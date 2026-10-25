@@ -1,0 +1,23 @@
+{
+  "name": "molty-console",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The Molty device console (setup, fluid, Molty picker, agent link). One HTML file served at / by the firmware.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vitest run && vite build && node tools/size.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "mock": "node tools/mock-device.mjs",
+    "e2e": "node tools/e2e.mjs",
+    "thumbs": "node tools/thumbs.mjs 160 0.8"
+  },
+  "devDependencies": {
+    "playwright": "1.61.1",
+    "typescript": "5.9.3",
+    "vite": "8.1.0",
+    "vite-plugin-singlefile": "2.3.3",
+    "vitest": "^3.1.0"
+  }
+}
