@@ -1,10 +1,10 @@
-// Header links follow the landing's order (fluid · moltys · bridge · boards), then the two
+// Header links follow the landing's order (fluid · moltys · bridge · bake), then the two
 // places people go next. /setup/ is the browser flasher (owned by the setup page's branch).
 export const SITE_LINKS = [
   { href: "/#fluid", label: "fluid", mobileHidden: true },
   { href: "/#moltys", label: "moltys", mobileHidden: true },
   { href: "/#bridge", label: "bridge", mobileHidden: true },
-  { href: "/#boards", label: "boards", mobileHidden: true },
+  { href: "/#boards", label: "bake", mobileHidden: true },
   { href: "/setup/", label: "setup" },
   { href: "/getting-started/introduction/", label: "docs" },
 ] as const;

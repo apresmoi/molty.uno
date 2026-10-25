@@ -34,7 +34,7 @@
   --m-text-xl: 28px;
   --m-text-hero: clamp(30px, 5.2vw, 52px);
   --m-text-word: clamp(64px, 13.4vw, 196px);
-  --m-text-section: clamp(64px, 10vw, 150px);
+  --m-text-section: clamp(84px, 10vw, 150px);
 
   --m-space-1: 4px;
   --m-space-2: 8px;
