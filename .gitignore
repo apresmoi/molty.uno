@@ -1,0 +1,26 @@
+# Build output
+build/
+dist/
+bin/
+*.o
+*.a
+*.tsbuildinfo
+firmware/test/host/*_bin
+
+# ESP-IDF generated (regenerable from sdkconfig.defaults / idf_component.yml;
+# dependencies.lock is intentionally tracked)
+managed_components/
+sdkconfig
+sdkconfig.old
+
+# Node
+node_modules/
+
+# Test output / local state
+console/e2e-out/
+.wrangler/
+.dev.vars
+
+# Editors / OS
+.DS_Store
+**/.cache/
