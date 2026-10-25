@@ -52,31 +52,38 @@ const sampleCanvas = (page, selector) =>
     return { lit, hash };
   }, selector);
 
+const FIELD = '[data-fluid-field] canvas';
+const scrollToSection = (page, id) =>
+  page.evaluate((id) => {
+    const el = document.getElementById(id);
+    window.scrollTo(0, el.getBoundingClientRect().top + scrollY - innerHeight * 0.22);
+  }, id);
+
 // Landing, desktop
 {
   const page = await open(1440, 900, '/');
-  const canvas = 'canvas.molty-screen';
-  await page.waitForSelector(canvas, { timeout: 20000 });
-  await page.waitForTimeout(6000); // past blob + "hello" → the first Molty has emerged
+  await page.waitForSelector('html[data-fluid="live"]', { timeout: 20000 });
+  await page.waitForTimeout(5000); // the wordmark has condensed, the first Molty has emerged
   await page.screenshot({ path: OUT + 'landing-1440-hero-a.png' });
-  const a = await sampleCanvas(page, canvas);
+  const a = await sampleCanvas(page, FIELD);
   await page.waitForTimeout(1000);
-  await page.screenshot({ path: OUT + 'landing-1440-hero-b.png' });
-  const b = await sampleCanvas(page, canvas);
-  if (!a || a.lit < 500) fail(`hero canvas not rendering (lit=${a?.lit})`);
-  else if (a.hash === b.hash) fail('hero canvas did not change in 1 s');
-  else console.log(`ok   hero renders (lit ${a.lit} → ${b.lit} px) and moves (hash ${a.hash} ≠ ${b.hash})`);
-  await page.locator('#moltys').scrollIntoViewIfNeeded();
-  await page.getByRole('button', { name: 'Axolotl' }).click();
+  const b = await sampleCanvas(page, FIELD);
+  if (!a || a.lit < 500) fail(`page fluid not rendering (lit=${a?.lit})`);
+  else if (a.hash === b.hash) fail('page fluid did not change in 1 s');
+  else console.log(`ok   page fluid renders (lit ${a.lit} → ${b.lit} px) and moves (hash ${a.hash} ≠ ${b.hash})`);
+  if (!(await page.locator('html[data-fluid-moltys="live"]').count())) fail('Moltys never became ready (three.js / CreatureTarget)');
+  await scrollToSection(page, 'moltys');
+  await page.getByRole('button', { name: 'frog' }).click();
+  const slot = await page.locator('[data-fluid-slot="gallery"]').getAttribute('data-fluid-molty');
+  if (slot !== 'cute-frog') fail(`gallery slot did not switch (data-fluid-molty=${slot})`);
+  else console.log('ok   gallery picker drives the fluid slot');
   await page.waitForTimeout(4000);
-  await page.locator('#moltys').evaluate((el) => el.closest('section').scrollIntoView());
   await page.screenshot({ path: OUT + 'landing-1440-gallery.png' });
-  const g = await sampleCanvas(page, 'section:has(#moltys) canvas.molty-screen');
-  if (!g || g.lit < 500) fail(`gallery preview not rendering (lit=${g?.lit})`);
-  else console.log(`ok   gallery live preview renders (lit ${g.lit})`);
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await page.waitForTimeout(300);
-  await page.screenshot({ path: OUT + 'landing-1440-full.png', fullPage: true });
+  for (const id of ['fluid', 'bridge', 'boards']) {
+    await scrollToSection(page, id);
+    await page.waitForTimeout(3500);
+    await page.screenshot({ path: OUT + `landing-1440-${id}.png` });
+  }
   await overflow(page, 'landing @1440');
   await page.close();
 }
@@ -84,10 +91,9 @@ const sampleCanvas = (page, selector) =>
 // Landing, phone
 {
   const page = await open(390, 844, '/');
-  await page.waitForSelector('canvas.molty-screen', { timeout: 20000 });
-  await page.waitForTimeout(6000);
+  await page.waitForSelector('html[data-fluid="live"]', { timeout: 20000 });
+  await page.waitForTimeout(5000);
   await page.screenshot({ path: OUT + 'landing-390-hero.png' });
-  await page.screenshot({ path: OUT + 'landing-390-full.png', fullPage: true });
   await overflow(page, 'landing @390');
   await page.close();
 }

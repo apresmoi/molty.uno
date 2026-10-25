@@ -1,18 +1,18 @@
 ---
 import ContentLayout from "../layouts/ContentLayout.astro";
 import { HomePage } from "../components/HomePage";
-import { HeroScreen } from "../components/HeroScreen";
-import { MoltyGallery } from "../components/MoltyGallery";
+import { FluidField } from "../components/FluidField";
+import { MoltyPicker } from "../components/MoltyPicker";
 import { CopyMessage } from "../components/CopyMessage";
-import { title, description, ldJson, pairingMessage } from "../features/home/content";
+import { title, description, ldJson, pairingMessage, GALLERY_FIRST } from "../features/home/content";
 import { MOLTYS } from "../features/moltys/catalog";
 ---
 
 <ContentLayout title={title} description={description} path="/">
   <script slot="head" type="application/ld+json" set:html={JSON.stringify(ldJson)} />
   <HomePage>
-    <HeroScreen slot="hero" client:load fallbackImage={MOLTYS[0]?.thumb} />
-    <MoltyGallery slot="gallery" client:visible moltys={MOLTYS} />
+    <FluidField slot="fluid" client:load />
+    <MoltyPicker slot="picker" client:visible moltys={MOLTYS} initial={GALLERY_FIRST} />
     <CopyMessage slot="message" client:visible text={pairingMessage} />
   </HomePage>
 </ContentLayout>

@@ -1,0 +1,12 @@
+.toggle {
+  padding: var(--m-space-2) 0;
+  border: 0;
+  background: transparent;
+  color: var(--m-dim);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.toggle:hover {
+  color: var(--m-accent);
+}

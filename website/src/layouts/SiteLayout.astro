@@ -1,6 +1,7 @@
 ---
 import Head from "../integrations/astro/Head.astro";
 import { SiteHeader } from "../components/SiteHeader";
+import { ThemeToggle } from "../components/ThemeToggle";
 import "../styles/global.css";
 export interface Props {
   title: string;
@@ -14,7 +15,9 @@ const page = Astro.props;
 <html lang="en">
   <head><Head {...page} /><slot name="head" /></head>
   <body class="site-content">
-    <SiteHeader pathname={Astro.url.pathname} />
+    <SiteHeader pathname={Astro.url.pathname}>
+      <ThemeToggle slot="theme" client:load />
+    </SiteHeader>
     <slot />
   </body>
 </html>

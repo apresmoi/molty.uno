@@ -26,20 +26,30 @@ Never deploy or publish from here; nothing in this package does.
 - `src/components/Name/Name.tsx` is the component; `index.ts` has explicit named exports.
   Import another component through its barrel. Components are React; `.astro` lives only in
   pages, layouts and `src/integrations/{astro,starlight}/` adapters.
-- `src/services/molty-stage/` is the only owner of the engine runtime: it loads
-  `@creatures/setup/fluid-stage.js` once, keeps one `FluidStage` per named slot (`hero`,
-  `gallery`), and pauses a stage by detaching its canvas when off screen. Components mount it
-  through `MoltyScreen`; nothing else imports `@creatures`.
+- `src/services/molty-stage/` is the only owner of the engine runtime (`pageFluid.ts`): one
+  `FluidSim` sized to the viewport (its round mask opened to a rectangle), the engine's
+  `GlyphRenderer` through a small context shim (stretched panel, no disc clip, per-cell dots),
+  and `CreatureTarget`s blitted into it. It reads its targets from the DOM:
+  `data-fluid-word` (a heading that condenses from the fluid while on screen),
+  `data-fluid-molty` (a square slot a Molty emerges in; comma list + `data-fluid-every`
+  cycles), `data-fluid-quiet` / `data-fluid-pool` (fluid recedes under prose / pools to be
+  touched). `FluidField` mounts it; nothing else imports `@creatures`. 30 fps, DPR ≤ 1.5,
+  ≤ 176 columns; `prefers-reduced-motion` draws one settled frame per scroll stop.
+- The page must read without the engine: headings keep their DOM text (transparent only
+  under `html[data-fluid="live"]`), Molty slots show the catalog still until
+  `html[data-fluid-moltys="live"]`.
 - `src/features/<feature>/` holds copy and data (`home/content.ts`, `moltys/catalog.ts`).
   `src/hooks/` holds reusable React hooks. Features, services, hooks and config never import
   components.
 
 ## Styling
 
-- `src/styles/tokens.css` is the only place for colours, fonts, sizes. Values follow the device
-  console (`console/src/style.css`): black glass, one mint accent, monospace chrome, sans prose.
+- `src/styles/tokens.css` is the only place for colours, fonts, sizes: black glass, dim braille,
+  monospace. The only UI colour is the wordmark green; every other colour comes from a Molty's
+  palette (via the fluid). Dark and light: light inverts the fluid canvas (`--m-fluid-filter`,
+  hue kept) into ink on paper; `ThemeToggle` shares Starlight's `starlight-theme` key.
 - Components own CSS Modules. `global.css` imports tokens, base and layout only. Starlight's
-  chrome is mapped in `src/integrations/starlight/starlight.css`. Dark only.
+  chrome is mapped in `src/integrations/starlight/starlight.css`.
 - Static presentation belongs in CSS; inline styles only for runtime values.
 - Layouts must not overflow horizontally at 390px; wide `<pre>` blocks scroll inside themselves.
 
@@ -49,7 +59,8 @@ Never deploy or publish from here; nothing in this package does.
   layers, engine/three import boundary, single repo URL, colour/font tokens, cycles) + prettier
   (`pnpm format` fixes). No baselines or exemptions.
 - `pnpm build && pnpm preview`, then `pnpm screens` (`e2e/screens.mjs`): screenshots to
-  `e2e-out/` (gitignored), fails on page errors, 390px overflow, or a hero screen that does
-  not render or does not move. Look at the screenshots.
-- `pnpm og` regenerates `public/og.png` from the live hero (needs the preview running).
+  `e2e-out/` (gitignored), fails on page errors, 390px overflow, a page fluid that does not
+  render or move, Moltys that never load, or a gallery picker that does not drive its slot.
+  Look at the screenshots.
+- `pnpm og` regenerates `public/og.png` from the live page fluid (needs the preview running).
 - `dist/llms.txt`, `llms-full.txt` and raw `docs/*.md` come from `scripts/generate-llms-txt.mjs`.

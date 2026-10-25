@@ -1,0 +1,81 @@
+.root {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+  gap: var(--m-space-8);
+  align-items: center;
+}
+.slot {
+  position: relative;
+  aspect-ratio: 1;
+  width: 100%;
+  max-width: 420px;
+  justify-self: center;
+}
+.still {
+  position: absolute;
+  inset: 12%;
+  width: 76%;
+  height: 76%;
+  object-fit: contain;
+  transition: opacity 0.4s;
+}
+:global(html[data-fluid-moltys="live"]) .still {
+  opacity: 0;
+}
+.side {
+  min-width: 0;
+}
+.names {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--m-space-1) var(--m-space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.names button {
+  padding: var(--m-space-1) 0;
+  border: 0;
+  background: transparent;
+  color: var(--m-dim);
+  font: var(--m-text-base) / 1.4 var(--m-font-mono);
+  cursor: pointer;
+}
+.names button::before {
+  content: "\00a0\00a0";
+}
+.names button::after {
+  content: "\00a0\00a0";
+}
+.names button:hover {
+  color: var(--m-ink);
+}
+.names button[aria-pressed="true"] {
+  color: var(--m-accent);
+}
+.names button[aria-pressed="true"]::before {
+  content: "[ ";
+}
+.names button[aria-pressed="true"]::after {
+  content: " ]";
+}
+.file {
+  margin: var(--m-space-6) 0 0;
+  font: var(--m-text-sm) / 1.4 var(--m-font-mono);
+}
+.file a {
+  color: var(--m-accent);
+  text-decoration: none;
+}
+.file a:hover {
+  color: var(--m-ink);
+}
+@media (max-width: 46rem) {
+  .root {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--m-space-4);
+  }
+  .slot {
+    max-width: 300px;
+  }
+}

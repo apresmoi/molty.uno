@@ -1,7 +1,8 @@
 /* Starlight keeps its navigation, search and Markdown rendering; this adapter maps its
    chrome to the site tokens. Unlayered rules override the vendor's cascade layers. */
 :root,
-:root[data-theme="dark"] {
+:root[data-theme="dark"],
+:root[data-theme="light"] {
   --sl-font: var(--m-font-sans);
   --sl-font-mono: var(--m-font-mono);
   --sl-color-accent-low: var(--m-panel);

@@ -1,1 +1,0 @@
-export { MoltyGallery } from "./MoltyGallery";

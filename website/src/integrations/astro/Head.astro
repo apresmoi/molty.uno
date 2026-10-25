@@ -18,6 +18,17 @@ const ogImage = `${SITE_URL}${image}`;
 ---
 
 <meta charset="utf-8" />
+<script is:inline>
+  // Same theme choice as the docs (Starlight's key), applied before paint.
+  (() => {
+    let stored = null;
+    try {
+      stored = localStorage.getItem("starlight-theme");
+    } catch {}
+    const light = stored ? stored === "light" : matchMedia("(prefers-color-scheme: light)").matches;
+    document.documentElement.dataset.theme = light ? "light" : "dark";
+  })();
+</script>
 <Analytics />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>{title}</title>

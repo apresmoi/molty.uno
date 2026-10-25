@@ -8,15 +8,18 @@
   align-items: center;
   gap: var(--m-space-6);
   padding: 0 var(--m-space-6);
-  background: var(--m-overlay);
-  backdrop-filter: blur(10px);
-  border-bottom: 1px solid var(--m-line);
+  background: linear-gradient(var(--m-overlay), var(--m-veil) 70%, transparent);
   font: var(--m-text-sm) / 1.3 var(--m-font-mono);
+}
+
+:global(body:not(.site-content)) .header {
+  background: var(--m-bg);
+  border-bottom: 1px solid var(--m-line);
 }
 .navigation {
   display: flex;
   align-items: center;
-  gap: var(--m-space-1);
+  gap: var(--m-space-4);
   min-width: 0;
   margin-right: auto;
   overflow-x: auto;
@@ -27,34 +30,41 @@
 }
 .navigation a,
 .repository {
-  padding: var(--m-space-1) var(--m-space-3);
-  border-radius: 999px;
+  padding-block: var(--m-space-2);
   color: var(--m-dim);
   text-decoration: none;
   white-space: nowrap;
 }
-.navigation a:hover,
-.repository:hover {
-  color: var(--m-ink);
+.navigation a > span {
+  color: var(--m-faint);
 }
+.navigation a:hover,
+.repository:hover,
 .navigation a[aria-current="page"] {
-  color: var(--m-accent-ink);
-  background: var(--m-accent);
+  color: var(--m-accent);
+}
+.navigation a[aria-current="page"] > span {
+  color: var(--m-accent);
 }
 .search {
   min-width: 0;
 }
-@media (max-width: 50rem) {
+@media (max-width: 62rem) {
   .header {
-    gap: var(--m-space-2);
+    gap: var(--m-space-3);
     padding-inline: var(--m-gutter) var(--m-header-end, var(--m-gutter));
   }
-  .navigation a,
-  .repository {
-    padding-inline: var(--m-space-2);
+  .navigation {
+    gap: var(--m-space-3);
   }
   .repository,
   .mobileHidden {
+    display: none;
+  }
+}
+/* docs on a phone: Starlight's menu carries its own theme picker; keep the header to one row */
+@media (max-width: 50rem) {
+  :global(body:not(.site-content)) .theme {
     display: none;
   }
 }

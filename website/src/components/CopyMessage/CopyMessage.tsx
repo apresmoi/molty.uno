@@ -1,7 +1,7 @@
 import { useState } from "react";
 import styles from "./CopyMessage.module.css";
 
-/** The one pairing message, with a copy button (same shape as the console's). */
+/** The one pairing message, with a copy action (same message the console hands you). */
 export function CopyMessage({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
@@ -14,10 +14,10 @@ export function CopyMessage({ text }: { text: string }) {
     }
   };
   return (
-    <div className={styles.message}>
+    <div className={styles.message} data-fluid-quiet>
       <pre>{text}</pre>
       <button type="button" className={copied ? styles.done : undefined} onClick={copy}>
-        {copied ? "Copied ✓" : "Copy message"}
+        {copied ? "[ copied ✓ ]" : "[ copy message ]"}
       </button>
     </div>
   );

@@ -1,2 +1,2 @@
-export { loadEngine, acquireStage, attachWhileVisible } from "./moltyStage";
-export type { ScreenCue, CueStep } from "./moltyStage";
+export { mountPageFluid } from "./pageFluid";
+export type { PageFluidHandle, PageFluidOptions } from "./pageFluid";

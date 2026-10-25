@@ -10,6 +10,9 @@
 .mark {
   color: var(--m-accent);
 }
+.name b {
+  color: var(--m-accent);
+}
 .title:hover .name {
   color: var(--m-accent);
 }
