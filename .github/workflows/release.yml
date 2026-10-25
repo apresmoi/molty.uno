@@ -1,0 +1,296 @@
+name: Release
+
+# A `vX.Y.Z` tag (or a manual run naming an existing tag) builds every release
+# asset from that tag and publishes one GitHub Release. Cut the tag with
+# docs/RELEASING.md; VERSION and CHANGELOG.md must already say X.Y.Z.
+#
+#   verify ──┬── console ── firmware ──┐
+#            └── cli (6 targets) ───────┴── publish ── deploy-relay (opt-in)
+#
+# Full test coverage runs on pull requests and main (ci.yml). This workflow
+# rebuilds from the tag and re-runs only the cheap gates that guard the artifacts
+# themselves (console unit tests, firmware host tests + size, the tag/version match).
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to (re)build and publish, e.g. v0.1.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  PNPM_VERSION: 11.22.0
+  NODE_VERSION: 22
+
+jobs:
+  verify:
+    name: verify tag matches VERSION
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # Tag is vX.Y.Z[-pre], equals VERSION, the package.json copies agree, and
+      # CHANGELOG.md has a non-empty "## vX.Y.Z" section (it becomes the notes).
+      - name: Verify tag, VERSION and CHANGELOG
+        id: version
+        run: |
+          node scripts/version.mjs check --tag "$RELEASE_TAG"
+          version="$(node scripts/version.mjs)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ "$version" == *-* ]]; then echo "prerelease=true"; else echo "prerelease=false"; fi >> "$GITHUB_OUTPUT"
+
+      - name: Repository hygiene
+        run: scripts/hygiene.sh
+
+  console:
+    name: console page
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: console/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: console
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck, test and build
+        working-directory: console
+        run: pnpm run build
+
+      - name: Upload console page
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: console-dist
+          path: console/dist/index.html
+          if-no-files-found: error
+
+  firmware:
+    name: firmware images
+    # The SPIFFS partition (and so the factory image) embeds the console page.
+    needs: [verify, console]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: espressif/idf:v5.5@sha256:00e94c6ff8bc1f7bd22b234ff43db3f3056cb33dedac6819df9fbedbcb5c6ebb
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Download console page
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: console-dist
+          path: console/dist
+
+      - name: Build
+        working-directory: firmware
+        run: |
+          . "$IDF_PATH/export.sh" > /dev/null
+          idf.py build
+
+      - name: Host tests
+        run: make firmware-test
+
+      - name: App size vs OTA slot (fail above 90%)
+        run: scripts/firmware-size.sh
+
+      # The version the device will report (/api/info "fw") is the one in the app
+      # descriptor; refuse to ship an image that disagrees with the tag.
+      - name: Verify the embedded version
+        run: |
+          . "$IDF_PATH/export.sh" > /dev/null
+          embedded="$(python -m esptool --chip esp32s3 image_info --version 2 firmware/build/molty.bin \
+            | tr -d '\000' | awk -F': *' '/^App version:/ { gsub(/[ \t]+$/, "", $2); print $2 }')"
+          echo "app descriptor version: $embedded"
+          [[ "$embedded" == "$VERSION" ]] || { echo "::error::firmware reports '$embedded', expected '$VERSION'"; exit 1; }
+
+      # ota.bin (app only) + factory.bin (esptool merge_bin of the build's flash_args,
+      # written at 0x0). ESP-IDF's Apache-2.0 text ships next to the binaries, as
+      # THIRD_PARTY_NOTICES.md requires; it is read from the very IDF that built them.
+      - name: Package
+        run: |
+          . "$IDF_PATH/export.sh" > /dev/null
+          scripts/firmware-package.sh "$VERSION" release
+          cp "$IDF_PATH/LICENSE" release/LICENSE-Apache-2.0.txt
+          grep -q "Apache License" release/LICENSE-Apache-2.0.txt
+
+      - name: Upload firmware assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-firmware
+          path: release/*
+          if-no-files-found: error
+
+  cli:
+    name: cli ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+
+      # Pure Go (CGO off), so every target cross-compiles from one Linux runner.
+      # Each archive carries the licence and notices next to the binary.
+      - name: Build archive
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          name="molty-${VERSION}-${GOOS}-${GOARCH}"
+          exe="molty"; [[ "$GOOS" == windows ]] && exe="molty.exe"
+          stage="$RUNNER_TEMP/$name"
+          mkdir -p "$stage" release
+          (cd cli && go build -trimpath \
+            -ldflags "-s -w -X github.com/molty/cli/internal/molty.Version=${VERSION}" \
+            -o "$stage/$exe" ./cmd/molty)
+          cp LICENSE THIRD_PARTY_NOTICES.md "$stage/"
+          if [[ "$GOOS" == windows ]]; then
+            (cd "$RUNNER_TEMP" && zip -qr "$GITHUB_WORKSPACE/release/$name.zip" "$name")
+          else
+            tar -C "$RUNNER_TEMP" -czf "release/$name.tar.gz" "$name"
+          fi
+
+      - name: Smoke-test the native binary
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        run: |
+          out="$(tar -xzOf "release/molty-${VERSION}-linux-amd64.tar.gz" "molty-${VERSION}-linux-amd64/molty" > "$RUNNER_TEMP/molty" && chmod +x "$RUNNER_TEMP/molty" && "$RUNNER_TEMP/molty" --version)"
+          echo "$out"
+          [[ "$out" == "molty $VERSION" ]]
+
+      - name: Upload CLI archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-cli-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: release/*
+          if-no-files-found: error
+
+  publish:
+    name: publish GitHub release
+    needs: [verify, console, firmware, cli]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Download firmware and CLI assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          path: dist
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Download console page
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: console-dist
+          path: console-dist
+
+      # One SHA256SUMS over every asset (verify: sha256sum -c SHA256SUMS).
+      - name: Assemble assets and checksums
+        run: |
+          set -euo pipefail
+          cp console-dist/index.html "dist/molty-${VERSION}-console.html"
+          cp LICENSE THIRD_PARTY_NOTICES.md dist/
+          (cd dist && sha256sum -- * > "$RUNNER_TEMP/SHA256SUMS" && mv "$RUNNER_TEMP/SHA256SUMS" . && cat SHA256SUMS)
+          node scripts/version.mjs notes "$VERSION" > "$RUNNER_TEMP/notes.md"
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Molty ${{ env.RELEASE_TAG }}
+          body_path: ${{ runner.temp }}/notes.md
+          prerelease: ${{ needs.verify.outputs.prerelease == 'true' }}
+          fail_on_unmatched_files: true
+          files: dist/*
+
+  # A release made with GITHUB_TOKEN does not trigger other workflows, so the
+  # relay deploy is chained here instead of listening for `release: published`.
+  # Opt-in: set the repository variable DEPLOY_RELAY_ON_RELEASE=true.
+  deploy-relay:
+    name: deploy relay
+    needs: publish
+    if: vars.DEPLOY_RELAY_ON_RELEASE == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/deploy-relay.yml
+    with:
+      ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    secrets: inherit

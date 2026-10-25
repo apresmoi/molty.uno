@@ -1,0 +1,347 @@
+name: CI
+
+# Every component, in parallel jobs. The only ordering is console → firmware and
+# console → console-e2e: the console page is baked into the firmware's SPIFFS
+# image, so firmware builds the exact dist/index.html this run built and tested
+# rather than rebuilding it in an image that has no Node.
+#
+#   hygiene    relay    cli    creatures    website
+#   console ──┬── firmware
+#             └── console-e2e
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Shared by the console/relay/website jobs. Matches docs/HARDWARE.md.
+  PNPM_VERSION: 11.22.0
+  NODE_VERSION: 22
+
+jobs:
+  hygiene:
+    name: hygiene (secrets, local paths, licences, version)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # Tracked files only: no local paths (/Users/…), no keys or tokens, no .env /
+      # .dev.vars, LICENSE + THIRD_PARTY_NOTICES.md present, VERSION copies agree.
+      - name: Repository hygiene
+        run: scripts/hygiene.sh
+
+  console:
+    name: console (typecheck, unit tests, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: console/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: console
+        run: pnpm install --frozen-lockfile
+
+      # `pnpm run build` = tsc --noEmit && vitest run && vite build && size report.
+      - name: Typecheck, test and build
+        working-directory: console
+        run: pnpm run build
+
+      - name: Upload console page
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: console-dist
+          path: console/dist/index.html
+          if-no-files-found: error
+          retention-days: 7
+
+  console-e2e:
+    name: console e2e (Playwright vs mock device)
+    needs: console
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: console/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: console
+        run: pnpm install --frozen-lockfile
+
+      # The page the console job built and unit-tested, not a rebuild.
+      - name: Download console page
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: console-dist
+          path: console/dist
+
+      # Browsers are keyed on the exact Playwright version in the lockfile. System
+      # libraries are not in the cache, so a hit still needs install-deps.
+      - name: Read Playwright version
+        id: playwright
+        working-directory: console
+        run: echo "version=$(node -p "require('playwright/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}-chromium
+
+      - name: Install Chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        working-directory: console
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Install Chromium system dependencies
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        working-directory: console
+        run: pnpm exec playwright install-deps chromium
+
+      - name: Walk-through against the mock device
+        run: make console-e2e
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: console-e2e-screenshots
+          path: console/e2e-out
+          if-no-files-found: ignore
+          retention-days: 7
+
+  firmware:
+    name: firmware (ESP-IDF build, host tests, size)
+    needs: console
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # espressif/idf:v5.5 is a moving tag (it follows v5.5.x); the digest freezes the
+    # exact toolchain. Bump it deliberately: docker buildx imagetools inspect espressif/idf:v5.5
+    container:
+      image: espressif/idf:v5.5@sha256:00e94c6ff8bc1f7bd22b234ff43db3f3056cb33dedac6819df9fbedbcb5c6ebb
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      # stage_console_html.cmake fails the build without console/dist/index.html.
+      - name: Download console page
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: console-dist
+          path: console/dist
+
+      # GitHub replaces the image's entrypoint, so every step sources export.sh itself.
+      - name: Build
+        working-directory: firmware
+        run: |
+          . "$IDF_PATH/export.sh" > /dev/null
+          idf.py build
+
+      # LINK_TEST_CFLAGS lives in the Makefile target: glibc hides strdup under -std=c11.
+      - name: Host tests
+        run: make firmware-test
+
+      - name: App size vs OTA slot (fail above 90%)
+        run: scripts/firmware-size.sh
+
+      - name: Upload firmware images
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: firmware-${{ github.sha }}
+          path: |
+            firmware/build/molty.bin
+            firmware/build/molty.elf
+            firmware/build/bootloader/bootloader.bin
+            firmware/build/partition_table/partition-table.bin
+            firmware/build/ota_data_initial.bin
+            firmware/build/spiffs.bin
+            firmware/build/flash_args
+          if-no-files-found: error
+          retention-days: 14
+
+  relay:
+    name: relay (typecheck, tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: relay/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: relay
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        working-directory: relay
+        run: pnpm typecheck
+
+      - name: Test
+        working-directory: relay
+        run: pnpm test
+
+      # Bundles exactly what `pnpm run deploy` would ship (version baked in) without
+      # deploying: catches wrangler config and bundling errors before a release.
+      - name: Bundle (wrangler dry run)
+        working-directory: relay
+        run: pnpm run deploy --dry-run --outdir "$RUNNER_TEMP/relay-bundle"
+
+  cli:
+    name: cli (vet, test, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+
+      - name: Check formatting
+        working-directory: cli
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needed (run 'make -C cli fmt'):"; echo "$unformatted"; exit 1
+          fi
+
+      - name: Go vet
+        working-directory: cli
+        run: go vet ./...
+
+      - name: Go test
+        working-directory: cli
+        run: go test ./...
+
+      - name: Build
+        run: make cli && cli/bin/molty --version
+
+  creatures:
+    name: creatures (.molty export is committed)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Re-export creatures
+        run: make creatures
+
+      # Content-based: the exporter is deterministic, so any byte change (or a new
+      # file) means a spec changed without its .molty being re-exported.
+      - name: Verify the committed .molty files match their specs
+        run: |
+          git diff --exit-code -- creatures/molty \
+            || { echo "::error::creatures/molty is stale — run 'make creatures' and commit the result"; exit 1; }
+          untracked="$(git ls-files --others --exclude-standard -- creatures/molty)"
+          if [ -n "$untracked" ]; then
+            echo "::error::new .molty files not committed:"; echo "$untracked"; exit 1
+          fi
+
+  website:
+    name: website (check, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      # Every later step is skipped (not failed) on a branch without website/.
+      - name: Report missing website
+        if: hashFiles('website/package.json') == ''
+        run: echo "::notice::website/ not present on this ref; skipping"
+
+      - name: Set up pnpm
+        if: hashFiles('website/package.json') != ''
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Set up Node
+        if: hashFiles('website/package.json') != ''
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: website/pnpm-lock.yaml
+
+      - name: Install dependencies
+        if: hashFiles('website/package.json') != ''
+        working-directory: website
+        run: pnpm install --frozen-lockfile
+
+      - name: Check
+        if: hashFiles('website/package.json') != ''
+        working-directory: website
+        run: pnpm check
+
+      - name: Build
+        if: hashFiles('website/package.json') != ''
+        working-directory: website
+        run: pnpm build

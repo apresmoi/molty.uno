@@ -1,0 +1,119 @@
+name: Deploy Relay
+
+# Deploys relay/ to Cloudflare Workers with `pnpm run deploy` (tools/deploy.mjs:
+# wrangler deploy with VERSION baked in, so GET /v1/health reports it).
+#
+# Manual (Actions tab, or: gh workflow run deploy-relay.yml -f ref=v0.1.0), or
+# chained from release.yml when the repository variable DEPLOY_RELAY_ON_RELEASE
+# is "true". Set `dry_run` to bundle without deploying (needs no secrets).
+#
+# Secrets (repository or `relay` environment):
+#   CLOUDFLARE_API_TOKEN   API token with "Workers Scripts: Edit" (+ "Workers AI: Read"
+#                          is not needed to deploy) on the account below
+#   CLOUDFLARE_ACCOUNT_ID  the Cloudflare account that owns the worker
+# Variable (optional):
+#   RELAY_URL              e.g. https://relay.example.com — after deploying, its
+#                          /v1/health must report the deployed version
+# Nothing account-specific lives in this repo: wrangler.jsonc has no account_id.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Tag, branch or SHA to deploy
+        required: true
+        default: main
+        type: string
+      dry_run:
+        description: Bundle only, do not deploy
+        required: false
+        default: false
+        type: boolean
+  workflow_call:
+    inputs:
+      ref:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# Never two deploys at once; never cancel one half-way.
+concurrency:
+  group: deploy-relay
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy molty-relay
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # The environment carries the secrets (or inherits repository secrets) and is
+    # where deployment approvals can be required.
+    environment:
+      name: relay
+    env:
+      DRY_RUN: ${{ inputs.dry_run == true }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda
+        with:
+          version: 11.22.0
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: relay/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: relay
+        run: pnpm install --frozen-lockfile
+
+      # Cheap, and the last gate before production traffic.
+      - name: Typecheck and test
+        working-directory: relay
+        run: pnpm typecheck && pnpm test
+
+      - name: Bundle (dry run)
+        if: env.DRY_RUN == 'true'
+        working-directory: relay
+        run: pnpm run deploy --dry-run --outdir "$RUNNER_TEMP/relay-bundle"
+
+      - name: Check Cloudflare secrets
+        if: env.DRY_RUN != 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          [ -n "$CLOUDFLARE_API_TOKEN" ] || { echo "::error::secret CLOUDFLARE_API_TOKEN is not set"; exit 1; }
+          [ -n "$CLOUDFLARE_ACCOUNT_ID" ] || { echo "::error::secret CLOUDFLARE_ACCOUNT_ID is not set"; exit 1; }
+
+      - name: Deploy
+        if: env.DRY_RUN != 'true'
+        working-directory: relay
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm run deploy
+
+      # A deploy that "succeeded" is not a relay that answers: when RELAY_URL is
+      # known, poll /v1/health until it reports this exact version.
+      - name: Verify the live relay
+        if: env.DRY_RUN != 'true' && vars.RELAY_URL != ''
+        env:
+          RELAY_URL: ${{ vars.RELAY_URL }}
+        run: |
+          want="$(cat VERSION)"
+          for i in $(seq 1 12); do
+            got="$(curl -fsS "${RELAY_URL%/}/v1/health" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).version)}catch{}})' || true)"
+            if [ "$got" = "$want" ]; then echo "relay reports $got"; exit 0; fi
+            echo "attempt $i: relay reports '${got:-nothing}', want $want"; sleep 5
+          done
+          echo "::error::${RELAY_URL}/v1/health never reported version $want"; exit 1
