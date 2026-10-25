@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "molty-relay",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-09-15",
+  "durable_objects": {
+    "bindings": [{ "name": "DEVICE", "class_name": "MoltyDevice" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MoltyDevice"] }],
+  // Workers AI always runs remotely; `wrangler dev --local` starts fine but AI.run
+  // throws, so local runs set VOICE_PROVIDER=none (see package.json "dev").
+  "ai": { "binding": "AI" },
+  "vars": {
+    "VOICE_PROVIDER": "workers-ai",
+    "TTS_MODEL": "@cf/deepgram/aura-2-en",
+    "STT_MODEL": "@cf/openai/whisper-large-v3-turbo",
+    "TTS_VOICE": "luna"
+  },
+  "observability": { "enabled": true }
+}

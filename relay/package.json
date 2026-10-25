@@ -1,0 +1,24 @@
+{
+  "name": "@molty/relay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cloud relay for Molty's agent link: device WSS, pairing, REST, remote MCP, voice, async jobs.",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --local --var VOICE_PROVIDER:none",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "e2e": "node tools/e2e.mjs",
+    "deploy": "node tools/deploy.mjs"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261004.1",
+    "@modelcontextprotocol/sdk": "1.32.0",
+    "typescript": "6.0.3",
+    "vitest": "5.0.3",
+    "wrangler": "4.147.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
