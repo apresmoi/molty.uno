@@ -13,7 +13,7 @@ import { REPO_URL, REPO_BRANCH } from '../src/config/site.mjs';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const OUT = fileURLToPath(new URL('../src/content/docs/repo/', import.meta.url));
-const bySource = new Map(SYNCED_DOCS.map((d) => [d.source, d]));
+const bySource = new Map(SYNCED_DOCS.filter((d) => !d.optional || existsSync(join(ROOT, d.source))).map((d) => [d.source, d]));
 
 const yaml = (s) => JSON.stringify(s); // JSON strings are valid YAML scalars
 
@@ -45,7 +45,8 @@ function transform(markdown, source) {
 
 rmSync(OUT, { recursive: true, force: true });
 mkdirSync(OUT, { recursive: true });
-for (const doc of SYNCED_DOCS) {
+const present = SYNCED_DOCS.filter((doc) => !doc.optional || existsSync(join(ROOT, doc.source)));
+for (const doc of present) {
   const body = transform(readFileSync(join(ROOT, doc.source), 'utf8'), doc.source);
   const front = [
     '---',
@@ -61,4 +62,4 @@ for (const doc of SYNCED_DOCS) {
   const file = join(OUT, doc.slug.replace(/\//g, '--') + '.md');
   writeFileSync(file, front + body);
 }
-console.log(`synced ${SYNCED_DOCS.length} repo docs → website/${relative(join(ROOT, 'website'), OUT)}`);
+console.log(`synced ${present.length} repo docs → website/${relative(join(ROOT, 'website'), OUT)}`);

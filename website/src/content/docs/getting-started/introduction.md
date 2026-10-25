@@ -1,37 +1,38 @@
 ---
 title: Introduction
-description: What Molty is, what you need, and where to go next.
+description: What molty.UNO is — the fluid, the Moltys, the bridge — and which screens it runs on.
 ---
 
-Molty is a small round screen for your desk. The whole screen is one calm fluid drawn in
-braille characters. Creatures — **Moltys** — emerge from it, dance, read text out of it,
-and melt back in.
+molty.UNO is not one device. It is three portable things you bake onto a screen:
 
-Molty has no brain of its own. **Your AI agent is its brain**: Claude, Grok, OpenClaw, or
-anything that speaks MCP or HTTP. You pair the agent with one message and a tap on the
-screen, and from then on the agent can set Molty's mood, show text in the fluid, speak
-through its speaker and listen through its mic.
+1. **The fluid.** One liquid of braille characters fills the screen. Everything it shows —
+   words, creatures, ripples — is a shape the fluid flows toward.
+2. **The Moltys.** Small creatures that emerge from the fluid, dance and melt back. Each is a
+   ~1 KB `.molty` file: the same file brings the same creature to any screen, no reflash.
+3. **The bridge.** Moltys have no brain of their own. Any agent — Claude, Grok, OpenClaw, or
+   anything that speaks MCP or HTTP — becomes one, paired with one message and a tap on the
+   screen. It can then set moods, show text in the fluid, speak and listen.
 
 ```
-your agent ──MCP / REST──▶ relay ◀──outbound WSS── Molty on your desk
+agent ──MCP / REST──▶ relay ◀──outbound WSS── your screen
 ```
 
-## What you need
+## Boards
 
-- A **Waveshare ESP32-S3-Touch-LCD-1.46** board (round 412×412 touch screen, mic,
-  speaker, IMU, battery charging).
-- A USB-C cable and a computer for the first flash.
-- An agent you already use.
+| Board | Screen | Status |
+|---|---|---|
+| Waveshare ESP32-S3-Touch-LCD-1.46 | 412×412 round, touch, mic, speaker | reference |
+| Waveshare ESP32-S3-Touch-LCD-1.28 | 240×240 round, touch, no audio | supported |
+| Your screen | anything with an ESP32-S3 | port it |
+
+You also need a USB-C cable and an agent you already use.
 
 ## Where to go next
 
-1. [Hardware, build and flash](/getting-started/hardware/) — the board and the toolchain,
-   if you build from source.
-2. [Flash a release](/getting-started/flash-a-release/) — the shorter path, once releases
-   are published.
+1. [Flash a release](/getting-started/flash-a-release/) — the short path.
+2. [Build and flash](/getting-started/hardware/) — from source, with the toolchain.
 3. [Set up your Molty](/getting-started/setup/) — Wi-Fi, pick a Molty, connect an agent.
-4. [Connect an agent](/agents/connect/) — what the one message does, and what your agent
-   can do afterwards.
+4. [Connect an agent](/agents/connect/) — what the one message does.
 
-Molty is open source under the MIT licence. The firmware, console, relay, CLI and the
-creature engine all live in one repository.
+Everything — firmware, console, relay, CLI and the creature engine — is MIT-licensed and
+lives in one repository.

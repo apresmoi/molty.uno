@@ -2,12 +2,22 @@
 // scripts/sync-docs.mjs reads each `source`, drops its H1, rewrites repo-relative links
 // and writes src/content/docs/repo/<slug>.md with `slug` frontmatter, so the page is
 // served at /<slug>/. The generated folder is gitignored; never edit it by hand.
+//
+// `optional: true` entries are synced (and listed in the sidebar) only when the source file
+// exists, so a guide that lands on another branch appears without touching this list.
 export const SYNCED_DOCS = [
   {
     source: 'docs/HARDWARE.md',
     slug: 'getting-started/hardware',
-    title: 'Hardware, build and flash',
-    description: 'The board, the toolchain, building the firmware and the first flash.',
+    title: 'Build and flash',
+    description: 'The boards, the toolchain, building the firmware and the first flash.',
+  },
+  {
+    source: 'docs/PORTING.md',
+    slug: 'boards/porting',
+    title: 'Port it to your screen',
+    description: 'Bring the fluid, the Moltys and the bridge to a board that is not on the list.',
+    optional: true,
   },
   {
     source: 'docs/AGENT-LINK.md',
