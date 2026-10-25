@@ -1,0 +1,114 @@
+# Releasing
+
+One version covers the whole product — firmware, console, relay and CLI. It lives in
+the root [`VERSION`](../VERSION) file and is read at build time everywhere:
+
+| Component | Where the version shows up | How it gets there |
+|---|---|---|
+| firmware | `GET /api/info` → `fw` (and the agent link's `fw`) | `PROJECT_VER` in `firmware/CMakeLists.txt` |
+| console | status page, `console` row | Vite `define` → `__MOLTY_VERSION__` |
+| CLI | `molty --version`, MCP `serverInfo` | `-ldflags -X …/internal/molty.Version` (`make cli`) |
+| relay | `GET /v1/health` (`version`, `x-molty-version`), MCP `serverInfo` | `wrangler deploy --define` (`pnpm run deploy`) |
+
+`console/package.json` and `relay/package.json` carry copies; `node scripts/version.mjs
+check` (run by CI's hygiene job) fails when they drift.
+
+## Cut a release
+
+1. Make sure `main` is green in CI.
+2. Write the release notes under `## Unreleased` in [`CHANGELOG.md`](../CHANGELOG.md).
+3. Bump (rewrites `VERSION`, the package.json copies, and turns `## Unreleased` into
+   `## vX.Y.Z — <date>`):
+   ```sh
+   node scripts/version.mjs bump patch      # or minor | major | 1.2.3 | 1.2.3-rc.1
+   make test && make console firmware       # optional local check
+   ```
+4. Commit, tag and push:
+   ```sh
+   v="$(node scripts/version.mjs)"
+   git commit -am "chore(release): v$v"
+   git tag "v$v"
+   git push origin main "v$v"
+   ```
+5. The tag runs [`release.yml`](../.github/workflows/release.yml): it refuses a tag that
+   does not equal `VERSION` or has no `CHANGELOG.md` section, builds everything from the
+   tag, and publishes a GitHub Release whose notes are that section. A version with a
+   `-suffix` is published as a pre-release. To rebuild an existing tag: Actions →
+   Release → Run workflow → `tag`.
+
+### Release assets
+
+| Asset | What it is |
+|---|---|
+| `molty-X.Y.Z-ota.bin` | App image only. Updates a running device: `firmware/ota.sh` or `POST /api/ota`. |
+| `molty-X.Y.Z-factory.bin` | Bootloader + partition table + otadata + app + console (SPIFFS), merged; flash at `0x0`. |
+| `molty-X.Y.Z-console.html` | The console page (also inside both firmware images). |
+| `molty-X.Y.Z-{linux,darwin}-{amd64,arm64}.tar.gz`, `…-windows-{amd64,arm64}.zip` | `molty` CLI, with `LICENSE` and `THIRD_PARTY_NOTICES.md`. |
+| `LICENSE`, `THIRD_PARTY_NOTICES.md`, `LICENSE-Apache-2.0.txt` | Licences that must accompany the firmware binaries (ESP-IDF is Apache-2.0). |
+| `SHA256SUMS` | Checksums of everything above: `sha256sum -c SHA256SUMS`. |
+
+## Flash a release
+
+**First flash, or after a partition-table change: the factory image.** It covers the
+flash from `0x0` to the end of SPIFFS, so it also erases NVS: Wi-Fi credentials and
+agent pairings are wiped. Put the board in download mode as in
+[HARDWARE.md](HARDWARE.md#first-flash-and-any-partition-table-change) (hold BOOT while
+plugging in USB-C), then:
+
+```sh
+sha256sum -c SHA256SUMS --ignore-missing
+python -m esptool --chip esp32s3 -p PORT -b 460800 \
+  --before default_reset --after hard_reset write_flash 0x0 molty-X.Y.Z-factory.bin
+```
+
+Unplug and replug to boot. `esptool` ships with ESP-IDF, or `pip install esptool`.
+
+**A device already running Molty: the OTA image.** Keeps settings and pairings.
+
+```sh
+curl -fsS -m120 -X POST --data-binary @molty-X.Y.Z-ota.bin http://10.13.37.1/api/ota
+```
+
+or `./ota.sh` from `firmware/` for a local build. Check it landed:
+`curl -s http://10.13.37.1/api/info` reports `"fw":"X.Y.Z"`.
+
+## Deploy the relay
+
+[`deploy-relay.yml`](../.github/workflows/deploy-relay.yml) runs `pnpm run deploy` in
+`relay/` (wrangler with the version baked in). Run it from Actions → Deploy Relay with a
+`ref` (tag, branch or SHA); `dry_run` bundles without deploying and needs no secrets.
+It runs after a release too when the repository variable `DEPLOY_RELAY_ON_RELEASE` is
+`true`.
+
+| Name | Kind | Value |
+|---|---|---|
+| `CLOUDFLARE_API_TOKEN` | secret | Cloudflare API token with **Workers Scripts: Edit** on the account |
+| `CLOUDFLARE_ACCOUNT_ID` | secret | the Cloudflare account that owns the worker |
+| `RELAY_URL` | variable (optional) | public relay origin; the deploy then waits for `/v1/health` to report the new version |
+| `DEPLOY_RELAY_ON_RELEASE` | variable (optional) | `true` to deploy the relay after every release |
+
+Store the secrets as repository secrets or on the `relay` environment (where you can also
+require an approval). No account id is committed: `relay/wrangler.jsonc` has none.
+
+Locally: `cd relay && pnpm run deploy` (uses your `wrangler login`), or
+`pnpm run deploy --dry-run --outdir dist` to bundle only.
+
+## Website
+
+[`deploy-website.yml`](../.github/workflows/deploy-website.yml) builds `website/` and
+publishes it to GitHub Pages on pushes to `main` that touch the site, creatures, docs or
+the console catalog. One-time setup: Settings → Pages → Source **GitHub Actions**, and
+DNS for `molty.uno` pointing at GitHub Pages. The domain comes from
+`website/public/CNAME`; the workflow fails if the built site lacks it.
+
+## CI
+
+[`ci.yml`](../.github/workflows/ci.yml) runs on every pull request and push to `main`:
+hygiene (no secrets or local paths, licences present, versions agree), console
+(typecheck, unit tests, build, Playwright walk-through), firmware (ESP-IDF v5.5 build in
+the pinned `espressif/idf` image, host tests, app size ≤ 90% of its OTA slot), relay
+(typecheck, tests, bundle), CLI (gofmt, vet, tests, build), creatures (re-export must
+match the committed `.molty` files) and website (check, build). Each has a `make`
+target to run it locally (`make help`).
+
+Actions are pinned by commit SHA and the ESP-IDF image by digest; bump them deliberately.
