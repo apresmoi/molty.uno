@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Molty Creature Viewer</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Ccircle cx=%278%27 cy=%279%27 r=%276%27 fill=%27%23f6b8c8%27/%3E%3C/svg%3E">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+<style>
+:root {
+  --bg: #f4efe8; --panel: #fbf8f3; --ink: #24212b; --muted: #77707f; --line: #e3dbd0;
+  --accent: #d9576b; --ok: #3f8f5a; --bad: #c4452f; --chip: #efe7dc; --stage: #ece5da;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #17151b; --panel: #1f1c24; --ink: #ece8f1; --muted: #9c95a6; --line: #34303b; --chip: #2a2631; --stage: #24212a; --accent: #f07b8d; --ok: #6cc28a; --bad: #f07a62; }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+button, select, input { font: inherit; color: inherit; }
+.app { display: grid; grid-template-columns: 270px 1fr 300px; height: 100vh; }
+aside { background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto; padding: 14px 12px; }
+aside.right { border-right: 0; border-left: 1px solid var(--line); }
+h1 { font-size: 16px; margin: 0 0 2px; letter-spacing: .2px; }
+h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 18px 0 8px; font-weight: 600; }
+.sub { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
+.group { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin: 14px 2px 6px; }
+.card { display: block; width: 100%; text-align: left; background: transparent; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin: 0 0 6px; cursor: pointer; }
+.card:hover { border-color: var(--muted); }
+.card.sel { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.card.other { border-style: dashed; }
+.row1 { display: flex; justify-content: space-between; gap: 6px; align-items: baseline; }
+.cname { font-weight: 600; }
+.arch { font-size: 11px; color: var(--muted); }
+.row2 { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; font-size: 11px; align-items: center; }
+.lic { background: var(--chip); border-radius: 4px; padding: 0 5px; }
+.lic.cc0 { color: var(--ok); }
+.tri.over { color: var(--bad); }
+.src { color: var(--muted); }
+.roster { font-size: 11px; color: var(--accent); margin-top: 3px; }
+main { display: flex; flex-direction: column; min-width: 0; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
+#moods { display: flex; gap: 4px; flex-wrap: wrap; }
+#moods button, .btn { border: 1px solid var(--line); background: var(--chip); border-radius: 999px; padding: 4px 11px; cursor: pointer; }
+#moods button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.toggles { display: flex; gap: 12px; flex-wrap: wrap; color: var(--muted); }
+.toggles label { display: flex; gap: 4px; align-items: center; cursor: pointer; }
+#autonote { color: var(--accent); font-size: 12px; min-height: 1em; }
+#stages { flex: 1; display: grid; grid-template-columns: 1fr; gap: 10px; padding: 10px; min-height: 0; }
+#stages.two { grid-template-columns: 1fr 1fr; }
+.stage { display: flex; flex-direction: column; background: var(--stage); border: 1px solid var(--line); border-radius: 12px; min-height: 0; overflow: hidden; }
+.stage.active { border-color: var(--accent); }
+.stage-head, .stage-foot { display: flex; gap: 10px; align-items: baseline; padding: 7px 12px; font-size: 12px; }
+.stage-foot { color: var(--muted); justify-content: space-between; flex-wrap: wrap; }
+.slot { background: var(--ink); color: var(--bg); border-radius: 4px; padding: 0 6px; font-weight: 700; }
+.sname { font-weight: 600; }
+.stris { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+.viewport { position: relative; flex: 1; min-height: 260px; display: flex; align-items: center; justify-content: center; }
+.viewport canvas.gl { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+.viewport canvas.dev { display: none; width: min(412px, 92%); aspect-ratio: 1; border-radius: 50%; box-shadow: 0 0 0 10px #0b0a0d, 0 0 0 11px var(--line); image-rendering: pixelated; touch-action: none; }
+.stage.device .viewport { background: radial-gradient(circle at 50% 50%, #2a2730 0, var(--stage) 70%); }
+.loading { position: absolute; top: 10px; left: 12px; color: var(--muted); display: none; }
+b.ok { color: var(--ok); } b.bad { color: var(--bad); }
+.clip { display: flex; justify-content: space-between; width: 100%; text-align: left; border: 1px solid transparent; background: transparent; border-radius: 6px; padding: 3px 8px; cursor: pointer; }
+.clip:hover { background: var(--chip); }
+.clip.on { border-color: var(--accent); background: var(--chip); }
+.dur { color: var(--muted); font-variant-numeric: tabular-nums; }
+.line { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 5px 0; }
+.line input[type=range] { flex: 1; }
+.line input[type=number] { width: 70px; }
+.muted { color: var(--muted); font-size: 12px; margin: 4px 0 8px; }
+.swatches { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 8px; }
+.sw { width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--line); cursor: pointer; padding: 0; }
+#devopts.off { opacity: .45; }
+.meter { height: 6px; background: var(--chip); border-radius: 3px; overflow: hidden; margin: 4px 0; }
+#envbar { height: 100%; width: 0; background: var(--accent); }
+.note { font-size: 12px; color: var(--muted); border-left: 3px solid var(--line); padding: 4px 8px; margin: 8px 0; }
+ul.credits { padding-left: 16px; margin: 4px 0; font-size: 12px; }
+ul.credits a { color: var(--ink); }
+#fps { color: var(--muted); font-size: 11px; margin-left: auto; }
+@media (max-width: 1100px) { .app { grid-template-columns: 1fr; height: auto; } aside { border: 0; max-height: none; } #stages { min-height: 70vh; } #stages.two { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <h1>Molty creatures</h1>
+    <p class="sub">Click a card to load it into the active stage.</p>
+    <p class="sub"><a href="fluid.html" style="color:var(--accent)">fluid of characters →</a></p>
+    <div id="cards"></div>
+  </aside>
+
+  <main>
+    <div class="toolbar">
+      <div id="moods"></div>
+      <div class="toggles">
+        <label title="Rule 12: self-amuse when ignored, doze after 45 s, tire after repeated pokes"><input type="checkbox" id="autopilot"> autopilot</label>
+        <label title="Rule 4: eyes lead, then head, then body toward the pointer"><input type="checkbox" id="gaze" checked> gaze follows pointer</label>
+        <label><input type="checkbox" id="emotes" checked> emotes</label>
+        <label title="Animalese-style blips while speaking"><input type="checkbox" id="sound"> blips</label>
+        <label><input type="checkbox" id="compare"> compare A | B</label>
+      </div>
+      <span id="autonote"></span>
+      <span id="fps"></span>
+    </div>
+    <div id="stages"></div>
+  </main>
+
+  <aside class="right">
+    <h2>Clips (embedded)</h2>
+    <div id="clips"></div>
+    <label class="line"><span>loop</span><input type="checkbox" id="loop" checked></label>
+    <label class="line"><span>crossfade</span><input type="range" id="fade" min="0" max="1.5" step="0.05" value="0.4"><span id="fadev">0.40 s</span></label>
+    <label class="line"><span>speed</span><input type="range" id="speed" min="0.1" max="2" step="0.05" value="1"><span id="speedv">1.00×</span></label>
+    <button class="btn" id="pause">pause</button>
+
+    <h2>Mood layer</h2>
+    <p class="muted">Procedural, additive, on top of any clip. Click the stage to poke. Speech envelope (fake TTS, 4–5 Hz):</p>
+    <div class="meter"><div id="envbar"></div></div>
+    <p class="muted" id="posev"></p>
+
+    <h2>Device preview</h2>
+    <label class="line"><span><b>412 × 412 round LCD</b></span><input type="checkbox" id="dev-on"></label>
+    <div id="devopts" class="off">
+      <label class="line"><span>glyph grid</span><input type="checkbox" id="dev-glyph" checked></label>
+      <label class="line"><span>grid</span><select id="dev-grid"><option>48</option><option>64</option><option selected>72</option><option>96</option></select></label>
+      <label class="line"><span>cells</span><select id="dev-cells"><option value="rect">rect fill (canonical)</option><option value="glyph">glyph characters</option></select></label>
+      <div class="note">Orthographic, flat Lambert (1 white directional + 0.4 ambient), one colour per face, no textures, no AA. Budget: 30 ms/frame at 33 fps = 10 ms flush + ~0.016 ms/poly + ~0.0022 ms/cell → about 600 tris per creature. Estimates per stage under the viewport.</div>
+    </div>
+
+    <div id="custom-sec">
+      <h2>Customise (Route 2 · 3)</h2>
+      <div id="custom"></div>
+    </div>
+  </aside>
+</div>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fluid sound harness</title>
+<style>
+  :root { --bg:#0b0d11; --fg:#d8dee8; --dim:#7d8696; --line:#232834; --acc:#7fe3c4; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.4 ui-monospace,Menlo,monospace; }
+  main { max-width:980px; margin:0 auto; padding:16px; display:grid; gap:14px; }
+  h1 { font-size:15px; margin:0; font-weight:600; } p { margin:0; color:var(--dim); }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  button { font:inherit; color:var(--fg); background:#161a22; border:1px solid var(--line); border-radius:6px; padding:5px 10px; cursor:pointer; }
+  button:hover { border-color:var(--acc); } button.on { border-color:var(--acc); color:var(--acc); }
+  .card { border:1px solid var(--line); border-radius:10px; padding:12px; }
+  .stage { display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+  #pad { width:180px; height:180px; border-radius:50%; background:radial-gradient(circle at 50% 45%,#1c2430,#0e1218); border:1px solid var(--line); cursor:crosshair; position:relative; overflow:hidden; }
+  #pad span { position:absolute; inset:0; display:grid; place-items:center; color:var(--dim); pointer-events:none; }
+  #motor { width:46px; height:46px; border-radius:50%; background:#2a1d14; border:1px solid #5a3a24; }
+  canvas { width:100%; height:240px; display:block; border-radius:8px; }
+  #layers { display:grid; grid-template-columns:repeat(auto-fill,minmax(130px,1fr)); gap:6px 12px; }
+  .lv { display:grid; grid-template-columns:80px 1fr; gap:6px; align-items:center; color:var(--dim); }
+  .lv b { height:4px; background:#1c212b; border-radius:2px; overflow:hidden; } .lv b i { display:block; height:100%; background:var(--acc); width:0; }
+  #out { color:var(--dim); white-space:pre-wrap; }
+</style>
+</head>
+<body>
+<main>
+  <div><h1>Fluid sound harness</h1><p>Fakes the fluid on the real bus. Sound on, then poke the buttons. Plot: level, pitch, haptic, pulses (dots), beats (ticks).</p></div>
+  <div class="row">
+    <button id="power">sound on</button>
+    <button id="b-breathe" class="on">breathe</button>
+    <button id="b-think">think</button>
+    <button id="b-speak">speak a sentence</button>
+    <button id="b-trans">transition</button>
+    <span style="color:var(--dim)">mood:</span>
+    <button data-mood="happy">happy</button><button data-mood="sleepy">sleepy</button>
+    <button data-mood="surprised">surprised</button><button data-mood="listening">listening</button>
+    <button data-mood="neutral">neutral</button>
+    <button id="b-mic">mic swell</button>
+  </div>
+  <div class="card stage">
+    <div id="pad"><span>touch</span></div>
+    <div id="motor" title="simulated ERM motor"></div>
+    <div id="sound-panel" style="flex:1;min-width:240px"></div>
+  </div>
+  <canvas id="plot" width="1900" height="480"></canvas>
+  <div class="card" id="layers"></div>
+  <div class="card">
+    <div class="row"><span style="color:var(--dim)">offline render:</span><span id="renders" class="row"></span></div>
+    <div id="out"></div>
+  </div>
+</main>
+<script type="module">
+  import { bus } from '../bus.js';
+  import { start, stop, running } from './index.js';
+  import { FakeFluid, SCENARIOS, SENTENCE, wordMs } from './scenarios.js';
+  import { renderScenario, encodeWav } from './offline.js';
+  import { drawPlot } from './plot.js';
+  import { LAYERS, LAYER_LABELS } from './engine.js';
+
+  const $ = (s) => document.querySelector(s);
+  const fluid = new FakeFluid(bus);
+  const log = { audio: [], haptic: [], pulse: [] };
+  bus.on('audio', (a) => log.audio.push(a));
+  bus.on('haptic', (h) => log.haptic.push(h));
+  bus.on('pulse', (p) => log.pulse.push(p));
+  window.__log = log;
+
+  // fake fluid frames at display rate; `t` here is page time, the sound reports its own clock
+  let last = performance.now();
+  (function loop(now) {
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    fluid.frame(now / 1000, dt);
+    requestAnimationFrame(loop);
+  })(last);
+
+  let api = null;
+  $('#power').onclick = async () => {
+    if (running()) { await stop(); api = null; $('#power').textContent = 'sound on'; return; }
+    api = await start(); window.__api = api; $('#power').textContent = 'sound off';
+  };
+  $('#b-breathe').onclick = (e) => { fluid.breathing = !fluid.breathing; e.target.classList.toggle('on', fluid.breathing); };
+  let thinking = false;
+  $('#b-think').onclick = (e) => { thinking = !thinking; e.target.classList.toggle('on', thinking); bus.emit('mood', { name: thinking ? 'thinking' : 'neutral' }); };
+  let speakTimer = null;
+  function speak(text = SENTENCE) {
+    clearTimeout(speakTimer);
+    const words = text.split(/\s+/); let i = 0;
+    const next = () => { if (i >= words.length) return; const word = words[i++], ms = wordMs(word); bus.emit('word', { word, orp: Math.floor(word.length * 0.35), ms }); speakTimer = setTimeout(next, ms); };
+    next();
+  }
+  $('#b-speak').onclick = () => speak();
+  const states = ['blob', 'creature', 'text', 'effect:ripple']; let si = 0;
+  $('#b-trans').onclick = () => {
+    const from = states[si], to = states[(si = (si + 1) % states.length)];
+    fluid.state = to; bus.emit('state', { from, to });
+    setTimeout(() => bus.emit('settle', { state: to }), 900);
+  };
+  document.querySelectorAll('[data-mood]').forEach((b) => b.onclick = () => { thinking = false; $('#b-think').classList.remove('on'); bus.emit('mood', { name: b.dataset.mood }); });
+  $('#b-mic').onclick = () => { let k = 0; const id = setInterval(() => { k++; fluid.micEnergy = k < 30 ? k / 30 : Math.max(0, 1 - (k - 30) / 20); if (k > 50) { clearInterval(id); fluid.micEnergy = 0; } }, 50); };
+  $('#pad').onpointerdown = (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+    const strength = Math.max(0.1, 1 - Math.hypot(x - 0.5, y - 0.5) * 2);
+    bus.emit('ripple', { x, y, strength });
+  };
+  window.__ui = { speak, fluid };
+
+  // live layer meters + plot
+  const lvEls = {};
+  for (const n of LAYERS) { const d = document.createElement('div'); d.className = 'lv'; d.innerHTML = `<span>${LAYER_LABELS[n]}</span><b><i></i></b>`; $('#layers').append(d); lvEls[n] = d.querySelector('i'); }
+  const cv = $('#plot');
+  (function draw() {
+    const a = log.audio, tEnd = a.length ? a[a.length - 1].t : 0;
+    for (const k of Object.keys(log)) { const arr = log[k]; let i = 0; while (i < arr.length && arr[i].t < tEnd - 12) i++; if (i) arr.splice(0, i); }
+    drawPlot(cv, log, { t0: tEnd - 8, t1: tEnd, title: running() ? 'live (audio clock)' : 'sound off', dpr: 2 });
+    const lv = a.length ? a[a.length - 1].layers : null;
+    if (lv) for (const n of LAYERS) lvEls[n].style.width = `${(lv[n] * 100).toFixed(0)}%`;
+    requestAnimationFrame(draw);
+  })();
+
+  // offline renders → WAV download
+  for (const name of Object.keys(SCENARIOS)) {
+    const b = document.createElement('button'); b.textContent = name;
+    b.onclick = async () => {
+      b.disabled = true; const preset = api?.engine?.preset || 'glass';
+      const r = await renderScenario(name, { preset });
+      const a = document.createElement('a'); a.href = URL.createObjectURL(encodeWav(r.buffer)); a.download = `fluid-${name}-${preset}.wav`; a.click();
+      $('#out').textContent = `${name}: ${r.seconds.toFixed(1)} s rendered in ${r.wallMs.toFixed(0)} ms (${(r.seconds * 1000 / r.wallMs).toFixed(0)}x realtime), ${r.log.pulse.length} pulses`;
+      b.disabled = false;
+    };
+    $('#renders').append(b);
+  }
+  window.__offline = { renderScenario, encodeWav, drawPlot, SCENARIOS };
+</script>
+</body>
+</html>

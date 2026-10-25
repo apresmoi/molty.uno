@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Molty Fluid Characters</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Ccircle cx=%278%27 cy=%278%27 r=%277%27 fill=%27%23000%27/%3E%3Ctext x=%278%27 y=%2711.5%27 font-size=%279%27 text-anchor=%27middle%27 fill=%27%2396ffaf%27 font-family=%27monospace%27%3E%40%3C/text%3E%3C/svg%3E">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+<style>
+:root {
+  --bg: #f4efe8; --panel: #fbf8f3; --ink: #24212b; --muted: #77707f; --line: #e3dbd0;
+  --accent: #d9576b; --chip: #efe7dc; --stage: #ece5da;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #17151b; --panel: #1f1c24; --ink: #ece8f1; --muted: #9c95a6; --line: #34303b; --chip: #2a2631; --stage: #24212a; --accent: #f07b8d; }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--ink); font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+button, select, input, textarea { font: inherit; color: inherit; }
+.app { display: grid; grid-template-columns: 1fr 320px; min-height: 100vh; }
+main { display: flex; flex-direction: column; min-width: 0; }
+header { display: flex; gap: 12px; align-items: baseline; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+h1 { font-size: 16px; margin: 0; }
+header a { color: var(--muted); }
+#reelstep { color: var(--accent); font-variant-numeric: tabular-nums; margin-left: auto; }
+.stagewrap { flex: 1; display: flex; align-items: center; justify-content: center; padding: 18px; background: radial-gradient(circle at 50% 50%, #2a2730 0, var(--stage) 75%); min-height: 480px; overflow: auto; }
+#stage { display: block; border-radius: 50%; box-shadow: 0 0 0 10px #0b0a0d, 0 0 0 11px var(--line); touch-action: none; cursor: crosshair; background: #000; }
+.foot { padding: 6px 16px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; border-top: 1px solid var(--line); background: var(--panel); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.emeter { width: 80px; height: 6px; background: var(--chip); border-radius: 3px; overflow: hidden; }
+#meter { height: 100%; width: 0; background: var(--accent); }
+aside { background: var(--panel); border-left: 1px solid var(--line); padding: 12px; overflow-y: auto; max-height: 100vh; }
+h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 16px 0 6px; font-weight: 600; }
+h2:first-child { margin-top: 2px; }
+.btns { display: flex; flex-wrap: wrap; gap: 4px; }
+.btns button, .btn { border: 1px solid var(--line); background: var(--chip); border-radius: 999px; padding: 3px 10px; cursor: pointer; }
+.btns button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.line { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 5px 0; }
+.line input[type=range] { flex: 1; min-width: 0; }
+.line select { max-width: 190px; }
+.line .v { width: 62px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+textarea { width: 100%; min-height: 54px; background: var(--chip); border: 1px solid var(--line); border-radius: 6px; padding: 5px; resize: vertical; }
+.muted { color: var(--muted); font-size: 12px; }
+.soundrow { display: flex; align-items: center; gap: 10px; }
+#motor { width: 22px; height: 22px; border-radius: 50%; background: var(--chip); border: 1px solid var(--line); flex: none; }
+#sound-panel:empty { display: none; }
+@media (max-width: 900px) { .app { grid-template-columns: 1fr; } aside { max-height: none; border-left: 0; border-top: 1px solid var(--line); } .stagewrap { padding: 16px; min-height: 0; } #stage { max-width: 100%; height: auto !important; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <main>
+    <header>
+      <h1>Molty — fluid of characters</h1>
+      <a href="index.html">← creature viewer</a>
+      <span id="reelstep"></span>
+    </header>
+    <div class="stagewrap"><canvas id="stage" width="412" height="412"></canvas></div>
+    <div class="foot"><span>energy</span><div class="emeter"><div id="meter"></div></div><span id="stats"></span><span id="gridinfo"></span></div>
+  </main>
+  <aside>
+    <h2>Show reel</h2>
+    <label class="line"><span>autoplay  (blob → creature → ripple → text → …)</span><input type="checkbox" id="autoplay" checked></label>
+    <div class="btns">
+      <button data-state="blob">blob</button><button data-state="creature">creature</button><button data-state="text">speed text</button>
+      <button data-state="effect:ripple">ripple bloom</button><button data-state="effect:vortex">vortex</button><button data-state="effect:wave">wave sheet</button>
+    </div>
+    <label class="line"><span>transition speed</span><input type="range" id="speed" min="0.4" max="2.5" step="0.05"><span class="v" id="speedv"></span></label>
+
+    <h2>Creature</h2>
+    <label class="line"><span>creature</span><select id="creature"></select></label>
+    <div class="btns" id="moods"></div>
+    <label class="line"><span>ink contours (part edges as / - \ |)</span><input type="checkbox" id="edges"></label>
+
+    <h2>Speed text</h2>
+    <textarea id="sentence"></textarea>
+    <label class="line"><span>WPM</span><input type="range" id="wpm" min="100" max="800" step="10"><span class="v" id="wpmv"></span></label>
+    <label class="line"><span>look</span><select id="textmode"><option value="plain">plain large letters (condensing)</option><option value="glyph">glyph-of-glyphs (fluid letters)</option></select></label>
+
+    <h2>Look</h2>
+    <label class="line"><span>edges</span><select id="braille"><option value="off">ASCII strokes / - \ |</option><option value="contours">braille contours (2×4 dots)</option><option value="all">all braille (dither + contours)</option></select></label>
+    <label class="line"><span>glyph ramp</span><select id="ramp"></select></label>
+    <label class="line"><span>palette</span><select id="palette"><option value="green">mono green</option><option value="amber">warm amber</option><option value="pastel">pastel creature colours</option></select></label>
+    <label class="line"><span>grid</span><select id="grid"><option value="44x27">44 × 27</option><option value="52x32">52 × 32 (13 px glyphs)</option><option value="60x37">60 × 37</option></select></label>
+    <label class="line"><span>2× zoom</span><input type="checkbox" id="zoom"></label>
+
+    <h2>Input</h2>
+    <p class="muted">Click or drag the screen to ripple and stir it.</p>
+    <label class="line"><span>mic level</span><input type="range" id="mic" min="0" max="1" step="0.01"><span class="v" id="micv"></span></label>
+
+    <h2>Sound + haptics</h2>
+    <div class="soundrow"><button class="btn" id="sound-on">sound on</button><div id="motor" title="vibration motor (simulated)"></div><span class="muted" id="sound-note"></span></div>
+    <div id="sound-panel"></div>
+  </aside>
+</div>
+<script type="module" src="js/fluid/main.js"></script>
+<script type="module">
+// The sound engine lives in js/fluid/sound/ (separate owner). Loaded guarded so the
+// fluid still runs if that module is missing or throws; started from a user gesture.
+const btn = document.getElementById('sound-on'), note = document.getElementById('sound-note');
+let mod = null, on = false;
+try { mod = await import('./js/fluid/sound/index.js'); }
+catch (e) { console.info('[fluid] sound module unavailable:', e.message); btn.disabled = true; note.textContent = 'sound module unavailable'; }
+btn.onclick = async () => {
+  if (!mod) return;
+  try {
+    if (!on) { if (typeof mod.start === 'function') await mod.start(); on = true; btn.textContent = 'sound off'; }
+    else { if (typeof mod.stop === 'function') await mod.stop(); on = false; btn.textContent = 'sound on'; }
+  } catch (e) { console.warn('[fluid] sound failed:', e); note.textContent = 'sound failed: ' + e.message; }
+};
+</script>
+</body>
+</html>
