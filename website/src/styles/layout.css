@@ -1,0 +1,11 @@
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: var(--m-header-height);
+}
+.site-content {
+  min-height: 100dvh;
+  overflow-x: clip;
+}
+.site-content > main {
+  padding-top: var(--m-header-height);
+}

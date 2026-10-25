@@ -1,0 +1,15 @@
+.title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--m-space-2);
+  color: var(--m-ink);
+  font: 700 var(--m-text-md) / 1 var(--m-font-mono);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.mark {
+  color: var(--m-accent);
+}
+.title:hover .name {
+  color: var(--m-accent);
+}

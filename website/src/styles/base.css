@@ -1,0 +1,33 @@
+html {
+  background: var(--m-bg);
+}
+body {
+  margin: 0;
+  color: var(--m-ink);
+  font: var(--m-text-base) / 1.55 var(--m-font-mono);
+  -webkit-font-smoothing: antialiased;
+}
+button,
+input {
+  font: inherit;
+}
+a {
+  color: var(--m-accent);
+}
+:focus-visible {
+  outline: 2px solid var(--m-accent);
+  outline-offset: 2px;
+}
+::selection {
+  background: var(--m-accent-soft);
+  color: var(--m-ink);
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--m-faint) transparent;
+}
+@media (prefers-reduced-motion: reduce) {
+  * {
+    scroll-behavior: auto !important;
+  }
+}

@@ -1,0 +1,47 @@
+/* The source of UI colours, type, spacing and layout sizes. Values follow the device
+   console (console/src/style.css): black glass, one soft mint accent, monospace. */
+:root {
+  color-scheme: dark;
+  --m-bg: #000;
+  --m-panel: #0a0c0b;
+  --m-glass: #0b0d0c;
+  --m-line: #1d2320;
+  --m-ink: #d8e2dc;
+  --m-dim: #7d8a83;
+  --m-faint: #39423d;
+  --m-accent: #9fe8c4;
+  --m-accent-ink: #001a0e;
+  --m-warn: #ffcf7a;
+  --m-accent-glow: rgba(159, 232, 196, 0.07);
+  --m-accent-soft: rgba(159, 232, 196, 0.14);
+  --m-overlay: rgba(0, 0, 0, 0.85);
+
+  --m-font-mono: ui-monospace, "SF Mono", Menlo, "JetBrains Mono", Consolas, monospace;
+  --m-font-sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+
+  --m-text-xs: 11px;
+  --m-text-sm: 12px;
+  --m-text-base: 14px;
+  --m-text-md: 16px;
+  --m-text-lg: 19px;
+  --m-text-xl: 28px;
+  --m-text-hero: clamp(30px, 5.2vw, 52px);
+
+  --m-space-1: 4px;
+  --m-space-2: 8px;
+  --m-space-3: 12px;
+  --m-space-4: 16px;
+  --m-space-6: 24px;
+  --m-space-8: 32px;
+  --m-space-12: 48px;
+  --m-space-16: 64px;
+
+  --m-radius: 10px;
+  --m-radius-lg: 16px;
+  --m-header-height: 56px;
+  --m-content-width: 1080px;
+  --m-gutter: 16px;
+  --m-sidebar-width: 280px;
+  --m-z-header: 100;
+  --sl-nav-height: var(--m-header-height);
+}

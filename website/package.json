@@ -1,0 +1,38 @@
+{
+  "name": "@molty/website",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "description": "molty.uno: the Molty landing page and documentation.",
+  "license": "MIT",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "sync": "node scripts/sync-docs.mjs",
+    "dev": "pnpm sync && astro dev --port 4330",
+    "build": "pnpm sync && astro build && node scripts/generate-llms-txt.mjs",
+    "preview": "astro preview --port 4330",
+    "check": "node scripts/checks/architecture.mjs && node scripts/checks/format.mjs",
+    "format": "node scripts/checks/format.mjs --write",
+    "og": "node scripts/generate-og.mjs",
+    "screens": "node e2e/screens.mjs"
+  },
+  "dependencies": {
+    "@astrojs/react": "^5.0.2",
+    "@astrojs/sitemap": "^3.7.1",
+    "@astrojs/starlight": "^0.38.2",
+    "astro": "^6.0.8",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "sharp": "^0.34.2"
+  },
+  "devDependencies": {
+    "@astrojs/compiler": "3.0.1",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "playwright": "1.61.1",
+    "postcss": "8.5.8",
+    "prettier": "3.6.2",
+    "prettier-plugin-astro": "0.14.1",
+    "typescript": "5.9.3"
+  }
+}

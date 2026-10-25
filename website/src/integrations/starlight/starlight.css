@@ -1,0 +1,107 @@
+/* Starlight keeps its navigation, search and Markdown rendering; this adapter maps its
+   chrome to the site tokens. Unlayered rules override the vendor's cascade layers. */
+:root,
+:root[data-theme="dark"] {
+  --sl-font: var(--m-font-sans);
+  --sl-font-mono: var(--m-font-mono);
+  --sl-color-accent-low: var(--m-panel);
+  --sl-color-accent: var(--m-accent);
+  --sl-color-accent-high: var(--m-accent);
+  --sl-color-white: var(--m-ink);
+  --sl-color-gray-1: var(--m-ink);
+  --sl-color-gray-2: var(--m-ink);
+  --sl-color-gray-3: var(--m-dim);
+  --sl-color-gray-4: var(--m-faint);
+  --sl-color-gray-5: var(--m-line);
+  --sl-color-gray-6: var(--m-panel);
+  --sl-color-black: var(--m-bg);
+  --sl-color-bg: var(--m-bg);
+  --sl-color-bg-nav: var(--m-bg);
+  --sl-color-bg-sidebar: var(--m-bg);
+  --sl-color-bg-inline-code: var(--m-panel);
+  --sl-color-text: var(--m-ink);
+  --sl-color-text-accent: var(--m-accent);
+  --sl-color-text-invert: var(--m-accent-ink);
+  --sl-color-hairline-light: var(--m-line);
+  --sl-color-hairline: var(--m-line);
+  --sl-color-hairline-shade: var(--m-line);
+  --sl-color-backdrop-overlay: var(--m-overlay);
+  --sl-shadow-sm: none;
+  --sl-shadow-md: none;
+  --sl-shadow-lg: none;
+  --sl-text-h1: var(--m-text-xl);
+  --sl-sidebar-width: var(--m-sidebar-width);
+}
+
+/* SiteHeader owns the fixed header; Starlight only reserves its space. */
+.page > header.header {
+  position: fixed;
+  inset: 0 0 auto;
+  height: var(--m-header-height);
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+
+.sidebar-pane,
+.right-sidebar,
+.main-pane {
+  background: var(--m-bg);
+}
+.sidebar-content {
+  font-family: var(--m-font-mono);
+  font-size: var(--m-text-sm);
+}
+.sidebar-content a[aria-current="page"] {
+  background: transparent;
+  color: var(--m-accent);
+  font-weight: 600;
+}
+.sidebar-content a[aria-current="page"]::before {
+  content: "⠶ ";
+}
+.sidebar-content .group-label .large {
+  font-family: var(--m-font-mono);
+  font-size: var(--m-text-sm);
+  color: var(--m-dim);
+  text-transform: lowercase;
+  letter-spacing: 0.08em;
+}
+
+.sl-markdown-content h1,
+.sl-markdown-content h2,
+.sl-markdown-content h3,
+.content-panel h1 {
+  font-family: var(--m-font-mono);
+  letter-spacing: -0.01em;
+}
+.sl-markdown-content :is(pre, code) {
+  font-family: var(--m-font-mono);
+}
+.sl-markdown-content table {
+  font-size: var(--m-text-sm);
+}
+.sl-markdown-content a {
+  text-underline-offset: 0.2em;
+}
+.expressive-code .frame {
+  --ec-frm-edBg: var(--m-panel);
+}
+
+/* Starlight's mobile menu toggle sits over the header's right edge; reserve its room. */
+@media (max-width: 50rem) {
+  :root {
+    --m-header-end: 60px;
+  }
+}
+
+/* Prose reads in the sans face (as the console's setup flow does); code and chrome stay mono. */
+.sl-markdown-content {
+  font-family: var(--m-font-sans);
+  font-size: var(--m-text-md);
+}
+:root {
+  --sl-text-h2: 22px;
+  --sl-text-h3: 18px;
+  --sl-text-h4: 16px;
+}

@@ -1,0 +1,20 @@
+---
+import Head from "../integrations/astro/Head.astro";
+import { SiteHeader } from "../components/SiteHeader";
+import "../styles/global.css";
+export interface Props {
+  title: string;
+  description: string;
+  path: string;
+  image?: string;
+}
+const page = Astro.props;
+---
+
+<html lang="en">
+  <head><Head {...page} /><slot name="head" /></head>
+  <body class="site-content">
+    <SiteHeader pathname={Astro.url.pathname} />
+    <slot />
+  </body>
+</html>
