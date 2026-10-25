@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Host gate for the exact device protocol helpers; no device or network access.
+set -euo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LINK="$HERE/../../main/link"
+HW="$HERE/../../main/hw"
+IDF_JSON="${IDF_PATH:-$HOME/esp/esp-idf}/components/json/cJSON"
+OUT="$(mktemp -d "${TMPDIR:-/tmp}/molty-link-test.XXXXXX")"
+trap 'rm -rf "$OUT"' EXIT
+cc -std=c11 -Wno-deprecated-declarations ${LINK_TEST_CFLAGS:-} -I"$IDF_JSON" \
+  -c "$IDF_JSON/cJSON.c" -o "$OUT/cJSON.o"
+cc -std=c11 -Wall -Wextra -Werror -O2 ${LINK_TEST_CFLAGS:-} \
+  -I"$LINK" -I"$IDF_JSON" "$HERE/link_test.c" \
+  "$LINK/link_protocol.c" "$OUT/cJSON.o" -lm -o "$OUT/link_test"
+"$OUT/link_test"
+
+# Shadow only SDK/driver boundaries; compile the real firmware control paths.
+mkdir -p "$OUT/stubs/freertos" "$OUT/stubs/driver" "$OUT/stubs/mbedtls"
+for header in esp_err.h esp_app_desc.h esp_random.h esp_timer.h nvs.h \
+  esp_http_server.h esp_websocket_client.h esp_crt_bundle.h esp_heap_caps.h \
+  esp_netif.h esp_wifi.h esp_log.h mole_audio.h mole_creature.h mole_diag.h sdkconfig.h \
+  freertos/idf_additions.h \
+  freertos/FreeRTOS.h freertos/task.h freertos/queue.h freertos/semphr.h \
+  freertos/ringbuf.h driver/gpio.h mbedtls/base64.h; do
+  printf '#include "link_sdk_stub.h"\n' > "$OUT/stubs/$header"
+done
+
+# Compile the actual driver streaming seam without unrelated mic/board setup.
+python3 - "$HW/mole_audio.c" "$OUT/audio_stream_under_test.inc" <<'PY'
+from pathlib import Path
+import sys
+source = Path(sys.argv[1]).read_text()
+start = source.index('esp_err_t mole_audio_tx_stream_begin(')
+end = source.index('static void rx_release(void) {', start)
+Path(sys.argv[2]).write_text(source[start:end])
+PY
+cc -std=c11 -Wall -Wextra -Werror -O2 ${LINK_TEST_CFLAGS:-} \
+  -I"$HERE" -I"$OUT" -I"$IDF_JSON" "$HERE/link_dma_test.c" -o "$OUT/link_dma_test"
+"$OUT/link_dma_test"
+for test in identity audio_pair client; do
+  extra=()
+  if [ "$test" = identity ]; then extra+=("$LINK/link_identity.c"); fi
+  cc -std=c11 -Wall -Wextra -Werror -O2 ${LINK_TEST_CFLAGS:-} \
+    -I"$OUT/stubs" -I"$HERE" -I"$LINK" -I"$IDF_JSON" \
+    "$HERE/link_${test}_test.c" "$HERE/link_sdk_stub.c" \
+    "$LINK/link_protocol.c" ${extra[@]+"${extra[@]}"} "$OUT/cJSON.o" -lm -o "$OUT/link_${test}_test"
+  "$OUT/link_${test}_test"
+done

@@ -1,0 +1,131 @@
+# Target: Waveshare ESP32-S3-Touch-LCD-1.46 (plain `idf.py build` picks the target up from here)
+CONFIG_IDF_TARGET="esp32s3"
+
+CONFIG_TINYUSB_NET_MODE_NCM=y
+
+# HTTP server — larger stack for JSON handlers, more sockets for concurrent browser tabs
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+CONFIG_HTTPD_MAX_URI_LEN=512
+CONFIG_HTTPD_ERR_RESP_NO_DELAY=y
+
+# WebSocket support — required for /ws/imu
+CONFIG_HTTPD_WS_SUPPORT=y
+
+# Large request bodies — pushing 100+ KB UIs to /dev/html requires bigger TCP
+# buffers than the lwIP defaults (5744 byte window, 6-slot recvmbox). Without
+# this the device crashes around ~135 KB into a POST as lwIP pools exhaust.
+CONFIG_LWIP_TCP_WND_DEFAULT=32768
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=32768
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=32
+CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64
+
+# Extend httpd recv timeout — large PSRAM calloc + slow PDM mic init can stall
+# request handling longer than the 5-second default.
+CONFIG_HTTPD_RECV_WAIT_TIMEOUT=20
+CONFIG_HTTPD_SEND_WAIT_TIMEOUT=20
+
+# Task watchdog (TWDT): panic-on-trip, so a wedged long-running task produces
+# a coredump (GET /api/coredump) instead of silently hanging forever —
+# 10s is generous headroom over every legitimate stall on the subscribed
+# tasks (LCD full flush ~8ms, imu_ws's slowest rate-limited period 1s) while
+# still catching a genuine wedge quickly.
+#
+# Subscribed + fed tasks (see the esp_task_wdt_add call sites): imu_poll
+# (hw/mole_imu.c), imu_ws (net/http.c), fluid_task and fluid_draw
+# (fluid/mole_fluid.c). Nothing else can trip the TWDT.
+#
+# CHECK_IDLE_TASK_CPU0/1 are deliberately left OFF (see below), NOT left at
+# their Kconfig default of y: idle-task watch is core-wide — it fires if
+# *any* task (subscribed or not) hogs a core long enough to starve that
+# core's FreeRTOS idle task. The old comment right above this one (kept in
+# git blame) is direct evidence why that matters here: the httpd worker
+# legitimately holds a core for extended stretches — the chunked /dev/html
+# SPIFFS persist (~40s worst case, spiffs_save_html) and large POST body
+# copies — which is exactly the scenario that previously forced this
+# timeout up to 60s. The httpd worker is intentionally NOT subscribed to the
+# TWDT (its stalls are audited/expected, not a wedge), but idle-task
+# checking would still catch its CPU-hogging and turn a known-slow-but-
+# legitimate deploy path into a spurious panic at a 10s timeout. Revisit only
+# after on-device validation shows the audited-task subscription set isn't
+# catching real wedges and idle-task false positives are ruled out.
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+CONFIG_ESP_TASK_WDT_PANIC=y
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=n
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=n
+
+# Interrupt watchdog: default 300ms tripped ON HARDWARE when esp_spiffs_format()
+# of the 8.4 MB spiffs partition ran inline in an httpd handler (reset_reason
+# "int_wdt"). The format now runs at early boot instead (before tinyusb/wifi/
+# httpd — see net/http.c SPIFFS recovery), but 800ms gives even that path
+# generous margin against multi-sector flash-erase bursts stalling the cache.
+# Still low enough to catch genuinely stuck interrupt handlers.
+CONFIG_ESP_INT_WDT_TIMEOUT_MS=800
+
+# mDNS: do NOT auto-register on Wi-Fi netifs. We want molty.local to deterministically
+# resolve to 10.13.37.1 (the USB-side IP), not to whatever IP the device has on Wi-Fi.
+# Ethernet auto-registration stays enabled because our USB-NCM netif uses the
+# Ethernet stack (ethernetif_init/input_fn) and we want it auto-registered.
+CONFIG_MDNS_PREDEF_NETIF_STA=n
+CONFIG_MDNS_PREDEF_NETIF_AP=n
+
+# Custom OTA partition table: two 3.75 MB app slots + ~8.4 MB SPIFFS (see partitions.csv).
+# Enables hands-free flashing over HTTP via /api/ota — no BOOT button, no esptool.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_OFFSET=0x8000
+
+# OTA rollback: a freshly-OTA'd image boots PENDING_VERIFY; the app must call
+# esp_ota_mark_app_valid_cancel_rollback() once healthy or the bootloader reverts
+# to the previous slot on next reset. Makes OTA iteration safe (bad build self-heals).
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# PSRAM: 8 MB OPI on the ESP32-S3-N16R8 (Waveshare 1.46). Without USE_CAPS_ALLOC the
+# heap_caps_get_free_size(MALLOC_CAP_SPIRAM) returns 0 and big allocations silently
+# fall back to SRAM — which exhausts the 320 KB pool mid-large-POST. Force it on
+# here (was in sdkconfig.defaults.esp32s3 but didn't propagate after partition-table
+# changes wiped sdkconfig).
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_TYPE_AUTO=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_CAPS_ALLOC=y
+
+# Core dump to flash: CONFIG_ESP_CONSOLE_NONE
+# (sdkconfig.defaults.esp32s3, above) means there is NO UART/USB-Serial-JTAG
+# console on this board — `idf.py monitor` shows nothing on a panic, and
+# UART-based coredump capture is a non-starter for the same reason. Flash is
+# the only channel left, so it's written to the dedicated "coredump" 64 KB
+# partition (partitions.csv) and pulled off over HTTP via GET /api/coredump
+# (see net/http.c) since there's no serial port to run
+# `idf.py coredump-info` against directly.
+#
+# Tasks may keep their stacks in PSRAM (CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM).
+# The coredump writer still works because ESP_COREDUMP_USE_STACK_SIZE (default y
+# with that option) runs it on its own small internal-DRAM stack. Do not disable
+# ESP_COREDUMP_USE_STACK_SIZE without re-checking this.
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_SHA256=y
+CONFIG_ESP_COREDUMP_CHECK_BOOT=y
+
+# Lets EXT_RAM_BSS_ATTR (esp_attr.h) place large `static` buffers in PSRAM instead
+# of internal DRAM (~512 KB, mostly taken by USB/lwIP/FreeRTOS). Kept on so large
+# file-scope scratch buffers can opt into PSRAM.
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+
+# Outbound agent link: verified WSS via IDF root CA bundle.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
+
+# mole_diag: per-task CPU % (/api/diag) + previous-boot log ring in no-init PSRAM
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID=y
+CONFIG_SPIRAM_ALLOW_NOINIT_SEG_EXTERNAL_MEMORY=y
+
+# Internal-RAM pressure (2026-10-25): with the fluid's int16 fields in internal
+# RAM, the 16.7 KB mbedTLS input buffer no longer fit (largest block 15.8 KB) and
+# the wss link could not connect; Wi-Fi/lwIP buffers starved too (5 KB/s HTTP).
+# TLS buffers and Wi-Fi/lwIP dynamic buffers live in PSRAM instead.
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y

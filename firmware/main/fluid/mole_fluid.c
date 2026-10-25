@@ -1,0 +1,1005 @@
+/*
+ * mole_fluid.c — "fluid" creature: Molty as a fluid of characters.
+ *
+ * Target board: Waveshare ESP32-S3-Touch-LCD-1.46 (412x412 round LCD)
+ * FQBN: esp32:esp32:esp32s3:FlashSize=16M,PSRAM=enabled,CDCOnBoot=cdc
+ *
+ * Port of creatures/js/fluid/main.js (wiring + show reel) on top of
+ * fluid_sim/target/draw.c. Threading:
+ *   - fluid_task (core 1, prio 2) OWNS the sim, targets, renderer and the LCD while
+ *     active: touch poll, IMU read, sequencer, fixed 60 Hz steps, draw, flush.
+ *   - the httpd task only touches s_cfg / pending requests / s_stats under s_mutex
+ *     (held for microseconds), so a slow frame never stalls the single-threaded
+ *     HTTP server and a POST never waits on a frame.
+ *
+ * FRAME BUDGET (52×32 = 1664 cells, ~1280 inside the disc; estimates for the S3 @
+ * 160 MHz with PSRAM-resident fields, before on-device measurement):
+ *   target fill + background floor + ψ noise   ~2.5 ms   (3 noise3/cell)
+ *   2 × sim step (60 Hz fixed step @ 30 fps)   ~5 ms
+ *   view + braille draw (dirty cells only)     ~4 ms
+ *   flush (dirty row band, ≤ full 412² QSPI)   ≤ 9 ms
+ *   total                                      ~20 ms → paced at 3 ticks = 33.3 fps
+ * Measured live: GET /api/creature/state → sim_ms / draw_ms / flush_ms / frame_ms / fps.
+ * If frame_ms > 30, drop to grid "44x27" (≈30 % fewer cells).
+ */
+#include "mole_fluid.h"
+#include "fluid_sim.h"
+#include "cute_rig.h"
+#include "glyph_rsvp.h"
+#include "mole_lcd.h"
+#include "mole_touch.h"
+#include "mole_imu.h"
+
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <sys/stat.h>
+#include <math.h>
+#include <unistd.h>
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
+
+#include "esp_log.h"
+#include "esp_timer.h"
+#include "esp_heap_caps.h"
+#include "esp_random.h"
+#include "esp_task_wdt.h"
+#include "mole_diag.h"
+#include "esp_private/esp_clk.h"
+#include "cJSON.h"
+
+#include "glyph_font.h"   /* gc_font5x7, GC_RAMP_ASCII */
+
+static const char *TAG = "mole_fluid";
+
+/* ── Constants ──────────────────────────────────────────────────────────────── */
+
+#define FLUID_TEXT_MAX     4096
+#define FLUID_MAX_TOKENS   512
+#define FLUID_STEP         (1.f / 60.f)
+#define FLUID_FRAME_TICKS  3          /* 100 Hz tick → 30 ms → 33.3 fps cap     */
+#define FLUID_TOUCH_US     16000      /* touch poll ≤ 60 Hz (shared I2C bus)    */
+#define FLUID_TILT_ACCEL   25.f       /* cells/s² of flow bias per g of tilt    */
+#define FLUID_TILT_LEAN    0.12f      /* stage units a target leans per g       */
+#define FLUID_IMU_SX       (1.f)      /* device-frame → screen: dashboard maps  */
+#define FLUID_IMU_SY       (-1.f)     /* dot_dx = +ax, dot_dy = -ay             */
+#define FLUID_RIPPLE_Q     4
+
+static const char *DEFAULT_TEXT =
+    "hello, i am molty. i breathe in ascii and i speak in ascii. touch the water.";
+
+/* ── States + show reel ─────────────────────────────────────────────────────── */
+
+enum { ST_BLOB, ST_THINKING, ST_TEXT, ST_FX, ST_CREATURE };
+
+/* main.js REEL: st −1 = keep the state, only change the creature's mood (mood −1 = keep) */
+typedef struct { int8_t st, fx, mood; float dur; } reel_step_t;   /* dur ≤ 0: text runs to its end */
+static const reel_step_t REEL[] = {
+    { ST_BLOB, 0, -1, 3.2f },
+    { ST_CREATURE, 0, CM_IDLE, 2.8f },
+    { -1, 0, CM_HAPPY, 2.6f },
+    { ST_FX, FLUID_FX_RIPPLE, -1, 2.8f },
+    { ST_TEXT, 0, -1, 0.f },
+    { ST_CREATURE, 0, CM_SPEAKING, 3.4f },
+    { -1, 0, CM_THINKING, 3.0f },
+    { ST_FX, FLUID_FX_VORTEX, -1, 2.8f },
+    { ST_BLOB, 0, -1, 2.4f },
+    { ST_CREATURE, 0, CM_LISTENING, 2.6f },
+    { -1, 0, CM_SLEEPY, 3.0f },
+    { ST_FX, FLUID_FX_WAVE, -1, 2.8f },
+};
+#define REEL_N ((int)(sizeof(REEL) / sizeof(REEL[0])))
+
+/* relax rates per kind of target (text must condense within one word's time) */
+static const float RATE_UP[]   = { 1.6f, 1.6f, 7.f, 1.8f, 2.6f };
+static const float RATE_DOWN[] = { 2.0f, 2.0f, 2.4f, 2.2f, 3.4f };
+
+/* ── Shared config / requests (httpd ↔ task, under s_mutex) ─────────────────── */
+
+typedef struct {
+    int   palette, edge_mode, grid_w, grid_h, wpm;
+    float speed, mic, tilt;
+    bool  autoplay;
+} fluid_cfg_t;
+
+typedef struct {
+    float fps, frame_ms, sim_ms, wait_ms, draw_ms, flush_ms, energy, err;
+    float prof_ms[FP_N];                       /* per-phase EMA, ms per frame */
+    int   mood, ctris;
+    bool  internal;
+    int   n_internal, n_blk;
+    int   state, fx, reel, word_idx, nwords, inside, grid_w, grid_h, cells_drawn;
+    char  word[40];
+} fluid_stats_t;
+
+static SemaphoreHandle_t s_mutex = NULL;
+static SemaphoreHandle_t s_done  = NULL;        /* given by the sim task on exit    */
+static SemaphoreHandle_t s_wdone = NULL;        /* given by the drawer on exit      */
+static SemaphoreHandle_t s_go    = NULL;        /* snapshot ready → drawer          */
+static SemaphoreHandle_t s_idle  = NULL;        /* drawer free → snapshot writable  */
+static TaskHandle_t      s_task  = NULL;
+static TaskHandle_t      s_dtask = NULL;
+static volatile bool     s_run   = false;
+
+static fluid_cfg_t   s_cfg = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 52, 32, 300, 1.f, 0.f, 1.f, true };
+static fluid_stats_t s_stats;
+static char   *s_text     = NULL;               /* PSRAM, FLUID_TEXT_MAX+1          */
+static int     s_text_len = 0;
+static int     s_text_ver = 0;
+static bool    s_text_appended = false;         /* last change(s) only appended     */
+static int     s_req_state = -1, s_req_fx = 0;  /* pending explicit state           */
+static bool    s_req_reel  = false;             /* pending autoplay restart         */
+static float   s_ripq[FLUID_RIPPLE_Q][3];
+static int     s_ripn = 0;
+
+/* creature (.molty) — the blob is handed over under s_mutex, built by the task */
+static uint8_t *s_cute_blob = NULL;  static size_t s_cute_len = 0;   /* pending load (PSRAM) */
+static int      s_req_mood = -1;
+static char     s_cute_name[40] = "", s_cute_err[40] = "";
+static cute_rt_t *s_cute = NULL;                    /* task-owned                        */
+static int      s_cute_tris = 0;
+
+/* ── Task-owned state ───────────────────────────────────────────────────────── */
+
+typedef struct { int16_t off, len, orp, core; uint8_t para; } ftok_t;
+
+static fluid_sim_t  *s_sim  = NULL;
+static fluid_text_t *s_tx   = NULL;
+static fluid_draw_t *s_draw = NULL;            /* drawer-owned while it runs        */
+static fluid_frame_t *s_frame = NULL;           /* snapshot handed to the drawer     */
+static fluid_draw_opts_t s_dopts;
+static fluid_letter_t s_dletters[FLUID_MAX_LETTERS];
+static float s_melt = 0.f, s_shimmer = 0.12f;
+static uint32_t s_frame_no = 0;
+static char   *s_ttext  = NULL;                 /* task copy of the text (PSRAM)    */
+static ftok_t *s_toks   = NULL;                 /* PSRAM, FLUID_MAX_TOKENS           */
+static int     s_ntok   = 0, s_seen_ver = -1;
+
+static int   s_cur = ST_BLOB, s_cur_fx = 0;
+static float s_fx_state = 0.f;
+static float s_tnow = 0.f, s_acc = 0.f, s_breath_ph = 0.f, s_state_t = 0.f, s_reel_t = 0.f;
+static float s_melt_t = 1e9f, s_word_until = 0.f;
+static int   s_reel = -1, s_word = 0;
+static fluid_letter_t s_overlay[FLUID_MAX_LETTERS];
+static int   s_noverlay = 0;
+static float s_gx = 0.f, s_gy = 0.f;            /* smoothed screen-space gravity     */
+static bool  s_touch_down = false;
+static float s_tpx = 0.f, s_tpy = 0.f;
+static int   s_last_tx = 0, s_last_ty = 0;
+static volatile bool s_full_flush = true;
+static int   s_cpu_mhz = 160;
+
+/* ── Text: tokenise + schedule (same rules as mole_reader.c / reader.js) ───── */
+
+static inline bool is_ws(char c) {
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v' || c == '\f';
+}
+
+static void tokenize(void) {
+    s_ntok = 0;
+    int len = (int)strlen(s_ttext), i = 0;
+    while (i < len && s_ntok < FLUID_MAX_TOKENS) {
+        int nl = 0;
+        while (i < len && is_ws(s_ttext[i])) { if (s_ttext[i] == '\n') nl++; i++; }
+        if (nl >= 2 && s_ntok > 0) s_toks[s_ntok - 1].para = 1;
+        if (i >= len) break;
+        int st = i;
+        while (i < len && !is_ws(s_ttext[i])) i++;
+        int tl = i - st;
+        if (tl > FLUID_MAX_LETTERS) tl = FLUID_MAX_LETTERS;     /* display cap */
+        gc_rsvp_orp_t orp = gc_rsvp_compute_orp(s_ttext + st, tl);
+        ftok_t *t = &s_toks[s_ntok++];
+        t->off = (int16_t)st; t->len = (int16_t)tl; t->orp = (int16_t)orp.focal; t->core = (int16_t)orp.core_len; t->para = 0;
+    }
+    /* A lone token is a static label (e.g. the pairing code), not a sequence:
+     * centre it and drop the ORP accent letter (orp = -1, see fluid_text_set_word). */
+    if (s_ntok == 1) s_toks[0].orp = -1;
+}
+
+static float word_delay_s(const ftok_t *t, int wpm) {
+    float base = 60000.f / (float)(wpm < 1 ? 1 : wpm);
+    float lf = t->core > 6 ? fminf(2.f, 1.f + 0.05f * (t->core - 6)) : 1.f;
+    const char *w = s_ttext + t->off;
+    int b = t->len - 1;
+    while (b > 0 && (w[b] == '"' || w[b] == '\'' || w[b] == ')' || w[b] == ']')) b--;
+    char last = b >= 0 ? w[b] : 0;
+    float pf = t->para ? 2.5f : (last == '.' || last == '!' || last == '?') ? 2.f
+             : (last == ',' || last == ';' || last == ':') ? 1.5f : 1.f;
+    float d = base * lf * pf;
+    return (d < 40.f ? 40.f : d) / 1000.f;
+}
+
+static void show_word(int idx) {
+    const ftok_t *t = &s_toks[idx];
+    fluid_text_set_word(s_tx, s_sim, s_ttext + t->off, t->len, t->orp);
+}
+
+/* ── State machine (task) ───────────────────────────────────────────────────── */
+
+static void ripple(float x, float y, float strength, float radius) {
+    fluid_sim_impulse(s_sim, x, y, strength, radius);
+}
+
+static void set_state(int st, int fx, const fluid_cfg_t *cfg) {
+    int from = s_cur;
+    if (s_cur == ST_FX) fluid_effect_exit(s_sim, s_cur_fx);
+    if (st == ST_CREATURE && !s_cute) st = ST_BLOB;   /* no creature loaded */
+    s_sim->edge_w = st == ST_CREATURE ? 1.f : 0.f;      /* solid eyes once settled */
+    if (st == ST_TEXT) {
+        if (s_ntok == 0) { strcpy(s_ttext, "..."); tokenize(); }
+        float ext = 1.f;
+        for (int i = 0; i < s_ntok; i++) {
+            float a = s_toks[i].orp < 0 ? s_toks[i].len / 2.f : s_toks[i].orp + 0.5f, b = s_toks[i].len - a;
+            if (a > ext) ext = a;
+            if (b > ext) ext = b;
+        }
+        fluid_text_set_sentence(s_tx, ext);
+        s_word = 0; show_word(0);
+        s_word_until = s_tnow + 0.55f + word_delay_s(&s_toks[0], cfg->wpm);   /* lead-in */
+    }
+    /* the transition: the old shape breaks up in eddies + a ring from its centre */
+    float cx, cy;
+    fluid_sim_centroid(s_sim, &cx, &cy);
+    if (s_sim->swirl_kick < 3.f) s_sim->swirl_kick = 3.f;
+    if (st != ST_TEXT) ripple(cx, cy, 0.7f, 0.2f);
+    else ripple(0.f, 0.f, 0.5f, 0.25f);
+    s_cur = st; s_cur_fx = fx; s_fx_state = 0.f;
+    if (st != ST_TEXT) memset(s_sim->bgm, 255, (size_t)s_sim->N);
+    s_sim->p.relax_up = RATE_UP[st]; s_sim->p.relax_down = RATE_DOWN[st];
+    if (from == ST_TEXT && st != ST_TEXT) s_melt_t = 0.f;
+    if (st == ST_FX) fluid_effect_enter(s_sim, fx);
+    s_state_t = 0.f;
+}
+
+static void next_reel(const fluid_cfg_t *cfg) {
+    s_reel = (s_reel + 1) % REEL_N;
+    s_reel_t = 0.f;
+    if (REEL[s_reel].mood >= 0 && s_cute) cute_rt_set_mood(s_cute, REEL[s_reel].mood);
+    if (REEL[s_reel].st >= 0) set_state(REEL[s_reel].st, REEL[s_reel].fx, cfg);
+}
+
+/* ── (Re)build for a grid ───────────────────────────────────────────────────── */
+
+static void free_grid(void) {
+    fluid_frame_destroy(s_frame); s_frame = NULL;
+    fluid_draw_destroy(s_draw); s_draw = NULL;
+    fluid_text_destroy(s_tx);   s_tx = NULL;
+    fluid_sim_destroy(s_sim);   s_sim = NULL;
+}
+
+/* caller must own the drawer (s_idle taken, or the drawer not running) */
+static esp_err_t build_grid(int W, int H) {
+    free_grid();
+    s_sim = fluid_sim_create(W, H);
+    if (s_sim) s_tx = fluid_text_create(s_sim);
+    if (s_tx) s_draw = fluid_draw_create(W, H);
+    if (s_draw) s_frame = fluid_frame_create(W, H);
+    if (!s_frame) { free_grid(); return ESP_ERR_NO_MEM; }
+    s_noverlay = 0;
+    s_full_flush = true;
+    s_frame_no = 0;
+    return ESP_OK;
+}
+
+/* ── Input ──────────────────────────────────────────────────────────────────── */
+
+static int64_t s_touch_t0;            /* sim: tap seen, not yet handed to the drawer */
+static volatile int64_t s_dtouch;     /* drawer: tap time riding with the current frame */
+static void poll_touch(void) {
+    uint16_t xs[MOLE_TOUCH_MAX_POINTS], ys[MOLE_TOUCH_MAX_POINTS];
+    int n = mole_touch_poll(xs, ys, MOLE_TOUCH_MAX_POINTS);
+    if (n <= 0) { s_touch_down = false; return; }
+    float x = xs[0] / (float)FLUID_PANEL * 2.f - 1.f, y = ys[0] / (float)FLUID_PANEL * 2.f - 1.f;
+    if (!s_touch_down) {                                    /* tap = ripple */
+        s_touch_down = true; s_tpx = x; s_tpy = y; s_last_tx = xs[0]; s_last_ty = ys[0];
+        ripple(x, y, 1.6f, 0.09f);
+        if (!s_touch_t0) s_touch_t0 = esp_timer_get_time();
+        return;
+    }
+    /* the SPD2010 sometimes reports a garbage coordinate: a finger can't move >140 px
+     * in one ~16 ms poll, so re-baseline instead of stirring */
+    if (abs((int)xs[0] - s_last_tx) > 140 || abs((int)ys[0] - s_last_ty) > 140) {
+        s_tpx = x; s_tpy = y; s_last_tx = xs[0]; s_last_ty = ys[0];
+        return;
+    }
+    s_last_tx = xs[0]; s_last_ty = ys[0];
+    float dx = x - s_tpx, dy = y - s_tpy;                   /* drag = trail + push */
+    if (dx * dx + dy * dy < 0.03f * 0.03f) return;
+    fluid_sim_push(s_sim, x, y, dx * s_sim->W * 6.f, dy * s_sim->W * 6.f, 0.16f);
+    ripple(x, y, 0.5f, 0.06f);
+    s_tpx = x; s_tpy = y;
+}
+
+static void read_tilt(float gain) {
+    mole_imu_sample_t im;
+    mole_imu_get(&im);
+    float gx = FLUID_IMU_SX * im.ax, gy = FLUID_IMU_SY * im.ay;
+    if (!isfinite(gx) || !isfinite(gy) || gain == 0.f) gx = gy = 0.f;
+    if (gx > 1.f) gx = 1.f;
+    if (gx < -1.f) gx = -1.f;
+    if (gy > 1.f) gy = 1.f;
+    if (gy < -1.f) gy = -1.f;
+    s_gx += (gx * gain - s_gx) * 0.15f;
+    s_gy += (gy * gain - s_gy) * 0.15f;
+    s_sim->p.tilt_x = s_gx * FLUID_TILT_ACCEL;
+    s_sim->p.tilt_y = s_gy * FLUID_TILT_ACCEL;
+}
+
+static inline float frand(void) { return (esp_random() & 0xFFFFFF) / 16777216.f; }
+
+/* ── Frame (core 1: sim) ─────────────────────────────────────────────────────
+ * PIPELINE: core 1 simulates frame N+1 while the drawer on core 0 rasterises and
+ * flushes frame N from a snapshot (fluid_frame_t). Frame period = max(sim, draw +
+ * flush) instead of their sum. Handshake: s_idle (drawer free → snapshot may be
+ * overwritten) / s_go (snapshot ready). Measured before the split: sim 34 ms, draw
+ * 17 ms, flush 9 ms per frame at 52×32. */
+
+static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
+    fluid_sim_t *s = s_sim;
+    s->p.speed_mul = cfg->speed;
+    s_tnow += rdt; s_state_t += rdt; s_reel_t += rdt;
+
+    /* breathing: a slow swell of the whole field */
+    s_breath_ph += rdt / 4.f;
+    if (s_breath_ph > 1000.f) s_breath_ph -= 1000.f;
+    float breath = 0.5f - 0.5f * cosf(s_breath_ph * 6.2831853f);
+    float swell = 1.f + 0.05f * (breath * 2.f - 1.f);
+
+    /* sequencer */
+    if (cfg->autoplay) {
+        if (s_reel < 0) next_reel(cfg);
+        else if (s_cur == ST_TEXT ? s_word >= s_ntok : s_reel_t >= REEL[s_reel].dur) next_reel(cfg);
+    }
+
+    /* speed reader */
+    if (s_cur == ST_TEXT && s_word < s_ntok && s_tnow >= s_word_until) {
+        s_word++;
+        if (s_word < s_ntok) {
+            show_word(s_word);
+            s_word_until = s_tnow + word_delay_s(&s_toks[s_word], cfg->wpm);
+            ripple(0.f, 0.f, 0.45f + 0.6f * 0.3f, 0.12f);  /* a soft ring leaves the word */
+        } else if (!cfg->autoplay) {
+            s_word = s_ntok - 1; s_word_until = 1e9f;      /* hold the last word */
+        }
+    }
+    s_melt = 0.f;
+    if (s_cur == ST_TEXT) {
+        s_noverlay = s_tx->nletters;
+        memcpy(s_overlay, s_tx->letters, sizeof(fluid_letter_t) * (size_t)s_noverlay);
+    } else {
+        s_melt_t += rdt; s_melt = s_melt_t;
+        if (s_melt_t > 0.8f) s_noverlay = 0;               /* condensed letters melt away */
+    }
+
+    {   /* hold: crystallise the shape once the flow had time to arrive */
+        float q = s_cur == ST_TEXT ? (s_state_t * cfg->speed - 0.2f) / 0.4f : (s_state_t * cfg->speed - 0.7f) / 1.0f;
+        q = fluid_clamp01(q);
+        s->p.hold = q * q * (3.f - 2.f * q);
+        s->p.tint_rate = 3.f + 9.f * s->p.hold;
+    }
+
+    /* input before the targets so the lean follows the hand of the moment */
+    read_tilt(cfg->tilt);
+    float ox = s_gx * FLUID_TILT_LEAN, oy = s_gy * FLUID_TILT_LEAN;
+
+    switch (s_cur) {
+    case ST_TEXT:     fluid_text_fill(s_tx, s, s_tnow); break;
+    case ST_FX:       fluid_target_effect(s, s_cur_fx, s_tnow, swell, ox, oy); break;
+    case ST_THINKING: fluid_target_blob(s, s_tnow * 1.4f, swell * 0.85f, ox, oy); break;
+    case ST_CREATURE:
+        if (s_cute) {
+            cute_rt_update(s_cute, rdt);                   /* mood engine + kit + behaviours */
+            cute_rt_raster(s_cute, s->W, s->H);
+            cute_rt_fill(s_cute, s, swell);
+            s_cute_tris = cute_rt_tris(s_cute);
+        } else {
+            fluid_target_blob(s, s_tnow, swell, ox, oy);   /* creature unloaded while showing */
+        }
+        break;
+    default:          fluid_target_blob(s, s_tnow, swell, ox, oy); break;
+    }
+    /* the always-on dim fluid; its slow noise (and the eddies' ψ) refresh on
+     * alternating frames — both drift ≤ 0.012 lattice units per frame */
+    fluid_sim_background(s, s_tnow, breath, (s_frame_no & 1) == 0 || s_frame_no < 2);
+    if (s_cur == ST_FX) fluid_effect_tick(s, s_cur_fx, rdt, &s_fx_state);
+
+    /* surface drivers (main.js): thinking = the motor's fine standing shimmer; the creature's
+     * speech envelope rings the surface from its mouth; mic adds shimmer + random drops */
+    int cmood = (s_cur == ST_CREATURE && s_cute) ? cute_rt_mood(s_cute) : -1;
+    bool thinking = s_cur == ST_THINKING || cmood == CM_THINKING;
+    float level = cmood == CM_SPEAKING ? cute_rt_env(s_cute) : 0.f;
+    s->osc.x = 0.f; s->osc.y = cmood == CM_SPEAKING ? 0.12f : 0.f;
+    s->osc.amp = (cmood == CM_SPEAKING ? 1.2f : thinking ? 0.25f : 0.5f) * level;
+    s->osc.freq = 2.5f + 6.f * 0.4f;
+    s->vibe.amp = (thinking ? 0.9f : 0.f) + cfg->mic * 1.4f;
+    s->vibe.freq = 7.f + 9.f * 0.3f;
+    if (cfg->mic > 0.f && frand() < cfg->mic * 0.35f * rdt * 60.f)
+        ripple(frand() * 1.6f - 0.8f, frand() * 1.6f - 0.8f, 0.4f + cfg->mic, 0.06f);
+
+    /* fixed-step physics */
+    if ((s_frame_no & 1) == 1 || s_frame_no < 2) fluid_sim_swirl_field(s);
+    s_acc += rdt;
+    int n = 0;
+    while (s_acc >= FLUID_STEP && n < 4) { fluid_sim_step(s, FLUID_STEP); s_acc -= FLUID_STEP; n++; }
+    if (n == 4) s_acc = 0.f;
+    fluid_sim_color(s, n * FLUID_STEP);                    /* colour rides the same flow, once per frame */
+    fluid_sim_view(s);
+    s_shimmer = 0.12f + (thinking ? 0.35f : 0.f) + cfg->mic * 0.4f;
+    s_frame_no++;
+}
+
+/* ── Creature (.molty): parse + build on the task; file I/O for the HTTP API ──── */
+
+static esp_err_t alloc_bufs(void);
+
+#define CUTE_PATH     "/spiffs/creature.molty"
+#define CUTE_TMP_PATH "/spiffs/creature.molty.tmp"
+/* firmware default (creatures/molty/duck.molty, EMBED_FILES in main/CMakeLists.txt) */
+extern const uint8_t _binary_default_molty_start[];
+extern const uint8_t _binary_default_molty_end[];
+
+static void load_creature(const uint8_t *buf, size_t len) {
+    cute_spec_t *spec = heap_caps_malloc(sizeof(cute_spec_t), MALLOC_CAP_SPIRAM);
+    const char *err = "oom";
+    cute_rt_t *rt = NULL;
+    if (spec && cute_spec_parse(buf, len, spec, &err) == 0) {
+        rt = cute_rt_create(spec, esp_random());
+        if (!rt) err = "oom";
+    }
+    if (rt) {
+        int mood = s_cute ? cute_rt_mood(s_cute) : CM_IDLE;
+        cute_rt_destroy(s_cute);
+        s_cute = rt;
+        cute_rt_set_mood(s_cute, mood);
+        ESP_LOGI(TAG, "creature '%s' loaded (%u B, %d parts)", spec->name, (unsigned)len, spec->nparts);
+    } else {
+        ESP_LOGW(TAG, "creature load failed: %s", err);
+    }
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (rt) { strncpy(s_cute_name, spec->name, sizeof(s_cute_name) - 1); s_cute_err[0] = '\0'; }
+    else strncpy(s_cute_err, err, sizeof(s_cute_err) - 1);
+    xSemaphoreGive(s_mutex);
+    heap_caps_free(spec);
+}
+
+/* read a whole small file into PSRAM; NULL if absent */
+static uint8_t *read_file(const char *path, size_t *len) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    uint8_t *b = heap_caps_malloc(CUTE_MAX_FILE, MALLOC_CAP_SPIRAM);
+    size_t n = b ? fread(b, 1, CUTE_MAX_FILE, f) : 0;
+    fclose(f);
+    if (!n) { heap_caps_free(b); return NULL; }
+    *len = n;
+    return b;
+}
+
+/* the stored creature (or the tmp left by a crash between remove and rename), else the
+ * firmware default; the CRC check in cute_spec_parse makes a torn file harmless */
+static uint8_t *creature_bytes(size_t *len, bool *is_default) {
+    uint8_t *b = read_file(CUTE_PATH, len);
+    if (!b) b = read_file(CUTE_TMP_PATH, len);
+    *is_default = b == NULL;
+    if (!b) {
+        size_t n = (size_t)(_binary_default_molty_end - _binary_default_molty_start);
+        b = heap_caps_malloc(n, MALLOC_CAP_SPIRAM);
+        if (b) { memcpy(b, _binary_default_molty_start, n); *len = n; }
+    }
+    return b;
+}
+
+static void queue_creature(uint8_t *blob, size_t len) {   /* takes ownership */
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_cute_blob) heap_caps_free(s_cute_blob);
+    s_cute_blob = blob; s_cute_len = len;
+    xSemaphoreGive(s_mutex);
+}
+
+esp_err_t mole_fluid_creature_file_put(const uint8_t *buf, size_t len, const char **err) {
+    if (alloc_bufs() != ESP_OK) { if (err) *err = "oom"; return ESP_ERR_NO_MEM; }
+    cute_spec_t *spec = heap_caps_malloc(sizeof(cute_spec_t), MALLOC_CAP_SPIRAM);
+    if (!spec) { if (err) *err = "oom"; return ESP_ERR_NO_MEM; }
+    int rc = cute_spec_parse(buf, len, spec, err);
+    heap_caps_free(spec);
+    if (rc != 0) return ESP_ERR_INVALID_ARG;
+    /* write tmp → fsync → verify size → remove old → rename (SPIFFS rename refuses an
+     * existing destination; the loader also accepts the tmp, so no window loses it) */
+    remove(CUTE_TMP_PATH);
+    FILE *f = fopen(CUTE_TMP_PATH, "wb");
+    if (!f) { if (err) *err = "spiffs_open"; return ESP_FAIL; }
+    size_t w = fwrite(buf, 1, len, f);
+    fflush(f); fsync(fileno(f)); fclose(f);
+    struct stat st;
+    if (w != len || stat(CUTE_TMP_PATH, &st) != 0 || (size_t)st.st_size != len) { remove(CUTE_TMP_PATH); if (err) *err = "spiffs_write"; return ESP_FAIL; }
+    remove(CUTE_PATH);
+    if (rename(CUTE_TMP_PATH, CUTE_PATH) != 0) { if (err) *err = "spiffs_rename"; return ESP_FAIL; }
+    uint8_t *copy = heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
+    if (copy) { memcpy(copy, buf, len); queue_creature(copy, len); }       /* hot reload */
+    if (err) *err = "ok";
+    return ESP_OK;
+}
+
+esp_err_t mole_fluid_creature_file_get(uint8_t **out, size_t *len, bool *is_default) {
+    bool d = false;
+    *out = creature_bytes(len, &d);
+    if (is_default) *is_default = d;
+    return *out ? ESP_OK : ESP_ERR_NOT_FOUND;
+}
+
+/* ── Drawer task (core 0): rasterise + flush the latest snapshot ─────────────── */
+
+static void draw_task(void *arg) {
+    (void)arg;
+    esp_err_t wdt_err = esp_task_wdt_add(NULL);
+    if (wdt_err != ESP_OK) ESP_LOGW(TAG, "drawer: esp_task_wdt_add failed (%s)", esp_err_to_name(wdt_err));
+    float dms = 0.f, lms = 0.f, pema[2] = { 0.f, 0.f };
+    while (s_run) {
+        esp_task_wdt_reset();
+        if (xSemaphoreTake(s_go, pdMS_TO_TICKS(200)) != pdTRUE) continue;
+        if (!s_run) { xSemaphoreGive(s_idle); break; }
+        int64_t t0 = esp_timer_get_time();
+        int64_t touch_t = s_dtouch; s_dtouch = 0;
+        uint16_t *fb = mole_lcd_framebuffer();
+        int y0 = 0, y1 = 0, nc = 0;
+        bool full = s_full_flush;
+        if (fb && s_draw && s_frame) {
+            if (full) { memset(fb, 0, (size_t)FLUID_PANEL * FLUID_PANEL * sizeof(uint16_t)); s_draw->force = true; }
+            nc = fluid_draw(s_draw, s_frame, fb, &s_dopts, &y0, &y1);
+        }
+        int64_t t1 = esp_timer_get_time();
+        if (fb) {
+            if (full) { mole_lcd_flush(); s_full_flush = false; }
+            else if (y1 > y0) mole_lcd_flush_rows(y0, y1);
+        }
+        int64_t t2 = esp_timer_get_time();
+        mole_diag_panel_frame((uint32_t)(t1 - t0), (uint32_t)(t2 - t1));
+        if (touch_t) mole_diag_touch_latency((uint32_t)(t2 - touch_t));
+        dms = dms * 0.9f + (t1 - t0) / 1000.f * 0.1f;
+        lms = lms * 0.9f + (t2 - t1) / 1000.f * 0.1f;
+        pema[0] = pema[0] * 0.9f + (float)fluid_prof[FP_DSAMPLE] / (float)s_cpu_mhz / 1000.f * 0.1f;
+        pema[1] = pema[1] * 0.9f + (float)fluid_prof[FP_DRASTER] / (float)s_cpu_mhz / 1000.f * 0.1f;
+        fluid_prof[FP_DSAMPLE] = fluid_prof[FP_DRASTER] = 0;
+        xSemaphoreTake(s_mutex, portMAX_DELAY);
+        s_stats.draw_ms = dms; s_stats.flush_ms = lms; s_stats.cells_drawn = nc;
+        s_stats.prof_ms[FP_DSAMPLE] = pema[0]; s_stats.prof_ms[FP_DRASTER] = pema[1];
+        xSemaphoreGive(s_mutex);
+        xSemaphoreGive(s_idle);
+    }
+    esp_task_wdt_delete(NULL);
+    xSemaphoreGive(s_wdone);
+    vTaskDelete(NULL);
+}
+
+/* ── Sim task (core 1) ───────────────────────────────────────────────────────── */
+
+static void fluid_task(void *arg) {
+    (void)arg;
+    /* TWDT: re-created on every select → self-subscribe; delete before exit */
+    esp_err_t wdt_err = esp_task_wdt_add(NULL);
+    if (wdt_err != ESP_OK) ESP_LOGW(TAG, "esp_task_wdt_add failed (%s)", esp_err_to_name(wdt_err));
+
+    int64_t prev = esp_timer_get_time(), last_touch = 0;
+    float fps = 0.f, sms = 0.f, wms = 0.f, fms = 0.f;
+    TickType_t wake = xTaskGetTickCount();
+
+    while (s_run) {
+        esp_task_wdt_reset();
+        int64_t now = esp_timer_get_time();
+        float rdt = (float)(now - prev) / 1e6f;
+        uint32_t raw_dt_us = (uint32_t)(now - prev);
+        prev = now;
+        if (rdt > 0.1f) rdt = 0.1f;
+
+
+        /* pull config + requests */
+        fluid_cfg_t cfg;
+        int req = -1, req_fx = 0; bool req_reel = false;
+        float rip[FLUID_RIPPLE_Q][3]; int nrip = 0;
+        bool text_changed = false, text_append = false;
+        xSemaphoreTake(s_mutex, portMAX_DELAY);
+        cfg = s_cfg;
+        req = s_req_state; req_fx = s_req_fx; s_req_state = -1;
+        req_reel = s_req_reel; s_req_reel = false;
+        nrip = s_ripn; memcpy(rip, s_ripq, sizeof(rip)); s_ripn = 0;
+        uint8_t *cblob = s_cute_blob; size_t clen = s_cute_len; s_cute_blob = NULL;
+        int req_mood = s_req_mood; s_req_mood = -1;
+        if (s_text_ver != s_seen_ver) {
+            memcpy(s_ttext, s_text, (size_t)s_text_len + 1);
+            s_seen_ver = s_text_ver; text_changed = true;
+            text_append = s_text_appended; s_text_appended = false;
+        }
+        xSemaphoreGive(s_mutex);
+
+        if (!s_sim || s_sim->W != cfg.grid_w || s_sim->H != cfg.grid_h) {
+            xSemaphoreTake(s_idle, portMAX_DELAY);          /* own the drawer's buffers */
+            if (build_grid(cfg.grid_w, cfg.grid_h) != ESP_OK) {
+                ESP_LOGE(TAG, "grid %dx%d alloc failed — back to 52x32", cfg.grid_w, cfg.grid_h);
+                xSemaphoreTake(s_mutex, portMAX_DELAY);
+                s_cfg.grid_w = 52; s_cfg.grid_h = 32;
+                xSemaphoreGive(s_mutex);
+                if (build_grid(52, 32) != ESP_OK) { xSemaphoreGive(s_idle); vTaskDelay(pdMS_TO_TICKS(200)); continue; }
+            }
+            xSemaphoreGive(s_idle);
+            set_state(s_cur, s_cur_fx, &cfg);           /* re-enter on the new grid */
+        }
+        if (text_changed) {
+            tokenize();
+            if (s_cur == ST_TEXT && req < 0) {
+                if (!text_append) { req = ST_TEXT; req_fx = 0; }        /* new text: start over */
+                else if (s_word_until > 1e8f && s_word + 1 < s_ntok)    /* streamed words arrived */
+                    s_word_until = s_tnow;                              /* while holding the last */
+            }
+        }
+        if (cblob) { load_creature(cblob, clen); heap_caps_free(cblob); }
+        if (req_mood >= 0 && s_cute) cute_rt_set_mood(s_cute, req_mood);
+        if (req_reel) s_reel = -1;
+        if (req >= 0) set_state(req, req_fx, &cfg);
+        for (int q = 0; q < nrip; q++) ripple(rip[q][0], rip[q][1], rip[q][2], 0.09f);
+        if (now - last_touch >= FLUID_TOUCH_US) { poll_touch(); last_touch = now; }
+
+        int64_t t0 = esp_timer_get_time();
+        sim_frame(rdt, &cfg);
+        int64_t t1 = esp_timer_get_time();
+        /* hand the frame to the drawer: wait until it finished the previous one */
+        xSemaphoreTake(s_idle, portMAX_DELAY);
+        int64_t t2 = esp_timer_get_time();
+        fluid_sim_snapshot(s_sim, s_frame, cfg.edge_mode == FLUID_EDGE_OFF);
+        s_dopts = (fluid_draw_opts_t){
+            .palette = cfg.palette, .edge_mode = cfg.edge_mode,
+            .shimmer = s_shimmer, .time = s_tnow, .melt = s_melt,
+            .letters = s_dletters, .nletters = s_noverlay,
+            .ramp = GC_RAMP_ASCII, .font = gc_font5x7,
+        };
+        memcpy(s_dletters, s_overlay, sizeof(fluid_letter_t) * (size_t)s_noverlay);
+        if (s_touch_t0) { s_dtouch = s_touch_t0; s_touch_t0 = 0; }
+        xSemaphoreGive(s_go);
+        int64_t t3 = esp_timer_get_time();
+
+        mole_diag_sim_frame(raw_dt_us, (uint32_t)(t1 - t0));
+        /* stats (EMA) */
+        fps = fps > 0.f ? fps * 0.93f + (1.f / fmaxf(rdt, 1e-3f)) * 0.07f : 30.f;
+        sms = sms * 0.9f + (t1 - t0) / 1000.f * 0.1f;
+        wms = wms * 0.9f + (t2 - t1) / 1000.f * 0.1f;
+        fms = fms * 0.9f + (t3 - t0) / 1000.f * 0.1f;
+        static float prof_ema[FP_N];
+        for (int q = 0; q < FP_DSAMPLE; q++) {
+            prof_ema[q] = prof_ema[q] * 0.9f + (float)fluid_prof[q] / (float)s_cpu_mhz / 1000.f * 0.1f;
+            fluid_prof[q] = 0;
+        }
+        xSemaphoreTake(s_mutex, portMAX_DELAY);
+        memcpy(s_stats.prof_ms, prof_ema, sizeof(float) * FP_DSAMPLE);
+        s_stats.fps = fps; s_stats.frame_ms = fms; s_stats.sim_ms = sms; s_stats.wait_ms = wms;
+        s_stats.energy = s_sim->energy; s_stats.err = s_sim->err;
+        s_stats.state = s_cur; s_stats.fx = s_cur_fx; s_stats.reel = s_reel;
+        s_stats.mood = s_cute ? cute_rt_mood(s_cute) : -1; s_stats.ctris = s_cute_tris;
+        s_stats.inside = s_sim->inside; s_stats.grid_w = s_sim->W; s_stats.grid_h = s_sim->H;
+        s_stats.internal = s_sim->internal;
+        s_stats.n_internal = s_sim->n_internal; s_stats.n_blk = s_sim->n_blk;
+        s_stats.word_idx = s_word; s_stats.nwords = s_ntok;
+        s_stats.word[0] = '\0';
+        if (s_cur == ST_TEXT && s_word < s_ntok) {
+            int wl = s_toks[s_word].len; if (wl > 39) wl = 39;
+            memcpy(s_stats.word, s_ttext + s_toks[s_word].off, (size_t)wl); s_stats.word[wl] = '\0';
+        }
+        xSemaphoreGive(s_mutex);
+
+        /* pace at 33.3 fps. An overrun frame used to always vTaskDelay(1): at a
+         * 100 Hz tick that turned every 31 ms frame into a 40 ms one (p50 39.9 ms,
+         * 27 fps, measured via /api/diag 2026-10-25). Now an overrun starts the
+         * next frame at once — but never twice in a row, so lower-priority core-1
+         * work still gets at least one tick every other frame. */
+        static bool overran;
+        if (xTaskDelayUntil(&wake, FLUID_FRAME_TICKS) == pdFALSE) {
+            if (overran) vTaskDelay(1);
+            overran = !overran;
+            wake = xTaskGetTickCount();
+        } else overran = false;
+    }
+    esp_task_wdt_delete(NULL);
+    xSemaphoreGive(s_done);
+    vTaskDelete(NULL);
+}
+
+/* ── Creature vtable ────────────────────────────────────────────────────────── */
+
+static esp_err_t alloc_bufs(void) {
+    if (!s_mutex) s_mutex = xSemaphoreCreateMutex();
+    if (!s_done) s_done = xSemaphoreCreateBinary();
+    if (!s_wdone) s_wdone = xSemaphoreCreateBinary();
+    if (!s_go) s_go = xSemaphoreCreateBinary();
+    if (!s_idle) s_idle = xSemaphoreCreateBinary();
+    if (!s_mutex || !s_done || !s_wdone || !s_go || !s_idle) return ESP_ERR_NO_MEM;
+    if (!s_text) {
+        s_text = heap_caps_malloc(FLUID_TEXT_MAX + 1, MALLOC_CAP_SPIRAM);
+        if (!s_text) return ESP_ERR_NO_MEM;
+        s_text_len = (int)strlen(DEFAULT_TEXT);
+        memcpy(s_text, DEFAULT_TEXT, (size_t)s_text_len + 1);
+        s_text_ver++;
+    }
+    return ESP_OK;
+}
+
+esp_err_t mole_fluid_creature_init(void) {
+    esp_err_t e = alloc_bufs();
+    if (e != ESP_OK) return e;
+    if (s_task) {                                /* a previous task that missed its exit */
+        if (xSemaphoreTake(s_done, pdMS_TO_TICKS(1000)) != pdTRUE) return ESP_ERR_INVALID_STATE;
+        s_task = NULL;
+    }
+    if (s_dtask) {
+        if (xSemaphoreTake(s_wdone, pdMS_TO_TICKS(1000)) != pdTRUE) return ESP_ERR_INVALID_STATE;
+        s_dtask = NULL;
+    }
+    s_cpu_mhz = (int)(esp_clk_cpu_freq() / 1000000);
+    if (s_cpu_mhz <= 0) s_cpu_mhz = 160;
+    if (!s_ttext) s_ttext = heap_caps_malloc(FLUID_TEXT_MAX + 1, MALLOC_CAP_SPIRAM);
+    if (!s_toks)  s_toks  = heap_caps_malloc(FLUID_MAX_TOKENS * sizeof(ftok_t), MALLOC_CAP_SPIRAM);
+    if (!s_ttext || !s_toks) return ESP_ERR_NO_MEM;
+    s_ttext[0] = '\0';
+    s_seen_ver = -1;
+
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    int W = s_cfg.grid_w, H = s_cfg.grid_h;
+    xSemaphoreGive(s_mutex);
+    if (build_grid(W, H) != ESP_OK) {
+        ESP_LOGE(TAG, "sim alloc failed (%dx%d), PSRAM free %u", W, H,
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+        return ESP_ERR_NO_MEM;
+    }
+    {   /* the stored creature (or the firmware default) — built on the task */
+        size_t clen = 0; bool dflt = false;
+        uint8_t *cb = creature_bytes(&clen, &dflt);
+        if (cb) queue_creature(cb, clen);
+    }
+    s_cur = ST_BLOB; s_cur_fx = 0; s_reel = -1; s_word = 0; s_ntok = 0;
+    s_tnow = s_acc = s_state_t = s_reel_t = 0.f; s_melt_t = 1e9f;
+    s_gx = s_gy = 0.f; s_touch_down = false;
+    s_sim->p.relax_up = RATE_UP[ST_BLOB]; s_sim->p.relax_down = RATE_DOWN[ST_BLOB];
+
+    xSemaphoreTake(s_go, 0);                     /* fresh handshake: drawer idle, nothing queued */
+    xSemaphoreTake(s_idle, 0);
+    xSemaphoreGive(s_idle);
+    s_run = true;
+    /* drawer on core 0 (Wi-Fi's core, mostly idle), below lwip/httpd priority */
+    if (xTaskCreatePinnedToCore(draw_task, "fluid_draw", 4096, NULL, 2, &s_dtask, 0) != pdPASS) {
+        s_run = false; s_dtask = NULL;
+        free_grid();
+        return ESP_ERR_NO_MEM;
+    }
+    if (xTaskCreatePinnedToCore(fluid_task, "fluid_task", 6144, NULL, 2, &s_task, 1) != pdPASS) {
+        s_run = false; s_task = NULL;
+        xSemaphoreGive(s_go);                    /* wake the drawer so it sees s_run=false */
+        if (xSemaphoreTake(s_wdone, pdMS_TO_TICKS(1000)) == pdTRUE) { s_dtask = NULL; free_grid(); }
+        return ESP_ERR_NO_MEM;
+    }
+    ESP_LOGI(TAG, "fluid creature init: %dx%d cells (%d inside), PSRAM free %u",
+             W, H, s_sim->inside, (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    return ESP_OK;
+}
+
+void mole_fluid_creature_deinit(void) {
+    s_run = false;
+    if (s_task) {
+        if (xSemaphoreTake(s_done, pdMS_TO_TICKS(1000)) != pdTRUE) {
+            /* never free the sim under a live task: keep s_task set so the next
+             * init waits for the exit before rebuilding */
+            ESP_LOGE(TAG, "fluid task did not exit in 1 s — keeping its buffers");
+            return;
+        }
+        s_task = NULL;
+    }
+    if (s_dtask) {
+        xSemaphoreGive(s_go);                    /* wake the drawer so it sees s_run=false */
+        if (xSemaphoreTake(s_wdone, pdMS_TO_TICKS(1000)) != pdTRUE) {
+            ESP_LOGE(TAG, "fluid drawer did not exit in 1 s — keeping its buffers");
+            return;
+        }
+        s_dtask = NULL;
+    }
+    free_grid();
+    cute_rt_destroy(s_cute); s_cute = NULL;
+    ESP_LOGI(TAG, "fluid creature deinit");
+}
+
+esp_err_t mole_fluid_creature_render(void) {
+    /* the task renders continuously; just ask it for a full repaint */
+    s_full_flush = true;
+    return ESP_OK;
+}
+
+static const char *state_name(int st, int fx, char *buf, size_t n) {
+    switch (st) {
+    case ST_THINKING: return "thinking";
+    case ST_TEXT:     return "text";
+    case ST_CREATURE: return "creature";
+    case ST_FX:       snprintf(buf, n, "effect:%s", FLUID_FX_NAMES[fx]); return buf;
+    default:          return "blob";
+    }
+}
+
+esp_err_t mole_fluid_creature_state_get_json(char **out) {
+    if (!out) return ESP_ERR_INVALID_ARG;
+    if (!s_mutex) return ESP_ERR_INVALID_STATE;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    fluid_cfg_t c = s_cfg;
+    fluid_stats_t st = s_stats;
+    char cname[40], cerr[40];
+    memcpy(cname, s_cute_name, sizeof(cname)); memcpy(cerr, s_cute_err, sizeof(cerr));
+    cJSON *root = cJSON_CreateObject();
+    if (root) cJSON_AddStringToObject(root, "text", s_text ? s_text : "");
+    xSemaphoreGive(s_mutex);
+    if (!root) return ESP_ERR_NO_MEM;
+
+    char sb[24], grid[12];
+    snprintf(grid, sizeof(grid), "%dx%d", c.grid_w, c.grid_h);
+    cJSON_AddBoolToObject  (root, "ok",          true);
+    cJSON_AddStringToObject(root, "creature",    "fluid");
+    cJSON_AddStringToObject(root, "state",       state_name(st.state, st.fx, sb, sizeof(sb)));
+    cJSON_AddBoolToObject  (root, "autoplay",    c.autoplay);
+    cJSON_AddNumberToObject(root, "reel_step",   st.reel);
+    cJSON_AddNumberToObject(root, "wpm",         c.wpm);
+    cJSON_AddStringToObject(root, "mood",        st.mood >= 0 ? CUTE_MOOD_NAMES[st.mood] : "");
+    {
+        cJSON *cj = cJSON_AddObjectToObject(root, "creature_info");
+        if (cj) {
+            cJSON_AddStringToObject(cj, "name", cname);
+            cJSON_AddNumberToObject(cj, "tris", st.ctris);
+            if (cerr[0]) cJSON_AddStringToObject(cj, "error", cerr);
+        }
+    }
+    cJSON_AddStringToObject(root, "palette",     FLUID_PAL_NAMES[c.palette]);
+    cJSON_AddStringToObject(root, "edge_mode",   FLUID_EDGE_NAMES[c.edge_mode]);
+    cJSON_AddStringToObject(root, "grid",        grid);
+    cJSON_AddNumberToObject(root, "speed",       c.speed);
+    cJSON_AddNumberToObject(root, "mic",         c.mic);
+    cJSON_AddNumberToObject(root, "tilt",        c.tilt);
+    cJSON_AddStringToObject(root, "word",        st.word);
+    cJSON_AddNumberToObject(root, "word_idx",    st.word_idx);
+    cJSON_AddNumberToObject(root, "nwords",      st.nwords);
+    /* read-only timing (EMA, ms). Core 1: sim_ms, wait_ms (blocked on the drawer),
+     * frame_ms (sim + wait + snapshot, excludes pacing). Core 0: draw_ms, flush_ms. */
+    cJSON_AddNumberToObject(root, "fps",         roundf(st.fps * 10.f) / 10.f);
+    cJSON_AddNumberToObject(root, "frame_ms",    roundf(st.frame_ms * 100.f) / 100.f);
+    cJSON_AddNumberToObject(root, "sim_ms",      roundf(st.sim_ms * 100.f) / 100.f);
+    cJSON_AddNumberToObject(root, "wait_ms",     roundf(st.wait_ms * 100.f) / 100.f);
+    cJSON_AddNumberToObject(root, "draw_ms",     roundf(st.draw_ms * 100.f) / 100.f);
+    cJSON_AddNumberToObject(root, "flush_ms",    roundf(st.flush_ms * 100.f) / 100.f);
+    cJSON_AddNumberToObject(root, "cells_drawn", st.cells_drawn);
+    cJSON_AddNumberToObject(root, "cells_inside", st.inside);
+    cJSON *prof = cJSON_AddObjectToObject(root, "prof_ms");
+    for (int q = 0; prof && q < FP_N; q++)
+        cJSON_AddNumberToObject(prof, FLUID_PROF_NAMES[q], roundf(st.prof_ms[q] * 100.f) / 100.f);
+    cJSON_AddNumberToObject(root, "cpu_mhz",     s_cpu_mhz);
+    {
+        char mb[24]; snprintf(mb, sizeof(mb), "internal %d/%d", st.n_internal, st.n_blk);
+        cJSON_AddStringToObject(root, "sim_mem", mb);
+    }
+    cJSON_AddNumberToObject(root, "energy",      roundf(st.energy * 1000.f) / 1000.f);
+    cJSON_AddNumberToObject(root, "err",         roundf(st.err * 1000.f) / 1000.f);
+    char *str = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!str) return ESP_ERR_NO_MEM;
+    *out = str;
+    return ESP_OK;
+}
+
+static int lookup(const char *v, const char *const *names, int n) {
+    for (int i = 0; i < n; i++) if (strcmp(v, names[i]) == 0) return i;
+    return -1;
+}
+
+static bool parse_state(const char *v, int *st, int *fx) {
+    *fx = 0;
+    if (!strcmp(v, "blob"))     { *st = ST_BLOB; return true; }
+    if (!strcmp(v, "thinking")) { *st = ST_THINKING; return true; }
+    if (!strcmp(v, "text"))     { *st = ST_TEXT; return true; }
+    if (!strcmp(v, "creature")) { *st = ST_CREATURE; return true; }   /* falls back to blob if none loaded */
+    if (!strncmp(v, "effect:", 7)) { int f = lookup(v + 7, FLUID_FX_NAMES, FLUID_FX_COUNT); if (f >= 0) { *st = ST_FX; *fx = f; return true; } }
+    return false;
+}
+
+static void set_text_locked(const char *text, int len) {
+    if (len > FLUID_TEXT_MAX) len = FLUID_TEXT_MAX;
+    if (len == s_text_len && memcmp(s_text, text, (size_t)len) == 0) return;   /* duplicate straggler */
+    memcpy(s_text, text, (size_t)len);
+    s_text[len] = '\0';
+    s_text_len = len;
+    s_text_ver++;
+    s_text_appended = false;
+}
+
+esp_err_t mole_fluid_creature_state_set_json(const char *body) {
+    if (!body) return ESP_ERR_INVALID_ARG;
+    if (alloc_bufs() != ESP_OK) return ESP_ERR_NO_MEM;
+    cJSON *root = cJSON_Parse(body);
+    if (!root) return ESP_ERR_INVALID_ARG;
+    esp_err_t ret = ESP_OK;
+    cJSON *j;
+
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if ((j = cJSON_GetObjectItem(root, "text")) && cJSON_IsString(j))
+        set_text_locked(j->valuestring, (int)strlen(j->valuestring));
+    if ((j = cJSON_GetObjectItem(root, "wpm")) && cJSON_IsNumber(j)) {
+        int v = (int)j->valuedouble; s_cfg.wpm = v < 100 ? 100 : v > 800 ? 800 : v;
+    }
+    if ((j = cJSON_GetObjectItem(root, "palette")) && cJSON_IsString(j)) {
+        int v = lookup(j->valuestring, FLUID_PAL_NAMES, FLUID_PAL_COUNT);
+        if (v >= 0) s_cfg.palette = v; else ret = ESP_ERR_INVALID_ARG;
+    }
+    if ((j = cJSON_GetObjectItem(root, "edge_mode")) && cJSON_IsString(j)) {
+        int v = lookup(j->valuestring, FLUID_EDGE_NAMES, FLUID_EDGE_COUNT);
+        if (v >= 0) s_cfg.edge_mode = v; else ret = ESP_ERR_INVALID_ARG;
+    }
+    if ((j = cJSON_GetObjectItem(root, "grid")) && cJSON_IsString(j)) {
+        int w = 0, h = 0;
+        if (sscanf(j->valuestring, "%dx%d", &w, &h) == 2 && w >= FLUID_GRID_MIN_W && w <= FLUID_GRID_MAX_W
+            && h >= FLUID_GRID_MIN_H && h <= FLUID_GRID_MAX_H) { s_cfg.grid_w = w; s_cfg.grid_h = h; }
+        else ret = ESP_ERR_INVALID_ARG;
+    }
+    if ((j = cJSON_GetObjectItem(root, "speed")) && cJSON_IsNumber(j))
+        s_cfg.speed = fminf(2.5f, fmaxf(0.4f, (float)j->valuedouble));
+    if ((j = cJSON_GetObjectItem(root, "mic")) && cJSON_IsNumber(j))
+        s_cfg.mic = fminf(1.f, fmaxf(0.f, (float)j->valuedouble));
+    if ((j = cJSON_GetObjectItem(root, "tilt")) && cJSON_IsNumber(j))
+        s_cfg.tilt = fminf(3.f, fmaxf(-3.f, (float)j->valuedouble));
+    if ((j = cJSON_GetObjectItem(root, "ripple")) && cJSON_IsObject(j) && s_ripn < FLUID_RIPPLE_Q) {
+        cJSON *x = cJSON_GetObjectItem(j, "x"), *y = cJSON_GetObjectItem(j, "y"), *k = cJSON_GetObjectItem(j, "strength");
+        s_ripq[s_ripn][0] = cJSON_IsNumber(x) ? fminf(1.f, fmaxf(-1.f, (float)x->valuedouble)) : 0.f;
+        s_ripq[s_ripn][1] = cJSON_IsNumber(y) ? fminf(1.f, fmaxf(-1.f, (float)y->valuedouble)) : 0.f;
+        s_ripq[s_ripn][2] = cJSON_IsNumber(k) ? fminf(3.f, fmaxf(0.f, (float)k->valuedouble)) : 1.6f;
+        s_ripn++;
+    }
+    bool state_given = (j = cJSON_GetObjectItem(root, "state")) && cJSON_IsString(j);
+    if ((j = cJSON_GetObjectItem(root, "mood")) && cJSON_IsString(j)) {
+        int m = -1;
+        for (int k = 0; k < CUTE_N_MOODS; k++) if (!strcmp(j->valuestring, CUTE_MOOD_NAMES[k])) m = k;
+        if (m < 0) ret = ESP_ERR_INVALID_ARG;
+        else {
+            s_req_mood = m;
+            /* a mood alone means "show me the creature in that mood" */
+            if (!state_given) { s_cfg.autoplay = false; s_req_state = ST_CREATURE; s_req_fx = 0; }
+        }
+    }
+    if ((j = cJSON_GetObjectItem(root, "state")) && cJSON_IsString(j)) {
+        int st, fx;
+        if (!strcmp(j->valuestring, "autoplay")) { s_cfg.autoplay = true; s_req_reel = true; }
+        else if (parse_state(j->valuestring, &st, &fx)) { s_cfg.autoplay = false; s_req_state = st; s_req_fx = fx; }
+        else ret = ESP_ERR_INVALID_ARG;
+    }
+    xSemaphoreGive(s_mutex);
+    cJSON_Delete(root);
+    return ret;
+}
+
+esp_err_t mole_fluid_append_text(const char *chunk, int len) {
+    if (!chunk || len < 0) return ESP_ERR_INVALID_ARG;
+    esp_err_t e = alloc_bufs();
+    if (e != ESP_OK) return e;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool sep = s_text_len > 0 && !is_ws(s_text[s_text_len - 1]) && len > 0 && !is_ws(chunk[0]);
+    int room = FLUID_TEXT_MAX - s_text_len - (sep ? 1 : 0);
+    if (len > room) len = room > 0 ? room : 0;
+    if (len > 0) {
+        if (sep) s_text[s_text_len++] = ' ';
+        memcpy(s_text + s_text_len, chunk, (size_t)len);
+        s_text_len += len;
+        s_text[s_text_len] = '\0';
+        if (s_seen_ver == s_text_ver) s_text_appended = true;   /* pure append since the task's last look */
+        s_text_ver++;
+    }
+    xSemaphoreGive(s_mutex);
+    return ESP_OK;
+}
+
+esp_err_t mole_fluid_set_text(const char *text, int len) {
+    if (!text || len < 0) return ESP_ERR_INVALID_ARG;
+    esp_err_t e = alloc_bufs();
+    if (e != ESP_OK) return e;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    set_text_locked(text, len);
+    xSemaphoreGive(s_mutex);
+    return ESP_OK;
+}
+

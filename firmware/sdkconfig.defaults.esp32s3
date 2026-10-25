@@ -1,0 +1,24 @@
+CONFIG_TINYUSB_TASK_AFFINITY_CPU0=y
+CONFIG_TINYUSB_INIT_IN_DEFAULT_TASK=y
+CONFIG_TINYUSB_NET_MODE_NCM=y
+
+# Board-specific defaults for the Waveshare ESP32-S3-Touch-LCD-1.46.
+# Mirrors Waveshare 1.46 demo bundle: ESP-IDF/.../sdkconfig.defaults.
+
+# Flash: 16 MB QIO
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+
+# PSRAM: 8 MB OPI (octal) — the N16R8 module
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_TYPE_AUTO=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# Console: NONE. The 1.46 has no UART bridge, and USB-Serial-JTAG conflicts
+# with TinyUSB (both want the same USB peripheral). For the portal we accept
+# zero serial logs — debug visibility goes through HTTP endpoints instead.
+CONFIG_ESP_CONSOLE_NONE=y
+
+# fluid creature perf (2026-10-25): 240 MHz — the per-cell loops are instruction-bound
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y

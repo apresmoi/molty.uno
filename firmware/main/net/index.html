@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>molty setup</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #fbf6ee;
+      --bg-card:   #fff9f2;
+      --ink:       #1a1814;
+      --ink-soft:  #5a5248;
+      --ink-faint: #b0a89e;
+      --green:     #5e8c5d;
+      --green-dim: #d6e9d5;
+      --orange:    #d27c3a;
+      --orange-dim:#f7e4cf;
+      --red:       #c44f3a;
+      --red-dim:   #f9ddd9;
+      --radius:    14px;
+      --radius-sm: 8px;
+      --shadow:    0 2px 12px rgba(26,24,20,0.07);
+      --font:      system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+
+    html { font-size: 16px; }
+
+    body {
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--font);
+      min-height: 100vh;
+      padding: 0 0 80px;
+    }
+
+    header {
+      padding: 36px 32px 28px;
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+    }
+    .logo {
+      font-size: 1.55rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      color: var(--ink);
+    }
+    .logo-mark {
+      font-size: 1.3rem;
+      line-height: 1;
+      opacity: 0.75;
+      transform: translateY(1px);
+      display: inline-block;
+    }
+    .logo-sub {
+      font-size: 0.78rem;
+      color: var(--ink-faint);
+      font-weight: 400;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    main {
+      max-width: 620px;
+      margin: 0 auto;
+      padding: 0 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .card {
+      background: var(--bg-card);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 24px 26px;
+      border: 1.5px solid rgba(26,24,20,0.06);
+    }
+    .card-title {
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+      color: var(--ink-faint);
+      margin-bottom: 14px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: none;
+      border-radius: var(--radius-sm);
+      padding: 11px 22px;
+      font-size: 0.93rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.14s, transform 0.1s;
+      line-height: 1;
+      font-family: var(--font);
+    }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none !important; }
+    .btn:not(:disabled):hover { opacity: 0.88; }
+    .btn:not(:disabled):active { transform: scale(0.97); }
+    .btn-green  { background: var(--green); color: #fff; }
+    .btn-ghost  { background: transparent; color: var(--ink-soft); border: 1.5px solid rgba(26,24,20,0.16); }
+    .btn-danger { background: var(--red-dim); color: var(--red); border: 1.5px solid rgba(196,79,58,0.18); }
+    .btn-sm     { padding: 7px 14px; font-size: 0.82rem; }
+
+    /* status */
+    .status-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px 18px;
+    }
+    .status-label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--ink-faint);
+      margin-bottom: 3px;
+    }
+    .status-value { font-size: 0.97rem; font-weight: 500; color: var(--ink); }
+
+    .state-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 10px 3px 7px;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    .state-badge::before {
+      content: "";
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .state-connected    { background: var(--green-dim); color: var(--green); }
+    .state-connected::before { background: var(--green); }
+    .state-connecting   { background: var(--orange-dim); color: var(--orange); }
+    .state-connecting::before { background: var(--orange); animation: pulse 1s ease-in-out infinite alternate; }
+    .state-disconnected { background: var(--red-dim); color: var(--red); }
+    .state-disconnected::before { background: var(--red); }
+    .state-setup_needed { background: var(--orange-dim); color: var(--orange); }
+    .state-setup_needed::before { background: var(--orange); }
+    .state-unknown      { background: #eee; color: var(--ink-soft); }
+    .state-unknown::before { background: var(--ink-faint); }
+
+    @keyframes pulse { from { opacity: 0.4; } to { opacity: 1; } }
+
+    .rssi-bars {
+      display: inline-flex;
+      align-items: flex-end;
+      gap: 2px;
+      height: 14px;
+      vertical-align: middle;
+      margin-right: 5px;
+    }
+    .rssi-bars .bar { width: 4px; border-radius: 1px; background: var(--ink-faint); }
+    .rssi-bars .bar.lit { background: var(--green); }
+    .rssi-bars .bar:nth-child(1) { height: 4px; }
+    .rssi-bars .bar:nth-child(2) { height: 7px; }
+    .rssi-bars .bar:nth-child(3) { height: 10px; }
+    .rssi-bars .bar:nth-child(4) { height: 14px; }
+    .rssi-dbm { color: var(--ink-soft); font-size: 0.82rem; margin-left: 4px; }
+
+    .status-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 18px;
+    }
+    .status-refresh-hint { font-size: 0.72rem; color: var(--ink-faint); }
+
+    /* networks */
+    .networks-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    #network-list { display: flex; flex-direction: column; gap: 8px; }
+    .net-row {
+      border: 1.5px solid rgba(26,24,20,0.08);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+      transition: border-color 0.15s;
+      background: var(--bg);
+    }
+    .net-row:hover { border-color: rgba(26,24,20,0.2); }
+    .net-row.selected { border-color: var(--green); }
+    .net-summary {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 11px 14px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .net-ssid {
+      flex: 1;
+      font-size: 0.93rem;
+      font-weight: 500;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .net-lock { font-size: 0.75rem; opacity: 0.5; flex-shrink: 0; }
+    .net-dbm { font-size: 0.75rem; color: var(--ink-faint); }
+
+    .net-connect-form {
+      display: none;
+      padding: 12px 14px 14px;
+      border-top: 1.5px solid rgba(26,24,20,0.07);
+      background: var(--bg-card);
+      flex-direction: column;
+      gap: 10px;
+    }
+    .net-row.selected .net-connect-form { display: flex; }
+    .net-connect-form input {
+      width: 100%;
+      border: 1.5px solid rgba(26,24,20,0.15);
+      border-radius: var(--radius-sm);
+      padding: 9px 12px;
+      font-size: 0.92rem;
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--ink);
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .net-connect-form input:focus { border-color: var(--green); }
+    .net-connect-form input::placeholder { color: var(--ink-faint); }
+    .net-form-row { display: flex; gap: 8px; align-items: center; }
+    .net-msg { font-size: 0.82rem; color: var(--ink-soft); flex: 1; }
+    .net-msg.error   { color: var(--red); }
+    .net-msg.success { color: var(--green); font-weight: 500; }
+
+    .spinner {
+      width: 16px; height: 16px;
+      border: 2px solid rgba(255,255,255,0.4);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      flex-shrink: 0;
+    }
+    .spinner-ink { border-color: rgba(26,24,20,0.15); border-top-color: var(--ink-soft); }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .scan-placeholder {
+      padding: 18px 0;
+      text-align: center;
+      color: var(--ink-faint);
+      font-size: 0.88rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+    .scan-placeholder .spinner { border-color: rgba(26,24,20,0.12); border-top-color: var(--ink-faint); }
+
+    .celebration {
+      background: var(--green-dim);
+      border-radius: var(--radius-sm);
+      padding: 12px 16px;
+      color: var(--green);
+      font-weight: 600;
+      font-size: 0.93rem;
+    }
+
+    .danger-zone {
+      margin-top: 8px;
+      padding-top: 16px;
+      border-top: 1.5px dashed rgba(26,24,20,0.1);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .danger-label { font-size: 0.78rem; color: var(--ink-faint); }
+
+    #debug-pane summary {
+      cursor: pointer;
+      font-size: 0.76rem;
+      color: var(--ink-faint);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      user-select: none;
+      list-style: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 0;
+    }
+    #debug-pane summary::-webkit-details-marker { display: none; }
+    #debug-pane summary::before { content: "▸"; transition: transform 0.15s; display: inline-block; }
+    #debug-pane details[open] summary::before { transform: rotate(90deg); }
+
+    #debug-log {
+      margin-top: 10px;
+      background: #1a1814;
+      border-radius: var(--radius-sm);
+      padding: 14px 16px;
+      height: 200px;
+      overflow-y: auto;
+      font-family: "Courier New", monospace;
+      font-size: 0.76rem;
+      line-height: 1.55;
+      color: #c8bfb4;
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      scroll-behavior: smooth;
+    }
+    .debug-line { word-break: break-all; }
+    .debug-line.req  { color: #7ec8a4; }
+    .debug-line.resp { color: #8cbdde; }
+    .debug-line.meta { color: #6a6058; font-style: italic; }
+
+    #toast {
+      position: fixed;
+      bottom: 28px;
+      left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      background: var(--ink);
+      color: var(--bg);
+      padding: 10px 22px;
+      border-radius: 20px;
+      font-size: 0.88rem;
+      font-weight: 500;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.22s, transform 0.22s;
+      z-index: 100;
+      white-space: nowrap;
+    }
+    #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+
+<header>
+  <span class="logo"><span class="logo-mark">&#x1F95A;</span> molty</span>
+  <span class="logo-sub">wi-fi setup</span>
+</header>
+
+<main>
+
+  <!-- status card -->
+  <div class="card" id="status-card">
+    <div class="status-header">
+      <div class="card-title" style="margin-bottom:0">device status</div>
+      <span class="status-refresh-hint" id="refresh-hint">loading&hellip;</span>
+    </div>
+    <div class="status-grid">
+      <div>
+        <div class="status-label">state</div>
+        <div class="status-value" id="st-state"><span class="state-badge state-unknown">&mdash;</span></div>
+      </div>
+      <div>
+        <div class="status-label">signal</div>
+        <div class="status-value" id="st-rssi">&mdash;</div>
+      </div>
+      <div>
+        <div class="status-label">network</div>
+        <div class="status-value" id="st-ssid">&mdash;</div>
+      </div>
+      <div>
+        <div class="status-label">IP address</div>
+        <div class="status-value" id="st-ip">&mdash;</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- celebration banner -->
+  <div id="celebration" class="hidden celebration">
+    molty is online &#x2728; &mdash; connected to <strong id="celebration-ssid"></strong>, IP <strong id="celebration-ip"></strong>
+  </div>
+
+  <!-- networks card -->
+  <div class="card">
+    <div class="networks-header">
+      <div class="card-title" style="margin-bottom:0">wi-fi networks</div>
+      <button id="btn-scan" class="btn btn-ghost btn-sm">scan again</button>
+    </div>
+    <div id="network-list">
+      <div class="scan-placeholder" id="scan-placeholder">
+        <div class="spinner spinner-ink"></div>
+        <span>scanning for networks&hellip;</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- danger zone -->
+  <div class="card">
+    <div class="danger-zone">
+      <span class="danger-label">forget saved wi-fi &amp; reboot</span>
+      <button id="btn-forget" class="btn btn-danger btn-sm">forget wi-fi</button>
+    </div>
+  </div>
+
+  <!-- debug pane -->
+  <div id="debug-pane" class="card">
+    <details>
+      <summary>debug log</summary>
+      <div id="debug-log"></div>
+    </details>
+  </div>
+
+</main>
+
+<div id="toast"></div>
+
+<script>
+'use strict';
+
+// ── DOM refs ──────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const btnScan        = $('btn-scan');
+const btnForget      = $('btn-forget');
+const networkList    = $('network-list');
+const scanPlaceholder= $('scan-placeholder');
+const celebrationEl  = $('celebration');
+const refreshHint    = $('refresh-hint');
+const debugLog       = $('debug-log');
+const toast          = $('toast');
+
+// ── debug log ─────────────────────────────────────────────────────────────────
+function dbg(text, cls) {
+  const line = document.createElement('div');
+  line.className = 'debug-line ' + cls;
+  line.textContent = text;
+  debugLog.appendChild(line);
+  while (debugLog.children.length > 300) debugLog.removeChild(debugLog.firstChild);
+  debugLog.scrollTop = debugLog.scrollHeight;
+}
+const dbgReq  = t => dbg('GET ' + t, 'req');
+const dbgPost = t => dbg('POST ' + t, 'req');
+const dbgResp = t => dbg(typeof t === 'string' ? t : JSON.stringify(t), 'resp');
+const dbgMeta = t => dbg('· ' + t, 'meta');
+
+// ── fetch helpers ─────────────────────────────────────────────────────────────
+async function apiGet(path) {
+  dbgReq(path);
+  const r = await fetch(path);
+  const j = await r.json();
+  dbgResp(j);
+  return j;
+}
+
+async function apiPost(path, body) {
+  dbgPost(path + ' ' + JSON.stringify(body));
+  const r = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const j = await r.json();
+  dbgResp(j);
+  return j;
+}
+
+// ── status ────────────────────────────────────────────────────────────────────
+let statusTimer = null;
+
+async function refreshStatus() {
+  try {
+    const resp = await apiGet('/api/status');
+    if (resp.ok) {
+      renderStatus(resp);
+      refreshHint.textContent = 'updated ' + new Date().toLocaleTimeString();
+    }
+  } catch (e) {
+    dbgMeta('status error: ' + e.message);
+    refreshHint.textContent = 'error';
+  }
+}
+
+function startStatusLoop() {
+  stopStatusLoop();
+  statusTimer = setInterval(refreshStatus, 3000);
+}
+function stopStatusLoop() {
+  if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
+}
+
+function renderStatus(resp) {
+  const state = resp.state || 'unknown';
+  const stateEl = $('st-state');
+  stateEl.innerHTML = '';
+  const badge = document.createElement('span');
+  badge.className = 'state-badge state-' + state;
+  badge.textContent = state.replace(/_/g, ' ');
+  stateEl.appendChild(badge);
+
+  $('st-ssid').textContent = resp.ssid || '—';
+  $('st-ip').textContent   = resp.ip   || '—';
+
+  const rssiEl = $('st-rssi');
+  if (resp.rssi !== undefined && resp.rssi !== null) {
+    rssiEl.innerHTML = rssiHTML(resp.rssi) + '<span class="rssi-dbm">' + resp.rssi + ' dBm</span>';
+  } else {
+    rssiEl.textContent = '—';
+  }
+}
+
+// ── scan ──────────────────────────────────────────────────────────────────────
+async function doScan() {
+  networkList.innerHTML = '';
+  networkList.appendChild(scanPlaceholder);
+  scanPlaceholder.style.display = 'flex';
+  btnScan.disabled = true;
+
+  try {
+    const resp = await apiGet('/api/scan');
+    scanPlaceholder.style.display = 'none';
+    btnScan.disabled = false;
+
+    if (!resp.ok || !Array.isArray(resp.networks)) {
+      showNetworkMsg('scan failed — try again');
+      return;
+    }
+    if (resp.networks.length === 0) {
+      showNetworkMsg('no networks found — try scanning again');
+      return;
+    }
+    renderNetworks(resp.networks);
+  } catch (e) {
+    btnScan.disabled = false;
+    scanPlaceholder.style.display = 'none';
+    showNetworkMsg('scan error: ' + e.message);
+  }
+}
+
+function showNetworkMsg(msg) {
+  networkList.innerHTML = '<div class="scan-placeholder"><span style="color:var(--ink-soft)">' + escHtml(msg) + '</span></div>';
+}
+
+function renderNetworks(networks) {
+  networkList.innerHTML = '';
+  networks.forEach(function(net) {
+    const row = document.createElement('div');
+    row.className = 'net-row';
+    const bars = rssiHTML(net.rssi);
+    const lock  = net.open ? '' : '<span class="net-lock" title="password required">&#x1F512;</span>';
+    const ssidTrunc = net.ssid.length > 34 ? net.ssid.slice(0, 32) + '…' : net.ssid;
+
+    row.innerHTML =
+      '<div class="net-summary">' +
+        bars +
+        '<span class="net-ssid">' + escHtml(ssidTrunc) + '</span>' +
+        lock +
+        '<span class="net-dbm">' + net.rssi + ' dBm</span>' +
+      '</div>' +
+      '<div class="net-connect-form">' +
+        (net.open ? '' : '<input type="password" placeholder="wi-fi password" autocomplete="current-password" spellcheck="false" />') +
+        '<div class="net-form-row">' +
+          '<button class="btn btn-green btn-sm net-btn-connect">connect</button>' +
+          '<span class="net-msg"></span>' +
+        '</div>' +
+      '</div>';
+
+    row.querySelector('.net-summary').addEventListener('click', function() {
+      toggleNetRow(row);
+    });
+
+    const connectBtn = row.querySelector('.net-btn-connect');
+    connectBtn.addEventListener('click', function() { attemptConnect(row, net); });
+
+    const pwInput = row.querySelector('input[type="password"]');
+    if (pwInput) {
+      pwInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') attemptConnect(row, net);
+      });
+    }
+
+    networkList.appendChild(row);
+  });
+}
+
+function toggleNetRow(row) {
+  const wasSelected = row.classList.contains('selected');
+  document.querySelectorAll('.net-row.selected').forEach(function(r) { r.classList.remove('selected'); });
+  if (!wasSelected) {
+    row.classList.add('selected');
+    const pw = row.querySelector('input[type="password"]');
+    if (pw) setTimeout(function() { pw.focus(); }, 50);
+  }
+}
+
+async function attemptConnect(row, net) {
+  const pwInput  = row.querySelector('input[type="password"]');
+  const msgEl    = row.querySelector('.net-msg');
+  const btn      = row.querySelector('.net-btn-connect');
+  const password = pwInput ? pwInput.value : '';
+
+  if (!net.open && password.trim() === '') {
+    msgEl.className = 'net-msg error';
+    msgEl.textContent = 'enter the password first';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = '<div class="spinner"></div> connecting…';
+  msgEl.className = 'net-msg';
+  msgEl.textContent = 'connecting to molty…';
+  if (pwInput) pwInput.disabled = true;
+
+  stopStatusLoop();
+
+  try {
+    const resp = await apiPost('/api/set_creds', { ssid: net.ssid, password: password });
+
+    if (resp.ok) {
+      msgEl.className = 'net-msg success';
+      msgEl.textContent = 'connected! IP: ' + (resp.ip || '?');
+      btn.innerHTML = '&#x2713; connected';
+
+      $('celebration-ssid').textContent = net.ssid;
+      $('celebration-ip').textContent   = resp.ip || '?';
+      celebrationEl.classList.remove('hidden');
+
+      showToast('molty is online ✨');
+    } else {
+      const hint = wifiErrorHint(resp.error, resp.wifi_status);
+      msgEl.className = 'net-msg error';
+      msgEl.textContent = hint;
+      btn.disabled = false;
+      btn.textContent = 'try again';
+      if (pwInput) pwInput.disabled = false;
+    }
+  } catch (e) {
+    msgEl.className = 'net-msg error';
+    msgEl.textContent = 'fetch error: ' + e.message;
+    btn.disabled = false;
+    btn.textContent = 'try again';
+    if (pwInput) pwInput.disabled = false;
+  }
+
+  startStatusLoop();
+  await refreshStatus();
+}
+
+function wifiErrorHint(errCode, wifiStatus) {
+  if (errCode === 'connect_failed') {
+    if (wifiStatus === 6)  return 'wrong password — try again';
+    if (wifiStatus === 1)  return 'network not found — maybe 5 GHz only, or out of range';
+    if (wifiStatus === 4)  return 'connection failed — wrong password or network issue';
+    return 'could not connect — wrong password, out of range, or 5 GHz only?';
+  }
+  return 'error: ' + (errCode || 'unknown');
+}
+
+// ── forget ───────────────────────────────────────────────────────────────────
+async function doForget() {
+  if (!window.confirm('forget saved wi-fi and reboot molty?\n\nyou\'ll need to set it up again.')) return;
+
+  btnForget.disabled = true;
+  btnForget.textContent = 'forgetting…';
+  stopStatusLoop();
+
+  try {
+    await apiPost('/api/forget', {});
+  } catch {
+    // device reboots ~500 ms after responding; fetch may error — that's fine
+  }
+
+  showToast('molty is rebooting — reload this page in a few seconds');
+  dbgMeta('forget sent — device rebooting');
+
+  btnForget.disabled = false;
+  btnForget.textContent = 'forget wi-fi';
+}
+
+// ── RSSI helpers ──────────────────────────────────────────────────────────────
+function rssiStrength(rssi) {
+  if (rssi >= -55) return 4;
+  if (rssi >= -67) return 3;
+  if (rssi >= -75) return 2;
+  if (rssi >= -85) return 1;
+  return 0;
+}
+function rssiHTML(rssi) {
+  const lit = rssiStrength(rssi);
+  const bars = [1,2,3,4].map(function(i) {
+    return '<div class="bar' + (i <= lit ? ' lit' : '') + '"></div>';
+  }).join('');
+  return '<div class="rssi-bars">' + bars + '</div>';
+}
+
+// ── toast ─────────────────────────────────────────────────────────────────────
+let toastTimer = null;
+function showToast(msg, duration) {
+  toast.textContent = msg;
+  toast.classList.add('show');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(function() { toast.classList.remove('show'); }, duration || 3200);
+}
+
+// ── utils ─────────────────────────────────────────────────────────────────────
+function escHtml(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── boot ──────────────────────────────────────────────────────────────────────
+btnScan.addEventListener('click', doScan);
+btnForget.addEventListener('click', doForget);
+
+refreshStatus();
+startStatusLoop();
+doScan();
+</script>
+</body>
+</html>

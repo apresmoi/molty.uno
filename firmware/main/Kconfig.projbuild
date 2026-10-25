@@ -1,0 +1,12 @@
+menu "Molty"
+
+config MOLTY_DEFAULT_RELAY
+    string "Default agent-link relay URL"
+    default "wss://molty-relay.alicenet.workers.dev"
+    help
+        Relay origin the device dials when no relay URL has been saved in NVS
+        (the console's "Connect an agent" settings, POST /api/link, can change it).
+        wss://host for a deployed relay, or ws://<LAN-IP>:8787 for `wrangler dev`.
+        The device appends /v1/device?id=<device_id>. See docs/AGENT-LINK.md.
+
+endmenu
