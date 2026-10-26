@@ -203,7 +203,8 @@ class PageFluid implements PageFluidHandle {
         extent: MOLTY_EXTENT,
         light: { direction: MOLTY_KEY_LIGHT, intensity: 1 },
         ambient: 0.4,
-        visibility: "viewport",
+        // reduced motion: a settled Molty stays drawn while any of it is on screen, as before
+        visibility: this.options.reducedMotion ? "always" : "viewport",
       }),
     );
     s.target.melt();

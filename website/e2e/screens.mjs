@@ -54,10 +54,15 @@ const FIELD = '[data-fluid-field] pre';
  *  page hidden, and count pixels that differ from the background (text alone can change while
  *  nothing shows: a hidden <pre>, an atlas that never loaded). */
 async function paintedPixels(page, selector) {
-  const style = await page.addStyleTag({ content: `body * { visibility: hidden !important; }
-      ${selector}, ${selector} * { visibility: visible !important; }` });
-  const shot = await page.locator(selector).first().screenshot();
+  // fade out everything that neither contains nor is inside the fluid; the fluid's own styles
+  // stay untouched, so a fluid hidden by the page still fails
+  await page.locator(selector).first().evaluate((el) => el.setAttribute('data-e2e-shot', ''));
+  const style = await page.addStyleTag({
+    content: `body *:not(:has([data-e2e-shot])):not([data-e2e-shot]):not([data-e2e-shot] *) { opacity: 0 !important; }`,
+  });
+  const shot = await page.locator('[data-e2e-shot]').screenshot();
   await style.evaluate((el) => el.remove());
+  await page.locator('[data-e2e-shot]').evaluate((el) => el.removeAttribute('data-e2e-shot'));
   const { data, info } = await sharp(shot).removeAlpha().raw().toBuffer({ resolveWithObject: true });
   const bg = [data[0], data[1], data[2]];
   let n = 0;
@@ -112,6 +117,21 @@ const scrollToSection = (page, id) =>
     await page.getByRole('button', { name: '[ read ]' }).click();
     if (!(await page.getByText('“hello from the test”').count())) fail('speed reader did not take typed text');
     else console.log('ok   speed reader takes wpm + typed text');
+    // the words themselves: the reader's real letters (its plain look) must spell the typed text
+    const seen = new Set();
+    for (let i = 0; i < 30; i++) {
+      const word = await page.evaluate(() =>
+        [...document.querySelectorAll('[data-speed-reader] [aria-hidden] span')]
+          .filter((s) => s.children.length === 0 && Number(getComputedStyle(s).opacity) > 0.5)
+          .map((s) => s.textContent)
+          .join(''),
+      );
+      if (word) seen.add(word);
+      await page.waitForTimeout(100);
+    }
+    const typed = ['hello', 'from', 'the', 'test'].filter((w) => [...seen].some((s) => s.includes(w)));
+    if (typed.length < 2) fail(`speed reader letters do not read the typed text (saw ${[...seen].join(' ') || 'nothing'})`);
+    else console.log(`ok   speed reader letters read the typed text (${typed.join(' ')})`);
   }
   for (const id of ['fluid', 'bridge', 'boards']) {
     await scrollToSection(page, id);
