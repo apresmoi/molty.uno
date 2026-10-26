@@ -3,6 +3,7 @@
 // or a hero screen that does not render / does not move.
 //   node e2e/screens.mjs [baseUrl=http://localhost:4330]
 import { chromium } from 'playwright';
+import sharp from 'sharp';
 import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -48,6 +49,22 @@ const sampleFluid = (page, selector) =>
   }, selector);
 
 const FIELD = '[data-fluid-field] pre';
+
+/** Pixels the fluid actually paints: screenshot `selector`'s box with everything else on the
+ *  page hidden, and count pixels that differ from the background (text alone can change while
+ *  nothing shows: a hidden <pre>, an atlas that never loaded). */
+async function paintedPixels(page, selector) {
+  const style = await page.addStyleTag({ content: `body * { visibility: hidden !important; }
+      ${selector}, ${selector} * { visibility: visible !important; }` });
+  const shot = await page.locator(selector).first().screenshot();
+  await style.evaluate((el) => el.remove());
+  const { data, info } = await sharp(shot).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const bg = [data[0], data[1], data[2]];
+  let n = 0;
+  for (let i = 0; i < data.length; i += info.channels)
+    if (Math.abs(data[i] - bg[0]) + Math.abs(data[i + 1] - bg[1]) + Math.abs(data[i + 2] - bg[2]) > 60) n++;
+  return n;
+}
 const scrollToSection = (page, id) =>
   page.evaluate((id) => {
     const el = document.getElementById(id);
@@ -66,6 +83,9 @@ const scrollToSection = (page, id) =>
   if (!a || a.lit < 500) fail(`page fluid not rendering (lit=${a?.lit})`);
   else if (a.hash === b.hash) fail('page fluid did not change in 1 s');
   else console.log(`ok   page fluid renders (lit ${a.lit} → ${b.lit} cells) and moves (hash ${a.hash} ≠ ${b.hash})`);
+  const painted = await paintedPixels(page, '[data-fluid-field]');
+  if (painted < 5000) fail(`page fluid paints nothing visible (${painted} px)`);
+  else console.log(`ok   page fluid paints ${painted} px`);
   if (!(await page.locator('html[data-fluid-moltys="live"]').count())) fail('Moltys never became ready (three.js rig / mesh target)');
   await scrollToSection(page, 'moltys');
   await page.getByRole('button', { name: 'frog' }).click();
@@ -83,6 +103,9 @@ const scrollToSection = (page, id) =>
     if (!r1 || r1.lit < 200) fail(`speed reader not rendering (lit=${r1?.lit})`);
     else if (r1.hash === r2.hash) fail('speed reader did not move');
     else console.log(`ok   speed reader renders (lit ${r1.lit}) and moves`);
+    const rp = await paintedPixels(page, '[data-speed-reader] pre');
+    if (rp < 300) fail(`speed reader paints nothing visible (${rp} px)`);
+    else console.log(`ok   speed reader paints ${rp} px`);
     await page.getByRole('button', { name: '600' }).click();
     await page.getByRole('button', { name: '[ type your own ]' }).click();
     await page.getByLabel('Text for Molty to read').fill('hello from the test');

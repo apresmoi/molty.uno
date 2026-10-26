@@ -145,7 +145,13 @@ class PageFluid implements PageFluidHandle {
 
   private addWord(el: HTMLElement, color: string) {
     const target = this.fluid.addTarget(
-      GlyphFluidTargets.text(el, { color, delay: Number(el.dataset.fluidDelay ?? 0), visibility: "viewport" }),
+      // reduced motion: every heading stands settled (no delay, no scroll band), as before
+      GlyphFluidTargets.text(
+        el,
+        this.options.reducedMotion
+          ? { color, visibility: "always" }
+          : { color, delay: Number(el.dataset.fluidDelay ?? 0), visibility: "viewport" },
+      ),
     );
     this.words.push({ el, color, target });
   }
@@ -163,7 +169,7 @@ class PageFluid implements PageFluidHandle {
 
   /** A tinted heading follows its slot's Molty; a text target's colour is fixed, so swap it. */
   private retint() {
-    for (const w of this.words) {
+    for (const w of [...this.words]) {
       if (!w.el.dataset.fluidTint) continue;
       const color = this.colorOf(w.el);
       if (color === w.color) continue;
