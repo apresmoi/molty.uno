@@ -19,11 +19,8 @@
   position: absolute;
   inset: 0;
 }
-/* FluidStage sizes its canvas inline; the glass decides here */
-.host canvas {
-  display: block;
-  width: 100% !important;
-  height: 100% !important;
+/* @glyphcss/fluid's layer fills the host; light theme inverts it */
+.host > * {
   filter: var(--m-fluid-filter);
 }
 .still {

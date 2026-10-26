@@ -31,28 +31,23 @@ async function overflow(page, label) {
   else console.log(`ok   ${label}: no horizontal overflow (${sw} ≤ ${cw})`);
 }
 
-/** Lit pixels of the hero canvas, plus a hash, so two samples can be compared. */
-const sampleCanvas = (page, selector) =>
+/** Lit cells of a fluid (@glyphcss/fluid draws one <pre> of glyphs; U+2800 and spaces are
+ *  blank), plus a hash of its text, so two samples can be compared. */
+const sampleFluid = (page, selector) =>
   page.evaluate((sel) => {
-    const cv = document.querySelector(sel);
-    if (!cv) return null;
-    const c = document.createElement('canvas');
-    c.width = 160;
-    c.height = 160;
-    const g = c.getContext('2d');
-    g.drawImage(cv, 0, 0, 160, 160);
-    const d = g.getImageData(0, 0, 160, 160).data;
+    const pre = document.querySelector(sel);
+    if (!pre) return null;
     let lit = 0;
     let hash = 0;
-    for (let i = 0; i < d.length; i += 4) {
-      const v = d[i] + d[i + 1] + d[i + 2];
-      if (v > 60) lit++;
-      hash = (hash * 31 + v) | 0;
+    for (const ch of pre.textContent ?? '') {
+      const c = ch.codePointAt(0);
+      if (c !== 0x20 && c !== 0x2800 && c !== 0x0a) lit++;
+      hash = (hash * 31 + c) | 0;
     }
     return { lit, hash };
   }, selector);
 
-const FIELD = '[data-fluid-field] canvas';
+const FIELD = '[data-fluid-field] pre';
 const scrollToSection = (page, id) =>
   page.evaluate((id) => {
     const el = document.getElementById(id);
@@ -65,13 +60,13 @@ const scrollToSection = (page, id) =>
   await page.waitForSelector('html[data-fluid="live"]', { timeout: 20000 });
   await page.waitForTimeout(5000); // the wordmark has condensed, the first Molty has emerged
   await page.screenshot({ path: OUT + 'landing-1440-hero-a.png' });
-  const a = await sampleCanvas(page, FIELD);
+  const a = await sampleFluid(page, FIELD);
   await page.waitForTimeout(1000);
-  const b = await sampleCanvas(page, FIELD);
+  const b = await sampleFluid(page, FIELD);
   if (!a || a.lit < 500) fail(`page fluid not rendering (lit=${a?.lit})`);
   else if (a.hash === b.hash) fail('page fluid did not change in 1 s');
-  else console.log(`ok   page fluid renders (lit ${a.lit} → ${b.lit} px) and moves (hash ${a.hash} ≠ ${b.hash})`);
-  if (!(await page.locator('html[data-fluid-moltys="live"]').count())) fail('Moltys never became ready (three.js / CreatureTarget)');
+  else console.log(`ok   page fluid renders (lit ${a.lit} → ${b.lit} cells) and moves (hash ${a.hash} ≠ ${b.hash})`);
+  if (!(await page.locator('html[data-fluid-moltys="live"]').count())) fail('Moltys never became ready (three.js rig / mesh target)');
   await scrollToSection(page, 'moltys');
   await page.getByRole('button', { name: 'frog' }).click();
   const slot = await page.locator('[data-fluid-slot="gallery"]').getAttribute('data-fluid-molty');
@@ -82,9 +77,9 @@ const scrollToSection = (page, id) =>
   {
     await page.locator('[data-speed-reader]').scrollIntoViewIfNeeded();
     await page.waitForTimeout(2500);
-    const r1 = await sampleCanvas(page, '[data-speed-reader] canvas');
+    const r1 = await sampleFluid(page, '[data-speed-reader] pre');
     await page.waitForTimeout(700);
-    const r2 = await sampleCanvas(page, '[data-speed-reader] canvas');
+    const r2 = await sampleFluid(page, '[data-speed-reader] pre');
     if (!r1 || r1.lit < 200) fail(`speed reader not rendering (lit=${r1?.lit})`);
     else if (r1.hash === r2.hash) fail('speed reader did not move');
     else console.log(`ok   speed reader renders (lit ${r1.lit}) and moves`);

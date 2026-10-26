@@ -26,15 +26,19 @@ Never deploy or publish from here; nothing in this package does.
 - `src/components/Name/Name.tsx` is the component; `index.ts` has explicit named exports.
   Import another component through its barrel. Components are React; `.astro` lives only in
   pages, layouts and `src/integrations/{astro,starlight}/` adapters.
-- `src/services/molty-stage/` is the only owner of the engine runtime (`pageFluid.ts`): one
-  `FluidSim` sized to the viewport (its round mask opened to a rectangle), the engine's
-  `GlyphRenderer` through a small context shim (stretched panel, no disc clip, per-cell dots),
-  and `CreatureTarget`s blitted into it. It reads its targets from the DOM:
-  `data-fluid-word` (a heading that condenses from the fluid while on screen),
-  `data-fluid-molty` (a square slot a Molty emerges in; comma list + `data-fluid-every`
-  cycles), `data-fluid-quiet` / `data-fluid-pool` (fluid recedes under prose / pools to be
-  touched). `FluidField` mounts it; nothing else imports `@creatures`. 30 fps, DPR ≤ 1.5,
-  ≤ 176 columns; `prefers-reduced-motion` draws one settled frame per scroll stop.
+- `src/services/molty-stage/` is the only owner of the fluid runtime. `pageFluid.ts` glues one
+  `@glyphcss/fluid` fluid (`glue: "document"`, one `<pre>`, the sim in a Vite-bundled Worker) to
+  the page and reads its targets from the DOM: `data-fluid-word` (a text target that condenses
+  while on screen; `data-fluid-color`, `data-fluid-delay`, `data-fluid-tint`), `data-fluid-molty`
+  (a square slot a Molty emerges in as a mesh target; comma list + `data-fluid-every` cycles),
+  `data-fluid-quiet` / `data-fluid-pool` (zones). `moltyMesh.ts` keeps the cute kit +
+  MoodEngine (`@creatures`) as the pose rig and hands glyphcss the posed triangles.
+  `speedReader.ts` is `@glyphcss/fluid/reader` on the round screen (`shape: "circle"`).
+  `FluidField` / `SpeedReader` mount them; nothing else imports `@creatures`, `glyphcss` or
+  `@glyphcss/*`. 30 fps, ≤ 176 columns; `prefers-reduced-motion` draws settled stills.
+- **Local-only today:** `@glyphcss/fluid` and the `glyphcss` with the braille-dots atlas are not
+  on npm yet; `astro.config.mjs` aliases them to a glyphcss checkout's `packages/*/src`
+  (`GLYPHCSS_DIR`, see `README.md`). Replace the aliases with npm deps once published.
 - The page must read without the engine: headings keep their DOM text (transparent only
   under `html[data-fluid="live"]`), Molty slots show the catalog still until
   `html[data-fluid-moltys="live"]`.
@@ -46,7 +50,7 @@ Never deploy or publish from here; nothing in this package does.
 
 - `src/styles/tokens.css` is the only place for colours, fonts, sizes: black glass, dim braille,
   monospace. The only UI colour is the wordmark green; every other colour comes from a Molty's
-  palette (via the fluid). Dark and light: light inverts the fluid canvas (`--m-fluid-filter`,
+  palette (via the fluid). Dark and light: light inverts the fluid layer (`--m-fluid-filter`,
   hue kept) into ink on paper; `ThemeToggle` shares Starlight's `starlight-theme` key.
 - Components own CSS Modules. `global.css` imports tokens, base and layout only. Starlight's
   chrome is mapped in `src/integrations/starlight/starlight.css`.
@@ -59,8 +63,8 @@ Never deploy or publish from here; nothing in this package does.
   layers, engine/three import boundary, single repo URL, colour/font tokens, cycles) + prettier
   (`pnpm format` fixes). No baselines or exemptions.
 - `pnpm build && pnpm preview`, then `pnpm screens` (`e2e/screens.mjs`): screenshots to
-  `e2e-out/` (gitignored), fails on page errors, 390px overflow, a page fluid that does not
-  render or move, Moltys that never load, or a gallery picker that does not drive its slot.
+  `e2e-out/` (gitignored), fails on page errors, 390px overflow, a page fluid (its `<pre>`)
+  that does not render or move, Moltys that never load, or a gallery picker that does not drive its slot.
   Look at the screenshots.
 - `pnpm og` regenerates `public/og.png` from the live page fluid (needs the preview running).
 - `dist/llms.txt`, `llms-full.txt` and raw `docs/*.md` come from `scripts/generate-llms-txt.mjs`.

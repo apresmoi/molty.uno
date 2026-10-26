@@ -4,8 +4,8 @@ import styles from "./FluidField.module.css";
 
 /** The one live fluid behind the landing page. It reads its targets (headings, Molty slots,
  *  quiet and pool zones) from data-fluid-* attributes in the page, so the page stays static
- *  HTML that reads fine without it. Sets <html data-fluid="live"> once it draws, and
- *  data-fluid-moltys="live" once the Moltys can emerge (three.js loaded). */
+ *  HTML that reads fine without it. Sets <html data-fluid="live"> once it draws (@glyphcss/fluid), and
+ *  data-fluid-moltys="live" once the Moltys can emerge (their three.js rig loaded). */
 export function FluidField() {
   const host = useRef<HTMLDivElement>(null);
   useEffect(() => {

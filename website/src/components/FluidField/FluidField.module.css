@@ -6,11 +6,7 @@
   pointer-events: none;
   background: var(--m-bg);
 }
-.field canvas {
-  position: absolute;
-  top: 0;
-  left: 0;
-  display: block;
-  will-change: transform;
+/* @glyphcss/fluid's layer (it positions and moves it itself); light theme inverts it */
+.field > * {
   filter: var(--m-fluid-filter);
 }

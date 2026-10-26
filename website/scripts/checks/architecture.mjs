@@ -35,6 +35,8 @@ function checkImport(file, target) {
 function checkBareImport(file, spec) {
   if (spec.startsWith('@creatures/') && !rel(file).startsWith('services/molty-stage/') && !rel(file).endsWith('env.d.ts'))
     report(file, 'Only services/molty-stage may import the creature engine (@creatures/…).');
+  if ((spec === 'glyphcss' || spec.startsWith('@glyphcss/')) && !rel(file).startsWith('services/molty-stage/'))
+    report(file, 'Only services/molty-stage may import the fluid renderer (glyphcss, @glyphcss/…).');
   if (spec === 'three' || spec.startsWith('three/')) report(file, 'three.js loads from the CDN inside the engine; do not import it.');
 }
 
