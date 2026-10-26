@@ -39,7 +39,17 @@ function Links({ children }: { children: ReactNode }) {
   return <p className={styles.links}>{children}</p>;
 }
 
-export function HomePage({ fluid, picker, message }: { fluid: ReactNode; picker: ReactNode; message: ReactNode }) {
+export function HomePage({
+  fluid,
+  reader,
+  picker,
+  message,
+}: {
+  fluid: ReactNode;
+  reader: ReactNode;
+  picker: ReactNode;
+  message: ReactNode;
+}) {
   return (
     <div className={styles.root}>
       {fluid}
@@ -95,6 +105,7 @@ export function HomePage({ fluid, picker, message }: { fluid: ReactNode; picker:
         <div className={styles.pool} data-fluid-pool="">
           <span>touch it</span>
         </div>
+        {reader}
         <Links>
           <a href="/architecture/">[ how it renders → ]</a>
         </Links>

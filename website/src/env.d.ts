@@ -86,3 +86,29 @@ declare module "@molty-catalog/catalog.json" {
   const catalog: { version: number; creatures: Array<{ id: string; name: string; file: string }> };
   export default catalog;
 }
+
+declare module "@creatures/setup/fluid-stage.js" {
+  import type { FluidSim } from "@creatures/fluid/sim.js";
+  /** The device's round 412 px screen (the console embeds it). */
+  export class FluidStage {
+    constructor(px?: number);
+    el: HTMLCanvasElement;
+    sim: FluidSim;
+    textT: { setSentence(tokens: ReaderToken[]): void; setWord(token: ReaderToken): void };
+    blob(): void;
+    set(name: "blob" | "text" | "creature"): void;
+    ripple(x: number, y: number, strength: number, radius: number): void;
+  }
+  export interface ReaderToken {
+    word: string;
+    orp: number;
+    core: number;
+    para: boolean;
+  }
+}
+
+declare module "@creatures/fluid/reader.js" {
+  import type { ReaderToken } from "@creatures/setup/fluid-stage.js";
+  export function tokenize(text: string): ReaderToken[];
+  export function wordDelay(token: ReaderToken, wpm: number): number;
+}

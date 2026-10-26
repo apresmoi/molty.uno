@@ -25,6 +25,9 @@ export const GALLERY_FIRST = "cute-axolotl";
 export const BRIDGE_MOLTY = { id: "cute-octopus", color: "#c6a8f2" };
 export const BAKE_MOLTY = { id: "cute-duck", color: "#ffdf5a" };
 
+/** What an agent might say through Molty, read one word at a time out of the fluid. */
+export const readerText = "Build passed. Three tests were flaky, so I reran them. Want me to open the pull request?";
+
 export const bridgeFlow = "agent ──MCP · REST──▶ relay ◀──WSS── molty";
 
 export const pairingMessage = `Hi! Please connect yourself to my Molty.

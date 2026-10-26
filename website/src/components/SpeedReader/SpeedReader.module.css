@@ -1,0 +1,120 @@
+.root {
+  display: grid;
+  grid-template-columns: minmax(0, 340px) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--m-space-12);
+  margin-top: var(--m-space-12);
+}
+/* the device's own round screen, sitting in the page fluid */
+.glass {
+  position: relative;
+  aspect-ratio: 1;
+  width: 100%;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--m-bg);
+  box-shadow: 0 0 0 1px var(--m-line);
+}
+.host {
+  position: absolute;
+  inset: 0;
+}
+/* FluidStage sizes its canvas inline; the glass decides here */
+.host canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  filter: var(--m-fluid-filter);
+}
+.still {
+  position: absolute;
+  inset: 18%;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  color: var(--m-ink);
+  font: var(--m-text-md) / 1.5 var(--m-font-mono);
+  text-align: center;
+}
+.side {
+  min-width: 0;
+}
+.said {
+  max-width: 30em;
+  margin: 0 0 var(--m-space-6);
+  color: var(--m-dim);
+  overflow-wrap: anywhere;
+}
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--m-space-3);
+  margin: 0 0 var(--m-space-3);
+  font-size: var(--m-text-base);
+}
+.row span {
+  color: var(--m-dim);
+}
+.row button,
+.own,
+.form button {
+  padding: var(--m-space-1) 0;
+  border: 0;
+  background: transparent;
+  color: var(--m-dim);
+  font: var(--m-text-base) / 1.4 var(--m-font-mono);
+  cursor: pointer;
+}
+.row button::before,
+.row button::after {
+  content: "\00a0\00a0";
+}
+.row button[aria-pressed="true"] {
+  color: var(--m-accent);
+}
+.row button[aria-pressed="true"]::before {
+  content: "[ ";
+}
+.row button[aria-pressed="true"]::after {
+  content: " ]";
+}
+.row button:hover,
+.own:hover,
+.form button:hover {
+  color: var(--m-ink);
+}
+.own,
+.form button {
+  color: var(--m-accent);
+}
+.form {
+  display: flex;
+  gap: var(--m-space-3);
+  align-items: baseline;
+  max-width: 30em;
+}
+.form input {
+  flex: 1;
+  min-width: 0;
+  padding: var(--m-space-1) 0;
+  border: 0;
+  border-bottom: 1px solid var(--m-faint);
+  background: transparent;
+  color: var(--m-ink);
+  font: var(--m-text-base) / 1.4 var(--m-font-mono);
+  outline: none;
+}
+.form input:focus {
+  border-bottom-color: var(--m-accent);
+}
+@media (max-width: 46rem) {
+  .root {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--m-space-6);
+  }
+  .glass {
+    width: min(78vw, 300px);
+    justify-self: center;
+  }
+}

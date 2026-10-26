@@ -79,6 +79,22 @@ const scrollToSection = (page, id) =>
   else console.log('ok   gallery picker drives the fluid slot');
   await page.waitForTimeout(4000);
   await page.screenshot({ path: OUT + 'landing-1440-gallery.png' });
+  {
+    await page.locator('[data-speed-reader]').scrollIntoViewIfNeeded();
+    await page.waitForTimeout(2500);
+    const r1 = await sampleCanvas(page, '[data-speed-reader] canvas');
+    await page.waitForTimeout(700);
+    const r2 = await sampleCanvas(page, '[data-speed-reader] canvas');
+    if (!r1 || r1.lit < 200) fail(`speed reader not rendering (lit=${r1?.lit})`);
+    else if (r1.hash === r2.hash) fail('speed reader did not move');
+    else console.log(`ok   speed reader renders (lit ${r1.lit}) and moves`);
+    await page.getByRole('button', { name: '600' }).click();
+    await page.getByRole('button', { name: '[ type your own ]' }).click();
+    await page.getByLabel('Text for Molty to read').fill('hello from the test');
+    await page.getByRole('button', { name: '[ read ]' }).click();
+    if (!(await page.getByText('“hello from the test”').count())) fail('speed reader did not take typed text');
+    else console.log('ok   speed reader takes wpm + typed text');
+  }
   for (const id of ['fluid', 'bridge', 'boards']) {
     await scrollToSection(page, id);
     await page.waitForTimeout(3500);
