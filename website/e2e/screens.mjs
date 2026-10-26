@@ -122,7 +122,18 @@ const scrollToSection = (page, id) =>
     for (let i = 0; i < 30; i++) {
       const word = await page.evaluate(() =>
         [...document.querySelectorAll('[data-speed-reader] [aria-hidden] span')]
-          .filter((s) => s.children.length === 0 && Number(getComputedStyle(s).opacity) > 0.5)
+          // drawn letters only: a leaf, effectively visible, and not a clipped 1 px
+          // screen-reader text (the reader announces its word in one)
+          .filter((s) => {
+            const r = s.getBoundingClientRect();
+            return (
+              s.children.length === 0 &&
+              r.width > 2 &&
+              r.height > 2 &&
+              s.checkVisibility({ opacityProperty: true, visibilityProperty: true }) &&
+              Number(getComputedStyle(s).opacity) > 0.5
+            );
+          })
           .map((s) => s.textContent)
           .join(''),
       );
