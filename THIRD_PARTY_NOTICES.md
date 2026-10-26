@@ -80,6 +80,12 @@ Licence: https://www.mozilla.org/MPL/2.0/
 Touch (SPD2010), IMU (QMI8658) and I/O-expander (TCA9554) drivers are
 re-implementations whose register sequences were derived from Waveshare's
 ESP32-S3-Touch-LCD-1.46 demo code and the respective vendor datasheets.
+The Waveshare ESP32-S3-Touch-LCD-1.28 board's GC9A01A panel driver
+(firmware/boards/waveshare/esp32-s3-touch-lcd-1.28/lcd_gc9a01.c) sends the panel
+register sequence of Waveshare's ESP32-S3-Touch-LCD-1.28 demo (LCD_1in28.cpp), and
+its CST816S touch driver is a re-implementation of the register layout used by the
+demo's CST816S driver (© 2021 Felix Biego, MIT). Each firmware image contains the
+drivers of one board.
 
 ## Device console (single-file HTML, also stored in the firmware SPIFFS image)
 - Vite runtime helper — © 2019-present VoidZero Inc. and Vite contributors, MIT.
@@ -98,6 +104,18 @@ ESP32-S3-Touch-LCD-1.46 demo code and the respective vendor datasheets.
     ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF
     CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE
     OR PERFORMANCE OF THIS SOFTWARE.
+
+## Website setup page (molty.uno/setup, browser bundle)
+The page bundles ESP Web Tools (its installer dialog), esptool-js (reading the chip to
+identify the board) and the Improv serial client to flash boards and set Wi-Fi over Web
+Serial:
+- esp-web-tools 10.4.0, improv-wifi-serial-sdk 2.8.0 — © Nabu Casa / ESPHome contributors, Apache-2.0.
+- esptool-js 0.6.1 — © Espressif Systems, Apache-2.0.
+- @material/web 2.5.0 — © Google LLC, Apache-2.0.
+- lit 3.3.3, lit-element, lit-html, @lit/reactive-element — © Google LLC, BSD-3-Clause.
+- pako 2.2.0 — © Vitaly Puzrin and Andrei Tuputcyn, MIT AND Zlib.
+- atob-lite 2.0.0 — MIT. tslib 2.8.1 — © Microsoft, 0BSD.
+Apache-2.0 text: https://www.apache.org/licenses/LICENSE-2.0.txt
 
 ## Hosted services (no code licence; terms of use apply)
 The optional cloud relay calls Cloudflare Workers AI models @cf/deepgram/aura-2-en

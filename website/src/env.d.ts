@@ -48,3 +48,7 @@ declare module "@molty-catalog/catalog.json" {
   const catalog: { version: number; creatures: Array<{ id: string; name: string; file: string }> };
   export default catalog;
 }
+
+/** ESP Web Tools' installer dialog (the pinned 10.4.0 browser bundle's chunk): registers
+ *  <ewt-install-dialog> on import. */
+declare module "esp-web-tools/dist/web/install-dialog-im156JnI.js";

@@ -12,12 +12,9 @@
  * Persistence is out of scope — the active creature lives in RAM only and
  * resets to the boot creature on power-cycle.
  *
- * Bus handoff: creatures that need the I2C bus read it via
- * mole_creature_get_bus(), which must be seeded from app_main before any
- * mole_creature_select() call.
- *
- * LCD lifecycle: mole_lcd_init() is called ONCE from app_main before any
- * creature is selected.  Creatures must NOT call mole_lcd_init().
+ * Hardware lifecycle: molty_board_init() runs ONCE from app_main before any
+ * creature is selected; creatures draw through molty_board.h and must NOT
+ * initialise hardware themselves.
  */
 
 #pragma once
@@ -92,17 +89,6 @@ size_t      mole_creature_count(void);
 
 /** Name of registered creature at index i (0-based).  NULL if out of range. */
 const char *mole_creature_name_at(size_t i);
-
-/* ── Bus handoff ──────────────────────────────────────────────────────────── */
-
-/**
- * Store the I2C bus handle so creatures can retrieve it via mole_creature_get_bus().
- * Call from app_main before mole_creature_select().
- */
-void  mole_creature_set_bus(void *bus);
-
-/** Retrieve the stored bus handle. */
-void *mole_creature_get_bus(void);
 
 #ifdef __cplusplus
 }

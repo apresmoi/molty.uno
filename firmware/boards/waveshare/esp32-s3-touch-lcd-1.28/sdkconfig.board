@@ -1,0 +1,19 @@
+# Waveshare ESP32-S3-Touch-LCD-1.28 — layered over sdkconfig.defaults(.esp32s3)
+# when this board is built (firmware/CMakeLists.txt, scripts/firmware-build.sh).
+CONFIG_MOLTY_BOARD_WAVESHARE_ESP32_S3_TOUCH_LCD_1_28=y
+
+# Flash: 16 MB (external W25Q128JVSIQ), QIO — the same partition table as the 1.46
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+
+# PSRAM: 2 MB quad, in the ESP32-S3R2 package
+CONFIG_SPIRAM_MODE_QUAD=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# Console: UART0. The USB-C port is a CH343P USB-UART bridge on GPIO43/44 (no native
+# USB there, so no USB-C network either): boot logs and panics show in a serial
+# monitor at 115200, and esptool auto-resets into the bootloader over DTR/RTS.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+# No secondary console on USB-Serial-JTAG: the chip's native USB pins are not wired to
+# the USB-C port here, so logs would only wait on a host that can never attach.
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y

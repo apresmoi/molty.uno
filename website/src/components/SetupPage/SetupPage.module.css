@@ -1,0 +1,66 @@
+.setup {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: var(--m-space-8) var(--m-gutter) var(--m-space-16);
+  font: var(--m-text-base) / 1.6 var(--m-font-sans);
+  color: var(--m-ink);
+}
+.steps {
+  margin: var(--m-space-4) 0 var(--m-space-6);
+  padding-left: var(--m-space-6);
+}
+.note {
+  color: var(--m-dim);
+}
+.warn {
+  color: var(--m-warn);
+}
+.small {
+  color: var(--m-dim);
+  font: var(--m-text-sm) / 1.4 var(--m-font-mono);
+}
+.boards {
+  border: 1px solid var(--m-line);
+  border-radius: var(--m-radius);
+  padding: var(--m-space-3) var(--m-space-4);
+  margin: 0 0 var(--m-space-6);
+}
+.boards ul {
+  margin: 0;
+  padding-left: var(--m-space-4);
+}
+.boards small {
+  display: block;
+  color: var(--m-dim);
+  font: var(--m-text-sm) / 1.4 var(--m-font-mono);
+}
+.action {
+  margin: 0 0 var(--m-space-6);
+}
+.found,
+.refused {
+  margin-top: var(--m-space-4);
+  border: 1px solid var(--m-line);
+  border-radius: var(--m-radius);
+  padding: var(--m-space-3) var(--m-space-4);
+}
+.found {
+  border-color: var(--m-accent);
+}
+.refused {
+  border-color: var(--m-warn);
+}
+.button:disabled {
+  background: var(--m-faint);
+  color: var(--m-dim);
+  cursor: progress;
+}
+.button {
+  border: 0;
+  border-radius: var(--m-radius);
+  padding: var(--m-space-3) var(--m-space-6);
+  background: var(--m-accent);
+  color: var(--m-accent-ink);
+  font: 600 var(--m-text-md) / 1.2 var(--m-font-sans);
+  cursor: pointer;
+}

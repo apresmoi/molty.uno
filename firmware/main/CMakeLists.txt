@@ -1,3 +1,34 @@
+# ── Board ────────────────────────────────────────────────────────────────────
+# Exactly one folder under firmware/boards/ is compiled in: the Kconfig MOLTY_BOARD
+# choice (CONFIG_MOLTY_BOARD_DIR). Its board.cmake lists the sources, the -O2 ones,
+# include dirs and IDF components. See docs/PORTING.md. Kconfig values do not exist
+# yet in IDF's early requirements pass, so that pass skips this; the components come
+# from the MOLTY_BOARD_REQUIRES build property (firmware/CMakeLists.txt) instead.
+idf_build_get_property(MOLTY_BOARD_REQUIRES MOLTY_BOARD_REQUIRES)
+set(MOLTY_BOARD_SRCS "")
+set(MOLTY_BOARD_FAST_SRCS "")
+set(MOLTY_BOARD_INCLUDE_DIRS "")
+if(NOT CMAKE_BUILD_EARLY_EXPANSION)
+    if(NOT CONFIG_MOLTY_BOARD_DIR)
+        message(FATAL_ERROR "CONFIG_MOLTY_BOARD_DIR is empty: no board selected")
+    endif()
+    if(DEFINED MOLTY_BOARD AND NOT MOLTY_BOARD STREQUAL CONFIG_MOLTY_BOARD_DIR)
+        message(FATAL_ERROR
+            "sdkconfig is for board '${CONFIG_MOLTY_BOARD_DIR}' but -DMOLTY_BOARD=${MOLTY_BOARD}: "
+            "its flash/PSRAM settings would be wrong. Build each board with its own sdkconfig "
+            "(scripts/firmware-build.sh ${MOLTY_BOARD}).")
+    endif()
+    get_filename_component(MOLTY_BOARD_PATH "${CMAKE_CURRENT_LIST_DIR}/../boards/${CONFIG_MOLTY_BOARD_DIR}" ABSOLUTE)
+    if(NOT EXISTS "${MOLTY_BOARD_PATH}/board.cmake")
+        message(FATAL_ERROR "board '${CONFIG_MOLTY_BOARD_DIR}': ${MOLTY_BOARD_PATH}/board.cmake not found")
+    endif()
+    include("${MOLTY_BOARD_PATH}/board.cmake")   # also re-sets MOLTY_BOARD_REQUIRES (same list)
+    list(TRANSFORM MOLTY_BOARD_SRCS PREPEND "${MOLTY_BOARD_PATH}/")
+    list(TRANSFORM MOLTY_BOARD_FAST_SRCS PREPEND "${MOLTY_BOARD_PATH}/")
+    list(TRANSFORM MOLTY_BOARD_INCLUDE_DIRS PREPEND "${MOLTY_BOARD_PATH}/")
+    message(STATUS "molty board: ${CONFIG_MOLTY_BOARD_DIR}")
+endif()
+
 idf_component_register(
     SRCS
         "app_main.c"
@@ -5,6 +36,8 @@ idf_component_register(
         "net/network.c"
         "net/http.c"
         "net/console_store.c"
+        "net/improv_proto.c"     # Wi-Fi setup over a serial console (boards with MOLTY_CAP_SERIAL)
+        "net/improv_serial.c"
         # fluid: the fluid-of-characters creature (+ speed reader, 5x7 font)
         "fluid/mole_fluid.c"
         "fluid/fluid_sim.c"
@@ -23,13 +56,9 @@ idf_component_register(
         "link/link_cmd.c"
         "link/link_audio.c"
         "link/link_pair.c"
-        # hw: board drivers
-        "hw/mole_lcd.c"
-        "hw/esp_lcd_spd2010.c"
-        "hw/mole_touch.c"
-        "hw/mole_imu.c"
-        "hw/mole_tca9554.c"
-        "hw/mole_audio.c"
+        # board: the seam to the hardware (molty_board.h) + the selected board's drivers
+        "board/molty_board.c"
+        ${MOLTY_BOARD_SRCS}
         # diag: log ring, perf histograms, /api/diag + /api/log
         "diag/mole_diag.c"
     INCLUDE_DIRS
@@ -38,8 +67,9 @@ idf_component_register(
         "fluid"
         "creature"
         "link"
-        "hw"
+        "board"
         "diag"
+        ${MOLTY_BOARD_INCLUDE_DIRS}
     PRIV_REQUIRES
         esp_wifi
         esp_websocket_client
@@ -51,11 +81,6 @@ idf_component_register(
         esp_event
         nvs_flash
         lwip
-        esp_driver_i2s
-        esp_driver_i2c
-        esp_driver_spi
-        esp_driver_gpio
-        esp_lcd
         esp_timer
         esp_hw_support
         esp_psram
@@ -66,6 +91,8 @@ idf_component_register(
         app_update
         espcoredump    # GET /api/coredump
         esp_partition  # coredump partition reads
+        esp_driver_uart  # Improv Wi-Fi setup on the console UART (net/improv_serial.c)
+        ${MOLTY_BOARD_REQUIRES}   # the board's drivers (its board.cmake)
     # Fallback page for "/" when no console is stored in SPIFFS.
     EMBED_TXTFILES
         "net/index.html"
@@ -117,7 +144,6 @@ set_source_files_properties(
     "fluid/fluid_draw.c"
     "fluid/mole_fluid.c"
     "creature/cute_rig.c"
-    "hw/mole_lcd.c"
-    "hw/esp_lcd_spd2010.c"
+    ${MOLTY_BOARD_FAST_SRCS}
     PROPERTIES COMPILE_OPTIONS "-O2;-fno-math-errno"
 )

@@ -1,9 +1,6 @@
 /*
  * cute_spec.h — parsed .molty creature (the cute kit's defineCreature spec, resolved).
  *
- * Target board: Waveshare ESP32-S3-Touch-LCD-1.46 (412x412 round LCD)
- * FQBN: esp32:esp32:esp32s3:FlashSize=16M,PSRAM=enabled,CDCOnBoot=cdc
- *
  * Binary format: creatures/MOLTY-FORMAT.md (writer: creatures/tools/
  * molty-export.mjs). The file is fully resolved by the exporter — kit defaults applied,
  * sockets placed — so this is a flat data structure the runtime (cute_rig.c) reads.

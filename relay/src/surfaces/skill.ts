@@ -88,7 +88,7 @@ Success: \`200 {"ok":true,"result":{…}}\`. Unknown argument keys are rejected.
 
 | name | args | result | notes |
 |---|---|---|---|
-| \`status\` | — | fw, uptime, creature, state, mood, fps, rssi + \`relay\` {online, connected_since, caps, voice, events} | cheap; use it to check Molty is online |
+| \`status\` | — | fw, uptime, creature, state, mood, fps, rssi + \`relay\` {online, connected_since, board, caps, voice, events} | cheap; use it to check Molty is online |
 | \`mood\` | \`{"mood": m}\` | — | m ∈ ${MOODS.join(", ")} |
 | \`show\` | \`{"text": s, "wpm"?: 100..800}\` | — | speed-reader text in the fluid, ≤ ${MAX_SHOW_BYTES} bytes, default ${DEFAULT_WPM} wpm; returns when it starts |
 | \`say\` | \`{"text": s, "voice"?: id}\` | \`{job}\` immediately | relay TTS → speaker, text shown in sync; ≤ ${MAX_SAY_BYTES} bytes; job done → \`{ms, text}\` |
@@ -106,7 +106,8 @@ audio job runs at a time (\`409 audio_busy\`) — wait for a \`say\` to finish b
 next \`say\`/\`listen\`.
 
 Errors: \`{"ok":false,"error":code}\` — \`401 unauthorized\` (bad/missing/revoked token),
-\`400 invalid_args\` / \`unknown_command\`, \`409 device_offline\` / \`audio_busy\`,
+\`400 invalid_args\` / \`unknown_command\`, \`409 device_offline\` / \`audio_busy\` /
+\`unsupported\` (the board has no speaker or mic: \`say\`/\`listen\` absent from \`relay.caps\`),
 \`504 device_timeout\`, \`502\` device-reported codes (e.g. \`mic_busy\`).
 
 Revoke your own token: \`curl -sS -X DELETE ${o}/v1/token -H "authorization: Bearer $TOKEN"\`.

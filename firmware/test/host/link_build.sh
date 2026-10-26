@@ -3,7 +3,8 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LINK="$HERE/../../main/link"
-HW="$HERE/../../main/hw"
+# the 1.46's audio driver: its streaming seam is what link_dma_test exercises
+HW="$HERE/../../boards/waveshare/esp32-s3-touch-lcd-1.46"
 IDF_JSON="${IDF_PATH:-$HOME/esp/esp-idf}/components/json/cJSON"
 OUT="$(mktemp -d "${TMPDIR:-/tmp}/molty-link-test.XXXXXX")"
 trap 'rm -rf "$OUT"' EXIT
@@ -18,7 +19,7 @@ cc -std=c11 -Wall -Wextra -Werror -O2 ${LINK_TEST_CFLAGS:-} \
 mkdir -p "$OUT/stubs/freertos" "$OUT/stubs/driver" "$OUT/stubs/mbedtls"
 for header in esp_err.h esp_app_desc.h esp_random.h esp_timer.h nvs.h \
   esp_http_server.h esp_websocket_client.h esp_crt_bundle.h esp_heap_caps.h \
-  esp_netif.h esp_wifi.h esp_log.h mole_audio.h mole_creature.h mole_diag.h sdkconfig.h \
+  esp_netif.h esp_wifi.h esp_log.h molty_board.h mole_creature.h mole_diag.h sdkconfig.h \
   freertos/idf_additions.h \
   freertos/FreeRTOS.h freertos/task.h freertos/queue.h freertos/semphr.h \
   freertos/ringbuf.h driver/gpio.h mbedtls/base64.h; do

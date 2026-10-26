@@ -1,5 +1,5 @@
 /*
- * mole_imu.c — QMI8658 IMU driver for the Molty portal firmware (IDF v5.5)
+ * qmi8658.c — QMI8658 IMU driver (IDF v5.5), shared by the Waveshare boards.
  *
  * SPDX-License-Identifier: MIT
  *
@@ -12,12 +12,13 @@
  *     → setODR → setLPF) so the chip ends up in the same configuration.
  *   - Accel ±8 g, Gyro ±512 dps, 8000 Hz internal ODR (polled at 50 Hz).
  *
- * Device-frame axis mapping (matches ws_stream-1.46 wire protocol):
+ * Device-frame axis mapping: per board (qmi8658_config_t.axes, see qmi8658.h). The
+ * 1.46's { -2, -1, +3 } matches the ws_stream-1.46 wire protocol:
  *   ax = -chip_y,  ay = -chip_x,  az = +chip_z
  *   gx = -chip_gy, gy = -chip_gx, gz = +chip_gz
  */
 
-#include "mole_imu.h"
+#include "qmi8658.h"
 
 #include <string.h>
 #include <math.h>
@@ -34,11 +35,7 @@
                                 * "make silent hangs confess" note; this task is the one
                                 * whose stack-overflow the first-ever coredump caught. */
 
-// ── Pin / address constants ────────────────────────────────────────────────────
-#define IMU_SDA_GPIO        11
-#define IMU_SCL_GPIO        10
-#define IMU_I2C_PORT        I2C_NUM_0
-#define IMU_ADDR            0x6B   // QMI8658 with SA0 high
+// ── Bus speed (the bus and the address come from the board) ──────────────────────
 #define IMU_I2C_FREQ_HZ     400000
 
 // ── QMI8658 register map (from Gyro_QMI8658.h) ────────────────────────────────
@@ -75,13 +72,19 @@ static const float ACCEL_SCALE = 8.0f / 32768.0f;
 // Gyro scale factor for ±512 dps
 static const float GYRO_SCALE  = 512.0f / 32768.0f;
 
-static const char *TAG = "mole_imu";
+static const char *TAG = "qmi8658";
 
 // ── Module globals ─────────────────────────────────────────────────────────────
-static i2c_master_bus_handle_t  s_i2c_bus    = NULL;
 static i2c_master_dev_handle_t  s_imu_dev    = NULL;
 static SemaphoreHandle_t        s_imu_mutex  = NULL;
-static mole_imu_sample_t        s_sample     = {};
+static molty_imu_sample_t       s_sample     = {};
+static int8_t                   s_axes[3]    = { 1, 2, 3 };
+
+/* device axis from the chip's three: sign(m) × chip[|m| - 1] */
+static inline float axis(const float chip[3], int8_t m)
+{
+    return m < 0 ? -chip[-m - 1] : chip[m - 1];
+}
 
 // ── Low-level I2C helpers ──────────────────────────────────────────────────────
 
@@ -162,7 +165,7 @@ static esp_err_t imu_chip_init(void)
 static void imu_poll_task(void *arg)
 {
     /* TWDT subscribe (a silent hang panics and leaves a coredump).
-     * This task is created exactly once at boot (mole_imu_init) and never
+     * This task is created exactly once at boot (qmi8658_init) and never
      * deleted, so a single subscribe is enough — no matching delete needed. */
     esp_err_t wdt_err = esp_task_wdt_add(NULL);
     if (wdt_err != ESP_OK) {
@@ -194,19 +197,18 @@ static void imu_poll_task(void *arg)
         float chip_gz = (float)(int16_t)((buf[11] << 8) | buf[10]) * GYRO_SCALE;
 
         /*
-         * Device-frame axis swap (same as ws_stream-1.46):
-         *   ax = -chip_ay,  ay = -chip_ax,  az = +chip_az
-         *   gx = -chip_gy,  gy = -chip_gx,  gz = +chip_gz
-         * Dashboard naive mapping  dot_dx = +ax * gain, dot_dy = -ay * gain
-         * then correctly follows physical tilt.
+         * Device-frame axis map from the board (1.46: ax = -chip_ay, ay = -chip_ax,
+         * az = +chip_az, same for the gyro). Dashboard naive mapping
+         * dot_dx = +ax * gain, dot_dy = -ay * gain then follows physical tilt.
          */
-        mole_imu_sample_t s;
-        s.ax = -chip_ay;
-        s.ay = -chip_ax;
-        s.az =  chip_az;
-        s.gx = -chip_gy;
-        s.gy = -chip_gx;
-        s.gz =  chip_gz;
+        const float acc[3] = { chip_ax, chip_ay, chip_az }, gyr[3] = { chip_gx, chip_gy, chip_gz };
+        molty_imu_sample_t s;
+        s.ax = axis(acc, s_axes[0]);
+        s.ay = axis(acc, s_axes[1]);
+        s.az = axis(acc, s_axes[2]);
+        s.gx = axis(gyr, s_axes[0]);
+        s.gy = axis(gyr, s_axes[1]);
+        s.gz = axis(gyr, s_axes[2]);
         s.ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
 
         xSemaphoreTake(s_imu_mutex, portMAX_DELAY);
@@ -217,36 +219,26 @@ static void imu_poll_task(void *arg)
 
 // ── Public API ─────────────────────────────────────────────────────────────────
 
-esp_err_t mole_imu_init(void)
+esp_err_t qmi8658_init(const qmi8658_config_t *cfg)
 {
+    if (!cfg || !cfg->bus) return ESP_ERR_INVALID_ARG;
+    for (int i = 0; i < 3; i++) {
+        if (cfg->axes[i] == 0 || cfg->axes[i] < -3 || cfg->axes[i] > 3) return ESP_ERR_INVALID_ARG;
+        s_axes[i] = cfg->axes[i];
+    }
     s_imu_mutex = xSemaphoreCreateMutex();
     if (!s_imu_mutex) return ESP_ERR_NO_MEM;
-
-    /* Create I2C master bus */
-    i2c_master_bus_config_t bus_cfg = {
-        .i2c_port          = IMU_I2C_PORT,
-        .sda_io_num        = IMU_SDA_GPIO,
-        .scl_io_num        = IMU_SCL_GPIO,
-        .clk_source        = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt = 7,
-        .intr_priority     = 0,
-        .trans_queue_depth = 0,
-        .flags = {
-            .enable_internal_pullup = true,
-        },
-    };
-    ESP_RETURN_ON_ERROR(i2c_new_master_bus(&bus_cfg, &s_i2c_bus), TAG, "i2c_new_master_bus");
 
     /* Add QMI8658 device */
     i2c_device_config_t dev_cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-        .device_address  = IMU_ADDR,
+        .device_address  = cfg->addr,
         .scl_speed_hz    = IMU_I2C_FREQ_HZ,
         .scl_wait_us     = 0,
         .flags = { .disable_ack_check = false },
     };
     ESP_RETURN_ON_ERROR(
-        i2c_master_bus_add_device(s_i2c_bus, &dev_cfg, &s_imu_dev),
+        i2c_master_bus_add_device(cfg->bus, &dev_cfg, &s_imu_dev),
         TAG, "i2c_master_bus_add_device");
 
     /* Configure the chip */
@@ -271,14 +263,9 @@ esp_err_t mole_imu_init(void)
     return ESP_OK;
 }
 
-void mole_imu_get(mole_imu_sample_t *out)
+void qmi8658_get(molty_imu_sample_t *out)
 {
     xSemaphoreTake(s_imu_mutex, portMAX_DELAY);
     *out = s_sample;
     xSemaphoreGive(s_imu_mutex);
-}
-
-i2c_master_bus_handle_t mole_imu_get_bus(void)
-{
-    return s_i2c_bus;
 }

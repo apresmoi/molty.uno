@@ -1,0 +1,43 @@
+{
+  "name": "waveshare-esp32-s3-touch-lcd-1.28",
+  "title": "Waveshare ESP32-S3-Touch-LCD-1.28",
+  "vendor": "waveshare",
+  "url": "https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-1.28",
+  "target": "esp32s3",
+  "kconfig": "CONFIG_MOLTY_BOARD_WAVESHARE_ESP32_S3_TOUCH_LCD_1_28",
+  "display": {
+    "width": 240,
+    "height": 240,
+    "shape": "round",
+    "controller": "GC9A01 (SPI)"
+  },
+  "flash": "16MB",
+  "psram": "2MB quad",
+  "caps": [
+    "display",
+    "touch",
+    "imu",
+    "btn_accept",
+    "battery",
+    "serial"
+  ],
+  "usb": [
+    {
+      "vid": "0x1a86",
+      "pid": "0x55d3",
+      "note": "WCH CH343P USB-UART (seen 2026-05)"
+    },
+    {
+      "vid": "0x1a86",
+      "pid": "0x5411",
+      "note": "WCH CH343P as 'USB Single Serial' (macOS ioreg, 2026-10-26)"
+    }
+  ],
+  "detect": {
+    "chip": "ESP32-S3",
+    "psram": "2MB",
+    "flash": "16MB"
+  },
+  "status": "experimental",
+  "maintainer": "molty.UNO"
+}

@@ -4,13 +4,16 @@
 IDF_PATH ?= $(HOME)/esp/esp-idf
 export IDF_PATH
 
-.PHONY: help all test console console-test console-e2e firmware firmware-test \
+.PHONY: help all test console console-test console-e2e firmware firmware-all firmware-test \
         firmware-size relay relay-test cli cli-test creatures hygiene version
 
 help:
 	@echo "build:"
 	@echo "  make console        console/dist/index.html (typecheck + unit tests + build)"
-	@echo "  make firmware       idf.py build (needs 'make console' first; never flashes)"
+	@echo "  make firmware       idf.py build: the 1.46 in firmware/build (needs 'make console' first; never flashes)"
+	@echo "  make firmware BOARD=waveshare/esp32-s3-touch-lcd-1.28"
+	@echo "                      one board, in firmware/build/<name>/ (scripts/firmware-build.sh)"
+	@echo "  make firmware-all   every board under firmware/boards/ (each in firmware/build/<name>/)"
 	@echo "  make cli            cli/bin/molty"
 	@echo "  make creatures      re-export creatures/molty/*.molty from the cute-kit specs"
 	@echo "test:"
@@ -39,8 +42,16 @@ console-e2e:
 	cd console && { node tools/mock-device.mjs & pid=$$!; sleep 1; \
 	  node tools/e2e.mjs; status=$$?; kill $$pid; exit $$status; }
 
+# No BOARD: the plain idf.py build (the Waveshare 1.46) in firmware/build, as ever.
 firmware:
+ifeq ($(BOARD),)
 	. "$(IDF_PATH)/export.sh" >/dev/null && cd firmware && idf.py build
+else
+	. "$(IDF_PATH)/export.sh" >/dev/null && scripts/firmware-build.sh "$(BOARD)"
+endif
+
+firmware-all:
+	. "$(IDF_PATH)/export.sh" >/dev/null && scripts/firmware-build.sh --all
 
 # _GNU_SOURCE: the host-test SDK stubs use strdup, which glibc hides under -std=c11
 # (macOS does not), so Linux/CI needs it.

@@ -1,9 +1,6 @@
 /*
  * fluid_target.c — what the fluid relaxes toward: blob, effect interludes, speed text.
  *
- * Target board: Waveshare ESP32-S3-Touch-LCD-1.46 (412x412 round LCD)
- * FQBN: esp32:esp32:esp32s3:FlashSize=16M,PSRAM=enabled,CDCOnBoot=cdc
- *
  * Port of creatures/js/fluid/targets.js (minus the 3D creature target —
  * mole_fluid.c exposes a per-cell target-source hook for that). Each fill writes
  * the sim's T (ink) and tcol (RGBA8 colour + accent); the fluid never shows a
@@ -150,6 +147,7 @@ fluid_text_t *fluid_text_create(const fluid_sim_t *s) {
     if (!tx->block) { FLUID_FREE(tx); return NULL; }
     float *f = (float *)tx->block;
     tx->cov = f; tx->orp = f + N; tx->near = f + 2 * N; tx->near_s = f + 3 * N; tx->dark = f + 4 * N; tx->tmp = f + 5 * N;
+    tx->stage = s->stage;
     tx->plain_font = 30.f;
     return tx;
 }
@@ -162,9 +160,14 @@ void fluid_text_destroy(fluid_text_t *tx) {
 
 void fluid_text_set_sentence(fluid_text_t *tx, float ext) {
     if (ext < 1.f) ext = 1.f;
-    /* letter advance 0.6 em; budget is the disc's middle chord */
-    float fs = 330.f / (2.f * ext) / 0.6f;
-    tx->plain_font = fs < 18.f ? 18.f : fs > 40.f ? 40.f : fs;
+    /* letter advance 0.6 em; budget is the disc's middle chord (330 px of 412). The
+     * largest size scales with the stage like the chord; the smallest stays 18 px, the
+     * legibility floor of the 5×7 font on any panel. */
+    const float k = (float)tx->stage / FLUID_STAGE_REF;
+    float chord = 330.f * k, fmax = 40.f * k;
+    if (fmax < 18.f) fmax = 18.f;
+    float fs = chord / (2.f * ext) / 0.6f;
+    tx->plain_font = fs < 18.f ? 18.f : fs > fmax ? fmax : fs;
 }
 
 void fluid_text_set_word(fluid_text_t *tx, const fluid_sim_t *s, const char *w, int len, int orp) {
@@ -174,14 +177,14 @@ void fluid_text_set_word(fluid_text_t *tx, const fluid_sim_t *s, const char *w, 
     /* orp < 0: a static label (lone token) -- centred, no accent letter */
     if (orp >= len) orp = len > 0 ? len - 1 : 0;
     const float fs = tx->plain_font, adv = fs * 0.6f, lh = fs * 1.05f;
-    const float x0 = FLUID_PANEL / 2.f - (orp < 0 ? len / 2.f : orp + 0.5f) * adv, ytop = FLUID_PANEL / 2.f - lh / 2.f;
+    const float x0 = s->stage / 2.f - (orp < 0 ? len / 2.f : orp + 0.5f) * adv, ytop = s->stage / 2.f - lh / 2.f;
     tx->nletters = len;
     for (int i = 0; i < len; i++) {
         fluid_letter_t *L = &tx->letters[i];
         L->ch = w[i]; L->acc = (i == orp);
         L->x = x0 + i * adv; L->y = ytop; L->w = adv; L->h = lh; L->fs = fs;
     }
-    const float cw = (float)FLUID_PANEL / W, ch = (float)FLUID_PANEL / H;
+    const float cw = (float)s->stage / W, ch = (float)s->stage / H;
     for (int j = 0; j < H; j++) for (int i = 0; i < W; i++) {
         int k = j * W + i;
         float px = (i + 0.5f) * cw, py = (j + 0.5f) * ch;

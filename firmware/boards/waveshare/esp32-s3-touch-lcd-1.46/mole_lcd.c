@@ -7,13 +7,13 @@
  * Notes:
  *  - No double-buffering, no DMA streaming.  Single PSRAM framebuffer + panel_draw_bitmap flush.
  *  - The TCA9554PWR I/O expander controls the LCD RST line (EXIO_PIN1 = bit 0).
- *  - The I2C bus is passed in from app_main (created by mole_imu_init or
- *    by this module's caller — see mole_lcd_init signature).
+ *  - The I2C bus is passed in by board.c, which creates it.
  *  - PSRAM allocation uses MALLOC_CAP_SPIRAM.  The framebuffer is 412*412*2 = 339,488 bytes.
  */
 
 #include "mole_lcd.h"
 #include "mole_tca9554.h"
+#include "board.h"
 #include "esp_lcd_spd2010.h"
 
 #include <string.h>
@@ -32,15 +32,7 @@
 
 static const char *TAG = "mole_lcd";
 
-/* ── Pin definitions (from Display_SPD2010.h) ──────────────────────────────── */
-#define LCD_BCLK        40
-#define LCD_DATA0       46
-#define LCD_DATA1       45
-#define LCD_DATA2       42
-#define LCD_DATA3       41
-#define LCD_CS          21
-#define LCD_TE          18
-#define LCD_BL_GPIO      5      /* GPIO5 HIGH = backlight on */
+/* Pins: board.h (from Display_SPD2010.h) */
 
 /* TCA9554PWR pin number for LCD RST. Waveshare's Display_SPD2010.cpp uses
  * EXIO_PIN2 (bit 1 of the output register), not PIN1. PIN1 leaves the panel

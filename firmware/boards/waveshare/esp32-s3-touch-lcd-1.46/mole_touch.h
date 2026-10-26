@@ -2,7 +2,7 @@
  * mole_touch.h — SPD2010 capacitive touch (Waveshare 1.46), IDF i2c_master API.
  *
  * Ported from Waveshare 1.46 demo bundle: ESP-IDF/.../Touch_Driver/Touch_SPD2010.c.
- * Shares the I2C bus created by mole_imu_init (touch @ 0x53). Touch reset is on
+ * Shares the board's I2C bus (board.c; touch @ 0x53). Touch reset is on
  * the TCA9554 expander pin 1 (LCD reset is pin 2 — independent).
  *
  * Polled (no INT pin needed): mole_touch_poll() runs one status->HDP exchange

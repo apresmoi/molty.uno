@@ -6,6 +6,11 @@ name: Deploy Website
 #
 # The site imports the real creature engine and .molty files, the console catalog,
 # and syncs repo docs (website/src/config/docs.mjs), so changes there redeploy too.
+#
+# /setup flashes boards from the browser (ESP Web Tools), which needs the firmware on
+# this origin: release assets have no CORS. So the build stages the latest release's
+# per-board factory images (website/scripts/stage-firmware.mjs). release.yml calls this
+# workflow after publishing, so a new release reaches /setup without a manual run.
 
 on:
   push:
@@ -18,8 +23,10 @@ on:
       - "console/src/catalog/**"
       - "README.md"
       - "CONTRIBUTING.md"
+      - "firmware/boards/**/board.json"
       - ".github/workflows/deploy-website.yml"
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -61,6 +68,18 @@ jobs:
       - name: Check
         working-directory: website
         run: pnpm check
+
+      - name: Test
+        working-directory: website
+        run: pnpm test
+
+      # Per-board factory images + ESP Web Tools manifests into public/firmware/. No
+      # release yet (or no image for a board): manifests only, and /setup says so.
+      - name: Stage firmware for /setup
+        working-directory: website
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: pnpm stage-firmware --release
 
       - name: Build
         working-directory: website

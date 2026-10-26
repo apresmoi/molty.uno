@@ -4,8 +4,8 @@
 #include "link_protocol.h"
 #include "link_audio.h"
 #include "mole_creature.h"
+#include "molty_board.h"
 #include "esp_timer.h"
-#include "driver/gpio.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -49,7 +49,7 @@ void link_pair_status(cJSON *j)
     } else cJSON_AddNullToObject(j, "last_pair");
 }
 
-/* Called by the existing touch poller; never runs I2C a second time. */
+/* Called by the one touch poller (molty_touch_poll); never runs I2C a second time. */
 void link_pair_touch(int count)
 {
     bool down = count > 0;
@@ -57,11 +57,11 @@ void link_pair_touch(int count)
     if (down && !old) atomic_store(&s_tap, true);
 }
 
+/* Accept = a touch tap or the board's accept button; reject = its reject button (if
+ * any) or the timeout. The buttons are the board's (molty_board_init configures them). */
 esp_err_t link_pair_init(void)
 {
-    gpio_config_t cfg = {.pin_bit_mask = (1ULL << GPIO_NUM_0) | (1ULL << GPIO_NUM_6), .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_ENABLE, .intr_type = GPIO_INTR_DISABLE};
-    return gpio_config(&cfg);
+    return ESP_OK;
 }
 
 /* Static prompt: the 4-digit code alone, condensed in the fluid. A lone token
@@ -122,7 +122,9 @@ void link_pair_request(const cJSON *args)
     cJSON *code = cJSON_GetObjectItemCaseSensitive(args, "code");
     if (!cJSON_IsString(req) || !req->valuestring[0] || strlen(req->valuestring) >= sizeof(s_req)) return;
     const char *who = cJSON_IsString(name) && strlen(name->valuestring) < sizeof(s_name) ? name->valuestring : NULL;
-    if (link_pair_active() || link_audio_busy() || !cJSON_IsString(name) || strlen(name->valuestring) > 120 ||
+    /* a board with neither touch nor an accept button could never say yes */
+    bool can_accept = molty_board_has(MOLTY_CAP_TOUCH) || molty_board_has(MOLTY_CAP_BTN_ACCEPT);
+    if (!can_accept || link_pair_active() || link_audio_busy() || !cJSON_IsString(name) || strlen(name->valuestring) > 120 ||
         !cJSON_IsString(code) || strlen(code->valuestring) != 4 || strspn(code->valuestring, "0123456789") != 4) {
         result(req->valuestring, false, "rejected", who); return;
     }
@@ -137,17 +139,17 @@ void link_pair_request(const cJSON *args)
         result(s_req, false, "rejected", s_name); link_pair_cancel(); return;
     }
     atomic_store(&s_tap, false);
-    s_boot_released = gpio_get_level(GPIO_NUM_0) != 0;
-    s_power_released = gpio_get_level(GPIO_NUM_6) != 0;
+    s_boot_released = !molty_button_pressed(MOLTY_BTN_ACCEPT);
+    s_power_released = !molty_button_pressed(MOLTY_BTN_REJECT);
 }
 
 void link_pair_tick(void)
 {
     if (!link_pair_active()) return;
-    bool boot = gpio_get_level(GPIO_NUM_0) == 0;
+    bool boot = molty_button_pressed(MOLTY_BTN_ACCEPT);
     if (!boot) s_boot_released = true;
     bool accept = atomic_exchange(&s_tap, false) || (boot && s_boot_released);
-    bool power = gpio_get_level(GPIO_NUM_6) == 0;
+    bool power = molty_button_pressed(MOLTY_BTN_REJECT);
     if (!power) s_power_released = true;
     bool reject = power && s_power_released;
     bool expired = esp_timer_get_time() >= s_deadline;

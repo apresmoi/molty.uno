@@ -20,6 +20,12 @@ export const SYNCED_DOCS = [
     optional: true,
   },
   {
+    source: 'docs/PORTING.md',
+    slug: 'getting-started/porting',
+    title: 'Porting to your board',
+    description: 'Bake molty.UNO for your own screen: one board folder, optional parts, build, flash, submit.',
+  },
+  {
     source: 'docs/AGENT-LINK.md',
     slug: 'agents/protocol',
     title: 'Agent link protocol',

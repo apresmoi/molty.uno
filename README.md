@@ -5,8 +5,8 @@
 
 A small creature that lives on your desk and gives an AI agent a body: a round screen,
 a voice, ears, and a sense of being picked up. Molty runs on a Waveshare
-ESP32-S3-Touch-LCD-1.46. The agent runs wherever you like — Molty is the surface, not
-the brain.
+ESP32-S3-Touch-LCD-1.46 (and the 1.28; [port it to your board](docs/PORTING.md)). The
+agent runs wherever you like — Molty is the surface, not the brain.
 
 ![The cute-kit Moltys](creatures/preview.png)
 
@@ -34,7 +34,7 @@ Prerequisites and flashing: [docs/HARDWARE.md](docs/HARDWARE.md).
 | Component | Build | Test |
 |---|---|---|
 | console | `make console` | `make console-test`, `make console-e2e` |
-| firmware | `make firmware` (after `make console`) | `make firmware-test` |
+| firmware | `make firmware` (after `make console`; other boards: `BOARD=<vendor>/<model>`, `make firmware-all`) | `make firmware-test` |
 | relay | `make relay` | `make relay-test` |
 | cli | `make cli` | `make cli-test` |
 | creatures | `make creatures` (re-export `.molty` files) | covered by `make firmware-test` |
@@ -50,7 +50,8 @@ binaries are attached to each [GitHub Release](https://github.com/apresmoi/molty
 - [Architecture](docs/ARCHITECTURE.md) — how the pieces fit
 - [Agent link](docs/AGENT-LINK.md) — device ↔ relay ↔ agent protocol, pairing, default relay
 - [CLI](docs/CLI.md) — `molty` verbs and MCP setup
-- [Hardware](docs/HARDWARE.md) — board, build, first flash, OTA
+- [Hardware](docs/HARDWARE.md) — supported boards, build, first flash, OTA
+- [Porting](docs/PORTING.md) — bake molty.UNO for your own screen
 - [.molty format](creatures/MOLTY-FORMAT.md) — the creature file
 - [Releasing](docs/RELEASING.md) — versioning, cutting a release, flashing a release image, CI
 - [Changelog](CHANGELOG.md)

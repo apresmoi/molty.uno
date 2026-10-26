@@ -181,7 +181,8 @@ static const char *error_code(esp_err_t e)
     switch (e) {
     case ESP_ERR_INVALID_ARG: return "invalid_args";
     case ESP_ERR_INVALID_STATE: return "busy";
-    case ESP_ERR_NOT_SUPPORTED: return "unknown_command";
+    case ESP_ERR_NOT_FOUND: return "unknown_command";
+    case ESP_ERR_NOT_SUPPORTED: return "unsupported";   /* this board lacks the hardware */
     case ESP_ERR_NO_MEM: return "oom";
     default: return "device_error";
     }

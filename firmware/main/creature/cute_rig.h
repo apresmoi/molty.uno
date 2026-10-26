@@ -3,9 +3,6 @@
  * rigid low-poly parts on a small rig, animated by the mood engine, rasterised into the
  * fluid's per-cell target (ink, colour, solid features) the fluid relaxes toward.
  *
- * Target board: Waveshare ESP32-S3-Touch-LCD-1.46 (412x412 round LCD)
- * FQBN: esp32:esp32:esp32s3:FlashSize=16M,PSRAM=enabled,CDCOnBoot=cdc
- *
  * Port of creatures/js/cute/kit.js (CuteCreature: build, update, _face,
  * _limbs, MOTIONS), js/mood.js (MoodEngine) and the CreatureTarget raster of
  * js/fluid/targets.js (ortho camera fit, flat Lambert key 1.0 + ambient 0.4, one colour

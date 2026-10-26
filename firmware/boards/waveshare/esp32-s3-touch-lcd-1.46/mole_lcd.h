@@ -29,8 +29,8 @@ extern "C" {
 
 /**
  * Initialise the LCD panel.
- * Requires the I2C bus to be created already (mole_imu_init creates it;
- * call mole_lcd_init BEFORE starting the IMU task so the bus is shared).
+ * Requires the board's I2C bus (board.c creates it; the TCA9554 expander that
+ * drives the LCD reset sits on it).
  *
  * Sequence:
  *   1. Add TCA9554 on the bus, toggle LCD RST low→high.

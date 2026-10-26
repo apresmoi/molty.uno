@@ -1,0 +1,9 @@
+---
+import ContentLayout from "../layouts/ContentLayout.astro";
+import { SetupPage } from "../components/SetupPage";
+import { title, description } from "../features/setup/content";
+---
+
+<ContentLayout title={title} description={description} path="/setup/">
+  <SetupPage client:only="react" />
+</ContentLayout>

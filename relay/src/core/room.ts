@@ -39,6 +39,7 @@ export interface SocketMeta {
   opened: number;
   fw?: string;
   caps?: string[];
+  board?: string;
   since?: number;
 }
 
@@ -258,7 +259,7 @@ export class DeviceRoom implements AgentApi {
       return sock.close(CLOSE_UNAUTHORIZED, "device key mismatch");
     }
     const previous = this.liveSocket(sock);
-    sock.setMeta({ stage: "live", opened: sock.getMeta()?.opened ?? this.clock.now(), fw: hello.fw, caps: hello.caps, since: this.clock.now() });
+    sock.setMeta({ stage: "live", opened: sock.getMeta()?.opened ?? this.clock.now(), fw: hello.fw, caps: hello.caps, board: hello.board, since: this.clock.now() });
     if (previous) {
       previous.close(CLOSE_REPLACED, "replaced by a newer connection");
       this.dropInFlight("device_offline");
@@ -353,8 +354,17 @@ export class DeviceRoom implements AgentApi {
       if (e instanceof CommandError) return fail(e.code, e.message);
       throw e;
     }
-    if (!this.liveSocket()) return fail("device_offline");
-    if (cmd.job) return this.startJob(cmd.name as "say" | "listen", cmd.args);
+    const live = this.liveSocket();
+    if (!live) return fail("device_offline");
+    if (cmd.job) {
+      // A device that lists its caps and leaves say/listen out has no speaker/mic
+      // (firmware/boards/): refuse before spending a TTS call. No caps = older firmware.
+      const caps = live.getMeta()?.caps;
+      if (caps && !caps.includes(cmd.name)) {
+        return fail("unsupported", `this device has no ${cmd.name === "say" ? "speaker" : "microphone"}`);
+      }
+      return this.startJob(cmd.name as "say" | "listen", cmd.args);
+    }
     const res = await this.sendCmd(cmd.name, cmd.args);
     if (!res.ok || cmd.name !== "status") return res;
     const sock = this.liveSocket();
@@ -365,7 +375,7 @@ export class DeviceRoom implements AgentApi {
       ok: true,
       result: {
         ...res.result,
-        relay: { device_id: this.deviceId, online: !!sock, fw: meta?.fw ?? null, caps: meta?.caps ?? [], connected_since: meta?.since ?? null, voice: this.voice.name, events },
+        relay: { device_id: this.deviceId, online: !!sock, fw: meta?.fw ?? null, board: meta?.board ?? null, caps: meta?.caps ?? [], connected_since: meta?.since ?? null, voice: this.voice.name, events },
       },
     };
   }

@@ -31,7 +31,7 @@ CONFIG_HTTPD_SEND_WAIT_TIMEOUT=20
 # still catching a genuine wedge quickly.
 #
 # Subscribed + fed tasks (see the esp_task_wdt_add call sites): imu_poll
-# (hw/mole_imu.c), imu_ws (net/http.c), fluid_task and fluid_draw
+# (boards/common/qmi8658.c), imu_ws (net/http.c), fluid_task and fluid_draw
 # (fluid/mole_fluid.c). Nothing else can trip the TWDT.
 #
 # CHECK_IDLE_TASK_CPU0/1 are deliberately left OFF (see below), NOT left at
@@ -79,20 +79,19 @@ CONFIG_PARTITION_TABLE_OFFSET=0x8000
 # to the previous slot on next reset. Makes OTA iteration safe (bad build self-heals).
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
-# PSRAM: 8 MB OPI on the ESP32-S3-N16R8 (Waveshare 1.46). Without USE_CAPS_ALLOC the
-# heap_caps_get_free_size(MALLOC_CAP_SPIRAM) returns 0 and big allocations silently
-# fall back to SRAM — which exhausts the 320 KB pool mid-large-POST. Force it on
-# here (was in sdkconfig.defaults.esp32s3 but didn't propagate after partition-table
-# changes wiped sdkconfig).
+# PSRAM: every board has some; its mode (octal / quad) is the board's sdkconfig.board.
+# Without USE_CAPS_ALLOC the heap_caps_get_free_size(MALLOC_CAP_SPIRAM) returns 0 and
+# big allocations silently fall back to SRAM — which exhausts the 320 KB pool
+# mid-large-POST. Force it on here (it was in sdkconfig.defaults.esp32s3 once but
+# didn't propagate after partition-table changes wiped sdkconfig).
 CONFIG_SPIRAM=y
-CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_TYPE_AUTO=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_USE_CAPS_ALLOC=y
 
-# Core dump to flash: CONFIG_ESP_CONSOLE_NONE
-# (sdkconfig.defaults.esp32s3, above) means there is NO UART/USB-Serial-JTAG
-# console on this board — `idf.py monitor` shows nothing on a panic, and
+# Core dump to flash: CONFIG_ESP_CONSOLE_NONE (the 1.46's sdkconfig.board) means
+# there is NO UART/USB-Serial-JTAG console on that board — `idf.py monitor` shows
+# nothing on a panic, and
 # UART-based coredump capture is a non-starter for the same reason. Flash is
 # the only channel left, so it's written to the dedicated "coredump" 64 KB
 # partition (partitions.csv) and pulled off over HTTP via GET /api/coredump

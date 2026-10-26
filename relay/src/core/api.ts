@@ -10,6 +10,7 @@ export type ErrorCode =
   | "device_offline"
   | "device_timeout"
   | "audio_busy"
+  | "unsupported"
   | "not_found"
   | "bad_link_code"
   | "pair_busy"

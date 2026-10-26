@@ -1,9 +1,6 @@
 /*
  * fluid_draw.c — draw the fluid as braille dots / ASCII glyphs into the framebuffer.
  *
- * Target board: Waveshare ESP32-S3-Touch-LCD-1.46 (412x412 round LCD)
- * FQBN: esp32:esp32:esp32s3:FlashSize=16M,PSRAM=enabled,CDCOnBoot=cdc
- *
  * Port of creatures/js/fluid/render.js. Braille is drawn as our own
  * 2×4 dot rectangles (no font): sub-samples are bilinear reads of the view field at
  * the 8 dot centres, then either
@@ -124,7 +121,8 @@ uint8_t fluid_braille_contour(const float *sub) {
 
 /* ── create / destroy ────────────────────────────────────────────────────── */
 
-fluid_draw_t *fluid_draw_create(int W, int H) {
+fluid_draw_t *fluid_draw_create(int W, int H, int fb_w, int fb_h) {
+    if (W <= 0 || H <= 0 || fb_w < 32 || fb_h < 32 || fb_w > 4096 || fb_h > 4096) return NULL;
     if (!s_glut_ok) {
         for (int i = 0; i <= 64; i++) s_glut[i] = DITHER_GAIN * powf(i / 64.f, DITHER_GAMMA);
         s_glut_ok = true;
@@ -132,25 +130,29 @@ fluid_draw_t *fluid_draw_create(int W, int H) {
     fluid_draw_t *d = FLUID_CALLOC(sizeof(fluid_draw_t));
     if (!d) return NULL;
     size_t N = (size_t)W * H;
-    size_t bytes = (size_t)(W + 1 + H + 1 + 2 * W + 4 * H) * sizeof(int16_t) + 2 * N * sizeof(uint16_t) + N;
+    size_t bytes = (size_t)(W + 1 + H + 1 + 2 * W + 4 * H) * sizeof(int16_t) + 2 * N * sizeof(uint16_t) + N + (size_t)fb_h;
     d->block = FLUID_CALLOC(bytes);
     if (!d->block) { FLUID_FREE(d); return NULL; }
     int16_t *p16 = (int16_t *)d->block;
     d->cx = p16; d->cy = d->cx + W + 1; d->dx = d->cy + H + 1; d->dy = d->dx + 2 * W;
     d->key = (uint16_t *)(d->dy + 4 * H); d->col = d->key + N;
     d->skip = (uint8_t *)(d->col + N);
+    d->yrow = (int8_t *)(d->skip + N);
     d->W = W; d->H = H;
-    const float cw = (float)FLUID_PANEL / W, ch = (float)FLUID_PANEL / H;
+    d->fb_w = fb_w; d->fb_h = fb_h;
+    d->stage = fb_w < fb_h ? fb_w : fb_h;
+    const int ox = d->ox = (fb_w - d->stage) / 2, oy = d->oy = (fb_h - d->stage) / 2;
+    const float cw = (float)d->stage / W, ch = (float)d->stage / H;
     float dw = cw * DOT_W, dh = ch * DOT_H;
     d->dot_w = (int)lrintf(dw < 1.5f ? 1.5f : dw); if (d->dot_w < 1) d->dot_w = 1;
     d->dot_h = (int)lrintf(dh < 1.5f ? 1.5f : dh); if (d->dot_h < 1) d->dot_h = 1;
-    for (int i = 0; i <= W; i++) d->cx[i] = (int16_t)lrintf(i * cw);
-    for (int j = 0; j <= H; j++) d->cy[j] = (int16_t)lrintf(j * ch);
+    for (int i = 0; i <= W; i++) d->cx[i] = (int16_t)(ox + lrintf(i * cw));
+    for (int j = 0; j <= H; j++) d->cy[j] = (int16_t)(oy + lrintf(j * ch));
     for (int i = 0; i < W; i++) for (int c = 0; c < 2; c++)
-        d->dx[i * 2 + c] = (int16_t)lrintf(i * cw + (c ? 0.7f : 0.3f) * cw - d->dot_w * 0.5f);
+        d->dx[i * 2 + c] = (int16_t)(ox + lrintf(i * cw + (c ? 0.7f : 0.3f) * cw - d->dot_w * 0.5f));
     for (int j = 0; j < H; j++) for (int r = 0; r < 4; r++)
-        d->dy[j * 4 + r] = (int16_t)lrintf(j * ch + (0.14f + 0.24f * r) * ch - d->dot_h * 0.5f);
-    memset(d->yrow, -1, sizeof(d->yrow));
+        d->dy[j * 4 + r] = (int16_t)(oy + lrintf(j * ch + (0.14f + 0.24f * r) * ch - d->dot_h * 0.5f));
+    memset(d->yrow, -1, (size_t)fb_h);
     for (int j = 0; j < H; j++) for (int r = 0; r < 4; r++)
         for (int y = d->dy[j * 4 + r]; y < d->dy[j * 4 + r] + d->dot_h; y++)
             if (y >= d->cy[j] && y < d->cy[j + 1]) d->yrow[y] = (int8_t)r;
@@ -166,19 +168,20 @@ void fluid_draw_destroy(fluid_draw_t *d) {
 
 /* ── primitives ──────────────────────────────────────────────────────────── */
 
-/* 5×7 glyph scaled (nearest) into the box (x0,y0,w,h), clipped to [cx0,cx1)×[cy0,cy1) */
-static void draw_glyph(uint16_t *fb, const uint8_t *gl, int x0, int y0, int w, int h, uint16_t c,
+/* 5×7 glyph scaled (nearest) into the box (x0,y0,w,h), clipped to [cx0,cx1)×[cy0,cy1)
+ * and to the fb_w×fb_h framebuffer */
+static void draw_glyph(uint16_t *fb, int fb_w, int fb_h, const uint8_t *gl, int x0, int y0, int w, int h, uint16_t c,
                        int cx0, int cy0, int cx1, int cy1) {
     if (!gl || w <= 0 || h <= 0) return;
     if (cx0 < 0) cx0 = 0;
     if (cy0 < 0) cy0 = 0;
-    if (cx1 > FLUID_PANEL) cx1 = FLUID_PANEL;
-    if (cy1 > FLUID_PANEL) cy1 = FLUID_PANEL;
+    if (cx1 > fb_w) cx1 = fb_w;
+    if (cy1 > fb_h) cy1 = fb_h;
     for (int py = 0; py < h; py++) {
         int y = y0 + py; if (y < cy0 || y >= cy1) continue;
         uint8_t bits = gl[py * 7 / h];
         if (!bits) continue;
-        uint16_t *row = fb + y * FLUID_PANEL;
+        uint16_t *row = fb + y * fb_w;
         for (int px = 0; px < w; px++) {
             int x = x0 + px; if (x < cx0 || x >= cx1) continue;
             if ((bits >> (4 - px * 5 / w)) & 1) row[x] = c;
@@ -312,10 +315,11 @@ int fluid_draw(fluid_draw_t *d, const fluid_frame_t *s, uint16_t *fb,
     const char *ramp = o->ramp ? o->ramp : " .:-=+*#";
     fluid_draw_opts_t oo = *o; oo.ramp = ramp;
     const int rmax = (int)strlen(ramp) - 1;
-    const float cw = (float)FLUID_PANEL / W, ch = (float)FLUID_PANEL / H;
+    const float cw = (float)d->stage / W, ch = (float)d->stage / H;   /* letters are in stage px */
+    const int fb_w = d->fb_w, ox = d->ox, oy = d->oy;
     const float melt = o->melt;
     const uint32_t frame = (uint32_t)(o->time * SHIMMER_HZ);
-    int dy0 = FLUID_PANEL, dy1 = 0, drawn = 0;
+    int dy0 = d->fb_h, dy1 = 0, drawn = 0;
 
     /* condensed letters: which have enough ink, and which cells they cover (the box) */
     struct { int li; float ink, hh, acc; } shown[FLUID_MAX_LETTERS];
@@ -324,7 +328,7 @@ int fluid_draw(fluid_draw_t *d, const fluid_frame_t *s, uint16_t *fb,
     for (int li = 0; li < o->nletters && li < FLUID_MAX_LETTERS && o->font; li++) {
         const fluid_letter_t *L = &o->letters[li];
         if (L->ch == ' ') continue;
-        float sx = (L->x + L->w / 2) / FLUID_PANEL * 2.f - 1.f, sy = (L->y + L->h / 2) / FLUID_PANEL * 2.f - 1.f;
+        float sx = (L->x + L->w / 2) / d->stage * 2.f - 1.f, sy = (L->y + L->h / 2) / d->stage * 2.f - 1.f;
         float ink = fluid_frame_sample(s, s->ink, 1.f / FQ_UNIT, sx, sy);
         if (ink < 0.14f + melt) continue;
         shown[nshown].li = li; shown[nshown].ink = ink;
@@ -365,7 +369,7 @@ int fluid_draw(fluid_draw_t *d, const fluid_frame_t *s, uint16_t *fb,
         if (ya < dy0) dy0 = ya;
         if (yb > dy1) dy1 = yb;
         for (int y = ya; y < yb; y++) {
-            uint16_t *row = fb + y * FLUID_PANEL;
+            uint16_t *row = fb + y * fb_w;
             const int r = d->yrow[y];
             for (int i = 0; i < W; i++) {
                 if (!d->rdirty[i]) continue;
@@ -410,9 +414,9 @@ int fluid_draw(fluid_draw_t *d, const fluid_frame_t *s, uint16_t *fb,
         int yoff = (int)lrintf(yo);
         if (yoff > margin) yoff = margin;
         if (yoff < -margin) yoff = -margin;
-        int gx = (int)lrintf(L->x + (L->w - gw) * 0.5f), gy = (int)lrintf(L->y) + margin + yoff;
-        draw_glyph(fb, o->font(c2), gx, gy, gw, gh, rgb565_be((int)r, (int)g, (int)b),
-                   (int)floorf(L->x), (int)floorf(L->y), (int)ceilf(L->x + L->w), (int)ceilf(L->y + L->h));
+        int gx = ox + (int)lrintf(L->x + (L->w - gw) * 0.5f), gy = oy + (int)lrintf(L->y) + margin + yoff;
+        draw_glyph(fb, fb_w, d->fb_h, o->font(c2), gx, gy, gw, gh, rgb565_be((int)r, (int)g, (int)b),
+                   ox + (int)floorf(L->x), oy + (int)floorf(L->y), ox + (int)ceilf(L->x + L->w), oy + (int)ceilf(L->y + L->h));
         drawn++;
     }
 

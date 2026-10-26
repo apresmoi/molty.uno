@@ -1,0 +1,40 @@
+{
+  "name": "waveshare-esp32-s3-touch-lcd-1.46",
+  "title": "Waveshare ESP32-S3-Touch-LCD-1.46",
+  "vendor": "waveshare",
+  "url": "https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-1.46",
+  "target": "esp32s3",
+  "kconfig": "CONFIG_MOLTY_BOARD_WAVESHARE_ESP32_S3_TOUCH_LCD_1_46",
+  "display": {
+    "width": 412,
+    "height": 412,
+    "shape": "round",
+    "controller": "SPD2010 (QSPI)"
+  },
+  "flash": "16MB",
+  "psram": "8MB octal",
+  "caps": [
+    "display",
+    "touch",
+    "imu",
+    "mic",
+    "speaker",
+    "btn_accept",
+    "btn_reject",
+    "usb_net"
+  ],
+  "usb": [
+    {
+      "vid": "0x303a",
+      "pid": "0x1001",
+      "note": "ESP32-S3 USB-Serial/JTAG, download mode only (hold BOOT while plugging in); in its firmware USB-C is a network adapter, not a serial port"
+    }
+  ],
+  "detect": {
+    "chip": "ESP32-S3",
+    "psram": "8MB",
+    "flash": "16MB"
+  },
+  "status": "reference",
+  "maintainer": "molty.UNO"
+}

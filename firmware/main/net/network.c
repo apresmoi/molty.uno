@@ -21,6 +21,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
+#include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_check.h"
 #include "esp_event.h"
@@ -73,6 +74,7 @@ static bool s_unique_delegate_present = false;
 #define WIFI_CONNECTED_BIT  BIT0
 #define WIFI_FAIL_BIT       BIT1
 static EventGroupHandle_t s_wifi_event_group = NULL;
+static SemaphoreHandle_t  s_wifi_op = NULL;       /* one join or scan at a time */
 
 // ─────────────────────────────────────────────────────────────────────────────
 // NVS helpers — namespace "wifi", keys "ssid" / "pass"
@@ -415,6 +417,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
 esp_err_t net_wifi_init(void)
 {
     s_wifi_event_group = xEventGroupCreate();
+    s_wifi_op = xSemaphoreCreateMutex();
+    if (!s_wifi_event_group || !s_wifi_op) return ESP_ERR_NO_MEM;
 
     s_sta_netif = esp_netif_create_default_wifi_sta();
 
@@ -499,10 +503,20 @@ static esp_err_t handler_status(httpd_req_t *r)
 // GET /api/scan
 // Triggers a blocking WiFi scan, sorts by RSSI descending, returns up to 12.
 // ─────────────────────────────────────────────────────────────────────────────
-static esp_err_t handler_scan(httpd_req_t *r)
+bool net_wifi_ready(void) { return s_wifi_op != NULL; }
+
+bool net_wifi_ip(char *ip, size_t len)
 {
-    // Disconnect before scan so we can scan while idle; reconnect afterwards
-    // if we were previously connected.
+    if (s_wifi_state != WIFI_PORTAL_STATE_CONNECTED || !s_ip_buf[0]) return false;
+    snprintf(ip, len, "%s", s_ip_buf);
+    return true;
+}
+
+int net_wifi_scan(net_ap_t *out, int max)
+{
+    if (!s_wifi_op || max <= 0) return -1;
+    xSemaphoreTake(s_wifi_op, portMAX_DELAY);
+    // Reconnect afterwards if we were connected (the scan may drop the association).
     bool was_connected = (s_wifi_state == WIFI_PORTAL_STATE_CONNECTED);
 
     wifi_scan_config_t scan_cfg = {
@@ -513,9 +527,9 @@ static esp_err_t handler_scan(httpd_req_t *r)
         .scan_type = WIFI_SCAN_TYPE_ACTIVE,
     };
 
-    esp_err_t scan_ret = esp_wifi_scan_start(&scan_cfg, true);  // blocking
-    if (scan_ret != ESP_OK) {
-        return http_send_json(r, "{\"ok\":false,\"error\":\"scan_failed\"}");
+    if (esp_wifi_scan_start(&scan_cfg, true) != ESP_OK) {   // blocking
+        xSemaphoreGive(s_wifi_op);
+        return -1;
     }
 
     uint16_t num = 12;
@@ -523,7 +537,7 @@ static esp_err_t handler_scan(httpd_req_t *r)
     esp_wifi_scan_get_ap_records(&num, records);
 
     // Sort by RSSI descending (bubble sort, max 12 entries)
-    for (uint16_t i = 0; i < num - 1; i++) {
+    for (uint16_t i = 0; i + 1 < num; i++) {
         for (uint16_t j = i + 1; j < num; j++) {
             if (records[j].rssi > records[i].rssi) {
                 wifi_ap_record_t tmp = records[i];
@@ -531,6 +545,29 @@ static esp_err_t handler_scan(httpd_req_t *r)
                 records[j] = tmp;
             }
         }
+    }
+    int n = num < max ? num : max;
+    for (int i = 0; i < n; i++) {
+        memcpy(out[i].ssid, records[i].ssid, sizeof(out[i].ssid) - 1);
+        out[i].ssid[sizeof(out[i].ssid) - 1] = '\0';
+        out[i].rssi = records[i].rssi;
+        out[i].open = records[i].authmode == WIFI_AUTH_OPEN;
+    }
+
+    if (was_connected) {
+        // Reconnect in background
+        esp_wifi_connect();
+    }
+    xSemaphoreGive(s_wifi_op);
+    return n;
+}
+
+static esp_err_t handler_scan(httpd_req_t *r)
+{
+    net_ap_t aps[12];
+    int num = net_wifi_scan(aps, 12);
+    if (num < 0) {
+        return http_send_json(r, "{\"ok\":false,\"error\":\"scan_failed\"}");
     }
 
     // Build JSON by hand — no heap allocation needed, stack is fine for 12 entries
@@ -540,13 +577,12 @@ static esp_err_t handler_scan(httpd_req_t *r)
     int pos = 0;
     pos += snprintf(buf + pos, sizeof(buf) - pos, "{\"ok\":true,\"networks\":[");
 
-    for (uint16_t i = 0; i < num && pos < (int)sizeof(buf) - 40; i++) {
-        bool open = (records[i].authmode == WIFI_AUTH_OPEN);
+    for (int i = 0; i < num && pos < (int)sizeof(buf) - 40; i++) {
         // Escape SSID: replace " and \ to avoid JSON injection
         char safe_ssid[70];
         size_t si = 0;
-        for (size_t ci = 0; ci < sizeof(records[i].ssid) && records[i].ssid[ci] && si < sizeof(safe_ssid) - 3; ci++) {
-            unsigned char c = records[i].ssid[ci];
+        for (size_t ci = 0; aps[i].ssid[ci] && si < sizeof(safe_ssid) - 3; ci++) {
+            unsigned char c = (unsigned char)aps[i].ssid[ci];
             if (c == '"' || c == '\\') { safe_ssid[si++] = '\\'; }
             safe_ssid[si++] = (char)c;
         }
@@ -556,17 +592,11 @@ static esp_err_t handler_scan(httpd_req_t *r)
             "%s{\"ssid\":\"%s\",\"rssi\":%d,\"open\":%s}",
             (i == 0 ? "" : ","),
             safe_ssid,
-            (int)records[i].rssi,
-            open ? "true" : "false");
+            (int)aps[i].rssi,
+            aps[i].open ? "true" : "false");
     }
 
     pos += snprintf(buf + pos, sizeof(buf) - pos, "]}");
-
-    if (was_connected) {
-        // Reconnect in background
-        esp_wifi_connect();
-    }
-
     return http_send_json(r, buf);
 }
 
@@ -599,6 +629,36 @@ static esp_err_t handler_set_creds(httpd_req_t *r)
     }
     http_json_get_str(body, "password", pass, sizeof(pass));  // empty = open network
 
+    esp_err_t e = net_wifi_join(ssid, pass, 15000);
+    if (e == ESP_OK) {
+        int rssi = 0;
+        esp_wifi_sta_get_rssi(&rssi);
+
+        char resp[128];
+        snprintf(resp, sizeof(resp),
+            "{\"ok\":true,\"ip\":\"%s\",\"rssi\":%d}", s_ip_buf, rssi);
+        return http_send_json(r, resp);
+    } else {
+        // Get WiFi error code
+        wifi_ap_record_t ap;
+        int wifi_status = (e == ESP_FAIL) ? 4 : 255;
+        // Try to get a more specific code
+        if (esp_wifi_sta_get_ap_info(&ap) == ESP_ERR_WIFI_NOT_CONNECT) {
+            wifi_status = 4;
+        }
+
+        char resp[128];
+        snprintf(resp, sizeof(resp),
+            "{\"ok\":false,\"error\":\"connect_failed\",\"wifi_status\":%d}", wifi_status);
+        return http_send_json(r, resp);
+    }
+}
+
+esp_err_t net_wifi_join(const char *ssid, const char *pass, uint32_t timeout_ms)
+{
+    if (!s_wifi_op) return ESP_ERR_INVALID_STATE;
+    xSemaphoreTake(s_wifi_op, portMAX_DELAY);
+
     // Disconnect if currently connected
     if (s_wifi_state == WIFI_PORTAL_STATE_CONNECTED ||
         s_wifi_state == WIFI_PORTAL_STATE_CONNECTING) {
@@ -621,42 +681,25 @@ static esp_err_t handler_set_creds(httpd_req_t *r)
     xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
     esp_wifi_connect();
 
-    // Wait up to 15 s
     EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
                                            WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
                                            pdTRUE,    // clear on exit
                                            pdFALSE,   // any bit
-                                           pdMS_TO_TICKS(15000));
-
+                                           pdMS_TO_TICKS(timeout_ms));
+    esp_err_t e;
     if (bits & WIFI_CONNECTED_BIT) {
         // Save to NVS
         esp_err_t nret = nvs_write_creds(ssid, pass);
         if (nret != ESP_OK) {
             ESP_LOGW(TAG, "NVS write failed: %s", esp_err_to_name(nret));
         }
-
-        int rssi = 0;
-        esp_wifi_sta_get_rssi(&rssi);
-
-        char resp[128];
-        snprintf(resp, sizeof(resp),
-            "{\"ok\":true,\"ip\":\"%s\",\"rssi\":%d}", s_ip_buf, rssi);
-        return http_send_json(r, resp);
+        e = ESP_OK;
     } else {
-        // Get WiFi error code
-        wifi_ap_record_t ap;
-        int wifi_status = (bits & WIFI_FAIL_BIT) ? 4 : 255;
-        // Try to get a more specific code
-        if (esp_wifi_sta_get_ap_info(&ap) == ESP_ERR_WIFI_NOT_CONNECT) {
-            wifi_status = 4;
-        }
         s_wifi_state = WIFI_PORTAL_STATE_DISCONNECTED;
-
-        char resp[128];
-        snprintf(resp, sizeof(resp),
-            "{\"ok\":false,\"error\":\"connect_failed\",\"wifi_status\":%d}", wifi_status);
-        return http_send_json(r, resp);
+        e = (bits & WIFI_FAIL_BIT) ? ESP_FAIL : ESP_ERR_TIMEOUT;
     }
+    xSemaphoreGive(s_wifi_op);
+    return e;
 }
 
 

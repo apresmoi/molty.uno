@@ -3,7 +3,7 @@
  *
  * Thin wrapper around the IDF i2c_master API.
  * The TCA9554PWR sits at address 0x20 on I2C bus (SDA=GPIO11, SCL=GPIO10).
- * The IMU driver creates the bus first; we share it by accepting a bus handle.
+ * board.c creates the bus; we share it by accepting a bus handle.
  *
  * Pins used (from Waveshare 1.46 TCA9554PWR.h / Display_SPD2010.h):
  *   EXIO_PIN1  — LCD RST (active-low, set HIGH to bring LCD out of reset)
@@ -38,7 +38,7 @@ extern "C" {
 /**
  * Initialise the TCA9554PWR on the given bus.
  * Sets all pins to output mode and output-LOW (safe default).
- * The bus must already be created (e.g. by mole_imu_init).
+ * The bus must already be created (board.c).
  */
 esp_err_t mole_tca9554_init(i2c_master_bus_handle_t bus);
 

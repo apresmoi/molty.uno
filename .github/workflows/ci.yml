@@ -3,10 +3,11 @@ name: CI
 # Every component, in parallel jobs. The only ordering is console → firmware and
 # console → console-e2e: the console page is baked into the firmware's SPIFFS
 # image, so firmware builds the exact dist/index.html this run built and tested
-# rather than rebuilding it in an image that has no Node.
+# rather than rebuilding it in an image that has no Node. The firmware builds once
+# per board: the matrix is every firmware/boards/**/board.json (boards job).
 #
-#   hygiene    relay    cli    creatures    website
-#   console ──┬── firmware
+#   hygiene    relay    cli    creatures    website    firmware-test
+#   console ──┬── firmware (one per board) ── boards
 #             └── console-e2e
 
 on:
@@ -154,11 +155,33 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  boards:
+    name: firmware boards (wiring check, build matrix)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.boards.outputs.matrix }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      # Every board.json is consistent with Kconfig, its sdkconfig.board and board.c;
+      # the matrix is [{board: <vendor>/<model>, name}] (docs/PORTING.md).
+      - name: Check boards and list the matrix
+        id: boards
+        run: |
+          python3 scripts/firmware-boards.py check
+          echo "matrix=$(python3 scripts/firmware-boards.py matrix)" >> "$GITHUB_OUTPUT"
+
   firmware:
-    name: firmware (ESP-IDF build, host tests, size)
-    needs: console
+    name: firmware ${{ matrix.name }} (ESP-IDF build, size)
+    needs: [console, boards]
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.boards.outputs.matrix) }}
     # espressif/idf:v5.5 is a moving tag (it follows v5.5.x); the digest freezes the
     # exact toolchain. Bump it deliberately: docker buildx imagetools inspect espressif/idf:v5.5
     container:
@@ -178,33 +201,47 @@ jobs:
           path: console/dist
 
       # GitHub replaces the image's entrypoint, so every step sources export.sh itself.
+      # Own build dir + sdkconfig per board (firmware/build/<name>/); checks the image tag.
       - name: Build
-        working-directory: firmware
         run: |
           . "$IDF_PATH/export.sh" > /dev/null
-          idf.py build
-
-      # LINK_TEST_CFLAGS lives in the Makefile target: glibc hides strdup under -std=c11.
-      - name: Host tests
-        run: make firmware-test
+          scripts/firmware-build.sh "${{ matrix.board }}"
 
       - name: App size vs OTA slot (fail above 90%)
-        run: scripts/firmware-size.sh
+        run: scripts/firmware-size.sh "firmware/build/${{ matrix.name }}" "${{ matrix.name }}"
 
       - name: Upload firmware images
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: firmware-${{ github.sha }}
+          name: firmware-${{ matrix.name }}-${{ github.sha }}
           path: |
-            firmware/build/molty.bin
-            firmware/build/molty.elf
-            firmware/build/bootloader/bootloader.bin
-            firmware/build/partition_table/partition-table.bin
-            firmware/build/ota_data_initial.bin
-            firmware/build/spiffs.bin
-            firmware/build/flash_args
+            firmware/build/${{ matrix.name }}/molty.bin
+            firmware/build/${{ matrix.name }}/molty.elf
+            firmware/build/${{ matrix.name }}/bootloader/bootloader.bin
+            firmware/build/${{ matrix.name }}/partition_table/partition-table.bin
+            firmware/build/${{ matrix.name }}/ota_data_initial.bin
+            firmware/build/${{ matrix.name }}/spiffs.bin
+            firmware/build/${{ matrix.name }}/flash_args
           if-no-files-found: error
           retention-days: 14
+
+  firmware-test:
+    name: firmware host tests (fluid goldens, cute runtime, agent link)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The link tests compile cJSON from ESP-IDF: same pinned image as the builds.
+    container:
+      image: espressif/idf:v5.5@sha256:00e94c6ff8bc1f7bd22b234ff43db3f3056cb33dedac6819df9fbedbcb5c6ebb
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      # LINK_TEST_CFLAGS lives in the Makefile target: glibc hides strdup under -std=c11.
+      - name: Host tests
+        run: make firmware-test
 
   relay:
     name: relay (typecheck, tests)
@@ -340,6 +377,12 @@ jobs:
         if: hashFiles('website/package.json') != ''
         working-directory: website
         run: pnpm check
+
+      # /setup's board matcher against the real firmware/boards/**/board.json
+      - name: Test
+        if: hashFiles('website/package.json') != ''
+        working-directory: website
+        run: pnpm test
 
       - name: Build
         if: hashFiles('website/package.json') != ''

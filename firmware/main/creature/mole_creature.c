@@ -28,13 +28,6 @@ static const char            *s_fallback = NULL;
 
 void mole_creature_set_fallback(const char *name) { s_fallback = name; }
 
-/* ── Bus store ───────────────────────────────────────────────────────────── */
-
-static void *s_bus = NULL;
-
-void mole_creature_set_bus(void *bus)  { s_bus = bus; }
-void *mole_creature_get_bus(void)      { return s_bus; }
-
 /* ── Registry API ────────────────────────────────────────────────────────── */
 
 esp_err_t mole_creature_register(const mole_creature_t *c)

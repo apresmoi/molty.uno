@@ -17,5 +17,16 @@ First public release.
 - **Relay** (Cloudflare Worker): device WSS, pairing, REST and remote MCP for agents,
   Workers AI TTS/STT. `GET /v1/health` reports the version.
 - **CLI**: `molty` device verbs and a stdio MCP server; `molty --version`.
-- **Release assets**: OTA image, full factory image, console page, CLI binaries for
+- **Boards**: a board layer (`firmware/main/board/molty_board.h`, one folder per board
+  under `firmware/boards/`, [docs/PORTING.md](docs/PORTING.md)). The fluid is sized at
+  runtime from the board's display; absent hardware degrades (`unsupported` voice/IMU
+  endpoints, button-only pairing). Second board: Waveshare ESP32-S3-Touch-LCD-1.28
+  (240×240, no audio, Wi-Fi only), experimental. OTA refuses another board's image; the
+  agent link reports `board` and only the `caps` the board has.
+- **Setup over USB for serial boards**: boards whose USB-C is a USB-UART bridge (the 1.28)
+  get Wi-Fi from the browser over the cable (Improv Wi-Fi Serial on the console UART);
+  `molty.uno/setup` installs molty.UNO per board and sets Wi-Fi with ESP Web Tools, with
+  the images served by the site.
+- **Release assets**: per board, OTA image and full factory image
+  (`molty-X.Y.Z-<board>-{ota,factory}.bin`); console page, CLI binaries for
   linux/darwin/windows × amd64/arm64, `SHA256SUMS`.

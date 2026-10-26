@@ -15,6 +15,7 @@ typedef int esp_err_t;
 #define ESP_ERR_INVALID_SIZE 5
 #define ESP_ERR_TIMEOUT 6
 #define ESP_ERR_NVS_NOT_FOUND 7
+#define ESP_ERR_NOT_FOUND 8
 #define NVS_READWRITE 1
 #define NVS_READONLY 0
 typedef int nvs_handle_t;
@@ -56,26 +57,31 @@ void *xRingbufferReceiveUpTo(RingbufHandle_t, size_t *, unsigned, size_t);
 void vRingbufferReturnItem(RingbufHandle_t, void *);
 int xRingbufferSend(RingbufHandle_t, const void *, size_t, unsigned);
 void *heap_caps_malloc(size_t, int);
-typedef struct { uint64_t pin_bit_mask; int mode, pull_up_en, intr_type; } gpio_config_t;
-#define GPIO_NUM_0 0
-#define GPIO_NUM_6 6
-#define GPIO_MODE_INPUT 1
-#define GPIO_PULLUP_ENABLE 1
-#define GPIO_INTR_DISABLE 0
-esp_err_t gpio_config(const gpio_config_t *);
-int gpio_get_level(int);
+/* molty_board.h: the board seam. sdk_caps = what the stub board has (all by default);
+ * the accept / reject buttons read sdk_gpio[0] / sdk_gpio[6] (BOOT / PWR, active low). */
+#define MOLTY_CAP_DISPLAY     (1u << 0)
+#define MOLTY_CAP_TOUCH       (1u << 1)
+#define MOLTY_CAP_IMU         (1u << 2)
+#define MOLTY_CAP_MIC         (1u << 3)
+#define MOLTY_CAP_SPEAKER     (1u << 4)
+#define MOLTY_CAP_BTN_ACCEPT  (1u << 5)
+#define MOLTY_CAP_BTN_REJECT  (1u << 6)
+typedef enum { MOLTY_BTN_ACCEPT = 0, MOLTY_BTN_REJECT = 1 } molty_button_t;
+extern uint32_t sdk_caps;
+bool molty_board_has(uint32_t caps);
+const char *molty_board_id(void);
+bool molty_button_pressed(molty_button_t b);
 esp_err_t mole_creature_select(const char *);
 const char *mole_creature_current(void);
 esp_err_t mole_creature_state_get(char **);
 esp_err_t mole_creature_state_set(const char *);
-esp_err_t mole_audio_tx_stream_begin(uint32_t);
-esp_err_t mole_audio_tx_stream_write(const int16_t *, size_t);
-esp_err_t mole_audio_tx_stream_drain(void);
-void mole_audio_tx_stream_end(void);
-esp_err_t mole_audio_record_raw(uint32_t, uint32_t, int16_t **, size_t *);
-esp_err_t mole_audio_rx_start_stream(uint32_t, uint32_t, uint8_t);
-esp_err_t mole_audio_rx_read_chunk(int16_t *, size_t, size_t *);
-void mole_audio_rx_stop_stream(void);
+esp_err_t molty_speaker_stream_begin(uint32_t);
+esp_err_t molty_speaker_stream_write(const int16_t *, size_t);
+esp_err_t molty_speaker_stream_drain(void);
+void molty_speaker_stream_end(void);
+esp_err_t molty_mic_stream_start(uint32_t, uint32_t, uint8_t);
+esp_err_t molty_mic_stream_read(int16_t *, size_t, size_t *);
+void molty_mic_stream_stop(void);
 extern esp_err_t sdk_rx_error;
 extern unsigned sdk_rx_chunks;
 #define tskNO_AFFINITY 0x7fffffff

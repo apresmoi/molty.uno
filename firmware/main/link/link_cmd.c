@@ -3,8 +3,7 @@
 #include "link_audio.h"
 #include "link_pair.h"
 #include "mole_creature.h"
-#include "mole_audio.h"
-#include "mole_imu.h"
+#include "molty_board.h"
 #include "sdkconfig.h"
 #include "mole_fluid.h"
 #include "mole_diag.h"
@@ -124,14 +123,14 @@ static esp_err_t cmd_volume(const cJSON *args, cJSON **out)
     (void)out;
     cJSON *v = cJSON_GetObjectItemCaseSensitive(args, "volume");
     if (!cJSON_IsNumber(v) || v->valuedouble < 0 || v->valuedouble > 21 || v->valuedouble != v->valueint) return ESP_ERR_INVALID_ARG;
-    mole_audio_set_volume((uint8_t)v->valueint);
-    return ESP_OK;
+    return molty_speaker_set_volume((uint8_t)v->valueint);   /* unsupported without a speaker */
 }
 
 static esp_err_t cmd_imu(const cJSON *args, cJSON **out)
 {
     (void)args;
-    mole_imu_sample_t s; mole_imu_get(&s);
+    molty_imu_sample_t s;
+    if (!molty_imu_get(&s)) return ESP_ERR_NOT_SUPPORTED;
     cJSON *j = cJSON_CreateObject();
     if (!j) return ESP_ERR_NO_MEM;
     cJSON_AddNumberToObject(j, "ax", s.ax); cJSON_AddNumberToObject(j, "ay", s.ay);
@@ -184,5 +183,5 @@ esp_err_t link_cmd_run(const char *name, const cJSON *args, cJSON **result)
     if (link_pair_active()) return ESP_ERR_INVALID_STATE;
     for (size_t i = 0; i < s_count; i++)
         if (!strcmp(name, s_registry[i].name)) return s_registry[i].handler(args, result);
-    return ESP_ERR_NOT_SUPPORTED;
+    return ESP_ERR_NOT_FOUND;   /* "unknown_command"; ESP_ERR_NOT_SUPPORTED is "unsupported" (no such hardware) */
 }

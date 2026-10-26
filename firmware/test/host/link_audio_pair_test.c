@@ -121,15 +121,42 @@ static void test_pair(void) {
     assert(!link_pair_active() && rotations==2);
     request(); send_error=ESP_FAIL; link_pair_touch(1); link_pair_tick(); link_pair_touch(0);
     assert(!link_pair_active() && rotations==3); send_error=ESP_OK;
+    /* A board with no reject button (the 1.28): GPIO 6 means nothing, only the timeout
+     * rejects; accept still works on the button with no touch at all. */
+    sdk_caps &= ~(MOLTY_CAP_BTN_REJECT | MOLTY_CAP_TOUCH);
+    request(); sdk_gpio[6]=0; link_pair_tick(); sdk_gpio[6]=1; assert(link_pair_active());
+    sdk_gpio[0]=0; link_pair_tick(); sdk_gpio[0]=1;
+    assert(!link_pair_active() && rotations==4);
+    /* Neither touch nor an accept button: refused at once, nothing shown. */
+    sdk_caps &= ~MOLTY_CAP_BTN_ACCEPT; sdk_state[0]='\0';
+    cJSON *nope=cJSON_Parse("{\"req\":\"noway\",\"agent_name\":\"test\",\"code\":\"1234\"}");
+    link_pair_request(nope); cJSON_Delete(nope);
+    assert(!link_pair_active() && !strcmp(field("reason"),"rejected") && !sdk_state[0]);
+    sdk_caps = 0xFFFFFFFFu;
     begin_say(); unsigned before=sent;
     cJSON *args=cJSON_Parse("{\"req\":\"busy\",\"agent_name\":\"test\",\"code\":\"1234\"}");
     link_pair_request(args); cJSON_Delete(args);
     assert(sent==before+1 && !strcmp(field("reason"),"rejected"));
     link_audio_cancel(); complete(play());
 }
+/* No speaker / no mic on the board: say / listen answer "unsupported" before touching
+ * the mood, the text or the audio worker. */
+static void test_unsupported(void) {
+    strcpy(sdk_mood,"idle"); sdk_text[0]='\0';
+    sdk_caps &= ~MOLTY_CAP_SPEAKER;
+    cJSON *args=say_args(),*res=NULL;
+    assert(link_audio_say(args,&res)==ESP_ERR_NOT_SUPPORTED && !res && !link_audio_busy());
+    assert(!strcmp(sdk_mood,"idle") && !sdk_text[0]); cJSON_Delete(args);
+    sdk_caps = 0xFFFFFFFFu & ~MOLTY_CAP_MIC;
+    args=cJSON_Parse("{\"job\":\"listen1\",\"ms\":100,\"rate\":16000}");
+    assert(link_audio_listen(args,&res)==ESP_ERR_NOT_SUPPORTED && !res && !link_audio_busy());
+    assert(!strcmp(sdk_mood,"idle")); cJSON_Delete(args);
+    audio_job_t job; assert(xQueueReceive(s_jobs,&job,0)!=pdTRUE);
+    sdk_caps = 0xFFFFFFFFu;
+}
 int main(void) {
     assert(link_audio_init()==ESP_OK && link_pair_init()==ESP_OK);
-    test_say(); test_pair();
+    test_say(); test_pair(); test_unsupported();
     cJSON_Delete(sdk_sent); free(s_jobs); free(s_done); free(s_ring);
-    puts("LINK AUDIO/PAIR PASS: paced PCM, final playback drain, errors, cmd-time text/mood, pairing reasons");
+    puts("LINK AUDIO/PAIR PASS: paced PCM, final playback drain, errors, cmd-time text/mood, pairing reasons, board caps");
 }

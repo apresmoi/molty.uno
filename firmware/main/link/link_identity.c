@@ -1,5 +1,6 @@
 #include "link_identity.h"
 #include "link_protocol.h"
+#include "molty_board.h"
 #include <stdio.h>
 #include <string.h>
 #include "esp_app_desc.h"
@@ -84,8 +85,15 @@ cJSON *link_identity_hello(void)
     cJSON_AddStringToObject(j, "key", key);
     memset(key, 0, sizeof(key));
     cJSON_AddStringToObject(j, "fw", esp_app_get_description()->version);
-    const char *caps[] = {"fluid", "say", "listen", "show", "mood", "creature"};
-    cJSON_AddItemToObject(j, "caps", cJSON_CreateStringArray(caps, 6));
+    /* say / listen only where the board has a speaker / mic (the relay refuses those
+     * jobs up front otherwise); board names the hardware for agents and support */
+    const char *caps[6]; int n = 0;
+    caps[n++] = "fluid";
+    if (molty_board_has(MOLTY_CAP_SPEAKER)) caps[n++] = "say";
+    if (molty_board_has(MOLTY_CAP_MIC)) caps[n++] = "listen";
+    caps[n++] = "show"; caps[n++] = "mood"; caps[n++] = "creature";
+    cJSON_AddItemToObject(j, "caps", cJSON_CreateStringArray(caps, n));
+    cJSON_AddStringToObject(j, "board", molty_board_id());
     cJSON_AddStringToObject(j, "link_code", s_code);
     return j;
 }

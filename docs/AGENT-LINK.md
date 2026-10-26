@@ -74,8 +74,14 @@ Molty (home Wi-Fi) ──outbound WSS──▶ molty-relay (Cloudflare Worker + 
 
 ## Device ↔ relay wire (WS/WSS `/v1/device?id=<device_id>`)
 
-First frame from device: `{"t":"hello","id":"molty-k7m2w9c4ya","key":"<b64 device_key>","fw":"...","caps":["fluid","say","listen","show","mood","creature"],"link_code":"..."}`
+First frame from device: `{"t":"hello","id":"molty-k7m2w9c4ya","key":"<b64 device_key>","fw":"...","caps":["fluid","say","listen","show","mood","creature"],"board":"waveshare-esp32-s3-touch-lcd-1.46","link_code":"..."}`
 → relay answers `{"t":"welcome"}` or closes with 4401.
+
+`board` names the hardware (`firmware/boards/`, see [PORTING.md](PORTING.md)). `caps`
+lists `say` / `listen` only when the board has a speaker / microphone; the relay answers
+those commands `409 unsupported` up front, without calling TTS, when the device left them
+out. The device itself answers a command its board cannot do with `error:"unsupported"`
+(an unknown command is `unknown_command`).
 
 Configure a relay origin (`wss://host` or `ws://LAN-IP:8787` for `wrangler dev`);
 the device appends `/v1/device?id=<device_id>`. WSS verifies certificates/hostnames.
@@ -118,14 +124,14 @@ text state wins over the creature view.
 
 | name | args | result | notes |
 |---|---|---|---|
-| `status` | — | fw, uptime, creature, state, mood, fps, rssi | |
+| `status` | — | fw, uptime, creature, state, mood, fps, rssi | relay adds `relay` {online, board, caps, ...} |
 | `state` | `{state, ...}` | creature state JSON | passthrough to `/api/creature/state` semantics |
 | `mood` | `{mood}` | — | idle listening thinking speaking happy sleepy surprised |
 | `show` | `{text, wpm?}` | — | speed reader in the fluid |
-| `say` | `{text, voice?}` | `{job}` immediately | relay does TTS + streams; device sets `speaking`, shows text in sync |
-| `listen` | `{ms≤10000}` | `{job}` immediately | device sets `listening`, streams mic; relay STT → job result `{text}` |
-| `volume` | `{volume 0..21}` | — | |
-| `imu` | — | snapshot | |
+| `say` | `{text, voice?}` | `{job}` immediately | relay does TTS + streams; device sets `speaking`, shows text in sync. `unsupported` without a speaker |
+| `listen` | `{ms≤10000}` | `{job}` immediately | device sets `listening`, streams mic; relay STT → job result `{text}`. `unsupported` without a mic |
+| `volume` | `{volume 0..21}` | — | `unsupported` without a speaker |
+| `imu` | — | snapshot | `unsupported` without an IMU |
 | `diag` | `{timeline? 0..180}` | `/api/diag` JSON | frame histograms, task CPU %, heap, stalls, net; `timeline` = seconds of 1 Hz rows |
 | `log` | `{since?, max? 1024..32768}` | `{next, text}` | device log ring tail (ESP_LOG + `EVT` lines); pass `next` back as `since` |
 | `creature.file` | (later) | — | upload `.molty` via relay |
@@ -154,7 +160,7 @@ bearer is `agent_token` = `<device_id>.<base64url(32 bytes)>`; the prefix only r
 |---|---|---|
 | `POST /v1/pair {device_id, link_code, agent_name}` (no token; long-polls ≤ 120 s) | `200 {ok:true, agent_token, device_id, agent_name, code}` | `{ok:false, error}`: `bad_link_code` 403, `rejected` 403, `timeout` 408, `device_offline` / `pair_busy` 409 |
 | same with `wait_s` < 120, or `{device_id, pair_id}` to resume | `202 {ok:true, status:"pending", pair_id, code, expires_in_s}` while undecided | as above |
-| `POST /v1/devices/<id>/cmd {name, args}` | `200 {ok:true, result:{...}}`; `say`/`listen` → `{ok:true, result:{job}}` | `{ok:false, error:"code"}`: 401 bad/missing bearer, 400 `invalid_args`/`unknown_command`, 409 `device_offline`/`audio_busy`, 504 `device_timeout`, 502 device-reported codes |
+| `POST /v1/devices/<id>/cmd {name, args}` | `200 {ok:true, result:{...}}`; `say`/`listen` → `{ok:true, result:{job}}` | `{ok:false, error:"code"}`: 401 bad/missing bearer, 400 `invalid_args`/`unknown_command`, 409 `device_offline`/`audio_busy`/`unsupported`, 504 `device_timeout`, 502 device-reported codes |
 | `GET /v1/jobs/<job>[?wait_s=0..8]` | `200 {job, kind, status:"queued"\|"running"\|"done"\|"failed", result?, error?}`; say done `{ms, text}`, listen done `{text, duration_ms, peak, rms}` | 401, 404 `not_found` |
 | `DELETE /v1/token` | `200 {ok:true, result:{revoked:true}}` | 401 |
 

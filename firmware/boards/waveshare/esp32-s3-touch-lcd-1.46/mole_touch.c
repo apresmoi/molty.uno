@@ -7,7 +7,6 @@
  * SPDX-License-Identifier: MIT
  */
 #include "mole_touch.h"
-#include "link/link_pair.h"
 #include "mole_tca9554.h"
 
 #include <string.h>
@@ -167,7 +166,5 @@ esp_err_t mole_touch_init(i2c_master_bus_handle_t bus) {
 int mole_touch_poll(uint16_t *xs, uint16_t *ys, int max) {
     if (!s_dev) return 0;
     if (max > MOLE_TOUCH_MAX_POINTS) max = MOLE_TOUCH_MAX_POINTS;
-    int n = tp_read_points(xs, ys, max);
-    link_pair_touch(n);
-    return n;
+    return tp_read_points(xs, ys, max);
 }

@@ -21,8 +21,11 @@ firmware size gate (`make firmware-size`: the app must stay under 90% of its OTA
 
 ## Conventions
 
-- Firmware: C11, ESP-IDF v5.5. Board drivers live in `firmware/main/hw/`; anything
-  per-frame stays allocation-free. New HTTP routes go in the matching `net/` or
+- Firmware: C11, ESP-IDF v5.5. Board drivers live in their board's folder under
+  `firmware/boards/` and the core reaches hardware only through
+  `firmware/main/board/molty_board.h` (new board: `docs/PORTING.md`); anything
+  per-frame stays allocation-free. The fluid's 412×412 output is pinned by golden
+  hashes (`firmware/test/host/fluid_golden.txt`): never re-capture them to go green. New HTTP routes go in the matching `net/` or
   feature file and are registered from `http_server_start()`.
 - The `.molty` format is shared by the JS exporter and the C reader: change
   `creatures/MOLTY-FORMAT.md`, `creatures/tools/molty-export.mjs` and

@@ -25,9 +25,9 @@ function autoDevice(room: DeviceRoom, sock: FakeSocket, handler: Handler, pair: 
   };
 }
 
-async function paired(handler: Handler = () => ({ ok: true, result: {} })) {
+async function paired(handler: Handler = () => ({ ok: true, result: {} }), hello: Record<string, unknown> = {}) {
   const ctx = makeRoom({ timings: FAST });
-  const sock = await connect(ctx.room, ctx.host);
+  const sock = await connect(ctx.room, ctx.host, undefined, undefined, hello);
   autoDevice(ctx.room, sock, handler);
   const out = await ctx.room.pair({ device_id: DEVICE, link_code: LINK, agent_name: "tester" });
   if (!out.ok || out.result.status !== "approved") throw new Error(`pair failed ${JSON.stringify(out)}`);
@@ -207,7 +207,21 @@ describe("commands", () => {
   it("status merges relay info", async () => {
     const { room, token } = await paired(() => ({ ok: true, result: { uptime: 5, mood: "idle" } }));
     const out = await room.command(token, "status", {});
-    expect(out).toMatchObject({ ok: true, result: { uptime: 5, relay: { device_id: DEVICE, online: true, fw: "test-fw", caps: ["say", "listen"] } } });
+    expect(out).toMatchObject({ ok: true, result: { uptime: 5, relay: { device_id: DEVICE, online: true, fw: "test-fw", board: null, caps: ["say", "listen"] } } });
+  });
+
+  it("a board without speaker/mic: say/listen are unsupported up front, status names the board", async () => {
+    const seen: string[] = [];
+    const { room, token, voice } = await paired((name) => (seen.push(name), { ok: true, result: {} }), {
+      board: "waveshare-esp32-s3-touch-lcd-1.28",
+      caps: ["fluid", "show", "mood", "creature"],
+    });
+    expect(await room.command(token, "say", { text: "hi" })).toMatchObject({ ok: false, error: "unsupported" });
+    expect(await room.command(token, "listen", {})).toMatchObject({ ok: false, error: "unsupported" });
+    expect(voice.ttsCalls).toEqual([]);
+    expect(seen).toEqual([]);
+    const out = await room.command(token, "status", {});
+    expect(out).toMatchObject({ ok: true, result: { relay: { board: "waveshare-esp32-s3-touch-lcd-1.28", caps: ["fluid", "show", "mood", "creature"] } } });
   });
 
   it("rejects bad tokens, passes device errors through, times out, reports offline", async () => {

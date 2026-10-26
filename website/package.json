@@ -5,22 +5,29 @@
   "private": true,
   "description": "molty.uno: the Molty landing page and documentation.",
   "license": "MIT",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "sync": "node scripts/sync-docs.mjs",
     "dev": "pnpm sync && astro dev --port 4330",
     "build": "pnpm sync && astro build && node scripts/generate-llms-txt.mjs",
     "preview": "astro preview --port 4330",
     "check": "node scripts/checks/architecture.mjs && node scripts/checks/format.mjs",
+    "test": "node --test scripts/tests/*.test.ts",
     "format": "node scripts/checks/format.mjs --write",
     "og": "node scripts/generate-og.mjs",
-    "screens": "node e2e/screens.mjs"
+    "screens": "node e2e/screens.mjs",
+    "stage-firmware": "node scripts/stage-firmware.mjs"
   },
   "dependencies": {
     "@astrojs/react": "^5.0.2",
     "@astrojs/sitemap": "^3.7.1",
     "@astrojs/starlight": "^0.38.2",
     "astro": "^6.0.8",
+    "esp-web-tools": "10.4.0",
+    "esptool-js": "0.6.1",
+    "improv-wifi-serial-sdk": "2.8.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "sharp": "^0.34.2"

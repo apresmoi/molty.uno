@@ -5,6 +5,13 @@ description: Wi-Fi, choose a Molty, connect an agent — the three steps of the 
 
 Molty serves its own setup console. The first time, you reach it over the USB-C cable.
 
+:::note[Waveshare 1.28 and other boards with a serial USB-C]
+These boards have no USB network, so Wi-Fi comes first, from your browser: open
+[the setup page](/setup/) in Chrome or Edge on a desktop, connect to the board's serial
+port and choose **Connect to Wi-Fi**. The password travels over the cable to Molty only.
+Then open `http://molty.local` and continue below from step 2.
+:::
+
 ## Open the console
 
 Plug Molty into your computer. It shows up as a USB network adapter and hands your

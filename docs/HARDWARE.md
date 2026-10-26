@@ -1,14 +1,18 @@
 # Hardware, build and flash
 
-## Board
+## Supported boards
 
-**Waveshare ESP32-S3-Touch-LCD-1.46** (the version without cover glass works too):
-ESP32-S3, 16 MB flash, 8 MB PSRAM, 412×412 round LCD (SPD2010, QSPI) with capacitive
-touch, QMI8658 IMU, TCA9554 I/O expander, I2S speaker amp and microphone, battery management.
-Its native USB is routed to the USB-C port (no USB-UART bridge).
+| Board (`firmware/boards/…`) | Display | Touch | IMU | Mic / speaker | Buttons | USB-C | Flash / PSRAM | Status |
+|---|---|---|---|---|---|---|---|---|
+| **Waveshare ESP32-S3-Touch-LCD-1.46** (`waveshare/esp32-s3-touch-lcd-1.46`) | 412×412 round, SPD2010 QSPI | SPD2010 | QMI8658 | yes / yes | BOOT accept, PWR reject | native USB: NCM network at 10.13.37.1 | 16 MB / 8 MB octal | reference |
+| **Waveshare ESP32-S3-Touch-LCD-1.28** (`waveshare/esp32-s3-touch-lcd-1.28`) | 240×240 round, GC9A01A SPI | CST816S | QMI8658 | — / — | BOOT accept | CH343P USB-UART: serial logs + Wi-Fi setup over Improv, no USB network | 16 MB / 2 MB quad | experimental |
 
-Pin assignments come from Waveshare's demo bundle for this board; see the headers in
-`firmware/main/hw/`.
+The 1.46 is the V1 board (the version without cover glass works too): it adds a TCA9554
+I/O expander, an I2S speaker amp and microphone, and battery management with a
+soft-power latch. The 1.28 has no audio, so `say`/`listen` and the audio endpoints
+answer `unsupported`; it is reached over Wi-Fi only, set up over the USB cable from
+**molty.uno/setup** (Improv Wi-Fi Serial; [PORTING.md](PORTING.md#flash-it)). Each board's pins, with their sources, are in its
+`board.h`. Another board: [PORTING.md](PORTING.md).
 
 ## Prerequisites
 
@@ -26,20 +30,42 @@ From the repo root (`make help` lists everything):
 
 ```sh
 make console     # console/dist/index.html (typecheck + unit tests + build)
-make firmware    # idf.py build; needs the console built first (it is baked into SPIFFS)
+make firmware    # idf.py build: the 1.46 in firmware/build; needs the console first (it is baked into SPIFFS)
+make firmware BOARD=waveshare/esp32-s3-touch-lcd-1.28   # another board, in firmware/build/<vendor>-<model>/
+make firmware-all                                       # every board under firmware/boards/
 ```
 
-`make firmware` never flashes. The console is part of the flash image: the build stages
+`make firmware` never flashes. Each board builds with its own sdkconfig
+(`scripts/firmware-build.sh`): the board's `sdkconfig.board` (flash, PSRAM, console, the
+Kconfig `MOLTY_BOARD` choice) is layered over `sdkconfig.defaults`, and a build whose
+sdkconfig belongs to another board stops with an error. The console is part of the flash image: the build stages
 `console/dist/index.html` into the `spiffs` partition (`firmware/main/stage_console_html.cmake`)
 and fails with an instruction if the console is not built yet.
 
 `sdkconfig` and `managed_components/` are generated from the tracked `sdkconfig.defaults`
-and `dependencies.lock`. Device options (e.g. the default relay URL) are under
-`idf.py menuconfig` → **Molty**.
+(+ the board's `sdkconfig.board`) and `dependencies.lock`. Device options (e.g. the default
+relay URL) are under `idf.py menuconfig` → **Molty**.
 
 ## First flash (and any partition-table change)
 
-Native USB on this board has no reliable auto-reset, so the first flash is manual:
+**Waveshare 1.28** (and any board with a USB-UART bridge): esptool resets it into the
+bootloader by itself, and the serial port shows the boot log at 115200.
+
+```sh
+make console firmware BOARD=waveshare/esp32-s3-touch-lcd-1.28
+cd firmware/build/waveshare-esp32-s3-touch-lcd-1.28
+python -m esptool --chip esp32s3 -p PORT -b 460800 erase_flash
+python -m esptool --chip esp32s3 -p PORT -b 460800 \
+  --before default_reset --after hard_reset write_flash "@flash_args"
+```
+
+Then give it Wi-Fi from **molty.uno/setup** in Chrome or Edge (Connect → the serial port →
+Connect to Wi-Fi), which can also do the install above without ESP-IDF; it identifies the
+board itself and offers only that board's firmware. Details and a
+local test: [PORTING.md](PORTING.md#flash-it).
+
+**Waveshare 1.46.** Native USB on this board has no reliable auto-reset, so the first
+flash is manual:
 
 1. `make console firmware`
 2. **Hold BOOT, plug the USB-C cable in while holding, then release.** (Holding BOOT and

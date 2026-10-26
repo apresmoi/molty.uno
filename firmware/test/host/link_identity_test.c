@@ -3,6 +3,7 @@
 #include "link_protocol.h"
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 int main(void)
@@ -17,7 +18,15 @@ int main(void)
     cJSON *hello=link_identity_hello(); assert(hello);
     assert(!strcmp(cJSON_GetObjectItem(hello,"id")->valuestring,first));
     assert(cJSON_GetObjectItem(hello,"key") && cJSON_GetObjectItem(hello,"link_code"));
+    assert(!strcmp(cJSON_GetObjectItem(hello,"board")->valuestring,"test-board"));
+    char *caps=cJSON_PrintUnformatted(cJSON_GetObjectItem(hello,"caps"));
+    assert(!strcmp(caps,"[\"fluid\",\"say\",\"listen\",\"show\",\"mood\",\"creature\"]")); free(caps);
     cJSON_Delete(hello);
+    /* no speaker / mic (the 1.28): no say / listen, so the relay refuses those jobs */
+    sdk_caps &= ~(MOLTY_CAP_SPEAKER | MOLTY_CAP_MIC);
+    hello=link_identity_hello(); caps=cJSON_PrintUnformatted(cJSON_GetObjectItem(hello,"caps"));
+    assert(!strcmp(caps,"[\"fluid\",\"show\",\"mood\",\"creature\"]")); free(caps); cJSON_Delete(hello);
+    sdk_caps = 0xFFFFFFFFu;
     char code[9]; strcpy(code,link_identity_code());
     sdk_now=899999999; assert(!link_identity_tick());
     sdk_now=900000000; assert(link_identity_tick());

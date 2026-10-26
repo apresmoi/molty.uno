@@ -88,6 +88,11 @@ static void request_persist(void)
 /* Flood guard: an error repeating at frame rate must not wash the ring. */
 #define LOG_LINES_PER_SEC 40
 static uint32_t s_log_sec, s_log_in_sec, s_log_dropped;
+#if !CONFIG_ESP_CONSOLE_NONE
+/* the console's writer (UART0 on boards with a USB-UART bridge, e.g. the 1.28): lines
+ * that pass the flood guard go there too, so a serial monitor shows the app's logs */
+static vprintf_like_t s_log_console;
+#endif
 
 static int log_vprintf(const char *fmt, va_list ap)
 {
@@ -102,6 +107,9 @@ static int log_vprintf(const char *fmt, va_list ap)
         }
     }
     if (++s_log_in_sec > LOG_LINES_PER_SEC) { s_log_dropped++; return 0; }
+#if !CONFIG_ESP_CONSOLE_NONE
+    if (s_log_console) { va_list cp; va_copy(cp, ap); s_log_console(fmt, cp); va_end(cp); }
+#endif
     int n = vsnprintf(buf, sizeof(buf), fmt, ap);
     if (n < 0) return n;
     size_t len = (size_t)n < sizeof(buf) ? (size_t)n : sizeof(buf) - 1;
@@ -627,6 +635,7 @@ void mole_diag_early_init(void)
     cJSON_InitHooks(&hooks);
 #if !CONFIG_ESP_CONSOLE_NONE
     /* keep the console when there is one: chain is cheap enough for dev boards */
+    s_log_console =
 #endif
     esp_log_set_vprintf(log_vprintf);
     heap_caps_register_failed_alloc_callback(alloc_failed);

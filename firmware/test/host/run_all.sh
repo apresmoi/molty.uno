@@ -3,7 +3,7 @@
 # link_build.sh compiles cJSON from ESP-IDF: set IDF_PATH (default ~/esp/esp-idf).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for t in fluid_build.sh cute_build.sh link_build.sh; do
+for t in fluid_build.sh fluid_golden_build.sh cute_build.sh improv_build.sh link_build.sh; do
   echo "== $t"
   "$HERE/$t"
 done

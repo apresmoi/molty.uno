@@ -1,15 +1,19 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * app_main.c — Molty firmware entry point (Waveshare ESP32-S3-Touch-LCD-1.46).
+ * app_main.c — Molty firmware entry point. The hardware is whatever board was
+ * compiled in (board/molty_board.h, firmware/boards/); nothing here knows a pin.
  *
  * Boot order:
- *   diag log ring → power latch → NVS → SPIFFS + console (net/console_store)
- *   → USB-C NCM + mDNS + Wi-Fi (net/network) → IMU → LCD + touch
- *   → "fluid" creature (fluid/) → agent link (link/) → diag tasks
- *   → HTTP server (net/http) → OTA image validation → /ws/imu task
+ *   diag log ring → board early init (power latch) → NVS → Improv serial setup
+ *   (boards with a serial console) → SPIFFS + console
+ *   (net/console_store) → USB-C NCM (boards with usb_net) + mDNS + Wi-Fi
+ *   (net/network) → board init (display, touch, IMU, ...) → "fluid" creature
+ *   (fluid/) → agent link (link/) → diag tasks → HTTP server (net/http)
+ *   → OTA image validation → /ws/imu task
  *
- * Plug USB-C into a laptop and browse http://10.13.37.1/ (or http://molty.local/).
+ * Plug USB-C into a laptop and browse http://10.13.37.1/ (or http://molty.local/);
+ * boards without native USB on the USB-C port are reached over Wi-Fi only.
  */
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -18,20 +22,18 @@
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_ota_ops.h"
-#include "driver/gpio.h"
 #include "nvs_flash.h"
 #include "soc/rtc_cntl_reg.h"   /* RTC_CNTL_OPTION1_REG / FORCE_DOWNLOAD_BOOT */
 
 #include "mole_diag.h"
-#include "mole_imu.h"
-#include "mole_lcd.h"
-#include "mole_touch.h"
+#include "molty_board.h"
 #include "mole_creature.h"
 #include "mole_fluid.h"
 #include "link_client.h"
 #include "network.h"
 #include "console_store.h"
 #include "http.h"
+#include "improv_serial.h"
 
 static const char *TAG = "molty";
 
@@ -55,22 +57,9 @@ void app_main(void)
     // the post-flash reset preserved the RTC domain — prevents a download boot-loop.
     REG_CLR_BIT(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
 
-    // Battery power latch (Waveshare 1.46 soft-power button). On battery, the side
-    // button only closes the rail momentarily; the firmware must drive GPIO 7 HIGH
-    // within ~100 ms or the chip loses power when the button is released. On USB
-    // power this is a no-op. Driving it LOW powers the device off.
-    {
-        gpio_config_t pwr_cfg = {
-            .pin_bit_mask = (1ULL << 7),
-            .mode         = GPIO_MODE_OUTPUT,
-            .pull_up_en   = GPIO_PULLUP_DISABLE,
-            .pull_down_en = GPIO_PULLDOWN_DISABLE,
-            .intr_type    = GPIO_INTR_DISABLE,
-        };
-        gpio_config(&pwr_cfg);
-        gpio_set_level(7, 1);
-        ESP_LOGI(TAG, "battery power latched (GPIO 7 = HIGH)");
-    }
+    // Board first-thing hook, e.g. the 1.46's battery power latch, which must be
+    // driven within ~100 ms of the power button or the board switches off again.
+    molty_board_early_init();
 
     // NVS — Wi-Fi PHY calibration, credentials, link identity, boot counter
     esp_err_t ret = nvs_flash_init();
@@ -85,38 +74,30 @@ void app_main(void)
     ESP_LOGI(TAG, "boot_count=%lu reset_reason=%s",
              (unsigned long)mole_diag_boot_count(), mole_diag_reset_reason());
 
+    // Wi-Fi setup over the USB cable on boards with a serial console (Improv): as early
+    // as possible, since a browser that just reset the board gives up after ~1.5 s.
+    improv_serial_start();
+
     // SPIFFS + console page. Must run before USB/Wi-Fi/httpd (see console_store.c).
     console_store_init();
 
-    // Networking: USB-C NCM (10.13.37.1, DHCP server), mDNS, Wi-Fi STA
+    // Networking: USB-C NCM (10.13.37.1, DHCP server), mDNS, Wi-Fi STA. NCM needs the
+    // chip's native USB on the USB-C port; boards with a USB-UART bridge there skip it.
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-    ESP_ERROR_CHECK(net_usb_init());
+    const bool usb_net = molty_board_declares(MOLTY_CAP_USB_NET);
+    if (usb_net) ESP_ERROR_CHECK(net_usb_init());
     net_mdns_start();
     ESP_ERROR_CHECK(net_wifi_init());
     ESP_LOGI(TAG, "WiFi STA initialized");
 
-    // IMU — creates the I2C bus shared by the TCA9554 expander, LCD and touch
-    ret = mole_imu_init();
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "IMU init failed (%s) — IMU endpoints will return stale zeros",
-                 esp_err_to_name(ret));
-    }
+    // Board: display, touch, IMU, audio, buttons — whatever it has, in its own order.
+    // Runs ONCE here; creatures must not touch the hardware init. A capability that
+    // fails to start is reported absent (molty_board_has) and the core degrades.
+    molty_board_init();
 
-    // LCD + touch + creature. mole_lcd_init() runs ONCE here; creatures must not call it.
+    // Creature
     {
-        i2c_master_bus_handle_t bus = mole_imu_get_bus();
-        mole_creature_set_bus((void *)bus);
-
-        ret = mole_lcd_init(bus);
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "LCD init failed (%s) — creature rendering will be dark",
-                     esp_err_to_name(ret));
-        }
-        if (mole_touch_init(bus) != ESP_OK) {
-            ESP_LOGW(TAG, "touch init failed — taps/gestures disabled");
-        }
-
         ESP_ERROR_CHECK(mole_creature_register(&s_creature_fluid));
         mole_creature_set_fallback("fluid");
         ret = mole_creature_select("fluid");
@@ -147,5 +128,6 @@ void app_main(void)
 
     http_imu_ws_start();
 
-    ESP_LOGI(TAG, "ready — browse http://" NET_USB_IP "/ (USB-C) or http://molty.local/ (Wi-Fi)");
+    if (usb_net) ESP_LOGI(TAG, "ready — browse http://" NET_USB_IP "/ (USB-C) or http://molty.local/ (Wi-Fi)");
+    else ESP_LOGI(TAG, "ready — browse http://molty.local/ (Wi-Fi; this board has no USB-C network)");
 }

@@ -1,18 +1,18 @@
 /*
  * mole_fluid.c — "fluid" creature: Molty as a fluid of characters.
  *
- * Target board: Waveshare ESP32-S3-Touch-LCD-1.46 (412x412 round LCD)
- * FQBN: esp32:esp32:esp32s3:FlashSize=16M,PSRAM=enabled,CDCOnBoot=cdc
- *
  * Port of creatures/js/fluid/main.js (wiring + show reel) on top of
  * fluid_sim/target/draw.c. Threading:
- *   - fluid_task (core 1, prio 2) OWNS the sim, targets, renderer and the LCD while
+ *   - fluid_task (core 1, prio 2) OWNS the sim, targets, renderer and the display while
  *     active: touch poll, IMU read, sequencer, fixed 60 Hz steps, draw, flush.
+ *   - the board (molty_board.h) sizes everything: the stage is the display's largest
+ *     centred square, the default grid keeps the 1.46's cell size in px; no touch / IMU
+ *     simply means no ripples from a finger / no tilt.
  *   - the httpd task only touches s_cfg / pending requests / s_stats under s_mutex
  *     (held for microseconds), so a slow frame never stalls the single-threaded
  *     HTTP server and a POST never waits on a frame.
  *
- * FRAME BUDGET (52×32 = 1664 cells, ~1280 inside the disc; estimates for the S3 @
+ * FRAME BUDGET on the 1.46 (52×32 = 1664 cells, ~1280 inside the disc; estimates for the S3 @
  * 160 MHz with PSRAM-resident fields, before on-device measurement):
  *   target fill + background floor + ψ noise   ~2.5 ms   (3 noise3/cell)
  *   2 × sim step (60 Hz fixed step @ 30 fps)   ~5 ms
@@ -26,9 +26,7 @@
 #include "fluid_sim.h"
 #include "cute_rig.h"
 #include "glyph_rsvp.h"
-#include "mole_lcd.h"
-#include "mole_touch.h"
-#include "mole_imu.h"
+#include "molty_board.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -123,7 +121,10 @@ static TaskHandle_t      s_task  = NULL;
 static TaskHandle_t      s_dtask = NULL;
 static volatile bool     s_run   = false;
 
-static fluid_cfg_t   s_cfg = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 52, 32, 300, 1.f, 0.f, 1.f, true };
+/* grid 0×0 = not resolved yet: alloc_bufs() sets the panel's default (52×32 on the 1.46) */
+static fluid_cfg_t   s_cfg = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0, 0, 300, 1.f, 0.f, 1.f, true };
+/* display geometry, fixed once known (alloc_bufs): fb_w×fb_h framebuffer, square stage */
+static int s_fb_w, s_fb_h, s_stage, s_ox, s_oy, s_grid_w0, s_grid_h0, s_touch_jump;
 static fluid_stats_t s_stats;
 static char   *s_text     = NULL;               /* PSRAM, FLUID_TEXT_MAX+1          */
 static int     s_text_len = 0;
@@ -272,9 +273,9 @@ static void free_grid(void) {
 /* caller must own the drawer (s_idle taken, or the drawer not running) */
 static esp_err_t build_grid(int W, int H) {
     free_grid();
-    s_sim = fluid_sim_create(W, H);
+    s_sim = fluid_sim_create(W, H, s_stage);
     if (s_sim) s_tx = fluid_text_create(s_sim);
-    if (s_tx) s_draw = fluid_draw_create(W, H);
+    if (s_tx) s_draw = fluid_draw_create(W, H, s_fb_w, s_fb_h);
     if (s_draw) s_frame = fluid_frame_create(W, H);
     if (!s_frame) { free_grid(); return ESP_ERR_NO_MEM; }
     s_noverlay = 0;
@@ -288,10 +289,10 @@ static esp_err_t build_grid(int W, int H) {
 static int64_t s_touch_t0;            /* sim: tap seen, not yet handed to the drawer */
 static volatile int64_t s_dtouch;     /* drawer: tap time riding with the current frame */
 static void poll_touch(void) {
-    uint16_t xs[MOLE_TOUCH_MAX_POINTS], ys[MOLE_TOUCH_MAX_POINTS];
-    int n = mole_touch_poll(xs, ys, MOLE_TOUCH_MAX_POINTS);
+    uint16_t xs[MOLTY_TOUCH_MAX_POINTS], ys[MOLTY_TOUCH_MAX_POINTS];
+    int n = molty_touch_poll(xs, ys, MOLTY_TOUCH_MAX_POINTS);
     if (n <= 0) { s_touch_down = false; return; }
-    float x = xs[0] / (float)FLUID_PANEL * 2.f - 1.f, y = ys[0] / (float)FLUID_PANEL * 2.f - 1.f;
+    float x = (float)(xs[0] - s_ox) / (float)s_stage * 2.f - 1.f, y = (float)(ys[0] - s_oy) / (float)s_stage * 2.f - 1.f;
     if (!s_touch_down) {                                    /* tap = ripple */
         s_touch_down = true; s_tpx = x; s_tpy = y; s_last_tx = xs[0]; s_last_ty = ys[0];
         ripple(x, y, 1.6f, 0.09f);
@@ -299,8 +300,8 @@ static void poll_touch(void) {
         return;
     }
     /* the SPD2010 sometimes reports a garbage coordinate: a finger can't move >140 px
-     * in one ~16 ms poll, so re-baseline instead of stirring */
-    if (abs((int)xs[0] - s_last_tx) > 140 || abs((int)ys[0] - s_last_ty) > 140) {
+     * (of 412) in one ~16 ms poll, so re-baseline instead of stirring */
+    if (abs((int)xs[0] - s_last_tx) > s_touch_jump || abs((int)ys[0] - s_last_ty) > s_touch_jump) {
         s_tpx = x; s_tpy = y; s_last_tx = xs[0]; s_last_ty = ys[0];
         return;
     }
@@ -313,8 +314,8 @@ static void poll_touch(void) {
 }
 
 static void read_tilt(float gain) {
-    mole_imu_sample_t im;
-    mole_imu_get(&im);
+    molty_imu_sample_t im;
+    if (!molty_imu_get(&im)) im.ax = im.ay = 0.f;          /* no IMU: no tilt */
     float gx = FLUID_IMU_SX * im.ax, gy = FLUID_IMU_SY * im.ay;
     if (!isfinite(gx) || !isfinite(gy) || gain == 0.f) gx = gy = 0.f;
     if (gx > 1.f) gx = 1.f;
@@ -541,17 +542,17 @@ static void draw_task(void *arg) {
         if (!s_run) { xSemaphoreGive(s_idle); break; }
         int64_t t0 = esp_timer_get_time();
         int64_t touch_t = s_dtouch; s_dtouch = 0;
-        uint16_t *fb = mole_lcd_framebuffer();
+        uint16_t *fb = molty_display_framebuffer();
         int y0 = 0, y1 = 0, nc = 0;
         bool full = s_full_flush;
         if (fb && s_draw && s_frame) {
-            if (full) { memset(fb, 0, (size_t)FLUID_PANEL * FLUID_PANEL * sizeof(uint16_t)); s_draw->force = true; }
+            if (full) { memset(fb, 0, (size_t)s_fb_w * s_fb_h * sizeof(uint16_t)); s_draw->force = true; }
             nc = fluid_draw(s_draw, s_frame, fb, &s_dopts, &y0, &y1);
         }
         int64_t t1 = esp_timer_get_time();
         if (fb) {
-            if (full) { mole_lcd_flush(); s_full_flush = false; }
-            else if (y1 > y0) mole_lcd_flush_rows(y0, y1);
+            if (full) { molty_display_flush(); s_full_flush = false; }
+            else if (y1 > y0) molty_display_flush_rows(y0, y1);
         }
         int64_t t2 = esp_timer_get_time();
         mole_diag_panel_frame((uint32_t)(t1 - t0), (uint32_t)(t2 - t1));
@@ -615,11 +616,11 @@ static void fluid_task(void *arg) {
         if (!s_sim || s_sim->W != cfg.grid_w || s_sim->H != cfg.grid_h) {
             xSemaphoreTake(s_idle, portMAX_DELAY);          /* own the drawer's buffers */
             if (build_grid(cfg.grid_w, cfg.grid_h) != ESP_OK) {
-                ESP_LOGE(TAG, "grid %dx%d alloc failed — back to 52x32", cfg.grid_w, cfg.grid_h);
+                ESP_LOGE(TAG, "grid %dx%d alloc failed — back to %dx%d", cfg.grid_w, cfg.grid_h, s_grid_w0, s_grid_h0);
                 xSemaphoreTake(s_mutex, portMAX_DELAY);
-                s_cfg.grid_w = 52; s_cfg.grid_h = 32;
+                s_cfg.grid_w = s_grid_w0; s_cfg.grid_h = s_grid_h0;
                 xSemaphoreGive(s_mutex);
-                if (build_grid(52, 32) != ESP_OK) { xSemaphoreGive(s_idle); vTaskDelay(pdMS_TO_TICKS(200)); continue; }
+                if (build_grid(s_grid_w0, s_grid_h0) != ESP_OK) { xSemaphoreGive(s_idle); vTaskDelay(pdMS_TO_TICKS(200)); continue; }
             }
             xSemaphoreGive(s_idle);
             set_state(s_cur, s_cur_fx, &cfg);           /* re-enter on the new grid */
@@ -711,6 +712,16 @@ static esp_err_t alloc_bufs(void) {
     if (!s_go) s_go = xSemaphoreCreateBinary();
     if (!s_idle) s_idle = xSemaphoreCreateBinary();
     if (!s_mutex || !s_done || !s_wdone || !s_go || !s_idle) return ESP_ERR_NO_MEM;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (!s_stage) {                              /* the board's display, once */
+        s_fb_w = molty_display_width(); s_fb_h = molty_display_height();
+        s_stage = s_fb_w < s_fb_h ? s_fb_w : s_fb_h;
+        s_ox = (s_fb_w - s_stage) / 2; s_oy = (s_fb_h - s_stage) / 2;
+        s_touch_jump = (int)lrintf(140.f * (float)s_stage / FLUID_STAGE_REF);
+        fluid_grid_for_stage(s_stage, &s_grid_w0, &s_grid_h0);
+        s_cfg.grid_w = s_grid_w0; s_cfg.grid_h = s_grid_h0;
+    }
+    xSemaphoreGive(s_mutex);
     if (!s_text) {
         s_text = heap_caps_malloc(FLUID_TEXT_MAX + 1, MALLOC_CAP_SPIRAM);
         if (!s_text) return ESP_ERR_NO_MEM;

@@ -4,8 +4,9 @@ name: Release
 # asset from that tag and publishes one GitHub Release. Cut the tag with
 # docs/RELEASING.md; VERSION and CHANGELOG.md must already say X.Y.Z.
 #
-#   verify ──┬── console ── firmware ──┐
-#            └── cli (6 targets) ───────┴── publish ── deploy-relay (opt-in)
+#   verify ──┬── console ──┬── firmware (one per board) ──┐
+#            ├── boards ───┘                              │                ┌── deploy-relay (opt-in)
+#            └── cli (6 targets) ─────────────────────────┴── publish ──┴── deploy-website (/setup images)
 #
 # Full test coverage runs on pull requests and main (ci.yml). This workflow
 # rebuilds from the tag and re-runs only the cheap gates that guard the artifacts
@@ -104,12 +105,35 @@ jobs:
           path: console/dist/index.html
           if-no-files-found: error
 
+  boards:
+    name: firmware boards (wiring check, build matrix)
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.boards.outputs.matrix }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Check boards and list the matrix
+        id: boards
+        run: |
+          python3 scripts/firmware-boards.py check
+          echo "matrix=$(python3 scripts/firmware-boards.py matrix)" >> "$GITHUB_OUTPUT"
+
   firmware:
-    name: firmware images
+    name: firmware images ${{ matrix.name }}
     # The SPIFFS partition (and so the factory image) embeds the console page.
-    needs: [verify, console]
+    needs: [verify, console, boards]
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: true
+      matrix:
+        include: ${{ fromJson(needs.boards.outputs.matrix) }}
     container:
       image: espressif/idf:v5.5@sha256:00e94c6ff8bc1f7bd22b234ff43db3f3056cb33dedac6819df9fbedbcb5c6ebb
     defaults:
@@ -129,42 +153,43 @@ jobs:
           name: console-dist
           path: console/dist
 
+      # Own build dir + sdkconfig per board (firmware/build/<name>/); checks the image tag.
       - name: Build
-        working-directory: firmware
         run: |
           . "$IDF_PATH/export.sh" > /dev/null
-          idf.py build
+          scripts/firmware-build.sh "${{ matrix.board }}"
 
       - name: Host tests
         run: make firmware-test
 
       - name: App size vs OTA slot (fail above 90%)
-        run: scripts/firmware-size.sh
+        run: scripts/firmware-size.sh "firmware/build/${{ matrix.name }}" "${{ matrix.name }}"
 
       # The version the device will report (/api/info "fw") is the one in the app
       # descriptor; refuse to ship an image that disagrees with the tag.
       - name: Verify the embedded version
         run: |
           . "$IDF_PATH/export.sh" > /dev/null
-          embedded="$(python -m esptool --chip esp32s3 image_info --version 2 firmware/build/molty.bin \
+          embedded="$(python -m esptool --chip esp32s3 image_info --version 2 "firmware/build/${{ matrix.name }}/molty.bin" \
             | tr -d '\000' | awk -F': *' '/^App version:/ { gsub(/[ \t]+$/, "", $2); print $2 }')"
           echo "app descriptor version: $embedded"
           [[ "$embedded" == "$VERSION" ]] || { echo "::error::firmware reports '$embedded', expected '$VERSION'"; exit 1; }
 
-      # ota.bin (app only) + factory.bin (esptool merge_bin of the build's flash_args,
-      # written at 0x0). ESP-IDF's Apache-2.0 text ships next to the binaries, as
-      # THIRD_PARTY_NOTICES.md requires; it is read from the very IDF that built them.
+      # molty-<ver>-<board>-ota.bin (app only) + -factory.bin (esptool merge_bin of the
+      # build's flash_args, written at 0x0). ESP-IDF's Apache-2.0 text ships next to the
+      # binaries, as THIRD_PARTY_NOTICES.md requires; it is read from the very IDF that
+      # built them (identical in every board's artifact; publish merges them).
       - name: Package
         run: |
           . "$IDF_PATH/export.sh" > /dev/null
-          scripts/firmware-package.sh "$VERSION" release
+          scripts/firmware-package.sh "$VERSION" release "${{ matrix.board }}"
           cp "$IDF_PATH/LICENSE" release/LICENSE-Apache-2.0.txt
           grep -q "Apache License" release/LICENSE-Apache-2.0.txt
 
       - name: Upload firmware assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: release-firmware
+          name: release-firmware-${{ matrix.name }}
           path: release/*
           if-no-files-found: error
 
@@ -231,7 +256,7 @@ jobs:
 
   publish:
     name: publish GitHub release
-    needs: [verify, console, firmware, cli]
+    needs: [verify, console, boards, firmware, cli]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -294,3 +319,14 @@ jobs:
     with:
       ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     secrets: inherit
+
+  # Same reason as deploy-relay: a GITHUB_TOKEN release triggers no other workflow. The
+  # site serves the release's per-board factory images to /setup (same origin).
+  deploy-website:
+    name: deploy website (setup page firmware)
+    needs: publish
+    permissions:
+      contents: read
+      id-token: write
+      pages: write
+    uses: ./.github/workflows/deploy-website.yml

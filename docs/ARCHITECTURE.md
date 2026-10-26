@@ -25,7 +25,7 @@ set — `mood`, `show`, `say`, `listen`, `state`, `volume`, `imu`, `status`, `di
 
 | Dir | What | Talks to |
 |---|---|---|
-| `firmware/` | ESP-IDF app: fluid renderer, `.molty` creature runtime, audio, IMU, touch, USB-C NCM + Wi-Fi, HTTP API, agent-link client | relay (WSS out), console + CLI (HTTP in) |
+| `firmware/` | ESP-IDF app: fluid renderer, `.molty` creature runtime, HTTP API, agent-link client, USB-C NCM + Wi-Fi; one board folder per supported board (display, touch, IMU, audio drivers) | relay (WSS out), console + CLI (HTTP in) |
 | `console/` | Setup + settings UI, built to one HTML file and baked into the firmware's SPIFFS image | device HTTP API |
 | `relay/` | Cloudflare Worker: device sockets, pairing, REST + remote MCP, voice | devices, agents |
 | `cli/` | `molty` CLI + stdio MCP server, direct HTTP or via the relay | device or relay |
@@ -34,19 +34,33 @@ set — `mood`, `show`, `say`, `listen`, `state`, `volume`, `imu`, `status`, `di
 ## Firmware layout
 
 ```
-firmware/main/
+firmware/main/                 the core: no pins, no panel sizes
 ├── app_main.c      boot order
+├── board/          molty_board.h: the one seam to the hardware (+ guarded wrappers)
 ├── net/            USB-C NCM + Wi-Fi + mDNS (network.c), HTTP API (http.c),
 │                   console page + SPIFFS (console_store.c)
 ├── fluid/          the fluid of characters: sim, targets, draw, speed reader, 5x7 font
 ├── creature/       creature registry + the .molty cute-kit runtime (cute_spec, cute_rig)
 ├── link/           agent link: WSS client, identity, pairing, command dispatcher, audio
-├── hw/             LCD (SPD2010), touch, IMU (QMI8658), I/O expander, audio (I2S)
 └── diag/           log ring, frame histograms, /api/diag, /api/log
+firmware/boards/               one folder per board, exactly one compiled in
+├── waveshare/esp32-s3-touch-lcd-1.46/   SPD2010 QSPI LCD + touch, TCA9554, I2S audio
+├── waveshare/esp32-s3-touch-lcd-1.28/   GC9A01 SPI LCD, CST816S touch, battery ADC
+├── common/         QMI8658 IMU (bus, address and axis map from the board)
+└── _template/      the documented skeleton for a new board
 ```
 
+A board describes its display (size, round or rectangular) and its optional parts —
+touch, IMU, mic, speaker, accept/reject buttons, battery, USB-C network — in a const
+`molty_board_t`; `init()` reports what came up and the core degrades around what is
+missing (voice and IMU endpoints answer `unsupported`, pairing falls back to a button,
+the agent link drops `say`/`listen` from its caps). The Kconfig `MOLTY_BOARD` choice
+picks the folder; its `sdkconfig.board` sets flash, PSRAM and console. Adding a board:
+[PORTING.md](PORTING.md).
+
 The device renders one creature, **fluid**: a per-cell fluid drawn as characters on the
-412×412 round LCD. Everything Molty shows is a *target* the fluid flows toward: a blob,
+round LCD, sized at runtime from the board's display (412×412 on the 1.46: 52×32 cells;
+240×240 on the 1.28: 30×19 at the same cell size). Everything Molty shows is a *target* the fluid flows toward: a blob,
 "thinking", speed-read text, effects, or a character creature. A character creature is a
 `.molty` file (≈0.4–1.3 KB, see `creatures/MOLTY-FORMAT.md`): the firmware holds the
 generic runtime and generates the meshes; creatures are data, swapped at runtime with

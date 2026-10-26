@@ -4,7 +4,7 @@
 #include "link_cmd.h"
 #include "link_pair.h"
 
-#include "mole_audio.h"
+#include "molty_board.h"
 #include "mole_creature.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -40,7 +40,7 @@ static void drain(void)
 
 static esp_err_t play(void)
 {
-    esp_err_t e = mole_audio_tx_stream_begin(16000);
+    esp_err_t e = molty_speaker_stream_begin(16000);
     if (e != ESP_OK) return e;
     while (!atomic_load(&s_cancel)) {
         size_t n;
@@ -52,15 +52,15 @@ static esp_err_t play(void)
             if (!pcm) break;
         }
         if (pcm) {
-            e = mole_audio_tx_stream_write(pcm, n / 2);
+            e = molty_speaker_stream_write(pcm, n / 2);
             vRingbufferReturnItem(s_ring, pcm);
             if (e != ESP_OK) break;
         }
     }
     /* i2s_channel_write queues DMA; draining the software ring is not the
      * playback boundary. Keep ownership until the final PCM has left DMA. */
-    if (e == ESP_OK && !atomic_load(&s_cancel)) e = mole_audio_tx_stream_drain();
-    mole_audio_tx_stream_end();
+    if (e == ESP_OK && !atomic_load(&s_cancel)) e = molty_speaker_stream_drain();
+    molty_speaker_stream_end();
     return atomic_load(&s_cancel) ? ESP_ERR_INVALID_STATE : e;
 }
 
@@ -90,14 +90,14 @@ static esp_err_t record(const audio_job_t *job)
     int16_t *acc = heap_caps_malloc(REC_FRAME_SAMPLES * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     int16_t *chunk = heap_caps_malloc(REC_CHUNK_SAMPLES * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     esp_err_t e = frame && acc && chunk ? ESP_OK : ESP_ERR_NO_MEM;
-    if (e == ESP_OK) e = mole_audio_rx_start_stream(16000, REC_CHUNK_MS, 8);
+    if (e == ESP_OK) e = molty_mic_stream_start(16000, REC_CHUNK_MS, 8);
     bool streaming = e == ESP_OK;
     link_frame_t h = {0}; strcpy(h.stream, job->job);
     size_t done = 0, have = 0;
     while (e == ESP_OK && done < total) {
         if (atomic_load(&s_cancel)) { e = ESP_ERR_INVALID_STATE; break; }
         size_t got = 0;
-        e = mole_audio_rx_read_chunk(chunk, REC_CHUNK_SAMPLES, &got);
+        e = molty_mic_stream_read(chunk, REC_CHUNK_SAMPLES, &got);
         if (e != ESP_OK) break;
         if (!got) { e = ESP_ERR_TIMEOUT; break; }
         if (got > total - done) got = total - done;
@@ -110,7 +110,7 @@ static esp_err_t record(const audio_job_t *job)
             have = 0;
         }
     }
-    if (streaming) mole_audio_rx_stop_stream();
+    if (streaming) molty_mic_stream_stop();
     /* Fail fast: an end-only frame tells the relay the stream is over instead of
      * leaving it to time out into no_audio ms + 5 s later. */
     if (e != ESP_OK && !atomic_load(&s_cancel) && frame && link_client_connected()) {
@@ -141,6 +141,9 @@ static void audio_task(void *arg)
 
 esp_err_t link_audio_init(void)
 {
+    /* No speaker and no mic: say/listen answer "unsupported" before ever touching the
+     * worker, so skip it and its 128 KB PSRAM ring (2 MB boards notice). */
+    if (!molty_board_has(MOLTY_CAP_SPEAKER) && !molty_board_has(MOLTY_CAP_MIC)) return ESP_OK;
     s_jobs = xQueueCreate(1, sizeof(audio_job_t));
     s_done = xQueueCreate(1, sizeof(esp_err_t));
     s_ring = xRingbufferCreateWithCaps(128 * 1024, RINGBUF_TYPE_BYTEBUF, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -152,6 +155,8 @@ esp_err_t link_audio_init(void)
 
 static esp_err_t start(const cJSON *args, bool listen, cJSON **out)
 {
+    /* no mic / no speaker on this board: "unsupported", before any mood or text change */
+    if (!molty_board_has(listen ? MOLTY_CAP_MIC : MOLTY_CAP_SPEAKER)) return ESP_ERR_NOT_SUPPORTED;
     if (s_busy) return ESP_ERR_INVALID_STATE;
     cJSON *j = cJSON_GetObjectItemCaseSensitive(args, "job");
     cJSON *ms = cJSON_GetObjectItemCaseSensitive(args, "ms");

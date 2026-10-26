@@ -1,5 +1,29 @@
 menu "Molty"
 
+choice MOLTY_BOARD
+    prompt "Board"
+    default MOLTY_BOARD_WAVESHARE_ESP32_S3_TOUCH_LCD_1_46
+    help
+        The hardware this firmware drives: exactly one folder under firmware/boards/
+        is compiled in. Set it with the board's sdkconfig.board, which the build
+        layers over sdkconfig.defaults when you pass -DMOLTY_BOARD=<vendor>/<model>
+        (scripts/firmware-build.sh does). Changing it here alone leaves flash and
+        PSRAM settings of the old board: the build stops and says so.
+        Adding a board: docs/PORTING.md.
+
+config MOLTY_BOARD_WAVESHARE_ESP32_S3_TOUCH_LCD_1_46
+    bool "Waveshare ESP32-S3-Touch-LCD-1.46 (412x412 round)"
+
+config MOLTY_BOARD_WAVESHARE_ESP32_S3_TOUCH_LCD_1_28
+    bool "Waveshare ESP32-S3-Touch-LCD-1.28 (240x240 round)"
+
+endchoice
+
+config MOLTY_BOARD_DIR
+    string
+    default "waveshare/esp32-s3-touch-lcd-1.46" if MOLTY_BOARD_WAVESHARE_ESP32_S3_TOUCH_LCD_1_46
+    default "waveshare/esp32-s3-touch-lcd-1.28" if MOLTY_BOARD_WAVESHARE_ESP32_S3_TOUCH_LCD_1_28
+
 config MOLTY_DEFAULT_RELAY
     string "Default agent-link relay URL"
     default "wss://molty-relay.alicenet.workers.dev"

@@ -1,9 +1,6 @@
 /*
  * fluid_sim.c — fluid core: params, sim step, view, field synth.
  *
- * Target board: Waveshare ESP32-S3-Touch-LCD-1.46 (412x412 round LCD)
- * FQBN: esp32:esp32:esp32s3:FlashSize=16M,PSRAM=enabled,CDCOnBoot=cdc
- *
  * Port of creatures/js/fluid/sim.js + synth.js. See fluid_sim.h.
  * Deviations from the JS, all for speed on the S3 (measured on device):
  *   - hot scalar fields are int16 fixed point in internal DRAM (math in float, mostly
@@ -79,8 +76,15 @@ void fluid_params_default(fluid_params_t *p) {
 #define N16 13      /* h hp ink ink2 u v D phi tmp psi T view bgn */
 #define N8  5       /* mask sponge rim bgm tf */
 
-fluid_sim_t *fluid_sim_create(int W, int H) {
+void fluid_grid_for_stage(int stage, int *W, int *H) {
+    int w = (int)lrintf(52.f * (float)stage / FLUID_STAGE_REF), h = (int)lrintf(32.f * (float)stage / FLUID_STAGE_REF);
+    *W = w < FLUID_GRID_MIN_W ? FLUID_GRID_MIN_W : w > FLUID_GRID_MAX_W ? FLUID_GRID_MAX_W : w;
+    *H = h < FLUID_GRID_MIN_H ? FLUID_GRID_MIN_H : h > FLUID_GRID_MAX_H ? FLUID_GRID_MAX_H : h;
+}
+
+fluid_sim_t *fluid_sim_create(int W, int H, int stage) {
     if (W < FLUID_GRID_MIN_W || W > FLUID_GRID_MAX_W || H < FLUID_GRID_MIN_H || H > FLUID_GRID_MAX_H) return NULL;
+    if (stage < 32 || stage > 4096) return NULL;
     fluid_sim_t *s = FLUID_CALLOC(sizeof(fluid_sim_t));
     if (!s) return NULL;
     const int N = W * H;
@@ -107,8 +111,8 @@ fluid_sim_t *fluid_sim_create(int W, int H) {
     s->ys = s->xs + W;
     s->col = (fluid_rgba16_t *)s->cblock; s->col2 = s->col + N; s->tcol = (uint32_t *)(s->col2 + N);
 
-    s->W = W; s->H = H; s->N = N;
-    s->A = ((float)FLUID_PANEL / H) / ((float)FLUID_PANEL / W);
+    s->W = W; s->H = H; s->N = N; s->stage = stage;
+    s->A = ((float)stage / H) / ((float)stage / W);
     fluid_params_default(&s->p);
     for (int i = 0; i < W; i++) s->xs[i] = ((i + 0.5f) / W) * 2.f - 1.f;
     for (int j = 0; j < H; j++) s->ys[j] = ((j + 0.5f) / H) * 2.f - 1.f;

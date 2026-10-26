@@ -10,6 +10,8 @@
  *   diagnostics (/api/diag, log) . diag/mole_diag.c
  *   everything else .............. here: audio, IMU, creature, reader text,
  *                                  framebuffer, info, OTA, coredump, bootloader.
+ * Hardware goes through the board seam (board/molty_board.h): on a board without a
+ * speaker / mic / IMU those endpoints answer {"ok":false,"error":"unsupported"}.
  * No auth: the API is for the local network. Remote agents go through the relay.
  */
 #include "http.h"
@@ -39,9 +41,8 @@
 #include "sdkconfig.h"
 #include "cJSON.h"
 
-#include "mole_audio.h"
-#include "mole_imu.h"
-#include "mole_lcd.h"
+#include "esp_psram.h"
+#include "molty_board.h"
 #include "mole_creature.h"
 #include "mole_fluid.h"
 #include "mole_diag.h"
@@ -120,6 +121,14 @@ bool http_json_get_str(const char *json, const char *key, char *out, size_t out_
     return true;
 }
 
+// The board has no such hardware (molty_board_has): a clear, stable error.
+static esp_err_t send_unsupported(httpd_req_t *r, const char *what)
+{
+    char buf[112];
+    snprintf(buf, sizeof(buf), "{\"ok\":false,\"error\":\"unsupported\",\"detail\":\"this board has no %s\"}", what);
+    return http_send_json(r, buf);
+}
+
 static void reboot_task(void *arg)
 {
     vTaskDelay(pdMS_TO_TICKS(500));
@@ -164,6 +173,7 @@ static uint32_t uri_param_u32(httpd_req_t *r, const char *key, uint32_t def)
 // Synthesise a sine wave at the given frequency and play it synchronously.
 static esp_err_t handler_audio_tone(httpd_req_t *r)
 {
+    if (!molty_board_has(MOLTY_CAP_SPEAKER)) return send_unsupported(r, "speaker");
     uint32_t hz  = uri_param_u32(r, "hz",  440);
     uint32_t ms  = uri_param_u32(r, "ms",  400);
     // Default 28000 ≈ -1.4 dBFS — close to int16 max without clipping. Was
@@ -189,7 +199,7 @@ static esp_err_t handler_audio_tone(httpd_req_t *r)
 
     /* Play raw (amp_scale=32767 means "pass through as-is" since samples already
      * have the caller-specified amplitude baked in). */
-    esp_err_t ret = mole_audio_play_raw(buf, n, RATE, 32767);
+    esp_err_t ret = molty_speaker_play(buf, n, RATE, 32767);
     free(buf);
 
     if (ret != ESP_OK) return http_send_json(r, "{\"ok\":false,\"error\":\"play_failed\"}");
@@ -204,6 +214,7 @@ static esp_err_t handler_audio_tone(httpd_req_t *r)
 // Body = raw int16 PCM mono.  Play synchronously.
 static esp_err_t handler_audio_play(httpd_req_t *r)
 {
+    if (!molty_board_has(MOLTY_CAP_SPEAKER)) return send_unsupported(r, "speaker");
     uint32_t rate = uri_param_u32(r, "rate", 16000);
 
     int content_len = r->content_len;
@@ -225,7 +236,7 @@ static esp_err_t handler_audio_play(httpd_req_t *r)
     }
 
     size_t n_samples = (size_t)received / sizeof(int16_t);
-    esp_err_t ret = mole_audio_play_raw(buf, n_samples, rate, 32767);
+    esp_err_t ret = molty_speaker_play(buf, n_samples, rate, 32767);
     free(buf);
 
     if (ret != ESP_OK) return http_send_json(r, "{\"ok\":false,\"error\":\"play_failed\"}");
@@ -240,6 +251,7 @@ static esp_err_t handler_audio_play(httpd_req_t *r)
 // Rejects anything that is not int16 mono PCM.
 static esp_err_t handler_audio_play_wav(httpd_req_t *r)
 {
+    if (!molty_board_has(MOLTY_CAP_SPEAKER)) return send_unsupported(r, "speaker");
     int content_len = r->content_len;
     // Cap at 4 MB — same reasoning as /api/audio/play. WAVs over a few MB
     // imply >1 min of playback during which the HTTP server is unresponsive.
@@ -293,7 +305,7 @@ static esp_err_t handler_audio_play_wav(httpd_req_t *r)
     size_t n_samples = (size_t)(received - data_offset) / sizeof(int16_t);
     uint32_t dur_ms  = (uint32_t)((uint64_t)n_samples * 1000 / sample_rate);
 
-    esp_err_t ret = mole_audio_play_raw(
+    esp_err_t ret = molty_speaker_play(
         (const int16_t *)(wav + data_offset), n_samples, sample_rate, 32767);
     free(wav);
 
@@ -309,8 +321,9 @@ static esp_err_t handler_audio_play_wav(httpd_req_t *r)
 // Record from PDM mic for N ms.  Returns audio/wav with a standard WAV header.
 static esp_err_t handler_audio_record(httpd_req_t *r)
 {
+    if (!molty_board_has(MOLTY_CAP_MIC)) return send_unsupported(r, "microphone");
     // Refuse if the mic streaming WS is active — one consumer at a time.
-    if (mole_audio_rx_stream_active()) {
+    if (molty_mic_stream_active()) {
         return http_send_json(r, "{\"ok\":false,\"error\":\"mic_busy\"}");
     }
 
@@ -320,7 +333,7 @@ static esp_err_t handler_audio_record(httpd_req_t *r)
 
     int16_t *pcm = NULL;
     size_t n_samples = 0;
-    esp_err_t ret = mole_audio_record_raw(rate, ms, &pcm, &n_samples);
+    esp_err_t ret = molty_mic_record(rate, ms, &pcm, &n_samples);
     if (ret != ESP_OK || !pcm) {
         // Surface the actual esp_err_t code + symbolic name so we can diagnose
         // without serial logs (CONFIG_ESP_CONSOLE_NONE is set on this firmware).
@@ -375,6 +388,7 @@ static esp_err_t handler_audio_record(httpd_req_t *r)
 // Body: {"volume": N} where N is 0..21.  Accepts raw integer string too.
 static esp_err_t handler_audio_volume(httpd_req_t *r)
 {
+    if (!molty_board_has(MOLTY_CAP_SPEAKER)) return send_unsupported(r, "speaker");
     int content_len = r->content_len;
     if (content_len <= 0 || content_len > 64) {
         return http_send_json(r, "{\"ok\":false,\"error\":\"bad_request\"}");
@@ -400,7 +414,7 @@ static esp_err_t handler_audio_volume(httpd_req_t *r)
         return http_send_json(r, "{\"ok\":false,\"error\":\"volume_out_of_range\"}");
     }
 
-    mole_audio_set_volume((uint8_t)vol);
+    molty_speaker_set_volume((uint8_t)vol);
     return http_send_json(r, "{\"ok\":true}");
 }
 
@@ -411,8 +425,8 @@ static esp_err_t handler_audio_volume(httpd_req_t *r)
 // ── GET /api/imu/snapshot ─────────────────────────────────────────────────────
 static esp_err_t handler_imu_snapshot(httpd_req_t *r)
 {
-    mole_imu_sample_t s;
-    mole_imu_get(&s);
+    molty_imu_sample_t s;
+    if (!molty_imu_get(&s)) return send_unsupported(r, "IMU");
 
     char buf[256];
     snprintf(buf, sizeof(buf),
@@ -450,6 +464,8 @@ static void imu_ws_marker_free_noop(void *ctx) { (void)ctx; }
 static esp_err_t handler_ws_imu(httpd_req_t *r)
 {
     if (r->method == HTTP_GET) {
+        /* No IMU on this board: refuse the upgrade (nothing would ever stream). */
+        if (!molty_board_has(MOLTY_CAP_IMU)) return ESP_ERR_NOT_SUPPORTED;
         /* HTTP GET — this is the WebSocket upgrade request. Mark this session
          * as an IMU subscriber (see s_imu_ws_marker above), then return
          * ESP_OK to let the server complete the handshake. */
@@ -511,8 +527,8 @@ static void imu_ws_task(void *arg)
 
         if (!s_http_server) continue;
 
-        mole_imu_sample_t s;
-        mole_imu_get(&s);
+        molty_imu_sample_t s;
+        molty_imu_get(&s);
 
         char json[256];
         int jlen = snprintf(json, sizeof(json),
@@ -584,11 +600,13 @@ static void mic_stream_task(void *arg)
     free(a);
 
     // ── Start the mic stream ──────────────────────────────────────────────────
-    esp_err_t ret = mole_audio_rx_start_stream(rate, chunk_ms, gain);
+    esp_err_t ret = molty_mic_stream_start(rate, chunk_ms, gain);
     if (ret != ESP_OK) {
         // Send error frame then bail
         char err[128];
-        snprintf(err, sizeof(err),
+        if (ret == ESP_ERR_NOT_SUPPORTED)
+            snprintf(err, sizeof(err), "{\"type\":\"error\",\"error\":\"unsupported\"}");
+        else snprintf(err, sizeof(err),
             "{\"type\":\"error\",\"error\":\"start_stream_failed\",\"code\":%d}",
             (int)ret);
         httpd_ws_frame_t ef = {
@@ -635,13 +653,13 @@ static void mic_stream_task(void *arg)
     }
 
     // ── Streaming loop ────────────────────────────────────────────────────────
-    // i2s_channel_read inside mole_audio_rx_read_chunk blocks for ~chunk_ms,
+    // i2s_channel_read inside the board's mic stream_read blocks for ~chunk_ms,
     // which naturally paces the loop.  We exit if:
     //   - the stream is flagged inactive (stop command arrived via the handler)
     //   - the send fails (client disconnected)
-    while (mole_audio_rx_stream_active()) {
+    while (molty_mic_stream_active()) {
         size_t got = 0;
-        ret = mole_audio_rx_read_chunk(mono, chunk_samples, &got);
+        ret = molty_mic_stream_read(mono, chunk_samples, &got);
         if (ret != ESP_OK) break;
 
         httpd_ws_frame_t bf = {
@@ -661,7 +679,7 @@ static void mic_stream_task(void *arg)
     free(mono);
 
 cleanup:
-    mole_audio_rx_stop_stream();
+    molty_mic_stream_stop();
     vTaskDelete(NULL);
 }
 
@@ -672,7 +690,7 @@ static esp_err_t handler_ws_audio_mic(httpd_req_t *r)
     if (r->method == HTTP_GET) {
         // WebSocket upgrade request.
         // Reject immediately if mic is already in use.
-        if (mole_audio_rx_stream_active()) {
+        if (molty_mic_stream_active()) {
             // We must complete the WS handshake before we can send a WS frame,
             // but esp_http_server doesn't provide a "reject upgrade" path that
             // still sends a WS close frame cleanly. Instead, return ESP_OK to
@@ -706,7 +724,7 @@ static esp_err_t handler_ws_audio_mic(httpd_req_t *r)
 
     if (strcmp(cmd, "start") == 0) {
         // Reject if mic is already busy
-        if (mole_audio_rx_stream_active()) {
+        if (molty_mic_stream_active()) {
             const char *err = "{\"type\":\"error\",\"error\":\"mic_busy\"}";
             httpd_ws_frame_t ef = {
                 .final = true, .fragmented = false,
@@ -731,7 +749,7 @@ static esp_err_t handler_ws_audio_mic(httpd_req_t *r)
         if (http_json_get_str((char *)payload, "gain", val, sizeof(val)))
             gain = (uint8_t)atoi(val);
 
-        // Clamp here too (mole_audio_rx_start_stream also clamps, but we want
+        // Clamp here too (the board's stream_start also clamps, but we want
         // the confirmed values in the "started" frame).
         if (rate < 8000)  rate = 8000;
         if (rate > 32000) rate = 32000;
@@ -775,8 +793,8 @@ static esp_err_t handler_ws_audio_mic(httpd_req_t *r)
 
     } else if (strcmp(cmd, "stop") == 0) {
         // Signal the streaming task to stop by flagging the stream inactive.
-        // The task checks mole_audio_rx_stream_active() in its loop condition.
-        mole_audio_rx_stop_stream();
+        // The task checks molty_mic_stream_active() in its loop condition.
+        molty_mic_stream_stop();
     }
 
     free(payload);
@@ -1069,11 +1087,32 @@ static esp_err_t handler_ota(httpd_req_t *r)
     char *buf = heap_caps_malloc(8192, MALLOC_CAP_SPIRAM);
     if (!buf) { esp_ota_abort(h); return http_send_json(r, "{\"ok\":false,\"error\":\"oom\"}"); }
     int remaining = r->content_len, total = 0;
+    /* the image's board tag (molty_board.h) sits in its first bytes: refuse an image
+     * built for another board before it can boot here */
+    uint8_t head[MOLTY_IMAGE_TAG_OFFSET + MOLTY_IMAGE_TAG_BYTES];
+    size_t have = 0;
+    bool checked = false;
     while (remaining > 0) {
         int want = remaining < 8192 ? remaining : 8192;
         int rcv = httpd_req_recv(r, buf, want);
         if (rcv == HTTPD_SOCK_ERR_TIMEOUT) continue;
         if (rcv <= 0) { heap_caps_free(buf); esp_ota_abort(h); return http_send_json(r, "{\"ok\":false,\"error\":\"recv\"}"); }
+        if (!checked) {
+            size_t n = sizeof(head) - have < (size_t)rcv ? sizeof(head) - have : (size_t)rcv;
+            memcpy(head + have, buf, n);
+            have += n;
+            if (have == sizeof(head)) {
+                checked = true;
+                char other[64];
+                if (molty_board_image_check(head, have, other, sizeof(other)) == 0) {
+                    heap_caps_free(buf); esp_ota_abort(h);
+                    char b[192];
+                    snprintf(b, sizeof(b), "{\"ok\":false,\"error\":\"wrong_board\",\"image\":\"%s\",\"device\":\"%s\"}",
+                             other, molty_board_dir());
+                    return http_send_json(r, b);
+                }
+            }
+        }
         if (esp_ota_write(h, buf, rcv) != ESP_OK) { heap_caps_free(buf); esp_ota_abort(h); return http_send_json(r, "{\"ok\":false,\"error\":\"write\"}"); }
         remaining -= rcv; total += rcv;
     }
@@ -1124,7 +1163,7 @@ static esp_err_t handler_info(httpd_req_t *r)
     // Task watchdog: "on" when CONFIG_ESP_TASK_WDT_PANIC is set, so a wedge on a
     // subscribed task panics -> coredump (GET /api/coredump). The list is a
     // literal (the TWDT has no "list subscribers" API): keep it in sync with the
-    // esp_task_wdt_add() call sites (mole_imu.c, imu_ws_task, mole_fluid.c).
+    // esp_task_wdt_add() call sites (qmi8658.c, imu_ws_task, mole_fluid.c).
 #if CONFIG_ESP_TASK_WDT_PANIC
     static const char *k_twdt_state = "on";
 #else
@@ -1132,13 +1171,32 @@ static esp_err_t handler_info(httpd_req_t *r)
 #endif
     static const char *k_twdt_tasks = "[\"imu_poll\",\"imu_ws\",\"fluid_task\",\"fluid_draw\"]";
 
-    char buf[768];
+    // The board: id, display and the capabilities that came up (molty_board.h).
+    char caps[160] = "[";
+    for (int i = 0, n = 1; i < MOLTY_CAP_COUNT; i++) {
+        if (!molty_board_has(1u << i)) continue;
+        n += snprintf(caps + n, sizeof(caps) - (size_t)n, "%s\"%s\"", n > 1 ? "," : "", molty_cap_name(i));
+        if (n >= (int)sizeof(caps) - 2) { n = (int)sizeof(caps) - 2; break; }
+    }
+    strlcat(caps, "]", sizeof(caps));
+    char mismatch[192] = "";
+    if (molty_board_mismatch()) snprintf(mismatch, sizeof(mismatch), "\"board_mismatch\":\"%s\",", molty_board_mismatch());
+    char battery[32] = "";
+    int mv = 0;
+    if (molty_battery_mv(&mv) == ESP_OK) snprintf(battery, sizeof(battery), "\"battery_mv\":%d,", mv);
+
+    char buf[1280];
     snprintf(buf, sizeof(buf),
         "{\"ok\":true,"
         "\"chip\":\"esp32-s3\","
+        "\"board\":\"%s\","
+        "\"board_name\":\"%s\","
+        "\"display\":{\"width\":%d,\"height\":%d,\"shape\":\"%s\"},"
+        "\"caps\":%s,"
+        "%s%s"
         "\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\","
         "\"flash_mb\":%lu,"
-        "\"psram_mb\":8,"
+        "\"psram_mb\":%lu,"
         "\"free_heap\":%lu,"
         "\"free_psram\":%lu,"
         "\"uptime_ms\":%lu,"
@@ -1153,8 +1211,13 @@ static esp_err_t handler_info(httpd_req_t *r)
         "\"idf_version\":\"v5.5\","
         "\"fw\":\"%s\","
         "\"fw_build\":\"" __DATE__ "T" __TIME__ "\"}",
+        molty_board_id(), molty_board_name(),
+        molty_display_width(), molty_display_height(),
+        molty_display_shape() == MOLTY_SHAPE_ROUND ? "round" : "rect",
+        caps, mismatch, battery,
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
         (unsigned long)(flash_size / (1024 * 1024)),
+        (unsigned long)(esp_psram_get_size() / (1024 * 1024)),
         (unsigned long)esp_get_free_heap_size(),
         (unsigned long)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
         (unsigned long)uptime_ms,
@@ -1174,8 +1237,9 @@ static esp_err_t handler_info(httpd_req_t *r)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ── GET /api/framebuffer — screenshot of the LCD ───────────────────────────────
-// Streams the live 412×412 framebuffer as a binary PPM (P6). The framebuffer
-// (mole_lcd_framebuffer()) holds RGB565 byte-swapped for the SPI panel's wire
+// Streams the live framebuffer (the board's display size, 412×412 on the 1.46) as a
+// binary PPM (P6). The framebuffer (molty_display_framebuffer()) holds RGB565
+// byte-swapped for the SPI panel's wire
 // order; we swap back and expand 5/6/5 bits to 8 bits per channel.
 // Consistency: there is no framebuffer lock, so we memcpy the whole 339 KB
 // buffer first (sub-millisecond) and convert from the copy; a frame can still,
@@ -1192,12 +1256,12 @@ static inline void rgb565_be_to_rgb888(uint16_t stored, uint8_t *out /* r,g,b */
     out[2] = (uint8_t)((b5 << 3) | (b5 >> 2));   // 5→8 bits
 }
 
-#define FB_PARITY_ROWS_PER_CHUNK 32   // 32*412*3 = 39,552 B/chunk — modest scratch, ~13 chunks/frame
+#define FB_PARITY_ROWS_PER_CHUNK 32   // 32*412*3 = 39,552 B/chunk on the 1.46 — modest scratch, ~13 chunks/frame
 
 static esp_err_t handler_framebuffer(httpd_req_t *r)
 {
-    const int W = MOLE_LCD_WIDTH, H = MOLE_LCD_HEIGHT;
-    uint16_t *live_fb = mole_lcd_framebuffer();
+    const int W = molty_display_width(), H = molty_display_height();
+    uint16_t *live_fb = molty_display_framebuffer();
     if (!live_fb) return http_send_json(r, "{\"ok\":false,\"error\":\"no_framebuffer\"}");
 
     size_t fb_bytes = (size_t)W * H * sizeof(uint16_t);
@@ -1243,7 +1307,7 @@ static esp_err_t handler_framebuffer(httpd_req_t *r)
 // ═════════════════════════════════════════════════════════════════════════════
 // ── Coredump retrieval ─────────────────────────────────────────────────────────
 // ═════════════════════════════════════════════════════════════════════════════
-// CONFIG_ESP_CONSOLE_NONE (sdkconfig.defaults.esp32s3) means this board has no
+// CONFIG_ESP_CONSOLE_NONE (the 1.46 sdkconfig.board) means that board has no
 // UART / USB-Serial-JTAG console at all, so a panic prints to nowhere and
 // `idf.py monitor`/serial-based coredump capture is not an option.
 // CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH (sdkconfig.defaults) instead writes an
@@ -1386,5 +1450,6 @@ esp_err_t http_server_start(void)
 
 void http_imu_ws_start(void)
 {
+    if (!molty_board_has(MOLTY_CAP_IMU)) return;   /* no IMU: no streamer (the upgrade is refused) */
     xTaskCreate(imu_ws_task, "imu_ws", 4096, NULL, 4, NULL);
 }

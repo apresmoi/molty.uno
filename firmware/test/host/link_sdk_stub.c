@@ -86,27 +86,29 @@ void mole_diag_event(bool important, const char *fmt, ...) { (void)important; (v
 esp_err_t sdk_rx_error;
 unsigned sdk_rx_chunks;
 static bool sdk_rx_open;
-esp_err_t mole_audio_rx_start_stream(uint32_t rate, uint32_t ms, uint8_t gain) {
+esp_err_t molty_mic_stream_start(uint32_t rate, uint32_t ms, uint8_t gain) {
     assert(rate==16000 && ms>0 && gain>0 && !sdk_rx_open); sdk_rx_open=true; return ESP_OK;
 }
-esp_err_t mole_audio_rx_read_chunk(int16_t *buf, size_t n, size_t *got) {
+esp_err_t molty_mic_stream_read(int16_t *buf, size_t n, size_t *got) {
     assert(sdk_rx_open); if (sdk_rx_error) { *got=0; return sdk_rx_error; }
     memset(buf,0,n*2); *got=n; sdk_rx_chunks++; return ESP_OK;
 }
-void mole_audio_rx_stop_stream(void) { assert(sdk_rx_open); sdk_rx_open=false; }
-esp_err_t gpio_config(const gpio_config_t *cfg) { (void)cfg; return ESP_OK; }
-int gpio_get_level(int pin) { return sdk_gpio[pin]; }
+void molty_mic_stream_stop(void) { assert(sdk_rx_open); sdk_rx_open=false; }
+uint32_t sdk_caps = 0xFFFFFFFFu;
+bool molty_board_has(uint32_t caps) { return caps && (sdk_caps & caps) == caps; }
+const char *molty_board_id(void) { return "test-board"; }
+bool molty_button_pressed(molty_button_t b) {
+    uint32_t need = b == MOLTY_BTN_ACCEPT ? MOLTY_CAP_BTN_ACCEPT : MOLTY_CAP_BTN_REJECT;
+    return (sdk_caps & need) && sdk_gpio[b == MOLTY_BTN_ACCEPT ? 0 : 6] == 0;
+}
 esp_err_t mole_creature_select(const char *name) { assert(name); return ESP_OK; }
 const char *mole_creature_current(void) { return "fluid"; }
 esp_err_t mole_creature_state_get(char **out) { *out=strdup("{\"state\":\"blob\"}"); return ESP_OK; }
 esp_err_t mole_creature_state_set(const char *json) { assert(strlen(json)<sizeof(sdk_state)); strcpy(sdk_state,json); return ESP_OK; }
-esp_err_t mole_audio_tx_stream_begin(uint32_t rate) { assert(rate==16000); return ESP_OK; }
-esp_err_t mole_audio_tx_stream_write(const int16_t *pcm, size_t n) { assert(pcm); sdk_written+=n*2; return sdk_play_error; }
-esp_err_t mole_audio_tx_stream_drain(void) { sdk_drained++; return sdk_play_error; }
-void mole_audio_tx_stream_end(void) {}
-esp_err_t mole_audio_record_raw(uint32_t rate, uint32_t ms, int16_t **out, size_t *n) {
-    assert(rate==16000); *n=(size_t)ms*16; *out=calloc(*n,2); return ESP_OK;
-}
+esp_err_t molty_speaker_stream_begin(uint32_t rate) { assert(rate==16000); return ESP_OK; }
+esp_err_t molty_speaker_stream_write(const int16_t *pcm, size_t n) { assert(pcm); sdk_written+=n*2; return sdk_play_error; }
+esp_err_t molty_speaker_stream_drain(void) { sdk_drained++; return sdk_play_error; }
+void molty_speaker_stream_end(void) {}
 void esp_crt_bundle_attach(void) {}
 esp_netif_t *esp_netif_get_handle_from_ifkey(const char *key) { (void)key; return (void *)1; }
 bool esp_netif_is_netif_up(esp_netif_t *net) { (void)net; return true; }

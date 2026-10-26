@@ -2,6 +2,8 @@
 # Hands-free serial flash: ask the running firmware to reboot into ROM download
 # mode (POST /api/reboot_bootloader), wait for the USB-Serial-JTAG port, flash.
 # Needs firmware already running on the device (it serves that endpoint).
+# Boards with native USB on USB-C only (the 1.46: the plain build in build/). Boards
+# with a USB-UART bridge (the 1.28) auto-reset into the bootloader: use esptool directly.
 # Usage: ./flash_auto.sh   (from this directory; build/ must be current)
 # Env: MOLTY_URL (default http://10.13.37.1), PORT (serial port, required on most
 #      machines, e.g. /dev/cu.usbmodem2101 on macOS), IDF_PATH (default ~/esp/esp-idf),

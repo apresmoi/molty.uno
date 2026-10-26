@@ -19,6 +19,7 @@ const STATUS: Record<string, number> = {
   timeout: 408,
   device_offline: 409,
   audio_busy: 409,
+  unsupported: 409,
   pair_busy: 409,
   device_timeout: 504,
   internal: 500,

@@ -81,10 +81,10 @@ export function makeRoom(opts: { kv?: MemoryKV; host?: FakeHost; voice?: FakeVoi
   return { room, kv, host, voice };
 }
 
-export async function connect(room: DeviceRoom, host: FakeHost, key = KEY, link: string | null = LINK) {
+export async function connect(room: DeviceRoom, host: FakeHost, key = KEY, link: string | null = LINK, hello: Record<string, unknown> = {}) {
   const s = host.open();
   room.socketOpen(s);
-  await room.socketMessage(s, JSON.stringify({ t: "hello", id: DEVICE, key, fw: "test-fw", caps: ["say", "listen"], ...(link ? { link_code: link } : {}) }));
+  await room.socketMessage(s, JSON.stringify({ t: "hello", id: DEVICE, key, fw: "test-fw", caps: ["say", "listen"], ...(link ? { link_code: link } : {}), ...hello }));
   return s;
 }
 

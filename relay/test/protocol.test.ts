@@ -44,6 +44,9 @@ describe("text frames and hello", () => {
   it("validates hello fields", () => {
     expect(parseHello({ t: "hello", id: "molty-k7m2q9xa4c", key: "AAAA", link_code: "ABCD2345" })).toBeDefined();
     expect(parseHello({ t: "hello", id: "molty-XYZ", key: "AAAA" })).toBeUndefined();
+    expect(parseHello({ t: "hello", id: "molty-k7m2q9xa4c", key: "AAAA", board: "waveshare-esp32-s3-touch-lcd-1.28" })).toBeDefined();
+    expect(parseHello({ t: "hello", id: "molty-k7m2q9xa4c", key: "AAAA", board: "Bad Board!" })).toBeUndefined();
+    expect(parseHello({ t: "hello", id: "molty-k7m2q9xa4c", key: "AAAA", board: 7 })).toBeUndefined();
     expect(parseHello({ t: "hello", id: "molty-k7m2q9xa4c", key: "AAAA", link_code: "abcd2345" })).toBeUndefined();
     expect(parseHello({ t: "hello", id: "molty-k7m2q9xa4c", key: "AAAA", caps: [1] })).toBeUndefined();
   });

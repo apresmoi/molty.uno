@@ -21,7 +21,7 @@ check` (run by CI's hygiene job) fails when they drift.
    `## vX.Y.Z — <date>`):
    ```sh
    node scripts/version.mjs bump patch      # or minor | major | 1.2.3 | 1.2.3-rc.1
-   make test && make console firmware       # optional local check
+   make test && make console firmware-all   # optional local check (every board)
    ```
 4. Commit, tag and push:
    ```sh
@@ -40,8 +40,8 @@ check` (run by CI's hygiene job) fails when they drift.
 
 | Asset | What it is |
 |---|---|
-| `molty-X.Y.Z-ota.bin` | App image only. Updates a running device: `firmware/ota.sh` or `POST /api/ota`. |
-| `molty-X.Y.Z-factory.bin` | Bootloader + partition table + otadata + app + console (SPIFFS), merged; flash at `0x0`. |
+| `molty-X.Y.Z-<board>-ota.bin` | App image only, per board (e.g. `waveshare-esp32-s3-touch-lcd-1.46`). Updates a running device: `firmware/ota.sh` or `POST /api/ota`, which refuses another board's image. |
+| `molty-X.Y.Z-<board>-factory.bin` | Bootloader + partition table + otadata + app + console (SPIFFS), merged; flash at `0x0`. |
 | `molty-X.Y.Z-console.html` | The console page (also inside both firmware images). |
 | `molty-X.Y.Z-{linux,darwin}-{amd64,arm64}.tar.gz`, `…-windows-{amd64,arm64}.zip` | `molty` CLI, with `LICENSE` and `THIRD_PARTY_NOTICES.md`. |
 | `LICENSE`, `THIRD_PARTY_NOTICES.md`, `LICENSE-Apache-2.0.txt` | Licences that must accompany the firmware binaries (ESP-IDF is Apache-2.0). |
@@ -58,7 +58,7 @@ plugging in USB-C), then:
 ```sh
 sha256sum -c SHA256SUMS --ignore-missing
 python -m esptool --chip esp32s3 -p PORT -b 460800 \
-  --before default_reset --after hard_reset write_flash 0x0 molty-X.Y.Z-factory.bin
+  --before default_reset --after hard_reset write_flash 0x0 molty-X.Y.Z-<board>-factory.bin
 ```
 
 Unplug and replug to boot. `esptool` ships with ESP-IDF, or `pip install esptool`.
@@ -66,7 +66,7 @@ Unplug and replug to boot. `esptool` ships with ESP-IDF, or `pip install esptool
 **A device already running Molty: the OTA image.** Keeps settings and pairings.
 
 ```sh
-curl -fsS -m120 -X POST --data-binary @molty-X.Y.Z-ota.bin http://10.13.37.1/api/ota
+curl -fsS -m120 -X POST --data-binary @molty-X.Y.Z-<board>-ota.bin http://10.13.37.1/api/ota
 ```
 
 or `./ota.sh` from `firmware/` for a local build. Check it landed:
@@ -105,8 +105,10 @@ DNS for `molty.uno` pointing at GitHub Pages. The domain comes from
 
 [`ci.yml`](../.github/workflows/ci.yml) runs on every pull request and push to `main`:
 hygiene (no secrets or local paths, licences present, versions agree), console
-(typecheck, unit tests, build, Playwright walk-through), firmware (ESP-IDF v5.5 build in
-the pinned `espressif/idf` image, host tests, app size ≤ 90% of its OTA slot), relay
+(typecheck, unit tests, build, Playwright walk-through), firmware (one ESP-IDF v5.5 build
+per `firmware/boards/**/board.json` in the pinned `espressif/idf` image, each checked for
+its image's board tag and app size ≤ 90% of its OTA slot; `scripts/firmware-boards.py
+check` first), firmware host tests (fluid goldens, cute runtime, agent link), relay
 (typecheck, tests, bundle), CLI (gofmt, vet, tests, build), creatures (re-export must
 match the committed `.molty` files) and website (check, build). Each has a `make`
 target to run it locally (`make help`).

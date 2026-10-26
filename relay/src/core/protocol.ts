@@ -34,8 +34,12 @@ export interface HelloFrame {
   key: string;
   fw?: string;
   caps?: string[];
+  /** firmware/boards/ name of the hardware, e.g. "waveshare-esp32-s3-touch-lcd-1.28". */
+  board?: string;
   link_code?: string;
 }
+
+export const BOARD_RE = /^[a-z0-9][a-z0-9.-]{0,63}$/;
 
 export interface AudioHeader {
   s: string;
@@ -66,6 +70,7 @@ export function parseHello(frame: Record<string, unknown>): HelloFrame | undefin
   if (!DEVICE_ID_RE.test(frame.id)) return undefined;
   if (frame.fw !== undefined && typeof frame.fw !== "string") return undefined;
   if (frame.caps !== undefined && !(Array.isArray(frame.caps) && frame.caps.every((c) => typeof c === "string"))) return undefined;
+  if (frame.board !== undefined && (typeof frame.board !== "string" || !BOARD_RE.test(frame.board))) return undefined;
   if (frame.link_code !== undefined && (typeof frame.link_code !== "string" || !LINK_CODE_RE.test(frame.link_code))) return undefined;
   return frame as unknown as HelloFrame;
 }

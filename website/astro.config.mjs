@@ -92,6 +92,7 @@ export default defineConfig({
             { label: 'Introduction', slug: 'getting-started/introduction' },
             { label: 'Flash a release', slug: 'getting-started/flash-a-release' },
             { label: 'Set up your Molty', slug: 'getting-started/setup' },
+            { label: 'Porting to your board', slug: 'getting-started/porting' },
           ],
         },
         {

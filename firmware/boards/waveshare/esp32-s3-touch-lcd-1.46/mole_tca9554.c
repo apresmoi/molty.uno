@@ -6,7 +6,7 @@
  * Register sequences derived from Waveshare's ESP32-S3-Touch-LCD-1.46 demo code
  * (Arduino/examples/LVGL_Arduino/TCA9554PWR.cpp) and the TCA9554 datasheet.
  * Uses IDF i2c_master API (NOT the deprecated driver/i2c.h).
- * The I2C bus is created by mole_imu_init(); this module adds itself as a device.
+ * The I2C bus is created by board.c; this module adds itself as a device.
  */
 
 #include "mole_tca9554.h"

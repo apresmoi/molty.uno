@@ -26,13 +26,13 @@ static const uint8_t *font(char c) {
 }
 
 static void write_sheet(const char *path, uint16_t **fbs, int n) {
-    int cols = 4, rows = (n + cols - 1) / cols, W = FLUID_PANEL * cols, H = FLUID_PANEL * rows;
+    int cols = 4, rows = (n + cols - 1) / cols, W = FLUID_STAGE_REF * cols, H = FLUID_STAGE_REF * rows;
     FILE *f = fopen(path, "wb");
     if (!f) return;
     fprintf(f, "P6\n%d %d\n255\n", W, H);
     for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
-        int k = (y / FLUID_PANEL) * cols + x / FLUID_PANEL;
-        uint16_t be = k < n ? fbs[k][(y % FLUID_PANEL) * FLUID_PANEL + x % FLUID_PANEL] : 0, le = (uint16_t)((be >> 8) | (be << 8));
+        int k = (y / FLUID_STAGE_REF) * cols + x / FLUID_STAGE_REF;
+        uint16_t be = k < n ? fbs[k][(y % FLUID_STAGE_REF) * FLUID_STAGE_REF + x % FLUID_STAGE_REF] : 0, le = (uint16_t)((be >> 8) | (be << 8));
         unsigned char c[3] = { (unsigned char)((le >> 11) << 3), (unsigned char)(((le >> 5) & 63) << 2), (unsigned char)((le & 31) << 3) };
         fwrite(c, 1, 3, f);
     }
@@ -61,15 +61,15 @@ static void test_file(const char *path, const char *outdir) {
     CHECK(rt != NULL, "%s: create", path);
     if (!rt) return;
     const int W = 52, H = 32;
-    fluid_sim_t *s = fluid_sim_create(W, H);
-    fluid_draw_t *d = fluid_draw_create(W, H);
+    fluid_sim_t *s = fluid_sim_create(W, H, FLUID_STAGE_REF);
+    fluid_draw_t *d = fluid_draw_create(W, H, FLUID_STAGE_REF, FLUID_STAGE_REF);
     fluid_frame_t *fr = fluid_frame_create(W, H);
     uint16_t *fbs[CUTE_N_MOODS];
     s->edge_w = 1.f;
     int worst_tris = 0;
     for (int m = 0; m < CUTE_N_MOODS; m++) {
         cute_rt_set_mood(rt, m);
-        fbs[m] = calloc(FLUID_PANEL * FLUID_PANEL, 2);
+        fbs[m] = calloc(FLUID_STAGE_REF * FLUID_STAGE_REF, 2);
         float cov = 0; int feats = 0;
         for (int fno = 0; fno < 75; fno++) {       /* 2.5 s at 30 fps */
             float t = fno / 30.f;

@@ -6,10 +6,12 @@
 # ESP-IDF itself only fails at 100%, by which point an OTA-able headroom is gone.
 # Writes a markdown table to $GITHUB_STEP_SUMMARY when set (CI).
 #
-#   scripts/firmware-size.sh [build-dir]        (default firmware/build)
+#   scripts/firmware-size.sh [build-dir] [label]   (default firmware/build; label = the
+#                                                   board name, for the CI summary)
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="${1:-$ROOT/firmware/build}"
+LABEL="${2:-molty.bin}"
 LIMIT_PCT="${LIMIT_PCT:-90}"
 
 app="$BUILD/molty.bin"
@@ -21,11 +23,11 @@ slot=$((slot_hex))
 pct=$(awk -v s="$size" -v t="$slot" 'BEGIN { printf "%.1f", 100 * s / t }')
 free=$((slot - size))
 
-line="app molty.bin: $size B of $slot B ota slot ($slot_hex) = ${pct}% used, $free B free (limit ${LIMIT_PCT}%)"
+line="app $LABEL: $size B of $slot B ota slot ($slot_hex) = ${pct}% used, $free B free (limit ${LIMIT_PCT}%)"
 echo "$line"
 if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
   {
-    echo "### Firmware size"
+    echo "### Firmware size: $LABEL"
     echo
     echo "| image | bytes | slot | used | free |"
     echo "|---|---:|---:|---:|---:|"
@@ -33,6 +35,6 @@ if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
   } >> "$GITHUB_STEP_SUMMARY"
 fi
 if awk -v p="$pct" -v l="$LIMIT_PCT" 'BEGIN { exit !(p > l) }'; then
-  echo "::error::firmware app is ${pct}% of its OTA slot (limit ${LIMIT_PCT}%)" >&2
+  echo "::error::firmware app ($LABEL) is ${pct}% of its OTA slot (limit ${LIMIT_PCT}%)" >&2
   exit 1
 fi

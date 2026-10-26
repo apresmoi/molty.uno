@@ -13,6 +13,7 @@
  */
 
 #include "mole_audio.h"
+#include "board.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -32,14 +33,7 @@
 static const char *TAG = "mole_audio";
 static void rx_release(void);
 
-// ── Pin definitions ────────────────────────────────────────────────────────────
-#define AUDIO_TX_BCLK   48
-#define AUDIO_TX_LRC    38
-#define AUDIO_TX_DOUT   47
-
-#define AUDIO_RX_CLK    15
-#define AUDIO_RX_WS      2
-#define AUDIO_RX_DIN    39
+// Pins: board.h
 
 // I2S port assignments: TX on I2S_NUM_0, RX on I2S_NUM_1.
 // IMPORTANT — the Waveshare 1.46 mic is **standard-mode I2S, NOT PDM**, despite

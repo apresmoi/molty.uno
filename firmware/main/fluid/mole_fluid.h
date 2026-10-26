@@ -1,9 +1,6 @@
 /*
  * mole_fluid.h — "fluid" creature: Molty as a fluid of characters.
  *
- * Target board: Waveshare ESP32-S3-Touch-LCD-1.46 (412x412 round LCD)
- * FQBN: esp32:esp32:esp32s3:FlashSize=16M,PSRAM=enabled,CDCOnBoot=cdc
- *
  * Device port of creatures/fluid.html. One per-cell fluid (fluid_sim.h)
  * fills the round panel as braille dots; states are targets it flows toward:
  * blob, thinking, text (speed reader), effect:ripple|vortex|wave, and an autoplay

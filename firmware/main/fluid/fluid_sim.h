@@ -1,8 +1,9 @@
 /*
  * fluid_sim.h — "fluid of characters" core: per-cell fluid sim, targets, braille renderer.
  *
- * Target board: Waveshare ESP32-S3-Touch-LCD-1.46 (412x412 round LCD)
- * FQBN: esp32:esp32:esp32s3:FlashSize=16M,PSRAM=enabled,CDCOnBoot=cdc
+ * Panel-agnostic: the fluid fills a square STAGE (the largest centred square of the
+ * board's display, sized at runtime — see molty_board.h); every pixel size here is in
+ * stage px. Tuned on the 412x412 Waveshare 1.46, where stage = panel.
  *
  * Plain-C port of creatures/js/fluid/{sim,synth,targets,render}.js.
  * NO ESP-IDF dependencies: the same three .c files (fluid_sim.c, fluid_target.c,
@@ -34,7 +35,7 @@
 extern "C" {
 #endif
 
-#define FLUID_PANEL       412
+#define FLUID_STAGE_REF   412      /* stage px the pixel constants were tuned at (1.46) */
 #define FLUID_GRID_MIN_W  24
 #define FLUID_GRID_MAX_W  64
 #define FLUID_GRID_MIN_H  16
@@ -100,6 +101,7 @@ static inline uint32_t fluid_pack_rgba8(float r, float g, float b, float a) {
 
 typedef struct {
     int W, H, N, inside;
+    int stage;                         /* stage side, px                                  */
     float A;                           /* cell aspect cellH/cellW                         */
     float *xs, *ys;                    /* cell centres in −1..1 (per column / per row)    */
     /* hot fields (internal DRAM when it fits) */
@@ -122,7 +124,11 @@ typedef struct {
 
 /** Prototype SIM_TUNING defaults. */
 void         fluid_params_default(fluid_params_t *p);
-fluid_sim_t *fluid_sim_create(int W, int H);
+/** W×H cells over a square stage of `stage` px (cells are stage/W × stage/H px). */
+fluid_sim_t *fluid_sim_create(int W, int H, int stage);
+/** Default grid for a stage: the 1.46's 52×32 at the same cell size in px, clamped to
+ *  the FLUID_GRID limits (412 → 52×32, 240 → 30×19). */
+void         fluid_grid_for_stage(int stage, int *W, int *H);
 void         fluid_sim_destroy(fluid_sim_t *s);
 /** Gaussian bump in the height field; x,y in −1..1 stage space. */
 void  fluid_sim_impulse(fluid_sim_t *s, float x, float y, float strength, float radius);
@@ -200,12 +206,13 @@ void fluid_effect_exit(fluid_sim_t *s, int fx);
 typedef struct {
     char  ch;
     bool  acc;                         /* ORP letter                                      */
-    float x, y, w, h, fs;              /* panel px                                        */
+    float x, y, w, h, fs;              /* stage px                                        */
 } fluid_letter_t;
 
 typedef struct {
     float *cov, *orp, *near, *near_s, *dark, *tmp;
     void  *block;
+    int    stage;                      /* the sim's stage side, px                        */
     float  plain_font;
     int    nletters;
     fluid_letter_t letters[FLUID_MAX_LETTERS];
@@ -236,14 +243,16 @@ uint8_t fluid_braille_contour(const float *sub);
 
 typedef struct {
     int W, H;
+    int fb_w, fb_h;                    /* framebuffer geometry (row stride = fb_w)        */
+    int stage, ox, oy;                 /* the square stage inside it, px                  */
     int dot_w, dot_h;
-    int16_t *cx;                       /* W+1 cell x edges (px)                           */
+    int16_t *cx;                       /* W+1 cell x edges (fb px)                        */
     int16_t *cy;                       /* H+1 cell y edges                                */
     int16_t *dx;                       /* 2·W dot left x                                  */
     int16_t *dy;                       /* 4·H dot top y                                   */
     uint16_t *key, *col;               /* per-cell last-drawn (dots|kind, rgb565)         */
     uint8_t  *skip;
-    int8_t   yrow[FLUID_PANEL];        /* pixel row → dot row 0..3 inside its cell, or −1 */
+    int8_t   *yrow;                    /* fb row → dot row 0..3 inside its cell, or −1    */
     uint8_t  rdirty[FLUID_GRID_MAX_W]; /* per cell of the row being drawn               */
     void *block;
     bool force;                        /* redraw every cell next frame                    */
@@ -257,9 +266,11 @@ typedef struct {
     const uint8_t *(*font)(char);      /* 5×7 rows, bit (4-col); NULL → no ASCII/letters  */
 } fluid_draw_opts_t;
 
-fluid_draw_t *fluid_draw_create(int W, int H);
+/** W×H cells drawn into an fb_w×fb_h framebuffer; the stage is its largest centred
+ *  square (the whole framebuffer on a square panel). */
+fluid_draw_t *fluid_draw_create(int W, int H, int fb_w, int fb_h);
 void fluid_draw_destroy(fluid_draw_t *d);
-/** Draw into a 412×412 rgb565-BE framebuffer, touching only cells that changed.
+/** Draw into the fb_w×fb_h rgb565-BE framebuffer, touching only cells that changed.
  *  Returns cells drawn; *y0,*y1 = dirty row band ([0,0) when nothing changed). */
 int  fluid_draw(fluid_draw_t *d, const fluid_frame_t *f, uint16_t *fb,
                 const fluid_draw_opts_t *o, int *y0, int *y1);
