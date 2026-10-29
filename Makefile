@@ -92,12 +92,14 @@ version:
 WAITLIST_DB ?= molty-waitlist
 
 waitlist-export: relay
+	@test -n "$(CLOUDFLARE_ACCOUNT_ID)" || { echo "set CLOUDFLARE_ACCOUNT_ID to the account that holds molty-waitlist (and its wrangler login)"; exit 2; }
 	cd relay && pnpm exec wrangler d1 execute $(WAITLIST_DB) --remote --json \
 	  --command "SELECT email, created_at, source FROM waitlist ORDER BY created_at" \
 	| node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const rows=JSON.parse(s)[0].results;const q=v=>`"$${String(v).replace(/"/g,"\"\"")}"`;process.stdout.write(["email,created_at,source",...rows.map(r=>[r.email,r.created_at,r.source].map(q).join(","))].join("\n")+"\n");console.error(`$${rows.length} signups -> waitlist.csv`)})' \
 	> ../waitlist.csv
 
 waitlist-delete: relay
+	@test -n "$(CLOUDFLARE_ACCOUNT_ID)" || { echo "set CLOUDFLARE_ACCOUNT_ID to the account that holds molty-waitlist (and its wrangler login)"; exit 2; }
 	@case "$(EMAIL)" in ""|*"'"*|*" "*) echo "usage: make waitlist-delete EMAIL=someone@example.org"; exit 2;; esac
 	cd relay && pnpm exec wrangler d1 execute $(WAITLIST_DB) --remote \
 	  --command "DELETE FROM waitlist WHERE email = lower(trim('$(EMAIL)'))"
