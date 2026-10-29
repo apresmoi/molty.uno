@@ -1,0 +1,94 @@
+.form {
+  margin: 0;
+}
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--m-space-2) var(--m-space-4);
+}
+.label {
+  color: var(--m-dim);
+}
+.input {
+  flex: 1 1 16em;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: var(--m-space-2) var(--m-space-3);
+  border: 1px solid var(--m-faint);
+  border-radius: var(--m-radius);
+  background: var(--m-bg);
+  color: var(--m-ink);
+}
+.input::placeholder {
+  color: var(--m-faint);
+}
+.input:focus-visible {
+  border-color: var(--m-accent);
+  outline-offset: 0;
+}
+.input[aria-invalid="true"] {
+  border-color: var(--m-warn);
+}
+.submit {
+  padding: var(--m-space-2) 0;
+  border: 0;
+  background: transparent;
+  color: var(--m-accent);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.submit:hover {
+  color: var(--m-ink);
+}
+.submit:disabled {
+  color: var(--m-dim);
+  cursor: progress;
+}
+.status,
+.done,
+.error {
+  min-height: 1.55em;
+  margin: var(--m-space-3) 0 0;
+}
+.status {
+  color: var(--m-dim);
+}
+.done {
+  color: var(--m-accent);
+}
+.error {
+  color: var(--m-warn);
+}
+.status:empty {
+  min-height: 0;
+  margin: 0;
+}
+/* the no-JavaScript outcome: shown only when the redirect targets it, and never once the
+   island is live (it renders the outcome itself) */
+.target {
+  display: none;
+  scroll-margin-top: 50vh;
+}
+.form:not([data-live]) .target:target {
+  display: block;
+}
+.privacy {
+  margin: var(--m-space-4) 0 0;
+  color: var(--m-dim);
+  font-size: var(--m-text-sm);
+}
+.privacy a {
+  color: var(--m-dim);
+}
+.privacy a:hover {
+  color: var(--m-accent);
+}
+.trap {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

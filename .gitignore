@@ -1,5 +1,7 @@
 # Build output
 build/
+# ...but /build/'s source (the website feature for molty.uno/build) is code
+!website/src/features/build/
 dist/
 bin/
 *.o
@@ -20,6 +22,8 @@ node_modules/
 console/e2e-out/
 .wrangler/
 .dev.vars
+# the waitlist export (make waitlist-export): personal data, never committed
+waitlist.csv
 
 # Editors / OS
 .DS_Store

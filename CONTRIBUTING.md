@@ -34,6 +34,13 @@ firmware size gate (`make firmware-size`: the app must stay under 90% of its OTA
 - New source files: add `SPDX-License-Identifier: MIT`. Keep third-party notices intact
   and add new dependencies to `THIRD_PARTY_NOTICES.md`.
 
+## New boards
+
+A new board is one folder under `firmware/boards/` ([docs/PORTING.md](docs/PORTING.md)).
+Open its pull request with the board template (add `?template=board.md` to the PR URL,
+[`.github/PULL_REQUEST_TEMPLATE/board.md`](.github/PULL_REQUEST_TEMPLATE/board.md)): it
+asks for a photo, a short video and `/api/info` from the real hardware.
+
 ## Hardware
 
 You need the board to test firmware behaviour, but not to build or to run the host

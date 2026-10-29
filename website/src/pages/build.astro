@@ -1,0 +1,15 @@
+---
+import ContentLayout from "../layouts/ContentLayout.astro";
+import { BuildPage } from "../components/BuildPage";
+import { FluidField } from "../components/FluidField";
+import { WaitlistForm } from "../components/WaitlistForm";
+import { title, description } from "../features/build/content";
+import { COMMUNITY_BOARDS } from "../features/build/repoBoards";
+---
+
+<ContentLayout title={title} description={description} path="/build/">
+  <BuildPage boards={COMMUNITY_BOARDS}>
+    <FluidField slot="fluid" client:load />
+    <WaitlistForm slot="waitlist" client:load source="build" returnPath="/build/" />
+  </BuildPage>
+</ContentLayout>

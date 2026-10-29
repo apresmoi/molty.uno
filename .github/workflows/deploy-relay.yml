@@ -8,8 +8,9 @@ name: Deploy Relay
 # is "true". Set `dry_run` to bundle without deploying (needs no secrets).
 #
 # Secrets (repository or `relay` environment):
-#   CLOUDFLARE_API_TOKEN   API token with "Workers Scripts: Edit" (+ "Workers AI: Read"
-#                          is not needed to deploy) on the account below
+#   CLOUDFLARE_API_TOKEN   API token with "Workers Scripts: Edit" and "D1: Edit" (the
+#                          waitlist's migrations; "Workers AI: Read" is not needed to
+#                          deploy) on the account below
 #   CLOUDFLARE_ACCOUNT_ID  the Cloudflare account that owns the worker
 # Variable (optional):
 #   RELAY_URL              e.g. https://relay.example.com — after deploying, its
@@ -94,6 +95,16 @@ jobs:
         run: |
           [ -n "$CLOUDFLARE_API_TOKEN" ] || { echo "::error::secret CLOUDFLARE_API_TOKEN is not set"; exit 1; }
           [ -n "$CLOUDFLARE_ACCOUNT_ID" ] || { echo "::error::secret CLOUDFLARE_ACCOUNT_ID is not set"; exit 1; }
+
+      # The waitlist's D1 schema (relay/migrations; already-applied ones are skipped),
+      # before the code that uses it.
+      - name: Apply D1 migrations
+        if: env.DRY_RUN != 'true'
+        working-directory: relay
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm exec wrangler d1 migrations apply molty-waitlist --remote
 
       - name: Deploy
         if: env.DRY_RUN != 'true'

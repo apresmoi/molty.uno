@@ -24,12 +24,15 @@ relay/
 │  │  ├─ protocol.ts   wire constants, text/audio frame codecs
 │  │  ├─ audio.ts      WAV parse/encode, mono, resample, PCM16, levels
 │  │  ├─ crypto.ts     Web Crypto helpers, codes, base64
-│  │  └─ store.ts      KV + Clock seams (+ in-memory versions)
-│  ├─ surfaces/        Fetch-API only: mcp.ts (Streamable HTTP), rest.ts
+│  │  ├─ store.ts      KV + Clock seams (+ in-memory versions)
+│  │  └─ waitlist.ts   waitlist validation, WaitlistStore seam, rate-limit rule
+│  ├─ surfaces/        Fetch-API only: mcp.ts (Streamable HTTP), rest.ts, waitlist.ts
 │  ├─ voice/           VoiceProvider + workers-ai.ts, openai.ts, none.ts, index.ts (selection)
 │  ├─ device-object.ts Cloudflare host: DO + hibernatable WebSockets + storage adapter
+│  ├─ waitlist-host.ts Cloudflare host: D1 WaitlistStore + Turnstile check
 │  └─ worker.ts        Cloudflare host: routing + DO-backed RelayBackend
-├─ test/               vitest unit tests (79)
+├─ migrations/         D1 schema for the waitlist (wrangler d1 migrations)
+├─ test/               vitest unit tests
 └─ tools/              fake-device.mjs, agent-e2e.mjs, e2e.mjs (local end-to-end)
 ```
 
@@ -123,6 +126,51 @@ npx wrangler tail molty-relay
    - Pair a fake device against `wss://molty-relay.<subdomain>.workers.dev`.
    - Call `molty_say` to confirm real Aura TTS. This is the first point where the `@cf/deepgram/aura-2-en` linear16/wav output path is exercised for real.
    - Wait more than 30 s idle, then send a command to confirm hibernation survival. `wrangler dev` never evicts, so only a deployed Worker can prove it.
+
+## Waitlist
+
+The website's "want one built?" form (molty.uno/build) posts to `POST /waitlist` here.
+
+| | |
+|---|---|
+| Accepts | JSON `{email, website, source}` (the page's script) or a form-encoded POST (no JavaScript: answered with a 303 back to `<origin><return>?waitlist=ok#waitlist-ok`) |
+| Answers | `{ok:true}` for a new address, a known one (idempotent) and a filled honeypot (`website`) alike; `400 bad_email`, `429 rate_limited` (+ `Retry-After`), `403 forbidden_origin` / `human_check_failed`, `415`, `503 unavailable` |
+| CORS | `https://molty.uno`, `https://www.molty.uno`, `http://localhost:*`, `http://127.0.0.1:*`; another Origin is refused |
+| Rate limit | 5 requests per IP per hour, counted in D1 under `sha256(IP)`; past windows are deleted |
+| Stored | `email` (trimmed, lower-cased, unique), `created_at`, `source`. No IP, no user agent |
+| Human check | Cloudflare Turnstile, only when the `TURNSTILE_SECRET` secret is set (then set `TURNSTILE_SITE_KEY` in `website/src/config/site.mjs` too; signing up then needs JavaScript) |
+
+Set it up once, on the account the relay is deployed to (nothing in the repo does this):
+
+```sh
+cd relay
+pnpm install --frozen-lockfile
+npx wrangler whoami
+npx wrangler d1 create molty-waitlist
+npx wrangler d1 migrations apply molty-waitlist --remote
+npx wrangler secret put TURNSTILE_SECRET
+pnpm run deploy
+curl -s -X POST https://<relay>/waitlist -H 'content-type: application/json' -d '{"email":"you@example.org","source":"test"}'
+make -C .. waitlist-export
+```
+
+1. `whoami` shows the account every following command acts on.
+2. `d1 create` prints a `database_id`: paste it over the placeholder in `wrangler.jsonc`
+   (`d1_databases`). Until then a deploy fails, because the placeholder database does not exist.
+3. Applies `migrations/` (the `waitlist` and `waitlist_rate` tables). New migrations later:
+   the same command.
+4. Optional. Skip it and no human check runs.
+5. The website's `WAITLIST_URL` (`website/src/config/site.mjs`) must point at this relay's
+   `/waitlist`.
+6. Smoke test; then delete the test row: `make waitlist-delete EMAIL=you@example.org`.
+7. Writes `waitlist.csv` at the repo root (gitignored: personal data).
+
+Deleting an address (GDPR request): `make waitlist-delete EMAIL=someone@example.org` from
+the repo root. Everything about an address is that one row.
+
+Locally (no account): `pnpm exec wrangler d1 migrations apply molty-waitlist --local`, then
+`pnpm dev`; signups land in `.wrangler/state` (`--local` instead of `--remote` on any
+`d1 execute` reads them).
 
 ## Configure an agent
 
