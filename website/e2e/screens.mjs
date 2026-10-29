@@ -168,6 +168,8 @@ for (const [path, name, width] of [
   ['/getting-started/introduction/', 'docs-introduction-1440', 1440],
   ['/agents/protocol/', 'docs-protocol-1440', 1440],
   ['/agents/connect/', 'docs-connect-390', 390],
+  ['/build/', 'build-1440', 1440],
+  ['/build/', 'build-390', 390],
 ]) {
   const page = await open(width, 900, path);
   await page.screenshot({ path: OUT + `${name}.png` });

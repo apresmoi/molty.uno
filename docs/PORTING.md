@@ -28,10 +28,13 @@ panel, no audio, one button, USB-UART bridge).
 
 | | Needed | Why |
 |---|---|---|
-| Chip | ESP32-S3 | the only target built today |
+| Chip | ESP32-S3 | the only target built today (C3, C6 and the classic ESP32: not yet) |
 | Flash | 16 MB | the partition table: two 3.75 MB OTA slots + 8.4 MB SPIFFS (console page, creature) |
-| PSRAM | 2 MB or more, quad or octal | framebuffer, console page (~340 KB), TLS and Wi-Fi buffers |
+| PSRAM | 2 MB or more (8 MB recommended), quad or octal | framebuffer, console page (~340 KB), TLS and Wi-Fi buffers |
 | Display | any size, round or rectangular, RGB565 | the fluid draws in the largest centred square |
+
+molty.uno/build restates this table as "Will my board work?"
+(`website/src/features/build/content.ts`; its test fails when the two disagree).
 
 ## Capabilities
 
@@ -90,10 +93,15 @@ panel, no audio, one button, USB-UART bridge).
    the firmware checks them at boot and leaves every pin alone on hardware that differs.
    molty.uno/setup uses these to identify a board and offer only its firmware; the check
    below refuses two boards it could not tell apart.
-9. **Kconfig.** Two lines in `firmware/main/Kconfig.projbuild`: a `config
+9. **Optional: where to buy it and photos.** `buy`, a list of `{"label", "url"}` (https;
+   Amazon links get the site's Associates tag added on molty.uno, so give a plain search
+   or product URL), and `photos`, repo-relative paths to `.jpg`/`.png`/`.webp` files in
+   your board folder (e.g. `firmware/boards/<vendor>/<model>/photo.jpg`). molty.uno/build
+   lists every board under "community builds" from its board.json, with these when present.
+10. **Kconfig.** Two lines in `firmware/main/Kconfig.projbuild`: a `config
    MOLTY_BOARD_<VENDOR>_<MODEL>` entry in the `MOLTY_BOARD` choice, and a
    `default "<vendor>/<model>" if MOLTY_BOARD_<VENDOR>_<MODEL>` under `MOLTY_BOARD_DIR`.
-10. **Check and build.**
+11. **Check and build.**
    ```sh
    python3 scripts/firmware-boards.py check          # wiring: Kconfig, sdkconfig.board, board.c id
    make console                                      # the console page is baked into the image
@@ -178,14 +186,19 @@ The device joins on boot and logs `WiFi connected: ip=…` on the serial port; b
 
 ## Submit your board
 
-Open a pull request with the board folder and the two Kconfig lines. Please include:
+Open a pull request with the board folder and the two Kconfig lines, using the board
+template: add `?template=board.md` to the "Open a pull request" URL
+([`.github/PULL_REQUEST_TEMPLATE/board.md`](../.github/PULL_REQUEST_TEMPLATE/board.md)).
+It asks for proof from the hardware:
 
-- `board.json` with `"status": "experimental"` and you as `maintainer`;
-- where the pins came from (links in `board.h`);
-- what you checked on the hardware: the fluid fills the screen the right way up, a tap
-  ripples where the finger is, tilting moves the fluid downhill, `/api/info` lists the
-  caps you expect, and (if present) `say`/`listen` work through the agent link;
-- the app size from `make firmware BOARD=...`.
+- a photo of the fluid filling the screen, the right way up;
+- a short video: a tap ripples under the finger, tilting moves the fluid downhill;
+- the `/api/info` output, with the `caps` you expect;
+- the app size from `make firmware BOARD=...`;
+- if the board has audio: `say` and `listen` working through the agent link;
+- `board.json` with `"status": "experimental"` and you as `maintainer`, optionally `buy`
+  and `photos` (step 9);
+- where the pins came from (links in `board.h`).
 
 CI builds every `firmware/boards/**/board.json` (folders starting with `_` are not
 boards) and releases publish `molty-<version>-<vendor>-<model>-{ota,factory}.bin` for

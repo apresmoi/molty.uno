@@ -33,5 +33,14 @@
     "flash": "16MB"
   },
   "status": "experimental",
-  "maintainer": "your GitHub handle"
+  "maintainer": "your GitHub handle",
+  "buy": [
+    {
+      "label": "where to buy it",
+      "url": "https://example.com/the-board"
+    }
+  ],
+  "photos": [
+    "firmware/boards/myvendor/mymodel/photo.jpg"
+  ]
 }

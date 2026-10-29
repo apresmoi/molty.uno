@@ -36,5 +36,15 @@
     "flash": "16MB"
   },
   "status": "reference",
-  "maintainer": "molty.UNO"
+  "maintainer": "molty.UNO",
+  "buy": [
+    {
+      "label": "waveshare",
+      "url": "https://www.waveshare.com/esp32-s3-touch-lcd-1.46b.htm"
+    },
+    {
+      "label": "amazon.de",
+      "url": "https://www.amazon.de/s?k=ESP32-S3-Touch-LCD-1.46"
+    }
+  ]
 }

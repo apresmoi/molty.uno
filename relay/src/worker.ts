@@ -7,8 +7,17 @@ import { type Env, MoltyDevice } from "./device-object.js";
 import { handleMcp } from "./surfaces/mcp.js";
 import { handleRest } from "./surfaces/rest.js";
 import { SKILL_PATHS, handleSkill } from "./surfaces/skill.js";
+import { WAITLIST_PATH, handleWaitlist } from "./surfaces/waitlist.js";
+import { D1WaitlistStore, turnstileCheck } from "./waitlist-host.js";
 
 export { MoltyDevice };
+
+interface WorkerEnv extends Env {
+  /** D1 database molty-waitlist (migrations/); absent = the waitlist answers 503 */
+  WAITLIST?: D1Database;
+  /** optional secret: when set, signups must pass Cloudflare Turnstile */
+  TURNSTILE_SECRET?: string;
+}
 
 interface DeviceRpc {
   pair(id: string, req: Parameters<AgentApi["pair"]>[0]): ReturnType<AgentApi["pair"]>;
@@ -33,8 +42,16 @@ function backendFor(env: Env): RelayBackend {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: WorkerEnv): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname === WAITLIST_PATH) {
+      if (!env.WAITLIST) return Response.json({ ok: false, error: "unavailable" }, { status: 503 });
+      return handleWaitlist(request, {
+        store: new D1WaitlistStore(env.WAITLIST),
+        ip: request.headers.get("cf-connecting-ip") ?? undefined,
+        humanCheck: env.TURNSTILE_SECRET ? turnstileCheck(env.TURNSTILE_SECRET) : undefined,
+      });
+    }
     if (url.pathname === "/v1/device") {
       const id = url.searchParams.get("id") ?? "";
       if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") return new Response("expected websocket upgrade", { status: 426 });
@@ -50,4 +67,4 @@ export default {
     }
     return new Response("not found", { status: 404 });
   },
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<WorkerEnv>;

@@ -201,6 +201,10 @@ three places to point a build at your own relay (see `relay/README.md` to deploy
 | console | `DEFAULT_RELAY` in `console/src/ui/agent-link.ts` (`https://…`) | the device has not reported a `relay_url` yet |
 | CLI | `DefaultRelay` in `cli/internal/molty/link.go` (`https://…`) | `molty pair` without `--relay` / `MOLTY_RELAY` |
 
+The website's waitlist form posts to the same hosted relay (`WAITLIST_URL` in
+`website/src/config/site.mjs`, `POST /waitlist`, relay/README.md "Waitlist"); it is not part
+of the agent link.
+
 ## Explicitly out of v0 (later)
 
 Auth on the device's local HTTP API · OpenClaw node adapter · streaming STT/TTS ·

@@ -5,7 +5,8 @@ IDF_PATH ?= $(HOME)/esp/esp-idf
 export IDF_PATH
 
 .PHONY: help all test console console-test console-e2e firmware firmware-all firmware-test \
-        firmware-size relay relay-test cli cli-test creatures hygiene version
+        firmware-size relay relay-test cli cli-test creatures hygiene version \
+        waitlist-export waitlist-delete
 
 help:
 	@echo "build:"
@@ -27,6 +28,9 @@ help:
 	@echo "  make firmware-size  app image vs its OTA slot (after 'make firmware'; fails > 90%)"
 	@echo "  make hygiene        no secrets/local paths committed, licences present, versions agree"
 	@echo "  make version        print the product version (VERSION; bump: node scripts/version.mjs bump)"
+	@echo "waitlist (the relay's D1 database on YOUR Cloudflare account; relay/README.md):"
+	@echo "  make waitlist-export             every signup -> waitlist.csv (gitignored)"
+	@echo "  make waitlist-delete EMAIL=a@b   delete one address (GDPR request)"
 
 all: console firmware cli
 
@@ -81,3 +85,19 @@ hygiene:
 
 version:
 	@node scripts/version.mjs
+
+# The website's waitlist lives in the relay's D1 database (relay/README.md "Waitlist").
+# Both talk to the REMOTE database on the account wrangler is logged into: check
+# `npx wrangler whoami` first. waitlist.csv holds personal data and is gitignored.
+WAITLIST_DB ?= molty-waitlist
+
+waitlist-export: relay
+	cd relay && pnpm exec wrangler d1 execute $(WAITLIST_DB) --remote --json \
+	  --command "SELECT email, created_at, source FROM waitlist ORDER BY created_at" \
+	| node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const rows=JSON.parse(s)[0].results;const q=v=>`"$${String(v).replace(/"/g,"\"\"")}"`;process.stdout.write(["email,created_at,source",...rows.map(r=>[r.email,r.created_at,r.source].map(q).join(","))].join("\n")+"\n");console.error(`$${rows.length} signups -> waitlist.csv`)})' \
+	> ../waitlist.csv
+
+waitlist-delete: relay
+	@case "$(EMAIL)" in ""|*"'"*|*" "*) echo "usage: make waitlist-delete EMAIL=someone@example.org"; exit 2;; esac
+	cd relay && pnpm exec wrangler d1 execute $(WAITLIST_DB) --remote \
+	  --command "DELETE FROM waitlist WHERE email = lower(trim('$(EMAIL)'))"

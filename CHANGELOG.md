@@ -27,6 +27,12 @@ First public release.
   get Wi-Fi from the browser over the cable (Improv Wi-Fi Serial on the console UART);
   `molty.uno/setup` installs molty.UNO per board and sets Wi-Fi with ESP Web Tools, with
   the images served by the site.
+- **molty.uno/build**: will my board work (from docs/PORTING.md), the reference build's
+  parts (board, cable, optional battery and an untested vibration add-on with its wiring),
+  community builds from every `board.json` (new optional `buy` and `photos`), and a
+  "want one built?" waitlist. The relay stores it: `POST /waitlist` into D1 (address,
+  time, form only), per-IP rate limit, honeypot, optional Turnstile. New board PRs use
+  `.github/PULL_REQUEST_TEMPLATE/board.md`.
 - **Release assets**: per board, OTA image and full factory image
   (`molty-X.Y.Z-<board>-{ota,factory}.bin`); console page, CLI binaries for
   linux/darwin/windows × amd64/arm64, `SHA256SUMS`.

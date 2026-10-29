@@ -1,0 +1,298 @@
+/* /build/: a heading drawn by the page fluid (FluidField, fixed behind), then plain
+   monospace sections over quiet zones of the fluid. Same grammar as the landing: bracket
+   links, dotted rules, ink and dim. */
+.root {
+  position: relative;
+  font: var(--m-text-md) / 1.6 var(--m-font-mono);
+  overflow-x: clip;
+}
+.root > section,
+.root > footer {
+  position: relative;
+  z-index: 1;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: var(--m-content-width);
+  margin: 0 auto;
+  padding-inline: var(--m-gutter);
+}
+.root > section > * {
+  max-width: 50rem;
+}
+
+.hero {
+  padding-block: calc(var(--m-header-height) + var(--m-space-6)) var(--m-space-8);
+}
+.word {
+  width: fit-content;
+  max-width: 100%;
+  margin: var(--m-space-4) 0 var(--m-space-4);
+  color: var(--m-ink);
+  font-family: var(--m-font-mono);
+  font-size: var(--m-text-page);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  white-space: nowrap;
+}
+:global(html[data-fluid="live"]) .word {
+  color: transparent;
+}
+.word::selection {
+  color: var(--m-ink);
+}
+.lede {
+  width: fit-content;
+  max-width: 34em;
+  margin: 0;
+  color: var(--m-ink);
+}
+
+.links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--m-space-2) var(--m-space-6);
+  margin: var(--m-space-6) 0 0;
+  font-size: var(--m-text-base);
+}
+.links a,
+.boards a,
+.out a {
+  color: var(--m-accent);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.links a:hover,
+.boards a:hover,
+.out a:hover {
+  color: var(--m-ink);
+}
+
+.section {
+  padding-block: var(--m-space-8);
+}
+.title {
+  scroll-margin-top: calc(var(--m-header-height) + var(--m-space-4));
+}
+.box {
+  box-sizing: border-box;
+  padding: var(--m-space-4) var(--m-space-6) var(--m-space-6);
+  border: 1px solid var(--m-faint);
+  border-radius: var(--m-radius);
+  background: var(--m-veil);
+}
+/* a heading is a dotted rule with its name on the left: "will my board work? ┄┄┄┄" */
+.title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--m-space-3);
+  margin: 0 0 var(--m-space-4);
+  color: var(--m-ink);
+  font-size: var(--m-text-lg);
+  font-weight: 700;
+}
+.title::after {
+  content: "";
+  flex: 1;
+  border-top: 1px dotted var(--m-faint);
+}
+.text {
+  margin: 0 0 var(--m-space-4);
+  color: var(--m-ink);
+}
+.kicker {
+  margin: var(--m-space-4) 0 var(--m-space-2);
+  color: var(--m-dim);
+  font-size: var(--m-text-sm);
+}
+.note {
+  margin: 0 0 var(--m-space-3);
+  color: var(--m-dim);
+  font-size: var(--m-text-base);
+}
+.root small {
+  display: block;
+  color: var(--m-dim);
+  font-size: var(--m-text-sm);
+}
+
+.rows {
+  margin: 0;
+}
+.rows > div {
+  display: grid;
+  grid-template-columns: 9em minmax(0, 1fr);
+  gap: var(--m-space-4);
+  align-items: baseline;
+  padding: var(--m-space-2) 0;
+  border-top: 1px dotted var(--m-faint);
+}
+.rows > div:last-child {
+  border-bottom: 1px dotted var(--m-faint);
+}
+.rows dt {
+  color: var(--m-ink);
+  font-weight: 700;
+}
+.rows dd {
+  margin: 0;
+  color: var(--m-ink);
+}
+
+.group {
+  margin: var(--m-space-6) 0 0;
+}
+.groupTitle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--m-space-1) var(--m-space-3);
+  margin: 0 0 var(--m-space-2);
+  color: var(--m-ink);
+  font-size: var(--m-text-md);
+}
+.groupTitle::before {
+  content: "›";
+  color: var(--m-dim);
+}
+.tag,
+.untested {
+  font-size: var(--m-text-sm);
+  font-weight: 400;
+}
+.tag {
+  color: var(--m-dim);
+}
+.untested {
+  color: var(--m-warn);
+}
+
+.parts,
+.boards {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.parts li,
+.boards li {
+  padding: var(--m-space-3) 0;
+  border-top: 1px dotted var(--m-faint);
+}
+.parts li:last-child,
+.boards li:last-child {
+  border-bottom: 1px dotted var(--m-faint);
+}
+.partName {
+  color: var(--m-ink);
+}
+.outs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--m-space-1) var(--m-space-6);
+  margin-top: var(--m-space-2);
+  font-size: var(--m-text-base);
+}
+.out {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--m-space-2);
+}
+.out small {
+  display: inline;
+}
+.warn {
+  margin: var(--m-space-2) 0 0;
+  color: var(--m-warn);
+  font-size: var(--m-text-base);
+}
+
+.wiring {
+  margin: var(--m-space-4) 0 0;
+}
+.wiring pre {
+  margin: 0;
+  padding: var(--m-space-4);
+  overflow-x: auto;
+  border: 1px solid var(--m-faint);
+  border-radius: var(--m-radius);
+  background: var(--m-veil);
+  color: var(--m-ink);
+  font: var(--m-text-base) / 1.2 var(--m-font-mono);
+}
+.wiring figcaption {
+  margin-top: var(--m-space-2);
+  color: var(--m-dim);
+  font-size: var(--m-text-sm);
+}
+.wiring ol {
+  margin: 0;
+  padding-left: var(--m-space-6);
+}
+
+.disclosure {
+  margin: var(--m-space-6) 0 0;
+  color: var(--m-dim);
+  font-size: var(--m-text-sm);
+}
+
+.boardHead {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--m-space-1) var(--m-space-4);
+}
+.boardHead .partName a {
+  color: var(--m-ink);
+}
+.boardHead .partName a:hover {
+  color: var(--m-accent);
+}
+.status {
+  color: var(--m-dim);
+  font-size: var(--m-text-sm);
+  font-style: normal;
+}
+.boardHead > a {
+  font-size: var(--m-text-base);
+}
+.photos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--m-space-2);
+  margin-top: var(--m-space-3);
+}
+.photos img {
+  width: 160px;
+  height: 160px;
+  object-fit: cover;
+  border: 1px solid var(--m-faint);
+  border-radius: var(--m-radius);
+}
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--m-space-2) var(--m-space-6);
+  padding-block: var(--m-space-8) var(--m-space-12);
+  font-size: var(--m-text-base);
+}
+.footer a {
+  color: var(--m-accent);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.footer a:hover {
+  color: var(--m-ink);
+}
+
+@media (max-width: 46rem) {
+  .box {
+    padding: var(--m-space-3) var(--m-space-4) var(--m-space-4);
+  }
+  .rows > div {
+    grid-template-columns: 6.5em minmax(0, 1fr);
+    gap: var(--m-space-3);
+  }
+}

@@ -10,6 +10,17 @@
   // Workers AI always runs remotely; `wrangler dev --local` starts fine but AI.run
   // throws, so local runs set VOICE_PROVIDER=none (see package.json "dev").
   "ai": { "binding": "AI" },
+  // The website's waitlist (POST /waitlist). database_id is a placeholder: create the
+  // database on your account and paste its id here (relay/README.md "Waitlist").
+  // `wrangler dev --local` runs against a local SQLite copy and needs no account.
+  "d1_databases": [
+    {
+      "binding": "WAITLIST",
+      "database_name": "molty-waitlist",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
   "vars": {
     "VOICE_PROVIDER": "workers-ai",
     "TTS_MODEL": "@cf/deepgram/aura-2-en",

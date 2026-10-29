@@ -106,6 +106,23 @@ def check():
             want_p = 0 if det.get("psram") == "none" else int(str(det.get("psram", "0MB"))[:-2] or 0)
             if not pm or int(pm.group(1)) != want_p or not fm or f"{fm.group(1)}MB" != det.get("flash"):
                 bad("board.c .psram_mb / .flash_mb must equal board.json detect (the firmware checks them at boot)")
+        # optional, shown on molty.uno/build: where to buy it, photos of it running molty.UNO
+        buy = cfg.get("buy", [])
+        if not isinstance(buy, list) or any(
+            not isinstance(b, dict) or not str(b.get("label", "")).strip() or not str(b.get("url", "")).startswith("https://")
+            for b in buy
+        ):
+            bad('buy: a list of {"label": "...", "url": "https://..."}')
+        photos = cfg.get("photos", [])
+        if not isinstance(photos, list):
+            bad('photos: a list of repo-relative paths')
+        else:
+            for ph in photos:
+                ph = str(ph)
+                if not ph.startswith(f"firmware/boards/{d}/") or not re.search(r"\.(jpe?g|png|webp)$", ph, re.I):
+                    bad(f'photos: "{ph}" must be a .jpg/.png/.webp inside firmware/boards/{d}/')
+                elif not (ROOT / ph).exists():
+                    bad(f'photos: "{ph}" does not exist')
     # two boards that identify the same way would make /setup refuse both
     all_b = boards()
     for i, (da, a) in enumerate(all_b):
