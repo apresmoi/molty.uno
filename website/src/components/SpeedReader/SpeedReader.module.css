@@ -2,7 +2,8 @@
 .root {
   display: contents;
 }
-/* the device's own round screen, sitting in the page fluid */
+/* the device's own round screen, sitting in the page fluid: an LCD, dark in both themes
+   (data-screen takes the dark tokens, so its fluid is not inverted) */
 .glass {
   position: relative;
   aspect-ratio: 1;
@@ -31,7 +32,7 @@
   position: absolute;
   inset: 0;
 }
-/* @glyphcss/fluid's layer fills the host; light theme inverts it */
+/* @glyphcss/fluid's layer fills the host (on the screen the fluid filter is none) */
 .host > * {
   filter: var(--m-fluid-filter);
 }

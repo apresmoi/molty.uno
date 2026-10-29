@@ -222,6 +222,7 @@ export function Device({ reveal, replay }: { reveal: RevealKind; replay?: string
         </span>
       )}
       <span ref={face} className={styles.face}>
+        <span className={styles.screen} />
         <span className={styles.bezel}>
           <span className={styles.lip} />
         </span>

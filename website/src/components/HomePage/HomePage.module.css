@@ -183,6 +183,8 @@
   width: 76%;
   height: 76%;
   object-fit: contain;
+  /* under the device's screen, which inverts its backdrop in the light theme */
+  filter: var(--m-still-filter);
   transition: opacity 0.4s;
 }
 :global(html[data-fluid-moltys="live"]) .still {

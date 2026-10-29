@@ -90,6 +90,15 @@
   );
 }
 
+/* the screen is the page fluid behind it, seen through: in the light theme its backdrop undoes
+   the page's inversion, so the Molty shows on a dark LCD exactly as drawn (none in the dark) */
+.screen {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  backdrop-filter: var(--m-screen-filter);
+}
+
 .lid {
   transform-origin: 50% 0;
 }
