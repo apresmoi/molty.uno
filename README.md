@@ -9,7 +9,7 @@ A round screen of flowing braille. Little Moltys live in it. Your AI agent is it
 [![Release](https://img.shields.io/github/v/release/apresmoi/molty.uno?include_prereleases)](https://github.com/apresmoi/molty.uno/releases)
 [![MIT](https://img.shields.io/badge/licence-MIT-9fe8c4)](LICENSE)
 
-<img src="docs/assets/molty-device.png" width="340" alt="A round Molty device: the screen reads 'hi, i am molty', then a duck and an octopus emerge from the braille fluid between ripples, a vortex and a wave">
+<img src="docs/assets/molty-device.webp" width="340" alt="A round Molty device: the screen reads 'hi, i am molty', then a duck and an octopus emerge from the braille fluid between ripples, a vortex and a wave">
 
 </div>
 
@@ -21,7 +21,8 @@ characters**: dim braille that is always moving, and that condenses into a Molty
 words, into ripples and vortices, then melts back.
 
 - **Moltys** are tiny creatures stored as ~1 KB `.molty` files. Swap them any time, no
-  recompile. 29 ship today.
+  recompile. 29 ship today; see them all, with their moods and actions, at
+  [molty.uno/showcase](https://molty.uno/showcase/).
 - **Any agent is the brain.** Claude, Grok, OpenClaw, your own script. Molty is the body:
   it shows, speaks, listens and feels taps. The thinking happens wherever your agent runs.
 - **No laptop in the loop.** Molty dials out to a small cloud relay; your agent reaches it
@@ -57,23 +58,30 @@ words, into ripples and vortices, then melts back.
 
 ### 1. Hardware
 
-A **Waveshare ESP32-S3-Touch-LCD-1.46** (or the 1.28) and a USB-C cable. That's all.
-Details: [docs/HARDWARE.md](docs/HARDWARE.md). Another screen?
+A **Waveshare ESP32-S3-Touch-LCD-1.46** (or the 1.28) and a USB-C data cable. That's all.
+Details: [docs/HARDWARE.md](docs/HARDWARE.md).
+
+Another screen? Molty needs an **ESP32-S3** with **16 MB flash** and **PSRAM** (2 MB or
+more) driving a colour display; touch, IMU, mic, speaker and battery are optional.
 [Port it to your board](docs/PORTING.md).
 
 ### 2. Flash the firmware
 
-Download `molty-X.Y.Z-factory.bin` from the
-[latest release](https://github.com/apresmoi/molty.uno/releases). Hold **BOOT** while
-plugging in USB-C, then:
+Easiest: open **[molty.uno/setup](https://molty.uno/setup/)** in Chrome or Edge, plug the
+board in over USB-C and press **Connect**. It flashes the latest release for your board
+from the browser.
+
+Or by hand: download `molty-X.Y.Z-<board>-factory.bin` from the
+[latest release](https://github.com/apresmoi/molty.uno/releases) (e.g.
+`waveshare-esp32-s3-touch-lcd-1.46`), hold **BOOT** while plugging in USB-C, then:
 
 ```sh
 pip install esptool
-python -m esptool --chip esp32s3 -p PORT -b 460800 write_flash 0x0 molty-X.Y.Z-factory.bin
+python -m esptool --chip esp32s3 -p PORT -b 460800 write_flash 0x0 molty-X.Y.Z-<board>-factory.bin
 ```
 
 Replug, and the fluid starts. Later updates keep your settings: send
-`molty-X.Y.Z-ota.bin` to `/api/ota` (see [docs/RELEASING.md](docs/RELEASING.md#flash-a-release)).
+`molty-X.Y.Z-<board>-ota.bin` to `/api/ota` (see [docs/RELEASING.md](docs/RELEASING.md#flash-a-release)).
 
 ### 3. Set it up in the console
 
@@ -142,7 +150,7 @@ console/     the setup + settings page, built into the firmware image
 relay/       Cloudflare Worker: pairing, MCP/REST for agents, speech
 cli/         `molty` CLI + stdio MCP server (Go)
 creatures/   the Molty kit, the JS fluid engine, viewers, .molty exporter
-website/     molty.uno
+website/     molty.uno: landing, Molty showcase, browser setup, docs (Astro + @glyphcss/fluid)
 docs/        architecture, agent link, CLI, hardware, releasing
 ```
 
