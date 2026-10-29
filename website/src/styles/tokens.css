@@ -83,6 +83,8 @@
      capped by the screen's height too, so a section's copy and its Molty share one screen */
   --m-stack-slot: min(100%, 520px, 44svh);
   --m-stack-glass: min(84vw, 420px, 40svh);
+  /* a section's word on a phone held upright, where each section is one screen */
+  --m-text-section-stack: min(84px, 17vw, 8.5svh);
 }
 @media (max-width: 46rem) {
   /* [data-theme] matches the dark block's specificity */

@@ -104,8 +104,13 @@ export function HomePage({
           talk
         </Word>
         <p className={styles.text} data-fluid-quiet="">
-          Your agent's words, one at a time, condensing out of the fluid. It asks, Molty listens, and yes, no or idk is
-          one tap on the glass.
+          <span className={styles.wide}>
+            Your agent's words, one at a time, condensing out of the fluid. It asks, Molty listens, and yes, no or idk
+            is one tap on the glass.
+          </span>
+          <span className={styles.phone}>
+            Your agent's words condense out of the fluid. Molty asks; yes, no or idk is one tap on the glass.
+          </span>
         </p>
         {reader}
         <Links>
@@ -118,14 +123,21 @@ export function HomePage({
           moltys
         </Word>
         <p className={styles.text} data-fluid-quiet="">
-          A Molty is a ~1 KB <code>.molty</code> file the fluid grows a creature from. Same file, same creature, any
-          screen.
+          <span className={styles.wide}>
+            A Molty is a ~1 KB <code>.molty</code> file the fluid grows a creature from. Same file, same creature, any
+            screen.
+          </span>
+          <span className={styles.phone}>
+            A ~1 KB <code>.molty</code> file grows a creature. Same file, any screen.
+          </span>
         </p>
         {picker}
         <Links>
           <a href="/showcase/">[ all moltys &amp; actions → ]</a>
           <a href="/moltys/making-your-own/">[ make your own → ]</a>
-          <a href="/moltys/format/">[ the .molty format → ]</a>
+          <a className={styles.wide} href="/moltys/format/">
+            [ the .molty format → ]
+          </a>
         </Links>
       </section>
 
@@ -139,20 +151,24 @@ export function HomePage({
             or HTTP.
           </p>
           <pre
-            className={styles.flow}
+            className={`${styles.flow} ${styles.wide}`}
             data-fluid-quiet=""
             aria-label="Your agent talks MCP or REST to the relay; Molty dials out to the relay over WSS."
           >
             {bridgeFlow}
           </pre>
-          <p className={styles.text} data-fluid-quiet="">
+          <p className={`${styles.text} ${styles.wide}`} data-fluid-quiet="">
             One message. One tap on the glass.
           </p>
           {message}
           <Links>
             <a href="/agents/connect/">[ connect an agent → ]</a>
-            <a href="/agents/protocol/">[ protocol → ]</a>
-            <a href="/agents/cli/">[ local MCP → ]</a>
+            <a className={styles.wide} href="/agents/protocol/">
+              [ protocol → ]
+            </a>
+            <a className={styles.wide} href="/agents/cli/">
+              [ local MCP → ]
+            </a>
           </Links>
         </div>
         <Slot molty={BRIDGE_MOLTY.id} device={bridgeDevice} />
@@ -188,7 +204,11 @@ export function HomePage({
           </ul>
           <Links>
             <a href="/setup/">[ flash from the browser → ]</a>
-            <a href="/getting-started/hardware/">[ build from source → ]</a>
+            <a href="/build/#waitlist">[ get one built → ]</a>
+            <a href="/build/">[ build your own → ]</a>
+            <a className={styles.wide} href="/getting-started/hardware/">
+              [ build from source → ]
+            </a>
           </Links>
         </div>
         <Slot molty={BAKE_MOLTY.id} device={bakeDevice} />

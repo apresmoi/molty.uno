@@ -237,3 +237,28 @@
     width: var(--m-stack-glass);
   }
 }
+/* phones held upright (each landing section is one screen): the speed and "type your own" share
+   a line when they fit */
+@media (max-width: 46rem) and (orientation: portrait) {
+  .side {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: var(--m-space-6);
+    width: auto;
+  }
+  .said,
+  .status,
+  .form {
+    flex-basis: 100%;
+  }
+  .said {
+    margin-bottom: 0;
+  }
+  .status {
+    margin-bottom: var(--m-space-1);
+  }
+  .row {
+    margin-bottom: 0;
+  }
+}

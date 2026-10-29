@@ -351,3 +351,85 @@
     padding-block: 14svh 4svh;
   }
 }
+
+/* copy that only phones get (and copy they skip): a phone section is one screen */
+.phone {
+  display: none;
+}
+/* Phones held upright: each section is one screen under the header (svh: the URL bar shown),
+   snapped to gently. The copy takes what it needs; the device fills the rest, round and centred
+   (it scrolls with the fluid's document glue like any scroll: a snap is just a scroll). */
+@media (max-width: 46rem) and (orientation: portrait) {
+  .wide {
+    display: none;
+  }
+  .phone {
+    display: inline;
+  }
+  :global(html):has(.root) {
+    scroll-snap-type: y proximity;
+  }
+  .hero {
+    scroll-snap-align: start;
+  }
+  .section {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: stretch;
+    min-height: calc(100svh - var(--m-header-height));
+    padding-block: var(--m-space-3);
+    font-size: var(--m-text-base);
+    line-height: 1.5;
+    scroll-snap-align: start;
+  }
+  .word {
+    margin-bottom: var(--m-space-2);
+    font-size: var(--m-text-section-stack);
+  }
+  .text {
+    margin-bottom: var(--m-space-2);
+  }
+  .links {
+    gap: var(--m-space-1) var(--m-space-4);
+    margin-top: var(--m-space-3);
+  }
+  /* the device takes what the copy leaves, square and centred; its bezel reaches 1.1× past the
+     screen, so it stops short of the gutters */
+  .section .slot,
+  .reading [data-reader-glass],
+  .gallery [data-fluid-slot="gallery"] {
+    flex: 1 1 0;
+    align-self: center;
+    width: auto;
+    min-height: 0;
+    max-width: none;
+    max-height: calc(0.86 * (100vw - 2 * var(--m-gutter)));
+    margin-block: var(--m-space-4);
+  }
+  /* bake: a board is two lines (its screen and status, then its name) */
+  .boards li {
+    grid-template-columns: 3.6em minmax(0, 1fr) auto;
+    gap: 0 var(--m-space-3);
+    padding: var(--m-space-2) 0;
+  }
+  .boards li > span {
+    display: contents;
+  }
+  .boards b,
+  .boards li > :last-child {
+    grid-row: 1;
+  }
+  .boards li > :last-child {
+    grid-column: 3;
+  }
+  .boards small {
+    grid-row: 2;
+    grid-column: 2 / -1;
+  }
+  /* the footer is a snap point too (its end): short, it would only ever snap back to bake */
+  .footer {
+    padding-block: var(--m-space-12) var(--m-space-8);
+    scroll-snap-align: end;
+  }
+}

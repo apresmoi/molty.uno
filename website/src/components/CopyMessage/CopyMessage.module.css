@@ -28,3 +28,14 @@
 .message button.done {
   color: var(--m-dim);
 }
+/* phones held upright (each landing section is one screen): the message sets smaller */
+@media (max-width: 46rem) and (orientation: portrait) {
+  .message {
+    padding-block: var(--m-space-2);
+  }
+  .message pre {
+    margin-bottom: var(--m-space-2);
+    font-size: var(--m-text-sm);
+    line-height: 1.5;
+  }
+}
