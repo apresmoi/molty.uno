@@ -9,7 +9,7 @@ All notable changes to Molty are recorded here. One version covers the whole pro
 First public release.
 
 - **Firmware** (Waveshare ESP32-S3-Touch-LCD-1.46): the fluid of characters, the `.molty`
-  creature runtime with 26 cute-kit creatures, speaker + microphone, IMU, touch, USB-C
+  creature runtime with 29 cute-kit creatures, speaker + microphone, IMU, touch, USB-C
   networking (NCM) + Wi-Fi with mDNS, rollback-protected OTA, and the agent link
   (pair with an on-device code and a tap). `/api/info` reports the product version as `fw`.
 - **Console**: the setup flow (Wi-Fi → Molty → Agent → Tap → Done) and settings pages,

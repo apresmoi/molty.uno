@@ -31,7 +31,7 @@ networks.
 
 ## 2. Who should I be?
 
-Pick one of the 26 Moltys. The console sends the creature's `.molty` file to the device
+Pick one of the 29 Moltys. The console sends the creature's `.molty` file to the device
 and it appears on the screen right away — no reflash. You can change it later in the
 console's Molty page.
 

@@ -89,9 +89,9 @@ const canvasStats = (page) => page.evaluate(() => {
   // Molty
   await page.locator('.setup .tile img').first().waitFor();
   const tiles = await page.locator('.setup .tile').count();
-  ok(tiles === 26, `molty: grid has all 26 Moltys (${tiles})`);
+  ok(tiles === 29, `molty: grid has all 29 Moltys (${tiles})`);
   const thumbsOk = await page.evaluate(() => [...document.querySelectorAll('.setup .tile img')].every((i) => i.complete && i.naturalWidth === 160));
-  ok(thumbsOk, 'molty: 26 bundled thumbnails decoded');
+  ok(thumbsOk, 'molty: 29 bundled thumbnails decoded');
   ok(!/creature/i.test(await page.locator('.setup').innerText()), 'molty: no "creature" in the copy');
   ok(await page.getByRole('button', { name: 'Pick one' }).isDisabled(), 'molty: button disabled until a pick');
   await page.locator('.setup .tile', { hasText: 'Frog' }).click();
@@ -207,7 +207,7 @@ const canvasStats = (page) => page.evaluate(() => {
 
   await page.goto(`${MOCK}/#/molty`);
   await page.locator('.creature img').first().waitFor();
-  ok(await page.locator('.creature').count() === 26, 'settings molty: 26 Moltys with thumbnails');
+  ok(await page.locator('.creature').count() === 29, 'settings molty: 29 Moltys with thumbnails');
   await page.locator('.creature', { hasText: 'Owl' }).click();
   await page.getByRole('button', { name: 'send Owl to molty' }).click();
   await page.locator('.note.ok', { hasText: 'moving in' }).waitFor();

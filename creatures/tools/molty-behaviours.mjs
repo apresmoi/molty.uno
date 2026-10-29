@@ -46,4 +46,54 @@ export const BEHAVIOURS = {
     { target: { kind: 'eyes' }, channel: 'lid', op: 'set',
       terms: [{ driver: 'pulse', amp: 1.6, freq: 1.6, p0: 4, p1: 7, gain: { idle: 1, listening: 1 } }] },
   ],
+
+  // pack-e.js Puppy: big listening head tilt, happy rear wiggle, tongue lolls out + pants.
+  'cute-puppy': [
+    // creature.headPivot.rotation.z += 0.32 * w.listening
+    { target: { kind: 'head' }, channel: 'rz', op: 'add',
+      terms: [{ driver: 'const', amp: 0.32, gain: { listening: 1 } }] },
+    // creature.root.rotation.z += 0.045 * w.happy * sin(TAU*5*t)
+    { target: { kind: 'root' }, channel: 'rz', op: 'add',
+      terms: [{ driver: 'sin', amp: 0.045, freq: 5, gain: { happy: 1 } }] },
+    // k = ease(k, happy, dt, 8); tongue pos = in + (out - in) k (+ 0.008 happy sin(TAU*3t) on y);
+    // scale = 0.3 (1 + (1/0.3 - 1) k). PUP_TONGUE: in [0,-0.13,0.2], out [0,-0.215,0.27]
+    { target: { kind: 'part', name: 'tongue' }, channel: 'py', op: 'set',
+      terms: [{ driver: 'const', amp: -0.085, gain: { happy: 1 }, ease: 8 },
+              { driver: 'sin', amp: 0.008, freq: 3, gain: { happy: 1 } }] },
+    { target: { kind: 'part', name: 'tongue' }, channel: 'pz', op: 'set',
+      terms: [{ driver: 'const', amp: 0.07, gain: { happy: 1 }, ease: 8 }] },
+    { target: { kind: 'part', name: 'tongue' }, channel: 's', op: 'set',
+      terms: [{ driver: 'const', amp: 1 / 0.3 - 1, gain: { happy: 1 }, ease: 8 }] },
+  ],
+
+  // pack-e.js Fox: slow tail swish; pounce-ready crouch every 5–9 s while idle.
+  'cute-fox': [
+    // tail.rotation.z = base.z + (0.3 (1 - 0.8 sleepy) + 0.15 happy) sin(TAU*0.55*t) + 0.3 sleepy
+    { target: { kind: 'socket', name: 'tail' }, channel: 'rz', op: 'set',
+      terms: [{ driver: 'sin', amp: 0.3, freq: 0.55, gain: { k: 1, sleepy: -0.8 } },
+              { driver: 'sin', amp: 0.15, freq: 0.55, gain: { happy: 1 } },
+              { driver: 'const', amp: 0.3, gain: { sleepy: 1 } }] },
+    // the crouch (root.rotation.x += 0.18 crouch, a 1.8 s event every 5–9 s while idle). One
+    // channel only: each pulse term has its own random timer, so a second channel would drift
+    // out of step. The wiggle and the spring need a gated product (not in v1).
+    { target: { kind: 'root' }, channel: 'rx', op: 'add',
+      terms: [{ driver: 'pulse', amp: 0.2, freq: 1.8, p0: 5, p1: 9, gain: { idle: 1 } }] },
+  ],
+
+  // pack-e.js Turtle: the head tucks into the shell (surprised, half when sleepy) and now and
+  // then ducks in and peeks back out.
+  'cute-turtle': [
+    // k = ease(k, max(surprised, 0.5 sleepy), dt, 7); headPivot pos += (0, -0.04, -0.2) k;
+    // headPivot scale *= 1 - 0.6 k  (TURTLE_TUCK). Three eased terms with the same gain stay in step.
+    { target: { kind: 'head' }, channel: 'pz', op: 'add',
+      terms: [{ driver: 'const', amp: -0.2, gain: { surprised: 1, sleepy: 0.5 }, ease: 7 }] },
+    { target: { kind: 'head' }, channel: 'py', op: 'add',
+      terms: [{ driver: 'const', amp: -0.04, gain: { surprised: 1, sleepy: 0.5 }, ease: 7 }] },
+    { target: { kind: 'head' }, channel: 's', op: 'add',
+      terms: [{ driver: 'const', amp: -0.6, gain: { surprised: 1, sleepy: 0.5 }, ease: 7 }] },
+    // the peek (every 7–12 s while calm): scale only (one channel, one timer), deep enough
+    // that the head hides behind the shell's front at the bottom of the bump
+    { target: { kind: 'head' }, channel: 's', op: 'add',
+      terms: [{ driver: 'pulse', amp: -0.75, freq: 2.6, p0: 7, p1: 12, gain: { idle: 1, listening: 1 } }] },
+  ],
 };

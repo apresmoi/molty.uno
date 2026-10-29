@@ -158,6 +158,9 @@ Example (kitten, from `molty-behaviours.mjs`): the tail swish. The JS
 |---|---|---|
 | duck, mochi 2 | none (kit only) | ✅ exact |
 | kitten | tail swish, slow blink, bottlebrush tail, kneading, whisker twitch | ✅ authored (13 behaviours) |
+| puppy | listening head tilt, happy wiggle, tongue lolls out + pants when happy | ✅ authored (5 behaviours) |
+| turtle | head tucks into the shell (startled, half when sleepy), periodic peek | ✅ authored (4 behaviours; the peek is scale-only) · ⚠ the peek's head sway needs a gated product |
+| fox | tail swish, pounce-ready crouch | ✅ authored (2 behaviours) · ⚠ the crouch's bum wiggle and spring need a gated product (one `pulse` timer per channel) |
 | penguin | extra flipper flap, surprise shiver | ✅ expressible (`possin` / `sin` on part rz, sideSign) |
 | frog | throat sac puffs with speech; tongue flick | ✅ sac (`mouth` → part `s`); ⚠ the tongue needs show/hide |
 | hamster | pouches puff while talking, stay stuffed when happy | ✅ (`mouth` + eased happy → part `s`) |

@@ -8,6 +8,7 @@ import './pack-a.js';
 import './pack-b.js';
 import './pack-c.js';
 import './pack-d.js';
+import './pack-e.js';
 import { cuteEntries } from './kit.js';
 
 export const CUTE_CATALOG = cuteEntries();

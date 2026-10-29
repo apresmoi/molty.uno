@@ -14,7 +14,7 @@ creatures/
 │   ├── stage.js      3D viewport + 412×412 device preview
 │   ├── catalog.js    viewer roster
 │   └── main.js       viewer UI
-├── molty/            the 26 exported .molty files (bundled into the console)
+├── molty/            the 29 exported .molty files (bundled into the console)
 ├── tools/            molty-export.mjs (spec → .molty), molty-behaviours.mjs (hook stand-ins)
 ├── index.html        creature viewer: moods, pokes, autopilot, device preview, compare A|B
 ├── fluid.html        the fluid of characters, as the device draws it

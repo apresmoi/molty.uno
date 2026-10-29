@@ -131,6 +131,21 @@
       "id": "cute-caterpillar",
       "name": "Caterpillar",
       "file": "caterpillar.molty"
+    },
+    {
+      "id": "cute-puppy",
+      "name": "Puppy",
+      "file": "puppy.molty"
+    },
+    {
+      "id": "cute-fox",
+      "name": "Fox",
+      "file": "fox.molty"
+    },
+    {
+      "id": "cute-turtle",
+      "name": "Turtle",
+      "file": "turtle.molty"
     }
   ]
 }

@@ -21,7 +21,7 @@ characters**: dim braille that is always moving, and that condenses into a Molty
 words, into ripples and vortices, then melts back.
 
 - **Moltys** are tiny creatures stored as ~1 KB `.molty` files. Swap them any time, no
-  recompile. 26 ship today.
+  recompile. 29 ship today.
 - **Any agent is the brain.** Claude, Grok, OpenClaw, your own script. Molty is the body:
   it shows, speaks, listens and feels taps. The thinking happens wherever your agent runs.
 - **No laptop in the loop.** Molty dials out to a small cloud relay; your agent reaches it

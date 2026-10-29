@@ -7,7 +7,7 @@ mode and the customise panel work with no extra code.
 
 ## Add a creature
 
-Add a `defineCreature({...})` call to one of the pack files (`pack-a.js` … `pack-d.js`),
+Add a `defineCreature({...})` call to one of the pack files (`pack-a.js` … `pack-e.js`),
 or create a new pack file and import it from `index.js`. Then export it to a `.molty`
 file with `node creatures/tools/molty-export.mjs <id>` (see `../../MOLTY-FORMAT.md`).
 
