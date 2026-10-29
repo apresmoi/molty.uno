@@ -52,9 +52,10 @@
   min-height: 100svh;
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  /* top-weighted, not centred: centring left the Molty's dome on the fold */
+  justify-content: flex-start;
   gap: var(--m-space-6);
-  padding-block: calc(var(--m-header-height) + var(--m-space-8)) var(--m-space-8);
+  padding-block: calc(var(--m-header-height) + 9svh) var(--m-space-8);
 }
 .heroBody {
   /* the Molty's dome; it sits a little below the wordmark and reaches past its row below
