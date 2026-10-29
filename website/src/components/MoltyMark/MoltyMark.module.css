@@ -5,28 +5,38 @@
   fill: currentColor;
   color: var(--m-accent);
 }
-/* one diagonal, then the other: each pair shows for half the cycle */
-.rise,
-.fall {
-  animation: swap 2s steps(1, end) infinite;
+/* each dot holds, then glides one row (6 user units) so the pair flips diagonal, and back */
+.left {
+  animation: rise 4s ease-in-out infinite;
 }
-.fall {
-  animation-delay: -1s;
+.right {
+  animation: fall 4s ease-in-out infinite;
 }
-@keyframes swap {
-  0% {
-    opacity: 1;
+@keyframes rise {
+  0%,
+  35%,
+  100% {
+    transform: translateY(0);
   }
-  50% {
-    opacity: 0;
+  50%,
+  85% {
+    transform: translateY(-6px);
+  }
+}
+@keyframes fall {
+  0%,
+  35%,
+  100% {
+    transform: translateY(0);
+  }
+  50%,
+  85% {
+    transform: translateY(6px);
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .rise,
-  .fall {
+  .left,
+  .right {
     animation: none;
-  }
-  .fall {
-    opacity: 0;
   }
 }
