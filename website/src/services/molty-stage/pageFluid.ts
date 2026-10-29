@@ -34,12 +34,16 @@ import { TargetShift } from "./shiftTarget";
 import { BeatRun } from "./beats/player";
 import { beatsOf, pickBeat, seedOf } from "./beats/registry";
 import { ACT_EVENT, MOOD_HOLD, isMood, parseAct, type ActDetail, type ActionKind } from "./actions";
+import { inverted, paperSource } from "./paper";
 
 type Rig = Awaited<ReturnType<typeof loadRig>>;
 type Catalog = typeof import("@creatures/cute/index.js").CUTE_CATALOG;
 
 const FPS = 30;
 const FLUID = "#6f8f82"; // the dim braille field
+// …on paper (the light theme, paper.ts): a quiet grey-green dot, handed over pre-inverted (the
+// screens undo the inversion, so there the field is its complement: a near-neutral grey)
+const PAPER_FIELD = "#757a78";
 const GAP = 1.6; // seconds a cycling slot rests between Moltys: it melts, the fluid settles
 // after a Molty emerges it dances (happy = hopping), rests, looks around (as fluid-stage.js)
 const DANCE: Array<[string, number]> = [
@@ -133,6 +137,10 @@ export interface PageFluidHandle {
 
 export interface PageFluidOptions {
   reducedMotion: boolean;
+  /** "light": the page inverts the fluid into ink on paper (paper.ts); its own colours are
+   *  handed over pre-inverted, and a Molty does not run in across the paper (it would show
+   *  inverted there: it lives on its screen). The theme is fixed per mount. */
+  theme: "dark" | "light";
   /** Called once the field is drawing (and again when the Moltys are ready). */
   onState?: (state: "live" | "moltys") => void;
 }
@@ -144,7 +152,7 @@ export async function mountPageFluid(host: HTMLElement, options: PageFluidOption
     fps: FPS,
     fpsFallback: false,
     worker: () => new FluidWorker(),
-    field: { color: FLUID, level: 0.18 },
+    field: { color: options.theme === "light" ? inverted(PAPER_FIELD) : FLUID, level: 0.18 },
   });
   try {
     await timeout(fluid.ready, 10000);
@@ -239,7 +247,13 @@ class PageFluid implements PageFluidHandle {
     this.words.push({ el, color, target });
   }
 
+  /** A heading's colour as the fluid takes it: on paper, pre-inverted and darkened to 3:1. */
   private colorOf(el: HTMLElement): string {
+    const c = this.wordColor(el);
+    return this.options.theme === "light" ? paperSource(c) : c;
+  }
+
+  private wordColor(el: HTMLElement): string {
     const tint = el.dataset.fluidTint;
     if (tint && this.moltys) {
       const id = this.slots.find((s) => s.name === tint)?.id;
@@ -273,7 +287,7 @@ class PageFluid implements PageFluidHandle {
       every: Number(el.dataset.fluidEvery ?? 0),
       rig,
       shift: new TargetShift(),
-      runIn: this.options.reducedMotion ? null : (el.dataset.fluidRunIn ?? null),
+      runIn: this.options.reducedMotion || this.options.theme === "light" ? null : (el.dataset.fluidRunIn ?? null),
       run: null,
       beat: null,
       glassed: false,

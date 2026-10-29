@@ -149,6 +149,7 @@ export function SpeedReader({ text, answers: own }: { text: string; answers: Rec
       <div
         className={styles.glass}
         data-reader-glass=""
+        data-screen=""
         data-live={live || undefined}
         data-listening={listening || undefined}
         data-held={held ?? undefined}

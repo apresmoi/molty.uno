@@ -1,19 +1,24 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { mountPageFluid, type PageFluidHandle } from "../../services/molty-stage";
 import styles from "./FluidField.module.css";
 
 /** The one live fluid behind the landing page. It reads its targets (headings, Molty slots,
  *  quiet and pool zones) from data-fluid-* attributes in the page, so the page stays static
  *  HTML that reads fine without it. Sets <html data-fluid="live"> once it draws (@glyphcss/fluid), and
- *  data-fluid-moltys="live" once the Moltys can emerge (their three.js rig loaded). */
+ *  data-fluid-moltys="live" once the Moltys can emerge (their three.js rig loaded). The fluid's
+ *  own colours depend on the theme (light hands them over pre-inverted), so a theme switch
+ *  mounts it afresh. */
 export function FluidField() {
   const host = useRef<HTMLDivElement>(null);
+  const theme = useTheme();
   useEffect(() => {
+    if (!theme) return;
     const root = document.documentElement;
     let handle: PageFluidHandle | null = null;
     let alive = true;
     mountPageFluid(host.current!, {
       reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
+      theme,
       onState: (state) => {
         if (state === "live") root.dataset.fluid = "live";
         else root.dataset.fluidMoltys = "live";
@@ -28,6 +33,20 @@ export function FluidField() {
       delete root.dataset.fluid;
       delete root.dataset.fluidMoltys;
     };
-  }, []);
+  }, [theme]);
   return <div ref={host} className={styles.field} data-fluid-field="" aria-hidden="true" />;
+}
+
+/** <html data-theme> (Starlight's picker and ThemeToggle set it), followed live; null before mount. */
+function useTheme(): "dark" | "light" | null {
+  const [theme, setTheme] = useState<"dark" | "light" | null>(null);
+  useEffect(() => {
+    const root = document.documentElement;
+    const read = () => setTheme(root.dataset.theme === "light" ? "light" : "dark");
+    read();
+    const mo = new MutationObserver(read);
+    mo.observe(root, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => mo.disconnect();
+  }, []);
+  return theme;
 }

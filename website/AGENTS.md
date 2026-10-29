@@ -56,7 +56,11 @@ Never deploy or publish from here; nothing in this package does.
 - `src/styles/tokens.css` is the only place for colours, fonts, sizes: black glass, dim braille,
   monospace. The only UI colour is the wordmark green; every other colour comes from a Molty's
   palette (via the fluid). Dark and light: light inverts the fluid layer (`--m-fluid-filter`,
-  hue kept) into ink on paper; `ThemeToggle` shares Starlight's `starlight-theme` key.
+  a plain `invert(1)`) into ink on paper, handing the page's own fluid colours over
+  pre-inverted (`molty-stage/paper.ts`: hue kept, ≥ 3:1); device screens stay dark LCDs (the
+  `Device` screen's backdrop undoes the invert, `[data-screen]` takes the dark tokens), so a
+  Molty looks the same in both themes. Light text tokens hold AA (`scripts/tests/light-theme`).
+  `ThemeToggle` shares Starlight's `starlight-theme` key.
 - Components own CSS Modules. `global.css` imports tokens, base and layout only. Starlight's
   chrome is mapped in `src/integrations/starlight/starlight.css`.
 - Static presentation belongs in CSS; inline styles only for runtime values.

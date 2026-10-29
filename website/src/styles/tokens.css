@@ -1,9 +1,30 @@
 /* The source of UI colours, type, spacing and layout sizes. The page is the fluid: black
    glass, dim braille, monospace. The only colour is the wordmark's green (#3ccf96, the
    README wordmark) and whatever the Moltys bring. Light theme = the same fluid as ink on
-   paper (the canvas is inverted, hues kept), so every token has a light twin below. */
+   paper (the canvas is inverted; the page's own fluid colours are handed over pre-inverted,
+   hues kept), so every token has a light twin below. A device's screen stays an LCD in both
+   themes: whatever is drawn on it ([data-screen]) takes the dark colours. */
 :root,
 :root[data-theme="dark"] {
+  /* the device around a round screen (Device): a satin anodised bezel with a rounded lip, a
+     dark gasket at the screen, a contact shadow; its wall and back (polycss, hex only); the
+     screen when off */
+  --m-bezel: #181d1b;
+  --m-bezel-in: #0c0f0e;
+  --m-bezel-out: #070908;
+  --m-bezel-hi: rgba(215, 235, 225, 0.13);
+  --m-bezel-lo: rgba(0, 0, 0, 0.62);
+  --m-bezel-lip: rgba(225, 242, 233, 0.5);
+  --m-bezel-gasket: #020303;
+  --m-device-wall: #1c2220;
+  --m-device-back: #111513;
+  --m-device-contact: rgba(0, 0, 0, 0.75);
+  --m-device-off: #030504;
+  --m-glass-hairline: rgba(255, 255, 255, 0.07);
+}
+:root,
+:root[data-theme="dark"],
+:root[data-theme="light"] [data-screen] {
   color-scheme: dark;
   --m-bg: #000;
   --m-panel: #070908;
@@ -25,29 +46,21 @@
   --m-accent-soft: rgba(60, 207, 150, 0.16);
   --m-overlay: rgba(0, 0, 0, 0.82);
   --m-veil: rgba(0, 0, 0, 0.6);
+  /* the page fluid's layer; a device screen's backdrop (undoes the page's filter over the
+     screen: the Molty shows as drawn); a slot's still portrait under that screen */
   --m-fluid-filter: none;
-  /* the device around a round screen (Device): a satin anodised bezel with a rounded lip, a
-     dark gasket at the screen, a contact shadow; its wall and back (polycss, hex only); the
-     screen when off */
-  --m-bezel: #181d1b;
-  --m-bezel-in: #0c0f0e;
-  --m-bezel-out: #070908;
-  --m-bezel-hi: rgba(215, 235, 225, 0.13);
-  --m-bezel-lo: rgba(0, 0, 0, 0.62);
-  --m-bezel-lip: rgba(225, 242, 233, 0.5);
-  --m-bezel-gasket: #020303;
-  --m-device-wall: #1c2220;
-  --m-device-back: #111513;
-  --m-device-contact: rgba(0, 0, 0, 0.75);
-  --m-device-off: #030504;
-  /* its domed glass (GlassDome): sheen, crisp highlight, opposite rim, fresnel edge */
+  --m-screen-filter: none;
+  --m-still-filter: none;
+  /* a device's domed glass (GlassDome), over the dark screen in both themes: sheen, crisp
+     highlight, opposite rim, fresnel edge */
   --m-glass-sheen: rgba(255, 255, 255, 0.1);
   --m-glass-spec: rgba(255, 255, 255, 0.85);
   --m-glass-spec-soft: rgba(255, 255, 255, 0.22);
   --m-glass-rim: rgba(255, 255, 255, 0.16);
   --m-glass-edge: rgba(0, 0, 0, 0.5);
-  --m-glass-hairline: rgba(255, 255, 255, 0.07);
-
+}
+:root,
+:root[data-theme="dark"] {
   --m-font-mono: ui-monospace, "SF Mono", Menlo, "JetBrains Mono", Consolas, monospace;
   --m-font-sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
 
@@ -104,19 +117,22 @@
   --m-dim: #48544e;
   --m-faint: #9aa59f;
   --m-fluid: #6f8f82;
-  --m-accent: #138a5e;
+  /* text colours hold WCAG AA (4.5:1) on bg, panel and glass; faint is never text */
+  --m-accent: #107f57;
   --m-accent-dim: #2f9a72;
   --m-accent-ink: #fff;
-  --m-accent-glow: rgba(19, 138, 94, 0.06);
-  --m-accent-soft: rgba(19, 138, 94, 0.14);
+  --m-warn: #8a5a00;
+  --m-accent-glow: rgba(16, 127, 87, 0.06);
+  --m-accent-soft: rgba(16, 127, 87, 0.14);
   --m-overlay: rgba(255, 255, 255, 0.86);
   --m-veil: rgba(255, 255, 255, 0.62);
-  /* black glass → white paper; hue-rotate puts each Molty's hue back after the inversion, and
-     saturate/contrast undo the wash-out (inverted pastels land dark and grey on white) */
-  --m-fluid-filter: invert(1) hue-rotate(180deg) saturate(2.6) contrast(1.4) brightness(0.9);
-  --m-yes: #138a5e;
-  --m-no: #d63c3c;
-  --m-idk: #d9771f;
+  /* black glass → white paper. Plain invert is its own exact inverse (no clipping), so a
+     screen's backdrop undoes it and its Molty keeps its colours; the page's own fluid colours
+     (field, headings) are handed over pre-inverted (services/molty-stage/paper.ts) */
+  --m-fluid-filter: invert(1);
+  --m-screen-filter: invert(1);
+  --m-still-filter: invert(1);
+  /* (yes / no / idk are drawn only on the reader's screen: they keep the dark values) */
   --m-bezel: #dce0de;
   --m-bezel-in: #aab3ae;
   --m-bezel-out: #8f9994;
@@ -128,11 +144,5 @@
   --m-device-back: #c5ccc8;
   --m-device-contact: rgba(24, 32, 28, 0.38);
   --m-device-off: #1b211e;
-  /* on paper a broad white sheen is a haze over the Molty: only a crisp highlight and a faint rim */
-  --m-glass-sheen: rgba(255, 255, 255, 0.04);
-  --m-glass-spec: rgba(255, 255, 255, 1);
-  --m-glass-spec-soft: rgba(255, 255, 255, 0.1);
-  --m-glass-rim: rgba(255, 255, 255, 0.45);
-  --m-glass-edge: rgba(24, 32, 28, 0.05);
   --m-glass-hairline: rgba(24, 32, 28, 0.1);
 }
