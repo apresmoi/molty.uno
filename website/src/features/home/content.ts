@@ -19,14 +19,20 @@ export const ldJson = {
 export const WORDMARK = "#3ccf96";
 export const FLUID_INK = "#9cb8ac";
 
-/** The hero's Moltys take turns emerging (the duck and octopus wait for their sections). */
-export const HERO_MOLTYS = ["cute-frog", "cute-dragon", "cute-jellyfish", "cute-bunny", "cute-kitten"];
+/** The hero's Moltys take turns emerging: the duck first, then the octopus, then the bunny. */
+export const HERO_MOLTYS = ["cute-duck", "cute-octopus", "cute-bunny"];
 export const GALLERY_FIRST = "cute-axolotl";
 export const BRIDGE_MOLTY = { id: "cute-octopus", color: "#c6a8f2" };
 export const BAKE_MOLTY = { id: "cute-duck", color: "#ffdf5a" };
 
-/** What an agent might say through Molty, read one word at a time out of the fluid. */
+/** What an agent might say through Molty, read one word at a time out of the fluid; its
+ *  question is answered by a tap on the screen (yes / no / idk), and the agent says one of these back. */
 export const readerText = "Build passed. Three tests were flaky, so I reran them. Want me to open the pull request?";
+export const readerAnswers = {
+  yes: "Opening it now.",
+  no: "Okay, leaving it.",
+  idk: "Okay, I'll leave it for you to check.",
+};
 
 export const bridgeFlow = "agent ──MCP · REST──▶ relay ◀──WSS── molty";
 
@@ -53,5 +59,5 @@ export const boards = [
   },
 ] as const;
 
-/** Porting guide (docs/PORTING.md, synced to this slug when present). */
-export const PORTING_HREF = "/boards/porting/";
+/** Porting guide (docs/PORTING.md, synced to this slug). */
+export const PORTING_HREF = "/getting-started/porting/";

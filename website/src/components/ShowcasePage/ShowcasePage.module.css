@@ -1,0 +1,98 @@
+/* The showcase is one stage over the live fluid (FluidField, fixed behind): the heading is
+   drawn BY the fluid (transparent text once it is live), the Molty lives in the big slot. */
+.root {
+  position: relative;
+  font: var(--m-text-md) / 1.6 var(--m-font-mono);
+  user-select: none;
+  -webkit-user-select: none;
+}
+.root > section,
+.root > footer {
+  position: relative;
+  z-index: 1;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: var(--m-content-width);
+  margin: 0 auto;
+  padding-inline: var(--m-gutter);
+}
+
+/* one column (phones, tablets): heading, text, the stage, its actions, the names. The stage
+   island's children take these areas (MoltyShowcase: stage, panel, names). */
+.show {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "head"
+    "text"
+    "stage"
+    "panel"
+    "names";
+  align-items: start;
+  padding-block: calc(var(--m-header-height) + var(--m-space-6)) var(--m-space-12);
+}
+.show :global(astro-island) {
+  display: contents;
+}
+
+.word {
+  grid-area: head;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 0 var(--m-space-4);
+  color: var(--m-ink);
+  font-family: var(--m-font-mono);
+  font-size: var(--m-text-page);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  white-space: nowrap;
+}
+:global(html[data-fluid="live"]) .word {
+  color: transparent;
+}
+.word::selection {
+  color: var(--m-ink);
+}
+.text {
+  grid-area: text;
+  width: fit-content;
+  max-width: 34em;
+  margin: 0 0 var(--m-space-4);
+  color: var(--m-ink);
+}
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--m-space-2) var(--m-space-6);
+  padding-block: var(--m-space-8) var(--m-space-12);
+  font-size: var(--m-text-base);
+}
+.footer a {
+  color: var(--m-accent);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.footer a:hover {
+  color: var(--m-ink);
+}
+
+/* two columns: the stage left (it stays in view while the list scrolls), everything else right */
+@media (min-width: 60rem) {
+  .show {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: auto auto auto minmax(0, 1fr);
+    grid-template-areas:
+      "stage head"
+      "stage text"
+      "stage panel"
+      "stage names";
+    column-gap: var(--m-space-12);
+    min-height: 100svh;
+    box-sizing: border-box;
+  }
+  .word {
+    margin-top: var(--m-space-4);
+  }
+}

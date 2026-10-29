@@ -1,0 +1,15 @@
+---
+import ContentLayout from "../layouts/ContentLayout.astro";
+import { ShowcasePage } from "../components/ShowcasePage";
+import { FluidField } from "../components/FluidField";
+import { MoltyShowcase } from "../components/MoltyShowcase";
+import { title, description, SHOWCASE_FIRST } from "../features/showcase/content";
+import { MOLTYS } from "../features/moltys/catalog";
+---
+
+<ContentLayout title={title} description={description} path="/showcase/">
+  <ShowcasePage>
+    <FluidField slot="fluid" client:load />
+    <MoltyShowcase slot="stage" client:load moltys={MOLTYS} initial={SHOWCASE_FIRST} />
+  </ShowcasePage>
+</ContentLayout>

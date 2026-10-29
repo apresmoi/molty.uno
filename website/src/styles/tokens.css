@@ -17,11 +17,21 @@
   --m-accent-dim: #2f9a72;
   --m-accent-ink: #001a0e;
   --m-warn: #ffcf7a;
+  /* the reader's answers: yes / no / idk */
+  --m-yes: #3ccf96;
+  --m-no: #ff6b6b;
+  --m-idk: #ffa94d;
   --m-accent-glow: rgba(60, 207, 150, 0.07);
   --m-accent-soft: rgba(60, 207, 150, 0.16);
   --m-overlay: rgba(0, 0, 0, 0.82);
   --m-veil: rgba(0, 0, 0, 0.6);
   --m-fluid-filter: none;
+  /* the domed glass shell over a round screen (SpeedReader) */
+  --m-shell-hi: rgba(255, 255, 255, 0.13);
+  --m-shell-arc: rgba(255, 255, 255, 0.3);
+  --m-shell-rim: rgba(255, 255, 255, 0.14);
+  --m-shell-shade: rgba(0, 0, 0, 0.6);
+  --m-shell-drop: rgba(0, 0, 0, 0.9);
 
   --m-font-mono: ui-monospace, "SF Mono", Menlo, "JetBrains Mono", Consolas, monospace;
   --m-font-sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
@@ -33,8 +43,9 @@
   --m-text-lg: 19px;
   --m-text-xl: 28px;
   --m-text-hero: clamp(30px, 5.2vw, 52px);
-  --m-text-word: clamp(64px, 13.4vw, 196px);
+  --m-text-word: clamp(min(64px, 17.5vw), 13.4vw, 196px);
   --m-text-section: clamp(84px, 10vw, 150px);
+  --m-text-page: clamp(60px, 6.6vw, 100px);
 
   --m-space-1: 4px;
   --m-space-2: 8px;
@@ -53,6 +64,18 @@
   --m-sidebar-width: 280px;
   --m-z-header: 100;
   --sl-nav-height: var(--m-header-height);
+  /* a Molty's square and the reader's glass when the landing stacks (phones, portrait tablets):
+     capped by the screen's height too, so a section's copy and its Molty share one screen */
+  --m-stack-slot: min(100%, 520px, 44svh);
+  --m-stack-glass: min(84vw, 420px, 40svh);
+}
+@media (max-width: 46rem) {
+  /* [data-theme] matches the dark block's specificity */
+  :root,
+  :root[data-theme] {
+    --m-stack-slot: min(100%, 400px, 40svh);
+    --m-stack-glass: min(84vw, 340px, 40svh);
+  }
 }
 :root[data-theme="light"] {
   color-scheme: light;
@@ -73,4 +96,12 @@
   --m-veil: rgba(255, 255, 255, 0.62);
   /* black glass → white paper; hue-rotate puts each Molty's hue back after the inversion */
   --m-fluid-filter: invert(1) hue-rotate(180deg);
+  --m-yes: #138a5e;
+  --m-no: #d63c3c;
+  --m-idk: #d9771f;
+  --m-shell-hi: rgba(255, 255, 255, 0.55);
+  --m-shell-arc: rgba(255, 255, 255, 0.95);
+  --m-shell-rim: rgba(24, 32, 28, 0.16);
+  --m-shell-shade: rgba(24, 32, 28, 0.13);
+  --m-shell-drop: rgba(24, 32, 28, 0.35);
 }

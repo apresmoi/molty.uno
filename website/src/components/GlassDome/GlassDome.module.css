@@ -1,0 +1,18 @@
+/* A broad glow and a specular arc toward the top-left, a lit rim, depth toward the bottom. */
+.dome {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  border-radius: 50%;
+  pointer-events: none;
+  background:
+    radial-gradient(58% 42% at 33% 21%, var(--m-shell-hi), transparent 72%),
+    radial-gradient(circle at 64% 72%, transparent 68.5%, var(--m-shell-arc) 71.4%, transparent 73.5%),
+    radial-gradient(circle at 50% 40%, transparent 62%, var(--m-shell-shade) 100%);
+  box-shadow:
+    inset 0 0 0 1.5px var(--m-shell-rim),
+    inset 0 2px 3px var(--m-shell-rim),
+    inset 0 -14px 26px -8px var(--m-shell-shade),
+    0 0 0 1px var(--m-line),
+    0 18px 36px -14px var(--m-shell-drop);
+}

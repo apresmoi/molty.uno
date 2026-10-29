@@ -1,0 +1,32 @@
+.mark {
+  width: 0.75em;
+  height: 0.75em;
+  flex: none;
+  fill: currentColor;
+  color: var(--m-accent);
+}
+/* one diagonal, then the other: each pair shows for half the cycle */
+.rise,
+.fall {
+  animation: swap 2s steps(1, end) infinite;
+}
+.fall {
+  animation-delay: -1s;
+}
+@keyframes swap {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rise,
+  .fall {
+    animation: none;
+  }
+  .fall {
+    opacity: 0;
+  }
+}

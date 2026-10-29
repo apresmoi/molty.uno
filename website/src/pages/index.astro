@@ -5,7 +5,15 @@ import { FluidField } from "../components/FluidField";
 import { MoltyPicker } from "../components/MoltyPicker";
 import { CopyMessage } from "../components/CopyMessage";
 import { SpeedReader } from "../components/SpeedReader";
-import { title, description, ldJson, pairingMessage, GALLERY_FIRST, readerText } from "../features/home/content";
+import {
+  title,
+  description,
+  ldJson,
+  pairingMessage,
+  GALLERY_FIRST,
+  readerText,
+  readerAnswers,
+} from "../features/home/content";
 import { MOLTYS } from "../features/moltys/catalog";
 ---
 
@@ -13,8 +21,8 @@ import { MOLTYS } from "../features/moltys/catalog";
   <script slot="head" type="application/ld+json" set:html={JSON.stringify(ldJson)} />
   <HomePage>
     <FluidField slot="fluid" client:load />
-    <SpeedReader slot="reader" client:visible text={readerText} />
-    <MoltyPicker slot="picker" client:visible moltys={MOLTYS} initial={GALLERY_FIRST} />
+    <SpeedReader slot="reader" client:idle text={readerText} answers={readerAnswers} />
+    <MoltyPicker slot="picker" client:idle moltys={MOLTYS} initial={GALLERY_FIRST} />
     <CopyMessage slot="message" client:visible text={pairingMessage} />
   </HomePage>
 </ContentLayout>

@@ -3,6 +3,9 @@
 .root {
   position: relative;
   font: var(--m-text-md) / 1.6 var(--m-font-mono);
+  /* the landing is a stage, not a document: only the pairing message selects (it is meant to be copied) */
+  user-select: none;
+  -webkit-user-select: none;
 }
 .root > section,
 .root > footer {
@@ -54,8 +57,11 @@
   padding-block: calc(var(--m-header-height) + var(--m-space-8)) var(--m-space-8);
 }
 .heroBody {
+  /* the Molty's dome; it sits a little below the wordmark and reaches past its row below
+     only (the copy sets the row), so the hero still fits a 800px screen */
+  --hero-slot: min(420px, 38vw, 44svh);
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 360px);
+  grid-template-columns: minmax(0, 1fr) minmax(0, var(--hero-slot));
   align-items: center;
   gap: var(--m-space-8);
 }
@@ -63,6 +69,8 @@
   min-width: 0;
 }
 .lede {
+  /* hug the text: the quiet zone under it is this box */
+  width: fit-content;
   margin: 0 0 var(--m-space-6);
   color: var(--m-ink);
   font-size: var(--m-text-lg);
@@ -75,31 +83,12 @@
   position: relative;
   aspect-ratio: 1;
   width: 100%;
-}
-.three {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--m-space-2) var(--m-space-6);
-  margin: var(--m-space-6) 0 0;
-  font-size: var(--m-text-sm);
-}
-.three a {
-  color: var(--m-dim);
-  text-decoration: none;
-}
-.three a:hover {
-  color: var(--m-accent);
+  margin-block: var(--m-space-2) min(0px, 300px - var(--hero-slot));
 }
 
 /* ---- sections ---- */
 .section {
   padding-block: 22vh 6vh;
-}
-.num {
-  margin: 0 0 var(--m-space-2);
-  color: var(--m-dim);
-  font-size: var(--m-text-sm);
-  letter-spacing: 0.06em;
 }
 .text {
   max-width: 34em;
@@ -128,12 +117,50 @@
 
 .split {
   display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
   align-items: center;
   gap: var(--m-space-12);
 }
+.flip {
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+}
 .flip > .slot {
   order: -1;
+  max-width: min(660px, 80svh);
+}
+/* 01: the reader's glass stands left of the heading, the text and its controls (like 03) */
+.reading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+  column-gap: var(--m-space-12);
+  align-items: center;
+}
+.reading > * {
+  grid-column: 2;
+}
+.reading :global(astro-island) {
+  display: contents;
+}
+.reading [data-reader-glass] {
+  grid-column: 1;
+  grid-row: 1 / span 4;
+}
+/* 02: the picker's slot stands beside the heading, the text and the names, like 04 */
+.gallery {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+  column-gap: var(--m-space-12);
+  align-items: center;
+}
+.gallery > * {
+  grid-column: 1;
+}
+.gallery :global(astro-island) {
+  display: contents;
+}
+.gallery [data-fluid-slot="gallery"] {
+  grid-column: 2;
+  grid-row: 1 / span 4;
 }
 .copy {
   min-width: 0;
@@ -142,7 +169,8 @@
   position: relative;
   aspect-ratio: 1;
   width: 100%;
-  max-width: 420px;
+  /* the screen's height caps it too: a short screen (a phone on its side) keeps it whole */
+  max-width: min(540px, 80svh);
   justify-self: center;
 }
 .still {
@@ -158,18 +186,6 @@
 }
 
 /* 01: a patch where the fluid runs denser, to touch */
-.pool {
-  display: grid;
-  place-items: center;
-  height: 36vh;
-  min-height: 220px;
-  margin-inline: calc(-1 * var(--m-gutter));
-}
-.pool span {
-  color: var(--m-dim);
-  font-size: var(--m-text-sm);
-  letter-spacing: 0.3em;
-}
 
 /* 03 */
 .flow {
@@ -233,36 +249,101 @@
 .footer a:hover {
   color: var(--m-accent);
 }
+.credit {
+  margin-left: auto;
+}
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--m-space-2);
+}
 
-@media (max-width: 46rem) {
+/* Stacked: phones, and tablets held upright (two columns there leave the copy a narrow strip and
+   the Molty small in a tall, empty screen). Each section's copy and Molty share about one screen. */
+@media (max-width: 46rem), (max-width: 68rem) and (orientation: portrait) {
   .hero {
     justify-content: flex-start;
     gap: var(--m-space-4);
     padding-top: calc(var(--m-header-height) + 10svh);
   }
+  .reading > *,
+  .reading [data-reader-glass] {
+    grid-column: 1;
+    grid-row: auto;
+  }
+  .gallery [data-fluid-slot="gallery"] {
+    grid-column: 1;
+    grid-row: auto;
+  }
   .heroBody,
-  .split {
+  .split,
+  .reading,
+  .gallery {
     grid-template-columns: minmax(0, 1fr);
     gap: var(--m-space-4);
   }
   .heroSlot {
     order: -1;
-    width: min(72vw, 300px);
+    width: var(--m-stack-slot);
+    margin-block: 0;
     justify-self: center;
   }
-  .flip > .slot {
+  /* bridge and bake: the Molty comes in under the heading and its first line (like talk's glass
+     and the gallery), not after the whole column; the copy's own margins space it */
+  .split {
+    gap: 0;
+  }
+  .split > .copy {
+    display: contents;
+  }
+  .split > .copy > *,
+  .split > .copy > :global(astro-island) > * {
+    /* an island is display: contents, so its own order is moot: order its content */
+    order: 2;
+  }
+  .split > .copy > :nth-child(-n + 2) {
     order: 0;
   }
-  .slot {
-    max-width: 300px;
+  .split > .slot,
+  .flip > .slot {
+    order: 1;
+    margin-bottom: var(--m-space-6);
+  }
+  .slot,
+  .flip > .slot {
+    width: var(--m-stack-slot);
+    max-width: none;
   }
   .section {
-    padding-top: 16vh;
+    padding-block: calc(var(--m-header-height) + 6svh) 4svh;
   }
+  .footer {
+    padding-block: 12svh var(--m-space-8);
+  }
+}
+@media (max-width: 46rem) {
   .boards li {
     grid-template-columns: 3.6em minmax(0, 1fr);
   }
   .boards li > :last-child {
     grid-column: 2;
+  }
+  /* the credit takes its own line instead of hanging off whatever wraps last */
+  .credit {
+    flex-basis: 100%;
+    margin-left: 0;
+  }
+}
+/* a phone on its side: the screen is short, so the hero starts under the header */
+@media (max-height: 30rem) and (orientation: landscape) {
+  .hero {
+    gap: var(--m-space-2);
+    padding-block: calc(var(--m-header-height) + var(--m-space-4)) var(--m-space-6);
+  }
+  .mark {
+    font-size: min(var(--m-text-word), 22svh);
+  }
+  .section {
+    padding-block: 14svh 4svh;
   }
 }

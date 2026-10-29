@@ -14,13 +14,6 @@ export const SYNCED_DOCS = [
   },
   {
     source: 'docs/PORTING.md',
-    slug: 'boards/porting',
-    title: 'Port it to your screen',
-    description: 'Bring the fluid, the Moltys and the bridge to a board that is not on the list.',
-    optional: true,
-  },
-  {
-    source: 'docs/PORTING.md',
     slug: 'getting-started/porting',
     title: 'Porting to your board',
     description: 'Bake molty.UNO for your own screen: one board folder, optional parts, build, flash, submit.',

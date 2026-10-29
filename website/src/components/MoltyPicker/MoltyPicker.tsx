@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { Molty } from "../../features/moltys/catalog";
+import { GlassDome } from "../GlassDome";
 import styles from "./MoltyPicker.module.css";
 
 /** The Moltys, by name. The chosen one emerges from the page fluid in the slot (the fluid
@@ -17,6 +18,7 @@ export function MoltyPicker({ moltys, initial }: { moltys: Molty[]; initial: str
         aria-label={`${selected.name}, emerging from the fluid`}
       >
         <img className={styles.still} src={selected.thumb} alt="" width={150} height={150} />
+        <GlassDome />
       </div>
       <div className={styles.side}>
         <ul className={styles.names} aria-label={`The ${moltys.length} Moltys`}>

@@ -4,6 +4,8 @@
   z-index: var(--m-z-header);
   box-sizing: border-box;
   height: var(--m-header-height);
+  user-select: none;
+  -webkit-user-select: none;
   display: flex;
   align-items: center;
   gap: var(--m-space-6);

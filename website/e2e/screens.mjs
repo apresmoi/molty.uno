@@ -144,7 +144,7 @@ const scrollToSection = (page, id) =>
     if (typed.length < 2) fail(`speed reader letters do not read the typed text (saw ${[...seen].join(' ') || 'nothing'})`);
     else console.log(`ok   speed reader letters read the typed text (${typed.join(' ')})`);
   }
-  for (const id of ['fluid', 'bridge', 'boards']) {
+  for (const id of ['talk', 'bridge', 'boards']) {
     await scrollToSection(page, id);
     await page.waitForTimeout(3500);
     await page.screenshot({ path: OUT + `landing-1440-${id}.png` });

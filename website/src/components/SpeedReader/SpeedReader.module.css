@@ -1,19 +1,21 @@
+/* the page lays the glass and the controls out (the root is transparent to its grid) */
 .root {
-  display: grid;
-  grid-template-columns: minmax(0, 340px) minmax(0, 1fr);
-  align-items: center;
-  gap: var(--m-space-12);
-  margin-top: var(--m-space-12);
+  display: contents;
 }
 /* the device's own round screen, sitting in the page fluid */
 .glass {
   position: relative;
   aspect-ratio: 1;
-  width: 100%;
+  width: min(100%, 420px, 80svh);
+  justify-self: center;
   border-radius: 50%;
   overflow: hidden;
   background: var(--m-bg);
-  box-shadow: 0 0 0 1px var(--m-line);
+  box-shadow:
+    0 0 0 1px var(--m-line),
+    0 18px 36px -14px var(--m-shell-drop);
+  /* the choices are sized off the screen */
+  container-type: inline-size;
 }
 .host {
   position: absolute;
@@ -33,14 +35,128 @@
   font: var(--m-text-md) / 1.5 var(--m-font-mono);
   text-align: center;
 }
+/* three equal 120° sectors are the answer buttons (dividers at 12, 4 and 8 o'clock): yes
+   upper left, no upper right, idk at the bottom. Each button covers the screen, clipped to
+   its sector (the clip is its hit area too); its word sits on the sector's bisector. */
+.sectors {
+  position: absolute;
+  inset: 0;
+}
+[data-listening] .sectors {
+  /* faint dividers, hair-thin at the centre */
+  background: repeating-conic-gradient(from -0.35deg, var(--m-faint) 0 0.7deg, transparent 0.7deg 120deg);
+}
+.sector {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--m-dim);
+  font: inherit;
+  cursor: pointer;
+}
+.sector[data-choice="yes"] {
+  clip-path: polygon(50% 50%, 50% -60%, -60% -60%, -60% 113.5%);
+}
+.sector[data-choice="no"] {
+  clip-path: polygon(50% 50%, 50% -60%, 160% -60%, 160% 113.5%);
+}
+.sector[data-choice="idk"] {
+  clip-path: polygon(50% 50%, 160% 113.5%, 160% 160%, -60% 160%, -60% 113.5%);
+}
+.sector:disabled {
+  /* not asking: the pointer stirs the fluid underneath */
+  pointer-events: none;
+}
+.sector:not(:disabled):hover {
+  background: var(--m-accent-glow);
+}
+.sector:focus-visible {
+  outline: 0;
+  background: var(--m-accent-soft);
+}
+/* the word's spot: centred on the sector's bisector, 40 % of the radius out */
+.spot {
+  position: absolute;
+  display: grid;
+  justify-items: center;
+  gap: 1.5cqi;
+  translate: -50% -30%;
+}
+[data-choice="yes"] .spot {
+  left: 32.7%;
+  top: 40%;
+}
+[data-choice="no"] .spot {
+  left: 67.3%;
+  top: 40%;
+}
+[data-choice="idk"] .spot {
+  left: 50%;
+  top: 70%;
+}
+.choice {
+  /* not asking: the words stay laid out (the fluid measures them) but unseen */
+  color: transparent;
+  font: 700 14cqi / 1 var(--m-font-mono);
+  letter-spacing: -0.04em;
+}
+[data-listening] .choice {
+  color: var(--choice);
+}
+[data-choice="yes"] {
+  --choice: var(--m-yes);
+}
+[data-choice="no"] {
+  --choice: var(--m-no);
+}
+[data-choice="idk"] {
+  --choice: var(--m-idk);
+}
+/* live: the fluid condenses the words first, then the real letters settle in over the ink
+   (the reader's plain look: the fluid alone is too coarse to read at this size) */
+.glass[data-live] .choice {
+  color: transparent;
+  transition: color 0.25s;
+}
+.glass[data-live][data-listening] .choice {
+  color: var(--choice);
+  transition: color 0.5s 0.45s;
+}
+/* a tap keeps the chosen word a beat while the others melt */
+.glass[data-held="yes"] [data-choice="yes"] .choice,
+.glass[data-held="no"] [data-choice="no"] .choice,
+.glass[data-held="idk"] [data-choice="idk"] .choice {
+  color: var(--choice);
+  transition: none;
+}
+.hint {
+  color: var(--m-dim);
+  font: var(--m-text-xs) / 1 var(--m-font-mono);
+  visibility: hidden;
+}
+[data-listening] .hint {
+  visibility: visible;
+}
 .side {
+  /* hug the text: the quiet zone under it is this box */
+  width: fit-content;
+  max-width: 30em;
   min-width: 0;
 }
 .said {
   max-width: 30em;
-  margin: 0 0 var(--m-space-6);
+  margin: 0 0 var(--m-space-2);
   color: var(--m-dim);
   overflow-wrap: anywhere;
+}
+.status {
+  min-height: 1.6em;
+  margin: 0 0 var(--m-space-4);
+  color: var(--m-accent);
+  font-size: var(--m-text-base);
 }
 .row {
   display: flex;
@@ -105,13 +221,9 @@
 .form input:focus {
   border-bottom-color: var(--m-accent);
 }
-@media (max-width: 46rem) {
-  .root {
-    grid-template-columns: minmax(0, 1fr);
-    gap: var(--m-space-6);
-  }
+/* stacked (phones, portrait tablets): see --m-stack-glass */
+@media (max-width: 46rem), (max-width: 68rem) and (orientation: portrait) {
   .glass {
-    width: min(78vw, 300px);
-    justify-self: center;
+    width: var(--m-stack-glass);
   }
 }

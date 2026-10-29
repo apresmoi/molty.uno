@@ -59,7 +59,7 @@
   font-weight: 600;
 }
 .sidebar-content a[aria-current="page"]::before {
-  content: "⠶ ";
+  content: "⠔ ";
 }
 .sidebar-content .group-label .large {
   font-family: var(--m-font-mono);

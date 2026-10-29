@@ -1,14 +1,12 @@
+/* the page lays the slot and the names out (the root is transparent to its grid) */
 .root {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
-  gap: var(--m-space-8);
-  align-items: center;
+  display: contents;
 }
 .slot {
   position: relative;
   aspect-ratio: 1;
   width: 100%;
-  max-width: 420px;
+  max-width: min(540px, 80svh);
   justify-self: center;
 }
 .still {
@@ -70,12 +68,32 @@
 .file a:hover {
   color: var(--m-ink);
 }
-@media (max-width: 46rem) {
-  .root {
-    grid-template-columns: minmax(0, 1fr);
-    gap: var(--m-space-4);
-  }
+/* stacked (phones, portrait tablets): see --m-stack-slot */
+@media (max-width: 46rem), (max-width: 68rem) and (orientation: portrait) {
   .slot {
-    max-width: 300px;
+    width: var(--m-stack-slot);
+    max-width: none;
+  }
+}
+/* phones: the names are a three-row strip that scrolls sideways (wrapped, they ran a screen long) */
+@media (max-width: 46rem) {
+  .names {
+    display: grid;
+    grid-template-rows: repeat(3, auto);
+    grid-auto-flow: column;
+    justify-content: start;
+    margin-inline: calc(-1 * var(--m-gutter));
+    padding-inline: var(--m-gutter);
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    /* fade the clipped edge: there is more to the right */
+    mask-image: linear-gradient(to right, var(--m-bg) 82%, transparent);
+  }
+  .names::-webkit-scrollbar {
+    display: none;
+  }
+  .names button {
+    white-space: nowrap;
   }
 }

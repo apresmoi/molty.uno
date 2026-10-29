@@ -7,9 +7,6 @@
   text-decoration: none;
   white-space: nowrap;
 }
-.mark {
-  color: var(--m-accent);
-}
 .name b {
   color: var(--m-accent);
 }

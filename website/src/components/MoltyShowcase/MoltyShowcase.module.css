@@ -1,0 +1,149 @@
+/* the page (ShowcasePage) lays the stage, the panel and the names out: the root is
+   transparent to its grid */
+.root {
+  display: contents;
+}
+.stage {
+  grid-area: stage;
+  position: relative;
+  aspect-ratio: 1;
+  width: 100%;
+  max-width: 520px;
+  justify-self: center;
+}
+.still {
+  position: absolute;
+  inset: 12%;
+  width: 76%;
+  height: 76%;
+  object-fit: contain;
+  transition: opacity 0.4s;
+}
+:global(html[data-fluid-moltys="live"]) .still {
+  opacity: 0;
+}
+
+.panel {
+  grid-area: panel;
+  min-width: 0;
+}
+.names {
+  grid-area: names;
+  min-width: 0;
+  margin-top: var(--m-space-6);
+}
+
+.now {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--m-space-2);
+  margin: 0 0 var(--m-space-2);
+  font-size: var(--m-text-md);
+}
+.now b {
+  color: var(--m-ink);
+}
+.now span {
+  color: var(--m-dim);
+}
+
+.group h3,
+.names h3 {
+  margin: var(--m-space-3) 0 var(--m-space-1);
+  color: var(--m-dim);
+  font: 400 var(--m-text-sm) / 1.4 var(--m-font-mono);
+}
+
+/* actions: always bracketed, like the page's links; the one playing lights up */
+.play,
+.acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--m-space-1) var(--m-space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.play button,
+.acts button {
+  padding: var(--m-space-1) 0;
+  border: 0;
+  background: transparent;
+  color: var(--m-accent);
+  font: var(--m-text-base) / 1.4 var(--m-font-mono);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.play button::before,
+.acts button::before {
+  content: "[ " / "";
+}
+.play button::after,
+.acts button::after {
+  content: " ]" / "";
+}
+.play button:hover,
+.acts button:hover {
+  color: var(--m-ink);
+}
+.acts button[aria-pressed="true"],
+.play button[aria-pressed="true"] {
+  background: var(--m-accent-soft);
+  color: var(--m-ink);
+}
+
+/* the names, as the home page's picker: the chosen one in brackets */
+.names ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--m-space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.names button {
+  padding: var(--m-space-1) 0;
+  border: 0;
+  background: transparent;
+  color: var(--m-dim);
+  font: var(--m-text-base) / 1.4 var(--m-font-mono);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.names button::before,
+.names button::after {
+  content: "\00a0\00a0";
+}
+.names button:hover {
+  color: var(--m-ink);
+}
+.names button[aria-pressed="true"] {
+  color: var(--m-accent);
+}
+.names button[aria-pressed="true"]::before {
+  content: "[ " / "";
+}
+.names button[aria-pressed="true"]::after {
+  content: " ]" / "";
+}
+
+.file {
+  margin: var(--m-space-4) 0 0;
+  font: var(--m-text-sm) / 1.4 var(--m-font-mono);
+}
+.file a {
+  color: var(--m-accent);
+  text-decoration: none;
+}
+.file a:hover {
+  color: var(--m-ink);
+}
+
+@media (min-width: 60rem) {
+  /* no sticky: the page fluid measures its slots in document space */
+  .stage {
+    align-self: start;
+    max-width: min(640px, 100svh - var(--m-header-height) - var(--m-space-12));
+    margin-top: var(--m-space-4);
+  }
+}

@@ -11,6 +11,8 @@ import {
 } from "../../features/home/content";
 import { MOLTYS } from "../../features/moltys/catalog";
 import { REPO_URL } from "../../config/site.mjs";
+import { GlassDome } from "../GlassDome";
+import { MoltyMark } from "../MoltyMark";
 import styles from "./HomePage.module.css";
 
 const still = (id: string) => MOLTYS.find((m) => m.id === id)?.thumb;
@@ -31,6 +33,7 @@ function Slot({ molty, className }: { molty: string; className?: string }) {
   return (
     <div className={`${styles.slot} ${className ?? ""}`} data-fluid-molty={molty} aria-hidden="true">
       {src && <img className={styles.still} src={src} alt="" width={150} height={150} />}
+      <GlassDome />
     </div>
   );
 }
@@ -59,8 +62,8 @@ export function HomePage({
           molty.UNO
         </h1>
         <div className={styles.heroBody}>
-          <div className={styles.heroCopy} data-fluid-quiet="">
-            <p className={styles.lede}>
+          <div className={styles.heroCopy}>
+            <p className={styles.lede} data-fluid-quiet="">
               Liquid ASCII creatures.
               <br />
               Any agent is the brain.
@@ -79,40 +82,31 @@ export function HomePage({
             className={styles.heroSlot}
             data-fluid-molty={HERO_MOLTYS.join(",")}
             data-fluid-every="12"
-            data-fluid-delay="2.4"
+            data-fluid-delay="0.5"
+            data-fluid-run-in={HERO_MOLTYS[0]}
             aria-hidden="true"
           >
             <img className={styles.still} src={still(HERO_MOLTYS[0]!)} alt="" width={150} height={150} />
+            <GlassDome />
           </div>
         </div>
-        <p className={styles.three} data-fluid-quiet="">
-          <a href="#fluid">01 fluid</a>
-          <a href="#moltys">02 moltys</a>
-          <a href="#bridge">03 bridge</a>
-          <a href="#boards">04 bake</a>
-        </p>
       </section>
 
-      <section className={styles.section} aria-labelledby="fluid">
-        <p className={styles.num}>01 · the rendering</p>
-        <Word id="fluid" color={FLUID_INK}>
-          fluid
+      <section className={`${styles.section} ${styles.reading}`} aria-labelledby="talk">
+        <Word id="talk" color={FLUID_INK}>
+          talk
         </Word>
         <p className={styles.text} data-fluid-quiet="">
-          One fluid of braille fills the screen. Words, creatures and ripples are shapes it flows toward, never painted
-          on top. This page is that fluid.
+          Your agent's words, one at a time, condensing out of the fluid. It asks, Molty listens, and yes, no or idk is
+          one tap on the glass.
         </p>
-        <div className={styles.pool} data-fluid-pool="">
-          <span>touch it</span>
-        </div>
         {reader}
         <Links>
           <a href="/architecture/">[ how it renders → ]</a>
         </Links>
       </section>
 
-      <section className={styles.section} aria-labelledby="moltys">
-        <p className={styles.num}>02 · the creatures</p>
+      <section className={`${styles.section} ${styles.gallery}`} aria-labelledby="moltys">
         <Word id="moltys" color={WORDMARK} tint="gallery">
           moltys
         </Word>
@@ -122,6 +116,7 @@ export function HomePage({
         </p>
         {picker}
         <Links>
+          <a href="/showcase/">[ all moltys &amp; actions → ]</a>
           <a href="/moltys/making-your-own/">[ make your own → ]</a>
           <a href="/moltys/format/">[ the .molty format → ]</a>
         </Links>
@@ -129,7 +124,6 @@ export function HomePage({
 
       <section className={`${styles.section} ${styles.split} ${styles.flip}`} aria-labelledby="bridge">
         <div className={styles.copy}>
-          <p className={styles.num}>03 · the bridge</p>
           <Word id="bridge" color={BRIDGE_MOLTY.color}>
             bridge
           </Word>
@@ -159,7 +153,6 @@ export function HomePage({
 
       <section className={`${styles.section} ${styles.split}`} aria-labelledby="boards">
         <div className={styles.copy}>
-          <p className={styles.num}>04 · bake it</p>
           <Word id="boards" color={BAKE_MOLTY.color}>
             bake
           </Word>
@@ -195,12 +188,17 @@ export function HomePage({
       </section>
 
       <footer className={styles.footer}>
-        <span>⠶ molty.UNO</span>
+        <span className={styles.brand}>
+          <MoltyMark /> molty.UNO
+        </span>
         <span>MIT</span>
         <a href="/getting-started/introduction/">docs</a>
         <a href="/llms.txt">llms.txt</a>
         <a href={REPO_URL} target="_blank" rel="noopener noreferrer">
           source ↗
+        </a>
+        <a className={styles.credit} href="https://ledeluge.me" target="_blank" rel="noopener noreferrer">
+          created by ledeluge.me
         </a>
       </footer>
     </div>
