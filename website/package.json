@@ -24,6 +24,8 @@
     "@astrojs/react": "^5.0.2",
     "@astrojs/sitemap": "^3.7.1",
     "@astrojs/starlight": "^0.38.2",
+    "@layoutit/polycss-core": "0.2.11",
+    "@layoutit/polycss-react": "0.2.11",
     "astro": "^6.0.8",
     "esp-web-tools": "10.4.0",
     "esptool-js": "0.6.1",

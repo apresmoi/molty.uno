@@ -26,12 +26,27 @@
   --m-overlay: rgba(0, 0, 0, 0.82);
   --m-veil: rgba(0, 0, 0, 0.6);
   --m-fluid-filter: none;
-  /* the domed glass shell over a round screen (SpeedReader) */
-  --m-shell-hi: rgba(255, 255, 255, 0.13);
-  --m-shell-arc: rgba(255, 255, 255, 0.3);
-  --m-shell-rim: rgba(255, 255, 255, 0.14);
-  --m-shell-shade: rgba(0, 0, 0, 0.6);
-  --m-shell-drop: rgba(0, 0, 0, 0.9);
+  /* the device around a round screen (Device): a satin anodised bezel with a rounded lip, a
+     dark gasket at the screen, a contact shadow; its wall and back (polycss, hex only); the
+     screen when off */
+  --m-bezel: #181d1b;
+  --m-bezel-in: #0c0f0e;
+  --m-bezel-out: #070908;
+  --m-bezel-hi: rgba(215, 235, 225, 0.13);
+  --m-bezel-lo: rgba(0, 0, 0, 0.62);
+  --m-bezel-lip: rgba(225, 242, 233, 0.5);
+  --m-bezel-gasket: #020303;
+  --m-device-wall: #1c2220;
+  --m-device-back: #111513;
+  --m-device-contact: rgba(0, 0, 0, 0.75);
+  --m-device-off: #030504;
+  /* its domed glass (GlassDome): sheen, crisp highlight, opposite rim, fresnel edge */
+  --m-glass-sheen: rgba(255, 255, 255, 0.1);
+  --m-glass-spec: rgba(255, 255, 255, 0.85);
+  --m-glass-spec-soft: rgba(255, 255, 255, 0.22);
+  --m-glass-rim: rgba(255, 255, 255, 0.16);
+  --m-glass-edge: rgba(0, 0, 0, 0.5);
+  --m-glass-hairline: rgba(255, 255, 255, 0.07);
 
   --m-font-mono: ui-monospace, "SF Mono", Menlo, "JetBrains Mono", Consolas, monospace;
   --m-font-sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
@@ -84,8 +99,8 @@
   --m-glass: #f2f4f3;
   --m-line: #e2e6e4;
   --m-ink: #18201c;
-  --m-dim: #5d6a63;
-  --m-faint: #b4beb9;
+  --m-dim: #48544e;
+  --m-faint: #9aa59f;
   --m-fluid: #6f8f82;
   --m-accent: #138a5e;
   --m-accent-dim: #2f9a72;
@@ -94,14 +109,28 @@
   --m-accent-soft: rgba(19, 138, 94, 0.14);
   --m-overlay: rgba(255, 255, 255, 0.86);
   --m-veil: rgba(255, 255, 255, 0.62);
-  /* black glass → white paper; hue-rotate puts each Molty's hue back after the inversion */
-  --m-fluid-filter: invert(1) hue-rotate(180deg);
+  /* black glass → white paper; hue-rotate puts each Molty's hue back after the inversion, and
+     saturate/contrast undo the wash-out (inverted pastels land dark and grey on white) */
+  --m-fluid-filter: invert(1) hue-rotate(180deg) saturate(2.6) contrast(1.4) brightness(0.9);
   --m-yes: #138a5e;
   --m-no: #d63c3c;
   --m-idk: #d9771f;
-  --m-shell-hi: rgba(255, 255, 255, 0.55);
-  --m-shell-arc: rgba(255, 255, 255, 0.95);
-  --m-shell-rim: rgba(24, 32, 28, 0.16);
-  --m-shell-shade: rgba(24, 32, 28, 0.13);
-  --m-shell-drop: rgba(24, 32, 28, 0.35);
+  --m-bezel: #dce0de;
+  --m-bezel-in: #aab3ae;
+  --m-bezel-out: #8f9994;
+  --m-bezel-hi: rgba(255, 255, 255, 0.7);
+  --m-bezel-lo: rgba(24, 32, 28, 0.34);
+  --m-bezel-lip: rgba(255, 255, 255, 0.95);
+  --m-bezel-gasket: #3a423e;
+  --m-device-wall: #b3bbb7;
+  --m-device-back: #c5ccc8;
+  --m-device-contact: rgba(24, 32, 28, 0.38);
+  --m-device-off: #1b211e;
+  /* on paper a broad white sheen is a haze over the Molty: only a crisp highlight and a faint rim */
+  --m-glass-sheen: rgba(255, 255, 255, 0.04);
+  --m-glass-spec: rgba(255, 255, 255, 1);
+  --m-glass-spec-soft: rgba(255, 255, 255, 0.1);
+  --m-glass-rim: rgba(255, 255, 255, 0.45);
+  --m-glass-edge: rgba(24, 32, 28, 0.05);
+  --m-glass-hairline: rgba(24, 32, 28, 0.1);
 }

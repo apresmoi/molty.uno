@@ -20,6 +20,9 @@
 //                       ({ act, kind, name, phase: "start" | "end" }) as it starts and ends
 //                       (or is cut short). Reduced motion: a mood is a settled still, a beat
 //                       a still of its midpoint. actions.ts has the protocol (the showcase).
+//   [data-fluid-hold]   (set by the Device as its board turns in, on a molty slot) the Molty
+//                       waits melted: the fluid cannot turn with the board, so it condenses
+//                       as the turn ends. `data-fluid-yaw` (radians) turns the Molty with it.
 //   [data-fluid-quiet]  the fluid recedes under prose
 //   [data-fluid-pool]   the fluid pools here (an invitation to touch it)
 // The pointer stirs it and taps ripple it (the package's window pointer). 30 fps, ≤176
@@ -184,6 +187,7 @@ class PageFluid implements PageFluidHandle {
       for (const r of records) {
         const s = this.slots.find((x) => x.el === r.target);
         if (s && r.attributeName === "data-fluid-act") this.request(s);
+        else if (s && r.attributeName === "data-fluid-hold") this.tick(s, false);
         else if (s) this.tick(s, true);
       }
       this.retint();
@@ -191,7 +195,7 @@ class PageFluid implements PageFluidHandle {
     mo.observe(document.body, {
       subtree: true,
       attributes: true,
-      attributeFilter: ["data-fluid-molty", "data-fluid-act"],
+      attributeFilter: ["data-fluid-molty", "data-fluid-act", "data-fluid-hold"],
     });
     this.cleanup.push(() => mo.disconnect());
     // the slot schedule (cycling, the gap, the dance, asked actions) on a light clock; the
@@ -315,7 +319,7 @@ class PageFluid implements PageFluidHandle {
     const ids = (s.el.dataset.fluidMolty ?? "").split(",").filter(Boolean);
     if (!ids.length) return null;
     if (this.options.reducedMotion) return ids[0]!;
-    if (this.t < s.delay) return null;
+    if (this.t < s.delay || s.el.hasAttribute("data-fluid-hold")) return null;
     if (!s.every || ids.length === 1) return ids[0]!;
     const k = (this.t - s.delay) / s.every;
     if (k - Math.floor(k) > 1 - GAP / s.every) return null; // the gap
@@ -364,6 +368,7 @@ class PageFluid implements PageFluidHandle {
     s.last = now;
     if (this.options.reducedMotion) return s.rig.polygons;
     if (s.run !== null) return this.running(s, dt);
+    s.rig.yaw = Number(s.el.dataset.fluidYaw) || 0; // the Device turning in (0 at rest)
     if (s.beat) return this.glassing(s, dt);
     if (s.held > 0) return this.holding(s, dt);
     s.danceT += dt;

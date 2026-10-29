@@ -9,7 +9,7 @@ import {
   type MoltyAction,
   type MoltyActions,
 } from "../../services/molty-stage";
-import { GlassDome } from "../GlassDome";
+import { Device } from "../Device";
 import styles from "./MoltyShowcase.module.css";
 
 type Phase = "idle" | "asked" | "playing";
@@ -151,7 +151,7 @@ export function MoltyShowcase({ moltys, initial }: { moltys: Molty[]; initial: s
         aria-label={`${molty.name}, emerging from the fluid`}
       >
         <img className={styles.still} src={molty.thumb} alt="" width={150} height={150} />
-        <GlassDome />
+        <Device reveal="turn" replay={molty.id} />
       </div>
 
       <div className={styles.panel} data-fluid-quiet="">

@@ -5,6 +5,7 @@ import { FluidField } from "../components/FluidField";
 import { MoltyPicker } from "../components/MoltyPicker";
 import { CopyMessage } from "../components/CopyMessage";
 import { SpeedReader } from "../components/SpeedReader";
+import { Device } from "../components/Device";
 import {
   title,
   description,
@@ -24,5 +25,8 @@ import { MOLTYS } from "../features/moltys/catalog";
     <SpeedReader slot="reader" client:idle text={readerText} answers={readerAnswers} />
     <MoltyPicker slot="picker" client:idle moltys={MOLTYS} initial={GALLERY_FIRST} />
     <CopyMessage slot="message" client:visible text={pairingMessage} />
+    <Device slot="heroDevice" client:load reveal="arrive" />
+    <Device slot="bridgeDevice" client:idle reveal="rise" />
+    <Device slot="bakeDevice" client:idle reveal="coin" />
   </HomePage>
 </ContentLayout>

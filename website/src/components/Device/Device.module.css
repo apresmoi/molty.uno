@@ -1,0 +1,111 @@
+/* The device over a round screen. At rest it is flat CSS: a contact shadow, the bezel (a satin
+   ring with a rounded lip and a gasket at the screen), the screen-off disc and the domed glass.
+   While it turns, the face layer carries all of that on the board's front plane and the wall
+   is a polycss scene behind it. All decoration: it fills the slot and never takes the pointer,
+   so taps reach the screen and ripple the fluid. */
+.device {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  pointer-events: none;
+  /* cq units: the shadow scales with the screen */
+  container-type: size;
+}
+.device :global(*) {
+  pointer-events: none;
+}
+/* before its script: one that arrives is unseen (no settled flash before the turn in), unless
+   no script takes over (then it fades in at rest). Reduced motion: shown at once. */
+@media (prefers-reduced-motion: no-preference) {
+  .device[data-armed] {
+    opacity: 0;
+    animation: unarmed 0.4s 4s forwards;
+  }
+}
+@keyframes unarmed {
+  to {
+    opacity: 1;
+  }
+}
+
+/* soft and close under it, a little below (the light is up-left, in front). A box-shadow is
+   drawn only outside its box, so none of it shows through the (transparent) screen */
+.shadow {
+  position: absolute;
+  inset: -5%;
+  border-radius: 50%;
+  box-shadow: 1.5cqw 4cqw 7cqw -1cqw var(--m-device-contact);
+}
+
+/* the wall's polycss camera (mounted only while it turns); the scene is centred in it. It
+   reaches past the slot so a turned wall is never cut */
+.body {
+  position: absolute;
+  inset: -15%;
+}
+
+.face,
+.cover,
+.lid {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+}
+
+/* the bezel: a ring from the screen's edge (90.9 % of its radius) to 1.1 × the screen's
+   radius. Its section is rounded: a dark gasket where it meets the glass, rising to the
+   lit crown, rolling off darker to the side; lit from up-left, shaded down-right (satin: soft,
+   no hard reflections but the lip's) */
+.bezel {
+  position: absolute;
+  inset: -5%;
+  border-radius: 50%;
+  background:
+    linear-gradient(135deg, var(--m-bezel-hi) 8%, transparent 46%, transparent 58%, var(--m-bezel-lo) 92%),
+    radial-gradient(
+      closest-side,
+      var(--m-bezel-gasket) 90.6%,
+      var(--m-bezel-in) 91.6%,
+      var(--m-bezel) 94.5%,
+      var(--m-bezel) 96%,
+      var(--m-bezel-out) 100%
+    );
+  mask-image: radial-gradient(closest-side, transparent 90.2%, var(--m-bg) 90.6%, var(--m-bg) 99.3%, transparent 100%);
+}
+/* the light caught along the crown of the lip, up-left (and a little on the far side) */
+.lip {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, transparent 94%, var(--m-bezel-lip) 95.6%, transparent 97.6%);
+  mask-image: conic-gradient(
+    from 180deg,
+    transparent 60deg,
+    var(--m-bg) 120deg,
+    var(--m-bg) 150deg,
+    transparent 205deg,
+    transparent 280deg,
+    var(--m-glass-hairline) 315deg,
+    transparent 350deg
+  );
+}
+
+.lid {
+  transform-origin: 50% 0;
+}
+/* the screen, off: a dark disc while the board turns (the fluid behind cannot turn with it) */
+.cover {
+  background: var(--m-device-off);
+  opacity: 0;
+}
+
+/* only while it turns: its moving layers on their own compositor layers (none at rest) */
+.device[data-turning] .face,
+.device[data-turning] .lid {
+  will-change: transform;
+}
+/* spun past edge-on (a coin), the face is behind the board (only while turning: at rest a
+   hidden backface would promote it to a layer of its own) */
+.device[data-turning] .face {
+  backface-visibility: hidden;
+}

@@ -11,7 +11,6 @@ import {
 } from "../../features/home/content";
 import { MOLTYS } from "../../features/moltys/catalog";
 import { REPO_URL } from "../../config/site.mjs";
-import { GlassDome } from "../GlassDome";
 import { MoltyMark } from "../MoltyMark";
 import styles from "./HomePage.module.css";
 
@@ -27,13 +26,14 @@ function Word({ id, children, color, tint }: { id?: string; children: string; co
   );
 }
 
-/** A square where one Molty emerges from the page fluid (still portrait until it can). */
-function Slot({ molty, className }: { molty: string; className?: string }) {
+/** A square where one Molty emerges from the page fluid (still portrait until it can), inside
+ *  its device (the island the page passes in). */
+function Slot({ molty, device, className }: { molty: string; device: ReactNode; className?: string }) {
   const src = still(molty.split(",")[0]!);
   return (
     <div className={`${styles.slot} ${className ?? ""}`} data-fluid-molty={molty} aria-hidden="true">
       {src && <img className={styles.still} src={src} alt="" width={150} height={150} />}
-      <GlassDome />
+      {device}
     </div>
   );
 }
@@ -47,11 +47,18 @@ export function HomePage({
   reader,
   picker,
   message,
+  heroDevice,
+  bridgeDevice,
+  bakeDevice,
 }: {
   fluid: ReactNode;
   reader: ReactNode;
   picker: ReactNode;
   message: ReactNode;
+  /** The devices around the three page slots (Device islands: they turn in on first sight). */
+  heroDevice: ReactNode;
+  bridgeDevice: ReactNode;
+  bakeDevice: ReactNode;
 }) {
   return (
     <div className={styles.root}>
@@ -87,7 +94,7 @@ export function HomePage({
             aria-hidden="true"
           >
             <img className={styles.still} src={still(HERO_MOLTYS[0]!)} alt="" width={150} height={150} />
-            <GlassDome />
+            {heroDevice}
           </div>
         </div>
       </section>
@@ -148,7 +155,7 @@ export function HomePage({
             <a href="/agents/cli/">[ local MCP → ]</a>
           </Links>
         </div>
-        <Slot molty={BRIDGE_MOLTY.id} />
+        <Slot molty={BRIDGE_MOLTY.id} device={bridgeDevice} />
       </section>
 
       <section className={`${styles.section} ${styles.split}`} aria-labelledby="boards">
@@ -184,7 +191,7 @@ export function HomePage({
             <a href="/getting-started/hardware/">[ build from source → ]</a>
           </Links>
         </div>
-        <Slot molty={BAKE_MOLTY.id} />
+        <Slot molty={BAKE_MOLTY.id} device={bakeDevice} />
       </section>
 
       <footer className={styles.footer}>

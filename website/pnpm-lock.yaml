@@ -17,6 +17,12 @@ importers:
       '@astrojs/starlight':
         specifier: ^0.38.2
         version: 0.38.5(astro@6.4.8(@types/node@24.19.2)(rollup@4.65.0)(yaml@2.9.1))
+      '@layoutit/polycss-core':
+        specifier: 0.2.11
+        version: 0.2.11
+      '@layoutit/polycss-react':
+        specifier: 0.2.11
+        version: 0.2.11(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       astro:
         specifier: ^6.0.8
         version: 6.4.8(@types/node@24.19.2)(rollup@4.65.0)(yaml@2.9.1)
@@ -726,6 +732,15 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
+
+  '@layoutit/polycss-core@0.2.11':
+    resolution: {integrity: sha512-JC2amXB5k1xooOBZevkKq6KW4SZwJa7wkzH1onarFsppzE1hxPhXmRLE+AoC2AfnOfBdt6Uz2d9Vdr38J4ITnA==}
+
+  '@layoutit/polycss-react@0.2.11':
+    resolution: {integrity: sha512-aTklFv1mU9bitbzf8qH+EpO+Zp60K3WTila1pom6bXcAeo+KjCbILaOE03ktglrpgEYGB8R4S7h9q8+4eARsbA==}
+    peerDependencies:
+      react: ^18.0.0 || ^19.0.0
+      react-dom: ^18.0.0 || ^19.0.0
 
   '@lit-labs/ssr-dom-shim@1.6.0':
     resolution: {integrity: sha512-VHb0ALPMTlgKjM6yIxxoQNnpKyUKLD04VzeQdsiXkMqkvYlAHxq9glGLmgbb889/1GsohSOAjvQYoiBppXFqrQ==}
@@ -2930,6 +2945,14 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.6.0
+
+  '@layoutit/polycss-core@0.2.11': {}
+
+  '@layoutit/polycss-react@0.2.11(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
+    dependencies:
+      '@layoutit/polycss-core': 0.2.11
+      react: 19.3.1
+      react-dom: 19.3.1(react@19.3.1)
 
   '@lit-labs/ssr-dom-shim@1.6.0': {}
 

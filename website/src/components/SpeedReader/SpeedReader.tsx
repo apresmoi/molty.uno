@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type MouseEvent } from "react";
 import { CHOICES, mountSpeedReader, readingMs, type Choice, type SpeedReaderHandle } from "../../services/molty-stage";
-import { GlassDome } from "../GlassDome";
+import { Device } from "../Device";
 import styles from "./SpeedReader.module.css";
 
 const SPEEDS = [250, 400, 600] as const;
@@ -178,7 +178,7 @@ export function SpeedReader({ text, answers: own }: { text: string; answers: Rec
             </button>
           ))}
         </div>
-        <GlassDome />
+        <Device reveal="lid" />
       </div>
       <div className={styles.side} data-fluid-quiet="">
         <p className={styles.said} aria-live="polite">

@@ -5,6 +5,9 @@
   font: var(--m-text-md) / 1.6 var(--m-font-mono);
   user-select: none;
   -webkit-user-select: none;
+  /* a device's bezel reaches a little past its screen (and turns in wider): never a sideways
+     scroll for it (clip, not hidden: no scroll container, the fixed fluid is not clipped) */
+  overflow-x: clip;
 }
 .root > section,
 .root > footer {

@@ -9,13 +9,23 @@
   width: min(100%, 420px, 80svh);
   justify-self: center;
   border-radius: 50%;
-  overflow: hidden;
   background: var(--m-bg);
-  box-shadow:
-    0 0 0 1px var(--m-line),
-    0 18px 36px -14px var(--m-shell-drop);
   /* the choices are sized off the screen */
   container-type: inline-size;
+}
+/* the device (Device) sits around the screen and reaches past it, so the screen's own layers
+   clip themselves to the round (the sectors' clip is their hit area too) */
+.host,
+.sectors {
+  border-radius: 50%;
+  overflow: hidden;
+}
+/* while the board turns in, the screen is off: nothing of it shows unturned */
+.glass:has([data-screen-off]) {
+  background: transparent;
+}
+.glass:has([data-screen-off]) > :not([data-device]) {
+  visibility: hidden;
 }
 .host {
   position: absolute;
