@@ -938,6 +938,13 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private async jobNow(token: string, jobId: string, waitMs: number): Promise<Outcome<JobView>> {
     const a = await this.agentAuth(token);
     if ("ok" in a) return a;
+    // Only the agent that started a job may read it (its result carries that agent's words).
+    // Ownerless jobs (a shake's adopted listen) hold what every agent got in `utterance`.
+    // Someone else's job answers not_found, the same as a job that never existed.
+    if (typeof jobId === "string") {
+      const rec = await this.kv.get<JobRecord>(K.job(jobId));
+      if (rec?.by && rec.by.who !== this.who(a).who) return fail("not_found");
+    }
     const out = await this.runJob(jobId, waitMs);
     // A failed job is an error to every surface: nothing rides along on it.
     if (out.ok && out.result.status === "failed") return out;
