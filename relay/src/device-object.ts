@@ -9,8 +9,10 @@ import { type DeviceSocket, DeviceRoom, type SocketMeta } from "./core/room.js";
 import { type KV, realClock } from "./core/store.js";
 import { dohResolver } from "./core/webhook.js";
 import { createVoice, type VoiceEnv, type VoiceProvider } from "./voice/index.js";
+import type { LookupMode, ReleaseCache, ReleaseLookup } from "./core/releases.js";
+import { type ReleaseEnv, releaseCache, releaseSource } from "./releases-host.js";
 
-export interface Env extends VoiceEnv {
+export interface Env extends VoiceEnv, ReleaseEnv {
   DEVICE: DurableObjectNamespace<MoltyDevice>;
 }
 
@@ -79,6 +81,8 @@ function safeVoice(env: Env): VoiceProvider {
 export class MoltyDevice extends DurableObject<Env> {
   // A cache of the stateless-by-construction core object, rebuilt after eviction.
   #room: DeviceRoom | undefined;
+  /** Only in the `releases` singleton (releases-host.ts). */
+  #releases: ReleaseCache | undefined;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -102,6 +106,7 @@ export class MoltyDevice extends DurableObject<Env> {
       fetch: fetcher,
       // Workers have no socket-level resolver: DNS-over-HTTPS for the SSRF guard (relay/README.md "Webhooks").
       resolveHost: dohResolver(fetcher),
+      releases: releaseSource(this.env.DEVICE as unknown as DurableObjectNamespace),
     });
     return this.#room;
   }
@@ -166,6 +171,18 @@ export class MoltyDevice extends DurableObject<Env> {
   }
   ask(deviceId: string, token: string, req: unknown): Promise<Outcome> {
     return this.room(deviceId).ask(token, req);
+  }
+  updates(deviceId: string, token: string): Promise<Outcome> {
+    return this.room(deviceId).updates(token);
+  }
+  update(deviceId: string, token: string, req: unknown): Promise<Outcome> {
+    return this.room(deviceId).update(token, req);
+  }
+
+  // ---- the `releases` singleton (never a device room) ----
+  releaseLookup(mode: LookupMode): Promise<ReleaseLookup> {
+    this.#releases ??= releaseCache(this.env, this.ctx.storage);
+    return this.#releases.latest(mode);
   }
 
   // Webhook deliveries and retries (DeviceRoom.alarm).

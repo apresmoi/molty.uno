@@ -6,7 +6,7 @@
 // docs/AGENT-LINK.md; test/skill.test.ts pins the load-bearing facts.
 
 import { INBOX_LIMITS, SKILL_EVENT } from "../core/events.js";
-import { SKILL_VERSION, skillHeadline } from "../core/version.js";
+import { FEATURES, SKILL_VERSION, skillHeadline } from "../core/version.js";
 import { WEBHOOK_LIMITS } from "../core/webhook.js";
 import { DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, DEFAULT_WPM, MAX_MOOD_HOLD_S, MAX_DIAG_TIMELINE_S, MAX_LISTEN_MS, MAX_LOG_BYTES, MAX_SAY_BYTES, MAX_SHOW_BYTES, MOODS, TALK_BUDGET_MS, TALK_DEFAULT_LISTEN_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
 
@@ -160,6 +160,7 @@ the one the human tapped: \`answer\` (its label) and \`index\`. Blocks and finis
 Errors: \`{"ok":false,"error":code}\` — \`401 unauthorized\` (bad/missing/revoked token),
 \`400 invalid_args\` / \`unknown_command\`, \`409 device_offline\` / \`audio_busy\` /
 \`unsupported\` (the board has no speaker or mic: \`say\`/\`listen\` absent from \`relay.caps\`),
+\`409 firmware_too_old\` (Molty's firmware predates the feature; see "Check Molty for updates"),
 \`504 device_timeout\`, \`502\` device-reported codes (e.g. \`mic_busy\`).
 
 Revoke your own token: \`curl -sS -X DELETE ${o}/v1/token -H "authorization: Bearer $TOKEN"\`.
@@ -170,7 +171,7 @@ The same features are a remote MCP server at \`${o}/mcp\` (streamable HTTP, bear
 auth). Tools: \`molty_pair\` (no token needed), \`molty_talk\`, \`molty_ask\`, \`molty_status\`, \`molty_mood\`,
 \`molty_show\`, \`molty_say\`, \`molty_listen\`, \`molty_wait\`, \`molty_state\`,
 \`molty_volume\`, \`molty_imu\`, \`molty_diag\`, \`molty_log\`, \`molty_events\`,
-\`molty_webhook\`. Claude Code example:
+\`molty_webhook\`, \`molty_updates\`, \`molty_update\`. Claude Code example:
 
 \`\`\`sh
 claude mcp add --transport http molty ${o}/mcp --header "Authorization: Bearer <agent_token>"
@@ -231,6 +232,45 @@ updated (…). Re-read ${o}/skill.md."). Re-read this page when you see it. Fail
 don't consume it. Agents paired before an update also get one \`${SKILL_EVENT}\` event
 (\`{"version","whats_new","url"}\`) in their inbox, and webhooks without an \`events\`
 filter receive it too — dedupe by \`id\`.
+
+## Check Molty for updates
+
+**When your human asks to check Molty for updates (any wording — "is Molty up to date?",
+"any news for Molty?"): call \`molty_updates\`** (REST \`GET ${o}/v1/devices/<id>/updates\`), then
+follow its \`actions\` in order:
+
+1. If the skill is newer than the one you read, **re-read this page**, then tell your human what's
+   new **in plain words** (what you can do for them now — not version numbers or tool names).
+2. If the firmware is behind, say so and **ask before updating**. On yes, call \`molty_update\`
+   (REST \`POST ${o}/v1/devices/<id>/update\` with \`{}\`): Molty asks your human on its screen too
+   ("update" / "later"), downloads and checks the official release, installs it and restarts
+   (about a minute; finish with \`molty_wait\`). If \`can_self_update\` is false, tell them to open
+   Molty's console → home instead; it shows the update and installs it.
+3. If nothing is new, say so in one sentence.
+
+\`\`\`
+{"skill":{"yours":4,"latest":${SKILL_VERSION},"whats_new":[{"version":${SKILL_VERSION},"text":"…"}],"url":"${o}/skill.md"},
+ "firmware":{"current":"0.1.0","board":"…","online":true,"latest":"0.2.0","status":"update_available","update_available":true,
+             "notes_url":"…","needed_for":[{"feature":"molty_ask","what":"…","needs":"${FEATURES.ask.min_fw}","released":true}],
+             "can_self_update":false,"release_check":"fresh"},
+ "actions":["Re-read …","Tell your human Molty firmware 0.2.0 is out …"]}
+\`\`\`
+
+\`firmware.status\`: \`current\`, \`update_available\`, \`no_build_for_board\`, \`no_release\` (nothing
+published yet), \`unknown\` (a development build, or the release list was unreachable: say so).
+\`molty_update\` results: \`{"status":"up_to_date"}\` (nothing to do), or a job that ends
+\`done\` with \`outcome\` \`updated\` / \`declined\` (the human tapped "later": fine, don't push),
+or fails with \`update_failed\` / \`rolled_back\` (Molty kept its old firmware) / \`update_timeout\`.
+Never update without asking; never more than once per request.
+
+**\`firmware_too_old\`.** A feature that needs newer firmware than Molty runs answers
+\`409 {"error":"firmware_too_old","feature","current","needed","latest","how"}\` (e.g. \`molty_ask\`
+needs ${FEATURES.ask.min_fw}). Tell your human which update unlocks it (\`how\` says whether it is
+out yet), and carry on without it (e.g. \`molty_talk\` instead of \`molty_ask\`).
+
+You also hear about updates without asking: once per new firmware release your next successful
+call carries \`firmware_update\` \`{current, latest, board, notes_url, can_self_update, how}\`
+(MCP: plus a line "Molty firmware … is out"), the same way as \`skill_update\`. Mention it once.
 
 ## Talking fast
 

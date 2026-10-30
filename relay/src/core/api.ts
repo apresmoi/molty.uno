@@ -18,6 +18,11 @@ export type ErrorCode =
   | "pair_busy"
   | "rejected"
   | "timeout"
+  | "firmware_too_old"
+  | "release_unavailable"
+  | "no_build"
+  | "no_checksum"
+  | "unknown_version"
   | "internal"
   | (string & {}); // device-reported codes pass through verbatim
 
@@ -30,11 +35,28 @@ export interface Inbox {
   now: number;
 }
 
+/** One-time "newer firmware is released" notice (core/updates.ts), once per agent token per release. */
+export interface FirmwareNotice {
+  current: string;
+  latest: string;
+  board: string;
+  notes_url: string;
+  can_self_update: boolean;
+  how: string;
+}
+
 /**
  * `notice`: a one-time "the skill changed" notice riding along on a successful
- * authenticated outcome (already marked seen); surfaces render it additively.
+ * authenticated outcome (already marked seen); `fw_notice` likewise for a new
+ * firmware release. Surfaces render both additively. A failure's `details` are
+ * extra structured fields of that error (e.g. firmware_too_old {current, needed,
+ * latest, how}), rendered next to `error`.
  */
-export type Outcome<T = JsonObject> = ({ ok: true; result: T } | { ok: false; error: ErrorCode; message?: string }) & { inbox?: Inbox; notice?: SkillNotice };
+export type Outcome<T = JsonObject> = ({ ok: true; result: T } | { ok: false; error: ErrorCode; message?: string; details?: JsonObject }) & {
+  inbox?: Inbox;
+  notice?: SkillNotice;
+  fw_notice?: FirmwareNotice;
+};
 
 export interface EventsRequest {
   /** Event id or sequence to read after; default = this agent's cursor. */
@@ -52,7 +74,7 @@ export const TERMINAL: readonly JobStatus[] = ["done", "failed"];
 
 export interface JobView {
   job: string;
-  kind: "say" | "listen" | "talk" | "ask";
+  kind: "say" | "listen" | "talk" | "ask" | "update";
   status: JobStatus;
   result?: JsonObject;
   error?: string;
@@ -97,6 +119,20 @@ export interface AgentApi {
    * status:"pending"}` to finish with job(). Args as validateAsk (commands.ts).
    */
   ask(token: string, req: unknown): Promise<Outcome>;
+  /**
+   * "Check Molty for updates": `{skill:{yours, latest, whats_new, url}, firmware:
+   * FirmwareBlock, actions:[…]}` (core/updates.ts). Marks the skill (and the
+   * reported firmware release) as seen for this token.
+   */
+  updates(token: string): Promise<Outcome>;
+  /**
+   * Ask the device to install the latest release (official asset of the configured
+   * repo only; args must be empty). A job: done `{outcome:"updated", from, to}` or
+   * `{outcome:"declined", reason?}`; failed `update_failed` / `rolled_back` /
+   * `update_timeout`; blocks <= TALK_BUDGET_MS, then `{job, status:"pending", phase}`.
+   * Already current: `{status:"up_to_date", current, latest}` (no job).
+   */
+  update(token: string, req: unknown): Promise<Outcome>;
 }
 
 export interface RelayBackend {

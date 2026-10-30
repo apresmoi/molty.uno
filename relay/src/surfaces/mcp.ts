@@ -9,7 +9,7 @@
 // Uses only the Fetch API (Request/Response) -- no Cloudflare imports -- so a
 // Node host can serve it unchanged.
 
-import { type AgentApi, type Inbox, type JobView, type Outcome, type RelayBackend, bearer, tokenDevice } from "../core/api.js";
+import { type AgentApi, type FirmwareNotice, type Inbox, type JobView, type Outcome, type RelayBackend, bearer, tokenDevice } from "../core/api.js";
 import { DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, MAX_LISTEN_MS, MAX_MOOD_HOLD_S, MOODS, TALK_BUDGET_MS, TALK_DEFAULT_LISTEN_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
 import { AGENT_EVENT_TYPES, type AgentEvent, INBOX_LIMITS, eventsLine, seqOf } from "../core/events.js";
 import { DEVICE_ID_RE, isRecord, type JsonObject } from "../core/protocol.js";
@@ -20,7 +20,7 @@ export const SERVER_INFO = { name: "molty-relay", title: `Molty relay (skill v${
 const MAX_BODY = 256 * 1024;
 const INSTRUCTIONS =
   `Tools operate a physical Molty device through the molty-relay. Pair first with molty_pair (no token needed), then send the returned agent_token as 'Authorization: Bearer <token>'. For conversation use molty_talk: ONE call per turn speaks your reply, then listens and returns what the human said ({heard, reason}); moods (listening, thinking, speaking) are automatic, so don't call molty_mood around talking. Keep spoken replies to 1-2 sentences. For a decision the human can answer with a tap use molty_ask: say the question, offer 1-${MAX_ASK_OPTIONS} options of at most ${MAX_ASK_LABEL} characters ("yes", "no", "later"); answer is null on timeout/cancelled/offline. molty_say / molty_listen return a job immediately (wait:true blocks until done); poll a job with molty_wait (<= 8 s per call). ` +
-  `Molty also emits events (${AGENT_EVENT_TYPES.join(", ")}) into your own inbox: unread ones ride along on every tool result as 'events' plus a 'Molty: ...' line; molty_events pulls/waits for them; molty_webhook registers an HTTPS request the relay sends you per event. React briefly, once per moment. Full guide: GET /skill.md on this relay. ${skillHeadline()}. When the skill changes again, your next successful tool result carries 'skill_update' plus a 'Molty's skill was updated' line once: re-read /skill.md then.`;
+  `Molty also emits events (${AGENT_EVENT_TYPES.join(", ")}) into your own inbox: unread ones ride along on every tool result as 'events' plus a 'Molty: ...' line; molty_events pulls/waits for them; molty_webhook registers an HTTPS request the relay sends you per event. React briefly, once per moment. Full guide: GET /skill.md on this relay. ${skillHeadline()}. When the skill changes again, your next successful tool result carries 'skill_update' plus a 'Molty's skill was updated' line once: re-read /skill.md then. When your human asks to check Molty for updates (any wording), call molty_updates and follow its 'actions'; ask before molty_update.`;
 
 type Prop = { type: string; description: string; enum?: string[]; items?: { type: "string"; enum?: string[] } };
 type Schema = { type: "object"; properties: Record<string, Prop>; required: string[]; additionalProperties: false };
@@ -52,8 +52,8 @@ function jobOutcome(out: Outcome<JobView>): Outcome<JsonObject> {
   if (!out.ok) return out;
   const j = out.result;
   if (j.status === "done") return { ok: true, result: { ...(j.result ?? {}), job: j.job, status: "done" } as JsonObject };
-  if (j.status === "failed") return { ok: false, error: j.error ?? "failed", message: `job ${j.job} failed` };
-  return { ok: true, result: { job: j.job, status: "pending", state: j.status } };
+  if (j.status === "failed") return { ok: false, error: j.error ?? "failed", message: typeof j.detail === "string" ? j.detail : `job ${j.job} failed` };
+  return { ok: true, result: { job: j.job, status: "pending", state: j.status, ...(typeof j.phase === "string" ? { phase: j.phase } : {}) } };
 }
 
 const obj = (properties: Schema["properties"], required: string[] = []): Schema => ({ type: "object", properties, required, additionalProperties: false });
@@ -171,11 +171,26 @@ export const TOOLS: ToolDef[] = [
     run: (api, t, a) => api.ask(t, a),
   },
   {
+    name: "molty_updates",
+    description:
+      "Check Molty for updates, in one call: use it whenever your human asks to check Molty for updates (any wording). Returns {skill:{yours, latest, whats_new:[{version, text, min_fw?}], url}, firmware:{current, board, online, latest|null, status: current|update_available|no_build_for_board|no_release|unknown, update_available, notes_url, needed_for:[{feature, what, needs, released}], can_self_update, release_check}, actions:[plain-language steps]}. Follow 'actions' in order: re-read the skill when it is newer, tell your human what's new in plain words, and when firmware is behind ASK them before calling molty_update. Marks the skill and the reported release as seen for you.",
+    inputSchema: obj({}),
+    auth: true,
+    run: (api, t) => api.updates(t),
+  },
+  {
+    name: "molty_update",
+    description: `Ask Molty to install the latest official firmware release itself. Only after your human said yes: Molty also asks them on its screen ("update" / "later"), then downloads, verifies (sha256), installs and restarts (about a minute; it rolls back on failure). No arguments: the relay picks the release's image for this board. Returns {status:"up_to_date", current, latest} when there is nothing newer; else a job: done {outcome:"updated", from, to} or {outcome:"declined", reason?}; errors update_failed, rolled_back, update_timeout. Blocks at most ${TALK_BUDGET_MS / 1000} s, then {job, status:"pending", phase: confirm|accepted|downloading|flashing|rebooting}: keep calling molty_wait. Firmware without the 'update' cap: unsupported, with 'how' (the console's Update).`,
+    inputSchema: obj({}),
+    auth: true,
+    run: (api, t) => api.update(t, {}),
+  },
+  {
     name: "molty_wait",
-    description: "Wait at most timeout_s (0..8, default 8) for a say/listen/talk/ask job. Returns the job result with status done, status pending if still queued/running (call again), or an error if it failed.",
+    description: "Wait at most timeout_s (0..8, default 8) for a say/listen/talk/ask/update job. Returns the job result with status done, status pending if still queued/running (call again), or an error if it failed.",
     inputSchema: obj(
       {
-        job: { type: "string", description: "Job id returned by molty_say, molty_listen, molty_talk or molty_ask." },
+        job: { type: "string", description: "Job id returned by molty_say, molty_listen, molty_talk, molty_ask or molty_update." },
         timeout_s: { type: "integer", description: "Polling budget, integer 0..8 seconds; default 8." },
       },
       ["job"],
@@ -308,7 +323,7 @@ const rpcResult = (id: unknown, result: unknown) => ({ jsonrpc: "2.0", id, resul
  * Results without unread events are byte-for-byte what they were before.
  */
 function toolResult(out: Outcome<JsonObject>, origin = "") {
-  const value: JsonObject = out.ok ? { ok: true, ...out.result } : { ok: false, error: out.error, ...(out.message ? { message: out.message } : {}) };
+  const value: JsonObject = out.ok ? { ok: true, ...out.result } : { ok: false, error: out.error, ...(out.message ? { message: out.message } : {}), ...(out.details ?? {}) };
   let line: string | undefined;
   if (out.inbox && out.inbox.events.length > 0 && !("events" in value)) {
     value.events = out.inbox.events as unknown as JsonObject[];
@@ -319,11 +334,18 @@ function toolResult(out: Outcome<JsonObject>, origin = "") {
   }
   // One-time skill notice (already marked seen by the backend): structured field + one line.
   if (out.notice && !("skill_update" in value)) value.skill_update = skillUpdate(out.notice, origin) as unknown as JsonObject;
+  // One-time firmware release notice (already marked seen): structured field + one line.
+  if (out.fw_notice && !("firmware_update" in value)) value.firmware_update = out.fw_notice as unknown as JsonObject;
   const content = [{ type: "text", text: JSON.stringify(value) }];
   if (line) content.push({ type: "text", text: line });
   if (out.notice) content.push({ type: "text", text: skillLine(out.notice, origin) });
+  if (out.fw_notice) content.push({ type: "text", text: firmwareLine(out.fw_notice) });
   return { content, structuredContent: value, isError: !out.ok };
 }
+
+/** The one-line MCP text item for a new firmware release. */
+export const firmwareLine = (n: FirmwareNotice): string =>
+  `Molty firmware ${n.latest} is out (Molty runs ${n.current}). Mention it to your human once and ask before updating; molty_updates has the details.`;
 
 async function callTool(backend: RelayBackend, token: string | undefined, params: unknown, origin: string) {
   if (!isRecord(params) || typeof params.name !== "string") return { error: [-32602, "Invalid tool parameters"] as const };
@@ -345,29 +367,33 @@ async function callTool(backend: RelayBackend, token: string | undefined, params
     // tool does to reshape the outcome (molty_wait builds new ones), the
     // inbox it received must reach the caller.
     // Same for the skill notice.
-    const { api, taken, notices } = capturingInbox(backend.device(deviceId));
+    const { api, taken, notices, fwNotices } = capturingInbox(backend.device(deviceId));
     let out = await tool.run(api, token ?? "", args);
     if (taken.length && !out.inbox) out = { ...out, inbox: mergeInbox(taken) };
     if (notices.length && !out.notice) out = { ...out, notice: notices[notices.length - 1] };
+    if (fwNotices.length && !out.fw_notice) out = { ...out, fw_notice: fwNotices[fwNotices.length - 1] };
     return { result: toolResult(out, origin) };
   } catch (e) {
     return { result: toolResult({ ok: false, error: "internal", message: e instanceof Error ? e.message : String(e) }) };
   }
 }
 
-/** Wraps an AgentApi so every inbox and skill notice any call returns is recorded. */
-function capturingInbox(api: AgentApi): { api: AgentApi; taken: Inbox[]; notices: SkillNotice[] } {
+/** Wraps an AgentApi so every inbox and notice any call returns is recorded. */
+function capturingInbox(api: AgentApi): { api: AgentApi; taken: Inbox[]; notices: SkillNotice[]; fwNotices: FirmwareNotice[] } {
   const taken: Inbox[] = [];
   const notices: SkillNotice[] = [];
+  const fwNotices: FirmwareNotice[] = [];
   const keep = async <T extends Outcome<any>>(p: Promise<T>) => {
     const out = await p;
     if (out.inbox && out.inbox.events.length) taken.push(out.inbox);
     if (out.notice) notices.push(out.notice);
+    if (out.fw_notice) fwNotices.push(out.fw_notice);
     return out;
   };
   return {
     taken,
     notices,
+    fwNotices,
     api: {
       pair: (req) => keep(api.pair(req)),
       command: (t, n, a) => keep(api.command(t, n, a)),
@@ -377,6 +403,8 @@ function capturingInbox(api: AgentApi): { api: AgentApi; taken: Inbox[]; notices
       webhook: (t, r) => keep(api.webhook(t, r)),
       talk: (t, r) => keep(api.talk(t, r)),
       ask: (t, r) => keep(api.ask(t, r)),
+      updates: (t) => keep(api.updates(t)),
+      update: (t, r) => keep(api.update(t, r)),
     },
   };
 }

@@ -16,8 +16,22 @@ export interface DeviceInfo {
   idf_version: string;
   fw_build: string;
   fw?: string;
+  /** board.json "name", e.g. waveshare-esp32-s3-touch-lcd-1.46 (release assets are named after it). */
+  board?: string;
   [k: string]: unknown;
 }
+
+/** GET /api/update (firmware that can update itself; older firmware: UnsupportedError). */
+export interface UpdateState {
+  ok: true;
+  state: 'idle' | 'downloading' | 'flashing' | 'rebooting' | 'failed';
+  version?: string;
+  progress?: number;
+  error?: string;
+}
+
+/** POST /api/ota result (the app image is written to the spare slot, then the device reboots). */
+export interface OtaResult { ok: true; written: number; slot: string; reboot: boolean }
 
 export type WifiState = 'setup_needed' | 'connecting' | 'connected' | 'disconnected' | 'unknown';
 

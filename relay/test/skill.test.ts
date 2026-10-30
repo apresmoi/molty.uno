@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { COMMANDS, MAX_ASK_LABEL, MOODS } from "../src/core/commands.js";
+import { FEATURES } from "../src/core/version.js";
 import { TOOLS } from "../src/surfaces/mcp.js";
 import { SKILL_PATHS, handleSkill, skillMarkdown } from "../src/surfaces/skill.js";
 import { readFileSync } from "node:fs";
@@ -37,6 +38,9 @@ describe("GET /skill.md", () => {
     for (const t of ["shake", "tap", "button", "answer"]) expect(md).toContain(`| \`${t}\` |`);
     // ask: the endpoint, the label limit stated from the constant, layouts, null answers, ask vs talk
     for (const fact of ["https://r/v1/devices/molty-xxxxxxxxxx/ask", `1–${MAX_ASK_LABEL} characters each`, "one centred button", "pie slices", "`timeout`", "`cancelled`", "`offline`", "use **talk** when you"]) expect(md).toContain(fact);
+ 
+    // updates: the trigger, the one call, ask-before-update, the error and the passive notice
+    for (const fact of ["When your human asks to check Molty for updates (any wording", "https://r/v1/devices/<id>/updates", "https://r/v1/devices/<id>/update", "**ask before updating**", "`firmware_too_old`", `needs ${FEATURES.ask.min_fw}`, "`firmware_update`", "`can_self_update`"]) expect(md).toContain(fact);
   });
 
   it("rejects non-GET and supports HEAD", async () => {

@@ -3,14 +3,16 @@ import type { AppCtx } from '../app';
 import { h, mount, note } from '../ui/dom';
 import { bars, errText, uptime } from '../ui/fmt';
 import { preview } from '../ui/preview';
+import { updateCard } from '../ui/update-card';
 
 export function statusPage(root: HTMLElement, { api }: AppCtx) {
   const pv = preview(api, { size: 300 });
   const facts = h('dl', { class: 'facts' });
   const msg = h('div');
+  const upd = updateCard(api);
   mount(root,
     h('h1', null, 'hello ', h('span', { class: 'dim' }, '⠶ this is your molty')),
-    h('div', { class: 'split' }, pv.el, h('div', null, facts, msg)));
+    h('div', { class: 'split' }, pv.el, h('div', null, facts, upd.el, msg)));
 
   let alive = true, timer = 0;
   const row = (k: string, v: unknown, cls = '') => [h('dt', null, k), h('dd', { class: cls }, v as string)];
@@ -37,8 +39,9 @@ export function statusPage(root: HTMLElement, { api }: AppCtx) {
       row('fps', s?.fps !== undefined ? `${s.fps.toFixed(1)}` : '—'),
       row('memory', i ? `${Math.round(i.free_heap / 1024)} KB heap ⠂ ${Math.round(i.free_psram / 1024)} KB psram free` : '—'),
     );
+    upd.check(i, l);
     timer = window.setTimeout(refresh, 3000);
   };
   refresh();
-  return () => { alive = false; clearTimeout(timer); pv.stop(); };
+  return () => { alive = false; clearTimeout(timer); pv.stop(); upd.stop(); };
 }

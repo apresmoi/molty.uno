@@ -9,6 +9,9 @@
 //   POST /__mock/pair {agent_name, code}   -> an agent asks to pair: GET /api/link shows `pair`
 //   POST /__mock/decide {ok, reason}       -> the human tapped (ok) / it failed: pair → last_pair (seq+1)
 //   POST /__mock/legacy {on}               -> GET /api/link omits pair/last_pair (pre-contract firmware)
+//   GET  /__mock/release?board=            -> what the relay's public GET /v1/releases/latest would answer
+//        (a release one minor above VERSION); e2e routes the console's relay call here.
+//        config {update:true} = firmware that can update itself (GET/POST /api/update).
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 
@@ -17,7 +20,18 @@ const dist = new URL('../dist/index.html', import.meta.url);
 const VERSION = readFileSync(new URL('../../VERSION', import.meta.url), 'utf8').trim();
 const W = 412;
 
-const cfg = { link: true, file: true };
+const cfg = { link: true, file: true, update: false };
+const BOARD = 'waveshare-esp32-s3-touch-lcd-1.46';
+const NEXT = VERSION.replace(/^(\d+)\.(\d+)\..*$/, (_, a, b) => `${a}.${+b + 1}.0`);
+let fw = VERSION;
+let upd = { state: 'idle' };
+const release = (board) => {
+  const tag = `v${NEXT}`, name = `molty-${NEXT}-${BOARD}-ota.bin`;
+  return { ok: true, release_check: 'fresh',
+    latest: { version: NEXT, tag, prerelease: false, published_at: '2026-11-01T10:00:00Z', notes_url: `https://github.com/apresmoi/molty.uno/releases/tag/${tag}`, notes: `## ${tag} — 2026-11-01\n- Molty asks you things: tap an answer\n- Molty can update itself` },
+    board: board === BOARD ? { name: BOARD, ota: { url: `https://github.com/apresmoi/molty.uno/releases/download/${tag}/${name}`, size: 1500000, sha256: 'd'.repeat(64) } } : null,
+    features: [{ feature: 'molty_ask', cap: 'ask', needs: NEXT }] };
+};
 const log = [];
 const WIFI0 = { state: 'connected', ssid: 'home-wifi', ip: '192.168.1.32', rssi: -61 };
 const wifi = { ...WIFI0 };
@@ -76,7 +90,7 @@ createServer(async (req, res) => {
   if (p === '/__mock/log') return json(res, log);
   if (p === '/__mock/config') {
     const c = b();
-    if (c.reset) { Object.assign(wifi, WIFI0); Object.assign(link, structuredClone(LINK0)); legacy = false; current = 'fluid'; delete c.reset; }
+    if (c.reset) { fw = VERSION; upd = { state: 'idle' }; cfg.update = false; Object.assign(wifi, WIFI0); Object.assign(link, structuredClone(LINK0)); legacy = false; current = 'fluid'; delete c.reset; }
     if (c.wifi === 'none') Object.assign(wifi, { state: 'setup_needed', ssid: undefined, ip: undefined, rssi: undefined });
     delete c.wifi;
     Object.assign(cfg, c); log.length = 0; return json(res, { ok: true, cfg });
@@ -89,11 +103,12 @@ createServer(async (req, res) => {
     return json(res, { ok: true, link });
   }
   if (p === '/__mock/legacy') { legacy = !!b().on; return json(res, { ok: true }); }
+  if (p === '/__mock/release') return json(res, release(url.searchParams.get('board')));
 
   switch (`${req.method} ${p}`) {
     case 'GET /api/info':
       return json(res, { ok: true, chip: 'esp32-s3', mac: '30:ed:a0:2a:3b:b0', flash_mb: 16, psram_mb: 8, free_heap: 3451664, free_psram: 5300000,
-        uptime_ms: Date.now() - t0 + 3_725_000, reset_reason: 'sw', boot_count: 74, idf_version: 'v5.5', fw: VERSION, fw_build: 'Oct 25 2026T04:51:38' });
+        uptime_ms: Date.now() - t0 + 3_725_000, reset_reason: 'sw', boot_count: 74, idf_version: 'v5.5', board: BOARD, fw, fw_build: 'Oct 25 2026T04:51:38' });
     case 'GET /api/status': return json(res, { ok: true, ...wifi });
     case 'GET /api/scan':
       await sleep(900);
@@ -126,6 +141,19 @@ createServer(async (req, res) => {
       if (raw.length > 16384) return json(res, { ok: false, error: 'bad_size_max_16kb' });
       if (raw.subarray(0, 4).toString('latin1') !== 'MLTY') return json(res, { ok: false, error: 'bad_magic' });
       return json(res, { ok: true, bytes: raw.length });
+    case 'GET /api/update': return cfg.update ? json(res, { ok: true, ...upd }) : notFound(res);
+    case 'POST /api/update': {
+      if (!cfg.update) return notFound(res);
+      const { version, url: u } = b();
+      if (!/^https:\/\/github\.com\/apresmoi\/molty\.uno\/releases\/download\//.test(u ?? '')) return json(res, { ok: false, error: 'bad_url' }, 400);
+      upd = { state: 'downloading', version, progress: 0 };
+      setTimeout(() => (upd = { state: 'flashing', version }), 600);
+      setTimeout(() => { upd = { state: 'idle' }; fw = version; }, 1200);
+      return json(res, { ok: true, state: 'downloading' }, 202);
+    }
+    case 'POST /api/ota':
+      if (raw.length < 32) return json(res, { ok: false, error: 'empty' });
+      return json(res, { ok: true, written: raw.length, slot: 'ota_1', reboot: true });
     case 'GET /api/link': return cfg.link ? json(res, linkBody()) : notFound(res);
     case 'POST /api/link': if (!cfg.link) return notFound(res); link.relay_url = b().relay_url ?? link.relay_url; link.connected = false; setTimeout(() => (link.connected = true), 1500); return json(res, linkBody());
   }

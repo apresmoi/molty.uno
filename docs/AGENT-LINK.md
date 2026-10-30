@@ -78,10 +78,12 @@ First frame from device: `{"t":"hello","id":"molty-k7m2w9c4ya","key":"<b64 devic
 → relay answers `{"t":"welcome"}` or closes with 4401.
 
 `board` names the hardware (`firmware/boards/`, see [PORTING.md](PORTING.md)). `caps`
-lists `say` / `listen` only when the board has a speaker / microphone, and `ask` only when it
-has a touch screen (and firmware that implements `ask`); the relay answers
+lists `say` / `listen` only when the board has a speaker / microphone, `ask` only when it
+has a touch screen (and firmware that implements `ask`), and `update` when the firmware can
+install a release itself ([Firmware updates](#firmware-updates)); the relay answers
 those commands `409 unsupported` up front, without calling TTS, when the device left them
-out. The device itself answers a command its board cannot do with `error:"unsupported"`
+out — or `409 firmware_too_old` when `fw` is older than the feature's minimum firmware
+(`FEATURES` in `relay/src/core/version.ts`): caps say whether it can, the version says why not. The device itself answers a command its board cannot do with `error:"unsupported"`
 (an unknown command is `unknown_command`).
 
 Configure a relay origin (`wss://host` or `ws://LAN-IP:8787` for `wrangler dev`);
@@ -165,6 +167,9 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   full, `ended` stopped early, `no_speech` empty transcript).
 
 
+- `update` (relay call `molty_update`): see [Firmware updates](#firmware-updates) for
+  `cmd update {job, version, url, sha256, size, timeout_ms}` and the device's `update` events.
+
 Automatic moods around talking: the device sets `listening` on `listen` and `speaking` on
 `say` (then `idle`); the relay sends `mood thinking hold_s:15` the moment a listen's end frame
 arrives with speech (while STT runs), re-sends it after STT, or `idle` when the transcript is
@@ -236,6 +241,8 @@ What the screen does between commands (`firmware/main/fluid/fluid_director.h`):
 | `say` | `{text, voice?}` | `{job}` immediately | relay does TTS (streamed per sentence) + streams; device sets `speaking`, shows text in sync. Job result `{ms, text, timings}`. `unsupported` without a speaker |
 | `listen` | `{ms≤10000, end_silence_ms?, no_speech_ms?, vad?}` | `{job}` immediately | device sets `listening`, streams mic, stops at end of speech ([Listen end of speech](#listen-end-of-speech-device-vad)); relay STT → job result `{text, duration_ms, peak, rms, reason, speech_ms?, timings}`. `unsupported` without a mic |
 | `talk` (relay) | `{say?, listen?=true, listen_ms?=10000, voice?, end_silence_ms?, no_speech_ms?, vad?}` | blocks ≤ 24 s | say then listen in one job: `{job, status:"done", heard, said?, reason, speech_ms?, ms:{tts_first_audio, speech, listen, stt, total}, timings}`; over 24 s `{job, status:"pending"}` |
+| `updates` (relay) | — | `{skill, firmware, actions}` | "check Molty for updates": [Firmware updates](#firmware-updates) |
+| `update` (relay → device) | — (agent) · `{job, version, url, sha256, size, timeout_ms}` (device) | job | install the latest release after an on-screen confirm; `unsupported` without the `update` cap |
 | `ask` (relay) | `{say?, options: 1..5 labels of 1..8 printable ASCII (unique, case-insensitive), timeout_s? 1..120 =30, voice?}` | blocks ≤ 24 s | say, then device `ask`, then the tap: `{job, status:"done", answer: label\|null, index: int\|null, reason?: "timeout"\|"cancelled"\|"offline", said?, ms:{tts_first_audio?, speech?, answer, total}, timings:{queue, say?, ask:{cmd, wait}, total}}`; over 24 s `{job, status:"pending"}` (finish with `molty_wait`). Holds the audio lock only while speaking. `unsupported` without `ask` in caps (no touch) or, with `say`, without a speaker |
 | `volume` | `{volume 0..21}` | — | `unsupported` without a speaker |
 | `imu` | — | snapshot | `unsupported` without an IMU |
@@ -279,10 +286,12 @@ constants: `firmware/main/sense/gesture.h`.
 - **Remote MCP** `https://<relay>/mcp` (streamable HTTP), `Authorization: Bearer <agent_token>`.
   Tools: `molty_pair`, `molty_talk`, `molty_ask`, `molty_status`, `molty_mood`, `molty_show`, `molty_say`, `molty_listen`,
   `molty_wait`, `molty_state`, `molty_volume`, `molty_imu`, `molty_diag`, `molty_log`, plus the
-  relay-only `molty_talk`, `molty_ask`, `molty_events` and `molty_webhook` ([Events](#events-device--agents)). Shared names
+  relay-only `molty_talk`, `molty_ask`, `molty_events`, `molty_webhook` ([Events](#events-device--agents)),
+  `molty_updates` and `molty_update` ([Firmware updates](#firmware-updates)). Shared names
   have the same semantics as the local stdio MCP in `cli/`.
 - **REST** `POST /v1/devices/<id>/cmd {name,args,wait?}`, `POST /v1/devices/<id>/talk`, `POST /v1/devices/<id>/ask`, `GET /v1/jobs/<job>`,
-  `GET /v1/devices/<id>/events`, `GET|PUT|DELETE /v1/webhook`, same bearer.
+  `GET /v1/devices/<id>/events`, `GET|PUT|DELETE /v1/webhook`, `GET /v1/devices/<id>/updates`,
+  `POST /v1/devices/<id>/update`, same bearer. `GET /v1/releases/latest?board=` needs none (public).
 - **Skill page** `GET /skill.md` (and `/skill`), no auth: the agent's self-setup guide (see
   Pairing flow step 1). Kept in sync with `commands.ts`/MCP tools by `test/skill.test.ts`.
 - **CLI** `molty --relay <url> --token <t> ...`, or `molty pair` once and the saved link (see [CLI.md](CLI.md)).
@@ -300,7 +309,10 @@ bearer is `agent_token` = `<device_id>.<base64url(32 bytes)>`; the prefix only r
 | same with `wait:true` (say/listen) | `200 {ok:true, result:{job, status:"done", ...job result}}`; still running after 24 s: `202 {ok:true, result:{job, status:"pending", state}}` | as above; a failed job → its error, still carrying the `events` / `skill_update` the call already consumed |
 | `POST /v1/devices/<id>/talk {say?, listen?, listen_ms?, voice?, end_silence_ms?, no_speech_ms?, vad?}` | `200 {ok:true, result:{job, status:"done", heard, said?, reason, speech_ms?, ms, timings}}`; `202` pending as above | 400 `invalid_args`, 401, 409 `audio_busy`/`unsupported`/`device_offline`, 504 `playback_timeout` (no `say.done`), job errors |
 | `POST /v1/devices/<id>/ask {say?, options, timeout_s?, voice?}` | `200 {ok:true, result:{job, status:"done", answer, index, reason?, said?, ms, timings}}` (a timeout / cancelled / offline ask is `200` with `answer:null`); `202` pending as above | 400 `invalid_args` (with the reason, e.g. a label over 8 chars), 401, 409 `audio_busy` (with `say`)/`unsupported`/`device_offline`, 504 `playback_timeout`, device-reported codes |
-| `GET /v1/jobs/<job>[?wait_s=0..8]` | `200 {job, kind:"say"\|"listen"\|"talk"\|"ask", status:"queued"\|"running"\|"done"\|"failed", result?, error?}`; say done `{ms, text, timings}`, listen done `{text, duration_ms, peak, rms, reason, speech_ms?, timings}`, talk / ask done as `/talk` / `/ask` | 401, 404 `not_found` |
+| `GET /v1/jobs/<job>[?wait_s=0..8]` | `200 {job, kind:"say"\|"listen"\|"talk"\|"ask"\|"update", status:"queued"\|"running"\|"done"\|"failed", phase?, result?, error?, detail?}`; say done `{ms, text, timings}`, listen done `{text, duration_ms, peak, rms, reason, speech_ms?, timings}`, talk / ask done as `/talk` / `/ask`, update as below | 401, 404 `not_found` |
+| `GET /v1/devices/<id>/updates` | `200 {ok:true, result:{skill, firmware, actions}}` ([Firmware updates](#firmware-updates)) | 401 |
+| `POST /v1/devices/<id>/update {}` | `200 {ok:true, result:{status:"up_to_date", current, latest}}`; a job: `200 {ok:true, result:{job, status:"done", outcome:"updated", from, to}}` or `{…, outcome:"declined", reason?}`, `202 {ok:true, result:{job, status:"pending", phase, hint}}` | 400 `invalid_args` (any argument), 401, 409 `unsupported` (+ `current, latest, how`) / `device_offline` / `no_build` / `no_checksum` / `unknown_version`, 503 `release_unavailable`, job errors `update_failed` / `rolled_back` / `update_timeout` (with `message`) |
+| `GET /v1/releases/latest[?board=<board>]` (no token) | `200 {ok:true, release_check, latest:null\|{version, tag, prerelease, published_at, notes_url, notes}, board:null\|{name, ota:{url, size, sha256}}, features:[{feature, cap, needs}]}`, CORS `*`, `cache-control: public, max-age=300` | 400 bad board, 429 rate limited |
 | `DELETE /v1/token` | `200 {ok:true, result:{revoked:true}}` | 401 |
 | `GET /v1/devices/<id>/events[?since=e41&wait_s=0..25]` | `200 {ok:true, events:[{id,type,ts,data}], next, more}` | 401, 400 `invalid_args`, 429 `too_many_polls` |
 | `PUT /v1/webhook {url, method?, headers?, body?, content_type?, events?}` | `200 {ok:true, result:{webhook, secret, secret_note, dry_run}}` | 401, 400 `invalid_args` (with the reason), 409 `conflict` |
@@ -308,7 +320,9 @@ bearer is `agent_token` = `<device_id>.<base64url(32 bytes)>`; the prefix only r
 
 Any successful authenticated response may also carry the caller's unread events as a
 top-level `events` array (+ `more_events:true`): additive, absent when there are none.
-Error responses never carry events and never move the read cursor.
+Error responses never carry events and never move the read cursor. An error may carry
+extra fields next to `error`: `firmware_too_old` has `{feature, current, needed, latest, how}`
+(409) — e.g. `molty_ask` on firmware older than the release that ships `ask`.
 
 Device-local console API (same Wi-Fi, no auth; served by the firmware, used by
 `console/`). One spelling per field — `relay_url` is the ws/wss origin the
@@ -319,6 +333,8 @@ device dials; agents/CLI use its http(s) twin (`ws://h` → `http://h`, `wss://h
 | `GET /api/link` | `200 {device_id, link_code, relay_url, pair, last_pair, connected, auth_failed, close_code}` | `500` link unavailable |
 | `POST /api/link {relay_url}` (any Content-Type) | same body as GET; saved to NVS, reconnects | `400` not a `ws://`/`wss://` origin |
 | `POST /api/link/forget` | `202 {ok:true, pending:true}` | `500` |
+| `GET /api/update` (firmware with the `update` cap; older firmware: not found) | `200 {ok:true, state:"idle"\|"downloading"\|"flashing"\|"rebooting"\|"failed", version?, progress?: 0..1, error?}` | — |
+| `POST /api/update {version, url, sha256, size}` (any Content-Type) | `202 {ok:true, state:"downloading"}`; then as `cmd update` after an accept (no on-screen question: the click in the console is the consent, the same trust as `POST /api/ota`) | `400 bad_url` (not an official release URL), `409 busy` |
 
 `pair`: `null`, or `{agent_name, code, expires_in_s}` for a request currently awaiting the
 tap. `last_pair`: `null` until the first decision since boot (RAM only), then
@@ -541,9 +557,9 @@ Agents learn that `/skill.md` changed without any push channel, by the same ride
 as events.
 
 - **One source of truth:** `WHATS_NEW` in `relay/src/core/version.ts` (ordered; the last
-  entry's version is `SKILL_VERSION`, now **4**: `molty_ask` (a question answered with a tap);
-  v3 was `molty_talk`, streamed speech, automatic moods, `wait:true`; v2 was device events shake/tap/button, inbox, `molty_events`, webhooks,
-  `molty events` CLI, mood `hold_s`). skill.md's header ("Skill v4 — what's new: …"), the MCP `instructions` and `serverInfo.title` derive from it;
+  entry's version is `SKILL_VERSION`, now **5**: `molty_updates` / `molty_update` / `firmware_too_old`
+  ([Firmware updates](#firmware-updates)); v4 was `molty_ask` (a question answered with a tap); v3 was `molty_talk`, streamed speech, automatic moods, `wait:true`; v2 was device events shake/tap/button, inbox, `molty_events`, webhooks,
+  `molty events` CLI, mood `hold_s`). skill.md's header ("Skill v5 — what's new: …"), the MCP `instructions` and `serverInfo.title` derive from it;
   a test fails if they disagree.
 - **Per token:** `skill_seen` on the token record. Newly paired tokens start current; a
   token without it (paired before versions existed) counts as v1.
@@ -561,6 +577,105 @@ as events.
   **without** an `events` filter whose agent is behind. Agents dedupe by `id`. `url` is
   absolute once the device has connected through this relay (`origin` key), else
   `/skill.md`.
+
+### Firmware updates
+
+"Check Molty for updates" is one agent call. Everything below is relay code
+(`relay/src/core/{releases,updates,version}.ts`) except the device wire, which the
+firmware implements.
+
+```
+GitHub Releases (RELEASES_REPO) ─▶ releases singleton DO (1 h cache, stale on error)
+                                        │
+           molty_updates / molty_status / ride-along notice / molty_update
+                                        │
+           molty_update ─▶ cmd update ─▶ device: "update?" on screen ─▶ download + sha256
+                                        ─▶ flash ─▶ reboot ─▶ hello fw=new ─▶ job done
+```
+
+**Latest release.** `https://api.github.com/repos/<RELEASES_REPO>/releases/latest` (wrangler
+var, default `apresmoi/molty.uno`; optional secret `GITHUB_TOKEN` for the higher rate limit).
+One Durable Object instance (`releases`) caches it for everyone: GitHub is asked about once an
+hour, at most once a minute after a failure, and the last good answer is served stale when
+GitHub fails. One 2 s deadline covers a refresh; agent calls never wait longer. No release yet
+is a normal answer (`latest:null`). Prereleases and drafts are ignored unless
+`RELEASES_PRERELEASE=true`. Per board, the OTA image is the asset `molty-X.Y.Z-<board>-ota.bin`
+whose URL is exactly `https://github.com/<repo>/releases/download/vX.Y.Z/<name>`; its sha256
+comes from the release's `SHA256SUMS` (GitHub's asset digest as fallback; if they disagree,
+none). Only these URLs ever reach the device — `molty_update` takes no arguments.
+
+**Feature → minimum firmware.** `FEATURES` in `relay/src/core/version.ts` is the one place:
+`ask` → `molty_ask`, `update` → `molty_update`, both `NEXT_FW` = **0.2.0** (the next release).
+WHATS_NEW entries name it as `min_fw`.
+
+**`molty_updates`** (REST `GET /v1/devices/<id>/updates`), ride-alongs included:
+
+```
+{"skill":   {"yours": 4, "latest": 5, "whats_new": [{"version":5, "text":"…", "min_fw"?:"0.2.0"}], "url": "<relay>/skill.md"},
+ "firmware":{"current":"0.1.0", "board":"…", "online":true, "latest":"0.2.0"|null,
+             "status":"current"|"update_available"|"no_build_for_board"|"no_release"|"unknown",
+             "update_available":true, "published_at":"…", "notes_url":"…",
+             "needed_for":[{"feature":"molty_ask", "what":"…", "needs":"0.2.0", "released":true}],
+             "can_self_update":false, "release_check":"fresh"|"stale"|"unavailable"},
+ "actions": ["Re-read <relay>/skill.md now …", "Tell your human Molty firmware 0.2.0 is out …"]}
+```
+
+It marks the skill (and the reported release) as seen for the calling token. `status` is
+`unknown` when the device reports a non-release version (`dev`, a local build) or the release
+list was never reachable. Offline devices are answered from their last hello (`online:false`).
+`molty_status` carries the same block as `relay.firmware`.
+
+**Passive notice.** Once per token per newer release (`fw_seen` on the token, atomic like the
+skill notice), the next successful authenticated response carries `firmware_update:
+{current, latest, board, notes_url, can_self_update, how}` (MCP: plus the line "Molty firmware
+X is out (Molty runs Y). …"). It never waits on GitHub (cached answer only).
+
+**`molty_update`** (REST `POST /v1/devices/<id>/update {}`): needs `update` in the device's
+caps (else `409 unsupported` with `{current, latest, how}` pointing at the console). Already
+current or nothing released: `{status:"up_to_date"}`, no job. Otherwise a job (`kind:"update"`,
+blocks ≤ 24 s, then `molty_wait`), stored in the room (`upd`), so it survives the relay host's
+eviction and the device's reboot:
+
+| phase | set by |
+|---|---|
+| `confirm` | relay sent `cmd update`; the device shows the question |
+| `accepted`, `downloading`, `flashing`, `rebooting` | the device's `update` events |
+
+Ends: `done {outcome:"updated", from, to}` when the device's next hello reports `fw == to`;
+`done {outcome:"declined", reason?}`; failed `update_failed` (device reported `failed`; `detail`
+names why), `rolled_back` (a hello on another version after `rebooting`), `update_timeout`
+(no answer within `timeout_ms` + 5 s, or not back on the new version 5 min after the accept).
+A hello on the old version before `rebooting` (a Wi-Fi blip mid-download) is not a failure.
+A second `molty_update` while one runs returns that job.
+
+**Device wire (firmware contract).**
+
+- Hello lists `update` in `caps` once the firmware implements this.
+- Relay → device: `{"t":"cmd","id":"c9","name":"update","args":{"job":"<job>","version":"0.2.0",
+  "url":"https://github.com/<repo>/releases/download/v0.2.0/molty-0.2.0-<board>-ota.bin",
+  "sha256":"<64 hex>","size":1234567,"timeout_ms":60000}}`.
+  The device acks (`res ok`) once the question is on screen: reuse the ask screen with two
+  options, "update" and "later", and the version. Refuse with `res {ok:false, error}`:
+  `busy` (an update already running), `bad_url` (not `https://github.com/<repo>/releases/download/…`
+  for the repo baked into the firmware), `wrong_board`.
+- Device → relay events `{"t":"evt","name":"update","data":{"job":"<job>","state":…}}`:
+  `declined` (+ `reason:"timeout"|"cancelled"`: no tap within `timeout_ms`, or another command
+  replaced the question), `accepted`, `downloading` (optional `progress` 0..1, at most 1/s),
+  `flashing`, `rebooting` (sent right before `esp_restart`), `failed` (+ `error`, a short ASCII
+  reason, e.g. `sha256_mismatch`, `size_mismatch`, `http_404`, `tls`, `wrong_board`, `write`).
+- Download over HTTPS with certificate verification (GitHub redirects to its asset CDN: follow
+  it), into the spare OTA slot (`esp_ota_*`, as `POST /api/ota`), checking the board tag like
+  `/api/ota`, then `size` and the sha256 of the whole image; on any mismatch abort and send
+  `failed`. Only then set the boot partition, send `rebooting`, restart.
+- After the restart, the new app reconnects and says hello with its new `fw`; it should mark
+  itself valid (`esp_ota_mark_app_valid_cancel_rollback`) only after the link's `welcome`, so an
+  image that cannot reach the relay rolls back by itself and comes back on the old version.
+
+**Console.** The status page asks the device's relay `GET /v1/releases/latest?board=<board>`
+(public, no device data) and shows "update available: X.Y.Z — what's new". With the device's
+`GET /api/update` present (firmware with self-update) its Update button posts
+`POST /api/update {version, url, sha256, size}` from that answer; otherwise it links the OTA
+image and uploads a chosen file to `POST /api/ota`.
 
 ### Example setups by agent kind
 
