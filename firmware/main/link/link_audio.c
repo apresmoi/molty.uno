@@ -212,7 +212,6 @@ static esp_err_t start(const cJSON *args, bool listen, cJSON **out)
     bool vad = vad_def.enabled;
     unsigned end_silence_ms = vad_def.end_silence_ms, no_speech_ms = vad_def.no_speech_ms;
     if (listen && !link_listen_args(args, &vad, &end_silence_ms, &no_speech_ms)) return ESP_ERR_INVALID_ARG;
-    link_ask_cancel();   /* say / listen take the screen from a pending question */
     cJSON *result = cJSON_CreateObject();
     if (!result) return ESP_ERR_NO_MEM;
     cJSON_AddStringToObject(result, "job", j->valuestring);
@@ -227,6 +226,7 @@ static esp_err_t start(const cJSON *args, bool listen, cJSON **out)
         if (e == ESP_OK) e = mole_creature_state_set("{\"state\":\"text\"}");
     }
     if (e != ESP_OK) { cJSON_Delete(result); return e; }
+    link_ask_cancel();   /* say / listen, once accepted, take the screen from a pending question */
     audio_job_t job = {.listen = listen, .ms = (unsigned)ms->valueint,
                        .vad = vad, .end_silence_ms = end_silence_ms, .no_speech_ms = no_speech_ms};
     strcpy(job.job, j->valuestring); strcpy(s_job, job.job);

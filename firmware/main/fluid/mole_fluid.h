@@ -81,10 +81,17 @@ void mole_fluid_listen_level(float level);
  *  end    the question ended unanswered (timeout, cancelled): the labels melt and the
  *         fluid returns to the creature — or to the state a command asked for meanwhile.
  *  While a question is up, other state changes wait under it (the director keeps them),
- *  except that an explicit state / mood request ends a pick's hold early. */
-esp_err_t mole_fluid_ask_show(int n, const char *const *labels);
+ *  except that an explicit state / mood request ends a pick's hold early.
+ *  show sets *seq (≠ 0) to the question's number on screen: what mole_fluid_ask_shown
+ *  reports once the panel shows it readable. */
+esp_err_t mole_fluid_ask_show(int n, const char *const *labels, unsigned *seq);
 void mole_fluid_ask_pick(int index);
 void mole_fluid_ask_end(void);
+/** The question (its show seq) a tap may answer right now: the one on the frame last flushed
+ *  to the panel, its labels condensed and not yet answered (fluid_ask_tappable); 0 when the
+ *  panel shows none — nothing, or another question's letters still morphing into it.
+ *  Safe from any task (the touch path). */
+unsigned mole_fluid_ask_shown(void);
 
 #ifdef __cplusplus
 }

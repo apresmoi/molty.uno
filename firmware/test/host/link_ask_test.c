@@ -35,17 +35,30 @@ esp_err_t link_send_json(const cJSON *j) {
     char *t = cJSON_PrintUnformatted(j); assert(t && strlen(t) < sizeof(frames[0]) && nframes < 16);
     strcpy(frames[nframes++], t); cJSON_free(t); return ESP_OK;
 }
-/* the screen (mole_fluid.c) */
+/* the screen (mole_fluid.c): what the link wants (want_*) reaches the panel only when a
+ * frame is drawn — glass = the question a tap on the panel may answer (mole_fluid_ask_shown) */
 static int shown_n = -1, picked = -1; static unsigned shows, ends; static char shown[5][9];
-esp_err_t mole_fluid_ask_show(int n, const char *const *labels) {
+static unsigned want_seq, glass; static bool want_up;
+esp_err_t mole_fluid_ask_show(int n, const char *const *labels, unsigned *seq) {
     shows++; shown_n = n; picked = -1;
     for (int i = 0; i < n; i++) snprintf(shown[i], sizeof(shown[i]), "%s", labels[i]);
+    *seq = ++want_seq; want_up = true;
     return ESP_OK;
 }
-void mole_fluid_ask_pick(int index) { picked = index; }
-void mole_fluid_ask_end(void) { ends++; }
+void mole_fluid_ask_pick(int index) { picked = index; want_up = false; }
+void mole_fluid_ask_end(void) { ends++; want_up = false; }
+unsigned mole_fluid_ask_shown(void) { return glass; }
+/* the panel catches up: the wanted question, condensed (fluid_ask_tappable) */
+static void draw(void) { glass = want_up ? want_seq : 0; }
 
-static esp_err_t ask(const char *args) {
+/* the firmware's own question (link_ask_open): its end goes to the owner, not the wire */
+static int done_index = -9, dones; static char done_reason[16];
+static void on_done(int index, const char *reason) {
+    dones++; done_index = index; snprintf(done_reason, sizeof(done_reason), "%s", reason ? reason : "");
+}
+static const char *const UL[2] = { "update", "later" };
+/* the command only: the panel still shows what it showed */
+static esp_err_t ask_cmd(const char *args) {
     cJSON *a = cJSON_Parse(args), *out = NULL; assert(a);
     esp_err_t e = link_ask_cmd(a, &out);
     if (e == ESP_OK) assert(out && !strcmp(cJSON_GetObjectItem(out, "job")->valuestring, cJSON_GetObjectItem(a, "job")->valuestring));
@@ -53,20 +66,85 @@ static esp_err_t ask(const char *args) {
     cJSON_Delete(a); cJSON_Delete(out);
     return e;
 }
+/* the command, then the panel shows its question */
+static esp_err_t ask(const char *args) { esp_err_t e = ask_cmd(args); draw(); return e; }
+static esp_err_t open_q(const char *job, unsigned timeout_ms) { esp_err_t e = link_ask_open(job, UL, 2, timeout_ms, on_done); draw(); return e; }
 /* a finger down then up at panel px (x, y) */
 static void touch(int x, int y) {
     uint16_t xs[1] = { (uint16_t)x }, ys[1] = { (uint16_t)y };
     sense_touch(1, xs, ys); sense_touch(0, xs, ys);
 }
 static const char *last(void) { return nframes ? frames[nframes - 1] : ""; }
-/* the firmware's own question (link_ask_open): its end goes to the owner, not the wire */
-static int done_index = -9, dones; static char done_reason[16];
-static void on_done(int index, const char *reason) {
-    dones++; done_index = index; snprintf(done_reason, sizeof(done_reason), "%s", reason ? reason : "");
-}
-static const char *const UL[2] = { "update", "later" };
 
 #define YNI "{\"job\":\"j1\",\"options\":[\"Yes\",\" no \",\"idk\"],\"timeout_ms\":5000}"
+
+/* A tap answers only the question the panel showed when it landed: screen updates are
+ * async, so right after ask B replaced ask A the finger may still be on A's labels. */
+static void test_displayed(void) {
+    sdk_now = 50000000;
+    assert(ask("{\"job\":\"A\",\"options\":[\"yes\",\"no\"],\"timeout_ms\":5000}") == ESP_OK);
+    unsigned n0 = nframes;
+    /* B replaces A; the panel has not drawn B yet: a tap on A's "no" (right half) answers
+     * nothing — not B, not a `tap` event — and B stays pending */
+    assert(ask_cmd("{\"job\":\"B\",\"options\":[\"red\",\"green\"],\"timeout_ms\":5000}") == ESP_OK);
+    assert(nframes == n0 + 1 && strstr(last(), "\"job\":\"A\"") && strstr(last(), "cancelled"));
+    touch(206 + 100, 206);
+    assert(!atomic_load(&s_tap));
+    link_ask_tick();
+    assert(link_ask_pending() && nframes == n0 + 1 && picked == -1);
+    /* B's letters still morphing out of A's (not condensed: nothing tappable) */
+    glass = 0;
+    touch(206 + 100, 206); link_ask_tick();
+    assert(link_ask_pending() && nframes == n0 + 1 && !atomic_load(&s_tap));
+    /* B on the panel: the next tap is B's answer */
+    draw();
+    touch(206 + 100, 206); link_ask_tick();
+    assert(!link_ask_pending() && picked == 1);
+    assert(!strcmp(last(), "{\"t\":\"evt\",\"name\":\"answer\",\"data\":{\"job\":\"B\",\"index\":1,\"label\":\"green\"}}"));
+    /* the firmware's own question replacing an agent's: same rule, its owner hears nothing
+     * from a tap aimed at the old labels */
+    assert(ask("{\"job\":\"C\",\"options\":[\"a\",\"b\"],\"timeout_ms\":5000}") == ESP_OK);
+    int d0 = dones;
+    assert(link_ask_open("u8", UL, 2, 5000, on_done) == ESP_OK);
+    touch(206 - 100, 206); link_ask_tick();
+    assert(dones == d0 && link_ask_pending());
+    draw(); touch(206 - 100, 206); link_ask_tick();
+    assert(dones == d0 + 1 && done_index == 0);
+    /* and an agent's ask replacing the firmware's: a tap on "update" is not its answer */
+    assert(open_q("u9", 5000) == ESP_OK);
+    n0 = nframes; d0 = dones;
+    assert(ask_cmd("{\"job\":\"D\",\"options\":[\"x\",\"y\"],\"timeout_ms\":5000}") == ESP_OK);
+    assert(dones == d0 + 1 && !strcmp(done_reason, "cancelled"));
+    touch(206 - 100, 206); link_ask_tick();
+    assert(link_ask_pending() && nframes == n0);
+    link_ask_cancel();
+}
+
+/* The deadline judges the tap's capture time, not when the link task gets to it. */
+static void test_deadline(void) {
+    sdk_now = 60000000;
+    unsigned n0 = nframes;
+    /* captured exactly at the deadline, drained later: the tap wins */
+    assert(ask("{\"job\":\"E\",\"options\":[\"a\",\"b\"],\"timeout_ms\":1000}") == ESP_OK);
+    sdk_now += 1000000; touch(206 + 100, 206);
+    sdk_now += 30000; link_ask_tick();
+    assert(!link_ask_pending() && nframes == n0 + 1);
+    assert(!strcmp(last(), "{\"t\":\"evt\",\"name\":\"answer\",\"data\":{\"job\":\"E\",\"index\":1,\"label\":\"b\"}}"));
+    /* captured 1 µs after it (the tick ran late): the timeout wins, the tap answers nothing */
+    assert(ask("{\"job\":\"F\",\"options\":[\"a\",\"b\"],\"timeout_ms\":1000}") == ESP_OK);
+    sdk_now += 1000001; touch(206 + 100, 206);
+    link_ask_tick();
+    assert(!link_ask_pending() && nframes == n0 + 2);
+    assert(!strcmp(last(), "{\"t\":\"evt\",\"name\":\"answer\",\"data\":{\"job\":\"F\",\"index\":null,\"reason\":\"timeout\"}}"));
+    /* the firmware's own question: the same */
+    int d0 = dones;
+    assert(open_q("u10", 1000) == ESP_OK);
+    sdk_now += 1000000; touch(206 - 100, 206); sdk_now += 30000; link_ask_tick();
+    assert(dones == d0 + 1 && done_index == 0);
+    assert(open_q("u11", 1000) == ESP_OK);
+    sdk_now += 1000001; touch(206 - 100, 206); link_ask_tick();
+    assert(dones == d0 + 2 && done_index == -1 && !strcmp(done_reason, "timeout"));
+}
 
 int main(void) {
     /* no touch: nothing could answer → unsupported, nothing on screen */
@@ -128,7 +206,7 @@ int main(void) {
     assert(nframes == n0 + 1 && shows == s0 + 1 && ends == e0 + 2 && shown_n == 3);
     assert(!strcmp(last(), "{\"t\":\"evt\",\"name\":\"answer\",\"data\":{\"job\":\"j7\",\"index\":null,\"reason\":\"cancelled\"}}"));
     /* a tap that raced the old question (its generation) answers nothing */
-    atomic_store(&s_mailbox, (s_ask.gen == 1 ? 255u : s_ask.gen - 1) << 24 | 2048u << 12 | 2048u);
+    atomic_store(&s_mailbox, (uint64_t)(s_ask.gen == 1 ? 255u : s_ask.gen - 1) << 56 | 2048ull << 44 | 2048ull << 32 | (uint32_t)sdk_now);
     link_ask_tick(); assert(link_ask_pending() && nframes == n0 + 1);
     touch(206, 206 + 150); link_ask_tick();       /* bottom of 3 */
     assert(!strcmp(last(), "{\"t\":\"evt\",\"name\":\"answer\",\"data\":{\"job\":\"j8\",\"index\":2,\"label\":\"z\"}}"));
@@ -152,20 +230,20 @@ int main(void) {
      * the end, no `answer` event ever */
     n0 = nframes;
     assert(link_ask_open("u1", UL, 2, 5000, NULL) == ESP_ERR_INVALID_ARG);
-    assert(link_ask_open("u1", UL, 2, 5000, on_done) == ESP_OK && link_ask_pending() && shown_n == 2 && !strcmp(shown[0], "update"));
+    assert(open_q("u1", 5000) == ESP_OK && link_ask_pending() && shown_n == 2 && !strcmp(shown[0], "update"));
     touch(206 - 100, 206); link_ask_tick();                 /* left half: "update" */
     assert(dones == 1 && done_index == 0 && !done_reason[0] && picked == 0 && nframes == n0 && !link_ask_pending());
-    assert(link_ask_open("u2", UL, 2, 1000, on_done) == ESP_OK);
+    assert(open_q("u2", 1000) == ESP_OK);
     touch(206 + 100, 206); link_ask_tick();                 /* right half: "later" */
     assert(dones == 2 && done_index == 1 && nframes == n0);
-    assert(link_ask_open("u3", UL, 2, 1000, on_done) == ESP_OK);
+    assert(open_q("u3", 1000) == ESP_OK);
     sdk_now += 1000000; link_ask_tick();
     assert(dones == 3 && done_index == -1 && !strcmp(done_reason, "timeout") && nframes == n0);
-    assert(link_ask_open("u4", UL, 2, 5000, on_done) == ESP_OK);
+    assert(open_q("u4", 5000) == ESP_OK);
     link_ask_cancel();                                      /* a screen command / link down */
     assert(dones == 4 && done_index == -1 && !strcmp(done_reason, "cancelled") && nframes == n0);
     /* an agent's ask replaces it: the owner hears cancelled, the ask runs as usual */
-    assert(link_ask_open("u5", UL, 2, 5000, on_done) == ESP_OK);
+    assert(open_q("u5", 5000) == ESP_OK);
     assert(ask("{\"job\":\"j12\",\"options\":[\"a\"],\"timeout_ms\":5000}") == ESP_OK);
     assert(dones == 5 && !strcmp(done_reason, "cancelled") && nframes == n0);
     touch(206, 206); link_ask_tick();
@@ -173,7 +251,7 @@ int main(void) {
     /* the update question replaces a pending agent ask: that ask ends cancelled on the wire */
     assert(ask("{\"job\":\"j13\",\"options\":[\"a\"],\"timeout_ms\":5000}") == ESP_OK);
     n0 = nframes;
-    assert(link_ask_open("u6", UL, 2, 5000, on_done) == ESP_OK && nframes == n0 + 1);
+    assert(open_q("u6", 5000) == ESP_OK && nframes == n0 + 1);
     assert(!strcmp(last(), "{\"t\":\"evt\",\"name\":\"answer\",\"data\":{\"job\":\"j13\",\"index\":null,\"reason\":\"cancelled\"}}"));
     /* link down: the owner still hears the end (it decides what goes out) */
     connected = false;
@@ -184,5 +262,7 @@ int main(void) {
     sdk_caps &= ~MOLTY_CAP_TOUCH;
     assert(link_ask_open("u7", UL, 2, 5000, on_done) == ESP_ERR_NOT_SUPPORTED);
     sdk_caps = 0xFFFFFFFFu;
-    puts("LINK ASK PASS: unsupported without touch, args, answer by sector (label verbatim), first tap wins, no tap event while pending, not rate-limited, timeout, cancel, replace, stale tap, pairing, link down, firmware-owned question (tap/timeout/cancel/replace → owner, never an answer event)");
+    test_displayed();
+    test_deadline();
+    puts("LINK ASK PASS: unsupported without touch, args, answer by sector (label verbatim), first tap wins, no tap event while pending, not rate-limited, timeout, cancel, replace, stale tap, pairing, link down, firmware-owned question (tap/timeout/cancel/replace → owner, never an answer event), a tap answers only the question on the panel, a tap at or before the deadline beats the timeout and one after it loses");
 }

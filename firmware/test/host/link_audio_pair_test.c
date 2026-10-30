@@ -276,6 +276,9 @@ static void test_ask_cancel(void) {
     args=cJSON_Parse("{\"job\":\"listen1\",\"ms\":100,\"rate\":16000}");
     assert(link_audio_listen(args,&res)==ESP_ERR_NOT_SUPPORTED && ask_cancels==c+1); cJSON_Delete(args);
     sdk_caps = 0xFFFFFFFFu;
+    sdk_select_error=ESP_ERR_NO_MEM;                  /* the creature refuses the say's screen */
+    args=say_args(); assert(link_audio_say(args,&res)==ESP_ERR_NO_MEM && ask_cancels==c+1); cJSON_Delete(args);
+    sdk_select_error=ESP_OK;
     audio_job_t job; listen_job(10,&job); assert(ask_cancels==c+2); complete(record(&job));
     request(); assert(ask_cancels==c+3);
     link_pair_cancel();

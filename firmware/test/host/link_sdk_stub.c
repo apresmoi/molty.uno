@@ -107,10 +107,11 @@ bool molty_button_pressed(molty_button_t b) {
     uint32_t need = b == MOLTY_BTN_ACCEPT ? MOLTY_CAP_BTN_ACCEPT : MOLTY_CAP_BTN_REJECT;
     return (sdk_caps & need) && sdk_gpio[b == MOLTY_BTN_ACCEPT ? 0 : 6] == 0;
 }
-esp_err_t mole_creature_select(const char *name) { assert(name); return ESP_OK; }
+esp_err_t mole_creature_select(const char *name) { assert(name); return sdk_select_error; }
 const char *mole_creature_current(void) { return "fluid"; }
 esp_err_t mole_creature_state_get(char **out) { *out=strdup(sdk_saved_state); return ESP_OK; }
-esp_err_t mole_creature_state_set(const char *json) { assert(strlen(json)<sizeof(sdk_state)); strcpy(sdk_state,json); sdk_state_locked=sdk_locks>0; return ESP_OK; }
+esp_err_t sdk_state_error, sdk_select_error;
+esp_err_t mole_creature_state_set(const char *json) { assert(strlen(json)<sizeof(sdk_state)); if(sdk_state_error) return sdk_state_error; strcpy(sdk_state,json); sdk_state_locked=sdk_locks>0; return ESP_OK; }
 esp_err_t molty_speaker_stream_begin(uint32_t rate) { assert(rate==16000); return ESP_OK; }
 esp_err_t molty_speaker_stream_write(const int16_t *pcm, size_t n) { assert(pcm); sdk_written+=n*2; return sdk_play_error; }
 esp_err_t molty_speaker_stream_drain(void) { sdk_drained++; return sdk_play_error; }

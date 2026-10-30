@@ -98,3 +98,33 @@ float fluid_ask_layout(int n, const int *lens, int stage, float *cx, float *cy) 
     }
     return fs;
 }
+
+int fluid_ask_follow(fluid_ask_screen_t *s, bool active, unsigned seq, int pick, int n, bool requested, bool *keep) {
+    int did = 0;
+    *keep = false;
+    if (s->phase != FLUID_ASK_NONE && requested) s->requested = true;
+    if (active && seq != s->seq) {                         /* a new question replaces any */
+        s->phase = FLUID_ASK_SHOW; s->seq = seq; s->pick = -1;
+        s->t = s->pick_t = 0.f; s->requested = false;
+        did |= FLUID_ASK_DID_SHOW;
+    } else if (s->phase == FLUID_ASK_SHOW && (!active || seq != s->seq)) {   /* ended unanswered */
+        s->phase = FLUID_ASK_NONE;
+        *keep = s->requested;
+        return did | FLUID_ASK_DID_LEAVE;
+    }
+    if (s->phase == FLUID_ASK_SHOW && pick >= 0) {         /* answered (maybe before it was drawn) */
+        s->phase = FLUID_ASK_PICK; s->pick = pick < clamp_n(n) ? pick : 0; s->pick_t = 0.f;
+        did |= FLUID_ASK_DID_PICK;
+    }
+    /* the chosen one stays a beat; an explicit request (the agent moved on) cuts it short */
+    if (s->phase == FLUID_ASK_PICK && (s->pick_t >= FLUID_ASK_HOLD_S || requested)) {
+        s->phase = FLUID_ASK_NONE;
+        *keep = requested || s->requested;
+        did |= FLUID_ASK_DID_LEAVE;
+    }
+    return did;
+}
+
+unsigned fluid_ask_tappable(const fluid_ask_screen_t *s, float speed) {
+    return s->phase == FLUID_ASK_SHOW && s->t * speed >= FLUID_ASK_READY ? s->seq : 0u;
+}

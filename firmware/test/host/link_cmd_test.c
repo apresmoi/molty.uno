@@ -88,10 +88,21 @@ int main(void) {
     assert(run("state","{}")==ESP_OK && run("status","{}")==ESP_OK && run("diag","{}")==ESP_OK && ask_cancels==c+3);
     assert(run("volume","{\"volume\":3}")==ESP_OK && run("imu","{}")==ESP_ERR_NOT_SUPPORTED && ask_cancels==c+3);
     assert(run("show","{\"text\":1}")==ESP_ERR_INVALID_ARG && run("mood","{\"mood\":\"furious\"}")==ESP_ERR_INVALID_ARG && ask_cancels==c+3);
+    /* a command the creature refuses after its args passed leaves the question up too:
+     * only an accepted one takes the screen (state's body is validated by the creature) */
+    sdk_state_error=ESP_ERR_INVALID_ARG;
+    assert(run("state","{\"palette\":\"nope\"}")==ESP_ERR_INVALID_ARG && ask_cancels==c+3);
+    assert(run("state","{\"mood\":\"happy\"}")==ESP_ERR_INVALID_ARG && ask_cancels==c+3);
+    assert(run("mood","{\"mood\":\"happy\"}")==ESP_ERR_INVALID_ARG && ask_cancels==c+3);
+    assert(run("show","{\"text\":\"hi\"}")==ESP_ERR_INVALID_ARG && ask_cancels==c+3);
+    sdk_state_error=ESP_OK; sdk_select_error=ESP_ERR_NO_MEM;
+    assert(run("mood","{\"mood\":\"happy\"}")==ESP_ERR_NO_MEM && run("show","{\"text\":\"hi\"}")==ESP_ERR_NO_MEM && ask_cancels==c+3);
+    sdk_select_error=ESP_OK;
+    assert(run("state","{\"palette\":\"green\"}")==ESP_OK && ask_cancels==c+4);
     /* update is registered; a handler's own refusal code reads back */
     cJSON *out=NULL, *a=cJSON_Parse("{}");
     assert(link_cmd_run("update",a,&out)==LINK_CMD_REFUSED && update_cmds==1 && !strcmp(link_cmd_refusal(),"wrong_board"));
     cJSON_Delete(a);
     cJSON_Delete(sdk_sent);
-    puts("LINK CMD PASS: explicit moods counted (link mood cmd, local state POST) under the mood lock, own/rejected moods not; screen commands cancel a question");
+    puts("LINK CMD PASS: explicit moods counted (link mood cmd, local state POST) under the mood lock, own/rejected moods not; screen commands cancel a question only once accepted");
 }

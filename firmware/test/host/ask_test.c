@@ -108,11 +108,66 @@ static void test_fits(void) {
     CHECK(!fluid_ask_fits(4, 0, 2, 20.f, 3.f, -100.f, 206.f, 1.f), "n=4 within the gap of 12 o'clock");
 }
 
+/* the question on screen, frame by frame (fluid_ask_follow / fluid_ask_tappable) */
+static void test_follow(void) {
+    fluid_ask_screen_t q = { 0 };
+    bool keep = true;
+    int did = fluid_ask_follow(&q, true, 1, -1, 2, false, &keep);
+    CHECK(did == FLUID_ASK_DID_SHOW && q.phase == FLUID_ASK_SHOW && q.seq == 1 && !keep, "show");
+    /* tappable only once condensed (t·speed ≥ FLUID_ASK_READY), at any speed */
+    CHECK(fluid_ask_tappable(&q, 1.f) == 0, "not condensed at t = 0");
+    q.t = 0.59f; CHECK(fluid_ask_tappable(&q, 1.f) == 0, "t 0.59 at speed 1");
+    q.t = 0.6f;  CHECK(fluid_ask_tappable(&q, 1.f) == 1, "t 0.6 at speed 1");
+    CHECK(fluid_ask_tappable(&q, 0.4f) == 0, "slow speed: still morphing");
+    q.t = 1.5f;  CHECK(fluid_ask_tappable(&q, 0.4f) == 1, "slow speed, later");
+    /* a new question replaces it: back to not tappable until its labels condense */
+    did = fluid_ask_follow(&q, true, 2, -1, 3, false, &keep);
+    CHECK(did == FLUID_ASK_DID_SHOW && q.seq == 2 && fluid_ask_tappable(&q, 2.5f) == 0, "replace");
+    /* answered: the pick holds FLUID_ASK_HOLD_S, never tappable, then leaves for the creature */
+    q.t = 1.f;
+    did = fluid_ask_follow(&q, true, 2, 1, 3, false, &keep);
+    CHECK(did == FLUID_ASK_DID_PICK && q.phase == FLUID_ASK_PICK && q.pick == 1 && fluid_ask_tappable(&q, 1.f) == 0, "pick");
+    q.pick_t = FLUID_ASK_HOLD_S - 0.01f;
+    CHECK(fluid_ask_follow(&q, true, 2, 1, 3, false, &keep) == 0, "pick holds");
+    q.pick_t = FLUID_ASK_HOLD_S;
+    did = fluid_ask_follow(&q, true, 2, 1, 3, false, &keep);
+    CHECK(did == FLUID_ASK_DID_LEAVE && q.phase == FLUID_ASK_NONE && !keep && fluid_ask_tappable(&q, 1.f) == 0, "pick leaves");
+    /* ended unanswered, nothing requested meanwhile: to the creature */
+    fluid_ask_follow(&q, true, 3, -1, 2, false, &keep);
+    did = fluid_ask_follow(&q, false, 3, -1, 2, false, &keep);
+    CHECK(did == FLUID_ASK_DID_LEAVE && !keep, "end, no request");
+    /* a request that arrived while it was up (the command that then cancelled it: the link
+     * applies first and cancels after, so they may land in different frames) is kept */
+    fluid_ask_follow(&q, true, 4, -1, 2, false, &keep);
+    CHECK(fluid_ask_follow(&q, true, 4, -1, 2, true, &keep) == 0 && q.phase == FLUID_ASK_SHOW, "request waits under it");
+    did = fluid_ask_follow(&q, false, 4, -1, 2, false, &keep);
+    CHECK(did == FLUID_ASK_DID_LEAVE && keep, "end after a request: keep it");
+    /* ...and one in the very frame it ends */
+    fluid_ask_follow(&q, true, 5, -1, 2, false, &keep);
+    did = fluid_ask_follow(&q, false, 5, -1, 2, true, &keep);
+    CHECK(did == FLUID_ASK_DID_LEAVE && keep, "end with a request");
+    /* a request during the previous question does not carry into the next one */
+    fluid_ask_follow(&q, true, 6, -1, 2, false, &keep);
+    fluid_ask_follow(&q, true, 6, -1, 2, true, &keep);
+    fluid_ask_follow(&q, true, 7, -1, 2, false, &keep);
+    did = fluid_ask_follow(&q, false, 7, -1, 2, false, &keep);
+    CHECK(did == FLUID_ASK_DID_LEAVE && !keep, "request does not carry over");
+    /* a request cuts a pick's hold short and is kept */
+    fluid_ask_follow(&q, true, 8, -1, 2, false, &keep);
+    fluid_ask_follow(&q, true, 8, 0, 2, false, &keep);
+    did = fluid_ask_follow(&q, true, 8, 0, 2, true, &keep);
+    CHECK(did == FLUID_ASK_DID_LEAVE && keep, "request ends the pick");
+    /* answered before it was ever drawn: show + pick in one frame; out-of-range pick → 0 */
+    did = fluid_ask_follow(&q, true, 9, 7, 2, false, &keep);
+    CHECK(did == (FLUID_ASK_DID_SHOW | FLUID_ASK_DID_PICK) && q.pick == 0, "show + pick");
+}
+
 int main(void) {
     printf("ask host test\n");
     test_order();
     test_pick();
     test_fits();
+    test_follow();
     test_layout(412);
     test_layout(240);
     printf("%d passed, %d failed\n", s_pass, s_fail);

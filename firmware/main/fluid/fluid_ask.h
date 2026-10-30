@@ -53,6 +53,31 @@ float fluid_ask_layout(int n, const int *lens, int stage, float *cx, float *cy);
  *  sector k of n on a disc of radius r px (rim and gap scaled by sc = stage / 412). */
 bool  fluid_ask_fits(int n, int k, int len, float fs, float x, float y, float r, float sc);
 
+/* ── The question on screen, frame by frame ─────────────────────────────────────
+ * mole_fluid.c follows what the link wants (mole_fluid_ask_*) with this once per frame,
+ * and tells the touch path which question a tap on the frame it drew may answer. */
+enum { FLUID_ASK_NONE, FLUID_ASK_SHOW, FLUID_ASK_PICK };
+#define FLUID_ASK_HOLD_S  0.8f   /* a picked answer stays this long                          */
+#define FLUID_ASK_READY   0.6f   /* t·speed at which the labels are condensed (the hold ramp,
+                                  * (t·speed − 0.2) / 0.4, reaches 1): readable, tappable     */
+typedef struct {
+    int phase, pick;             /* FLUID_ASK_*; the option picked (PICK)                     */
+    unsigned seq;                /* the question it follows (mole_fluid_ask_show's seq)       */
+    float t, pick_t;             /* s shown, s since the pick (the caller advances both)      */
+    bool requested;              /* a state / mood request came while it was up               */
+} fluid_ask_screen_t;
+enum { FLUID_ASK_DID_SHOW = 1, FLUID_ASK_DID_PICK = 2, FLUID_ASK_DID_LEAVE = 4 };
+/** One frame: the link wants question `seq` (`active`), answered with option `pick` (≥ 0,
+ *  of n) or not yet; `requested` = an explicit state / mood request arrived this frame.
+ *  Returns what changed, in this order: SHOW (a new question replaces any), PICK, LEAVE
+ *  (ended unanswered, or the pick's hold is over / cut short by a request). On LEAVE, *keep
+ *  = a request came while the question was up: the screen goes to it, not to the creature. */
+int fluid_ask_follow(fluid_ask_screen_t *s, bool active, unsigned seq, int pick, int n, bool requested, bool *keep);
+/** The question a tap on a frame of this screen may answer: shown, not yet answered, its
+ *  labels condensed at this speed (cfg speed) — else 0 (nothing, another question's
+ *  letters still morphing, or a pick on its way out). */
+unsigned fluid_ask_tappable(const fluid_ask_screen_t *s, float speed);
+
 #ifdef __cplusplus
 }
 #endif

@@ -7,9 +7,10 @@
  * link is up, never rate-limited (one per question):
  *   {"t":"evt","name":"answer","data":{"job":J,"index":I,"label":L}}            a tap
  *   {"t":"evt","name":"answer","data":{"job":J,"index":null,"reason":"timeout"}}   no tap in time
- *   {"t":"evt","name":"answer","data":{"job":J,"index":null,"reason":"cancelled"}} a command that
- *       changes the screen (say, show, mood, state, listen, another ask), a pairing, or
- *       the link going down (no event then: it is down)
+ *   {"t":"evt","name":"answer","data":{"job":J,"index":null,"reason":"cancelled"}} an accepted
+ *       command that changes the screen (say, show, mood, state, listen, another ask; a
+ *       refused one leaves the question up), a pairing, or the link going down (no event
+ *       then: it is down)
  */
 #pragma once
 #include <stdbool.h>
@@ -32,6 +33,10 @@ void link_ask_cancel(void);
 /* Link task, every loop: a tap that answers, else the timeout. */
 void link_ask_tick(void);
 /* Touch path, on a touch-down edge at (dx, dy) px from the screen's centre: true when a
- * question is pending — the tap is its answer, not a `tap` event (the first tap wins). */
+ * question is pending — the tap is not a `tap` event. It answers that question (the first
+ * such tap wins) only when the panel shows it (mole_fluid_ask_shown): a tap on a frame
+ * still showing a replaced question, or its letters morphing into the new one, answers
+ * nothing. Its capture time decides against the deadline: at or before it, it wins over
+ * the timeout. */
 bool link_ask_tap(float dx, float dy);
 bool link_ask_pending(void);

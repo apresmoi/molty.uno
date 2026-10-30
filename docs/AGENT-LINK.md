@@ -146,15 +146,21 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   `{"t":"evt","name":"answer","data":{"job":"…","index":null,"reason":"timeout"}}` (no tap
   within `timeout_ms`), or `{…,"index":null,"reason":"cancelled"}` (an accepted `say`,
   `show`, `mood`, `state` with args, `listen` or a new `ask`, or a pairing, took the screen
-  first; a new `ask` cancels the old one before its own ack). Events go out only while the
-  link is up: a question pending when the link drops ends on screen with no event. While a
-  question is pending, the tap that answers it is not also a `tap` event.
+  first — a command the device refuses leaves the question up; a new `ask` cancels the old
+  one before its own ack). Events go out only while the link is up: a question pending when
+  the link drops ends on screen with no event. While a question is pending, no tap is a `tap`
+  event, and a tap answers it only when the panel shows it: a tap on a frame still showing a
+  question it replaced, or the letters morphing into its labels (until they condensed), answers
+  nothing. A tap's capture time decides against `timeout_ms`: at or before it, the tap wins
+  over the timeout; after it, the timeout wins.
   Relay side (`molty_ask` / `POST …/ask`): the `cmd ask` goes out only after the optional
   `say` has played (its `say.done`, as `talk`), with labels already trimmed (`MAX_ASK_LABEL`
   in `relay/src/core/commands.ts`). The relay drops an `answer` unless its job is an ask still
   waiting, `index` is within that job's options, `label` (optional) equals `options[index]`, and
   a tap carries no `reason` / a non-answer no label. No answer within `timeout_ms` + 5 s: the
-  relay resolves `timeout` itself; device gone mid-ask: `reason:"offline"`.
+  relay resolves `timeout` itself; device gone mid-ask: `reason:"offline"`. An answer the relay
+  accepted stands even when the `cmd ask` ack is then lost (`device_timeout`): the job is done
+  with it (one `answer` inbox event); with no answer yet, a lost ack fails the job.
 - `listen`: relay sends `cmd listen {job, ms, rate:16000, end_silence_ms?, no_speech_ms?, vad?}`
   (`ms` = maximum window; the VAD knobs only when the agent gave them: `end_silence_ms`
   300..3000, `no_speech_ms` 1000..10000, `vad` bool). Device streams mic PCM up; the last frame
@@ -177,7 +183,9 @@ empty. So the creature thinks from end of speech until the agent's next command 
 Agents don't need `mood` calls around talking; an explicit `mood` still wins: once the device
 has accepted a `mood` from any agent after a listen began, the relay sends no more automatic
 moods for that listen (none while that `mood` awaits its answer either; a refused one does not
-count). On the device, a listen/say that ends falls back to `idle` only if no explicit mood (link
+count). The same for an `ask` sent after a listen began (any `mood` cancels a pending question
+on the device): no automatic mood while its `cmd ask` awaits the ack, none for that listen once
+the device showed it (or its ack was lost). On the device, a listen/say that ends falls back to `idle` only if no explicit mood (link
 `mood` command, or a local `POST /api/creature/state` with a `mood`) arrived since it started, so
 the explicit mood keeps its own `hold_s`.
 
@@ -659,8 +667,8 @@ A second `molty_update` while one runs returns that job.
   `busy` (an update already running), `bad_url` (not `https://github.com/<repo>/releases/download/…`
   for the repo baked into the firmware), `wrong_board`.
 - Device → relay events `{"t":"evt","name":"update","data":{"job":"<job>","state":…}}`:
-  `declined` (+ `reason:"timeout"|"cancelled"`: no tap within `timeout_ms`, or another command
-  replaced the question), `accepted`, `downloading` (optional `progress` 0..1, at most 1/s),
+  `declined` (+ `reason:"timeout"|"cancelled"`: no tap within `timeout_ms`, or another accepted
+  command replaced the question — the same tap, deadline and cancellation rules as `ask`), `accepted`, `downloading` (optional `progress` 0..1, at most 1/s),
   `flashing`, `rebooting` (sent right before `esp_restart`), `failed` (+ `error`, a short ASCII
   reason, e.g. `sha256_mismatch`, `size_mismatch`, `http_404`, `tls`, `wrong_board`, `write`).
 - Download over HTTPS with certificate verification (GitHub redirects to its asset CDN: follow
