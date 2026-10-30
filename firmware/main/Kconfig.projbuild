@@ -33,4 +33,13 @@ config MOLTY_DEFAULT_RELAY
         wss://host for a deployed relay, or ws://<LAN-IP>:8787 for `wrangler dev`.
         The device appends /v1/device?id=<device_id>. See docs/AGENT-LINK.md.
 
+config MOLTY_RELEASES_REPO
+    string "GitHub repo whose releases the device installs"
+    default "apresmoi/molty.uno"
+    help
+        owner/name. A self-update (the link's `update`, POST /api/update) accepts only
+        https://github.com/<this>/releases/download/<tag>/molty-<version>-<board>-ota.bin
+        (refused with bad_url otherwise). Must match the relay's RELEASES_REPO.
+        See docs/AGENT-LINK.md "Firmware updates".
+
 endmenu

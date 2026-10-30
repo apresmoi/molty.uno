@@ -29,6 +29,7 @@ static struct {
     char label[LINK_ASK_MAX][LINK_ASK_LABEL_MAX + 1];
     int n;
     int64_t deadline;
+    link_ask_done_t done;   /* NULL: the agent's ask (an `answer` event) */
 } s_ask;
 static atomic_uint s_open_gen, s_mailbox;
 
@@ -47,6 +48,7 @@ bool link_ask_tap(float dx, float dy)
 
 static void emit_answer(int index, const char *reason)
 {
+    if (s_ask.done) { s_ask.done(index, reason); return; }   /* the firmware's own question */
     if (!link_client_connected()) return;   /* events go out only while the link is up */
     cJSON *j = link_evt_answer_frame(s_ask.job, index, index >= 0 ? s_ask.label[index] : NULL, reason);
     if (j) link_send_json(j);
@@ -72,6 +74,29 @@ static void finish(const char *reason, bool screen)
 
 void link_ask_cancel(void) { finish("cancelled", true); }
 
+static esp_err_t open_question(const char *job, char label[LINK_ASK_MAX][LINK_ASK_LABEL_MAX + 1], int n,
+                               unsigned timeout_ms, link_ask_done_t done)
+{
+    esp_err_t e = mole_creature_select("fluid");
+    if (e != ESP_OK) return e;
+    /* a pending question is cancelled first; the new labels replace it on screen */
+    finish("cancelled", false);
+    const char *labels[LINK_ASK_MAX];
+    for (int i = 0; i < n; i++) labels[i] = label[i];
+    e = mole_fluid_ask_show(n, labels);
+    if (e != ESP_OK) { mole_fluid_ask_end(); return e; }
+    strcpy(s_ask.job, job);
+    memcpy(s_ask.label, label, sizeof(s_ask.label));
+    s_ask.n = n;
+    s_ask.done = done;
+    s_ask.deadline = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
+    s_ask.gen = s_ask.gen % 255 + 1;
+    s_ask.open = true;
+    atomic_store(&s_mailbox, 0);
+    atomic_store(&s_open_gen, s_ask.gen);
+    return ESP_OK;
+}
+
 esp_err_t link_ask_cmd(const cJSON *args, cJSON **out)
 {
     if (!molty_board_has(MOLTY_CAP_TOUCH)) return ESP_ERR_NOT_SUPPORTED;   /* nothing could answer */
@@ -81,24 +106,23 @@ esp_err_t link_ask_cmd(const cJSON *args, cJSON **out)
     cJSON *result = cJSON_CreateObject();
     if (!result) return ESP_ERR_NO_MEM;
     cJSON_AddStringToObject(result, "job", job);
-    esp_err_t e = mole_creature_select("fluid");
+    esp_err_t e = open_question(job, label, n, timeout_ms, NULL);
     if (e != ESP_OK) { cJSON_Delete(result); return e; }
-    /* a pending question is cancelled first; the new labels replace it on screen */
-    finish("cancelled", false);
-    const char *labels[LINK_ASK_MAX];
-    for (int i = 0; i < n; i++) labels[i] = label[i];
-    e = mole_fluid_ask_show(n, labels);
-    if (e != ESP_OK) { mole_fluid_ask_end(); cJSON_Delete(result); return e; }
-    strcpy(s_ask.job, job);
-    memcpy(s_ask.label, label, sizeof(label));
-    s_ask.n = n;
-    s_ask.deadline = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
-    s_ask.gen = s_ask.gen % 255 + 1;
-    s_ask.open = true;
-    atomic_store(&s_mailbox, 0);
-    atomic_store(&s_open_gen, s_ask.gen);
     *out = result;
     return ESP_OK;
+}
+
+esp_err_t link_ask_open(const char *job, const char *const *labels, int n, unsigned timeout_ms, link_ask_done_t done)
+{
+    if (!molty_board_has(MOLTY_CAP_TOUCH)) return ESP_ERR_NOT_SUPPORTED;
+    if (!job || !job[0] || strlen(job) >= LINK_STREAM_MAX || n < 1 || n > LINK_ASK_MAX || !done) return ESP_ERR_INVALID_ARG;
+    char label[LINK_ASK_MAX][LINK_ASK_LABEL_MAX + 1];
+    memset(label, 0, sizeof(label));
+    for (int i = 0; i < n; i++) {
+        if (!labels[i] || !labels[i][0] || strlen(labels[i]) > LINK_ASK_LABEL_MAX) return ESP_ERR_INVALID_ARG;
+        strcpy(label[i], labels[i]);
+    }
+    return open_question(job, label, n, timeout_ms, done);
 }
 
 void link_ask_tick(void)

@@ -59,6 +59,9 @@ idf_component_register(
         "link/link_audio.c"
         "link/link_pair.c"
         "link/link_ask.c"        # ask: a question answered by a tap
+        # update: firmware self-update (link `update`, /api/update, the mark-valid guard)
+        "update/update_core.c"   # the rules (plain C, host-tested)
+        "update/self_update.c"
         # audio: listen end-of-speech detection (plain C, host-tested)
         "audio/vad.c"
         # sense: device events (IMU shake, taps, buttons) for the agent + the fluid
@@ -75,6 +78,7 @@ idf_component_register(
         "fluid"
         "creature"
         "link"
+        "update"
         "audio"
         "sense"
         "board"
@@ -83,6 +87,8 @@ idf_component_register(
     PRIV_REQUIRES
         esp_wifi
         esp_websocket_client
+        esp_http_client  # self-update download
+        esp-tls
         mbedtls
         esp_ringbuf
         esp_app_format

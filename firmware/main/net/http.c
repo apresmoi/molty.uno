@@ -48,6 +48,7 @@
 #include "mole_diag.h"
 #include "link_client.h"
 #include "link_cmd.h"
+#include "self_update.h"
 
 static const char *TAG = "http";
 
@@ -1072,8 +1073,19 @@ static esp_err_t handler_reboot_bootloader(httpd_req_t *r)
 // ═════════════════════════════════════════════════════════════════════════════
 // Hands-free flashing: `curl --data-binary @build/tusb_ncm.bin http://molty.local/api/ota`
 // Rollback-protected — if the new image fails to boot+validate, the bootloader
-// reverts to this image on the next reset.
+// reverts to this image on the next reset. One OTA at a time: a self-update
+// (update/self_update.c, POST /api/update, the link's `update`) writes the same slot.
+static esp_err_t ota_receive(httpd_req_t *r, bool *rebooting);
 static esp_err_t handler_ota(httpd_req_t *r)
+{
+    if (!self_update_ota_claim()) return http_send_json(r, "{\"ok\":false,\"error\":\"busy\"}");
+    bool rebooting = false;
+    esp_err_t e = ota_receive(r, &rebooting);
+    if (!rebooting) self_update_ota_release();   /* rebooting: keep it, the slot is set to boot */
+    return e;
+}
+
+static esp_err_t ota_receive(httpd_req_t *r, bool *rebooting)
 {
     const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
     if (!part) return http_send_json(r, "{\"ok\":false,\"error\":\"no_ota_partition\"}");
@@ -1130,6 +1142,7 @@ static esp_err_t handler_ota(httpd_req_t *r)
     }
     char ok[96]; snprintf(ok, sizeof(ok), "{\"ok\":true,\"written\":%d,\"slot\":\"%s\",\"reboot\":true}", total, part->label);
     esp_err_t resp = http_send_json(r, ok);
+    *rebooting = true;
     http_reboot_soon("ota_reboot");
     return resp;
 }
@@ -1443,6 +1456,7 @@ esp_err_t http_server_start(void)
     ESP_RETURN_ON_ERROR(console_http_register(server), TAG, "console routes");
     ESP_RETURN_ON_ERROR(net_http_register(server), TAG, "wifi routes");
     ESP_RETURN_ON_ERROR(link_http_register(server), TAG, "link routes");
+    ESP_RETURN_ON_ERROR(self_update_http_register(server), TAG, "update routes");
     ESP_RETURN_ON_ERROR(mole_diag_http_register(server), TAG, "diag routes");
     httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, handler_404);
 

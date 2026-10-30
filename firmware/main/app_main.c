@@ -11,7 +11,7 @@
  *   (net/network) → board init (display, touch, IMU, ...) → "fluid" creature
  *   (fluid/) → agent link (link/) → device events (sense/) → diag tasks → HTTP
  *   server (net/http)
- *   → OTA image validation → /ws/imu task
+ *   → OTA image validation (update/self_update) → /ws/imu task
  *
  * Plug USB-C into a laptop and browse http://10.13.37.1/ (or http://molty.local/);
  * boards without native USB on the USB-C port are reached over Wi-Fi only.
@@ -36,6 +36,7 @@
 #include "console_store.h"
 #include "http.h"
 #include "improv_serial.h"
+#include "self_update.h"
 
 static const char *TAG = "molty";
 
@@ -121,16 +122,12 @@ void app_main(void)
 
     ESP_ERROR_CHECK(http_server_start());
 
-    // OTA rollback validation: a freshly-OTA'd image (PENDING_VERIFY) that got this
-    // far (HTTP server up) is marked valid. A crash before here rolls back on reset.
-    {
-        const esp_partition_t *running = esp_ota_get_running_partition();
-        esp_ota_img_states_t st;
-        if (esp_ota_get_state_partition(running, &st) == ESP_OK && st == ESP_OTA_IMG_PENDING_VERIFY) {
-            esp_ota_mark_app_valid_cancel_rollback();
-            ESP_LOGI(TAG, "OTA image marked valid (rollback cancelled)");
-        }
-    }
+    // OTA rollback validation (update/update_core.h "the mark-valid rule"): a fresh
+    // image (PENDING_VERIFY) installed by a self-update while the link was up is kept
+    // once the relay welcomes it, and rolled back if that does not happen within 3 min;
+    // any other fresh image (POST /api/ota, no relay link at install time) is kept now
+    // that the HTTP server is up. A crash before either rolls back on reset.
+    self_update_boot();
 
     http_imu_ws_start();
 

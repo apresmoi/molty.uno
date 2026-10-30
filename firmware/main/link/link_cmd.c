@@ -3,6 +3,7 @@
 #include "link_audio.h"
 #include "link_pair.h"
 #include "link_ask.h"
+#include "self_update.h"
 #include "mole_creature.h"
 #include "molty_board.h"
 #include "sdkconfig.h"
@@ -245,7 +246,12 @@ void link_cmd_init(void)
     link_cmd_register("say", link_audio_say); link_cmd_register("listen", link_audio_listen);
     link_cmd_register("volume", cmd_volume); link_cmd_register("imu", cmd_imu);
     link_cmd_register("ask", link_ask_cmd);
+    link_cmd_register("update", self_update_cmd);
 }
+
+static const char *s_refusal = "device_error";
+esp_err_t link_cmd_refuse(const char *code) { s_refusal = code ? code : "device_error"; return LINK_CMD_REFUSED; }
+const char *link_cmd_refusal(void) { return s_refusal; }
 
 esp_err_t link_cmd_run(const char *name, const cJSON *args, cJSON **result)
 {

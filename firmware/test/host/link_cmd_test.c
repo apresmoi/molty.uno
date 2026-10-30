@@ -22,6 +22,8 @@ esp_err_t link_audio_listen(const cJSON *a, cJSON **o) { (void)a;(void)o; return
 static unsigned ask_cancels, ask_cmds;
 void link_ask_cancel(void) { ask_cancels++; }
 esp_err_t link_ask_cmd(const cJSON *a, cJSON **o) { (void)a;(void)o; ask_cmds++; return ESP_OK; }
+static unsigned update_cmds;
+esp_err_t self_update_cmd(const cJSON *a, cJSON **o) { (void)a;(void)o; update_cmds++; return link_cmd_refuse("wrong_board"); }
 
 static unsigned gen_at_unlock;
 static void snap_gen(void) { gen_at_unlock=link_cmd_mood_gen(); }
@@ -86,6 +88,10 @@ int main(void) {
     assert(run("state","{}")==ESP_OK && run("status","{}")==ESP_OK && run("diag","{}")==ESP_OK && ask_cancels==c+3);
     assert(run("volume","{\"volume\":3}")==ESP_OK && run("imu","{}")==ESP_ERR_NOT_SUPPORTED && ask_cancels==c+3);
     assert(run("show","{\"text\":1}")==ESP_ERR_INVALID_ARG && run("mood","{\"mood\":\"furious\"}")==ESP_ERR_INVALID_ARG && ask_cancels==c+3);
+    /* update is registered; a handler's own refusal code reads back */
+    cJSON *out=NULL, *a=cJSON_Parse("{}");
+    assert(link_cmd_run("update",a,&out)==LINK_CMD_REFUSED && update_cmds==1 && !strcmp(link_cmd_refusal(),"wrong_board"));
+    cJSON_Delete(a);
     cJSON_Delete(sdk_sent);
     puts("LINK CMD PASS: explicit moods counted (link mood cmd, local state POST) under the mood lock, own/rejected moods not; screen commands cancel a question");
 }

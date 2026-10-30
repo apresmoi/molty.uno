@@ -20,13 +20,14 @@ int main(void)
     assert(cJSON_GetObjectItem(hello,"key") && cJSON_GetObjectItem(hello,"link_code"));
     assert(!strcmp(cJSON_GetObjectItem(hello,"board")->valuestring,"test-board"));
     char *caps=cJSON_PrintUnformatted(cJSON_GetObjectItem(hello,"caps"));
-    assert(!strcmp(caps,"[\"fluid\",\"say\",\"listen\",\"show\",\"mood\",\"creature\",\"ask\"]")); free(caps);
+    assert(!strcmp(caps,"[\"fluid\",\"say\",\"listen\",\"show\",\"mood\",\"creature\",\"ask\",\"update\"]")); free(caps);
     cJSON_Delete(hello);
     /* no speaker / mic (the 1.28): no say / listen, so the relay refuses those jobs */
     sdk_caps &= ~(MOLTY_CAP_SPEAKER | MOLTY_CAP_MIC);
     hello=link_identity_hello(); caps=cJSON_PrintUnformatted(cJSON_GetObjectItem(hello,"caps"));
-    assert(!strcmp(caps,"[\"fluid\",\"show\",\"mood\",\"creature\",\"ask\"]")); free(caps); cJSON_Delete(hello);
-    /* no touch: nothing could answer a question, so no ask (the relay gates on it) */
+    assert(!strcmp(caps,"[\"fluid\",\"show\",\"mood\",\"creature\",\"ask\",\"update\"]")); free(caps); cJSON_Delete(hello);
+    /* no touch: nothing could answer a question, so no ask and no update (nobody could
+     * confirm it on screen; the relay gates on both caps) */
     sdk_caps &= ~MOLTY_CAP_TOUCH;
     hello=link_identity_hello(); caps=cJSON_PrintUnformatted(cJSON_GetObjectItem(hello,"caps"));
     assert(!strcmp(caps,"[\"fluid\",\"show\",\"mood\",\"creature\"]")); free(caps); cJSON_Delete(hello);

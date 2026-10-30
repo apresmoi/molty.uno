@@ -77,6 +77,11 @@ void link_audio_tick(void) {}
 static unsigned ask_cancels, ask_ticks, ask_cancels_connected;
 void link_ask_cancel(void) { ask_cancels++; if (link_client_connected()) ask_cancels_connected++; }
 void link_ask_tick(void) { ask_ticks++; }
+/* self_update.c: told of every welcome (a fresh image is kept on it), and the refusal
+ * code a handler chose (link_cmd_refuse) is the res's error */
+static unsigned welcomes;
+void self_update_welcomed(void) { welcomes++; assert(link_client_connected()); }
+const char *link_cmd_refusal(void) { return "bad_url"; }
 void link_pair_tick(void) {}
 void link_pair_status(cJSON *j) { cJSON_AddNullToObject(j,"pair"); cJSON_AddNullToObject(j,"last_pair"); }
 void link_pair_request(const cJSON *args) { (void)args; assert(!"unexpected pairing"); }
@@ -157,5 +162,7 @@ int main(void) {
     disconnect("test"); free(s_rxq); cJSON_Delete(sdk_sent);
     /* every disconnect ended the question, with the link already marked down (no event) */
     assert(ask_ticks>0 && ask_cancels>0 && !ask_cancels_connected);
-    puts("LINK CLIENT PASS: code update without reconnect, forget ack/timeout/offline, close codes, 5-minute auth retry, API status");
+    assert(welcomes>0);
+    assert(!strcmp(error_code(LINK_CMD_REFUSED),"bad_url") && !strcmp(error_code(ESP_ERR_INVALID_STATE),"busy"));
+    puts("LINK CLIENT PASS: code update without reconnect, forget ack/timeout/offline, close codes, 5-minute auth retry, API status, welcome → self-update, refusal codes");
 }

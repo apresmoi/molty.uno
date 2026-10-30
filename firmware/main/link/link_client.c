@@ -5,6 +5,7 @@
 #include "link_audio.h"
 #include "link_pair.h"
 #include "link_ask.h"
+#include "self_update.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -192,6 +193,7 @@ static const char *error_code(esp_err_t e)
     case ESP_ERR_NOT_FOUND: return "unknown_command";
     case ESP_ERR_NOT_SUPPORTED: return "unsupported";   /* this board lacks the hardware */
     case ESP_ERR_NO_MEM: return "oom";
+    case LINK_CMD_REFUSED: return link_cmd_refusal();   /* the handler's own code */
     default: return "device_error";
     }
 }
@@ -314,6 +316,7 @@ static void link_task(void *arg)
                     if (!strcmp(t->valuestring, "welcome")) {
                         atomic_store(&s_connected, true); atomic_store(&s_auth, false);
                         mole_diag_event(false, "link.welcome after %ums", (unsigned)((now - started) / 1000));
+                        self_update_welcomed();   /* a freshly updated image: valid now (update_core.h) */
                         backoff = 1; last_pong = now; last_ping = now;
                     } else if (!strcmp(t->valuestring, "pong")) last_pong = now;
                     else if (!strcmp(t->valuestring, "ping")) {

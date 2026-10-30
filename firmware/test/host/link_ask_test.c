@@ -59,6 +59,12 @@ static void touch(int x, int y) {
     sense_touch(1, xs, ys); sense_touch(0, xs, ys);
 }
 static const char *last(void) { return nframes ? frames[nframes - 1] : ""; }
+/* the firmware's own question (link_ask_open): its end goes to the owner, not the wire */
+static int done_index = -9, dones; static char done_reason[16];
+static void on_done(int index, const char *reason) {
+    dones++; done_index = index; snprintf(done_reason, sizeof(done_reason), "%s", reason ? reason : "");
+}
+static const char *const UL[2] = { "update", "later" };
 
 #define YNI "{\"job\":\"j1\",\"options\":[\"Yes\",\" no \",\"idk\"],\"timeout_ms\":5000}"
 
@@ -141,5 +147,42 @@ int main(void) {
     assert(ask("{\"job\":\"j11\",\"options\":[\"a\",\"b\"],\"timeout_ms\":1000}") == ESP_OK);
     sdk_now += 1000000; link_ask_tick(); assert(!link_ask_pending() && nframes == n0);
     connected = true;
-    puts("LINK ASK PASS: unsupported without touch, args, answer by sector (label verbatim), first tap wins, no tap event while pending, not rate-limited, timeout, cancel, replace, stale tap, pairing, link down");
+
+    /* link_ask_open (self_update's "update" / "later"): same screen + tap, the owner hears
+     * the end, no `answer` event ever */
+    n0 = nframes;
+    assert(link_ask_open("u1", UL, 2, 5000, NULL) == ESP_ERR_INVALID_ARG);
+    assert(link_ask_open("u1", UL, 2, 5000, on_done) == ESP_OK && link_ask_pending() && shown_n == 2 && !strcmp(shown[0], "update"));
+    touch(206 - 100, 206); link_ask_tick();                 /* left half: "update" */
+    assert(dones == 1 && done_index == 0 && !done_reason[0] && picked == 0 && nframes == n0 && !link_ask_pending());
+    assert(link_ask_open("u2", UL, 2, 1000, on_done) == ESP_OK);
+    touch(206 + 100, 206); link_ask_tick();                 /* right half: "later" */
+    assert(dones == 2 && done_index == 1 && nframes == n0);
+    assert(link_ask_open("u3", UL, 2, 1000, on_done) == ESP_OK);
+    sdk_now += 1000000; link_ask_tick();
+    assert(dones == 3 && done_index == -1 && !strcmp(done_reason, "timeout") && nframes == n0);
+    assert(link_ask_open("u4", UL, 2, 5000, on_done) == ESP_OK);
+    link_ask_cancel();                                      /* a screen command / link down */
+    assert(dones == 4 && done_index == -1 && !strcmp(done_reason, "cancelled") && nframes == n0);
+    /* an agent's ask replaces it: the owner hears cancelled, the ask runs as usual */
+    assert(link_ask_open("u5", UL, 2, 5000, on_done) == ESP_OK);
+    assert(ask("{\"job\":\"j12\",\"options\":[\"a\"],\"timeout_ms\":5000}") == ESP_OK);
+    assert(dones == 5 && !strcmp(done_reason, "cancelled") && nframes == n0);
+    touch(206, 206); link_ask_tick();
+    assert(dones == 5 && !strcmp(last(), "{\"t\":\"evt\",\"name\":\"answer\",\"data\":{\"job\":\"j12\",\"index\":0,\"label\":\"a\"}}"));
+    /* the update question replaces a pending agent ask: that ask ends cancelled on the wire */
+    assert(ask("{\"job\":\"j13\",\"options\":[\"a\"],\"timeout_ms\":5000}") == ESP_OK);
+    n0 = nframes;
+    assert(link_ask_open("u6", UL, 2, 5000, on_done) == ESP_OK && nframes == n0 + 1);
+    assert(!strcmp(last(), "{\"t\":\"evt\",\"name\":\"answer\",\"data\":{\"job\":\"j13\",\"index\":null,\"reason\":\"cancelled\"}}"));
+    /* link down: the owner still hears the end (it decides what goes out) */
+    connected = false;
+    touch(206 - 100, 206); link_ask_tick();
+    assert(dones == 6 && done_index == 0);
+    connected = true;
+    /* no touch: unsupported */
+    sdk_caps &= ~MOLTY_CAP_TOUCH;
+    assert(link_ask_open("u7", UL, 2, 5000, on_done) == ESP_ERR_NOT_SUPPORTED);
+    sdk_caps = 0xFFFFFFFFu;
+    puts("LINK ASK PASS: unsupported without touch, args, answer by sector (label verbatim), first tap wins, no tap event while pending, not rate-limited, timeout, cancel, replace, stale tap, pairing, link down, firmware-owned question (tap/timeout/cancel/replace → owner, never an answer event)");
 }
