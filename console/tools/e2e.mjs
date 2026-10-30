@@ -265,6 +265,14 @@ const canvasStats = (page) => page.evaluate(() => {
   ok(!!post && /releases\/download\/v.*-ota\.bin/.test(JSON.parse(post.body).url) && JSON.parse(post.body).sha256 === 'd'.repeat(64), 'update: self-updating firmware gets Update, which posts the relay’s official image + sha256');
   ok((await page.locator('.facts dd').nth(1).innerText()).startsWith((await (await fetch(`${MOCK}/__mock/release`)).json()).latest.version), 'update: status shows the new firmware afterwards');
   await shot(page, '15-update-self');
+  // the new image does not stick: Molty comes back on the old firmware -> rolled back, Update offered again
+  await mock('config', { reset: true, update: true, rollback: true });
+  await page.reload();
+  await card.getByRole('button', { name: 'Update' }).click();
+  await card.getByRole('button', { name: 'Sure? Update now' }).click();
+  await card.locator('.note', { hasText: /did not stick/ }).waitFor({ timeout: 15000 });
+  ok(await card.getByRole('button', { name: 'Update' }).count() === 1, 'update: back on the old firmware ends the install as rolled back and offers Update again');
+  await shot(page, '16-update-rolled-back');
   await mock('config', { reset: true });
   await page.context().close();
 }

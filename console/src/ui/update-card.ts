@@ -6,7 +6,7 @@
 // (POST /api/ota). docs/AGENT-LINK.md "Firmware updates".
 import { DeviceError, OfflineError, UnsupportedError, relayHttp, type DeviceApi } from '../api/device';
 import type { DeviceInfo, LinkInfo } from '../api/types';
-import { latestRelease, notesText, updateView, type UpdateView } from '../update/update';
+import { installOutcome, latestRelease, notesText, updateView, type BootMark, type UpdateView } from '../update/update';
 import { DEFAULT_RELAY } from './agent-link';
 import { confirmButton, h, mount, note } from './dom';
 import { errText } from './fmt';
@@ -21,16 +21,31 @@ export function updateCard(api: DeviceApi, fetchImpl: typeof fetch = (...a) => f
   let view: UpdateView | null = null;
   let selfUpdate = false;
   /** Set once an install started: the card then follows it instead of offering it again. */
-  let installing: { version: string; line: string; kind: 'info' | 'warn' | 'err' | 'ok' } | null = null;
+  let installing: { version: string; line: string; kind: 'info' | 'warn' | 'err' | 'ok'; since: BootMark | null } | null = null;
+  /** The device as last seen: an install compares its next boots against this. */
+  let seen: BootMark | null = null;
   /** Why the last attempt did not start (the offer stays). */
   let problem: string | null = null;
 
   async function check(info: DeviceInfo | null, link: LinkInfo | null) {
     if (!alive || !info) return;
-    if (installing && info.fw && info.fw === installing.version) {
-      installing = { ...installing, line: `updated to ${installing.version} ✓`, kind: 'ok' };
-      view = { kind: 'current', latest: installing.version };
-      return render();
+    const mark: BootMark = { fw: info.fw, boot_count: info.boot_count, uptime_ms: info.uptime_ms };
+    seen = mark;
+    if (installing) {
+      const out = installOutcome(installing.version, installing.since, mark);
+      if (out === 'updated' && installing.kind !== 'ok') {
+        installing = { ...installing, line: `updated to ${installing.version} ✓`, kind: 'ok' };
+        view = { kind: 'current', latest: installing.version };
+        return render();
+      }
+      if (out === 'rolled_back') {
+        // Back on the old firmware (also after an "updated" that did not stick): end the
+        // install and offer it again, with what happened.
+        problem = `Molty restarted on ${info.fw ?? 'its previous firmware'}, not ${installing.version}: the update did not stick — try again`;
+        installing = null;
+        clearTimeout(poll);
+        key = '';
+      }
     }
     const board = typeof info.board === 'string' ? info.board : '';
     const relay = relayHttp(link?.relay_url || '') || DEFAULT_RELAY;
@@ -85,7 +100,7 @@ export function updateCard(api: DeviceApi, fetchImpl: typeof fetch = (...a) => f
 
   async function start(t: { version: string; url: string; sha256: string; size: number }) {
     problem = null;
-    installing = { version: t.version, line: 'starting the update…', kind: 'info' };
+    installing = { version: t.version, line: 'starting the update…', kind: 'info', since: seen };
     render();
     try { await api.startUpdate(t); }
     catch (e) { installing = null; problem = errText(e); render(); return; }
@@ -96,7 +111,7 @@ export function updateCard(api: DeviceApi, fetchImpl: typeof fetch = (...a) => f
   function follow() {
     clearTimeout(poll);
     poll = window.setTimeout(async () => {
-      if (!alive || !installing || installing.kind === 'ok') return;
+      if (!alive || !installing || installing.kind === 'ok' || installing.kind === 'err') return;
       try {
         const s = await api.updateState();
         if (s.state === 'failed') { installing = { ...installing, line: `update failed: ${s.error ?? 'unknown'} — Molty kept its firmware`, kind: 'err' }; return render(); }
@@ -114,7 +129,7 @@ export function updateCard(api: DeviceApi, fetchImpl: typeof fetch = (...a) => f
     const f = input.files?.[0];
     if (!f) { problem = 'pick the .bin you downloaded first'; render(); return; }
     problem = null;
-    installing = { version, line: `installing ${f.name}… (keep this page open)`, kind: 'info' };
+    installing = { version, line: `installing ${f.name}… (keep this page open)`, kind: 'info', since: seen };
     render();
     try {
       await api.ota(new Uint8Array(await f.arrayBuffer()));

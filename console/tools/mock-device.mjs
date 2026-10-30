@@ -11,7 +11,8 @@
 //   POST /__mock/legacy {on}               -> GET /api/link omits pair/last_pair (pre-contract firmware)
 //   GET  /__mock/release?board=            -> what the relay's public GET /v1/releases/latest would answer
 //        (a release one minor above VERSION); e2e routes the console's relay call here.
-//        config {update:true} = firmware that can update itself (GET/POST /api/update).
+//        config {update:true} = firmware that can update itself (GET/POST /api/update);
+//        {rollback:true} = its new image does not stick: it restarts on the old firmware.
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 
@@ -20,11 +21,14 @@ const dist = new URL('../dist/index.html', import.meta.url);
 const VERSION = readFileSync(new URL('../../VERSION', import.meta.url), 'utf8').trim();
 const W = 412;
 
-const cfg = { link: true, file: true, update: false };
+const cfg = { link: true, file: true, update: false, rollback: false };
 const BOARD = 'waveshare-esp32-s3-touch-lcd-1.46';
 const NEXT = VERSION.replace(/^(\d+)\.(\d+)\..*$/, (_, a, b) => `${a}.${+b + 1}.0`);
 let fw = VERSION;
 let upd = { state: 'idle' };
+/** The device's boot as GET /api/info reports it (a restart bumps the count, resets the uptime). */
+let boots = 74, bootAt = Date.now(), upBase = 3_725_000;
+const restart = () => { boots++; bootAt = Date.now(); upBase = 0; };
 const release = (board) => {
   const tag = `v${NEXT}`, name = `molty-${NEXT}-${BOARD}-ota.bin`;
   return { ok: true, release_check: 'fresh',
@@ -90,7 +94,7 @@ createServer(async (req, res) => {
   if (p === '/__mock/log') return json(res, log);
   if (p === '/__mock/config') {
     const c = b();
-    if (c.reset) { fw = VERSION; upd = { state: 'idle' }; cfg.update = false; Object.assign(wifi, WIFI0); Object.assign(link, structuredClone(LINK0)); legacy = false; current = 'fluid'; delete c.reset; }
+    if (c.reset) { fw = VERSION; upd = { state: 'idle' }; cfg.update = false; cfg.rollback = false; Object.assign(wifi, WIFI0); Object.assign(link, structuredClone(LINK0)); legacy = false; current = 'fluid'; delete c.reset; }
     if (c.wifi === 'none') Object.assign(wifi, { state: 'setup_needed', ssid: undefined, ip: undefined, rssi: undefined });
     delete c.wifi;
     Object.assign(cfg, c); log.length = 0; return json(res, { ok: true, cfg });
@@ -108,7 +112,7 @@ createServer(async (req, res) => {
   switch (`${req.method} ${p}`) {
     case 'GET /api/info':
       return json(res, { ok: true, chip: 'esp32-s3', mac: '30:ed:a0:2a:3b:b0', flash_mb: 16, psram_mb: 8, free_heap: 3451664, free_psram: 5300000,
-        uptime_ms: Date.now() - t0 + 3_725_000, reset_reason: 'sw', boot_count: 74, idf_version: 'v5.5', board: BOARD, fw, fw_build: 'Oct 25 2026T04:51:38' });
+        uptime_ms: Date.now() - bootAt + upBase, reset_reason: 'sw', boot_count: boots, idf_version: 'v5.5', board: BOARD, fw, fw_build: 'Oct 25 2026T04:51:38' });
     case 'GET /api/status': return json(res, { ok: true, ...wifi });
     case 'GET /api/scan':
       await sleep(900);
@@ -148,7 +152,8 @@ createServer(async (req, res) => {
       if (!/^https:\/\/github\.com\/apresmoi\/molty\.uno\/releases\/download\//.test(u ?? '')) return json(res, { ok: false, error: 'bad_url' }, 400);
       upd = { state: 'downloading', version, progress: 0 };
       setTimeout(() => (upd = { state: 'flashing', version }), 600);
-      setTimeout(() => { upd = { state: 'idle' }; fw = version; }, 1200);
+      setTimeout(() => (upd = { state: 'rebooting', version }), 900);
+      setTimeout(() => { upd = { state: 'idle' }; restart(); if (!cfg.rollback) fw = version; }, 1200);
       return json(res, { ok: true, state: 'downloading' }, 202);
     }
     case 'POST /api/ota':
