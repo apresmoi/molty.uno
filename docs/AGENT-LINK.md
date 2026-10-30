@@ -9,6 +9,7 @@ Molty (home Wi-Fi) ──outbound WSS──▶ molty-relay (Cloudflare Worker + 
                                        ├─ /mcp   remote MCP (HTTPS)   ◀── any MCP client (Claude, Grok, …)
                                        ├─ /v1/*  REST                 ◀── molty CLI --relay, scripts
                                        ├─ voice  TTS/STT provider     (Workers AI first; swappable)
+                                       ├─ /v1/voice  voice box (WSS)  ◀── the owner's own STT/TTS box (molty-voice)
                                        └─ (later) OpenClaw node adapter
 ```
 
@@ -19,7 +20,7 @@ Molty (home Wi-Fi) ──outbound WSS──▶ molty-relay (Cloudflare Worker + 
 | Relay core (rooms, auth, pairing, routing, jobs) | `relay/src/core/` | pure TS, no Cloudflare imports |
 | Relay host | `relay/src/worker.ts` (+ DO) | another host (Node server) wraps the same core |
 | Agent surfaces | `src/surfaces/mcp.ts`, `src/surfaces/rest.ts` | add OpenClaw node adapter beside them |
-| Voice provider | `src/voice/*.ts` → `interface VoiceProvider { tts(text, opts) → PCM16@16k; stt(PCM16@16k) → text }` | workers-ai · openai · none |
+| Voice provider | `src/voice/*.ts` → `interface VoiceProvider { tts(text, opts) → PCM16@16k; stt(PCM16@16k) → text; ttsStream?; sttStream? }` | workers-ai · openai · none (env) · box (the owner's [voice box](#voice-box), per device) |
 | Device link client | `firmware/main/link/` | transport only; commands come from the dispatcher |
 | Device command dispatcher | `main/link/link_cmd.c` | ONE registry used by both the WSS link and (later) local HTTP |
 | Pairing UI | static: the 4-digit code alone, held as one centred token in the fluid text target (no ORP accent), until accept/reject/timeout (`link_ui_show_pair`); agent name is shown by the console via `GET /api/link` | a dedicated `pair` creature state is the planned upgrade |
@@ -331,7 +332,7 @@ bearer is `agent_token` = `<device_id>.<base64url(32 bytes)>`; the prefix only r
 
 | Call | Success | Failure |
 |---|---|---|
-| `POST /v1/pair {device_id, link_code, agent_name}` (no token; long-polls ≤ 120 s) | `200 {ok:true, agent_token, device_id, agent_name, code}` | `{ok:false, error}`: `bad_link_code` 403, `rejected` 403, `timeout` 408, `device_offline` / `pair_busy` 409 |
+| `POST /v1/pair {device_id, link_code, agent_name, role?}` (no token; long-polls ≤ 120 s; `role:"voice"` pairs a [voice box](#voice-box)) | `200 {ok:true, agent_token, device_id, agent_name, code}` (+ `role:"voice"` for a box) | `{ok:false, error}`: `bad_link_code` 403, `rejected` 403, `timeout` 408, `device_offline` / `pair_busy` 409 |
 | same with `wait_s` < 120, or `{device_id, pair_id}` to resume | `202 {ok:true, status:"pending", pair_id, code, expires_in_s}` while undecided | as above |
 | `POST /v1/devices/<id>/cmd {name, args}` | `200 {ok:true, result:{...}}`; `say`/`listen` → `{ok:true, result:{job}}` | `{ok:false, error:"code"}`: 401 bad/missing bearer, 400 `invalid_args`/`unknown_command`, 409 `device_offline`/`audio_busy`/`unsupported`, 504 `device_timeout`, 502 device-reported codes |
 | same with `wait:true` (say/listen) | `200 {ok:true, result:{job, status:"done", ...job result}}`; still running after 24 s: `202 {ok:true, result:{job, status:"pending", state}}` | as above; a failed job → its error, still carrying the `events` / `skill_update` the call already consumed |
@@ -726,6 +727,127 @@ These are examples, not rules; skill.md deliberately lets each agent choose.
   between turns: rely on ride-along, and call `molty_events` at the start of a turn when
   the human is talking about Molty. Do not claim to react live.
 
+## Voice box
+
+The owner's own GPU machine can do Molty's speech (STT + TTS) instead of the relay's
+cloud provider. Reference implementation: `voicebox/` (`molty-voice`, bridging Kyutai's
+moshi-server). The device does not change: it talks to the relay as always. The box is one
+more relay client that **dials out** to the relay over WSS (no inbound ports, no tunnel).
+
+```
+Molty ──WSS /v1/device──▶ relay (DO per device) ◀──WSS /v1/voice── voice box ──▶ local STT/TTS
+                            │  record(): mic chunks forwarded to the box AS THEY ARRIVE
+                            │  speak():  box PCM streamed to Molty as it arrives
+                            └─ cloud provider (env) when the box is absent (mode auto)
+```
+
+### Pairing and tokens
+
+- Same flow as an agent: `POST /v1/pair {device_id, link_code, agent_name, role:"voice"}`,
+  code on the device, the human taps. The device is sent
+  `agent_name: "voice box · <name>"` (unchanged when the name already starts with
+  "voice box"). The firmware shows only the code; the console names the request. No
+  firmware change.
+- The approved reply carries `role:"voice"`. The token (same `<device_id>.<43 chars>`
+  shape, the field is still `agent_token`) is stored with `role:"voice"`.
+- **Role isolation:**
+  - A voice token is refused on every agent call: REST, MCP, jobs, inbox, webhooks,
+    updates. The error is `403 forbidden` ("this is a voice box token…").
+  - An agent token is refused on the voice socket (`403`).
+  - An unknown or revoked token is `401`.
+- **Revoke:**
+  - `DELETE /v1/token` works for a voice token and closes its socket (4401).
+  - The console can unpair the box (below).
+  - Forgetting the device drops the box and its settings.
+- **One box per device:** approving a new voice pairing deletes the older voice tokens
+  and closes their sockets.
+
+### Voice socket
+
+`GET /v1/voice?device_id=<id>` (WebSocket upgrade), `Authorization: Bearer <voice token>`.
+The worker routes it into the device's Durable Object.
+
+- **Auth:** the token is checked before the upgrade is accepted. A refused box gets the
+  HTTP status (401/403), never an open socket.
+- **Hibernation:** the socket is hibernatable like the device's. Its role lives in its own
+  attachment (`SocketMeta.stage = "voice"`), never in instance fields. No device code path
+  ever sees it.
+- **One active box per device:** a new connection replaces the old one, which closes with
+  4409 and fails its in-flight requests at once.
+- **Keepalive:** `{"t":"ping"}` → `{"t":"pong"}`, answered by the runtime without waking
+  the object.
+
+Wire: JSON text frames plus binary audio frames in the device's framing
+(`<JSON header>\n<payload>`, header ≤ 512 B, payload ≤ 16 KB, PCM16 mono @16 kHz), with
+the request id in `s`.
+
+| Direction | Message |
+|---|---|
+| box → relay | `{"t":"voice.hello","name","version","voices":[…],"stt":bool,"tts":bool}`: first frame; the box is used only after it |
+| relay → box | `{"t":"voice.welcome","device_id","mode","voice"}` |
+| relay → box | `{"t":"tts","id","text","voice"?}`: one sentence-sized segment (the relay keeps one segment of lookahead) |
+| box → relay | binary frames `s=id` (PCM16 @16 kHz, as synthesised), then `{"t":"tts.end","id"}` or `{"t":"tts.end","id","error"}` |
+| relay → box | `{"t":"tts.cancel","id"}`: nobody will play it (device gone, turn failed, segment timeout) |
+| relay → box | `{"t":"stt.start","id","rate":16000}` at listen start, binary frames `s=id` as Molty records, `{"t":"stt.end","id"}` at the device's end frame |
+| relay → box | `{"t":"stt.cancel","id"}`: no speech, or the listen failed |
+| box → relay | `{"t":"stt.partial","id","text"}` (optional, ignored by the relay), `{"t":"stt.final","id","text","ms"?}` or `{"t":"stt.final","id","error"}` |
+
+### Selection: `voice_mode`
+
+A per-device owner setting, read for every say and every listen:
+
+| Mode | Behaviour |
+|---|---|
+| `auto` (default) | The box when it is connected, greeted, and offers that direction (`stt` / `tts` in its hello); otherwise the env provider. |
+| `box` | The box only. Without it, the job fails `voice_box_offline` (REST 503) before anything reaches the device. |
+| `cloud` | The env provider always. |
+
+How the paths work:
+
+- **Streaming STT:** with the box, `record()` opens `sttStream()` before `cmd listen` and
+  pushes every device chunk as it arrives. At the end frame it waits at most 5 s
+  (`boxSttFinalMs`) for `stt.final`.
+- **Box drops mid-listen, `auto`:** the relay falls back to the env provider's batch STT
+  on the audio it buffered anyway. This also covers no final in time and a box error.
+  `timings.voice_fallback` says why (`voice_box_offline`, `stt_timeout`,
+  `voice_box_error`).
+- **Box drops mid-listen, `box`:** the job fails.
+- **Box drops before its TTS audio:** the segment fails at once (`voice_box_offline`),
+  with no hang, and the device is never told to speak. If it drops mid-stream, the
+  device's stream is closed as for any TTS failure.
+- **Voice choice:** the agent's `voice` passes through to the box. With none, the
+  owner's default box voice is used; with neither, the box picks its own.
+- **Timings:** every say / listen timing payload carries `voice` (`"box"` or the env
+  provider's name). For talk / ask that is `timings.say.voice` and `timings.listen.voice`.
+- **Status:** `molty_status`'s `relay.voice` names who would speak now (`box`, the env
+  provider, or `voice_box_offline`).
+
+Providers without `sttStream` (Workers AI, OpenAI, none) keep the batch path unchanged.
+
+### Owner API (console)
+
+`GET|POST|DELETE /v1/devices/<id>/voice` with the header
+`X-Molty-Link-Code: <the device's current link code>`. The route answers CORS, because
+the console is served by the device.
+
+- **Auth model:** being on Molty's network makes you the owner, the same model as every
+  local device setting. The console reads the code from `GET /api/link`; it rotates every
+  15 min and after each pairing.
+- **GET** returns `{mode, voice, cloud, serving:{tts, stt}, box:{paired, name, paired_at,
+  connected, connected_since, reported_name, version, voices, stt, tts, last:{stt_ms,
+  tts_first_audio_ms, …}}}`.
+- **POST** `{mode?, voice?}` changes the settings (`voice: null` = the box's default).
+- **DELETE** unpairs the box.
+- **Errors:** `401` for a wrong or expired code, `400 invalid_args`.
+
+The console's agent page has a **Voice** card with:
+
+- the mode;
+- the box status and last latencies;
+- the default box voice;
+- unpair;
+- the `molty-voice pair` command, filled in.
+
 ## Default relay
 
 Each component has exactly one default relay URL, all set to the same value
@@ -744,5 +866,5 @@ of the agent link.
 
 ## Explicitly out of v0 (later)
 
-Auth on the device's local HTTP API · OpenClaw node adapter · streaming STT/TTS ·
+Auth on the device's local HTTP API · OpenClaw node adapter · streaming STT/TTS on the cloud providers (the [voice box](#voice-box) streams both) ·
 end-to-end encryption past the relay · multi-device accounts · rate limits beyond basics.
