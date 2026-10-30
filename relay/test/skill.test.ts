@@ -38,7 +38,7 @@ describe("GET /skill.md", () => {
     for (const t of ["shake", "tap", "button", "answer"]) expect(md).toContain(`| \`${t}\` |`);
     // ask: the endpoint, the label limit stated from the constant, layouts, null answers, ask vs talk
     for (const fact of ["https://r/v1/devices/molty-xxxxxxxxxx/ask", `1–${MAX_ASK_LABEL} characters each`, "one centred button", "pie slices", "`timeout`", "`cancelled`", "`offline`", "use **talk** when you"]) expect(md).toContain(fact);
- 
+
     // colours: the option object, every palette name, the defaults, meaningful use; ring_color on talk/listen
     for (const fact of ['{"label": "yes", "color": "green"}', "green, red, amber, blue, violet, pink, cyan, white", '`"#rrggbb"`', "green, red, amber, blue, violet by position", "green yes, red no", '"ring_color"?: c', '"ring_color"?}']) expect(md).toContain(fact);
     // updates: the trigger, the one call, ask-before-update, the error and the passive notice
