@@ -146,7 +146,13 @@ const char *upd_download(const upd_target_t *t, const upd_io_t *io, uint8_t *buf
 typedef enum { UPD_BOOT_NOTHING, UPD_BOOT_VALID_NOW, UPD_BOOT_AWAIT_WELCOME } upd_boot_t;
 upd_boot_t upd_boot_rule(bool pending_verify, bool armed);
 typedef enum { UPD_GUARD_WAIT, UPD_GUARD_MARK_VALID, UPD_GUARD_ROLLBACK, UPD_GUARD_DONE } upd_guard_t;
-/* What to do now under rule r: welcomed = the link got its welcome; since_boot_us. */
-upd_guard_t upd_guard_step(upd_boot_t r, bool welcomed, int64_t since_boot_us);
+/*
+ * What to do now under rule *r: welcomed = the link got its welcome; since_boot_us.
+ * A decision (MARK_VALID / ROLLBACK) is returned exactly once: it consumes the rule
+ * (*r becomes UPD_BOOT_NOTHING), so racing callers (the welcome vs the window's timer)
+ * that call this under one lock get one decision and the loser gets DONE. The caller
+ * performs the decision's side effect without dropping that claim (self_update.c).
+ */
+upd_guard_t upd_guard_step(upd_boot_t *r, bool welcomed, int64_t since_boot_us);
 /* Arm only when the link is up at install time. */
 bool upd_should_arm(bool link_welcomed);

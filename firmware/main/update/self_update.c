@@ -112,7 +112,14 @@ static esp_err_t arm_set(const char *label)
     return e;
 }
 
-/* read once and erased: true when it names the running slot */
+/*
+ * Read once and erased: true when it names the running slot. A read error counts as
+ * not armed (fails open, deliberately): it cannot be told from "never armed", and the
+ * unarmed rule still keeps only an image that boots far enough to serve HTTP, so a
+ * broken image still rolls back and the local console stays a way back. Failing
+ * closed would roll back every console install on a device whose NVS is unreadable,
+ * onto an old image with the same NVS.
+ */
 static bool arm_take(const esp_partition_t *running)
 {
     nvs_handle_t n;
@@ -221,6 +228,13 @@ static const char *io_ota_set_boot(void *ctx)
     dl_t *d = ctx;
     /* the new image must reach the relay too when this one did (update_core.h) */
     bool arm = upd_should_arm(link_client_connected());
+    /*
+     * An arm that can't be written installs unarmed (fails open, deliberately): the
+     * image is then kept once its HTTP server is up, so one that does not boot still
+     * rolls back; what is lost is only the "must reach the relay" check, and the local
+     * console can reinstall. Refusing would block every self-update on a device whose
+     * NVS is full or worn (the usual cause, and a lasting one) for a rarer risk.
+     */
     if (arm_set(arm ? d->part->label : NULL) != ESP_OK && arm) {
         ESP_LOGW(TAG, "could not arm the welcome check: the new image is kept once its HTTP server is up");
         arm = false;
@@ -431,25 +445,27 @@ esp_err_t self_update_http_register(httpd_handle_t server)
 
 /* ── boot: the mark-valid guard ────────────────────────────────────────────── */
 
+/*
+ * The decision and its side effect stay under s_lock: upd_guard_step hands out one
+ * decision per boot (it consumes s_rule), so of the welcome and the window's timer
+ * exactly one marks valid OR rolls back; the other finds DONE and does nothing.
+ */
 static void guard_eval(void)
 {
     lock();
-    upd_guard_t g = upd_guard_step(s_rule, s_welcomed, esp_timer_get_time());
-    if (g == UPD_GUARD_MARK_VALID) {
-        s_rule = UPD_BOOT_NOTHING;
-        if (s_guard_timer) esp_timer_stop(s_guard_timer);
-    }
-    unlock();
+    upd_guard_t g = upd_guard_step(&s_rule, s_welcomed, esp_timer_get_time());
+    bool welcomed = s_welcomed;
+    if (g != UPD_GUARD_WAIT && s_guard_timer) esp_timer_stop(s_guard_timer);
     if (g == UPD_GUARD_MARK_VALID) {
         esp_ota_mark_app_valid_cancel_rollback();
-        mole_diag_event(false, "update.valid (%s)", s_welcomed ? "relay welcome" : "http up");
     } else if (g == UPD_GUARD_ROLLBACK) {
         mole_diag_event(true, "update.rollback: no relay welcome within %us", (unsigned)(UPD_WELCOME_WINDOW_US / 1000000));
         esp_ota_mark_app_invalid_rollback_and_reboot();
         /* only returns when there is no other app to go back to: keep this one */
-        lock(); s_rule = UPD_BOOT_NOTHING; unlock();
         esp_ota_mark_app_valid_cancel_rollback();
     }
+    unlock();
+    if (g == UPD_GUARD_MARK_VALID) mole_diag_event(false, "update.valid (%s)", welcomed ? "relay welcome" : "http up");
 }
 
 static void guard_timer(void *arg) { (void)arg; guard_eval(); }
