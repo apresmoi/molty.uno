@@ -149,6 +149,35 @@ static void test_listen_args(void)
     assert(!link_listen_args(NULL, NULL, &es, &ns));
 }
 
+static bool window(const char *json, uint32_t dflt, uint32_t *w, uint32_t *rec)
+{
+    cJSON *args = cJSON_Parse(json);
+    assert(args);
+    bool ok = link_listen_window(args, dflt, w, rec);
+    cJSON_Delete(args);
+    return ok;
+}
+
+/* the listen window: 1..30000, 0 = unlimited (records to the 300 s ceiling), absent = the setting */
+static void test_listen_window(void)
+{
+    uint32_t w = 7, r = 7;
+    assert(window("{\"ms\":30000}", 30000, &w, &r) && w == 30000 && r == 30000);
+    assert(window("{\"ms\":1}", 30000, &w, &r) && w == 1 && r == 1);
+    assert(window("{\"ms\":0}", 30000, &w, &r) && w == 0 && r == LINK_LISTEN_CEILING_MS && r == 300000);
+    assert(window("{}", 12000, &w, &r) && w == 12000 && r == 12000);          /* the device's setting */
+    assert(window("{}", 0, &w, &r) && w == 0 && r == 300000);                  /* ...unlimited */
+    assert(window("{}", 999, &w, &r) && w == LINK_LISTEN_DEFAULT_MS && w == 30000);   /* a bad setting: the default */
+    w = r = 7;
+    assert(!window("{\"ms\":30001}", 30000, &w, &r) && w == 7 && r == 7);
+    assert(!window("{\"ms\":-1}", 30000, &w, &r) && !window("{\"ms\":1.5}", 30000, &w, &r));
+    assert(!window("{\"ms\":\"30000\"}", 30000, &w, &r) && !window("{\"ms\":null}", 30000, &w, &r));
+    assert(!link_listen_window(NULL, 0, NULL, &r));
+    /* the console's setting: 0 or 5..30 s */
+    assert(link_listen_setting_ok(0) && link_listen_setting_ok(5000) && link_listen_setting_ok(30000));
+    assert(!link_listen_setting_ok(4999) && !link_listen_setting_ok(30001) && !link_listen_setting_ok(10000.5) && !link_listen_setting_ok(-1));
+}
+
 static void test_event_frames(void)
 {
     expect_json(link_evt_shake_frame(1.83456, 4, 412),
@@ -332,7 +361,7 @@ static void test_ask_args(void)
 int main(void)
 {
     test_codes(); test_moods(); test_frames(); test_identity_and_urls(); test_control_frames();
-    test_mood_args(); test_listen_args(); test_event_frames(); test_restore(); test_ask_args();
-    puts("LINK HOST PASS: audio/control/event frames, random IDs, code alphabet, URLs, close retry policy, moods + hold_s, listen args, restore, ask args + answer frames");
+    test_mood_args(); test_listen_args(); test_listen_window(); test_event_frames(); test_restore(); test_ask_args();
+    puts("LINK HOST PASS: audio/control/event frames, random IDs, code alphabet, URLs, close retry policy, moods + hold_s, listen args + window, restore, ask args + answer frames");
     return 0;
 }

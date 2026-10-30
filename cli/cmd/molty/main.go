@@ -30,7 +30,7 @@ Commands:
   mood <mood>               idle|listening|thinking|speaking|happy|sleepy|surprised
   show [text] [--wpm 300]    Display text (stdin when omitted)
   say <text> | --wav PATH    Speak via macOS say or play a WAV
-  listen [--ms 4000] [--out PATH.wav] [--force]   Record WAV and optionally transcribe
+  listen [--ms N] [--out PATH.wav] [--force]      Record WAV (HTTP: N 1..10000, 4000) or transcribe via the relay (N 0..30000, 0 = unlimited; default the device's setting)
   volume <0..21>            Set speaker volume
   imu                       One IMU sample
   diag [--timeline S]       Frame-time histograms, task CPU %, heap, stalls, link (S<=180 s of 1 Hz timeline)
@@ -276,7 +276,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 					result, err = c.Say(ctx, molty.SayOptions{Text: strings.Join(pos, " "), WAV: o.wav})
 				case "listen":
 					if noArgs() {
-						result, err = c.Listen(ctx, molty.ListenOptions{MS: o.ms, Out: o.out, Force: o.force})
+						result, err = c.Listen(ctx, molty.ListenOptions{MS: o.ms, DeviceDefault: !o.set["ms"], Out: o.out, Force: o.force})
 					}
 				case "events":
 					if noArgs() {

@@ -37,6 +37,16 @@ static void listen_job_with(unsigned ms, const char *extra, audio_job_t *job) {
     bin_frames=bin_bytes=bin_ends=bin_seq=0; bin_reason[0]=0; bin_speech_ms=-1;
 }
 static void listen_job(unsigned ms, audio_job_t *job) { listen_job_with(ms,"",job); }
+/* cmd listen with these exact args (no ms injected): its ack's "ms", or -1 when refused */
+static double listen_raw(const char *a, audio_job_t *job) {
+    cJSON *args=cJSON_Parse(a),*res=NULL;
+    esp_err_t e=link_audio_listen(args,&res); cJSON_Delete(args);
+    if (e!=ESP_OK) { assert(!res && !link_audio_busy()); return -1; }
+    cJSON *m=cJSON_GetObjectItem(res,"ms"); assert(cJSON_IsNumber(m)); double v=m->valuedouble; cJSON_Delete(res);
+    assert(xQueueReceive(s_jobs,job,0)==pdTRUE && job->listen);
+    bin_frames=bin_bytes=bin_ends=bin_seq=0; bin_reason[0]=0; bin_speech_ms=-1;
+    return v;
+}
 static bool listen_rejects(const char *extra) {
     char a[192]; snprintf(a,sizeof(a),"{\"job\":\"listen1\",\"ms\":5000,\"rate\":16000%s}",extra);
     cJSON *args=cJSON_Parse(a),*res=NULL;
@@ -62,6 +72,8 @@ void mole_fluid_listen(bool on) { if (on) { assert(!ring_on); ring_ons++; } ring
 void mole_fluid_listen_level(float l) { assert(ring_on && l>=0.f && l<=1.f); ring_levels++; ring_last=l; if (l>ring_peak) ring_peak=l; }
 static int32_t ring_color = -9; static unsigned ring_colors;
 void mole_fluid_listen_color(int32_t rgb) { assert(!ring_on); ring_colors++; ring_color=rgb; }
+static uint32_t listen_setting = 30000;   /* the console's setting (mole_fluid.c, NVS) */
+uint32_t mole_fluid_listen_window(void) { return listen_setting; }
 static unsigned ask_cancels;
 void link_ask_cancel(void) { ask_cancels++; }
 const char *link_identity_code(void) { return "ABCDEFGH"; }
@@ -340,9 +352,40 @@ static void test_listen_stop(void) {
     cJSON *bad=cJSON_Parse("{\"job\":7}"),*res=NULL;
     assert(link_audio_listen_stop(bad,&res)==ESP_ERR_INVALID_ARG && !res); cJSON_Delete(bad);
 }
+/* The window: 30000 ok, 30001 refused, 0 = unlimited (records to the 300 s ceiling, reason
+ * max, nothing sized by it), absent = the device's setting; the ack reports the window. */
+static void test_listen_window(void) {
+    audio_job_t job;
+    assert(listen_raw("{\"job\":\"listen1\",\"ms\":30000,\"rate\":16000}",&job)==30000 && job.ms==30000);
+    link_audio_cancel(); complete(record(&job));
+    assert(listen_raw("{\"job\":\"listen1\",\"ms\":30001,\"rate\":16000}",&job)==-1);
+    assert(listen_raw("{\"job\":\"listen1\",\"ms\":-1,\"rate\":16000}",&job)==-1);
+    /* absent: the setting */
+    listen_setting=12000;
+    assert(listen_raw("{\"job\":\"listen1\",\"rate\":16000}",&job)==12000 && job.ms==12000);
+    link_audio_cancel(); complete(record(&job));
+    listen_setting=0;
+    assert(listen_raw("{\"job\":\"listen1\",\"rate\":16000}",&job)==0 && job.ms==300000);
+    link_audio_cancel(); complete(record(&job));
+    listen_setting=30000;
+    /* unlimited, VAD off (the voice box's end of turn decides): it records all 300 s, streamed
+     * in 300 ms frames, and ends with reason max — the safety ceiling */
+    assert(listen_raw("{\"job\":\"listen1\",\"ms\":0,\"rate\":16000,\"vad\":false}",&job)==0 && job.ms==300000);
+    sdk_rx_chunks=0; complete(record(&job));
+    assert(sdk_rx_chunks==3000 && bin_bytes==300000u*32 && bin_frames==1000 && bin_ends==1);
+    assert(!strcmp(bin_reason,"max") && !ring_on && !link_audio_busy());
+    /* unlimited with the VAD on: nobody speaking still ends at no_speech_ms (4 s) */
+    assert(listen_raw("{\"job\":\"listen1\",\"ms\":0,\"rate\":16000}",&job)==0);
+    sdk_rx_chunks=0; complete(record(&job));
+    assert(!strcmp(bin_reason,"no_speech") && sdk_rx_chunks==40);
+    /* ...and the relay's listen_stop ends it (turn_end) */
+    assert(listen_raw("{\"job\":\"listen1\",\"ms\":0,\"rate\":16000,\"vad\":false}",&job)==0);
+    sdk_rx_chunks=0; sdk_rx_fill=stop_at_chunk_10; complete(record(&job)); sdk_rx_fill=NULL;
+    assert(!strcmp(bin_reason,"turn_end") && sdk_rx_chunks==11);
+}
 int main(void) {
     assert(link_audio_init()==ESP_OK && link_pair_init()==ESP_OK);
-    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop();
+    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop(); test_listen_window();
     cJSON_Delete(sdk_sent); free(s_jobs); free(s_done); free(s_ring);
-    puts("LINK AUDIO/PAIR PASS: paced PCM, final playback drain, errors, cmd-time text/mood, explicit moods outlive jobs, pairing reasons, board caps, listening ring (+ ring_color), ask cancellation, listen_stop (turn_end)");
+    puts("LINK AUDIO/PAIR PASS: paced PCM, final playback drain, errors, cmd-time text/mood, explicit moods outlive jobs, pairing reasons, board caps, listening ring (+ ring_color), ask cancellation, listen_stop (turn_end), listen window (30 s, unlimited, setting)");
 }

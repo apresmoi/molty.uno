@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { CommandError, validateCommand } from "../src/core/commands.js";
+import { CommandError, DEFAULT_LISTEN_MS, LISTEN_CEILING_MS, TALK_DEFAULT_LISTEN_MS, validateCommand, validateTalk } from "../src/core/commands.js";
+import { MAX_LISTEN_BYTES } from "../src/core/protocol.js";
 
 const code = (f: () => unknown) => {
   try {
@@ -13,9 +14,23 @@ const code = (f: () => unknown) => {
 describe("validateCommand", () => {
   it("applies defaults", () => {
     expect(validateCommand("show", { text: "hi" }).args).toEqual({ text: "hi", wpm: 300 });
-    expect(validateCommand("listen", {}).args).toEqual({ ms: 4000 });
+    // no ms: none sent, the device applies its own setting (30 s out of the box)
+    expect(validateCommand("listen", {}).args).toEqual({});
     expect(validateCommand("listen", undefined).job).toBe(true);
     expect(validateCommand("say", { text: "x", voice: "luna" })).toEqual({ name: "say", args: { text: "x", voice: "luna" }, job: true });
+  });
+  it("listen window: 1..30000, 0 = unlimited, absent = the device's setting; talk's listen_ms the same", () => {
+    expect(validateCommand("listen", { ms: 30000 }).args).toEqual({ ms: 30000 });
+    expect(validateCommand("listen", { ms: 1 }).args).toEqual({ ms: 1 });
+    expect(validateCommand("listen", { ms: 0 }).args).toEqual({ ms: 0 });
+    expect(validateTalk({ listen_ms: 30000 }).listen_ms).toBe(30000);
+    expect(validateTalk({ listen_ms: 0 }).listen_ms).toBe(0);
+    expect(validateTalk({}).listen_ms).toBeUndefined();
+    expect(code(() => validateTalk({ listen_ms: 30001 }))).toBe("invalid_args");
+    expect(code(() => validateTalk({ listen_ms: -1 }))).toBe("invalid_args");
+    expect(DEFAULT_LISTEN_MS).toBe(30000);
+    expect(TALK_DEFAULT_LISTEN_MS).toBe(30000);
+    expect(MAX_LISTEN_BYTES).toBeGreaterThanOrEqual((LISTEN_CEILING_MS + 1000) * 32);
   });
   it("state: empty = read, {state:{}} or flat = patch (flat to device)", () => {
     expect(validateCommand("state", {}).args).toEqual({});
@@ -51,7 +66,8 @@ describe("validateCommand", () => {
     expect(code(() => validateCommand("show", { text: "" }))).toBe("invalid_args");
     expect(code(() => validateCommand("show", { text: "x".repeat(16385) }))).toBe("invalid_args");
     expect(code(() => validateCommand("show", { text: "a\u0000" }))).toBe("invalid_args");
-    expect(code(() => validateCommand("listen", { ms: 10001 }))).toBe("invalid_args");
+    expect(code(() => validateCommand("listen", { ms: 30001 }))).toBe("invalid_args");
+    for (const ms of [-1, 1.5, "30000", null]) expect(code(() => validateCommand("listen", { ms })), String(ms)).toBe("invalid_args");
     expect(code(() => validateCommand("say", { text: "x", voice: "../x" }))).toBe("invalid_args");
     expect(code(() => validateCommand("status", { a: 1 }))).toBe("invalid_args");
     expect(code(() => validateCommand("mood", { mood: null }))).toBe("invalid_args");

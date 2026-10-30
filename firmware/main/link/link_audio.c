@@ -104,7 +104,9 @@ static esp_err_t record(const audio_job_t *job)
 {
     _Static_assert(LINK_HEADER_MAX + 1 + REC_FRAME_SAMPLES * 2 <= LINK_MESSAGE_MAX, "uplink frame too big");
     _Static_assert(REC_FRAME_SAMPLES % REC_CHUNK_SAMPLES == 0, "chunks fill frames exactly");
-    const size_t total = (size_t)16000 * job->ms / 1000;
+    /* 16 samples per ms, in 32 bits as on the S3: never 16000 * ms first (it wraps past
+     * ~268 s, and an unlimited listen runs 300 s) */
+    const uint32_t total = 16u * (uint32_t)job->ms;
     vad_cfg_t vc = VAD_CFG_DEFAULT;
     vc.enabled = job->vad; vc.max_ms = job->ms;
     vc.end_silence_ms = job->end_silence_ms; vc.no_speech_ms = job->no_speech_ms;
@@ -216,9 +218,13 @@ static esp_err_t start(const cJSON *args, bool listen, cJSON **out)
     cJSON *text = cJSON_GetObjectItemCaseSensitive(args, "text");
     cJSON *rate = cJSON_GetObjectItemCaseSensitive(args, "rate");
     if (!cJSON_IsString(j) || !j->valuestring[0] || strlen(j->valuestring) >= sizeof(s_job)) return ESP_ERR_INVALID_ARG;
-    if (!cJSON_IsNumber(rate) || rate->valuedouble != 16000 || !cJSON_IsNumber(ms) ||
-        ms->valuedouble < (listen ? 1 : 0) || ms->valuedouble > (listen ? 10000 : INT_MAX) ||
-        ms->valuedouble != ms->valueint) return ESP_ERR_INVALID_ARG;
+    if (!cJSON_IsNumber(rate) || rate->valuedouble != 16000) return ESP_ERR_INVALID_ARG;
+    /* listen: the window (link_protocol.h; absent = the device's setting, 0 = unlimited);
+     * say: the clip's length */
+    uint32_t window = 0, rec_ms = 0;
+    if (listen) { if (!link_listen_window(args, mole_fluid_listen_window(), &window, &rec_ms)) return ESP_ERR_INVALID_ARG; }
+    else if (!cJSON_IsNumber(ms) || ms->valuedouble < 0 || ms->valuedouble > INT_MAX ||
+             ms->valuedouble != ms->valueint) return ESP_ERR_INVALID_ARG;
     if (!listen && (!cJSON_IsString(text) || !text->valuestring[0] || strlen(text->valuestring) > 4096)) return ESP_ERR_INVALID_ARG;
     const vad_cfg_t vad_def = VAD_CFG_DEFAULT;
     bool vad = vad_def.enabled;
@@ -229,6 +235,7 @@ static esp_err_t start(const cJSON *args, bool listen, cJSON **out)
     cJSON *result = cJSON_CreateObject();
     if (!result) return ESP_ERR_NO_MEM;
     cJSON_AddStringToObject(result, "job", j->valuestring);
+    if (listen) cJSON_AddNumberToObject(result, "ms", window);   /* the window it applies (0 = unlimited) */
     esp_err_t e;
     if (listen) {
         mole_fluid_listen_color(ring);       /* before the mic opens the ring (record) */
@@ -242,7 +249,7 @@ static esp_err_t start(const cJSON *args, bool listen, cJSON **out)
     }
     if (e != ESP_OK) { cJSON_Delete(result); return e; }
     link_ask_cancel();   /* say / listen, once accepted, take the screen from a pending question */
-    audio_job_t job = {.listen = listen, .ms = (unsigned)ms->valueint,
+    audio_job_t job = {.listen = listen, .ms = listen ? (unsigned)rec_ms : (unsigned)ms->valueint,
                        .vad = vad, .end_silence_ms = end_silence_ms, .no_speech_ms = no_speech_ms};
     strcpy(job.job, j->valuestring); strcpy(s_job, job.job);
     s_mood_gen0 = link_cmd_mood_gen();   /* after our own listening/speaking mood */

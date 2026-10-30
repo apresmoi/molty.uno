@@ -8,7 +8,7 @@
 import { INBOX_LIMITS, SKILL_EVENT } from "../core/events.js";
 import { FEATURES, SKILL_VERSION, skillHeadline } from "../core/version.js";
 import { WEBHOOK_LIMITS } from "../core/webhook.js";
-import { COLORS, DEFAULT_ASK_COLORS, DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, DEFAULT_WPM, MAX_MOOD_HOLD_S, MAX_DIAG_TIMELINE_S, MAX_LISTEN_MS, MAX_LOG_BYTES, MAX_SAY_BYTES, MAX_SHOW_BYTES, MOODS, TALK_BUDGET_MS, TALK_DEFAULT_LISTEN_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
+import { COLORS, DEFAULT_ASK_COLORS, DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, LISTEN_CEILING_MS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, DEFAULT_WPM, MAX_MOOD_HOLD_S, MAX_DIAG_TIMELINE_S, MAX_LISTEN_MS, MAX_LOG_BYTES, MAX_SAY_BYTES, MAX_SHOW_BYTES, MOODS, TALK_BUDGET_MS, TALK_DEFAULT_LISTEN_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
 
 export const SKILL_PATHS = ["/skill.md", "/skill"];
 
@@ -98,7 +98,7 @@ Success: \`200 {"ok":true,"result":{…}}\`. Unknown argument keys are rejected.
 | \`mood\` | \`{"mood": m, "hold_s"?: s}\` | — | m ∈ ${MOODS.join(", ")}; happy/surprised revert by themselves, \`hold_s\` (0 < s ≤ ${MAX_MOOD_HOLD_S}) sets how long any mood stays |
 | \`show\` | \`{"text": s, "wpm"?: 100..800}\` | — | speed-reader text in the fluid, ≤ ${MAX_SHOW_BYTES} bytes, default ${DEFAULT_WPM} wpm; returns when it starts |
 | \`say\` | \`{"text": s, "voice"?: id}\` | \`{job}\` immediately | relay TTS → speaker (streamed sentence by sentence), text shown in sync; ≤ ${MAX_SAY_BYTES} bytes; job done → \`{ms, text, timings}\` |
-| \`listen\` | \`{"ms"?: 1..${MAX_LISTEN_MS}, "end_silence_ms"?: ${VAD_LIMITS.end_silence_ms.join("..")}, "no_speech_ms"?: ${VAD_LIMITS.no_speech_ms.join("..")}, "vad"?: bool, "ring_color"?: c}\` | \`{job}\` immediately | records the mic (window default ${DEFAULT_LISTEN_MS} ms; the device stops early when speech ends), relay STT; job done → \`{text, duration_ms, peak, rms, reason, speech_ms?, timings}\` |
+| \`listen\` | \`{"ms"?: 0..${MAX_LISTEN_MS}, "end_silence_ms"?: ${VAD_LIMITS.end_silence_ms.join("..")}, "no_speech_ms"?: ${VAD_LIMITS.no_speech_ms.join("..")}, "vad"?: bool, "ring_color"?: c}\` | \`{job}\` immediately | records the mic until the human finishes (the window is a ceiling: omit \`ms\` for the human's own setting, ${DEFAULT_LISTEN_MS} ms out of the box; \`0\` = unlimited, ${LISTEN_CEILING_MS / 60000} min safety ceiling), relay STT; job done → \`{text, duration_ms, peak, rms, reason, speech_ms?, timings}\` |
 | \`state\` | \`{}\` = read · \`{"state": {…}}\` or flat fields = patch | creature state JSON | low-level creature state, same as the device's \`/api/creature/state\` |
 | \`volume\` | \`{"volume": 0..21}\` | — | speaker volume, 0 = mute |
 | \`imu\` | — | ax/ay/az (g), gx/gy/gz (°/s), ms | one motion-sensor snapshot |
@@ -123,7 +123,7 @@ curl -sS -X POST ${o}/v1/devices/molty-xxxxxxxxxx/talk \\
 #     "reason":"silence","ms":{"tts_first_audio":…,"speech":…,"listen":…,"stt":…,"total":…},"timings":{…}}}
 \`\`\`
 
-Body: \`{"say"?: s, "listen"?: true, "listen_ms"?: 1..${MAX_LISTEN_MS} (default ${TALK_DEFAULT_LISTEN_MS}), "voice"?, "end_silence_ms"?, "no_speech_ms"?, "vad"?, "ring_color"?}\`.
+Body: \`{"say"?: s, "listen"?: true, "listen_ms"?: 0..${MAX_LISTEN_MS} (omit: the human's setting, ${TALK_DEFAULT_LISTEN_MS} out of the box; 0 = unlimited), "voice"?, "end_silence_ms"?, "no_speech_ms"?, "vad"?, "ring_color"?}\`.
 \`ring_color\` (talk and listen): the listening ring's colour, a colour name or \`"#rrggbb"\` as in Ask below;
 leave it out for the human's own setting.
 Speaks \`say\` (if given), then listens until the human stops talking (or the window ends), then

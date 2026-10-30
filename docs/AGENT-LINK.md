@@ -75,12 +75,13 @@ Molty (home Wi-Fi) ──outbound WSS──▶ molty-relay (Cloudflare Worker + 
 
 ## Device ↔ relay wire (WS/WSS `/v1/device?id=<device_id>`)
 
-First frame from device: `{"t":"hello","id":"molty-k7m2w9c4ya","key":"<b64 device_key>","fw":"...","caps":["fluid","say","listen","listen_stop","show","mood","creature","ask"],"board":"waveshare-esp32-s3-touch-lcd-1.46","link_code":"..."}`
+First frame from device: `{"t":"hello","id":"molty-k7m2w9c4ya","key":"<b64 device_key>","fw":"...","caps":["fluid","say","listen","listen_stop","listen_window","show","mood","creature","ask"],"board":"waveshare-esp32-s3-touch-lcd-1.46","link_code":"..."}`
 → relay answers `{"t":"welcome"}` or closes with 4401.
 
 `board` names the hardware (`firmware/boards/`, see [PORTING.md](PORTING.md)). `caps`
 lists `say` / `listen` only when the board has a speaker / microphone (`listen_stop` with
-`listen`, firmware that can end a listen on the relay's word), `ask` only when it
+`listen`, firmware that can end a listen on the relay's word; `listen_window` with `listen`,
+firmware whose window is optional, 0..30000 or unlimited — see `listen` below), `ask` only when it
 has a touch screen (and firmware that implements `ask`), and `update` when the firmware can
 install a release itself ([Firmware updates](#firmware-updates)); the relay answers
 those commands `409 unsupported` up front, without calling TTS, when the device left them
@@ -172,8 +173,17 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   with it (one `answer` inbox event). A lost ack is "delivery unknown", not a failure: the relay
   keeps waiting, and an answer arriving later still ends the job; none by `timeout_ms` + 5 s
   (counted from the ack timeout) resolves `timeout`.
-- `listen`: relay sends `cmd listen {job, ms, rate:16000, end_silence_ms?, no_speech_ms?, vad?, ring_color?}`
-  (`ms` = maximum window; the VAD knobs only when the agent gave them: `end_silence_ms`
+- `listen`: relay sends `cmd listen {job, ms?, rate:16000, end_silence_ms?, no_speech_ms?, vad?, ring_color?}`
+  (`ms` = maximum window, a ceiling — every listen ends early on end of speech / turn.
+  **Firmware with the cap `listen_window`**: `ms` 1..30000, or `0` = unlimited (it ends only on
+  end of speech / turn, no_speech, the relay's `listen_stop`, or a 300 s safety ceiling →
+  `reason:"max"`); sent only when the agent gave one — absent, the device applies its own
+  setting (console, 5..30 s or unlimited, NVS, 30000 out of the box; `POST /api/creature/state
+  {listen_ms}`), like `ring_color`. Its answer carries the window it applies: `{job, ms}`
+  (`0` = unlimited), and the relay waits that long (the ceiling for 0) + 5 s for the end frame.
+  The mic streams in 100 ms chunks: no device buffer is sized by the window. **Older firmware**
+  (no cap) takes 1..10000 and always gets `ms` (10000 when the agent gave none); an agent's
+  `0` or > 10000 is refused up front, `409 unsupported`. The VAD knobs only when the agent gave them: `end_silence_ms`
   300..3000, `no_speech_ms` 1000..10000, `vad` bool; `ring_color` `"#rrggbb"`, resolved by the
   relay, only when the agent gave one — else the device's default, see the console's
   `ring_color`; older firmware ignores it). Device streams mic PCM up; the last frame
@@ -274,8 +284,8 @@ What the screen does between commands (`firmware/main/fluid/fluid_director.h`):
 | `mood` | `{mood, hold_s?}` | — | idle listening thinking speaking happy sleepy surprised; `hold_s` 0..3600 (0 = until the next mood; default: happy/surprised revert, the rest persist) |
 | `show` | `{text, wpm?}` | — | speed reader in the fluid; back to the creature 1.5 s after the last word |
 | `say` | `{text, voice?}` | `{job}` immediately | relay does TTS (streamed per sentence) + streams; device sets `speaking`, shows text in sync. Job result `{ms, text, timings}`. `unsupported` without a speaker |
-| `listen` | `{ms≤10000, end_silence_ms?, no_speech_ms?, vad?, ring_color?}` | `{job}` immediately | device sets `listening`, streams mic, stops at end of speech ([Listen end of speech](#listen-end-of-speech-device-vad)); relay STT → job result `{text, duration_ms, peak, rms, reason, speech_ms?, timings}`. `unsupported` without a mic |
-| `talk` (relay) | `{say?, listen?=true, listen_ms?=10000, voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?}` | blocks ≤ 24 s | say then listen in one job: `{job, status:"done", heard, said?, reason, speech_ms?, ms:{tts_first_audio, speech, listen, stt, total}, timings}`; over 24 s `{job, status:"pending"}` |
+| `listen` | `{ms? 0..30000 (0 = unlimited; omit = the device's setting, 30000 out of the box), end_silence_ms?, no_speech_ms?, vad?, ring_color?}` | `{job}` immediately | device sets `listening`, streams mic, stops at end of speech ([Listen end of speech](#listen-end-of-speech-device-vad)); relay STT → job result `{text, duration_ms, peak, rms, reason, speech_ms?, timings}`. `unsupported` without a mic |
+| `talk` (relay) | `{say?, listen?=true, listen_ms? 0..30000 (as listen's ms), voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?}` | blocks ≤ 24 s | say then listen in one job: `{job, status:"done", heard, said?, reason, speech_ms?, ms:{tts_first_audio, speech, listen, stt, total}, timings}`; over 24 s `{job, status:"pending"}` |
 | `updates` (relay) | — | `{skill, firmware, actions}` | "check Molty for updates": [Firmware updates](#firmware-updates) |
 | `update` (relay → device) | — (agent) · `{job, version, url, sha256, size, timeout_ms}` (device) | job | install the latest release after an on-screen confirm; `unsupported` without the `update` cap |
 | `ask` (relay) | `{say?, options: 1..5 items — a label of 1..8 printable ASCII (unique, case-insensitive) or {label, color?}, timeout_s? 1..120 =30, voice?}` | blocks ≤ 24 s | say, then device `ask`, then the tap: `{job, status:"done", answer: label\|null, index: int\|null, reason?: "timeout"\|"cancelled"\|"offline", said?, ms:{tts_first_audio?, speech?, answer, total}, timings:{queue, say?, ask:{cmd, wait}, total}}`; over 24 s `{job, status:"pending"}` (finish with `molty_wait`). Holds the audio lock only while speaking. `unsupported` without `ask` in caps (no touch) or, with `say`, without a speaker |
@@ -382,6 +392,7 @@ device dials; agents/CLI use its http(s) twin (`ws://h` → `http://h`, `wss://h
 | `POST /api/link {relay_url}` (any Content-Type) | same body as GET; saved to NVS, reconnects | `400` not a `ws://`/`wss://` origin |
 | `POST /api/link/forget` | `202 {ok:true, pending:true}` | `500` |
 | `POST /api/creature/state {ring_color}` (with the other fluid fields) | the state JSON; saved to NVS; `GET` reports `ring_color` as `"#rrggbb"` or `"accent"` (older firmware: absent — the console hides the setting) | `{ok:false, error}` when not `"#rrggbb"` / `"accent"` |
+| `POST /api/creature/state {listen_ms}` (with the other fluid fields) | the state JSON; saved to NVS: the listen window an agent gets when it gives none, `5000..30000` or `0` = unlimited (300 s safety ceiling); `GET` reports `listen_ms` (older firmware: absent — the console hides the setting) | `{ok:false, error}` when not an integer 5000..30000 or 0 |
 | `GET /api/update` (firmware with the `update` cap; older firmware: not found) | `200 {ok:true, state:"idle"\|"downloading"\|"flashing"\|"rebooting"\|"failed", version?, progress?: 0..1, error?}` | — |
 | `POST /api/update {version, url, sha256, size}` (any Content-Type) | `202 {ok:true, state:"downloading"}`; then as `cmd update` after an accept (no on-screen question: the click in the console is the consent, the same trust as `POST /api/ota`) | `400 bad_url` (not an official release URL), `409 busy` |
 

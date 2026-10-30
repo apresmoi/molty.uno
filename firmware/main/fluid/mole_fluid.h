@@ -14,6 +14,8 @@
  *               |"effect:wave"|"autoplay",
  *         ring_color: "#rrggbb"|"accent" (the listening ring's default colour, kept in NVS;
  *               GET reports it the same way),
+ *         listen_ms: 0 (unlimited) | 5000..30000 (the listen window an agent gets when it
+ *               gives none, kept in NVS; GET reports it),
  *         hold: true (with "text": hold the last word instead of returning to the
  *               creature 1.5 s after it; the pairing code, the Improv "hi"),
  *         text, wpm, palette: "green"|"amber"|"pastel", edge_mode: "off"|"contours"|"all",
@@ -81,6 +83,11 @@ void mole_fluid_set_status(int status);
 void mole_fluid_listen(bool on);
 void mole_fluid_listen_level(float level);
 void mole_fluid_listen_color(int32_t rgb);
+/** The listen window an agent gets when it gives none (link_audio.c, cmd listen without ms):
+ *  0 = unlimited or 5000..30000 ms (link_protocol.h LINK_LISTEN_*), 30000 out of the box.
+ *  The console's setting, POST /api/creature/state {listen_ms} (GET reports it), kept in NVS
+ *  like ring_color. Safe from any task, before init too (read straight from NVS). */
+uint32_t mole_fluid_listen_window(void);
 
 /** A question (link_ask.c, the link task) — the screen follows what the link wants:
  *  show   n (1..FLUID_ASK_MAX) labels condense out of the fluid in their sectors

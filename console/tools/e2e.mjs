@@ -261,6 +261,14 @@ const canvasStats = (page) => page.evaluate(() => {
   await ringRow.getByRole('button', { name: 'violet' }).click();
   await ringRow.locator('button[aria-pressed="true"]', { hasText: 'violet' }).waitFor();
   ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).ring_color === '#b197fc'), 'settings molty: ring colour sent to the device');
+  const listenRow = page.getByRole('group', { name: 'listen window' });
+  ok(await listenRow.getByRole('button', { name: '30 s (default)' }).getAttribute('aria-pressed') === 'true', 'settings molty: listen window defaults to 30 s');
+  await listenRow.getByRole('button', { name: 'unlimited' }).click();
+  await listenRow.locator('button[aria-pressed="true"]', { hasText: 'unlimited' }).waitFor();
+  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).listen_ms === 0), 'settings molty: unlimited listen window sent to the device (listen_ms 0)');
+  await listenRow.getByRole('button', { name: '10 s' }).click();
+  await listenRow.locator('button[aria-pressed="true"]', { hasText: '10 s' }).waitFor();
+  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).listen_ms === 10000), 'settings molty: 10 s listen window sent to the device');
   ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'settings molty: no horizontal scroll at 390px');
   await shot(page, '12-settings-molty');
 

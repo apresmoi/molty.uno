@@ -10,7 +10,10 @@
 // Node host can serve it unchanged.
 
 import { type AgentApi, type FirmwareNotice, type Inbox, type JobView, type Outcome, type RelayBackend, bearer, tokenDevice } from "../core/api.js";
-import { COLORS, DEFAULT_ASK_COLORS, DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, MAX_LISTEN_MS, MAX_MOOD_HOLD_S, MOODS, TALK_BUDGET_MS, TALK_DEFAULT_LISTEN_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
+import { COLORS, DEFAULT_ASK_COLORS, DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, LISTEN_CEILING_MS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, MAX_LISTEN_MS, MAX_MOOD_HOLD_S, MOODS, TALK_BUDGET_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
+
+/** ms (listen) / listen_ms (talk): the window is a ceiling; leaving it out is the usual choice. */
+const LISTEN_MS_DOC = `Listen window ceiling in ms: 1..${MAX_LISTEN_MS}, or 0 = unlimited (ends only on end of speech / turn, no_speech, or a ${LISTEN_CEILING_MS / 60000} min safety ceiling, reason max). Omit it: the human's own setting applies (${DEFAULT_LISTEN_MS} ms out of the box). The listen ends early when they finish.`;
 import { AGENT_EVENT_TYPES, type AgentEvent, INBOX_LIMITS, eventsLine, seqOf } from "../core/events.js";
 import { DEVICE_ID_RE, isRecord, type JsonObject } from "../core/protocol.js";
 import { RELAY_VERSION, SKILL_VERSION, type SkillNotice, skillHeadline, skillLine, skillUpdate } from "../core/version.js";
@@ -140,8 +143,8 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "molty_listen",
-    description: `Record the device microphone (window default ${DEFAULT_LISTEN_MS} ms, maximum ${MAX_LISTEN_MS}; devices with end-of-speech detection stop early) and transcribe it with the relay's STT. Returns {job} immediately; molty_wait returns {text, duration_ms, peak, rms, reason, speech_ms?, timings}; wait:true blocks until done. The device shows listening while recording and thinking after speech ends. No audio file is returned.`,
-    inputSchema: obj({ ms: { type: "integer", description: `Maximum capture in milliseconds (1..${MAX_LISTEN_MS}); default ${DEFAULT_LISTEN_MS}.` }, ...VAD_PROPS, wait: { type: "boolean", description: `true: block until transcribed (at most ${TALK_BUDGET_MS / 1000} s).` } }),
+    description: `Record the device microphone until the human finishes (end of speech / end of turn; the window is only a ceiling: the human's own setting, ${DEFAULT_LISTEN_MS} ms out of the box, at most ${MAX_LISTEN_MS}, or unlimited) and transcribe it with the relay's STT. Returns {job} immediately; molty_wait returns {text, duration_ms, peak, rms, reason, speech_ms?, timings}; wait:true blocks until done. The device shows listening while recording and thinking after speech ends. No audio file is returned.`,
+    inputSchema: obj({ ms: { type: "integer", description: LISTEN_MS_DOC }, ...VAD_PROPS, wait: { type: "boolean", description: `true: block until transcribed (at most ${TALK_BUDGET_MS / 1000} s).` } }),
     auth: true,
     run: (api, t, a) => commandWait(api, t, "listen", a),
   },
@@ -151,7 +154,7 @@ export const TOOLS: ToolDef[] = [
     inputSchema: obj({
       say: { type: "string", description: "What to say first (at most 4096 bytes). Omit to just listen." },
       listen: { type: "boolean", description: "Listen after speaking; default true. false = just speak (and wait until spoken)." },
-      listen_ms: { type: "integer", description: `Maximum listen window in ms (1..${MAX_LISTEN_MS}); default ${TALK_DEFAULT_LISTEN_MS}. The device stops early when speech ends.` },
+      listen_ms: { type: "integer", description: LISTEN_MS_DOC },
       voice: { type: "string", description: "Optional relay TTS voice." },
       ...VAD_PROPS,
     }),

@@ -74,6 +74,8 @@ export interface FluidState {
   palette?: string;
   /** The listening ring's default colour: "#rrggbb" or "accent" (newer firmware). */
   ring_color?: string;
+  /** The listen window an agent gets when it gives none: 0 = unlimited or 5000..30000 ms (newer firmware). */
+  listen_ms?: number;
   word?: string;
   word_idx?: number;
   nwords?: number;
@@ -88,6 +90,7 @@ export interface FluidOrder {
   wpm?: number; // 100..800
   palette?: string; // green | amber | pastel
   ring_color?: string; // "#rrggbb" | "accent" — the listening ring's default, kept on the device
+  listen_ms?: number; // 0 (unlimited) | 5000..30000 — the default listen window, kept on the device
   ripple?: { x: number; y: number; strength?: number }; // x,y in -1..1, y down
 }
 

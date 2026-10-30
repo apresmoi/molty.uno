@@ -372,3 +372,35 @@ func TestRelayRequestBudgetsAndRedirects(t *testing.T) {
 		t.Fatalf("missing token: %v", err)
 	}
 }
+
+// The relay listen window: none sent by default (the device's own setting), 1..30000 or
+// 0 (unlimited) when given, anything else refused before the call.
+func TestRelayListenWindow(t *testing.T) {
+	var got []string
+	c := relayClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v1/devices/molty-test/cmd":
+			var cmd struct{ Args Result }
+			_ = json.NewDecoder(r.Body).Decode(&cmd)
+			b, _ := json.Marshal(cmd.Args)
+			got = append(got, string(b))
+			fmt.Fprint(w, `{"ok":true,"result":{"job":"j1"}}`)
+		default:
+			fmt.Fprint(w, `{"status":"done","result":{"text":"ok"}}`)
+		}
+	})
+	ctx := context.Background()
+	for _, o := range []ListenOptions{{MS: 4000, DeviceDefault: true}, {MS: 30000}, {MS: 0}} {
+		if _, err := c.Listen(ctx, o); err != nil {
+			t.Fatal(o, err)
+		}
+	}
+	if strings.Join(got, " ") != `{} {"ms":30000} {"ms":0}` {
+		t.Fatal(got)
+	}
+	for _, ms := range []int{30001, -1} {
+		if _, err := c.Listen(ctx, ListenOptions{MS: ms}); err == nil || len(got) != 3 {
+			t.Fatal(ms, err)
+		}
+	}
+}

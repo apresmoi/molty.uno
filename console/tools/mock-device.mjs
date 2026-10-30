@@ -42,7 +42,7 @@ const WIFI0 = { state: 'connected', ssid: 'home-wifi', ip: '192.168.1.32', rssi:
 const wifi = { ...WIFI0 };
 const fluid = {
   ok: true, creature: 'fluid', state: 'blob', autoplay: false, text: 'hello, i am molty. i breathe in ascii.', wpm: 300,
-  palette: 'pastel', ring_color: 'accent', word: '', word_idx: 0, nwords: 7, fps: 33.1,
+  palette: 'pastel', ring_color: 'accent', listen_ms: 30000, word: '', word_idx: 0, nwords: 7, fps: 33.1,
 };
 let current = 'fluid';
 const LINK0 = { device_id: 'molty-k7m2w9c4ya', link_code: 'K7QX2MPA', relay_url: 'wss://molty-relay.example.workers.dev', connected: true, auth_failed: false, close_code: 0,
@@ -135,7 +135,8 @@ createServer(async (req, res) => {
       const o = b();
       if (o.state === 'autoplay') { fluid.autoplay = true; } else if (o.state) { fluid.autoplay = false; fluid.state = o.state; }
       if (o.ring_color !== undefined && !(o.ring_color === 'accent' || /^#[0-9a-fA-F]{6}$/.test(o.ring_color))) return json(res, { ok: false, error: 'invalid_args' }, 400);
-      for (const k of ['text', 'wpm', 'palette', 'ring_color']) if (o[k] !== undefined) fluid[k] = o[k];
+      if (o.listen_ms !== undefined && !(Number.isInteger(o.listen_ms) && (o.listen_ms === 0 || (o.listen_ms >= 5000 && o.listen_ms <= 30000)))) return json(res, { ok: false, error: 'invalid_args' }, 400);
+      for (const k of ['text', 'wpm', 'palette', 'ring_color', 'listen_ms']) if (o[k] !== undefined) fluid[k] = o[k];
       if (o.text) fluid.nwords = o.text.split(/\s+/).filter(Boolean).length;
       return json(res, fluid);
     }

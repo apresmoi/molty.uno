@@ -239,10 +239,13 @@ func (c *HTTPTransport) Say(ctx context.Context, opts SayOptions) (result Result
 }
 
 type ListenOptions struct {
-	MS    int
-	Out   string
-	Force bool
-	Async bool
+	MS int
+	// DeviceDefault: no ms was given. The relay then sends none and the device applies its
+	// own listen window (console setting, 30 s out of the box); HTTP records MS.
+	DeviceDefault bool
+	Out           string
+	Force         bool
+	Async         bool
 }
 
 func validateOutputPath(path string, force bool) error {

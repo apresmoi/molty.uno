@@ -24,7 +24,7 @@ type sayInput struct {
 	WAV   string `json:"wav,omitempty" jsonschema:"Path on the server machine to a 16 kHz int16 mono PCM WAV, at most 4 MB; bypasses TTS."`
 }
 type listenInput struct {
-	MS *int `json:"ms,omitempty" jsonschema:"Capture duration in milliseconds (1..10000); default 4000."`
+	MS *int `json:"ms,omitempty" jsonschema:"Relay: listen window ceiling in ms, 1..30000 or 0 = unlimited; omit for the device's own setting (30000 out of the box). HTTP: capture duration 1..10000, default 4000."`
 }
 type volumeInput struct {
 	Volume int `json:"volume" jsonschema:"Speaker volume, integer 0..21."`
@@ -66,12 +66,12 @@ func (c *Client) mcpTools() map[string]mcpTool {
 	addTool(s, "molty_say", "Relay: submit text and optional voice; returns job immediately (use molty_wait). HTTP: speak text using server-configured TTS, or play a local WAV. Blocks through playback (up to about 141 seconds); device HTTP is busy meanwhile. Shows speaking mood then restores prior creature/state on success or failure (glyph/ui/world: switch only); restoration failures are restore_warning, not audio errors. WAV must be 16 kHz int16 mono PCM, at most 4 MB.", func(ctx context.Context, in sayInput) (Result, error) {
 		return c.Say(ctx, SayOptions{Text: in.Text, WAV: in.WAV, Voice: in.Voice, Async: true})
 	})
-	addTool(s, "molty_listen", "Relay: submit capture and return job immediately; molty_wait returns transcribed text, with no local file or STT. HTTP: record microphone audio (default 4000 ms, maximum 10000). Blocks during capture, shows listening mood, restores previous creature/state (glyph/ui/world: switch only); restoration failures are restore_warning. Always creates a fresh private temporary WAV; no output path argument. Returns local WAV path, duration_ms, normalized peak/RMS (0..1), plus text only if STT configured at startup. mic_busy means a microphone websocket must be closed first. Paths refer to the server machine.", func(ctx context.Context, in listenInput) (Result, error) {
+	addTool(s, "molty_listen", "Relay: submit capture and return job immediately (it ends when the human finishes; the window is only a ceiling); molty_wait returns transcribed text, with no local file or STT. HTTP: record microphone audio (default 4000 ms, maximum 10000). Blocks during capture, shows listening mood, restores previous creature/state (glyph/ui/world: switch only); restoration failures are restore_warning. Always creates a fresh private temporary WAV; no output path argument. Returns local WAV path, duration_ms, normalized peak/RMS (0..1), plus text only if STT configured at startup. mic_busy means a microphone websocket must be closed first. Paths refer to the server machine.", func(ctx context.Context, in listenInput) (Result, error) {
 		ms := 4000
 		if in.MS != nil {
 			ms = *in.MS
 		}
-		return c.Listen(ctx, ListenOptions{MS: ms, Async: true})
+		return c.Listen(ctx, ListenOptions{MS: ms, DeviceDefault: in.MS == nil, Async: true})
 	})
 	addTool(s, "molty_volume", "Set the physical speaker volume from 0 (mute) to 21 (maximum).", func(ctx context.Context, in volumeInput) (Result, error) { return c.Volume(ctx, in.Volume) })
 	addTool(s, "molty_diag", "Device health: sim/panel frame-time histograms (fps, p50/p95/p99/max ms), touch-to-panel latency, per-task CPU %, internal/PSRAM heap free and low-water, allocation failures, stall probes, Wi-Fi/gateway ping and link state. timeline (0..180) adds that many seconds of the 1 Hz timeline.", func(ctx context.Context, in diagInput) (Result, error) { return c.Diag(ctx, in.Timeline) })

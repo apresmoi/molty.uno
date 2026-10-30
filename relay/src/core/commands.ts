@@ -9,15 +9,29 @@ export type CommandName = (typeof COMMANDS)[number];
 
 export const MAX_SHOW_BYTES = 16384;
 export const MAX_SAY_BYTES = 4096;
-export const MAX_LISTEN_MS = 10000;
-export const DEFAULT_LISTEN_MS = 4000;
+/**
+ * The listen window (ms). Every listen ends early anyway (the device's end of speech, or the
+ * voice box's semantic end of turn): the window is a ceiling. `0` = unlimited — it ends only
+ * on end of turn / speech, no_speech, or LISTEN_CEILING_MS.
+ */
+export const MAX_LISTEN_MS = 30000;
+/** The out-of-the-box window. An agent that omits ms / listen_ms gets the DEVICE's setting
+ *  (console: 5..30 s or unlimited, kept on the device, like ring_color) — this is its default. */
+export const DEFAULT_LISTEN_MS = 30000;
+export const LISTEN_UNLIMITED = 0;
+/** An unlimited listen's safety backstop (reason "max"): a stuck mic or a noisy room can't stream forever. */
+export const LISTEN_CEILING_MS = 300000;
+/** Firmware without the `listen_window` cap: 1..10000 ms only, and the relay always sends one. */
+export const LEGACY_MAX_LISTEN_MS = 10000;
+/** The firmware cap: ms optional (its own setting), 0..MAX_LISTEN_MS, the window in the listen's ack. */
+export const LISTEN_WINDOW_CAP = "listen_window";
 export const DEFAULT_WPM = 300;
 export const MAX_DIAG_TIMELINE_S = 180;
 export const MAX_LOG_BYTES = 32768;
 /** mood hold: seconds before the device reverts (quick moods revert by default). */
 export const MAX_MOOD_HOLD_S = 3600;
-/** talk: default listen window. With device end-of-speech this is a ceiling, not a fixed length. */
-export const TALK_DEFAULT_LISTEN_MS = MAX_LISTEN_MS;
+/** talk: default listen window — the same as listen's (a ceiling, not a fixed length). */
+export const TALK_DEFAULT_LISTEN_MS = DEFAULT_LISTEN_MS;
 /**
  * Longest a blocking call (talk, say/listen with wait) holds the request open.
  * Under the ~30 s tool-call timeouts common in MCP clients; past it the call
@@ -100,6 +114,15 @@ export function resolveColor(value: unknown, field: string): string {
 export const VAD_KEYS = ["end_silence_ms", "no_speech_ms", "vad"] as const;
 export const VAD_LIMITS = { end_silence_ms: [300, 3000], no_speech_ms: [1000, 10000] } as const;
 
+/** A listen window: undefined (the device's setting), 0 (unlimited) or 1..MAX_LISTEN_MS. */
+function listenMs(v: unknown, field: string): number | undefined {
+  if (v === undefined) return undefined;
+  if (typeof v !== "number" || !Number.isInteger(v) || v < 0 || v > MAX_LISTEN_MS) {
+    throw invalid(`${field} must be an integer 1..${MAX_LISTEN_MS}, or 0 for unlimited (ends on end of turn; ${LISTEN_CEILING_MS / 60000} min safety ceiling)`);
+  }
+  return v;
+}
+
 function vadArgs(args: Record<string, unknown>): JsonObject {
   const out: JsonObject = {};
   for (const k of ["end_silence_ms", "no_speech_ms"] as const) {
@@ -168,7 +191,8 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
     }
     case "listen": {
       only(args, ["ms", "ring_color", ...VAD_KEYS]);
-      const out: JsonObject = { ms: int(args.ms, "ms", 1, MAX_LISTEN_MS, DEFAULT_LISTEN_MS), ...vadArgs(args) };
+      const ms = listenMs(args.ms, "ms");
+      const out: JsonObject = { ...(ms !== undefined ? { ms } : {}), ...vadArgs(args) };
       if (args.ring_color !== undefined) out.ring_color = resolveColor(args.ring_color, "ring_color");
       return { name: n, args: out, job: true };
     }
@@ -195,20 +219,23 @@ export interface TalkArgs {
   say?: string;
   voice?: string;
   listen: boolean;
-  listen_ms: number;
+  /** undefined = the device's setting; 0 = unlimited. */
+  listen_ms?: number;
   /** Device VAD knobs (end_silence_ms, no_speech_ms, vad), forwarded to the device's listen. */
   vad: JsonObject;
   /** The listening ring's colour, resolved "#rrggbb"; absent = the device's default. */
   ring_color?: string;
 }
 
-/** molty_talk / POST /v1/devices/<id>/talk: `{say?, listen? (default true), listen_ms? (1..10000, default 10000), voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?}`. */
+/** molty_talk / POST /v1/devices/<id>/talk: `{say?, listen? (default true), listen_ms? (0 = unlimited, 1..30000; default the device's setting, 30000 out of the box), voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?}`. */
 export function validateTalk(raw: unknown): TalkArgs {
   const args = raw === undefined || raw === null ? {} : raw;
   if (!isRecord(args)) throw invalid("args must be an object");
   only(args, ["say", "listen", "listen_ms", "voice", "ring_color", ...VAD_KEYS]);
   if (args.listen !== undefined && typeof args.listen !== "boolean") throw invalid("listen must be a boolean");
-  const out: TalkArgs = { listen: args.listen !== false, listen_ms: int(args.listen_ms, "listen_ms", 1, MAX_LISTEN_MS, TALK_DEFAULT_LISTEN_MS), vad: vadArgs(args) };
+  const out: TalkArgs = { listen: args.listen !== false, vad: vadArgs(args) };
+  const lm = listenMs(args.listen_ms, "listen_ms");
+  if (lm !== undefined) out.listen_ms = lm;
   if (args.say !== undefined) out.say = text(args.say, "say", MAX_SAY_BYTES);
   if (args.voice !== undefined) out.voice = voiceId(args.voice);
   if (args.ring_color !== undefined) out.ring_color = resolveColor(args.ring_color, "ring_color");

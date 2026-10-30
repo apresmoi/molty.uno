@@ -50,7 +50,7 @@ import {
   type WebhookRequest,
 } from "./api.js";
 import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
-import { type AskArgs, CommandError, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk } from "./commands.js";
+import { type AskArgs, CommandError, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk } from "./commands.js";
 import { PcmFeed, estimateSpeechMs, splitSpeech, synthesize } from "./speech.js";
 import { b64Decode, b64urlEncode, randomBytes, randomDigits, safeEqual, sha256Hex } from "./crypto.js";
 import {
@@ -702,6 +702,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       if (caps && !caps.includes(cmd.name)) {
         return fail("unsupported", `this device has no ${cmd.name === "say" ? "speaker" : "microphone"}`);
       }
+      if (cmd.name === "listen") {
+        const w = this.listenWindow(cmd.args.ms as number | undefined);
+        if (!w.ok) return w;
+      }
       return this.startJob(cmd.name as "say" | "listen", cmd.args);
     }
     let res: Outcome<JsonObject>;
@@ -875,6 +879,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const caps = live.getMeta()?.caps;
     if (caps && args.say !== undefined && !caps.includes("say")) return fail("unsupported", "this device has no speaker");
     if (caps && args.listen && !caps.includes("listen")) return fail("unsupported", "this device has no microphone");
+    if (args.listen) {
+      const w = this.listenWindow(args.listen_ms);
+      if (!w.ok) return w;
+    }
     const started = await this.startJob("talk", args as unknown as JsonObject);
     if (!started.ok) return started;
     const job = started.result.job as string;
@@ -1210,7 +1218,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private async runListen(id: string, args: JsonObject, created: number) {
     await this.setJob(id, { status: "running" });
     const { ms, ...listenArgs } = args;
-    const r = await this.record(id, ms as number, listenArgs);
+    const r = await this.record(id, ms as number | undefined, listenArgs);
     if (!r.ok) return this.finishJob(id, { status: "failed", error: r.error });
     const timings: JsonObject = { queue: r.start - created, ...r.timings, total: this.clock.now() - created };
     this.logTimings(id, "listen", timings);
@@ -1462,8 +1470,24 @@ export class DeviceRoom implements AgentApi, OwnerApi {
    * STT. The creature shows `thinking` from end of speech until the agent's
    * next command (or THINK_HOLD_S).
    */
-  /** `extra`: the device listen args besides job/ms/rate (VAD knobs, ring_color), passed through. */
-  private async record(id: string, ms: number, extra: JsonObject = {}): Promise<ListenResult> {
+  /**
+   * The `ms` sent with a device listen. Firmware with the listen_window cap takes it only
+   * when the agent gave one (undefined: the device applies its own setting, console 5..30 s
+   * or unlimited, like ring_color) and reports the window in its ack. Older firmware takes
+   * 1..10000 and always gets one: no unlimited, nothing longer.
+   */
+  private listenWindow(ms: number | undefined): Outcome<{ ms?: number }> {
+    const caps = this.liveSocket()?.getMeta()?.caps;
+    if (caps?.includes(LISTEN_WINDOW_CAP)) return { ok: true, result: ms !== undefined ? { ms } : {} };
+    if (ms === undefined) return { ok: true, result: { ms: LEGACY_MAX_LISTEN_MS } };
+    if (ms === 0 || ms > LEGACY_MAX_LISTEN_MS) {
+      return fail("unsupported", `this firmware listens at most ${LEGACY_MAX_LISTEN_MS / 1000} s and has no unlimited window: update Molty (molty_update) for windows up to 30 s or unlimited`);
+    }
+    return { ok: true, result: { ms } };
+  }
+
+  /** `extra`: the device listen args besides job/ms/rate (VAD knobs, ring_color), passed through. `ms` undefined: the device's setting. */
+  private async record(id: string, ms: number | undefined, extra: JsonObject = {}): Promise<ListenResult> {
     const t0 = this.clock.now();
     let pick = await this.pickVoice("stt");
     if (!pick.ok) return { ok: false, error: pick.error };
@@ -1487,13 +1511,20 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     }
   }
 
-  private async recordInto(buf: ListenBuffer, pick: Extract<VoicePick, { ok: true }>, id: string, ms: number, extra: JsonObject, t0: number, fallback?: string): Promise<ListenResult> {
+  private async recordInto(buf: ListenBuffer, pick: Extract<VoicePick, { ok: true }>, id: string, given: number | undefined, extra: JsonObject, t0: number, fallback?: string): Promise<ListenResult> {
     this.listenBuf = buf;
     let tAck = t0;
+    // the window this listen records at most: what the device's ack reports (listen_window
+    // firmware; 0 = unlimited → its LISTEN_CEILING_MS backstop), else what was sent
+    let ms = LISTEN_CEILING_MS;
     try {
-      const res = await this.sendCmd("listen", { job: id, ms, rate: SAMPLE_RATE, ...extra });
+      const w = this.listenWindow(given);
+      if (!w.ok) return { ok: false, error: w.error };
+      const res = await this.sendCmd("listen", { job: id, ...w.result, rate: SAMPLE_RATE, ...extra });
       if (!res.ok) return { ok: false, error: res.error };
       tAck = this.clock.now();
+      const acked = res.result.ms;
+      ms = typeof acked === "number" && Number.isFinite(acked) && acked >= 0 ? acked || LISTEN_CEILING_MS : (w.result.ms ?? LISTEN_CEILING_MS) || LISTEN_CEILING_MS;
       if (!buf.ended) {
         await new Promise<void>((resolve) => {
           const timer = this.clock.setTimeout(resolve, ms + this.t.listenGraceMs);

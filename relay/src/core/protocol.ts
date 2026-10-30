@@ -12,8 +12,8 @@ export const MAX_AUDIO_PAYLOAD_BYTES = 16 * 1024;
 export const MAX_TEXT_FRAME_BYTES = 64 * 1024;
 
 export const SAMPLE_RATE = 16000;
-/** Max listen capture the relay buffers: 10 s + 1 s slack of PCM16 @16 kHz. */
-export const MAX_LISTEN_BYTES = 11000 * 32;
+/** The longest listen buffered: an unlimited one (LISTEN_CEILING_MS, 300 s) + 1 s, 16 kHz pcm16. */
+export const MAX_LISTEN_BYTES = 301000 * 32;
 
 /** WebSocket close codes. 4401 is the spec's auth failure. */
 export const CLOSE_UNAUTHORIZED = 4401;

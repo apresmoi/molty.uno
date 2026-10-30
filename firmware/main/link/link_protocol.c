@@ -144,6 +144,25 @@ bool link_listen_args(const cJSON *args, bool *vad, unsigned *end_silence_ms, un
     return true;
 }
 
+bool link_listen_setting_ok(double v)
+{
+    return v == floor(v) && (v == LINK_LISTEN_UNLIMITED || (v >= LINK_LISTEN_SET_MIN && v <= LINK_LISTEN_MAX_MS));
+}
+
+bool link_listen_window(const cJSON *args, uint32_t dflt, uint32_t *window, uint32_t *record_ms)
+{
+    if (!window || !record_ms) return false;
+    const cJSON *v = cJSON_GetObjectItemCaseSensitive(args, "ms");
+    uint32_t w;
+    if (!v) w = link_listen_setting_ok(dflt) ? dflt : LINK_LISTEN_DEFAULT_MS;
+    else if (!cJSON_IsNumber(v) || !(v->valuedouble >= 0 && v->valuedouble <= LINK_LISTEN_MAX_MS) ||
+             v->valuedouble != floor(v->valuedouble)) return false;
+    else w = (uint32_t)v->valuedouble;
+    *window = w;
+    *record_ms = w == LINK_LISTEN_UNLIMITED ? LINK_LISTEN_CEILING_MS : w;
+    return true;
+}
+
 static cJSON *evt(const char *name, cJSON **data)
 {
     cJSON *j = frame("evt");

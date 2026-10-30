@@ -53,6 +53,22 @@ bool link_mood_args(const cJSON *args, const char **mood, double *hold_s);
  * (integers; vad a bool). Absent fields leave the outputs untouched (the caller's
  * defaults); a wrong type or an out-of-range value → false. */
 bool link_listen_args(const cJSON *args, bool *vad, unsigned *end_silence_ms, unsigned *no_speech_ms);
+/* The listen window (cap "listen_window"). Every listen ends early on end of speech / turn:
+ * the window is a ceiling. An agent's "ms": 1..LINK_LISTEN_MAX_MS, or 0 = unlimited (it ends
+ * only on end of speech / turn, no_speech, listen_stop, or LINK_LISTEN_CEILING_MS → "max").
+ * Absent: the device's own setting (POST /api/creature/state {listen_ms}: 0 or
+ * LINK_LISTEN_SET_MIN..LINK_LISTEN_MAX_MS, LINK_LISTEN_DEFAULT_MS out of the box). The mic
+ * streams in fixed chunks: nothing on the device is sized by the window. */
+#define LINK_LISTEN_MAX_MS      30000u
+#define LINK_LISTEN_DEFAULT_MS  30000u
+#define LINK_LISTEN_SET_MIN     5000u
+#define LINK_LISTEN_UNLIMITED   0u
+#define LINK_LISTEN_CEILING_MS  300000u   /* unlimited: the safety backstop (stuck mic, noisy room) */
+/* args' "ms" (absent → dflt) → *window (0 = unlimited, else ms) and *record_ms (what the mic
+ * records at most: the window, or the ceiling for unlimited). Not an integer 0..MAX → false. */
+bool link_listen_window(const cJSON *args, uint32_t dflt, uint32_t *window, uint32_t *record_ms);
+/* A valid device setting: 0 (unlimited) or LINK_LISTEN_SET_MIN..LINK_LISTEN_MAX_MS. */
+bool link_listen_setting_ok(double v);
 cJSON *link_evt_shake_frame(double peak_g, int reversals, unsigned ms);
 cJSON *link_evt_tap_frame(double x, double y);
 cJSON *link_evt_button_frame(bool accept);

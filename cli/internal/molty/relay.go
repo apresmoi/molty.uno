@@ -267,11 +267,15 @@ func (r *RelayTransport) Say(ctx context.Context, opts SayOptions) (Result, erro
 	return r.audio(ctx, "say", args, opts.Async)
 }
 func (r *RelayTransport) Listen(ctx context.Context, opts ListenOptions) (Result, error) {
-	if opts.MS < 1 || opts.MS > 10000 {
-		return nil, fmt.Errorf("ms must be 1..10000")
-	}
 	if opts.Out != "" || opts.Force {
 		return nil, fmt.Errorf("relay listen returns text; --out and --force require HTTP mode")
+	}
+	// the window is a ceiling: the listen ends when the human finishes
+	if opts.DeviceDefault {
+		return r.audio(ctx, "listen", Result{}, opts.Async)
+	}
+	if opts.MS < 0 || opts.MS > 30000 {
+		return nil, fmt.Errorf("ms must be 1..30000, or 0 for unlimited")
 	}
 	return r.audio(ctx, "listen", Result{"ms": opts.MS}, opts.Async)
 }

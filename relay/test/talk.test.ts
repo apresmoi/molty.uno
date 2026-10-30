@@ -29,11 +29,23 @@ interface Mic {
   endRaw?: string;
   /** The device refuses a cmd with this error code (undefined: it accepts). */
   cmdError?: (name: string, args: any) => string | undefined;
+  /** The listen's ack result (listen_window firmware reports {ms}); default {}. */
+  listenAck?: (args: any) => Record<string, unknown>;
+  /** Stream the first frame but hold the end frame until endListen() (a long / unlimited listen). */
+  holdEnd?: boolean;
 }
 
 /** A device that answers cmds, "plays" say streams (say.done when the end frame arrives) and streams mic audio for listen. */
 function device(room: DeviceRoom, sock: FakeSocket, mic: Mic = {}) {
   const log: Array<{ at: number; kind: string; name?: string; args?: any; end?: boolean; bytes?: number }> = [];
+  let held: { job: string; n: number } | undefined;
+  /** holdEnd: the device ends the held listen now, with these end-frame extras. */
+  const endListen = (extra: Record<string, unknown>) => {
+    if (!held) throw new Error("no held listen");
+    const { job, n } = held;
+    held = undefined;
+    void room.socketMessage(sock, new TextEncoder().encode(JSON.stringify({ s: job, seq: n ? 1 : 0, kind: "pcm16", rate: 16000, end: true, ...extra })));
+  };
   const origText = sock.sendText.bind(sock);
   const origBin = sock.sendBinary.bind(sock);
   sock.sendText = (t: string) => {
@@ -42,13 +54,18 @@ function device(room: DeviceRoom, sock: FakeSocket, mic: Mic = {}) {
     if (f.t === "cmd") {
       log.push({ at: Date.now(), kind: "cmd", name: f.name, args: f.args });
       const err = mic.cmdError?.(f.name, f.args);
-      const res = err ? { t: "res", id: f.id, ok: false, error: err } : { t: "res", id: f.id, ok: true, result: {} };
+      const result = f.name === "listen" && mic.listenAck ? mic.listenAck(f.args) : {};
+      const res = err ? { t: "res", id: f.id, ok: false, error: err } : { t: "res", id: f.id, ok: true, result };
       setTimeout(() => void room.socketMessage(sock, JSON.stringify(res)), 1);
       if (f.name === "listen") {
         setTimeout(() => {
           const n = mic.samples ?? 3200;
           const pcm = new Uint8Array(new Int16Array(n).fill(8000).buffer);
           if (n) void room.socketMessage(sock, encodeAudioFrame({ s: f.args.job, seq: 0, kind: "pcm16", rate: 16000, end: false }, pcm));
+          if (mic.holdEnd) {
+            held = { job: f.args.job, n };
+            return;
+          }
           const head = mic.endRaw
             ? mic.endRaw.replace(/"s":"[^"]*","seq":\d+/, `"s":"${f.args.job}","seq":${n ? 1 : 0}`)
             : JSON.stringify({ s: f.args.job, seq: n ? 1 : 0, kind: "pcm16", rate: 16000, end: true, ...(mic.end ?? {}) });
@@ -69,7 +86,7 @@ function device(room: DeviceRoom, sock: FakeSocket, mic: Mic = {}) {
       }, mic.sayDoneMs ?? 5);
   };
   const moods = () => log.filter((l) => l.kind === "cmd" && l.name === "mood").map((l) => l.args);
-  return { log, moods };
+  return { log, moods, endListen, holding: () => !!held };
 }
 
 async function setup(mic: Mic = {}, opts: { voice?: FakeVoice; timings?: Record<string, number>; caps?: string[]; hello?: Record<string, unknown>; releases?: ReleaseSource } = {}) {
@@ -154,7 +171,7 @@ describe("molty_talk", () => {
     const ok = await w.room.talk(w.token, { end_silence_ms: 500, no_speech_ms: 3000, vad: true, listen_ms: 8000 });
     expect(ok.ok).toBe(true);
     expect(w.dev.log.find((l) => l.name === "listen")!.args).toMatchObject({ ms: 8000, end_silence_ms: 500, no_speech_ms: 3000, vad: true });
-    for (const bad of [{ end_silence_ms: 299 }, { end_silence_ms: 3001 }, { no_speech_ms: 999 }, { no_speech_ms: 10001 }, { vad: "yes" }, { listen_ms: 10001 }, { listen: false }, { bogus: 1 }]) {
+    for (const bad of [{ end_silence_ms: 299 }, { end_silence_ms: 3001 }, { no_speech_ms: 999 }, { no_speech_ms: 10001 }, { vad: "yes" }, { listen_ms: 30001 }, { listen: false }, { bogus: 1 }]) {
       expect(await w.room.talk(w.token, bad), JSON.stringify(bad)).toMatchObject({ ok: false, error: "invalid_args" });
     }
     // plain listen: same knobs, same ranges; absent knobs are not sent (older firmware sees the old cmd)
@@ -435,6 +452,100 @@ describe("molty_talk", () => {
     const mute = await setup({}, { caps: ["listen"] });
     expect(await mute.room.talk(mute.token, { say: "x" })).toMatchObject({ ok: false, error: "unsupported" });
     expect(await mute.room.talk(mute.token, {})).toMatchObject({ ok: true });
+  });
+});
+
+describe("listen window", () => {
+  const WINDOW_CAPS = ["say", "listen", "listen_stop", "listen_window"];
+  /** listen_window firmware: reports the window it applies (its own setting when no ms came: here 20000). */
+  const ack = (args: any) => ({ job: args.job, ms: args.ms ?? 20000 });
+  const lastListen = (w: Awaited<ReturnType<typeof setup>>) => w.dev.log.filter((l) => l.name === "listen").at(-1)!.args;
+
+  it("listen_window firmware: no ms sent when the agent gave none (the device's setting); 30000 and 0 (unlimited) go through; 30001 is refused", async () => {
+    const w = await setup({ end: { reason: "silence", speech_ms: 100 }, listenAck: ack }, { caps: WINDOW_CAPS });
+    expect((await w.room.talk(w.token, {})).ok).toBe(true);
+    expect(lastListen(w)).not.toHaveProperty("ms");
+    expect((await w.room.talk(w.token, { listen_ms: 30000 })).ok).toBe(true);
+    expect(lastListen(w).ms).toBe(30000);
+    expect((await w.room.talk(w.token, { listen_ms: 0 })).ok).toBe(true);
+    expect(lastListen(w).ms).toBe(0);
+    const job = ((await w.room.command(w.token, "listen", {})) as any).result.job;
+    await w.room.job(w.token, job, 2000);
+    expect(lastListen(w)).toEqual({ job, rate: 16000 });
+    const j0 = ((await w.room.command(w.token, "listen", { ms: 0 })) as any).result.job;
+    await w.room.job(w.token, j0, 2000);
+    expect(lastListen(w)).toEqual({ job: j0, ms: 0, rate: 16000 });
+    expect(await w.room.talk(w.token, { listen_ms: 30001 })).toMatchObject({ ok: false, error: "invalid_args" });
+    expect(await w.room.command(w.token, "listen", { ms: 30001 })).toMatchObject({ ok: false, error: "invalid_args" });
+  });
+
+  it("older firmware (no listen_window cap): always gets ms, 10000 by default; unlimited or > 10 s is refused up front as unsupported", async () => {
+    const w = await setup({ end: { reason: "silence", speech_ms: 100 } });
+    expect((await w.room.talk(w.token, {})).ok).toBe(true);
+    expect(lastListen(w).ms).toBe(10000);
+    expect((await w.room.talk(w.token, { listen_ms: 10000 })).ok).toBe(true);
+    for (const listen_ms of [0, 10001, 30000]) {
+      expect(await w.room.talk(w.token, { listen_ms }), String(listen_ms)).toMatchObject({ ok: false, error: "unsupported", message: expect.stringMatching(/at most 10 s/) });
+      expect(await w.room.command(w.token, "listen", { ms: listen_ms }), String(listen_ms)).toMatchObject({ ok: false, error: "unsupported" });
+    }
+    const job = ((await w.room.command(w.token, "listen", {})) as any).result.job;
+    await w.room.job(w.token, job, 2000);
+    expect(lastListen(w)).toEqual({ job, ms: 10000, rate: 16000 });
+    expect(w.dev.log.filter((l) => l.name === "listen").every((l) => l.args.ms !== 0 && l.args.ms <= 10000)).toBe(true);
+  });
+
+  it("the relay waits for the window the device acked (not a guess): a short acked window times out on it", async () => {
+    // ack says 100 ms; the device never sends its end frame: the relay ends the listen at 100 + grace (200), reason max
+    const w = await setup({ holdEnd: true, listenAck: (a) => ({ job: a.job, ms: 100 }) }, { caps: WINDOW_CAPS });
+    const t0 = Date.now();
+    const out = await w.room.talk(w.token, {});
+    expect(out).toMatchObject({ ok: true, result: { status: "done", reason: "max" } });
+    expect(Date.now() - t0).toBeLessThan(1500);
+  });
+
+  it("unlimited (acked 0): no early timeout; talk returns pending over its budget and molty_wait finishes it on every end; the audio lock is released each time", async () => {
+    for (const reason of ["silence", "no_speech", "max", "error", "turn_end"]) {
+      const w = await setup({ holdEnd: true, samples: 3200, listenAck: (a) => ({ job: a.job, ms: a.ms ?? 0 }) }, { caps: WINDOW_CAPS, timings: { talkBudgetMs: 150, listenGraceMs: 100 } });
+      const r = await mcp(w.backend, w.token, "molty_talk", { listen_ms: 0 });
+      expect(r.structuredContent, reason).toMatchObject({ ok: true, status: "pending", job: expect.any(String) });
+      const job = r.structuredContent.job;
+      await new Promise((res) => setTimeout(res, 600)); // well past any 0 + grace: still recording
+      expect(w.dev.holding(), reason).toBe(true);
+      expect((await w.room.job(w.token, job, 0)) as any, reason).toMatchObject({ ok: true, result: { status: "running" } });
+      expect(await w.room.talk(w.token, {}), reason).toMatchObject({ ok: false, error: "audio_busy" });
+      w.dev.endListen(reason === "no_speech" ? { reason, speech_ms: 0 } : { reason, speech_ms: 900 });
+      const done = await mcp(w.backend, w.token, "molty_wait", { job, timeout_s: 3 });
+      expect(done.structuredContent, reason).toMatchObject({ ok: true, status: "done", reason });
+      expect(done.structuredContent.heard, reason).toBe(reason === "no_speech" ? "" : "hello molty");
+      // released: the next turn starts
+      w.voice.ttsSamples = 1600;
+      expect(await w.room.talk(w.token, { listen: false, say: "ok" }), reason).toMatchObject({ ok: true, result: { status: "done", reason: "spoken" } });
+    }
+  });
+
+  it("unlimited: the device link dropping mid-listen ends the job and frees the audio lock", async () => {
+    const w = await setup({ holdEnd: true, listenAck: (a) => ({ job: a.job, ms: 0 }) }, { caps: WINDOW_CAPS, timings: { talkBudgetMs: 100 } });
+    const r = await w.room.talk(w.token, { listen_ms: 0 });
+    expect(r).toMatchObject({ ok: true, result: { status: "pending" } });
+    const job = (r as any).result.job;
+    await w.room.socketClose(w.sock);
+    const v = (await w.room.job(w.token, job, 2000)) as any;
+    expect(["done", "failed"]).toContain(v.result.status);
+    const sock2 = await connect(w.room, w.host, undefined, null, { caps: WINDOW_CAPS });
+    device(w.room, sock2, { listenAck: ack, end: { reason: "silence", speech_ms: 100 } });
+    expect(await w.room.talk(w.token, {})).toMatchObject({ ok: true, result: { status: "done" } });
+  });
+
+  it("a long listen's audio is all kept (30 s and more, not cut at 11 s)", async () => {
+    const w = await setup({ holdEnd: true, samples: 0, listenAck: ack }, { caps: WINDOW_CAPS, timings: { talkBudgetMs: 50 } });
+    const r = (await w.room.talk(w.token, { listen_ms: 0 })) as any;
+    await until(() => w.dev.holding());
+    const job = r.result.job;
+    const chunk = new Uint8Array(new Int16Array(8000).fill(4000).buffer); // 0.5 s, 16000 B
+    for (let i = 0; i < 62; i++) await w.room.socketMessage(w.sock, encodeAudioFrame({ s: job, seq: i, kind: "pcm16", rate: 16000, end: false }, chunk));
+    w.dev.endListen({ reason: "turn_end" });
+    const v = (await w.room.job(w.token, job, 3000)) as any;
+    expect(v.result).toMatchObject({ status: "done", result: { duration_ms: 31000 } });
   });
 });
 
