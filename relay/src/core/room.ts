@@ -915,8 +915,20 @@ export class DeviceRoom implements AgentApi {
     await this.kv.put<UpdateRecord>(K.upd, { job: id, from: args.from as string, to: args.version as string, phase: "confirm", deadline: now + this.t.updateConfirmMs + this.t.askGraceMs });
     this.armUpdateTimer(this.t.updateConfirmMs + this.t.askGraceMs);
     const { from: _from, ...wire } = args;
-    const res = await this.sendCmd("update", { job: id, ...wire, timeout_ms: this.t.updateConfirmMs });
-    if (!res.ok) await this.endUpdate(id, { status: "failed", error: res.error });
+    // The confirmation takes the screen like an ask: no automatic mood (an older listen's) may cancel it.
+    this.screenInFlight++;
+    let res: Outcome<JsonObject>;
+    try {
+      res = await this.sendCmd("update", { job: id, ...wire, timeout_ms: this.t.updateConfirmMs });
+    } finally {
+      this.screenInFlight--;
+    }
+    // Device events already in for this job (accepted / downloading, or a settled decline / failure)
+    // prove the cmd landed: a lost ack must not discard them (the device keeps installing).
+    const u = await this.kv.get<UpdateRecord>(K.upd);
+    const evidenced = !u || u.job !== id || u.phase !== "confirm";
+    if (res.ok || res.error === "device_timeout" || evidenced) this.screenRev++;
+    if (!res.ok && !evidenced) await this.endUpdate(id, { status: "failed", error: res.error });
   }
 
   private armUpdateTimer(ms: number) {

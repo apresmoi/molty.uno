@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { RelayBackend } from "../src/core/api.js";
 import { encodeWav } from "../src/core/audio.js";
 import { decodeAudioFrame, encodeAudioFrame } from "../src/core/protocol.js";
+import type { ReleaseSource } from "../src/core/releases.js";
 import type { DeviceRoom } from "../src/core/room.js";
 import { PcmFeed, splitSpeech, synthesize } from "../src/core/speech.js";
 import type { TtsOptions } from "../src/voice/types.js";
@@ -71,9 +72,9 @@ function device(room: DeviceRoom, sock: FakeSocket, mic: Mic = {}) {
   return { log, moods };
 }
 
-async function setup(mic: Mic = {}, opts: { voice?: FakeVoice; timings?: Record<string, number>; caps?: string[] } = {}) {
-  const ctx = makeRoom({ timings: { ...FAST, ...opts.timings }, voice: opts.voice });
-  const sock = await connect(ctx.room, ctx.host, undefined, LINK, opts.caps ? { caps: opts.caps } : {});
+async function setup(mic: Mic = {}, opts: { voice?: FakeVoice; timings?: Record<string, number>; caps?: string[]; hello?: Record<string, unknown>; releases?: ReleaseSource } = {}) {
+  const ctx = makeRoom({ timings: { ...FAST, ...opts.timings }, voice: opts.voice, releases: opts.releases });
+  const sock = await connect(ctx.room, ctx.host, undefined, LINK, { ...(opts.caps ? { caps: opts.caps } : {}), ...opts.hello });
   const dev = device(ctx.room, sock, mic);
   const out = await ctx.room.pair({ device_id: DEVICE, link_code: LINK, agent_name: "talker" });
   if (!out.ok || out.result.status !== "approved") throw new Error(JSON.stringify(out));
@@ -309,6 +310,37 @@ describe("molty_talk", () => {
     await w.room.talk(w.token, {});
     await new Promise((r) => setTimeout(r, 20));
     expect(w.dev.moods().slice(1)).toEqual([{ mood: "thinking", hold_s: 15 }, { mood: "thinking", hold_s: 15 }]);
+  });
+
+  it("an update confirmation shown after a listen began is never cancelled by that listen's automatic moods", async () => {
+    const board = "waveshare-esp32-s3-touch-lcd-1.46";
+    const releases: ReleaseSource = {
+      latest: async () => ({
+        state: "fresh",
+        checked_at: 1,
+        release: { version: "0.2.0", tag: "v0.2.0", prerelease: false, published_at: "2026-11-01T10:00:00Z", notes_url: "https://x.test/n", notes: "", boards: { [board]: { name: "m.bin", url: "https://github.com/apresmoi/molty.uno/releases/download/v0.2.0/m.bin", size: 10, sha256: "d".repeat(64) } } },
+      }),
+    };
+    const w = await setup({ samples: 3200, end: { reason: "silence", speech_ms: 150 } }, { caps: ["say", "listen", "update"], hello: { fw: "0.1.0", board }, releases, timings: { updateConfirmMs: 5000 } });
+    const stt = w.voice.stt.bind(w.voice);
+    w.voice.stt = async (pcm) => {
+      await new Promise((r) => setTimeout(r, 80));
+      return stt(pcm);
+    };
+    const updates = () => w.dev.log.filter((l) => l.name === "update");
+    // the confirmation goes out during STT: the re-asserted thinking (an accepted mood cancels it) is not sent
+    const turn = w.room.talk(w.token, {});
+    await until(() => w.dev.moods().length > 0);
+    const u = w.room.update(w.token, {});
+    await until(() => updates().length === 1);
+    expect(await turn).toMatchObject({ ok: true, result: { heard: "hello molty" } });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(w.dev.moods()).toEqual([{ mood: "thinking", hold_s: 15 }]);
+    const after = w.dev.log.filter((l) => l.kind === "cmd").map((l) => l.name);
+    expect(after.slice(after.indexOf("update"))).toEqual(["update"]);
+    const job = updates()[0].args.job;
+    await w.room.socketMessage(w.sock, JSON.stringify({ t: "evt", name: "update", data: { job, state: "declined" } }));
+    expect(await u).toMatchObject({ ok: true, result: { job, outcome: "declined" } });
   });
 
   it("a mood the device refuses does not count as explicit: the automatic thinking still lands", async () => {
