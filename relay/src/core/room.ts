@@ -54,7 +54,7 @@ import {
   type ActivityOwnerRequest,
 } from "./api.js";
 import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
-import { ACK_CAP, ACK_MODES, type AskArgs, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk } from "./commands.js";
+import { ACK_CAP, ACK_MODES, type AskArgs, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk } from "./commands.js";
 import { PcmFeed, estimateSpeechMs, splitSpeech, synthesize } from "./speech.js";
 import { b64Decode, b64urlEncode, randomBytes, randomDigits, safeEqual, sha256Hex } from "./crypto.js";
 import {
@@ -735,7 +735,9 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   }
 
   async command(token: string, name: string, args: unknown): Promise<Outcome> {
-    return this.logged(token, typeof name === "string" ? name.slice(0, 32) : "?", args, () => this.commandNow(token, name, args));
+    // the op is a known command name or "unknown_command": a caller-chosen string is never logged as an op
+    const op = typeof name === "string" && (COMMANDS as readonly string[]).includes(name) ? name : "unknown_command";
+    return this.logged(token, op, args, () => this.commandNow(token, name, args));
   }
 
   private async commandNow(token: string, name: string, args: unknown): Promise<Outcome> {
@@ -766,10 +768,12 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         if (!w.ok) return w;
       }
       if (cmd.name === "say") {
-        // a human turn is open: the first answer claims it, other agents get turn_claimed (not audio_busy)
-        const c = await this.claim(hash, cmd.in_reply_to);
-        if (!c.ok) return c;
-        if (c.result.turn) return this.startJob("say", { ...cmd.args, turn: c.result.turn as JsonObject, called: this.clock.now() }, true, by);
+        // a human turn is open: the first answer claims it, other agents get turn_claimed (not audio_busy);
+        // the claim is taken only once the say holds the audio lock (a refused say claims nothing)
+        const pre = await this.claimCheck(hash, cmd.in_reply_to);
+        if (!pre.ok) return pre;
+        const called = this.clock.now();
+        return this.startJob("say", cmd.args, true, by, () => this.claimFor(hash, cmd.in_reply_to, called));
       }
       return this.startJob(cmd.name as "say" | "listen", cmd.args, true, by);
     }
@@ -964,11 +968,11 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       const w = this.listenWindow(args.listen_ms);
       if (!w.ok) return w;
     }
-    // a human turn is open: the first answer claims it, other agents get turn_claimed (not audio_busy)
-    const c = await this.claim(a.hash, args.in_reply_to);
-    if (!c.ok) return c;
-    const turn: JsonObject = c.result.turn ? { turn: c.result.turn, called: t0 } : {};
-    const started = await this.startJob("talk", { ...(args as unknown as JsonObject), ...turn }, true, this.who(a));
+    // a human turn is open: the first answer claims it, other agents get turn_claimed (not audio_busy);
+    // the claim is taken only once the talk holds the audio lock (a refused talk claims nothing)
+    const pre = await this.claimCheck(a.hash, args.in_reply_to);
+    if (!pre.ok) return pre;
+    const started = await this.startJob("talk", args as unknown as JsonObject, true, this.who(a), () => this.claimFor(a.hash, args.in_reply_to, t0));
     if (!started.ok) return started;
     const job = started.result.job as string;
     const out = await this.runJob(job, Math.max(0, this.t.talkBudgetMs - (this.clock.now() - t0)));
@@ -1239,11 +1243,30 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   }
 
   /** `audio`: the job takes the one-at-a-time audio lock (an ask only while it speaks). */
-  private async startJob(kind: JobKind, args: JsonObject, audio = true, by?: Who): Promise<Outcome> {
-    if (audio && this.audioJob) return fail("audio_busy", `job ${this.audioJob} is still running`);
+  /**
+   * `admit`: runs once the audio lock is held (taken synchronously with its check), before the
+   * job exists; a failure releases the lock and is the call's answer, success adds args. A turn
+   * claim goes here, so only an admitted say / talk ever claims the human's turn.
+   */
+  private async startJob(kind: JobKind, args: JsonObject, audio = true, by?: Who, admit?: () => Promise<Outcome<JsonObject>>): Promise<Outcome> {
+    // the running job's id is not disclosed: it may be another agent's
+    if (audio && this.audioJob) return fail("audio_busy", "another say / listen / talk is still running on Molty");
     const id = `${this.deviceId}.j_${b64urlEncode(randomBytes(12))}`;
-    const now = this.clock.now();
     if (audio) this.audioJob = id;
+    if (admit) {
+      let ok: Outcome<JsonObject>;
+      try {
+        ok = await admit();
+      } catch (e) {
+        ok = fail(errorCode(e));
+      }
+      if (!ok.ok) {
+        if (this.audioJob === id) this.audioJob = undefined;
+        return ok;
+      }
+      args = { ...args, ...ok.result };
+    }
+    const now = this.clock.now();
     this.tasks.add(id);
     await this.kv.put<JobRecord>(K.job(id), { job: id, kind, status: "queued", created: now, updated: now, ...(by ? { by } : {}) });
     void this.purgeJobs(now);
@@ -1921,6 +1944,20 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     // agent-facing, one per turn: not subject to the device event rate cap
     await this.appendEvent(UTTERANCE_EVENT, data, true);
     await this.activity.record({ ts: this.clock.now(), kind: "device", ev: "utterance", job: id, data: { text: text.slice(0, 500), reason: r.reason, trigger: "shake" } });
+  }
+
+  /** Would a say / talk by `hash` be refused the latest turn? Read only: nothing is claimed. */
+  private async claimCheck(hash: string, inReplyTo: string | undefined): Promise<Outcome<JsonObject>> {
+    const out = claimTurn(await this.kv.get<TurnRecord>(K.turn), hash, inReplyTo, this.clock.now());
+    if (!out.ok) return fail("turn_claimed", `another agent is already answering the human's turn ${out.turn}: stay quiet (or answer the next one)`, { turn_id: out.turn });
+    return { ok: true, result: {} };
+  }
+
+  /** The claim of an admitted say / talk, as the args its job needs ({turn, called} when it answers a turn). */
+  private async claimFor(hash: string, inReplyTo: string | undefined, called: number): Promise<Outcome<JsonObject>> {
+    const c = await this.claim(hash, inReplyTo);
+    if (!c.ok) return c;
+    return { ok: true, result: c.result.turn ? { turn: c.result.turn, called } : {} };
   }
 
   /** A say / talk against the latest turn (claimTurn), the claim written atomically. */

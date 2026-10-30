@@ -318,6 +318,26 @@ describe("who answers a turn", () => {
     expect(JSON.stringify([...w.kv.data.entries()].filter(([k]) => k.startsWith("al:")))).not.toContain("dentist");
   });
 
+  it("P1-3: an answer refused for audio_busy claims nothing — the next agent may still answer the turn", async () => {
+    const w = await setup();
+    const a = await w.pairAgent("grok");
+    const b = await w.pairAgent("claude");
+    const c = await w.pairAgent("other");
+    const turnId = `${DEVICE}.j_seededturn0001`;
+    await w.kv.put("turn", { id: turnId, at: Date.now() });
+    // the speaker / mic is held by another job (a listen claims no turn)
+    const held = (await w.room.command(c, "listen", {})) as any;
+    expect(held.ok).toBe(true);
+    expect(await w.room.talk(a, { say: "Two meetings.", listen: false, in_reply_to: turnId })).toMatchObject({ ok: false, error: "audio_busy" });
+    expect(await w.room.command(a, "say", { text: "Two meetings.", in_reply_to: turnId })).toMatchObject({ ok: false, error: "audio_busy" });
+    expect((await w.kv.get<any>("turn")).by).toBeUndefined();
+    await w.room.job(c, held.result.job, 5000);
+    const r = (await w.room.command(b, "say", { text: "Hello!", in_reply_to: turnId })) as any;
+    expect(r.ok).toBe(true);
+    expect((await w.kv.get<any>("turn")).by).toBeDefined();
+    await w.room.job(b, r.result.job, 5000);
+  });
+
   it("in_reply_to is checked: a turn id, nothing else", async () => {
     const w = await turn();
     for (const bad of ["e5", "molty-k7m2q9xa4c", 7]) {

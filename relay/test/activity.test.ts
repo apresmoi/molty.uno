@@ -309,6 +309,61 @@ describe("activity: agent isolation", () => {
   });
 });
 
+describe("activity: review findings (merge3)", () => {
+  it("P0-1: naming another agent's job (an unknown 'wait' command with args.job) grants nothing; ops are only known command names", async () => {
+    const w = await world();
+    const victim = await w.pair("Claude");
+    const attacker = await w.pair("Mallory");
+    const say = (await w.room.command(victim, "say", { text: "hi" })) as any;
+    const job = say.result.job as string;
+    await w.room.job(victim, job, 5000);
+    await logFrame(w.room, w.sock, { boot: 1, up: 50000, lines: [[1, 49000, tagOf(job), "EVT victim line"]] });
+    const before = JSON.stringify(await w.room.activityLog(attacker, {}));
+    expect(before).not.toContain("victim line");
+    expect(await w.room.command(attacker, "wait", { job })).toMatchObject({ ok: false, error: "unknown_command" });
+    await w.room.job(attacker, job, 0); // a molty_wait on it: refused or not, it is not the attacker's job
+    const after = (await w.room.activityLog(attacker, {})) as any;
+    expect(JSON.stringify(after)).not.toContain("victim line");
+    expect(after.result.entries.filter((e: any) => e.kind === "device_log")).toEqual([]);
+    expect(after.result.entries.filter((e: any) => e.kind === "call").map((e: any) => e.op)).toContain("unknown_command");
+    expect(after.result.entries.some((e: any) => e.op === "wait" && e.job === job)).toBe(false);
+    // even a call entry that DID carry the job and the attacker's identity grants nothing: only job records do
+    const attackerWho = (await import("../src/core/crypto.js")).sha256Hex;
+    const who = (await attackerWho(attacker)).slice(0, 16);
+    await w.room.activity.record({ ts: Date.now(), kind: "call", op: "say", agent: "Mallory", who, job, ok: true });
+    expect(JSON.stringify(await w.room.activityLog(attacker, {}))).not.toContain("victim line");
+    // the victim still sees its own line
+    expect(JSON.stringify(await w.room.activityLog(victim, {}))).toContain("victim line");
+  });
+
+  it("P0-1: audio_busy does not disclose the running job's id to another agent", async () => {
+    const w = await world();
+    const a = await w.pair("Claude");
+    const b = await w.pair("Mallory");
+    const say = (await w.room.command(a, "say", { text: "a long enough sentence to keep the speaker busy" })) as any;
+    const busy = await w.room.command(b, "say", { text: "me" });
+    expect(busy).toMatchObject({ ok: false, error: "audio_busy" });
+    expect(JSON.stringify(busy)).not.toContain(say.result.job);
+    await w.room.job(a, say.result.job, 5000);
+  });
+
+  it("P0-2: job results go through the same secret sanitizer as calls (one write path)", async () => {
+    const w = await world();
+    const a = await w.pair("Claude");
+    const tok = `${DEVICE}.${"Q".repeat(43)}`;
+    const r = (await w.room.command(a, "say", { text: `your key is ${tok} ok` })) as any;
+    await w.room.job(a, r.result.job, 5000);
+    const r2 = (await w.room.command(a, "say", { text: tok })) as any;
+    await w.room.job(a, r2.result.job, 5000);
+    expect(w.raw()).not.toContain("Q".repeat(43));
+    const jobs = (await w.entries({ kind: "job" })).map((e) => e.data.said);
+    expect(jobs).toEqual(["your key is [secret] ok", "[secret]"]);
+    // and directly: any kind, any field
+    await w.room.activity.record({ ts: Date.now(), kind: "settings", ev: "x", data: { note: `Bearer ${"Z".repeat(30)}`, nested: { api_key: "plain" }, code: 4401 } });
+    expect((await w.entries({ kind: "settings" })).at(-1).data).toEqual({ note: "[secret]", nested: { api_key: "[secret]" }, code: 4401 });
+  });
+});
+
 describe("activity: bounded retention", () => {
   function fakeClock(start = 1_800_000_000_000) {
     let now = start;

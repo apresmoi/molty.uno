@@ -343,7 +343,9 @@ shake ─▶ device: listening at once (ring + mood), audio kept locally
 - **Who answers.** All paired agents get the event (routing a gesture to one agent comes later).
   The first `say` or `talk` after it — from any agent, with `in_reply_to: turn_id` or without —
   **claims the turn**; for **60 s** after the utterance (`TURN_HOLD_MS`) every other agent's `say`
-  / `talk` is refused `409 turn_claimed {turn_id}` (before, and instead of, `audio_busy`). The
+  / `talk` is refused `409 turn_claimed {turn_id}` (before, and instead of, `audio_busy`). Only a
+  say / talk the relay admits (it got the speaker) claims: one refused `audio_busy` or anything
+  else claims nothing, so the turn stays open for the next answer. The
   claimant keeps the floor (follow-ups need no `in_reply_to`); `mood`, `show`, `ask` are never
   claimed. `in_reply_to` naming an older turn (the human has spoken again since) goes ahead
   unclaimed and uncorrelated. With a claimed turn the answer's `timings.turn` is
@@ -1086,8 +1088,10 @@ their job id as `job` next to `error`, so an agent can look the turn up.
 
 **Secrets** never reach storage: keys named like secret / token / key / auth / password /
 cookie / signature / credential / link_code / headers / code, and bearer- or token-shaped
-values anywhere, become `"[secret]"`; webhook registrations keep only the redacted URL
-(origin), the method, the number of headers and whether a body template is set.
+values anywhere (also inside free text: a say, a transcript, a device line), become `"[secret]"` —
+one sanitizer at the log's single write path, for every entry kind and field; webhook
+registrations keep only the redacted URL (origin), the method, the number of headers and
+whether a body template is set.
 
 **Transcripts** (`heard`, `said`, say / show text in call args, an `utterance`'s text) are kept by default (≤ 500
 chars each). The owner's setting **log transcripts: off** removes them *before the write*
@@ -1142,6 +1146,9 @@ few). Soft resets (panic, watchdog, OTA restart) are covered by the no-init RAM 
   its own jobs, and the device's connects / disconnects within its jobs' spans (5 s before to
   30 s after). Never another agent's entries or transcripts; `agent=` is ignored. Voice box
   tokens are refused (`403`).
+  "Its own jobs" means the relay's job record says that agent's token started them (written by
+  the relay when the job is created); naming a job id in a call never makes it yours. An
+  `audio_busy` refusal does not name the running job.
 
 ## Default relay
 

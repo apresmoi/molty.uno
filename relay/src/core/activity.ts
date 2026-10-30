@@ -144,6 +144,39 @@ const JOB_TAG_RE = /^[A-Za-z0-9_-]{1,32}$/;
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 const printable = (s: string) => s.replace(/[\u0000-\u001f\u007f]/g, " ");
 
+/** Credentials inside free text (a say, a heard line, a device log line): replaced in place. */
+const SECRET_IN_TEXT = /Bearer\s+[A-Za-z0-9._~+/=-]+|molty-[a-z2-9]{10}\.[A-Za-z0-9_-]{20,}/g;
+
+/**
+ * THE sanitizer, applied to every entry at the single write path (append): any string under a
+ * secret-looking key, any string that is wholly an opaque credential, and credentials inside
+ * free text become "[secret]". Numbers stay (a close `code` is not a secret).
+ */
+function scrub(v: unknown, key: string, depth: number): JsonObject[string] | undefined {
+  if (typeof v === "string") {
+    if (SECRET_KEY.test(key) || SECRET_VALUE.test(v.trim())) return "[secret]";
+    return v.replace(SECRET_IN_TEXT, "[secret]");
+  }
+  if (v === null || typeof v === "boolean" || typeof v === "number") return v as JsonObject[string];
+  if (depth >= 6) return "[…]";
+  if (Array.isArray(v)) return v.map((x) => scrub(x, "", depth + 1) ?? null);
+  if (isRecord(v)) {
+    const o: JsonObject = {};
+    for (const [k, x] of Object.entries(v)) {
+      const w = scrub(x, k, depth + 1);
+      if (w !== undefined) o[k] = w;
+    }
+    return o;
+  }
+  return undefined;
+}
+
+function sanitize(d: ActivityDraft): void {
+  if (d.args) d.args = scrub(d.args, "", 0) as JsonObject;
+  if (d.data) d.data = scrub(d.data, "", 0) as JsonObject;
+  if (typeof d.message === "string") d.message = scrub(d.message, "message", 0) as string;
+}
+
 /**
  * Args summary: scalars and short arrays, depth <= 3, strings clipped, every secret-looking
  * key or value replaced by "[secret]". Webhook specs keep only their redacted shape.
@@ -296,7 +329,9 @@ export class ActivityLog {
   async call<T extends { ok: boolean; error?: string; message?: string; result?: unknown; details?: JsonObject }>(by: Who, op: string, args: unknown, t0: number, out: T): Promise<T> {
     if (QUIET_OPS.has(op) && out.ok) return out;
     const result = out.ok && isRecord(out.result) ? out.result : undefined;
-    const job = typeof result?.job === "string" ? result.job : typeof out.details?.job === "string" ? out.details.job : op === "wait" && isRecord(args) && typeof args.job === "string" ? args.job : undefined;
+    // the job this call MADE (relay-generated: its result, or a failed talk/ask/update's details);
+    // never a job id the caller merely named (wait args): those are not its jobs
+    const job = op !== "wait" && typeof result?.job === "string" ? result.job : op !== "wait" && typeof out.details?.job === "string" ? out.details.job : undefined;
     const data: JsonObject = {};
     if (result) {
       if (typeof result.status === "string") data.status = result.status;
@@ -401,6 +436,7 @@ export class ActivityLog {
     for (const d of drafts) {
       const draft: ActivityDraft = structuredClone(d);
       if (!cfg.transcripts && redact(draft)) draft.redacted = true;
+      sanitize(draft); // every kind, every field: nothing reaches storage around it
       const e: ActivityEntry = { id: `a${c.seq + 1}`, ...draft };
       const size = JSON.stringify(e).length;
       if (c.entries.length && (c.entries.length >= ACTIVITY_LIMITS.chunkEntries || c.bytes + size > ACTIVITY_LIMITS.chunkBytes)) {
@@ -469,8 +505,11 @@ export class ActivityLog {
     if ("who" in viewer) {
       const mine = new Set<string>();
       const spans: Array<[number, number]> = [];
+      // Ownership is AUTHORITATIVE only: job entries are written by the relay from the job
+      // record's `by` (set when that agent's token created the job). Call entries, args and
+      // anything else a caller can influence never grant a job.
       for (const e of all) {
-        if (e.who !== viewer.who || !e.job) continue;
+        if (e.kind !== "job" || e.who !== viewer.who || !e.job) continue;
         mine.add(e.job);
         spans.push([e.ts - 5000, e.ts + (e.ms ?? 0) + 30000]);
       }
