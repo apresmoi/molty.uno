@@ -47,6 +47,24 @@ class KyutaiError(RuntimeError):
     pass
 
 
+# A last word ending in one of these closes a sentence (Kyutai's STT punctuates its Words:
+# "meters.", "it?", "carve it," — a comma or no mark is mid-sentence). An ellipsis trails off.
+SENTENCE_END = (".", "?", "!")
+# Hesitations: never the end of a thought, even with a full stop after them ("um.").
+# Conjunctions / prepositions / articles ("and", "from", "the", "like", "so", …) need no list:
+# unpunctuated they are mid-sentence like any other unpunctuated word, and with a mark the
+# mark wins ("What are you thinking of?", "I think so.").
+HESITATIONS = frozenset({"um", "uh", "uhm", "umm", "erm", "er", "hmm", "mm", "ah", "eh"})
+
+
+def sentence_complete(word: str) -> bool:
+    """True when the transcript's last word ends a sentence (terminal . ? !, not an ellipsis nor a hesitation)."""
+    w = word.strip().rstrip("\"')»”’)]")
+    if not w.endswith(SENTENCE_END) or w.endswith(("..", "…")):
+        return False
+    return w.rstrip(".?!").strip(".,;:\"'«“‘(").lower() not in HESITATIONS
+
+
 class PausePredictor:
     """Semantic end of turn from the STT's Step messages — Kyutai Unmute's rule.
 
@@ -56,6 +74,15 @@ class PausePredictor:
     while the user is speaking — i.e. once they said something. Here: `update()`
     returns True exactly once, the first time that holds after >= 1 word. Pure
     silence never ends a turn that way.
+
+    Mid-sentence hold (ours, not Unmute's): a thinking pause inside a sentence ("…at 2 meters
+    from" + 0.6 s) raises prs[2] past the threshold just like the end of a turn. So the pause
+    ends the turn at once only when the transcript so far reads as complete — its last Word
+    ends a sentence (`sentence_complete`); otherwise the pause must persist for `hold_s`
+    of continuous model steps above the threshold. The judgement uses the latest Word at each
+    step (Words lag the voice by ~0.5-1.6 s, so the sentence's own last word may land during
+    the hold and end it at once), and any Word arriving during the hold restarts it (the
+    human is still talking, or the model is still catching up). hold_s 0: Unmute's rule.
 
     `no_speech(s)`: the other end — nobody spoke. True exactly once, the first step at which
     the model has heard >= s seconds of audio since the last voice activity (since the
@@ -78,19 +105,26 @@ class PausePredictor:
 
     SKIP_STEPS = 12
 
-    def __init__(self, threshold: float = 0.6, attack_s: float = 0.01, release_s: float = 0.01, skip_steps: int = SKIP_STEPS):
+    def __init__(self, threshold: float = 0.6, attack_s: float = 0.01, release_s: float = 0.01, skip_steps: int = SKIP_STEPS,
+                 hold_s: float = 1.2):
         self.threshold, self.attack_s, self.release_s = threshold, attack_s, release_s
         self.skip_steps = max(0, int(skip_steps))
+        self.hold_s = max(0.0, float(hold_s))
         self.value = 1.0
         self.steps = 0
         self.words = 0
+        self.last_word = ""  # the latest non-empty Word (Kyutai attaches punctuation to words)
+        self.held = 0  # continuous paused steps since the pause began or the last Word came
         self.fired = False
         self.no_speech_fired = False
         self.active_run = 0
         self.quiet_since = 0  # step of the last voice activity (0: the capture's start)
 
-    def word(self) -> None:
+    def word(self, text: str = "") -> None:
         self.words += 1
+        self.held = 0  # a Word during the hold: still talking (or the model catching up) — start over
+        if text.strip():
+            self.last_word = text.strip()
 
     def update(self, pause_prob: float, dt: float = FRAME_S) -> bool:
         self.steps += 1
@@ -103,8 +137,14 @@ class PausePredictor:
         half = self.attack_s if p > self.value else self.release_s
         alpha = 1 - math.exp(-dt / half * math.log(2))
         self.value = (1 - alpha) * self.value + alpha * p
-        if self.fired or self.threshold <= 0 or self.words == 0 or self.value <= self.threshold:
+        if self.fired or self.threshold <= 0 or self.words == 0:
             return False
+        if self.value <= self.threshold:
+            self.held = 0  # speaking again: the pause is over
+            return False
+        self.held += 1
+        if self.hold_s > 0 and not sentence_complete(self.last_word) and self.held * dt < self.hold_s - 1e-9:
+            return False  # mid-sentence: wait for the pause to last hold_s
         self.fired = True
         return True
 
@@ -171,13 +211,14 @@ class SttSession:
         on_turn_end: Callable[[], Awaitable[None]] | None = None,
         turn_end_threshold: float = 0.6,
         turn_end_skip_steps: int = PausePredictor.SKIP_STEPS,
+        turn_end_hold_s: float = 1.2,
         on_no_speech: Callable[[], Awaitable[None]] | None = None,
         no_speech_s: float | None = None,
         connect=ws_connect,
     ):
         self.url, self.api_key, self.flush_s, self.on_word, self._connect = url, api_key, flush_s, on_word, connect
         self.on_turn_end = on_turn_end
-        self.pause = PausePredictor(turn_end_threshold, skip_steps=turn_end_skip_steps)
+        self.pause = PausePredictor(turn_end_threshold, skip_steps=turn_end_skip_steps, hold_s=turn_end_hold_s)
         # nobody spoke within no_speech_s (None: off): the relay turned the device's VAD off
         self.on_no_speech, self.no_speech_s = on_no_speech, no_speech_s
         self._finishing = False
@@ -205,7 +246,7 @@ class SttSession:
                 t = d.get("type") if isinstance(d, dict) else None
                 if t == "Word":
                     self.words.append(str(d.get("text", "")))
-                    self.pause.word()
+                    self.pause.word(self.words[-1])
                     if self.on_word:
                         await self.on_word(" ".join(self.words))
                 elif t == "Step":

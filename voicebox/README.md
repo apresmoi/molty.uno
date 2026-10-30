@@ -107,7 +107,9 @@ moshi-server on 127.0.0.1, and mounts the paired config read-only. Pair on the h
     done here; add it before switching to that model.
 - **End of turn:** While you talk, the STT's per-step pause estimate (`Step.prs[2]`) is
   smoothed exactly as Kyutai Unmute does it. Once you said a word and it passes 0.6
-  (`--turn-end`, 0 = off), the box sends `stt.turn_end`. The relay then stops Molty's mic
+  (`--turn-end`, 0 = off), the box sends `stt.turn_end` — at once when the latest word ends a
+  sentence (`.` `?` `!`); mid-sentence ("…2 meters from", "it,") only once the pause has lasted
+  `--turn-end-hold` seconds (default 1.2, 0 = at once; a word landing meanwhile restarts it). The relay then stops Molty's mic
   (firmware with the `listen_stop` cap) and finishes the transcript at once, with reason
   `turn_end`, instead of waiting for Molty's silence timer or the listen window. Silence
   alone never ends a turn that way. With the box serving the listen, this is THE end: the

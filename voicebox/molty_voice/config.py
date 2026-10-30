@@ -42,6 +42,10 @@ class Config:
     turn_end: float = 0.6
     # ...ignoring the first N model steps (80 ms each) of a listen, where prs[2] is unreliable (Unmute: 12).
     turn_end_skip_steps: int = 12
+    # ...and when the last word does not end a sentence (no . ? !, e.g. "…2 meters from"), the
+    # pause must last this many seconds of model steps above the threshold first (a word
+    # arriving meanwhile restarts it). 0 = Unmute's rule (end at the first paused step).
+    turn_end_hold_s: float = 1.2
     # TTS: drop the near-silent lead of each stream's first frame (<= 80 ms) so the voice starts sooner.
     trim_lead: bool = True
 

@@ -265,7 +265,7 @@ class Bridge:
 
         s = SttSession(self.cfg.stt_url, self.cfg.api_key, flush_s=self.cfg.stt_flush_s, on_word=partial,
                        on_turn_end=turn_end, turn_end_threshold=self.cfg.turn_end,
-                       turn_end_skip_steps=self.cfg.turn_end_skip_steps,
+                       turn_end_skip_steps=self.cfg.turn_end_skip_steps, turn_end_hold_s=self.cfg.turn_end_hold_s,
                        on_no_speech=no_speech, no_speech_s=no_speech_s, connect=self._kconnect)
         t_end = None
         try:

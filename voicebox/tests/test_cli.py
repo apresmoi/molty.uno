@@ -57,3 +57,27 @@ def test_pair_asks_for_role_voice_shows_the_code_and_stores_the_token_0600(tmp_p
 
 def test_run_refuses_when_not_paired(tmp_path):
     assert main(["--config", str(tmp_path / "none.json"), "run"]) == 2
+
+
+def test_run_passes_the_end_of_turn_flags_to_the_bridge(tmp_path, monkeypatch):
+    from molty_voice import cli
+    from molty_voice.config import Config, save
+
+    path = tmp_path / "c.json"
+    save(Config(relay="http://r", device_id=DEVICE, token=TOKEN), path)
+    seen = []
+
+    class FakeBridge:
+        def __init__(self, cfg):
+            seen.append(cfg)
+
+        async def run_forever(self):
+            return None
+
+    monkeypatch.setattr(cli, "Bridge", FakeBridge)
+    assert main(["--config", str(path), "run"]) == 0
+    assert seen[-1].turn_end_hold_s == 1.2  # the default
+    assert main(["--config", str(path), "run", "--turn-end-hold", "0", "--turn-end", "0.7", "--turn-end-skip", "8"]) == 0
+    assert (seen[-1].turn_end_hold_s, seen[-1].turn_end, seen[-1].turn_end_skip_steps) == (0.0, 0.7, 8)
+    assert main(["--config", str(path), "run", "--turn-end-hold", "2.5"]) == 0
+    assert seen[-1].turn_end_hold_s == 2.5
