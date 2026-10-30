@@ -53,7 +53,8 @@ const RESERVED_HEADERS = new Set(["host", "content-length", "transfer-encoding",
 const HEADER_NAME_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,64}$/;
 /** `{{name}}` or `{{name|default}}`; the default is literal text (escaped like a string value). */
 const PLACEHOLDER_RE = /\{\{\s*([a-z_][a-z0-9_.]*)(?:\|([^{}|]{0,64}))?\s*\}\}/gi;
-const KNOWN = /^(event\.(type|id|ts|data(\.[a-z_][a-z0-9_]*)?)|device|text)$/i;
+/** event.data.<field>, nested up to 3 deep (event.data.ms.speech, event.data.device.mood). */
+const KNOWN = /^(event\.(type|id|ts|data(\.[a-z_][a-z0-9_]*){0,3})|device|text)$/i;
 const bytes = (s: string) => new TextEncoder().encode(s).byteLength;
 
 export type Check<T> = { ok: true; value: T } | { ok: false; message: string };
@@ -135,8 +136,12 @@ export function renderTemplate(tpl: string, ev: AgentEvent, device: string, esc:
     if (key === "event.ts") return String(ev.ts);
     const data = ev.data as Record<string, unknown>;
     if (key === "event.data") return esc === jsonEsc ? JSON.stringify(data) : esc(JSON.stringify(data));
-    const field = name.slice("event.data.".length);
-    const v = Object.hasOwn(data, field) ? data[field] : undefined;
+    // event.data.a.b: walk own fields only (a missing step = missing)
+    let v: unknown = data;
+    for (const field of name.slice("event.data.".length).split(".")) {
+      v = isRecord(v) && Object.hasOwn(v, field) ? v[field] : undefined;
+      if (v === undefined) break;
+    }
     if (v === undefined || v === null) return dflt !== undefined ? str(dflt) : esc === jsonEsc ? "null" : "";
     if (typeof v === "string") return str(v);
     return esc === jsonEsc ? JSON.stringify(v) : esc(JSON.stringify(v));

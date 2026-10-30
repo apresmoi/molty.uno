@@ -12,6 +12,7 @@ export type ErrorCode =
   | "device_offline"
   | "device_timeout"
   | "audio_busy"
+  | "turn_claimed"
   | "unsupported"
   | "not_found"
   | "bad_link_code"

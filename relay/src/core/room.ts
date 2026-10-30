@@ -27,6 +27,12 @@
 // sees it); settings (`voicecfg`), the box's hello (`vbox`) and its last latencies
 // (`vstat`) live in KV. Each say/listen picks a provider by `voice_mode` (pickVoice).
 //
+// Shake to talk (core/turns.ts, docs/AGENT-LINK.md "Shake to talk"): a device shake event
+// naming a listen the device began by itself is adopted as a listen job (normal voice path);
+// heard speech becomes ONE `utterance` event and the latest turn (`turn` in KV), which the
+// first agent to say / talk claims. Section "Shake to talk" below; hooks in onEvt, command,
+// talk, runSay, runTalk, runListen.
+//
 // Firmware updates (core/updates.ts, core/releases.ts): the last hello's fw /
 // board / caps are kept (`devinfo`) so molty_updates answers while offline. A
 // token gets one `fw_notice` per newer release (`fw_seen`). molty_update is a
@@ -70,7 +76,8 @@ import {
   type JsonObject,
 } from "./protocol.js";
 import { type Clock, type KV, sleep } from "./store.js";
-import { AGENT_EVENT_TYPES, type AgentEvent, INBOX_LIMITS, SAMPLE_EVENTS, SKILL_EVENT, agentEventData, eventId } from "./events.js";
+import { AGENT_EVENT_TYPES, type AgentEvent, INBOX_LIMITS, SAMPLE_EVENTS, SKILL_EVENT, UTTERANCE_EVENT, agentEventData, eventId } from "./events.js";
+import { LISTEN_ADOPT_FEATURE, LOCAL_LISTEN_RE, type TurnClaim, type TurnRecord, claimTurn, turnTimings, utteranceData } from "./turns.js";
 import { FEATURES, SKILL_PATH, SKILL_VERSION, type SkillNotice, WHATS_NEW, compareVersions, skillNotice } from "./version.js";
 import type { ReleaseLookup, ReleaseSource } from "./releases.js";
 import { type DeviceFacts, type FirmwareBlock, CONSOLE_HINT, firmwareBlock, howToUpdate, installable, tooOld, updateActions } from "./updates.js";
@@ -356,7 +363,7 @@ interface PendingAsk {
 }
 type SpeakResult = { ok: true; start: number; ms: number; timings: JsonObject } | { ok: false; error: string };
 type ListenResult =
-  | { ok: true; start: number; text: string; reason: string; speech_ms?: number; duration_ms: number; peak: number; rms: number; timings: JsonObject }
+  | { ok: true; start: number; text: string; reason: string; speech_ms?: number; duration_ms: number; peak: number; rms: number; timings: JsonObject; ack?: string }
   | { ok: false; error: string };
 
 function concat(a: Int16Array, b: Int16Array): Int16Array {
@@ -388,6 +395,8 @@ const K = {
   voiceCfg: "voicecfg",
   vbox: "vbox",
   vstat: "vstat",
+  /** The latest human turn (shake to talk, core/turns.ts). */
+  turn: "turn",
 };
 
 /** Device-facing name of a voice box pairing (the console shows it next to the code). */
@@ -571,7 +580,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     }
     if (hello.link_code) await this.kv.put(K.link, { code: hello.link_code, at: this.clock.now() });
     await this.kv.put<DevInfo>(K.devinfo, { fw: hello.fw ?? null, board: hello.board ?? null, caps: hello.caps ?? null, at: this.clock.now() });
-    sock.sendText(JSON.stringify({ t: "welcome" }));
+    // features: what this relay does for the device (listen_adopt: shake to talk, core/turns.ts)
+    sock.sendText(JSON.stringify({ t: "welcome", features: [LISTEN_ADOPT_FEATURE] }));
     // Back from an update's reboot (or a reconnect during one): settle it by the version it runs.
     await this.settleUpdate(hello.fw ?? null);
     // After a deploy the device reconnects: tell push-mode agents the skill changed.
@@ -606,6 +616,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (frame.name === "link_code") await this.onLinkCode(data.link_code);
     if (frame.name === "answer") return this.onAnswer(data); // its inbox event is appended when the ask job ends
     if (frame.name === "update") return this.onUpdateEvent(data); // relay-internal: drives the molty_update job
+    if (frame.name === "shake") return this.onShake(data); // may start the shake's listen job
     const clean = agentEventData(frame.name, data);
     if (clean) await this.appendEvent(frame.name, clean);
   }
@@ -642,7 +653,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     for (const prefix of ["tok:", "pair:", "job:", "ev:", "cur:", "whq:"]) {
       for (const key of (await this.kv.list(prefix)).keys()) await this.kv.delete(key);
     }
-    for (const key of [K.device, K.link, K.pairCurrent, K.evSeq, K.evRate, K.skillEv, K.origin, K.devinfo, K.upd, K.voiceCfg, K.vbox, K.vstat]) await this.kv.delete(key);
+    for (const key of [K.device, K.link, K.pairCurrent, K.evSeq, K.evRate, K.skillEv, K.origin, K.devinfo, K.upd, K.voiceCfg, K.vbox, K.vstat, K.turn]) await this.kv.delete(key);
     // Its token is gone with the rest: so is the voice box.
     this.closeBoxes(() => true, CLOSE_UNAUTHORIZED, "device forgotten");
     this.log("device forgotten", { device: this.deviceId });
@@ -708,10 +719,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   async command(token: string, name: string, args: unknown): Promise<Outcome> {
     const a = await this.agentAuth(token);
     if ("ok" in a) return a;
-    return this.ride(a, await this.runCommand(a.rec, name, args));
+    return this.ride(a, await this.runCommand(a.rec, name, args, a.hash));
   }
 
-  private async runCommand(agent: TokenRecord, name: string, args: unknown): Promise<Outcome> {
+  private async runCommand(agent: TokenRecord, name: string, args: unknown, hash = ""): Promise<Outcome> {
     let cmd;
     try {
       cmd = validateCommand(name, args);
@@ -731,6 +742,12 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       if (cmd.name === "listen") {
         const w = this.listenWindow(cmd.args.ms as number | undefined);
         if (!w.ok) return w;
+      }
+      if (cmd.name === "say") {
+        // a human turn is open: the first answer claims it, other agents get turn_claimed (not audio_busy)
+        const c = await this.claim(hash, cmd.in_reply_to);
+        if (!c.ok) return c;
+        if (c.result.turn) return this.startJob("say", { ...cmd.args, turn: c.result.turn as JsonObject, called: this.clock.now() });
       }
       return this.startJob(cmd.name as "say" | "listen", cmd.args);
     }
@@ -909,7 +926,11 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       const w = this.listenWindow(args.listen_ms);
       if (!w.ok) return w;
     }
-    const started = await this.startJob("talk", args as unknown as JsonObject);
+    // a human turn is open: the first answer claims it, other agents get turn_claimed (not audio_busy)
+    const c = await this.claim(a.hash, args.in_reply_to);
+    if (!c.ok) return c;
+    const turn: JsonObject = c.result.turn ? { turn: c.result.turn, called: t0 } : {};
+    const started = await this.startJob("talk", { ...(args as unknown as JsonObject), ...turn });
     if (!started.ok) return started;
     const job = started.result.job as string;
     const out = await this.runJob(job, Math.max(0, this.t.talkBudgetMs - (this.clock.now() - t0)));
@@ -1237,15 +1258,17 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const r = await this.speak(id, text, typeof args.voice === "string" ? args.voice : undefined, false);
     if (!r.ok) return this.finishJob(id, { status: "failed", error: r.error });
     const timings: JsonObject = { queue: r.start - created, ...r.timings, total: this.clock.now() - created };
+    if (isRecord(args.turn)) timings.turn = this.answerTimings(args, r.start + (r.timings.first_audio as number));
     this.logTimings(id, "say", timings);
     await this.finishJob(id, { status: "done", result: { ms: r.ms, text, timings } });
   }
 
   private async runListen(id: string, args: JsonObject, created: number) {
     await this.setJob(id, { status: "running" });
-    const { ms, ...listenArgs } = args;
+    const { ms, trigger, ...listenArgs } = args;
     const r = await this.record(id, ms as number | undefined, listenArgs);
     if (!r.ok) return this.finishJob(id, { status: "failed", error: r.error });
+    if (trigger === "shake") await this.emitUtterance(id, r);
     const timings: JsonObject = { queue: r.start - created, ...r.timings, total: this.clock.now() - created };
     this.logTimings(id, "listen", timings);
     const extra: JsonObject = r.speech_ms !== undefined ? { speech_ms: r.speech_ms } : {};
@@ -1255,6 +1278,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   /** say (optional) then listen, one job holding the audio lock across both, so nothing slips in between. */
   private async runTalk(id: string, args: TalkArgs, created: number) {
     await this.setJob(id, { status: "running" });
+    const reply = args as unknown as JsonObject; // talk() adds {turn, called} when it answers a human turn
     const ms: JsonObject = {};
     const timings: JsonObject = { queue: this.clock.now() - created };
     const result: JsonObject = {};
@@ -1267,7 +1291,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       ms.tts_first_audio = (s.timings.first_audio as number) ?? 0;
       ms.speech = (s.timings.play as number) ?? 0;
       timings.say = s.timings;
-    }
+      if (reply.turn) timings.turn = this.answerTimings(reply, s.start + (ms.tts_first_audio as number));
+    } else if (reply.turn) timings.turn = this.answerTimings(reply);
     if (args.listen) {
       const l = await this.record(id, args.listen_ms, { ...args.vad, ...(args.ring_color !== undefined ? { ring_color: args.ring_color } : {}), ...(args.ack !== undefined ? { ack: args.ack } : {}) });
       if (!l.ok) return this.finishJob(id, { status: "failed", error: l.error });
@@ -1706,6 +1731,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         voice: served,
         ...(fallback ? { voice_fallback: fallback } : {}),
       },
+      ...(buf.deviceAck ? { ack: buf.deviceAck } : {}),
     };
   }
 
@@ -1793,6 +1819,81 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       }
       buf.wake?.();
     }
+  }
+
+
+  // =====================================================================
+  // Shake to talk (core/turns.ts, docs/AGENT-LINK.md "Shake to talk")
+  // =====================================================================
+
+  /**
+   * Device `shake`. With `listen` (the local id of the listen the device began on it), the relay
+   * adopts that listen as a job — or declines it (listen_stop) when audio is busy or the board
+   * has no mic. The agents' shake event then says `listening: true` and carries the `turn_id`
+   * its utterance will have. The plain shake is appended either way (rate-capped as ever).
+   */
+  private async onShake(data: Record<string, unknown>) {
+    const clean = agentEventData("shake", data);
+    if (!clean) return;
+    if (typeof data.listen === "string" && LOCAL_LISTEN_RE.test(data.listen)) {
+      const job = await this.adoptShake(data.listen);
+      if (job) Object.assign(clean, { listening: true, turn_id: job });
+    }
+    await this.appendEvent("shake", clean);
+  }
+
+  /** The shake's listen as a relay listen job (`cmd listen {adopt}`), or declined. Returns the job id. */
+  private async adoptShake(local: string): Promise<string | undefined> {
+    const caps = this.liveSocket()?.getMeta()?.caps;
+    const started = !caps || caps.includes("listen") ? await this.startJob("listen", { adopt: local, trigger: "shake" }) : fail("unsupported");
+    if (started.ok) return started.result.job as string;
+    // audio busy (a say / listen crossed the shake): the device ends its listen quietly
+    void this.sendCmd("listen_stop", { job: local, reason: "no_speech" }).then((r) => {
+      if (!r.ok) this.log("shake listen decline failed", { device: this.deviceId, error: r.error });
+    });
+    this.log("shake listen declined", { device: this.deviceId, error: started.error });
+    return undefined;
+  }
+
+  /**
+   * The shake's listen ended. Heard words → the latest turn (KV, before the event so the
+   * fastest answer finds it) and ONE `utterance` event to every agent (inbox + webhooks).
+   * Nobody spoke (no_speech, or STT heard nothing): nothing at all.
+   */
+  private async emitUtterance(id: string, r: Extract<ListenResult, { ok: true }>) {
+    const text = r.text.trim();
+    if (!text) return;
+    await this.kv.put<TurnRecord>(K.turn, { id, at: this.clock.now() });
+    const data = utteranceData({
+      turn_id: id,
+      text,
+      reason: r.reason,
+      speech_ms: r.speech_ms ?? r.duration_ms,
+      stt_ms: (r.timings.stt as number) ?? 0,
+      trigger: "shake",
+      caps: this.liveSocket()?.getMeta()?.caps ?? [],
+      ack: r.ack,
+      voice: await this.voiceName(),
+    });
+    // agent-facing, one per turn: not subject to the device event rate cap
+    await this.appendEvent(UTTERANCE_EVENT, data, true);
+  }
+
+  /** A say / talk against the latest turn (claimTurn), the claim written atomically. */
+  private async claim(hash: string, inReplyTo: string | undefined): Promise<Outcome<{ turn?: JsonObject }>> {
+    const now = this.clock.now();
+    const c = await this.kv.update<TurnRecord, TurnClaim>(K.turn, (cur) => {
+      const out = claimTurn(cur, hash, inReplyTo, now);
+      return out.ok && out.next ? { next: out.next, result: out } : { result: out };
+    });
+    if (!c.ok) return fail("turn_claimed", `another agent is already answering the human's turn ${c.turn}: stay quiet (or answer the next one)`, { turn_id: c.turn });
+    return { ok: true, result: c.turn ? { turn: c.turn as unknown as JsonObject } : {} };
+  }
+
+  /** timings.turn of an answer: the call and its first audio, in ms after the utterance. */
+  private answerTimings(args: JsonObject, firstAudioAt?: number): JsonObject {
+    const turn = args.turn as unknown as { id: string; at: number };
+    return turnTimings(turn, args.called as number, firstAudioAt);
   }
 
   // =====================================================================
