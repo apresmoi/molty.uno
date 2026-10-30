@@ -8,7 +8,7 @@ import { encodeWav } from "../src/core/audio.js";
 import { decodeAudioFrame, encodeAudioFrame } from "../src/core/protocol.js";
 import type { ReleaseSource } from "../src/core/releases.js";
 import type { DeviceRoom } from "../src/core/room.js";
-import { PcmFeed, splitSpeech, synthesize } from "../src/core/speech.js";
+import { PcmFeed, speechWords, splitSpeech, synthesize } from "../src/core/speech.js";
 import type { TtsOptions } from "../src/voice/types.js";
 import { handleMcp } from "../src/surfaces/mcp.js";
 import { handleRest } from "../src/surfaces/rest.js";
@@ -37,7 +37,7 @@ interface Mic {
 
 /** A device that answers cmds, "plays" say streams (say.done when the end frame arrives) and streams mic audio for listen. */
 function device(room: DeviceRoom, sock: FakeSocket, mic: Mic = {}) {
-  const log: Array<{ at: number; kind: string; name?: string; args?: any; end?: boolean; bytes?: number }> = [];
+  const log: Array<{ at: number; kind: string; name?: string; args?: any; end?: boolean; bytes?: number; head?: any }> = [];
   let held: { job: string; n: number } | undefined;
   /** holdEnd: the device ends the held listen now, with these end-frame extras. */
   const endListen = (extra: Record<string, unknown>) => {
@@ -78,7 +78,10 @@ function device(room: DeviceRoom, sock: FakeSocket, mic: Mic = {}) {
   sock.sendBinary = (b: Uint8Array) => {
     origBin(b);
     const fr = decodeAudioFrame(b)!;
-    log.push({ at: Date.now(), kind: "frame", end: fr.header.end, bytes: fr.payload.byteLength });
+    const nl = b.indexOf(10);
+    const head = JSON.parse(new TextDecoder().decode(nl < 0 ? b : b.subarray(0, nl)));
+    expect(nl < 0 ? b.byteLength : nl).toBeLessThanOrEqual(512);
+    log.push({ at: Date.now(), kind: "frame", end: fr.header.end, bytes: fr.payload.byteLength, head });
     if (fr.header.end && mic.sayDoneMs !== null)
       setTimeout(() => {
         log.push({ at: Date.now(), kind: "say.done" });
@@ -546,6 +549,96 @@ describe("listen window", () => {
     w.dev.endListen({ reason: "turn_end" });
     const v = (await w.room.job(w.token, job, 3000)) as any;
     expect(v.result).toMatchObject({ status: "done", result: { duration_ms: 31000 } });
+  });
+});
+
+describe("say word cues (the text follows the voice)", () => {
+  const CUE_CAPS = ["say", "say_cues", "listen"];
+  const frames = (w: Awaited<ReturnType<typeof setup>>) => w.dev.log.filter((l) => l.kind === "frame");
+  const allCues = (w: Awaited<ReturnType<typeof setup>>) => frames(w).flatMap((f) => (f.head.w ?? []) as Array<[number, number]>);
+
+  it("firmware with say_cues: say {cues:true}, every word cued once on the stream's timeline, in proportion to characters without timings", async () => {
+    const w = await setup({}, { caps: CUE_CAPS });
+    w.voice.ttsSamples = 16000; // 1 s for the one segment
+    const job = ((await w.room.command(w.token, "say", { text: "hi there wonderful world" })) as any).result.job;
+    await w.room.job(w.token, job, 3000);
+    expect(w.dev.log.find((l) => l.name === "say")!.args.cues).toBe(true);
+    const c = allCues(w);
+    expect(c.map((x) => x[0])).toEqual([0, 1, 2, 3]);
+    // chars before each word (+1 per word): 0, 3, 9, 19 of 25 → of 16000 samples
+    expect(c.map((x) => x[1])).toEqual([0, 1920, 5760, 12160]);
+    // a cue goes out no later than the frame holding its audio
+    let sent = 0;
+    for (const f of frames(w)) {
+      for (const [, smp] of (f.head.w ?? []) as Array<[number, number]>) expect(smp).toBeGreaterThanOrEqual(0);
+      sent += f.bytes! / 2;
+    }
+    expect(sent).toBe(16000);
+  });
+
+  it("older firmware (no say_cues): no cues arg, no cues in the frames", async () => {
+    const w = await setup();
+    const job = ((await w.room.command(w.token, "say", { text: "hi there" })) as any).result.job;
+    await w.room.job(w.token, job, 3000);
+    expect(w.dev.log.find((l) => l.name === "say")!.args).not.toHaveProperty("cues");
+    expect(allCues(w)).toEqual([]);
+  });
+
+  it("segments: later sentences are cued after the audio before them (the device's timeline, not the segment's)", async () => {
+    const w = await setup({}, { caps: CUE_CAPS });
+    w.voice.ttsSamples = 8000;
+    const job = ((await w.room.command(w.token, "say", { text: "One two. Three four." })) as any).result.job;
+    await w.room.job(w.token, job, 3000);
+    expect(w.voice.ttsCalls.map((c) => c.text)).toEqual(["One two.", "Three four."]);
+    const c = new Map(allCues(w));
+    expect([...c.keys()]).toEqual([0, 1, 2, 3]);
+    expect(c.get(0)).toBe(0);
+    expect(c.get(2)).toBe(8000); // the second segment starts where the first one's audio ended
+    expect(c.get(3)).toBeGreaterThan(8000);
+  });
+
+  it("long texts: only words the device can cue (< 512), headers within 512 B, the rest in header-only frames before the end", async () => {
+    const w = await setup({}, { caps: CUE_CAPS });
+    w.voice.ttsSamples = 1600;
+    const text = Array.from({ length: 600 }, (_, i) => `w${i}`).join(" ");
+    const job = ((await w.room.command(w.token, "say", { text })) as any).result.job;
+    expect(await w.room.job(w.token, job, 10000)).toMatchObject({ ok: true, result: { status: "done" } });
+    const c = allCues(w);
+    expect(c.map((x) => x[0])).toEqual(Array.from({ length: 512 }, (_, i) => i));
+    const fs = frames(w);
+    expect(fs.at(-1)!.end).toBe(true);
+    expect(fs.filter((f) => f.end)).toHaveLength(1);
+    expect(fs.some((f) => f.bytes === 0 && !f.end && f.head.w?.length)).toBe(true);
+  });
+
+  it("words are counted as the device's reader counts them (ASCII whitespace only)", () => {
+    expect(speechWords("a\tb  c\nd\u00a0e\r\nf\vg\fh ")).toEqual(["a", "b", "c", "d\u00a0e", "f", "g", "h"]);
+    expect(speechWords("  ")).toEqual([]);
+  });
+
+  it("synthesize: a backend's own word timing wins; missing words are estimated; segment offsets add up", async () => {
+    const said: string[] = [];
+    const voice = {
+      name: "timed",
+      async tts() { return new Int16Array(0); },
+      async *ttsStream(text: string, opts: any) {
+        said.push(text);
+        const words = text.split(" ");
+        // times for every word but the last
+        words.slice(0, -1).forEach((_, i) => opts.onWord(i, 0.1 * i + 0.05));
+        yield new Int16Array(16000);
+      },
+      async stt() { return ""; },
+    };
+    const feed = new PcmFeed();
+    await synthesize(voice as any, ["a b c.", "d e."], {}, feed, { setTimeout: (f, ms) => setTimeout(f, ms), clearTimeout: (h) => clearTimeout(h as any) }, 2000);
+    const c = new Map(feed.takeCues());
+    expect([...c.keys()].sort()).toEqual([0, 1, 2, 3, 4]);
+    expect(c.get(0)).toBe(800);
+    expect(c.get(1)).toBe(2400);
+    expect(c.get(2)).toBe(Math.round((16000 * 4) / 7)); // estimated: "a b " of "a b c. " (7)
+    expect(c.get(3)).toBe(16000 + 800); // segment 2's own timing, after segment 1's audio
+    expect(c.get(4)).toBe(16000 + Math.round((16000 * 2) / 5)); // "d " of "d e. " (5)
   });
 });
 

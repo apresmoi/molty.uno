@@ -75,11 +75,12 @@ Molty (home Wi-Fi) ──outbound WSS──▶ molty-relay (Cloudflare Worker + 
 
 ## Device ↔ relay wire (WS/WSS `/v1/device?id=<device_id>`)
 
-First frame from device: `{"t":"hello","id":"molty-k7m2w9c4ya","key":"<b64 device_key>","fw":"...","caps":["fluid","say","listen","listen_stop","listen_window","show","mood","creature","ask"],"board":"waveshare-esp32-s3-touch-lcd-1.46","link_code":"..."}`
+First frame from device: `{"t":"hello","id":"molty-k7m2w9c4ya","key":"<b64 device_key>","fw":"...","caps":["fluid","say","say_cues","listen","listen_stop","listen_window","show","mood","creature","ask"],"board":"waveshare-esp32-s3-touch-lcd-1.46","link_code":"..."}`
 → relay answers `{"t":"welcome"}` or closes with 4401.
 
 `board` names the hardware (`firmware/boards/`, see [PORTING.md](PORTING.md)). `caps`
-lists `say` / `listen` only when the board has a speaker / microphone (`listen_stop` with
+lists `say` / `listen` only when the board has a speaker / microphone (`say_cues` with `say`,
+firmware that shows a say's words as they are spoken; `listen_stop` with
 `listen`, firmware that can end a listen on the relay's word; `listen_window` with `listen`,
 firmware whose window is optional, 0..30000 or unlimited — see `listen` below), `ask` only when it
 has a touch screen (and firmware that implements `ask`), and `update` when the firmware can
@@ -114,7 +115,7 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
 - Stream IDs allow 1–128 characters; omitted `end` means false. Header-only binary
   frames (without a newline/payload) are accepted. PCM payloads contain whole int16 samples.
   Text-frame limit is 64 KiB, independently of the audio-frame limit.
-- `say`: relay sends `cmd say {job,text,ms,rate:16000,voice?}`; device starts `speaking`
+- `say`: relay sends `cmd say {job,text,ms,rate:16000,voice?,cues?}`; device starts `speaking`
   and text immediately, then acknowledges. Relay sends 320 ms PCM frames (`s` = job id),
   with three lead frames and paced delivery thereafter. TTS is streamed: the relay sends
   `cmd say` once the first sentence is synthesised and streams while the rest is still being
@@ -125,7 +126,20 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   the ring **and I2S DMA**, device returns to idle (unless an explicit mood arrived during the
   say) and sends
   `{"t":"evt","name":"say.done","data":{"job":"..."}}`. Failed/cancelled playback
-  does not emit successful completion. Reader timing remains approximate (no word timestamps).
+  does not emit successful completion.
+  **Word-timed text (cap `say_cues`)**: the relay adds `cues:true` and the frames' headers carry
+  word cues `"w":[[word, sample], ...]` (≤ 20 per header; word = 0-based index of the text's
+  whitespace-split words, as the speed reader counts them, < 512; sample = 16 kHz offset from
+  the stream's first sample). A cue goes out with or before the frame holding its audio; cues
+  that do not fit before the end go in header-only frames just before it. The device holds the
+  reader on the first word and shows word k once the speaker has PLAYED up to its cue (samples
+  written to I2S minus the DMA ring — never ahead of the voice, at most one 32 ms write late);
+  when playback is over, the remaining cued words, then the reader's own pace. Cues come from
+  the voice box's own word timing (Kyutai's TTS `Text {start_s}`, `tts.word` below, offset by
+  the audio of the segments before it); any word without one — every word with the cloud — is
+  estimated when its segment's audio is complete, from its real length in proportion to
+  characters. A malformed cue list is a malformed frame (the stream ends). Firmware without
+  the cap gets neither: its reader runs at its own pace as before.
   `talk` requires this `say.done` before it opens the mic: none within the streamed playback
   time + 2.5 s fails the turn with `playback_timeout` (REST 504); an elapsed estimate is never
   taken as playback.
@@ -837,6 +851,7 @@ the request id in `s`.
 | relay → box | `{"t":"voice.welcome","device_id","mode","voice"}` |
 | relay → box | `{"t":"tts","id","text","voice"?}`: one sentence-sized segment (the relay keeps one segment of lookahead) |
 | box → relay | binary frames `s=id` (PCM16 @16 kHz, as synthesised), then `{"t":"tts.end","id"}` or `{"t":"tts.end","id","error"}` |
+| box → relay | `{"t":"tts.word","id","i","text","start_s"}` (optional, in order, before the tts.end): word `i` of the text (whitespace-split) is spoken from `start_s` s into this tts's audio — moshi-server's `Text {text, start_s, stop_s}` (text step / 12.5 Hz; the audio starts with text step 0's voice). The relay turns it into the device's word cues; malformed ones are ignored |
 | relay → box | `{"t":"tts.cancel","id"}`: nobody will play it (device gone, turn failed, segment timeout) |
 | relay → box | `{"t":"stt.start","id","rate":16000,"no_speech_ms"?}` at listen start (`no_speech_ms` 1000..10000 only when the device VAD is off for this listen: the box then calls no_speech), binary frames `s=id` as Molty records, `{"t":"stt.end","id"}` at the device's end frame |
 | relay → box | `{"t":"stt.cancel","id"}`: no speech, or the listen failed |

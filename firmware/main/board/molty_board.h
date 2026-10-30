@@ -79,6 +79,7 @@ typedef struct {
     esp_err_t (*stream_write)(const int16_t *samples, size_t n);
     esp_err_t (*stream_drain)(void);                      /* until queued PCM has played */
     void      (*stream_end)(void);
+    uint32_t  (*stream_played)(void);                     /* optional: samples played since begin */
 } molty_speaker_ops_t;
 
 /* Microphone: blocking clip capture + one exclusive chunked stream, PCM16 mono. */
@@ -180,6 +181,9 @@ esp_err_t molty_speaker_stream_begin(uint32_t rate_hz);
 esp_err_t molty_speaker_stream_write(const int16_t *samples, size_t n);
 esp_err_t molty_speaker_stream_drain(void);
 void      molty_speaker_stream_end(void);
+/** Samples the speaker has played since stream_begin (the say's playback position);
+ *  0 without a speaker or when the board cannot tell. */
+uint32_t  molty_speaker_stream_played(void);
 
 esp_err_t molty_mic_record(uint32_t rate_hz, uint32_t ms, int16_t **out, size_t *n);
 esp_err_t molty_mic_stream_start(uint32_t rate_hz, uint32_t chunk_ms, uint8_t gain);

@@ -412,6 +412,9 @@ bool mole_audio_rx_stream_active(void)
  * including local HTTP callers; never let one caller reconfigure a live channel. */
 static portMUX_TYPE s_owner_lock = portMUX_INITIALIZER_UNLOCKED;
 static bool s_tx_owned, s_rx_owned;
+/* say playback position: samples handed to I2S since stream_begin, and the DMA ring
+ * they sit in before the DAC plays them (mole_audio_tx_stream_played) */
+static volatile uint32_t s_tx_written, s_tx_dma;
 static bool claim(bool *owner) {
     portENTER_CRITICAL(&s_owner_lock);
     bool ok = !*owner;
@@ -447,8 +450,18 @@ esp_err_t mole_audio_rx_start_stream(uint32_t rate, uint32_t ms, uint8_t gain) {
 esp_err_t mole_audio_tx_stream_begin(uint32_t rate) {
     if (!claim(&s_tx_owned)) return ESP_ERR_INVALID_STATE;
     esp_err_t e = mole_audio_tx_init(rate);
-    if (e != ESP_OK) release(&s_tx_owned);
-    return e;
+    if (e != ESP_OK) { release(&s_tx_owned); return e; }
+    i2s_chan_info_t info;
+    s_tx_written = 0;
+    s_tx_dma = i2s_channel_get_info(s_tx_chan, &info) == ESP_OK ? info.total_dma_buf_size / sizeof(int16_t) : 0;
+    return ESP_OK;
+}
+/* Samples the DAC has played since stream_begin: written minus the DMA ring's worth
+ * still queued (the writer blocks on a full ring, so it is full while PCM flows). After
+ * an underrun it lags by at most the ring (6 × 240 = 90 ms at 16 kHz), never leads. */
+uint32_t mole_audio_tx_stream_played(void) {
+    const uint32_t w = s_tx_written, d = s_tx_dma;
+    return w > d ? w - d : 0;
 }
 esp_err_t mole_audio_tx_stream_write(const int16_t *samples, size_t n) {
     int16_t buf[512];
@@ -459,6 +472,7 @@ esp_err_t mole_audio_tx_stream_write(const int16_t *samples, size_t n) {
         esp_err_t e = i2s_channel_write(s_tx_chan, buf, count * 2, &written, 1000);
         if (e != ESP_OK) return e;
         if (written != count * 2) return ESP_ERR_TIMEOUT;
+        s_tx_written += (uint32_t)count;
         samples += count; n -= count;
     }
     return ESP_OK;

@@ -81,6 +81,7 @@ esp_err_t molty_speaker_stream_begin(uint32_t);
 esp_err_t molty_speaker_stream_write(const int16_t *, size_t);
 esp_err_t molty_speaker_stream_drain(void);
 void molty_speaker_stream_end(void);
+uint32_t molty_speaker_stream_played(void);
 esp_err_t molty_mic_stream_start(uint32_t, uint32_t, uint8_t);
 esp_err_t molty_mic_stream_read(int16_t *, size_t, size_t *);
 void molty_mic_stream_stop(void);

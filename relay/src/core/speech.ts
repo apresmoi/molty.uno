@@ -58,6 +58,7 @@ export function splitSpeech(text: string): string[] {
  */
 export class PcmFeed {
   private readonly pieces: Int16Array[] = [];
+  private cues: Array<[number, number]> = [];
   done = false;
   error: unknown = undefined;
   private wake: (() => void) | undefined;
@@ -78,6 +79,15 @@ export class PcmFeed {
     this.error = error;
     this.poke();
     this.ac.abort(error);
+  }
+  /** A word cue: word `word` is spoken from sample `sample` of this feed's audio. */
+  cue(word: number, sample: number) {
+    if (this.done) return;
+    this.cues.push([word, sample]);
+  }
+  /** Removes and returns the cues queued so far, in order. */
+  takeCues(): Array<[number, number]> {
+    return this.cues.splice(0);
   }
   /** Removes and returns everything queued. */
   take(): Int16Array[] {
@@ -124,6 +134,22 @@ class TtsTimeout extends Error {
  * (segment i+1 starts when segment i starts). Each segment must finish within
  * `segmentTimeoutMs`. Resolves when the feed has ended (ok or error).
  */
+/** Words the way the device's speed reader counts them (whitespace-split, ASCII whitespace). */
+export function speechWords(text: string): string[] {
+  return text.split(/[ \t\r\n\v\f]+/).filter(Boolean);
+}
+
+/**
+ * Synthesises `segments` into `feed`, in order, with one segment of lookahead
+ * (segment i+1 starts when segment i starts). Each segment must finish within
+ * `segmentTimeoutMs`. Resolves when the feed has ended (ok or error).
+ *
+ * Word cues: every word of the utterance (counted across segments, as the device's
+ * reader counts them) gets one feed.cue(word, sample) on the feed's own sample
+ * timeline. A backend with timings (opts.onWord) cues them as it goes; any word left
+ * uncued when its segment ends is estimated from the segment's real duration, in
+ * proportion to characters.
+ */
 export async function synthesize(voice: VoiceProvider, segments: string[], opts: TtsOptions, feed: PcmFeed, timer: SynthTimer, segmentTimeoutMs: number): Promise<void> {
   const subs: PcmFeed[] = [];
   // The consumer ending the feed (device done / gone / failed) stops every segment now,
@@ -137,16 +163,42 @@ export async function synthesize(voice: VoiceProvider, segments: string[], opts:
     const sub = (subs[i] = new PcmFeed());
     void runSegment(voice, segments[i], opts, sub, timer, segmentTimeoutMs);
   };
+  let pushed = 0; // samples of the feed so far: the device's playback timeline
+  let wordBase = 0; // words of the earlier segments
   try {
     for (let i = 0; i < segments.length; i++) {
       start(i);
       start(i + 1);
       const sub = subs[i];
+      const segStart = pushed;
+      const words = speechWords(segments[i]);
+      const cued = new Set<number>();
+      const moveCues = () => {
+        for (const [w, s] of sub.takeCues()) {
+          if (w < 0 || w >= words.length || cued.has(w)) continue;
+          cued.add(w);
+          feed.cue(wordBase + w, segStart + s);
+        }
+      };
       for (;;) {
-        for (const p of sub.take()) feed.push(p);
+        for (const p of sub.take()) {
+          feed.push(p);
+          pushed += p.length;
+        }
+        moveCues();
         if (feed.done) return; // consumer gave up (device said done / went away / failed)
         if (sub.done) {
           if (sub.error !== undefined) throw sub.error;
+          // no timing from the backend for some (or all) words: from the segment's real
+          // length, in proportion to characters (a word starts after the ones before it)
+          const total = pushed - segStart;
+          const chars = words.reduce((n, w) => n + w.length + 1, 0);
+          let before = 0;
+          for (let k = 0; k < words.length; k++) {
+            if (!cued.has(k)) feed.cue(wordBase + k, segStart + Math.round((total * before) / chars));
+            before += words[k].length + 1;
+          }
+          wordBase += words.length;
           break;
         }
         await sub.waitFor((f, ms) => timer.setTimeout(f, ms), (h) => timer.clearTimeout(h), segmentTimeoutMs);
@@ -166,7 +218,7 @@ async function runSegment(voice: VoiceProvider, text: string, opts: TtsOptions, 
   // Ending the segment (timeout, or synthesize() stopping it) aborts sub.signal, which
   // the provider uses to cancel its request / stream: a stalled backend is torn down.
   const t = timer.setTimeout(() => sub.end(new TtsTimeout()), timeoutMs);
-  const o: TtsOptions = { ...opts, signal: sub.signal };
+  const o: TtsOptions = { ...opts, signal: sub.signal, onWord: (i, startS) => sub.cue(i, Math.max(0, Math.round(startS * 16000))) };
   try {
     if (voice.ttsStream) {
       for await (const p of voice.ttsStream(text, o)) {

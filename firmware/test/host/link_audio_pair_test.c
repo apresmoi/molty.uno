@@ -74,6 +74,13 @@ static int32_t ring_color = -9; static unsigned ring_colors;
 void mole_fluid_listen_color(int32_t rgb) { assert(!ring_on); ring_colors++; ring_color=rgb; }
 static uint32_t listen_setting = 30000;   /* the console's setting (mole_fluid.c, NVS) */
 uint32_t mole_fluid_listen_window(void) { return listen_setting; }
+/* the reader following a say (mole_fluid.c): every cue with the playback position it came at */
+static int cue_n, cue_last=-9, cue_ends, cue_hold; static int cue_w[64]; static uint32_t cue_at[64];
+void mole_fluid_text_cue(int w) {
+    if (w<0) { cue_hold++; cue_last=-1; assert(!sdk_text[0]); return; }   /* held BEFORE the text is set */
+    assert(w>cue_last && cue_n<64); cue_w[cue_n]=w; cue_at[cue_n++]=molty_speaker_stream_played(); cue_last=w;
+}
+void mole_fluid_text_cue_end(void) { cue_ends++; }
 static unsigned ask_cancels;
 void link_ask_cancel(void) { ask_cancels++; }
 const char *link_identity_code(void) { return "ABCDEFGH"; }
@@ -383,9 +390,51 @@ static void test_listen_window(void) {
     sdk_rx_chunks=0; sdk_rx_fill=stop_at_chunk_10; complete(record(&job)); sdk_rx_fill=NULL;
     assert(!strcmp(bin_reason,"turn_end") && sdk_rx_chunks==11);
 }
+/* a say frame with word cues in its header ("w"), 5120 samples of PCM */
+static esp_err_t receive_cued(unsigned seq,bool end,const char *w) {
+    static uint8_t frame[LINK_MESSAGE_MAX];
+    int n=snprintf((char *)frame,LINK_HEADER_MAX+1,"{\"s\":\"%s\",\"seq\":%u,\"kind\":\"pcm16\",\"rate\":16000,\"end\":%s%s%s}\n",
+                   s_job,seq,end?"true":"false",w?",\"w\":":"",w?w:"");
+    memset(frame+n,0x12,10240);
+    return link_audio_receive(frame,n+10240);
+}
+static bool say_with(const char *extra) {
+    char a[256]; snprintf(a,sizeof(a),"{\"job\":\"molty-abcdefghij.j_2\",\"text\":\"one two three four\",\"ms\":640,\"rate\":16000%s}",extra);
+    cJSON *args=cJSON_Parse(a),*res=NULL; sdk_text[0]=0;
+    esp_err_t e=link_audio_say(args,&res); cJSON_Delete(args); cJSON_Delete(res);
+    if (e!=ESP_OK) return false;
+    audio_job_t job; assert(xQueueReceive(s_jobs,&job,0)==pdTRUE && !job.listen); return true;
+}
+/* say {cues:true}: each word shows when the speaker has PLAYED up to its cue — never before,
+ * at most one 512-sample write after — and the rest when playback is over */
+static void test_say_cues(void) {
+    static const uint32_t at[4]={0,3000,6000,9000};
+    cue_n=0; cue_ends=cue_hold=0;
+    assert(say_with(",\"cues\":true") && cue_hold==1 && !strcmp(sdk_text,"one two three four"));
+    assert(receive_cued(0,false,"[[0,0],[1,3000]]")==ESP_OK);
+    assert(receive_cued(1,true,"[[2,6000],[3,9000]]")==ESP_OK);
+    complete(play());
+    assert(cue_n>=2 && cue_ends==1 && cue_last==3);
+    for (int i=0;i<cue_n;i++) {
+        const uint32_t due=at[cue_w[i]];
+        if (i==cue_n-1 && cue_w[i]==3) continue;          /* 9000 > the 8800 played before the drain: shown at the end */
+        assert(cue_at[i]>=due);                            /* never ahead of the voice */
+        assert(cue_at[i]-due<=512 || (i>0 && cue_at[i-1]<at[cue_w[i]-1]));   /* within one write */
+    }
+    /* a plain say (no cues arg): the reader keeps its own pace, no cue calls */
+    cue_n=0; cue_ends=cue_hold=0;
+    assert(say_with("")); assert(receive_cued(0,true,"[[0,0]]")==ESP_OK); complete(play());
+    assert(cue_n==0 && cue_ends==0 && cue_hold==0);
+    /* cues not a bool: refused */
+    assert(!say_with(",\"cues\":1") && !link_audio_busy());
+    /* a malformed cue list ends the stream like any malformed frame */
+    assert(say_with(",\"cues\":true"));
+    assert(receive_cued(0,false,"[[0]]")==ESP_ERR_INVALID_ARG);
+    complete(play()); assert(cue_ends==1 && !link_audio_busy());
+}
 int main(void) {
     assert(link_audio_init()==ESP_OK && link_pair_init()==ESP_OK);
-    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop(); test_listen_window();
+    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop(); test_listen_window(); test_say_cues();
     cJSON_Delete(sdk_sent); free(s_jobs); free(s_done); free(s_ring);
-    puts("LINK AUDIO/PAIR PASS: paced PCM, final playback drain, errors, cmd-time text/mood, explicit moods outlive jobs, pairing reasons, board caps, listening ring (+ ring_color), ask cancellation, listen_stop (turn_end), listen window (30 s, unlimited, setting)");
+    puts("LINK AUDIO/PAIR PASS: paced PCM, final playback drain, errors, cmd-time text/mood, explicit moods outlive jobs, pairing reasons, board caps, listening ring (+ ring_color), ask cancellation, listen_stop (turn_end), listen window (30 s, unlimited, setting), say word cues follow playback");
 }

@@ -5,6 +5,7 @@
 // socket `link()` returns at the moment a request starts.
 //
 //   relay → box  {"t":"tts","id","text","voice"?}      box → relay  pcm16 frames (s=id) … {"t":"tts.end","id","error"?}
+//                                                    box → relay  {"t":"tts.word","id","i","start_s"} per word (its timing)
 //   relay → box  {"t":"tts.cancel","id"}
 //   relay → box  {"t":"stt.start","id","rate":16000,"no_speech_ms"?}, pcm16 frames (s=id) as the device sends them,
 //                {"t":"stt.end","id"} | {"t":"stt.cancel","id"}
@@ -39,6 +40,7 @@ const TTS_IDLE_MS = 60000;
 interface TtsOp {
   ch: BoxChannel;
   feed: PcmFeed;
+  onWord?: (i: number, startS: number) => void;
 }
 interface SttOp {
   ch: BoxChannel;
@@ -98,7 +100,7 @@ export class RemoteVoiceProvider implements VoiceProvider {
     const ch = this.channel();
     const id = this.newId("t");
     const feed = new PcmFeed();
-    this.ttsOps.set(id, { ch, feed });
+    this.ttsOps.set(id, { ch, feed, onWord: opts.onWord });
     const cancel = () => {
       if (feed.done) return;
       feed.end(opts.signal?.reason ?? new Error("tts cancelled"));
@@ -219,6 +221,12 @@ export class RemoteVoiceProvider implements VoiceProvider {
       const op = this.ttsOps.get(id);
       if (!op || !op.ch.same(from)) return;
       op.feed.end(typeof frame.error === "string" && frame.error ? new Error(BOX_ERROR) : undefined);
+    } else if (frame.t === "tts.word") {
+      const op = this.ttsOps.get(id);
+      const i = frame.i, s = frame.start_s;
+      if (!op || !op.ch.same(from) || op.feed.done) return;
+      if (typeof i !== "number" || !Number.isInteger(i) || i < 0 || i > 100000 || typeof s !== "number" || !Number.isFinite(s) || s < 0 || s > 3600) return;
+      op.onWord?.(i, s);
     } else if (frame.t === "stt.turn_end") {
       const op = this.sttOps.get(id);
       if (op && op.ch.same(from)) op.turnEnd(frame.reason === "no_speech" ? "no_speech" : undefined);

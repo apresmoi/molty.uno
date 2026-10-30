@@ -41,6 +41,13 @@ static const char *s_end_reason;                       /* diag: why the last lis
 static uint32_t s_speech_ms;
 static unsigned s_mood_gen0;                           /* link_cmd_mood_gen() when the job started */
 
+/* say word cues (cap say_cues): word i of the text is spoken from sample s_cue[i] of the
+ * stream (UINT32_MAX = not cued yet), filled from the frames' headers; the play loop
+ * reveals each word on screen once the speaker has played up to it */
+static volatile uint32_t s_cue[LINK_CUE_WORDS];
+static bool s_cued;                                    /* this say follows cues */
+static int  s_cue_next;                                /* first word not shown yet */
+
 bool link_audio_busy(void) { return s_busy; }
 void link_audio_cancel(void) { atomic_store(&s_cancel, true); }
 
@@ -50,10 +57,21 @@ static void drain(void)
     while ((p = xRingbufferReceive(s_ring, &n, 0))) vRingbufferReturnItem(s_ring, p);
 }
 
+/* Show the words whose cue the speaker has played (in order: a word waits for the ones
+ * before it). all: playback is over — every cued word. */
+static void cue_follow(bool all)
+{
+    if (!s_cued) return;
+    const uint32_t played = all ? UINT32_MAX : molty_speaker_stream_played();
+    int k = s_cue_next;
+    while (k < LINK_CUE_WORDS && s_cue[k] != UINT32_MAX && s_cue[k] <= played) k++;
+    if (k > s_cue_next) { s_cue_next = k; mole_fluid_text_cue(k - 1); }
+}
+
 static esp_err_t play(void)
 {
     esp_err_t e = molty_speaker_stream_begin(16000);
-    if (e != ESP_OK) return e;
+    if (e != ESP_OK) { if (s_cued) mole_fluid_text_cue_end(); return e; }
     while (!atomic_load(&s_cancel)) {
         size_t n;
         void *pcm = xRingbufferReceiveUpTo(s_ring, &n, pdMS_TO_TICKS(50), 1024);
@@ -68,11 +86,16 @@ static esp_err_t play(void)
             vRingbufferReturnItem(s_ring, pcm);
             if (e != ESP_OK) break;
         }
+        cue_follow(false);   /* each ≤ 32 ms write: the words the speaker has reached */
     }
     /* i2s_channel_write queues DMA; draining the software ring is not the
      * playback boundary. Keep ownership until the final PCM has left DMA. */
     if (e == ESP_OK && !atomic_load(&s_cancel)) e = molty_speaker_stream_drain();
     molty_speaker_stream_end();
+    if (s_cued) {                        /* played out: the last words, then the reader's own pace */
+        if (e == ESP_OK && !atomic_load(&s_cancel)) cue_follow(true);
+        mole_fluid_text_cue_end();
+    }
     return atomic_load(&s_cancel) ? ESP_ERR_INVALID_STATE : e;
 }
 
@@ -226,6 +249,10 @@ static esp_err_t start(const cJSON *args, bool listen, cJSON **out)
     else if (!cJSON_IsNumber(ms) || ms->valuedouble < 0 || ms->valuedouble > INT_MAX ||
              ms->valuedouble != ms->valueint) return ESP_ERR_INVALID_ARG;
     if (!listen && (!cJSON_IsString(text) || !text->valuestring[0] || strlen(text->valuestring) > 4096)) return ESP_ERR_INVALID_ARG;
+    /* say {cues: true} (cap say_cues): the frames carry word cues; the text follows the voice */
+    const cJSON *cues = cJSON_GetObjectItemCaseSensitive(args, "cues");
+    if (!listen && cues && !cJSON_IsBool(cues)) return ESP_ERR_INVALID_ARG;
+    const bool cued = !listen && cJSON_IsTrue(cues);
     const vad_cfg_t vad_def = VAD_CFG_DEFAULT;
     bool vad = vad_def.enabled;
     unsigned end_silence_ms = vad_def.end_silence_ms, no_speech_ms = vad_def.no_speech_ms;
@@ -242,18 +269,23 @@ static esp_err_t start(const cJSON *args, bool listen, cJSON **out)
         e = link_cmd_mood("listening", -1);
     } else {
         e = mole_creature_select("fluid");
+        if (e == ESP_OK && cued) {               /* hold the reader on the first word until cued */
+            for (int i = 0; i < LINK_CUE_WORDS; i++) s_cue[i] = UINT32_MAX;
+            mole_fluid_text_cue(-1);
+        }
         if (e == ESP_OK) e = link_ui_set_text(text->valuestring, (int)strlen(text->valuestring));
         /* mood first: it selects the creature view; the text state then wins. */
         if (e == ESP_OK) e = link_cmd_mood("speaking", -1);
         if (e == ESP_OK) e = mole_creature_state_set("{\"state\":\"text\"}");
     }
-    if (e != ESP_OK) { cJSON_Delete(result); return e; }
+    if (e != ESP_OK) { if (cued) mole_fluid_text_cue_end(); cJSON_Delete(result); return e; }
     link_ask_cancel();   /* say / listen, once accepted, take the screen from a pending question */
     audio_job_t job = {.listen = listen, .ms = listen ? (unsigned)rec_ms : (unsigned)ms->valueint,
                        .vad = vad, .end_silence_ms = end_silence_ms, .no_speech_ms = no_speech_ms};
     strcpy(job.job, j->valuestring); strcpy(s_job, job.job);
     s_mood_gen0 = link_cmd_mood_gen();   /* after our own listening/speaking mood */
     s_seq = 0; s_stat_frames = 0; s_stat_bytes = 0; s_busy = true; s_listen = listen; s_last_frame = esp_timer_get_time();
+    s_cued = cued; s_cue_next = 0;
     atomic_store(&s_end, false); atomic_store(&s_cancel, false); atomic_store(&s_stop, false);
     xQueueSend(s_jobs, &job, 0);
     *out = result;
@@ -290,6 +322,7 @@ esp_err_t link_audio_receive(const void *data, size_t len)
     }
     /* Backpressure stays on link tasks. 16 KB takes 512 ms at PCM16/16k;
      * bounded waits let TCP pace a relay sending faster than the speaker. */
+    if (s_cued) for (int i = 0; i < h.ncues; i++) s_cue[h.cue_word[i]] = h.cue_sample[i];   /* before its audio */
     if (n && xRingbufferSend(s_ring, pcm, n, pdMS_TO_TICKS(750)) != pdTRUE) {
         link_audio_cancel(); return ESP_ERR_NO_MEM;
     }

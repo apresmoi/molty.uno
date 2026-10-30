@@ -71,7 +71,8 @@ class FakeMoshi:
             if d["type"] == "Text":
                 req["words"].append(d["text"])
             elif d["type"] == "Eos":
-                for _ in req["words"]:
+                for i, w in enumerate(req["words"]):   # like moshi-server: the word's timing, then its audio
+                    await ws.send(msgpack.packb({"type": "Text", "text": w, "start_s": 0.2 * i, "stop_s": 0.2 * i + 0.16}, use_single_float=True))
                     await ws.send(msgpack.packb({"type": "Audio", "pcm": [0.25] * 2400}, use_single_float=True))
                     await ws.send(msgpack.packb({"type": "Audio", "pcm": [0.25] * 2400}, use_single_float=True))
                 await ws.close()
@@ -103,6 +104,7 @@ def test_tts_and_streaming_stt_through_the_bridge():
         # TTS: an unsafe voice name falls back to the default; a normal one passes through
         audio = {"t1": b"", "t2": b""}
         ends = {}
+        words = []
         await ws.send(json.dumps({"t": "tts", "id": "t1", "text": "hello molty there", "voice": "../../etc/passwd"}))
         await ws.send(json.dumps({"t": "tts", "id": "t2", "text": "hi", "voice": "expresso/ex04-ex02_happy_001_channel1_118s.wav"}))
         while len(ends) < 2:
@@ -115,6 +117,9 @@ def test_tts_and_streaming_stt_through_the_bridge():
                 d = json.loads(m)
                 if d["t"] == "tts.end":
                     ends[d["id"]] = d
+                if d["t"] == "tts.word":
+                    words.append(d)
+        seen["tts_words"] = words
         seen["tts_audio"] = audio
         seen["tts_end"] = ends
 
@@ -162,6 +167,10 @@ def test_tts_and_streaming_stt_through_the_bridge():
     assert moshi.tts_requests[0]["words"] == ["hello", "molty", "there"]
     assert moshi.tts_requests[1]["voice"] == "expresso/ex04-ex02_happy_001_channel1_118s.wav"
     assert seen["tts_end"]["t1"] == {"t": "tts.end", "id": "t1"}
+    # the server's word timing, forwarded per tts id with its index in the text
+    w1 = [w for w in seen["tts_words"] if w["id"] == "t1"]
+    assert [(w["i"], w["text"], w["start_s"]) for w in w1] == [(0, "hello", 0.0), (1, "molty", 0.2), (2, "there", 0.4)]
+    assert [(w["i"], w["text"]) for w in seen["tts_words"] if w["id"] == "t2"] == [(0, "hi")]
     pcm = np.frombuffer(seen["tts_audio"]["t1"], dtype="<i2")
     assert len(pcm) == 3 * 4800 * 2 // 3  # 24 kHz -> 16 kHz, every sample accounted for
     assert abs(int(np.median(pcm[200:-200])) - 8192) < 50  # 0.25 * 32768

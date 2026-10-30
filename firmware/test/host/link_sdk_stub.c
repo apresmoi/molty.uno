@@ -112,8 +112,10 @@ const char *mole_creature_current(void) { return "fluid"; }
 esp_err_t mole_creature_state_get(char **out) { *out=strdup(sdk_saved_state); return ESP_OK; }
 esp_err_t sdk_state_error, sdk_select_error;
 esp_err_t mole_creature_state_set(const char *json) { assert(strlen(json)<sizeof(sdk_state)); if(sdk_state_error) return sdk_state_error; strcpy(sdk_state,json); sdk_state_locked=sdk_locks>0; return ESP_OK; }
-esp_err_t molty_speaker_stream_begin(uint32_t rate) { assert(rate==16000); return ESP_OK; }
-esp_err_t molty_speaker_stream_write(const int16_t *pcm, size_t n) { assert(pcm); sdk_written+=n*2; return sdk_play_error; }
+static size_t sdk_stream_samples;   /* since stream_begin; the DAC lags by a 1440-sample DMA ring */
+esp_err_t molty_speaker_stream_begin(uint32_t rate) { assert(rate==16000); sdk_stream_samples=0; return ESP_OK; }
+esp_err_t molty_speaker_stream_write(const int16_t *pcm, size_t n) { assert(pcm); sdk_written+=n*2; sdk_stream_samples+=n; return sdk_play_error; }
+uint32_t molty_speaker_stream_played(void) { return sdk_stream_samples>1440 ? (uint32_t)(sdk_stream_samples-1440) : 0; }
 esp_err_t molty_speaker_stream_drain(void) { sdk_drained++; return sdk_play_error; }
 void molty_speaker_stream_end(void) {}
 void esp_crt_bundle_attach(void) {}

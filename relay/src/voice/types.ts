@@ -9,6 +9,13 @@ export interface TtsOptions {
    * on it so a stalled backend does not keep running.
    */
   signal?: AbortSignal;
+  /**
+   * Word timing, when the backend knows it (the voice box: Kyutai's TTS): word `i` of
+   * this text (0-based, whitespace-split) is spoken from `startS` seconds into its audio.
+   * Called in order, before or while that audio arrives. Backends without timings never
+   * call it (the relay then estimates).
+   */
+  onWord?: (i: number, startS: number) => void;
 }
 
 export interface VoiceProvider {

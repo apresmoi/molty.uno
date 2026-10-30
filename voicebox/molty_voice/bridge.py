@@ -7,6 +7,8 @@ Wire (docs/AGENT-LINK.md "Voice box"): JSON text control messages + binary audio
   relay -> box   {"t":"voice.welcome","device_id","mode","voice"}
   relay -> box   {"t":"tts","id","text","voice"?}      box -> relay  frames(s=id) ... {"t":"tts.end","id","error"?}
   relay -> box   {"t":"tts.cancel","id"}
+  box -> relay   {"t":"tts.word","id","i","text","start_s"} per word, in order (Kyutai's word timing: word i of the
+                 text is spoken from start_s seconds into this tts's audio)
   relay -> box   {"t":"stt.start","id","rate":16000,"no_speech_ms"?}, frames(s=id) as Molty records, {"t":"stt.end","id"} | {"t":"stt.cancel","id"}
   box -> relay   {"t":"stt.partial","id","text"}  {"t":"stt.turn_end","id"} (once: the human finished, Molty stops listening)
                  {"t":"stt.turn_end","id","reason":"no_speech"} (instead, once: nobody spoke within no_speech_ms —
@@ -212,8 +214,16 @@ class Bridge:
                 await self._send(fr)
                 seq += 1
 
+        nword = 0
+
+        async def word(w: str, start_s: float) -> None:
+            # word timing for the relay: Molty shows each word when it is spoken (tts.word {i, start_s})
+            nonlocal nword
+            await self._send_json({"t": "tts.word", "id": mid, "i": nword, "text": w[:64], "start_s": round(start_s, 3)})
+            nword += 1
+
         try:
-            await synthesize(self.cfg.tts_url, self.cfg.api_key, text, self.pick_voice(voice), out, connect=self._kconnect)
+            await synthesize(self.cfg.tts_url, self.cfg.api_key, text, self.pick_voice(voice), out, on_word=word, connect=self._kconnect)
             await out(np.zeros(0, np.float32), flush=True)
             await self._send_json({"t": "tts.end", "id": mid})
             log.info("tts %s: %d chars, first audio %.0f ms, total %.0f ms", mid, len(text), (first or 0) * 1000, (time.monotonic() - t0) * 1000)

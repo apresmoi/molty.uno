@@ -140,6 +140,8 @@ typedef struct {
 } ask_want_t;
 static ask_want_t s_ask_want;
 static bool    s_listen_in = false;             /* link_audio: a listen is recording   */
+static bool    s_follow_in = false;             /* link_audio: the reader follows a say's voice */
+static int     s_follow_word_in = 0;            /* ...the last word the speaker reached  */
 static float   s_level_in = 0.f;                /* ...its mic level 0..1               */
 static int32_t s_ring_in = -1;                  /* ...its ring colour (-1 = the default) */
 /* the device's default ring colour (NVS "fluid"/"ring", the console's setting; -1 = the
@@ -210,6 +212,8 @@ static float s_fx_state = 0.f;
 static float s_tnow = 0.f, s_acc = 0.f, s_breath_ph = 0.f;
 static float s_melt_t = 1e9f, s_word_until = 0.f;
 static int   s_word = 0;
+static bool  s_follow = false;                  /* task copies of s_follow_in / s_follow_word_in */
+static int   s_follow_word = 0;
 static volatile int s_dstatus = FD_STATUS_OK;   /* indicator riding with the snapshot */
 static fluid_letter_t s_overlay[FLUID_MAX_LETTERS];
 static int   s_noverlay = 0;
@@ -456,12 +460,22 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     float swell = 1.f + 0.05f * (breath * 2.f - 1.f);
 
     /* director: the reel, the reader's return, mood holds + flashes, sleep, status */
-    fd_tick(&s_dir, rdt, s_cur == ST_TEXT && s_word_until > 1e8f);
+    fd_tick(&s_dir, rdt, s_cur == ST_TEXT && s_word_until > 1e8f && !s_follow);
     direct(cfg);
 
     const bool asking = s_ask.scr.phase != FLUID_ASK_NONE;
     /* speed reader (paused under a question: the labels own s_tx) */
-    if (!asking && s_cur == ST_TEXT && s_word < s_ntok && s_tnow >= s_word_until) {
+    if (!asking && s_cur == ST_TEXT && s_word < s_ntok && s_follow) {
+        /* following a say: each word when the speaker reaches it (link_audio's cues),
+         * never on the reader's own clock; once the say is over, the clock takes the rest */
+        const int t = s_follow_word < s_ntok ? s_follow_word : s_ntok - 1;
+        if (t > s_word) {
+            s_word = t;
+            show_word(s_word);
+            ripple(0.f, 0.f, 0.45f + 0.6f * 0.3f, 0.12f);
+        }
+        s_word_until = s_tnow + word_delay_s(&s_toks[s_word], cfg->wpm);
+    } else if (!asking && s_cur == ST_TEXT && s_word < s_ntok && s_tnow >= s_word_until) {
         s_word++;
         if (s_word < s_ntok) {
             show_word(s_word);
@@ -772,6 +786,7 @@ static void fluid_task(void *arg) {
         int status = s_status_in;
         ask_want_t want = s_ask_want;
         s_listen = s_listen_in; s_level = s_level_in; s_ring_rgb = s_ring_in; s_ring_def = s_ring_dflt;
+        s_follow = s_follow_in; s_follow_word = s_follow_word_in;
         if (s_text_ver != s_seen_ver) {
             memcpy(s_ttext, s_text, (size_t)s_text_len + 1);
             s_seen_ver = s_text_ver; text_changed = true;
@@ -961,6 +976,7 @@ esp_err_t mole_fluid_creature_init(void) {
     s_gx = s_gy = 0.f; s_touch_down = false;
     s_ask.scr.phase = FLUID_ASK_NONE; s_ask.scr.seq = s_ask_want.seq;     /* a question from before is gone */
     s_dask = 0; atomic_store(&s_glass_ask, 0);
+    s_follow = false; s_follow_word = 0;
     s_rg = (fluid_ring_t){ 0 }; s_div = 0.f; s_ov = s_dov = (fluid_overlay_t){ 0 };   /* the fluid's own ring is in the sim */
     s_sim->p.relax_up = RATE_UP[ST_BLOB]; s_sim->p.relax_down = RATE_DOWN[ST_BLOB];
 
@@ -1286,6 +1302,21 @@ void mole_fluid_listen(bool on) {
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     s_listen_in = on;
     if (!on) s_level_in = 0.f;
+    xSemaphoreGive(s_mutex);
+}
+
+void mole_fluid_text_cue(int word) {
+    if (!s_mutex) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (word < 0) { s_follow_in = true; s_follow_word_in = 0; }
+    else if (word > s_follow_word_in) s_follow_word_in = word;
+    xSemaphoreGive(s_mutex);
+}
+
+void mole_fluid_text_cue_end(void) {
+    if (!s_mutex) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_follow_in = false;
     xSemaphoreGive(s_mutex);
 }
 

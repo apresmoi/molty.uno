@@ -236,8 +236,14 @@ class SttSession:
                 pass
 
 
-async def synthesize(url: str, api_key: str, text: str, voice: str, on_audio: Callable[[np.ndarray], Awaitable[None]], *, connect=ws_connect) -> int:
-    """Streams `text` through TTS; on_audio gets float32 @24 kHz chunks as they come. Returns samples received."""
+async def synthesize(url: str, api_key: str, text: str, voice: str, on_audio: Callable[[np.ndarray], Awaitable[None]], *,
+                     on_word: Callable[[str, float], Awaitable[None]] | None = None, connect=ws_connect) -> int:
+    """Streams `text` through TTS; on_audio gets float32 @24 kHz chunks as they come. Returns samples received.
+
+    on_word(text, start_s): the server's word timing (moshi-server tts `Text {text, start_s,
+    stop_s}`), one per word sent, in order: the word is spoken from start_s seconds into this
+    stream's audio (its text step / 12.5 Hz; the audio starts at text step 0's voice).
+    """
     q = urlencode({"voice": voice, "format": "PcmMessagePack"})
     sep = "&" if "?" in url else "?"
     total = 0
@@ -254,6 +260,10 @@ async def synthesize(url: str, api_key: str, text: str, voice: str, on_audio: Ca
                     total += pcm.size
                     if pcm.size:
                         await on_audio(pcm)
+                elif t == "Text" and on_word is not None:
+                    s = d.get("start_s")
+                    if isinstance(s, (int, float)) and not isinstance(s, bool) and math.isfinite(s) and s >= 0:
+                        await on_word(str(d.get("text", "")), float(s))
                 elif t == "Error":
                     raise KyutaiError(f"tts server error: {d.get('message', '')}"[:200])
         except ConnectionClosed as e:

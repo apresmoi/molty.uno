@@ -215,6 +215,33 @@ static bool parses(const char *str)
     return link_frame_parse(str, strlen(str), &h, &p, &n);
 }
 
+/* say frames' word cues: "w":[[word, sample], ...] */
+static bool cues(const char *w, link_frame_t *got)
+{
+    char frame[LINK_HEADER_MAX + 8];
+    int n = snprintf(frame, sizeof(frame), "{\"s\":\"j\",\"seq\":0,\"kind\":\"pcm16\",\"rate\":16000,\"w\":%s}\n", w);
+    const uint8_t *pcm; size_t pl;
+    return n > 0 && link_frame_parse(frame, (size_t)n, got, &pcm, &pl);
+}
+static void test_cues(void)
+{
+    link_frame_t g;
+    assert(cues("[[0,0],[1,3000],[511,4294967295]]", &g) && g.ncues == 3 && g.cue_word[1] == 1 && g.cue_sample[1] == 3000 && g.cue_word[2] == 511 && g.cue_sample[2] == 4294967295u);
+    assert(cues("[]", &g) && g.ncues == 0);
+    char many[LINK_HEADER_MAX]; int o = sprintf(many, "[");
+    for (int i = 0; i < LINK_CUES_MAX; i++) o += sprintf(many + o, "%s[%d,%d]", i ? "," : "", i, i);
+    strcpy(many + o, "]");
+    assert(cues(many, &g) && g.ncues == LINK_CUES_MAX);
+    many[o] = 0; strcat(many, ",[1,1]]");
+    assert(!cues(many, &g));                                     /* > LINK_CUES_MAX */
+    const char *bad[] = { "[[512,0]]", "[[-1,0]]", "[[0,-1]]", "[[0,1.5]]", "[[0.5,1]]", "[[0]]", "[[0,1,2]]", "[\"x\"]", "{}", "1", "[[0,4294967296]]" };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(*bad); i++) assert(!cues(bad[i], &g));
+    /* no "w": no cues */
+    link_frame_t h = {.stream = "j"}; uint8_t f[LINK_HEADER_MAX + 2]; const uint8_t *pcm; size_t pl;
+    int n = link_frame_header((char *)f, sizeof(f), &h);
+    g.ncues = 9; assert(link_frame_parse(f, (size_t)n, &g, &pcm, &pl) && g.ncues == 0);
+}
+
 static void test_frames(void)
 {
     uint8_t frame[LINK_MESSAGE_MAX + 2];
@@ -360,8 +387,8 @@ static void test_ask_args(void)
 
 int main(void)
 {
-    test_codes(); test_moods(); test_frames(); test_identity_and_urls(); test_control_frames();
+    test_codes(); test_moods(); test_frames(); test_cues(); test_identity_and_urls(); test_control_frames();
     test_mood_args(); test_listen_args(); test_listen_window(); test_event_frames(); test_restore(); test_ask_args();
-    puts("LINK HOST PASS: audio/control/event frames, random IDs, code alphabet, URLs, close retry policy, moods + hold_s, listen args + window, restore, ask args + answer frames");
+    puts("LINK HOST PASS: audio/control/event frames, random IDs, code alphabet, URLs, close retry policy, moods + hold_s, listen args + window, say cues, restore, ask args + answer frames");
     return 0;
 }

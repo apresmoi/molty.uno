@@ -102,6 +102,7 @@ static const molty_speaker_ops_t s_speaker = {
     .stream_write = mole_audio_tx_stream_write,
     .stream_drain = mole_audio_tx_stream_drain,
     .stream_end   = mole_audio_tx_stream_end,
+    .stream_played = mole_audio_tx_stream_played,
 };
 
 static const molty_mic_ops_t s_mic = {

@@ -9,6 +9,7 @@ typedef struct { unsigned total_dma_buf_size; } i2s_chan_info_t;
 static i2s_chan_handle_t s_tx_chan=(void *)1;
 static unsigned s_volume=21;
 static bool s_tx_owned;
+static volatile uint32_t s_tx_written, s_tx_dma;
 static int16_t fifo[2048];
 static size_t capacity, queued, played_audio;
 static esp_err_t write_error;
@@ -40,15 +41,24 @@ int main(void) {
         capacity=geometries[g]; queued=played_audio=0;
         assert(mole_audio_tx_stream_begin(16000)==ESP_OK && s_tx_owned);
         assert(mole_audio_tx_stream_begin(16000)==ESP_ERR_INVALID_STATE);
+        assert(mole_audio_tx_stream_played()==0);
         assert(mole_audio_tx_stream_write(pcm,lengths[n])==ESP_OK);
         assert(played_audio<lengths[n]); /* final PCM is still queued */
+        /* the playback position: what really left the FIFO, never ahead of it */
+        assert(mole_audio_tx_stream_played()==played_audio);
         assert(mole_audio_tx_stream_drain()==ESP_OK && s_tx_owned);
         assert(played_audio==lengths[n]); /* final PCM really left the FIFO */
+        assert(mole_audio_tx_stream_played()>=lengths[n]);  /* ...and the position says so */
         mole_audio_tx_stream_end(); assert(!s_tx_owned);
     }
     assert(mole_audio_tx_stream_begin(16000)==ESP_OK);
     write_error=ESP_ERR_TIMEOUT;
     assert(mole_audio_tx_stream_drain()==ESP_ERR_TIMEOUT);
     mole_audio_tx_stream_end();
-    puts("LINK DMA PASS: actual driver drain across 18 PCM/geometry combinations, ownership and I2S failure");
+    /* a long stream: the position tracks the DAC exactly while the ring is full */
+    write_error=ESP_OK; capacity=240*6; queued=played_audio=0;
+    assert(mole_audio_tx_stream_begin(16000)==ESP_OK);
+    for (int i=0;i<10;i++) { assert(mole_audio_tx_stream_write(pcm,4096)==ESP_OK); assert(mole_audio_tx_stream_played()==played_audio && played_audio==(i+1)*4096u-capacity); }
+    mole_audio_tx_stream_end();
+    puts("LINK DMA PASS: actual driver drain across 18 PCM/geometry combinations, ownership and I2S failure, playback position");
 }

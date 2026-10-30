@@ -87,9 +87,10 @@ cJSON *link_identity_hello(void)
     cJSON_AddStringToObject(j, "fw", esp_app_get_description()->version);
     /* say / listen only where the board has a speaker / mic (the relay refuses those
      * jobs up front otherwise); board names the hardware for agents and support */
-    const char *caps[10]; int n = 0;
+    const char *caps[11]; int n = 0;
     caps[n++] = "fluid";
     if (molty_board_has(MOLTY_CAP_SPEAKER)) caps[n++] = "say";
+    if (molty_board_has(MOLTY_CAP_SPEAKER)) caps[n++] = "say_cues";   /* say {cues:true}: word-timed text */
     if (molty_board_has(MOLTY_CAP_MIC)) caps[n++] = "listen";
     if (molty_board_has(MOLTY_CAP_MIC)) caps[n++] = "listen_stop";   /* the relay may end a listen early (turn_end) */
     if (molty_board_has(MOLTY_CAP_MIC)) caps[n++] = "listen_window";   /* ms optional (the setting), 0..30000, 0 = unlimited */

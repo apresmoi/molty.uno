@@ -14,6 +14,8 @@
 #define LINK_TEXT_MAX 65536
 #define LINK_STREAM_MAX 129
 #define LINK_MESSAGE_MAX (LINK_HEADER_MAX + 1 + LINK_PCM_MAX)
+#define LINK_CUES_MAX 32        /* word cues one frame header may carry (≤ 512 B header) */
+#define LINK_CUE_WORDS 512      /* words of one say that can be cued (the reader's tokens) */
 typedef struct {
     char stream[LINK_STREAM_MAX];
     uint32_t seq;
@@ -26,6 +28,13 @@ typedef struct {
     const char *reason;
     uint32_t speech_ms;
     bool speech_known;
+    /* Relay→device say frames (header field "w", cap "say_cues"): word cues, each
+     * [word, sample] — the say text's word `word` (0-based, whitespace-split) is spoken
+     * from `sample` (16 kHz, counted from the stream's first sample). Up to
+     * LINK_CUES_MAX per frame; parsed only (link_frame_header never writes them). */
+    uint16_t ncues;
+    uint16_t cue_word[LINK_CUES_MAX];
+    uint32_t cue_sample[LINK_CUES_MAX];
 } link_frame_t;
 /* The newline is not counted in header_len. Payload is a borrowed byte view. */
 bool link_frame_parse(const void *data, size_t len, link_frame_t *h,

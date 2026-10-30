@@ -83,6 +83,12 @@ void mole_fluid_set_status(int status);
 void mole_fluid_listen(bool on);
 void mole_fluid_listen_level(float level);
 void mole_fluid_listen_color(int32_t rgb);
+/** A say's text follows its voice (link_audio.c, cap say_cues): word < 0 holds the speed
+ *  reader on the first word (its own clock stops); word ≥ 0 shows up to that word (the
+ *  last one the speaker reached; never backwards). mole_fluid_text_cue_end: the say is
+ *  over — the reader's own pace takes whatever is left, then it ends as usual. */
+void mole_fluid_text_cue(int word);
+void mole_fluid_text_cue_end(void);
 /** The listen window an agent gets when it gives none (link_audio.c, cmd listen without ms):
  *  0 = unlimited or 5000..30000 ms (link_protocol.h LINK_LISTEN_*), 30000 out of the box.
  *  The console's setting, POST /api/creature/state {listen_ms} (GET reports it), kept in NVS

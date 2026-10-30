@@ -53,6 +53,8 @@ function device(room: DeviceRoom, sock: FakeSocket, o: { chunks?: number } = {})
   sock.sendBinary = (b: Uint8Array) => {
     bin(b);
     const fr = decodeAudioFrame(b)!;
+    const nl = b.indexOf(10);
+    log.push({ at: Date.now(), kind: "frame", args: JSON.parse(new TextDecoder().decode(nl < 0 ? b : b.subarray(0, nl))) });
     if (fr.header.end) setTimeout(() => void room.socketMessage(sock, JSON.stringify({ t: "evt", name: "say.done", data: { job: fr.header.s } })), 5);
   };
   return { log };
@@ -68,6 +70,8 @@ interface BoxOpts {
   twice?: boolean;
   /** Send stt.turn_end {reason:"no_speech"} after this many audio chunks (nobody spoke). */
   noSpeechAfter?: number;
+  /** TTS word timings (Kyutai's Text messages): tts.word {i, start_s: 0.05 + 0.1·i} per word but the last, before the audio. */
+  words?: boolean;
 }
 
 /** A voice box on the relay's voice socket: synthesises 3200 samples per tts, transcribes by counting the chunks it got. */
@@ -86,6 +90,8 @@ function box(room: DeviceRoom, sock: FakeSocket, o: BoxOpts = {}) {
       tts.push(f);
       setTimeout(() => {
         if (sock.closed) return;
+        if (o.words) for (const bad of [{ i: 0, start_s: -1 }, { i: 0, start_s: 9999 }, { i: 0, start_s: "x" }, { i: 0.5, start_s: 0 }, { i: -1, start_s: 0 }]) say({ t: "tts.word", id: f.id, ...bad });
+        if (o.words) f.text.split(" ").slice(0, -1).forEach((_: string, i: number) => say({ t: "tts.word", id: f.id, i, text: "x", start_s: 0.05 + 0.1 * i }));
         void room.socketMessage(sock, encodeAudioFrame({ s: f.id, seq: 0, kind: "pcm16", rate: 16000, end: false }, new Uint8Array(new Int16Array(3200).fill(500).buffer)));
         say({ t: "tts.end", id: f.id });
       }, 5);
@@ -642,5 +648,22 @@ describe("semantic end of turn is the default with a voice box", () => {
     expect(Date.now() - tDrop).toBeLessThan(400); // not the device's ~1.8 s run
     expect(out).toMatchObject({ ok: true, result: { reason: "error", heard: "hello molty", timings: { listen: { voice: "fake", voice_fallback: "voice_box_offline" } } } });
     expect(w.dev.log.filter((l) => l.name === "listen_stop")).toHaveLength(1);
+  });
+});
+
+describe("say word cues from the voice box", () => {
+  it("the box's word timing reaches the device as cues on the stream's timeline; words it did not time are estimated; malformed timings are ignored", async () => {
+    const w = await setup({ caps: ["say", "say_cues", "listen"], box: { words: true } });
+    const job = ((await w.room.command(w.token, "say", { text: "One two three. Four five." })) as any).result.job;
+    await w.room.job(w.token, job, 3000);
+    expect(w.box!.tts.map((t) => t.text)).toEqual(["One two three.", "Four five."]);
+    const cues = new Map(w.dev.log.filter((l) => l.kind === "frame").flatMap((l) => (l.args.w ?? []) as Array<[number, number]>));
+    // segment 1 (3200 samples): its own times for words 0, 1; word 2 estimated ("One two " of 15)
+    expect(cues.get(0)).toBe(800);
+    expect(cues.get(1)).toBe(2400);
+    expect(cues.get(2)).toBe(Math.round((3200 * 8) / 15));
+    // segment 2 starts at 3200: word 3 at its own 0.05 s, word 4 estimated
+    expect(cues.get(3)).toBe(3200 + 800);
+    expect(cues.get(4)).toBe(3200 + Math.round((3200 * 5) / 11));
   });
 });

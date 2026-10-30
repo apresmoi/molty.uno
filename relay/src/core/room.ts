@@ -176,6 +176,12 @@ export const DEFAULT_TIMINGS: RoomTimings = {
 };
 
 /** say: a first frame shorter than a full chunk waits at most this long for more audio. */
+/** Firmware cap: say {cues:true} and frames with "w" word cues (the text follows the voice). */
+const SAY_CUES_CAP = "say_cues";
+/** Word cues one frame header carries (each ≤ 17 B: the header stays under 512 B). */
+const SAY_CUES_PER_FRAME = 20;
+/** Words of one say the device can cue (firmware LINK_CUE_WORDS): later words go uncued. */
+const SAY_CUE_WORDS = 512;
 const FIRST_FRAME_HOLD_MS = 100;
 
 /** Room-side cap on one job wait; surfaces apply their own (molty_wait / GET /v1/jobs: 8 s). */
@@ -1359,6 +1365,9 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const absorb = () => {
       for (const p of feed.take()) carry = concat(carry, p);
     };
+    const absorbCues = (into: Array<[number, number]>) => {
+      for (const c of feed.takeCues()) if (c[0] < SAY_CUE_WORDS) into.push(c);
+    };
     try {
       // First audio (or the end) -- synthesize() bounds this with its per-segment timeout.
       while (!feed.queued && !feed.done) await wait(this.t.ttsTimeoutMs);
@@ -1371,6 +1380,11 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       const announced = feed.done && feed.error === undefined ? durationMs(carry.length) : Math.max(durationMs(carry.length), estimateSpeechMs(text));
       const deviceArgs: JsonObject = { job: id, text, ms: announced, rate: SAMPLE_RATE };
       if (voice) deviceArgs.voice = voice;
+      // Firmware with say_cues shows each word when the speaker reaches it: the frames carry
+      // word cues [word, sample] on the stream's timeline (the box's own timing, else estimated).
+      const cuesOn = !!sock.getMeta()?.caps?.includes(SAY_CUES_CAP);
+      if (cuesOn) deviceArgs.cues = true;
+      let cues: Array<[number, number]> = [];
       const res = await this.sendCmd("say", deviceArgs);
       if (!res.ok) return { ok: false, error: res.error };
 
@@ -1393,7 +1407,13 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         }
         const live = this.liveSocket();
         if (!live || !live.same(sock)) throw new CodedError("device_offline");
-        live.sendBinary(encodeAudioFrame({ s: id, seq: seq++, kind: "pcm16", rate: SAMPLE_RATE, end }, pcm16ToBytes(pcm)));
+        if (cuesOn) absorbCues(cues);
+        // cues ride ahead of (or with) their audio; more than a header holds go in header-only frames first
+        while (cuesOn && end && cues.length > SAY_CUES_PER_FRAME) {
+          live.sendBinary(encodeAudioFrame({ s: id, seq: seq++, kind: "pcm16", rate: SAMPLE_RATE, end: false, w: cues.splice(0, SAY_CUES_PER_FRAME) }, new Uint8Array(0)));
+        }
+        const w = cuesOn && cues.length ? cues.splice(0, SAY_CUES_PER_FRAME) : undefined;
+        live.sendBinary(encodeAudioFrame({ s: id, seq: seq++, kind: "pcm16", rate: SAMPLE_RATE, end, ...(w ? { w } : {}) }, pcm16ToBytes(pcm)));
         const now = this.clock.now();
         if (!firstSent) firstSent = now;
         lastSent = now;
@@ -1731,6 +1751,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       case "voice.hello":
         return this.onBoxHello(sock, meta, frame);
       case "tts.end":
+      case "tts.word":
       case "stt.final":
       case "stt.partial":
       case "stt.turn_end":

@@ -239,11 +239,25 @@ bool link_frame_parse(const void *data, size_t len, link_frame_t *h,
     cJSON *kind = cJSON_GetObjectItemCaseSensitive(j, "kind");
     cJSON *rate = cJSON_GetObjectItemCaseSensitive(j, "rate");
     cJSON *end = cJSON_GetObjectItemCaseSensitive(j, "end");
+    cJSON *w = cJSON_GetObjectItemCaseSensitive(j, "w");
     bool ok = cJSON_IsObject(j) && cJSON_IsString(s) && valid_stream(s->valuestring)
         && cJSON_IsNumber(seq) && isfinite(seq->valuedouble) && seq->valuedouble >= 0
         && seq->valuedouble <= UINT32_MAX && floor(seq->valuedouble) == seq->valuedouble
         && cJSON_IsString(kind) && !strcmp(kind->valuestring, "pcm16")
-        && cJSON_IsNumber(rate) && rate->valuedouble == 16000 && (!end || cJSON_IsBool(end));
+        && cJSON_IsNumber(rate) && rate->valuedouble == 16000 && (!end || cJSON_IsBool(end))
+        && (!w || (cJSON_IsArray(w) && cJSON_GetArraySize(w) <= LINK_CUES_MAX));
+    h->ncues = 0;
+    if (ok && w) {                       /* word cues: [[word, sample], ...] */
+        const cJSON *c;
+        cJSON_ArrayForEach(c, w) {
+            const cJSON *a = cJSON_GetArrayItem(c, 0), *b = cJSON_GetArrayItem(c, 1);
+            if (!cJSON_IsArray(c) || cJSON_GetArraySize(c) != 2 || !cJSON_IsNumber(a) || !cJSON_IsNumber(b)
+                || !(a->valuedouble >= 0 && a->valuedouble < LINK_CUE_WORDS) || floor(a->valuedouble) != a->valuedouble
+                || !(b->valuedouble >= 0 && b->valuedouble <= UINT32_MAX) || floor(b->valuedouble) != b->valuedouble) { ok = false; break; }
+            h->cue_word[h->ncues] = (uint16_t)a->valuedouble; h->cue_sample[h->ncues] = (uint32_t)b->valuedouble; h->ncues++;
+        }
+        if (!ok) h->ncues = 0;
+    }
     if (ok) {
         strcpy(h->stream, s->valuestring); h->seq = (uint32_t)seq->valuedouble;
         h->end = cJSON_IsTrue(end); h->reason = NULL; h->speech_ms = 0; h->speech_known = false; *pcm = nl ? nl + 1 : p + len; *pcm_len = payload;

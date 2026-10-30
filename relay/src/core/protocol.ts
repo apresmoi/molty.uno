@@ -55,6 +55,12 @@ export interface AudioHeader {
   reason?: string;
   /** Optional, with `reason`: milliseconds of detected speech in the clip (0 = none). */
   speech_ms?: number;
+  /**
+   * Optional, relay -> device on say frames (firmware cap `say_cues`): word cues
+   * [word, sample] — the say text's word `word` (0-based, whitespace-split) is spoken
+   * from sample `sample` of the stream (16 kHz, from its first sample).
+   */
+  w?: Array<[number, number]>;
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {

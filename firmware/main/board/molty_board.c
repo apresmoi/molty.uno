@@ -227,6 +227,11 @@ void molty_speaker_stream_end(void)
     if (SPEAKER) B.speaker->stream_end();
 }
 
+uint32_t molty_speaker_stream_played(void)
+{
+    return SPEAKER && B.speaker->stream_played ? B.speaker->stream_played() : 0;
+}
+
 /* ── microphone ───────────────────────────────────────────────────────────── */
 
 #define MIC (s_caps & MOLTY_CAP_MIC)

@@ -111,4 +111,5 @@ esp_err_t mole_audio_tx_stream_begin(uint32_t rate);
 esp_err_t mole_audio_tx_stream_write(const int16_t *samples, size_t n);
 /* Blocks until queued PCM is clocked out, retaining stream ownership. */
 esp_err_t mole_audio_tx_stream_drain(void);
+uint32_t  mole_audio_tx_stream_played(void);   /* samples the DAC played since begin */
 void mole_audio_tx_stream_end(void);
