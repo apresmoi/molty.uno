@@ -20,9 +20,12 @@ typedef struct {
     bool end;
     /* Device→relay listen end frame only (header fields "reason", "speech_ms"): why the
      * listen ended ("silence" | "no_speech" | "max" | "error") and the voiced ms heard.
-     * NULL reason: neither field is written. Parsing does not read them (NULL / 0). */
+     * NULL reason: neither field is written. speech_known false (VAD off, or the listen
+     * ended before VAD calibration): "speech_ms" is omitted, since 0 would claim
+     * silence the device never measured. Parsing does not read them (NULL / 0 / false). */
     const char *reason;
     uint32_t speech_ms;
+    bool speech_known;
 } link_frame_t;
 /* The newline is not counted in header_len. Payload is a borrowed byte view. */
 bool link_frame_parse(const void *data, size_t len, link_frame_t *h,

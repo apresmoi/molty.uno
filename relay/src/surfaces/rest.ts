@@ -35,6 +35,7 @@ const STATUS: Record<string, number> = {
   unsupported: 409,
   pair_busy: 409,
   device_timeout: 504,
+  playback_timeout: 504,
   too_many_polls: 429,
   conflict: 409,
   cancelled: 499,
@@ -45,9 +46,9 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 
 const inboxExtra = (inbox?: Inbox) => (inbox && inbox.events.length ? { events: inbox.events, ...(inbox.more ? { more_events: true } : {}) } : {});
 
-function failure(out: { error: string; message?: string; inbox?: Inbox }) {
+function failure(out: { error: string; message?: string; inbox?: Inbox }, rideAlong: Record<string, unknown> = {}) {
   // Unknown codes are device-reported errors (e.g. mic_busy): 502.
-  return json({ ok: false, error: out.error, ...(out.message ? { message: out.message } : {}), ...inboxExtra(out.inbox) }, STATUS[out.error] ?? 502);
+  return json({ ok: false, error: out.error, ...(out.message ? { message: out.message } : {}), ...inboxExtra(out.inbox), ...rideAlong }, STATUS[out.error] ?? 502);
 }
 
 async function body(request: Request): Promise<Record<string, unknown> | undefined> {
@@ -68,13 +69,22 @@ function merged(a: Pick<Outcome, "inbox" | "notice">, b: Pick<Outcome, "inbox" |
   return { inbox, notice: b.notice ?? a.notice };
 }
 
-/** A waited job as a REST reply: done -> 200 result, failed -> error, still running -> 202 pending. */
-function jobResponse(out: Outcome<JobView>, extra: (o: Pick<Outcome, "inbox" | "notice">) => Record<string, unknown>): Response {
-  if (!out.ok) return failure(out);
+/**
+ * A waited job as a REST reply: done -> 200 result, failed -> error, still running -> 202 pending.
+ * `ride` is what the starting call already consumed (events marked read, skill notice marked
+ * seen): it reaches the caller on EVERY outcome, failures included, or it is lost for good.
+ */
+function jobResponse(
+  out: Outcome<JobView>,
+  ride: Pick<Outcome, "inbox" | "notice">,
+  extra: (o: Pick<Outcome, "inbox" | "notice">) => Record<string, unknown>,
+): Response {
+  const all = extra(merged(ride, out));
+  if (!out.ok) return failure({ error: out.error, message: out.message }, all);
   const j = out.result;
-  if (j.status === "failed") return failure({ error: j.error ?? "failed", message: `job ${j.job} failed` });
-  if (j.status === "done") return json({ ok: true, result: { ...(j.result ?? {}), job: j.job, status: "done" }, ...extra(out) });
-  return json({ ok: true, result: { job: j.job, status: "pending", state: j.status }, ...extra(out) }, 202);
+  if (j.status === "failed") return failure({ error: j.error ?? "failed", message: `job ${j.job} failed` }, all);
+  if (j.status === "done") return json({ ok: true, result: { ...(j.result ?? {}), job: j.job, status: "done" }, ...all });
+  return json({ ok: true, result: { job: j.job, status: "pending", state: j.status }, ...all }, 202);
 }
 
 export async function handleRest(request: Request, backend: RelayBackend): Promise<Response> {
@@ -122,9 +132,10 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
     const out: Outcome = await api.command(token!, b.name as string, b.args);
     if (!out.ok) return failure(out);
     if (b.wait !== true || (b.name !== "say" && b.name !== "listen")) return json({ ok: true, result: out.result, ...extra(out) });
-    // Block on the job. Both outcomes may carry ride-alongs (already marked read): hand over both.
+    // Block on the job. Both outcomes may carry ride-alongs (already marked read): hand over both,
+    // whatever the job's outcome.
     const waited = await api.job(token!, out.result.job as string, Math.max(0, TALK_BUDGET_MS - (Date.now() - t0)));
-    return jobResponse(waited, (o) => extra(merged(out, o)));
+    return jobResponse(waited, out, extra);
   }
 
   const talk = /^\/v1\/devices\/([^/]+)\/talk$/.exec(path);

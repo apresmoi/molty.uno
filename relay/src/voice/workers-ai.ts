@@ -50,7 +50,12 @@ export class WorkersAiVoice implements VoiceProvider {
   }
 
   async tts(text: string, opts: TtsOptions): Promise<Int16Array> {
-    const bytes = await toBytes(await this.ai.run(this.ttsModel, this.ttsInputs(text, opts)));
+    const out = await this.ai.run(this.ttsModel, this.ttsInputs(text, opts));
+    if (opts.signal?.aborted) {
+      cancelBody(out);
+      throw opts.signal.reason ?? new Error("tts aborted");
+    }
+    const bytes = await toBytes(out);
     if (bytes.byteLength === 0) throw new Error("tts returned no audio");
     return toPcm16k(bytes, 16000);
   }
@@ -58,6 +63,8 @@ export class WorkersAiVoice implements VoiceProvider {
   /** Yields PCM as the binding's ReadableStream delivers it (Aura); other output shapes arrive whole. */
   async *ttsStream(text: string, opts: TtsOptions): AsyncGenerator<Int16Array> {
     const out = await this.ai.run(this.ttsModel, this.ttsInputs(text, opts));
+    // Gave up while the binding was still answering: release its stream unread.
+    if (opts.signal?.aborted) return void cancelBody(out);
     const body = typeof Response !== "undefined" && out instanceof Response ? out.body : out;
     if (!body || typeof (body as ReadableStream).getReader !== "function") {
       const bytes = await toBytes(out);
@@ -66,7 +73,7 @@ export class WorkersAiVoice implements VoiceProvider {
       return;
     }
     let any = false;
-    for await (const pcm of streamPcm16k(readChunks(body as ReadableStream<Uint8Array>))) {
+    for await (const pcm of streamPcm16k(readChunks(body as ReadableStream<Uint8Array>, opts.signal))) {
       any ||= pcm.length > 0;
       yield pcm;
     }
@@ -94,18 +101,33 @@ export class WorkersAiVoice implements VoiceProvider {
   }
 }
 
-async function* readChunks(stream: ReadableStream<Uint8Array>): AsyncGenerator<Uint8Array> {
+/**
+ * Reads the model stream. `signal` cancels it even while a read is pending (a stalled
+ * backend): the generator cannot be return()ed mid-await, so the reader is cancelled
+ * directly, which settles the pending read and ends the loop.
+ */
+async function* readChunks(stream: ReadableStream<Uint8Array>, signal?: AbortSignal): AsyncGenerator<Uint8Array> {
   const reader = stream.getReader();
+  const cancel = () => void reader.cancel(signal?.reason).catch(() => {});
+  signal?.addEventListener("abort", cancel, { once: true });
   try {
     for (;;) {
+      if (signal?.aborted) return;
       const { done, value } = await reader.read();
-      if (done) return;
+      if (done || signal?.aborted) return;
       if (value?.byteLength) yield value instanceof Uint8Array ? value : new Uint8Array(value as ArrayBufferLike);
     }
   } finally {
+    signal?.removeEventListener("abort", cancel);
     // Early stop (consumer gave up): cancel the model stream.
     reader.cancel().catch(() => {});
   }
+}
+
+/** Cancels an unread audio stream (ReadableStream or Response body); anything else is dropped. */
+function cancelBody(out: unknown) {
+  const body = typeof Response !== "undefined" && out instanceof Response ? out.body : out;
+  if (body && typeof (body as ReadableStream).cancel === "function") (body as ReadableStream).cancel().catch(() => {});
 }
 
 /** Normalizes every shape AI.run returns for audio models into bytes. */

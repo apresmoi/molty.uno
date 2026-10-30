@@ -52,12 +52,20 @@ export function splitSpeech(text: string): string[] {
   return out;
 }
 
-/** A single-producer / single-consumer queue of PCM pieces with an end (or error) marker. */
+/**
+ * A single-producer / single-consumer queue of PCM pieces with an end (or error) marker.
+ * `signal` aborts when the feed ends, for whatever reason: the producer's cue to stop.
+ */
 export class PcmFeed {
   private readonly pieces: Int16Array[] = [];
   done = false;
   error: unknown = undefined;
   private wake: (() => void) | undefined;
+  private readonly ac = new AbortController();
+
+  get signal(): AbortSignal {
+    return this.ac.signal;
+  }
 
   push(p: Int16Array) {
     if (this.done || p.length === 0) return;
@@ -69,6 +77,7 @@ export class PcmFeed {
     this.done = true;
     this.error = error;
     this.poke();
+    this.ac.abort(error);
   }
   /** Removes and returns everything queued. */
   take(): Int16Array[] {
@@ -117,6 +126,12 @@ class TtsTimeout extends Error {
  */
 export async function synthesize(voice: VoiceProvider, segments: string[], opts: TtsOptions, feed: PcmFeed, timer: SynthTimer, segmentTimeoutMs: number): Promise<void> {
   const subs: PcmFeed[] = [];
+  // The consumer ending the feed (device done / gone / failed) stops every segment now,
+  // not when a stalled provider next yields.
+  const stopAll = () => {
+    for (const s of subs) s?.end();
+  };
+  feed.signal.addEventListener("abort", stopAll, { once: true });
   const start = (i: number) => {
     if (i >= segments.length || subs[i]) return;
     const sub = (subs[i] = new PcmFeed());
@@ -142,20 +157,24 @@ export async function synthesize(voice: VoiceProvider, segments: string[], opts:
     feed.end(e ?? new Error("tts failed"));
   } finally {
     // Free lookahead work nobody will read.
-    for (const s of subs) s?.end();
+    feed.signal.removeEventListener("abort", stopAll);
+    stopAll();
   }
 }
 
 async function runSegment(voice: VoiceProvider, text: string, opts: TtsOptions, sub: PcmFeed, timer: SynthTimer, timeoutMs: number) {
+  // Ending the segment (timeout, or synthesize() stopping it) aborts sub.signal, which
+  // the provider uses to cancel its request / stream: a stalled backend is torn down.
   const t = timer.setTimeout(() => sub.end(new TtsTimeout()), timeoutMs);
+  const o: TtsOptions = { ...opts, signal: sub.signal };
   try {
     if (voice.ttsStream) {
-      for await (const p of voice.ttsStream(text, opts)) {
+      for await (const p of voice.ttsStream(text, o)) {
         if (sub.done) return;
         sub.push(p);
       }
     } else {
-      sub.push(await voice.tts(text, opts));
+      sub.push(await voice.tts(text, o));
     }
     sub.end();
   } catch (e) {

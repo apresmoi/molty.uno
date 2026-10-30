@@ -14,16 +14,18 @@ esp_err_t link_send_json(const cJSON *j) {
     cJSON_Delete(sdk_sent); sdk_sent=cJSON_Duplicate(j,true); sent++; return send_error;
 }
 static unsigned bin_frames, bin_bytes, bin_ends, bin_seq;
-static char bin_reason[16]; static int bin_speech_ms;
+static char bin_reason[16]; static int bin_speech_ms;   /* -1: speech_ms absent */
+static char bin_end_header[512];                          /* the exact end-frame header */
 esp_err_t link_send_binary(const void *data,size_t size) {
     link_frame_t h; const uint8_t *pcm; size_t bytes;
     assert(link_frame_parse(data,size,&h,&pcm,&bytes) && size<=16384);
     assert(h.seq==bin_seq++ && !bin_ends);       /* ordered, nothing after end */
-    /* the end frame alone carries {reason, speech_ms} */
+    /* the end frame alone carries {reason, speech_ms?}: speech_ms only when measured */
     const char *nl=memchr(data,'\n',size); cJSON *hj=cJSON_ParseWithLength(data,nl?(size_t)(nl-(const char *)data):size);
     cJSON *r=cJSON_GetObjectItem(hj,"reason"), *sm=cJSON_GetObjectItem(hj,"speech_ms");
-    assert(h.end ? cJSON_IsString(r) && cJSON_IsNumber(sm) : !r && !sm);
-    if (h.end) { snprintf(bin_reason,sizeof(bin_reason),"%s",r->valuestring); bin_speech_ms=sm->valueint; }
+    assert(h.end ? cJSON_IsString(r) && (!sm || cJSON_IsNumber(sm)) : !r && !sm);
+    if (h.end) { snprintf(bin_reason,sizeof(bin_reason),"%s",r->valuestring); bin_speech_ms=sm?sm->valueint:-1; }
+    if (h.end) snprintf(bin_end_header,sizeof(bin_end_header),"%.*s",(int)(nl?(size_t)(nl-(const char *)data):size),(const char *)data);
     cJSON_Delete(hj);
     bin_frames++; bin_bytes+=bytes; bin_ends+=h.end; return ESP_OK;
 }
@@ -105,7 +107,8 @@ static void test_say(void) {
     audio_job_t job; listen_job(10,&job);
     before=sent; complete(record(&job)); assert(sent==before && !strcmp(sdk_mood,"idle"));
     assert(bin_frames==1 && bin_bytes==320 && bin_ends==1);
-    assert(!strcmp(bin_reason,"max") && bin_speech_ms==0);
+    /* 10 ms < VAD calibration: nothing was classified, so speech_ms is unknown (absent) */
+    assert(!strcmp(bin_reason,"max") && bin_speech_ms==-1);
     /* Streamed uplink: 5 s = 80000 samples in 300 ms frames, sent while recording.
      * vad:false records the full window whatever it hears. */
     listen_job_with(5000,",\"vad\":false",&job); sdk_rx_chunks=0;
@@ -113,6 +116,10 @@ static void test_say(void) {
     complete(record(&job));
     assert(bin_bytes==160000 && bin_ends==1 && bin_frames==17 && sdk_rx_chunks==50);
     assert(!strcmp(bin_reason,"max") && !strcmp(s_end_reason,"max"));
+    /* VAD off measured nothing: no speech_ms (a 0 made the relay skip STT). This exact
+     * header is the fixture in relay/test/talk.test.ts ("vad:false end frame"). */
+    assert(bin_speech_ms==-1);
+    assert(!strcmp(bin_end_header,"{\"s\":\"listen1\",\"seq\":16,\"kind\":\"pcm16\",\"rate\":16000,\"end\":true,\"reason\":\"max\"}"));
     /* End of speech (default on): nobody speaks → the listen ends at no_speech_ms 4 s
      * (13 full frames + a 100 ms tail with end:true), the mic stops there. */
     listen_job(8000,&job); sdk_rx_chunks=0;

@@ -220,12 +220,21 @@ static void test_frames(void)
     assert(!link_frame_parse(frame, LINK_HEADER_MAX + 2, &got, &pcm, &bytes));
     assert(!link_frame_parse(NULL, 0, &got, &pcm, &bytes));
     /* listen end frame: {reason, speech_ms} after end; parse ignores them (relay too) */
-    link_frame_t e = {.stream = "j", .seq = 7, .end = true, .reason = "silence", .speech_ms = 1420};
+    link_frame_t e = {.stream = "j", .seq = 7, .end = true, .reason = "silence", .speech_ms = 1420, .speech_known = true};
     n = link_frame_header((char *)frame, sizeof(frame), &e);
     frame[n] = 0;
     assert(!strcmp((char *)frame, "{\"s\":\"j\",\"seq\":7,\"kind\":\"pcm16\",\"rate\":16000,\"end\":true,\"reason\":\"silence\",\"speech_ms\":1420}\n"));
     got.reason = "x"; got.speech_ms = 9;
     assert(link_frame_parse(frame, n, &got, &pcm, &bytes) && got.end && got.seq == 7 && !got.reason && !got.speech_ms);
+    /* VAD off / ended inside calibration: the reason, but no unmeasured speech_ms:0 */
+    e.reason = "max"; e.speech_ms = 0; e.speech_known = false;
+    n = link_frame_header((char *)frame, sizeof(frame), &e);
+    frame[n] = 0;
+    assert(!strcmp((char *)frame, "{\"s\":\"j\",\"seq\":7,\"kind\":\"pcm16\",\"rate\":16000,\"end\":true,\"reason\":\"max\"}\n"));
+    e.speech_known = true;
+    n = link_frame_header((char *)frame, sizeof(frame), &e);
+    frame[n] = 0;
+    assert(strstr((char *)frame, "\"speech_ms\":0}"));   /* a measured 0 is still sent */
     e.reason = NULL;                    /* every other frame: unchanged shape */
     n = link_frame_header((char *)frame, sizeof(frame), &e);
     frame[n] = 0;

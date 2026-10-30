@@ -9,7 +9,9 @@
  * a softer tail stays voiced (hysteresis); a fan switched on mid-listen becomes the
  * floor and does not count as speech for ever; speech over a fan; speech from t = 0;
  * a click is not speech; the max cap (and vad off = the full window); min_record_ms;
- * odd chunk sizes give the same verdict; the verdict is sticky.
+ * odd chunk sizes give the same verdict; the verdict is sticky; short replies said
+ * at t = 0 (inside calibration) still count; speech_ms is unknown with VAD off or
+ * before calibration ends.
  *
  * Build + run: test/host/vad_build.sh   (VAD_SRC overrides vad.c, for mutation checks)
  */
@@ -233,6 +235,42 @@ static void test_min_record_and_chunks(void)
           "chunking: %d/%u/%u vs %d/%u/%u", a.v, a.end_ms, a.speech_ms, b.v, b.end_ms, b.speech_ms);
 }
 
+/* A short reply right at t = 0, inside the 300 ms calibration: the calibration frames
+ * are classified retroactively, so "yes" is speech (silence + speech_ms), never
+ * no_speech (the relay would skip STT and lose it). Also mid-listen, for parity. */
+static void test_immediate_reply(void)
+{
+    vad_cfg_t c = cfg_max(8000);
+    const uint32_t lens[] = {200, 300, 400};
+    for (int i = 0; i < 3; i++) {
+        seg_t u[] = {{SPEECH, -25.f, lens[i]}, {NOISE, QUIET, 60000}};
+        run_t r = run(&c, u, N(u));
+        CHECK(r.v == VAD_END_SILENCE && r.speech_ms >= lens[i] - 60 && r.speech_ms <= lens[i] + 20,
+              "immediate %u ms reply: verdict %d at %u ms, speech %u", lens[i], r.v, r.end_ms, r.speech_ms);
+        CHECK(r.end_ms <= lens[i] + 800, "immediate %u ms reply ended late: %u ms", lens[i], r.end_ms);
+        seg_t m[] = {{NOISE, QUIET, 1000}, {SPEECH, -25.f, lens[i]}, {NOISE, QUIET, 60000}};
+        r = run(&c, m, N(m));
+        CHECK(r.v == VAD_END_SILENCE && r.speech_ms > 0, "mid-listen %u ms reply: verdict %d, speech %u", lens[i], r.v, r.speech_ms);
+    }
+}
+
+static void test_speech_known(void)
+{
+    vad_t v;
+    static int16_t quiet[1600];
+    vad_cfg_t c = cfg_max(8000);
+    vad_init(&v, &c);
+    CHECK(!vad_speech_known(&v), "known before any audio");
+    vad_feed(&v, quiet, 1600);                   /* 100 ms < calib_ms */
+    CHECK(!vad_speech_known(&v), "known inside calibration");
+    vad_feed(&v, quiet, 3200);                   /* 300 ms */
+    CHECK(vad_speech_known(&v), "unknown after calibration");
+    c.enabled = false;
+    vad_init(&v, &c);
+    vad_feed(&v, quiet, 1600 * 10);
+    CHECK(!vad_speech_known(&v), "known with VAD off");
+}
+
 int main(void)
 {
     test_no_speech();
@@ -242,6 +280,8 @@ int main(void)
     test_fan();
     test_max_and_off();
     test_min_record_and_chunks();
+    test_immediate_reply();
+    test_speech_known();
     printf("vad_test: %d passed, %d failed\n", s_pass, s_fail);
     return s_fail ? 1 : 0;
 }

@@ -119,34 +119,44 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   the ring **and I2S DMA**, device returns to idle and sends
   `{"t":"evt","name":"say.done","data":{"job":"..."}}`. Failed/cancelled playback
   does not emit successful completion. Reader timing remains approximate (no word timestamps).
+  `talk` requires this `say.done` before it opens the mic: none within the streamed playback
+  time + 2.5 s fails the turn with `playback_timeout` (REST 504); an elapsed estimate is never
+  taken as playback.
+- TTS cancellation: a segment that misses its timeout (`tts_timeout`), or a stream nobody reads
+  any more (device done/gone, turn failed), aborts the provider's request/stream (`TtsOptions.signal`):
+  Workers AI cancels the model stream even mid-read, OpenAI aborts the fetch.
 - `listen`: relay sends `cmd listen {job, ms, rate:16000, end_silence_ms?, no_speech_ms?, vad?}`
   (`ms` = maximum window; the VAD knobs only when the agent gave them: `end_silence_ms`
   300..3000, `no_speech_ms` 1000..10000, `vad` bool). Device streams mic PCM up; the last frame
   (`end:true`) may carry `"reason":"silence"|"no_speech"|"max"|"error"` and `"speech_ms":N`
-  (device end-of-speech). Relay runs STT the moment `end` arrives, except when `reason` is
-  `no_speech` or `speech_ms` is 0: then no STT call, transcript `""`. Older firmware sends no
-  reason: STT as before, reason derived (`max` window full, `ended` stopped early, `no_speech`
-  empty transcript).
+  (device end-of-speech). `speech_ms` is present only when the device measured it: absent with
+  `vad:false` and when the listen ended inside VAD calibration (unknown, not 0). Relay runs STT
+  the moment `end` arrives, except when `reason` is `no_speech`: then no STT call, transcript
+  `""`. `speech_ms` alone never skips STT (firmware before this change sent `speech_ms:0` with
+  `vad:false`). Older firmware sends no reason: STT as before, reason derived (`max` window
+  full, `ended` stopped early, `no_speech` empty transcript).
 
 Automatic moods around talking: the device sets `listening` on `listen` and `speaking` on
 `say` (then `idle`); the relay sends `mood thinking hold_s:15` the moment a listen's end frame
 arrives with speech (while STT runs), re-sends it after STT, or `idle` when the transcript is
 empty. So the creature thinks from end of speech until the agent's next command (≤ 15 s).
-Agents don't need `mood` calls around talking; an explicit `mood` still wins.
+Agents don't need `mood` calls around talking; an explicit `mood` still wins: once any agent
+sends `mood` after a listen began, the relay sends no more automatic moods for that listen.
 
 ### Listen end of speech (device VAD)
 
 `firmware/main/audio/vad.h` — energy VAD on the 16 kHz mic stream (gain 8), 20 ms
 frames, RMS in dBFS against an adaptive noise floor:
 
-- **Floor**: minimum frame energy over the last 3 s (first 300 ms measured, not
-  classified). Drops at once to a quieter frame; a steady fan becomes the floor after
+- **Floor**: minimum frame energy over the last 3 s. The first 300 ms only measure it; the
+  moment it exists those frames are classified retroactively, so a short reply said right at
+  the start ("yes" inside the first 300 ms) still counts as speech. Drops at once to a quieter frame; a steady fan becomes the floor after
   ≤ 3 s. Until 3 s have passed it is capped at −50 dBFS, so speech already running
   when `listen` starts is not mistaken for the floor.
 - **Speech**: energy > floor + 10 dB, or > floor + 5 dB while already speaking
   (hysteresis: a softer tail stays speech); never below −60 dBFS.
-- **Ends** at the first of: ≥ 250 ms of speech, then `end_silence_ms` of continuous
-  non-speech (never before 600 ms) → `silence`; `no_speech_ms` with < 250 ms of speech
+- **Ends** at the first of: ≥ 160 ms of speech, then `end_silence_ms` of continuous
+  non-speech (never before 600 ms) → `silence`; `no_speech_ms` with < 160 ms of speech
   and nobody speaking right then → `no_speech`; `ms` → `max`. The mic stops at once.
 
 Optional `listen` args (validated by the relay and again by the device; forwarded only when the agent gives them):
@@ -250,8 +260,8 @@ bearer is `agent_token` = `<device_id>.<base64url(32 bytes)>`; the prefix only r
 | `POST /v1/pair {device_id, link_code, agent_name}` (no token; long-polls ≤ 120 s) | `200 {ok:true, agent_token, device_id, agent_name, code}` | `{ok:false, error}`: `bad_link_code` 403, `rejected` 403, `timeout` 408, `device_offline` / `pair_busy` 409 |
 | same with `wait_s` < 120, or `{device_id, pair_id}` to resume | `202 {ok:true, status:"pending", pair_id, code, expires_in_s}` while undecided | as above |
 | `POST /v1/devices/<id>/cmd {name, args}` | `200 {ok:true, result:{...}}`; `say`/`listen` → `{ok:true, result:{job}}` | `{ok:false, error:"code"}`: 401 bad/missing bearer, 400 `invalid_args`/`unknown_command`, 409 `device_offline`/`audio_busy`/`unsupported`, 504 `device_timeout`, 502 device-reported codes |
-| same with `wait:true` (say/listen) | `200 {ok:true, result:{job, status:"done", ...job result}}`; still running after 24 s: `202 {ok:true, result:{job, status:"pending", state}}` | as above; a failed job → its error |
-| `POST /v1/devices/<id>/talk {say?, listen?, listen_ms?, voice?, end_silence_ms?, no_speech_ms?, vad?}` | `200 {ok:true, result:{job, status:"done", heard, said?, reason, speech_ms?, ms, timings}}`; `202` pending as above | 400 `invalid_args`, 401, 409 `audio_busy`/`unsupported`/`device_offline`, job errors |
+| same with `wait:true` (say/listen) | `200 {ok:true, result:{job, status:"done", ...job result}}`; still running after 24 s: `202 {ok:true, result:{job, status:"pending", state}}` | as above; a failed job → its error, still carrying the `events` / `skill_update` the call already consumed |
+| `POST /v1/devices/<id>/talk {say?, listen?, listen_ms?, voice?, end_silence_ms?, no_speech_ms?, vad?}` | `200 {ok:true, result:{job, status:"done", heard, said?, reason, speech_ms?, ms, timings}}`; `202` pending as above | 400 `invalid_args`, 401, 409 `audio_busy`/`unsupported`/`device_offline`, 504 `playback_timeout` (no `say.done`), job errors |
 | `GET /v1/jobs/<job>[?wait_s=0..8]` | `200 {job, kind:"say"\|"listen"\|"talk", status:"queued"\|"running"\|"done"\|"failed", result?, error?}`; say done `{ms, text, timings}`, listen done `{text, duration_ms, peak, rms, reason, speech_ms?, timings}`, talk done as `/talk` | 401, 404 `not_found` |
 | `DELETE /v1/token` | `200 {ok:true, result:{revoked:true}}` | 401 |
 | `GET /v1/devices/<id>/events[?since=e41&wait_s=0..25]` | `200 {ok:true, events:[{id,type,ts,data}], next, more}` | 401, 400 `invalid_args`, 429 `too_many_polls` |

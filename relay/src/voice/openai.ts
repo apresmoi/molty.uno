@@ -29,6 +29,7 @@ export class OpenAiVoice implements VoiceProvider {
       method: "POST",
       headers: { authorization: `Bearer ${this.o.apiKey}`, "content-type": "application/json" },
       body: JSON.stringify({ model: this.o.ttsModel || "gpt-4o-mini-tts", input: text, voice: opts.voice || this.o.defaultVoice || "alloy", response_format: "pcm" }),
+      signal: opts.signal,
     });
     if (!res.ok) throw new Error(`openai tts HTTP ${res.status}`);
     return toPcm16k(new Uint8Array(await res.arrayBuffer()), 24000);

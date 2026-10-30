@@ -7,7 +7,8 @@ import type { RelayBackend } from "../src/core/api.js";
 import { encodeWav } from "../src/core/audio.js";
 import { decodeAudioFrame, encodeAudioFrame } from "../src/core/protocol.js";
 import type { DeviceRoom } from "../src/core/room.js";
-import { splitSpeech } from "../src/core/speech.js";
+import { PcmFeed, splitSpeech, synthesize } from "../src/core/speech.js";
+import type { TtsOptions } from "../src/voice/types.js";
 import { handleMcp } from "../src/surfaces/mcp.js";
 import { handleRest } from "../src/surfaces/rest.js";
 import { WorkersAiVoice } from "../src/voice/workers-ai.js";
@@ -16,12 +17,14 @@ import { DEVICE, type FakeSocket, FakeVoice, LINK, connect, makeRoom } from "./h
 const FAST = { cmdTimeoutMs: 300, pairWindowMs: 400, sayChunkSamples: 1600, sayLeadFrames: 2, listenGraceMs: 200, sayDoneGraceMs: 300 };
 
 interface Mic {
-  /** ms between the say end frame and the device's say.done (default 5). */
-  sayDoneMs?: number;
+  /** ms between the say end frame and the device's say.done (default 5); null: never (playback failed). */
+  sayDoneMs?: number | null;
   /** Samples streamed up before the end frame. */
   samples?: number;
   /** End-frame extras (firmware VAD): reason, speech_ms. */
   end?: Record<string, unknown>;
+  /** The end-frame header verbatim as the firmware writes it (its "s"/"seq" are rewritten to this job's). */
+  endRaw?: string;
 }
 
 /** A device that answers cmds, "plays" say streams (say.done when the end frame arrives) and streams mic audio for listen. */
@@ -40,7 +43,9 @@ function device(room: DeviceRoom, sock: FakeSocket, mic: Mic = {}) {
           const n = mic.samples ?? 3200;
           const pcm = new Uint8Array(new Int16Array(n).fill(8000).buffer);
           if (n) void room.socketMessage(sock, encodeAudioFrame({ s: f.args.job, seq: 0, kind: "pcm16", rate: 16000, end: false }, pcm));
-          const head = JSON.stringify({ s: f.args.job, seq: n ? 1 : 0, kind: "pcm16", rate: 16000, end: true, ...(mic.end ?? {}) });
+          const head = mic.endRaw
+            ? mic.endRaw.replace(/"s":"[^"]*","seq":\d+/, `"s":"${f.args.job}","seq":${n ? 1 : 0}`)
+            : JSON.stringify({ s: f.args.job, seq: n ? 1 : 0, kind: "pcm16", rate: 16000, end: true, ...(mic.end ?? {}) });
           void room.socketMessage(sock, new TextEncoder().encode(head));
         }, 20);
       }
@@ -51,7 +56,7 @@ function device(room: DeviceRoom, sock: FakeSocket, mic: Mic = {}) {
     origBin(b);
     const fr = decodeAudioFrame(b)!;
     log.push({ at: Date.now(), kind: "frame", end: fr.header.end, bytes: fr.payload.byteLength });
-    if (fr.header.end)
+    if (fr.header.end && mic.sayDoneMs !== null)
       setTimeout(() => {
         log.push({ at: Date.now(), kind: "say.done" });
         void room.socketMessage(sock, JSON.stringify({ t: "evt", name: "say.done", data: { job: fr.header.s } }));
@@ -155,10 +160,23 @@ describe("molty_talk", () => {
     expect(w.voice.sttCalls).toHaveLength(0);
   });
 
-  it("speech_ms 0 with any reason also skips STT", async () => {
+  // The firmware's exact vad:false end-frame header (firmware/test/host/link_audio_pair_test.c
+  // asserts this string): VAD off measured nothing, so there is no speech_ms.
+  const FW_VAD_OFF_END = '{"s":"listen1","seq":16,"kind":"pcm16","rate":16000,"end":true,"reason":"max"}';
+
+  it("vad:false (firmware end frame: reason max, no speech_ms) is transcribed", async () => {
+    const w = await setup({ samples: 3200, endRaw: FW_VAD_OFF_END });
+    const r = await w.room.talk(w.token, { vad: false, listen_ms: 5000 });
+    expect(r).toMatchObject({ ok: true, result: { heard: "hello molty", reason: "max" } });
+    expect((r as any).result.speech_ms).toBeUndefined();
+    expect(w.voice.sttCalls).toHaveLength(1);
+    expect(w.dev.moods()[0]).toEqual({ mood: "thinking", hold_s: 15 });
+  });
+
+  it("only reason no_speech skips STT: speech_ms 0 alone never does (older vad:false firmware sent it)", async () => {
     const w = await setup({ samples: 1600, end: { reason: "max", speech_ms: 0 } });
-    expect(await w.room.talk(w.token, {})).toMatchObject({ ok: true, result: { heard: "", reason: "max", speech_ms: 0 } });
-    expect(w.voice.sttCalls).toHaveLength(0);
+    expect(await w.room.talk(w.token, {})).toMatchObject({ ok: true, result: { heard: "hello molty", reason: "max", speech_ms: 0 } });
+    expect(w.voice.sttCalls).toHaveLength(1);
   });
 
   it("older firmware (no reason on the end frame): STT runs as before, reason derived from the clip", async () => {
@@ -205,6 +223,53 @@ describe("molty_talk", () => {
     expect(listen).toBeGreaterThanOrEqual(done);
   });
 
+  it("no say.done: the turn fails with playback_timeout and the mic never opens", async () => {
+    const w = await setup({ sayDoneMs: null, end: { reason: "silence", speech_ms: 90 } });
+    w.voice.ttsSamples = 1600; // 100 ms of speech; + 300 ms grace
+    const t0 = Date.now();
+    const r = await w.room.talk(w.token, { say: "Hi." });
+    expect(r).toMatchObject({ ok: false, error: "playback_timeout" });
+    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(w.dev.log.filter((l) => l.kind === "cmd").map((l) => l.name)).toEqual(["say"]);
+    // REST: a clear gateway timeout, not a success
+    const rr = await rest(w.backend, w.token, `/v1/devices/${DEVICE}/talk`, { say: "Hi." });
+    expect(rr).toMatchObject({ status: 504, body: { ok: false, error: "playback_timeout" } });
+    expect(w.dev.log.some((l) => l.name === "listen")).toBe(false);
+  });
+
+  it("an explicit mood during STT stands: the automatic thinking/idle does not overwrite it", async () => {
+    const w = await setup({ samples: 3200, end: { reason: "silence", speech_ms: 150 } });
+    const stt = w.voice.stt.bind(w.voice);
+    w.voice.stt = async (pcm) => {
+      await new Promise((r) => setTimeout(r, 80));
+      return stt(pcm);
+    };
+    const turn = w.room.talk(w.token, {});
+    await until(() => w.dev.moods().length > 0);
+    expect(w.dev.moods()).toEqual([{ mood: "thinking", hold_s: 15 }]);
+    // another paired agent, even: the device's mood belongs to whoever set it last
+    expect(await w.room.command(w.token, "mood", { mood: "happy", hold_s: 60 })).toMatchObject({ ok: true });
+    expect(await turn).toMatchObject({ ok: true, result: { heard: "hello molty" } });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(w.dev.moods()).toEqual([{ mood: "thinking", hold_s: 15 }, { mood: "happy", hold_s: 60 }]);
+    // nothing heard + explicit mood: no automatic idle either
+    w.voice.stt = async () => {
+      await new Promise((r) => setTimeout(r, 80));
+      return "";
+    };
+    const turn2 = w.room.talk(w.token, {});
+    await until(() => w.dev.moods().length > 2);
+    expect(await w.room.command(w.token, "mood", { mood: "surprised" })).toMatchObject({ ok: true });
+    await turn2;
+    await new Promise((r) => setTimeout(r, 20));
+    expect(w.dev.moods().slice(2)).toEqual([{ mood: "thinking", hold_s: 15 }, { mood: "surprised" }]);
+    // the next listen starts clean: automatic moods are back
+    w.voice.stt = stt;
+    await w.room.talk(w.token, {});
+    await new Promise((r) => setTimeout(r, 20));
+    expect(w.dev.moods().slice(4)).toEqual([{ mood: "thinking", hold_s: 15 }, { mood: "thinking", hold_s: 15 }]);
+  });
+
   it("over budget: returns {job, status:'pending'} and molty_wait finishes it", async () => {
     const w = await setup({ samples: 1600, end: { reason: "silence", speech_ms: 90 } }, { timings: { talkBudgetMs: 30 } });
     w.voice.ttsSamples = 16000 * 0.4; // 400 ms of speech > 30 ms budget
@@ -244,6 +309,27 @@ describe("wait:true on say / listen", () => {
     const a = await mcp(w.backend, w.token, "molty_say", { text: "hi" });
     expect(Object.keys(a.structuredContent).sort()).toEqual(["job", "ok"]);
     await w.room.job(w.token, a.structuredContent.job, 2000);
+  });
+
+  it("REST: a failing say {wait:true} still hands over the events and skill notice it consumed", async () => {
+    const w = await setup();
+    w.voice.tts = async () => {
+      throw new Error("upstream 500");
+    };
+    await w.room.socketMessage(w.sock, JSON.stringify({ t: "evt", name: "tap", data: { x: 0.5, y: 0.25 } }));
+    for (const [k, v] of await w.kv.list<Record<string, unknown>>("tok:")) await w.kv.put(k, { ...v, skill_seen: 2 });
+    const r = await rest(w.backend, w.token, `/v1/devices/${DEVICE}/cmd`, { name: "say", args: { text: "hi" }, wait: true });
+    expect(r.status).toBe(502);
+    expect(r.body).toMatchObject({ ok: false, error: "upstream 500", skill_update: { version: 3 } });
+    expect(r.body.events.map((e: any) => e.type)).toContain("tap");
+    // consistent: what was handed over is marked read / seen, and is not handed over again
+    const head = await w.kv.get<number>("evseq");
+    const [[hash]] = [...(await w.kv.list("tok:")).keys()].map((k) => [k.slice(4)]);
+    expect(await w.kv.get<number>(`cur:${hash}`)).toBe(head);
+    expect([...(await w.kv.list<any>("tok:")).values()][0].skill_seen).toBe(3);
+    const again = await rest(w.backend, w.token, `/v1/devices/${DEVICE}/cmd`, { name: "imu" });
+    expect(again.body.events).toBeUndefined();
+    expect(again.body.skill_update).toBeUndefined();
   });
 
   it("REST: cmd {wait:true} blocks; non-job commands ignore it; bad wait is invalid", async () => {
@@ -360,6 +446,84 @@ describe("streamed speech", () => {
     expect(parts[0]).toBe("Well, after thinking about it for quite a long time,");
     expect(parts.join(" ").replace(/\s+/g, " ")).toBe(long);
     expect(splitSpeech("no punctuation at all")).toEqual(["no punctuation at all"]);
+  });
+});
+
+/** A streaming provider that yields one piece, then stalls until its signal aborts. */
+function stalledVoice() {
+  const st = { aborted: false, finalized: false };
+  const voice = new FakeVoice();
+  (voice as any).ttsStream = async function* (_t: string, o: TtsOptions) {
+    try {
+      yield new Int16Array(1600).fill(300);
+      await new Promise<void>((resolve) => {
+        if (o.signal?.aborted) return resolve();
+        o.signal?.addEventListener("abort", () => resolve());
+      });
+      st.aborted = !!o.signal?.aborted;
+    } finally {
+      st.finalized = true;
+    }
+  };
+  return { voice, st };
+}
+const timer = { setTimeout: (f: () => void, ms: number) => setTimeout(f, ms), clearTimeout: (h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>) };
+
+describe("TTS cancellation: a stalled provider is torn down", () => {
+  it("segment timeout aborts the provider (its stream finishes), and the feed reports tts_timeout", async () => {
+    const { voice, st } = stalledVoice();
+    const feed = new PcmFeed();
+    await synthesize(voice, ["Hello there."], {}, feed, timer, 50);
+    expect((feed.error as any)?.code).toBe("tts_timeout");
+    await until(() => st.finalized, 500);
+    expect(st).toEqual({ aborted: true, finalized: true });
+  });
+
+  it("the consumer giving up aborts the provider at once (no wait for the segment timeout)", async () => {
+    const { voice, st } = stalledVoice();
+    const feed = new PcmFeed();
+    const run = synthesize(voice, ["Hello there."], {}, feed, timer, 10_000);
+    await until(() => feed.queued, 500);
+    const t0 = Date.now();
+    feed.end(); // the say streamer stopped reading (device done / gone)
+    await run;
+    await until(() => st.finalized, 500);
+    expect(st).toEqual({ aborted: true, finalized: true });
+    expect(Date.now() - t0).toBeLessThan(500);
+  });
+
+  it("Workers AI: a model stream that stalls mid-audio is cancelled on timeout", async () => {
+    let cancelled: unknown = "no";
+    const head = encodeWav(new Int16Array(800).fill(9), 16000);
+    const ai = {
+      async run() {
+        return new ReadableStream<Uint8Array>({
+          start(c) {
+            c.enqueue(head.slice(0, 44 + 800)); // header + 400 samples, then nothing more
+          },
+          pull() {
+            return new Promise<void>(() => {}); // stalled backend
+          },
+          cancel(reason) {
+            cancelled = reason ?? "cancelled";
+          },
+        });
+      },
+    };
+    const feed = new PcmFeed();
+    await synthesize(new WorkersAiVoice(ai, {}), ["Hello there."], {}, feed, timer, 50);
+    expect((feed.error as any)?.code).toBe("tts_timeout");
+    await until(() => cancelled !== "no", 500);
+    expect(cancelled).not.toBe("no");
+  });
+
+  it("say: a provider stalling mid-utterance fails the job with tts_timeout and is cancelled", async () => {
+    const { voice, st } = stalledVoice();
+    const w = await setup({}, { voice, timings: { ttsTimeoutMs: 100 } });
+    const job = ((await w.room.command(w.token, "say", { text: "Hello there." })) as any).result.job;
+    expect(await w.room.job(w.token, job, 3000)).toMatchObject({ ok: true, result: { status: "failed", error: "tts_timeout" } });
+    await until(() => st.finalized, 500);
+    expect(st.aborted).toBe(true);
   });
 });
 

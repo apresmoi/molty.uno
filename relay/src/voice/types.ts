@@ -3,6 +3,12 @@
 
 export interface TtsOptions {
   voice?: string;
+  /**
+   * Aborted when nobody will read the audio any more (segment timeout, the
+   * consumer gave up, the turn failed). Providers cancel their request / stream
+   * on it so a stalled backend does not keep running.
+   */
+  signal?: AbortSignal;
 }
 
 export interface VoiceProvider {

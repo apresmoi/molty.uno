@@ -207,6 +207,8 @@ interface ListenBuffer {
   speech_ms?: number;
   /** The automatic `thinking` mood was sent at end of speech. */
   thinking?: boolean;
+  /** `moodRev` when this listen began: automatic moods apply only while it is unchanged. */
+  moodRev: number;
 }
 
 type JobKind = "say" | "listen" | "talk";
@@ -266,6 +268,8 @@ export class DeviceRoom implements AgentApi {
   private readonly sayDone = new Map<string, () => void>();
   private listenBuf: ListenBuffer | undefined;
   private audioJob: string | undefined;
+  /** Bumped by every explicit `mood` command (any agent): automatic moods never overwrite a newer explicit one. */
+  private moodRev = 0;
   private readonly lastEvents = new Map<string, { data: unknown; at: number }>();
   private readonly inboxWaiters = new Map<string, Set<() => void>>();
   /** Outstanding long-polls per token hash (admission control). */
@@ -502,6 +506,7 @@ export class DeviceRoom implements AgentApi {
       }
       return this.startJob(cmd.name as "say" | "listen", cmd.args);
     }
+    if (cmd.name === "mood") this.moodRev++;
     const res = await this.sendCmd(cmd.name, cmd.args);
     if (!res.ok || cmd.name !== "status") return res;
     const sock = this.liveSocket();
@@ -746,7 +751,8 @@ export class DeviceRoom implements AgentApi {
     const timings: JsonObject = { queue: this.clock.now() - created };
     const result: JsonObject = {};
     if (args.say !== undefined) {
-      // Wait for the device's say.done (bounded) so the mic does not open while the speaker still plays.
+      // The device's say.done is required before the mic opens (it must not record its own
+      // voice); none within playback + sayDoneGraceMs fails the turn with playback_timeout.
       const s = await this.speak(id, args.say, args.voice, true);
       if (!s.ok) return this.finishJob(id, { status: "failed", error: s.error });
       result.said = args.say;
@@ -862,6 +868,9 @@ export class DeviceRoom implements AgentApi {
         // Playback ends ~ when the stream would have, unless the device says so first.
         const left = playEnd - this.clock.now() + (untilDone ? this.t.sayDoneGraceMs : 0);
         if (left > 0 && !done) await Promise.race([doneSignal, sleep(this.clock, left)]);
+        // untilDone (talk): only the device's say.done proves the speaker is free. An
+        // elapsed estimate is not playback: never report success (or open the mic) on it.
+        if (untilDone && !done) return { ok: false, error: this.liveSocket()?.same(sock) ? "playback_timeout" : "device_offline" };
       } catch (e) {
         // Mid-stream failure: close the device's stream so it plays what it has and frees the speaker.
         if (!ended) {
@@ -903,7 +912,7 @@ export class DeviceRoom implements AgentApi {
    */
   private async record(id: string, ms: number, vad: JsonObject = {}): Promise<ListenResult> {
     const t0 = this.clock.now();
-    const buf: ListenBuffer = { job: id, chunks: [], bytes: 0, ended: false };
+    const buf: ListenBuffer = { job: id, chunks: [], bytes: 0, ended: false, moodRev: this.moodRev };
     this.listenBuf = buf;
     let tAck = t0;
     try {
@@ -923,8 +932,10 @@ export class DeviceRoom implements AgentApi {
       if (this.listenBuf === buf) this.listenBuf = undefined;
     }
     const tEnd = buf.endAt ?? this.clock.now();
-    // Device VAD heard nothing: no STT call at all (older firmware sends no reason: STT as before).
-    const noSpeech = buf.reason === "no_speech" || (buf.reason !== undefined && buf.speech_ms === 0);
+    // Device VAD heard nothing: no STT call at all. Only the explicit verdict counts:
+    // speech_ms is absent when VAD was off, and older firmware sent speech_ms:0 with
+    // vad:false -- neither means silence (older firmware without reason: STT as before).
+    const noSpeech = buf.reason === "no_speech";
     if (!this.liveSocket() && buf.bytes === 0) return { ok: false, error: "device_offline" };
     if (buf.bytes === 0 && !noSpeech) return { ok: false, error: "no_audio" };
     const all = new Uint8Array(buf.bytes);
@@ -938,7 +949,7 @@ export class DeviceRoom implements AgentApi {
     const text = noSpeech ? "" : await withTimeout(this.clock, this.voice.stt(pcm), this.t.sttTimeoutMs, "stt_timeout");
     const sttMs = noSpeech ? 0 : this.clock.now() - tStt;
     // Re-assert thinking after STT (covers the device's own idle racing the first one); nothing heard -> idle.
-    if (buf.thinking) this.autoMood(text ? "thinking" : "idle");
+    if (buf.thinking) this.autoMood(buf, text ? "thinking" : "idle");
     const duration = durationMs(pcm.length);
     const reason = buf.reason ?? (!text ? "no_speech" : duration >= ms - 100 ? "max" : "ended");
     return {
@@ -953,8 +964,12 @@ export class DeviceRoom implements AgentApi {
     };
   }
 
-  /** Relay-driven mood around talking; fire-and-forget (an explicit mood command still wins: it comes later). */
-  private autoMood(mood: "thinking" | "idle") {
+  /**
+   * Relay-driven mood around talking; fire-and-forget. Skipped once any agent has
+   * sent an explicit mood since this listen began: the explicit one stands.
+   */
+  private autoMood(buf: ListenBuffer, mood: "thinking" | "idle") {
+    if (buf.moodRev !== this.moodRev) return;
     const args: JsonObject = mood === "thinking" ? { mood, hold_s: this.t.thinkHoldS } : { mood };
     void this.sendCmd("mood", args).then((r) => {
       if (!r.ok) this.log("auto mood failed", { device: this.deviceId, mood, error: r.error });
@@ -976,9 +991,9 @@ export class DeviceRoom implements AgentApi {
       if (frame.header.reason) buf.reason = frame.header.reason;
       if (frame.header.speech_ms !== undefined) buf.speech_ms = frame.header.speech_ms;
       // End of speech: show thinking right away, while STT runs.
-      if (buf.bytes > 0 && buf.reason !== "no_speech" && buf.speech_ms !== 0 && buf.reason !== "error") {
+      if (buf.bytes > 0 && buf.reason !== "no_speech" && buf.reason !== "error") {
         buf.thinking = true;
-        this.autoMood("thinking");
+        this.autoMood(buf, "thinking");
       }
       buf.wake?.();
     }

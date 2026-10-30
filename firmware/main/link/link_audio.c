@@ -91,7 +91,8 @@ static esp_err_t send_frame(uint8_t *frame, link_frame_t *h, const int16_t *pcm,
 /* The listen ends at the first of: end of speech (vad.h: ~end_silence_ms of silence
  * after speech), nobody speaking by no_speech_ms, or the `ms` window. Either way the
  * last frame carries end:true plus {reason, speech_ms}, so the relay starts STT at
- * once instead of after the full window. */
+ * once instead of after the full window. speech_ms is left out when it was never
+ * measured (vad:false, or a listen shorter than VAD calibration). */
 static esp_err_t record(const audio_job_t *job)
 {
     _Static_assert(LINK_HEADER_MAX + 1 + REC_FRAME_SAMPLES * 2 <= LINK_MESSAGE_MAX, "uplink frame too big");
@@ -129,6 +130,9 @@ static esp_err_t record(const audio_job_t *job)
             if (h.end) {
                 s_end_reason = vad_reason(verdict); s_speech_ms = vad.speech_ms;
                 h.reason = s_end_reason; h.speech_ms = s_speech_ms;
+                /* VAD off / ended inside calibration: no measurement, so no speech_ms
+                 * (a 0 would make the relay treat real speech as silence) */
+                h.speech_known = vad_speech_known(&vad);
             }
             e = send_frame(frame, &h, acc, have);
             have = 0;
@@ -141,7 +145,7 @@ static esp_err_t record(const audio_job_t *job)
     /* Fail fast: an end-only frame tells the relay the stream is over instead of
      * leaving it to time out into no_audio ms + 5 s later. */
     if (e != ESP_OK && !atomic_load(&s_cancel) && frame && link_client_connected()) {
-        h.end = true; h.reason = "error"; h.speech_ms = vad.speech_ms;
+        h.end = true; h.reason = "error"; h.speech_ms = vad.speech_ms; h.speech_known = vad_speech_known(&vad);
         send_frame(frame, &h, NULL, 0);
     }
     heap_caps_free(chunk); heap_caps_free(acc); heap_caps_free(frame);

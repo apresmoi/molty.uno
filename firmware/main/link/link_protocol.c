@@ -226,7 +226,7 @@ bool link_frame_parse(const void *data, size_t len, link_frame_t *h,
         && cJSON_IsNumber(rate) && rate->valuedouble == 16000 && (!end || cJSON_IsBool(end));
     if (ok) {
         strcpy(h->stream, s->valuestring); h->seq = (uint32_t)seq->valuedouble;
-        h->end = cJSON_IsTrue(end); h->reason = NULL; h->speech_ms = 0; *pcm = nl ? nl + 1 : p + len; *pcm_len = payload;
+        h->end = cJSON_IsTrue(end); h->reason = NULL; h->speech_ms = 0; h->speech_known = false; *pcm = nl ? nl + 1 : p + len; *pcm_len = payload;
     }
     cJSON_Delete(j);
     return ok;
@@ -244,7 +244,7 @@ int link_frame_header(char *out, size_t cap, const link_frame_t *h)
     cJSON_AddBoolToObject(j, "end", h->end);
     if (h->reason) {
         cJSON_AddStringToObject(j, "reason", h->reason);
-        cJSON_AddNumberToObject(j, "speech_ms", h->speech_ms);
+        if (h->speech_known) cJSON_AddNumberToObject(j, "speech_ms", h->speech_ms);
     }
     char *json = cJSON_PrintUnformatted(j);
     cJSON_Delete(j);
