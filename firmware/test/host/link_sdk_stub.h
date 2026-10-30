@@ -152,6 +152,11 @@ extern uint8_t sdk_key[32];
 extern size_t sdk_key_len, sdk_written;
 extern int sdk_gpio[7];
 extern unsigned sdk_drained;
+/* speaker streams opened / closed; begin refuses with this (the speaker is someone else's);
+ * called on every write with what is written */
+extern unsigned sdk_speaker_begins, sdk_speaker_ends;
+extern esp_err_t sdk_speaker_begin_error;
+extern void (*sdk_on_speaker_write)(const int16_t *pcm, size_t n);
 extern esp_err_t sdk_play_error;
 /* the creature refuses a state set / a creature switch with this (ESP_OK: accepts) */
 extern esp_err_t sdk_state_error, sdk_select_error;

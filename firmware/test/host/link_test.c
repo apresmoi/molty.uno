@@ -178,6 +178,62 @@ static void test_listen_window(void)
     assert(!link_listen_setting_ok(4999) && !link_listen_setting_ok(30001) && !link_listen_setting_ok(10000.5) && !link_listen_setting_ok(-1));
 }
 
+/* The turn acknowledgement's rules (link_ack_decide) and its args / setting names. */
+static link_ack_t ack_of(const char *json, link_ack_t setting, bool *ok)
+{
+    cJSON *args = cJSON_Parse(json);
+    assert(args);
+    link_ack_t m = (link_ack_t)99;
+    *ok = link_ack_arg(args, setting, &m);
+    cJSON_Delete(args);
+    return m;
+}
+static void test_ack(void)
+{
+    const link_ack_t C = LINK_ACK_CHIRP, T = LINK_ACK_THINKING, O = LINK_ACK_OFF;
+    /* which ends acknowledge: speech heard */
+    assert(link_ack_decide(C, "turn_end", false, 0, false, true) == C);     /* the relay's end of turn: speech by definition */
+    assert(link_ack_decide(C, "turn_end", true, 0, false, true) == C);
+    assert(link_ack_decide(C, "silence", true, 900, false, true) == C);
+    assert(link_ack_decide(C, "silence", false, 0, false, true) == C);      /* unmeasured: the VAD called it */
+    assert(link_ack_decide(C, "silence", true, 0, false, true) == O);       /* measured nothing */
+    assert(link_ack_decide(C, "max", true, 160, false, true) == C);
+    assert(link_ack_decide(C, "max", true, 159, false, true) == O);
+    assert(link_ack_decide(C, "max", false, 5000, false, true) == O);       /* vad:false: unknown */
+    /* ...and nothing else */
+    const char *never[] = {"no_speech", "error", "cancelled", "ended", "", "TURN_END"};
+    for (size_t i = 0; i < sizeof(never) / sizeof(*never); i++)
+        assert(link_ack_decide(C, never[i], true, 3000, false, true) == O);
+    assert(link_ack_decide(C, NULL, true, 3000, false, true) == O);
+    /* opt-out, screen owners, no speaker */
+    assert(link_ack_decide(T, "turn_end", true, 900, false, true) == T);
+    assert(link_ack_decide(O, "turn_end", true, 900, false, true) == O);
+    assert(link_ack_decide(C, "turn_end", true, 900, true, true) == O);     /* explicit mood / ask / update / pairing */
+    assert(link_ack_decide(T, "silence", true, 900, true, true) == O);
+    assert(link_ack_decide(C, "turn_end", true, 900, false, false) == T);   /* no speaker: thinking only */
+    assert(link_ack_decide((link_ack_t)7, "turn_end", true, 900, false, true) == O);
+    /* per-listen "ack": absent / true → the setting; "silent" → no chirp; false → off */
+    bool ok;
+    assert(ack_of("{}", C, &ok) == C && ok);
+    assert(ack_of("{\"ack\":true}", T, &ok) == T && ok);
+    assert(ack_of("{\"ack\":\"silent\"}", C, &ok) == T && ok);
+    assert(ack_of("{\"ack\":\"silent\"}", O, &ok) == O && ok);          /* never turned up */
+    assert(ack_of("{\"ack\":true}", O, &ok) == O && ok);
+    assert(ack_of("{\"ack\":false}", C, &ok) == O && ok);
+    assert(ack_of("{}", (link_ack_t)9, &ok) == LINK_ACK_DEFAULT && ok);       /* a bad setting: the default */
+    const char *bad[] = {"{\"ack\":\"loud\"}", "{\"ack\":1}", "{\"ack\":null}", "{\"ack\":\"Silent\"}", "{\"ack\":\"chirp\"}"};
+    for (size_t i = 0; i < sizeof(bad) / sizeof(*bad); i++) {
+        assert(ack_of(bad[i], C, &ok) == (link_ack_t)99 && !ok);
+    }
+    assert(!link_ack_arg(NULL, C, NULL));
+    /* the setting's names */
+    link_ack_t m;
+    assert(link_ack_parse("chirp", &m) && m == C && link_ack_parse("thinking", &m) && m == T && link_ack_parse("off", &m) && m == O);
+    assert(!link_ack_parse("silent", &m) && !link_ack_parse("Chirp", &m) && !link_ack_parse("", &m) && !link_ack_parse(NULL, &m));
+    assert(!strcmp(link_ack_name(C), "chirp") && !strcmp(link_ack_name(T), "thinking") && !strcmp(link_ack_name(O), "off"));
+    assert(!strcmp(link_ack_name((link_ack_t)5), "chirp") && LINK_ACK_DEFAULT == C && LINK_ACK_THINK_S == 30);
+}
+
 static void test_event_frames(void)
 {
     expect_json(link_evt_shake_frame(1.83456, 4, 412),
@@ -388,7 +444,7 @@ static void test_ask_args(void)
 int main(void)
 {
     test_codes(); test_moods(); test_frames(); test_cues(); test_identity_and_urls(); test_control_frames();
-    test_mood_args(); test_listen_args(); test_listen_window(); test_event_frames(); test_restore(); test_ask_args();
-    puts("LINK HOST PASS: audio/control/event frames, random IDs, code alphabet, URLs, close retry policy, moods + hold_s, listen args + window, say cues, restore, ask args + answer frames");
+    test_mood_args(); test_listen_args(); test_listen_window(); test_ack(); test_event_frames(); test_restore(); test_ask_args();
+    puts("LINK HOST PASS: audio/control/event frames, random IDs, code alphabet, URLs, close retry policy, moods + hold_s, listen args + window, turn ack rules, say cues, restore, ask args + answer frames");
     return 0;
 }

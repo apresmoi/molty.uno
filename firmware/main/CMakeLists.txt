@@ -64,6 +64,7 @@ idf_component_register(
         "update/self_update.c"
         # audio: listen end-of-speech detection (plain C, host-tested)
         "audio/vad.c"
+        "audio/chirp.c"          # the turn acknowledgement blip (link_audio)
         # sense: device events (IMU shake, taps, buttons) for the agent + the fluid
         "sense/gesture.c"
         "sense/sense.c"

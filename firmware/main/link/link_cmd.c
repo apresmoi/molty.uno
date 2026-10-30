@@ -76,12 +76,14 @@ esp_err_t link_cmd_screen_claim(const char *body)
     return e;
 }
 
-void link_cmd_mood_idle_unless(unsigned gen0)
+void link_cmd_mood_unless(unsigned gen0, const char *mood, double hold_s)
 {
     mood_lock();
-    if (atomic_load(&s_mood_gen) == gen0) link_cmd_mood("idle", -1);
+    if (atomic_load(&s_mood_gen) == gen0) link_cmd_mood(mood, hold_s);
     mood_unlock();
 }
+
+void link_cmd_mood_idle_unless(unsigned gen0) { link_cmd_mood_unless(gen0, "idle", -1); }
 
 esp_err_t link_cmd_register(const char *name, link_cmd_handler_t handler)
 {

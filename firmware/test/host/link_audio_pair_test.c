@@ -89,7 +89,12 @@ esp_err_t link_cmd_mood(const char *mood,double hold_s) { strcpy(sdk_mood,mood);
 static unsigned mood_gen;            /* link_cmd.c's explicit-mood count (link_cmd_test.c) */
 unsigned link_cmd_mood_gen(void) { return mood_gen; }
 static void explicit_mood(const char *mood,double hold_s) { link_cmd_mood(mood,hold_s); mood_gen++; }
-void link_cmd_mood_idle_unless(unsigned gen0) { if (mood_gen==gen0) link_cmd_mood("idle",-1); }
+void link_cmd_mood_unless(unsigned gen0,const char *mood,double hold_s) { if (mood_gen==gen0) link_cmd_mood(mood,hold_s); }
+void link_cmd_mood_idle_unless(unsigned gen0) { link_cmd_mood_unless(gen0,"idle",-1); }
+static bool ask_pending;             /* link_ask.c: a question on screen */
+bool link_ask_pending(void) { return ask_pending; }
+static int ack_setting = LINK_ACK_CHIRP;   /* the console's acknowledgement setting (mole_fluid.c, NVS) */
+int mole_fluid_ack_mode(void) { return ack_setting; }
 esp_err_t link_ui_set_text(const char *text,int len) { assert(len>=0 && len<=4096); memcpy(sdk_text,text,len+1); return ESP_OK; }
 
 static cJSON *say_args(void) { return cJSON_Parse("{\"job\":\"molty-abcdefghij.j_1\",\"text\":\"hello world\",\"ms\":640,\"rate\":16000}"); }
@@ -179,6 +184,126 @@ static void test_say(void) {
 }
 /* An explicit mood that arrives while a listen / say runs outlives its completion
  * (it carries its own hold_s); with none, completion falls back to idle. */
+/* The chirp itself (audio/chirp.h): 160 ms, soft edges, quiet, smooth, G5 then D6. */
+static int crossings(const int16_t *b,size_t from_ms,size_t to_ms) {
+    int c=0; for (size_t i=from_ms*16+1;i<to_ms*16;i++) c+=(b[i-1]<0)!=(b[i]<0); return c;
+}
+static void test_chirp_sound(void) {
+    static int16_t b[CHIRP_SAMPLES+8];
+    assert(CHIRP_SAMPLES==2560 && chirp_fill(b,0,CHIRP_SAMPLES+8)==CHIRP_SAMPLES);
+    assert(chirp_fill(b,CHIRP_SAMPLES,8)==0 && chirp_fill(b,CHIRP_SAMPLES-3,8)==3);
+    chirp_fill(b,0,CHIRP_SAMPLES);
+    int peak=0,step=0;
+    for (size_t i=0;i<CHIRP_SAMPLES;i++) {
+        if (abs(b[i])>peak) peak=abs(b[i]);
+        if (i && abs(b[i]-b[i-1])>step) step=abs(b[i]-b[i-1]);
+    }
+    assert(peak>=3000 && peak<=CHIRP_PEAK);                 /* ≈ −17 dBFS: quiet under speech */
+    assert(step<2400);                                      /* no click anywhere */
+    assert(abs(b[0])<50 && abs(b[CHIRP_SAMPLES-1])<50);     /* soft attack and release */
+    int lo=crossings(b,5,45), hi=crossings(b,100,150);      /* 2 per cycle */
+    assert(lo>=58 && lo<=68 && hi>=112 && hi<=123);          /* 784 Hz, then 1175 Hz */
+    /* chunked synthesis is the same sound */
+    static int16_t c[CHIRP_SAMPLES]; size_t at=0,n;
+    while ((n=chirp_fill(c+at,at,256))>0) at+=n;
+    assert(at==CHIRP_SAMPLES && !memcmp(b,c,sizeof(c)));
+}
+
+/* The turn acknowledgement: a listen run the way the worker runs it (record, done, then
+ * the chirp), the link task completing it at the chirp's first write. */
+static size_t chirp_samples; static unsigned chirp_writes; static bool cut_with_say;
+static char ack_mood[16]; static double ack_hold;
+static void chirp_write(const int16_t *pcm,size_t n) {
+    (void)pcm;
+    if (!chirp_writes++) {
+        /* the listen was reported done BEFORE the chirp's first sample: thinking is up and a
+         * say is accepted right away (not answered busy) */
+        assert(link_audio_busy()); link_audio_tick(); assert(!link_audio_busy());
+        snprintf(ack_mood,sizeof(ack_mood),"%s",sdk_mood); ack_hold=sdk_hold_s;
+        if (cut_with_say) begin_say();
+    }
+    chirp_samples+=n;
+}
+/* -> the listen answer's "ack", or NULL when the listen was refused */
+static const char *ack_listen_ms(unsigned ms, const char *extra, void (*fill)(int16_t *,size_t,unsigned), void (*during)(void)) {
+    static char acked[16];
+    char a[192]; snprintf(a,sizeof(a),"{\"job\":\"listen1\",\"ms\":%u,\"rate\":16000%s}",ms,extra);
+    cJSON *args=cJSON_Parse(a),*res=NULL;
+    esp_err_t e=link_audio_listen(args,&res); cJSON_Delete(args);
+    if (e!=ESP_OK) { assert(e==ESP_ERR_INVALID_ARG && !res && !link_audio_busy()); return NULL; }
+    cJSON *ak=cJSON_GetObjectItem(res,"ack"); assert(cJSON_IsString(ak));
+    snprintf(acked,sizeof(acked),"%s",ak->valuestring); cJSON_Delete(res);
+    audio_job_t job; assert(xQueueReceive(s_jobs,&job,0)==pdTRUE && job.listen);
+    bin_frames=bin_bytes=bin_ends=bin_seq=0; bin_reason[0]=0; bin_speech_ms=-1;
+    if (during) during();
+    sdk_rx_chunks=0; sdk_rx_fill=fill; chirp_samples=0; chirp_writes=0; ack_mood[0]=0; sdk_drained=0;
+    sdk_on_speaker_write=chirp_write;
+    run_job(&job);
+    sdk_on_speaker_write=NULL; sdk_rx_fill=NULL;
+    link_audio_tick();                       /* no chirp: the completion happens here */
+    assert(!link_audio_busy() || cut_with_say);
+    return acked;
+}
+#define ack_listen(...) ack_listen_ms(8000,__VA_ARGS__)
+static void mic_fails(void) { sdk_rx_error=ESP_ERR_TIMEOUT; }
+static void stop_it(void) { cJSON *a=cJSON_Parse("{\"job\":\"listen1\"}"),*r=NULL; assert(link_audio_listen_stop(a,&r)==ESP_OK); cJSON_Delete(a); cJSON_Delete(r); }
+static void cancel_it(void) { link_audio_cancel(); }
+static void mood_meanwhile(void) { explicit_mood("happy",0); }
+static void ask_meanwhile(void) { ask_pending=true; }
+#define CHIRPED_FULL() (chirp_writes>0 && chirp_samples==CHIRP_SAMPLES && sdk_drained==1 && !strcmp(ack_mood,"thinking") && ack_hold==LINK_ACK_THINK_S && sdk_speaker_begins==sdk_speaker_ends)
+#define THINKS_QUIETLY() (!chirp_writes && !strcmp(sdk_mood,"thinking") && sdk_hold_s==LINK_ACK_THINK_S)
+#define NO_ACK() (!chirp_writes && !strcmp(sdk_mood,"idle"))
+static void test_ack(void) {
+    const char *k;
+    /* heard speech (device VAD: silence after it) → chirp + thinking, out of the box */
+    k=ack_listen("",speech_fill,NULL); assert(!strcmp(k,"chirp") && !strcmp(bin_reason,"silence") && CHIRPED_FULL());
+    assert(!strcmp(sdk_mood,"thinking"));     /* the chirp's own end changes nothing on screen */
+    /* the relay's end of turn (listen_stop → turn_end) */
+    k=ack_listen("",speech_fill,stop_it); assert(!strcmp(bin_reason,"turn_end") && CHIRPED_FULL());
+    /* the window ran out while they were talking (measured speech) */
+    k=ack_listen_ms(1500,"",speech_fill,NULL); assert(!strcmp(bin_reason,"max") && bin_speech_ms>=160 && CHIRPED_FULL());
+    /* nothing heard / nothing known / failed / cancelled: no acknowledgement, idle as before */
+    k=ack_listen("",NULL,NULL); assert(!strcmp(bin_reason,"no_speech") && NO_ACK());
+    k=ack_listen_ms(1500,",\"vad\":false",speech_fill,NULL); assert(!strcmp(bin_reason,"max") && bin_speech_ms==-1 && NO_ACK());
+    k=ack_listen("",speech_fill,mic_fails); sdk_rx_error=ESP_OK; assert(!strcmp(bin_reason,"error") && NO_ACK());
+    k=ack_listen("",speech_fill,cancel_it); assert(!strcmp(s_end_reason,"error") && NO_ACK());
+    /* the agent opts out per listen: false → nothing; "silent" → thinking without the chirp */
+    k=ack_listen(",\"ack\":false",speech_fill,NULL); assert(!strcmp(k,"off") && NO_ACK());
+    k=ack_listen(",\"ack\":\"silent\"",speech_fill,NULL); assert(!strcmp(k,"thinking") && THINKS_QUIETLY());
+    k=ack_listen(",\"ack\":true",speech_fill,NULL); assert(!strcmp(k,"chirp") && CHIRPED_FULL());
+    assert(!ack_listen(",\"ack\":\"loud\"",speech_fill,NULL) && !ack_listen(",\"ack\":1",speech_fill,NULL));
+    assert(!ack_listen(",\"ack\":null",speech_fill,NULL));
+    /* the human's setting: thinking only / off (an agent can only turn it down) */
+    ack_setting=LINK_ACK_THINKING;
+    k=ack_listen("",speech_fill,NULL); assert(!strcmp(k,"thinking") && THINKS_QUIETLY());
+    k=ack_listen(",\"ack\":true",speech_fill,NULL); assert(!strcmp(k,"thinking") && THINKS_QUIETLY());
+    ack_setting=LINK_ACK_OFF;
+    k=ack_listen("",speech_fill,NULL); assert(!strcmp(k,"off") && NO_ACK());
+    k=ack_listen(",\"ack\":true",speech_fill,NULL); assert(!strcmp(k,"off") && NO_ACK());
+    k=ack_listen(",\"ack\":\"silent\"",speech_fill,NULL); assert(!strcmp(k,"off") && NO_ACK());
+    ack_setting=LINK_ACK_CHIRP;
+    /* someone else took the screen during the listen: an explicit mood stays, a question stays up */
+    k=ack_listen("",speech_fill,mood_meanwhile); assert(!chirp_writes && !strcmp(sdk_mood,"happy") && sdk_hold_s==0);
+    k=ack_listen("",speech_fill,ask_meanwhile); assert(!chirp_writes && !strcmp(sdk_mood,"idle")); ask_pending=false;
+    /* the agent's next command replaces the thinking: say → speaking, its end → idle */
+    k=ack_listen("",speech_fill,NULL); assert(CHIRPED_FULL());
+    begin_say(); receive_pcm(0,true); complete(play()); assert(!strcmp(sdk_mood,"idle"));
+    /* no speaker: thinking only; the speaker busy elsewhere: thinking, the chirp skipped */
+    sdk_caps&=~MOLTY_CAP_SPEAKER;
+    k=ack_listen("",speech_fill,NULL); assert(!strcmp(k,"chirp") && THINKS_QUIETLY());
+    sdk_caps=0xFFFFFFFFu;
+    unsigned b0=sdk_speaker_begins; sdk_speaker_begin_error=ESP_ERR_INVALID_STATE;
+    k=ack_listen("",speech_fill,NULL); assert(THINKS_QUIETLY() && sdk_speaker_begins==b0);
+    sdk_speaker_begin_error=ESP_OK;
+    /* a say accepted while the chirp plays cuts it (faded, the DMA flushed with silence) and
+     * starts only once the speaker is free: the stub asserts one owner at a time */
+    cut_with_say=true;
+    k=ack_listen("",speech_fill,NULL); cut_with_say=false;
+    assert(link_audio_busy() && !strcmp(sdk_mood,"speaking"));       /* the say owns the screen */
+    assert(chirp_samples>0 && chirp_samples<CHIRP_SAMPLES/2 && sdk_drained==1 && sdk_speaker_begins==sdk_speaker_ends);
+    receive_pcm(0,true); complete(play()); assert(!strcmp(field("name"),"say.done") && !link_audio_busy());
+}
+
 static void test_mood_survives(void) {
     audio_job_t job; listen_job(10,&job); assert(!strcmp(sdk_mood,"listening"));
     explicit_mood("happy",0);                         /* held until the next mood */
@@ -344,7 +469,8 @@ static void test_listen_stop(void) {
     /* 11 chunks read (the stop lands after the 11th): 3 full frames + the 2-chunk tail with end */
     assert(sdk_rx_chunks==11 && bin_bytes==11*3200u && bin_frames==4 && bin_ends==1);
     assert(!strcmp(bin_reason,"turn_end") && !strcmp(s_end_reason,"turn_end"));
-    assert(!ring_on && !link_audio_busy() && !strcmp(sdk_mood,"idle"));
+    /* the ring is off; the turn was heard: Molty acknowledges it (thinking, test_ack) */
+    assert(!ring_on && !link_audio_busy() && !strcmp(sdk_mood,"thinking") && sdk_hold_s==LINK_ACK_THINK_S);
     /* nothing running: a late stop is answered, and does not leak into the next listen */
     assert(!stop_cmd("listen1"));
     listen_job(1000,&job); sdk_rx_chunks=0;
@@ -434,7 +560,7 @@ static void test_say_cues(void) {
 }
 int main(void) {
     assert(link_audio_init()==ESP_OK && link_pair_init()==ESP_OK);
-    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop(); test_listen_window(); test_say_cues();
+    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop(); test_listen_window(); test_say_cues(); test_chirp_sound(); test_ack();
     cJSON_Delete(sdk_sent); free(s_jobs); free(s_done); free(s_ring);
-    puts("LINK AUDIO/PAIR PASS: paced PCM, final playback drain, errors, cmd-time text/mood, explicit moods outlive jobs, pairing reasons, board caps, listening ring (+ ring_color), ask cancellation, listen_stop (turn_end), listen window (30 s, unlimited, setting), say word cues follow playback");
+    puts("LINK AUDIO/PAIR PASS: paced PCM, final playback drain, errors, cmd-time text/mood, explicit moods outlive jobs, pairing reasons, board caps, listening ring (+ ring_color), ask cancellation, listen_stop (turn_end), listen window (30 s, unlimited, setting), say word cues follow playback, turn acknowledgement (chirp + thinking: which ends ack, opt-outs, setting, screen owners, cut by the next job)");
 }

@@ -78,6 +78,31 @@ bool link_listen_args(const cJSON *args, bool *vad, unsigned *end_silence_ms, un
 bool link_listen_window(const cJSON *args, uint32_t dflt, uint32_t *window, uint32_t *record_ms);
 /* A valid device setting: 0 (unlimited) or LINK_LISTEN_SET_MIN..LINK_LISTEN_MAX_MS. */
 bool link_listen_setting_ok(double v);
+/* The turn acknowledgement (cap "ack"): when a listen that heard speech ends, the device
+ * itself plays a short chirp and shows `thinking` (held LINK_ACK_THINK_S, or until the
+ * agent's next say / mood / ask / listen), so the human never waits in dead air while the
+ * agent works out its answer. The device's setting (POST /api/creature/state {ack}, NVS like
+ * ring_color): "chirp" (chirp + thinking, out of the box) | "thinking" (no sound) | "off". */
+typedef enum { LINK_ACK_OFF = 0, LINK_ACK_THINKING = 1, LINK_ACK_CHIRP = 2 } link_ack_t;
+#define LINK_ACK_DEFAULT  LINK_ACK_CHIRP
+#define LINK_ACK_THINK_S  30          /* the acknowledgement's thinking reverts to idle after this */
+/* "chirp" | "thinking" | "off" (an unknown mode reads as the default's name) */
+const char *link_ack_name(link_ack_t mode);
+/* A setting's name → mode; false when it is none of the three. */
+bool link_ack_parse(const char *name, link_ack_t *mode);
+/* listen/talk's per-listen "ack": absent or true → the device's setting; "silent" → no chirp
+ * (thinking, unless the setting is off); false → off. An agent can only turn it down. A wrong
+ * type / another string → false, *mode untouched. */
+bool link_ack_arg(const cJSON *args, link_ack_t setting, link_ack_t *mode);
+/* What a listen that ended acknowledges: the listen's mode when it heard speech — reason
+ * "turn_end" (the relay's end of turn), "silence" (the device VAD's end of speech, with
+ * speech measured > 0 if measured), or "max" (window full) with ≥ LINK_ACK_MIN_SPEECH_MS of
+ * measured speech — and nothing else owns the screen (an explicit mood, an ask, an update
+ * screen or a pairing arrived during the listen: screen_taken). no_speech / error / a
+ * cancelled listen ("error" too) never ack. A chirp without a speaker is thinking only. */
+#define LINK_ACK_MIN_SPEECH_MS 160u
+link_ack_t link_ack_decide(link_ack_t mode, const char *reason, bool speech_known, uint32_t speech_ms,
+                           bool screen_taken, bool has_speaker);
 cJSON *link_evt_shake_frame(double peak_g, int reversals, unsigned ms);
 cJSON *link_evt_tap_frame(double x, double y);
 cJSON *link_evt_button_frame(bool accept);

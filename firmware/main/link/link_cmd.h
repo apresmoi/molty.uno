@@ -27,5 +27,8 @@ esp_err_t link_cmd_state_set_explicit(const char *body);
 esp_err_t link_cmd_screen_claim(const char *body);
 /* A listen/say ended: back to idle unless an explicit mood was accepted since gen0. */
 void link_cmd_mood_idle_unless(unsigned gen0);
+/* The same with another mood the device sets for itself (the turn acknowledgement's
+ * `thinking`, link_audio.c): not counted as explicit, so the next job still replaces it. */
+void link_cmd_mood_unless(unsigned gen0, const char *mood, double hold_s);
 /* Shared with the local reader HTTP endpoint; preserves its routing semantics. */
 esp_err_t link_ui_set_text(const char *text, int len);

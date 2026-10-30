@@ -163,6 +163,45 @@ bool link_listen_window(const cJSON *args, uint32_t dflt, uint32_t *window, uint
     return true;
 }
 
+static const char *const ACK_NAMES[] = {"off", "thinking", "chirp"};
+
+const char *link_ack_name(link_ack_t mode)
+{
+    return mode >= LINK_ACK_OFF && mode <= LINK_ACK_CHIRP ? ACK_NAMES[mode] : ACK_NAMES[LINK_ACK_DEFAULT];
+}
+
+bool link_ack_parse(const char *name, link_ack_t *mode)
+{
+    if (!name || !mode) return false;
+    for (int i = LINK_ACK_OFF; i <= LINK_ACK_CHIRP; i++)
+        if (!strcmp(name, ACK_NAMES[i])) { *mode = (link_ack_t)i; return true; }
+    return false;
+}
+
+bool link_ack_arg(const cJSON *args, link_ack_t setting, link_ack_t *mode)
+{
+    if (!mode) return false;
+    if (setting < LINK_ACK_OFF || setting > LINK_ACK_CHIRP) setting = LINK_ACK_DEFAULT;
+    const cJSON *a = cJSON_GetObjectItemCaseSensitive(args, "ack");
+    if (!a || cJSON_IsTrue(a)) *mode = setting;
+    else if (cJSON_IsFalse(a)) *mode = LINK_ACK_OFF;
+    else if (cJSON_IsString(a) && !strcmp(a->valuestring, "silent"))
+        *mode = setting == LINK_ACK_OFF ? LINK_ACK_OFF : LINK_ACK_THINKING;
+    else return false;
+    return true;
+}
+
+link_ack_t link_ack_decide(link_ack_t mode, const char *reason, bool speech_known, uint32_t speech_ms,
+                           bool screen_taken, bool has_speaker)
+{
+    if (mode <= LINK_ACK_OFF || mode > LINK_ACK_CHIRP || screen_taken || !reason) return LINK_ACK_OFF;
+    bool heard = !strcmp(reason, "turn_end") ||
+                 (!strcmp(reason, "silence") && (!speech_known || speech_ms > 0)) ||
+                 (!strcmp(reason, "max") && speech_known && speech_ms >= LINK_ACK_MIN_SPEECH_MS);
+    if (!heard) return LINK_ACK_OFF;
+    return mode == LINK_ACK_CHIRP && !has_speaker ? LINK_ACK_THINKING : mode;
+}
+
 static cJSON *evt(const char *name, cJSON **data)
 {
     cJSON *j = frame("evt");
