@@ -1741,7 +1741,9 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     // no_speech (the box heard nobody, device VAD off): as the device's own no_speech — no STT, transcript ""
     buf.reason = why === "no_speech" ? "no_speech" : "turn_end";
     if (this.liveSocket()?.getMeta()?.caps?.includes("listen_stop")) {
-      void this.sendCmd("listen_stop", { job: buf.job }).then((r) => {
+      // the reason rides along so the device ends with it and applies its acknowledgement
+      // rules to it: no_speech → no chirp, no thinking (older firmware ignores it: turn_end)
+      void this.sendCmd("listen_stop", { job: buf.job, reason: buf.reason }).then((r) => {
         if (!r.ok) this.log("listen_stop failed", { device: this.deviceId, job: buf.job, error: r.error });
       });
     }

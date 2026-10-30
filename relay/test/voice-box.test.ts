@@ -14,8 +14,8 @@ const NEXT = ["NEWC2345", "NEWD2345", "NEWE2345", "NEWF2345"];
 
 /**
  * A device that answers cmds, plays say streams, and streams a listen as `chunks` chunks
- * 30 ms apart, then the end frame. `listen_stop {job}` (firmware with the cap) ends it at
- * once with reason turn_end, like link_audio.c.
+ * 30 ms apart, then the end frame. `listen_stop {job, reason?}` (firmware with the cap) ends it at
+ * once with that reason (turn_end when absent), like link_audio.c.
  */
 function device(room: DeviceRoom, sock: FakeSocket, o: { chunks?: number; ack?: string } = {}) {
   const chunks = o.chunks ?? 3;
@@ -47,7 +47,7 @@ function device(room: DeviceRoom, sock: FakeSocket, o: { chunks?: number; ack?: 
       if (f.name === "listen_stop") {
         for (const t of timers) clearTimeout(t);
         timers = [];
-        setTimeout(() => void room.socketMessage(sock, new TextEncoder().encode(JSON.stringify({ s: f.args.job, seq: 99, kind: "pcm16", rate: 16000, end: true, reason: "turn_end" }))), 2);
+        setTimeout(() => void room.socketMessage(sock, new TextEncoder().encode(JSON.stringify({ s: f.args.job, seq: 99, kind: "pcm16", rate: 16000, end: true, reason: f.args.reason ?? "turn_end" }))), 2);
       }
     }
     if (f.t === "pair.request") setTimeout(() => void room.socketMessage(sock, JSON.stringify({ t: "pair.result", req: f.req, ok: true, link_code: NEXT[codes++] })), 2);
@@ -578,7 +578,7 @@ describe("semantic end of turn (box stt.turn_end)", () => {
     expect(Date.now() - t0).toBeLessThan(300);
     const stops = w.dev.log.filter((l) => l.name === "listen_stop");
     expect(stops).toHaveLength(1);
-    expect(stops[0].args).toEqual({ job: w.dev.log.find((l) => l.name === "listen")!.args.job });
+    expect(stops[0].args).toEqual({ job: w.dev.log.find((l) => l.name === "listen")!.args.job, reason: "turn_end" });
     // stt.end went out right after the turn end; the device's own late end frame changed nothing
     const c = w.box!.control.map((f) => f.t);
     expect(c.indexOf("stt.end")).toBeGreaterThan(c.indexOf("stt.start"));
@@ -678,7 +678,10 @@ describe("semantic end of turn is the default with a voice box", () => {
     const out = await w.room.talk(w.token, {});
     expect(out).toMatchObject({ ok: true, result: { status: "done", heard: "", reason: "no_speech" } });
     expect(Date.now() - t0).toBeLessThan(400); // not the device's 40-chunk run
-    expect(w.dev.log.filter((l) => l.name === "listen_stop")).toHaveLength(1);
+    const stops = w.dev.log.filter((l) => l.name === "listen_stop");
+    expect(stops).toHaveLength(1);
+    // the device is told WHY: it ends with no_speech and acknowledges nothing (no chirp, no thinking)
+    expect(stops[0].args).toEqual({ job: w.dev.log.find((l) => l.name === "listen")!.args.job, reason: "no_speech" });
     const c = w.box!.control.map((f) => f.t);
     expect(c).toContain("stt.cancel"); // nobody wants a transcript
     expect(c).not.toContain("stt.end");

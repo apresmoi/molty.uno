@@ -247,6 +247,8 @@ static const char *ack_listen_ms(unsigned ms, const char *extra, void (*fill)(in
 #define ack_listen(...) ack_listen_ms(8000,__VA_ARGS__)
 static void mic_fails(void) { sdk_rx_error=ESP_ERR_TIMEOUT; }
 static void stop_it(void) { cJSON *a=cJSON_Parse("{\"job\":\"listen1\"}"),*r=NULL; assert(link_audio_listen_stop(a,&r)==ESP_OK); cJSON_Delete(a); cJSON_Delete(r); }
+static void stop_no_speech(void) { cJSON *a=cJSON_Parse("{\"job\":\"listen1\",\"reason\":\"no_speech\"}"),*r=NULL; assert(link_audio_listen_stop(a,&r)==ESP_OK); cJSON_Delete(a); cJSON_Delete(r); }
+static void stop_turn_end(void) { cJSON *a=cJSON_Parse("{\"job\":\"listen1\",\"reason\":\"turn_end\"}"),*r=NULL; assert(link_audio_listen_stop(a,&r)==ESP_OK); cJSON_Delete(a); cJSON_Delete(r); }
 static void cancel_it(void) { link_audio_cancel(); }
 static void mood_meanwhile(void) { explicit_mood("happy",0); }
 static void ask_meanwhile(void) { ask_pending=true; }
@@ -260,6 +262,11 @@ static void test_ack(void) {
     assert(!strcmp(sdk_mood,"thinking"));     /* the chirp's own end changes nothing on screen */
     /* the relay's end of turn (listen_stop → turn_end) */
     k=ack_listen("",speech_fill,stop_it); assert(!strcmp(bin_reason,"turn_end") && CHIRPED_FULL());
+    k=ack_listen("",speech_fill,stop_turn_end); assert(!strcmp(bin_reason,"turn_end") && CHIRPED_FULL());
+    /* the relay's no_speech (its STT heard nobody, device VAD off): ends with that reason and is
+     * never acknowledged — no chirp, no thinking — even if the mic picked up sound */
+    k=ack_listen(",\"vad\":false",speech_fill,stop_no_speech); assert(!strcmp(k,"chirp") && !strcmp(bin_reason,"no_speech") && NO_ACK());
+    k=ack_listen("",NULL,stop_no_speech); assert(!strcmp(bin_reason,"no_speech") && NO_ACK());
     /* the window ran out while they were talking (measured speech) */
     k=ack_listen_ms(1500,"",speech_fill,NULL); assert(!strcmp(bin_reason,"max") && bin_speech_ms>=160 && CHIRPED_FULL());
     /* nothing heard / nothing known / failed / cancelled: no acknowledgement, idle as before */
@@ -484,6 +491,13 @@ static void test_listen_stop(void) {
     /* malformed */
     cJSON *bad=cJSON_Parse("{\"job\":7}"),*res=NULL;
     assert(link_audio_listen_stop(bad,&res)==ESP_ERR_INVALID_ARG && !res); cJSON_Delete(bad);
+    /* reason: "turn_end" | "no_speech" (absent: turn_end); anything else is refused */
+    const char *bad_reasons[]={"\"error\"","\"\"","7","null","true"};
+    for (size_t i=0;i<sizeof bad_reasons/sizeof *bad_reasons;i++) {
+        char a[96]; snprintf(a,sizeof(a),"{\"job\":\"listen1\",\"reason\":%s}",bad_reasons[i]);
+        bad=cJSON_Parse(a); res=NULL;
+        assert(link_audio_listen_stop(bad,&res)==ESP_ERR_INVALID_ARG && !res); cJSON_Delete(bad);
+    }
 }
 /* The window: 30000 ok, 30001 refused, 0 = unlimited (records to the 300 s ceiling, reason
  * max, nothing sized by it), absent = the device's setting; the ack reports the window. */
@@ -564,5 +578,5 @@ int main(void) {
     assert(link_audio_init()==ESP_OK && link_pair_init()==ESP_OK);
     test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop(); test_listen_window(); test_say_cues(); test_chirp_sound(); test_ack();
     cJSON_Delete(sdk_sent); free(s_jobs); free(s_done); free(s_ring);
-    puts("LINK AUDIO/PAIR PASS: paced PCM, final playback drain, errors, cmd-time text/mood, explicit moods outlive jobs, pairing reasons, board caps, listening ring (+ ring_color), ask cancellation, listen_stop (turn_end), listen window (30 s, unlimited, setting), say word cues follow playback, turn acknowledgement (chirp + thinking: which ends ack, opt-outs, setting, screen owners, cut by the next job)");
+    puts("LINK AUDIO/PAIR PASS: paced PCM, final playback drain, errors, cmd-time text/mood, explicit moods outlive jobs, pairing reasons, board caps, listening ring (+ ring_color), ask cancellation, listen_stop (turn_end; no_speech never acknowledged), listen window (30 s, unlimited, setting), say word cues follow playback, turn acknowledgement (chirp + thinking: which ends ack, opt-outs, setting, screen owners, cut by the next job)");
 }

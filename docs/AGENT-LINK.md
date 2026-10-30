@@ -212,10 +212,14 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   `""`. `speech_ms` alone never skips STT (firmware before this change sent `speech_ms:0` with
   `vad:false`). Older firmware sends no reason: STT as before, reason derived (`max` window
   full, `ended` stopped early, `no_speech` empty transcript).
-- `listen_stop` (cap `listen_stop`, boards with a mic): relay sends `cmd listen_stop {job}` when
-  its STT called the end of the human's turn (a [voice box](#voice-box) `stt.turn_end`). The
-  device ends THAT listen within one 100 ms chunk, as if its VAD had fired: the frames recorded
-  so far go up, the last with `end:true, "reason":"turn_end"`. Answer `{job, stopping:bool}`
+- `listen_stop` (cap `listen_stop`, boards with a mic): relay sends `cmd listen_stop {job, reason}`
+  when its STT called the end of the listen (a [voice box](#voice-box) `stt.turn_end`): `reason`
+  `"turn_end"` (the human finished) or `"no_speech"` (the box heard nobody). The device ends THAT
+  listen within one 100 ms chunk, as if its VAD had fired: the frames recorded so far go up, the
+  last with `end:true` and that `reason`, and its [turn acknowledgement](#turn-acknowledgement)
+  rules apply to it — `no_speech` gets no chirp and no thinking. `reason` absent = `turn_end`
+  (older relays); any other value is refused. Firmware older than the reason ignores it and ends
+  with `turn_end` (so it chirps on a box no_speech). Answer `{job, stopping:bool}`
   (`false`: not the running listen — already ended, another job, or a say; nothing changes).
   It never cancels and never touches a say. The relay does not wait for that end frame: the job
   is already done (`reason:"turn_end"`, `timings.turn_end` = ms from the listen's start to the
@@ -256,7 +260,8 @@ so firmware with the cap `ack` acknowledges the turn **itself, locally, at once*
 - **When.** A listen ends with `reason` `turn_end` (the relay's end of turn), `silence` (the
   device VAD's end of speech) or `max` with ≥ 160 ms of measured speech — and nothing else took
   the screen during the listen (an explicit `mood`, an `ask`, an update screen, a pairing).
-  Never on `no_speech`, `error` or a cancelled listen. Decided by the device when the end frame
+  Never on `no_speech` (the device's own, or a `listen_stop` with `reason:"no_speech"`), `error`
+  or a cancelled listen. Decided by the device when the end frame
   leaves (`link_ack_decide`, `firmware/main/link/link_protocol.h`).
 - **What.** A chirp (`firmware/main/audio/chirp.h`: G5 784 Hz → D6 1175 Hz, a rising fifth,
   160 ms, soft raised-cosine attack / exponential decay, peak −17 dBFS, scaled by the speaker
@@ -901,7 +906,7 @@ the request id in `s`.
 | relay → box | `{"t":"stt.start","id","rate":16000,"no_speech_ms"?}` at listen start (`no_speech_ms` 1000..10000 only when the device VAD is off for this listen: the box then calls no_speech), binary frames `s=id` as Molty records, `{"t":"stt.end","id"}` at the device's end frame |
 | relay → box | `{"t":"stt.cancel","id"}`: no speech, or the listen failed |
 | box → relay | `{"t":"stt.partial","id","text"}` (optional, ignored by the relay), `{"t":"stt.final","id","text","ms"?}` or `{"t":"stt.final","id","error"}` |
-| box → relay | `{"t":"stt.turn_end","id","reason":"no_speech"}` (only when `stt.start` carried `no_speech_ms`; at most once, never after a word or a turn end): nobody spoke for `no_speech_ms` of captured audio — no word, no voice activity (the model's `prs[2]` below 0.3 for 3 steps restarts the clock; a loud frame in the last ~0.5 s postpones the verdict) — and nobody is speaking right then. The relay ends the listen as the device's own no_speech: `listen_stop`, `stt.cancel`, `reason:"no_speech"`, `heard:""` |
+| box → relay | `{"t":"stt.turn_end","id","reason":"no_speech"}` (only when `stt.start` carried `no_speech_ms`; at most once, never after a word or a turn end): nobody spoke for `no_speech_ms` of captured audio — no word, no voice activity (the model's `prs[2]` below 0.3 for 3 steps restarts the clock; a loud frame in the last ~0.5 s postpones the verdict) — and nobody is speaking right then. The relay ends the listen as the device's own no_speech: `listen_stop {job, reason:"no_speech"}` (no chirp, no thinking), `stt.cancel`, `reason:"no_speech"`, `heard:""` |
 | box → relay | `{"t":"stt.turn_end","id"}` (optional, at most once per listen): the human finished. The relay ends the listen there (`cmd listen_stop` to firmware with the cap, `stt.end` to the box at once); see `listen_stop` above |
 
 ### Selection: `voice_mode`
@@ -933,6 +938,14 @@ How the paths work:
   first 12 steps ignored, `--turn-end-skip`) above 0.6 (`--turn-end`), once, and only after at least one word —
   silence alone never ends a turn (the device's `no_speech` does). The listen then ends with
   `reason:"turn_end"` instead of waiting for the device's silence timer or its window.
+  **Mid-sentence hold:** the pause ends the turn at once only when the transcript's latest word
+  ends a sentence (Kyutai punctuates its words: a final `.` `?` `!`, not an ellipsis, not a bare
+  "um."). Otherwise — no mark, a comma, "…2 meters from" — the pause must stay above the
+  threshold for `--turn-end-hold` seconds of model steps (default 1.2; 0 = Unmute's rule). Words
+  lag the voice by ~0.5–1.6 s, so each step judges the latest word received: a sentence's
+  closing word that lands during the hold ends the turn then, and any word landing during the
+  hold restarts it (as does the voice coming back). A thinking pause inside a sentence
+  (~0.6 s, live 2026-10-30) no longer cuts the human off; a finished sentence ends as before.
 - **Voice choice:** the agent's `voice` passes through to the box. With none, the
   owner's default box voice is used; with neither, the box picks its own.
 - **Timings:** every say / listen timing payload carries `voice` (`"box"` or the env

@@ -32,9 +32,11 @@ static QueueHandle_t s_jobs, s_done;
 static RingbufHandle_t s_ring;
 static bool s_busy, s_listen;
 static atomic_bool s_cancel, s_end;
-/* listen_stop: the relay heard the end of the human's turn (semantic end-of-turn from its
- * STT) — end the recording now, as if the VAD had fired. Listen only; reset per job. */
-static atomic_bool s_stop;
+/* listen_stop: the relay called the end of the listen (semantic end-of-turn from its STT,
+ * or nobody spoke) — end the recording now, as if the VAD had fired, with that reason.
+ * Listen only; reset per job. 0: not stopped; else the STOP_* reason. */
+enum { STOP_NONE, STOP_TURN_END, STOP_NO_SPEECH };
+static atomic_int s_stop;
 static char s_job[LINK_STREAM_MAX];
 static uint32_t s_seq;
 static int64_t s_last_frame;
@@ -140,7 +142,7 @@ static esp_err_t send_frame(uint8_t *frame, link_frame_t *h, const int16_t *pcm,
 
 /* The listen ends at the first of: end of speech (vad.h: ~end_silence_ms of silence
  * after speech), nobody speaking by no_speech_ms, the `ms` window, or the relay's
- * `listen_stop` (reason "turn_end", within one 100 ms chunk). Either way the
+ * `listen_stop` (its reason, "turn_end" or "no_speech", within one 100 ms chunk). Either way the
  * last frame carries end:true plus {reason, speech_ms}, so the relay starts STT at
  * once instead of after the full window. speech_ms is left out when it was never
  * measured (vad:false, or a listen shorter than VAD calibration). */
@@ -169,9 +171,11 @@ static esp_err_t record(const audio_job_t *job)
     size_t done = 0, have = 0;
     while (e == ESP_OK && verdict == VAD_CONTINUE) {
         if (atomic_load(&s_cancel)) { e = ESP_ERR_INVALID_STATE; break; }
-        if (atomic_load(&s_stop)) {
-            /* the relay's end of turn: what is buffered goes out as the final frame */
-            s_end_reason = "turn_end"; s_speech_ms = vad.speech_ms;
+        const int stop = atomic_load(&s_stop);
+        if (stop != STOP_NONE) {
+            /* the relay's end of the listen: what is buffered goes out as the final frame, with
+             * the relay's reason — no_speech is acknowledged like the device's own (no chirp) */
+            s_end_reason = stop == STOP_NO_SPEECH ? "no_speech" : "turn_end"; s_speech_ms = vad.speech_ms;
             h.end = true; h.reason = s_end_reason; h.speech_ms = s_speech_ms; h.speech_known = vad_speech_known(&vad);
             e = send_frame(frame, &h, acc, have);
             have = 0;
@@ -351,7 +355,7 @@ static esp_err_t start(const cJSON *args, bool listen, cJSON **out)
     s_mood_gen0 = link_cmd_mood_gen();   /* after our own listening/speaking mood */
     s_seq = 0; s_stat_frames = 0; s_stat_bytes = 0; s_busy = true; s_listen = listen; s_last_frame = esp_timer_get_time();
     s_cued = cued; s_cue_next = 0;
-    atomic_store(&s_end, false); atomic_store(&s_cancel, false); atomic_store(&s_stop, false);
+    atomic_store(&s_end, false); atomic_store(&s_cancel, false); atomic_store(&s_stop, STOP_NONE);
     atomic_store(&s_chirp_cut, true);    /* a chirp still playing ends now: this job is next */
     xQueueSend(s_jobs, &job, 0);
     *out = result;
@@ -361,7 +365,9 @@ static esp_err_t start(const cJSON *args, bool listen, cJSON **out)
 esp_err_t link_audio_say(const cJSON *args, cJSON **out) { return start(args, false, out); }
 esp_err_t link_audio_listen(const cJSON *args, cJSON **out) { return start(args, true, out); }
 
-/* cmd listen_stop {job}: ends THAT listen early (reason "turn_end"). Never touches a say,
+/* cmd listen_stop {job, reason?}: ends THAT listen early with `reason` — "turn_end" (the
+ * default: the human finished; acknowledged) or "no_speech" (nobody spoke; never
+ * acknowledged: no chirp, no thinking); any other reason is refused. Never touches a say,
  * and never cancels: the frames recorded so far still go up, ending with end:true. A job
  * that is not the running listen (already ended, or another job) is answered
  * {stopping:false} — the relay sends it fire-and-forget and may race the device's own end. */
@@ -369,8 +375,12 @@ esp_err_t link_audio_listen_stop(const cJSON *args, cJSON **out)
 {
     cJSON *j = cJSON_GetObjectItemCaseSensitive(args, "job");
     if (!cJSON_IsString(j) || !j->valuestring[0] || strlen(j->valuestring) >= sizeof(s_job)) return ESP_ERR_INVALID_ARG;
+    const cJSON *r = cJSON_GetObjectItemCaseSensitive(args, "reason");
+    int why = STOP_TURN_END;
+    if (r && cJSON_IsString(r) && !strcmp(r->valuestring, "no_speech")) why = STOP_NO_SPEECH;
+    else if (r && !(cJSON_IsString(r) && !strcmp(r->valuestring, "turn_end"))) return ESP_ERR_INVALID_ARG;
     bool mine = s_busy && s_listen && !strcmp(j->valuestring, s_job);
-    if (mine) atomic_store(&s_stop, true);
+    if (mine) atomic_store(&s_stop, why);
     cJSON *result = cJSON_CreateObject();
     if (!result) return ESP_ERR_NO_MEM;
     cJSON_AddStringToObject(result, "job", j->valuestring);
