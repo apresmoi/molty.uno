@@ -13,6 +13,7 @@ import urllib.request
 from pathlib import Path
 
 from . import __version__
+
 from .bridge import Bridge, Fatal
 from .config import Config, default_path, load, save
 
@@ -26,7 +27,7 @@ def http_base(relay: str) -> str:
 
 def post_json(url: str, body: dict, timeout: float, method: str = "POST", token: str | None = None) -> tuple[int, dict]:
     data = json.dumps(body).encode()
-    req = urllib.request.Request(url, data=data if method != "DELETE" else None, method=method, headers={"content-type": "application/json"})
+    req = urllib.request.Request(url, data=data if method != "DELETE" else None, method=method, headers={"content-type": "application/json", "user-agent": f"molty-voice/{__version__}"})
     if token:
         req.add_header("authorization", f"Bearer {token}")
     try:

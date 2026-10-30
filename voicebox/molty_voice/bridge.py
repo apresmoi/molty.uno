@@ -81,7 +81,7 @@ class Bridge:
     async def serve_once(self) -> None:
         url = voice_url(self.cfg.relay, self.cfg.device_id)
         try:
-            ws = await self._connect(url, additional_headers={"Authorization": f"Bearer {self.cfg.token}"}, ping_interval=None, max_size=1 << 20, open_timeout=15)
+            ws = await self._connect(url, additional_headers={"Authorization": f"Bearer {self.cfg.token}"}, ping_interval=None, max_size=1 << 20, open_timeout=15, user_agent_header=f"molty-voice/{__version__}")
         except InvalidStatus as e:
             if e.response.status_code in (401, 403):
                 raise Fatal(f"the relay refused this voice box (HTTP {e.response.status_code}): it was unpaired or the token is wrong — run `molty-voice pair` again") from e
