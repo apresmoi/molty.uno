@@ -40,7 +40,7 @@ const items = (p: Prop) => (p.items && "type" in p.items ? p.items : undefined);
 const VAD_PROPS: Schema["properties"] = {
   end_silence_ms: { type: "integer", description: `Device end-of-speech: silence that ends the turn, ${VAD_LIMITS.end_silence_ms[0]}..${VAD_LIMITS.end_silence_ms[1]} ms (device default 700).` },
   no_speech_ms: { type: "integer", description: `Device end-of-speech: give up when nobody starts talking within ${VAD_LIMITS.no_speech_ms[0]}..${VAD_LIMITS.no_speech_ms[1]} ms (device default 4000).` },
-  vad: { type: "boolean", description: "Device end-of-speech detection on (default) or off (record the whole window)." },
+  vad: { type: "boolean", description: "Device end-of-speech detection on or off (record the whole window). Leave it out: with the owner's voice box, semantic end of turn is automatic (the box decides; device VAD off); otherwise the device's detection is on." },
   ring_color: { type: "string", description: `Colour of the listening ring on Molty's screen: ${Object.keys(COLORS).join(", ")} or "#rrggbb". Default: the device's setting.` },
 };
 

@@ -10,7 +10,7 @@ from websockets.asyncio.server import serve
 from molty_voice import framing
 from molty_voice.bridge import Bridge
 from molty_voice.config import Config
-from molty_voice.kyutai import PausePredictor
+from molty_voice.kyutai import FRAME_S, PausePredictor
 
 DEVICE = "molty-k7m2q9xa4c"
 TOKEN = DEVICE + "." + "A" * 43
@@ -58,6 +58,28 @@ def test_ema_matches_unmute_constants():
     assert abs(p.value - 2 ** -8) < 1e-9
 
 
+def test_no_speech_fires_once_on_silence_after_the_time():
+    p = PausePredictor()
+    fired = [i for i in range(100) if (p.update(0.95), p.no_speech(1.0))[1]]
+    # 1.0 s = 12.5 steps of 80 ms: the 13th step (index 12) is the first at >= 1 s
+    assert fired == [12] and 13 * FRAME_S >= 1.0 > 12 * FRAME_S
+
+
+def test_no_speech_never_after_a_word_nor_while_someone_speaks():
+    p = PausePredictor()
+    for _ in range(5):
+        p.update(0.0)
+    p.word()
+    assert not any((p.update(0.95), p.no_speech(1.0))[1] for _ in range(100))
+    # speaking right at the deadline (the estimate is low): not yet; it fires once they stop
+    q = PausePredictor()
+    seq = [0.95] * 12 + [0.0] * 20 + [0.95] * 5
+    fired = [i for i, v in enumerate(seq) if (q.update(v), q.no_speech(1.0))[1]]
+    assert fired == [32]
+    off = PausePredictor()
+    assert not any((off.update(0.95), off.no_speech(0))[1] for _ in range(100))
+
+
 class VadMoshi:
     """STT that answers every 80 ms frame with a Step: prs[2] ~0 while there is sound, 0.95 in silence; a Word on the
     first sound; the Marker comes back 6 frames (~0.5 s) after it went in, with paused Steps in between."""
@@ -88,7 +110,7 @@ class VadMoshi:
             self.closed.append(True)
 
 
-def run_listen(chunks):
+def run_listen(chunks, start_extra=None):
     """Streams `chunks` (True = speech, False = silence) as 200 ms device frames; returns the relay's messages for s1."""
     moshi = VadMoshi()
     msgs = []
@@ -96,7 +118,7 @@ def run_listen(chunks):
     async def relay(ws):
         await ws.recv()
         await ws.send(json.dumps({"t": "voice.welcome", "device_id": DEVICE, "mode": "auto", "voice": None}))
-        await ws.send(json.dumps({"t": "stt.start", "id": "s1", "rate": 16000}))
+        await ws.send(json.dumps({"t": "stt.start", "id": "s1", "rate": 16000, **(start_extra or {})}))
         for i, loud in enumerate(chunks):
             pcm = np.full(3200, 6000 if loud else 0, dtype="<i2").tobytes()
             await ws.send(framing.encode("s1", i, pcm))
@@ -137,4 +159,31 @@ def test_bridge_never_sends_turn_end_on_silence_only():
 def test_the_flush_silence_after_stt_end_is_not_a_turn_end():
     # speech right up to stt.end: the marker's flush silence must not be taken for the human's pause
     msgs = run_listen([True] * 10)
+    assert [m["t"] for m in msgs] == ["stt.final"]
+
+
+def test_bridge_sends_no_speech_once_when_nobody_speaks_and_the_relay_asked():
+    msgs = run_listen([False] * 14, {"no_speech_ms": 1000})
+    assert [m["t"] for m in msgs] == ["stt.turn_end", "stt.final"]
+    assert msgs[0] == {"t": "stt.turn_end", "id": "s1", "reason": "no_speech"}
+    assert msgs[1]["text"] == ""
+
+
+def test_bridge_no_speech_never_after_a_word():
+    # speech first (a word), then a long silence: the word-based turn end, never no_speech
+    msgs = run_listen([True] * 3 + [False] * 11, {"no_speech_ms": 1000})
+    assert [m["t"] for m in msgs] == ["stt.turn_end", "stt.final"]
+    assert msgs[0] == {"t": "stt.turn_end", "id": "s1"}
+
+
+def test_bridge_ignores_a_bad_no_speech_ms():
+    for bad in (0, 999, 10001, "4000", True, 1500.5):
+        msgs = run_listen([False] * 10, {"no_speech_ms": bad})
+        assert [m["t"] for m in msgs] == ["stt.final"], bad
+
+
+def test_the_flush_silence_after_stt_end_is_not_no_speech():
+    # a short silent listen ended by the relay before no_speech_ms: the marker's flush
+    # silence (well past 1 s of model time) must not be taken for nobody speaking
+    msgs = run_listen([False] * 3, {"no_speech_ms": 1000})
     assert [m["t"] for m in msgs] == ["stt.final"]

@@ -241,13 +241,25 @@ frames, RMS in dBFS against an adaptive noise floor:
   non-speech (never before 600 ms) → `silence`; `no_speech_ms` with < 160 ms of speech
   and nobody speaking right then → `no_speech`; `ms` → `max`. The mic stops at once.
 
+**Semantic end of turn is the default with a voice box.** When the owner's [voice box](#voice-box)
+serves the listen (it is picked for STT and its stream opened) and the firmware lists
+`listen_stop`, the relay sends the device listen with `vad:false`: the box's end of turn
+(`stt.turn_end`, Kyutai's pause prediction) is THE end, and the box also ends a listen nobody
+spoke in (`no_speech_ms`, passed in `stt.start`: the agent's, else the device default 4000 →
+`reason:"no_speech"`, `heard:""`, no transcription). The device's silence VAD stays off because
+it heard Molty's own speech tail and cut humans off. Agents need not pass anything. An agent
+that passes `vad` or `end_silence_ms` keeps the device VAD as asked; the cloud path, a box that
+could not open, and firmware without `listen_stop` keep the device VAD as before. A box that
+drops mid-listen while the device VAD is off ends the listen at once (`reason:"error"`, what
+was said is transcribed — by the cloud in `auto` mode) instead of running out the window.
+
 Optional `listen` args (validated by the relay and again by the device; forwarded only when the agent gives them):
 
 | arg | range | default | |
 |---|---|---|---|
 | `end_silence_ms` | 300..3000 (integer) | 700 | silence after speech that ends the listen; raise it for slow / hesitant speakers |
 | `no_speech_ms` | 1000..10000 (integer) | 4000 | give up when nobody spoke by then (≥ `ms` = never) |
-| `vad` | bool | `true` | `false`: record the full `ms` window as before |
+| `vad` | bool | `true` (off with a voice box, see below) | `false`: record the full `ms` window as before |
 | `ring_color` | a colour name or `#rrggbb` | the device's setting | the listening ring's colour for this listen (also on `talk`) |
 
 Out-of-range or mistyped values → `invalid_args`.
@@ -825,9 +837,10 @@ the request id in `s`.
 | relay → box | `{"t":"tts","id","text","voice"?}`: one sentence-sized segment (the relay keeps one segment of lookahead) |
 | box → relay | binary frames `s=id` (PCM16 @16 kHz, as synthesised), then `{"t":"tts.end","id"}` or `{"t":"tts.end","id","error"}` |
 | relay → box | `{"t":"tts.cancel","id"}`: nobody will play it (device gone, turn failed, segment timeout) |
-| relay → box | `{"t":"stt.start","id","rate":16000}` at listen start, binary frames `s=id` as Molty records, `{"t":"stt.end","id"}` at the device's end frame |
+| relay → box | `{"t":"stt.start","id","rate":16000,"no_speech_ms"?}` at listen start (`no_speech_ms` 1000..10000 only when the device VAD is off for this listen: the box then calls no_speech), binary frames `s=id` as Molty records, `{"t":"stt.end","id"}` at the device's end frame |
 | relay → box | `{"t":"stt.cancel","id"}`: no speech, or the listen failed |
 | box → relay | `{"t":"stt.partial","id","text"}` (optional, ignored by the relay), `{"t":"stt.final","id","text","ms"?}` or `{"t":"stt.final","id","error"}` |
+| box → relay | `{"t":"stt.turn_end","id","reason":"no_speech"}` (only when `stt.start` carried `no_speech_ms`; at most once, never after a word or a turn end): nobody spoke by then (and nobody is speaking right then). The relay ends the listen as the device's own no_speech: `listen_stop`, `stt.cancel`, `reason:"no_speech"`, `heard:""` |
 | box → relay | `{"t":"stt.turn_end","id"}` (optional, at most once per listen): the human finished. The relay ends the listen there (`cmd listen_stop` to firmware with the cap, `stt.end` to the box at once); see `listen_stop` above |
 
 ### Selection: `voice_mode`

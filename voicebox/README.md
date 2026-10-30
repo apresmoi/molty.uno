@@ -110,7 +110,11 @@ moshi-server on 127.0.0.1, and mounts the paired config read-only. Pair on the h
   (`--turn-end`, 0 = off), the box sends `stt.turn_end`. The relay then stops Molty's mic
   (firmware with the `listen_stop` cap) and finishes the transcript at once, with reason
   `turn_end`, instead of waiting for Molty's silence timer or the listen window. Silence
-  alone never ends a turn.
+  alone never ends a turn that way. With the box serving the listen, this is THE end: the
+  relay turns Molty's own silence VAD off and passes `no_speech_ms` in `stt.start`, and when
+  nobody said a word by then (and nobody is speaking right then) the box sends
+  `stt.turn_end` with `reason: "no_speech"` once: the relay ends the listen with an empty
+  transcript.
 - **TTS:** One connection per sentence. The box sends the words, then `Eos`. The 24 kHz
   float audio streams back resampled to 16 kHz PCM16, in ≤ 16 KB frames.
 

@@ -7,8 +7,10 @@ Wire (docs/AGENT-LINK.md "Voice box"): JSON text control messages + binary audio
   relay -> box   {"t":"voice.welcome","device_id","mode","voice"}
   relay -> box   {"t":"tts","id","text","voice"?}      box -> relay  frames(s=id) ... {"t":"tts.end","id","error"?}
   relay -> box   {"t":"tts.cancel","id"}
-  relay -> box   {"t":"stt.start","id","rate":16000}, frames(s=id) as Molty records, {"t":"stt.end","id"} | {"t":"stt.cancel","id"}
+  relay -> box   {"t":"stt.start","id","rate":16000,"no_speech_ms"?}, frames(s=id) as Molty records, {"t":"stt.end","id"} | {"t":"stt.cancel","id"}
   box -> relay   {"t":"stt.partial","id","text"}  {"t":"stt.turn_end","id"} (once: the human finished, Molty stops listening)
+                 {"t":"stt.turn_end","id","reason":"no_speech"} (instead, once: nobody spoke within no_speech_ms —
+                 sent only when stt.start carried it, i.e. Molty's own VAD is off and the box decides the end)
                  {"t":"stt.final","id","text","ms":{...}} | {"t":"stt.final","id","error"}
   both           {"t":"ping"} / {"t":"pong"} (the relay answers pings without waking up)
 """
@@ -153,7 +155,9 @@ class Bridge:
             if mid not in self._stt:
                 q: asyncio.Queue = asyncio.Queue()
                 self._stt[mid] = q
-                self._stt_tasks[mid] = asyncio.create_task(self._run_stt(mid, q))
+                ns = m.get("no_speech_ms")
+                no_speech_s = ns / 1000 if isinstance(ns, int) and not isinstance(ns, bool) and 1000 <= ns <= 10000 else None
+                self._stt_tasks[mid] = asyncio.create_task(self._run_stt(mid, q, no_speech_s))
         elif t == "stt.end" and isinstance(mid, str):
             if mid in self._stt:
                 self._stt[mid].put_nowait(("end", None))
@@ -223,7 +227,7 @@ class Bridge:
 
     # ---------------- STT ----------------
 
-    async def _run_stt(self, mid: str, q: asyncio.Queue) -> None:
+    async def _run_stt(self, mid: str, q: asyncio.Queue, no_speech_s: float | None = None) -> None:
         async def partial(text: str) -> None:
             await self._send_json({"t": "stt.partial", "id": mid, "text": text})
 
@@ -231,8 +235,13 @@ class Bridge:
             log.info("stt %s: end of turn", mid)
             await self._send_json({"t": "stt.turn_end", "id": mid})
 
+        async def no_speech() -> None:
+            log.info("stt %s: nobody spoke within %.1f s", mid, no_speech_s)
+            await self._send_json({"t": "stt.turn_end", "id": mid, "reason": "no_speech"})
+
         s = SttSession(self.cfg.stt_url, self.cfg.api_key, flush_s=self.cfg.stt_flush_s, on_word=partial,
-                       on_turn_end=turn_end, turn_end_threshold=self.cfg.turn_end, connect=self._kconnect)
+                       on_turn_end=turn_end, turn_end_threshold=self.cfg.turn_end,
+                       on_no_speech=no_speech, no_speech_s=no_speech_s, connect=self._kconnect)
         t_end = None
         try:
             await s.open()

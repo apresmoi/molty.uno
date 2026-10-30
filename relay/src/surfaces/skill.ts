@@ -124,6 +124,10 @@ curl -sS -X POST ${o}/v1/devices/molty-xxxxxxxxxx/talk \\
 \`\`\`
 
 Body: \`{"say"?: s, "listen"?: true, "listen_ms"?: 0..${MAX_LISTEN_MS} (omit: the human's setting, ${TALK_DEFAULT_LISTEN_MS} out of the box; 0 = unlimited), "voice"?, "end_silence_ms"?, "no_speech_ms"?, "vad"?, "ring_color"?}\`.
+**End of turn is automatic**: don't pass \`vad\` / \`end_silence_ms\`. With the owner's voice box the
+box's semantic end of turn decides (reason \`turn_end\`, or \`no_speech\` when nobody spoke); otherwise
+the device's own end-of-speech does (\`silence\` / \`no_speech\`). Passing \`vad\` or \`end_silence_ms\` puts the device's
+detection back in charge.
 \`ring_color\` (talk and listen): the listening ring's colour, a colour name or \`"#rrggbb"\` as in Ask below;
 leave it out for the human's own setting.
 Speaks \`say\` (if given), then listens until the human stops talking (or the window ends), then

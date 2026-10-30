@@ -6,9 +6,10 @@
 //
 //   relay → box  {"t":"tts","id","text","voice"?}      box → relay  pcm16 frames (s=id) … {"t":"tts.end","id","error"?}
 //   relay → box  {"t":"tts.cancel","id"}
-//   relay → box  {"t":"stt.start","id","rate":16000}, pcm16 frames (s=id) as the device sends them,
+//   relay → box  {"t":"stt.start","id","rate":16000,"no_speech_ms"?}, pcm16 frames (s=id) as the device sends them,
 //                {"t":"stt.end","id"} | {"t":"stt.cancel","id"}
-//   box → relay  {"t":"stt.partial","id","text"}?  {"t":"stt.turn_end","id"}? (the human finished: end the listen now)
+//   box → relay  {"t":"stt.partial","id","text"}?  {"t":"stt.turn_end","id","reason"?}? (the human finished — or,
+//                with reason "no_speech", nobody spoke within no_speech_ms: end the listen now)
 //                {"t":"stt.final","id","text","ms"?} | {"t":"stt.final","id","error"}
 //
 // Every request is bound to the socket it went out on: when that socket closes
@@ -43,7 +44,7 @@ interface SttOp {
   ch: BoxChannel;
   settle(err: Error | undefined, text?: string): void;
   /** stt.turn_end from the box: once, and only while the audio is still flowing. */
-  turnEnd(): void;
+  turnEnd(reason?: "no_speech"): void;
   ms?: JsonObject;
 }
 
@@ -156,20 +157,22 @@ export class RemoteVoiceProvider implements VoiceProvider {
       ch,
       settle: (err, text) => {
         if (state === "settled") return;
+        const open = state === "open";
         state = "settled";
         this.sttOps.delete(id);
         if (err) reject(err);
         else resolve(text ?? "");
+        if (err && open) opts.onFail?.(); // gone mid-listen: nobody will call the turn's end
       },
-      turnEnd: () => {
+      turnEnd: (reason) => {
         if (state !== "open" || turned) return;
         turned = true;
-        opts.onTurnEnd?.();
+        opts.onTurnEnd?.(reason);
       },
     };
     this.sttOps.set(id, op);
     try {
-      ch.sendText(JSON.stringify({ t: "stt.start", id, rate: SAMPLE_RATE }));
+      ch.sendText(JSON.stringify({ t: "stt.start", id, rate: SAMPLE_RATE, ...(opts.noSpeechMs !== undefined ? { no_speech_ms: opts.noSpeechMs } : {}) }));
     } catch {
       op.settle(new Error(BOX_OFFLINE));
     }
@@ -218,7 +221,7 @@ export class RemoteVoiceProvider implements VoiceProvider {
       op.feed.end(typeof frame.error === "string" && frame.error ? new Error(BOX_ERROR) : undefined);
     } else if (frame.t === "stt.turn_end") {
       const op = this.sttOps.get(id);
-      if (op && op.ch.same(from)) op.turnEnd();
+      if (op && op.ch.same(from)) op.turnEnd(frame.reason === "no_speech" ? "no_speech" : undefined);
     } else if (frame.t === "stt.final") {
       const op = this.sttOps.get(id);
       if (!op || !op.ch.same(from)) return;

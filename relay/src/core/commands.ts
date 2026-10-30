@@ -113,6 +113,8 @@ export function resolveColor(value: unknown, field: string): string {
 /** Device end-of-speech knobs for listen (firmware VAD); passed through only when given. */
 export const VAD_KEYS = ["end_silence_ms", "no_speech_ms", "vad"] as const;
 export const VAD_LIMITS = { end_silence_ms: [300, 3000], no_speech_ms: [1000, 10000] } as const;
+/** The device's no_speech_ms default (firmware/main/audio/vad.h): what the voice box gets when the agent gave none. */
+export const DEVICE_NO_SPEECH_MS = 4000;
 
 /** A listen window: undefined (the device's setting), 0 (unlimited) or 1..MAX_LISTEN_MS. */
 function listenMs(v: unknown, field: string): number | undefined {

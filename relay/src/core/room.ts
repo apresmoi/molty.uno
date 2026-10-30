@@ -50,7 +50,7 @@ import {
   type WebhookRequest,
 } from "./api.js";
 import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
-import { type AskArgs, CommandError, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk } from "./commands.js";
+import { type AskArgs, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk } from "./commands.js";
 import { PcmFeed, estimateSpeechMs, splitSpeech, synthesize } from "./speech.js";
 import { b64Decode, b64urlEncode, randomBytes, randomDigits, safeEqual, sha256Hex } from "./crypto.js";
 import {
@@ -294,6 +294,10 @@ interface ListenBuffer {
   stream?: SttStream;
   /** When the STT backend called the end of the human's turn (the listen ended there). */
   turnEndAt?: number;
+  /** Semantic end of turn is THE end: the device's VAD was turned off for this listen (voice box + listen_stop). */
+  semantic?: boolean;
+  /** The streaming STT failed while the listen was open. */
+  boxFailed?: boolean;
 }
 
 /** Owner voice settings (KV `voicecfg`). */
@@ -1493,10 +1497,24 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (!pick.ok) return { ok: false, error: pick.error };
     const buf: ListenBuffer = { job: id, chunks: [], bytes: 0, ended: false, screenRev: this.screenRev };
     let fallback: string | undefined;
+    // Semantic end of turn by default: when the voice box serves this listen and the firmware
+    // can be stopped by it (listen_stop), the box's end of turn is THE end — the device's
+    // silence VAD is turned off (it heard Molty's own tail and cut humans off), and the box
+    // also calls no_speech. Not when the agent tuned the device VAD itself (vad /
+    // end_silence_ms), nor on the cloud path or older firmware: those keep the device VAD.
+    const semantic = pick.box && extra.vad === undefined && extra.end_silence_ms === undefined && !!this.liveSocket()?.getMeta()?.caps?.includes("listen_stop");
     // Streaming STT (voice box): opened before the mic, so every chunk goes out the moment it arrives.
     if (pick.provider.sttStream) {
       try {
-        buf.stream = pick.provider.sttStream({ onTurnEnd: () => this.onTurnEnd(buf) });
+        buf.stream = pick.provider.sttStream({
+          onTurnEnd: (reason) => this.onTurnEnd(buf, reason),
+          onFail: () => this.onBoxFail(buf),
+          ...(semantic ? { noSpeechMs: typeof extra.no_speech_ms === "number" ? extra.no_speech_ms : DEVICE_NO_SPEECH_MS } : {}),
+        });
+        if (semantic && !buf.boxFailed) {
+          buf.semantic = true;
+          extra = { ...extra, vad: false };
+        }
       } catch (e) {
         if (pick.mode !== "auto") return { ok: false, error: errorCode(e) };
         // auto: the box vanished between the pick and the open: the cloud, batch.
@@ -1618,23 +1636,39 @@ export class DeviceRoom implements AgentApi, OwnerApi {
    * firmware keeps its mic open until its own end, and those late frames are dropped
    * (onAudio ignores an ended listen).
    */
-  private onTurnEnd(buf: ListenBuffer) {
+  private onTurnEnd(buf: ListenBuffer, why?: "no_speech") {
     if (buf.ended || this.listenBuf !== buf) return;
     const now = this.clock.now();
     buf.ended = true;
     buf.endAt = now;
     buf.turnEndAt = now;
-    buf.reason = "turn_end";
+    // no_speech (the box heard nobody, device VAD off): as the device's own no_speech — no STT, transcript ""
+    buf.reason = why === "no_speech" ? "no_speech" : "turn_end";
     if (this.liveSocket()?.getMeta()?.caps?.includes("listen_stop")) {
       void this.sendCmd("listen_stop", { job: buf.job }).then((r) => {
         if (!r.ok) this.log("listen_stop failed", { device: this.deviceId, job: buf.job, error: r.error });
       });
     }
-    if (buf.bytes > 0) {
+    if (buf.bytes > 0 && buf.reason !== "no_speech") {
       buf.thinking = true;
       this.autoMood(buf, "thinking");
     }
     buf.wake?.();
+  }
+
+  /**
+   * The voice box's stream failed mid-listen. With the device VAD on, nothing changes (the
+   * device still ends the listen; record() then falls back or fails as before). With it off
+   * (semantic), nobody would end the turn: end the listen now, reason `error` — what was
+   * said so far is transcribed (auto mode: by the cloud) — instead of making the human wait
+   * out the window.
+   */
+  private onBoxFail(buf: ListenBuffer) {
+    buf.boxFailed = true;
+    if (!buf.semantic || buf.ended || this.listenBuf !== buf) return;
+    this.onTurnEnd(buf);
+    buf.turnEndAt = undefined;
+    buf.reason = "error";
   }
 
   private onAudio(bytes: Uint8Array) {

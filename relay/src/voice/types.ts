@@ -35,9 +35,18 @@ export interface SttStreamOptions {
   /**
    * The backend's semantic end-of-turn (e.g. Kyutai's pause prediction): the human has
    * finished, so the listen can end now instead of at the device's silence timer or its
-   * window. Called at most once, only while the stream is still open.
+   * window. Called at most once, only while the stream is still open. `reason`
+   * "no_speech": nobody spoke within `noSpeechMs` (only when it was given) — the
+   * other way a turn ends.
    */
-  onTurnEnd?: () => void;
+  onTurnEnd?: (reason?: "no_speech") => void;
+  /**
+   * Nobody-spoke timeout for the backend (ms): given when the device's own VAD is off
+   * and the backend decides the end of the turn. Absent: the backend never calls it.
+   */
+  noSpeechMs?: number;
+  /** The stream failed while it was still open (the backend went away mid-listen). */
+  onFail?: () => void;
 }
 
 /** One streaming transcription (VoiceProvider.sttStream). */

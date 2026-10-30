@@ -49,8 +49,16 @@ class PausePredictor:
     first 12 steps ignored ("all over the place"), and a pause when it exceeds 0.6
     while the user is speaking — i.e. once they said something. Here: `update()`
     returns True exactly once, the first time that holds after >= 1 word. Pure
-    silence never ends a turn (Molty's own no_speech covers that).
+    silence never ends a turn that way.
+
+    `no_speech(s)`: the other end — nobody said a word. True exactly once, the first step
+    at which the model has heard >= s seconds, no Word came, and nobody is speaking right
+    then (the pause estimate above NO_SPEECH_QUIET): the device's own no_speech rule, for
+    listens where the device's VAD is off and the box decides the end of turn. Never once
+    a word came, and never after the turn ended.
     """
+
+    NO_SPEECH_QUIET = 0.5
 
     SKIP_STEPS = 12
 
@@ -60,6 +68,7 @@ class PausePredictor:
         self.steps = 0
         self.words = 0
         self.fired = False
+        self.no_speech_fired = False
 
     def word(self) -> None:
         self.words += 1
@@ -75,6 +84,15 @@ class PausePredictor:
         if self.fired or self.threshold <= 0 or self.words == 0 or self.value <= self.threshold:
             return False
         self.fired = True
+        return True
+
+    def no_speech(self, after_s: float, dt: float = FRAME_S) -> bool:
+        """Call after update() on each step: True once when nobody spoke within after_s."""
+        if self.no_speech_fired or self.fired or self.words or after_s <= 0:
+            return False
+        if self.steps * dt < after_s - 1e-9 or self.value <= self.NO_SPEECH_QUIET:
+            return False
+        self.no_speech_fired = True
         return True
 
 
@@ -98,11 +116,15 @@ class SttSession:
         on_word: Callable[[str], Awaitable[None]] | None = None,
         on_turn_end: Callable[[], Awaitable[None]] | None = None,
         turn_end_threshold: float = 0.6,
+        on_no_speech: Callable[[], Awaitable[None]] | None = None,
+        no_speech_s: float | None = None,
         connect=ws_connect,
     ):
         self.url, self.api_key, self.flush_s, self.on_word, self._connect = url, api_key, flush_s, on_word, connect
         self.on_turn_end = on_turn_end
         self.pause = PausePredictor(turn_end_threshold)
+        # nobody spoke within no_speech_s (None: off): the relay turned the device's VAD off
+        self.on_no_speech, self.no_speech_s = on_no_speech, no_speech_s
         self._finishing = False
         self.words: list[str] = []
         self._rs = Resampler(DEVICE_RATE, MODEL_RATE)
@@ -135,6 +157,9 @@ class SttSession:
                     # after finish() began, the flush silence is ours, not the human's pause
                     if len(prs) > 2 and self.pause.update(prs[2]) and not self._finishing and self.on_turn_end:
                         await self.on_turn_end()
+                    elif (len(prs) > 2 and self.no_speech_s and self.on_no_speech and not self._finishing
+                          and self.pause.no_speech(self.no_speech_s)):
+                        await self.on_no_speech()
                 elif t == "Marker" and d.get("id") == self._marker_id:
                     self._marker_seen = True
                     return

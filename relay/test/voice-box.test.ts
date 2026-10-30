@@ -66,6 +66,8 @@ interface BoxOpts {
   /** Send stt.turn_end after this many audio chunks (the box's end-of-turn); `twice` repeats it. */
   turnEndAfter?: number;
   twice?: boolean;
+  /** Send stt.turn_end {reason:"no_speech"} after this many audio chunks (nobody spoke). */
+  noSpeechAfter?: number;
 }
 
 /** A voice box on the relay's voice socket: synthesises 3200 samples per tts, transcribes by counting the chunks it got. */
@@ -95,6 +97,7 @@ function box(room: DeviceRoom, sock: FakeSocket, o: BoxOpts = {}) {
     const fr = decodeAudioFrame(b)!;
     const list = got[fr.header.s];
     list?.push({ at: Date.now(), bytes: fr.payload.byteLength });
+    if (list && o.noSpeechAfter !== undefined && list.length === o.noSpeechAfter) say({ t: "stt.turn_end", id: fr.header.s, reason: "no_speech" });
     if (list && o.turnEndAfter !== undefined && list.length === o.turnEndAfter) {
       say({ t: "stt.turn_end", id: fr.header.s });
       if (o.twice) say({ t: "stt.turn_end", id: fr.header.s });
@@ -560,5 +563,84 @@ describe("semantic end of turn (box stt.turn_end)", () => {
     expect(out).toMatchObject({ ok: true, result: { reason: "silence", speech_ms: 250 } });
     expect((out as any).result.timings.listen).not.toHaveProperty("turn_end");
     expect(w.dev.log.filter((l) => l.name === "listen_stop")).toHaveLength(0);
+  });
+});
+
+describe("semantic end of turn is the default with a voice box", () => {
+  const NEW_FW = ["say", "listen", "listen_stop", "listen_window"];
+  const lastListen = (w: Awaited<ReturnType<typeof setup>>) => w.dev.log.filter((l) => l.name === "listen").at(-1)!.args;
+  const sttStart = (w: Awaited<ReturnType<typeof setup>>) => w.box!.control.filter((f) => f.t === "stt.start").at(-1);
+
+  it("box + listen_stop firmware: the device VAD is off (vad:false) and the box gets no_speech_ms (the device default, or the agent's)", async () => {
+    const w = await setup({ caps: NEW_FW, box: { turnEndAfter: 2 } });
+    expect(await w.room.talk(w.token, {})).toMatchObject({ ok: true, result: { reason: "turn_end" } });
+    expect(lastListen(w).vad).toBe(false);
+    expect(lastListen(w)).not.toHaveProperty("end_silence_ms");
+    expect(sttStart(w).no_speech_ms).toBe(4000);
+    // no_speech_ms alone still means semantic: it goes to the box (and the device, harmless with VAD off)
+    expect(await w.room.talk(w.token, { no_speech_ms: 6000 })).toMatchObject({ ok: true });
+    expect(lastListen(w).vad).toBe(false);
+    expect(sttStart(w).no_speech_ms).toBe(6000);
+    // plain listen too
+    const job = ((await w.room.command(w.token, "listen", {})) as any).result.job;
+    await w.room.job(w.token, job, 2000);
+    expect(lastListen(w).vad).toBe(false);
+  });
+
+  it("an agent that tunes the device VAD keeps it: vad or end_silence_ms given -> no vad:false, no no_speech_ms to the box", async () => {
+    const w = await setup({ caps: NEW_FW, box: { turnEndAfter: 2 } });
+    for (const args of [{ vad: true }, { end_silence_ms: 500 }, { vad: false }]) {
+      expect(await w.room.talk(w.token, args), JSON.stringify(args)).toMatchObject({ ok: true });
+      expect(lastListen(w).vad, JSON.stringify(args)).toBe((args as any).vad);
+      expect(sttStart(w), JSON.stringify(args)).not.toHaveProperty("no_speech_ms");
+    }
+  });
+
+  it("older firmware (no listen_stop), the cloud, or a box that cannot open: the device VAD stays on", async () => {
+    const old = await setup({ caps: ["say", "listen"], box: { turnEndAfter: 2 } });
+    expect(await old.room.talk(old.token, {})).toMatchObject({ ok: true });
+    expect(lastListen(old)).not.toHaveProperty("vad");
+    expect(sttStart(old)).not.toHaveProperty("no_speech_ms");
+    const cloud = await setup({ caps: NEW_FW, box: false });
+    expect(await cloud.room.talk(cloud.token, {})).toMatchObject({ ok: true, result: { timings: { listen: { voice: "fake" } } } });
+    expect(lastListen(cloud)).not.toHaveProperty("vad");
+    const cm = await setup({ caps: NEW_FW, box: { turnEndAfter: 2 } });
+    await cm.room.voiceSettings(cm.link, { action: "set", mode: "cloud" });
+    expect(await cm.room.talk(cm.token, {})).toMatchObject({ ok: true });
+    expect(lastListen(cm)).not.toHaveProperty("vad");
+  });
+
+  it("no_speech from the box: the listen ends at once with reason no_speech, heard \"\", no STT, no thinking, the device is stopped", async () => {
+    const w = await setup({ caps: NEW_FW, chunks: 40, box: { noSpeechAfter: 2 } });
+    const t0 = Date.now();
+    const out = await w.room.talk(w.token, {});
+    expect(out).toMatchObject({ ok: true, result: { status: "done", heard: "", reason: "no_speech" } });
+    expect(Date.now() - t0).toBeLessThan(400); // not the device's 40-chunk run
+    expect(w.dev.log.filter((l) => l.name === "listen_stop")).toHaveLength(1);
+    const c = w.box!.control.map((f) => f.t);
+    expect(c).toContain("stt.cancel"); // nobody wants a transcript
+    expect(c).not.toContain("stt.end");
+    expect(w.voice.sttCalls).toHaveLength(0);
+    expect(w.dev.log.filter((l) => l.name === "mood").map((l) => l.args.mood)).not.toContain("thinking");
+    // and the next turn works
+    expect(await w.room.talk(w.token, {})).toMatchObject({ ok: true, result: { status: "done" } });
+  });
+
+  it("a no_speech after the word-based turn end changes nothing (one end per listen)", async () => {
+    const w = await setup({ caps: NEW_FW, chunks: 12, box: { turnEndAfter: 2, noSpeechAfter: 3 } });
+    expect(await w.room.talk(w.token, {})).toMatchObject({ ok: true, result: { reason: "turn_end", heard: "box heard 2 chunks" } });
+  });
+
+  it("the box drops mid-listen with the device VAD off: the listen ends at once (reason error), auto transcribes what was said in the cloud", async () => {
+    const w = await setup({ caps: NEW_FW, chunks: 60, box: { silent: true } });
+    const p = w.room.talk(w.token, {});
+    await until(() => w.box!.control.some((f) => f.t === "stt.start"));
+    await new Promise((r) => setTimeout(r, 100));
+    const tDrop = Date.now();
+    w.box!.sock.close(1006, "gone");
+    const out = await p;
+    expect(Date.now() - tDrop).toBeLessThan(400); // not the device's ~1.8 s run
+    expect(out).toMatchObject({ ok: true, result: { reason: "error", heard: "hello molty", timings: { listen: { voice: "fake", voice_fallback: "voice_box_offline" } } } });
+    expect(w.dev.log.filter((l) => l.name === "listen_stop")).toHaveLength(1);
   });
 });
