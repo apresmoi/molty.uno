@@ -1,4 +1,7 @@
-<a href="https://molty.uno"><img src="docs/assets/molty-hero.webp" width="830" alt="molty.UNO: a round screen of braille fluid. A frog Molty condenses out of it, melts, and the screen asks 'Build passed. Open the PR?' word by word. Yes, no and idk appear in three slices, yes is tapped, it answers 'Opening it now.', and the frog comes back happy."></a>
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/molty-hero-light.webp">
+  <img src="docs/assets/molty-hero.webp" width="830" alt="molty.UNO: the braille wordmark in a moving fluid of characters beside a round device. A duck Molty condenses out of the fluid and melts, and the screen asks 'Build passed. Open the PR?' word by word. Yes, no and idk appear in three slices, yes is tapped, it answers 'Opening it now.', and the duck comes back happy.">
+</picture>
 
 ### A round desk device that gives your AI agent a body.
 

@@ -83,6 +83,6 @@ Never deploy or publish from here; nothing in this package does.
   is not monotonic, CLS > 0.01, or reduced motion / no JS / bundles that never load leave it
   hidden. Frames to `e2e-out/first-load-*.png`.
 - `pnpm og` regenerates `public/og.png` from the live page fluid (needs the preview running).
-- `pnpm readme` regenerates the GitHub README hero (`docs/assets/molty-hero.webp` + `.png`) from
+- `pnpm readme` regenerates the GitHub README hero (`docs/assets/molty-hero[-light].webp` + `.png`) from
   the same components: wordmark, Device, a Molty, the talk screen (preview running).
 - `dist/llms.txt`, `llms-full.txt` and raw `docs/*.md` come from `scripts/generate-llms-txt.mjs`.
