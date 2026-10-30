@@ -141,8 +141,9 @@ export interface PageFluidOptions {
    *  handed over pre-inverted, and a Molty does not run in across the paper (it would show
    *  inverted there: it lives on its screen). The theme is fixed per mount. */
   theme: "dark" | "light";
-  /** Called once the field is drawing (and again when the Moltys are ready). */
-  onState?: (state: "live" | "moltys") => void;
+  /** Called once the field is drawing, and again when the Moltys are ready ("moltys") or
+   *  cannot be ("moltys-off": no three.js, the slots keep their stills). */
+  onState?: (state: "live" | "moltys" | "moltys-off") => void;
 }
 
 export async function mountPageFluid(host: HTMLElement, options: PageFluidOptions): Promise<PageFluidHandle> {
@@ -187,7 +188,8 @@ class PageFluid implements PageFluidHandle {
         this.retint();
         this.options.onState?.("moltys");
       },
-      () => {}, // no three.js: the field and the headings still run, slots show their stills
+      // no three.js: the field and the headings still run, slots show their stills
+      () => this.alive && this.options.onState?.("moltys-off"),
     );
     // a picker swapping a slot's Molty (MoltyPicker writes data-fluid-molty); the showcase
     // asking it for an action (data-fluid-act)

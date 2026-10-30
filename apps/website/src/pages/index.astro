@@ -18,7 +18,7 @@ import {
 import { MOLTYS } from "../features/moltys/catalog";
 ---
 
-<ContentLayout title={title} description={description} path="/">
+<ContentLayout title={title} description={description} path="/" fluid>
   <script slot="head" type="application/ld+json" set:html={JSON.stringify(ldJson)} />
   <HomePage>
     <FluidField slot="fluid" client:load />
