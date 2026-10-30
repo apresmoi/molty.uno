@@ -50,7 +50,7 @@ import {
   type WebhookRequest,
 } from "./api.js";
 import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
-import { type AskArgs, BOX_NO_SPEECH_MS, CommandError, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk } from "./commands.js";
+import { ACK_CAP, ACK_MODES, type AskArgs, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk } from "./commands.js";
 import { PcmFeed, estimateSpeechMs, splitSpeech, synthesize } from "./speech.js";
 import { b64Decode, b64urlEncode, randomBytes, randomDigits, safeEqual, sha256Hex } from "./crypto.js";
 import {
@@ -301,6 +301,10 @@ interface ListenBuffer {
   speech_ms?: number;
   /** The automatic `thinking` mood was sent at end of speech. */
   thinking?: boolean;
+  /** The device acknowledges this listen's end itself (cap `ack`; from the listen's ack): with
+   *  it the relay sends no automatic `thinking`, and `idle` on an empty transcript only when the
+   *  device put thinking up (not "off"). Absent: older firmware, the relay's moods as before. */
+  deviceAck?: (typeof ACK_MODES)[number];
   /** `screenRev` when this listen began: automatic moods apply only while it is unchanged. */
   screenRev: number;
   /** Streaming STT (voice box): every chunk is pushed here as it arrives. */
@@ -1265,7 +1269,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       timings.say = s.timings;
     }
     if (args.listen) {
-      const l = await this.record(id, args.listen_ms, args.ring_color !== undefined ? { ...args.vad, ring_color: args.ring_color } : args.vad);
+      const l = await this.record(id, args.listen_ms, { ...args.vad, ...(args.ring_color !== undefined ? { ring_color: args.ring_color } : {}), ...(args.ack !== undefined ? { ack: args.ack } : {}) });
       if (!l.ok) return this.finishJob(id, { status: "failed", error: l.error });
       Object.assign(result, { heard: l.text, reason: l.reason, duration_ms: l.duration_ms, peak: l.peak, rms: l.rms });
       if (l.speech_ms !== undefined) result.speech_ms = l.speech_ms;
@@ -1618,9 +1622,14 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     try {
       const w = this.listenWindow(given);
       if (!w.ok) return { ok: false, error: w.error };
-      const res = await this.sendCmd("listen", { job: id, ...w.result, rate: SAMPLE_RATE, ...extra });
+      // ack: only firmware that acknowledges turns itself knows the arg
+      const { ack, ...rest } = extra;
+      const sendAck = ack !== undefined && !!this.liveSocket()?.getMeta()?.caps?.includes(ACK_CAP);
+      const res = await this.sendCmd("listen", { job: id, ...w.result, rate: SAMPLE_RATE, ...rest, ...(sendAck ? { ack } : {}) });
       if (!res.ok) return { ok: false, error: res.error };
       tAck = this.clock.now();
+      const did = res.result.ack;
+      if (typeof did === "string" && (ACK_MODES as readonly string[]).includes(did)) buf.deviceAck = did as (typeof ACK_MODES)[number];
       const acked = res.result.ms;
       ms = typeof acked === "number" && Number.isFinite(acked) && acked >= 0 ? acked || LISTEN_CEILING_MS : (w.result.ms ?? LISTEN_CEILING_MS) || LISTEN_CEILING_MS;
       if (!buf.ended) {
@@ -1707,6 +1716,9 @@ export class DeviceRoom implements AgentApi, OwnerApi {
    */
   private autoMood(buf: ListenBuffer, mood: "thinking" | "idle") {
     if (buf.screenRev !== this.screenRev || this.screenInFlight > 0) return;
+    // the device acknowledged the turn itself (chirp + thinking): no thinking from here; idle
+    // only takes down a thinking the device put up
+    if (buf.deviceAck !== undefined && (mood === "thinking" || buf.deviceAck === "off")) return;
     const args: JsonObject = mood === "thinking" ? { mood, hold_s: this.t.thinkHoldS } : { mood };
     void this.sendCmd("mood", args).then((r) => {
       if (!r.ok) this.log("auto mood failed", { device: this.deviceId, mood, error: r.error });

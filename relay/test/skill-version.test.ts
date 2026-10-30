@@ -111,19 +111,20 @@ describe("skill notice (ride-along)", () => {
     expect(recs.map((r) => r.skill_seen)).toEqual([SKILL_VERSION, SKILL_VERSION]);
   });
 
-  it("v9 bump: an agent that saw v8 is told only what is new in v9 (caps, buttons, broken listens, wakes), once; one that saw v7 hears v8 and v9", async () => {
-    expect(SKILL_VERSION).toBe(9);
+  it("v10 bump: an agent that saw v9 is told only what is new in v10 (Molty acknowledges the turn itself), once; one that saw v8 hears v9 (caps, buttons, broken listens, wakes) and v10", async () => {
+    expect(SKILL_VERSION).toBe(10);
     const w = await world();
-    const a = await w.pairAgent("v8 agent");
-    for (const [k, v] of await w.kv.list<Record<string, unknown>>("tok:")) await w.kv.put(k, { ...v, skill_seen: 8 });
+    const a = await w.pairAgent("v9 agent");
+    for (const [k, v] of await w.kv.list<Record<string, unknown>>("tok:")) await w.kv.put(k, { ...v, skill_seen: 9 });
     const first = await w.room.command(a, "imu", {});
-    expect(first.notice).toEqual({ version: 9, whats_new: [`v9: ${WHATS_NEW.at(-1)!.text}`] });
-    expect(first.notice!.whats_new[0]).toMatch(/relay\.caps/);
-    expect(first.notice!.whats_new[0]).toMatch(/never an answer/);
+    expect(first.notice).toEqual({ version: 10, whats_new: [`v10: ${WHATS_NEW.at(-1)!.text}`] });
+    expect(first.notice!.whats_new[0]).toMatch(/acknowledges the end of the human's turn by itself/);
     expect((await w.room.command(a, "imu", {})).notice).toBeUndefined();
-    for (const [k, v] of await w.kv.list<Record<string, unknown>>("tok:")) await w.kv.put(k, { ...v, skill_seen: 7 });
+    for (const [k, v] of await w.kv.list<Record<string, unknown>>("tok:")) await w.kv.put(k, { ...v, skill_seen: 8 });
     const older = await w.room.command(a, "imu", {});
-    expect(older.notice!.whats_new.map((l) => l.slice(0, 3))).toEqual(["v8:", "v9:"]);
+    expect(older.notice!.whats_new.map((l) => l.slice(0, 4))).toEqual(["v9: ", "v10:"]);
+    expect(older.notice!.whats_new[0]).toMatch(/relay\.caps/);
+    expect(older.notice!.whats_new[0]).toMatch(/never an answer/);
   });
 
   it("failed outcomes do not consume it; the next success does", async () => {

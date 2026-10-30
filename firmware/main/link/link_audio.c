@@ -6,6 +6,7 @@
 #include "link_ask.h"
 #include "mole_fluid.h"
 #include "vad.h"
+#include "chirp.h"
 
 #include "molty_board.h"
 #include "mole_creature.h"
@@ -25,6 +26,7 @@
 typedef struct {
     char job[LINK_STREAM_MAX]; unsigned ms; bool listen;
     bool vad; unsigned end_silence_ms, no_speech_ms;   /* listen: end-of-speech (audio/vad.h) */
+    link_ack_t ack;                                     /* listen: the turn acknowledgement it allows */
 } audio_job_t;
 static QueueHandle_t s_jobs, s_done;
 static RingbufHandle_t s_ring;
@@ -40,6 +42,15 @@ static volatile uint32_t s_stat_frames, s_stat_bytes;   /* diag: frames/bytes of
 static const char *s_end_reason;                       /* diag: why the last listen ended */
 static uint32_t s_speech_ms;
 static unsigned s_mood_gen0;                           /* link_cmd_mood_gen() when the job started */
+/* The turn acknowledgement (link_protocol.h link_ack_decide): what the listen that just ended
+ * acknowledges, decided by the audio task at its end (before anyone could answer it) and read
+ * by link_audio_tick once the job is done (s_done orders the two). The chirp then plays on the
+ * audio task AFTER the job is reported done, so a say / listen sent meanwhile is accepted at
+ * once: it waits in s_jobs, and s_chirp_cut (set when it is accepted) ends the chirp within
+ * one 16 ms write, faded, its DMA flushed with silence — so the chirp never overlaps a say and
+ * the next listen's mic never hears it. */
+static link_ack_t s_ack;
+static atomic_bool s_chirp_cut;
 
 /* say word cues (cap say_cues): word i of the text is spoken from sample s_cue[i] of the
  * stream (UINT32_MAX = not cued yet), filled from the frames' headers; the play loop
@@ -194,6 +205,12 @@ static esp_err_t record(const audio_job_t *job)
      * the relay is already transcribing */
     if (streaming) { molty_mic_stream_stop(); mole_fluid_listen(false); }
     if (e != ESP_OK) s_end_reason = "error";
+    /* heard speech and nobody else took the screen meanwhile (an explicit mood, an ask, an
+     * update screen, a pairing): acknowledge it — decided now, before the relay or an agent
+     * could react to the end frame */
+    s_ack = link_ack_decide(job->ack, s_end_reason, vad_speech_known(&vad), s_speech_ms,
+                            link_cmd_mood_gen() != s_mood_gen0 || link_ask_pending() || link_pair_active(),
+                            molty_board_has(MOLTY_CAP_SPEAKER));
     /* Fail fast: an end-only frame tells the relay the stream is over instead of
      * leaving it to time out into no_audio ms + 5 s later. */
     if (e != ESP_OK && !atomic_load(&s_cancel) && frame && link_client_connected()) {
@@ -204,26 +221,61 @@ static esp_err_t record(const audio_job_t *job)
     return e;
 }
 
+/* The acknowledgement chirp (audio/chirp.h), on the audio task after the listen was reported
+ * done. Skipped when the speaker is someone else's; cut (a 4 ms fade) when a new job arrives. */
+#define CHIRP_CHUNK 256    /* 16 ms: the cut's latency once the DMA ring is full */
+#define CHIRP_FADE  64     /* 4 ms */
+static void chirp_play(void)
+{
+    if (molty_speaker_stream_begin(CHIRP_RATE) != ESP_OK) return;
+    int16_t buf[CHIRP_CHUNK];
+    size_t at = 0, n;
+    esp_err_t e = ESP_OK;
+    while (!atomic_load(&s_chirp_cut) && (n = chirp_fill(buf, at, CHIRP_CHUNK)) > 0) {
+        e = molty_speaker_stream_write(buf, n);
+        if (e != ESP_OK) break;
+        at += n;
+    }
+    const bool cut = at < CHIRP_SAMPLES;
+    if (e == ESP_OK && cut && (n = chirp_fill(buf, at, CHIRP_FADE)) > 0) {   /* no click */
+        for (size_t i = 0; i < n; i++) buf[i] = (int16_t)((int32_t)buf[i] * (int32_t)(n - i) / (int32_t)(n + 1));
+        e = molty_speaker_stream_write(buf, n);
+    }
+    if (e == ESP_OK) e = molty_speaker_stream_drain();   /* the DMA ring clocked out with silence */
+    molty_speaker_stream_end();
+    mole_diag_event(e != ESP_OK, "audio.ack chirp %s %s", cut ? "cut" : "played", esp_err_to_name(e));
+}
+
+/* One job, start to finish (the worker's loop body; host tests run it directly). */
+static void run_job(const audio_job_t *job)
+{
+    int64_t t0 = esp_timer_get_time();
+    mole_diag_event(false, "audio.%s start ms=%u int_free=%u", job->listen ? "listen" : "say", job->ms,
+                    (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    s_ack = LINK_ACK_OFF;
+    esp_err_t e = job->listen ? record(job) : play();
+    unsigned took = (unsigned)((esp_timer_get_time() - t0) / 1000);
+    if (job->listen)
+        mole_diag_event(e != ESP_OK, "audio.listen end %s took=%ums frames=%u bytes=%u reason=%s speech_ms=%u ack=%s",
+                        esp_err_to_name(e), took, (unsigned)s_stat_frames, (unsigned)s_stat_bytes,
+                        s_end_reason, (unsigned)s_speech_ms, link_ack_name(s_ack));
+    else
+        mole_diag_event(e != ESP_OK, "audio.say end %s took=%ums frames=%u bytes=%u",
+                        esp_err_to_name(e), took, (unsigned)s_stat_frames, (unsigned)s_stat_bytes);
+    drain();
+    const bool chirp = job->listen && s_ack == LINK_ACK_CHIRP;
+    atomic_store(&s_chirp_cut, false);   /* before done: only a job accepted after it cuts */
+    xQueueSend(s_done, &e, portMAX_DELAY);
+    if (chirp) chirp_play();
+}
+
 static void audio_task(void *arg)
 {
     (void)arg;
     audio_job_t job;
     for (;;) {
         xQueueReceive(s_jobs, &job, portMAX_DELAY);
-        int64_t t0 = esp_timer_get_time();
-        mole_diag_event(false, "audio.%s start ms=%u int_free=%u", job.listen ? "listen" : "say", job.ms,
-                        (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
-        esp_err_t e = job.listen ? record(&job) : play();
-        unsigned took = (unsigned)((esp_timer_get_time() - t0) / 1000);
-        if (job.listen)
-            mole_diag_event(e != ESP_OK, "audio.listen end %s took=%ums frames=%u bytes=%u reason=%s speech_ms=%u",
-                            esp_err_to_name(e), took, (unsigned)s_stat_frames, (unsigned)s_stat_bytes,
-                            s_end_reason, (unsigned)s_speech_ms);
-        else
-            mole_diag_event(e != ESP_OK, "audio.say end %s took=%ums frames=%u bytes=%u",
-                            esp_err_to_name(e), took, (unsigned)s_stat_frames, (unsigned)s_stat_bytes);
-        drain();
-        xQueueSend(s_done, &e, portMAX_DELAY);
+        run_job(&job);
     }
 }
 
@@ -269,10 +321,13 @@ static esp_err_t start(const cJSON *args, bool listen, cJSON **out)
     if (listen && !link_listen_args(args, &vad, &end_silence_ms, &no_speech_ms)) return ESP_ERR_INVALID_ARG;
     int32_t ring = -1;                       /* the listening ring's colour; -1 = the device default */
     if (listen && !link_color_arg(args, "ring_color", &ring)) return ESP_ERR_INVALID_ARG;
+    link_ack_t ack = LINK_ACK_OFF;           /* the turn acknowledgement: the agent's ack, else the setting */
+    if (listen && !link_ack_arg(args, (link_ack_t)mole_fluid_ack_mode(), &ack)) return ESP_ERR_INVALID_ARG;
     cJSON *result = cJSON_CreateObject();
     if (!result) return ESP_ERR_NO_MEM;
     cJSON_AddStringToObject(result, "job", j->valuestring);
     if (listen) cJSON_AddNumberToObject(result, "ms", window);   /* the window it applies (0 = unlimited) */
+    if (listen) cJSON_AddStringToObject(result, "ack", link_ack_name(ack));   /* the relay leaves thinking to us */
     esp_err_t e;
     if (listen) {
         mole_fluid_listen_color(ring);       /* before the mic opens the ring (record) */
@@ -291,12 +346,13 @@ static esp_err_t start(const cJSON *args, bool listen, cJSON **out)
     if (e != ESP_OK) { if (cued) mole_fluid_text_cue_end(); cJSON_Delete(result); return e; }
     link_ask_cancel();   /* say / listen, once accepted, take the screen from a pending question */
     audio_job_t job = {.listen = listen, .ms = listen ? (unsigned)rec_ms : (unsigned)ms->valueint,
-                       .vad = vad, .end_silence_ms = end_silence_ms, .no_speech_ms = no_speech_ms};
+                       .vad = vad, .end_silence_ms = end_silence_ms, .no_speech_ms = no_speech_ms, .ack = ack};
     strcpy(job.job, j->valuestring); strcpy(s_job, job.job);
     s_mood_gen0 = link_cmd_mood_gen();   /* after our own listening/speaking mood */
     s_seq = 0; s_stat_frames = 0; s_stat_bytes = 0; s_busy = true; s_listen = listen; s_last_frame = esp_timer_get_time();
     s_cued = cued; s_cue_next = 0;
     atomic_store(&s_end, false); atomic_store(&s_cancel, false); atomic_store(&s_stop, false);
+    atomic_store(&s_chirp_cut, true);    /* a chirp still playing ends now: this job is next */
     xQueueSend(s_jobs, &job, 0);
     *out = result;
     return ESP_OK;
@@ -352,7 +408,13 @@ void link_audio_tick(void)
     s_busy = false;
     /* Back to idle only if nobody chose a mood while the job ran: an explicit mood
      * (with its own hold_s, fluid_director) outlives the listen/say it arrived in. */
-    if (!link_pair_active()) link_cmd_mood_idle_unless(s_mood_gen0);
+    /* A listen that heard speech is acknowledged (s_ack, decided at its end): `thinking`
+     * instead of idle, LINK_ACK_THINK_S at most, until the agent's say / mood / ask / listen
+     * replaces it — a mood the device sets itself, so the next job still takes over. */
+    if (!link_pair_active()) {
+        if (s_listen && s_ack != LINK_ACK_OFF) link_cmd_mood_unless(s_mood_gen0, "thinking", LINK_ACK_THINK_S);
+        else link_cmd_mood_idle_unless(s_mood_gen0);
+    }
     /* A failed/cancelled stream must never report successful playback. Listen
      * completion is the uplink end flag, not a say event. */
     if (!s_listen && e == ESP_OK && !atomic_load(&s_cancel) && link_client_connected()) {

@@ -40,7 +40,9 @@ describe("GET /skill.md", () => {
     for (const fact of ["https://r/v1/devices/molty-xxxxxxxxxx/ask", `1–${MAX_ASK_LABEL} characters each`, "one centred button", "pie slices", "`timeout`", "`cancelled`", "`offline`", "use **talk** when you"]) expect(md).toContain(fact);
 
     // colours: the option object, every palette name, the defaults, meaningful use; ring_color on talk/listen
-    for (const fact of ['{"label": "yes", "color": "green"}', "green, red, amber, blue, violet, pink, cyan, white", '`"#rrggbb"`', "green, red, amber, blue, violet by position", "green yes, red no", '"ring_color"?: c', '"ring_color"?}']) expect(md).toContain(fact);
+    for (const fact of ['{"label": "yes", "color": "green"}', "green, red, amber, blue, violet, pink, cyan, white", '`"#rrggbb"`', "green, red, amber, blue, violet by position", "green yes, red no", '"ring_color"?: c', '"ring_color"?, "ack"?}']) expect(md).toContain(fact);
+    // the turn acknowledgement: the device does it, so agents answer straight away; long work still acks
+    for (const fact of ['"ack"?: true\\|false\\|"silent"', "Molty acknowledges the turn itself", "go straight to your answer", "Never leave the human in silence", '`"ack": false`', "30 s"]) expect(md).toContain(fact);
     // updates: the trigger, the one call, ask-before-update, the error and the passive notice
     for (const fact of ["When your human asks to check Molty for updates (any wording", "https://r/v1/devices/<id>/updates", "https://r/v1/devices/<id>/update", "**ask before updating**", "`firmware_too_old`", `needs ${FEATURES.ask.min_fw}`, "`firmware_update`", "`can_self_update`"]) expect(md).toContain(fact);
   });

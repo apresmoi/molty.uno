@@ -113,11 +113,23 @@ esp_err_t mole_creature_state_get(char **out) { *out=strdup(sdk_saved_state); re
 esp_err_t sdk_state_error, sdk_select_error;
 esp_err_t mole_creature_state_set(const char *json) { assert(strlen(json)<sizeof(sdk_state)); if(sdk_state_error) return sdk_state_error; strcpy(sdk_state,json); sdk_state_locked=sdk_locks>0; return ESP_OK; }
 static size_t sdk_stream_samples;   /* since stream_begin; the DAC lags by a 1440-sample DMA ring */
-esp_err_t molty_speaker_stream_begin(uint32_t rate) { assert(rate==16000); sdk_stream_samples=0; return ESP_OK; }
-esp_err_t molty_speaker_stream_write(const int16_t *pcm, size_t n) { assert(pcm); sdk_written+=n*2; sdk_stream_samples+=n; return sdk_play_error; }
+unsigned sdk_speaker_begins, sdk_speaker_ends;
+esp_err_t sdk_speaker_begin_error;
+void (*sdk_on_speaker_write)(const int16_t *pcm, size_t n);
+esp_err_t molty_speaker_stream_begin(uint32_t rate) {
+    assert(rate==16000); if (sdk_speaker_begin_error) return sdk_speaker_begin_error;
+    assert(sdk_speaker_begins==sdk_speaker_ends);   /* one owner at a time */
+    sdk_speaker_begins++; sdk_stream_samples=0; return ESP_OK;
+}
+esp_err_t molty_speaker_stream_write(const int16_t *pcm, size_t n) {
+    assert(pcm && sdk_speaker_begins==sdk_speaker_ends+1);
+    sdk_written+=n*2; sdk_stream_samples+=n;
+    if (sdk_on_speaker_write) sdk_on_speaker_write(pcm,n);
+    return sdk_play_error;
+}
 uint32_t molty_speaker_stream_played(void) { return sdk_stream_samples>1440 ? (uint32_t)(sdk_stream_samples-1440) : 0; }
 esp_err_t molty_speaker_stream_drain(void) { sdk_drained++; return sdk_play_error; }
-void molty_speaker_stream_end(void) {}
+void molty_speaker_stream_end(void) { sdk_speaker_ends++; }
 void esp_crt_bundle_attach(void) {}
 esp_netif_t *esp_netif_get_handle_from_ifkey(const char *key) { (void)key; return (void *)1; }
 bool esp_netif_is_netif_up(esp_netif_t *net) { (void)net; return true; }

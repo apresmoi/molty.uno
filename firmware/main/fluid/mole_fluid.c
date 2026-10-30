@@ -153,6 +153,11 @@ static bool    s_ring_dflt_loaded = false;
 static uint32_t s_listen_dflt = LINK_LISTEN_DEFAULT_MS;
 static bool     s_listen_dflt_loaded = false;
 static uint32_t listen_setting_load(void);       /* NVS → the setting (or the default) */
+/* the turn acknowledgement (NVS "fluid"/"ack", the console's setting; link_ack_t), loaded on
+ * first use */
+static int      s_ack_dflt = LINK_ACK_DEFAULT;
+static bool     s_ack_dflt_loaded = false;
+static int      ack_setting_load(void);
 static float   s_ripq[FLUID_RIPPLE_Q][3];
 static int     s_ripn = 0;
 
@@ -1063,6 +1068,8 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     int32_t ring = s_ring_dflt;
     if (!s_listen_dflt_loaded) { s_listen_dflt = listen_setting_load(); s_listen_dflt_loaded = true; }
     const uint32_t listen_ms = s_listen_dflt;
+    if (!s_ack_dflt_loaded) { s_ack_dflt = ack_setting_load(); s_ack_dflt_loaded = true; }
+    const int ack = s_ack_dflt;
     char cname[40], cerr[40];
     memcpy(cname, s_cute_name, sizeof(cname)); memcpy(cerr, s_cute_err, sizeof(cerr));
     cJSON *root = cJSON_CreateObject();
@@ -1096,6 +1103,7 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
         cJSON_AddStringToObject(root, "ring_color", ring >= 0 ? rb : "accent");
     }
     cJSON_AddNumberToObject(root, "listen_ms", listen_ms);   /* 0 = unlimited */
+    cJSON_AddStringToObject(root, "ack", link_ack_name((link_ack_t)ack));
     cJSON_AddStringToObject(root, "edge_mode",   FLUID_EDGE_NAMES[c.edge_mode]);
     cJSON_AddStringToObject(root, "grid",        grid);
     cJSON_AddNumberToObject(root, "speed",       c.speed);
@@ -1176,6 +1184,23 @@ esp_err_t mole_fluid_creature_state_set_json(const char *body) {
     if ((j = cJSON_GetObjectItem(root, "listen_ms"))) {
         if (cJSON_IsNumber(j) && link_listen_setting_ok(j->valuedouble)) listen = (int32_t)j->valuedouble;
         else ret = ESP_ERR_INVALID_ARG;
+    }
+    /* ack: "chirp" | "thinking" | "off" — the turn acknowledgement, kept in NVS */
+    int ack = -1;                                      /* -1: not given */
+    if ((j = cJSON_GetObjectItem(root, "ack"))) {
+        link_ack_t m;
+        if (cJSON_IsString(j) && link_ack_parse(j->valuestring, &m)) ack = (int)m;
+        else ret = ESP_ERR_INVALID_ARG;
+    }
+    if (ack >= 0) {
+        nvs_handle_t h;
+        esp_err_t ne = nvs_open("fluid", NVS_READWRITE, &h);
+        if (ne == ESP_OK) {
+            ne = nvs_set_i32(h, "ack", ack);
+            if (ne == ESP_OK) ne = nvs_commit(h);
+            nvs_close(h);
+        }
+        if (ne != ESP_OK) { ESP_LOGW(TAG, "ack not saved (%s)", esp_err_to_name(ne)); ret = ne; }
     }
     if (listen >= 0) {
         nvs_handle_t h;
@@ -1259,6 +1284,7 @@ esp_err_t mole_fluid_creature_state_set_json(const char *body) {
     }
     if (ring != -2) { s_ring_dflt = ring; s_ring_dflt_loaded = true; }   /* live even if NVS failed */
     if (listen >= 0) { s_listen_dflt = (uint32_t)listen; s_listen_dflt_loaded = true; }
+    if (ack >= 0) { s_ack_dflt = ack; s_ack_dflt_loaded = true; }
     s_req_activity = true;                             /* someone is driving: no dozing off */
     xSemaphoreGive(s_mutex);
     cJSON_Delete(root);
@@ -1356,6 +1382,25 @@ uint32_t mole_fluid_listen_window(void) {
     const uint32_t w = s_listen_dflt;
     xSemaphoreGive(s_mutex);
     return w;
+}
+
+static int ack_setting_load(void) {
+    nvs_handle_t h;
+    int32_t v = -1;
+    if (nvs_open("fluid", NVS_READONLY, &h) == ESP_OK) {
+        if (nvs_get_i32(h, "ack", &v) != ESP_OK) v = -1;
+        nvs_close(h);
+    }
+    return v >= LINK_ACK_OFF && v <= LINK_ACK_CHIRP ? (int)v : LINK_ACK_DEFAULT;
+}
+
+int mole_fluid_ack_mode(void) {
+    if (!s_mutex) return ack_setting_load();             /* before init: straight from NVS */
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (!s_ack_dflt_loaded) { s_ack_dflt = ack_setting_load(); s_ack_dflt_loaded = true; }
+    const int m = s_ack_dflt;
+    xSemaphoreGive(s_mutex);
+    return m;
 }
 
 void mole_fluid_listen_level(float level) {

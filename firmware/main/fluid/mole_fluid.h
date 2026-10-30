@@ -16,6 +16,8 @@
  *               GET reports it the same way),
  *         listen_ms: 0 (unlimited) | 5000..30000 (the listen window an agent gets when it
  *               gives none, kept in NVS; GET reports it),
+ *         ack: "chirp"|"thinking"|"off" (what the device does when the human finishes
+ *               speaking: chirp + thinking out of the box; kept in NVS; GET reports it),
  *         hold: true (with "text": hold the last word instead of returning to the
  *               creature 1.5 s after it; the pairing code, the Improv "hi"),
  *         text, wpm, palette: "green"|"amber"|"pastel", edge_mode: "off"|"contours"|"all",
@@ -94,6 +96,10 @@ void mole_fluid_text_cue_end(void);
  *  The console's setting, POST /api/creature/state {listen_ms} (GET reports it), kept in NVS
  *  like ring_color. Safe from any task, before init too (read straight from NVS). */
 uint32_t mole_fluid_listen_window(void);
+/** The turn acknowledgement's setting (link_protocol.h link_ack_t: 0 off, 1 thinking,
+ *  2 chirp — the default). POST /api/creature/state {ack: "chirp"|"thinking"|"off"} (GET
+ *  reports it), kept in NVS like ring_color. Safe from any task, before init too. */
+int mole_fluid_ack_mode(void);
 
 /** A question (link_ask.c, the link task) — the screen follows what the link wants:
  *  show   n (1..FLUID_ASK_MAX) labels condense out of the fluid in their sectors

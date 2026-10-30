@@ -269,6 +269,16 @@ const canvasStats = (page) => page.evaluate(() => {
   await listenRow.getByRole('button', { name: '10 s' }).click();
   await listenRow.locator('button[aria-pressed="true"]', { hasText: '10 s' }).waitFor();
   ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).listen_ms === 10000), 'settings molty: 10 s listen window sent to the device');
+  const ackRow = page.getByRole('group', { name: 'acknowledge' });
+  ok(await ackRow.getByRole('button', { name: 'chirp + thinking (default)' }).getAttribute('aria-pressed') === 'true', 'settings molty: acknowledge defaults to chirp + thinking');
+  await ackRow.getByRole('button', { name: 'thinking only' }).click();
+  await ackRow.locator('button[aria-pressed="true"]', { hasText: 'thinking only' }).waitFor();
+  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).ack === 'thinking'), 'settings molty: "thinking only" acknowledgement sent to the device (ack thinking)');
+  await ackRow.getByRole('button', { name: 'off' }).click();
+  await ackRow.locator('button[aria-pressed="true"]', { hasText: 'off' }).waitFor();
+  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).ack === 'off'), 'settings molty: acknowledgement off sent to the device (ack off)');
+  await ackRow.getByRole('button', { name: 'chirp + thinking (default)' }).click();
+  await ackRow.locator('button[aria-pressed="true"]', { hasText: 'chirp + thinking' }).waitFor();
   ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'settings molty: no horizontal scroll at 390px');
   await shot(page, '12-settings-molty');
 

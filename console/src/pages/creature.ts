@@ -1,6 +1,6 @@
 // Molty (settings): pick a Molty from the catalog (sent to the device as a .molty file),
 // and play with the fluid — state, speed-reader text + WPM, palette, listening ring colour,
-// listen window, tap-to-ripple.
+// listen window, turn acknowledgement, tap-to-ripple.
 import { UnsupportedError } from '../api/device';
 import type { FluidOrder, FluidState } from '../api/types';
 import type { AppCtx } from '../app';
@@ -10,6 +10,7 @@ import { debounce, errText } from '../ui/fmt';
 import { preview } from '../ui/preview';
 import { RING_CHOICES, ringChoice, ringSupported } from '../ring/ring';
 import { LISTEN_CHOICES, listenChoice, listenSupported } from '../listen/listen';
+import { ACK_CHOICES, ackChoice, ackSupported } from '../ack/ack';
 
 const STATES = ['blob', 'creature', 'thinking', 'text', 'autoplay'];
 const EFFECTS = ['ripple', 'vortex', 'wave'];
@@ -29,6 +30,9 @@ export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
   const listenLabel = h('label', { hidden: true }, 'listen window');
   const listenRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'listen window', hidden: true });
   const listenHint = h('p', { class: 'dim small', hidden: true }, 'how long Molty listens at most when an agent doesn’t say — it stops as soon as you finish anyway; unlimited still stops after 5 minutes');
+  const ackLabel = h('label', { hidden: true }, 'acknowledge');
+  const ackRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'acknowledge', hidden: true });
+  const ackHint = h('p', { class: 'dim small', hidden: true }, 'what Molty does the moment you finish speaking, before the agent answers — so there is never dead air');
   const text = h('textarea', { rows: 3, placeholder: 'words for the speed reader…', 'aria-label': 'reader text' });
   const wpm = h('input', { type: 'range', min: 100, max: 800, step: 25, value: '300', 'aria-label': 'words per minute' });
   const wpmOut = h('output', null, '300 wpm');
@@ -52,6 +56,7 @@ export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
         h('label', null, 'palette'), palRow,
         ringLabel, ringRow,
         listenLabel, listenRow, listenHint,
+        ackLabel, ackRow, ackHint,
         h('label', null, 'speed reader'), text,
         h('div', { class: 'row' }, wpm, wpmOut),
         h('div', { class: 'row' }, word, h('button', { type: 'button', onclick: () => order({ text: text.value, wpm: +wpm.value, state: 'text' }) }, 'read it ⠶')),
@@ -84,6 +89,12 @@ export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
     if (listenOn) mount(listenRow, LISTEN_CHOICES.map((c) =>
       h('button', { type: 'button', class: 'chip' + (lw === c.id ? ' on' : ''), 'aria-pressed': String(lw === c.id),
         onclick: () => order({ listen_ms: c.ms }) }, c.label)));
+    const ackOn = ackSupported(s);   /* older firmware does not acknowledge turns itself */
+    ackLabel.hidden = ackRow.hidden = ackHint.hidden = !ackOn;
+    const ak = ackChoice(s?.ack);
+    if (ackOn) mount(ackRow, ACK_CHOICES.map((c) =>
+      h('button', { type: 'button', class: 'chip' + (ak === c.id ? ' on' : ''), 'aria-pressed': String(ak === c.id),
+        onclick: () => order({ ack: c.id }) }, c.label)));
     if (s && document.activeElement !== wpm && s.wpm) { wpm.value = String(s.wpm); wpmOut.textContent = `${s.wpm} wpm`; }
     if (s && !text.value && s.text) text.value = s.text;
     word.textContent = s?.word ? `⠶ ${s.word}` : s?.nwords ? `${s.word_idx ?? 0}/${s.nwords} words` : '';

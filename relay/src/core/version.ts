@@ -95,6 +95,7 @@ export const WHATS_NEW: ReadonlyArray<{ version: number; text: string; min_fw?: 
   { version: 7, text: "listen windows up to 30 s, or 0 = unlimited (ends when the human finishes); omit ms / listen_ms for the human's own setting (30 s out of the box)" },
   { version: 8, text: "end of turn is automatic: with the owner's voice box its semantic end of turn decides (device VAD off, no_speech from the box too) — don't pass vad / end_silence_ms" },
   { version: 9, text: "check relay.caps (not firmware versions) to know what Molty can do; button accept/reject = acknowledge / dismiss, never an answer (answers come only from molty_ask); a broken listen is an error (listen_failed / device_offline), never no_speech; after a wake, meet no_speech with one short line or one more listen, not silence" },
+  { version: 10, text: "Molty acknowledges the end of the human's turn by itself (a soft chirp + thinking, the human's setting) — go straight to your answer; for long work still say a quick ack or keep thinking up; ack:false|\"silent\" on listen/talk opts out" },
 ];
 export const SKILL_VERSION: number = WHATS_NEW[WHATS_NEW.length - 1].version;
 export const SKILL_PATH = "/skill.md";
