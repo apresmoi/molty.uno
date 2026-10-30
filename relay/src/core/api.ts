@@ -36,6 +36,8 @@ export interface EventsRequest {
   since?: number;
   /** Long-poll budget (ms); the surface caps it. */
   wait_ms: number;
+  /** The caller went away: free the waiter now. Not serializable, so DO RPC hosts drop it. */
+  signal?: AbortSignal;
 }
 
 export type WebhookRequest = { action: "get" } | { action: "delete" } | { action: "set"; spec: Record<string, unknown> };

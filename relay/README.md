@@ -101,27 +101,37 @@ token record, and `room_id` (lets `alarm()` rebuild the room). All survive hiber
 |---|---|
 | Inbox | last 200 events, max age 24 h, trimmed on append |
 | Intake | 30 events/min per device, excess dropped and counted |
-| Pull | ≤ 50 events per response; long-poll ≤ 25 s REST, ≤ 8 s MCP |
+| Pull | ≤ 50 events per response; long-poll ≤ 25 s REST, ≤ 8 s MCP; ≤ 2 concurrent waits per token, ≤ 16 per device (`too_many_polls`, 429) |
 | Ride-along | ≤ 10 unread events per response (`more_events` when more remain) |
 | Webhook spec | url ≤ 2048 B, body template ≤ 4096 B, ≤ 16 headers / 4096 B |
-| Delivery | DO alarm; 5 s timeout; no redirects; retries after 1 s / 10 s / 60 s; disabled after 20 consecutive failed attempts |
+| Delivery | DO alarm; one 5 s deadline over DNS + request; no redirects; retries after 1 s / 10 s / 60 s; disabled after 20 consecutive failed attempts; acks never move the read cursor |
 
 - **Delivery runs from the DO alarm** (`ctx.storage.setAlarm`), never inline with the
   device frame, so a slow endpoint cannot stall the socket and a queued delivery survives
   eviction. Alarms need no `wrangler.jsonc` change or migration.
 - **Long-polls hold the DO awake** for their duration (≤ 25 s), like `molty_wait` does.
+  Admission is capped (above). The room frees a waiter as soon as its caller's
+  `AbortSignal` fires, but an `AbortSignal` cannot cross DO RPC, so on Workers a
+  disconnected client's slot is held until that poll's own deadline (≤ 25 s).
   Agents running `molty events` therefore keep their device's object resident: the cost is
   DO wall-clock duration, not CPU. Note it if you meter a hosted relay.
 - **SSRF.** Literal checks (https only, no IP literals, no local/internal names) at
   registration, plus A/AAAA resolution over DNS-over-HTTPS (`cloudflare-dns.com`) at
-  registration and before each delivery, refusing private/reserved addresses. Honest
+  registration and before each delivery, refusing private/reserved addresses (parsed to
+  bytes, every IPv6 spelling, IPv4 embedded in IPv6 classified as IPv4). Honest
   limits: Workers' `fetch` resolves again by itself, so a DNS-rebinding host can still
   win the race between our lookup and the request, and we trust the DoH answer. Workers
   egress from Cloudflare's network, so a home LAN behind the owner's router is not
   reachable from the relay regardless. A Node host must supply its own `resolveHost`
   (and should pin the resolved address in its HTTP agent, which Workers cannot do).
 - **Secrets.** Header values, the signing secret and the URL path/query are never returned
-  after registration and never logged (logs carry the origin only).
+  after registration and never logged (logs carry the origin only). `last_error` is a fixed
+  category (`timeout`, `dns_failed`, `blocked_address`, `blocked_url`, `render_failed`,
+  `network_error`, `http_<status>`), never exception text.
+- **Signature v2** covers method, request target and body (`t\nMETHOD\npath?query\nbody`),
+  so a signed GET's query cannot be swapped.
+- **Registration** re-reads the token record after its DNS checks and refuses
+  (`unauthorized` / `conflict`) instead of writing back a stale record.
 
 ## Run locally (nothing is deployed, no login)
 

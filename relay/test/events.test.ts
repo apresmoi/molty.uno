@@ -6,7 +6,7 @@ import { join } from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import type { RelayBackend } from "../src/core/api.js";
-import type { AgentEvent } from "../src/core/events.js";
+import { type AgentEvent, INBOX_LIMITS, SAMPLE_EVENTS as SAMPLE } from "../src/core/events.js";
 import type { DeviceRoom } from "../src/core/room.js";
 import { type Clock, MemoryKV } from "../src/core/store.js";
 import { ESCAPE, checkWebhookUrl, guardWebhookUrl, isPrivateAddress, parseWebhookSpec, renderRequest, renderTemplate } from "../src/core/webhook.js";
@@ -203,12 +203,15 @@ describe("inbox", () => {
     expect(withEv).toMatchObject({ ok: true, result: { echo: "imu" }, inbox: { events: [{ id: "e1", type: "shake" }], more: false } });
     expect(await w.room.command(a, "imu", {})).toEqual({ ok: true, result: { echo: "imu" } });
     expect(evs(await w.room.events(a, { wait_ms: 0 }))).toEqual([]);
-    // errors carry them too, and at most 10 per response
+    // errors carry nothing and move nothing; the next success gets them, at most 10 at a time
     for (let i = 0; i < 12; i++) await w.emit("tap", { x: 0, y: 0 });
     const bad = await w.room.command(a, "nope", {});
-    expect(bad).toMatchObject({ ok: false, error: "unknown_command", inbox: { more: true } });
-    expect(bad.inbox!.events).toHaveLength(10);
-    expect((await w.room.job(a, `${DEVICE}.j_abcdefghijkl`, 0)).inbox!.events).toHaveLength(2);
+    expect(bad).toEqual({ ok: false, error: "unknown_command", message: "unknown command nope" });
+    expect(await w.room.job(a, `${DEVICE}.j_abcdefghijkl`, 0)).toEqual({ ok: false, error: "not_found" });
+    const good = await w.room.command(a, "imu", {});
+    expect(good.inbox).toMatchObject({ more: true });
+    expect(good.inbox!.events).toHaveLength(10);
+    expect((await w.room.command(a, "imu", {})).inbox!.events).toHaveLength(2);
   });
 
   it("revoke and forget remove cursors, events and queued deliveries", async () => {
@@ -322,17 +325,17 @@ function docBlock(marker: string): string {
   if (!m) throw new Error(`no ${marker} verifier in docs`);
   return m[1];
 }
-async function tsVerifier(): Promise<(secret: string, header: string | null, body: string, tol?: number) => Promise<boolean>> {
+async function tsVerifier(): Promise<(secret: string, header: string | null, method: string, target: string, body: string, tol?: number) => Promise<boolean>> {
   const js = ts.transpileModule(docBlock("ts"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
   const mod = await import(`data:text/javascript,${encodeURIComponent(js)}`);
   return mod.verifyMolty;
 }
-function pyVerify(secret: string, header: string, body: string): boolean | "skipped" {
+function pyVerify(secret: string, header: string, method: string, target: string, body: string): boolean | "skipped" {
   const dir = mkdtempSync(join(tmpdir(), "molty-verifier-"));
   const file = join(dir, "check.py");
-  writeFileSync(file, `${docBlock("py")}\nimport sys\nprint(verify_molty(sys.argv[1], sys.argv[2], sys.argv[3].encode()))\n`);
+  writeFileSync(file, `${docBlock("py")}\nimport sys\nprint(verify_molty(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5].encode()))\n`);
   try {
-    return execFileSync("python3", ["-I", file, secret, header, body], { encoding: "utf8" }).trim() === "True";
+    return execFileSync("python3", ["-I", file, secret, header, method, target, body], { encoding: "utf8" }).trim() === "True";
   } catch (e: any) {
     if (e.code === "ENOENT") return "skipped";
     throw e;
@@ -358,20 +361,23 @@ describe("webhooks", () => {
     expect(req).toMatchObject({ url: "https://hooks.example.org/molty", method: "POST", headers: { "content-type": "application/json" } });
     expect(JSON.parse(req.body)).toEqual({ device: DEVICE, event: { id: "e1", type: "shake", ts: w.clock.t, data: shake } });
     const sig = req.headers["molty-signature"];
-    expect(sig).toMatch(/^t=\d+,v1=[0-9a-f]{64}$/);
+    expect(sig).toMatch(/^t=\d+,v2=[0-9a-f]{64}$/);
     const verify = await tsVerifier();
-    expect(await verify(w.secret, sig, req.body)).toBe(true);
-    expect(await verify(w.secret, sig, req.body.replace("2.4", "9.9"))).toBe(false);
-    expect(await verify("whsec_wrong", sig, req.body)).toBe(false);
-    expect(await verify(w.secret, null, req.body)).toBe(false);
-    expect(await verify(w.secret, sig.replace(/t=\d+/, "t=1000"), req.body)).toBe(false); // stale + mismatched
-    const py = pyVerify(w.secret, sig, req.body);
+    expect(await verify(w.secret, sig, "POST", "/molty", req.body)).toBe(true);
+    expect(await verify(w.secret, sig, "POST", "/molty", req.body.replace("2.4", "9.9"))).toBe(false);
+    expect(await verify(w.secret, sig, "PUT", "/molty", req.body)).toBe(false);
+    expect(await verify(w.secret, sig, "POST", "/other", req.body)).toBe(false);
+    expect(await verify("whsec_wrong", sig, "POST", "/molty", req.body)).toBe(false);
+    expect(await verify(w.secret, null, "POST", "/molty", req.body)).toBe(false);
+    expect(await verify(w.secret, sig.replace(/t=\d+/, "t=1000"), "POST", "/molty", req.body)).toBe(false); // stale + mismatched
+    const py = pyVerify(w.secret, sig, "POST", "/molty", req.body);
     if (py !== "skipped") {
       expect(py).toBe(true);
-      expect(pyVerify(w.secret, sig, req.body + " ")).toBe(false);
+      expect(pyVerify(w.secret, sig, "POST", "/molty", req.body + " ")).toBe(false);
+      expect(pyVerify(w.secret, sig, "POST", "/molty?x=1", req.body)).toBe(false);
     }
-    // delivered = read for this agent
-    expect(evs(await w.room.events(w.token, { wait_ms: 0 }))).toEqual([]);
+    // webhook acks do not touch the read cursor: the inbox stays the record
+    expect(evs(await w.room.events(w.token, { wait_ms: 0 }))).toEqual(["shake"]);
     expect(await w.kv.list("whq:")).toEqual(new Map());
   });
 
@@ -465,7 +471,7 @@ describe("webhooks", () => {
     await w.emit("tap", { x: 0, y: 0 });
     await w.room.alarm();
     expect(w.sent).toHaveLength(0);
-    expect(((await w.room.webhook(w.token, { action: "get" })) as any).result.webhook.last_error).toMatch(/private/);
+    expect(((await w.room.webhook(w.token, { action: "get" })) as any).result.webhook.last_error).toBe("blocked_address");
   });
 
   it("retries 1 s / 10 s / 60 s via the alarm, then drops; success resets the failure count", async () => {
@@ -489,7 +495,7 @@ describe("webhooks", () => {
     expect(calls).toHaveLength(4);
     expect(await w.kv.list("whq:")).toEqual(new Map()); // gave up on this event
     const view = ((await w.room.webhook(w.token, { action: "get" })) as any).result.webhook;
-    expect(view).toMatchObject({ active: true, consecutive_failures: 4, last_error: "HTTP 500" });
+    expect(view).toMatchObject({ active: true, consecutive_failures: 4, last_error: "http_500" });
     status = 204;
     await w.emit("tap", { x: 0, y: 0 });
     await w.room.alarm();
@@ -502,7 +508,7 @@ describe("webhooks", () => {
     const w = await hooked({ url: "https://hooks.example.org/x" }, { fetchImpl: (r) => (modes.push(r.redirect), mode === "redirect" ? Promise.resolve(new Response(null, { status: 302, headers: { location: "https://10.0.0.1/" } })) : new Promise<Response>((_, rej) => r.signal.addEventListener("abort", () => rej(new Error("aborted"))))) });
     await w.emit("tap", { x: 0, y: 0 });
     await w.room.alarm();
-    expect(((await w.room.webhook(w.token, { action: "get" })) as any).result.webhook.last_error).toBe("HTTP 302");
+    expect(((await w.room.webhook(w.token, { action: "get" })) as any).result.webhook.last_error).toBe("http_302");
     expect(modes).toEqual(["manual"]); // never follow: a redirect could point anywhere
     mode = "hang";
     w.clock.t += 1000;
@@ -541,6 +547,192 @@ describe("webhooks", () => {
     await w.room.alarm();
     expect(w.sent.map((s) => s.url)).toEqual(["https://a.example.org/h"]);
     expect(evs(await w.room.events(b, { wait_ms: 0 }))).toEqual(["shake"]);
-    expect(evs(await w.room.events(a, { wait_ms: 0 }))).toEqual([]);
+    expect(evs(await w.room.events(a, { wait_ms: 0 }))).toEqual(["shake"]); // delivery is not a read
+  });
+});
+
+// ---------------------------------------------------------------- review round 1 (one test per finding)
+
+describe("review fixes", () => {
+  it("P1-1: a registration racing a revoke never resurrects the token; racing a replacement returns conflict", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const w = await world({ resolve: async (host) => (host.startsWith("slow.") ? gate.then(() => ["93.184.216.34"]) : ["93.184.216.34"]) });
+    const a = await w.pairAgent("a");
+    const pending = w.room.webhook(a, { action: "set", spec: { url: "https://slow.example.org/h" } });
+    await flush();
+    expect(await w.room.revoke(a)).toMatchObject({ ok: true });
+    release();
+    expect(await pending).toMatchObject({ ok: false, error: "unauthorized" });
+    expect(await w.room.command(a, "imu", {})).toMatchObject({ ok: false, error: "unauthorized" });
+    expect([...(await w.kv.list("tok:")).keys()]).toHaveLength(0);
+
+    let release2: () => void = () => {};
+    const gate2 = new Promise<void>((r) => (release2 = r));
+    const w2 = await world({ resolve: async (host) => (host.startsWith("slow.") ? gate2.then(() => ["93.184.216.34"]) : ["93.184.216.34"]) });
+    const b = await w2.pairAgent("b");
+    const slow = w2.room.webhook(b, { action: "set", spec: { url: "https://slow.example.org/h" } });
+    await flush();
+    const fast = (await w2.room.webhook(b, { action: "set", spec: { url: "https://fast.example.org/h" } })) as any;
+    release2();
+    expect(await slow).toMatchObject({ ok: false, error: "conflict" });
+    expect(((await w2.room.webhook(b, { action: "get" })) as any).result.webhook.url).toBe("https://fast.example.org/…");
+    expect(fast.result.secret).toMatch(/^whsec_/);
+  });
+
+  it("P1-2: every IPv6 spelling of private/loopback/embedded-private IPv4 is refused; malformed answers too", () => {
+    for (const ip of [
+      "::ffff:7f00:1", "::ffff:a00:1", "::ffff:c0a8:101", "::FFFF:127.0.0.1", "0:0:0:0:0:0:0:1", "0000:0000:0000:0000:0000:0000:0000:0001",
+      "0::1", "::0:1", "::", "::127.0.0.1", "::a00:1", "::8.8.8.8", "64:ff9b::a00:1", "64:ff9b::7f00:1", "64:ff9b:1::1",
+      "2002:a00:1::1", "2002:7f00:1::", "2001:0:4136:e378:8000:63bf:3fff:fdd2", "2001:db8::1", "2001:10::1", "3fff::1",
+      "fe80::1%eth0", "fec0::1", "100::1", "5f00::1", "::ffff:0:0", "1::", "2001:db8::1:2:3:4:5:6:7", "1:2:3:4:5:6:7:8:9", "12345::1", "::1::", "1.2.3", "01.2.3.4", "256.1.1.1", "",
+    ]) {
+      expect(isPrivateAddress(ip), ip).toBe(true);
+    }
+    for (const ip of ["2606:4700:4700::1111", "2a00:1450:4001:80b::200e", "64:ff9b::808:808", "2002:808:808::1", "::ffff:8.8.8.8", "::ffff:808:808", "8.8.8.8"]) {
+      expect(isPrivateAddress(ip), ip).toBe(false);
+    }
+  });
+
+  it("P1-3: molty_wait keeps ride-along events on pending and done results; a failed job carries none and moves nothing", async () => {
+    const { backend, token, emit, room, voice } = await surfaceWorld();
+    voice.ttsSamples = 16000 * 30; // 30 s of audio = 300 ms on the scaled clock: still pending below
+    const say = await mcpCall(backend, "molty_say", { text: "hi" }, token);
+    await emit("shake", shake);
+    const pending = await mcpCall(backend, "molty_wait", { job: say.structuredContent.job, timeout_s: 0 }, token);
+    expect(pending.structuredContent).toMatchObject({ status: "pending", events: [{ id: "e1", type: "shake" }] });
+    expect(pending.content[1].text).toMatch(/^Molty: was shaken/);
+    await emit("tap", { x: 0, y: 0 });
+    const waits = [pending];
+    while (waits.length < 400 && waits.at(-1).structuredContent.status !== "done") waits.push(await mcpCall(backend, "molty_wait", { job: say.structuredContent.job, timeout_s: 1 }, token));
+    expect(waits.at(-1).structuredContent).toMatchObject({ status: "done" });
+    const all = waits.flatMap((r) => r.structuredContent.events ?? []).map((e: AgentEvent) => e.id);
+    expect(all).toEqual(["e1", "e2"]); // nothing silently consumed
+    const listen = await mcpCall(backend, "molty_listen", { ms: 10 }, token); // fake device never streams: no_audio
+    let failed;
+    for (let i = 0; i < 50 && !failed?.isError; i++) failed = await mcpCall(backend, "molty_wait", { job: listen.structuredContent.job, timeout_s: 1 }, token);
+    await emit("button", { id: "reject" });
+    failed = await mcpCall(backend, "molty_wait", { job: listen.structuredContent.job, timeout_s: 0 }, token);
+    expect(failed).toMatchObject({ isError: true, structuredContent: { ok: false, error: "no_audio" } });
+    expect(failed.structuredContent.events).toBeUndefined();
+    expect(evs(await room.events(token, { wait_ms: 0 }))).toEqual(["button"]);
+  });
+
+  it("P1-4: a later webhook success never hides an earlier undelivered event; exhausted events stay readable", async () => {
+    const w = await hooked({ url: "https://hooks.example.org/x" }, { fetchImpl: async (r) => new Response(null, { status: (JSON.parse(await r.text()).event.id === "e1" ? 500 : 204) }) });
+    await w.emit("shake", shake);
+    await w.emit("tap", { x: 0, y: 0 });
+    for (let i = 0; i < 5; i++) {
+      await w.room.alarm();
+      w.clock.t += 61_000;
+    }
+    expect(await w.kv.list("whq:")).toEqual(new Map()); // e1 exhausted its retries, e2 delivered
+    expect(evs(await w.room.events(w.token, { wait_ms: 0 }))).toEqual(["shake", "tap"]);
+  });
+
+  it("P1-5: GET deliveries sign the request target: a swapped query fails verification", async () => {
+    const w = await hooked({ url: "https://bot.example.org/send?type={{event.type}}&id={{event.id}}", method: "GET" });
+    await w.emit("tap", { x: 0, y: 0 });
+    await w.room.alarm();
+    const req = w.sent[0];
+    const u = new URL(req.url);
+    expect(u.search).toBe("?type=tap&id=e1");
+    const verify = await tsVerifier();
+    const sig = req.headers["molty-signature"];
+    expect(await verify(w.secret, sig, "GET", u.pathname + u.search, "")).toBe(true);
+    expect(await verify(w.secret, sig, "GET", "/send?type=shake&id=e1", "")).toBe(false);
+    const py = pyVerify(w.secret, sig, "GET", u.pathname + u.search, "");
+    if (py !== "skipped") expect(py).toBe(true);
+  });
+
+  it("P2-6: failures are stored, logged and shown as fixed categories, never exception text", async () => {
+    const w = await hooked({ url: "https://hooks.example.org/bot999:SECRETPATH/send?key=QUERYSECRET" }, {
+      fetchImpl: async (r) => Promise.reject(new TypeError(`fetch failed: ${r.url}`)),
+    });
+    await w.emit("tap", { x: 0, y: 0 });
+    await w.room.alarm();
+    const view = JSON.stringify(await w.room.webhook(w.token, { action: "get" }));
+    expect(JSON.parse(view).result.webhook.last_error).toBe("network_error");
+    for (const text of [view, w.logs.join("\n"), JSON.stringify([...w.kv.data.values()].filter((v: any) => v?.webhook).map((v: any) => v.webhook.last_error))]) {
+      expect(text).not.toContain("SECRETPATH");
+      expect(text).not.toContain("QUERYSECRET");
+    }
+  });
+
+  it("P2-7: one deadline covers DNS + request: a hanging resolver fails as `timeout` (delivery) or quickly (registration)", async () => {
+    let hang = false;
+    const hangingResolver = (_h: string, signal?: AbortSignal) =>
+      hang ? new Promise<string[]>((_, rej) => signal?.addEventListener("abort", () => rej(new Error("aborted")))) : Promise.resolve(["93.184.216.34"]);
+    const w = await hooked({ url: "https://hooks.example.org/x" }, { resolve: hangingResolver });
+    hang = true;
+    await w.emit("tap", { x: 0, y: 0 });
+    const started = Date.now();
+    await w.room.alarm(); // scaled clock: 5 s = 50 ms
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(((await w.room.webhook(w.token, { action: "get" })) as any).result.webhook).toMatchObject({ last_error: "timeout", consecutive_failures: 1 });
+    expect([...(await w.kv.list("whq:")).values()]).toMatchObject([{ attempt: 1 }]); // counted, retried
+    const reg = (await w.room.webhook(w.token, { action: "set", spec: { url: "https://other.example.org/x" } })) as any;
+    expect(reg).toMatchObject({ ok: false, error: "invalid_args", message: expect.stringMatching(/in time/) });
+  });
+
+  it("P2-8: long-polls are capped per token and per device; an aborted poll frees its slot at once", async () => {
+    const w = await world();
+    const a = await w.pairAgent("a");
+    const b = await w.pairAgent("b");
+    const c1 = new AbortController();
+    const p1 = w.room.events(a, { wait_ms: 20_000, signal: c1.signal });
+    const p2 = w.room.events(a, { wait_ms: 20_000 });
+    await flush();
+    expect(await w.room.events(a, { wait_ms: 20_000 })).toMatchObject({ ok: false, error: "too_many_polls" });
+    expect(await w.room.events(a, { wait_ms: 0 })).toMatchObject({ ok: true }); // immediate reads are not counted
+    const t0 = Date.now();
+    c1.abort();
+    expect(await p1).toMatchObject({ ok: false, error: "cancelled" });
+    expect(Date.now() - t0).toBeLessThan(100); // freed now, not at its 200 ms (scaled) deadline
+    const p3 = w.room.events(a, { wait_ms: 20_000 }); // slot freed by the abort
+    const saved = INBOX_LIMITS.pollsPerDevice;
+    INBOX_LIMITS.pollsPerDevice = 3;
+    try {
+      await flush();
+      const p4 = w.room.events(b, { wait_ms: 20_000 });
+      await flush();
+      expect(await w.room.events(b, { wait_ms: 20_000 })).toMatchObject({ ok: false, error: "too_many_polls" });
+      await w.emit("tap", { x: 0, y: 0 });
+      for (const p of [p2, p3, p4]) expect(evs(await p)).toEqual(["tap"].slice(0, 1));
+    } finally {
+      INBOX_LIMITS.pollsPerDevice = saved;
+    }
+    expect((await rest({ device: () => w.room }, `/v1/devices/${DEVICE}/events?wait_s=0`, { token: a })).status).toBe(200);
+  });
+
+  it("P2-9: templates are validated for every event type; missing fields render null/default; an events filter limits delivery", async () => {
+    const w = await world();
+    const t = await w.pairAgent("t");
+    const json = { url: "https://hooks.example.org/x", content_type: "application/json" };
+    // valid for a shake, invalid for a tap (explicit empty default): only an all-types dry run catches it
+    const strict = (await w.room.webhook(t, { action: "set", spec: { ...json, body: '{"v":{{event.data.peak_g|}}}' } })) as any;
+    expect(strict).toMatchObject({ ok: false, error: "invalid_args", message: expect.stringMatching(/^for a tap event: .*valid JSON/) });
+    expect((await w.room.webhook(t, { action: "set", spec: { ...json, body: '{"v":{{event.data.peak_g|}}}', events: ["shake"] } })).ok).toBe(true);
+    expect((await w.room.webhook(t, { action: "set", spec: { ...json, events: ["wave"] } })) as any).toMatchObject({ ok: false, message: expect.stringMatching(/events must be/) });
+    const ok = (await w.room.webhook(t, { action: "set", spec: { ...json, body: '{"peak":{{event.data.peak_g}},"n":{{event.data.reversals|0}},"id":"{{event.data.id|none}}"}', events: ["tap", "button"] } })) as any;
+    expect(ok.ok).toBe(true);
+    expect(ok.result.webhook.events).toEqual(["tap", "button"]);
+    await w.emit("shake", shake); // filtered out: not queued
+    expect(await w.kv.list("whq:")).toEqual(new Map());
+    await w.emit("tap", { x: 0.5, y: 0.5 });
+    await w.emit("button", { id: "accept" });
+    await w.room.alarm();
+    expect(w.sent.map((r) => JSON.parse(r.body))).toEqual([
+      { peak: null, n: 0, id: "none" },
+      { peak: null, n: 0, id: "accept" },
+    ]);
+    expect(renderTemplate("{{event.data.toString}}", SAMPLE.tap, DEVICE, ESCAPE.json)).toBe("null"); // no prototype leaks
+  });
+
+  it("MCP molty_webhook accepts an events list and rejects unknown types", async () => {
+    const { backend, token } = await surfaceWorld();
+    const ok = await mcpCall(backend, "molty_webhook", { url: "https://hooks.example.org/x", events: ["shake"] }, token);
+    expect(ok.structuredContent).toMatchObject({ ok: true, webhook: { events: ["shake"] } });
+    expect((await mcpCall(backend, "molty_webhook", { url: "https://hooks.example.org/x", events: ["wave"] }, token)).structuredContent.message).toBe("events must be a list of shake, tap, button");
   });
 });

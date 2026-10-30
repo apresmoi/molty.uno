@@ -8,7 +8,7 @@
 // Uses only the Fetch API (Request/Response) -- no Cloudflare imports -- so a
 // Node host can serve it unchanged.
 
-import { type AgentApi, type Outcome, type RelayBackend, bearer, tokenDevice } from "../core/api.js";
+import { type AgentApi, type Inbox, type Outcome, type RelayBackend, bearer, tokenDevice } from "../core/api.js";
 import { DEFAULT_LISTEN_MS, MAX_MOOD_HOLD_S, MOODS } from "../core/commands.js";
 import { AGENT_EVENT_TYPES, type AgentEvent, INBOX_LIMITS, eventsLine, seqOf } from "../core/events.js";
 import { DEVICE_ID_RE, isRecord, type JsonObject } from "../core/protocol.js";
@@ -21,7 +21,8 @@ const INSTRUCTIONS =
   "Tools operate a physical Molty device through the molty-relay. Pair first with molty_pair (no token needed), then send the returned agent_token as 'Authorization: Bearer <token>'. molty_say and molty_listen return a job immediately; poll it with molty_wait (<= 8 s per call). " +
   `Molty also emits events (${AGENT_EVENT_TYPES.join(", ")}) into your own inbox: unread ones ride along on every tool result as 'events' plus a 'Molty: ...' line; molty_events pulls/waits for them; molty_webhook registers an HTTPS request the relay sends you per event. React briefly, once per moment. Full guide: GET /skill.md on this relay.`;
 
-type Schema = { type: "object"; properties: Record<string, { type: string; description: string; enum?: string[] }>; required: string[]; additionalProperties: false };
+type Prop = { type: string; description: string; enum?: string[]; items?: { type: "string"; enum?: string[] } };
+type Schema = { type: "object"; properties: Record<string, Prop>; required: string[]; additionalProperties: false };
 interface ToolDef {
   name: string;
   description: string;
@@ -156,13 +157,14 @@ export const TOOLS: ToolDef[] = [
   {
     name: "molty_webhook",
     description:
-      "Have the relay call YOU on each event: an HTTPS request you define. url (https, public host); method POST (default) | GET | PUT | PATCH; headers (your own auth; stored, never shown again); body template + content_type. Placeholders in url and body: {{event.type}} {{event.id}} {{event.ts}} {{event.data}} (JSON) {{event.data.<field>}} {{device}} {{text}} (e.g. 'Molty was shaken'), escaped for JSON / form / URL. No body = {\"device\",\"event\"} JSON. Every request is signed: Molty-Signature: t=<ms>,v1=hex(hmac_sha256(secret, t+'.'+body)); the secret is returned once. Returns a dry run rendered for a sample event. Omit url to read the current webhook; remove:true deletes it. Retries 1 s/10 s/60 s; disabled after 20 consecutive failures (re-register to re-enable).",
+      "Have the relay call YOU on each event: an HTTPS request you define. url (https, public host); method POST (default) | GET | PUT | PATCH; headers (your own auth; stored, never shown again); body template + content_type. Placeholders in url and body: {{event.type}} {{event.id}} {{event.ts}} {{event.data}} (JSON) {{event.data.<field>}} {{device}} {{text}} (e.g. 'Molty was shaken'), escaped for JSON / form / URL. No body = {\"device\",\"event\"} JSON. A missing field renders its {{event.data.x|default}}, else null in JSON / empty elsewhere. events (optional) limits the types sent. Every request is signed: Molty-Signature: t=<ms>,v2=hex(hmac_sha256(secret, t+'\\n'+METHOD+'\\n'+path?query+'\\n'+body)); the secret is returned once. Returns a dry run; the template is validated against every event type it will receive. Omit url to read the current webhook; remove:true deletes it. Retries 1 s/10 s/60 s; disabled after 20 consecutive failures (re-register to re-enable).",
     inputSchema: obj({
       url: { type: "string", description: "https URL the relay requests per event; may contain placeholders (URL-encoded)." },
       method: { type: "string", description: "POST (default), GET, PUT or PATCH.", enum: ["POST", "GET", "PUT", "PATCH"] },
       headers: { type: "object", description: "Extra request headers, e.g. your API key. Values are stored and never echoed." },
       body: { type: "string", description: "Body template (max 4096 bytes); default is the relay's signed {device, event} JSON." },
       content_type: { type: "string", description: "Body media type; application/json escapes placeholders as JSON strings." },
+      events: { type: "array", items: { type: "string", enum: AGENT_EVENT_TYPES }, description: `Event types to send (default all): ${AGENT_EVENT_TYPES.join(", ")}.` },
       remove: { type: "boolean", description: "true removes your webhook." },
     }),
     auth: true,
@@ -236,7 +238,10 @@ export function checkArgs(schema: Schema, raw: unknown): string | undefined {
             ? isRecord(v)
             : prop.type === "boolean"
               ? typeof v === "boolean"
-              : true;
+              : prop.type === "array"
+                ? Array.isArray(v) && v.every((x) => typeof x === "string" && (!prop.items?.enum || prop.items.enum.includes(x)))
+                : true;
+    if (!ok && prop.type === "array") return `${k} must be a list of ${prop.items?.enum ? prop.items.enum.join(", ") : "strings"}`;
     if (!ok) return `${k} must be ${prop.type === "integer" ? "an integer" : `a${prop.type === "object" ? "n" : ""} ${prop.type}`}`;
     if (prop.enum && !prop.enum.includes(v as string)) return `${k} must be one of ${prop.enum.join(", ")}`;
   }
@@ -284,10 +289,40 @@ async function callTool(backend: RelayBackend, token: string | undefined, params
     if (!DEVICE_ID_RE.test(deviceId)) return { result: toolResult({ ok: false, error: "invalid_args", message: "device_id must look like molty-xxxxxxxxxx" }) };
   }
   try {
-    return { result: toolResult(await tool.run(backend.device(deviceId), token ?? "", args)) };
+    // Ride-along events were already marked read by the backend: whatever a
+    // tool does to reshape the outcome (molty_wait builds new ones), the
+    // inbox it received must reach the caller.
+    const { api, taken } = capturingInbox(backend.device(deviceId));
+    const out = await tool.run(api, token ?? "", args);
+    return { result: toolResult(taken.length && !out.inbox ? { ...out, inbox: mergeInbox(taken) } : out) };
   } catch (e) {
     return { result: toolResult({ ok: false, error: "internal", message: e instanceof Error ? e.message : String(e) }) };
   }
+}
+
+/** Wraps an AgentApi so every inbox any call returns is recorded. */
+function capturingInbox(api: AgentApi): { api: AgentApi; taken: Inbox[] } {
+  const taken: Inbox[] = [];
+  const keep = async <T extends Outcome<any>>(p: Promise<T>) => {
+    const out = await p;
+    if (out.inbox && out.inbox.events.length) taken.push(out.inbox);
+    return out;
+  };
+  return {
+    taken,
+    api: {
+      pair: (req) => keep(api.pair(req)),
+      command: (t, n, a) => keep(api.command(t, n, a)),
+      job: (t, j, w) => keep(api.job(t, j, w)),
+      revoke: (t) => keep(api.revoke(t)),
+      events: (t, r) => keep(api.events(t, r)),
+      webhook: (t, r) => keep(api.webhook(t, r)),
+    },
+  };
+}
+
+function mergeInbox(list: Inbox[]): Inbox {
+  return { events: list.flatMap((i) => i.events), more: list.some((i) => i.more), now: Math.max(...list.map((i) => i.now)) };
 }
 
 async function handleOne(msg: unknown, backend: RelayBackend, token: string | undefined): Promise<object | undefined> {

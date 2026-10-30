@@ -36,10 +36,14 @@ import {
   type JsonObject,
 } from "./protocol.js";
 import { type Clock, type KV, sleep } from "./store.js";
-import { type AgentEvent, INBOX_LIMITS, agentEventData, eventId } from "./events.js";
+import { AGENT_EVENT_TYPES, type AgentEvent, INBOX_LIMITS, SAMPLE_EVENTS, agentEventData, eventId } from "./events.js";
 import {
+  type DeliveryError,
+  type GuardResult,
   type Resolver,
   WEBHOOK_LIMITS,
+  WebhookFailure,
+  categorize,
   type WebhookRecord,
   guardWebhookUrl,
   newWebhookSecret,
@@ -178,7 +182,7 @@ const K = {
   whq: (hash: string, seq: number) => `whq:${hash}:${String(seq).padStart(12, "0")}`,
 };
 
-const SAMPLE_EVENT: AgentEvent = { id: "e1", type: "shake", ts: 0, data: { peak_g: 2.4, reversals: 5, ms: 900 } };
+
 
 const fail = (error: string, message?: string): { ok: false; error: string; message?: string } =>
   message === undefined ? { ok: false, error } : { ok: false, error, message };
@@ -205,6 +209,8 @@ export class DeviceRoom implements AgentApi {
   private audioJob: string | undefined;
   private readonly lastEvents = new Map<string, { data: unknown; at: number }>();
   private readonly inboxWaiters = new Map<string, Set<() => void>>();
+  /** Outstanding long-polls per token hash (admission control). */
+  private readonly polls = new Map<string, number>();
   private evChain: Promise<void> = Promise.resolve();
   private cmdSeq = 0;
 
@@ -548,7 +554,10 @@ export class DeviceRoom implements AgentApi {
   async job(token: string, jobId: string, waitMs: number): Promise<Outcome<JobView>> {
     const a = await this.auth(token);
     if (!a) return fail("unauthorized");
-    return this.withInbox(a.hash, await this.runJob(jobId, waitMs));
+    const out = await this.runJob(jobId, waitMs);
+    // A failed job is an error to every surface: nothing rides along on it.
+    if (out.ok && out.result.status === "failed") return out;
+    return this.withInbox(a.hash, out);
   }
 
   private async runJob(jobId: string, waitMs: number): Promise<Outcome<JobView>> {
@@ -721,7 +730,7 @@ export class DeviceRoom implements AgentApi {
     this.notify(this.inboxWaiters, "inbox");
     let queued = false;
     for (const [key, tok] of await this.kv.list<TokenRecord>("tok:")) {
-      if (!tok.webhook || tok.webhook.disabled) continue;
+      if (!tok.webhook || tok.webhook.disabled || (tok.webhook.events && !tok.webhook.events.includes(type))) continue;
       const hash = key.slice(4);
       await this.kv.put<Delivery>(K.whq(hash, seq), { tok: hash, seq, attempt: 0, due: now });
       queued = true;
@@ -751,8 +760,14 @@ export class DeviceRoom implements AgentApi {
     if (next > cursor) await this.kv.put(K.cur(hash), next);
   }
 
-  /** Piggyback: attach this agent's unread events to any authenticated outcome and mark them read. */
+  /**
+   * Ride-along: attach this agent's unread events to a SUCCESSFUL outcome and
+   * mark them read. Errors carry nothing and move nothing: clients often drop
+   * error bodies, and a read cursor must only move when the events were
+   * actually handed over. Surfaces must keep `inbox` through any reshaping.
+   */
   private async withInbox<T>(hash: string, out: Outcome<T>): Promise<Outcome<T>> {
+    if (!out.ok) return out;
     const r = await this.readInbox(hash, undefined, INBOX_LIMITS.piggyback);
     if (r.events.length === 0) return out;
     await this.advance(hash, r.cursor, r.next);
@@ -763,15 +778,37 @@ export class DeviceRoom implements AgentApi {
     const a = await this.auth(token);
     if (!a) return fail("unauthorized");
     if (req.since !== undefined && (!Number.isInteger(req.since) || req.since < 0)) return fail("invalid_args", "since must be an event id like e42");
-    const deadline = this.clock.now() + Math.max(0, Math.min(req.wait_ms, INBOX_LIMITS.restWaitS * 1000));
-    for (;;) {
-      const r = await this.readInbox(a.hash, req.since, INBOX_LIMITS.page);
-      const remaining = deadline - this.clock.now();
-      if (r.events.length > 0 || remaining <= 0) {
-        await this.advance(a.hash, r.cursor, r.next);
-        return { ok: true, result: { events: r.events as unknown as JsonObject[], next: eventId(r.next), more: r.more } };
+    const waitMs = Math.max(0, Math.min(req.wait_ms, INBOX_LIMITS.restWaitS * 1000));
+    // Admission: bounded concurrent long-polls per token and per device.
+    let admitted = false;
+    if (waitMs > 0) {
+      const mine = this.polls.get(a.hash) ?? 0;
+      let total = 0;
+      for (const n of this.polls.values()) total += n;
+      if (mine >= INBOX_LIMITS.pollsPerToken || total >= INBOX_LIMITS.pollsPerDevice) {
+        return fail("too_many_polls", `at most ${INBOX_LIMITS.pollsPerToken} concurrent waits per agent and ${INBOX_LIMITS.pollsPerDevice} per device; wait for one to return`);
       }
-      await this.waitOn(this.inboxWaiters, "inbox", remaining);
+      this.polls.set(a.hash, mine + 1);
+      admitted = true;
+    }
+    try {
+      const deadline = this.clock.now() + waitMs;
+      for (;;) {
+        const r = await this.readInbox(a.hash, req.since, INBOX_LIMITS.page);
+        const remaining = deadline - this.clock.now();
+        if (r.events.length > 0 || remaining <= 0 || req.signal?.aborted) {
+          if (req.signal?.aborted) return fail("cancelled"); // nobody is listening: hand over nothing
+          await this.advance(a.hash, r.cursor, r.next);
+          return { ok: true, result: { events: r.events as unknown as JsonObject[], next: eventId(r.next), more: r.more } };
+        }
+        await this.waitOn(this.inboxWaiters, "inbox", remaining, req.signal);
+      }
+    } finally {
+      if (admitted) {
+        const n = (this.polls.get(a.hash) ?? 1) - 1;
+        if (n > 0) this.polls.set(a.hash, n);
+        else this.polls.delete(a.hash);
+      }
     }
   }
 
@@ -785,34 +822,50 @@ export class DeviceRoom implements AgentApi {
       return this.withInbox(a.hash, { ok: true, result: { webhook: a.rec.webhook ? (redactWebhook(a.rec.webhook) as JsonObject) : null } });
     }
     if (req.action === "delete") {
-      const had = !!a.rec.webhook;
-      delete a.rec.webhook;
-      await this.kv.put(key, a.rec);
+      const fresh = await this.kv.get<TokenRecord>(key);
+      if (!fresh) return fail("unauthorized");
+      const had = !!fresh.webhook;
+      delete fresh.webhook;
+      await this.kv.put(key, fresh);
       await this.dropDeliveries(a.hash);
       return this.withInbox(a.hash, { ok: true, result: { removed: had } });
     }
     const parsed = parseWebhookSpec(req.spec);
     if (!parsed.ok) return fail("invalid_args", parsed.message);
-    // Dry run: the template must render for a sample event, to a URL that passes the guard.
-    let rendered;
-    try {
-      rendered = renderRequest(parsed.value, this.deviceId, SAMPLE_EVENT);
-    } catch (e) {
-      return fail("invalid_args", e instanceof Error ? e.message : String(e));
+    // Generation of the webhook this registration replaces; checked again after the network awaits.
+    const generation = a.rec.webhook?.secret ?? null;
+    // Dry run against every event type the webhook will receive, to URLs that pass the guard.
+    const types = parsed.value.events ?? AGENT_EVENT_TYPES;
+    const rendered = [];
+    for (const type of types) {
+      try {
+        rendered.push(renderRequest(parsed.value, this.deviceId, SAMPLE_EVENTS[type]));
+      } catch (e) {
+        return fail("invalid_args", `for a ${type} event: ${e instanceof Error ? e.message : String(e)}`);
+      }
     }
-    const guard = await guardWebhookUrl(rendered.url, this.resolveHost);
-    if (!guard.ok) return fail("invalid_args", guard.message);
+    for (const url of new Set(rendered.map((r) => r.url))) {
+      const guard = await this.withDeadline((signal) => guardWebhookUrl(url, this.resolveHost, signal)).catch(
+        (): GuardResult => ({ ok: false, message: "url host did not resolve in time", category: "timeout" }),
+      );
+      if (!guard.ok) return fail("invalid_args", guard.message);
+    }
+    // Never write back the record read before the awaits: re-read, and refuse
+    // if the token was revoked or its webhook changed meanwhile.
+    const fresh = await this.kv.get<TokenRecord>(key);
+    if (!fresh) return fail("unauthorized");
+    if ((fresh.webhook?.secret ?? null) !== generation) return fail("conflict", "the webhook changed while this registration was being validated; read it and retry");
     const secret = newWebhookSecret();
-    a.rec.webhook = { ...parsed.value, secret, created: this.clock.now(), fails: 0 };
-    await this.kv.put(key, a.rec);
+    fresh.webhook = { ...parsed.value, secret, created: this.clock.now(), fails: 0 };
+    await this.kv.put(key, fresh);
     await this.dropDeliveries(a.hash);
     return this.withInbox(a.hash, {
       ok: true,
       result: {
-        webhook: redactWebhook(a.rec.webhook) as JsonObject,
+        webhook: redactWebhook(fresh.webhook) as JsonObject,
         secret,
-        secret_note: "Shown once. Verify Molty-Signature: t=<unix ms>,v1=hex(hmac_sha256(secret, t + '.' + body)).",
-        dry_run: redactRendered(rendered) as unknown as JsonObject,
+        secret_note: "Shown once. Verify Molty-Signature: t=<unix ms>,v2=hex(hmac_sha256(secret, t + '\\n' + METHOD + '\\n' + path?query + '\\n' + body)).",
+        dry_run: redactRendered(rendered[0]) as unknown as JsonObject,
       },
     });
   }
@@ -845,39 +898,51 @@ export class DeviceRoom implements AgentApi {
     await this.scheduleDeliveries();
   }
 
+  /**
+   * One delivery attempt. Webhook acks are separate from the read cursor: a
+   * delivered event stays readable by pull/ride-along (the inbox is the source
+   * of truth; agents dedupe by id), so an event that exhausts its retries is
+   * never lost to the agent.
+   */
   private async deliver(key: string, d: Delivery) {
     const tokKey = K.token(d.tok);
     const before = await this.kv.get<TokenRecord>(tokKey);
     const ev = await this.kv.get<AgentEvent>(K.ev(d.seq));
-    if (!before?.webhook || before.webhook.disabled || !ev) return this.kv.delete(key);
+    if (!before?.webhook || before.webhook.disabled || !ev || (before.webhook.events && !before.webhook.events.includes(ev.type))) return this.kv.delete(key);
     const hook = before.webhook;
-    let error: string | undefined;
+    let error: DeliveryError | undefined;
     try {
-      const r = renderRequest(hook, this.deviceId, ev);
-      const guard = await guardWebhookUrl(r.url, this.resolveHost);
-      if (!guard.ok) throw new Error(guard.message);
-      const headers = { ...r.headers, "molty-signature": await signatureHeader(hook.secret, r.body, this.clock.now()) };
-      const res = await this.fetchWithTimeout(new Request(r.url, { method: r.method, headers, body: r.method === "GET" ? undefined : r.body, redirect: "manual" }));
-      if (res.status < 200 || res.status > 299) error = `HTTP ${res.status}`;
-      try {
-        await res.body?.cancel();
-      } catch {
-        /* ignore */
-      }
+      // One deadline over DNS, signing and the request itself.
+      await this.withDeadline(async (signal) => {
+        let r;
+        try {
+          r = renderRequest(hook, this.deviceId, ev);
+        } catch {
+          throw new WebhookFailure("render_failed");
+        }
+        const guard = await guardWebhookUrl(r.url, this.resolveHost, signal);
+        if (!guard.ok) throw new WebhookFailure(guard.category);
+        const headers = { ...r.headers, "molty-signature": await signatureHeader(hook.secret, r.method, r.url, r.body, this.clock.now()) };
+        const res = await this.fetcher(new Request(r.url, { method: r.method, headers, body: r.method === "GET" ? undefined : r.body, redirect: "manual", signal }));
+        try {
+          await res.body?.cancel();
+        } catch {
+          /* ignore */
+        }
+        if (res.status < 200 || res.status > 299) throw new WebhookFailure(`http_${res.status}`);
+      });
     } catch (e) {
-      error = (e instanceof Error ? e.message : String(e)).slice(0, 200) || "fetch failed";
+      error = categorize(e);
     }
+    // Re-read right before writing: never write back a record that vanished or was replaced.
     const rec = await this.kv.get<TokenRecord>(tokKey);
-    if (!rec?.webhook || rec.webhook.secret !== hook.secret) return this.kv.delete(key); // removed or replaced meanwhile
+    if (!rec?.webhook || rec.webhook.secret !== hook.secret) return this.kv.delete(key);
     const w = rec.webhook;
     if (!error) {
       w.fails = 0;
       w.last_ok = this.clock.now();
       delete w.last_error;
       await this.kv.delete(key);
-      // Delivered events count as read for this agent.
-      const cur = (await this.kv.get<number>(K.cur(d.tok))) ?? 0;
-      if (d.seq > cur) await this.kv.put(K.cur(d.tok), d.seq);
     } else {
       w.fails++;
       w.last_error = error;
@@ -894,17 +959,18 @@ export class DeviceRoom implements AgentApi {
     await this.kv.put(tokKey, rec);
   }
 
-  private fetchWithTimeout(req: Request): Promise<Response> {
+  /** Runs `fn` under one deadline: on expiry its signal aborts and the call fails as `timeout`. */
+  private withDeadline<T>(fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
     const ctl = new AbortController();
-    return new Promise<Response>((resolve, reject) => {
+    return new Promise<T>((resolve, reject) => {
       const timer = this.clock.setTimeout(() => {
         ctl.abort();
-        reject(new Error("timeout"));
+        reject(new WebhookFailure("timeout"));
       }, WEBHOOK_LIMITS.timeoutMs);
-      this.fetcher(new Request(req, { signal: ctl.signal })).then(
-        (res) => {
+      fn(ctl.signal).then(
+        (v) => {
           this.clock.clearTimeout(timer);
-          resolve(res);
+          resolve(v);
         },
         (e: unknown) => {
           this.clock.clearTimeout(timer);
@@ -916,18 +982,21 @@ export class DeviceRoom implements AgentApi {
 
   // ---------------- waiter plumbing ----------------
 
-  private waitOn(map: Map<string, Set<() => void>>, key: string, ms: number): Promise<void> {
+  private waitOn(map: Map<string, Set<() => void>>, key: string, ms: number, signal?: AbortSignal): Promise<void> {
     return new Promise((resolve) => {
       let set = map.get(key);
       if (!set) map.set(key, (set = new Set()));
       const wake = () => {
         this.clock.clearTimeout(timer);
+        signal?.removeEventListener("abort", wake);
         set!.delete(wake);
         if (set!.size === 0) map.delete(key);
         resolve();
       };
       const timer = this.clock.setTimeout(wake, ms);
       set.add(wake);
+      // A caller that went away frees its waiter now, not at the deadline.
+      signal?.addEventListener("abort", wake, { once: true });
     });
   }
 

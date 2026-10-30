@@ -28,6 +28,9 @@ const STATUS: Record<string, number> = {
   unsupported: 409,
   pair_busy: 409,
   device_timeout: 504,
+  too_many_polls: 429,
+  conflict: 409,
+  cancelled: 499,
   internal: 500,
 };
 
@@ -105,7 +108,7 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
     const sinceRaw = url.searchParams.get("since");
     const since = sinceRaw === null || sinceRaw === "" ? undefined : seqOf(sinceRaw);
     if (sinceRaw && since === undefined) return failure({ error: "invalid_args", message: "since must be an event id like e41" });
-    const out = await backend.device(id).events(token!, { since, wait_ms: waitS * 1000 });
+    const out = await backend.device(id).events(token!, { since, wait_ms: waitS * 1000, signal: request.signal });
     return out.ok ? json({ ok: true, ...out.result }) : failure(out);
   }
 

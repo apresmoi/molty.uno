@@ -38,7 +38,8 @@ function backendFor(env: Env): RelayBackend {
         command: (token, name, args) => stub.command(id, token, name, args),
         job: (token, job, waitMs) => stub.job(id, token, job, waitMs),
         revoke: (token) => stub.revoke(id, token),
-        events: (token, req) => stub.events(id, token, req),
+        // An AbortSignal does not cross DO RPC: strip it (the room frees the wait at its deadline).
+        events: (token, req) => stub.events(id, token, { since: req.since, wait_ms: req.wait_ms }),
         webhook: (token, req) => stub.webhook(id, token, req),
       };
     },

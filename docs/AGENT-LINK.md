@@ -200,12 +200,13 @@ bearer is `agent_token` = `<device_id>.<base64url(32 bytes)>`; the prefix only r
 | `POST /v1/devices/<id>/cmd {name, args}` | `200 {ok:true, result:{...}}`; `say`/`listen` → `{ok:true, result:{job}}` | `{ok:false, error:"code"}`: 401 bad/missing bearer, 400 `invalid_args`/`unknown_command`, 409 `device_offline`/`audio_busy`/`unsupported`, 504 `device_timeout`, 502 device-reported codes |
 | `GET /v1/jobs/<job>[?wait_s=0..8]` | `200 {job, kind, status:"queued"\|"running"\|"done"\|"failed", result?, error?}`; say done `{ms, text}`, listen done `{text, duration_ms, peak, rms}` | 401, 404 `not_found` |
 | `DELETE /v1/token` | `200 {ok:true, result:{revoked:true}}` | 401 |
-| `GET /v1/devices/<id>/events[?since=e41&wait_s=0..25]` | `200 {ok:true, events:[{id,type,ts,data}], next, more}` | 401, 400 `invalid_args` |
-| `PUT /v1/webhook {url, method?, headers?, body?, content_type?}` | `200 {ok:true, result:{webhook, secret, secret_note, dry_run}}` | 401, 400 `invalid_args` (with the reason) |
+| `GET /v1/devices/<id>/events[?since=e41&wait_s=0..25]` | `200 {ok:true, events:[{id,type,ts,data}], next, more}` | 401, 400 `invalid_args`, 429 `too_many_polls` |
+| `PUT /v1/webhook {url, method?, headers?, body?, content_type?, events?}` | `200 {ok:true, result:{webhook, secret, secret_note, dry_run}}` | 401, 400 `invalid_args` (with the reason), 409 `conflict` |
 | `GET` / `DELETE /v1/webhook` | `200 {ok:true, result:{webhook\|null}}` / `{removed}` | 401 |
 
-Any authenticated response may also carry the caller's unread events as a top-level
-`events` array (+ `more_events:true`): additive, absent when there are none.
+Any successful authenticated response may also carry the caller's unread events as a
+top-level `events` array (+ `more_events:true`): additive, absent when there are none.
+Error responses never carry events and never move the read cursor.
 
 Device-local console API (same Wi-Fi, no auth; served by the firmware, used by
 `console/`). One spelling per field — `relay_url` is the ws/wss origin the
@@ -269,9 +270,16 @@ The relay stores `{id:"e<seq>", type, ts:<relay unix ms>, data}`; `seq` increase
   storage so it survives hibernation and eviction).
 - Intake cap: **30 events/min per device**; the excess is dropped (counted in storage).
 - Each agent token has a cursor. A newly paired agent starts at the head (no backlog).
-  Every way of reading below advances only that agent's cursor, so two agents each get
-  every event once. Webhook deliveries that succeed also count as read.
-- Ids are stable: an agent using two modes at once may see an event twice; dedupe by `id`.
+  Ride-along and pull advance only that agent's cursor, so two agents each get every
+  event once. The cursor moves only when events are actually handed over: error responses
+  carry no events and move nothing (a failed `molty_wait` job included).
+- Webhook acknowledgements are **separate** from the cursor: a delivered event stays
+  readable by pull and ride-along, so an event whose delivery exhausted its retries is
+  never lost. An agent using a webhook plus another mode sees events twice; dedupe by `id`
+  (ids are stable).
+- Long-poll admission: at most **2** concurrent waits (`wait_s > 0`) per agent token and
+  **16** per device; more answer `too_many_polls` (REST 429). Immediate reads (`wait_s=0`)
+  are not counted.
 
 ### Receive modes
 
@@ -291,7 +299,8 @@ an agent sees events the next time it calls anything (ride-along).
 
 ```
 {"url": "https://…", "method"?: "POST"|"GET"|"PUT"|"PATCH",
- "headers"?: {"Authorization": "Bearer …"}, "body"?: "<template>", "content_type"?: "application/json"}
+ "headers"?: {"Authorization": "Bearer …"}, "body"?: "<template>", "content_type"?: "application/json",
+ "events"?: ["shake", "tap", "button"]}
 ```
 
 - Placeholders in `url` (URL-encoded) and `body`: `{{event.type}}` `{{event.id}}` `{{event.ts}}`
@@ -300,28 +309,47 @@ an agent sees events the next time it calls anything (ride-along).
   pressed"). With a JSON `content_type` strings are JSON-escaped (write them inside quotes;
   write `{{event.data}}` and numeric fields unquoted); with
   `application/x-www-form-urlencoded` they are form-encoded; otherwise inserted raw.
-  Unknown placeholders are rejected; missing fields render empty.
+  Unknown placeholders are rejected. A missing field renders its default when written
+  `{{event.data.peak_g|0}}` (the default is literal text, escaped like a string), else
+  `null` in a JSON body and empty elsewhere — so `"peak": {{event.data.peak_g}}` stays valid
+  JSON for a tap.
+- `events` (optional) limits which event types are sent; default all.
 - No `body`: the relay's own `{"device":"molty-…","event":{id,type,ts,data}}`, `application/json`.
-- Every request carries `Molty-Signature: t=<unix ms>,v1=<hex hmac_sha256(secret, t + "." + body)>`
-  (GET: empty body). Harmless for targets that ignore it.
-- Registration validates and **dry-runs** the template on a sample `shake` and returns
-  `{webhook, secret, dry_run}`. `secret` is shown once (re-registering rotates it and
+- Every request carries `Molty-Signature: t=<unix ms>,v2=<hex hmac_sha256(secret, S)>` with
+  `S = t + "\n" + METHOD + "\n" + path?query + "\n" + body` (GET: empty body). v2 covers the
+  request target because placeholders may put event data in the URL; signing only the body
+  would let anyone holding one signed GET swap its query within the freshness window.
+  `path?query` is the target exactly as sent (percent-encoded, as in the HTTP request line).
+  Harmless for targets that ignore it.
+- Registration validates and **dry-runs** the template against a sample of every event type
+  it will receive (all, or `events`), checks every rendered host, and returns
+  `{webhook, secret, dry_run}` (the dry run shown is the first type's). `secret` is shown once (re-registering rotates it and
   re-enables a disabled webhook). Header values, the secret and the URL path/query (often a
   bot token) are never echoed again: `status`/`GET` show `{url: origin + "/…", method,
-  headers: [names], active, consecutive_failures, disabled?, last_ok_at?, last_error?}`,
+  headers: [names], events, active, consecutive_failures, disabled?, last_ok_at?, last_error?}`,
   as `relay.webhook` in `status` too. Logs carry the origin only. The dry run echoes the
-  rendered body, so keep secrets in headers or the URL.
+  rendered body, so keep secrets in headers or the URL. If the token is revoked or the
+  webhook is replaced while a registration is being validated, the registration fails
+  (`unauthorized` / `conflict` 409) instead of overwriting.
+- `last_error` (and the log line) is a fixed category, never exception text: `timeout`,
+  `dns_failed`, `blocked_address`, `blocked_url`, `render_failed`, `network_error`, `http_<status>`.
 - Limits: url ≤ 2048 B, body template ≤ 4096 B, ≤ 16 headers / 4096 B; reserved headers
   (`Host`, `Content-Length`, `Molty-Signature`, …) refused; `Content-Type` comes from `content_type`.
-- Delivery: queued in DO storage, sent from the DO alarm, 5 s timeout, redirects not
-  followed (a 3xx is a failure), 2xx = success. Retries after 1 s, 10 s, 60 s, then the event is
-  dropped for that agent. **20 consecutive failed attempts disable the webhook.**
+- Delivery: queued in DO storage, sent from the DO alarm. One **5 s deadline** covers DNS
+  resolution and the request (both aborted on expiry; registration's DNS check has the same
+  deadline). Redirects are not followed (a 3xx is a failure), 2xx = success. Retries after
+  1 s, 10 s, 60 s, then that delivery is dropped (the event stays in the inbox).
+  **20 consecutive failed attempts disable the webhook.**
 - SSRF guard: `https:` only; no credentials in the URL; no IP literals (v4, v6, hex/decimal
   forms); no `localhost`, single-label names or `.local`/`.localhost`/`.internal`/`.lan`/
   `.home`/`.home.arpa`/`.corp`/`.intranet`/`.localdomain`. The rendered host is resolved
   (A + AAAA over DNS-over-HTTPS on Workers) at registration and before every delivery and
   refused if any address is private, loopback, link-local, CGNAT, multicast, documentation
-  or otherwise reserved. **Residual risk, stated plainly:** Workers' `fetch` resolves the
+  or otherwise reserved. Addresses are parsed to bytes (any IPv6 spelling or compression);
+  IPv6 must be global unicast (`2000::/3`) outside the special blocks, and IPv4 embedded in
+  IPv6 (mapped `::ffff:0:0/96`, compatible `::/96`, NAT64 `64:ff9b::/96`, 6to4 `2002::/16`)
+  is classified as IPv4; Teredo and the rest of `2001::/23` are refused; unparsable answers
+  are refused. **Residual risk, stated plainly:** Workers' `fetch` resolves the
   name again itself, so a DNS-rebinding host could answer differently between our check
   and the request (TOCTOU), and the check trusts the DoH answer. What bounds it: Workers
   egress comes from Cloudflare's network, not from the owner's LAN, so private addresses
@@ -353,19 +381,23 @@ Your own server, default signed body (verify it, below):
 
 #### Reference verifiers
 
-Use the raw request body exactly as received. Reject when the header is missing, the
-signature differs, or `t` is older than your tolerance (replay).
+Pass the request method, the request target as received (path + query, e.g.
+`url.pathname + url.search` of the incoming request URL) and the raw body. Reject when the
+header is missing, the signature differs, or `t` is outside your tolerance (replay).
 
 <!-- verifier:ts -->
 ```ts
 // Node 20+, Deno, Bun, Workers (Web Crypto). True when the request is authentic and fresh.
-export async function verifyMolty(secret: string, header: string | null, body: string, toleranceMs = 5 * 60 * 1000): Promise<boolean> {
-  const m = /^t=(\d+),v1=([0-9a-f]{64})$/.exec(header ?? "");
+export async function verifyMolty(
+  secret: string, header: string | null, method: string, target: string, body: string, toleranceMs = 5 * 60 * 1000,
+): Promise<boolean> {
+  const m = /^t=(\d+),v2=([0-9a-f]{64})$/.exec(header ?? "");
   if (!m || Math.abs(Date.now() - Number(m[1])) > toleranceMs) return false;
   const enc = new TextEncoder();
   const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
   const sig = new Uint8Array(m[2].match(/../g)!.map((h) => parseInt(h, 16)));
-  return crypto.subtle.verify("HMAC", key, sig, enc.encode(`${m[1]}.${body}`)); // constant-time
+  const signed = `${m[1]}\n${method.toUpperCase()}\n${target}\n${body}`;
+  return crypto.subtle.verify("HMAC", key, sig, enc.encode(signed)); // constant-time
 }
 ```
 
@@ -373,17 +405,18 @@ export async function verifyMolty(secret: string, header: string | null, body: s
 ```python
 import hashlib, hmac, time
 
-def verify_molty(secret: str, header: str | None, body: bytes, tolerance_s: int = 300) -> bool:
-    """True when the request is authentic and fresh. body = raw request bytes."""
+def verify_molty(secret: str, header: str | None, method: str, target: str, body: bytes, tolerance_s: int = 300) -> bool:
+    """True when the request is authentic and fresh. target = path + query as received; body = raw bytes."""
     try:
         parts = dict(p.split("=", 1) for p in (header or "").split(","))
-        t, v1 = parts["t"], parts["v1"]
+        t, v2 = parts["t"], parts["v2"]
     except (ValueError, KeyError):
         return False
     if not t.isdigit() or abs(time.time() * 1000 - int(t)) > tolerance_s * 1000:
         return False
-    mac = hmac.new(secret.encode(), t.encode() + b"." + body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(mac, v1)
+    signed = f"{t}\n{method.upper()}\n{target}\n".encode() + body
+    mac = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(mac, v2)
 ```
 
 ### Example setups by agent kind

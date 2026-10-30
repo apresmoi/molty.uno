@@ -143,21 +143,22 @@ Each event is \`{"id":"e42","type":"shake","ts":<unix ms>,"data":{…}}\`. The r
 **personal inbox per agent token** with a read cursor, so every paired agent gets every
 event once (last ${INBOX_LIMITS.keep} events / 24 h, at most ${INBOX_LIMITS.perMinute} per minute per device). Ways to receive:
 
-1. **Ride-along.** Every authenticated REST response and MCP tool result carries your unread
+1. **Ride-along.** Every successful authenticated REST response and MCP tool result carries your unread
    events as an extra \`events\` array (MCP also adds a line like
    "Molty: was shaken (peak 2.4 g) 2 min ago [e42]"). Seeing them marks them read.
 2. **Pull / long-poll.** \`GET ${o}/v1/devices/<id>/events?wait_s=0..${INBOX_LIMITS.restWaitS}\` or MCP
    \`molty_events {wait_s: 0..${INBOX_LIMITS.mcpWaitS}}\` → \`{"ok":true,"events":[…],"next":"e42","more":false}\`;
    returns as soon as an event arrives. \`since=e41\` re-reads after an id.
 3. **Webhook.** \`PUT ${o}/v1/webhook\` (or \`molty_webhook\`) with a request you define:
-   \`{"url":"https://<your-host>/…","method"?:"POST","headers"?:{…},"body"?:"<template>","content_type"?:"application/json"}\`.
+   \`{"url":"https://<your-host>/…","method"?:"POST","headers"?:{…},"body"?:"<template>","content_type"?:"application/json","events"?:["shake"]}\`.
    The relay sends it per event, filling \`{{event.type}}\` \`{{event.id}}\` \`{{event.ts}}\`
-   \`{{event.data}}\` \`{{event.data.<field>}}\` \`{{device}}\` \`{{text}}\` — so you can point it at
+   \`{{event.data}}\` \`{{event.data.<field>}}\` (\`|default\` optional) \`{{device}}\` \`{{text}}\` — so you can point it at
    whatever wakes you (your own server, a chat/bot API, an agent-run endpoint). No body =
    \`{"device","event"}\` JSON. Header values are stored and never shown again. The response
    has a dry run for a sample event and a \`secret\`, once: every request carries
-   \`Molty-Signature: t=<unix ms>,v1=<hex hmac_sha256(secret, t + "." + body)>\` (verify it;
-   reject stale \`t\`). HTTPS to public hosts only; retries ${WEBHOOK_LIMITS.retryMs.map((m) => `${m / 1000} s`).join(" / ")}; disabled after
+   \`Molty-Signature: t=<unix ms>,v2=<hex hmac_sha256(secret, t \\n METHOD \\n path?query \\n body)>\`
+   (newline-joined; verify it, reject stale \`t\`). Webhooks wake you; the inbox stays the record
+   (pull still returns delivered events, dedupe by \`id\`). HTTPS to public hosts only; retries ${WEBHOOK_LIMITS.retryMs.map((m) => `${m / 1000} s`).join(" / ")}; disabled after
    ${WEBHOOK_LIMITS.maxFails} straight failures (\`relay.webhook\` in \`status\`; register again to re-enable).
 4. **Stream.** The \`molty\` CLI (release binaries: github.com/apresmoi/molty.uno/releases) follows
    the long-poll: \`molty events\` prints one JSON line per event; \`--exec 'cmd'\` runs a

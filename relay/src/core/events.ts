@@ -33,6 +33,9 @@ export const INBOX_LIMITS = {
   /** Long-poll caps. */
   mcpWaitS: 8,
   restWaitS: 25,
+  /** Concurrent long-polls (wait > 0) admitted per agent token / per device. */
+  pollsPerToken: 2,
+  pollsPerDevice: 16,
 };
 
 const num = (v: unknown, lo: number, hi: number) => typeof v === "number" && Number.isFinite(v) && v >= lo && v <= hi;
@@ -46,6 +49,13 @@ const SHAPES: Record<string, (d: Record<string, unknown>) => JsonObject | undefi
 };
 
 export const AGENT_EVENT_TYPES = Object.keys(SHAPES);
+
+/** One representative event per type: webhook templates are dry-run against every type they will receive. */
+export const SAMPLE_EVENTS: Record<string, AgentEvent> = {
+  shake: { id: "e1", type: "shake", ts: 0, data: { peak_g: 2.4, reversals: 5, ms: 900 } },
+  tap: { id: "e2", type: "tap", ts: 0, data: { x: 0.5, y: 0.5 } },
+  button: { id: "e3", type: "button", ts: 0, data: { id: "accept" } },
+};
 
 export function agentEventData(name: string, data: unknown): JsonObject | undefined {
   const shape = Object.hasOwn(SHAPES, name) ? SHAPES[name] : undefined;
