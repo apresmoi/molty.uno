@@ -15,6 +15,7 @@ export const OPTIONS = [
   {
     name: 'device',
     file: '1-device',
+    moltyDir: '.', // OG_MOLTYS: <outDir>/<name>.png
     molty: 'cute-duck',
     line: 'Liquid ASCII creatures. Any agent is the brain.',
     // its first dances, before the glass beat (a close-up) comes round
@@ -24,6 +25,23 @@ export const OPTIONS = [
       .og-screen { position: relative; flex: none; width: 372px; aspect-ratio: 1; margin: 0; }
       .og-device .og-word { margin-top: 18px; font-size: 104px; line-height: 1; }
       .og-device .og-line { margin-top: 14px; }
+    `,
+  },
+  {
+    // the device card with a bolder wordmark (the braille reads weakly at 600 px): a smaller
+    // screen, a larger heading
+    name: 'device-word',
+    file: '1b-device',
+    moltyDir: 'bold-word',
+    molty: 'cute-duck',
+    themes: ['dark'],
+    line: 'Liquid ASCII creatures. Any agent is the brain.',
+    pick: { from: 500, to: 5500 },
+    css: `${base}
+      .og-device-word { display: flex; flex-direction: column; align-items: center; padding-top: 22px; }
+      .og-screen { position: relative; flex: none; width: 330px; aspect-ratio: 1; margin: 0; }
+      .og-device-word .og-word { margin-top: 14px; font-size: 140px; line-height: 1; }
+      .og-device-word .og-line { margin-top: 8px; }
     `,
   },
   {
