@@ -10,3 +10,13 @@
 .toggle:hover {
   color: var(--m-accent);
 }
+/* the label names the theme a click switches to, from <html data-theme> (set before paint) */
+.toDark {
+  display: none;
+}
+:global(:root[data-theme="light"]) .toDark {
+  display: inline;
+}
+:global(:root[data-theme="light"]) .toLight {
+  display: none;
+}

@@ -82,6 +82,9 @@ Never deploy or publish from here; nothing in this package does.
   first load on a slow network + CPU and fails if the hero is shown and then hidden, the device
   is not monotonic, CLS > 0.01, or reduced motion / no JS / bundles that never load leave it
   hidden. Frames to `e2e-out/first-load-*.png`.
+- `pnpm theme-label` (`e2e/theme-label.mjs`, preview running): the theme button's label is
+  CSS-driven off `<html data-theme>` (set before paint); fails if any frame before a click shows
+  another label (the old `[ theme ]` → `[ dark ]` flash) or a click does not flip it.
 - `pnpm og` regenerates `public/og.png` from the live page fluid (needs the preview running).
 - `pnpm readme` regenerates the GitHub README hero (`docs/assets/molty-hero[-light].webp` + `.png`) from
   the same components: wordmark, Device, a Molty, the talk screen (preview running).
