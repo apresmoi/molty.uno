@@ -78,6 +78,7 @@ static void send_evt(cJSON *j)
 
 bool self_update_ota_claim(void) { bool idle = false; return atomic_compare_exchange_strong(&s_ota, &idle, true); }
 void self_update_ota_release(void) { atomic_store(&s_ota, false); }
+bool self_update_busy(void) { return atomic_load(&s_ota); }
 
 static void policy(upd_policy_t *p)
 {

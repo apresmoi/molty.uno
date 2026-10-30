@@ -236,8 +236,16 @@ static void test_ack(void)
 
 static void test_event_frames(void)
 {
-    expect_json(link_evt_shake_frame(1.83456, 4, 412),
+    expect_json(link_evt_shake_frame(1.83456, 4, 412, NULL),
         "{\"t\":\"evt\",\"name\":\"shake\",\"data\":{\"peak_g\":1.83,\"reversals\":4,\"ms\":412}}");
+    /* shake to talk: the listen the device began by itself, for the relay to adopt */
+    expect_json(link_evt_shake_frame(2.4, 5, 900, "shake-3"),
+        "{\"t\":\"evt\",\"name\":\"shake\",\"data\":{\"peak_g\":2.4,\"reversals\":5,\"ms\":900,\"listen\":\"shake-3\"}}");
+    cJSON *w = cJSON_Parse("{\"t\":\"welcome\",\"features\":[\"x\",\"listen_adopt\"]}");
+    assert(link_welcome_has(w, LINK_FEATURE_ADOPT) && !link_welcome_has(w, "listen") && !link_welcome_has(w, NULL));
+    cJSON_Delete(w);
+    w = cJSON_Parse("{\"t\":\"welcome\"}"); assert(!link_welcome_has(w, LINK_FEATURE_ADOPT)); cJSON_Delete(w);
+    w = cJSON_Parse("{\"t\":\"welcome\",\"features\":\"listen_adopt\"}"); assert(!link_welcome_has(w, LINK_FEATURE_ADOPT)); cJSON_Delete(w);
     expect_json(link_evt_tap_frame(0.25, 0.5004),
         "{\"t\":\"evt\",\"name\":\"tap\",\"data\":{\"x\":0.25,\"y\":0.5}}");
     expect_json(link_evt_tap_frame(-0.1, 1.7),

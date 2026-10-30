@@ -649,6 +649,20 @@ describe("semantic end of turn is the default with a voice box", () => {
     expect(lastListen(w).vad).toBe(false);
   });
 
+  it("shake to talk rides the same path: the adopted listen gets vad:false + the box's semantic end of turn, and its words become one utterance", async () => {
+    const w = await setup({ caps: [...NEW_FW, "shake_talk"], box: { turnEndAfter: 2 } });
+    await w.room.socketMessage(w.sock, JSON.stringify({ t: "evt", name: "shake", data: { peak_g: 2.4, reversals: 5, ms: 900, listen: "shake-1" } }));
+    expect(lastListen(w)).toMatchObject({ adopt: "shake-1", vad: false });
+    expect(sttStart(w).no_speech_ms).toBe(8000);
+    const seen: any[] = [];
+    await until(() => {
+      void w.room.events(w.token, { wait_ms: 0 }).then((r: any) => r.ok && seen.push(...r.result.events));
+      return seen.some((e) => e.type === "utterance");
+    }, 2000);
+    const u = seen.find((e) => e.type === "utterance");
+    expect(u.data).toMatchObject({ reason: "turn_end", trigger: "shake", turn_id: lastListen(w).job, device: { voice: "box" } });
+  });
+
   it("an agent that tunes the device VAD keeps it: vad or end_silence_ms given -> no vad:false, no no_speech_ms to the box", async () => {
     const w = await setup({ caps: NEW_FW, box: { turnEndAfter: 2 } });
     for (const args of [{ vad: true }, { end_silence_ms: 500 }, { vad: false }]) {

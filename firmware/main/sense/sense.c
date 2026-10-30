@@ -10,7 +10,9 @@
  *   status   every 0.5 s: Wi-Fi / relay / auth → mole_fluid_set_status (the edge mark)
  * A tap while a question (link `ask`) is pending is its answer (link_ask.c), not a tap event.
  * Nothing leaves while a pairing is pending (its tap and buttons decide the pairing) or
- * while the link is down; events are not queued for later. Rate limits on the device:
+ * while the link is down; events are not queued for later. A shake with "shake to talk" on
+ * goes to the link task (link_audio_shake): Molty starts listening at once and the shake
+ * event names that listen. Rate limits on the device:
  * ≤ 1 shake per 2 s, ≤ 4 taps and ≤ 4 button presses per second.
  */
 #include "sense.h"
@@ -22,6 +24,7 @@
 #include "link_pair.h"
 #include "link_ask.h"
 #include "link_protocol.h"
+#include "link_audio.h"
 #include "mole_diag.h"
 
 #include "freertos/FreeRTOS.h"
@@ -93,7 +96,10 @@ static void sense_task(void *arg)
                 mole_fluid_event(MOLE_FLUID_SHAKE);          /* reacts with or without an agent */
                 mole_diag_event(false, "sense.shake peak=%dmg reversals=%d ms=%u",
                                 (int)(sh.peak_g * 1000.f), sh.reversals, (unsigned)sh.ms);
-                if (gesture_limit_allow(&shake_l, now)) emit(link_evt_shake_frame(sh.peak_g, sh.reversals, sh.ms));
+                /* shake to talk (the console's setting, on out of the box): the link task starts
+                 * listening and sends the event; otherwise the plain shake goes from here */
+                if (gesture_limit_allow(&shake_l, now) && !link_audio_shake(sh.peak_g, sh.reversals, sh.ms))
+                    emit(link_evt_shake_frame(sh.peak_g, sh.reversals, sh.ms, NULL));
             }
         }
 

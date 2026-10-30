@@ -23,7 +23,7 @@ export const SERVER_INFO = { name: "molty-relay", title: `Molty relay (skill v${
 const MAX_BODY = 256 * 1024;
 const INSTRUCTIONS =
   `Tools operate a physical Molty device through the molty-relay. Pair first with molty_pair (no token needed), then send the returned agent_token as 'Authorization: Bearer <token>'. For conversation use molty_talk: ONE call per turn speaks your reply, then listens and returns what the human said ({heard, reason}); moods (listening, thinking, speaking) are automatic, so don't call molty_mood around talking. When the human finishes, Molty acknowledges it by itself at once (a soft chirp, then thinking): go straight to your answer, no "let me think" filler; if the answer needs long work (tools, search), still say a short spoken ack first or keep thinking up with molty_mood, so the human is never left in silence. Keep spoken replies to 1-2 sentences. For a decision the human can answer with a tap use molty_ask: say the question, offer 1-${MAX_ASK_OPTIONS} options of at most ${MAX_ASK_LABEL} characters ("yes", "no", "later"); answer is null on timeout/cancelled/offline. molty_say / molty_listen return a job immediately (wait:true blocks until done); poll a job with molty_wait (<= 8 s per call). ` +
-  `Molty also emits events (${AGENT_EVENT_TYPES.join(", ")}) into your own inbox: unread ones ride along on every tool result as 'events' plus a 'Molty: ...' line; molty_events pulls/waits for them; molty_webhook registers an HTTPS request the relay sends you per event. React briefly, once per moment. Full guide: GET /skill.md on this relay. ${skillHeadline()}. When the skill changes again, your next successful tool result carries 'skill_update' plus a 'Molty's skill was updated' line once: re-read /skill.md then. When your human asks to check Molty for updates (any wording), call molty_updates and follow its 'actions'; ask before molty_update.`;
+  `Molty also emits events (${AGENT_EVENT_TYPES.join(", ")}) into your own inbox: unread ones ride along on every tool result as 'events' plus a 'Molty: ...' line; molty_events pulls/waits for them; molty_webhook registers an HTTPS request the relay sends you per event. A shake means the human wants to talk: Molty listens by itself and you get one 'utterance' event {turn_id, text, ...}: answer it at once with molty_talk {say, in_reply_to: turn_id} (the first agent to answer claims the turn; others get turn_claimed). Other events: react briefly, once per moment. Full guide: GET /skill.md on this relay. ${skillHeadline()}. When the skill changes again, your next successful tool result carries 'skill_update' plus a 'Molty's skill was updated' line once: re-read /skill.md then. When your human asks to check Molty for updates (any wording), call molty_updates and follow its 'actions'; ask before molty_update.`;
 
 type Prop = { type: string | string[]; description: string; enum?: string[]; items?: { type: "string"; enum?: string[] } | { anyOf: JsonObject[] } };
 type Schema = { type: "object"; properties: Record<string, Prop>; required: string[]; additionalProperties: false };
@@ -43,6 +43,11 @@ const VAD_PROPS: Schema["properties"] = {
   vad: { type: "boolean", description: "Device end-of-speech detection on or off (record the whole window). Leave it out: with the owner's voice box, semantic end of turn is automatic (the box decides; device VAD off); otherwise the device's detection is on." },
   ring_color: { type: "string", description: `Colour of the listening ring on Molty's screen: ${Object.keys(COLORS).join(", ")} or "#rrggbb". Default: the device's setting.` },
   ack: { type: ["boolean", "string"], description: `Molty's own acknowledgement when the human finishes (a soft chirp + thinking, ${ACK_THINK_S} s max, before you answer): true (default) = the human's setting; "silent" = thinking without the chirp; false = none. Leave it out unless you acknowledge yourself.` },
+};
+
+const IN_REPLY_TO: Prop = {
+  type: "string",
+  description: "The turn_id of the `utterance` you are answering (the human shook Molty and spoke). The first agent to answer a turn claims it; other agents get turn_claimed for 60 s. Adds timings.turn {id, reply, first_audio} (ms after the utterance).",
 };
 
 /** say/listen with `wait: true` block on their job (bounded), returning what molty_wait would. */
@@ -135,6 +140,7 @@ export const TOOLS: ToolDef[] = [
       {
         text: { type: "string", description: "Text to synthesize, at most 4096 bytes." },
         voice: { type: "string", description: "Optional relay TTS voice (provider-specific, e.g. luna for Workers AI Aura)." },
+        in_reply_to: IN_REPLY_TO,
         wait: { type: "boolean", description: `true: block until spoken (at most ${TALK_BUDGET_MS / 1000} s, then {job, status:"pending"} for molty_wait).` },
       },
       ["text"],
@@ -157,6 +163,7 @@ export const TOOLS: ToolDef[] = [
       listen: { type: "boolean", description: "Listen after speaking; default true. false = just speak (and wait until spoken)." },
       listen_ms: { type: "integer", description: LISTEN_MS_DOC },
       voice: { type: "string", description: "Optional relay TTS voice." },
+      in_reply_to: IN_REPLY_TO,
       ...VAD_PROPS,
     }),
     auth: true,
@@ -220,7 +227,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "molty_events",
-    description: `Your unread Molty events (${AGENT_EVENT_TYPES.join(", ")}), oldest first: {events:[{id, type, ts, data}], next, more}. Default since = your read cursor (each event is returned to you once; it advances). wait_s (0..${INBOX_LIMITS.mcpWaitS}, default 0) long-polls until an event arrives. since = an event id (e.g. e41) re-reads after it. shake {peak_g, reversals, ms}; tap {x, y} in 0..1; button {id: accept|reject} (physical buttons: acknowledge / dismiss what you showed, never an answer); answer {job, index, label, reason?} (how a molty_ask ended).`,
+    description: `Your unread Molty events (${AGENT_EVENT_TYPES.join(", ")}), oldest first: {events:[{id, type, ts, data}], next, more}. Default since = your read cursor (each event is returned to you once; it advances). wait_s (0..${INBOX_LIMITS.mcpWaitS}, default 0) long-polls until an event arrives. since = an event id (e.g. e41) re-reads after it. shake {peak_g, reversals, ms, listening?, turn_id?} (listening: Molty is already listening, wait for the utterance); utterance {turn_id, text, reason, ms:{speech, stt}, trigger, device:{caps, mood, voice}} (the human's words after a shake: answer with molty_talk {say, in_reply_to: turn_id}); tap {x, y} in 0..1; button {id: accept|reject} (physical buttons: acknowledge / dismiss what you showed, never an answer); answer {job, index, label, reason?} (how a molty_ask ended).`,
     inputSchema: obj({
       since: { type: "string", description: "Event id to read after, e.g. e41; default your cursor." },
       wait_s: { type: "integer", description: `Seconds to wait for a new event, 0..${INBOX_LIMITS.mcpWaitS}; default 0.` },
@@ -237,7 +244,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "molty_webhook",
     description:
-      "Have the relay call YOU on each event: an HTTPS request you define. url (https, public host); method POST (default) | GET | PUT | PATCH; headers (your own auth; stored, never shown again); body template + content_type. Placeholders in url and body: {{event.type}} {{event.id}} {{event.ts}} {{event.data}} (JSON) {{event.data.<field>}} {{device}} {{text}} (e.g. 'Molty was shaken'), escaped for JSON / form / URL. No body = {\"device\",\"event\"} JSON. A missing field renders its {{event.data.x|default}}, else null in JSON / empty elsewhere. events (optional) limits the types sent. Every request is signed: Molty-Signature: t=<ms>,v2=hex(hmac_sha256(secret, t+'\\n'+METHOD+'\\n'+path?query+'\\n'+body)); the secret is returned once. Returns a dry run; the template is validated against every event type it will receive. Omit url to read the current webhook; remove:true deletes it. Retries 1 s/10 s/60 s; disabled after 20 consecutive failures (re-register to re-enable).",
+      "Have the relay call YOU on each event: an HTTPS request you define. url (https, public host); method POST (default) | GET | PUT | PATCH; headers (your own auth; stored, never shown again); body template + content_type. Placeholders in url and body: {{event.type}} {{event.id}} {{event.ts}} {{event.data}} (JSON) {{event.data.<field>}} (nested up to 3 deep, e.g. {{event.data.ms.speech}}; an utterance's words: \"{{event.data.text}}\") {{device}} {{text}} (e.g. 'Molty was shaken'), escaped for JSON / form / URL. No body = {\"device\",\"event\"} JSON. A missing field renders its {{event.data.x|default}}, else null in JSON / empty elsewhere. events (optional) limits the types sent. Every request is signed: Molty-Signature: t=<ms>,v2=hex(hmac_sha256(secret, t+'\\n'+METHOD+'\\n'+path?query+'\\n'+body)); the secret is returned once. Returns a dry run; the template is validated against every event type it will receive. Omit url to read the current webhook; remove:true deletes it. Retries 1 s/10 s/60 s; disabled after 20 consecutive failures (re-register to re-enable).",
     inputSchema: obj({
       url: { type: "string", description: "https URL the relay requests per event; may contain placeholders (URL-encoded)." },
       method: { type: "string", description: "POST (default), GET, PUT or PATCH.", enum: ["POST", "GET", "PUT", "PATCH"] },

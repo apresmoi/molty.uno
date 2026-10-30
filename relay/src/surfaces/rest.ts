@@ -3,7 +3,8 @@
 //   POST   /v1/pair                     {device_id, link_code, agent_name}  (no token; long-polls <= 120 s)
 //   POST   /v1/devices/<id>/cmd         {name, args, wait?}   -> {ok:true,result} | {ok:false,error}
 //                                       (say/listen + wait:true: blocks <= 24 s -> result {job, status:"done", ...} | 202 {job, status:"pending"})
-//   POST   /v1/devices/<id>/talk        {say?, listen?, listen_ms?, voice?, end_silence_ms?, no_speech_ms?, vad?}
+//   POST   /v1/devices/<id>/talk        {say?, listen?, listen_ms?, voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?, ack?, in_reply_to?}
+//                                       (in_reply_to / a say's: an utterance's turn_id; another agent answered it first -> 409 turn_claimed)
 //                                       -> {ok:true, result:{job, status:"done", heard, said?, reason, ms, timings}} | 202 pending
 //   POST   /v1/devices/<id>/ask         {say?, options[1..5], timeout_s?, voice?}
 //                                       -> {ok:true, result:{job, status:"done", answer, index, reason?, said?, ms, timings}} | 202 pending
@@ -47,6 +48,7 @@ const STATUS: Record<string, number> = {
   timeout: 408,
   device_offline: 409,
   audio_busy: 409,
+  turn_claimed: 409,
   unsupported: 409,
   firmware_too_old: 409,
   no_build: 409,

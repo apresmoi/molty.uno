@@ -3,7 +3,9 @@
 // one-line summaries that ride along on tool results. Host-neutral.
 //
 // Firmware contract (device -> relay `{"t":"evt",name,data}`):
-//   shake  {peak_g:number, reversals:int, ms:int}
+//   shake  {peak_g:number, reversals:int, ms:int, listen?:string}
+//          (listen: the local id of the listen the device began on this shake — shake to talk,
+//          core/turns.ts; the relay adopts it and agents see {listening:true, turn_id} instead)
 //   tap    {x:0..1, y:0..1}
 //   button {id:"accept"|"reject"}
 //   answer {job, index:int|null, label?:string, reason?:"timeout"|"cancelled"}
@@ -76,7 +78,16 @@ function answerShape(d: Record<string, unknown>): JsonObject | undefined {
 /** Why an ask ended without an answer. `offline` is relay-side (the device dropped mid-ask). */
 export const ASK_NO_ANSWER = ["timeout", "cancelled", "offline"] as const;
 
-export const AGENT_EVENT_TYPES = Object.keys(SHAPES);
+/**
+ * Relay-generated (not device) event: the human said something to Molty on its own initiative
+ * (shake to talk, core/turns.ts). One per heard turn; never sent for no_speech. Data
+ * `{turn_id, text, reason, ms:{speech, stt}, trigger:"shake", device:{caps, mood, voice}}`.
+ * Filterable like device events; a device can never send it.
+ */
+export const UTTERANCE_EVENT = "utterance";
+
+/** Every type an agent can receive and filter on (webhook `events`): device events + utterance. */
+export const AGENT_EVENT_TYPES = [...Object.keys(SHAPES), UTTERANCE_EVENT];
 
 /**
  * Relay-generated (not device) event: the agent skill changed. Data
@@ -92,6 +103,19 @@ export const SAMPLE_EVENTS: Record<string, AgentEvent> = {
   tap: { id: "e2", type: "tap", ts: 0, data: { x: 0.5, y: 0.5 } },
   button: { id: "e3", type: "button", ts: 0, data: { id: "accept" } },
   answer: { id: "e4", type: "answer", ts: 0, data: { job: "molty-xxxxxxxxxx.j_sample00", index: 0, label: "yes" } },
+  [UTTERANCE_EVENT]: {
+    id: "e5",
+    type: UTTERANCE_EVENT,
+    ts: 0,
+    data: {
+      turn_id: "molty-xxxxxxxxxx.j_sample01",
+      text: "what's on my calendar today?",
+      reason: "turn_end",
+      ms: { speech: 1800, stt: 120 },
+      trigger: "shake",
+      device: { caps: ["say", "listen", "shake_talk"], mood: "thinking", voice: "box" },
+    },
+  },
 };
 
 export function agentEventData(name: string, data: unknown): JsonObject | undefined {
@@ -113,7 +137,11 @@ export function eventSentence(ev: AgentEvent): string {
   const d = ev.data as Record<string, unknown>;
   switch (ev.type) {
     case "shake":
-      return `Molty was shaken (peak ${Number(d.peak_g).toFixed(1)} g)`;
+      return d.listening === true
+        ? `Molty was shaken (peak ${Number(d.peak_g).toFixed(1)} g) and is listening: the human's words follow as an utterance`
+        : `Molty was shaken (peak ${Number(d.peak_g).toFixed(1)} g)`;
+    case UTTERANCE_EVENT:
+      return `The human said to Molty: "${String(d.text ?? "")}"`;
     case "tap":
       return "Molty's screen was tapped";
     case "button":

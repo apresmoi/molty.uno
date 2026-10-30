@@ -111,20 +111,20 @@ describe("skill notice (ride-along)", () => {
     expect(recs.map((r) => r.skill_seen)).toEqual([SKILL_VERSION, SKILL_VERSION]);
   });
 
-  it("v10 bump: an agent that saw v9 is told only what is new in v10 (Molty acknowledges the turn itself), once; one that saw v8 hears v9 (caps, buttons, broken listens, wakes) and v10", async () => {
-    expect(SKILL_VERSION).toBe(10);
+  it("v11 bump: an agent that saw v10 is told only what is new in v11 (shake to talk, utterance), once; one that saw v9 hears v10 (Molty acknowledges the turn) and v11", async () => {
+    expect(SKILL_VERSION).toBe(11);
     const w = await world();
-    const a = await w.pairAgent("v9 agent");
-    for (const [k, v] of await w.kv.list<Record<string, unknown>>("tok:")) await w.kv.put(k, { ...v, skill_seen: 9 });
+    const a = await w.pairAgent("v10 agent");
+    for (const [k, v] of await w.kv.list<Record<string, unknown>>("tok:")) await w.kv.put(k, { ...v, skill_seen: 10 });
     const first = await w.room.command(a, "imu", {});
-    expect(first.notice).toEqual({ version: 10, whats_new: [`v10: ${WHATS_NEW.at(-1)!.text}`] });
-    expect(first.notice!.whats_new[0]).toMatch(/acknowledges the end of the human's turn by itself/);
+    expect(first.notice).toEqual({ version: 11, whats_new: [`v11: ${WHATS_NEW.at(-1)!.text}`] });
+    expect(first.notice!.whats_new[0]).toMatch(/shake = the human wants to talk/);
+    expect(first.notice!.whats_new[0]).toMatch(/utterance/);
     expect((await w.room.command(a, "imu", {})).notice).toBeUndefined();
-    for (const [k, v] of await w.kv.list<Record<string, unknown>>("tok:")) await w.kv.put(k, { ...v, skill_seen: 8 });
+    for (const [k, v] of await w.kv.list<Record<string, unknown>>("tok:")) await w.kv.put(k, { ...v, skill_seen: 9 });
     const older = await w.room.command(a, "imu", {});
-    expect(older.notice!.whats_new.map((l) => l.slice(0, 4))).toEqual(["v9: ", "v10:"]);
-    expect(older.notice!.whats_new[0]).toMatch(/relay\.caps/);
-    expect(older.notice!.whats_new[0]).toMatch(/never an answer/);
+    expect(older.notice!.whats_new.map((l) => l.slice(0, 4))).toEqual(["v10:", "v11:"]);
+    expect(older.notice!.whats_new[0]).toMatch(/acknowledges the end of the human's turn by itself/);
   });
 
   it("failed outcomes do not consume it; the next success does", async () => {
