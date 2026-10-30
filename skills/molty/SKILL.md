@@ -1,61 +1,99 @@
 ---
 name: molty
-description: Connect this session to your human's Molty (the round desk device that talks) and use it as a side channel — speak to them, ask quick tap-button questions, show moods, and hear them when they shake Molty and speak. Use when the human says "connect to molty", "talk to me through molty", "ping me on molty if you need anything", or asks to test/talk with Molty. Session-only: while this session lives you can reach them; when it ends Molty can't wake you.
+description: Connect to your human's Molty (the round desk device that talks) and use it — pair with the link code and a tap, speak and listen in one call per turn, ask tap-button questions, show moods, and answer when they shake Molty and speak. Use when the human says "connect to molty", "connect yourself to my Molty", "talk to me through molty", "ping me on molty if you need anything", pastes a Molty setup message (Device + Code), or asks to test, update or debug Molty.
 ---
 
-# Molty (session attach)
+# Molty
 
-Molty is a thin surface: screen + speaker + mic + touch, reached through a relay. This skill
-attaches **this session** to it. Long-lived agents (Grok Bot, OpenClaw) wake themselves via
-webhooks; a session agent like you does not — you can only use Molty while you are running.
+Molty is a small physical desk creature next to your human: a round touch screen, a
+speaker, a microphone and a motion sensor. It is a thin client, not an agent. It holds a
+link to a relay, and you drive it over plain HTTPS (or MCP): show text in its fluid
+"creature" display, set its mood, speak through its speaker and listen through its mic (the
+relay does the speech: [voice.md](references/voice.md)), ask questions answered with a tap,
+and hear what the human does to it. You are its brain for as
+long as your human keeps you paired.
 
-Full API, wire details and etiquette: the relay's live skill at `$MOLTY_RELAY/skill.md`
-(relay URL in `~/.config/molty-claude/env`). Read it once per session if you need more than
-the helpers below.
-
-## Setup (once per machine)
-
-- `~/.config/molty-claude/env` — `MOLTY_RELAY=…`, `MOLTY_DEVICE=molty-…`
-- `~/.config/molty-claude/token` — agent token (0600). **Never print, echo or paste it.**
-- Not paired yet → ask the human for the 8-char link code (console's agent page), then
-  `~/.claude/skills/molty/scripts/pair.sh <LINK_CODE> "Claude Code"`; the human taps Molty.
+Resolve `<skill-dir>` to this file's directory.
 
 ## Connect
 
-1. Start the event watcher with **Monitor** (persistent, one notification per event):
-   `python3 ~/.claude/skills/molty/scripts/watch.py` — description "Molty events".
-   Lines: `MOLTY utterance: '…'` (the human shook Molty and spoke — Molty already listened),
-   `MOLTY shake/tap/button: …`. Ignore a `shake` with `"listening": true` (its `utterance` follows).
-2. Say hello once, short: `scripts/talk.sh "Claude here, connected." --no-listen`.
+The human's setup message gives you a **Device** id (`molty-xxxxxxxxxx`) and an
+8-character **Code** (`[A-Z2-9]`, the link code; it rotates every 15 min and after each
+pairing). Molty uses the official relay unless the message also names a **Relay** (a
+private one, see [self-hosting](references/self-hosting.md)).
 
-## Helpers (`~/.claude/skills/molty/scripts/`)
+1. **Pair once.** With a shell (macOS/Linux, `zsh` or `bash`, `curl`, `python3`):
 
-| Script | Does | Output |
+   ```sh
+   "<skill-dir>/scripts/pair.sh" <DEVICE> <CODE> "<your name>"
+   ```
+
+   It prints Molty's 4-digit code: tell your human "Molty shows 1234 — tap it to accept me."
+   It stores the device in `~/.config/molty/env` and the agent token in
+   `~/.config/molty/token` (0600). The message names a Relay? Run it with
+   `MOLTY_RELAY=<that relay>` in front; it is stored too. Without a shell, pair over REST or
+   MCP: [api.md](references/api.md#pair).
+2. **The agent token is a secret.** Never print, echo or paste it — not in chat, logs,
+   commits or on the device. It is scoped to this one Molty; the human can revoke it.
+3. **Say hello once**, short: `"<skill-dir>/scripts/talk.sh" "Hi, I'm here." --no-listen`,
+   then tell your human it worked.
+4. **Hear Molty.** Pick how you receive events from your harness:
+   [Claude Code](references/harnesses/claude-code.md),
+   [Codex](references/harnesses/codex.md), [Grok](references/harnesses/grok.md),
+   [OpenClaw and other long-lived agents](references/harnesses/openclaw.md).
+
+The default relay is `https://molty-relay.alicenet.workers.dev`; `MOLTY_RELAY` overrides
+it. Examples in the references write `$MOLTY_RELAY` for whichever relay Molty uses.
+
+## Helpers (`<skill-dir>/scripts/`)
+
+| Script | Does | Prints |
 |---|---|---|
-| `talk.sh "text"` | speak, then listen until the human finishes (end of turn is automatic) | `HEARD: '…' \| reason …` |
+| `pair.sh <DEVICE> <CODE> [name]` | pair, store env + token | Molty's code, then `paired` |
+| `talk.sh "text"` | speak, then listen until the human finishes | `HEARD: '…' \| reason …` |
 | `talk.sh "text" --no-listen` | speak only | — |
-| `ask.sh "question" yes no later` | speak + 1–5 tap buttons (labels ≤ 8 chars), waits up to 120 s | `ANSWER: yes \| index 0` or `None` (timeout) |
-| `mood.sh happy [hold_s]` | idle listening thinking speaking happy sleepy surprised | — |
+| `talk.sh "text" --reply <turn_id>` | answer an `utterance` (claims the turn) | `HEARD: …` |
+| `ask.sh "question" yes no later` | speak + 1–5 tap buttons (labels ≤ 8 chars) | `ANSWER: yes \| index 0` |
+| `mood.sh happy [hold_s]` | set a mood | the result |
+| `watch.py` / `watch.py --once [wait_s]` | one line per event, forever / unread events, then exit | `MOLTY utterance: '…'` |
 
-All helpers follow long turns (202 pending) to the end; one call = one full turn.
+Each helper follows a long turn (`202 pending`) to its end: one call = one full turn.
 
-## How to behave
+## Key rules
 
-- **Answer an `utterance` with one `talk.sh`** — it speaks your reply and hears their next turn.
-  Keep going turn by turn; when they're done (or `reason no_speech`), end with `--no-listen`.
-- **Blocked or need a decision → `ask.sh`** with short options instead of waiting in the
-  terminal. Finished something they're waiting for → one short `talk.sh … --no-listen`.
-- **Short.** 1–2 sentences; the first sentence starts the audio, so make it short.
-  Molty chirps + shows `thinking` by itself when they stop talking — don't fill with "ok!".
-- **Emote with intent**, not for turn-taking: `happy`/`surprised` on real moments.
-- **Don't talk unprompted or repeatedly**; never use the mic unless they expect it.
-- `reason no_speech` after a wake → one short line ("I'm here.") or nothing, never a burst.
-- Errors: `audio_busy` (something else is speaking — wait/retry once), `turn_claimed`
-  (another agent took this turn — stay quiet), `device_offline` (Molty's Wi-Fi; tell them in
-  the terminal), `voice_box_offline` (their GPU voice box is down; cloud fallback is automatic
-  in auto mode).
+- **One call per turn: talk.** It speaks your reply, listens, and returns what the human
+  said. Moods around talking are automatic; don't chain mood → say → wait → listen.
+- **A shake means "I want to talk".** Molty listens by itself; you get one `utterance`
+  event with their words. Answer it at once with talk and `in_reply_to: <turn_id>`; ignore
+  the `shake` that comes with `"listening": true`. `turn_claimed` = another agent answered:
+  stay quiet.
+- **Molty acknowledges the end of their turn itself** (a soft chirp + `thinking`): go
+  straight to your answer, no "hmm" or "let me check". Long work → one short spoken line
+  first, so they are never left in silence.
+- **Short.** 1–2 sentences; a short first sentence starts the audio sooner.
+- **A decision a tap can settle → ask**, not a spoken yes/no. Buttons (accept/reject) mean
+  acknowledge / dismiss, never an answer.
+- **Read `relay.caps`, not versions**, to know what this Molty can do (`say`, `listen`,
+  `ask`, `shake_talk`, `update`, …). `relay.voice` says who speaks.
+- **Don't talk unprompted or repeatedly**; the mic only when they expect it. `no_speech`
+  after a wake → one short line or nothing.
+- **Errors:** `audio_busy` (wait for the current audio, retry once), `turn_claimed` (stay
+  quiet), `device_offline` (Molty's Wi-Fi/power: tell them another way),
+  `voice_box_offline` (their GPU voice box is down), `listen_failed` (the recording broke:
+  try once more). A failed turn carries its `job` id: look it up in the
+  [activity log](references/activity.md).
 
-## Disconnect
+## References
 
-When the session's work is done or they say stop: `talk.sh "Signing off." --no-listen`,
-then stop the Monitor (TaskStop). Leave the token in place for next time.
+Read the one you need, when you need it.
+
+- [api.md](references/api.md) — pairing in full, REST commands, talk, ask, errors, MCP, revoke.
+- [events.md](references/events.md) — event types, the `utterance`, inbox, long-poll, webhooks and templates, the CLI stream.
+- [talking-fast.md](references/talking-fast.md) — end of turn, the ack chirp, `no_speech`, latency rules.
+- [etiquette.md](references/etiquette.md) — when to speak, emotes, keeping your own behaviour ledger.
+- [voice.md](references/voice.md) — the ways Molty gets a voice, and what each means for you.
+- [voice-box.md](references/voice-box.md) — the owner's own GPU voice box: what agents see.
+- [updates.md](references/updates.md) — firmware updates, `api_version`, updating this skill.
+- [activity.md](references/activity.md) — `molty_activity`: debug your own turns.
+- [self-hosting.md](references/self-hosting.md) — run your own private relay.
+- Harnesses: [claude-code.md](references/harnesses/claude-code.md), [codex.md](references/harnesses/codex.md), [grok.md](references/harnesses/grok.md), [openclaw.md](references/harnesses/openclaw.md).

@@ -5,6 +5,7 @@
 #   2. no committed secret files (.env, .dev.vars, keys)
 #   3. the licence files every release ships are present
 #   4. the product version copies agree (scripts/version.mjs check)
+#   5. the agent skill + plugin packaging (scripts/check-skill.mjs)
 # Exits non-zero listing every hit. Run from anywhere inside the repo.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
@@ -44,6 +45,9 @@ done
 
 # 4. Version copies.
 node scripts/version.mjs check || fail=1
+
+# 5. The agent skill (skills/molty/) and its plugin manifests.
+node scripts/check-skill.mjs || fail=1
 
 if [[ $fail -ne 0 ]]; then echo "hygiene: FAILED"; exit 1; fi
 echo "hygiene: ok"

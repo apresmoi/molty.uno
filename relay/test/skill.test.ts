@@ -1,101 +1,28 @@
-import { describe, expect, it } from "vitest";
-import { COMMANDS, MAX_ASK_LABEL, MOODS } from "../src/core/commands.js";
-import { FEATURES } from "../src/core/version.js";
-import { TOOLS } from "../src/surfaces/mcp.js";
-import { SKILL_PATHS, handleSkill, skillMarkdown } from "../src/surfaces/skill.js";
 import { readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+import { SKILL_PATHS, SKILL_URL, handleSkill } from "../src/surfaces/skill.js";
 
-describe("GET /skill.md", () => {
-  it("serves markdown at /skill.md and /skill with URLs built from the request origin", async () => {
+// The relay no longer serves the skill (skills/molty/ in the repo, the molty plugin).
+// Agents set up before that still fetch <relay>/skill.md: a permanent redirect keeps them working.
+describe("GET /skill.md (deprecated)", () => {
+  it("301s /skill.md and /skill to the raw SKILL.md on GitHub main", async () => {
     expect(SKILL_PATHS).toEqual(["/skill.md", "/skill"]);
+    expect(SKILL_URL).toBe("https://raw.githubusercontent.com/apresmoi/molty.uno/main/skills/molty/SKILL.md");
     for (const path of SKILL_PATHS) {
-      const res = handleSkill(new Request(`https://relay.example.dev${path}`));
-      expect(res.status).toBe(200);
-      expect(res.headers.get("content-type")).toMatch(/^text\/markdown/);
-      const md = await res.text();
-      expect(md).toContain("curl -sS -X POST https://relay.example.dev/v1/pair");
-      expect(md).toContain("https://relay.example.dev/v1/devices/molty-xxxxxxxxxx/cmd");
-      expect(md).toContain("https://relay.example.dev/v1/jobs/");
-      expect(md).toContain("claude mcp add --transport http molty https://relay.example.dev/mcp --header");
-      // No other origin leaks in (never hard-coded).
-      const origins = new Set(md.match(/https?:\/\/[a-z0-9.:-]+/gi));
-      expect([...origins]).toEqual(["https://relay.example.dev"]);
+      for (const method of ["GET", "HEAD"]) {
+        const res = handleSkill(new Request(`https://relay.example.dev${path}`, { method }));
+        expect(res.status).toBe(301);
+        expect(res.headers.get("location")).toBe(SKILL_URL);
+        expect(await res.text()).toBe("");
+      }
     }
+    // The skill file the redirect names exists in this repo.
+    expect(readFileSync(new URL("../../skills/molty/SKILL.md", import.meta.url), "utf8")).toMatch(/^---\nname: molty\n/);
     // worker.ts imports cloudflare:workers (not loadable here): check the route statically.
     expect(readFileSync(new URL("../src/worker.ts", import.meta.url), "utf8")).toMatch(/SKILL_PATHS\.includes\(url\.pathname\)\) return handleSkill\(request\)/);
-    const local = await handleSkill(new Request("http://127.0.0.1:8787/skill.md")).text();
-    expect(local).toContain("http://127.0.0.1:8787/v1/pair");
   });
 
-  it("documents every command, mood and MCP tool the code actually has", () => {
-    const md = skillMarkdown("https://r");
-    for (const c of COMMANDS) expect(md).toContain(`| \`${c}\` |`);
-    for (const m of MOODS) expect(md).toContain(m);
-    for (const t of TOOLS) expect(md).toContain(`\`${t.name}\``);
-    for (const fact of ["pair_id", "agent_token", "wait_s", "120 s", "Authorization: Bearer", "audio_busy", "secret"]) expect(md).toContain(fact);
-    // events: every receive mode, the signature contract, the honest limit, hold_s
-    for (const fact of ["https://r/v1/devices/<id>/events?wait_s=0..25", "https://r/v1/webhook", "Molty-Signature: t=<unix ms>,v2=<hex hmac_sha256(secret, t \\n METHOD \\n path?query \\n body)>", "molty events", "--exec", "{{event.data.<field>}}", "nothing can wake an agent", "hold_s"]) expect(md).toContain(fact);
-    for (const t of ["shake", "tap", "button", "answer", "utterance"]) expect(md).toContain(`| \`${t}\` |`);
-    // ask: the endpoint, the label limit stated from the constant, layouts, null answers, ask vs talk
-    for (const fact of ["https://r/v1/devices/molty-xxxxxxxxxx/ask", `1–${MAX_ASK_LABEL} characters each`, "one centred button", "pie slices", "`timeout`", "`cancelled`", "`offline`", "use **talk** when you"]) expect(md).toContain(fact);
-
-    // colours: the option object, every palette name, the defaults, meaningful use; ring_color on talk/listen
-    for (const fact of ['{"label": "yes", "color": "green"}', "green, red, amber, blue, violet, pink, cyan, white", '`"#rrggbb"`', "green, red, amber, blue, violet by position", "green yes, red no", '"ring_color"?: c', '"ring_color"?, "ack"?, "in_reply_to"?}']) expect(md).toContain(fact);
-    // the turn acknowledgement: the device does it, so agents answer straight away; long work still acks
-    for (const fact of ['"ack"?: true\\|false\\|"silent"', "Molty acknowledges the turn itself", "go straight to your answer", "Never leave the human in silence", '`"ack": false`', "30 s"]) expect(md).toContain(fact);
-    // updates: the trigger, the one call, ask-before-update, the error and the passive notice
-    for (const fact of ["When your human asks to check Molty for updates (any wording", "https://r/v1/devices/<id>/updates", "https://r/v1/devices/<id>/update", "**ask before updating**", "`firmware_too_old`", `needs ${FEATURES.ask.min_fw}`, "`firmware_update`", "`can_self_update`"]) expect(md).toContain(fact);
-  });
-
-  it("rejects non-GET and supports HEAD", async () => {
-    expect((await handleSkill(new Request("https://r/skill.md", { method: "POST" }))).status).toBe(405);
-    const head = await handleSkill(new Request("https://r/skill.md", { method: "HEAD" }));
-    expect(head.status).toBe(200);
-    expect(await head.text()).toBe("");
-  });
-});
-
-describe("skill v9 rules", () => {
-  const md = skillMarkdown("https://relay.example.dev");
-  it("capabilities come from relay.caps, not versions", () => {
-    expect(md).toMatch(/read `relay\.caps`, not version numbers/);
-    expect(md).toMatch(/`ask` in caps = `molty_ask` works/);
-  });
-  it("buttons mean one thing everywhere: acknowledge / dismiss, never an answer", () => {
-    expect(md).not.toMatch(/accept\/reject = yes\/no|accept = yes/i);
-    expect(md.match(/acknowledge \/ dismiss/g)!.length).toBeGreaterThanOrEqual(2);
-    expect(md).toMatch(/Not an answer to a question/);
-    const ev = TOOLS.find((t) => t.name === "molty_events")!;
-    expect(ev.description).toMatch(/never an answer/);
-  });
-  it("a broken listen is an error; after a wake, no_speech gets one short line or nothing", () => {
-    expect(md).toMatch(/A listen that broke is an error, never `no_speech`/);
-    expect(md).toMatch(/`listen_failed`/);
-    expect(md).toMatch(/After a wake, meet `no_speech` with one short line or nothing — never a burst/);
-    expect(md).toContain(`{"say":"I'm here.","listen":false}`);
-  });
-});
-
-describe("skill v11 rules: shake to talk, talking fast", () => {
-  const md = skillMarkdown("https://relay.example.dev");
-  it("a shake means the human wants to talk: answer the utterance, not the shake", () => {
-    expect(md).toContain('a shake means "I want to talk"');
-    expect(md).not.toContain("A shake or tap is a nudge, not a");
-    expect(md).toMatch(/\*\*don't react to it\*\*, the `utterance` follows/);
-    expect(md).toContain('`molty_talk {"say": "<your answer>", "in_reply_to": "<turn_id>"}`');
-    expect(md).toMatch(/nothing at all when nobody spoke/);
-  });
-  it("the first answer claims the turn; others get turn_claimed", () => {
-    expect(md).toMatch(/The first agent to answer a turn claims it/);
-    expect(md).toContain("`409 turn_claimed`");
-    expect(md).toContain("`timings.turn` `{id, reply, first_audio}`");
-  });
-  it("talking fast: payload first, fast model, short first sentence, warm session, caps", () => {
-    for (const fact of ["Act on the event payload directly", "no lock files", "fastest model for conversation", "say one short line first", "Short first sentence", "Keep a warm session", "Check `relay.caps`, not versions"]) expect(md).toContain(fact);
-  });
-  it("webhook placeholders nest and an utterance-only webhook carries everything", () => {
-    expect(md).toContain("{{event.data.ms.speech}}");
-    expect(md).toContain('"events":["utterance"]');
-    expect(md).toMatch(/never speak while the human talks/);
+  it("rejects other methods", () => {
+    expect(handleSkill(new Request("https://r/skill.md", { method: "POST" })).status).toBe(405);
   });
 });

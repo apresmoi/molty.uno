@@ -178,8 +178,11 @@ const canvasStats = (page) => page.evaluate(() => {
   await page.waitForURL(/#\/setup\/agent/);
   await page.locator('.msg pre', { hasText: 'molty-k7m2w9c4ya' }).waitFor();
   const msg = await page.locator('.msg pre').innerText();
-  const MSG = "Hi! Please connect yourself to my Molty.\n\nInstructions: https://molty-relay.example.workers.dev/skill.md\nDevice: molty-k7m2w9c4ya\nCode: K7QX2MPA\n\nI'll tap Molty to accept you.";
-  ok(msg === MSG, 'agent: the one message has real device id, code, https relay /skill.md');
+  // The mock device reports a private relay: the message names it; the skill comes from GitHub.
+  const MSG = "Hi! Please connect yourself to my Molty.\n\nSkill: https://github.com/apresmoi/molty.uno/tree/main/skills/molty\nDevice: molty-k7m2w9c4ya\nCode: K7QX2MPA\nRelay: https://molty-relay.example.workers.dev\n\nI'll tap Molty to accept you.";
+  ok(msg === MSG, 'agent: the one message has the skill on GitHub, real device id, code, and the (private) relay');
+  ok(await page.getByLabel('Claude Code install command').innerText() === 'claude plugin marketplace add apresmoi/molty.uno && claude plugin install molty@molty', 'agent: Claude Code plugin install line');
+  ok(await page.getByLabel('Codex install command').innerText() === 'codex plugin marketplace add apresmoi/molty.uno && codex plugin add molty@molty', 'agent: Codex plugin install line');
   ok((await bubble(page)).startsWith('Who will be my brain?'), 'agent: bubble');
   await page.getByRole('button', { name: 'Copy message' }).click();
   ok(await page.evaluate(() => navigator.clipboard.readText()) === MSG, 'agent: Copy message → clipboard has the message');
@@ -197,7 +200,7 @@ const canvasStats = (page) => page.evaluate(() => {
   await page.getByRole('button', { name: 'Save' }).click();
   await page.locator('.adv-msg', { hasText: 'Saved' }).waitFor();
   ok((await mockLog()).some((l) => l.path === '/api/link' && JSON.parse(l.body).relay_url === 'wss://relay.example.org'), 'agent: relay POSTed as ws origin');
-  ok((await page.locator('.msg pre').innerText()).includes('https://relay.example.org/skill.md'), 'agent: message follows the new relay');
+  ok((await page.locator('.msg pre').innerText()).includes('\nRelay: https://relay.example.org\n'), 'agent: message follows the new relay');
   await noOverflow(page, 'agent advanced');
   await shot(page, '05-agent-advanced');
 

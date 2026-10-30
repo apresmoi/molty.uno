@@ -1,4 +1,4 @@
-// "Check Molty for updates": molty_updates (skill + firmware + actions), the
+// "Check Molty for updates": molty_updates (api_version + firmware + actions), the
 // firmware_too_old gate on molty_ask, molty_update as a storage-driven job settled
 // by the device's next hello, and the one-time firmware_update ride-along notice.
 import { describe, expect, it } from "vitest";
@@ -6,7 +6,7 @@ import type { RelayBackend } from "../src/core/api.js";
 import type { ReleaseInfo, ReleaseLookup, ReleaseSource } from "../src/core/releases.js";
 import type { DeviceRoom } from "../src/core/room.js";
 import { MemoryKV } from "../src/core/store.js";
-import { FEATURES, SKILL_VERSION, WHATS_NEW } from "../src/core/version.js";
+import { API_VERSION, FEATURES } from "../src/core/version.js";
 import { handleMcp } from "../src/surfaces/mcp.js";
 import { handleRest } from "../src/surfaces/rest.js";
 import { DEVICE, FakeHost, type FakeSocket, KEY, LINK, connect, flush, makeRoom } from "./helpers.js";
@@ -61,7 +61,6 @@ async function setup(opts: { fw?: string; caps?: string[]; board?: string | null
   const kv = opts.kv ?? new MemoryKV();
   const host = new FakeHost();
   const ctx = makeRoom({ kv, host, releases, timings: { ...FAST, ...opts.timings } });
-  await ctx.room.noteOrigin("https://relay.test");
   const hello = { fw: opts.fw ?? "0.1.0", caps: opts.caps ?? ["say", "listen"], ...(opts.board === null ? {} : { board: opts.board ?? B146 }) };
   const sock = await connect(ctx.room, host, KEY, LINK, hello);
   const dev = device(ctx.room, sock);
@@ -105,14 +104,15 @@ const rest = async (b: RelayBackend, token: string, path: string, init: RequestI
 };
 
 describe("molty_updates", () => {
-  it("skill behind + firmware behind (no self-update): what's new, the update, needed_for, plain actions; marks the skill seen", async () => {
+  it("firmware behind (no self-update): api_version, the update, needed_for, plain actions; nothing about a skill", async () => {
     const w = await setup();
+    // A token minted while the relay still tracked skill versions: the legacy field changes nothing.
     await w.kv.put([...(await w.kv.list("tok:")).keys()][0], { ...(await w.tokRec()), skill_seen: 3 });
     const out = await w.room.updates(w.token);
     expect(out.ok).toBe(true);
     const r = (out as any).result;
-    expect(r.skill).toEqual({ yours: 3, latest: SKILL_VERSION, whats_new: WHATS_NEW.filter((e) => e.version > 3).map((e) => ({ ...e })), url: "https://relay.test/skill.md" });
-    expect(r.skill.whats_new.find((e: any) => e.version === 4).min_fw).toBe(FEATURES.ask.min_fw);
+    expect(Object.keys(r).sort()).toEqual(["actions", "api_version", "firmware"]);
+    expect(r.api_version).toBe(API_VERSION);
     expect(r.firmware).toEqual({
       current: "0.1.0",
       board: B146,
@@ -129,23 +129,20 @@ describe("molty_updates", () => {
       can_self_update: false,
       release_check: "fresh",
     });
-    expect(r.actions[0]).toMatch(/^Re-read https:\/\/relay\.test\/skill\.md .*v3.*plain words/);
-    expect(r.actions[1]).toMatch(/0\.2\.0 is out .*can't update itself.*console/);
+    expect(r.actions[0]).toMatch(/0\.2\.0 is out .*can't update itself.*console/);
+    expect(r.actions.join("\n")).not.toMatch(/skill|re-read/i);
     expect(r.actions.join("\n")).toMatch(/molty_ask .* needs firmware 0\.2\.0: mention that updating unlocks it/);
-    // seen: no duplicate skill notice / firmware notice on this result, none later, and the next check says current
-    expect((out as any).notice).toBeUndefined();
+    // seen: no duplicate firmware notice on this result, and nothing skill-shaped rides along
     expect((out as any).fw_notice).toBeUndefined();
-    expect(await w.tokRec()).toMatchObject({ skill_seen: SKILL_VERSION, fw_seen: "0.2.0" });
-    const again = (await w.room.updates(w.token)) as any;
-    expect(again.result.skill).toMatchObject({ yours: SKILL_VERSION, whats_new: [] });
-    expect(again.result.actions[0]).toMatch(/skill is current/);
+    expect(out).not.toHaveProperty("notice");
+    expect(await w.tokRec()).toMatchObject({ skill_seen: 3, fw_seen: "0.2.0" });
   });
 
   it("firmware current / no release / unknown version / release list unreachable / self-update capable", async () => {
     const cur = await setup({ fw: "0.2.0", caps: ["say", "listen", "ask", "update"] });
     const c = ((await cur.room.updates(cur.token)) as any).result;
     expect(c.firmware).toMatchObject({ status: "current", update_available: false, needed_for: [], can_self_update: true });
-    expect(c.actions[1]).toMatch(/0\.2\.0 is the latest/);
+    expect(c.actions[0]).toMatch(/0\.2\.0 is the latest/);
 
     const none = await setup({ release: null });
     const n = ((await none.room.updates(none.token)) as any).result;
@@ -157,17 +154,17 @@ describe("molty_updates", () => {
     const dev = await setup({ fw: "test-fw" });
     const d = ((await dev.room.updates(dev.token)) as any).result;
     expect(d.firmware).toMatchObject({ status: "unknown", current: "test-fw", needed_for: [], update_available: false });
-    expect(d.actions[1]).toMatch(/development build/);
+    expect(d.actions[0]).toMatch(/development build/);
 
     const down = await setup({ release: null, state: "unavailable" });
     const u = ((await down.room.updates(down.token)) as any).result;
     expect(u.firmware).toMatchObject({ status: "unknown", release_check: "unavailable" });
-    expect(u.actions[1]).toMatch(/Couldn't reach the release list/);
+    expect(u.actions[0]).toMatch(/Couldn't reach the release list/);
 
     const self = await setup({ caps: ["say", "listen", "update"] });
     const s = ((await self.room.updates(self.token)) as any).result;
     expect(s.firmware.can_self_update).toBe(true);
-    expect(s.actions[1]).toMatch(/Ask your human: .*Update now\?.*molty_update/);
+    expect(s.actions[0]).toMatch(/Ask your human: .*Update now\?.*molty_update/);
 
     const other = await setup({ release: release("0.2.0", { boards: ["some-other-board"] }) });
     expect(((await other.room.updates(other.token)) as any).result.firmware).toMatchObject({ status: "no_build_for_board", update_available: false });
@@ -185,7 +182,7 @@ describe("molty_updates", () => {
     const w = await setup();
     const r = await rest(w.backend, w.token, `/v1/devices/${DEVICE}/updates`);
     expect(r.status).toBe(200);
-    expect(r.body).toMatchObject({ ok: true, result: { skill: { latest: SKILL_VERSION }, firmware: { status: "update_available" }, actions: expect.any(Array) } });
+    expect(r.body).toMatchObject({ ok: true, result: { api_version: API_VERSION, firmware: { status: "update_available" }, actions: expect.any(Array) } });
     expect((await rest(w.backend, w.token, `/v1/devices/${DEVICE}/updates`, { method: "POST" })).status).toBe(405);
     expect((await rest(w.backend, "nope", `/v1/devices/${DEVICE}/updates`)).status).toBe(401);
     const m = await mcp(w.backend, w.token, "molty_updates");

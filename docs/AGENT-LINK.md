@@ -50,16 +50,17 @@ Molty (home Wi-Fi) ──outbound WSS──▶ molty-relay (Cloudflare Worker + 
    ```
    Hi! Please connect yourself to my Molty.
 
-   Instructions: <relay https origin>/skill.md
+   Skill: https://github.com/apresmoi/molty.uno/tree/main/skills/molty
    Device: molty-xxxxxxxxxx
    Code: K7M2W9C4
+   Relay: https://<relay>        (only when the device uses a relay other than the default)
 
    I'll tap Molty to accept you.
    ```
-   `GET <relay>/skill.md` (also `/skill`, `text/markdown`) is the agent-facing guide: what
-   Molty is, pairing over plain HTTPS, the REST command table, the optional MCP route,
-   etiquette. All URLs in it are built from the request origin
-   (`relay/src/surfaces/skill.ts`).
+   The agent-facing guide is the [agent skill](#agent-skill-and-api_version) (`skills/molty/`):
+   what Molty is, pairing over plain HTTPS, the REST and MCP surfaces, events, latency and
+   etiquette. Claude Code and Codex install it as the `molty` plugin; the console shows both
+   install lines above the message.
 2. The agent calls `POST /v1/pair {device_id, link_code, agent_name}` (or the `molty_pair` MCP
    tool, which is the only tool usable without a token). The request long-polls ≤ 120 s.
 3. Relay → device: `pair.request {req, agent_name, code}` where `code` is 4 digits.
@@ -69,7 +70,7 @@ Molty (home Wi-Fi) ──outbound WSS──▶ molty-relay (Cloudflare Worker + 
    (~1 Hz) and advances on `pair` / `last_pair`.
 5. Device → relay: `pair.result {req, ok}`; failures include `reason:"timeout"` or
    `reason:"rejected"`. On ok the relay mints `agent_token` and returns it to the waiting
-   request: `{agent_token, device_id}`. Device rotates `link_code` and reports the new code
+   request: `{agent_token, device_id, api_version}`. Device rotates `link_code` and reports the new code
    on the same connection. Successful `pair.result` also carries the new `link_code`,
    allowing the relay to replace the old code within its approval transaction.
 
@@ -424,14 +425,14 @@ What the screen does between commands (`firmware/main/fluid/fluid_director.h`):
 
 | name | args | result | notes |
 |---|---|---|---|
-| `status` | — | fw, uptime, creature, state, mood, fps, rssi | relay adds `relay` {online, board, caps, ...} |
+| `status` | — | fw, uptime, creature, state, mood, fps, rssi | relay adds `relay` {api_version, online, board, caps, voice, ...} |
 | `state` | `{state, ...}` | creature state JSON | passthrough to `/api/creature/state` semantics |
 | `mood` | `{mood, hold_s?}` | — | idle listening thinking speaking happy sleepy surprised; `hold_s` 0..3600 (0 = until the next mood; default: happy/surprised revert, the rest persist) |
 | `show` | `{text, wpm?}` | — | speed reader in the fluid; back to the creature 1.5 s after the last word |
 | `say` | `{text, voice?, in_reply_to?}` | `{job}` immediately | relay does TTS (streamed per sentence) + streams; device sets `speaking`, shows text in sync. Job result `{ms, text, timings}`. `unsupported` without a speaker; `in_reply_to` / `turn_claimed`: [Shake to talk](#shake-to-talk) |
 | `listen` | `{ms? 0..30000 (0 = unlimited; omit = the device's setting, 30000 out of the box), end_silence_ms?, no_speech_ms?, vad?, ring_color?}` | `{job}` immediately | device sets `listening`, streams mic, stops at end of speech ([Listen end of speech](#listen-end-of-speech-device-vad)); relay STT → job result `{text, duration_ms, peak, rms, reason, speech_ms?, timings}`. `unsupported` without a mic |
 | `talk` (relay) | `{say?, listen?=true, listen_ms? 0..30000 (as listen's ms), voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?}` | blocks ≤ 24 s | say then listen in one job: `{job, status:"done", heard, said?, reason, speech_ms?, ms:{tts_first_audio, speech, listen, stt, total}, timings}`; over 24 s `{job, status:"pending"}` |
-| `updates` (relay) | — | `{skill, firmware, actions}` | "check Molty for updates": [Firmware updates](#firmware-updates) |
+| `updates` (relay) | — | `{api_version, firmware, actions}` | "check Molty for updates": [Firmware updates](#firmware-updates) |
 | `update` (relay → device) | — (agent) · `{job, version, url, sha256, size, timeout_ms}` (device) | job | install the latest release after an on-screen confirm; `unsupported` without the `update` cap |
 | `ask` (relay) | `{say?, options: 1..5 items — a label of 1..8 printable ASCII (unique, case-insensitive) or {label, color?}, timeout_s? 1..120 =30, voice?}` | blocks ≤ 24 s | say, then device `ask`, then the tap: `{job, status:"done", answer: label\|null, index: int\|null, reason?: "timeout"\|"cancelled"\|"offline", said?, ms:{tts_first_audio?, speech?, answer, total}, timings:{queue, say?, ask:{cmd, wait}, total}}`; over 24 s `{job, status:"pending"}` (finish with `molty_wait`). Holds the audio lock only while speaking. `unsupported` without `ask` in caps (no touch) or, with `say`, without a speaker |
 | `volume` | `{volume 0..21}` | — | `unsupported` without a speaker |
@@ -497,8 +498,8 @@ constants: `firmware/main/sense/gesture.h`.
 - **REST** `POST /v1/devices/<id>/cmd {name,args,wait?}`, `POST /v1/devices/<id>/talk`, `POST /v1/devices/<id>/ask`, `GET /v1/jobs/<job>`,
   `GET /v1/devices/<id>/events`, `GET|PUT|DELETE /v1/webhook`, `GET /v1/devices/<id>/updates`,
   `POST /v1/devices/<id>/update`, `GET /v1/activity`, same bearer. `GET /v1/releases/latest?board=` needs none (public).
-- **Skill page** `GET /skill.md` (and `/skill`), no auth: the agent's self-setup guide (see
-  Pairing flow step 1). Kept in sync with `commands.ts`/MCP tools by `test/skill.test.ts`.
+- **`GET /skill.md`** (and `/skill`), no auth: **deprecated**, a `301` to the skill's raw
+  `SKILL.md` on GitHub for agents set up before the plugin ([Agent skill](#agent-skill-and-api_version)).
 - **CLI** `molty --relay <url> --token <t> ...`, or `molty pair` once and the saved link (see [CLI.md](CLI.md)).
 
 ## REST envelopes
@@ -508,14 +509,14 @@ bearer is `agent_token` = `<device_id>.<base64url(32 bytes)>`; the prefix only r
 
 | Call | Success | Failure |
 |---|---|---|
-| `POST /v1/pair {device_id, link_code, agent_name, role?}` (no token; long-polls ≤ 120 s; `role:"voice"` pairs a [voice box](#voice-box)) | `200 {ok:true, agent_token, device_id, agent_name, code}` (+ `role:"voice"` for a box) | `{ok:false, error}`: `bad_link_code` 403, `rejected` 403, `timeout` 408, `device_offline` / `pair_busy` 409 |
+| `POST /v1/pair {device_id, link_code, agent_name, role?}` (no token; long-polls ≤ 120 s; `role:"voice"` pairs a [voice box](#voice-box)) | `200 {ok:true, agent_token, device_id, agent_name, code, api_version}` (+ `role:"voice"` for a box) | `{ok:false, error}`: `bad_link_code` 403, `rejected` 403, `timeout` 408, `device_offline` / `pair_busy` 409 |
 | same with `wait_s` < 120, or `{device_id, pair_id}` to resume | `202 {ok:true, status:"pending", pair_id, code, expires_in_s}` while undecided | as above |
 | `POST /v1/devices/<id>/cmd {name, args}` | `200 {ok:true, result:{...}}`; `say`/`listen` → `{ok:true, result:{job}}` | `{ok:false, error:"code"}`: 401 bad/missing bearer, 400 `invalid_args`/`unknown_command`, 409 `device_offline`/`turn_claimed` (`say`)/`audio_busy`/`unsupported`, 504 `device_timeout`, 502 device-reported codes |
-| same with `wait:true` (say/listen) | `200 {ok:true, result:{job, status:"done", ...job result}}`; still running after 24 s: `202 {ok:true, result:{job, status:"pending", state}}` | as above; a failed job → its error, still carrying the `events` / `skill_update` the call already consumed |
+| same with `wait:true` (say/listen) | `200 {ok:true, result:{job, status:"done", ...job result}}`; still running after 24 s: `202 {ok:true, result:{job, status:"pending", state}}` | as above; a failed job → its error, still carrying the `events` / `firmware_update` the call already consumed |
 | `POST /v1/devices/<id>/talk {say?, listen?, listen_ms?, voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?, ack?, in_reply_to?}` | `200 {ok:true, result:{job, status:"done", heard, said?, reason, speech_ms?, ms, timings}}` (`timings.turn` when it answered a turn); `202` pending as above | 400 `invalid_args`, 401, 409 `turn_claimed` (another agent answers this human turn, [Shake to talk](#shake-to-talk))/`audio_busy`/`unsupported`/`device_offline`, 504 `playback_timeout` (no `say.done`), job errors |
 | `POST /v1/devices/<id>/ask {say?, options, timeout_s?, voice?}` | `200 {ok:true, result:{job, status:"done", answer, index, reason?, said?, ms, timings}}` (a timeout / cancelled / offline ask is `200` with `answer:null`); `202` pending as above | 400 `invalid_args` (with the reason, e.g. a label over 8 chars), 401, 409 `audio_busy` (with `say`)/`unsupported`/`device_offline`, 504 `playback_timeout`, device-reported codes |
 | `GET /v1/jobs/<job>[?wait_s=0..8]` | `200 {job, kind:"say"\|"listen"\|"talk"\|"ask"\|"update", status:"queued"\|"running"\|"done"\|"failed", phase?, result?, error?, detail?}`; say done `{ms, text, timings}`, listen done `{text, duration_ms, peak, rms, reason, speech_ms?, timings}`, talk / ask done as `/talk` / `/ask`, update as below | 401, 404 `not_found` |
-| `GET /v1/devices/<id>/updates` | `200 {ok:true, result:{skill, firmware, actions}}` ([Firmware updates](#firmware-updates)) | 401 |
+| `GET /v1/devices/<id>/updates` | `200 {ok:true, result:{api_version, firmware, actions}}` ([Firmware updates](#firmware-updates)) | 401 |
 | `POST /v1/devices/<id>/update {}` | `200 {ok:true, result:{status:"up_to_date", current, latest}}`; a job: `200 {ok:true, result:{job, status:"done", outcome:"updated", from, to}}` or `{…, outcome:"declined", reason?}`, `202 {ok:true, result:{job, status:"pending", phase, hint}}` | 400 `invalid_args` (any argument), 401, 409 `unsupported` (+ `current, latest, how`) / `device_offline` / `no_build` / `no_checksum` / `unknown_version`, 503 `release_unavailable`, job errors `update_failed` / `rolled_back` / `update_timeout` (with `message`) |
 | `GET /v1/releases/latest[?board=<board>]` (no token) | `200 {ok:true, release_check, latest:null\|{version, tag, prerelease, published_at, notes_url, notes}, board:null\|{name, ota:{url, size, sha256}}, features:[{feature, cap, needs}]}`, CORS `*`, `cache-control: public, max-age=300` | 400 bad board, 429 rate limited |
 | `DELETE /v1/token` | `200 {ok:true, result:{revoked:true}}` | 401 |
@@ -567,12 +568,12 @@ mode suits that agent.
 ```
 device evt ──WSS──▶ DeviceRoom.onEvt
                      ├─ allow-list + shape check (shake, tap, button, answer; rest stays internal)
-                     │    (+ relay-generated: utterance, skill.updated)
+                     │    (+ relay-generated: utterance)
                      ├─ cap 30/min/device (excess dropped, counted)
                      └─ ev:<seq> ring (200 / 24 h, DO storage)
                           │  one read cursor per agent token (cur:<token hash>)
                           ├─▶ ride-along: unread `events` on every authenticated response
-                          │      (+ one-time `skill_update`, see "Skill versions")
+                          │      (+ one-time `firmware_update`, see "Firmware updates")
                           ├─▶ pull: GET /v1/devices/<id>/events · molty_events (long-poll)
                           │      └─▶ `molty events [--exec cmd]` (CLI, JSON lines)
                           └─▶ webhook: whq:<token hash>:<seq> ─DO alarm─▶ agent-defined HTTPS request
@@ -769,35 +770,33 @@ def verify_molty(secret: str, header: str | None, method: str, target: str, body
     return hmac.compare_digest(mac, v2)
 ```
 
-### Skill versions and the update notice
+### Agent skill and api_version
 
-Agents learn that `/skill.md` changed without any push channel, by the same ride-along rule
-as events.
+The relay is just a relay: it does not serve, version or announce the agent skill.
 
-- **One source of truth:** `WHATS_NEW` in `relay/src/core/version.ts` (ordered; the last
-  entry's version is `SKILL_VERSION`, now **9**: Molty acknowledges the end of a turn itself
-  ([Turn acknowledgement](#turn-acknowledgement)) — agents go straight to their answer; v8 automatic
-  end of turn; v7 listen windows up to 30 s / unlimited; v6 colours on `molty_ask` options and `ring_color` on listen/talk
-  ([Colours](#commands-v0)); v5 was `molty_updates` / `molty_update` / `firmware_too_old`
-  ([Firmware updates](#firmware-updates)); v4 was `molty_ask` (a question answered with a tap); v3 was `molty_talk`, streamed speech, automatic moods, `wait:true`; v2 was device events shake/tap/button, inbox, `molty_events`, webhooks,
-  `molty events` CLI, mood `hold_s`). skill.md's header ("Skill v9 — what's new: …"), the MCP `instructions` and `serverInfo.title` derive from it;
-  a test fails if they disagree.
-- **Per token:** `skill_seen` on the token record. Newly paired tokens start current; a
-  token without it (paired before versions existed) counts as v1.
-- **Notice:** the next **successful** authenticated response of an agent behind
-  `SKILL_VERSION` carries it once — REST: additive top-level
-  `skill_update: {version, whats_new: ["v2: …"], url: "<relay>/skill.md"}`; MCP: the same
-  `skill_update` in `structuredContent` plus a text item `Molty's skill was updated (v2: …).
-  Re-read <relay>/skill.md.` Error responses carry nothing and consume nothing. The write
-  is one atomic `KV.update` on the current token record: two concurrent calls cannot both
-  get it, and a token revoked mid-call is never recreated. Fetching skill.md marks nothing.
-- **Inbox event:** once per device room and version (`skillev`), on the first device
-  hello or authenticated call after a deploy, if some paired agent is behind, the relay
-  appends `{"type":"skill.updated","data":{version, whats_new, url}}` to the inbox
-  (not rate-limited). Older agents read it like any event; it is queued to webhooks
-  **without** an `events` filter whose agent is behind. Agents dedupe by `id`. `url` is
-  absolute once the device has connected through this relay (`origin` key), else
-  `/skill.md`.
+- **One skill, in the repo:** `skills/molty/` — a short `SKILL.md` core plus `references/`
+  (API, events, talking fast, etiquette, voice, voice box, updates, activity, self-hosting,
+  per-harness setups) and shell helpers in `scripts/`. `scripts/check-skill.mjs` (run by
+  `make hygiene`) checks it against the code: every command, mood and MCP tool documented, the
+  links, no hard-coded relay host, the manifests.
+- **Distributed only through the git plugin marketplaces.** The repo root is the plugin
+  (`.claude-plugin/{marketplace,plugin}.json`, `.codex-plugin/plugin.json`,
+  `.agents/plugins/marketplace.json`; Codex only finds skills under `<plugin root>/skills/`):
+  `claude plugin marketplace add apresmoi/molty.uno && claude plugin install molty@molty`,
+  `codex plugin marketplace add apresmoi/molty.uno && codex plugin add molty@molty`. The
+  manifests carry no `version`, so an update follows the repo's commits. Agents without a plugin
+  system read it on GitHub.
+- **`api_version`** (`API_VERSION` in `relay/src/core/version.ts`, an integer, now **1**): the
+  agent API contract, bumped only when an agent built for the previous one would break or miss
+  something it must handle. Stated in the pair result, `status` → `relay.api_version`,
+  `GET /v1/health`, `molty_updates` and the MCP `serverInfo.title` / `instructions`. The skill
+  names the `api_version` it targets; an agent that sees a higher one asks its human to update the
+  plugin. What a given Molty can do stays `relay.caps`.
+- **Backward compatibility:** `GET /skill.md` (and `/skill`) answers `301` to
+  `https://raw.githubusercontent.com/apresmoi/molty.uno/main/skills/molty/SKILL.md`
+  (deprecated). The former skill-version machinery is gone: no `skill_update` ride-along, no
+  `skill.updated` event, `molty_updates` has no `skill` block. Tokens and rooms from before keep
+  their stale `skill_seen` / `skillev` / `origin` values; nothing reads them.
 
 ### Firmware updates
 
@@ -827,27 +826,26 @@ none). Only these URLs ever reach the device — `molty_update` takes no argumen
 
 **Feature → minimum firmware.** `FEATURES` in `relay/src/core/version.ts` is the one place:
 `ask` → `molty_ask`, `update` → `molty_update`, both `NEXT_FW` = **0.2.0** (the next release).
-WHATS_NEW entries name it as `min_fw`.
 
 **`molty_updates`** (REST `GET /v1/devices/<id>/updates`), ride-alongs included:
 
 ```
-{"skill":   {"yours": 4, "latest": 5, "whats_new": [{"version":5, "text":"…", "min_fw"?:"0.2.0"}], "url": "<relay>/skill.md"},
+{"api_version": 1,
  "firmware":{"current":"0.1.0", "board":"…", "online":true, "latest":"0.2.0"|null,
              "status":"current"|"update_available"|"no_build_for_board"|"no_release"|"unknown",
              "update_available":true, "published_at":"…", "notes_url":"…",
              "needed_for":[{"feature":"molty_ask", "what":"…", "needs":"0.2.0", "released":true}],
              "can_self_update":false, "release_check":"fresh"|"stale"|"unavailable"},
- "actions": ["Re-read <relay>/skill.md now …", "Tell your human Molty firmware 0.2.0 is out …"]}
+ "actions": ["Tell your human Molty firmware 0.2.0 is out …"]}
 ```
 
-It marks the skill (and the reported release) as seen for the calling token. `status` is
+It marks the reported release as seen for the calling token. `status` is
 `unknown` when the device reports a non-release version (`dev`, a local build) or the release
 list was never reachable. Offline devices are answered from their last hello (`online:false`).
 `molty_status` carries the same block as `relay.firmware`.
 
-**Passive notice.** Once per token per newer release (`fw_seen` on the token, atomic like the
-skill notice), the next successful authenticated response carries `firmware_update:
+**Passive notice.** Once per token per newer release (`fw_seen` on the token, written
+atomically on the current token record, never resurrecting a revoked one), the next successful authenticated response carries `firmware_update:
 {current, latest, board, notes_url, can_self_update, how}` (MCP: plus the line "Molty firmware
 X is out (Molty runs Y). …"). It never waits on GitHub (cached answer only).
 
@@ -907,7 +905,8 @@ image and uploads a chosen file to `POST /api/ota`.
 
 ### Example setups by agent kind
 
-These are examples, not rules; skill.md deliberately lets each agent choose.
+These are examples, not rules; the skill deliberately lets each agent choose (its
+`references/harnesses/` spell these out per harness).
 
 - **Shell-capable, long-running (Claude Code, Codex CLI, local OpenClaw).** Run the CLI as
   a background process and treat each output line as a wake-up.
@@ -1148,12 +1147,13 @@ few). Soft resets (panic, watchdog, OTA restart) are covered by the no-init RAM 
 
 Each component has exactly one default relay URL, all set to the same value
 (`molty-relay.alicenet.workers.dev`, the project's hosted relay). Change it in these
-three places to point a build at your own relay (see `relay/README.md` to deploy one):
+places to point a build at your own relay (see `relay/README.md` to deploy one):
 
 | Component | Where | Used when |
 |---|---|---|
 | firmware | `CONFIG_MOLTY_DEFAULT_RELAY` in `firmware/main/Kconfig.projbuild` (`wss://…`) | no relay URL saved in NVS (`POST /api/link {relay_url}` overrides) |
-| console | `DEFAULT_RELAY` in `console/src/ui/agent-link.ts` (`https://…`) | the device has not reported a `relay_url` yet |
+| console | `DEFAULT_RELAY` in `console/src/agents/agents.ts` (`https://…`) | the device has not reported a `relay_url` yet; the setup message names the relay only when it differs |
+| skill | `MOLTY_DEFAULT_RELAY` in `skills/molty/scripts/_config.sh` (and `watch.py`, `SKILL.md`) | `MOLTY_RELAY` is unset (env or `~/.config/molty/env`) |
 | CLI | `DefaultRelay` in `cli/internal/molty/link.go` (`https://…`) | `molty pair` without `--relay` / `MOLTY_RELAY` |
 
 The website's waitlist form posts to the same hosted relay (`WAITLIST_URL` in

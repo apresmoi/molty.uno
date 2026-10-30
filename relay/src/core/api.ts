@@ -3,7 +3,6 @@
 
 import type { AgentEvent } from "./events.js";
 import type { JsonObject } from "./protocol.js";
-import type { SkillNotice } from "./version.js";
 
 export type ErrorCode =
   | "unauthorized"
@@ -49,15 +48,13 @@ export interface FirmwareNotice {
 }
 
 /**
- * `notice`: a one-time "the skill changed" notice riding along on a successful
- * authenticated outcome (already marked seen); `fw_notice` likewise for a new
- * firmware release. Surfaces render both additively. A failure's `details` are
+ * `fw_notice`: a one-time "newer firmware released" notice riding along on a
+ * successful authenticated outcome (already marked seen). Surfaces render it additively. A failure's `details` are
  * extra structured fields of that error (e.g. firmware_too_old {current, needed,
  * latest, how}), rendered next to `error`.
  */
 export type Outcome<T = JsonObject> = ({ ok: true; result: T } | { ok: false; error: ErrorCode; message?: string; details?: JsonObject }) & {
   inbox?: Inbox;
-  notice?: SkillNotice;
   fw_notice?: FirmwareNotice;
 };
 
@@ -101,7 +98,7 @@ export interface PairRequest {
 }
 
 export type PairResult =
-  | { status: "approved"; agent_token: string; device_id: string; agent_name: string; code: string; role?: "voice" }
+  | { status: "approved"; agent_token: string; device_id: string; agent_name: string; code: string; api_version: number; role?: "voice" }
   | { status: "pending"; pair_id: string; code: string; expires_in_s: number };
 
 export interface AgentApi {
@@ -129,9 +126,8 @@ export interface AgentApi {
    */
   ask(token: string, req: unknown): Promise<Outcome>;
   /**
-   * "Check Molty for updates": `{skill:{yours, latest, whats_new, url}, firmware:
-   * FirmwareBlock, actions:[…]}` (core/updates.ts). Marks the skill (and the
-   * reported firmware release) as seen for this token.
+   * "Check Molty for updates": `{api_version, firmware: FirmwareBlock, actions:[…]}`
+   * (core/updates.ts). Marks the reported firmware release as seen for this token.
    */
   updates(token: string): Promise<Outcome>;
   /**

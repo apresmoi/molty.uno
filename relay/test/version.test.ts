@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { RELAY_VERSION, healthResponse } from "../src/core/version.js";
+import { API_VERSION, RELAY_VERSION, healthResponse } from "../src/core/version.js";
 import { SERVER_INFO } from "../src/surfaces/mcp.js";
 
 const VERSION = readFileSync(new URL("../../VERSION", import.meta.url), "utf8").trim();
@@ -12,7 +12,7 @@ describe("version", () => {
     expect(SERVER_INFO.version).toBe(VERSION);
     const res = healthResponse();
     expect(res.headers.get("x-molty-version")).toBe(VERSION);
-    expect(await res.json()).toEqual({ ok: true, service: "molty-relay", version: VERSION });
+    expect(await res.json()).toEqual({ ok: true, service: "molty-relay", version: VERSION, api_version: API_VERSION });
   });
   it("routes /v1/health before the REST surface swallows /v1/*", () => {
     // worker.ts imports cloudflare:workers (not loadable here): check the route statically.

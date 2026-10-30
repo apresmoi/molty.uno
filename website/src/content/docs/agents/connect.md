@@ -10,7 +10,7 @@ The setup console (and its Agent page) gives you a message like this:
 ```
 Hi! Please connect yourself to my Molty.
 
-Instructions: https://<relay>/skill.md
+Skill: https://github.com/apresmoi/molty.uno/tree/main/skills/molty
 Device: molty-xxxxxxxxxx
 Code: K7M2W9C4
 
@@ -18,8 +18,21 @@ I'll tap Molty to accept you.
 ```
 
 Paste it into Claude, Grok, OpenClaw, or any agent that can make HTTPS requests. The
-`skill.md` link is the agent's own guide: it explains what Molty is, how to pair, and
-every command.
+skill is the agent's own guide: it explains what Molty is, how to pair, and every command.
+A Molty on a private relay adds a `Relay:` line.
+
+**Claude Code or Codex?** Install the skill once as a plugin from the git marketplace, then
+paste the message:
+
+```sh
+claude plugin marketplace add apresmoi/molty.uno
+claude plugin install molty@molty
+```
+
+```sh
+codex plugin marketplace add apresmoi/molty.uno
+codex plugin add molty@molty
+```
 
 ## Tap to accept
 

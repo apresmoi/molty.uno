@@ -1,17 +1,15 @@
 // The "give Molty a brain" panel, shared by setup step 3 and the settings Agent page:
-// ONE message + ONE big copy button, and a collapsed Advanced (ids, editable relay,
-// CLI pair command, MCP fallback). Rendering only — the caller polls GET /api/link and
+// ONE message + ONE big copy button, the two plugin install lines (Claude Code, Codex:
+// the skill ships only through the git marketplaces), and a collapsed Advanced (ids,
+// editable relay, CLI pair command, MCP fallback). Rendering only — the caller polls GET /api/link and
 // feeds update().
 import { relayHttp, relayWs, type DeviceApi } from '../api/device';
 import type { LinkInfo } from '../api/types';
-import { agentMessage, mcpUrl, pairCommand, type LinkContext } from '../agents/agents';
+import { DEFAULT_RELAY, PLUGIN_INSTALL, agentMessage, mcpUrl, pairCommand, type LinkContext } from '../agents/agents';
 import { copyButton, copyText, h, mount } from './dom';
 import { errText } from './fmt';
 
-// The console's default relay (shown until the device reports its own relay_url).
-// Same value as the firmware's CONFIG_MOLTY_DEFAULT_RELAY and the CLI's DefaultRelay —
-// see docs/AGENT-LINK.md "Default relay".
-export const DEFAULT_RELAY = 'https://molty-relay.alicenet.workers.dev';
+export { DEFAULT_RELAY };
 
 export function linkContext(l: LinkInfo | null): LinkContext {
   return { relay: relayHttp(l?.relay_url || '') || DEFAULT_RELAY, deviceId: l?.device_id || 'molty-…', linkCode: l?.link_code || '…' };
@@ -27,7 +25,16 @@ export function linkPanel(api: DeviceApi, onLink: (l: LinkInfo) => void = () => 
     await copyText(agentMessage(linkContext(link)));
     copy.textContent = 'Copied ✓'; copy.classList.add('done');
   });
-  const box = h('div', { class: 'msg' }, pre, copy);
+  // Claude Code / Codex: install the skill first (once per machine), then paste the message.
+  const install = (who: string, line: string) => {
+    const code = h('code', { 'aria-label': `${who} install command` }, line);
+    return h('div', { class: 'copy' }, code, copyButton(() => line, 'Copy', 'Copied', 'pill'));
+  };
+  const plugin = h('div', { class: 'plugin' },
+    h('p', { class: 'adv-note' }, 'Claude Code or Codex? Install the Molty skill once, then paste the message:'),
+    install('Claude Code', PLUGIN_INSTALL.claude),
+    install('Codex', PLUGIN_INSTALL.codex));
+  const box = h('div', { class: 'msg' }, pre, copy, plugin);
 
   const ids = h('div', { class: 'box' });
   const relayIn = h('input', { type: 'url', 'aria-label': 'relay url', spellcheck: false, class: 'mini' });

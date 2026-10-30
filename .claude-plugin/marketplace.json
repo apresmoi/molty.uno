@@ -1,0 +1,18 @@
+{
+  "name": "molty",
+  "owner": {
+    "name": "apresmoi",
+    "url": "https://github.com/apresmoi"
+  },
+  "metadata": {
+    "description": "Connect your agent to Molty, the round desk device that talks: pair with a tap, talk and listen in one call per turn, ask tap-button questions, show moods, and answer when your human shakes Molty and speaks."
+  },
+  "plugins": [
+    {
+      "name": "molty",
+      "source": "./",
+      "description": "Connect your agent to Molty, the round desk device that talks: pair with a tap, talk and listen in one call per turn, ask tap-button questions, show moods, and answer when your human shakes Molty and speaks.",
+      "category": "productivity"
+    }
+  ]
+}

@@ -89,14 +89,6 @@ export const UTTERANCE_EVENT = "utterance";
 /** Every type an agent can receive and filter on (webhook `events`): device events + utterance. */
 export const AGENT_EVENT_TYPES = [...Object.keys(SHAPES), UTTERANCE_EVENT];
 
-/**
- * Relay-generated (not device) event: the agent skill changed. Data
- * `{version, whats_new, url}`. Appended once per device room per skill version,
- * only when a paired agent has an older version; goes to the inbox and to
- * webhooks without an `events` filter. Not filterable, not rate-limited.
- */
-export const SKILL_EVENT = "skill.updated";
-
 /** One representative event per type: webhook templates are dry-run against every type they will receive. */
 export const SAMPLE_EVENTS: Record<string, AgentEvent> = {
   shake: { id: "e1", type: "shake", ts: 0, data: { peak_g: 2.4, reversals: 5, ms: 900 } },
@@ -148,8 +140,6 @@ export function eventSentence(ev: AgentEvent): string {
       return `Molty's ${d.id} button was pressed`;
     case "answer":
       return typeof d.label === "string" ? `Molty's question was answered: ${d.label}` : `Molty's question got no answer (${String(d.reason ?? "timeout")})`;
-    case SKILL_EVENT:
-      return `Molty's skill was updated to v${Number(d.version)}: re-read ${typeof d.url === "string" ? d.url : "/skill.md"}`;
     default:
       return `Molty event ${ev.type}`;
   }

@@ -121,7 +121,7 @@ const CREATURES = CUTE_CATALOG.map(c=>({id:c.id, n:c.name}));
 const THUMBS = {};
 const DEV = {id:'molty-k7m2w9c4ya', code:'K7M2W9C4', relay:'https://molty-relay.example.workers.dev'};   // mock values
 const MCP = DEV.relay + '/mcp';
-const MSG = `Hi! Please connect yourself to my Molty.\n\nInstructions: ${DEV.relay}/skill.md\nDevice: ${DEV.id}\nCode: ${DEV.code}\n\nI'll tap Molty to accept you.`;
+const MSG = `Hi! Please connect yourself to my Molty.\n\nSkill: https://github.com/apresmoi/molty.uno/tree/main/skills/molty\nDevice: ${DEV.id}\nCode: ${DEV.code}\n\nI'll tap Molty to accept you.`;
 const AGENTS = [
   {id:'grok',n:'Grok',ic:'⣿',s1:'In Grok: Customize → MCPs → Add, paste this link',copy1:MCP},
   {id:'claude',n:'Claude',ic:'⣾',s1:'Run this in your terminal',copy1:`claude mcp add --transport http molty ${MCP}`},
