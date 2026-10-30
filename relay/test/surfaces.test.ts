@@ -44,7 +44,7 @@ describe("MCP surface", () => {
     expect((await rpc(backend, "initialize", { protocolVersion: "1999-01-01" })).result.protocolVersion).toBe("2025-11-25");
     const list = (await rpc(backend, "tools/list")).result.tools;
     expect(list.map((t: any) => t.name).sort()).toEqual(
-      ["molty_pair", "molty_status", "molty_mood", "molty_show", "molty_say", "molty_listen", "molty_wait", "molty_state", "molty_volume", "molty_imu", "molty_diag", "molty_log"].sort(),
+      ["molty_pair", "molty_status", "molty_mood", "molty_show", "molty_say", "molty_listen", "molty_wait", "molty_state", "molty_volume", "molty_imu", "molty_diag", "molty_log", "molty_events", "molty_webhook"].sort(),
     );
     for (const t of list) expect(t.inputSchema).toMatchObject({ type: "object", additionalProperties: false });
   });
@@ -96,6 +96,9 @@ describe("MCP surface", () => {
     const { backend, sock } = await setup();
     const token = (await call(backend, "molty_pair", { device_id: DEVICE, link_code: LINK, agent_name: "x" })).structuredContent.agent_token;
     expect((await call(backend, "molty_mood", { mood: "happy" }, token)).structuredContent).toMatchObject({ echo: "mood", args: { mood: "happy" } });
+    expect((await call(backend, "molty_mood", { mood: "happy", hold_s: 1.5 }, token)).structuredContent).toMatchObject({ echo: "mood", args: { mood: "happy", hold_s: 1.5 } });
+    expect((await call(backend, "molty_mood", { mood: "happy", hold_s: "1" }, token)).structuredContent.message).toBe("hold_s must be a number");
+    expect((await call(backend, "molty_mood", { mood: "happy", hold_s: 601 }, token)).structuredContent.error).toBe("invalid_args");
     expect((await call(backend, "molty_show", { text: "hi" }, token)).structuredContent).toMatchObject({ echo: "show", args: { text: "hi", wpm: 300 } });
     expect((await call(backend, "molty_state", {}, token)).structuredContent).toMatchObject({ echo: "state", args: {} });
     expect((await call(backend, "molty_state", { state: { blink: 1 } }, token)).structuredContent).toMatchObject({ echo: "state", args: { blink: 1 } });

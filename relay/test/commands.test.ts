@@ -33,6 +33,14 @@ describe("validateCommand", () => {
     expect(code(() => validateCommand("log", { max: 100 }))).toBe("invalid_args");
     expect(code(() => validateCommand("log", { since: -1 }))).toBe("invalid_args");
   });
+  it("mood: optional hold_s, a finite number 0 < hold_s <= 600, forwarded only when given", () => {
+    expect(validateCommand("mood", { mood: "happy" }).args).toEqual({ mood: "happy" });
+    expect(validateCommand("mood", { mood: "happy", hold_s: 2.5 }).args).toEqual({ mood: "happy", hold_s: 2.5 });
+    expect(validateCommand("mood", { mood: "thinking", hold_s: 600 }).args).toEqual({ mood: "thinking", hold_s: 600 });
+    for (const hold_s of [0, -1, 600.5, Number.NaN, Number.POSITIVE_INFINITY, "3", null]) {
+      expect(code(() => validateCommand("mood", { mood: "happy", hold_s })), String(hold_s)).toBe("invalid_args");
+    }
+  });
   it("rejects bad input", () => {
     expect(code(() => validateCommand("reboot", {}))).toBe("unknown_command");
     expect(code(() => validateCommand("mood", { mood: "angry" }))).toBe("invalid_args");

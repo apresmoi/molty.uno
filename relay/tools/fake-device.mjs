@@ -99,8 +99,13 @@ function onCmd(f, send) {
     case "mood":
       state.mood = a.mood;
       return reply(true, { mood: a.mood });
-    case "show":
+    case "show": {
+      // Test hook: show "evt:<type>" makes the fake device emit that agent event (as if touched).
+      const sample = { shake: { peak_g: 2.4, reversals: 5, ms: 900 }, tap: { x: 0.5, y: 0.5 }, button: { id: "accept" } };
+      const m = /^evt:(\w+)$/.exec(String(a.text));
+      if (m && sample[m[1]]) setTimeout(() => send({ t: "evt", name: m[1], data: sample[m[1]] }), 10);
       return reply(true, { reader: "playing", words: String(a.text).split(/\s+/).length, wpm: a.wpm });
+    }
     case "volume":
       state.volume = a.volume;
       return reply(true, { volume: a.volume });

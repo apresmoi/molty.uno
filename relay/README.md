@@ -6,7 +6,8 @@ relay does TTS/STT. No laptop is in the loop.
 
 ```
 Molty ──WSS /v1/device──▶ Worker ──▶ Durable Object "MoltyDevice" (one per device_id)
-                            │            └─ DeviceRoom (src/core): TOFU, pairing, tokens, cmd routing, jobs
+                            │            └─ DeviceRoom (src/core): TOFU, pairing, tokens, cmd routing, jobs,
+                            │               event inbox + per-agent cursors, webhook queue (DO alarm) ──▶ agents' HTTPS
                             ├─ /mcp  ◀── any MCP client (Claude, Grok, …)   (src/surfaces/mcp.ts)
                             ├─ /v1/* ◀── molty CLI --relay, scripts         (src/surfaces/rest.ts)
                             └─ voice: workers-ai | openai | none             (src/voice/*)
@@ -18,7 +19,9 @@ Molty ──WSS /v1/device──▶ Worker ──▶ Durable Object "MoltyDevice
 relay/
 ├─ src/
 │  ├─ core/            pure TS, no Cloudflare imports (enforced by test/boundaries.test.ts)
-│  │  ├─ room.ts       DeviceRoom: device auth, pairing, tokens, routing, say/listen jobs
+│  │  ├─ room.ts       DeviceRoom: device auth, pairing, tokens, routing, say/listen jobs, event inbox, webhook delivery
+│  │  ├─ events.ts     agent-visible events: allow-list + shapes, limits, one-line summaries
+│  │  ├─ webhook.ts    webhook spec validation, templates, HMAC signing, SSRF guard, redaction
 │  │  ├─ api.ts        AgentApi / RelayBackend: the only thing surfaces see
 │  │  ├─ commands.ts   agent command validation, shared by every surface
 │  │  ├─ protocol.ts   wire constants, text/audio frame codecs
@@ -84,7 +87,41 @@ SQLite. To swap the voice provider, implement `VoiceProvider` and add one case t
 | `listen` to device | `cmd listen {job, ms, rate:16000}`. The device streams `s=job` frames and ends with `end:true`. Grace is `ms + 5 s`. The result is `{text, duration_ms, peak, rms}`; with no frames it fails `no_audio`. |
 | `state` | Empty args read the state. `{state:{…}}` or flat fields patch it. The device always receives the patch **flat**, like the body of `/api/creature/state`. |
 | Concurrency | One audio job (say or listen) per device; otherwise `audio_busy`. One pending pairing per device; otherwise `pair_busy`. |
+| Device events | `evt` `shake`/`tap`/`button` with the documented shapes go to the agent inbox; everything else (`say.done`, `link_code`, unknown names, bad shapes) stays internal (still listed under `relay.events` in `status`). |
 | Timeouts | Device command 6 s, which is under the Go CLI's 8 s budget and the common 10 s tool-call cap of agent runtimes. TTS 20 s, STT 30 s. Pairing window 120 s. Jobs kept 15 min. |
+
+## Events and webhooks
+
+Spec: [AGENT-LINK.md "Events"](../docs/AGENT-LINK.md#events-device--agents). Storage keys in
+the device's DO: `ev:<seq>` (ring), `evseq`, `evrate`, `cur:<sha256(token)>` (per-agent
+cursor), `whq:<sha256(token)>:<seq>` (pending deliveries), the webhook itself on the
+token record, and `room_id` (lets `alarm()` rebuild the room). All survive hibernation.
+
+| Limit | Value |
+|---|---|
+| Inbox | last 200 events, max age 24 h, trimmed on append |
+| Intake | 30 events/min per device, excess dropped and counted |
+| Pull | ≤ 50 events per response; long-poll ≤ 25 s REST, ≤ 8 s MCP |
+| Ride-along | ≤ 10 unread events per response (`more_events` when more remain) |
+| Webhook spec | url ≤ 2048 B, body template ≤ 4096 B, ≤ 16 headers / 4096 B |
+| Delivery | DO alarm; 5 s timeout; no redirects; retries after 1 s / 10 s / 60 s; disabled after 20 consecutive failed attempts |
+
+- **Delivery runs from the DO alarm** (`ctx.storage.setAlarm`), never inline with the
+  device frame, so a slow endpoint cannot stall the socket and a queued delivery survives
+  eviction. Alarms need no `wrangler.jsonc` change or migration.
+- **Long-polls hold the DO awake** for their duration (≤ 25 s), like `molty_wait` does.
+  Agents running `molty events` therefore keep their device's object resident: the cost is
+  DO wall-clock duration, not CPU. Note it if you meter a hosted relay.
+- **SSRF.** Literal checks (https only, no IP literals, no local/internal names) at
+  registration, plus A/AAAA resolution over DNS-over-HTTPS (`cloudflare-dns.com`) at
+  registration and before each delivery, refusing private/reserved addresses. Honest
+  limits: Workers' `fetch` resolves again by itself, so a DNS-rebinding host can still
+  win the race between our lookup and the request, and we trust the DoH answer. Workers
+  egress from Cloudflare's network, so a home LAN behind the owner's router is not
+  reachable from the relay regardless. A Node host must supply its own `resolveHost`
+  (and should pin the resolved address in its HTTP agent, which Workers cannot do).
+- **Secrets.** Header values, the signing secret and the URL path/query are never returned
+  after registration and never logged (logs carry the origin only).
 
 ## Run locally (nothing is deployed, no login)
 
@@ -126,6 +163,7 @@ npx wrangler tail molty-relay
    - Pair a fake device against `wss://molty-relay.<subdomain>.workers.dev`.
    - Call `molty_say` to confirm real Aura TTS. This is the first point where the `@cf/deepgram/aura-2-en` linear16/wav output path is exercised for real.
    - Wait more than 30 s idle, then send a command to confirm hibernation survival. `wrangler dev` never evicts, so only a deployed Worker can prove it.
+   - Events: shake the device (or send `{"t":"evt","name":"tap","data":{"x":0.5,"y":0.5}}` from the fake device), then `GET /v1/devices/<id>/events`. Register a webhook at a request bin you control and check the delivery and its `Molty-Signature` (first real exercise of the DoH resolver and the DO alarm).
 
 ## Waitlist
 

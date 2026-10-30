@@ -93,7 +93,8 @@ backoff. Local status also includes `close_code` for the current/last attempt.
 Text frames are JSON:
 - relay→device `{"t":"cmd","id":"c17","name":"show","args":{...}}`
 - device→relay `{"t":"res","id":"c17","ok":true,"result":{...}}` or `{"ok":false,"error":"code"}`
-- device→relay `{"t":"evt","name":"touch|state|listen.level|...","data":{...}}`
+- device→relay `{"t":"evt","name":"shake|tap|button|say.done|link_code|...","data":{...}}`;
+  `shake`/`tap`/`button` reach agents (see [Events](#events-device--agents)), the rest is relay-internal.
 - `pair.request` / `pair.result` as above; `{"t":"ping"}`/`{"t":"pong"}` every 20 s.
 - device→relay on each rotation: `{"t":"link_code","code":"...","link_code":"..."}`.
   `code` is the requested spelling; `link_code` is a compatibility alias required by
@@ -126,7 +127,7 @@ text state wins over the creature view.
 |---|---|---|---|
 | `status` | — | fw, uptime, creature, state, mood, fps, rssi | relay adds `relay` {online, board, caps, ...} |
 | `state` | `{state, ...}` | creature state JSON | passthrough to `/api/creature/state` semantics |
-| `mood` | `{mood}` | — | idle listening thinking speaking happy sleepy surprised |
+| `mood` | `{mood, hold_s?}` | — | idle listening thinking speaking happy sleepy surprised; happy/surprised revert by themselves, listening/thinking/speaking persist; `hold_s` (number, 0 < s ≤ 600) sets how long the mood stays |
 | `show` | `{text, wpm?}` | — | speed reader in the fluid |
 | `say` | `{text, voice?}` | `{job}` immediately | relay does TTS + streams; device sets `speaking`, shows text in sync. `unsupported` without a speaker |
 | `listen` | `{ms≤10000}` | `{job}` immediately | device sets `listening`, streams mic; relay STT → job result `{text}`. `unsupported` without a mic |
@@ -144,9 +145,11 @@ Agent-facing calls are **async-friendly** (agent runtimes commonly cap a tool ca
 
 - **Remote MCP** `https://<relay>/mcp` (streamable HTTP), `Authorization: Bearer <agent_token>`.
   Tools: `molty_pair`, `molty_status`, `molty_mood`, `molty_show`, `molty_say`, `molty_listen`,
-  `molty_wait`, `molty_state`, `molty_volume`, `molty_imu`. Same names/semantics as the local
-  stdio MCP in `cli/` so agents don't care which transport they're on.
-- **REST** `POST /v1/devices/<id>/cmd {name,args}`, `GET /v1/jobs/<job>`, same bearer.
+  `molty_wait`, `molty_state`, `molty_volume`, `molty_imu`, `molty_diag`, `molty_log`, plus the
+  relay-only `molty_events` and `molty_webhook` ([Events](#events-device--agents)). Shared names
+  have the same semantics as the local stdio MCP in `cli/`.
+- **REST** `POST /v1/devices/<id>/cmd {name,args}`, `GET /v1/jobs/<job>`,
+  `GET /v1/devices/<id>/events`, `GET|PUT|DELETE /v1/webhook`, same bearer.
 - **Skill page** `GET /skill.md` (and `/skill`), no auth: the agent's self-setup guide (see
   Pairing flow step 1). Kept in sync with `commands.ts`/MCP tools by `test/skill.test.ts`.
 - **CLI** `molty --relay <url> --token <t> ...`, or `molty pair` once and the saved link (see [CLI.md](CLI.md)).
@@ -163,6 +166,12 @@ bearer is `agent_token` = `<device_id>.<base64url(32 bytes)>`; the prefix only r
 | `POST /v1/devices/<id>/cmd {name, args}` | `200 {ok:true, result:{...}}`; `say`/`listen` → `{ok:true, result:{job}}` | `{ok:false, error:"code"}`: 401 bad/missing bearer, 400 `invalid_args`/`unknown_command`, 409 `device_offline`/`audio_busy`/`unsupported`, 504 `device_timeout`, 502 device-reported codes |
 | `GET /v1/jobs/<job>[?wait_s=0..8]` | `200 {job, kind, status:"queued"\|"running"\|"done"\|"failed", result?, error?}`; say done `{ms, text}`, listen done `{text, duration_ms, peak, rms}` | 401, 404 `not_found` |
 | `DELETE /v1/token` | `200 {ok:true, result:{revoked:true}}` | 401 |
+| `GET /v1/devices/<id>/events[?since=e41&wait_s=0..25]` | `200 {ok:true, events:[{id,type,ts,data}], next, more}` | 401, 400 `invalid_args` |
+| `PUT /v1/webhook {url, method?, headers?, body?, content_type?}` | `200 {ok:true, result:{webhook, secret, secret_note, dry_run}}` | 401, 400 `invalid_args` (with the reason) |
+| `GET` / `DELETE /v1/webhook` | `200 {ok:true, result:{webhook\|null}}` / `{removed}` | 401 |
+
+Any authenticated response may also carry the caller's unread events as a top-level
+`events` array (+ `more_events:true`): additive, absent when there are none.
 
 Device-local console API (same Wi-Fi, no auth; served by the firmware, used by
 `console/`). One spelling per field — `relay_url` is the ws/wss origin the
@@ -188,6 +197,179 @@ a relay disconnect clears `pair` without a decision. Example while pending, then
 `state` cmd: empty args = read; `{state:{...}}` or flat fields = patch (sent to the
 device flat). MCP `molty_wait` maps job status to `pending` (queued/running), the job
 result plus `status:"done"`, or a tool error for `failed`.
+
+## Events (device → agents)
+
+Molty is not only driven; it reports what its human does to it. Agent-visible events
+travel device → relay → each paired agent's own inbox → the agent, by whichever receive
+mode suits that agent.
+
+```
+device evt ──WSS──▶ DeviceRoom.onEvt
+                     ├─ allow-list + shape check (shake, tap, button; rest stays internal)
+                     ├─ cap 30/min/device (excess dropped, counted)
+                     └─ ev:<seq> ring (200 / 24 h, DO storage)
+                          │  one read cursor per agent token (cur:<token hash>)
+                          ├─▶ ride-along: unread `events` on every authenticated response
+                          ├─▶ pull: GET /v1/devices/<id>/events · molty_events (long-poll)
+                          │      └─▶ `molty events [--exec cmd]` (CLI, JSON lines)
+                          └─▶ webhook: whq:<token hash>:<seq> ─DO alarm─▶ agent-defined HTTPS request
+```
+
+### Firmware contract
+
+`{"t":"evt","name":<type>,"data":{…}}`. Only these reach agents; anything else (`say.done`,
+`link_code`, …) is relay-internal. An event whose data does not match is dropped.
+
+| type | data |
+|---|---|
+| `shake` | `{peak_g: number 0..64, reversals: int, ms: int}` |
+| `tap` | `{x: 0..1, y: 0..1}` (screen position, unit square) |
+| `button` | `{id: "accept" \| "reject"}` |
+
+The relay stores `{id:"e<seq>", type, ts:<relay unix ms>, data}`; `seq` increases per device.
+
+### Inbox and cursor
+
+- Ring: the last **200** events, none older than **24 h** (trimmed on append, also in DO
+  storage so it survives hibernation and eviction).
+- Intake cap: **30 events/min per device**; the excess is dropped (counted in storage).
+- Each agent token has a cursor. A newly paired agent starts at the head (no backlog).
+  Every way of reading below advances only that agent's cursor, so two agents each get
+  every event once. Webhook deliveries that succeed also count as read.
+- Ids are stable: an agent using two modes at once may see an event twice; dedupe by `id`.
+
+### Receive modes
+
+| Mode | Call | Notes |
+|---|---|---|
+| Ride-along | any authenticated REST response / MCP tool result | REST: additive top-level `events` (+ `more_events`). MCP: `events` in `structuredContent` and a second text item `Molty: was shaken (peak 2.4 g) 2 min ago [e42].` At most 10 per response; no unread events = the response is unchanged |
+| Pull | `GET /v1/devices/<id>/events[?since=e41][&wait_s=0..25]` · MCP `molty_events {since?, wait_s? 0..8}` | `{ok:true, events:[…], next:"e42", more}`, oldest first, ≤ 50. Default `since` = cursor; long-poll returns as soon as an event lands. An explicit `since` never moves the cursor backwards |
+| Webhook | `PUT /v1/webhook` · `GET` · `DELETE` · MCP `molty_webhook` | per-agent HTTPS request, see below |
+| Stream | `molty events [--n N] [--exec CMD]` | CLI loop over the pull call ([CLI.md](CLI.md#events-and-receiving)) |
+
+Nothing can wake an agent that has neither a reachable endpoint nor a running process; such
+an agent sees events the next time it calls anything (ride-along).
+
+### Webhooks
+
+`PUT /v1/webhook` (or `molty_webhook`), body:
+
+```
+{"url": "https://…", "method"?: "POST"|"GET"|"PUT"|"PATCH",
+ "headers"?: {"Authorization": "Bearer …"}, "body"?: "<template>", "content_type"?: "application/json"}
+```
+
+- Placeholders in `url` (URL-encoded) and `body`: `{{event.type}}` `{{event.id}}` `{{event.ts}}`
+  `{{event.data}}` (JSON) `{{event.data.<field>}}` `{{device}}` `{{text}}` (a short sentence:
+  "Molty was shaken (peak 2.4 g)", "Molty's screen was tapped", "Molty's accept button was
+  pressed"). With a JSON `content_type` strings are JSON-escaped (write them inside quotes;
+  write `{{event.data}}` and numeric fields unquoted); with
+  `application/x-www-form-urlencoded` they are form-encoded; otherwise inserted raw.
+  Unknown placeholders are rejected; missing fields render empty.
+- No `body`: the relay's own `{"device":"molty-…","event":{id,type,ts,data}}`, `application/json`.
+- Every request carries `Molty-Signature: t=<unix ms>,v1=<hex hmac_sha256(secret, t + "." + body)>`
+  (GET: empty body). Harmless for targets that ignore it.
+- Registration validates and **dry-runs** the template on a sample `shake` and returns
+  `{webhook, secret, dry_run}`. `secret` is shown once (re-registering rotates it and
+  re-enables a disabled webhook). Header values, the secret and the URL path/query (often a
+  bot token) are never echoed again: `status`/`GET` show `{url: origin + "/…", method,
+  headers: [names], active, consecutive_failures, disabled?, last_ok_at?, last_error?}`,
+  as `relay.webhook` in `status` too. Logs carry the origin only. The dry run echoes the
+  rendered body, so keep secrets in headers or the URL.
+- Limits: url ≤ 2048 B, body template ≤ 4096 B, ≤ 16 headers / 4096 B; reserved headers
+  (`Host`, `Content-Length`, `Molty-Signature`, …) refused; `Content-Type` comes from `content_type`.
+- Delivery: queued in DO storage, sent from the DO alarm, 5 s timeout, redirects not
+  followed (a 3xx is a failure), 2xx = success. Retries after 1 s, 10 s, 60 s, then the event is
+  dropped for that agent. **20 consecutive failed attempts disable the webhook.**
+- SSRF guard: `https:` only; no credentials in the URL; no IP literals (v4, v6, hex/decimal
+  forms); no `localhost`, single-label names or `.local`/`.localhost`/`.internal`/`.lan`/
+  `.home`/`.home.arpa`/`.corp`/`.intranet`/`.localdomain`. The rendered host is resolved
+  (A + AAAA over DNS-over-HTTPS on Workers) at registration and before every delivery and
+  refused if any address is private, loopback, link-local, CGNAT, multicast, documentation
+  or otherwise reserved. **Residual risk, stated plainly:** Workers' `fetch` resolves the
+  name again itself, so a DNS-rebinding host could answer differently between our check
+  and the request (TOCTOU), and the check trusts the DoH answer. What bounds it: Workers
+  egress comes from Cloudflare's network, not from the owner's LAN, so private addresses
+  of the owner's home are not reachable from the relay at all; the guard mainly stops
+  pointing the relay at Cloudflare-internal or other tenants' private-looking endpoints.
+
+#### Examples (neutral)
+
+Generic chat-bot API (the bot token lives in the URL path, which is never echoed):
+
+```json
+{"url": "https://api.chat.example/bot<TOKEN>/sendMessage", "content_type": "application/json",
+ "body": "{\"chat_id\": 12345, \"text\": \"{{text}} ({{event.id}})\"}"}
+```
+
+Generic "start an agent run" endpoint:
+
+```json
+{"url": "https://agents.example/v1/runs", "headers": {"Authorization": "Bearer <your key>"},
+ "content_type": "application/json",
+ "body": "{\"agent\": \"desk-buddy\", \"input\": \"Molty event: {{text}}\", \"event\": {{event.data}}, \"type\": \"{{event.type}}\"}"}
+```
+
+Your own server, default signed body (verify it, below):
+
+```json
+{"url": "https://me.example/molty"}
+```
+
+#### Reference verifiers
+
+Use the raw request body exactly as received. Reject when the header is missing, the
+signature differs, or `t` is older than your tolerance (replay).
+
+<!-- verifier:ts -->
+```ts
+// Node 20+, Deno, Bun, Workers (Web Crypto). True when the request is authentic and fresh.
+export async function verifyMolty(secret: string, header: string | null, body: string, toleranceMs = 5 * 60 * 1000): Promise<boolean> {
+  const m = /^t=(\d+),v1=([0-9a-f]{64})$/.exec(header ?? "");
+  if (!m || Math.abs(Date.now() - Number(m[1])) > toleranceMs) return false;
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+  const sig = new Uint8Array(m[2].match(/../g)!.map((h) => parseInt(h, 16)));
+  return crypto.subtle.verify("HMAC", key, sig, enc.encode(`${m[1]}.${body}`)); // constant-time
+}
+```
+
+<!-- verifier:py -->
+```python
+import hashlib, hmac, time
+
+def verify_molty(secret: str, header: str | None, body: bytes, tolerance_s: int = 300) -> bool:
+    """True when the request is authentic and fresh. body = raw request bytes."""
+    try:
+        parts = dict(p.split("=", 1) for p in (header or "").split(","))
+        t, v1 = parts["t"], parts["v1"]
+    except (ValueError, KeyError):
+        return False
+    if not t.isdigit() or abs(time.time() * 1000 - int(t)) > tolerance_s * 1000:
+        return False
+    mac = hmac.new(secret.encode(), t.encode() + b"." + body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(mac, v1)
+```
+
+### Example setups by agent kind
+
+These are examples, not rules; skill.md deliberately lets each agent choose.
+
+- **Shell-capable, long-running (Claude Code, Codex CLI, local OpenClaw).** Run the CLI as
+  a background process and treat each output line as a wake-up.
+  - Claude Code: start `molty events` with the Bash tool's `run_in_background`, then watch
+    it with the Monitor tool (or read its output file between turns); each JSON line is one
+    event. Example: `molty events --exec 'cat >> ~/.molty-events.jsonl'`.
+  - Codex CLI / local OpenClaw: launch `molty events --exec '<your wake hook>'` as a
+    long-lived child (or a `systemd --user` / `launchd` service) whose `--exec` command
+    posts to the agent's local wake endpoint or appends to the file it watches.
+- **Server-hosted (bots on xAI/OpenAI/Anthropic APIs, cloud OpenClaw).** Register a
+  webhook pointing at the bot's own HTTPS endpoint (default body, verify the signature), or
+  directly at the platform's message/run API with a template.
+- **Chat apps (ChatGPT, claude.ai, Claude Cowork, grok.com).** No endpoint, not running
+  between turns: rely on ride-along, and call `molty_events` at the start of a turn when
+  the human is talking about Molty. Do not claim to react live.
 
 ## Default relay
 

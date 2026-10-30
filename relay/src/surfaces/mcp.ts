@@ -9,7 +9,8 @@
 // Node host can serve it unchanged.
 
 import { type AgentApi, type Outcome, type RelayBackend, bearer, tokenDevice } from "../core/api.js";
-import { DEFAULT_LISTEN_MS, MOODS } from "../core/commands.js";
+import { DEFAULT_LISTEN_MS, MAX_MOOD_HOLD_S, MOODS } from "../core/commands.js";
+import { AGENT_EVENT_TYPES, type AgentEvent, INBOX_LIMITS, eventsLine, seqOf } from "../core/events.js";
 import { DEVICE_ID_RE, isRecord, type JsonObject } from "../core/protocol.js";
 import { RELAY_VERSION } from "../core/version.js";
 
@@ -17,9 +18,10 @@ export const SUPPORTED_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"];
 export const SERVER_INFO = { name: "molty-relay", version: RELAY_VERSION };
 const MAX_BODY = 256 * 1024;
 const INSTRUCTIONS =
-  "Tools operate a physical Molty device through the molty-relay. Pair first with molty_pair (no token needed), then send the returned agent_token as 'Authorization: Bearer <token>'. molty_say and molty_listen return a job immediately; poll it with molty_wait (<= 8 s per call).";
+  "Tools operate a physical Molty device through the molty-relay. Pair first with molty_pair (no token needed), then send the returned agent_token as 'Authorization: Bearer <token>'. molty_say and molty_listen return a job immediately; poll it with molty_wait (<= 8 s per call). " +
+  `Molty also emits events (${AGENT_EVENT_TYPES.join(", ")}) into your own inbox: unread ones ride along on every tool result as 'events' plus a 'Molty: ...' line; molty_events pulls/waits for them; molty_webhook registers an HTTPS request the relay sends you per event. React briefly, once per moment. Full guide: GET /skill.md on this relay.`;
 
-type Schema = { type: "object"; properties: Record<string, { type: string; description: string }>; required: string[]; additionalProperties: false };
+type Schema = { type: "object"; properties: Record<string, { type: string; description: string; enum?: string[] }>; required: string[]; additionalProperties: false };
 interface ToolDef {
   name: string;
   description: string;
@@ -68,8 +70,14 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "molty_mood",
-    description: `Show ${MOODS.join(", ")}. Replaces the current display.`,
-    inputSchema: obj({ mood: { type: "string", description: `One of ${MOODS.join(", ")}.` } }, ["mood"]),
+    description: `Show ${MOODS.join(", ")}. Replaces the current display. Quick moods (happy, surprised) revert on their own; listening/thinking/speaking persist. hold_s sets how long it stays (0 < hold_s <= ${MAX_MOOD_HOLD_S}).`,
+    inputSchema: obj(
+      {
+        mood: { type: "string", description: `One of ${MOODS.join(", ")}.` },
+        hold_s: { type: "number", description: `Optional seconds to hold the mood before reverting, 0 < hold_s <= ${MAX_MOOD_HOLD_S}.` },
+      },
+      ["mood"],
+    ),
     auth: true,
     run: (api, t, a) => api.command(t, "mood", a),
   },
@@ -130,6 +138,42 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: "molty_events",
+    description: `Your unread Molty events (${AGENT_EVENT_TYPES.join(", ")}), oldest first: {events:[{id, type, ts, data}], next, more}. Default since = your read cursor (each event is returned to you once; it advances). wait_s (0..${INBOX_LIMITS.mcpWaitS}, default 0) long-polls until an event arrives. since = an event id (e.g. e41) re-reads after it. shake {peak_g, reversals, ms}; tap {x, y} in 0..1; button {id: accept|reject}.`,
+    inputSchema: obj({
+      since: { type: "string", description: "Event id to read after, e.g. e41; default your cursor." },
+      wait_s: { type: "integer", description: `Seconds to wait for a new event, 0..${INBOX_LIMITS.mcpWaitS}; default 0.` },
+    }),
+    auth: true,
+    async run(api, t, a) {
+      const wait = a.wait_s === undefined ? 0 : (a.wait_s as number);
+      if (!Number.isInteger(wait) || wait < 0 || wait > INBOX_LIMITS.mcpWaitS) return { ok: false, error: "invalid_args", message: `wait_s must be 0..${INBOX_LIMITS.mcpWaitS}` };
+      const since = a.since === undefined ? undefined : seqOf(a.since);
+      if (a.since !== undefined && since === undefined) return { ok: false, error: "invalid_args", message: "since must be an event id like e41" };
+      return api.events(t, { since, wait_ms: wait * 1000 });
+    },
+  },
+  {
+    name: "molty_webhook",
+    description:
+      "Have the relay call YOU on each event: an HTTPS request you define. url (https, public host); method POST (default) | GET | PUT | PATCH; headers (your own auth; stored, never shown again); body template + content_type. Placeholders in url and body: {{event.type}} {{event.id}} {{event.ts}} {{event.data}} (JSON) {{event.data.<field>}} {{device}} {{text}} (e.g. 'Molty was shaken'), escaped for JSON / form / URL. No body = {\"device\",\"event\"} JSON. Every request is signed: Molty-Signature: t=<ms>,v1=hex(hmac_sha256(secret, t+'.'+body)); the secret is returned once. Returns a dry run rendered for a sample event. Omit url to read the current webhook; remove:true deletes it. Retries 1 s/10 s/60 s; disabled after 20 consecutive failures (re-register to re-enable).",
+    inputSchema: obj({
+      url: { type: "string", description: "https URL the relay requests per event; may contain placeholders (URL-encoded)." },
+      method: { type: "string", description: "POST (default), GET, PUT or PATCH.", enum: ["POST", "GET", "PUT", "PATCH"] },
+      headers: { type: "object", description: "Extra request headers, e.g. your API key. Values are stored and never echoed." },
+      body: { type: "string", description: "Body template (max 4096 bytes); default is the relay's signed {device, event} JSON." },
+      content_type: { type: "string", description: "Body media type; application/json escapes placeholders as JSON strings." },
+      remove: { type: "boolean", description: "true removes your webhook." },
+    }),
+    auth: true,
+    run(api, t, a) {
+      if (a.remove === true) return api.webhook(t, { action: "delete" });
+      if (a.url === undefined) return api.webhook(t, { action: "get" });
+      const { remove: _r, ...spec } = a;
+      return api.webhook(t, { action: "set", spec });
+    },
+  },
+  {
     name: "molty_state",
     description: "Read creature state (omit state) or patch it (state = object of creature fields, same semantics as the device's /api/creature/state).",
     inputSchema: obj({ state: { type: "object", description: "State patch; omit to read state." } }),
@@ -182,8 +226,19 @@ export function checkArgs(schema: Schema, raw: unknown): string | undefined {
     if (!prop) return `unknown argument ${k}`;
     if (v === null) return `${k} must not be null`;
     const ok =
-      prop.type === "string" ? typeof v === "string" : prop.type === "integer" ? Number.isInteger(v) : prop.type === "object" ? isRecord(v) : true;
+      prop.type === "string"
+        ? typeof v === "string"
+        : prop.type === "integer"
+          ? Number.isInteger(v)
+          : prop.type === "number"
+            ? typeof v === "number" && Number.isFinite(v)
+          : prop.type === "object"
+            ? isRecord(v)
+            : prop.type === "boolean"
+              ? typeof v === "boolean"
+              : true;
     if (!ok) return `${k} must be ${prop.type === "integer" ? "an integer" : `a${prop.type === "object" ? "n" : ""} ${prop.type}`}`;
+    if (prop.enum && !prop.enum.includes(v as string)) return `${k} must be one of ${prop.enum.join(", ")}`;
   }
   for (const k of schema.required) if (!(k in args)) return `missing required argument ${k}`;
   return undefined;
@@ -193,9 +248,24 @@ type RpcMessage = { jsonrpc?: unknown; id?: unknown; method?: unknown; params?: 
 const rpcError = (id: unknown, code: number, message: string) => ({ jsonrpc: "2.0", id: id ?? null, error: { code, message } });
 const rpcResult = (id: unknown, result: unknown) => ({ jsonrpc: "2.0", id, result });
 
+/**
+ * Unread events ride along additively: `events` (+ `more_events`) in the
+ * structured result and one extra text item ("Molty: was shaken ... 2 min ago").
+ * Results without unread events are byte-for-byte what they were before.
+ */
 function toolResult(out: Outcome<JsonObject>) {
   const value: JsonObject = out.ok ? { ok: true, ...out.result } : { ok: false, error: out.error, ...(out.message ? { message: out.message } : {}) };
-  return { content: [{ type: "text", text: JSON.stringify(value) }], structuredContent: value, isError: !out.ok };
+  let line: string | undefined;
+  if (out.inbox && out.inbox.events.length > 0 && !("events" in value)) {
+    value.events = out.inbox.events as unknown as JsonObject[];
+    if (out.inbox.more) value.more_events = true;
+    line = eventsLine(out.inbox.events, out.inbox.now, out.inbox.more);
+  } else if (out.ok && Array.isArray(value.events) && value.events.length > 0 && "next" in value) {
+    line = eventsLine(value.events as unknown as AgentEvent[], Date.now(), value.more === true); // molty_events itself
+  }
+  const content = [{ type: "text", text: JSON.stringify(value) }];
+  if (line) content.push({ type: "text", text: line });
+  return { content, structuredContent: value, isError: !out.ok };
 }
 
 async function callTool(backend: RelayBackend, token: string | undefined, params: unknown) {

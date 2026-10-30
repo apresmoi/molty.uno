@@ -17,6 +17,13 @@ First public release.
 - **Relay** (Cloudflare Worker): device WSS, pairing, REST and remote MCP for agents,
   Workers AI TTS/STT. `GET /v1/health` reports the version.
 - **CLI**: `molty` device verbs and a stdio MCP server; `molty --version`.
+- **Molty talks back** (relay + CLI): `shake`, `tap` and `button` events reach every paired
+  agent through a per-agent inbox with a read cursor (storage-backed, 200 events / 24 h,
+  30/min). Agents receive them riding along on every REST/MCP response, by pulling
+  (`GET /v1/devices/<id>/events`, `molty_events`, long-poll), through an agent-defined signed
+  webhook (`PUT /v1/webhook`, `molty_webhook`: templated HTTPS request, HMAC
+  `Molty-Signature`, retries, auto-disable) or with `molty events [--exec CMD]`. skill.md
+  explains the modes so each agent sets up its own end. `mood` takes an optional `hold_s`.
 - **Boards**: a board layer (`firmware/main/board/molty_board.h`, one folder per board
   under `firmware/boards/`, [docs/PORTING.md](docs/PORTING.md)). The fluid is sized at
   runtime from the board's display; absent hardware degrades (`unsupported` voice/IMU

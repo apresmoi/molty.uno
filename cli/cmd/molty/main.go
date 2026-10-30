@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,7 +10,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -32,7 +35,10 @@ Commands:
   imu                       One IMU sample
   diag [--timeline S]       Frame-time histograms, task CPU %, heap, stalls, link (S<=180 s of 1 Hz timeline)
   log [--since N] [--max B] [--follow]   Device log ring (ESP_LOG + EVT events); --follow tails it
-  events [--n N]            JSON lines; n=0 streams until interrupted
+  events [--n N] [--exec CMD]  JSON lines; n=0 streams until interrupted. Relay: your
+                            Molty events (shake/tap/button) via long-poll, reconnecting;
+                            direct HTTP: IMU frames. --exec runs CMD (sh -c) per event
+                            with the event JSON on stdin; exits 1 on a rejected token
   mcp                       MCP stdio server (stdout reserved for JSON-RPC)
   version                   Print the CLI version (also --version)
 Options may appear before or after the command:
@@ -47,12 +53,12 @@ Options may appear before or after the command:
 `
 
 type options struct {
-	device, relay, token, code, name, tts, stt, wav, out string
-	timeout                                              time.Duration
-	json, force, follow                                  bool
-	wpm, ms, n, timeline, since, max                     int
-	args                                                 []string
-	set                                                  map[string]bool
+	device, relay, token, code, name, tts, stt, wav, out, exec string
+	timeout                                                    time.Duration
+	json, force, follow                                        bool
+	wpm, ms, n, timeline, since, max                           int
+	args                                                       []string
+	set                                                        map[string]bool
 }
 
 // errVersion asks run to print the version (--version).
@@ -82,6 +88,7 @@ func parse(args []string) (options, error) {
 	fs.IntVar(&o.since, "since", 0, "log sequence to start at")
 	fs.IntVar(&o.max, "max", 0, "log bytes per read")
 	fs.BoolVar(&o.follow, "follow", false, "keep tailing the log")
+	fs.StringVar(&o.exec, "exec", "", "command per event")
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--" {
@@ -143,7 +150,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			ctx, cancel = context.WithTimeout(ctx, o.timeout)
 			defer cancel()
 		}
-		cfg := molty.Config{Device: o.device, Relay: o.relay, Token: o.token}
+		cfg := molty.Config{Device: o.device, Relay: o.relay, Token: o.token, Warn: stderr}
 		// pair starts a new link: without --relay or MOLTY_RELAY it uses the default relay.
 		if len(o.args) > 0 && o.args[0] == "pair" && cfg.Relay == "" && os.Getenv("MOLTY_RELAY") == "" {
 			cfg.Relay = molty.DefaultRelay
@@ -161,7 +168,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		if err == nil {
 			command := o.args[0]
 			pos := o.args[1:]
-			allowed := map[string]string{"wpm": "show", "wav": "say", "ms": "listen", "out": "listen", "force": "listen", "n": "events", "code": "pair", "name": "pair", "timeline": "diag", "since": "log", "max": "log", "follow": "log"}
+			allowed := map[string]string{"wpm": "show", "wav": "say", "ms": "listen", "out": "listen", "force": "listen", "n": "events", "exec": "events", "code": "pair", "name": "pair", "timeline": "diag", "since": "log", "max": "log", "follow": "log"}
 			for option, verb := range allowed {
 				if o.set[option] && command != verb {
 					err = fmt.Errorf("--%s is only valid for %s", option, verb)
@@ -273,7 +280,15 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 					}
 				case "events":
 					if noArgs() {
-						err = c.Events(ctx, o.n, func(frame json.RawMessage) error { return json.NewEncoder(stdout).Encode(frame) })
+						err = c.Events(ctx, o.n, func(frame json.RawMessage) error {
+							if err := json.NewEncoder(stdout).Encode(frame); err != nil {
+								return err
+							}
+							if o.exec != "" {
+								runExec(ctx, o.exec, frame, stderr)
+							}
+							return nil
+						})
 						if err == nil {
 							return 0
 						}
@@ -307,6 +322,26 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 	return 0
 }
+
+// runExec runs the --exec command for one event: the event JSON on stdin,
+// MOLTY_EVENT_ID / MOLTY_EVENT_TYPE in the environment, its output on our
+// stderr (stdout stays pure JSON lines). A failing command is reported, not fatal.
+func runExec(ctx context.Context, command string, frame json.RawMessage, stderr io.Writer) {
+	var ev struct{ ID, Type string }
+	_ = json.Unmarshal(frame, &ev)
+	shell, flag := "sh", "-c"
+	if runtime.GOOS == "windows" {
+		shell, flag = "cmd", "/C"
+	}
+	cmd := exec.CommandContext(ctx, shell, flag, command)
+	cmd.Stdin = bytes.NewReader(append(append([]byte{}, frame...), '\n'))
+	cmd.Stdout, cmd.Stderr = stderr, stderr
+	cmd.Env = append(os.Environ(), "MOLTY_EVENT_ID="+ev.ID, "MOLTY_EVENT_TYPE="+ev.Type)
+	if err := cmd.Run(); err != nil && ctx.Err() == nil {
+		fmt.Fprintf(stderr, "molty: --exec for %s: %v\n", ev.ID, err)
+	}
+}
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

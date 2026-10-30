@@ -18,7 +18,28 @@ import (
 type RelayTransport struct {
 	base, device, token string
 	http                *http.Client
+	// Warn receives reconnect notices from long-running verbs (events); nil = silent.
+	Warn io.Writer
 }
+
+// ErrRelayAuth marks a rejected agent token (HTTP 401/403): retrying cannot help.
+var ErrRelayAuth = errors.New("relay authentication rejected")
+
+// RelayHTTPError is any other non-2xx relay answer.
+type RelayHTTPError struct {
+	Status int
+	Body   string
+}
+
+func (e *RelayHTTPError) Error() string { return fmt.Sprintf("relay HTTP %d: %s", e.Status, e.Body) }
+
+// Long-poll budget per events request (the relay caps REST at 25 s) and the
+// reconnect backoff bounds.
+var (
+	eventsWait       = 25 * time.Second
+	eventsBackoffMin = time.Second
+	eventsBackoffMax = 30 * time.Second
+)
 
 func NewRelayTransport(base, device, token string, client *http.Client) (*RelayTransport, error) {
 	u, err := url.Parse(base)
@@ -36,7 +57,7 @@ func NewRelayTransport(base, device, token string, client *http.Client) (*RelayT
 	}
 	hc := *client
 	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &RelayTransport{strings.TrimRight(base, "/"), device, token, &hc}, nil
+	return &RelayTransport{base: strings.TrimRight(base, "/"), device: device, token: token, http: &hc}, nil
 }
 
 func (r *RelayTransport) request(ctx context.Context, method, path string, body any, auth bool) (Result, error) {
@@ -74,17 +95,17 @@ func (r *RelayTransport) request(ctx context.Context, method, path string, body 
 		return nil, fmt.Errorf("relay response exceeds 64 KB")
 	}
 	if resp.StatusCode == 401 || resp.StatusCode == 403 {
-		return nil, fmt.Errorf("relay authentication rejected (HTTP %d): %s", resp.StatusCode, data)
+		return nil, fmt.Errorf("%w (HTTP %d): %s", ErrRelayAuth, resp.StatusCode, data)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("relay HTTP %d: %s", resp.StatusCode, data)
+		return nil, &RelayHTTPError{resp.StatusCode, string(data)}
 	}
 	out, err := decode(data)
 	if err != nil {
 		return nil, err
 	}
 	if fmt.Sprint(out["code"]) == "4401" || fmt.Sprint(out["error"]) == "4401" {
-		return nil, fmt.Errorf("relay authentication rejected (4401)")
+		return nil, fmt.Errorf("%w (4401)", ErrRelayAuth)
 	}
 	if out["ok"] == false || out["error"] != nil {
 		return nil, fmt.Errorf("relay error: %v", out)
@@ -114,8 +135,71 @@ func (r *RelayTransport) IMU(ctx context.Context) (Result, error) { return r.com
 func (*RelayTransport) Creature(context.Context, string) (Result, error) {
 	return nil, fmt.Errorf("creature list/switch is not specified by relay v0; use state")
 }
-func (*RelayTransport) Events(context.Context, int, func(json.RawMessage) error) error {
-	return fmt.Errorf("events are not specified by relay REST v0")
+
+// Events follows this agent's relay inbox (GET /v1/devices/<id>/events,
+// long-poll) and emits one JSON object per event ({id,type,ts,data}) until n
+// events (n <= 0: until ctx ends). The first request resumes at the relay's
+// cursor for this token; later ones pass the last `next`, so a response lost in
+// transit is re-read. Network errors, 5xx, 408 and 429 reconnect with
+// exponential backoff (1 s .. 30 s); a rejected token or another 4xx returns.
+func (r *RelayTransport) Events(ctx context.Context, n int, emit func(json.RawMessage) error) error {
+	since := ""
+	backoff := eventsBackoffMin
+	count := 0
+	for {
+		if ctx.Err() != nil {
+			return nil
+		}
+		path := fmt.Sprintf("/v1/devices/%s/events?wait_s=%d", url.PathEscape(r.device), int(eventsWait/time.Second))
+		if since != "" {
+			path += "&since=" + url.QueryEscape(since)
+		}
+		reqCtx, cancel := context.WithTimeout(ctx, eventsWait+15*time.Second)
+		out, err := r.request(reqCtx, "GET", path, nil, true)
+		cancel()
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			var httpErr *RelayHTTPError
+			if errors.Is(err, ErrRelayAuth) || (errors.As(err, &httpErr) && httpErr.Status < 500 && httpErr.Status != 408 && httpErr.Status != 429) {
+				return err
+			}
+			if r.Warn != nil {
+				fmt.Fprintf(r.Warn, "molty: events: %v; reconnecting in %s\n", err, backoff)
+			}
+			timer := time.NewTimer(backoff)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil
+			case <-timer.C:
+			}
+			backoff = min(backoff*2, eventsBackoffMax)
+			continue
+		}
+		backoff = eventsBackoffMin
+		events, ok := out["events"].([]any)
+		if !ok {
+			return fmt.Errorf("relay events: response has no events array")
+		}
+		for _, ev := range events {
+			raw, err := json.Marshal(ev)
+			if err != nil {
+				return err
+			}
+			if err := emit(raw); err != nil {
+				return err
+			}
+			count++
+			if n > 0 && count >= n {
+				return nil
+			}
+		}
+		if next, ok := out["next"].(string); ok && next != "" {
+			since = next
+		}
+	}
 }
 func (r *RelayTransport) State(ctx context.Context, patch Result) (Result, error) {
 	return r.command(ctx, "state", patch)

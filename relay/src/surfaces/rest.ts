@@ -4,8 +4,14 @@
 //   POST   /v1/devices/<id>/cmd         {name, args}   -> {ok:true,result} | {ok:false,error}
 //   GET    /v1/jobs/<job>[?wait_s=0..8] -> {job, kind, status, result?, error?}
 //   DELETE /v1/token                    revoke the calling token
+//   GET    /v1/devices/<id>/events[?since=e41&wait_s=0..25] -> {ok, events, next, more}
+//   GET|PUT|DELETE /v1/webhook          read / register (secret once) / remove the caller's webhook
+//
+// Any authenticated response may carry the caller's unread device events as an
+// additive top-level `events` array (+ `more_events`); reading them marks them read.
 
-import { type Outcome, type RelayBackend, bearer, jobDevice, tokenDevice } from "../core/api.js";
+import { type Inbox, type Outcome, type RelayBackend, bearer, jobDevice, tokenDevice } from "../core/api.js";
+import { INBOX_LIMITS, seqOf } from "../core/events.js";
 import { DEVICE_ID_RE, isRecord } from "../core/protocol.js";
 
 const STATUS: Record<string, number> = {
@@ -27,9 +33,11 @@ const STATUS: Record<string, number> = {
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
-function failure(out: { error: string; message?: string }) {
+const extra = (inbox?: Inbox) => (inbox && inbox.events.length ? { events: inbox.events, ...(inbox.more ? { more_events: true } : {}) } : {});
+
+function failure(out: { error: string; message?: string; inbox?: Inbox }) {
   // Unknown codes are device-reported errors (e.g. mic_busy): 502.
-  return json({ ok: false, error: out.error, ...(out.message ? { message: out.message } : {}) }, STATUS[out.error] ?? 502);
+  return json({ ok: false, error: out.error, ...(out.message ? { message: out.message } : {}), ...extra(out.inbox) }, STATUS[out.error] ?? 502);
 }
 
 async function body(request: Request): Promise<Record<string, unknown> | undefined> {
@@ -82,7 +90,37 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
     const b = await body(request);
     if (!b) return failure({ error: "bad_request", message: "body must be a JSON object" });
     const out: Outcome = await backend.device(id).command(token!, b.name as string, b.args);
-    return out.ok ? json({ ok: true, result: out.result }) : failure(out);
+    return out.ok ? json({ ok: true, result: out.result, ...extra(out.inbox) }) : failure(out);
+  }
+
+  const events = /^\/v1\/devices\/([^/]+)\/events$/.exec(path);
+  if (events) {
+    if (request.method !== "GET") return json({ ok: false, error: "method_not_allowed" }, 405);
+    const id = decodeURIComponent(events[1]);
+    if (!DEVICE_ID_RE.test(id)) return failure({ error: "not_found" });
+    if (tokenDevice(token) !== id) return failure({ error: "unauthorized" });
+    const w = url.searchParams.get("wait_s");
+    const waitS = w === null ? 0 : Number(w);
+    if (!Number.isInteger(waitS) || waitS < 0 || waitS > INBOX_LIMITS.restWaitS) return failure({ error: "invalid_args", message: `wait_s must be 0..${INBOX_LIMITS.restWaitS}` });
+    const sinceRaw = url.searchParams.get("since");
+    const since = sinceRaw === null || sinceRaw === "" ? undefined : seqOf(sinceRaw);
+    if (sinceRaw && since === undefined) return failure({ error: "invalid_args", message: "since must be an event id like e41" });
+    const out = await backend.device(id).events(token!, { since, wait_ms: waitS * 1000 });
+    return out.ok ? json({ ok: true, ...out.result }) : failure(out);
+  }
+
+  if (path === "/v1/webhook") {
+    const dev = tokenDevice(token);
+    if (!dev) return failure({ error: "unauthorized" });
+    let out: Outcome;
+    if (request.method === "GET") out = await backend.device(dev).webhook(token!, { action: "get" });
+    else if (request.method === "DELETE") out = await backend.device(dev).webhook(token!, { action: "delete" });
+    else if (request.method === "PUT") {
+      const b = await body(request);
+      if (!b) return failure({ error: "bad_request", message: "body must be a JSON object" });
+      out = await backend.device(dev).webhook(token!, { action: "set", spec: b });
+    } else return json({ ok: false, error: "method_not_allowed" }, 405);
+    return out.ok ? json({ ok: true, result: out.result, ...extra(out.inbox) }) : failure(out);
   }
 
   const job = /^\/v1\/jobs\/([^/]+)$/.exec(path);
@@ -96,7 +134,7 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
     const waitS = w === null ? 0 : Number(w);
     if (!Number.isInteger(waitS) || waitS < 0 || waitS > 8) return failure({ error: "invalid_args", message: "wait_s must be 0..8" });
     const out = await backend.device(dev).job(token!, jobId, waitS * 1000);
-    return out.ok ? json(out.result) : failure(out);
+    return out.ok ? json({ ...out.result, ...extra(out.inbox) }) : failure(out);
   }
 
   if (path === "/v1/token") {

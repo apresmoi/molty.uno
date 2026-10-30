@@ -40,7 +40,12 @@ func New(cfg Config) (*Client, error) {
 	}
 	var transport Transport
 	if cfg.Relay != "" {
-		transport, err = NewRelayTransport(cfg.Relay, cfg.Device, cfg.Token, cfg.HTTPClient)
+		var relay *RelayTransport
+		relay, err = NewRelayTransport(cfg.Relay, cfg.Device, cfg.Token, cfg.HTTPClient)
+		if err == nil {
+			relay.Warn = cfg.Warn
+			transport = relay
+		}
 	} else {
 		transport, err = NewHTTPTransport(cfg)
 	}

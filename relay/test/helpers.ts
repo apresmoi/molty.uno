@@ -1,4 +1,4 @@
-import { DeviceRoom, type DeviceSocket, type RoomTimings, type SocketMeta } from "../src/core/room.js";
+import { DeviceRoom, type DeviceSocket, type RoomDeps, type RoomTimings, type SocketMeta } from "../src/core/room.js";
 import { MemoryKV, realClock } from "../src/core/store.js";
 import { b64Encode } from "../src/core/crypto.js";
 import type { VoiceProvider } from "../src/voice/types.js";
@@ -72,11 +72,22 @@ export class FakeVoice implements VoiceProvider {
   }
 }
 
-export function makeRoom(opts: { kv?: MemoryKV; host?: FakeHost; voice?: FakeVoice; timings?: Partial<RoomTimings> } = {}) {
+export function makeRoom(opts: { kv?: MemoryKV; host?: FakeHost; voice?: FakeVoice; timings?: Partial<RoomTimings> } & Partial<Pick<RoomDeps, "clock" | "scheduler" | "fetch" | "resolveHost" | "log">> = {}) {
   const kv = opts.kv ?? new MemoryKV();
   const host = opts.host ?? new FakeHost();
   const voice = opts.voice ?? new FakeVoice();
-  const room = new DeviceRoom({ deviceId: DEVICE, kv, clock: realClock, voice, host, timings: opts.timings });
+  const room = new DeviceRoom({
+    deviceId: DEVICE,
+    kv,
+    clock: opts.clock ?? realClock,
+    voice,
+    host,
+    timings: opts.timings,
+    scheduler: opts.scheduler,
+    fetch: opts.fetch,
+    resolveHost: opts.resolveHost,
+    log: opts.log,
+  });
   host.onClose = (s) => room.socketClose(s);
   return { room, kv, host, voice };
 }

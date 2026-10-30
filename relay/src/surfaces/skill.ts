@@ -5,7 +5,9 @@
 // `wrangler dev`). Keep it in sync with commands.ts / rest.ts / mcp.ts and
 // docs/AGENT-LINK.md; test/skill.test.ts pins the load-bearing facts.
 
-import { DEFAULT_LISTEN_MS, DEFAULT_WPM, MAX_DIAG_TIMELINE_S, MAX_LISTEN_MS, MAX_LOG_BYTES, MAX_SAY_BYTES, MAX_SHOW_BYTES, MOODS } from "../core/commands.js";
+import { INBOX_LIMITS } from "../core/events.js";
+import { WEBHOOK_LIMITS } from "../core/webhook.js";
+import { DEFAULT_LISTEN_MS, DEFAULT_WPM, MAX_MOOD_HOLD_S, MAX_DIAG_TIMELINE_S, MAX_LISTEN_MS, MAX_LOG_BYTES, MAX_SAY_BYTES, MAX_SHOW_BYTES, MOODS } from "../core/commands.js";
 
 export const SKILL_PATHS = ["/skill.md", "/skill"];
 
@@ -89,7 +91,7 @@ Success: \`200 {"ok":true,"result":{…}}\`. Unknown argument keys are rejected.
 | name | args | result | notes |
 |---|---|---|---|
 | \`status\` | — | fw, uptime, creature, state, mood, fps, rssi + \`relay\` {online, connected_since, board, caps, voice, events} | cheap; use it to check Molty is online |
-| \`mood\` | \`{"mood": m}\` | — | m ∈ ${MOODS.join(", ")} |
+| \`mood\` | \`{"mood": m, "hold_s"?: s}\` | — | m ∈ ${MOODS.join(", ")}; happy/surprised revert by themselves, \`hold_s\` (0 < s ≤ ${MAX_MOOD_HOLD_S}) sets how long any mood stays |
 | \`show\` | \`{"text": s, "wpm"?: 100..800}\` | — | speed-reader text in the fluid, ≤ ${MAX_SHOW_BYTES} bytes, default ${DEFAULT_WPM} wpm; returns when it starts |
 | \`say\` | \`{"text": s, "voice"?: id}\` | \`{job}\` immediately | relay TTS → speaker, text shown in sync; ≤ ${MAX_SAY_BYTES} bytes; job done → \`{ms, text}\` |
 | \`listen\` | \`{"ms"?: 1..${MAX_LISTEN_MS}}\` | \`{job}\` immediately | records the mic (default ${DEFAULT_LISTEN_MS} ms), relay STT; job done → \`{text, duration_ms, peak, rms}\` |
@@ -117,7 +119,8 @@ Revoke your own token: \`curl -sS -X DELETE ${o}/v1/token -H "authorization: Bea
 The same features are a remote MCP server at \`${o}/mcp\` (streamable HTTP, bearer
 auth). Tools: \`molty_pair\` (no token needed), \`molty_status\`, \`molty_mood\`,
 \`molty_show\`, \`molty_say\`, \`molty_listen\`, \`molty_wait\`, \`molty_state\`,
-\`molty_volume\`, \`molty_imu\`, \`molty_diag\`, \`molty_log\`. Claude Code example:
+\`molty_volume\`, \`molty_imu\`, \`molty_diag\`, \`molty_log\`, \`molty_events\`,
+\`molty_webhook\`. Claude Code example:
 
 \`\`\`sh
 claude mcp add --transport http molty ${o}/mcp --header "Authorization: Bearer <agent_token>"
@@ -125,6 +128,46 @@ claude mcp add --transport http molty ${o}/mcp --header "Authorization: Bearer <
 
 A newly added MCP server may only appear after a session restart. REST works right
 away, so pair and say hello over REST first; switch to MCP when it is available.
+
+## 4. Hear Molty (events)
+
+Molty talks back. When your human touches it, the relay records an event:
+
+| type | data |
+|---|---|
+| \`shake\` | \`{"peak_g": 2.4, "reversals": 5, "ms": 900}\` |
+| \`tap\` | \`{"x": 0..1, "y": 0..1}\` (screen position) |
+| \`button\` | \`{"id": "accept"}\` or \`{"id": "reject"}\` |
+
+Each event is \`{"id":"e42","type":"shake","ts":<unix ms>,"data":{…}}\`. The relay keeps a
+**personal inbox per agent token** with a read cursor, so every paired agent gets every
+event once (last ${INBOX_LIMITS.keep} events / 24 h, at most ${INBOX_LIMITS.perMinute} per minute per device). Ways to receive:
+
+1. **Ride-along.** Every authenticated REST response and MCP tool result carries your unread
+   events as an extra \`events\` array (MCP also adds a line like
+   "Molty: was shaken (peak 2.4 g) 2 min ago [e42]"). Seeing them marks them read.
+2. **Pull / long-poll.** \`GET ${o}/v1/devices/<id>/events?wait_s=0..${INBOX_LIMITS.restWaitS}\` or MCP
+   \`molty_events {wait_s: 0..${INBOX_LIMITS.mcpWaitS}}\` → \`{"ok":true,"events":[…],"next":"e42","more":false}\`;
+   returns as soon as an event arrives. \`since=e41\` re-reads after an id.
+3. **Webhook.** \`PUT ${o}/v1/webhook\` (or \`molty_webhook\`) with a request you define:
+   \`{"url":"https://<your-host>/…","method"?:"POST","headers"?:{…},"body"?:"<template>","content_type"?:"application/json"}\`.
+   The relay sends it per event, filling \`{{event.type}}\` \`{{event.id}}\` \`{{event.ts}}\`
+   \`{{event.data}}\` \`{{event.data.<field>}}\` \`{{device}}\` \`{{text}}\` — so you can point it at
+   whatever wakes you (your own server, a chat/bot API, an agent-run endpoint). No body =
+   \`{"device","event"}\` JSON. Header values are stored and never shown again. The response
+   has a dry run for a sample event and a \`secret\`, once: every request carries
+   \`Molty-Signature: t=<unix ms>,v1=<hex hmac_sha256(secret, t + "." + body)>\` (verify it;
+   reject stale \`t\`). HTTPS to public hosts only; retries ${WEBHOOK_LIMITS.retryMs.map((m) => `${m / 1000} s`).join(" / ")}; disabled after
+   ${WEBHOOK_LIMITS.maxFails} straight failures (\`relay.webhook\` in \`status\`; register again to re-enable).
+4. **Stream.** The \`molty\` CLI (release binaries: github.com/apresmoi/molty.uno/releases) follows
+   the long-poll: \`molty events\` prints one JSON line per event; \`--exec 'cmd'\` runs a
+   command per event with the event JSON on stdin. Saved link from \`molty pair\`, or
+   \`MOLTY_RELAY=${o} MOLTY_DEVICE=<id> MOLTY_TOKEN=<agent_token>\`.
+
+Pick whatever fits how you run; you know your environment better than we do. Be honest
+about the limit: nothing can wake an agent that has no reachable endpoint and is not
+running — then you hear Molty the next time you touch it (way 1), so say so instead of
+promising to react live.
 
 ## Etiquette
 
@@ -134,6 +177,11 @@ away, so pair and say hello over REST first; switch to MCP when it is available.
 - \`listen\` records the room: only when the human expects it.
 - After pairing, a good first move is one short \`say\` (e.g. "Hi, I'm here.") and
   then tell your human it worked.
+- **Events: react briefly, one reaction per moment.** A shake or tap is a nudge, not a
+  conversation: a \`mood\` (\`surprised\`, \`happy\`) or a few words is plenty; a burst of
+  events is one moment. Never answer every event with \`say\`. Ideas: shake = "pay
+  attention to me" / undo / shuffle; tap = acknowledge or dismiss what you showed; \`button\`
+  accept/reject = yes/no to a question you just asked on screen.
 `;
 }
 
