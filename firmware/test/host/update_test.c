@@ -326,6 +326,8 @@ static void test_boot(void) {
 }
 
 int main(void) {
+    /* the confirm question's fixed colours: update green, later neutral (the relay's palette) */
+    assert(UPD_COLOR_UPDATE == 0x3ccf96 && UPD_COLOR_LATER == 0xf1f3f5);
     test_parse();
     test_progress();
     test_session();

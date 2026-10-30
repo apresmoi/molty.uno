@@ -11,9 +11,48 @@
 #define TWO_PI 6.2831853f
 
 /* label centres on the bisector, as a fraction of the radius, per option count */
-static const float RADIUS_FRAC[FLUID_ASK_MAX + 1] = { 0.f, 0.f, 0.48f, 0.50f, 0.58f, 0.62f };
+static const float RADIUS_FRAC[FLUID_ASK_MAX + 1] = { 0.f, 0.f, 0.48f, 0.46f, 0.52f, 0.56f };
 
 static int clamp_n(int n) { return n < 1 ? 1 : n > FLUID_ASK_MAX ? FLUID_ASK_MAX : n; }
+
+/* relay/src/core/commands.ts COLORS: green, red, amber, blue, violet */
+const uint32_t FLUID_ASK_COLORS[FLUID_ASK_MAX] = { 0x3ccf96, 0xff6b6b, 0xffa94d, 0x4dabf7, 0xb197fc };
+
+uint32_t fluid_ask_color(int32_t given, int i) {
+    if (given >= 0) return (uint32_t)given & 0xFFFFFFu;
+    return FLUID_ASK_COLORS[i < 0 ? 0 : i % FLUID_ASK_MAX];
+}
+
+void fluid_ask_arc(int n, int i, int stage, float *a0, float *a1) {
+    n = clamp_n(n);
+    if (n == 1) { *a0 = 0.f; *a1 = TWO_PI; return; }
+    int sector[FLUID_ASK_MAX];
+    fluid_ask_order(n, sector);
+    int k = sector[i < 0 ? 0 : i >= n ? n - 1 : i];
+    /* the gap is in px along the arc: an angle at the arc's radius */
+    float r = FLUID_ASK_ARC_R * (float)stage * 0.5f, g = FLUID_ASK_ARC_GAP * ((float)stage / 412.f) / r;
+    *a0 = (float)k * TWO_PI / (float)n + g;
+    *a1 = (float)(k + 1) * TWO_PI / (float)n - g;
+}
+
+void fluid_ask_arc_look(const fluid_ask_screen_t *s, int i, float speed, float *amt, float *hw) {
+    *amt = 0.f; *hw = FLUID_ASK_ARC_HW;
+    if (s->phase == FLUID_ASK_SHOW) {
+        float q = (s->t * speed - 0.2f) / 0.4f;            /* the labels' hold ramp */
+        q = q < 0.f ? 0.f : q > 1.f ? 1.f : q;
+        *amt = q * q * (3.f - 2.f * q);
+    } else if (s->phase == FLUID_ASK_PICK) {
+        if (i == s->pick) {
+            float b = 1.f - s->pick_t / FLUID_ASK_HOLD_S;  /* the flare settles over the hold */
+            b = b < 0.f ? 0.f : b > 1.f ? 1.f : b;
+            *amt = 1.f + 0.35f * b;
+            *hw = FLUID_ASK_ARC_HW * (1.f + 0.7f * b);
+        } else {
+            float f = 1.f - s->pick_t * 2.f;               /* as the labels melt (0.8 at 0.5 s) */
+            *amt = f < 0.f ? 0.f : f;
+        }
+    }
+}
 
 int fluid_ask_sector(int n, float dx, float dy) {
     n = clamp_n(n);
@@ -96,7 +135,9 @@ float fluid_ask_layout(int n, const int *lens, int stage, float *cx, float *cy) 
         }
         if (hi < fs) fs = hi;
     }
-    return fs;
+    /* a hair under the bisected limit: a box that touches the boundary must still fit
+     * when its centre is recomputed from the stage px returned (float rounding) */
+    return fs * 0.999f;
 }
 
 int fluid_ask_follow(fluid_ask_screen_t *s, bool active, unsigned seq, int pick, int n, bool requested, bool *keep) {

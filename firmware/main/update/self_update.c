@@ -358,7 +358,8 @@ esp_err_t self_update_cmd(const cJSON *args, cJSON **out)
     }
     cJSON *result = cJSON_CreateObject();
     const char *labels[2] = { UPD_LABEL_UPDATE, UPD_LABEL_LATER };
-    esp_err_t r = result ? link_ask_open(t.job, labels, 2, t.timeout_ms, on_answer) : ESP_ERR_NO_MEM;
+    const int32_t colors[2] = { UPD_COLOR_UPDATE, UPD_COLOR_LATER };
+    esp_err_t r = result ? link_ask_open(t.job, labels, colors, 2, t.timeout_ms, on_answer) : ESP_ERR_NO_MEM;
     if (r != ESP_OK) {
         lock();
         if (s_s.state == UPD_CONFIRM) s_s.state = UPD_IDLE;

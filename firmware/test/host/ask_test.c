@@ -162,8 +162,73 @@ static void test_follow(void) {
     CHECK(did == (FLUID_ASK_DID_SHOW | FLUID_ASK_DID_PICK) && q.pick == 0, "show + pick");
 }
 
+/* colours: the agent's, else green, red, amber, blue, violet by index */
+static void test_colors(void) {
+    static const uint32_t want[5] = { 0x3ccf96, 0xff6b6b, 0xffa94d, 0x4dabf7, 0xb197fc };
+    for (int i = 0; i < FLUID_ASK_MAX; i++) {
+        CHECK(fluid_ask_color(-1, i) == want[i], "default %d = %06x", i, (unsigned)fluid_ask_color(-1, i));
+        CHECK(fluid_ask_color(0x123456, i) == 0x123456 && fluid_ask_color(0, i) == 0, "given %d", i);
+    }
+}
+
+/* each option's arc: inside its own sector (the one its label sits in), the gap off
+ * both dividers, n = 1 the whole ring; arcs never overlap */
+static void test_arcs(int stage) {
+    const float TWO_PI = 6.2831853f, R = FLUID_ASK_ARC_R * stage * 0.5f, gap = FLUID_ASK_ARC_GAP * stage / 412.f;
+    float a0, a1;
+    fluid_ask_arc(1, 0, stage, &a0, &a1);
+    CHECK(a0 == 0.f && a1 >= TWO_PI, "n=1: a full ring (%.3f..%.3f)", a0, a1);
+    for (int n = 2; n <= FLUID_ASK_MAX; n++) {
+        int sector[FLUID_ASK_MAX]; fluid_ask_order(n, sector);
+        float lo[FLUID_ASK_MAX], hi[FLUID_ASK_MAX];
+        for (int i = 0; i < n; i++) {
+            fluid_ask_arc(n, i, stage, &lo[i], &hi[i]);
+            float s0 = sector[i] * TWO_PI / n, s1 = (sector[i] + 1) * TWO_PI / n;
+            CHECK(lo[i] < hi[i] && fabsf((lo[i] - s0) * R - gap) < 0.01f && fabsf((s1 - hi[i]) * R - gap) < 0.01f,
+                  "stage %d n=%d arc %d: %.3f..%.3f in sector %.3f..%.3f", stage, n, i, lo[i], hi[i], s0, s1);
+            /* its middle on the rim picks its own option (the colour belongs to the button) */
+            float m = 0.5f * (lo[i] + hi[i]);
+            CHECK(fluid_ask_pick(n, sinf(m) * R, -cosf(m) * R) == i, "n=%d arc %d sits in option %d's sector", n, i, fluid_ask_pick(n, sinf(m) * R, -cosf(m) * R));
+            /* both ends too, just inside */
+            CHECK(fluid_ask_pick(n, sinf(lo[i] + 1e-3f) * R, -cosf(lo[i] + 1e-3f) * R) == i && fluid_ask_pick(n, sinf(hi[i] - 1e-3f) * R, -cosf(hi[i] - 1e-3f) * R) == i,
+                  "n=%d arc %d ends", n, i);
+        }
+        for (int i = 0; i < n; i++) for (int j = 0; j < n; j++)
+            if (i != j) CHECK(hi[i] <= lo[j] || hi[j] <= lo[i], "n=%d arcs %d and %d overlap", n, i, j);
+    }
+}
+
+/* the arcs follow the question: condense with the labels, the pick flares, the others fade */
+static void test_arc_look(void) {
+    fluid_ask_screen_t s = { 0 };
+    float amt, hw;
+    s.phase = FLUID_ASK_NONE; fluid_ask_arc_look(&s, 0, 1.f, &amt, &hw);
+    CHECK(amt == 0.f, "no question: no arc");
+    s.phase = FLUID_ASK_SHOW; s.t = 0.f; fluid_ask_arc_look(&s, 0, 1.f, &amt, &hw);
+    CHECK(amt == 0.f && hw == FLUID_ASK_ARC_HW, "just shown: none yet (%.2f)", amt);
+    s.t = FLUID_ASK_READY; fluid_ask_arc_look(&s, 2, 1.f, &amt, &hw);
+    CHECK(amt == 1.f, "condensed with the labels at READY (%.2f)", amt);
+    s.t = FLUID_ASK_READY / 2.f; fluid_ask_arc_look(&s, 2, 2.f, &amt, &hw);
+    CHECK(amt == 1.f, "speed scales the ramp");
+    s.phase = FLUID_ASK_PICK; s.pick = 1; s.pick_t = 0.f;
+    float a1, h1, a0, h0;
+    fluid_ask_arc_look(&s, 1, 1.f, &a1, &h1); fluid_ask_arc_look(&s, 0, 1.f, &a0, &h0);
+    CHECK(a1 > 1.2f && h1 > 1.5f * FLUID_ASK_ARC_HW && a0 == 1.f, "pick: the chosen flares (%.2f, %.3f), the other still there (%.2f)", a1, h1, a0);
+    s.pick_t = 0.25f;
+    fluid_ask_arc_look(&s, 0, 1.f, &a0, &h0); fluid_ask_arc_look(&s, 1, 1.f, &amt, &hw);
+    CHECK(a0 > 0.f && a0 < 1.f && amt < a1 && amt > 1.f && hw < h1, "fading / settling (%.2f, %.2f)", a0, amt);
+    s.pick_t = 0.5f; fluid_ask_arc_look(&s, 0, 1.f, &a0, &h0);
+    CHECK(a0 == 0.f, "the others gone by 0.5 s");
+    s.pick_t = FLUID_ASK_HOLD_S; fluid_ask_arc_look(&s, 1, 1.f, &amt, &hw);
+    CHECK(amt == 1.f && hw == FLUID_ASK_ARC_HW, "the chosen one settled at the hold's end");
+}
+
 int main(void) {
     printf("ask host test\n");
+    test_colors();
+    test_arcs(412);
+    test_arcs(240);
+    test_arc_look();
     test_order();
     test_pick();
     test_fits();

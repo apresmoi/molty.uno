@@ -20,14 +20,15 @@
  *             its sector (FLUID_ASK_GAP px off both dividers) and inside the disc
  *             (FLUID_ASK_RIM px off the rim), capped at FLUID_ASK_FS_MAX. Letter boxes are
  *             the reader's: 0.6 em wide, 1.05 em tall (fluid_text_set_word). 8 letters fit
- *             at 27.9 px at n = 5 on the 412 px stage, above FLUID_ASK_FS_MIN (18 px, the
- *             reader's legibility floor; ask_test.c pins it). A 240 px stage gets 16 px.
+ *             at 26.0 px at n = 5 on the 412 px stage, above FLUID_ASK_FS_MIN (18 px, the
+ *             reader's legibility floor; ask_test.c pins it). A 240 px stage gets 15 px.
  * Coordinates: px relative to the screen's centre, y down; pixel sizes scale with the
  * stage (tuned at FLUID_STAGE_REF = 412).
  */
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,8 +38,26 @@ extern "C" {
 #define FLUID_ASK_LABEL_MAX  8       /* characters per option (the relay checks it too) */
 #define FLUID_ASK_FS_MIN     18.f    /* type size floor, stage px at 412              */
 #define FLUID_ASK_FS_MAX     44.f    /* type size cap                                 */
-#define FLUID_ASK_RIM        10.f    /* letter boxes stay this far inside the rim     */
+#define FLUID_ASK_RIM        27.f    /* letter boxes stay this far inside the rim (the arcs' band) */
 #define FLUID_ASK_GAP        4.f     /* ...and this far off a divider                 */
+
+/* ── Colours and rim arcs (the buttons' borders) ─────────────────────────────────
+ *   colour    each option has one (0xRRGGBB): the agent's (the relay resolves names),
+ *             else FLUID_ASK_COLORS[i] by index. Its label's letters and its arc take it.
+ *   arc       option i's border: an arc of the fluid itself (fluid_target_arc) centred
+ *             FLUID_ASK_ARC_R of the radius out, spanning its sector minus
+ *             FLUID_ASK_ARC_GAP px (at 412) at each divider; n = 1: the whole ring.
+ *             Labels stay FLUID_ASK_RIM px inside the rim, clear of the arcs' band. */
+#define FLUID_ASK_ARC_R      0.92f   /* arc centre line, of the radius                 */
+#define FLUID_ASK_ARC_HW     0.022f  /* arc half width, of the radius                   */
+#define FLUID_ASK_ARC_GAP    9.f     /* px (at 412) each arc stops short of a divider   */
+/** Default colours by option index: green, red, amber, blue, violet (relay COLORS). */
+extern const uint32_t FLUID_ASK_COLORS[FLUID_ASK_MAX];
+/** Option i's colour: `given` (0xRRGGBB) when ≥ 0, else FLUID_ASK_COLORS[i]. */
+uint32_t fluid_ask_color(int32_t given, int i);
+/** Option i's arc (of n) on a stage of `stage` px: *a0..*a1 radians clockwise from 12
+ *  o'clock, a0 < a1; n = 1: 0..2π. */
+void  fluid_ask_arc(int n, int i, int stage, float *a0, float *a1);
 
 /** The clockwise sector 0..n-1 of a point (dx, dy) from the centre; 0 for n ≤ 1. */
 int   fluid_ask_sector(int n, float dx, float dy);
@@ -73,6 +92,11 @@ enum { FLUID_ASK_DID_SHOW = 1, FLUID_ASK_DID_PICK = 2, FLUID_ASK_DID_LEAVE = 4 }
  *  (ended unanswered, or the pick's hold is over / cut short by a request). On LEAVE, *keep
  *  = a request came while the question was up: the screen goes to it, not to the creature. */
 int fluid_ask_follow(fluid_ask_screen_t *s, bool active, unsigned seq, int pick, int n, bool requested, bool *keep);
+/** Option i's arc this frame: *amt its ink (0 = gone, 1 = full) and *hw its half width
+ *  (of the radius). SHOW: every arc condenses with the labels (the hold ramp at this
+ *  speed). PICK: the chosen arc flares (brighter, up to 1.7× as wide) and settles over the
+ *  hold; the others fade as fast as their labels melt (gone at 0.5 s). */
+void  fluid_ask_arc_look(const fluid_ask_screen_t *s, int i, float speed, float *amt, float *hw);
 /** The question a tap on a frame of this screen may answer: shown, not yet answered, its
  *  labels condensed at this speed (cfg speed) — else 0 (nothing, another question's
  *  letters still morphing, or a pick on its way out). */

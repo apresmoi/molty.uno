@@ -243,8 +243,8 @@ static void test_frames(void)
 
 static bool ask_ok(const char *json, int *n_out) {
     cJSON *a = cJSON_Parse(json); assert(a);
-    char job[LINK_STREAM_MAX], labels[LINK_ASK_MAX][LINK_ASK_LABEL_MAX + 1]; int n = -1; unsigned to = 0;
-    bool ok = link_ask_args(a, job, labels, &n, &to);
+    char job[LINK_STREAM_MAX], labels[LINK_ASK_MAX][LINK_ASK_LABEL_MAX + 1]; int32_t cols[LINK_ASK_MAX]; int n = -1; unsigned to = 0;
+    bool ok = link_ask_args(a, job, labels, cols, &n, &to);
     if (ok && n_out) *n_out = n;
     cJSON_Delete(a);
     return ok;
@@ -254,8 +254,9 @@ static bool ask_ok(const char *json, int *n_out) {
 static void test_ask_args(void)
 {
     cJSON *a = cJSON_Parse("{\"job\":\"molty-x.j_3\",\"options\":[\"Yes\",\" no \",\"(a)~\"],\"timeout_ms\":15000,\"extra\":1}");
-    char job[LINK_STREAM_MAX], labels[LINK_ASK_MAX][LINK_ASK_LABEL_MAX + 1]; int n; unsigned to;
-    assert(link_ask_args(a, job, labels, &n, &to) && n == 3 && to == 15000);
+    char job[LINK_STREAM_MAX], labels[LINK_ASK_MAX][LINK_ASK_LABEL_MAX + 1]; int32_t cols[LINK_ASK_MAX]; int n; unsigned to;
+    assert(link_ask_args(a, job, labels, cols, &n, &to) && n == 3 && to == 15000);
+    for (int i = 0; i < LINK_ASK_MAX; i++) assert(cols[i] == -1);   /* no colors: the screen's defaults */
     /* verbatim: the answer's label must equal options[index] exactly */
     assert(!strcmp(job, "molty-x.j_3") && !strcmp(labels[0], "Yes") && !strcmp(labels[1], " no ") && !strcmp(labels[2], "(a)~"));
     cJSON_Delete(a);
@@ -288,6 +289,32 @@ static void test_ask_args(void)
     assert(!ask_ok(big, NULL));
     id[128] = 0; snprintf(big, sizeof(big), "{\"job\":\"%s\",\"options\":[\"a\"],\"timeout_ms\":5000}", id);
     assert(ask_ok(big, NULL));
+
+    /* colors: optional, exactly one "#rrggbb" (either case) per option, in order */
+    {
+        cJSON *c = cJSON_Parse("{\"job\":\"j\",\"options\":[\"a\",\"b\",\"c\"],\"colors\":[\"#3ccf96\",\"#FF6B6B\",\"#000000\"],\"timeout_ms\":5000}");
+        char cj[LINK_STREAM_MAX], cl[LINK_ASK_MAX][LINK_ASK_LABEL_MAX + 1]; int32_t cc[LINK_ASK_MAX]; int cn; unsigned cto;
+        assert(link_ask_args(c, cj, cl, cc, &cn, &cto) && cn == 3 && cc[0] == 0x3ccf96 && cc[1] == 0xff6b6b && cc[2] == 0 && cc[3] == -1);
+        cJSON_Delete(c);
+    }
+#define ASKC(opts, cols) "{\"job\":\"j1\",\"options\":" opts ",\"colors\":" cols ",\"timeout_ms\":5000}"
+    assert(!ask_ok(ASKC("[\"a\",\"b\"]", "[\"#3ccf96\"]"), NULL));                    /* one short */
+    assert(!ask_ok(ASKC("[\"a\"]", "[\"#3ccf96\",\"#3ccf96\"]"), NULL));                /* one too many */
+    assert(!ask_ok(ASKC("[\"a\"]", "[\"green\"]"), NULL));                             /* names are the relay's */
+    assert(!ask_ok(ASKC("[\"a\"]", "[\"#3cf\"]"), NULL) && !ask_ok(ASKC("[\"a\"]", "[\"#3ccf9g\"]"), NULL));
+    assert(!ask_ok(ASKC("[\"a\"]", "[\"3ccf96\"]"), NULL) && !ask_ok(ASKC("[\"a\"]", "[\"#3ccf960\"]"), NULL));
+    assert(!ask_ok(ASKC("[\"a\"]", "[3985302]"), NULL) && !ask_ok(ASKC("[\"a\"]", "\"#3ccf96\""), NULL) && !ask_ok(ASKC("[\"a\"]", "null"), NULL));
+    assert(ask_ok(ASKC("[\"a\"]", "[\"#a1B2c3\"]"), NULL));
+    /* link_color_arg: absent → -1; "#rrggbb" → value; anything else → false */
+    {
+        cJSON *c = cJSON_Parse("{\"x\":\"#00ff00\",\"n\":5,\"b\":\"#00ff0\",\"z\":null}"); int32_t v = 7;
+        assert(link_color_arg(c, "missing", &v) && v == -1);
+        assert(link_color_arg(c, "x", &v) && v == 0x00ff00);
+        assert(!link_color_arg(c, "n", &v) && !link_color_arg(c, "b", &v) && !link_color_arg(c, "z", &v));
+        cJSON_Delete(c);
+        uint32_t u;
+        assert(link_color_parse("#FFFFFF", &u) && u == 0xffffff && !link_color_parse("#fffff", &u) && !link_color_parse(NULL, &u) && !link_color_parse("fffffff", &u));
+    }
 
     /* the answer events, exactly */
     cJSON *f = link_evt_answer_frame("j1", 2, "(a)~", NULL);

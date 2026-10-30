@@ -209,7 +209,10 @@ typedef struct {
     bool  acc;                         /* ORP letter                                      */
     float x, y, w, h, fs;              /* stage px                                        */
     float melt;                        /* this letter's own melt, added to the frame's    */
+    uint32_t rgb;                      /* FLUID_RGB | 0xRRGGBB: its own colour (pastel);
+                                        * 0 = the palette's                               */
 } fluid_letter_t;
+#define FLUID_RGB 0x1000000u           /* "a colour is set" flag over 0xRRGGBB            */
 
 typedef struct {
     float *cov, *orp, *near, *near_s, *dark, *tmp;
@@ -231,8 +234,21 @@ void fluid_text_fill(fluid_text_t *tx, fluid_sim_t *s, float t);
  *  type size fs. Every label's letters go into tx->letters in order (label i's letters
  *  follow label i−1's); only `shown` labels pool ink (the target), so a label that is not
  *  shown melts back into the fluid; `acc` labels are accented. Then fluid_text_fill. */
-typedef struct { const char *text; int len; float cx, cy; bool shown, acc; } fluid_label_t;
+typedef struct { const char *text; int len; float cx, cy; bool shown, acc; uint32_t rgb; } fluid_label_t;   /* rgb: as fluid_letter_t */
 void fluid_text_set_labels(fluid_text_t *tx, const fluid_sim_t *s, const fluid_label_t *lb, int n, float fs);
+
+/** A ring / arc of the fluid itself (the listening ring, a question's button borders):
+ *  raises T toward amt·FLUID_ARC_INK over the band |r − rc| ≤ hw (soft edge outside it),
+ *  angles a0..a1 (radians clockwise from 12 o'clock; a1 − a0 ≥ 2π = the whole ring, soft
+ *  ends otherwise), and tints those cells toward rgb (0xRRGGBB) with accent acc (0..1:
+ *  mono palettes show the accent, pastel the colour). Radii in stage units (1 = the rim).
+ *  Call after the state's target fill, before fluid_sim_background. */
+#define FLUID_ARC_INK 0.72f
+void fluid_target_arc(fluid_sim_t *s, float rc, float hw, float a0, float a1, float amt, uint32_t rgb, float acc);
+/** Several arcs on one centre line in ONE pass (a question's 1..5 borders): each cell
+ *  takes the strongest arc there (its ink and colour). */
+typedef struct { float a0, a1, hw, amt; uint32_t rgb; } fluid_arc_t;
+void fluid_target_arcs(fluid_sim_t *s, float rc, const fluid_arc_t *arcs, int n, float acc);
 
 /* ── renderer (render.js) ─────────────────────────────────────────────────── */
 
@@ -292,18 +308,22 @@ enum { FLUID_MARK_NONE, FLUID_MARK_ARC, FLUID_MARK_DOT, FLUID_MARK_ALERT, FLUID_
 /** Returns the pixels written (0 for FLUID_MARK_NONE). */
 int  fluid_draw_mark(const fluid_draw_t *d, uint16_t *fb, int palette, int mark);
 
+/** The palette's accent colour, 0xRRGGBB (the listening ring's default). */
+uint32_t fluid_palette_accent(int palette);
+/** The listening ring's colour (0xRRGGBB): the listen's own `given` when ≥ 0, else the
+ *  device default `dflt` when ≥ 0 (the console's setting), else the palette's accent. */
+uint32_t fluid_ring_rgb(int32_t given, int32_t dflt, int palette);
+
 /** Pixel overlays drawn over the fluid (after fluid_draw, before the mark), blended:
- *  ring     the listening ring: a thin circle just inside the round panel's rim in the
- *           palette's accent colour; ring = its opacity 0..1 (0 = none), ring_w = its
- *           stroke width in stage px at 412 (scaled with the stage)
  *  dividers a question's faint sector dividers (fluid_ask.h): sectors ≥ 2 rays from the
  *           centre at 12 o'clock + k·360/sectors; divider = their opacity 0..1 (0 = none)
+ *  (The listening ring and the buttons' borders are the fluid itself: fluid_target_arc.)
  *  Blending reads the pixel under it, so it must be a freshly drawn one: before every
  *  fluid_draw call fluid_draw_overlay_dirty with the overlay last drawn AND the one about
  *  to be drawn — the cells under them are redrawn (restored), nothing else is. */
-typedef struct { float ring, ring_w; int sectors; float divider; } fluid_overlay_t;
+typedef struct { int sectors; float divider; } fluid_overlay_t;
 static inline bool fluid_overlay_on(const fluid_overlay_t *ov) {
-    return ov->ring > 0.f || (ov->sectors >= 2 && ov->divider > 0.f);
+    return ov->sectors >= 2 && ov->divider > 0.f;
 }
 /** Mark the cells under ov for redraw by the next fluid_draw. */
 void fluid_draw_overlay_dirty(fluid_draw_t *d, const fluid_overlay_t *ov);

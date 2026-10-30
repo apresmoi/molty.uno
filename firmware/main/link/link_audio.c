@@ -212,11 +212,14 @@ static esp_err_t start(const cJSON *args, bool listen, cJSON **out)
     bool vad = vad_def.enabled;
     unsigned end_silence_ms = vad_def.end_silence_ms, no_speech_ms = vad_def.no_speech_ms;
     if (listen && !link_listen_args(args, &vad, &end_silence_ms, &no_speech_ms)) return ESP_ERR_INVALID_ARG;
+    int32_t ring = -1;                       /* the listening ring's colour; -1 = the device default */
+    if (listen && !link_color_arg(args, "ring_color", &ring)) return ESP_ERR_INVALID_ARG;
     cJSON *result = cJSON_CreateObject();
     if (!result) return ESP_ERR_NO_MEM;
     cJSON_AddStringToObject(result, "job", j->valuestring);
     esp_err_t e;
     if (listen) {
+        mole_fluid_listen_color(ring);       /* before the mic opens the ring (record) */
         e = link_cmd_mood("listening", -1);
     } else {
         e = mole_creature_select("fluid");

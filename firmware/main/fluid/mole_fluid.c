@@ -4,8 +4,9 @@
  * Port of creatures/js/fluid/main.js (wiring) on top of fluid_sim/target/draw.c; what
  * is shown when (states, moods, idle life, the demo reel) is fluid_director.c. Over it:
  * a question (the link's ask: labels as text targets in their sectors, fluid_ask.h, the
- * director's transitions waiting underneath) and pixel overlays (fluid_draw_overlay: the
- * listening ring while a listen records, a question's dividers). Threading:
+ * director's transitions waiting underneath), rings of the fluid itself (fluid_target_arc:
+ * the listening ring while a listen records, a question's coloured button borders) and
+ * one pixel overlay (fluid_draw_overlay: a question's faint dividers). Threading:
  *   - fluid_task (core 1, prio 2) OWNS the sim, targets, renderer, the director and the
  *     display while active: touch poll, IMU read, director, fixed 60 Hz steps, draw, flush.
  *   - the board (molty_board.h) sizes everything: the stage is the display's largest
@@ -53,6 +54,8 @@
 #include "mole_diag.h"
 #include "esp_private/esp_clk.h"
 #include "cJSON.h"
+#include "nvs.h"
+#include "link_protocol.h"   /* link_color_parse */
 
 #include "glyph_font.h"   /* gc_font5x7, GC_RAMP_ASCII */
 
@@ -72,6 +75,7 @@ static const char *TAG = "mole_fluid";
 #define FLUID_IMU_SY       (-1.f)     /* dot_dx = +ax, dot_dy = -ay             */
 #define FLUID_RIPPLE_Q     4
 #define RING_FADE_S        0.3f       /* listening ring fade in / out              */
+#define RING_R             0.875f     /* listening ring: centre line, of the radius */
 #define RING_BEAT_S        0.76f      /* a soft ripple on the ring each beat (the website's) */
 #define DIV_FADE_S         0.4f       /* a question's dividers fade in / out       */
 
@@ -133,10 +137,16 @@ static int     s_status_in = FD_STATUS_OK;      /* link status (mole_fluid_set_s
 typedef struct {
     unsigned seq; bool active; int n, pick;
     char label[FLUID_ASK_MAX][FLUID_ASK_LABEL_MAX + 1];
+    uint32_t rgb[FLUID_ASK_MAX];                /* each option's colour, 0xRRGGBB */
 } ask_want_t;
 static ask_want_t s_ask_want;
 static bool    s_listen_in = false;             /* link_audio: a listen is recording   */
 static float   s_level_in = 0.f;                /* ...its mic level 0..1               */
+static int32_t s_ring_in = -1;                  /* ...its ring colour (-1 = the default) */
+/* the device's default ring colour (NVS "fluid"/"ring", the console's setting; -1 = the
+ * palette's accent), loaded once by alloc_bufs */
+static int32_t s_ring_dflt = -1;
+static bool    s_ring_dflt_loaded = false;
 static float   s_ripq[FLUID_RIPPLE_Q][3];
 static int     s_ripn = 0;
 
@@ -174,10 +184,12 @@ static struct {
     char label[FLUID_ASK_MAX][FLUID_ASK_LABEL_MAX + 1];
     int len[FLUID_ASK_MAX];
     float cx[FLUID_ASK_MAX], cy[FLUID_ASK_MAX]; /* label centres, stage px              */
+    uint32_t rgb[FLUID_ASK_MAX];                /* colours (labels + rim arcs)           */
 } s_ask;
-/* overlays (fluid_draw_overlay): the listening ring and a question's dividers */
+/* the listening ring (fluid_target_arc) and a question's dividers (fluid_draw_overlay) */
 static bool  s_listen = false;                  /* task copies of s_listen_in / s_level_in */
 static float s_level = 0.f;
+static int32_t s_ring_rgb = -1, s_ring_def = -1;   /* task copies of s_ring_in / s_ring_dflt */
 static float s_ring = 0.f, s_lvl = 0.f, s_ring_ph = 0.f, s_ring_beat = 0.f, s_div = 0.f;
 static int   s_div_n = 0;
 static fluid_overlay_t s_ov;                    /* this frame's, from sim_frame          */
@@ -304,7 +316,8 @@ static void ask_apply(void) {
     fluid_label_t lb[FLUID_ASK_MAX];
     for (int i = 0; i < s_ask.n; i++)
         lb[i] = (fluid_label_t){ s_ask.label[i], s_ask.len[i], s_ask.cx[i], s_ask.cy[i],
-                                 s_ask.scr.phase == FLUID_ASK_SHOW || i == s_ask.scr.pick, s_ask.scr.phase == FLUID_ASK_PICK && i == s_ask.scr.pick };
+                                 s_ask.scr.phase == FLUID_ASK_SHOW || i == s_ask.scr.pick, s_ask.scr.phase == FLUID_ASK_PICK && i == s_ask.scr.pick,
+                                 FLUID_RGB | s_ask.rgb[i] };
     fluid_text_set_labels(s_tx, s_sim, lb, s_ask.n, s_ask.fs);
     s_sim->edge_w = 0.f;
     s_sim->p.relax_up = RATE_UP[ST_TEXT]; s_sim->p.relax_down = RATE_DOWN[ST_TEXT];
@@ -318,6 +331,7 @@ static void ask_show(const ask_want_t *w, int was) {
     for (int i = 0; i < s_ask.n; i++) {
         memcpy(s_ask.label[i], w->label[i], sizeof(s_ask.label[i]));
         s_ask.len[i] = (int)strlen(s_ask.label[i]);
+        s_ask.rgb[i] = w->rgb[i];
     }
     s_ask.fs = fluid_ask_layout(s_ask.n, s_ask.len, s_stage, s_ask.cx, s_ask.cy);
     ask_apply();
@@ -484,6 +498,18 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     read_tilt(cfg->tilt);
     float ox = s_gx * FLUID_TILT_LEAN, oy = s_gy * FLUID_TILT_LEAN;
 
+    /* the listening ring: fades in while a listen records (never over a question),
+     * breathes ~1 Hz (radius, width, ink) and swells with the mic level (fast attack,
+     * slow release). It is a target of the fluid, around whatever the state shows (the
+     * creature, in its listening mood, stays in the middle). */
+    s_ring = s_listen && !asking ? fminf(1.f, s_ring + rdt / RING_FADE_S) : fmaxf(0.f, s_ring - rdt / RING_FADE_S);
+    float lv = s_listen ? s_level : 0.f;
+    s_lvl += (lv - s_lvl) * (1.f - expf(-rdt / (lv > s_lvl ? 0.05f : 0.25f)));
+    s_ring_ph += rdt;
+    if (s_ring_ph >= 1.f) s_ring_ph -= floorf(s_ring_ph);
+    const float br = 0.5f - 0.5f * cosf(s_ring_ph * 6.2831853f);
+    const float acc = cfg->palette == FLUID_PAL_PASTEL ? 0.f : 1.f;   /* mono palettes: the accent */
+
     switch (asking ? ST_TEXT : s_cur) {
     case ST_TEXT:     fluid_text_fill(s_tx, s, s_tnow); break;
     case ST_FX:       fluid_target_effect(s, s_cur_fx, s_tnow, swell, ox, oy); break;
@@ -499,6 +525,18 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         }
         break;
     default:          fluid_target_blob(s, s_tnow, swell, ox, oy); break;
+    }
+    if (asking) {                                          /* each button's border, in its colour */
+        fluid_arc_t arcs[FLUID_ASK_MAX];
+        for (int i = 0; i < s_ask.n; i++) {
+            fluid_ask_arc_look(&s_ask.scr, i, cfg->speed, &arcs[i].amt, &arcs[i].hw);
+            fluid_ask_arc(s_ask.n, i, s_stage, &arcs[i].a0, &arcs[i].a1);
+            arcs[i].rgb = s_ask.rgb[i];
+        }
+        fluid_target_arcs(s, FLUID_ASK_ARC_R, arcs, s_ask.n, acc);   /* one pass for all */
+    } else if (s_ring > 0.f) {
+        fluid_target_arc(s, RING_R + 0.012f * br + 0.02f * s_lvl, 0.018f + 0.008f * br + 0.02f * s_lvl, 0.f, 6.2831853f,
+                         s_ring * fminf(1.f, 0.7f + 0.2f * br + 0.35f * s_lvl), fluid_ring_rgb(s_ring_rgb, s_ring_def, cfg->palette), acc);
     }
     /* the always-on dim fluid; its slow noise (and the eddies' ψ) refresh on
      * alternating frames — both drift ≤ 0.012 lattice units per frame */
@@ -528,22 +566,10 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     fluid_sim_view(s);
     s_shimmer = 0.12f + (thinking ? 0.35f : 0.f) + cfg->mic * 0.4f;
 
-    /* the listening ring: fades in while a listen records (never over a question),
-     * breathes ~1 Hz, brightens and thickens with the mic level (fast attack, slow
-     * release), and each beat a soft ripple wobbles the fluid somewhere along it */
-    s_ring = s_listen && !asking ? fminf(1.f, s_ring + rdt / RING_FADE_S) : fmaxf(0.f, s_ring - rdt / RING_FADE_S);
-    float lv = s_listen ? s_level : 0.f;
-    s_lvl += (lv - s_lvl) * (1.f - expf(-rdt / (lv > s_lvl ? 0.05f : 0.25f)));
-    s_ring_ph += rdt;
-    if (s_ring_ph >= 1.f) s_ring_ph -= floorf(s_ring_ph);
-    float br = 0.5f - 0.5f * cosf(s_ring_ph * 6.2831853f);
-    /* quantised: an overlay that did not change is not re-blended */
-    s_ov.ring = roundf(s_ring * fminf(1.f, 0.45f + 0.25f * br + 0.55f * s_lvl) * 64.f) / 64.f;
-    s_ov.ring_w = s_ov.ring > 0.f ? roundf((2.f + 0.8f * br + 3.2f * s_lvl) * 4.f) / 4.f : 0.f;
-    if (s_ring > 0.5f && (s_ring_beat += rdt) >= RING_BEAT_S) {
+    if (s_ring > 0.5f && (s_ring_beat += rdt) >= RING_BEAT_S) {   /* a soft ripple somewhere on the ring each beat */
         s_ring_beat = 0.f;
         float a = frand() * 6.2831853f;
-        ripple(0.9f * cosf(a), 0.9f * sinf(a), 0.3f + 0.9f * s_lvl, 0.06f);
+        ripple(RING_R * cosf(a), RING_R * sinf(a), 0.3f + 0.9f * s_lvl, 0.06f);
     }
     /* a question's faint dividers: in while it waits, out once it was answered */
     bool div_on = s_ask.scr.phase == FLUID_ASK_SHOW && s_ask.n >= 2;
@@ -748,7 +774,7 @@ static void fluid_task(void *arg) {
         s_req_activity = s_req_shake = s_req_user = false;
         int status = s_status_in;
         ask_want_t want = s_ask_want;
-        s_listen = s_listen_in; s_level = s_level_in;
+        s_listen = s_listen_in; s_level = s_level_in; s_ring_rgb = s_ring_in; s_ring_def = s_ring_dflt;
         if (s_text_ver != s_seen_ver) {
             memcpy(s_ttext, s_text, (size_t)s_text_len + 1);
             s_seen_ver = s_text_ver; text_changed = true;
@@ -877,6 +903,17 @@ static esp_err_t alloc_bufs(void) {
         s_cfg.grid_w = s_grid_w0; s_cfg.grid_h = s_grid_h0;
     }
     xSemaphoreGive(s_mutex);
+    if (!s_ring_dflt_loaded) {                   /* the console's ring colour, once */
+        nvs_handle_t h;
+        int32_t v = -1;
+        if (nvs_open("fluid", NVS_READONLY, &h) == ESP_OK) {
+            if (nvs_get_i32(h, "ring", &v) != ESP_OK || v > 0xFFFFFF) v = -1;
+            nvs_close(h);
+        }
+        xSemaphoreTake(s_mutex, portMAX_DELAY);
+        s_ring_dflt = v < 0 ? -1 : v; s_ring_dflt_loaded = true;
+        xSemaphoreGive(s_mutex);
+    }
     if (!s_text) {
         s_text = heap_caps_malloc(FLUID_TEXT_MAX + 1, MALLOC_CAP_SPIRAM);
         if (!s_text) return ESP_ERR_NO_MEM;
@@ -927,7 +964,7 @@ esp_err_t mole_fluid_creature_init(void) {
     s_gx = s_gy = 0.f; s_touch_down = false;
     s_ask.scr.phase = FLUID_ASK_NONE; s_ask.scr.seq = s_ask_want.seq;     /* a question from before is gone */
     s_dask = 0; atomic_store(&s_glass_ask, 0);
-    s_ring = s_lvl = s_div = 0.f; s_ov = s_dov = (fluid_overlay_t){ 0 };
+    s_ring = s_lvl = s_div = 0.f; s_ov = s_dov = (fluid_overlay_t){ 0 };   /* the fluid's own ring is in the sim */
     s_sim->p.relax_up = RATE_UP[ST_BLOB]; s_sim->p.relax_down = RATE_DOWN[ST_BLOB];
 
     xSemaphoreTake(s_go, 0);                     /* fresh handshake: drawer idle, nothing queued */
@@ -998,6 +1035,7 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     fluid_cfg_t c = s_cfg;
     fluid_stats_t st = s_stats;
+    int32_t ring = s_ring_dflt;
     char cname[40], cerr[40];
     memcpy(cname, s_cute_name, sizeof(cname)); memcpy(cerr, s_cute_err, sizeof(cerr));
     cJSON *root = cJSON_CreateObject();
@@ -1025,6 +1063,11 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
         }
     }
     cJSON_AddStringToObject(root, "palette",     FLUID_PAL_NAMES[c.palette]);
+    {   /* the listening ring's default colour: the console's setting, else the accent */
+        char rb[12];
+        if (ring >= 0) snprintf(rb, sizeof(rb), "#%06x", (unsigned)ring & 0xFFFFFFu);
+        cJSON_AddStringToObject(root, "ring_color", ring >= 0 ? rb : "accent");
+    }
     cJSON_AddStringToObject(root, "edge_mode",   FLUID_EDGE_NAMES[c.edge_mode]);
     cJSON_AddStringToObject(root, "grid",        grid);
     cJSON_AddNumberToObject(root, "speed",       c.speed);
@@ -1092,6 +1135,25 @@ esp_err_t mole_fluid_creature_state_set_json(const char *body) {
     if (!root) return ESP_ERR_INVALID_ARG;
     esp_err_t ret = ESP_OK;
     cJSON *j;
+    /* ring_color: "#rrggbb" or "accent" — the device default, kept in NVS */
+    int32_t ring = -2;                                 /* -2: not given */
+    if ((j = cJSON_GetObjectItem(root, "ring_color"))) {
+        uint32_t v;
+        if (cJSON_IsString(j) && !strcmp(j->valuestring, "accent")) ring = -1;
+        else if (cJSON_IsString(j) && link_color_parse(j->valuestring, &v)) ring = (int32_t)v;
+        else ret = ESP_ERR_INVALID_ARG;
+    }
+    if (ring != -2) {
+        nvs_handle_t h;
+        esp_err_t ne = nvs_open("fluid", NVS_READWRITE, &h);
+        if (ne == ESP_OK) {
+            ne = ring < 0 ? nvs_erase_key(h, "ring") : nvs_set_i32(h, "ring", ring);
+            if (ne == ESP_ERR_NVS_NOT_FOUND) ne = ESP_OK;  /* already the accent */
+            if (ne == ESP_OK) ne = nvs_commit(h);
+            nvs_close(h);
+        }
+        if (ne != ESP_OK) { ESP_LOGW(TAG, "ring_color not saved (%s)", esp_err_to_name(ne)); ret = ne; }
+    }
 
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     if ((j = cJSON_GetObjectItem(root, "text")) && cJSON_IsString(j))
@@ -1151,6 +1213,7 @@ esp_err_t mole_fluid_creature_state_set_json(const char *body) {
         }
         else ret = ESP_ERR_INVALID_ARG;
     }
+    if (ring != -2) { s_ring_dflt = ring; s_ring_dflt_loaded = true; }   /* live even if NVS failed */
     s_req_activity = true;                             /* someone is driving: no dozing off */
     xSemaphoreGive(s_mutex);
     cJSON_Delete(root);
@@ -1209,6 +1272,13 @@ void mole_fluid_listen(bool on) {
     xSemaphoreGive(s_mutex);
 }
 
+void mole_fluid_listen_color(int32_t rgb) {
+    if (!s_mutex) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_ring_in = rgb < 0 ? -1 : (int32_t)(rgb & 0xFFFFFF);
+    xSemaphoreGive(s_mutex);
+}
+
 void mole_fluid_listen_level(float level) {
     if (!s_mutex) return;
     level = isfinite(level) ? fminf(1.f, fmaxf(0.f, level)) : 0.f;
@@ -1217,14 +1287,17 @@ void mole_fluid_listen_level(float level) {
     xSemaphoreGive(s_mutex);
 }
 
-esp_err_t mole_fluid_ask_show(int n, const char *const *labels, unsigned *seq) {
+esp_err_t mole_fluid_ask_show(int n, const char *const *labels, const int32_t *colors, unsigned *seq) {
     if (n < 1 || n > FLUID_ASK_MAX || !labels || !seq) return ESP_ERR_INVALID_ARG;
     esp_err_t e = alloc_bufs();
     if (e != ESP_OK) return e;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     if (++s_ask_want.seq == 0) s_ask_want.seq = 1;     /* 0 = no question (mole_fluid_ask_shown) */
     s_ask_want.active = true; s_ask_want.n = n; s_ask_want.pick = -1;
-    for (int i = 0; i < n; i++) snprintf(s_ask_want.label[i], sizeof(s_ask_want.label[i]), "%s", labels[i] ? labels[i] : "");
+    for (int i = 0; i < n; i++) {
+        snprintf(s_ask_want.label[i], sizeof(s_ask_want.label[i]), "%s", labels[i] ? labels[i] : "");
+        s_ask_want.rgb[i] = fluid_ask_color(colors ? colors[i] : -1, i);
+    }
     s_req_activity = true;                             /* an agent is here: no dozing off */
     *seq = s_ask_want.seq;
     xSemaphoreGive(s_mutex);

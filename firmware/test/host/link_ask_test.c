@@ -26,6 +26,7 @@ void mole_fluid_event(mole_fluid_event_t ev) { (void)ev; }
 void mole_fluid_set_status(int status) { (void)status; }
 void mole_fluid_listen(bool on) { (void)on; }
 void mole_fluid_listen_level(float level) { (void)level; }
+void mole_fluid_listen_color(int32_t rgb) { (void)rgb; }
 int fd_status_from(bool wifi, bool relay, bool auth) { (void)wifi; (void)relay; (void)auth; return 0; }
 void link_client_health(bool *w, bool *r, bool *a) { *w = *r = true; *a = false; }
 static bool connected = true;
@@ -38,10 +39,11 @@ esp_err_t link_send_json(const cJSON *j) {
 /* the screen (mole_fluid.c): what the link wants (want_*) reaches the panel only when a
  * frame is drawn — glass = the question a tap on the panel may answer (mole_fluid_ask_shown) */
 static int shown_n = -1, picked = -1; static unsigned shows, ends; static char shown[5][9];
+static int32_t shown_rgb[5];          /* the colours handed to the screen; -2 = none (NULL) */
 static unsigned want_seq, glass; static bool want_up;
-esp_err_t mole_fluid_ask_show(int n, const char *const *labels, unsigned *seq) {
+esp_err_t mole_fluid_ask_show(int n, const char *const *labels, const int32_t *colors, unsigned *seq) {
     shows++; shown_n = n; picked = -1;
-    for (int i = 0; i < n; i++) snprintf(shown[i], sizeof(shown[i]), "%s", labels[i]);
+    for (int i = 0; i < n; i++) { snprintf(shown[i], sizeof(shown[i]), "%s", labels[i]); shown_rgb[i] = colors ? colors[i] : -2; }
     *seq = ++want_seq; want_up = true;
     return ESP_OK;
 }
@@ -68,7 +70,8 @@ static esp_err_t ask_cmd(const char *args) {
 }
 /* the command, then the panel shows its question */
 static esp_err_t ask(const char *args) { esp_err_t e = ask_cmd(args); draw(); return e; }
-static esp_err_t open_q(const char *job, unsigned timeout_ms) { esp_err_t e = link_ask_open(job, UL, 2, timeout_ms, on_done); draw(); return e; }
+static const int32_t UC[2] = { 0x3ccf96, 0xf1f3f5 };
+static esp_err_t open_q(const char *job, unsigned timeout_ms) { esp_err_t e = link_ask_open(job, UL, UC, 2, timeout_ms, on_done); draw(); return e; }
 /* a finger down then up at panel px (x, y) */
 static void touch(int x, int y) {
     uint16_t xs[1] = { (uint16_t)x }, ys[1] = { (uint16_t)y };
@@ -105,7 +108,7 @@ static void test_displayed(void) {
      * from a tap aimed at the old labels */
     assert(ask("{\"job\":\"C\",\"options\":[\"a\",\"b\"],\"timeout_ms\":5000}") == ESP_OK);
     int d0 = dones;
-    assert(link_ask_open("u8", UL, 2, 5000, on_done) == ESP_OK);
+    assert(link_ask_open("u8", UL, UC, 2, 5000, on_done) == ESP_OK);
     touch(206 - 100, 206); link_ask_tick();
     assert(dones == d0 && link_ask_pending());
     draw(); touch(206 - 100, 206); link_ask_tick();
@@ -153,6 +156,15 @@ int main(void) {
     sdk_caps = 0xFFFFFFFFu;
     /* bad args: refused, nothing shown */
     assert(ask("{\"job\":\"j1\",\"options\":[\"123456789\"],\"timeout_ms\":5000}") == ESP_ERR_INVALID_ARG && !shows);
+    /* colours: optional, one "#rrggbb" per option; a bad one refuses the question */
+    assert(ask("{\"job\":\"j1\",\"options\":[\"a\",\"b\"],\"colors\":[\"#3ccf96\"],\"timeout_ms\":5000}") == ESP_ERR_INVALID_ARG && !shows);
+    assert(ask("{\"job\":\"j1\",\"options\":[\"a\"],\"colors\":[\"green\"],\"timeout_ms\":5000}") == ESP_ERR_INVALID_ARG && !shows);
+    assert(ask("{\"job\":\"c1\",\"options\":[\"a\",\"b\"],\"colors\":[\"#3CCF96\",\"#000000\"],\"timeout_ms\":5000}") == ESP_OK);
+    assert(shows == 1 && shown_rgb[0] == 0x3ccf96 && shown_rgb[1] == 0);
+    assert(ask("{\"job\":\"c2\",\"options\":[\"a\",\"b\"],\"timeout_ms\":5000}") == ESP_OK);   /* older relay: defaults */
+    assert(shows == 2 && shown_rgb[0] == -1 && shown_rgb[1] == -1);
+    assert(open_q("c3", 5000) == ESP_OK && shown_rgb[0] == 0x3ccf96 && shown_rgb[1] == 0xf1f3f5);   /* the firmware's own */
+    link_ask_cancel(); shows = 0; nframes = 0; dones = 0;
 
     /* an answer: the tap's sector picks the option (n = 3: upper left, upper right, bottom);
      * the label goes back exactly as received; no `tap` event for that tap */
@@ -229,7 +241,7 @@ int main(void) {
     /* link_ask_open (self_update's "update" / "later"): same screen + tap, the owner hears
      * the end, no `answer` event ever */
     n0 = nframes;
-    assert(link_ask_open("u1", UL, 2, 5000, NULL) == ESP_ERR_INVALID_ARG);
+    assert(link_ask_open("u1", UL, UC, 2, 5000, NULL) == ESP_ERR_INVALID_ARG);
     assert(open_q("u1", 5000) == ESP_OK && link_ask_pending() && shown_n == 2 && !strcmp(shown[0], "update"));
     touch(206 - 100, 206); link_ask_tick();                 /* left half: "update" */
     assert(dones == 1 && done_index == 0 && !done_reason[0] && picked == 0 && nframes == n0 && !link_ask_pending());
@@ -260,7 +272,7 @@ int main(void) {
     connected = true;
     /* no touch: unsupported */
     sdk_caps &= ~MOLTY_CAP_TOUCH;
-    assert(link_ask_open("u7", UL, 2, 5000, on_done) == ESP_ERR_NOT_SUPPORTED);
+    assert(link_ask_open("u7", UL, UC, 2, 5000, on_done) == ESP_ERR_NOT_SUPPORTED);
     sdk_caps = 0xFFFFFFFFu;
     test_displayed();
     test_deadline();

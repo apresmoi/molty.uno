@@ -257,8 +257,32 @@ int link_frame_header(char *out, size_t cap, const link_frame_t *h)
     return (int)n + 1;
 }
 
+bool link_color_parse(const char *s, uint32_t *rgb)
+{
+    if (!s || s[0] != '#' || strlen(s) != 7) return false;
+    uint32_t v = 0;
+    for (int i = 1; i < 7; i++) {
+        int c = (unsigned char)s[i], d = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10
+                                       : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+        if (d < 0) return false;
+        v = v << 4 | (uint32_t)d;
+    }
+    *rgb = v;
+    return true;
+}
+
+bool link_color_arg(const cJSON *args, const char *key, int32_t *rgb)
+{
+    const cJSON *c = cJSON_GetObjectItemCaseSensitive(args, key);
+    uint32_t v;
+    if (!c) { *rgb = -1; return true; }
+    if (!cJSON_IsString(c) || !link_color_parse(c->valuestring, &v)) return false;
+    *rgb = (int32_t)v;
+    return true;
+}
+
 bool link_ask_args(const cJSON *args, char job[LINK_STREAM_MAX], char labels[LINK_ASK_MAX][LINK_ASK_LABEL_MAX + 1],
-                   int *n, unsigned *timeout_ms)
+                   int32_t colors[LINK_ASK_MAX], int *n, unsigned *timeout_ms)
 {
     const cJSON *j = cJSON_GetObjectItemCaseSensitive(args, "job");
     const cJSON *opts = cJSON_GetObjectItemCaseSensitive(args, "options");
@@ -288,6 +312,17 @@ bool link_ask_args(const cJSON *args, char job[LINK_STREAM_MAX], char labels[LIN
             if (!a[q] && !v[q]) return false;
         }
         memcpy(labels[i], v, len + 1);
+    }
+    const cJSON *cols = cJSON_GetObjectItemCaseSensitive(args, "colors");
+    for (int i = 0; i < LINK_ASK_MAX; i++) colors[i] = -1;
+    if (cols) {
+        if (!cJSON_IsArray(cols) || cJSON_GetArraySize(cols) != count) return false;
+        for (int i = 0; i < count; i++) {
+            const cJSON *c = cJSON_GetArrayItem(cols, i);
+            uint32_t v;
+            if (!cJSON_IsString(c) || !link_color_parse(c->valuestring, &v)) return false;
+            colors[i] = (int32_t)v;
+        }
     }
     strcpy(job, j->valuestring);
     *n = count; *timeout_ms = (unsigned)to->valuedouble;

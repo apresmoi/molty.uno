@@ -14,10 +14,11 @@
  */
 #pragma once
 #include <stdbool.h>
+#include <stdint.h>
 #include "cJSON.h"
 #include "esp_err.h"
 
-/* args {job, options, timeout_ms} (link_ask_args) → result {job} at once. "unsupported"
+/* args {job, options, colors?, timeout_ms} (link_ask_args) → result {job} at once. "unsupported"
  * without touch; a pending question is cancelled first. */
 esp_err_t link_ask_cmd(const cJSON *args, cJSON **result);
 /* A question the firmware itself asks (self_update.c's "update" / "later"): the same
@@ -25,9 +26,10 @@ esp_err_t link_ask_cmd(const cJSON *args, cJSON **result);
  * on the link task — index ≥ 0 the option tapped, else reason "timeout" | "cancelled"
  * (also when the link goes down) — instead of an `answer` event. A pending question is
  * cancelled first (its owner hears "cancelled"). Link task; labels as link_ask_args
- * accepts them (the caller's own constants). */
+ * accepts them (the caller's own constants); colors[i] 0xRRGGBB (NULL, or -1 for one
+ * option: the screen's default by index). */
 typedef void (*link_ask_done_t)(int index, const char *reason);
-esp_err_t link_ask_open(const char *job, const char *const *labels, int n, unsigned timeout_ms, link_ask_done_t done);
+esp_err_t link_ask_open(const char *job, const char *const *labels, const int32_t *colors, int n, unsigned timeout_ms, link_ask_done_t done);
 /* Something else takes the screen: a pending question ends "cancelled" (link task). */
 void link_ask_cancel(void);
 /* Link task, every loop: a tap that answers, else the timeout. */

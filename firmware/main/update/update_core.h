@@ -38,6 +38,8 @@
 #define UPD_TIMEOUT_DEF   60000          /* the relay always sends one; the default is for completeness */
 #define UPD_LABEL_UPDATE  "update"       /* option 0 (left half)                      */
 #define UPD_LABEL_LATER   "later"        /* option 1 (right half)                     */
+#define UPD_COLOR_UPDATE  0x3ccf96       /* its colour: green (relay COLORS.green)    */
+#define UPD_COLOR_LATER   0xf1f3f5       /* neutral white (relay COLORS.white)        */
 
 typedef struct {
     char job[UPD_JOB_MAX];               /* "" for a console update: no events          */

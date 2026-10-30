@@ -56,16 +56,24 @@ bool link_listen_args(const cJSON *args, bool *vad, unsigned *end_silence_ms, un
 cJSON *link_evt_shake_frame(double peak_g, int reversals, unsigned ms);
 cJSON *link_evt_tap_frame(double x, double y);
 cJSON *link_evt_button_frame(bool accept);
-/* ask cmd args {job, options, timeout_ms}: job a stream-sized id (1..128 chars); options
- * 1..LINK_ASK_MAX strings, each 1..LINK_ASK_LABEL_MAX chars of printable ASCII
+/* A colour on the wire: "#rrggbb" (hex digits either case) → 0xRRGGBB. Anything else → false. */
+bool link_color_parse(const char *s, uint32_t *rgb);
+/* An optional colour field (listen's "ring_color"): absent → *rgb = -1 and true; a
+ * "#rrggbb" string → its value; any other value (wrong type, bad hex, null) → false. */
+bool link_color_arg(const cJSON *args, const char *key, int32_t *rgb);
+/* ask cmd args {job, options, colors?, timeout_ms}: job a stream-sized id (1..128 chars);
+ * options 1..LINK_ASK_MAX strings, each 1..LINK_ASK_LABEL_MAX chars of printable ASCII
  * (0x20..0x7E), not all spaces, no two equal ignoring case; timeout_ms an integer
- * 1000..120000. All required. Labels are copied verbatim (the answer echoes them). */
+ * 1000..120000. All required. Labels are copied verbatim (the answer echoes them).
+ * colors (optional; the relay resolves names): one "#rrggbb" per option, in order →
+ * colors[i] = 0xRRGGBB; absent → every colors[i] = -1 (the screen's default by index);
+ * present but not an array of exactly n valid hex strings → false. */
 #define LINK_ASK_MAX        5
 #define LINK_ASK_LABEL_MAX  8
 #define LINK_ASK_TIMEOUT_MIN 1000
 #define LINK_ASK_TIMEOUT_MAX 120000
 bool link_ask_args(const cJSON *args, char job[LINK_STREAM_MAX], char labels[LINK_ASK_MAX][LINK_ASK_LABEL_MAX + 1],
-                   int *n, unsigned *timeout_ms);
+                   int32_t colors[LINK_ASK_MAX], int *n, unsigned *timeout_ms);
 /* {"t":"evt","name":"answer","data":{...}}: index ≥ 0 → {job, index, label} (a tap);
  * index < 0 → {job, index:null, reason} ("timeout" | "cancelled"). */
 cJSON *link_evt_answer_frame(const char *job, int index, const char *label, const char *reason);

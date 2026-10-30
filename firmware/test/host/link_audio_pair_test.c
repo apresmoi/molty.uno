@@ -60,6 +60,8 @@ void link_identity_rotate(void) { rotations++; }
 static bool ring_on; static unsigned ring_ons, ring_levels; static float ring_peak, ring_last;
 void mole_fluid_listen(bool on) { if (on) { assert(!ring_on); ring_ons++; } ring_on=on; }
 void mole_fluid_listen_level(float l) { assert(ring_on && l>=0.f && l<=1.f); ring_levels++; ring_last=l; if (l>ring_peak) ring_peak=l; }
+static int32_t ring_color = -9; static unsigned ring_colors;
+void mole_fluid_listen_color(int32_t rgb) { assert(!ring_on); ring_colors++; ring_color=rgb; }
 static unsigned ask_cancels;
 void link_ask_cancel(void) { ask_cancels++; }
 const char *link_identity_code(void) { return "ABCDEFGH"; }
@@ -260,6 +262,20 @@ static void test_ring(void) {
     listen_job(5000,&job); link_audio_cancel(); complete(record(&job)); assert(!ring_on);
     ring_ons=0; begin_say(); receive_pcm(0,true); complete(play()); assert(!ring_on && !ring_ons);
 }
+/* ring_color: optional "#rrggbb", set before the mic opens; every listen sets it (-1 = the
+ * device default), so a colour never leaks into the next listen; anything else is
+ * invalid_args before any screen change; say never touches it */
+static void test_ring_color(void) {
+    audio_job_t job; unsigned n=ring_colors;
+    listen_job_with(10,",\"ring_color\":\"#B197fc\"",&job);
+    assert(ring_colors==n+1 && ring_color==0xb197fc); complete(record(&job));
+    listen_job(10,&job); assert(ring_colors==n+2 && ring_color==-1); complete(record(&job));
+    listen_job_with(10,",\"ring_color\":\"#000000\"",&job); assert(ring_color==0); complete(record(&job));
+    const char *bad[]={",\"ring_color\":\"violet\"",",\"ring_color\":\"#abc\"",",\"ring_color\":\"#12345g\"",
+                       ",\"ring_color\":\"abcdef0\"",",\"ring_color\":11630588",",\"ring_color\":null",",\"ring_color\":\"#1234567\""};
+    for (size_t i=0;i<sizeof(bad)/sizeof(*bad);i++) { unsigned c=ring_colors; strcpy(sdk_mood,"idle"); assert(listen_rejects(bad[i]) && ring_colors==c && !strcmp(sdk_mood,"idle")); }
+    n=ring_colors; begin_say(); receive_pcm(0,true); complete(play()); assert(ring_colors==n);
+}
 /* say / listen take the screen from a pending question — only once they are accepted:
  * a refused one (bad args, busy, no hardware) leaves the question up. So does a pairing
  * that starts; a pairing refused at once does not. */
@@ -290,7 +306,7 @@ static void test_ask_cancel(void) {
 }
 int main(void) {
     assert(link_audio_init()==ESP_OK && link_pair_init()==ESP_OK);
-    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ask_cancel();
+    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel();
     cJSON_Delete(sdk_sent); free(s_jobs); free(s_done); free(s_ring);
-    puts("LINK AUDIO/PAIR PASS: paced PCM, final playback drain, errors, cmd-time text/mood, explicit moods outlive jobs, pairing reasons, board caps, listening ring, ask cancellation");
+    puts("LINK AUDIO/PAIR PASS: paced PCM, final playback drain, errors, cmd-time text/mood, explicit moods outlive jobs, pairing reasons, board caps, listening ring (+ ring_color), ask cancellation");
 }

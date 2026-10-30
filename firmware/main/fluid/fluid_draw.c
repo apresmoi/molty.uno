@@ -55,6 +55,12 @@ static const float PAL[FLUID_PAL_COUNT][3][3] = {     /* lo, hi, acc (0..255) */
     { { 0, 0, 0 },     { 255, 255, 255 }, { 255, 140, 60 } },
 };
 
+uint32_t fluid_palette_accent(int palette) {
+    const int pal = (palette >= 0 && palette < FLUID_PAL_COUNT) ? palette : FLUID_PAL_PASTEL;
+    const float *ac = PAL[pal][2];
+    return (uint32_t)ac[0] << 16 | (uint32_t)ac[1] << 8 | (uint32_t)ac[2];
+}
+
 /* 4×4 Bayer over the global sub-dot lattice (2W × 4H): (v + 0.5) / 16 */
 static const float BAYER4[16] = {
     0.5f / 16, 8.5f / 16, 2.5f / 16, 10.5f / 16, 12.5f / 16, 4.5f / 16, 14.5f / 16, 6.5f / 16,
@@ -405,8 +411,13 @@ int fluid_draw(fluid_draw_t *d, const fluid_frame_t *s, uint16_t *fb,
         else { int idx = (int)lrintf(fmaxf(0.f, ink - m) * rmax); c2 = ramp[idx < 1 ? 1 : idx > rmax ? rmax : idx]; }
         float br = fminf(1.f, 0.55f + ink), r, g, b;
         if (mono) { r = lo[0] + (hi[0] - lo[0]) * br; g = lo[1] + (hi[1] - lo[1]) * br; b = lo[2] + (hi[2] - lo[2]) * br; }
-        else { r = g = b = 255.f * br; }
-        if (L->acc) { float a = fmaxf(shown[n].acc, 0.85f); if (a > 1.f) a = 1.f; r += (ac[0] - r) * a; g += (ac[1] - g) * a; b += (ac[2] - b) * a; }
+        else if (L->rgb & FLUID_RGB) {                  /* its own colour (a question's button) */
+            if (L->acc) br = 1.f;                        /* accented = at full strength       */
+            r = (float)(L->rgb >> 16 & 255) * br; g = (float)(L->rgb >> 8 & 255) * br; b = (float)(L->rgb & 255) * br;
+        } else { r = g = b = 255.f * br; }
+        if (L->acc && (mono || !(L->rgb & FLUID_RGB))) {
+            float a = fmaxf(shown[n].acc, 0.85f); if (a > 1.f) a = 1.f; r += (ac[0] - r) * a; g += (ac[1] - g) * a; b += (ac[2] - b) * a;
+        }
         int gw = (int)(L->w * 0.8f), gh = (int)(L->h * 0.72f);
         int margin = ((int)L->h - gh) / 2 - 1;
         if (margin < 0) margin = 0;
@@ -457,9 +468,8 @@ int fluid_draw_mark(const fluid_draw_t *d, uint16_t *fb, int palette, int mark) 
     return n;
 }
 
-/* ── overlays: the listening ring, a question's dividers ─────────────────── */
+/* ── overlays: a question's dividers ─────────────────────────────────────── */
 
-#define RING_INSET   9.f      /* ring centre line, px inside the stage's rim at 412      */
 #define DIV_FROM     0.06f    /* dividers start this far out (of the radius) ...          */
 #define DIV_INSET    10.f     /* ...and stop this many px inside the rim                  */
 #define DIV_ALPHA    0.32f    /* faint: the palette's bright colour at this opacity        */
@@ -485,27 +495,9 @@ static bool cell_at(const fluid_draw_t *d, int x, int y, int *k) {
     return true;
 }
 
-/* the ring's band: [rc − hw − 1, rc + hw + 1] px around the centre */
-static void ring_band(const fluid_draw_t *d, const fluid_overlay_t *ov, float *rc, float *hw) {
-    float cx, cy, sc; ov_geom(d, &cx, &cy, &sc);
-    *rc = d->stage * 0.5f - RING_INSET * sc;
-    *hw = fmaxf(0.5f, ov->ring_w * sc * 0.5f);
-}
-
 void fluid_draw_overlay_dirty(fluid_draw_t *d, const fluid_overlay_t *ov) {
     if (!d || !ov || !fluid_overlay_on(ov)) return;
     float cx, cy, sc; ov_geom(d, &cx, &cy, &sc);
-    if (ov->ring > 0.f) {
-        float rc, hw; ring_band(d, ov, &rc, &hw);
-        const float ri = rc - hw - 1.5f, ro = rc + hw + 1.5f;
-        for (int j = 0; j < d->H; j++) for (int i = 0; i < d->W; i++) {
-            /* the cell rect's nearest and farthest point from the centre */
-            float x0 = d->cx[i] - cx, x1 = d->cx[i + 1] - cx, y0 = d->cy[j] - cy, y1 = d->cy[j + 1] - cy;
-            float nx = x0 > 0.f ? x0 : x1 < 0.f ? x1 : 0.f, ny = y0 > 0.f ? y0 : y1 < 0.f ? y1 : 0.f;
-            float fx = fmaxf(fabsf(x0), fabsf(x1)), fy = fmaxf(fabsf(y0), fabsf(y1));
-            if (nx * nx + ny * ny <= ro * ro && fx * fx + fy * fy >= ri * ri) d->key[j * d->W + i] = KEY_STALE;
-        }
-    }
     if (ov->sectors >= 2 && ov->divider > 0.f) {
         const float R = d->stage * 0.5f, r0 = DIV_FROM * R, r1 = R - DIV_INSET * sc;
         for (int q = 0; q < ov->sectors; q++) {
@@ -562,34 +554,6 @@ int fluid_draw_overlay(const fluid_draw_t *d, uint16_t *fb, int palette, const f
         for (int q = 0; q < ov->sectors; q++) {
             float a = 6.2831853f * q / ov->sectors, ux = sinf(a), uy = -cosf(a);
             n += wu_line(d, fb, cx + ux * r0, cy + uy * r0, cx + ux * r1, cy + uy * r1, PAL[pal][1], DIV_ALPHA * ov->divider);
-        }
-    }
-    if (ov->ring > 0.f) {
-        const float *ac = PAL[pal][2];
-        float rc, hw; ring_band(d, ov, &rc, &hw);
-        const float ri = rc - hw - 1.f, ro = rc + hw + 1.f;
-        int y0 = (int)floorf(cy - ro), y1 = (int)ceilf(cy + ro);
-        if (y0 < 0) y0 = 0;
-        if (y1 > d->fb_h) y1 = d->fb_h;
-        for (int y = y0; y < y1; y++) {
-            float dy = (float)y + 0.5f - cy, dy2 = dy * dy;
-            if (dy2 >= ro * ro) continue;
-            /* the annulus on this row: |x − cx| from xi to xo, both sides */
-            float xo = sqrtf(ro * ro - dy2), xi = dy2 < ri * ri ? sqrtf(ri * ri - dy2) : 0.f;
-            uint16_t *row = fb + y * d->fb_w;
-            for (int side = -1; side <= 1; side += 2) {
-                int xa = (int)floorf(side < 0 ? cx - xo : cx + xi), xb = (int)ceilf(side < 0 ? cx - xi : cx + xo);
-                if (xa < 0) xa = 0;
-                if (xb > d->fb_w) xb = d->fb_w;
-                if (side > 0 && xi == 0.f && xa < (int)ceilf(cx)) xa = (int)ceilf(cx);   /* the row's middle once */
-                for (int x = xa; x < xb; x++) {
-                    float dx = (float)x + 0.5f - cx;
-                    float cov = hw + 0.5f - fabsf(sqrtf(dx * dx + dy2) - rc);
-                    if (cov <= 0.f) continue;
-                    blend(&row[x], ac[0], ac[1], ac[2], ov->ring * (cov > 1.f ? 1.f : cov));
-                    n++;
-                }
-            }
         }
     }
     return n;

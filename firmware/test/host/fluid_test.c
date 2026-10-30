@@ -284,7 +284,7 @@ static void test_labels(void) {
     int lens[5] = { 8, 8, 8, 8, 8 };
     float cx[5], cy[5], fs = fluid_ask_layout(5, lens, FLUID_STAGE_REF, cx, cy);
     fluid_label_t lb[5];
-    for (int i = 0; i < 5; i++) lb[i] = (fluid_label_t){ txt[i], 8, cx[i], cy[i], i != 2, i == 3 };
+    for (int i = 0; i < 5; i++) lb[i] = (fluid_label_t){ txt[i], 8, cx[i], cy[i], i != 2, i == 3, 0 };
     fluid_text_set_labels(tx, s, lb, 5, fs);
     CHECK(tx->nletters == 40, "5×8 labels: %d letters", tx->nletters);
     const float cw = (float)FLUID_STAGE_REF / s->W, ch = (float)FLUID_STAGE_REF / s->H;
@@ -302,9 +302,9 @@ static void test_labels(void) {
     fluid_text_destroy(tx); fluid_sim_destroy(s);
 }
 
-/* overlays: the ring sits in a thin band inside the rim, the dividers on their rays;
- * dirtying the last overlay before a draw restores exactly what it covered, and a
- * repeated overlay over freshly redrawn cells does not compound */
+/* overlays: the dividers on their rays; dirtying the last overlay before a draw restores
+ * exactly what it covered, and a repeated overlay over freshly redrawn cells does not
+ * compound */
 static void test_overlay(void) {
     const int P = FLUID_STAGE_REF;
     fluid_sim_t *s = fluid_sim_create(52, 32, P);
@@ -315,37 +315,14 @@ static void test_overlay(void) {
     fluid_sim_view(s);
     fluid_sim_snapshot(s, fr, false);
     fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, 2.f, 0.f, NULL, 0, " .:-=+*#", stub_font };
-    int y0, y1;
+    int y0, y1, n;
+    long changed, stray;
     fluid_draw(ref, fr, fb_ref, &o, &y0, &y1);                       /* the fluid alone */
     fluid_draw(d, fr, fb, &o, &y0, &y1);
     CHECK(!memcmp(fb, fb_ref, (size_t)P * P * 2), "same snapshot, different pixels");
-    fluid_overlay_t none = { 0 }, ring = { 0.8f, 5.f, 0, 0.f }, divs = { 0.f, 0.f, 5, 1.f };
-    CHECK(!fluid_overlay_on(&none) && fluid_overlay_on(&ring) && fluid_overlay_on(&divs), "overlay_on");
+    fluid_overlay_t none = { 0 }, divs = { 5, 1.f };
+    CHECK(!fluid_overlay_on(&none) && fluid_overlay_on(&divs), "overlay_on");
     CHECK(fluid_draw_overlay(d, fb, o.palette, &none) == 0, "empty overlay drew");
-    /* ring: drawn over freshly dirtied cells */
-    fluid_draw_overlay_dirty(d, &none); fluid_draw_overlay_dirty(d, &ring);
-    fluid_draw(d, fr, fb, &o, &y0, &y1);
-    CHECK(y0 < 12 && y1 > P - 12, "ring cells not redrawn: band [%d,%d)", y0, y1);
-    int n = fluid_draw_overlay(d, fb, o.palette, &ring);
-    long changed = 0, stray = 0;
-    for (int y = 0; y < P; y++) for (int x = 0; x < P; x++) {
-        if (fb[y * P + x] == fb_ref[y * P + x]) continue;
-        changed++;
-        float r = sqrtf((x + 0.5f - P / 2.f) * (x + 0.5f - P / 2.f) + (y + 0.5f - P / 2.f) * (y + 0.5f - P / 2.f));
-        if (r < P / 2.f - 9.f - 4.f || r > P / 2.f - 9.f + 4.f) stray++;
-    }
-    CHECK(n > 3000 && changed > 3000 && stray == 0, "ring: %d px drawn, %ld changed, %ld off its band", n, changed, stray);
-    memcpy(fb1, fb, (size_t)P * P * 2);
-    /* the same ring next frame: dirty + redraw + overlay = the same pixels (no compounding) */
-    fluid_draw_overlay_dirty(d, &ring); fluid_draw_overlay_dirty(d, &ring);
-    fluid_draw(d, fr, fb, &o, &y0, &y1);
-    fluid_draw_overlay(d, fb, o.palette, &ring);
-    CHECK(!memcmp(fb, fb1, (size_t)P * P * 2), "a repeated ring compounded");
-    /* the ring goes: dirtying it restores the fluid it covered, pixel for pixel */
-    fluid_draw_overlay_dirty(d, &ring); fluid_draw_overlay_dirty(d, &none);
-    fluid_draw(d, fr, fb, &o, &y0, &y1);
-    fluid_draw_overlay(d, fb, o.palette, &none);
-    CHECK(!memcmp(fb, fb_ref, (size_t)P * P * 2), "the ring left pixels behind");
     /* dividers: on the 5 rays only, and off every label box of a 5-option layout */
     fluid_draw_overlay_dirty(d, &divs);
     fluid_draw(d, fr, fb, &o, &y0, &y1);
@@ -369,7 +346,165 @@ static void test_overlay(void) {
     fluid_draw_overlay_dirty(d, &divs);
     fluid_draw(d, fr, fb, &o, &y0, &y1);
     CHECK(!memcmp(fb, fb_ref, (size_t)P * P * 2), "the dividers left pixels behind");
+    /* the same dividers again next frame: dirty + redraw + overlay = the same pixels */
+    fluid_draw_overlay_dirty(d, &none); fluid_draw_overlay_dirty(d, &divs);
+    fluid_draw(d, fr, fb, &o, &y0, &y1);
+    fluid_draw_overlay(d, fb, o.palette, &divs);
+    memcpy(fb1, fb, (size_t)P * P * 2);
+    fluid_draw_overlay_dirty(d, &divs); fluid_draw_overlay_dirty(d, &divs);
+    fluid_draw(d, fr, fb, &o, &y0, &y1);
+    fluid_draw_overlay(d, fb, o.palette, &divs);
+    CHECK(!memcmp(fb, fb1, (size_t)P * P * 2), "repeated dividers compounded");
     free(fb); free(fb_ref); free(fb1); fluid_frame_destroy(fr); fluid_draw_destroy(d); fluid_draw_destroy(ref); fluid_sim_destroy(s);
+}
+
+
+/* ── rings of the fluid: the listening ring and a question's coloured arcs ───── */
+
+static void rgb_of(uint32_t c, float *r, float *g, float *b) { *r = (c >> 16 & 255) / 255.f; *g = (c >> 8 & 255) / 255.f; *b = (c & 255) / 255.f; }
+/* the view (what the screen shows) and the carried colour at stage point (x, y) */
+static int cell_of(const fluid_sim_t *s, float x, float y) {
+    int i = (int)((x + 1.f) * 0.5f * s->W), j = (int)((y + 1.f) * 0.5f * s->H);
+    i = i < 0 ? 0 : i >= s->W ? s->W - 1 : i; j = j < 0 ? 0 : j >= s->H ? s->H - 1 : j;
+    return j * s->W + i;
+}
+/* run the sim f frames: the blob (the creature's stand-in) in the middle, then `arcs` */
+typedef void (*arcs_fn)(fluid_sim_t *s, float t);
+static void run_arcs(fluid_sim_t *s, int frames, arcs_fn arcs) {
+    s->p.relax_up = 2.6f; s->p.relax_down = 3.4f;            /* mole_fluid's creature rates, */
+    s->p.hold = 1.f; s->p.tint_rate = 12.f;                  /* settled (fd_solidity / the ask's ramp) */
+    for (int f = 0; f < frames; f++) {
+        float t = f / 30.f;
+        fluid_target_blob(s, t, 1.f, 0.f, 0.f);
+        if (arcs) arcs(s, t);
+        fluid_sim_background(s, t, 0.5f, true); fluid_sim_swirl_field(s);
+        fluid_sim_step(s, 1.f / 60); fluid_sim_step(s, 1.f / 60); fluid_sim_color(s, 2.f / 60);
+    }
+    fluid_sim_view(s);
+}
+static void ring_violet(fluid_sim_t *s, float t) { (void)t; fluid_target_arc(s, 0.875f, 0.02f, 0.f, 6.2831853f, 1.f, 0xb197fc, 0.f); }
+
+static void test_fluid_ring(void) {
+    fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF), *z = fluid_sim_create(52, 32, FLUID_STAGE_REF);
+    run_arcs(s, 45, ring_violet);
+    run_arcs(z, 45, NULL);
+    /* the ring condenses all the way round, just inside the rim, and the creature stays */
+    int lit = 0, tinted = 0; float ink_min = 1.f, cr, cg, cb;
+    rgb_of(0xb197fc, &cr, &cg, &cb);
+    for (int q = 0; q < 24; q++) {
+        float a = 6.2831853f * q / 24, x = 0.875f * sinf(a), y = -0.875f * cosf(a);
+        int k = cell_of(s, x, y);
+        float v = s->view[k] / FQ_UNIT, v0 = z->view[k] / FQ_UNIT;
+        if (v < ink_min) ink_min = v;
+        lit += v > 0.35f && v > v0 + 0.2f;
+        const fluid_rgba16_t *c = &s->col[k];
+        float r = c->r / 65535.f, g = c->g / 65535.f, b = c->b / 65535.f;
+        tinted += fabsf(r - cr) < 0.12f && fabsf(g - cg) < 0.12f && fabsf(b - cb) < 0.12f;
+    }
+    CHECK(lit >= 22, "ring: %d/24 points condensed (min ink %.2f)", lit, ink_min);
+    CHECK(tinted >= 22, "ring: %d/24 points carry its colour", tinted);
+    int kc = cell_of(s, 0.f, 0.f);
+    CHECK(s->view[kc] / FQ_UNIT > 0.3f && abs(s->view[kc] - z->view[kc]) / FQ_UNIT < 0.15f, "the creature in the middle stays (%.2f vs %.2f)", s->view[kc] / FQ_UNIT, z->view[kc] / FQ_UNIT);
+    /* between the creature and the ring, the fluid is dim: a ring, not a filled disc */
+    int kb = cell_of(s, 0.f, 0.62f);
+    CHECK(s->view[kb] / FQ_UNIT < 0.3f, "between creature and ring: ink %.2f", s->view[kb] / FQ_UNIT);
+    /* amt 0 or no width adds nothing */
+    fluid_sim_t *e = fluid_sim_create(52, 32, FLUID_STAGE_REF);
+    fluid_target_blob(e, 0.f, 1.f, 0.f, 0.f);
+    size_t N = (size_t)e->N;
+    int16_t *T0 = malloc(N * 2); memcpy(T0, e->T, N * 2);
+    fluid_target_arc(e, 0.875f, 0.02f, 0.f, 6.2831853f, 0.f, 0xffffff, 0.f);
+    fluid_target_arc(e, 0.875f, 0.f, 0.f, 6.2831853f, 1.f, 0xffffff, 0.f);
+    CHECK(!memcmp(T0, e->T, N * 2), "an empty ring changed the target");
+    /* wider and stronger = more ink (the pulse and the mic swell) */
+    fluid_target_arc(e, 0.875f, 0.016f, 0.f, 6.2831853f, 0.6f, 0xffffff, 0.f);
+    double sum1 = 0; for (size_t k = 0; k < N; k++) sum1 += e->T[k];
+    memcpy(e->T, T0, N * 2);
+    fluid_target_arc(e, 0.875f, 0.036f, 0.f, 6.2831853f, 1.f, 0xffffff, 0.f);
+    double sum2 = 0; for (size_t k = 0; k < N; k++) sum2 += e->T[k];
+    CHECK(sum2 > sum1 * 1.3, "a wider, louder ring pools more ink (%.0f vs %.0f)", sum2, sum1);
+    free(T0); fluid_sim_destroy(e);
+    /* colour resolution: the listen's colour > the device default > the palette's accent */
+    CHECK(fluid_ring_rgb(0x123456, 0xabcdef, FLUID_PAL_PASTEL) == 0x123456, "arg wins");
+    CHECK(fluid_ring_rgb(-1, 0xabcdef, FLUID_PAL_PASTEL) == 0xabcdef, "then the default");
+    CHECK(fluid_ring_rgb(-1, -1, FLUID_PAL_PASTEL) == 0xff8c3c && fluid_ring_rgb(-1, -1, FLUID_PAL_GREEN) == 0xffd65a, "then the accent (%06x)", (unsigned)fluid_ring_rgb(-1, -1, FLUID_PAL_PASTEL));
+    CHECK(fluid_ring_rgb(0, 0xabcdef, FLUID_PAL_PASTEL) == 0, "black is a colour, not 'unset'");
+    fluid_sim_destroy(s); fluid_sim_destroy(z);
+}
+
+/* a question's arcs: each sector's border in its option's colour, gaps at the dividers */
+static const uint32_t ARC_RGB[3] = { 0x3ccf96, 0xff6b6b, 0x4dabf7 };
+static void arcs3(fluid_sim_t *s, float t) {
+    (void)t;
+    fluid_arc_t a[3];
+    for (int i = 0; i < 3; i++) { fluid_ask_arc(3, i, FLUID_STAGE_REF, &a[i].a0, &a[i].a1); a[i].hw = FLUID_ASK_ARC_HW; a[i].amt = 1.f; a[i].rgb = ARC_RGB[i]; }
+    fluid_target_arcs(s, FLUID_ASK_ARC_R, a, 3, 0.f);
+}
+static void test_fluid_arcs(void) {
+    fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
+    run_arcs(s, 45, arcs3);
+    int sector[FLUID_ASK_MAX]; fluid_ask_order(3, sector);
+    for (int i = 0; i < 3; i++) {
+        float a = ((float)sector[i] + 0.5f) * 6.2831853f / 3, R = FLUID_ASK_ARC_R;
+        int k = cell_of(s, R * sinf(a), -R * cosf(a));
+        float r, g, b; rgb_of(ARC_RGB[i], &r, &g, &b);
+        const fluid_rgba16_t *c = &s->col[k];
+        CHECK(s->view[k] / FQ_UNIT > 0.35f, "arc %d mid: ink %.2f", i, s->view[k] / FQ_UNIT);
+        CHECK(fabsf(c->r / 65535.f - r) < 0.12f && fabsf(c->g / 65535.f - g) < 0.12f && fabsf(c->b / 65535.f - b) < 0.12f,
+              "arc %d mid colour %.2f %.2f %.2f, want %.2f %.2f %.2f", i, c->r / 65535.f, c->g / 65535.f, c->b / 65535.f, r, g, b);
+    }
+    /* the targets alone (no flow): a divider is a gap, the arc's middle is full */
+    fluid_sim_t *e = fluid_sim_create(52, 32, FLUID_STAGE_REF);
+    memset(e->T, 0, (size_t)e->N * 2);
+    arcs3(e, 0.f);
+    for (int q = 0; q < 3; q++) {
+        float a = q * 6.2831853f / 3, R = FLUID_ASK_ARC_R;
+        float mid = e->T[cell_of(e, R * sinf(a + 1.047f), -R * cosf(a + 1.047f))] / FQ_UNIT;
+        float gap = e->T[cell_of(e, R * sinf(a), -R * cosf(a))] / FQ_UNIT;
+        CHECK(mid > 0.5f && gap < 0.5f * mid, "divider %d: gap %.2f vs arc %.2f", q, gap, mid);
+    }
+    /* one pass = the arcs one by one (disjoint arcs: the same target and colour) */
+    fluid_sim_t *o = fluid_sim_create(52, 32, FLUID_STAGE_REF);
+    fluid_sim_destroy(e); e = fluid_sim_create(52, 32, FLUID_STAGE_REF);   /* fresh T and tcol on both */
+    memset(e->T, 0, (size_t)e->N * 2); memset(o->T, 0, (size_t)o->N * 2);
+    arcs3(e, 0.f);
+    for (int i = 0; i < 3; i++) { float a0, a1; fluid_ask_arc(3, i, FLUID_STAGE_REF, &a0, &a1); fluid_target_arc(o, FLUID_ASK_ARC_R, FLUID_ASK_ARC_HW, a0, a1, 1.f, ARC_RGB[i], 0.f); }
+    CHECK(!memcmp(e->T, o->T, (size_t)e->N * 2) && !memcmp(e->tcol, o->tcol, (size_t)e->N * 4), "one pass differs from the arcs one by one");
+    fluid_sim_destroy(o);
+    fluid_sim_destroy(e); fluid_sim_destroy(s);
+}
+
+/* a coloured label: its letters draw in its colour on pastel, in the palette's on mono */
+static void test_letter_color(void) {
+    fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
+    fluid_text_t *tx = fluid_text_create(s);
+    fluid_draw_t *d = fluid_draw_create(52, 32, FLUID_STAGE_REF, FLUID_STAGE_REF);
+    fluid_frame_t *fr = fluid_frame_create(52, 32);
+    const size_t PX = (size_t)FLUID_STAGE_REF * FLUID_STAGE_REF;
+    uint16_t *fb = calloc(PX, 2);
+    fluid_label_t lb[1] = { { "YES", 3, 206.f, 206.f, true, false, FLUID_RGB | 0xff0000 } };
+    fluid_text_set_labels(tx, s, lb, 1, 40.f);
+    CHECK(tx->letters[0].rgb == (FLUID_RGB | 0xff0000), "label colour reaches its letters");
+    s->p.relax_up = 7.f; s->p.relax_down = 2.4f;
+    for (int f = 0; f < 90; f++) { fluid_text_fill(tx, s, f / 30.f); fluid_sim_background(s, 1.f, 0.5f, true); fluid_sim_swirl_field(s); fluid_sim_step(s, 1.f / 60); fluid_sim_color(s, 1.f / 60); }
+    fluid_sim_view(s); fluid_sim_snapshot(s, fr, false);
+    for (int pal = 0; pal < FLUID_PAL_COUNT; pal++) {
+        fluid_draw_opts_t o = { pal, FLUID_EDGE_ALL, 0.f, 1.f, 0.f, tx->letters, tx->nletters, " .:-=+*#", stub_font };
+        memset(fb, 0, PX * 2); d->force = true; int y0, y1;
+        fluid_draw(d, fr, fb, &o, &y0, &y1);
+        long red = 0;
+        for (int li = 0; li < tx->nletters; li++) {
+            const fluid_letter_t *L = &tx->letters[li];
+            for (int y = (int)L->y; y < (int)(L->y + L->h); y++) for (int x = (int)L->x; x < (int)(L->x + L->w); x++) {
+                uint16_t be = fb[(size_t)y * FLUID_STAGE_REF + x], le = (uint16_t)(be >> 8 | be << 8);
+                int r = (le >> 11) & 31, g = (le >> 5) & 63, b = le & 31;
+                red += r > 20 && g < 8 && b < 4;
+            }
+        }
+        if (pal == FLUID_PAL_PASTEL) CHECK(red > 60, "pastel: %ld red letter px", red);
+        else CHECK(red == 0, "palette %d: %ld red px (mono stays mono)", pal, red);
+    }
+    free(fb); fluid_frame_destroy(fr); fluid_draw_destroy(d); fluid_text_destroy(tx); fluid_sim_destroy(s);
 }
 
 /* a letter's own melt hides it like the frame's melt does */
@@ -430,6 +565,9 @@ int main(void) {
     test_dirty();
     test_labels();
     test_overlay();
+    test_fluid_ring();
+    test_fluid_arcs();
+    test_letter_color();
     test_letter_melt();
     test_font();
     static const int grids[3][2] = { { 44, 27 }, { 52, 32 }, { 60, 37 } };

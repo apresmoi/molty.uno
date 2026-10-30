@@ -88,8 +88,8 @@ static void finish(const char *reason, bool screen)
 
 void link_ask_cancel(void) { finish("cancelled", true); }
 
-static esp_err_t open_question(const char *job, char label[LINK_ASK_MAX][LINK_ASK_LABEL_MAX + 1], int n,
-                               unsigned timeout_ms, link_ask_done_t done)
+static esp_err_t open_question(const char *job, char label[LINK_ASK_MAX][LINK_ASK_LABEL_MAX + 1], const int32_t *colors,
+                               int n, unsigned timeout_ms, link_ask_done_t done)
 {
     esp_err_t e = mole_creature_select("fluid");
     if (e != ESP_OK) return e;
@@ -98,7 +98,7 @@ static esp_err_t open_question(const char *job, char label[LINK_ASK_MAX][LINK_AS
     const char *labels[LINK_ASK_MAX];
     for (int i = 0; i < n; i++) labels[i] = label[i];
     unsigned seq = 0;
-    e = mole_fluid_ask_show(n, labels, &seq);
+    e = mole_fluid_ask_show(n, labels, colors, &seq);
     if (e != ESP_OK) { mole_fluid_ask_end(); return e; }
     strcpy(s_ask.job, job);
     memcpy(s_ask.label, label, sizeof(s_ask.label));
@@ -118,18 +118,19 @@ esp_err_t link_ask_cmd(const cJSON *args, cJSON **out)
 {
     if (!molty_board_has(MOLTY_CAP_TOUCH)) return ESP_ERR_NOT_SUPPORTED;   /* nothing could answer */
     char job[LINK_STREAM_MAX], label[LINK_ASK_MAX][LINK_ASK_LABEL_MAX + 1];
+    int32_t colors[LINK_ASK_MAX];
     int n; unsigned timeout_ms;
-    if (!link_ask_args(args, job, label, &n, &timeout_ms)) return ESP_ERR_INVALID_ARG;
+    if (!link_ask_args(args, job, label, colors, &n, &timeout_ms)) return ESP_ERR_INVALID_ARG;
     cJSON *result = cJSON_CreateObject();
     if (!result) return ESP_ERR_NO_MEM;
     cJSON_AddStringToObject(result, "job", job);
-    esp_err_t e = open_question(job, label, n, timeout_ms, NULL);
+    esp_err_t e = open_question(job, label, colors, n, timeout_ms, NULL);
     if (e != ESP_OK) { cJSON_Delete(result); return e; }
     *out = result;
     return ESP_OK;
 }
 
-esp_err_t link_ask_open(const char *job, const char *const *labels, int n, unsigned timeout_ms, link_ask_done_t done)
+esp_err_t link_ask_open(const char *job, const char *const *labels, const int32_t *colors, int n, unsigned timeout_ms, link_ask_done_t done)
 {
     if (!molty_board_has(MOLTY_CAP_TOUCH)) return ESP_ERR_NOT_SUPPORTED;
     if (!job || !job[0] || strlen(job) >= LINK_STREAM_MAX || n < 1 || n > LINK_ASK_MAX || !done) return ESP_ERR_INVALID_ARG;
@@ -139,7 +140,7 @@ esp_err_t link_ask_open(const char *job, const char *const *labels, int n, unsig
         if (!labels[i] || !labels[i][0] || strlen(labels[i]) > LINK_ASK_LABEL_MAX) return ESP_ERR_INVALID_ARG;
         strcpy(label[i], labels[i]);
     }
-    return open_question(job, label, n, timeout_ms, done);
+    return open_question(job, label, colors, n, timeout_ms, done);
 }
 
 void link_ask_tick(void)

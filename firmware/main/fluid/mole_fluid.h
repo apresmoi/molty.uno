@@ -12,6 +12,8 @@
  * State via GET/POST /api/creature/state when "fluid" is active:
  *   POST {state: "creature"|"blob"|"thinking"|"text"|"effect:ripple"|"effect:vortex"
  *               |"effect:wave"|"autoplay",
+ *         ring_color: "#rrggbb"|"accent" (the listening ring's default colour, kept in NVS;
+ *               GET reports it the same way),
  *         hold: true (with "text": hold the last word instead of returning to the
  *               creature 1.5 s after it; the pairing code, the Improv "hi"),
  *         text, wpm, palette: "green"|"amber"|"pastel", edge_mode: "off"|"contours"|"all",
@@ -67,24 +69,31 @@ void mole_fluid_event(mole_fluid_event_t ev);
 void mole_fluid_set_status(int status);
 
 /** The listening ring (link_audio.c, the audio task): on while the mic records a `listen`
- *  — a thin accent ring inside the rim fades in, breathes ~1 Hz, and brightens / thickens
- *  with `level` (0..1, the VAD's mic level, ~10 Hz); off fades it out. Never shown while
- *  a question is on screen. Safe from any task; a no-op before init. */
+ *  — a ring of the fluid itself condenses just inside the rim around the creature (in
+ *  its listening mood), breathes ~1 Hz (radius, width, ink), and swells with `level`
+ *  (0..1, the VAD's mic level, ~10 Hz); off melts it back. Never shown while a question
+ *  is on screen. Its colour: mole_fluid_listen_color (the listen's ring_color, 0xRRGGBB;
+ *  -1 = the device default, POST /api/creature/state {ring_color: "#rrggbb"|"accent"},
+ *  kept in NVS, else the palette's accent; fluid_ring_rgb). Safe from any task; a no-op
+ *  before init. */
 void mole_fluid_listen(bool on);
 void mole_fluid_listen_level(float level);
+void mole_fluid_listen_color(int32_t rgb);
 
 /** A question (link_ask.c, the link task) — the screen follows what the link wants:
  *  show   n (1..FLUID_ASK_MAX) labels condense out of the fluid in their sectors
- *         (fluid_ask.h) with faint dividers; replaces any question on screen.
- *  pick   the question was answered with option i: the others melt, the chosen one
- *         stays ~0.8 s (accented), then the creature comes back.
+ *         (fluid_ask.h), each in its colour (colors[i] 0xRRGGBB, -1 or colors NULL =
+ *         FLUID_ASK_COLORS[i]) with a rim arc of the fluid in that colour, and faint
+ *         dividers; replaces any question on screen.
+ *  pick   the question was answered with option i: the others (labels and arcs) melt,
+ *         the chosen one stays ~0.8 s (its arc flares), then the creature comes back.
  *  end    the question ended unanswered (timeout, cancelled): the labels melt and the
  *         fluid returns to the creature — or to the state a command asked for meanwhile.
  *  While a question is up, other state changes wait under it (the director keeps them),
  *  except that an explicit state / mood request ends a pick's hold early.
  *  show sets *seq (≠ 0) to the question's number on screen: what mole_fluid_ask_shown
  *  reports once the panel shows it readable. */
-esp_err_t mole_fluid_ask_show(int n, const char *const *labels, unsigned *seq);
+esp_err_t mole_fluid_ask_show(int n, const char *const *labels, const int32_t *colors, unsigned *seq);
 void mole_fluid_ask_pick(int index);
 void mole_fluid_ask_end(void);
 /** The question (its show seq) a tap may answer right now: the one on the frame last flushed

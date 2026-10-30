@@ -192,7 +192,7 @@ void fluid_text_set_word(fluid_text_t *tx, const fluid_sim_t *s, const char *w, 
     tx->nletters = len;
     for (int i = 0; i < len; i++) {
         fluid_letter_t *L = &tx->letters[i];
-        L->ch = w[i]; L->acc = (i == orp);
+        L->ch = w[i]; L->acc = (i == orp); L->rgb = 0;
         L->x = x0 + i * adv; L->y = ytop; L->w = adv; L->h = lh; L->fs = fs; L->melt = 0.f;
     }
     const float cw = (float)s->stage / W, ch = (float)s->stage / H;
@@ -221,7 +221,7 @@ void fluid_text_set_labels(fluid_text_t *tx, const fluid_sim_t *s, const fluid_l
         x0[b] = lb[b].cx - len * adv * 0.5f; y0[b] = lb[b].cy - lh * 0.5f;
         for (int i = 0; i < len && nl < FLUID_MAX_LETTERS; i++) {
             fluid_letter_t *L = &tx->letters[nl++];
-            L->ch = lb[b].text[i]; L->acc = lb[b].acc;
+            L->ch = lb[b].text[i]; L->acc = lb[b].acc; L->rgb = lb[b].rgb;
             L->x = x0[b] + i * adv; L->y = y0[b]; L->w = adv; L->h = lh; L->fs = fs; L->melt = 0.f;
         }
     }
@@ -263,4 +263,74 @@ void fluid_text_fill(fluid_text_t *tx, fluid_sim_t *s, float t) {
         s->tcol[k] = fluid_pack_rgba8(0.6f + 0.35f * wv, 0.68f + 0.28f * wv, 0.92f + 0.08f * wv, tx->orp[k]);
     }
     FLUID_PROF_END(FP_TARGET, c0);
+}
+
+/* ── rings and arcs of the fluid (the listening ring, a question's borders) ───── */
+
+#define ARC_SOFT   0.035f     /* soft edge outside the band, stage units (≈ one cell row)  */
+#define ARC_ASOFT  0.02f      /* soft ends of an arc, stage units along it                 */
+
+void fluid_target_arcs(fluid_sim_t *s, float rc, const fluid_arc_t *arcs, int n, float acc) {
+    if (n <= 0) return;
+    FLUID_PROF_BEGIN(c0);
+    float hwmax = 0.f;
+    bool any = false, angled = false;
+    for (int q = 0; q < n; q++) {
+        if (arcs[q].amt <= 0.f || arcs[q].hw <= 0.f) continue;
+        any = true;
+        if (arcs[q].hw > hwmax) hwmax = arcs[q].hw;
+        if (arcs[q].a1 - arcs[q].a0 < 6.2831853f) angled = true;
+    }
+    if (!any) { FLUID_PROF_END(FP_TARGET, c0); return; }
+    /* one pass over the band of the widest arc: radius once, angle once per cell */
+    const float ro = rc + hwmax + ARC_SOFT, ri = rc - hwmax - ARC_SOFT, asoft = ARC_ASOFT / rc;
+    for (int j = 0; j < s->H; j++) {
+        const float y = s->ys[j];
+        if (y * y > ro * ro) continue;
+        for (int i = 0; i < s->W; i++) {
+            const int k = j * s->W + i;
+            if (!s->mask[k]) continue;
+            const float x = s->xs[i], rr2 = x * x + y * y;
+            if (rr2 > ro * ro || rr2 < (ri > 0.f ? ri * ri : 0.f)) continue;
+            const float d = fabsf(sqrtf(rr2) - rc);
+            float a = 0.f;
+            if (angled) { a = fluid_atan2(x, -y); if (a < 0.f) a += 6.2831853f; }   /* clockwise from 12 */
+            float v = 0.f; uint32_t rgb = 0;
+            for (int q = 0; q < n; q++) {                  /* the strongest arc here wins the cell */
+                const fluid_arc_t *A = &arcs[q];
+                if (A->amt <= 0.f || A->hw <= 0.f) continue;
+                float w = 1.f - fluid_smooth(A->hw, A->hw + ARC_SOFT, d);
+                if (w <= 0.f) continue;
+                if (A->a1 - A->a0 < 6.2831853f) {
+                    float out = a < A->a0 ? A->a0 - a : a > A->a1 ? a - A->a1 : 0.f;   /* radians past an end */
+                    if (out >= asoft) continue;
+                    w *= 1.f - fluid_smooth(0.f, asoft, out);
+                }
+                w *= A->amt * FLUID_ARC_INK;
+                if (w > v) { v = w; rgb = A->rgb; }
+            }
+            if (v <= 0.004f) continue;
+            const float t = s->T[k] * (1.f / FQ_UNIT);
+            if (v > t) s->T[k] = fq(v, FQ_UNIT);
+            /* the arc's colour where it dominates; the creature keeps its own inside */
+            const float w = fluid_smooth(0.02f, 0.25f, v - 0.5f * t);
+            if (w <= 0.f) continue;
+            const float cr = (rgb >> 16 & 255) / 255.f, cg = (rgb >> 8 & 255) / 255.f, cb = (rgb & 255) / 255.f;
+            const uint32_t tc = s->tcol[k];
+            const float r = (tc & 255) / 255.f, g = (tc >> 8 & 255) / 255.f, b = (tc >> 16 & 255) / 255.f, al = (tc >> 24) / 255.f;
+            s->tcol[k] = fluid_pack_rgba8(r + (cr - r) * w, g + (cg - g) * w, b + (cb - b) * w, al + (acc - al) * w);
+        }
+    }
+    FLUID_PROF_END(FP_TARGET, c0);
+}
+
+void fluid_target_arc(fluid_sim_t *s, float rc, float hw, float a0, float a1, float amt, uint32_t rgb, float acc) {
+    const fluid_arc_t a = { a0, a1, hw, amt, rgb };
+    fluid_target_arcs(s, rc, &a, 1, acc);
+}
+
+uint32_t fluid_ring_rgb(int32_t given, int32_t dflt, int palette) {
+    if (given >= 0) return (uint32_t)given & 0xFFFFFFu;
+    if (dflt >= 0) return (uint32_t)dflt & 0xFFFFFFu;
+    return fluid_palette_accent(palette);
 }
