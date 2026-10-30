@@ -25,13 +25,13 @@ agent (scripted | local LLM) ──REST talk/say──▶ relay ◀────�
   pipeline's own), or `--agent llm` (any OpenAI-compatible endpoint, default Ollama on the box).
 - **Metrics** per turn and summarised (`runs/<ts>/report.{md,json}`, plus every WAV).
 
-Why Python: it reuses `voicebox/` directly (Kyutai TTS/STT clients, resampler, framing) and runs the
+Why Python: it reuses `services/molty-voice/` directly (Kyutai TTS/STT clients, resampler, framing) and runs the
 second molty-voice bridge from the same venv; the relay side needs no hook (a stock `wrangler dev`).
 
 ## Run it (from clean state)
 
 ```sh
-cd relay && pnpm install --frozen-lockfile && cd ..        # (1)
+cd services/relay && pnpm install --frozen-lockfile && cd ../..  # (1)
 cp tools/sim/local.env.example tools/sim/local.env && $EDITOR tools/sim/local.env   # (2)
 ssh "$MOLTY_SIM_BOX" 'docker ps --format "{{.Names}} {{.Status}}" | grep molty-voice'
 make sim                                                     # (3)
@@ -39,7 +39,7 @@ make sim SIM_ARGS='--turn-end-hold 1.5 --only meters-from,i-think-that'        #
 make sim-test                                                # (5)
 ```
 
-1. The local relay is this repo's `relay/` under `wrangler dev --local` (`VOICE_PROVIDER=none`: only the box speaks).
+1. The local relay is this repo's `services/relay/` under `wrangler dev --local` (`VOICE_PROVIDER=none`: only the box speaks).
 2. `local.env` (gitignored, read by `make sim`) names your box: `MOLTY_SIM_BOX` (ssh host), `MOLTY_SIM_ALIGN_PYTHON`
    (a python with torchaudio on it), `MOLTY_SIM_LLM_URL` / `MOLTY_SIM_LLM_MODEL` (for `--agent llm`). Kyutai
    STT/TTS must be up on the box; the sim only connects to them as a client.

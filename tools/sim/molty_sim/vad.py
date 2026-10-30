@@ -1,4 +1,4 @@
-"""The device's end-of-speech VAD, ported 1:1 from firmware/main/audio/vad.{h,c}.
+"""The device's end-of-speech VAD, ported 1:1 from device/firmware/main/audio/vad.{h,c}.
 
 20 ms frames, RMS in dBFS against an adaptive noise floor (minimum of 100 ms block minima
 over floor_window_ms), calibration replay, hysteresis. Used by the sim device exactly where

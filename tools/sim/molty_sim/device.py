@@ -1,6 +1,6 @@
 """The simulated Molty: the firmware's side of docs/AGENT-LINK.md, timed like the firmware.
 
-Mirrors firmware/main/link/ — hello (id, key, fw, the 1.46's caps, board, link_code), welcome,
+Mirrors device/firmware/main/link/ — hello (id, key, fw, the 1.46's caps, board, link_code), welcome,
 ping every 20 s, pair.request auto-accepted ("the human taps") with link-code rotation, cmd/res,
 and audio:
 
@@ -50,7 +50,7 @@ LINK_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz23456789"
 SIM_PREFIX = "molty-sim"
 
-# The Waveshare 1.46's hello (firmware/main/link/link_identity.c: speaker + mic + touch).
+# The Waveshare 1.46's hello (device/firmware/main/link/link_identity.c: speaker + mic + touch).
 CAPS_146 = ["fluid", "say", "say_cues", "listen", "listen_stop", "listen_window", "ack", "show", "mood", "creature", "ask", "update"]
 BOARD_146 = "waveshare-esp32-s3-touch-lcd-1.46"
 ACK_NAMES = ("off", "thinking", "chirp")
@@ -78,7 +78,7 @@ def ack_arg(args: dict, setting: str) -> str | None:
 
 
 def ack_decide(mode: str, reason: str | None, speech_known: bool, speech_ms: int, screen_taken: bool = False, has_speaker: bool = True) -> str:
-    """link_ack_decide (firmware/main/link/link_protocol.c)."""
+    """link_ack_decide (device/firmware/main/link/link_protocol.c)."""
     if mode == "off" or screen_taken or not reason:
         return "off"
     heard = (reason == "turn_end" or (reason == "silence" and (not speech_known or speech_ms > 0))

@@ -1,0 +1,19 @@
+# My Vendor My-Model — layered over sdkconfig.defaults(.esp32s3) when this board is built.
+# The Kconfig choice line is required (tools/scripts/firmware-boards.py check verifies it).
+CONFIG_MOLTY_BOARD_MYVENDOR_MYMODEL=y
+
+# Flash: the partition table (device/firmware/partitions.csv) needs 16 MB.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+
+# PSRAM: required (framebuffer, console page, TLS and Wi-Fi buffers live there).
+# Octal modules (ESP32-S3-WROOM-1 N16R8, "R8"): CONFIG_SPIRAM_MODE_OCT=y
+# Quad (ESP32-S3R2 / N16R2, "R2"):              CONFIG_SPIRAM_MODE_QUAD=y
+CONFIG_SPIRAM_MODE_QUAD=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# Console: a USB-UART bridge on the USB-C port (CH340/CH343/CP210x) → UART0 logs and
+# Wi-Fi setup over the cable (Improv; declare MOLTY_CAP_SERIAL in board.c).
+# Native USB on the USB-C port instead → CONFIG_ESP_CONSOLE_NONE=y (TinyUSB owns it)
+# and declare MOLTY_CAP_USB_NET in board.c.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
