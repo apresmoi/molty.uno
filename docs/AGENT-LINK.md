@@ -75,14 +75,15 @@ Molty (home Wi-Fi) ──outbound WSS──▶ molty-relay (Cloudflare Worker + 
 
 ## Device ↔ relay wire (WS/WSS `/v1/device?id=<device_id>`)
 
-First frame from device: `{"t":"hello","id":"molty-k7m2w9c4ya","key":"<b64 device_key>","fw":"...","caps":["fluid","say","say_cues","listen","listen_stop","listen_window","show","mood","creature","ask"],"board":"waveshare-esp32-s3-touch-lcd-1.46","link_code":"..."}`
+First frame from device: `{"t":"hello","id":"molty-k7m2w9c4ya","key":"<b64 device_key>","fw":"...","caps":["fluid","say","say_cues","listen","listen_stop","listen_window","ack","show","mood","creature","ask"],"board":"waveshare-esp32-s3-touch-lcd-1.46","link_code":"..."}`
 → relay answers `{"t":"welcome"}` or closes with 4401.
 
 `board` names the hardware (`firmware/boards/`, see [PORTING.md](PORTING.md)). `caps`
 lists `say` / `listen` only when the board has a speaker / microphone (`say_cues` with `say`,
 firmware that shows a say's words as they are spoken; `listen_stop` with
 `listen`, firmware that can end a listen on the relay's word; `listen_window` with `listen`,
-firmware whose window is optional, 0..30000 or unlimited — see `listen` below), `ask` only when it
+firmware whose window is optional, 0..30000 or unlimited — see `listen` below; `ack` with
+`listen`, firmware that acknowledges the end of a turn itself — see [Turn acknowledgement](#turn-acknowledgement)), `ask` only when it
 has a touch screen (and firmware that implements `ask`), and `update` when the firmware can
 install a release itself ([Firmware updates](#firmware-updates)); the relay answers
 those commands `409 unsupported` up front, without calling TTS, when the device left them
@@ -187,14 +188,14 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   with it (one `answer` inbox event). A lost ack is "delivery unknown", not a failure: the relay
   keeps waiting, and an answer arriving later still ends the job; none by `timeout_ms` + 5 s
   (counted from the ack timeout) resolves `timeout`.
-- `listen`: relay sends `cmd listen {job, ms?, rate:16000, end_silence_ms?, no_speech_ms?, vad?, ring_color?}`
+- `listen`: relay sends `cmd listen {job, ms?, rate:16000, end_silence_ms?, no_speech_ms?, vad?, ring_color?, ack?}`
   (`ms` = maximum window, a ceiling — every listen ends early on end of speech / turn.
   **Firmware with the cap `listen_window`**: `ms` 1..30000, or `0` = unlimited (it ends only on
   end of speech / turn, no_speech, the relay's `listen_stop`, or a 300 s safety ceiling →
   `reason:"max"`); sent only when the agent gave one — absent, the device applies its own
   setting (console, 5..30 s or unlimited, NVS, 30000 out of the box; `POST /api/creature/state
   {listen_ms}`), like `ring_color`. Its answer carries the window it applies: `{job, ms}`
-  (`0` = unlimited), and the relay waits that long (the ceiling for 0) + 5 s for the end frame.
+  (`0` = unlimited; cap `ack` firmware adds `ack`, see [Turn acknowledgement](#turn-acknowledgement)), and the relay waits that long (the ceiling for 0) + 5 s for the end frame.
   The mic streams in 100 ms chunks: no device buffer is sized by the window. **Older firmware**
   (no cap) takes 1..10000 and always gets `ms` (10000 when the agent gave none); an agent's
   `0` or > 10000 is refused up front, `409 unsupported`. The VAD knobs only when the agent gave them: `end_silence_ms`
@@ -225,9 +226,14 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   `cmd update {job, version, url, sha256, size, timeout_ms}` and the device's `update` events.
 
 Automatic moods around talking: the device sets `listening` on `listen` and `speaking` on
-`say` (then `idle`); the relay sends `mood thinking hold_s:15` the moment a listen's end frame
+`say` (then `idle`). Firmware with the cap `ack` puts up `thinking` itself the moment a listen
+that heard speech ends (with a chirp; [Turn acknowledgement](#turn-acknowledgement)); for it the
+relay sends no automatic `thinking`, only `idle` when the transcript comes back empty and the
+device had put thinking up (its listen answer said `ack` `chirp` or `thinking`). For older
+firmware the relay sends `mood thinking hold_s:15` the moment a listen's end frame
 arrives with speech (while STT runs), re-sends it after STT, or `idle` when the transcript is
-empty. So the creature thinks from end of speech until the agent's next command (≤ 15 s).
+empty. So the creature thinks from end of speech until the agent's next command (≤ 30 s with
+`ack`, ≤ 15 s before).
 Agents don't need `mood` calls around talking; an explicit `mood` still wins: once the device
 has accepted a `mood` from any agent after a listen began, the relay sends no more automatic
 moods for that listen (none while that `mood` awaits its answer either; a refused one does not
@@ -238,6 +244,33 @@ the device showed it (or its ack was lost). On the device, a listen/say that end
 the explicit mood keeps its own `hold_s`; likewise a self-update's progress ("update", "40%", …)
 owns the screen once shown (`link_cmd_screen_claim`), so an older listen/say ending mid-download
 does not put idle over it.
+
+### Turn acknowledgement
+
+No dead air after the human finishes: the agent's answer takes seconds (STT, the model, TTS),
+so firmware with the cap `ack` acknowledges the turn **itself, locally, at once** — no network:
+
+- **When.** A listen ends with `reason` `turn_end` (the relay's end of turn), `silence` (the
+  device VAD's end of speech) or `max` with ≥ 160 ms of measured speech — and nothing else took
+  the screen during the listen (an explicit `mood`, an `ask`, an update screen, a pairing).
+  Never on `no_speech`, `error` or a cancelled listen. Decided by the device when the end frame
+  leaves (`link_ack_decide`, `firmware/main/link/link_protocol.h`).
+- **What.** A chirp (`firmware/main/audio/chirp.h`: G5 784 Hz → D6 1175 Hz, a rising fifth,
+  160 ms, soft raised-cosine attack / exponential decay, peak −17 dBFS, scaled by the speaker
+  volume like a say) and the `thinking` mood, the listening ring melting out. `thinking` holds
+  30 s at most (then idle) and is the device's own mood: the agent's next `say` (speaking),
+  `listen`, `mood` or `ask` replaces it as usual.
+- **Audio.** The chirp plays after the listen is reported done, so a `say` / `listen` sent
+  meanwhile is accepted at once; it waits until the chirp ends — or cuts it (4 ms fade, the DMA
+  ring flushed with silence, ≤ ~110 ms) — and only then starts: the chirp never plays over a
+  say and the next listen's mic never records it. A speaker owned by something else: no chirp.
+- **Setting.** The human's choice, console Settings › Molty "acknowledge" (`POST
+  /api/creature/state {ack: "chirp"|"thinking"|"off"}`, GET reports it, kept in NVS like
+  `ring_color`): chirp + thinking (default), thinking only, off.
+- **Per listen.** `listen` / `talk` take `ack`: `true` (default) = the setting, `"silent"` =
+  thinking without the chirp, `false` = none — an agent can only turn it down. The relay
+  validates it and forwards it only to firmware with the cap. The device's listen answer
+  reports what it will do (`ack`: `chirp` | `thinking` | `off`).
 
 ### Listen end of speech (device VAD)
 
@@ -275,6 +308,7 @@ Optional `listen` args (validated by the relay and again by the device; forwarde
 | `no_speech_ms` | 1000..10000 (integer) | 4000 | give up when nobody spoke by then (≥ `ms` = never) |
 | `vad` | bool | `true` (off with a voice box, see below) | `false`: record the full `ms` window as before |
 | `ring_color` | a colour name or `#rrggbb` | the device's setting | the listening ring's colour for this listen (also on `talk`) |
+| `ack` | `true`, `false`, `"silent"` | `true` (the device's setting) | the device's own [turn acknowledgement](#turn-acknowledgement): `"silent"` = no chirp, `false` = none (also on `talk`) |
 
 Out-of-range or mistyped values → `invalid_args`.
 
@@ -644,10 +678,12 @@ Agents learn that `/skill.md` changed without any push channel, by the same ride
 as events.
 
 - **One source of truth:** `WHATS_NEW` in `relay/src/core/version.ts` (ordered; the last
-  entry's version is `SKILL_VERSION`, now **6**: colours on `molty_ask` options and `ring_color` on listen/talk
+  entry's version is `SKILL_VERSION`, now **9**: Molty acknowledges the end of a turn itself
+  ([Turn acknowledgement](#turn-acknowledgement)) — agents go straight to their answer; v8 automatic
+  end of turn; v7 listen windows up to 30 s / unlimited; v6 colours on `molty_ask` options and `ring_color` on listen/talk
   ([Colours](#commands-v0)); v5 was `molty_updates` / `molty_update` / `firmware_too_old`
   ([Firmware updates](#firmware-updates)); v4 was `molty_ask` (a question answered with a tap); v3 was `molty_talk`, streamed speech, automatic moods, `wait:true`; v2 was device events shake/tap/button, inbox, `molty_events`, webhooks,
-  `molty events` CLI, mood `hold_s`). skill.md's header ("Skill v6 — what's new: …"), the MCP `instructions` and `serverInfo.title` derive from it;
+  `molty events` CLI, mood `hold_s`). skill.md's header ("Skill v9 — what's new: …"), the MCP `instructions` and `serverInfo.title` derive from it;
   a test fails if they disagree.
 - **Per token:** `skill_seen` on the token record. Newly paired tokens start current; a
   token without it (paired before versions existed) counts as v1.
