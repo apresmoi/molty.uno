@@ -69,7 +69,7 @@ Helper: `watch.py` (forever) or `watch.py --once [wait_s]`.
 
 - The relay sends it per event, filling `{{event.type}}` `{{event.id}}` `{{event.ts}}`
   `{{event.data}}` `{{event.data.<field>}}` (nested up to 3 deep: `{{event.data.ms.speech}}`,
-  `{{event.data.device.mood}}`; `|default` optional) `{{device}}` `{{text}}` — so you can point it at
+  `{{event.data.device.mood}}`; a default after a pipe, e.g. `{{event.data.text|(nothing said)}}`, is used when the field is missing — literal text, escaped like a string; without one a missing field is `null` in a JSON body and empty elsewhere) `{{device}}` `{{text}}` — so you can point it at
   whatever wakes you (your own server, a chat/bot API, an agent-run endpoint). No body =
   `{"device","event"}` JSON.
 - String placeholders are escaped for the body's `content_type` (JSON-safe in a JSON body, so
