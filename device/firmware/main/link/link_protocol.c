@@ -1,4 +1,5 @@
 #include "link_protocol.h"
+#include "cute_act.h"   /* the actions: act, say marks */
 #include <ctype.h>
 #include <limits.h>
 #include <math.h>
@@ -107,6 +108,49 @@ bool link_mood_map(const char *mood, const char **state)
         if (!strcmp(mood, map[i].mood)) { *state = map[i].state; return true; }
     }
     return false;
+}
+
+/* the mood's index in the creature's order (cute_spec.h CUTE_MOOD_NAMES / link_mood_map) */
+const char *link_mood_name(int id);
+static int mood_index(const char *m)
+{
+    for (int i = 0; link_mood_name(i)[0]; i++) if (!strcmp(m, link_mood_name(i))) return i;
+    return -1;
+}
+
+const char *link_mood_name(int id)
+{
+    static const char *const order[] = { "idle", "listening", "thinking", "speaking", "happy", "sleepy", "surprised" };
+    return id >= 0 && id < (int)(sizeof(order) / sizeof(order[0])) ? order[id] : "";
+}
+
+bool link_marks_parse(const cJSON *args, link_mark_t marks[LINK_MARKS_MAX], int *n)
+{
+    if (!n || !marks) return false;
+    *n = 0;
+    const cJSON *m = cJSON_GetObjectItemCaseSensitive(args, "marks");
+    if (!m) return true;
+    if (!cJSON_IsArray(m) || cJSON_GetArraySize(m) > LINK_MARKS_MAX) return false;
+    const cJSON *e;
+    cJSON_ArrayForEach(e, m) {
+        const cJSON *w = cJSON_GetArrayItem(e, 0), *name = cJSON_GetArrayItem(e, 1);
+        if (!cJSON_IsArray(e) || cJSON_GetArraySize(e) != 2 || !cJSON_IsNumber(w) || !cJSON_IsString(name) ||
+            !(w->valuedouble >= 0 && w->valuedouble <= LINK_MARK_WORD_MAX) || w->valuedouble != floor(w->valuedouble))
+            { *n = 0; return false; }
+        int mood = mood_index(name->valuestring), act = cute_act_lookup(name->valuestring);
+        if (mood < 0 && act < 0) { *n = 0; return false; }
+        marks[*n] = (link_mark_t){ .word = (uint16_t)w->valuedouble, .act = mood < 0, .id = (int8_t)(mood < 0 ? act : mood) };
+        (*n)++;
+    }
+    return true;
+}
+
+bool link_act_args(const cJSON *args, int *act)
+{
+    const cJSON *a = cJSON_GetObjectItemCaseSensitive(args, "action");
+    if (!act || !cJSON_IsString(a)) return false;
+    *act = cute_act_lookup(a->valuestring);
+    return *act >= 0;
 }
 
 bool link_mood_args(const cJSON *args, const char **mood, double *hold_s)

@@ -83,6 +83,33 @@ static unsigned s_shake_n;                            /* local listen ids: shake
 static volatile uint32_t s_cue[LINK_CUE_WORDS];
 static bool s_cued;                                    /* this say follows cues */
 static int  s_cue_next;                                /* first word not shown yet */
+/* say marks (cap say_marks, link_protocol.h): the relay's inline [mood] / [action] cues,
+ * each fired when its word is shown (cue_follow, the audio task) — a mood tints the words
+ * from there on and becomes the creature's mood when the say ends; an action plays on the
+ * creature once it is back (mole_fluid_act). Never while a question, a pairing or an update
+ * owns the screen. Set by start() before the job goes to the audio task. */
+static link_mark_t s_marks[LINK_MARKS_MAX];
+static int s_nmarks;
+static uint32_t s_mark_fired;                          /* bit i: mark i fired */
+static int s_mark_mood;                                /* the last mood mark fired, -1 none */
+static unsigned s_say_text_ver;                        /* the say's words (mole_fluid_text_ver) */
+/* a say whose last mood mark persists past its end holds it this long (happy / surprised /
+ * idle keep their own default) */
+#define MARK_MOOD_HOLD_S 8
+
+static bool screen_owned(void) { return link_ask_pending() || link_pair_active() || self_update_busy(); }
+
+/* fire the marks whose word is shown (all: playback is over — every one left), in order */
+static void marks_follow(bool all)
+{
+    for (int i = 0; i < s_nmarks; i++) {
+        if ((s_mark_fired >> i & 1u) || (!all && s_marks[i].word >= s_cue_next)) continue;
+        s_mark_fired |= 1u << i;
+        if (screen_owned()) continue;
+        if (s_marks[i].act) mole_fluid_act(s_marks[i].id);
+        else { mole_fluid_cue_mood(s_marks[i].id, s_say_text_ver); s_mark_mood = s_marks[i].id; }
+    }
+}
 
 bool link_audio_busy(void) { return s_busy; }
 void link_audio_cancel(void) { atomic_store(&s_cancel, true); }
@@ -112,6 +139,7 @@ static void cue_follow(bool all)
     int k = s_cue_next;
     while (k < LINK_CUE_WORDS && s_cue[k] != UINT32_MAX && s_cue[k] <= played) k++;
     if (k > s_cue_next) { s_cue_next = k; mole_fluid_text_cue(k - 1); }
+    marks_follow(all);
 }
 
 static esp_err_t play(void)
@@ -396,6 +424,7 @@ static void begin(const audio_job_t *job, bool cued)
     s_mood_gen0 = link_cmd_mood_gen();   /* after our own listening/speaking mood */
     s_seq = 0; s_stat_frames = 0; s_stat_bytes = 0; s_busy = true; s_listen = job->listen; s_last_frame = esp_timer_get_time();
     s_cued = cued; s_cue_next = 0;
+    s_mark_fired = 0; s_mark_mood = -1;
     atomic_store(&s_end, false); atomic_store(&s_cancel, false); atomic_store(&s_stop, STOP_NONE);
     atomic_store(&s_pend, job->pending ? PEND_WAIT : PEND_NONE);
     atomic_store(&s_chirp_cut, true);    /* a chirp still playing ends now: this job is next */
@@ -432,6 +461,9 @@ static esp_err_t start(const cJSON *args, bool listen, cJSON **out)
     const cJSON *cues = cJSON_GetObjectItemCaseSensitive(args, "cues");
     if (!listen && cues && !cJSON_IsBool(cues)) return ESP_ERR_INVALID_ARG;
     const bool cued = !listen && cJSON_IsTrue(cues);
+    /* say marks (cap say_marks): they ride the word cues; without cues they are ignored */
+    link_mark_t marks[LINK_MARKS_MAX]; int nmarks = 0;
+    if (!listen && !link_marks_parse(args, marks, &nmarks)) return ESP_ERR_INVALID_ARG;
     const vad_cfg_t vad_def = VAD_CFG_DEFAULT;
     bool vad = vad_def.enabled;
     unsigned end_silence_ms = vad_def.end_silence_ms, no_speech_ms = vad_def.no_speech_ms;
@@ -456,6 +488,7 @@ static esp_err_t start(const cJSON *args, bool listen, cJSON **out)
             mole_fluid_text_cue(-1);
         }
         if (e == ESP_OK) e = link_ui_set_text(text->valuestring, (int)strlen(text->valuestring));
+        if (e == ESP_OK) s_say_text_ver = mole_fluid_text_ver();   /* the tint is for these words only */
         /* mood first: it selects the creature view; the text state then wins. */
         if (e == ESP_OK) e = link_cmd_mood("speaking", -1);
         if (e == ESP_OK) e = mole_creature_state_set("{\"state\":\"text\"}");
@@ -465,6 +498,8 @@ static esp_err_t start(const cJSON *args, bool listen, cJSON **out)
     audio_job_t job = {.listen = listen, .ms = listen ? (unsigned)rec_ms : (unsigned)ms->valueint,
                        .vad = vad, .end_silence_ms = end_silence_ms, .no_speech_ms = no_speech_ms, .ack = ack};
     strcpy(job.job, j->valuestring);
+    s_nmarks = cued ? nmarks : 0;
+    memcpy(s_marks, marks, sizeof(marks[0]) * (size_t)s_nmarks);
     begin(&job, cued);
     *out = result;
     return ESP_OK;
@@ -622,10 +657,19 @@ void link_audio_tick(void)
     /* A listen that heard speech is acknowledged (s_ack, decided at its end): `thinking`
      * instead of idle, LINK_ACK_THINK_S at most, until the agent's say / mood / ask / listen
      * replaces it — a mood the device sets itself, so the next job still takes over. */
+    /* A say whose mood marks fired ends in its last one (the creature shows it as the words
+     * end), unless an explicit mood came meanwhile — the say's own housekeeping, like idle. */
     if (!link_pair_active()) {
         if (s_listen && s_ack != LINK_ACK_OFF) link_cmd_mood_unless(s_mood_gen0, "thinking", LINK_ACK_THINK_S);
+        else if (!s_listen && s_mark_mood >= 0) {
+            const int m = s_mark_mood;
+            const bool quick = !strcmp(link_mood_name(m), "happy") || !strcmp(link_mood_name(m), "surprised") || m == 0;
+            link_cmd_mood_unless(s_mood_gen0, link_mood_name(m), quick ? -1 : MARK_MOOD_HOLD_S);
+        }
         else link_cmd_mood_idle_unless(s_mood_gen0);
     }
+    /* played to its end: idle life may smile once the creature is back (fd_turn_spoken) */
+    if (!s_listen && e == ESP_OK && !atomic_load(&s_cancel)) mole_fluid_spoke();
     /* A failed/cancelled stream must never report successful playback. Listen
      * completion is the uplink end flag, not a say event. */
     if (!s_listen && e == ESP_OK && !atomic_load(&s_cancel) && link_client_connected()) {

@@ -8,6 +8,7 @@
 // segment is one tts() call.
 
 import type { TtsOptions, VoiceProvider } from "../voice/types.js";
+import { ACTIONS, MAX_SAY_MARKS, MOODS } from "./commands.js";
 
 /** First segment: if the first sentence is longer than this, cut it at its first clause boundary. */
 const FIRST_MAX_CHARS = 80;
@@ -151,6 +152,108 @@ class TtsTimeout extends Error {
 /** Words the way the device's speed reader counts them (whitespace-split, ASCII whitespace). */
 export function speechWords(text: string): string[] {
   return text.split(/[ \t\r\n\v\f]+/).filter(Boolean);
+}
+
+/** Longest cue name between the brackets (`[` + 1..24 chars + `]`). */
+const CUE_MAX_CHARS = 24;
+/** Built on first use: commands.ts imports this module too (the cycle is safe only lazily). */
+let cueNames: ReadonlySet<string> | undefined;
+const isWs = (c: string | undefined) => c === " " || c === "\t" || c === "\n" || c === "\r" || c === "\v" || c === "\f";
+
+/**
+ * Inline mood / action cues in say text: `[happy] Build passed! [nod] …`. Returns the text
+ * as spoken and shown (cues removed) and the marks [word, name], in text order.
+ *
+ * - A cue is `[` + 1..24 chars without `[`, `]`, CR, LF (nor an escaped `\[` / `\]`) + `]`. Its name
+ *   is the inside trimmed, lowercased, runs of spaces / tabs / hyphens → `_` (`[Shake Head]` →
+ *   shake_head). A MOODS / ACTIONS name becomes a mark; any other cue is removed silently.
+ * - An unescaped `[` or `]` that forms no cue is dropped (never spoken nor shown); the text
+ *   after it stays. `\[` / `\]` are literal brackets; any other backslash is literal.
+ * - Where something was removed, the whitespace on both sides collapses to what was there on
+ *   one side (a line break wins over spaces); the result is trimmed. Nothing else changes.
+ * - A mark's word = the number of words (speechWords) of the result that start before the
+ *   cue: before word k → k, mid-word → the next word, after the last word → the word count
+ *   (the device fires it when playback ends).
+ * - At most MAX_SAY_MARKS marks (the first ones); an exact duplicate [word, name] is dropped.
+ */
+export function parseCues(text: string): { text: string; marks: Array<[number, string]> } {
+  cueNames ??= new Set<string>([...MOODS, ...ACTIONS]);
+  let out = "";
+  /** Something was just removed: whitespace that would now double up is skipped. */
+  let cut = false;
+  const found: Array<[number, string]> = []; // [position in out, name]
+  const remove = () => {
+    cut = true;
+  };
+  const append = (c: string) => {
+    if (cut && isWs(c) && (out === "" || isWs(out[out.length - 1]))) {
+      if (c !== "\n" && c !== "\r") return; // a space after the gap that already has one
+      // a line break after the gap: it replaces the spaces before it
+      let end = out.length;
+      while (end > 0 && (out[end - 1] === " " || out[end - 1] === "\t")) end--;
+      out = out.slice(0, end);
+      for (const f of found) if (f[0] > end) f[0] = end;
+    }
+    out += c;
+    if (!isWs(c)) cut = false;
+  };
+  for (let i = 0; i < text.length; ) {
+    const c = text[i];
+    if (c === "\\" && (text[i + 1] === "[" || text[i + 1] === "]")) {
+      append(text[i + 1]);
+      i += 2;
+      continue;
+    }
+    if (c === "]") {
+      remove(); // a lone closing bracket
+      i++;
+      continue;
+    }
+    if (c !== "[") {
+      append(c);
+      i++;
+      continue;
+    }
+    // `[`: a cue if an unescaped `]` closes it within CUE_MAX_CHARS, before any `[`, `]`, CR, LF
+    let close = -1;
+    for (let j = i + 1; j <= i + CUE_MAX_CHARS + 1 && j < text.length; j++) {
+      const d = text[j];
+      if (d === "]") {
+        if (j > i + 1) close = j;
+        break;
+      }
+      if (d === "[" || d === "\n" || d === "\r") break;
+      if (d === "\\" && (text[j + 1] === "[" || text[j + 1] === "]")) break;
+    }
+    if (close < 0) {
+      remove(); // a lone opening bracket: dropped, the text after it stays
+      i++;
+      continue;
+    }
+    const name = text.slice(i + 1, close).trim().toLowerCase().replace(/[ \t-]+/g, "_");
+    if (cueNames.has(name)) found.push([out.length, name]);
+    remove();
+    i = close + 1;
+  }
+  // word starts of the RESULT (speechWords' ASCII whitespace), on the text as returned: trim()
+  // also drops Unicode spaces (NBSP) that the ASCII count would take for a word
+  const result = out.trim();
+  const lead = out.length - out.trimStart().length;
+  for (const f of found) f[0] = Math.max(0, f[0] - lead);
+  const starts: number[] = [];
+  for (let k = 0; k < result.length; k++) if (!isWs(result[k]) && (k === 0 || isWs(result[k - 1]))) starts.push(k);
+  const marks: Array<[number, string]> = [];
+  const seen = new Set<string>();
+  for (const [pos, name] of found) {
+    let word = 0;
+    while (word < starts.length && starts[word] < pos) word++;
+    const key = `${word}:${name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    marks.push([word, name]);
+    if (marks.length === MAX_SAY_MARKS) break;
+  }
+  return { text: result, marks };
 }
 
 /**

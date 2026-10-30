@@ -8,6 +8,7 @@
 #include "molty_board.h"
 #include "sdkconfig.h"
 #include "mole_fluid.h"
+#include "cute_act.h"
 #include "mole_diag.h"
 #include "esp_heap_caps.h"
 #include <string.h>
@@ -182,6 +183,23 @@ static esp_err_t cmd_mood(const cJSON *args, cJSON **out)
     return e;
 }
 
+/* act {action}: a one-shot gesture on the creature (cute_act.h). It never takes the screen:
+ * no mood change, no question cancelled, not counted as an explicit mood; while the words or
+ * a question cover the creature it waits up to 3 s (fluid_director.h), then is dropped. */
+static esp_err_t cmd_act(const cJSON *args, cJSON **out)
+{
+    int act;
+    if (!link_act_args(args, &act)) return ESP_ERR_INVALID_ARG;
+    esp_err_t e = mole_creature_select("fluid");
+    if (e != ESP_OK) return e;
+    mole_fluid_act(act);
+    cJSON *j = cJSON_CreateObject();
+    if (!j) return ESP_ERR_NO_MEM;
+    cJSON_AddStringToObject(j, "action", cute_act_name(act));
+    *out = j;
+    return ESP_OK;
+}
+
 static esp_err_t cmd_show(const cJSON *args, cJSON **out)
 {
     (void)out;
@@ -258,6 +276,7 @@ void link_cmd_init(void)
     link_cmd_register("diag", cmd_diag); link_cmd_register("log", cmd_log);
     link_cmd_register("status", cmd_status); link_cmd_register("state", cmd_state);
     link_cmd_register("mood", cmd_mood); link_cmd_register("show", cmd_show);
+    link_cmd_register("act", cmd_act);
     link_cmd_register("say", link_audio_say); link_cmd_register("listen", link_audio_listen);
     link_cmd_register("listen_stop", link_audio_listen_stop);
     link_cmd_register("volume", cmd_volume); link_cmd_register("imu", cmd_imu);

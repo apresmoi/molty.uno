@@ -1,4 +1,5 @@
 #include "link_protocol.h"
+#include "cute_act.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -306,6 +307,45 @@ static void test_cues(void)
     g.ncues = 9; assert(link_frame_parse(f, (size_t)n, &g, &pcm, &pl) && g.ncues == 0);
 }
 
+/* say marks (cap say_marks) and act: the names are the creature's moods and actions
+ * (cute_act.h), words 0..LINK_MARK_WORD_MAX, at most LINK_MARKS_MAX; anything else refuses
+ * the say (the relay only sends valid ones) */
+static bool marks(const char *json, link_mark_t *m, int *n)
+{
+    char buf[1024]; snprintf(buf, sizeof(buf), "{\"marks\":%s}", json);
+    cJSON *a = cJSON_Parse(buf); assert(a);
+    bool ok = link_marks_parse(a, m, n); cJSON_Delete(a); return ok;
+}
+static void test_marks(void)
+{
+    link_mark_t m[LINK_MARKS_MAX]; int n = -1;
+    cJSON *none = cJSON_Parse("{}");
+    assert(link_marks_parse(none, m, &n) && n == 0); cJSON_Delete(none);
+    assert(marks("[[0,\"happy\"],[2,\"thinking\"],[2,\"nod\"],[4096,\"shake_head\"]]", m, &n) && n == 4);
+    assert(!m[0].act && m[0].id == 4 && m[0].word == 0 && !strcmp(link_mood_name(m[0].id), "happy"));
+    assert(!m[1].act && !strcmp(link_mood_name(m[1].id), "thinking") && m[1].word == 2);
+    assert(m[2].act && m[2].id == CA_NOD && m[3].act && m[3].id == CA_SHAKE_HEAD && m[3].word == 4096);
+    assert(marks("[]", m, &n) && n == 0);
+    char many[1024]; int o = sprintf(many, "[");
+    for (int i = 0; i < LINK_MARKS_MAX; i++) o += sprintf(many + o, "%s[%d,\"blink\"]", i ? "," : "", i);
+    strcpy(many + o, "]");
+    assert(marks(many, m, &n) && n == LINK_MARKS_MAX);
+    many[o] = 0; strcat(many, ",[1,\"nod\"]]");
+    assert(!marks(many, m, &n) && n == 0);                            /* > LINK_MARKS_MAX */
+    const char *bad[] = { "[[0,\"Happy\"]]", "[[0,\"dance\"]]", "[[-1,\"nod\"]]", "[[4097,\"nod\"]]", "[[1.5,\"nod\"]]",
+                          "[[0]]", "[[0,\"nod\",1]]", "[\"nod\"]", "{}", "1", "[[\"nod\",0]]", "[[0,1]]" };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(*bad); i++) assert(!marks(bad[i], m, &n) && n == 0);
+    assert(!link_mood_name(-1)[0] && !link_mood_name(7)[0] && !strcmp(link_mood_name(6), "surprised"));
+    /* act {action} */
+    int act = -1;
+    for (int a = 0; a < CUTE_N_ACTS; a++) {
+        char b[64]; snprintf(b, sizeof(b), "{\"action\":\"%s\"}", cute_act_name(a));
+        cJSON *j = cJSON_Parse(b); assert(link_act_args(j, &act) && act == a); cJSON_Delete(j);
+    }
+    const char *nope[] = { "{}", "{\"action\":1}", "{\"action\":\"dance\"}", "{\"action\":\"NOD\"}", "{\"action\":\"\"}" };
+    for (size_t i = 0; i < sizeof(nope) / sizeof(*nope); i++) { cJSON *j = cJSON_Parse(nope[i]); assert(!link_act_args(j, &act)); cJSON_Delete(j); }
+}
+
 static void test_frames(void)
 {
     uint8_t frame[LINK_MESSAGE_MAX + 2];
@@ -451,8 +491,8 @@ static void test_ask_args(void)
 
 int main(void)
 {
-    test_codes(); test_moods(); test_frames(); test_cues(); test_identity_and_urls(); test_control_frames();
+    test_codes(); test_moods(); test_frames(); test_cues(); test_marks(); test_identity_and_urls(); test_control_frames();
     test_mood_args(); test_listen_args(); test_listen_window(); test_ack(); test_event_frames(); test_restore(); test_ask_args();
-    puts("LINK HOST PASS: audio/control/event frames, random IDs, code alphabet, URLs, close retry policy, moods + hold_s, listen args + window, turn ack rules, say cues, restore, ask args + answer frames");
+    puts("LINK HOST PASS: audio/control/event frames, random IDs, code alphabet, URLs, close retry policy, moods + hold_s, listen args + window, turn ack rules, say cues + marks, act, restore, ask args + answer frames");
     return 0;
 }

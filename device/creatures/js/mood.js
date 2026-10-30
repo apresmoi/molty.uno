@@ -1,3 +1,5 @@
+import { ACTIONS, actionPose } from './actions.js';
+
 // Procedural mood layer. Pure JS (no three.js) so it can be unit-checked in node.
 //
 // A mood is a function of time that returns an additive POSE. The engine adds the
@@ -21,6 +23,7 @@
 //   emote        floating glyph ('' | '?' | '!' | 'zZz' | '♪' | '…')
 
 export const MOODS = ['idle', 'listening', 'thinking', 'speaking', 'happy', 'sleepy', 'surprised'];
+export { ACTIONS, ACTION_NAMES } from './actions.js';
 
 const TAU = Math.PI * 2;
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -149,6 +152,36 @@ export class MoodEngine {
     this.springs.sq = new Spring(160, 9);
     this.springs.py = new Spring(220, 14);
     this.envValue = 0;
+    this.action = null; this.prevAction = null; // one-shot gestures (actions.js), {name, t, w}
+  }
+  /** Play a one-shot action (actions.js) over the current mood; a newer one replaces it (the old fades out over 0.25 s). */
+  act(name) {
+    if (ACTIONS[name] === undefined) return;
+    if (this.action) this.prevAction = { ...this.action, w: 1 };
+    this.action = { name, t: 0 };
+  }
+  // the action layer (cute_act.h / cute_rig.c act_layer): offsets after the springs, look
+  // before the saccade clamp; returns the action's lid (taken as max after the blink)
+  _actLayer(p, dt) {
+    let lid = 0;
+    const add = (a, w) => {
+      for (const k of ['pos', 'rot', 'head', 'spine']) for (const c of ['x', 'y', 'z']) p[k][c] += w * a[k][c];
+      p.squash += w * a.squash; p.mouth = Math.max(p.mouth, w * a.mouth);
+      p.look.x += w * a.look.x; p.look.y += w * a.look.y;
+    };
+    const pa = this.prevAction;
+    if (pa) {
+      pa.t += dt; pa.w -= dt / 0.25;
+      if (pa.w <= 0 || pa.t > ACTIONS[pa.name]) this.prevAction = null;
+      else { const a = actionPose(pa.name, pa.t); add(a, pa.w); lid = pa.w * a.lid; }
+    }
+    const ca = this.action;
+    if (ca) {
+      ca.t += dt;
+      if (ca.t > ACTIONS[ca.name]) this.action = null;
+      else { const a = actionPose(ca.name, ca.t); add(a, 1); lid = Math.max(lid, a.lid); }
+    }
+    return lid;
   }
   _jitter() { return { a: jit(0.15), f: jit(0.15), side: Math.random() < 0.5 ? -1 : 1, nextGlance: rand(3, 8), glanceUntil: 0, glanceDir: 1 }; }
   set(mood) {
@@ -194,6 +227,7 @@ export class MoodEngine {
     p.rot.x = s.bx.step(p.rot.x, dt); p.rot.y = s.by.step(p.rot.y, dt); p.rot.z = s.bz.step(p.rot.z, dt);
     p.pos.y = s.py.step(p.pos.y, dt);
     p.squash = s.sq.step(p.squash, dt);
+    const actLid = this._actLayer(p, dt);
 
     // rule 3: micro-saccades, snapped, every 200–600 ms
     this.saccade.next -= dt;
@@ -215,6 +249,7 @@ export class MoodEngine {
       }
     }
     p.lid = clamp(Math.max(p.lid, 0) + b.value * (1 - p.lid), 0, 1);
+    p.lid = Math.max(p.lid, actLid);
     p.env = this.envValue;
     p.mood = this.mood; // lets rigs with their own vocabulary (cute kit) key off the state
     return p;

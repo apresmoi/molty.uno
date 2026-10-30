@@ -2,13 +2,20 @@
 // later the OpenClaw node adapter). Produces the args sent to the device.
 
 import { isRecord, type JsonObject } from "./protocol.js";
+import { parseCues, speechWords } from "./speech.js";
 
 export const MOODS = ["idle", "listening", "thinking", "speaking", "happy", "sleepy", "surprised"] as const;
-export const COMMANDS = ["status", "state", "mood", "show", "say", "listen", "volume", "imu", "diag", "log"] as const;
+/** One-shot gestures over the current mood (`act`, and `[name]` cues in say text). */
+export const ACTIONS = ["wiggle", "nod", "shake_head", "bounce", "peek", "glance_left", "glance_right", "blink", "wobble", "stretch", "look_up", "yawn"] as const;
+export const COMMANDS = ["status", "state", "mood", "show", "say", "listen", "volume", "imu", "diag", "log", "act"] as const;
 export type CommandName = (typeof COMMANDS)[number];
 
 export const MAX_SHOW_BYTES = 16384;
 export const MAX_SAY_BYTES = 4096;
+/** Inline `[mood]` / `[action]` cues kept per say (core/speech.ts parseCues): later ones are dropped. */
+export const MAX_SAY_MARKS = 16;
+/** A say's marks: [word index of the stripped text, mood or action name]; fired when that word's cue plays. */
+export type SayMarks = Array<[number, string]>;
 /**
  * The listen window (ms). Every listen ends early anyway (the device's end of speech, or the
  * voice box's semantic end of turn): the window is a ceiling. `0` = unlimited — it ends only
@@ -64,6 +71,19 @@ function text(value: unknown, field: string, maxBytes: number): string {
   if (value.includes("\u0000")) throw invalid(`${field} must not contain NUL`);
   if (new TextEncoder().encode(value).byteLength > maxBytes) throw invalid(`${field} exceeds ${maxBytes} bytes`);
   return value;
+}
+
+/**
+ * Say text with inline cues (`[happy] Build passed! [nod] …`): the raw text is size-checked,
+ * then the cues are stripped (never spoken, never shown) and returned as marks.
+ */
+function sayText(value: unknown, field: string): { text: string; marks: SayMarks } {
+  const raw = text(value, field, MAX_SAY_BYTES);
+  const parsed = parseCues(raw);
+  if (speechWords(parsed.text).length === 0) {
+    throw invalid(parsed.text === raw.trim() ? `${field} has no words to speak` : `${field} has nothing to speak after removing its [cues]: use mood or act for a gesture without speech`);
+  }
+  return parsed;
 }
 
 function int(value: unknown, field: string, min: number, max: number, fallback?: number): number {
@@ -222,7 +242,10 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
       };
     case "say": {
       only(args, ["text", "voice", "in_reply_to"]);
-      const out: JsonObject = { text: text(args.text, "text", MAX_SAY_BYTES) };
+      // relay-only `marks` (the text's [cues]): room.ts sends them to firmware with say_marks
+      const said = sayText(args.text, "text");
+      const out: JsonObject = { text: said.text };
+      if (said.marks.length) out.marks = said.marks;
       if (args.voice !== undefined) out.voice = voiceId(args.voice);
       const reply = turnId(args.in_reply_to);
       return { name: n, args: out, job: true, ...(reply !== undefined ? { in_reply_to: reply } : {}) };
@@ -252,11 +275,20 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
     case "volume":
       only(args, ["volume"]);
       return { name: n, args: { volume: int(args.volume, "volume", 0, 21) }, job: false };
+    case "act":
+      only(args, ["action"]);
+      if (typeof args.action !== "string" || !(ACTIONS as readonly string[]).includes(args.action)) {
+        throw invalid(`action must be one of ${ACTIONS.join(", ")}`);
+      }
+      return { name: n, args: { action: args.action }, job: false };
   }
 }
 
 export interface TalkArgs {
+  /** What is spoken and shown: the agent's text with its [cues] stripped. */
   say?: string;
+  /** The say's [cues] (relay-only; sent to firmware with say_marks). */
+  marks?: SayMarks;
   voice?: string;
   listen: boolean;
   /** undefined = the device's setting; 0 = unlimited. */
@@ -280,7 +312,11 @@ export function validateTalk(raw: unknown): TalkArgs {
   const out: TalkArgs = { listen: args.listen !== false, vad: vadArgs(args) };
   const lm = listenMs(args.listen_ms, "listen_ms");
   if (lm !== undefined) out.listen_ms = lm;
-  if (args.say !== undefined) out.say = text(args.say, "say", MAX_SAY_BYTES);
+  if (args.say !== undefined) {
+    const said = sayText(args.say, "say");
+    out.say = said.text;
+    if (said.marks.length) out.marks = said.marks;
+  }
   if (args.voice !== undefined) out.voice = voiceId(args.voice);
   if (args.ring_color !== undefined) out.ring_color = resolveColor(args.ring_color, "ring_color");
   const ack = ackArg(args.ack);
@@ -300,7 +336,9 @@ export const MAX_ASK_TIMEOUT_S = 120;
 export const DEFAULT_ASK_TIMEOUT_S = 30;
 
 export interface AskArgs {
+  /** The spoken question, [cues] stripped (as TalkArgs). */
   say?: string;
+  marks?: SayMarks;
   voice?: string;
   /** Trimmed labels, in order: index i is options[i]. */
   options: string[];
@@ -344,7 +382,11 @@ export function validateAsk(raw: unknown): AskArgs {
     return label;
   });
   const out: AskArgs = { options, colors, timeout_s: int(args.timeout_s, "timeout_s", 1, MAX_ASK_TIMEOUT_S, DEFAULT_ASK_TIMEOUT_S) };
-  if (args.say !== undefined) out.say = text(args.say, "say", MAX_SAY_BYTES);
+  if (args.say !== undefined) {
+    const said = sayText(args.say, "say");
+    out.say = said.text;
+    if (said.marks.length) out.marks = said.marks;
+  }
   if (args.voice !== undefined) out.voice = voiceId(args.voice);
   return out;
 }

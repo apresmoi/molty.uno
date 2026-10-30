@@ -20,6 +20,9 @@
  *               speaking: chirp + thinking out of the box; kept in NVS; GET reports it),
  *         shake_talk: true|false (a shake starts a listen by itself, for the agents:
  *               on out of the box; kept in NVS; GET reports it),
+ *         idle_life: "lively"|"calm"|"off" (how much the creature moves by itself:
+ *               fluid_director.h; lively out of the box; kept in NVS; GET reports it),
+ *         act: "nod"|... (a one-shot action, cute_act.h; GET reports the one playing),
  *         hold: true (with "text": hold the last word instead of returning to the
  *               creature 1.5 s after it; the pairing code, the Improv "hi"),
  *         text, wpm, palette: "green"|"amber"|"pastel", edge_mode: "off"|"contours"|"all",
@@ -93,6 +96,22 @@ void mole_fluid_listen_color(int32_t rgb);
  *  over — the reader's own pace takes whatever is left, then it ends as usual. */
 void mole_fluid_text_cue(int word);
 void mole_fluid_text_cue_end(void);
+/** A one-shot action (cute_act.h CA_*) on the creature (link_cmd.c `act`, a say's action
+ *  mark): it plays once the creature is on screen and no question covers it, waiting up to
+ *  3 s (fluid_director.h). Safe from any task; a no-op before init. */
+void mole_fluid_act(int act);
+/** A say's mood mark reached its word (link_audio.c, cap say_marks): the reader's words
+ *  — if text_ver is still the loaded text, i.e. the say's own — take that mood's colour from there on (happy amber, surprised cyan, thinking violet,
+ *  sleepy blue, listening green; idle / speaking the palette's), until the next text. The
+ *  creature itself shows the say's last mood when the words end (link_audio_tick). */
+void mole_fluid_cue_mood(int mood, unsigned text_ver);
+/** The reader's text version (bumped by every text set / append): a say captures it after
+ *  setting its words and hands it to mole_fluid_cue_mood, which tints only while that text
+ *  is still the one loaded. */
+unsigned mole_fluid_text_ver(void);
+/** A say played to its end (link_audio_tick): the director may give a happy flash once the
+ *  creature is back and idle (fd_turn_spoken). Safe from any task. */
+void mole_fluid_spoke(void);
 /** The listen window an agent gets when it gives none (link_audio.c, cmd listen without ms):
  *  0 = unlimited or 5000..30000 ms (link_protocol.h LINK_LISTEN_*), 30000 out of the box.
  *  The console's setting, POST /api/creature/state {listen_ms} (GET reports it), kept in NVS
