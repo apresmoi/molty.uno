@@ -39,7 +39,7 @@ const FAST = { cmdTimeoutMs: 300, pairWindowMs: 400, askGraceMs: 50, updateConfi
 /** A device that answers every cmd ok (or `refuse` for update) and records them. */
 function device(room: DeviceRoom, sock: FakeSocket) {
   const cmds: Array<{ name: string; args: any }> = [];
-  const ctl = { refuse: undefined as string | undefined };
+  const ctl = { refuse: undefined as string | undefined, noAck: false };
   const orig = sock.sendText.bind(sock);
   sock.sendText = (t: string) => {
     orig(t);
@@ -48,6 +48,7 @@ function device(room: DeviceRoom, sock: FakeSocket) {
     if (f.t !== "cmd") return;
     cmds.push({ name: f.name, args: f.args });
     const err = f.name === "update" ? ctl.refuse : undefined;
+    if (f.name === "update" && ctl.noAck) return;
     setTimeout(() => void room.socketMessage(sock, JSON.stringify(err ? { t: "res", id: f.id, ok: false, error: err } : { t: "res", id: f.id, ok: true, result: { echo: f.name } })), 1);
   };
   const evt = (data: Record<string, unknown>) => room.socketMessage(sock, JSON.stringify({ t: "evt", name: "update", data }));
@@ -310,6 +311,27 @@ describe("molty_update", () => {
     r.dev.ctl.refuse = "update_busy";
     expect(await r.room.update(r.token, {})).toMatchObject({ ok: false, error: "update_busy" });
     expect(await r.kv.get("upd")).toBeUndefined();
+  });
+
+  it("an update the device accepted survives a lost ack: still tracked, settled by the next hello", async () => {
+    const w = await setup({ caps: CAPS, timings: { talkBudgetMs: 50, updateMs: 2000 } });
+    w.dev.ctl.noAck = true;
+    const p = w.room.update(w.token, {});
+    await until(() => w.dev.updates().length === 1);
+    const job = w.dev.updates()[0].args.job;
+    await w.dev.evt({ job, state: "accepted" });
+    await sleep(FAST.cmdTimeoutMs + 50); // the ack timed out
+    expect(await p).toMatchObject({ ok: true, result: { job, status: "pending", phase: "accepted" } });
+    expect(await w.room.job(w.token, job, 0)).toMatchObject({ ok: true, result: { status: "running", phase: "accepted" } });
+    expect(await w.kv.get("upd")).toMatchObject({ job, phase: "accepted" });
+    await w.dev.evt({ job, state: "rebooting" });
+    await w.reconnect("0.2.0");
+    expect(await w.room.job(w.token, job, 0)).toMatchObject({ ok: true, result: { status: "done", result: { outcome: "updated" } } });
+    // no device event before the ack timed out: still a failure (nothing to keep)
+    const n = await setup({ caps: CAPS, timings: { updateConfirmMs: 1000 } });
+    n.dev.ctl.noAck = true;
+    expect(await n.room.update(n.token, {})).toMatchObject({ ok: false, error: "device_timeout" });
+    expect(await n.kv.get("upd")).toBeUndefined();
   });
 
   it("nobody answers the on-screen question, or the device never comes back: update_timeout", async () => {

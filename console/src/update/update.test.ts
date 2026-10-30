@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compareVersions, latestRelease, notesText, updateView, type PublicRelease } from './update';
+import { compareVersions, installOutcome, latestRelease, notesText, updateView, type PublicRelease } from './update';
 
 const OTA = { url: 'https://github.com/apresmoi/molty.uno/releases/download/v0.2.0/molty-0.2.0-b-ota.bin', size: 1234, sha256: 'd'.repeat(64) };
 const rel = (o: Partial<PublicRelease> = {}): PublicRelease => ({
@@ -57,5 +57,20 @@ describe('latestRelease', () => {
     expect(await latestRelease('https://r', 'b', limited)).toBeNull();
     const hang = ((_: string, i: RequestInit) => new Promise((_r, rej) => i.signal!.addEventListener('abort', () => rej(new Error('abort'))))) as unknown as typeof fetch;
     expect(await latestRelease('https://r', 'b', hang, 20)).toBeNull();
+  });
+});
+
+describe('installOutcome', () => {
+  const before = { fw: '0.1.0', boot_count: 74, uptime_ms: 3_725_000 };
+  it('updated on the target version', () => {
+    expect(installOutcome('0.2.0', before, { fw: '0.2.0', boot_count: 75, uptime_ms: 2000 })).toBe('updated');
+  });
+  it('restarted on another version: rolled back (new boot count, or the uptime went backwards)', () => {
+    expect(installOutcome('0.2.0', before, { fw: '0.1.0', boot_count: 75, uptime_ms: 9_000_000 })).toBe('rolled_back');
+    expect(installOutcome('0.2.0', { fw: '0.1.0', uptime_ms: 3_725_000 }, { fw: '0.1.0', uptime_ms: 2000 })).toBe('rolled_back');
+  });
+  it('same boot, old version: still pending (downloading, installing, or not restarted yet)', () => {
+    expect(installOutcome('0.2.0', before, { fw: '0.1.0', boot_count: 74, uptime_ms: 3_730_000 })).toBe('pending');
+    expect(installOutcome('0.2.0', null, { fw: '0.1.0', boot_count: 75, uptime_ms: 1 })).toBe('pending');
   });
 });

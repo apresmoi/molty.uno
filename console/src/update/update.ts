@@ -56,6 +56,24 @@ export function updateView(fw: string | null | undefined, r: PublicRelease | nul
 }
 
 /** Release notes as plain lines: the CHANGELOG section minus its "## vX.Y.Z" heading. */
+/** What the console last saw of the device (GET /api/info): which firmware, which boot. */
+export interface BootMark { fw?: string; boot_count?: number; uptime_ms: number }
+
+/**
+ * Where an install stands, from the device's info: `updated` on the target version;
+ * `rolled_back` once Molty restarted (a new boot count, or its uptime went backwards)
+ * but runs another version (the new image did not stick, or never got installed);
+ * otherwise still `pending`. `since` is the mark taken when the install started.
+ */
+export function installOutcome(target: string, since: BootMark | null, now: BootMark): 'updated' | 'rolled_back' | 'pending' {
+  if (compareVersions(now.fw, target) === 0) return 'updated';
+  if (!since) return 'pending';
+  const restarted =
+    (typeof since.boot_count === 'number' && typeof now.boot_count === 'number' && now.boot_count !== since.boot_count) ||
+    now.uptime_ms < since.uptime_ms;
+  return restarted ? 'rolled_back' : 'pending';
+}
+
 export function notesText(notes: string): string {
   return notes.replace(/\r/g, '').split('\n').filter((l, i) => !(i === 0 && /^#+\s/.test(l))).join('\n').trim();
 }

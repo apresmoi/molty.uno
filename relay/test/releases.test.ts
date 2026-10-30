@@ -2,9 +2,9 @@
 // stale-on-error with a short negative cache, zero releases, prereleases, board
 // asset selection, checksums; and the public GET /v1/releases/latest.
 import { describe, expect, it } from "vitest";
-import { MemoryReleaseStore, type ReleaseLookup, ReleaseCache, parseSums } from "../src/core/releases.js";
+import { MemoryReleaseStore, type ReleaseLookup, ReleaseCache, type ReleaseSource, parseSums } from "../src/core/releases.js";
 import { FEATURES, compareVersions, parseVersion } from "../src/core/version.js";
-import { handleReleases } from "../src/surfaces/releases.js";
+import { handleReleases, servePublicRelease } from "../src/surfaces/releases.js";
 
 const REPO = "apresmoi/molty.uno";
 const B146 = "waveshare-esp32-s3-touch-lcd-1.46";
@@ -260,5 +260,28 @@ describe("GET /v1/releases/latest (public)", () => {
     const limited = await handleReleases(new Request("https://r/v1/releases/latest"), lookup({}), { limit: async () => false });
     expect(limited.status).toBe(429);
     expect(limited.headers.get("access-control-allow-origin")).toBe("*");
+  });
+
+  it("as served: every method that reaches the lookup (GET miss, HEAD) is rate-limited; cache hits and preflights are not", async () => {
+    let lookups = 0;
+    let limits = 0;
+    const source: ReleaseSource = { latest: async () => (lookups++, { release: null, state: "fresh", checked_at: 1 }) };
+    const store = new Map<string, Response>();
+    const edge = { match: async (k: Request) => store.get(k.url)?.clone(), put: async (k: Request, r: Response) => void store.set(k.url, r) };
+    const host = (allow: boolean) => ({ cache: edge, limit: async () => (limits++, allow) });
+    const at = (method: string) => new Request(`https://r/v1/releases/latest?board=${B146}`, { method });
+    // denied: neither HEAD nor a GET miss reaches the release lookup
+    expect((await servePublicRelease(at("HEAD"), source, host(false))).status).toBe(429);
+    expect((await servePublicRelease(at("GET"), source, host(false))).status).toBe(429);
+    expect([lookups, limits]).toEqual([0, 2]);
+    expect((await servePublicRelease(at("OPTIONS"), source, host(false))).status).toBe(204);
+    expect((await servePublicRelease(at("POST"), source, host(false))).status).toBe(405);
+    expect(limits).toBe(2);
+    // allowed: the GET fills the edge cache; the next GET is a hit (no limit, no lookup); HEAD is limited again
+    expect((await servePublicRelease(at("GET"), source, host(true))).status).toBe(200);
+    expect((await servePublicRelease(at("GET"), source, host(false))).status).toBe(200);
+    expect([lookups, limits]).toEqual([1, 3]);
+    expect((await servePublicRelease(at("HEAD"), source, host(false))).status).toBe(429);
+    expect([lookups, limits]).toEqual([1, 4]);
   });
 });

@@ -309,16 +309,30 @@ static void test_boot(void) {
     assert(upd_boot_rule(true, false) == UPD_BOOT_VALID_NOW);       /* /api/ota, no relay link at install */
     assert(upd_boot_rule(true, true) == UPD_BOOT_AWAIT_WELCOME);   /* a self-update while linked */
     /* await: valid on welcome, rollback only after the window, wait in between */
-    assert(upd_guard_step(UPD_BOOT_AWAIT_WELCOME, false, 0) == UPD_GUARD_WAIT);
-    assert(upd_guard_step(UPD_BOOT_AWAIT_WELCOME, false, UPD_WELCOME_WINDOW_US - 1) == UPD_GUARD_WAIT);
-    assert(upd_guard_step(UPD_BOOT_AWAIT_WELCOME, false, UPD_WELCOME_WINDOW_US) == UPD_GUARD_ROLLBACK);
-    assert(upd_guard_step(UPD_BOOT_AWAIT_WELCOME, true, 5) == UPD_GUARD_MARK_VALID);
-    assert(upd_guard_step(UPD_BOOT_AWAIT_WELCOME, true, UPD_WELCOME_WINDOW_US * 2) == UPD_GUARD_MARK_VALID);   /* welcome wins */
-    /* not armed: valid at once, welcome or not, never a rollback */
-    assert(upd_guard_step(UPD_BOOT_VALID_NOW, false, 0) == UPD_GUARD_MARK_VALID);
-    assert(upd_guard_step(UPD_BOOT_VALID_NOW, false, UPD_WELCOME_WINDOW_US * 10) == UPD_GUARD_MARK_VALID);
-    assert(upd_guard_step(UPD_BOOT_NOTHING, false, UPD_WELCOME_WINDOW_US * 10) == UPD_GUARD_DONE);
-    assert(upd_guard_step(UPD_BOOT_NOTHING, true, 0) == UPD_GUARD_DONE);
+    upd_boot_t r = UPD_BOOT_AWAIT_WELCOME;
+    assert(upd_guard_step(&r, false, 0) == UPD_GUARD_WAIT && r == UPD_BOOT_AWAIT_WELCOME);
+    assert(upd_guard_step(&r, false, UPD_WELCOME_WINDOW_US - 1) == UPD_GUARD_WAIT && r == UPD_BOOT_AWAIT_WELCOME);
+    assert(upd_guard_step(&r, false, UPD_WELCOME_WINDOW_US) == UPD_GUARD_ROLLBACK);
+    r = UPD_BOOT_AWAIT_WELCOME;
+    assert(upd_guard_step(&r, true, 5) == UPD_GUARD_MARK_VALID);
+    r = UPD_BOOT_AWAIT_WELCOME;
+    assert(upd_guard_step(&r, true, UPD_WELCOME_WINDOW_US * 2) == UPD_GUARD_MARK_VALID);   /* welcome wins */
+    /* one decision per boot: the window's timer rolled back, then the welcome lands -> nothing */
+    r = UPD_BOOT_AWAIT_WELCOME;
+    assert(upd_guard_step(&r, false, UPD_WELCOME_WINDOW_US) == UPD_GUARD_ROLLBACK);
+    assert(upd_guard_step(&r, true, UPD_WELCOME_WINDOW_US + 1) == UPD_GUARD_DONE);
+    /* the welcome kept it, then the timer fires -> nothing (no rollback of a kept image) */
+    r = UPD_BOOT_AWAIT_WELCOME;
+    assert(upd_guard_step(&r, true, UPD_WELCOME_WINDOW_US - 1) == UPD_GUARD_MARK_VALID);
+    assert(upd_guard_step(&r, true, UPD_WELCOME_WINDOW_US) == UPD_GUARD_DONE);
+    assert(upd_guard_step(&r, false, UPD_WELCOME_WINDOW_US * 2) == UPD_GUARD_DONE);
+    /* not armed: valid at once (once), welcome or not, never a rollback */
+    r = UPD_BOOT_VALID_NOW;
+    assert(upd_guard_step(&r, false, UPD_WELCOME_WINDOW_US * 10) == UPD_GUARD_MARK_VALID);
+    assert(upd_guard_step(&r, true, 0) == UPD_GUARD_DONE);
+    r = UPD_BOOT_NOTHING;
+    assert(upd_guard_step(&r, false, UPD_WELCOME_WINDOW_US * 10) == UPD_GUARD_DONE);
+    assert(upd_guard_step(&r, true, 0) == UPD_GUARD_DONE);
     /* armed only when the installing image was itself linked */
     assert(upd_should_arm(true) && !upd_should_arm(false));
     /* the window fits inside the relay's 5 min after the accept */

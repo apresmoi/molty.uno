@@ -267,15 +267,19 @@ upd_boot_t upd_boot_rule(bool pending_verify, bool armed)
     return armed ? UPD_BOOT_AWAIT_WELCOME : UPD_BOOT_VALID_NOW;
 }
 
-upd_guard_t upd_guard_step(upd_boot_t r, bool welcomed, int64_t since_boot_us)
+upd_guard_t upd_guard_step(upd_boot_t *r, bool welcomed, int64_t since_boot_us)
 {
-    switch (r) {
-    case UPD_BOOT_VALID_NOW: return UPD_GUARD_MARK_VALID;
+    upd_guard_t g;
+    switch (*r) {
+    case UPD_BOOT_VALID_NOW: g = UPD_GUARD_MARK_VALID; break;
     case UPD_BOOT_AWAIT_WELCOME:
-        if (welcomed) return UPD_GUARD_MARK_VALID;
-        return since_boot_us >= UPD_WELCOME_WINDOW_US ? UPD_GUARD_ROLLBACK : UPD_GUARD_WAIT;
+        if (welcomed) g = UPD_GUARD_MARK_VALID;
+        else g = since_boot_us >= UPD_WELCOME_WINDOW_US ? UPD_GUARD_ROLLBACK : UPD_GUARD_WAIT;
+        break;
     default: return UPD_GUARD_DONE;
     }
+    if (g != UPD_GUARD_WAIT) *r = UPD_BOOT_NOTHING;   /* decided: nobody decides again */
+    return g;
 }
 
 bool upd_should_arm(bool link_welcomed) { return link_welcomed; }
