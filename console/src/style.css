@@ -216,3 +216,11 @@ button.pill.done { background: var(--faint); color: var(--ink); }
 .agent-page { max-width: 520px; }
 .agent-page .say { color: var(--ink); }
 .link-state { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+
+/* agent page: the Voice card (ui/voice-card.ts) */
+.voice.card { margin-top: 18px; }
+.voice p { margin: 6px 0; }
+.voice p.ok { color: var(--ok); }
+.voice p.warn { color: var(--warn); }
+.voice .chips { margin: 4px 0 6px; }
+.voice select { max-width: 100%; }

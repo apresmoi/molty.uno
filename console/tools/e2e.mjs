@@ -26,6 +26,26 @@ const mockLog = async () => (await fetch(`${MOCK}/__mock/log`)).json();
 const mock = (path, c = {}) => fetch(`${MOCK}/__mock/${path}`, { method: 'POST', body: JSON.stringify(c) });
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// The relay's owner voice-box API (GET|POST|DELETE /v1/devices/<id>/voice, X-Molty-Link-Code), faked here.
+const VOICE_CORS = { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS', 'access-control-allow-headers': 'content-type, x-molty-link-code' };
+const voiceRelay = {
+  calls: [],
+  state: { mode: 'auto', voice: null, cloud: 'workers-ai', serving: { tts: 'box', stt: 'box' },
+    box: { paired: true, name: 'voice box', paired_at: 1, connected: true, connected_since: 2, reported_name: 'voice box', version: '0.1.0',
+      voices: ['expresso/ex03-ex01_happy_001_channel1_334s.wav', 'expresso/ex03-ex01_calm_001_channel2_1081s.wav'], stt: true, tts: true, last: { stt_ms: 310, tts_first_audio_ms: 240 } } },
+  async route(r) {
+    const req = r.request();
+    if (req.method() === 'OPTIONS') return r.fulfill({ status: 204, headers: VOICE_CORS });
+    const code = req.headers()['x-molty-link-code'];
+    this.calls.push({ method: req.method(), code, body: req.postData() });
+    if (code !== 'K7QX2MPA') return r.fulfill({ status: 401, headers: VOICE_CORS, contentType: 'application/json', body: '{"ok":false,"error":"unauthorized"}' });
+    const st = this.state;
+    if (req.method() === 'POST') { const b = JSON.parse(req.postData() || '{}'); if (b.mode) st.mode = b.mode; if (b.voice !== undefined) st.voice = b.voice; if (st.mode === 'cloud') st.serving = { tts: 'workers-ai', stt: 'workers-ai' }; }
+    if (req.method() === 'DELETE') { st.box = { ...st.box, paired: false, name: null, connected: false, voices: [] }; st.serving = { tts: 'workers-ai', stt: 'workers-ai' }; }
+    return r.fulfill({ status: 200, headers: VOICE_CORS, contentType: 'application/json', body: JSON.stringify({ ok: true, result: st }) });
+  },
+};
+
 const browser = await chromium.launch();
 async function newPage(tag, { offline = false, viewport = PHONE } = {}) {
   const ctx = await browser.newContext({ viewport, deviceScaleFactor: 2 });
@@ -33,6 +53,7 @@ async function newPage(tag, { offline = false, viewport = PHONE } = {}) {
   if (offline) await ctx.route('https://cdn.jsdelivr.net/**', (r) => r.abort('internetdisconnected'));
   // The status page asks the device's relay for the latest release: answer from the mock.
   await ctx.route('**/v1/releases/latest*', async (r) => r.fulfill({ response: await ctx.request.get(`${MOCK}/__mock/release?${new URL(r.request().url()).searchParams}`), headers: { 'access-control-allow-origin': '*' } }));
+  await ctx.route('**/v1/devices/*/voice', (r) => voiceRelay.route(r));
   const page = await ctx.newPage();
   page.on('console', (m) => {
     if (m.type() !== 'error' && m.type() !== 'warning') return;
@@ -206,6 +227,27 @@ const canvasStats = (page) => page.evaluate(() => {
   ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'settings agent: no horizontal scroll at 390px');
   await shot(page, '11-settings-agent');
   await mock('decide', { ok: true });
+  // Voice card: the owner's voice box, through the relay with the link code from GET /api/link
+  const vc = page.locator('.voice.card');
+  await vc.locator('p', { hasText: 'voice box ⠂ connected ⠂ listens + speaks' }).waitFor({ timeout: 5000 });
+  ok(voiceRelay.calls.every((c) => c.code === 'K7QX2MPA'), 'settings voice: relay calls carry the current link code');
+  ok(await vc.getByText('last turn: transcript 0.31 s after you stop').isVisible(), 'settings voice: last latencies');
+  const modes = vc.getByRole('group', { name: 'voice mode' });
+  ok(await modes.getByRole('button', { name: 'auto' }).getAttribute('aria-pressed') === 'true', 'settings voice: mode auto by default');
+  await modes.getByRole('button', { name: 'cloud' }).click();
+  await modes.locator('button[aria-pressed="true"]', { hasText: 'cloud' }).waitFor();
+  ok(voiceRelay.calls.some((c) => c.method === 'POST' && JSON.parse(c.body).mode === 'cloud'), 'settings voice: mode sent to the relay');
+  await vc.getByLabel('box voice').selectOption('expresso/ex03-ex01_calm_001_channel2_1081s.wav');
+  await page.waitForFunction(() => document.querySelector('.voice select')?.value === 'expresso/ex03-ex01_calm_001_channel2_1081s.wav');
+  ok(voiceRelay.calls.some((c) => c.method === 'POST' && JSON.parse(c.body).voice === 'expresso/ex03-ex01_calm_001_channel2_1081s.wav'), 'settings voice: default box voice sent');
+  await vc.locator('summary', { hasText: 'Pair another voice box' }).click();
+  ok((await vc.locator('code').innerText()) === 'molty-voice pair --relay https://molty-relay.example.workers.dev --device molty-k7m2w9c4ya --link-code K7QX2MPA', 'settings voice: pair command for the box');
+  ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'settings voice: no horizontal scroll at 390px');
+  await shot(page, '11b-settings-voice');
+  await vc.getByRole('button', { name: 'Unpair voice box' }).click();
+  await vc.getByRole('button', { name: 'Sure? Unpair' }).click();
+  await vc.locator('p', { hasText: 'no voice box paired' }).waitFor();
+  ok(voiceRelay.calls.some((c) => c.method === 'DELETE'), 'settings voice: unpair');
 
   await page.goto(`${MOCK}/#/molty`);
   await page.locator('.creature img').first().waitFor();
