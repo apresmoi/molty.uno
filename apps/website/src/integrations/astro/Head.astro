@@ -10,9 +10,11 @@ interface Props {
   description: string;
   path: string;
   image?: string;
+  /** The page runs the live fluid (a FluidField): its intro starts hidden before paint. */
+  fluid?: boolean;
 }
 
-const { title, description, path, image = "/og.png" } = Astro.props;
+const { title, description, path, image = "/og.png", fluid = false } = Astro.props;
 const canonical = `${SITE_URL}${path}`;
 const ogImage = `${SITE_URL}${image}`;
 ---
@@ -28,6 +30,23 @@ const ogImage = `${SITE_URL}${image}`;
     const light = stored ? stored === "light" : matchMedia("(prefers-color-scheme: light)").matches;
     document.documentElement.dataset.theme = light ? "light" : "dark";
   })();
+</script>
+<script is:inline define:vars={{ fluid }}>
+  // The intro's start state, before the first paint (a page with the live fluid): the fluid
+  // will draw the headings, the Moltys will emerge in their slots and the devices turn in, so
+  // none of them shows settled first (the CSS keys on these; FluidField moves them on). Without
+  // JS they are never set and the page shows at rest; if no script takes over (a bundle that
+  // never loads), it shows at rest after 8 s ("static").
+  if (fluid) {
+    const root = document.documentElement;
+    root.dataset.fluid = "pending";
+    root.dataset.fluidMoltys = "pending";
+    setTimeout(() => {
+      if (root.dataset.fluid !== "pending") return;
+      root.dataset.fluid = "static";
+      root.dataset.fluidMoltys = "static";
+    }, 8000);
+  }
 </script>
 <Analytics />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />

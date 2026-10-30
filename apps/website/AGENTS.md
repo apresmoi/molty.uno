@@ -44,6 +44,12 @@ Never deploy or publish from here; nothing in this package does.
 - The page must read without the engine: headings keep their DOM text (transparent only
   under `html[data-fluid="live"]`), Molty slots show the catalog still until
   `html[data-fluid-moltys="live"]`.
+- The first paint is the intro's start state: a fluid page (`fluid` on its layout) gets
+  `data-fluid` / `data-fluid-moltys="pending"` from an inline script in `Head.astro` before
+  paint, and CSS keeps the headings' text, the stills and arriving devices unseen until
+  FluidField moves them on (`loading` → `live`, or `off` when the engine or rig cannot run).
+  Never show something settled that the intro then hides. No JS: never set, all shows at rest;
+  no script taking over: `static` after 8 s. Reduced motion: shown at once.
 - `src/features/<feature>/` holds copy and data (`home/content.ts`, `moltys/catalog.ts`).
   `src/hooks/` holds reusable React hooks. Features, services, hooks and config never import
   components.
@@ -72,5 +78,9 @@ Never deploy or publish from here; nothing in this package does.
   `e2e-out/` (gitignored), fails on page errors, 390px overflow, a page fluid (its `<pre>`)
   that does not render or move, Moltys that never load, or a gallery picker that does not drive its slot.
   Look at the screenshots.
+- `pnpm first-load` (`e2e/first-load.mjs`, preview running): samples every frame of the landing's
+  first load on a slow network + CPU and fails if the hero is shown and then hidden, the device
+  is not monotonic, CLS > 0.01, or reduced motion / no JS / bundles that never load leave it
+  hidden. Frames to `e2e-out/first-load-*.png`.
 - `pnpm og` regenerates `public/og.png` from the live page fluid (needs the preview running).
 - `dist/llms.txt`, `llms-full.txt` and raw `docs/*.md` come from `scripts/generate-llms-txt.mjs`.

@@ -24,6 +24,13 @@
 :global(html[data-fluid-moltys="live"]) .still {
   opacity: 0;
 }
+/* the intro's start state (Head, before the first paint): the Molty is about to emerge here, so
+   its still is not shown first (no JS, no rig, or reduced motion: it shows) */
+@media (prefers-reduced-motion: no-preference) {
+  :global(html[data-fluid-moltys="pending"]) .still {
+    opacity: 0;
+  }
+}
 
 .panel {
   grid-area: panel;

@@ -18,6 +18,7 @@
     "format": "node scripts/checks/format.mjs --write",
     "og": "node scripts/generate-og.mjs",
     "screens": "node e2e/screens.mjs",
+    "first-load": "node e2e/first-load.mjs",
     "stage-firmware": "node scripts/stage-firmware.mjs"
   },
   "dependencies": {

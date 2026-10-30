@@ -14,17 +14,14 @@
 .device :global(*) {
   pointer-events: none;
 }
-/* before its script: one that arrives is unseen (no settled flash before the turn in), unless
-   no script takes over (then it fades in at rest). Reduced motion: shown at once. */
+/* before its script: one that arrives is unseen from the first paint (its start pose), so
+   nothing settled shows before the turn in. Keyed on the page's intro state (Head sets it
+   before paint on a fluid page, the only pages with a device): no JS leaves it unset and a
+   script that never takes over ends it ("static"), so the device then shows at rest. Reduced
+   motion: shown at once. */
 @media (prefers-reduced-motion: no-preference) {
-  .device[data-armed] {
+  :global(html[data-fluid]:not([data-fluid="static"])) .device[data-armed] {
     opacity: 0;
-    animation: unarmed 0.4s 4s forwards;
-  }
-}
-@keyframes unarmed {
-  to {
-    opacity: 1;
   }
 }
 
