@@ -12,6 +12,43 @@ const base = `
 `;
 
 export const OPTIONS = [
+  // The device IS the image (hardware brands' cards: Playdate, Tidbyt, Analogue): the round
+  // device centred at ~88 % of the card's height, everything that matters in the centre square
+  // (messengers crop to it; X may trim top and bottom), few big elements (previews are tiny).
+  {
+    name: 'big',
+    file: 'A-big',
+    moltyDir: 'big-device',
+    prefix: 'A-big-',
+    molty: 'cute-duck',
+    themes: ['dark'],
+    square: true,
+    pick: { from: 500, to: 5500 },
+    css: `${base}
+      .og > .og-screen { position: absolute; left: 345px; top: 50px; width: 510px; aspect-ratio: 1; margin: 0; }
+      .og > .og-mark { position: absolute; left: 40px; bottom: 34px; }
+      .og-mark > span { display: inline-flex; align-items: center; gap: 12px; color: var(--m-accent); font: 700 34px / 1 var(--m-font-mono); }
+      .og-mark svg { width: 24px; height: 24px; }
+    `,
+  },
+  // …and the brand ON the screen (Playdate's trick): the fluid condenses "molty.UNO" across the
+  // upper screen, the Molty forms under it
+  {
+    name: 'brand',
+    file: 'B-brand',
+    moltyDir: 'big-device',
+    prefix: 'B-brand-',
+    molty: 'cute-duck',
+    themes: ['dark'],
+    square: true,
+    wordDelay: 0.3,
+    pick: { from: 1500, to: 6500 },
+    css: `${base}
+      .og > .og-screen { position: absolute; left: 345px; top: 50px; width: 510px; aspect-ratio: 1; }
+      .og-screen > .og-word { position: absolute; left: 50%; top: 31%; translate: -50% 0; font-size: 84px; line-height: 1; white-space: nowrap; }
+      .og-screen > .og-under { position: absolute; left: 50%; bottom: -3%; translate: -50% 0; width: 330px; aspect-ratio: 1; margin: 0; }
+    `,
+  },
   {
     name: 'device',
     file: '1-device',

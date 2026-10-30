@@ -76,7 +76,17 @@ function compose([html, opt]) {
     return p;
   };
 
-  if (opt.name.startsWith('device')) {
+  if (opt.name === 'big') {
+    // the device as the image: one large centred screen, a small brand mark in a corner
+    const mark = el('div', 'og-mark');
+    mark.append(brand.cloneNode(true));
+    card.append(moltySlot('og-screen', true), mark);
+  } else if (opt.name === 'brand') {
+    // the brand ON the screen: the fluid condenses the wordmark there, the Molty under it
+    const screen = el('div', 'og-screen');
+    screen.append(heroDevice.cloneNode(true), word('molty.UNO', 'og-word'), moltySlot('og-under', false));
+    card.append(screen);
+  } else if (opt.name.startsWith('device')) {
     card.append(moltySlot('og-screen', true), word('molty.UNO', 'og-word'), line(opt.line));
   } else if (opt.name === 'conversation') {
     const reader = island('SpeedReader');
@@ -163,14 +173,16 @@ async function render(opt, theme, stem) {
     const png = opt.pick ? await pickFrame(page, opt.pick) : (await page.waitForTimeout(opt.settle), await page.screenshot());
     await sharp(png).toFile(`${OUT}/${stem}.png`);
     await sharp(png).resize(600, 315).toFile(`${OUT}/${stem}-600.png`);
-    console.log(`wrote ${OUT}/${stem}.png (+ -600)`);
+    // a messenger's centre-square crop (iMessage, WhatsApp): what survives it
+    if (opt.square) await sharp(png).extract({ left: 285, top: 0, width: 630, height: 630 }).toFile(`${OUT}/${stem}-square.png`);
+    console.log(`wrote ${OUT}/${stem}.png (+ -600${opt.square ? ', -square' : ''})`);
   }
   await ctx.close();
 }
 
 /** OG_MOLTYS=all (or a comma list of ids): every card with a Molty once per Molty, as
- *  <outDir>/<moltyDir>/<name>[-light].png (moltyDir: the option's, else its name), plus a
- *  labelled contact-sheet[-light].png there. */
+ *  <outDir>/<moltyDir>/<prefix><name>[-light].png (moltyDir: the option's, else its name), plus
+ *  a labelled contact-sheet[-light].png there (one per folder). */
 const catalog = JSON.parse(readFileSync(new URL('../../../../device/console/src/catalog/catalog.json', import.meta.url), 'utf8')).creatures;
 const moltys = process.env.OG_MOLTYS === 'all' ? catalog.map((c) => c.id) : process.env.OG_MOLTYS?.split(',');
 const short = (id) => id.replace(/^cute-/, '');
@@ -184,8 +196,13 @@ for (const opt of OPTIONS) {
     if (moltys && opt.molty) {
       const dir = opt.moltyDir ?? opt.name;
       mkdirSync(`${OUT}/${dir}`, { recursive: true });
-      for (const id of moltys) jobs.push(() => render({ ...opt, molty: id }, theme, `${dir}/${short(id)}${suffix}`));
-      sheets.push({ stem: `${dir}/contact-sheet${suffix}`, cards: moltys.map((id) => [`${dir}/${short(id)}${suffix}`, catalog.find((c) => c.id === id)?.name ?? id]) });
+      const file = (id) => `${dir}/${opt.prefix ?? ''}${short(id)}${suffix}`;
+      for (const id of moltys) jobs.push(() => render({ ...opt, molty: id }, theme, file(id)));
+      // options sharing a folder share its sheet
+      const stem = `${dir}/contact-sheet${suffix}`;
+      const sheet = sheets.find((x) => x.stem === stem) ?? (sheets.push({ stem, cards: [] }), sheets.at(-1));
+      const label = (id) => `${opt.prefix ?? ''}${catalog.find((c) => c.id === id)?.name ?? id}`;
+      sheet.cards.push(...moltys.map((id) => [file(id), label(id)]));
     } else jobs.push(() => render(opt, theme, `${opt.file}${suffix}`));
   }
 }
@@ -195,7 +212,7 @@ await Promise.all(Array.from({ length: Number(process.env.OG_JOBS ?? 1) }, async
 
 /** All cards of one option tiled at 400×210 with their names, to compare at a glance. */
 for (const { stem, cards } of sheets) {
-  const W = 400, H = 210, L = 30, C = 5;
+  const W = 400, H = 210, L = 30, C = Math.min(5, cards.length);
   const tiles = await Promise.all(
     cards.map(async ([file, name], i) => {
       const label = Buffer.from(`<svg width="${W}" height="${L}"><rect width="100%" height="100%" fill="#111"/><text x="10" y="21" font-family="Menlo, monospace" font-size="16" fill="#d8e2dc">${name}</text></svg>`);
