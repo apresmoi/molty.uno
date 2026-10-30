@@ -118,11 +118,13 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
 - `say`: relay sends `cmd say {job,text,ms,rate:16000,voice?,cues?}`; device starts `speaking`
   and text immediately, then acknowledges. Relay sends 320 ms PCM frames (`s` = job id),
   with three lead frames and paced delivery thereafter. TTS is streamed: the relay sends
-  `cmd say` once the first sentence is synthesised and streams while the rest is still being
-  synthesised, so `ms` is then an estimate (informational; exact when synthesis finished
-  first). A frame may be shorter than 320 ms when the device would otherwise run dry, and the
-  last one may be header-only (`end:true`, no payload) when synthesis ended after the last
-  audio frame left. After the last frame leaves
+  `cmd say` once the first sentence is synthesised — with the voice box, at once, in parallel
+  with the synthesis (its first audio is ~0.25 s away) — and streams while the rest is still
+  being synthesised, so `ms` is then an estimate (informational; exact when synthesis finished
+  first). The first frame leaves once it holds 160 ms (or after 100 ms), not a full chunk. A
+  frame may be shorter than 320 ms when the device would otherwise run dry, and the last one
+  may be header-only (`end:true`, no payload) when synthesis ended after the last audio frame
+  left (or, with the box, when synthesis failed before any audio). After the last frame leaves
   the ring **and I2S DMA**, device returns to idle (unless an explicit mood arrived during the
   say) and sends
   `{"t":"evt","name":"say.done","data":{"job":"..."}}`. Failed/cancelled playback
@@ -131,11 +133,12 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   word cues `"w":[[word, sample], ...]` (≤ 20 per header; word = 0-based index of the text's
   whitespace-split words, as the speed reader counts them, < 512; sample = 16 kHz offset from
   the stream's first sample). A cue goes out with or before the frame holding its audio; cues
-  that do not fit before the end go in header-only frames just before it. The device holds the
-  reader on the first word and shows word k once the speaker has PLAYED up to its cue (samples
-  written to I2S minus the DMA ring — never ahead of the voice, at most one 32 ms write late);
+  that do not fit before the end go in header-only frames just before it. The device shows no
+  word until word 0 is cued, and word k once the speaker's position (samples written to I2S
+  minus the DMA ring) is within 30 ms of its cue — the lead covers the estimate's bias, the
+  reader's frame and the 15 ms write cadence, so the word reaches the glass with its voice;
   when playback is over, the remaining cued words, then the reader's own pace. Cues come from
-  the voice box's own word timing (Kyutai's TTS `Text {start_s}`, `tts.word` below, offset by
+  the voice box's own word timing (Kyutai's TTS `Text {start_s}` less its one-step lag, `tts.word` below, offset by
   the audio of the segments before it); any word without one — every word with the cloud — is
   estimated when its segment's audio is complete, from its real length in proportion to
   characters. A malformed cue list is a malformed frame (the stream ends). Firmware without
@@ -259,20 +262,26 @@ frames, RMS in dBFS against an adaptive noise floor:
 serves the listen (it is picked for STT and its stream opened) and the firmware lists
 `listen_stop`, the relay sends the device listen with `vad:false`: the box's end of turn
 (`stt.turn_end`, Kyutai's pause prediction) is THE end, and the box also ends a listen nobody
-spoke in (`no_speech_ms`, passed in `stt.start`: the agent's, else the device default 4000 →
-`reason:"no_speech"`, `heard:""`, no transcription). The device's silence VAD stays off because
+spoke in (`no_speech_ms`, passed in `stt.start`: the agent's, else 8000 →
+`reason:"no_speech"`, `heard:""`, no transcription). The box decides "nobody spoke" from voice
+activity in the captured audio (the model's own speaking estimate, plus a frame-energy veto
+near the deadline), not from words, which lag the voice by ~1–1.6 s; any activity restarts
+its clock. The device's silence VAD stays off because
 it heard Molty's own speech tail and cut humans off. Agents need not pass anything. An agent
 that passes `vad` or `end_silence_ms` keeps the device VAD as asked; the cloud path, a box that
 could not open, and firmware without `listen_stop` keep the device VAD as before. A box that
 drops mid-listen while the device VAD is off ends the listen at once (`reason:"error"`, what
 was said is transcribed — by the cloud in `auto` mode) instead of running out the window.
+A listen that breaks on the device's side is an error, never `no_speech` or an empty result:
+the device's end frame with `reason:"error"` (its capture failed) → `listen_failed`; the
+device's link dropping mid-listen → `device_offline`.
 
 Optional `listen` args (validated by the relay and again by the device; forwarded only when the agent gives them):
 
 | arg | range | default | |
 |---|---|---|---|
 | `end_silence_ms` | 300..3000 (integer) | 700 | silence after speech that ends the listen; raise it for slow / hesitant speakers |
-| `no_speech_ms` | 1000..10000 (integer) | 4000 | give up when nobody spoke by then (≥ `ms` = never) |
+| `no_speech_ms` | 1000..10000 (integer) | 4000 (device VAD); 8000 when the voice box decides | give up when nobody spoke by then (≥ `ms` = never) |
 | `vad` | bool | `true` (off with a voice box, see below) | `false`: record the full `ms` window as before |
 | `ring_color` | a colour name or `#rrggbb` | the device's setting | the listening ring's colour for this listen (also on `talk`) |
 
@@ -351,7 +360,7 @@ pairing). Rate-limited on the device. `shake`, `tap` and `button` reach agents t
 | `say.done` | `{job}` | a `say` finished playing (its last PCM left the speaker) |
 | `shake` | `{peak_g, reversals, ms}` | the board was shaken (boards with an IMU): ≥ 3 sign reversals of > 1.2 g dynamic acceleration on one axis within 800 ms; ≤ 1 per 2 s. `peak_g` largest dynamic acceleration (g), `ms` first peak → detection |
 | `tap` | `{x, y}` | a finger touched the screen (boards with touch); 0..1 of the panel from the top left; ≤ 4/s |
-| `button` | `{id: "accept"\|"reject"}` | a button was pressed (the board's accept / reject buttons); ≤ 4/s |
+| `button` | `{id: "accept"\|"reject"}` | a button was pressed (the board's accept / reject buttons); ≤ 4/s. For agents it means acknowledge / dismiss, never an answer (answers come only from `ask`) |
 | `answer` | `{job, index, label}` · `{job, index: null, reason: "timeout"\|"cancelled"}` | an `ask` ended: tapped (0-based `index`, `label` verbatim), timed out, or cancelled; one per job, never rate-limited |
 
 The device reacts to a shake by itself (a brief `surprised`), agent or not. While a `listen`
@@ -851,12 +860,12 @@ the request id in `s`.
 | relay → box | `{"t":"voice.welcome","device_id","mode","voice"}` |
 | relay → box | `{"t":"tts","id","text","voice"?}`: one sentence-sized segment (the relay keeps one segment of lookahead) |
 | box → relay | binary frames `s=id` (PCM16 @16 kHz, as synthesised), then `{"t":"tts.end","id"}` or `{"t":"tts.end","id","error"}` |
-| box → relay | `{"t":"tts.word","id","i","text","start_s"}` (optional, in order, before the tts.end): word `i` of the text (whitespace-split) is spoken from `start_s` s into this tts's audio — moshi-server's `Text {text, start_s, stop_s}` (text step / 12.5 Hz; the audio starts with text step 0's voice). The relay turns it into the device's word cues; malformed ones are ignored |
+| box → relay | `{"t":"tts.word","id","i","text","start_s"}` (optional, in order, before the tts.end): word `i` of the text (whitespace-split) is spoken from `start_s` s into this tts's audio as sent — moshi-server's `Text {text, start_s, stop_s}` less one 80 ms step (its counter runs one step ahead: measured +91 ms median against forced alignment) and less the quiet lead the box trimmed from the stream's first frame (≤ 70 ms). The relay turns it into the device's word cues; malformed ones are ignored |
 | relay → box | `{"t":"tts.cancel","id"}`: nobody will play it (device gone, turn failed, segment timeout) |
 | relay → box | `{"t":"stt.start","id","rate":16000,"no_speech_ms"?}` at listen start (`no_speech_ms` 1000..10000 only when the device VAD is off for this listen: the box then calls no_speech), binary frames `s=id` as Molty records, `{"t":"stt.end","id"}` at the device's end frame |
 | relay → box | `{"t":"stt.cancel","id"}`: no speech, or the listen failed |
 | box → relay | `{"t":"stt.partial","id","text"}` (optional, ignored by the relay), `{"t":"stt.final","id","text","ms"?}` or `{"t":"stt.final","id","error"}` |
-| box → relay | `{"t":"stt.turn_end","id","reason":"no_speech"}` (only when `stt.start` carried `no_speech_ms`; at most once, never after a word or a turn end): nobody spoke by then (and nobody is speaking right then). The relay ends the listen as the device's own no_speech: `listen_stop`, `stt.cancel`, `reason:"no_speech"`, `heard:""` |
+| box → relay | `{"t":"stt.turn_end","id","reason":"no_speech"}` (only when `stt.start` carried `no_speech_ms`; at most once, never after a word or a turn end): nobody spoke for `no_speech_ms` of captured audio — no word, no voice activity (the model's `prs[2]` below 0.3 for 3 steps restarts the clock; a loud frame in the last ~0.5 s postpones the verdict) — and nobody is speaking right then. The relay ends the listen as the device's own no_speech: `listen_stop`, `stt.cancel`, `reason:"no_speech"`, `heard:""` |
 | box → relay | `{"t":"stt.turn_end","id"}` (optional, at most once per listen): the human finished. The relay ends the listen there (`cmd listen_stop` to firmware with the cap, `stt.end` to the box at once); see `listen_stop` above |
 
 ### Selection: `voice_mode`
@@ -880,11 +889,12 @@ How the paths work:
   `voice_box_error`).
 - **Box drops mid-listen, `box`:** the job fails.
 - **Box drops before its TTS audio:** the segment fails at once (`voice_box_offline`),
-  with no hang, and the device is never told to speak. If it drops mid-stream, the
+  with no hang; the say the device was already told about (`cmd say` leaves with the box's
+  tts request) gets a header-only end frame, so its speaker is free at once. If it drops mid-stream, the
   device's stream is closed as for any TTS failure.
 - **Semantic end of turn:** `molty-voice` sends `stt.turn_end` by Kyutai Unmute's pause rule:
   an EMA of the STT's per-step pause estimate `prs[2]` (half-life 0.01 s, starting at 1.0, the
-  first 12 steps ignored) above 0.6 (`--turn-end`), once, and only after at least one word —
+  first 12 steps ignored, `--turn-end-skip`) above 0.6 (`--turn-end`), once, and only after at least one word —
   silence alone never ends a turn (the device's `no_speech` does). The listen then ends with
   `reason:"turn_end"` instead of waiting for the device's silence timer or its window.
 - **Voice choice:** the agent's `voice` passes through to the box. With none, the
