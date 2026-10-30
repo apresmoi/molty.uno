@@ -6,7 +6,7 @@ export IDF_PATH
 
 .PHONY: help all test console console-test console-e2e firmware firmware-all firmware-test \
         firmware-size relay relay-test cli cli-test creatures hygiene version \
-        waitlist-export waitlist-delete
+        waitlist-export waitlist-delete sim sim-test sim-env
 
 help:
 	@echo "build:"
@@ -20,6 +20,9 @@ help:
 	@echo "test:"
 	@echo "  make firmware-test  firmware host tests (fluid, director, gestures, cute runtime, agent link)"
 	@echo "  make relay-test     relay unit tests + typecheck"
+	@echo "  make sim-test       simulated-Molty harness unit tests (tools/sim)"
+	@echo "sim (tools/sim/README.md; needs ssh to the voice box, never touches a real device):"
+	@echo "  make sim            the default conversation suite end to end; SIM_ARGS='--turn-end-hold 1.5' etc."
 	@echo "  make cli-test       go build + go test"
 	@echo "  make console-test   console unit tests + typecheck"
 	@echo "  make console-e2e    headless walk-through against the mock device (after 'make console')"
@@ -70,6 +73,16 @@ relay:
 
 relay-test: relay
 	cd relay && pnpm test && pnpm typecheck
+
+# Simulated Molty (tools/sim): its own venv (uv, Python 3.12), molty-voice installed from voicebox/.
+sim-env:
+	cd tools/sim && { test -x .venv/bin/python || uv venv -q -p 3.12 .venv; } && uv pip install -q -p .venv/bin/python -e '.[test]'
+
+sim-test: sim-env
+	cd tools/sim && .venv/bin/python -m pytest -q
+
+sim: relay sim-env
+	cd tools/sim && { test ! -f local.env || { set -a; . ./local.env; set +a; }; } && .venv/bin/molty-sim run $(SIM_ARGS)
 
 cli:
 	$(MAKE) -C cli build
