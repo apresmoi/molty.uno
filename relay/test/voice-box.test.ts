@@ -621,12 +621,12 @@ describe("semantic end of turn is the default with a voice box", () => {
   const lastListen = (w: Awaited<ReturnType<typeof setup>>) => w.dev.log.filter((l) => l.name === "listen").at(-1)!.args;
   const sttStart = (w: Awaited<ReturnType<typeof setup>>) => w.box!.control.filter((f) => f.t === "stt.start").at(-1);
 
-  it("box + listen_stop firmware: the device VAD is off (vad:false) and the box gets no_speech_ms (the device default, or the agent's)", async () => {
+  it("box + listen_stop firmware: the device VAD is off (vad:false) and the box gets no_speech_ms (8 s by default, or the agent's)", async () => {
     const w = await setup({ caps: NEW_FW, box: { turnEndAfter: 2 } });
     expect(await w.room.talk(w.token, {})).toMatchObject({ ok: true, result: { reason: "turn_end" } });
     expect(lastListen(w).vad).toBe(false);
     expect(lastListen(w)).not.toHaveProperty("end_silence_ms");
-    expect(sttStart(w).no_speech_ms).toBe(4000);
+    expect(sttStart(w).no_speech_ms).toBe(8000);
     // no_speech_ms alone still means semantic: it goes to the box (and the device, harmless with VAD off)
     expect(await w.room.talk(w.token, { no_speech_ms: 6000 })).toMatchObject({ ok: true });
     expect(lastListen(w).vad).toBe(false);

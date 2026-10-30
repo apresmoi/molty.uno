@@ -115,6 +115,12 @@ export const VAD_KEYS = ["end_silence_ms", "no_speech_ms", "vad"] as const;
 export const VAD_LIMITS = { end_silence_ms: [300, 3000], no_speech_ms: [1000, 10000] } as const;
 /** The device's no_speech_ms default (firmware/main/audio/vad.h): what the voice box gets when the agent gave none. */
 export const DEVICE_NO_SPEECH_MS = 4000;
+/**
+ * The voice box's no_speech_ms when the agent gave none (semantic end of turn): longer than the
+ * device's 4 s — the box decides from the model's voice activity on captured audio, and a human
+ * who starts after a pause (reaction time after Molty's say) must not be cut off.
+ */
+export const BOX_NO_SPEECH_MS = 8000;
 
 /** A listen window: undefined (the device's setting), 0 (unlimited) or 1..MAX_LISTEN_MS. */
 function listenMs(v: unknown, field: string): number | undefined {

@@ -50,7 +50,7 @@ import {
   type WebhookRequest,
 } from "./api.js";
 import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
-import { type AskArgs, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk } from "./commands.js";
+import { type AskArgs, BOX_NO_SPEECH_MS, CommandError, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk } from "./commands.js";
 import { PcmFeed, estimateSpeechMs, splitSpeech, synthesize } from "./speech.js";
 import { b64Decode, b64urlEncode, randomBytes, randomDigits, safeEqual, sha256Hex } from "./crypto.js";
 import {
@@ -311,6 +311,10 @@ interface ListenBuffer {
   semantic?: boolean;
   /** The streaming STT failed while the listen was open. */
   boxFailed?: boolean;
+  /** The device's socket closed (or was replaced) before its end frame. */
+  lost?: boolean;
+  /** The device ended the listen with reason "error": its capture failed. */
+  captureFailed?: boolean;
 }
 
 /** Owner voice settings (KV `voicecfg`). */
@@ -531,6 +535,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     }
     if (this.listenBuf && !this.listenBuf.ended) {
       this.listenBuf.ended = true;
+      this.listenBuf.lost = true; // the device went away mid-listen: an error, never "nobody spoke"
       this.listenBuf.wake?.();
     }
     // The device that showed the question is gone: nobody can answer it.
@@ -1584,7 +1589,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         buf.stream = pick.provider.sttStream({
           onTurnEnd: (reason) => this.onTurnEnd(buf, reason),
           onFail: () => this.onBoxFail(buf),
-          ...(semantic ? { noSpeechMs: typeof extra.no_speech_ms === "number" ? extra.no_speech_ms : DEVICE_NO_SPEECH_MS } : {}),
+          ...(semantic ? { noSpeechMs: typeof extra.no_speech_ms === "number" ? extra.no_speech_ms : BOX_NO_SPEECH_MS } : {}),
         });
         if (semantic && !buf.boxFailed) {
           buf.semantic = true;
@@ -1631,6 +1636,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       if (this.listenBuf === buf) this.listenBuf = undefined;
     }
     const tEnd = buf.endAt ?? this.clock.now();
+    // A listen that broke is an error, never "nobody spoke" (no_speech) nor an empty success:
+    // the device went away mid-listen, or its capture failed (end frame reason "error").
+    if (buf.lost) return { ok: false, error: "device_offline" };
+    if (buf.captureFailed) return { ok: false, error: "listen_failed" };
     // Device VAD heard nothing: no STT call at all. Only the explicit verdict counts:
     // speech_ms is absent when VAD was off, and older firmware sent speech_ms:0 with
     // vad:false -- neither means silence (older firmware without reason: STT as before).
@@ -1761,6 +1770,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       buf.ended = true;
       buf.endAt = this.clock.now();
       if (frame.header.reason) buf.reason = frame.header.reason;
+      if (frame.header.reason === "error") buf.captureFailed = true;
       if (frame.header.speech_ms !== undefined) buf.speech_ms = frame.header.speech_ms;
       // End of speech: show thinking right away, while STT runs.
       if (buf.bytes > 0 && buf.reason !== "no_speech" && buf.reason !== "error") {

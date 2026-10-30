@@ -518,8 +518,13 @@ describe("listen window", () => {
       expect(await w.room.talk(w.token, {}), reason).toMatchObject({ ok: false, error: "audio_busy" });
       w.dev.endListen(reason === "no_speech" ? { reason, speech_ms: 0 } : { reason, speech_ms: 900 });
       const done = await mcp(w.backend, w.token, "molty_wait", { job, timeout_s: 3 });
-      expect(done.structuredContent, reason).toMatchObject({ ok: true, status: "done", reason });
-      expect(done.structuredContent.heard, reason).toBe(reason === "no_speech" ? "" : "hello molty");
+      if (reason === "error") {
+        // the device's capture failed: an error, never no_speech nor an empty success
+        expect(done.structuredContent, reason).toMatchObject({ ok: false, error: "listen_failed" });
+      } else {
+        expect(done.structuredContent, reason).toMatchObject({ ok: true, status: "done", reason });
+        expect(done.structuredContent.heard, reason).toBe(reason === "no_speech" ? "" : "hello molty");
+      }
       // released: the next turn starts
       w.voice.ttsSamples = 1600;
       expect(await w.room.talk(w.token, { listen: false, say: "ok" }), reason).toMatchObject({ ok: true, result: { status: "done", reason: "spoken" } });
@@ -533,7 +538,9 @@ describe("listen window", () => {
     const job = (r as any).result.job;
     await w.room.socketClose(w.sock);
     const v = (await w.room.job(w.token, job, 2000)) as any;
-    expect(["done", "failed"]).toContain(v.result.status);
+    // audio had arrived: still an error (device_offline), never a no_speech / empty success
+    expect(v.result).toMatchObject({ status: "failed", error: "device_offline" });
+    expect(v.result).not.toHaveProperty("heard");
     const sock2 = await connect(w.room, w.host, undefined, null, { caps: WINDOW_CAPS });
     device(w.room, sock2, { listenAck: ack, end: { reason: "silence", speech_ms: 100 } });
     expect(await w.room.talk(w.token, {})).toMatchObject({ ok: true, result: { status: "done" } });
