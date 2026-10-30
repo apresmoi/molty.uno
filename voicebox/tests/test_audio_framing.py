@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from molty_voice import framing
-from molty_voice.audio import Resampler, float_to_pcm16, pcm16_to_float
+from molty_voice.audio import Resampler, fade_in, float_to_pcm16, pcm16_to_float, quiet_lead
 
 
 def tone(freq: float, rate: int, seconds: float = 0.5, amp: float = 0.5) -> np.ndarray:
@@ -100,3 +100,16 @@ def test_frame_limits_and_chunking():
     assert [len(f.payload) for f in frames] == [16384, 16384, 7232]
     assert [f.seq for f in frames] == [5, 6, 7]
     assert b"".join(f.payload for f in frames) == pcm
+
+
+def test_quiet_lead():
+    rate = 24000
+    quiet = np.full(1200, 0.001, np.float32)  # 50 ms at -60 dBFS
+    loud = np.full(720, 0.3, np.float32)
+    assert quiet_lead(np.concatenate([quiet, loud]), rate) == 1200 - 240  # keeps 10 ms before the voice
+    assert quiet_lead(loud, rate) == 0  # starts loud: nothing goes
+    assert quiet_lead(np.concatenate([np.zeros(100, np.float32), loud]), rate) == 0  # less than the margin
+    assert quiet_lead(np.zeros(1920, np.float32), rate) == 1920 - 240  # all quiet: at most the frame, less the margin
+    assert quiet_lead(np.zeros(0, np.float32), rate) == 0
+    y = fade_in(loud, 120)
+    assert y[0] < 0.01 and y[119] < 0.3 and y[120] == np.float32(0.3) and np.all(np.diff(y[:121]) > 0)

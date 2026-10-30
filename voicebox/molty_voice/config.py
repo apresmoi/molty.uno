@@ -40,6 +40,8 @@ class Config:
     # Semantic end of turn (Unmute's pause rule): smoothed prs[2] above this, after >= 1
     # word, sends stt.turn_end so Molty stops listening. <= 0 turns it off.
     turn_end: float = 0.6
+    # TTS: drop the near-silent lead of each stream's first frame (<= 80 ms) so the voice starts sooner.
+    trim_lead: bool = True
 
     def __repr__(self) -> str:  # never show the token
         d = asdict(self)

@@ -80,3 +80,31 @@ class Resampler:
         if pending <= 0:
             return np.zeros(0, dtype=np.float32)
         return self.process(np.zeros(self.hist_len, dtype=np.float64))[:pending]
+
+
+def quiet_lead(x: np.ndarray, rate: int, floor_db: float = -40.0, win_s: float = 0.01, keep_s: float = 0.01) -> int:
+    """Samples of near-silence at the start of `x` that can go: up to the first `win_s`
+    window louder than `floor_db` dBFS (RMS), less `keep_s` of margin. 0 when it starts loud.
+
+    Kyutai TTS streams open with ~0.1-0.2 s of breath/room tone before the voice (measured:
+    first-word onset median 160 ms, min 40 ms over 90 openings x 3 voices); dropping what is
+    quiet in the first frame brings the voice forward at no latency cost (the frame is in hand).
+    """
+    x = np.asarray(x, dtype=np.float32)
+    w = max(1, int(rate * win_s))
+    n = len(x) // w
+    if n == 0:
+        return 0
+    rms = np.sqrt(np.mean(x[: n * w].reshape(n, w).astype(np.float64) ** 2, axis=1))
+    loud = np.nonzero(rms > 10 ** (floor_db / 20))[0]
+    first = int(loud[0]) * w if loud.size else n * w
+    return max(0, first - int(rate * keep_s))
+
+
+def fade_in(x: np.ndarray, samples: int) -> np.ndarray:
+    """A linear fade over the first `samples` (no click where a trimmed stream now starts)."""
+    y = np.array(x, dtype=np.float32, copy=True)
+    k = min(samples, len(y))
+    if k > 0:
+        y[:k] *= np.arange(1, k + 1, dtype=np.float32) / (k + 1)
+    return y

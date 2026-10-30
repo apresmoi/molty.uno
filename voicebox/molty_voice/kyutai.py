@@ -35,6 +35,12 @@ log = logging.getLogger("molty_voice.kyutai")
 
 FRAME = 1920  # 80 ms @24 kHz: the model's step
 FRAME_S = FRAME / MODEL_RATE
+# moshi-server's TTS word timing is one model step late: it counts the step before it marks
+# the word's start (py_module.rs: steps += 1, then prev_word_steps = steps), so the word's
+# voice starts at start_s - 0.08 s. Measured against forced alignment (MMS_FA) on 240 words,
+# 3 voices: raw start_s is late by median +91 ms (mean +85, sd 94); minus one step the mean
+# error is +5 ms. The spread (sd ~90 ms) is the model's own and stays.
+TTS_WORD_LATE_S = FRAME_S
 
 
 class KyutaiError(RuntimeError):
@@ -242,7 +248,7 @@ async def synthesize(url: str, api_key: str, text: str, voice: str, on_audio: Ca
 
     on_word(text, start_s): the server's word timing (moshi-server tts `Text {text, start_s,
     stop_s}`), one per word sent, in order: the word is spoken from start_s seconds into this
-    stream's audio (its text step / 12.5 Hz; the audio starts at text step 0's voice).
+    stream's audio — the server's start_s less its one-step lag (TTS_WORD_LATE_S), never < 0.
     """
     q = urlencode({"voice": voice, "format": "PcmMessagePack"})
     sep = "&" if "?" in url else "?"
@@ -263,7 +269,7 @@ async def synthesize(url: str, api_key: str, text: str, voice: str, on_audio: Ca
                 elif t == "Text" and on_word is not None:
                     s = d.get("start_s")
                     if isinstance(s, (int, float)) and not isinstance(s, bool) and math.isfinite(s) and s >= 0:
-                        await on_word(str(d.get("text", "")), float(s))
+                        await on_word(str(d.get("text", "")), max(0.0, float(s) - TTS_WORD_LATE_S))
                 elif t == "Error":
                     raise KyutaiError(f"tts server error: {d.get('message', '')}"[:200])
         except ConnectionClosed as e:

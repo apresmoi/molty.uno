@@ -32,7 +32,7 @@ from websockets.asyncio.client import connect as ws_connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 from . import __version__, framing
-from .audio import DEVICE_RATE, MODEL_RATE, Resampler, float_to_pcm16
+from .audio import DEVICE_RATE, MODEL_RATE, Resampler, fade_in, float_to_pcm16, quiet_lead
 from .config import Config
 from .kyutai import SttSession, synthesize
 
@@ -203,9 +203,19 @@ class Bridge:
         seq = 0
         t0 = time.monotonic()
         first = None
+        trim_s: float | None = None  # seconds cut from the stream's start (known with the first audio)
+        held: list[tuple[str, float]] = []  # word timings that came before the first audio
 
         async def out(pcm24: np.ndarray, flush: bool = False) -> None:
-            nonlocal seq, first
+            nonlocal seq, first, trim_s
+            if not flush and trim_s is None:
+                # the voice comes forward: the quiet lead of the first frame goes (never more than it)
+                cut = quiet_lead(pcm24, MODEL_RATE) if self.cfg.trim_lead else 0
+                trim_s = cut / MODEL_RATE
+                pcm24 = fade_in(pcm24[cut:], int(MODEL_RATE * 0.005)) if cut else pcm24
+                for w, s0 in held:
+                    await word(w, s0)
+                held.clear()
             y = rs.process(pcm24) if not flush else rs.flush()
             if y.size == 0:
                 return
@@ -217,16 +227,20 @@ class Bridge:
         nword = 0
 
         async def word(w: str, start_s: float) -> None:
-            # word timing for the relay: Molty shows each word when it is spoken (tts.word {i, start_s})
+            # word timing for the relay: Molty shows each word when it is spoken (tts.word {i, start_s}),
+            # on the stream as sent (after the trimmed lead)
             nonlocal nword
-            await self._send_json({"t": "tts.word", "id": mid, "i": nword, "text": w[:64], "start_s": round(start_s, 3)})
+            if trim_s is None:
+                held.append((w, start_s))
+                return
+            await self._send_json({"t": "tts.word", "id": mid, "i": nword, "text": w[:64], "start_s": round(max(0.0, start_s - trim_s), 3)})
             nword += 1
 
         try:
             await synthesize(self.cfg.tts_url, self.cfg.api_key, text, self.pick_voice(voice), out, on_word=word, connect=self._kconnect)
             await out(np.zeros(0, np.float32), flush=True)
             await self._send_json({"t": "tts.end", "id": mid})
-            log.info("tts %s: %d chars, first audio %.0f ms, total %.0f ms", mid, len(text), (first or 0) * 1000, (time.monotonic() - t0) * 1000)
+            log.info("tts %s: %d chars, first audio %.0f ms (lead trimmed %.0f ms), total %.0f ms", mid, len(text), (first or 0) * 1000, (trim_s or 0) * 1000, (time.monotonic() - t0) * 1000)
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001 - every failure ends the request cleanly

@@ -25,6 +25,7 @@ class FakeMoshi:
         self.stt_sessions = []  # per session: {"samples", "closed", "marker"}
         self.tts_requests = []
         self.stt_mode = "ok"  # ok | no_channel | garbage
+        self.tts_lead = 0  # samples of silence the first TTS audio frame opens with
 
     async def handler(self, ws):
         assert ws.request.headers.get("kyutai-api-key") == "public_token"
@@ -73,7 +74,8 @@ class FakeMoshi:
             elif d["type"] == "Eos":
                 for i, w in enumerate(req["words"]):   # like moshi-server: the word's timing, then its audio
                     await ws.send(msgpack.packb({"type": "Text", "text": w, "start_s": 0.2 * i, "stop_s": 0.2 * i + 0.16}, use_single_float=True))
-                    await ws.send(msgpack.packb({"type": "Audio", "pcm": [0.25] * 2400}, use_single_float=True))
+                    lead = self.tts_lead if i == 0 else 0
+                    await ws.send(msgpack.packb({"type": "Audio", "pcm": [0.0] * lead + [0.25] * (2400 - lead)}, use_single_float=True))
                     await ws.send(msgpack.packb({"type": "Audio", "pcm": [0.25] * 2400}, use_single_float=True))
                 await ws.close()
                 return
@@ -167,9 +169,9 @@ def test_tts_and_streaming_stt_through_the_bridge():
     assert moshi.tts_requests[0]["words"] == ["hello", "molty", "there"]
     assert moshi.tts_requests[1]["voice"] == "expresso/ex04-ex02_happy_001_channel1_118s.wav"
     assert seen["tts_end"]["t1"] == {"t": "tts.end", "id": "t1"}
-    # the server's word timing, forwarded per tts id with its index in the text
+    # the server's word timing less its one-step (80 ms) lag, forwarded per tts id with its index in the text
     w1 = [w for w in seen["tts_words"] if w["id"] == "t1"]
-    assert [(w["i"], w["text"], w["start_s"]) for w in w1] == [(0, "hello", 0.0), (1, "molty", 0.2), (2, "there", 0.4)]
+    assert [(w["i"], w["text"], w["start_s"]) for w in w1] == [(0, "hello", 0.0), (1, "molty", 0.12), (2, "there", 0.32)]
     assert [(w["i"], w["text"]) for w in seen["tts_words"] if w["id"] == "t2"] == [(0, "hi")]
     pcm = np.frombuffer(seen["tts_audio"]["t1"], dtype="<i2")
     assert len(pcm) == 3 * 4800 * 2 // 3  # 24 kHz -> 16 kHz, every sample accounted for
@@ -240,3 +242,44 @@ def test_a_receiver_failure_is_an_stt_error_never_a_transcript():
     assert "error" in seen["final"] and "text" not in seen["final"], seen["final"]
     assert "receiver failed" in seen["final"]["error"]
     assert seen["closed"] is True
+
+
+def _tts_run(cfg_extra=None, lead=0):
+    moshi = FakeMoshi()
+    moshi.tts_lead = lead
+    seen = {"audio": b"", "words": []}
+
+    async def relay(ws):
+        await ws.recv()
+        await ws.send(json.dumps({"t": "voice.welcome", "device_id": DEVICE, "mode": "auto", "voice": None}))
+        await ws.send(json.dumps({"t": "tts", "id": "t1", "text": "one two"}))
+        while True:
+            m = await ws.recv()
+            if isinstance(m, bytes):
+                seen["audio"] += framing.decode(m).payload
+            else:
+                d = json.loads(m)
+                if d["t"] == "tts.word":
+                    seen["words"].append((d["i"], d["start_s"], len(seen["audio"]) // 2))
+                if d["t"] == "tts.end":
+                    break
+        await ws.close()
+
+    asyncio.run(with_servers(relay, moshi, cfg_extra))
+    return seen
+
+
+def test_tts_quiet_lead_is_trimmed_and_word_timings_follow():
+    # 40 ms of silence opens the stream: 30 ms of it goes (10 ms kept), the timings move with it,
+    # and timings that came before any audio wait until the trim is known
+    seen = _tts_run(lead=960)
+    assert len(seen["audio"]) // 2 == (4 * 2400 - 720) * 2 // 3
+    assert [(i, s) for i, s, _ in seen["words"]] == [(0, 0.0), (1, 0.09)]
+    pcm = np.frombuffer(seen["audio"], dtype="<i2")
+    assert abs(int(pcm[0])) < 100  # 10 ms of the quiet kept, then the fade: no click
+
+
+def test_tts_lead_trim_can_be_turned_off():
+    seen = _tts_run({"trim_lead": False}, lead=960)
+    assert len(seen["audio"]) // 2 == 4 * 2400 * 2 // 3
+    assert [(i, s) for i, s, _ in seen["words"]] == [(0, 0.0), (1, 0.12)]
