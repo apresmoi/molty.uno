@@ -19,7 +19,7 @@ import { readFileSync } from 'node:fs';
 
 const port = +(process.argv[2] ?? 8170);
 const dist = new URL('../dist/index.html', import.meta.url);
-const VERSION = readFileSync(new URL('../../VERSION', import.meta.url), 'utf8').trim();
+const VERSION = readFileSync(new URL('../../../VERSION', import.meta.url), 'utf8').trim();
 const W = 412;
 
 const cfg = { link: true, file: true, update: false, rollback: false, fail: false };

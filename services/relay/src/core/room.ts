@@ -758,7 +758,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (!live) return fail("device_offline");
     if (cmd.job) {
       // A device that lists its caps and leaves say/listen out has no speaker/mic
-      // (firmware/boards/): refuse before spending a TTS call. No caps = older firmware.
+      // (device/firmware/boards/): refuse before spending a TTS call. No caps = older firmware.
       const caps = live.getMeta()?.caps;
       if (caps && !caps.includes(cmd.name)) {
         return fail("unsupported", `this device has no ${cmd.name === "say" ? "speaker" : "microphone"}`);

@@ -1,8 +1,8 @@
 # My Vendor My-Model — layered over sdkconfig.defaults(.esp32s3) when this board is built.
-# The Kconfig choice line is required (scripts/firmware-boards.py check verifies it).
+# The Kconfig choice line is required (tools/scripts/firmware-boards.py check verifies it).
 CONFIG_MOLTY_BOARD_MYVENDOR_MYMODEL=y
 
-# Flash: the partition table (firmware/partitions.csv) needs 16 MB.
+# Flash: the partition table (device/firmware/partitions.csv) needs 16 MB.
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 

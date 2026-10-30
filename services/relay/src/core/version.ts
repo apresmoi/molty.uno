@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Product version (repo-root VERSION, see scripts/version.mjs), baked in at bundle
+// Product version (repo-root VERSION, see tools/scripts/version.mjs), baked in at bundle
 // time: `pnpm run deploy` (tools/deploy.mjs) passes `--define __MOLTY_VERSION__:"X.Y.Z"`
 // to wrangler and vitest.config.ts defines it for tests. A bundle built without it
 // (plain `wrangler dev`/`deploy`) reports "dev" instead of failing.

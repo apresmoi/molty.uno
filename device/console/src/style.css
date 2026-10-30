@@ -144,7 +144,7 @@ pre.log { background: var(--panel); border: 1px solid var(--line); border-radius
 /* molty page cards: thumbnails */
 .creature img { width: 72px; height: 72px; border-radius: 50%; background: #000; margin-bottom: 4px; }
 
-/* ── setup: "Molty talks" (creatures/setup-mock.html option B) ── */
+/* ── setup: "Molty talks" (device/creatures/setup-mock.html option B) ── */
 [hidden] { display: none !important; }
 html, body { overflow-x: hidden; }
 body.in-setup { font: 16px/1.5 var(--sans); }

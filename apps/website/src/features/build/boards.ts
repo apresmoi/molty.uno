@@ -1,4 +1,4 @@
-// Community builds on /build/: every firmware/boards/**/board.json (folders starting with
+// Community builds on /build/: every device/firmware/boards/**/board.json (folders starting with
 // "_" are not boards), with its optional `buy` links and `photos`. Pure, so the unit test
 // runs it on the real files; repoBoards.ts feeds it at build time.
 import { shopLink } from "../../config/affiliate.mjs";
@@ -14,7 +14,7 @@ export interface BoardJson {
   status: string;
   maintainer?: string;
   buy?: Array<{ label: string; url: string }>;
-  /** repo-relative paths, e.g. firmware/boards/<vendor>/<model>/photo.jpg */
+  /** repo-relative paths, e.g. device/firmware/boards/<vendor>/<model>/photo.jpg */
   photos?: string[];
 }
 
@@ -40,7 +40,7 @@ const EXTRAS: Record<string, string> = {
   battery: "battery",
 };
 
-/** `dir` is the board folder under firmware/boards/ ("waveshare/esp32-s3-touch-lcd-1.46");
+/** `dir` is the board folder under device/firmware/boards/ ("waveshare/esp32-s3-touch-lcd-1.46");
  *  `photoUrl` turns a repo-relative photo path into a served URL (undefined: not found). */
 export function communityBoards(
   entries: Array<{ dir: string; json: BoardJson }>,

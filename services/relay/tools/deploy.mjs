@@ -10,7 +10,7 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
-const version = readFileSync(new URL('../../VERSION', import.meta.url), 'utf8').trim();
+const version = readFileSync(new URL('../../../VERSION', import.meta.url), 'utf8').trim();
 const extra = process.argv.slice(2).filter((a) => a !== '--');
 const dryRun = extra.includes('--dry-run');
 if (!dryRun && !process.env.CLOUDFLARE_ACCOUNT_ID) {

@@ -1,7 +1,7 @@
 GO      ?= go
 GOFMT   ?= gofmt
-# Product version from the repo-root VERSION file (see scripts/version.mjs).
-VERSION ?= $(shell cat ../VERSION)
+# Product version from the repo-root VERSION file (see tools/scripts/version.mjs).
+VERSION ?= $(shell cat ../../VERSION)
 LDFLAGS := -X github.com/molty/cli/internal/molty.Version=$(VERSION)
 
 .PHONY: build test fmt

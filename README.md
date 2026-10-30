@@ -143,7 +143,7 @@ Moltys connect to the hosted relay by default. You can **run your own** on a fre
 Cloudflare account in a couple of minutes:
 
 ```sh
-git clone https://github.com/apresmoi/molty.uno && cd molty.uno/relay
+git clone https://github.com/apresmoi/molty.uno && cd molty.uno/services/relay
 pnpm install
 npx wrangler login
 npx wrangler deploy                     # prints https://molty-relay.<you>.workers.dev
@@ -152,7 +152,7 @@ npx wrangler deploy                     # prints https://molty-relay.<you>.worke
 Then point Molty at it: console → **Agent** → **Advanced** → relay, set
 `wss://molty-relay.<you>.workers.dev`, and save. Molty reconnects to your relay.
 Before deploying on your own account, drop the `d1_databases` block from
-`relay/wrangler.jsonc` (it is the project's waitlist). Step by step, with what changes for
+`services/relay/wrangler.jsonc` (it is the project's waitlist). Step by step, with what changes for
 agents: [self-hosting](skills/molty/references/self-hosting.md).
 
 - **Voice** uses Cloudflare Workers AI by default. To use OpenAI instead, run
@@ -160,18 +160,26 @@ agents: [self-hosting](skills/molty/references/self-hosting.md).
 - **What the relay sees:** commands, text and audio pass through it (TLS on both sides),
   so pick a relay you trust, or run your own.
 - Protocol, pairing and security model: [docs/AGENT-LINK.md](docs/AGENT-LINK.md).
-  Relay internals: [relay/README.md](relay/README.md).
+  Relay internals: [services/relay/README.md](services/relay/README.md).
 
 ## Build from source
 
 ```
-firmware/    ESP-IDF firmware: fluid, Molty runtime, audio, IMU, touch, USB-C + Wi-Fi, agent link
-console/     the setup + settings page, built into the firmware image
-relay/       Cloudflare Worker: pairing, MCP/REST for agents, speech
-cli/         `molty` CLI + stdio MCP server (Go)
-creatures/   the Molty kit, the JS fluid engine, viewers, .molty exporter
-website/     molty.uno: landing, Molty showcase, browser setup, docs (Astro + @glyphcss/fluid)
-docs/        architecture, agent link, CLI, hardware, releasing
+device/
+  firmware/         ESP-IDF firmware: fluid, Molty runtime, audio, IMU, touch, USB-C + Wi-Fi, agent link
+  console/          the setup + settings page, built into the firmware image
+  creatures/        the Molty kit, the JS fluid engine, viewers, .molty exporter
+services/
+  relay/            Cloudflare Worker: pairing, MCP/REST for agents, speech
+  molty-voice/      self-hosted voice box bridge (Kyutai STT/TTS)
+apps/
+  cli/              `molty` CLI + stdio MCP server (Go)
+  website/          molty.uno: landing, Molty showcase, browser setup, docs (Astro + @glyphcss/fluid)
+tools/
+  scripts/          build, packaging and hygiene scripts
+  sim/              simulated-Molty test harness
+skills/molty/       the agent skill (git plugin)
+docs/               architecture, agent link, CLI, hardware, releasing
 ```
 
 | Component | Build | Test |
@@ -193,7 +201,7 @@ first flash from source: [docs/HARDWARE.md](docs/HARDWARE.md). Releases:
 [CLI](docs/CLI.md) ·
 [Hardware](docs/HARDWARE.md) ·
 [Porting](docs/PORTING.md) ·
-[.molty format](creatures/MOLTY-FORMAT.md) ·
+[.molty format](device/creatures/MOLTY-FORMAT.md) ·
 [Releasing](docs/RELEASING.md) ·
 [Changelog](CHANGELOG.md) ·
 [Contributing](CONTRIBUTING.md)

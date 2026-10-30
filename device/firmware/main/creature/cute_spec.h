@@ -1,7 +1,7 @@
 /*
  * cute_spec.h — parsed .molty creature (the cute kit's defineCreature spec, resolved).
  *
- * Binary format: creatures/MOLTY-FORMAT.md (writer: creatures/tools/
+ * Binary format: device/creatures/MOLTY-FORMAT.md (writer: device/creatures/tools/
  * molty-export.mjs). The file is fully resolved by the exporter — kit defaults applied,
  * sockets placed — so this is a flat data structure the runtime (cute_rig.c) reads.
  * No ESP-IDF dependencies (host-testable).

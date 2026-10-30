@@ -1,7 +1,7 @@
 """Relay audio frames: `<JSON header>\\n<payload>` (docs/AGENT-LINK.md, "Device <-> relay wire").
 
 Header {"s": id, "seq": n, "kind": "pcm16", "rate": 16000, "end": bool}, header <= 512 B,
-payload <= 16 KB of PCM16 mono @16 kHz. Same rules as relay/src/core/protocol.ts.
+payload <= 16 KB of PCM16 mono @16 kHz. Same rules as services/relay/src/core/protocol.ts.
 """
 
 from __future__ import annotations

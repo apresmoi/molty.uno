@@ -1,6 +1,6 @@
 // molty-behaviours.mjs — declarative re-expressions of cute-kit creatures' JS hooks
 // (build/update), for molty-export.mjs. Hooks cannot ship as code to the device; each
-// entry here is a list of behaviours in the vocabulary of creatures/MOLTY-FORMAT.md:
+// entry here is a list of behaviours in the vocabulary of device/creatures/MOLTY-FORMAT.md:
 //
 //   { target: { kind: 'part'|'socket'|'root'|'head'|'eyes'|'body', name? },
 //     channel: 'rx'|'ry'|'rz'|'px'|'py'|'pz'|'s'|'sx'|'sy'|'sz'|'sxz'|'lid',

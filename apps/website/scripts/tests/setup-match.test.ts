@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { identify, portFilters, usbNumber, psramFromCap, boardFromImprovChip, type BoardSpec } from "../../src/features/setup/match.ts";
 
-const BOARDS = fileURLToPath(new URL("../../../firmware/boards/", import.meta.url));
+const BOARDS = fileURLToPath(new URL("../../../../device/firmware/boards/", import.meta.url));
 
 function boards(): BoardSpec[] {
   const out: BoardSpec[] = [];

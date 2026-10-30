@@ -34,7 +34,7 @@ export interface HelloFrame {
   key: string;
   fw?: string;
   caps?: string[];
-  /** firmware/boards/ name of the hardware, e.g. "waveshare-esp32-s3-touch-lcd-1.28". */
+  /** device/firmware/boards/ name of the hardware, e.g. "waveshare-esp32-s3-touch-lcd-1.28". */
   board?: string;
   link_code?: string;
 }

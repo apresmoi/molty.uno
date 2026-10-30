@@ -1,6 +1,6 @@
 # molty-relay
 
-The cloud relay for Molty's agent link (spec: [`docs/AGENT-LINK.md`](../docs/AGENT-LINK.md)).
+The cloud relay for Molty's agent link (spec: [`docs/AGENT-LINK.md`](../../docs/AGENT-LINK.md)).
 Molty dials **out** over WSS. Agents reach it over remote MCP or REST, and the
 relay does TTS/STT. No laptop is in the loop.
 
@@ -16,7 +16,7 @@ Molty ──WSS /v1/device──▶ Worker ──▶ Durable Object "MoltyDevice
 ## Layout
 
 ```
-relay/
+services/relay/
 ├─ src/
 │  ├─ core/            pure TS, no Cloudflare imports (enforced by test/boundaries.test.ts)
 │  │  ├─ room.ts       DeviceRoom: device auth, pairing, tokens, routing, say/listen jobs, event inbox, webhook delivery
@@ -99,11 +99,11 @@ SQLite. To swap the voice provider, implement `VoiceProvider` and add one case t
 
 ## Events and webhooks
 
-Spec: [AGENT-LINK.md "Events"](../docs/AGENT-LINK.md#events-device--agents). Storage keys in
+Spec: [AGENT-LINK.md "Events"](../../docs/AGENT-LINK.md#events-device--agents). Storage keys in
 the device's DO: `ev:<seq>` (ring), `evseq`, `evrate`, `cur:<sha256(token)>` (per-agent
 cursor), `whq:<sha256(token)>:<seq>` (pending deliveries), the webhook itself on the
 token record, and `room_id` (lets `alarm()` rebuild the room). All survive hibernation.
-The relay does not serve or version the agent skill ([AGENT-LINK.md](../docs/AGENT-LINK.md#agent-skill-and-api_version)): it states `api_version` (`API_VERSION` in `src/core/version.ts`) and answers `GET /skill.md` with a deprecated `301` to the skill on GitHub. Keys left from the old skill versions (`skill_seen` on token records, `skillev`, `origin`) are never read; a device reset clears the last two.
+The relay does not serve or version the agent skill ([AGENT-LINK.md](../../docs/AGENT-LINK.md#agent-skill-and-api_version)): it states `api_version` (`API_VERSION` in `src/core/version.ts`) and answers `GET /skill.md` with a deprecated `301` to the skill on GitHub. Keys left from the old skill versions (`skill_seen` on token records, `skillev`, `origin`) are never read; a device reset clears the last two.
 
 | Limit | Value |
 |---|---|
@@ -156,12 +156,12 @@ The relay does not serve or version the agent skill ([AGENT-LINK.md](../docs/AGE
 ## Run locally (nothing is deployed, no login)
 
 ```sh
-cd relay
+cd services/relay
 pnpm install --ignore-workspace
 pnpm typecheck
 pnpm test
 pnpm e2e
-(cd ../cli && make build) && node tools/e2e.mjs --go-cli ../cli/bin/molty
+(cd ../../apps/cli && make build) && node tools/e2e.mjs --go-cli ../../apps/cli/bin/molty
 pnpm dev
 node tools/fake-device.mjs --relay ws://127.0.0.1:8787 --id molty-k7m2w9c4ya --key-file /tmp/molty.key --link-file /tmp/molty.link
 ```
@@ -177,7 +177,7 @@ node tools/fake-device.mjs --relay ws://127.0.0.1:8787 --id molty-k7m2w9c4ya --k
 ## Deploy your own relay
 
 ```sh
-cd relay
+cd services/relay
 pnpm install --ignore-workspace
 pnpm test
 pnpm e2e
@@ -209,12 +209,12 @@ The website's "want one built?" form (molty.uno/build) posts to `POST /waitlist`
 | CORS | `https://molty.uno`, `https://www.molty.uno`, `http://localhost:*`, `http://127.0.0.1:*`; another Origin is refused |
 | Rate limit | 5 requests per IP per hour, counted in D1 under `sha256(IP)`; past windows are deleted |
 | Stored | `email` (trimmed, lower-cased, unique), `created_at`, `source`. No IP, no user agent |
-| Human check | Cloudflare Turnstile, only when the `TURNSTILE_SECRET` secret is set (then set `TURNSTILE_SITE_KEY` in `website/src/config/site.mjs` too; signing up then needs JavaScript) |
+| Human check | Cloudflare Turnstile, only when the `TURNSTILE_SECRET` secret is set (then set `TURNSTILE_SITE_KEY` in `apps/website/src/config/site.mjs` too; signing up then needs JavaScript) |
 
 Set it up once, on the account the relay is deployed to (nothing in the repo does this):
 
 ```sh
-cd relay
+cd services/relay
 pnpm install --frozen-lockfile
 npx wrangler whoami
 npx wrangler d1 create molty-waitlist
@@ -222,7 +222,7 @@ npx wrangler d1 migrations apply molty-waitlist --remote
 npx wrangler secret put TURNSTILE_SECRET
 pnpm run deploy
 curl -s -X POST https://<relay>/waitlist -H 'content-type: application/json' -d '{"email":"you@example.org","source":"test"}'
-make -C .. waitlist-export
+make -C ../.. waitlist-export
 ```
 
 1. `whoami` shows the account every following command acts on.
@@ -231,7 +231,7 @@ make -C .. waitlist-export
 3. Applies `migrations/` (the `waitlist` and `waitlist_rate` tables). New migrations later:
    the same command.
 4. Optional. Skip it and no human check runs.
-5. The website's `WAITLIST_URL` (`website/src/config/site.mjs`) must point at this relay's
+5. The website's `WAITLIST_URL` (`apps/website/src/config/site.mjs`) must point at this relay's
    `/waitlist`.
 6. Smoke test; then delete the test row: `make waitlist-delete EMAIL=you@example.org`.
 7. Writes `waitlist.csv` at the repo root (gitignored: personal data).

@@ -1,5 +1,5 @@
 # Waveshare ESP32-S3-Touch-LCD-1.46 — layered over sdkconfig.defaults(.esp32s3)
-# when this board is built (firmware/CMakeLists.txt, scripts/firmware-build.sh).
+# when this board is built (device/firmware/CMakeLists.txt, tools/scripts/firmware-build.sh).
 # Mirrors Waveshare 1.46 demo bundle: ESP-IDF/.../sdkconfig.defaults.
 CONFIG_MOLTY_BOARD_WAVESHARE_ESP32_S3_TOUCH_LCD_1_46=y
 

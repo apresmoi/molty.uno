@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: MIT
  *
  * app_main.c — Molty firmware entry point. The hardware is whatever board was
- * compiled in (board/molty_board.h, firmware/boards/); nothing here knows a pin.
+ * compiled in (board/molty_board.h, device/firmware/boards/); nothing here knows a pin.
  *
  * Boot order:
  *   diag log ring → board early init (power latch) → NVS → Improv serial setup

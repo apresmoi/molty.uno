@@ -1,4 +1,4 @@
-// Architecture and style rules for website/src (see website/AGENTS.md). No baselines, no
+// Architecture and style rules for apps/website/src (see apps/website/AGENTS.md). No baselines, no
 // exemptions: a violation fails `pnpm check`. Usage: node scripts/checks/architecture.mjs [srcDir]
 import fs from 'node:fs';
 import path from 'node:path';
@@ -31,7 +31,7 @@ function checkImport(file, target) {
   if (service && !rel(file).startsWith(`services/${service}/`) && path.basename(target) !== 'index.ts') report(file, `Import services/${service} through its index.ts.`);
 }
 
-/** The creature engine is the repo's (creatures/js), imported via @creatures — never forked. */
+/** The creature engine is the repo's (device/creatures/js), imported via @creatures — never forked. */
 function checkBareImport(file, spec) {
   if (spec.startsWith('@creatures/') && !rel(file).startsWith('services/molty-stage/') && !rel(file).endsWith('env.d.ts'))
     report(file, 'Only services/molty-stage may import the creature engine (@creatures/…).');

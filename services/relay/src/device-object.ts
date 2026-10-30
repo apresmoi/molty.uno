@@ -104,7 +104,7 @@ export class MoltyDevice extends DurableObject<Env> {
       log: (msg, data) => console.log(JSON.stringify({ msg, ...data })),
       scheduler: { setAlarm: (at) => this.ctx.storage.setAlarm(at) },
       fetch: fetcher,
-      // Workers have no socket-level resolver: DNS-over-HTTPS for the SSRF guard (relay/README.md "Webhooks").
+      // Workers have no socket-level resolver: DNS-over-HTTPS for the SSRF guard (services/relay/README.md "Webhooks").
       resolveHost: dohResolver(fetcher),
       releases: releaseSource(this.env.DEVICE as unknown as DurableObjectNamespace),
     });

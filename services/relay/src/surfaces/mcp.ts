@@ -2,7 +2,7 @@
 // at POST /mcp, stateless, tools only, JSON responses (no SSE stream: every
 // tool answers within ~8 s, or ~24 s for the blocking talk/wait calls, so the
 // server never needs to stream).
-// Tool names/arguments mirror the local stdio server in cli/
+// Tool names/arguments mirror the local stdio server in apps/cli/
 // (internal/molty/mcp.go); relay-specific differences are stated in each
 // description. Authorization: Bearer <agent_token>; molty_pair needs none.
 //

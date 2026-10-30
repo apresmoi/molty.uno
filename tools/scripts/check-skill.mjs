@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: MIT
 // check-skill.mjs — the agent skill (skills/molty/) and its plugin packaging, checked
-// against the repo (run by scripts/hygiene.sh). The relay no longer serves the skill, so
+// against the repo (run by tools/scripts/hygiene.sh). The relay no longer serves the skill, so
 // what its tests used to pin about the served text is checked here instead:
 //   1. SKILL.md frontmatter (name, description) and a short core
 //   2. every reference is linked from SKILL.md; every relative link (and #anchor) resolves
@@ -19,7 +19,7 @@ import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const SKILL = join(ROOT, 'skills/molty');
 const HOME = 'https://github.com/apresmoi/molty.uno/tree/main/skills/molty';
 const RAW = 'https://raw.githubusercontent.com/apresmoi/molty.uno/main/skills/molty/SKILL.md';
@@ -91,25 +91,25 @@ for (const [file, text] of Object.entries(allText)) {
     if (file.endsWith('.md') && /\bcurl\b/.test(line) && /\/v1\//.test(line) && !/\$MOLTY_RELAY|<[^>]+>\.workers\.dev/.test(line)) bad(`${at}: curl to the relay without $MOLTY_RELAY`);
   });
 }
-if (!DEFAULT_RELAY.test(read('console/src/agents/agents.ts'))) bad('the skill\'s default relay differs from the console\'s DEFAULT_RELAY');
+if (!DEFAULT_RELAY.test(read('device/console/src/agents/agents.ts'))) bad('the skill\'s default relay differs from the console\'s DEFAULT_RELAY');
 
 // 4. documented vs implemented
 const all = Object.values(allText).join('\n');
 const tsList = (src, name) => JSON.parse(`[${(new RegExp(`export const ${name} = \\[([^\\]]*)\\]`).exec(src) || [, ''])[1]}]`);
-const commands = read('relay/src/core/commands.ts');
+const commands = read('services/relay/src/core/commands.ts');
 const api = allText[join(SKILL, 'references/api.md')] ?? '';
 for (const c of tsList(commands, 'COMMANDS')) if (!api.includes(`| \`${c}\` |`)) bad(`api.md has no row for command ${c}`);
 for (const m of tsList(commands, 'MOODS')) if (!api.includes(m)) bad(`api.md does not list mood ${m}`);
-const tools = [...read('relay/src/surfaces/mcp.ts').matchAll(/name: "(molty_\w+)"/g)].map((m) => m[1]);
-if (tools.length < 10) bad('could not read the MCP tool names from relay/src/surfaces/mcp.ts');
+const tools = [...read('services/relay/src/surfaces/mcp.ts').matchAll(/name: "(molty_\w+)"/g)].map((m) => m[1]);
+if (tools.length < 10) bad('could not read the MCP tool names from services/relay/src/surfaces/mcp.ts');
 for (const t of tools) if (!api.includes(`\`${t}\``)) bad(`api.md does not list MCP tool ${t}`);
-const relayApi = Number((/export const API_VERSION = (\d+);/.exec(read('relay/src/core/version.ts')) || [])[1]);
+const relayApi = Number((/export const API_VERSION = (\d+);/.exec(read('services/relay/src/core/version.ts')) || [])[1]);
 const skillApi = Number((/written for \*\*api_version (\d+)\*\*/.exec(all) || [])[1]);
 if (!relayApi || relayApi !== skillApi) bad(`the skill targets api_version ${skillApi}, the relay speaks ${relayApi}`);
 for (const [k, n] of [['MAX_ASK_LABEL', /1–(\d+) characters each/], ['MAX_ASK_OPTIONS', /"options": \[1\.\.(\d+) labels\]/], ['MAX_SAY_BYTES', /≤ (\d+) bytes; job done/]]) {
   const code = Number((new RegExp(`export const ${k} = (\\d+)`).exec(commands) || [])[1]);
   const doc = Number((n.exec(api) || [])[1]);
-  if (code !== doc) bad(`api.md states ${k} = ${doc}, relay/src/core/commands.ts has ${code}`);
+  if (code !== doc) bad(`api.md states ${k} = ${doc}, services/relay/src/core/commands.ts has ${code}`);
 }
 
 // 5. load-bearing rules (they used to be pinned by the relay's skill tests)
@@ -159,9 +159,9 @@ for (const f of tracked) {
 
 // 7. one home for the skill
 const homes = {
-  'relay/src/surfaces/skill.ts': RAW,
-  'relay/src/surfaces/mcp.ts': HOME,
-  'console/src/agents/agents.ts': HOME,
+  'services/relay/src/surfaces/skill.ts': RAW,
+  'services/relay/src/surfaces/mcp.ts': HOME,
+  'device/console/src/agents/agents.ts': HOME,
 };
 for (const [p, url] of Object.entries(homes)) if (!read(p).includes(`"${url}"`) && !read(p).includes(`'${url}'`)) bad(`${p} must name the skill at ${url}`);
 

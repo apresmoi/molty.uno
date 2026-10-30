@@ -931,7 +931,7 @@ static esp_err_t handler_creature_state_post(httpd_req_t *r)
 // ═════════════════════════════════════════════════════════════════════════════
 // ── /api/creature/file — the fluid's creature as a .molty file ────────────────
 // POST (binary, ≤ 16 KB): validated (magic, version, length, CRC, bounds — see
-// creatures/MOLTY-FORMAT.md), stored atomically as /spiffs/creature.molty and
+// device/creatures/MOLTY-FORMAT.md), stored atomically as /spiffs/creature.molty and
 // hot-reloaded into the fluid's "creature" state. No reflash to swap creatures.
 // GET: the stored file, else the firmware default (header X-Molty-Default: 1).
 // ═════════════════════════════════════════════════════════════════════════════

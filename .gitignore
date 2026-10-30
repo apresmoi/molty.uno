@@ -1,13 +1,13 @@
 # Build output
 build/
 # ...but /build/'s source (the website feature for molty.uno/build) is code
-!website/src/features/build/
+!apps/website/src/features/build/
 dist/
 bin/
 *.o
 *.a
 *.tsbuildinfo
-firmware/test/host/*_bin
+device/firmware/test/host/*_bin
 
 # ESP-IDF generated (regenerable from sdkconfig.defaults / idf_component.yml;
 # dependencies.lock is intentionally tracked)
@@ -19,7 +19,7 @@ sdkconfig.old
 node_modules/
 
 # Test output / local state
-console/e2e-out/
+device/console/e2e-out/
 .wrangler/
 .dev.vars
 # the waitlist export (make waitlist-export): personal data, never committed

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # cute_build.sh — host build + run of the cute-kit runtime test (creature/cute_spec +
-# cute_rig + the fluid core). Tests .molty files from creatures/molty/ (export them
-# with `node creatures/tools/molty-export.mjs all`). Optional: an outdir for mood previews.
+# cute_rig + the fluid core). Tests .molty files from device/creatures/molty/ (export them
+# with `node device/creatures/tools/molty-export.mjs all`). Optional: an outdir for mood previews.
 # Usage: test/host/cute_build.sh [outdir]
 set -euo pipefail
 

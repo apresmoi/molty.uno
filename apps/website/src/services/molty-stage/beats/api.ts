@@ -20,7 +20,7 @@
 //      read. Get parts with `b.part(name)` / `b.socket(name)` / `b.kit` (head pivot, body
 //      group…). Anything reached through `b.part` / `b.socket` / `b.node` is snapshotted and
 //      restored when the beat ends; parts the kit re-poses every frame need no restore.
-//      The part names are in the creature's spec (creatures/js/cute/pack-*.js).
+//      The part names are in the creature's spec (device/creatures/js/cute/pack-*.js).
 //   5. Fluid effects (the fluid is the particle system): `b.fx` — ripples, pushes, a ring
 //      thud, and particles (`emit`) that leave an impulse trail every frame: rain, spouts,
 //      sparks. Coordinates are WINDOW units: (0, 0) the slot's centre, x right, y up, 1 = the

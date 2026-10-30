@@ -1,5 +1,5 @@
 // What a Molty can be asked to do on a page-fluid slot (the showcase's control path, read by
-// pageFluid.ts): a mood (creatures/js/mood.js MOODS, held MOOD_HOLD seconds, then the dance
+// pageFluid.ts): a mood (device/creatures/js/mood.js MOODS, held MOOD_HOLD seconds, then the dance
 // goes on) or a glass beat (beatsOf(id): its signature beats, then the generic ones). Pure
 // data + the attribute/event protocol; nothing here touches the fluid.
 //

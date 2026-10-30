@@ -1,5 +1,5 @@
 // Package device holds the HTTP client and types for talking to a Molty device.
-// The JSON shapes here mirror what the firmware (firmware/main/net/http.c) sends.
+// The JSON shapes here mirror what the firmware (device/firmware/main/net/http.c) sends.
 package device
 
 // EyeState mirrors the full eye state JSON that the device sends on

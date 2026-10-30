@@ -4,7 +4,7 @@ name: CI
 # console → console-e2e: the console page is baked into the firmware's SPIFFS
 # image, so firmware builds the exact dist/index.html this run built and tested
 # rather than rebuilding it in an image that has no Node. The firmware builds once
-# per board: the matrix is every firmware/boards/**/board.json (boards job).
+# per board: the matrix is every device/firmware/boards/**/board.json (boards job).
 #
 #   hygiene    relay    cli    creatures    website    firmware-test
 #   console ──┬── firmware (one per board) ── boards
@@ -48,7 +48,7 @@ jobs:
       # Tracked files only: no local paths (/Users/…), no keys or tokens, no .env /
       # .dev.vars, LICENSE + THIRD_PARTY_NOTICES.md present, VERSION copies agree.
       - name: Repository hygiene
-        run: scripts/hygiene.sh
+        run: tools/scripts/hygiene.sh
 
   console:
     name: console (typecheck, unit tests, build)
@@ -68,22 +68,22 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
-          cache-dependency-path: console/pnpm-lock.yaml
+          cache-dependency-path: device/console/pnpm-lock.yaml
 
       - name: Install dependencies
-        working-directory: console
+        working-directory: device/console
         run: pnpm install --frozen-lockfile
 
       # `pnpm run build` = tsc --noEmit && vitest run && vite build && size report.
       - name: Typecheck, test and build
-        working-directory: console
+        working-directory: device/console
         run: pnpm run build
 
       - name: Upload console page
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: console-dist
-          path: console/dist/index.html
+          path: device/console/dist/index.html
           if-no-files-found: error
           retention-days: 7
 
@@ -106,10 +106,10 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
-          cache-dependency-path: console/pnpm-lock.yaml
+          cache-dependency-path: device/console/pnpm-lock.yaml
 
       - name: Install dependencies
-        working-directory: console
+        working-directory: device/console
         run: pnpm install --frozen-lockfile
 
       # The page the console job built and unit-tested, not a rebuild.
@@ -117,13 +117,13 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: console-dist
-          path: console/dist
+          path: device/console/dist
 
       # Browsers are keyed on the exact Playwright version in the lockfile. System
       # libraries are not in the cache, so a hit still needs install-deps.
       - name: Read Playwright version
         id: playwright
-        working-directory: console
+        working-directory: device/console
         run: echo "version=$(node -p "require('playwright/package.json').version")" >> "$GITHUB_OUTPUT"
 
       - name: Cache Playwright browsers
@@ -135,12 +135,12 @@ jobs:
 
       - name: Install Chromium
         if: steps.playwright-cache.outputs.cache-hit != 'true'
-        working-directory: console
+        working-directory: device/console
         run: pnpm exec playwright install --with-deps chromium
 
       - name: Install Chromium system dependencies
         if: steps.playwright-cache.outputs.cache-hit == 'true'
-        working-directory: console
+        working-directory: device/console
         run: pnpm exec playwright install-deps chromium
 
       - name: Walk-through against the mock device
@@ -151,7 +151,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: console-e2e-screenshots
-          path: console/e2e-out
+          path: device/console/e2e-out
           if-no-files-found: ignore
           retention-days: 7
 
@@ -170,8 +170,8 @@ jobs:
       - name: Check boards and list the matrix
         id: boards
         run: |
-          python3 scripts/firmware-boards.py check
-          echo "matrix=$(python3 scripts/firmware-boards.py matrix)" >> "$GITHUB_OUTPUT"
+          python3 tools/scripts/firmware-boards.py check
+          echo "matrix=$(python3 tools/scripts/firmware-boards.py matrix)" >> "$GITHUB_OUTPUT"
 
   firmware:
     name: firmware ${{ matrix.name }} (ESP-IDF build, size)
@@ -193,35 +193,35 @@ jobs:
       - name: Check out
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
-      # stage_console_html.cmake fails the build without console/dist/index.html.
+      # stage_console_html.cmake fails the build without device/console/dist/index.html.
       - name: Download console page
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: console-dist
-          path: console/dist
+          path: device/console/dist
 
       # GitHub replaces the image's entrypoint, so every step sources export.sh itself.
-      # Own build dir + sdkconfig per board (firmware/build/<name>/); checks the image tag.
+      # Own build dir + sdkconfig per board (device/firmware/build/<name>/); checks the image tag.
       - name: Build
         run: |
           . "$IDF_PATH/export.sh" > /dev/null
-          scripts/firmware-build.sh "${{ matrix.board }}"
+          tools/scripts/firmware-build.sh "${{ matrix.board }}"
 
       - name: App size vs OTA slot (fail above 90%)
-        run: scripts/firmware-size.sh "firmware/build/${{ matrix.name }}" "${{ matrix.name }}"
+        run: tools/scripts/firmware-size.sh "device/firmware/build/${{ matrix.name }}" "${{ matrix.name }}"
 
       - name: Upload firmware images
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: firmware-${{ matrix.name }}-${{ github.sha }}
           path: |
-            firmware/build/${{ matrix.name }}/molty.bin
-            firmware/build/${{ matrix.name }}/molty.elf
-            firmware/build/${{ matrix.name }}/bootloader/bootloader.bin
-            firmware/build/${{ matrix.name }}/partition_table/partition-table.bin
-            firmware/build/${{ matrix.name }}/ota_data_initial.bin
-            firmware/build/${{ matrix.name }}/spiffs.bin
-            firmware/build/${{ matrix.name }}/flash_args
+            device/firmware/build/${{ matrix.name }}/molty.bin
+            device/firmware/build/${{ matrix.name }}/molty.elf
+            device/firmware/build/${{ matrix.name }}/bootloader/bootloader.bin
+            device/firmware/build/${{ matrix.name }}/partition_table/partition-table.bin
+            device/firmware/build/${{ matrix.name }}/ota_data_initial.bin
+            device/firmware/build/${{ matrix.name }}/spiffs.bin
+            device/firmware/build/${{ matrix.name }}/flash_args
           if-no-files-found: error
           retention-days: 14
 
@@ -261,24 +261,24 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
-          cache-dependency-path: relay/pnpm-lock.yaml
+          cache-dependency-path: services/relay/pnpm-lock.yaml
 
       - name: Install dependencies
-        working-directory: relay
+        working-directory: services/relay
         run: pnpm install --frozen-lockfile
 
       - name: Typecheck
-        working-directory: relay
+        working-directory: services/relay
         run: pnpm typecheck
 
       - name: Test
-        working-directory: relay
+        working-directory: services/relay
         run: pnpm test
 
       # Bundles exactly what `pnpm run deploy` would ship (version baked in) without
       # deploying: catches wrangler config and bundling errors before a release.
       - name: Bundle (wrangler dry run)
-        working-directory: relay
+        working-directory: services/relay
         run: pnpm run deploy --dry-run --outdir "$RUNNER_TEMP/relay-bundle"
 
   cli:
@@ -292,27 +292,27 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
-          go-version-file: cli/go.mod
-          cache-dependency-path: cli/go.sum
+          go-version-file: apps/cli/go.mod
+          cache-dependency-path: apps/cli/go.sum
 
       - name: Check formatting
-        working-directory: cli
+        working-directory: apps/cli
         run: |
           unformatted="$(gofmt -l .)"
           if [ -n "$unformatted" ]; then
-            echo "::error::gofmt needed (run 'make -C cli fmt'):"; echo "$unformatted"; exit 1
+            echo "::error::gofmt needed (run 'make -C apps/cli fmt'):"; echo "$unformatted"; exit 1
           fi
 
       - name: Go vet
-        working-directory: cli
+        working-directory: apps/cli
         run: go vet ./...
 
       - name: Go test
-        working-directory: cli
+        working-directory: apps/cli
         run: go test ./...
 
       - name: Build
-        run: make cli && cli/bin/molty --version
+        run: make cli && apps/cli/bin/molty --version
 
   creatures:
     name: creatures (.molty export is committed)
@@ -334,9 +334,9 @@ jobs:
       # file) means a spec changed without its .molty being re-exported.
       - name: Verify the committed .molty files match their specs
         run: |
-          git diff --exit-code -- creatures/molty \
-            || { echo "::error::creatures/molty is stale — run 'make creatures' and commit the result"; exit 1; }
-          untracked="$(git ls-files --others --exclude-standard -- creatures/molty)"
+          git diff --exit-code -- device/creatures/molty \
+            || { echo "::error::device/creatures/molty is stale — run 'make creatures' and commit the result"; exit 1; }
+          untracked="$(git ls-files --others --exclude-standard -- device/creatures/molty)"
           if [ -n "$untracked" ]; then
             echo "::error::new .molty files not committed:"; echo "$untracked"; exit 1
           fi
@@ -349,42 +349,42 @@ jobs:
       - name: Check out
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
-      # Every later step is skipped (not failed) on a branch without website/.
+      # Every later step is skipped (not failed) on a branch without apps/website/.
       - name: Report missing website
-        if: hashFiles('website/package.json') == ''
-        run: echo "::notice::website/ not present on this ref; skipping"
+        if: hashFiles('apps/website/package.json') == ''
+        run: echo "::notice::apps/website/ not present on this ref; skipping"
 
       - name: Set up pnpm
-        if: hashFiles('website/package.json') != ''
+        if: hashFiles('apps/website/package.json') != ''
         uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda
         with:
           version: ${{ env.PNPM_VERSION }}
 
       - name: Set up Node
-        if: hashFiles('website/package.json') != ''
+        if: hashFiles('apps/website/package.json') != ''
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
-          cache-dependency-path: website/pnpm-lock.yaml
+          cache-dependency-path: apps/website/pnpm-lock.yaml
 
       - name: Install dependencies
-        if: hashFiles('website/package.json') != ''
-        working-directory: website
+        if: hashFiles('apps/website/package.json') != ''
+        working-directory: apps/website
         run: pnpm install --frozen-lockfile
 
       - name: Check
-        if: hashFiles('website/package.json') != ''
-        working-directory: website
+        if: hashFiles('apps/website/package.json') != ''
+        working-directory: apps/website
         run: pnpm check
 
-      # /setup's board matcher against the real firmware/boards/**/board.json
+      # /setup's board matcher against the real device/firmware/boards/**/board.json
       - name: Test
-        if: hashFiles('website/package.json') != ''
-        working-directory: website
+        if: hashFiles('apps/website/package.json') != ''
+        working-directory: apps/website
         run: pnpm test
 
       - name: Build
-        if: hashFiles('website/package.json') != ''
-        working-directory: website
+        if: hashFiles('apps/website/package.json') != ''
+        working-directory: apps/website
         run: pnpm build

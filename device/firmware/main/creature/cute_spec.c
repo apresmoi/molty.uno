@@ -1,6 +1,6 @@
 /*
  * cute_spec.c — .molty parser/validator. Mirrors encode() in
- * creatures/tools/molty-export.mjs field by field.
+ * device/creatures/tools/molty-export.mjs field by field.
  *
  * Target board: Waveshare ESP32-S3-Touch-LCD-1.46 (412x412 round LCD)
  * FQBN: esp32:esp32:esp32s3:FlashSize=16M,PSRAM=enabled,CDCOnBoot=cdc

@@ -7,7 +7,7 @@ services:
     network_mode: host
     restart: unless-stopped
     volumes:
-      - ./:/src:ro                                   # this voicebox/ directory
+      - ./:/src:ro                                   # this services/molty-voice/ directory
       - ${HOME}/.config/molty-voice:/config:ro
     environment:
       XDG_CONFIG_HOME: /config-root

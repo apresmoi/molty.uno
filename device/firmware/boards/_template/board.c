@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * board.c — the template: copy this folder to firmware/boards/<vendor>/<model>/ and
+ * board.c — the template: copy this folder to device/firmware/boards/<vendor>/<model>/ and
  * fill it in (docs/PORTING.md walks through it). Folders starting with "_" are not
  * built; yours will be once it is in the Kconfig MOLTY_BOARD choice.
  *

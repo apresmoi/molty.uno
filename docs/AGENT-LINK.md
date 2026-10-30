@@ -17,11 +17,11 @@ Molty (home Wi-Fi) ──outbound WSS──▶ molty-relay (Cloudflare Worker + 
 
 | Module | Where | Swappable seam |
 |---|---|---|
-| Relay core (rooms, auth, pairing, routing, jobs) | `relay/src/core/` | pure TS, no Cloudflare imports |
-| Relay host | `relay/src/worker.ts` (+ DO) | another host (Node server) wraps the same core |
+| Relay core (rooms, auth, pairing, routing, jobs) | `services/relay/src/core/` | pure TS, no Cloudflare imports |
+| Relay host | `services/relay/src/worker.ts` (+ DO) | another host (Node server) wraps the same core |
 | Agent surfaces | `src/surfaces/mcp.ts`, `src/surfaces/rest.ts` | add OpenClaw node adapter beside them |
 | Voice provider | `src/voice/*.ts` → `interface VoiceProvider { tts(text, opts) → PCM16@16k; stt(PCM16@16k) → text; ttsStream?; sttStream? }` | workers-ai · openai · none (env) · box (the owner's [voice box](#voice-box), per device) |
-| Device link client | `firmware/main/link/` | transport only; commands come from the dispatcher |
+| Device link client | `device/firmware/main/link/` | transport only; commands come from the dispatcher |
 | Device command dispatcher | `main/link/link_cmd.c` | ONE registry used by both the WSS link and (later) local HTTP |
 | Pairing UI | static: the 4-digit code alone, held as one centred token in the fluid text target (no ORP accent), until accept/reject/timeout (`link_ui_show_pair`); agent name is shown by the console via `GET /api/link` | a dedicated `pair` creature state is the planned upgrade |
 
@@ -83,7 +83,7 @@ began by itself — [Shake to talk](#shake-to-talk)); `now` is the device's time
 relay takes device log uploads ([Activity log](#activity-log)). Older relays send none of them, and
 the device then never starts a shake listen nor uploads.
 
-`board` names the hardware (`firmware/boards/`, see [PORTING.md](PORTING.md)). `caps`
+`board` names the hardware (`device/firmware/boards/`, see [PORTING.md](PORTING.md)). `caps`
 lists `say` / `listen` only when the board has a speaker / microphone (`say_cues` with `say`,
 firmware that shows a say's words as they are spoken; `listen_stop` with
 `listen`, firmware that can end a listen on the relay's word; `listen_window` with `listen`,
@@ -95,7 +95,7 @@ install a release itself ([Firmware updates](#firmware-updates)), and `log_uploa
 sends its log lines to the relay ([Activity log](#activity-log)); the relay answers
 those commands `409 unsupported` up front, without calling TTS, when the device left them
 out — or `409 firmware_too_old` when `fw` is older than the feature's minimum firmware
-(`FEATURES` in `relay/src/core/version.ts`): caps say whether it can, the version says why not. The device itself answers a command its board cannot do with `error:"unsupported"`
+(`FEATURES` in `services/relay/src/core/version.ts`): caps say whether it can, the version says why not. The device itself answers a command its board cannot do with `error:"unsupported"`
 (an unknown command is `unknown_command`).
 
 Configure a relay origin (`wss://host` or `ws://LAN-IP:8787` for `wrangler dev`);
@@ -170,7 +170,7 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   defaults by index, present → exactly one valid hex per option), answers `unsupported`
   without touch, and acknowledges `{job}` at once. Firmware from before colours ignores the
   extra field (unknown args are not checked), so the relay needs no cap for it. The options
-  condense out of the fluid in sectors (`firmware/main/fluid/fluid_ask.h`: 1 = whole screen,
+  condense out of the fluid in sectors (`device/firmware/main/fluid/fluid_ask.h`: 1 = whole screen,
   2 = left / right, 3–5 = pie sectors from 12 o'clock clockwise, options in reading order of
   the sectors), each label in its colour (pastel palette; mono palettes stay one hue), with a
   rim arc of the fluid in that colour spanning its sector minus a small gap at each faint
@@ -190,7 +190,7 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   over the timeout; after it, the timeout wins.
   Relay side (`molty_ask` / `POST …/ask`): the `cmd ask` goes out only after the optional
   `say` has played (its `say.done`, as `talk`), with labels already trimmed (`MAX_ASK_LABEL`
-  in `relay/src/core/commands.ts`). The relay drops an `answer` unless its job is an ask still
+  in `services/relay/src/core/commands.ts`). The relay drops an `answer` unless its job is an ask still
   waiting, `index` is within that job's options, `label` (optional) equals `options[index]`, and
   a tap carries no `reason` / a non-answer no label. No answer within `timeout_ms` + 5 s: the
   relay resolves `timeout` itself; device gone mid-ask: `reason:"offline"`. An answer the relay
@@ -275,8 +275,8 @@ so firmware with the cap `ack` acknowledges the turn **itself, locally, at once*
   the screen during the listen (an explicit `mood`, an `ask`, an update screen, a pairing).
   Never on `no_speech` (the device's own, or a `listen_stop` with `reason:"no_speech"`), `error`
   or a cancelled listen. Decided by the device when the end frame
-  leaves (`link_ack_decide`, `firmware/main/link/link_protocol.h`).
-- **What.** A chirp (`firmware/main/audio/chirp.h`: G5 784 Hz → D6 1175 Hz, a rising fifth,
+  leaves (`link_ack_decide`, `device/firmware/main/link/link_protocol.h`).
+- **What.** A chirp (`device/firmware/main/audio/chirp.h`: G5 784 Hz → D6 1175 Hz, a rising fifth,
   160 ms, soft raised-cosine attack / exponential decay, peak −17 dBFS, scaled by the speaker
   volume like a say) and the `thinking` mood, the listening ring melting out. `thinking` holds
   30 s at most (then idle) and is the device's own mood: the agent's next `say` (speaking),
@@ -356,7 +356,7 @@ shake ─▶ device: listening at once (ring + mood), audio kept locally
 
 ### Listen end of speech (device VAD)
 
-`firmware/main/audio/vad.h` — energy VAD on the 16 kHz mic stream (gain 8), 20 ms
+`device/firmware/main/audio/vad.h` — energy VAD on the 16 kHz mic stream (gain 8), 20 ms
 frames, RMS in dBFS against an adaptive noise floor:
 
 - **Floor**: minimum frame energy over the last 3 s. The first 300 ms only measure it; the
@@ -405,7 +405,7 @@ of the fluid creature's loaded `.molty` creature: the device applies
 `{"state":"creature","mood":"<mood>"[,"hold_s":N]}` (blob when no creature is loaded).
 During `say` the text state wins over the creature view.
 
-What the screen does between commands (`firmware/main/fluid/fluid_director.h`):
+What the screen does between commands (`device/firmware/main/fluid/fluid_director.h`):
 
 - **The creature is home.** The device boots into it, and re-sending the state or mood it
   already shows changes nothing: a mood blends inside the creature instead of melting it
@@ -445,7 +445,7 @@ What the screen does between commands (`firmware/main/fluid/fluid_director.h`):
 
 **Colours** (`ask` options, `ring_color`): one of `green #3ccf96`, `red #ff6b6b`, `amber #ffa94d`,
 `blue #4dabf7`, `violet #b197fc`, `pink #f783ac`, `cyan #3bc9db`, `white #f1f3f5` (`COLORS` in
-`relay/src/core/commands.ts`; names case-insensitive), or any `#rrggbb`. Anything else is
+`services/relay/src/core/commands.ts`; names case-insensitive), or any `#rrggbb`. Anything else is
 `invalid_args` naming the field and the choices. Options without a colour take green, red, amber,
 blue, violet by position. The device only ever receives resolved hex; the answer's `label` is
 still the plain string. The self-update question is fixed: the version (`v0.2.0`) green, `later` white.
@@ -483,10 +483,10 @@ contracts, calm while the room is quiet, quicker and deeper as the human speaks 
 ~10 Hz, smoothed), and circular ripples run inward across the fluid from the whole rim; silence
 settles it back to a calm breath, nothing ever travels around it
 (`mole_fluid_listen`, `fluid_target_ring`; every tuning knob in
-`firmware/main/fluid/fluid_ring.h`). It is never shown over a pending `ask`. Its colour:
+`device/firmware/main/fluid/fluid_ring.h`). It is never shown over a pending `ask`. Its colour:
 the listen's `ring_color`, else the device default (console setting, NVS), else the palette's
 accent (mono palettes always show their accent). Detector
-constants: `firmware/main/sense/gesture.h`.
+constants: `device/firmware/main/sense/gesture.h`.
 
 ## Agent surfaces
 
@@ -496,7 +496,7 @@ constants: `firmware/main/sense/gesture.h`.
   relay-only `molty_talk`, `molty_ask`, `molty_events`, `molty_webhook` ([Events](#events-device--agents)),
   `molty_updates` and `molty_update` ([Firmware updates](#firmware-updates)), `molty_activity`
   ([Activity log](#activity-log)). Shared names
-  have the same semantics as the local stdio MCP in `cli/`.
+  have the same semantics as the local stdio MCP in `apps/cli/`.
 - **REST** `POST /v1/devices/<id>/cmd {name,args,wait?}`, `POST /v1/devices/<id>/talk`, `POST /v1/devices/<id>/ask`, `GET /v1/jobs/<job>`,
   `GET /v1/devices/<id>/events`, `GET|PUT|DELETE /v1/webhook`, `GET /v1/devices/<id>/updates`,
   `POST /v1/devices/<id>/update`, `GET /v1/activity`, same bearer. `GET /v1/releases/latest?board=` needs none (public).
@@ -506,7 +506,7 @@ constants: `firmware/main/sense/gesture.h`.
 
 ## REST envelopes
 
-Agreed between the relay (`relay/`) and the Go CLI relay transport. The
+Agreed between the relay (`services/relay/`) and the Go CLI relay transport. The
 bearer is `agent_token` = `<device_id>.<base64url(32 bytes)>`; the prefix only routes.
 
 | Call | Success | Failure |
@@ -533,7 +533,7 @@ extra fields next to `error`: `firmware_too_old` has `{feature, current, needed,
 (409) — e.g. `molty_ask` on firmware older than the release that ships `ask`.
 
 Device-local console API (same Wi-Fi, no auth; served by the firmware, used by
-`console/`). One spelling per field — `relay_url` is the ws/wss origin the
+`device/console/`). One spelling per field — `relay_url` is the ws/wss origin the
 device dials; agents/CLI use its http(s) twin (`ws://h` → `http://h`, `wss://h` → `https://h`).
 
 | Call | Success | Failure |
@@ -778,7 +778,7 @@ The relay is just a relay: it does not serve, version or announce the agent skil
 
 - **One skill, in the repo:** `skills/molty/` — a short `SKILL.md` core plus `references/`
   (API, events, talking fast, etiquette, voice, voice box, updates, activity, self-hosting,
-  per-harness setups) and shell helpers in `scripts/`. `scripts/check-skill.mjs` (run by
+  per-harness setups) and shell helpers in `scripts/`. `tools/scripts/check-skill.mjs` (run by
   `make hygiene`) checks it against the code: every command, mood and MCP tool documented, the
   links, no hard-coded relay host, the manifests.
 - **Distributed only through the git plugin marketplaces.** The repo root is the plugin
@@ -788,7 +788,7 @@ The relay is just a relay: it does not serve, version or announce the agent skil
   `codex plugin marketplace add apresmoi/molty.uno && codex plugin add molty@molty`. The
   manifests carry no `version`, so an update follows the repo's commits. Agents without a plugin
   system read it on GitHub.
-- **`api_version`** (`API_VERSION` in `relay/src/core/version.ts`, an integer, now **1**): the
+- **`api_version`** (`API_VERSION` in `services/relay/src/core/version.ts`, an integer, now **1**): the
   agent API contract, bumped only when an agent built for the previous one would break or miss
   something it must handle. Stated in the pair result, `status` → `relay.api_version`,
   `GET /v1/health`, `molty_updates` and the MCP `serverInfo.title` / `instructions`. The skill
@@ -803,7 +803,7 @@ The relay is just a relay: it does not serve, version or announce the agent skil
 ### Firmware updates
 
 "Check Molty for updates" is one agent call. Everything below is relay code
-(`relay/src/core/{releases,updates,version}.ts`) except the device wire, which the
+(`services/relay/src/core/{releases,updates,version}.ts`) except the device wire, which the
 firmware implements.
 
 ```
@@ -826,7 +826,7 @@ whose URL is exactly `https://github.com/<repo>/releases/download/vX.Y.Z/<name>`
 comes from the release's `SHA256SUMS` (GitHub's asset digest as fallback; if they disagree,
 none). Only these URLs ever reach the device — `molty_update` takes no arguments.
 
-**Feature → minimum firmware.** `FEATURES` in `relay/src/core/version.ts` is the one place:
+**Feature → minimum firmware.** `FEATURES` in `services/relay/src/core/version.ts` is the one place:
 `ask` → `molty_ask`, `update` → `molty_update`, both `NEXT_FW` = **0.2.0** (the next release).
 
 **`molty_updates`** (REST `GET /v1/devices/<id>/updates`), ride-alongs included:
@@ -928,7 +928,7 @@ These are examples, not rules; the skill deliberately lets each agent choose (it
 ## Voice box
 
 The owner's own GPU machine can do Molty's speech (STT + TTS) instead of the relay's
-cloud provider. Reference implementation: `voicebox/` (`molty-voice`, bridging Kyutai's
+cloud provider. Reference implementation: `services/molty-voice/` (`molty-voice`, bridging Kyutai's
 moshi-server). The device does not change: it talks to the relay as always. The box is one
 more relay client that **dials out** to the relay over WSS (no inbound ports, no tunnel).
 
@@ -1067,8 +1067,8 @@ The console's agent page has a **Voice** card with:
 
 One timeline of everything that happens on a Molty, and which agent did it — so a failed turn
 can be read in one place instead of lining up the agent's memory, the device log and a live
-`wrangler tail`. Code: `relay/src/core/activity.ts` (relay), `firmware/main/diag/log_upload.c`
-(device), `console/src/activity/` (console's **activity** page).
+`wrangler tail`. Code: `services/relay/src/core/activity.ts` (relay), `device/firmware/main/diag/log_upload.c`
+(device), `device/console/src/activity/` (console's **activity** page).
 
 ### What is recorded
 
@@ -1154,17 +1154,17 @@ few). Soft resets (panic, watchdog, OTA restart) are covered by the no-init RAM 
 
 Each component has exactly one default relay URL, all set to the same value
 (`molty-relay.alicenet.workers.dev`, the project's hosted relay). Change it in these
-places to point a build at your own relay (see `relay/README.md` to deploy one):
+places to point a build at your own relay (see `services/relay/README.md` to deploy one):
 
 | Component | Where | Used when |
 |---|---|---|
-| firmware | `CONFIG_MOLTY_DEFAULT_RELAY` in `firmware/main/Kconfig.projbuild` (`wss://…`) | no relay URL saved in NVS (`POST /api/link {relay_url}` overrides) |
-| console | `DEFAULT_RELAY` in `console/src/agents/agents.ts` (`https://…`) | the device has not reported a `relay_url` yet; the setup message names the relay only when it differs |
+| firmware | `CONFIG_MOLTY_DEFAULT_RELAY` in `device/firmware/main/Kconfig.projbuild` (`wss://…`) | no relay URL saved in NVS (`POST /api/link {relay_url}` overrides) |
+| console | `DEFAULT_RELAY` in `device/console/src/agents/agents.ts` (`https://…`) | the device has not reported a `relay_url` yet; the setup message names the relay only when it differs |
 | skill | `MOLTY_DEFAULT_RELAY` in `skills/molty/scripts/_config.sh` (and `watch.py`, `SKILL.md`) | `MOLTY_RELAY` is unset (env or `~/.config/molty/env`) |
-| CLI | `DefaultRelay` in `cli/internal/molty/link.go` (`https://…`) | `molty pair` without `--relay` / `MOLTY_RELAY` |
+| CLI | `DefaultRelay` in `apps/cli/internal/molty/link.go` (`https://…`) | `molty pair` without `--relay` / `MOLTY_RELAY` |
 
 The website's waitlist form posts to the same hosted relay (`WAITLIST_URL` in
-`website/src/config/site.mjs`, `POST /waitlist`, relay/README.md "Waitlist"); it is not part
+`apps/website/src/config/site.mjs`, `POST /waitlist`, services/relay/README.md "Waitlist"); it is not part
 of the agent link.
 
 ## Explicitly out of v0 (later)

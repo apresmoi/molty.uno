@@ -5,7 +5,7 @@ describe('listening ring colour setting', () => {
   it('offers the accent (default) first, then the relay palette in its order', () => {
     expect(RING_CHOICES.map((c) => c.id)).toEqual(['accent', 'green', 'red', 'amber', 'blue', 'violet', 'pink', 'cyan', 'white']);
     expect(RING_CHOICES[0].value).toBe('accent');
-    // the relay's values (relay/src/core/commands.ts COLORS), so a chip and an agent's name agree
+    // the relay's values (services/relay/src/core/commands.ts COLORS), so a chip and an agent's name agree
     expect(RING_COLORS).toEqual({ green: '#3ccf96', red: '#ff6b6b', amber: '#ffa94d', blue: '#4dabf7', violet: '#b197fc', pink: '#f783ac', cyan: '#3bc9db', white: '#f1f3f5' });
   });
   it('maps what the device reports to the chip that is on', () => {

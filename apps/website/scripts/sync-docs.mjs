@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { SYNCED_DOCS } from '../src/config/docs.mjs';
 import { REPO_URL, REPO_BRANCH } from '../src/config/site.mjs';
 
-const ROOT = fileURLToPath(new URL('../../', import.meta.url));
+const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const OUT = fileURLToPath(new URL('../src/content/docs/repo/', import.meta.url));
 const bySource = new Map(SYNCED_DOCS.filter((d) => !d.optional || existsSync(join(ROOT, d.source))).map((d) => [d.source, d]));
 
@@ -56,10 +56,10 @@ for (const doc of present) {
     `editUrl: ${yaml(`${REPO_URL}/edit/${REPO_BRANCH}/${doc.source}`)}`,
     '---',
     '',
-    `<!-- Generated from ${doc.source} by website/scripts/sync-docs.mjs. Edit the source, not this file. -->`,
+    `<!-- Generated from ${doc.source} by apps/website/scripts/sync-docs.mjs. Edit the source, not this file. -->`,
     '',
   ].join('\n');
   const file = join(OUT, doc.slug.replace(/\//g, '--') + '.md');
   writeFileSync(file, front + body);
 }
-console.log(`synced ${present.length} repo docs → website/${relative(join(ROOT, 'website'), OUT)}`);
+console.log(`synced ${present.length} repo docs → apps/website/${relative(join(ROOT, 'apps/website'), OUT)}`);

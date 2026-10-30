@@ -1,7 +1,7 @@
 // The listening ring's colour (Molty settings): the device keeps one default in NVS
 // (POST /api/creature/state {ring_color: "#rrggbb" | "accent"}; GET reports it the same
 // way). An agent's listen / talk may still pick its own colour for one listen.
-// The names and values are the relay's palette (relay/src/core/commands.ts COLORS).
+// The names and values are the relay's palette (services/relay/src/core/commands.ts COLORS).
 
 export const RING_COLORS = {
   green: '#3ccf96',

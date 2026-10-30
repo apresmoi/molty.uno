@@ -201,7 +201,7 @@ describe("molty_talk", () => {
     expect(w.voice.sttCalls).toHaveLength(0);
   });
 
-  // The firmware's exact vad:false end-frame header (firmware/test/host/link_audio_pair_test.c
+  // The firmware's exact vad:false end-frame header (device/firmware/test/host/link_audio_pair_test.c
   // asserts this string): VAD off measured nothing, so there is no speech_ms.
   const FW_VAD_OFF_END = '{"s":"listen1","seq":16,"kind":"pcm16","rate":16000,"end":true,"reason":"max"}';
 

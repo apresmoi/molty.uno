@@ -1,8 +1,8 @@
-// A Molty as a @glyphcss/fluid mesh target. The cute kit (creatures/js/cute/kit.js) and its
+// A Molty as a @glyphcss/fluid mesh target. The cute kit (device/creatures/js/cute/kit.js) and its
 // MoodEngine stay the creature's rig: they pose the three.js parts exactly as on the device
 // and in the console. This module only reads the posed triangles out of that scene graph and
 // hands them to glyphcss, which rasterises them (no WebGL, no offscreen renderer, no GPU
-// readback). The camera is CreatureTarget's (creatures/js/fluid/targets.js): view direction
+// readback). The camera is CreatureTarget's (device/creatures/js/fluid/targets.js): view direction
 // (0.38, 0.28, 1), an orthographic envelope fit made round for the disc, key light (0.5, 1, 1).
 // Polygons are emitted normalised to that fit (±1 across), so the target's `extent` is 2.
 import { createGlyphOrthographicCamera, type GlyphCamera, type Polygon } from "glyphcss";

@@ -2,7 +2,7 @@
 // the human can just shake and speak — the agents get their words as one `utterance`. Off:
 // a shake is only an event (a nudge). The device keeps it in NVS (POST /api/creature/state
 // {shake_talk: true | false}; GET reports it), like ring_color. On out of the box.
-// Values: firmware/main/fluid/mole_fluid.h; the protocol: docs/AGENT-LINK.md "Shake to talk".
+// Values: device/firmware/main/fluid/mole_fluid.h; the protocol: docs/AGENT-LINK.md "Shake to talk".
 
 export const SHAKE_TALK_DEFAULT = true;
 

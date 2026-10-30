@@ -1,5 +1,5 @@
-// Wire shapes of the device's HTTP API (firmware/main/net/http.c
-// + creatures/mole_fluid.c). Only the fields this console reads are typed strictly;
+// Wire shapes of the device's HTTP API (device/firmware/main/net/http.c
+// + device/creatures/mole_fluid.c). Only the fields this console reads are typed strictly;
 // everything else stays open so firmware can add fields without breaking us.
 
 export interface DeviceInfo {

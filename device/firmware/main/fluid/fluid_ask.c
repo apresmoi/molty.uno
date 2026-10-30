@@ -15,7 +15,7 @@ static const float RADIUS_FRAC[FLUID_ASK_MAX + 1] = { 0.f, 0.f, 0.48f, 0.46f, 0.
 
 static int clamp_n(int n) { return n < 1 ? 1 : n > FLUID_ASK_MAX ? FLUID_ASK_MAX : n; }
 
-/* relay/src/core/commands.ts COLORS: green, red, amber, blue, violet */
+/* services/relay/src/core/commands.ts COLORS: green, red, amber, blue, violet */
 const uint32_t FLUID_ASK_COLORS[FLUID_ASK_MAX] = { 0x3ccf96, 0xff6b6b, 0xffa94d, 0x4dabf7, 0xb197fc };
 
 uint32_t fluid_ask_color(int32_t given, int i) {
