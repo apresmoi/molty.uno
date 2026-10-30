@@ -315,6 +315,7 @@ static void download_task(void *arg)
     upd_target_t t;
     lock(); t = s_s.t; unlock();
     memset(&s_dl, 0, sizeof(s_dl));
+    mole_diag_job_begin(t.job);   /* the download's lines carry the update job (a console update has none) */
     mole_diag_event(false, "update.download v=%s size=%u", t.version, (unsigned)t.size);
     screen_word("update");
     uint8_t *buf = heap_caps_malloc(DL_BUF, MALLOC_CAP_SPIRAM);
@@ -326,6 +327,7 @@ static void download_task(void *arg)
         report(UPD_FAILED, 0, 0, e);
         screen_home();
         self_update_ota_release();
+        mole_diag_job_end(t.job);
         vTaskDelete(NULL);
         return;
     }

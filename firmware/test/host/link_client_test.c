@@ -11,6 +11,25 @@ static unsigned starts, stops, hellos, codes, forgets, wipes, steps, stage;
 static int64_t close_at, forget_at;
 static char test_code[9]="ABCDEFGH";
 static unsigned scenario, injected_close;
+/* activity log uploads: the {"t":"log"} frames sent, in order, and when */
+static unsigned logs, log_calls;
+static bool log_prev[8];
+static int64_t log_at[8];
+static unsigned prev_left, cur_left;      /* frames the fake ring still has */
+static cJSON *fake_log_frame(bool prev, uint32_t *cursor, int max_lines, int backlog) {
+    log_calls++;
+    assert(max_lines==48);
+    unsigned *left = prev ? &prev_left : &cur_left;
+    /* the backlog bound (2 frames) applies to the first frame after a welcome only */
+    static bool prev_seen, cur_seen;
+    if (prev) { assert(backlog==(prev_seen ? 0 : 96)); prev_seen=true; }
+    else { assert(backlog==(cur_seen ? 0 : 96)); cur_seen=true; }
+    if (!*left) return NULL;
+    (*left)--; (*cursor)+=10;
+    cJSON *f=cJSON_CreateObject(); cJSON_AddStringToObject(f,"t","log");
+    if (prev) cJSON_AddBoolToObject(f,"prev",true);
+    return f;
+}
 
 static void text_event(const char *text) {
     esp_websocket_event_data_t d={.op_code=1,.data_ptr=(char *)text,.data_len=(int)strlen(text),.payload_len=(int)strlen(text),.fin=true};
@@ -32,7 +51,9 @@ esp_err_t esp_websocket_register_events(esp_websocket_client_handle_t ws,int id,
 }
 esp_err_t esp_websocket_client_start(esp_websocket_client_handle_t ws) {
     starts++; ws->connected=true; callback(NULL,NULL,WEBSOCKET_EVENT_CONNECTED,NULL);
-    text_event("{\"t\":\"welcome\"}"); return ESP_OK;
+    /* scenario 5: a relay that takes log uploads (and gives its clock); else an older one */
+    text_event(scenario==5 ? "{\"t\":\"welcome\",\"now\":1790000000000,\"log\":{\"max_lines\":48}}" : "{\"t\":\"welcome\"}");
+    return ESP_OK;
 }
 esp_err_t esp_websocket_client_stop(esp_websocket_client_handle_t ws) { ws->connected=false; stops++; return ESP_OK; }
 esp_err_t esp_websocket_client_destroy(esp_websocket_client_handle_t ws) { free(ws); return ESP_OK; }
@@ -42,6 +63,9 @@ int esp_websocket_client_send_text(esp_websocket_client_handle_t ws,const char *
     cJSON *j=cJSON_Parse(text); assert(j);
     const char *type=cJSON_GetObjectItem(j,"t")->valuestring;
     if(!strcmp(type,"hello")) hellos++;
+    if(!strcmp(type,"log")) {
+        assert(logs<8); log_prev[logs]=cJSON_IsTrue(cJSON_GetObjectItem(j,"prev")); log_at[logs]=sdk_now; logs++;
+    }
     if(!strcmp(type,"link_code")) {
         codes++;
         assert(!strcmp(cJSON_GetObjectItem(j,"code")->valuestring,test_code));
@@ -93,6 +117,17 @@ static void tick(void) {
     if(scenario==0) {
         if(link_client_connected() && !stage) { strcpy(test_code,"JKLMNPQR"); stage++; }
         else if(codes) { assert(starts==1 && stops==0 && hellos==1); longjmp(stopped,1); }
+    } else if(scenario==5) {
+        /* the previous boot's lines first, then this boot's backlog, 2 s apart */
+        if(logs==2 && !stage) {
+            assert(log_prev[0] && !log_prev[1] && log_at[1]-log_at[0]>=2000000);
+            assert(sdk_sync_wall==1790000000000LL && sdk_sync_up<=sdk_now/1000);
+            stage=1; steps=0; cur_left=1; sdk_log_request=true;   /* a job ended: its lines go up */
+        } else if(stage==1 && logs==3) {
+            assert(!log_prev[2] && log_at[2]-log_at[1]>=2000000);
+            /* nothing new: no more frames */
+            stage=2; steps=0;
+        } else if(stage==2 && steps>60) { assert(logs==3 && s_prev_done && !s_log_due); longjmp(stopped,1); }
     } else if(scenario<=3) {
         if(scenario==3 && !stage) { atomic_store(&s_connected,false); stage++; atomic_store(&s_forget,true); }
         else if(link_client_connected() && !stage) {
@@ -125,6 +160,8 @@ static void run(unsigned which,unsigned code) {
     atomic_store(&s_forget,false); atomic_store(&s_reconnect,false); atomic_store(&s_close_code,0);
     starts=stops=hellos=codes=forgets=wipes=steps=stage=0;
     sdk_now=close_at=forget_at=0; scenario=which; injected_close=code; sdk_wait=tick;
+    logs=0; prev_left=which==5 ? 1 : 0; cur_left=which==5 ? 1 : 0;
+    s_prev_done=false; s_prev_first=true; s_log_last=0; s_log_cur=s_prev_cur=0; s_log_max=0;
     if(!setjmp(stopped)) link_task(NULL);
     sdk_wait=NULL;
 }
@@ -157,12 +194,16 @@ static void test_receive_bounds(void) {
 int main(void) {
     assert(link_client_init()==ESP_OK);
     run(0,0); run(1,0); run(2,0); run(3,0);
+    sdk_log_frame=fake_log_frame;
     run(4,4401); run(4,4400); run(4,4409); run(4,4410);
+    /* an older relay (welcome without `log`): never asked for a frame, nothing sent */
+    assert(logs==0 && log_calls==0);
+    run(5,0);
     test_receive_bounds();
     disconnect("test"); free(s_rxq); cJSON_Delete(sdk_sent);
     /* every disconnect ended the question, with the link already marked down (no event) */
     assert(ask_ticks>0 && ask_cancels>0 && !ask_cancels_connected);
     assert(welcomes>0);
     assert(!strcmp(error_code(LINK_CMD_REFUSED),"bad_url") && !strcmp(error_code(ESP_ERR_INVALID_STATE),"busy"));
-    puts("LINK CLIENT PASS: code update without reconnect, forget ack/timeout/offline, close codes, 5-minute auth retry, API status, welcome → self-update, refusal codes");
+    puts("LINK CLIENT PASS: code update without reconnect, forget ack/timeout/offline, close codes, 5-minute auth retry, API status, welcome → self-update, refusal codes, log uploads only for a relay that asks (prev boot first, backlog bound, job end, 2 s gap, time sync)");
 }

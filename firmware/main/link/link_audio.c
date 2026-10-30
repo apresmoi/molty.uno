@@ -357,6 +357,7 @@ static esp_err_t start(const cJSON *args, bool listen, cJSON **out)
     s_cued = cued; s_cue_next = 0;
     atomic_store(&s_end, false); atomic_store(&s_cancel, false); atomic_store(&s_stop, STOP_NONE);
     atomic_store(&s_chirp_cut, true);    /* a chirp still playing ends now: this job is next */
+    mole_diag_job_begin(job.job);        /* its lines carry the job (ended in link_audio_tick) */
     xQueueSend(s_jobs, &job, 0);
     *out = result;
     return ESP_OK;
@@ -431,4 +432,5 @@ void link_audio_tick(void)
         cJSON *j = link_say_done_frame(s_job);
         if (j) { link_send_json(j); cJSON_Delete(j); }
     }
+    mole_diag_job_end(s_job);   /* every end (done, failed, cancelled) passes here; the link uploads its lines */
 }

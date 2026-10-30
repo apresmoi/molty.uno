@@ -87,7 +87,7 @@ cJSON *link_identity_hello(void)
     cJSON_AddStringToObject(j, "fw", esp_app_get_description()->version);
     /* say / listen only where the board has a speaker / mic (the relay refuses those
      * jobs up front otherwise); board names the hardware for agents and support */
-    const char *caps[12]; int n = 0;
+    const char *caps[16]; int n = 0;
     caps[n++] = "fluid";
     if (molty_board_has(MOLTY_CAP_SPEAKER)) caps[n++] = "say";
     if (molty_board_has(MOLTY_CAP_SPEAKER)) caps[n++] = "say_cues";   /* say {cues:true}: word-timed text */
@@ -98,6 +98,7 @@ cJSON *link_identity_hello(void)
     caps[n++] = "show"; caps[n++] = "mood"; caps[n++] = "creature";
     if (molty_board_has(MOLTY_CAP_TOUCH)) caps[n++] = "ask";   /* answered by a tap */
     if (molty_board_has(MOLTY_CAP_TOUCH)) caps[n++] = "update";   /* self-update, confirmed by a tap */
+    caps[n++] = "log_upload";   /* sends its log lines up ({"t":"log"}) when the relay's welcome asks */
     cJSON_AddItemToObject(j, "caps", cJSON_CreateStringArray(caps, n));
     cJSON_AddStringToObject(j, "board", molty_board_id());
     cJSON_AddStringToObject(j, "link_code", s_code);

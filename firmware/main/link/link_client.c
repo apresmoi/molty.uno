@@ -18,6 +18,7 @@
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "mole_diag.h"
+#include "log_upload.h"
 #include "nvs.h"
 #include <stdlib.h>
 #include <stdio.h>
@@ -41,6 +42,53 @@ static uint8_t s_opcode;
 typedef struct { uint8_t *data; size_t len; uint8_t opcode; bool open; } rx_msg_t;
 
 bool link_client_connected(void) { return atomic_load(&s_connected); }
+
+/* ── activity log uploads (docs/AGENT-LINK.md "Activity log"; link task only) ──
+ * The relay's welcome says whether it takes {"t":"log"} frames (log.max_lines; an older
+ * relay sends no `log`: nothing is uploaded) and its wall clock (`now`: the time sync for
+ * the lines' uptime stamps). After each welcome: the previous boot's lines once per boot,
+ * then this boot's backlog since the last frame sent (at most 2 frames, newest); then new
+ * lines whenever a job ends. One frame per LOG_UPLOAD_GAP_MS at most. The relay dedupes by
+ * (boot, seq), so a frame lost with the socket is simply sent again. */
+static int s_log_max;                 /* welcome.log.max_lines; 0 = this relay takes no uploads */
+static uint32_t s_log_cur, s_prev_cur;
+static bool s_log_due, s_log_first, s_prev_done, s_prev_first = true;
+static int64_t s_log_last;
+
+static void log_welcome(const cJSON *j, int64_t now_us)
+{
+    const cJSON *wall = cJSON_GetObjectItemCaseSensitive(j, "now");
+    if (cJSON_IsNumber(wall) && wall->valuedouble > 0) mole_diag_link_sync((uint32_t)(now_us / 1000), (int64_t)wall->valuedouble);
+    const cJSON *max = cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(j, "log"), "max_lines");
+    s_log_max = !cJSON_IsNumber(max) || max->valuedouble < 1 ? 0
+              : max->valuedouble > LOG_UPLOAD_LINES_MAX ? LOG_UPLOAD_LINES_MAX : (int)max->valuedouble;
+    s_log_due = s_log_first = s_log_max > 0;
+}
+
+static void log_upload(int64_t now_us)
+{
+    if (mole_diag_log_take_request()) s_log_due = true;   /* a job ended */
+    if (!link_client_connected() || s_log_max <= 0 || now_us - s_log_last < LOG_UPLOAD_GAP_MS * 1000LL) return;
+    cJSON *f = NULL;
+    uint32_t *cur = NULL, save = 0;
+    bool *first = NULL;
+    if (!s_prev_done) {
+        cur = &s_prev_cur; save = *cur; first = &s_prev_first;
+        f = mole_diag_log_prev_frame(cur, s_log_max, s_prev_first ? 2 * s_log_max : 0);
+        s_prev_first = false;
+        if (!f) s_prev_done = true;
+    }
+    if (!f && s_log_due) {
+        cur = &s_log_cur; save = *cur; first = &s_log_first;
+        f = mole_diag_log_frame(cur, s_log_max, s_log_first ? 2 * s_log_max : 0);
+        s_log_first = false;
+        if (!f) s_log_due = false;
+    }
+    if (!f) return;
+    s_log_last = now_us;
+    if (link_send_json(f) != ESP_OK) { *cur = save; *first = true; atomic_store(&s_lost, true); }   /* again after the reconnect */
+    cJSON_Delete(f);
+}
 
 static esp_err_t send_data(const void *data, size_t len, bool binary)
 {
@@ -317,6 +365,7 @@ static void link_task(void *arg)
                         atomic_store(&s_connected, true); atomic_store(&s_auth, false);
                         mole_diag_event(false, "link.welcome after %ums", (unsigned)((now - started) / 1000));
                         self_update_welcomed();   /* a freshly updated image: valid now (update_core.h) */
+                        log_welcome(j, now);
                         backoff = 1; last_pong = now; last_ping = now;
                     } else if (!strcmp(t->valuestring, "pong")) last_pong = now;
                     else if (!strcmp(t->valuestring, "ping")) {
@@ -333,6 +382,7 @@ static void link_task(void *arg)
             }
             free(m.data);
         }
+        log_upload(esp_timer_get_time());
         if (link_client_connected() && now - last_ping >= 20000000) {
             cJSON *ping = cJSON_CreateObject();
             cJSON_AddStringToObject(ping, "t", "ping");

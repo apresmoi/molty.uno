@@ -577,6 +577,8 @@ static void test_say_cues(void) {
 int main(void) {
     assert(link_audio_init()==ESP_OK && link_pair_init()==ESP_OK);
     test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop(); test_listen_window(); test_say_cues(); test_chirp_sound(); test_ack();
+    /* activity log: every accepted job (done, failed, cancelled, refused frames) ended its tag */
+    assert(sdk_job_begins>0 && sdk_job_begins==sdk_job_ends);
     cJSON_Delete(sdk_sent); free(s_jobs); free(s_done); free(s_ring);
-    puts("LINK AUDIO/PAIR PASS: paced PCM, final playback drain, errors, cmd-time text/mood, explicit moods outlive jobs, pairing reasons, board caps, listening ring (+ ring_color), ask cancellation, listen_stop (turn_end; no_speech never acknowledged), listen window (30 s, unlimited, setting), say word cues follow playback, turn acknowledgement (chirp + thinking: which ends ack, opt-outs, setting, screen owners, cut by the next job)");
+    puts("LINK AUDIO/PAIR PASS: job tags begin/end on every path, paced PCM, final playback drain, errors, cmd-time text/mood, explicit moods outlive jobs, pairing reasons, board caps, listening ring (+ ring_color), ask cancellation, listen_stop (turn_end; no_speech never acknowledged), listen window (30 s, unlimited, setting), say word cues follow playback, turn acknowledgement (chirp + thinking: which ends ack, opt-outs, setting, screen owners, cut by the next job)");
 }

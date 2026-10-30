@@ -84,6 +84,7 @@ static void finish(const char *reason, bool screen)
     close_ask();
     mole_diag_event(false, "ask.%s job=%s", reason, s_ask.job);
     emit_answer(-1, reason);
+    mole_diag_job_end(s_ask.job);
 }
 
 void link_ask_cancel(void) { finish("cancelled", true); }
@@ -111,6 +112,7 @@ static esp_err_t open_question(const char *job, char label[LINK_ASK_MAX][LINK_AS
     atomic_store(&s_mailbox, 0);
     atomic_store(&s_open_seq, seq);
     atomic_store(&s_open_gen, s_ask.gen);
+    mole_diag_job_begin(job);   /* ended with the question (finish / an answer in link_ask_tick) */
     return ESP_OK;
 }
 
@@ -155,6 +157,7 @@ void link_ask_tick(void)
         close_ask();
         mole_diag_event(false, "ask.answer job=%s index=%d", s_ask.job, index);
         emit_answer(index, NULL);
+        mole_diag_job_end(s_ask.job);
         return;
     }
     if (esp_timer_get_time() >= s_ask.deadline) finish("timeout", true);
