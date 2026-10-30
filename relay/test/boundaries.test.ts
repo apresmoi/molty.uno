@@ -34,6 +34,7 @@ describe("hibernation rule", () => {
     expect(dobj).toMatch(/setWebSocketAutoResponse/);
     const cls = dobj.slice(dobj.indexOf("export class MoltyDevice"));
     const fields = [...cls.matchAll(/^ {2}(?!static )(?:private |readonly )*#?[A-Za-z_$][\w$]*\s*[:=]/gm)].map((m) => m[0].trim());
-    expect(fields).toEqual(["#room:"]);
+    // #releases: only in the `releases` singleton, a cache of storage-backed state (releases-host.ts).
+    expect(fields).toEqual(["#room:", "#releases:"]);
   });
 });

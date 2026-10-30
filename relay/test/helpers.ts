@@ -72,7 +72,7 @@ export class FakeVoice implements VoiceProvider {
   }
 }
 
-export function makeRoom(opts: { kv?: MemoryKV; host?: FakeHost; voice?: FakeVoice; timings?: Partial<RoomTimings> } & Partial<Pick<RoomDeps, "clock" | "scheduler" | "fetch" | "resolveHost" | "log">> = {}) {
+export function makeRoom(opts: { kv?: MemoryKV; host?: FakeHost; voice?: FakeVoice; timings?: Partial<RoomTimings> } & Partial<Pick<RoomDeps, "clock" | "scheduler" | "fetch" | "resolveHost" | "log" | "releases">> = {}) {
   const kv = opts.kv ?? new MemoryKV();
   const host = opts.host ?? new FakeHost();
   const voice = opts.voice ?? new FakeVoice();
@@ -87,6 +87,7 @@ export function makeRoom(opts: { kv?: MemoryKV; host?: FakeHost; voice?: FakeVoi
     fetch: opts.fetch,
     resolveHost: opts.resolveHost,
     log: opts.log,
+    releases: opts.releases,
   });
   host.onClose = (s) => room.socketClose(s);
   return { room, kv, host, voice };

@@ -20,8 +20,15 @@
 // carries a one-time `notice` (written atomically onto the token, never
 // resurrecting a revoked one). Once per room and version, a `skill.updated`
 // event is appended to the inbox when an older agent exists (`skillev`).
+//
+// Firmware updates (core/updates.ts, core/releases.ts): the last hello's fw /
+// board / caps are kept (`devinfo`) so molty_updates answers while offline. A
+// token gets one `fw_notice` per newer release (`fw_seen`). molty_update is a
+// storage-driven job (`upd`): device `update` events move its phase, and the
+// device's next hello settles it (new fw = done), so it survives eviction and
+// the device's own reboot.
 
-import { type AgentApi, type EventsRequest, type JobView, type Outcome, type PairRequest, type PairResult, TERMINAL, type WebhookRequest } from "./api.js";
+import { type AgentApi, type EventsRequest, type FirmwareNotice, type JobView, type Outcome, type PairRequest, type PairResult, TERMINAL, type WebhookRequest } from "./api.js";
 import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
 import { type AskArgs, CommandError, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk } from "./commands.js";
 import { PcmFeed, estimateSpeechMs, splitSpeech, synthesize } from "./speech.js";
@@ -44,7 +51,9 @@ import {
 } from "./protocol.js";
 import { type Clock, type KV, sleep } from "./store.js";
 import { AGENT_EVENT_TYPES, type AgentEvent, INBOX_LIMITS, SAMPLE_EVENTS, SKILL_EVENT, agentEventData, eventId } from "./events.js";
-import { SKILL_PATH, SKILL_VERSION, type SkillNotice, skillNotice } from "./version.js";
+import { FEATURES, SKILL_PATH, SKILL_VERSION, type SkillNotice, WHATS_NEW, compareVersions, skillNotice } from "./version.js";
+import type { ReleaseLookup, ReleaseSource } from "./releases.js";
+import { type DeviceFacts, type FirmwareBlock, CONSOLE_HINT, firmwareBlock, howToUpdate, installable, tooOld, updateActions } from "./updates.js";
 import {
   type DeliveryError,
   type GuardResult,
@@ -107,6 +116,10 @@ export interface RoomTimings {
   talkBudgetMs: number;
   /** ask: after the device's own timeout_ms, how long the relay waits for its `answer` before resolving `timeout` itself. */
   askGraceMs: number;
+  /** update: how long the on-screen "update?" waits for a tap (sent as timeout_ms); the relay adds askGraceMs. */
+  updateConfirmMs: number;
+  /** update: from the human's accept until the device is back on the new firmware. */
+  updateMs: number;
 }
 
 export const DEFAULT_TIMINGS: RoomTimings = {
@@ -123,6 +136,8 @@ export const DEFAULT_TIMINGS: RoomTimings = {
   thinkHoldS: THINK_HOLD_S,
   talkBudgetMs: TALK_BUDGET_MS,
   askGraceMs: 5000,
+  updateConfirmMs: 60000,
+  updateMs: 5 * 60 * 1000,
 };
 
 /** say: a first frame shorter than a full chunk waits at most this long for more audio. */
@@ -145,6 +160,8 @@ export interface RoomDeps {
   fetch?: (req: Request) => Promise<Response>;
   /** Resolves a webhook host to its addresses for the SSRF guard; absent = literal checks only. */
   resolveHost?: Resolver;
+  /** Latest firmware release (core/releases.ts); absent = always "unavailable". */
+  releases?: ReleaseSource;
 }
 
 interface DeviceRecord {
@@ -163,6 +180,26 @@ interface TokenRecord {
   wh_rev?: number;
   /** Last skill version this agent was told about (absent = paired before versions: older than any). */
   skill_seen?: number;
+  /** Newest firmware release this agent was told about (fw_notice / molty_updates). */
+  fw_seen?: string;
+}
+
+/** The last hello's identity, kept for while the device is offline. */
+interface DevInfo {
+  fw: string | null;
+  board: string | null;
+  caps: string[] | null;
+  at: number;
+}
+
+/** The one molty_update in flight (storage-driven: survives eviction and the device's reboot). */
+interface UpdateRecord {
+  job: string;
+  from: string;
+  to: string;
+  /** confirm (on-screen question) | accepted | downloading | flashing | rebooting */
+  phase: string;
+  deadline: number;
 }
 
 type WebhookWrite = "ok" | "gone" | "conflict";
@@ -214,7 +251,7 @@ interface ListenBuffer {
   moodRev: number;
 }
 
-type JobKind = "say" | "listen" | "talk" | "ask";
+type JobKind = "say" | "listen" | "talk" | "ask" | "update";
 
 /** How an ask ended: a tap (index + label) or no answer (reason). */
 type AskAnswer = { index: number; label: string; reason?: undefined } | { index: null; label: null; reason: "timeout" | "cancelled" | "offline" };
@@ -251,12 +288,23 @@ const K = {
   skillEv: "skillev",
   /** Public origin of this relay (from the device upgrade request), for absolute URLs in events. */
   origin: "origin",
+  devinfo: "devinfo",
+  upd: "upd",
 };
 
 
 
-const fail = (error: string, message?: string): { ok: false; error: string; message?: string } =>
-  message === undefined ? { ok: false, error } : { ok: false, error, message };
+const fail = (error: string, message?: string, details?: JsonObject): { ok: false; error: string; message?: string; details?: JsonObject } => ({
+  ok: false,
+  error,
+  ...(message === undefined ? {} : { message }),
+  ...(details ? { details } : {}),
+});
+
+/** Update phases a device reports between accept and its reboot. */
+const UPDATE_PHASES = ["accepted", "downloading", "flashing", "rebooting"];
+
+const NO_RELEASES: ReleaseSource = { latest: async () => ({ release: null, state: "unavailable", checked_at: null }) };
 
 export class DeviceRoom implements AgentApi {
   readonly deviceId: string;
@@ -269,6 +317,7 @@ export class DeviceRoom implements AgentApi {
   private readonly scheduler: RoomDeps["scheduler"];
   private readonly fetcher: NonNullable<RoomDeps["fetch"]>;
   private readonly resolveHost: RoomDeps["resolveHost"];
+  private readonly releases: ReleaseSource;
 
   // ---- in-flight work only (see header comment) ----
   private readonly pendingCmds = new Map<string, PendingCmd>();
@@ -292,6 +341,7 @@ export class DeviceRoom implements AgentApi {
   /** Cache of "skillev >= SKILL_VERSION" (KV stays authoritative). */
   private skillAnnounced = false;
   private cmdSeq = 0;
+  private updTimer: unknown;
 
   constructor(deps: RoomDeps) {
     this.deviceId = deps.deviceId;
@@ -304,6 +354,7 @@ export class DeviceRoom implements AgentApi {
     this.scheduler = deps.scheduler;
     this.fetcher = deps.fetch ?? ((req) => globalThis.fetch(req));
     this.resolveHost = deps.resolveHost;
+    this.releases = deps.releases ?? NO_RELEASES;
   }
 
   // =====================================================================
@@ -406,7 +457,10 @@ export class DeviceRoom implements AgentApi {
       this.dropInFlight("device_offline");
     }
     if (hello.link_code) await this.kv.put(K.link, { code: hello.link_code, at: this.clock.now() });
+    await this.kv.put<DevInfo>(K.devinfo, { fw: hello.fw ?? null, board: hello.board ?? null, caps: hello.caps ?? null, at: this.clock.now() });
     sock.sendText(JSON.stringify({ t: "welcome" }));
+    // Back from an update's reboot (or a reconnect during one): settle it by the version it runs.
+    await this.settleUpdate(hello.fw ?? null);
     // After a deploy the device reconnects: tell push-mode agents the skill changed.
     await this.announceSkill();
   }
@@ -438,6 +492,7 @@ export class DeviceRoom implements AgentApi {
     if (frame.name === "say.done" && typeof data.job === "string") this.sayDone.get(data.job)?.();
     if (frame.name === "link_code") await this.onLinkCode(data.link_code);
     if (frame.name === "answer") return this.onAnswer(data); // its inbox event is appended when the ask job ends
+    if (frame.name === "update") return this.onUpdateEvent(data); // relay-internal: drives the molty_update job
     const clean = agentEventData(frame.name, data);
     if (clean) await this.appendEvent(frame.name, clean);
   }
@@ -474,7 +529,7 @@ export class DeviceRoom implements AgentApi {
     for (const prefix of ["tok:", "pair:", "job:", "ev:", "cur:", "whq:"]) {
       for (const key of (await this.kv.list(prefix)).keys()) await this.kv.delete(key);
     }
-    for (const key of [K.device, K.link, K.pairCurrent, K.evSeq, K.evRate, K.skillEv, K.origin]) await this.kv.delete(key);
+    for (const key of [K.device, K.link, K.pairCurrent, K.evSeq, K.evRate, K.skillEv, K.origin, K.devinfo, K.upd]) await this.kv.delete(key);
     this.log("device forgotten", { device: this.deviceId });
     sock.sendText(JSON.stringify({ t: "forgotten" }));
     sock.close(CLOSE_FORGOTTEN, "forgotten");
@@ -567,6 +622,7 @@ export class DeviceRoom implements AgentApi {
     const meta = sock?.getMeta();
     const events: JsonObject = {};
     for (const [k, v] of this.lastEvents) events[k] = { data: v.data as JsonObject, at: v.at };
+    const firmware = firmwareBlock(await this.facts(), await this.releases.latest("wait"));
     return {
       ok: true,
       result: {
@@ -581,6 +637,7 @@ export class DeviceRoom implements AgentApi {
           voice: this.voice.name,
           events,
           webhook: agent.webhook ? (redactWebhook(agent.webhook) as JsonObject) : null,
+          firmware: firmware as unknown as JsonObject,
         },
       },
     };
@@ -732,9 +789,15 @@ export class DeviceRoom implements AgentApi {
     }
     const live = this.liveSocket();
     if (!live) return fail("device_offline");
-    // Firmware lists `ask` in caps only on boards with a touch screen. No caps = older firmware.
+    // Firmware lists `ask` in caps only on boards with a touch screen. Caps say whether it can;
+    // the version says why not: older firmware is firmware_too_old (an update unlocks it),
+    // firmware that has ask but leaves it out is a board without touch (unsupported).
     const caps = live.getMeta()?.caps;
-    if (caps && !caps.includes("ask")) return fail("unsupported", "this device has no touch screen for answers (or its firmware predates ask): use molty_talk instead");
+    if (!caps?.includes(FEATURES.ask.cap)) {
+      const old = tooOld("ask", await this.facts(), await this.releases.latest("wait"));
+      if (old) return fail("firmware_too_old", `molty_ask needs Molty firmware ${old.needed} or newer; this Molty runs ${old.current}`, old);
+      if (caps) return fail("unsupported", "this device has no touch screen for answers: use molty_talk instead");
+    }
     if (caps && args.say !== undefined && !caps.includes("say")) return fail("unsupported", "this device has no speaker: ask without say, or show the question first");
     // Only the spoken part needs the speaker; waiting for the tap holds no audio lock.
     const started = await this.startJob("ask", args as unknown as JsonObject, args.say !== undefined);
@@ -751,13 +814,193 @@ export class DeviceRoom implements AgentApi {
     });
   }
 
+  // ---------------- updates ----------------
+
+  async updates(token: string): Promise<Outcome> {
+    const a = await this.auth(token);
+    if (!a) return fail("unauthorized");
+    // Reporting the skill counts as telling it: mark it seen (atomically, never resurrecting a revoked token).
+    const yours = await this.kv.update<TokenRecord, number | undefined>(K.token(a.hash), (cur) =>
+      cur ? { next: { ...cur, skill_seen: SKILL_VERSION }, result: cur.skill_seen ?? 1 } : { result: undefined },
+    );
+    if (yours === undefined) return fail("unauthorized");
+    const origin = (await this.kv.get<string>(K.origin)) ?? "";
+    const skill = {
+      yours,
+      latest: SKILL_VERSION,
+      whats_new: WHATS_NEW.filter((e) => e.version > yours).map((e) => ({ ...e })),
+      url: `${origin}${SKILL_PATH}`,
+    };
+    const fw = firmwareBlock(await this.facts(), await this.releases.latest("wait"));
+    // Likewise the firmware release it reports.
+    if (fw.update_available && fw.latest) {
+      const latest = fw.latest;
+      await this.kv.update<TokenRecord, void>(K.token(a.hash), (cur) =>
+        cur && !(cur.fw_seen && (compareVersions(cur.fw_seen, latest) ?? -1) >= 0) ? { next: { ...cur, fw_seen: latest }, result: undefined } : { result: undefined },
+      );
+    }
+    const result = { skill, firmware: fw, actions: updateActions(skill, fw) };
+    // Re-read the token so the ride-along does not repeat what this result already says.
+    const rec = (await this.kv.get<TokenRecord>(K.token(a.hash))) ?? a.rec;
+    return this.ride({ rec, hash: a.hash }, { ok: true, result: result as unknown as JsonObject });
+  }
+
+  async update(token: string, req: unknown): Promise<Outcome> {
+    const t0 = this.clock.now();
+    const a = await this.auth(token);
+    if (!a) return fail("unauthorized");
+    // No arguments: what gets installed is decided here, from the configured repo's latest release.
+    if (req !== undefined && req !== null && !(isRecord(req) && Object.keys(req).length === 0)) {
+      return fail("invalid_args", "molty_update takes no arguments: it installs the latest official release");
+    }
+    const live = this.liveSocket();
+    if (!live) return fail("device_offline");
+    const d = await this.facts();
+    const lookup = await this.releases.latest("wait");
+    const fw = firmwareBlock(d, lookup);
+    if (!fw.can_self_update) {
+      return fail("unsupported", `this firmware (${d.fw ?? "unknown"}) can't update itself (no \`update\` in its caps)`, {
+        current: d.fw,
+        latest: fw.latest,
+        how: `tell your human to ${CONSOLE_HINT}, which shows the latest firmware and installs it`,
+      });
+    }
+    const busy = await this.kv.get<UpdateRecord>(K.upd);
+    if (busy) {
+      const v = await this.runJob(busy.job, 0);
+      if (v.ok && !TERMINAL.includes(v.result.status)) return this.ride(a, { ok: true, result: this.pendingUpdate(v.result) });
+    }
+    if (lookup.state === "unavailable") return fail("release_unavailable", "couldn't reach the release list just now; try again in a minute");
+    if (fw.status === "unknown") return fail("unknown_version", `Molty runs ${d.fw ?? "an unknown firmware"}, which can't be compared with releases: update it by hand (${CONSOLE_HINT})`);
+    if (fw.status === "current" || fw.status === "no_release") {
+      return this.ride(a, { ok: true, result: { status: "up_to_date", current: fw.current, latest: fw.latest } });
+    }
+    if (fw.status === "no_build_for_board") return fail("no_build", `release ${fw.latest} has no firmware image for this board (${fw.board})`);
+    const asset = installable(lookup.release, d.board);
+    if (!asset) return fail("no_checksum", `release ${fw.latest} publishes no sha256 for this board's image, so Molty can't verify it: update by hand (${CONSOLE_HINT})`);
+    const args: JsonObject = { version: fw.latest!, url: asset.url, sha256: asset.sha256!, size: asset.size, from: d.fw! };
+    const started = await this.startJob("update", args, false);
+    if (!started.ok) return started;
+    const job = started.result.job as string;
+    const out = await this.runJob(job, Math.max(0, this.t.talkBudgetMs - (this.clock.now() - t0)));
+    if (!out.ok) return out;
+    const v = out.result;
+    if (v.status === "failed") return fail(v.error ?? "failed", typeof v.detail === "string" ? v.detail : `update job ${job} failed`);
+    if (v.status === "done") return this.ride(a, { ok: true, result: { ...(v.result ?? {}), job, status: "done" } });
+    return this.ride(a, { ok: true, result: this.pendingUpdate(v) });
+  }
+
+  private pendingUpdate(v: JobView): JsonObject {
+    return {
+      job: v.job,
+      status: "pending",
+      state: v.status,
+      phase: (v.phase as string | undefined) ?? "confirm",
+      hint:
+        v.phase === "confirm" || v.phase === undefined
+          ? "Molty is asking your human on its screen: call molty_wait {job} (REST: GET /v1/jobs/<job>?wait_s=8) until it is done"
+          : "Molty is updating and will restart (about a minute): keep calling molty_wait {job} until it is done",
+    };
+  }
+
+  /** Sends `cmd update` and arms the deadline; the rest is driven by device events and the next hello. */
+  private async runUpdate(id: string, args: JsonObject) {
+    const now = this.clock.now();
+    await this.setJob(id, { status: "running", phase: "confirm" });
+    await this.kv.put<UpdateRecord>(K.upd, { job: id, from: args.from as string, to: args.version as string, phase: "confirm", deadline: now + this.t.updateConfirmMs + this.t.askGraceMs });
+    this.armUpdateTimer(this.t.updateConfirmMs + this.t.askGraceMs);
+    const { from: _from, ...wire } = args;
+    const res = await this.sendCmd("update", { job: id, ...wire, timeout_ms: this.t.updateConfirmMs });
+    if (!res.ok) await this.endUpdate(id, { status: "failed", error: res.error });
+  }
+
+  private armUpdateTimer(ms: number) {
+    if (this.updTimer !== undefined) this.clock.clearTimeout(this.updTimer);
+    this.updTimer = this.clock.setTimeout(() => {
+      this.updTimer = undefined;
+      void this.checkUpdateDeadline();
+    }, Math.max(0, ms));
+  }
+
+  /** Fails the update job once its deadline passed (also checked lazily, after an eviction). */
+  private async checkUpdateDeadline(): Promise<void> {
+    const u = await this.kv.get<UpdateRecord>(K.upd);
+    if (!u || this.clock.now() < u.deadline) return;
+    const detail =
+      u.phase === "confirm"
+        ? "nobody answered Molty's update question"
+        : `Molty did not come back on firmware ${u.to} in time (last step: ${u.phase})`;
+    await this.endUpdate(u.job, { status: "failed", error: "update_timeout", detail });
+  }
+
+  private async endUpdate(job: string, patch: Partial<JobRecord> & { status: "done" | "failed" }) {
+    await this.kv.update<UpdateRecord, void>(K.upd, (cur) => (cur && cur.job === job ? { next: null, result: undefined } : { result: undefined }));
+    if (this.updTimer !== undefined) {
+      this.clock.clearTimeout(this.updTimer);
+      this.updTimer = undefined;
+    }
+    await this.finishJob(job, patch);
+  }
+
+  /** Device `update {job, state, reason?, error?}` for the update in flight. */
+  private async onUpdateEvent(data: Record<string, unknown>) {
+    const u = await this.kv.get<UpdateRecord>(K.upd);
+    if (!u || data.job !== u.job || typeof data.state !== "string") return;
+    const state = data.state;
+    const short = (v: unknown) => (typeof v === "string" ? v.replace(/[^\x20-\x7e]/g, "").slice(0, 80) : undefined);
+    if (state === "declined") {
+      const reason = data.reason === "timeout" || data.reason === "cancelled" ? data.reason : undefined;
+      return this.endUpdate(u.job, { status: "done", result: { outcome: "declined", ...(reason ? { reason } : {}), current: u.from, latest: u.to } });
+    }
+    if (state === "failed") {
+      const err = short(data.error);
+      return this.endUpdate(u.job, { status: "failed", error: "update_failed", detail: `Molty could not install ${u.to}${err ? `: ${err}` : ""}; it still runs ${u.from}` });
+    }
+    if (!UPDATE_PHASES.includes(state)) return;
+    // From the accept on, the device has updateMs to come back on the new firmware.
+    const deadline = u.phase === "confirm" ? this.clock.now() + this.t.updateMs : u.deadline;
+    if (u.phase === "confirm") this.armUpdateTimer(this.t.updateMs);
+    await this.kv.put<UpdateRecord>(K.upd, { ...u, phase: state, deadline });
+    await this.setJob(u.job, { phase: state });
+    this.notify(this.jobWaiters, u.job);
+  }
+
+  /**
+   * On every hello: the new firmware = done. The old one after `rebooting` = the new
+   * image did not stick (rolled back). Any other phase: a reconnect mid-download, keep
+   * waiting for the deadline.
+   */
+  private async settleUpdate(fw: string | null) {
+    const u = await this.kv.get<UpdateRecord>(K.upd);
+    if (!u) return;
+    if (fw !== null && compareVersions(fw, u.to) === 0) {
+      return this.endUpdate(u.job, { status: "done", result: { outcome: "updated", from: u.from, to: u.to } });
+    }
+    if (u.phase === "rebooting") {
+      return this.endUpdate(u.job, { status: "failed", error: "rolled_back", detail: `Molty restarted but came back on ${fw ?? "an unknown firmware"}, not ${u.to}: the update did not stick` });
+    }
+    if (this.clock.now() >= u.deadline) return this.checkUpdateDeadline();
+    this.armUpdateTimer(u.deadline - this.clock.now());
+  }
+
   private async runJob(jobId: string, waitMs: number): Promise<Outcome<JobView>> {
     if (typeof jobId !== "string" || !jobId.startsWith(`${this.deviceId}.j_`)) return fail("not_found");
     const deadline = this.clock.now() + Math.max(0, Math.min(waitMs, JOB_WAIT_CAP_MS));
     for (;;) {
       const rec = await this.kv.get<JobRecord>(K.job(jobId));
       if (!rec) return fail("not_found");
-      if (!TERMINAL.includes(rec.status) && !this.tasks.has(jobId)) {
+      if (rec.kind === "update" && !TERMINAL.includes(rec.status)) {
+        // Storage-driven (no in-memory task to lose): only its deadline ends it here.
+        const u = await this.kv.get<UpdateRecord>(K.upd);
+        if ((!u || u.job !== jobId) && !this.tasks.has(jobId)) {
+          await this.finishJob(jobId, { status: "failed", error: "interrupted" });
+          continue;
+        }
+        if (u && u.job === jobId && this.clock.now() >= u.deadline) {
+          await this.checkUpdateDeadline();
+          continue;
+        }
+      } else if (!TERMINAL.includes(rec.status) && !this.tasks.has(jobId)) {
         await this.finishJob(jobId, { status: "failed", error: "interrupted" });
         continue;
       }
@@ -783,7 +1026,9 @@ export class DeviceRoom implements AgentApi {
           ? this.runListen(id, args, now)
           : kind === "ask"
             ? this.runAsk(id, args as unknown as AskArgs, now)
-            : this.runTalk(id, args as unknown as TalkArgs, now);
+            : kind === "update"
+              ? this.runUpdate(id, args)
+              : this.runTalk(id, args as unknown as TalkArgs, now);
     run
       .catch((e: unknown) => this.finishJob(id, { status: "failed", error: errorCode(e) }))
       .finally(() => {
@@ -1228,11 +1473,39 @@ export class DeviceRoom implements AgentApi {
     return { ...out, inbox: { events: r.events, more: r.more, now: this.clock.now() } };
   }
 
-  /** Everything that rides along on a successful authenticated outcome: unread events, then the skill notice. */
+  /** Everything that rides along on a successful authenticated outcome: unread events, then the skill and firmware notices. */
   private async ride<T>(a: { rec: TokenRecord; hash: string }, out: Outcome<T>): Promise<Outcome<T>> {
     if (!out.ok) return out;
     await this.announceSkill();
-    return this.withNotice(a, await this.withInbox(a.hash, out));
+    return this.withFwNotice(a, await this.withNotice(a, await this.withInbox(a.hash, out)));
+  }
+
+  /** What the relay knows about the device: the live socket's hello, else the last one stored. */
+  private async facts(): Promise<DeviceFacts> {
+    const meta = this.liveSocket()?.getMeta();
+    if (meta) return { fw: meta.fw ?? null, board: meta.board ?? null, caps: meta.caps ?? null, online: true };
+    const d = await this.kv.get<DevInfo>(K.devinfo);
+    return { fw: d?.fw ?? null, board: d?.board ?? null, caps: d?.caps ?? null, online: false };
+  }
+
+  /**
+   * One-time "newer firmware released" notice, same rules as the skill notice (success
+   * only, marked seen atomically on the current token record), once per token per
+   * release. Never waits on GitHub: it uses whatever release answer is cached.
+   */
+  private async withFwNotice<T>(a: { rec: TokenRecord; hash: string }, out: Outcome<T>): Promise<Outcome<T>> {
+    if (!out.ok) return out;
+    const fw = firmwareBlock(await this.facts(), await this.releases.latest("cached"));
+    if (!fw.update_available || !fw.latest || !fw.current || !fw.board) return out;
+    const latest = fw.latest;
+    if (a.rec.fw_seen && (compareVersions(a.rec.fw_seen, latest) ?? -1) >= 0) return out;
+    const won = await this.kv.update<TokenRecord, boolean>(K.token(a.hash), (cur) => {
+      if (!cur || (cur.fw_seen && (compareVersions(cur.fw_seen, latest) ?? -1) >= 0)) return { result: false };
+      return { next: { ...cur, fw_seen: latest }, result: true };
+    });
+    if (!won) return out;
+    const fw_notice: FirmwareNotice = { current: fw.current, latest, board: fw.board, notes_url: fw.notes_url ?? "", can_self_update: fw.can_self_update, how: howToUpdate(fw, latest) };
+    return { ...out, fw_notice };
   }
 
   /**
@@ -1298,7 +1571,7 @@ export class DeviceRoom implements AgentApi {
         if (r.events.length > 0 || remaining <= 0 || req.signal?.aborted) {
           if (req.signal?.aborted) return fail("cancelled"); // nobody is listening: hand over nothing
           await this.advance(a.hash, r.cursor, r.next);
-          return this.withNotice(a, { ok: true, result: { events: r.events as unknown as JsonObject[], next: eventId(r.next), more: r.more } });
+          return this.withFwNotice(a, await this.withNotice(a, { ok: true, result: { events: r.events as unknown as JsonObject[], next: eventId(r.next), more: r.more } }));
         }
         await this.waitOn(this.inboxWaiters, "inbox", remaining, req.signal);
       }
@@ -1520,6 +1793,8 @@ function viewOf(rec: JobRecord): JobView {
   const view: JobView = { job: rec.job, kind: rec.kind, status: rec.status };
   if (rec.result) view.result = rec.result;
   if (rec.error) view.error = rec.error;
+  if (typeof rec.phase === "string") view.phase = rec.phase;
+  if (typeof rec.detail === "string") view.detail = rec.detail;
   return view;
 }
 

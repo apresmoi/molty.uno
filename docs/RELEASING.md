@@ -47,6 +47,15 @@ check` (run by CI's hygiene job) fails when they drift.
 | `LICENSE`, `THIRD_PARTY_NOTICES.md`, `LICENSE-Apache-2.0.txt` | Licences that must accompany the firmware binaries (ESP-IDF is Apache-2.0). |
 | `SHA256SUMS` | Checksums of everything above: `sha256sum -c SHA256SUMS`. |
 
+The asset names and `SHA256SUMS` are a contract with the relay's update check
+([AGENT-LINK.md "Firmware updates"](AGENT-LINK.md#firmware-updates)): it reads the latest
+non-prerelease GitHub Release of `RELEASES_REPO`, takes `molty-X.Y.Z-<board>-ota.bin` per board
+(`<board>` = the name the device reports in its hello) and that file's line in `SHA256SUMS`,
+and hands exactly that URL + sha256 to a device that updates itself. Renaming an asset, or
+dropping `SHA256SUMS`, makes `molty_update` refuse (`no_build` / `no_checksum`). Agents and the
+console learn about a release within about an hour of publishing it. A `-suffix` pre-release
+is not offered unless the relay sets `RELEASES_PRERELEASE=true`.
+
 ## Flash a release
 
 **First flash, or after a partition-table change: the factory image.** It covers the
@@ -86,6 +95,12 @@ It runs after a release too when the repository variable `DEPLOY_RELAY_ON_RELEAS
 | `CLOUDFLARE_ACCOUNT_ID` | secret | the Cloudflare account that owns the worker |
 | `RELAY_URL` | variable (optional) | public relay origin; the deploy then waits for `/v1/health` to report the new version |
 | `DEPLOY_RELAY_ON_RELEASE` | variable (optional) | `true` to deploy the relay after every release |
+
+The relay's own settings for the update check live in `relay/wrangler.jsonc`: `RELEASES_REPO`
+(var, the repository whose Releases are Molty's), `RELEASES_PRERELEASE` (var, optional) and the
+`RELEASES_RATE` rate limit on the public `GET /v1/releases/latest`. An optional worker secret
+`GITHUB_TOKEN` (`wrangler secret put GITHUB_TOKEN`, a token with no scopes is enough for a public
+repo) raises GitHub's API rate limit; without it the relay still works (it asks about once an hour).
 
 Store the secrets as repository secrets or on the `relay` environment (where you can also
 require an approval). No account id is committed: `relay/wrangler.jsonc` has none.

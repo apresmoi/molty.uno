@@ -21,6 +21,9 @@ relay/
 │  ├─ core/            pure TS, no Cloudflare imports (enforced by test/boundaries.test.ts)
 │  │  ├─ room.ts       DeviceRoom: device auth, pairing, tokens, routing, say/listen jobs, event inbox, webhook delivery
 │  │  ├─ events.ts     agent-visible events: allow-list + shapes, limits, one-line summaries
+│  │  ├─ releases.ts   latest GitHub release: parse, per-board OTA asset + sha256, hourly cache, stale on error
+│  │  ├─ updates.ts    "is Molty up to date": firmware block, firmware_too_old, plain-language actions
+│  │  ├─ version.ts    product version, skill WHATS_NEW, FEATURES (feature -> minimum firmware)
 │  │  ├─ webhook.ts    webhook spec validation, templates, HMAC signing, SSRF guard, redaction
 │  │  ├─ api.ts        AgentApi / RelayBackend: the only thing surfaces see
 │  │  ├─ commands.ts   agent command validation, shared by every surface
@@ -29,10 +32,11 @@ relay/
 │  │  ├─ crypto.ts     Web Crypto helpers, codes, base64
 │  │  ├─ store.ts      KV + Clock seams (+ in-memory versions)
 │  │  └─ waitlist.ts   waitlist validation, WaitlistStore seam, rate-limit rule
-│  ├─ surfaces/        Fetch-API only: mcp.ts (Streamable HTTP), rest.ts, waitlist.ts
+│  ├─ surfaces/        Fetch-API only: mcp.ts (Streamable HTTP), rest.ts, releases.ts (public latest release), waitlist.ts
 │  ├─ voice/           VoiceProvider + workers-ai.ts, openai.ts, none.ts, index.ts (selection)
 │  ├─ device-object.ts Cloudflare host: DO + hibernatable WebSockets + storage adapter
 │  ├─ waitlist-host.ts Cloudflare host: D1 WaitlistStore + Turnstile check
+│  ├─ releases-host.ts Cloudflare host: the one `releases` DO instance that caches GitHub for all devices
 │  └─ worker.ts        Cloudflare host: routing + DO-backed RelayBackend
 ├─ migrations/         D1 schema for the waitlist (wrangler d1 migrations)
 ├─ test/               vitest unit tests
@@ -184,8 +188,11 @@ npx wrangler tail molty-relay
 ```
 
 1. This creates a Worker named `molty-relay` (DO class `MoltyDevice`, migration `v1`) on your Cloudflare account. Point devices at it with the console's relay setting (or build the firmware with your URL as `CONFIG_MOLTY_DEFAULT_RELAY`, see docs/AGENT-LINK.md).
-2. The `OPENAI_API_KEY` secret is optional. Set it only to use `--var VOICE_PROVIDER:openai`, or set `VOICE_PROVIDER` to `openai` under `vars` in `wrangler.jsonc`.
-3. Smoke-test after deploy:
+2. Firmware updates read the GitHub Releases of `RELEASES_REPO` (`wrangler.jsonc` var). Optional
+   secret `GITHUB_TOKEN` raises GitHub's rate limit (`npx wrangler secret put GITHUB_TOKEN`); see
+   docs/AGENT-LINK.md "Firmware updates".
+3. The `OPENAI_API_KEY` secret is optional. Set it only to use `--var VOICE_PROVIDER:openai`, or set `VOICE_PROVIDER` to `openai` under `vars` in `wrangler.jsonc`.
+4. Smoke-test after deploy:
    - Pair a fake device against `wss://molty-relay.<subdomain>.workers.dev`.
    - Call `molty_say` to confirm real Aura TTS. This is the first point where the `@cf/deepgram/aura-2-en` linear16/wav output path is exercised for real.
    - Wait more than 30 s idle, then send a command to confirm hibernation survival. `wrangler dev` never evicts, so only a deployed Worker can prove it.

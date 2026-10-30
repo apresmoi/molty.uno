@@ -14,16 +14,83 @@ export function healthResponse(): Response {
   });
 }
 
+// ---- product versions (VERSION scheme: X.Y.Z[-pre]) ----
+
+interface Semver {
+  core: [number, number, number];
+  pre: string[];
+}
+
+/** "1.2.3", "v1.2.3", "1.2.3-rc.1" (build metadata ignored); undefined for anything else ("dev", "test-fw"). */
+export function parseVersion(v: unknown): Semver | undefined {
+  if (typeof v !== "string") return undefined;
+  const m = /^v?(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z.-]+)?$/.exec(v.trim());
+  if (!m) return undefined;
+  return { core: [Number(m[1]), Number(m[2]), Number(m[3])], pre: m[4] ? m[4].split(".") : [] };
+}
+
+/** Semver precedence: <0, 0, >0; undefined when either side is not a version. */
+export function compareVersions(a: unknown, b: unknown): number | undefined {
+  const x = parseVersion(a);
+  const y = parseVersion(b);
+  if (!x || !y) return undefined;
+  for (let i = 0; i < 3; i++) if (x.core[i] !== y.core[i]) return x.core[i] - y.core[i];
+  if (!x.pre.length || !y.pre.length) return y.pre.length - x.pre.length; // a release outranks its prereleases
+  for (let i = 0; i < Math.max(x.pre.length, y.pre.length); i++) {
+    const p = x.pre[i];
+    const q = y.pre[i];
+    if (p === undefined) return -1;
+    if (q === undefined) return 1;
+    if (p === q) continue;
+    const pn = /^\d+$/.test(p);
+    const qn = /^\d+$/.test(q);
+    if (pn && qn) return Number(p) - Number(q);
+    if (pn !== qn) return pn ? -1 : 1;
+    return p < q ? -1 : 1;
+  }
+  return 0;
+}
+
+// ---- device features that need a firmware version ----
+// The ONE place a feature's minimum firmware is stated. `cap` is what the device
+// advertises in hello.caps when it can do it: caps stay the truth for "can this
+// device do X"; min_fw only explains why not (firmware_too_old vs unsupported).
+
+/** The firmware release that first ships the device side of ask + self-update. */
+export const NEXT_FW = "0.2.0";
+
+export interface Feature {
+  /** Agent-facing tool. */
+  tool: string;
+  /** Capability the device lists in hello.caps once its firmware (and board) can do it. */
+  cap: string;
+  min_fw: string;
+  /** Short plain words for the human. */
+  what: string;
+}
+
+export const FEATURES = {
+  ask: { tool: "molty_ask", cap: "ask", min_fw: NEXT_FW, what: "questions answered with a tap" },
+  update: { tool: "molty_update", cap: "update", min_fw: NEXT_FW, what: "Molty updating its own firmware" },
+} as const satisfies Record<string, Feature>;
+
+export type FeatureId = keyof typeof FEATURES;
+
 // ---- agent skill version (what /skill.md teaches) ----
 // Single source of truth: bump by appending to WHATS_NEW. skill.md's header, the
 // MCP instructions/serverInfo and the one-time "skill_update" ride-along notice
 // all derive from it; test/skill-version.test.ts fails if they disagree.
 
-/** Ordered oldest -> newest. v1 is the original skill (tokens with no recorded version saw v1). */
-export const WHATS_NEW: ReadonlyArray<{ version: number; text: string }> = [
+/**
+ * Ordered oldest -> newest. v1 is the original skill (tokens with no recorded version saw v1).
+ * `min_fw`: the device firmware this entry's feature needs (from FEATURES), so agents can tell
+ * their human which firmware update unlocks it.
+ */
+export const WHATS_NEW: ReadonlyArray<{ version: number; text: string; min_fw?: string }> = [
   { version: 2, text: "device events: shake, tap, button; inbox, molty_events, webhooks, molty events CLI; mood hold_s" },
   { version: 3, text: "molty_talk (one call per conversation turn: say, listen, transcript), faster streamed speech, automatic moods around talking, wait:true on say/listen" },
-  { version: 4, text: "molty_ask (ask a question, the human answers with a tap on one of 1-5 short options)" },
+  { version: 4, text: "molty_ask (ask a question, the human answers with a tap on one of 1-5 short options)", min_fw: FEATURES.ask.min_fw },
+  { version: 5, text: "molty_updates (check Molty for updates: skill and firmware, in one call), molty_update (Molty updates its own firmware after the human confirms), firmware_too_old errors" },
 ];
 export const SKILL_VERSION: number = WHATS_NEW[WHATS_NEW.length - 1].version;
 export const SKILL_PATH = "/skill.md";

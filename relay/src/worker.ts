@@ -8,6 +8,8 @@ import { handleMcp } from "./surfaces/mcp.js";
 import { handleRest } from "./surfaces/rest.js";
 import { SKILL_PATHS, handleSkill } from "./surfaces/skill.js";
 import { WAITLIST_PATH, handleWaitlist } from "./surfaces/waitlist.js";
+import { RELEASES_PATH, handleReleases } from "./surfaces/releases.js";
+import { releaseSource } from "./releases-host.js";
 import { D1WaitlistStore, turnstileCheck } from "./waitlist-host.js";
 
 export { MoltyDevice };
@@ -17,6 +19,8 @@ interface WorkerEnv extends Env {
   WAITLIST?: D1Database;
   /** optional secret: when set, signups must pass Cloudflare Turnstile */
   TURNSTILE_SECRET?: string;
+  /** optional Workers Rate Limiting binding for the public GET /v1/releases/latest (per client IP) */
+  RELEASES_RATE?: { limit(opts: { key: string }): Promise<{ success: boolean }> };
 }
 
 interface DeviceRpc {
@@ -28,6 +32,8 @@ interface DeviceRpc {
   webhook(id: string, token: string, req: Parameters<AgentApi["webhook"]>[1]): ReturnType<AgentApi["webhook"]>;
   talk(id: string, token: string, req: unknown): ReturnType<AgentApi["talk"]>;
   ask(id: string, token: string, req: unknown): ReturnType<AgentApi["ask"]>;
+  updates(id: string, token: string): ReturnType<AgentApi["updates"]>;
+  update(id: string, token: string, req: unknown): ReturnType<AgentApi["update"]>;
 }
 
 function backendFor(env: Env): RelayBackend {
@@ -45,13 +51,15 @@ function backendFor(env: Env): RelayBackend {
         webhook: (token, req) => stub.webhook(id, token, req),
         talk: (token, req) => stub.talk(id, token, req),
         ask: (token, req) => stub.ask(id, token, req),
+        updates: (token) => stub.updates(id, token),
+        update: (token, req) => stub.update(id, token, req),
       };
     },
   };
 }
 
 export default {
-  async fetch(request: Request, env: WorkerEnv): Promise<Response> {
+  async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === WAITLIST_PATH) {
       if (!env.WAITLIST) return Response.json({ ok: false, error: "unavailable" }, { status: 503 });
@@ -70,6 +78,7 @@ export default {
     if (SKILL_PATHS.includes(url.pathname)) return handleSkill(request);
     if (url.pathname === "/mcp") return handleMcp(request, backendFor(env));
     if (url.pathname === "/v1/health") return healthResponse();
+    if (url.pathname === RELEASES_PATH) return publicRelease(request, env, ctx);
     if (url.pathname.startsWith("/v1/")) return handleRest(request, backendFor(env));
     if (url.pathname === "/" || url.pathname === "/healthz") {
       return new Response("molty-relay ok\n", { headers: { "content-type": "text/plain" } });
@@ -77,3 +86,24 @@ export default {
     return new Response("not found", { status: 404 });
   },
 } satisfies ExportedHandler<WorkerEnv>;
+
+/**
+ * Public latest-release info, edge-cached per board (Cache API, keyed on the
+ * normalized URL) in front of the singleton's own hourly cache, and optionally
+ * rate-limited per client IP (RELEASES_RATE binding, wrangler.jsonc).
+ */
+async function publicRelease(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
+  if (request.method !== "GET") return handleReleases(request, releaseSource(env.DEVICE as unknown as DurableObjectNamespace));
+  const url = new URL(request.url);
+  const board = url.searchParams.get("board");
+  const key = new Request(`${url.origin}${RELEASES_PATH}${board === null ? "" : `?board=${encodeURIComponent(board)}`}`);
+  const cache = (caches as unknown as { default: Cache }).default;
+  const hit = await cache.match(key);
+  if (hit) return hit;
+  const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+  const res = await handleReleases(request, releaseSource(env.DEVICE as unknown as DurableObjectNamespace), {
+    limit: env.RELEASES_RATE ? async () => (await env.RELEASES_RATE!.limit({ key: ip })).success : undefined,
+  });
+  if (res.status === 200) ctx.waitUntil(cache.put(key, res.clone()));
+  return res;
+}

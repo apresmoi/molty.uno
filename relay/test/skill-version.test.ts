@@ -111,18 +111,18 @@ describe("skill notice (ride-along)", () => {
     expect(recs.map((r) => r.skill_seen)).toEqual([SKILL_VERSION, SKILL_VERSION]);
   });
 
-  it("v4 bump: an agent that saw v3 is told only what is new in v4 (molty_ask), once; one that saw v2 hears v3 and v4", async () => {
-    expect(SKILL_VERSION).toBe(4);
+  it("v5 bump: an agent that saw v4 is told only what is new in v5 (molty_updates), once; one that saw v3 hears v4 and v5", async () => {
+    expect(SKILL_VERSION).toBe(5);
     const w = await world();
-    const a = await w.pairAgent("v3 agent");
-    for (const [k, v] of await w.kv.list<Record<string, unknown>>("tok:")) await w.kv.put(k, { ...v, skill_seen: 3 });
+    const a = await w.pairAgent("v4 agent");
+    for (const [k, v] of await w.kv.list<Record<string, unknown>>("tok:")) await w.kv.put(k, { ...v, skill_seen: 4 });
     const first = await w.room.command(a, "imu", {});
-    expect(first.notice).toEqual({ version: 4, whats_new: [`v4: ${WHATS_NEW.at(-1)!.text}`] });
-    expect(first.notice!.whats_new[0]).toMatch(/molty_ask/);
+    expect(first.notice).toEqual({ version: 5, whats_new: [`v5: ${WHATS_NEW.at(-1)!.text}`] });
+    expect(first.notice!.whats_new[0]).toMatch(/molty_updates/);
     expect((await w.room.command(a, "imu", {})).notice).toBeUndefined();
-    for (const [k, v] of await w.kv.list<Record<string, unknown>>("tok:")) await w.kv.put(k, { ...v, skill_seen: 2 });
+    for (const [k, v] of await w.kv.list<Record<string, unknown>>("tok:")) await w.kv.put(k, { ...v, skill_seen: 3 });
     const older = await w.room.command(a, "imu", {});
-    expect(older.notice!.whats_new.map((l) => l.slice(0, 3))).toEqual(["v3:", "v4:"]);
+    expect(older.notice!.whats_new.map((l) => l.slice(0, 3))).toEqual(["v4:", "v5:"]);
   });
 
   it("failed outcomes do not consume it; the next success does", async () => {

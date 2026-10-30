@@ -24,7 +24,12 @@
     "VOICE_PROVIDER": "workers-ai",
     "TTS_MODEL": "@cf/deepgram/aura-2-en",
     "STT_MODEL": "@cf/openai/whisper-large-v3-turbo",
-    "TTS_VOICE": "luna"
+    "TTS_VOICE": "luna",
+    // GitHub Releases that hold Molty's firmware (molty_updates, molty_update, GET /v1/releases/latest).
+    // Optional secret GITHUB_TOKEN raises GitHub's API rate limit; RELEASES_PRERELEASE "true" counts prereleases.
+    "RELEASES_REPO": "apresmoi/molty.uno"
   },
+  // Per-client-IP limit on the public GET /v1/releases/latest (it is edge-cached too).
+  "ratelimits": [{ "name": "RELEASES_RATE", "namespace_id": "4711", "simple": { "limit": 30, "period": 60 } }],
   "observability": { "enabled": true }
 }

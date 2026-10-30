@@ -20,6 +20,9 @@ describe("version", () => {
     const health = worker.indexOf('url.pathname === "/v1/health"');
     expect(health).toBeGreaterThan(0);
     expect(health).toBeLessThan(worker.indexOf('url.pathname.startsWith("/v1/")'));
+    const releases = worker.indexOf("url.pathname === RELEASES_PATH");
+    expect(releases).toBeGreaterThan(0);
+    expect(releases).toBeLessThan(worker.indexOf('url.pathname.startsWith("/v1/")'));
   });
   it("tools/deploy.mjs bakes the version into the bundle", () => {
     expect(readFileSync(new URL("../tools/deploy.mjs", import.meta.url), "utf8")).toMatch(/--define[^\n]*__MOLTY_VERSION__/);

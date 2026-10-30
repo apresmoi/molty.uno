@@ -7,7 +7,10 @@
 //                                       -> {ok:true, result:{job, status:"done", heard, said?, reason, ms, timings}} | 202 pending
 //   POST   /v1/devices/<id>/ask         {say?, options[1..5], timeout_s?, voice?}
 //                                       -> {ok:true, result:{job, status:"done", answer, index, reason?, said?, ms, timings}} | 202 pending
-//   GET    /v1/jobs/<job>[?wait_s=0..8] -> {job, kind, status, result?, error?}
+//   GET    /v1/devices/<id>/updates     -> {ok:true, result:{skill, firmware, actions}} ("check Molty for updates")
+//   POST   /v1/devices/<id>/update      {} -> job: {ok:true, result:{job, status:"done", outcome, ...}} | 202 {job, status:"pending", phase}
+//                                       | {ok:true, result:{status:"up_to_date", current, latest}}
+//   GET    /v1/jobs/<job>[?wait_s=0..8] -> {job, kind, status, phase?, result?, error?, detail?}
 //   DELETE /v1/token                    revoke the calling token
 //   GET    /v1/devices/<id>/events[?since=e41&wait_s=0..25] -> {ok, events, next, more}
 //   GET|PUT|DELETE /v1/webhook          read / register (secret once) / remove the caller's webhook
@@ -15,7 +18,10 @@
 // Any authenticated response may carry the caller's unread device events as an
 // additive top-level `events` array (+ `more_events`); reading them marks them read.
 // Likewise, once per agent per skill version, an additive top-level
-// `skill_update: {version, whats_new, url}` (core/version.ts).
+// `skill_update: {version, whats_new, url}` (core/version.ts), and once per agent per
+// newer firmware release `firmware_update: {current, latest, board, notes_url,
+// can_self_update, how}` (core/updates.ts). An error's `details` (e.g.
+// firmware_too_old {feature, current, needed, latest, how}) are top-level fields next to `error`.
 
 import { type Inbox, type JobView, type Outcome, type RelayBackend, bearer, jobDevice, tokenDevice } from "../core/api.js";
 import { TALK_BUDGET_MS } from "../core/commands.js";
@@ -35,6 +41,11 @@ const STATUS: Record<string, number> = {
   device_offline: 409,
   audio_busy: 409,
   unsupported: 409,
+  firmware_too_old: 409,
+  no_build: 409,
+  no_checksum: 409,
+  unknown_version: 409,
+  release_unavailable: 503,
   pair_busy: 409,
   device_timeout: 504,
   playback_timeout: 504,
@@ -48,10 +59,12 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 
 const inboxExtra = (inbox?: Inbox) => (inbox && inbox.events.length ? { events: inbox.events, ...(inbox.more ? { more_events: true } : {}) } : {});
 
-function failure(out: { error: string; message?: string; inbox?: Inbox }, rideAlong: Record<string, unknown> = {}) {
+function failure(out: { error: string; message?: string; details?: Record<string, unknown>; inbox?: Inbox }, rideAlong: Record<string, unknown> = {}) {
   // Unknown codes are device-reported errors (e.g. mic_busy): 502.
-  return json({ ok: false, error: out.error, ...(out.message ? { message: out.message } : {}), ...inboxExtra(out.inbox), ...rideAlong }, STATUS[out.error] ?? 502);
+  return json({ ok: false, error: out.error, ...(out.message ? { message: out.message } : {}), ...(out.details ?? {}), ...inboxExtra(out.inbox), ...rideAlong }, STATUS[out.error] ?? 502);
 }
+
+type RideAlong = Pick<Outcome, "inbox" | "notice" | "fw_notice">;
 
 async function body(request: Request): Promise<Record<string, unknown> | undefined> {
   const text = await request.text();
@@ -64,11 +77,11 @@ async function body(request: Request): Promise<Record<string, unknown> | undefin
   }
 }
 
-/** Two outcomes' ride-alongs as one (events concatenated, the later notice). */
-function merged(a: Pick<Outcome, "inbox" | "notice">, b: Pick<Outcome, "inbox" | "notice">): Pick<Outcome, "inbox" | "notice"> {
+/** Two outcomes' ride-alongs as one (events concatenated, the later notices). */
+function merged(a: RideAlong, b: RideAlong): RideAlong {
   const events = [...(a.inbox?.events ?? []), ...(b.inbox?.events ?? [])];
   const inbox: Inbox | undefined = events.length ? { events, more: !!(a.inbox?.more || b.inbox?.more), now: Math.max(a.inbox?.now ?? 0, b.inbox?.now ?? 0) } : undefined;
-  return { inbox, notice: b.notice ?? a.notice };
+  return { inbox, notice: b.notice ?? a.notice, fw_notice: b.fw_notice ?? a.fw_notice };
 }
 
 /**
@@ -78,25 +91,29 @@ function merged(a: Pick<Outcome, "inbox" | "notice">, b: Pick<Outcome, "inbox" |
  */
 function jobResponse(
   out: Outcome<JobView>,
-  ride: Pick<Outcome, "inbox" | "notice">,
-  extra: (o: Pick<Outcome, "inbox" | "notice">) => Record<string, unknown>,
+  ride: RideAlong,
+  extra: (o: RideAlong) => Record<string, unknown>,
 ): Response {
   const all = extra(merged(ride, out));
   if (!out.ok) return failure({ error: out.error, message: out.message }, all);
   const j = out.result;
-  if (j.status === "failed") return failure({ error: j.error ?? "failed", message: `job ${j.job} failed` }, all);
+  if (j.status === "failed") return failure({ error: j.error ?? "failed", message: typeof j.detail === "string" ? j.detail : `job ${j.job} failed` }, all);
   if (j.status === "done") return json({ ok: true, result: { ...(j.result ?? {}), job: j.job, status: "done" }, ...all });
-  return json({ ok: true, result: { job: j.job, status: "pending", state: j.status }, ...all }, 202);
+  return json({ ok: true, result: { job: j.job, status: "pending", state: j.status, ...(j.phase ? { phase: j.phase } : {}) }, ...all }, 202);
 }
 
 export async function handleRest(request: Request, backend: RelayBackend): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
   const token = bearer(request.headers.get("authorization"));
-  const extra = (out: Pick<Outcome, "inbox" | "notice">) => ({ ...inboxExtra(out.inbox), ...(out.notice ? { skill_update: skillUpdate(out.notice, url.origin) } : {}) });
+  const extra = (out: RideAlong) => ({
+    ...inboxExtra(out.inbox),
+    ...(out.notice ? { skill_update: skillUpdate(out.notice, url.origin) } : {}),
+    ...(out.fw_notice ? { firmware_update: out.fw_notice } : {}),
+  });
   // A failed outcome renders its ride-alongs too (events already marked read, skill notice
   // already marked seen), like MCP's toolResult: dropping them here would lose them for good.
-  const failed = (out: { error: string; message?: string } & Pick<Outcome, "inbox" | "notice">) => failure(out, extra(out));
+  const failed = (out: { error: string; message?: string; details?: Record<string, unknown> } & RideAlong) => failure(out, extra(out));
 
   if (path === "/v1/pair") {
     if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
@@ -153,6 +170,25 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
     if (!b) return failure({ error: "bad_request", message: "body must be a JSON object" });
     const api = backend.device(id);
     const out = await (turn[2] === "ask" ? api.ask(token!, b) : api.talk(token!, b));
+    if (!out.ok) return failed(out);
+    return json({ ok: true, result: out.result, ...extra(out) }, out.result.status === "pending" ? 202 : 200);
+  }
+
+  const upd = /^\/v1\/devices\/([^/]+)\/(updates|update)$/.exec(path);
+  if (upd) {
+    const want = upd[2] === "updates" ? "GET" : "POST";
+    if (request.method !== want) return json({ ok: false, error: "method_not_allowed" }, 405);
+    const id = decodeURIComponent(upd[1]);
+    if (!DEVICE_ID_RE.test(id)) return failure({ error: "not_found" });
+    if (tokenDevice(token) !== id) return failure({ error: "unauthorized" });
+    const api = backend.device(id);
+    let out: Outcome;
+    if (want === "GET") out = await api.updates(token!);
+    else {
+      const b = await body(request);
+      if (!b) return failure({ error: "bad_request", message: "body must be a JSON object (empty: {})" });
+      out = await api.update(token!, b);
+    }
     if (!out.ok) return failed(out);
     return json({ ok: true, result: out.result, ...extra(out) }, out.result.status === "pending" ? 202 : 200);
   }
