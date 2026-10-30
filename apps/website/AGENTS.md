@@ -88,4 +88,8 @@ Never deploy or publish from here; nothing in this package does.
 - `pnpm og` regenerates `public/og.png` from the live page fluid (needs the preview running).
 - `pnpm readme` regenerates the GitHub README hero (`docs/assets/molty-hero[-light].webp` + `.png`) from
   the same components: wordmark, Device, a Molty, the talk screen (preview running).
+- `pnpm og-options [baseUrl] [outDir]` (`scripts/og/`, preview running): candidate OG cards
+  (device, conversation, wordmark; dark + light), recomposed in the browser from the built
+  landing's own head and islands and captured at a picked frame. Not wired into the build and
+  never writes `public/og.png`.
 - `dist/llms.txt`, `llms-full.txt` and raw `docs/*.md` come from `scripts/generate-llms-txt.mjs`.
