@@ -75,11 +75,12 @@ Molty (home Wi-Fi) ──outbound WSS──▶ molty-relay (Cloudflare Worker + 
 
 ## Device ↔ relay wire (WS/WSS `/v1/device?id=<device_id>`)
 
-First frame from device: `{"t":"hello","id":"molty-k7m2w9c4ya","key":"<b64 device_key>","fw":"...","caps":["fluid","say","listen","show","mood","creature","ask"],"board":"waveshare-esp32-s3-touch-lcd-1.46","link_code":"..."}`
+First frame from device: `{"t":"hello","id":"molty-k7m2w9c4ya","key":"<b64 device_key>","fw":"...","caps":["fluid","say","listen","listen_stop","show","mood","creature","ask"],"board":"waveshare-esp32-s3-touch-lcd-1.46","link_code":"..."}`
 → relay answers `{"t":"welcome"}` or closes with 4401.
 
 `board` names the hardware (`firmware/boards/`, see [PORTING.md](PORTING.md)). `caps`
-lists `say` / `listen` only when the board has a speaker / microphone, `ask` only when it
+lists `say` / `listen` only when the board has a speaker / microphone (`listen_stop` with
+`listen`, firmware that can end a listen on the relay's word), `ask` only when it
 has a touch screen (and firmware that implements `ask`), and `update` when the firmware can
 install a release itself ([Firmware updates](#firmware-updates)); the relay answers
 those commands `409 unsupported` up front, without calling TTS, when the device left them
@@ -183,6 +184,17 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   `""`. `speech_ms` alone never skips STT (firmware before this change sent `speech_ms:0` with
   `vad:false`). Older firmware sends no reason: STT as before, reason derived (`max` window
   full, `ended` stopped early, `no_speech` empty transcript).
+- `listen_stop` (cap `listen_stop`, boards with a mic): relay sends `cmd listen_stop {job}` when
+  its STT called the end of the human's turn (a [voice box](#voice-box) `stt.turn_end`). The
+  device ends THAT listen within one 100 ms chunk, as if its VAD had fired: the frames recorded
+  so far go up, the last with `end:true, "reason":"turn_end"`. Answer `{job, stopping:bool}`
+  (`false`: not the running listen — already ended, another job, or a say; nothing changes).
+  It never cancels and never touches a say. The relay does not wait for that end frame: the job
+  is already done (`reason:"turn_end"`, `timings.turn_end` = ms from the listen's start to the
+  turn end) and frames arriving after the turn end are dropped. **Firmware without the cap** is
+  not sent the command: the job still finishes at the turn end, but the mic stays open until the
+  device's own end (silence / no_speech / its window), and those frames are dropped; a say or
+  listen sent in that gap is answered busy by the device.
 
 
 - `update` (relay call `molty_update`): see [Firmware updates](#firmware-updates) for
@@ -802,6 +814,7 @@ the request id in `s`.
 | relay → box | `{"t":"stt.start","id","rate":16000}` at listen start, binary frames `s=id` as Molty records, `{"t":"stt.end","id"}` at the device's end frame |
 | relay → box | `{"t":"stt.cancel","id"}`: no speech, or the listen failed |
 | box → relay | `{"t":"stt.partial","id","text"}` (optional, ignored by the relay), `{"t":"stt.final","id","text","ms"?}` or `{"t":"stt.final","id","error"}` |
+| box → relay | `{"t":"stt.turn_end","id"}` (optional, at most once per listen): the human finished. The relay ends the listen there (`cmd listen_stop` to firmware with the cap, `stt.end` to the box at once); see `listen_stop` above |
 
 ### Selection: `voice_mode`
 
@@ -826,6 +839,11 @@ How the paths work:
 - **Box drops before its TTS audio:** the segment fails at once (`voice_box_offline`),
   with no hang, and the device is never told to speak. If it drops mid-stream, the
   device's stream is closed as for any TTS failure.
+- **Semantic end of turn:** `molty-voice` sends `stt.turn_end` by Kyutai Unmute's pause rule:
+  an EMA of the STT's per-step pause estimate `prs[2]` (half-life 0.01 s, starting at 1.0, the
+  first 12 steps ignored) above 0.6 (`--turn-end`), once, and only after at least one word —
+  silence alone never ends a turn (the device's `no_speech` does). The listen then ends with
+  `reason:"turn_end"` instead of waiting for the device's silence timer or its window.
 - **Voice choice:** the agent's `voice` passes through to the box. With none, the
   owner's default box voice is used; with neither, the box picks its own.
 - **Timings:** every say / listen timing payload carries `voice` (`"box"` or the env
