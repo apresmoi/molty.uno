@@ -4,7 +4,7 @@
 ## Board
 
 - Board: <!-- vendor + model, link to its wiki or datasheet -->
-- Folder: `firmware/boards/<vendor>/<model>/`
+- Folder: `device/firmware/boards/<vendor>/<model>/`
 - Pins from: <!-- the vendor demo / schematic you read (also linked in board.h) -->
 
 ## Proof
@@ -32,7 +32,7 @@
 
 - [ ] `board.json` has `"status": "experimental"` and me as `maintainer`
 - [ ] optional: `buy` (where to get it) and `photos` (repo-relative, inside the board folder)
-- [ ] the two Kconfig lines in `firmware/main/Kconfig.projbuild`
-- [ ] `python3 scripts/firmware-boards.py check` passes
+- [ ] the two Kconfig lines in `device/firmware/main/Kconfig.projbuild`
+- [ ] `python3 tools/scripts/firmware-boards.py check` passes
 - [ ] `make console firmware BOARD=<vendor>/<model>` builds with zero new warnings
 - [ ] `make firmware-test` passes

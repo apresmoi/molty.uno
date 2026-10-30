@@ -1,0 +1,46 @@
+{
+  "name": "myvendor-mymodel",
+  "title": "My Vendor My-Model",
+  "vendor": "myvendor",
+  "url": "https://example.com/the-board's-wiki-or-datasheet",
+  "target": "esp32s3",
+  "kconfig": "CONFIG_MOLTY_BOARD_MYVENDOR_MYMODEL",
+  "display": {
+    "width": 240,
+    "height": 240,
+    "shape": "round",
+    "controller": "GC9A01 (SPI)"
+  },
+  "flash": "16MB",
+  "psram": "2MB quad",
+  "caps": [
+    "display",
+    "touch",
+    "imu",
+    "btn_accept",
+    "serial"
+  ],
+  "usb": [
+    {
+      "vid": "0x1a86",
+      "pid": "0x55d3",
+      "note": "the USB-UART bridge on USB-C (or 0x303a:0x1001 for native USB in download mode)"
+    }
+  ],
+  "detect": {
+    "chip": "ESP32-S3",
+    "psram": "2MB",
+    "flash": "16MB"
+  },
+  "status": "experimental",
+  "maintainer": "your GitHub handle",
+  "buy": [
+    {
+      "label": "where to buy it",
+      "url": "https://example.com/the-board"
+    }
+  ],
+  "photos": [
+    "device/firmware/boards/myvendor/mymodel/photo.jpg"
+  ]
+}

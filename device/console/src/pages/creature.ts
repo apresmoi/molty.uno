@@ -1,0 +1,153 @@
+// Molty (settings): pick a Molty from the catalog (sent to the device as a .molty file),
+// and play with the fluid — state, speed-reader text + WPM, palette, listening ring colour,
+// listen window, turn acknowledgement, shake to talk, tap-to-ripple.
+import { UnsupportedError } from '../api/device';
+import type { FluidOrder, FluidState } from '../api/types';
+import type { AppCtx } from '../app';
+import type { CreatureEntry } from '../catalog/catalog';
+import { h, mount, note } from '../ui/dom';
+import { debounce, errText } from '../ui/fmt';
+import { preview } from '../ui/preview';
+import { RING_CHOICES, ringChoice, ringSupported } from '../ring/ring';
+import { LISTEN_CHOICES, listenChoice, listenSupported } from '../listen/listen';
+import { ACK_CHOICES, ackChoice, ackSupported } from '../ack/ack';
+import { SHAKE_CHOICES, shakeChoice, shakeSupported } from '../shake/shake';
+
+const STATES = ['blob', 'creature', 'thinking', 'text', 'autoplay'];
+const EFFECTS = ['ripple', 'vortex', 'wave'];
+const PALETTES: Record<string, string> = { green: '#7cf29a', amber: '#ffb347', pastel: '#c9b6ff' };
+
+export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
+  let alive = true, timer = 0, chosen: CreatureEntry | null = null, fluid: FluidState | null = null;
+  const cards = h('div', { class: 'cards', role: 'listbox', 'aria-label': 'moltys' });
+  const send = h('button', { class: 'primary', type: 'button', disabled: true, onclick: () => upload() }, 'send to molty');
+  const sendMsg = h('div');
+  const current = h('div', { class: 'dim small' });
+  const ctlMsg = h('div');
+  const stateRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'state' });
+  const palRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'palette' });
+  const ringLabel = h('label', { hidden: true }, 'listening ring');
+  const ringRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'listening ring colour', hidden: true });
+  const listenLabel = h('label', { hidden: true }, 'listen window');
+  const listenRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'listen window', hidden: true });
+  const listenHint = h('p', { class: 'dim small', hidden: true }, 'how long Molty listens at most when an agent doesn’t say — it stops as soon as you finish anyway; unlimited still stops after 5 minutes');
+  const ackLabel = h('label', { hidden: true }, 'acknowledge');
+  const ackRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'acknowledge', hidden: true });
+  const ackHint = h('p', { class: 'dim small', hidden: true }, 'what Molty does the moment you finish speaking, before the agent answers — so there is never dead air');
+  const shakeLabel = h('label', { hidden: true }, 'shake to talk');
+  const shakeRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'shake to talk', hidden: true });
+  const shakeHint = h('p', { class: 'dim small', hidden: true }, 'shake Molty and just speak — it listens at once and your agent gets your words; off: a shake is only a nudge');
+  const text = h('textarea', { rows: 3, placeholder: 'words for the speed reader…', 'aria-label': 'reader text' });
+  const wpm = h('input', { type: 'range', min: 100, max: 800, step: 25, value: '300', 'aria-label': 'words per minute' });
+  const wpmOut = h('output', null, '300 wpm');
+  const word = h('div', { class: 'word', 'aria-live': 'polite' });
+
+  const order = async (o: FluidOrder, quiet = false) => {
+    try { const s = await api.fluid(o); if (alive) { fluid = s; renderControls(); mount(ctlMsg); } }
+    catch (e) { if (!quiet) mount(ctlMsg, note('err', errText(e))); }
+  };
+  const pv = preview(api, { size: 320, onTap: (x, y) => order({ ripple: { x, y } }, true) });
+  const sendWpm = debounce((v: number) => order({ wpm: v }), 350);
+
+  mount(root,
+    h('h1', null, 'molty ', h('span', { class: 'dim' }, '⠶ who lives in the water')),
+    cards, h('div', { class: 'row' }, current, send), sendMsg,
+    h('h2', null, 'the fluid'),
+    h('div', { class: 'split' },
+      h('div', null, pv.el, h('p', { class: 'dim small center' }, 'tap the screen to make a ripple')),
+      h('div', { class: 'controls' },
+        h('label', null, 'state'), stateRow,
+        h('label', null, 'palette'), palRow,
+        ringLabel, ringRow,
+        listenLabel, listenRow, listenHint,
+        ackLabel, ackRow, ackHint,
+        shakeLabel, shakeRow, shakeHint,
+        h('label', null, 'speed reader'), text,
+        h('div', { class: 'row' }, wpm, wpmOut),
+        h('div', { class: 'row' }, word, h('button', { type: 'button', onclick: () => order({ text: text.value, wpm: +wpm.value, state: 'text' }) }, 'read it ⠶')),
+        ctlMsg)));
+
+  wpm.addEventListener('input', () => { wpmOut.textContent = `${wpm.value} wpm`; sendWpm(+wpm.value); });
+
+  function renderControls() {
+    const s = fluid;
+    const active = s?.autoplay ? 'autoplay' : s?.state ?? '';
+    mount(stateRow,
+      STATES.map((st) => h('button', { type: 'button', class: 'chip' + (active === st ? ' on' : ''), 'aria-pressed': String(active === st), onclick: () => order({ state: st }) }, st)),
+      EFFECTS.map((fx) => {
+        const v = `effect:${fx}`;
+        return h('button', { type: 'button', class: 'chip fx' + (active === v ? ' on' : ''), 'aria-pressed': String(active === v), onclick: () => order({ state: v }) }, fx);
+      }));
+    mount(palRow, Object.entries(PALETTES).map(([p, c]) =>
+      h('button', { type: 'button', class: 'chip' + (s?.palette === p ? ' on' : ''), 'aria-pressed': String(s?.palette === p), style: `--sw:${c}`, onclick: () => order({ palette: p }) },
+        h('span', { class: 'swatch' }), p)));
+    const ringOn = ringSupported(s);   /* older firmware has no ring setting */
+    ringLabel.hidden = ringRow.hidden = !ringOn;
+    const ring = ringChoice(s?.ring_color);
+    if (ringOn) mount(ringRow, RING_CHOICES.map((c) =>
+      h('button', { type: 'button', class: 'chip' + (ring === c.id ? ' on' : ''), 'aria-pressed': String(ring === c.id),
+        style: c.id === 'accent' ? '' : `--sw:${c.value}`, onclick: () => order({ ring_color: c.value }) },
+        c.id === 'accent' ? null : h('span', { class: 'swatch' }), c.id === 'accent' ? 'accent (default)' : c.id)));
+    const listenOn = listenSupported(s);   /* older firmware has no listen setting */
+    listenLabel.hidden = listenRow.hidden = listenHint.hidden = !listenOn;
+    const lw = listenChoice(s?.listen_ms);
+    if (listenOn) mount(listenRow, LISTEN_CHOICES.map((c) =>
+      h('button', { type: 'button', class: 'chip' + (lw === c.id ? ' on' : ''), 'aria-pressed': String(lw === c.id),
+        onclick: () => order({ listen_ms: c.ms }) }, c.label)));
+    const ackOn = ackSupported(s);   /* older firmware does not acknowledge turns itself */
+    ackLabel.hidden = ackRow.hidden = ackHint.hidden = !ackOn;
+    const ak = ackChoice(s?.ack);
+    if (ackOn) mount(ackRow, ACK_CHOICES.map((c) =>
+      h('button', { type: 'button', class: 'chip' + (ak === c.id ? ' on' : ''), 'aria-pressed': String(ak === c.id),
+        onclick: () => order({ ack: c.id }) }, c.label)));
+    const shakeOn = shakeSupported(s);   /* older firmware: a shake is only an event */
+    shakeLabel.hidden = shakeRow.hidden = shakeHint.hidden = !shakeOn;
+    const sk = shakeChoice(s?.shake_talk);
+    if (shakeOn) mount(shakeRow, SHAKE_CHOICES.map((c) =>
+      h('button', { type: 'button', class: 'chip' + (sk === c.on ? ' on' : ''), 'aria-pressed': String(sk === c.on),
+        onclick: () => order({ shake_talk: c.on }) }, c.label)));
+    if (s && document.activeElement !== wpm && s.wpm) { wpm.value = String(s.wpm); wpmOut.textContent = `${s.wpm} wpm`; }
+    if (s && !text.value && s.text) text.value = s.text;
+    word.textContent = s?.word ? `⠶ ${s.word}` : s?.nwords ? `${s.word_idx ?? 0}/${s.nwords} words` : '';
+  }
+
+  const poll = async () => {
+    const [reg, st] = await Promise.allSettled([api.creatures(), api.creatureState()]);
+    if (!alive) return;
+    if (reg.status === 'fulfilled') {
+      const cur = reg.value.current;
+      mount(current, 'on molty now: ', h('b', null, cur || 'nothing'),
+        cur && cur !== 'fluid' && reg.value.available.includes('fluid')
+          ? [' ⠂ ', h('button', { type: 'button', class: 'ghost small', onclick: async () => { try { await api.selectCreature('fluid'); poll(); } catch (e) { mount(ctlMsg, note('err', errText(e))); } } }, 'wake the fluid')] : null);
+    }
+    if (st.status === 'fulfilled') { fluid = st.value; renderControls(); }
+    timer = window.setTimeout(poll, 2500);
+  };
+
+  function renderCards(list: CreatureEntry[]) {
+    mount(cards, list.map((c) => h('button', {
+      type: 'button', role: 'option', class: 'creature' + (chosen?.id === c.id ? ' on' : ''), 'aria-selected': String(chosen?.id === c.id),
+      onclick: () => { chosen = c; send.disabled = false; send.textContent = `send ${c.name} to molty`; renderCards(list); mount(sendMsg); },
+    }, c.thumb ? h('img', { src: c.thumb, alt: '', width: 72, height: 72 }) : null, h('b', null, c.name), c.blurb ? h('span', { class: 'dim small' }, c.blurb) : null)));
+  }
+
+  async function upload() {
+    if (!chosen) return;
+    send.disabled = true; const label = send.textContent; send.textContent = 'sending ⠴';
+    try {
+      const bytes = await catalog.fetchFile(chosen);
+      await api.uploadCreature(chosen.id, bytes);
+      await api.fluid({ state: 'creature' }).catch(() => {});
+      mount(sendMsg, note('ok', `${chosen.name} is moving in ⠶`));
+      poll();
+    } catch (e) {
+      mount(sendMsg, e instanceof UnsupportedError
+        ? note('warn', 'this firmware can\'t take new moltys yet — an update will add it. the fluid below still works.')
+        : note('err', errText(e)));
+    } finally { send.disabled = false; send.textContent = label; }
+  }
+
+  catalog.list().then((l) => alive && renderCards(l), (e) => mount(cards, note('err', `catalog (${catalog.label}): ${errText(e)}`)));
+  renderControls(); poll();
+  return () => { alive = false; clearTimeout(timer); pv.stop(); };
+}

@@ -1,15 +1,15 @@
 # molty CLI and MCP server
 
-`molty` is a Go CLI and stdio MCP server for the device (source: `cli/`). Both
-adapters call `cli/internal/molty`; `molty.Transport` selects direct HTTP or relay
-REST; `cli/internal/device` provides the direct HTTP request and IMU WebSocket plumbing.
+`molty` is a Go CLI and stdio MCP server for the device (source: `apps/cli/`). Both
+adapters call `apps/cli/internal/molty`; `molty.Transport` selects direct HTTP or relay
+REST; `apps/cli/internal/device` provides the direct HTTP request and IMU WebSocket plumbing.
 
 ## Build and test
 
 Go 1.25 or newer.
 
 ```sh
-cd cli
+cd apps/cli
 make build        # -> bin/molty
 make test         # go build ./... && go test ./...
 ./bin/molty --help
@@ -156,7 +156,7 @@ from the CLI and MCP tools.
 ## MCP configuration
 
 ```sh
-cd cli && make build
+cd apps/cli && make build
 claude mcp add molty -- "$PWD/bin/molty" mcp
 ```
 
@@ -166,7 +166,7 @@ Generic configuration (WAV paths refer to the server machine):
 {
   "mcpServers": {
     "molty": {
-      "command": "/absolute/path/to/molty/cli/bin/molty",
+      "command": "/absolute/path/to/molty/apps/cli/bin/molty",
       "args": ["mcp"],
       "env": {"MOLTY_URL": "http://10.13.37.1"}
     }
@@ -201,11 +201,11 @@ http://...` or `https://...` selects direct HTTP even when relay settings exist.
 Invalid saved JSON is reported instead of silently probing a device.
 
 `molty pair` uses `--relay`, else `MOLTY_RELAY`, else the default relay
-(`DefaultRelay` in `cli/internal/molty/link.go`, see AGENT-LINK.md "Default relay").
+(`DefaultRelay` in `apps/cli/internal/molty/link.go`, see AGENT-LINK.md "Default relay").
 Replace the device ID and link code with the ones the console shows:
 
 ```sh
-cd cli && make build
+cd apps/cli && make build
 ./bin/molty pair --device molty-xxxxxxxxxx --code ABCDEFG2 --name 'My agent'
 ./bin/molty --json status
 ./bin/molty --timeout 30s --json say 'Hello from the relay'
@@ -215,7 +215,7 @@ cd cli && make build
 
 - The 4401 code is defined for device WSS closes, not agent REST. Numeric/string
   JSON code/error 4401 is recognized defensively; other non-2xx bodies are included
-  in the error. `relay/tools/e2e.mjs --go-cli cli/bin/molty` runs this CLI against
+  in the error. `services/relay/tools/e2e.mjs --go-cli apps/cli/bin/molty` runs this CLI against
   a local relay and fake device.
 
 Offline fake-relay tests cover pairing approval/rejection/cancellation, private
@@ -264,7 +264,7 @@ displayed mood. The STT command below is a pipeline check, not a transcription m
 Direct-HTTP mood verbs are affected by the known gap above.
 
 ```sh
-cd cli && make build
+cd apps/cli && make build
 export MOLTY_URL=http://10.13.37.1
 ./bin/molty --json status
 ./bin/molty --device http://molty.local --json status

@@ -1,0 +1,20 @@
+{
+  "name": "molty",
+  "interface": {
+    "displayName": "Molty"
+  },
+  "plugins": [
+    {
+      "name": "molty",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

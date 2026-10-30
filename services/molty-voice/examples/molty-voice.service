@@ -1,0 +1,18 @@
+# systemd USER unit: ~/.config/systemd/user/molty-voice.service
+#   systemctl --user daemon-reload && systemctl --user enable --now molty-voice
+#   loginctl enable-linger $USER   # keep it running without a login session
+[Unit]
+Description=molty.UNO voice box (Kyutai STT/TTS bridged to the Molty relay)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# pipx/uv tool install puts the entry point here; adjust if yours differs
+ExecStart=%h/.local/bin/molty-voice run
+Restart=on-failure
+RestartSec=5
+# exit 3 = the relay refused the token (unpaired): restarting won't help, pair again
+RestartPreventExitStatus=2 3
+
+[Install]
+WantedBy=default.target

@@ -5,7 +5,7 @@ else (touch, IMU, mic, speaker, buttons, battery) is optional: the firmware asks
 board what it has and degrades without it. Supporting a board is one folder.
 
 ```
-firmware/
+device/firmware/
 ├── main/                      the core: fluid, creature, link, net, diag — no pins, no panel sizes
 │   └── board/molty_board.h    the interface a board implements
 └── boards/
@@ -34,7 +34,7 @@ panel, no audio, one button, USB-UART bridge).
 | Display | any size, round or rectangular, RGB565 | the fluid draws in the largest centred square |
 
 molty.uno/build restates this table as "Will my board work?"
-(`website/src/features/build/content.ts`; its test fails when the two disagree).
+(`apps/website/src/features/build/content.ts`; its test fails when the two disagree).
 
 ## Capabilities
 
@@ -56,7 +56,7 @@ molty.uno/build restates this table as "Will my board work?"
 
 ## Steps
 
-1. **Copy the template** to `firmware/boards/<vendor>/<model>/` (lowercase, e.g.
+1. **Copy the template** to `device/firmware/boards/<vendor>/<model>/` (lowercase, e.g.
    `lilygo/t-rgb-2.1`). Its board.json `name` is `<vendor>-<model>`.
 2. **Pins → `board.h`.** Every pin in one place, with where it came from (the vendor's
    demo or schematic). Read the vendor demo's display init and touch code, not just its
@@ -96,16 +96,16 @@ molty.uno/build restates this table as "Will my board work?"
 9. **Optional: where to buy it and photos.** `buy`, a list of `{"label", "url"}` (https;
    Amazon links get the site's Associates tag added on molty.uno, so give a plain search
    or product URL), and `photos`, repo-relative paths to `.jpg`/`.png`/`.webp` files in
-   your board folder (e.g. `firmware/boards/<vendor>/<model>/photo.jpg`). molty.uno/build
+   your board folder (e.g. `device/firmware/boards/<vendor>/<model>/photo.jpg`). molty.uno/build
    lists every board under "community builds" from its board.json, with these when present.
-10. **Kconfig.** Two lines in `firmware/main/Kconfig.projbuild`: a `config
+10. **Kconfig.** Two lines in `device/firmware/main/Kconfig.projbuild`: a `config
    MOLTY_BOARD_<VENDOR>_<MODEL>` entry in the `MOLTY_BOARD` choice, and a
    `default "<vendor>/<model>" if MOLTY_BOARD_<VENDOR>_<MODEL>` under `MOLTY_BOARD_DIR`.
 11. **Check and build.**
    ```sh
-   python3 scripts/firmware-boards.py check          # wiring: Kconfig, sdkconfig.board, board.c id
+   python3 tools/scripts/firmware-boards.py check          # wiring: Kconfig, sdkconfig.board, board.c id
    make console                                      # the console page is baked into the image
-   make firmware BOARD=<vendor>/<model>              # -> firmware/build/<vendor>-<model>/
+   make firmware BOARD=<vendor>/<model>              # -> device/firmware/build/<vendor>-<model>/
    ```
    Zero new warnings, please. `make firmware-test` runs the host tests (the fluid at
    412×412 must stay bit-identical; it is also rendered at 240×240 and 320×240).
@@ -124,7 +124,7 @@ cells, 240 px → 30×19 (clamped to 24×16 .. 64×40; `POST /api/creature/state
 The first flash of a new firmware (and any partition-table change) is a full flash:
 
 ```sh
-cd firmware/build/<vendor>-<model>
+cd device/firmware/build/<vendor>-<model>
 python -m esptool --chip esp32s3 -p PORT -b 460800 erase_flash
 python -m esptool --chip esp32s3 -p PORT -b 460800 \
   --before default_reset --after hard_reset write_flash "@flash_args"
@@ -132,15 +132,15 @@ python -m esptool --chip esp32s3 -p PORT -b 460800 \
 
 With a USB-UART bridge (CH340/CH343/CP210x) esptool resets into the bootloader by itself;
 with native USB, hold BOOT while plugging in (HARDWARE.md). Afterwards
-`BOARD=<vendor>/<model> MOLTY_URL=http://<device> firmware/ota.sh` updates over HTTP
-(it uploads `firmware/build/<vendor>-<model>/molty.bin` after checking its board tag); `/api/ota` refuses an image built for another board (each image
+`BOARD=<vendor>/<model> MOLTY_URL=http://<device> device/firmware/ota.sh` updates over HTTP
+(it uploads `device/firmware/build/<vendor>-<model>/molty.bin` after checking its board tag); `/api/ota` refuses an image built for another board (each image
 carries its board folder).
 
 **Wi-Fi without USB-C networking.** The console's Wi-Fi setup runs over the USB-C
 network. A board without `usb_net` but with `serial` (a USB-UART bridge on the console
 UART, like the 1.28) is set up over the cable instead: the firmware speaks
 [Improv Wi-Fi Serial](https://www.improv-wifi.com/serial/) on the console UART, next to
-its log lines (`firmware/main/net/improv_serial.c`). Open **molty.uno/setup** in Chrome or
+its log lines (`device/firmware/main/net/improv_serial.c`). Open **molty.uno/setup** in Chrome or
 Edge on a desktop, Connect, choose the serial port, then Connect to Wi-Fi. The password
 goes from the browser over the cable to the device only. The same page can install
 molty.UNO on the board first (ESP Web Tools; images served by the site itself).
@@ -164,7 +164,7 @@ To try it against a local build:
 
 ```sh
 make console firmware BOARD=<vendor>/<model>
-cd website && pnpm install && pnpm stage-firmware --local && pnpm dev   # http://localhost:4330/setup/
+cd apps/website && pnpm install && pnpm stage-firmware --local && pnpm dev   # http://localhost:4330/setup/
 ```
 
 What the device answers: device info `molty.UNO`, the version, `ESP32-S3`, the board's
@@ -200,6 +200,6 @@ It asks for proof from the hardware:
   and `photos` (step 9);
 - where the pins came from (links in `board.h`).
 
-CI builds every `firmware/boards/**/board.json` (folders starting with `_` are not
+CI builds every `device/firmware/boards/**/board.json` (folders starting with `_` are not
 boards) and releases publish `molty-<version>-<vendor>-<model>-{ota,factory}.bin` for
 each.

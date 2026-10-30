@@ -1,0 +1,9 @@
+CONFIG_TINYUSB_TASK_AFFINITY_CPU0=y
+CONFIG_TINYUSB_INIT_IN_DEFAULT_TASK=y
+CONFIG_TINYUSB_NET_MODE_NCM=y
+
+# Flash size, PSRAM mode and the console are per board: device/firmware/boards/<board>/
+# sdkconfig.board, layered over these defaults (device/firmware/CMakeLists.txt).
+
+# fluid creature perf (2026-10-25): 240 MHz — the per-cell loops are instruction-bound
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
