@@ -430,6 +430,21 @@ static void test_fluid_ring(void) {
     CHECK(fluid_ring_rgb(-1, -1, FLUID_PAL_PASTEL) == 0xff8c3c && fluid_ring_rgb(-1, -1, FLUID_PAL_GREEN) == 0xffd65a, "then the accent (%06x)", (unsigned)fluid_ring_rgb(-1, -1, FLUID_PAL_PASTEL));
     CHECK(fluid_ring_rgb(0, 0xabcdef, FLUID_PAL_PASTEL) == 0, "black is a colour, not 'unset'");
     fluid_sim_destroy(s); fluid_sim_destroy(z);
+    /* a listen right after `say`: text → creature restarts the hold ramp (0 for 0.7 s), and
+     * the ring still shows within 0.3 s (its own local condensing) */
+    fluid_sim_t *h = fluid_sim_create(52, 32, FLUID_STAGE_REF);
+    h->p.relax_up = 2.6f; h->p.relax_down = 3.4f; h->p.hold = 0.f; h->p.tint_rate = 3.f;
+    for (int f = 0; f < 9; f++) {
+        fluid_target_blob(h, f / 30.f, 1.f, 0.f, 0.f);
+        fluid_target_arc(h, 0.875f, 0.018f, 0.f, 6.2831853f, 0.8f, 0xff8c3c, 0.f);
+        fluid_sim_background(h, f / 30.f, 0.5f, true); fluid_sim_swirl_field(h);
+        fluid_sim_step(h, 1.f / 60); fluid_sim_step(h, 1.f / 60); fluid_sim_color(h, 2.f / 60);
+    }
+    fluid_sim_view(h);
+    double m = 0;
+    for (int q = 0; q < 24; q++) { float a = 6.2831853f * q / 24; m += h->view[cell_of(h, 0.875f * sinf(a), -0.875f * cosf(a))] / FQ_UNIT; }
+    CHECK(m / 24 > 0.22, "hold 0: the ring only reached ink %.2f in 0.3 s", m / 24);
+    fluid_sim_destroy(h);
 }
 
 /* a question's arcs: each sector's border in its option's colour, gaps at the dividers */

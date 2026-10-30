@@ -269,6 +269,7 @@ void fluid_text_fill(fluid_text_t *tx, fluid_sim_t *s, float t) {
 
 #define ARC_SOFT   0.035f     /* soft edge outside the band, stage units (≈ one cell row)  */
 #define ARC_ASOFT  0.02f      /* soft ends of an arc, stage units along it                 */
+#define ARC_PULL   0.12f      /* per call (frame): ink pulled toward the arc, whatever the hold */
 
 void fluid_target_arcs(fluid_sim_t *s, float rc, const fluid_arc_t *arcs, int n, float acc) {
     if (n <= 0) return;
@@ -312,6 +313,11 @@ void fluid_target_arcs(fluid_sim_t *s, float rc, const fluid_arc_t *arcs, int n,
             if (v <= 0.004f) continue;
             const float t = s->T[k] * (1.f / FQ_UNIT);
             if (v > t) s->T[k] = fq(v, FQ_UNIT);
+            /* condense locally too: the relax toward T is slow while the state's hold ramps
+             * up (a listen right after `say` switches text → creature, hold 0 for 0.7 s), and
+             * the ring must show at once, not a second into the listen */
+            const float ik = s->ink[k] * (1.f / FQ_UNIT);
+            if (v > ik) s->ink[k] = fq(ik + (v - ik) * ARC_PULL, FQ_UNIT);
             /* the arc's colour where it dominates; the creature keeps its own inside */
             const float w = fluid_smooth(0.02f, 0.25f, v - 0.5f * t);
             if (w <= 0.f) continue;
