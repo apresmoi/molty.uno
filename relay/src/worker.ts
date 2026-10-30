@@ -26,6 +26,7 @@ interface DeviceRpc {
   revoke(id: string, token: string): ReturnType<AgentApi["revoke"]>;
   events(id: string, token: string, req: Parameters<AgentApi["events"]>[1]): ReturnType<AgentApi["events"]>;
   webhook(id: string, token: string, req: Parameters<AgentApi["webhook"]>[1]): ReturnType<AgentApi["webhook"]>;
+  talk(id: string, token: string, req: unknown): ReturnType<AgentApi["talk"]>;
 }
 
 function backendFor(env: Env): RelayBackend {
@@ -41,6 +42,7 @@ function backendFor(env: Env): RelayBackend {
         // An AbortSignal does not cross DO RPC: strip it (the room frees the wait at its deadline).
         events: (token, req) => stub.events(id, token, { since: req.since, wait_ms: req.wait_ms }),
         webhook: (token, req) => stub.webhook(id, token, req),
+        talk: (token, req) => stub.talk(id, token, req),
       };
     },
   };

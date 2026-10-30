@@ -11,6 +11,9 @@ import { handleRest } from "../src/surfaces/rest.js";
 import { skillMarkdown } from "../src/surfaces/skill.js";
 import { DEVICE, FakeHost, type FakeSocket, LINK, connect, flush, makeRoom } from "./helpers.js";
 
+/** What a pre-versions (v1) agent is told: every entry. */
+const ALL_NEW = WHATS_NEW.map((e) => `v${e.version}: ${e.text}`);
+
 const FAST = { cmdTimeoutMs: 2000, pairWindowMs: 2000 };
 
 /** Device that answers commands (unless `hold` is set) and accepts every pairing. */
@@ -100,12 +103,23 @@ describe("skill notice (ride-along)", () => {
     await w.legacy();
     const fresh = await w.pairAgent("fresh");
     const first = await w.room.command(old, "imu", {});
-    expect(first).toEqual({ ok: true, result: { echo: "imu" }, notice: { version: SKILL_VERSION, whats_new: [`v2: ${WHATS_NEW[0].text}`] } });
+    expect(first).toEqual({ ok: true, result: { echo: "imu" }, notice: { version: SKILL_VERSION, whats_new: ALL_NEW } });
     expect(await w.room.command(old, "imu", {})).toEqual({ ok: true, result: { echo: "imu" } });
     expect((await w.room.events(old, { wait_ms: 0 })).notice).toBeUndefined();
     expect(await w.room.command(fresh, "imu", {})).toEqual({ ok: true, result: { echo: "imu" } });
     const recs = [...(await w.kv.list<any>("tok:")).values()];
     expect(recs.map((r) => r.skill_seen)).toEqual([SKILL_VERSION, SKILL_VERSION]);
+  });
+
+  it("v3 bump: an agent that saw v2 is told only what is new in v3 (molty_talk), once", async () => {
+    expect(SKILL_VERSION).toBe(3);
+    const w = await world();
+    const a = await w.pairAgent("v2 agent");
+    for (const [k, v] of await w.kv.list<Record<string, unknown>>("tok:")) await w.kv.put(k, { ...v, skill_seen: 2 });
+    const first = await w.room.command(a, "imu", {});
+    expect(first.notice).toEqual({ version: 3, whats_new: [`v3: ${WHATS_NEW.at(-1)!.text}`] });
+    expect(first.notice!.whats_new[0]).toMatch(/molty_talk/);
+    expect((await w.room.command(a, "imu", {})).notice).toBeUndefined();
   });
 
   it("failed outcomes do not consume it; the next success does", async () => {
@@ -163,7 +177,7 @@ describe("skill notice on the surfaces", () => {
     expect(await cmd(a)).toEqual({
       ok: true,
       result: { echo: "imu" },
-      skill_update: { version: SKILL_VERSION, whats_new: [`v2: ${WHATS_NEW[0].text}`], url: "https://relay.test/skill.md" },
+      skill_update: { version: SKILL_VERSION, whats_new: ALL_NEW, url: "https://relay.test/skill.md" },
     });
     expect(await cmd(a)).toEqual({ ok: true, result: { echo: "imu" } });
   });
@@ -184,9 +198,9 @@ describe("skill notice on the surfaces", () => {
     await w.legacy();
     const r = await mcp(w.backend, "molty_imu", {}, a);
     expect(r.isError).toBe(false);
-    expect(r.structuredContent).toMatchObject({ ok: true, echo: "imu", skill_update: { version: SKILL_VERSION, whats_new: [`v2: ${WHATS_NEW[0].text}`], url: "https://relay.test/skill.md" } });
+    expect(r.structuredContent).toMatchObject({ ok: true, echo: "imu", skill_update: { version: SKILL_VERSION, whats_new: ALL_NEW, url: "https://relay.test/skill.md" } });
     const lines = r.content.map((c: any) => c.text);
-    expect(lines.at(-1)).toBe(`Molty's skill was updated (v2: ${WHATS_NEW[0].text}). Re-read https://relay.test/skill.md.`);
+    expect(lines.at(-1)).toBe(`Molty's skill was updated (${ALL_NEW.join("; ")}). Re-read https://relay.test/skill.md.`);
     expect(lines.at(-1)).toMatch(/^Molty's skill was updated \(v2: device events/);
     const again = await mcp(w.backend, "molty_imu", {}, a);
     expect(again.structuredContent).not.toHaveProperty("skill_update");
@@ -234,7 +248,7 @@ describe("skill.updated inbox event", () => {
     await connect(after.room, host, undefined, null);
     const evs = [...(await kv.list<any>("ev:")).values()];
     expect(evs).toEqual([
-      { id: "e1", type: SKILL_EVENT, ts: expect.any(Number), data: { version: SKILL_VERSION, whats_new: [`v2: ${WHATS_NEW[0].text}`], url: "https://relay.test/skill.md" } },
+      { id: "e1", type: SKILL_EVENT, ts: expect.any(Number), data: { version: SKILL_VERSION, whats_new: ALL_NEW, url: "https://relay.test/skill.md" } },
     ]);
     const queued = [...(await kv.list<any>("whq:")).values()];
     expect(queued).toHaveLength(1);

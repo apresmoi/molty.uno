@@ -110,19 +110,29 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   Text-frame limit is 64 KiB, independently of the audio-frame limit.
 - `say`: relay sends `cmd say {job,text,ms,rate:16000,voice?}`; device starts `speaking`
   and text immediately, then acknowledges. Relay sends 320 ms PCM frames (`s` = job id),
-  with three lead frames and paced delivery thereafter. After the last frame leaves
+  with three lead frames and paced delivery thereafter. TTS is streamed: the relay sends
+  `cmd say` once the first sentence is synthesised and streams while the rest is still being
+  synthesised, so `ms` is then an estimate (informational; exact when synthesis finished
+  first). A frame may be shorter than 320 ms when the device would otherwise run dry, and the
+  last one may be header-only (`end:true`, no payload) when synthesis ended after the last
+  audio frame left. After the last frame leaves
   the ring **and I2S DMA**, device returns to idle and sends
   `{"t":"evt","name":"say.done","data":{"job":"..."}}`. Failed/cancelled playback
   does not emit successful completion. Reader timing remains approximate (no word timestamps).
-- `listen`: device streams mic PCM up (300 ms frames); relay runs STT on `end`.
-  The device ends the listen on its own at the **end of speech** (below), so `end`
-  usually arrives well before `ms`. The final frame's header adds
-  `"reason":"silence"|"no_speech"|"max"|"error","speech_ms":N` (only on the `end`
-  frame; older relays ignore unknown header fields): `silence` = the user stopped
-  talking, `no_speech` = nobody spoke within `no_speech_ms`, `max` = the `ms` window
-  ran out (or `vad:false`), `error` = the mic failed (header-only end frame).
-  `speech_ms` = voiced audio heard, in ms. The device log shows
-  `audio.listen end ... reason=<reason> speech_ms=<N>`.
+- `listen`: relay sends `cmd listen {job, ms, rate:16000, end_silence_ms?, no_speech_ms?, vad?}`
+  (`ms` = maximum window; the VAD knobs only when the agent gave them: `end_silence_ms`
+  300..3000, `no_speech_ms` 1000..10000, `vad` bool). Device streams mic PCM up; the last frame
+  (`end:true`) may carry `"reason":"silence"|"no_speech"|"max"|"error"` and `"speech_ms":N`
+  (device end-of-speech). Relay runs STT the moment `end` arrives, except when `reason` is
+  `no_speech` or `speech_ms` is 0: then no STT call, transcript `""`. Older firmware sends no
+  reason: STT as before, reason derived (`max` window full, `ended` stopped early, `no_speech`
+  empty transcript).
+
+Automatic moods around talking: the device sets `listening` on `listen` and `speaking` on
+`say` (then `idle`); the relay sends `mood thinking hold_s:15` the moment a listen's end frame
+arrives with speech (while STT runs), re-sends it after STT, or `idle` when the transcript is
+empty. So the creature thinks from end of speech until the agent's next command (≤ 15 s).
+Agents don't need `mood` calls around talking; an explicit `mood` still wins.
 
 ### Listen end of speech (device VAD)
 
@@ -139,8 +149,7 @@ frames, RMS in dBFS against an adaptive noise floor:
   non-speech (never before 600 ms) → `silence`; `no_speech_ms` with < 250 ms of speech
   and nobody speaking right then → `no_speech`; `ms` → `max`. The mic stops at once.
 
-Optional `listen` args (device-validated; the relay currently forwards only
-`{job, ms, rate}`, so agents get the defaults until it passes these through):
+Optional `listen` args (validated by the relay and again by the device; forwarded only when the agent gives them):
 
 | arg | range | default | |
 |---|---|---|---|
@@ -181,8 +190,9 @@ What the screen does between commands (`firmware/main/fluid/fluid_director.h`):
 | `state` | `{state, ...}` | creature state JSON | passthrough to `/api/creature/state` semantics |
 | `mood` | `{mood, hold_s?}` | — | idle listening thinking speaking happy sleepy surprised; `hold_s` 0..3600 (0 = until the next mood; default: happy/surprised revert, the rest persist) |
 | `show` | `{text, wpm?}` | — | speed reader in the fluid; back to the creature 1.5 s after the last word |
-| `say` | `{text, voice?}` | `{job}` immediately | relay does TTS + streams; device sets `speaking`, shows text in sync. `unsupported` without a speaker |
-| `listen` | `{ms≤10000, end_silence_ms?, no_speech_ms?, vad?}` | `{job}` immediately | device sets `listening`, streams mic, ends early at the end of speech ([Listen end of speech](#listen-end-of-speech-device-vad)); relay STT → job result `{text}`. `unsupported` without a mic |
+| `say` | `{text, voice?}` | `{job}` immediately | relay does TTS (streamed per sentence) + streams; device sets `speaking`, shows text in sync. Job result `{ms, text, timings}`. `unsupported` without a speaker |
+| `listen` | `{ms≤10000, end_silence_ms?, no_speech_ms?, vad?}` | `{job}` immediately | device sets `listening`, streams mic, stops at end of speech ([Listen end of speech](#listen-end-of-speech-device-vad)); relay STT → job result `{text, duration_ms, peak, rms, reason, speech_ms?, timings}`. `unsupported` without a mic |
+| `talk` (relay) | `{say?, listen?=true, listen_ms?=10000, voice?, end_silence_ms?, no_speech_ms?, vad?}` | blocks ≤ 24 s | say then listen in one job: `{job, status:"done", heard, said?, reason, speech_ms?, ms:{tts_first_audio, speech, listen, stt, total}, timings}`; over 24 s `{job, status:"pending"}` |
 | `volume` | `{volume 0..21}` | — | `unsupported` without a speaker |
 | `imu` | — | snapshot | `unsupported` without an IMU |
 | `diag` | `{timeline? 0..180}` | `/api/diag` JSON | frame histograms, task CPU %, heap, stalls, net; `timeline` = seconds of 1 Hz rows |
@@ -191,7 +201,15 @@ What the screen does between commands (`firmware/main/fluid/fluid_director.h`):
 
 Agent-facing calls are **async-friendly** (agent runtimes commonly cap a tool call at ~10 s / 64 KiB):
 `say`/`listen` return a `job` id; `molty_wait {job, timeout_s≤8}` returns the result or
-`pending`. Short calls answer inline.
+`pending`. Short calls answer inline. For fewer agent round trips, `say`/`listen` take
+`wait:true` and `molty_talk` does a whole conversation turn in one call; both block at most
+24 s (under common ~30 s MCP tool timeouts) and otherwise return `{job, status:"pending"}`.
+
+**Stage timings.** Every say/listen/talk job result carries `timings` (ms) and the relay logs
+them (`job timings`): `queue` (job created → work started), say: `tts_first_byte` (first PCM
+ready), `tts_total` (synthesis finished), `first_audio` (first frame sent), `stream` (first →
+last frame), `play` (first frame → playback end / `say.done`); listen: `cmd` (listen ack),
+`record` (ack → end frame), `first_frame`, `stt`; `total`.
 
 ## Device events
 
@@ -212,11 +230,11 @@ constants: `firmware/main/sense/gesture.h`.
 ## Agent surfaces
 
 - **Remote MCP** `https://<relay>/mcp` (streamable HTTP), `Authorization: Bearer <agent_token>`.
-  Tools: `molty_pair`, `molty_status`, `molty_mood`, `molty_show`, `molty_say`, `molty_listen`,
+  Tools: `molty_pair`, `molty_talk`, `molty_status`, `molty_mood`, `molty_show`, `molty_say`, `molty_listen`,
   `molty_wait`, `molty_state`, `molty_volume`, `molty_imu`, `molty_diag`, `molty_log`, plus the
-  relay-only `molty_events` and `molty_webhook` ([Events](#events-device--agents)). Shared names
+  relay-only `molty_talk`, `molty_events` and `molty_webhook` ([Events](#events-device--agents)). Shared names
   have the same semantics as the local stdio MCP in `cli/`.
-- **REST** `POST /v1/devices/<id>/cmd {name,args}`, `GET /v1/jobs/<job>`,
+- **REST** `POST /v1/devices/<id>/cmd {name,args,wait?}`, `POST /v1/devices/<id>/talk`, `GET /v1/jobs/<job>`,
   `GET /v1/devices/<id>/events`, `GET|PUT|DELETE /v1/webhook`, same bearer.
 - **Skill page** `GET /skill.md` (and `/skill`), no auth: the agent's self-setup guide (see
   Pairing flow step 1). Kept in sync with `commands.ts`/MCP tools by `test/skill.test.ts`.
@@ -232,7 +250,9 @@ bearer is `agent_token` = `<device_id>.<base64url(32 bytes)>`; the prefix only r
 | `POST /v1/pair {device_id, link_code, agent_name}` (no token; long-polls ≤ 120 s) | `200 {ok:true, agent_token, device_id, agent_name, code}` | `{ok:false, error}`: `bad_link_code` 403, `rejected` 403, `timeout` 408, `device_offline` / `pair_busy` 409 |
 | same with `wait_s` < 120, or `{device_id, pair_id}` to resume | `202 {ok:true, status:"pending", pair_id, code, expires_in_s}` while undecided | as above |
 | `POST /v1/devices/<id>/cmd {name, args}` | `200 {ok:true, result:{...}}`; `say`/`listen` → `{ok:true, result:{job}}` | `{ok:false, error:"code"}`: 401 bad/missing bearer, 400 `invalid_args`/`unknown_command`, 409 `device_offline`/`audio_busy`/`unsupported`, 504 `device_timeout`, 502 device-reported codes |
-| `GET /v1/jobs/<job>[?wait_s=0..8]` | `200 {job, kind, status:"queued"\|"running"\|"done"\|"failed", result?, error?}`; say done `{ms, text}`, listen done `{text, duration_ms, peak, rms}` | 401, 404 `not_found` |
+| same with `wait:true` (say/listen) | `200 {ok:true, result:{job, status:"done", ...job result}}`; still running after 24 s: `202 {ok:true, result:{job, status:"pending", state}}` | as above; a failed job → its error |
+| `POST /v1/devices/<id>/talk {say?, listen?, listen_ms?, voice?, end_silence_ms?, no_speech_ms?, vad?}` | `200 {ok:true, result:{job, status:"done", heard, said?, reason, speech_ms?, ms, timings}}`; `202` pending as above | 400 `invalid_args`, 401, 409 `audio_busy`/`unsupported`/`device_offline`, job errors |
+| `GET /v1/jobs/<job>[?wait_s=0..8]` | `200 {job, kind:"say"\|"listen"\|"talk", status:"queued"\|"running"\|"done"\|"failed", result?, error?}`; say done `{ms, text, timings}`, listen done `{text, duration_ms, peak, rms, reason, speech_ms?, timings}`, talk done as `/talk` | 401, 404 `not_found` |
 | `DELETE /v1/token` | `200 {ok:true, result:{revoked:true}}` | 401 |
 | `GET /v1/devices/<id>/events[?since=e41&wait_s=0..25]` | `200 {ok:true, events:[{id,type,ts,data}], next, more}` | 401, 400 `invalid_args`, 429 `too_many_polls` |
 | `PUT /v1/webhook {url, method?, headers?, body?, content_type?, events?}` | `200 {ok:true, result:{webhook, secret, secret_note, dry_run}}` | 401, 400 `invalid_args` (with the reason), 409 `conflict` |
@@ -468,9 +488,9 @@ Agents learn that `/skill.md` changed without any push channel, by the same ride
 as events.
 
 - **One source of truth:** `WHATS_NEW` in `relay/src/core/version.ts` (ordered; the last
-  entry's version is `SKILL_VERSION`, now **2**: device events shake/tap/button; inbox,
-  `molty_events`, webhooks, `molty events` CLI; mood `hold_s`). skill.md's header
-  ("Skill v2 — what's new: …"), the MCP `instructions` and `serverInfo.title` derive from it;
+  entry's version is `SKILL_VERSION`, now **3**: `molty_talk`, streamed speech, automatic moods,
+  `wait:true`; v2 was device events shake/tap/button, inbox, `molty_events`, webhooks,
+  `molty events` CLI, mood `hold_s`). skill.md's header ("Skill v3 — what's new: …"), the MCP `instructions` and `serverInfo.title` derive from it;
   a test fails if they disagree.
 - **Per token:** `skill_seen` on the token record. Newly paired tokens start current; a
   token without it (paired before versions existed) counts as v1.

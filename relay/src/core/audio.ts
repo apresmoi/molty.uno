@@ -217,3 +217,90 @@ export function levels(pcm: Int16Array): { peak: number; rms: number } {
 }
 
 export const durationMs = (samples: number, rate = SAMPLE_RATE) => Math.round((samples * 1000) / rate);
+
+/**
+ * Streams PCM16 mono @16 kHz out of a byte stream holding a WAV (or raw
+ * bytes). When the header says PCM16 mono 16 kHz the samples are yielded as
+ * the bytes arrive (a streaming header with data size 0 / 0xFFFFFFFF reads
+ * to EOF); any other format is buffered whole and converted by toPcm16k
+ * (which also rejects MP3 with a clear error).
+ */
+export async function* streamPcm16k(chunks: AsyncIterable<Uint8Array>): AsyncGenerator<Int16Array> {
+  const it = chunks[Symbol.asyncIterator]();
+  try {
+    yield* pcmFrom(it);
+  } finally {
+    // Stop reading (cancels the backend stream) when the consumer stops early.
+    await it.return?.();
+  }
+}
+
+async function* pcmFrom(it: AsyncIterator<Uint8Array>): AsyncGenerator<Int16Array> {
+  let head: Uint8Array = new Uint8Array(0);
+  const append = (a: Uint8Array, b: Uint8Array): Uint8Array => {
+    const o = new Uint8Array(a.byteLength + b.byteLength);
+    o.set(a, 0);
+    o.set(b, a.byteLength);
+    return o;
+  };
+  const rest = async () => {
+    let all = head;
+    for (let r = await it.next(); !r.done; r = await it.next()) all = append(all, r.value);
+    return all;
+  };
+  // Read until the header is decided: data chunk found, or not a WAV.
+  let dataStart = -1;
+  let dataSize = 0;
+  let direct = false;
+  for (;;) {
+    if (head.byteLength >= 12 && !isWav(head)) {
+      if (head.byteLength) yield toPcm16k(await rest());
+      return;
+    }
+    if (head.byteLength >= 12) {
+      const v = new DataView(head.buffer, head.byteOffset, head.byteLength);
+      let off = 12;
+      let fmt: { format: number; channels: number; rate: number; bits: number } | undefined;
+      while (off + 8 <= head.byteLength) {
+        const id = String.fromCharCode(head[off], head[off + 1], head[off + 2], head[off + 3]);
+        const size = v.getUint32(off + 4, true);
+        if (id === "data") {
+          dataStart = off + 8;
+          dataSize = size;
+          break;
+        }
+        if (off + 8 + size > head.byteLength) break; // chunk not fully read yet
+        if (id === "fmt ") fmt = { format: v.getUint16(off + 8, true), channels: v.getUint16(off + 10, true), rate: v.getUint32(off + 12, true), bits: v.getUint16(off + 22, true) };
+        off += 8 + size + (size & 1);
+      }
+      if (dataStart >= 0) {
+        direct = !!fmt && fmt.format === 1 && fmt.channels === 1 && fmt.rate === SAMPLE_RATE && fmt.bits === 16;
+        break;
+      }
+    }
+    const r = await it.next();
+    if (r.done) {
+      if (head.byteLength) yield toPcm16k(head);
+      return;
+    }
+    head = append(head, r.value);
+  }
+  if (!direct) {
+    yield toPcm16k(await rest());
+    return;
+  }
+  let left = dataSize === 0 || dataSize === 0xffffffff ? Infinity : dataSize;
+  let carry: Uint8Array = head.subarray(dataStart);
+  for (;;) {
+    const usable = Math.min(carry.byteLength, left) & ~1;
+    if (usable > 0) {
+      yield bytesToPcm16(carry.subarray(0, usable));
+      left -= usable;
+      carry = carry.slice(usable);
+    }
+    if (left <= 1) return;
+    const r = await it.next();
+    if (r.done) return;
+    carry = carry.byteLength ? append(carry, r.value) : r.value;
+  }
+}

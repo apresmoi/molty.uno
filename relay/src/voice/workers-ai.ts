@@ -1,13 +1,17 @@
 // Workers AI provider (binding `AI`). Model ids verified against
-// developers.cloudflare.com/workers-ai/models on 2026-10-25:
+// developers.cloudflare.com/workers-ai/models on 2026-10-25 / 2026-10-30:
 //   TTS  @cf/deepgram/aura-2-en  {text, speaker, encoding, container, sample_rate}
-//   STT  @cf/openai/whisper-large-v3-turbo  {audio: base64} -> {text}
+//        "The binding returns a `ReadableStream` with the audio" (model page), so
+//        ttsStream() reads it incrementally (streamPcm16k) instead of buffering.
+//   STT  @cf/openai/whisper-large-v3-turbo  {audio: base64} -> {text}   (default)
+//        @cf/deepgram/nova-3  {audio: {body, contentType}} -> results.channels[0].alternatives[0].transcript
+//        (schema-input.json / schema-output.json on the model page; opt in with STT_MODEL)
 // We ask Aura for linear16 in a WAV container at 16 kHz and still parse +
 // resample whatever comes back, so a different rate or channel count is fine.
 // MP3 (Aura's default, MeloTTS's only output) is rejected with a clear error:
 // no MP3 decoder is bundled.
 import { b64Encode } from "../core/crypto.js";
-import { encodeWav, toPcm16k } from "../core/audio.js";
+import { encodeWav, streamPcm16k, toPcm16k } from "../core/audio.js";
 import type { TtsOptions, VoiceProvider } from "./types.js";
 
 /** Structural type of the `AI` binding; no Cloudflare import needed. */
@@ -39,23 +43,68 @@ export class WorkersAiVoice implements VoiceProvider {
     this.defaultVoice = opts.defaultVoice || "luna";
   }
 
-  async tts(text: string, opts: TtsOptions): Promise<Int16Array> {
-    const inputs = this.ttsModel.includes("melotts")
+  private ttsInputs(text: string, opts: TtsOptions) {
+    return this.ttsModel.includes("melotts")
       ? { prompt: text, lang: opts.voice || "en" }
       : { text, speaker: opts.voice || this.defaultVoice, encoding: "linear16", container: "wav", sample_rate: 16000 };
-    const bytes = await toBytes(await this.ai.run(this.ttsModel, inputs));
+  }
+
+  async tts(text: string, opts: TtsOptions): Promise<Int16Array> {
+    const bytes = await toBytes(await this.ai.run(this.ttsModel, this.ttsInputs(text, opts)));
     if (bytes.byteLength === 0) throw new Error("tts returned no audio");
     return toPcm16k(bytes, 16000);
   }
 
+  /** Yields PCM as the binding's ReadableStream delivers it (Aura); other output shapes arrive whole. */
+  async *ttsStream(text: string, opts: TtsOptions): AsyncGenerator<Int16Array> {
+    const out = await this.ai.run(this.ttsModel, this.ttsInputs(text, opts));
+    const body = typeof Response !== "undefined" && out instanceof Response ? out.body : out;
+    if (!body || typeof (body as ReadableStream).getReader !== "function") {
+      const bytes = await toBytes(out);
+      if (bytes.byteLength === 0) throw new Error("tts returned no audio");
+      yield toPcm16k(bytes, 16000);
+      return;
+    }
+    let any = false;
+    for await (const pcm of streamPcm16k(readChunks(body as ReadableStream<Uint8Array>))) {
+      any ||= pcm.length > 0;
+      yield pcm;
+    }
+    if (!any) throw new Error("tts returned no audio");
+  }
+
   async stt(pcm: Int16Array): Promise<string> {
     const wav = encodeWav(pcm);
+    if (this.sttModel.includes("nova")) return this.sttNova(wav);
     // The original @cf/openai/whisper (and -tiny-en) take a byte array; turbo takes base64.
     const audio = /whisper(-tiny-en)?$/.test(this.sttModel) ? Array.from(wav) : b64Encode(wav);
     const out = await this.ai.run(this.sttModel, { audio });
     const text = (out as { text?: unknown } | null)?.text;
     if (typeof text !== "string") throw new Error("stt returned no text");
     return text.trim();
+  }
+
+  /** Deepgram Nova-3 on Workers AI: audio as {body, contentType}, transcript under results.channels[0].alternatives[0]. */
+  private async sttNova(wav: Uint8Array): Promise<string> {
+    let out = await this.ai.run(this.sttModel, { audio: { body: new Response(wav).body, contentType: "audio/wav" }, punctuate: true, smart_format: true });
+    if (typeof Response !== "undefined" && out instanceof Response) out = await out.json();
+    const text = (out as { results?: { channels?: Array<{ alternatives?: Array<{ transcript?: unknown }> }> } } | null)?.results?.channels?.[0]?.alternatives?.[0]?.transcript;
+    if (typeof text !== "string") throw new Error("stt returned no text");
+    return text.trim();
+  }
+}
+
+async function* readChunks(stream: ReadableStream<Uint8Array>): AsyncGenerator<Uint8Array> {
+  const reader = stream.getReader();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      if (value?.byteLength) yield value instanceof Uint8Array ? value : new Uint8Array(value as ArrayBufferLike);
+    }
+  } finally {
+    // Early stop (consumer gave up): cancel the model stream.
+    reader.cancel().catch(() => {});
   }
 }
 

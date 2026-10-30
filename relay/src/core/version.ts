@@ -22,6 +22,7 @@ export function healthResponse(): Response {
 /** Ordered oldest -> newest. v1 is the original skill (tokens with no recorded version saw v1). */
 export const WHATS_NEW: ReadonlyArray<{ version: number; text: string }> = [
   { version: 2, text: "device events: shake, tap, button; inbox, molty_events, webhooks, molty events CLI; mood hold_s" },
+  { version: 3, text: "molty_talk (one call per conversation turn: say, listen, transcript), faster streamed speech, automatic moods around talking, wait:true on say/listen" },
 ];
 export const SKILL_VERSION: number = WHATS_NEW[WHATS_NEW.length - 1].version;
 export const SKILL_PATH = "/skill.md";

@@ -52,7 +52,7 @@ export const TERMINAL: readonly JobStatus[] = ["done", "failed"];
 
 export interface JobView {
   job: string;
-  kind: "say" | "listen";
+  kind: "say" | "listen" | "talk";
   status: JobStatus;
   result?: JsonObject;
   error?: string;
@@ -82,6 +82,13 @@ export interface AgentApi {
   events(token: string, req: EventsRequest): Promise<Outcome>;
   /** Read, register (returns the signing secret once) or remove this agent's webhook. */
   webhook(token: string, req: WebhookRequest): Promise<Outcome>;
+  /**
+   * One conversational turn: speak `say` (optional), then listen, and block
+   * (bounded, TALK_BUDGET_MS) for the transcript. Done: `{job, status:"done",
+   * heard, said?, reason, ms:{…}, timings}`; over budget: `{job,
+   * status:"pending"}` to finish with job(). Args as validateTalk (commands.ts).
+   */
+  talk(token: string, req: unknown): Promise<Outcome>;
 }
 
 export interface RelayBackend {

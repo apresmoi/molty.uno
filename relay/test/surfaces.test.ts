@@ -37,14 +37,14 @@ async function rpc(backend: RelayBackend, method: string, params?: unknown, toke
 const call = async (b: RelayBackend, name: string, args: unknown, token?: string) => (await rpc(b, "tools/call", { name, arguments: args }, token)).result;
 
 describe("MCP surface", () => {
-  it("initializes with version negotiation and lists the 10 spec tools", async () => {
+  it("initializes with version negotiation and lists the spec tools", async () => {
     const { backend } = await setup();
     const init = await rpc(backend, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } });
     expect(init.result).toMatchObject({ protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "molty-relay" } });
     expect((await rpc(backend, "initialize", { protocolVersion: "1999-01-01" })).result.protocolVersion).toBe("2025-11-25");
     const list = (await rpc(backend, "tools/list")).result.tools;
     expect(list.map((t: any) => t.name).sort()).toEqual(
-      ["molty_pair", "molty_status", "molty_mood", "molty_show", "molty_say", "molty_listen", "molty_wait", "molty_state", "molty_volume", "molty_imu", "molty_diag", "molty_log", "molty_events", "molty_webhook"].sort(),
+      ["molty_pair", "molty_status", "molty_mood", "molty_show", "molty_say", "molty_listen", "molty_wait", "molty_state", "molty_volume", "molty_imu", "molty_diag", "molty_log", "molty_events", "molty_webhook", "molty_talk"].sort(),
     );
     for (const t of list) expect(t.inputSchema).toMatchObject({ type: "object", additionalProperties: false });
   });
@@ -161,7 +161,7 @@ describe("REST surface (envelopes agreed with the Go CLI)", () => {
     const j0 = (await (await handleRest(req(`/v1/jobs/${sb.result.job}`, { token }), backend)).json()) as any;
     expect(["queued", "running"]).toContain(j0.status);
     const j = (await (await handleRest(req(`/v1/jobs/${sb.result.job}?wait_s=5`, { token }), backend)).json()) as any;
-    expect(j).toEqual({ job: sb.result.job, kind: "say", status: "done", result: { ms: 100, text: "yo" } });
+    expect(j).toEqual({ job: sb.result.job, kind: "say", status: "done", result: { ms: 100, text: "yo", timings: expect.objectContaining({ tts_first_byte: expect.any(Number), first_audio: expect.any(Number), total: expect.any(Number) }) } });
   });
 
   it("401 on bad or missing bearer, or a token for another device", async () => {

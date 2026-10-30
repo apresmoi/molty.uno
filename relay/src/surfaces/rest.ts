@@ -1,7 +1,10 @@
 // REST surface (docs/AGENT-LINK.md "REST envelopes"). Fetch-API only.
 //
 //   POST   /v1/pair                     {device_id, link_code, agent_name}  (no token; long-polls <= 120 s)
-//   POST   /v1/devices/<id>/cmd         {name, args}   -> {ok:true,result} | {ok:false,error}
+//   POST   /v1/devices/<id>/cmd         {name, args, wait?}   -> {ok:true,result} | {ok:false,error}
+//                                       (say/listen + wait:true: blocks <= 24 s -> result {job, status:"done", ...} | 202 {job, status:"pending"})
+//   POST   /v1/devices/<id>/talk        {say?, listen?, listen_ms?, voice?, end_silence_ms?, no_speech_ms?, vad?}
+//                                       -> {ok:true, result:{job, status:"done", heard, said?, reason, ms, timings}} | 202 pending
 //   GET    /v1/jobs/<job>[?wait_s=0..8] -> {job, kind, status, result?, error?}
 //   DELETE /v1/token                    revoke the calling token
 //   GET    /v1/devices/<id>/events[?since=e41&wait_s=0..25] -> {ok, events, next, more}
@@ -12,7 +15,8 @@
 // Likewise, once per agent per skill version, an additive top-level
 // `skill_update: {version, whats_new, url}` (core/version.ts).
 
-import { type Inbox, type Outcome, type RelayBackend, bearer, jobDevice, tokenDevice } from "../core/api.js";
+import { type Inbox, type JobView, type Outcome, type RelayBackend, bearer, jobDevice, tokenDevice } from "../core/api.js";
+import { TALK_BUDGET_MS } from "../core/commands.js";
 import { INBOX_LIMITS, seqOf } from "../core/events.js";
 import { DEVICE_ID_RE, isRecord } from "../core/protocol.js";
 import { skillUpdate } from "../core/version.js";
@@ -57,6 +61,22 @@ async function body(request: Request): Promise<Record<string, unknown> | undefin
   }
 }
 
+/** Two outcomes' ride-alongs as one (events concatenated, the later notice). */
+function merged(a: Pick<Outcome, "inbox" | "notice">, b: Pick<Outcome, "inbox" | "notice">): Pick<Outcome, "inbox" | "notice"> {
+  const events = [...(a.inbox?.events ?? []), ...(b.inbox?.events ?? [])];
+  const inbox: Inbox | undefined = events.length ? { events, more: !!(a.inbox?.more || b.inbox?.more), now: Math.max(a.inbox?.now ?? 0, b.inbox?.now ?? 0) } : undefined;
+  return { inbox, notice: b.notice ?? a.notice };
+}
+
+/** A waited job as a REST reply: done -> 200 result, failed -> error, still running -> 202 pending. */
+function jobResponse(out: Outcome<JobView>, extra: (o: Pick<Outcome, "inbox" | "notice">) => Record<string, unknown>): Response {
+  if (!out.ok) return failure(out);
+  const j = out.result;
+  if (j.status === "failed") return failure({ error: j.error ?? "failed", message: `job ${j.job} failed` });
+  if (j.status === "done") return json({ ok: true, result: { ...(j.result ?? {}), job: j.job, status: "done" }, ...extra(out) });
+  return json({ ok: true, result: { job: j.job, status: "pending", state: j.status }, ...extra(out) }, 202);
+}
+
 export async function handleRest(request: Request, backend: RelayBackend): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -96,8 +116,28 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
     if (tokenDevice(token) !== id) return failure({ error: "unauthorized" });
     const b = await body(request);
     if (!b) return failure({ error: "bad_request", message: "body must be a JSON object" });
-    const out: Outcome = await backend.device(id).command(token!, b.name as string, b.args);
-    return out.ok ? json({ ok: true, result: out.result, ...extra(out) }) : failure(out);
+    if (b.wait !== undefined && typeof b.wait !== "boolean") return failure({ error: "invalid_args", message: "wait must be a boolean" });
+    const api = backend.device(id);
+    const t0 = Date.now();
+    const out: Outcome = await api.command(token!, b.name as string, b.args);
+    if (!out.ok) return failure(out);
+    if (b.wait !== true || (b.name !== "say" && b.name !== "listen")) return json({ ok: true, result: out.result, ...extra(out) });
+    // Block on the job. Both outcomes may carry ride-alongs (already marked read): hand over both.
+    const waited = await api.job(token!, out.result.job as string, Math.max(0, TALK_BUDGET_MS - (Date.now() - t0)));
+    return jobResponse(waited, (o) => extra(merged(out, o)));
+  }
+
+  const talk = /^\/v1\/devices\/([^/]+)\/talk$/.exec(path);
+  if (talk) {
+    if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
+    const id = decodeURIComponent(talk[1]);
+    if (!DEVICE_ID_RE.test(id)) return failure({ error: "not_found" });
+    if (tokenDevice(token) !== id) return failure({ error: "unauthorized" });
+    const b = await body(request);
+    if (!b) return failure({ error: "bad_request", message: "body must be a JSON object" });
+    const out = await backend.device(id).talk(token!, b);
+    if (!out.ok) return failure(out);
+    return json({ ok: true, result: out.result, ...extra(out) }, out.result.status === "pending" ? 202 : 200);
   }
 
   const events = /^\/v1\/devices\/([^/]+)\/events$/.exec(path);
