@@ -56,8 +56,11 @@ class SttSession:
         self._pending = np.zeros(0, dtype=np.float32)
         self._ws = None
         self._recv: asyncio.Task | None = None
-        self._marker = asyncio.Event()
-        self._closed_early: str | None = None
+        # Two different facts: the receiver ENDED (for any reason) vs the marker CAME BACK.
+        # Only the second makes a transcript; every other end is a failure, never "".
+        self._ended = asyncio.Event()
+        self._marker_seen = False
+        self._failure: str | None = None
         self._marker_id = 1
 
     async def open(self) -> None:
@@ -69,23 +72,28 @@ class SttSession:
             async for m in self._ws:
                 d = msgpack.unpackb(m, raw=False)
                 t = d.get("type") if isinstance(d, dict) else None
-                if t == "Word" and not self._marker.is_set():
-                    w = str(d.get("text", ""))
-                    self.words.append(w)
+                if t == "Word":
+                    self.words.append(str(d.get("text", "")))
                     if self.on_word:
                         await self.on_word(" ".join(self.words))
-                elif t == "Marker":
-                    self._marker.set()
+                elif t == "Marker" and d.get("id") == self._marker_id:
+                    self._marker_seen = True
                     return
                 elif t == "Error":
-                    self._closed_early = f"stt server error: {d.get('message', '')}"[:200]
+                    self._failure = f"stt server error: {d.get('message', '')}"[:200]
                     return
-            self._closed_early = "stt server closed the stream before the marker"
+            self._failure = "stt server closed the stream before the marker"
         except ConnectionClosed as e:
-            self._closed_early = f"stt server closed the stream before the marker ({e.rcvd.reason if e.rcvd else 'no reason'})"[:200]
+            self._failure = f"stt server closed the stream before the marker ({e.rcvd.reason if e.rcvd else 'no reason'})"[:200]
+        except asyncio.CancelledError:
+            self._failure = self._failure or "stt receiver cancelled"
+            raise
+        except Exception as e:  # noqa: BLE001 - malformed message, callback failure, …: all are failures
+            self._failure = f"stt receiver failed: {type(e).__name__}: {e}"[:200]
         finally:
-            if not self._marker.is_set():
-                self._marker.set()  # wake finish(): it checks _closed_early
+            if not self._marker_seen and not self._failure:
+                self._failure = "stt receiver ended without the marker"
+            self._ended.set()  # wake finish(): it decides by _marker_seen / _failure
 
     async def _send_frames(self, x: np.ndarray, final: bool = False) -> None:
         buf = np.concatenate([self._pending, x]) if self._pending.size else x
@@ -100,8 +108,8 @@ class SttSession:
             self._pending = np.zeros(0, dtype=np.float32)
 
     def _check(self) -> None:
-        if self._closed_early:
-            raise KyutaiError(self._closed_early)
+        if self._failure:
+            raise KyutaiError(self._failure)
 
     async def feed(self, pcm16: bytes) -> None:
         self._check()
@@ -115,15 +123,17 @@ class SttSession:
         silence = np.zeros(FRAME, dtype=np.float32).tolist()
         sent = 0.0
         # Push the marker through the model's delay as fast as the server takes it.
-        while not self._marker.is_set() and sent < self.flush_s:
+        while not self._ended.is_set() and sent < self.flush_s:
             await self._ws.send(_pack({"type": "Audio", "pcm": silence}))
             sent += FRAME / MODEL_RATE
             await asyncio.sleep(0)
         try:
-            await asyncio.wait_for(self._marker.wait(), timeout)
+            await asyncio.wait_for(self._ended.wait(), timeout)
         except TimeoutError as e:
             raise KyutaiError("stt marker did not come back in time") from e
         self._check()
+        if not self._marker_seen:  # unreachable by construction; never turn it into an empty success
+            raise KyutaiError("stt receiver ended without the marker")
         return " ".join(w for w in self.words if w).strip()
 
     async def close(self) -> None:

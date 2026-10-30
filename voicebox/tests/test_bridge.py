@@ -24,7 +24,7 @@ class FakeMoshi:
     def __init__(self):
         self.stt_sessions = []  # per session: {"samples", "closed", "marker"}
         self.tts_requests = []
-        self.stt_mode = "ok"  # ok | no_channel
+        self.stt_mode = "ok"  # ok | no_channel | garbage
 
     async def handler(self, ws):
         assert ws.request.headers.get("kyutai-api-key") == "public_token"
@@ -48,7 +48,11 @@ class FakeMoshi:
                         sess["samples"] += len(d["pcm"])
                     else:
                         sess["after"] += 1
-                        if sess["after"] == 6:  # the model's delay: ~0.5 s of silence later
+                        if sess["after"] == 6 and self.stt_mode == "garbage":
+                            # a word, then a message that is not msgpack at all (0xc1 is never valid)
+                            await ws.send(msgpack.packb({"type": "Word", "text": "hello", "start_time": 0.1}))
+                            await ws.send(b"\xc1\xc1 not msgpack")
+                        elif sess["after"] == 6:  # the model's delay: ~0.5 s of silence later
                             await ws.send(msgpack.packb({"type": "Word", "text": "hello", "start_time": 0.1}))
                             await ws.send(msgpack.packb({"type": "Word", "text": "molty.", "start_time": 0.4}))
                             await ws.send(msgpack.packb({"type": "Marker", "id": sess["marker"]}))
@@ -200,3 +204,30 @@ def test_a_refused_token_is_fatal():
 
     with pytest.raises(Fatal):
         asyncio.run(with_servers(relay, moshi, process_request=reject))
+
+
+def test_a_receiver_failure_is_an_stt_error_never_a_transcript():
+    """Malformed msgpack from the STT server: stt.final {error}, so the relay can fall back to the cloud."""
+    moshi = FakeMoshi()
+    moshi.stt_mode = "garbage"
+    seen = {}
+
+    async def relay(ws):
+        await ws.recv()
+        await ws.send(json.dumps({"t": "voice.welcome", "device_id": DEVICE, "mode": "auto", "voice": None}))
+        await ws.send(json.dumps({"t": "stt.start", "id": "s3", "rate": 16000}))
+        await ws.send(framing.encode("s3", 0, np.full(3200, 3000, dtype="<i2").tobytes()))
+        await ws.send(json.dumps({"t": "stt.end", "id": "s3"}))
+        while True:
+            d = json.loads(await ws.recv())
+            if d["t"] == "stt.final":
+                seen["final"] = d
+                break
+        await asyncio.sleep(0.1)
+        seen["closed"] = moshi.stt_sessions[0]["closed"]
+        await ws.close()
+
+    asyncio.run(with_servers(relay, moshi))
+    assert "error" in seen["final"] and "text" not in seen["final"], seen["final"]
+    assert "receiver failed" in seen["final"]["error"]
+    assert seen["closed"] is True

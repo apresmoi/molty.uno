@@ -100,7 +100,11 @@ moshi-server on 127.0.0.1, and mounts the paired config read-only. Pair on the h
   - The words seen before the marker comes back are the transcript.
   - Every session closes its socket at once: the server has a fixed number of channels.
   - A socket that closes before the marker (e.g. "no free channels") is reported as an
-    error. The relay then falls back in `auto` mode; it is never an empty transcript.
+    error. So is a malformed server message. The relay then falls back in `auto` mode;
+    it is never an empty transcript.
+  - Model: built and measured for `kyutai/stt-1b-en_fr`, which needs no leading silence.
+    Kyutai's reference client sends 1 s of silence first for the 2.6B model. That is not
+    done here; add it before switching to that model.
 - **TTS:** One connection per sentence. The box sends the words, then `Eos`. The 24 kHz
   float audio streams back resampled to 16 kHz PCM16, in ≤ 16 KB frames.
 
