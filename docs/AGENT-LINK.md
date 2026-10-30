@@ -167,7 +167,9 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   a tap carries no `reason` / a non-answer no label. No answer within `timeout_ms` + 5 s: the
   relay resolves `timeout` itself; device gone mid-ask: `reason:"offline"`. An answer the relay
   accepted stands even when the `cmd ask` ack is then lost (`device_timeout`): the job is done
-  with it (one `answer` inbox event); with no answer yet, a lost ack fails the job.
+  with it (one `answer` inbox event). A lost ack is "delivery unknown", not a failure: the relay
+  keeps waiting, and an answer arriving later still ends the job; none by `timeout_ms` + 5 s
+  (counted from the ack timeout) resolves `timeout`.
 - `listen`: relay sends `cmd listen {job, ms, rate:16000, end_silence_ms?, no_speech_ms?, vad?, ring_color?}`
   (`ms` = maximum window; the VAD knobs only when the agent gave them: `end_silence_ms`
   300..3000, `no_speech_ms` 1000..10000, `vad` bool; `ring_color` `"#rrggbb"`, resolved by the
@@ -676,6 +678,10 @@ Ends: `done {outcome:"updated", from, to}` when the device's next hello reports 
 names why), `rolled_back` (a hello on another version after `rebooting`), `update_timeout`
 (no answer within `timeout_ms` + 5 s, or not back on the new version 5 min after the accept).
 A hello on the old version before `rebooting` (a Wi-Fi blip mid-download) is not a failure.
+A lost `cmd update` ack (`device_timeout`) does not fail the job: delivery is unknown, the
+question may be on screen, so `upd` stays tracked through the confirmation deadline and a later
+`accepted` / progress event, a decline, or a hello on the new version still settles it (none:
+`update_timeout`). A refusal (`res ok:false`) or an offline device fails it at once.
 A second `molty_update` while one runs returns that job.
 
 **Device wire (firmware contract).**

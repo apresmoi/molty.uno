@@ -200,6 +200,8 @@ interface UpdateRecord {
   /** confirm (on-screen question) | accepted | downloading | flashing | rebooting */
   phase: string;
   deadline: number;
+  /** false: the `cmd update` ack never came (delivery unknown); tracked through the confirmation deadline anyway. */
+  acked?: boolean;
 }
 
 type WebhookWrite = "ok" | "gone" | "conflict";
@@ -928,7 +930,15 @@ export class DeviceRoom implements AgentApi {
     const u = await this.kv.get<UpdateRecord>(K.upd);
     const evidenced = !u || u.job !== id || u.phase !== "confirm";
     if (res.ok || res.error === "device_timeout" || evidenced) this.screenRev++;
-    if (!res.ok && !evidenced) await this.endUpdate(id, { status: "failed", error: res.error });
+    if (res.ok || evidenced) return;
+    // A missing ack is "delivery unknown", not a refusal: the question may well be on screen and
+    // the human can still tap it. Keep tracking through the confirmation deadline (already armed);
+    // a later `accepted` / progress event, a decline, or the next hello settles it, else update_timeout.
+    if (res.error === "device_timeout") {
+      await this.kv.update<UpdateRecord, void>(K.upd, (cur) => (cur && cur.job === id && cur.phase === "confirm" ? { next: { ...cur, acked: false }, result: undefined } : { result: undefined }));
+      return;
+    }
+    await this.endUpdate(id, { status: "failed", error: res.error });
   }
 
   private armUpdateTimer(ms: number) {
@@ -945,7 +955,9 @@ export class DeviceRoom implements AgentApi {
     if (!u || this.clock.now() < u.deadline) return;
     const detail =
       u.phase === "confirm"
-        ? "nobody answered Molty's update question"
+        ? u.acked === false
+          ? "Molty never confirmed it showed the update question, and nobody answered it"
+          : "nobody answered Molty's update question"
         : `Molty did not come back on firmware ${u.to} in time (last step: ${u.phase})`;
     await this.endUpdate(u.job, { status: "failed", error: "update_timeout", detail });
   }
@@ -1174,8 +1186,10 @@ export class DeviceRoom implements AgentApi {
         this.screenInFlight--;
       }
       if (res.ok || res.error === "device_timeout" || ended) this.screenRev++;
-      // A failed ack loses nothing the device already settled: an accepted answer stands.
-      if (!res.ok && !ended) {
+      // A failed ack loses nothing the device already settled: an accepted answer stands. A missing
+      // ack (device_timeout) is "delivery unknown": the question may be on screen, so keep waiting for
+      // its answer until the ask's own deadline below (no answer by then: timeout).
+      if (!res.ok && !ended && res.error !== "device_timeout") {
         if (res.error !== "device_offline") return this.finishJob(id, { status: "failed", error: res.error });
         settle({ index: null, label: null, reason: "offline" });
       }
