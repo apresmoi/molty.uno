@@ -249,7 +249,7 @@ follow its \`actions\` in order:
    new **in plain words** (what you can do for them now — not version numbers or tool names).
 2. If the firmware is behind, say so and **ask before updating**. On yes, call \`molty_update\`
    (REST \`POST ${o}/v1/devices/<id>/update\` with \`{}\`): Molty asks your human on its screen too
-   ("update" / "later"), downloads and checks the official release, installs it and restarts
+   (tap the version, e.g. "v0.2.0", or "later"), downloads and checks the official release, installs it and restarts
    (about a minute; finish with \`molty_wait\`). If \`can_self_update\` is false, tell them to open
    Molty's console → home instead; it shows the update and installs it.
 3. If nothing is new, say so in one sentence.

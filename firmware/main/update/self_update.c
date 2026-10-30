@@ -373,7 +373,9 @@ esp_err_t self_update_cmd(const cJSON *args, cJSON **out)
         return !strcmp(e, "invalid_args") ? ESP_ERR_INVALID_ARG : link_cmd_refuse(e);
     }
     cJSON *result = cJSON_CreateObject();
-    const char *labels[2] = { UPD_LABEL_UPDATE, UPD_LABEL_LATER };
+    char version[UPD_LABEL_MAX + 1];
+    upd_confirm_label(t.version, version);   /* fits: upd_request refused it otherwise */
+    const char *labels[2] = { version, UPD_LABEL_LATER };
     const int32_t colors[2] = { UPD_COLOR_UPDATE, UPD_COLOR_LATER };
     esp_err_t r = result ? link_ask_open(t.job, labels, colors, 2, t.timeout_ms, on_answer) : ESP_ERR_NO_MEM;
     if (r != ESP_OK) {

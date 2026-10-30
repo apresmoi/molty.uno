@@ -277,7 +277,7 @@ What the screen does between commands (`firmware/main/fluid/fluid_director.h`):
 `relay/src/core/commands.ts`; names case-insensitive), or any `#rrggbb`. Anything else is
 `invalid_args` naming the field and the choices. Options without a colour take green, red, amber,
 blue, violet by position. The device only ever receives resolved hex; the answer's `label` is
-still the plain string. The self-update question is fixed: `update` green, `later` white.
+still the plain string. The self-update question is fixed: the version (`v0.2.0`) green, `later` white.
 
 Agent-facing calls are **async-friendly** (agent runtimes commonly cap a tool call at ~10 s / 64 KiB):
 `say`/`listen` return a `job` id; `molty_wait {job, timeout_s≤8}` returns the result or
@@ -693,9 +693,12 @@ A second `molty_update` while one runs returns that job.
   "url":"https://github.com/<repo>/releases/download/v0.2.0/molty-0.2.0-<board>-ota.bin",
   "sha256":"<64 hex>","size":1234567,"timeout_ms":60000}}`.
   The device acks (`res ok`) once the question is on screen: reuse the ask screen with two
-  options, "update" (green) and "later" (white), and the version. Refuse with `res {ok:false, error}`:
+  options, the version (green: tap to install it) and "later" (white). The ask screen has no
+  header, so the green option's label *is* the version: `v0.2.0`, or the bare version when the
+  `v` would push it past the 8-character label limit (`10.10.10`). Refuse with `res {ok:false, error}`:
   `busy` (an update already running), `bad_url` (not `https://github.com/<repo>/releases/download/…`
-  for the repo baked into the firmware), `wrong_board`.
+  for the repo baked into the firmware), `wrong_board`, `version_too_long` (the version does not
+  fit an 8-character label, so the question could not show it; update from the console instead).
 - Device → relay events `{"t":"evt","name":"update","data":{"job":"<job>","state":…}}`:
   `declined` (+ `reason:"timeout"|"cancelled"`: no tap within `timeout_ms`, or another accepted
   command replaced the question — the same tap, deadline and cancellation rules as `ask`), `accepted`, `downloading` (optional `progress` 0..1, at most 1/s),
