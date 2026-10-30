@@ -33,6 +33,16 @@ Emote with intent, not for turn-taking: moods around talking are automatic
 moments (a build went green, they said something delightful) and revert by themselves. `sleepy`
 fits "I'll be quiet now". `hold_s` keeps any mood up to an hour; use it sparingly.
 
+- **Inline cues are the cheap way** ([api.md](api.md#gestures-act-and-inline-cues)): put the
+  feeling in the sentence that carries it — `"[happy] Build passed!"` — no extra call, and it
+  lands on the right word. Actions go at the end: `"Done. [nod]"`.
+- **One cue per sentence at most**, and only where the feeling changes. A cue on every phrase
+  reads as noise, not personality.
+- **Don't fidget.** Molty already has its own idle life (glances, blinks, stretches); don't add
+  `act` calls to "keep it alive", and never loop gestures. An `act` answers a moment: a `nod`
+  when they tell you something, a `shake_head` at a bad result, a `bounce` for real good news.
+- Match the words: `[happy]` on bad news, or `[sleepy]` mid-task, confuses more than it charms.
+
 ## Keep a behaviour ledger
 
 Molty has few, un-prescribed affordances: a shake, a tap, two buttons, a mood, a short line.

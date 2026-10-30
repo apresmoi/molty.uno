@@ -1,6 +1,6 @@
 // Molty (settings): pick a Molty from the catalog (sent to the device as a .molty file),
 // and play with the fluid — state, speed-reader text + WPM, palette, listening ring colour,
-// listen window, turn acknowledgement, shake to talk, tap-to-ripple.
+// listen window, turn acknowledgement, shake to talk, idle life, tap-to-ripple.
 import { UnsupportedError } from '../api/device';
 import type { FluidOrder, FluidState } from '../api/types';
 import type { AppCtx } from '../app';
@@ -11,6 +11,7 @@ import { preview } from '../ui/preview';
 import { RING_CHOICES, ringChoice, ringSupported } from '../ring/ring';
 import { LISTEN_CHOICES, listenChoice, listenSupported } from '../listen/listen';
 import { ACK_CHOICES, ackChoice, ackSupported } from '../ack/ack';
+import { IDLE_CHOICES, idleChoice, idleSupported } from '../idle/idle';
 import { SHAKE_CHOICES, shakeChoice, shakeSupported } from '../shake/shake';
 
 const STATES = ['blob', 'creature', 'thinking', 'text', 'autoplay'];
@@ -37,6 +38,9 @@ export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
   const shakeLabel = h('label', { hidden: true }, 'shake to talk');
   const shakeRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'shake to talk', hidden: true });
   const shakeHint = h('p', { class: 'dim small', hidden: true }, 'shake Molty and just speak — it listens at once and your agent gets your words; off: a shake is only a nudge');
+  const idleLabel = h('label', { hidden: true }, 'idle life');
+  const idleRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'idle life', hidden: true });
+  const idleHint = h('p', { class: 'dim small', hidden: true }, 'how much Molty moves by itself when nobody drives it — glances, blinks, stretches, a yawn before dozing; always silent');
   const text = h('textarea', { rows: 3, placeholder: 'words for the speed reader…', 'aria-label': 'reader text' });
   const wpm = h('input', { type: 'range', min: 100, max: 800, step: 25, value: '300', 'aria-label': 'words per minute' });
   const wpmOut = h('output', null, '300 wpm');
@@ -62,6 +66,7 @@ export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
         listenLabel, listenRow, listenHint,
         ackLabel, ackRow, ackHint,
         shakeLabel, shakeRow, shakeHint,
+        idleLabel, idleRow, idleHint,
         h('label', null, 'speed reader'), text,
         h('div', { class: 'row' }, wpm, wpmOut),
         h('div', { class: 'row' }, word, h('button', { type: 'button', onclick: () => order({ text: text.value, wpm: +wpm.value, state: 'text' }) }, 'read it ⠶')),
@@ -106,6 +111,12 @@ export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
     if (shakeOn) mount(shakeRow, SHAKE_CHOICES.map((c) =>
       h('button', { type: 'button', class: 'chip' + (sk === c.on ? ' on' : ''), 'aria-pressed': String(sk === c.on),
         onclick: () => order({ shake_talk: c.on }) }, c.label)));
+    const idleOn = idleSupported(s);   /* older firmware has no idle actions */
+    idleLabel.hidden = idleRow.hidden = idleHint.hidden = !idleOn;
+    const il = idleChoice(s?.idle_life);
+    if (idleOn) mount(idleRow, IDLE_CHOICES.map((c) =>
+      h('button', { type: 'button', class: 'chip' + (il === c.id ? ' on' : ''), 'aria-pressed': String(il === c.id),
+        onclick: () => order({ idle_life: c.id }) }, c.label)));
     if (s && document.activeElement !== wpm && s.wpm) { wpm.value = String(s.wpm); wpmOut.textContent = `${s.wpm} wpm`; }
     if (s && !text.value && s.text) text.value = s.text;
     word.textContent = s?.word ? `⠶ ${s.word}` : s?.nwords ? `${s.word_idx ?? 0}/${s.nwords} words` : '';

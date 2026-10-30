@@ -33,7 +33,8 @@ So the device carries no default logic.
 - **Meshes.** The device generates each part from its primitive parameters, with the same
   vertex order and winding as three.js.
 - **Per-frame animation.** It comes from the runtime: the mood engine (`mood.js`) and the kit
-  (`update`, `MOTIONS`, `_face`, `_limbs`).
+  (`update`, `MOTIONS`, `_face`, `_limbs`), plus the one-shot actions (`js/actions.js` ↔
+  `cute_act.h`: nod, wiggle, glances, yawn …), a pose layer every creature shares.
 - **JS hooks.** They become declarative **behaviours** (below).
 
 `custom` geometry cannot ship. The exporter approximates a custom part from its declared

@@ -75,8 +75,9 @@ Success: `200 {"ok":true,"result":{…}}`. Unknown argument keys are rejected.
 |---|---|---|---|
 | `status` | — | fw, uptime, creature, state, mood, fps, rssi + `relay` {api_version, online, connected_since, board, caps, voice, events, webhook, firmware} | cheap; use it to check Molty is online |
 | `mood` | `{"mood": m, "hold_s"?: s}` | — | m ∈ idle, listening, thinking, speaking, happy, sleepy, surprised; happy/surprised revert by themselves, `hold_s` (0 < s ≤ 3600) sets how long any mood stays |
+| `act` | `{"action": a}` | `{action}` | a one-shot gesture over the current mood (see [Gestures](#gestures-act-and-inline-cues)); needs `act` in `relay.caps` (`409 unsupported` / `firmware_too_old` otherwise) |
 | `show` | `{"text": s, "wpm"?: 100..800}` | — | speed-reader text in the fluid, ≤ 16384 bytes, default 300 wpm; returns when it starts |
-| `say` | `{"text": s, "voice"?: id, "in_reply_to"?: turn_id}` | `{job}` immediately | relay TTS → speaker (streamed sentence by sentence), text shown in sync; ≤ 4096 bytes; job done → `{ms, text, timings}`; `in_reply_to`: see [events.md](events.md#shake-to-talk) |
+| `say` | `{"text": s, "voice"?: id, "in_reply_to"?: turn_id}` | `{job}` immediately | relay TTS → speaker (streamed sentence by sentence), text shown in sync; ≤ 4096 bytes; job done → `{ms, text, timings}` (`text` without its [inline cues](#gestures-act-and-inline-cues) like `[happy]`); `in_reply_to`: see [events.md](events.md#shake-to-talk) |
 | `listen` | `{"ms"?: 0..30000, "end_silence_ms"?: 300..3000, "no_speech_ms"?: 1000..10000, "vad"?: bool, "ring_color"?: c, "ack"?: true\|false\|"silent"}` | `{job}` immediately | records the mic until the human finishes (the window is a ceiling: omit `ms` for the human's own setting, 30000 ms out of the box; `0` = unlimited, 5 min safety ceiling), relay STT; job done → `{text, duration_ms, peak, rms, reason, speech_ms?, timings}` |
 | `state` | `{}` = read · `{"state": {…}}` or flat fields = patch | creature state JSON | low-level creature state, same as the device's `/api/creature/state` |
 | `volume` | `{"volume": 0..21}` | — | speaker volume, 0 = mute |
@@ -91,6 +92,41 @@ Success: `200 {"ok":true,"result":{…}}`. Unknown argument keys are rejected.
 24 s; past that `202` with `{"job","status":"pending"}`, finish with the jobs URL). Only one
 audio job runs at a time (`409 audio_busy`) — wait for a `say` to finish before the
 next `say`/`listen`.
+
+## Gestures: act and inline cues
+
+Molty idles by itself (glances, blinks, a stretch now and then: the human's "idle life"
+setting). You add expression in two ways:
+
+**Inline cues — the cheap way.** Put `[mood]` or `[action]` in the text of `say`, `talk`'s
+`say` or `ask`'s `say`:
+
+```json
+{"say": "[happy] Build passed! [thinking] Three tests were flaky… [surprised] wait, one is new."}
+```
+
+- A cue is never spoken and never shown: the relay strips it from the speech and the on-screen
+  words. It fires when the word after it is spoken (the same timing that shows each word with
+  its voice); a cue after the last word fires when the speech ends.
+- Names: any mood (idle, listening, thinking, speaking, happy, sleepy, surprised) or action
+  (below), any case; `[shake head]` = `[shake-head]` = `[shake_head]`. Unknown or malformed
+  cues are dropped silently, and a lone `[` or `]` is dropped too. **A literal bracket: escape
+  it**, `\[` and `\]` (in JSON: `"\\[1\\]"`).
+- While Molty speaks, its words cover the creature: a mood cue tints the words from there on
+  (happy amber, surprised cyan, thinking violet, sleepy blue) and the creature shows the last
+  mood cue when the words end (happy / surprised then revert as usual). An action cue plays
+  on the creature once its face is back (within 3 s, else it is dropped): put actions at the
+  **end** (`"Done. [nod]"`).
+- At most 16 cues per say; a say of only cues is `400 invalid_args` (use `mood` / `act`).
+  Molty firmware without `say_marks` in `relay.caps` still gets the cues stripped, they just
+  don't fire.
+- Cues never take the screen from a question or an update, and never cancel one.
+
+**`act {action}`** — a one-shot gesture over the current mood, when you are not speaking:
+`wiggle`, `nod`, `shake_head`, `bounce`, `peek`, `glance_left`, `glance_right` (as you look at
+Molty), `blink`, `wobble`, `stretch`, `look_up`, `yawn`. It never changes what is shown and
+never cancels a question; while words or a question cover the creature it waits up to 3 s,
+then is dropped. Silent, ~0.3–2.6 s. A `nod` while they talk (listening) is fine.
 
 ## Talk (one call per conversation turn)
 
@@ -204,7 +240,7 @@ Ignore fields you don't know.
 ## MCP (optional)
 
 The same features are a remote MCP server at `$MOLTY_RELAY/mcp` (streamable HTTP, bearer
-auth). Tools: `molty_pair` (no token needed), `molty_talk`, `molty_ask`, `molty_status`, `molty_mood`,
+auth). Tools: `molty_pair` (no token needed), `molty_talk`, `molty_ask`, `molty_status`, `molty_mood`, `molty_act`,
 `molty_show`, `molty_say`, `molty_listen`, `molty_wait`, `molty_state`,
 `molty_volume`, `molty_imu`, `molty_diag`, `molty_log`, `molty_events`,
 `molty_webhook`, `molty_updates`, `molty_update`, `molty_activity`. Claude Code example:

@@ -140,6 +140,19 @@ bool link_ask_args(const cJSON *args, char job[LINK_STREAM_MAX], char labels[LIN
 /* {"t":"evt","name":"answer","data":{...}}: index ≥ 0 → {job, index, label} (a tap);
  * index < 0 → {job, index:null, reason} ("timeout" | "cancelled"). */
 cJSON *link_evt_answer_frame(const char *job, int index, const char *label, const char *reason);
+/* say marks (cap say_marks): `cmd say {..., cues:true, marks:[[word, "name"], ...]}` — the
+ * relay's inline cues ([happy], [nod]) stripped out of the text. Each mark fires when the
+ * speaker reaches word `word` (its word cue), or when playback ends for a word with no cue
+ * (past the last word / LINK_CUE_WORDS). name: a mood (link_mood_map) or an action
+ * (cute_act.h). At most LINK_MARKS_MAX; word 0..LINK_MARK_WORD_MAX. Absent = none. */
+#define LINK_MARKS_MAX      16
+#define LINK_MARK_WORD_MAX  4096
+typedef struct { uint16_t word; bool act; int8_t id; } link_mark_t;   /* id: CM_* mood or CA_* action */
+bool link_marks_parse(const cJSON *args, link_mark_t marks[LINK_MARKS_MAX], int *n);
+/* A mood mark's name (its id, the creature's order); "" when out of range. */
+const char *link_mood_name(int id);
+/* act {action}: one of cute_act.h's names → *act (CA_*). */
+bool link_act_args(const cJSON *args, int *act);
 /* After the pairing code / the Improv "hi": the state body to go back to (malloc'd),
  * the saved one unless it was text or the demo reel, which become the creature. */
 char *link_restore_body(const char *saved_state_json);

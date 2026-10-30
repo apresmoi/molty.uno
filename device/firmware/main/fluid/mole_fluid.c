@@ -32,6 +32,7 @@
 #include "fluid_director.h"
 #include "fluid_ask.h"
 #include "cute_rig.h"
+#include "cute_act.h"
 #include "glyph_rsvp.h"
 #include "molty_board.h"
 
@@ -100,7 +101,7 @@ typedef struct {
 typedef struct {
     float fps, frame_ms, sim_ms, wait_ms, draw_ms, flush_ms, energy, err;
     float prof_ms[FP_N];                       /* per-phase EMA, ms per frame */
-    int   mood, ctris, status;
+    int   mood, ctris, status, act;
     bool  internal, autoplay, asleep;
     int   n_internal, n_blk;
     int   state, fx, reel, word_idx, nwords, inside, grid_w, grid_h, cells_drawn;
@@ -162,6 +163,15 @@ static int      ack_setting_load(void);
 static bool     s_shake_talk = true;
 static bool     s_shake_talk_loaded = false;
 static bool     shake_talk_load(void);
+/* idle life (NVS "fluid"/"idle_life", the console's setting; FD_IDLE_*, lively by default) */
+static int      s_idle_life = FD_IDLE_DEFAULT;
+static bool     s_idle_life_loaded = false;
+static int      idle_life_load(void);
+static int      s_req_act = -1;                 /* an agent's action (act / a say's mark)  */
+static bool     s_req_spoke = false;            /* a say played to its end                 */
+/* a say's mood marks tint its words from the cued word on (mole_fluid_cue_mood):
+ * 0 = the palette's colours, else FLUID_RGB | 0xRRGGBB */
+static uint32_t s_tint_in = 0;
 static float   s_ripq[FLUID_RIPPLE_Q][3];
 static int     s_ripn = 0;
 
@@ -224,6 +234,7 @@ static int   s_word = 0;
 static bool  s_follow = false;                  /* task copies of s_follow_in / s_follow_word_in */
 static int   s_follow_word = 0;                 /* -1: following, no word reached yet */
 static bool  s_text_hidden = false;             /* following a say: the text state is blank until its first cue */
+static uint32_t s_tint = 0;                     /* task copy of s_tint_in: the reader's words' colour */
 static volatile int s_dstatus = FD_STATUS_OK;   /* indicator riding with the snapshot */
 static fluid_letter_t s_overlay[FLUID_MAX_LETTERS];
 static int   s_noverlay = 0;
@@ -274,9 +285,15 @@ static float word_delay_s(const ftok_t *t, int wpm) {
     return (d < 40.f ? 40.f : d) / 1000.f;
 }
 
+/* the reader's letters in the say's mood colour (0: the palette's own) */
+static void tint_letters(void) {
+    for (int i = 0; i < s_tx->nletters; i++) s_tx->letters[i].rgb = s_tint;
+}
+
 static void show_word(int idx) {
     const ftok_t *t = &s_toks[idx];
     fluid_text_set_word(s_tx, s_sim, s_ttext + t->off, t->len, t->orp);
+    if (s_tint) tint_letters();
 }
 
 /* ── State machine (task) ───────────────────────────────────────────────────── */
@@ -474,9 +491,17 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     float breath = 0.5f - 0.5f * cosf(s_breath_ph * 6.2831853f);
     float swell = 1.f + 0.05f * (breath * 2.f - 1.f);
 
-    /* director: the reel, the reader's return, mood holds + flashes, sleep, status */
+    /* director: the reel, the reader's return, mood holds + flashes, idle life, sleep,
+     * status. A question, a listen or a say owns the screen (no idle life); a question's
+     * labels cover the creature (no action plays under them). */
+    const bool covered = s_ask.scr.phase != FLUID_ASK_NONE;
+    fd_set_busy(&s_dir, s_listen || s_follow, covered);
     fd_tick(&s_dir, rdt, s_cur == ST_TEXT && s_word_until > 1e8f && !s_follow);
     direct(cfg);
+    {   /* an action to start: an agent's, or idle life's (never a sound) */
+        int a = fd_take_act(&s_dir);
+        if (a >= 0 && s_cute) cute_rt_act(s_cute, a);
+    }
 
     const bool asking = s_ask.scr.phase != FLUID_ASK_NONE;
     /* speed reader (paused under a question: the labels own s_tx) */
@@ -802,6 +827,11 @@ static void fluid_task(void *arg) {
         uint8_t *cblob = s_cute_blob; size_t clen = s_cute_len; s_cute_blob = NULL;
         int req_mood = s_req_mood; s_req_mood = -1;
         float req_hold_s = s_req_hold_s;
+        int req_act = s_req_act; s_req_act = -1;
+        bool spoke = s_req_spoke; s_req_spoke = false;
+        if (!s_idle_life_loaded) { s_idle_life = idle_life_load(); s_idle_life_loaded = true; }
+        int idle_life = s_idle_life;
+        uint32_t tint = s_tint_in;
         bool activity = s_req_activity, shake = s_req_shake, user = s_req_user;
         s_req_activity = s_req_shake = s_req_user = false;
         int status = s_status_in;
@@ -844,6 +874,13 @@ static void fluid_task(void *arg) {
         else if (activity) fd_activity(&s_dir);
         if (user) fd_user(&s_dir);
         if (shake) fd_shake(&s_dir);
+        fd_set_idle_life(&s_dir, idle_life);
+        if (req_act >= 0) fd_agent_act(&s_dir, req_act);
+        if (spoke) fd_turn_spoken(&s_dir);
+        if (tint != s_tint) {                      /* a say's mood mark: its words from now on */
+            s_tint = tint;
+            if (s_cur == ST_TEXT && s_ask.scr.phase == FLUID_ASK_NONE) tint_letters();
+        }
         fd_set_status(&s_dir, status);
         ask_follow(&want, req >= 0 || req_mood >= 0 || req_reel, &cfg);
         direct(&cfg);
@@ -889,6 +926,7 @@ static void fluid_task(void *arg) {
         s_stats.state = s_cur; s_stats.fx = s_cur_fx; s_stats.reel = s_dir.autoplay ? s_dir.reel : -1;
         s_stats.autoplay = s_dir.autoplay; s_stats.asleep = fd_asleep(&s_dir); s_stats.status = fd_status(&s_dir);
         s_stats.mood = s_cute ? cute_rt_mood(s_cute) : -1; s_stats.ctris = s_cute_tris;
+        s_stats.act = s_cute ? cute_rt_acting(s_cute) : -1;
         s_stats.inside = s_sim->inside; s_stats.grid_w = s_sim->W; s_stats.grid_h = s_sim->H;
         s_stats.internal = s_sim->internal;
         s_stats.n_internal = s_sim->n_internal; s_stats.n_blk = s_sim->n_blk;
@@ -1076,6 +1114,8 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     const int ack = s_ack_dflt;
     if (!s_shake_talk_loaded) { s_shake_talk = shake_talk_load(); s_shake_talk_loaded = true; }
     const bool shake_talk = s_shake_talk;
+    if (!s_idle_life_loaded) { s_idle_life = idle_life_load(); s_idle_life_loaded = true; }
+    const int idle_life = s_idle_life;
     char cname[40], cerr[40];
     memcpy(cname, s_cute_name, sizeof(cname)); memcpy(cerr, s_cute_err, sizeof(cerr));
     cJSON *root = cJSON_CreateObject();
@@ -1093,6 +1133,7 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     cJSON_AddNumberToObject(root, "wpm",         c.wpm);
     cJSON_AddStringToObject(root, "mood",        st.mood >= 0 ? CUTE_MOOD_NAMES[st.mood] : "");
     cJSON_AddBoolToObject  (root, "asleep",      st.asleep);
+    cJSON_AddStringToObject(root, "act",         st.act >= 0 ? cute_act_name(st.act) : "");   /* the action playing */
     cJSON_AddStringToObject(root, "indicator",   FD_STATUS_NAMES[st.status]);
     {
         cJSON *cj = cJSON_AddObjectToObject(root, "creature_info");
@@ -1111,6 +1152,7 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     cJSON_AddNumberToObject(root, "listen_ms", listen_ms);   /* 0 = unlimited */
     cJSON_AddStringToObject(root, "ack", link_ack_name((link_ack_t)ack));
     cJSON_AddBoolToObject(root, "shake_talk", shake_talk);
+    cJSON_AddStringToObject(root, "idle_life", FD_IDLE_NAMES[idle_life]);
     cJSON_AddStringToObject(root, "edge_mode",   FLUID_EDGE_NAMES[c.edge_mode]);
     cJSON_AddStringToObject(root, "grid",        grid);
     cJSON_AddNumberToObject(root, "speed",       c.speed);
@@ -1163,6 +1205,7 @@ static bool parse_state(const char *v, int *st, int *fx) {
 
 static void set_text_locked(const char *text, int len) {
     if (len > FLUID_TEXT_MAX) len = FLUID_TEXT_MAX;
+    s_tint_in = 0;                                     /* new words: the palette's colours */
     if (len == s_text_len && memcmp(s_text, text, (size_t)len) == 0) return;   /* duplicate straggler */
     memcpy(s_text, text, (size_t)len);
     s_text[len] = '\0';
@@ -1204,6 +1247,28 @@ esp_err_t mole_fluid_creature_state_set_json(const char *body) {
     if ((j = cJSON_GetObjectItem(root, "shake_talk"))) {
         if (cJSON_IsBool(j)) shake = cJSON_IsTrue(j) ? 1 : 0;
         else ret = ESP_ERR_INVALID_ARG;
+    }
+    /* idle_life: "lively" | "calm" | "off" — how much the creature moves by itself, kept in NVS */
+    int idle = -1;                                     /* -1: not given */
+    if ((j = cJSON_GetObjectItem(root, "idle_life"))) {
+        idle = cJSON_IsString(j) ? lookup(j->valuestring, FD_IDLE_NAMES, FD_IDLE_COUNT) : -1;
+        if (idle < 0) ret = ESP_ERR_INVALID_ARG;
+    }
+    if (idle >= 0) {
+        nvs_handle_t h;
+        esp_err_t ne = nvs_open("fluid", NVS_READWRITE, &h);
+        if (ne == ESP_OK) {
+            ne = nvs_set_i32(h, "idle_life", idle);
+            if (ne == ESP_OK) ne = nvs_commit(h);
+            nvs_close(h);
+        }
+        if (ne != ESP_OK) { ESP_LOGW(TAG, "idle_life not saved (%s)", esp_err_to_name(ne)); ret = ne; }
+    }
+    /* act: a one-shot action (cute_act.h) on the creature, as the link's `act` */
+    int act = -2;                                      /* -2: not given */
+    if ((j = cJSON_GetObjectItem(root, "act"))) {
+        act = cJSON_IsString(j) ? cute_act_lookup(j->valuestring) : -1;
+        if (act < 0) ret = ESP_ERR_INVALID_ARG;
     }
     if (shake >= 0) {
         nvs_handle_t h;
@@ -1309,6 +1374,8 @@ esp_err_t mole_fluid_creature_state_set_json(const char *body) {
     if (listen >= 0) { s_listen_dflt = (uint32_t)listen; s_listen_dflt_loaded = true; }
     if (ack >= 0) { s_ack_dflt = ack; s_ack_dflt_loaded = true; }
     if (shake >= 0) { s_shake_talk = shake == 1; s_shake_talk_loaded = true; }
+    if (idle >= 0) { s_idle_life = idle; s_idle_life_loaded = true; }
+    if (act >= 0) s_req_act = act;
     s_req_activity = true;                             /* someone is driving: no dozing off */
     xSemaphoreGive(s_mutex);
     cJSON_Delete(root);
@@ -1380,6 +1447,59 @@ void mole_fluid_text_cue_end(void) {
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     s_follow_in = false;
     xSemaphoreGive(s_mutex);
+}
+
+void mole_fluid_act(int act) {
+    if (!s_mutex || act < 0 || act >= CUTE_N_ACTS) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_req_act = act;
+    xSemaphoreGive(s_mutex);
+}
+
+/* a say's mood mark → its colour for the words (the relay's COLORS, commands.ts) */
+static uint32_t mood_tint(int mood) {
+    switch (mood) {
+    case CM_HAPPY:     return FLUID_RGB | 0xffa94du;   /* amber */
+    case CM_SURPRISED: return FLUID_RGB | 0x3bc9dbu;   /* cyan */
+    case CM_THINKING:  return FLUID_RGB | 0xb197fcu;   /* violet */
+    case CM_SLEEPY:    return FLUID_RGB | 0x4dabf7u;   /* blue */
+    case CM_LISTENING: return FLUID_RGB | 0x3ccf96u;   /* green */
+    default:           return 0;                       /* idle, speaking: the palette's */
+    }
+}
+
+unsigned mole_fluid_text_ver(void) {
+    if (!s_mutex) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    const unsigned v = (unsigned)s_text_ver;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+void mole_fluid_cue_mood(int mood, unsigned text_ver) {
+    if (!s_mutex || mood < 0 || mood >= CUTE_N_MOODS) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    /* only the say's own words: an update / show / pairing text set since then owns the
+     * reader (checked and set under one lock, so no ownership race) */
+    if ((unsigned)s_text_ver == text_ver) s_tint_in = mood_tint(mood);
+    xSemaphoreGive(s_mutex);
+}
+
+void mole_fluid_spoke(void) {
+    if (!s_mutex) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_req_spoke = true;
+    xSemaphoreGive(s_mutex);
+}
+
+static int idle_life_load(void) {
+    nvs_handle_t h;
+    int32_t v = -1;
+    if (nvs_open("fluid", NVS_READONLY, &h) == ESP_OK) {
+        if (nvs_get_i32(h, "idle_life", &v) != ESP_OK) v = -1;
+        nvs_close(h);
+    }
+    return v >= 0 && v < FD_IDLE_COUNT ? (int)v : FD_IDLE_DEFAULT;
 }
 
 void mole_fluid_listen_color(int32_t rgb) {

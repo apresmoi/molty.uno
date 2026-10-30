@@ -42,7 +42,7 @@ const WIFI0 = { state: 'connected', ssid: 'home-wifi', ip: '192.168.1.32', rssi:
 const wifi = { ...WIFI0 };
 const fluid = {
   ok: true, creature: 'fluid', state: 'blob', autoplay: false, text: 'hello, i am molty. i breathe in ascii.', wpm: 300,
-  palette: 'pastel', ring_color: 'accent', listen_ms: 30000, ack: 'chirp', shake_talk: true, word: '', word_idx: 0, nwords: 7, fps: 33.1,
+  palette: 'pastel', ring_color: 'accent', listen_ms: 30000, ack: 'chirp', shake_talk: true, idle_life: 'lively', word: '', word_idx: 0, nwords: 7, fps: 33.1,
 };
 let current = 'fluid';
 const LINK0 = { device_id: 'molty-k7m2w9c4ya', link_code: 'K7QX2MPA', relay_url: 'wss://molty-relay.example.workers.dev', connected: true, auth_failed: false, close_code: 0,
@@ -138,7 +138,8 @@ createServer(async (req, res) => {
       if (o.listen_ms !== undefined && !(Number.isInteger(o.listen_ms) && (o.listen_ms === 0 || (o.listen_ms >= 5000 && o.listen_ms <= 30000)))) return json(res, { ok: false, error: 'invalid_args' }, 400);
       if (o.ack !== undefined && !['chirp', 'thinking', 'off'].includes(o.ack)) return json(res, { ok: false, error: 'invalid_args' }, 400);
       if (o.shake_talk !== undefined && typeof o.shake_talk !== 'boolean') return json(res, { ok: false, error: 'invalid_args' }, 400);
-      for (const k of ['text', 'wpm', 'palette', 'ring_color', 'listen_ms', 'ack', 'shake_talk']) if (o[k] !== undefined) fluid[k] = o[k];
+      if (o.idle_life !== undefined && !['lively', 'calm', 'off'].includes(o.idle_life)) return json(res, { ok: false, error: 'invalid_args' }, 400);
+      for (const k of ['text', 'wpm', 'palette', 'ring_color', 'listen_ms', 'ack', 'shake_talk', 'idle_life']) if (o[k] !== undefined) fluid[k] = o[k];
       if (o.text) fluid.nwords = o.text.split(/\s+/).filter(Boolean).length;
       return json(res, fluid);
     }

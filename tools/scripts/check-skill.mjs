@@ -7,7 +7,7 @@
 //   2. every reference is linked from SKILL.md; every relative link (and #anchor) resolves
 //   3. no hard-coded relay host: curl examples use $MOLTY_RELAY; the official relay URL only
 //      where MOLTY_RELAY's default is defined
-//   4. the skill documents what the relay has: every command, mood and MCP tool, and the
+//   4. the skill documents what the relay has: every command, mood, action and MCP tool, and the
 //      api_version it targets equals the relay's API_VERSION
 //   5. load-bearing rules are still stated (shake to talk, ack, no_speech, caps, …)
 //   6. plugin manifests (Claude Code + Codex) agree; the plugin root (the repo) holds no
@@ -100,6 +100,14 @@ const commands = read('services/relay/src/core/commands.ts');
 const api = allText[join(SKILL, 'references/api.md')] ?? '';
 for (const c of tsList(commands, 'COMMANDS')) if (!api.includes(`| \`${c}\` |`)) bad(`api.md has no row for command ${c}`);
 for (const m of tsList(commands, 'MOODS')) if (!api.includes(m)) bad(`api.md does not list mood ${m}`);
+// actions: the relay's ACTIONS = the firmware's (cute_act.h) = the JS twin's (actions.js), each documented
+const actions = tsList(commands, 'ACTIONS');
+const fwActs = [...read('device/firmware/main/creature/cute_act.h').matchAll(/^\s*X\(\w+, "(\w+)", [\d.]+f\)/gm)].map((m) => m[1]);
+const jsActs = Object.keys(Function(`return ${(/export const ACTIONS = (\{[^}]*\})/.exec(read('device/creatures/js/actions.js')) || [, '{}'])[1]}`)());
+if (actions.length < 5) bad('could not read ACTIONS from services/relay/src/core/commands.ts');
+if (actions.join() !== fwActs.join()) bad(`relay ACTIONS (${actions}) differ from the firmware's cute_act.h (${fwActs})`);
+if (actions.join() !== jsActs.join()) bad(`relay ACTIONS (${actions}) differ from device/creatures/js/actions.js (${jsActs})`);
+for (const x of actions) if (!api.includes(`\`${x}\``)) bad(`api.md does not list action ${x}`);
 const tools = [...read('services/relay/src/surfaces/mcp.ts').matchAll(/name: "(molty_\w+)"/g)].map((m) => m[1]);
 if (tools.length < 10) bad('could not read the MCP tool names from services/relay/src/surfaces/mcp.ts');
 for (const t of tools) if (!api.includes(`\`${t}\``)) bad(`api.md does not list MCP tool ${t}`);
@@ -117,7 +125,7 @@ const FACTS = {
   'references/api.md': ['agent_token', 'pair_id', 'wait_s', '120 s', 'Authorization: Bearer', 'audio_busy', 'turn_claimed', 'firmware_too_old', 'listen_failed', 'A listen that broke is an error, never `no_speech`', 'one centred button', 'pie slices', '`timeout`', '`cancelled`', '`offline`', 'use **talk** when you', '{"label": "yes", "color": "green"}', 'green, red, amber, blue, violet, pink, cyan, white', 'green yes, red no', '"ack"?: true\\|false\\|"silent"'],
   'references/events.md': ['a shake means "I want to talk"', "**don't react to it**, the `utterance` follows", 'nothing at all when nobody spoke', 'The first agent to answer a turn claims it', '`409 turn_claimed`', '`timings.turn` `{id, reply, first_audio}`', '{{event.data.<field>}}', '{{event.data.ms.speech}}', '"events":["utterance"]', 'Molty-Signature: t=<unix ms>,v2=<hex hmac_sha256(secret, t \\n METHOD \\n path?query \\n body)>', 'never speak while the human talks', 'Nothing can wake an agent', 'Not an answer to a question', 'molty events', '--exec'],
   'references/talking-fast.md': ['Act on the event payload directly', 'no lock files', 'fastest model for conversation', 'say one short line first', 'Short first sentence', 'Keep a warm session', 'Check `relay.caps`, not versions', 'Molty acknowledges the turn itself', 'go straight to your answer', 'Never leave the human in silence', 'After a wake, meet `no_speech` with one short line or nothing — never a burst', '{"say":"I\'m here.","listen":false}', "Don't call `mood` around talking"],
-  'references/etiquette.md': ['acknowledge / dismiss (never yes / no)', 'Ask sparingly', 'behaviour ledger'],
+  'references/etiquette.md': ['acknowledge / dismiss (never yes / no)', 'Ask sparingly', 'behaviour ledger', 'Inline cues are the cheap way', 'One cue per sentence at most', "Don't fidget"],
   'references/updates.md': ['When your human asks to check Molty for updates (any wording', '**ask before updating**', 'firmware_too_old', '`firmware_update`', '`can_self_update`', 'read `relay.caps`'.replace('read ', ''), 'claude plugin update molty@molty', 'codex plugin add molty@molty', 'deprecated'],
   'references/voice.md': ['`relay.voice`', '[stt unavailable]', 'voice_box_offline'],
   'references/self-hosting.md': ['d1_databases', 'pnpm run deploy', 'relay_url', 'Tokens belong to the relay'],
