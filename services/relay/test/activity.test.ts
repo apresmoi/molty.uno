@@ -299,6 +299,17 @@ describe("activity: agent isolation", () => {
     expect(((await w.room.activityLog(idle, {})) as any).result.entries.map((e: any) => e.kind)).toEqual(["pair"]);
   });
 
+  it("pr2 review: B cannot read A's job result (job id learned from an event) — not_found; A still can", async () => {
+    const { w, a, b, ja } = await two();
+    const theirs = (await w.room.job(b, ja, 0)) as any;
+    expect(theirs).toMatchObject({ ok: false, error: "not_found" });
+    expect(JSON.stringify(theirs)).not.toContain("Claude speaking.");
+    expect(JSON.stringify(theirs)).not.toContain("alpha secret words");
+    const mine = (await w.room.job(a, ja, 0)) as any;
+    expect(mine.ok).toBe(true);
+    expect(JSON.stringify(mine)).toContain("alpha secret words");
+  });
+
   it("a voice box token cannot read activity", async () => {
     const w = await world();
     await w.pair("Claude");
