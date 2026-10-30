@@ -14,6 +14,8 @@
 #include "esp_app_desc.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 static struct { const char *name; link_cmd_handler_t handler; } s_registry[16];
 static size_t s_count;
@@ -24,14 +26,49 @@ static char s_mood[16] = "idle";
  * sets for itself (listening / speaking / idle). */
 static atomic_uint s_mood_gen;
 
+/* Applying an explicit mood + counting it, and a job's end checking the count +
+ * writing idle, run on different tasks (local HTTP server, link task). One lock over
+ * both pairs, so idle can never land between an explicit mood and its count. Created
+ * on first use: the HTTP API works even when the link never started. */
+static _Atomic(SemaphoreHandle_t) s_mood_lock;
+
+static void mood_lock(void)
+{
+    SemaphoreHandle_t m = atomic_load(&s_mood_lock);
+    if (!m) {
+        SemaphoreHandle_t fresh = xSemaphoreCreateMutex(), none = NULL;
+        configASSERT(fresh);
+        if (atomic_compare_exchange_strong(&s_mood_lock, &none, fresh)) m = fresh;
+        else { vSemaphoreDelete(fresh); m = none; }
+    }
+    xSemaphoreTake(m, portMAX_DELAY);
+}
+static void mood_unlock(void) { xSemaphoreGive(atomic_load(&s_mood_lock)); }
+
 unsigned link_cmd_mood_gen(void) { return atomic_load(&s_mood_gen); }
 
-void link_cmd_note_state_body(const char *body)
+static void note_state_body(const char *body)
 {
     if (!body || !strstr(body, "\"mood\"")) return;     /* cheap: most bodies carry no mood */
     cJSON *j = cJSON_Parse(body);
     if (cJSON_IsString(cJSON_GetObjectItemCaseSensitive(j, "mood"))) atomic_fetch_add(&s_mood_gen, 1);
     cJSON_Delete(j);
+}
+
+esp_err_t link_cmd_state_set_explicit(const char *body)
+{
+    mood_lock();
+    esp_err_t e = mole_creature_state_set(body);
+    if (e == ESP_OK) note_state_body(body);
+    mood_unlock();
+    return e;
+}
+
+void link_cmd_mood_idle_unless(unsigned gen0)
+{
+    mood_lock();
+    if (atomic_load(&s_mood_gen) == gen0) link_cmd_mood("idle", -1);
+    mood_unlock();
 }
 
 esp_err_t link_cmd_register(const char *name, link_cmd_handler_t handler)
@@ -118,8 +155,10 @@ static esp_err_t cmd_mood(const cJSON *args, cJSON **out)
     (void)out;
     const char *mood; double hold_s;
     if (!link_mood_args(args, &mood, &hold_s)) return ESP_ERR_INVALID_ARG;
+    mood_lock();
     esp_err_t e = link_cmd_mood(mood, hold_s);
     if (e == ESP_OK) atomic_fetch_add(&s_mood_gen, 1);
+    mood_unlock();
     return e;
 }
 

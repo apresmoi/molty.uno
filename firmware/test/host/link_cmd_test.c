@@ -38,11 +38,21 @@ int main(void) {
     assert(run("mood","{\"mood\":\"happy\",\"hold_s\":-1}")==ESP_ERR_INVALID_ARG && link_cmd_mood_gen()==g+2);
     assert(run("show","{\"text\":\"hi\"}")==ESP_OK && link_cmd_mood_gen()==g+2);
     /* local HTTP state bodies: only a top-level mood string counts */
-    link_cmd_note_state_body("{\"mood\":\"sleepy\",\"hold_s\":30}"); assert(link_cmd_mood_gen()==g+3);
-    link_cmd_note_state_body("{\"state\":\"text\",\"text\":\"my \\\"mood\\\" is fine\"}"); assert(link_cmd_mood_gen()==g+3);
-    link_cmd_note_state_body("{\"state\":\"blob\"}"); assert(link_cmd_mood_gen()==g+3);
-    link_cmd_note_state_body("not json \"mood\""); assert(link_cmd_mood_gen()==g+3);
-    link_cmd_note_state_body(NULL); assert(link_cmd_mood_gen()==g+3);
+    assert(link_cmd_state_set_explicit("{\"mood\":\"sleepy\",\"hold_s\":30}")==ESP_OK && link_cmd_mood_gen()==g+3);
+    assert(link_cmd_state_set_explicit("{\"state\":\"text\",\"text\":\"my \\\"mood\\\" is fine\"}")==ESP_OK && link_cmd_mood_gen()==g+3);
+    assert(link_cmd_state_set_explicit("{\"state\":\"blob\"}")==ESP_OK && link_cmd_mood_gen()==g+3);
+    assert(link_cmd_state_set_explicit("not json \"mood\"")==ESP_OK && link_cmd_mood_gen()==g+3);
+    /* the race: an explicit mood's apply + count, and a job end's check + idle, share one
+     * lock (HTTP task vs link task). Every mood write below must run with it held. */
+    sdk_state_locked=false; assert(link_cmd_state_set_explicit("{\"mood\":\"happy\"}")==ESP_OK && sdk_state_locked);
+    sdk_state_locked=false; assert(run("mood","{\"mood\":\"sleepy\"}")==ESP_OK && sdk_state_locked);
+    unsigned g0=link_cmd_mood_gen();
+    strcpy(sdk_state,""); sdk_state_locked=false; link_cmd_mood_idle_unless(g0);
+    assert(strstr(sdk_state,"\"mood\":\"idle\"") && sdk_state_locked);
+    /* an explicit mood since the snapshot: idle is skipped */
+    assert(run("mood","{\"mood\":\"thinking\"}")==ESP_OK);
+    link_cmd_mood_idle_unless(g0); assert(strstr(sdk_state,"\"mood\":\"thinking\""));
+    assert(sdk_locks==0);
     cJSON_Delete(sdk_sent);
-    puts("LINK CMD PASS: explicit moods counted (link mood cmd, local state POST), own/rejected moods not");
+    puts("LINK CMD PASS: explicit moods counted (link mood cmd, local state POST) under the mood lock, own/rejected moods not");
 }

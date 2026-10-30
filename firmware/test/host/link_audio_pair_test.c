@@ -62,6 +62,7 @@ esp_err_t link_cmd_mood(const char *mood,double hold_s) { strcpy(sdk_mood,mood);
 static unsigned mood_gen;            /* link_cmd.c's explicit-mood count (link_cmd_test.c) */
 unsigned link_cmd_mood_gen(void) { return mood_gen; }
 static void explicit_mood(const char *mood,double hold_s) { link_cmd_mood(mood,hold_s); mood_gen++; }
+void link_cmd_mood_idle_unless(unsigned gen0) { if (mood_gen==gen0) link_cmd_mood("idle",-1); }
 esp_err_t link_ui_set_text(const char *text,int len) { assert(len>=0 && len<=4096); memcpy(sdk_text,text,len+1); return ESP_OK; }
 
 static cJSON *say_args(void) { return cJSON_Parse("{\"job\":\"molty-abcdefghij.j_1\",\"text\":\"hello world\",\"ms\":640,\"rate\":16000}"); }

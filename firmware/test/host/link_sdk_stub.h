@@ -47,6 +47,8 @@ typedef struct sdk_ring *RingbufHandle_t;
 SemaphoreHandle_t xSemaphoreCreateMutex(void);
 int xSemaphoreTake(SemaphoreHandle_t, unsigned);
 int xSemaphoreGive(SemaphoreHandle_t);
+void vSemaphoreDelete(SemaphoreHandle_t);
+#define configASSERT(x) do { if (!(x)) abort(); } while (0)
 QueueHandle_t xQueueCreate(unsigned, size_t);
 int xQueueSend(QueueHandle_t, const void *, unsigned);
 int xQueueReceive(QueueHandle_t, void *, unsigned);
@@ -139,6 +141,8 @@ esp_err_t httpd_register_uri_handler(httpd_handle_t, const httpd_uri_t *);
 extern int64_t sdk_now;
 extern void (*sdk_wait)(void);
 extern unsigned sdk_random, sdk_commits, sdk_erases;
+/* mutexes held right now; whether the last state set ran with one held */
+extern int sdk_locks; extern bool sdk_state_locked;
 extern char sdk_id[64], sdk_url[384], sdk_state[512], sdk_text[4097], sdk_mood[16];
 extern const char *sdk_saved_state;   /* what mole_creature_state_get reports */
 extern uint8_t sdk_key[32];

@@ -905,9 +905,8 @@ static esp_err_t handler_creature_state_post(httpd_req_t *r)
     if (received <= 0) { free(body); return http_send_json(r, "{\"ok\":false,\"error\":\"recv_failed\"}"); }
     body[received] = '\0';
 
-    esp_err_t ret = mole_creature_state_set(body);
     /* an explicit mood: a listen/say finishing must not drop it back to idle */
-    if (ret == ESP_OK) link_cmd_note_state_body(body);
+    esp_err_t ret = link_cmd_state_set_explicit(body);
     free(body);
     if (ret == ESP_ERR_INVALID_STATE)
         return http_send_json(r, "{\"ok\":false,\"error\":\"no_creature\"}");

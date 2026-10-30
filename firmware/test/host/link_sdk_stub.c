@@ -46,9 +46,11 @@ int mbedtls_base64_encode(unsigned char *out, size_t cap, size_t *len, const uns
     (void)in; assert(cap>=45 && size==32); memset(out,'A',43); out[43]='='; *len=44; return 0;
 }
 const char *esp_err_to_name(esp_err_t e) { (void)e; return "mock_error"; }
+int sdk_locks; bool sdk_state_locked;
 SemaphoreHandle_t xSemaphoreCreateMutex(void) { return (void *)1; }
-int xSemaphoreTake(SemaphoreHandle_t s, unsigned t) { (void)s; (void)t; return pdTRUE; }
-int xSemaphoreGive(SemaphoreHandle_t s) { (void)s; return pdTRUE; }
+int xSemaphoreTake(SemaphoreHandle_t s, unsigned t) { assert(s); (void)t; sdk_locks++; return pdTRUE; }
+int xSemaphoreGive(SemaphoreHandle_t s) { assert(s && sdk_locks>0); sdk_locks--; return pdTRUE; }
+void vSemaphoreDelete(SemaphoreHandle_t s) { (void)s; }
 struct sdk_queue { size_t count, cap, item; unsigned char data[]; };
 QueueHandle_t xQueueCreate(unsigned n, size_t item) {
     QueueHandle_t q=calloc(1,sizeof(*q)+n*item); assert(q); q->cap=n; q->item=item; return q;
@@ -107,7 +109,7 @@ bool molty_button_pressed(molty_button_t b) {
 esp_err_t mole_creature_select(const char *name) { assert(name); return ESP_OK; }
 const char *mole_creature_current(void) { return "fluid"; }
 esp_err_t mole_creature_state_get(char **out) { *out=strdup(sdk_saved_state); return ESP_OK; }
-esp_err_t mole_creature_state_set(const char *json) { assert(strlen(json)<sizeof(sdk_state)); strcpy(sdk_state,json); return ESP_OK; }
+esp_err_t mole_creature_state_set(const char *json) { assert(strlen(json)<sizeof(sdk_state)); strcpy(sdk_state,json); sdk_state_locked=sdk_locks>0; return ESP_OK; }
 esp_err_t molty_speaker_stream_begin(uint32_t rate) { assert(rate==16000); return ESP_OK; }
 esp_err_t molty_speaker_stream_write(const int16_t *pcm, size_t n) { assert(pcm); sdk_written+=n*2; return sdk_play_error; }
 esp_err_t molty_speaker_stream_drain(void) { sdk_drained++; return sdk_play_error; }

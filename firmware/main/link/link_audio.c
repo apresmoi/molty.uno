@@ -264,7 +264,7 @@ void link_audio_tick(void)
     s_busy = false;
     /* Back to idle only if nobody chose a mood while the job ran: an explicit mood
      * (with its own hold_s, fluid_director) outlives the listen/say it arrived in. */
-    if (!link_pair_active() && link_cmd_mood_gen() == s_mood_gen0) link_cmd_mood("idle", -1);
+    if (!link_pair_active()) link_cmd_mood_idle_unless(s_mood_gen0);
     /* A failed/cancelled stream must never report successful playback. Listen
      * completion is the uplink end flag, not a say event. */
     if (!s_listen && e == ESP_OK && !atomic_load(&s_cancel) && link_client_connected()) {
