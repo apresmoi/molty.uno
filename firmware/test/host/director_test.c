@@ -267,6 +267,19 @@ static void test_reel(void) {
           "the reel's last mood does not stick: %d", fd_mood(&D));
 }
 
+/* a question covered the shown state and left: replay restarts its clock (it flows back
+ * before it crystallises) without a transition or a change of state */
+static void test_replay(void) {
+    boot(true);
+    run(5.f, false);
+    CHECK(fd_solidity(&D, 1.f) > 0.99f, "settled creature solidity %f", fd_solidity(&D, 1.f));
+    int melts = s_melts;
+    fd_replay(&D);
+    CHECK(fd_solidity(&D, 1.f) == 0.f && D.cur == FD_ST_CREATURE && !D.pending && s_melts == melts, "replay");
+    run(2.f, false);
+    CHECK(fd_solidity(&D, 1.f) > 0.99f, "replayed creature settles again: %f", fd_solidity(&D, 1.f));
+}
+
 int main(void) {
     printf("director host test\n");
     test_boot();
@@ -278,6 +291,7 @@ int main(void) {
     test_shake();
     test_status();
     test_reel();
+    test_replay();
     printf("%d passed, %d failed\n", s_pass, s_fail);
     return s_fail ? 1 : 0;
 }

@@ -8,6 +8,7 @@
  *   buttons  press edges of the accept / reject buttons
  *   touch    tap edges handed over by sense_touch (the fluid task polls touch)
  *   status   every 0.5 s: Wi-Fi / relay / auth → mole_fluid_set_status (the edge mark)
+ * A tap while a question (link `ask`) is pending is its answer (link_ask.c), not a tap event.
  * Nothing leaves while a pairing is pending (its tap and buttons decide the pairing) or
  * while the link is down; events are not queued for later. Rate limits on the device:
  * ≤ 1 shake per 2 s, ≤ 4 taps and ≤ 4 button presses per second.
@@ -19,6 +20,7 @@
 #include "fluid_director.h"
 #include "link_client.h"
 #include "link_pair.h"
+#include "link_ask.h"
 #include "link_protocol.h"
 #include "mole_diag.h"
 
@@ -44,6 +46,8 @@ void sense_touch(int n, const uint16_t *xs, const uint16_t *ys)
     static bool down;
     if (n > 0 && !down && !link_pair_active()) {
         int w = molty_display_width(), h = molty_display_height();
+        /* a pending question takes the tap as its answer: no `tap` event for it */
+        if (link_ask_tap((float)xs[0] + 0.5f - w * 0.5f, (float)ys[0] + 0.5f - h * 0.5f)) { down = true; return; }
         uint32_t x = w > 1 ? (uint32_t)xs[0] * 65535u / (uint32_t)(w - 1) : 0;
         uint32_t y = h > 1 ? (uint32_t)ys[0] * 65535u / (uint32_t)(h - 1) : 0;
         atomic_store(&s_tap_xy, (x > 65535u ? 65535u : x) << 16 | (y > 65535u ? 65535u : y));

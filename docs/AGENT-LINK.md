@@ -74,7 +74,7 @@ Molty (home Wi-Fi) ──outbound WSS──▶ molty-relay (Cloudflare Worker + 
 
 ## Device ↔ relay wire (WS/WSS `/v1/device?id=<device_id>`)
 
-First frame from device: `{"t":"hello","id":"molty-k7m2w9c4ya","key":"<b64 device_key>","fw":"...","caps":["fluid","say","listen","show","mood","creature"],"board":"waveshare-esp32-s3-touch-lcd-1.46","link_code":"..."}`
+First frame from device: `{"t":"hello","id":"molty-k7m2w9c4ya","key":"<b64 device_key>","fw":"...","caps":["fluid","say","listen","show","mood","creature","ask"],"board":"waveshare-esp32-s3-touch-lcd-1.46","link_code":"..."}`
 → relay answers `{"t":"welcome"}` or closes with 4401.
 
 `board` names the hardware (`firmware/boards/`, see [PORTING.md](PORTING.md)). `caps`
@@ -132,6 +132,27 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   `run()` stays pending until Workers AI answers, and its output is then released unread.
   Likewise a non-streamed (whole-body) TTS reply is read to the end once it has started.
   Whether Workers AI keeps computing (and billing) an abandoned request is not verified.
+- `ask`: relay sends `cmd ask {job, options, timeout_ms}` (`options` 1–5 strings, each 1–8
+  chars of printable ASCII 0x20–0x7E, not all spaces, unique ignoring case; `timeout_ms`
+  integer 1000..120000); the device validates the same (`invalid_args`), answers
+  `unsupported` without touch, and acknowledges `{job}` at once. The options condense out
+  of the fluid in sectors (`firmware/main/fluid/fluid_ask.h`: 1 = whole screen, 2 = left /
+  right, 3–5 = pie sectors from 12 o'clock clockwise, options in reading order of the
+  sectors). The device then sends exactly one `answer` event for the job:
+  `{"t":"evt","name":"answer","data":{"job":"…","index":1,"label":"no"}}` (a tap: the sector
+  it landed in; `label` = `options[index]` verbatim, no `reason`),
+  `{"t":"evt","name":"answer","data":{"job":"…","index":null,"reason":"timeout"}}` (no tap
+  within `timeout_ms`), or `{…,"index":null,"reason":"cancelled"}` (an accepted `say`,
+  `show`, `mood`, `state` with args, `listen` or a new `ask`, or a pairing, took the screen
+  first; a new `ask` cancels the old one before its own ack). Events go out only while the
+  link is up: a question pending when the link drops ends on screen with no event. While a
+  question is pending, the tap that answers it is not also a `tap` event.
+  Relay side (`molty_ask` / `POST …/ask`): the `cmd ask` goes out only after the optional
+  `say` has played (its `say.done`, as `talk`), with labels already trimmed (`MAX_ASK_LABEL`
+  in `relay/src/core/commands.ts`). The relay drops an `answer` unless its job is an ask still
+  waiting, `index` is within that job's options, `label` (optional) equals `options[index]`, and
+  a tap carries no `reason` / a non-answer no label. No answer within `timeout_ms` + 5 s: the
+  relay resolves `timeout` itself; device gone mid-ask: `reason:"offline"`.
 - `listen`: relay sends `cmd listen {job, ms, rate:16000, end_silence_ms?, no_speech_ms?, vad?}`
   (`ms` = maximum window; the VAD knobs only when the agent gave them: `end_silence_ms`
   300..3000, `no_speech_ms` 1000..10000, `vad` bool). Device streams mic PCM up; the last frame
@@ -143,18 +164,6 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   `vad:false`). Older firmware sends no reason: STT as before, reason derived (`max` window
   full, `ended` stopped early, `no_speech` empty transcript).
 
-- `ask` (relay call `molty_ask` / `POST …/ask`): after the optional `say` has played (its
-  `say.done`, as `talk`), relay sends `cmd ask {job, options:[1..5 labels], timeout_ms}`
-  (labels already trimmed, 1–8 printable ASCII chars, unique ignoring case; `MAX_ASK_LABEL` in
-  `relay/src/core/commands.ts`). Device shows 1 option as a centred button, 2 as halves, 3–5 as pie
-  slices, acks, and later sends exactly one
-  `{"t":"evt","name":"answer","data":{"job":"…","index":N,"label":"…"}}` for the tap, or
-  `{"job":"…","index":null,"reason":"timeout"|"cancelled"}` when `timeout_ms` passed or any later
-  command replaced the question. The relay drops an `answer` unless its job is an ask still
-  waiting, `index` is within that job's options, `label` (optional) equals `options[index]`, and a
-  tap carries no `reason` / a non-answer no label. No answer within `timeout_ms` + 5 s: the relay
-  resolves `timeout` itself. Device gone mid-ask: `reason:"offline"`. The answering tap is not also
-  sent as a `tap` event.
 
 Automatic moods around talking: the device sets `listening` on `listen` and `speaking` on
 `say` (then `idle`); the relay sends `mood thinking hold_s:15` the moment a listen's end frame
@@ -258,9 +267,11 @@ pairing). Rate-limited on the device. `shake`, `tap` and `button` reach agents t
 | `shake` | `{peak_g, reversals, ms}` | the board was shaken (boards with an IMU): ≥ 3 sign reversals of > 1.2 g dynamic acceleration on one axis within 800 ms; ≤ 1 per 2 s. `peak_g` largest dynamic acceleration (g), `ms` first peak → detection |
 | `tap` | `{x, y}` | a finger touched the screen (boards with touch); 0..1 of the panel from the top left; ≤ 4/s |
 | `button` | `{id: "accept"\|"reject"}` | a button was pressed (the board's accept / reject buttons); ≤ 4/s |
-| `answer` | `{job, index: int\|null, label?, reason?: "timeout"\|"cancelled"}` | an `ask` ended: tapped option, or none (see the `ask` wire bullet above); once per ask |
+| `answer` | `{job, index, label}` · `{job, index: null, reason: "timeout"\|"cancelled"}` | an `ask` ended: tapped (0-based `index`, `label` verbatim), timed out, or cancelled; one per job, never rate-limited |
 
-The device reacts to a shake by itself (a brief `surprised`), agent or not. Detector
+The device reacts to a shake by itself (a brief `surprised`), agent or not. While a `listen`
+records, a thin accent-coloured ring inside the screen's rim breathes and swells with the
+voice (`mole_fluid_listen`); it is never shown over a pending `ask`. Detector
 constants: `firmware/main/sense/gesture.h`.
 
 ## Agent surfaces

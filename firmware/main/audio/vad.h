@@ -79,6 +79,7 @@ typedef struct {
     uint32_t      silence_ms;    /* current run of unvoiced frames after speech */
     float         floor_db;
     float         last_db;
+    float         peak_db;       /* loudest frame since the last vad_level()          */
     /* partial frame carried between feeds */
     uint64_t      acc;
     uint32_t      acc_n;
@@ -98,5 +99,11 @@ vad_verdict_t vad_feed(vad_t *v, const int16_t *pcm, size_t n);
 /* true when speech_ms is a measurement: VAD enabled and calibration over. A listen
  * that ends earlier (or runs with VAD off) has an unknown voiced total. */
 bool vad_speech_known(const vad_t *v);
+/* The mic level for the screen's listening ring: the loudest frame since the previous
+ * call, VAD_LEVEL_FLOOR_DB above the noise floor = 0 ... + VAD_LEVEL_SPAN_DB = 1 (close
+ * speech reads ~1, the room 0). Works with the VAD off too. Resets the peak. */
+#define VAD_LEVEL_FLOOR_DB 6.f
+#define VAD_LEVEL_SPAN_DB  24.f
+float vad_level(vad_t *v);
 /* "silence" / "no_speech" / "max" (NULL while VAD_CONTINUE). */
 const char *vad_reason(vad_verdict_t verdict);

@@ -272,6 +272,32 @@ static void test_speech_known(void)
     CHECK(!vad_speech_known(&v), "known with VAD off");
 }
 
+/* the mic level for the screen's ring (vad_level): ~0 for the room, ~1 for close speech,
+ * the loudest frame since the last read (the peak resets), VAD on or off */
+static void test_level(void)
+{
+    const seg_t segs[] = { { NOISE, QUIET, 1000 }, { SPEECH, -25.f, 1000 }, { NOISE, QUIET, 1000 } };
+    for (int on = 0; on < 2; on++) {
+        vad_cfg_t c = VAD_CFG_DEFAULT; c.enabled = on; c.max_ms = 10000; c.no_speech_ms = 10000;
+        vad_t v; vad_init(&v, &c);
+        CHECK(vad_level(&v) == 0.f, "vad=%d: level before any audio", on);
+        static int16_t buf[1600];
+        float room = 0.f, speech = 0.f, after = 1.f;
+        s_rng = 7;
+        for (uint32_t ch = 0; ch < 30; ch++) {
+            for (uint32_t i = 0; i < 1600; i++) buf[i] = sample(segs, 3, ch * 1600 + i, -999.f, 0);
+            vad_feed(&v, buf, 1600);
+            float l = vad_level(&v);
+            CHECK(l >= 0.f && l <= 1.f, "level %f out of 0..1", l);
+            if (ch >= 3 && ch < 10 && l > room) room = l;
+            if (ch >= 12 && ch < 19 && l > speech) speech = l;
+            if (ch == 29) after = l;
+        }
+        CHECK(room < 0.15f && speech > 0.8f && after < 0.15f, "vad=%d: room %.2f, speech %.2f, after %.2f", on, room, speech, after);
+        CHECK(vad_level(&v) == 0.f, "vad=%d: the peak did not reset", on);
+    }
+}
+
 int main(void)
 {
     test_no_speech();
@@ -283,6 +309,7 @@ int main(void)
     test_min_record_and_chunks();
     test_immediate_reply();
     test_speech_known();
+    test_level();
     printf("vad_test: %d passed, %d failed\n", s_pass, s_fail);
     return s_fail ? 1 : 0;
 }

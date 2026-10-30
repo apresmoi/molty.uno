@@ -22,7 +22,7 @@ void vad_init(vad_t *v, const vad_cfg_t *cfg)
     uint32_t calib_cap = VAD_CALIB_MAX * VAD_FRAME_MS;
     c->calib_ms = clamp_u(c->calib_ms, VAD_FRAME_MS, c->floor_window_ms < calib_cap ? c->floor_window_ms : calib_cap);
     if (c->off_db > c->on_db) c->off_db = c->on_db;
-    v->floor_db = v->last_db = VAD_SILENT_DB;
+    v->floor_db = v->last_db = v->peak_db = VAD_SILENT_DB;
     v->block_min = INFINITY;
 }
 
@@ -75,6 +75,7 @@ static vad_verdict_t frame(vad_t *v, float db)
 {
     const vad_cfg_t *c = &v->cfg;
     v->last_db = db;
+    if (db > v->peak_db) v->peak_db = db;
     bool calibrated = v->t_ms >= c->calib_ms;
     if (calibrated && c->enabled) {
         v->floor_db = floor_capped(v);
@@ -118,6 +119,17 @@ vad_verdict_t vad_feed(vad_t *v, const int16_t *pcm, size_t n)
         v->verdict = frame(v, db);
     }
     return v->verdict;
+}
+
+float vad_level(vad_t *v)
+{
+    /* the floor as classification sees it (capped early on), never below digital-silence
+     * territory: a near-silent room must not read a faint click as a shout */
+    float floor = floor_capped(v);
+    if (!(floor > -70.f)) floor = -70.f;
+    float l = (v->peak_db - floor - VAD_LEVEL_FLOOR_DB) / VAD_LEVEL_SPAN_DB;
+    v->peak_db = VAD_SILENT_DB;
+    return l < 0.f ? 0.f : l > 1.f ? 1.f : l;
 }
 
 bool vad_speech_known(const vad_t *v) { return v->cfg.enabled && v->t_ms >= v->cfg.calib_ms; }

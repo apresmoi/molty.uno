@@ -19,6 +19,9 @@ esp_err_t mole_fluid_set_text(const char *t, int len) { (void)t;(void)len; retur
 bool link_pair_active(void) { return false; }
 esp_err_t link_audio_say(const cJSON *a, cJSON **o) { (void)a;(void)o; return ESP_OK; }
 esp_err_t link_audio_listen(const cJSON *a, cJSON **o) { (void)a;(void)o; return ESP_OK; }
+static unsigned ask_cancels, ask_cmds;
+void link_ask_cancel(void) { ask_cancels++; }
+esp_err_t link_ask_cmd(const cJSON *a, cJSON **o) { (void)a;(void)o; ask_cmds++; return ESP_OK; }
 
 static unsigned gen_at_unlock;
 static void snap_gen(void) { gen_at_unlock=link_cmd_mood_gen(); }
@@ -73,6 +76,16 @@ int main(void) {
     assert(run("mood","{\"mood\":\"thinking\"}")==ESP_OK);
     link_cmd_mood_idle_unless(g0); assert(strstr(sdk_state,"\"mood\":\"thinking\""));
     assert(sdk_locks==0);
+    /* ask is registered; commands that change the screen cancel a pending question once
+     * accepted, the rest (reads, refused args, hardware) leave it up */
+    assert(run("ask","{}")==ESP_OK && ask_cmds==1);
+    unsigned c=ask_cancels;
+    assert(run("show","{\"text\":\"hi\"}")==ESP_OK && ask_cancels==c+1);
+    assert(run("mood","{\"mood\":\"happy\"}")==ESP_OK && ask_cancels==c+2);
+    assert(run("state","{\"palette\":\"green\"}")==ESP_OK && ask_cancels==c+3);
+    assert(run("state","{}")==ESP_OK && run("status","{}")==ESP_OK && run("diag","{}")==ESP_OK && ask_cancels==c+3);
+    assert(run("volume","{\"volume\":3}")==ESP_OK && run("imu","{}")==ESP_ERR_NOT_SUPPORTED && ask_cancels==c+3);
+    assert(run("show","{\"text\":1}")==ESP_ERR_INVALID_ARG && run("mood","{\"mood\":\"furious\"}")==ESP_ERR_INVALID_ARG && ask_cancels==c+3);
     cJSON_Delete(sdk_sent);
-    puts("LINK CMD PASS: explicit moods counted (link mood cmd, local state POST) under the mood lock, own/rejected moods not");
+    puts("LINK CMD PASS: explicit moods counted (link mood cmd, local state POST) under the mood lock, own/rejected moods not; screen commands cancel a question");
 }

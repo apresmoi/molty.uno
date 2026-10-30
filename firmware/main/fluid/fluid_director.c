@@ -172,6 +172,8 @@ void fd_tick(fluid_director_t *d, float dt, bool text_done) {
     else if ((d->status_t += dt) >= d->cfg.status_after_s) { d->shown = d->status; d->status_t = 0.f; }
 }
 
+void fd_replay(fluid_director_t *d) { d->state_t = 0.f; d->text_done_t = 0.f; }
+
 bool fd_take(fluid_director_t *d, int *st, int *fx) {
     if (!d->pending) return false;
     d->pending = false;

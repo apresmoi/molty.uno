@@ -241,10 +241,71 @@ static void test_frames(void)
     assert(!strcmp((char *)frame, "{\"s\":\"j\",\"seq\":7,\"kind\":\"pcm16\",\"rate\":16000,\"end\":true}\n"));
 }
 
+static bool ask_ok(const char *json, int *n_out) {
+    cJSON *a = cJSON_Parse(json); assert(a);
+    char job[LINK_STREAM_MAX], labels[LINK_ASK_MAX][LINK_ASK_LABEL_MAX + 1]; int n = -1; unsigned to = 0;
+    bool ok = link_ask_args(a, job, labels, &n, &to);
+    if (ok && n_out) *n_out = n;
+    cJSON_Delete(a);
+    return ok;
+}
+#define ASK(opts, to) "{\"job\":\"j1\",\"options\":" opts ",\"timeout_ms\":" to "}"
+
+static void test_ask_args(void)
+{
+    cJSON *a = cJSON_Parse("{\"job\":\"molty-x.j_3\",\"options\":[\"Yes\",\" no \",\"(a)~\"],\"timeout_ms\":15000,\"extra\":1}");
+    char job[LINK_STREAM_MAX], labels[LINK_ASK_MAX][LINK_ASK_LABEL_MAX + 1]; int n; unsigned to;
+    assert(link_ask_args(a, job, labels, &n, &to) && n == 3 && to == 15000);
+    /* verbatim: the answer's label must equal options[index] exactly */
+    assert(!strcmp(job, "molty-x.j_3") && !strcmp(labels[0], "Yes") && !strcmp(labels[1], " no ") && !strcmp(labels[2], "(a)~"));
+    cJSON_Delete(a);
+    int got = 0;
+    assert(ask_ok(ASK("[\"a\"]", "1000"), &got) && got == 1);
+    assert(ask_ok(ASK("[\"a\",\"b\",\"c\",\"d\",\"e\"]", "120000"), &got) && got == 5);
+    /* every printable ASCII char is allowed (the font draws them all) */
+    assert(ask_ok(ASK("[\"12345678\",\" ~!@#$%^\",\"&*()_+{}\",\"|:<>?`[]\",\"\\\\;',./\\\"-\"]", "5000"), &got) && got == 5);
+    /* count: 1..5 */
+    assert(!ask_ok(ASK("[]", "5000"), NULL) && !ask_ok(ASK("[\"a\",\"b\",\"c\",\"d\",\"e\",\"f\"]", "5000"), NULL));
+    /* length 1..8 */
+    assert(!ask_ok(ASK("[\"\"]", "5000"), NULL) && !ask_ok(ASK("[\"123456789\"]", "5000"), NULL));
+    /* printable ASCII only, not all spaces */
+    assert(!ask_ok(ASK("[\"   \"]", "5000"), NULL) && !ask_ok(ASK("[\"a\\tb\"]", "5000"), NULL));
+    assert(!ask_ok(ASK("[\"a\\u007f\"]", "5000"), NULL) && !ask_ok(ASK("[\"caf\\u00e9\"]", "5000"), NULL));
+    assert(!ask_ok(ASK("[\"a\\nb\"]", "5000"), NULL) && !ask_ok(ASK("[\"\\u0000a\"]", "5000"), NULL));
+    /* unique ignoring case (they render alike: the font has capitals only) */
+    assert(!ask_ok(ASK("[\"Yes\",\"no\",\"YES\"]", "5000"), NULL) && !ask_ok(ASK("[\"a\",\"a\"]", "5000"), NULL));
+    assert(ask_ok(ASK("[\"yes\",\"yes \"]", "5000"), NULL) && ask_ok(ASK("[\"ab\",\"abc\"]", "5000"), NULL));
+    /* option types */
+    assert(!ask_ok(ASK("[\"a\",1]", "5000"), NULL) && !ask_ok(ASK("\"a\"", "5000"), NULL) && !ask_ok(ASK("[null]", "5000"), NULL));
+    /* timeout_ms: integer 1000..120000, required */
+    assert(!ask_ok(ASK("[\"a\"]", "999"), NULL) && !ask_ok(ASK("[\"a\"]", "120001"), NULL));
+    assert(!ask_ok(ASK("[\"a\"]", "1500.5"), NULL) && !ask_ok(ASK("[\"a\"]", "\"5000\""), NULL));
+    assert(!ask_ok("{\"job\":\"j1\",\"options\":[\"a\"]}", NULL));
+    /* job: 1..128 chars, required */
+    assert(!ask_ok("{\"options\":[\"a\"],\"timeout_ms\":5000}", NULL) && !ask_ok("{\"job\":\"\",\"options\":[\"a\"],\"timeout_ms\":5000}", NULL));
+    char big[300]; char id[130]; memset(id, 'j', 129); id[129] = 0;
+    snprintf(big, sizeof(big), "{\"job\":\"%s\",\"options\":[\"a\"],\"timeout_ms\":5000}", id);
+    assert(!ask_ok(big, NULL));
+    id[128] = 0; snprintf(big, sizeof(big), "{\"job\":\"%s\",\"options\":[\"a\"],\"timeout_ms\":5000}", id);
+    assert(ask_ok(big, NULL));
+
+    /* the answer events, exactly */
+    cJSON *f = link_evt_answer_frame("j1", 2, "(a)~", NULL);
+    char *t = cJSON_PrintUnformatted(f);
+    assert(!strcmp(t, "{\"t\":\"evt\",\"name\":\"answer\",\"data\":{\"job\":\"j1\",\"index\":2,\"label\":\"(a)~\"}}"));
+    cJSON_free(t); cJSON_Delete(f);
+    f = link_evt_answer_frame("j1", -1, NULL, "timeout"); t = cJSON_PrintUnformatted(f);
+    assert(!strcmp(t, "{\"t\":\"evt\",\"name\":\"answer\",\"data\":{\"job\":\"j1\",\"index\":null,\"reason\":\"timeout\"}}"));
+    cJSON_free(t); cJSON_Delete(f);
+    f = link_evt_answer_frame("j1", -1, NULL, "cancelled"); t = cJSON_PrintUnformatted(f);
+    assert(!strcmp(t, "{\"t\":\"evt\",\"name\":\"answer\",\"data\":{\"job\":\"j1\",\"index\":null,\"reason\":\"cancelled\"}}"));
+    cJSON_free(t); cJSON_Delete(f);
+}
+
 int main(void)
 {
     test_codes(); test_moods(); test_frames(); test_identity_and_urls(); test_control_frames();
-    test_mood_args(); test_listen_args(); test_event_frames(); test_restore();
-    puts("LINK HOST PASS: audio/control/event frames, random IDs, code alphabet, URLs, close retry policy, moods + hold_s, listen args, restore");
+    test_mood_args(); test_listen_args(); test_event_frames(); test_restore(); test_ask_args();
+    puts("LINK HOST PASS: audio/control/event frames, random IDs, code alphabet, URLs, close retry policy, moods + hold_s, listen args, restore, ask args + answer frames");
     return 0;
 }

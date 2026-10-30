@@ -9,6 +9,8 @@
  * Build + run: test/host/fluid_build.sh
  */
 #include "fluid_sim.h"
+#include "fluid_ask.h"
+#include "glyph_font.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -273,11 +275,163 @@ static void test_mark(int fb_w, int fb_h) {
     fluid_draw_destroy(d);
 }
 
+/* a question's labels: every letter in order, centred on its spot; only shown labels
+ * pool ink; the accent follows acc */
+static void test_labels(void) {
+    fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
+    fluid_text_t *tx = fluid_text_create(s);
+    const char *txt[5] = { "ABCDEFGH", "IJKLMNOP", "QRSTUVWX", "YZ012345", "6789 #@!" };
+    int lens[5] = { 8, 8, 8, 8, 8 };
+    float cx[5], cy[5], fs = fluid_ask_layout(5, lens, FLUID_STAGE_REF, cx, cy);
+    fluid_label_t lb[5];
+    for (int i = 0; i < 5; i++) lb[i] = (fluid_label_t){ txt[i], 8, cx[i], cy[i], i != 2, i == 3 };
+    fluid_text_set_labels(tx, s, lb, 5, fs);
+    CHECK(tx->nletters == 40, "5×8 labels: %d letters", tx->nletters);
+    const float cw = (float)FLUID_STAGE_REF / s->W, ch = (float)FLUID_STAGE_REF / s->H;
+    for (int i = 0; i < 5; i++) {
+        const fluid_letter_t *a = &tx->letters[i * 8], *z = &tx->letters[i * 8 + 7];
+        CHECK(a->ch == txt[i][0] && z->ch == txt[i][7] && a->melt == 0.f, "label %d letters", i);
+        CHECK(fabsf((a->x + z->x + z->w) / 2.f - cx[i]) < 0.01f && fabsf(a->y + a->h / 2.f - cy[i]) < 0.01f, "label %d off its spot", i);
+        CHECK(a->acc == (i == 3), "label %d accent %d", i, a->acc);
+        /* ink under the label's middle letter (D/E boundary: take letter 3's centre) */
+        const fluid_letter_t *m = &tx->letters[i * 8 + 3];
+        int k = (int)((m->y + m->h / 2.f) / ch) * s->W + (int)((m->x + m->w / 2.f) / cw);
+        CHECK((tx->cov[k] > 0.f) == (i != 2), "label %d cov %.2f (shown %d)", i, tx->cov[k], i != 2);
+        CHECK((tx->orp[k] > 0.f) == (i == 3), "label %d accent ink %.2f", i, tx->orp[k]);
+    }
+    fluid_text_destroy(tx); fluid_sim_destroy(s);
+}
+
+/* overlays: the ring sits in a thin band inside the rim, the dividers on their rays;
+ * dirtying the last overlay before a draw restores exactly what it covered, and a
+ * repeated overlay over freshly redrawn cells does not compound */
+static void test_overlay(void) {
+    const int P = FLUID_STAGE_REF;
+    fluid_sim_t *s = fluid_sim_create(52, 32, P);
+    fluid_draw_t *d = fluid_draw_create(52, 32, P, P), *ref = fluid_draw_create(52, 32, P, P);
+    fluid_frame_t *fr = fluid_frame_create(52, 32);
+    uint16_t *fb = calloc((size_t)P * P, 2), *fb_ref = calloc((size_t)P * P, 2), *fb1 = calloc((size_t)P * P, 2);
+    for (int f = 0; f < 60; f++) { fluid_target_blob(s, 1.f, 1.f, 0, 0); fluid_sim_background(s, 1.f, 0.5f, true); fluid_sim_swirl_field(s); fluid_sim_step(s, 1.f / 60); fluid_sim_color(s, 1.f / 60); }
+    fluid_sim_view(s);
+    fluid_sim_snapshot(s, fr, false);
+    fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, 2.f, 0.f, NULL, 0, " .:-=+*#", stub_font };
+    int y0, y1;
+    fluid_draw(ref, fr, fb_ref, &o, &y0, &y1);                       /* the fluid alone */
+    fluid_draw(d, fr, fb, &o, &y0, &y1);
+    CHECK(!memcmp(fb, fb_ref, (size_t)P * P * 2), "same snapshot, different pixels");
+    fluid_overlay_t none = { 0 }, ring = { 0.8f, 5.f, 0, 0.f }, divs = { 0.f, 0.f, 5, 1.f };
+    CHECK(!fluid_overlay_on(&none) && fluid_overlay_on(&ring) && fluid_overlay_on(&divs), "overlay_on");
+    CHECK(fluid_draw_overlay(d, fb, o.palette, &none) == 0, "empty overlay drew");
+    /* ring: drawn over freshly dirtied cells */
+    fluid_draw_overlay_dirty(d, &none); fluid_draw_overlay_dirty(d, &ring);
+    fluid_draw(d, fr, fb, &o, &y0, &y1);
+    CHECK(y0 < 12 && y1 > P - 12, "ring cells not redrawn: band [%d,%d)", y0, y1);
+    int n = fluid_draw_overlay(d, fb, o.palette, &ring);
+    long changed = 0, stray = 0;
+    for (int y = 0; y < P; y++) for (int x = 0; x < P; x++) {
+        if (fb[y * P + x] == fb_ref[y * P + x]) continue;
+        changed++;
+        float r = sqrtf((x + 0.5f - P / 2.f) * (x + 0.5f - P / 2.f) + (y + 0.5f - P / 2.f) * (y + 0.5f - P / 2.f));
+        if (r < P / 2.f - 9.f - 4.f || r > P / 2.f - 9.f + 4.f) stray++;
+    }
+    CHECK(n > 3000 && changed > 3000 && stray == 0, "ring: %d px drawn, %ld changed, %ld off its band", n, changed, stray);
+    memcpy(fb1, fb, (size_t)P * P * 2);
+    /* the same ring next frame: dirty + redraw + overlay = the same pixels (no compounding) */
+    fluid_draw_overlay_dirty(d, &ring); fluid_draw_overlay_dirty(d, &ring);
+    fluid_draw(d, fr, fb, &o, &y0, &y1);
+    fluid_draw_overlay(d, fb, o.palette, &ring);
+    CHECK(!memcmp(fb, fb1, (size_t)P * P * 2), "a repeated ring compounded");
+    /* the ring goes: dirtying it restores the fluid it covered, pixel for pixel */
+    fluid_draw_overlay_dirty(d, &ring); fluid_draw_overlay_dirty(d, &none);
+    fluid_draw(d, fr, fb, &o, &y0, &y1);
+    fluid_draw_overlay(d, fb, o.palette, &none);
+    CHECK(!memcmp(fb, fb_ref, (size_t)P * P * 2), "the ring left pixels behind");
+    /* dividers: on the 5 rays only, and off every label box of a 5-option layout */
+    fluid_draw_overlay_dirty(d, &divs);
+    fluid_draw(d, fr, fb, &o, &y0, &y1);
+    n = fluid_draw_overlay(d, fb, o.palette, &divs);
+    int lens[5] = { 8, 8, 8, 8, 8 }; float cx[5], cy[5], fs = fluid_ask_layout(5, lens, P, cx, cy);
+    changed = stray = 0; long in_label = 0;
+    for (int y = 0; y < P; y++) for (int x = 0; x < P; x++) {
+        if (fb[y * P + x] == fb_ref[y * P + x]) continue;
+        changed++;
+        float dx = x + 0.5f - P / 2.f, dy = y + 0.5f - P / 2.f, best = 1e9f;
+        for (int q = 0; q < 5; q++) {
+            float a = 6.2831853f * q / 5, ux = sinf(a), uy = -cosf(a), t = dx * ux + dy * uy;
+            float px = dx - t * ux, py = dy - t * uy, dd = t > 0.f ? sqrtf(px * px + py * py) : 1e9f;
+            if (dd < best) best = dd;
+        }
+        if (best > 1.6f) stray++;
+        for (int i = 0; i < 5; i++)
+            if (fabsf(x + 0.5f - cx[i]) < 8 * 0.6f * fs / 2 && fabsf(y + 0.5f - cy[i]) < 1.05f * fs / 2) in_label++;
+    }
+    CHECK(n > 500 && changed > 300 && stray == 0 && in_label == 0, "dividers: %d px, %ld changed, %ld off the rays, %ld in a label", n, changed, stray, in_label);
+    fluid_draw_overlay_dirty(d, &divs);
+    fluid_draw(d, fr, fb, &o, &y0, &y1);
+    CHECK(!memcmp(fb, fb_ref, (size_t)P * P * 2), "the dividers left pixels behind");
+    free(fb); free(fb_ref); free(fb1); fluid_frame_destroy(fr); fluid_draw_destroy(d); fluid_draw_destroy(ref); fluid_sim_destroy(s);
+}
+
+/* a letter's own melt hides it like the frame's melt does */
+static void test_letter_melt(void) {
+    fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
+    fluid_text_t *tx = fluid_text_create(s);
+    fluid_draw_t *d = fluid_draw_create(52, 32, FLUID_STAGE_REF, FLUID_STAGE_REF);
+    fluid_frame_t *fr = fluid_frame_create(52, 32);
+    uint16_t *fb = calloc(FLUID_STAGE_REF * FLUID_STAGE_REF, 2);
+    fluid_text_set_sentence(tx, 2.f);
+    fluid_text_set_word(tx, s, "OK", 2, -1);
+    s->p.relax_up = 7.f; s->p.relax_down = 2.4f;               /* mole_fluid's text rates */
+    for (int f = 0; f < 90; f++) { fluid_text_fill(tx, s, f / 30.f); fluid_sim_background(s, 1.f, 0.5f, true); fluid_sim_swirl_field(s); fluid_sim_step(s, 1.f / 60); fluid_sim_color(s, 1.f / 60); }
+    fluid_sim_view(s); fluid_sim_snapshot(s, fr, false);
+    fluid_letter_t L[2]; memcpy(L, tx->letters, sizeof(L));
+    fluid_draw_opts_t o = { FLUID_PAL_GREEN, FLUID_EDGE_ALL, 0.f, 1.f, 0.f, L, 2, " .:-=+*#", stub_font };
+    const size_t PX = (size_t)FLUID_STAGE_REF * FLUID_STAGE_REF;
+    uint16_t *img[3] = { calloc(PX, 2), calloc(PX, 2), calloc(PX, 2) };
+    for (int v = 0; v < 3; v++) {          /* both shown · letter 1 melted · the frame melted */
+        L[1].melt = v == 1 ? 0.8f : 0.f; o.melt = v == 2 ? 0.8f : 0.f;
+        d->force = true; int y0, y1;
+        fluid_draw(d, fr, img[v], &o, &y0, &y1);
+    }
+    /* compare each letter's box: letter 0 as when shown, letter 1 as when melted */
+    long same0 = 0, same1 = 0, diff0 = 0, diff1 = 0;
+    for (int li = 0; li < 2; li++)
+        for (int y = (int)L[li].y; y < (int)(L[li].y + L[li].h); y++)
+            for (int x = (int)L[li].x + 1; x < (int)(L[li].x + L[li].w) - 1; x++) {
+                size_t p = (size_t)y * FLUID_STAGE_REF + x;
+                if (li == 0) { same0 += img[1][p] == img[0][p]; diff0 += img[2][p] != img[0][p]; }
+                else { same1 += img[1][p] == img[2][p]; diff1 += img[1][p] != img[0][p]; }
+            }
+    long area0 = (long)((int)(L[0].y + L[0].h) - (int)L[0].y) * ((int)(L[0].x + L[0].w) - 1 - ((int)L[0].x + 1));
+    CHECK(same0 == area0 && diff0 > 20, "letter 0 must stay (%ld/%ld same, %ld differ when melted)", same0, area0, diff0);
+    CHECK(diff1 > 20 && same1 > area0 * 8 / 10, "letter 1's own melt hid it (%ld differ, %ld like the melted frame)", diff1, same1);
+    for (int v = 0; v < 3; v++) free(img[v]);
+    free(fb); fluid_frame_destroy(fr); fluid_draw_destroy(d); fluid_text_destroy(tx); fluid_sim_destroy(s);
+}
+
+/* the device font draws every printable ASCII char (a question's labels may use any) */
+static void test_font(void) {
+    static const uint8_t full[7] = { 0x1f, 0x1f, 0x1f, 0x1f, 0x1f, 0x1f, 0x1f };
+    int bad = 0;
+    for (int c = 0x21; c <= 0x7e; c++) {
+        const uint8_t *g = gc_font5x7((char)c);
+        int ink = 0; for (int r = 0; r < 7; r++) ink |= g[r];
+        if (!ink || !memcmp(g, full, 7)) { bad++; printf("  no glyph for '%c'\n", c); }
+    }
+    const uint8_t *sp = gc_font5x7(' ');
+    CHECK(bad == 0 && !(sp[0] | sp[3] | sp[6]), "%d printable chars without a glyph", bad);
+    CHECK(!memcmp(gc_font5x7('\t'), full, 7), "a control char is not the solid block");
+}
+
 int main(void) {
     printf("fluid host test\n");
     test_static_label();
     test_braille();
     test_dirty();
+    test_labels();
+    test_overlay();
+    test_letter_melt();
+    test_font();
     static const int grids[3][2] = { { 44, 27 }, { 52, 32 }, { 60, 37 } };
     for (int g = 0; g < 3; g++) for (int st = 0; st < ST_N; st++) run_state(grids[g][0], grids[g][1], st, NULL, NULL);
     CHECK(fluid_sim_create(8, 8, FLUID_STAGE_REF) == NULL, "out-of-range grid accepted");

@@ -56,6 +56,12 @@ static void speech_fill(int16_t *buf,size_t n,unsigned chunk) {
     }
 }
 void link_identity_rotate(void) { rotations++; }
+/* the screen's listening ring (mole_fluid.c) and the pending question (link_ask.c) */
+static bool ring_on; static unsigned ring_ons, ring_levels; static float ring_peak, ring_last;
+void mole_fluid_listen(bool on) { if (on) { assert(!ring_on); ring_ons++; } ring_on=on; }
+void mole_fluid_listen_level(float l) { assert(ring_on && l>=0.f && l<=1.f); ring_levels++; ring_last=l; if (l>ring_peak) ring_peak=l; }
+static unsigned ask_cancels;
+void link_ask_cancel(void) { ask_cancels++; }
 const char *link_identity_code(void) { return "ABCDEFGH"; }
 static double sdk_hold_s;
 esp_err_t link_cmd_mood(const char *mood,double hold_s) { strcpy(sdk_mood,mood); sdk_hold_s=hold_s; return ESP_OK; }
@@ -238,9 +244,50 @@ static void test_unsupported(void) {
     audio_job_t job; assert(xQueueReceive(s_jobs,&job,0)!=pdTRUE);
     sdk_caps = 0xFFFFFFFFu;
 }
+/* The listening ring is on exactly while the mic records a listen, fed the mic level
+ * per 100 ms chunk (loud while someone speaks, ~0 in a quiet room), off however the
+ * listen ends; say never lights it. */
+static void test_ring(void) {
+    audio_job_t job; listen_job(2000,&job); ring_ons=ring_levels=0; ring_peak=0.f; sdk_rx_chunks=0;
+    assert(!ring_on);                                 /* nothing until the mic actually records */
+    complete(record(&job));
+    assert(!ring_on && ring_ons==1 && ring_levels==sdk_rx_chunks && ring_peak<0.2f);
+    listen_job(8000,&job); ring_ons=ring_levels=0; ring_peak=0.f; sdk_rx_chunks=0; sdk_rx_fill=speech_fill;
+    complete(record(&job)); sdk_rx_fill=NULL;
+    assert(!ring_on && ring_ons==1 && ring_levels==sdk_rx_chunks && ring_peak>0.8f && ring_last<0.2f);
+    listen_job(5000,&job); sdk_rx_error=ESP_ERR_TIMEOUT;   /* a mic failure ends it too */
+    complete(record(&job)); sdk_rx_error=ESP_OK; assert(!ring_on);
+    listen_job(5000,&job); link_audio_cancel(); complete(record(&job)); assert(!ring_on);
+    ring_ons=0; begin_say(); receive_pcm(0,true); complete(play()); assert(!ring_on && !ring_ons);
+}
+/* say / listen take the screen from a pending question — only once they are accepted:
+ * a refused one (bad args, busy, no hardware) leaves the question up. So does a pairing
+ * that starts; a pairing refused at once does not. */
+static void test_ask_cancel(void) {
+    unsigned c=ask_cancels;
+    begin_say(); assert(ask_cancels==c+1);
+    cJSON *args=say_args(),*res=NULL;
+    assert(link_audio_say(args,&res)==ESP_ERR_INVALID_STATE && ask_cancels==c+1);   /* busy */
+    link_audio_cancel(); complete(play());
+    cJSON_ReplaceItemInObject(args,"rate",cJSON_CreateNumber(8000));
+    assert(link_audio_say(args,&res)==ESP_ERR_INVALID_ARG && ask_cancels==c+1); cJSON_Delete(args);
+    assert(listen_rejects(",\"end_silence_ms\":299") && ask_cancels==c+1);
+    sdk_caps &= ~MOLTY_CAP_MIC;
+    args=cJSON_Parse("{\"job\":\"listen1\",\"ms\":100,\"rate\":16000}");
+    assert(link_audio_listen(args,&res)==ESP_ERR_NOT_SUPPORTED && ask_cancels==c+1); cJSON_Delete(args);
+    sdk_caps = 0xFFFFFFFFu;
+    audio_job_t job; listen_job(10,&job); assert(ask_cancels==c+2); complete(record(&job));
+    request(); assert(ask_cancels==c+3);
+    link_pair_cancel();
+    begin_say();                                      /* audio busy: pairing refused at once */
+    args=cJSON_Parse("{\"req\":\"busy\",\"agent_name\":\"test\",\"code\":\"1234\"}");
+    link_pair_request(args); cJSON_Delete(args);
+    assert(!link_pair_active() && ask_cancels==c+4);
+    link_audio_cancel(); complete(play());
+}
 int main(void) {
     assert(link_audio_init()==ESP_OK && link_pair_init()==ESP_OK);
-    test_say(); test_mood_survives(); test_pair(); test_unsupported();
+    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ask_cancel();
     cJSON_Delete(sdk_sent); free(s_jobs); free(s_done); free(s_ring);
-    puts("LINK AUDIO/PAIR PASS: paced PCM, final playback drain, errors, cmd-time text/mood, explicit moods outlive jobs, pairing reasons, board caps");
+    puts("LINK AUDIO/PAIR PASS: paced PCM, final playback drain, errors, cmd-time text/mood, explicit moods outlive jobs, pairing reasons, board caps, listening ring, ask cancellation");
 }

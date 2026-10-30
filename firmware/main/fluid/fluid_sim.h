@@ -40,7 +40,8 @@ extern "C" {
 #define FLUID_GRID_MAX_W  64
 #define FLUID_GRID_MIN_H  16
 #define FLUID_GRID_MAX_H  40
-#define FLUID_MAX_LETTERS 32
+#define FLUID_MAX_LETTERS 40       /* a question's 5 labels × 8 letters             */
+#define FLUID_WORD_LETTERS 32      /* the speed reader's display cap per word        */
 
 /* ── profiling: CPU cycles per phase, accumulated until the caller resets ── */
 enum { FP_TARGET, FP_BG, FP_SWIRL, FP_WAVE, FP_DEMAND, FP_FLOW, FP_ADVECT, FP_RELAX, FP_COLOR, FP_VIEW,
@@ -207,6 +208,7 @@ typedef struct {
     char  ch;
     bool  acc;                         /* ORP letter                                      */
     float x, y, w, h, fs;              /* stage px                                        */
+    float melt;                        /* this letter's own melt, added to the frame's    */
 } fluid_letter_t;
 
 typedef struct {
@@ -224,6 +226,13 @@ void fluid_text_destroy(fluid_text_t *tx);
 void fluid_text_set_sentence(fluid_text_t *tx, float ext);
 void fluid_text_set_word(fluid_text_t *tx, const fluid_sim_t *s, const char *w, int len, int orp);
 void fluid_text_fill(fluid_text_t *tx, fluid_sim_t *s, float t);
+
+/** A question's labels (fluid_ask.h lays them out): each centred at (cx, cy) stage px, one
+ *  type size fs. Every label's letters go into tx->letters in order (label i's letters
+ *  follow label i−1's); only `shown` labels pool ink (the target), so a label that is not
+ *  shown melts back into the fluid; `acc` labels are accented. Then fluid_text_fill. */
+typedef struct { const char *text; int len; float cx, cy; bool shown, acc; } fluid_label_t;
+void fluid_text_set_labels(fluid_text_t *tx, const fluid_sim_t *s, const fluid_label_t *lb, int n, float fs);
 
 /* ── renderer (render.js) ─────────────────────────────────────────────────── */
 
@@ -282,6 +291,24 @@ int  fluid_draw(fluid_draw_t *d, const fluid_frame_t *f, uint16_t *fb,
 enum { FLUID_MARK_NONE, FLUID_MARK_ARC, FLUID_MARK_DOT, FLUID_MARK_ALERT, FLUID_MARK_COUNT };
 /** Returns the pixels written (0 for FLUID_MARK_NONE). */
 int  fluid_draw_mark(const fluid_draw_t *d, uint16_t *fb, int palette, int mark);
+
+/** Pixel overlays drawn over the fluid (after fluid_draw, before the mark), blended:
+ *  ring     the listening ring: a thin circle just inside the round panel's rim in the
+ *           palette's accent colour; ring = its opacity 0..1 (0 = none), ring_w = its
+ *           stroke width in stage px at 412 (scaled with the stage)
+ *  dividers a question's faint sector dividers (fluid_ask.h): sectors ≥ 2 rays from the
+ *           centre at 12 o'clock + k·360/sectors; divider = their opacity 0..1 (0 = none)
+ *  Blending reads the pixel under it, so it must be a freshly drawn one: before every
+ *  fluid_draw call fluid_draw_overlay_dirty with the overlay last drawn AND the one about
+ *  to be drawn — the cells under them are redrawn (restored), nothing else is. */
+typedef struct { float ring, ring_w; int sectors; float divider; } fluid_overlay_t;
+static inline bool fluid_overlay_on(const fluid_overlay_t *ov) {
+    return ov->ring > 0.f || (ov->sectors >= 2 && ov->divider > 0.f);
+}
+/** Mark the cells under ov for redraw by the next fluid_draw. */
+void fluid_draw_overlay_dirty(fluid_draw_t *d, const fluid_overlay_t *ov);
+/** Draw ov over the framebuffer. Returns the pixels touched. */
+int  fluid_draw_overlay(const fluid_draw_t *d, uint16_t *fb, int palette, const fluid_overlay_t *ov);
 
 #ifdef __cplusplus
 }

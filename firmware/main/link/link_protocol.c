@@ -1,4 +1,5 @@
 #include "link_protocol.h"
+#include <ctype.h>
 #include <limits.h>
 #include <math.h>
 #include <string.h>
@@ -254,4 +255,56 @@ int link_frame_header(char *out, size_t cap, const link_frame_t *h)
     memcpy(out, json, n); out[n] = '\n'; out[n + 1] = 0;
     cJSON_free(json);
     return (int)n + 1;
+}
+
+bool link_ask_args(const cJSON *args, char job[LINK_STREAM_MAX], char labels[LINK_ASK_MAX][LINK_ASK_LABEL_MAX + 1],
+                   int *n, unsigned *timeout_ms)
+{
+    const cJSON *j = cJSON_GetObjectItemCaseSensitive(args, "job");
+    const cJSON *opts = cJSON_GetObjectItemCaseSensitive(args, "options");
+    const cJSON *to = cJSON_GetObjectItemCaseSensitive(args, "timeout_ms");
+    if (!cJSON_IsString(j) || !valid_stream(j->valuestring)) return false;
+    if (!cJSON_IsNumber(to) || !isfinite(to->valuedouble) || floor(to->valuedouble) != to->valuedouble ||
+        to->valuedouble < LINK_ASK_TIMEOUT_MIN || to->valuedouble > LINK_ASK_TIMEOUT_MAX) return false;
+    int count = cJSON_IsArray(opts) ? cJSON_GetArraySize(opts) : 0;
+    if (count < 1 || count > LINK_ASK_MAX) return false;
+    for (int i = 0; i < count; i++) {
+        const cJSON *o = cJSON_GetArrayItem(opts, i);
+        if (!cJSON_IsString(o)) return false;
+        const char *v = o->valuestring;
+        size_t len = strlen(v);
+        if (len < 1 || len > LINK_ASK_LABEL_MAX) return false;
+        bool ink = false;
+        for (size_t k = 0; k < len; k++) {
+            unsigned char c = (unsigned char)v[k];
+            if (c < 0x20 || c > 0x7E) return false;
+            if (c != ' ') ink = true;
+        }
+        if (!ink) return false;
+        for (int p = 0; p < i; p++) {                 /* unique, ignoring case */
+            const char *a = labels[p];
+            size_t q = 0;
+            while (a[q] && v[q] && tolower((unsigned char)a[q]) == tolower((unsigned char)v[q])) q++;
+            if (!a[q] && !v[q]) return false;
+        }
+        memcpy(labels[i], v, len + 1);
+    }
+    strcpy(job, j->valuestring);
+    *n = count; *timeout_ms = (unsigned)to->valuedouble;
+    return true;
+}
+
+cJSON *link_evt_answer_frame(const char *job, int index, const char *label, const char *reason)
+{
+    cJSON *data, *j = evt("answer", &data);
+    if (!j) return NULL;
+    cJSON_AddStringToObject(data, "job", job ? job : "");
+    if (index >= 0) {
+        cJSON_AddNumberToObject(data, "index", index);
+        cJSON_AddStringToObject(data, "label", label ? label : "");
+    } else {
+        cJSON_AddNullToObject(data, "index");
+        cJSON_AddStringToObject(data, "reason", reason ? reason : "cancelled");
+    }
+    return j;
 }

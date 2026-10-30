@@ -3,6 +3,8 @@
 #include "link_client.h"
 #include "link_cmd.h"
 #include "link_pair.h"
+#include "link_ask.h"
+#include "mole_fluid.h"
 #include "vad.h"
 
 #include "molty_board.h"
@@ -112,6 +114,7 @@ static esp_err_t record(const audio_job_t *job)
     esp_err_t e = frame && acc && chunk ? ESP_OK : ESP_ERR_NO_MEM;
     if (e == ESP_OK) e = molty_mic_stream_start(16000, REC_CHUNK_MS, 8);
     bool streaming = e == ESP_OK;
+    if (streaming) mole_fluid_listen(true);   /* the screen's listening ring, while the mic records */
     link_frame_t h = {0}; strcpy(h.stream, job->job);
     size_t done = 0, have = 0;
     while (e == ESP_OK && verdict == VAD_CONTINUE) {
@@ -125,6 +128,7 @@ static esp_err_t record(const audio_job_t *job)
         memcpy(acc + have, chunk, got * 2);
         have += got; done += got;
         verdict = vad_feed(&vad, chunk, got);
+        mole_fluid_listen_level(vad_level(&vad));   /* ~10 Hz: the ring swells with the voice */
         if (verdict == VAD_CONTINUE && done == total) verdict = VAD_END_MAX;   /* window < one VAD frame */
         if (have == REC_FRAME_SAMPLES || verdict != VAD_CONTINUE) {
             h.end = verdict != VAD_CONTINUE;
@@ -141,7 +145,7 @@ static esp_err_t record(const audio_job_t *job)
     }
     /* stop the mic as soon as the listen is over: the creature leaves `listening` and
      * the relay is already transcribing */
-    if (streaming) molty_mic_stream_stop();
+    if (streaming) { molty_mic_stream_stop(); mole_fluid_listen(false); }
     if (e != ESP_OK) s_end_reason = "error";
     /* Fail fast: an end-only frame tells the relay the stream is over instead of
      * leaving it to time out into no_audio ms + 5 s later. */
@@ -208,6 +212,7 @@ static esp_err_t start(const cJSON *args, bool listen, cJSON **out)
     bool vad = vad_def.enabled;
     unsigned end_silence_ms = vad_def.end_silence_ms, no_speech_ms = vad_def.no_speech_ms;
     if (listen && !link_listen_args(args, &vad, &end_silence_ms, &no_speech_ms)) return ESP_ERR_INVALID_ARG;
+    link_ask_cancel();   /* say / listen take the screen from a pending question */
     cJSON *result = cJSON_CreateObject();
     if (!result) return ESP_ERR_NO_MEM;
     cJSON_AddStringToObject(result, "job", j->valuestring);

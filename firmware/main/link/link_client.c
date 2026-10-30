@@ -4,6 +4,7 @@
 #include "link_cmd.h"
 #include "link_audio.h"
 #include "link_pair.h"
+#include "link_ask.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -153,7 +154,7 @@ static void disconnect(const char *why)
     free(s_rx); s_rx = NULL; s_rx_len = 0; s_opcode = 0;
     rx_msg_t m;
     while (xQueueReceive(s_rxq, &m, 0) == pdTRUE) free(m.data);
-    link_audio_cancel(); link_pair_cancel();
+    link_audio_cancel(); link_pair_cancel(); link_ask_cancel();   /* link down: no event */
 }
 
 static esp_err_t connect_session(void)
@@ -268,6 +269,7 @@ static void link_task(void *arg)
         link_pair_tick();
         xSemaphoreGive(s_config);
         link_audio_tick();
+        link_ask_tick();
         xSemaphoreTake(s_config, portMAX_DELAY);
         link_identity_tick();
         bool rotated = strcmp(announced, link_identity_code()) != 0;
