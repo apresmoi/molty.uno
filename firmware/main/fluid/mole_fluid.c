@@ -213,7 +213,8 @@ static float s_tnow = 0.f, s_acc = 0.f, s_breath_ph = 0.f;
 static float s_melt_t = 1e9f, s_word_until = 0.f;
 static int   s_word = 0;
 static bool  s_follow = false;                  /* task copies of s_follow_in / s_follow_word_in */
-static int   s_follow_word = 0;
+static int   s_follow_word = 0;                 /* -1: following, no word reached yet */
+static bool  s_text_hidden = false;             /* following a say: the text state is blank until its first cue */
 static volatile int s_dstatus = FD_STATUS_OK;   /* indicator riding with the snapshot */
 static fluid_letter_t s_overlay[FLUID_MAX_LETTERS];
 static int   s_noverlay = 0;
@@ -292,7 +293,12 @@ static void enter_state(int st, int fx, const fluid_cfg_t *cfg) {
             if (b > ext) ext = b;
         }
         fluid_text_set_sentence(s_tx, ext);
-        s_word = 0; show_word(0);
+        s_word = 0;
+        /* following a say whose voice has not reached word 0 yet: blank until it does (the
+         * word lands with its voice, not ~0.3 s before it) */
+        s_text_hidden = s_follow && s_follow_word < 0;
+        if (s_text_hidden) fluid_text_set_word(s_tx, s_sim, "", 0, 0);
+        else show_word(0);
         s_word_until = s_tnow + 0.55f + word_delay_s(&s_toks[0], cfg->wpm);   /* lead-in */
     }
     /* the transition: the old shape breaks up in eddies + a ring from its centre */
@@ -469,11 +475,17 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         /* following a say: each word when the speaker reaches it (link_audio's cues),
          * never on the reader's own clock; once the say is over, the clock takes the rest */
         const int t = s_follow_word < s_ntok ? s_follow_word : s_ntok - 1;
-        if (t > s_word) {
-            s_word = t;
+        if (t >= 0 && (t > s_word || s_text_hidden)) {
+            if (t > s_word) s_word = t;
+            s_text_hidden = false;
             show_word(s_word);
             ripple(0.f, 0.f, 0.45f + 0.6f * 0.3f, 0.12f);
         }
+        s_word_until = s_tnow + word_delay_s(&s_toks[s_word], cfg->wpm);
+    } else if (!asking && s_cur == ST_TEXT && s_word < s_ntok && s_text_hidden) {
+        /* the say ended (or failed) before word 0 was cued: the reader's own pace from word 0 */
+        s_text_hidden = false;
+        show_word(s_word);
         s_word_until = s_tnow + word_delay_s(&s_toks[s_word], cfg->wpm);
     } else if (!asking && s_cur == ST_TEXT && s_word < s_ntok && s_tnow >= s_word_until) {
         s_word++;
@@ -976,7 +988,7 @@ esp_err_t mole_fluid_creature_init(void) {
     s_gx = s_gy = 0.f; s_touch_down = false;
     s_ask.scr.phase = FLUID_ASK_NONE; s_ask.scr.seq = s_ask_want.seq;     /* a question from before is gone */
     s_dask = 0; atomic_store(&s_glass_ask, 0);
-    s_follow = false; s_follow_word = 0;
+    s_follow = false; s_follow_word = 0; s_text_hidden = false;
     s_rg = (fluid_ring_t){ 0 }; s_div = 0.f; s_ov = s_dov = (fluid_overlay_t){ 0 };   /* the fluid's own ring is in the sim */
     s_sim->p.relax_up = RATE_UP[ST_BLOB]; s_sim->p.relax_down = RATE_DOWN[ST_BLOB];
 
@@ -1308,7 +1320,7 @@ void mole_fluid_listen(bool on) {
 void mole_fluid_text_cue(int word) {
     if (!s_mutex) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    if (word < 0) { s_follow_in = true; s_follow_word_in = 0; }
+    if (word < 0) { s_follow_in = true; s_follow_word_in = -1; }   /* following; no word reached yet */
     else if (word > s_follow_word_in) s_follow_word_in = word;
     xSemaphoreGive(s_mutex);
 }

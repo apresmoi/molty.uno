@@ -405,8 +405,9 @@ static bool say_with(const char *extra) {
     if (e!=ESP_OK) return false;
     audio_job_t job; assert(xQueueReceive(s_jobs,&job,0)==pdTRUE && !job.listen); return true;
 }
-/* say {cues:true}: each word shows when the speaker has PLAYED up to its cue — never before,
- * at most one 512-sample write after — and the rest when playback is over */
+/* say {cues:true}: each word shows when the speaker has played up to its cue less the reveal
+ * lead (CUE_LEAD_SAMPLES, the decision-to-glass latency) — never earlier than that, at most one
+ * 240-sample write later — and the rest when playback is over */
 static void test_say_cues(void) {
     static const uint32_t at[4]={0,3000,6000,9000};
     cue_n=0; cue_ends=cue_hold=0;
@@ -418,8 +419,9 @@ static void test_say_cues(void) {
     for (int i=0;i<cue_n;i++) {
         const uint32_t due=at[cue_w[i]];
         if (i==cue_n-1 && cue_w[i]==3) continue;          /* 9000 > the 8800 played before the drain: shown at the end */
-        assert(cue_at[i]>=due);                            /* never ahead of the voice */
-        assert(cue_at[i]-due<=512 || (i>0 && cue_at[i-1]<at[cue_w[i]-1]));   /* within one write */
+        const uint32_t lead=16*30;
+        assert(cue_at[i]+lead>=due);                       /* never more than the lead ahead of the voice */
+        assert(due<=lead || cue_at[i]+lead-due<=240 || (i>0 && cue_at[i-1]+lead<at[cue_w[i]-1]));   /* within one 15 ms write (a cue under the lead: the first one) */
     }
     /* a plain say (no cues arg): the reader keeps its own pace, no cue calls */
     cue_n=0; cue_ends=cue_hold=0;

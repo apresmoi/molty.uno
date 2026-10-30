@@ -57,12 +57,22 @@ static void drain(void)
     while ((p = xRingbufferReceive(s_ring, &n, 0))) vRingbufferReturnItem(s_ring, p);
 }
 
+/* A word is revealed this much before the speaker's estimated position reaches its cue: what
+ * happens between that decision and the glass, so the word lands with its voice. The estimate
+ * lags the DAC by ~7.5 ms on average (the writer blocks with 1200..1440 samples queued, not the
+ * full 1440 it assumes), the reader picks the cue up on its next 30 ms frame (~15 ms), and the
+ * check runs once per 15 ms write (~7.5 ms). */
+#define CUE_LEAD_SAMPLES (16 * 30)
+/* PCM per speaker write in play(): one DMA descriptor (240 samples, 15 ms), so the cue check
+ * runs every 15 ms rather than every 32 ms */
+#define PLAY_WRITE_BYTES 480
+
 /* Show the words whose cue the speaker has played (in order: a word waits for the ones
  * before it). all: playback is over — every cued word. */
 static void cue_follow(bool all)
 {
     if (!s_cued) return;
-    const uint32_t played = all ? UINT32_MAX : molty_speaker_stream_played();
+    const uint32_t played = all ? UINT32_MAX : molty_speaker_stream_played() + CUE_LEAD_SAMPLES;
     int k = s_cue_next;
     while (k < LINK_CUE_WORDS && s_cue[k] != UINT32_MAX && s_cue[k] <= played) k++;
     if (k > s_cue_next) { s_cue_next = k; mole_fluid_text_cue(k - 1); }
@@ -74,11 +84,11 @@ static esp_err_t play(void)
     if (e != ESP_OK) { if (s_cued) mole_fluid_text_cue_end(); return e; }
     while (!atomic_load(&s_cancel)) {
         size_t n;
-        void *pcm = xRingbufferReceiveUpTo(s_ring, &n, pdMS_TO_TICKS(50), 1024);
+        void *pcm = xRingbufferReceiveUpTo(s_ring, &n, pdMS_TO_TICKS(50), PLAY_WRITE_BYTES);
         /* end may have arrived just after the timed receive returned empty.
          * Recheck the ring after observing end before declaring it drained. */
         if (!pcm && atomic_load(&s_end)) {
-            pcm = xRingbufferReceiveUpTo(s_ring, &n, 0, 1024);
+            pcm = xRingbufferReceiveUpTo(s_ring, &n, 0, PLAY_WRITE_BYTES);
             if (!pcm) break;
         }
         if (pcm) {
@@ -86,7 +96,7 @@ static esp_err_t play(void)
             vRingbufferReturnItem(s_ring, pcm);
             if (e != ESP_OK) break;
         }
-        cue_follow(false);   /* each ≤ 32 ms write: the words the speaker has reached */
+        cue_follow(false);   /* each ≤ 15 ms write: the words the speaker has reached */
     }
     /* i2s_channel_write queues DMA; draining the software ring is not the
      * playback boundary. Keep ownership until the final PCM has left DMA. */
@@ -269,7 +279,7 @@ static esp_err_t start(const cJSON *args, bool listen, cJSON **out)
         e = link_cmd_mood("listening", -1);
     } else {
         e = mole_creature_select("fluid");
-        if (e == ESP_OK && cued) {               /* hold the reader on the first word until cued */
+        if (e == ESP_OK && cued) {               /* no word on screen until the first one is cued */
             for (int i = 0; i < LINK_CUE_WORDS; i++) s_cue[i] = UINT32_MAX;
             mole_fluid_text_cue(-1);
         }

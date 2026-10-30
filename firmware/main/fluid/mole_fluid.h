@@ -83,8 +83,8 @@ void mole_fluid_set_status(int status);
 void mole_fluid_listen(bool on);
 void mole_fluid_listen_level(float level);
 void mole_fluid_listen_color(int32_t rgb);
-/** A say's text follows its voice (link_audio.c, cap say_cues): word < 0 holds the speed
- *  reader on the first word (its own clock stops); word ≥ 0 shows up to that word (the
+/** A say's text follows its voice (link_audio.c, cap say_cues): word < 0 starts following:
+ *  the text shows no word until word 0 is reached (its own clock stops); word ≥ 0 shows up to that word (the
  *  last one the speaker reached; never backwards). mole_fluid_text_cue_end: the say is
  *  over — the reader's own pace takes whatever is left, then it ends as usual. */
 void mole_fluid_text_cue(int word);
