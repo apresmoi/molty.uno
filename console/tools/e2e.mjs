@@ -31,6 +31,8 @@ async function newPage(tag, { offline = false, viewport = PHONE } = {}) {
   const ctx = await browser.newContext({ viewport, deviceScaleFactor: 2 });
   await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: MOCK });
   if (offline) await ctx.route('https://cdn.jsdelivr.net/**', (r) => r.abort('internetdisconnected'));
+  // The status page asks the device's relay for the latest release: answer from the mock.
+  await ctx.route('**/v1/releases/latest*', async (r) => r.fulfill({ response: await ctx.request.get(`${MOCK}/__mock/release?${new URL(r.request().url()).searchParams}`), headers: { 'access-control-allow-origin': '*' } }));
   const page = await ctx.newPage();
   page.on('console', (m) => {
     if (m.type() !== 'error' && m.type() !== 'warning') return;
@@ -234,6 +236,36 @@ const canvasStats = (page) => page.evaluate(() => {
   ok((await bubble(page)).includes('Give me a brain any time'), 'no /api/link → "Skip for now" → done');
   await shot(page, '13-link-unsupported-done');
   await mock('config', { reset: true, link: true, file: true });
+  await page.context().close();
+}
+
+// ── firmware update on the status page ──────────────────────────────────────
+{
+  await mock('config', { reset: true });
+  const page = await newPage('update');
+  await page.goto(`${MOCK}/#/status`);
+  const card = page.locator('.update .card');
+  await card.locator('b', { hasText: /^update available: \d+\.\d+\.\d+$/ }).waitFor({ timeout: 10000 });
+  ok(await card.locator('a', { hasText: /^molty-.*-ota\.bin$/ }).count() === 1, 'update: older firmware gets the manual path (download link + install)');
+  await card.locator('summary', { hasText: 'what’s new' }).click();
+  ok((await card.locator('pre').innerText()).includes('tap an answer'), 'update: what’s new shows the release notes');
+  await page.setInputFiles('input[type=file]', { name: 'molty-ota.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(4096, 0xe9) });
+  await card.getByRole('button', { name: 'Install' }).click();
+  await card.getByRole('button', { name: 'Sure? Molty restarts' }).click();
+  await card.locator('.note', { hasText: 'restarting' }).waitFor();
+  ok((await mockLog()).some((l) => l.path === '/api/ota' && l.bytes === 4096), 'update: the chosen image is uploaded to /api/ota');
+  await noOverflow(page, 'update manual');
+  await shot(page, '14-update-manual');
+  await mock('config', { reset: true, update: true });
+  await page.reload();
+  await card.getByRole('button', { name: 'Update' }).click();
+  await card.getByRole('button', { name: 'Sure? Update now' }).click();
+  await page.locator('.update .note', { hasText: /updated to \d+\.\d+\.\d+ ✓/ }).waitFor({ timeout: 15000 });
+  const post = (await mockLog()).find((l) => l.path === '/api/update');
+  ok(!!post && /releases\/download\/v.*-ota\.bin/.test(JSON.parse(post.body).url) && JSON.parse(post.body).sha256 === 'd'.repeat(64), 'update: self-updating firmware gets Update, which posts the relay’s official image + sha256');
+  ok((await page.locator('.facts dd').nth(1).innerText()).startsWith((await (await fetch(`${MOCK}/__mock/release`)).json()).latest.version), 'update: status shows the new firmware afterwards');
+  await shot(page, '15-update-self');
+  await mock('config', { reset: true });
   await page.context().close();
 }
 

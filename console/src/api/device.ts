@@ -20,8 +20,9 @@
 
 import type {
   CreatureRegistry, DeviceInfo, FluidOrder, FluidState, Frame, LinkInfo,
-  WifiConnectResult, WifiNetwork, WifiStatus, Diag,
+  WifiConnectResult, WifiNetwork, WifiStatus, Diag, OtaResult, UpdateState,
 } from './types';
+import type { UpdateTarget } from '../update/update';
 import { parsePPM } from './ppm';
 
 export class UnsupportedError extends Error {
@@ -176,6 +177,16 @@ export class DeviceApi {
       const hdr = Number(res.headers.get('X-Next-Seq'));
       return { text, next: Number.isFinite(hdr) && hdr > 0 ? hdr : since };
     });
+  }
+
+  // ── firmware update (docs/AGENT-LINK.md "Firmware updates") ───────────────
+  /** Self-update state; UnsupportedError on firmware that can't update itself. */
+  updateState() { return this.get<UpdateState>('/api/update', undefined, true); }
+  /** The device downloads the official release image, checks size + sha256, installs it and restarts. */
+  startUpdate(t: UpdateTarget) { return this.post<UpdateState>('/api/update', t, 15000, true); }
+  /** Manual path: upload an OTA image (molty-X.Y.Z-<board>-ota.bin); the device refuses another board's image. */
+  ota(bytes: Uint8Array) {
+    return this.json<OtaResult>('/api/ota', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: new Blob([bytes as BlobPart]) }, 120000);
   }
 
   // ── agent link (docs/AGENT-LINK.md) ────────────────────────────────────────

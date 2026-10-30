@@ -134,6 +134,13 @@ pre.hist .hrow { display: block; }
 pre.log { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px;
   font: 11px/1.4 var(--mono); max-height: 420px; overflow: auto; white-space: pre-wrap; word-break: break-all; color: var(--dim); }
 
+/* status page: firmware update */
+.update .card { margin-top: 14px; }
+.update details.notes summary { color: var(--dim); cursor: pointer; margin-top: 6px; }
+.update details.notes pre { margin: 6px 0 0; font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--dim); max-height: 240px; overflow: auto; }
+.update .manual p { margin: 6px 0; }
+.update .manual input[type=file] { flex: 1; min-width: 0; font-size: 12px; }
+
 /* molty page cards: thumbnails */
 .creature img { width: 72px; height: 72px; border-radius: 50%; background: #000; margin-bottom: 4px; }
 
