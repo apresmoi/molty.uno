@@ -21,4 +21,22 @@ export interface VoiceProvider {
    */
   ttsStream?(text: string, opts: TtsOptions): AsyncIterable<Int16Array>;
   stt(pcm: Int16Array): Promise<string>;
+  /**
+   * Optional streaming STT: opened when a listen starts, fed every device mic
+   * chunk as it arrives, finalized at the listen's end, so the transcript is
+   * ready moments after speech ends instead of after a batch upload. Absent =
+   * the relay buffers the listen and calls stt() once. May throw when the
+   * backend is unreachable (the relay then uses the batch path or fails).
+   */
+  sttStream?(): SttStream;
+}
+
+/** One streaming transcription (VoiceProvider.sttStream). */
+export interface SttStream {
+  /** A mic chunk, PCM16 mono @16 kHz, in order. Ignored after end() / abort() or a failure. */
+  push(pcm: Int16Array): void;
+  /** No more audio: resolves to the final transcript (rejects when the backend failed). */
+  end(): Promise<string>;
+  /** Drop it: nobody wants the transcript (no speech, the listen failed). Idempotent. */
+  abort(): void;
 }

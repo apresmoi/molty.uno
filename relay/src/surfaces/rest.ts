@@ -14,6 +14,11 @@
 //   DELETE /v1/token                    revoke the calling token
 //   GET    /v1/devices/<id>/events[?since=e41&wait_s=0..25] -> {ok, events, next, more}
 //   GET|PUT|DELETE /v1/webhook          read / register (secret once) / remove the caller's webhook
+//   GET|POST|DELETE /v1/devices/<id>/voice  owner voice-box settings (header X-Molty-Link-Code: the
+//                                       device's current link code; CORS, for the device-served console):
+//                                       read / {mode?, voice?} / unpair the voice box
+//
+// A voice box token (pair role "voice") is refused on every agent route: 403 forbidden.
 //
 // Any authenticated response may carry the caller's unread device events as an
 // additive top-level `events` array (+ `more_events`); reading them marks them read.
@@ -23,7 +28,7 @@
 // can_self_update, how}` (core/updates.ts). An error's `details` (e.g.
 // firmware_too_old {feature, current, needed, latest, how}) are top-level fields next to `error`.
 
-import { type Inbox, type JobView, type Outcome, type RelayBackend, bearer, jobDevice, tokenDevice } from "../core/api.js";
+import { type Inbox, type JobView, type Outcome, type RelayBackend, type VoiceOwnerRequest, bearer, jobDevice, tokenDevice } from "../core/api.js";
 import { TALK_BUDGET_MS } from "../core/commands.js";
 import { INBOX_LIMITS, seqOf } from "../core/events.js";
 import { DEVICE_ID_RE, isRecord } from "../core/protocol.js";
@@ -31,6 +36,8 @@ import { skillUpdate } from "../core/version.js";
 
 const STATUS: Record<string, number> = {
   unauthorized: 401,
+  forbidden: 403,
+  voice_box_offline: 503,
   invalid_args: 400,
   unknown_command: 400,
   bad_request: 400,
@@ -131,11 +138,12 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
       agent_name: b.agent_name as string | undefined,
       pair_id: b.pair_id as string | undefined,
       wait_ms: waitMs,
+      ...(b.role !== undefined ? { role: b.role as "agent" | "voice" } : {}),
     });
     if (!out.ok) return failed(out);
     if (out.result.status === "approved") {
-      const { agent_token, device_id, agent_name, code } = out.result;
-      return json({ ok: true, agent_token, device_id, agent_name, code });
+      const { agent_token, device_id, agent_name, code, role } = out.result;
+      return json({ ok: true, agent_token, device_id, agent_name, code, ...(role ? { role } : {}) });
     }
     return json({ ok: true, ...out.result }, 202);
   }
@@ -223,6 +231,9 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
     return out.ok ? json({ ok: true, result: out.result, ...extra(out) }) : failed(out);
   }
 
+  const voice = /^\/v1\/devices\/([^/]+)\/voice$/.exec(path);
+  if (voice) return voiceOwner(request, voice[1], backend);
+
   const job = /^\/v1\/jobs\/([^/]+)$/.exec(path);
   if (job) {
     if (request.method !== "GET") return json({ ok: false, error: "method_not_allowed" }, 405);
@@ -246,4 +257,36 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
   }
 
   return json({ ok: false, error: "not_found" }, 404);
+}
+
+// The setup console runs on the device's own origin (http://<molty>), so this route answers CORS.
+const OWNER_CORS = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
+  "access-control-allow-headers": "content-type, x-molty-link-code",
+  "access-control-max-age": "86400",
+};
+
+/** Owner voice-box settings: authenticated by the device's current link code (OwnerApi). */
+async function voiceOwner(request: Request, rawId: string, backend: RelayBackend): Promise<Response> {
+  const cors = (r: Response) => {
+    for (const [k, v] of Object.entries(OWNER_CORS)) r.headers.set(k, v);
+    return r;
+  };
+  if (request.method === "OPTIONS") return cors(new Response(null, { status: 204 }));
+  const id = decodeURIComponent(rawId);
+  if (!DEVICE_ID_RE.test(id)) return cors(failure({ error: "not_found" }));
+  const api = backend.device(id);
+  if (!api.voiceSettings) return cors(failure({ error: "not_found" }));
+  const code = request.headers.get("x-molty-link-code") ?? "";
+  let req: VoiceOwnerRequest;
+  if (request.method === "GET") req = { action: "get" };
+  else if (request.method === "DELETE") req = { action: "unpair" };
+  else if (request.method === "POST") {
+    const b = await body(request);
+    if (!b) return cors(failure({ error: "bad_request", message: "body must be a JSON object" }));
+    req = { action: "set", mode: b.mode, voice: b.voice };
+  } else return cors(json({ ok: false, error: "method_not_allowed" }, 405));
+  const out = await api.voiceSettings(code, req);
+  return cors(out.ok ? json({ ok: true, result: out.result }) : failure(out));
 }

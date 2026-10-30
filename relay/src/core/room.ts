@@ -21,6 +21,12 @@
 // resurrecting a revoked one). Once per room and version, a `skill.updated`
 // event is appended to the inbox when an older agent exists (`skillev`).
 //
+// Voice box (voice/remote.ts, docs/AGENT-LINK.md "Voice box"): an owner's own STT/TTS
+// machine pairs like an agent (role "voice", same tap) and dials the voice socket. Its
+// socket is marked stage "voice" in its own metadata (never "live": no device code path
+// sees it); settings (`voicecfg`), the box's hello (`vbox`) and its last latencies
+// (`vstat`) live in KV. Each say/listen picks a provider by `voice_mode` (pickVoice).
+//
 // Firmware updates (core/updates.ts, core/releases.ts): the last hello's fw /
 // board / caps are kept (`devinfo`) so molty_updates answers while offline. A
 // token gets one `fw_notice` per newer release (`fw_seen`). molty_update is a
@@ -28,7 +34,21 @@
 // device's next hello settles it (new fw = done), so it survives eviction and
 // the device's own reboot.
 
-import { type AgentApi, type EventsRequest, type FirmwareNotice, type JobView, type Outcome, type PairRequest, type PairResult, TERMINAL, type WebhookRequest } from "./api.js";
+import {
+  type AgentApi,
+  type EventsRequest,
+  type FirmwareNotice,
+  type JobView,
+  type Outcome,
+  type OwnerApi,
+  type PairRequest,
+  type PairResult,
+  TERMINAL,
+  VOICE_MODES,
+  type VoiceMode,
+  type VoiceOwnerRequest,
+  type WebhookRequest,
+} from "./api.js";
 import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
 import { type AskArgs, CommandError, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk } from "./commands.js";
 import { PcmFeed, estimateSpeechMs, splitSpeech, synthesize } from "./speech.js";
@@ -72,15 +92,21 @@ import {
   renderRequest,
   signatureHeader,
 } from "./webhook.js";
-import type { VoiceProvider } from "../voice/types.js";
+import type { SttStream, VoiceProvider } from "../voice/types.js";
+import { BOX_OFFLINE, RemoteVoiceProvider } from "../voice/remote.js";
 
 export interface SocketMeta {
-  stage: "hello" | "live";
+  /** hello: device not yet authenticated; live: the device; voice: a voice box (authenticated at upgrade). */
+  stage: "hello" | "live" | "voice";
   opened: number;
   fw?: string;
   caps?: string[];
   board?: string;
   since?: number;
+  /** voice: the box token's hash (revocation closes the socket). */
+  tok?: string;
+  /** voice: what the box offers, set by its voice.hello (absent = not greeted yet: not used). */
+  box?: { stt: boolean; tts: boolean };
 }
 
 export interface DeviceSocket {
@@ -120,6 +146,8 @@ export interface RoomTimings {
   updateConfirmMs: number;
   /** update: from the human's accept until the device is back on the new firmware. */
   updateMs: number;
+  /** voice box: after the listen ended, how long its streaming STT may take for the final text. */
+  boxSttFinalMs: number;
 }
 
 export const DEFAULT_TIMINGS: RoomTimings = {
@@ -138,6 +166,7 @@ export const DEFAULT_TIMINGS: RoomTimings = {
   askGraceMs: 5000,
   updateConfirmMs: 60000,
   updateMs: 5 * 60 * 1000,
+  boxSttFinalMs: 5000,
 };
 
 /** say: a first frame shorter than a full chunk waits at most this long for more audio. */
@@ -171,6 +200,8 @@ interface DeviceRecord {
 interface TokenRecord {
   agent_name: string;
   created: number;
+  /** "voice": a voice box (opens only the voice socket). Absent = an agent (every record before roles). */
+  role?: "voice";
   webhook?: WebhookRecord;
   /**
    * Webhook configuration revision: +1 on every successful set and delete, so
@@ -219,6 +250,8 @@ interface PairRecord {
   req: string;
   code: string;
   agent_name: string;
+  /** A voice box pairing (absent = agent). */
+  role?: "voice";
   created: number;
   expires: number;
   status: "pending" | "approved" | "rejected" | "timeout";
@@ -249,7 +282,34 @@ interface ListenBuffer {
   thinking?: boolean;
   /** `screenRev` when this listen began: automatic moods apply only while it is unchanged. */
   screenRev: number;
+  /** Streaming STT (voice box): every chunk is pushed here as it arrives. */
+  stream?: SttStream;
 }
+
+/** Owner voice settings (KV `voicecfg`). */
+interface VoiceCfg {
+  mode: VoiceMode;
+  /** Default voice for the box when the agent gives none. */
+  voice?: string;
+}
+/** The connected box's voice.hello (KV `vbox`). */
+interface BoxInfo {
+  name: string;
+  version: string;
+  voices: string[];
+  stt: boolean;
+  tts: boolean;
+  since: number;
+}
+/** The box's last measured latencies (KV `vstat`). */
+interface BoxStats {
+  stt_ms?: number;
+  stt_at?: number;
+  tts_first_audio_ms?: number;
+  tts_at?: number;
+}
+/** Which provider serves one say / listen. */
+type VoicePick = { ok: true; provider: VoiceProvider; name: string; mode: VoiceMode; box: boolean; cfg: VoiceCfg } | { ok: false; error: string; message: string };
 
 type JobKind = "say" | "listen" | "talk" | "ask" | "update";
 
@@ -290,7 +350,13 @@ const K = {
   origin: "origin",
   devinfo: "devinfo",
   upd: "upd",
+  voiceCfg: "voicecfg",
+  vbox: "vbox",
+  vstat: "vstat",
 };
+
+/** Device-facing name of a voice box pairing (the console shows it next to the code). */
+const voiceLabel = (name: string) => (/^voice box\b/i.test(name) ? name : `voice box · ${name}`);
 
 
 
@@ -306,7 +372,7 @@ const UPDATE_PHASES = ["accepted", "downloading", "flashing", "rebooting"];
 
 const NO_RELEASES: ReleaseSource = { latest: async () => ({ release: null, state: "unavailable", checked_at: null }) };
 
-export class DeviceRoom implements AgentApi {
+export class DeviceRoom implements AgentApi, OwnerApi {
   readonly deviceId: string;
   private readonly kv: KV;
   private readonly clock: Clock;
@@ -318,6 +384,8 @@ export class DeviceRoom implements AgentApi {
   private readonly fetcher: NonNullable<RoomDeps["fetch"]>;
   private readonly resolveHost: RoomDeps["resolveHost"];
   private readonly releases: ReleaseSource;
+  /** The voice box, spoken to over whichever voice socket is live (in-flight requests only). */
+  private readonly box: RemoteVoiceProvider;
 
   // ---- in-flight work only (see header comment) ----
   private readonly pendingCmds = new Map<string, PendingCmd>();
@@ -360,6 +428,7 @@ export class DeviceRoom implements AgentApi {
     this.fetcher = deps.fetch ?? ((req) => globalThis.fetch(req));
     this.resolveHost = deps.resolveHost;
     this.releases = deps.releases ?? NO_RELEASES;
+    this.box = new RemoteVoiceProvider(() => this.boxSocket(), this.clock);
   }
 
   // =====================================================================
@@ -372,7 +441,7 @@ export class DeviceRoom implements AgentApi {
     // Bound unauthenticated sockets: drop stale ones and keep at most 4 waiting.
     const waiting = this.host
       .sockets()
-      .filter((s) => !s.same(sock) && s.getMeta()?.stage !== "live")
+      .filter((s) => !s.same(sock) && s.getMeta()?.stage !== "live" && s.getMeta()?.stage !== "voice")
       .sort((a, b) => (a.getMeta()?.opened ?? 0) - (b.getMeta()?.opened ?? 0));
     for (const [i, s] of waiting.entries()) {
       const stale = now - (s.getMeta()?.opened ?? 0) > this.t.helloTimeoutMs;
@@ -383,6 +452,7 @@ export class DeviceRoom implements AgentApi {
   async socketMessage(sock: DeviceSocket, data: string | Uint8Array): Promise<void> {
     const meta = sock.getMeta();
     if (!meta) return sock.close(CLOSE_PROTOCOL, "unknown socket");
+    if (meta.stage === "voice") return this.voiceMessage(sock, meta, data);
     if (meta.stage === "hello") {
       if (this.clock.now() - meta.opened > this.t.helloTimeoutMs) return sock.close(CLOSE_PROTOCOL, "hello timeout");
       const frame = typeof data === "string" ? parseTextFrame(data) : undefined;
@@ -414,6 +484,8 @@ export class DeviceRoom implements AgentApi {
   }
 
   socketClose(sock: DeviceSocket): void {
+    // A voice box that goes away fails its own requests at once (auto mode falls back, box mode fails).
+    if (sock.getMeta()?.stage === "voice") return this.box.drop(sock);
     if (sock.getMeta()?.stage !== "live") return;
     // The runtime may still list the closing socket; anything else live is a replacement.
     if (this.liveSocket(sock)) return;
@@ -534,7 +606,9 @@ export class DeviceRoom implements AgentApi {
     for (const prefix of ["tok:", "pair:", "job:", "ev:", "cur:", "whq:"]) {
       for (const key of (await this.kv.list(prefix)).keys()) await this.kv.delete(key);
     }
-    for (const key of [K.device, K.link, K.pairCurrent, K.evSeq, K.evRate, K.skillEv, K.origin, K.devinfo, K.upd]) await this.kv.delete(key);
+    for (const key of [K.device, K.link, K.pairCurrent, K.evSeq, K.evRate, K.skillEv, K.origin, K.devinfo, K.upd, K.voiceCfg, K.vbox, K.vstat]) await this.kv.delete(key);
+    // Its token is gone with the rest: so is the voice box.
+    this.closeBoxes(() => true, CLOSE_UNAUTHORIZED, "device forgotten");
     this.log("device forgotten", { device: this.deviceId });
     sock.sendText(JSON.stringify({ t: "forgotten" }));
     sock.close(CLOSE_FORGOTTEN, "forgotten");
@@ -576,18 +650,28 @@ export class DeviceRoom implements AgentApi {
     return rec ? { rec, hash } : undefined;
   }
 
+  /** An AGENT token: every agent surface (commands, jobs, inbox, webhooks, updates) goes through here. */
+  private async agentAuth(token: string): Promise<{ rec: TokenRecord; hash: string } | ReturnType<typeof fail>> {
+    const a = await this.auth(token);
+    if (!a) return fail("unauthorized");
+    if (a.rec.role === "voice") return fail("forbidden", "this is a voice box token: it only opens the voice socket (GET /v1/voice), never agent calls");
+    return a;
+  }
+
+  /** Revokes the calling token, agent or voice box (a box's socket closes with it). */
   async revoke(token: string): Promise<Outcome> {
     const a = await this.auth(token);
     if (!a) return fail("unauthorized");
     await this.kv.delete(K.token(a.hash));
     await this.kv.delete(K.cur(a.hash));
     await this.dropDeliveries(a.hash);
+    if (a.rec.role === "voice") await this.forgetBox((m) => m.tok === a.hash, "voice box token revoked");
     return { ok: true, result: { revoked: true } };
   }
 
   async command(token: string, name: string, args: unknown): Promise<Outcome> {
-    const a = await this.auth(token);
-    if (!a) return fail("unauthorized");
+    const a = await this.agentAuth(token);
+    if ("ok" in a) return a;
     return this.ride(a, await this.runCommand(a.rec, name, args));
   }
 
@@ -639,7 +723,8 @@ export class DeviceRoom implements AgentApi {
           board: meta?.board ?? null,
           caps: meta?.caps ?? [],
           connected_since: meta?.since ?? null,
-          voice: this.voice.name,
+          // Who would speak now: the cloud provider, "box" (the owner's voice box), or voice_box_offline (box mode, no box).
+          voice: await this.voiceName(),
           events,
           webhook: agent.webhook ? (redactWebhook(agent.webhook) as JsonObject) : null,
           firmware: firmware as unknown as JsonObject,
@@ -662,6 +747,8 @@ export class DeviceRoom implements AgentApi {
     if (typeof name !== "string" || name.trim().length === 0 || name.length > 64 || /[\u0000-\u001f\u007f]/.test(name)) {
       return fail("invalid_args", "agent_name must be 1..64 printable characters");
     }
+    if (req.role !== undefined && req.role !== "agent" && req.role !== "voice") return fail("invalid_args", 'role must be "agent" or "voice"');
+    const voice = req.role === "voice";
     if (typeof req.link_code !== "string" || !LINK_CODE_RE.test(req.link_code)) return fail("bad_link_code");
     const sock = this.liveSocket();
     if (!sock) return fail("device_offline");
@@ -678,13 +765,16 @@ export class DeviceRoom implements AgentApi {
       req: b64urlEncode(randomBytes(6)),
       code: randomDigits(4),
       agent_name: name.trim(),
+      ...(voice ? { role: "voice" as const } : {}),
       created: now,
       expires: now + this.t.pairWindowMs,
       status: "pending",
     };
     await this.kv.put(K.pair(rec.id), rec);
     await this.kv.put(K.pairCurrent, rec.id);
-    sock.sendText(JSON.stringify({ t: "pair.request", req: rec.req, agent_name: rec.agent_name, code: rec.code }));
+    // The device (and its console) show this name next to the code: a voice box says so.
+    const shown = voice ? voiceLabel(rec.agent_name) : rec.agent_name;
+    sock.sendText(JSON.stringify({ t: "pair.request", req: rec.req, agent_name: shown, code: rec.code }));
     return this.awaitPair(rec.id, waitMs);
   }
 
@@ -697,7 +787,9 @@ export class DeviceRoom implements AgentApi {
       if (rec.status === "pending" && now >= rec.expires) rec.status = "timeout";
       if (rec.status === "approved" && rec.token) {
         await this.kv.delete(K.pair(id)); // the token is handed out exactly once
-        return { ok: true, result: { status: "approved", agent_token: rec.token, device_id: this.deviceId, agent_name: rec.agent_name, code: rec.code } };
+        const result: PairResult = { status: "approved", agent_token: rec.token, device_id: this.deviceId, agent_name: rec.agent_name, code: rec.code };
+        if (rec.role === "voice") result.role = "voice";
+        return { ok: true, result };
       }
       if (rec.status !== "pending") {
         await this.kv.delete(K.pair(id));
@@ -722,10 +814,16 @@ export class DeviceRoom implements AgentApi {
     } else if (frame.ok === true) {
       const token = `${this.deviceId}.${b64urlEncode(randomBytes(32))}`;
       const hash = await sha256Hex(token);
-      // A new agent just learned the current skill (skill.md / MCP instructions).
-      await this.kv.put<TokenRecord>(K.token(hash), { agent_name: rec.agent_name, created: this.clock.now(), skill_seen: SKILL_VERSION });
-      // A new agent starts at the head: it hears what happens from now on.
-      await this.kv.put(K.cur(hash), (await this.kv.get<number>(K.evSeq)) ?? 0);
+      if (rec.role === "voice") {
+        // One voice box per device: the new one replaces any earlier box (token and socket).
+        await this.unpairBoxes("replaced by a newly paired voice box");
+        await this.kv.put<TokenRecord>(K.token(hash), { agent_name: rec.agent_name, created: this.clock.now(), role: "voice" });
+      } else {
+        // A new agent just learned the current skill (skill.md / MCP instructions).
+        await this.kv.put<TokenRecord>(K.token(hash), { agent_name: rec.agent_name, created: this.clock.now(), skill_seen: SKILL_VERSION });
+        // A new agent starts at the head: it hears what happens from now on.
+        await this.kv.put(K.cur(hash), (await this.kv.get<number>(K.evSeq)) ?? 0);
+      }
       rec.status = "approved";
       rec.token = token;
     } else {
@@ -743,8 +841,8 @@ export class DeviceRoom implements AgentApi {
   // ---------------- jobs ----------------
 
   async job(token: string, jobId: string, waitMs: number): Promise<Outcome<JobView>> {
-    const a = await this.auth(token);
-    if (!a) return fail("unauthorized");
+    const a = await this.agentAuth(token);
+    if ("ok" in a) return a;
     const out = await this.runJob(jobId, waitMs);
     // A failed job is an error to every surface: nothing rides along on it.
     if (out.ok && out.result.status === "failed") return out;
@@ -753,8 +851,8 @@ export class DeviceRoom implements AgentApi {
 
   async talk(token: string, req: unknown): Promise<Outcome> {
     const t0 = this.clock.now();
-    const a = await this.auth(token);
-    if (!a) return fail("unauthorized");
+    const a = await this.agentAuth(token);
+    if ("ok" in a) return a;
     let args: TalkArgs;
     try {
       args = validateTalk(req);
@@ -783,8 +881,8 @@ export class DeviceRoom implements AgentApi {
 
   async ask(token: string, req: unknown): Promise<Outcome> {
     const t0 = this.clock.now();
-    const a = await this.auth(token);
-    if (!a) return fail("unauthorized");
+    const a = await this.agentAuth(token);
+    if ("ok" in a) return a;
     let args: AskArgs;
     try {
       args = validateAsk(req);
@@ -822,8 +920,8 @@ export class DeviceRoom implements AgentApi {
   // ---------------- updates ----------------
 
   async updates(token: string): Promise<Outcome> {
-    const a = await this.auth(token);
-    if (!a) return fail("unauthorized");
+    const a = await this.agentAuth(token);
+    if ("ok" in a) return a;
     // Reporting the skill counts as telling it: mark it seen (atomically, never resurrecting a revoked token).
     const yours = await this.kv.update<TokenRecord, number | undefined>(K.token(a.hash), (cur) =>
       cur ? { next: { ...cur, skill_seen: SKILL_VERSION }, result: cur.skill_seen ?? 1 } : { result: undefined },
@@ -852,8 +950,8 @@ export class DeviceRoom implements AgentApi {
 
   async update(token: string, req: unknown): Promise<Outcome> {
     const t0 = this.clock.now();
-    const a = await this.auth(token);
-    if (!a) return fail("unauthorized");
+    const a = await this.agentAuth(token);
+    if ("ok" in a) return a;
     // No arguments: what gets installed is decided here, from the configured repo's latest release.
     if (req !== undefined && req !== null && !(isRecord(req) && Object.keys(req).length === 0)) {
       return fail("invalid_args", "molty_update takes no arguments: it installs the latest official release");
@@ -1216,8 +1314,12 @@ export class DeviceRoom implements AgentApi {
    */
   private async speak(id: string, text: string, voice: string | undefined, untilDone: boolean): Promise<SpeakResult> {
     const t0 = this.clock.now();
+    const pick = await this.pickVoice("tts");
+    if (!pick.ok) return { ok: false, error: pick.error };
     const feed = new PcmFeed();
-    void synthesize(this.voice, splitSpeech(text), { voice }, feed, this.clock, this.t.ttsTimeoutMs);
+    // The agent's voice passes through; with none, the box uses the owner's default box voice.
+    const ttsVoice = voice ?? (pick.box ? pick.cfg.voice : undefined);
+    void synthesize(pick.provider, splitSpeech(text), { voice: ttsVoice }, feed, this.clock, this.t.ttsTimeoutMs);
     const wait = (ms: number) => feed.waitFor((f, d) => this.clock.setTimeout(f, d), (h) => this.clock.clearTimeout(h), ms);
     let carry: Int16Array = new Int16Array(0);
     const absorb = () => {
@@ -1311,6 +1413,7 @@ export class DeviceRoom implements AgentApi {
         this.sayDone.delete(id);
       }
       const tEnd = this.clock.now();
+      if (pick.box) await this.noteBoxStats({ tts_first_audio_ms: tFirst - t0, tts_at: tEnd });
       return {
         ok: true,
         start: t0,
@@ -1321,6 +1424,7 @@ export class DeviceRoom implements AgentApi {
           first_audio: firstSent - t0,
           stream: lastSent - firstSent,
           play: tEnd - firstSent,
+          voice: pick.name,
         },
       };
     } catch (e) {
@@ -1339,7 +1443,29 @@ export class DeviceRoom implements AgentApi {
   /** `extra`: the device listen args besides job/ms/rate (VAD knobs, ring_color), passed through. */
   private async record(id: string, ms: number, extra: JsonObject = {}): Promise<ListenResult> {
     const t0 = this.clock.now();
+    let pick = await this.pickVoice("stt");
+    if (!pick.ok) return { ok: false, error: pick.error };
     const buf: ListenBuffer = { job: id, chunks: [], bytes: 0, ended: false, screenRev: this.screenRev };
+    let fallback: string | undefined;
+    // Streaming STT (voice box): opened before the mic, so every chunk goes out the moment it arrives.
+    if (pick.provider.sttStream) {
+      try {
+        buf.stream = pick.provider.sttStream();
+      } catch (e) {
+        if (pick.mode !== "auto") return { ok: false, error: errorCode(e) };
+        // auto: the box vanished between the pick and the open: the cloud, batch.
+        fallback = errorCode(e);
+        pick = { ...pick, provider: this.voice, name: this.voice.name, box: false };
+      }
+    }
+    try {
+      return await this.recordInto(buf, pick, id, ms, extra, t0, fallback);
+    } finally {
+      buf.stream?.abort(); // no-op once its final text is in
+    }
+  }
+
+  private async recordInto(buf: ListenBuffer, pick: Extract<VoicePick, { ok: true }>, id: string, ms: number, extra: JsonObject, t0: number, fallback?: string): Promise<ListenResult> {
     this.listenBuf = buf;
     let tAck = t0;
     try {
@@ -1373,7 +1499,27 @@ export class DeviceRoom implements AgentApi {
     }
     const pcm = bytesToPcm16(all);
     const tStt = this.clock.now();
-    const text = noSpeech ? "" : await withTimeout(this.clock, this.voice.stt(pcm), this.t.sttTimeoutMs, "stt_timeout");
+    let served = pick.name;
+    let text = "";
+    if (noSpeech) {
+      // nothing said: no transcription at all (abort() in record() drops a stream)
+    } else if (buf.stream) {
+      // The box has had every chunk already: only the tail of the transcript is left.
+      try {
+        text = await withTimeout(this.clock, buf.stream.end(), this.t.boxSttFinalMs, "stt_timeout");
+        await this.noteBoxStats({ stt_ms: this.clock.now() - tStt, stt_at: this.clock.now() });
+      } catch (e) {
+        buf.stream.abort();
+        // box mode fails; auto falls back to the cloud, on the audio already buffered here.
+        if (pick.mode !== "auto") throw e;
+        fallback = errorCode(e);
+        served = this.voice.name;
+        text = await withTimeout(this.clock, this.voice.stt(pcm), this.t.sttTimeoutMs, "stt_timeout");
+      }
+    } else {
+      // The cloud (or a provider without streaming): one batch call on the whole clip.
+      text = await withTimeout(this.clock, pick.provider.stt(pcm), this.t.sttTimeoutMs, "stt_timeout");
+    }
     const sttMs = noSpeech ? 0 : this.clock.now() - tStt;
     // Re-assert thinking after STT (covers the device's own idle racing the first one); nothing heard -> idle.
     if (buf.thinking) this.autoMood(buf, text ? "thinking" : "idle");
@@ -1387,7 +1533,14 @@ export class DeviceRoom implements AgentApi {
       ...(buf.speech_ms !== undefined ? { speech_ms: buf.speech_ms } : {}),
       duration_ms: duration,
       ...levels(pcm),
-      timings: { cmd: tAck - t0, record: tEnd - tAck, stt: sttMs, ...(buf.firstAt ? { first_frame: buf.firstAt - tAck } : {}) },
+      timings: {
+        cmd: tAck - t0,
+        record: tEnd - tAck,
+        stt: sttMs,
+        ...(buf.firstAt ? { first_frame: buf.firstAt - tAck } : {}),
+        voice: served,
+        ...(fallback ? { voice_fallback: fallback } : {}),
+      },
     };
   }
 
@@ -1412,6 +1565,8 @@ export class DeviceRoom implements AgentApi {
       buf.chunks.push(frame.payload.slice());
       buf.bytes += frame.payload.byteLength;
       buf.firstAt ??= this.clock.now();
+      // Streaming STT: forwarded now, while the human is still talking.
+      buf.stream?.push(bytesToPcm16(frame.payload));
     }
     if (frame.header.end) {
       buf.ended = true;
@@ -1425,6 +1580,190 @@ export class DeviceRoom implements AgentApi {
       }
       buf.wake?.();
     }
+  }
+
+  // =====================================================================
+  // Voice box (docs/AGENT-LINK.md "Voice box")
+  // =====================================================================
+
+  /** The voice socket's upgrade: a VOICE token of this device, nothing else. */
+  async voiceAuth(token: string): Promise<Outcome<{ hash: string }>> {
+    const a = await this.auth(token);
+    if (!a) return fail("unauthorized", "unknown or revoked voice box token: pair the box again (molty-voice pair)");
+    if (a.rec.role !== "voice") return fail("forbidden", 'this is an agent token: the voice socket takes a voice box token (pair with role "voice")');
+    return { ok: true, result: { hash: a.hash } };
+  }
+
+  /** An authenticated voice socket: it replaces any earlier box connection. Used once its voice.hello arrives. */
+  voiceOpen(sock: DeviceSocket, tokenHash: string): void {
+    sock.setMeta({ stage: "voice", opened: this.clock.now(), tok: tokenHash });
+    this.closeBoxes((_m, s) => !s.same(sock), CLOSE_REPLACED, "replaced by a newer voice box connection");
+  }
+
+  private async voiceMessage(sock: DeviceSocket, meta: SocketMeta, data: string | Uint8Array): Promise<void> {
+    if (typeof data !== "string") {
+      if (!meta.box) return;
+      const frame = decodeAudioFrame(data);
+      if (frame) this.box.onAudio(sock, frame.header, frame.payload);
+      return;
+    }
+    const frame = parseTextFrame(data);
+    if (!frame) return;
+    switch (frame.t) {
+      case "ping":
+        sock.sendText(PONG_TEXT);
+        return;
+      case "voice.hello":
+        return this.onBoxHello(sock, meta, frame);
+      case "tts.end":
+      case "stt.final":
+      case "stt.partial":
+        if (meta.box) this.box.onText(sock, frame);
+        return;
+      default:
+        return;
+    }
+  }
+
+  private async onBoxHello(sock: DeviceSocket, meta: SocketMeta, f: Record<string, unknown>) {
+    const str = (v: unknown, max: number) => typeof v === "string" && v.length > 0 && v.length <= max && !/[\u0000-\u001f\u007f]/.test(v);
+    const voices = Array.isArray(f.voices) ? f.voices.filter((v): v is string => str(v, 200)).slice(0, 64) : [];
+    if (!str(f.name, 64) || (f.version !== undefined && !str(f.version, 32)) || typeof f.stt !== "boolean" || typeof f.tts !== "boolean") {
+      return sock.close(CLOSE_PROTOCOL, "malformed voice.hello");
+    }
+    // Unpaired since the upgrade (revoke / unpair / forget close it too, but never trust a stale socket).
+    if (!meta.tok || !(await this.kv.get<TokenRecord>(K.token(meta.tok)))) return sock.close(CLOSE_UNAUTHORIZED, "voice box token revoked");
+    const now = this.clock.now();
+    sock.setMeta({ ...meta, box: { stt: f.stt, tts: f.tts } });
+    await this.kv.put<BoxInfo>(K.vbox, { name: f.name as string, version: (f.version as string | undefined) ?? "", voices, stt: f.stt, tts: f.tts, since: now });
+    const cfg = await this.voiceCfg();
+    sock.sendText(JSON.stringify({ t: "voice.welcome", device_id: this.deviceId, mode: cfg.mode, voice: cfg.voice ?? null }));
+    this.log("voice box connected", { device: this.deviceId, stt: f.stt, tts: f.tts });
+  }
+
+  /** The greeted voice box socket, if any. */
+  private boxSocket(): DeviceSocket | undefined {
+    return this.host.sockets().find((s) => {
+      const m = s.getMeta();
+      return m?.stage === "voice" && !!m.box;
+    });
+  }
+
+  /** Closes voice sockets matching `match`, failing their in-flight requests first. */
+  private closeBoxes(match: (m: SocketMeta, s: DeviceSocket) => boolean, code: number, reason: string) {
+    for (const s of this.host.sockets()) {
+      const m = s.getMeta();
+      if (m?.stage !== "voice" || !match(m, s)) continue;
+      this.box.drop(s);
+      s.close(code, reason);
+    }
+  }
+
+  /** Closes the matching boxes for good (revoked / unpaired) and forgets the hello of a box no longer there. */
+  private async forgetBox(match: (m: SocketMeta) => boolean, reason: string) {
+    this.closeBoxes((m) => match(m), CLOSE_UNAUTHORIZED, reason);
+    if (!this.host.sockets().some((s) => s.getMeta()?.stage === "voice")) await this.kv.delete(K.vbox);
+  }
+
+  /** Deletes every voice box token (one box per device) and closes their sockets; returns how many. */
+  private async unpairBoxes(reason: string): Promise<number> {
+    let n = 0;
+    for (const [key, tok] of await this.kv.list<TokenRecord>("tok:")) {
+      if (tok.role !== "voice") continue;
+      await this.kv.delete(key);
+      n++;
+    }
+    await this.forgetBox(() => true, reason);
+    await this.kv.delete(K.vstat);
+    return n;
+  }
+
+  private async voiceCfg(): Promise<VoiceCfg> {
+    return (await this.kv.get<VoiceCfg>(K.voiceCfg)) ?? { mode: "auto" };
+  }
+
+  /**
+   * Which provider serves one say (tts) or listen (stt), by `voice_mode`: auto = the box when
+   * it is connected and offers it, else the cloud (env) provider; box = the box or
+   * voice_box_offline; cloud = the env provider always.
+   */
+  private async pickVoice(kind: "tts" | "stt"): Promise<VoicePick> {
+    const cfg = await this.voiceCfg();
+    const cloud: VoicePick = { ok: true, provider: this.voice, name: this.voice.name, mode: cfg.mode, box: false, cfg };
+    if (cfg.mode === "cloud") return cloud;
+    const s = this.boxSocket();
+    if (s?.getMeta()?.box?.[kind]) return { ok: true, provider: this.box, name: this.box.name, mode: cfg.mode, box: true, cfg };
+    if (cfg.mode === "box") {
+      return { ok: false, error: BOX_OFFLINE, message: s ? `the voice box offers no ${kind.toUpperCase()}` : "no voice box is connected (voice_mode is box)" };
+    }
+    return cloud;
+  }
+
+  private async voiceName(): Promise<string> {
+    const p = await this.pickVoice("tts");
+    return p.ok ? p.name : p.error;
+  }
+
+  private async noteBoxStats(patch: BoxStats) {
+    await this.kv.update<BoxStats, void>(K.vstat, (cur) => ({ next: { ...cur, ...patch }, result: undefined }));
+  }
+
+  /** Owner (console) voice settings, authenticated by the device's current link code. */
+  async voiceSettings(linkCode: string, req: VoiceOwnerRequest): Promise<Outcome> {
+    const link = await this.kv.get<{ code: string }>(K.link);
+    if (typeof linkCode !== "string" || !LINK_CODE_RE.test(linkCode) || !link || !safeEqual(link.code, linkCode)) {
+      return fail("unauthorized", "wrong or expired link code (it rotates every 15 min: read it from Molty's console)");
+    }
+    if (req.action === "unpair") {
+      const n = await this.unpairBoxes("voice box unpaired by the owner");
+      return { ok: true, result: { unpaired: n, ...(await this.voiceView()) } };
+    }
+    if (req.action === "set") {
+      const cfg = await this.voiceCfg();
+      if (req.mode !== undefined) {
+        if (!VOICE_MODES.includes(req.mode as VoiceMode)) return fail("invalid_args", `mode must be one of ${VOICE_MODES.join(", ")}`);
+        cfg.mode = req.mode as VoiceMode;
+      }
+      if (req.voice !== undefined) {
+        if (req.voice === null || req.voice === "") delete cfg.voice;
+        else if (typeof req.voice !== "string" || req.voice.length > 200 || /[\u0000-\u001f\u007f]/.test(req.voice)) {
+          return fail("invalid_args", "voice must be a voice name of 1..200 printable characters, or null for the box's default");
+        } else cfg.voice = req.voice;
+      }
+      await this.kv.put<VoiceCfg>(K.voiceCfg, cfg);
+    }
+    return { ok: true, result: await this.voiceView() };
+  }
+
+  private async voiceView(): Promise<JsonObject> {
+    const cfg = await this.voiceCfg();
+    const tok = [...(await this.kv.list<TokenRecord>("tok:")).values()].find((t) => t.role === "voice");
+    const connected = this.boxSocket();
+    const info = await this.kv.get<BoxInfo>(K.vbox);
+    const stats = (await this.kv.get<BoxStats>(K.vstat)) ?? {};
+    const serving = async (k: "tts" | "stt") => {
+      const p = await this.pickVoice(k);
+      return p.ok ? p.name : p.error;
+    };
+    return {
+      mode: cfg.mode,
+      voice: cfg.voice ?? null,
+      cloud: this.voice.name,
+      serving: { tts: await serving("tts"), stt: await serving("stt") },
+      box: {
+        paired: !!tok,
+        name: tok?.agent_name ?? null,
+        paired_at: tok?.created ?? null,
+        connected: !!connected,
+        connected_since: connected && info ? info.since : null,
+        reported_name: connected && info ? info.name : null,
+        version: connected && info ? info.version : null,
+        voices: connected && info ? info.voices : [],
+        stt: connected && info ? info.stt : false,
+        tts: connected && info ? info.tts : false,
+        last: stats as JsonObject,
+      },
+    };
   }
 
   // ---------------- agent events: inbox ----------------
@@ -1568,7 +1907,7 @@ export class DeviceRoom implements AgentApi {
       return;
     }
     // New tokens are minted current, so the set of older agents only shrinks.
-    const behind = [...(await this.kv.list<TokenRecord>("tok:")).values()].some((t) => skillNotice(t.skill_seen));
+    const behind = [...(await this.kv.list<TokenRecord>("tok:")).values()].some((t) => t.role !== "voice" && skillNotice(t.skill_seen));
     const won = await this.kv.update<number, boolean>(K.skillEv, (cur) => ((cur ?? 0) >= SKILL_VERSION ? { result: false } : { next: SKILL_VERSION, result: true }));
     this.skillAnnounced = true;
     if (!won || !behind) return;
@@ -1578,8 +1917,8 @@ export class DeviceRoom implements AgentApi {
   }
 
   async events(token: string, req: EventsRequest): Promise<Outcome> {
-    const a = await this.auth(token);
-    if (!a) return fail("unauthorized");
+    const a = await this.agentAuth(token);
+    if ("ok" in a) return a;
     await this.announceSkill();
     if (req.since !== undefined && (!Number.isInteger(req.since) || req.since < 0)) return fail("invalid_args", "since must be an event id like e42");
     const waitMs = Math.max(0, Math.min(req.wait_ms, INBOX_LIMITS.restWaitS * 1000));
@@ -1619,8 +1958,8 @@ export class DeviceRoom implements AgentApi {
   // ---------------- agent events: webhooks ----------------
 
   async webhook(token: string, req: WebhookRequest): Promise<Outcome> {
-    const a = await this.auth(token);
-    if (!a) return fail("unauthorized");
+    const a = await this.agentAuth(token);
+    if ("ok" in a) return a;
     const key = K.token(a.hash);
     if (req.action === "get") {
       return this.ride(a, { ok: true, result: { webhook: a.rec.webhook ? (redactWebhook(a.rec.webhook) as JsonObject) : null } });

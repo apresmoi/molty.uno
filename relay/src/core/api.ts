@@ -23,6 +23,8 @@ export type ErrorCode =
   | "no_build"
   | "no_checksum"
   | "unknown_version"
+  | "forbidden"
+  | "voice_box_offline"
   | "internal"
   | (string & {}); // device-reported codes pass through verbatim
 
@@ -89,10 +91,16 @@ export interface PairRequest {
   pair_id?: string;
   /** How long to hold the call open (ms). Capped at the pairing window. */
   wait_ms?: number;
+  /**
+   * What the token will be for: `agent` (default) drives the device through the agent
+   * surfaces; `voice` is a voice box (docs/AGENT-LINK.md "Voice box"): its token opens
+   * only the voice socket and is refused everywhere else. Same tap on the device.
+   */
+  role?: "agent" | "voice";
 }
 
 export type PairResult =
-  | { status: "approved"; agent_token: string; device_id: string; agent_name: string; code: string }
+  | { status: "approved"; agent_token: string; device_id: string; agent_name: string; code: string; role?: "voice" }
   | { status: "pending"; pair_id: string; code: string; expires_in_s: number };
 
 export interface AgentApi {
@@ -135,9 +143,25 @@ export interface AgentApi {
   update(token: string, req: unknown): Promise<Outcome>;
 }
 
+export type VoiceMode = "auto" | "box" | "cloud";
+export const VOICE_MODES: readonly VoiceMode[] = ["auto", "box", "cloud"];
+
+/** Owner settings for the voice box: read, change (mode / default box voice), or unpair the box. */
+export type VoiceOwnerRequest = { action: "get" } | { action: "set"; mode?: unknown; voice?: unknown } | { action: "unpair" };
+
+/**
+ * The device owner's calls (the setup console). Authenticated by the device's CURRENT
+ * link code: the console reads it from the device over the LAN (GET /api/link), the
+ * same "on Molty's network = owner" model as every local device setting.
+ */
+export interface OwnerApi {
+  /** get / set: `{mode, voice, cloud, box:{paired, name, connected, …}}`; unpair: `{unpaired: n}`. */
+  voiceSettings(linkCode: string, req: VoiceOwnerRequest): Promise<Outcome>;
+}
+
 export interface RelayBackend {
   /** `id` is already validated against DEVICE_ID_RE by the caller. */
-  device(id: string): AgentApi;
+  device(id: string): AgentApi & Partial<OwnerApi>;
 }
 
 /** `agent_token` = `<device_id>.<base64url(32 random bytes)>`; the prefix is a public routing hint. */

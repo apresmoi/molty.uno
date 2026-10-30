@@ -1,6 +1,6 @@
 // Worker entry: routing + the Durable Object-backed RelayBackend. The MCP and
 // REST surfaces run here (stateless); per-device state lives in MoltyDevice.
-import type { AgentApi, RelayBackend } from "./core/api.js";
+import { type AgentApi, type OwnerApi, type RelayBackend, bearer, tokenDevice } from "./core/api.js";
 import { DEVICE_ID_RE } from "./core/protocol.js";
 import { healthResponse } from "./core/version.js";
 import { type Env, MoltyDevice } from "./device-object.js";
@@ -34,11 +34,12 @@ interface DeviceRpc {
   ask(id: string, token: string, req: unknown): ReturnType<AgentApi["ask"]>;
   updates(id: string, token: string): ReturnType<AgentApi["updates"]>;
   update(id: string, token: string, req: unknown): ReturnType<AgentApi["update"]>;
+  voiceSettings(id: string, linkCode: string, req: Parameters<OwnerApi["voiceSettings"]>[1]): ReturnType<OwnerApi["voiceSettings"]>;
 }
 
 function backendFor(env: Env): RelayBackend {
   return {
-    device(id: string): AgentApi {
+    device(id: string): AgentApi & OwnerApi {
       // Typed as the plain RPC shape: the generated DO stub type recurses too deep for tsc.
       const stub = env.DEVICE.get(env.DEVICE.idFromName(id)) as unknown as DeviceRpc;
       return {
@@ -53,6 +54,7 @@ function backendFor(env: Env): RelayBackend {
         ask: (token, req) => stub.ask(id, token, req),
         updates: (token) => stub.updates(id, token),
         update: (token, req) => stub.update(id, token, req),
+        voiceSettings: (linkCode, req) => stub.voiceSettings(id, linkCode, req),
       };
     },
   };
@@ -73,6 +75,14 @@ export default {
       const id = url.searchParams.get("id") ?? "";
       if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") return new Response("expected websocket upgrade", { status: 426 });
       if (!DEVICE_ID_RE.test(id)) return new Response("bad device id", { status: 400 });
+      return env.DEVICE.get(env.DEVICE.idFromName(id)).fetch(request);
+    }
+    if (url.pathname === "/v1/voice") {
+      // The owner's voice box (docs/AGENT-LINK.md "Voice box"): GET /v1/voice?device_id=… + Bearer <voice token>.
+      const id = url.searchParams.get("device_id") ?? "";
+      if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") return new Response("expected websocket upgrade", { status: 426 });
+      if (!DEVICE_ID_RE.test(id)) return new Response("bad device id", { status: 400 });
+      if (tokenDevice(bearer(request.headers.get("authorization"))) !== id) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
       return env.DEVICE.get(env.DEVICE.idFromName(id)).fetch(request);
     }
     if (SKILL_PATHS.includes(url.pathname)) return handleSkill(request);

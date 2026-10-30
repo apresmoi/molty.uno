@@ -3,7 +3,7 @@
 // storage, sockets and RPC. Hibernation rule: the authenticated-device flag
 // lives in each socket's serialized attachment (SocketMeta), never here.
 import { DurableObject } from "cloudflare:workers";
-import type { EventsRequest, JobView, Outcome, PairRequest, PairResult, WebhookRequest } from "./core/api.js";
+import { type EventsRequest, type JobView, type Outcome, type PairRequest, type PairResult, type VoiceOwnerRequest, type WebhookRequest, bearer } from "./core/api.js";
 import { PING_TEXT, PONG_TEXT } from "./core/protocol.js";
 import { type DeviceSocket, DeviceRoom, type SocketMeta } from "./core/room.js";
 import { type KV, realClock } from "./core/store.js";
@@ -117,6 +117,7 @@ export class MoltyDevice extends DurableObject<Env> {
   }
 
   async fetch(request: Request): Promise<Response> {
+    if (new URL(request.url).pathname === "/v1/voice") return this.voiceUpgrade(request);
     const id = new URL(request.url).searchParams.get("id") ?? "";
     const pair = new WebSocketPair();
     const [client, server] = [pair[0], pair[1]];
@@ -125,6 +126,25 @@ export class MoltyDevice extends DurableObject<Env> {
     // Absolute skill.md URL for relay-generated events (webhooks have no request origin).
     await this.room(id).noteOrigin(new URL(request.url).origin);
     this.room(id).socketOpen(new WsSocket(server));
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  /**
+   * The voice box's socket (worker.ts checked the upgrade and the token's device). The
+   * token is checked HERE, before accepting: a refused box sees the HTTP status (401
+   * unknown/revoked, 403 an agent token), never an open socket. Hibernatable like the
+   * device's: its role lives in its own attachment (SocketMeta stage "voice").
+   */
+  private async voiceUpgrade(request: Request): Promise<Response> {
+    const id = new URL(request.url).searchParams.get("device_id") ?? "";
+    const room = this.room(id);
+    const auth = await room.voiceAuth(bearer(request.headers.get("authorization")) ?? "");
+    if (!auth.ok) return Response.json({ ok: false, error: auth.error, message: auth.message }, { status: auth.error === "forbidden" ? 403 : 401 });
+    const pair = new WebSocketPair();
+    const [client, server] = [pair[0], pair[1]];
+    this.ctx.acceptWebSocket(server);
+    server.serializeAttachment({ device: id } satisfies Attachment);
+    room.voiceOpen(new WsSocket(server), auth.result.hash);
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -177,6 +197,9 @@ export class MoltyDevice extends DurableObject<Env> {
   }
   update(deviceId: string, token: string, req: unknown): Promise<Outcome> {
     return this.room(deviceId).update(token, req);
+  }
+  voiceSettings(deviceId: string, linkCode: string, req: VoiceOwnerRequest): Promise<Outcome> {
+    return this.room(deviceId).voiceSettings(linkCode, req);
   }
 
   // ---- the `releases` singleton (never a device room) ----
