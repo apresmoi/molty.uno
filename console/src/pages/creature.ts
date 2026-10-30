@@ -1,5 +1,6 @@
 // Molty (settings): pick a Molty from the catalog (sent to the device as a .molty file),
-// and play with the fluid — state, speed-reader text + WPM, palette, tap-to-ripple.
+// and play with the fluid — state, speed-reader text + WPM, palette, listening ring colour,
+// tap-to-ripple.
 import { UnsupportedError } from '../api/device';
 import type { FluidOrder, FluidState } from '../api/types';
 import type { AppCtx } from '../app';
@@ -7,6 +8,7 @@ import type { CreatureEntry } from '../catalog/catalog';
 import { h, mount, note } from '../ui/dom';
 import { debounce, errText } from '../ui/fmt';
 import { preview } from '../ui/preview';
+import { RING_CHOICES, ringChoice, ringSupported } from '../ring/ring';
 
 const STATES = ['blob', 'creature', 'thinking', 'text', 'autoplay'];
 const EFFECTS = ['ripple', 'vortex', 'wave'];
@@ -21,6 +23,8 @@ export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
   const ctlMsg = h('div');
   const stateRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'state' });
   const palRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'palette' });
+  const ringLabel = h('label', { hidden: true }, 'listening ring');
+  const ringRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'listening ring colour', hidden: true });
   const text = h('textarea', { rows: 3, placeholder: 'words for the speed reader…', 'aria-label': 'reader text' });
   const wpm = h('input', { type: 'range', min: 100, max: 800, step: 25, value: '300', 'aria-label': 'words per minute' });
   const wpmOut = h('output', null, '300 wpm');
@@ -42,6 +46,7 @@ export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
       h('div', { class: 'controls' },
         h('label', null, 'state'), stateRow,
         h('label', null, 'palette'), palRow,
+        ringLabel, ringRow,
         h('label', null, 'speed reader'), text,
         h('div', { class: 'row' }, wpm, wpmOut),
         h('div', { class: 'row' }, word, h('button', { type: 'button', onclick: () => order({ text: text.value, wpm: +wpm.value, state: 'text' }) }, 'read it ⠶')),
@@ -61,6 +66,13 @@ export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
     mount(palRow, Object.entries(PALETTES).map(([p, c]) =>
       h('button', { type: 'button', class: 'chip' + (s?.palette === p ? ' on' : ''), 'aria-pressed': String(s?.palette === p), style: `--sw:${c}`, onclick: () => order({ palette: p }) },
         h('span', { class: 'swatch' }), p)));
+    const ringOn = ringSupported(s);   /* older firmware has no ring setting */
+    ringLabel.hidden = ringRow.hidden = !ringOn;
+    const ring = ringChoice(s?.ring_color);
+    if (ringOn) mount(ringRow, RING_CHOICES.map((c) =>
+      h('button', { type: 'button', class: 'chip' + (ring === c.id ? ' on' : ''), 'aria-pressed': String(ring === c.id),
+        style: c.id === 'accent' ? '' : `--sw:${c.value}`, onclick: () => order({ ring_color: c.value }) },
+        c.id === 'accent' ? null : h('span', { class: 'swatch' }), c.id === 'accent' ? 'accent (default)' : c.id)));
     if (s && document.activeElement !== wpm && s.wpm) { wpm.value = String(s.wpm); wpmOut.textContent = `${s.wpm} wpm`; }
     if (s && !text.value && s.text) text.value = s.text;
     word.textContent = s?.word ? `⠶ ${s.word}` : s?.nwords ? `${s.word_idx ?? 0}/${s.nwords} words` : '';

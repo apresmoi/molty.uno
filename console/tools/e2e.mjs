@@ -214,6 +214,11 @@ const canvasStats = (page) => page.evaluate(() => {
   await page.getByRole('button', { name: 'send Owl to molty' }).click();
   await page.locator('.note.ok', { hasText: 'moving in' }).waitFor();
   ok((await mockLog()).some((l) => l.path === '/api/creature/file?name=cute-owl' && l.head === 'MLTY'), 'settings molty: upload');
+  const ringRow = page.getByRole('group', { name: 'listening ring colour' });
+  ok(await ringRow.getByRole('button', { name: 'accent (default)' }).getAttribute('aria-pressed') === 'true', 'settings molty: listening ring defaults to the accent');
+  await ringRow.getByRole('button', { name: 'violet' }).click();
+  await ringRow.locator('button[aria-pressed="true"]', { hasText: 'violet' }).waitFor();
+  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).ring_color === '#b197fc'), 'settings molty: ring colour sent to the device');
   ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'settings molty: no horizontal scroll at 390px');
   await shot(page, '12-settings-molty');
 

@@ -72,6 +72,8 @@ export interface FluidState {
   text?: string;
   wpm?: number;
   palette?: string;
+  /** The listening ring's default colour: "#rrggbb" or "accent" (newer firmware). */
+  ring_color?: string;
   word?: string;
   word_idx?: number;
   nwords?: number;
@@ -85,6 +87,7 @@ export interface FluidOrder {
   text?: string;
   wpm?: number; // 100..800
   palette?: string; // green | amber | pastel
+  ring_color?: string; // "#rrggbb" | "accent" — the listening ring's default, kept on the device
   ripple?: { x: number; y: number; strength?: number }; // x,y in -1..1, y down
 }
 
