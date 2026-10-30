@@ -9,5 +9,11 @@ esp_err_t link_cmd_run(const char *name, const cJSON *args, cJSON **result);
  * to idle after a few seconds, the rest persist); 0: until the next mood; > 0: seconds. */
 esp_err_t link_cmd_mood(const char *mood, double hold_s);
 const char *link_cmd_current_mood(void);
+/* Count of explicit moods accepted so far (link `mood` command, local POST with a mood).
+ * link_audio compares it across a job: completion reverts to idle only if unchanged. */
+unsigned link_cmd_mood_gen(void);
+/* A creature-state body the local HTTP API applied successfully: counts as an explicit
+ * mood when it carries a top-level "mood" string. */
+void link_cmd_note_state_body(const char *body);
 /* Shared with the local reader HTTP endpoint; preserves its routing semantics. */
 esp_err_t link_ui_set_text(const char *text, int len);

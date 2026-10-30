@@ -119,6 +119,12 @@ Skill versions ([AGENT-LINK.md](../docs/AGENT-LINK.md#skill-versions-and-the-upd
   disconnected client's slot is held until that poll's own deadline (≤ 25 s).
   Agents running `molty events` therefore keep their device's object resident: the cost is
   DO wall-clock duration, not CPU. Note it if you meter a hosted relay.
+- **Workers AI TTS cannot be cancelled before it answers.** `env.AI.run()` takes no
+  `AbortSignal`: a segment over `tts_timeout` fails the turn on time and its model stream is
+  cancelled once one exists, but a `run()` still waiting for the binding stays pending until
+  Workers AI replies (its output is then dropped unread). A whole-body (non-streamed) reply
+  already being read is read to the end. Upstream compute/billing for the abandoned request
+  is unverified. OpenAI-compatible providers abort the fetch itself. (docs/AGENT-LINK.md)
 - **SSRF.** Literal checks (https only, no IP literals, no local/internal names) at
   registration, plus A/AAAA resolution over DNS-over-HTTPS (`cloudflare-dns.com`) at
   registration and before each delivery, refusing private/reserved addresses (parsed to

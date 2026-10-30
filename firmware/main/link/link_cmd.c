@@ -10,6 +10,7 @@
 #include "esp_heap_caps.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdatomic.h>
 #include "esp_app_desc.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
@@ -17,6 +18,21 @@
 static struct { const char *name; link_cmd_handler_t handler; } s_registry[16];
 static size_t s_count;
 static char s_mood[16] = "idle";
+/* Bumped by every explicit mood (the link's `mood` command, a local POST with a mood)
+ * that the creature accepted. Audio jobs snapshot it so their completion only falls
+ * back to idle when nobody chose a mood meanwhile. Not bumped by the moods the device
+ * sets for itself (listening / speaking / idle). */
+static atomic_uint s_mood_gen;
+
+unsigned link_cmd_mood_gen(void) { return atomic_load(&s_mood_gen); }
+
+void link_cmd_note_state_body(const char *body)
+{
+    if (!body || !strstr(body, "\"mood\"")) return;     /* cheap: most bodies carry no mood */
+    cJSON *j = cJSON_Parse(body);
+    if (cJSON_IsString(cJSON_GetObjectItemCaseSensitive(j, "mood"))) atomic_fetch_add(&s_mood_gen, 1);
+    cJSON_Delete(j);
+}
 
 esp_err_t link_cmd_register(const char *name, link_cmd_handler_t handler)
 {
@@ -101,7 +117,10 @@ static esp_err_t cmd_mood(const cJSON *args, cJSON **out)
 {
     (void)out;
     const char *mood; double hold_s;
-    return link_mood_args(args, &mood, &hold_s) ? link_cmd_mood(mood, hold_s) : ESP_ERR_INVALID_ARG;
+    if (!link_mood_args(args, &mood, &hold_s)) return ESP_ERR_INVALID_ARG;
+    esp_err_t e = link_cmd_mood(mood, hold_s);
+    if (e == ESP_OK) atomic_fetch_add(&s_mood_gen, 1);
+    return e;
 }
 
 static esp_err_t cmd_show(const cJSON *args, cJSON **out)

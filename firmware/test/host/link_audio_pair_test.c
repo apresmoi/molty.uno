@@ -59,6 +59,9 @@ void link_identity_rotate(void) { rotations++; }
 const char *link_identity_code(void) { return "ABCDEFGH"; }
 static double sdk_hold_s;
 esp_err_t link_cmd_mood(const char *mood,double hold_s) { strcpy(sdk_mood,mood); sdk_hold_s=hold_s; return ESP_OK; }
+static unsigned mood_gen;            /* link_cmd.c's explicit-mood count (link_cmd_test.c) */
+unsigned link_cmd_mood_gen(void) { return mood_gen; }
+static void explicit_mood(const char *mood,double hold_s) { link_cmd_mood(mood,hold_s); mood_gen++; }
 esp_err_t link_ui_set_text(const char *text,int len) { assert(len>=0 && len<=4096); memcpy(sdk_text,text,len+1); return ESP_OK; }
 
 static cJSON *say_args(void) { return cJSON_Parse("{\"job\":\"molty-abcdefghij.j_1\",\"text\":\"hello world\",\"ms\":640,\"rate\":16000}"); }
@@ -146,6 +149,21 @@ static void test_say(void) {
     esp_err_t le=record(&job); complete(le); sdk_rx_error=ESP_OK;
     assert(le==ESP_ERR_TIMEOUT && bin_frames==1 && bin_bytes==0 && bin_ends==1 && !strcmp(bin_reason,"error"));
 }
+/* An explicit mood that arrives while a listen / say runs outlives its completion
+ * (it carries its own hold_s); with none, completion falls back to idle. */
+static void test_mood_survives(void) {
+    audio_job_t job; listen_job(10,&job); assert(!strcmp(sdk_mood,"listening"));
+    explicit_mood("happy",0);                         /* held until the next mood */
+    complete(record(&job)); assert(!link_audio_busy());
+    assert(!strcmp(sdk_mood,"happy") && sdk_hold_s==0);
+    listen_job(10,&job); complete(record(&job));      /* nothing chosen this time */
+    assert(!strcmp(sdk_mood,"idle"));
+    begin_say(); explicit_mood("thinking",-1); receive_pcm(0,true); complete(play());
+    assert(!strcmp(field("name"),"say.done") && !strcmp(sdk_mood,"thinking") && sdk_hold_s<0);
+    /* a mood chosen before the job started is the job's to replace */
+    explicit_mood("sleepy",-1); begin_say(); receive_pcm(0,true); complete(play());
+    assert(!strcmp(sdk_mood,"idle"));
+}
 static void request(void) {
     cJSON *args=cJSON_Parse("{\"t\":\"pair.request\",\"req\":\"request1\",\"agent_name\":\"test agent\",\"code\":\"1234\"}");
     link_pair_request(args); cJSON_Delete(args); assert(link_pair_active());
@@ -221,7 +239,7 @@ static void test_unsupported(void) {
 }
 int main(void) {
     assert(link_audio_init()==ESP_OK && link_pair_init()==ESP_OK);
-    test_say(); test_pair(); test_unsupported();
+    test_say(); test_mood_survives(); test_pair(); test_unsupported();
     cJSON_Delete(sdk_sent); free(s_jobs); free(s_done); free(s_ring);
-    puts("LINK AUDIO/PAIR PASS: paced PCM, final playback drain, errors, cmd-time text/mood, pairing reasons, board caps");
+    puts("LINK AUDIO/PAIR PASS: paced PCM, final playback drain, errors, cmd-time text/mood, explicit moods outlive jobs, pairing reasons, board caps");
 }

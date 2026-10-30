@@ -92,6 +92,9 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
   const path = url.pathname;
   const token = bearer(request.headers.get("authorization"));
   const extra = (out: Pick<Outcome, "inbox" | "notice">) => ({ ...inboxExtra(out.inbox), ...(out.notice ? { skill_update: skillUpdate(out.notice, url.origin) } : {}) });
+  // A failed outcome renders its ride-alongs too (events already marked read, skill notice
+  // already marked seen), like MCP's toolResult: dropping them here would lose them for good.
+  const failed = (out: { error: string; message?: string } & Pick<Outcome, "inbox" | "notice">) => failure(out, extra(out));
 
   if (path === "/v1/pair") {
     if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
@@ -110,7 +113,7 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
       pair_id: b.pair_id as string | undefined,
       wait_ms: waitMs,
     });
-    if (!out.ok) return failure(out);
+    if (!out.ok) return failed(out);
     if (out.result.status === "approved") {
       const { agent_token, device_id, agent_name, code } = out.result;
       return json({ ok: true, agent_token, device_id, agent_name, code });
@@ -130,7 +133,7 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
     const api = backend.device(id);
     const t0 = Date.now();
     const out: Outcome = await api.command(token!, b.name as string, b.args);
-    if (!out.ok) return failure(out);
+    if (!out.ok) return failed(out);
     if (b.wait !== true || (b.name !== "say" && b.name !== "listen")) return json({ ok: true, result: out.result, ...extra(out) });
     // Block on the job. Both outcomes may carry ride-alongs (already marked read): hand over both,
     // whatever the job's outcome.
@@ -147,7 +150,7 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
     const b = await body(request);
     if (!b) return failure({ error: "bad_request", message: "body must be a JSON object" });
     const out = await backend.device(id).talk(token!, b);
-    if (!out.ok) return failure(out);
+    if (!out.ok) return failed(out);
     return json({ ok: true, result: out.result, ...extra(out) }, out.result.status === "pending" ? 202 : 200);
   }
 
@@ -164,7 +167,7 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
     const since = sinceRaw === null || sinceRaw === "" ? undefined : seqOf(sinceRaw);
     if (sinceRaw && since === undefined) return failure({ error: "invalid_args", message: "since must be an event id like e41" });
     const out = await backend.device(id).events(token!, { since, wait_ms: waitS * 1000, signal: request.signal });
-    return out.ok ? json({ ok: true, ...out.result, ...extra(out) }) : failure(out);
+    return out.ok ? json({ ok: true, ...out.result, ...extra(out) }) : failed(out);
   }
 
   if (path === "/v1/webhook") {
@@ -178,7 +181,7 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
       if (!b) return failure({ error: "bad_request", message: "body must be a JSON object" });
       out = await backend.device(dev).webhook(token!, { action: "set", spec: b });
     } else return json({ ok: false, error: "method_not_allowed" }, 405);
-    return out.ok ? json({ ok: true, result: out.result, ...extra(out) }) : failure(out);
+    return out.ok ? json({ ok: true, result: out.result, ...extra(out) }) : failed(out);
   }
 
   const job = /^\/v1\/jobs\/([^/]+)$/.exec(path);
@@ -192,7 +195,7 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
     const waitS = w === null ? 0 : Number(w);
     if (!Number.isInteger(waitS) || waitS < 0 || waitS > 8) return failure({ error: "invalid_args", message: "wait_s must be 0..8" });
     const out = await backend.device(dev).job(token!, jobId, waitS * 1000);
-    return out.ok ? json({ ...out.result, ...extra(out) }) : failure(out);
+    return out.ok ? json({ ...out.result, ...extra(out) }) : failed(out);
   }
 
   if (path === "/v1/token") {
@@ -200,7 +203,7 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
     const dev = tokenDevice(token);
     if (!dev) return failure({ error: "unauthorized" });
     const out = await backend.device(dev).revoke(token!);
-    return out.ok ? json({ ok: true, result: out.result }) : failure(out);
+    return out.ok ? json({ ok: true, result: out.result }) : failed(out);
   }
 
   return json({ ok: false, error: "not_found" }, 404);

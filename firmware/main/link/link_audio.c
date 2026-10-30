@@ -34,6 +34,7 @@ static int64_t s_last_frame;
 static volatile uint32_t s_stat_frames, s_stat_bytes;   /* diag: frames/bytes of the current job */
 static const char *s_end_reason;                       /* diag: why the last listen ended */
 static uint32_t s_speech_ms;
+static unsigned s_mood_gen0;                           /* link_cmd_mood_gen() when the job started */
 
 bool link_audio_busy(void) { return s_busy; }
 void link_audio_cancel(void) { atomic_store(&s_cancel, true); }
@@ -224,6 +225,7 @@ static esp_err_t start(const cJSON *args, bool listen, cJSON **out)
     audio_job_t job = {.listen = listen, .ms = (unsigned)ms->valueint,
                        .vad = vad, .end_silence_ms = end_silence_ms, .no_speech_ms = no_speech_ms};
     strcpy(job.job, j->valuestring); strcpy(s_job, job.job);
+    s_mood_gen0 = link_cmd_mood_gen();   /* after our own listening/speaking mood */
     s_seq = 0; s_stat_frames = 0; s_stat_bytes = 0; s_busy = true; s_listen = listen; s_last_frame = esp_timer_get_time();
     atomic_store(&s_end, false); atomic_store(&s_cancel, false);
     xQueueSend(s_jobs, &job, 0);
@@ -260,7 +262,9 @@ void link_audio_tick(void)
     if (xQueueReceive(s_done, &e, 0) != pdTRUE) return;
     drain(); /* worker has acknowledged completion; discard any late PCM */
     s_busy = false;
-    if (!link_pair_active()) link_cmd_mood("idle", -1);
+    /* Back to idle only if nobody chose a mood while the job ran: an explicit mood
+     * (with its own hold_s, fluid_director) outlives the listen/say it arrived in. */
+    if (!link_pair_active() && link_cmd_mood_gen() == s_mood_gen0) link_cmd_mood("idle", -1);
     /* A failed/cancelled stream must never report successful playback. Listen
      * completion is the uplink end flag, not a say event. */
     if (!s_listen && e == ESP_OK && !atomic_load(&s_cancel) && link_client_connected()) {

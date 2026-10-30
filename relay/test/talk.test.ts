@@ -25,6 +25,8 @@ interface Mic {
   end?: Record<string, unknown>;
   /** The end-frame header verbatim as the firmware writes it (its "s"/"seq" are rewritten to this job's). */
   endRaw?: string;
+  /** The device refuses a cmd with this error code (undefined: it accepts). */
+  cmdError?: (name: string, args: any) => string | undefined;
 }
 
 /** A device that answers cmds, "plays" say streams (say.done when the end frame arrives) and streams mic audio for listen. */
@@ -37,7 +39,9 @@ function device(room: DeviceRoom, sock: FakeSocket, mic: Mic = {}) {
     const f = JSON.parse(t);
     if (f.t === "cmd") {
       log.push({ at: Date.now(), kind: "cmd", name: f.name, args: f.args });
-      setTimeout(() => void room.socketMessage(sock, JSON.stringify({ t: "res", id: f.id, ok: true, result: {} })), 1);
+      const err = mic.cmdError?.(f.name, f.args);
+      const res = err ? { t: "res", id: f.id, ok: false, error: err } : { t: "res", id: f.id, ok: true, result: {} };
+      setTimeout(() => void room.socketMessage(sock, JSON.stringify(res)), 1);
       if (f.name === "listen") {
         setTimeout(() => {
           const n = mic.samples ?? 3200;
@@ -270,6 +274,58 @@ describe("molty_talk", () => {
     expect(w.dev.moods().slice(4)).toEqual([{ mood: "thinking", hold_s: 15 }, { mood: "thinking", hold_s: 15 }]);
   });
 
+  it("a mood the device refuses does not count as explicit: the automatic thinking still lands", async () => {
+    const w = await setup({
+      samples: 3200,
+      end: { reason: "silence", speech_ms: 150 },
+      cmdError: (name, args) => (name === "mood" && args.mood === "happy" ? "invalid_state" : undefined),
+    });
+    const stt = w.voice.stt.bind(w.voice);
+    w.voice.stt = async (pcm) => {
+      await new Promise((r) => setTimeout(r, 80));
+      return stt(pcm);
+    };
+    const turn = w.room.talk(w.token, {});
+    await until(() => w.dev.moods().length > 0);
+    expect(await w.room.command(w.token, "mood", { mood: "happy", hold_s: 60 })).toMatchObject({ ok: false });
+    expect(await turn).toMatchObject({ ok: true, result: { heard: "hello molty" } });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(w.dev.moods()).toEqual([{ mood: "thinking", hold_s: 15 }, { mood: "happy", hold_s: 60 }, { mood: "thinking", hold_s: 15 }]);
+  });
+
+  it("an explicit mood still awaiting the device's answer is not overtaken by an automatic one", async () => {
+    const w = await setup({ samples: 3200, end: { reason: "silence", speech_ms: 150 } });
+    const stt = w.voice.stt.bind(w.voice);
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    w.voice.stt = async (pcm) => {
+      await held;
+      return stt(pcm);
+    };
+    // hold the device's answer to the explicit mood until after STT finished
+    const orig = w.sock.sendText.bind(w.sock);
+    let parked: string | undefined;
+    w.sock.sendText = (t: string) => {
+      const f = JSON.parse(t);
+      if (f.t === "cmd" && f.name === "mood" && f.args.mood === "surprised") {
+        parked = f.id;
+        w.dev.log.push({ at: Date.now(), kind: "cmd", name: f.name, args: f.args });
+        return;
+      }
+      orig(t);
+    };
+    const turn = w.room.talk(w.token, {});
+    await until(() => w.dev.moods().length > 0);
+    const explicit = w.room.command(w.token, "mood", { mood: "surprised" });
+    await until(() => parked !== undefined);
+    release();
+    expect(await turn).toMatchObject({ ok: true });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(w.dev.moods()).toEqual([{ mood: "thinking", hold_s: 15 }, { mood: "surprised" }]);
+    void w.room.socketMessage(w.sock, JSON.stringify({ t: "res", id: parked, ok: true, result: {} }));
+    expect(await explicit).toMatchObject({ ok: true });
+  });
+
   it("over budget: returns {job, status:'pending'} and molty_wait finishes it", async () => {
     const w = await setup({ samples: 1600, end: { reason: "silence", speech_ms: 90 } }, { timings: { talkBudgetMs: 30 } });
     w.voice.ttsSamples = 16000 * 0.4; // 400 ms of speech > 30 ms budget
@@ -330,6 +386,43 @@ describe("wait:true on say / listen", () => {
     const again = await rest(w.backend, w.token, `/v1/devices/${DEVICE}/cmd`, { name: "imu" });
     expect(again.body.events).toBeUndefined();
     expect(again.body.skill_update).toBeUndefined();
+  });
+
+  it("REST: every failure renders the ride-alongs its outcome carries (events + skill notice), like MCP", async () => {
+    const w = await setup({ cmdError: (name) => (name === "volume" ? "busy" : undefined) });
+    // A backend whose failed outcomes carry already-consumed ride-alongs: the REST
+    // surface must hand them over on every failure path, never drop them.
+    const ride = { inbox: { events: [{ id: "e9", type: "tap", at: 1, data: {} } as any], more: false, now: 2 }, notice: { version: 3, whats_new: ["v3: x"] } };
+    const api: any = w.room;
+    const decorated: RelayBackend = {
+      device: () =>
+        new Proxy(api, {
+          get: (t, k) =>
+            typeof t[k] === "function" ? async (...a: unknown[]) => {
+              const out = k === "events" ? { ok: false, error: "internal" } : await t[k](...a);
+              return out.ok ? out : { ...out, ...ride };
+            } : t[k],
+        }),
+    };
+    const call = async (method: string, path: string, body?: unknown) => {
+      const r = await handleRest(
+        new Request(`https://relay.test${path}`, { method, headers: { authorization: `Bearer ${w.token}` }, ...(body ? { body: JSON.stringify(body) } : {}) }),
+        decorated,
+      );
+      return { status: r.status, body: (await r.json()) as any };
+    };
+    const cases = [
+      await call("POST", `/v1/devices/${DEVICE}/cmd`, { name: "volume", args: { volume: 3 } }), // device refuses
+      await call("POST", `/v1/devices/${DEVICE}/cmd`, { name: "nope" }), // relay refuses at once
+      await call("POST", `/v1/devices/${DEVICE}/talk`, { listen_ms: -5 }), // failed /talk
+      await call("GET", `/v1/jobs/${DEVICE}.j_nosuchjob`), // unknown job
+      await call("PUT", `/v1/webhook`, { url: "http://not-https" }), // bad webhook
+      await call("GET", `/v1/devices/${DEVICE}/events`), // failed events read
+    ];
+    for (const c of cases) {
+      expect(c.body.ok).toBe(false);
+      expect(c.body).toMatchObject({ events: [{ id: "e9", type: "tap" }], skill_update: { version: 3, url: "https://relay.test/skill.md" } });
+    }
   });
 
   it("REST: cmd {wait:true} blocks; non-job commands ignore it; bad wait is invalid", async () => {

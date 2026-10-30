@@ -268,8 +268,10 @@ export class DeviceRoom implements AgentApi {
   private readonly sayDone = new Map<string, () => void>();
   private listenBuf: ListenBuffer | undefined;
   private audioJob: string | undefined;
-  /** Bumped by every explicit `mood` command (any agent): automatic moods never overwrite a newer explicit one. */
+  /** Bumped by every explicit `mood` command (any agent) the device accepted: automatic moods never overwrite a newer explicit one. */
   private moodRev = 0;
+  /** Explicit `mood` commands sent but not yet answered: no automatic mood may overtake one on the wire. */
+  private moodInFlight = 0;
   private readonly lastEvents = new Map<string, { data: unknown; at: number }>();
   private readonly inboxWaiters = new Map<string, Set<() => void>>();
   /** Outstanding long-polls per token hash (admission control). */
@@ -506,8 +508,18 @@ export class DeviceRoom implements AgentApi {
       }
       return this.startJob(cmd.name as "say" | "listen", cmd.args);
     }
-    if (cmd.name === "mood") this.moodRev++;
-    const res = await this.sendCmd(cmd.name, cmd.args);
+    let res: Outcome<JsonObject>;
+    if (cmd.name === "mood") {
+      // Counted only once the device took it: a refused mood (pairing prompt up, bad
+      // state) must not silence the automatic thinking/idle that follows.
+      this.moodInFlight++;
+      try {
+        res = await this.sendCmd(cmd.name, cmd.args);
+      } finally {
+        this.moodInFlight--;
+      }
+      if (res.ok) this.moodRev++;
+    } else res = await this.sendCmd(cmd.name, cmd.args);
     if (!res.ok || cmd.name !== "status") return res;
     const sock = this.liveSocket();
     const meta = sock?.getMeta();
@@ -965,11 +977,12 @@ export class DeviceRoom implements AgentApi {
   }
 
   /**
-   * Relay-driven mood around talking; fire-and-forget. Skipped once any agent has
-   * sent an explicit mood since this listen began: the explicit one stands.
+   * Relay-driven mood around talking; fire-and-forget. Skipped once the device has
+   * accepted an explicit mood since this listen began (the explicit one stands), and
+   * while one is still awaiting its answer (it may be accepted).
    */
   private autoMood(buf: ListenBuffer, mood: "thinking" | "idle") {
-    if (buf.moodRev !== this.moodRev) return;
+    if (buf.moodRev !== this.moodRev || this.moodInFlight > 0) return;
     const args: JsonObject = mood === "thinking" ? { mood, hold_s: this.t.thinkHoldS } : { mood };
     void this.sendCmd("mood", args).then((r) => {
       if (!r.ok) this.log("auto mood failed", { device: this.deviceId, mood, error: r.error });

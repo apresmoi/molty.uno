@@ -47,6 +47,7 @@
 #include "mole_fluid.h"
 #include "mole_diag.h"
 #include "link_client.h"
+#include "link_cmd.h"
 
 static const char *TAG = "http";
 
@@ -905,6 +906,8 @@ static esp_err_t handler_creature_state_post(httpd_req_t *r)
     body[received] = '\0';
 
     esp_err_t ret = mole_creature_state_set(body);
+    /* an explicit mood: a listen/say finishing must not drop it back to idle */
+    if (ret == ESP_OK) link_cmd_note_state_body(body);
     free(body);
     if (ret == ESP_ERR_INVALID_STATE)
         return http_send_json(r, "{\"ok\":false,\"error\":\"no_creature\"}");

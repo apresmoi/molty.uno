@@ -257,17 +257,18 @@ static void test_immediate_reply(void)
 static void test_speech_known(void)
 {
     vad_t v;
-    static int16_t quiet[1600];
+    static int16_t quiet[16000];                 /* 1 s: every feed below fits in it */
     vad_cfg_t c = cfg_max(8000);
+    CHECK(c.calib_ms > 100 && c.calib_ms <= 400, "calib_ms %u: the steps below assume 100 < calib <= 400", (unsigned)c.calib_ms);
     vad_init(&v, &c);
     CHECK(!vad_speech_known(&v), "known before any audio");
-    vad_feed(&v, quiet, 1600);                   /* 100 ms < calib_ms */
+    vad_feed(&v, quiet, 1600);                   /* 100 ms in: < calib_ms */
     CHECK(!vad_speech_known(&v), "known inside calibration");
-    vad_feed(&v, quiet, 3200);                   /* 300 ms */
+    vad_feed(&v, quiet, 4800);                   /* 400 ms in: >= calib_ms */
     CHECK(vad_speech_known(&v), "unknown after calibration");
     c.enabled = false;
     vad_init(&v, &c);
-    vad_feed(&v, quiet, 1600 * 10);
+    vad_feed(&v, quiet, N(quiet));               /* a full second with VAD off */
     CHECK(!vad_speech_known(&v), "known with VAD off");
 }
 

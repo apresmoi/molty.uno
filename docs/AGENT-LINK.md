@@ -116,7 +116,8 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   first). A frame may be shorter than 320 ms when the device would otherwise run dry, and the
   last one may be header-only (`end:true`, no payload) when synthesis ended after the last
   audio frame left. After the last frame leaves
-  the ring **and I2S DMA**, device returns to idle and sends
+  the ring **and I2S DMA**, device returns to idle (unless an explicit mood arrived during the
+  say) and sends
   `{"t":"evt","name":"say.done","data":{"job":"..."}}`. Failed/cancelled playback
   does not emit successful completion. Reader timing remains approximate (no word timestamps).
   `talk` requires this `say.done` before it opens the mic: none within the streamed playback
@@ -125,6 +126,11 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
 - TTS cancellation: a segment that misses its timeout (`tts_timeout`), or a stream nobody reads
   any more (device done/gone, turn failed), aborts the provider's request/stream (`TtsOptions.signal`):
   Workers AI cancels the model stream even mid-read, OpenAI aborts the fetch.
+  **Limit (Workers AI):** `env.AI.run()` takes no signal, so a call still waiting for the
+  binding's answer cannot be cancelled: the turn fails on time (`tts_timeout`), but that
+  `run()` stays pending until Workers AI answers, and its output is then released unread.
+  Likewise a non-streamed (whole-body) TTS reply is read to the end once it has started.
+  Whether Workers AI keeps computing (and billing) an abandoned request is not verified.
 - `listen`: relay sends `cmd listen {job, ms, rate:16000, end_silence_ms?, no_speech_ms?, vad?}`
   (`ms` = maximum window; the VAD knobs only when the agent gave them: `end_silence_ms`
   300..3000, `no_speech_ms` 1000..10000, `vad` bool). Device streams mic PCM up; the last frame
@@ -140,8 +146,12 @@ Automatic moods around talking: the device sets `listening` on `listen` and `spe
 `say` (then `idle`); the relay sends `mood thinking hold_s:15` the moment a listen's end frame
 arrives with speech (while STT runs), re-sends it after STT, or `idle` when the transcript is
 empty. So the creature thinks from end of speech until the agent's next command (≤ 15 s).
-Agents don't need `mood` calls around talking; an explicit `mood` still wins: once any agent
-sends `mood` after a listen began, the relay sends no more automatic moods for that listen.
+Agents don't need `mood` calls around talking; an explicit `mood` still wins: once the device
+has accepted a `mood` from any agent after a listen began, the relay sends no more automatic
+moods for that listen (none while that `mood` awaits its answer either; a refused one does not
+count). On the device, a listen/say that ends falls back to `idle` only if no explicit mood (link
+`mood` command, or a local `POST /api/creature/state` with a `mood`) arrived since it started, so
+the explicit mood keeps its own `hold_s`.
 
 ### Listen end of speech (device VAD)
 

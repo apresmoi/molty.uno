@@ -39,12 +39,12 @@ PY
 cc -std=c11 -Wall -Wextra -Werror -O2 ${LINK_TEST_CFLAGS:-} \
   -I"$HERE" -I"$OUT" -I"$IDF_JSON" "$HERE/link_dma_test.c" -o "$OUT/link_dma_test"
 "$OUT/link_dma_test"
-for test in identity audio_pair client; do
+for test in identity audio_pair client cmd; do
   extra=()
   if [ "$test" = identity ]; then extra+=("$LINK/link_identity.c"); fi
   if [ "$test" = audio_pair ]; then extra+=("$AUDIO/vad.c"); fi
   cc -std=c11 -Wall -Wextra -Werror -O2 ${LINK_TEST_CFLAGS:-} \
-    -I"$OUT/stubs" -I"$HERE" -I"$LINK" -I"$AUDIO" -I"$IDF_JSON" \
+    -I"$OUT/stubs" -I"$HERE" -I"$LINK" -I"$AUDIO" -I"$HERE/../../main/fluid" -I"$IDF_JSON" \
     "$HERE/link_${test}_test.c" "$HERE/link_sdk_stub.c" \
     "$LINK/link_protocol.c" ${extra[@]+"${extra[@]}"} "$OUT/cJSON.o" -lm -o "$OUT/link_${test}_test"
   "$OUT/link_${test}_test"
