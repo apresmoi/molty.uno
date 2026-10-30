@@ -16,6 +16,16 @@ export const MAX_DIAG_TIMELINE_S = 180;
 export const MAX_LOG_BYTES = 32768;
 /** mood hold: seconds before the device reverts (quick moods revert by default). */
 export const MAX_MOOD_HOLD_S = 3600;
+/** talk: default listen window. With device end-of-speech this is a ceiling, not a fixed length. */
+export const TALK_DEFAULT_LISTEN_MS = MAX_LISTEN_MS;
+/**
+ * Longest a blocking call (talk, say/listen with wait) holds the request open.
+ * Under the ~30 s tool-call timeouts common in MCP clients; past it the call
+ * returns {job, status:"pending"} and molty_wait / GET /v1/jobs finishes it.
+ */
+export const TALK_BUDGET_MS = 24000;
+/** Automatic `thinking` after end of speech reverts to idle after this long without a next command. */
+export const THINK_HOLD_S = 15;
 
 export class CommandError extends Error {
   constructor(
@@ -48,6 +58,27 @@ function int(value: unknown, field: string, min: number, max: number, fallback?:
     throw invalid(`${field} must be an integer ${min}..${max}`);
   }
   return value;
+}
+
+function voiceId(v: unknown): string {
+  if (typeof v !== "string" || !/^[A-Za-z0-9_.:-]{1,64}$/.test(v)) throw invalid("voice must be a short identifier");
+  return v;
+}
+
+/** Device end-of-speech knobs for listen (firmware VAD); passed through only when given. */
+export const VAD_KEYS = ["end_silence_ms", "no_speech_ms", "vad"] as const;
+export const VAD_LIMITS = { end_silence_ms: [300, 3000], no_speech_ms: [1000, 10000] } as const;
+
+function vadArgs(args: Record<string, unknown>): JsonObject {
+  const out: JsonObject = {};
+  for (const k of ["end_silence_ms", "no_speech_ms"] as const) {
+    if (args[k] !== undefined) out[k] = int(args[k], k, VAD_LIMITS[k][0], VAD_LIMITS[k][1]);
+  }
+  if (args.vad !== undefined) {
+    if (typeof args.vad !== "boolean") throw invalid("vad must be a boolean");
+    out.vad = args.vad;
+  }
+  return out;
 }
 
 export interface Validated {
@@ -101,15 +132,12 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
     case "say": {
       only(args, ["text", "voice"]);
       const out: JsonObject = { text: text(args.text, "text", MAX_SAY_BYTES) };
-      if (args.voice !== undefined) {
-        if (typeof args.voice !== "string" || !/^[A-Za-z0-9_.:-]{1,64}$/.test(args.voice)) throw invalid("voice must be a short identifier");
-        out.voice = args.voice;
-      }
+      if (args.voice !== undefined) out.voice = voiceId(args.voice);
       return { name: n, args: out, job: true };
     }
     case "listen":
-      only(args, ["ms"]);
-      return { name: n, args: { ms: int(args.ms, "ms", 1, MAX_LISTEN_MS, DEFAULT_LISTEN_MS) }, job: true };
+      only(args, ["ms", ...VAD_KEYS]);
+      return { name: n, args: { ms: int(args.ms, "ms", 1, MAX_LISTEN_MS, DEFAULT_LISTEN_MS), ...vadArgs(args) }, job: true };
     case "diag": {
       only(args, ["timeline"]);
       const out: JsonObject = {};
@@ -127,4 +155,26 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
       only(args, ["volume"]);
       return { name: n, args: { volume: int(args.volume, "volume", 0, 21) }, job: false };
   }
+}
+
+export interface TalkArgs {
+  say?: string;
+  voice?: string;
+  listen: boolean;
+  listen_ms: number;
+  /** Device VAD knobs (end_silence_ms, no_speech_ms, vad), forwarded to the device's listen. */
+  vad: JsonObject;
+}
+
+/** molty_talk / POST /v1/devices/<id>/talk: `{say?, listen? (default true), listen_ms? (1..10000, default 10000), voice?, end_silence_ms?, no_speech_ms?, vad?}`. */
+export function validateTalk(raw: unknown): TalkArgs {
+  const args = raw === undefined || raw === null ? {} : raw;
+  if (!isRecord(args)) throw invalid("args must be an object");
+  only(args, ["say", "listen", "listen_ms", "voice", ...VAD_KEYS]);
+  if (args.listen !== undefined && typeof args.listen !== "boolean") throw invalid("listen must be a boolean");
+  const out: TalkArgs = { listen: args.listen !== false, listen_ms: int(args.listen_ms, "listen_ms", 1, MAX_LISTEN_MS, TALK_DEFAULT_LISTEN_MS), vad: vadArgs(args) };
+  if (args.say !== undefined) out.say = text(args.say, "say", MAX_SAY_BYTES);
+  if (args.voice !== undefined) out.voice = voiceId(args.voice);
+  if (out.say === undefined && !out.listen) throw invalid("give say, or listen (or both)");
+  return out;
 }

@@ -49,7 +49,7 @@ async function waitJob(client, job) {
 const anon = await mcpClient();
 check(anon.getServerVersion()?.name === "molty-relay", "serverInfo");
 const tools = (await anon.listTools()).tools.map((t) => t.name).sort();
-check(tools.length === 14, `14 tools, got ${tools}`);
+check(tools.length === 15 && tools.includes("molty_talk"), `15 tools, got ${tools}`);
 log("mcp initialize + tools/list", tools);
 
 const denied = await anon.callTool({ name: "molty_status", arguments: {} });
@@ -105,6 +105,12 @@ const heard = await waitJob(mcp, listen.job);
 check(!heard.isError && sc(heard).text === o["expect-stt"], `listen text: ${JSON.stringify(sc(heard))}`);
 check(sc(heard).duration_ms === 1500 && sc(heard).peak > 0.25 && sc(heard).rms > 0.15, "listen levels from fake tone");
 log("mcp molty_wait(listen)", sc(heard));
+
+// one conversation turn in one call: say (two sentences: streamed) -> listen -> transcript
+const talk = await call("molty_talk", { say: "Short reply. Then a second sentence.", listen_ms: 1200 });
+check(talk.status === "done" && talk.said && talk.heard === o["expect-stt"] && talk.reason === "max" && talk.ms.total > 0 && talk.ms.tts_first_audio >= 0, `talk: ${JSON.stringify(talk)}`);
+const sayWait = await call("molty_say", { text: "Blocking say.", wait: true });
+check(sayWait.status === "done" && sayWait.ms > 0 && sayWait.timings.first_audio >= 0, `say wait:true: ${JSON.stringify(sayWait)}`);
 
 // events: long-poll wakes on a device evt; ride-along on the next tool result
 const polled = mcp.callTool({ name: "molty_events", arguments: { wait_s: 8 } });
@@ -176,6 +182,9 @@ const l2 = await rest("POST", `/v1/devices/${o.device}/cmd`, { name: "listen", a
 const l2done = await pollJob(l2.body.result.job);
 check(l2done.status === "done" && l2done.result.text === o["expect-stt"], `REST listen ${JSON.stringify(l2done)}`);
 log("rest listen + GET /v1/jobs", l2done);
+const t2talk = await rest("POST", `/v1/devices/${o.device}/talk`, { say: "REST talk.", listen_ms: 600 }, t2);
+check(t2talk.status === 200 && t2talk.body.result.heard === o["expect-stt"] && t2talk.body.result.said === "REST talk.", `REST talk ${JSON.stringify(t2talk)}`);
+log("rest POST /v1/devices/<id>/talk", t2talk.body.result);
 
 await rest("POST", `/v1/devices/${o.device}/cmd`, { name: "show", args: { text: "evt:button" } }, t2);
 const ev2 = await rest("GET", `/v1/devices/${o.device}/events?wait_s=5`, undefined, t2);

@@ -47,6 +47,14 @@ export interface AudioHeader {
   kind: "pcm16";
   rate: number;
   end: boolean;
+  /**
+   * Optional, device -> relay on the final listen frame: why recording stopped
+   * (`silence` = end of speech, `no_speech` = nothing said, `max` = window
+   * full, `error` = capture failed). Firmware without on-device end-of-speech omits it.
+   */
+  reason?: string;
+  /** Optional, with `reason`: milliseconds of detected speech in the clip (0 = none). */
+  speech_ms?: number;
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -117,5 +125,9 @@ export function decodeAudioFrame(bytes: Uint8Array): DecodedAudio | undefined {
   if (end !== undefined && typeof end !== "boolean") return undefined;
   const payload = nl < 0 ? new Uint8Array(0) : bytes.subarray(nl + 1);
   if (payload.byteLength > MAX_AUDIO_PAYLOAD_BYTES) return undefined;
-  return { header: { s, seq, kind, rate, end: end === true }, payload };
+  const out: AudioHeader = { s, seq, kind, rate, end: end === true };
+  // Unknown or malformed reasons are dropped, never fatal.
+  if (typeof header.reason === "string" && /^[a-z_]{1,16}$/.test(header.reason)) out.reason = header.reason;
+  if (typeof header.speech_ms === "number" && Number.isInteger(header.speech_ms) && header.speech_ms >= 0 && header.speech_ms <= 600000) out.speech_ms = header.speech_ms;
+  return { header: out, payload };
 }

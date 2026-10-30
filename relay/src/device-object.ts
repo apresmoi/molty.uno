@@ -161,6 +161,9 @@ export class MoltyDevice extends DurableObject<Env> {
   webhook(deviceId: string, token: string, req: WebhookRequest): Promise<Outcome> {
     return this.room(deviceId).webhook(token, req);
   }
+  talk(deviceId: string, token: string, req: unknown): Promise<Outcome> {
+    return this.room(deviceId).talk(token, req);
+  }
 
   // Webhook deliveries and retries (DeviceRoom.alarm).
   async alarm() {

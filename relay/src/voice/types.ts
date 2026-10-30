@@ -8,5 +8,11 @@ export interface TtsOptions {
 export interface VoiceProvider {
   readonly name: string;
   tts(text: string, opts: TtsOptions): Promise<Int16Array>;
+  /**
+   * Optional: the same audio as tts(), yielded in pieces as the backend
+   * produces it, so the relay can start streaming to the device before the
+   * whole segment is synthesised. Absent = the relay calls tts() per segment.
+   */
+  ttsStream?(text: string, opts: TtsOptions): AsyncIterable<Int16Array>;
   stt(pcm: Int16Array): Promise<string>;
 }

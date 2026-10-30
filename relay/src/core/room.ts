@@ -23,7 +23,8 @@
 
 import { type AgentApi, type EventsRequest, type JobView, type Outcome, type PairRequest, type PairResult, TERMINAL, type WebhookRequest } from "./api.js";
 import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
-import { CommandError, validateCommand } from "./commands.js";
+import { CommandError, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateCommand, validateTalk } from "./commands.js";
+import { PcmFeed, estimateSpeechMs, splitSpeech, synthesize } from "./speech.js";
 import { b64Decode, b64urlEncode, randomBytes, randomDigits, safeEqual, sha256Hex } from "./crypto.js";
 import {
   CLOSE_FORGOTTEN,
@@ -98,6 +99,12 @@ export interface RoomTimings {
   sayChunkSamples: number;
   /** say streaming: frames sent ahead of real time to fill the device ring buffer. */
   sayLeadFrames: number;
+  /** talk: after the stream's playback end, how long to wait for the device's say.done before opening the mic. */
+  sayDoneGraceMs: number;
+  /** Automatic `thinking` hold after end of speech. */
+  thinkHoldS: number;
+  /** Longest a blocking talk call holds the request before answering {status:"pending"}. */
+  talkBudgetMs: number;
 }
 
 export const DEFAULT_TIMINGS: RoomTimings = {
@@ -110,7 +117,16 @@ export const DEFAULT_TIMINGS: RoomTimings = {
   jobTtlMs: 15 * 60 * 1000,
   sayChunkSamples: 5120, // 320 ms, 10240 B
   sayLeadFrames: 3,
+  sayDoneGraceMs: 2500,
+  thinkHoldS: THINK_HOLD_S,
+  talkBudgetMs: TALK_BUDGET_MS,
 };
+
+/** say: a first frame shorter than a full chunk waits at most this long for more audio. */
+const FIRST_FRAME_HOLD_MS = 100;
+
+/** Room-side cap on one job wait; surfaces apply their own (molty_wait / GET /v1/jobs: 8 s). */
+const JOB_WAIT_CAP_MS = 25000;
 
 export interface RoomDeps {
   deviceId: string;
@@ -184,6 +200,27 @@ interface ListenBuffer {
   bytes: number;
   ended: boolean;
   wake?: () => void;
+  firstAt?: number;
+  endAt?: number;
+  /** Device end-of-speech verdict from the end frame (absent on older firmware). */
+  reason?: string;
+  speech_ms?: number;
+  /** The automatic `thinking` mood was sent at end of speech. */
+  thinking?: boolean;
+}
+
+type JobKind = "say" | "listen" | "talk";
+type SpeakResult = { ok: true; start: number; ms: number; timings: JsonObject } | { ok: false; error: string };
+type ListenResult =
+  | { ok: true; start: number; text: string; reason: string; speech_ms?: number; duration_ms: number; peak: number; rms: number; timings: JsonObject }
+  | { ok: false; error: string };
+
+function concat(a: Int16Array, b: Int16Array): Int16Array {
+  if (a.length === 0) return b;
+  const out = new Int16Array(a.length + b.length);
+  out.set(a, 0);
+  out.set(b, a.length);
+  return out;
 }
 
 const K = {
@@ -593,9 +630,39 @@ export class DeviceRoom implements AgentApi {
     return this.ride(a, out);
   }
 
+  async talk(token: string, req: unknown): Promise<Outcome> {
+    const t0 = this.clock.now();
+    const a = await this.auth(token);
+    if (!a) return fail("unauthorized");
+    let args: TalkArgs;
+    try {
+      args = validateTalk(req);
+    } catch (e) {
+      if (e instanceof CommandError) return fail(e.code, e.message);
+      throw e;
+    }
+    const live = this.liveSocket();
+    if (!live) return fail("device_offline");
+    const caps = live.getMeta()?.caps;
+    if (caps && args.say !== undefined && !caps.includes("say")) return fail("unsupported", "this device has no speaker");
+    if (caps && args.listen && !caps.includes("listen")) return fail("unsupported", "this device has no microphone");
+    const started = await this.startJob("talk", args as unknown as JsonObject);
+    if (!started.ok) return started;
+    const job = started.result.job as string;
+    const out = await this.runJob(job, Math.max(0, this.t.talkBudgetMs - (this.clock.now() - t0)));
+    if (!out.ok) return out;
+    const v = out.result;
+    if (v.status === "failed") return fail(v.error ?? "failed", `talk job ${job} failed`);
+    if (v.status === "done") return this.ride(a, { ok: true, result: { ...(v.result ?? {}), job, status: "done" } });
+    return this.ride(a, {
+      ok: true,
+      result: { job, status: "pending", state: v.status, hint: "still talking: call molty_wait {job} (REST: GET /v1/jobs/<job>?wait_s=8) for the result" },
+    });
+  }
+
   private async runJob(jobId: string, waitMs: number): Promise<Outcome<JobView>> {
     if (typeof jobId !== "string" || !jobId.startsWith(`${this.deviceId}.j_`)) return fail("not_found");
-    const deadline = this.clock.now() + Math.max(0, Math.min(waitMs, 8000));
+    const deadline = this.clock.now() + Math.max(0, Math.min(waitMs, JOB_WAIT_CAP_MS));
     for (;;) {
       const rec = await this.kv.get<JobRecord>(K.job(jobId));
       if (!rec) return fail("not_found");
@@ -609,7 +676,7 @@ export class DeviceRoom implements AgentApi {
     }
   }
 
-  private async startJob(kind: "say" | "listen", args: JsonObject): Promise<Outcome> {
+  private async startJob(kind: JobKind, args: JsonObject): Promise<Outcome> {
     if (this.audioJob) return fail("audio_busy", `job ${this.audioJob} is still running`);
     const id = `${this.deviceId}.j_${b64urlEncode(randomBytes(12))}`;
     const now = this.clock.now();
@@ -617,7 +684,7 @@ export class DeviceRoom implements AgentApi {
     this.tasks.add(id);
     await this.kv.put<JobRecord>(K.job(id), { job: id, kind, status: "queued", created: now, updated: now });
     void this.purgeJobs(now);
-    const run = kind === "say" ? this.runSay(id, args) : this.runListen(id, args);
+    const run = kind === "say" ? this.runSay(id, args, now) : kind === "listen" ? this.runListen(id, args, now) : this.runTalk(id, args as unknown as TalkArgs, now);
     run
       .catch((e: unknown) => this.finishJob(id, { status: "failed", error: errorCode(e) }))
       .finally(() => {
@@ -646,53 +713,203 @@ export class DeviceRoom implements AgentApi {
     }
   }
 
-  private async runSay(id: string, args: JsonObject) {
-    await this.setJob(id, { status: "running" });
-    const text = args.text as string;
-    const voice = typeof args.voice === "string" ? args.voice : undefined;
-    const pcm = await withTimeout(this.clock, this.voice.tts(text, { voice }), this.t.ttsTimeoutMs, "tts_timeout");
-    const ms = durationMs(pcm.length);
-    const sock = this.liveSocket();
-    if (!sock) return this.finishJob(id, { status: "failed", error: "device_offline" });
-    const deviceArgs: JsonObject = { job: id, text, ms, rate: SAMPLE_RATE };
-    if (voice) deviceArgs.voice = voice;
-    const res = await this.sendCmd("say", deviceArgs);
-    if (!res.ok) return this.finishJob(id, { status: "failed", error: res.error });
-
-    let done = false;
-    const doneSignal = new Promise<void>((resolve) => this.sayDone.set(id, () => ((done = true), resolve())));
-    try {
-      const chunk = this.t.sayChunkSamples;
-      const frames = Math.max(1, Math.ceil(pcm.length / chunk));
-      const chunkMs = (chunk * 1000) / SAMPLE_RATE;
-      const start = this.clock.now();
-      for (let seq = 0; seq < frames; seq++) {
-        if (done) break;
-        const due = start + (seq - this.t.sayLeadFrames) * chunkMs;
-        const wait = due - this.clock.now();
-        if (wait > 0) await sleep(this.clock, wait);
-        const live = this.liveSocket();
-        if (!live || !live.same(sock)) return this.finishJob(id, { status: "failed", error: "device_offline" });
-        const payload = pcm16ToBytes(pcm.subarray(seq * chunk, (seq + 1) * chunk));
-        live.sendBinary(encodeAudioFrame({ s: id, seq, kind: "pcm16", rate: SAMPLE_RATE, end: seq === frames - 1 }, payload));
-      }
-      // Playback ends ~ when the stream would have, unless the device says so first.
-      const left = start + ms - this.clock.now();
-      if (left > 0 && !done) await Promise.race([doneSignal, sleep(this.clock, left)]);
-    } finally {
-      this.sayDone.delete(id);
-    }
-    await this.finishJob(id, { status: "done", result: { ms, text } });
+  /** Stage timings are returned in job results and logged, so real-device latency can be read after deploy. */
+  private logTimings(id: string, kind: JobKind, timings: JsonObject) {
+    this.log("job timings", { device: this.deviceId, job: id, kind, ...timings });
   }
 
-  private async runListen(id: string, args: JsonObject) {
-    const ms = args.ms as number;
+  private async runSay(id: string, args: JsonObject, created: number) {
     await this.setJob(id, { status: "running" });
+    const text = args.text as string;
+    const r = await this.speak(id, text, typeof args.voice === "string" ? args.voice : undefined, false);
+    if (!r.ok) return this.finishJob(id, { status: "failed", error: r.error });
+    const timings: JsonObject = { queue: r.start - created, ...r.timings, total: this.clock.now() - created };
+    this.logTimings(id, "say", timings);
+    await this.finishJob(id, { status: "done", result: { ms: r.ms, text, timings } });
+  }
+
+  private async runListen(id: string, args: JsonObject, created: number) {
+    await this.setJob(id, { status: "running" });
+    const { ms, ...vad } = args;
+    const r = await this.record(id, ms as number, vad);
+    if (!r.ok) return this.finishJob(id, { status: "failed", error: r.error });
+    const timings: JsonObject = { queue: r.start - created, ...r.timings, total: this.clock.now() - created };
+    this.logTimings(id, "listen", timings);
+    const extra: JsonObject = r.speech_ms !== undefined ? { speech_ms: r.speech_ms } : {};
+    await this.finishJob(id, { status: "done", result: { text: r.text, duration_ms: r.duration_ms, peak: r.peak, rms: r.rms, reason: r.reason, ...extra, timings } });
+  }
+
+  /** say (optional) then listen, one job holding the audio lock across both, so nothing slips in between. */
+  private async runTalk(id: string, args: TalkArgs, created: number) {
+    await this.setJob(id, { status: "running" });
+    const ms: JsonObject = {};
+    const timings: JsonObject = { queue: this.clock.now() - created };
+    const result: JsonObject = {};
+    if (args.say !== undefined) {
+      // Wait for the device's say.done (bounded) so the mic does not open while the speaker still plays.
+      const s = await this.speak(id, args.say, args.voice, true);
+      if (!s.ok) return this.finishJob(id, { status: "failed", error: s.error });
+      result.said = args.say;
+      ms.tts_first_audio = (s.timings.first_audio as number) ?? 0;
+      ms.speech = (s.timings.play as number) ?? 0;
+      timings.say = s.timings;
+    }
+    if (args.listen) {
+      const l = await this.record(id, args.listen_ms, args.vad);
+      if (!l.ok) return this.finishJob(id, { status: "failed", error: l.error });
+      Object.assign(result, { heard: l.text, reason: l.reason, duration_ms: l.duration_ms, peak: l.peak, rms: l.rms });
+      if (l.speech_ms !== undefined) result.speech_ms = l.speech_ms;
+      ms.listen = (l.timings.record as number) ?? 0;
+      ms.stt = (l.timings.stt as number) ?? 0;
+      timings.listen = l.timings;
+    } else {
+      result.reason = "spoken";
+    }
+    ms.total = this.clock.now() - created;
+    timings.total = ms.total;
+    this.logTimings(id, "talk", timings);
+    await this.finishJob(id, { status: "done", result: { ...result, ms, timings } });
+  }
+
+  /**
+   * TTS -> device, streamed: segments are synthesised in order with lookahead
+   * (core/speech.ts) and their PCM is framed and paced to the device as soon as
+   * it exists, so playback starts after the FIRST segment's synthesis, not the
+   * whole text's. Wire format and pacing are unchanged: `cmd say` first, then
+   * `s=job` pcm16 frames of `sayChunkSamples` (a shorter frame only when the
+   * device would otherwise run dry, or at the end), `sayLeadFrames` ahead of
+   * real time, `end:true` on the last (a header-only end frame when synthesis
+   * finished after the last audio frame left). A TTS failure before any audio
+   * never touches the device.
+   */
+  private async speak(id: string, text: string, voice: string | undefined, untilDone: boolean): Promise<SpeakResult> {
+    const t0 = this.clock.now();
+    const feed = new PcmFeed();
+    void synthesize(this.voice, splitSpeech(text), { voice }, feed, this.clock, this.t.ttsTimeoutMs);
+    const wait = (ms: number) => feed.waitFor((f, d) => this.clock.setTimeout(f, d), (h) => this.clock.clearTimeout(h), ms);
+    let carry: Int16Array = new Int16Array(0);
+    const absorb = () => {
+      for (const p of feed.take()) carry = concat(carry, p);
+    };
+    try {
+      // First audio (or the end) -- synthesize() bounds this with its per-segment timeout.
+      while (!feed.queued && !feed.done) await wait(this.t.ttsTimeoutMs);
+      absorb();
+      if (carry.length === 0) throw feed.error ?? new Error("tts returned no audio");
+      const tFirst = this.clock.now();
+      const sock = this.liveSocket();
+      if (!sock) return { ok: false, error: "device_offline" };
+      // `ms` is informational on the device; exact when synthesis already finished.
+      const announced = feed.done && feed.error === undefined ? durationMs(carry.length) : Math.max(durationMs(carry.length), estimateSpeechMs(text));
+      const deviceArgs: JsonObject = { job: id, text, ms: announced, rate: SAMPLE_RATE };
+      if (voice) deviceArgs.voice = voice;
+      const res = await this.sendCmd("say", deviceArgs);
+      if (!res.ok) return { ok: false, error: res.error };
+
+      let done = false;
+      const doneSignal = new Promise<void>((resolve) => this.sayDone.set(id, () => ((done = true), resolve())));
+      const chunk = this.t.sayChunkSamples;
+      const chunkMs = (chunk * 1000) / SAMPLE_RATE;
+      const lead = this.t.sayLeadFrames * chunkMs;
+      let seq = 0;
+      let playEnd = 0; // when the device will have played everything sent so far (relay clock)
+      let firstSent = 0;
+      let lastSent = 0;
+      let samples = 0;
+      let ended = false;
+      let tSynth = feed.done ? tFirst : 0;
+      const send = async (pcm: Int16Array, end: boolean) => {
+        if (seq > 0) {
+          const w = playEnd - lead - this.clock.now();
+          if (w > 0) await sleep(this.clock, w);
+        }
+        const live = this.liveSocket();
+        if (!live || !live.same(sock)) throw new CodedError("device_offline");
+        live.sendBinary(encodeAudioFrame({ s: id, seq: seq++, kind: "pcm16", rate: SAMPLE_RATE, end }, pcm16ToBytes(pcm)));
+        const now = this.clock.now();
+        if (!firstSent) firstSent = now;
+        lastSent = now;
+        playEnd = Math.max(playEnd, now) + (pcm.length * 1000) / SAMPLE_RATE;
+        samples += pcm.length;
+        if (end) ended = true;
+      };
+      try {
+        while (!done) {
+          absorb();
+          if (!tSynth && feed.done) tSynth = this.clock.now();
+          if (feed.done && feed.error !== undefined) throw feed.error;
+          if (carry.length >= chunk) {
+            const piece = carry.subarray(0, chunk);
+            carry = carry.subarray(chunk);
+            await send(piece, feed.done && !feed.queued && carry.length === 0);
+            if (ended) break;
+            continue;
+          }
+          if (feed.done) {
+            await send(carry, true); // the tail, or a header-only end frame
+            break;
+          }
+          // A partial frame and more audio coming: wait for it, but never let the device run dry
+          // (the first frame waits at most FIRST_FRAME_HOLD_MS for more before it goes as is).
+          const hungryIn = seq === 0 ? tFirst + FIRST_FRAME_HOLD_MS - this.clock.now() : playEnd - chunkMs - this.clock.now();
+          if (carry.length && hungryIn <= 0) {
+            await send(carry, false);
+            carry = new Int16Array(0);
+            continue;
+          }
+          await wait(carry.length ? hungryIn : this.t.ttsTimeoutMs);
+        }
+        // Playback ends ~ when the stream would have, unless the device says so first.
+        const left = playEnd - this.clock.now() + (untilDone ? this.t.sayDoneGraceMs : 0);
+        if (left > 0 && !done) await Promise.race([doneSignal, sleep(this.clock, left)]);
+      } catch (e) {
+        // Mid-stream failure: close the device's stream so it plays what it has and frees the speaker.
+        if (!ended) {
+          try {
+            this.liveSocket()?.sendBinary(encodeAudioFrame({ s: id, seq, kind: "pcm16", rate: SAMPLE_RATE, end: true }, new Uint8Array(0)));
+          } catch {
+            /* offline */
+          }
+        }
+        return { ok: false, error: errorCode(e) };
+      } finally {
+        this.sayDone.delete(id);
+      }
+      const tEnd = this.clock.now();
+      return {
+        ok: true,
+        start: t0,
+        ms: durationMs(samples),
+        timings: {
+          tts_first_byte: tFirst - t0,
+          tts_total: (tSynth || tEnd) - t0,
+          first_audio: firstSent - t0,
+          stream: lastSent - firstSent,
+          play: tEnd - firstSent,
+        },
+      };
+    } catch (e) {
+      return { ok: false, error: errorCode(e) };
+    } finally {
+      feed.end(); // stops synthesis nobody will play
+    }
+  }
+
+  /**
+   * Device mic -> STT. STT starts the moment the device's end frame arrives.
+   * The end frame may carry `reason` (device end-of-speech): `no_speech` skips
+   * STT. The creature shows `thinking` from end of speech until the agent's
+   * next command (or THINK_HOLD_S).
+   */
+  private async record(id: string, ms: number, vad: JsonObject = {}): Promise<ListenResult> {
+    const t0 = this.clock.now();
     const buf: ListenBuffer = { job: id, chunks: [], bytes: 0, ended: false };
     this.listenBuf = buf;
+    let tAck = t0;
     try {
-      const res = await this.sendCmd("listen", { job: id, ms, rate: SAMPLE_RATE });
-      if (!res.ok) return this.finishJob(id, { status: "failed", error: res.error });
+      const res = await this.sendCmd("listen", { job: id, ms, rate: SAMPLE_RATE, ...vad });
+      if (!res.ok) return { ok: false, error: res.error };
+      tAck = this.clock.now();
       if (!buf.ended) {
         await new Promise<void>((resolve) => {
           const timer = this.clock.setTimeout(resolve, ms + this.t.listenGraceMs);
@@ -705,8 +922,11 @@ export class DeviceRoom implements AgentApi {
     } finally {
       if (this.listenBuf === buf) this.listenBuf = undefined;
     }
-    if (!this.liveSocket() && buf.bytes === 0) return this.finishJob(id, { status: "failed", error: "device_offline" });
-    if (buf.bytes === 0) return this.finishJob(id, { status: "failed", error: "no_audio" });
+    const tEnd = buf.endAt ?? this.clock.now();
+    // Device VAD heard nothing: no STT call at all (older firmware sends no reason: STT as before).
+    const noSpeech = buf.reason === "no_speech" || (buf.reason !== undefined && buf.speech_ms === 0);
+    if (!this.liveSocket() && buf.bytes === 0) return { ok: false, error: "device_offline" };
+    if (buf.bytes === 0 && !noSpeech) return { ok: false, error: "no_audio" };
     const all = new Uint8Array(buf.bytes);
     let o = 0;
     for (const c of buf.chunks) {
@@ -714,8 +934,31 @@ export class DeviceRoom implements AgentApi {
       o += c.byteLength;
     }
     const pcm = bytesToPcm16(all);
-    const text = await withTimeout(this.clock, this.voice.stt(pcm), this.t.sttTimeoutMs, "stt_timeout");
-    await this.finishJob(id, { status: "done", result: { text, duration_ms: durationMs(pcm.length), ...levels(pcm) } });
+    const tStt = this.clock.now();
+    const text = noSpeech ? "" : await withTimeout(this.clock, this.voice.stt(pcm), this.t.sttTimeoutMs, "stt_timeout");
+    const sttMs = noSpeech ? 0 : this.clock.now() - tStt;
+    // Re-assert thinking after STT (covers the device's own idle racing the first one); nothing heard -> idle.
+    if (buf.thinking) this.autoMood(text ? "thinking" : "idle");
+    const duration = durationMs(pcm.length);
+    const reason = buf.reason ?? (!text ? "no_speech" : duration >= ms - 100 ? "max" : "ended");
+    return {
+      ok: true,
+      start: t0,
+      text,
+      reason,
+      ...(buf.speech_ms !== undefined ? { speech_ms: buf.speech_ms } : {}),
+      duration_ms: duration,
+      ...levels(pcm),
+      timings: { cmd: tAck - t0, record: tEnd - tAck, stt: sttMs, ...(buf.firstAt ? { first_frame: buf.firstAt - tAck } : {}) },
+    };
+  }
+
+  /** Relay-driven mood around talking; fire-and-forget (an explicit mood command still wins: it comes later). */
+  private autoMood(mood: "thinking" | "idle") {
+    const args: JsonObject = mood === "thinking" ? { mood, hold_s: this.t.thinkHoldS } : { mood };
+    void this.sendCmd("mood", args).then((r) => {
+      if (!r.ok) this.log("auto mood failed", { device: this.deviceId, mood, error: r.error });
+    });
   }
 
   private onAudio(bytes: Uint8Array) {
@@ -725,9 +968,18 @@ export class DeviceRoom implements AgentApi {
     if (buf.bytes + frame.payload.byteLength <= MAX_LISTEN_BYTES && frame.payload.byteLength > 0) {
       buf.chunks.push(frame.payload.slice());
       buf.bytes += frame.payload.byteLength;
+      buf.firstAt ??= this.clock.now();
     }
     if (frame.header.end) {
       buf.ended = true;
+      buf.endAt = this.clock.now();
+      if (frame.header.reason) buf.reason = frame.header.reason;
+      if (frame.header.speech_ms !== undefined) buf.speech_ms = frame.header.speech_ms;
+      // End of speech: show thinking right away, while STT runs.
+      if (buf.bytes > 0 && buf.reason !== "no_speech" && buf.speech_ms !== 0 && buf.reason !== "error") {
+        buf.thinking = true;
+        this.autoMood("thinking");
+      }
       buf.wake?.();
     }
   }

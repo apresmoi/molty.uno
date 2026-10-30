@@ -8,7 +8,7 @@
 import { INBOX_LIMITS, SKILL_EVENT } from "../core/events.js";
 import { SKILL_VERSION, skillHeadline } from "../core/version.js";
 import { WEBHOOK_LIMITS } from "../core/webhook.js";
-import { DEFAULT_LISTEN_MS, DEFAULT_WPM, MAX_MOOD_HOLD_S, MAX_DIAG_TIMELINE_S, MAX_LISTEN_MS, MAX_LOG_BYTES, MAX_SAY_BYTES, MAX_SHOW_BYTES, MOODS } from "../core/commands.js";
+import { DEFAULT_LISTEN_MS, DEFAULT_WPM, MAX_MOOD_HOLD_S, MAX_DIAG_TIMELINE_S, MAX_LISTEN_MS, MAX_LOG_BYTES, MAX_SAY_BYTES, MAX_SHOW_BYTES, MOODS, TALK_BUDGET_MS, TALK_DEFAULT_LISTEN_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
 
 export const SKILL_PATHS = ["/skill.md", "/skill"];
 
@@ -97,19 +97,38 @@ Success: \`200 {"ok":true,"result":{…}}\`. Unknown argument keys are rejected.
 | \`status\` | — | fw, uptime, creature, state, mood, fps, rssi + \`relay\` {online, connected_since, board, caps, voice, events} | cheap; use it to check Molty is online |
 | \`mood\` | \`{"mood": m, "hold_s"?: s}\` | — | m ∈ ${MOODS.join(", ")}; happy/surprised revert by themselves, \`hold_s\` (0 < s ≤ ${MAX_MOOD_HOLD_S}) sets how long any mood stays |
 | \`show\` | \`{"text": s, "wpm"?: 100..800}\` | — | speed-reader text in the fluid, ≤ ${MAX_SHOW_BYTES} bytes, default ${DEFAULT_WPM} wpm; returns when it starts |
-| \`say\` | \`{"text": s, "voice"?: id}\` | \`{job}\` immediately | relay TTS → speaker, text shown in sync; ≤ ${MAX_SAY_BYTES} bytes; job done → \`{ms, text}\` |
-| \`listen\` | \`{"ms"?: 1..${MAX_LISTEN_MS}}\` | \`{job}\` immediately | records the mic (default ${DEFAULT_LISTEN_MS} ms), relay STT; job done → \`{text, duration_ms, peak, rms}\` |
+| \`say\` | \`{"text": s, "voice"?: id}\` | \`{job}\` immediately | relay TTS → speaker (streamed sentence by sentence), text shown in sync; ≤ ${MAX_SAY_BYTES} bytes; job done → \`{ms, text, timings}\` |
+| \`listen\` | \`{"ms"?: 1..${MAX_LISTEN_MS}, "end_silence_ms"?: ${VAD_LIMITS.end_silence_ms.join("..")}, "no_speech_ms"?: ${VAD_LIMITS.no_speech_ms.join("..")}, "vad"?: bool}\` | \`{job}\` immediately | records the mic (window default ${DEFAULT_LISTEN_MS} ms; the device stops early when speech ends), relay STT; job done → \`{text, duration_ms, peak, rms, reason, speech_ms?, timings}\` |
 | \`state\` | \`{}\` = read · \`{"state": {…}}\` or flat fields = patch | creature state JSON | low-level creature state, same as the device's \`/api/creature/state\` |
 | \`volume\` | \`{"volume": 0..21}\` | — | speaker volume, 0 = mute |
 | \`imu\` | — | ax/ay/az (g), gx/gy/gz (°/s), ms | one motion-sensor snapshot |
 | \`diag\` | \`{"timeline"?: 0..${MAX_DIAG_TIMELINE_S}}\` | diagnostics JSON | frame/CPU/heap/network health; timeline = seconds of 1 Hz rows |
 | \`log\` | \`{"since"?: n, "max"?: 1024..${MAX_LOG_BYTES}}\` | \`{next, text}\` | device log tail; pass \`next\` back as \`since\` |
 
-**Timing.** Every call is designed to answer within ~10 s. Short commands answer
-inline. \`say\` and \`listen\` are **async jobs**: they return \`{job}\` at once; poll
-\`GET /v1/jobs/<job>?wait_s=0..8\` until \`status\` is \`done\` or \`failed\`. Only one
+**Timing.** Short commands answer inline within ~10 s. \`say\` and \`listen\` are
+**async jobs**: they return \`{job}\` at once; poll \`GET /v1/jobs/<job>?wait_s=0..8\` until
+\`status\` is \`done\` or \`failed\` — or add \`"wait": true\` to the cmd body
+(\`{"name":"say","args":{…},"wait":true}\`) and the call blocks until the job is done (at most
+${TALK_BUDGET_MS / 1000} s; past that \`202\` with \`{"job","status":"pending"}\`, finish with the jobs URL). Only one
 audio job runs at a time (\`409 audio_busy\`) — wait for a \`say\` to finish before the
 next \`say\`/\`listen\`.
+
+**Talk (one call per conversation turn).**
+
+\`\`\`sh
+curl -sS -X POST ${o}/v1/devices/molty-xxxxxxxxxx/talk \\
+  -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \\
+  -d '{"say":"Sure. What should I call it?"}'
+# → {"ok":true,"result":{"job":"…","status":"done","said":"Sure. What should I call it?","heard":"call it pancake",
+#     "reason":"silence","ms":{"tts_first_audio":…,"speech":…,"listen":…,"stt":…,"total":…},"timings":{…}}}
+\`\`\`
+
+Body: \`{"say"?: s, "listen"?: true, "listen_ms"?: 1..${MAX_LISTEN_MS} (default ${TALK_DEFAULT_LISTEN_MS}), "voice"?, "end_silence_ms"?, "no_speech_ms"?, "vad"?}\`.
+Speaks \`say\` (if given), then listens until the human stops talking (or the window ends), then
+returns the transcript as \`heard\`. \`reason\`: \`silence\` (they finished), \`no_speech\` (nobody
+spoke: \`heard\` is \`""\`), \`max\` (window full), \`ended\` (older firmware stopped early), \`error\` (the device's capture failed; \`heard\` is what was transcribed, if anything),
+\`spoken\` (\`"listen":false\`). Blocks at most ${TALK_BUDGET_MS / 1000} s; a longer turn answers \`202\` with
+\`{"job","status":"pending"}\` — finish it with \`GET /v1/jobs/<job>?wait_s=8\`.
 
 Errors: \`{"ok":false,"error":code}\` — \`401 unauthorized\` (bad/missing/revoked token),
 \`400 invalid_args\` / \`unknown_command\`, \`409 device_offline\` / \`audio_busy\` /
@@ -121,7 +140,7 @@ Revoke your own token: \`curl -sS -X DELETE ${o}/v1/token -H "authorization: Bea
 ## 3. Optional: MCP
 
 The same features are a remote MCP server at \`${o}/mcp\` (streamable HTTP, bearer
-auth). Tools: \`molty_pair\` (no token needed), \`molty_status\`, \`molty_mood\`,
+auth). Tools: \`molty_pair\` (no token needed), \`molty_talk\`, \`molty_status\`, \`molty_mood\`,
 \`molty_show\`, \`molty_say\`, \`molty_listen\`, \`molty_wait\`, \`molty_state\`,
 \`molty_volume\`, \`molty_imu\`, \`molty_diag\`, \`molty_log\`, \`molty_events\`,
 \`molty_webhook\`. Claude Code example:
@@ -184,6 +203,25 @@ updated (…). Re-read ${o}/skill.md."). Re-read this page when you see it. Fail
 don't consume it. Agents paired before an update also get one \`${SKILL_EVENT}\` event
 (\`{"version","whats_new","url"}\`) in their inbox, and webhooks without an \`events\`
 filter receive it too — dedupe by \`id\`.
+
+## Talking fast
+
+A spoken conversation feels slow when every turn costs several of your tool calls (each one
+a full model round trip on your side). So:
+
+- **One call per turn: \`molty_talk\`** (REST \`POST …/talk\`). It speaks your reply, listens, and
+  returns what the human said. Don't chain \`mood\` → \`say\` → \`molty_wait\` → \`listen\` → \`molty_wait\`.
+- **Moods are automatic.** Molty shows \`speaking\` while talking, \`listening\` while
+  recording, and \`thinking\` from the end of the human's speech until your next command (at most
+  ${THINK_HOLD_S} s), then idle. **Don't call \`mood\` around talking**; use it for feelings
+  (\`happy\`, \`surprised\`), not for turn-taking.
+- **Keep replies to 1–2 short sentences.** Speech time is latency: the human waits for every word
+  before they can answer. Audio starts after your first sentence is synthesised, so a short
+  first sentence also starts sooner.
+- **Use events, not polling.** To notice a shake or tap, read the ride-along \`events\`, long-poll
+  \`molty_events\` / the events URL, or register a webhook. Never poll \`imu\` (or \`status\`) in a
+  loop to detect motion: it is slow, misses short gestures, and keeps Molty's link busy.
+- To end the conversation, \`molty_talk {"say":"…","listen":false}\` (speak without listening).
 
 ## Etiquette
 

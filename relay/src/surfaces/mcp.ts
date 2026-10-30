@@ -1,6 +1,7 @@
 // Remote MCP surface: Streamable HTTP transport (spec 2025-03-26 .. 2025-11-25)
 // at POST /mcp, stateless, tools only, JSON responses (no SSE stream: every
-// tool answers within ~8 s by design, so the server never needs to stream).
+// tool answers within ~8 s, or ~24 s for the blocking talk/wait calls, so the
+// server never needs to stream).
 // Tool names/arguments mirror the local stdio server in cli/
 // (internal/molty/mcp.go); relay-specific differences are stated in each
 // description. Authorization: Bearer <agent_token>; molty_pair needs none.
@@ -8,8 +9,8 @@
 // Uses only the Fetch API (Request/Response) -- no Cloudflare imports -- so a
 // Node host can serve it unchanged.
 
-import { type AgentApi, type Inbox, type Outcome, type RelayBackend, bearer, tokenDevice } from "../core/api.js";
-import { DEFAULT_LISTEN_MS, MAX_MOOD_HOLD_S, MOODS } from "../core/commands.js";
+import { type AgentApi, type Inbox, type JobView, type Outcome, type RelayBackend, bearer, tokenDevice } from "../core/api.js";
+import { DEFAULT_LISTEN_MS, MAX_LISTEN_MS, MAX_MOOD_HOLD_S, MOODS, TALK_BUDGET_MS, TALK_DEFAULT_LISTEN_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
 import { AGENT_EVENT_TYPES, type AgentEvent, INBOX_LIMITS, eventsLine, seqOf } from "../core/events.js";
 import { DEVICE_ID_RE, isRecord, type JsonObject } from "../core/protocol.js";
 import { RELAY_VERSION, SKILL_VERSION, type SkillNotice, skillHeadline, skillLine, skillUpdate } from "../core/version.js";
@@ -18,7 +19,7 @@ export const SUPPORTED_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"];
 export const SERVER_INFO = { name: "molty-relay", title: `Molty relay (skill v${SKILL_VERSION})`, version: RELAY_VERSION };
 const MAX_BODY = 256 * 1024;
 const INSTRUCTIONS =
-  "Tools operate a physical Molty device through the molty-relay. Pair first with molty_pair (no token needed), then send the returned agent_token as 'Authorization: Bearer <token>'. molty_say and molty_listen return a job immediately; poll it with molty_wait (<= 8 s per call). " +
+  "Tools operate a physical Molty device through the molty-relay. Pair first with molty_pair (no token needed), then send the returned agent_token as 'Authorization: Bearer <token>'. For conversation use molty_talk: ONE call per turn speaks your reply, then listens and returns what the human said ({heard, reason}); moods (listening, thinking, speaking) are automatic, so don't call molty_mood around talking. Keep spoken replies to 1-2 sentences. molty_say / molty_listen return a job immediately (wait:true blocks until done); poll a job with molty_wait (<= 8 s per call). " +
   `Molty also emits events (${AGENT_EVENT_TYPES.join(", ")}) into your own inbox: unread ones ride along on every tool result as 'events' plus a 'Molty: ...' line; molty_events pulls/waits for them; molty_webhook registers an HTTPS request the relay sends you per event. React briefly, once per moment. Full guide: GET /skill.md on this relay. ${skillHeadline()}. When the skill changes again, your next successful tool result carries 'skill_update' plus a 'Molty's skill was updated' line once: re-read /skill.md then.`;
 
 type Prop = { type: string; description: string; enum?: string[]; items?: { type: "string"; enum?: string[] } };
@@ -29,6 +30,30 @@ interface ToolDef {
   inputSchema: Schema;
   auth: boolean;
   run(api: AgentApi, token: string, args: Record<string, unknown>): Promise<Outcome<JsonObject>>;
+}
+
+const VAD_PROPS: Schema["properties"] = {
+  end_silence_ms: { type: "integer", description: `Device end-of-speech: silence that ends the turn, ${VAD_LIMITS.end_silence_ms[0]}..${VAD_LIMITS.end_silence_ms[1]} ms (device default 700).` },
+  no_speech_ms: { type: "integer", description: `Device end-of-speech: give up when nobody starts talking within ${VAD_LIMITS.no_speech_ms[0]}..${VAD_LIMITS.no_speech_ms[1]} ms (device default 4000).` },
+  vad: { type: "boolean", description: "Device end-of-speech detection on (default) or off (record the whole window)." },
+};
+
+/** say/listen with `wait: true` block on their job (bounded), returning what molty_wait would. */
+async function commandWait(api: AgentApi, t: string, name: "say" | "listen", a: Record<string, unknown>): Promise<Outcome<JsonObject>> {
+  const { wait, ...args } = a;
+  const start = Date.now();
+  const out = await api.command(t, name, args);
+  if (!out.ok || wait !== true) return out;
+  return jobOutcome(await api.job(t, out.result.job as string, Math.max(0, TALK_BUDGET_MS - (Date.now() - start))));
+}
+
+/** Shapes a job view like molty_wait: done -> result + {job, status}, failed -> error, else pending. */
+function jobOutcome(out: Outcome<JobView>): Outcome<JsonObject> {
+  if (!out.ok) return out;
+  const j = out.result;
+  if (j.status === "done") return { ok: true, result: { ...(j.result ?? {}), job: j.job, status: "done" } as JsonObject };
+  if (j.status === "failed") return { ok: false, error: j.error ?? "failed", message: `job ${j.job} failed` };
+  return { ok: true, result: { job: j.job, status: "pending", state: j.status } };
 }
 
 const obj = (properties: Schema["properties"], required: string[] = []): Schema => ({ type: "object", properties, required, additionalProperties: false });
@@ -98,30 +123,44 @@ export const TOOLS: ToolDef[] = [
   {
     name: "molty_say",
     description:
-      "Speak text through the device speaker using the relay's TTS. Returns {job} immediately; poll molty_wait until done ({ms, text}). The device shows the speaking mood and the text while audio plays. One audio job (say or listen) at a time; audio_busy otherwise. No WAV/path argument on the relay.",
+      "Speak text through the device speaker using the relay's TTS (streamed: audio starts after the first sentence is synthesised). Returns {job} immediately; poll molty_wait until done ({ms, text, timings}), or pass wait:true to block until done. The device shows the speaking mood and the text while audio plays. One audio job (say/listen/talk) at a time; audio_busy otherwise. For a conversation turn use molty_talk instead.",
     inputSchema: obj(
       {
         text: { type: "string", description: "Text to synthesize, at most 4096 bytes." },
         voice: { type: "string", description: "Optional relay TTS voice (provider-specific, e.g. luna for Workers AI Aura)." },
+        wait: { type: "boolean", description: `true: block until spoken (at most ${TALK_BUDGET_MS / 1000} s, then {job, status:"pending"} for molty_wait).` },
       },
       ["text"],
     ),
     auth: true,
-    run: (api, t, a) => api.command(t, "say", a),
+    run: (api, t, a) => commandWait(api, t, "say", a),
   },
   {
     name: "molty_listen",
-    description: `Record the device microphone (default ${DEFAULT_LISTEN_MS} ms, maximum 10000) and transcribe it with the relay's STT. Returns {job} immediately; molty_wait returns {text, duration_ms, peak, rms}. The device shows the listening mood while recording. No audio file is returned.`,
-    inputSchema: obj({ ms: { type: "integer", description: "Capture duration in milliseconds (1..10000); default 4000." } }),
+    description: `Record the device microphone (window default ${DEFAULT_LISTEN_MS} ms, maximum ${MAX_LISTEN_MS}; devices with end-of-speech detection stop early) and transcribe it with the relay's STT. Returns {job} immediately; molty_wait returns {text, duration_ms, peak, rms, reason, speech_ms?, timings}; wait:true blocks until done. The device shows listening while recording and thinking after speech ends. No audio file is returned.`,
+    inputSchema: obj({ ms: { type: "integer", description: `Maximum capture in milliseconds (1..${MAX_LISTEN_MS}); default ${DEFAULT_LISTEN_MS}.` }, ...VAD_PROPS, wait: { type: "boolean", description: `true: block until transcribed (at most ${TALK_BUDGET_MS / 1000} s).` } }),
     auth: true,
-    run: (api, t, a) => api.command(t, "listen", a),
+    run: (api, t, a) => commandWait(api, t, "listen", a),
+  },
+  {
+    name: "molty_talk",
+    description: `One conversation turn in ONE call: speaks 'say' (if given), then listens and returns what the human said: {heard, said?, reason: silence|no_speech|max|ended|error, speech_ms?, ms:{tts_first_audio, speech, listen, stt, total}}. Moods are automatic (speaking, listening, then thinking until your next command, ${THINK_HOLD_S} s max): don't call molty_mood around it. Blocks at most ${TALK_BUDGET_MS / 1000} s; a longer turn returns {job, status:"pending"}: finish it with molty_wait. Keep 'say' to 1-2 sentences.`,
+    inputSchema: obj({
+      say: { type: "string", description: "What to say first (at most 4096 bytes). Omit to just listen." },
+      listen: { type: "boolean", description: "Listen after speaking; default true. false = just speak (and wait until spoken)." },
+      listen_ms: { type: "integer", description: `Maximum listen window in ms (1..${MAX_LISTEN_MS}); default ${TALK_DEFAULT_LISTEN_MS}. The device stops early when speech ends.` },
+      voice: { type: "string", description: "Optional relay TTS voice." },
+      ...VAD_PROPS,
+    }),
+    auth: true,
+    run: (api, t, a) => api.talk(t, a),
   },
   {
     name: "molty_wait",
-    description: "Wait at most timeout_s (0..8, default 8) for a say/listen job. Returns the job result with status done, status pending if still queued/running (call again), or an error if it failed.",
+    description: "Wait at most timeout_s (0..8, default 8) for a say/listen/talk job. Returns the job result with status done, status pending if still queued/running (call again), or an error if it failed.",
     inputSchema: obj(
       {
-        job: { type: "string", description: "Job id returned by molty_say or molty_listen." },
+        job: { type: "string", description: "Job id returned by molty_say, molty_listen or molty_talk." },
         timeout_s: { type: "integer", description: "Polling budget, integer 0..8 seconds; default 8." },
       },
       ["job"],
@@ -130,12 +169,7 @@ export const TOOLS: ToolDef[] = [
     async run(api, t, a): Promise<Outcome<JsonObject>> {
       const s = a.timeout_s === undefined ? 8 : (a.timeout_s as number);
       if (!Number.isInteger(s) || s < 0 || s > 8) return { ok: false, error: "invalid_args", message: "timeout_s must be 0..8" };
-      const out = await api.job(t, a.job as string, s * 1000);
-      if (!out.ok) return out;
-      const j = out.result;
-      if (j.status === "done") return { ok: true, result: { ...(j.result ?? {}), job: j.job, status: "done" } as JsonObject };
-      if (j.status === "failed") return { ok: false, error: j.error ?? "failed", message: `job ${j.job} failed` };
-      return { ok: true, result: { job: j.job, status: "pending", state: j.status } };
+      return jobOutcome(await api.job(t, a.job as string, s * 1000));
     },
   },
   {
@@ -326,6 +360,7 @@ function capturingInbox(api: AgentApi): { api: AgentApi; taken: Inbox[]; notices
       revoke: (t) => keep(api.revoke(t)),
       events: (t, r) => keep(api.events(t, r)),
       webhook: (t, r) => keep(api.webhook(t, r)),
+      talk: (t, r) => keep(api.talk(t, r)),
     },
   };
 }
