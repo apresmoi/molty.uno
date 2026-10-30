@@ -20,7 +20,7 @@ const NEXT = ["NEWC2345", "NEWD2345", "NEWE2345", "NEWF2345"];
 function device(room: DeviceRoom, sock: FakeSocket, o: { chunks?: number } = {}) {
   const chunks = o.chunks ?? 3;
   let timers: ReturnType<typeof setTimeout>[] = [];
-  const log: Array<{ at: number; kind: string; name?: string; args?: any }> = [];
+  const log: Array<{ at: number; kind: string; name?: string; args?: any; bytes?: number }> = [];
   let codes = 0;
   const text = sock.sendText.bind(sock);
   const bin = sock.sendBinary.bind(sock);
@@ -54,7 +54,7 @@ function device(room: DeviceRoom, sock: FakeSocket, o: { chunks?: number } = {})
     bin(b);
     const fr = decodeAudioFrame(b)!;
     const nl = b.indexOf(10);
-    log.push({ at: Date.now(), kind: "frame", args: JSON.parse(new TextDecoder().decode(nl < 0 ? b : b.subarray(0, nl))) });
+    log.push({ at: Date.now(), kind: "frame", args: JSON.parse(new TextDecoder().decode(nl < 0 ? b : b.subarray(0, nl))), bytes: nl < 0 ? 0 : b.length - nl - 1 });
     if (fr.header.end) setTimeout(() => void room.socketMessage(sock, JSON.stringify({ t: "evt", name: "say.done", data: { job: fr.header.s } })), 5);
   };
   return { log };
@@ -72,6 +72,10 @@ interface BoxOpts {
   noSpeechAfter?: number;
   /** TTS word timings (Kyutai's Text messages): tts.word {i, start_s: 0.05 + 0.1·i} per word but the last, before the audio. */
   words?: boolean;
+  /** TTS: first audio this long after the request (default 5 ms). */
+  delayMs?: number;
+  /** TTS: stream like Kyutai — `frames` frames of 1280 samples (80 ms), one every `everyMs`, instead of one 3200-sample frame. */
+  stream?: { frames: number; everyMs: number };
 }
 
 /** A voice box on the relay's voice socket: synthesises 3200 samples per tts, transcribes by counting the chunks it got. */
@@ -87,14 +91,24 @@ function box(room: DeviceRoom, sock: FakeSocket, o: BoxOpts = {}) {
     control.push(f);
     if (o.silent) return;
     if (f.t === "tts") {
-      tts.push(f);
+      tts.push({ ...f, at: Date.now() });
       setTimeout(() => {
         if (sock.closed) return;
         if (o.words) for (const bad of [{ i: 0, start_s: -1 }, { i: 0, start_s: 9999 }, { i: 0, start_s: "x" }, { i: 0.5, start_s: 0 }, { i: -1, start_s: 0 }]) say({ t: "tts.word", id: f.id, ...bad });
         if (o.words) f.text.split(" ").slice(0, -1).forEach((_: string, i: number) => say({ t: "tts.word", id: f.id, i, text: "x", start_s: 0.05 + 0.1 * i }));
+        if (o.stream) {
+          const { frames, everyMs } = o.stream;
+          for (let k = 0; k < frames; k++)
+            setTimeout(() => {
+              if (sock.closed) return;
+              void room.socketMessage(sock, encodeAudioFrame({ s: f.id, seq: k, kind: "pcm16", rate: 16000, end: false }, new Uint8Array(new Int16Array(1280).fill(500).buffer)));
+              if (k === frames - 1) say({ t: "tts.end", id: f.id });
+            }, k * everyMs);
+          return;
+        }
         void room.socketMessage(sock, encodeAudioFrame({ s: f.id, seq: 0, kind: "pcm16", rate: 16000, end: false }, new Uint8Array(new Int16Array(3200).fill(500).buffer)));
         say({ t: "tts.end", id: f.id });
-      }, 5);
+      }, o.delayMs ?? 5);
     }
     if (f.t === "stt.start") got[f.id] = [];
     if (f.t === "stt.end") setTimeout(() => !sock.closed && say({ t: "stt.final", id: f.id, text: `box heard ${got[f.id].length} chunks`, ms: { final: 3 } }), 5);
@@ -129,8 +143,8 @@ async function openBox(room: DeviceRoom, host: FakeHost, token: string, o: BoxOp
   return { sock, ...b };
 }
 
-async function setup(o: { box?: BoxOpts | false; keepClosing?: boolean; caps?: string[]; chunks?: number } = {}) {
-  const ctx = makeRoom({ timings: FAST });
+async function setup(o: { box?: BoxOpts | false; keepClosing?: boolean; caps?: string[]; chunks?: number; timings?: Record<string, number> } = {}) {
+  const ctx = makeRoom({ timings: { ...FAST, ...o.timings } });
   ctx.host.keepClosing = !!o.keepClosing;
   const sock = await connect(ctx.room, ctx.host, undefined, LINK, o.caps ? { caps: o.caps } : {});
   const dev = device(ctx.room, sock, { chunks: o.chunks });
@@ -426,15 +440,45 @@ describe("box drops mid-job", () => {
     expect(w.voice.sttCalls).toHaveLength(0);
   });
 
-  it("the box drops before its TTS audio: the say fails cleanly and quickly (no hang, device untouched)", async () => {
+  it("the box drops before its TTS audio: the say fails cleanly and quickly (no hang, the early say's stream closed)", async () => {
     const w = await setup({ box: { silent: true } });
     const p = w.room.talk(w.token, { say: "Hello." });
     await until(() => w.box!.tts.length === 0 && w.box!.control.some((f) => f.t === "tts"));
+    // with the box, `cmd say` went out with the tts request (its round trip overlaps the synthesis)
+    await until(() => w.dev.log.some((l) => l.name === "say"));
     const t0 = Date.now();
     w.box!.sock.close(1006, "gone");
     expect(await p).toMatchObject({ ok: false, error: "voice_box_offline" });
     expect(Date.now() - t0).toBeLessThan(300);
-    expect(w.dev.log.filter((l) => l.name === "say")).toHaveLength(0);
+    const job = w.dev.log.find((l) => l.name === "say")!.args.job;
+    // no audio will come: one header-only end frame frees the speaker at once
+    const frames = w.dev.log.filter((l) => l.kind === "frame" && l.args.s === job);
+    expect(frames.map((f) => [f.args.seq, f.args.end])).toEqual([[0, true]]);
+    expect(w.dev.log.filter((l) => l.name === "listen")).toHaveLength(0);
+  });
+
+  it("with the box, cmd say leaves before the first audio; the first frame leaves with 160 ms in hand, not a full chunk", async () => {
+    const w = await setup({ box: { delayMs: 60 } });
+    const job = ((await w.room.command(w.token, "say", { text: "Hello there." })) as any).result.job;
+    await w.room.job(w.token, job, 3000);
+    const say = w.dev.log.find((l) => l.name === "say")!;
+    const tts = w.box!.tts[0];
+    expect(say.at).toBeLessThan(tts.at + 30); // not after the box's first audio (60 ms later)
+    const first = w.dev.log.find((l) => l.kind === "frame" && l.args.s === job)!;
+    expect(first.at - tts.at).toBeLessThan(60 + 60); // no 100 ms hold on top of the first audio
+  });
+
+  it("the first frame goes once it holds 160 ms of a Kyutai-paced stream (not a full 320 ms chunk, not after 100 ms)", async () => {
+    const w = await setup({ timings: { sayChunkSamples: 5120, sayLeadFrames: 3 }, box: { delayMs: 5, stream: { frames: 12, everyMs: 40 } } });
+    const job = ((await w.room.command(w.token, "say", { text: "Hello there." })) as any).result.job;
+    await w.room.job(w.token, job, 5000);
+    const frames = w.dev.log.filter((l) => l.kind === "frame" && l.args.s === job);
+    const t1 = w.box!.tts[0].at + 5; // the first 80 ms frame reaches the relay
+    expect(frames[0].at - t1).toBeGreaterThanOrEqual(30); // waited for the second frame (40 ms later)...
+    expect(frames[0].at - t1).toBeLessThan(80); // ...not for the 100 ms hold or a full chunk (~120 ms)
+    const bytes = frames.map((f) => f.bytes!);
+    expect(bytes[0]).toBe(2560 * 2);
+    expect(bytes.reduce((a, b) => a + b, 0)).toBe(12 * 1280 * 2); // nothing lost
   });
 });
 
@@ -654,14 +698,16 @@ describe("semantic end of turn is the default with a voice box", () => {
 describe("say word cues from the voice box", () => {
   it("the box's word timing reaches the device as cues on the stream's timeline; words it did not time are estimated; malformed timings are ignored", async () => {
     const w = await setup({ caps: ["say", "say_cues", "listen"], box: { words: true } });
-    const job = ((await w.room.command(w.token, "say", { text: "One two three. Four five." })) as any).result.job;
+    // the box streams, so sentences are grouped (up to ~220 chars) even for the first segment
+    const long = "x".repeat(215) + ".";
+    const job = ((await w.room.command(w.token, "say", { text: `One two ${long} Four five.` })) as any).result.job;
     await w.room.job(w.token, job, 3000);
-    expect(w.box!.tts.map((t) => t.text)).toEqual(["One two three.", "Four five."]);
+    expect(w.box!.tts.map((t) => t.text)).toEqual([`One two ${long}`, "Four five."]);
     const cues = new Map(w.dev.log.filter((l) => l.kind === "frame").flatMap((l) => (l.args.w ?? []) as Array<[number, number]>));
-    // segment 1 (3200 samples): its own times for words 0, 1; word 2 estimated ("One two " of 15)
+    // segment 1 (3200 samples): its own times for words 0, 1; word 2 estimated ("One two " of 4 + 4 + 217)
     expect(cues.get(0)).toBe(800);
     expect(cues.get(1)).toBe(2400);
-    expect(cues.get(2)).toBe(Math.round((3200 * 8) / 15));
+    expect(cues.get(2)).toBe(Math.round((3200 * 8) / 225));
     // segment 2 starts at 3200: word 3 at its own 0.05 s, word 4 estimated
     expect(cues.get(3)).toBe(3200 + 800);
     expect(cues.get(4)).toBe(3200 + Math.round((3200 * 5) / 11));

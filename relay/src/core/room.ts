@@ -175,14 +175,21 @@ export const DEFAULT_TIMINGS: RoomTimings = {
   boxSttFinalMs: 5000,
 };
 
-/** say: a first frame shorter than a full chunk waits at most this long for more audio. */
 /** Firmware cap: say {cues:true} and frames with "w" word cues (the text follows the voice). */
 const SAY_CUES_CAP = "say_cues";
 /** Word cues one frame header carries (each ≤ 17 B: the header stays under 512 B). */
 const SAY_CUES_PER_FRAME = 20;
 /** Words of one say the device can cue (firmware LINK_CUE_WORDS): later words go uncued. */
 const SAY_CUE_WORDS = 512;
+/** say: a first frame shorter than a full chunk waits at most this long for more audio... */
 const FIRST_FRAME_HOLD_MS = 100;
+/**
+ * ...or until it holds this much (160 ms). The device plays from its first frame; the voice
+ * box (Kyutai) delivers 80 ms of audio every ~25 ms (3.2x real time, measured on the 4090,
+ * also with the lookahead segment running), so 160 ms in hand leaves ~130 ms of slack for
+ * the network where a full 320 ms chunk cost ~75 ms of waiting.
+ */
+const FIRST_FRAME_MIN_SAMPLES = 2560;
 
 /** Room-side cap on one job wait; surfaces apply their own (molty_wait / GET /v1/jobs: 8 s). */
 const JOB_WAIT_CAP_MS = 25000;
@@ -1349,8 +1356,11 @@ export class DeviceRoom implements AgentApi, OwnerApi {
    * `s=job` pcm16 frames of `sayChunkSamples` (a shorter frame only when the
    * device would otherwise run dry, or at the end), `sayLeadFrames` ahead of
    * real time, `end:true` on the last (a header-only end frame when synthesis
-   * finished after the last audio frame left). A TTS failure before any audio
-   * never touches the device.
+   * finished after the last audio frame left). With the voice box `cmd say` goes
+   * out with the request (its round trip overlaps the synthesis) and a TTS failure
+   * before any audio closes that stream at once; with any other provider the
+   * device is only told once the first audio exists, so such a failure never
+   * touches it.
    */
   private async speak(id: string, text: string, voice: string | undefined, untilDone: boolean): Promise<SpeakResult> {
     const t0 = this.clock.now();
@@ -1359,7 +1369,9 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const feed = new PcmFeed();
     // The agent's voice passes through; with none, the box uses the owner's default box voice.
     const ttsVoice = voice ?? (pick.box ? pick.cfg.voice : undefined);
-    void synthesize(pick.provider, splitSpeech(text), { voice: ttsVoice }, feed, this.clock, this.t.ttsTimeoutMs);
+    // The box streams: its first audio does not wait on the text's length, so sentences are not cut
+    // apart for it (every cut is a seam of trailing + leading silence and a prosody restart).
+    void synthesize(pick.provider, splitSpeech(text, { streaming: pick.box }), { voice: ttsVoice }, feed, this.clock, this.t.ttsTimeoutMs);
     const wait = (ms: number) => feed.waitFor((f, d) => this.clock.setTimeout(f, d), (h) => this.clock.clearTimeout(h), ms);
     let carry: Int16Array = new Int16Array(0);
     const absorb = () => {
@@ -1368,24 +1380,52 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const absorbCues = (into: Array<[number, number]>) => {
       for (const c of feed.takeCues()) if (c[0] < SAY_CUE_WORDS) into.push(c);
     };
+    // With the box (first audio ~0.25 s), `cmd say` goes out at once, in parallel with the
+    // synthesis: its round trip to the device no longer sits between the first audio and the
+    // first frame. Elsewhere (the cloud can take a second) it waits for the first audio, so
+    // the device never shows a say whose voice is still far off.
+    const early = pick.box;
+    let sock: DeviceSocket | undefined;
+    let cuesOn = false;
+    const sayCmd = (ms: number) => {
+      const deviceArgs: JsonObject = { job: id, text, ms, rate: SAMPLE_RATE };
+      if (voice) deviceArgs.voice = voice;
+      // Firmware with say_cues shows each word when the speaker reaches it: the frames carry
+      // word cues [word, sample] on the stream's timeline (the box's own timing, else estimated).
+      cuesOn = !!sock!.getMeta()?.caps?.includes(SAY_CUES_CAP);
+      if (cuesOn) deviceArgs.cues = true;
+      return this.sendCmd("say", deviceArgs);
+    };
+    let cmd: Promise<Outcome<JsonObject>> | undefined;
+    if (early) {
+      sock = this.liveSocket();
+      if (!sock) {
+        feed.end();
+        return { ok: false, error: "device_offline" };
+      }
+      // `ms` is informational on the device: the estimate (the audio does not exist yet)
+      cmd = sayCmd(estimateSpeechMs(text));
+    }
     try {
       // First audio (or the end) -- synthesize() bounds this with its per-segment timeout.
       while (!feed.queued && !feed.done) await wait(this.t.ttsTimeoutMs);
       absorb();
-      if (carry.length === 0) throw feed.error ?? new Error("tts returned no audio");
+      if (carry.length === 0) {
+        // Nothing to play: an early `cmd say` gets its stream closed (header-only end frame), so
+        // the device frees the speaker instead of waiting out its 30 s frame timeout.
+        if (cmd && (await cmd).ok) this.endStream(id, sock!, 0);
+        throw feed.error ?? new Error("tts returned no audio");
+      }
       const tFirst = this.clock.now();
-      const sock = this.liveSocket();
-      if (!sock) return { ok: false, error: "device_offline" };
-      // `ms` is informational on the device; exact when synthesis already finished.
-      const announced = feed.done && feed.error === undefined ? durationMs(carry.length) : Math.max(durationMs(carry.length), estimateSpeechMs(text));
-      const deviceArgs: JsonObject = { job: id, text, ms: announced, rate: SAMPLE_RATE };
-      if (voice) deviceArgs.voice = voice;
-      // Firmware with say_cues shows each word when the speaker reaches it: the frames carry
-      // word cues [word, sample] on the stream's timeline (the box's own timing, else estimated).
-      const cuesOn = !!sock.getMeta()?.caps?.includes(SAY_CUES_CAP);
-      if (cuesOn) deviceArgs.cues = true;
+      if (!early) {
+        sock = this.liveSocket();
+        if (!sock) return { ok: false, error: "device_offline" };
+        // `ms` is informational on the device; exact when synthesis already finished.
+        const announced = feed.done && feed.error === undefined ? durationMs(carry.length) : Math.max(durationMs(carry.length), estimateSpeechMs(text));
+        cmd = sayCmd(announced);
+      }
       let cues: Array<[number, number]> = [];
-      const res = await this.sendCmd("say", deviceArgs);
+      const res = await cmd!;
       if (!res.ok) return { ok: false, error: res.error };
 
       let done = false;
@@ -1406,7 +1446,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
           if (w > 0) await sleep(this.clock, w);
         }
         const live = this.liveSocket();
-        if (!live || !live.same(sock)) throw new CodedError("device_offline");
+        if (!live || !live.same(sock!)) throw new CodedError("device_offline");
         if (cuesOn) absorbCues(cues);
         // cues ride ahead of (or with) their audio; more than a header holds go in header-only frames first
         while (cuesOn && end && cues.length > SAY_CUES_PER_FRAME) {
@@ -1426,6 +1466,12 @@ export class DeviceRoom implements AgentApi, OwnerApi {
           absorb();
           if (!tSynth && feed.done) tSynth = this.clock.now();
           if (feed.done && feed.error !== undefined) throw feed.error;
+          // the first frame goes as soon as it holds FIRST_FRAME_MIN_SAMPLES (never more than a chunk)
+          if (seq === 0 && carry.length >= Math.min(FIRST_FRAME_MIN_SAMPLES, chunk) && carry.length < chunk && !feed.done) {
+            await send(carry, false);
+            carry = new Int16Array(0);
+            continue;
+          }
           if (carry.length >= chunk) {
             const piece = carry.subarray(0, chunk);
             carry = carry.subarray(chunk);
@@ -1452,7 +1498,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         if (left > 0 && !done) await Promise.race([doneSignal, sleep(this.clock, left)]);
         // untilDone (talk): only the device's say.done proves the speaker is free. An
         // elapsed estimate is not playback: never report success (or open the mic) on it.
-        if (untilDone && !done) return { ok: false, error: this.liveSocket()?.same(sock) ? "playback_timeout" : "device_offline" };
+        if (untilDone && !done) return { ok: false, error: this.liveSocket()?.same(sock!) ? "playback_timeout" : "device_offline" };
       } catch (e) {
         // Mid-stream failure: close the device's stream so it plays what it has and frees the speaker.
         if (!ended) {
@@ -1485,6 +1531,15 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       return { ok: false, error: errorCode(e) };
     } finally {
       feed.end(); // stops synthesis nobody will play
+    }
+  }
+
+  /** Closes a say stream on the device that never got (or will get no more) audio: a header-only end frame. */
+  private endStream(id: string, sock: DeviceSocket, seq: number) {
+    try {
+      if (this.liveSocket()?.same(sock)) sock.sendBinary(encodeAudioFrame({ s: id, seq, kind: "pcm16", rate: SAMPLE_RATE, end: true }, new Uint8Array(0)));
+    } catch {
+      /* offline */
     }
   }
 

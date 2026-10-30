@@ -828,6 +828,13 @@ describe("streamed speech", () => {
     expect(parts[0]).toBe("Well, after thinking about it for quite a long time,");
     expect(parts.join(" ").replace(/\s+/g, " ")).toBe(long);
     expect(splitSpeech("no punctuation at all")).toEqual(["no punctuation at all"]);
+    // a streaming provider (the voice box): no short first segment, sentences grouped up to ~220 chars
+    expect(splitSpeech("Hi! How are you today? I am fine.", { streaming: true })).toEqual(["Hi! How are you today? I am fine."]);
+    const many = Array.from({ length: 12 }, (_, i) => `Sentence number ${i} is here.`).join(" ");
+    const grouped = splitSpeech(many, { streaming: true });
+    expect(grouped.length).toBe(2);
+    expect(grouped.join(" ")).toBe(many);
+    expect(grouped.every((g) => g.length <= 220)).toBe(true);
   });
 });
 

@@ -18,13 +18,28 @@ const SEGMENT_CHARS = 220;
  * Splits text into speakable segments, in order, losing no characters except
  * whitespace at the cuts. Segment 1 is short (first sentence, or its first
  * clause when long) so audio starts early; later sentences are grouped.
+ *
+ * `streaming`: the provider streams audio as it synthesises (the voice box), so its first
+ * audio does not depend on the segment's length: the first sentence is grouped with the
+ * next ones like any other (fewer seams of silence and prosody restarts).
  */
-export function splitSpeech(text: string): string[] {
+export function splitSpeech(text: string, opts: { streaming?: boolean } = {}): string[] {
   // A sentence ends at . ! ? … (plus closing quotes/brackets) followed by whitespace, or at a newline;
   // "3.5" and "molty.uno" stay whole.
   const sentences = text.split(/(?<=[.!?…]["')\]]*)\s+|\s*\n+\s*/).map((s) => s.trim()).filter(Boolean);
   if (sentences.length === 0) return [text];
   const out: string[] = [];
+  let cur = "";
+  if (opts.streaming) {
+    for (const s of sentences) {
+      if (cur && cur.length + 1 + s.length > SEGMENT_CHARS) {
+        out.push(cur);
+        cur = s;
+      } else cur = cur ? `${cur} ${s}` : s;
+    }
+    if (cur) out.push(cur);
+    return out;
+  }
   let first = sentences.shift()!;
   if (first.length > FIRST_MAX_CHARS) {
     // Cut after a clause mark (, ; : — –) that leaves at least 3 words in the head.
@@ -41,7 +56,6 @@ export function splitSpeech(text: string): string[] {
     }
   }
   out.push(first);
-  let cur = "";
   for (const s of sentences) {
     if (cur && cur.length + 1 + s.length > SEGMENT_CHARS) {
       out.push(cur);
