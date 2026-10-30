@@ -107,6 +107,12 @@ export interface SocketMeta {
   tok?: string;
   /** voice: what the box offers, set by its voice.hello (absent = not greeted yet: not used). */
   box?: { stt: boolean; tts: boolean };
+  /**
+   * voice: replaced / revoked / unpaired. Set BEFORE the socket is closed, in its own
+   * serialized metadata (survives hibernation): the host may keep listing a closing socket
+   * (Cloudflare's getWebSockets() includes CLOSING ones), and it must never be picked again.
+   */
+  retired?: boolean;
 }
 
 export interface DeviceSocket {
@@ -1615,6 +1621,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   }
 
   private async voiceMessage(sock: DeviceSocket, meta: SocketMeta, data: string | Uint8Array): Promise<void> {
+    if (meta.retired) return; // closing: nothing it says counts any more
     if (typeof data !== "string") {
       if (!meta.box) return;
       const frame = decodeAudioFrame(data);
@@ -1659,7 +1666,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private boxSocket(): DeviceSocket | undefined {
     return this.host.sockets().find((s) => {
       const m = s.getMeta();
-      return m?.stage === "voice" && !!m.box;
+      return m?.stage === "voice" && !!m.box && !m.retired;
     });
   }
 
@@ -1667,7 +1674,9 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private closeBoxes(match: (m: SocketMeta, s: DeviceSocket) => boolean, code: number, reason: string) {
     for (const s of this.host.sockets()) {
       const m = s.getMeta();
-      if (m?.stage !== "voice" || !match(m, s)) continue;
+      if (m?.stage !== "voice" || m.retired || !match(m, s)) continue;
+      // Ineligible first (in its own attachment), then fail its requests, then close.
+      s.setMeta({ ...m, retired: true });
       this.box.drop(s);
       s.close(code, reason);
     }
@@ -1676,7 +1685,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   /** Closes the matching boxes for good (revoked / unpaired) and forgets the hello of a box no longer there. */
   private async forgetBox(match: (m: SocketMeta) => boolean, reason: string) {
     this.closeBoxes((m) => match(m), CLOSE_UNAUTHORIZED, reason);
-    if (!this.host.sockets().some((s) => s.getMeta()?.stage === "voice")) await this.kv.delete(K.vbox);
+    if (!this.host.sockets().some((s) => s.getMeta()?.stage === "voice" && !s.getMeta()?.retired)) await this.kv.delete(K.vbox);
   }
 
   /** Deletes every voice box token (one box per device) and closes their sockets; returns how many. */

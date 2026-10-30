@@ -98,8 +98,9 @@ async function openBox(room: DeviceRoom, host: FakeHost, token: string, o: BoxOp
   return { sock, ...b };
 }
 
-async function setup(o: { box?: BoxOpts | false } = {}) {
+async function setup(o: { box?: BoxOpts | false; keepClosing?: boolean } = {}) {
   const ctx = makeRoom({ timings: FAST });
+  ctx.host.keepClosing = !!o.keepClosing;
   const sock = await connect(ctx.room, ctx.host);
   const dev = device(ctx.room, sock);
   const agent = await pairAs(ctx.room, LINK, "talker");
@@ -249,6 +250,48 @@ describe("voice socket", () => {
     const out = await w.room.job(w.token, started.result.job as string, 2000);
     expect(out).toMatchObject({ ok: true, result: { status: "failed", error: "voice_box_offline" } });
     expect(Date.now() - t0).toBeLessThan(500);
+  });
+
+  describe("a closing socket the host still lists (Cloudflare getWebSockets() includes CLOSING ones)", () => {
+    it("after a replacement, the NEW box serves; the old one is marked retired in its own metadata", async () => {
+      const w = await setup({ keepClosing: true });
+      const old = w.box!;
+      const fresh = await openBox(w.room, w.host, w.voiceToken);
+      expect(old.sock.closed?.code).toBe(4409);
+      expect(w.host.sockets()).toContain(old.sock); // still listed, as on Cloudflare
+      expect(old.sock.meta?.retired).toBe(true); // in the serialized attachment: survives hibernation
+      const out = await w.room.talk(w.token, { say: "Hi there." });
+      expect(out).toMatchObject({ ok: true, result: { heard: "box heard 3 chunks", timings: { say: { voice: "box" }, listen: { voice: "box" } } } });
+      expect(fresh.tts).toHaveLength(1);
+      expect(old.control.filter((f) => f.t === "tts" || f.t === "stt.start")).toHaveLength(0);
+    });
+
+    it("a late frame from the retired socket is ignored (it cannot re-greet itself back)", async () => {
+      const w = await setup({ keepClosing: true });
+      const old = w.box!;
+      await openBox(w.room, w.host, w.voiceToken);
+      old.sock.closed = undefined; // its close has not completed yet: it can still talk
+      await old.hello();
+      expect(old.sock.meta?.retired).toBe(true);
+      expect(old.control.filter((f) => f.t === "voice.welcome")).toHaveLength(1); // only the first, before it was replaced
+    });
+
+    it("after a revoke, the closing box is never picked: auto uses the cloud, box mode says offline", async () => {
+      const w = await setup({ keepClosing: true });
+      await w.room.revoke(w.voiceToken);
+      expect(w.host.sockets()).toContain(w.box!.sock);
+      const out = await w.room.talk(w.token, { say: "Hi." });
+      expect(out).toMatchObject({ ok: true, result: { timings: { say: { voice: "fake" }, listen: { voice: "fake" } } } });
+      await w.room.voiceSettings(w.link, { action: "set", mode: "box" });
+      expect(await w.room.talk(w.token, {})).toMatchObject({ ok: false, error: "voice_box_offline" });
+      expect((await w.room.voiceSettings(w.link, { action: "get" })).ok && (await w.room.voiceSettings(w.link, { action: "get" }) as any).result.box.connected).toBe(false);
+    });
+
+    it("after the owner unpairs, the closing box is not shown as connected nor picked", async () => {
+      const w = await setup({ keepClosing: true });
+      const un = await w.room.voiceSettings(w.link, { action: "unpair" });
+      expect(un).toMatchObject({ ok: true, result: { serving: { tts: "fake", stt: "fake" }, box: { connected: false } } });
+    });
   });
 
   it("answers ping with pong", async () => {

@@ -46,8 +46,10 @@ export class FakeSocket implements DeviceSocket {
 export class FakeHost {
   list: FakeSocket[] = [];
   onClose?: (s: FakeSocket) => void;
+  /** Keep listing closed sockets, as Cloudflare's getWebSockets() may still list CLOSING ones. */
+  keepClosing = false;
   sockets() {
-    return this.list.filter((s) => !s.closed);
+    return this.keepClosing ? [...this.list] : this.list.filter((s) => !s.closed);
   }
   open() {
     const s = new FakeSocket(this);
