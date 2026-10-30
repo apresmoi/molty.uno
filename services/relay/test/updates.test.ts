@@ -369,7 +369,8 @@ describe("molty_update", () => {
     await v.dev.evt({ job, state: "accepted" });
     await sleep(FAST.updateMs + 50);
     expect(await v.room.job(v.token, job, 0)).toMatchObject({ ok: true, result: { status: "failed", error: "update_timeout", detail: expect.stringMatching(/did not come back/) } });
-  });
+    // Two real-time update flows back to back (~1–2 s idle, past 5 s on a loaded CI runner).
+  }, 15000);
 
   it("up to date, no release, dev build, no image for the board, no checksum, release list down, offline", async () => {
     const cur = await setup({ fw: "0.2.0", caps: CAPS });
