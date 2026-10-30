@@ -19,7 +19,7 @@ test = ["pytest>=8"]
 molty-sim = "molty_sim.cli:main"
 
 [tool.uv.sources]
-molty-voice = { path = "../../voicebox", editable = true }
+molty-voice = { path = "../../services/molty-voice", editable = true }
 
 [build-system]
 requires = ["hatchling"]

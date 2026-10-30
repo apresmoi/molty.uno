@@ -2,7 +2,7 @@
 
 ## Supported boards
 
-| Board (`firmware/boards/…`) | Display | Touch | IMU | Mic / speaker | Buttons | USB-C | Flash / PSRAM | Status |
+| Board (`device/firmware/boards/…`) | Display | Touch | IMU | Mic / speaker | Buttons | USB-C | Flash / PSRAM | Status |
 |---|---|---|---|---|---|---|---|---|
 | **Waveshare ESP32-S3-Touch-LCD-1.46** (`waveshare/esp32-s3-touch-lcd-1.46`) | 412×412 round, SPD2010 QSPI | SPD2010 | QMI8658 | yes / yes | BOOT accept, PWR reject | native USB: NCM network at 10.13.37.1 | 16 MB / 8 MB octal | reference |
 | **Waveshare ESP32-S3-Touch-LCD-1.28** (`waveshare/esp32-s3-touch-lcd-1.28`) | 240×240 round, GC9A01A SPI | CST816S | QMI8658 | — / — | BOOT accept | CH343P USB-UART: serial logs + Wi-Fi setup over Improv, no USB network | 16 MB / 2 MB quad | experimental |
@@ -29,17 +29,17 @@ answer `unsupported`; it is reached over Wi-Fi only, set up over the USB cable f
 From the repo root (`make help` lists everything):
 
 ```sh
-make console     # console/dist/index.html (typecheck + unit tests + build)
-make firmware    # idf.py build: the 1.46 in firmware/build; needs the console first (it is baked into SPIFFS)
-make firmware BOARD=waveshare/esp32-s3-touch-lcd-1.28   # another board, in firmware/build/<vendor>-<model>/
-make firmware-all                                       # every board under firmware/boards/
+make console     # device/console/dist/index.html (typecheck + unit tests + build)
+make firmware    # idf.py build: the 1.46 in device/firmware/build; needs the console first (it is baked into SPIFFS)
+make firmware BOARD=waveshare/esp32-s3-touch-lcd-1.28   # another board, in device/firmware/build/<vendor>-<model>/
+make firmware-all                                       # every board under device/firmware/boards/
 ```
 
 `make firmware` never flashes. Each board builds with its own sdkconfig
-(`scripts/firmware-build.sh`): the board's `sdkconfig.board` (flash, PSRAM, console, the
+(`tools/scripts/firmware-build.sh`): the board's `sdkconfig.board` (flash, PSRAM, console, the
 Kconfig `MOLTY_BOARD` choice) is layered over `sdkconfig.defaults`, and a build whose
 sdkconfig belongs to another board stops with an error. The console is part of the flash image: the build stages
-`console/dist/index.html` into the `spiffs` partition (`firmware/main/stage_console_html.cmake`)
+`device/console/dist/index.html` into the `spiffs` partition (`device/firmware/main/stage_console_html.cmake`)
 and fails with an instruction if the console is not built yet.
 
 `sdkconfig` and `managed_components/` are generated from the tracked `sdkconfig.defaults`
@@ -53,7 +53,7 @@ bootloader by itself, and the serial port shows the boot log at 115200.
 
 ```sh
 make console firmware BOARD=waveshare/esp32-s3-touch-lcd-1.28
-cd firmware/build/waveshare-esp32-s3-touch-lcd-1.28
+cd device/firmware/build/waveshare-esp32-s3-touch-lcd-1.28
 python -m esptool --chip esp32s3 -p PORT -b 460800 erase_flash
 python -m esptool --chip esp32s3 -p PORT -b 460800 \
   --before default_reset --after hard_reset write_flash "@flash_args"
@@ -72,7 +72,7 @@ flash is manual:
    tapping RESET is not reliable on this board.)
 3. Flash (replace the port; on macOS it is a `/dev/cu.usbmodem*` that appears on replug):
    ```sh
-   cd firmware/build
+   cd device/firmware/build
    python -m esptool --chip esp32s3 -p PORT -b 460800 \
      --before default_reset --after hard_reset write_flash "@flash_args"
    ```
@@ -85,7 +85,7 @@ flash is manual:
 Both scripts need firmware already running on the device.
 
 ```sh
-cd firmware
+cd device/firmware
 ./ota.sh          # over HTTP via POST /api/ota; rollback-protected
 PORT=/dev/cu.usbmodemXXXX ./flash_auto.sh   # serial, hands-free via /api/reboot_bootloader
 ```
@@ -108,5 +108,5 @@ Gotchas:
 - `http://molty.local` — over Wi-Fi via mDNS, once Wi-Fi is set up in the console.
 - The scripts take `MOLTY_URL` (device) and `PORT` (serial port).
 
-Console development against a real device: `cd console && pnpm dev`, then open
+Console development against a real device: `cd device/console && pnpm dev`, then open
 `http://localhost:8170/?device=http://10.13.37.1`.

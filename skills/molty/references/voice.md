@@ -6,7 +6,7 @@ audio into words (STT) by the relay, by one of these.
 | Way | What does the speech | Needs |
 |---|---|---|
 | **Cloud** | the relay's provider: Cloudflare Workers AI (Deepgram Aura TTS, Whisper STT), or any OpenAI-compatible API | nothing from the owner on the official relay; on a private relay, the Workers AI binding on its account (`VOICE_PROVIDER=workers-ai`, what `wrangler.jsonc` ships) or a key (`VOICE_PROVIDER=openai`, `OPENAI_API_KEY`, optional `OPENAI_BASE_URL`, `TTS_MODEL` / `STT_MODEL` / `TTS_VOICE`) |
-| **Own voice box** | the owner's GPU running Kyutai STT/TTS + `molty-voice`, paired with a tap like an agent | a GPU machine ([voicebox/README](https://github.com/apresmoi/molty.uno/tree/main/voicebox)); streaming STT and semantic end of turn: the fastest turns. See [voice-box.md](voice-box.md) |
+| **Own voice box** | the owner's GPU running Kyutai STT/TTS + `molty-voice`, paired with a tap like an agent | a GPU machine ([services/molty-voice/README](https://github.com/apresmoi/molty.uno/tree/main/services/molty-voice)); streaming STT and semantic end of turn: the fastest turns. See [voice-box.md](voice-box.md) |
 | **None** | nothing: `VOICE_PROVIDER=none` on the relay (also what a relay without an AI binding and without the variable falls back to) | no account, key or GPU |
 
 The official relay runs the cloud provider. Which one a private relay runs is its operator's

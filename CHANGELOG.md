@@ -8,6 +8,10 @@ All notable changes to Molty are recorded here. One version covers the whole pro
 
 First public release.
 
+- **Repo layout**: components grouped by where they run. `firmware/`, `console/`, `creatures/`
+  → `device/`; `relay/` → `services/relay/`; `voicebox/` → `services/molty-voice/` (the
+  `molty_voice` package and `molty-voice` command keep their names); `cli/`, `website/` →
+  `apps/`; `scripts/` → `tools/scripts/`. `make` targets are unchanged.
 - **Firmware** (Waveshare ESP32-S3-Touch-LCD-1.46): the fluid of characters, the `.molty`
   creature runtime with 29 cute-kit creatures, speaker + microphone, IMU, touch, USB-C
   networking (NCM) + Wi-Fi with mDNS, rollback-protected OTA, and the agent link

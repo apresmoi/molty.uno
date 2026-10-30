@@ -1,5 +1,5 @@
 """The pieces around the sim: the ssh tunnel to the box's Kyutai, a local `wrangler dev` relay, a
-second molty-voice bridge (this repo's voicebox/, its own config file) paired to the sim device.
+second molty-voice bridge (this repo's services/molty-voice/, its own config file) paired to the sim device.
 
 Nothing here touches the box's services: the tunnel is a client connection to 127.0.0.1:8089/8090
 on the box, and the bridge runs on this machine with its own --config (never the systemd one).
@@ -19,7 +19,7 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]  # the repo
-RELAY_DIR = ROOT / "relay"
+RELAY_DIR = ROOT / "services" / "relay"
 
 
 def free_port() -> int:
@@ -89,7 +89,7 @@ async def relay(state: Path, log: Path, port: int | None = None) -> tuple[Proc, 
     """`wrangler dev --local` (workerd + local DO storage), VOICE_PROVIDER=none: only the box speaks."""
     wr = RELAY_DIR / "node_modules" / ".bin" / "wrangler"
     if not wr.exists():
-        raise RuntimeError("relay deps missing: run `cd relay && pnpm install --frozen-lockfile` first")
+        raise RuntimeError("relay deps missing: run `cd services/relay && pnpm install --frozen-lockfile` first")
     port = port or free_port()
     p = Proc("wrangler dev", [str(wr), "dev", "--local", "--ip", "127.0.0.1", "--port", str(port), "--persist-to", str(state),
                               "--var", "VOICE_PROVIDER:none", "--log-level", "info"], log, cwd=RELAY_DIR,
