@@ -504,8 +504,9 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     float ox = s_gx * FLUID_TILT_LEAN, oy = s_gy * FLUID_TILT_LEAN;
 
     /* the listening ring: fades in while a listen records (never over a question), a
-     * thin line that ripples — gently when quiet, faster and deeper with the voice (the
-     * mic level, smoothed in the tick) — and pings the surface from points on it. It is a
+     * thin line that breathes — the whole circle in and out, calm when quiet, quicker and
+     * deeper with the voice (smoothed in the tick) — and pings the surface from the whole
+     * rim, circular ripples running inward. It is a
      * target of the fluid, around whatever the state shows (the creature, in its
      * listening mood, stays in the middle). */
     const int ring_pings = fluid_ring_tick(&s_rg, rdt, s_listen && !asking, s_level);
@@ -566,8 +567,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     fluid_sim_view(s);
     s_shimmer = 0.12f + (thinking ? 0.35f : 0.f) + cfg->mic * 0.4f;
 
-    for (int q = 0; q < ring_pings; q++)                   /* the ring's sound-like ripples */
-        ripple(s_rg.ping_x[q], s_rg.ping_y[q], s_rg.ping_s, RING_PING_RADIUS);
+    if (ring_pings) fluid_ring_ping(s, &s_rg);             /* a circular ripple from the whole rim */
     /* a question's faint dividers: in while it waits, out once it was answered */
     bool div_on = s_ask.scr.phase == FLUID_ASK_SHOW && s_ask.n >= 2;
     s_div = div_on ? fminf(1.f, s_div + rdt / DIV_FADE_S) : fmaxf(0.f, s_div - rdt / DIV_FADE_S);
