@@ -10,12 +10,15 @@ device/creatures/
 │   ├── fluid/        fluid-of-characters engine (sim, targets, renderer, speed reader, sound)
 │   ├── setup/        fluid-stage.js — the animated round screen the console embeds
 │   ├── mood.js       mood engine (idle, listening, thinking, speaking, happy, sleepy, surprised)
+│   ├── actions.js    one-shot actions (nod, wiggle, glances, yawn, …): MoodEngine.act(name);
+│   │                 the firmware twin is cute_act.h, pinned by tools/act-golden.mjs
 │   ├── proc.js       two procedural creatures (Mochi, Burr)
 │   ├── stage.js      3D viewport + 412×412 device preview
 │   ├── catalog.js    viewer roster
 │   └── main.js       viewer UI
 ├── molty/            the 29 exported .molty files (bundled into the console)
-├── tools/            molty-export.mjs (spec → .molty), molty-behaviours.mjs (hook stand-ins)
+├── tools/            molty-export.mjs (spec → .molty), molty-behaviours.mjs (hook stand-ins),
+│                     act-golden.mjs (actions.js → the firmware's act_golden.txt)
 ├── index.html        creature viewer: moods, pokes, autopilot, device preview, compare A|B
 ├── fluid.html        the fluid of characters, as the device draws it
 ├── setup-mock.html   design mock of the console's setup flow

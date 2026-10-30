@@ -125,6 +125,7 @@ describe("molty_updates", () => {
       needed_for: [
         { feature: "molty_ask", what: FEATURES.ask.what, needs: "0.2.0", released: true },
         { feature: "molty_update", what: FEATURES.update.what, needs: "0.2.0", released: true },
+        { feature: "molty_act", what: FEATURES.act.what, needs: "0.2.0", released: true },
       ],
       can_self_update: false,
       release_check: "fresh",
@@ -147,7 +148,7 @@ describe("molty_updates", () => {
     const none = await setup({ release: null });
     const n = ((await none.room.updates(none.token)) as any).result;
     expect(n.firmware).toMatchObject({ status: "no_release", latest: null, update_available: false });
-    expect(n.firmware.needed_for.map((x: any) => [x.feature, x.released])).toEqual([["molty_ask", false], ["molty_update", false]]);
+    expect(n.firmware.needed_for.map((x: any) => [x.feature, x.released])).toEqual([["molty_ask", false], ["molty_update", false], ["molty_act", false]]);
     expect(n.actions.join("\n")).toMatch(/No firmware release is published yet/);
     expect(n.actions.join("\n")).toMatch(/molty_ask .* not released yet: don't offer it/);
 
@@ -368,7 +369,8 @@ describe("molty_update", () => {
     await v.dev.evt({ job, state: "accepted" });
     await sleep(FAST.updateMs + 50);
     expect(await v.room.job(v.token, job, 0)).toMatchObject({ ok: true, result: { status: "failed", error: "update_timeout", detail: expect.stringMatching(/did not come back/) } });
-  });
+    // Two real-time update flows back to back (~1–2 s idle, past 5 s on a loaded CI runner).
+  }, 15000);
 
   it("up to date, no release, dev build, no image for the board, no checksum, release list down, offline", async () => {
     const cur = await setup({ fw: "0.2.0", caps: CAPS });

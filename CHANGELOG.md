@@ -8,6 +8,14 @@ All notable changes to Molty are recorded here. One version covers the whole pro
 
 First public release.
 
+- **Expressive Molty**: inline mood / action cues in what agents say (`"[happy] Build passed!
+  … [nod]"`: stripped from the speech and the screen, fired on their word — firmware cap
+  `say_marks`); `act {action}` / `molty_act` one-shot gestures (wiggle, nod, shake_head,
+  bounce, peek, glances, blink, wobble, stretch, look_up, yawn — cap `act`); an idle life of
+  small actions every 10–40 s, a yawn before dozing off and a smile after a finished say, with
+  a console setting (lively / calm / off). The actions' curves have a JS twin
+  (`device/creatures/js/actions.js`) held to the firmware's by a golden.
+
 - **Repo layout**: components grouped by where they run. `firmware/`, `console/`, `creatures/`
   → `device/`; `relay/` → `services/relay/`; `voicebox/` → `services/molty-voice/` (the
   `molty_voice` package and `molty-voice` command keep their names); `cli/`, `website/` →

@@ -10,7 +10,10 @@
 // Node host can serve it unchanged.
 
 import { type AgentApi, type FirmwareNotice, type Inbox, type JobView, type Outcome, type RelayBackend, bearer, tokenDevice } from "../core/api.js";
-import { ACK_THINK_S, COLORS, DEFAULT_ASK_COLORS, DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, LISTEN_CEILING_MS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, MAX_LISTEN_MS, MAX_MOOD_HOLD_S, MOODS, TALK_BUDGET_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
+import { ACK_THINK_S, ACTIONS, COLORS, DEFAULT_ASK_COLORS, DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, LISTEN_CEILING_MS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, MAX_LISTEN_MS, MAX_MOOD_HOLD_S, MOODS, TALK_BUDGET_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
+
+/** say / talk / ask: inline [mood] / [action] cues in the spoken text. */
+const CUES_DOC = `The text may carry inline cues like [happy] or [nod] (a mood: ${MOODS.join(", ")}; or a gesture: ${ACTIONS.join(", ")}): they are never spoken nor shown, and fire when the word after them is spoken; write a literal bracket as \\[.`;
 
 /** ms (listen) / listen_ms (talk): the window is a ceiling; leaving it out is the usual choice. */
 const LISTEN_MS_DOC = `Listen window ceiling in ms: 1..${MAX_LISTEN_MS}, or 0 = unlimited (ends only on end of speech / turn, no_speech, or a ${LISTEN_CEILING_MS / 60000} min safety ceiling, reason max). Omit it: the human's own setting applies (${DEFAULT_LISTEN_MS} ms out of the box). The listen ends early when they finish.`;
@@ -25,7 +28,7 @@ export const SUPPORTED_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"];
 export const SERVER_INFO = { name: "molty-relay", title: `Molty relay (api v${API_VERSION})`, version: RELAY_VERSION };
 const MAX_BODY = 256 * 1024;
 const INSTRUCTIONS =
-  `Tools operate a physical Molty device through the molty-relay. Pair first with molty_pair (no token needed), then send the returned agent_token as 'Authorization: Bearer <token>'. For conversation use molty_talk: ONE call per turn speaks your reply, then listens and returns what the human said ({heard, reason}); moods (listening, thinking, speaking) are automatic, so don't call molty_mood around talking. When the human finishes, Molty acknowledges it by itself at once (a soft chirp, then thinking): go straight to your answer, no "let me think" filler; if the answer needs long work (tools, search), still say a short spoken ack first or keep thinking up with molty_mood, so the human is never left in silence. Keep spoken replies to 1-2 sentences. For a decision the human can answer with a tap use molty_ask: say the question, offer 1-${MAX_ASK_OPTIONS} options of at most ${MAX_ASK_LABEL} characters ("yes", "no", "later"); answer is null on timeout/cancelled/offline. molty_say / molty_listen return a job immediately (wait:true blocks until done); poll a job with molty_wait (<= 8 s per call). ` +
+  `Tools operate a physical Molty device through the molty-relay. Pair first with molty_pair (no token needed), then send the returned agent_token as 'Authorization: Bearer <token>'. For conversation use molty_talk: ONE call per turn speaks your reply, then listens and returns what the human said ({heard, reason}); moods (listening, thinking, speaking) are automatic, so don't call molty_mood around talking. When the human finishes, Molty acknowledges it by itself at once (a soft chirp, then thinking): go straight to your answer, no "let me think" filler; if the answer needs long work (tools, search), still say a short spoken ack first or keep thinking up with molty_mood, so the human is never left in silence. Keep spoken replies to 1-2 sentences (inline cues like [happy] or [nod] in them set mood / gesture as you speak). For a decision the human can answer with a tap use molty_ask: say the question, offer 1-${MAX_ASK_OPTIONS} options of at most ${MAX_ASK_LABEL} characters ("yes", "no", "later"); answer is null on timeout/cancelled/offline. molty_say / molty_listen return a job immediately (wait:true blocks until done); poll a job with molty_wait (<= 8 s per call). ` +
   `Molty also emits events (${AGENT_EVENT_TYPES.join(", ")}) into your own inbox: unread ones ride along on every tool result as 'events' plus a 'Molty: ...' line; molty_events pulls/waits for them; molty_webhook registers an HTTPS request the relay sends you per event. A shake means the human wants to talk: Molty listens by itself and you get one 'utterance' event {turn_id, text, ...}: answer it at once with molty_talk {say, in_reply_to: turn_id} (the first agent to answer claims the turn; others get turn_claimed). Other events: react briefly, once per moment. Full guide: the molty agent skill, ${SKILL_HOME} (Claude Code / Codex: the molty plugin). This relay speaks agent api_version ${API_VERSION} (also in molty_status relay.api_version); what this Molty can do is relay.caps. When your human asks to check Molty for updates (any wording), call molty_updates and follow its 'actions'; ask before molty_update.`;
 
 type Prop = { type: string | string[]; description: string; enum?: string[]; items?: { type: "string"; enum?: string[] } | { anyOf: JsonObject[] } };
@@ -123,6 +126,13 @@ export const TOOLS: ToolDef[] = [
     run: (api, t, a) => api.command(t, "mood", a),
   },
   {
+    name: "molty_act",
+    description: `Play a one-shot gesture over the current mood: ${ACTIONS.join(", ")}. It never changes what is shown; while words or a question cover the creature it waits up to 3 s, then is dropped. To gesture while speaking, put [nod] etc. in the say text instead.`,
+    inputSchema: obj({ action: { type: "string", description: `One of ${ACTIONS.join(", ")}.`, enum: [...ACTIONS] } }, ["action"]),
+    auth: true,
+    run: (api, t, a) => api.command(t, "act", a),
+  },
+  {
     name: "molty_show",
     description: "Display up to 16 KB of text with the speed reader at WPM (default 300). Returns after starting, not after reading completes.",
     inputSchema: obj(
@@ -138,7 +148,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "molty_say",
     description:
-      "Speak text through the device speaker using the relay's TTS (streamed: audio starts after the first sentence is synthesised). Returns {job} immediately; poll molty_wait until done ({ms, text, timings}), or pass wait:true to block until done. The device shows the speaking mood and the text while audio plays. One audio job (say/listen/talk) at a time; audio_busy otherwise. For a conversation turn use molty_talk instead.",
+      "Speak text through the device speaker using the relay's TTS (streamed: audio starts after the first sentence is synthesised). Returns {job} immediately; poll molty_wait until done ({ms, text, timings}), or pass wait:true to block until done. The device shows the speaking mood and the text while audio plays. One audio job (say/listen/talk) at a time; audio_busy otherwise. For a conversation turn use molty_talk instead. " + CUES_DOC,
     inputSchema: obj(
       {
         text: { type: "string", description: "Text to synthesize, at most 4096 bytes." },
@@ -160,7 +170,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "molty_talk",
-    description: `One conversation turn in ONE call: speaks 'say' (if given), then listens and returns what the human said: {heard, said?, reason: silence|turn_end|no_speech|max|ended|error (turn_end = they finished, like silence), speech_ms?, ms:{tts_first_audio, speech, listen, stt, total}}. Moods are automatic (speaking, listening, then thinking until your next command, ${THINK_HOLD_S} s max): don't call molty_mood around it. Blocks at most ${TALK_BUDGET_MS / 1000} s; a longer turn returns {job, status:"pending"}: finish it with molty_wait. Keep 'say' to 1-2 sentences.`,
+    description: `One conversation turn in ONE call: speaks 'say' (if given), then listens and returns what the human said: {heard, said?, reason: silence|turn_end|no_speech|max|ended|error (turn_end = they finished, like silence), speech_ms?, ms:{tts_first_audio, speech, listen, stt, total}}. Moods are automatic (speaking, listening, then thinking until your next command, ${THINK_HOLD_S} s max): don't call molty_mood around it. Blocks at most ${TALK_BUDGET_MS / 1000} s; a longer turn returns {job, status:"pending"}: finish it with molty_wait. Keep 'say' to 1-2 sentences. ${CUES_DOC}`,
     inputSchema: obj({
       say: { type: "string", description: "What to say first (at most 4096 bytes). Omit to just listen." },
       listen: { type: "boolean", description: "Listen after speaking; default true. false = just speak (and wait until spoken)." },
@@ -174,7 +184,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "molty_ask",
-    description: `Ask the human a question they answer with a TAP on Molty's round screen: speaks 'say' (if given; put the question there), then shows 1-${MAX_ASK_OPTIONS} options and returns which one they tapped: {answer: label|null, index: int|null, reason?: timeout|cancelled|offline, said?, ms:{tts_first_audio?, speech?, answer, total}}. Options must be SHORT: 1-${MAX_ASK_LABEL} printable ASCII characters each, unique (good: "yes", "no", "later", "idk", "ok"; bad: "Yes, please do it", "maybe later"). 1 option = one centred button ("ok", "done"); 2 = halves; 3-${MAX_ASK_OPTIONS} = pie slices. answer null: nobody tapped within timeout_s (timeout), another command replaced the question (cancelled), or Molty went offline. Use molty_talk instead for open-ended answers. Blocks at most ${TALK_BUDGET_MS / 1000} s; longer returns {job, status:"pending"}: finish it with molty_wait.`,
+    description: `Ask the human a question they answer with a TAP on Molty's round screen: speaks 'say' (if given; put the question there), then shows 1-${MAX_ASK_OPTIONS} options and returns which one they tapped: {answer: label|null, index: int|null, reason?: timeout|cancelled|offline, said?, ms:{tts_first_audio?, speech?, answer, total}}. Options must be SHORT: 1-${MAX_ASK_LABEL} printable ASCII characters each, unique (good: "yes", "no", "later", "idk", "ok"; bad: "Yes, please do it", "maybe later"). 1 option = one centred button ("ok", "done"); 2 = halves; 3-${MAX_ASK_OPTIONS} = pie slices. answer null: nobody tapped within timeout_s (timeout), another command replaced the question (cancelled), or Molty went offline. Use molty_talk instead for open-ended answers. Blocks at most ${TALK_BUDGET_MS / 1000} s; longer returns {job, status:"pending"}: finish it with molty_wait. ${CUES_DOC}`,
     inputSchema: obj(
       {
         say: { type: "string", description: "The question, spoken first (at most 4096 bytes). Recommended." },

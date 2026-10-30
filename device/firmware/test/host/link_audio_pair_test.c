@@ -1,6 +1,7 @@
 #include "link_sdk_stub.h"
 #include "link_protocol.h"
 #include "../../main/link/link_audio.c"
+#include "cute_act.h"
 #include "../../main/link/link_pair.c"
 #include <assert.h>
 #include <stdio.h>
@@ -81,6 +82,17 @@ void mole_fluid_text_cue(int w) {
     assert(w>cue_last && cue_n<64); cue_w[cue_n]=w; cue_at[cue_n++]=molty_speaker_stream_played(); cue_last=w;
 }
 void mole_fluid_text_cue_end(void) { cue_ends++; }
+/* a say's marks (mole_fluid.c): what fired, at which playback position, after which word */
+static int mark_n; static char mark_what[32][16]; static uint32_t mark_at[32]; static int mark_word[32]; static unsigned spoke;
+static void mark_log(const char *w) { assert(mark_n<32); strcpy(mark_what[mark_n],w); mark_at[mark_n]=molty_speaker_stream_played(); mark_word[mark_n++]=cue_last; }
+void mole_fluid_act(int a) { mark_log(cute_act_name(a)); }
+/* the reader's text version (mole_fluid.c): bumped by every text set; a mood mark carries
+ * the version its say set, so a newer text (an update's progress) is never tinted */
+static unsigned text_ver = 7;
+unsigned mole_fluid_text_ver(void) { return text_ver; }
+static unsigned mark_ver;
+void mole_fluid_cue_mood(int m, unsigned v) { mark_ver = v; mark_log(link_mood_name(m)); }
+void mole_fluid_spoke(void) { spoke++; }
 static unsigned ask_cancels;
 void link_ask_cancel(void) { ask_cancels++; }
 const char *link_identity_code(void) { return "ABCDEFGH"; }
@@ -102,7 +114,7 @@ bool mole_fluid_shake_talk(void) { return shake_setting; }
 bool self_update_busy(void) { return update_busy; }
 static const char *refused;
 esp_err_t link_cmd_refuse(const char *code) { refused=code; return LINK_CMD_REFUSED; }
-esp_err_t link_ui_set_text(const char *text,int len) { assert(len>=0 && len<=4096); memcpy(sdk_text,text,len+1); return ESP_OK; }
+esp_err_t link_ui_set_text(const char *text,int len) { assert(len>=0 && len<=4096); memcpy(sdk_text,text,len+1); text_ver++; return ESP_OK; }
 
 static cJSON *say_args(void) { return cJSON_Parse("{\"job\":\"molty-abcdefghij.j_1\",\"text\":\"hello world\",\"ms\":640,\"rate\":16000}"); }
 static void begin_say(void) {
@@ -582,6 +594,56 @@ static void test_say_cues(void) {
     complete(play()); assert(cue_ends==1 && !link_audio_busy());
 }
 
+/* say marks (cap say_marks): each fires when its word is shown — right after that word's cue,
+ * at the same playback position — a mark past the last cued word when playback ends; the say
+ * ends in its last mood mark (not idle) unless an explicit mood came meanwhile; never while a
+ * question / update owns the screen; ignored without cues; malformed marks refuse the say */
+static void test_say_marks(void) {
+    static const uint32_t at[4]={0,3000,6000,9000};
+    mark_n=0; cue_n=0; cue_last=-9; spoke=0;
+    assert(say_with(",\"cues\":true,\"marks\":[[0,\"happy\"],[2,\"thinking\"],[2,\"nod\"],[4,\"wiggle\"]]"));
+    const unsigned say_ver=text_ver; text_ver+=5;   /* another text (an update's "40%") replaced the say's meanwhile */
+    assert(receive_cued(0,false,"[[0,0],[1,3000]]")==ESP_OK);
+    assert(receive_cued(1,true,"[[2,6000],[3,9000]]")==ESP_OK);
+    esp_err_t e=play();
+    assert(mark_n==4);
+    assert(!strcmp(mark_what[0],"happy") && mark_word[0]==0 && mark_at[0]+16*30>=at[0]);
+    assert(mark_ver==say_ver && mark_ver!=text_ver);             /* the say's own words' version: mole_fluid tints nothing newer */
+    assert(!strcmp(mark_what[1],"thinking") && !strcmp(mark_what[2],"nod"));
+    assert(mark_word[1]==2 && mark_word[2]==2 && mark_at[1]+16*30>=at[2] && mark_at[1]+16*30-at[2]<=240);   /* with word 2's reveal */
+    assert(!strcmp(mark_what[3],"wiggle") && mark_word[3]==3);   /* trailing: at the end */
+    complete(e);
+    assert(!strcmp(sdk_mood,"thinking") && sdk_hold_s==8 && spoke==1);   /* ends in its last mood, not idle */
+    /* happy as the last mood keeps its own (quick) hold; an explicit mood meanwhile wins */
+    mark_n=0; cue_last=-9;
+    assert(say_with(",\"cues\":true,\"marks\":[[1,\"happy\"]]"));
+    assert(receive_cued(0,true,"[[0,0],[1,3000],[2,6000],[3,9000]]")==ESP_OK);
+    complete(play()); assert(!strcmp(sdk_mood,"happy") && sdk_hold_s<0);
+    mark_n=0; cue_last=-9;
+    assert(say_with(",\"cues\":true,\"marks\":[[1,\"happy\"]]"));
+    assert(receive_cued(0,true,"[[0,0],[1,3000],[2,6000],[3,9000]]")==ESP_OK);
+    e=play(); explicit_mood("sleepy",0); complete(e); assert(!strcmp(sdk_mood,"sleepy"));
+    /* no marks: idle as before; a question / update owning the screen: none fire */
+    mark_n=0; cue_last=-9;
+    assert(say_with(",\"cues\":true")); assert(receive_cued(0,true,"[[0,0]]")==ESP_OK);
+    unsigned g=mood_gen; complete(play()); assert(mood_gen==g && !strcmp(sdk_mood,"idle") && mark_n==0);
+    update_busy=true; cue_last=-9;
+    assert(say_with(",\"cues\":true,\"marks\":[[0,\"happy\"],[4,\"nod\"]]"));
+    assert(receive_cued(0,true,"[[0,0],[1,3000],[2,6000],[3,9000]]")==ESP_OK);
+    complete(play()); update_busy=false;
+    assert(mark_n==0 && !strcmp(sdk_mood,"idle"));
+    /* without cues the marks are ignored; a cancelled say fires none of the rest, no smile */
+    assert(say_with(",\"marks\":[[0,\"happy\"]]")); assert(receive_cued(0,true,"[[0,0]]")==ESP_OK);
+    complete(play()); assert(mark_n==0);
+    spoke=0; cue_last=-9;
+    assert(say_with(",\"cues\":true,\"marks\":[[3,\"happy\"],[4,\"nod\"]]"));
+    assert(receive_cued(0,true,"[[0,0],[1,3000],[2,6000],[3,9000]]")==ESP_OK);
+    link_audio_cancel(); complete(play()); assert(mark_n==0 && spoke==0);
+    /* malformed marks: the say is refused, nothing changes */
+    assert(!say_with(",\"cues\":true,\"marks\":[[0,\"dance\"]]") && !link_audio_busy());
+    assert(!say_with(",\"cues\":true,\"marks\":{}") && !link_audio_busy());
+}
+
 /* Shake to talk: the shake starts a listen at once, on the device (mood listening, ring up);
  * the shake event names it; nothing goes up until the relay adopts it — then the relay's job
  * id, window and end-of-turn rule apply from the shake's first sample (what was recorded
@@ -697,7 +759,7 @@ static void test_shake_talk(void) {
 
 int main(void) {
     assert(link_audio_init()==ESP_OK && link_pair_init()==ESP_OK);
-    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop(); test_listen_window(); test_say_cues(); test_chirp_sound(); test_ack(); test_shake_talk();
+    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop(); test_listen_window(); test_say_cues(); test_say_marks(); test_chirp_sound(); test_ack(); test_shake_talk();
     /* activity log: every accepted job (done, failed, cancelled, refused frames, adopted shakes) ended its tag */
     assert(sdk_job_begins>0 && sdk_job_begins==sdk_job_ends);
     cJSON_Delete(sdk_sent); free(s_jobs); free(s_done); free(s_ring);
