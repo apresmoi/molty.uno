@@ -63,8 +63,8 @@ export function Device({ reveal, replay }: { reveal: RevealKind; replay?: string
   const queued = useRef<RevealKind | null>(null); // waits for the polycss scene to mount
   const [turning, setTurning] = useState(false);
   // a device that arrives (starts unseen) is rendered unseen already (the HTML, before any JS),
-  // so nothing settled flashes before it turns in: CSS hides it (motion allowed) and shows it
-  // anyway if no script takes over in a few seconds
+  // so nothing settled flashes before it turns in: CSS hides it (motion allowed, the page's
+  // intro started by Head) and shows it at rest without JS or if no script takes over
   const [armed, setArmed] = useState(() => revealFrame(reveal, 0).opacity < 1);
 
   /** Put the whole device in pose `f`: a few style writes, one of them the polycss scene root. */
