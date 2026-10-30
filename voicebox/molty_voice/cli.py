@@ -97,6 +97,8 @@ def cmd_run(a: argparse.Namespace) -> int:
             setattr(cfg, k, v)
     if a.voices:
         cfg.voices = [v.strip() for v in a.voices.split(",") if v.strip()]
+    if a.turn_end is not None:
+        cfg.turn_end = a.turn_end
     if a.no_stt:
         cfg.stt = False
     if a.no_tts:
@@ -140,6 +142,7 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--default-voice", help=f"voice when the agent names none (default {d.default_voice})")
     pr.add_argument("--voices", help="comma-separated voices offered to the console")
     pr.add_argument("--name", help="name reported to the relay")
+    pr.add_argument("--turn-end", type=float, help=f"end-of-turn threshold on the STT's pause prediction (default {d.turn_end}; 0 = off)")
     pr.add_argument("--no-stt", action="store_true", help="serve TTS only")
     pr.add_argument("--no-tts", action="store_true", help="serve STT only")
 

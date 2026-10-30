@@ -105,6 +105,12 @@ moshi-server on 127.0.0.1, and mounts the paired config read-only. Pair on the h
   - Model: built and measured for `kyutai/stt-1b-en_fr`, which needs no leading silence.
     Kyutai's reference client sends 1 s of silence first for the 2.6B model. That is not
     done here; add it before switching to that model.
+- **End of turn:** While you talk, the STT's per-step pause estimate (`Step.prs[2]`) is
+  smoothed exactly as Kyutai Unmute does it. Once you said a word and it passes 0.6
+  (`--turn-end`, 0 = off), the box sends `stt.turn_end`. The relay then stops Molty's mic
+  (firmware with the `listen_stop` cap) and finishes the transcript at once, with reason
+  `turn_end`, instead of waiting for Molty's silence timer or the listen window. Silence
+  alone never ends a turn.
 - **TTS:** One connection per sentence. The box sends the words, then `Eos`. The 24 kHz
   float audio streams back resampled to 16 kHz PCM16, in ≤ 16 KB frames.
 

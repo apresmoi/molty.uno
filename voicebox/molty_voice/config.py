@@ -37,6 +37,9 @@ class Config:
     tts: bool = True
     # Seconds of silence at most pushed after the marker to flush the STT model's delay.
     stt_flush_s: float = 6.0
+    # Semantic end of turn (Unmute's pause rule): smoothed prs[2] above this, after >= 1
+    # word, sends stt.turn_end so Molty stops listening. <= 0 turns it off.
+    turn_end: float = 0.6
 
     def __repr__(self) -> str:  # never show the token
         d = asdict(self)

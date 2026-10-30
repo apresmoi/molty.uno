@@ -4,7 +4,8 @@ Protocol (msgpack over WebSocket, header `kyutai-api-key`), as in Kyutai's refer
 clients `scripts/stt_from_file_rust_server.py` / `scripts/tts_rust_server.py`:
 
 STT  client -> {"type":"Audio","pcm":[float @24 kHz]} ... {"type":"Marker","id":n}
-     server -> {"type":"Word","text","start_time"} {"type":"EndWord"} {"type":"Step",...}
+     server -> {"type":"Word","text","start_time"} {"type":"EndWord"} {"type":"Step","prs":[...]}
+               (one Step per 80 ms frame; prs[2] is the model's "the speaker paused" estimate)
                {"type":"Marker","id":n} once the audio before the marker is transcribed
                (the model lags, so silence must follow the marker to push it through).
 TTS  client -> {"type":"Text","text":word} ... {"type":"Eos"}
@@ -19,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from collections.abc import Awaitable, Callable
 from urllib.parse import urlencode
 
@@ -32,10 +34,48 @@ from .audio import DEVICE_RATE, MODEL_RATE, Resampler, pcm16_to_float
 log = logging.getLogger("molty_voice.kyutai")
 
 FRAME = 1920  # 80 ms @24 kHz: the model's step
+FRAME_S = FRAME / MODEL_RATE
 
 
 class KyutaiError(RuntimeError):
     pass
+
+
+class PausePredictor:
+    """Semantic end of turn from the STT's Step messages — Kyutai Unmute's rule.
+
+    unmute/stt/speech_to_text.py + unmute_handler.py determine_pause: an exponential
+    moving average of prs[2] (attack/release half-life 0.01 s, starting at 1.0), the
+    first 12 steps ignored ("all over the place"), and a pause when it exceeds 0.6
+    while the user is speaking — i.e. once they said something. Here: `update()`
+    returns True exactly once, the first time that holds after >= 1 word. Pure
+    silence never ends a turn (Molty's own no_speech covers that).
+    """
+
+    SKIP_STEPS = 12
+
+    def __init__(self, threshold: float = 0.6, attack_s: float = 0.01, release_s: float = 0.01):
+        self.threshold, self.attack_s, self.release_s = threshold, attack_s, release_s
+        self.value = 1.0
+        self.steps = 0
+        self.words = 0
+        self.fired = False
+
+    def word(self) -> None:
+        self.words += 1
+
+    def update(self, pause_prob: float, dt: float = FRAME_S) -> bool:
+        self.steps += 1
+        if self.steps <= self.SKIP_STEPS:
+            return False
+        p = max(0.0, float(pause_prob))
+        half = self.attack_s if p > self.value else self.release_s
+        alpha = 1 - math.exp(-dt / half * math.log(2))
+        self.value = (1 - alpha) * self.value + alpha * p
+        if self.fired or self.threshold <= 0 or self.words == 0 or self.value <= self.threshold:
+            return False
+        self.fired = True
+        return True
 
 
 def _pack(obj) -> bytes:
@@ -49,8 +89,21 @@ def _headers(api_key: str) -> dict[str, str]:
 class SttSession:
     """One streaming transcription: open(), feed() PCM16 @16 kHz as it arrives, finish() -> text."""
 
-    def __init__(self, url: str, api_key: str, *, flush_s: float = 6.0, on_word: Callable[[str], Awaitable[None]] | None = None, connect=ws_connect):
+    def __init__(
+        self,
+        url: str,
+        api_key: str,
+        *,
+        flush_s: float = 6.0,
+        on_word: Callable[[str], Awaitable[None]] | None = None,
+        on_turn_end: Callable[[], Awaitable[None]] | None = None,
+        turn_end_threshold: float = 0.6,
+        connect=ws_connect,
+    ):
         self.url, self.api_key, self.flush_s, self.on_word, self._connect = url, api_key, flush_s, on_word, connect
+        self.on_turn_end = on_turn_end
+        self.pause = PausePredictor(turn_end_threshold)
+        self._finishing = False
         self.words: list[str] = []
         self._rs = Resampler(DEVICE_RATE, MODEL_RATE)
         self._pending = np.zeros(0, dtype=np.float32)
@@ -74,8 +127,14 @@ class SttSession:
                 t = d.get("type") if isinstance(d, dict) else None
                 if t == "Word":
                     self.words.append(str(d.get("text", "")))
+                    self.pause.word()
                     if self.on_word:
                         await self.on_word(" ".join(self.words))
+                elif t == "Step":
+                    prs = d.get("prs") or []
+                    # after finish() began, the flush silence is ours, not the human's pause
+                    if len(prs) > 2 and self.pause.update(prs[2]) and not self._finishing and self.on_turn_end:
+                        await self.on_turn_end()
                 elif t == "Marker" and d.get("id") == self._marker_id:
                     self._marker_seen = True
                     return
@@ -118,6 +177,7 @@ class SttSession:
     async def finish(self, timeout: float = 5.0) -> str:
         """Marker + silence until the marker comes back; the words before it are the transcript."""
         self._check()
+        self._finishing = True
         await self._send_frames(self._rs.flush(), final=True)
         await self._ws.send(_pack({"type": "Marker", "id": self._marker_id}))
         silence = np.zeros(FRAME, dtype=np.float32).tolist()

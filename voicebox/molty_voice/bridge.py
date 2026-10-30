@@ -8,7 +8,8 @@ Wire (docs/AGENT-LINK.md "Voice box"): JSON text control messages + binary audio
   relay -> box   {"t":"tts","id","text","voice"?}      box -> relay  frames(s=id) ... {"t":"tts.end","id","error"?}
   relay -> box   {"t":"tts.cancel","id"}
   relay -> box   {"t":"stt.start","id","rate":16000}, frames(s=id) as Molty records, {"t":"stt.end","id"} | {"t":"stt.cancel","id"}
-  box -> relay   {"t":"stt.partial","id","text"}  {"t":"stt.final","id","text","ms":{...}} | {"t":"stt.final","id","error"}
+  box -> relay   {"t":"stt.partial","id","text"}  {"t":"stt.turn_end","id"} (once: the human finished, Molty stops listening)
+                 {"t":"stt.final","id","text","ms":{...}} | {"t":"stt.final","id","error"}
   both           {"t":"ping"} / {"t":"pong"} (the relay answers pings without waking up)
 """
 
@@ -226,7 +227,12 @@ class Bridge:
         async def partial(text: str) -> None:
             await self._send_json({"t": "stt.partial", "id": mid, "text": text})
 
-        s = SttSession(self.cfg.stt_url, self.cfg.api_key, flush_s=self.cfg.stt_flush_s, on_word=partial, connect=self._kconnect)
+        async def turn_end() -> None:
+            log.info("stt %s: end of turn", mid)
+            await self._send_json({"t": "stt.turn_end", "id": mid})
+
+        s = SttSession(self.cfg.stt_url, self.cfg.api_key, flush_s=self.cfg.stt_flush_s, on_word=partial,
+                       on_turn_end=turn_end, turn_end_threshold=self.cfg.turn_end, connect=self._kconnect)
         t_end = None
         try:
             await s.open()
