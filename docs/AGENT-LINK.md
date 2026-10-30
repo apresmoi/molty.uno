@@ -319,9 +319,12 @@ pairing). Rate-limited on the device. `shake`, `tap` and `button` reach agents t
 | `answer` | `{job, index, label}` · `{job, index: null, reason: "timeout"\|"cancelled"}` | an `ask` ended: tapped (0-based `index`, `label` verbatim), timed out, or cancelled; one per job, never rate-limited |
 
 The device reacts to a shake by itself (a brief `surprised`), agent or not. While a `listen`
-records, a ring of the fluid itself condenses just inside the screen's rim around Molty (in
-its `listening` mood, in the middle), breathes ~1 Hz and swells with the voice
-(`mole_fluid_listen`, `fluid_target_arc`); it is never shown over a pending `ask`. Its colour:
+records, a thin line of the fluid itself condenses just inside the screen's rim around Molty
+(in its `listening` mood, in the middle) and ripples: waves travel round it, gently while the
+room is quiet, faster and deeper as the human speaks (the mic level, ~10 Hz, smoothed), and it
+sends sound-like ripples into the fluid from points on it; silence settles it back to a calm
+line (`mole_fluid_listen`, `fluid_target_ring`; every tuning knob in
+`firmware/main/fluid/fluid_ring.h`). It is never shown over a pending `ask`. Its colour:
 the listen's `ring_color`, else the device default (console setting, NVS), else the palette's
 accent (mono palettes always show their accent). Detector
 constants: `firmware/main/sense/gesture.h`.

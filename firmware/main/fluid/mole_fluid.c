@@ -4,8 +4,9 @@
  * Port of creatures/js/fluid/main.js (wiring) on top of fluid_sim/target/draw.c; what
  * is shown when (states, moods, idle life, the demo reel) is fluid_director.c. Over it:
  * a question (the link's ask: labels as text targets in their sectors, fluid_ask.h, the
- * director's transitions waiting underneath), rings of the fluid itself (fluid_target_arc:
- * the listening ring while a listen records, a question's coloured button borders) and
+ * director's transitions waiting underneath), rings of the fluid itself (the listening
+ * ring while a listen records, fluid_target_ring / fluid_ring.h; a question's coloured
+ * button borders, fluid_target_arcs) and
  * one pixel overlay (fluid_draw_overlay: a question's faint dividers). Threading:
  *   - fluid_task (core 1, prio 2) OWNS the sim, targets, renderer, the director and the
  *     display while active: touch poll, IMU read, director, fixed 60 Hz steps, draw, flush.
@@ -58,6 +59,7 @@
 #include "link_protocol.h"   /* link_color_parse */
 
 #include "glyph_font.h"   /* gc_font5x7, GC_RAMP_ASCII */
+#include "fluid_ring.h"   /* the listening ring's knobs */
 
 static const char *TAG = "mole_fluid";
 
@@ -74,9 +76,6 @@ static const char *TAG = "mole_fluid";
 #define FLUID_IMU_SX       (1.f)      /* device-frame → screen: dashboard maps  */
 #define FLUID_IMU_SY       (-1.f)     /* dot_dx = +ax, dot_dy = -ay             */
 #define FLUID_RIPPLE_Q     4
-#define RING_FADE_S        0.3f       /* listening ring fade in / out              */
-#define RING_R             0.875f     /* listening ring: centre line, of the radius */
-#define RING_BEAT_S        0.76f      /* a soft ripple on the ring each beat (the website's) */
 #define DIV_FADE_S         0.4f       /* a question's dividers fade in / out       */
 
 static const char *DEFAULT_TEXT =
@@ -190,7 +189,8 @@ static struct {
 static bool  s_listen = false;                  /* task copies of s_listen_in / s_level_in */
 static float s_level = 0.f;
 static int32_t s_ring_rgb = -1, s_ring_def = -1;   /* task copies of s_ring_in / s_ring_dflt */
-static float s_ring = 0.f, s_lvl = 0.f, s_ring_ph = 0.f, s_ring_beat = 0.f, s_div = 0.f;
+static fluid_ring_t s_rg;                       /* the listening ring (fluid_ring.h)     */
+static float s_div = 0.f;
 static int   s_div_n = 0;
 static fluid_overlay_t s_ov;                    /* this frame's, from sim_frame          */
 static fluid_overlay_t s_dov;                   /* riding with the snapshot              */
@@ -498,16 +498,12 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     read_tilt(cfg->tilt);
     float ox = s_gx * FLUID_TILT_LEAN, oy = s_gy * FLUID_TILT_LEAN;
 
-    /* the listening ring: fades in while a listen records (never over a question),
-     * breathes ~1 Hz (radius, width, ink) and swells with the mic level (fast attack,
-     * slow release). It is a target of the fluid, around whatever the state shows (the
-     * creature, in its listening mood, stays in the middle). */
-    s_ring = s_listen && !asking ? fminf(1.f, s_ring + rdt / RING_FADE_S) : fmaxf(0.f, s_ring - rdt / RING_FADE_S);
-    float lv = s_listen ? s_level : 0.f;
-    s_lvl += (lv - s_lvl) * (1.f - expf(-rdt / (lv > s_lvl ? 0.05f : 0.25f)));
-    s_ring_ph += rdt;
-    if (s_ring_ph >= 1.f) s_ring_ph -= floorf(s_ring_ph);
-    const float br = 0.5f - 0.5f * cosf(s_ring_ph * 6.2831853f);
+    /* the listening ring: fades in while a listen records (never over a question), a
+     * thin line that ripples — gently when quiet, faster and deeper with the voice (the
+     * mic level, smoothed in the tick) — and pings the surface from points on it. It is a
+     * target of the fluid, around whatever the state shows (the creature, in its
+     * listening mood, stays in the middle). */
+    const int ring_pings = fluid_ring_tick(&s_rg, rdt, s_listen && !asking, s_level);
     const float acc = cfg->palette == FLUID_PAL_PASTEL ? 0.f : 1.f;   /* mono palettes: the accent */
 
     switch (asking ? ST_TEXT : s_cur) {
@@ -534,9 +530,8 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
             arcs[i].rgb = s_ask.rgb[i];
         }
         fluid_target_arcs(s, FLUID_ASK_ARC_R, arcs, s_ask.n, acc);   /* one pass for all */
-    } else if (s_ring > 0.f) {
-        fluid_target_arc(s, RING_R + 0.012f * br + 0.02f * s_lvl, 0.018f + 0.008f * br + 0.02f * s_lvl, 0.f, 6.2831853f,
-                         s_ring * fminf(1.f, 0.7f + 0.2f * br + 0.35f * s_lvl), fluid_ring_rgb(s_ring_rgb, s_ring_def, cfg->palette), acc);
+    } else {
+        fluid_target_ring(s, &s_rg, fluid_ring_rgb(s_ring_rgb, s_ring_def, cfg->palette), acc);
     }
     /* the always-on dim fluid; its slow noise (and the eddies' ψ) refresh on
      * alternating frames — both drift ≤ 0.012 lattice units per frame */
@@ -566,11 +561,8 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     fluid_sim_view(s);
     s_shimmer = 0.12f + (thinking ? 0.35f : 0.f) + cfg->mic * 0.4f;
 
-    if (s_ring > 0.5f && (s_ring_beat += rdt) >= RING_BEAT_S) {   /* a soft ripple somewhere on the ring each beat */
-        s_ring_beat = 0.f;
-        float a = frand() * 6.2831853f;
-        ripple(RING_R * cosf(a), RING_R * sinf(a), 0.3f + 0.9f * s_lvl, 0.06f);
-    }
+    for (int q = 0; q < ring_pings; q++)                   /* the ring's sound-like ripples */
+        ripple(s_rg.ping_x[q], s_rg.ping_y[q], s_rg.ping_s, RING_PING_RADIUS);
     /* a question's faint dividers: in while it waits, out once it was answered */
     bool div_on = s_ask.scr.phase == FLUID_ASK_SHOW && s_ask.n >= 2;
     s_div = div_on ? fminf(1.f, s_div + rdt / DIV_FADE_S) : fmaxf(0.f, s_div - rdt / DIV_FADE_S);
@@ -964,7 +956,7 @@ esp_err_t mole_fluid_creature_init(void) {
     s_gx = s_gy = 0.f; s_touch_down = false;
     s_ask.scr.phase = FLUID_ASK_NONE; s_ask.scr.seq = s_ask_want.seq;     /* a question from before is gone */
     s_dask = 0; atomic_store(&s_glass_ask, 0);
-    s_ring = s_lvl = s_div = 0.f; s_ov = s_dov = (fluid_overlay_t){ 0 };   /* the fluid's own ring is in the sim */
+    s_rg = (fluid_ring_t){ 0 }; s_div = 0.f; s_ov = s_dov = (fluid_overlay_t){ 0 };   /* the fluid's own ring is in the sim */
     s_sim->p.relax_up = RATE_UP[ST_BLOB]; s_sim->p.relax_down = RATE_DOWN[ST_BLOB];
 
     xSemaphoreTake(s_go, 0);                     /* fresh handshake: drawer idle, nothing queued */

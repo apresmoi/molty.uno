@@ -10,6 +10,7 @@
  */
 #include "fluid_sim.h"
 #include "fluid_ask.h"
+#include "fluid_ring.h"
 #include "glyph_font.h"
 
 #include <math.h>
@@ -361,6 +362,7 @@ static void test_overlay(void) {
 
 /* ── rings of the fluid: the listening ring and a question's coloured arcs ───── */
 
+static float wrap_turn(float d) { return d - floorf(d + 0.5f); }   /* −½..½ turns */
 static void rgb_of(uint32_t c, float *r, float *g, float *b) { *r = (c >> 16 & 255) / 255.f; *g = (c >> 8 & 255) / 255.f; *b = (c & 255) / 255.f; }
 /* the view (what the screen shows) and the carried colour at stage point (x, y) */
 static int cell_of(const fluid_sim_t *s, float x, float y) {
@@ -445,6 +447,152 @@ static void test_fluid_ring(void) {
     for (int q = 0; q < 24; q++) { float a = 6.2831853f * q / 24; m += h->view[cell_of(h, 0.875f * sinf(a), -0.875f * cosf(a))] / FQ_UNIT; }
     CHECK(m / 24 > 0.22, "hold 0: the ring only reached ink %.2f in 0.3 s", m / 24);
     fluid_sim_destroy(h);
+}
+
+/* the listening ring (fluid_ring.h): thin and soft, ripples when quiet, more with the voice */
+static fluid_ring_t g_rg;
+static float g_level;
+static void ring_tick_fill(fluid_sim_t *s, float t) {
+    (void)t;
+    fluid_ring_tick(&g_rg, 1.f / 30, true, g_level);
+    fluid_target_ring(s, &g_rg, 0xb197fc, 0.f);
+}
+static void ring_old(fluid_sim_t *s, float t) {        /* the ring before: a breathing band */
+    (void)t;
+    fluid_target_arc(s, 0.875f + 0.006f, 0.022f, 0.f, 6.2831853f, 0.8f, 0xb197fc, 0.f);
+}
+static float ring_amp(const fluid_ring_t *r) { return fmaxf(r->dr_hi, -r->dr_lo); }
+/* ink the ring adds over the plain sim, summed over the band 0.7..1 (the view and T) */
+static void ring_excess(const fluid_sim_t *s, const fluid_sim_t *z, double *view, double *tgt) {
+    *view = *tgt = 0;
+    for (int j = 0; j < s->H; j++) for (int i = 0; i < s->W; i++) {
+        int k = j * s->W + i;
+        float r = sqrtf(s->xs[i] * s->xs[i] + s->ys[j] * s->ys[j]);
+        if (!s->mask[k] || r < 0.7f) continue;
+        *view += fmax(0, (s->view[k] - z->view[k]) / FQ_UNIT);
+        *tgt  += fmax(0, (s->T[k] - z->T[k]) / FQ_UNIT);
+    }
+}
+static void test_ring_ripples(void) {
+    fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF), *z = fluid_sim_create(52, 32, FLUID_STAGE_REF),
+                *o = fluid_sim_create(52, 32, FLUID_STAGE_REF);
+    g_rg = (fluid_ring_t){ 0 }; g_level = 0.f;
+    run_arcs(s, 45, ring_tick_fill);
+    run_arcs(z, 45, NULL);
+    run_arcs(o, 45, ring_old);
+    /* still a whole ring of the fluid in its colour, the creature untouched in the middle */
+    int lit = 0, tinted = 0; float cr, cg, cb;
+    rgb_of(0xb197fc, &cr, &cg, &cb);
+    for (int q = 0; q < 24; q++) {
+        float a = 6.2831853f * q / 24;
+        int best = -1; float bv = -1.f;                    /* the ring's cell on this ray */
+        for (float rr = 0.80f; rr <= 0.95f; rr += 0.01f) {
+            int k = cell_of(s, rr * sinf(a), -rr * cosf(a));
+            float v = (s->view[k] - z->view[k]) / FQ_UNIT;
+            if (v > bv) { bv = v; best = k; }
+        }
+        lit += bv > 0.08f;
+        const fluid_rgba16_t *c = &s->col[best];
+        tinted += fabsf(c->r / 65535.f - cr) < 0.15f && fabsf(c->g / 65535.f - cg) < 0.15f && fabsf(c->b / 65535.f - cb) < 0.15f;
+    }
+    CHECK(lit >= 22, "calm ring: %d/24 rays show it", lit);
+    CHECK(tinted >= 20, "calm ring: %d/24 rays carry its colour", tinted);
+    int kc = cell_of(s, 0.f, 0.f);
+    CHECK(abs(s->view[kc] - z->view[kc]) / FQ_UNIT < 0.15f, "the creature in the middle stays");
+    /* thinner and softer than the old band: far less ink pooled at the edge */
+    double vs, ts, vo, to;
+    ring_excess(s, z, &vs, &ts); ring_excess(o, z, &vo, &to);
+    if (getenv("RING_STATS")) printf("  ring excess: target %.1f (old %.1f), view %.1f (old %.1f)\n", ts, to, vs, vo);
+    CHECK(ts < 0.45 * to && vs < 0.6 * vo, "calm ring not thin/soft: target %.1f vs old %.1f, view %.1f vs old %.1f", ts, to, vs, vo);
+    fluid_sim_destroy(s); fluid_sim_destroy(z); fluid_sim_destroy(o);
+
+    /* quiet: it still moves (the waves travel), gently */
+    fluid_ring_t r = { 0 };
+    const float dt = 1.f / 30;
+    float dr0[FLUID_RING_N];
+    for (int f = 0; f < 30; f++) fluid_ring_tick(&r, dt, true, 0.f);
+    memcpy(dr0, r.dr, sizeof dr0);
+    int pq = 0;
+    for (int f = 0; f < 60; f++) fluid_ring_tick(&r, dt, true, 0.f);
+    double moved = 0; for (int q = 0; q < FLUID_RING_N; q++) moved += fabsf(r.dr[q] - dr0[q]);
+    const float amp_idle = ring_amp(&r);
+    CHECK(amp_idle > 0.5f * RING_AMP_IDLE && amp_idle < 0.02f, "quiet ripple amplitude %.4f", amp_idle);
+    CHECK(moved / FLUID_RING_N > 0.15 * amp_idle, "quiet ring is static (moved %.5f per sample in 2 s)", moved / FLUID_RING_N);
+    for (int f = 0; f < 240; f++) pq += fluid_ring_tick(&r, dt, true, 0.f);
+    CHECK(pq >= 1 && pq <= 3, "quiet: %d pings in 8 s", pq);
+
+    /* speaking (level updates at 10 Hz): deeper, faster ripples, more and stronger pings */
+    int ps = 0; float s_max = 0.f, ink_max_q = 0.f, ink_max_s = 0.f;
+    for (int q = 0; q < FLUID_RING_N; q++) ink_max_q = fmaxf(ink_max_q, r.ink[q]);
+    double adv = 0;
+    for (int f = 0; f < 240; f++) {
+        const float lv = 0.55f + 0.25f * ((f / 3) % 2);     /* a voice: steps every 0.1 s */
+        const float before = r.ph_a;
+        ps += fluid_ring_tick(&r, dt, true, lv);
+        adv += wrap_turn(r.ph_a - before);
+        if (f > 10) { s_max = fmaxf(s_max, ring_amp(&r)); }
+    }
+    for (int q = 0; q < FLUID_RING_N; q++) ink_max_s = fmaxf(ink_max_s, r.ink[q]);
+    CHECK(s_max > 2.5f * amp_idle, "voice: amplitude %.4f vs quiet %.4f", s_max, amp_idle);
+    CHECK(adv > 3.0 * RING_SPEED_IDLE * 8.0, "voice: waves travelled %.2f turns in 8 s (quiet %.2f)", adv, RING_SPEED_IDLE * 8.0);
+    CHECK(ps >= 4 * pq && r.ping_s > 2.f * RING_PING_S_IDLE, "voice: %d pings (quiet %d), strength %.2f", ps, pq, r.ping_s);
+    CHECK(ink_max_s > 1.25f * ink_max_q, "voice: brighter (%.2f vs %.2f)", ink_max_s, ink_max_q);
+    /* pings land on the ring */
+    CHECK(fabsf(sqrtf(r.ping_x[0] * r.ping_x[0] + r.ping_y[0] * r.ping_y[0]) - RING_R) < 1e-3f, "a ping off the ring");
+
+    /* silence: it settles back to the calm line */
+    for (int f = 0; f < 45; f++) fluid_ring_tick(&r, dt, true, 0.f);
+    CHECK(r.lvl < 0.05f && ring_amp(&r) < 1.3f * RING_AMP_IDLE, "silence: level %.3f, amplitude %.4f", r.lvl, ring_amp(&r));
+
+    /* smooth: a level jumping 0 ↔ 1 every 0.1 s never steps the ripples */
+    float maxd = 0.f, maxph = 0.f;
+    for (int f = 0; f < 60; f++) {
+        const float l0 = r.lvl, p0 = r.ph_a;
+        fluid_ring_tick(&r, dt, true, (f / 3) % 2 ? 1.f : 0.f);
+        maxd = fmaxf(maxd, fabsf(r.lvl - l0));
+        maxph = fmaxf(maxph, wrap_turn(r.ph_a - p0));
+    }
+    CHECK(maxd < 0.4f, "level stepped %.2f in one frame", maxd);
+    CHECK(maxph <= (RING_SPEED_IDLE + RING_SPEED_LEVEL) * dt + 1e-5f, "phase jumped %.4f turns in one frame", maxph);
+
+    /* off: melts out within the fade, no pings, and a faded ring writes nothing */
+    int poff = 0;
+    for (int f = 0; f * dt < RING_FADE_S + dt; f++) poff += fluid_ring_tick(&r, dt, false, 1.f);
+    CHECK(r.on == 0.f, "off: still %.2f after the fade", r.on);
+    for (int f = 0; f < 30; f++) poff += fluid_ring_tick(&r, dt, false, 1.f);
+    CHECK(poff <= 1 && r.lvl < 0.05f, "off: %d pings, level %.2f", poff, r.lvl);
+    fluid_sim_t *e = fluid_sim_create(52, 32, FLUID_STAGE_REF);
+    fluid_target_blob(e, 0.f, 1.f, 0.f, 0.f);
+    int16_t *T0 = malloc((size_t)e->N * 2); memcpy(T0, e->T, (size_t)e->N * 2);
+    fluid_target_ring(e, &r, 0xffffff, 0.f);
+    CHECK(!memcmp(T0, e->T, (size_t)e->N * 2), "a faded ring changed the target");
+    free(T0); fluid_sim_destroy(e);
+
+    /* a listen right after `say` (hold 0): the thin ring still shows within 0.3 s */
+    fluid_sim_t *h = fluid_sim_create(52, 32, FLUID_STAGE_REF), *h0 = fluid_sim_create(52, 32, FLUID_STAGE_REF);
+    fluid_ring_t rh = { 0 };
+    for (int pass = 0; pass < 2; pass++) {
+        fluid_sim_t *x = pass ? h0 : h;
+        x->p.relax_up = 2.6f; x->p.relax_down = 3.4f; x->p.hold = 0.f; x->p.tint_rate = 3.f;
+        for (int f = 0; f < 9; f++) {
+            fluid_target_blob(x, f / 30.f, 1.f, 0.f, 0.f);
+            if (!pass) { fluid_ring_tick(&rh, dt, true, 0.f); fluid_target_ring(x, &rh, 0xff8c3c, 0.f); }
+            fluid_sim_background(x, f / 30.f, 0.5f, true); fluid_sim_swirl_field(x);
+            fluid_sim_step(x, 1.f / 60); fluid_sim_step(x, 1.f / 60); fluid_sim_color(x, 2.f / 60);
+        }
+        fluid_sim_view(x);
+    }
+    int shown = 0;
+    for (int q = 0; q < 24; q++) {
+        float a = 6.2831853f * q / 24, bv = 0.f;
+        for (float rr = 0.80f; rr <= 0.95f; rr += 0.01f) {
+            int k = cell_of(h, rr * sinf(a), -rr * cosf(a));
+            bv = fmaxf(bv, (h->view[k] - h0->view[k]) / FQ_UNIT);
+        }
+        shown += bv > 0.06f;
+    }
+    CHECK(shown >= 20, "hold 0: the ring shows on only %d/24 rays within 0.3 s", shown);
+    fluid_sim_destroy(h); fluid_sim_destroy(h0);
 }
 
 /* a question's arcs: each sector's border in its option's colour, gaps at the dividers */
@@ -581,6 +729,7 @@ int main(void) {
     test_labels();
     test_overlay();
     test_fluid_ring();
+    test_ring_ripples();
     test_fluid_arcs();
     test_letter_color();
     test_letter_melt();

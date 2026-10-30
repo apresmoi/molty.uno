@@ -144,6 +144,7 @@ void fluid_sim_destroy(fluid_sim_t *s) {
     if (!s) return;
     for (int k = 0; k < s->n_blk; k++) if (s->blk[k]) FLUID_FREE(s->blk[k]);
     if (s->cblock) FLUID_FREE(s->cblock);
+    if (s->ring_geom) FLUID_FREE(s->ring_geom);
     FLUID_FREE(s);
 }
 

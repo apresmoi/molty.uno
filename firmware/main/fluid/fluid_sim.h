@@ -115,6 +115,9 @@ typedef struct {
     fluid_rgba16_t *col, *col2;        /* carried colour + accent                         */
     uint32_t *tcol;                    /* target colour + accent, RGBA8                   */
     void *blk[20], *cblock;            /* one allocation per hot field (+ colour block)   */
+    void *ring_geom;                   /* the listening ring's cells (fluid_target_ring,
+                                        * built on first use, freed with the sim)          */
+    int ring_n;
     int n_blk, n_internal;             /* how many hot fields landed in internal DRAM     */
     bool internal;                     /* all of them                                     */
     fluid_params_t p;
@@ -249,6 +252,27 @@ void fluid_target_arc(fluid_sim_t *s, float rc, float hw, float a0, float a1, fl
  *  takes the strongest arc there (its ink and colour). */
 typedef struct { float a0, a1, hw, amt; uint32_t rgb; } fluid_arc_t;
 void fluid_target_arcs(fluid_sim_t *s, float rc, const fluid_arc_t *arcs, int n, float acc);
+
+/** The listening ring (knobs: fluid_ring.h): a thin soft line of the fluid at RING_R whose
+ *  radius and ink ripple with two counter-travelling waves around it, slow when quiet,
+ *  faster / deeper with the voice. fluid_ring_tick advances it once per frame: on = a
+ *  listen records (it fades in / melts out over RING_FADE_S), level = the latest mic level
+ *  0..1 (held between its ~10 Hz updates; smoothed here). It returns the pings due this
+ *  frame (0..2): a ripple of the fluid's surface at (ping_x, ping_y), strength ping_s —
+ *  the caller applies them (fluid_sim_impulse, RING_PING_RADIUS). fluid_target_ring
+ *  writes this frame's ring into the target in the given colour (as fluid_target_arcs:
+ *  after the state's fill, before fluid_sim_background); nothing while it is faded out. */
+#define FLUID_RING_N 64                /* samples of the ring's profile around it          */
+typedef struct {
+    float on, lvl;                     /* fade 0..1; smoothed level 0..1                  */
+    float ph_a, ph_b;                  /* the two waves' phases, turns                    */
+    float ping_acc, ping_turn;         /* ping clock; where the next ping goes, turns     */
+    float dr[FLUID_RING_N], ink[FLUID_RING_N];   /* this frame: radius offset, ink        */
+    float dr_lo, dr_hi;                /* the offsets' range (the band to visit)          */
+    float ping_x[2], ping_y[2], ping_s;
+} fluid_ring_t;
+int  fluid_ring_tick(fluid_ring_t *r, float dt, bool on, float level);
+void fluid_target_ring(fluid_sim_t *s, const fluid_ring_t *r, uint32_t rgb, float acc);
 
 /* ── renderer (render.js) ─────────────────────────────────────────────────── */
 
