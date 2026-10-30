@@ -111,12 +111,18 @@ moshi-server on 127.0.0.1, and mounts the paired config read-only. Pair on the h
   (firmware with the `listen_stop` cap) and finishes the transcript at once, with reason
   `turn_end`, instead of waiting for Molty's silence timer or the listen window. Silence
   alone never ends a turn that way. With the box serving the listen, this is THE end: the
-  relay turns Molty's own silence VAD off and passes `no_speech_ms` in `stt.start`, and when
-  nobody said a word by then (and nobody is speaking right then) the box sends
+  relay turns Molty's own silence VAD off and passes `no_speech_ms` in `stt.start` (8 s unless
+  the agent set one), and when nobody spoke for that much captured audio the box sends
   `stt.turn_end` with `reason: "no_speech"` once: the relay ends the listen with an empty
-  transcript.
-- **TTS:** One connection per sentence. The box sends the words, then `Eos`. The 24 kHz
-  float audio streams back resampled to 16 kHz PCM16, in ≤ 16 KB frames.
+  transcript. "Nobody spoke" is voice activity, not words (words lag the voice by 1–1.6 s):
+  the model's `prs[2]` under 0.3 for 3 steps restarts the clock, and a loud frame in the last
+  ~0.5 s postpones the verdict. `--turn-end-skip` sets how many 80 ms steps at a listen's start
+  the end-of-turn rule ignores (default 12, as Unmute).
+- **TTS:** One connection per request (the relay groups sentences up to ~220 characters for the
+  box; connecting costs ~1 ms, so there is no pool). The box sends the words, then `Eos`. The
+  24 kHz float audio streams back resampled to 16 kHz PCM16, in ≤ 16 KB frames. The quiet lead
+  of the first frame (≤ 70 ms before the voice) is dropped (`trim_lead`), and word timings
+  (`tts.word`) are Kyutai's `start_s` less one 80 ms step and less that trim.
 
 ## Tests
 

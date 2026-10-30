@@ -57,33 +57,49 @@ class PausePredictor:
     returns True exactly once, the first time that holds after >= 1 word. Pure
     silence never ends a turn that way.
 
-    `no_speech(s)`: the other end — nobody said a word. True exactly once, the first step
-    at which the model has heard >= s seconds, no Word came, and nobody is speaking right
-    then (the pause estimate above NO_SPEECH_QUIET): the device's own no_speech rule, for
-    listens where the device's VAD is off and the box decides the end of turn. Never once
-    a word came, and never after the turn ended.
+    `no_speech(s)`: the other end — nobody spoke. True exactly once, the first step at which
+    the model has heard >= s seconds of audio since the last voice activity (since the
+    capture began, if none), no Word came, and nobody is speaking right then (the pause
+    estimate above NO_SPEECH_QUIET). Voice activity is the model's own "someone is speaking"
+    — prs[2] below ACTIVE_BELOW for ACTIVE_STEPS steps in a row — not a Word: Words lag the
+    voice by 1.0-1.6 s (measured: speech from 3.8 s, first Word at 4.8-5.4 s), while prs[2]
+    drops 0.3-0.45 s into it, over noise floors of -65..-40 dBFS and 15 dB quieter speech,
+    and never on noise or knocks (prs[2] stayed >= 0.80). Frame energy was faster (0-0.12 s)
+    but missed quiet speech in noise and took a knock for a voice, so it only VETOES: a loud
+    frame within the last VETO_STEPS (`voice_recent`, see EnergyGate) postpones the verdict —
+    a voice starting just before the deadline is not cut while prs[2] catches up. The clock
+    is the audio fed (model steps), i.e. capture time, never wall time from stt.start. Never
+    once a word came, and never after the turn ended.
     """
 
     NO_SPEECH_QUIET = 0.5
+    ACTIVE_BELOW = 0.3
+    ACTIVE_STEPS = 3
 
     SKIP_STEPS = 12
 
-    def __init__(self, threshold: float = 0.6, attack_s: float = 0.01, release_s: float = 0.01):
+    def __init__(self, threshold: float = 0.6, attack_s: float = 0.01, release_s: float = 0.01, skip_steps: int = SKIP_STEPS):
         self.threshold, self.attack_s, self.release_s = threshold, attack_s, release_s
+        self.skip_steps = max(0, int(skip_steps))
         self.value = 1.0
         self.steps = 0
         self.words = 0
         self.fired = False
         self.no_speech_fired = False
+        self.active_run = 0
+        self.quiet_since = 0  # step of the last voice activity (0: the capture's start)
 
     def word(self) -> None:
         self.words += 1
 
     def update(self, pause_prob: float, dt: float = FRAME_S) -> bool:
         self.steps += 1
-        if self.steps <= self.SKIP_STEPS:
+        if self.steps <= self.skip_steps:
             return False
         p = max(0.0, float(pause_prob))
+        self.active_run = self.active_run + 1 if p < self.ACTIVE_BELOW else 0
+        if self.active_run >= self.ACTIVE_STEPS:
+            self.quiet_since = self.steps  # someone is speaking: the no-speech clock starts over
         half = self.attack_s if p > self.value else self.release_s
         alpha = 1 - math.exp(-dt / half * math.log(2))
         self.value = (1 - alpha) * self.value + alpha * p
@@ -92,14 +108,46 @@ class PausePredictor:
         self.fired = True
         return True
 
-    def no_speech(self, after_s: float, dt: float = FRAME_S) -> bool:
-        """Call after update() on each step: True once when nobody spoke within after_s."""
-        if self.no_speech_fired or self.fired or self.words or after_s <= 0:
+    def no_speech(self, after_s: float, dt: float = FRAME_S, voice_recent: bool = False) -> bool:
+        """Call after update() on each step: True once when nobody spoke for after_s of audio."""
+        if self.no_speech_fired or self.fired or self.words or after_s <= 0 or voice_recent:
             return False
-        if self.steps * dt < after_s - 1e-9 or self.value <= self.NO_SPEECH_QUIET:
+        if (self.steps - self.quiet_since) * dt < after_s - 1e-9 or self.value <= self.NO_SPEECH_QUIET:
             return False
         self.no_speech_fired = True
         return True
+
+
+class EnergyGate:
+    """Loud 80 ms frames over the noise floor, on the audio as it goes to the model.
+
+    A frame is loud when its RMS is MARGIN_DB over the tracked noise floor (follows drops at
+    once, rises 0.05 dB per frame) and over ABS_DB. `recent(step)`: a loud frame among the
+    frames at or after `step - VETO_STEPS` — frames sent run ahead of the model's steps, so a
+    loud frame not yet processed counts too.
+    """
+
+    MARGIN_DB = 12.0
+    ABS_DB = -55.0
+    VETO_STEPS = 6
+
+    def __init__(self):
+        self.floor: float | None = None
+        self.frames = 0
+        self.last_loud = -(10**9)
+
+    def frame(self, x: np.ndarray) -> None:
+        self.frames += 1
+        r = 20 * math.log10(math.sqrt(float(np.mean(np.square(x, dtype=np.float64)))) + 1e-9)
+        if self.floor is None or r < self.floor:
+            self.floor = r
+        else:
+            self.floor = min(r, self.floor + 0.05)
+        if r > self.floor + self.MARGIN_DB and r > self.ABS_DB:
+            self.last_loud = self.frames
+
+    def recent(self, step: int) -> bool:
+        return self.last_loud >= step - self.VETO_STEPS
 
 
 def _pack(obj) -> bytes:
@@ -122,16 +170,18 @@ class SttSession:
         on_word: Callable[[str], Awaitable[None]] | None = None,
         on_turn_end: Callable[[], Awaitable[None]] | None = None,
         turn_end_threshold: float = 0.6,
+        turn_end_skip_steps: int = PausePredictor.SKIP_STEPS,
         on_no_speech: Callable[[], Awaitable[None]] | None = None,
         no_speech_s: float | None = None,
         connect=ws_connect,
     ):
         self.url, self.api_key, self.flush_s, self.on_word, self._connect = url, api_key, flush_s, on_word, connect
         self.on_turn_end = on_turn_end
-        self.pause = PausePredictor(turn_end_threshold)
+        self.pause = PausePredictor(turn_end_threshold, skip_steps=turn_end_skip_steps)
         # nobody spoke within no_speech_s (None: off): the relay turned the device's VAD off
         self.on_no_speech, self.no_speech_s = on_no_speech, no_speech_s
         self._finishing = False
+        self.energy = EnergyGate()
         self.words: list[str] = []
         self._rs = Resampler(DEVICE_RATE, MODEL_RATE)
         self._pending = np.zeros(0, dtype=np.float32)
@@ -164,7 +214,7 @@ class SttSession:
                     if len(prs) > 2 and self.pause.update(prs[2]) and not self._finishing and self.on_turn_end:
                         await self.on_turn_end()
                     elif (len(prs) > 2 and self.no_speech_s and self.on_no_speech and not self._finishing
-                          and self.pause.no_speech(self.no_speech_s)):
+                          and self.pause.no_speech(self.no_speech_s, voice_recent=self.energy.recent(self.pause.steps))):
                         await self.on_no_speech()
                 elif t == "Marker" and d.get("id") == self._marker_id:
                     self._marker_seen = True
@@ -189,6 +239,8 @@ class SttSession:
         buf = np.concatenate([self._pending, x]) if self._pending.size else x
         n = (len(buf) // FRAME) * FRAME
         for i in range(0, n, FRAME):
+            if not self._finishing:
+                self.energy.frame(buf[i : i + FRAME])
             await self._ws.send(_pack({"type": "Audio", "pcm": buf[i : i + FRAME].tolist()}))
         self._pending = buf[n:]
         if final and self._pending.size:

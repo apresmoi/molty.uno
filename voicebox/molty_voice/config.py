@@ -40,6 +40,8 @@ class Config:
     # Semantic end of turn (Unmute's pause rule): smoothed prs[2] above this, after >= 1
     # word, sends stt.turn_end so Molty stops listening. <= 0 turns it off.
     turn_end: float = 0.6
+    # ...ignoring the first N model steps (80 ms each) of a listen, where prs[2] is unreliable (Unmute: 12).
+    turn_end_skip_steps: int = 12
     # TTS: drop the near-silent lead of each stream's first frame (<= 80 ms) so the voice starts sooner.
     trim_lead: bool = True
 

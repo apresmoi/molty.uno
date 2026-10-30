@@ -39,6 +39,15 @@ def test_ignores_the_first_12_steps():
     assert feed(p, [0.95] * 13) == [12]  # steps 0..11 are skipped, step 12 counts
 
 
+def test_skip_steps_is_tunable():
+    p = PausePredictor(skip_steps=4)
+    p.word()
+    assert feed(p, [0.95] * 6) == [4]
+    q = PausePredictor(skip_steps=0)
+    q.word()
+    assert feed(q, [0.95]) == [0]
+
+
 def test_threshold_and_off_switch():
     p = PausePredictor(threshold=0.97)
     p.word()
@@ -71,11 +80,20 @@ def test_no_speech_never_after_a_word_nor_while_someone_speaks():
         p.update(0.0)
     p.word()
     assert not any((p.update(0.95), p.no_speech(1.0))[1] for _ in range(100))
-    # speaking right at the deadline (the estimate is low): not yet; it fires once they stop
+    # someone speaks (the estimate is low) before the deadline, with no word yet (words lag
+    # the voice by ~1 s): the clock starts over from their last activity
     q = PausePredictor()
-    seq = [0.95] * 12 + [0.0] * 20 + [0.95] * 5
+    seq = [0.95] * 12 + [0.0] * 20 + [0.95] * 20
     fired = [i for i, v in enumerate(seq) if (q.update(v), q.no_speech(1.0))[1]]
-    assert fired == [32]
+    assert fired == [31 + 13]  # 13 steps (>= 1 s) after the last active step (index 31)
+    # a blip shorter than ACTIVE_STEPS is not a voice
+    b = PausePredictor()
+    seq = [0.95] * 12 + [0.0] * 2 + [0.95] * 20
+    assert [i for i, v in enumerate(seq) if (b.update(v), b.no_speech(1.0))[1]] == [14]  # no restart: due at 12, once the blip is over
+    # a recent loud frame (energy veto) postpones the verdict, no more
+    e = PausePredictor()
+    veto = lambda i: 12 <= i < 15
+    assert [i for i in range(30) if (e.update(0.95), e.no_speech(1.0, voice_recent=veto(i)))[1]] == [15]
     off = PausePredictor()
     assert not any((off.update(0.95), off.no_speech(0))[1] for _ in range(100))
 
@@ -84,11 +102,15 @@ class VadMoshi:
     """STT that answers every 80 ms frame with a Step: prs[2] ~0 while there is sound, 0.95 in silence; a Word on the
     first sound; the Marker comes back 6 frames (~0.5 s) after it went in, with paused Steps in between."""
 
-    def __init__(self):
+    def __init__(self, lag: int = 0, word_after: int = 1):
         self.closed = []
+        # like the real model: prs[2] drops only after `lag` loud frames (measured 0.3-0.45 s),
+        # and the first Word comes after `word_after` loud frames (measured 1.0-1.6 s)
+        self.lag, self.word_after = lag, word_after
 
     async def handler(self, ws):
         said = False
+        loud_n = 0
         marker, after = None, 0
         try:
             async for m in ws:
@@ -100,19 +122,21 @@ class VadMoshi:
                         await ws.send(msgpack.packb({"type": "Marker", "id": marker}))
                 elif d["type"] == "Audio":
                     loud = max((abs(x) for x in d["pcm"]), default=0) > 0.01
-                    if loud and not said:
+                    loud_n = loud_n + 1 if loud else 0
+                    if loud_n >= self.word_after and not said:
                         said = True
                         await ws.send(msgpack.packb({"type": "Word", "text": "hi", "start_time": 0.1}))
-                    await ws.send(msgpack.packb({"type": "Step", "step_idx": 0, "prs": [0.0, 0.0, 0.0 if loud else 0.95, 0.0]}, use_single_float=True))
+                    speaking = loud_n > self.lag
+                    await ws.send(msgpack.packb({"type": "Step", "step_idx": 0, "prs": [0.0, 0.0, 0.0 if speaking else 0.95, 0.0]}, use_single_float=True))
                 elif d["type"] == "Marker":
                     marker = d["id"]
         finally:
             self.closed.append(True)
 
 
-def run_listen(chunks, start_extra=None):
+def run_listen(chunks, start_extra=None, moshi=None):
     """Streams `chunks` (True = speech, False = silence) as 200 ms device frames; returns the relay's messages for s1."""
-    moshi = VadMoshi()
+    moshi = moshi or VadMoshi()
     msgs = []
 
     async def relay(ws):
@@ -187,3 +211,24 @@ def test_the_flush_silence_after_stt_end_is_not_no_speech():
     # silence (well past 1 s of model time) must not be taken for nobody speaking
     msgs = run_listen([False] * 3, {"no_speech_ms": 1000})
     assert [m["t"] for m in msgs] == ["stt.final"]
+
+
+def test_speech_starting_just_before_the_no_speech_deadline_is_not_no_speech():
+    # 4 s deadline, the human starts at 3.8 s; their first word comes ~1.2 s later and the
+    # model's "speaking" ~0.4 s later (after the deadline): the energy veto holds the verdict,
+    # the model's activity restarts the clock, the word ends the turn — never no_speech
+    lagging = VadMoshi(lag=5, word_after=15)
+    msgs = run_listen([False] * 19 + [True] * 12 + [False] * 10, {"no_speech_ms": 4000}, lagging)
+    assert [m["t"] for m in msgs] == ["stt.turn_end", "stt.final"]
+    assert msgs[0] == {"t": "stt.turn_end", "id": "s1"}
+
+
+def test_speech_without_a_word_restarts_the_no_speech_clock():
+    # a voice the model hears (prs) but no word yet (e.g. a hum): no_speech only once that
+    # many seconds of quiet followed it
+    hum = VadMoshi(lag=0, word_after=10**6)
+    msgs = run_listen([False] * 4 + [True] * 4 + [False] * 4, {"no_speech_ms": 1000}, hum)
+    assert [m["t"] for m in msgs] == ["stt.final"]  # 2.4 s of quiet after 1.6 s of hum: but only ~0.8 s fed after it ended
+    msgs = run_listen([False] * 4 + [True] * 4 + [False] * 10, {"no_speech_ms": 1000}, VadMoshi(lag=0, word_after=10**6))
+    assert [m["t"] for m in msgs] == ["stt.turn_end", "stt.final"]
+    assert msgs[0]["reason"] == "no_speech"

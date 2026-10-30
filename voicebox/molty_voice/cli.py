@@ -99,6 +99,8 @@ def cmd_run(a: argparse.Namespace) -> int:
         cfg.voices = [v.strip() for v in a.voices.split(",") if v.strip()]
     if a.turn_end is not None:
         cfg.turn_end = a.turn_end
+    if a.turn_end_skip is not None:
+        cfg.turn_end_skip_steps = a.turn_end_skip
     if a.no_stt:
         cfg.stt = False
     if a.no_tts:
@@ -143,6 +145,7 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--voices", help="comma-separated voices offered to the console")
     pr.add_argument("--name", help="name reported to the relay")
     pr.add_argument("--turn-end", type=float, help=f"end-of-turn threshold on the STT's pause prediction (default {d.turn_end}; 0 = off)")
+    pr.add_argument("--turn-end-skip", type=int, help=f"model steps (80 ms) at a listen's start the end-of-turn rule ignores (default {d.turn_end_skip_steps})")
     pr.add_argument("--no-stt", action="store_true", help="serve TTS only")
     pr.add_argument("--no-tts", action="store_true", help="serve STT only")
 
