@@ -38,6 +38,15 @@ Path(sys.argv[2]).write_text(source[start:end])
 PY
 cc -std=c11 -Wall -Wextra -Werror -O2 ${LINK_TEST_CFLAGS:-} \
   -I"$HERE" -I"$OUT" -I"$IDF_JSON" "$HERE/link_dma_test.c" -o "$OUT/link_dma_test"
+# The self-update's screen writer (link_cmd_test: update progress owns the screen).
+python3 - "$HERE/../../main/update/self_update.c" "$OUT/update_screen.inc" <<'PY'
+from pathlib import Path
+import sys
+source = Path(sys.argv[1]).read_text()
+start = source.index('static void screen_word(')
+end = source.index('static void screen_home(', start)
+Path(sys.argv[2]).write_text(source[start:end])
+PY
 "$OUT/link_dma_test"
 for test in identity audio_pair client cmd ask; do
   extra=()
@@ -45,7 +54,7 @@ for test in identity audio_pair client cmd ask; do
   if [ "$test" = audio_pair ]; then extra+=("$AUDIO/vad.c"); fi
   if [ "$test" = ask ]; then extra+=("$HERE/../../main/fluid/fluid_ask.c" "$HERE/../../main/sense/gesture.c"); fi
   cc -std=c11 -Wall -Wextra -Werror -O2 ${LINK_TEST_CFLAGS:-} \
-    -I"$OUT/stubs" -I"$HERE" -I"$LINK" -I"$AUDIO" -I"$HERE/../../main/fluid" -I"$HERE/../../main/sense" -I"$HERE/../../main/update" -I"$IDF_JSON" \
+    -I"$OUT/stubs" -I"$OUT" -I"$HERE" -I"$LINK" -I"$AUDIO" -I"$HERE/../../main/fluid" -I"$HERE/../../main/sense" -I"$HERE/../../main/update" -I"$IDF_JSON" \
     "$HERE/link_${test}_test.c" "$HERE/link_sdk_stub.c" \
     "$LINK/link_protocol.c" ${extra[@]+"${extra[@]}"} "$OUT/cJSON.o" -lm -o "$OUT/link_${test}_test"
   "$OUT/link_${test}_test"

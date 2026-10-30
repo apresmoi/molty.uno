@@ -21,6 +21,10 @@ unsigned link_cmd_mood_gen(void);
 /* A raw state set (local HTTP API, the link's `state` command): applied, and counted as an explicit mood when it
  * carries a top-level mood string (as the creature reads it), atomically against link_cmd_mood_idle_unless. */
 esp_err_t link_cmd_state_set_explicit(const char *body);
+/* A screen owner other than the audio jobs (the self-update's question-then-progress):
+ * applies `body` and counts it like an explicit mood, under the same lock, so a listen/say
+ * that started earlier and ends meanwhile does not put idle over it. */
+esp_err_t link_cmd_screen_claim(const char *body);
 /* A listen/say ended: back to idle unless an explicit mood was accepted since gen0. */
 void link_cmd_mood_idle_unless(unsigned gen0);
 /* Shared with the local reader HTTP endpoint; preserves its routing semantics. */

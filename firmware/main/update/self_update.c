@@ -89,11 +89,13 @@ static void policy(upd_policy_t *p)
 
 /* ── screen: the reader holds one word ("update", "40%", "restart") ─────────── */
 
+/* A screen claim (link_cmd.h), not a plain state set: the update owns the screen, so a
+ * listen/say that ends during the download does not restore idle over its progress. */
 static void screen_word(const char *w)
 {
     if (mole_creature_select("fluid") != ESP_OK) return;
     mole_fluid_set_text(w, (int)strlen(w));
-    mole_creature_state_set("{\"state\":\"text\",\"hold\":true}");
+    link_cmd_screen_claim("{\"state\":\"text\",\"hold\":true}");
 }
 
 static void screen_home(void) { mole_creature_state_set("{\"state\":\"creature\"}"); }

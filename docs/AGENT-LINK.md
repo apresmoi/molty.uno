@@ -198,7 +198,9 @@ count). The same for an `ask` sent after a listen began (any `mood` cancels a pe
 on the device): no automatic mood while its `cmd ask` awaits the ack, none for that listen once
 the device showed it (or its ack was lost). On the device, a listen/say that ends falls back to `idle` only if no explicit mood (link
 `mood` command, or a local `POST /api/creature/state` with a `mood`) arrived since it started, so
-the explicit mood keeps its own `hold_s`.
+the explicit mood keeps its own `hold_s`; likewise a self-update's progress ("update", "40%", …)
+owns the screen once shown (`link_cmd_screen_claim`), so an older listen/say ending mid-download
+does not put idle over it.
 
 ### Listen end of speech (device VAD)
 

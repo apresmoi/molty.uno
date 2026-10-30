@@ -23,7 +23,7 @@ static struct { const char *name; link_cmd_handler_t handler; } s_registry[16];
 static size_t s_count;
 static char s_mood[16] = "idle";
 /* Bumped by every explicit mood (the link's `mood` command, a local POST with a mood)
- * that the creature accepted. Audio jobs snapshot it so their completion only falls
+ * that the creature accepted, and by every screen claim (the self-update's progress). Audio jobs snapshot it so their completion only falls
  * back to idle when nobody chose a mood meanwhile. Not bumped by the moods the device
  * sets for itself (listening / speaking / idle). */
 static atomic_uint s_mood_gen;
@@ -63,6 +63,15 @@ esp_err_t link_cmd_state_set_explicit(const char *body)
     mood_lock();
     esp_err_t e = mole_creature_state_set(body);
     if (e == ESP_OK) note_state_body(body);
+    mood_unlock();
+    return e;
+}
+
+esp_err_t link_cmd_screen_claim(const char *body)
+{
+    mood_lock();
+    esp_err_t e = mole_creature_state_set(body);
+    if (e == ESP_OK) atomic_fetch_add(&s_mood_gen, 1);
     mood_unlock();
     return e;
 }
