@@ -292,6 +292,8 @@ interface ListenBuffer {
   screenRev: number;
   /** Streaming STT (voice box): every chunk is pushed here as it arrives. */
   stream?: SttStream;
+  /** When the STT backend called the end of the human's turn (the listen ended there). */
+  turnEndAt?: number;
 }
 
 /** Owner voice settings (KV `voicecfg`). */
@@ -1470,7 +1472,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     // Streaming STT (voice box): opened before the mic, so every chunk goes out the moment it arrives.
     if (pick.provider.sttStream) {
       try {
-        buf.stream = pick.provider.sttStream();
+        buf.stream = pick.provider.sttStream({ onTurnEnd: () => this.onTurnEnd(buf) });
       } catch (e) {
         if (pick.mode !== "auto") return { ok: false, error: errorCode(e) };
         // auto: the box vanished between the pick and the open: the cloud, batch.
@@ -1558,6 +1560,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         record: tEnd - tAck,
         stt: sttMs,
         ...(buf.firstAt ? { first_frame: buf.firstAt - tAck } : {}),
+        ...(buf.turnEndAt !== undefined ? { turn_end: buf.turnEndAt - tAck } : {}),
         voice: served,
         ...(fallback ? { voice_fallback: fallback } : {}),
       },
@@ -1575,6 +1578,32 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     void this.sendCmd("mood", args).then((r) => {
       if (!r.ok) this.log("auto mood failed", { device: this.deviceId, mood, error: r.error });
     });
+  }
+
+  /**
+   * The STT backend's semantic end of turn (voice box `stt.turn_end`): the listen ends HERE,
+   * as if the device's end frame had arrived (reason `turn_end`; record() then finalizes the
+   * stream at once). Firmware with the `listen_stop` cap is told to stop recording; older
+   * firmware keeps its mic open until its own end, and those late frames are dropped
+   * (onAudio ignores an ended listen).
+   */
+  private onTurnEnd(buf: ListenBuffer) {
+    if (buf.ended || this.listenBuf !== buf) return;
+    const now = this.clock.now();
+    buf.ended = true;
+    buf.endAt = now;
+    buf.turnEndAt = now;
+    buf.reason = "turn_end";
+    if (this.liveSocket()?.getMeta()?.caps?.includes("listen_stop")) {
+      void this.sendCmd("listen_stop", { job: buf.job }).then((r) => {
+        if (!r.ok) this.log("listen_stop failed", { device: this.deviceId, job: buf.job, error: r.error });
+      });
+    }
+    if (buf.bytes > 0) {
+      buf.thinking = true;
+      this.autoMood(buf, "thinking");
+    }
+    buf.wake?.();
   }
 
   private onAudio(bytes: Uint8Array) {
@@ -1639,6 +1668,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       case "tts.end":
       case "stt.final":
       case "stt.partial":
+      case "stt.turn_end":
         if (meta.box) this.box.onText(sock, frame);
         return;
       default:

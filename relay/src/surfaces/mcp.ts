@@ -147,7 +147,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "molty_talk",
-    description: `One conversation turn in ONE call: speaks 'say' (if given), then listens and returns what the human said: {heard, said?, reason: silence|no_speech|max|ended|error, speech_ms?, ms:{tts_first_audio, speech, listen, stt, total}}. Moods are automatic (speaking, listening, then thinking until your next command, ${THINK_HOLD_S} s max): don't call molty_mood around it. Blocks at most ${TALK_BUDGET_MS / 1000} s; a longer turn returns {job, status:"pending"}: finish it with molty_wait. Keep 'say' to 1-2 sentences.`,
+    description: `One conversation turn in ONE call: speaks 'say' (if given), then listens and returns what the human said: {heard, said?, reason: silence|turn_end|no_speech|max|ended|error (turn_end = they finished, like silence), speech_ms?, ms:{tts_first_audio, speech, listen, stt, total}}. Moods are automatic (speaking, listening, then thinking until your next command, ${THINK_HOLD_S} s max): don't call molty_mood around it. Blocks at most ${TALK_BUDGET_MS / 1000} s; a longer turn returns {job, status:"pending"}: finish it with molty_wait. Keep 'say' to 1-2 sentences.`,
     inputSchema: obj({
       say: { type: "string", description: "What to say first (at most 4096 bytes). Omit to just listen." },
       listen: { type: "boolean", description: "Listen after speaking; default true. false = just speak (and wait until spoken)." },

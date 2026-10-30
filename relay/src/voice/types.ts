@@ -28,7 +28,16 @@ export interface VoiceProvider {
    * the relay buffers the listen and calls stt() once. May throw when the
    * backend is unreachable (the relay then uses the batch path or fails).
    */
-  sttStream?(): SttStream;
+  sttStream?(opts?: SttStreamOptions): SttStream;
+}
+
+export interface SttStreamOptions {
+  /**
+   * The backend's semantic end-of-turn (e.g. Kyutai's pause prediction): the human has
+   * finished, so the listen can end now instead of at the device's silence timer or its
+   * window. Called at most once, only while the stream is still open.
+   */
+  onTurnEnd?: () => void;
 }
 
 /** One streaming transcription (VoiceProvider.sttStream). */

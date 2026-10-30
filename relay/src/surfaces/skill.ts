@@ -127,7 +127,8 @@ Body: \`{"say"?: s, "listen"?: true, "listen_ms"?: 1..${MAX_LISTEN_MS} (default 
 \`ring_color\` (talk and listen): the listening ring's colour, a colour name or \`"#rrggbb"\` as in Ask below;
 leave it out for the human's own setting.
 Speaks \`say\` (if given), then listens until the human stops talking (or the window ends), then
-returns the transcript as \`heard\`. \`reason\`: \`silence\` (they finished), \`no_speech\` (nobody
+returns the transcript as \`heard\`. \`reason\`: \`silence\` (they finished), \`turn_end\` (they finished, called by the
+owner's voice box from what they said: treat it like \`silence\`), \`no_speech\` (nobody
 spoke: \`heard\` is \`""\`), \`max\` (window full), \`ended\` (older firmware stopped early), \`error\` (the device's capture failed; \`heard\` is what was transcribed, if anything),
 \`spoken\` (\`"listen":false\`). Blocks at most ${TALK_BUDGET_MS / 1000} s; a longer turn answers \`202\` with
 \`{"job","status":"pending"}\` — finish it with \`GET /v1/jobs/<job>?wait_s=8\`.

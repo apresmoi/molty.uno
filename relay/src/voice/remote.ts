@@ -8,7 +8,8 @@
 //   relay → box  {"t":"tts.cancel","id"}
 //   relay → box  {"t":"stt.start","id","rate":16000}, pcm16 frames (s=id) as the device sends them,
 //                {"t":"stt.end","id"} | {"t":"stt.cancel","id"}
-//   box → relay  {"t":"stt.partial","id","text"}?  {"t":"stt.final","id","text","ms"?} | {"t":"stt.final","id","error"}
+//   box → relay  {"t":"stt.partial","id","text"}?  {"t":"stt.turn_end","id"}? (the human finished: end the listen now)
+//                {"t":"stt.final","id","text","ms"?} | {"t":"stt.final","id","error"}
 //
 // Every request is bound to the socket it went out on: when that socket closes
 // or is replaced, drop() fails its requests at once (`voice_box_offline`), so
@@ -17,7 +18,7 @@ import { b64urlEncode, randomBytes } from "../core/crypto.js";
 import { type AudioHeader, type JsonObject, MAX_AUDIO_PAYLOAD_BYTES, SAMPLE_RATE, encodeAudioFrame, isRecord } from "../core/protocol.js";
 import { bytesToPcm16, pcm16ToBytes } from "../core/audio.js";
 import { PcmFeed, type SynthTimer } from "../core/speech.js";
-import type { SttStream, TtsOptions, VoiceProvider } from "./types.js";
+import type { SttStream, SttStreamOptions, TtsOptions, VoiceProvider } from "./types.js";
 
 /** The socket the box is on (a DeviceSocket in the room). */
 export interface BoxChannel {
@@ -41,6 +42,8 @@ interface TtsOp {
 interface SttOp {
   ch: BoxChannel;
   settle(err: Error | undefined, text?: string): void;
+  /** stt.turn_end from the box: once, and only while the audio is still flowing. */
+  turnEnd(): void;
   ms?: JsonObject;
 }
 
@@ -138,11 +141,12 @@ export class RemoteVoiceProvider implements VoiceProvider {
     return s.end();
   }
 
-  sttStream(): SttStream & { readonly id: string; readonly boxMs: () => JsonObject | undefined } {
+  sttStream(opts: SttStreamOptions = {}): SttStream & { readonly id: string; readonly boxMs: () => JsonObject | undefined } {
     const ch = this.channel();
     const id = this.newId("s");
     let seq = 0;
     let state: "open" | "ending" | "settled" = "open";
+    let turned = false;
     let resolve!: (t: string) => void;
     let reject!: (e: Error) => void;
     const result = new Promise<string>((res, rej) => ((resolve = res), (reject = rej)));
@@ -156,6 +160,11 @@ export class RemoteVoiceProvider implements VoiceProvider {
         this.sttOps.delete(id);
         if (err) reject(err);
         else resolve(text ?? "");
+      },
+      turnEnd: () => {
+        if (state !== "open" || turned) return;
+        turned = true;
+        opts.onTurnEnd?.();
       },
     };
     this.sttOps.set(id, op);
@@ -207,6 +216,9 @@ export class RemoteVoiceProvider implements VoiceProvider {
       const op = this.ttsOps.get(id);
       if (!op || !op.ch.same(from)) return;
       op.feed.end(typeof frame.error === "string" && frame.error ? new Error(BOX_ERROR) : undefined);
+    } else if (frame.t === "stt.turn_end") {
+      const op = this.sttOps.get(id);
+      if (op && op.ch.same(from)) op.turnEnd();
     } else if (frame.t === "stt.final") {
       const op = this.sttOps.get(id);
       if (!op || !op.ch.same(from)) return;

@@ -12,8 +12,14 @@ import { DEVICE, type FakeHost, type FakeSocket, LINK, connect, makeRoom } from 
 const FAST = { cmdTimeoutMs: 300, pairWindowMs: 400, sayChunkSamples: 1600, sayLeadFrames: 2, listenGraceMs: 200, sayDoneGraceMs: 300, boxSttFinalMs: 300 };
 const NEXT = ["NEWC2345", "NEWD2345", "NEWE2345", "NEWF2345"];
 
-/** A device that answers cmds, plays say streams, and streams a listen as 3 chunks 30 ms apart, then the end frame. */
-function device(room: DeviceRoom, sock: FakeSocket) {
+/**
+ * A device that answers cmds, plays say streams, and streams a listen as `chunks` chunks
+ * 30 ms apart, then the end frame. `listen_stop {job}` (firmware with the cap) ends it at
+ * once with reason turn_end, like link_audio.c.
+ */
+function device(room: DeviceRoom, sock: FakeSocket, o: { chunks?: number } = {}) {
+  const chunks = o.chunks ?? 3;
+  let timers: ReturnType<typeof setTimeout>[] = [];
   const log: Array<{ at: number; kind: string; name?: string; args?: any }> = [];
   let codes = 0;
   const text = sock.sendText.bind(sock);
@@ -26,12 +32,20 @@ function device(room: DeviceRoom, sock: FakeSocket) {
       setTimeout(() => void room.socketMessage(sock, JSON.stringify({ t: "res", id: f.id, ok: true, result: {} })), 1);
       if (f.name === "listen") {
         const job = f.args.job;
-        const chunk = (seq: number) => encodeAudioFrame({ s: job, seq, kind: "pcm16", rate: 16000, end: false }, new Uint8Array(new Int16Array(1600).fill(4000 + seq).buffer));
-        for (let i = 0; i < 3; i++) setTimeout(() => void room.socketMessage(sock, chunk(i)), 10 + 30 * i);
-        setTimeout(() => {
-          log.push({ at: Date.now(), kind: "end" });
-          void room.socketMessage(sock, new TextEncoder().encode(JSON.stringify({ s: job, seq: 3, kind: "pcm16", rate: 16000, end: true, reason: "silence", speech_ms: 250 })));
-        }, 110);
+        let seq = 0;
+        const chunk = () => encodeAudioFrame({ s: job, seq: seq++, kind: "pcm16", rate: 16000, end: false }, new Uint8Array(new Int16Array(1600).fill(4000 + seq).buffer));
+        const end = (reason: string) => {
+          log.push({ at: Date.now(), kind: "end", name: reason });
+          void room.socketMessage(sock, new TextEncoder().encode(JSON.stringify({ s: job, seq: seq++, kind: "pcm16", rate: 16000, end: true, reason, speech_ms: 250 })));
+        };
+        timers = [];
+        for (let i = 0; i < chunks; i++) timers.push(setTimeout(() => void room.socketMessage(sock, chunk()), 10 + 30 * i));
+        timers.push(setTimeout(() => end(chunks > 3 ? "max" : "silence"), 20 + 30 * chunks));
+      }
+      if (f.name === "listen_stop") {
+        for (const t of timers) clearTimeout(t);
+        timers = [];
+        setTimeout(() => void room.socketMessage(sock, new TextEncoder().encode(JSON.stringify({ s: f.args.job, seq: 99, kind: "pcm16", rate: 16000, end: true, reason: "turn_end" }))), 2);
       }
     }
     if (f.t === "pair.request") setTimeout(() => void room.socketMessage(sock, JSON.stringify({ t: "pair.result", req: f.req, ok: true, link_code: NEXT[codes++] })), 2);
@@ -49,6 +63,9 @@ interface BoxOpts {
   silent?: boolean;
   stt?: boolean;
   tts?: boolean;
+  /** Send stt.turn_end after this many audio chunks (the box's end-of-turn); `twice` repeats it. */
+  turnEndAfter?: number;
+  twice?: boolean;
 }
 
 /** A voice box on the relay's voice socket: synthesises 3200 samples per tts, transcribes by counting the chunks it got. */
@@ -76,7 +93,12 @@ function box(room: DeviceRoom, sock: FakeSocket, o: BoxOpts = {}) {
   };
   sock.sendBinary = (b: Uint8Array) => {
     const fr = decodeAudioFrame(b)!;
-    got[fr.header.s]?.push({ at: Date.now(), bytes: fr.payload.byteLength });
+    const list = got[fr.header.s];
+    list?.push({ at: Date.now(), bytes: fr.payload.byteLength });
+    if (list && o.turnEndAfter !== undefined && list.length === o.turnEndAfter) {
+      say({ t: "stt.turn_end", id: fr.header.s });
+      if (o.twice) say({ t: "stt.turn_end", id: fr.header.s });
+    }
   };
   const hello = () => room.socketMessage(sock, JSON.stringify({ t: "voice.hello", name: "gpu box", version: "0.1.0", voices: ["a.wav", "b.wav"], stt: o.stt ?? true, tts: o.tts ?? true }));
   return { got, tts, control, hello };
@@ -98,11 +120,11 @@ async function openBox(room: DeviceRoom, host: FakeHost, token: string, o: BoxOp
   return { sock, ...b };
 }
 
-async function setup(o: { box?: BoxOpts | false; keepClosing?: boolean } = {}) {
+async function setup(o: { box?: BoxOpts | false; keepClosing?: boolean; caps?: string[]; chunks?: number } = {}) {
   const ctx = makeRoom({ timings: FAST });
   ctx.host.keepClosing = !!o.keepClosing;
-  const sock = await connect(ctx.room, ctx.host);
-  const dev = device(ctx.room, sock);
+  const sock = await connect(ctx.room, ctx.host, undefined, LINK, o.caps ? { caps: o.caps } : {});
+  const dev = device(ctx.room, sock, { chunks: o.chunks });
   const agent = await pairAs(ctx.room, LINK, "talker");
   const voice = await pairAs(ctx.room, NEXT[0], "gpu box", "voice");
   const b = o.box === false ? undefined : await openBox(ctx.room, ctx.host, voice.agent_token, o.box || {});
@@ -486,5 +508,57 @@ describe("owner voice settings (console)", () => {
     await w.room.socketMessage(w.sock, JSON.stringify({ t: "forget" }));
     expect(w.box!.sock.closed?.code).toBe(4401);
     expect(w.kv.data.has("voicecfg")).toBe(false);
+  });
+});
+
+describe("semantic end of turn (box stt.turn_end)", () => {
+  const NEW_FW = ["say", "listen", "listen_stop"];
+
+  it("firmware with listen_stop: the device is told to stop, STT finishes at once, reason turn_end", async () => {
+    const w = await setup({ caps: NEW_FW, chunks: 12, box: { turnEndAfter: 3 } });
+    const t0 = Date.now();
+    const out = await w.room.talk(w.token, { listen_ms: 8000 });
+    expect(out).toMatchObject({ ok: true, result: { heard: "box heard 3 chunks", reason: "turn_end", timings: { listen: { voice: "box", turn_end: expect.any(Number) } } } });
+    // ended at the turn, not at the device's 12-chunk window (~380 ms) nor the 8 s listen window
+    expect(Date.now() - t0).toBeLessThan(300);
+    const stops = w.dev.log.filter((l) => l.name === "listen_stop");
+    expect(stops).toHaveLength(1);
+    expect(stops[0].args).toEqual({ job: w.dev.log.find((l) => l.name === "listen")!.args.job });
+    // stt.end went out right after the turn end; the device's own late end frame changed nothing
+    const c = w.box!.control.map((f) => f.t);
+    expect(c.indexOf("stt.end")).toBeGreaterThan(c.indexOf("stt.start"));
+    expect((out as any).result.timings.listen.turn_end).toBeLessThan(250);
+    // speech_ms is not invented: the device never measured this end
+    expect((out as any).result).not.toHaveProperty("speech_ms");
+  });
+
+  it("old firmware (no listen_stop cap): no stop command, the job still ends early; late frames are dropped", async () => {
+    const w = await setup({ caps: ["say", "listen"], chunks: 12, box: { turnEndAfter: 3 } });
+    const t0 = Date.now();
+    const out = await w.room.talk(w.token, { listen_ms: 8000 });
+    expect(out).toMatchObject({ ok: true, result: { heard: "box heard 3 chunks", reason: "turn_end" } });
+    expect(Date.now() - t0).toBeLessThan(300);
+    expect(w.dev.log.filter((l) => l.name === "listen_stop")).toHaveLength(0);
+    // the device keeps recording until its own window: those frames never reach the box or a job
+    await until(() => w.dev.log.some((l) => l.kind === "end"), 1000);
+    const id = Object.keys(w.box!.got)[0];
+    expect(w.box!.got[id]).toHaveLength(3);
+    expect(w.voice.sttCalls).toHaveLength(0);
+    // and the next turn works normally
+    expect(await w.room.talk(w.token, {})).toMatchObject({ ok: true, result: { status: "done" } });
+  });
+
+  it("a repeated turn_end is acted on once", async () => {
+    const w = await setup({ caps: NEW_FW, chunks: 12, box: { turnEndAfter: 2, twice: true } });
+    expect(await w.room.talk(w.token, {})).toMatchObject({ ok: true, result: { reason: "turn_end" } });
+    expect(w.dev.log.filter((l) => l.name === "listen_stop")).toHaveLength(1);
+  });
+
+  it("without a turn end nothing changes: the device's own end frame decides", async () => {
+    const w = await setup({ caps: NEW_FW });
+    const out = await w.room.talk(w.token, {});
+    expect(out).toMatchObject({ ok: true, result: { reason: "silence", speech_ms: 250 } });
+    expect((out as any).result.timings.listen).not.toHaveProperty("turn_end");
+    expect(w.dev.log.filter((l) => l.name === "listen_stop")).toHaveLength(0);
   });
 });
