@@ -34,3 +34,5 @@ void self_update_welcomed(void);
  * the spare slot (release when done or failed); it also drops a stale arm. */
 bool self_update_ota_claim(void);
 void self_update_ota_release(void);
+/* An update or OTA is writing the spare slot (its progress owns the screen): no shake to talk. */
+bool self_update_busy(void);

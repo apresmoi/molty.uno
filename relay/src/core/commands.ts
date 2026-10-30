@@ -168,6 +168,16 @@ export interface Validated {
   args: JsonObject;
   /** say/listen are jobs: the agent gets `{job}` immediately. */
   job: boolean;
+  /** say: the human turn (an `utterance`'s turn_id) this answers (core/turns.ts); relay-only. */
+  in_reply_to?: string;
+}
+
+/** An `utterance`'s turn_id (the listen job's id): what say / talk name in `in_reply_to`. */
+const TURN_ID_RE = /^molty-[a-z2-9]{10}\.j_[A-Za-z0-9_-]{8,32}$/;
+function turnId(v: unknown): string | undefined {
+  if (v === undefined) return undefined;
+  if (typeof v !== "string" || !TURN_ID_RE.test(v)) throw invalid("in_reply_to must be an utterance's turn_id (molty-xxxxxxxxxx.j_…)");
+  return v;
 }
 
 export function validateCommand(name: unknown, rawArgs: unknown): Validated {
@@ -211,10 +221,11 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
         job: false,
       };
     case "say": {
-      only(args, ["text", "voice"]);
+      only(args, ["text", "voice", "in_reply_to"]);
       const out: JsonObject = { text: text(args.text, "text", MAX_SAY_BYTES) };
       if (args.voice !== undefined) out.voice = voiceId(args.voice);
-      return { name: n, args: out, job: true };
+      const reply = turnId(args.in_reply_to);
+      return { name: n, args: out, job: true, ...(reply !== undefined ? { in_reply_to: reply } : {}) };
     }
     case "listen": {
       only(args, ["ms", "ring_color", "ack", ...VAD_KEYS]);
@@ -256,13 +267,15 @@ export interface TalkArgs {
   ring_color?: string;
   /** The device's turn acknowledgement for this listen (ACK_CAP); absent = the human's setting. */
   ack?: AckArg;
+  /** The human turn (an `utterance`'s turn_id) this answers (core/turns.ts). */
+  in_reply_to?: string;
 }
 
-/** molty_talk / POST /v1/devices/<id>/talk: `{say?, listen? (default true), listen_ms? (0 = unlimited, 1..30000; default the device's setting, 30000 out of the box), voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?, ack?}`. */
+/** molty_talk / POST /v1/devices/<id>/talk: `{say?, listen? (default true), listen_ms? (0 = unlimited, 1..30000; default the device's setting, 30000 out of the box), voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?, ack?, in_reply_to?}`. */
 export function validateTalk(raw: unknown): TalkArgs {
   const args = raw === undefined || raw === null ? {} : raw;
   if (!isRecord(args)) throw invalid("args must be an object");
-  only(args, ["say", "listen", "listen_ms", "voice", "ring_color", "ack", ...VAD_KEYS]);
+  only(args, ["say", "listen", "listen_ms", "voice", "ring_color", "ack", "in_reply_to", ...VAD_KEYS]);
   if (args.listen !== undefined && typeof args.listen !== "boolean") throw invalid("listen must be a boolean");
   const out: TalkArgs = { listen: args.listen !== false, vad: vadArgs(args) };
   const lm = listenMs(args.listen_ms, "listen_ms");
@@ -272,6 +285,8 @@ export function validateTalk(raw: unknown): TalkArgs {
   if (args.ring_color !== undefined) out.ring_color = resolveColor(args.ring_color, "ring_color");
   const ack = ackArg(args.ack);
   if (ack !== undefined) out.ack = ack;
+  const reply = turnId(args.in_reply_to);
+  if (reply !== undefined) out.in_reply_to = reply;
   if (out.say === undefined && !out.listen) throw invalid("give say, or listen (or both)");
   return out;
 }

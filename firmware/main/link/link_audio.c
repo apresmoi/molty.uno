@@ -7,6 +7,7 @@
 #include "mole_fluid.h"
 #include "vad.h"
 #include "chirp.h"
+#include "self_update.h"
 
 #include "molty_board.h"
 #include "mole_creature.h"
@@ -18,6 +19,7 @@
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "mole_diag.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdatomic.h>
@@ -27,6 +29,7 @@ typedef struct {
     char job[LINK_STREAM_MAX]; unsigned ms; bool listen;
     bool vad; unsigned end_silence_ms, no_speech_ms;   /* listen: end-of-speech (audio/vad.h) */
     link_ack_t ack;                                     /* listen: the turn acknowledgement it allows */
+    bool pending;                                       /* listen: begun by a shake, not adopted yet */
 } audio_job_t;
 static QueueHandle_t s_jobs, s_done;
 static RingbufHandle_t s_ring;
@@ -53,6 +56,25 @@ static unsigned s_mood_gen0;                           /* link_cmd_mood_gen() wh
  * the next listen's mic never hears it. */
 static link_ack_t s_ack;
 static atomic_bool s_chirp_cut;
+
+/* Shake to talk (link_protocol.h LINK_SHAKE_ADOPT_MS). The sense task hands a shake over
+ * (link_audio_shake); the link task starts the local listen and sends the shake event naming
+ * it. The listen is PEND_WAIT until the relay adopts it (cmd listen {adopt}, link task: CAS
+ * WAIT → ADOPTED, after filling s_adopt) or declines it (cmd listen_stop: WAIT → DECLINED);
+ * the audio task gives up on its own (WAIT → DEAD) when nobody did within the adopt window
+ * or the link went down. One CAS decides each race, so an adoption either lands on a listen
+ * that will stream or is refused (listen_gone). A listen the relay started is PEND_NONE. */
+enum { PEND_NONE, PEND_WAIT, PEND_ADOPTED, PEND_DECLINED, PEND_DEAD };
+static atomic_int s_pend;
+typedef struct {
+    char job[LINK_STREAM_MAX]; uint32_t rec_ms;
+    bool vad; unsigned end_silence_ms, no_speech_ms; link_ack_t ack;
+} adopt_t;
+static adopt_t s_adopt;                               /* written before WAIT → ADOPTED */
+static atomic_bool s_relay_adopts;                    /* the relay's welcome lists listen_adopt */
+static atomic_bool s_shake_req;                       /* a shake handed over by the sense task */
+static double s_shake_peak; static int s_shake_rev; static unsigned s_shake_ms;   /* before s_shake_req */
+static unsigned s_shake_n;                            /* local listen ids: shake-<n> */
 
 /* say word cues (cap say_cues): word i of the text is spoken from sample s_cue[i] of the
  * stream (UINT32_MAX = not cued yet), filled from the frames' headers; the play loop
@@ -140,88 +162,157 @@ static esp_err_t send_frame(uint8_t *frame, link_frame_t *h, const int16_t *pcm,
     return e;
 }
 
+/* What record() carries from one mic chunk to the next. */
+typedef struct {
+    uint8_t *frame; int16_t *acc;
+    size_t have, done, total;               /* samples in acc; recorded; the window */
+    vad_t vad; vad_verdict_t verdict;
+    link_frame_t h;
+} rec_t;
+
+/* One chunk of the listen: into the frame being filled, through the VAD, and the frame goes
+ * up when full or when the VAD (or the window) ended the listen — the end frame carrying
+ * {reason, speech_ms?}. */
+static esp_err_t rec_take(rec_t *r, const int16_t *pcm, size_t got)
+{
+    if (got > r->total - r->done) got = r->total - r->done;
+    if (got > REC_FRAME_SAMPLES - r->have) got = REC_FRAME_SAMPLES - r->have;
+    memcpy(r->acc + r->have, pcm, got * 2);
+    r->have += got; r->done += got;
+    r->verdict = vad_feed(&r->vad, pcm, got);
+    mole_fluid_listen_level(vad_level(&r->vad));   /* ~10 Hz: the ring swells with the voice */
+    if (r->verdict == VAD_CONTINUE && r->done == r->total) r->verdict = VAD_END_MAX;   /* window < one VAD frame */
+    if (r->have < REC_FRAME_SAMPLES && r->verdict == VAD_CONTINUE) return ESP_OK;
+    r->h.end = r->verdict != VAD_CONTINUE;
+    if (r->h.end) {
+        s_end_reason = vad_reason(r->verdict); s_speech_ms = r->vad.speech_ms;
+        r->h.reason = s_end_reason; r->h.speech_ms = s_speech_ms;
+        /* VAD off / ended inside calibration: no measurement, so no speech_ms
+         * (a 0 would make the relay treat real speech as silence) */
+        r->h.speech_known = vad_speech_known(&r->vad);
+    }
+    esp_err_t e = send_frame(r->frame, &r->h, r->acc, r->have);
+    r->have = 0;
+    return e;
+}
+
+static void rec_vad(rec_t *r, bool on, uint32_t ms, unsigned end_silence_ms, unsigned no_speech_ms)
+{
+    vad_cfg_t vc = VAD_CFG_DEFAULT;
+    vc.enabled = on; vc.max_ms = ms;
+    vc.end_silence_ms = end_silence_ms; vc.no_speech_ms = no_speech_ms;
+    vad_init(&r->vad, &vc);
+    /* 16 samples per ms, in 32 bits as on the S3: never 16000 * ms first (it wraps past
+     * ~268 s, and an unlimited listen runs 300 s) */
+    r->total = 16u * ms;
+}
+
 /* The listen ends at the first of: end of speech (vad.h: ~end_silence_ms of silence
  * after speech), nobody speaking by no_speech_ms, the `ms` window, or the relay's
  * `listen_stop` (its reason, "turn_end" or "no_speech", within one 100 ms chunk). Either way the
  * last frame carries end:true plus {reason, speech_ms}, so the relay starts STT at
  * once instead of after the full window. speech_ms is left out when it was never
- * measured (vad:false, or a listen shorter than VAD calibration). */
+ * measured (vad:false, or a listen shorter than VAD calibration).
+ * A shake's listen (job->pending) records into `pre` and sends nothing until the relay adopts
+ * it: then it takes the relay's job id, window, end-of-turn and acknowledgement, the audio so
+ * far replays through them (frames go up at once), and it carries on as any listen. Declined,
+ * not adopted within LINK_SHAKE_ADOPT_MS of audio, or the link gone: it ends quietly
+ * ("unclaimed": no frame, no acknowledgement). */
 static esp_err_t record(const audio_job_t *job)
 {
     _Static_assert(LINK_HEADER_MAX + 1 + REC_FRAME_SAMPLES * 2 <= LINK_MESSAGE_MAX, "uplink frame too big");
     _Static_assert(REC_FRAME_SAMPLES % REC_CHUNK_SAMPLES == 0, "chunks fill frames exactly");
-    /* 16 samples per ms, in 32 bits as on the S3: never 16000 * ms first (it wraps past
-     * ~268 s, and an unlimited listen runs 300 s) */
-    const uint32_t total = 16u * (uint32_t)job->ms;
-    vad_cfg_t vc = VAD_CFG_DEFAULT;
-    vc.enabled = job->vad; vc.max_ms = job->ms;
-    vc.end_silence_ms = job->end_silence_ms; vc.no_speech_ms = job->no_speech_ms;
-    vad_t vad;
-    vad_init(&vad, &vc);
-    vad_verdict_t verdict = VAD_CONTINUE;
+    _Static_assert((16u * LINK_SHAKE_ADOPT_MS) % REC_CHUNK_SAMPLES == 0, "the adopt window is whole chunks");
+    rec_t r = { .verdict = VAD_CONTINUE };
+    rec_vad(&r, job->vad, job->ms, job->end_silence_ms, job->no_speech_ms);
+    link_ack_t ack = job->ack;
+    bool pending = job->pending, unclaimed = false;
+    const size_t pre_max = 16u * LINK_SHAKE_ADOPT_MS;
+    size_t pre_n = 0;
     s_end_reason = "error"; s_speech_ms = 0;
-    uint8_t *frame = heap_caps_malloc(LINK_MESSAGE_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    int16_t *acc = heap_caps_malloc(REC_FRAME_SAMPLES * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    r.frame = heap_caps_malloc(LINK_MESSAGE_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    r.acc = heap_caps_malloc(REC_FRAME_SAMPLES * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     int16_t *chunk = heap_caps_malloc(REC_CHUNK_SAMPLES * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    esp_err_t e = frame && acc && chunk ? ESP_OK : ESP_ERR_NO_MEM;
+    int16_t *pre = pending ? heap_caps_malloc(pre_max * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) : NULL;
+    esp_err_t e = r.frame && r.acc && chunk && (!pending || pre) ? ESP_OK : ESP_ERR_NO_MEM;
     if (e == ESP_OK) e = molty_mic_stream_start(16000, REC_CHUNK_MS, 8);
     bool streaming = e == ESP_OK;
     if (streaming) mole_fluid_listen(true);   /* the screen's listening ring, while the mic records */
-    link_frame_t h = {0}; strcpy(h.stream, job->job);
-    size_t done = 0, have = 0;
-    while (e == ESP_OK && verdict == VAD_CONTINUE) {
-        if (atomic_load(&s_cancel)) { e = ESP_ERR_INVALID_STATE; break; }
-        const int stop = atomic_load(&s_stop);
-        if (stop != STOP_NONE) {
-            /* the relay's end of the listen: what is buffered goes out as the final frame, with
-             * the relay's reason — no_speech is acknowledged like the device's own (no chirp) */
-            s_end_reason = stop == STOP_NO_SPEECH ? "no_speech" : "turn_end"; s_speech_ms = vad.speech_ms;
-            h.end = true; h.reason = s_end_reason; h.speech_ms = s_speech_ms; h.speech_known = vad_speech_known(&vad);
-            e = send_frame(frame, &h, acc, have);
-            have = 0;
-            break;
+    strcpy(r.h.stream, job->job);
+    while (e == ESP_OK && r.verdict == VAD_CONTINUE) {
+        if (atomic_load(&s_cancel)) {
+            int w = PEND_WAIT;
+            if (pending && atomic_compare_exchange_strong(&s_pend, &w, PEND_DEAD)) unclaimed = true;   /* link down */
+            e = ESP_ERR_INVALID_STATE; break;
+        }
+        if (pending) {
+            int st = atomic_load(&s_pend);
+            if (st == PEND_WAIT && pre_n >= pre_max) {
+                int w = PEND_WAIT;   /* nobody adopted it in time; an adoption racing this one wins */
+                if (atomic_compare_exchange_strong(&s_pend, &w, PEND_DEAD)) st = PEND_DEAD;
+                else st = w;
+            }
+            if (st == PEND_DECLINED || st == PEND_DEAD) {
+                unclaimed = true; s_end_reason = st == PEND_DECLINED ? "declined" : "unclaimed";
+                break;
+            }
+            if (st == PEND_ADOPTED) {
+                /* the relay's listen from here: its id, window, end of turn and acknowledgement,
+                 * as if it had begun with them — the audio so far replays through them */
+                pending = false;
+                strcpy(r.h.stream, s_adopt.job);
+                ack = s_adopt.ack;
+                rec_vad(&r, s_adopt.vad, s_adopt.rec_ms, s_adopt.end_silence_ms, s_adopt.no_speech_ms);
+                for (size_t at = 0; at < pre_n && e == ESP_OK && r.verdict == VAD_CONTINUE; at += REC_CHUNK_SAMPLES)
+                    e = rec_take(&r, pre + at, pre_n - at < REC_CHUNK_SAMPLES ? pre_n - at : REC_CHUNK_SAMPLES);
+                continue;
+            }
+        } else {
+            const int stop = atomic_load(&s_stop);
+            if (stop != STOP_NONE) {
+                /* the relay's end of the listen: what is buffered goes out as the final frame, with
+                 * the relay's reason — no_speech is acknowledged like the device's own (no chirp) */
+                s_end_reason = stop == STOP_NO_SPEECH ? "no_speech" : "turn_end"; s_speech_ms = r.vad.speech_ms;
+                r.h.end = true; r.h.reason = s_end_reason; r.h.speech_ms = s_speech_ms; r.h.speech_known = vad_speech_known(&r.vad);
+                e = send_frame(r.frame, &r.h, r.acc, r.have);
+                r.have = 0;
+                break;
+            }
         }
         size_t got = 0;
         e = molty_mic_stream_read(chunk, REC_CHUNK_SAMPLES, &got);
         if (e != ESP_OK) break;
         if (!got) { e = ESP_ERR_TIMEOUT; break; }
-        if (got > total - done) got = total - done;
-        if (got > REC_FRAME_SAMPLES - have) got = REC_FRAME_SAMPLES - have;
-        memcpy(acc + have, chunk, got * 2);
-        have += got; done += got;
-        verdict = vad_feed(&vad, chunk, got);
-        mole_fluid_listen_level(vad_level(&vad));   /* ~10 Hz: the ring swells with the voice */
-        if (verdict == VAD_CONTINUE && done == total) verdict = VAD_END_MAX;   /* window < one VAD frame */
-        if (have == REC_FRAME_SAMPLES || verdict != VAD_CONTINUE) {
-            h.end = verdict != VAD_CONTINUE;
-            if (h.end) {
-                s_end_reason = vad_reason(verdict); s_speech_ms = vad.speech_ms;
-                h.reason = s_end_reason; h.speech_ms = s_speech_ms;
-                /* VAD off / ended inside calibration: no measurement, so no speech_ms
-                 * (a 0 would make the relay treat real speech as silence) */
-                h.speech_known = vad_speech_known(&vad);
-            }
-            e = send_frame(frame, &h, acc, have);
-            have = 0;
+        if (pending) {
+            /* kept for the relay; the VAD only drives the ring here (its verdict waits for the
+             * relay's settings) */
+            if (got > pre_max - pre_n) got = pre_max - pre_n;
+            memcpy(pre + pre_n, chunk, got * 2); pre_n += got;
+            vad_feed(&r.vad, chunk, got);
+            mole_fluid_listen_level(vad_level(&r.vad));
+            continue;
         }
+        e = rec_take(&r, chunk, got);
     }
     /* stop the mic as soon as the listen is over: the creature leaves `listening` and
      * the relay is already transcribing */
     if (streaming) { molty_mic_stream_stop(); mole_fluid_listen(false); }
-    if (e != ESP_OK) s_end_reason = "error";
+    if (unclaimed) { if (s_end_reason[0] == 'e') s_end_reason = "unclaimed"; e = ESP_OK; }
+    else if (e != ESP_OK) s_end_reason = "error";
     /* heard speech and nobody else took the screen meanwhile (an explicit mood, an ask, an
      * update screen, a pairing): acknowledge it — decided now, before the relay or an agent
-     * could react to the end frame */
-    s_ack = link_ack_decide(job->ack, s_end_reason, vad_speech_known(&vad), s_speech_ms,
-                            link_cmd_mood_gen() != s_mood_gen0 || link_ask_pending() || link_pair_active(),
-                            molty_board_has(MOLTY_CAP_SPEAKER));
+     * could react to the end frame. A listen nobody adopted ("unclaimed" / "declined") is no
+     * heard reason: it acknowledges nothing. */
+    s_ack = link_ack_decide(ack, s_end_reason, vad_speech_known(&r.vad), s_speech_ms,
+                          link_cmd_mood_gen() != s_mood_gen0 || link_ask_pending() || link_pair_active(),
+                          molty_board_has(MOLTY_CAP_SPEAKER));
     /* Fail fast: an end-only frame tells the relay the stream is over instead of
      * leaving it to time out into no_audio ms + 5 s later. */
-    if (e != ESP_OK && !atomic_load(&s_cancel) && frame && link_client_connected()) {
-        h.end = true; h.reason = "error"; h.speech_ms = vad.speech_ms; h.speech_known = vad_speech_known(&vad);
-        send_frame(frame, &h, NULL, 0);
+    if (e != ESP_OK && !atomic_load(&s_cancel) && r.frame && link_client_connected()) {
+        r.h.end = true; r.h.reason = "error"; r.h.speech_ms = r.vad.speech_ms; r.h.speech_known = vad_speech_known(&r.vad);
+        send_frame(r.frame, &r.h, NULL, 0);
     }
-    heap_caps_free(chunk); heap_caps_free(acc); heap_caps_free(frame);
+    heap_caps_free(pre); heap_caps_free(chunk); heap_caps_free(r.acc); heap_caps_free(r.frame);
     return e;
 }
 
@@ -297,10 +388,27 @@ esp_err_t link_audio_init(void)
                                            MALLOC_CAP_SPIRAM) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
+/* The job's bookkeeping, then the audio task gets it. */
+static void begin(const audio_job_t *job, bool cued)
+{
+    strcpy(s_job, job->job);
+    s_mood_gen0 = link_cmd_mood_gen();   /* after our own listening/speaking mood */
+    s_seq = 0; s_stat_frames = 0; s_stat_bytes = 0; s_busy = true; s_listen = job->listen; s_last_frame = esp_timer_get_time();
+    s_cued = cued; s_cue_next = 0;
+    atomic_store(&s_end, false); atomic_store(&s_cancel, false); atomic_store(&s_stop, STOP_NONE);
+    atomic_store(&s_pend, job->pending ? PEND_WAIT : PEND_NONE);
+    atomic_store(&s_chirp_cut, true);    /* a chirp still playing ends now: this job is next */
+    xQueueSend(s_jobs, job, 0);
+}
+
+static esp_err_t adopt(const cJSON *args, const cJSON *local, cJSON **out);
+
 static esp_err_t start(const cJSON *args, bool listen, cJSON **out)
 {
     /* no mic / no speaker on this board: "unsupported", before any mood or text change */
     if (!molty_board_has(listen ? MOLTY_CAP_MIC : MOLTY_CAP_SPEAKER)) return ESP_ERR_NOT_SUPPORTED;
+    const cJSON *local = listen ? cJSON_GetObjectItemCaseSensitive(args, "adopt") : NULL;
+    if (local) return adopt(args, local, out);
     if (s_busy) return ESP_ERR_INVALID_STATE;
     cJSON *j = cJSON_GetObjectItemCaseSensitive(args, "job");
     cJSON *ms = cJSON_GetObjectItemCaseSensitive(args, "ms");
@@ -351,23 +459,106 @@ static esp_err_t start(const cJSON *args, bool listen, cJSON **out)
     link_ask_cancel();   /* say / listen, once accepted, take the screen from a pending question */
     audio_job_t job = {.listen = listen, .ms = listen ? (unsigned)rec_ms : (unsigned)ms->valueint,
                        .vad = vad, .end_silence_ms = end_silence_ms, .no_speech_ms = no_speech_ms, .ack = ack};
-    strcpy(job.job, j->valuestring); strcpy(s_job, job.job);
-    s_mood_gen0 = link_cmd_mood_gen();   /* after our own listening/speaking mood */
-    s_seq = 0; s_stat_frames = 0; s_stat_bytes = 0; s_busy = true; s_listen = listen; s_last_frame = esp_timer_get_time();
-    s_cued = cued; s_cue_next = 0;
-    atomic_store(&s_end, false); atomic_store(&s_cancel, false); atomic_store(&s_stop, STOP_NONE);
-    atomic_store(&s_chirp_cut, true);    /* a chirp still playing ends now: this job is next */
-    xQueueSend(s_jobs, &job, 0);
+    strcpy(job.job, j->valuestring);
+    begin(&job, cued);
     *out = result;
     return ESP_OK;
 }
+
+/* cmd listen {job, adopt: <local id>, rate, ms?, vad?, end_silence_ms?, no_speech_ms?, ack?}:
+ * the relay takes the shake's listen as its job `job` (link_protocol.h "Shake to talk"). The
+ * args are checked as a listen's (ring_color too, though the ring is already up: ignored);
+ * `ms` absent = the setting, counted from when the shake began. Refused "listen_gone" when that
+ * listen is not waiting any more (ended, declined, or another job), never "busy". Answers
+ * like a listen: {job, ms, ack}. */
+static esp_err_t adopt(const cJSON *args, const cJSON *local, cJSON **out)
+{
+    cJSON *j = cJSON_GetObjectItemCaseSensitive(args, "job");
+    cJSON *rate = cJSON_GetObjectItemCaseSensitive(args, "rate");
+    if (!cJSON_IsString(local) || !local->valuestring[0]) return ESP_ERR_INVALID_ARG;
+    if (!cJSON_IsString(j) || !j->valuestring[0] || strlen(j->valuestring) >= sizeof(s_job)) return ESP_ERR_INVALID_ARG;
+    if (!cJSON_IsNumber(rate) || rate->valuedouble != 16000) return ESP_ERR_INVALID_ARG;
+    adopt_t a = {0};
+    uint32_t window = 0;
+    if (!link_listen_window(args, mole_fluid_listen_window(), &window, &a.rec_ms)) return ESP_ERR_INVALID_ARG;
+    const vad_cfg_t vad_def = VAD_CFG_DEFAULT;
+    a.vad = vad_def.enabled; a.end_silence_ms = vad_def.end_silence_ms; a.no_speech_ms = vad_def.no_speech_ms;
+    if (!link_listen_args(args, &a.vad, &a.end_silence_ms, &a.no_speech_ms)) return ESP_ERR_INVALID_ARG;
+    int32_t ring = -1;
+    if (!link_color_arg(args, "ring_color", &ring)) return ESP_ERR_INVALID_ARG;
+    if (!link_ack_arg(args, (link_ack_t)mole_fluid_ack_mode(), &a.ack)) return ESP_ERR_INVALID_ARG;
+    if (!(s_busy && s_listen && !strcmp(local->valuestring, s_job) && atomic_load(&s_pend) == PEND_WAIT))
+        return link_cmd_refuse("listen_gone");
+    cJSON *result = cJSON_CreateObject();
+    if (!result) return ESP_ERR_NO_MEM;
+    strcpy(a.job, j->valuestring);
+    s_adopt = a;                          /* before the CAS: the audio task reads it after ADOPTED */
+    int w = PEND_WAIT;
+    if (!atomic_compare_exchange_strong(&s_pend, &w, PEND_ADOPTED)) { cJSON_Delete(result); return link_cmd_refuse("listen_gone"); }
+    strcpy(s_job, a.job);                 /* listen_stop / diag name the relay's job from now on */
+    cJSON_AddStringToObject(result, "job", a.job);
+    cJSON_AddNumberToObject(result, "ms", window);
+    cJSON_AddStringToObject(result, "ack", link_ack_name(a.ack));
+    *out = result;
+    return ESP_OK;
+}
+
+/* No other owner of the speaker, mic or screen, a relay that adopts, a link that is up. */
+static bool shake_talk_ok(void)
+{
+    return atomic_load(&s_relay_adopts) && link_client_connected() && !s_busy &&
+           !link_ask_pending() && !link_pair_active() && !self_update_busy();
+}
+
+/* The shake's own listen, at once: the listening mood and ring, the device's window and
+ * acknowledgement settings; nothing goes up until the relay adopts it. */
+static esp_err_t local_listen(char id[LINK_STREAM_MAX])
+{
+    audio_job_t job = {.listen = true, .pending = true, .ack = (link_ack_t)mole_fluid_ack_mode()};
+    const uint32_t w = mole_fluid_listen_window();
+    job.ms = w == LINK_LISTEN_UNLIMITED ? LINK_LISTEN_CEILING_MS : link_listen_setting_ok(w) ? w : LINK_LISTEN_DEFAULT_MS;
+    const vad_cfg_t vad_def = VAD_CFG_DEFAULT;
+    job.vad = vad_def.enabled; job.end_silence_ms = vad_def.end_silence_ms; job.no_speech_ms = vad_def.no_speech_ms;
+    mole_fluid_listen_color(-1);
+    esp_err_t e = link_cmd_mood("listening", -1);
+    if (e != ESP_OK) return e;
+    link_ask_cancel();
+    snprintf(job.job, sizeof(job.job), "shake-%u", ++s_shake_n);
+    strcpy(id, job.job);
+    begin(&job, false);
+    return ESP_OK;
+}
+
+/* Link task: the shake the sense task handed over → its listen (when nothing else owns the
+ * device) and the shake event, naming that listen. */
+static void shake_talk(void)
+{
+    char id[LINK_STREAM_MAX] = "";
+    if (shake_talk_ok() && local_listen(id) != ESP_OK) id[0] = 0;
+    mole_diag_event(false, "sense.shake talk=%s", id[0] ? id : "no");
+    if (!link_client_connected()) return;
+    cJSON *j = link_evt_shake_frame(s_shake_peak, s_shake_rev, s_shake_ms, id[0] ? id : NULL);
+    if (j) link_send_json(j);
+    cJSON_Delete(j);
+}
+
+bool link_audio_shake(double peak_g, int reversals, unsigned ms)
+{
+    if (!s_jobs || !molty_board_has(MOLTY_CAP_MIC) || !mole_fluid_shake_talk()) return false;
+    s_shake_peak = peak_g; s_shake_rev = reversals; s_shake_ms = ms;
+    atomic_store(&s_shake_req, true);
+    return true;
+}
+
+void link_audio_relay_adopts(bool on) { atomic_store(&s_relay_adopts, on); }
 
 esp_err_t link_audio_say(const cJSON *args, cJSON **out) { return start(args, false, out); }
 esp_err_t link_audio_listen(const cJSON *args, cJSON **out) { return start(args, true, out); }
 
 /* cmd listen_stop {job, reason?}: ends THAT listen early with `reason` — "turn_end" (the
  * default: the human finished; acknowledged) or "no_speech" (nobody spoke; never
- * acknowledged: no chirp, no thinking); any other reason is refused. Never touches a say,
+ * acknowledged: no chirp, no thinking); any other reason is refused. Naming a shake's listen
+ * still waiting to be adopted (its local id) declines it: it ends quietly, whatever the reason. Never touches a say,
  * and never cancels: the frames recorded so far still go up, ending with end:true. A job
  * that is not the running listen (already ended, or another job) is answered
  * {stopping:false} — the relay sends it fire-and-forget and may race the device's own end. */
@@ -380,7 +571,10 @@ esp_err_t link_audio_listen_stop(const cJSON *args, cJSON **out)
     if (r && cJSON_IsString(r) && !strcmp(r->valuestring, "no_speech")) why = STOP_NO_SPEECH;
     else if (r && !(cJSON_IsString(r) && !strcmp(r->valuestring, "turn_end"))) return ESP_ERR_INVALID_ARG;
     bool mine = s_busy && s_listen && !strcmp(j->valuestring, s_job);
-    if (mine) atomic_store(&s_stop, why);
+    int w = PEND_WAIT;
+    /* a shake's listen the relay will not adopt (any reason): it ends quietly */
+    if (mine && atomic_load(&s_pend) == PEND_WAIT) mine = atomic_compare_exchange_strong(&s_pend, &w, PEND_DECLINED);
+    else if (mine) atomic_store(&s_stop, why);
     cJSON *result = cJSON_CreateObject();
     if (!result) return ESP_ERR_NO_MEM;
     cJSON_AddStringToObject(result, "job", j->valuestring);
@@ -410,6 +604,7 @@ esp_err_t link_audio_receive(const void *data, size_t len)
 
 void link_audio_tick(void)
 {
+    if (atomic_exchange(&s_shake_req, false)) shake_talk();
     if (!s_busy) return;
     if (!s_listen && esp_timer_get_time() - s_last_frame > 30000000) link_audio_cancel();
     esp_err_t e;

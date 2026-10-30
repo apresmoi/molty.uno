@@ -35,12 +35,12 @@ describe("GET /skill.md", () => {
     for (const fact of ["pair_id", "agent_token", "wait_s", "120 s", "Authorization: Bearer", "audio_busy", "secret"]) expect(md).toContain(fact);
     // events: every receive mode, the signature contract, the honest limit, hold_s
     for (const fact of ["https://r/v1/devices/<id>/events?wait_s=0..25", "https://r/v1/webhook", "Molty-Signature: t=<unix ms>,v2=<hex hmac_sha256(secret, t \\n METHOD \\n path?query \\n body)>", "molty events", "--exec", "{{event.data.<field>}}", "nothing can wake an agent", "hold_s"]) expect(md).toContain(fact);
-    for (const t of ["shake", "tap", "button", "answer"]) expect(md).toContain(`| \`${t}\` |`);
+    for (const t of ["shake", "tap", "button", "answer", "utterance"]) expect(md).toContain(`| \`${t}\` |`);
     // ask: the endpoint, the label limit stated from the constant, layouts, null answers, ask vs talk
     for (const fact of ["https://r/v1/devices/molty-xxxxxxxxxx/ask", `1–${MAX_ASK_LABEL} characters each`, "one centred button", "pie slices", "`timeout`", "`cancelled`", "`offline`", "use **talk** when you"]) expect(md).toContain(fact);
 
     // colours: the option object, every palette name, the defaults, meaningful use; ring_color on talk/listen
-    for (const fact of ['{"label": "yes", "color": "green"}', "green, red, amber, blue, violet, pink, cyan, white", '`"#rrggbb"`', "green, red, amber, blue, violet by position", "green yes, red no", '"ring_color"?: c', '"ring_color"?, "ack"?}']) expect(md).toContain(fact);
+    for (const fact of ['{"label": "yes", "color": "green"}', "green, red, amber, blue, violet, pink, cyan, white", '`"#rrggbb"`', "green, red, amber, blue, violet by position", "green yes, red no", '"ring_color"?: c', '"ring_color"?, "ack"?, "in_reply_to"?}']) expect(md).toContain(fact);
     // the turn acknowledgement: the device does it, so agents answer straight away; long work still acks
     for (const fact of ['"ack"?: true\\|false\\|"silent"', "Molty acknowledges the turn itself", "go straight to your answer", "Never leave the human in silence", '`"ack": false`', "30 s"]) expect(md).toContain(fact);
     // updates: the trigger, the one call, ask-before-update, the error and the passive notice
@@ -68,10 +68,34 @@ describe("skill v9 rules", () => {
     const ev = TOOLS.find((t) => t.name === "molty_events")!;
     expect(ev.description).toMatch(/never an answer/);
   });
-  it("a broken listen is an error; after a wake, no_speech gets a reaction", () => {
+  it("a broken listen is an error; after a wake, no_speech gets one short line or nothing", () => {
     expect(md).toMatch(/A listen that broke is an error, never `no_speech`/);
     expect(md).toMatch(/`listen_failed`/);
-    expect(md).toMatch(/After a wake, never answer `no_speech` with silence/);
+    expect(md).toMatch(/After a wake, meet `no_speech` with one short line or nothing — never a burst/);
     expect(md).toContain(`{"say":"I'm here.","listen":false}`);
+  });
+});
+
+describe("skill v11 rules: shake to talk, talking fast", () => {
+  const md = skillMarkdown("https://relay.example.dev");
+  it("a shake means the human wants to talk: answer the utterance, not the shake", () => {
+    expect(md).toContain('a shake means "I want to talk"');
+    expect(md).not.toContain("A shake or tap is a nudge, not a");
+    expect(md).toMatch(/\*\*don't react to it\*\*, the `utterance` follows/);
+    expect(md).toContain('`molty_talk {"say": "<your answer>", "in_reply_to": "<turn_id>"}`');
+    expect(md).toMatch(/nothing at all when nobody spoke/);
+  });
+  it("the first answer claims the turn; others get turn_claimed", () => {
+    expect(md).toMatch(/The first agent to answer a turn claims it/);
+    expect(md).toContain("`409 turn_claimed`");
+    expect(md).toContain("`timings.turn` `{id, reply, first_audio}`");
+  });
+  it("talking fast: payload first, fast model, short first sentence, warm session, caps", () => {
+    for (const fact of ["Act on the event payload directly", "no lock files", "fastest model for conversation", "say one short line first", "Short first sentence", "Keep a warm session", "Check `relay.caps`, not versions"]) expect(md).toContain(fact);
+  });
+  it("webhook placeholders nest and an utterance-only webhook carries everything", () => {
+    expect(md).toContain("{{event.data.ms.speech}}");
+    expect(md).toContain('"events":["utterance"]');
+    expect(md).toMatch(/never speak while the human talks/);
   });
 });

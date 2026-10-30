@@ -71,6 +71,8 @@ esp_err_t link_audio_init(void) { return ESP_OK; }
 esp_err_t link_pair_init(void) { return ESP_OK; }
 void link_cmd_init(void) {}
 void link_audio_cancel(void) {}
+static bool relay_adopts;
+void link_audio_relay_adopts(bool on) { relay_adopts=on; }
 void link_pair_cancel(void) {}
 void link_audio_tick(void) {}
 /* link_ask.c: ticked every loop, its question cancelled whenever the session goes */
@@ -163,6 +165,7 @@ int main(void) {
     /* every disconnect ended the question, with the link already marked down (no event) */
     assert(ask_ticks>0 && ask_cancels>0 && !ask_cancels_connected);
     assert(welcomes>0);
+    assert(!relay_adopts);   /* a welcome without listen_adopt: no shake to talk */
     assert(!strcmp(error_code(LINK_CMD_REFUSED),"bad_url") && !strcmp(error_code(ESP_ERR_INVALID_STATE),"busy"));
     puts("LINK CLIENT PASS: code update without reconnect, forget ack/timeout/offline, close codes, 5-minute auth retry, API status, welcome → self-update, refusal codes");
 }

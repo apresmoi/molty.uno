@@ -95,6 +95,13 @@ static bool ask_pending;             /* link_ask.c: a question on screen */
 bool link_ask_pending(void) { return ask_pending; }
 static int ack_setting = LINK_ACK_CHIRP;   /* the console's acknowledgement setting (mole_fluid.c, NVS) */
 int mole_fluid_ack_mode(void) { return ack_setting; }
+/* shake to talk: the console's setting (mole_fluid.c, NVS), an update writing the spare slot
+ * (self_update.c), and link_cmd.c's refusal codes */
+static bool shake_setting = true, update_busy;
+bool mole_fluid_shake_talk(void) { return shake_setting; }
+bool self_update_busy(void) { return update_busy; }
+static const char *refused;
+esp_err_t link_cmd_refuse(const char *code) { refused=code; return LINK_CMD_REFUSED; }
 esp_err_t link_ui_set_text(const char *text,int len) { assert(len>=0 && len<=4096); memcpy(sdk_text,text,len+1); return ESP_OK; }
 
 static cJSON *say_args(void) { return cJSON_Parse("{\"job\":\"molty-abcdefghij.j_1\",\"text\":\"hello world\",\"ms\":640,\"rate\":16000}"); }
@@ -574,9 +581,121 @@ static void test_say_cues(void) {
     assert(receive_cued(0,false,"[[0]]")==ESP_ERR_INVALID_ARG);
     complete(play()); assert(cue_ends==1 && !link_audio_busy());
 }
+
+/* Shake to talk: the shake starts a listen at once, on the device (mood listening, ring up);
+ * the shake event names it; nothing goes up until the relay adopts it — then the relay's job
+ * id, window and end-of-turn rule apply from the shake's first sample (what was recorded
+ * replays first). Declined, never adopted, or the link gone: it ends quietly. Never over
+ * another owner (say/listen, a question, a pairing, an update), never with the setting off,
+ * never with a relay that does not adopt. */
+#define RELAY_JOB "molty-abcdefghij.j_shake01"
+static int adopt_at = -1, decline_at = -1, cancel_at = -1, stop_at = -1; static const char *adopt_args;
+static esp_err_t adopt_e; static char adopt_ack[16]; static double adopt_ms;
+static void shake_fill(int16_t *buf,size_t n,unsigned chunk) {
+    speech_fill(buf,n,chunk);
+    if ((int)chunk==adopt_at) {
+        char a[256]; snprintf(a,sizeof(a),"{\"job\":\"" RELAY_JOB "\",\"rate\":16000,\"adopt\":\"shake-%u\"%s}",s_shake_n,adopt_args?adopt_args:"");
+        cJSON *args=cJSON_Parse(a),*res=NULL;
+        adopt_e=link_audio_listen(args,&res); cJSON_Delete(args);
+        if (res) { snprintf(adopt_ack,sizeof(adopt_ack),"%s",cJSON_GetObjectItem(res,"ack")->valuestring); adopt_ms=cJSON_GetObjectItem(res,"ms")->valuedouble; }
+        cJSON_Delete(res);
+    }
+    if ((int)chunk==decline_at) { char id[24]; snprintf(id,sizeof(id),"shake-%u",s_shake_n); assert(stop_cmd(id)); }
+    if ((int)chunk==cancel_at) link_audio_cancel();
+    if ((int)chunk==stop_at) assert(stop_cmd(RELAY_JOB));   /* the relay's end of turn, by its own job id */
+}
+/* a shake handed over → the link task's tick: the shake event it sent, and the listen it queued */
+static bool shake(audio_job_t *job) {
+    unsigned before=sent;
+    if (!link_audio_shake(2.4,5,900)) return false;
+    link_audio_tick();
+    assert(sent==before+1 && !strcmp(field("t"),"evt") && !strcmp(field("name"),"shake"));
+    cJSON *d=cJSON_GetObjectItem(sdk_sent,"data"), *l=cJSON_GetObjectItem(d,"listen");
+    assert(cJSON_GetObjectItem(d,"peak_g")->valuedouble==2.4 && cJSON_GetObjectItem(d,"reversals")->valueint==5);
+    bin_frames=bin_bytes=bin_ends=bin_seq=0; bin_reason[0]=0; bin_speech_ms=-1;
+    if (!l) { assert(xQueueReceive(s_jobs,job,0)!=pdTRUE); return true; }
+    char id[24]; snprintf(id,sizeof(id),"shake-%u",s_shake_n);
+    assert(cJSON_IsString(l) && !strcmp(l->valuestring,id));
+    assert(xQueueReceive(s_jobs,job,0)==pdTRUE && job->listen && job->pending && !strcmp(job->job,id));
+    assert(link_audio_busy() && !strcmp(sdk_mood,"listening") && ring_color==-1);
+    return true;
+}
+static bool talked(void) { return cJSON_GetObjectItem(cJSON_GetObjectItem(sdk_sent,"data"),"listen")!=NULL; }
+static void shake_run(audio_job_t *job,int adopt,const char *args) {
+    adopt_at=adopt; adopt_args=args; adopt_e=-99; adopt_ack[0]=0; sdk_rx_chunks=0; sdk_rx_fill=shake_fill;
+    complete(record(job)); sdk_rx_fill=NULL; adopt_at=decline_at=cancel_at=stop_at=-1; adopt_args=NULL;
+}
+static void test_shake_talk(void) {
+    audio_job_t job;
+    link_audio_relay_adopts(true);
+    /* adopted after 5 chunks (500 ms) with semantic end of turn (vad:false): the relay's job id
+     * on every frame, every sample from the shake on (21 chunks read = 21 chunks up: the first
+     * 5 replayed), ended by the relay's listen_stop on ITS job id → turn_end, acknowledged */
+    listen_setting=5000;
+    assert(shake(&job) && talked());
+    unsigned b=sent;
+    stop_at=20; shake_run(&job,5,",\"vad\":false");
+    assert(adopt_e==ESP_OK && !strcmp(adopt_ack,"chirp") && adopt_ms==5000 && sent==b);   /* nothing but frames went up */
+    assert(sdk_rx_chunks==21 && bin_bytes==21*3200u && bin_ends==1 && !strcmp(bin_reason,"turn_end"));
+    assert(strstr(bin_end_header,"\"s\":\"" RELAY_JOB "\""));
+    assert(!link_audio_busy() && !ring_on && !strcmp(sdk_mood,"thinking"));   /* heard: acknowledged */
+    /* vad:false and nobody ends it: the device's 5 s window, counted from the shake */
+    assert(shake(&job)); shake_run(&job,5,",\"vad\":false");
+    assert(bin_bytes==160000 && !strcmp(bin_reason,"max") && sdk_rx_chunks==50);
+    /* adopted with the device's own VAD (the cloud path): it ends on the silence after speech */
+    assert(shake(&job)); shake_run(&job,2,"");
+    assert(adopt_e==ESP_OK && !strcmp(bin_reason,"silence") && bin_ends==1 && bin_bytes<160000);
+    /* the agent's ack applies: false → no acknowledgement */
+    assert(shake(&job)); shake_run(&job,1,",\"vad\":false,\"ack\":false");
+    assert(adopt_e==ESP_OK && !strcmp(adopt_ack,"off") && !strcmp(sdk_mood,"idle"));
+    /* nobody adopts it: after LINK_SHAKE_ADOPT_MS of audio it ends — no frame, no chirp, idle */
+    assert(shake(&job)); b=sent; shake_run(&job,-1,"");
+    assert(sdk_rx_chunks==LINK_SHAKE_ADOPT_MS/100 && !bin_frames && !strcmp(s_end_reason,"unclaimed"));
+    assert(sent==b && s_ack==LINK_ACK_OFF && !strcmp(sdk_mood,"idle") && !link_audio_busy() && !ring_on);
+    /* ...and a late adoption is refused listen_gone (never busy) */
+    char a[160]; snprintf(a,sizeof(a),"{\"job\":\"" RELAY_JOB "\",\"rate\":16000,\"adopt\":\"shake-%u\"}",s_shake_n);
+    cJSON *args=cJSON_Parse(a),*res=NULL; refused=NULL;
+    assert(link_audio_listen(args,&res)==LINK_CMD_REFUSED && !res && !strcmp(refused,"listen_gone") && !link_audio_busy());
+    /* the relay declines it (listen_stop naming the local id): it ends at once, quietly */
+    assert(shake(&job)); decline_at=2; shake_run(&job,-1,"");
+    assert(sdk_rx_chunks==3 && !bin_frames && !strcmp(s_end_reason,"declined") && !strcmp(sdk_mood,"idle"));
+    /* the link went down: ends quietly too */
+    assert(shake(&job)); cancel_at=1; shake_run(&job,-1,"");
+    assert(!bin_frames && !strcmp(s_end_reason,"unclaimed") && !strcmp(sdk_mood,"idle"));
+    /* an adoption naming another listen, or a malformed one: refused, the shake's listen still waits */
+    assert(shake(&job));
+    cJSON_Delete(args); args=cJSON_Parse("{\"job\":\"" RELAY_JOB "\",\"rate\":16000,\"adopt\":\"shake-999\"}"); res=NULL;
+    assert(link_audio_listen(args,&res)==LINK_CMD_REFUSED && !res && atomic_load(&s_pend)==PEND_WAIT);
+    cJSON_Delete(args); args=cJSON_Parse("{\"job\":\"" RELAY_JOB "\",\"rate\":8000,\"adopt\":\"x\"}");
+    assert(link_audio_listen(args,&res)==ESP_ERR_INVALID_ARG && !res && atomic_load(&s_pend)==PEND_WAIT);
+    cJSON_Delete(args); args=cJSON_Parse("{\"job\":\"" RELAY_JOB "\",\"rate\":16000,\"adopt\":7}");
+    assert(link_audio_listen(args,&res)==ESP_ERR_INVALID_ARG && !res); cJSON_Delete(args);
+    /* a plain listen while it waits: busy, as ever */
+    args=cJSON_Parse("{\"job\":\"listen9\",\"rate\":16000}");
+    assert(link_audio_listen(args,&res)==ESP_ERR_INVALID_STATE && !res); cJSON_Delete(args);
+    shake_run(&job,-1,"");
+    /* never over another owner: a say playing, a question up, a pairing, an update — the plain
+     * shake goes up instead (no listen) */
+    begin_say(); assert(shake(&job) && !talked()); receive_pcm(0,true); complete(play());
+    ask_pending=true; assert(shake(&job) && !talked() && !link_audio_busy()); ask_pending=false;
+    update_busy=true; assert(shake(&job) && !talked() && !link_audio_busy()); update_busy=false;
+    request(); assert(shake(&job) && !talked() && !link_audio_busy());
+    link_pair_cancel(); assert(!link_pair_active());
+    /* a relay that does not adopt (its welcome had no listen_adopt): the plain shake */
+    link_audio_relay_adopts(false); assert(shake(&job) && !talked() && !link_audio_busy());
+    link_audio_relay_adopts(true);
+    /* the setting off, or no mic: not taken at all — the sense task sends the plain shake */
+    shake_setting=false; b=sent; assert(!link_audio_shake(2.4,5,900)); link_audio_tick(); assert(sent==b && !link_audio_busy());
+    shake_setting=true;
+    sdk_caps&=~MOLTY_CAP_MIC; assert(!link_audio_shake(2.4,5,900)); sdk_caps=0xFFFFFFFFu;
+    /* back on: it talks again */
+    assert(shake(&job) && talked()); shake_run(&job,-1,"");
+    listen_setting=30000;
+}
+
 int main(void) {
     assert(link_audio_init()==ESP_OK && link_pair_init()==ESP_OK);
-    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop(); test_listen_window(); test_say_cues(); test_chirp_sound(); test_ack();
+    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop(); test_listen_window(); test_say_cues(); test_chirp_sound(); test_ack(); test_shake_talk();
     cJSON_Delete(sdk_sent); free(s_jobs); free(s_done); free(s_ring);
-    puts("LINK AUDIO/PAIR PASS: paced PCM, final playback drain, errors, cmd-time text/mood, explicit moods outlive jobs, pairing reasons, board caps, listening ring (+ ring_color), ask cancellation, listen_stop (turn_end; no_speech never acknowledged), listen window (30 s, unlimited, setting), say word cues follow playback, turn acknowledgement (chirp + thinking: which ends ack, opt-outs, setting, screen owners, cut by the next job)");
+    puts("LINK AUDIO/PAIR PASS: paced PCM, final playback drain, errors, cmd-time text/mood, explicit moods outlive jobs, pairing reasons, board caps, listening ring (+ ring_color), ask cancellation, listen_stop (turn_end; no_speech never acknowledged), listen window (30 s, unlimited, setting), say word cues follow playback, turn acknowledgement (chirp + thinking: which ends ack, opt-outs, setting, screen owners, cut by the next job), shake to talk (a local listen at once, adopted by the relay with its job id + end of turn and the audio replayed, or ending quietly: unclaimed / declined / link down; never over another owner, the setting, or a relay that does not adopt)");
 }

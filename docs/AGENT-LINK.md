@@ -75,15 +75,19 @@ Molty (home Wi-Fi) ──outbound WSS──▶ molty-relay (Cloudflare Worker + 
 
 ## Device ↔ relay wire (WS/WSS `/v1/device?id=<device_id>`)
 
-First frame from device: `{"t":"hello","id":"molty-k7m2w9c4ya","key":"<b64 device_key>","fw":"...","caps":["fluid","say","say_cues","listen","listen_stop","listen_window","ack","show","mood","creature","ask"],"board":"waveshare-esp32-s3-touch-lcd-1.46","link_code":"..."}`
-→ relay answers `{"t":"welcome"}` or closes with 4401.
+First frame from device: `{"t":"hello","id":"molty-k7m2w9c4ya","key":"<b64 device_key>","fw":"...","caps":["fluid","say","say_cues","listen","listen_stop","listen_window","ack","shake_talk","show","mood","creature","ask"],"board":"waveshare-esp32-s3-touch-lcd-1.46","link_code":"..."}`
+→ relay answers `{"t":"welcome","features":["listen_adopt"]}` or closes with 4401. `features`
+lists what the relay does for the device (`listen_adopt`: it adopts a listen the device began by
+itself — [Shake to talk](#shake-to-talk)); older relays send none, and the device then never
+starts one.
 
 `board` names the hardware (`firmware/boards/`, see [PORTING.md](PORTING.md)). `caps`
 lists `say` / `listen` only when the board has a speaker / microphone (`say_cues` with `say`,
 firmware that shows a say's words as they are spoken; `listen_stop` with
 `listen`, firmware that can end a listen on the relay's word; `listen_window` with `listen`,
 firmware whose window is optional, 0..30000 or unlimited — see `listen` below; `ack` with
-`listen`, firmware that acknowledges the end of a turn itself — see [Turn acknowledgement](#turn-acknowledgement)), `ask` only when it
+`listen`, firmware that acknowledges the end of a turn itself — see [Turn acknowledgement](#turn-acknowledgement); `shake_talk` on
+boards with a mic and an IMU, firmware whose shake can start a listen — see [Shake to talk](#shake-to-talk)), `ask` only when it
 has a touch screen (and firmware that implements `ask`), and `update` when the firmware can
 install a release itself ([Firmware updates](#firmware-updates)); the relay answers
 those commands `409 unsupported` up front, without calling TTS, when the device left them
@@ -227,6 +231,12 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   not sent the command: the job still finishes at the turn end, but the mic stays open until the
   device's own end (silence / no_speech / its window), and those frames are dropped; a say or
   listen sent in that gap is answered busy by the device.
+  `listen_stop` naming a [shake's listen](#shake-to-talk) still waiting to be adopted (its local
+  id) declines it, whatever the reason: it ends quietly.
+- `listen {job, adopt: <local id>, rate, ms?, vad?, end_silence_ms?, no_speech_ms?, ack?}`
+  ([Shake to talk](#shake-to-talk)): the relay takes the listen the device began on a shake as
+  its job `job`. Checked like a listen; answered like one (`{job, ms, ack}`); refused
+  `listen_gone` when that listen is not waiting any more (never `busy`).
 
 
 - `update` (relay call `molty_update`): see [Firmware updates](#firmware-updates) for
@@ -279,6 +289,65 @@ so firmware with the cap `ack` acknowledges the turn **itself, locally, at once*
   thinking without the chirp, `false` = none — an agent can only turn it down. The relay
   validates it and forwards it only to firmware with the cap. The device's listen answer
   reports what it will do (`ack`: `chirp` | `thinking` | `off`).
+
+### Shake to talk
+
+The human shakes Molty and just speaks: no agent round trip before the mic opens (with an agent
+woken by a webhook that was ~11–16 s of "Yeah?" first).
+
+```
+shake ─▶ device: listening at once (ring + mood), audio kept locally
+           └─ evt shake {…, listen:"shake-3"} ─▶ relay: cmd listen {job, adopt:"shake-3", vad:false?}
+                                                    └─ device: frames under `job`, from the shake's first sample
+            relay: the usual listen job (box streaming STT + semantic end of turn, else cloud / device VAD)
+              └─ heard words ─▶ ONE `utterance` event ─▶ every agent (inbox + webhook)
+                                  └─ first say / talk claims the turn
+```
+
+- **Device** (cap `shake_talk`, boards with a mic and an IMU; console setting "shake to talk",
+  `POST /api/creature/state {shake_talk: bool}`, GET reports it, NVS like `ring_color`, on out of
+  the box). On a shake (≤ 1 per 2 s) it starts a listen **by itself** — when the setting is on,
+  the relay's welcome listed `listen_adopt`, the link is up and nothing else owns the device: no
+  say / listen running, no question on screen, no pairing, no update writing. `listening` mood
+  and ring at once; window and acknowledgement from the device's settings. It records under a
+  local id (`shake-<n>`) and sends `evt shake {peak_g, reversals, ms, listen:"shake-<n>"}`;
+  otherwise it sends the plain shake (no `listen`). Nothing goes up until the relay adopts it.
+- **Adopt.** The relay answers with `cmd listen {job, adopt, …}` — the same args it sends for an
+  agent's listen (`vad:false` with the voice box: semantic end of turn). From then on the listen is
+  that job: its frames carry `job`, the relay's end-of-turn rules, window (absent = the device's
+  setting, counted from the shake) and `ack` apply as if it had begun with them, and the audio
+  recorded so far replays through them and goes up first. A cmd say/listen sent while the shake's
+  listen waits is answered `busy` as usual.
+- **Declined / unclaimed.** The relay declines (`cmd listen_stop {job:"shake-<n>"}`) when an audio
+  job is already running there (a say or listen crossed the shake) or the device has no mic. Not
+  adopted within **3 s** of audio (`LINK_SHAKE_ADOPT_MS`), declined, or the link went down: the
+  listen ends quietly — no frame, no acknowledgement, `idle`. A late adoption is refused
+  `listen_gone`.
+- **Agents' shake.** The `shake` event still goes to agents either way; when the relay adopted
+  the listen it says so: `{peak_g, reversals, ms, listening: true, turn_id}` (the local id never
+  reaches agents). Agents should not react to it: the utterance follows.
+- **Utterance.** When the listen ended with words (a non-empty transcript), the relay stores the
+  turn and appends ONE `utterance` event (relay-generated, not rate-capped, never accepted from a
+  device): `{turn_id, text, reason, ms:{speech, stt}, trigger:"shake", device:{caps, mood, voice}}`.
+  `turn_id` is the listen job's id (`GET /v1/jobs/<turn_id>` has the full listen result);
+  `ms.speech` the measured speech (else the recording's length), `ms.stt` the transcription's
+  tail; `device.mood` what Molty shows now (`thinking`: its acknowledgement, unless `ack` is off →
+  `idle`), `device.voice` who would speak now (as `status` `relay.voice`). **No speech** (reason
+  `no_speech`, or an empty transcript): **no `utterance` at all** — only the shake was sent; the
+  device already went back to idle without a chirp. A broken listen (`listen_failed`,
+  `device_offline`): no utterance either. The device's turn acknowledgement (chirp + thinking)
+  applies as for any listen.
+- **Who answers.** All paired agents get the event (routing a gesture to one agent comes later).
+  The first `say` or `talk` after it — from any agent, with `in_reply_to: turn_id` or without —
+  **claims the turn**; for **60 s** after the utterance (`TURN_HOLD_MS`) every other agent's `say`
+  / `talk` is refused `409 turn_claimed {turn_id}` (before, and instead of, `audio_busy`). The
+  claimant keeps the floor (follow-ups need no `in_reply_to`); `mood`, `show`, `ask` are never
+  claimed. `in_reply_to` naming an older turn (the human has spoken again since) goes ahead
+  unclaimed and uncorrelated. With a claimed turn the answer's `timings.turn` is
+  `{id, reply, first_audio}`: ms from the utterance to the call and to its first audio.
+- **Reserved, not built:** `utterance.partial` (words while the human is still talking), `draft`
+  and `react` events during an open human turn. Whatever comes, agents must not speak while the
+  human talks; agents should ignore event types they do not know.
 
 ### Listen end of speech (device VAD)
 
@@ -357,7 +426,7 @@ What the screen does between commands (`firmware/main/fluid/fluid_director.h`):
 | `state` | `{state, ...}` | creature state JSON | passthrough to `/api/creature/state` semantics |
 | `mood` | `{mood, hold_s?}` | — | idle listening thinking speaking happy sleepy surprised; `hold_s` 0..3600 (0 = until the next mood; default: happy/surprised revert, the rest persist) |
 | `show` | `{text, wpm?}` | — | speed reader in the fluid; back to the creature 1.5 s after the last word |
-| `say` | `{text, voice?}` | `{job}` immediately | relay does TTS (streamed per sentence) + streams; device sets `speaking`, shows text in sync. Job result `{ms, text, timings}`. `unsupported` without a speaker |
+| `say` | `{text, voice?, in_reply_to?}` | `{job}` immediately | relay does TTS (streamed per sentence) + streams; device sets `speaking`, shows text in sync. Job result `{ms, text, timings}`. `unsupported` without a speaker; `in_reply_to` / `turn_claimed`: [Shake to talk](#shake-to-talk) |
 | `listen` | `{ms? 0..30000 (0 = unlimited; omit = the device's setting, 30000 out of the box), end_silence_ms?, no_speech_ms?, vad?, ring_color?}` | `{job}` immediately | device sets `listening`, streams mic, stops at end of speech ([Listen end of speech](#listen-end-of-speech-device-vad)); relay STT → job result `{text, duration_ms, peak, rms, reason, speech_ms?, timings}`. `unsupported` without a mic |
 | `talk` (relay) | `{say?, listen?=true, listen_ms? 0..30000 (as listen's ms), voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?}` | blocks ≤ 24 s | say then listen in one job: `{job, status:"done", heard, said?, reason, speech_ms?, ms:{tts_first_audio, speech, listen, stt, total}, timings}`; over 24 s `{job, status:"pending"}` |
 | `updates` (relay) | — | `{skill, firmware, actions}` | "check Molty for updates": [Firmware updates](#firmware-updates) |
@@ -397,7 +466,7 @@ pairing). Rate-limited on the device. `shake`, `tap` and `button` reach agents t
 | name | data | when |
 |---|---|---|
 | `say.done` | `{job}` | a `say` finished playing (its last PCM left the speaker) |
-| `shake` | `{peak_g, reversals, ms}` | the board was shaken (boards with an IMU): ≥ 3 sign reversals of > 1.2 g dynamic acceleration on one axis within 800 ms; ≤ 1 per 2 s. `peak_g` largest dynamic acceleration (g), `ms` first peak → detection |
+| `shake` | `{peak_g, reversals, ms, listen?}` | the board was shaken (boards with an IMU): ≥ 3 sign reversals of > 1.2 g dynamic acceleration on one axis within 800 ms; ≤ 1 per 2 s. `peak_g` largest dynamic acceleration (g), `ms` first peak → detection; `listen` the local id of the listen it started ([Shake to talk](#shake-to-talk)) |
 | `tap` | `{x, y}` | a finger touched the screen (boards with touch); 0..1 of the panel from the top left; ≤ 4/s |
 | `button` | `{id: "accept"\|"reject"}` | a button was pressed (the board's accept / reject buttons); ≤ 4/s. For agents it means acknowledge / dismiss, never an answer (answers come only from `ask`) |
 | `answer` | `{job, index, label}` · `{job, index: null, reason: "timeout"\|"cancelled"}` | an `ask` ended: tapped (0-based `index`, `label` verbatim), timed out, or cancelled; one per job, never rate-limited |
@@ -438,9 +507,9 @@ bearer is `agent_token` = `<device_id>.<base64url(32 bytes)>`; the prefix only r
 |---|---|---|
 | `POST /v1/pair {device_id, link_code, agent_name, role?}` (no token; long-polls ≤ 120 s; `role:"voice"` pairs a [voice box](#voice-box)) | `200 {ok:true, agent_token, device_id, agent_name, code}` (+ `role:"voice"` for a box) | `{ok:false, error}`: `bad_link_code` 403, `rejected` 403, `timeout` 408, `device_offline` / `pair_busy` 409 |
 | same with `wait_s` < 120, or `{device_id, pair_id}` to resume | `202 {ok:true, status:"pending", pair_id, code, expires_in_s}` while undecided | as above |
-| `POST /v1/devices/<id>/cmd {name, args}` | `200 {ok:true, result:{...}}`; `say`/`listen` → `{ok:true, result:{job}}` | `{ok:false, error:"code"}`: 401 bad/missing bearer, 400 `invalid_args`/`unknown_command`, 409 `device_offline`/`audio_busy`/`unsupported`, 504 `device_timeout`, 502 device-reported codes |
+| `POST /v1/devices/<id>/cmd {name, args}` | `200 {ok:true, result:{...}}`; `say`/`listen` → `{ok:true, result:{job}}` | `{ok:false, error:"code"}`: 401 bad/missing bearer, 400 `invalid_args`/`unknown_command`, 409 `device_offline`/`turn_claimed` (`say`)/`audio_busy`/`unsupported`, 504 `device_timeout`, 502 device-reported codes |
 | same with `wait:true` (say/listen) | `200 {ok:true, result:{job, status:"done", ...job result}}`; still running after 24 s: `202 {ok:true, result:{job, status:"pending", state}}` | as above; a failed job → its error, still carrying the `events` / `skill_update` the call already consumed |
-| `POST /v1/devices/<id>/talk {say?, listen?, listen_ms?, voice?, end_silence_ms?, no_speech_ms?, vad?}` | `200 {ok:true, result:{job, status:"done", heard, said?, reason, speech_ms?, ms, timings}}`; `202` pending as above | 400 `invalid_args`, 401, 409 `audio_busy`/`unsupported`/`device_offline`, 504 `playback_timeout` (no `say.done`), job errors |
+| `POST /v1/devices/<id>/talk {say?, listen?, listen_ms?, voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?, ack?, in_reply_to?}` | `200 {ok:true, result:{job, status:"done", heard, said?, reason, speech_ms?, ms, timings}}` (`timings.turn` when it answered a turn); `202` pending as above | 400 `invalid_args`, 401, 409 `turn_claimed` (another agent answers this human turn, [Shake to talk](#shake-to-talk))/`audio_busy`/`unsupported`/`device_offline`, 504 `playback_timeout` (no `say.done`), job errors |
 | `POST /v1/devices/<id>/ask {say?, options, timeout_s?, voice?}` | `200 {ok:true, result:{job, status:"done", answer, index, reason?, said?, ms, timings}}` (a timeout / cancelled / offline ask is `200` with `answer:null`); `202` pending as above | 400 `invalid_args` (with the reason, e.g. a label over 8 chars), 401, 409 `audio_busy` (with `say`)/`unsupported`/`device_offline`, 504 `playback_timeout`, device-reported codes |
 | `GET /v1/jobs/<job>[?wait_s=0..8]` | `200 {job, kind:"say"\|"listen"\|"talk"\|"ask"\|"update", status:"queued"\|"running"\|"done"\|"failed", phase?, result?, error?, detail?}`; say done `{ms, text, timings}`, listen done `{text, duration_ms, peak, rms, reason, speech_ms?, timings}`, talk / ask done as `/talk` / `/ask`, update as below | 401, 404 `not_found` |
 | `GET /v1/devices/<id>/updates` | `200 {ok:true, result:{skill, firmware, actions}}` ([Firmware updates](#firmware-updates)) | 401 |
@@ -495,6 +564,7 @@ mode suits that agent.
 ```
 device evt ──WSS──▶ DeviceRoom.onEvt
                      ├─ allow-list + shape check (shake, tap, button, answer; rest stays internal)
+                     │    (+ relay-generated: utterance, skill.updated)
                      ├─ cap 30/min/device (excess dropped, counted)
                      └─ ev:<seq> ring (200 / 24 h, DO storage)
                           │  one read cursor per agent token (cur:<token hash>)
@@ -512,7 +582,7 @@ device evt ──WSS──▶ DeviceRoom.onEvt
 
 | type | data |
 |---|---|
-| `shake` | `{peak_g: number 0..64, reversals: int, ms: int}` |
+| `shake` | `{peak_g: number 0..64, reversals: int, ms: int, listen?: string}` → agents get `{peak_g, reversals, ms}` plus `listening: true, turn_id` when the relay adopted `listen` |
 | `tap` | `{x: 0..1, y: 0..1}` (screen position, unit square) |
 | `button` | `{id: "accept" \| "reject"}` |
 | `answer` | `{job, index: int 0..4 \| null, label?: string, reason?: "timeout" \| "cancelled"}`, checked against the pending ask (see the `ask` wire bullet) |
@@ -522,6 +592,8 @@ The relay stores `{id:"e<seq>", type, ts:<relay unix ms>, data}`; `seq` increase
 `offline` when the relay resolved it because the device dropped, or `timeout` when the device never
 reported), appended before the job's result is published, so the asking call's own ride-along
 carries it. Answers are not counted against the per-device rate cap (one per ask).
+`utterance` ([Shake to talk](#shake-to-talk)) is relay-generated: a device frame named
+`utterance` is dropped; agents receive and filter it like the device events.
 
 ### Inbox and cursor
 
@@ -559,20 +631,28 @@ an agent sees events the next time it calls anything (ride-along).
 ```
 {"url": "https://…", "method"?: "POST"|"GET"|"PUT"|"PATCH",
  "headers"?: {"Authorization": "Bearer …"}, "body"?: "<template>", "content_type"?: "application/json",
- "events"?: ["shake", "tap", "button", "answer"]}
+ "events"?: ["shake", "tap", "button", "answer", "utterance"]}
 ```
 
 - Placeholders in `url` (URL-encoded) and `body`: `{{event.type}}` `{{event.id}}` `{{event.ts}}`
-  `{{event.data}}` (JSON) `{{event.data.<field>}}` `{{device}}` `{{text}}` (a short sentence:
+  `{{event.data}}` (JSON) `{{event.data.<field>}}` (nested up to 3 deep, own fields only:
+  `{{event.data.ms.speech}}`, `{{event.data.device.mood}}`) `{{device}}` `{{text}}` (a short sentence:
   "Molty was shaken (peak 2.4 g)", "Molty's screen was tapped", "Molty's accept button was
-  pressed", "Molty's question was answered: yes", "Molty's question got no answer (timeout)"). With a JSON `content_type` strings are JSON-escaped (write them inside quotes;
+  pressed", "Molty's question was answered: yes", "Molty's question got no answer (timeout)",
+  `The human said to Molty: "…"`). With a JSON `content_type` strings are JSON-escaped (write them inside quotes;
   write `{{event.data}}` and numeric fields unquoted); with
   `application/x-www-form-urlencoded` they are form-encoded; otherwise inserted raw.
   Unknown placeholders are rejected. A missing field renders its default when written
   `{{event.data.peak_g|0}}` (the default is literal text, escaped like a string), else
   `null` in a JSON body and empty elsewhere — so `"peak": {{event.data.peak_g}}` stays valid
   JSON for a tap.
-- `events` (optional) limits which event types are sent; default all.
+- `events` (optional) limits which event types are sent; default all. A conversational agent
+  wants `["utterance"]`: the payload is self-contained — `{{event.data.text}}` (the words),
+  `{{event.data.turn_id}}` (for `in_reply_to`), `{{event.data.reason}}`, `{{event.data.ms.speech}}`,
+  `{{event.data.ms.stt}}`, `{{event.data.trigger}}`, `{{event.data.device.mood}}`,
+  `{{event.data.device.voice}}`, `{{event.data.device.caps}}` (JSON) — so it can answer with no
+  confirming `events` call, e.g. body
+  `{"message": "Molty heard: \"{{event.data.text}}\" — answer with molty_talk {say, in_reply_to: \"{{event.data.turn_id}}\"}"}`.
 - No `body`: the relay's own `{"device":"molty-…","event":{id,type,ts,data}}`, `application/json`.
 - Every request carries `Molty-Signature: t=<unix ms>,v2=<hex hmac_sha256(secret, S)>` with
   `S = t + "\n" + METHOD + "\n" + path?query + "\n" + body` (GET: empty body). v2 covers the

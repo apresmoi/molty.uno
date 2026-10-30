@@ -103,7 +103,20 @@ bool link_ack_arg(const cJSON *args, link_ack_t setting, link_ack_t *mode);
 #define LINK_ACK_MIN_SPEECH_MS 160u
 link_ack_t link_ack_decide(link_ack_t mode, const char *reason, bool speech_known, uint32_t speech_ms,
                            bool screen_taken, bool has_speaker);
-cJSON *link_evt_shake_frame(double peak_g, int reversals, unsigned ms);
+/* shake {peak_g, reversals, ms, listen?}: listen = the id of the listen the device began by
+ * itself on this shake (shake to talk), for the relay to adopt; NULL = a plain shake. */
+cJSON *link_evt_shake_frame(double peak_g, int reversals, unsigned ms, const char *listen);
+/* Shake to talk (docs/AGENT-LINK.md "Shake to talk"): on a shake the device starts listening at
+ * once, by itself, under a local id ("shake-<n>"), and names it in the shake event. The relay
+ * adopts it with `cmd listen {job, adopt: <local id>, ...}` (its own job id and end-of-turn
+ * settings from then on: the audio recorded so far replays through them and goes up first) or
+ * declines it with `cmd listen_stop {job: <local id>}`. Not adopted within LINK_SHAKE_ADOPT_MS
+ * of audio → it ends quietly: no frames, no acknowledgement, idle. Only when the relay's
+ * welcome lists LINK_FEATURE_ADOPT. */
+#define LINK_SHAKE_ADOPT_MS 3000u
+#define LINK_FEATURE_ADOPT  "listen_adopt"
+/* The relay's welcome {"t":"welcome","features":[...]} lists `name` (absent list: none). */
+bool link_welcome_has(const cJSON *welcome, const char *name);
 cJSON *link_evt_tap_frame(double x, double y);
 cJSON *link_evt_button_frame(bool accept);
 /* A colour on the wire: "#rrggbb" (hex digits either case) → 0xRRGGBB. Anything else → false. */

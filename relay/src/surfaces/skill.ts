@@ -97,7 +97,7 @@ Success: \`200 {"ok":true,"result":{…}}\`. Unknown argument keys are rejected.
 | \`status\` | — | fw, uptime, creature, state, mood, fps, rssi + \`relay\` {online, connected_since, board, caps, voice, events} | cheap; use it to check Molty is online |
 | \`mood\` | \`{"mood": m, "hold_s"?: s}\` | — | m ∈ ${MOODS.join(", ")}; happy/surprised revert by themselves, \`hold_s\` (0 < s ≤ ${MAX_MOOD_HOLD_S}) sets how long any mood stays |
 | \`show\` | \`{"text": s, "wpm"?: 100..800}\` | — | speed-reader text in the fluid, ≤ ${MAX_SHOW_BYTES} bytes, default ${DEFAULT_WPM} wpm; returns when it starts |
-| \`say\` | \`{"text": s, "voice"?: id}\` | \`{job}\` immediately | relay TTS → speaker (streamed sentence by sentence), text shown in sync; ≤ ${MAX_SAY_BYTES} bytes; job done → \`{ms, text, timings}\` |
+| \`say\` | \`{"text": s, "voice"?: id, "in_reply_to"?: turn_id}\` | \`{job}\` immediately | relay TTS → speaker (streamed sentence by sentence), text shown in sync; ≤ ${MAX_SAY_BYTES} bytes; job done → \`{ms, text, timings}\`; \`in_reply_to\`: see Shake to talk |
 | \`listen\` | \`{"ms"?: 0..${MAX_LISTEN_MS}, "end_silence_ms"?: ${VAD_LIMITS.end_silence_ms.join("..")}, "no_speech_ms"?: ${VAD_LIMITS.no_speech_ms.join("..")}, "vad"?: bool, "ring_color"?: c, "ack"?: true\\|false\\|"silent"}\` | \`{job}\` immediately | records the mic until the human finishes (the window is a ceiling: omit \`ms\` for the human's own setting, ${DEFAULT_LISTEN_MS} ms out of the box; \`0\` = unlimited, ${LISTEN_CEILING_MS / 60000} min safety ceiling), relay STT; job done → \`{text, duration_ms, peak, rms, reason, speech_ms?, timings}\` |
 | \`state\` | \`{}\` = read · \`{"state": {…}}\` or flat fields = patch | creature state JSON | low-level creature state, same as the device's \`/api/creature/state\` |
 | \`volume\` | \`{"volume": 0..21}\` | — | speaker volume, 0 = mute |
@@ -123,7 +123,8 @@ curl -sS -X POST ${o}/v1/devices/molty-xxxxxxxxxx/talk \\
 #     "reason":"silence","ms":{"tts_first_audio":…,"speech":…,"listen":…,"stt":…,"total":…},"timings":{…}}}
 \`\`\`
 
-Body: \`{"say"?: s, "listen"?: true, "listen_ms"?: 0..${MAX_LISTEN_MS} (omit: the human's setting, ${TALK_DEFAULT_LISTEN_MS} out of the box; 0 = unlimited), "voice"?, "end_silence_ms"?, "no_speech_ms"?, "vad"?, "ring_color"?, "ack"?}\`.
+Body: \`{"say"?: s, "listen"?: true, "listen_ms"?: 0..${MAX_LISTEN_MS} (omit: the human's setting, ${TALK_DEFAULT_LISTEN_MS} out of the box; 0 = unlimited), "voice"?, "end_silence_ms"?, "no_speech_ms"?, "vad"?, "ring_color"?, "ack"?, "in_reply_to"?}\`.
+\`in_reply_to\` (talk and say): the \`turn_id\` of the \`utterance\` you answer (see Shake to talk).
 **End of turn is automatic**: don't pass \`vad\` / \`end_silence_ms\`. With the owner's voice box the
 box's semantic end of turn decides (reason \`turn_end\`, or \`no_speech\` when nobody spoke); otherwise
 the device's own end-of-speech does (\`silence\` / \`no_speech\`). Passing \`vad\` or \`end_silence_ms\` puts the device's
@@ -141,9 +142,10 @@ spoke: \`heard\` is \`""\`), \`max\` (window full), \`ended\` (older firmware st
 A listen that broke is an error, never \`no_speech\`: \`listen_failed\` (Molty's recording failed
 mid-listen, e.g. weak Wi-Fi) or \`device_offline\` (Molty dropped off mid-listen). Say nothing about
 silence then; try the turn again once (or tell your human Molty's connection is shaky).
-**After a wake, never answer \`no_speech\` with silence.** If you started talking because the human
-shook or tapped Molty and the listen comes back \`no_speech\`, they are there and expect a reaction:
-say one short line (\`{"say":"I'm here.","listen":false}\`) or listen once more — not both, not nothing.
+**After a wake, meet \`no_speech\` with one short line or nothing — never a burst.** If you started
+talking because the human tapped Molty (or shook it, on a Molty without shake to talk) and the listen
+comes back \`no_speech\`, say at most one short line (\`{"say":"I'm here.","listen":false}\`) or stay
+quiet: never several lines, never a loop of listens.
 
 **Ask (a question the human answers with a tap).**
 
@@ -179,6 +181,7 @@ the one the human tapped: \`answer\` (its label) and \`index\`. Blocks and finis
 Errors: \`{"ok":false,"error":code}\` — \`401 unauthorized\` (bad/missing/revoked token),
 \`400 invalid_args\` / \`unknown_command\`, \`409 device_offline\` / \`audio_busy\` /
 \`unsupported\` (the board has no speaker or mic: \`say\`/\`listen\` absent from \`relay.caps\`),
+\`409 turn_claimed\` (another agent is already answering the human's turn: stay quiet, see Shake to talk),
 \`409 firmware_too_old\` (Molty's firmware predates the feature; see "Check Molty for updates"),
 \`listen_failed\` (the recording broke mid-listen),
 \`504 device_timeout\`, \`502\` device-reported codes (e.g. \`mic_busy\`).
@@ -206,10 +209,14 @@ Molty talks back. When your human touches it, the relay records an event:
 
 | type | data |
 |---|---|
-| \`shake\` | \`{"peak_g": 2.4, "reversals": 5, "ms": 900}\` |
+| \`shake\` | \`{"peak_g": 2.4, "reversals": 5, "ms": 900}\`; with shake to talk also \`"listening": true, "turn_id": "…"\` — Molty is already listening: do nothing, its \`utterance\` follows |
+| \`utterance\` | \`{"turn_id": "molty-…j_…", "text": "what's on my calendar?", "reason": "turn_end", "ms": {"speech": 1800, "stt": 120}, "trigger": "shake", "device": {"caps": […], "mood": "thinking", "voice": "box"}}\` — the human's words, once per turn (see Shake to talk) |
 | \`tap\` | \`{"x": 0..1, "y": 0..1}\` (screen position) |
 | \`button\` | \`{"id": "accept"}\` or \`{"id": "reject"}\` — the board's physical buttons. Not an answer to a question: they mean acknowledge / dismiss whatever you showed (see Etiquette). Answers to a question come only as \`answer\` |
 | \`answer\` | \`{"job": "…", "index": 0, "label": "yes"}\`, or \`{"job", "index": null, "label": null, "reason": "timeout"}\` — how an ask ended |
+
+Ignore event types you don't know: more will come (e.g. partial transcripts while the human is still
+talking — never speak while the human talks).
 
 Each event is \`{"id":"e42","type":"shake","ts":<unix ms>,"data":{…}}\`. The relay keeps a
 **personal inbox per agent token** with a read cursor, so every paired agent gets every
@@ -222,11 +229,14 @@ event once (last ${INBOX_LIMITS.keep} events / 24 h, at most ${INBOX_LIMITS.perM
    \`molty_events {wait_s: 0..${INBOX_LIMITS.mcpWaitS}}\` → \`{"ok":true,"events":[…],"next":"e42","more":false}\`;
    returns as soon as an event arrives. \`since=e41\` re-reads after an id.
 3. **Webhook.** \`PUT ${o}/v1/webhook\` (or \`molty_webhook\`) with a request you define:
-   \`{"url":"https://<your-host>/…","method"?:"POST","headers"?:{…},"body"?:"<template>","content_type"?:"application/json","events"?:["shake"]}\`.
+   \`{"url":"https://<your-host>/…","method"?:"POST","headers"?:{…},"body"?:"<template>","content_type"?:"application/json","events"?:["utterance"]}\`.
    The relay sends it per event, filling \`{{event.type}}\` \`{{event.id}}\` \`{{event.ts}}\`
-   \`{{event.data}}\` \`{{event.data.<field>}}\` (\`|default\` optional) \`{{device}}\` \`{{text}}\` — so you can point it at
+   \`{{event.data}}\` \`{{event.data.<field>}}\` (nested up to 3 deep: \`{{event.data.ms.speech}}\`,
+   \`{{event.data.device.mood}}\`; \`|default\` optional) \`{{device}}\` \`{{text}}\` — so you can point it at
    whatever wakes you (your own server, a chat/bot API, an agent-run endpoint). No body =
-   \`{"device","event"}\` JSON. Header values are stored and never shown again. The response
+   \`{"device","event"}\` JSON. For conversation, a body like
+   \`{"message":"Molty: the human said \\"{{event.data.text}}\\" (turn {{event.data.turn_id}})"}\` with
+   \`"events":["utterance"]\` hands your runtime everything it needs: no confirming call. Header values are stored and never shown again. The response
    has a dry run for a sample event and a \`secret\`, once: every request carries
    \`Molty-Signature: t=<unix ms>,v2=<hex hmac_sha256(secret, t \\n METHOD \\n path?query \\n body)>\`
    (newline-joined; verify it, reject stale \`t\`). Webhooks wake you; the inbox stays the record
@@ -241,6 +251,25 @@ Pick whatever fits how you run; you know your environment better than we do. Be 
 about the limit: nothing can wake an agent that has no reachable endpoint and is not
 running — then you hear Molty the next time you touch it (way 1), so say so instead of
 promising to react live.
+
+## Shake to talk
+
+When Molty lists \`shake_talk\` in \`relay.caps\` and its human leaves the setting on (out of the box),
+**a shake means "I want to talk"**. Molty starts listening by itself, at once (listening ring), the
+relay transcribes with the usual end of turn, and every paired agent gets **one \`utterance\` event**
+with the human's words — nothing at all when nobody spoke. You also get the \`shake\` (with
+\`"listening": true\`): **don't react to it**, the \`utterance\` follows within seconds.
+
+1. On \`utterance\`: answer at once with \`molty_talk {"say": "<your answer>", "in_reply_to": "<turn_id>"}\`
+   (REST \`POST …/talk\`). Molty already chirped and shows \`thinking\`: no "yeah?", no "let me check".
+   Keep listening (\`listen\` default true) for a back-and-forth, or \`"listen": false\` to finish.
+2. **The first agent to answer a turn claims it.** For 60 s other agents' \`say\` / \`talk\` get
+   \`409 turn_claimed\` (not \`audio_busy\`): that's fine, stay quiet. All paired agents get the
+   event for now (routing a gesture to one agent comes later).
+3. \`in_reply_to\` adds \`timings.turn\` \`{id, reply, first_audio}\`: ms from the utterance to your
+   call and to your first audio — your real response time.
+
+The setting off (or older firmware): a plain \`shake\` (no \`listening\`) — a nudge, as before.
 
 ## Skill updates
 
@@ -300,7 +329,17 @@ call carries \`firmware_update\` \`{current, latest, board, notes_url, can_self_
 ## Talking fast
 
 A spoken conversation feels slow when every turn costs several of your tool calls (each one
-a full model round trip on your side). So:
+a full model round trip on your side). The human hears your latency as silence. So:
+
+- **Act on the event payload directly.** An \`utterance\` (webhook body, ride-along or pull) holds
+  everything: \`text\`, \`turn_id\`, \`reason\`, timings, Molty's state. No confirming \`events\` /
+  \`status\` call, no lock files or bookkeeping before you answer.
+- **Use your fastest model for conversation.** Escalate to a bigger model or tools only for real
+  work — and then say one short line first ("Checking your calendar.") so the human hears you.
+- **Short first sentence.** Audio starts after the first sentence is synthesised.
+- **Keep a warm session** if your runtime allows (a resident process or kept-alive session beats a
+  cold start per event: cold starts cost seconds).
+- **Check \`relay.caps\`, not versions,** to know what Molty can do (\`shake_talk\`, \`ask\`, \`ack\`).
 
 - **One call per turn: \`molty_talk\`** (REST \`POST …/talk\`). It speaks your reply, listens, and
   returns what the human said. Don't chain \`mood\` → \`say\` → \`molty_wait\` → \`listen\` → \`molty_wait\`.
@@ -334,10 +373,11 @@ a full model round trip on your side). So:
 - \`listen\` records the room: only when the human expects it.
 - After pairing, a good first move is one short \`say\` (e.g. "Hi, I'm here.") and
   then tell your human it worked.
-- **Events: react briefly, one reaction per moment.** A shake or tap is a nudge, not a
-  conversation: a \`mood\` (\`surprised\`, \`happy\`) or a few words is plenty; a burst of
-  events is one moment. Never answer every event with \`say\`. Ideas: shake = "pay
-  attention to me" / undo / shuffle; tap = acknowledge or dismiss what you showed; \`button\`
+- **A shake means the human wants to talk** (shake to talk): answer their \`utterance\`, not the
+  \`shake\`. A plain shake (no \`listening\`: the setting is off) and a tap are nudges: a \`mood\`
+  (\`surprised\`, \`happy\`) or a few words is plenty; a burst of events is one moment. Never answer
+  every event with \`say\`. Ideas for a plain shake: "pay attention to me" / undo / shuffle; tap =
+  acknowledge or dismiss what you showed; \`button\`
   accept/reject = acknowledge / dismiss (never yes / no). To ask something, use \`ask\`, not
   taps or buttons: its \`answer\` is the only yes / no.
 - **Ask sparingly.** One question at a time, only when the answer changes what you do next.

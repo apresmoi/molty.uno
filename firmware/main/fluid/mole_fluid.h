@@ -18,6 +18,8 @@
  *               gives none, kept in NVS; GET reports it),
  *         ack: "chirp"|"thinking"|"off" (what the device does when the human finishes
  *               speaking: chirp + thinking out of the box; kept in NVS; GET reports it),
+ *         shake_talk: true|false (a shake starts a listen by itself, for the agents:
+ *               on out of the box; kept in NVS; GET reports it),
  *         hold: true (with "text": hold the last word instead of returning to the
  *               creature 1.5 s after it; the pairing code, the Improv "hi"),
  *         text, wpm, palette: "green"|"amber"|"pastel", edge_mode: "off"|"contours"|"all",
@@ -100,6 +102,10 @@ uint32_t mole_fluid_listen_window(void);
  *  2 chirp — the default). POST /api/creature/state {ack: "chirp"|"thinking"|"off"} (GET
  *  reports it), kept in NVS like ring_color. Safe from any task, before init too. */
 int mole_fluid_ack_mode(void);
+/** Shake to talk (link_protocol.h): whether a shake starts a listen by itself. POST
+ *  /api/creature/state {shake_talk: bool} (GET reports it), kept in NVS like ring_color; on
+ *  out of the box. Safe from any task, before init too. */
+bool mole_fluid_shake_talk(void);
 
 /** A question (link_ask.c, the link task) — the screen follows what the link wants:
  *  show   n (1..FLUID_ASK_MAX) labels condense out of the fluid in their sectors

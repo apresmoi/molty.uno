@@ -1,6 +1,6 @@
 // Molty (settings): pick a Molty from the catalog (sent to the device as a .molty file),
 // and play with the fluid — state, speed-reader text + WPM, palette, listening ring colour,
-// listen window, turn acknowledgement, tap-to-ripple.
+// listen window, turn acknowledgement, shake to talk, tap-to-ripple.
 import { UnsupportedError } from '../api/device';
 import type { FluidOrder, FluidState } from '../api/types';
 import type { AppCtx } from '../app';
@@ -11,6 +11,7 @@ import { preview } from '../ui/preview';
 import { RING_CHOICES, ringChoice, ringSupported } from '../ring/ring';
 import { LISTEN_CHOICES, listenChoice, listenSupported } from '../listen/listen';
 import { ACK_CHOICES, ackChoice, ackSupported } from '../ack/ack';
+import { SHAKE_CHOICES, shakeChoice, shakeSupported } from '../shake/shake';
 
 const STATES = ['blob', 'creature', 'thinking', 'text', 'autoplay'];
 const EFFECTS = ['ripple', 'vortex', 'wave'];
@@ -33,6 +34,9 @@ export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
   const ackLabel = h('label', { hidden: true }, 'acknowledge');
   const ackRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'acknowledge', hidden: true });
   const ackHint = h('p', { class: 'dim small', hidden: true }, 'what Molty does the moment you finish speaking, before the agent answers — so there is never dead air');
+  const shakeLabel = h('label', { hidden: true }, 'shake to talk');
+  const shakeRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'shake to talk', hidden: true });
+  const shakeHint = h('p', { class: 'dim small', hidden: true }, 'shake Molty and just speak — it listens at once and your agent gets your words; off: a shake is only a nudge');
   const text = h('textarea', { rows: 3, placeholder: 'words for the speed reader…', 'aria-label': 'reader text' });
   const wpm = h('input', { type: 'range', min: 100, max: 800, step: 25, value: '300', 'aria-label': 'words per minute' });
   const wpmOut = h('output', null, '300 wpm');
@@ -57,6 +61,7 @@ export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
         ringLabel, ringRow,
         listenLabel, listenRow, listenHint,
         ackLabel, ackRow, ackHint,
+        shakeLabel, shakeRow, shakeHint,
         h('label', null, 'speed reader'), text,
         h('div', { class: 'row' }, wpm, wpmOut),
         h('div', { class: 'row' }, word, h('button', { type: 'button', onclick: () => order({ text: text.value, wpm: +wpm.value, state: 'text' }) }, 'read it ⠶')),
@@ -95,6 +100,12 @@ export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
     if (ackOn) mount(ackRow, ACK_CHOICES.map((c) =>
       h('button', { type: 'button', class: 'chip' + (ak === c.id ? ' on' : ''), 'aria-pressed': String(ak === c.id),
         onclick: () => order({ ack: c.id }) }, c.label)));
+    const shakeOn = shakeSupported(s);   /* older firmware: a shake is only an event */
+    shakeLabel.hidden = shakeRow.hidden = shakeHint.hidden = !shakeOn;
+    const sk = shakeChoice(s?.shake_talk);
+    if (shakeOn) mount(shakeRow, SHAKE_CHOICES.map((c) =>
+      h('button', { type: 'button', class: 'chip' + (sk === c.on ? ' on' : ''), 'aria-pressed': String(sk === c.on),
+        onclick: () => order({ shake_talk: c.on }) }, c.label)));
     if (s && document.activeElement !== wpm && s.wpm) { wpm.value = String(s.wpm); wpmOut.textContent = `${s.wpm} wpm`; }
     if (s && !text.value && s.text) text.value = s.text;
     word.textContent = s?.word ? `⠶ ${s.word}` : s?.nwords ? `${s.word_idx ?? 0}/${s.nwords} words` : '';

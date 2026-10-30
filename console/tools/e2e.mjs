@@ -279,6 +279,14 @@ const canvasStats = (page) => page.evaluate(() => {
   ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).ack === 'off'), 'settings molty: acknowledgement off sent to the device (ack off)');
   await ackRow.getByRole('button', { name: 'chirp + thinking (default)' }).click();
   await ackRow.locator('button[aria-pressed="true"]', { hasText: 'chirp + thinking' }).waitFor();
+  const shakeRow = page.getByRole('group', { name: 'shake to talk' });
+  ok(await shakeRow.getByRole('button', { name: 'on (default)' }).getAttribute('aria-pressed') === 'true', 'settings molty: shake to talk defaults to on');
+  await shakeRow.getByRole('button', { name: 'off' }).click();
+  await shakeRow.locator('button[aria-pressed="true"]', { hasText: 'off' }).waitFor();
+  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).shake_talk === false), 'settings molty: shake to talk off sent to the device (shake_talk false)');
+  await shakeRow.getByRole('button', { name: 'on (default)' }).click();
+  await shakeRow.locator('button[aria-pressed="true"]', { hasText: 'on' }).waitFor();
+  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).shake_talk === true), 'settings molty: shake to talk back on (shake_talk true)');
   ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'settings molty: no horizontal scroll at 390px');
   await shot(page, '12-settings-molty');
 
