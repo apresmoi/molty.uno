@@ -76,7 +76,9 @@ Molty (home Wi-Fi) ──outbound WSS──▶ molty-relay (Cloudflare Worker + 
 ## Device ↔ relay wire (WS/WSS `/v1/device?id=<device_id>`)
 
 First frame from device: `{"t":"hello","id":"molty-k7m2w9c4ya","key":"<b64 device_key>","fw":"...","caps":["fluid","say","say_cues","listen","listen_stop","listen_window","ack","show","mood","creature","ask"],"board":"waveshare-esp32-s3-touch-lcd-1.46","link_code":"..."}`
-→ relay answers `{"t":"welcome"}` or closes with 4401.
+→ relay answers `{"t":"welcome","now":<relay unix ms>,"log":{"max_lines":48}}` or closes with 4401.
+`now` is the device's time sync and `log` says the relay takes device log uploads
+([Activity log](#activity-log)); older relays send a bare `{"t":"welcome"}` and firmware then never uploads.
 
 `board` names the hardware (`firmware/boards/`, see [PORTING.md](PORTING.md)). `caps`
 lists `say` / `listen` only when the board has a speaker / microphone (`say_cues` with `say`,
@@ -85,7 +87,8 @@ firmware that shows a say's words as they are spoken; `listen_stop` with
 firmware whose window is optional, 0..30000 or unlimited — see `listen` below; `ack` with
 `listen`, firmware that acknowledges the end of a turn itself — see [Turn acknowledgement](#turn-acknowledgement)), `ask` only when it
 has a touch screen (and firmware that implements `ask`), and `update` when the firmware can
-install a release itself ([Firmware updates](#firmware-updates)); the relay answers
+install a release itself ([Firmware updates](#firmware-updates)), and `log_upload` when it
+sends its log lines to the relay ([Activity log](#activity-log)); the relay answers
 those commands `409 unsupported` up front, without calling TTS, when the device left them
 out — or `409 firmware_too_old` when `fw` is older than the feature's minimum firmware
 (`FEATURES` in `relay/src/core/version.ts`): caps say whether it can, the version says why not. The device itself answers a command its board cannot do with `error:"unsupported"`
@@ -420,11 +423,12 @@ constants: `firmware/main/sense/gesture.h`.
   Tools: `molty_pair`, `molty_talk`, `molty_ask`, `molty_status`, `molty_mood`, `molty_show`, `molty_say`, `molty_listen`,
   `molty_wait`, `molty_state`, `molty_volume`, `molty_imu`, `molty_diag`, `molty_log`, plus the
   relay-only `molty_talk`, `molty_ask`, `molty_events`, `molty_webhook` ([Events](#events-device--agents)),
-  `molty_updates` and `molty_update` ([Firmware updates](#firmware-updates)). Shared names
+  `molty_updates` and `molty_update` ([Firmware updates](#firmware-updates)), `molty_activity`
+  ([Activity log](#activity-log)). Shared names
   have the same semantics as the local stdio MCP in `cli/`.
 - **REST** `POST /v1/devices/<id>/cmd {name,args,wait?}`, `POST /v1/devices/<id>/talk`, `POST /v1/devices/<id>/ask`, `GET /v1/jobs/<job>`,
   `GET /v1/devices/<id>/events`, `GET|PUT|DELETE /v1/webhook`, `GET /v1/devices/<id>/updates`,
-  `POST /v1/devices/<id>/update`, same bearer. `GET /v1/releases/latest?board=` needs none (public).
+  `POST /v1/devices/<id>/update`, `GET /v1/activity`, same bearer. `GET /v1/releases/latest?board=` needs none (public).
 - **Skill page** `GET /skill.md` (and `/skill`), no auth: the agent's self-setup guide (see
   Pairing flow step 1). Kept in sync with `commands.ts`/MCP tools by `test/skill.test.ts`.
 - **CLI** `molty --relay <url> --token <t> ...`, or `molty pair` once and the saved link (see [CLI.md](CLI.md)).
@@ -978,6 +982,87 @@ The console's agent page has a **Voice** card with:
 - the default box voice;
 - unpair;
 - the `molty-voice pair` command, filled in.
+
+## Activity log
+
+One timeline of everything that happens on a Molty, and which agent did it — so a failed turn
+can be read in one place instead of lining up the agent's memory, the device log and a live
+`wrangler tail`. Code: `relay/src/core/activity.ts` (relay), `firmware/main/diag/log_upload.c`
+(device), `console/src/activity/` (console's **activity** page).
+
+### What is recorded
+
+| kind | when | fields |
+|---|---|---|
+| `call` | every authenticated agent call (successful `wait` / `events` polls are skipped: they would wash the log out) | `agent`, `op` (`talk`, `say`, `mood`, `status`, …), `args` (summary: secrets stripped), `ok` / `error` / `message`, `ms`, `job` when it made or names one; `status` adds `data.rssi` |
+| `job` | a job ends (`ts` = its start) | `op` (job kind), `agent`, `ok` / `error`, `ms`, `data: {status, timings, voice:{tts?, stt?, fallback?}, reason?, heard?, said?, answer?, index?, outcome?, phase?}` |
+| `device` | `connect` (`fw`, `board`), `disconnect` (`code`: the close code), `refused` (wrong device key), `shake` / `tap` / `button` | `ev`, `data` |
+| `device_log` | the device's own log lines (below) | `job` when tagged, `data: {text, level: E\|W\|I\|D\|V\|EVT, boot, seq, prev?, approx?}` |
+| `pair` | `approved` / `rejected` / `timeout` / `revoked` | `ev`, `agent` |
+| `voice_box` | `connect` / `disconnect` / `unpaired` | `ev`, `data` |
+| `settings` | owner changes: `voice` (mode, voice), `activity` (transcripts) | `ev`, `data` |
+
+Every entry is `{id:"a<seq>", ts, kind, …}`. Failed `talk` / `ask` / `update` calls also return
+their job id as `job` next to `error`, so an agent can look the turn up.
+
+**Secrets** never reach storage: keys named like secret / token / key / auth / password /
+cookie / signature / credential / link_code / headers / code, and bearer- or token-shaped
+values anywhere, become `"[secret]"`; webhook registrations keep only the redacted URL
+(origin), the method, the number of headers and whether a body template is set.
+
+**Transcripts** (`heard`, `said`, say / show text in call args) are kept by default (≤ 500
+chars each). The owner's setting **log transcripts: off** removes them *before the write*
+(the entry keeps its metadata and gets `redacted: true`); turning it on again affects new
+entries only.
+
+### Limits (Durable Object storage)
+
+Entries go into chunks (`al:c:<n>`, ≤ 64 entries / ≤ 16 KB each) behind a head pointer
+(`al:h`): an append reads the pointer and the head chunk and writes the head chunk back — one
+row written, which is what a SQLite-backed Durable Object bills, whatever the size. Kept:
+**the last 24 h, and at most 48 chunks (≤ 768 KB, ≤ 3072 entries)**, whichever is smaller;
+older chunks are deleted as the head moves on, and nothing older than 24 h is ever returned.
+A busy device (~500 turns a day, ~10 entries each) fits; storage stays under 1 MB per
+device. Device lines are capped at 64 per frame and 240 per minute; device events at 60 per
+minute. Forgetting the device deletes the log.
+
+### Device log lines
+
+The firmware tags every log line written while a relay job runs (say, listen, ask, update)
+with the job id's random part (`[j_<tag>]` in `/api/log` text, `"job"` in its JSON). With the
+`log_upload` cap and a welcome that carries `log`, it uploads:
+
+`{"t":"log","boot":<n>,"up":<uptime ms>,"lines":[[seq, ms, "<tag>", "<text>"], …]}` —
+at most `max_lines` lines (oldest first, text ≤ 150 chars, frame ≤ 12 KB), only lines worth
+it: job-tagged lines, `E` / `W` lines and `EVT` lines (not the routine 10 s `EVT TL` timeline,
+but its `TL!` trouble form). Sent after each welcome (the previous boot's lines once, as
+`"prev":true` with that boot's `"sync":[uptime ms, relay ms]` from its last welcome, then the
+current backlog, newest two frames at most) and after each job ends; at most one frame per 2 s.
+
+The relay maps the tag to `<device_id>.j_<tag>`, converts uptime to wall time (`receive time −
+(up − ms)`; previous boot: `sync[1] + (ms − sync[0])`, or its receive time with `approx:true`
+when that boot never had a welcome) and skips lines it already has (by `boot` + `seq`). An
+older relay ignores the frame.
+
+The device keeps a persistent copy for power loss: `/spiffs/diag.log`, a header
+`#molty-log 2 boot=<n> sync_up=<ms> sync_wall=<ms>` then `<seq> <ms> <tag|-> <text>` lines
+(newest 12 KB). Written on an error line or important event, and on the 30-minute tick only
+when an uploadable line arrived since the last write; never in the first 90 s after boot and
+at least 5 minutes apart (≤ 288 small writes a day even with errors all day; typically a
+few). Soft resets (panic, watchdog, OTA restart) are covered by the no-init RAM ring.
+
+### Reading it
+
+- **Owner** (console): `GET /v1/devices/<id>/activity?since=a42|<unix ms>&limit=1..500&agent=<name>&kind=call,job&job=<job id>&errors=1`
+  with `X-Molty-Link-Code` (same auth and CORS as the [voice owner API](#owner-api-console)) →
+  `{entries, next, more, transcripts, limits:{max_age_h, max_entries}}`, entries oldest first.
+  `since=a<id>`: entries after it, `limit` at most (`more` when cut; resume from `next`); no
+  `since`: the newest `limit` (default 200). `POST {transcripts: true|false}` sets the setting.
+- **Agents**: `GET /v1/activity?since&limit&kind&job&errors` (bearer) or MCP `molty_activity` →
+  `{entries, next, more}`: **only that agent's own** calls, jobs and pairing, the device lines of
+  its own jobs, and the device's connects / disconnects within its jobs' spans (5 s before to
+  30 s after). Never another agent's entries or transcripts; `agent=` is ignored. Voice box
+  tokens are refused (`403`).
 
 ## Default relay
 
