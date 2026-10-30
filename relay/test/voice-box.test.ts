@@ -189,13 +189,13 @@ describe("voice box pairing", () => {
     const s = await connect(room, host);
     device(room, s);
     const r = await pairAs(room, LINK, "Claude");
-    expect(Object.keys(r).sort()).toEqual(["agent_name", "agent_token", "code", "device_id", "status"]);
+    expect(Object.keys(r).sort()).toEqual(["agent_name", "agent_token", "api_version", "code", "device_id", "status"]);
     expect(s.last("pair.request").agent_name).toBe("Claude");
     expect([...(await kv.list<any>("tok:")).values()][0]).not.toHaveProperty("role");
     const b: RelayBackend = { device: () => room };
     // REST pair reply keeps its exact shape for agents, and adds role only for a box
     const agent = await rest(b, "POST", "/v1/pair", { device_id: DEVICE, link_code: NEXT[0], agent_name: "rest agent" });
-    expect(Object.keys(agent.body).sort()).toEqual(["agent_name", "agent_token", "code", "device_id", "ok"]);
+    expect(Object.keys(agent.body).sort()).toEqual(["agent_name", "agent_token", "api_version", "code", "device_id", "ok"]);
     const voice = await rest(b, "POST", "/v1/pair", { device_id: DEVICE, link_code: NEXT[1], agent_name: "box", role: "voice" });
     expect(voice.body).toMatchObject({ ok: true, role: "voice" });
     expect((await rest(b, "POST", "/v1/pair", { device_id: DEVICE, link_code: NEXT[2], agent_name: "x", role: "admin" })).body).toMatchObject({ ok: false, error: "invalid_args" });

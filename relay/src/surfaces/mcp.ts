@@ -16,14 +16,17 @@ import { ACK_THINK_S, COLORS, DEFAULT_ASK_COLORS, DEFAULT_ASK_TIMEOUT_S, DEFAULT
 const LISTEN_MS_DOC = `Listen window ceiling in ms: 1..${MAX_LISTEN_MS}, or 0 = unlimited (ends only on end of speech / turn, no_speech, or a ${LISTEN_CEILING_MS / 60000} min safety ceiling, reason max). Omit it: the human's own setting applies (${DEFAULT_LISTEN_MS} ms out of the box). The listen ends early when they finish.`;
 import { AGENT_EVENT_TYPES, type AgentEvent, INBOX_LIMITS, eventsLine, seqOf } from "../core/events.js";
 import { DEVICE_ID_RE, isRecord, type JsonObject } from "../core/protocol.js";
-import { RELAY_VERSION, SKILL_VERSION, type SkillNotice, skillHeadline, skillLine, skillUpdate } from "../core/version.js";
+import { API_VERSION, RELAY_VERSION } from "../core/version.js";
+
+/** Where agents read the skill (the relay does not serve it). */
+export const SKILL_HOME = "https://github.com/apresmoi/molty.uno/tree/main/skills/molty";
 
 export const SUPPORTED_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"];
-export const SERVER_INFO = { name: "molty-relay", title: `Molty relay (skill v${SKILL_VERSION})`, version: RELAY_VERSION };
+export const SERVER_INFO = { name: "molty-relay", title: `Molty relay (api v${API_VERSION})`, version: RELAY_VERSION };
 const MAX_BODY = 256 * 1024;
 const INSTRUCTIONS =
   `Tools operate a physical Molty device through the molty-relay. Pair first with molty_pair (no token needed), then send the returned agent_token as 'Authorization: Bearer <token>'. For conversation use molty_talk: ONE call per turn speaks your reply, then listens and returns what the human said ({heard, reason}); moods (listening, thinking, speaking) are automatic, so don't call molty_mood around talking. When the human finishes, Molty acknowledges it by itself at once (a soft chirp, then thinking): go straight to your answer, no "let me think" filler; if the answer needs long work (tools, search), still say a short spoken ack first or keep thinking up with molty_mood, so the human is never left in silence. Keep spoken replies to 1-2 sentences. For a decision the human can answer with a tap use molty_ask: say the question, offer 1-${MAX_ASK_OPTIONS} options of at most ${MAX_ASK_LABEL} characters ("yes", "no", "later"); answer is null on timeout/cancelled/offline. molty_say / molty_listen return a job immediately (wait:true blocks until done); poll a job with molty_wait (<= 8 s per call). ` +
-  `Molty also emits events (${AGENT_EVENT_TYPES.join(", ")}) into your own inbox: unread ones ride along on every tool result as 'events' plus a 'Molty: ...' line; molty_events pulls/waits for them; molty_webhook registers an HTTPS request the relay sends you per event. A shake means the human wants to talk: Molty listens by itself and you get one 'utterance' event {turn_id, text, ...}: answer it at once with molty_talk {say, in_reply_to: turn_id} (the first agent to answer claims the turn; others get turn_claimed). Other events: react briefly, once per moment. Full guide: GET /skill.md on this relay. ${skillHeadline()}. When the skill changes again, your next successful tool result carries 'skill_update' plus a 'Molty's skill was updated' line once: re-read /skill.md then. When your human asks to check Molty for updates (any wording), call molty_updates and follow its 'actions'; ask before molty_update.`;
+  `Molty also emits events (${AGENT_EVENT_TYPES.join(", ")}) into your own inbox: unread ones ride along on every tool result as 'events' plus a 'Molty: ...' line; molty_events pulls/waits for them; molty_webhook registers an HTTPS request the relay sends you per event. A shake means the human wants to talk: Molty listens by itself and you get one 'utterance' event {turn_id, text, ...}: answer it at once with molty_talk {say, in_reply_to: turn_id} (the first agent to answer claims the turn; others get turn_claimed). Other events: react briefly, once per moment. Full guide: the molty agent skill, ${SKILL_HOME} (Claude Code / Codex: the molty plugin). This relay speaks agent api_version ${API_VERSION} (also in molty_status relay.api_version); what this Molty can do is relay.caps. When your human asks to check Molty for updates (any wording), call molty_updates and follow its 'actions'; ask before molty_update.`;
 
 type Prop = { type: string | string[]; description: string; enum?: string[]; items?: { type: "string"; enum?: string[] } | { anyOf: JsonObject[] } };
 type Schema = { type: "object"; properties: Record<string, Prop>; required: string[]; additionalProperties: false };
@@ -196,7 +199,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "molty_updates",
     description:
-      "Check Molty for updates, in one call: use it whenever your human asks to check Molty for updates (any wording). Returns {skill:{yours, latest, whats_new:[{version, text, min_fw?}], url}, firmware:{current, board, online, latest|null, status: current|update_available|no_build_for_board|no_release|unknown, update_available, notes_url, needed_for:[{feature, what, needs, released}], can_self_update, release_check}, actions:[plain-language steps]}. Follow 'actions' in order: re-read the skill when it is newer, tell your human what's new in plain words, and when firmware is behind ASK them before calling molty_update. Marks the skill and the reported release as seen for you.",
+      "Check Molty for updates, in one call: use it whenever your human asks to check Molty for updates (any wording). Returns {api_version, firmware:{current, board, online, latest|null, status: current|update_available|no_build_for_board|no_release|unknown, update_available, notes_url, needed_for:[{feature, what, needs, released}], can_self_update, release_check}, actions:[plain-language steps]}. Follow 'actions' in order: when firmware is behind ASK your human before calling molty_update. Marks the reported release as seen for you. The skill itself updates with the molty plugin, not through the relay.",
     inputSchema: obj({}),
     auth: true,
     run: (api, t) => api.updates(t),
@@ -360,7 +363,7 @@ const rpcResult = (id: unknown, result: unknown) => ({ jsonrpc: "2.0", id, resul
  * structured result and one extra text item ("Molty: was shaken ... 2 min ago").
  * Results without unread events are byte-for-byte what they were before.
  */
-function toolResult(out: Outcome<JsonObject>, origin = "") {
+function toolResult(out: Outcome<JsonObject>) {
   const value: JsonObject = out.ok ? { ok: true, ...out.result } : { ok: false, error: out.error, ...(out.message ? { message: out.message } : {}), ...(out.details ?? {}) };
   let line: string | undefined;
   if (out.inbox && out.inbox.events.length > 0 && !("events" in value)) {
@@ -370,13 +373,10 @@ function toolResult(out: Outcome<JsonObject>, origin = "") {
   } else if (out.ok && Array.isArray(value.events) && value.events.length > 0 && "next" in value) {
     line = eventsLine(value.events as unknown as AgentEvent[], Date.now(), value.more === true); // molty_events itself
   }
-  // One-time skill notice (already marked seen by the backend): structured field + one line.
-  if (out.notice && !("skill_update" in value)) value.skill_update = skillUpdate(out.notice, origin) as unknown as JsonObject;
   // One-time firmware release notice (already marked seen): structured field + one line.
   if (out.fw_notice && !("firmware_update" in value)) value.firmware_update = out.fw_notice as unknown as JsonObject;
   const content = [{ type: "text", text: JSON.stringify(value) }];
   if (line) content.push({ type: "text", text: line });
-  if (out.notice) content.push({ type: "text", text: skillLine(out.notice, origin) });
   if (out.fw_notice) content.push({ type: "text", text: firmwareLine(out.fw_notice) });
   return { content, structuredContent: value, isError: !out.ok };
 }
@@ -385,7 +385,7 @@ function toolResult(out: Outcome<JsonObject>, origin = "") {
 export const firmwareLine = (n: FirmwareNotice): string =>
   `Molty firmware ${n.latest} is out (Molty runs ${n.current}). Mention it to your human once and ask before updating; molty_updates has the details.`;
 
-async function callTool(backend: RelayBackend, token: string | undefined, params: unknown, origin: string) {
+async function callTool(backend: RelayBackend, token: string | undefined, params: unknown) {
   if (!isRecord(params) || typeof params.name !== "string") return { error: [-32602, "Invalid tool parameters"] as const };
   const tool = TOOL_MAP.get(params.name);
   if (!tool) return { error: [-32602, `Unknown tool ${params.name}`] as const };
@@ -404,33 +404,29 @@ async function callTool(backend: RelayBackend, token: string | undefined, params
     // Ride-along events were already marked read by the backend: whatever a
     // tool does to reshape the outcome (molty_wait builds new ones), the
     // inbox it received must reach the caller.
-    // Same for the skill notice.
-    const { api, taken, notices, fwNotices } = capturingInbox(backend.device(deviceId));
+    // Same for the firmware notice.
+    const { api, taken, fwNotices } = capturingInbox(backend.device(deviceId));
     let out = await tool.run(api, token ?? "", args);
     if (taken.length && !out.inbox) out = { ...out, inbox: mergeInbox(taken) };
-    if (notices.length && !out.notice) out = { ...out, notice: notices[notices.length - 1] };
     if (fwNotices.length && !out.fw_notice) out = { ...out, fw_notice: fwNotices[fwNotices.length - 1] };
-    return { result: toolResult(out, origin) };
+    return { result: toolResult(out) };
   } catch (e) {
     return { result: toolResult({ ok: false, error: "internal", message: e instanceof Error ? e.message : String(e) }) };
   }
 }
 
 /** Wraps an AgentApi so every inbox and notice any call returns is recorded. */
-function capturingInbox(api: AgentApi): { api: AgentApi; taken: Inbox[]; notices: SkillNotice[]; fwNotices: FirmwareNotice[] } {
+function capturingInbox(api: AgentApi): { api: AgentApi; taken: Inbox[]; fwNotices: FirmwareNotice[] } {
   const taken: Inbox[] = [];
-  const notices: SkillNotice[] = [];
   const fwNotices: FirmwareNotice[] = [];
   const keep = async <T extends Outcome<any>>(p: Promise<T>) => {
     const out = await p;
     if (out.inbox && out.inbox.events.length) taken.push(out.inbox);
-    if (out.notice) notices.push(out.notice);
     if (out.fw_notice) fwNotices.push(out.fw_notice);
     return out;
   };
   return {
     taken,
-    notices,
     fwNotices,
     api: {
       pair: (req) => keep(api.pair(req)),
@@ -452,7 +448,7 @@ function mergeInbox(list: Inbox[]): Inbox {
   return { events: list.flatMap((i) => i.events), more: list.some((i) => i.more), now: Math.max(...list.map((i) => i.now)) };
 }
 
-async function handleOne(msg: unknown, backend: RelayBackend, token: string | undefined, origin: string): Promise<object | undefined> {
+async function handleOne(msg: unknown, backend: RelayBackend, token: string | undefined): Promise<object | undefined> {
   if (!isRecord(msg)) return rpcError(null, -32600, "Invalid Request");
   const m = msg as RpcMessage;
   const isRequest = "id" in m && m.id !== null && m.id !== undefined;
@@ -475,7 +471,7 @@ async function handleOne(msg: unknown, backend: RelayBackend, token: string | un
     case "tools/list":
       return rpcResult(m.id, { tools: TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) });
     case "tools/call": {
-      const out = await callTool(backend, token, m.params, origin);
+      const out = await callTool(backend, token, m.params);
       return "error" in out && out.error ? rpcError(m.id, out.error[0], out.error[1]) : rpcResult(m.id, out.result);
     }
     default:
@@ -503,13 +499,12 @@ export async function handleMcp(request: Request, backend: RelayBackend): Promis
     return json(rpcError(null, -32700, "Parse error"), 400);
   }
   const token = bearer(request.headers.get("authorization"));
-  const origin = new URL(request.url).origin;
   if (Array.isArray(body)) {
     // Batches were allowed in 2025-03-26 (removed later); accept for older clients.
     if (body.length === 0) return json(rpcError(null, -32600, "Invalid Request"), 400);
-    const replies = (await Promise.all(body.map((m) => handleOne(m, backend, token, origin)))).filter(Boolean);
+    const replies = (await Promise.all(body.map((m) => handleOne(m, backend, token)))).filter(Boolean);
     return replies.length ? json(replies) : new Response(null, { status: 202 });
   }
-  const reply = await handleOne(body, backend, token, origin);
+  const reply = await handleOne(body, backend, token);
   return reply ? json(reply) : new Response(null, { status: 202 });
 }

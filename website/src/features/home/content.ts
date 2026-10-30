@@ -38,7 +38,7 @@ export const bridgeFlow = "agent ──MCP · REST──▶ relay ◀──WSS�
 
 export const pairingMessage = `Hi! Please connect yourself to my Molty.
 
-Instructions: https://<relay>/skill.md
+Skill: https://github.com/apresmoi/molty.uno/tree/main/skills/molty
 Device: molty-k7m2w9c4ya
 Code: K7M2W9C4
 

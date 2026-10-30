@@ -104,16 +104,33 @@ The console gives you **one message**. Paste it into your agent's chat:
 ```
 Hi! Please connect yourself to my Molty.
 
-Instructions: https://<relay>/skill.md
+Skill: https://github.com/apresmoi/molty.uno/tree/main/skills/molty
 Device: molty-xxxxxxxxxx
 Code: K7M2W9C4
 
 I'll tap Molty to accept you.
 ```
 
-The agent reads the instructions page, asks to pair, and a 4-digit code appears on
+The agent reads the skill, asks to pair, and a 4-digit code appears on
 Molty's screen. **Tap Molty to accept.** Done. Your agent can now show, say, listen and
 change moods.
+
+**Claude Code or Codex?** Install the Molty skill once (the console shows these lines too),
+then paste the message:
+
+```sh
+claude plugin marketplace add apresmoi/molty.uno
+claude plugin install molty@molty
+```
+
+```sh
+codex plugin marketplace add apresmoi/molty.uno
+codex plugin add molty@molty
+```
+
+The skill lives in [`skills/molty/`](skills/molty/) and ships only through these git
+marketplaces; other agents read it on GitHub. Update it with `claude plugin update molty@molty`
+(after `claude plugin marketplace update molty`) or `codex plugin marketplace upgrade molty`.
 
 Works with **any agent that can make an HTTPS request**: Claude Code, Grok bots,
 OpenClaw, Cursor, a shell script. Chat-only apps that can't call URLs can add the relay as
@@ -134,6 +151,9 @@ npx wrangler deploy                     # prints https://molty-relay.<you>.worke
 
 Then point Molty at it: console → **Agent** → **Advanced** → relay, set
 `wss://molty-relay.<you>.workers.dev`, and save. Molty reconnects to your relay.
+Before deploying on your own account, drop the `d1_databases` block from
+`relay/wrangler.jsonc` (it is the project's waitlist). Step by step, with what changes for
+agents: [self-hosting](skills/molty/references/self-hosting.md).
 
 - **Voice** uses Cloudflare Workers AI by default. To use OpenAI instead, run
   `npx wrangler secret put OPENAI_API_KEY` and set `VOICE_PROVIDER` to `openai`.

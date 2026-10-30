@@ -23,7 +23,7 @@ relay/
 │  │  ├─ events.ts     agent-visible events: allow-list + shapes, limits, one-line summaries
 │  │  ├─ releases.ts   latest GitHub release: parse, per-board OTA asset + sha256, hourly cache, stale on error
 │  │  ├─ updates.ts    "is Molty up to date": firmware block, firmware_too_old, plain-language actions
-│  │  ├─ version.ts    product version, skill WHATS_NEW, FEATURES (feature -> minimum firmware)
+│  │  ├─ version.ts    product version, API_VERSION (agent API contract), FEATURES (feature -> minimum firmware)
 │  │  ├─ webhook.ts    webhook spec validation, templates, HMAC signing, SSRF guard, redaction
 │  │  ├─ api.ts        AgentApi / RelayBackend: the only thing surfaces see
 │  │  ├─ commands.ts   agent command validation, shared by every surface
@@ -32,7 +32,7 @@ relay/
 │  │  ├─ crypto.ts     Web Crypto helpers, codes, base64
 │  │  ├─ store.ts      KV + Clock seams (+ in-memory versions)
 │  │  └─ waitlist.ts   waitlist validation, WaitlistStore seam, rate-limit rule
-│  ├─ surfaces/        Fetch-API only: mcp.ts (Streamable HTTP), rest.ts, releases.ts (public latest release), waitlist.ts
+│  ├─ surfaces/        Fetch-API only: mcp.ts (Streamable HTTP), rest.ts, releases.ts (public latest release), waitlist.ts, skill.ts (deprecated /skill.md redirect)
 │  ├─ voice/           VoiceProvider + workers-ai.ts, openai.ts, none.ts, index.ts (selection)
 │  ├─ device-object.ts Cloudflare host: DO + hibernatable WebSockets + storage adapter
 │  ├─ waitlist-host.ts Cloudflare host: D1 WaitlistStore + Turnstile check
@@ -103,7 +103,7 @@ Spec: [AGENT-LINK.md "Events"](../docs/AGENT-LINK.md#events-device--agents). Sto
 the device's DO: `ev:<seq>` (ring), `evseq`, `evrate`, `cur:<sha256(token)>` (per-agent
 cursor), `whq:<sha256(token)>:<seq>` (pending deliveries), the webhook itself on the
 token record, and `room_id` (lets `alarm()` rebuild the room). All survive hibernation.
-Skill versions ([AGENT-LINK.md](../docs/AGENT-LINK.md#skill-versions-and-the-update-notice)): `skill_seen` on the token record, `skillev` (version already announced as a `skill.updated` event) and `origin` (public origin, for its URL); bump by appending to `WHATS_NEW` in `src/core/version.ts`.
+The relay does not serve or version the agent skill ([AGENT-LINK.md](../docs/AGENT-LINK.md#agent-skill-and-api_version)): it states `api_version` (`API_VERSION` in `src/core/version.ts`) and answers `GET /skill.md` with a deprecated `301` to the skill on GitHub. Keys left from the old skill versions (`skill_seen` on token records, `skillev`, `origin`) are never read; a device reset clears the last two.
 
 | Limit | Value |
 |---|---|

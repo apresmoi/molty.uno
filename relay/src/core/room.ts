@@ -15,11 +15,8 @@
 // per-token read cursor `cur:<token hash>` and a webhook delivery queue
 // `whq:` driven by the host's alarm. All survive hibernation.
 //
-// Skill versions (core/version.ts): each TokenRecord holds `skill_seen`; the
-// first successful authenticated outcome for an agent behind SKILL_VERSION
-// carries a one-time `notice` (written atomically onto the token, never
-// resurrecting a revoked one). Once per room and version, a `skill.updated`
-// event is appended to the inbox when an older agent exists (`skillev`).
+// The agent skill is not the relay's: it ships as the molty plugin (skills/molty/).
+// Agents read the contract they talk to from `api_version` (core/version.ts).
 //
 // Voice box (voice/remote.ts, docs/AGENT-LINK.md "Voice box"): an owner's own STT/TTS
 // machine pairs like an agent (role "voice", same tap) and dials the voice socket. Its
@@ -77,9 +74,9 @@ import {
   type JsonObject,
 } from "./protocol.js";
 import { type Clock, type KV, sleep } from "./store.js";
-import { AGENT_EVENT_TYPES, type AgentEvent, INBOX_LIMITS, SAMPLE_EVENTS, SKILL_EVENT, UTTERANCE_EVENT, agentEventData, eventId } from "./events.js";
+import { AGENT_EVENT_TYPES, type AgentEvent, INBOX_LIMITS, SAMPLE_EVENTS, UTTERANCE_EVENT, agentEventData, eventId } from "./events.js";
 import { LISTEN_ADOPT_FEATURE, LOCAL_LISTEN_RE, type TurnClaim, type TurnRecord, claimTurn, turnTimings, utteranceData } from "./turns.js";
-import { FEATURES, SKILL_PATH, SKILL_VERSION, type SkillNotice, WHATS_NEW, compareVersions, skillNotice } from "./version.js";
+import { API_VERSION, FEATURES, compareVersions } from "./version.js";
 import type { ReleaseLookup, ReleaseSource } from "./releases.js";
 import { type DeviceFacts, type FirmwareBlock, CONSOLE_HINT, firmwareBlock, howToUpdate, installable, tooOld, updateActions } from "./updates.js";
 import {
@@ -237,7 +234,7 @@ interface TokenRecord {
    * one KV.update (atomic read-check-write). Revocation deletes the record.
    */
   wh_rev?: number;
-  /** Last skill version this agent was told about (absent = paired before versions: older than any). */
+  /** Legacy (skill versions, removed): may still sit on tokens minted before; ignored. */
   skill_seen?: number;
   /** Newest firmware release this agent was told about (fw_notice / molty_updates). */
   fw_seen?: string;
@@ -390,9 +387,8 @@ const K = {
   ev: (seq: number) => `ev:${String(seq).padStart(12, "0")}`,
   cur: (hash: string) => `cur:${hash}`,
   whq: (hash: string, seq: number) => `whq:${hash}:${String(seq).padStart(12, "0")}`,
-  /** Highest skill version already announced as a `skill.updated` inbox event. */
+  /** Legacy keys (skill versions, removed): only cleared on reset. */
   skillEv: "skillev",
-  /** Public origin of this relay (from the device upgrade request), for absolute URLs in events. */
   origin: "origin",
   devinfo: "devinfo",
   upd: "upd",
@@ -461,8 +457,6 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   /** Outstanding long-polls per token hash (admission control). */
   private readonly polls = new Map<string, number>();
   private evChain: Promise<void> = Promise.resolve();
-  /** Cache of "skillev >= SKILL_VERSION" (KV stays authoritative). */
-  private skillAnnounced = false;
   private cmdSeq = 0;
   private updTimer: unknown;
 
@@ -601,14 +595,6 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     await this.activity.device("connect", { fw: hello.fw ?? null, board: hello.board ?? null, ...(typeof frame.rssi === "number" ? { rssi: frame.rssi } : {}) });
     // Back from an update's reboot (or a reconnect during one): settle it by the version it runs.
     await this.settleUpdate(hello.fw ?? null);
-    // After a deploy the device reconnects: tell push-mode agents the skill changed.
-    await this.announceSkill();
-  }
-
-  /** The host records the public origin it was reached on (device upgrade request). */
-  async noteOrigin(origin: string): Promise<void> {
-    if (!/^https?:\/\/[A-Za-z0-9.:[\]-]{1,253}$/.test(origin)) return;
-    if ((await this.kv.get<string>(K.origin)) !== origin) await this.kv.put(K.origin, origin);
   }
 
   private onRes(frame: Record<string, unknown>) {
@@ -810,6 +796,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       result: {
         ...res.result,
         relay: {
+          api_version: API_VERSION,
           device_id: this.deviceId,
           online: !!sock,
           fw: meta?.fw ?? null,
@@ -880,7 +867,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       if (rec.status === "pending" && now >= rec.expires) rec.status = "timeout";
       if (rec.status === "approved" && rec.token) {
         await this.kv.delete(K.pair(id)); // the token is handed out exactly once
-        const result: PairResult = { status: "approved", agent_token: rec.token, device_id: this.deviceId, agent_name: rec.agent_name, code: rec.code };
+        const result: PairResult = { status: "approved", agent_token: rec.token, device_id: this.deviceId, agent_name: rec.agent_name, code: rec.code, api_version: API_VERSION };
         if (rec.role === "voice") result.role = "voice";
         return { ok: true, result };
       }
@@ -912,8 +899,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         await this.unpairBoxes("replaced by a newly paired voice box");
         await this.kv.put<TokenRecord>(K.token(hash), { agent_name: rec.agent_name, created: this.clock.now(), role: "voice" });
       } else {
-        // A new agent just learned the current skill (skill.md / MCP instructions).
-        await this.kv.put<TokenRecord>(K.token(hash), { agent_name: rec.agent_name, created: this.clock.now(), skill_seen: SKILL_VERSION });
+        await this.kv.put<TokenRecord>(K.token(hash), { agent_name: rec.agent_name, created: this.clock.now() });
         // A new agent starts at the head: it hears what happens from now on.
         await this.kv.put(K.cur(hash), (await this.kv.get<number>(K.evSeq)) ?? 0);
       }
@@ -1047,27 +1033,15 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private async updatesNow(token: string): Promise<Outcome> {
     const a = await this.agentAuth(token);
     if ("ok" in a) return a;
-    // Reporting the skill counts as telling it: mark it seen (atomically, never resurrecting a revoked token).
-    const yours = await this.kv.update<TokenRecord, number | undefined>(K.token(a.hash), (cur) =>
-      cur ? { next: { ...cur, skill_seen: SKILL_VERSION }, result: cur.skill_seen ?? 1 } : { result: undefined },
-    );
-    if (yours === undefined) return fail("unauthorized");
-    const origin = (await this.kv.get<string>(K.origin)) ?? "";
-    const skill = {
-      yours,
-      latest: SKILL_VERSION,
-      whats_new: WHATS_NEW.filter((e) => e.version > yours).map((e) => ({ ...e })),
-      url: `${origin}${SKILL_PATH}`,
-    };
     const fw = firmwareBlock(await this.facts(), await this.releases.latest("wait"));
-    // Likewise the firmware release it reports.
+    // Reporting the firmware release counts as telling it (atomically, never resurrecting a revoked token).
     if (fw.update_available && fw.latest) {
       const latest = fw.latest;
       await this.kv.update<TokenRecord, void>(K.token(a.hash), (cur) =>
         cur && !(cur.fw_seen && (compareVersions(cur.fw_seen, latest) ?? -1) >= 0) ? { next: { ...cur, fw_seen: latest }, result: undefined } : { result: undefined },
       );
     }
-    const result = { skill, firmware: fw, actions: updateActions(skill, fw) };
+    const result = { api_version: API_VERSION, firmware: fw, actions: updateActions(fw) };
     // Re-read the token so the ride-along does not repeat what this result already says.
     const rec = (await this.kv.get<TokenRecord>(K.token(a.hash))) ?? a.rec;
     return this.ride({ rec, hash: a.hash }, { ok: true, result: result as unknown as JsonObject });
@@ -2231,7 +2205,6 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     let queued = false;
     for (const [key, tok] of await this.kv.list<TokenRecord>("tok:")) {
       if (!tok.webhook || tok.webhook.disabled || (tok.webhook.events && !tok.webhook.events.includes(type))) continue;
-      if (type === SKILL_EVENT && !skillNotice(tok.skill_seen)) continue; // already current
       const hash = key.slice(4);
       await this.kv.put<Delivery>(K.whq(hash, seq), { tok: hash, seq, attempt: 0, due: now });
       queued = true;
@@ -2275,11 +2248,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     return { ...out, inbox: { events: r.events, more: r.more, now: this.clock.now() } };
   }
 
-  /** Everything that rides along on a successful authenticated outcome: unread events, then the skill and firmware notices. */
+  /** Everything that rides along on a successful authenticated outcome: unread events, then the firmware notice. */
   private async ride<T>(a: { rec: TokenRecord; hash: string }, out: Outcome<T>): Promise<Outcome<T>> {
     if (!out.ok) return out;
-    await this.announceSkill();
-    return this.withFwNotice(a, await this.withNotice(a, await this.withInbox(a.hash, out)));
+    return this.withFwNotice(a, await this.withInbox(a.hash, out));
   }
 
   /** What the relay knows about the device: the live socket's hello, else the last one stored. */
@@ -2291,7 +2263,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   }
 
   /**
-   * One-time "newer firmware released" notice, same rules as the skill notice (success
+   * One-time "newer firmware released" notice, same rules as the events ride-along (success
    * only, marked seen atomically on the current token record), once per token per
    * release. Never waits on GitHub: it uses whatever release answer is cached.
    */
@@ -2310,43 +2282,6 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     return { ...out, fw_notice };
   }
 
-  /**
-   * One-time skill notice, same rule as events: only on success, and marked
-   * seen in the same step it is handed over. Atomic on the CURRENT token
-   * record: a token revoked meanwhile is never recreated, and two concurrent
-   * calls cannot both deliver it.
-   */
-  private async withNotice<T>(a: { rec: TokenRecord; hash: string }, out: Outcome<T>): Promise<Outcome<T>> {
-    if (!out.ok || !skillNotice(a.rec.skill_seen)) return out;
-    const notice = await this.kv.update<TokenRecord, SkillNotice | undefined>(K.token(a.hash), (cur) => {
-      if (!cur) return { result: undefined };
-      const n = skillNotice(cur.skill_seen);
-      if (!n) return { result: undefined };
-      return { next: { ...cur, skill_seen: SKILL_VERSION }, result: n };
-    });
-    return notice ? { ...out, notice } : out;
-  }
-
-  /**
-   * Once per room and skill version: append a `skill.updated` event when some
-   * paired agent is behind, so pull/webhook agents hear it without calling.
-   */
-  private async announceSkill(): Promise<void> {
-    if (this.skillAnnounced) return;
-    if (((await this.kv.get<number>(K.skillEv)) ?? 0) >= SKILL_VERSION) {
-      this.skillAnnounced = true;
-      return;
-    }
-    // New tokens are minted current, so the set of older agents only shrinks.
-    const behind = [...(await this.kv.list<TokenRecord>("tok:")).values()].some((t) => t.role !== "voice" && skillNotice(t.skill_seen));
-    const won = await this.kv.update<number, boolean>(K.skillEv, (cur) => ((cur ?? 0) >= SKILL_VERSION ? { result: false } : { next: SKILL_VERSION, result: true }));
-    this.skillAnnounced = true;
-    if (!won || !behind) return;
-    const n = skillNotice(undefined)!;
-    const origin = await this.kv.get<string>(K.origin);
-    await this.appendEvent(SKILL_EVENT, { version: n.version, whats_new: n.whats_new, url: `${origin ?? ""}${SKILL_PATH}` }, true);
-  }
-
   async events(token: string, req: EventsRequest): Promise<Outcome> {
     return this.logged(token, "events", { since: req.since ?? null, wait_ms: req.wait_ms }, () => this.eventsNow(token, req));
   }
@@ -2354,7 +2289,6 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private async eventsNow(token: string, req: EventsRequest): Promise<Outcome> {
     const a = await this.agentAuth(token);
     if ("ok" in a) return a;
-    await this.announceSkill();
     if (req.since !== undefined && (!Number.isInteger(req.since) || req.since < 0)) return fail("invalid_args", "since must be an event id like e42");
     const waitMs = Math.max(0, Math.min(req.wait_ms, INBOX_LIMITS.restWaitS * 1000));
     // Admission: bounded concurrent long-polls per token and per device.
@@ -2377,7 +2311,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         if (r.events.length > 0 || remaining <= 0 || req.signal?.aborted) {
           if (req.signal?.aborted) return fail("cancelled"); // nobody is listening: hand over nothing
           await this.advance(a.hash, r.cursor, r.next);
-          return this.withFwNotice(a, await this.withNotice(a, { ok: true, result: { events: r.events as unknown as JsonObject[], next: eventId(r.next), more: r.more } }));
+          return this.withFwNotice(a, { ok: true, result: { events: r.events as unknown as JsonObject[], next: eventId(r.next), more: r.more } });
         }
         await this.waitOn(this.inboxWaiters, "inbox", remaining, req.signal);
       }

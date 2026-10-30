@@ -22,7 +22,7 @@ export const SYNCED_DOCS = [
     source: 'docs/AGENT-LINK.md',
     slug: 'agents/protocol',
     title: 'Agent link protocol',
-    description: 'Device, relay and agent: pairing, skill.md, REST, remote MCP and the device wire.',
+    description: 'Device, relay and agent: pairing, the agent skill, REST, remote MCP and the device wire.',
   },
   {
     source: 'docs/CLI.md',

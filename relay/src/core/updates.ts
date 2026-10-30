@@ -106,21 +106,12 @@ export function tooOld(feature: FeatureId, d: DeviceFacts, lookup: ReleaseLookup
   return { feature: f.tool, current: d.fw, needed: f.min_fw, latest: fw.latest, how };
 }
 
-export interface SkillPart {
-  yours: number;
-  latest: number;
-  whats_new: Array<{ version: number; text: string; min_fw?: string }>;
-  url: string;
-}
-
-/** Plain-language steps for the agent, in order. */
-export function updateActions(skill: SkillPart, fw: FirmwareBlock): string[] {
+/**
+ * Plain-language firmware steps for the agent, in order. The agent skill is not the
+ * relay's business: it updates with the molty plugin (skills/molty/references/updates.md).
+ */
+export function updateActions(fw: FirmwareBlock): string[] {
   const out: string[] = [];
-  if (skill.yours < skill.latest) {
-    out.push(`Re-read ${skill.url} now (you know skill v${skill.yours}, it is v${skill.latest}), then tell your human in plain words what you can do now: ${skill.whats_new.map((e) => e.text + (e.min_fw ? ` (needs Molty firmware ${e.min_fw})` : "")).join("; ")}.`);
-  } else {
-    out.push(`Your skill is current (v${skill.latest}): nothing to re-read.`);
-  }
   switch (fw.status) {
     case "update_available":
       out.push(

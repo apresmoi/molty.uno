@@ -8,7 +8,7 @@
 //                                       -> {ok:true, result:{job, status:"done", heard, said?, reason, ms, timings}} | 202 pending
 //   POST   /v1/devices/<id>/ask         {say?, options[1..5], timeout_s?, voice?}
 //                                       -> {ok:true, result:{job, status:"done", answer, index, reason?, said?, ms, timings}} | 202 pending
-//   GET    /v1/devices/<id>/updates     -> {ok:true, result:{skill, firmware, actions}} ("check Molty for updates")
+//   GET    /v1/devices/<id>/updates     -> {ok:true, result:{api_version, firmware, actions}} ("check Molty for updates")
 //   POST   /v1/devices/<id>/update      {} -> job: {ok:true, result:{job, status:"done", outcome, ...}} | 202 {job, status:"pending", phase}
 //                                       | {ok:true, result:{status:"up_to_date", current, latest}}
 //   GET    /v1/jobs/<job>[?wait_s=0..8] -> {job, kind, status, phase?, result?, error?, detail?}
@@ -27,9 +27,7 @@
 //
 // Any authenticated response may carry the caller's unread device events as an
 // additive top-level `events` array (+ `more_events`); reading them marks them read.
-// Likewise, once per agent per skill version, an additive top-level
-// `skill_update: {version, whats_new, url}` (core/version.ts), and once per agent per
-// newer firmware release `firmware_update: {current, latest, board, notes_url,
+// Likewise, once per agent per newer firmware release `firmware_update: {current, latest, board, notes_url,
 // can_self_update, how}` (core/updates.ts). An error's `details` (e.g.
 // firmware_too_old {feature, current, needed, latest, how}) are top-level fields next to `error`.
 
@@ -37,7 +35,6 @@ import { type ActivityOwnerRequest, type Inbox, type JobView, type Outcome, type
 import { TALK_BUDGET_MS } from "../core/commands.js";
 import { INBOX_LIMITS, seqOf } from "../core/events.js";
 import { DEVICE_ID_RE, isRecord } from "../core/protocol.js";
-import { skillUpdate } from "../core/version.js";
 
 const STATUS: Record<string, number> = {
   unauthorized: 401,
@@ -77,7 +74,7 @@ function failure(out: { error: string; message?: string; details?: Record<string
   return json({ ok: false, error: out.error, ...(out.message ? { message: out.message } : {}), ...(out.details ?? {}), ...inboxExtra(out.inbox), ...rideAlong }, STATUS[out.error] ?? 502);
 }
 
-type RideAlong = Pick<Outcome, "inbox" | "notice" | "fw_notice">;
+type RideAlong = Pick<Outcome, "inbox" | "fw_notice">;
 
 async function body(request: Request): Promise<Record<string, unknown> | undefined> {
   const text = await request.text();
@@ -94,12 +91,12 @@ async function body(request: Request): Promise<Record<string, unknown> | undefin
 function merged(a: RideAlong, b: RideAlong): RideAlong {
   const events = [...(a.inbox?.events ?? []), ...(b.inbox?.events ?? [])];
   const inbox: Inbox | undefined = events.length ? { events, more: !!(a.inbox?.more || b.inbox?.more), now: Math.max(a.inbox?.now ?? 0, b.inbox?.now ?? 0) } : undefined;
-  return { inbox, notice: b.notice ?? a.notice, fw_notice: b.fw_notice ?? a.fw_notice };
+  return { inbox, fw_notice: b.fw_notice ?? a.fw_notice };
 }
 
 /**
  * A waited job as a REST reply: done -> 200 result, failed -> error, still running -> 202 pending.
- * `ride` is what the starting call already consumed (events marked read, skill notice marked
+ * `ride` is what the starting call already consumed (events marked read, firmware notice marked
  * seen): it reaches the caller on EVERY outcome, failures included, or it is lost for good.
  */
 function jobResponse(
@@ -121,10 +118,9 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
   const token = bearer(request.headers.get("authorization"));
   const extra = (out: RideAlong) => ({
     ...inboxExtra(out.inbox),
-    ...(out.notice ? { skill_update: skillUpdate(out.notice, url.origin) } : {}),
     ...(out.fw_notice ? { firmware_update: out.fw_notice } : {}),
   });
-  // A failed outcome renders its ride-alongs too (events already marked read, skill notice
+  // A failed outcome renders its ride-alongs too (events already marked read, firmware notice
   // already marked seen), like MCP's toolResult: dropping them here would lose them for good.
   const failed = (out: { error: string; message?: string; details?: Record<string, unknown> } & RideAlong) => failure(out, extra(out));
 
@@ -148,8 +144,8 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
     });
     if (!out.ok) return failed(out);
     if (out.result.status === "approved") {
-      const { agent_token, device_id, agent_name, code, role } = out.result;
-      return json({ ok: true, agent_token, device_id, agent_name, code, ...(role ? { role } : {}) });
+      const { agent_token, device_id, agent_name, code, api_version, role } = out.result;
+      return json({ ok: true, agent_token, device_id, agent_name, code, api_version, ...(role ? { role } : {}) });
     }
     return json({ ok: true, ...out.result }, 202);
   }

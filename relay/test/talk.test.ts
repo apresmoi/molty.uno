@@ -13,7 +13,6 @@ import type { TtsOptions } from "../src/voice/types.js";
 import { handleMcp } from "../src/surfaces/mcp.js";
 import { handleRest } from "../src/surfaces/rest.js";
 import { WorkersAiVoice } from "../src/voice/workers-ai.js";
-import { SKILL_VERSION } from "../src/core/version.js";
 import { DEVICE, type FakeSocket, FakeVoice, LINK, connect, makeRoom } from "./helpers.js";
 
 const FAST = { cmdTimeoutMs: 300, pairWindowMs: 400, sayChunkSamples: 1600, sayLeadFrames: 2, listenGraceMs: 200, sayDoneGraceMs: 300 };
@@ -663,32 +662,33 @@ describe("wait:true on say / listen", () => {
     await w.room.job(w.token, a.structuredContent.job, 2000);
   });
 
-  it("REST: a failing say {wait:true} still hands over the events and skill notice it consumed", async () => {
+  it("REST: a failing say {wait:true} still hands over the events it consumed", async () => {
     const w = await setup();
     w.voice.tts = async () => {
       throw new Error("upstream 500");
     };
     await w.room.socketMessage(w.sock, JSON.stringify({ t: "evt", name: "tap", data: { x: 0.5, y: 0.25 } }));
+    // a token minted while the relay still tracked skill versions: no skill notice anywhere
     for (const [k, v] of await w.kv.list<Record<string, unknown>>("tok:")) await w.kv.put(k, { ...v, skill_seen: 2 });
     const r = await rest(w.backend, w.token, `/v1/devices/${DEVICE}/cmd`, { name: "say", args: { text: "hi" }, wait: true });
     expect(r.status).toBe(502);
-    expect(r.body).toMatchObject({ ok: false, error: "upstream 500", skill_update: { version: SKILL_VERSION } });
+    expect(r.body).toMatchObject({ ok: false, error: "upstream 500" });
+    expect(r.body).not.toHaveProperty("skill_update");
     expect(r.body.events.map((e: any) => e.type)).toContain("tap");
-    // consistent: what was handed over is marked read / seen, and is not handed over again
+    // consistent: what was handed over is marked read, and is not handed over again
     const head = await w.kv.get<number>("evseq");
     const [[hash]] = [...(await w.kv.list("tok:")).keys()].map((k) => [k.slice(4)]);
     expect(await w.kv.get<number>(`cur:${hash}`)).toBe(head);
-    expect([...(await w.kv.list<any>("tok:")).values()][0].skill_seen).toBe(SKILL_VERSION);
     const again = await rest(w.backend, w.token, `/v1/devices/${DEVICE}/cmd`, { name: "imu" });
     expect(again.body.events).toBeUndefined();
     expect(again.body.skill_update).toBeUndefined();
   });
 
-  it("REST: every failure renders the ride-alongs its outcome carries (events + skill notice), like MCP", async () => {
+  it("REST: every failure renders the ride-alongs its outcome carries (events + firmware notice), like MCP", async () => {
     const w = await setup({ cmdError: (name) => (name === "volume" ? "busy" : undefined) });
     // A backend whose failed outcomes carry already-consumed ride-alongs: the REST
     // surface must hand them over on every failure path, never drop them.
-    const ride = { inbox: { events: [{ id: "e9", type: "tap", at: 1, data: {} } as any], more: false, now: 2 }, notice: { version: 3, whats_new: ["v3: x"] } };
+    const ride = { inbox: { events: [{ id: "e9", type: "tap", at: 1, data: {} } as any], more: false, now: 2 }, fw_notice: { current: "0.1.0", latest: "0.2.0", board: "b", notes_url: "n", can_self_update: false, how: "h" } };
     const api: any = w.room;
     const decorated: RelayBackend = {
       device: () =>
@@ -717,7 +717,8 @@ describe("wait:true on say / listen", () => {
     ];
     for (const c of cases) {
       expect(c.body.ok).toBe(false);
-      expect(c.body).toMatchObject({ events: [{ id: "e9", type: "tap" }], skill_update: { version: 3, url: "https://relay.test/skill.md" } });
+      expect(c.body).toMatchObject({ events: [{ id: "e9", type: "tap" }], firmware_update: { current: "0.1.0", latest: "0.2.0" } });
+      expect(c.body).not.toHaveProperty("skill_update");
     }
   });
 
