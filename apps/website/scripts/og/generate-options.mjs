@@ -8,10 +8,11 @@
 //   pnpm build && pnpm preview          (another terminal)
 //   node scripts/og/generate-options.mjs [baseUrl=http://localhost:4330] [outDir=e2e-out/og-options]
 //   OG_ONLY=device,conversation OG_THEMES=dark,light OG_MOLTY=cute-fox OG_BURST=1 …
+//   OG_ONLY=device OG_THEMES=dark OG_MOLTYS=all OG_JOBS=3 …   (every Molty + a contact sheet)
 //   (OG_BURST: frames every 0.5 s to <outDir>/burst/, to re-pick a moment)
 import { chromium } from 'playwright';
 import sharp from 'sharp';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OPTIONS } from './options.mjs';
@@ -75,7 +76,7 @@ function compose([html, opt]) {
     return p;
   };
 
-  if (opt.name === 'device') {
+  if (opt.name.startsWith('device')) {
     card.append(moltySlot('og-screen', true), word('molty.UNO', 'og-word'), line(opt.line));
   } else if (opt.name === 'conversation') {
     const reader = island('SpeedReader');
@@ -139,35 +140,72 @@ async function pickFrame(page, { from, to, band }) {
   return best.png;
 }
 
+/** One card: compose, serve, wait for the fluid (and its Molty), capture → <OUT>/<stem>.png. */
+async function render(opt, theme, stem) {
+  const ctx = await browser.newContext({ viewport: { width: 1200, height: 630 }, deviceScaleFactor: 1, colorScheme: theme });
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => console.error(`${stem}: pageerror ${e.message}`));
+  await page.goto(BASE + '/robots.txt');
+  const card = await page.evaluate(compose, [landing, opt]);
+  const url = `${BASE}/__og/${stem.replace(/\W/g, '-')}`;
+  await page.route(url, (r) => r.fulfill({ body: card, contentType: 'text/html; charset=utf-8' }));
+  await page.goto(url, { waitUntil: 'networkidle' });
+  await page.waitForFunction(() => document.documentElement.dataset.fluid === 'live', null, { timeout: 20000 });
+  if (opt.molty) await page.waitForFunction(() => document.documentElement.dataset.fluidMoltys === 'live', null, { timeout: 20000 });
+  if (opt.waitFor) await page.waitForSelector(opt.waitFor, { timeout: 30000 });
+  if (BURST) {
+    mkdirSync(`${OUT}/burst`, { recursive: true });
+    for (let i = 0; i < 24; i++) {
+      await page.screenshot({ path: `${OUT}/burst/${stem}-${String(i * 500).padStart(5, '0')}.png` });
+      await page.waitForTimeout(500);
+    }
+  } else {
+    const png = opt.pick ? await pickFrame(page, opt.pick) : (await page.waitForTimeout(opt.settle), await page.screenshot());
+    await sharp(png).toFile(`${OUT}/${stem}.png`);
+    await sharp(png).resize(600, 315).toFile(`${OUT}/${stem}-600.png`);
+    console.log(`wrote ${OUT}/${stem}.png (+ -600)`);
+  }
+  await ctx.close();
+}
+
+/** OG_MOLTYS=all (or a comma list of ids): every card with a Molty once per Molty, as
+ *  <outDir>/<moltyDir>/<name>[-light].png (moltyDir: the option's, else its name), plus a
+ *  labelled contact-sheet[-light].png there. */
+const catalog = JSON.parse(readFileSync(new URL('../../../../device/console/src/catalog/catalog.json', import.meta.url), 'utf8')).creatures;
+const moltys = process.env.OG_MOLTYS === 'all' ? catalog.map((c) => c.id) : process.env.OG_MOLTYS?.split(',');
+const short = (id) => id.replace(/^cute-/, '');
+const jobs = [];
+const sheets = [];
 for (const opt of OPTIONS) {
   if (ONLY && !ONLY.includes(opt.name)) continue;
   if (process.env.OG_MOLTY && opt.molty) opt.molty = process.env.OG_MOLTY;
   for (const theme of THEMES.filter((t) => (opt.themes ?? THEMES).includes(t))) {
-    const ctx = await browser.newContext({ viewport: { width: 1200, height: 630 }, deviceScaleFactor: 1, colorScheme: theme });
-    const page = await ctx.newPage();
-    page.on('pageerror', (e) => console.error(`${opt.name}/${theme}: pageerror ${e.message}`));
-    await page.goto(BASE + '/robots.txt');
-    const card = await page.evaluate(compose, [landing, opt]);
-    const url = `${BASE}/__og/${opt.name}`;
-    await page.route(url, (r) => r.fulfill({ body: card, contentType: 'text/html; charset=utf-8' }));
-    await page.goto(url, { waitUntil: 'networkidle' });
-    await page.waitForFunction(() => document.documentElement.dataset.fluid === 'live', null, { timeout: 20000 });
-    if (opt.molty) await page.waitForFunction(() => document.documentElement.dataset.fluidMoltys === 'live', null, { timeout: 20000 });
-    if (opt.waitFor) await page.waitForSelector(opt.waitFor, { timeout: 30000 });
-    const stem = `${opt.file}${theme === 'dark' ? '' : '-light'}`;
-    if (BURST) {
-      mkdirSync(`${OUT}/burst`, { recursive: true });
-      for (let i = 0; i < 24; i++) {
-        await page.screenshot({ path: `${OUT}/burst/${stem}-${String(i * 500).padStart(5, '0')}.png` });
-        await page.waitForTimeout(500);
-      }
-    } else {
-      const png = opt.pick ? await pickFrame(page, opt.pick) : (await page.waitForTimeout(opt.settle), await page.screenshot());
-      await sharp(png).toFile(`${OUT}/${stem}.png`);
-      await sharp(png).resize(600, 315).toFile(`${OUT}/${stem}-600.png`);
-      console.log(`wrote ${OUT}/${stem}.png (+ -600)`);
-    }
-    await ctx.close();
+    const suffix = theme === 'dark' ? '' : '-light';
+    if (moltys && opt.molty) {
+      const dir = opt.moltyDir ?? opt.name;
+      mkdirSync(`${OUT}/${dir}`, { recursive: true });
+      for (const id of moltys) jobs.push(() => render({ ...opt, molty: id }, theme, `${dir}/${short(id)}${suffix}`));
+      sheets.push({ stem: `${dir}/contact-sheet${suffix}`, cards: moltys.map((id) => [`${dir}/${short(id)}${suffix}`, catalog.find((c) => c.id === id)?.name ?? id]) });
+    } else jobs.push(() => render(opt, theme, `${opt.file}${suffix}`));
   }
+}
+// OG_JOBS cards at once (each runs its own fluid; a few in parallel keep 30 fps on a laptop)
+const queue = [...jobs];
+await Promise.all(Array.from({ length: Number(process.env.OG_JOBS ?? 1) }, async () => { while (queue.length) await queue.shift()(); }));
+
+/** All cards of one option tiled at 400×210 with their names, to compare at a glance. */
+for (const { stem, cards } of sheets) {
+  const W = 400, H = 210, L = 30, C = 5;
+  const tiles = await Promise.all(
+    cards.map(async ([file, name], i) => {
+      const label = Buffer.from(`<svg width="${W}" height="${L}"><rect width="100%" height="100%" fill="#111"/><text x="10" y="21" font-family="Menlo, monospace" font-size="16" fill="#d8e2dc">${name}</text></svg>`);
+      const img = await sharp(`${OUT}/${file}.png`).resize(W, H).toBuffer();
+      const x = (i % C) * W, y = Math.floor(i / C) * (H + L);
+      return [{ input: img, left: x, top: y }, { input: label, left: x, top: y + H }];
+    }),
+  );
+  const out = `${OUT}/${stem}.png`;
+  await sharp({ create: { width: W * C, height: (H + L) * Math.ceil(cards.length / C), channels: 3, background: '#222' } }).composite(tiles.flat()).png().toFile(out);
+  console.log(`wrote ${out}`);
 }
 await browser.close();
