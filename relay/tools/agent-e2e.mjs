@@ -49,7 +49,7 @@ async function waitJob(client, job) {
 const anon = await mcpClient();
 check(anon.getServerVersion()?.name === "molty-relay", "serverInfo");
 const tools = (await anon.listTools()).tools.map((t) => t.name).sort();
-check(tools.length === 12, `12 tools, got ${tools}`);
+check(tools.length === 14, `14 tools, got ${tools}`);
 log("mcp initialize + tools/list", tools);
 
 const denied = await anon.callTool({ name: "molty_status", arguments: {} });
@@ -105,6 +105,21 @@ const heard = await waitJob(mcp, listen.job);
 check(!heard.isError && sc(heard).text === o["expect-stt"], `listen text: ${JSON.stringify(sc(heard))}`);
 check(sc(heard).duration_ms === 1500 && sc(heard).peak > 0.25 && sc(heard).rms > 0.15, "listen levels from fake tone");
 log("mcp molty_wait(listen)", sc(heard));
+
+// events: long-poll wakes on a device evt; ride-along on the next tool result
+const polled = mcp.callTool({ name: "molty_events", arguments: { wait_s: 8 } });
+await call("molty_show", { text: "evt:shake" });
+const got = await polled;
+check(!got.isError && sc(got).events?.[0]?.type === "shake" && /^Molty: was shaken/.test(got.content[1]?.text ?? ""), `molty_events long-poll: ${JSON.stringify(got)}`);
+log("mcp molty_events (long-poll) <- device evt shake", sc(got).events);
+await call("molty_show", { text: "evt:tap" });
+await new Promise((s) => setTimeout(s, 300));
+const ride = await call("molty_imu");
+check(ride.events?.[0]?.type === "tap", `ride-along tap: ${JSON.stringify(ride)}`);
+check(!(await call("molty_imu")).events, "ride-along delivered once");
+const hook = await call("molty_webhook", { url: "https://example.org/molty", headers: { "X-Key": "e2e-secret" } });
+check(/^whsec_/.test(hook.secret) && !JSON.stringify(hook.dry_run).includes("e2e-secret"), "webhook registered, secret once, header redacted");
+check((await call("molty_webhook", { remove: true })).removed === true, "webhook removed");
 await mcp.close();
 
 // ---------------------------------------------------------------- REST
@@ -161,6 +176,11 @@ const l2 = await rest("POST", `/v1/devices/${o.device}/cmd`, { name: "listen", a
 const l2done = await pollJob(l2.body.result.job);
 check(l2done.status === "done" && l2done.result.text === o["expect-stt"], `REST listen ${JSON.stringify(l2done)}`);
 log("rest listen + GET /v1/jobs", l2done);
+
+await rest("POST", `/v1/devices/${o.device}/cmd`, { name: "show", args: { text: "evt:button" } }, t2);
+const ev2 = await rest("GET", `/v1/devices/${o.device}/events?wait_s=5`, undefined, t2);
+check(ev2.status === 200 && ev2.body.events.some((e) => e.type === "button"), `REST events: ${JSON.stringify(ev2)}`);
+log("rest GET /v1/devices/<id>/events", ev2.body);
 
 const rv = await rest("DELETE", "/v1/token", undefined, t2);
 check(rv.status === 200, "revoke");

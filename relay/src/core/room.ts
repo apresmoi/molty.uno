@@ -10,8 +10,12 @@
 // work (an open agent request, a pending timer, an incoming frame) keeps
 // the host awake. If the host is evicted anyway, jobs left "running" with
 // no in-memory task are reported as failed:"interrupted" instead of hanging.
+//
+// Agent events (shake/tap/button) are storage-backed: an `ev:` ring, a
+// per-token read cursor `cur:<token hash>` and a webhook delivery queue
+// `whq:` driven by the host's alarm. All survive hibernation.
 
-import { type AgentApi, type JobView, type Outcome, type PairRequest, type PairResult, TERMINAL } from "./api.js";
+import { type AgentApi, type EventsRequest, type JobView, type Outcome, type PairRequest, type PairResult, TERMINAL, type WebhookRequest } from "./api.js";
 import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
 import { CommandError, validateCommand } from "./commands.js";
 import { b64Decode, b64urlEncode, randomBytes, randomDigits, safeEqual, sha256Hex } from "./crypto.js";
@@ -32,6 +36,20 @@ import {
   type JsonObject,
 } from "./protocol.js";
 import { type Clock, type KV, sleep } from "./store.js";
+import { type AgentEvent, INBOX_LIMITS, agentEventData, eventId } from "./events.js";
+import {
+  type Resolver,
+  WEBHOOK_LIMITS,
+  type WebhookRecord,
+  guardWebhookUrl,
+  newWebhookSecret,
+  parseWebhookSpec,
+  redactRendered,
+  redactUrl,
+  redactWebhook,
+  renderRequest,
+  signatureHeader,
+} from "./webhook.js";
 import type { VoiceProvider } from "../voice/types.js";
 
 export interface SocketMeta {
@@ -90,6 +108,12 @@ export interface RoomDeps {
   host: SocketHost;
   timings?: Partial<RoomTimings>;
   log?: (msg: string, data?: Record<string, unknown>) => void;
+  /** Host alarm: run `room.alarm()` at (or soon after) `at`. Replaces any earlier schedule. Without it webhooks are not delivered. */
+  scheduler?: { setAlarm(at: number): Promise<void> };
+  /** Outbound fetch for webhooks (default: global fetch). */
+  fetch?: (req: Request) => Promise<Response>;
+  /** Resolves a webhook host to its addresses for the SSRF guard; absent = literal checks only. */
+  resolveHost?: Resolver;
 }
 
 interface DeviceRecord {
@@ -99,6 +123,18 @@ interface DeviceRecord {
 interface TokenRecord {
   agent_name: string;
   created: number;
+  webhook?: WebhookRecord;
+}
+interface Delivery {
+  tok: string;
+  seq: number;
+  attempt: number;
+  due: number;
+}
+interface RateRecord {
+  start: number;
+  n: number;
+  dropped: number;
 }
 interface PairRecord {
   id: string;
@@ -135,7 +171,14 @@ const K = {
   token: (hash: string) => `tok:${hash}`,
   pair: (id: string) => `pair:${id}`,
   job: (id: string) => `job:${id}`,
+  evSeq: "evseq",
+  evRate: "evrate",
+  ev: (seq: number) => `ev:${String(seq).padStart(12, "0")}`,
+  cur: (hash: string) => `cur:${hash}`,
+  whq: (hash: string, seq: number) => `whq:${hash}:${String(seq).padStart(12, "0")}`,
 };
+
+const SAMPLE_EVENT: AgentEvent = { id: "e1", type: "shake", ts: 0, data: { peak_g: 2.4, reversals: 5, ms: 900 } };
 
 const fail = (error: string, message?: string): { ok: false; error: string; message?: string } =>
   message === undefined ? { ok: false, error } : { ok: false, error, message };
@@ -148,6 +191,9 @@ export class DeviceRoom implements AgentApi {
   private readonly host: SocketHost;
   private readonly t: RoomTimings;
   private readonly log: NonNullable<RoomDeps["log"]>;
+  private readonly scheduler: RoomDeps["scheduler"];
+  private readonly fetcher: NonNullable<RoomDeps["fetch"]>;
+  private readonly resolveHost: RoomDeps["resolveHost"];
 
   // ---- in-flight work only (see header comment) ----
   private readonly pendingCmds = new Map<string, PendingCmd>();
@@ -158,6 +204,8 @@ export class DeviceRoom implements AgentApi {
   private listenBuf: ListenBuffer | undefined;
   private audioJob: string | undefined;
   private readonly lastEvents = new Map<string, { data: unknown; at: number }>();
+  private readonly inboxWaiters = new Map<string, Set<() => void>>();
+  private evChain: Promise<void> = Promise.resolve();
   private cmdSeq = 0;
 
   constructor(deps: RoomDeps) {
@@ -168,6 +216,9 @@ export class DeviceRoom implements AgentApi {
     this.host = deps.host;
     this.t = { ...DEFAULT_TIMINGS, ...deps.timings };
     this.log = deps.log ?? (() => {});
+    this.scheduler = deps.scheduler;
+    this.fetcher = deps.fetch ?? ((req) => globalThis.fetch(req));
+    this.resolveHost = deps.resolveHost;
   }
 
   // =====================================================================
@@ -288,6 +339,8 @@ export class DeviceRoom implements AgentApi {
     if (this.lastEvents.size > 32) this.lastEvents.delete(this.lastEvents.keys().next().value!);
     if (frame.name === "say.done" && typeof data.job === "string") this.sayDone.get(data.job)?.();
     if (frame.name === "link_code") await this.onLinkCode(data.link_code);
+    const clean = agentEventData(frame.name, data);
+    if (clean) await this.appendEvent(frame.name, clean);
   }
 
   private async onLinkCode(code: unknown) {
@@ -295,10 +348,10 @@ export class DeviceRoom implements AgentApi {
   }
 
   private async onForget(sock: DeviceSocket) {
-    for (const prefix of ["tok:", "pair:", "job:"]) {
+    for (const prefix of ["tok:", "pair:", "job:", "ev:", "cur:", "whq:"]) {
       for (const key of (await this.kv.list(prefix)).keys()) await this.kv.delete(key);
     }
-    for (const key of [K.device, K.link, K.pairCurrent]) await this.kv.delete(key);
+    for (const key of [K.device, K.link, K.pairCurrent, K.evSeq, K.evRate]) await this.kv.delete(key);
     this.log("device forgotten", { device: this.deviceId });
     sock.sendText(JSON.stringify({ t: "forgotten" }));
     sock.close(CLOSE_FORGOTTEN, "forgotten");
@@ -333,20 +386,29 @@ export class DeviceRoom implements AgentApi {
   // Agent API
   // =====================================================================
 
-  private async authorize(token: string): Promise<TokenRecord | undefined> {
+  private async auth(token: string): Promise<{ rec: TokenRecord; hash: string } | undefined> {
     if (typeof token !== "string" || !token.startsWith(`${this.deviceId}.`)) return undefined;
-    return this.kv.get<TokenRecord>(K.token(await sha256Hex(token)));
+    const hash = await sha256Hex(token);
+    const rec = await this.kv.get<TokenRecord>(K.token(hash));
+    return rec ? { rec, hash } : undefined;
   }
 
   async revoke(token: string): Promise<Outcome> {
-    if (!(await this.authorize(token))) return fail("unauthorized");
-    await this.kv.delete(K.token(await sha256Hex(token)));
+    const a = await this.auth(token);
+    if (!a) return fail("unauthorized");
+    await this.kv.delete(K.token(a.hash));
+    await this.kv.delete(K.cur(a.hash));
+    await this.dropDeliveries(a.hash);
     return { ok: true, result: { revoked: true } };
   }
 
   async command(token: string, name: string, args: unknown): Promise<Outcome> {
-    const agent = await this.authorize(token);
-    if (!agent) return fail("unauthorized");
+    const a = await this.auth(token);
+    if (!a) return fail("unauthorized");
+    return this.withInbox(a.hash, await this.runCommand(a.rec, name, args));
+  }
+
+  private async runCommand(agent: TokenRecord, name: string, args: unknown): Promise<Outcome> {
     let cmd;
     try {
       cmd = validateCommand(name, args);
@@ -375,7 +437,17 @@ export class DeviceRoom implements AgentApi {
       ok: true,
       result: {
         ...res.result,
-        relay: { device_id: this.deviceId, online: !!sock, fw: meta?.fw ?? null, board: meta?.board ?? null, caps: meta?.caps ?? [], connected_since: meta?.since ?? null, voice: this.voice.name, events },
+        relay: {
+          device_id: this.deviceId,
+          online: !!sock,
+          fw: meta?.fw ?? null,
+          board: meta?.board ?? null,
+          caps: meta?.caps ?? [],
+          connected_since: meta?.since ?? null,
+          voice: this.voice.name,
+          events,
+          webhook: agent.webhook ? (redactWebhook(agent.webhook) as JsonObject) : null,
+        },
       },
     };
   }
@@ -453,7 +525,10 @@ export class DeviceRoom implements AgentApi {
       rec.status = "timeout";
     } else if (frame.ok === true) {
       const token = `${this.deviceId}.${b64urlEncode(randomBytes(32))}`;
-      await this.kv.put<TokenRecord>(K.token(await sha256Hex(token)), { agent_name: rec.agent_name, created: this.clock.now() });
+      const hash = await sha256Hex(token);
+      await this.kv.put<TokenRecord>(K.token(hash), { agent_name: rec.agent_name, created: this.clock.now() });
+      // A new agent starts at the head: it hears what happens from now on.
+      await this.kv.put(K.cur(hash), (await this.kv.get<number>(K.evSeq)) ?? 0);
       rec.status = "approved";
       rec.token = token;
     } else {
@@ -471,7 +546,12 @@ export class DeviceRoom implements AgentApi {
   // ---------------- jobs ----------------
 
   async job(token: string, jobId: string, waitMs: number): Promise<Outcome<JobView>> {
-    if (!(await this.authorize(token))) return fail("unauthorized");
+    const a = await this.auth(token);
+    if (!a) return fail("unauthorized");
+    return this.withInbox(a.hash, await this.runJob(jobId, waitMs));
+  }
+
+  private async runJob(jobId: string, waitMs: number): Promise<Outcome<JobView>> {
     if (typeof jobId !== "string" || !jobId.startsWith(`${this.deviceId}.j_`)) return fail("not_found");
     const deadline = this.clock.now() + Math.max(0, Math.min(waitMs, 8000));
     for (;;) {
@@ -608,6 +688,230 @@ export class DeviceRoom implements AgentApi {
       buf.ended = true;
       buf.wake?.();
     }
+  }
+
+  // ---------------- agent events: inbox ----------------
+
+  /** Serialized so concurrent frames cannot race the sequence counter. */
+  private appendEvent(type: string, data: JsonObject): Promise<void> {
+    const run = this.evChain.then(() => this.doAppend(type, data));
+    this.evChain = run.catch(() => {});
+    return run;
+  }
+
+  private async doAppend(type: string, data: JsonObject) {
+    const now = this.clock.now();
+    const rate = (await this.kv.get<RateRecord>(K.evRate)) ?? { start: now, n: 0, dropped: 0 };
+    if (now - rate.start >= 60000) Object.assign(rate, { start: now, n: 0 });
+    if (rate.n >= INBOX_LIMITS.perMinute) {
+      rate.dropped++;
+      await this.kv.put(K.evRate, rate);
+      return;
+    }
+    rate.n++;
+    await this.kv.put(K.evRate, rate);
+    const seq = ((await this.kv.get<number>(K.evSeq)) ?? 0) + 1;
+    await this.kv.put(K.evSeq, seq);
+    const ev: AgentEvent = { id: eventId(seq), type, ts: now, data };
+    await this.kv.put(K.ev(seq), ev);
+    for (const [key, old] of await this.kv.list<AgentEvent>("ev:")) {
+      const oldSeq = Number(key.slice(3));
+      if (oldSeq <= seq - INBOX_LIMITS.keep || now - old.ts > INBOX_LIMITS.maxAgeMs) await this.kv.delete(key);
+    }
+    this.notify(this.inboxWaiters, "inbox");
+    let queued = false;
+    for (const [key, tok] of await this.kv.list<TokenRecord>("tok:")) {
+      if (!tok.webhook || tok.webhook.disabled) continue;
+      const hash = key.slice(4);
+      await this.kv.put<Delivery>(K.whq(hash, seq), { tok: hash, seq, attempt: 0, due: now });
+      queued = true;
+    }
+    if (queued) await this.scheduleDeliveries();
+  }
+
+  /** Unread events after `since` (default: the agent's cursor), oldest first, at most `limit`. */
+  private async readInbox(hash: string, since: number | undefined, limit: number) {
+    const head = (await this.kv.get<number>(K.evSeq)) ?? 0;
+    let cursor = await this.kv.get<number>(K.cur(hash));
+    if (cursor === undefined) {
+      cursor = head; // tokens minted before the inbox existed start at the head
+      await this.kv.put(K.cur(hash), cursor);
+    }
+    const from = Math.min(since ?? cursor, head);
+    if (from >= head) return { events: [] as AgentEvent[], next: from, more: false, cursor };
+    const now = this.clock.now();
+    const unread = [...(await this.kv.list<AgentEvent>("ev:")).entries()]
+      .map(([key, ev]) => ({ seq: Number(key.slice(3)), ev }))
+      .filter((e) => e.seq > from && now - e.ev.ts <= INBOX_LIMITS.maxAgeMs);
+    const page = unread.slice(0, limit);
+    return { events: page.map((e) => e.ev), next: page.length ? page[page.length - 1].seq : from, more: unread.length > page.length, cursor };
+  }
+
+  private async advance(hash: string, cursor: number, next: number) {
+    if (next > cursor) await this.kv.put(K.cur(hash), next);
+  }
+
+  /** Piggyback: attach this agent's unread events to any authenticated outcome and mark them read. */
+  private async withInbox<T>(hash: string, out: Outcome<T>): Promise<Outcome<T>> {
+    const r = await this.readInbox(hash, undefined, INBOX_LIMITS.piggyback);
+    if (r.events.length === 0) return out;
+    await this.advance(hash, r.cursor, r.next);
+    return { ...out, inbox: { events: r.events, more: r.more, now: this.clock.now() } };
+  }
+
+  async events(token: string, req: EventsRequest): Promise<Outcome> {
+    const a = await this.auth(token);
+    if (!a) return fail("unauthorized");
+    if (req.since !== undefined && (!Number.isInteger(req.since) || req.since < 0)) return fail("invalid_args", "since must be an event id like e42");
+    const deadline = this.clock.now() + Math.max(0, Math.min(req.wait_ms, INBOX_LIMITS.restWaitS * 1000));
+    for (;;) {
+      const r = await this.readInbox(a.hash, req.since, INBOX_LIMITS.page);
+      const remaining = deadline - this.clock.now();
+      if (r.events.length > 0 || remaining <= 0) {
+        await this.advance(a.hash, r.cursor, r.next);
+        return { ok: true, result: { events: r.events as unknown as JsonObject[], next: eventId(r.next), more: r.more } };
+      }
+      await this.waitOn(this.inboxWaiters, "inbox", remaining);
+    }
+  }
+
+  // ---------------- agent events: webhooks ----------------
+
+  async webhook(token: string, req: WebhookRequest): Promise<Outcome> {
+    const a = await this.auth(token);
+    if (!a) return fail("unauthorized");
+    const key = K.token(a.hash);
+    if (req.action === "get") {
+      return this.withInbox(a.hash, { ok: true, result: { webhook: a.rec.webhook ? (redactWebhook(a.rec.webhook) as JsonObject) : null } });
+    }
+    if (req.action === "delete") {
+      const had = !!a.rec.webhook;
+      delete a.rec.webhook;
+      await this.kv.put(key, a.rec);
+      await this.dropDeliveries(a.hash);
+      return this.withInbox(a.hash, { ok: true, result: { removed: had } });
+    }
+    const parsed = parseWebhookSpec(req.spec);
+    if (!parsed.ok) return fail("invalid_args", parsed.message);
+    // Dry run: the template must render for a sample event, to a URL that passes the guard.
+    let rendered;
+    try {
+      rendered = renderRequest(parsed.value, this.deviceId, SAMPLE_EVENT);
+    } catch (e) {
+      return fail("invalid_args", e instanceof Error ? e.message : String(e));
+    }
+    const guard = await guardWebhookUrl(rendered.url, this.resolveHost);
+    if (!guard.ok) return fail("invalid_args", guard.message);
+    const secret = newWebhookSecret();
+    a.rec.webhook = { ...parsed.value, secret, created: this.clock.now(), fails: 0 };
+    await this.kv.put(key, a.rec);
+    await this.dropDeliveries(a.hash);
+    return this.withInbox(a.hash, {
+      ok: true,
+      result: {
+        webhook: redactWebhook(a.rec.webhook) as JsonObject,
+        secret,
+        secret_note: "Shown once. Verify Molty-Signature: t=<unix ms>,v1=hex(hmac_sha256(secret, t + '.' + body)).",
+        dry_run: redactRendered(rendered) as unknown as JsonObject,
+      },
+    });
+  }
+
+  private async dropDeliveries(hash: string) {
+    for (const key of (await this.kv.list(`whq:${hash}:`)).keys()) await this.kv.delete(key);
+  }
+
+  private async scheduleDeliveries() {
+    if (!this.scheduler) return;
+    let next = Infinity;
+    for (const d of (await this.kv.list<Delivery>("whq:")).values()) next = Math.min(next, d.due);
+    if (next !== Infinity) await this.scheduler.setAlarm(Math.max(next, this.clock.now()));
+  }
+
+  /** Host alarm handler: delivers due webhook requests, then reschedules. */
+  async alarm(): Promise<void> {
+    const now = this.clock.now();
+    const byToken = new Map<string, Array<[string, Delivery]>>();
+    for (const [key, d] of await this.kv.list<Delivery>("whq:")) {
+      if (d.due > now) continue;
+      const list = byToken.get(d.tok) ?? [];
+      if (list.length < 10) list.push([key, d]);
+      byToken.set(d.tok, list);
+    }
+    // One agent's deliveries in order (they share a failure counter); agents in parallel.
+    await Promise.all([...byToken.values()].map(async (list) => {
+      for (const [key, d] of list) await this.deliver(key, d);
+    }));
+    await this.scheduleDeliveries();
+  }
+
+  private async deliver(key: string, d: Delivery) {
+    const tokKey = K.token(d.tok);
+    const before = await this.kv.get<TokenRecord>(tokKey);
+    const ev = await this.kv.get<AgentEvent>(K.ev(d.seq));
+    if (!before?.webhook || before.webhook.disabled || !ev) return this.kv.delete(key);
+    const hook = before.webhook;
+    let error: string | undefined;
+    try {
+      const r = renderRequest(hook, this.deviceId, ev);
+      const guard = await guardWebhookUrl(r.url, this.resolveHost);
+      if (!guard.ok) throw new Error(guard.message);
+      const headers = { ...r.headers, "molty-signature": await signatureHeader(hook.secret, r.body, this.clock.now()) };
+      const res = await this.fetchWithTimeout(new Request(r.url, { method: r.method, headers, body: r.method === "GET" ? undefined : r.body, redirect: "manual" }));
+      if (res.status < 200 || res.status > 299) error = `HTTP ${res.status}`;
+      try {
+        await res.body?.cancel();
+      } catch {
+        /* ignore */
+      }
+    } catch (e) {
+      error = (e instanceof Error ? e.message : String(e)).slice(0, 200) || "fetch failed";
+    }
+    const rec = await this.kv.get<TokenRecord>(tokKey);
+    if (!rec?.webhook || rec.webhook.secret !== hook.secret) return this.kv.delete(key); // removed or replaced meanwhile
+    const w = rec.webhook;
+    if (!error) {
+      w.fails = 0;
+      w.last_ok = this.clock.now();
+      delete w.last_error;
+      await this.kv.delete(key);
+      // Delivered events count as read for this agent.
+      const cur = (await this.kv.get<number>(K.cur(d.tok))) ?? 0;
+      if (d.seq > cur) await this.kv.put(K.cur(d.tok), d.seq);
+    } else {
+      w.fails++;
+      w.last_error = error;
+      this.log("webhook delivery failed", { device: this.deviceId, url: redactUrl(w.url), error, fails: w.fails });
+      if (w.fails >= WEBHOOK_LIMITS.maxFails) {
+        w.disabled = `disabled after ${w.fails} consecutive failed deliveries; register it again to re-enable`;
+        await this.dropDeliveries(d.tok);
+      } else if (d.attempt < WEBHOOK_LIMITS.retryMs.length) {
+        await this.kv.put<Delivery>(key, { ...d, attempt: d.attempt + 1, due: this.clock.now() + WEBHOOK_LIMITS.retryMs[d.attempt] });
+      } else {
+        await this.kv.delete(key);
+      }
+    }
+    await this.kv.put(tokKey, rec);
+  }
+
+  private fetchWithTimeout(req: Request): Promise<Response> {
+    const ctl = new AbortController();
+    return new Promise<Response>((resolve, reject) => {
+      const timer = this.clock.setTimeout(() => {
+        ctl.abort();
+        reject(new Error("timeout"));
+      }, WEBHOOK_LIMITS.timeoutMs);
+      this.fetcher(new Request(req, { signal: ctl.signal })).then(
+        (res) => {
+          this.clock.clearTimeout(timer);
+          resolve(res);
+        },
+        (e: unknown) => {
+          this.clock.clearTimeout(timer);
+          reject(e);
+        },
+      );
+    });
   }
 
   // ---------------- waiter plumbing ----------------

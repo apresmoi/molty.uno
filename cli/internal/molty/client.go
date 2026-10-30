@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -25,6 +26,8 @@ type Config struct {
 	Mapper     MoodMapper
 	TTS        TTS
 	STT        STT
+	// Warn receives non-fatal notices (relay events reconnects); nil = silent.
+	Warn io.Writer
 }
 
 type HTTPTransport struct {

@@ -14,6 +14,8 @@ export const DEFAULT_LISTEN_MS = 4000;
 export const DEFAULT_WPM = 300;
 export const MAX_DIAG_TIMELINE_S = 180;
 export const MAX_LOG_BYTES = 32768;
+/** mood hold: seconds before the device reverts (quick moods revert by default). */
+export const MAX_MOOD_HOLD_S = 3600;
 
 export class CommandError extends Error {
   constructor(
@@ -79,9 +81,14 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
       return { name: n, args: patch as JsonObject, job: false };
     }
     case "mood":
-      only(args, ["mood"]);
+      only(args, ["mood", "hold_s"]);
       if (typeof args.mood !== "string" || !(MOODS as readonly string[]).includes(args.mood)) {
         throw invalid(`mood must be one of ${MOODS.join(", ")}`);
+      }
+      if (args.hold_s !== undefined) {
+        const h = args.hold_s;
+        if (typeof h !== "number" || !Number.isFinite(h) || h < 0 || h > MAX_MOOD_HOLD_S) throw invalid(`hold_s must be a number 0 <= hold_s <= ${MAX_MOOD_HOLD_S} (0 = until the next mood)`);
+        return { name: n, args: { mood: args.mood, hold_s: h }, job: false };
       }
       return { name: n, args: { mood: args.mood }, job: false };
     case "show":

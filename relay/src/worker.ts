@@ -24,6 +24,8 @@ interface DeviceRpc {
   command(id: string, token: string, name: string, args: unknown): ReturnType<AgentApi["command"]>;
   job(id: string, token: string, job: string, waitMs: number): ReturnType<AgentApi["job"]>;
   revoke(id: string, token: string): ReturnType<AgentApi["revoke"]>;
+  events(id: string, token: string, req: Parameters<AgentApi["events"]>[1]): ReturnType<AgentApi["events"]>;
+  webhook(id: string, token: string, req: Parameters<AgentApi["webhook"]>[1]): ReturnType<AgentApi["webhook"]>;
 }
 
 function backendFor(env: Env): RelayBackend {
@@ -36,6 +38,8 @@ function backendFor(env: Env): RelayBackend {
         command: (token, name, args) => stub.command(id, token, name, args),
         job: (token, job, waitMs) => stub.job(id, token, job, waitMs),
         revoke: (token) => stub.revoke(id, token),
+        events: (token, req) => stub.events(id, token, req),
+        webhook: (token, req) => stub.webhook(id, token, req),
       };
     },
   };

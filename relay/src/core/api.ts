@@ -1,6 +1,7 @@
 // Surface-neutral agent API. Surfaces (REST, MCP, later OpenClaw node) speak
 // only this; hosts (Durable Object, Node) implement RelayBackend.
 
+import type { AgentEvent } from "./events.js";
 import type { JsonObject } from "./protocol.js";
 
 export type ErrorCode =
@@ -19,7 +20,25 @@ export type ErrorCode =
   | "internal"
   | (string & {}); // device-reported codes pass through verbatim
 
-export type Outcome<T = JsonObject> = { ok: true; result: T } | { ok: false; error: ErrorCode; message?: string };
+/** Unread device events riding along on a response (surfaces render them additively). */
+export interface Inbox {
+  events: AgentEvent[];
+  /** More unread events remain than were attached. */
+  more: boolean;
+  /** Relay time the inbox was read, unix ms (for "2 min ago"). */
+  now: number;
+}
+
+export type Outcome<T = JsonObject> = ({ ok: true; result: T } | { ok: false; error: ErrorCode; message?: string }) & { inbox?: Inbox };
+
+export interface EventsRequest {
+  /** Event id or sequence to read after; default = this agent's cursor. */
+  since?: number;
+  /** Long-poll budget (ms); the surface caps it. */
+  wait_ms: number;
+}
+
+export type WebhookRequest = { action: "get" } | { action: "delete" } | { action: "set"; spec: Record<string, unknown> };
 
 export type JobStatus = "queued" | "running" | "done" | "failed";
 export const TERMINAL: readonly JobStatus[] = ["done", "failed"];
@@ -52,6 +71,10 @@ export interface AgentApi {
   command(token: string, name: string, args: unknown): Promise<Outcome>;
   job(token: string, jobId: string, waitMs: number): Promise<Outcome<JobView>>;
   revoke(token: string): Promise<Outcome>;
+  /** Pull this agent's events: `{events, next, more}`; advances the agent's cursor. */
+  events(token: string, req: EventsRequest): Promise<Outcome>;
+  /** Read, register (returns the signing secret once) or remove this agent's webhook. */
+  webhook(token: string, req: WebhookRequest): Promise<Outcome>;
 }
 
 export interface RelayBackend {

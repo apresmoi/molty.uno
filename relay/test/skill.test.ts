@@ -32,6 +32,9 @@ describe("GET /skill.md", () => {
     for (const m of MOODS) expect(md).toContain(m);
     for (const t of TOOLS) expect(md).toContain(`\`${t.name}\``);
     for (const fact of ["pair_id", "agent_token", "wait_s", "120 s", "Authorization: Bearer", "audio_busy", "secret"]) expect(md).toContain(fact);
+    // events: every receive mode, the signature contract, the honest limit, hold_s
+    for (const fact of ["https://r/v1/devices/<id>/events?wait_s=0..25", "https://r/v1/webhook", "Molty-Signature: t=<unix ms>,v1=<hex hmac_sha256(secret, t + \".\" + body)>", "molty events", "--exec", "{{event.data.<field>}}", "nothing can wake an agent", "hold_s"]) expect(md).toContain(fact);
+    for (const t of ["shake", "tap", "button"]) expect(md).toContain(`| \`${t}\` |`);
   });
 
   it("rejects non-GET and supports HEAD", async () => {

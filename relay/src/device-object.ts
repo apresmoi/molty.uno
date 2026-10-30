@@ -3,10 +3,11 @@
 // storage, sockets and RPC. Hibernation rule: the authenticated-device flag
 // lives in each socket's serialized attachment (SocketMeta), never here.
 import { DurableObject } from "cloudflare:workers";
-import type { JobView, Outcome, PairRequest, PairResult } from "./core/api.js";
+import type { EventsRequest, JobView, Outcome, PairRequest, PairResult, WebhookRequest } from "./core/api.js";
 import { PING_TEXT, PONG_TEXT } from "./core/protocol.js";
 import { type DeviceSocket, DeviceRoom, type SocketMeta } from "./core/room.js";
 import { type KV, realClock } from "./core/store.js";
+import { dohResolver } from "./core/webhook.js";
 import { createVoice, type VoiceEnv, type VoiceProvider } from "./voice/index.js";
 
 export interface Env extends VoiceEnv {
@@ -77,6 +78,9 @@ export class MoltyDevice extends DurableObject<Env> {
 
   private room(deviceId: string): DeviceRoom {
     if (this.#room && this.#room.deviceId === deviceId) return this.#room;
+    // alarm() carries no request, so remember which device this object is.
+    void this.ctx.storage.put("room_id", deviceId);
+    const fetcher = (req: Request) => fetch(req);
     this.#room = new DeviceRoom({
       deviceId,
       kv: storageKV(this.ctx.storage),
@@ -84,6 +88,10 @@ export class MoltyDevice extends DurableObject<Env> {
       voice: safeVoice(this.env),
       host: { sockets: () => this.ctx.getWebSockets().map((ws) => new WsSocket(ws)) },
       log: (msg, data) => console.log(JSON.stringify({ msg, ...data })),
+      scheduler: { setAlarm: (at) => this.ctx.storage.setAlarm(at) },
+      fetch: fetcher,
+      // Workers have no socket-level resolver: DNS-over-HTTPS for the SSRF guard (relay/README.md "Webhooks").
+      resolveHost: dohResolver(fetcher),
     });
     return this.#room;
   }
@@ -134,5 +142,17 @@ export class MoltyDevice extends DurableObject<Env> {
   }
   revoke(deviceId: string, token: string): Promise<Outcome> {
     return this.room(deviceId).revoke(token);
+  }
+  events(deviceId: string, token: string, req: EventsRequest): Promise<Outcome> {
+    return this.room(deviceId).events(token, req);
+  }
+  webhook(deviceId: string, token: string, req: WebhookRequest): Promise<Outcome> {
+    return this.room(deviceId).webhook(token, req);
+  }
+
+  // Webhook deliveries and retries (DeviceRoom.alarm).
+  async alarm() {
+    const id = await this.ctx.storage.get<string>("room_id");
+    if (id) await this.room(id).alarm();
   }
 }

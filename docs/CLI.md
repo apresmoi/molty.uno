@@ -48,7 +48,7 @@ Without `--json`, errors go to stderr. Events always produce JSON lines.
 | `listen [--ms 4000] [--out PATH.wav] [--force]` | `molty_listen` | Capture, restore visuals, save WAV, report `path`, `duration_ms`, `peak`, `rms`, optional `text` |
 | `volume <0-21>` | `molty_volume` | Set speaker volume |
 | `imu` | `molty_imu` | One acceleration/gyro snapshot with device timestamp |
-| `events [--n N]` | — | IMU WebSocket JSON lines; default 0 streams until interrupted |
+| `events [--n N] [--exec CMD]` | — | Direct: IMU WebSocket JSON lines. Relay: your Molty events, see [below](#events-and-receiving). Default 0 streams until interrupted |
 | `mcp` | — | Serve JSON-RPC on stdin/stdout; diagnostics use stderr |
 
 `show` reads stdin if text is omitted or is `-`. Text must be nonempty UTF-8,
@@ -221,6 +221,41 @@ cd cli && make build
 Offline fake-relay tests cover pairing approval/rejection/cancellation, private
 credential replacement, config precedence, command names/args/auth, job polling,
 deadlines, async MCP submission and wait, redirects and auth errors.
+
+## Events and receiving
+
+In relay mode `molty events` follows this agent's event inbox on the relay
+(`GET /v1/devices/<id>/events`, long-poll ≤ 25 s; [AGENT-LINK.md](AGENT-LINK.md#events-device--agents))
+and prints one compact JSON line per event: `{"data":{…},"id":"e42","ts":<ms>,"type":"shake|tap|button"}`.
+It is how a shell-capable agent hears Molty: run it in the background and treat each line as
+a wake-up.
+
+```sh
+molty events                                    # until interrupted
+molty events --n 1                              # block until the next event, print it, exit 0
+molty events --exec 'jq -r .type >> ~/molty.log' # also run a command per event
+```
+
+- Start: resumes at the relay's cursor for this token, so a restart neither replays read
+  events nor loses unread ones (within the relay's 200 events / 24 h). After that it passes
+  the last `next` as `since`, so a response lost in transit is read again.
+- `--exec CMD` runs `sh -c CMD` (Windows: `cmd /C`) once per event, in order, after the line
+  is printed: event JSON on stdin, `MOLTY_EVENT_ID` and `MOLTY_EVENT_TYPE` in the
+  environment, its output on stderr (stdout stays pure JSON lines). A failing command is
+  reported on stderr and the stream continues; a slow one delays later events (they wait
+  on the relay).
+- Network errors, 5xx, 408 and 429 reconnect with backoff (1 s doubling to 30 s, notice on
+  stderr). A rejected token (401/403) or another 4xx exits **1** (with `--json`, the error
+  is a JSON object on stdout): re-pair instead of looping.
+- Direct HTTP mode keeps the old behaviour (IMU frames from the device's WebSocket).
+
+Examples of running it as an agent (not prescriptions):
+
+- Claude Code: start `molty events` through the Bash tool with `run_in_background`, then
+  watch its output with the Monitor tool; each line is one event.
+- Codex CLI, local OpenClaw or any long-lived agent: run
+  `molty events --exec '<command that wakes the agent>'` as a child process or a
+  `systemd --user` / `launchd` service.
 
 ## Live check against a device
 

@@ -214,3 +214,62 @@ func TestCLIRelayPairAndSavedSelection(t *testing.T) {
 		t.Fatalf("%d %s %s commands=%d", code, &out, &stderr, commands)
 	}
 }
+
+func TestCLIRelayEventsExec(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("needs sh")
+	}
+	calls := 0
+	server := testdevice.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.URL.Path != "/v1/devices/molty-k7m2q9xa4c/events" {
+			http.NotFound(w, r)
+			return
+		}
+		switch r.Header.Get("Authorization") {
+		case "Bearer good":
+			fmt.Fprint(w, `{"ok":true,"events":[{"id":"e1","type":"shake","ts":1,"data":{"peak_g":2}},{"id":"e2","type":"tap","ts":2,"data":{"x":0,"y":1}}],"next":"e2"}`)
+		default:
+			w.WriteHeader(401)
+			fmt.Fprint(w, `{"ok":false,"error":"unauthorized"}`)
+		}
+	}))
+	defer server.Close()
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("MOLTY_RELAY", server.URL)
+	t.Setenv("MOLTY_DEVICE", "molty-k7m2q9xa4c")
+	t.Setenv("MOLTY_TOKEN", "good")
+	log := filepath.Join(dir, "events.log")
+	var out, stderr bytes.Buffer
+	cmd := `printf '%s ' "$MOLTY_EVENT_TYPE" >> ` + log + `; cat >> ` + log + `; [ "$MOLTY_EVENT_ID" != e2 ]`
+	if code := run(context.Background(), []string{"events", "--n", "2", "--exec", cmd}, strings.NewReader(""), &out, &stderr); code != 0 {
+		t.Fatalf("%d %s", code, stderr.String())
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[0], `"id":"e1"`) || !strings.Contains(lines[1], `"type":"tap"`) {
+		t.Fatalf("stdout %q", out.String())
+	}
+	data, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(data), `shake {"data":{"peak_g":2},"id":"e1"`) || !strings.Contains(string(data), "\ntap {") {
+		t.Fatalf("exec log %q", data)
+	}
+	// A failing --exec command is reported, not fatal.
+	if !strings.Contains(stderr.String(), "--exec for e2") {
+		t.Fatalf("stderr %q", stderr.String())
+	}
+	// A rejected token ends the stream with exit 1 (no reconnect loop).
+	t.Setenv("MOLTY_TOKEN", "revoked")
+	out.Reset()
+	stderr.Reset()
+	before := calls
+	if code := run(context.Background(), []string{"--json", "events"}, strings.NewReader(""), &out, &stderr); code != 1 || calls-before != 1 || !strings.Contains(out.String(), "authentication rejected") {
+		t.Fatalf("code %d calls %d out %q", code, calls-before, out.String())
+	}
+	if code := run(context.Background(), []string{"--json", "status", "--exec", "x"}, strings.NewReader(""), &out, &stderr); code != 1 {
+		t.Fatal("--exec outside events must be rejected")
+	}
+}
