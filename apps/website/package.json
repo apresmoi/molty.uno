@@ -17,6 +17,7 @@
     "test": "node --test scripts/tests/*.test.ts",
     "format": "node scripts/checks/format.mjs --write",
     "og": "node scripts/generate-og.mjs",
+    "readme": "node scripts/readme/generate.mjs",
     "screens": "node e2e/screens.mjs",
     "first-load": "node e2e/first-load.mjs",
     "stage-firmware": "node scripts/stage-firmware.mjs"
