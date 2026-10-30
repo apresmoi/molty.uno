@@ -101,7 +101,12 @@ async function newPage(tag, { offline = false, viewport = PHONE } = {}) {
     errors.push(`[${tag}] console.${m.type()}: ${m.text()}`);
   });
   page.on('pageerror', (e) => errors.push(`[${tag}] pageerror: ${e.message}`));
-  page.on('requestfailed', (r) => { if (!(offline && r.url().includes('cdn.jsdelivr.net'))) errors.push(`[${tag}] requestfailed: ${r.url()} ${r.failure()?.errorText}`); });
+  // net::ERR_ABORTED is the browser cancelling an in-flight request (a poll cut short by a
+  // navigation or a reload): not a failure of the page, and timing-dependent on CI.
+  page.on('requestfailed', (r) => {
+    if (r.failure()?.errorText === 'net::ERR_ABORTED') return;
+    if (!(offline && r.url().includes('cdn.jsdelivr.net'))) errors.push(`[${tag}] requestfailed: ${r.url()} ${r.failure()?.errorText}`);
+  });
   return page;
 }
 const shot = (page, name) => page.screenshot({ path: `${OUT}/${name}.png`, fullPage: true });
