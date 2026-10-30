@@ -98,7 +98,7 @@ describe("MCP surface", () => {
     expect((await call(backend, "molty_mood", { mood: "happy" }, token)).structuredContent).toMatchObject({ echo: "mood", args: { mood: "happy" } });
     expect((await call(backend, "molty_mood", { mood: "happy", hold_s: 1.5 }, token)).structuredContent).toMatchObject({ echo: "mood", args: { mood: "happy", hold_s: 1.5 } });
     expect((await call(backend, "molty_mood", { mood: "happy", hold_s: "1" }, token)).structuredContent.message).toBe("hold_s must be a number");
-    expect((await call(backend, "molty_mood", { mood: "happy", hold_s: 601 }, token)).structuredContent.error).toBe("invalid_args");
+    expect((await call(backend, "molty_mood", { mood: "happy", hold_s: 3601 }, token)).structuredContent.error).toBe("invalid_args");
     expect((await call(backend, "molty_show", { text: "hi" }, token)).structuredContent).toMatchObject({ echo: "show", args: { text: "hi", wpm: 300 } });
     expect((await call(backend, "molty_state", {}, token)).structuredContent).toMatchObject({ echo: "state", args: {} });
     expect((await call(backend, "molty_state", { state: { blink: 1 } }, token)).structuredContent).toMatchObject({ echo: "state", args: { blink: 1 } });
