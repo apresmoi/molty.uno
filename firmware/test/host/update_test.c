@@ -43,6 +43,16 @@ static void test_parse(void) {
     assert(OK(parse_with(true, NULL, NULL, &t)));
     assert(!strcmp(t.job, "molty-x.j_1") && !strcmp(t.version, "0.2.0") && !strcmp(t.url, URL) && t.size == 1234567 && t.timeout_ms == 60000);
     for (int i = 0; i < 32; i++) assert(t.sha256[i] == 0xdd);
+    /* the confirm question shows the version it installs, within the ask's 8-char labels */
+    char l[UPD_LABEL_MAX + 1];
+    assert(upd_confirm_label("0.2.0", l) && !strcmp(l, "v0.2.0"));
+    assert(upd_confirm_label("0.10.12", l) && !strcmp(l, "v0.10.12"));
+    assert(upd_confirm_label("10.10.10", l) && !strcmp(l, "10.10.10"));   /* 8: no room for the v */
+    assert(!upd_confirm_label("0.2.0-rc.1", l) && !upd_confirm_label("", l));
+    /* a version the question cannot show: the link's cmd is refused (consent always names
+     * the version); the console's POST (the click is the consent, its page shows it) is not */
+    assert(IS(parse_with(true, "version", "\"0.2.0-rc.1\"", NULL), "version_too_long"));
+    assert(!IS(parse_with(false, "version", "\"0.2.0-rc.1\"", NULL), "version_too_long"));
     /* sha256: exactly 64 hex digits, either case */
     assert(OK(parse_with(true, "sha256", "\"" "0123456789ABCDEFabcdef0123456789ABCDEFabcdef0123456789abcdef0123" "\"", &t)) && t.sha256[0] == 0x01 && t.sha256[5] == 0xab && t.sha256[31] == 0x23);
     assert(IS(parse_with(true, "sha256", "\"" "ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" "\"", NULL), "invalid_args"));   /* 63 */
@@ -347,5 +357,5 @@ int main(void) {
     test_session();
     test_download();
     test_boot();
-    puts("UPDATE PASS: args (https + baked repo + version + board, sha256 hex, size ≤ slot, job/timeout), confirm flow (update/later/timeout/cancelled → exact events), busy, console path (no events), progress ≤ 1 per 10 % and 1/s, download order (board tag, size, sha256 before set_boot; abort on every failure), mark-valid rule");
+    puts("UPDATE PASS: args (https + baked repo + version + board, sha256 hex, size ≤ slot, job/timeout), confirm flow (version label ≤ 8 / version_too_long, update/later/timeout/cancelled → exact events), busy, console path (no events), progress ≤ 1 per 10 % and 1/s, download order (board tag, size, sha256 before set_boot; abort on every failure), mark-valid rule");
 }

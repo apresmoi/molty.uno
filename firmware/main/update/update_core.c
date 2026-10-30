@@ -42,6 +42,14 @@ static bool version_ok(const char *v)
     return n >= 1 && n < UPD_VERSION_MAX && safe_chars(v, n) && !strchr(v, '_');
 }
 
+bool upd_confirm_label(const char *version, char out[UPD_LABEL_MAX + 1])
+{
+    size_t n = version ? strlen(version) : 0;
+    if (n == 0 || n > UPD_LABEL_MAX) return false;
+    snprintf(out, UPD_LABEL_MAX + 1, n < UPD_LABEL_MAX ? "v%s" : "%s", version);
+    return true;
+}
+
 /* https://github.com/<repo>/releases/download/<tag>/molty-<version>-<board>-ota.bin */
 static const char *url_check(const char *url, const char *version, const upd_policy_t *p)
 {
@@ -90,6 +98,8 @@ const char *upd_parse(const cJSON *args, bool link, const upd_policy_t *p, upd_t
         n.timeout_ms = to ? (unsigned)to->valuedouble : UPD_TIMEOUT_DEF;
     }
     if (!cJSON_IsString(ver) || !version_ok(ver->valuestring)) return "invalid_args";
+    char label[UPD_LABEL_MAX + 1];
+    if (link && !upd_confirm_label(ver->valuestring, label)) return "version_too_long";
     if (!cJSON_IsString(sha) || !upd_hex32(sha->valuestring, n.sha256)) return "invalid_args";
     if (!whole(size, 1, 4294967295.0)) return "invalid_args";
     if (!cJSON_IsString(url)) return "invalid_args";

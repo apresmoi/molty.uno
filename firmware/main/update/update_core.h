@@ -11,7 +11,8 @@
  *             baked into the firmware, for this board:
  *               https://github.com/<repo>/releases/download/<tag>/molty-<version>-<board>-ota.bin
  *             refusals: "invalid_args" (a field's type / format), "bad_url", "wrong_board"
- *             (the asset is another board's), "too_big" (size > the OTA slot).
+ *             (the asset is another board's), "too_big" (size > the OTA slot),
+ *             "version_too_long" (link only: the version does not fit the question's label).
  *   session   idle → confirm (link: the question is on screen) → accepted → downloading
  *             → flashing → rebooting; declined / failed end it. The console's POST
  *             /api/update starts at accepted (the click is the consent). Busy while
@@ -36,8 +37,9 @@
 #define UPD_TIMEOUT_MIN   1000           /* confirm question, ms (as ask)             */
 #define UPD_TIMEOUT_MAX   120000
 #define UPD_TIMEOUT_DEF   60000          /* the relay always sends one; the default is for completeness */
-#define UPD_LABEL_UPDATE  "update"       /* option 0 (left half)                      */
-#define UPD_LABEL_LATER   "later"        /* option 1 (right half)                     */
+#define UPD_LABEL_MAX     8              /* = LINK_ASK_LABEL_MAX / FLUID_ASK_LABEL_MAX */
+#define UPD_LABEL_LATER   "later"        /* option 1 (right half); option 0 (left half) is
+                                            the version itself, upd_confirm_label        */
 #define UPD_COLOR_UPDATE  0x3ccf96       /* its colour: green (relay COLORS.green)    */
 #define UPD_COLOR_LATER   0xf1f3f5       /* neutral white (relay COLORS.white)        */
 
@@ -59,6 +61,11 @@ typedef struct {
 /* NULL: *t filled. Else the refusal code (static string). link: job + timeout_ms are
  * read (job required); otherwise they are ignored and job stays "". */
 const char *upd_parse(const cJSON *args, bool link, const upd_policy_t *p, upd_target_t *t);
+/* The confirm question's "update" option names the version it installs (the screen has
+ * no room for a header): "v<version>" when that fits UPD_LABEL_MAX chars, else the bare
+ * version; false when even that does not fit (upd_parse refuses the link's cmd with
+ * "version_too_long": consent is never asked without showing the version). */
+bool upd_confirm_label(const char *version, char out[UPD_LABEL_MAX + 1]);
 /* exactly 64 hex digits (either case) → 32 bytes */
 bool upd_hex32(const char *hex, uint8_t out[32]);
 

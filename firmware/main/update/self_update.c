@@ -89,11 +89,13 @@ static void policy(upd_policy_t *p)
 
 /* ── screen: the reader holds one word ("update", "40%", "restart") ─────────── */
 
+/* A screen claim (link_cmd.h), not a plain state set: the update owns the screen, so a
+ * listen/say that ends during the download does not restore idle over its progress. */
 static void screen_word(const char *w)
 {
     if (mole_creature_select("fluid") != ESP_OK) return;
     mole_fluid_set_text(w, (int)strlen(w));
-    mole_creature_state_set("{\"state\":\"text\",\"hold\":true}");
+    link_cmd_screen_claim("{\"state\":\"text\",\"hold\":true}");
 }
 
 static void screen_home(void) { mole_creature_state_set("{\"state\":\"creature\"}"); }
@@ -371,7 +373,9 @@ esp_err_t self_update_cmd(const cJSON *args, cJSON **out)
         return !strcmp(e, "invalid_args") ? ESP_ERR_INVALID_ARG : link_cmd_refuse(e);
     }
     cJSON *result = cJSON_CreateObject();
-    const char *labels[2] = { UPD_LABEL_UPDATE, UPD_LABEL_LATER };
+    char version[UPD_LABEL_MAX + 1];
+    upd_confirm_label(t.version, version);   /* fits: upd_request refused it otherwise */
+    const char *labels[2] = { version, UPD_LABEL_LATER };
     const int32_t colors[2] = { UPD_COLOR_UPDATE, UPD_COLOR_LATER };
     esp_err_t r = result ? link_ask_open(t.job, labels, colors, 2, t.timeout_ms, on_answer) : ESP_ERR_NO_MEM;
     if (r != ESP_OK) {

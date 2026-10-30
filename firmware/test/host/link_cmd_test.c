@@ -25,6 +25,9 @@ esp_err_t link_ask_cmd(const cJSON *a, cJSON **o) { (void)a;(void)o; ask_cmds++;
 static unsigned update_cmds;
 esp_err_t self_update_cmd(const cJSON *a, cJSON **o) { (void)a;(void)o; update_cmds++; return link_cmd_refuse("wrong_board"); }
 
+/* self_update.c's screen writer, extracted verbatim by link_build.sh */
+#include "update_screen.inc"
+
 static unsigned gen_at_unlock;
 static void snap_gen(void) { gen_at_unlock=link_cmd_mood_gen(); }
 /* another task's explicit mood, completed just before this task got the lock */
@@ -77,6 +80,13 @@ int main(void) {
     /* an explicit mood since the snapshot: idle is skipped */
     assert(run("mood","{\"mood\":\"thinking\"}")==ESP_OK);
     link_cmd_mood_idle_unless(g0); assert(strstr(sdk_state,"\"mood\":\"thinking\""));
+    /* the update's progress owns the screen: a say/listen that started before the update
+     * (its snapshot g0) and ends during the download must not put idle over "40%" */
+    g0=link_cmd_mood_gen(); sdk_state_locked=false;
+    screen_word("40%");
+    assert(strstr(sdk_state,"\"state\":\"text\"") && sdk_state_locked);   /* written under the mood lock */
+    link_cmd_mood_idle_unless(g0);
+    assert(strstr(sdk_state,"\"state\":\"text\"") && !strstr(sdk_state,"idle"));
     assert(sdk_locks==0);
     /* ask is registered; commands that change the screen cancel a pending question once
      * accepted, the rest (reads, refused args, hardware) leave it up */

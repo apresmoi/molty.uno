@@ -457,8 +457,24 @@ describe("molty_ask", () => {
     expect(r).toMatchObject({ ok: true, result: { job, status: "done", answer: "no", index: 1 } });
     const evs = (await w.room.events(w.token, { since: 0, wait_ms: 0 })) as any;
     expect(evs.result.events.map((e: any) => [e.type, e.data])).toEqual([["answer", { job, index: 1, label: "no" }]]);
-    // no answer before the ack timed out: still a failure (nothing to keep)
-    expect(await w.room.ask(w.token, { options: ["ok"] })).toMatchObject({ ok: false, error: "device_timeout" });
+  });
+
+  it("a lost ack is delivery unknown: an answer after the ack timeout, before the ask's deadline, reaches the agent", async () => {
+    const w = await setup();
+    w.dev.ctl.noAck = true;
+    const call = w.room.ask(w.token, { options: ["yes", "no"], timeout_s: 2 });
+    await until(() => w.dev.asks().length === 1);
+    const job = w.dev.asks()[0].args.job;
+    await sleep(FAST.cmdTimeoutMs + 100); // the ack timed out; the question is still up on the device
+    await w.dev.answer({ job, index: 0, label: "yes" });
+    expect(await call).toMatchObject({ ok: true, result: { job, status: "done", answer: "yes", index: 0 } });
+    const evs = (await w.room.events(w.token, { since: 0, wait_ms: 0 })) as any;
+    expect(evs.result.events.map((e: any) => [e.type, e.data])).toEqual([["answer", { job, index: 0, label: "yes" }]]);
+    // no answer at all: the ask's own deadline resolves it (timeout), not the ack timeout
+    const t0 = Date.now();
+    const none = (await w.room.ask(w.token, { options: ["ok"], timeout_s: 1 })) as any;
+    expect(none).toMatchObject({ ok: true, result: { status: "done", answer: null, index: null, reason: "timeout" } });
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(1000);
   });
 
   it("a device that refuses the ask cmd fails the job with its error code", async () => {

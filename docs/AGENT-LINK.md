@@ -168,7 +168,9 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   a tap carries no `reason` / a non-answer no label. No answer within `timeout_ms` + 5 s: the
   relay resolves `timeout` itself; device gone mid-ask: `reason:"offline"`. An answer the relay
   accepted stands even when the `cmd ask` ack is then lost (`device_timeout`): the job is done
-  with it (one `answer` inbox event); with no answer yet, a lost ack fails the job.
+  with it (one `answer` inbox event). A lost ack is "delivery unknown", not a failure: the relay
+  keeps waiting, and an answer arriving later still ends the job; none by `timeout_ms` + 5 s
+  (counted from the ack timeout) resolves `timeout`.
 - `listen`: relay sends `cmd listen {job, ms, rate:16000, end_silence_ms?, no_speech_ms?, vad?, ring_color?}`
   (`ms` = maximum window; the VAD knobs only when the agent gave them: `end_silence_ms`
   300..3000, `no_speech_ms` 1000..10000, `vad` bool; `ring_color` `"#rrggbb"`, resolved by the
@@ -197,7 +199,9 @@ count). The same for an `ask` sent after a listen began (any `mood` cancels a pe
 on the device): no automatic mood while its `cmd ask` awaits the ack, none for that listen once
 the device showed it (or its ack was lost). On the device, a listen/say that ends falls back to `idle` only if no explicit mood (link
 `mood` command, or a local `POST /api/creature/state` with a `mood`) arrived since it started, so
-the explicit mood keeps its own `hold_s`.
+the explicit mood keeps its own `hold_s`; likewise a self-update's progress ("update", "40%", …)
+owns the screen once shown (`link_cmd_screen_claim`), so an older listen/say ending mid-download
+does not put idle over it.
 
 ### Listen end of speech (device VAD)
 
@@ -274,7 +278,7 @@ What the screen does between commands (`firmware/main/fluid/fluid_director.h`):
 `relay/src/core/commands.ts`; names case-insensitive), or any `#rrggbb`. Anything else is
 `invalid_args` naming the field and the choices. Options without a colour take green, red, amber,
 blue, violet by position. The device only ever receives resolved hex; the answer's `label` is
-still the plain string. The self-update question is fixed: `update` green, `later` white.
+still the plain string. The self-update question is fixed: the version (`v0.2.0`) green, `later` white.
 
 Agent-facing calls are **async-friendly** (agent runtimes commonly cap a tool call at ~10 s / 64 KiB):
 `say`/`listen` return a `job` id; `molty_wait {job, timeout_s≤8}` returns the result or
@@ -677,6 +681,10 @@ Ends: `done {outcome:"updated", from, to}` when the device's next hello reports 
 names why), `rolled_back` (a hello on another version after `rebooting`), `update_timeout`
 (no answer within `timeout_ms` + 5 s, or not back on the new version 5 min after the accept).
 A hello on the old version before `rebooting` (a Wi-Fi blip mid-download) is not a failure.
+A lost `cmd update` ack (`device_timeout`) does not fail the job: delivery is unknown, the
+question may be on screen, so `upd` stays tracked through the confirmation deadline and a later
+`accepted` / progress event, a decline, or a hello on the new version still settles it (none:
+`update_timeout`). A refusal (`res ok:false`) or an offline device fails it at once.
 A second `molty_update` while one runs returns that job.
 
 **Device wire (firmware contract).**
@@ -686,9 +694,12 @@ A second `molty_update` while one runs returns that job.
   "url":"https://github.com/<repo>/releases/download/v0.2.0/molty-0.2.0-<board>-ota.bin",
   "sha256":"<64 hex>","size":1234567,"timeout_ms":60000}}`.
   The device acks (`res ok`) once the question is on screen: reuse the ask screen with two
-  options, "update" (green) and "later" (white), and the version. Refuse with `res {ok:false, error}`:
+  options, the version (green: tap to install it) and "later" (white). The ask screen has no
+  header, so the green option's label *is* the version: `v0.2.0`, or the bare version when the
+  `v` would push it past the 8-character label limit (`10.10.10`). Refuse with `res {ok:false, error}`:
   `busy` (an update already running), `bad_url` (not `https://github.com/<repo>/releases/download/…`
-  for the repo baked into the firmware), `wrong_board`.
+  for the repo baked into the firmware), `wrong_board`, `version_too_long` (the version does not
+  fit an 8-character label, so the question could not show it; update from the console instead).
 - Device → relay events `{"t":"evt","name":"update","data":{"job":"<job>","state":…}}`:
   `declined` (+ `reason:"timeout"|"cancelled"`: no tap within `timeout_ms`, or another accepted
   command replaced the question — the same tap, deadline and cancellation rules as `ask`), `accepted`, `downloading` (optional `progress` 0..1, at most 1/s),

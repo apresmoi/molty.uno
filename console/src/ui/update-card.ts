@@ -114,11 +114,17 @@ export function updateCard(api: DeviceApi, fetchImpl: typeof fetch = (...a) => f
       if (!alive || !installing || installing.kind === 'ok' || installing.kind === 'err') return;
       try {
         const s = await api.updateState();
-        if (s.state === 'failed') { installing = { ...installing, line: `update failed: ${s.error ?? 'unknown'} — Molty kept its firmware`, kind: 'err' }; return render(); }
+        if (s.state === 'failed') {
+          // The device allows another attempt (a transient DNS / TLS / download error): end the
+          // install and offer Update again, with what went wrong.
+          problem = `update failed: ${s.error ?? 'unknown'} — Molty kept its firmware; try again`;
+          installing = null;
+          return render();
+        }
         const pct = typeof s.progress === 'number' ? ` ${Math.round(s.progress * 100)}%` : '';
         installing = { ...installing, line: s.state === 'downloading' ? `downloading${pct}…` : s.state === 'flashing' ? 'installing…' : s.state === 'rebooting' ? 'restarting…' : installing.line };
       } catch (e) {
-        if (e instanceof OfflineError) installing = { ...installing, line: 'Molty is restarting…' };
+        if (e instanceof OfflineError && installing) installing = { ...installing, line: 'Molty is restarting…' };
       }
       render();
       follow();

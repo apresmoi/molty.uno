@@ -327,11 +327,39 @@ describe("molty_update", () => {
     await w.dev.evt({ job, state: "rebooting" });
     await w.reconnect("0.2.0");
     expect(await w.room.job(w.token, job, 0)).toMatchObject({ ok: true, result: { status: "done", result: { outcome: "updated" } } });
-    // no device event before the ack timed out: still a failure (nothing to keep)
-    const n = await setup({ caps: CAPS, timings: { updateConfirmMs: 1000 } });
+  });
+
+  it("a lost ack is delivery unknown: tracked through the confirmation deadline, a later accept still settles it", async () => {
+    // No device event before the ack timed out: the question may be on screen, the human can still tap it.
+    const n = await setup({ caps: CAPS, timings: { talkBudgetMs: 50, updateConfirmMs: 1500, updateMs: 2000 } });
     n.dev.ctl.noAck = true;
-    expect(await n.room.update(n.token, {})).toMatchObject({ ok: false, error: "device_timeout" });
+    const p = n.room.update(n.token, {});
+    await until(() => n.dev.updates().length === 1);
+    const job = n.dev.updates()[0].args.job;
+    expect(await p).toMatchObject({ ok: true, result: { job, status: "pending", phase: "confirm" } });
+    await sleep(FAST.cmdTimeoutMs + 50); // the ack timed out
+    expect(await n.room.job(n.token, job, 0)).toMatchObject({ ok: true, result: { status: "running", phase: "confirm" } });
+    expect(await n.kv.get("upd")).toMatchObject({ job, phase: "confirm", acked: false });
+    await n.dev.evt({ job, state: "accepted" }); // the human taps Update after the ack was lost
+    expect(await n.room.job(n.token, job, 0)).toMatchObject({ ok: true, result: { status: "running", phase: "accepted" } });
+    await n.dev.evt({ job, state: "rebooting" });
+    await n.reconnect("0.2.0");
+    expect(await n.room.job(n.token, job, 0)).toMatchObject({ ok: true, result: { status: "done", result: { outcome: "updated", from: "0.1.0", to: "0.2.0" } } });
     expect(await n.kv.get("upd")).toBeUndefined();
+    // ... a reconnect on the new firmware (accepted event lost too) settles it as well
+    const r = await setup({ caps: CAPS, timings: { talkBudgetMs: 50, updateConfirmMs: 1500 } });
+    r.dev.ctl.noAck = true;
+    const rj = ((await r.room.update(r.token, {})) as any).result.job;
+    await sleep(FAST.cmdTimeoutMs + 50);
+    await r.reconnect("0.2.0");
+    expect(await r.room.job(r.token, rj, 0)).toMatchObject({ ok: true, result: { status: "done", result: { outcome: "updated" } } });
+    // ... and nobody answering ends it at the confirmation deadline, not at the ack timeout
+    const q = await setup({ caps: CAPS, timings: { updateConfirmMs: 700 } });
+    q.dev.ctl.noAck = true;
+    const t0 = Date.now();
+    expect(await q.room.update(q.token, {})).toMatchObject({ ok: false, error: "update_timeout", message: expect.stringMatching(/never confirmed/) });
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(700);
+    expect(await q.kv.get("upd")).toBeUndefined();
   });
 
   it("nobody answers the on-screen question, or the device never comes back: update_timeout", async () => {

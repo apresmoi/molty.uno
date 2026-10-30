@@ -192,7 +192,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "molty_update",
-    description: `Ask Molty to install the latest official firmware release itself. Only after your human said yes: Molty also asks them on its screen ("update" / "later"), then downloads, verifies (sha256), installs and restarts (about a minute; it rolls back on failure). No arguments: the relay picks the release's image for this board. Returns {status:"up_to_date", current, latest} when there is nothing newer; else a job: done {outcome:"updated", from, to} or {outcome:"declined", reason?}; errors update_failed, rolled_back, update_timeout. Blocks at most ${TALK_BUDGET_MS / 1000} s, then {job, status:"pending", phase: confirm|accepted|downloading|flashing|rebooting}: keep calling molty_wait. Firmware without the 'update' cap: unsupported, with 'how' (the console's Update).`,
+    description: `Ask Molty to install the latest official firmware release itself. Only after your human said yes: Molty also asks them on its screen (the version, e.g. "v0.2.0", or "later"), then downloads, verifies (sha256), installs and restarts (about a minute; it rolls back on failure). No arguments: the relay picks the release's image for this board. Returns {status:"up_to_date", current, latest} when there is nothing newer; else a job: done {outcome:"updated", from, to} or {outcome:"declined", reason?}; errors update_failed, rolled_back, update_timeout. Blocks at most ${TALK_BUDGET_MS / 1000} s, then {job, status:"pending", phase: confirm|accepted|downloading|flashing|rebooting}: keep calling molty_wait. Firmware without the 'update' cap: unsupported, with 'how' (the console's Update).`,
     inputSchema: obj({}),
     auth: true,
     run: (api, t) => api.update(t, {}),
