@@ -54,6 +54,16 @@ function storageKV(storage: DurableObjectStorage): KV {
       await storage.delete(k);
     },
     list: (prefix) => storage.list({ prefix }) as Promise<Map<string, never>>,
+    // Atomic by the Durable Object input gate: while `storage.get` runs no other
+    // event is delivered to this object, and between its completion and the
+    // write below there is no await on external I/O (only microtasks), so no
+    // other request can interleave. Never add a fetch/RPC await in here.
+    update: async (key, fn) => {
+      const { next, result } = fn(await storage.get(key));
+      if (next === null) await storage.delete(key);
+      else if (next !== undefined) await storage.put(key, next);
+      return result;
+    },
   };
 }
 

@@ -319,7 +319,10 @@ an agent sees events the next time it calls anything (ride-along).
   `S = t + "\n" + METHOD + "\n" + path?query + "\n" + body` (GET: empty body). v2 covers the
   request target because placeholders may put event data in the URL; signing only the body
   would let anyone holding one signed GET swap its query within the freshness window.
-  `path?query` is the target exactly as sent (percent-encoded, as in the HTTP request line).
+  `path?query` is the request target exactly as sent on the wire (percent-encoded, as in the
+  HTTP request line). The relay canonicalizes the outgoing URL before both sending and
+  signing: a fragment and a bare trailing `?` (empty query, including one left by an empty
+  placeholder) are dropped, so the target is always `pathname + search`.
   Harmless for targets that ignore it.
 - Registration validates and **dry-runs** the template against a sample of every event type
   it will receive (all, or `events`), checks every rendered host, and returns
@@ -328,17 +331,22 @@ an agent sees events the next time it calls anything (ride-along).
   bot token) are never echoed again: `status`/`GET` show `{url: origin + "/…", method,
   headers: [names], events, active, consecutive_failures, disabled?, last_ok_at?, last_error?}`,
   as `relay.webhook` in `status` too. Logs carry the origin only. The dry run echoes the
-  rendered body, so keep secrets in headers or the URL. If the token is revoked or the
-  webhook is replaced while a registration is being validated, the registration fails
-  (`unauthorized` / `conflict` 409) instead of overwriting.
+  rendered body, so keep secrets in headers or the URL. Each token keeps a webhook
+  revision (+1 on every register and delete). A registration remembers the revision it
+  started from and, after its DNS checks, compares and writes in one atomic step: if the
+  token was revoked meanwhile it fails `unauthorized`; if any other register or delete
+  happened meanwhile it fails `conflict` (409) — of two concurrent registrations exactly one
+  succeeds, and a returned secret always matches the stored webhook.
 - `last_error` (and the log line) is a fixed category, never exception text: `timeout`,
   `dns_failed`, `blocked_address`, `blocked_url`, `render_failed`, `network_error`, `http_<status>`.
 - Limits: url ≤ 2048 B, body template ≤ 4096 B, ≤ 16 headers / 4096 B; reserved headers
   (`Host`, `Content-Length`, `Molty-Signature`, …) refused; `Content-Type` comes from `content_type`.
 - Delivery: queued in DO storage, sent from the DO alarm. One **5 s deadline** covers DNS
-  resolution and the request (both aborted on expiry; registration's DNS check has the same
-  deadline). Redirects are not followed (a 3xx is a failure), 2xx = success. Retries after
-  1 s, 10 s, 60 s, then that delivery is dropped (the event stays in the inbox).
+  resolution and the request (both aborted on expiry). Registration has one 5 s deadline over
+  all of its DNS checks, resolving each host once. Redirects are not followed (a 3xx is a failure), 2xx = success. Retries after
+  1 s, 10 s, 60 s, then that delivery is dropped (the event stays in the inbox). Delivery
+  stats are written atomically and only onto the webhook they belong to, so a revoke or a
+  new registration during an in-flight delivery is never undone.
   **20 consecutive failed attempts disable the webhook.**
 - SSRF guard: `https:` only; no credentials in the URL; no IP literals (v4, v6, hex/decimal
   forms); no `localhost`, single-label names or `.local`/`.localhost`/`.internal`/`.lan`/

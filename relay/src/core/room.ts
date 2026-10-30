@@ -40,6 +40,7 @@ import { AGENT_EVENT_TYPES, type AgentEvent, INBOX_LIMITS, SAMPLE_EVENTS, agentE
 import {
   type DeliveryError,
   type GuardResult,
+  type RenderedRequest,
   type Resolver,
   WEBHOOK_LIMITS,
   WebhookFailure,
@@ -128,7 +129,15 @@ interface TokenRecord {
   agent_name: string;
   created: number;
   webhook?: WebhookRecord;
+  /**
+   * Webhook configuration revision: +1 on every successful set and delete, so
+   * "never configured" and "deleted" differ. Registrations compare it inside
+   * one KV.update (atomic read-check-write). Revocation deletes the record.
+   */
+  wh_rev?: number;
 }
+
+type WebhookWrite = "ok" | "gone" | "conflict";
 interface Delivery {
   tok: string;
   seq: number;
@@ -822,21 +831,22 @@ export class DeviceRoom implements AgentApi {
       return this.withInbox(a.hash, { ok: true, result: { webhook: a.rec.webhook ? (redactWebhook(a.rec.webhook) as JsonObject) : null } });
     }
     if (req.action === "delete") {
-      const fresh = await this.kv.get<TokenRecord>(key);
-      if (!fresh) return fail("unauthorized");
-      const had = !!fresh.webhook;
-      delete fresh.webhook;
-      await this.kv.put(key, fresh);
+      const had = await this.kv.update<TokenRecord, boolean | undefined>(key, (cur) => {
+        if (!cur) return { result: undefined };
+        const { webhook, ...rest } = cur;
+        return { next: { ...rest, wh_rev: (cur.wh_rev ?? 0) + 1 }, result: !!webhook };
+      });
+      if (had === undefined) return fail("unauthorized");
       await this.dropDeliveries(a.hash);
       return this.withInbox(a.hash, { ok: true, result: { removed: had } });
     }
     const parsed = parseWebhookSpec(req.spec);
     if (!parsed.ok) return fail("invalid_args", parsed.message);
-    // Generation of the webhook this registration replaces; checked again after the network awaits.
-    const generation = a.rec.webhook?.secret ?? null;
+    // Revision this registration was based on; compared atomically when writing.
+    const revision = a.rec.wh_rev ?? 0;
     // Dry run against every event type the webhook will receive, to URLs that pass the guard.
     const types = parsed.value.events ?? AGENT_EVENT_TYPES;
-    const rendered = [];
+    const rendered: RenderedRequest[] = [];
     for (const type of types) {
       try {
         rendered.push(renderRequest(parsed.value, this.deviceId, SAMPLE_EVENTS[type]));
@@ -844,25 +854,37 @@ export class DeviceRoom implements AgentApi {
         return fail("invalid_args", `for a ${type} event: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
-    for (const url of new Set(rendered.map((r) => r.url))) {
-      const guard = await this.withDeadline((signal) => guardWebhookUrl(url, this.resolveHost, signal)).catch(
-        (): GuardResult => ({ ok: false, message: "url host did not resolve in time", category: "timeout" }),
-      );
-      if (!guard.ok) return fail("invalid_args", guard.message);
-    }
-    // Never write back the record read before the awaits: re-read, and refuse
-    // if the token was revoked or its webhook changed meanwhile.
-    const fresh = await this.kv.get<TokenRecord>(key);
-    if (!fresh) return fail("unauthorized");
-    if ((fresh.webhook?.secret ?? null) !== generation) return fail("conflict", "the webhook changed while this registration was being validated; read it and retry");
+    // One deadline over the whole validation; each host resolved once.
+    const resolve = this.resolveHost;
+    const cache = new Map<string, Promise<string[]>>();
+    const cached: Resolver | undefined = resolve && ((host, signal) => {
+      if (!cache.has(host)) cache.set(host, resolve(host, signal));
+      return cache.get(host)!;
+    });
+    const refused = await this.withDeadline(async (signal): Promise<GuardResult | undefined> => {
+      for (const url of new Set(rendered.map((r) => r.url))) {
+        const g = await guardWebhookUrl(url, cached, signal);
+        if (!g.ok) return g;
+      }
+      return undefined;
+    }).catch((): GuardResult => ({ ok: false, message: "url host did not resolve in time", category: "timeout" }));
+    if (refused && !refused.ok) return fail("invalid_args", refused.message);
+    // Atomic compare-and-write on the revision: a revoke (record gone), another
+    // registration or a delete since `revision` was read makes this one lose.
     const secret = newWebhookSecret();
-    fresh.webhook = { ...parsed.value, secret, created: this.clock.now(), fails: 0 };
-    await this.kv.put(key, fresh);
+    const webhook: WebhookRecord = { ...parsed.value, secret, created: this.clock.now(), fails: 0 };
+    const outcome = await this.kv.update<TokenRecord, WebhookWrite>(key, (cur) => {
+      if (!cur) return { result: "gone" };
+      if ((cur.wh_rev ?? 0) !== revision) return { result: "conflict" };
+      return { next: { ...cur, webhook, wh_rev: revision + 1 }, result: "ok" };
+    });
+    if (outcome === "gone") return fail("unauthorized");
+    if (outcome === "conflict") return fail("conflict", "the webhook changed while this registration was being validated; read it and retry");
     await this.dropDeliveries(a.hash);
     return this.withInbox(a.hash, {
       ok: true,
       result: {
-        webhook: redactWebhook(fresh.webhook) as JsonObject,
+        webhook: redactWebhook(webhook) as JsonObject,
         secret,
         secret_note: "Shown once. Verify Molty-Signature: t=<unix ms>,v2=hex(hmac_sha256(secret, t + '\\n' + METHOD + '\\n' + path?query + '\\n' + body)).",
         dry_run: redactRendered(rendered[0]) as unknown as JsonObject,
@@ -934,29 +956,28 @@ export class DeviceRoom implements AgentApi {
     } catch (e) {
       error = categorize(e);
     }
-    // Re-read right before writing: never write back a record that vanished or was replaced.
-    const rec = await this.kv.get<TokenRecord>(tokKey);
-    if (!rec?.webhook || rec.webhook.secret !== hook.secret) return this.kv.delete(key);
-    const w = rec.webhook;
-    if (!error) {
-      w.fails = 0;
-      w.last_ok = this.clock.now();
-      delete w.last_error;
-      await this.kv.delete(key);
-    } else {
-      w.fails++;
-      w.last_error = error;
-      this.log("webhook delivery failed", { device: this.deviceId, url: redactUrl(w.url), error, fails: w.fails });
-      if (w.fails >= WEBHOOK_LIMITS.maxFails) {
-        w.disabled = `disabled after ${w.fails} consecutive failed deliveries; register it again to re-enable`;
-        await this.dropDeliveries(d.tok);
-      } else if (d.attempt < WEBHOOK_LIMITS.retryMs.length) {
-        await this.kv.put<Delivery>(key, { ...d, attempt: d.attempt + 1, due: this.clock.now() + WEBHOOK_LIMITS.retryMs[d.attempt] });
+    // Delivery stats are written atomically onto the CURRENT record, and only if
+    // it still holds this webhook: never resurrect or overwrite a newer config.
+    const now = this.clock.now();
+    const w = await this.kv.update<TokenRecord, WebhookRecord | undefined>(tokKey, (cur) => {
+      if (!cur?.webhook || cur.webhook.secret !== hook.secret) return { result: undefined };
+      const next = { ...cur.webhook };
+      if (!error) {
+        next.fails = 0;
+        next.last_ok = now;
+        delete next.last_error;
       } else {
-        await this.kv.delete(key);
+        next.fails++;
+        next.last_error = error;
+        if (next.fails >= WEBHOOK_LIMITS.maxFails) next.disabled = `disabled after ${next.fails} consecutive failed deliveries; register it again to re-enable`;
       }
-    }
-    await this.kv.put(tokKey, rec);
+      return { next: { ...cur, webhook: next }, result: next };
+    });
+    if (!w || !error) return this.kv.delete(key); // removed/replaced meanwhile, or delivered
+    this.log("webhook delivery failed", { device: this.deviceId, url: redactUrl(w.url), error, fails: w.fails });
+    if (w.disabled) await this.dropDeliveries(d.tok);
+    else if (d.attempt < WEBHOOK_LIMITS.retryMs.length) await this.kv.put<Delivery>(key, { ...d, attempt: d.attempt + 1, due: now + WEBHOOK_LIMITS.retryMs[d.attempt] });
+    else await this.kv.delete(key);
   }
 
   /** Runs `fn` under one deadline: on expiry its signal aborts and the call fails as `timeout`. */

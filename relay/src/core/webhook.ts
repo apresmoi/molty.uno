@@ -150,13 +150,28 @@ export interface RenderedRequest {
   body: string;
 }
 
+/** URL with an empty query delimiter and fragment removed; unparsable input is returned unchanged (the guard rejects it). */
+export function canonicalUrl(raw: string): string {
+  try {
+    const u = new URL(raw);
+    u.hash = "";
+    if (u.search === "") u.search = "";
+    return u.href;
+  } catch {
+    return raw;
+  }
+}
+
 export function defaultBody(device: string, ev: AgentEvent): string {
   return JSON.stringify({ device, event: ev });
 }
 
 /** Builds the unsigned request for one event. Throws on a template that renders to an invalid URL/JSON. */
 export function renderRequest(spec: WebhookSpec, device: string, ev: AgentEvent): RenderedRequest {
-  const url = renderTemplate(spec.url, ev, device, urlEsc);
+  // Canonical outgoing URL: what is sent is exactly what is signed. A bare
+  // trailing "?" (empty query) and any fragment are dropped, so the request
+  // target on the wire is always pathname + search.
+  const url = canonicalUrl(renderTemplate(spec.url, ev, device, urlEsc));
   const headers: Record<string, string> = { ...spec.headers, "user-agent": "molty-relay-webhook" };
   let body = "";
   if (spec.method !== "GET") {

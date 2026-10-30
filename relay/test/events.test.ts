@@ -736,3 +736,135 @@ describe("review fixes", () => {
     expect((await mcpCall(backend, "molty_webhook", { url: "https://hooks.example.org/x", events: ["wave"] }, token)).structuredContent.message).toBe("events must be a list of shake, tap, button");
   });
 });
+
+// ---------------------------------------------------------------- review round 2
+
+describe("review fixes, round 2", () => {
+  /** Resolver that holds hosts starting with `slow` until released (per host). */
+  function gatedResolver() {
+    const gates = new Map<string, () => void>();
+    const waits = new Map<string, Promise<void>>();
+    const asked = new Set<string>();
+    const gate = (host: string) => {
+      if (!waits.has(host)) waits.set(host, new Promise<void>((r) => gates.set(host, r)));
+      return waits.get(host)!;
+    };
+    return {
+      resolve: async (host: string) => (asked.add(host), host.startsWith("slow") ? gate(host).then(() => ["93.184.216.34"]) : ["93.184.216.34"]),
+      /** Resolves once every host has been asked for: those registrations have read their revision. */
+      reached: async (...hosts: string[]) => {
+        for (let i = 0; i < 500 && !hosts.every((h) => asked.has(h)); i++) await new Promise((r) => setTimeout(r, 1));
+        if (!hosts.every((h) => asked.has(h))) throw new Error(`never reached ${hosts}`);
+      },
+      release: (host: string) => {
+        gate(host);
+        gates.get(host)!();
+      },
+    };
+  }
+  const stored = async (w: Awaited<ReturnType<typeof world>>) => [...(await w.kv.list<any>("tok:")).values()][0];
+
+  it("P1 revision: register / register / delete / stale-complete never reinstalls (no prior webhook)", async () => {
+    const g = gatedResolver();
+    const w = await world({ resolve: g.resolve });
+    const t = await w.pairAgent("a");
+    const stale = w.room.webhook(t, { action: "set", spec: { url: "https://slow1.example.org/h" } });
+    await g.reached("slow1.example.org");
+    expect((await w.room.webhook(t, { action: "set", spec: { url: "https://fast.example.org/h" } })).ok).toBe(true);
+    expect(await w.room.webhook(t, { action: "delete" })).toMatchObject({ ok: true, result: { removed: true } });
+    g.release("slow1.example.org");
+    expect(await stale).toMatchObject({ ok: false, error: "conflict" });
+    expect((await stored(w)).webhook).toBeUndefined();
+  });
+
+  it("P1 revision: with a webhook already set, register / delete / stale-complete never reinstalls", async () => {
+    const g = gatedResolver();
+    const w = await world({ resolve: g.resolve });
+    const t = await w.pairAgent("a");
+    expect((await w.room.webhook(t, { action: "set", spec: { url: "https://first.example.org/h" } })).ok).toBe(true);
+    const stale = w.room.webhook(t, { action: "set", spec: { url: "https://slow2.example.org/h" } });
+    await g.reached("slow2.example.org");
+    expect(await w.room.webhook(t, { action: "delete" })).toMatchObject({ ok: true, result: { removed: true } });
+    g.release("slow2.example.org");
+    expect(await stale).toMatchObject({ ok: false, error: "conflict" });
+    expect((await stored(w)).webhook).toBeUndefined();
+  });
+
+  it("P1 revision: two concurrent registrations -> exactly one success, the loser gets 409 conflict, the winner's secret is the stored one", async () => {
+    const g = gatedResolver();
+    const w = await world({ resolve: g.resolve });
+    const t = await w.pairAgent("a");
+    const one = w.room.webhook(t, { action: "set", spec: { url: "https://slowa.example.org/h" } });
+    const two = w.room.webhook(t, { action: "set", spec: { url: "https://slowb.example.org/h" } });
+    await g.reached("slowa.example.org", "slowb.example.org"); // both have read the same revision
+    g.release("slowa.example.org");
+    g.release("slowb.example.org");
+    const results = (await Promise.all([one, two])) as any[];
+    const winners = results.filter((r) => r.ok);
+    expect(winners).toHaveLength(1);
+    expect(results.filter((r) => !r.ok)).toMatchObject([{ error: "conflict" }]);
+    expect((await stored(w)).webhook.secret).toBe(winners[0].result.secret);
+  });
+
+  it("P1 revision: REST answers 409 to the losing registration", async () => {
+    const g = gatedResolver();
+    const w = await world({ resolve: g.resolve });
+    const t = await w.pairAgent("a");
+    const backend = { device: () => w.room };
+    const put = (url: string) => rest(backend, "/v1/webhook", { method: "PUT", token: t, body: JSON.stringify({ url }) });
+    const a = put("https://slowx.example.org/h");
+    const b = put("https://slowy.example.org/h");
+    await g.reached("slowx.example.org", "slowy.example.org");
+    g.release("slowx.example.org");
+    g.release("slowy.example.org");
+    expect((await Promise.all([a, b])).map((r) => r.status).sort()).toEqual([200, 409]);
+  });
+
+  it("P1 same class: a revoke (or replacement) during an in-flight delivery is never undone by the stats write", async () => {
+    let release: (() => void) | undefined;
+    const w = await hooked({ url: "https://hooks.example.org/x" }, { fetchImpl: () => new Promise<Response>((r) => (release = () => r(new Response(null, { status: 500 })))) });
+    await w.emit("tap", { x: 0, y: 0 });
+    const running = w.room.alarm();
+    for (let i = 0; i < 40 && !release; i++) await new Promise((r) => setTimeout(r, 1)); // until the request is in flight (inside its 50 ms scaled deadline)
+    expect(release).toBeDefined();
+    await w.room.revoke(w.token);
+    release!();
+    await running;
+    expect([...(await w.kv.list("tok:")).keys()]).toHaveLength(0);
+    expect(await w.room.command(w.token, "imu", {})).toMatchObject({ ok: false, error: "unauthorized" });
+  });
+
+  it("P2 canonical target: a bare '?' (or empty rendered query) is dropped before sending AND signing; documented verifiers agree on the wire target", async () => {
+    for (const url of ["https://hooks.example.org/path?", "https://hooks.example.org/path?{{event.data.missing}}#frag"]) {
+      const w = await hooked({ url });
+      await w.emit("tap", { x: 0, y: 0 });
+      await w.room.alarm();
+      const req = w.sent[0];
+      expect(req.url).toBe("https://hooks.example.org/path");
+      const wireTarget = req.url.slice(new URL(req.url).origin.length); // exactly what the request line carries
+      expect(await (await tsVerifier())(w.secret, req.headers["molty-signature"], "POST", wireTarget, req.body)).toBe(true);
+      const py = pyVerify(w.secret, req.headers["molty-signature"], "POST", wireTarget, req.body);
+      if (py !== "skipped") expect(py).toBe(true);
+    }
+  });
+
+  it("P2 registration deadline: one 5 s budget over the whole validation; each host is resolved once", async () => {
+    let calls = 0;
+    const slowResolver = (_h: string, signal?: AbortSignal) =>
+      new Promise<string[]>((res, rej) => {
+        calls++;
+        const t = setTimeout(() => res(["93.184.216.34"]), 30); // 3 s on the scaled clock
+        signal?.addEventListener("abort", () => (clearTimeout(t), rej(new Error("aborted"))));
+      });
+    const w = await world({ resolve: slowResolver });
+    const t = await w.pairAgent("a");
+    // three distinct hosts x 3 s each > one 5 s budget
+    const over = (await w.room.webhook(t, { action: "set", spec: { url: "https://{{event.type}}.example.org/x" } })) as any;
+    expect(over).toMatchObject({ ok: false, error: "invalid_args", message: expect.stringMatching(/in time/) });
+    // three rendered URLs on one host: one resolution, well within the budget
+    calls = 0;
+    const one = (await w.room.webhook(t, { action: "set", spec: { url: "https://hooks.example.org/{{event.type}}" } })) as any;
+    expect(one.ok).toBe(true);
+    expect(calls).toBe(1);
+  });
+});

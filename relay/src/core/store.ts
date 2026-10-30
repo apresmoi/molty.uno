@@ -7,6 +7,13 @@ export interface KV {
   delete(key: string): Promise<void>;
   /** All entries whose key starts with `prefix`. */
   list<T>(prefix: string): Promise<Map<string, T>>;
+  /**
+   * Atomic read-modify-write of one key: no other KV operation on this store
+   * may interleave between the read and the write. `fn` must be synchronous
+   * and pure. `next`: a value to store, `null` to delete, `undefined` to leave
+   * the key untouched. Resolves to `fn`'s `result`.
+   */
+  update<T, R>(key: string, fn: (current: T | undefined) => { next?: T | null; result: R }): Promise<R>;
 }
 
 export class MemoryKV implements KV {
@@ -20,6 +27,15 @@ export class MemoryKV implements KV {
   }
   async delete(key: string) {
     this.data.delete(key);
+  }
+  // No await inside: the whole read-check-write runs in one synchronous step,
+  // which is exactly the guarantee KV.update promises.
+  async update<T, R>(key: string, fn: (current: T | undefined) => { next?: T | null; result: R }): Promise<R> {
+    const v = this.data.get(key);
+    const { next, result } = fn(v === undefined ? undefined : (structuredClone(v) as T));
+    if (next === null) this.data.delete(key);
+    else if (next !== undefined) this.data.set(key, structuredClone(next));
+    return result;
   }
   async list<T>(prefix: string) {
     const out = new Map<string, T>();

@@ -130,8 +130,14 @@ token record, and `room_id` (lets `alarm()` rebuild the room). All survive hiber
   `network_error`, `http_<status>`), never exception text.
 - **Signature v2** covers method, request target and body (`t\nMETHOD\npath?query\nbody`),
   so a signed GET's query cannot be swapped.
-- **Registration** re-reads the token record after its DNS checks and refuses
-  (`unauthorized` / `conflict`) instead of writing back a stale record.
+- **Registration** compares a persistent per-token webhook revision and writes in one
+  `KV.update` (atomic read-check-write) after its DNS checks, refusing with `unauthorized`
+  (revoked) or `conflict` (any register/delete meanwhile). `KV.update` is atomic in the DO
+  by the input gate (no external-I/O await between the read and the write) and in
+  `MemoryKV` by construction (no await at all); a new host must provide the same guarantee.
+  Delivery stats use the same primitive. One 5 s deadline covers all of a registration's
+  DNS checks, one resolution per host.
+- **Canonical URL**: fragment and bare trailing `?` are dropped before sending and signing.
 
 ## Run locally (nothing is deployed, no login)
 
