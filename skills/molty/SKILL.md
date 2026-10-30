@@ -74,7 +74,9 @@ Each helper follows a long turn (`202 pending`) to its end: one call = one full 
 - **A decision a tap can settle → ask**, not a spoken yes/no. Buttons (accept/reject) mean
   acknowledge / dismiss, never an answer.
 - **Read `relay.caps`, not versions**, to know what this Molty can do (`say`, `listen`,
-  `ask`, `shake_talk`, `update`, …). `relay.voice` says who speaks.
+  `ask`, `shake_talk`, `update`, …). `relay.voice` says who speaks. Get them from the `status`
+  command (`POST $MOLTY_RELAY/v1/devices/<id>/cmd {"name":"status"}`, MCP `molty_status`);
+  every `utterance` also carries them as `device.caps`. There is no `GET …/status` route.
 - **Don't talk unprompted or repeatedly**; the mic only when they expect it. `no_speech`
   after a wake → one short line or nothing.
 - **Errors:** `audio_busy` (wait for the current audio, retry once), `turn_claimed` (stay
