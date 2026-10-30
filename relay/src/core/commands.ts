@@ -116,6 +116,25 @@ export const VAD_LIMITS = { end_silence_ms: [300, 3000], no_speech_ms: [1000, 10
 /** The device's no_speech_ms default (firmware/main/audio/vad.h): what the voice box gets when the agent gave none. */
 export const DEVICE_NO_SPEECH_MS = 4000;
 
+/**
+ * The turn acknowledgement (firmware cap `ack`): when a listen that heard speech ends, the
+ * DEVICE itself plays a short chirp and shows `thinking` (ACK_THINK_S at most, or until the
+ * agent's next say / mood / ask / listen) — no network, before any agent answers. The human's
+ * setting (console: chirp + thinking | thinking only | off) applies; an agent's `ack` on
+ * listen / talk can only turn it down: true (default) = the setting, "silent" = no chirp,
+ * false = none. The device reports what it will do in the listen's ack (`ack`: "chirp" |
+ * "thinking" | "off"): with it, the relay sends no automatic `thinking` of its own.
+ */
+export const ACK_CAP = "ack";
+export const ACK_THINK_S = 30;
+export type AckArg = boolean | "silent";
+export const ACK_MODES = ["chirp", "thinking", "off"] as const;
+function ackArg(v: unknown): AckArg | undefined {
+  if (v === undefined) return undefined;
+  if (typeof v === "boolean" || v === "silent") return v;
+  throw invalid('ack must be true, false or "silent"');
+}
+
 /** A listen window: undefined (the device's setting), 0 (unlimited) or 1..MAX_LISTEN_MS. */
 function listenMs(v: unknown, field: string): number | undefined {
   if (v === undefined) return undefined;
@@ -192,10 +211,12 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
       return { name: n, args: out, job: true };
     }
     case "listen": {
-      only(args, ["ms", "ring_color", ...VAD_KEYS]);
+      only(args, ["ms", "ring_color", "ack", ...VAD_KEYS]);
       const ms = listenMs(args.ms, "ms");
       const out: JsonObject = { ...(ms !== undefined ? { ms } : {}), ...vadArgs(args) };
       if (args.ring_color !== undefined) out.ring_color = resolveColor(args.ring_color, "ring_color");
+      const ack = ackArg(args.ack);
+      if (ack !== undefined) out.ack = ack;
       return { name: n, args: out, job: true };
     }
     case "diag": {
@@ -227,13 +248,15 @@ export interface TalkArgs {
   vad: JsonObject;
   /** The listening ring's colour, resolved "#rrggbb"; absent = the device's default. */
   ring_color?: string;
+  /** The device's turn acknowledgement for this listen (ACK_CAP); absent = the human's setting. */
+  ack?: AckArg;
 }
 
-/** molty_talk / POST /v1/devices/<id>/talk: `{say?, listen? (default true), listen_ms? (0 = unlimited, 1..30000; default the device's setting, 30000 out of the box), voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?}`. */
+/** molty_talk / POST /v1/devices/<id>/talk: `{say?, listen? (default true), listen_ms? (0 = unlimited, 1..30000; default the device's setting, 30000 out of the box), voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?, ack?}`. */
 export function validateTalk(raw: unknown): TalkArgs {
   const args = raw === undefined || raw === null ? {} : raw;
   if (!isRecord(args)) throw invalid("args must be an object");
-  only(args, ["say", "listen", "listen_ms", "voice", "ring_color", ...VAD_KEYS]);
+  only(args, ["say", "listen", "listen_ms", "voice", "ring_color", "ack", ...VAD_KEYS]);
   if (args.listen !== undefined && typeof args.listen !== "boolean") throw invalid("listen must be a boolean");
   const out: TalkArgs = { listen: args.listen !== false, vad: vadArgs(args) };
   const lm = listenMs(args.listen_ms, "listen_ms");
@@ -241,6 +264,8 @@ export function validateTalk(raw: unknown): TalkArgs {
   if (args.say !== undefined) out.say = text(args.say, "say", MAX_SAY_BYTES);
   if (args.voice !== undefined) out.voice = voiceId(args.voice);
   if (args.ring_color !== undefined) out.ring_color = resolveColor(args.ring_color, "ring_color");
+  const ack = ackArg(args.ack);
+  if (ack !== undefined) out.ack = ack;
   if (out.say === undefined && !out.listen) throw invalid("give say, or listen (or both)");
   return out;
 }

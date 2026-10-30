@@ -8,7 +8,7 @@
 import { INBOX_LIMITS, SKILL_EVENT } from "../core/events.js";
 import { FEATURES, SKILL_VERSION, skillHeadline } from "../core/version.js";
 import { WEBHOOK_LIMITS } from "../core/webhook.js";
-import { COLORS, DEFAULT_ASK_COLORS, DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, LISTEN_CEILING_MS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, DEFAULT_WPM, MAX_MOOD_HOLD_S, MAX_DIAG_TIMELINE_S, MAX_LISTEN_MS, MAX_LOG_BYTES, MAX_SAY_BYTES, MAX_SHOW_BYTES, MOODS, TALK_BUDGET_MS, TALK_DEFAULT_LISTEN_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
+import { ACK_THINK_S, COLORS, DEFAULT_ASK_COLORS, DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, LISTEN_CEILING_MS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, DEFAULT_WPM, MAX_MOOD_HOLD_S, MAX_DIAG_TIMELINE_S, MAX_LISTEN_MS, MAX_LOG_BYTES, MAX_SAY_BYTES, MAX_SHOW_BYTES, MOODS, TALK_BUDGET_MS, TALK_DEFAULT_LISTEN_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
 
 export const SKILL_PATHS = ["/skill.md", "/skill"];
 
@@ -98,7 +98,7 @@ Success: \`200 {"ok":true,"result":{…}}\`. Unknown argument keys are rejected.
 | \`mood\` | \`{"mood": m, "hold_s"?: s}\` | — | m ∈ ${MOODS.join(", ")}; happy/surprised revert by themselves, \`hold_s\` (0 < s ≤ ${MAX_MOOD_HOLD_S}) sets how long any mood stays |
 | \`show\` | \`{"text": s, "wpm"?: 100..800}\` | — | speed-reader text in the fluid, ≤ ${MAX_SHOW_BYTES} bytes, default ${DEFAULT_WPM} wpm; returns when it starts |
 | \`say\` | \`{"text": s, "voice"?: id}\` | \`{job}\` immediately | relay TTS → speaker (streamed sentence by sentence), text shown in sync; ≤ ${MAX_SAY_BYTES} bytes; job done → \`{ms, text, timings}\` |
-| \`listen\` | \`{"ms"?: 0..${MAX_LISTEN_MS}, "end_silence_ms"?: ${VAD_LIMITS.end_silence_ms.join("..")}, "no_speech_ms"?: ${VAD_LIMITS.no_speech_ms.join("..")}, "vad"?: bool, "ring_color"?: c}\` | \`{job}\` immediately | records the mic until the human finishes (the window is a ceiling: omit \`ms\` for the human's own setting, ${DEFAULT_LISTEN_MS} ms out of the box; \`0\` = unlimited, ${LISTEN_CEILING_MS / 60000} min safety ceiling), relay STT; job done → \`{text, duration_ms, peak, rms, reason, speech_ms?, timings}\` |
+| \`listen\` | \`{"ms"?: 0..${MAX_LISTEN_MS}, "end_silence_ms"?: ${VAD_LIMITS.end_silence_ms.join("..")}, "no_speech_ms"?: ${VAD_LIMITS.no_speech_ms.join("..")}, "vad"?: bool, "ring_color"?: c, "ack"?: true\\|false\\|"silent"}\` | \`{job}\` immediately | records the mic until the human finishes (the window is a ceiling: omit \`ms\` for the human's own setting, ${DEFAULT_LISTEN_MS} ms out of the box; \`0\` = unlimited, ${LISTEN_CEILING_MS / 60000} min safety ceiling), relay STT; job done → \`{text, duration_ms, peak, rms, reason, speech_ms?, timings}\` |
 | \`state\` | \`{}\` = read · \`{"state": {…}}\` or flat fields = patch | creature state JSON | low-level creature state, same as the device's \`/api/creature/state\` |
 | \`volume\` | \`{"volume": 0..21}\` | — | speaker volume, 0 = mute |
 | \`imu\` | — | ax/ay/az (g), gx/gy/gz (°/s), ms | one motion-sensor snapshot |
@@ -123,13 +123,15 @@ curl -sS -X POST ${o}/v1/devices/molty-xxxxxxxxxx/talk \\
 #     "reason":"silence","ms":{"tts_first_audio":…,"speech":…,"listen":…,"stt":…,"total":…},"timings":{…}}}
 \`\`\`
 
-Body: \`{"say"?: s, "listen"?: true, "listen_ms"?: 0..${MAX_LISTEN_MS} (omit: the human's setting, ${TALK_DEFAULT_LISTEN_MS} out of the box; 0 = unlimited), "voice"?, "end_silence_ms"?, "no_speech_ms"?, "vad"?, "ring_color"?}\`.
+Body: \`{"say"?: s, "listen"?: true, "listen_ms"?: 0..${MAX_LISTEN_MS} (omit: the human's setting, ${TALK_DEFAULT_LISTEN_MS} out of the box; 0 = unlimited), "voice"?, "end_silence_ms"?, "no_speech_ms"?, "vad"?, "ring_color"?, "ack"?}\`.
 **End of turn is automatic**: don't pass \`vad\` / \`end_silence_ms\`. With the owner's voice box the
 box's semantic end of turn decides (reason \`turn_end\`, or \`no_speech\` when nobody spoke); otherwise
 the device's own end-of-speech does (\`silence\` / \`no_speech\`). Passing \`vad\` or \`end_silence_ms\` puts the device's
 detection back in charge.
 \`ring_color\` (talk and listen): the listening ring's colour, a colour name or \`"#rrggbb"\` as in Ask below;
 leave it out for the human's own setting.
+\`ack\` (talk and listen): Molty's own acknowledgement when the human finishes (see Talking fast):
+\`true\` (default) = the human's setting, \`"silent"\` = thinking without the chirp, \`false\` = none.
 Speaks \`say\` (if given), then listens until the human stops talking (or the window ends), then
 returns the transcript as \`heard\`. \`reason\`: \`silence\` (they finished), \`turn_end\` (they finished, called by the
 owner's voice box from what they said: treat it like \`silence\`), \`no_speech\` (nobody
@@ -292,8 +294,17 @@ a full model round trip on your side). So:
   returns what the human said. Don't chain \`mood\` → \`say\` → \`molty_wait\` → \`listen\` → \`molty_wait\`.
 - **Moods are automatic.** Molty shows \`speaking\` while talking, \`listening\` while
   recording, and \`thinking\` from the end of the human's speech until your next command (at most
-  ${THINK_HOLD_S} s), then idle. **Don't call \`mood\` around talking**; use it for feelings
+  ${ACK_THINK_S} s; ${THINK_HOLD_S} s on older firmware), then idle. **Don't call \`mood\` around talking**; use it for feelings
   (\`happy\`, \`surprised\`), not for turn-taking.
+- **Molty acknowledges the turn itself.** The moment the human finishes, Molty plays a short,
+  soft chirp and shows \`thinking\` — on the device, before you have even seen the transcript
+  (the human picks chirp + thinking, thinking only, or off). So **go straight to your answer**:
+  no "hmm", "let me think" or "got it" opener. Pass \`"ack": false\` (or \`"silent"\`) only when you
+  acknowledge in your own way.
+- **Never leave the human in silence.** The device's \`thinking\` lasts ${ACK_THINK_S} s. If your
+  answer needs longer work (tools, search, a build), first send a short spoken ack ("On it — give
+  me a minute.") with \`say\`, or re-send \`mood thinking\` with a \`hold_s\` that covers the work,
+  then answer.
 - **Keep replies to 1–2 short sentences.** Speech time is latency: the human waits for every word
   before they can answer. Audio starts after your first sentence is synthesised, so a short
   first sentence also starts sooner.

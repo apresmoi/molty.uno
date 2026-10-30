@@ -981,3 +981,59 @@ describe("protocol: end-of-speech fields on the last mic frame", () => {
     expect(decodeAudioFrame(enc({}))!.header).toEqual({ s: "j", seq: 3, kind: "pcm16", rate: 16000, end: true });
   });
 });
+
+describe("turn acknowledgement (cap ack)", () => {
+  const ACK_CAPS = ["say", "listen", "listen_stop", "listen_window", "ack"];
+  /** ack firmware: its listen answer says what it will do (the agent's ack over the human's setting, here chirp). */
+  const ackOf = (a: any) => (a.ack === false ? "off" : a.ack === "silent" ? "thinking" : "chirp");
+  const lastListen = (w: Awaited<ReturnType<typeof setup>>) => w.dev.log.filter((l) => l.name === "listen").at(-1)!.args;
+
+  it("ack is passed to firmware that has the cap, only when the agent gave it (talk and listen); invalid values are refused", async () => {
+    const w = await setup({ end: { reason: "silence", speech_ms: 400 }, listenAck: (a) => ({ job: a.job, ms: 30000, ack: ackOf(a) }) }, { caps: ACK_CAPS });
+    expect((await w.room.talk(w.token, {})).ok).toBe(true);
+    expect(lastListen(w)).not.toHaveProperty("ack");
+    for (const ack of [false, "silent", true] as const) {
+      expect((await w.room.talk(w.token, { ack })).ok, String(ack)).toBe(true);
+      expect(lastListen(w).ack, String(ack)).toBe(ack);
+    }
+    const job = ((await w.room.command(w.token, "listen", { ack: "silent" })) as any).result.job;
+    await w.room.job(w.token, job, 2000);
+    expect(lastListen(w)).toEqual({ job, rate: 16000, ack: "silent" });
+    // MCP carries it too
+    expect((await mcp(w.backend, w.token, "molty_talk", { ack: false })).isError).toBe(false);
+    expect(lastListen(w).ack).toBe(false);
+    for (const ack of ["loud", 1, null, "false"]) {
+      expect(await w.room.talk(w.token, { ack }), String(ack)).toMatchObject({ ok: false, error: "invalid_args" });
+      expect(await w.room.command(w.token, "listen", { ack }), String(ack)).toMatchObject({ ok: false, error: "invalid_args" });
+    }
+  });
+
+  it("older firmware (no ack cap) never gets the arg: the relay's automatic moods as before", async () => {
+    const w = await setup({ end: { reason: "silence", speech_ms: 400 } }, { caps: ["say", "listen", "listen_stop", "listen_window"] });
+    expect((await w.room.talk(w.token, { ack: false })).ok).toBe(true);
+    expect(lastListen(w)).not.toHaveProperty("ack");
+    expect(w.dev.moods()).toEqual([{ mood: "thinking", hold_s: 15 }, { mood: "thinking", hold_s: 15 }]);
+  });
+
+  it("the device acknowledges (chirp / thinking): no automatic thinking from the relay; idle only takes down an empty turn's thinking; off: no moods at all", async () => {
+    let mode = "chirp";
+    const w = await setup({ end: { reason: "silence", speech_ms: 400 }, listenAck: (a) => ({ job: a.job, ms: 30000, ack: mode }) }, { caps: ACK_CAPS });
+    expect(await w.room.talk(w.token, { say: "Hi." })).toMatchObject({ ok: true, result: { heard: "hello molty" } });
+    expect(w.dev.moods()).toEqual([]);
+    mode = "thinking";
+    expect((await w.room.talk(w.token, {})).ok).toBe(true);
+    expect(w.dev.moods()).toEqual([]);
+    w.voice.sttText = "";   // the device heard speech, the transcript is empty: its thinking comes down
+    expect((await w.room.talk(w.token, {})).ok).toBe(true);
+    expect(w.dev.moods()).toEqual([{ mood: "idle" }]);
+    mode = "off";           // the human turned it off (or the agent did): nothing put thinking up, nothing to take down
+    expect((await w.room.talk(w.token, {})).ok).toBe(true);
+    w.voice.sttText = "hello molty";
+    expect((await w.room.talk(w.token, {})).ok).toBe(true);
+    expect(w.dev.moods()).toEqual([{ mood: "idle" }]);
+    // an unknown report reads as older firmware: the relay's moods
+    mode = "loud";
+    expect((await w.room.talk(w.token, {})).ok).toBe(true);
+    expect(w.dev.moods().slice(1)).toEqual([{ mood: "thinking", hold_s: 15 }, { mood: "thinking", hold_s: 15 }]);
+  });
+});

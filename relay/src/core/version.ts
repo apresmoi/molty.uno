@@ -94,6 +94,7 @@ export const WHATS_NEW: ReadonlyArray<{ version: number; text: string; min_fw?: 
   { version: 6, text: "molty_ask options can carry colours; ring_color on listen/talk" },
   { version: 7, text: "listen windows up to 30 s, or 0 = unlimited (ends when the human finishes); omit ms / listen_ms for the human's own setting (30 s out of the box)" },
   { version: 8, text: "end of turn is automatic: with the owner's voice box its semantic end of turn decides (device VAD off, no_speech from the box too) — don't pass vad / end_silence_ms" },
+  { version: 9, text: "Molty acknowledges the end of the human's turn by itself (a soft chirp + thinking, the human's setting) — go straight to your answer; for long work still say a quick ack or keep thinking up; ack:false|\"silent\" on listen/talk opts out" },
 ];
 export const SKILL_VERSION: number = WHATS_NEW[WHATS_NEW.length - 1].version;
 export const SKILL_PATH = "/skill.md";

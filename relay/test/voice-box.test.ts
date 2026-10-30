@@ -17,7 +17,7 @@ const NEXT = ["NEWC2345", "NEWD2345", "NEWE2345", "NEWF2345"];
  * 30 ms apart, then the end frame. `listen_stop {job}` (firmware with the cap) ends it at
  * once with reason turn_end, like link_audio.c.
  */
-function device(room: DeviceRoom, sock: FakeSocket, o: { chunks?: number } = {}) {
+function device(room: DeviceRoom, sock: FakeSocket, o: { chunks?: number; ack?: string } = {}) {
   const chunks = o.chunks ?? 3;
   let timers: ReturnType<typeof setTimeout>[] = [];
   const log: Array<{ at: number; kind: string; name?: string; args?: any }> = [];
@@ -29,7 +29,9 @@ function device(room: DeviceRoom, sock: FakeSocket, o: { chunks?: number } = {})
     const f = JSON.parse(t);
     if (f.t === "cmd") {
       log.push({ at: Date.now(), kind: "cmd", name: f.name, args: f.args });
-      setTimeout(() => void room.socketMessage(sock, JSON.stringify({ t: "res", id: f.id, ok: true, result: {} })), 1);
+      // firmware with the ack cap reports the acknowledgement it will do in the listen's answer
+      const result = f.name === "listen" && o.ack ? { job: f.args.job, ack: o.ack } : {};
+      setTimeout(() => void room.socketMessage(sock, JSON.stringify({ t: "res", id: f.id, ok: true, result })), 1);
       if (f.name === "listen") {
         const job = f.args.job;
         let seq = 0;
@@ -129,11 +131,11 @@ async function openBox(room: DeviceRoom, host: FakeHost, token: string, o: BoxOp
   return { sock, ...b };
 }
 
-async function setup(o: { box?: BoxOpts | false; keepClosing?: boolean; caps?: string[]; chunks?: number } = {}) {
+async function setup(o: { box?: BoxOpts | false; keepClosing?: boolean; caps?: string[]; chunks?: number; ack?: string } = {}) {
   const ctx = makeRoom({ timings: FAST });
   ctx.host.keepClosing = !!o.keepClosing;
   const sock = await connect(ctx.room, ctx.host, undefined, LINK, o.caps ? { caps: o.caps } : {});
-  const dev = device(ctx.room, sock, { chunks: o.chunks });
+  const dev = device(ctx.room, sock, { chunks: o.chunks, ack: o.ack });
   const agent = await pairAs(ctx.room, LINK, "talker");
   const voice = await pairAs(ctx.room, NEXT[0], "gpu box", "voice");
   const b = o.box === false ? undefined : await openBox(ctx.room, ctx.host, voice.agent_token, o.box || {});
@@ -555,6 +557,16 @@ describe("semantic end of turn (box stt.turn_end)", () => {
     expect(w.voice.sttCalls).toHaveLength(0);
     // and the next turn works normally
     expect(await w.room.talk(w.token, {})).toMatchObject({ ok: true, result: { status: "done" } });
+  });
+
+  it("firmware that acknowledges the turn itself (cap ack): the box's turn end sends listen_stop, but no thinking from the relay; older firmware still gets it", async () => {
+    const w = await setup({ caps: [...NEW_FW, "ack"], chunks: 12, box: { turnEndAfter: 3 }, ack: "chirp" });
+    expect(await w.room.talk(w.token, { listen_ms: 8000 })).toMatchObject({ ok: true, result: { reason: "turn_end" } });
+    expect(w.dev.log.filter((l) => l.name === "listen_stop")).toHaveLength(1);
+    expect(w.dev.log.filter((l) => l.name === "mood")).toEqual([]);   // the device chirped + thinks on its own
+    const old = await setup({ caps: NEW_FW, chunks: 12, box: { turnEndAfter: 3 } });
+    expect(await old.room.talk(old.token, { listen_ms: 8000 })).toMatchObject({ ok: true, result: { reason: "turn_end" } });
+    expect(old.dev.log.filter((l) => l.name === "mood").map((l) => l.args.mood)).toContain("thinking");
   });
 
   it("a repeated turn_end is acted on once", async () => {
