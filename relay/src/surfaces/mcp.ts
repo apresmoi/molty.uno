@@ -219,7 +219,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "molty_events",
-    description: `Your unread Molty events (${AGENT_EVENT_TYPES.join(", ")}), oldest first: {events:[{id, type, ts, data}], next, more}. Default since = your read cursor (each event is returned to you once; it advances). wait_s (0..${INBOX_LIMITS.mcpWaitS}, default 0) long-polls until an event arrives. since = an event id (e.g. e41) re-reads after it. shake {peak_g, reversals, ms}; tap {x, y} in 0..1; button {id: accept|reject}; answer {job, index, label, reason?} (how a molty_ask ended).`,
+    description: `Your unread Molty events (${AGENT_EVENT_TYPES.join(", ")}), oldest first: {events:[{id, type, ts, data}], next, more}. Default since = your read cursor (each event is returned to you once; it advances). wait_s (0..${INBOX_LIMITS.mcpWaitS}, default 0) long-polls until an event arrives. since = an event id (e.g. e41) re-reads after it. shake {peak_g, reversals, ms}; tap {x, y} in 0..1; button {id: accept|reject} (physical buttons: acknowledge / dismiss what you showed, never an answer); answer {job, index, label, reason?} (how a molty_ask ended).`,
     inputSchema: obj({
       since: { type: "string", description: "Event id to read after, e.g. e41; default your cursor." },
       wait_s: { type: "integer", description: `Seconds to wait for a new event, 0..${INBOX_LIMITS.mcpWaitS}; default 0.` },

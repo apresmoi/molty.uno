@@ -52,3 +52,24 @@ describe("GET /skill.md", () => {
     expect(await head.text()).toBe("");
   });
 });
+
+describe("skill v9 rules", () => {
+  const md = skillMarkdown("https://relay.example.dev");
+  it("capabilities come from relay.caps, not versions", () => {
+    expect(md).toMatch(/read `relay\.caps`, not version numbers/);
+    expect(md).toMatch(/`ask` in caps = `molty_ask` works/);
+  });
+  it("buttons mean one thing everywhere: acknowledge / dismiss, never an answer", () => {
+    expect(md).not.toMatch(/accept\/reject = yes\/no|accept = yes/i);
+    expect(md.match(/acknowledge \/ dismiss/g)!.length).toBeGreaterThanOrEqual(2);
+    expect(md).toMatch(/Not an answer to a question/);
+    const ev = TOOLS.find((t) => t.name === "molty_events")!;
+    expect(ev.description).toMatch(/never an answer/);
+  });
+  it("a broken listen is an error; after a wake, no_speech gets a reaction", () => {
+    expect(md).toMatch(/A listen that broke is an error, never `no_speech`/);
+    expect(md).toMatch(/`listen_failed`/);
+    expect(md).toMatch(/After a wake, never answer `no_speech` with silence/);
+    expect(md).toContain(`{"say":"I'm here.","listen":false}`);
+  });
+});

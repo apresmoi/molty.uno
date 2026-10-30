@@ -133,9 +133,15 @@ leave it out for the human's own setting.
 Speaks \`say\` (if given), then listens until the human stops talking (or the window ends), then
 returns the transcript as \`heard\`. \`reason\`: \`silence\` (they finished), \`turn_end\` (they finished, called by the
 owner's voice box from what they said: treat it like \`silence\`), \`no_speech\` (nobody
-spoke: \`heard\` is \`""\`), \`max\` (window full), \`ended\` (older firmware stopped early), \`error\` (the device's capture failed; \`heard\` is what was transcribed, if anything),
+spoke: \`heard\` is \`""\`), \`max\` (window full), \`ended\` (older firmware stopped early), \`error\` (the voice box failed mid-listen; \`heard\` is what was transcribed, if anything),
 \`spoken\` (\`"listen":false\`). Blocks at most ${TALK_BUDGET_MS / 1000} s; a longer turn answers \`202\` with
 \`{"job","status":"pending"}\` — finish it with \`GET /v1/jobs/<job>?wait_s=8\`.
+A listen that broke is an error, never \`no_speech\`: \`listen_failed\` (Molty's recording failed
+mid-listen, e.g. weak Wi-Fi) or \`device_offline\` (Molty dropped off mid-listen). Say nothing about
+silence then; try the turn again once (or tell your human Molty's connection is shaky).
+**After a wake, never answer \`no_speech\` with silence.** If you started talking because the human
+shook or tapped Molty and the listen comes back \`no_speech\`, they are there and expect a reaction:
+say one short line (\`{"say":"I'm here.","listen":false}\`) or listen once more — not both, not nothing.
 
 **Ask (a question the human answers with a tap).**
 
@@ -172,6 +178,7 @@ Errors: \`{"ok":false,"error":code}\` — \`401 unauthorized\` (bad/missing/revo
 \`400 invalid_args\` / \`unknown_command\`, \`409 device_offline\` / \`audio_busy\` /
 \`unsupported\` (the board has no speaker or mic: \`say\`/\`listen\` absent from \`relay.caps\`),
 \`409 firmware_too_old\` (Molty's firmware predates the feature; see "Check Molty for updates"),
+\`listen_failed\` (the recording broke mid-listen),
 \`504 device_timeout\`, \`502\` device-reported codes (e.g. \`mic_busy\`).
 
 Revoke your own token: \`curl -sS -X DELETE ${o}/v1/token -H "authorization: Bearer $TOKEN"\`.
@@ -199,7 +206,7 @@ Molty talks back. When your human touches it, the relay records an event:
 |---|---|
 | \`shake\` | \`{"peak_g": 2.4, "reversals": 5, "ms": 900}\` |
 | \`tap\` | \`{"x": 0..1, "y": 0..1}\` (screen position) |
-| \`button\` | \`{"id": "accept"}\` or \`{"id": "reject"}\` |
+| \`button\` | \`{"id": "accept"}\` or \`{"id": "reject"}\` — the board's physical buttons. Not an answer to a question: they mean acknowledge / dismiss whatever you showed (see Etiquette). Answers to a question come only as \`answer\` |
 | \`answer\` | \`{"job": "…", "index": 0, "label": "yes"}\`, or \`{"job", "index": null, "label": null, "reason": "timeout"}\` — how an ask ended |
 
 Each event is \`{"id":"e42","type":"shake","ts":<unix ms>,"data":{…}}\`. The relay keeps a
@@ -274,6 +281,11 @@ published yet), \`unknown\` (a development build, or the release list was unreac
 or fails with \`update_failed\` / \`rolled_back\` (Molty kept its old firmware) / \`update_timeout\`.
 Never update without asking; never more than once per request.
 
+**What Molty can do: read \`relay.caps\`, not version numbers.** \`status\` returns \`relay.caps\`,
+the features Molty's firmware and board actually have (e.g. \`ask\` in caps = \`molty_ask\` works;
+\`say\` / \`listen\` = speaker / mic). Decide from caps — never from the firmware version, the
+release list or this page's version history.
+
 **\`firmware_too_old\`.** A feature that needs newer firmware than Molty runs answers
 \`409 {"error":"firmware_too_old","feature","current","needed","latest","how"}\` (e.g. \`molty_ask\`
 needs ${FEATURES.ask.min_fw}). Tell your human which update unlocks it (\`how\` says whether it is
@@ -315,7 +327,8 @@ a full model round trip on your side). So:
   conversation: a \`mood\` (\`surprised\`, \`happy\`) or a few words is plenty; a burst of
   events is one moment. Never answer every event with \`say\`. Ideas: shake = "pay
   attention to me" / undo / shuffle; tap = acknowledge or dismiss what you showed; \`button\`
-  accept/reject = acknowledge / dismiss. To ask something, use \`ask\`, not taps or buttons.
+  accept/reject = acknowledge / dismiss (never yes / no). To ask something, use \`ask\`, not
+  taps or buttons: its \`answer\` is the only yes / no.
 - **Ask sparingly.** One question at a time, only when the answer changes what you do next.
 `;
 }
