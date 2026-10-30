@@ -1,21 +1,23 @@
 // The GitHub README's hero, rendered by the site's REAL runtime (the approach of scripts/og:
 // the built landing's own <head> and React islands, recomposed into a small page on the
-// preview's origin and captured as it plays). Nothing here is hand-drawn.
-//   left   the landing's braille "molty.UNO" heading (FluidField, the page fluid)
+// preview's origin and recorded as it plays). Nothing here is hand-drawn.
+//   left   the landing's braille "molty.UNO" heading in the page fluid (FluidField), live: the
+//          field moves, and a pointer passing over the wordmark stirs it
 //   right  the hero's Molty slot in its round Device, and over it the talk demo's screen
 //          (SpeedReader, the same Device) for the question; one at a time, swapped while
 //          both screens are only fluid
-// One scripted round, recorded as it plays (the screen @2x, ~40 captures/s):
-//   the Molty condenses out of the fluid and idles → melts → "Build passed. Open the PR?"
-//   word by word → yes / no / idk sectors → a tap on yes → "Opening it now." → the Molty
-//   condenses again, happy → melts (back to the first frame: a seamless loop)
-// → <outDir>/molty-hero.webp (animated, ~2 MB) + molty-hero.png (the question, still). Dark
-// only by default: on paper the wordmark washes out, and the README shows the dark hero in both
-// GitHub themes (README_THEMES=dark,light renders a -light pair to compare).
+// One scripted round, the whole banner recorded @2x:
+//   the Molty (the duck) condenses out of the fluid and idles → melts → "Build passed. Open
+//   the PR?" word by word → yes / no / idk sectors → a tap on yes → "Opening it now." → the
+//   Molty condenses again, happy → melts (back to the first frame: a seamless loop)
+// The page is GitHub's own colour (#0d1117 dark, #ffffff light) and the fluid fades out at the
+// banner's edges, so the README shows no box; the README picks the variant per theme.
+// → <outDir>/<name>.webp + <name>-light.webp (animated, lossless 256 colours, ~3–4 MB) and
+//   <name>[-light].png (the question, still)
 // Re-run when the look changes; the outputs are committed to docs/assets/.
 //   pnpm build && pnpm preview          (another terminal)
 //   pnpm readme [baseUrl=http://localhost:4330] [outDir=../../docs/assets]
-//   README_THEMES=dark,light README_MOLTY=cute-frog README_FPS=12 README_COLOURS=256 README_SCREEN=300 …
+//   README_MOLTY=cute-bunny README_NAME=molty-hero-bunny README_THEMES=dark README_FPS=12 …
 import { chromium } from 'playwright';
 import sharp from 'sharp';
 import { mkdirSync, statSync } from 'node:fs';
@@ -24,21 +26,25 @@ import { fileURLToPath } from 'node:url';
 
 const BASE = process.argv[2] ?? 'http://localhost:4330';
 const OUT = resolve(process.argv[3] ?? fileURLToPath(new URL('../../../../docs/assets/', import.meta.url)));
-const THEMES = (process.env.README_THEMES ?? 'dark').split(',');
-const MOLTY = process.env.README_MOLTY ?? 'cute-frog';
+const THEMES = (process.env.README_THEMES ?? 'dark,light').split(',');
+const MOLTY = process.env.README_MOLTY ?? 'cute-duck';
+const NAME = process.env.README_NAME ?? 'molty-hero'; // the output files' stem
 const FPS = Number(process.env.README_FPS ?? 12);
 const QUALITY = Number(process.env.README_Q ?? 80);
 const COLOURS = Number(process.env.README_COLOURS ?? 256); // 0: lossy WebP at README_Q instead
 const QUESTION = 'Build passed. Open the PR?';
+/** GitHub's page colours, so the banner has no box; on paper the wordmark is handed a deeper
+ *  green (the site's paper conversion keeps its hue; thin braille dots need more than 3:1). */
+const LOOK = { dark: { page: '#0d1117' }, light: { page: '#ffffff', ink: '#0b6642' } };
 const ANSWER = 'Opening it now.';
-const W = 830, H = 400, D = Number(process.env.README_SCREEN ?? 300), DPR = 2; // GitHub's README column, @2x; D: the screen
+const W = 830, H = 440, PAD = 46, D = Number(process.env.README_SCREEN ?? 300), DPR = 2; // GitHub's README column, @2x; D: the screen
 mkdirSync(OUT, { recursive: true });
 
 const landing = await (await fetch(BASE + '/')).text();
 const browser = await chromium.launch();
 
 /** Runs in the browser: the landing's HTML → the hero, built from its own parts. */
-function compose([html, question, answer, W, H, D]) {
+function compose([html, question, answer, W, H, D, PAD, look]) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const island = (name) => doc.querySelector(`astro-island[component-export="${name}"]`);
   // the island runtime Astro inlines in the body (its scripts and the islands' display: contents)
@@ -47,6 +53,7 @@ function compose([html, question, answer, W, H, D]) {
   main.className = 'rm';
   const mark = doc.querySelector('h1[data-fluid-word]').cloneNode(true);
   mark.dataset.fluidDelay = '0';
+  if (look.ink) mark.dataset.fluidColor = look.ink;
   // the hero's slot: no Molty until the script asks for one
   const hero = doc.querySelector('[data-fluid-molty]');
   const slot = hero.cloneNode(false);
@@ -68,9 +75,19 @@ function compose([html, question, answer, W, H, D]) {
   main.append(island('FluidField'), mark, stage);
   const style = doc.createElement('style');
   style.textContent = `
-    html, body { margin: 0; overflow: hidden; background: var(--m-bg); }
+    html, body { margin: 0; overflow: hidden; background: ${look.page}; }
+    /* the page fluid on GitHub's own page colour, fading out at the banner's edges (no box) */
+    [data-fluid-field] { background: transparent;
+      mask-image: radial-gradient(circle ${D / 2 + 2}px at ${W - PAD - D / 2}px ${H / 2}px, #000 99%, transparent 100%),
+        linear-gradient(to right, transparent 0, #000 ${look.fade}px, #000 calc(100% - ${look.fade}px), transparent 100%),
+        linear-gradient(to bottom, transparent ${look.top}px, #000 ${look.top + look.fade}px, #000 ${look.bottom - look.fade}px, transparent ${look.bottom}px);
+      mask-composite: add, intersect; }
+    /* the Molty's screen: the site's page colour under it (the Device's backdrop inverts it on
+       paper), so it is the same dark LCD as the talk screen in both themes */
+    .rm::before { content: ''; position: absolute; z-index: 0; left: ${W - PAD - D}px; top: ${(H - D) / 2}px;
+      width: ${D}px; height: ${D}px; border-radius: 50%; background: var(--m-bg); }
     .rm { position: relative; box-sizing: border-box; width: ${W}px; height: ${H}px;
-      display: grid; grid-template-columns: 1fr ${D}px; align-items: center; column-gap: 20px; padding: 0 28px 0 30px; }
+      display: grid; grid-template-columns: 1fr ${D}px; align-items: center; column-gap: 20px; padding: 0 ${PAD}px 0 30px; }
     .rm > :not(astro-island) { position: relative; z-index: 1; }
     .rm h1 { font-size: 84px; }
     .rm-stage { position: relative; width: ${D}px; height: ${D}px; }
@@ -84,9 +101,7 @@ function compose([html, question, answer, W, H, D]) {
   return '<!doctype html>\n' + doc.documentElement.outerHTML;
 }
 
-/** The round screen, captured @2x as fast as it paints (~40/s), while `run` plays. Only the
- *  screen moves in the loop: the rest of the hero (the wordmark, the field, the bezel) is one
- *  frozen frame, so the animation stays small. */
+/** The banner, captured @2x as fast as it paints, while `run` plays. */
 async function record(page, clip, run) {
   const frames = [];
   let done = false;
@@ -157,6 +172,26 @@ async function quantize(pngs, colours) {
   );
 }
 
+/** The last `n` device px at the bottom (the tail of the device's soft shadow) eased into the
+ *  page colour, so no frame ends on a line. */
+async function settle(pngs, page, n = 48) {
+  const bg = [1, 3, 5].map((i) => parseInt(page.slice(i, i + 2), 16));
+  return Promise.all(
+    pngs.map(async (png) => {
+      const { data, info } = await sharp(png).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+      const { width, height } = info;
+      for (let y = height - n; y < height; y++) {
+        const k = (y - (height - n) + 1) / n;
+        for (let x = 0; x < width; x++) {
+          const i = (y * width + x) * 3;
+          for (let c = 0; c < 3; c++) data[i + c] = Math.round(data[i + c] * (1 - k) + bg[c] * k);
+        }
+      }
+      return sharp(data, { raw: { width, height, channels: 3 } }).png().toBuffer();
+    }),
+  );
+}
+
 /** Fades the round's last frames into its first (both only fluid), so the seam does not jump. */
 async function seam(pngs, n = 4) {
   const raw = await Promise.all(pngs.map((p) => sharp(p).removeAlpha().raw().toBuffer({ resolveWithObject: true })));
@@ -176,7 +211,11 @@ for (const theme of THEMES) {
   const page = await ctx.newPage();
   page.on('pageerror', (e) => console.error(`pageerror ${e.message}`));
   await page.goto(BASE + '/robots.txt');
-  const html = await page.evaluate(compose, [landing, QUESTION, ANSWER, W, H, D]);
+  // the banner: the device and a little air above and below it (the page is laid out taller,
+  // so nothing of the bezel or its shadow is cut); the fluid fades out at its edges
+  const top = (H - D) / 2 - 40, bottom = (H + D) / 2 + 60; // the device's shadow falls below it
+  const look = { ...LOOK[theme], top, bottom, fade: 56 };
+  const html = await page.evaluate(compose, [landing, QUESTION, ANSWER, W, H, D, PAD, look]);
   const url = `${BASE}/__readme/hero-${theme}`;
   await page.route(url, (r) => r.fulfill({ body: html, contentType: 'text/html; charset=utf-8' }));
   await page.goto(url, { waitUntil: 'networkidle' });
@@ -204,17 +243,20 @@ for (const theme of THEMES) {
   await say('.');
   await page.waitForTimeout(3500);
 
-  // the screen: a circle in the stage (the bezel reaches past it and is static)
-  const box = await page.locator('.rm-stage').boundingBox();
-  const clip = { x: box.x, y: box.y, width: box.width, height: box.height };
-  const base = await page.screenshot(); // the frozen hero, the screen only fluid
+  const clip = { x: 0, y: top, width: W, height: bottom - top };
+  const mark = await page.locator('.rm h1').boundingBox();
   let still = null;
   const { frames, marks } = await record(page, clip, async () => {
     const at = {};
     await page.waitForTimeout(300);
     at.start = Date.now();
     await set('[data-fluid-molty]', 'fluidMolty', MOLTY); // condenses (~1 s), idles
-    await page.waitForTimeout(1900);
+    // a hand passes over the wordmark: the pointer stirs the page fluid, the letters re-form
+    const y = mark.y + mark.height / 2;
+    await page.mouse.move(mark.x - 20, y);
+    await page.mouse.move(mark.x + mark.width + 20, y + 6, { steps: 24 });
+    await page.mouse.move(W - 4, 4, { steps: 4 });
+    await page.waitForTimeout(1000);
     await set('[data-fluid-molty]', 'fluidMolty', ''); // melts
     await page.waitForTimeout(800);
     // the talk screen takes over while both are only fluid, and asks
@@ -223,7 +265,7 @@ for (const theme of THEMES) {
     await set('.rm-stage', 'show', 'ask');
     await page.waitForSelector('[data-reader-glass][data-listening]', { timeout: 20000 });
     await page.waitForTimeout(1100); // the sectors read
-    still = await page.screenshot();
+    still = await page.screenshot({ clip });
     const word = await page.locator('[data-choice="yes"] span span').first().boundingBox();
     await page.mouse.click(word.x + word.width / 2, word.y + word.height / 2);
     await page.waitForTimeout(2500); // the tapped word holds, "Opening it now.", melts
@@ -237,36 +279,16 @@ for (const theme of THEMES) {
     await page.waitForTimeout(300);
     return at;
   });
-  // each frame: the frozen hero with the live screen set in (a soft-edged circle)
-  const s = DPR, r = Math.round((clip.width / 2) * s);
-  const ring = Buffer.from(`<svg width="${2 * r}" height="${2 * r}"><defs><radialGradient id="g"><stop offset="${(r - 3) / r}" stop-color="#fff"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient></defs><circle cx="${r}" cy="${r}" r="${r}" fill="url(#g)"/></svg>`);
-  const at = { left: Math.round(clip.x * s), top: Math.round(clip.y * s) };
-  // the banner: the device and a little air above and below it (the page is laid out taller,
-  // so nothing of the bezel or its shadow is cut)
-  const top = Math.max(0, Math.round((clip.y - 36) * s));
-  const band = { left: 0, top, width: W * s, height: Math.min(H * s, Math.round((clip.y + clip.height + 36) * s)) - top };
-  const shown = resample(frames, marks.start, marks.end);
-  const cache = new Map();
-  const pngs = await quantize(await seam(
-    await Promise.all(
-      shown.map(async (png) => {
-        if (!cache.has(png)) {
-          const screen = await sharp(png).resize(2 * r, 2 * r).ensureAlpha().composite([{ input: ring, blend: 'dest-in' }]).png().toBuffer();
-          const full = await sharp(base).composite([{ input: screen, ...at }]).removeAlpha().png().toBuffer();
-          cache.set(png, await sharp(full).extract(band).png().toBuffer());
-        }
-        return cache.get(png);
-      }),
-    ),
-  ), COLOURS);
-  const file = `${OUT}/molty-hero${suffix}.webp`;
+  console.log(`  ${frames.length} captures in ${((marks.end - marks.start) / 1000).toFixed(1)} s`);
+  const pngs = await quantize(await settle(await seam(resample(frames, marks.start, marks.end)), look.page), COLOURS);
+  const file = `${OUT}/${NAME}${suffix}.webp`;
   await sharp(pngs, { join: { animated: true }, limitInputPixels: false })
     .webp({ ...(COLOURS ? { lossless: true } : { quality: QUALITY }), effort: 4, loop: 0, delay: pngs.map(() => Math.round(1000 / FPS)) })
     .toFile(file);
   console.log(`wrote ${file} (${pngs.length} frames, ${((marks.end - marks.start) / 1000).toFixed(1)} s, ${(statSync(file).size / 1e6).toFixed(2)} MB)`);
   // the still: the whole hero at the question (the sectors up)
-  await sharp(still).extract(band).png().toFile(`${OUT}/molty-hero${suffix}.png`);
-  console.log(`wrote ${OUT}/molty-hero${suffix}.png`);
+  await sharp((await settle([still], look.page))[0]).png().toFile(`${OUT}/${NAME}${suffix}.png`);
+  console.log(`wrote ${OUT}/${NAME}${suffix}.png`);
   if (process.env.README_DEBUG) {
     mkdirSync(`${OUT}/frames`, { recursive: true });
     for (let i = 0; i < pngs.length; i++) await sharp(pngs[i]).toFile(`${OUT}/frames/${theme}-${String(i).padStart(3, '0')}.png`);
