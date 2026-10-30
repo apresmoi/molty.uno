@@ -52,7 +52,7 @@ export const TERMINAL: readonly JobStatus[] = ["done", "failed"];
 
 export interface JobView {
   job: string;
-  kind: "say" | "listen" | "talk";
+  kind: "say" | "listen" | "talk" | "ask";
   status: JobStatus;
   result?: JsonObject;
   error?: string;
@@ -89,6 +89,14 @@ export interface AgentApi {
    * status:"pending"}` to finish with job(). Args as validateTalk (commands.ts).
    */
   talk(token: string, req: unknown): Promise<Outcome>;
+  /**
+   * A question with tap answers: speak `say` (optional), show 1..5 short
+   * options, wait for the human's tap (bounded, TALK_BUDGET_MS). Done: `{job,
+   * status:"done", answer: label|null, index: int|null, reason?:
+   * "timeout"|"cancelled"|"offline", said?, ms, timings}`; over budget: `{job,
+   * status:"pending"}` to finish with job(). Args as validateAsk (commands.ts).
+   */
+  ask(token: string, req: unknown): Promise<Outcome>;
 }
 
 export interface RelayBackend {

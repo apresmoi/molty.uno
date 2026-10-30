@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { COMMANDS, MOODS } from "../src/core/commands.js";
+import { COMMANDS, MAX_ASK_LABEL, MOODS } from "../src/core/commands.js";
 import { TOOLS } from "../src/surfaces/mcp.js";
 import { SKILL_PATHS, handleSkill, skillMarkdown } from "../src/surfaces/skill.js";
 import { readFileSync } from "node:fs";
@@ -34,7 +34,9 @@ describe("GET /skill.md", () => {
     for (const fact of ["pair_id", "agent_token", "wait_s", "120 s", "Authorization: Bearer", "audio_busy", "secret"]) expect(md).toContain(fact);
     // events: every receive mode, the signature contract, the honest limit, hold_s
     for (const fact of ["https://r/v1/devices/<id>/events?wait_s=0..25", "https://r/v1/webhook", "Molty-Signature: t=<unix ms>,v2=<hex hmac_sha256(secret, t \\n METHOD \\n path?query \\n body)>", "molty events", "--exec", "{{event.data.<field>}}", "nothing can wake an agent", "hold_s"]) expect(md).toContain(fact);
-    for (const t of ["shake", "tap", "button"]) expect(md).toContain(`| \`${t}\` |`);
+    for (const t of ["shake", "tap", "button", "answer"]) expect(md).toContain(`| \`${t}\` |`);
+    // ask: the endpoint, the label limit stated from the constant, layouts, null answers, ask vs talk
+    for (const fact of ["https://r/v1/devices/molty-xxxxxxxxxx/ask", `1–${MAX_ASK_LABEL} characters each`, "one centred button", "pie slices", "`timeout`", "`cancelled`", "`offline`", "use **talk** when you"]) expect(md).toContain(fact);
   });
 
   it("rejects non-GET and supports HEAD", async () => {

@@ -8,7 +8,7 @@
 import { INBOX_LIMITS, SKILL_EVENT } from "../core/events.js";
 import { SKILL_VERSION, skillHeadline } from "../core/version.js";
 import { WEBHOOK_LIMITS } from "../core/webhook.js";
-import { DEFAULT_LISTEN_MS, DEFAULT_WPM, MAX_MOOD_HOLD_S, MAX_DIAG_TIMELINE_S, MAX_LISTEN_MS, MAX_LOG_BYTES, MAX_SAY_BYTES, MAX_SHOW_BYTES, MOODS, TALK_BUDGET_MS, TALK_DEFAULT_LISTEN_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
+import { DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, DEFAULT_WPM, MAX_MOOD_HOLD_S, MAX_DIAG_TIMELINE_S, MAX_LISTEN_MS, MAX_LOG_BYTES, MAX_SAY_BYTES, MAX_SHOW_BYTES, MOODS, TALK_BUDGET_MS, TALK_DEFAULT_LISTEN_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
 
 export const SKILL_PATHS = ["/skill.md", "/skill"];
 
@@ -130,6 +130,33 @@ spoke: \`heard\` is \`""\`), \`max\` (window full), \`ended\` (older firmware st
 \`spoken\` (\`"listen":false\`). Blocks at most ${TALK_BUDGET_MS / 1000} s; a longer turn answers \`202\` with
 \`{"job","status":"pending"}\` — finish it with \`GET /v1/jobs/<job>?wait_s=8\`.
 
+**Ask (a question the human answers with a tap).**
+
+\`\`\`sh
+curl -sS -X POST ${o}/v1/devices/molty-xxxxxxxxxx/ask \\
+  -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \\
+  -d '{"say":"Shall I start the build now?","options":["yes","no","later"]}'
+# → {"ok":true,"result":{"job":"…","status":"done","answer":"later","index":2,"said":"Shall I start the build now?",
+#     "ms":{"tts_first_audio":…,"speech":…,"answer":…,"total":…},"timings":{…}}}
+\`\`\`
+
+Body: \`{"say"?: s, "options": [1..${MAX_ASK_OPTIONS} labels], "timeout_s"?: 1..${MAX_ASK_TIMEOUT_S} (default ${DEFAULT_ASK_TIMEOUT_S}), "voice"?}\`.
+Speaks \`say\` (put the question there), then shows the options on the round screen and returns
+the one the human tapped: \`answer\` (its label) and \`index\`. Blocks and finishes like talk
+(${TALK_BUDGET_MS / 1000} s, then \`202\` pending — a long \`timeout_s\` is fine, finish it with the jobs URL).
+
+- **Labels are tap targets on a small round screen: 1–${MAX_ASK_LABEL} characters each**, printable ASCII,
+  unique ignoring case. Good: \`"yes"\`, \`"no"\`, \`"later"\`, \`"idk"\`, \`"ok"\`, \`"A"\`, \`"tea"\`. Bad:
+  \`"Yes, please"\` (too long), \`"maybe later"\` (11 chars), \`"👍"\` (not ASCII), \`["no","No"]\` (duplicates).
+  Too long is \`400 invalid_args\` with the reason.
+- 1 option = one centred button (\`"ok"\`, \`"done"\`); 2 = two halves; 3–${MAX_ASK_OPTIONS} = pie slices.
+- \`answer\` is \`null\` (and \`index\` \`null\`) when nobody tapped: \`reason\` is \`timeout\` (no tap within
+  \`timeout_s\`), \`cancelled\` (any later command to Molty, yours or another agent's, replaced the
+  question) or \`offline\` (Molty disconnected). Handle it: carry on with a sensible default, or ask
+  once more later — don't loop.
+- Use **ask** for a decision a tap can settle (yes/no, pick one of a few); use **talk** when you
+  need words. No touch screen: \`409 unsupported\`.
+
 Errors: \`{"ok":false,"error":code}\` — \`401 unauthorized\` (bad/missing/revoked token),
 \`400 invalid_args\` / \`unknown_command\`, \`409 device_offline\` / \`audio_busy\` /
 \`unsupported\` (the board has no speaker or mic: \`say\`/\`listen\` absent from \`relay.caps\`),
@@ -140,7 +167,7 @@ Revoke your own token: \`curl -sS -X DELETE ${o}/v1/token -H "authorization: Bea
 ## 3. Optional: MCP
 
 The same features are a remote MCP server at \`${o}/mcp\` (streamable HTTP, bearer
-auth). Tools: \`molty_pair\` (no token needed), \`molty_talk\`, \`molty_status\`, \`molty_mood\`,
+auth). Tools: \`molty_pair\` (no token needed), \`molty_talk\`, \`molty_ask\`, \`molty_status\`, \`molty_mood\`,
 \`molty_show\`, \`molty_say\`, \`molty_listen\`, \`molty_wait\`, \`molty_state\`,
 \`molty_volume\`, \`molty_imu\`, \`molty_diag\`, \`molty_log\`, \`molty_events\`,
 \`molty_webhook\`. Claude Code example:
@@ -161,6 +188,7 @@ Molty talks back. When your human touches it, the relay records an event:
 | \`shake\` | \`{"peak_g": 2.4, "reversals": 5, "ms": 900}\` |
 | \`tap\` | \`{"x": 0..1, "y": 0..1}\` (screen position) |
 | \`button\` | \`{"id": "accept"}\` or \`{"id": "reject"}\` |
+| \`answer\` | \`{"job": "…", "index": 0, "label": "yes"}\`, or \`{"job", "index": null, "label": null, "reason": "timeout"}\` — how an ask ended |
 
 Each event is \`{"id":"e42","type":"shake","ts":<unix ms>,"data":{…}}\`. The relay keeps a
 **personal inbox per agent token** with a read cursor, so every paired agent gets every
@@ -221,6 +249,7 @@ a full model round trip on your side). So:
 - **Use events, not polling.** To notice a shake or tap, read the ride-along \`events\`, long-poll
   \`molty_events\` / the events URL, or register a webhook. Never poll \`imu\` (or \`status\`) in a
   loop to detect motion: it is slow, misses short gestures, and keeps Molty's link busy.
+- **A decision → \`molty_ask\`**, not a spoken yes/no: one call says the question and returns the tap.
 - To end the conversation, \`molty_talk {"say":"…","listen":false}\` (speak without listening).
 
 ## Etiquette
@@ -235,7 +264,8 @@ a full model round trip on your side). So:
   conversation: a \`mood\` (\`surprised\`, \`happy\`) or a few words is plenty; a burst of
   events is one moment. Never answer every event with \`say\`. Ideas: shake = "pay
   attention to me" / undo / shuffle; tap = acknowledge or dismiss what you showed; \`button\`
-  accept/reject = yes/no to a question you just asked on screen.
+  accept/reject = acknowledge / dismiss. To ask something, use \`ask\`, not taps or buttons.
+- **Ask sparingly.** One question at a time, only when the answer changes what you do next.
 `;
 }
 

@@ -27,6 +27,7 @@ interface DeviceRpc {
   events(id: string, token: string, req: Parameters<AgentApi["events"]>[1]): ReturnType<AgentApi["events"]>;
   webhook(id: string, token: string, req: Parameters<AgentApi["webhook"]>[1]): ReturnType<AgentApi["webhook"]>;
   talk(id: string, token: string, req: unknown): ReturnType<AgentApi["talk"]>;
+  ask(id: string, token: string, req: unknown): ReturnType<AgentApi["ask"]>;
 }
 
 function backendFor(env: Env): RelayBackend {
@@ -43,6 +44,7 @@ function backendFor(env: Env): RelayBackend {
         events: (token, req) => stub.events(id, token, { since: req.since, wait_ms: req.wait_ms }),
         webhook: (token, req) => stub.webhook(id, token, req),
         talk: (token, req) => stub.talk(id, token, req),
+        ask: (token, req) => stub.ask(id, token, req),
       };
     },
   };

@@ -376,13 +376,13 @@ describe("wait:true on say / listen", () => {
     for (const [k, v] of await w.kv.list<Record<string, unknown>>("tok:")) await w.kv.put(k, { ...v, skill_seen: 2 });
     const r = await rest(w.backend, w.token, `/v1/devices/${DEVICE}/cmd`, { name: "say", args: { text: "hi" }, wait: true });
     expect(r.status).toBe(502);
-    expect(r.body).toMatchObject({ ok: false, error: "upstream 500", skill_update: { version: 3 } });
+    expect(r.body).toMatchObject({ ok: false, error: "upstream 500", skill_update: { version: 4 } });
     expect(r.body.events.map((e: any) => e.type)).toContain("tap");
     // consistent: what was handed over is marked read / seen, and is not handed over again
     const head = await w.kv.get<number>("evseq");
     const [[hash]] = [...(await w.kv.list("tok:")).keys()].map((k) => [k.slice(4)]);
     expect(await w.kv.get<number>(`cur:${hash}`)).toBe(head);
-    expect([...(await w.kv.list<any>("tok:")).values()][0].skill_seen).toBe(3);
+    expect([...(await w.kv.list<any>("tok:")).values()][0].skill_seen).toBe(4);
     const again = await rest(w.backend, w.token, `/v1/devices/${DEVICE}/cmd`, { name: "imu" });
     expect(again.body.events).toBeUndefined();
     expect(again.body.skill_update).toBeUndefined();

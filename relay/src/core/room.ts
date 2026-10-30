@@ -11,7 +11,7 @@
 // the host awake. If the host is evicted anyway, jobs left "running" with
 // no in-memory task are reported as failed:"interrupted" instead of hanging.
 //
-// Agent events (shake/tap/button) are storage-backed: an `ev:` ring, a
+// Agent events (shake/tap/button, and one `answer` per ended ask) are storage-backed: an `ev:` ring, a
 // per-token read cursor `cur:<token hash>` and a webhook delivery queue
 // `whq:` driven by the host's alarm. All survive hibernation.
 //
@@ -23,7 +23,7 @@
 
 import { type AgentApi, type EventsRequest, type JobView, type Outcome, type PairRequest, type PairResult, TERMINAL, type WebhookRequest } from "./api.js";
 import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
-import { CommandError, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateCommand, validateTalk } from "./commands.js";
+import { type AskArgs, CommandError, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk } from "./commands.js";
 import { PcmFeed, estimateSpeechMs, splitSpeech, synthesize } from "./speech.js";
 import { b64Decode, b64urlEncode, randomBytes, randomDigits, safeEqual, sha256Hex } from "./crypto.js";
 import {
@@ -105,6 +105,8 @@ export interface RoomTimings {
   thinkHoldS: number;
   /** Longest a blocking talk call holds the request before answering {status:"pending"}. */
   talkBudgetMs: number;
+  /** ask: after the device's own timeout_ms, how long the relay waits for its `answer` before resolving `timeout` itself. */
+  askGraceMs: number;
 }
 
 export const DEFAULT_TIMINGS: RoomTimings = {
@@ -120,6 +122,7 @@ export const DEFAULT_TIMINGS: RoomTimings = {
   sayDoneGraceMs: 2500,
   thinkHoldS: THINK_HOLD_S,
   talkBudgetMs: TALK_BUDGET_MS,
+  askGraceMs: 5000,
 };
 
 /** say: a first frame shorter than a full chunk waits at most this long for more audio. */
@@ -211,7 +214,14 @@ interface ListenBuffer {
   moodRev: number;
 }
 
-type JobKind = "say" | "listen" | "talk";
+type JobKind = "say" | "listen" | "talk" | "ask";
+
+/** How an ask ended: a tap (index + label) or no answer (reason). */
+type AskAnswer = { index: number; label: string; reason?: undefined } | { index: null; label: null; reason: "timeout" | "cancelled" | "offline" };
+interface PendingAsk {
+  options: string[];
+  resolve(a: AskAnswer): void;
+}
 type SpeakResult = { ok: true; start: number; ms: number; timings: JsonObject } | { ok: false; error: string };
 type ListenResult =
   | { ok: true; start: number; text: string; reason: string; speech_ms?: number; duration_ms: number; peak: number; rms: number; timings: JsonObject }
@@ -266,6 +276,8 @@ export class DeviceRoom implements AgentApi {
   private readonly jobWaiters = new Map<string, Set<() => void>>();
   private readonly tasks = new Set<string>();
   private readonly sayDone = new Map<string, () => void>();
+  /** Asks shown (or being shown) on the device, by job: the device's `answer` resolves them. */
+  private readonly pendingAsks = new Map<string, PendingAsk>();
   private listenBuf: ListenBuffer | undefined;
   private audioJob: string | undefined;
   /** Bumped by every explicit `mood` command (any agent) the device accepted: automatic moods never overwrite a newer explicit one. */
@@ -366,6 +378,11 @@ export class DeviceRoom implements AgentApi {
       this.listenBuf.ended = true;
       this.listenBuf.wake?.();
     }
+    // The device that showed the question is gone: nobody can answer it.
+    for (const [job, p] of this.pendingAsks) {
+      this.pendingAsks.delete(job);
+      p.resolve({ index: null, label: null, reason: "offline" });
+    }
   }
 
   private async onHello(sock: DeviceSocket, frame: Record<string, unknown>) {
@@ -420,8 +437,33 @@ export class DeviceRoom implements AgentApi {
     if (this.lastEvents.size > 32) this.lastEvents.delete(this.lastEvents.keys().next().value!);
     if (frame.name === "say.done" && typeof data.job === "string") this.sayDone.get(data.job)?.();
     if (frame.name === "link_code") await this.onLinkCode(data.link_code);
+    if (frame.name === "answer") return this.onAnswer(data); // its inbox event is appended when the ask job ends
     const clean = agentEventData(frame.name, data);
     if (clean) await this.appendEvent(frame.name, clean);
+  }
+
+  /**
+   * Device `answer`: resolves the pending ask it names, once. Dropped unless the
+   * shape is right (events.ts), the job is an ask still waiting here, the index
+   * is within its options and the label (when sent) is exactly options[index].
+   */
+  private onAnswer(data: Record<string, unknown>) {
+    const clean = agentEventData("answer", data);
+    if (!clean) return;
+    const job = clean.job as string;
+    const p = this.pendingAsks.get(job);
+    if (!p) return;
+    let answer: AskAnswer;
+    if (clean.index === null) {
+      answer = { index: null, label: null, reason: clean.reason as "timeout" | "cancelled" };
+    } else {
+      const index = clean.index as number;
+      if (index >= p.options.length) return;
+      if (clean.label !== null && clean.label !== p.options[index]) return;
+      answer = { index, label: p.options[index] };
+    }
+    this.pendingAsks.delete(job);
+    p.resolve(answer);
   }
 
   private async onLinkCode(code: unknown) {
@@ -677,6 +719,38 @@ export class DeviceRoom implements AgentApi {
     });
   }
 
+  async ask(token: string, req: unknown): Promise<Outcome> {
+    const t0 = this.clock.now();
+    const a = await this.auth(token);
+    if (!a) return fail("unauthorized");
+    let args: AskArgs;
+    try {
+      args = validateAsk(req);
+    } catch (e) {
+      if (e instanceof CommandError) return fail(e.code, e.message);
+      throw e;
+    }
+    const live = this.liveSocket();
+    if (!live) return fail("device_offline");
+    // Firmware lists `ask` in caps only on boards with a touch screen. No caps = older firmware.
+    const caps = live.getMeta()?.caps;
+    if (caps && !caps.includes("ask")) return fail("unsupported", "this device has no touch screen for answers (or its firmware predates ask): use molty_talk instead");
+    if (caps && args.say !== undefined && !caps.includes("say")) return fail("unsupported", "this device has no speaker: ask without say, or show the question first");
+    // Only the spoken part needs the speaker; waiting for the tap holds no audio lock.
+    const started = await this.startJob("ask", args as unknown as JsonObject, args.say !== undefined);
+    if (!started.ok) return started;
+    const job = started.result.job as string;
+    const out = await this.runJob(job, Math.max(0, this.t.talkBudgetMs - (this.clock.now() - t0)));
+    if (!out.ok) return out;
+    const v = out.result;
+    if (v.status === "failed") return fail(v.error ?? "failed", `ask job ${job} failed`);
+    if (v.status === "done") return this.ride(a, { ok: true, result: { ...(v.result ?? {}), job, status: "done" } });
+    return this.ride(a, {
+      ok: true,
+      result: { job, status: "pending", state: v.status, hint: "still waiting for the tap: call molty_wait {job} (REST: GET /v1/jobs/<job>?wait_s=8) until it is done" },
+    });
+  }
+
   private async runJob(jobId: string, waitMs: number): Promise<Outcome<JobView>> {
     if (typeof jobId !== "string" || !jobId.startsWith(`${this.deviceId}.j_`)) return fail("not_found");
     const deadline = this.clock.now() + Math.max(0, Math.min(waitMs, JOB_WAIT_CAP_MS));
@@ -693,15 +767,23 @@ export class DeviceRoom implements AgentApi {
     }
   }
 
-  private async startJob(kind: JobKind, args: JsonObject): Promise<Outcome> {
-    if (this.audioJob) return fail("audio_busy", `job ${this.audioJob} is still running`);
+  /** `audio`: the job takes the one-at-a-time audio lock (an ask only while it speaks). */
+  private async startJob(kind: JobKind, args: JsonObject, audio = true): Promise<Outcome> {
+    if (audio && this.audioJob) return fail("audio_busy", `job ${this.audioJob} is still running`);
     const id = `${this.deviceId}.j_${b64urlEncode(randomBytes(12))}`;
     const now = this.clock.now();
-    this.audioJob = id;
+    if (audio) this.audioJob = id;
     this.tasks.add(id);
     await this.kv.put<JobRecord>(K.job(id), { job: id, kind, status: "queued", created: now, updated: now });
     void this.purgeJobs(now);
-    const run = kind === "say" ? this.runSay(id, args, now) : kind === "listen" ? this.runListen(id, args, now) : this.runTalk(id, args as unknown as TalkArgs, now);
+    const run =
+      kind === "say"
+        ? this.runSay(id, args, now)
+        : kind === "listen"
+          ? this.runListen(id, args, now)
+          : kind === "ask"
+            ? this.runAsk(id, args as unknown as AskArgs, now)
+            : this.runTalk(id, args as unknown as TalkArgs, now);
     run
       .catch((e: unknown) => this.finishJob(id, { status: "failed", error: errorCode(e) }))
       .finally(() => {
@@ -786,6 +868,62 @@ export class DeviceRoom implements AgentApi {
     ms.total = this.clock.now() - created;
     timings.total = ms.total;
     this.logTimings(id, "talk", timings);
+    await this.finishJob(id, { status: "done", result: { ...result, ms, timings } });
+  }
+
+  /**
+   * say (optional, until the device's say.done, as talk) then `cmd ask {job, options,
+   * timeout_ms}`, then wait for the device's `answer`. The audio lock is released
+   * once the speech is over. Every way it ends that reaches the device is a done
+   * job: a tap, or answer:null with reason timeout / cancelled (any later command
+   * replaced it on the device) / offline. Each end is also one `answer` inbox event.
+   */
+  private async runAsk(id: string, args: AskArgs, created: number) {
+    await this.setJob(id, { status: "running" });
+    const ms: JsonObject = {};
+    const timings: JsonObject = { queue: this.clock.now() - created };
+    const result: JsonObject = {};
+    if (args.say !== undefined) {
+      const s = await this.speak(id, args.say, args.voice, true);
+      if (this.audioJob === id) this.audioJob = undefined;
+      if (!s.ok) return this.finishJob(id, { status: "failed", error: s.error });
+      result.said = args.say;
+      ms.tts_first_audio = (s.timings.first_audio as number) ?? 0;
+      ms.speech = (s.timings.play as number) ?? 0;
+      timings.say = s.timings;
+    }
+    const tAsk = this.clock.now();
+    let settle!: (a: AskAnswer) => void;
+    const answered = new Promise<AskAnswer>((resolve) => (settle = resolve));
+    // Registered before the cmd goes out: an answer may overtake the cmd's `res`.
+    this.pendingAsks.set(id, { options: args.options, resolve: settle });
+    let answer: AskAnswer;
+    let tAck = tAsk;
+    try {
+      const res = await this.sendCmd("ask", { job: id, options: args.options, timeout_ms: args.timeout_s * 1000 });
+      if (!res.ok && res.error !== "device_offline") return this.finishJob(id, { status: "failed", error: res.error });
+      if (!res.ok) settle({ index: null, label: null, reason: "offline" });
+      tAck = this.clock.now();
+      // The device times out at timeout_ms and says so; this only covers a device that never does.
+      const timer = this.clock.setTimeout(() => settle({ index: null, label: null, reason: "timeout" }), args.timeout_s * 1000 + this.t.askGraceMs);
+      answer = await answered;
+      this.clock.clearTimeout(timer);
+    } finally {
+      this.pendingAsks.delete(id);
+    }
+    const tEnd = this.clock.now();
+    Object.assign(result, { answer: answer.label, index: answer.index });
+    if (answer.reason) result.reason = answer.reason;
+    ms.answer = tEnd - tAsk;
+    ms.total = tEnd - created;
+    timings.ask = { cmd: tAck - tAsk, wait: tEnd - tAck };
+    timings.total = ms.total;
+    this.logTimings(id, "ask", timings);
+    // Inbox first, then the result: the asking call's own ride-along reliably carries it (marked read).
+    // Answers are agent-driven (one per ask), so they bypass the device event rate cap.
+    const ev: JsonObject = { job: id, index: answer.index, label: answer.label };
+    if (answer.reason) ev.reason = answer.reason;
+    await this.appendEvent("answer", ev, true);
     await this.finishJob(id, { status: "done", result: { ...result, ms, timings } });
   }
 

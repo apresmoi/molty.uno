@@ -10,7 +10,7 @@
 // Node host can serve it unchanged.
 
 import { type AgentApi, type Inbox, type JobView, type Outcome, type RelayBackend, bearer, tokenDevice } from "../core/api.js";
-import { DEFAULT_LISTEN_MS, MAX_LISTEN_MS, MAX_MOOD_HOLD_S, MOODS, TALK_BUDGET_MS, TALK_DEFAULT_LISTEN_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
+import { DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, MAX_LISTEN_MS, MAX_MOOD_HOLD_S, MOODS, TALK_BUDGET_MS, TALK_DEFAULT_LISTEN_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
 import { AGENT_EVENT_TYPES, type AgentEvent, INBOX_LIMITS, eventsLine, seqOf } from "../core/events.js";
 import { DEVICE_ID_RE, isRecord, type JsonObject } from "../core/protocol.js";
 import { RELAY_VERSION, SKILL_VERSION, type SkillNotice, skillHeadline, skillLine, skillUpdate } from "../core/version.js";
@@ -19,7 +19,7 @@ export const SUPPORTED_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"];
 export const SERVER_INFO = { name: "molty-relay", title: `Molty relay (skill v${SKILL_VERSION})`, version: RELAY_VERSION };
 const MAX_BODY = 256 * 1024;
 const INSTRUCTIONS =
-  "Tools operate a physical Molty device through the molty-relay. Pair first with molty_pair (no token needed), then send the returned agent_token as 'Authorization: Bearer <token>'. For conversation use molty_talk: ONE call per turn speaks your reply, then listens and returns what the human said ({heard, reason}); moods (listening, thinking, speaking) are automatic, so don't call molty_mood around talking. Keep spoken replies to 1-2 sentences. molty_say / molty_listen return a job immediately (wait:true blocks until done); poll a job with molty_wait (<= 8 s per call). " +
+  `Tools operate a physical Molty device through the molty-relay. Pair first with molty_pair (no token needed), then send the returned agent_token as 'Authorization: Bearer <token>'. For conversation use molty_talk: ONE call per turn speaks your reply, then listens and returns what the human said ({heard, reason}); moods (listening, thinking, speaking) are automatic, so don't call molty_mood around talking. Keep spoken replies to 1-2 sentences. For a decision the human can answer with a tap use molty_ask: say the question, offer 1-${MAX_ASK_OPTIONS} options of at most ${MAX_ASK_LABEL} characters ("yes", "no", "later"); answer is null on timeout/cancelled/offline. molty_say / molty_listen return a job immediately (wait:true blocks until done); poll a job with molty_wait (<= 8 s per call). ` +
   `Molty also emits events (${AGENT_EVENT_TYPES.join(", ")}) into your own inbox: unread ones ride along on every tool result as 'events' plus a 'Molty: ...' line; molty_events pulls/waits for them; molty_webhook registers an HTTPS request the relay sends you per event. React briefly, once per moment. Full guide: GET /skill.md on this relay. ${skillHeadline()}. When the skill changes again, your next successful tool result carries 'skill_update' plus a 'Molty's skill was updated' line once: re-read /skill.md then.`;
 
 type Prop = { type: string; description: string; enum?: string[]; items?: { type: "string"; enum?: string[] } };
@@ -156,11 +156,26 @@ export const TOOLS: ToolDef[] = [
     run: (api, t, a) => api.talk(t, a),
   },
   {
-    name: "molty_wait",
-    description: "Wait at most timeout_s (0..8, default 8) for a say/listen/talk job. Returns the job result with status done, status pending if still queued/running (call again), or an error if it failed.",
+    name: "molty_ask",
+    description: `Ask the human a question they answer with a TAP on Molty's round screen: speaks 'say' (if given; put the question there), then shows 1-${MAX_ASK_OPTIONS} options and returns which one they tapped: {answer: label|null, index: int|null, reason?: timeout|cancelled|offline, said?, ms:{tts_first_audio?, speech?, answer, total}}. Options must be SHORT: 1-${MAX_ASK_LABEL} printable ASCII characters each, unique (good: "yes", "no", "later", "idk", "ok"; bad: "Yes, please do it", "maybe later"). 1 option = one centred button ("ok", "done"); 2 = halves; 3-${MAX_ASK_OPTIONS} = pie slices. answer null: nobody tapped within timeout_s (timeout), another command replaced the question (cancelled), or Molty went offline. Use molty_talk instead for open-ended answers. Blocks at most ${TALK_BUDGET_MS / 1000} s; longer returns {job, status:"pending"}: finish it with molty_wait.`,
     inputSchema: obj(
       {
-        job: { type: "string", description: "Job id returned by molty_say, molty_listen or molty_talk." },
+        say: { type: "string", description: "The question, spoken first (at most 4096 bytes). Recommended." },
+        options: { type: "array", items: { type: "string" }, description: `1..${MAX_ASK_OPTIONS} answer labels, each 1..${MAX_ASK_LABEL} printable ASCII characters, unique ignoring case, e.g. ["yes","no","later"].` },
+        timeout_s: { type: "integer", description: `Seconds the options stay up waiting for a tap, 1..${MAX_ASK_TIMEOUT_S}; default ${DEFAULT_ASK_TIMEOUT_S}.` },
+        voice: { type: "string", description: "Optional relay TTS voice for 'say'." },
+      },
+      ["options"],
+    ),
+    auth: true,
+    run: (api, t, a) => api.ask(t, a),
+  },
+  {
+    name: "molty_wait",
+    description: "Wait at most timeout_s (0..8, default 8) for a say/listen/talk/ask job. Returns the job result with status done, status pending if still queued/running (call again), or an error if it failed.",
+    inputSchema: obj(
+      {
+        job: { type: "string", description: "Job id returned by molty_say, molty_listen, molty_talk or molty_ask." },
         timeout_s: { type: "integer", description: "Polling budget, integer 0..8 seconds; default 8." },
       },
       ["job"],
@@ -174,7 +189,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "molty_events",
-    description: `Your unread Molty events (${AGENT_EVENT_TYPES.join(", ")}), oldest first: {events:[{id, type, ts, data}], next, more}. Default since = your read cursor (each event is returned to you once; it advances). wait_s (0..${INBOX_LIMITS.mcpWaitS}, default 0) long-polls until an event arrives. since = an event id (e.g. e41) re-reads after it. shake {peak_g, reversals, ms}; tap {x, y} in 0..1; button {id: accept|reject}.`,
+    description: `Your unread Molty events (${AGENT_EVENT_TYPES.join(", ")}), oldest first: {events:[{id, type, ts, data}], next, more}. Default since = your read cursor (each event is returned to you once; it advances). wait_s (0..${INBOX_LIMITS.mcpWaitS}, default 0) long-polls until an event arrives. since = an event id (e.g. e41) re-reads after it. shake {peak_g, reversals, ms}; tap {x, y} in 0..1; button {id: accept|reject}; answer {job, index, label, reason?} (how a molty_ask ended).`,
     inputSchema: obj({
       since: { type: "string", description: "Event id to read after, e.g. e41; default your cursor." },
       wait_s: { type: "integer", description: `Seconds to wait for a new event, 0..${INBOX_LIMITS.mcpWaitS}; default 0.` },
@@ -361,6 +376,7 @@ function capturingInbox(api: AgentApi): { api: AgentApi; taken: Inbox[]; notices
       events: (t, r) => keep(api.events(t, r)),
       webhook: (t, r) => keep(api.webhook(t, r)),
       talk: (t, r) => keep(api.talk(t, r)),
+      ask: (t, r) => keep(api.ask(t, r)),
     },
   };
 }

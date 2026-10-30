@@ -178,3 +178,47 @@ export function validateTalk(raw: unknown): TalkArgs {
   if (out.say === undefined && !out.listen) throw invalid("give say, or listen (or both)");
   return out;
 }
+
+// ---- ask: a question with tap answers ----
+
+/** Longest answer label (trimmed, printable ASCII). The firmware fits this at 5 sectors; change it here only. */
+export const MAX_ASK_LABEL = 8;
+export const MAX_ASK_OPTIONS = 5;
+export const MAX_ASK_TIMEOUT_S = 120;
+export const DEFAULT_ASK_TIMEOUT_S = 30;
+
+export interface AskArgs {
+  say?: string;
+  voice?: string;
+  /** Trimmed labels, in order: index i is options[i]. */
+  options: string[];
+  timeout_s: number;
+}
+
+/** molty_ask / POST /v1/devices/<id>/ask: `{say?, options: 1..5 labels of 1..8 printable ASCII chars (unique, case-insensitive), timeout_s? 1..120 (default 30), voice?}`. */
+export function validateAsk(raw: unknown): AskArgs {
+  const args = raw === undefined || raw === null ? {} : raw;
+  if (!isRecord(args)) throw invalid("args must be an object");
+  only(args, ["say", "options", "timeout_s", "voice"]);
+  const opts = args.options;
+  if (!Array.isArray(opts) || opts.length < 1 || opts.length > MAX_ASK_OPTIONS) {
+    throw invalid(`options must be a list of 1..${MAX_ASK_OPTIONS} short labels, e.g. ["yes","no"]`);
+  }
+  const seen = new Set<string>();
+  const options = opts.map((o, i) => {
+    if (typeof o !== "string") throw invalid(`options[${i}] must be a string`);
+    const label = o.trim();
+    if (label.length < 1 || label.length > MAX_ASK_LABEL) {
+      throw invalid(`options[${i}] "${o}" must be 1..${MAX_ASK_LABEL} characters after trimming (it is a tap target on a small round screen): shorten it, e.g. "yes", "no", "later"`);
+    }
+    if (!/^[\x20-\x7e]+$/.test(label)) throw invalid(`options[${i}] must be printable ASCII (letters, digits, spaces, punctuation; no emoji or accents)`);
+    const key = label.toLowerCase();
+    if (seen.has(key)) throw invalid(`options must be unique (case-insensitive): "${label}" appears twice`);
+    seen.add(key);
+    return label;
+  });
+  const out: AskArgs = { options, timeout_s: int(args.timeout_s, "timeout_s", 1, MAX_ASK_TIMEOUT_S, DEFAULT_ASK_TIMEOUT_S) };
+  if (args.say !== undefined) out.say = text(args.say, "say", MAX_SAY_BYTES);
+  if (args.voice !== undefined) out.voice = voiceId(args.voice);
+  return out;
+}

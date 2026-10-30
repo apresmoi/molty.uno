@@ -6,8 +6,11 @@
 //   shake  {peak_g:number, reversals:int, ms:int}
 //   tap    {x:0..1, y:0..1}
 //   button {id:"accept"|"reject"}
+//   answer {job, index:int|null, label?:string, reason?:"timeout"|"cancelled"}
+//          (the human's tap on a molty_ask; also checked against the job's options in room.ts)
 // Everything else (say.done, link_code, ...) stays internal to the relay.
 
+import { MAX_ASK_LABEL, MAX_ASK_OPTIONS } from "./commands.js";
 import { isRecord, type JsonObject } from "./protocol.js";
 
 export interface AgentEvent {
@@ -46,7 +49,32 @@ const SHAPES: Record<string, (d: Record<string, unknown>) => JsonObject | undefi
   shake: (d) => (num(d.peak_g, 0, 64) && int(d.reversals, 0, 1000) && int(d.ms, 0, 600000) ? { peak_g: d.peak_g as number, reversals: d.reversals as number, ms: d.ms as number } : undefined),
   tap: (d) => (num(d.x, 0, 1) && num(d.y, 0, 1) ? { x: d.x as number, y: d.y as number } : undefined),
   button: (d) => (d.id === "accept" || d.id === "reject" ? { id: d.id } : undefined),
+  answer: answerShape,
 };
+
+const JOB_RE = /^molty-[a-z2-9]{10}\.j_[A-Za-z0-9_-]{8,32}$/;
+const LABEL_RE = new RegExp(`^[\\x20-\\x7e]{1,${MAX_ASK_LABEL}}$`);
+
+/**
+ * Device `answer` (stateless part): a tap `{job, index, label?}` or no answer
+ * `{job, index:null, reason:"timeout"|"cancelled"}`, never both. Stored as
+ * `{job, index, label|null, reason?}`. room.ts additionally requires a pending
+ * ask for `job`, `index` within its options and `label` equal to options[index].
+ */
+function answerShape(d: Record<string, unknown>): JsonObject | undefined {
+  if (typeof d.job !== "string" || !JOB_RE.test(d.job)) return undefined;
+  if (d.index === null || d.index === undefined) {
+    if (d.reason !== "timeout" && d.reason !== "cancelled") return undefined;
+    if (d.label !== undefined && d.label !== null) return undefined;
+    return { job: d.job, index: null, label: null, reason: d.reason };
+  }
+  if (!int(d.index, 0, MAX_ASK_OPTIONS - 1) || d.reason !== undefined) return undefined;
+  if (d.label !== undefined && (typeof d.label !== "string" || !LABEL_RE.test(d.label))) return undefined;
+  return { job: d.job, index: d.index as number, label: (d.label as string | undefined) ?? null };
+}
+
+/** Why an ask ended without an answer. `offline` is relay-side (the device dropped mid-ask). */
+export const ASK_NO_ANSWER = ["timeout", "cancelled", "offline"] as const;
 
 export const AGENT_EVENT_TYPES = Object.keys(SHAPES);
 
@@ -63,6 +91,7 @@ export const SAMPLE_EVENTS: Record<string, AgentEvent> = {
   shake: { id: "e1", type: "shake", ts: 0, data: { peak_g: 2.4, reversals: 5, ms: 900 } },
   tap: { id: "e2", type: "tap", ts: 0, data: { x: 0.5, y: 0.5 } },
   button: { id: "e3", type: "button", ts: 0, data: { id: "accept" } },
+  answer: { id: "e4", type: "answer", ts: 0, data: { job: "molty-xxxxxxxxxx.j_sample00", index: 0, label: "yes" } },
 };
 
 export function agentEventData(name: string, data: unknown): JsonObject | undefined {
@@ -89,6 +118,8 @@ export function eventSentence(ev: AgentEvent): string {
       return "Molty's screen was tapped";
     case "button":
       return `Molty's ${d.id} button was pressed`;
+    case "answer":
+      return typeof d.label === "string" ? `Molty's question was answered: ${d.label}` : `Molty's question got no answer (${String(d.reason ?? "timeout")})`;
     case SKILL_EVENT:
       return `Molty's skill was updated to v${Number(d.version)}: re-read ${typeof d.url === "string" ? d.url : "/skill.md"}`;
     default:

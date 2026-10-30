@@ -5,6 +5,8 @@
 //                                       (say/listen + wait:true: blocks <= 24 s -> result {job, status:"done", ...} | 202 {job, status:"pending"})
 //   POST   /v1/devices/<id>/talk        {say?, listen?, listen_ms?, voice?, end_silence_ms?, no_speech_ms?, vad?}
 //                                       -> {ok:true, result:{job, status:"done", heard, said?, reason, ms, timings}} | 202 pending
+//   POST   /v1/devices/<id>/ask         {say?, options[1..5], timeout_s?, voice?}
+//                                       -> {ok:true, result:{job, status:"done", answer, index, reason?, said?, ms, timings}} | 202 pending
 //   GET    /v1/jobs/<job>[?wait_s=0..8] -> {job, kind, status, result?, error?}
 //   DELETE /v1/token                    revoke the calling token
 //   GET    /v1/devices/<id>/events[?since=e41&wait_s=0..25] -> {ok, events, next, more}
@@ -141,15 +143,16 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
     return jobResponse(waited, out, extra);
   }
 
-  const talk = /^\/v1\/devices\/([^/]+)\/talk$/.exec(path);
-  if (talk) {
+  const turn = /^\/v1\/devices\/([^/]+)\/(talk|ask)$/.exec(path);
+  if (turn) {
     if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
-    const id = decodeURIComponent(talk[1]);
+    const id = decodeURIComponent(turn[1]);
     if (!DEVICE_ID_RE.test(id)) return failure({ error: "not_found" });
     if (tokenDevice(token) !== id) return failure({ error: "unauthorized" });
     const b = await body(request);
     if (!b) return failure({ error: "bad_request", message: "body must be a JSON object" });
-    const out = await backend.device(id).talk(token!, b);
+    const api = backend.device(id);
+    const out = await (turn[2] === "ask" ? api.ask(token!, b) : api.talk(token!, b));
     if (!out.ok) return failed(out);
     return json({ ok: true, result: out.result, ...extra(out) }, out.result.status === "pending" ? 202 : 200);
   }
