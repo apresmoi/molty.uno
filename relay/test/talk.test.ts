@@ -132,6 +132,22 @@ describe("molty_talk", () => {
     expect(w.voice.sttCalls).toHaveLength(1);
   });
 
+  it("ring_color: resolved to #rrggbb for talk and listen, sent only when given, invalid -> invalid_args", async () => {
+    const w = await setup({ end: { reason: "silence", speech_ms: 100 } });
+    expect((await w.room.talk(w.token, { ring_color: "Violet" })).ok).toBe(true);
+    expect(w.dev.log.find((l) => l.name === "listen")!.args.ring_color).toBe("#b197fc");
+    expect((await w.room.talk(w.token, {})).ok).toBe(true);
+    expect(w.dev.log.filter((l) => l.name === "listen").at(-1)!.args).not.toHaveProperty("ring_color");
+    const job = ((await w.room.command(w.token, "listen", { ms: 500, ring_color: "#ABCDEF" })) as any).result.job;
+    await w.room.job(w.token, job, 2000);
+    expect(w.dev.log.filter((l) => l.name === "listen").at(-1)!.args).toEqual({ job, ms: 500, rate: 16000, ring_color: "#abcdef" });
+    for (const ring_color of ["orange", "#abc", "abcdef", 5, null]) {
+      expect(await w.room.talk(w.token, { ring_color }), String(ring_color)).toMatchObject({ ok: false, error: "invalid_args" });
+      expect(await w.room.command(w.token, "listen", { ring_color }), String(ring_color)).toMatchObject({ ok: false, error: "invalid_args" });
+    }
+    expect(await w.room.talk(w.token, { ring_color: "orange" })).toMatchObject({ message: expect.stringMatching(/ring_color must be one of green, red/) });
+  });
+
   it("passes the device VAD knobs through to listen, validated to the firmware's ranges", async () => {
     const w = await setup({ end: { reason: "silence", speech_ms: 100 } });
     const ok = await w.room.talk(w.token, { end_silence_ms: 500, no_speech_ms: 3000, vad: true, listen_ms: 8000 });

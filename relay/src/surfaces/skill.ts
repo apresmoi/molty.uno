@@ -8,7 +8,7 @@
 import { INBOX_LIMITS, SKILL_EVENT } from "../core/events.js";
 import { FEATURES, SKILL_VERSION, skillHeadline } from "../core/version.js";
 import { WEBHOOK_LIMITS } from "../core/webhook.js";
-import { DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, DEFAULT_WPM, MAX_MOOD_HOLD_S, MAX_DIAG_TIMELINE_S, MAX_LISTEN_MS, MAX_LOG_BYTES, MAX_SAY_BYTES, MAX_SHOW_BYTES, MOODS, TALK_BUDGET_MS, TALK_DEFAULT_LISTEN_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
+import { COLORS, DEFAULT_ASK_COLORS, DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, DEFAULT_WPM, MAX_MOOD_HOLD_S, MAX_DIAG_TIMELINE_S, MAX_LISTEN_MS, MAX_LOG_BYTES, MAX_SAY_BYTES, MAX_SHOW_BYTES, MOODS, TALK_BUDGET_MS, TALK_DEFAULT_LISTEN_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
 
 export const SKILL_PATHS = ["/skill.md", "/skill"];
 
@@ -98,7 +98,7 @@ Success: \`200 {"ok":true,"result":{…}}\`. Unknown argument keys are rejected.
 | \`mood\` | \`{"mood": m, "hold_s"?: s}\` | — | m ∈ ${MOODS.join(", ")}; happy/surprised revert by themselves, \`hold_s\` (0 < s ≤ ${MAX_MOOD_HOLD_S}) sets how long any mood stays |
 | \`show\` | \`{"text": s, "wpm"?: 100..800}\` | — | speed-reader text in the fluid, ≤ ${MAX_SHOW_BYTES} bytes, default ${DEFAULT_WPM} wpm; returns when it starts |
 | \`say\` | \`{"text": s, "voice"?: id}\` | \`{job}\` immediately | relay TTS → speaker (streamed sentence by sentence), text shown in sync; ≤ ${MAX_SAY_BYTES} bytes; job done → \`{ms, text, timings}\` |
-| \`listen\` | \`{"ms"?: 1..${MAX_LISTEN_MS}, "end_silence_ms"?: ${VAD_LIMITS.end_silence_ms.join("..")}, "no_speech_ms"?: ${VAD_LIMITS.no_speech_ms.join("..")}, "vad"?: bool}\` | \`{job}\` immediately | records the mic (window default ${DEFAULT_LISTEN_MS} ms; the device stops early when speech ends), relay STT; job done → \`{text, duration_ms, peak, rms, reason, speech_ms?, timings}\` |
+| \`listen\` | \`{"ms"?: 1..${MAX_LISTEN_MS}, "end_silence_ms"?: ${VAD_LIMITS.end_silence_ms.join("..")}, "no_speech_ms"?: ${VAD_LIMITS.no_speech_ms.join("..")}, "vad"?: bool, "ring_color"?: c}\` | \`{job}\` immediately | records the mic (window default ${DEFAULT_LISTEN_MS} ms; the device stops early when speech ends), relay STT; job done → \`{text, duration_ms, peak, rms, reason, speech_ms?, timings}\` |
 | \`state\` | \`{}\` = read · \`{"state": {…}}\` or flat fields = patch | creature state JSON | low-level creature state, same as the device's \`/api/creature/state\` |
 | \`volume\` | \`{"volume": 0..21}\` | — | speaker volume, 0 = mute |
 | \`imu\` | — | ax/ay/az (g), gx/gy/gz (°/s), ms | one motion-sensor snapshot |
@@ -123,7 +123,9 @@ curl -sS -X POST ${o}/v1/devices/molty-xxxxxxxxxx/talk \\
 #     "reason":"silence","ms":{"tts_first_audio":…,"speech":…,"listen":…,"stt":…,"total":…},"timings":{…}}}
 \`\`\`
 
-Body: \`{"say"?: s, "listen"?: true, "listen_ms"?: 1..${MAX_LISTEN_MS} (default ${TALK_DEFAULT_LISTEN_MS}), "voice"?, "end_silence_ms"?, "no_speech_ms"?, "vad"?}\`.
+Body: \`{"say"?: s, "listen"?: true, "listen_ms"?: 1..${MAX_LISTEN_MS} (default ${TALK_DEFAULT_LISTEN_MS}), "voice"?, "end_silence_ms"?, "no_speech_ms"?, "vad"?, "ring_color"?}\`.
+\`ring_color\` (talk and listen): the listening ring's colour, a colour name or \`"#rrggbb"\` as in Ask below;
+leave it out for the human's own setting.
 Speaks \`say\` (if given), then listens until the human stops talking (or the window ends), then
 returns the transcript as \`heard\`. \`reason\`: \`silence\` (they finished), \`no_speech\` (nobody
 spoke: \`heard\` is \`""\`), \`max\` (window full), \`ended\` (older firmware stopped early), \`error\` (the device's capture failed; \`heard\` is what was transcribed, if anything),
@@ -150,6 +152,10 @@ the one the human tapped: \`answer\` (its label) and \`index\`. Blocks and finis
   \`"Yes, please"\` (too long), \`"maybe later"\` (11 chars), \`"👍"\` (not ASCII), \`["no","No"]\` (duplicates).
   Too long is \`400 invalid_args\` with the reason.
 - 1 option = one centred button (\`"ok"\`, \`"done"\`); 2 = two halves; 3–${MAX_ASK_OPTIONS} = pie slices.
+- **Colours (optional).** An option may be \`{"label": "yes", "color": "green"}\` instead of a plain label;
+  \`color\` is one of ${Object.keys(COLORS).join(", ")} or \`"#rrggbb"\`. Each button's label and rim arc take its
+  colour. Without one, buttons get ${DEFAULT_ASK_COLORS.join(", ")} by position — fine for most questions. Use colour
+  to mean something (green yes, red no), e.g. \`"options":[{"label":"yes","color":"green"},{"label":"no","color":"red"},"later"]\`.
 - \`answer\` is \`null\` (and \`index\` \`null\`) when nobody tapped: \`reason\` is \`timeout\` (no tap within
   \`timeout_s\`), \`cancelled\` (any later command to Molty, yours or another agent's, replaced the
   question) or \`offline\` (Molty disconnected). Handle it: carry on with a sensible default, or ask

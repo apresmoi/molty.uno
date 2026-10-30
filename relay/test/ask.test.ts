@@ -4,7 +4,7 @@
 // event's strict checks, and `answer` in the inbox / webhooks.
 import { describe, expect, it } from "vitest";
 import type { RelayBackend } from "../src/core/api.js";
-import { MAX_ASK_LABEL, MAX_ASK_OPTIONS, validateAsk } from "../src/core/commands.js";
+import { COLORS, DEFAULT_ASK_COLORS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, validateAsk } from "../src/core/commands.js";
 import { AGENT_EVENT_TYPES, SAMPLE_EVENTS, agentEventData } from "../src/core/events.js";
 import { decodeAudioFrame } from "../src/core/protocol.js";
 import type { DeviceRoom } from "../src/core/room.js";
@@ -93,9 +93,10 @@ const rest = async (b: RelayBackend, token: string, body: unknown) => {
 describe("validateAsk", () => {
   const bad = (args: unknown) => expect(() => validateAsk(args), JSON.stringify(args)).toThrow();
   it("accepts 1..5 trimmed labels of 1..8 printable ASCII chars, unique ignoring case", () => {
-    expect(validateAsk({ options: ["ok"] })).toEqual({ options: ["ok"], timeout_s: 30 });
+    expect(validateAsk({ options: ["ok"] })).toEqual({ options: ["ok"], colors: ["#3ccf96"], timeout_s: 30 });
     expect(validateAsk({ options: [" yes ", "no", "later", "idk", "A b ~!"], timeout_s: 120, say: "Q?", voice: "luna" })).toEqual({
       options: ["yes", "no", "later", "idk", "A b ~!"],
+      colors: ["#3ccf96", "#ff6b6b", "#ffa94d", "#4dabf7", "#b197fc"],
       timeout_s: 120,
       say: "Q?",
       voice: "luna",
@@ -131,6 +132,34 @@ describe("validateAsk", () => {
   });
 });
 
+describe("validateAsk colours", () => {
+  const bad = (args: unknown) => expect(() => validateAsk(args), JSON.stringify(args)).toThrow();
+  it("defaults by index: green, red, amber, blue, violet", () => {
+    expect(DEFAULT_ASK_COLORS).toEqual(["green", "red", "amber", "blue", "violet"]);
+    expect(validateAsk({ options: ["a", "b", "c", "d", "e"] }).colors).toEqual(DEFAULT_ASK_COLORS.map((n) => COLORS[n]));
+  });
+  it("takes every palette name (any case, trimmed) and #rrggbb (lowercased)", () => {
+    for (const [name, hex] of Object.entries(COLORS)) expect(validateAsk({ options: [{ label: "x", color: ` ${name.toUpperCase()} ` }] }).colors).toEqual([hex]);
+    expect(validateAsk({ options: [{ label: "x", color: "#A1B2C3" }] }).colors).toEqual(["#a1b2c3"]);
+    expect(Object.keys(COLORS)).toEqual(["green", "red", "amber", "blue", "violet", "pink", "cyan", "white"]);
+    for (const hex of Object.values(COLORS)) expect(hex).toMatch(/^#[0-9a-f]{6}$/);
+  });
+  it("mixes strings and objects; an object without color keeps its index default", () => {
+    const a = validateAsk({ options: ["yes", { label: " no ", color: "white" }, { label: "later" }, { label: "idk", color: "#000001" }] });
+    expect(a.options).toEqual(["yes", "no", "later", "idk"]);
+    expect(a.colors).toEqual(["#3ccf96", "#f1f3f5", "#ffa94d", "#000001"]);
+  });
+  it("rejects unknown names, bad hex and bad shapes with a helpful message", () => {
+    expect(() => validateAsk({ options: [{ label: "x", color: "orange" }] })).toThrow(/options\[0\]\.color must be one of green, red, amber, blue, violet, pink, cyan, white or a hex colour/);
+    for (const color of ["#fff", "#12345g", "123456", "#1234567", "", 0x3ccf96, null, ["green"]]) bad({ options: [{ label: "x", color }] });
+    bad({ options: [{ color: "green" }] }); // no label
+    bad({ options: [{ label: 3 }] });
+    bad({ options: [{ label: "x", colour: "green" }] }); // unknown field
+    bad({ options: [{ label: "yes" }, { label: "YES", color: "red" }] }); // still unique
+    bad({ options: [{ label: "x".repeat(MAX_ASK_LABEL + 1), color: "red" }] }); // still short
+  });
+});
+
 describe("molty_ask", () => {
   it("happy path with say: speaks (until say.done), then shows the options; the tap is the answer", async () => {
     const w = await setup();
@@ -138,7 +167,7 @@ describe("molty_ask", () => {
     const call = mcp(w.backend, w.token, "molty_ask", { say: "Build now?", options: ["yes", " no ", "later"], timeout_s: 20 });
     await until(() => w.dev.asks().length === 1);
     const ask = w.dev.asks()[0];
-    expect(ask.args).toEqual({ job: expect.stringMatching(/^molty-k7m2q9xa4c\.j_/), options: ["yes", "no", "later"], timeout_ms: 20000 });
+    expect(ask.args).toEqual({ job: expect.stringMatching(/^molty-k7m2q9xa4c\.j_/), options: ["yes", "no", "later"], colors: ["#3ccf96", "#ff6b6b", "#ffa94d"], timeout_ms: 20000 });
     // the ask goes out only after the say played (say.done)
     expect(w.dev.cmds.map((c) => c.name)).toEqual(["say", "ask"]);
     await w.dev.answer({ job: ask.args.job, index: 2, label: "later" });
@@ -155,6 +184,24 @@ describe("molty_ask", () => {
       timings: { say: expect.any(Object), ask: { cmd: expect.any(Number), wait: expect.any(Number) } },
     });
     expect(r.structuredContent.reason).toBeUndefined();
+  });
+
+  it("coloured options (MCP + REST): the device gets labels + resolved colours; the answer stays the plain label", async () => {
+    const w = await setup();
+    const call = mcp(w.backend, w.token, "molty_ask", { options: [{ label: "yes", color: "cyan" }, "no", { label: "later", color: "#FFFFFF" }] });
+    await until(() => w.dev.asks().length === 1);
+    const ask = w.dev.asks()[0];
+    expect(ask.args.options).toEqual(["yes", "no", "later"]);
+    expect(ask.args.colors).toEqual(["#3bc9db", "#ff6b6b", "#ffffff"]);
+    await w.dev.answer({ job: ask.args.job, index: 0, label: "yes" });
+    expect((await call).structuredContent).toMatchObject({ answer: "yes", index: 0 });
+    const bad = await mcp(w.backend, w.token, "molty_ask", { options: [{ label: "yes", color: "mauve" }] });
+    expect(bad.isError).toBe(true);
+    expect(JSON.stringify(bad)).toMatch(/options\[0\]\.color must be one of/);
+    const r = await rest(w.backend, w.token, { options: [{ label: "ok", color: "blurple" }] });
+    expect(r.status).toBe(400);
+    expect(r.body).toMatchObject({ ok: false, error: "invalid_args" });
+    expect(w.dev.asks()).toHaveLength(1);
   });
 
   it("waits for the device's say.done (bounded) before showing the options; none -> playback_timeout, no ask", async () => {

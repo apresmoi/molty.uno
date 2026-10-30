@@ -10,7 +10,7 @@
 // Node host can serve it unchanged.
 
 import { type AgentApi, type FirmwareNotice, type Inbox, type JobView, type Outcome, type RelayBackend, bearer, tokenDevice } from "../core/api.js";
-import { DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, MAX_LISTEN_MS, MAX_MOOD_HOLD_S, MOODS, TALK_BUDGET_MS, TALK_DEFAULT_LISTEN_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
+import { COLORS, DEFAULT_ASK_COLORS, DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, MAX_LISTEN_MS, MAX_MOOD_HOLD_S, MOODS, TALK_BUDGET_MS, TALK_DEFAULT_LISTEN_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
 import { AGENT_EVENT_TYPES, type AgentEvent, INBOX_LIMITS, eventsLine, seqOf } from "../core/events.js";
 import { DEVICE_ID_RE, isRecord, type JsonObject } from "../core/protocol.js";
 import { RELAY_VERSION, SKILL_VERSION, type SkillNotice, skillHeadline, skillLine, skillUpdate } from "../core/version.js";
@@ -22,7 +22,7 @@ const INSTRUCTIONS =
   `Tools operate a physical Molty device through the molty-relay. Pair first with molty_pair (no token needed), then send the returned agent_token as 'Authorization: Bearer <token>'. For conversation use molty_talk: ONE call per turn speaks your reply, then listens and returns what the human said ({heard, reason}); moods (listening, thinking, speaking) are automatic, so don't call molty_mood around talking. Keep spoken replies to 1-2 sentences. For a decision the human can answer with a tap use molty_ask: say the question, offer 1-${MAX_ASK_OPTIONS} options of at most ${MAX_ASK_LABEL} characters ("yes", "no", "later"); answer is null on timeout/cancelled/offline. molty_say / molty_listen return a job immediately (wait:true blocks until done); poll a job with molty_wait (<= 8 s per call). ` +
   `Molty also emits events (${AGENT_EVENT_TYPES.join(", ")}) into your own inbox: unread ones ride along on every tool result as 'events' plus a 'Molty: ...' line; molty_events pulls/waits for them; molty_webhook registers an HTTPS request the relay sends you per event. React briefly, once per moment. Full guide: GET /skill.md on this relay. ${skillHeadline()}. When the skill changes again, your next successful tool result carries 'skill_update' plus a 'Molty's skill was updated' line once: re-read /skill.md then. When your human asks to check Molty for updates (any wording), call molty_updates and follow its 'actions'; ask before molty_update.`;
 
-type Prop = { type: string; description: string; enum?: string[]; items?: { type: "string"; enum?: string[] } };
+type Prop = { type: string; description: string; enum?: string[]; items?: { type: "string"; enum?: string[] } | { anyOf: JsonObject[] } };
 type Schema = { type: "object"; properties: Record<string, Prop>; required: string[]; additionalProperties: false };
 interface ToolDef {
   name: string;
@@ -32,10 +32,13 @@ interface ToolDef {
   run(api: AgentApi, token: string, args: Record<string, unknown>): Promise<Outcome<JsonObject>>;
 }
 
+const items = (p: Prop) => (p.items && "type" in p.items ? p.items : undefined);
+
 const VAD_PROPS: Schema["properties"] = {
   end_silence_ms: { type: "integer", description: `Device end-of-speech: silence that ends the turn, ${VAD_LIMITS.end_silence_ms[0]}..${VAD_LIMITS.end_silence_ms[1]} ms (device default 700).` },
   no_speech_ms: { type: "integer", description: `Device end-of-speech: give up when nobody starts talking within ${VAD_LIMITS.no_speech_ms[0]}..${VAD_LIMITS.no_speech_ms[1]} ms (device default 4000).` },
   vad: { type: "boolean", description: "Device end-of-speech detection on (default) or off (record the whole window)." },
+  ring_color: { type: "string", description: `Colour of the listening ring on Molty's screen: ${Object.keys(COLORS).join(", ")} or "#rrggbb". Default: the device's setting.` },
 };
 
 /** say/listen with `wait: true` block on their job (bounded), returning what molty_wait would. */
@@ -161,7 +164,16 @@ export const TOOLS: ToolDef[] = [
     inputSchema: obj(
       {
         say: { type: "string", description: "The question, spoken first (at most 4096 bytes). Recommended." },
-        options: { type: "array", items: { type: "string" }, description: `1..${MAX_ASK_OPTIONS} answer labels, each 1..${MAX_ASK_LABEL} printable ASCII characters, unique ignoring case, e.g. ["yes","no","later"].` },
+        options: {
+          type: "array",
+          items: {
+            anyOf: [
+              { type: "string" },
+              { type: "object", properties: { label: { type: "string" }, color: { type: "string" } }, required: ["label"], additionalProperties: false },
+            ],
+          },
+          description: `1..${MAX_ASK_OPTIONS} answers: a label (1..${MAX_ASK_LABEL} printable ASCII characters, unique ignoring case) or {label, color} with color one of ${Object.keys(COLORS).join(", ")} or "#rrggbb", e.g. [{"label":"yes","color":"green"},{"label":"no","color":"red"}]. Default colours by position: ${DEFAULT_ASK_COLORS.join(", ")}.`,
+        },
         timeout_s: { type: "integer", description: `Seconds the options stay up waiting for a tap, 1..${MAX_ASK_TIMEOUT_S}; default ${DEFAULT_ASK_TIMEOUT_S}.` },
         voice: { type: "string", description: "Optional relay TTS voice for 'say'." },
       },
@@ -303,9 +315,10 @@ export function checkArgs(schema: Schema, raw: unknown): string | undefined {
             : prop.type === "boolean"
               ? typeof v === "boolean"
               : prop.type === "array"
-                ? Array.isArray(v) && v.every((x) => typeof x === "string" && (!prop.items?.enum || prop.items.enum.includes(x)))
+                ? Array.isArray(v) && ((prop.items !== undefined && "anyOf" in prop.items) || v.every((x) => typeof x === "string" && (!items(prop)?.enum || items(prop)!.enum!.includes(x))))
                 : true;
-    if (!ok && prop.type === "array") return `${k} must be a list of ${prop.items?.enum ? prop.items.enum.join(", ") : "strings"}`;
+    // anyOf items (molty_ask options): the command's own validation checks each one
+    if (!ok && prop.type === "array") return `${k} must be a list of ${items(prop)?.enum ? items(prop)!.enum!.join(", ") : prop.items && "anyOf" in prop.items ? "items" : "strings"}`;
     if (!ok) return `${k} must be ${prop.type === "integer" ? "an integer" : `a${prop.type === "object" ? "n" : ""} ${prop.type}`}`;
     if (prop.enum && !prop.enum.includes(v as string)) return `${k} must be one of ${prop.enum.join(", ")}`;
   }

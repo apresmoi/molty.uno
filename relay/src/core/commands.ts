@@ -65,6 +65,37 @@ function voiceId(v: unknown): string {
   return v;
 }
 
+// ---- colours: ask buttons and the listening ring ----
+
+/**
+ * Named colours an agent may use (ask options, ring_color). Light, saturated tones that read on
+ * the dark fluid at the dim end of its brightness (the fluid multiplies a cell's colour by its
+ * ink); green / red / amber are the website's yes / no / idk inks (--m-yes/--m-no/--m-idk).
+ */
+export const COLORS = {
+  green: "#3ccf96",
+  red: "#ff6b6b",
+  amber: "#ffa94d",
+  blue: "#4dabf7",
+  violet: "#b197fc",
+  pink: "#f783ac",
+  cyan: "#3bc9db",
+  white: "#f1f3f5",
+} as const;
+export type ColorName = keyof typeof COLORS;
+/** Ask options without a colour take these by index. */
+export const DEFAULT_ASK_COLORS: readonly ColorName[] = ["green", "red", "amber", "blue", "violet"];
+
+/** A palette name or #rrggbb → lowercase "#rrggbb" (what the device gets). */
+export function resolveColor(value: unknown, field: string): string {
+  if (typeof value === "string") {
+    const v = value.trim().toLowerCase();
+    if (v in COLORS) return COLORS[v as ColorName];
+    if (/^#[0-9a-f]{6}$/.test(v)) return v;
+  }
+  throw invalid(`${field} must be one of ${Object.keys(COLORS).join(", ")} or a hex colour like "#3ccf96"`);
+}
+
 /** Device end-of-speech knobs for listen (firmware VAD); passed through only when given. */
 export const VAD_KEYS = ["end_silence_ms", "no_speech_ms", "vad"] as const;
 export const VAD_LIMITS = { end_silence_ms: [300, 3000], no_speech_ms: [1000, 10000] } as const;
@@ -135,9 +166,12 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
       if (args.voice !== undefined) out.voice = voiceId(args.voice);
       return { name: n, args: out, job: true };
     }
-    case "listen":
-      only(args, ["ms", ...VAD_KEYS]);
-      return { name: n, args: { ms: int(args.ms, "ms", 1, MAX_LISTEN_MS, DEFAULT_LISTEN_MS), ...vadArgs(args) }, job: true };
+    case "listen": {
+      only(args, ["ms", "ring_color", ...VAD_KEYS]);
+      const out: JsonObject = { ms: int(args.ms, "ms", 1, MAX_LISTEN_MS, DEFAULT_LISTEN_MS), ...vadArgs(args) };
+      if (args.ring_color !== undefined) out.ring_color = resolveColor(args.ring_color, "ring_color");
+      return { name: n, args: out, job: true };
+    }
     case "diag": {
       only(args, ["timeline"]);
       const out: JsonObject = {};
@@ -164,17 +198,20 @@ export interface TalkArgs {
   listen_ms: number;
   /** Device VAD knobs (end_silence_ms, no_speech_ms, vad), forwarded to the device's listen. */
   vad: JsonObject;
+  /** The listening ring's colour, resolved "#rrggbb"; absent = the device's default. */
+  ring_color?: string;
 }
 
-/** molty_talk / POST /v1/devices/<id>/talk: `{say?, listen? (default true), listen_ms? (1..10000, default 10000), voice?, end_silence_ms?, no_speech_ms?, vad?}`. */
+/** molty_talk / POST /v1/devices/<id>/talk: `{say?, listen? (default true), listen_ms? (1..10000, default 10000), voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?}`. */
 export function validateTalk(raw: unknown): TalkArgs {
   const args = raw === undefined || raw === null ? {} : raw;
   if (!isRecord(args)) throw invalid("args must be an object");
-  only(args, ["say", "listen", "listen_ms", "voice", ...VAD_KEYS]);
+  only(args, ["say", "listen", "listen_ms", "voice", "ring_color", ...VAD_KEYS]);
   if (args.listen !== undefined && typeof args.listen !== "boolean") throw invalid("listen must be a boolean");
   const out: TalkArgs = { listen: args.listen !== false, listen_ms: int(args.listen_ms, "listen_ms", 1, MAX_LISTEN_MS, TALK_DEFAULT_LISTEN_MS), vad: vadArgs(args) };
   if (args.say !== undefined) out.say = text(args.say, "say", MAX_SAY_BYTES);
   if (args.voice !== undefined) out.voice = voiceId(args.voice);
+  if (args.ring_color !== undefined) out.ring_color = resolveColor(args.ring_color, "ring_color");
   if (out.say === undefined && !out.listen) throw invalid("give say, or listen (or both)");
   return out;
 }
@@ -192,10 +229,16 @@ export interface AskArgs {
   voice?: string;
   /** Trimmed labels, in order: index i is options[i]. */
   options: string[];
+  /** options[i]'s colour, resolved "#rrggbb" (given, else DEFAULT_ASK_COLORS[i]). */
+  colors: string[];
   timeout_s: number;
 }
 
-/** molty_ask / POST /v1/devices/<id>/ask: `{say?, options: 1..5 labels of 1..8 printable ASCII chars (unique, case-insensitive), timeout_s? 1..120 (default 30), voice?}`. */
+/**
+ * molty_ask / POST /v1/devices/<id>/ask: `{say?, options: 1..5 items, timeout_s? 1..120 (default 30), voice?}`.
+ * An item is a label (1..8 printable ASCII chars, unique case-insensitive) or `{label, color?}`
+ * (color: a COLORS name or #rrggbb); mixed arrays are fine.
+ */
 export function validateAsk(raw: unknown): AskArgs {
   const args = raw === undefined || raw === null ? {} : raw;
   if (!isRecord(args)) throw invalid("args must be an object");
@@ -205,8 +248,16 @@ export function validateAsk(raw: unknown): AskArgs {
     throw invalid(`options must be a list of 1..${MAX_ASK_OPTIONS} short labels, e.g. ["yes","no"]`);
   }
   const seen = new Set<string>();
-  const options = opts.map((o, i) => {
-    if (typeof o !== "string") throw invalid(`options[${i}] must be a string`);
+  const colors: string[] = [];
+  const options = opts.map((item, i) => {
+    let o: unknown = item;
+    colors[i] = COLORS[DEFAULT_ASK_COLORS[i]];
+    if (isRecord(item)) {
+      for (const key of Object.keys(item)) if (key !== "label" && key !== "color") throw invalid(`options[${i}] has unknown field ${key} (use {"label","color"})`);
+      o = item.label;
+      if (item.color !== undefined) colors[i] = resolveColor(item.color, `options[${i}].color`);
+    }
+    if (typeof o !== "string") throw invalid(`options[${i}] must be a label string or {"label": "yes", "color": "green"}`);
     const label = o.trim();
     if (label.length < 1 || label.length > MAX_ASK_LABEL) {
       throw invalid(`options[${i}] "${o}" must be 1..${MAX_ASK_LABEL} characters after trimming (it is a tap target on a small round screen): shorten it, e.g. "yes", "no", "later"`);
@@ -217,7 +268,7 @@ export function validateAsk(raw: unknown): AskArgs {
     seen.add(key);
     return label;
   });
-  const out: AskArgs = { options, timeout_s: int(args.timeout_s, "timeout_s", 1, MAX_ASK_TIMEOUT_S, DEFAULT_ASK_TIMEOUT_S) };
+  const out: AskArgs = { options, colors, timeout_s: int(args.timeout_s, "timeout_s", 1, MAX_ASK_TIMEOUT_S, DEFAULT_ASK_TIMEOUT_S) };
   if (args.say !== undefined) out.say = text(args.say, "say", MAX_SAY_BYTES);
   if (args.voice !== undefined) out.voice = voiceId(args.voice);
   return out;

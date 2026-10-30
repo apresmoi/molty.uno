@@ -91,6 +91,7 @@ export const WHATS_NEW: ReadonlyArray<{ version: number; text: string; min_fw?: 
   { version: 3, text: "molty_talk (one call per conversation turn: say, listen, transcript), faster streamed speech, automatic moods around talking, wait:true on say/listen" },
   { version: 4, text: "molty_ask (ask a question, the human answers with a tap on one of 1-5 short options)", min_fw: FEATURES.ask.min_fw },
   { version: 5, text: "molty_updates (check Molty for updates: skill and firmware, in one call), molty_update (Molty updates its own firmware after the human confirms), firmware_too_old errors" },
+  { version: 6, text: "molty_ask options can carry colours; ring_color on listen/talk" },
 ];
 export const SKILL_VERSION: number = WHATS_NEW[WHATS_NEW.length - 1].version;
 export const SKILL_PATH = "/skill.md";

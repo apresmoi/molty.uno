@@ -1079,8 +1079,8 @@ export class DeviceRoom implements AgentApi {
 
   private async runListen(id: string, args: JsonObject, created: number) {
     await this.setJob(id, { status: "running" });
-    const { ms, ...vad } = args;
-    const r = await this.record(id, ms as number, vad);
+    const { ms, ...listenArgs } = args;
+    const r = await this.record(id, ms as number, listenArgs);
     if (!r.ok) return this.finishJob(id, { status: "failed", error: r.error });
     const timings: JsonObject = { queue: r.start - created, ...r.timings, total: this.clock.now() - created };
     this.logTimings(id, "listen", timings);
@@ -1105,7 +1105,7 @@ export class DeviceRoom implements AgentApi {
       timings.say = s.timings;
     }
     if (args.listen) {
-      const l = await this.record(id, args.listen_ms, args.vad);
+      const l = await this.record(id, args.listen_ms, args.ring_color !== undefined ? { ...args.vad, ring_color: args.ring_color } : args.vad);
       if (!l.ok) return this.finishJob(id, { status: "failed", error: l.error });
       Object.assign(result, { heard: l.text, reason: l.reason, duration_ms: l.duration_ms, peak: l.peak, rms: l.rms });
       if (l.speech_ms !== undefined) result.speech_ms = l.speech_ms;
@@ -1123,7 +1123,7 @@ export class DeviceRoom implements AgentApi {
 
   /**
    * say (optional, until the device's say.done, as talk) then `cmd ask {job, options,
-   * timeout_ms}`, then wait for the device's `answer`. The audio lock is released
+   * colors, timeout_ms}`, then wait for the device's `answer`. The audio lock is released
    * once the speech is over. Every way it ends that reaches the device is a done
    * job: a tap, or answer:null with reason timeout / cancelled (any later command
    * replaced it on the device) / offline. Each end is also one `answer` inbox event.
@@ -1156,7 +1156,8 @@ export class DeviceRoom implements AgentApi {
       this.screenInFlight++;
       let res: Outcome<JsonObject>;
       try {
-        res = await this.sendCmd("ask", { job: id, options: args.options, timeout_ms: args.timeout_s * 1000 });
+        // colors rides along always: firmware without button colours ignores the field.
+        res = await this.sendCmd("ask", { job: id, options: args.options, colors: args.colors, timeout_ms: args.timeout_s * 1000 });
       } finally {
         this.screenInFlight--;
       }
@@ -1323,13 +1324,14 @@ export class DeviceRoom implements AgentApi {
    * STT. The creature shows `thinking` from end of speech until the agent's
    * next command (or THINK_HOLD_S).
    */
-  private async record(id: string, ms: number, vad: JsonObject = {}): Promise<ListenResult> {
+  /** `extra`: the device listen args besides job/ms/rate (VAD knobs, ring_color), passed through. */
+  private async record(id: string, ms: number, extra: JsonObject = {}): Promise<ListenResult> {
     const t0 = this.clock.now();
     const buf: ListenBuffer = { job: id, chunks: [], bytes: 0, ended: false, screenRev: this.screenRev };
     this.listenBuf = buf;
     let tAck = t0;
     try {
-      const res = await this.sendCmd("listen", { job: id, ms, rate: SAMPLE_RATE, ...vad });
+      const res = await this.sendCmd("listen", { job: id, ms, rate: SAMPLE_RATE, ...extra });
       if (!res.ok) return { ok: false, error: res.error };
       tAck = this.clock.now();
       if (!buf.ended) {
