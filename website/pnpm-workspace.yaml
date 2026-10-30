@@ -1,3 +1,7 @@
 allowBuilds:
   esbuild: true
   sharp: true
+minimumReleaseAgeExclude:
+  - '@glyphcss/core@0.3.2'
+  - '@glyphcss/fluid@0.3.2'
+  - glyphcss@0.3.2

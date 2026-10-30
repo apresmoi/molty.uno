@@ -32,7 +32,7 @@ Never deploy or publish from here; nothing in this package does.
   Import another component through its barrel. Components are React; `.astro` lives only in
   pages, layouts and `src/integrations/{astro,starlight}/` adapters.
 - `src/services/molty-stage/` is the only owner of the fluid runtime. `pageFluid.ts` glues one
-  `@glyphcss/fluid` fluid (`glue: "document"`, one `<pre>`, the sim in a Vite-bundled Worker) to
+  `@glyphcss/fluid` fluid (`glue: "document"`, one `<pre>`, the sim in a Vite-bundled Worker from `@glyphcss/fluid/worker?worker`) to
   the page and reads its targets from the DOM: `data-fluid-word` (a text target that condenses
   while on screen; `data-fluid-color`, `data-fluid-delay`, `data-fluid-tint`), `data-fluid-molty`
   (a square slot a Molty emerges in as a mesh target; comma list + `data-fluid-every` cycles),
@@ -41,9 +41,6 @@ Never deploy or publish from here; nothing in this package does.
   `speedReader.ts` is `@glyphcss/fluid/reader` on the round screen (`shape: "circle"`).
   `FluidField` / `SpeedReader` mount them; nothing else imports `@creatures`, `glyphcss` or
   `@glyphcss/*`. 30 fps, ≤ 176 columns; `prefers-reduced-motion` draws settled stills.
-- **Local-only today:** `@glyphcss/fluid` and the `glyphcss` with the braille-dots atlas are not
-  on npm yet; `astro.config.mjs` aliases them to a glyphcss checkout's `packages/*/src`
-  (`GLYPHCSS_DIR`, see `README.md`). Replace the aliases with npm deps once published.
 - The page must read without the engine: headings keep their DOM text (transparent only
   under `html[data-fluid="live"]`), Molty slots show the catalog still until
   `html[data-fluid-moltys="live"]`.
