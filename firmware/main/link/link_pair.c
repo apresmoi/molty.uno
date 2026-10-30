@@ -3,6 +3,7 @@
 #include "link_identity.h"
 #include "link_protocol.h"
 #include "link_audio.h"
+#include "link_ask.h"
 #include "mole_creature.h"
 #include "molty_board.h"
 #include "esp_timer.h"
@@ -129,6 +130,7 @@ void link_pair_request(const cJSON *args)
     const char *cur = mole_creature_current();
     snprintf(s_previous, sizeof(s_previous), "%s", cur ? cur : "");
     if (cur && mole_creature_state_get(&s_state) != ESP_OK) { result(req->valuestring, false, "rejected", who); return; }
+    link_ask_cancel();   /* the code takes the screen; its event leaves before pairing mutes events */
     strcpy(s_req, req->valuestring);
     strcpy(s_name, name->valuestring); strcpy(s_code, code->valuestring);
     s_deadline = esp_timer_get_time() + PAIR_TIMEOUT_US;

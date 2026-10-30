@@ -73,6 +73,10 @@ void link_cmd_init(void) {}
 void link_audio_cancel(void) {}
 void link_pair_cancel(void) {}
 void link_audio_tick(void) {}
+/* link_ask.c: ticked every loop, its question cancelled whenever the session goes */
+static unsigned ask_cancels, ask_ticks, ask_cancels_connected;
+void link_ask_cancel(void) { ask_cancels++; if (link_client_connected()) ask_cancels_connected++; }
+void link_ask_tick(void) { ask_ticks++; }
 void link_pair_tick(void) {}
 void link_pair_status(cJSON *j) { cJSON_AddNullToObject(j,"pair"); cJSON_AddNullToObject(j,"last_pair"); }
 void link_pair_request(const cJSON *args) { (void)args; assert(!"unexpected pairing"); }
@@ -151,5 +155,7 @@ int main(void) {
     run(4,4401); run(4,4400); run(4,4409); run(4,4410);
     test_receive_bounds();
     disconnect("test"); free(s_rxq); cJSON_Delete(sdk_sent);
+    /* every disconnect ended the question, with the link already marked down (no event) */
+    assert(ask_ticks>0 && ask_cancels>0 && !ask_cancels_connected);
     puts("LINK CLIENT PASS: code update without reconnect, forget ack/timeout/offline, close codes, 5-minute auth retry, API status");
 }

@@ -170,9 +170,20 @@ void fluid_text_set_sentence(fluid_text_t *tx, float ext) {
     tx->plain_font = fs < 18.f ? 18.f : fs > fmax ? fmax : fs;
 }
 
+/* 'near' (wide, normalised) shapes the meniscus that wraps the word; 'dark' (tight)
+ * is the soft darker falloff right around the letters */
+static void text_shape(fluid_text_t *tx, int W, int H, int N) {
+    blur(tx->cov, tx->near, tx->tmp, W, H, 9, 4);
+    float mx = 1e-6f;
+    for (int k = 0; k < N; k++) if (tx->near[k] > mx) mx = tx->near[k];
+    for (int k = 0; k < N; k++) { float v = tx->near[k] / mx * 1.15f; tx->near[k] = v > 1.f ? 1.f : v; }
+    blur(tx->cov, tx->dark, tx->tmp, W, H, 2, 1);
+    for (int k = 0; k < N; k++) { float v = tx->dark[k] * 2.2f; tx->dark[k] = v > 1.f ? 1.f : v; }
+}
+
 void fluid_text_set_word(fluid_text_t *tx, const fluid_sim_t *s, const char *w, int len, int orp) {
     const int W = s->W, H = s->H, N = s->N;
-    if (len > FLUID_MAX_LETTERS) len = FLUID_MAX_LETTERS;
+    if (len > FLUID_WORD_LETTERS) len = FLUID_WORD_LETTERS;
     if (len < 0) len = 0;
     /* orp < 0: a static label (lone token) -- centred, no accent letter */
     if (orp >= len) orp = len > 0 ? len - 1 : 0;
@@ -182,7 +193,7 @@ void fluid_text_set_word(fluid_text_t *tx, const fluid_sim_t *s, const char *w, 
     for (int i = 0; i < len; i++) {
         fluid_letter_t *L = &tx->letters[i];
         L->ch = w[i]; L->acc = (i == orp);
-        L->x = x0 + i * adv; L->y = ytop; L->w = adv; L->h = lh; L->fs = fs;
+        L->x = x0 + i * adv; L->y = ytop; L->w = adv; L->h = lh; L->fs = fs; L->melt = 0.f;
     }
     const float cw = (float)s->stage / W, ch = (float)s->stage / H;
     for (int j = 0; j < H; j++) for (int i = 0; i < W; i++) {
@@ -195,14 +206,38 @@ void fluid_text_set_word(fluid_text_t *tx, const fluid_sim_t *s, const char *w, 
         }
         tx->cov[k] = inL * 0.62f; tx->orp[k] = isO;
     }
-    /* 'near' (wide, normalised) shapes the meniscus that wraps the word; 'dark' (tight)
-     * is the soft darker falloff right around the letters */
-    blur(tx->cov, tx->near, tx->tmp, W, H, 9, 4);
-    float mx = 1e-6f;
-    for (int k = 0; k < N; k++) if (tx->near[k] > mx) mx = tx->near[k];
-    for (int k = 0; k < N; k++) { float v = tx->near[k] / mx * 1.15f; tx->near[k] = v > 1.f ? 1.f : v; }
-    blur(tx->cov, tx->dark, tx->tmp, W, H, 2, 1);
-    for (int k = 0; k < N; k++) { float v = tx->dark[k] * 2.2f; tx->dark[k] = v > 1.f ? 1.f : v; }
+    text_shape(tx, W, H, N);
+}
+
+/* A question's labels: the word's rules (letter boxes, ink 0.62 under each letter, the
+ * meniscus and the dark falloff) for several words, each centred on its own spot. */
+void fluid_text_set_labels(fluid_text_t *tx, const fluid_sim_t *s, const fluid_label_t *lb, int n, float fs) {
+    const int W = s->W, H = s->H, N = s->N;
+    const float adv = fs * 0.6f, lh = fs * 1.05f;
+    float x0[8], y0[8];
+    int nl = 0, cnt = n < 0 ? 0 : n > 8 ? 8 : n;
+    for (int b = 0; b < cnt; b++) {
+        int len = lb[b].len < 0 ? 0 : lb[b].len;
+        x0[b] = lb[b].cx - len * adv * 0.5f; y0[b] = lb[b].cy - lh * 0.5f;
+        for (int i = 0; i < len && nl < FLUID_MAX_LETTERS; i++) {
+            fluid_letter_t *L = &tx->letters[nl++];
+            L->ch = lb[b].text[i]; L->acc = lb[b].acc;
+            L->x = x0[b] + i * adv; L->y = y0[b]; L->w = adv; L->h = lh; L->fs = fs; L->melt = 0.f;
+        }
+    }
+    tx->nletters = nl;
+    const float cw = (float)s->stage / W, ch = (float)s->stage / H;
+    for (int j = 0; j < H; j++) for (int i = 0; i < W; i++) {
+        int k = j * W + i;
+        float px = (i + 0.5f) * cw, py = (j + 0.5f) * ch, inL = 0.f, isA = 0.f;
+        for (int b = 0; b < cnt && inL == 0.f; b++) {
+            if (!lb[b].shown || py <= y0[b] || py >= y0[b] + lh) continue;
+            int li = (int)floorf((px - x0[b]) / adv);
+            if (li >= 0 && li < lb[b].len && lb[b].text[li] != ' ') { inL = 1.f; isA = lb[b].acc ? 1.f : 0.f; }
+        }
+        tx->cov[k] = inL * 0.62f; tx->orp[k] = isA;
+    }
+    text_shape(tx, W, H, N);
 }
 
 void fluid_text_fill(fluid_text_t *tx, fluid_sim_t *s, float t) {

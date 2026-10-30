@@ -103,6 +103,9 @@ void  fd_shake(fluid_director_t *d);
 void  fd_set_status(fluid_director_t *d, int status);
 /** Advance by dt seconds. text_done: the reader is holding its last word. */
 void  fd_tick(fluid_director_t *d, float dt, bool text_done);
+/** The shown state was covered (a question's labels) and forms again: its clock restarts,
+ *  so it flows back in before it crystallises. */
+void  fd_replay(fluid_director_t *d);
 /** The transition to execute now, if any (resets the state clock). */
 bool  fd_take(fluid_director_t *d, int *st, int *fx);
 

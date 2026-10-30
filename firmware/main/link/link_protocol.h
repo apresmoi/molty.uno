@@ -56,6 +56,19 @@ bool link_listen_args(const cJSON *args, bool *vad, unsigned *end_silence_ms, un
 cJSON *link_evt_shake_frame(double peak_g, int reversals, unsigned ms);
 cJSON *link_evt_tap_frame(double x, double y);
 cJSON *link_evt_button_frame(bool accept);
+/* ask cmd args {job, options, timeout_ms}: job a stream-sized id (1..128 chars); options
+ * 1..LINK_ASK_MAX strings, each 1..LINK_ASK_LABEL_MAX chars of printable ASCII
+ * (0x20..0x7E), not all spaces, no two equal ignoring case; timeout_ms an integer
+ * 1000..120000. All required. Labels are copied verbatim (the answer echoes them). */
+#define LINK_ASK_MAX        5
+#define LINK_ASK_LABEL_MAX  8
+#define LINK_ASK_TIMEOUT_MIN 1000
+#define LINK_ASK_TIMEOUT_MAX 120000
+bool link_ask_args(const cJSON *args, char job[LINK_STREAM_MAX], char labels[LINK_ASK_MAX][LINK_ASK_LABEL_MAX + 1],
+                   int *n, unsigned *timeout_ms);
+/* {"t":"evt","name":"answer","data":{...}}: index ≥ 0 → {job, index, label} (a tap);
+ * index < 0 → {job, index:null, reason} ("timeout" | "cancelled"). */
+cJSON *link_evt_answer_frame(const char *job, int index, const char *label, const char *reason);
 /* After the pairing code / the Improv "hi": the state body to go back to (malloc'd),
  * the saved one unless it was text or the demo reel, which become the creature. */
 char *link_restore_body(const char *saved_state_json);

@@ -66,6 +66,26 @@ void mole_fluid_event(mole_fluid_event_t ev);
  *  screen's edge, never a state change. One caller (sense.c). */
 void mole_fluid_set_status(int status);
 
+/** The listening ring (link_audio.c, the audio task): on while the mic records a `listen`
+ *  — a thin accent ring inside the rim fades in, breathes ~1 Hz, and brightens / thickens
+ *  with `level` (0..1, the VAD's mic level, ~10 Hz); off fades it out. Never shown while
+ *  a question is on screen. Safe from any task; a no-op before init. */
+void mole_fluid_listen(bool on);
+void mole_fluid_listen_level(float level);
+
+/** A question (link_ask.c, the link task) — the screen follows what the link wants:
+ *  show   n (1..FLUID_ASK_MAX) labels condense out of the fluid in their sectors
+ *         (fluid_ask.h) with faint dividers; replaces any question on screen.
+ *  pick   the question was answered with option i: the others melt, the chosen one
+ *         stays ~0.8 s (accented), then the creature comes back.
+ *  end    the question ended unanswered (timeout, cancelled): the labels melt and the
+ *         fluid returns to the creature — or to the state a command asked for meanwhile.
+ *  While a question is up, other state changes wait under it (the director keeps them),
+ *  except that an explicit state / mood request ends a pick's hold early. */
+esp_err_t mole_fluid_ask_show(int n, const char *const *labels);
+void mole_fluid_ask_pick(int index);
+void mole_fluid_ask_end(void);
+
 #ifdef __cplusplus
 }
 #endif

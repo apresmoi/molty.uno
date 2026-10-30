@@ -2,6 +2,7 @@
 #include "link_protocol.h"
 #include "link_audio.h"
 #include "link_pair.h"
+#include "link_ask.h"
 #include "mole_creature.h"
 #include "molty_board.h"
 #include "sdkconfig.h"
@@ -145,6 +146,7 @@ static esp_err_t cmd_status(const cJSON *args, cJSON **out)
 static esp_err_t cmd_state(const cJSON *args, cJSON **out)
 {
     if (!args->child) return state_get(out);
+    link_ask_cancel();   /* a state set takes the screen from a pending question */
     char *body = cJSON_PrintUnformatted(args);
     if (!body) return ESP_ERR_NO_MEM;
     esp_err_t e = link_cmd_state_set_explicit(body); free(body);   /* may carry a mood */
@@ -156,6 +158,7 @@ static esp_err_t cmd_mood(const cJSON *args, cJSON **out)
     (void)out;
     const char *mood; double hold_s;
     if (!link_mood_args(args, &mood, &hold_s)) return ESP_ERR_INVALID_ARG;
+    link_ask_cancel();
     mood_lock();
     esp_err_t e = link_cmd_mood(mood, hold_s);
     if (e == ESP_OK) atomic_fetch_add(&s_mood_gen, 1);
@@ -170,6 +173,7 @@ static esp_err_t cmd_show(const cJSON *args, cJSON **out)
     cJSON *wpm = cJSON_GetObjectItemCaseSensitive(args, "wpm");
     if (!cJSON_IsString(text) || strlen(text->valuestring) > 16384 ||
         (wpm && (!cJSON_IsNumber(wpm) || wpm->valuedouble < 100 || wpm->valuedouble > 800))) return ESP_ERR_INVALID_ARG;
+    link_ask_cancel();
     esp_err_t e = mole_creature_select("fluid");
     if (e != ESP_OK) return e;
     e = link_ui_set_text(text->valuestring, (int)strlen(text->valuestring));
@@ -240,6 +244,7 @@ void link_cmd_init(void)
     link_cmd_register("mood", cmd_mood); link_cmd_register("show", cmd_show);
     link_cmd_register("say", link_audio_say); link_cmd_register("listen", link_audio_listen);
     link_cmd_register("volume", cmd_volume); link_cmd_register("imu", cmd_imu);
+    link_cmd_register("ask", link_ask_cmd);
 }
 
 esp_err_t link_cmd_run(const char *name, const cJSON *args, cJSON **result)

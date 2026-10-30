@@ -74,11 +74,12 @@ Molty (home Wi-Fi) ──outbound WSS──▶ molty-relay (Cloudflare Worker + 
 
 ## Device ↔ relay wire (WS/WSS `/v1/device?id=<device_id>`)
 
-First frame from device: `{"t":"hello","id":"molty-k7m2w9c4ya","key":"<b64 device_key>","fw":"...","caps":["fluid","say","listen","show","mood","creature"],"board":"waveshare-esp32-s3-touch-lcd-1.46","link_code":"..."}`
+First frame from device: `{"t":"hello","id":"molty-k7m2w9c4ya","key":"<b64 device_key>","fw":"...","caps":["fluid","say","listen","show","mood","creature","ask"],"board":"waveshare-esp32-s3-touch-lcd-1.46","link_code":"..."}`
 → relay answers `{"t":"welcome"}` or closes with 4401.
 
 `board` names the hardware (`firmware/boards/`, see [PORTING.md](PORTING.md)). `caps`
-lists `say` / `listen` only when the board has a speaker / microphone; the relay answers
+lists `say` / `listen` only when the board has a speaker / microphone, and `ask` only when
+it has touch (firmware that implements it); the relay answers
 those commands `409 unsupported` up front, without calling TTS, when the device left them
 out. The device itself answers a command its board cannot do with `error:"unsupported"`
 (an unknown command is `unknown_command`).
@@ -131,6 +132,21 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   `run()` stays pending until Workers AI answers, and its output is then released unread.
   Likewise a non-streamed (whole-body) TTS reply is read to the end once it has started.
   Whether Workers AI keeps computing (and billing) an abandoned request is not verified.
+- `ask`: relay sends `cmd ask {job, options, timeout_ms}` (`options` 1–5 strings, each 1–8
+  chars of printable ASCII 0x20–0x7E, not all spaces, unique ignoring case; `timeout_ms`
+  integer 1000..120000); the device validates the same (`invalid_args`), answers
+  `unsupported` without touch, and acknowledges `{job}` at once. The options condense out
+  of the fluid in sectors (`firmware/main/fluid/fluid_ask.h`: 1 = whole screen, 2 = left /
+  right, 3–5 = pie sectors from 12 o'clock clockwise, options in reading order of the
+  sectors). The device then sends exactly one `answer` event for the job:
+  `{"t":"evt","name":"answer","data":{"job":"…","index":1,"label":"no"}}` (a tap: the sector
+  it landed in; `label` = `options[index]` verbatim, no `reason`),
+  `{"t":"evt","name":"answer","data":{"job":"…","index":null,"reason":"timeout"}}` (no tap
+  within `timeout_ms`), or `{…,"index":null,"reason":"cancelled"}` (an accepted `say`,
+  `show`, `mood`, `state` with args, `listen` or a new `ask`, or a pairing, took the screen
+  first; a new `ask` cancels the old one before its own ack). Events go out only while the
+  link is up: a question pending when the link drops ends on screen with no event. While a
+  question is pending, the tap that answers it is not also a `tap` event.
 - `listen`: relay sends `cmd listen {job, ms, rate:16000, end_silence_ms?, no_speech_ms?, vad?}`
   (`ms` = maximum window; the VAD knobs only when the agent gave them: `end_silence_ms`
   300..3000, `no_speech_ms` 1000..10000, `vad` bool). Device streams mic PCM up; the last frame
@@ -243,8 +259,11 @@ pairing). Rate-limited on the device. `shake`, `tap` and `button` reach agents t
 | `shake` | `{peak_g, reversals, ms}` | the board was shaken (boards with an IMU): ≥ 3 sign reversals of > 1.2 g dynamic acceleration on one axis within 800 ms; ≤ 1 per 2 s. `peak_g` largest dynamic acceleration (g), `ms` first peak → detection |
 | `tap` | `{x, y}` | a finger touched the screen (boards with touch); 0..1 of the panel from the top left; ≤ 4/s |
 | `button` | `{id: "accept"\|"reject"}` | a button was pressed (the board's accept / reject buttons); ≤ 4/s |
+| `answer` | `{job, index, label}` · `{job, index: null, reason: "timeout"\|"cancelled"}` | an `ask` ended: tapped (0-based `index`, `label` verbatim), timed out, or cancelled; one per job, never rate-limited |
 
-The device reacts to a shake by itself (a brief `surprised`), agent or not. Detector
+The device reacts to a shake by itself (a brief `surprised`), agent or not. While a `listen`
+records, a thin accent-coloured ring inside the screen's rim breathes and swells with the
+voice (`mole_fluid_listen`); it is never shown over a pending `ask`. Detector
 constants: `firmware/main/sense/gesture.h`.
 
 ## Agent surfaces
