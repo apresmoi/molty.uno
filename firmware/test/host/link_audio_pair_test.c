@@ -28,14 +28,15 @@ static void listen_job(unsigned ms, audio_job_t *job) {
 }
 void link_identity_rotate(void) { rotations++; }
 const char *link_identity_code(void) { return "ABCDEFGH"; }
-esp_err_t link_cmd_mood(const char *mood) { strcpy(sdk_mood,mood); return ESP_OK; }
+static double sdk_hold_s;
+esp_err_t link_cmd_mood(const char *mood,double hold_s) { strcpy(sdk_mood,mood); sdk_hold_s=hold_s; return ESP_OK; }
 esp_err_t link_ui_set_text(const char *text,int len) { assert(len>=0 && len<=4096); memcpy(sdk_text,text,len+1); return ESP_OK; }
 
 static cJSON *say_args(void) { return cJSON_Parse("{\"job\":\"molty-abcdefghij.j_1\",\"text\":\"hello world\",\"ms\":640,\"rate\":16000}"); }
 static void begin_say(void) {
     cJSON *args=say_args(), *res=NULL;
     assert(link_audio_say(args,&res)==ESP_OK && res);
-    assert(!strcmp(sdk_mood,"speaking") && !strcmp(sdk_state,"{\"state\":\"text\"}"));
+    assert(!strcmp(sdk_mood,"speaking") && sdk_hold_s<0 && !strcmp(sdk_state,"{\"state\":\"text\"}"));
     assert(!strcmp(sdk_text,"hello world"));
     assert(!strcmp(cJSON_GetObjectItem(res,"job")->valuestring,"molty-abcdefghij.j_1"));
     cJSON_Delete(res); cJSON_Delete(args);
@@ -95,8 +96,8 @@ static void test_pair(void) {
     cJSON *st=status();   /* boot: nothing pending, no decision yet */
     assert(cJSON_IsNull(cJSON_GetObjectItem(st,"pair")) && cJSON_IsNull(cJSON_GetObjectItem(st,"last_pair"))); cJSON_Delete(st);
     request();
-    /* Static prompt: the code alone, as one held token. */
-    assert(!strcmp(sdk_state,"{\"state\":\"text\",\"text\":\"1234\"}"));
+    /* Static prompt: the code alone, as one held token (no return to the creature). */
+    assert(!strcmp(sdk_state,"{\"state\":\"text\",\"text\":\"1234\",\"hold\":true}"));
     st=status(); cJSON *p=cJSON_GetObjectItem(st,"pair");
     assert(!strcmp(cJSON_GetObjectItem(p,"agent_name")->valuestring,"test agent") && !strcmp(cJSON_GetObjectItem(p,"code")->valuestring,"1234"));
     assert(cJSON_GetObjectItem(p,"expires_in_s")->valueint==110 && cJSON_IsNull(cJSON_GetObjectItem(st,"last_pair"))); cJSON_Delete(st);
@@ -105,12 +106,17 @@ static void test_pair(void) {
     sdk_now+=79999999; link_pair_tick(); assert(link_pair_active());
     sdk_now+=1; link_pair_tick();
     assert(!link_pair_active() && !strcmp(field("reason"),"timeout") && !rotations);
+    assert(!strcmp(sdk_state,"{\"state\":\"blob\"}"));          /* back to what was shown */
     st=status(); p=cJSON_GetObjectItem(st,"last_pair");
     assert(cJSON_IsNull(cJSON_GetObjectItem(st,"pair")) && cJSON_GetObjectItem(p,"seq")->valueint==1);
     assert(cJSON_IsFalse(cJSON_GetObjectItem(p,"ok")) && !strcmp(cJSON_GetObjectItem(p,"reason")->valuestring,"timeout"));
     assert(!strcmp(cJSON_GetObjectItem(p,"agent_name")->valuestring,"test agent")); cJSON_Delete(st);
+    /* The demo reel was running: the restore lands on the creature, never re-enables it. */
+    sdk_saved_state="{\"state\":\"effect:wave\",\"autoplay\":true,\"reel_step\":11}";
     request(); sdk_gpio[6]=0; link_pair_tick(); sdk_gpio[6]=1;
     assert(!link_pair_active() && !strcmp(field("reason"),"rejected") && !rotations);
+    assert(!strcmp(sdk_state,"{\"state\":\"creature\"}") && !strstr(sdk_state,"autoplay"));
+    sdk_saved_state="{\"state\":\"blob\"}";
     request(); link_pair_touch(1); link_pair_tick(); link_pair_touch(0);
     assert(!link_pair_active() && cJSON_IsTrue(cJSON_GetObjectItem(sdk_sent,"ok")) && rotations==1);
     assert(!strcmp(field("link_code"),"ABCDEFGH"));

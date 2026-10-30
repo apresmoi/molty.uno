@@ -36,3 +36,14 @@ cJSON *link_say_done_frame(const char *job);
 cJSON *link_forget_frame(void);
 /* NULL state means preserve the current visual state. */
 bool link_mood_map(const char *mood, const char **state);
+/* mood cmd args {mood, hold_s?}: hold_s 0..3600 s (0 = until the next mood); absent
+ * → *hold_s = -1 (the mood's default: happy / surprised revert, the rest persist). */
+bool link_mood_args(const cJSON *args, const char **mood, double *hold_s);
+/* Device events (sense/sense.c), {"t":"evt","name":...,"data":{...}}:
+ *   shake  {peak_g, reversals, ms}   tap {x, y} (0..1 of the panel)   button {id} */
+cJSON *link_evt_shake_frame(double peak_g, int reversals, unsigned ms);
+cJSON *link_evt_tap_frame(double x, double y);
+cJSON *link_evt_button_frame(bool accept);
+/* After the pairing code / the Improv "hi": the state body to go back to (malloc'd),
+ * the saved one unless it was text or the demo reel, which become the creature. */
+char *link_restore_body(const char *saved_state_json);

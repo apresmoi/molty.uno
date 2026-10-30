@@ -138,6 +138,7 @@ extern int64_t sdk_now;
 extern void (*sdk_wait)(void);
 extern unsigned sdk_random, sdk_commits, sdk_erases;
 extern char sdk_id[64], sdk_url[384], sdk_state[512], sdk_text[4097], sdk_mood[16];
+extern const char *sdk_saved_state;   /* what mole_creature_state_get reports */
 extern uint8_t sdk_key[32];
 extern size_t sdk_key_len, sdk_written;
 extern int sdk_gpio[7];

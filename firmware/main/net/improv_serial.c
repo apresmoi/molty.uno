@@ -14,7 +14,8 @@
  *   network state online/Wi-Fi flags + the URL
  *
  * While a browser talks Improv, the fluid holds "hi" so the user sees which device is on
- * the cable (like the pairing code, link/link_pair.c); a minute of silence restores it.
+ * the cable (like the pairing code, link/link_pair.c); a minute of silence goes back
+ * to the creature (or the state before it, never the demo reel).
  *
  * Sharing the UART with logs: the UART driver serves both (uart_vfs_dev_use_driver),
  * a packet is written raw (no "\n" → "\r\n") while holding stdout's lock, so a log
@@ -27,6 +28,7 @@
 #include "molty_board.h"
 #include "mole_creature.h"
 #include "link_pair.h"
+#include "link_protocol.h"
 #include "sdkconfig.h"
 
 #if CONFIG_ESP_CONSOLE_UART
@@ -41,7 +43,6 @@
 #include "esp_app_desc.h"
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "cJSON.h"
 
 static const char *TAG = "improv";
 
@@ -69,7 +70,7 @@ static void hello_show(void)
     snprintf(s_prev_creature, sizeof(s_prev_creature), "%s", cur);
     if (mole_creature_state_get(&s_prev_state) != ESP_OK) s_prev_state = NULL;
     if (mole_creature_select("fluid") == ESP_OK &&
-        mole_creature_state_set("{\"state\":\"text\",\"text\":\"hi\"}") == ESP_OK) {
+        mole_creature_state_set("{\"state\":\"text\",\"text\":\"hi\",\"hold\":true}") == ESP_OK) {
         s_hello = true;
         return;
     }
@@ -77,19 +78,16 @@ static void hello_show(void)
     s_prev_state = NULL;
 }
 
-/* as link_pair_cancel: back to the previous creature and state, autoplay resumed */
+/* as link_pair_cancel: back to the previous creature and state (the creature for text
+ * or the demo reel, link_restore_body) */
 static void hello_restore(void)
 {
     if (!s_hello) return;
     s_hello = false;
     if (!link_pair_active() && mole_creature_select(s_prev_creature) == ESP_OK && s_prev_state) {
-        cJSON *saved = cJSON_Parse(s_prev_state);
-        if (saved && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(saved, "autoplay")))
-            cJSON_ReplaceItemInObjectCaseSensitive(saved, "state", cJSON_CreateString("autoplay"));
-        char *body = saved ? cJSON_PrintUnformatted(saved) : NULL;
+        char *body = link_restore_body(s_prev_state);
         if (body) mole_creature_state_set(body);
         free(body);
-        cJSON_Delete(saved);
     }
     free(s_prev_state);
     s_prev_state = NULL;

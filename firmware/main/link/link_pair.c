@@ -64,9 +64,9 @@ esp_err_t link_pair_init(void)
     return ESP_OK;
 }
 
-/* Static prompt: the 4-digit code alone, condensed in the fluid. A lone token
- * is held (state "text" turns autoplay off), centred, with no ORP accent. The
- * agent name is shown by the console and returned in GET /api/link. */
+/* Static prompt: the 4-digit code alone, condensed in the fluid. A lone token is
+ * centred with no ORP accent, and "hold" keeps it (no return to the creature) until
+ * the decision. The agent name is shown by the console and returned in GET /api/link. */
 esp_err_t link_ui_show_pair(const char *agent_name, const char *code)
 {
     (void)agent_name;
@@ -75,6 +75,7 @@ esp_err_t link_ui_show_pair(const char *agent_name, const char *code)
     cJSON *j = cJSON_CreateObject();
     if (!j) return ESP_ERR_NO_MEM;
     cJSON_AddStringToObject(j, "state", "text"); cJSON_AddStringToObject(j, "text", code);
+    cJSON_AddBoolToObject(j, "hold", true);
     char *body = cJSON_PrintUnformatted(j); cJSON_Delete(j);
     if (!body) return ESP_ERR_NO_MEM;
     e = mole_creature_state_set(body); free(body);
@@ -102,15 +103,12 @@ static void result(const char *req, bool ok, const char *reason, const char *age
 void link_pair_cancel(void)
 {
     if (!atomic_exchange(&s_active, false)) return;
-    if (s_previous[0]) {
-        if (mole_creature_select(s_previous) == ESP_OK && s_state) {
-            cJSON *saved = cJSON_Parse(s_state);
-            if (saved && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(saved, "autoplay")))
-                cJSON_ReplaceItemInObjectCaseSensitive(saved, "state", cJSON_CreateString("autoplay"));
-            char *body = saved ? cJSON_PrintUnformatted(saved) : NULL;
-            if (body) mole_creature_state_set(body);
-            free(body); cJSON_Delete(saved);
-        }
+    /* back to what was shown — the creature when that was text or the demo reel: the
+     * reel never comes back on its own (link_restore_body) */
+    if (s_previous[0] && mole_creature_select(s_previous) == ESP_OK && s_state) {
+        char *body = link_restore_body(s_state);
+        if (body) mole_creature_state_set(body);
+        free(body);
     }
     free(s_state); s_state = NULL;
 }

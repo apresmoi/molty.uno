@@ -248,6 +248,31 @@ static void test_panel(int fb_w, int fb_h) {
     free(fb); fluid_frame_destroy(fr); fluid_draw_destroy(ref); fluid_draw_destroy(d); fluid_text_destroy(tx); fluid_sim_destroy(s);
 }
 
+/* the status mark: nothing for NONE; otherwise a few pixels at the bottom of the stage,
+ * inside the round panel, and nowhere else */
+static void test_mark(int fb_w, int fb_h) {
+    fluid_draw_t *d = fluid_draw_create(52, 32, fb_w, fb_h);
+    uint16_t *fb = calloc((size_t)fb_w * fb_h, sizeof(uint16_t));
+    CHECK(d && fb, "mark alloc");
+    if (!d || !fb) { free(fb); fluid_draw_destroy(d); return; }
+    CHECK(fluid_draw_mark(d, fb, FLUID_PAL_PASTEL, FLUID_MARK_NONE) == 0, "NONE draws");
+    for (int m = FLUID_MARK_ARC; m < FLUID_MARK_COUNT; m++) {
+        memset(fb, 0, (size_t)fb_w * fb_h * sizeof(uint16_t));
+        int n = fluid_draw_mark(d, fb, FLUID_PAL_GREEN, m), lit = 0, stray = 0;
+        float cx = d->ox + d->stage / 2.f, cy = d->oy + d->stage / 2.f, R = d->stage / 2.f;
+        for (int y = 0; y < fb_h; y++) for (int x = 0; x < fb_w; x++) {
+            if (!fb[y * fb_w + x]) continue;
+            lit++;
+            float dx = x + 0.5f - cx, dy = y + 0.5f - cy;
+            if (dy < R * 0.8f || dx * dx + dy * dy > R * R || fabsf(dx) > R * 0.2f) stray++;
+        }
+        CHECK(n == lit && n >= 9 && n <= 600, "%dx%d mark %d: %d px (%d lit)", fb_w, fb_h, m, n, lit);
+        CHECK(stray == 0, "%dx%d mark %d: %d px off the bottom edge", fb_w, fb_h, m, stray);
+    }
+    free(fb);
+    fluid_draw_destroy(d);
+}
+
 int main(void) {
     printf("fluid host test\n");
     test_static_label();
@@ -260,6 +285,9 @@ int main(void) {
     test_panel(240, 240);
     test_panel(320, 240);
     test_panel(FLUID_STAGE_REF, FLUID_STAGE_REF);
+    test_mark(FLUID_STAGE_REF, FLUID_STAGE_REF);
+    test_mark(240, 240);
+    test_mark(320, 240);
     printf("%d passed, %d failed\n", s_pass, s_fail);
     return s_fail ? 1 : 0;
 }

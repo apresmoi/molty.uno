@@ -33,6 +33,14 @@ First public release.
   "want one built?" waitlist. The relay stores it: `POST /waitlist` into D1 (address,
   time, form only), per-IP rate limit, honeypot, optional Turnstile. New board PRs use
   `.github/PULL_REQUEST_TEMPLATE/board.md`.
+- **Stable presence**: the device boots into the creature and stays there; re-sending a
+  state or mood no longer melts it (moods blend), the demo reel runs only on
+  `state:"autoplay"`, `show` returns to the creature 1.5 s after its last word, quick
+  moods (`happy`, `surprised`) revert (`mood` takes an optional `hold_s`). Idle life: a
+  short mood flash every 20–60 s, sleepy after 5 min alone. Wi-Fi / relay / auth trouble
+  is a small mark at the screen's edge instead of a state change.
+- **Device events**: `shake`, `tap` and `button` evt frames to the agent
+  ([docs/AGENT-LINK.md](docs/AGENT-LINK.md#device-events)); a shake makes the Molty jump.
 - **Release assets**: per board, OTA image and full factory image
   (`molty-X.Y.Z-<board>-{ota,factory}.bin`); console page, CLI binaries for
   linux/darwin/windows × amd64/arm64, `SHA256SUMS`.

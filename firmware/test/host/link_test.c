@@ -92,6 +92,64 @@ static void test_moods(void)
     assert(!link_mood_map(NULL, &state));
 }
 
+static bool mood_args(const char *json, const char **mood, double *hold_s)
+{
+    cJSON *args = cJSON_Parse(json);
+    assert(args);
+    bool ok = link_mood_args(args, mood, hold_s);
+    static char kept[16];                         /* the mood points into args */
+    if (ok) { snprintf(kept, sizeof(kept), "%s", *mood); *mood = kept; }
+    cJSON_Delete(args);
+    return ok;
+}
+
+/* mood {mood, hold_s?}: old agents send no hold_s and keep working (default hold = -1) */
+static void test_mood_args(void)
+{
+    const char *mood; double hold;
+    assert(mood_args("{\"mood\":\"happy\"}", &mood, &hold) && !strcmp(mood, "happy") && hold == -1);
+    assert(mood_args("{\"mood\":\"thinking\",\"hold_s\":0}", &mood, &hold) && hold == 0);
+    assert(mood_args("{\"mood\":\"surprised\",\"hold_s\":2.5}", &mood, &hold) && hold == 2.5);
+    assert(mood_args("{\"mood\":\"idle\",\"hold_s\":3600}", &mood, &hold) && hold == 3600);
+    assert(!mood_args("{\"mood\":\"happy\",\"hold_s\":-1}", &mood, &hold));
+    assert(!mood_args("{\"mood\":\"happy\",\"hold_s\":3601}", &mood, &hold));
+    assert(!mood_args("{\"mood\":\"happy\",\"hold_s\":\"2\"}", &mood, &hold));
+    assert(!mood_args("{\"mood\":\"grumpy\"}", &mood, &hold));
+    assert(!mood_args("{\"hold_s\":2}", &mood, &hold));
+}
+
+/* device events: exactly the frames docs/AGENT-LINK.md lists */
+static void test_event_frames(void)
+{
+    expect_json(link_evt_shake_frame(1.83456, 4, 412),
+        "{\"t\":\"evt\",\"name\":\"shake\",\"data\":{\"peak_g\":1.83,\"reversals\":4,\"ms\":412}}");
+    expect_json(link_evt_tap_frame(0.25, 0.5004),
+        "{\"t\":\"evt\",\"name\":\"tap\",\"data\":{\"x\":0.25,\"y\":0.5}}");
+    expect_json(link_evt_tap_frame(-0.1, 1.7),
+        "{\"t\":\"evt\",\"name\":\"tap\",\"data\":{\"x\":0,\"y\":1}}");
+    expect_json(link_evt_button_frame(true), "{\"t\":\"evt\",\"name\":\"button\",\"data\":{\"id\":\"accept\"}}");
+    expect_json(link_evt_button_frame(false), "{\"t\":\"evt\",\"name\":\"button\",\"data\":{\"id\":\"reject\"}}");
+}
+
+/* after the pairing code / the Improv "hi": back to the shown state, never the reel */
+static void test_restore(void)
+{
+    const struct { const char *saved, *want; } cases[] = {
+        { "{\"state\":\"creature\",\"autoplay\":false,\"mood\":\"idle\"}", "{\"state\":\"creature\"}" },
+        { "{\"state\":\"effect:vortex\",\"autoplay\":false}", "{\"state\":\"effect:vortex\"}" },
+        { "{\"state\":\"blob\",\"autoplay\":true}", "{\"state\":\"creature\"}" },
+        { "{\"state\":\"text\",\"autoplay\":false}", "{\"state\":\"creature\"}" },
+        { "{\"state\":\"autoplay\"}", "{\"state\":\"creature\"}" },
+        { "not json", "{\"state\":\"creature\"}" },
+        { NULL, "{\"state\":\"creature\"}" },
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        char *body = link_restore_body(cases[i].saved);
+        assert(body && !strcmp(body, cases[i].want));
+        free(body);
+    }
+}
+
 static bool parses(const char *str)
 {
     link_frame_t h; const uint8_t *p; size_t n;
@@ -136,6 +194,7 @@ static void test_frames(void)
 int main(void)
 {
     test_codes(); test_moods(); test_frames(); test_identity_and_urls(); test_control_frames();
-    puts("LINK HOST PASS: audio/control frames, random IDs, code alphabet, URLs, close retry policy, moods");
+    test_mood_args(); test_event_frames(); test_restore();
+    puts("LINK HOST PASS: audio/control/event frames, random IDs, code alphabet, URLs, close retry policy, moods + hold_s, restore");
     return 0;
 }

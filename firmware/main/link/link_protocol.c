@@ -108,6 +108,71 @@ bool link_mood_map(const char *mood, const char **state)
     return false;
 }
 
+bool link_mood_args(const cJSON *args, const char **mood, double *hold_s)
+{
+    const cJSON *m = cJSON_GetObjectItemCaseSensitive(args, "mood");
+    const cJSON *h = cJSON_GetObjectItemCaseSensitive(args, "hold_s");
+    const char *state;
+    if (!mood || !hold_s || !cJSON_IsString(m) || !link_mood_map(m->valuestring, &state)) return false;
+    if (h && (!cJSON_IsNumber(h) || !(h->valuedouble >= 0 && h->valuedouble <= 3600))) return false;
+    *mood = m->valuestring;
+    *hold_s = h ? h->valuedouble : -1;
+    return true;
+}
+
+static cJSON *evt(const char *name, cJSON **data)
+{
+    cJSON *j = frame("evt");
+    if (!j) return NULL;
+    cJSON_AddStringToObject(j, "name", name);
+    if (!(*data = cJSON_AddObjectToObject(j, "data"))) { cJSON_Delete(j); return NULL; }
+    return j;
+}
+
+static double clamp01(double v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
+
+cJSON *link_evt_shake_frame(double peak_g, int reversals, unsigned ms)
+{
+    cJSON *data, *j = evt("shake", &data);
+    if (j) {
+        cJSON_AddNumberToObject(data, "peak_g", round(peak_g * 100) / 100);
+        cJSON_AddNumberToObject(data, "reversals", reversals);
+        cJSON_AddNumberToObject(data, "ms", ms);
+    }
+    return j;
+}
+
+cJSON *link_evt_tap_frame(double x, double y)
+{
+    cJSON *data, *j = evt("tap", &data);
+    if (j) {
+        cJSON_AddNumberToObject(data, "x", round(clamp01(x) * 1000) / 1000);
+        cJSON_AddNumberToObject(data, "y", round(clamp01(y) * 1000) / 1000);
+    }
+    return j;
+}
+
+cJSON *link_evt_button_frame(bool accept)
+{
+    cJSON *data, *j = evt("button", &data);
+    if (j) cJSON_AddStringToObject(data, "id", accept ? "accept" : "reject");
+    return j;
+}
+
+char *link_restore_body(const char *saved_state_json)
+{
+    cJSON *saved = saved_state_json ? cJSON_Parse(saved_state_json) : NULL;
+    const cJSON *st = cJSON_GetObjectItemCaseSensitive(saved, "state");
+    const char *name = cJSON_IsString(st) ? st->valuestring : "creature";
+    if (!strcmp(name, "text") || !strcmp(name, "autoplay") ||
+        cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(saved, "autoplay"))) name = "creature";
+    cJSON *j = cJSON_CreateObject();
+    char *body = NULL;
+    if (j && cJSON_AddStringToObject(j, "state", name)) body = cJSON_PrintUnformatted(j);
+    cJSON_Delete(j); cJSON_Delete(saved);
+    return body;
+}
+
 static bool valid_stream(const char *s)
 {
     return s && s[0] && strlen(s) < LINK_STREAM_MAX;

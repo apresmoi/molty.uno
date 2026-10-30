@@ -275,6 +275,14 @@ void fluid_draw_destroy(fluid_draw_t *d);
 int  fluid_draw(fluid_draw_t *d, const fluid_frame_t *f, uint16_t *fb,
                 const fluid_draw_opts_t *o, int *y0, int *y1);
 
+/** A small status mark at the bottom of the stage, just inside the round panel's edge,
+ *  in the palette's colours, drawn over the fluid (the caller repaints everything once
+ *  when the mark changes or goes; fluid_draw only redraws cells that changed). ARC: a
+ *  short dim arc · DOT: a dim dot · ALERT: a dot in the accent colour. */
+enum { FLUID_MARK_NONE, FLUID_MARK_ARC, FLUID_MARK_DOT, FLUID_MARK_ALERT, FLUID_MARK_COUNT };
+/** Returns the pixels written (0 for FLUID_MARK_NONE). */
+int  fluid_draw_mark(const fluid_draw_t *d, uint16_t *fb, int palette, int mark);
+
 #ifdef __cplusplus
 }
 #endif

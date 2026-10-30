@@ -42,6 +42,7 @@ firmware/main/                 the core: no pins, no panel sizes
 ├── fluid/          the fluid of characters: sim, targets, draw, speed reader, 5x7 font
 ├── creature/       creature registry + the .molty cute-kit runtime (cute_spec, cute_rig)
 ├── link/           agent link: WSS client, identity, pairing, command dispatcher, audio
+├── sense/          device events (IMU shake, taps, buttons) → agent + fluid; status mark
 └── diag/           log ring, frame histograms, /api/diag, /api/log
 firmware/boards/               one folder per board, exactly one compiled in
 ├── waveshare/esp32-s3-touch-lcd-1.46/   SPD2010 QSPI LCD + touch, TCA9554, I2S audio

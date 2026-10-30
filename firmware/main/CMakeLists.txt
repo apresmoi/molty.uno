@@ -40,6 +40,7 @@ idf_component_register(
         "net/improv_serial.c"
         # fluid: the fluid-of-characters creature (+ speed reader, 5x7 font)
         "fluid/mole_fluid.c"
+        "fluid/fluid_director.c"  # what is shown when: states, moods, idle life, status
         "fluid/fluid_sim.c"
         "fluid/fluid_target.c"
         "fluid/fluid_draw.c"
@@ -56,6 +57,9 @@ idf_component_register(
         "link/link_cmd.c"
         "link/link_audio.c"
         "link/link_pair.c"
+        # sense: device events (IMU shake, taps, buttons) for the agent + the fluid
+        "sense/gesture.c"
+        "sense/sense.c"
         # board: the seam to the hardware (molty_board.h) + the selected board's drivers
         "board/molty_board.c"
         ${MOLTY_BOARD_SRCS}
@@ -67,6 +71,7 @@ idf_component_register(
         "fluid"
         "creature"
         "link"
+        "sense"
         "board"
         "diag"
         ${MOLTY_BOARD_INCLUDE_DIRS}

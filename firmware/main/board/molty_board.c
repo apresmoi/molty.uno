@@ -6,6 +6,7 @@
  */
 #include "molty_board.h"
 #include "link_pair.h"
+#include "sense.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -164,6 +165,7 @@ int molty_touch_poll(uint16_t *xs, uint16_t *ys, int max)
     if (max > MOLTY_TOUCH_MAX_POINTS) max = MOLTY_TOUCH_MAX_POINTS;
     int n = B.touch_poll(xs, ys, max);
     link_pair_touch(n);   /* the one touch poller also drives the pairing tap */
+    sense_touch(n, xs, ys);   /* ...and the agent's tap events */
     return n;
 }
 

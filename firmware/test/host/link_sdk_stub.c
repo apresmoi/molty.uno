@@ -7,6 +7,7 @@ int64_t sdk_now;
 void (*sdk_wait)(void);
 unsigned sdk_random, sdk_commits, sdk_erases;
 char sdk_id[64], sdk_url[384], sdk_state[512], sdk_text[4097], sdk_mood[16];
+const char *sdk_saved_state = "{\"state\":\"blob\"}";
 uint8_t sdk_key[32];
 size_t sdk_key_len, sdk_written;
 int sdk_gpio[7] = {1,1,1,1,1,1,1};
@@ -103,7 +104,7 @@ bool molty_button_pressed(molty_button_t b) {
 }
 esp_err_t mole_creature_select(const char *name) { assert(name); return ESP_OK; }
 const char *mole_creature_current(void) { return "fluid"; }
-esp_err_t mole_creature_state_get(char **out) { *out=strdup("{\"state\":\"blob\"}"); return ESP_OK; }
+esp_err_t mole_creature_state_get(char **out) { *out=strdup(sdk_saved_state); return ESP_OK; }
 esp_err_t mole_creature_state_set(const char *json) { assert(strlen(json)<sizeof(sdk_state)); strcpy(sdk_state,json); return ESP_OK; }
 esp_err_t molty_speaker_stream_begin(uint32_t rate) { assert(rate==16000); return ESP_OK; }
 esp_err_t molty_speaker_stream_write(const int16_t *pcm, size_t n) { assert(pcm); sdk_written+=n*2; return sdk_play_error; }

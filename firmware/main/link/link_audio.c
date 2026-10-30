@@ -172,12 +172,12 @@ static esp_err_t start(const cJSON *args, bool listen, cJSON **out)
     cJSON_AddStringToObject(result, "job", j->valuestring);
     esp_err_t e;
     if (listen) {
-        e = link_cmd_mood("listening");
+        e = link_cmd_mood("listening", -1);
     } else {
         e = mole_creature_select("fluid");
         if (e == ESP_OK) e = link_ui_set_text(text->valuestring, (int)strlen(text->valuestring));
         /* mood first: it selects the creature view; the text state then wins. */
-        if (e == ESP_OK) e = link_cmd_mood("speaking");
+        if (e == ESP_OK) e = link_cmd_mood("speaking", -1);
         if (e == ESP_OK) e = mole_creature_state_set("{\"state\":\"text\"}");
     }
     if (e != ESP_OK) { cJSON_Delete(result); return e; }
@@ -219,7 +219,7 @@ void link_audio_tick(void)
     if (xQueueReceive(s_done, &e, 0) != pdTRUE) return;
     drain(); /* worker has acknowledged completion; discard any late PCM */
     s_busy = false;
-    if (!link_pair_active()) link_cmd_mood("idle");
+    if (!link_pair_active()) link_cmd_mood("idle", -1);
     /* A failed/cancelled stream must never report successful playback. Listen
      * completion is the uplink end flag, not a say event. */
     if (!s_listen && e == ESP_OK && !atomic_load(&s_cancel) && link_client_connected()) {

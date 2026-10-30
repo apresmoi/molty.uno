@@ -31,7 +31,7 @@ esp_err_t link_cmd_register(const char *name, link_cmd_handler_t handler)
 
 const char *link_cmd_current_mood(void) { return s_mood; }
 
-esp_err_t link_cmd_mood(const char *mood)
+esp_err_t link_cmd_mood(const char *mood, double hold_s)
 {
     const char *state;
     if (!link_mood_map(mood, &state)) return ESP_ERR_INVALID_ARG;
@@ -42,6 +42,7 @@ esp_err_t link_cmd_mood(const char *mood)
         if (!j) return ESP_ERR_NO_MEM;
         cJSON_AddStringToObject(j, "state", state);
         cJSON_AddStringToObject(j, "mood", mood);
+        if (hold_s >= 0) cJSON_AddNumberToObject(j, "hold_s", hold_s);
         char *body = cJSON_PrintUnformatted(j); cJSON_Delete(j);
         if (!body) return ESP_ERR_NO_MEM;
         e = mole_creature_state_set(body); free(body);
@@ -72,7 +73,13 @@ static esp_err_t cmd_status(const cJSON *args, cJSON **out)
     cJSON *j = *out;
     cJSON_AddStringToObject(j, "fw", esp_app_get_description()->version);
     cJSON_AddNumberToObject(j, "uptime", esp_timer_get_time() / 1000000);
-    cJSON_AddStringToObject(j, "mood", s_mood);
+    /* the mood on screen (a quick mood may have reverted, the creature may doze off);
+     * the last commanded one when the fluid reports none */
+    cJSON *shown = cJSON_GetObjectItemCaseSensitive(j, "mood");
+    if (!cJSON_IsString(shown) || !shown->valuestring[0]) {
+        cJSON_DeleteItemFromObjectCaseSensitive(j, "mood");
+        cJSON_AddStringToObject(j, "mood", s_mood);
+    }
     if (!cJSON_HasObjectItem(j, "creature")) cJSON_AddStringToObject(j, "creature", mole_creature_current());
     if (!cJSON_HasObjectItem(j, "state")) cJSON_AddStringToObject(j, "state", "unknown");
     if (!cJSON_HasObjectItem(j, "fps")) cJSON_AddNumberToObject(j, "fps", 0);
@@ -93,8 +100,8 @@ static esp_err_t cmd_state(const cJSON *args, cJSON **out)
 static esp_err_t cmd_mood(const cJSON *args, cJSON **out)
 {
     (void)out;
-    cJSON *v = cJSON_GetObjectItemCaseSensitive(args, "mood");
-    return cJSON_IsString(v) ? link_cmd_mood(v->valuestring) : ESP_ERR_INVALID_ARG;
+    const char *mood; double hold_s;
+    return link_mood_args(args, &mood, &hold_s) ? link_cmd_mood(mood, hold_s) : ESP_ERR_INVALID_ARG;
 }
 
 static esp_err_t cmd_show(const cJSON *args, cJSON **out)

@@ -3,16 +3,25 @@
  *
  * Device port of creatures/fluid.html. One per-cell fluid (fluid_sim.h)
  * fills the round panel as braille dots; states are targets it flows toward:
- * blob, thinking, text (speed reader), effect:ripple|vortex|wave, and an autoplay
- * show reel cycling through them. Touch → ripple, IMU tilt → slosh.
+ * creature (the .molty, home: boot lands here), blob (stands in while no creature is
+ * loaded), thinking, text (speed reader), effect:ripple|vortex|wave, and the demo reel
+ * ("autoplay", on request only). What is shown when — the same-state guard, idle mood
+ * flashes, sleep, the reader's return — is fluid_director.h. Touch → ripple, IMU tilt
+ * → slosh.
  *
  * State via GET/POST /api/creature/state when "fluid" is active:
- *   POST {state: "blob"|"thinking"|"text"|"effect:ripple"|"effect:vortex"|"effect:wave"
- *               |"autoplay"|"creature"(only once a target source is installed),
+ *   POST {state: "creature"|"blob"|"thinking"|"text"|"effect:ripple"|"effect:vortex"
+ *               |"effect:wave"|"autoplay",
+ *         hold: true (with "text": hold the last word instead of returning to the
+ *               creature 1.5 s after it; the pairing code, the Improv "hi"),
  *         text, wpm, palette: "green"|"amber"|"pastel", edge_mode: "off"|"contours"|"all",
  *         grid: "52x32", speed, mic (0..1), tilt (IMU gain, 0 = off), ripple: {x,y,strength},
- *         mood: idle|listening|thinking|speaking|happy|sleepy|surprised (alone: shows the creature)}
- *   GET adds read-only fps, frame_ms, sim_ms, draw_ms, flush_ms, word, energy, ...
+ *         mood: idle|listening|thinking|speaking|happy|sleepy|surprised (alone: shows the creature),
+ *         hold_s: 0..3600 (with mood: seconds before idle; 0 = until the next mood;
+ *                 absent: happy / surprised revert after a few s, the rest persist)}
+ *   Re-requesting the shown state changes nothing; autoplay is never persisted.
+ *   GET adds read-only fps, frame_ms, sim_ms, draw_ms, flush_ms, word, energy, asleep,
+ *   indicator ("ok"|"wifi"|"relay"|"auth"), ...
  * POST /api/reader/text and /api/reader/append feed the speed reader.
  */
 #pragma once
@@ -48,6 +57,14 @@ esp_err_t mole_fluid_append_text(const char *chunk, int len);
 #include <stdint.h>
 esp_err_t mole_fluid_creature_file_put(const uint8_t *buf, size_t len, const char **err);
 esp_err_t mole_fluid_creature_file_get(uint8_t **out, size_t *len, bool *is_default);
+
+/** Something happened to the device (sense.c): a shake (a brief surprised flash) or a
+ *  button press (wakes a sleepy creature). Safe from any task; a no-op before init. */
+typedef enum { MOLE_FLUID_SHAKE, MOLE_FLUID_BUTTON } mole_fluid_event_t;
+void mole_fluid_event(mole_fluid_event_t ev);
+/** The link's health as an FD_STATUS_* code (fluid_director.h): a small mark at the
+ *  screen's edge, never a state change. One caller (sense.c). */
+void mole_fluid_set_status(int status);
 
 #ifdef __cplusplus
 }

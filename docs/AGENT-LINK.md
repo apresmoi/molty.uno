@@ -93,7 +93,8 @@ backoff. Local status also includes `close_code` for the current/last attempt.
 Text frames are JSON:
 - relay→device `{"t":"cmd","id":"c17","name":"show","args":{...}}`
 - device→relay `{"t":"res","id":"c17","ok":true,"result":{...}}` or `{"ok":false,"error":"code"}`
-- device→relay `{"t":"evt","name":"touch|state|listen.level|...","data":{...}}`
+- device→relay `{"t":"evt","name":"say.done|shake|tap|button","data":{...}}` (see
+  [Device events](#device-events))
 - `pair.request` / `pair.result` as above; `{"t":"ping"}`/`{"t":"pong"}` every 20 s.
 - device→relay on each rotation: `{"t":"link_code","code":"...","link_code":"..."}`.
   `code` is the requested spelling; `link_code` is a compatibility alias required by
@@ -117,8 +118,26 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
 
 Moods (`mood` cmd, and the implicit `listening`/`speaking` around audio jobs) are moods
 of the fluid creature's loaded `.molty` creature: the device applies
-`{"state":"creature","mood":"<mood>"}` (blob when no creature is loaded). During `say` the
-text state wins over the creature view.
+`{"state":"creature","mood":"<mood>"[,"hold_s":N]}` (blob when no creature is loaded).
+During `say` the text state wins over the creature view.
+
+What the screen does between commands (`firmware/main/fluid/fluid_director.h`):
+
+- **The creature is home.** The device boots into it, and re-sending the state or mood it
+  already shows changes nothing: a mood blends inside the creature instead of melting it
+  and re-forming. The demo reel runs only on an explicit `state:"autoplay"` (never
+  saved; pairing and the Improv "hi" go back to the creature, not the reel).
+- **Quick moods revert.** `happy` (3 s) and `surprised` (2 s) return to `idle` on their
+  own; `listening`, `thinking`, `speaking`, `sleepy` persist until the next mood.
+  `hold_s` overrides either (`0` = until the next mood).
+- **`show` returns** to the creature 1.5 s after its last word; `say` ends in `idle`.
+- **Idle life.** While idle, the creature blinks, glances and breathes, and every
+  20–60 s flashes a short `happy` or `surprised`. After 5 minutes without a touch or a
+  command it dozes off (`sleepy`, 20 fps); a touch, a button, a shake or any command
+  wakes it. `status` reports the mood on screen.
+- **Status mark.** No Wi-Fi (a short arc), relay offline (a dim dot) or a refused device
+  key (an accent dot) shows as a small mark at the bottom edge after 10 s; it never
+  changes the state. Only the pairing code takes over the screen.
 
 ## Commands (v0)
 
@@ -126,8 +145,8 @@ text state wins over the creature view.
 |---|---|---|---|
 | `status` | — | fw, uptime, creature, state, mood, fps, rssi | relay adds `relay` {online, board, caps, ...} |
 | `state` | `{state, ...}` | creature state JSON | passthrough to `/api/creature/state` semantics |
-| `mood` | `{mood}` | — | idle listening thinking speaking happy sleepy surprised |
-| `show` | `{text, wpm?}` | — | speed reader in the fluid |
+| `mood` | `{mood, hold_s?}` | — | idle listening thinking speaking happy sleepy surprised; `hold_s` 0..3600 (0 = until the next mood; default: happy/surprised revert, the rest persist) |
+| `show` | `{text, wpm?}` | — | speed reader in the fluid; back to the creature 1.5 s after the last word |
 | `say` | `{text, voice?}` | `{job}` immediately | relay does TTS + streams; device sets `speaking`, shows text in sync. `unsupported` without a speaker |
 | `listen` | `{ms≤10000}` | `{job}` immediately | device sets `listening`, streams mic; relay STT → job result `{text}`. `unsupported` without a mic |
 | `volume` | `{volume 0..21}` | — | `unsupported` without a speaker |
@@ -139,6 +158,22 @@ text state wins over the creature view.
 Agent-facing calls are **async-friendly** (agent runtimes commonly cap a tool call at ~10 s / 64 KiB):
 `say`/`listen` return a `job` id; `molty_wait {job, timeout_s≤8}` returns the result or
 `pending`. Short calls answer inline.
+
+## Device events
+
+Device→relay `{"t":"evt","name":...,"data":{...}}` frames, sent only while the link is up
+(not queued) and never while a pairing is pending (its tap and buttons decide the
+pairing). Rate-limited on the device. The relay keeps the latest of each name.
+
+| name | data | when |
+|---|---|---|
+| `say.done` | `{job}` | a `say` finished playing (its last PCM left the speaker) |
+| `shake` | `{peak_g, reversals, ms}` | the board was shaken (boards with an IMU): ≥ 3 sign reversals of > 1.2 g dynamic acceleration on one axis within 800 ms; ≤ 1 per 2 s. `peak_g` largest dynamic acceleration (g), `ms` first peak → detection |
+| `tap` | `{x, y}` | a finger touched the screen (boards with touch); 0..1 of the panel from the top left; ≤ 4/s |
+| `button` | `{id: "accept"\|"reject"}` | a button was pressed (the board's accept / reject buttons); ≤ 4/s |
+
+The device reacts to a shake by itself (a brief `surprised`), agent or not. Detector
+constants: `firmware/main/sense/gesture.h`.
 
 ## Agent surfaces
 

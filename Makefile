@@ -18,7 +18,7 @@ help:
 	@echo "  make cli            cli/bin/molty"
 	@echo "  make creatures      re-export creatures/molty/*.molty from the cute-kit specs"
 	@echo "test:"
-	@echo "  make firmware-test  firmware host tests (fluid, cute runtime, agent link)"
+	@echo "  make firmware-test  firmware host tests (fluid, director, gestures, cute runtime, agent link)"
 	@echo "  make relay-test     relay unit tests + typecheck"
 	@echo "  make cli-test       go build + go test"
 	@echo "  make console-test   console unit tests + typecheck"

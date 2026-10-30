@@ -424,3 +424,33 @@ int fluid_draw(fluid_draw_t *d, const fluid_frame_t *s, uint16_t *fb,
     *y1out = dy1 > dy0 ? dy1 : 0;
     return drawn;
 }
+
+int fluid_draw_mark(const fluid_draw_t *d, uint16_t *fb, int palette, int mark) {
+    if (!d || !fb || mark <= FLUID_MARK_NONE || mark >= FLUID_MARK_COUNT) return 0;
+    const int pal = (palette >= 0 && palette < FLUID_PAL_COUNT) ? palette : FLUID_PAL_PASTEL;
+    const float *lo = PAL[pal][0], *c = mark == FLUID_MARK_ALERT ? PAL[pal][2] : PAL[pal][1];
+    const float k = mark == FLUID_MARK_ALERT ? 0.8f : 0.4f;           /* subtle: well below the fluid */
+    const uint16_t col = rgb565_be((int)(lo[0] + (c[0] - lo[0]) * k), (int)(lo[1] + (c[1] - lo[1]) * k),
+                                   (int)(lo[2] + (c[2] - lo[2]) * k));
+    const float sc = (float)d->stage / (float)FLUID_STAGE_REF;
+    const float cx = d->ox + d->stage * 0.5f, cy = d->oy + d->stage * 0.5f;
+    const float r = d->stage * 0.5f - 12.f * sc;                      /* inside the panel's rim */
+    const float half = fmaxf(1.f, 1.5f * sc), dot = fmaxf(2.f, 3.f * sc), span = r * 0.15f;   /* arc ≈ ±8.6° */
+    const bool arc = mark == FLUID_MARK_ARC;
+    const float ext = arc ? span : dot;
+    int x0 = (int)(cx - ext) - 1, x1 = (int)(cx + ext) + 2;
+    int y0 = (int)(arc ? cy + sqrtf(r * r - span * span) - half : cy + r - dot) - 1, y1 = (int)(cy + r + (arc ? half : dot)) + 2;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > d->fb_w) x1 = d->fb_w;
+    if (y1 > d->fb_h) y1 = d->fb_h;
+    int n = 0;
+    for (int y = y0; y < y1; y++) for (int x = x0; x < x1; x++) {
+        float dx = x + 0.5f - cx, dy = y + 0.5f - cy;
+        bool on;
+        if (arc) { float dr = sqrtf(dx * dx + dy * dy) - r; on = dy > 0.f && fabsf(dx) <= span && fabsf(dr) <= half; }
+        else { float ey = dy - r; on = dx * dx + ey * ey <= dot * dot; }
+        if (on) { fb[y * d->fb_w + x] = col; n++; }
+    }
+    return n;
+}

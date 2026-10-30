@@ -134,6 +134,13 @@ static bool wifi_ready(void)
         && ip.ip.addr && esp_wifi_sta_get_ap_info(&ap) == ESP_OK;
 }
 
+void link_client_health(bool *wifi, bool *relay, bool *auth_failed)
+{
+    *wifi = wifi_ready();
+    *relay = link_client_connected();
+    *auth_failed = atomic_load(&s_auth);
+}
+
 static void disconnect(const char *why)
 {
     mole_diag_event(true, "link.disconnect why=%s close=%u int_free=%u", why, atomic_load(&s_close_code),

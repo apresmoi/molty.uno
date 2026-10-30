@@ -9,7 +9,8 @@
  *   (boards with a serial console) → SPIFFS + console
  *   (net/console_store) → USB-C NCM (boards with usb_net) + mDNS + Wi-Fi
  *   (net/network) → board init (display, touch, IMU, ...) → "fluid" creature
- *   (fluid/) → agent link (link/) → diag tasks → HTTP server (net/http)
+ *   (fluid/) → agent link (link/) → device events (sense/) → diag tasks → HTTP
+ *   server (net/http)
  *   → OTA image validation → /ws/imu task
  *
  * Plug USB-C into a laptop and browse http://10.13.37.1/ (or http://molty.local/);
@@ -30,6 +31,7 @@
 #include "mole_creature.h"
 #include "mole_fluid.h"
 #include "link_client.h"
+#include "sense.h"
 #include "network.h"
 #include "console_store.h"
 #include "http.h"
@@ -109,6 +111,10 @@ void app_main(void)
     // Agent link owns its WSS/audio tasks; no device I/O in HTTP callbacks.
     ret = link_client_init();
     if (ret != ESP_OK) ESP_LOGW(TAG, "Agent link unavailable: %s", esp_err_to_name(ret));
+
+    // Device events (shake / tap / button → agent + fluid) and the status mark.
+    ret = sense_start();
+    if (ret != ESP_OK) ESP_LOGW(TAG, "device events unavailable: %s", esp_err_to_name(ret));
 
     // Diagnostics sampler/persist tasks + Wi-Fi hooks (needs SPIFFS + Wi-Fi up).
     mole_diag_start();
