@@ -155,6 +155,7 @@ static void disconnect(const char *why)
     free(s_rx); s_rx = NULL; s_rx_len = 0; s_opcode = 0;
     rx_msg_t m;
     while (xQueueReceive(s_rxq, &m, 0) == pdTRUE) free(m.data);
+    link_audio_relay_adopts(false);
     link_audio_cancel(); link_pair_cancel(); link_ask_cancel();   /* link down: no event */
 }
 
@@ -317,6 +318,7 @@ static void link_task(void *arg)
                         atomic_store(&s_connected, true); atomic_store(&s_auth, false);
                         mole_diag_event(false, "link.welcome after %ums", (unsigned)((now - started) / 1000));
                         self_update_welcomed();   /* a freshly updated image: valid now (update_core.h) */
+                        link_audio_relay_adopts(link_welcome_has(j, LINK_FEATURE_ADOPT));   /* shake to talk */
                         backoff = 1; last_pong = now; last_ping = now;
                     } else if (!strcmp(t->valuestring, "pong")) last_pong = now;
                     else if (!strcmp(t->valuestring, "ping")) {

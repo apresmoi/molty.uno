@@ -213,15 +213,24 @@ static cJSON *evt(const char *name, cJSON **data)
 
 static double clamp01(double v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
 
-cJSON *link_evt_shake_frame(double peak_g, int reversals, unsigned ms)
+cJSON *link_evt_shake_frame(double peak_g, int reversals, unsigned ms, const char *listen)
 {
     cJSON *data, *j = evt("shake", &data);
     if (j) {
         cJSON_AddNumberToObject(data, "peak_g", round(peak_g * 100) / 100);
         cJSON_AddNumberToObject(data, "reversals", reversals);
         cJSON_AddNumberToObject(data, "ms", ms);
+        if (listen) cJSON_AddStringToObject(data, "listen", listen);
     }
     return j;
+}
+
+bool link_welcome_has(const cJSON *welcome, const char *name)
+{
+    const cJSON *f = cJSON_GetObjectItemCaseSensitive(welcome, "features"), *it;
+    if (!name || !cJSON_IsArray(f)) return false;
+    cJSON_ArrayForEach(it, f) if (cJSON_IsString(it) && !strcmp(it->valuestring, name)) return true;
+    return false;
 }
 
 cJSON *link_evt_tap_frame(double x, double y)
