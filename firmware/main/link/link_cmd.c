@@ -257,6 +257,7 @@ void link_cmd_init(void)
     link_cmd_register("status", cmd_status); link_cmd_register("state", cmd_state);
     link_cmd_register("mood", cmd_mood); link_cmd_register("show", cmd_show);
     link_cmd_register("say", link_audio_say); link_cmd_register("listen", link_audio_listen);
+    link_cmd_register("listen_stop", link_audio_listen_stop);
     link_cmd_register("volume", cmd_volume); link_cmd_register("imu", cmd_imu);
     link_cmd_register("ask", link_ask_cmd);
     link_cmd_register("update", self_update_cmd);

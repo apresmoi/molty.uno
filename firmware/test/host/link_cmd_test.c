@@ -19,6 +19,7 @@ esp_err_t mole_fluid_set_text(const char *t, int len) { (void)t;(void)len; retur
 bool link_pair_active(void) { return false; }
 esp_err_t link_audio_say(const cJSON *a, cJSON **o) { (void)a;(void)o; return ESP_OK; }
 esp_err_t link_audio_listen(const cJSON *a, cJSON **o) { (void)a;(void)o; return ESP_OK; }
+esp_err_t link_audio_listen_stop(const cJSON *a, cJSON **o) { (void)a;(void)o; return ESP_OK; }
 static unsigned ask_cancels, ask_cmds;
 void link_ask_cancel(void) { ask_cancels++; }
 esp_err_t link_ask_cmd(const cJSON *a, cJSON **o) { (void)a;(void)o; ask_cmds++; return ESP_OK; }

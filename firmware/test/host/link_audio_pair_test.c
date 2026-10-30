@@ -304,9 +304,45 @@ static void test_ask_cancel(void) {
     assert(!link_pair_active() && ask_cancels==c+4);
     link_audio_cancel(); complete(play());
 }
+/* cmd listen_stop {job}: {stopping} — true only for the running listen of that job */
+static bool stop_cmd(const char *job) {
+    char a[96]; snprintf(a,sizeof(a),"{\"job\":\"%s\"}",job);
+    cJSON *args=cJSON_Parse(a),*res=NULL;
+    assert(link_audio_listen_stop(args,&res)==ESP_OK && res); cJSON_Delete(args);
+    assert(!strcmp(cJSON_GetObjectItem(res,"job")->valuestring,job));
+    bool on=cJSON_IsTrue(cJSON_GetObjectItem(res,"stopping")); cJSON_Delete(res); return on;
+}
+static void stop_at_chunk_10(int16_t *buf,size_t n,unsigned chunk) {
+    speech_fill(buf,n,chunk);
+    if (chunk==10) { assert(!stop_cmd("other")); assert(stop_cmd("listen1")); }   /* the relay heard the turn end */
+}
+/* The relay's semantic end of turn: the listen ends within one chunk, as if the VAD fired,
+ * with reason turn_end; what was recorded still goes up. Says and later listens are untouched. */
+static void test_listen_stop(void) {
+    audio_job_t job;
+    listen_job(8000,&job); sdk_rx_chunks=0; sdk_rx_fill=stop_at_chunk_10;
+    complete(record(&job)); sdk_rx_fill=NULL;
+    /* 11 chunks read (the stop lands after the 11th): 3 full frames + the 2-chunk tail with end */
+    assert(sdk_rx_chunks==11 && bin_bytes==11*3200u && bin_frames==4 && bin_ends==1);
+    assert(!strcmp(bin_reason,"turn_end") && !strcmp(s_end_reason,"turn_end"));
+    assert(!ring_on && !link_audio_busy() && !strcmp(sdk_mood,"idle"));
+    /* nothing running: a late stop is answered, and does not leak into the next listen */
+    assert(!stop_cmd("listen1"));
+    listen_job(1000,&job); sdk_rx_chunks=0;
+    assert(!stop_cmd("listen2"));                 /* not this job */
+    complete(record(&job));
+    assert(!strcmp(bin_reason,"max") && sdk_rx_chunks==10);
+    /* a say is never stopped by it: playback completes with say.done */
+    begin_say(); assert(!stop_cmd("say1") && !stop_cmd("listen1"));
+    receive_pcm(0,true); complete(play());
+    assert(!strcmp(field("name"),"say.done") && !link_audio_busy());
+    /* malformed */
+    cJSON *bad=cJSON_Parse("{\"job\":7}"),*res=NULL;
+    assert(link_audio_listen_stop(bad,&res)==ESP_ERR_INVALID_ARG && !res); cJSON_Delete(bad);
+}
 int main(void) {
     assert(link_audio_init()==ESP_OK && link_pair_init()==ESP_OK);
-    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel();
+    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop();
     cJSON_Delete(sdk_sent); free(s_jobs); free(s_done); free(s_ring);
-    puts("LINK AUDIO/PAIR PASS: paced PCM, final playback drain, errors, cmd-time text/mood, explicit moods outlive jobs, pairing reasons, board caps, listening ring (+ ring_color), ask cancellation");
+    puts("LINK AUDIO/PAIR PASS: paced PCM, final playback drain, errors, cmd-time text/mood, explicit moods outlive jobs, pairing reasons, board caps, listening ring (+ ring_color), ask cancellation, listen_stop (turn_end)");
 }
