@@ -45,3 +45,35 @@ export async function handleReleases(request: Request, source: ReleaseSource, op
   // A fresh answer may sit in caches for a while; a degraded one should not.
   return json(body, 200, lookup.state === "fresh" ? "public, max-age=300" : "public, max-age=30");
 }
+
+/** The edge cache in front of the lookup (the Workers Cache API's shape). */
+export interface ReleasesEdgeCache {
+  match(key: Request): Promise<Response | undefined>;
+  put(key: Request, res: Response): Promise<void>;
+}
+
+/**
+ * The public endpoint as the host serves it: GET answers from the edge cache
+ * (keyed on the normalized URL) when it can; every request that reaches the
+ * release lookup (GET on a cache miss, HEAD always) passes the rate limit first.
+ */
+export async function servePublicRelease(
+  request: Request,
+  source: ReleaseSource,
+  host: { limit?: () => Promise<boolean>; cache?: ReleasesEdgeCache; waitUntil?: (p: Promise<unknown>) => void } = {},
+): Promise<Response> {
+  const opts: ReleasesOptions = { limit: host.limit };
+  if (request.method !== "GET" || !host.cache) return handleReleases(request, source, opts);
+  const url = new URL(request.url);
+  const board = url.searchParams.get("board");
+  const key = new Request(`${url.origin}${RELEASES_PATH}${board === null ? "" : `?board=${encodeURIComponent(board)}`}`);
+  const hit = await host.cache.match(key);
+  if (hit) return hit;
+  const res = await handleReleases(request, source, opts);
+  if (res.status === 200) {
+    const put = host.cache.put(key, res.clone());
+    if (host.waitUntil) host.waitUntil(put);
+    else await put;
+  }
+  return res;
+}

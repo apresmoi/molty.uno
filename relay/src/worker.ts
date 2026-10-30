@@ -8,7 +8,7 @@ import { handleMcp } from "./surfaces/mcp.js";
 import { handleRest } from "./surfaces/rest.js";
 import { SKILL_PATHS, handleSkill } from "./surfaces/skill.js";
 import { WAITLIST_PATH, handleWaitlist } from "./surfaces/waitlist.js";
-import { RELEASES_PATH, handleReleases } from "./surfaces/releases.js";
+import { RELEASES_PATH, servePublicRelease } from "./surfaces/releases.js";
 import { releaseSource } from "./releases-host.js";
 import { D1WaitlistStore, turnstileCheck } from "./waitlist-host.js";
 
@@ -88,22 +88,15 @@ export default {
 } satisfies ExportedHandler<WorkerEnv>;
 
 /**
- * Public latest-release info, edge-cached per board (Cache API, keyed on the
- * normalized URL) in front of the singleton's own hourly cache, and optionally
- * rate-limited per client IP (RELEASES_RATE binding, wrangler.jsonc).
+ * Public latest-release info, edge-cached per board (Cache API) in front of the
+ * singleton's own hourly cache, and optionally rate-limited per client IP
+ * (RELEASES_RATE binding, wrangler.jsonc) on every method that reaches the lookup.
  */
-async function publicRelease(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
-  if (request.method !== "GET") return handleReleases(request, releaseSource(env.DEVICE as unknown as DurableObjectNamespace));
-  const url = new URL(request.url);
-  const board = url.searchParams.get("board");
-  const key = new Request(`${url.origin}${RELEASES_PATH}${board === null ? "" : `?board=${encodeURIComponent(board)}`}`);
-  const cache = (caches as unknown as { default: Cache }).default;
-  const hit = await cache.match(key);
-  if (hit) return hit;
+function publicRelease(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
   const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
-  const res = await handleReleases(request, releaseSource(env.DEVICE as unknown as DurableObjectNamespace), {
+  return servePublicRelease(request, releaseSource(env.DEVICE as unknown as DurableObjectNamespace), {
     limit: env.RELEASES_RATE ? async () => (await env.RELEASES_RATE!.limit({ key: ip })).success : undefined,
+    cache: (caches as unknown as { default: Cache }).default,
+    waitUntil: (p) => ctx.waitUntil(p),
   });
-  if (res.status === 200) ctx.waitUntil(cache.put(key, res.clone()));
-  return res;
 }
