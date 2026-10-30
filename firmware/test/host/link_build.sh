@@ -54,7 +54,7 @@ for test in identity audio_pair client cmd ask; do
   if [ "$test" = audio_pair ]; then extra+=("$AUDIO/vad.c" "$AUDIO/chirp.c"); fi
   if [ "$test" = ask ]; then extra+=("$HERE/../../main/fluid/fluid_ask.c" "$HERE/../../main/sense/gesture.c"); fi
   cc -std=c11 -Wall -Wextra -Werror -O2 ${LINK_TEST_CFLAGS:-} \
-    -I"$OUT/stubs" -I"$OUT" -I"$HERE" -I"$LINK" -I"$AUDIO" -I"$HERE/../../main/fluid" -I"$HERE/../../main/sense" -I"$HERE/../../main/update" -I"$IDF_JSON" \
+    -I"$OUT/stubs" -I"$OUT" -I"$HERE" -I"$LINK" -I"$AUDIO" -I"$HERE/../../main/fluid" -I"$HERE/../../main/sense" -I"$HERE/../../main/update" -I"$HERE/../../main/diag" -I"$IDF_JSON" \
     "$HERE/link_${test}_test.c" "$HERE/link_sdk_stub.c" \
     "$LINK/link_protocol.c" ${extra[@]+"${extra[@]}"} "$OUT/cJSON.o" -lm -o "$OUT/link_${test}_test"
   "$OUT/link_${test}_test"

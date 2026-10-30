@@ -46,6 +46,45 @@ const voiceRelay = {
   },
 };
 
+// The relay's owner activity API (GET|POST /v1/devices/<id>/activity, X-Molty-Link-Code), faked here:
+// two agents, a done talk (timings + device lines), a failed talk (voice_box_offline), a disconnect, a pairing.
+const JA = 'molty-k7m2w9c4ya.j_Qm9vZ2llV29vZ2ll', JB = 'molty-k7m2w9c4ya.j_R3Jva2JvdEZhaWxz';
+const T0 = Date.parse('2026-10-30T19:00:00Z');
+const activityRelay = {
+  calls: [],
+  transcripts: true,
+  entries: [
+    { id: 'a1', ts: T0, kind: 'pair', ev: 'approved', agent: 'Claude' },
+    { id: 'a2', ts: T0 + 60000, kind: 'call', job: JA, agent: 'Claude', op: 'talk', ok: true, ms: 4210, args: { say: 'Want some tea?', listen: true } },
+    { id: 'a3', ts: T0 + 60120, kind: 'device_log', job: JA, data: { text: 'EVT audio.say start ms=1400 int_free=61234', level: 'EVT', boot: 74, seq: 801 } },
+    { id: 'a4', ts: T0 + 62900, kind: 'device_log', job: JA, data: { text: 'W (62900) audio: mic gain clipped twice', level: 'W', boot: 74, seq: 805 } },
+    { id: 'a5', ts: T0 + 64200, kind: 'job', job: JA, agent: 'Claude', op: 'talk', ok: true, ms: 4200,
+      data: { status: 'done', reason: 'turn_end', said: 'Want some tea?', heard: 'yes please, green tea',
+        voice: { tts: 'box', stt: 'box' }, timings: { queue: 3, say: { tts_first_byte: 240, first_audio: 260, play: 1500, voice: 'box' }, listen: { cmd: 40, record: 2100, stt: 310, voice: 'box' }, total: 4200 } } },
+    { id: 'a6', ts: T0 + 120000, kind: 'device', ev: 'disconnect', data: { code: 1006 } },
+    { id: 'a7', ts: T0 + 125000, kind: 'device', ev: 'connect', data: { fw: '0.4.0', rssi: -61 } },
+    { id: 'a8', ts: T0 + 180000, kind: 'pair', ev: 'approved', agent: 'Grokbot' },
+    { id: 'a9', ts: T0 + 240000, kind: 'call', job: JB, agent: 'Grokbot', op: 'talk', ok: false, error: 'voice_box_offline', ms: 18, args: { say: 'Hello there', listen: true } },
+    { id: 'a10', ts: T0 + 240010, kind: 'job', job: JB, agent: 'Grokbot', op: 'talk', ok: false, error: 'voice_box_offline', ms: 12, data: { status: 'failed', error: 'voice_box_offline' } },
+    { id: 'a11', ts: T0 + 240015, kind: 'device_log', job: JB, data: { text: 'E (240015) agent_link: say refused: no stream', level: 'E', boot: 74, seq: 990 } },
+  ],
+  async route(r) {
+    const req = r.request();
+    if (req.method() === 'OPTIONS') return r.fulfill({ status: 204, headers: VOICE_CORS });
+    const code = req.headers()['x-molty-link-code'];
+    const u = new URL(req.url());
+    this.calls.push({ method: req.method(), code, since: u.searchParams.get('since'), body: req.postData() });
+    if (code !== 'K7QX2MPA') return r.fulfill({ status: 401, headers: VOICE_CORS, contentType: 'application/json', body: '{"ok":false,"error":"unauthorized"}' });
+    if (req.method() === 'POST') this.transcripts = JSON.parse(req.postData() || '{}').transcripts !== false;
+    const since = u.searchParams.get('since');
+    const after = since && req.method() === 'GET' ? Number(since.slice(1)) : 0;
+    const entries = this.entries.filter((e) => Number(e.id.slice(1)) > after);
+    const next = `a${this.entries.length}`;
+    return r.fulfill({ status: 200, headers: VOICE_CORS, contentType: 'application/json',
+      body: JSON.stringify({ ok: true, result: { entries: req.method() === 'POST' ? [] : entries, next, more: false, transcripts: this.transcripts, limits: { max_age_h: 24, max_entries: 3000 } } }) });
+  },
+};
+
 const browser = await chromium.launch();
 async function newPage(tag, { offline = false, viewport = PHONE } = {}) {
   const ctx = await browser.newContext({ viewport, deviceScaleFactor: 2 });
@@ -54,6 +93,7 @@ async function newPage(tag, { offline = false, viewport = PHONE } = {}) {
   // The status page asks the device's relay for the latest release: answer from the mock.
   await ctx.route('**/v1/releases/latest*', async (r) => r.fulfill({ response: await ctx.request.get(`${MOCK}/__mock/release?${new URL(r.request().url()).searchParams}`), headers: { 'access-control-allow-origin': '*' } }));
   await ctx.route('**/v1/devices/*/voice', (r) => voiceRelay.route(r));
+  await ctx.route('**/v1/devices/*/activity*', (r) => activityRelay.route(r));
   const page = await ctx.newPage();
   page.on('console', (m) => {
     if (m.type() !== 'error' && m.type() !== 'warning') return;
@@ -248,6 +288,44 @@ const canvasStats = (page) => page.evaluate(() => {
   await vc.getByRole('button', { name: 'Sure? Unpair' }).click();
   await vc.locator('p', { hasText: 'no voice box paired' }).waitFor();
   ok(voiceRelay.calls.some((c) => c.method === 'DELETE'), 'settings voice: unpair');
+
+  // Activity: the relay's merged timeline, grouped by turn, through the link code from GET /api/link
+  await page.goto(`${MOCK}/#/activity`);
+  const turns = page.locator('.act-turn');
+  await turns.first().waitFor({ timeout: 5000 });
+  ok(activityRelay.calls.every((c) => c.code === 'K7QX2MPA'), 'activity: relay calls carry the current link code');
+  ok(await turns.count() === 2, 'activity: two turns (one per job)');
+  ok(await page.locator('.act-item', { hasText: 'molty disconnected ⠂ close 1006' }).count() === 1, 'activity: device disconnect with its close code');
+  // the agent's name is the row's own column, the line says what happened (not the name twice)
+  const pairRow = page.locator('.act-item', { hasText: 'Grokbot' }).filter({ hasText: 'paired' });
+  ok(await pairRow.count() === 1 && !(await pairRow.innerText()).includes('Grokbot Grokbot'), 'activity: pairing shown');
+  ok((await turns.first().locator('summary').innerText()).includes('Grokbot'), 'activity: newest turn first');
+  const done = turns.filter({ hasText: 'Claude' });
+  await done.locator('summary').click();
+  ok(await done.getByLabel('stage timings').getByText('say · tts_first_byte').isVisible(), 'activity: expanded turn shows stage timings');
+  ok(await done.getByText('speaks with voice box ⠂ listens with voice box').isVisible(), 'activity: voice provider');
+  ok(await done.getByText('“yes please, green tea”').isVisible(), 'activity: heard text');
+  ok(await done.getByLabel('device log').getByText('mic gain clipped twice').isVisible(), 'activity: the turn’s device line');
+  ok(await done.locator('.act-line.warn').count() === 1, 'activity: W device line highlighted');
+  await wait(3500);   // one live poll (since=next) must keep the expanded turn open
+  ok(activityRelay.calls.some((c) => c.method === 'GET' && c.since === 'a11'), 'activity: live poll asks since the last id');
+  ok(await done.getAttribute('open') !== null, 'activity: an expanded turn survives the live poll');
+  await shot(page, '11c-activity');
+  await page.getByRole('button', { name: 'errors only' }).click();
+  await page.locator('.act-turn', { hasText: 'Claude' }).waitFor({ state: 'detached' });
+  ok(await page.locator('.act-turn').count() === 1 && (await page.locator('.act-turn').innerText()).includes('voice_box_offline'), 'activity: errors only → just the failed turn');
+  ok(await page.locator('.act-item').count() === 0, 'activity: errors only hides the ok events');
+  await page.getByRole('button', { name: 'errors only' }).click();
+  await page.getByLabel('agent', { exact: true }).selectOption('Grokbot');
+  ok(await page.locator('.act-turn').count() === 1 && await page.locator('.act-item', { hasText: 'Claude' }).count() === 0, 'activity: agent filter');
+  await page.getByLabel('agent', { exact: true }).selectOption('');
+  const tr = page.getByRole('group', { name: 'log transcripts' });
+  ok(await tr.getByRole('button', { name: 'on' }).getAttribute('aria-pressed') === 'true', 'activity: transcripts on by default');
+  await tr.getByRole('button', { name: 'off' }).click();
+  await tr.locator('button[aria-pressed="true"]', { hasText: 'off' }).waitFor();
+  ok(activityRelay.calls.some((c) => c.method === 'POST' && JSON.parse(c.body).transcripts === false), 'activity: transcripts off sent to the relay');
+  ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'activity: no horizontal scroll at 390px');
+  await shot(page, '11d-activity-errors');
 
   await page.goto(`${MOCK}/#/molty`);
   await page.locator('.creature img').first().waitFor();

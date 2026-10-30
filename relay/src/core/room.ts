@@ -54,6 +54,7 @@ import {
   type VoiceMode,
   type VoiceOwnerRequest,
   type WebhookRequest,
+  type ActivityOwnerRequest,
 } from "./api.js";
 import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
 import { ACK_CAP, ACK_MODES, type AskArgs, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk } from "./commands.js";
@@ -100,6 +101,7 @@ import {
   signatureHeader,
 } from "./webhook.js";
 import type { SttStream, VoiceProvider } from "../voice/types.js";
+import { ACTIVITY_LIMITS, ACTIVITY_PREFIX, ActivityLog, type Who, jobDraft, parseActivityQuery } from "./activity.js";
 import { BOX_OFFLINE, RemoteVoiceProvider } from "../voice/remote.js";
 
 export interface SocketMeta {
@@ -288,6 +290,8 @@ interface PairRecord {
 interface JobRecord extends JobView {
   created: number;
   updated: number;
+  /** The agent that started it (activity log attribution; never in a JobView). */
+  by?: Who;
 }
 
 interface PendingCmd {
@@ -430,6 +434,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private readonly releases: ReleaseSource;
   /** The voice box, spoken to over whichever voice socket is live (in-flight requests only). */
   private readonly box: RemoteVoiceProvider;
+  /** The activity log (core/activity.ts): every hook below is one `this.activity.*` call. */
+  readonly activity: ActivityLog;
 
   // ---- in-flight work only (see header comment) ----
   private readonly pendingCmds = new Map<string, PendingCmd>();
@@ -473,6 +479,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     this.resolveHost = deps.resolveHost;
     this.releases = deps.releases ?? NO_RELEASES;
     this.box = new RemoteVoiceProvider(() => this.boxSocket(), this.clock);
+    this.activity = new ActivityLog({ deviceId: this.deviceId, kv: this.kv, clock: this.clock, log: this.log });
   }
 
   // =====================================================================
@@ -522,12 +529,19 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         return this.onLinkCode(frame.link_code);
       case "forget":
         return this.onForget(sock);
+      case "log":
+        return this.activity.deviceLog(frame);
       default:
         return;
     }
   }
 
-  socketClose(sock: DeviceSocket): void {
+  /** `code`: the WebSocket close code, when the host knows it. */
+  socketClose(sock: DeviceSocket, code?: number): void {
+    const stage = sock.getMeta()?.stage;
+    const closed: JsonObject = code === undefined ? {} : { code };
+    if (stage === "live") void this.activity.device("disconnect", closed);
+    else if (stage === "voice" && sock.getMeta()?.box) void this.activity.record({ ts: this.clock.now(), kind: "voice_box", ev: "disconnect", data: closed });
     // A voice box that goes away fails its own requests at once (auto mode falls back, box mode fails).
     if (sock.getMeta()?.stage === "voice") return this.box.drop(sock);
     if (sock.getMeta()?.stage !== "live") return;
@@ -570,6 +584,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       await this.kv.put<DeviceRecord>(K.device, { key_hash: hash, claimed_at: this.clock.now() });
       this.log("device claimed (tofu)", { device: this.deviceId });
     } else if (!safeEqual(record.key_hash, hash)) {
+      void this.activity.device("refused", { code: CLOSE_UNAUTHORIZED, reason: "device key mismatch" });
       return sock.close(CLOSE_UNAUTHORIZED, "device key mismatch");
     }
     const previous = this.liveSocket(sock);
@@ -580,8 +595,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     }
     if (hello.link_code) await this.kv.put(K.link, { code: hello.link_code, at: this.clock.now() });
     await this.kv.put<DevInfo>(K.devinfo, { fw: hello.fw ?? null, board: hello.board ?? null, caps: hello.caps ?? null, at: this.clock.now() });
-    // features: what this relay does for the device (listen_adopt: shake to talk, core/turns.ts)
-    sock.sendText(JSON.stringify({ t: "welcome", features: [LISTEN_ADOPT_FEATURE] }));
+    // features: what this relay does for the device (listen_adopt: shake to talk, core/turns.ts);
+    // now: the relay's clock (the device's time sync for log uploads); log: uploads welcome (core/activity.ts)
+    sock.sendText(JSON.stringify({ t: "welcome", features: [LISTEN_ADOPT_FEATURE], now: this.clock.now(), log: { max_lines: ACTIVITY_LIMITS.deviceLinesAdvertised } }));
+    await this.activity.device("connect", { fw: hello.fw ?? null, board: hello.board ?? null, ...(typeof frame.rssi === "number" ? { rssi: frame.rssi } : {}) });
     // Back from an update's reboot (or a reconnect during one): settle it by the version it runs.
     await this.settleUpdate(hello.fw ?? null);
     // After a deploy the device reconnects: tell push-mode agents the skill changed.
@@ -619,6 +636,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (frame.name === "shake") return this.onShake(data); // may start the shake's listen job
     const clean = agentEventData(frame.name, data);
     if (clean) await this.appendEvent(frame.name, clean);
+    if (clean) await this.activity.device(frame.name, clean);
   }
 
   /**
@@ -650,7 +668,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   }
 
   private async onForget(sock: DeviceSocket) {
-    for (const prefix of ["tok:", "pair:", "job:", "ev:", "cur:", "whq:"]) {
+    for (const prefix of ["tok:", "pair:", "job:", "ev:", "cur:", "whq:", ACTIVITY_PREFIX]) {
       for (const key of (await this.kv.list(prefix)).keys()) await this.kv.delete(key);
     }
     for (const key of [K.device, K.link, K.pairCurrent, K.evSeq, K.evRate, K.skillEv, K.origin, K.devinfo, K.upd, K.voiceCfg, K.vbox, K.vstat, K.turn]) await this.kv.delete(key);
@@ -705,10 +723,24 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     return a;
   }
 
+  /** Activity attribution of an authenticated token. */
+  private who(a: { rec: TokenRecord; hash: string }): Who {
+    return { who: a.hash.slice(0, 16), agent: a.rec.agent_name };
+  }
+
+  /** Runs one agent call and records it in the activity log (agent tokens only; resolved first: a call may revoke it). */
+  private async logged<T extends Outcome<any>>(token: string, op: string, args: unknown, run: () => Promise<T>): Promise<T> {
+    const t0 = this.clock.now();
+    const a = await this.auth(token);
+    const out = await run();
+    return a && a.rec.role !== "voice" ? this.activity.call(this.who(a), op, args, t0, out) : out;
+  }
+
   /** Revokes the calling token, agent or voice box (a box's socket closes with it). */
   async revoke(token: string): Promise<Outcome> {
     const a = await this.auth(token);
     if (!a) return fail("unauthorized");
+    await this.activity.record({ ts: this.clock.now(), kind: "pair", ev: "revoked", ...this.who(a), ...(a.rec.role === "voice" ? { data: { role: "voice" } } : {}) });
     await this.kv.delete(K.token(a.hash));
     await this.kv.delete(K.cur(a.hash));
     await this.dropDeliveries(a.hash);
@@ -717,12 +749,16 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   }
 
   async command(token: string, name: string, args: unknown): Promise<Outcome> {
-    const a = await this.agentAuth(token);
-    if ("ok" in a) return a;
-    return this.ride(a, await this.runCommand(a.rec, name, args, a.hash));
+    return this.logged(token, typeof name === "string" ? name.slice(0, 32) : "?", args, () => this.commandNow(token, name, args));
   }
 
-  private async runCommand(agent: TokenRecord, name: string, args: unknown, hash = ""): Promise<Outcome> {
+  private async commandNow(token: string, name: string, args: unknown): Promise<Outcome> {
+    const a = await this.agentAuth(token);
+    if ("ok" in a) return a;
+    return this.ride(a, await this.runCommand(a.rec, name, args, a.hash, this.who(a)));
+  }
+
+  private async runCommand(agent: TokenRecord, name: string, args: unknown, hash = "", by?: Who): Promise<Outcome> {
     let cmd;
     try {
       cmd = validateCommand(name, args);
@@ -747,9 +783,9 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         // a human turn is open: the first answer claims it, other agents get turn_claimed (not audio_busy)
         const c = await this.claim(hash, cmd.in_reply_to);
         if (!c.ok) return c;
-        if (c.result.turn) return this.startJob("say", { ...cmd.args, turn: c.result.turn as JsonObject, called: this.clock.now() });
+        if (c.result.turn) return this.startJob("say", { ...cmd.args, turn: c.result.turn as JsonObject, called: this.clock.now() }, true, by);
       }
-      return this.startJob(cmd.name as "say" | "listen", cmd.args);
+      return this.startJob(cmd.name as "say" | "listen", cmd.args, true, by);
     }
     let res: Outcome<JsonObject>;
     if (cmd.name === "mood") {
@@ -888,6 +924,14 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     }
     await this.kv.put(K.pair(id), rec);
     await this.kv.delete(K.pairCurrent);
+    await this.activity.record({
+      ts: this.clock.now(),
+      kind: "pair",
+      ev: rec.status,
+      agent: rec.agent_name,
+      ...(rec.token ? { who: (await sha256Hex(rec.token)).slice(0, 16) } : {}),
+      ...(rec.role === "voice" ? { data: { role: "voice" } } : {}),
+    });
     // The device rotates its link code after a pairing; the old one is dead
     // until the device reports the new one (here, in hello, or link_code).
     if (rec.status === "approved") await this.kv.delete(K.link);
@@ -898,6 +942,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   // ---------------- jobs ----------------
 
   async job(token: string, jobId: string, waitMs: number): Promise<Outcome<JobView>> {
+    return this.logged(token, "wait", { job: jobId, wait_ms: waitMs }, () => this.jobNow(token, jobId, waitMs));
+  }
+
+  private async jobNow(token: string, jobId: string, waitMs: number): Promise<Outcome<JobView>> {
     const a = await this.agentAuth(token);
     if ("ok" in a) return a;
     const out = await this.runJob(jobId, waitMs);
@@ -907,6 +955,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   }
 
   async talk(token: string, req: unknown): Promise<Outcome> {
+    return this.logged(token, "talk", req, () => this.talkNow(token, req));
+  }
+
+  private async talkNow(token: string, req: unknown): Promise<Outcome> {
     const t0 = this.clock.now();
     const a = await this.agentAuth(token);
     if ("ok" in a) return a;
@@ -930,13 +982,13 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const c = await this.claim(a.hash, args.in_reply_to);
     if (!c.ok) return c;
     const turn: JsonObject = c.result.turn ? { turn: c.result.turn, called: t0 } : {};
-    const started = await this.startJob("talk", { ...(args as unknown as JsonObject), ...turn });
+    const started = await this.startJob("talk", { ...(args as unknown as JsonObject), ...turn }, true, this.who(a));
     if (!started.ok) return started;
     const job = started.result.job as string;
     const out = await this.runJob(job, Math.max(0, this.t.talkBudgetMs - (this.clock.now() - t0)));
     if (!out.ok) return out;
     const v = out.result;
-    if (v.status === "failed") return fail(v.error ?? "failed", `talk job ${job} failed`);
+    if (v.status === "failed") return fail(v.error ?? "failed", `talk job ${job} failed`, { job });
     if (v.status === "done") return this.ride(a, { ok: true, result: { ...(v.result ?? {}), job, status: "done" } });
     return this.ride(a, {
       ok: true,
@@ -945,6 +997,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   }
 
   async ask(token: string, req: unknown): Promise<Outcome> {
+    return this.logged(token, "ask", req, () => this.askNow(token, req));
+  }
+
+  private async askNow(token: string, req: unknown): Promise<Outcome> {
     const t0 = this.clock.now();
     const a = await this.agentAuth(token);
     if ("ok" in a) return a;
@@ -968,13 +1024,13 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     }
     if (caps && args.say !== undefined && !caps.includes("say")) return fail("unsupported", "this device has no speaker: ask without say, or show the question first");
     // Only the spoken part needs the speaker; waiting for the tap holds no audio lock.
-    const started = await this.startJob("ask", args as unknown as JsonObject, args.say !== undefined);
+    const started = await this.startJob("ask", args as unknown as JsonObject, args.say !== undefined, this.who(a));
     if (!started.ok) return started;
     const job = started.result.job as string;
     const out = await this.runJob(job, Math.max(0, this.t.talkBudgetMs - (this.clock.now() - t0)));
     if (!out.ok) return out;
     const v = out.result;
-    if (v.status === "failed") return fail(v.error ?? "failed", `ask job ${job} failed`);
+    if (v.status === "failed") return fail(v.error ?? "failed", `ask job ${job} failed`, { job });
     if (v.status === "done") return this.ride(a, { ok: true, result: { ...(v.result ?? {}), job, status: "done" } });
     return this.ride(a, {
       ok: true,
@@ -985,6 +1041,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   // ---------------- updates ----------------
 
   async updates(token: string): Promise<Outcome> {
+    return this.logged(token, "updates", undefined, () => this.updatesNow(token));
+  }
+
+  private async updatesNow(token: string): Promise<Outcome> {
     const a = await this.agentAuth(token);
     if ("ok" in a) return a;
     // Reporting the skill counts as telling it: mark it seen (atomically, never resurrecting a revoked token).
@@ -1014,6 +1074,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   }
 
   async update(token: string, req: unknown): Promise<Outcome> {
+    return this.logged(token, "update", req, () => this.updateNow(token, req));
+  }
+
+  private async updateNow(token: string, req: unknown): Promise<Outcome> {
     const t0 = this.clock.now();
     const a = await this.agentAuth(token);
     if ("ok" in a) return a;
@@ -1047,13 +1111,13 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const asset = installable(lookup.release, d.board);
     if (!asset) return fail("no_checksum", `release ${fw.latest} publishes no sha256 for this board's image, so Molty can't verify it: update by hand (${CONSOLE_HINT})`);
     const args: JsonObject = { version: fw.latest!, url: asset.url, sha256: asset.sha256!, size: asset.size, from: d.fw! };
-    const started = await this.startJob("update", args, false);
+    const started = await this.startJob("update", args, false, this.who(a));
     if (!started.ok) return started;
     const job = started.result.job as string;
     const out = await this.runJob(job, Math.max(0, this.t.talkBudgetMs - (this.clock.now() - t0)));
     if (!out.ok) return out;
     const v = out.result;
-    if (v.status === "failed") return fail(v.error ?? "failed", typeof v.detail === "string" ? v.detail : `update job ${job} failed`);
+    if (v.status === "failed") return fail(v.error ?? "failed", typeof v.detail === "string" ? v.detail : `update job ${job} failed`, { job });
     if (v.status === "done") return this.ride(a, { ok: true, result: { ...(v.result ?? {}), job, status: "done" } });
     return this.ride(a, { ok: true, result: this.pendingUpdate(v) });
   }
@@ -1201,13 +1265,13 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   }
 
   /** `audio`: the job takes the one-at-a-time audio lock (an ask only while it speaks). */
-  private async startJob(kind: JobKind, args: JsonObject, audio = true): Promise<Outcome> {
+  private async startJob(kind: JobKind, args: JsonObject, audio = true, by?: Who): Promise<Outcome> {
     if (audio && this.audioJob) return fail("audio_busy", `job ${this.audioJob} is still running`);
     const id = `${this.deviceId}.j_${b64urlEncode(randomBytes(12))}`;
     const now = this.clock.now();
     if (audio) this.audioJob = id;
     this.tasks.add(id);
-    await this.kv.put<JobRecord>(K.job(id), { job: id, kind, status: "queued", created: now, updated: now });
+    await this.kv.put<JobRecord>(K.job(id), { job: id, kind, status: "queued", created: now, updated: now, ...(by ? { by } : {}) });
     void this.purgeJobs(now);
     const run =
       kind === "say"
@@ -1228,14 +1292,18 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     return { ok: true, result: { job: id } };
   }
 
-  private async setJob(id: string, patch: Partial<JobRecord>) {
+  /** The record as written, or undefined when there was none to change (missing or already ended). */
+  private async setJob(id: string, patch: Partial<JobRecord>): Promise<JobRecord | undefined> {
     const rec = await this.kv.get<JobRecord>(K.job(id));
-    if (!rec || TERMINAL.includes(rec.status)) return;
-    await this.kv.put(K.job(id), { ...rec, ...patch, updated: this.clock.now() });
+    if (!rec || TERMINAL.includes(rec.status)) return undefined;
+    const next = { ...rec, ...patch, updated: this.clock.now() };
+    await this.kv.put(K.job(id), next);
+    return next;
   }
 
   private async finishJob(id: string, patch: Partial<JobRecord> & { status: "done" | "failed" }) {
-    await this.setJob(id, patch);
+    const ended = await this.setJob(id, patch);
+    if (ended) await this.activity.record(jobDraft(ended, ended.by));
     this.tasks.delete(id);
     if (this.audioJob === id) this.audioJob = undefined;
     this.notify(this.jobWaiters, id);
@@ -1840,6 +1908,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       if (job) Object.assign(clean, { listening: true, turn_id: job });
     }
     await this.appendEvent("shake", clean);
+    await this.activity.device("shake", clean);
   }
 
   /** The shake's listen as a relay listen job (`cmd listen {adopt}`), or declined. Returns the job id. */
@@ -1877,6 +1946,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     });
     // agent-facing, one per turn: not subject to the device event rate cap
     await this.appendEvent(UTTERANCE_EVENT, data, true);
+    await this.activity.record({ ts: this.clock.now(), kind: "device", ev: "utterance", job: id, data: { text: text.slice(0, 500), reason: r.reason, trigger: "shake" } });
   }
 
   /** A say / talk against the latest turn (claimTurn), the claim written atomically. */
@@ -1956,6 +2026,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const cfg = await this.voiceCfg();
     sock.sendText(JSON.stringify({ t: "voice.welcome", device_id: this.deviceId, mode: cfg.mode, voice: cfg.voice ?? null }));
     this.log("voice box connected", { device: this.deviceId, stt: f.stt, tts: f.tts });
+    await this.activity.record({ ts: now, kind: "voice_box", ev: "connect", data: { name: f.name as string, stt: f.stt, tts: f.tts } });
   }
 
   /** The greeted voice box socket, if any. */
@@ -2027,14 +2098,22 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     await this.kv.update<BoxStats, void>(K.vstat, (cur) => ({ next: { ...cur, ...patch }, result: undefined }));
   }
 
-  /** Owner (console) voice settings, authenticated by the device's current link code. */
-  async voiceSettings(linkCode: string, req: VoiceOwnerRequest): Promise<Outcome> {
+  /** Owner calls: the device's CURRENT link code (the console reads it from Molty over the LAN). */
+  private async ownerAuth(linkCode: string): Promise<Outcome | undefined> {
     const link = await this.kv.get<{ code: string }>(K.link);
     if (typeof linkCode !== "string" || !LINK_CODE_RE.test(linkCode) || !link || !safeEqual(link.code, linkCode)) {
       return fail("unauthorized", "wrong or expired link code (it rotates every 15 min: read it from Molty's console)");
     }
+    return undefined;
+  }
+
+  /** Owner (console) voice settings, authenticated by the device's current link code. */
+  async voiceSettings(linkCode: string, req: VoiceOwnerRequest): Promise<Outcome> {
+    const denied = await this.ownerAuth(linkCode);
+    if (denied) return denied;
     if (req.action === "unpair") {
       const n = await this.unpairBoxes("voice box unpaired by the owner");
+      if (n) await this.activity.record({ ts: this.clock.now(), kind: "voice_box", ev: "unpaired", data: { by: "owner" } });
       return { ok: true, result: { unpaired: n, ...(await this.voiceView()) } };
     }
     if (req.action === "set") {
@@ -2050,8 +2129,41 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         } else cfg.voice = req.voice;
       }
       await this.kv.put<VoiceCfg>(K.voiceCfg, cfg);
+      await this.activity.record({ ts: this.clock.now(), kind: "settings", ev: "voice", data: { mode: cfg.mode, voice: cfg.voice ?? null } });
     }
     return { ok: true, result: await this.voiceView() };
+  }
+
+  // ---------------- activity log (core/activity.ts) ----------------
+
+  /** Owner: the whole merged timeline, or set "log transcripts" (link-code auth, like voiceSettings). */
+  async ownerActivity(linkCode: string, req: ActivityOwnerRequest): Promise<Outcome> {
+    const denied = await this.ownerAuth(linkCode);
+    if (denied) return denied;
+    if (req.action === "set") {
+      if (typeof req.transcripts !== "boolean") return fail("invalid_args", "transcripts must be true or false");
+      const before = await this.activity.settings();
+      await this.activity.setTranscripts(req.transcripts);
+      if (before.transcripts !== req.transcripts) await this.activity.record({ ts: this.clock.now(), kind: "settings", ev: "activity", data: { transcripts: req.transcripts } });
+    }
+    const q = parseActivityQuery(req.action === "get" ? req.query : {});
+    if (typeof q === "string") return fail("invalid_args", q);
+    const page = await this.activity.query(q, { owner: true });
+    const cfg = await this.activity.settings();
+    return {
+      ok: true,
+      result: { ...page, transcripts: cfg.transcripts, limits: { max_age_h: ACTIVITY_LIMITS.maxAgeMs / 3600000, max_entries: ACTIVITY_LIMITS.chunkEntries * ACTIVITY_LIMITS.maxChunks } } as unknown as JsonObject,
+    };
+  }
+
+  /** Agent: its own entries only (+ its jobs' device lines and the device's connects around them). */
+  async activityLog(token: string, req: unknown): Promise<Outcome> {
+    const a = await this.agentAuth(token);
+    if ("ok" in a) return a;
+    const { agent: _agent, ...params } = isRecord(req) ? req : {};
+    const q = parseActivityQuery(params);
+    if (typeof q === "string") return fail("invalid_args", q);
+    return { ok: true, result: (await this.activity.query(q, { who: this.who(a).who })) as unknown as JsonObject };
   }
 
   private async voiceView(): Promise<JsonObject> {
@@ -2236,6 +2348,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   }
 
   async events(token: string, req: EventsRequest): Promise<Outcome> {
+    return this.logged(token, "events", { since: req.since ?? null, wait_ms: req.wait_ms }, () => this.eventsNow(token, req));
+  }
+
+  private async eventsNow(token: string, req: EventsRequest): Promise<Outcome> {
     const a = await this.agentAuth(token);
     if ("ok" in a) return a;
     await this.announceSkill();
@@ -2277,6 +2393,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   // ---------------- agent events: webhooks ----------------
 
   async webhook(token: string, req: WebhookRequest): Promise<Outcome> {
+    return this.logged(token, "webhook", req, () => this.webhookNow(token, req));
+  }
+
+  private async webhookNow(token: string, req: WebhookRequest): Promise<Outcome> {
     const a = await this.agentAuth(token);
     if ("ok" in a) return a;
     const key = K.token(a.hash);

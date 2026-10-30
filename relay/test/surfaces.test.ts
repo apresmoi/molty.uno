@@ -44,7 +44,7 @@ describe("MCP surface", () => {
     expect((await rpc(backend, "initialize", { protocolVersion: "1999-01-01" })).result.protocolVersion).toBe("2025-11-25");
     const list = (await rpc(backend, "tools/list")).result.tools;
     expect(list.map((t: any) => t.name).sort()).toEqual(
-      ["molty_pair", "molty_status", "molty_mood", "molty_show", "molty_say", "molty_listen", "molty_wait", "molty_state", "molty_volume", "molty_imu", "molty_diag", "molty_log", "molty_events", "molty_webhook", "molty_talk", "molty_ask", "molty_updates", "molty_update"].sort(),
+      ["molty_pair", "molty_status", "molty_mood", "molty_show", "molty_say", "molty_listen", "molty_wait", "molty_state", "molty_volume", "molty_imu", "molty_diag", "molty_log", "molty_events", "molty_webhook", "molty_talk", "molty_ask", "molty_updates", "molty_update", "molty_activity"].sort(),
     );
     for (const t of list) expect(t.inputSchema).toMatchObject({ type: "object", additionalProperties: false });
   });

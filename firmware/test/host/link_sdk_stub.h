@@ -95,6 +95,19 @@ void heap_caps_free(void *);
 size_t heap_caps_get_free_size(int);
 #define MALLOC_CAP_INTERNAL 4
 void mole_diag_event(bool, const char *, ...);
+/* activity log (mole_diag.h): job tags counted; uploads served by sdk_log_frame (NULL: none) */
+void mole_diag_job_begin(const char *job);
+void mole_diag_job_end(const char *job);
+bool mole_diag_log_take_request(void);
+void mole_diag_link_sync(uint32_t up_ms, int64_t wall_ms);
+cJSON *mole_diag_log_frame(uint32_t *cursor, int max_lines, int backlog);
+cJSON *mole_diag_log_prev_frame(uint32_t *cursor, int max_lines, int backlog);
+extern unsigned sdk_job_begins, sdk_job_ends;
+extern char sdk_job_last_end[160];
+extern bool sdk_log_request;
+extern uint32_t sdk_sync_up;
+extern int64_t sdk_sync_wall;
+extern cJSON *(*sdk_log_frame)(bool prev, uint32_t *cursor, int max_lines, int backlog);
 typedef void *esp_event_base_t;
 typedef struct { int close_status_code, op_code, data_len, payload_len, payload_offset; char *data_ptr; bool fin; } esp_websocket_event_data_t;
 enum { WEBSOCKET_EVENT_DISCONNECTED, WEBSOCKET_EVENT_CLOSED, WEBSOCKET_EVENT_ERROR,

@@ -35,6 +35,8 @@ interface DeviceRpc {
   updates(id: string, token: string): ReturnType<AgentApi["updates"]>;
   update(id: string, token: string, req: unknown): ReturnType<AgentApi["update"]>;
   voiceSettings(id: string, linkCode: string, req: Parameters<OwnerApi["voiceSettings"]>[1]): ReturnType<OwnerApi["voiceSettings"]>;
+  ownerActivity(id: string, linkCode: string, req: Parameters<OwnerApi["ownerActivity"]>[1]): ReturnType<OwnerApi["ownerActivity"]>;
+  activityLog(id: string, token: string, req: unknown): ReturnType<AgentApi["activityLog"]>;
 }
 
 function backendFor(env: Env): RelayBackend {
@@ -55,6 +57,8 @@ function backendFor(env: Env): RelayBackend {
         updates: (token) => stub.updates(id, token),
         update: (token, req) => stub.update(id, token, req),
         voiceSettings: (linkCode, req) => stub.voiceSettings(id, linkCode, req),
+        ownerActivity: (linkCode, req) => stub.ownerActivity(id, linkCode, req),
+        activityLog: (token, req) => stub.activityLog(id, token, req),
       };
     },
   };

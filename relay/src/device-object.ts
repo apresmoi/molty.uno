@@ -3,7 +3,7 @@
 // storage, sockets and RPC. Hibernation rule: the authenticated-device flag
 // lives in each socket's serialized attachment (SocketMeta), never here.
 import { DurableObject } from "cloudflare:workers";
-import { type EventsRequest, type JobView, type Outcome, type PairRequest, type PairResult, type VoiceOwnerRequest, type WebhookRequest, bearer } from "./core/api.js";
+import { type ActivityOwnerRequest, type EventsRequest, type JobView, type Outcome, type PairRequest, type PairResult, type VoiceOwnerRequest, type WebhookRequest, bearer } from "./core/api.js";
 import { PING_TEXT, PONG_TEXT } from "./core/protocol.js";
 import { type DeviceSocket, DeviceRoom, type SocketMeta } from "./core/room.js";
 import { type KV, realClock } from "./core/store.js";
@@ -155,7 +155,7 @@ export class MoltyDevice extends DurableObject<Env> {
   }
 
   async webSocketClose(ws: WebSocket, code: number) {
-    this.roomFor(ws)?.socketClose(new WsSocket(ws));
+    this.roomFor(ws)?.socketClose(new WsSocket(ws), code);
     try {
       ws.close(code === 1005 || code === 1006 ? 1000 : code, "closing");
     } catch {
@@ -200,6 +200,12 @@ export class MoltyDevice extends DurableObject<Env> {
   }
   voiceSettings(deviceId: string, linkCode: string, req: VoiceOwnerRequest): Promise<Outcome> {
     return this.room(deviceId).voiceSettings(linkCode, req);
+  }
+  ownerActivity(deviceId: string, linkCode: string, req: ActivityOwnerRequest): Promise<Outcome> {
+    return this.room(deviceId).ownerActivity(linkCode, req);
+  }
+  activityLog(deviceId: string, token: string, req: unknown): Promise<Outcome> {
+    return this.room(deviceId).activityLog(token, req);
   }
 
   // ---- the `releases` singleton (never a device room) ----

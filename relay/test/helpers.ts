@@ -91,7 +91,7 @@ export function makeRoom(opts: { kv?: MemoryKV; host?: FakeHost; voice?: FakeVoi
     log: opts.log,
     releases: opts.releases,
   });
-  host.onClose = (s) => room.socketClose(s);
+  host.onClose = (s) => room.socketClose(s, s.closed?.code);
   return { room, kv, host, voice };
 }
 

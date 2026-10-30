@@ -306,7 +306,7 @@ describe("molty_update", () => {
     await w.dev.evt({ job, state: "accepted" });
     await w.dev.evt({ job: "molty-k7m2q9xa4c.j_someoneelse0", state: "failed", error: "x" }); // not this job: ignored
     await w.dev.evt({ job, state: "failed", error: "sha256 mismatch\u0000" });
-    expect(await p).toEqual({ ok: false, error: "update_failed", message: "Molty could not install 0.2.0: sha256 mismatch; it still runs 0.1.0" });
+    expect(await p).toEqual({ ok: false, error: "update_failed", message: "Molty could not install 0.2.0: sha256 mismatch; it still runs 0.1.0", details: { job } });
     const r = await setup({ caps: CAPS });
     r.dev.ctl.refuse = "update_busy";
     expect(await r.room.update(r.token, {})).toMatchObject({ ok: false, error: "update_busy" });
