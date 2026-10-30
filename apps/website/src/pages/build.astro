@@ -7,7 +7,7 @@ import { title, description } from "../features/build/content";
 import { COMMUNITY_BOARDS } from "../features/build/repoBoards";
 ---
 
-<ContentLayout title={title} description={description} path="/build/">
+<ContentLayout title={title} description={description} path="/build/" fluid>
   <BuildPage boards={COMMUNITY_BOARDS}>
     <FluidField slot="fluid" client:load />
     <WaitlistForm slot="waitlist" client:load source="build" returnPath="/build/" />

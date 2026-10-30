@@ -54,6 +54,14 @@
 :global(html[data-fluid="live"]) .word {
   color: transparent;
 }
+/* the intro's start state (Head sets it before the first paint, FluidField moves it on): a
+   heading the fluid is about to draw is not shown first, so it never shows and then vanishes.
+   No JS, an engine that cannot run, or reduced motion: the DOM text shows */
+@media (prefers-reduced-motion: no-preference) {
+  :global(html:is([data-fluid="pending"], [data-fluid="loading"])) .word {
+    color: transparent;
+  }
+}
 .word::selection {
   color: var(--m-ink);
 }
