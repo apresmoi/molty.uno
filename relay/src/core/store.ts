@@ -8,10 +8,13 @@ export interface KV {
   /** All entries whose key starts with `prefix`. */
   list<T>(prefix: string): Promise<Map<string, T>>;
   /**
-   * Atomic read-modify-write of one key: no other KV operation on this store
-   * may interleave between the read and the write. `fn` must be synchronous
-   * and pure. `next`: a value to store, `null` to delete, `undefined` to leave
-   * the key untouched. Resolves to `fn`'s `result`.
+   * Atomic read-modify-write of one key against other requests: no other
+   * request's KV operation may interleave between the read and the write.
+   * In the Durable Object that rests on its input gate, which does NOT order
+   * operations started in parallel within the same request, so never run two
+   * `update`s on one key concurrently from a single request. `fn` must be
+   * synchronous and pure. `next`: a value to store, `null` to delete,
+   * `undefined` to leave the key untouched. Resolves to `fn`'s `result`.
    */
   update<T, R>(key: string, fn: (current: T | undefined) => { next?: T | null; result: R }): Promise<R>;
 }
