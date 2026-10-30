@@ -275,6 +275,42 @@ describe("molty_talk", () => {
     expect(w.dev.moods().slice(4)).toEqual([{ mood: "thinking", hold_s: 15 }, { mood: "thinking", hold_s: 15 }]);
   });
 
+  it("an ask shown after a listen began is never cancelled by that listen's automatic moods", async () => {
+    const w = await setup({ samples: 3200, end: { reason: "silence", speech_ms: 150 } }, { caps: ["say", "listen", "ask"] });
+    const stt = w.voice.stt.bind(w.voice);
+    w.voice.stt = async (pcm) => {
+      await new Promise((r) => setTimeout(r, 80));
+      return stt(pcm);
+    };
+    const asks = () => w.dev.log.filter((l) => l.name === "ask");
+    const answer = (job: string) => w.room.socketMessage(w.sock, JSON.stringify({ t: "evt", name: "answer", data: { job, index: 0, label: "ok" } }));
+    // the question goes out during STT: the re-asserted thinking (any mood cancels an ask) is not sent
+    const turn = w.room.talk(w.token, {});
+    await until(() => w.dev.moods().length > 0);
+    const q = w.room.ask(w.token, { options: ["ok"] });
+    await until(() => asks().length === 1);
+    expect(await turn).toMatchObject({ ok: true, result: { heard: "hello molty" } });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(w.dev.moods()).toEqual([{ mood: "thinking", hold_s: 15 }]);
+    const after = w.dev.log.filter((l) => l.kind === "cmd").map((l) => l.name);
+    expect(after.slice(after.indexOf("ask"))).toEqual(["ask"]);
+    await answer(asks()[0].args.job);
+    expect(await q).toMatchObject({ ok: true, result: { answer: "ok" } });
+    // the question goes out before the end of speech: neither automatic mood is sent
+    const turn2 = w.room.talk(w.token, {});
+    await until(() => w.dev.log.filter((l) => l.name === "listen").length === 2);
+    const q2 = w.room.ask(w.token, { options: ["ok"] });
+    expect(await turn2).toMatchObject({ ok: true, result: { heard: "hello molty" } });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(w.dev.moods()).toEqual([{ mood: "thinking", hold_s: 15 }]);
+    await answer(asks()[1].args.job);
+    expect(await q2).toMatchObject({ ok: true });
+    // a listen that begins after the question: its automatic moods are back
+    await w.room.talk(w.token, {});
+    await new Promise((r) => setTimeout(r, 20));
+    expect(w.dev.moods().slice(1)).toEqual([{ mood: "thinking", hold_s: 15 }, { mood: "thinking", hold_s: 15 }]);
+  });
+
   it("a mood the device refuses does not count as explicit: the automatic thinking still lands", async () => {
     const w = await setup({
       samples: 3200,

@@ -247,8 +247,8 @@ interface ListenBuffer {
   speech_ms?: number;
   /** The automatic `thinking` mood was sent at end of speech. */
   thinking?: boolean;
-  /** `moodRev` when this listen began: automatic moods apply only while it is unchanged. */
-  moodRev: number;
+  /** `screenRev` when this listen began: automatic moods apply only while it is unchanged. */
+  screenRev: number;
 }
 
 type JobKind = "say" | "listen" | "talk" | "ask" | "update";
@@ -329,10 +329,15 @@ export class DeviceRoom implements AgentApi {
   private readonly pendingAsks = new Map<string, PendingAsk>();
   private listenBuf: ListenBuffer | undefined;
   private audioJob: string | undefined;
-  /** Bumped by every explicit `mood` command (any agent) the device accepted: automatic moods never overwrite a newer explicit one. */
-  private moodRev = 0;
-  /** Explicit `mood` commands sent but not yet answered: no automatic mood may overtake one on the wire. */
-  private moodInFlight = 0;
+  /**
+   * Bumped by every command that took the screen after a listen began: an explicit `mood`
+   * (any agent) the device accepted, and an `ask` the device showed (or may have: no ack in
+   * time). Automatic moods are a listen's own housekeeping: they never overwrite a newer
+   * explicit mood, and never cancel a newer question (any mood cancels a pending ask).
+   */
+  private screenRev = 0;
+  /** Explicit `mood` / `ask` commands sent but not yet answered: no automatic mood may overtake one on the wire. */
+  private screenInFlight = 0;
   private readonly lastEvents = new Map<string, { data: unknown; at: number }>();
   private readonly inboxWaiters = new Map<string, Set<() => void>>();
   /** Outstanding long-polls per token hash (admission control). */
@@ -609,13 +614,13 @@ export class DeviceRoom implements AgentApi {
     if (cmd.name === "mood") {
       // Counted only once the device took it: a refused mood (pairing prompt up, bad
       // state) must not silence the automatic thinking/idle that follows.
-      this.moodInFlight++;
+      this.screenInFlight++;
       try {
         res = await this.sendCmd(cmd.name, cmd.args);
       } finally {
-        this.moodInFlight--;
+        this.screenInFlight--;
       }
-      if (res.ok) this.moodRev++;
+      if (res.ok) this.screenRev++;
     } else res = await this.sendCmd(cmd.name, cmd.args);
     if (!res.ok || cmd.name !== "status") return res;
     const sock = this.liveSocket();
@@ -1139,15 +1144,28 @@ export class DeviceRoom implements AgentApi {
     }
     const tAsk = this.clock.now();
     let settle!: (a: AskAnswer) => void;
-    const answered = new Promise<AskAnswer>((resolve) => (settle = resolve));
+    /** The first end accepted for this ask (a device `answer` may come before the cmd's `res`). */
+    let ended: AskAnswer | undefined;
+    const answered = new Promise<AskAnswer>((resolve) => (settle = (a) => resolve((ended ??= a))));
     // Registered before the cmd goes out: an answer may overtake the cmd's `res`.
     this.pendingAsks.set(id, { options: args.options, resolve: settle });
     let answer: AskAnswer;
     let tAck = tAsk;
     try {
-      const res = await this.sendCmd("ask", { job: id, options: args.options, timeout_ms: args.timeout_s * 1000 });
-      if (!res.ok && res.error !== "device_offline") return this.finishJob(id, { status: "failed", error: res.error });
-      if (!res.ok) settle({ index: null, label: null, reason: "offline" });
+      // The question takes the screen: no automatic mood (an older listen's) may overtake it.
+      this.screenInFlight++;
+      let res: Outcome<JsonObject>;
+      try {
+        res = await this.sendCmd("ask", { job: id, options: args.options, timeout_ms: args.timeout_s * 1000 });
+      } finally {
+        this.screenInFlight--;
+      }
+      if (res.ok || res.error === "device_timeout" || ended) this.screenRev++;
+      // A failed ack loses nothing the device already settled: an accepted answer stands.
+      if (!res.ok && !ended) {
+        if (res.error !== "device_offline") return this.finishJob(id, { status: "failed", error: res.error });
+        settle({ index: null, label: null, reason: "offline" });
+      }
       tAck = this.clock.now();
       // The device times out at timeout_ms and says so; this only covers a device that never does.
       const timer = this.clock.setTimeout(() => settle({ index: null, label: null, reason: "timeout" }), args.timeout_s * 1000 + this.t.askGraceMs);
@@ -1307,7 +1325,7 @@ export class DeviceRoom implements AgentApi {
    */
   private async record(id: string, ms: number, vad: JsonObject = {}): Promise<ListenResult> {
     const t0 = this.clock.now();
-    const buf: ListenBuffer = { job: id, chunks: [], bytes: 0, ended: false, moodRev: this.moodRev };
+    const buf: ListenBuffer = { job: id, chunks: [], bytes: 0, ended: false, screenRev: this.screenRev };
     this.listenBuf = buf;
     let tAck = t0;
     try {
@@ -1361,11 +1379,11 @@ export class DeviceRoom implements AgentApi {
 
   /**
    * Relay-driven mood around talking; fire-and-forget. Skipped once the device has
-   * accepted an explicit mood since this listen began (the explicit one stands), and
-   * while one is still awaiting its answer (it may be accepted).
+   * accepted an explicit mood or shown an ask since this listen began (the explicit
+   * mood stands; the question stays up), and while one is still awaiting its answer.
    */
   private autoMood(buf: ListenBuffer, mood: "thinking" | "idle") {
-    if (buf.moodRev !== this.moodRev || this.moodInFlight > 0) return;
+    if (buf.screenRev !== this.screenRev || this.screenInFlight > 0) return;
     const args: JsonObject = mood === "thinking" ? { mood, hold_s: this.t.thinkHoldS } : { mood };
     void this.sendCmd("mood", args).then((r) => {
       if (!r.ok) this.log("auto mood failed", { device: this.deviceId, mood, error: r.error });

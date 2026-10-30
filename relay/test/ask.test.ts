@@ -20,7 +20,8 @@ const CAPS = ["say", "listen", "ask"];
 function device(room: DeviceRoom, sock: FakeSocket) {
   const cmds: Array<{ name: string; args: any; at: number }> = [];
   /** sayDoneMs: delay from the say end frame to say.done; null = never (playback failed). */
-  const ctl = { refuse: undefined as string | undefined, sayDoneMs: 5 as number | null };
+  /** noAck: the device never acknowledges `ask` (its `res` is lost). */
+  const ctl = { refuse: undefined as string | undefined, sayDoneMs: 5 as number | null, noAck: false };
   const log: Array<{ kind: string; at: number }> = [];
   const origText = sock.sendText.bind(sock);
   const origBin = sock.sendBinary.bind(sock);
@@ -31,6 +32,7 @@ function device(room: DeviceRoom, sock: FakeSocket) {
     if (f.t !== "cmd") return;
     cmds.push({ name: f.name, args: f.args, at: Date.now() });
     const err = f.name === "ask" ? ctl.refuse : undefined;
+    if (f.name === "ask" && ctl.noAck) return;
     setTimeout(() => void room.socketMessage(sock, JSON.stringify(err ? { t: "res", id: f.id, ok: false, error: err } : { t: "res", id: f.id, ok: true, result: {} })), 1);
   };
   sock.sendBinary = (b: Uint8Array) => {
@@ -395,6 +397,21 @@ describe("molty_ask", () => {
     await until(() => mute.dev.asks().length === 1);
     await mute.dev.answer({ job: mute.dev.asks()[0].args.job, index: 0, label: "ok" });
     expect(await call).toMatchObject({ ok: true, result: { answer: "ok" } });
+  });
+
+  it("an answer accepted before the ack timed out stands: done with that answer, one inbox event", async () => {
+    const w = await setup();
+    w.dev.ctl.noAck = true;
+    const call = w.room.ask(w.token, { options: ["yes", "no"] });
+    await until(() => w.dev.asks().length === 1);
+    const job = w.dev.asks()[0].args.job;
+    await w.dev.answer({ job, index: 1, label: "no" });
+    const r = (await call) as any;
+    expect(r).toMatchObject({ ok: true, result: { job, status: "done", answer: "no", index: 1 } });
+    const evs = (await w.room.events(w.token, { since: 0, wait_ms: 0 })) as any;
+    expect(evs.result.events.map((e: any) => [e.type, e.data])).toEqual([["answer", { job, index: 1, label: "no" }]]);
+    // no answer before the ack timed out: still a failure (nothing to keep)
+    expect(await w.room.ask(w.token, { options: ["ok"] })).toMatchObject({ ok: false, error: "device_timeout" });
   });
 
   it("a device that refuses the ask cmd fails the job with its error code", async () => {
