@@ -86,13 +86,15 @@ int xTaskCreatePinnedToCoreWithCaps(void (*fn)(void *), const char *name, unsign
 void mole_diag_event(bool important, const char *fmt, ...) { (void)important; (void)fmt; }
 esp_err_t sdk_rx_error;
 unsigned sdk_rx_chunks;
+void (*sdk_rx_fill)(int16_t *buf, size_t n, unsigned chunk);
 static bool sdk_rx_open;
 esp_err_t molty_mic_stream_start(uint32_t rate, uint32_t ms, uint8_t gain) {
     assert(rate==16000 && ms>0 && gain>0 && !sdk_rx_open); sdk_rx_open=true; return ESP_OK;
 }
 esp_err_t molty_mic_stream_read(int16_t *buf, size_t n, size_t *got) {
     assert(sdk_rx_open); if (sdk_rx_error) { *got=0; return sdk_rx_error; }
-    memset(buf,0,n*2); *got=n; sdk_rx_chunks++; return ESP_OK;
+    if (sdk_rx_fill) sdk_rx_fill(buf,n,sdk_rx_chunks); else memset(buf,0,n*2);
+    *got=n; sdk_rx_chunks++; return ESP_OK;
 }
 void molty_mic_stream_stop(void) { assert(sdk_rx_open); sdk_rx_open=false; }
 uint32_t sdk_caps = 0xFFFFFFFFu;

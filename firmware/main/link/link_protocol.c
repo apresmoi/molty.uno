@@ -120,6 +120,29 @@ bool link_mood_args(const cJSON *args, const char **mood, double *hold_s)
     return true;
 }
 
+static bool ms_arg(const cJSON *args, const char *key, unsigned lo, unsigned hi, unsigned *out)
+{
+    const cJSON *v = cJSON_GetObjectItemCaseSensitive(args, key);
+    if (!v) return true;
+    if (!cJSON_IsNumber(v) || !(v->valuedouble >= lo && v->valuedouble <= hi) ||
+        v->valuedouble != floor(v->valuedouble)) return false;
+    *out = (unsigned)v->valuedouble;
+    return true;
+}
+
+bool link_listen_args(const cJSON *args, bool *vad, unsigned *end_silence_ms, unsigned *no_speech_ms)
+{
+    if (!vad || !end_silence_ms || !no_speech_ms) return false;
+    const cJSON *v = cJSON_GetObjectItemCaseSensitive(args, "vad");
+    if (v && !cJSON_IsBool(v)) return false;
+    unsigned es = *end_silence_ms, ns = *no_speech_ms;
+    if (!ms_arg(args, "end_silence_ms", 300, 3000, &es) || !ms_arg(args, "no_speech_ms", 1000, 10000, &ns))
+        return false;
+    if (v) *vad = cJSON_IsTrue(v);
+    *end_silence_ms = es; *no_speech_ms = ns;
+    return true;
+}
+
 static cJSON *evt(const char *name, cJSON **data)
 {
     cJSON *j = frame("evt");
@@ -203,7 +226,7 @@ bool link_frame_parse(const void *data, size_t len, link_frame_t *h,
         && cJSON_IsNumber(rate) && rate->valuedouble == 16000 && (!end || cJSON_IsBool(end));
     if (ok) {
         strcpy(h->stream, s->valuestring); h->seq = (uint32_t)seq->valuedouble;
-        h->end = cJSON_IsTrue(end); *pcm = nl ? nl + 1 : p + len; *pcm_len = payload;
+        h->end = cJSON_IsTrue(end); h->reason = NULL; h->speech_ms = 0; *pcm = nl ? nl + 1 : p + len; *pcm_len = payload;
     }
     cJSON_Delete(j);
     return ok;
@@ -219,6 +242,10 @@ int link_frame_header(char *out, size_t cap, const link_frame_t *h)
     cJSON_AddStringToObject(j, "kind", "pcm16");
     cJSON_AddNumberToObject(j, "rate", 16000);
     cJSON_AddBoolToObject(j, "end", h->end);
+    if (h->reason) {
+        cJSON_AddStringToObject(j, "reason", h->reason);
+        cJSON_AddNumberToObject(j, "speech_ms", h->speech_ms);
+    }
     char *json = cJSON_PrintUnformatted(j);
     cJSON_Delete(j);
     if (!json) return -1;

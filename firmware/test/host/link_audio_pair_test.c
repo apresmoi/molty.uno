@@ -4,6 +4,7 @@
 #include "../../main/link/link_pair.c"
 #include <assert.h>
 #include <stdio.h>
+#include <math.h>
 
 static unsigned rotations, sent;
 static esp_err_t send_error;
@@ -13,18 +14,44 @@ esp_err_t link_send_json(const cJSON *j) {
     cJSON_Delete(sdk_sent); sdk_sent=cJSON_Duplicate(j,true); sent++; return send_error;
 }
 static unsigned bin_frames, bin_bytes, bin_ends, bin_seq;
+static char bin_reason[16]; static int bin_speech_ms;
 esp_err_t link_send_binary(const void *data,size_t size) {
     link_frame_t h; const uint8_t *pcm; size_t bytes;
     assert(link_frame_parse(data,size,&h,&pcm,&bytes) && size<=16384);
     assert(h.seq==bin_seq++ && !bin_ends);       /* ordered, nothing after end */
+    /* the end frame alone carries {reason, speech_ms} */
+    const char *nl=memchr(data,'\n',size); cJSON *hj=cJSON_ParseWithLength(data,nl?(size_t)(nl-(const char *)data):size);
+    cJSON *r=cJSON_GetObjectItem(hj,"reason"), *sm=cJSON_GetObjectItem(hj,"speech_ms");
+    assert(h.end ? cJSON_IsString(r) && cJSON_IsNumber(sm) : !r && !sm);
+    if (h.end) { snprintf(bin_reason,sizeof(bin_reason),"%s",r->valuestring); bin_speech_ms=sm->valueint; }
+    cJSON_Delete(hj);
     bin_frames++; bin_bytes+=bytes; bin_ends+=h.end; return ESP_OK;
 }
-static void listen_job(unsigned ms, audio_job_t *job) {
-    char a[96]; snprintf(a,sizeof(a),"{\"job\":\"listen1\",\"ms\":%u,\"rate\":16000}",ms);
+static void listen_job_with(unsigned ms, const char *extra, audio_job_t *job) {
+    char a[192]; snprintf(a,sizeof(a),"{\"job\":\"listen1\",\"ms\":%u,\"rate\":16000%s}",ms,extra);
     cJSON *args=cJSON_Parse(a),*res=NULL;
     assert(link_audio_listen(args,&res)==ESP_OK); cJSON_Delete(args); cJSON_Delete(res);
     assert(xQueueReceive(s_jobs,job,0)==pdTRUE && job->listen);
-    bin_frames=bin_bytes=bin_ends=bin_seq=0;
+    bin_frames=bin_bytes=bin_ends=bin_seq=0; bin_reason[0]=0; bin_speech_ms=-1;
+}
+static void listen_job(unsigned ms, audio_job_t *job) { listen_job_with(ms,"",job); }
+static bool listen_rejects(const char *extra) {
+    char a[192]; snprintf(a,sizeof(a),"{\"job\":\"listen1\",\"ms\":5000,\"rate\":16000%s}",extra);
+    cJSON *args=cJSON_Parse(a),*res=NULL;
+    esp_err_t e=link_audio_listen(args,&res); cJSON_Delete(args); cJSON_Delete(res);
+    if (e==ESP_OK) { audio_job_t j; assert(xQueueReceive(s_jobs,&j,0)==pdTRUE); s_busy=false; }
+    return e==ESP_ERR_INVALID_ARG && !link_audio_busy();
+}
+/* 0.5 s room, 1.5 s of speech-ish tone at about -25 dBFS, then room again */
+static void speech_fill(int16_t *buf,size_t n,unsigned chunk) {
+    static uint32_t rng=1;
+    for (size_t i=0;i<n;i++) {
+        rng=rng*1664525u+1013904223u;
+        int noise=(int)(rng>>27)-16;                                 /* ~-65 dBFS */
+        unsigned t=chunk*1600+(unsigned)i;
+        int tone=(t>=8000 && t<32000) ? (int)(1800.0*sin(t*0.055)) : 0;
+        buf[i]=(int16_t)(noise+tone);
+    }
 }
 void link_identity_rotate(void) { rotations++; }
 const char *link_identity_code(void) { return "ABCDEFGH"; }
@@ -78,14 +105,39 @@ static void test_say(void) {
     audio_job_t job; listen_job(10,&job);
     before=sent; complete(record(&job)); assert(sent==before && !strcmp(sdk_mood,"idle"));
     assert(bin_frames==1 && bin_bytes==320 && bin_ends==1);
-    /* Streamed uplink: 5 s = 80000 samples in 300 ms frames, sent while recording. */
-    listen_job(5000,&job); sdk_rx_chunks=0;
+    assert(!strcmp(bin_reason,"max") && bin_speech_ms==0);
+    /* Streamed uplink: 5 s = 80000 samples in 300 ms frames, sent while recording.
+     * vad:false records the full window whatever it hears. */
+    listen_job_with(5000,",\"vad\":false",&job); sdk_rx_chunks=0;
+    assert(!job.vad);
     complete(record(&job));
     assert(bin_bytes==160000 && bin_ends==1 && bin_frames==17 && sdk_rx_chunks==50);
+    assert(!strcmp(bin_reason,"max") && !strcmp(s_end_reason,"max"));
+    /* End of speech (default on): nobody speaks → the listen ends at no_speech_ms 4 s
+     * (13 full frames + a 100 ms tail with end:true), the mic stops there. */
+    listen_job(8000,&job); sdk_rx_chunks=0;
+    assert(job.vad && job.end_silence_ms==700 && job.no_speech_ms==4000);
+    complete(record(&job));
+    assert(sdk_rx_chunks==40 && bin_bytes==128000 && bin_frames==14 && bin_ends==1);
+    assert(!strcmp(bin_reason,"no_speech") && bin_speech_ms==0);
+    /* ...an utterance 0.5..2 s → ends ~700 ms after it (not at 8 s), reason silence */
+    listen_job(8000,&job); sdk_rx_chunks=0; sdk_rx_fill=speech_fill;
+    complete(record(&job)); sdk_rx_fill=NULL;
+    assert(sdk_rx_chunks>=27 && sdk_rx_chunks<=28 && bin_ends==1 && bin_bytes==sdk_rx_chunks*3200u);
+    assert(!strcmp(bin_reason,"silence") && bin_speech_ms>=1200 && bin_speech_ms<=1500);
+    /* custom tuning reaches the job; out-of-range / mistyped args are refused */
+    listen_job_with(5000,",\"end_silence_ms\":300,\"no_speech_ms\":1000",&job);
+    assert(job.vad && job.end_silence_ms==300 && job.no_speech_ms==1000);
+    complete(record(&job));
+    assert(!strcmp(bin_reason,"no_speech") && bin_bytes==32000);
+    assert(listen_rejects(",\"end_silence_ms\":299") && listen_rejects(",\"end_silence_ms\":3001"));
+    assert(listen_rejects(",\"no_speech_ms\":999") && listen_rejects(",\"no_speech_ms\":10001"));
+    assert(listen_rejects(",\"end_silence_ms\":700.5") && listen_rejects(",\"vad\":0"));
+    assert(listen_rejects(",\"no_speech_ms\":\"4000\""));
     /* Mic failure mid-stream fails fast with an end frame (relay: no 5 s wait). */
     listen_job(5000,&job); sdk_rx_error=ESP_ERR_TIMEOUT;
     esp_err_t le=record(&job); complete(le); sdk_rx_error=ESP_OK;
-    assert(le==ESP_ERR_TIMEOUT && bin_frames==1 && bin_bytes==0 && bin_ends==1);
+    assert(le==ESP_ERR_TIMEOUT && bin_frames==1 && bin_bytes==0 && bin_ends==1 && !strcmp(bin_reason,"error"));
 }
 static void request(void) {
     cJSON *args=cJSON_Parse("{\"t\":\"pair.request\",\"req\":\"request1\",\"agent_name\":\"test agent\",\"code\":\"1234\"}");

@@ -114,7 +114,41 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   the ring **and I2S DMA**, device returns to idle and sends
   `{"t":"evt","name":"say.done","data":{"job":"..."}}`. Failed/cancelled playback
   does not emit successful completion. Reader timing remains approximate (no word timestamps).
-- `listen`: device streams mic PCM up; relay runs STT on `end`.
+- `listen`: device streams mic PCM up (300 ms frames); relay runs STT on `end`.
+  The device ends the listen on its own at the **end of speech** (below), so `end`
+  usually arrives well before `ms`. The final frame's header adds
+  `"reason":"silence"|"no_speech"|"max"|"error","speech_ms":N` (only on the `end`
+  frame; older relays ignore unknown header fields): `silence` = the user stopped
+  talking, `no_speech` = nobody spoke within `no_speech_ms`, `max` = the `ms` window
+  ran out (or `vad:false`), `error` = the mic failed (header-only end frame).
+  `speech_ms` = voiced audio heard, in ms. The device log shows
+  `audio.listen end ... reason=<reason> speech_ms=<N>`.
+
+### Listen end of speech (device VAD)
+
+`firmware/main/audio/vad.h` — energy VAD on the 16 kHz mic stream (gain 8), 20 ms
+frames, RMS in dBFS against an adaptive noise floor:
+
+- **Floor**: minimum frame energy over the last 3 s (first 300 ms measured, not
+  classified). Drops at once to a quieter frame; a steady fan becomes the floor after
+  ≤ 3 s. Until 3 s have passed it is capped at −50 dBFS, so speech already running
+  when `listen` starts is not mistaken for the floor.
+- **Speech**: energy > floor + 10 dB, or > floor + 5 dB while already speaking
+  (hysteresis: a softer tail stays speech); never below −60 dBFS.
+- **Ends** at the first of: ≥ 250 ms of speech, then `end_silence_ms` of continuous
+  non-speech (never before 600 ms) → `silence`; `no_speech_ms` with < 250 ms of speech
+  and nobody speaking right then → `no_speech`; `ms` → `max`. The mic stops at once.
+
+Optional `listen` args (device-validated; the relay currently forwards only
+`{job, ms, rate}`, so agents get the defaults until it passes these through):
+
+| arg | range | default | |
+|---|---|---|---|
+| `end_silence_ms` | 300..3000 (integer) | 700 | silence after speech that ends the listen; raise it for slow / hesitant speakers |
+| `no_speech_ms` | 1000..10000 (integer) | 4000 | give up when nobody spoke by then (≥ `ms` = never) |
+| `vad` | bool | `true` | `false`: record the full `ms` window as before |
+
+Out-of-range or mistyped values → `invalid_args`.
 
 Moods (`mood` cmd, and the implicit `listening`/`speaking` around audio jobs) are moods
 of the fluid creature's loaded `.molty` creature: the device applies
@@ -148,7 +182,7 @@ What the screen does between commands (`firmware/main/fluid/fluid_director.h`):
 | `mood` | `{mood, hold_s?}` | — | idle listening thinking speaking happy sleepy surprised; `hold_s` 0..3600 (0 = until the next mood; default: happy/surprised revert, the rest persist) |
 | `show` | `{text, wpm?}` | — | speed reader in the fluid; back to the creature 1.5 s after the last word |
 | `say` | `{text, voice?}` | `{job}` immediately | relay does TTS + streams; device sets `speaking`, shows text in sync. `unsupported` without a speaker |
-| `listen` | `{ms≤10000}` | `{job}` immediately | device sets `listening`, streams mic; relay STT → job result `{text}`. `unsupported` without a mic |
+| `listen` | `{ms≤10000, end_silence_ms?, no_speech_ms?, vad?}` | `{job}` immediately | device sets `listening`, streams mic, ends early at the end of speech ([Listen end of speech](#listen-end-of-speech-device-vad)); relay STT → job result `{text}`. `unsupported` without a mic |
 | `volume` | `{volume 0..21}` | — | `unsupported` without a speaker |
 | `imu` | — | snapshot | `unsupported` without an IMU |
 | `diag` | `{timeline? 0..180}` | `/api/diag` JSON | frame histograms, task CPU %, heap, stalls, net; `timeline` = seconds of 1 Hz rows |

@@ -3,6 +3,7 @@
 #include "link_client.h"
 #include "link_cmd.h"
 #include "link_pair.h"
+#include "vad.h"
 
 #include "molty_board.h"
 #include "mole_creature.h"
@@ -19,7 +20,10 @@
 #include <stdatomic.h>
 #include <limits.h>
 
-typedef struct { char job[LINK_STREAM_MAX]; unsigned ms; bool listen; } audio_job_t;
+typedef struct {
+    char job[LINK_STREAM_MAX]; unsigned ms; bool listen;
+    bool vad; unsigned end_silence_ms, no_speech_ms;   /* listen: end-of-speech (audio/vad.h) */
+} audio_job_t;
 static QueueHandle_t s_jobs, s_done;
 static RingbufHandle_t s_ring;
 static bool s_busy, s_listen;
@@ -28,6 +32,8 @@ static char s_job[LINK_STREAM_MAX];
 static uint32_t s_seq;
 static int64_t s_last_frame;
 static volatile uint32_t s_stat_frames, s_stat_bytes;   /* diag: frames/bytes of the current job */
+static const char *s_end_reason;                       /* diag: why the last listen ended */
+static uint32_t s_speech_ms;
 
 bool link_audio_busy(void) { return s_busy; }
 void link_audio_cancel(void) { atomic_store(&s_cancel, true); }
@@ -82,10 +88,22 @@ static esp_err_t send_frame(uint8_t *frame, link_frame_t *h, const int16_t *pcm,
     return e;
 }
 
+/* The listen ends at the first of: end of speech (vad.h: ~end_silence_ms of silence
+ * after speech), nobody speaking by no_speech_ms, or the `ms` window. Either way the
+ * last frame carries end:true plus {reason, speech_ms}, so the relay starts STT at
+ * once instead of after the full window. */
 static esp_err_t record(const audio_job_t *job)
 {
     _Static_assert(LINK_HEADER_MAX + 1 + REC_FRAME_SAMPLES * 2 <= LINK_MESSAGE_MAX, "uplink frame too big");
+    _Static_assert(REC_FRAME_SAMPLES % REC_CHUNK_SAMPLES == 0, "chunks fill frames exactly");
     const size_t total = (size_t)16000 * job->ms / 1000;
+    vad_cfg_t vc = VAD_CFG_DEFAULT;
+    vc.enabled = job->vad; vc.max_ms = job->ms;
+    vc.end_silence_ms = job->end_silence_ms; vc.no_speech_ms = job->no_speech_ms;
+    vad_t vad;
+    vad_init(&vad, &vc);
+    vad_verdict_t verdict = VAD_CONTINUE;
+    s_end_reason = "error"; s_speech_ms = 0;
     uint8_t *frame = heap_caps_malloc(LINK_MESSAGE_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     int16_t *acc = heap_caps_malloc(REC_FRAME_SAMPLES * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     int16_t *chunk = heap_caps_malloc(REC_CHUNK_SAMPLES * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -94,7 +112,7 @@ static esp_err_t record(const audio_job_t *job)
     bool streaming = e == ESP_OK;
     link_frame_t h = {0}; strcpy(h.stream, job->job);
     size_t done = 0, have = 0;
-    while (e == ESP_OK && done < total) {
+    while (e == ESP_OK && verdict == VAD_CONTINUE) {
         if (atomic_load(&s_cancel)) { e = ESP_ERR_INVALID_STATE; break; }
         size_t got = 0;
         e = molty_mic_stream_read(chunk, REC_CHUNK_SAMPLES, &got);
@@ -104,17 +122,26 @@ static esp_err_t record(const audio_job_t *job)
         if (got > REC_FRAME_SAMPLES - have) got = REC_FRAME_SAMPLES - have;
         memcpy(acc + have, chunk, got * 2);
         have += got; done += got;
-        if (have == REC_FRAME_SAMPLES || done == total) {
-            h.end = done == total;
+        verdict = vad_feed(&vad, chunk, got);
+        if (verdict == VAD_CONTINUE && done == total) verdict = VAD_END_MAX;   /* window < one VAD frame */
+        if (have == REC_FRAME_SAMPLES || verdict != VAD_CONTINUE) {
+            h.end = verdict != VAD_CONTINUE;
+            if (h.end) {
+                s_end_reason = vad_reason(verdict); s_speech_ms = vad.speech_ms;
+                h.reason = s_end_reason; h.speech_ms = s_speech_ms;
+            }
             e = send_frame(frame, &h, acc, have);
             have = 0;
         }
     }
+    /* stop the mic as soon as the listen is over: the creature leaves `listening` and
+     * the relay is already transcribing */
     if (streaming) molty_mic_stream_stop();
+    if (e != ESP_OK) s_end_reason = "error";
     /* Fail fast: an end-only frame tells the relay the stream is over instead of
      * leaving it to time out into no_audio ms + 5 s later. */
     if (e != ESP_OK && !atomic_load(&s_cancel) && frame && link_client_connected()) {
-        h.end = true;
+        h.end = true; h.reason = "error"; h.speech_ms = vad.speech_ms;
         send_frame(frame, &h, NULL, 0);
     }
     heap_caps_free(chunk); heap_caps_free(acc); heap_caps_free(frame);
@@ -131,9 +158,14 @@ static void audio_task(void *arg)
         mole_diag_event(false, "audio.%s start ms=%u int_free=%u", job.listen ? "listen" : "say", job.ms,
                         (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
         esp_err_t e = job.listen ? record(&job) : play();
-        mole_diag_event(e != ESP_OK, "audio.%s end %s took=%ums frames=%u bytes=%u",
-                        job.listen ? "listen" : "say", esp_err_to_name(e),
-                        (unsigned)((esp_timer_get_time() - t0) / 1000), (unsigned)s_stat_frames, (unsigned)s_stat_bytes);
+        unsigned took = (unsigned)((esp_timer_get_time() - t0) / 1000);
+        if (job.listen)
+            mole_diag_event(e != ESP_OK, "audio.listen end %s took=%ums frames=%u bytes=%u reason=%s speech_ms=%u",
+                            esp_err_to_name(e), took, (unsigned)s_stat_frames, (unsigned)s_stat_bytes,
+                            s_end_reason, (unsigned)s_speech_ms);
+        else
+            mole_diag_event(e != ESP_OK, "audio.say end %s took=%ums frames=%u bytes=%u",
+                            esp_err_to_name(e), took, (unsigned)s_stat_frames, (unsigned)s_stat_bytes);
         drain();
         xQueueSend(s_done, &e, portMAX_DELAY);
     }
@@ -167,6 +199,10 @@ static esp_err_t start(const cJSON *args, bool listen, cJSON **out)
         ms->valuedouble < (listen ? 1 : 0) || ms->valuedouble > (listen ? 10000 : INT_MAX) ||
         ms->valuedouble != ms->valueint) return ESP_ERR_INVALID_ARG;
     if (!listen && (!cJSON_IsString(text) || !text->valuestring[0] || strlen(text->valuestring) > 4096)) return ESP_ERR_INVALID_ARG;
+    const vad_cfg_t vad_def = VAD_CFG_DEFAULT;
+    bool vad = vad_def.enabled;
+    unsigned end_silence_ms = vad_def.end_silence_ms, no_speech_ms = vad_def.no_speech_ms;
+    if (listen && !link_listen_args(args, &vad, &end_silence_ms, &no_speech_ms)) return ESP_ERR_INVALID_ARG;
     cJSON *result = cJSON_CreateObject();
     if (!result) return ESP_ERR_NO_MEM;
     cJSON_AddStringToObject(result, "job", j->valuestring);
@@ -181,7 +217,8 @@ static esp_err_t start(const cJSON *args, bool listen, cJSON **out)
         if (e == ESP_OK) e = mole_creature_state_set("{\"state\":\"text\"}");
     }
     if (e != ESP_OK) { cJSON_Delete(result); return e; }
-    audio_job_t job = {.listen = listen, .ms = (unsigned)ms->valueint};
+    audio_job_t job = {.listen = listen, .ms = (unsigned)ms->valueint,
+                       .vad = vad, .end_silence_ms = end_silence_ms, .no_speech_ms = no_speech_ms};
     strcpy(job.job, j->valuestring); strcpy(s_job, job.job);
     s_seq = 0; s_stat_frames = 0; s_stat_bytes = 0; s_busy = true; s_listen = listen; s_last_frame = esp_timer_get_time();
     atomic_store(&s_end, false); atomic_store(&s_cancel, false);

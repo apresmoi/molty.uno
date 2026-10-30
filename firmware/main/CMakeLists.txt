@@ -57,6 +57,8 @@ idf_component_register(
         "link/link_cmd.c"
         "link/link_audio.c"
         "link/link_pair.c"
+        # audio: listen end-of-speech detection (plain C, host-tested)
+        "audio/vad.c"
         # sense: device events (IMU shake, taps, buttons) for the agent + the fluid
         "sense/gesture.c"
         "sense/sense.c"
@@ -71,6 +73,7 @@ idf_component_register(
         "fluid"
         "creature"
         "link"
+        "audio"
         "sense"
         "board"
         "diag"

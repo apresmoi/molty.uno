@@ -18,6 +18,11 @@ typedef struct {
     char stream[LINK_STREAM_MAX];
     uint32_t seq;
     bool end;
+    /* Device→relay listen end frame only (header fields "reason", "speech_ms"): why the
+     * listen ended ("silence" | "no_speech" | "max" | "error") and the voiced ms heard.
+     * NULL reason: neither field is written. Parsing does not read them (NULL / 0). */
+    const char *reason;
+    uint32_t speech_ms;
 } link_frame_t;
 /* The newline is not counted in header_len. Payload is a borrowed byte view. */
 bool link_frame_parse(const void *data, size_t len, link_frame_t *h,
@@ -41,6 +46,10 @@ bool link_mood_map(const char *mood, const char **state);
 bool link_mood_args(const cJSON *args, const char **mood, double *hold_s);
 /* Device events (sense/sense.c), {"t":"evt","name":...,"data":{...}}:
  *   shake  {peak_g, reversals, ms}   tap {x, y} (0..1 of the panel)   button {id} */
+/* listen end-of-speech args {vad?, end_silence_ms? 300..3000, no_speech_ms? 1000..10000}
+ * (integers; vad a bool). Absent fields leave the outputs untouched (the caller's
+ * defaults); a wrong type or an out-of-range value → false. */
+bool link_listen_args(const cJSON *args, bool *vad, unsigned *end_silence_ms, unsigned *no_speech_ms);
 cJSON *link_evt_shake_frame(double peak_g, int reversals, unsigned ms);
 cJSON *link_evt_tap_frame(double x, double y);
 cJSON *link_evt_button_frame(bool accept);

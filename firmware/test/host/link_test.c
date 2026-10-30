@@ -119,6 +119,36 @@ static void test_mood_args(void)
 }
 
 /* device events: exactly the frames docs/AGENT-LINK.md lists */
+static bool listen_args(const char *json, bool *vad, unsigned *es, unsigned *ns)
+{
+    cJSON *args = cJSON_Parse(json);
+    assert(args);
+    bool ok = link_listen_args(args, vad, es, ns);
+    cJSON_Delete(args);
+    return ok;
+}
+
+static void test_listen_args(void)
+{
+    bool vad = true; unsigned es = 700, ns = 4000;
+    assert(listen_args("{\"ms\":8000}", &vad, &es, &ns) && vad && es == 700 && ns == 4000);
+    assert(listen_args("{\"vad\":false}", &vad, &es, &ns) && !vad && es == 700 && ns == 4000);
+    assert(listen_args("{\"vad\":true,\"end_silence_ms\":300,\"no_speech_ms\":10000}", &vad, &es, &ns)
+           && vad && es == 300 && ns == 10000);
+    assert(listen_args("{\"end_silence_ms\":3000,\"no_speech_ms\":1000}", &vad, &es, &ns) && es == 3000 && ns == 1000);
+    es = 700; ns = 4000;
+    /* a bad field leaves every output untouched */
+    assert(!listen_args("{\"end_silence_ms\":800,\"no_speech_ms\":999}", &vad, &es, &ns) && es == 700 && ns == 4000);
+    assert(!listen_args("{\"end_silence_ms\":299}", &vad, &es, &ns));
+    assert(!listen_args("{\"end_silence_ms\":3001}", &vad, &es, &ns));
+    assert(!listen_args("{\"end_silence_ms\":700.5}", &vad, &es, &ns));
+    assert(!listen_args("{\"no_speech_ms\":10001}", &vad, &es, &ns));
+    assert(!listen_args("{\"no_speech_ms\":\"4000\"}", &vad, &es, &ns));
+    assert(!listen_args("{\"vad\":0}", &vad, &es, &ns) && vad);
+    assert(!listen_args("{\"vad\":false,\"end_silence_ms\":1}", &vad, &es, &ns) && vad);
+    assert(!link_listen_args(NULL, NULL, &es, &ns));
+}
+
 static void test_event_frames(void)
 {
     expect_json(link_evt_shake_frame(1.83456, 4, 412),
@@ -189,12 +219,23 @@ static void test_frames(void)
     memset(frame, ' ', LINK_HEADER_MAX + 1); frame[LINK_HEADER_MAX + 1] = '\n';
     assert(!link_frame_parse(frame, LINK_HEADER_MAX + 2, &got, &pcm, &bytes));
     assert(!link_frame_parse(NULL, 0, &got, &pcm, &bytes));
+    /* listen end frame: {reason, speech_ms} after end; parse ignores them (relay too) */
+    link_frame_t e = {.stream = "j", .seq = 7, .end = true, .reason = "silence", .speech_ms = 1420};
+    n = link_frame_header((char *)frame, sizeof(frame), &e);
+    frame[n] = 0;
+    assert(!strcmp((char *)frame, "{\"s\":\"j\",\"seq\":7,\"kind\":\"pcm16\",\"rate\":16000,\"end\":true,\"reason\":\"silence\",\"speech_ms\":1420}\n"));
+    got.reason = "x"; got.speech_ms = 9;
+    assert(link_frame_parse(frame, n, &got, &pcm, &bytes) && got.end && got.seq == 7 && !got.reason && !got.speech_ms);
+    e.reason = NULL;                    /* every other frame: unchanged shape */
+    n = link_frame_header((char *)frame, sizeof(frame), &e);
+    frame[n] = 0;
+    assert(!strcmp((char *)frame, "{\"s\":\"j\",\"seq\":7,\"kind\":\"pcm16\",\"rate\":16000,\"end\":true}\n"));
 }
 
 int main(void)
 {
     test_codes(); test_moods(); test_frames(); test_identity_and_urls(); test_control_frames();
-    test_mood_args(); test_event_frames(); test_restore();
-    puts("LINK HOST PASS: audio/control/event frames, random IDs, code alphabet, URLs, close retry policy, moods + hold_s, restore");
+    test_mood_args(); test_listen_args(); test_event_frames(); test_restore();
+    puts("LINK HOST PASS: audio/control/event frames, random IDs, code alphabet, URLs, close retry policy, moods + hold_s, listen args, restore");
     return 0;
 }

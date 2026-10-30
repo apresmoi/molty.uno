@@ -84,6 +84,8 @@ esp_err_t molty_mic_stream_read(int16_t *, size_t, size_t *);
 void molty_mic_stream_stop(void);
 extern esp_err_t sdk_rx_error;
 extern unsigned sdk_rx_chunks;
+/* mic samples for read #chunk (NULL: digital silence) */
+extern void (*sdk_rx_fill)(int16_t *buf, size_t n, unsigned chunk);
 #define tskNO_AFFINITY 0x7fffffff
 int xTaskCreatePinnedToCoreWithCaps(void (*)(void *), const char *, unsigned, void *, unsigned, void *, int, int);
 void heap_caps_free(void *);

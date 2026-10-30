@@ -3,6 +3,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LINK="$HERE/../../main/link"
+AUDIO="$HERE/../../main/audio"
 # the 1.46's audio driver: its streaming seam is what link_dma_test exercises
 HW="$HERE/../../boards/waveshare/esp32-s3-touch-lcd-1.46"
 IDF_JSON="${IDF_PATH:-$HOME/esp/esp-idf}/components/json/cJSON"
@@ -41,8 +42,9 @@ cc -std=c11 -Wall -Wextra -Werror -O2 ${LINK_TEST_CFLAGS:-} \
 for test in identity audio_pair client; do
   extra=()
   if [ "$test" = identity ]; then extra+=("$LINK/link_identity.c"); fi
+  if [ "$test" = audio_pair ]; then extra+=("$AUDIO/vad.c"); fi
   cc -std=c11 -Wall -Wextra -Werror -O2 ${LINK_TEST_CFLAGS:-} \
-    -I"$OUT/stubs" -I"$HERE" -I"$LINK" -I"$IDF_JSON" \
+    -I"$OUT/stubs" -I"$HERE" -I"$LINK" -I"$AUDIO" -I"$IDF_JSON" \
     "$HERE/link_${test}_test.c" "$HERE/link_sdk_stub.c" \
     "$LINK/link_protocol.c" ${extra[@]+"${extra[@]}"} "$OUT/cJSON.o" -lm -o "$OUT/link_${test}_test"
   "$OUT/link_${test}_test"
