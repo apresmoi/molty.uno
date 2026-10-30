@@ -183,7 +183,35 @@ Errors: \`{"ok":false,"error":code}\` — \`401 unauthorized\` (bad/missing/revo
 \`listen_failed\` (the recording broke mid-listen),
 \`504 device_timeout\`, \`502\` device-reported codes (e.g. \`mic_busy\`).
 
+A failed \`talk\` / \`ask\` / \`update\` also carries its \`job\` id next to \`error\`: look it up with the
+activity log (below) to see where it broke.
+
 Revoke your own token: \`curl -sS -X DELETE ${o}/v1/token -H "authorization: Bearer $TOKEN"\`.
+
+### Debug yourself: the activity log
+
+When a turn failed or felt slow, don't guess: read **your own activity** on this Molty (kept 24 h).
+
+\`\`\`sh
+curl -sS "${o}/v1/activity?job=<job id>" -H "authorization: Bearer $TOKEN"     # one turn
+curl -sS "${o}/v1/activity?errors=1&limit=50" -H "authorization: Bearer $TOKEN" # recent failures
+# MCP: molty_activity {job?, errors?, since?, limit?, kind?}
+\`\`\`
+
+→ \`{"ok":true,"result":{"entries":[…],"next":"a42","more":false}}\`, oldest first; pass \`next\` back as
+\`since\` for newer ones. Each entry: \`{id, ts, kind, ev?, op?, job?, args?, ok?, error?, ms?, data?}\`:
+
+- \`call\` — a call you made: \`op\` (\`talk\`, \`say\`, \`mood\`, …), an args summary (secrets stripped), outcome, \`ms\`.
+- \`job\` — a job you started, at its end: \`data.timings\` (every stage, as in the job result),
+  \`data.voice\` (\`{tts, stt}\` = \`box\` or the cloud provider, \`fallback\` when the box failed and the
+  cloud took over), \`reason\`, \`heard\` / \`said\` (empty with \`redacted: true\` when the owner turned
+  transcripts off).
+- \`device_log\` — Molty's own log lines tagged with your job (\`data.level\` \`E\` / \`W\` / \`I\` / \`EVT\`,
+  \`data.text\`), already on the relay's clock.
+- \`device\` — Molty's \`connect\` / \`disconnect\` (\`data.code\`: the close code) around your jobs.
+- \`pair\` — your own pairing.
+
+You only ever see your own entries; other agents' calls and transcripts are not readable.
 
 ## 3. Optional: MCP
 
@@ -191,7 +219,7 @@ The same features are a remote MCP server at \`${o}/mcp\` (streamable HTTP, bear
 auth). Tools: \`molty_pair\` (no token needed), \`molty_talk\`, \`molty_ask\`, \`molty_status\`, \`molty_mood\`,
 \`molty_show\`, \`molty_say\`, \`molty_listen\`, \`molty_wait\`, \`molty_state\`,
 \`molty_volume\`, \`molty_imu\`, \`molty_diag\`, \`molty_log\`, \`molty_events\`,
-\`molty_webhook\`, \`molty_updates\`, \`molty_update\`. Claude Code example:
+\`molty_webhook\`, \`molty_updates\`, \`molty_update\`, \`molty_activity\`. Claude Code example:
 
 \`\`\`sh
 claude mcp add --transport http molty ${o}/mcp --header "Authorization: Bearer <agent_token>"

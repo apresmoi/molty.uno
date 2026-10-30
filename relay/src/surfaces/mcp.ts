@@ -285,6 +285,20 @@ export const TOOLS: ToolDef[] = [
     run: (api, t, a) => api.command(t, "diag", a),
   },
   {
+    name: "molty_activity",
+    description:
+      "Debug yourself: YOUR OWN activity on this Molty, newest last — one entry per call you made (op, args summary, ok/error, ms), per job you started (stage timings, voice provider box/cloud + fallback, reason, heard/said unless the owner turned transcripts off), Molty's own log lines tagged with your jobs (device_log: level E/W/I/EVT, text), and Molty's connects/disconnects (close codes) around your jobs. Never other agents' entries. Use it when a turn failed or felt slow: molty_activity {job} on the job id from the error (failures carry it as 'job'), or errors:true. {entries:[{id, ts, kind: call|job|device|device_log|pair, ev?, op?, job?, args?, ok?, error?, ms?, data?}], next, more}; pass next back as since for newer entries. Kept 24 h.",
+    inputSchema: obj({
+      since: { type: "string", description: "Entry id (e.g. a42) to read after, or a unix time in ms; default: the newest entries." },
+      limit: { type: "integer", description: "Entries to return, 1..500 (default 200)." },
+      kind: { type: "string", description: "Comma-separated kinds: call, job, device, device_log, pair." },
+      job: { type: "string", description: "Only this job's entries (a job id from molty_talk / molty_say / an error's 'job')." },
+      errors: { type: "boolean", description: "true: only failures (failed calls / jobs, device E lines)." },
+    }),
+    auth: true,
+    run: (api, t, a) => api.activityLog(t, a),
+  },
+  {
     name: "molty_log",
     description:
       "Tail the device log ring (ESP_LOG lines + structured EVT events: link, audio, stalls, heap, Wi-Fi). Returns {next, text}; pass next back as since to continue. max is 1024..32768 bytes (default 12288).",
@@ -422,6 +436,7 @@ function capturingInbox(api: AgentApi): { api: AgentApi; taken: Inbox[]; notices
       ask: (t, r) => keep(api.ask(t, r)),
       updates: (t) => keep(api.updates(t)),
       update: (t, r) => keep(api.update(t, r)),
+      activityLog: (t, r) => keep(api.activityLog(t, r)),
     },
   };
 }
