@@ -1,0 +1,6 @@
+__pycache__/
+.pytest_cache/
+*.egg-info/
+.venv/
+# Kyutai's reference clients, copied locally for reading (not ours to vendor)
+ref/

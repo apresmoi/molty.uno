@@ -1,0 +1,120 @@
+# The default suite: one conversation, ~20 turns. Each turn = Molty says `say`, then listens
+# while the simulated human speaks `user` (Kyutai TTS on the box, cached) / a WAV / silence.
+# Markup: {pause S} = S seconds of silence cut in at that point. See molty_sim/scenario.py.
+name: default
+defaults:
+  lead_s: 0.6          # the human starts 0.6 s after the mic opens
+  level_db: -24        # active speech level at the mic
+  noise: {kind: pink, db: -62}
+closing: "Okay, that's all I needed. Talk soon!"
+turns:
+  - id: hello
+    say: "Hey, I'm here. What's up?"
+    user: "Hi Molty, how are you doing today?"
+    tags: [short, question]
+
+  - id: "yes"
+    say: "I'm good! Want me to check the weather for later?"
+    user: "Yes please."
+    tags: [short]
+
+  - id: "no"
+    say: "Looks sunny all afternoon. Should I remind you to take a jacket anyway?"
+    user: "No."
+    tags: [short, one-word]
+
+  - id: time
+    say: "Got it, no jacket. When do you want to leave?"
+    user: "Around seven thirty."
+    tags: [short]
+
+  - id: meters-from
+    say: "Seven thirty, noted. How far is the sensor from the window?"
+    user: "I measured it, like at 2 meters from {pause 0.8} the window."
+    tags: [thinking-pause, live-case]
+
+  - id: i-think-that
+    say: "Two meters is fine. Do you want to try the new placement?"
+    user: "Yeah, I think that {pause 0.9} we could try it tomorrow."
+    tags: [thinking-pause, live-case]
+
+  - id: router-um
+    say: "Tomorrow works. What else is on your mind?"
+    user: "I was thinking {pause 0.7} about the router, um {pause 0.6} and maybe moving it upstairs."
+    tags: [thinking-pause, filler]
+
+  - id: um-first
+    say: "Upstairs could help the signal. Anything else?"
+    user: "Um {pause 0.6} what was the name of that song from yesterday?"
+    tags: [filler, late-start]
+
+  - id: ramble
+    say: "I think it was Harvest Moon. Tell me about your day?"
+    user: "Well, it started badly because the train was late again, so I got to the office after nine, and then the meeting ran over, but in the afternoon I finally fixed the bug that had been bothering me all week, which felt really good, and now I just want to cook something simple and relax."
+    tags: [long, ramble]
+
+  - id: remind
+    say: "That sounds like a full day. Anything I can do?"
+    user: "Can you remind me to water the plants on Sunday?"
+    tags: [question]
+
+  - id: long-pause
+    say: "Sunday plants, done. How do you feel about the trip?"
+    user: "So the thing is {pause 1.5} I don't really know yet."
+    tags: [thinking-pause, long-pause]
+
+  - id: and-pause
+    say: "That's okay. What's the plan for tonight?"
+    user: "I want to go out and {pause 2.0} get some groceries."
+    tags: [thinking-pause, conjunction]
+
+  - id: silence
+    say: "Do you need anything from me?"
+    silence_s: 12
+    tags: [no-speech]
+
+  - id: well-uh
+    say: "Still there? Should I make a shopping list?"
+    user: "Well, uh, {pause 0.8} maybe later."
+    tags: [filler, hesitation]
+
+  - id: fast
+    say: "Sure, later then. The list is empty for now."
+    voice: expresso/ex01-ex02_fast_001_channel1_104s.wav
+    user: "Okay okay, got it, thanks."
+    tags: [short, fast]
+
+  - id: late-start
+    say: "Anything else before I go quiet?"
+    lead_s: 2.5
+    user: "Sorry, I was in the other room. What did you say?"
+    tags: [late-start, question]
+
+  - id: quiet
+    say: "I asked if you needed anything else."
+    level_db: -40
+    user: "Can you hear me now?"
+    tags: [quiet]
+
+  - id: noisy
+    say: "Yes, I can hear you fine."
+    noise: {kind: brown, db: -40}
+    user: "It's really loud in here, the dishwasher is running."
+    tags: [noise]
+
+  - id: noisy-silence
+    say: "Want me to wait until it's quieter?"
+    noise: {kind: brown, db: -40}
+    silence_s: 12
+    tags: [no-speech, noise]
+
+  - id: list
+    say: "Okay. What do we need from the store?"
+    user: "We need eggs, {pause 0.6} milk, {pause 0.6} bread, {pause 0.7} and coffee."
+    tags: [list, thinking-pause]
+
+  - id: unlimited
+    say: "Got the list. Tell me the whole story about the trip, take your time."
+    listen_ms: 0
+    user: "Okay so we left really early in the morning, around five, and the roads were completely empty, which was great, and we drove for about three hours until we reached the lake, and the water was freezing but my brother jumped in anyway, and then we had lunch at this tiny place by the shore where the owner kept telling us stories about the old village, and after that we hiked up the hill behind the lake, it took almost two hours because my sister kept stopping to take pictures of everything, and at the top the view was incredible, you could see all the way to the mountains, and we stayed there until the sun started going down, and then we drove back home and everyone fell asleep in the car except me, because I was driving, obviously."
+    tags: [long, unlimited]

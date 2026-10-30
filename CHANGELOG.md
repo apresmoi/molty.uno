@@ -8,6 +8,10 @@ All notable changes to Molty are recorded here. One version covers the whole pro
 
 First public release.
 
+- **Repo layout**: components grouped by where they run. `firmware/`, `console/`, `creatures/`
+  → `device/`; `relay/` → `services/relay/`; `voicebox/` → `services/molty-voice/` (the
+  `molty_voice` package and `molty-voice` command keep their names); `cli/`, `website/` →
+  `apps/`; `scripts/` → `tools/scripts/`. `make` targets are unchanged.
 - **Firmware** (Waveshare ESP32-S3-Touch-LCD-1.46): the fluid of characters, the `.molty`
   creature runtime with 29 cute-kit creatures, speaker + microphone, IMU, touch, USB-C
   networking (NCM) + Wi-Fi with mDNS, rollback-protected OTA, and the agent link
@@ -22,12 +26,17 @@ First public release.
   30/min). Agents receive them riding along on every REST/MCP response, by pulling
   (`GET /v1/devices/<id>/events`, `molty_events`, long-poll), through an agent-defined signed
   webhook (`PUT /v1/webhook`, `molty_webhook`: templated HTTPS request, HMAC
-  `Molty-Signature`, retries, auto-disable) or with `molty events [--exec CMD]`. skill.md
+  `Molty-Signature`, retries, auto-disable) or with `molty events [--exec CMD]`. The skill
   explains the modes so each agent sets up its own end. `mood` takes an optional `hold_s`.
-- **Skill versions** (relay): skill.md is versioned (now v2). An agent paired before a
-  change gets a one-time `skill_update` on its next successful REST/MCP call (MCP adds a
-  "Molty's skill was updated" line) and one `skill.updated` inbox event, which also reaches
-  its unfiltered webhook.
+- **Agent skill as a plugin**: the agent skill is one folder in the repo, `skills/molty/`
+  (a short `SKILL.md`, references, shell helpers), distributed only through the git plugin
+  marketplaces: `claude plugin marketplace add apresmoi/molty.uno && claude plugin install
+  molty@molty`, or `codex plugin marketplace add apresmoi/molty.uno && codex plugin add
+  molty@molty`. The relay no longer serves or versions it: `GET /skill.md` is a deprecated `301`
+  to the skill on GitHub, the `skill_update` / `skill.updated` notices are gone, and agents read
+  the contract as `api_version` (pair result, `status` `relay.api_version`, `/v1/health`,
+  `molty_updates`, MCP `serverInfo`). The console's setup message points at the skill and names
+  the relay only when it is a private one.
 - **Boards**: a board layer (`firmware/main/board/molty_board.h`, one folder per board
   under `firmware/boards/`, [docs/PORTING.md](docs/PORTING.md)). The fluid is sized at
   runtime from the board's display; absent hardware degrades (`unsupported` voice/IMU

@@ -1,0 +1,36 @@
+{
+  "name": "molty",
+  "description": "Connect your agent to Molty, the round desk device that talks: pair with a tap, talk and listen in one call per turn, ask tap-button questions, show moods, and answer when your human shakes Molty and speaks.",
+  "author": {
+    "name": "apresmoi",
+    "url": "https://github.com/apresmoi"
+  },
+  "homepage": "https://github.com/apresmoi/molty.uno",
+  "repository": "https://github.com/apresmoi/molty.uno",
+  "license": "MIT",
+  "keywords": [
+    "molty",
+    "hardware",
+    "voice",
+    "companion",
+    "desk-device",
+    "agent-link"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Molty",
+    "shortDescription": "Talk to your human through Molty",
+    "longDescription": "Connect your agent to Molty, the round desk device that talks: pair with a tap, talk and listen in one call per turn, ask tap-button questions, show moods, and answer when your human shakes Molty and speaks. One skill: the Molty agent API, event handling, latency and etiquette rules, and shell helpers.",
+    "developerName": "apresmoi",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://molty.uno",
+    "defaultPrompt": [
+      "Connect yourself to my Molty.",
+      "Tell me on Molty when this is done."
+    ]
+  }
+}

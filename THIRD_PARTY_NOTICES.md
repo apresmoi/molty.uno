@@ -81,7 +81,7 @@ Touch (SPD2010), IMU (QMI8658) and I/O-expander (TCA9554) drivers are
 re-implementations whose register sequences were derived from Waveshare's
 ESP32-S3-Touch-LCD-1.46 demo code and the respective vendor datasheets.
 The Waveshare ESP32-S3-Touch-LCD-1.28 board's GC9A01A panel driver
-(firmware/boards/waveshare/esp32-s3-touch-lcd-1.28/lcd_gc9a01.c) sends the panel
+(device/firmware/boards/waveshare/esp32-s3-touch-lcd-1.28/lcd_gc9a01.c) sends the panel
 register sequence of Waveshare's ESP32-S3-Touch-LCD-1.28 demo (LCD_1in28.cpp), and
 its CST816S touch driver is a re-implementation of the register layout used by the
 demo's CST816S driver (© 2021 Felix Biego, MIT). Each firmware image contains the

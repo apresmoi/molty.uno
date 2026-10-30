@@ -25,16 +25,16 @@ set — `mood`, `show`, `say`, `listen`, `state`, `volume`, `imu`, `status`, `di
 
 | Dir | What | Talks to |
 |---|---|---|
-| `firmware/` | ESP-IDF app: fluid renderer, `.molty` creature runtime, HTTP API, agent-link client, USB-C NCM + Wi-Fi; one board folder per supported board (display, touch, IMU, audio drivers) | relay (WSS out), console + CLI (HTTP in) |
-| `console/` | Setup + settings UI, built to one HTML file and baked into the firmware's SPIFFS image | device HTTP API |
-| `relay/` | Cloudflare Worker: device sockets, pairing, REST + remote MCP, voice | devices, agents |
-| `cli/` | `molty` CLI + stdio MCP server, direct HTTP or via the relay | device or relay |
-| `creatures/` | Cute-kit creature specs, the JS fluid engine, viewers, the `.molty` exporter | console (imported at build time) |
+| `device/firmware/` | ESP-IDF app: fluid renderer, `.molty` creature runtime, HTTP API, agent-link client, USB-C NCM + Wi-Fi; one board folder per supported board (display, touch, IMU, audio drivers) | relay (WSS out), console + CLI (HTTP in) |
+| `device/console/` | Setup + settings UI, built to one HTML file and baked into the firmware's SPIFFS image | device HTTP API |
+| `services/relay/` | Cloudflare Worker: device sockets, pairing, REST + remote MCP, voice | devices, agents |
+| `apps/cli/` | `molty` CLI + stdio MCP server, direct HTTP or via the relay | device or relay |
+| `device/creatures/` | Cute-kit creature specs, the JS fluid engine, viewers, the `.molty` exporter | console (imported at build time) |
 
 ## Firmware layout
 
 ```
-firmware/main/                 the core: no pins, no panel sizes
+device/firmware/main/                 the core: no pins, no panel sizes
 ├── app_main.c      boot order
 ├── board/          molty_board.h: the one seam to the hardware (+ guarded wrappers)
 ├── net/            USB-C NCM + Wi-Fi + mDNS (network.c), HTTP API (http.c),
@@ -44,7 +44,7 @@ firmware/main/                 the core: no pins, no panel sizes
 ├── link/           agent link: WSS client, identity, pairing, command dispatcher, audio
 ├── sense/          device events (IMU shake, taps, buttons) → agent + fluid; status mark
 └── diag/           log ring, frame histograms, /api/diag, /api/log
-firmware/boards/               one folder per board, exactly one compiled in
+device/firmware/boards/               one folder per board, exactly one compiled in
 ├── waveshare/esp32-s3-touch-lcd-1.46/   SPD2010 QSPI LCD + touch, TCA9554, I2S audio
 ├── waveshare/esp32-s3-touch-lcd-1.28/   GC9A01 SPI LCD, CST816S touch, battery ADC
 ├── common/         QMI8658 IMU (bus, address and axis map from the board)
@@ -63,7 +63,7 @@ The device renders one creature, **fluid**: a per-cell fluid drawn as characters
 round LCD, sized at runtime from the board's display (412×412 on the 1.46: 52×32 cells;
 240×240 on the 1.28: 30×19 at the same cell size). Everything Molty shows is a *target* the fluid flows toward: a blob,
 "thinking", speed-read text, effects, or a character creature. A character creature is a
-`.molty` file (≈0.4–1.3 KB, see `creatures/MOLTY-FORMAT.md`): the firmware holds the
+`.molty` file (≈0.4–1.3 KB, see `device/creatures/MOLTY-FORMAT.md`): the firmware holds the
 generic runtime and generates the meshes; creatures are data, swapped at runtime with
 `POST /api/creature/file`, no reflash.
 
@@ -81,8 +81,8 @@ generic runtime and generates the meshes; creatures are data, swapped at runtime
 - **Swappable seams.** The relay core is plain TypeScript (no Cloudflare imports, enforced
   by a test), so another host can wrap it. Voice providers sit behind one interface.
   The device has one command dispatcher (`link/link_cmd.c`) meant to serve both the relay link and, later, local HTTP.
-- **One creature engine, two implementations.** `creatures/js` (three.js, browser) is the
-  reference; `firmware/main/creature` reproduces it in C from the exported `.molty` data.
+- **One creature engine, two implementations.** `device/creatures/js` (three.js, browser) is the
+  reference; `device/firmware/main/creature` reproduces it in C from the exported `.molty` data.
   The console imports the JS engine directly for its animated preview.
 - **Future direction.** An agent-runtime "node" adapter (the device as a peripheral that
   exposes `say/listen/show/mood` commands to a gateway) can sit beside the relay's MCP and

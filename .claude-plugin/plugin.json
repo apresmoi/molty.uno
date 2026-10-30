@@ -1,0 +1,19 @@
+{
+  "name": "molty",
+  "description": "Connect your agent to Molty, the round desk device that talks: pair with a tap, talk and listen in one call per turn, ask tap-button questions, show moods, and answer when your human shakes Molty and speaks.",
+  "author": {
+    "name": "apresmoi",
+    "url": "https://github.com/apresmoi"
+  },
+  "homepage": "https://github.com/apresmoi/molty.uno",
+  "repository": "https://github.com/apresmoi/molty.uno",
+  "license": "MIT",
+  "keywords": [
+    "molty",
+    "hardware",
+    "voice",
+    "companion",
+    "desk-device",
+    "agent-link"
+  ]
+}

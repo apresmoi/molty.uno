@@ -1,0 +1,28 @@
+[project]
+name = "molty-voice"
+version = "0.1.0"
+description = "The owner's voice box for molty.UNO: bridges a local Kyutai moshi-server (STT + TTS) to the Molty relay."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+  "websockets>=14",
+  "msgpack>=1.0",
+  "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.scripts]
+molty-voice = "molty_voice.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["molty_voice"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
