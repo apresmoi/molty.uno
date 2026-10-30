@@ -20,6 +20,11 @@ bool link_pair_active(void) { return false; }
 esp_err_t link_audio_say(const cJSON *a, cJSON **o) { (void)a;(void)o; return ESP_OK; }
 esp_err_t link_audio_listen(const cJSON *a, cJSON **o) { (void)a;(void)o; return ESP_OK; }
 
+static unsigned gen_at_unlock;
+static void snap_gen(void) { gen_at_unlock=link_cmd_mood_gen(); }
+/* another task's explicit mood, completed just before this task got the lock */
+static void racing_mood(void) { atomic_fetch_add(&s_mood_gen,1); }
+
 static esp_err_t run(const char *name, const char *args) {
     cJSON *a=cJSON_Parse(args),*out=NULL; assert(a);
     esp_err_t e=link_cmd_run(name,a,&out); cJSON_Delete(a); cJSON_Delete(out); return e;
@@ -42,6 +47,12 @@ int main(void) {
     assert(link_cmd_state_set_explicit("{\"state\":\"text\",\"text\":\"my \\\"mood\\\" is fine\"}")==ESP_OK && link_cmd_mood_gen()==g+3);
     assert(link_cmd_state_set_explicit("{\"state\":\"blob\"}")==ESP_OK && link_cmd_mood_gen()==g+3);
     assert(link_cmd_state_set_explicit("not json \"mood\"")==ESP_OK && link_cmd_mood_gen()==g+3);
+    /* the creature reads "mood" case-insensitively with escapes decoded: count those too */
+    assert(link_cmd_state_set_explicit("{\"Mood\":\"happy\"}")==ESP_OK && link_cmd_mood_gen()==g+4);
+    assert(link_cmd_state_set_explicit("{\"\\u006dood\":\"happy\"}")==ESP_OK && link_cmd_mood_gen()==g+5);
+    /* the link's raw state command with a mood is explicit too */
+    assert(run("state","{\"mood\":\"happy\"}")==ESP_OK && link_cmd_mood_gen()==g+6);
+    assert(run("state","{\"state\":\"blob\"}")==ESP_OK && link_cmd_mood_gen()==g+6);
     /* the race: an explicit mood's apply + count, and a job end's check + idle, share one
      * lock (HTTP task vs link task). Every mood write below must run with it held. */
     sdk_state_locked=false; assert(link_cmd_state_set_explicit("{\"mood\":\"happy\"}")==ESP_OK && sdk_state_locked);
@@ -49,6 +60,15 @@ int main(void) {
     unsigned g0=link_cmd_mood_gen();
     strcpy(sdk_state,""); sdk_state_locked=false; link_cmd_mood_idle_unless(g0);
     assert(strstr(sdk_state,"\"mood\":\"idle\"") && sdk_state_locked);
+    /* critical-section boundaries: the count moves before release, the check after acquire */
+    unsigned g1=link_cmd_mood_gen(); sdk_on_unlock=snap_gen;
+    assert(link_cmd_state_set_explicit("{\"mood\":\"happy\"}")==ESP_OK && gen_at_unlock==g1+1);
+    assert(run("mood","{\"mood\":\"sleepy\"}")==ESP_OK && gen_at_unlock==g1+2);
+    sdk_on_unlock=NULL;
+    g1=link_cmd_mood_gen(); sdk_on_lock=racing_mood; strcpy(sdk_state,"");
+    link_cmd_mood_idle_unless(g1); sdk_on_lock=NULL;
+    assert(!strstr(sdk_state,"idle"));
+    g0=link_cmd_mood_gen();
     /* an explicit mood since the snapshot: idle is skipped */
     assert(run("mood","{\"mood\":\"thinking\"}")==ESP_OK);
     link_cmd_mood_idle_unless(g0); assert(strstr(sdk_state,"\"mood\":\"thinking\""));

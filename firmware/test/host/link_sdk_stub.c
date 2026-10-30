@@ -47,9 +47,10 @@ int mbedtls_base64_encode(unsigned char *out, size_t cap, size_t *len, const uns
 }
 const char *esp_err_to_name(esp_err_t e) { (void)e; return "mock_error"; }
 int sdk_locks; bool sdk_state_locked;
+void (*sdk_on_lock)(void), (*sdk_on_unlock)(void);
 SemaphoreHandle_t xSemaphoreCreateMutex(void) { return (void *)1; }
-int xSemaphoreTake(SemaphoreHandle_t s, unsigned t) { assert(s); (void)t; sdk_locks++; return pdTRUE; }
-int xSemaphoreGive(SemaphoreHandle_t s) { assert(s && sdk_locks>0); sdk_locks--; return pdTRUE; }
+int xSemaphoreTake(SemaphoreHandle_t s, unsigned t) { assert(s); (void)t; sdk_locks++; if (sdk_on_lock) sdk_on_lock(); return pdTRUE; }
+int xSemaphoreGive(SemaphoreHandle_t s) { assert(s && sdk_locks>0); if (sdk_on_unlock) sdk_on_unlock(); sdk_locks--; return pdTRUE; }
 void vSemaphoreDelete(SemaphoreHandle_t s) { (void)s; }
 struct sdk_queue { size_t count, cap, item; unsigned char data[]; };
 QueueHandle_t xQueueCreate(unsigned n, size_t item) {

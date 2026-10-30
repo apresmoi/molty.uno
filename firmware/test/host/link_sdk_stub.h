@@ -143,6 +143,8 @@ extern void (*sdk_wait)(void);
 extern unsigned sdk_random, sdk_commits, sdk_erases;
 /* mutexes held right now; whether the last state set ran with one held */
 extern int sdk_locks; extern bool sdk_state_locked;
+/* run as a mutex is acquired / about to be released (critical-section boundaries) */
+extern void (*sdk_on_lock)(void), (*sdk_on_unlock)(void);
 extern char sdk_id[64], sdk_url[384], sdk_state[512], sdk_text[4097], sdk_mood[16];
 extern const char *sdk_saved_state;   /* what mole_creature_state_get reports */
 extern uint8_t sdk_key[32];

@@ -47,11 +47,12 @@ static void mood_unlock(void) { xSemaphoreGive(atomic_load(&s_mood_lock)); }
 
 unsigned link_cmd_mood_gen(void) { return atomic_load(&s_mood_gen); }
 
+/* The same lookup the creature's setter uses (case-insensitive, escapes decoded), so
+ * every body that sets a mood counts. */
 static void note_state_body(const char *body)
 {
-    if (!body || !strstr(body, "\"mood\"")) return;     /* cheap: most bodies carry no mood */
-    cJSON *j = cJSON_Parse(body);
-    if (cJSON_IsString(cJSON_GetObjectItemCaseSensitive(j, "mood"))) atomic_fetch_add(&s_mood_gen, 1);
+    cJSON *j = body ? cJSON_Parse(body) : NULL;
+    if (cJSON_IsString(cJSON_GetObjectItem(j, "mood"))) atomic_fetch_add(&s_mood_gen, 1);
     cJSON_Delete(j);
 }
 
@@ -146,7 +147,7 @@ static esp_err_t cmd_state(const cJSON *args, cJSON **out)
     if (!args->child) return state_get(out);
     char *body = cJSON_PrintUnformatted(args);
     if (!body) return ESP_ERR_NO_MEM;
-    esp_err_t e = mole_creature_state_set(body); free(body);
+    esp_err_t e = link_cmd_state_set_explicit(body); free(body);   /* may carry a mood */
     return e == ESP_OK ? state_get(out) : e;
 }
 
