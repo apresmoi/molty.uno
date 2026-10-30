@@ -246,6 +246,7 @@ device evt ──WSS──▶ DeviceRoom.onEvt
                      └─ ev:<seq> ring (200 / 24 h, DO storage)
                           │  one read cursor per agent token (cur:<token hash>)
                           ├─▶ ride-along: unread `events` on every authenticated response
+                          │      (+ one-time `skill_update`, see "Skill versions")
                           ├─▶ pull: GET /v1/devices/<id>/events · molty_events (long-poll)
                           │      └─▶ `molty events [--exec cmd]` (CLI, JSON lines)
                           └─▶ webhook: whq:<token hash>:<seq> ─DO alarm─▶ agent-defined HTTPS request
@@ -426,6 +427,33 @@ def verify_molty(secret: str, header: str | None, method: str, target: str, body
     mac = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
     return hmac.compare_digest(mac, v2)
 ```
+
+### Skill versions and the update notice
+
+Agents learn that `/skill.md` changed without any push channel, by the same ride-along rule
+as events.
+
+- **One source of truth:** `WHATS_NEW` in `relay/src/core/version.ts` (ordered; the last
+  entry's version is `SKILL_VERSION`, now **2**: device events shake/tap/button; inbox,
+  `molty_events`, webhooks, `molty events` CLI; mood `hold_s`). skill.md's header
+  ("Skill v2 — what's new: …"), the MCP `instructions` and `serverInfo.title` derive from it;
+  a test fails if they disagree.
+- **Per token:** `skill_seen` on the token record. Newly paired tokens start current; a
+  token without it (paired before versions existed) counts as v1.
+- **Notice:** the next **successful** authenticated response of an agent behind
+  `SKILL_VERSION` carries it once — REST: additive top-level
+  `skill_update: {version, whats_new: ["v2: …"], url: "<relay>/skill.md"}`; MCP: the same
+  `skill_update` in `structuredContent` plus a text item `Molty's skill was updated (v2: …).
+  Re-read <relay>/skill.md.` Error responses carry nothing and consume nothing. The write
+  is one atomic `KV.update` on the current token record: two concurrent calls cannot both
+  get it, and a token revoked mid-call is never recreated. Fetching skill.md marks nothing.
+- **Inbox event:** once per device room and version (`skillev`), on the first device
+  hello or authenticated call after a deploy, if some paired agent is behind, the relay
+  appends `{"type":"skill.updated","data":{version, whats_new, url}}` to the inbox
+  (not rate-limited). Older agents read it like any event; it is queued to webhooks
+  **without** an `events` filter whose agent is behind. Agents dedupe by `id`. `url` is
+  absolute once the device has connected through this relay (`origin` key), else
+  `/skill.md`.
 
 ### Example setups by agent kind
 

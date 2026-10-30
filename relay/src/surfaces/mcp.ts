@@ -12,14 +12,14 @@ import { type AgentApi, type Inbox, type Outcome, type RelayBackend, bearer, tok
 import { DEFAULT_LISTEN_MS, MAX_MOOD_HOLD_S, MOODS } from "../core/commands.js";
 import { AGENT_EVENT_TYPES, type AgentEvent, INBOX_LIMITS, eventsLine, seqOf } from "../core/events.js";
 import { DEVICE_ID_RE, isRecord, type JsonObject } from "../core/protocol.js";
-import { RELAY_VERSION } from "../core/version.js";
+import { RELAY_VERSION, SKILL_VERSION, type SkillNotice, skillHeadline, skillLine, skillUpdate } from "../core/version.js";
 
 export const SUPPORTED_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"];
-export const SERVER_INFO = { name: "molty-relay", version: RELAY_VERSION };
+export const SERVER_INFO = { name: "molty-relay", title: `Molty relay (skill v${SKILL_VERSION})`, version: RELAY_VERSION };
 const MAX_BODY = 256 * 1024;
 const INSTRUCTIONS =
   "Tools operate a physical Molty device through the molty-relay. Pair first with molty_pair (no token needed), then send the returned agent_token as 'Authorization: Bearer <token>'. molty_say and molty_listen return a job immediately; poll it with molty_wait (<= 8 s per call). " +
-  `Molty also emits events (${AGENT_EVENT_TYPES.join(", ")}) into your own inbox: unread ones ride along on every tool result as 'events' plus a 'Molty: ...' line; molty_events pulls/waits for them; molty_webhook registers an HTTPS request the relay sends you per event. React briefly, once per moment. Full guide: GET /skill.md on this relay.`;
+  `Molty also emits events (${AGENT_EVENT_TYPES.join(", ")}) into your own inbox: unread ones ride along on every tool result as 'events' plus a 'Molty: ...' line; molty_events pulls/waits for them; molty_webhook registers an HTTPS request the relay sends you per event. React briefly, once per moment. Full guide: GET /skill.md on this relay. ${skillHeadline()}. When the skill changes again, your next successful tool result carries 'skill_update' plus a 'Molty's skill was updated' line once: re-read /skill.md then.`;
 
 type Prop = { type: string; description: string; enum?: string[]; items?: { type: "string"; enum?: string[] } };
 type Schema = { type: "object"; properties: Record<string, Prop>; required: string[]; additionalProperties: false };
@@ -258,7 +258,7 @@ const rpcResult = (id: unknown, result: unknown) => ({ jsonrpc: "2.0", id, resul
  * structured result and one extra text item ("Molty: was shaken ... 2 min ago").
  * Results without unread events are byte-for-byte what they were before.
  */
-function toolResult(out: Outcome<JsonObject>) {
+function toolResult(out: Outcome<JsonObject>, origin = "") {
   const value: JsonObject = out.ok ? { ok: true, ...out.result } : { ok: false, error: out.error, ...(out.message ? { message: out.message } : {}) };
   let line: string | undefined;
   if (out.inbox && out.inbox.events.length > 0 && !("events" in value)) {
@@ -268,12 +268,15 @@ function toolResult(out: Outcome<JsonObject>) {
   } else if (out.ok && Array.isArray(value.events) && value.events.length > 0 && "next" in value) {
     line = eventsLine(value.events as unknown as AgentEvent[], Date.now(), value.more === true); // molty_events itself
   }
+  // One-time skill notice (already marked seen by the backend): structured field + one line.
+  if (out.notice && !("skill_update" in value)) value.skill_update = skillUpdate(out.notice, origin) as unknown as JsonObject;
   const content = [{ type: "text", text: JSON.stringify(value) }];
   if (line) content.push({ type: "text", text: line });
+  if (out.notice) content.push({ type: "text", text: skillLine(out.notice, origin) });
   return { content, structuredContent: value, isError: !out.ok };
 }
 
-async function callTool(backend: RelayBackend, token: string | undefined, params: unknown) {
+async function callTool(backend: RelayBackend, token: string | undefined, params: unknown, origin: string) {
   if (!isRecord(params) || typeof params.name !== "string") return { error: [-32602, "Invalid tool parameters"] as const };
   const tool = TOOL_MAP.get(params.name);
   if (!tool) return { error: [-32602, `Unknown tool ${params.name}`] as const };
@@ -292,24 +295,30 @@ async function callTool(backend: RelayBackend, token: string | undefined, params
     // Ride-along events were already marked read by the backend: whatever a
     // tool does to reshape the outcome (molty_wait builds new ones), the
     // inbox it received must reach the caller.
-    const { api, taken } = capturingInbox(backend.device(deviceId));
-    const out = await tool.run(api, token ?? "", args);
-    return { result: toolResult(taken.length && !out.inbox ? { ...out, inbox: mergeInbox(taken) } : out) };
+    // Same for the skill notice.
+    const { api, taken, notices } = capturingInbox(backend.device(deviceId));
+    let out = await tool.run(api, token ?? "", args);
+    if (taken.length && !out.inbox) out = { ...out, inbox: mergeInbox(taken) };
+    if (notices.length && !out.notice) out = { ...out, notice: notices[notices.length - 1] };
+    return { result: toolResult(out, origin) };
   } catch (e) {
     return { result: toolResult({ ok: false, error: "internal", message: e instanceof Error ? e.message : String(e) }) };
   }
 }
 
-/** Wraps an AgentApi so every inbox any call returns is recorded. */
-function capturingInbox(api: AgentApi): { api: AgentApi; taken: Inbox[] } {
+/** Wraps an AgentApi so every inbox and skill notice any call returns is recorded. */
+function capturingInbox(api: AgentApi): { api: AgentApi; taken: Inbox[]; notices: SkillNotice[] } {
   const taken: Inbox[] = [];
+  const notices: SkillNotice[] = [];
   const keep = async <T extends Outcome<any>>(p: Promise<T>) => {
     const out = await p;
     if (out.inbox && out.inbox.events.length) taken.push(out.inbox);
+    if (out.notice) notices.push(out.notice);
     return out;
   };
   return {
     taken,
+    notices,
     api: {
       pair: (req) => keep(api.pair(req)),
       command: (t, n, a) => keep(api.command(t, n, a)),
@@ -325,7 +334,7 @@ function mergeInbox(list: Inbox[]): Inbox {
   return { events: list.flatMap((i) => i.events), more: list.some((i) => i.more), now: Math.max(...list.map((i) => i.now)) };
 }
 
-async function handleOne(msg: unknown, backend: RelayBackend, token: string | undefined): Promise<object | undefined> {
+async function handleOne(msg: unknown, backend: RelayBackend, token: string | undefined, origin: string): Promise<object | undefined> {
   if (!isRecord(msg)) return rpcError(null, -32600, "Invalid Request");
   const m = msg as RpcMessage;
   const isRequest = "id" in m && m.id !== null && m.id !== undefined;
@@ -348,7 +357,7 @@ async function handleOne(msg: unknown, backend: RelayBackend, token: string | un
     case "tools/list":
       return rpcResult(m.id, { tools: TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) });
     case "tools/call": {
-      const out = await callTool(backend, token, m.params);
+      const out = await callTool(backend, token, m.params, origin);
       return "error" in out && out.error ? rpcError(m.id, out.error[0], out.error[1]) : rpcResult(m.id, out.result);
     }
     default:
@@ -376,12 +385,13 @@ export async function handleMcp(request: Request, backend: RelayBackend): Promis
     return json(rpcError(null, -32700, "Parse error"), 400);
   }
   const token = bearer(request.headers.get("authorization"));
+  const origin = new URL(request.url).origin;
   if (Array.isArray(body)) {
     // Batches were allowed in 2025-03-26 (removed later); accept for older clients.
     if (body.length === 0) return json(rpcError(null, -32600, "Invalid Request"), 400);
-    const replies = (await Promise.all(body.map((m) => handleOne(m, backend, token)))).filter(Boolean);
+    const replies = (await Promise.all(body.map((m) => handleOne(m, backend, token, origin)))).filter(Boolean);
     return replies.length ? json(replies) : new Response(null, { status: 202 });
   }
-  const reply = await handleOne(body, backend, token);
+  const reply = await handleOne(body, backend, token, origin);
   return reply ? json(reply) : new Response(null, { status: 202 });
 }

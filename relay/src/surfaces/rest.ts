@@ -9,10 +9,13 @@
 //
 // Any authenticated response may carry the caller's unread device events as an
 // additive top-level `events` array (+ `more_events`); reading them marks them read.
+// Likewise, once per agent per skill version, an additive top-level
+// `skill_update: {version, whats_new, url}` (core/version.ts).
 
 import { type Inbox, type Outcome, type RelayBackend, bearer, jobDevice, tokenDevice } from "../core/api.js";
 import { INBOX_LIMITS, seqOf } from "../core/events.js";
 import { DEVICE_ID_RE, isRecord } from "../core/protocol.js";
+import { skillUpdate } from "../core/version.js";
 
 const STATUS: Record<string, number> = {
   unauthorized: 401,
@@ -36,11 +39,11 @@ const STATUS: Record<string, number> = {
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
-const extra = (inbox?: Inbox) => (inbox && inbox.events.length ? { events: inbox.events, ...(inbox.more ? { more_events: true } : {}) } : {});
+const inboxExtra = (inbox?: Inbox) => (inbox && inbox.events.length ? { events: inbox.events, ...(inbox.more ? { more_events: true } : {}) } : {});
 
 function failure(out: { error: string; message?: string; inbox?: Inbox }) {
   // Unknown codes are device-reported errors (e.g. mic_busy): 502.
-  return json({ ok: false, error: out.error, ...(out.message ? { message: out.message } : {}), ...extra(out.inbox) }, STATUS[out.error] ?? 502);
+  return json({ ok: false, error: out.error, ...(out.message ? { message: out.message } : {}), ...inboxExtra(out.inbox) }, STATUS[out.error] ?? 502);
 }
 
 async function body(request: Request): Promise<Record<string, unknown> | undefined> {
@@ -58,6 +61,7 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
   const url = new URL(request.url);
   const path = url.pathname;
   const token = bearer(request.headers.get("authorization"));
+  const extra = (out: Pick<Outcome, "inbox" | "notice">) => ({ ...inboxExtra(out.inbox), ...(out.notice ? { skill_update: skillUpdate(out.notice, url.origin) } : {}) });
 
   if (path === "/v1/pair") {
     if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
@@ -93,7 +97,7 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
     const b = await body(request);
     if (!b) return failure({ error: "bad_request", message: "body must be a JSON object" });
     const out: Outcome = await backend.device(id).command(token!, b.name as string, b.args);
-    return out.ok ? json({ ok: true, result: out.result, ...extra(out.inbox) }) : failure(out);
+    return out.ok ? json({ ok: true, result: out.result, ...extra(out) }) : failure(out);
   }
 
   const events = /^\/v1\/devices\/([^/]+)\/events$/.exec(path);
@@ -109,7 +113,7 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
     const since = sinceRaw === null || sinceRaw === "" ? undefined : seqOf(sinceRaw);
     if (sinceRaw && since === undefined) return failure({ error: "invalid_args", message: "since must be an event id like e41" });
     const out = await backend.device(id).events(token!, { since, wait_ms: waitS * 1000, signal: request.signal });
-    return out.ok ? json({ ok: true, ...out.result }) : failure(out);
+    return out.ok ? json({ ok: true, ...out.result, ...extra(out) }) : failure(out);
   }
 
   if (path === "/v1/webhook") {
@@ -123,7 +127,7 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
       if (!b) return failure({ error: "bad_request", message: "body must be a JSON object" });
       out = await backend.device(dev).webhook(token!, { action: "set", spec: b });
     } else return json({ ok: false, error: "method_not_allowed" }, 405);
-    return out.ok ? json({ ok: true, result: out.result, ...extra(out.inbox) }) : failure(out);
+    return out.ok ? json({ ok: true, result: out.result, ...extra(out) }) : failure(out);
   }
 
   const job = /^\/v1\/jobs\/([^/]+)$/.exec(path);
@@ -137,7 +141,7 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
     const waitS = w === null ? 0 : Number(w);
     if (!Number.isInteger(waitS) || waitS < 0 || waitS > 8) return failure({ error: "invalid_args", message: "wait_s must be 0..8" });
     const out = await backend.device(dev).job(token!, jobId, waitS * 1000);
-    return out.ok ? json({ ...out.result, ...extra(out.inbox) }) : failure(out);
+    return out.ok ? json({ ...out.result, ...extra(out) }) : failure(out);
   }
 
   if (path === "/v1/token") {

@@ -14,6 +14,12 @@
 // Agent events (shake/tap/button) are storage-backed: an `ev:` ring, a
 // per-token read cursor `cur:<token hash>` and a webhook delivery queue
 // `whq:` driven by the host's alarm. All survive hibernation.
+//
+// Skill versions (core/version.ts): each TokenRecord holds `skill_seen`; the
+// first successful authenticated outcome for an agent behind SKILL_VERSION
+// carries a one-time `notice` (written atomically onto the token, never
+// resurrecting a revoked one). Once per room and version, a `skill.updated`
+// event is appended to the inbox when an older agent exists (`skillev`).
 
 import { type AgentApi, type EventsRequest, type JobView, type Outcome, type PairRequest, type PairResult, TERMINAL, type WebhookRequest } from "./api.js";
 import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
@@ -36,7 +42,8 @@ import {
   type JsonObject,
 } from "./protocol.js";
 import { type Clock, type KV, sleep } from "./store.js";
-import { AGENT_EVENT_TYPES, type AgentEvent, INBOX_LIMITS, SAMPLE_EVENTS, agentEventData, eventId } from "./events.js";
+import { AGENT_EVENT_TYPES, type AgentEvent, INBOX_LIMITS, SAMPLE_EVENTS, SKILL_EVENT, agentEventData, eventId } from "./events.js";
+import { SKILL_PATH, SKILL_VERSION, type SkillNotice, skillNotice } from "./version.js";
 import {
   type DeliveryError,
   type GuardResult,
@@ -135,6 +142,8 @@ interface TokenRecord {
    * one KV.update (atomic read-check-write). Revocation deletes the record.
    */
   wh_rev?: number;
+  /** Last skill version this agent was told about (absent = paired before versions: older than any). */
+  skill_seen?: number;
 }
 
 type WebhookWrite = "ok" | "gone" | "conflict";
@@ -189,6 +198,10 @@ const K = {
   ev: (seq: number) => `ev:${String(seq).padStart(12, "0")}`,
   cur: (hash: string) => `cur:${hash}`,
   whq: (hash: string, seq: number) => `whq:${hash}:${String(seq).padStart(12, "0")}`,
+  /** Highest skill version already announced as a `skill.updated` inbox event. */
+  skillEv: "skillev",
+  /** Public origin of this relay (from the device upgrade request), for absolute URLs in events. */
+  origin: "origin",
 };
 
 
@@ -221,6 +234,8 @@ export class DeviceRoom implements AgentApi {
   /** Outstanding long-polls per token hash (admission control). */
   private readonly polls = new Map<string, number>();
   private evChain: Promise<void> = Promise.resolve();
+  /** Cache of "skillev >= SKILL_VERSION" (KV stays authoritative). */
+  private skillAnnounced = false;
   private cmdSeq = 0;
 
   constructor(deps: RoomDeps) {
@@ -332,6 +347,14 @@ export class DeviceRoom implements AgentApi {
     }
     if (hello.link_code) await this.kv.put(K.link, { code: hello.link_code, at: this.clock.now() });
     sock.sendText(JSON.stringify({ t: "welcome" }));
+    // After a deploy the device reconnects: tell push-mode agents the skill changed.
+    await this.announceSkill();
+  }
+
+  /** The host records the public origin it was reached on (device upgrade request). */
+  async noteOrigin(origin: string): Promise<void> {
+    if (!/^https?:\/\/[A-Za-z0-9.:[\]-]{1,253}$/.test(origin)) return;
+    if ((await this.kv.get<string>(K.origin)) !== origin) await this.kv.put(K.origin, origin);
   }
 
   private onRes(frame: Record<string, unknown>) {
@@ -366,7 +389,7 @@ export class DeviceRoom implements AgentApi {
     for (const prefix of ["tok:", "pair:", "job:", "ev:", "cur:", "whq:"]) {
       for (const key of (await this.kv.list(prefix)).keys()) await this.kv.delete(key);
     }
-    for (const key of [K.device, K.link, K.pairCurrent, K.evSeq, K.evRate]) await this.kv.delete(key);
+    for (const key of [K.device, K.link, K.pairCurrent, K.evSeq, K.evRate, K.skillEv, K.origin]) await this.kv.delete(key);
     this.log("device forgotten", { device: this.deviceId });
     sock.sendText(JSON.stringify({ t: "forgotten" }));
     sock.close(CLOSE_FORGOTTEN, "forgotten");
@@ -420,7 +443,7 @@ export class DeviceRoom implements AgentApi {
   async command(token: string, name: string, args: unknown): Promise<Outcome> {
     const a = await this.auth(token);
     if (!a) return fail("unauthorized");
-    return this.withInbox(a.hash, await this.runCommand(a.rec, name, args));
+    return this.ride(a, await this.runCommand(a.rec, name, args));
   }
 
   private async runCommand(agent: TokenRecord, name: string, args: unknown): Promise<Outcome> {
@@ -541,7 +564,8 @@ export class DeviceRoom implements AgentApi {
     } else if (frame.ok === true) {
       const token = `${this.deviceId}.${b64urlEncode(randomBytes(32))}`;
       const hash = await sha256Hex(token);
-      await this.kv.put<TokenRecord>(K.token(hash), { agent_name: rec.agent_name, created: this.clock.now() });
+      // A new agent just learned the current skill (skill.md / MCP instructions).
+      await this.kv.put<TokenRecord>(K.token(hash), { agent_name: rec.agent_name, created: this.clock.now(), skill_seen: SKILL_VERSION });
       // A new agent starts at the head: it hears what happens from now on.
       await this.kv.put(K.cur(hash), (await this.kv.get<number>(K.evSeq)) ?? 0);
       rec.status = "approved";
@@ -566,7 +590,7 @@ export class DeviceRoom implements AgentApi {
     const out = await this.runJob(jobId, waitMs);
     // A failed job is an error to every surface: nothing rides along on it.
     if (out.ok && out.result.status === "failed") return out;
-    return this.withInbox(a.hash, out);
+    return this.ride(a, out);
   }
 
   private async runJob(jobId: string, waitMs: number): Promise<Outcome<JobView>> {
@@ -710,24 +734,26 @@ export class DeviceRoom implements AgentApi {
 
   // ---------------- agent events: inbox ----------------
 
-  /** Serialized so concurrent frames cannot race the sequence counter. */
-  private appendEvent(type: string, data: JsonObject): Promise<void> {
-    const run = this.evChain.then(() => this.doAppend(type, data));
+  /** Serialized so concurrent frames cannot race the sequence counter. `relay`: relay-generated, not rate-limited. */
+  private appendEvent(type: string, data: JsonObject, relay = false): Promise<void> {
+    const run = this.evChain.then(() => this.doAppend(type, data, relay));
     this.evChain = run.catch(() => {});
     return run;
   }
 
-  private async doAppend(type: string, data: JsonObject) {
+  private async doAppend(type: string, data: JsonObject, relay: boolean) {
     const now = this.clock.now();
-    const rate = (await this.kv.get<RateRecord>(K.evRate)) ?? { start: now, n: 0, dropped: 0 };
-    if (now - rate.start >= 60000) Object.assign(rate, { start: now, n: 0 });
-    if (rate.n >= INBOX_LIMITS.perMinute) {
-      rate.dropped++;
+    if (!relay) {
+      const rate = (await this.kv.get<RateRecord>(K.evRate)) ?? { start: now, n: 0, dropped: 0 };
+      if (now - rate.start >= 60000) Object.assign(rate, { start: now, n: 0 });
+      if (rate.n >= INBOX_LIMITS.perMinute) {
+        rate.dropped++;
+        await this.kv.put(K.evRate, rate);
+        return;
+      }
+      rate.n++;
       await this.kv.put(K.evRate, rate);
-      return;
     }
-    rate.n++;
-    await this.kv.put(K.evRate, rate);
     const seq = ((await this.kv.get<number>(K.evSeq)) ?? 0) + 1;
     await this.kv.put(K.evSeq, seq);
     const ev: AgentEvent = { id: eventId(seq), type, ts: now, data };
@@ -740,6 +766,7 @@ export class DeviceRoom implements AgentApi {
     let queued = false;
     for (const [key, tok] of await this.kv.list<TokenRecord>("tok:")) {
       if (!tok.webhook || tok.webhook.disabled || (tok.webhook.events && !tok.webhook.events.includes(type))) continue;
+      if (type === SKILL_EVENT && !skillNotice(tok.skill_seen)) continue; // already current
       const hash = key.slice(4);
       await this.kv.put<Delivery>(K.whq(hash, seq), { tok: hash, seq, attempt: 0, due: now });
       queued = true;
@@ -783,9 +810,54 @@ export class DeviceRoom implements AgentApi {
     return { ...out, inbox: { events: r.events, more: r.more, now: this.clock.now() } };
   }
 
+  /** Everything that rides along on a successful authenticated outcome: unread events, then the skill notice. */
+  private async ride<T>(a: { rec: TokenRecord; hash: string }, out: Outcome<T>): Promise<Outcome<T>> {
+    if (!out.ok) return out;
+    await this.announceSkill();
+    return this.withNotice(a, await this.withInbox(a.hash, out));
+  }
+
+  /**
+   * One-time skill notice, same rule as events: only on success, and marked
+   * seen in the same step it is handed over. Atomic on the CURRENT token
+   * record: a token revoked meanwhile is never recreated, and two concurrent
+   * calls cannot both deliver it.
+   */
+  private async withNotice<T>(a: { rec: TokenRecord; hash: string }, out: Outcome<T>): Promise<Outcome<T>> {
+    if (!out.ok || !skillNotice(a.rec.skill_seen)) return out;
+    const notice = await this.kv.update<TokenRecord, SkillNotice | undefined>(K.token(a.hash), (cur) => {
+      if (!cur) return { result: undefined };
+      const n = skillNotice(cur.skill_seen);
+      if (!n) return { result: undefined };
+      return { next: { ...cur, skill_seen: SKILL_VERSION }, result: n };
+    });
+    return notice ? { ...out, notice } : out;
+  }
+
+  /**
+   * Once per room and skill version: append a `skill.updated` event when some
+   * paired agent is behind, so pull/webhook agents hear it without calling.
+   */
+  private async announceSkill(): Promise<void> {
+    if (this.skillAnnounced) return;
+    if (((await this.kv.get<number>(K.skillEv)) ?? 0) >= SKILL_VERSION) {
+      this.skillAnnounced = true;
+      return;
+    }
+    // New tokens are minted current, so the set of older agents only shrinks.
+    const behind = [...(await this.kv.list<TokenRecord>("tok:")).values()].some((t) => skillNotice(t.skill_seen));
+    const won = await this.kv.update<number, boolean>(K.skillEv, (cur) => ((cur ?? 0) >= SKILL_VERSION ? { result: false } : { next: SKILL_VERSION, result: true }));
+    this.skillAnnounced = true;
+    if (!won || !behind) return;
+    const n = skillNotice(undefined)!;
+    const origin = await this.kv.get<string>(K.origin);
+    await this.appendEvent(SKILL_EVENT, { version: n.version, whats_new: n.whats_new, url: `${origin ?? ""}${SKILL_PATH}` }, true);
+  }
+
   async events(token: string, req: EventsRequest): Promise<Outcome> {
     const a = await this.auth(token);
     if (!a) return fail("unauthorized");
+    await this.announceSkill();
     if (req.since !== undefined && (!Number.isInteger(req.since) || req.since < 0)) return fail("invalid_args", "since must be an event id like e42");
     const waitMs = Math.max(0, Math.min(req.wait_ms, INBOX_LIMITS.restWaitS * 1000));
     // Admission: bounded concurrent long-polls per token and per device.
@@ -808,7 +880,7 @@ export class DeviceRoom implements AgentApi {
         if (r.events.length > 0 || remaining <= 0 || req.signal?.aborted) {
           if (req.signal?.aborted) return fail("cancelled"); // nobody is listening: hand over nothing
           await this.advance(a.hash, r.cursor, r.next);
-          return { ok: true, result: { events: r.events as unknown as JsonObject[], next: eventId(r.next), more: r.more } };
+          return this.withNotice(a, { ok: true, result: { events: r.events as unknown as JsonObject[], next: eventId(r.next), more: r.more } });
         }
         await this.waitOn(this.inboxWaiters, "inbox", remaining, req.signal);
       }
@@ -828,7 +900,7 @@ export class DeviceRoom implements AgentApi {
     if (!a) return fail("unauthorized");
     const key = K.token(a.hash);
     if (req.action === "get") {
-      return this.withInbox(a.hash, { ok: true, result: { webhook: a.rec.webhook ? (redactWebhook(a.rec.webhook) as JsonObject) : null } });
+      return this.ride(a, { ok: true, result: { webhook: a.rec.webhook ? (redactWebhook(a.rec.webhook) as JsonObject) : null } });
     }
     if (req.action === "delete") {
       const had = await this.kv.update<TokenRecord, boolean | undefined>(key, (cur) => {
@@ -838,7 +910,7 @@ export class DeviceRoom implements AgentApi {
       });
       if (had === undefined) return fail("unauthorized");
       await this.dropDeliveries(a.hash);
-      return this.withInbox(a.hash, { ok: true, result: { removed: had } });
+      return this.ride(a, { ok: true, result: { removed: had } });
     }
     const parsed = parseWebhookSpec(req.spec);
     if (!parsed.ok) return fail("invalid_args", parsed.message);
@@ -881,7 +953,7 @@ export class DeviceRoom implements AgentApi {
     if (outcome === "gone") return fail("unauthorized");
     if (outcome === "conflict") return fail("conflict", "the webhook changed while this registration was being validated; read it and retry");
     await this.dropDeliveries(a.hash);
-    return this.withInbox(a.hash, {
+    return this.ride(a, {
       ok: true,
       result: {
         webhook: redactWebhook(webhook) as JsonObject,

@@ -117,6 +117,8 @@ export class MoltyDevice extends DurableObject<Env> {
     const [client, server] = [pair[0], pair[1]];
     this.ctx.acceptWebSocket(server);
     server.serializeAttachment({ device: id } satisfies Attachment);
+    // Absolute skill.md URL for relay-generated events (webhooks have no request origin).
+    await this.room(id).noteOrigin(new URL(request.url).origin);
     this.room(id).socketOpen(new WsSocket(server));
     return new Response(null, { status: 101, webSocket: client });
   }

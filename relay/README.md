@@ -96,6 +96,7 @@ Spec: [AGENT-LINK.md "Events"](../docs/AGENT-LINK.md#events-device--agents). Sto
 the device's DO: `ev:<seq>` (ring), `evseq`, `evrate`, `cur:<sha256(token)>` (per-agent
 cursor), `whq:<sha256(token)>:<seq>` (pending deliveries), the webhook itself on the
 token record, and `room_id` (lets `alarm()` rebuild the room). All survive hibernation.
+Skill versions ([AGENT-LINK.md](../docs/AGENT-LINK.md#skill-versions-and-the-update-notice)): `skill_seen` on the token record, `skillev` (version already announced as a `skill.updated` event) and `origin` (public origin, for its URL); bump by appending to `WHATS_NEW` in `src/core/version.ts`.
 
 | Limit | Value |
 |---|---|

@@ -3,6 +3,7 @@
 
 import type { AgentEvent } from "./events.js";
 import type { JsonObject } from "./protocol.js";
+import type { SkillNotice } from "./version.js";
 
 export type ErrorCode =
   | "unauthorized"
@@ -29,7 +30,11 @@ export interface Inbox {
   now: number;
 }
 
-export type Outcome<T = JsonObject> = ({ ok: true; result: T } | { ok: false; error: ErrorCode; message?: string }) & { inbox?: Inbox };
+/**
+ * `notice`: a one-time "the skill changed" notice riding along on a successful
+ * authenticated outcome (already marked seen); surfaces render it additively.
+ */
+export type Outcome<T = JsonObject> = ({ ok: true; result: T } | { ok: false; error: ErrorCode; message?: string }) & { inbox?: Inbox; notice?: SkillNotice };
 
 export interface EventsRequest {
   /** Event id or sequence to read after; default = this agent's cursor. */

@@ -24,6 +24,10 @@ First public release.
   webhook (`PUT /v1/webhook`, `molty_webhook`: templated HTTPS request, HMAC
   `Molty-Signature`, retries, auto-disable) or with `molty events [--exec CMD]`. skill.md
   explains the modes so each agent sets up its own end. `mood` takes an optional `hold_s`.
+- **Skill versions** (relay): skill.md is versioned (now v2). An agent paired before a
+  change gets a one-time `skill_update` on its next successful REST/MCP call (MCP adds a
+  "Molty's skill was updated" line) and one `skill.updated` inbox event, which also reaches
+  its unfiltered webhook.
 - **Boards**: a board layer (`firmware/main/board/molty_board.h`, one folder per board
   under `firmware/boards/`, [docs/PORTING.md](docs/PORTING.md)). The fluid is sized at
   runtime from the board's display; absent hardware degrades (`unsupported` voice/IMU

@@ -5,7 +5,8 @@
 // `wrangler dev`). Keep it in sync with commands.ts / rest.ts / mcp.ts and
 // docs/AGENT-LINK.md; test/skill.test.ts pins the load-bearing facts.
 
-import { INBOX_LIMITS } from "../core/events.js";
+import { INBOX_LIMITS, SKILL_EVENT } from "../core/events.js";
+import { SKILL_VERSION, skillHeadline } from "../core/version.js";
 import { WEBHOOK_LIMITS } from "../core/webhook.js";
 import { DEFAULT_LISTEN_MS, DEFAULT_WPM, MAX_MOOD_HOLD_S, MAX_DIAG_TIMELINE_S, MAX_LISTEN_MS, MAX_LOG_BYTES, MAX_SAY_BYTES, MAX_SHOW_BYTES, MOODS } from "../core/commands.js";
 
@@ -14,6 +15,9 @@ export const SKILL_PATHS = ["/skill.md", "/skill"];
 export function skillMarkdown(origin: string): string {
   const o = origin.replace(/\/+$/, "");
   return `# Molty — agent skill
+
+> **${skillHeadline()}.** When this page changes, your next successful
+> authenticated call carries a one-time \`skill_update\` (see "Skill updates" below).
 
 You were asked to connect yourself to a **Molty**. This page tells you everything
 you need. Relay origin for every call below: \`${o}\`.
@@ -169,6 +173,17 @@ Pick whatever fits how you run; you know your environment better than we do. Be 
 about the limit: nothing can wake an agent that has no reachable endpoint and is not
 running — then you hear Molty the next time you touch it (way 1), so say so instead of
 promising to react live.
+
+## Skill updates
+
+This page is **Skill v${SKILL_VERSION}**. When it changes, nothing is pushed at you: the
+next successful authenticated REST response carries, once, an additive top-level
+\`"skill_update": {"version": ${SKILL_VERSION}, "whats_new": ["v${SKILL_VERSION}: …"], "url": "${o}/skill.md"}\`
+(MCP: the same \`skill_update\` in the structured result plus a line "Molty's skill was
+updated (…). Re-read ${o}/skill.md."). Re-read this page when you see it. Failed calls
+don't consume it. Agents paired before an update also get one \`${SKILL_EVENT}\` event
+(\`{"version","whats_new","url"}\`) in their inbox, and webhooks without an \`events\`
+filter receive it too — dedupe by \`id\`.
 
 ## Etiquette
 
