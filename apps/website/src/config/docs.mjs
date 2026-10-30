@@ -31,19 +31,19 @@ export const SYNCED_DOCS = [
     description: 'The molty CLI and stdio MCP server, direct over USB/Wi-Fi or through the relay.',
   },
   {
-    source: 'creatures/README.md',
+    source: 'device/creatures/README.md',
     slug: 'moltys/overview',
     title: 'Moltys and the viewers',
     description: 'Where the creatures live, the browser viewers and the .molty exporter.',
   },
   {
-    source: 'creatures/js/cute/README.md',
+    source: 'device/creatures/js/cute/README.md',
     slug: 'moltys/making-your-own',
     title: 'Make your own Molty',
     description: 'The cute kit: a creature is a small data spec plus optional hooks.',
   },
   {
-    source: 'creatures/MOLTY-FORMAT.md',
+    source: 'device/creatures/MOLTY-FORMAT.md',
     slug: 'moltys/format',
     title: 'The .molty format',
     description: 'The ~1 KB binary file that carries one creature to the device.',

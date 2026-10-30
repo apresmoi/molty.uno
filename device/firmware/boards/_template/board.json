@@ -41,6 +41,6 @@
     }
   ],
   "photos": [
-    "firmware/boards/myvendor/mymodel/photo.jpg"
+    "device/firmware/boards/myvendor/mymodel/photo.jpg"
   ]
 }

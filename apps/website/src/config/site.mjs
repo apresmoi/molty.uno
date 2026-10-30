@@ -14,7 +14,7 @@ export const THREE_CDN = 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three
 export const repoFile = (path) => `${REPO_URL}/blob/${REPO_BRANCH}/${path}`;
 /** Where people write about their data (the waitlist's GDPR line). */
 export const CONTACT_EMAIL = 'hello@molty.uno';
-/** The waitlist form posts here: POST /waitlist on the project's relay (relay/README.md
+/** The waitlist form posts here: POST /waitlist on the project's relay (services/relay/README.md
  *  "Waitlist"). Same host as the agent link's default relay (docs/AGENT-LINK.md). */
 export const WAITLIST_URL = 'https://molty-relay.alicenet.workers.dev/waitlist';
 /** Cloudflare Turnstile site key for the waitlist, or '' for none. Set it together with the

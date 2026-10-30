@@ -160,7 +160,7 @@ static void test_say(void) {
     assert(bin_bytes==160000 && bin_ends==1 && bin_frames==17 && sdk_rx_chunks==50);
     assert(!strcmp(bin_reason,"max") && !strcmp(s_end_reason,"max"));
     /* VAD off measured nothing: no speech_ms (a 0 made the relay skip STT). This exact
-     * header is the fixture in relay/test/talk.test.ts ("vad:false end frame"). */
+     * header is the fixture in services/relay/test/talk.test.ts ("vad:false end frame"). */
     assert(bin_speech_ms==-1);
     assert(!strcmp(bin_end_header,"{\"s\":\"listen1\",\"seq\":16,\"kind\":\"pcm16\",\"rate\":16000,\"end\":true,\"reason\":\"max\"}"));
     /* End of speech (default on): nobody speaks → the listen ends at no_speech_ms 4 s

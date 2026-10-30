@@ -4,12 +4,12 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 // One self-contained HTML file (dist/index.html). The firmware stages it into
-// the SPIFFS image and serves it at "/" (see firmware/main/CMakeLists.txt).
+// the SPIFFS image and serves it at "/" (see device/firmware/main/CMakeLists.txt).
 // Dev: `pnpm dev` and open http://localhost:8170/?device=http://<device-ip>
 //
 // Two extras for the setup flow:
-//  - `@viewer/…` → creatures/js (the REAL fluid engine + cute-kit Moltys;
-//    imported, never forked) and `@molty/…` → creatures/molty (.molty files).
+//  - `@viewer/…` → device/creatures/js (the REAL fluid engine + cute-kit Moltys;
+//    imported, never forked) and `@molty/…` → device/creatures/molty (.molty files).
 //  - `virtual:molty-stage` — the animated round screen (src/stage/entry.js + the viewer
 //    code) built as a SEPARATE ES module and inlined here as a string. three.js (~600 KB)
 //    stays out of the firmware-served file: the stage imports it from the CDN at runtime,
@@ -18,8 +18,8 @@ export const THREE_CDN = 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three
 const viewer = fileURLToPath(new URL('../creatures/js', import.meta.url));
 const molty = fileURLToPath(new URL('../creatures/molty', import.meta.url));
 const alias = { '@viewer': viewer, '@molty': molty };
-/** Product version from the repo-root VERSION file (scripts/version.mjs) → __MOLTY_VERSION__. */
-const VERSION = readFileSync(fileURLToPath(new URL('../VERSION', import.meta.url)), 'utf8').trim();
+/** Product version from the repo-root VERSION file (tools/scripts/version.mjs) → __MOLTY_VERSION__. */
+const VERSION = readFileSync(fileURLToPath(new URL('../../VERSION', import.meta.url)), 'utf8').trim();
 
 /** `import b64 from '…/x.molty'` → the file's bytes as a base64 string. */
 const moltyFiles = (): Plugin => ({
@@ -57,6 +57,6 @@ export default defineConfig({
   define: { __MOLTY_VERSION__: JSON.stringify(VERSION) },
   resolve: { alias },
   build: { target: 'es2020', cssMinify: true, reportCompressedSize: true, assetsInlineLimit: 1 << 20 },
-  server: { port: 8170, strictPort: true, fs: { allow: ['..'] } },
+  server: { port: 8170, strictPort: true, fs: { allow: ['../..'] } },
   test: { include: ['src/**/*.test.ts'] },
 } as Parameters<typeof defineConfig>[0]);

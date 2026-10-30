@@ -34,7 +34,7 @@ export interface ReleaseInfo {
   notes_url: string;
   /** The release notes (CHANGELOG section), truncated to MAX_NOTES chars. */
   notes: string;
-  /** board name (firmware/boards/**\/board.json "name") -> its OTA image. */
+  /** board name (device/firmware/boards/**\/board.json "name") -> its OTA image. */
   boards: Record<string, OtaAsset>;
 }
 

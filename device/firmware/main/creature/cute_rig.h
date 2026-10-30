@@ -3,7 +3,7 @@
  * rigid low-poly parts on a small rig, animated by the mood engine, rasterised into the
  * fluid's per-cell target (ink, colour, solid features) the fluid relaxes toward.
  *
- * Port of creatures/js/cute/kit.js (CuteCreature: build, update, _face,
+ * Port of device/creatures/js/cute/kit.js (CuteCreature: build, update, _face,
  * _limbs, MOTIONS), js/mood.js (MoodEngine) and the CreatureTarget raster of
  * js/fluid/targets.js (ortho camera fit, flat Lambert key 1.0 + ambient 0.4, one colour
  * per face, coverage / colour / luminance per cell, auto-exposure, dark covered cells as

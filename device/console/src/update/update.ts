@@ -24,7 +24,7 @@ export type UpdateView =
 
 const SEMVER = /^v?(\d{1,9})\.(\d{1,9})\.(\d{1,9})(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/;
 
-/** Semver precedence (<0, 0, >0); undefined when either side is not X.Y.Z[-pre]. Mirrors relay/src/core/version.ts. */
+/** Semver precedence (<0, 0, >0); undefined when either side is not X.Y.Z[-pre]. Mirrors services/relay/src/core/version.ts. */
 export function compareVersions(a: string | null | undefined, b: string | null | undefined): number | undefined {
   const x = a ? SEMVER.exec(a.trim()) : null;
   const y = b ? SEMVER.exec(b.trim()) : null;

@@ -88,7 +88,7 @@ export function voiceCard(fetchImpl: typeof fetch = (...a) => fetch(...a)): Voic
     if (!target) return null;
     const cmd = h('code', null, pairCommand(target));
     return h('details', { class: 'adv' }, h('summary', null, status?.box.paired ? 'Pair another voice box' : 'Pair a voice box'),
-      h('p', { class: 'adv-note' }, 'Run your own speech on a GPU box (Kyutai STT + TTS). On the box, install molty-voice (voicebox/ in the molty repo), run this, then tap Molty when it shows the code:'),
+      h('p', { class: 'adv-note' }, 'Run your own speech on a GPU box (Kyutai STT + TTS). On the box, install molty-voice (services/molty-voice/ in the molty repo), run this, then tap Molty when it shows the code:'),
       h('div', { class: 'copy' }, cmd, copyButton(() => cmd.textContent || '', 'Copy', 'Copied', 'pill')),
       h('p', { class: 'adv-note' }, 'Then keep molty-voice run going (systemd or compose: see its README). The code above rotates every 15 min.'));
   }

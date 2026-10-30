@@ -9,7 +9,7 @@ mode and the customise panel work with no extra code.
 
 Add a `defineCreature({...})` call to one of the pack files (`pack-a.js` … `pack-e.js`),
 or create a new pack file and import it from `index.js`. Then export it to a `.molty`
-file with `node creatures/tools/molty-export.mjs <id>` (see `../../MOLTY-FORMAT.md`).
+file with `node device/creatures/tools/molty-export.mjs <id>` (see `../../MOLTY-FORMAT.md`).
 
 ```js
 // js/cute/pack-a.js
@@ -30,7 +30,7 @@ defineCreature({
 });
 ```
 
-To check your work, serve `creatures/` (see `../../README.md`), click the creature's card,
+To check your work, serve `device/creatures/` (see `../../README.md`), click the creature's card,
 try all seven moods, turn on the device preview and read the tri counter in the stage
 header. The kit logs a console warning when a creature goes over 1000 tris.
 

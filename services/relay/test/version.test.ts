@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { API_VERSION, RELAY_VERSION, healthResponse } from "../src/core/version.js";
 import { SERVER_INFO } from "../src/surfaces/mcp.js";
 
-const VERSION = readFileSync(new URL("../../VERSION", import.meta.url), "utf8").trim();
+const VERSION = readFileSync(new URL("../../../VERSION", import.meta.url), "utf8").trim();
 
 describe("version", () => {
   it("reports the repo-root VERSION everywhere", async () => {

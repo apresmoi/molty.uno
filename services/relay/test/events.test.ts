@@ -319,7 +319,7 @@ describe("surfaces", () => {
 
 // ---------------------------------------------------------------- webhooks
 
-const docs = readFileSync(new URL("../../docs/AGENT-LINK.md", import.meta.url), "utf8");
+const docs = readFileSync(new URL("../../../docs/AGENT-LINK.md", import.meta.url), "utf8");
 function docBlock(marker: string): string {
   const m = new RegExp(`<!-- verifier:${marker} -->\\n\`\`\`\\w+\\n([\\s\\S]*?)\`\`\``).exec(docs);
   if (!m) throw new Error(`no ${marker} verifier in docs`);

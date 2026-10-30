@@ -3,11 +3,11 @@
 // boards. The images are served from the site itself (same origin): GitHub release
 // assets have no CORS headers, so the browser could not fetch them from there.
 //
-// The board list comes from firmware/boards/**/board.json (folders starting with "_"
-// are not boards), like scripts/firmware-boards.py. The output folder is gitignored.
+// The board list comes from device/firmware/boards/**/board.json (folders starting with "_"
+// are not boards), like tools/scripts/firmware-boards.py. The output folder is gitignored.
 //
 //   node scripts/stage-firmware.mjs --local [build-root]   images from local builds:
-//        <build-root>/<board-name>/ (default ../firmware/build; `make firmware BOARD=...`),
+//        <build-root>/<board-name>/ (default ../../device/firmware/build; `make firmware BOARD=...`),
 //        flashed part by part at the offsets in each build's flash_args
 //   node scripts/stage-firmware.mjs --release [tag]        molty-<ver>-<board>-factory.bin
 //        from a GitHub release (default: the latest), via the `gh` CLI
@@ -20,9 +20,9 @@ import { join, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 
-const ROOT = fileURLToPath(new URL('../../', import.meta.url));
+const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const OUT = fileURLToPath(new URL('../public/firmware/', import.meta.url));
-const BOARDS = join(ROOT, 'firmware/boards');
+const BOARDS = join(ROOT, 'device/firmware/boards');
 
 const [mode = '--none', arg] = process.argv.slice(2);
 if (!['--local', '--release', '--none'].includes(mode)) {
@@ -30,7 +30,7 @@ if (!['--local', '--release', '--none'].includes(mode)) {
   process.exit(2);
 }
 
-/** firmware/boards/<vendor>/<model>/board.json, skipping "_" folders */
+/** device/firmware/boards/<vendor>/<model>/board.json, skipping "_" folders */
 function boards() {
   const out = [];
   const walk = (dir, rel) => {
@@ -102,7 +102,7 @@ for (const b of boards()) {
   let ver = version;
 
   if (mode === '--local') {
-    const build = join(arg ?? join(ROOT, 'firmware/build'), b.name);
+    const build = join(arg ?? join(ROOT, 'device/firmware/build'), b.name);
     if (existsSync(join(build, 'flash_args')) && existsSync(join(build, 'molty.bin'))) {
       parts = flashArgs(join(build, 'flash_args')).map(({ offset, file }) => {
         const name = basename(file);

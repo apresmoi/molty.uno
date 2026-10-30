@@ -1,7 +1,7 @@
 /*
  * mole_fluid.h — "fluid" creature: Molty as a fluid of characters.
  *
- * Device port of creatures/fluid.html. One per-cell fluid (fluid_sim.h)
+ * Device port of device/creatures/fluid.html. One per-cell fluid (fluid_sim.h)
  * fills the round panel as braille dots; states are targets it flows toward:
  * creature (the .molty, home: boot lands here), blob (stands in while no creature is
  * loaded), thinking, text (speed reader), effect:ripple|vortex|wave, and the demo reel
@@ -54,7 +54,7 @@ esp_err_t mole_fluid_set_text(const char *text, int len);
 esp_err_t mole_fluid_append_text(const char *chunk, int len);
 
 /**
- * The creature (.molty, creatures/MOLTY-FORMAT.md) the "creature" state renders.
+ * The creature (.molty, device/creatures/MOLTY-FORMAT.md) the "creature" state renders.
  * put: validate (magic, version, length, CRC, bounds), store atomically as
  * /spiffs/creature.molty and hot-reload it; *err names the failed check.
  * get: the stored file, else the firmware default (duck); caller frees *out with

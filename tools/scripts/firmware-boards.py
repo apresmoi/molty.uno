@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""firmware-boards.py — the boards under firmware/boards/, for scripts and CI.
+"""firmware-boards.py — the boards under device/firmware/boards/, for scripts and CI.
 
-A board is a folder firmware/boards/<vendor>/<model>/ with a board.json; folders
+A board is a folder device/firmware/boards/<vendor>/<model>/ with a board.json; folders
 starting with "_" (the _template) are not boards. See docs/PORTING.md.
 
-  scripts/firmware-boards.py list                 board folders, one per line
-  scripts/firmware-boards.py matrix               GitHub Actions matrix JSON: [{"board","name"}]
-  scripts/firmware-boards.py name <board>         board.json "name" of a folder (or of a name)
-  scripts/firmware-boards.py dir <board>          the folder of a name (or of a folder)
-  scripts/firmware-boards.py check                every board is wired up consistently
-  scripts/firmware-boards.py check-image <bin> <board>
+  tools/scripts/firmware-boards.py list                 board folders, one per line
+  tools/scripts/firmware-boards.py matrix               GitHub Actions matrix JSON: [{"board","name"}]
+  tools/scripts/firmware-boards.py name <board>         board.json "name" of a folder (or of a name)
+  tools/scripts/firmware-boards.py dir <board>          the folder of a name (or of a folder)
+  tools/scripts/firmware-boards.py check                every board is wired up consistently
+  tools/scripts/firmware-boards.py check-image <bin> <board>
                                                   the app image carries that board's tag
 """
 import json
@@ -18,16 +18,16 @@ import re
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-BOARDS = ROOT / "firmware" / "boards"
-KCONFIG = ROOT / "firmware" / "main" / "Kconfig.projbuild"
+ROOT = Path(__file__).resolve().parents[2]
+BOARDS = ROOT / "device" / "firmware" / "boards"
+KCONFIG = ROOT / "device" / "firmware" / "main" / "Kconfig.projbuild"
 
 REQUIRED = ("name", "title", "vendor", "target", "kconfig", "display", "flash", "psram", "caps", "usb", "detect", "status")
 HEX16 = re.compile(r"^0x[0-9a-f]{4}$")
 DETECT_PSRAM = ("none", "2MB", "8MB")
 CAPS = ("display", "touch", "imu", "mic", "speaker", "btn_accept", "btn_reject", "battery", "usb_net", "serial")
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,63}$")
-# firmware/main/board/molty_board.h: MOLTY_IMAGE_TAG_OFFSET / _MAGIC
+# device/firmware/main/board/molty_board.h: MOLTY_IMAGE_TAG_OFFSET / _MAGIC
 TAG_OFFSET, TAG_MAGIC = 0x20 + 256, b"MOLTYBRD"
 
 
@@ -45,7 +45,7 @@ def resolve(arg):
     for d, cfg in boards():
         if arg in (d, cfg.get("name")):
             return d, cfg
-    sys.exit(f"firmware-boards: no board '{arg}' (try: scripts/firmware-boards.py list)")
+    sys.exit(f"firmware-boards: no board '{arg}' (try: tools/scripts/firmware-boards.py list)")
 
 
 def check():
@@ -92,7 +92,7 @@ def check():
             bad('display needs integer width/height and shape "round" or "rect"')
         if cfg.get("target") != "esp32s3":
             bad('target must be "esp32s3" (the only target built so far)')
-        # identification for molty.uno/setup (website/src/features/setup/match.ts)
+        # identification for molty.uno/setup (apps/website/src/features/setup/match.ts)
         usb = cfg.get("usb", [])
         if not usb or any(not HEX16.match(str(u.get("vid", ""))) or not HEX16.match(str(u.get("pid", ""))) for u in usb):
             bad('usb: a list of {"vid": "0x1a86", "pid": "0x55d3"} (lowercase hex), at least one')
@@ -119,8 +119,8 @@ def check():
         else:
             for ph in photos:
                 ph = str(ph)
-                if not ph.startswith(f"firmware/boards/{d}/") or not re.search(r"\.(jpe?g|png|webp)$", ph, re.I):
-                    bad(f'photos: "{ph}" must be a .jpg/.png/.webp inside firmware/boards/{d}/')
+                if not ph.startswith(f"device/firmware/boards/{d}/") or not re.search(r"\.(jpe?g|png|webp)$", ph, re.I):
+                    bad(f'photos: "{ph}" must be a .jpg/.png/.webp inside device/firmware/boards/{d}/')
                 elif not (ROOT / ph).exists():
                     bad(f'photos: "{ph}" does not exist')
     # two boards that identify the same way would make /setup refuse both

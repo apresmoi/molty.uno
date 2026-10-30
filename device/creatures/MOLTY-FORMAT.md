@@ -11,11 +11,11 @@ js/cute/*.js spec ──molty-export.mjs──▶ name.molty (≈0.4–1.3 KB) �
             firmware: cute_spec.c (parse+validate) → cute_rig.c (meshes, rig, moods, raster) → fluid target
 ```
 
-- Writer: `creatures/tools/molty-export.mjs` (`node … molty-export.mjs <id|all> [outdir] [--json]`).
+- Writer: `device/creatures/tools/molty-export.mjs` (`node … molty-export.mjs <id|all> [outdir] [--json]`).
   Hook stand-ins live in `tools/molty-behaviours.mjs`.
-- Reader: `firmware/main/creature/cute_spec.c`. The runtime is
-  `cute_rig.c`. Host test: `firmware/test/host/cute_build.sh`.
-- Exported files: `creatures/molty/`. The firmware default (`firmware/main/creature/default.molty`)
+- Reader: `device/firmware/main/creature/cute_spec.c`. The runtime is
+  `cute_rig.c`. Host test: `device/firmware/test/host/cute_build.sh`.
+- Exported files: `device/creatures/molty/`. The firmware default (`device/firmware/main/creature/default.molty`)
   is the duck.
 
 ## What is (and is not) in the file

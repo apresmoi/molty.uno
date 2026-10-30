@@ -4,7 +4,7 @@
  * molty_board.h — the one seam between molty.UNO and the hardware it runs on.
  *
  * The core (fluid, creature, link, net, diag) knows no pins and no panel sizes. A
- * board is a folder under firmware/boards/<vendor>/<model>/ whose board.c defines
+ * board is a folder under device/firmware/boards/<vendor>/<model>/ whose board.c defines
  *
  *     const molty_board_t molty_board_desc = { ... };
  *

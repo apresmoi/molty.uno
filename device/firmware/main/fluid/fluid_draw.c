@@ -1,7 +1,7 @@
 /*
  * fluid_draw.c — draw the fluid as braille dots / ASCII glyphs into the framebuffer.
  *
- * Port of creatures/js/fluid/render.js. Braille is drawn as our own
+ * Port of device/creatures/js/fluid/render.js. Braille is drawn as our own
  * 2×4 dot rectangles (no font): sub-samples are bilinear reads of the view field at
  * the 8 dot centres, then either
  *   contour — the cell straddles an edge: dots on the dense side of its own mid-level

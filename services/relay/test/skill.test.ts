@@ -17,7 +17,7 @@ describe("GET /skill.md (deprecated)", () => {
       }
     }
     // The skill file the redirect names exists in this repo.
-    expect(readFileSync(new URL("../../skills/molty/SKILL.md", import.meta.url), "utf8")).toMatch(/^---\nname: molty\n/);
+    expect(readFileSync(new URL("../../../skills/molty/SKILL.md", import.meta.url), "utf8")).toMatch(/^---\nname: molty\n/);
     // worker.ts imports cloudflare:workers (not loadable here): check the route statically.
     expect(readFileSync(new URL("../src/worker.ts", import.meta.url), "utf8")).toMatch(/SKILL_PATHS\.includes\(url\.pathname\)\) return handleSkill\(request\)/);
   });

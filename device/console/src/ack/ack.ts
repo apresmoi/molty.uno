@@ -2,7 +2,7 @@
 // speaking, before any agent has answered — a soft chirp and its thinking face, its thinking
 // face only, or nothing. The device keeps it in NVS (POST /api/creature/state {ack:
 // "chirp" | "thinking" | "off"}; GET reports it), like ring_color. Agents can only turn it
-// down for a listen (ack: false | "silent"). Values: firmware/main/link/link_protocol.h.
+// down for a listen (ack: false | "silent"). Values: device/firmware/main/link/link_protocol.h.
 
 export const ACK_DEFAULT = 'chirp';
 

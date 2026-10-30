@@ -5,7 +5,7 @@
  * board's display, sized at runtime — see molty_board.h); every pixel size here is in
  * stage px. Tuned on the 412x412 Waveshare 1.46, where stage = panel.
  *
- * Plain-C port of creatures/js/fluid/{sim,synth,targets,render}.js.
+ * Plain-C port of device/creatures/js/fluid/{sim,synth,targets,render}.js.
  * NO ESP-IDF dependencies: the same three .c files (fluid_sim.c, fluid_target.c,
  * fluid_draw.c) build on the host for test/host/fluid_test.c. The creature
  * wrapper (task, JSON, LCD, touch, IMU) is mole_fluid.c.

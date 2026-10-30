@@ -22,7 +22,7 @@ make test                      # go build ./... && go test ./...
 
 `molty pair` uses the default relay (`DefaultRelay` in `internal/molty/link.go`)
 unless `--relay` or `MOLTY_RELAY` is set. Full verb list, speech backends and MCP
-setup: [docs/CLI.md](../docs/CLI.md).
+setup: [docs/CLI.md](../../docs/CLI.md).
 
 ## Layout
 

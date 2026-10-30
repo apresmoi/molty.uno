@@ -1,5 +1,5 @@
 // Screenshot + smoke check against a running preview (`pnpm build && pnpm preview`).
-// Writes website/e2e-out/*.png and fails on: page errors, horizontal overflow at 390px,
+// Writes apps/website/e2e-out/*.png and fails on: page errors, horizontal overflow at 390px,
 // or a hero screen that does not render / does not move.
 //   node e2e/screens.mjs [baseUrl=http://localhost:4330]
 import { chromium } from 'playwright';

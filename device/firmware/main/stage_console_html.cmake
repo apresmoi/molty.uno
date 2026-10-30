@@ -3,14 +3,14 @@
 #
 # Run via `cmake -P` from an ALL custom target (not at configure time) so it
 # re-stages on every `idf.py build`, picking up whatever is CURRENTLY in
-# console/dist/index.html even if cmake was never reconfigured —
+# device/console/dist/index.html even if cmake was never reconfigured —
 # same reasoning as spiffs_create_partition_image()'s own image-generation
 # target (components/spiffs/project_include.cmake): "this always executes as
 # there is no way to specify for CMake to watch for contents of the base dir
 # changing."
 #
 # Inputs (passed via -D on the command line):
-#   DEVICE_CONSOLE_DIST      — absolute path to console/dist/index.html
+#   DEVICE_CONSOLE_DIST      — absolute path to device/console/dist/index.html
 #   CONSOLE_SPIFFS_STAGE_DIR — absolute path to the staging directory that
 #                              becomes the SPIFFS image's base_dir
 #
@@ -36,14 +36,14 @@ if(NOT EXISTS "${DEVICE_CONSOLE_DIST}")
     message(FATAL_ERROR
 "\n"
 "================================================================================\n"
-" console/dist/index.html not found:\n"
+" device/console/dist/index.html not found:\n"
 "   ${DEVICE_CONSOLE_DIST}\n"
 "\n"
 " The firmware SPIFFS image ships whatever is CURRENTLY built there — idf.py\n"
 " has no pnpm/node toolchain wired in to build it for you. Build the console\n"
 " first, then re-run idf.py build:\n"
 "\n"
-"   cd console && pnpm install && pnpm run build\n"
+"   cd device/console && pnpm install && pnpm run build\n"
 "\n"
 " (or from the repo root: make console)\n"
 "================================================================================\n"

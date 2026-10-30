@@ -14,7 +14,7 @@ Molty ──WSS──▶ your relay (Worker + one Durable Object per Molty) ◀�
 
 ```sh
 git clone https://github.com/apresmoi/molty.uno.git
-cd molty.uno/relay
+cd molty.uno/services/relay
 pnpm install --ignore-workspace
 pnpm test
 npx wrangler login
@@ -43,7 +43,7 @@ npx wrangler tail molty-relay
 5. Check it: `curl https://molty-relay.<your-subdomain>.workers.dev/v1/health` →
    `{"ok":true,"service":"molty-relay","version":…,"api_version":1}`.
 
-Full operator notes (local runs, limits, smoke tests): `relay/README.md` in the repo.
+Full operator notes (local runs, limits, smoke tests): `services/relay/README.md` in the repo.
 
 ## 2. Point Molty at it
 

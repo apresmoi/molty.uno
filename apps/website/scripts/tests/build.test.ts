@@ -10,7 +10,7 @@ import { AMAZON_TAG, amazonSearch, shopLink } from "../../src/config/affiliate.m
 import { requirements, niceToHave, partGroups, readWaitlistResult, waitlistMessage } from "../../src/features/build/content.ts";
 import { communityBoards, type BoardJson } from "../../src/features/build/boards.ts";
 
-const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
+const ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
 const SRC = fileURLToPath(new URL("../../src/", import.meta.url));
 const porting = readFileSync(join(ROOT, "docs/PORTING.md"), "utf8");
 
@@ -42,7 +42,7 @@ test("'Will my board work?' needs match docs/PORTING.md Requirements", () => {
 
 test("nice-to-haves are PORTING Capabilities and firmware-boards.py caps", () => {
   const caps = table("Capabilities");
-  const known = /CAPS\s*=\s*\(([^)]*)\)/.exec(readFileSync(join(ROOT, "scripts/firmware-boards.py"), "utf8"))?.[1] ?? "";
+  const known = /CAPS\s*=\s*\(([^)]*)\)/.exec(readFileSync(join(ROOT, "tools/scripts/firmware-boards.py"), "utf8"))?.[1] ?? "";
   for (const n of niceToHave) {
     assert.ok(caps.has(n.cap), `${n.cap} is not in PORTING's Capabilities table`);
     assert.ok(known.includes(`"${n.cap}"`), `${n.cap} is not a firmware-boards.py cap`);
@@ -78,7 +78,7 @@ test("nothing in src spells the Associates tag or a tagged URL except config/aff
 });
 
 // the real board.json files, as repoBoards.ts reads them through Vite
-const BOARDS = join(ROOT, "firmware/boards");
+const BOARDS = join(ROOT, "device/firmware/boards");
 function entries(): Array<{ dir: string; json: BoardJson }> {
   const out: Array<{ dir: string; json: BoardJson }> = [];
   const walk = (dir: string) => {
@@ -115,7 +115,7 @@ test("community builds: photos resolve through the served URL, missing ones are 
     title: "Acme Round",
     display: { width: 240, height: 240, shape: "round" },
     status: "experimental",
-    photos: ["firmware/boards/acme/round/a.jpg", "firmware/boards/acme/round/missing.jpg"],
+    photos: ["device/firmware/boards/acme/round/a.jpg", "device/firmware/boards/acme/round/missing.jpg"],
   };
   const [b] = communityBoards([{ dir: "acme/round", json }], (p) => (p.endsWith("a.jpg") ? "/_astro/a.123.jpg" : undefined));
   assert.deepEqual(b!.photos, [{ src: "/_astro/a.123.jpg", alt: "Acme Round, photo 1" }]);

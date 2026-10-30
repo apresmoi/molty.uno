@@ -1,9 +1,9 @@
 # ── Board ────────────────────────────────────────────────────────────────────
-# Exactly one folder under firmware/boards/ is compiled in: the Kconfig MOLTY_BOARD
+# Exactly one folder under device/firmware/boards/ is compiled in: the Kconfig MOLTY_BOARD
 # choice (CONFIG_MOLTY_BOARD_DIR). Its board.cmake lists the sources, the -O2 ones,
 # include dirs and IDF components. See docs/PORTING.md. Kconfig values do not exist
 # yet in IDF's early requirements pass, so that pass skips this; the components come
-# from the MOLTY_BOARD_REQUIRES build property (firmware/CMakeLists.txt) instead.
+# from the MOLTY_BOARD_REQUIRES build property (device/firmware/CMakeLists.txt) instead.
 idf_build_get_property(MOLTY_BOARD_REQUIRES MOLTY_BOARD_REQUIRES)
 set(MOLTY_BOARD_SRCS "")
 set(MOLTY_BOARD_FAST_SRCS "")
@@ -16,7 +16,7 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
         message(FATAL_ERROR
             "sdkconfig is for board '${CONFIG_MOLTY_BOARD_DIR}' but -DMOLTY_BOARD=${MOLTY_BOARD}: "
             "its flash/PSRAM settings would be wrong. Build each board with its own sdkconfig "
-            "(scripts/firmware-build.sh ${MOLTY_BOARD}).")
+            "(tools/scripts/firmware-build.sh ${MOLTY_BOARD}).")
     endif()
     get_filename_component(MOLTY_BOARD_PATH "${CMAKE_CURRENT_LIST_DIR}/../boards/${CONFIG_MOLTY_BOARD_DIR}" ABSOLUTE)
     if(NOT EXISTS "${MOLTY_BOARD_PATH}/board.cmake")
@@ -114,21 +114,21 @@ idf_component_register(
     # Fallback page for "/" when no console is stored in SPIFFS.
     EMBED_TXTFILES
         "net/index.html"
-    # Default creature for the fluid's "creature" state (creatures/molty/duck.molty).
+    # Default creature for the fluid's "creature" state (device/creatures/molty/duck.molty).
     # POST /api/creature/file replaces it at runtime without a reflash.
     EMBED_FILES
         "creature/default.molty"
 )
 
 # ── Console SPIFFS image ─────────────────────────────────────────────────────
-# Ships console/dist/index.html in the "spiffs" partition (partitions.csv), so a
+# Ships device/console/dist/index.html in the "spiffs" partition (partitions.csv), so a
 # cable flash always lands the current console. net/console_store.c loads
 # /spiffs/index.html at boot if /spiffs/index.size matches its exact size;
 # stage_console_html.cmake writes that pair at build time in the same format
 # the runtime POST /dev/html path writes.
 #
 # Build the console FIRST (idf.py has no node/pnpm toolchain wired in):
-#   cd console && pnpm install && pnpm run build     (or from the repo root: make console)
+#   cd device/console && pnpm install && pnpm run build     (or from the repo root: make console)
 # stage_console_html.cmake fails the build with that instruction if dist/index.html is missing.
 set(CONSOLE_SPIFFS_STAGE_DIR "${CMAKE_BINARY_DIR}/console_spiffs_staging")
 get_filename_component(CONSOLE_DIST

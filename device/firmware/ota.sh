@@ -9,7 +9,7 @@
 set -e
 B=${MOLTY_URL:-http://10.13.37.1}
 HERE="$(cd "$(dirname "$0")" && pwd)"
-BOARDS="$HERE/../scripts/firmware-boards.py"
+BOARDS="$HERE/../../tools/scripts/firmware-boards.py"
 if [[ -n "$BOARD" ]]; then
   BIN="$HERE/build/$(python3 "$BOARDS" name "$BOARD")/molty.bin"
 else

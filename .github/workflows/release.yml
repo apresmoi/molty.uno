@@ -59,13 +59,13 @@ jobs:
       - name: Verify tag, VERSION and CHANGELOG
         id: version
         run: |
-          node scripts/version.mjs check --tag "$RELEASE_TAG"
-          version="$(node scripts/version.mjs)"
+          node tools/scripts/version.mjs check --tag "$RELEASE_TAG"
+          version="$(node tools/scripts/version.mjs)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           if [[ "$version" == *-* ]]; then echo "prerelease=true"; else echo "prerelease=false"; fi >> "$GITHUB_OUTPUT"
 
       - name: Repository hygiene
-        run: scripts/hygiene.sh
+        run: tools/scripts/hygiene.sh
 
   console:
     name: console page
@@ -88,21 +88,21 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
-          cache-dependency-path: console/pnpm-lock.yaml
+          cache-dependency-path: device/console/pnpm-lock.yaml
 
       - name: Install dependencies
-        working-directory: console
+        working-directory: device/console
         run: pnpm install --frozen-lockfile
 
       - name: Typecheck, test and build
-        working-directory: console
+        working-directory: device/console
         run: pnpm run build
 
       - name: Upload console page
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: console-dist
-          path: console/dist/index.html
+          path: device/console/dist/index.html
           if-no-files-found: error
 
   boards:
@@ -121,8 +121,8 @@ jobs:
       - name: Check boards and list the matrix
         id: boards
         run: |
-          python3 scripts/firmware-boards.py check
-          echo "matrix=$(python3 scripts/firmware-boards.py matrix)" >> "$GITHUB_OUTPUT"
+          python3 tools/scripts/firmware-boards.py check
+          echo "matrix=$(python3 tools/scripts/firmware-boards.py matrix)" >> "$GITHUB_OUTPUT"
 
   firmware:
     name: firmware images ${{ matrix.name }}
@@ -151,26 +151,26 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: console-dist
-          path: console/dist
+          path: device/console/dist
 
-      # Own build dir + sdkconfig per board (firmware/build/<name>/); checks the image tag.
+      # Own build dir + sdkconfig per board (device/firmware/build/<name>/); checks the image tag.
       - name: Build
         run: |
           . "$IDF_PATH/export.sh" > /dev/null
-          scripts/firmware-build.sh "${{ matrix.board }}"
+          tools/scripts/firmware-build.sh "${{ matrix.board }}"
 
       - name: Host tests
         run: make firmware-test
 
       - name: App size vs OTA slot (fail above 90%)
-        run: scripts/firmware-size.sh "firmware/build/${{ matrix.name }}" "${{ matrix.name }}"
+        run: tools/scripts/firmware-size.sh "device/firmware/build/${{ matrix.name }}" "${{ matrix.name }}"
 
       # The version the device will report (/api/info "fw") is the one in the app
       # descriptor; refuse to ship an image that disagrees with the tag.
       - name: Verify the embedded version
         run: |
           . "$IDF_PATH/export.sh" > /dev/null
-          embedded="$(python -m esptool --chip esp32s3 image_info --version 2 "firmware/build/${{ matrix.name }}/molty.bin" \
+          embedded="$(python -m esptool --chip esp32s3 image_info --version 2 "device/firmware/build/${{ matrix.name }}/molty.bin" \
             | tr -d '\000' | awk -F': *' '/^App version:/ { gsub(/[ \t]+$/, "", $2); print $2 }')"
           echo "app descriptor version: $embedded"
           [[ "$embedded" == "$VERSION" ]] || { echo "::error::firmware reports '$embedded', expected '$VERSION'"; exit 1; }
@@ -182,7 +182,7 @@ jobs:
       - name: Package
         run: |
           . "$IDF_PATH/export.sh" > /dev/null
-          scripts/firmware-package.sh "$VERSION" release "${{ matrix.board }}"
+          tools/scripts/firmware-package.sh "$VERSION" release "${{ matrix.board }}"
           cp "$IDF_PATH/LICENSE" release/LICENSE-Apache-2.0.txt
           grep -q "Apache License" release/LICENSE-Apache-2.0.txt
 
@@ -214,8 +214,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
-          go-version-file: cli/go.mod
-          cache-dependency-path: cli/go.sum
+          go-version-file: apps/cli/go.mod
+          cache-dependency-path: apps/cli/go.sum
 
       # Pure Go (CGO off), so every target cross-compiles from one Linux runner.
       # Each archive carries the licence and notices next to the binary.
@@ -230,7 +230,7 @@ jobs:
           exe="molty"; [[ "$GOOS" == windows ]] && exe="molty.exe"
           stage="$RUNNER_TEMP/$name"
           mkdir -p "$stage" release
-          (cd cli && go build -trimpath \
+          (cd apps/cli && go build -trimpath \
             -ldflags "-s -w -X github.com/molty/cli/internal/molty.Version=${VERSION}" \
             -o "$stage/$exe" ./cmd/molty)
           cp LICENSE THIRD_PARTY_NOTICES.md "$stage/"
@@ -294,7 +294,7 @@ jobs:
           cp console-dist/index.html "dist/molty-${VERSION}-console.html"
           cp LICENSE THIRD_PARTY_NOTICES.md dist/
           (cd dist && sha256sum -- * > "$RUNNER_TEMP/SHA256SUMS" && mv "$RUNNER_TEMP/SHA256SUMS" . && cat SHA256SUMS)
-          node scripts/version.mjs notes "$VERSION" > "$RUNNER_TEMP/notes.md"
+          node tools/scripts/version.mjs notes "$VERSION" > "$RUNNER_TEMP/notes.md"
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe

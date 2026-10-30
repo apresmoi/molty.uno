@@ -1,7 +1,7 @@
 /*
  * fluid_sim.c — fluid core: params, sim step, view, field synth.
  *
- * Port of creatures/js/fluid/sim.js + synth.js. See fluid_sim.h.
+ * Port of device/creatures/js/fluid/sim.js + synth.js. See fluid_sim.h.
  * Deviations from the JS, all for speed on the S3 (measured on device):
  *   - hot scalar fields are int16 fixed point in internal DRAM (math in float, mostly
  *     in raw fixed-point units so loads need no rescale); PSRAM-resident floats made

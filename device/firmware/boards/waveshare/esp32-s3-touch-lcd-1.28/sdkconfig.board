@@ -1,5 +1,5 @@
 # Waveshare ESP32-S3-Touch-LCD-1.28 — layered over sdkconfig.defaults(.esp32s3)
-# when this board is built (firmware/CMakeLists.txt, scripts/firmware-build.sh).
+# when this board is built (device/firmware/CMakeLists.txt, tools/scripts/firmware-build.sh).
 CONFIG_MOLTY_BOARD_WAVESHARE_ESP32_S3_TOUCH_LCD_1_28=y
 
 # Flash: 16 MB (external W25Q128JVSIQ), QIO — the same partition table as the 1.46

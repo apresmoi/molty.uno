@@ -1,7 +1,7 @@
 /*
  * fluid_target.c — what the fluid relaxes toward: blob, effect interludes, speed text.
  *
- * Port of creatures/js/fluid/targets.js (minus the 3D creature target —
+ * Port of device/creatures/js/fluid/targets.js (minus the 3D creature target —
  * mole_fluid.c exposes a per-cell target-source hook for that). Each fill writes
  * the sim's T (ink) and tcol (RGBA8 colour + accent); the fluid never shows a
  * target directly — it flows and relaxes toward it.

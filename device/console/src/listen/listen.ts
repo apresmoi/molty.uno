@@ -2,7 +2,7 @@
 // window of its own. Every listen ends early anyway (end of speech / the voice box's end of
 // turn): this is a ceiling. The device keeps it in NVS (POST /api/creature/state
 // {listen_ms}: 0 = unlimited, or 5000..30000; GET reports it), like ring_color. Unlimited
-// still has a 5-minute safety ceiling on the device. Values: relay/src/core/commands.ts.
+// still has a 5-minute safety ceiling on the device. Values: services/relay/src/core/commands.ts.
 
 export const LISTEN_DEFAULT_MS = 30000;
 export const LISTEN_UNLIMITED = 0;

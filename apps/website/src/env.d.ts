@@ -1,6 +1,6 @@
 /// <reference types="astro/client" />
 
-/* The REAL creature engine from creatures/js (aliased in astro.config.mjs). Plain JS, typed
+/* The REAL creature engine from device/creatures/js (aliased in astro.config.mjs). Plain JS, typed
    here for the parts services/molty-stage uses: the cute kit and its mood engine are the
    Moltys' rig; @glyphcss/fluid draws them. */
 

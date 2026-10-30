@@ -1,7 +1,7 @@
 /*
  * mole_fluid.c — "fluid" creature: Molty as a fluid of characters.
  *
- * Port of creatures/js/fluid/main.js (wiring) on top of fluid_sim/target/draw.c; what
+ * Port of device/creatures/js/fluid/main.js (wiring) on top of fluid_sim/target/draw.c; what
  * is shown when (states, moods, idle life, the demo reel) is fluid_director.c. Over it:
  * a question (the link's ask: labels as text targets in their sectors, fluid_ask.h, the
  * director's transitions waiting underneath), rings of the fluid itself (the listening
@@ -617,7 +617,7 @@ static esp_err_t alloc_bufs(void);
 
 #define CUTE_PATH     "/spiffs/creature.molty"
 #define CUTE_TMP_PATH "/spiffs/creature.molty.tmp"
-/* firmware default (creatures/molty/duck.molty, EMBED_FILES in main/CMakeLists.txt) */
+/* firmware default (device/creatures/molty/duck.molty, EMBED_FILES in main/CMakeLists.txt) */
 extern const uint8_t _binary_default_molty_start[];
 extern const uint8_t _binary_default_molty_end[];
 

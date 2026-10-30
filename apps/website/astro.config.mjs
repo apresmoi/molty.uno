@@ -15,9 +15,9 @@ const repoPath = (path) => fileURLToPath(new URL(path, import.meta.url));
 /** An optional synced doc (e.g. docs/PORTING.md, landing on another branch) is listed only
  *  once its source exists, so the sidebar never points at a page that was not built. */
 /** @param {{ source: string }} doc */
-const syncedExists = (doc) => existsSync(repoPath(`../${doc.source}`));
+const syncedExists = (doc) => existsSync(repoPath(`../../${doc.source}`));
 
-/** The creature engine imports bare `three`; like console/vite.config.ts, it comes from the
+/** The creature engine imports bare `three`; like device/console/vite.config.ts, it comes from the
  *  CDN at runtime instead of being bundled (~600 KB). */
 const threeFromCdn = () => ({
   name: 'molty-three-cdn',
@@ -33,14 +33,14 @@ export default defineConfig({
     plugins: [threeFromCdn()],
     resolve: {
       dedupe: ['react', 'react-dom'],
-      // The REAL engine and assets from the repo, imported, never copied (as console/ does).
+      // The REAL engine and assets from the repo, imported, never copied (as device/console/ does).
       alias: [
-        { find: '@creatures', replacement: repoPath('../creatures/js') },
-        { find: '@molty-files', replacement: repoPath('../creatures/molty') },
-        { find: '@molty-catalog', replacement: repoPath('../console/src/catalog') },
+        { find: '@creatures', replacement: repoPath('../../device/creatures/js') },
+        { find: '@molty-files', replacement: repoPath('../../device/creatures/molty') },
+        { find: '@molty-catalog', replacement: repoPath('../../device/console/src/catalog') },
       ],
     },
-    server: { fs: { allow: ['..'] } },
+    server: { fs: { allow: ['../..'] } },
     // the fluid worker lazy-loads glyphcss's atlas payloads: workers must be ES modules
     worker: { format: 'es' },
     // Thumbnails and .molty files ship as real files (downloadable, cacheable), not data URIs.

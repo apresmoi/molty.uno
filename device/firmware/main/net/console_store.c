@@ -3,7 +3,7 @@
  *
  * console_store.c — SPIFFS mount + the console page served at "/".
  *
- * The console (console/dist/index.html) is baked into the "spiffs" partition at
+ * The console (device/console/dist/index.html) is baked into the "spiffs" partition at
  * build time (main/stage_console_html.cmake) and can be replaced at runtime with
  * POST /dev/html. GET / serves, in order: the uploaded/baked console (held in
  * PSRAM), else the small embedded fallback page (net/index.html).

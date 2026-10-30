@@ -35,7 +35,7 @@ Wire protocol: `docs/AGENT-LINK.md`, section "Voice box".
 ## Install
 
 ```sh
-uv tool install ./voicebox        # or: pipx install ./voicebox
+uv tool install ./services/molty-voice   # or: pipx install ./services/molty-voice
 ```
 
 ## Pair (once)
@@ -129,7 +129,7 @@ moshi-server on 127.0.0.1, and mounts the paired config read-only. Pair on the h
 ## Tests
 
 ```sh
-cd voicebox && uv run --with pytest --with . pytest -q
+cd services/molty-voice && uv run --with pytest --with . pytest -q
 ```
 
 The tests cover:

@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // molty-export.mjs — convert cute-kit creatures (js/cute/*.js) to .molty files for the
-// device runtime (firmware/main/creature/cute_*.c). Spec: creatures/MOLTY-FORMAT.md
+// device runtime (device/firmware/main/creature/cute_*.c). Spec: device/creatures/MOLTY-FORMAT.md
 //
-//   node creatures/tools/molty-export.mjs <id|all> [outdir] [--json]
+//   node device/creatures/tools/molty-export.mjs <id|all> [outdir] [--json]
 //     id      cute-duck | duck | all
-//     outdir  default: creatures/molty/
+//     outdir  default: device/creatures/molty/
 //     --json  also write <name>.molty.json (the resolved spec, for review)
 //
 // The exporter imports the REAL kit specs (three.js is stubbed: no geometry is built

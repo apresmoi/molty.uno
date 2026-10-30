@@ -10,7 +10,7 @@
   // Workers AI always runs remotely; `wrangler dev --local` starts fine but AI.run
   // throws, so local runs set VOICE_PROVIDER=none (see package.json "dev").
   "ai": { "binding": "AI" },
-  // The website's waitlist (POST /waitlist), on the owner's account (relay/README.md "Waitlist").
+  // The website's waitlist (POST /waitlist), on the owner's account (services/relay/README.md "Waitlist").
   // `wrangler dev --local` runs against a local SQLite copy and needs no account.
   "d1_databases": [
     {

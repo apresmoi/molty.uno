@@ -1,5 +1,5 @@
 # This board's sources, included by main/CMakeLists.txt (paths relative to this
-# folder), and by firmware/CMakeLists.txt for MOLTY_BOARD_REQUIRES.
+# folder), and by device/firmware/CMakeLists.txt for MOLTY_BOARD_REQUIRES.
 set(MOLTY_BOARD_SRCS
     "board.c"
     "mole_lcd.c"

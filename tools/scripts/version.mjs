@@ -5,20 +5,20 @@
 // cli -ldflags, relay --define); only the two private package.json "version"
 // fields and the CHANGELOG headings are copies, and `check` keeps them honest.
 //
-//   node scripts/version.mjs                       print VERSION
-//   node scripts/version.mjs check [--tag vX.Y.Z]  copies agree (+ tag matches, CHANGELOG has the section)
-//   node scripts/version.mjs bump <patch|minor|major|X.Y.Z>
+//   node tools/scripts/version.mjs                       print VERSION
+//   node tools/scripts/version.mjs check [--tag vX.Y.Z]  copies agree (+ tag matches, CHANGELOG has the section)
+//   node tools/scripts/version.mjs bump <patch|minor|major|X.Y.Z>
 //                                                  write VERSION + package.json copies, and turn
 //                                                  CHANGELOG "## Unreleased" into "## vX.Y.Z — <date>"
-//   node scripts/version.mjs notes [X.Y.Z]         print that CHANGELOG section (release notes)
+//   node tools/scripts/version.mjs notes [X.Y.Z]         print that CHANGELOG section (release notes)
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..');
 const at = (p) => join(ROOT, p);
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/;
-const PACKAGES = ['console/package.json', 'relay/package.json'];
+const PACKAGES = ['device/console/package.json', 'services/relay/package.json'];
 
 const die = (msg) => { console.error(`version: ${msg}`); process.exit(1); };
 const read = () => {
@@ -49,7 +49,7 @@ if (cmd === 'print') {
   const problems = [];
   for (const p of PACKAGES) {
     const pv = JSON.parse(readFileSync(at(p), 'utf8')).version;
-    if (pv !== v) problems.push(`${p} version ${pv} != VERSION ${v} (run: node scripts/version.mjs bump ${v})`);
+    if (pv !== v) problems.push(`${p} version ${pv} != VERSION ${v} (run: node tools/scripts/version.mjs bump ${v})`);
   }
   const tagAt = args.indexOf('--tag');
   if (tagAt >= 0) {

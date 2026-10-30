@@ -4,7 +4,7 @@ Molty's creatures and the browser reference for how they move. The firmware runs
 same creatures from exported `.molty` files.
 
 ```
-creatures/
+device/creatures/
 ├── js/
 │   ├── cute/         cute kit: kit.js (defineCreature) + one file per creature pack — see cute/README.md
 │   ├── fluid/        fluid-of-characters engine (sim, targets, renderer, speed reader, sound)
@@ -36,9 +36,9 @@ from cdn.jsdelivr.net, so the first load needs network.
 ## Export creatures
 
 ```sh
-node creatures/tools/molty-export.mjs all          # -> creatures/molty/*.molty
-node creatures/tools/molty-export.mjs duck --json  # one creature + its resolved spec
+node device/creatures/tools/molty-export.mjs all          # -> device/creatures/molty/*.molty
+node device/creatures/tools/molty-export.mjs duck --json  # one creature + its resolved spec
 ```
 
 The output is deterministic; commit the `.molty` files. The firmware's default creature
-is `firmware/main/creature/default.molty` (the duck).
+is `device/firmware/main/creature/default.molty` (the duck).
