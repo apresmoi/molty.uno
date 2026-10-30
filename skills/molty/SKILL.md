@@ -55,6 +55,7 @@ it. Examples in the references write `$MOLTY_RELAY` for whichever relay Molty us
 | `talk.sh "text" --reply <turn_id>` | answer an `utterance` (claims the turn) | `HEARD: …` |
 | `ask.sh "question" yes no later` | speak + 1–5 tap buttons (labels ≤ 8 chars) | `ANSWER: yes \| index 0` |
 | `mood.sh happy [hold_s]` | set a mood | the result |
+| `act.sh nod` | a one-shot gesture (nod, wiggle, bounce, …) | the result |
 | `watch.py` / `watch.py --once [wait_s]` | one line per event, forever / unread events, then exit | `MOLTY utterance: '…'` |
 
 Each helper follows a long turn (`202 pending`) to its end: one call = one full turn.
@@ -71,6 +72,9 @@ Each helper follows a long turn (`202 pending`) to its end: one call = one full 
   straight to your answer, no "hmm" or "let me check". Long work → one short spoken line
   first, so they are never left in silence.
 - **Short.** 1–2 sentences; a short first sentence starts the audio sooner.
+- **Emote inline, sparingly:** `"[happy] Build passed!"`, `"Done. [nod]"` — cues are never
+  spoken or shown and fire on their word; one per sentence at most; don't fidget
+  ([etiquette.md](references/etiquette.md#emotes)).
 - **A decision a tap can settle → ask**, not a spoken yes/no. Buttons (accept/reject) mean
   acknowledge / dismiss, never an answer.
 - **Read `relay.caps`, not versions**, to know what this Molty can do (`say`, `listen`,

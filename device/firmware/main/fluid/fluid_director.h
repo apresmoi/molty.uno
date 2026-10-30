@@ -12,9 +12,18 @@
  *                Re-requesting the shown state is a no-op, so a repeated mood or state
  *                never melts the creature; moods blend inside it. The demo reel runs
  *                only on an explicit "autoplay".
- *   idle life    the creature's own idle (blinks, glances, breathing: cute_rig.c) plus a
- *                short mood flash every 20–60 s. After 5 min without touch or agent
- *                activity it dozes off (sleepy); a touch, button, shake or command wakes it.
+ *   idle life    the creature's own idle (blinks, glances, breathing: cute_rig.c) plus,
+ *                every 10–40 s ("lively", the default) or 20–60 s ("calm"), one small
+ *                action from a weighted library (cute_act.h: glances, a blink, look up;
+ *                lively adds a wobble and a stretch), never the same one twice in a row.
+ *                Only while the creature is on screen, idle, and nothing owns the screen
+ *                (no question, listen or say, no agent mood, not asleep) — never a sound.
+ *                After 5 min without touch or agent activity it yawns, then dozes off
+ *                (sleepy); a touch, button, shake or command wakes it. A say that played
+ *                to its end, the creature back and idle within 8 s: one happy flash (at
+ *                most one a minute). "off": none of it (it still dozes off, unyawning).
+ *   actions      an agent's `act` (or a say's action mark) plays once on the creature as
+ *                soon as it is on screen, uncovered — waiting up to 3 s, then dropped.
  *   agent moods  quick moods (happy, surprised) revert to idle after a hold; the others
  *                persist until the next command. hold_s overrides either.
  *   reader       "text" returns to the creature 1.5 s after its last word, unless the
@@ -38,6 +47,11 @@
 extern "C" {
 #endif
 
+/* Idle life levels (the console's setting, NVS "fluid"/"idle_life"). */
+enum { FD_IDLE_OFF, FD_IDLE_CALM, FD_IDLE_LIVELY, FD_IDLE_COUNT };
+extern const char *const FD_IDLE_NAMES[FD_IDLE_COUNT];   /* "off" "calm" "lively" */
+#define FD_IDLE_DEFAULT FD_IDLE_LIVELY
+
 /* States, in mole_fluid.c's order (its per-state relax rates are indexed by them). */
 enum { FD_ST_BLOB, FD_ST_THINKING, FD_ST_TEXT, FD_ST_FX, FD_ST_CREATURE, FD_ST_COUNT };
 
@@ -47,7 +61,12 @@ extern const char *const FD_STATUS_NAMES[FD_STATUS_COUNT];   /* "ok" "wifi" "rel
 
 /* Tunables (seconds). FD_CFG_DEFAULT holds the shipped values. */
 typedef struct {
-    float flash_min_s, flash_max_s;   /* idle gap between two mood flashes: 20..60     */
+    float lively_min_s, lively_max_s; /* idle gap between two idle actions: 10..40     */
+    float calm_min_s, calm_max_s;     /* ...when calm: 20..60                          */
+    float yawn_lead_s;                /* the yawn starts this long before dozing off   */
+    float act_ttl_s;                  /* an agent's action waits this long for the creature */
+    float convo_window_s;             /* a say ended: the happy flash may come within  */
+    float convo_gap_s;                /* ...at most one per this long                  */
     float sleep_after_s;              /* no touch / agent activity this long: sleepy   */
     float text_return_s;              /* reader: last word → back to the creature      */
     float status_after_s;             /* trouble must last this long before it shows   */
@@ -72,7 +91,17 @@ typedef struct {
     float held_left;                  /* s until it reverts to idle; < 0: until the next command */
     int   flash;                      /* short overlay mood, -1 = none                 */
     float flash_left;
-    float next_flash;                 /* s of idle life until the next flash           */
+    int   idle_life;                  /* FD_IDLE_*                                     */
+    bool  busy, covered;              /* a question / listen / say owns the screen; a question covers it */
+    float next_idle;                  /* s of idle life until the next idle action     */
+    int   last_idle;                  /* the last idle action (no immediate repeat)    */
+    int   act_req;                    /* an agent's action waiting for the creature, -1 */
+    float act_req_ttl;
+    int   act_start;                  /* the action to start now (fd_take_act), -1     */
+    float acting_left;                /* s the action handed out still plays           */
+    bool  yawned;                     /* this quiet spell's yawn was played            */
+    float convo_left, convo_delay;    /* a say ended: window for its happy flash, its delay */
+    float since_convo;                /* s since the last such flash                   */
     float quiet;                      /* s since the last touch / agent activity       */
     bool  asleep;
     int   status, shown;              /* reported / on screen                          */
@@ -99,6 +128,19 @@ void  fd_activity(fluid_director_t *d);
 void  fd_user(fluid_director_t *d);
 /** The board was shaken: wakes, a brief surprised flash (over any mood). */
 void  fd_shake(fluid_director_t *d);
+/** The idle life level (FD_IDLE_*): the console's setting. */
+void  fd_set_idle_life(fluid_director_t *d, int level);
+/** Who owns the screen this frame: busy = a question, a listen or a say (no idle life);
+ *  covered = a question's labels are over the creature (no action plays). */
+void  fd_set_busy(fluid_director_t *d, bool busy, bool covered);
+/** An agent's one-shot action (cute_act.h CA_*): plays once the creature is on screen and
+ *  uncovered (fd_take_act), or is dropped after act_ttl_s. Counts as agent activity. */
+void  fd_agent_act(fluid_director_t *d, int act);
+/** A say played to its end: a happy flash if the creature is back, idle, within
+ *  convo_window_s (idle life on, at most one per convo_gap_s). */
+void  fd_turn_spoken(fluid_director_t *d);
+/** The action to start on the creature now (an agent's, or idle life's), -1 = none. */
+int   fd_take_act(fluid_director_t *d);
 /** Report the link status (FD_STATUS_*); shown after status_after_s, hidden at once. */
 void  fd_set_status(fluid_director_t *d, int status);
 /** Advance by dt seconds. text_done: the reader is holding its last word. */

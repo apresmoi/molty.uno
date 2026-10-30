@@ -7,21 +7,36 @@
 #include "fluid_director.h"
 #include "fluid_sim.h"      /* FLUID_FX_*, fluid_clamp01 */
 #include "cute_spec.h"      /* CM_* moods */
+#include "cute_act.h"       /* CA_* actions */
 
 #include <stddef.h>
 
 const char *const FD_STATUS_NAMES[FD_STATUS_COUNT] = { "ok", "wifi", "relay", "auth" };
+const char *const FD_IDLE_NAMES[FD_IDLE_COUNT] = { "off", "calm", "lively" };
 
 const fd_cfg_t FD_CFG_DEFAULT = {
-    .flash_min_s = 20.f, .flash_max_s = 60.f,
+    .lively_min_s = 10.f, .lively_max_s = 40.f,
+    .calm_min_s = 20.f, .calm_max_s = 60.f,
+    .yawn_lead_s = 3.f,
+    .act_ttl_s = 3.f,
+    .convo_window_s = 8.f, .convo_gap_s = 60.f,
     .sleep_after_s = 300.f,
     .text_return_s = 1.5f,
     .status_after_s = 10.f,       /* boot: Wi-Fi join + TLS take a few seconds */
 };
 
-/* idle flashes: happy twice as often as surprised */
+/* flashes: a say that ended well (happy), a shake (surprised) */
 #define FLASH_HAPPY_S      2.0f
-#define FLASH_SURPRISED_S  1.2f   /* a shake, too: the pose needs ~0.5–1 s to blend in */
+#define FLASH_SURPRISED_S  1.2f   /* the pose needs ~0.5–1 s to blend in */
+#define CONVO_DELAY_S      1.0f   /* the creature settles back before the flash */
+
+/* idle life's library: (action, weight) for lively; calm keeps only the small ones */
+typedef struct { int8_t act; float w; bool calm; } idle_item_t;
+static const idle_item_t IDLE_LIB[] = {
+    { CA_GLANCE_LEFT, 3.f, true }, { CA_GLANCE_RIGHT, 3.f, true }, { CA_BLINK, 3.f, true },
+    { CA_LOOK_UP, 2.f, true }, { CA_WOBBLE, 1.5f, false }, { CA_STRETCH, 1.5f, false },
+};
+#define IDLE_N ((int)(sizeof(IDLE_LIB) / sizeof(IDLE_LIB[0])))
 /* an agent's quick moods, when it gives no hold_s */
 #define HOLD_HAPPY_S       3.0f
 #define HOLD_SURPRISED_S   2.0f
@@ -52,8 +67,30 @@ static float frand(fluid_director_t *d) {
     return (float)(x >> 8) * (1.f / 16777216.f);
 }
 
-static float flash_gap(fluid_director_t *d) {
-    return d->cfg.flash_min_s + (d->cfg.flash_max_s - d->cfg.flash_min_s) * frand(d);
+static float idle_gap(fluid_director_t *d) {
+    bool calm = d->idle_life == FD_IDLE_CALM;
+    float a = calm ? d->cfg.calm_min_s : d->cfg.lively_min_s, b = calm ? d->cfg.calm_max_s : d->cfg.lively_max_s;
+    return a + (b - a) * frand(d);
+}
+
+/* weighted, never the last one again */
+static int idle_pick(fluid_director_t *d) {
+    bool calm = d->idle_life == FD_IDLE_CALM;
+    float sum = 0.f;
+    for (int i = 0; i < IDLE_N; i++) if ((!calm || IDLE_LIB[i].calm) && IDLE_LIB[i].act != d->last_idle) sum += IDLE_LIB[i].w;
+    float r = frand(d) * sum;
+    int pick = -1;
+    for (int i = 0; i < IDLE_N; i++) {
+        if ((calm && !IDLE_LIB[i].calm) || IDLE_LIB[i].act == d->last_idle) continue;
+        pick = IDLE_LIB[i].act;
+        if ((r -= IDLE_LIB[i].w) < 0.f) break;
+    }
+    return pick;
+}
+
+static void start_act(fluid_director_t *d, int act) {
+    d->act_start = act;
+    d->acting_left = cute_act_dur(act);
 }
 
 /* queue a transition; the creature falls back to the blob while none is loaded */
@@ -74,7 +111,10 @@ void fd_init(fluid_director_t *d, const fd_cfg_t *cfg, uint32_t seed) {
     d->reel = -1;
     d->held = CM_IDLE; d->held_left = -1.f;
     d->flash = -1;
-    d->next_flash = flash_gap(d);
+    d->idle_life = FD_IDLE_DEFAULT;
+    d->last_idle = d->act_req = d->act_start = -1;
+    d->since_convo = 1e9f;
+    d->next_idle = idle_gap(d);
     go(d, FD_ST_CREATURE, 0);              /* home: the blob until a creature loads */
 }
 
@@ -99,7 +139,7 @@ void fd_request_state(fluid_director_t *d, int st, int fx, bool text_hold) {
 
 void fd_autoplay(fluid_director_t *d) {
     d->autoplay = true; d->reel = -1; d->reel_t = 0.f;
-    d->flash = -1; d->asleep = false;
+    d->flash = -1; d->asleep = false; d->convo_left = 0.f;
 }
 
 float fd_default_hold(int mood) {
@@ -107,8 +147,8 @@ float fd_default_hold(int mood) {
 }
 
 void fd_activity(fluid_director_t *d) {
-    d->asleep = false; d->quiet = 0.f;
-    d->next_flash = flash_gap(d);          /* no random flash right after a command */
+    d->asleep = false; d->quiet = 0.f; d->yawned = false;
+    d->next_idle = idle_gap(d);            /* no idle action right after a command */
 }
 
 void fd_agent_mood(fluid_director_t *d, int mood, float hold_s) {
@@ -119,7 +159,33 @@ void fd_agent_mood(fluid_director_t *d, int mood, float hold_s) {
     fd_activity(d);
 }
 
-void fd_user(fluid_director_t *d) { d->asleep = false; d->quiet = 0.f; }
+void fd_user(fluid_director_t *d) { d->asleep = false; d->quiet = 0.f; d->yawned = false; }
+
+void fd_set_idle_life(fluid_director_t *d, int level) {
+    if (level < 0 || level >= FD_IDLE_COUNT || level == d->idle_life) return;
+    d->idle_life = level;
+    d->next_idle = idle_gap(d);
+    if (level == FD_IDLE_OFF) d->convo_left = 0.f;
+}
+
+void fd_set_busy(fluid_director_t *d, bool busy, bool covered) { d->busy = busy || covered; d->covered = covered; }
+
+void fd_agent_act(fluid_director_t *d, int act) {
+    if (act < 0 || act >= CUTE_N_ACTS) return;
+    d->act_req = act; d->act_req_ttl = d->cfg.act_ttl_s;
+    fd_activity(d);
+}
+
+void fd_turn_spoken(fluid_director_t *d) {
+    if (d->idle_life == FD_IDLE_OFF || d->since_convo < d->cfg.convo_gap_s) return;
+    d->convo_left = d->cfg.convo_window_s; d->convo_delay = CONVO_DELAY_S;
+}
+
+int fd_take_act(fluid_director_t *d) {
+    int a = d->act_start;
+    d->act_start = -1;
+    return a;
+}
 
 void fd_shake(fluid_director_t *d) {
     fd_user(d);
@@ -151,21 +217,41 @@ void fd_tick(fluid_director_t *d, float dt, bool text_done) {
 
     if (d->held_left > 0.f && (d->held_left -= dt) <= 0.f) {
         d->held = CM_IDLE; d->held_left = -1.f;
-        d->next_flash = flash_gap(d);
+        d->next_idle = idle_gap(d);
     }
     if (d->flash >= 0 && (d->flash_left -= dt) <= 0.f) d->flash = -1;
+    if (d->acting_left > 0.f) d->acting_left -= dt;
+    d->since_convo += dt;
+
+    /* an agent's action: once the creature is on screen and nothing covers it */
+    const bool shown = !d->autoplay && !d->pending && d->cur == FD_ST_CREATURE;
+    if (d->act_req >= 0) {
+        if (shown && !d->covered) { start_act(d, d->act_req); d->act_req = -1; }
+        else if ((d->act_req_ttl -= dt) <= 0.f) d->act_req = -1;
+    }
 
     /* idle life: only while the creature is on screen, idle, and nobody drives it */
     d->quiet += dt;
-    if (!d->autoplay && !d->pending && d->cur == FD_ST_CREATURE && d->held == CM_IDLE) {
-        if (!d->asleep && d->quiet >= d->cfg.sleep_after_s) { d->asleep = true; d->flash = -1; }
-        if (!d->asleep && d->flash < 0 && (d->next_flash -= dt) <= 0.f) {
-            bool happy = frand(d) < 2.f / 3.f;
-            d->flash = happy ? CM_HAPPY : CM_SURPRISED;
-            d->flash_left = happy ? FLASH_HAPPY_S : FLASH_SURPRISED_S;
-            d->next_flash = flash_gap(d);
-        }
+    if (shown && d->held == CM_IDLE) {
+        if (!d->asleep && d->quiet >= d->cfg.sleep_after_s) { d->asleep = true; d->flash = -1; d->convo_left = 0.f; }
     }
+    const bool free = shown && d->held == CM_IDLE && !d->asleep && !d->busy && d->flash < 0 &&
+                      d->idle_life != FD_IDLE_OFF && d->acting_left <= 0.f && d->act_start < 0;
+    if (free && !d->yawned && d->quiet >= d->cfg.sleep_after_s - d->cfg.yawn_lead_s) {
+        d->yawned = true;                  /* dozing off: a yawn first */
+        start_act(d, CA_YAWN);
+    } else if (free && d->convo_left > 0.f) {
+        if ((d->convo_delay -= dt) <= 0.f) {   /* a say ended well: a happy flash */
+            d->flash = CM_HAPPY; d->flash_left = FLASH_HAPPY_S;
+            d->convo_left = 0.f; d->since_convo = 0.f;
+            d->next_idle = idle_gap(d);
+        }
+    } else if (free && (d->next_idle -= dt) <= 0.f) {
+        int a = idle_pick(d);
+        if (a >= 0) { start_act(d, a); d->last_idle = a; }
+        d->next_idle = idle_gap(d);
+    }
+    if (d->convo_left > 0.f && (d->convo_left -= dt) <= 0.f) d->convo_left = 0.f;
 
     if (d->status == d->shown) d->status_t = 0.f;
     else if (d->status == FD_STATUS_OK) { d->shown = FD_STATUS_OK; d->status_t = 0.f; }

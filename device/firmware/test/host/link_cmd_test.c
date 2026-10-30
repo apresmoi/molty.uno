@@ -16,6 +16,8 @@ esp_err_t molty_speaker_set_volume(uint8_t vol) { (void)vol; return ESP_OK; }
 cJSON *mole_diag_json(int t) { (void)t; return cJSON_CreateObject(); }
 char *mole_diag_log_text(uint32_t s, size_t m, uint32_t *n, bool j) { (void)s;(void)m;(void)n;(void)j; return NULL; }
 esp_err_t mole_fluid_set_text(const char *t, int len) { (void)t;(void)len; return ESP_OK; }
+static int acted = -1, acts;
+void mole_fluid_act(int a) { acted = a; acts++; }
 bool link_pair_active(void) { return false; }
 esp_err_t link_audio_say(const cJSON *a, cJSON **o) { (void)a;(void)o; return ESP_OK; }
 esp_err_t link_audio_listen(const cJSON *a, cJSON **o) { (void)a;(void)o; return ESP_OK; }
@@ -110,10 +112,18 @@ int main(void) {
     assert(run("mood","{\"mood\":\"happy\"}")==ESP_ERR_NO_MEM && run("show","{\"text\":\"hi\"}")==ESP_ERR_NO_MEM && ask_cancels==c+3);
     sdk_select_error=ESP_OK;
     assert(run("state","{\"palette\":\"green\"}")==ESP_OK && ask_cancels==c+4);
+    /* act: a gesture on the creature — never takes the screen (no mood, no question
+     * cancelled, not an explicit mood); unknown actions refused */
+    unsigned ga=link_cmd_mood_gen(); c=ask_cancels; strcpy(sdk_state,"");
+    cJSON *ao=NULL, *aa=cJSON_Parse("{\"action\":\"nod\"}");
+    assert(link_cmd_run("act",aa,&ao)==ESP_OK && acted==CA_NOD && acts==1 && !strcmp(cJSON_GetObjectItem(ao,"action")->valuestring,"nod"));
+    cJSON_Delete(aa); cJSON_Delete(ao);
+    assert(link_cmd_mood_gen()==ga && ask_cancels==c && !sdk_state[0]);
+    assert(run("act","{\"action\":\"dance\"}")==ESP_ERR_INVALID_ARG && run("act","{}")==ESP_ERR_INVALID_ARG && acts==1);
     /* update is registered; a handler's own refusal code reads back */
     cJSON *out=NULL, *a=cJSON_Parse("{}");
     assert(link_cmd_run("update",a,&out)==LINK_CMD_REFUSED && update_cmds==1 && !strcmp(link_cmd_refusal(),"wrong_board"));
     cJSON_Delete(a);
     cJSON_Delete(sdk_sent);
-    puts("LINK CMD PASS: explicit moods counted (link mood cmd, local state POST) under the mood lock, own/rejected moods not; screen commands cancel a question only once accepted");
+    puts("LINK CMD PASS: explicit moods counted (link mood cmd, local state POST) under the mood lock, own/rejected moods not; screen commands cancel a question only once accepted; act never takes the screen");
 }

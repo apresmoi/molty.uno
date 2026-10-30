@@ -6,6 +6,7 @@
  * FQBN: esp32:esp32:esp32s3:FlashSize=16M,PSRAM=enabled,CDCOnBoot=cdc
  */
 #include "cute_rig.h"
+#include "cute_act.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -302,6 +303,8 @@ struct cute_rt {
     struct { float next, x, y; } saccade;
     spring_t sp_h[3], sp_b[3], sp_py, sp_sq;
     pose_t pose;
+    /* one-shot action (cute_act.h): the one playing, and the one it replaced fading out */
+    int act, pact; float act_t, pact_t, pact_w;
     /* behaviours */
     term_state_t bst[CUTE_MAX_BEHAV][CUTE_MAX_TERMS];
     float beh_lid;
@@ -589,6 +592,7 @@ static void engine_init(cute_rt_t *rt) {
     for (int k = 0; k < 3; k++) { rt->sp_h[k] = (spring_t){ 90, 9, 0, 0 }; rt->sp_b[k] = (spring_t){ 45, 7, 0, 0 }; }
     rt->sp_sq = (spring_t){ 160, 9, 0, 0 };
     rt->sp_py = (spring_t){ 220, 14, 0, 0 };
+    rt->act = rt->pact = -1;
 }
 
 void cute_rt_set_mood(cute_rt_t *rt, int mood) {
@@ -599,6 +603,40 @@ void cute_rt_set_mood(cute_rt_t *rt, int mood) {
     rt->anticip = 0.0001f;
 }
 int cute_rt_mood(const cute_rt_t *rt) { return rt ? rt->mood : 0; }
+
+void cute_rt_act(cute_rt_t *rt, int act) {
+    if (!rt || act < 0 || act >= CUTE_N_ACTS) return;
+    if (rt->act >= 0) { rt->pact = rt->act; rt->pact_t = rt->act_t; rt->pact_w = 1.f; }   /* fades out */
+    rt->act = act; rt->act_t = 0.f;
+}
+int cute_rt_acting(const cute_rt_t *rt) { return rt ? rt->act : -1; }
+
+/* the action layer: offsets added after the springs (the curves are smooth already, and a
+ * nod must not be swallowed by the head's 1.5 Hz spring); look before the saccade clamp,
+ * lid after the blink (taken as max) */
+static void act_add(pose_t *p, const cute_act_pose_t *a, float w) {
+    for (int k = 0; k < 3; k++) {
+        p->pos[k] += w * a->pos[k]; p->rot[k] += w * a->rot[k];
+        p->head[k] += w * a->head[k]; p->spine[k] += w * a->spine[k];
+    }
+    p->squash += w * a->squash; p->mouth = fmaxf(p->mouth, w * a->mouth);
+    p->look[0] += w * a->look[0]; p->look[1] += w * a->look[1];
+}
+static float act_layer(cute_rt_t *rt, float dt, pose_t *p) {
+    float lid = 0.f;
+    cute_act_pose_t a;
+    if (rt->pact >= 0) {                               /* the replaced one, out over 0.25 s */
+        rt->pact_t += dt; rt->pact_w -= dt / 0.25f;
+        if (rt->pact_w <= 0.f || rt->pact_t > cute_act_dur(rt->pact)) rt->pact = -1;
+        else { cute_act_pose(rt->pact, rt->pact_t, &a); act_add(p, &a, rt->pact_w); lid = rt->pact_w * a.lid; }
+    }
+    if (rt->act >= 0) {
+        rt->act_t += dt;
+        if (rt->act_t > cute_act_dur(rt->act)) rt->act = -1;
+        else { cute_act_pose(rt->act, rt->act_t, &a); act_add(p, &a, 1.f); lid = fmaxf(lid, a.lid); }
+    }
+    return lid;
+}
 float cute_rt_env(const cute_rt_t *rt) { return rt ? rt->env_value : 0.f; }
 
 static void engine_update(cute_rt_t *rt, float dt, pose_t *p) {
@@ -624,6 +662,7 @@ static void engine_update(cute_rt_t *rt, float dt, pose_t *p) {
     for (int k = 0; k < 3; k++) p->rot[k] = spring_step(&rt->sp_b[k], p->rot[k], dt);
     p->pos[1] = spring_step(&rt->sp_py, p->pos[1], dt);
     p->squash = spring_step(&rt->sp_sq, p->squash, dt);
+    const float act_lid = act_layer(rt, dt, p);
     rt->saccade.next -= dt;
     if (rt->saccade.next <= 0) { rt->saccade.next = rand_ab(rt, 0.2f, 0.6f); rt->saccade.x = rand_ab(rt, -0.08f, 0.08f); rt->saccade.y = rand_ab(rt, -0.06f, 0.06f); }
     p->look[0] = clampf(p->look[0] + rt->saccade.x, -1, 1);
@@ -643,6 +682,7 @@ static void engine_update(cute_rt_t *rt, float dt, pose_t *p) {
         }
     }
     p->lid = clampf(fmaxf(p->lid, 0) + b->value * (1 - p->lid), 0, 1);
+    p->lid = fmaxf(p->lid, act_lid);
     p->mood = rt->mood;
 }
 

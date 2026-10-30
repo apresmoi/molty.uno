@@ -54,7 +54,7 @@ import {
   type ActivityOwnerRequest,
 } from "./api.js";
 import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
-import { ACK_CAP, ACK_MODES, type AskArgs, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk } from "./commands.js";
+import { ACK_CAP, ACK_MODES, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk } from "./commands.js";
 import { PcmFeed, estimateSpeechMs, splitSpeech, synthesize } from "./speech.js";
 import { b64Decode, b64urlEncode, randomBytes, randomDigits, safeEqual, sha256Hex } from "./crypto.js";
 import {
@@ -183,6 +183,8 @@ export const DEFAULT_TIMINGS: RoomTimings = {
 
 /** Firmware cap: say {cues:true} and frames with "w" word cues (the text follows the voice). */
 const SAY_CUES_CAP = "say_cues";
+/** Firmware cap (with say_cues): say {marks:[[word, name]...]} fires each [mood]/[action] cue of the text at its word's cue. */
+const SAY_MARKS_CAP = "say_marks";
 /** Word cues one frame header carries (each ≤ 17 B: the header stays under 512 B). */
 const SAY_CUES_PER_FRAME = 20;
 /** Words of one say the device can cue (firmware LINK_CUE_WORDS): later words go uncued. */
@@ -756,6 +758,16 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     }
     const live = this.liveSocket();
     if (!live) return fail("device_offline");
+    if (cmd.name === "act") {
+      // A gesture (cap `act`), gated like ask: older firmware is firmware_too_old, a device that
+      // lists caps without it is unsupported. It never takes the screen: no screenRev / screenInFlight.
+      const caps = live.getMeta()?.caps;
+      if (!caps?.includes(FEATURES.act.cap)) {
+        const old = tooOld("act", await this.facts(), await this.releases.latest("wait"));
+        if (old) return fail("firmware_too_old", `molty_act needs Molty firmware ${old.needed} or newer; this Molty runs ${old.current}`, old);
+        if (caps) return fail("unsupported", "this Molty has no gestures (no `act` in its caps)");
+      }
+    }
     if (cmd.job) {
       // A device that lists its caps and leaves say/listen out has no speaker/mic
       // (device/firmware/boards/): refuse before spending a TTS call. No caps = older firmware.
@@ -1327,7 +1339,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private async runSay(id: string, args: JsonObject, created: number) {
     await this.setJob(id, { status: "running" });
     const text = args.text as string;
-    const r = await this.speak(id, text, typeof args.voice === "string" ? args.voice : undefined, false);
+    const r = await this.speak(id, text, typeof args.voice === "string" ? args.voice : undefined, false, args.marks as SayMarks | undefined);
     if (!r.ok) return this.finishJob(id, { status: "failed", error: r.error });
     const timings: JsonObject = { queue: r.start - created, ...r.timings, total: this.clock.now() - created };
     if (isRecord(args.turn)) timings.turn = this.answerTimings(args, r.start + (r.timings.first_audio as number));
@@ -1357,7 +1369,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (args.say !== undefined) {
       // The device's say.done is required before the mic opens (it must not record its own
       // voice); none within playback + sayDoneGraceMs fails the turn with playback_timeout.
-      const s = await this.speak(id, args.say, args.voice, true);
+      const s = await this.speak(id, args.say, args.voice, true, args.marks);
       if (!s.ok) return this.finishJob(id, { status: "failed", error: s.error });
       result.said = args.say;
       ms.tts_first_audio = (s.timings.first_audio as number) ?? 0;
@@ -1395,7 +1407,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const timings: JsonObject = { queue: this.clock.now() - created };
     const result: JsonObject = {};
     if (args.say !== undefined) {
-      const s = await this.speak(id, args.say, args.voice, true);
+      const s = await this.speak(id, args.say, args.voice, true, args.marks);
       if (this.audioJob === id) this.audioJob = undefined;
       if (!s.ok) return this.finishJob(id, { status: "failed", error: s.error });
       result.said = args.say;
@@ -1468,7 +1480,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
    * device is only told once the first audio exists, so such a failure never
    * touches it.
    */
-  private async speak(id: string, text: string, voice: string | undefined, untilDone: boolean): Promise<SpeakResult> {
+  private async speak(id: string, text: string, voice: string | undefined, untilDone: boolean, marks?: SayMarks): Promise<SpeakResult> {
     const t0 = this.clock.now();
     const pick = await this.pickVoice("tts");
     if (!pick.ok) return { ok: false, error: pick.error };
@@ -1500,6 +1512,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       // word cues [word, sample] on the stream's timeline (the box's own timing, else estimated).
       cuesOn = !!sock!.getMeta()?.caps?.includes(SAY_CUES_CAP);
       if (cuesOn) deviceArgs.cues = true;
+      // Inline [cues] (validated + stripped from `text` in commands.ts): [word, name] marks the
+      // device fires as its playback reaches that word's cue. They ride only inside this say:
+      // no separate mood/act cmd, no screenRev bump. Firmware without the cap gets none.
+      if (cuesOn && marks?.length && sock!.getMeta()?.caps?.includes(SAY_MARKS_CAP)) deviceArgs.marks = marks;
       return this.sendCmd("say", deviceArgs);
     };
     let cmd: Promise<Outcome<JsonObject>> | undefined;

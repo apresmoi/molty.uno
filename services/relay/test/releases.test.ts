@@ -238,6 +238,7 @@ describe("GET /v1/releases/latest (public)", () => {
       features: [
         { feature: "molty_ask", cap: "ask", needs: "0.2.0" },
         { feature: "molty_update", cap: "update", needs: "0.2.0" },
+        { feature: "molty_act", cap: "act", needs: "0.2.0" },
       ],
     });
     expect(((await (await handleReleases(new Request("https://r/v1/releases/latest?board=nope-board"), await src)).json()) as any).board).toBeNull();

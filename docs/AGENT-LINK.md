@@ -76,7 +76,7 @@ Molty (home Wi-Fi) ──outbound WSS──▶ molty-relay (Cloudflare Worker + 
 
 ## Device ↔ relay wire (WS/WSS `/v1/device?id=<device_id>`)
 
-First frame from device: `{"t":"hello","id":"molty-k7m2w9c4ya","key":"<b64 device_key>","fw":"...","caps":["fluid","say","say_cues","listen","listen_stop","listen_window","ack","shake_talk","show","mood","creature","ask","log_upload"],"board":"waveshare-esp32-s3-touch-lcd-1.46","link_code":"..."}`
+First frame from device: `{"t":"hello","id":"molty-k7m2w9c4ya","key":"<b64 device_key>","fw":"...","caps":["fluid","say","say_cues","say_marks","listen","listen_stop","listen_window","ack","shake_talk","show","mood","act","creature","ask","log_upload"],"board":"waveshare-esp32-s3-touch-lcd-1.46","link_code":"..."}`
 → relay answers `{"t":"welcome","features":["listen_adopt"],"now":<relay unix ms>,"log":{"max_lines":48}}` or closes with 4401.
 `features` lists what the relay does for the device (`listen_adopt`: it adopts a listen the device
 began by itself — [Shake to talk](#shake-to-talk)); `now` is the device's time sync and `log` says the
@@ -85,13 +85,15 @@ the device then never starts a shake listen nor uploads.
 
 `board` names the hardware (`device/firmware/boards/`, see [PORTING.md](PORTING.md)). `caps`
 lists `say` / `listen` only when the board has a speaker / microphone (`say_cues` with `say`,
-firmware that shows a say's words as they are spoken; `listen_stop` with
+firmware that shows a say's words as they are spoken; `say_marks` with `say`, firmware that
+fires a say's inline cues on their word — see [Inline cues and actions](#inline-cues-and-actions); `listen_stop` with
 `listen`, firmware that can end a listen on the relay's word; `listen_window` with `listen`,
 firmware whose window is optional, 0..30000 or unlimited — see `listen` below; `ack` with
 `listen`, firmware that acknowledges the end of a turn itself — see [Turn acknowledgement](#turn-acknowledgement); `shake_talk` on
 boards with a mic and an IMU, firmware whose shake can start a listen — see [Shake to talk](#shake-to-talk)), `ask` only when it
 has a touch screen (and firmware that implements `ask`), and `update` when the firmware can
-install a release itself ([Firmware updates](#firmware-updates)), and `log_upload` when it
+install a release itself ([Firmware updates](#firmware-updates)), `act` when it plays one-shot
+gestures ([Inline cues and actions](#inline-cues-and-actions)), and `log_upload` when it
 sends its log lines to the relay ([Activity log](#activity-log)); the relay answers
 those commands `409 unsupported` up front, without calling TTS, when the device left them
 out — or `409 firmware_too_old` when `fw` is older than the feature's minimum firmware
@@ -151,6 +153,13 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   estimated when its segment's audio is complete, from its real length in proportion to
   characters. A malformed cue list is a malformed frame (the stream ends). Firmware without
   the cap gets neither: its reader runs at its own pace as before.
+  **Marks (cap `say_marks`, with `say_cues`)**: `cmd say` adds `marks: [[word, "name"], ...]`
+  (≤ 16, in text order; `word` 0..4096; `name` a mood or an action) — the agent's inline cues,
+  already stripped from `text`. The device fires mark k when word `word` is revealed (its word
+  cue, the same instant), or when playback ends cleanly for a word with no cue (past the last
+  word, or past word 511); a cancelled or failed say fires none of the rest. Malformed marks
+  refuse the say (`invalid_args`); marks without `cues:true` are ignored. What firing does:
+  [Inline cues and actions](#inline-cues-and-actions).
   `talk` requires this `say.done` before it opens the mic: none within the streamed playback
   time + 2.5 s fails the turn with `playback_timeout` (REST 504); an elapsed estimate is never
   taken as playback.
@@ -430,8 +439,9 @@ What the screen does between commands (`device/firmware/main/fluid/fluid_directo
 | `status` | — | fw, uptime, creature, state, mood, fps, rssi | relay adds `relay` {api_version, online, board, caps, voice, ...} |
 | `state` | `{state, ...}` | creature state JSON | passthrough to `/api/creature/state` semantics |
 | `mood` | `{mood, hold_s?}` | — | idle listening thinking speaking happy sleepy surprised; `hold_s` 0..3600 (0 = until the next mood; default: happy/surprised revert, the rest persist) |
+| `act` | `{action}` | `{action}` | a one-shot gesture over the current mood: wiggle nod shake_head bounce peek glance_left glance_right blink wobble stretch look_up yawn ([Inline cues and actions](#inline-cues-and-actions)); `unsupported` / `firmware_too_old` without the `act` cap |
 | `show` | `{text, wpm?}` | — | speed reader in the fluid; back to the creature 1.5 s after the last word |
-| `say` | `{text, voice?, in_reply_to?}` | `{job}` immediately | relay does TTS (streamed per sentence) + streams; device sets `speaking`, shows text in sync. Job result `{ms, text, timings}`. `unsupported` without a speaker; `in_reply_to` / `turn_claimed`: [Shake to talk](#shake-to-talk) |
+| `say` | `{text, voice?, in_reply_to?}` | `{job}` immediately | relay does TTS (streamed per sentence) + streams; device sets `speaking`, shows text in sync. `text` may carry [inline cues](#inline-cues-and-actions). Job result `{ms, text, timings}` (`text` as spoken, cues stripped). `unsupported` without a speaker; `in_reply_to` / `turn_claimed`: [Shake to talk](#shake-to-talk) |
 | `listen` | `{ms? 0..30000 (0 = unlimited; omit = the device's setting, 30000 out of the box), end_silence_ms?, no_speech_ms?, vad?, ring_color?}` | `{job}` immediately | device sets `listening`, streams mic, stops at end of speech ([Listen end of speech](#listen-end-of-speech-device-vad)); relay STT → job result `{text, duration_ms, peak, rms, reason, speech_ms?, timings}`. `unsupported` without a mic |
 | `talk` (relay) | `{say?, listen?=true, listen_ms? 0..30000 (as listen's ms), voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?}` | blocks ≤ 24 s | say then listen in one job: `{job, status:"done", heard, said?, reason, speech_ms?, ms:{tts_first_audio, speech, listen, stt, total}, timings}`; over 24 s `{job, status:"pending"}` |
 | `updates` (relay) | — | `{api_version, firmware, actions}` | "check Molty for updates": [Firmware updates](#firmware-updates) |
@@ -462,6 +472,65 @@ ready), `tts_total` (synthesis finished), `first_audio` (first frame sent), `str
 last frame), `play` (first frame → playback end / `say.done`); listen: `cmd` (listen ack),
 `record` (ack → end frame), `first_frame`, `stt`; `total`.
 
+### Inline cues and actions
+
+Molty is not "always idle": agents add expression without extra calls, and the creature has an
+idle life of its own.
+
+**Inline cues** (relay: `parseCues`, `services/relay/src/core/speech.ts`). The text of `say`,
+`talk`'s `say` and `ask`'s `say` may carry `[name]` cues:
+`"[happy] Build passed! [thinking] Three tests were flaky… [surprised] wait, one is new."`
+
+- A cue is `[` + 1..24 characters without `[`, `]`, CR or LF + `]`. Its name is the inside
+  trimmed, lower-cased, runs of spaces / tabs / hyphens → `_` (`[Shake Head]` = `shake_head`).
+  A mood (`MOODS`) or an action (`ACTIONS`, `commands.ts`) becomes a **mark**; any other name is
+  stripped silently. An unescaped `[` or `]` that forms no cue is dropped silently too.
+- `\[` and `\]` are literal brackets (spoken and shown); any other backslash is literal.
+- Cues are **never spoken and never shown**: TTS, `cmd say`'s `text`, the word cues and the
+  job's `text` / `said` all use the stripped text. Removing a cue never doubles a space; the
+  result is trimmed. Nothing left to speak → `invalid_args` (use `mood` / `act`). The 4096-byte
+  limit applies to the text as sent.
+- A mark's word = the words of the stripped text (counted like the reader) that start before
+  the cue: a cue before word k fires with word k, mid-word with the next word, after the last
+  word when the speech ends. At most 16 marks (the rest dropped), exact duplicates dropped.
+- Timing is the say's word-cue path: the device fires a mark the moment its word is revealed,
+  i.e. with the voice box's own word timing or the cloud's per-character estimate.
+- Firmware without `say_marks`: the cues are still stripped, nothing fires.
+
+**On the device** (`link_audio.c`, `mole_fluid.c`, `fluid_director.c`):
+
+- During a say the words cover the creature. A **mood mark** tints the words from its word on
+  (happy amber, surprised cyan, thinking violet, sleepy blue, listening green; idle / speaking
+  the palette's colours) and becomes the creature's mood when the say ends — instead of `idle`,
+  unless an explicit `mood` arrived during the say (it wins, as ever); happy / surprised / idle
+  keep their default hold, the others hold 8 s. An **action mark** asks the creature for that
+  action: it plays once the creature is back (within 3 s, else dropped), so trailing actions
+  (`"Done. [nod]"`) land as the words melt.
+- Marks never take the screen: none fires while a question, a pairing or an update owns it,
+  they never cancel a question, and they are not explicit moods (`link_cmd_mood_gen`).
+- **`act {action}`**: the same action, any time. It plays over the current mood (an additive
+  pose layer, `device/firmware/main/creature/cute_act.h`; JS twin `device/creatures/js/actions.js`,
+  pinned sample for sample by `test/host/act_golden.txt`); a newer one replaces it (0.25 s
+  fade). It never changes the state or mood, never cancels a question, never makes a sound;
+  while words or a question cover the creature it waits up to 3 s, then is dropped. A sleeping
+  creature wakes for it. Local twin: `POST /api/creature/state {act: "nod"}`; GET reports the
+  action playing as `act`.
+
+**Idle life** (`fluid_director.h`). With nobody driving it, the creature plays one small action
+from a weighted library every 10–40 s — glance left / right, blink (×3 weight), look up (×2),
+wobble, stretch (×1.5) — never the same one twice in a row; "calm" keeps the small ones every
+20–60 s; "off" plays none. Only while the creature is on screen, in `idle`, awake, and nothing
+owns the screen: never during a say, a listen, a question, an update or pairing screen, the
+turn acknowledgement's `thinking` or any agent mood. After 5 min without touch or agent activity
+it **yawns**, then dozes off (`sleepy`; off: no yawn). A say that played to its end, the
+creature back and idle within 8 s: one `happy` flash (at most one a minute). The console's
+setting: Settings › Molty "idle life" (`POST /api/creature/state {idle_life:
+"lively"|"calm"|"off"}`, GET reports it, kept in NVS like `ring_color`; lively out of the box).
+**Frame cost:** the action layer is a handful of `sinf` per frame on the creature's pose
+(host: within ±0.03 µs, i.e. noise, of a ~54 µs creature update + raster + fill — scaled to
+the device's ~11 ms creature work, a few µs of a 33 ms frame), the scheduler a few
+comparisons: no measurable change to the ~30 fps. Not yet measured on hardware.
+
 ## Device events
 
 Device→relay `{"t":"evt","name":...,"data":{...}}` frames, sent only while the link is up
@@ -491,7 +560,7 @@ constants: `device/firmware/main/sense/gesture.h`.
 ## Agent surfaces
 
 - **Remote MCP** `https://<relay>/mcp` (streamable HTTP), `Authorization: Bearer <agent_token>`.
-  Tools: `molty_pair`, `molty_talk`, `molty_ask`, `molty_status`, `molty_mood`, `molty_show`, `molty_say`, `molty_listen`,
+  Tools: `molty_pair`, `molty_talk`, `molty_ask`, `molty_status`, `molty_mood`, `molty_act`, `molty_show`, `molty_say`, `molty_listen`,
   `molty_wait`, `molty_state`, `molty_volume`, `molty_imu`, `molty_diag`, `molty_log`, plus the
   relay-only `molty_talk`, `molty_ask`, `molty_events`, `molty_webhook` ([Events](#events-device--agents)),
   `molty_updates` and `molty_update` ([Firmware updates](#firmware-updates)), `molty_activity`

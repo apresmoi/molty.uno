@@ -373,6 +373,17 @@ const canvasStats = (page) => page.evaluate(() => {
   await shakeRow.getByRole('button', { name: 'on (default)' }).click();
   await shakeRow.locator('button[aria-pressed="true"]', { hasText: 'on' }).waitFor();
   ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).shake_talk === true), 'settings molty: shake to talk back on (shake_talk true)');
+  const idleRow = page.getByRole('group', { name: 'idle life' });
+  ok(await idleRow.getByRole('button', { name: 'lively (default)' }).getAttribute('aria-pressed') === 'true', 'settings molty: idle life defaults to lively');
+  await idleRow.getByRole('button', { name: 'calm' }).click();
+  await idleRow.locator('button[aria-pressed="true"]', { hasText: 'calm' }).waitFor();
+  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).idle_life === 'calm'), 'settings molty: calm idle life sent to the device (idle_life calm)');
+  await idleRow.getByRole('button', { name: 'off' }).click();
+  await idleRow.locator('button[aria-pressed="true"]', { hasText: 'off' }).waitFor();
+  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).idle_life === 'off'), 'settings molty: idle life off sent to the device (idle_life off)');
+  await idleRow.getByRole('button', { name: 'lively (default)' }).click();
+  await idleRow.locator('button[aria-pressed="true"]', { hasText: 'lively' }).waitFor();
+  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).idle_life === 'lively'), 'settings molty: idle life back to lively (idle_life lively)');
   ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'settings molty: no horizontal scroll at 390px');
   await shot(page, '12-settings-molty');
 
