@@ -639,6 +639,8 @@ static void test_shake_talk(void) {
     assert(sdk_rx_chunks==21 && bin_bytes==21*3200u && bin_ends==1 && !strcmp(bin_reason,"turn_end"));
     assert(strstr(bin_end_header,"\"s\":\"" RELAY_JOB "\""));
     assert(!link_audio_busy() && !ring_on && !strcmp(sdk_mood,"thinking"));   /* heard: acknowledged */
+    /* activity log: the adopted listen's lines carry the relay's job, ended with it */
+    assert(!strcmp(sdk_job_last_end, RELAY_JOB));
     /* vad:false and nobody ends it: the device's 5 s window, counted from the shake */
     assert(shake(&job)); shake_run(&job,5,",\"vad\":false");
     assert(bin_bytes==160000 && !strcmp(bin_reason,"max") && sdk_rx_chunks==50);
@@ -696,6 +698,8 @@ static void test_shake_talk(void) {
 int main(void) {
     assert(link_audio_init()==ESP_OK && link_pair_init()==ESP_OK);
     test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop(); test_listen_window(); test_say_cues(); test_chirp_sound(); test_ack(); test_shake_talk();
+    /* activity log: every accepted job (done, failed, cancelled, refused frames, adopted shakes) ended its tag */
+    assert(sdk_job_begins>0 && sdk_job_begins==sdk_job_ends);
     cJSON_Delete(sdk_sent); free(s_jobs); free(s_done); free(s_ring);
-    puts("LINK AUDIO/PAIR PASS: paced PCM, final playback drain, errors, cmd-time text/mood, explicit moods outlive jobs, pairing reasons, board caps, listening ring (+ ring_color), ask cancellation, listen_stop (turn_end; no_speech never acknowledged), listen window (30 s, unlimited, setting), say word cues follow playback, turn acknowledgement (chirp + thinking: which ends ack, opt-outs, setting, screen owners, cut by the next job), shake to talk (a local listen at once, adopted by the relay with its job id + end of turn and the audio replayed, or ending quietly: unclaimed / declined / link down; never over another owner, the setting, or a relay that does not adopt)");
+    puts("LINK AUDIO/PAIR PASS: job tags begin/end on every path, paced PCM, final playback drain, errors, cmd-time text/mood, explicit moods outlive jobs, pairing reasons, board caps, listening ring (+ ring_color), ask cancellation, listen_stop (turn_end; no_speech never acknowledged), listen window (30 s, unlimited, setting), say word cues follow playback, turn acknowledgement (chirp + thinking: which ends ack, opt-outs, setting, screen owners, cut by the next job), shake to talk (a local listen at once, adopted by the relay with its job id + end of turn and the audio replayed, or ending quietly: unclaimed / declined / link down; never over another owner, the setting, or a relay that does not adopt)");
 }

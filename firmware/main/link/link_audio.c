@@ -70,7 +70,8 @@ typedef struct {
     char job[LINK_STREAM_MAX]; uint32_t rec_ms;
     bool vad; unsigned end_silence_ms, no_speech_ms; link_ack_t ack;
 } adopt_t;
-static adopt_t s_adopt;                               /* written before WAIT → ADOPTED */
+static adopt_t s_adopt;
+static bool s_tagged;                                 /* the running job began an activity-log tag (link task) */                               /* written before WAIT → ADOPTED */
 static atomic_bool s_relay_adopts;                    /* the relay's welcome lists listen_adopt */
 static atomic_bool s_shake_req;                       /* a shake handed over by the sense task */
 static double s_shake_peak; static int s_shake_rev; static unsigned s_shake_ms;   /* before s_shake_req */
@@ -398,6 +399,10 @@ static void begin(const audio_job_t *job, bool cued)
     atomic_store(&s_end, false); atomic_store(&s_cancel, false); atomic_store(&s_stop, STOP_NONE);
     atomic_store(&s_pend, job->pending ? PEND_WAIT : PEND_NONE);
     atomic_store(&s_chirp_cut, true);    /* a chirp still playing ends now: this job is next */
+    /* activity log: its lines carry the relay job (ended in link_audio_tick); a shake's own
+     * listen has no relay job until it is adopted (adopt() begins the tag then) */
+    s_tagged = !job->pending;
+    if (s_tagged) mole_diag_job_begin(job->job);
     xQueueSend(s_jobs, job, 0);
 }
 
@@ -496,6 +501,7 @@ static esp_err_t adopt(const cJSON *args, const cJSON *local, cJSON **out)
     int w = PEND_WAIT;
     if (!atomic_compare_exchange_strong(&s_pend, &w, PEND_ADOPTED)) { cJSON_Delete(result); return link_cmd_refuse("listen_gone"); }
     strcpy(s_job, a.job);                 /* listen_stop / diag name the relay's job from now on */
+    mole_diag_job_begin(a.job); s_tagged = true;   /* activity log: its lines carry the relay's job from here */
     cJSON_AddStringToObject(result, "job", a.job);
     cJSON_AddNumberToObject(result, "ms", window);
     cJSON_AddStringToObject(result, "ack", link_ack_name(a.ack));
@@ -626,4 +632,6 @@ void link_audio_tick(void)
         cJSON *j = link_say_done_frame(s_job);
         if (j) { link_send_json(j); cJSON_Delete(j); }
     }
+    if (s_tagged) mole_diag_job_end(s_job);   /* every end (done, failed, cancelled) passes here; the link uploads its lines */
+    s_tagged = false;
 }

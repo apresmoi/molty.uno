@@ -1,6 +1,7 @@
 /* mole_diag — see mole_diag.h. Everything here is cheap by construction:
  * one memcpy per log line, two uint16 stores per frame, a 1 Hz sampler. */
 #include "mole_diag.h"
+#include "log_upload.h"
 #include "link/link_client.h"
 #include "link/link_audio.h"
 
@@ -29,7 +30,7 @@
 
 #define RING_SLOTS   400
 #define SLOT_TEXT    152
-#define RING_MAGIC   0x4D444C47u   /* "MDLG" */
+#define RING_MAGIC   0x4D444C32u   /* "MDL2": slots carry a job tag, the header a boot + time sync */
 #define FRAMES_N     1024          /* ~30 s of frames at 33 fps */
 #define TL_N         180           /* 1 Hz timeline, 3 min */
 #define MAX_TASKS    40
@@ -37,15 +38,21 @@
 #define PERSIST_TMP  "/spiffs/diag.tmp"
 /* SPIFFS writes freeze the other core (ipc) — measured ~150 ms render hitches
  * over a 2 s 24 KB persist. Crashes/WDT/OTA are covered by the no-init RAM ring,
- * so the file only has to survive power loss: small, rare, never at boot. */
-#define PERSIST_BYTES (12 * 1024)
-#define PERSIST_MIN_GAP_US (300LL * 1000000)
-#define PERSIST_PERIOD_MS  (30 * 60 * 1000)
-#define PERSIST_NOT_BEFORE_US (90LL * 1000000)
+ * so the file only has to survive power loss: small, rare, never at boot. The policy
+ * and its numbers live in log_upload.h (LOG_PERSIST_*), host-tested. */
+#define PERSIST_BYTES LOG_PERSIST_BYTES
 #define PERSIST_CHUNK 2048
 
-typedef struct { uint32_t seq, ms; char text[SLOT_TEXT]; } slot_t;
-typedef struct { uint32_t magic, boot_ms_unused, next, nslots; slot_t s[RING_SLOTS]; uint32_t magic2; } ring_t;
+typedef struct { uint32_t seq, ms; char job[LOG_TAG_MAX + 1]; char text[SLOT_TEXT]; } slot_t;
+/* boot: the NVS boot count; sync_up/sync_wall: uptime ms + relay wall ms at this boot's
+ * last welcome (0/0: none) — kept in no-init RAM, so a soft reset's previous ring still
+ * knows its wall time */
+typedef struct {
+    uint32_t magic, boot, next, nslots, sync_up, pad;
+    int64_t sync_wall;
+    slot_t s[RING_SLOTS];
+    uint32_t magic2;
+} ring_t;
 
 /* Survives software resets (panic, TWDT, esp_restart, OTA) — not power loss. */
 static EXT_RAM_NOINIT_ATTR ring_t s_ring;
@@ -57,7 +64,18 @@ static char *s_prev_file;            /* or: previous boot's persisted text */
 static size_t s_prev_file_len;
 static const char *s_prev_src = "none";
 
+static log_jobs_t s_jobs;            /* the jobs running now (s_ring_mux) */
+static atomic_bool s_upload_req;     /* a job ended: the link uploads new lines */
+
+/* previous boot's lines for the relay (mole_diag_log_prev_frame), from the RAM copy or
+ * parsed out of the SPIFFS file */
+static log_line_t *s_prev_lines;
+static size_t s_prev_n;
+static uint32_t s_prev_boot, s_prev_sync_up;
+static int64_t s_prev_sync_wall;
+
 static atomic_bool s_persist_req;
+static uint32_t s_persist_next;      /* ring seq at the last write (periodic writes only when wanted lines came) */
 static TaskHandle_t s_persist_task;
 static int64_t s_last_persist;
 static uint32_t s_persist_n, s_persist_ms, s_persist_fail;
@@ -75,6 +93,7 @@ static void ring_put(const char *text, size_t len)
     uint32_t seq = s_ring.next++;
     slot_t *sl = &s_ring.s[seq % RING_SLOTS];
     sl->seq = seq; sl->ms = ms;
+    strcpy(sl->job, log_jobs_current(&s_jobs));
     memcpy(sl->text, text, len); sl->text[len] = 0;
     portEXIT_CRITICAL_SAFE(&s_ring_mux);
 }
@@ -150,7 +169,7 @@ static char *render(const ring_t *r, uint32_t since, size_t max_bytes, uint32_t 
     size_t total = 0; uint32_t start = end;
     while (start > first) {
         const slot_t *sl = &r->s[(start - 1) % RING_SLOTS];
-        size_t l = strnlen(sl->text, SLOT_TEXT) * (json ? 2 : 1) + (json ? 48 : 24);
+        size_t l = strnlen(sl->text, SLOT_TEXT) * (json ? 2 : 1) + (json ? 48 : 24) + LOG_TAG_MAX + 12;
         if (total + l > max_bytes) break;
         total += l; start--;
     }
@@ -161,15 +180,18 @@ static char *render(const ring_t *r, uint32_t since, size_t max_bytes, uint32_t 
         sl = r->s[q % RING_SLOTS];
         portEXIT_CRITICAL_SAFE(&s_ring_mux);
         if (sl.seq != q) continue;                     /* overwritten meanwhile */
-        sl.text[SLOT_TEXT - 1] = 0;
+        sl.text[SLOT_TEXT - 1] = 0; sl.job[LOG_TAG_MAX] = 0;
         if (!json) {
-            int w = snprintf(out + o, max_bytes + 1 - o, "%lu %lu.%03lu %s\n", (unsigned long)sl.seq,
-                             (unsigned long)(sl.ms / 1000), (unsigned long)(sl.ms % 1000), sl.text);
+            /* a job's lines: "[j_<tag>] " before the text (display only) */
+            int w = snprintf(out + o, max_bytes + 1 - o, "%lu %lu.%03lu %s%s%s%s\n", (unsigned long)sl.seq,
+                             (unsigned long)(sl.ms / 1000), (unsigned long)(sl.ms % 1000),
+                             sl.job[0] ? "[j_" : "", sl.job, sl.job[0] ? "] " : "", sl.text);
             if (w < 0 || (size_t)w >= max_bytes + 1 - o) break;
             o += (size_t)w;
         } else {
-            int w = snprintf(out + o, max_bytes + 1 - o, "{\"seq\":%lu,\"ms\":%lu,\"msg\":\"",
-                             (unsigned long)sl.seq, (unsigned long)sl.ms);
+            int w = snprintf(out + o, max_bytes + 1 - o, "{\"seq\":%lu,\"ms\":%lu,%s%s%s\"msg\":\"",
+                             (unsigned long)sl.seq, (unsigned long)sl.ms,
+                             sl.job[0] ? "\"job\":\"" : "", sl.job, sl.job[0] ? "\"," : "");
             if (w < 0 || (size_t)w >= max_bytes + 1 - o) break;
             o += (size_t)w;
             for (const char *p = sl.text; *p && o + 8 < max_bytes; p++) {
@@ -526,11 +548,51 @@ static void sampler_task(void *arg)
 
 /* ── persistence ──────────────────────────────────────────────────────────── */
 
+/* The file format (log_upload.h): a header with this boot and its time sync, then
+ * "<seq> <ms> <tag|-> <text>" lines, oldest first, the newest PERSIST_BYTES. */
+static char *render_persist(uint32_t *next)
+{
+    char *out = heap_caps_malloc(PERSIST_BYTES + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!out) return NULL;
+    portENTER_CRITICAL_SAFE(&s_ring_mux);
+    uint32_t end = s_ring.next, boot = s_ring.boot, sync_up = s_ring.sync_up;
+    int64_t sync_wall = s_ring.sync_wall;
+    portEXIT_CRITICAL_SAFE(&s_ring_mux);
+    int h = log_persist_header(out, PERSIST_BYTES, boot, sync_up, sync_wall);
+    if (h < 0) { heap_caps_free(out); return NULL; }
+    size_t o = (size_t)h;
+    out[o++] = '\n';
+    uint32_t first = end > RING_SLOTS ? end - RING_SLOTS : 0;
+    size_t total = o; uint32_t start = end;
+    while (start > first) {
+        const slot_t *sl = &s_ring.s[(start - 1) % RING_SLOTS];
+        size_t l = strnlen(sl->text, SLOT_TEXT) + strnlen(sl->job, LOG_TAG_MAX + 1) + 26;
+        if (total + l > PERSIST_BYTES) break;
+        total += l; start--;
+    }
+    for (uint32_t q = start; q < end; q++) {
+        slot_t sl;
+        portENTER_CRITICAL_SAFE(&s_ring_mux);
+        sl = s_ring.s[q % RING_SLOTS];
+        portEXIT_CRITICAL_SAFE(&s_ring_mux);
+        if (sl.seq != q) continue;
+        sl.text[SLOT_TEXT - 1] = 0; sl.job[LOG_TAG_MAX] = 0;
+        log_line_t l = {.seq = sl.seq, .ms = sl.ms, .job = sl.job, .text = sl.text};
+        int w = log_persist_line(out + o, PERSIST_BYTES - o, &l);
+        if (w < 0 || o + (size_t)w + 1 > PERSIST_BYTES) break;
+        o += (size_t)w;
+        out[o++] = '\n';
+    }
+    out[o] = 0;
+    *next = end;
+    return out;
+}
+
 static void persist_now(void)
 {
     int64_t t0 = esp_timer_get_time();
     uint32_t next;
-    char *text = render(&s_ring, 0, PERSIST_BYTES, &next, false);
+    char *text = render_persist(&next);
     if (!text) { s_persist_fail++; return; }
     size_t len = strlen(text);
     FILE *f = fopen(PERSIST_TMP, "wb");
@@ -545,28 +607,171 @@ static void persist_now(void)
     heap_caps_free(text);
     if (ok) { remove(PERSIST_PATH); ok = rename(PERSIST_TMP, PERSIST_PATH) == 0; }
     if (!ok) { s_persist_fail++; remove(PERSIST_TMP); return; }
+    s_persist_next = next;
     s_persist_n++;
     s_persist_ms = (uint32_t)((esp_timer_get_time() - t0) / 1000);
+}
+
+/* lines worth uploading logged since the last write (the periodic write skips an idle log) */
+static uint32_t wanted_since(uint32_t from)
+{
+    uint32_t end = s_ring.next, n = 0;
+    if (end > RING_SLOTS && from < end - RING_SLOTS) from = end - RING_SLOTS;
+    for (uint32_t q = from; q < end; q++) {
+        slot_t sl;
+        portENTER_CRITICAL_SAFE(&s_ring_mux);
+        sl = s_ring.s[q % RING_SLOTS];
+        portEXIT_CRITICAL_SAFE(&s_ring_mux);
+        sl.text[SLOT_TEXT - 1] = 0; sl.job[LOG_TAG_MAX] = 0;
+        if (sl.seq == q && log_upload_wanted(sl.text, sl.job)) n++;
+    }
+    return n;
 }
 
 static void persist_task(void *arg)
 {
     (void)arg;
     for (;;) {
-        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(PERSIST_PERIOD_MS));
-        int64_t now = esp_timer_get_time();
-        if (now < PERSIST_NOT_BEFORE_US) {
-            vTaskDelay(pdMS_TO_TICKS((PERSIST_NOT_BEFORE_US - now) / 1000));
-            now = esp_timer_get_time();
-        }
-        if (s_last_persist && now - s_last_persist < PERSIST_MIN_GAP_US) {
-            /* rate-limited: sleep out the gap, keep the request pending */
-            vTaskDelay(pdMS_TO_TICKS((s_last_persist + PERSIST_MIN_GAP_US - now) / 1000 + 10));
-        }
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(LOG_PERSIST_PERIOD_MS));
+        bool requested = atomic_load(&s_persist_req);
+        if (!log_persist_due(requested, wanted_since(s_persist_next))) continue;
+        /* never in the first 90 s, at least 5 min apart: sleep it out, the request stays pending */
+        int64_t wait = log_persist_delay_us(esp_timer_get_time(), s_last_persist);
+        if (wait > 0) vTaskDelay(pdMS_TO_TICKS(wait / 1000 + 10));
         atomic_store(&s_persist_req, false);
         s_last_persist = esp_timer_get_time();
         persist_now();
     }
+}
+
+/* ── activity log: job tags, time sync, uploads (log_upload.h) ────────────── */
+
+void mole_diag_job_begin(const char *job)
+{
+    char tag[LOG_TAG_MAX + 1];
+    if (!log_job_tag(job, tag)) return;
+    portENTER_CRITICAL_SAFE(&s_ring_mux);
+    log_jobs_begin(&s_jobs, tag);
+    portEXIT_CRITICAL_SAFE(&s_ring_mux);
+}
+
+void mole_diag_job_end(const char *job)
+{
+    char tag[LOG_TAG_MAX + 1];
+    if (!log_job_tag(job, tag)) return;
+    portENTER_CRITICAL_SAFE(&s_ring_mux);
+    log_jobs_end(&s_jobs, tag);
+    portEXIT_CRITICAL_SAFE(&s_ring_mux);
+    atomic_store(&s_upload_req, true);       /* the link sends the job's lines up */
+}
+
+bool mole_diag_log_take_request(void) { return atomic_exchange(&s_upload_req, false); }
+
+void mole_diag_link_sync(uint32_t up_ms, int64_t wall_ms)
+{
+    portENTER_CRITICAL_SAFE(&s_ring_mux);
+    s_ring.sync_up = up_ms; s_ring.sync_wall = wall_ms;
+    portEXIT_CRITICAL_SAFE(&s_ring_mux);
+}
+
+/* The wanted lines of a ring from *cursor: backlog > 0 first moves the cursor so that at
+ * most `backlog` remain; then up to max_lines of them, framed. */
+static cJSON *ring_frame(const ring_t *r, bool live, uint32_t *cursor, int max_lines, int backlog,
+                         const log_frame_opts_t *o)
+{
+    uint32_t end = r->next;
+    uint32_t first = end > RING_SLOTS ? end - RING_SLOTS : 0;
+    if (*cursor < first) *cursor = first;
+    if (*cursor >= end) { *cursor = end; return NULL; }
+    if (backlog > 0) {
+        uint32_t *seqs = heap_caps_malloc(RING_SLOTS * sizeof(uint32_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!seqs) return NULL;
+        size_t n = 0;
+        for (uint32_t q = *cursor; q < end; q++) {
+            slot_t sl;
+            if (live) portENTER_CRITICAL_SAFE(&s_ring_mux);
+            sl = r->s[q % RING_SLOTS];
+            if (live) portEXIT_CRITICAL_SAFE(&s_ring_mux);
+            sl.text[SLOT_TEXT - 1] = 0; sl.job[LOG_TAG_MAX] = 0;
+            if (sl.seq == q && log_upload_wanted(sl.text, sl.job)) seqs[n++] = q;
+        }
+        *cursor = log_upload_backlog(seqs, n, *cursor, (size_t)backlog);
+        heap_caps_free(seqs);
+    }
+    int cap = max_lines < 1 ? 1 : max_lines > LOG_UPLOAD_LINES_MAX ? LOG_UPLOAD_LINES_MAX : max_lines;
+    slot_t *got = heap_caps_malloc((size_t)(cap + 1) * sizeof(slot_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    log_line_t *lines = heap_caps_malloc((size_t)(cap + 1) * sizeof(log_line_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!got || !lines) { heap_caps_free(got); heap_caps_free(lines); return NULL; }
+    /* cap + 1 wanted lines: the extra one tells the framer where the next frame starts */
+    size_t n = 0;
+    uint32_t q = *cursor;
+    for (; q < end && n < (size_t)cap + 1; q++) {
+        slot_t *sl = &got[n];
+        if (live) portENTER_CRITICAL_SAFE(&s_ring_mux);
+        *sl = r->s[q % RING_SLOTS];
+        if (live) portEXIT_CRITICAL_SAFE(&s_ring_mux);
+        sl->text[SLOT_TEXT - 1] = 0; sl->job[LOG_TAG_MAX] = 0;
+        if (sl->seq != q || !log_upload_wanted(sl->text, sl->job)) continue;
+        lines[n] = (log_line_t){.seq = sl->seq, .ms = sl->ms, .job = sl->job, .text = sl->text};
+        n++;
+    }
+    cJSON *f = log_upload_frame(lines, n, o, n > (size_t)cap ? lines[cap].seq : q, cursor);
+    heap_caps_free(got); heap_caps_free(lines);
+    return f;
+}
+
+cJSON *mole_diag_log_frame(uint32_t *cursor, int max_lines, int backlog)
+{
+    if (!s_ring_ok) return NULL;
+    log_frame_opts_t o = {.boot = s_ring.boot, .up_ms = (uint32_t)(esp_timer_get_time() / 1000), .max_lines = max_lines};
+    return ring_frame(&s_ring, true, cursor, max_lines, backlog, &o);
+}
+
+cJSON *mole_diag_log_prev_frame(uint32_t *cursor, int max_lines, int backlog)
+{
+    log_frame_opts_t o = {.boot = s_prev_boot, .up_ms = (uint32_t)(esp_timer_get_time() / 1000), .prev = true,
+                          .has_sync = s_prev_sync_wall > 0, .sync_up_ms = s_prev_sync_up,
+                          .sync_wall_ms = s_prev_sync_wall, .max_lines = max_lines};
+    if (s_prev) return ring_frame(s_prev, false, cursor, max_lines, backlog, &o);
+    if (!s_prev_lines || !s_prev_n) return NULL;
+    uint32_t end = s_prev_lines[s_prev_n - 1].seq + 1;
+    if (backlog > 0) {
+        uint32_t *seqs = heap_caps_malloc(s_prev_n * sizeof(uint32_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!seqs) return NULL;
+        size_t n = 0;
+        for (size_t i = 0; i < s_prev_n; i++)
+            if (log_upload_wanted(s_prev_lines[i].text, s_prev_lines[i].job)) seqs[n++] = s_prev_lines[i].seq;
+        *cursor = log_upload_backlog(seqs, n, *cursor, (size_t)backlog);
+        heap_caps_free(seqs);
+    }
+    return log_upload_frame(s_prev_lines, s_prev_n, &o, end, cursor);
+}
+
+/* After power loss: the SPIFFS copy's lines, parsed in place (s_prev_file stays the raw text
+ * /api/log/prev serves, so parse a second copy). An older file without the header: no upload. */
+static void parse_prev_file(void)
+{
+    if (!s_prev_file) return;
+    char *copy = heap_caps_malloc(s_prev_file_len + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!copy) return;
+    memcpy(copy, s_prev_file, s_prev_file_len + 1);
+    char *nl = strchr(copy, '\n');
+    if (!nl) { heap_caps_free(copy); return; }
+    *nl = 0;
+    if (!log_persist_parse_header(copy, &s_prev_boot, &s_prev_sync_up, &s_prev_sync_wall)) { heap_caps_free(copy); return; }
+    size_t cap = 0;
+    for (char *p = nl + 1; *p; p++) if (*p == '\n') cap++;
+    s_prev_lines = heap_caps_malloc((cap + 1) * sizeof(log_line_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_prev_lines) { heap_caps_free(copy); return; }
+    for (char *line = nl + 1; *line; ) {
+        char *e = strchr(line, '\n');
+        if (e) *e = 0;
+        log_line_t l;
+        if (log_persist_parse_line(line, &l) && (!s_prev_n || l.seq > s_prev_lines[s_prev_n - 1].seq)) s_prev_lines[s_prev_n++] = l;
+        if (!e) break;
+        line = e + 1;
+    }
+    /* `copy` stays: the lines point into it */
 }
 
 /* ── boot ─────────────────────────────────────────────────────────────────── */
@@ -609,6 +814,7 @@ void mole_diag_boot_count_bump(void)
     if (nvs_set_u32(h, "boot_count", count) == ESP_OK) nvs_commit(h);
     nvs_close(h);
     s_boot_count = count;
+    s_ring.boot = count;                    /* the ring (and its persisted copy) know their boot */
 }
 
 uint32_t mole_diag_boot_count(void) { return s_boot_count; }
@@ -624,7 +830,10 @@ void mole_diag_early_init(void)
 {
     if (ring_valid(&s_ring)) {
         s_prev = heap_caps_malloc(sizeof(ring_t), MALLOC_CAP_SPIRAM);
-        if (s_prev) { memcpy(s_prev, &s_ring, sizeof(ring_t)); s_prev_src = "ram"; }
+        if (s_prev) {
+            memcpy(s_prev, &s_ring, sizeof(ring_t)); s_prev_src = "ram";
+            s_prev_boot = s_prev->boot; s_prev_sync_up = s_prev->sync_up; s_prev_sync_wall = s_prev->sync_wall;
+        }
     }
     memset(&s_ring, 0, sizeof(s_ring));
     s_ring.magic = RING_MAGIC; s_ring.magic2 = RING_MAGIC; s_ring.nslots = RING_SLOTS;
@@ -655,6 +864,7 @@ void mole_diag_start(void)
                     s_prev_file_len = fread(s_prev_file, 1, (size_t)st.st_size, f);
                     s_prev_file[s_prev_file_len] = 0;
                     s_prev_src = "spiffs";
+                    parse_prev_file();             /* its lines go up to the relay once (prev:true) */
                 }
             }
             fclose(f);

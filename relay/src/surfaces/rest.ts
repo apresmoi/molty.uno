@@ -18,6 +18,10 @@
 //   GET|POST|DELETE /v1/devices/<id>/voice  owner voice-box settings (header X-Molty-Link-Code: the
 //                                       device's current link code; CORS, for the device-served console):
 //                                       read / {mode?, voice?} / unpair the voice box
+//   GET|POST /v1/devices/<id>/activity   owner activity log (same link-code auth + CORS):
+//                                       ?since=a42|<unix ms>&limit&agent&kind=a,b&job&errors=1 -> {entries, next, more,
+//                                       transcripts, limits}; POST {transcripts: bool} sets "log transcripts"
+//   GET    /v1/activity[?since&limit&kind&job&errors]  the CALLING agent's own activity -> {ok, result:{entries, next, more}}
 //
 // A voice box token (pair role "voice") is refused on every agent route: 403 forbidden.
 //
@@ -29,7 +33,7 @@
 // can_self_update, how}` (core/updates.ts). An error's `details` (e.g.
 // firmware_too_old {feature, current, needed, latest, how}) are top-level fields next to `error`.
 
-import { type Inbox, type JobView, type Outcome, type RelayBackend, type VoiceOwnerRequest, bearer, jobDevice, tokenDevice } from "../core/api.js";
+import { type ActivityOwnerRequest, type Inbox, type JobView, type Outcome, type RelayBackend, type VoiceOwnerRequest, bearer, jobDevice, tokenDevice } from "../core/api.js";
 import { TALK_BUDGET_MS } from "../core/commands.js";
 import { INBOX_LIMITS, seqOf } from "../core/events.js";
 import { DEVICE_ID_RE, isRecord } from "../core/protocol.js";
@@ -236,6 +240,17 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
   const voice = /^\/v1\/devices\/([^/]+)\/voice$/.exec(path);
   if (voice) return voiceOwner(request, voice[1], backend);
 
+  const activity = /^\/v1\/devices\/([^/]+)\/activity$/.exec(path);
+  if (activity) return activityOwner(request, activity[1], backend);
+
+  if (path === "/v1/activity") {
+    if (request.method !== "GET") return json({ ok: false, error: "method_not_allowed" }, 405);
+    const dev = tokenDevice(token);
+    if (!dev) return failure({ error: "unauthorized" });
+    const out = await backend.device(dev).activityLog(token!, queryParams(url));
+    return out.ok ? json({ ok: true, result: out.result }) : failed(out);
+  }
+
   const job = /^\/v1\/jobs\/([^/]+)$/.exec(path);
   if (job) {
     if (request.method !== "GET") return json({ ok: false, error: "method_not_allowed" }, 405);
@@ -268,6 +283,39 @@ const OWNER_CORS = {
   "access-control-allow-headers": "content-type, x-molty-link-code",
   "access-control-max-age": "86400",
 };
+
+/** The activity query params, raw (core/activity.ts parses and checks them). */
+function queryParams(url: URL): Record<string, unknown> {
+  const q: Record<string, unknown> = {};
+  for (const k of ["since", "limit", "agent", "kind", "job", "errors"]) {
+    const v = url.searchParams.get(k);
+    if (v !== null) q[k] = v;
+  }
+  return q;
+}
+
+/** Owner activity log: the device's current link code, like the voice settings (OwnerApi). */
+async function activityOwner(request: Request, rawId: string, backend: RelayBackend): Promise<Response> {
+  const cors = (r: Response) => {
+    for (const [k, v] of Object.entries(OWNER_CORS)) r.headers.set(k, v);
+    return r;
+  };
+  if (request.method === "OPTIONS") return cors(new Response(null, { status: 204 }));
+  const id = decodeURIComponent(rawId);
+  if (!DEVICE_ID_RE.test(id)) return cors(failure({ error: "not_found" }));
+  const api = backend.device(id);
+  if (!api.ownerActivity) return cors(failure({ error: "not_found" }));
+  const code = request.headers.get("x-molty-link-code") ?? "";
+  let req: ActivityOwnerRequest;
+  if (request.method === "GET") req = { action: "get", query: queryParams(new URL(request.url)) };
+  else if (request.method === "POST") {
+    const b = await body(request);
+    if (!b) return cors(failure({ error: "bad_request", message: "body must be a JSON object" }));
+    req = { action: "set", transcripts: b.transcripts };
+  } else return cors(json({ ok: false, error: "method_not_allowed" }, 405));
+  const out = await api.ownerActivity(code, req);
+  return cors(out.ok ? json({ ok: true, result: out.result }) : failure(out));
+}
 
 /** Owner voice-box settings: authenticated by the device's current link code (OwnerApi). */
 async function voiceOwner(request: Request, rawId: string, backend: RelayBackend): Promise<Response> {

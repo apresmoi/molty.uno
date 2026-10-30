@@ -276,5 +276,8 @@ int main(void) {
     sdk_caps = 0xFFFFFFFFu;
     test_displayed();
     test_deadline();
-    puts("LINK ASK PASS: unsupported without touch, args, answer by sector (label verbatim), first tap wins, no tap event while pending, not rate-limited, timeout, cancel, replace, stale tap, pairing, link down, firmware-owned question (tap/timeout/cancel/replace → owner, never an answer event), a tap answers only the question on the panel, a tap at or before the deadline beats the timeout and one after it loses");
+    link_ask_cancel();
+    /* activity log: every question shown (answered, timed out, cancelled, replaced) ended its tag */
+    assert(sdk_job_begins>0 && sdk_job_begins==sdk_job_ends);
+    puts("LINK ASK PASS: job tags begin/end on every path, unsupported without touch, args, answer by sector (label verbatim), first tap wins, no tap event while pending, not rate-limited, timeout, cancel, replace, stale tap, pairing, link down, firmware-owned question (tap/timeout/cancel/replace → owner, never an answer event), a tap answers only the question on the panel, a tap at or before the deadline beats the timeout and one after it loses");
 }

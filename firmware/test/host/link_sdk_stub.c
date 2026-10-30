@@ -2,6 +2,7 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 int64_t sdk_now;
 void (*sdk_wait)(void);
@@ -87,6 +88,18 @@ int xTaskCreatePinnedToCoreWithCaps(void (*fn)(void *), const char *name, unsign
     (void)core; (void)caps; return xTaskCreate(fn, name, stack, arg, prio, out);
 }
 void mole_diag_event(bool important, const char *fmt, ...) { (void)important; (void)fmt; }
+unsigned sdk_job_begins, sdk_job_ends;
+char sdk_job_last_end[160];
+bool sdk_log_request;
+uint32_t sdk_sync_up;
+int64_t sdk_sync_wall;
+cJSON *(*sdk_log_frame)(bool prev, uint32_t *cursor, int max_lines, int backlog);
+void mole_diag_job_begin(const char *job) { (void)job; sdk_job_begins++; }
+void mole_diag_job_end(const char *job) { sdk_job_ends++; snprintf(sdk_job_last_end, sizeof(sdk_job_last_end), "%s", job); sdk_log_request = true; }
+bool mole_diag_log_take_request(void) { bool r = sdk_log_request; sdk_log_request = false; return r; }
+void mole_diag_link_sync(uint32_t up_ms, int64_t wall_ms) { sdk_sync_up = up_ms; sdk_sync_wall = wall_ms; }
+cJSON *mole_diag_log_frame(uint32_t *c, int m, int b) { return sdk_log_frame ? sdk_log_frame(false, c, m, b) : NULL; }
+cJSON *mole_diag_log_prev_frame(uint32_t *c, int m, int b) { return sdk_log_frame ? sdk_log_frame(true, c, m, b) : NULL; }
 esp_err_t sdk_rx_error;
 unsigned sdk_rx_chunks;
 void (*sdk_rx_fill)(int16_t *buf, size_t n, unsigned chunk);

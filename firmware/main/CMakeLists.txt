@@ -73,6 +73,7 @@ idf_component_register(
         ${MOLTY_BOARD_SRCS}
         # diag: log ring, perf histograms, /api/diag + /api/log
         "diag/mole_diag.c"
+        "diag/log_upload.c"     # activity log: job tags, upload filter + frames, persist policy (host-tested)
     INCLUDE_DIRS
         "."
         "net"

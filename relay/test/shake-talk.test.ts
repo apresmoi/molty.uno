@@ -296,6 +296,28 @@ describe("who answers a turn", () => {
     expect(late.structuredContent).toMatchObject({ error: "turn_claimed" });
   });
 
+  it("activity log: the shake, its utterance (a transcript: redacted when the owner says so), the adopted listen job and a turn_claimed refusal", async () => {
+    const w = await turn();
+    expect((await w.room.talk(w.a, { say: "Two meetings.", listen: false, in_reply_to: w.turnId })).ok).toBe(true);
+    expect((await w.room.talk(w.b, { say: "Me too!", listen: false, in_reply_to: w.turnId })).ok).toBe(false);
+    const owner = async (q: Record<string, unknown> = {}) => ((await w.room.ownerActivity((await w.kv.get<{ code: string }>("link"))!.code, { action: "get", query: q })) as any).result.entries as any[];
+    const es = await owner();
+    expect(es.find((e) => e.ev === "shake")).toMatchObject({ kind: "device", data: { peak_g: 2.4 } });
+    expect(es.find((e) => e.ev === "utterance")).toMatchObject({ kind: "device", job: w.turnId, data: { text: "what's on my calendar today?", trigger: "shake" } });
+    expect(es.find((e) => e.kind === "job" && e.job === w.turnId)).toMatchObject({ op: "listen", ok: true });
+    expect(es.find((e) => e.kind === "job" && e.job === w.turnId).agent).toBeUndefined(); // the device's own turn: no agent
+    expect(es.find((e) => e.kind === "call" && e.agent === "claude")).toMatchObject({ op: "talk", ok: false, error: "turn_claimed" });
+    // neither agent reads the utterance through the activity log (it reaches them as an event)
+    expect(JSON.stringify(await w.room.activityLog(w.a, {}))).not.toContain("calendar");
+    // transcripts off: the next utterance's text never reaches storage
+    await w.room.ownerActivity((await w.kv.get<{ code: string }>("link"))!.code, { action: "set", transcripts: false });
+    w.voice.sttText = "remind me about the dentist";
+    await w.emit("shake", { ...SHAKE, listen: "shake-2" });
+    await until(async () => (await owner()).filter((e) => e.ev === "utterance").length === 2);
+    expect((await owner()).filter((e) => e.ev === "utterance").at(-1)).toMatchObject({ redacted: true, data: { text: "" } });
+    expect(JSON.stringify([...w.kv.data.entries()].filter(([k]) => k.startsWith("al:")))).not.toContain("dentist");
+  });
+
   it("in_reply_to is checked: a turn id, nothing else", async () => {
     const w = await turn();
     for (const bad of ["e5", "molty-k7m2q9xa4c", 7]) {

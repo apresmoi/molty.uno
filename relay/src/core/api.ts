@@ -142,10 +142,19 @@ export interface AgentApi {
    * Already current: `{status:"up_to_date", current, latest}` (no job).
    */
   update(token: string, req: unknown): Promise<Outcome>;
+  /**
+   * This agent's own activity (core/activity.ts): `{entries, next, more}`, entries of its own
+   * calls and jobs, its jobs' device log lines, and the device's connects / disconnects around
+   * them; never another agent's. `req`: {since?, limit?, kind?, job?, errors?} (raw; parsed here).
+   */
+  activityLog(token: string, req: unknown): Promise<Outcome>;
 }
 
 export type VoiceMode = "auto" | "box" | "cloud";
 export const VOICE_MODES: readonly VoiceMode[] = ["auto", "box", "cloud"];
+
+/** Owner activity log: read the merged timeline (raw query params), or set "log transcripts". */
+export type ActivityOwnerRequest = { action: "get"; query: Record<string, unknown> } | { action: "set"; transcripts: unknown };
 
 /** Owner settings for the voice box: read, change (mode / default box voice), or unpair the box. */
 export type VoiceOwnerRequest = { action: "get" } | { action: "set"; mode?: unknown; voice?: unknown } | { action: "unpair" };
@@ -158,6 +167,8 @@ export type VoiceOwnerRequest = { action: "get" } | { action: "set"; mode?: unkn
 export interface OwnerApi {
   /** get / set: `{mode, voice, cloud, box:{paired, name, connected, …}}`; unpair: `{unpaired: n}`. */
   voiceSettings(linkCode: string, req: VoiceOwnerRequest): Promise<Outcome>;
+  /** `{entries, next, more, transcripts, limits}` (core/activity.ts); set: changes "log transcripts" first. */
+  ownerActivity(linkCode: string, req: ActivityOwnerRequest): Promise<Outcome>;
 }
 
 export interface RelayBackend {

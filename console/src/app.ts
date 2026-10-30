@@ -8,6 +8,7 @@ import { statusPage } from './pages/status';
 import { wifiPage } from './pages/wifi';
 import { creaturePage } from './pages/creature';
 import { agentPage } from './pages/agent';
+import { activityPage } from './pages/activity';
 import { diagPage } from './pages/diag';
 import { licencesPage } from './pages/licences';
 import { setupPage, SETUP_KEY } from './pages/setup';
@@ -22,6 +23,7 @@ const PAGES: Array<{ id: string; label: string; page: Page }> = [
   { id: 'wifi', label: 'wi-fi', page: wifiPage },
   { id: 'molty', label: 'molty', page: creaturePage },
   { id: 'agent', label: 'agent', page: agentPage },
+  { id: 'activity', label: 'activity', page: activityPage },
   { id: 'diag', label: 'diag', page: diagPage },
 ];
 const ALIAS: Record<string, string> = { creature: 'molty' };

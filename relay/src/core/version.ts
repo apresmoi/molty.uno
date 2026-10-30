@@ -97,6 +97,7 @@ export const WHATS_NEW: ReadonlyArray<{ version: number; text: string; min_fw?: 
   { version: 9, text: "check relay.caps (not firmware versions) to know what Molty can do; button accept/reject = acknowledge / dismiss, never an answer (answers come only from molty_ask); a broken listen is an error (listen_failed / device_offline), never no_speech; after a wake, meet no_speech with one short line or one more listen, not silence" },
   { version: 10, text: "Molty acknowledges the end of the human's turn by itself (a soft chirp + thinking, the human's setting) — go straight to your answer; for long work still say a quick ack or keep thinking up; ack:false|\"silent\" on listen/talk opts out" },
   { version: 11, text: "shake = the human wants to talk: Molty already listens by itself, and you get ONE `utterance` event {turn_id, text, reason, ms, trigger, device} with their words (webhook payloads carry it all) — answer straight away with molty_talk {say, in_reply_to: turn_id}; the first agent to answer claims the turn (others: turn_claimed); new \"Talking fast\" rules" },
+  { version: 12, text: "molty_activity (REST GET /v1/activity): debug yourself — your own calls, jobs (stage timings, voice provider, reason), Molty's log lines for your jobs and its disconnects, 24 h; failed talk/ask/update errors carry their job id" },
 ];
 export const SKILL_VERSION: number = WHATS_NEW[WHATS_NEW.length - 1].version;
 export const SKILL_PATH = "/skill.md";
