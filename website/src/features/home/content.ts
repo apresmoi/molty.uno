@@ -1,5 +1,5 @@
 // Landing copy and data. Few words: the fluid does the talking.
-import { SITE_URL, SITE_DESCRIPTION, REPO_URL } from "../../config/site.mjs";
+import { SITE_URL, SITE_DESCRIPTION, REPO_URL, REPO_BRANCH } from "../../config/site.mjs";
 
 export const title = "molty.UNO — liquid ASCII creatures for any screen";
 export const description = SITE_DESCRIPTION;
@@ -38,7 +38,7 @@ export const bridgeFlow = "agent ──MCP · REST──▶ relay ◀──WSS�
 
 export const pairingMessage = `Hi! Please connect yourself to my Molty.
 
-Skill: https://github.com/apresmoi/molty.uno/tree/main/skills/molty
+Skill: ${REPO_URL}/tree/${REPO_BRANCH}/skills/molty
 Device: molty-k7m2w9c4ya
 Code: K7M2W9C4
 
