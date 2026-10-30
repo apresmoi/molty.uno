@@ -278,6 +278,13 @@ const canvasStats = (page) => page.evaluate(() => {
   await card.locator('.note', { hasText: /did not stick/ }).waitFor({ timeout: 15000 });
   ok(await card.getByRole('button', { name: 'Update' }).count() === 1, 'update: back on the old firmware ends the install as rolled back and offers Update again');
   await shot(page, '16-update-rolled-back');
+  // the download fails (a transient TLS error): the failure shows and Update is offered again
+  await mock('config', { reset: true, update: true, fail: true });
+  await page.reload();
+  await card.getByRole('button', { name: 'Update' }).click();
+  await card.getByRole('button', { name: 'Sure? Update now' }).click();
+  await card.locator('.note', { hasText: /update failed: tls/ }).waitFor({ timeout: 15000 });
+  ok(await card.getByRole('button', { name: 'Update' }).count() === 1, 'update: a failed download shows why and offers Update again');
   await mock('config', { reset: true });
   await page.context().close();
 }

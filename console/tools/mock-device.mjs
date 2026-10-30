@@ -13,6 +13,7 @@
 //        (a release one minor above VERSION); e2e routes the console's relay call here.
 //        config {update:true} = firmware that can update itself (GET/POST /api/update);
 //        {rollback:true} = its new image does not stick: it restarts on the old firmware.
+//        {fail:true} = the download fails (state failed, error tls); Molty keeps its firmware.
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 
@@ -21,7 +22,7 @@ const dist = new URL('../dist/index.html', import.meta.url);
 const VERSION = readFileSync(new URL('../../VERSION', import.meta.url), 'utf8').trim();
 const W = 412;
 
-const cfg = { link: true, file: true, update: false, rollback: false };
+const cfg = { link: true, file: true, update: false, rollback: false, fail: false };
 const BOARD = 'waveshare-esp32-s3-touch-lcd-1.46';
 const NEXT = VERSION.replace(/^(\d+)\.(\d+)\..*$/, (_, a, b) => `${a}.${+b + 1}.0`);
 let fw = VERSION;
@@ -94,7 +95,7 @@ createServer(async (req, res) => {
   if (p === '/__mock/log') return json(res, log);
   if (p === '/__mock/config') {
     const c = b();
-    if (c.reset) { fw = VERSION; upd = { state: 'idle' }; cfg.update = false; cfg.rollback = false; Object.assign(wifi, WIFI0); Object.assign(link, structuredClone(LINK0)); legacy = false; current = 'fluid'; delete c.reset; }
+    if (c.reset) { fw = VERSION; upd = { state: 'idle' }; cfg.update = false; cfg.rollback = false; cfg.fail = false; Object.assign(wifi, WIFI0); Object.assign(link, structuredClone(LINK0)); legacy = false; current = 'fluid'; delete c.reset; }
     if (c.wifi === 'none') Object.assign(wifi, { state: 'setup_needed', ssid: undefined, ip: undefined, rssi: undefined });
     delete c.wifi;
     Object.assign(cfg, c); log.length = 0; return json(res, { ok: true, cfg });
@@ -152,6 +153,7 @@ createServer(async (req, res) => {
       const { version, url: u } = b();
       if (!/^https:\/\/github\.com\/apresmoi\/molty\.uno\/releases\/download\//.test(u ?? '')) return json(res, { ok: false, error: 'bad_url' }, 400);
       upd = { state: 'downloading', version, progress: 0 };
+      if (cfg.fail) { setTimeout(() => (upd = { state: 'failed', version, error: 'tls' }), 600); return json(res, { ok: true, state: 'downloading' }, 202); }
       setTimeout(() => (upd = { state: 'flashing', version }), 600);
       setTimeout(() => (upd = { state: 'rebooting', version }), 900);
       setTimeout(() => { upd = { state: 'idle' }; restart(); if (!cfg.rollback) fw = version; }, 1200);
