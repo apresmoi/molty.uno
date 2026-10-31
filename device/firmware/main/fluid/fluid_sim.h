@@ -257,25 +257,22 @@ void fluid_target_arc(fluid_sim_t *s, float rc, float hw, float a0, float a1, fl
 typedef struct { float a0, a1, hw, amt; uint32_t rgb; } fluid_arc_t;
 void fluid_target_arcs(fluid_sim_t *s, float rc, const fluid_arc_t *arcs, int n, float acc);
 
-/** The listening ring (knobs: fluid_ring.h): a thin soft line of the fluid at RING_R that
- *  breathes — the whole circle expands / contracts, slowly when quiet, quicker and deeper
- *  with the voice — with nothing moving around it. fluid_ring_tick advances it once per
- *  frame: on = a listen records (it fades in / melts out over RING_FADE_S), level = the
- *  latest mic level 0..1 (held between its ~10 Hz updates; smoothed here). It returns 1
- *  when a ping is due this frame: fluid_ring_ping then ripples the surface from the whole
- *  rim at once (strength ping_s), a circular wave running inward. fluid_target_ring writes
- *  this frame's ring into the target in the given colour (as fluid_target_arcs: after the
- *  state's fill, before fluid_sim_background); nothing while it is faded out. */
+/** A listen on the water (knobs: fluid_ring.h): the voice drops touch-style ripples and a
+ *  faint line marks the rim. fluid_ring_tick advances it once per frame: on = a listen
+ *  records (it fades in / melts out over RING_FADE_S), level = the latest mic level 0..1
+ *  (held between its ~10 Hz updates). It returns 1 when a drop is due this frame: apply
+ *  fluid_sim_impulse(s, drop_x, drop_y, drop_s, RING_DROP_R). fluid_target_ring writes this
+ *  frame's line into the target in the given colour (as fluid_target_arcs: after the state's
+ *  fill, before fluid_sim_background); nothing while it is faded out. */
 typedef struct {
     float on, lvl;                     /* fade 0..1; smoothed level 0..1                  */
-    float ph;                          /* the breath's phase, turns                       */
-    float ping_acc;                    /* ping clock                                      */
-    float dr, ink;                     /* this frame: radius offset (the same all round), ink */
-    float ping_s;                      /* a ping's strength now                           */
+    float ink;                         /* this frame's line ink                           */
+    float low, gap, since;             /* onset: recent low level; s until a drop may fall; s since the last */
+    uint32_t n_drops;                  /* walks the drops' spiral                         */
+    float drop_x, drop_y, drop_s;      /* the latest drop: where and how high             */
 } fluid_ring_t;
 int  fluid_ring_tick(fluid_ring_t *r, float dt, bool on, float level);
 void fluid_target_ring(fluid_sim_t *s, const fluid_ring_t *r, uint32_t rgb, float acc);
-void fluid_ring_ping(fluid_sim_t *s, const fluid_ring_t *r);
 
 /* ── renderer (render.js) ─────────────────────────────────────────────────── */
 
