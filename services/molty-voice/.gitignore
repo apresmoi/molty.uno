@@ -4,3 +4,5 @@ __pycache__/
 .venv/
 # Kyutai's reference clients, copied locally for reading (not ours to vendor)
 ref/
+data/
+.env

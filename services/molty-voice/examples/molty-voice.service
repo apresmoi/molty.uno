@@ -1,4 +1,4 @@
-# systemd USER unit: ~/.config/systemd/user/molty-voice.service
+# Host install without Docker. systemd USER unit: ~/.config/systemd/user/molty-voice.service
 #   systemctl --user daemon-reload && systemctl --user enable --now molty-voice
 #   loginctl enable-linger $USER   # keep it running without a login session
 [Unit]

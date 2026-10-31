@@ -198,7 +198,7 @@ def table(rows):
 def main():
     a = argparse.ArgumentParser()
     a.add_argument("--set", default="tune", choices=["tune", "heldout", "adversarial", "fresh", "fresh2", "all"])
-    a.add_argument("--url", default="http://192.168.178.24:11434")
+    a.add_argument("--url", default="http://127.0.0.1:11434")
     a.add_argument("--model", default=opener.DEFAULT_MODEL)
     a.add_argument("--out")
     x = a.parse_args()
