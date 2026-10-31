@@ -107,6 +107,7 @@ export function voiceCard(fetchImpl: typeof fetch = (...a) => fetch(...a)): Voic
       h('p', { class: 'dim small' }, servingLine(s)),
       lat ? h('p', { class: 'dim small' }, lat) : null,
       reflex,
+      firstWords,
       select ? h('div', { class: 'row' }, h('label', null, 'box voice'), select) : null,
       s.box.paired ? h('div', { class: 'row' }, h('span', { class: 'dim small' }, 'the box’s token stops working; pair again to bring it back'),
         confirmButton('Unpair voice box', 'Sure? Unpair', () => void act((t) => unpairBox(t, fetchImpl)))) : null,
