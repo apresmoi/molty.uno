@@ -23,33 +23,45 @@ Molty ──WSS──▶ relay ◀──WSS── molty-voice ──ws://127.0.0
 
 Wire protocol: `docs/AGENT-LINK.md`, section "Voice box".
 
-## Requirements
+## Deploy
 
-- Python ≥ 3.12; dependencies: `websockets`, `msgpack`, `numpy`.
-- A running moshi-server:
-  - STT at `ws://127.0.0.1:8090/api/asr-streaming`
-  - TTS at `ws://127.0.0.1:8089/api/tts_streaming`
-  - API key header `kyutai-api-key: public_token`
-  - Both are configurable.
-
-## Install
+You need Docker with Compose, an NVIDIA GPU with its container toolkit, and the Molty relay's
+address. On Molty's console, the **agent** page shows the device id and the current link code; the
+code rotates every 15 minutes. Then, from a checkout of this repo:
 
 ```sh
-uv tool install ./services/molty-voice   # or: pipx install ./services/molty-voice
+cd services/molty-voice
+docker compose build
+docker compose run --rm --no-deps bridge pair --relay https://<your relay> --device molty-xxxxxxxxxx --link-code K7M2W9C4
+docker compose up -d stt tts
+docker compose run --rm --no-deps bridge check   # once STT and TTS are up; repeat until it prints ok
+docker compose up -d
 ```
 
-## Pair (once)
+Molty shows a 4-digit code during `pair`: tap it to accept. `check` speaks a line through TTS and
+hears it back through STT. The first start compiles Kyutai's server and downloads its models, so
+expect 15 minutes or more; follow it with `docker compose logs -f tts`. Later starts take seconds.
 
-On Molty's console, open the **agent** page. It shows the device id and the current
-link code; the code rotates every 15 minutes. Then run:
+Everything is kept in `./data`, including the pairing token (`config/config.json`, mode 0600).
 
-```sh
-molty-voice pair --relay https://<your relay> --device molty-xxxxxxxxxx --link-code K7M2W9C4 --name "voice box"
-```
+| | |
+|---|---|
+| GPU memory | 9.6 GB for STT + TTS; first words add 3.9 GB (measured on an RTX 4090) |
+| Disk | about 40 GB: server image 11, build caches 20, models 6 |
+| Smaller GPU | lower `batch_size` in `moshi/stt.toml` (fewer simultaneous listens); not measured |
+| Hugging Face | no account needed. A busy IP can get `429 Too Many Requests` on the voices: the container restarts and resumes. To avoid it, put `HUGGING_FACE_HUB_TOKEN=...` (a read token) in `.env` |
 
-Molty shows a 4-digit code, and the console names the request `voice box`. Tap Molty to
-accept. The token is stored in `~/.config/molty-voice/config.json` with mode 0600. It is
-never printed.
+Update with `git pull && docker compose up -d --build`.
+
+Without Docker, run your own moshi-server (STT at `ws://127.0.0.1:8090/api/asr-streaming`, TTS at
+`ws://127.0.0.1:8089/api/tts_streaming`, header `kyutai-api-key: public_token`; configs in `moshi/`)
+and install the bridge with Python ≥ 3.12: `uv tool install './services/molty-voice[reflex]'`.
+Then use `molty-voice pair`, `check` and `run` directly; `examples/molty-voice.service` keeps it running.
+
+## Pairing
+
+The console names the request after `--name` (default `voice box`). The token is stored with
+mode 0600 and never printed.
 
 Pairing a new box replaces the old one: the relay keeps one voice box per device.
 
@@ -69,16 +81,17 @@ molty-voice run --default-voice expresso/ex03-ex01_calm_001_channel2_1081s.wav \
 Flags override the config file (`--name`, `--voices a.wav,b.wav`, `--no-stt`, `--no-tts`,
 `--api-key`, `--reflex`).
 
-**First words**: `--opener` (or `"opener": true` in the config) offers the relay a very small model that
-starts Molty's reply before the agent can speak. It needs Ollama on the box with the model pulled:
-`ollama pull gemma3:4b` (`opener_url`, `opener_model` in the config). The bridge loads it on connect
-and keeps it loaded (about 1.4 GB; about 60 ms a line). No model: a warning, and no first words. The owner
+**First words** are optional: install [Ollama](https://ollama.com) on the box and run
+`ollama pull gemma3:4b`. The compose bridge runs with `--opener`; elsewhere pass it, or set
+`"opener": true` in the config (`opener_url`, `opener_model` too). It offers the relay a small model that
+starts Molty's reply before the agent can speak. The bridge loads it on connect
+and keeps it loaded (about 3.9 GB; about 150 ms a line). No model: a warning, and no first words. The owner
 turns it on in the console; the relay's guard decides what may be said.
 
 **Molty's reflex** (docs/AGENT-LINK.md "Reflex"): `--reflex` (or `"reflex": true` in the config)
 loads a small emotion classifier — `SamLowe/roberta-base-go_emotions-onnx`, int8 ONNX, ~125 MB,
 on the CPU (~35 ms a phrase with 4 threads; nothing on the GPU next to Kyutai) — and offers it
-to the relay. Install its extras first: `uv tool install './services/molty-voice[reflex]'`. The
+to the relay. The compose bridge has it on; a host install needs the `reflex` extra. The
 model downloads from Hugging Face on the first run. Without the extras the box logs a warning
 and offers no reflex. The owner picks the engine in the console (box = this classifier). Exit codes:
 
@@ -89,20 +102,6 @@ Voices are paths in Kyutai's `kyutai/tts-voices` repository. The default is
 `expresso/ex03-ex01_happy_001_channel1_334s.wav`. An agent's `voice` argument passes
 through when it looks like such a path; otherwise the box uses its default (or the
 default the owner picked in the console).
-
-### systemd (user unit)
-
-```sh
-cp examples/molty-voice.service ~/.config/systemd/user/
-systemctl --user daemon-reload && systemctl --user enable --now molty-voice
-loginctl enable-linger "$USER"          # keep running without a login
-journalctl --user -u molty-voice -f
-```
-
-### Docker compose
-
-See `examples/compose.yaml`. It uses host networking so the container reaches
-moshi-server on 127.0.0.1, and mounts the paired config read-only. Pair on the host first.
 
 ## How it maps to Kyutai
 
