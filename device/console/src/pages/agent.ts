@@ -7,6 +7,7 @@ import type { LinkInfo } from '../api/types';
 import type { AppCtx } from '../app';
 import { linkPanel } from '../ui/agent-link';
 import { h, mount, note } from '../ui/dom';
+import { pageHead, section, statusRow } from '../ui/kit';
 import { errText } from '../ui/fmt';
 
 export function agentPage(root: HTMLElement, { api }: AppCtx) {
@@ -16,19 +17,19 @@ export function agentPage(root: HTMLElement, { api }: AppCtx) {
   const msg = h('div');
 
   mount(root,
-    h('h1', null, 'agent ', h('span', { class: 'dim' }, '⠶ who is my brain')),
-    h('div', { class: 'agent-page' },
-      h('p', { class: 'say' }, 'Send this to your agent. ', h('span', { class: 'dim' }, 'Claude, Grok, OpenClaw… it does the rest.')),
-      panel.box, state, msg, panel.adv));
+    ...pageHead('Agent', 'The AI that thinks and answers through Molty.'),
+    state, msg,
+    section('Connect an agent', 'Send this message to Claude, Grok, Codex or any agent with skills. It does the rest.',
+      panel.box, panel.adv));
 
   function renderState() {
     const l = link;
-    if (!l) { mount(state, h('span', { class: 'dim' }, 'asking molty…')); return; }
+    if (!l) { mount(state, h('p', { class: 'why' }, 'Asking Molty…')); return; }
     const lp = l.last_pair;
-    mount(state,
-      h('span', { class: l.connected ? 'badge ok' : 'badge warn' }, l.connected ? '⠶ relay connected' : l.auth_failed ? '⠂ relay refused molty' : '⠂ relay offline'),
-      l.pair ? h('span', { class: 'badge warn' }, `tap molty to accept ${l.pair.agent_name} (${l.pair.code})`) : null,
-      !l.pair && lp ? h('span', { class: 'badge' + (lp.ok ? ' ok' : '') }, lp.ok ? `${lp.agent_name} paired` : `${lp.agent_name}: ${lp.reason || 'not accepted'}`) : null);
+    mount(state, h('div', { class: 'srows' },
+      statusRow('Relay', l.connected ? 'Connected' : l.auth_failed ? 'Refused this Molty' : 'Not connected', l.connected ? 'ok' : 'warn'),
+      lp ? statusRow('Last agent', lp.ok ? `${lp.agent_name} is paired` : `${lp.agent_name}: ${lp.reason || 'not accepted'}`, lp.ok ? 'ok' : 'dim') : null),
+      l.pair ? note('warn', `Tap Molty to accept ${l.pair.agent_name} (code ${l.pair.code}).`) : null);
   }
 
   async function poll() {

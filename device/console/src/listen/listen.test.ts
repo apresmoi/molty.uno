@@ -4,8 +4,7 @@ import { LISTEN_CHOICES, listenChoice, listenSupported, listenValid } from './li
 describe('listen window setting', () => {
   it('offers 5..30 s, then unlimited (0); 30 s is the default', () => {
     expect(LISTEN_CHOICES.map((c) => c.ms)).toEqual([5000, 10000, 15000, 20000, 30000, 0]);
-    expect(LISTEN_CHOICES.find((c) => c.ms === 30000)!.label).toMatch(/default/);
-    expect(LISTEN_CHOICES[LISTEN_CHOICES.length - 1].label).toBe('unlimited');
+    expect(LISTEN_CHOICES[LISTEN_CHOICES.length - 1].label).toBe('No limit');
     expect(LISTEN_CHOICES.every((c) => listenValid(c.ms))).toBe(true);
   });
   it('takes only what the device takes: 0 or 5000..30000', () => {

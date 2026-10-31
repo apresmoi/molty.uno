@@ -80,6 +80,7 @@ export interface FluidState {
   ack?: string;
   /** Molty's own filler when no agent answered this long after you finished: 0 = off or 400..5000 ms (newer firmware). */
   filler_ms?: number;
+  creature_info?: { name?: string };
   /** Whether a shake makes Molty start listening by itself (newer firmware). */
   shake_talk?: boolean;
   /** What tap, double tap and the two buttons do (newer firmware). */

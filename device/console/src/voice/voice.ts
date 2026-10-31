@@ -2,33 +2,22 @@
 // GET|POST|DELETE <relay>/v1/devices/<id>/voice, authenticated with the device's CURRENT
 // link code (header X-Molty-Link-Code) — the console reads it from Molty over the LAN
 // (GET /api/link), the same "on Molty's network = owner" model as every local setting.
-// Pure: the Voice card (ui/voice-card.ts) renders what these return.
+// Pure: the voice page and setup render what these return.
+
+import type { Choice } from '../ui/kit';
+import { FILLER_DEFAULT_MS, FILLER_OFF } from '../filler/filler';
 
 export type VoiceMode = 'auto' | 'box' | 'cloud' | 'off';
-export const VOICE_MODES: ReadonlyArray<{ id: VoiceMode; label: string; hint: string }> = [
-  { id: 'auto', label: 'auto', hint: 'the voice box when it is on, else the cloud' },
-  { id: 'box', label: 'box only', hint: 'the voice box or nothing' },
-  { id: 'cloud', label: 'cloud', hint: 'the relay’s cloud voice' },
-  { id: 'off', label: 'text only', hint: 'no voice: Molty shows what the agent says and doesn’t listen' },
-];
 
 /** Molty's reflex (docs/AGENT-LINK.md "Reflex"): who classifies what the human says while they talk. */
 export type ReflexMode = 'off' | 'auto' | 'local' | 'jev' | 'openai' | 'keywords';
 export type ReflexEngine = 'local' | 'jev' | 'openai' | 'keywords';
-export const REFLEX_MODES: ReadonlyArray<{ id: ReflexMode; label: string; hint: string }> = [
-  { id: 'off', label: 'off', hint: 'Molty only reacts when an agent asks it to' },
-  { id: 'auto', label: 'auto', hint: 'the voice box’s classifier, else Jev with a key, else keywords' },
-  { id: 'local', label: 'box', hint: 'a small emotion model on the voice box (no extra hop, free)' },
-  { id: 'jev', label: 'Jev', hint: 'TypeSafe Jev (the relay’s TYPESAFE_API_KEY)' },
-  { id: 'openai', label: 'OpenAI', hint: 'OpenAI Decisions, gpt-6-luna (the relay’s OPENAI_API_KEY)' },
-  { id: 'keywords', label: 'keywords', hint: 'a quick word list on the relay, no key' },
-];
 /** How lively the reflex is while the human talks (the relay's REFLEX_LIVELINESS: cadence + gates). */
 export type Liveliness = 'calm' | 'normal' | 'lively';
 export const LIVELINESS: ReadonlyArray<{ id: Liveliness; label: string; hint: string }> = [
-  { id: 'calm', label: 'calm', hint: 'only clear reactions, at most one every 3 s' },
-  { id: 'normal', label: 'normal', hint: 'clear reactions in full, likely ones as a small gesture, every 2 s at most' },
-  { id: 'lively', label: 'lively', hint: 'reacts sooner and more often (every 1.5 s at most): small gestures for anything plausible' },
+  { id: 'calm', label: 'Calm', hint: 'only clear reactions, at most one every 3 s' },
+  { id: 'normal', label: 'Normal', hint: 'clear reactions in full, likely ones as a small gesture, every 2 s at most' },
+  { id: 'lively', label: 'Lively', hint: 'reacts sooner and more often (every 1.5 s at most): small gestures for anything plausible' },
 ];
 export interface ReflexStatus {
   mode: ReflexMode;
@@ -107,11 +96,10 @@ export const unpairBox = (t: VoiceTarget, f: typeof fetch = fetch) => call(t, 'D
 
 /** One status line for the box. */
 export function boxLine(s: VoiceStatus): { text: string; kind: 'ok' | 'warn' | 'dim' } {
-  if (!s.box.paired) return { text: 'no voice box paired', kind: 'dim' };
+  if (!s.box.paired) return { text: 'No voice box paired.', kind: 'dim' };
   const name = s.box.name ?? 'voice box';
-  if (!s.box.connected) return { text: `${name} ⠂ offline`, kind: 'warn' };
-  const can = [s.box.stt && 'listens', s.box.tts && 'speaks'].filter(Boolean).join(' + ');
-  return { text: `${name} ⠂ connected${can ? ` ⠂ ${can}` : ''}${s.box.version ? ` ⠂ v${s.box.version}` : ''}`, kind: 'ok' };
+  if (!s.box.connected) return { text: `${name} is offline.`, kind: 'warn' };
+  return { text: `${name} is connected.`, kind: 'ok' };
 }
 
 const who = (v: string, s: VoiceStatus) => (v === 'box' ? 'voice box' : v === 'voice_box_offline' ? 'nobody (box offline)' : v === 'voice_off' ? 'nobody (text only)' : `cloud (${v || s.cloud})`);
@@ -162,31 +150,57 @@ export function reflexLine(r: ReflexStatus | undefined): string {
   return `reacts with ${ENGINE_NAME[r.engine]}${why}${r.compare ? ' ⠂ comparing every engine in the activity log' : ''}`;
 }
 
-/** One answer of a setup question. */
-export interface SetupOption<T extends string = string> { id: T; label: string; hint: string }
 export type GapFill = 'off' | 'phrases' | 'local';
 
-/** The setup's voice answers: only the ones this owner's tools can do. */
-export function voiceOptions(s: VoiceStatus): SetupOption<VoiceMode>[] {
+/** Who speaks, as the owner chose it: with a box and a cloud, "auto" is the box with a safety net. */
+export function voiceOptions(s: VoiceStatus): Choice<VoiceMode>[] {
+  const cloud = s.cloud !== 'none', box = s.box.paired;
   return [
-    s.cloud !== 'none' ? { id: 'cloud' as const, label: 'Cloud voice', hint: s.cloud } : null,
-    s.box.paired ? { id: 'box' as const, label: 'My voice box', hint: s.box.name ?? 'voice box' } : null,
-    { id: 'off' as const, label: 'Text only', hint: 'I show words and emote; no mic, no speaker' },
+    box ? { id: cloud ? 'auto' as const : 'box' as const, label: 'My voice box', hint: `Speech runs on your own computer${s.box.name ? ` (${s.box.name})` : ''}.${cloud ? ' The cloud takes over if it goes offline.' : ''}` } : null,
+    cloud ? { id: 'cloud' as const, label: 'Cloud voice', hint: 'Speech runs in the cloud. Nothing to install.' } : null,
+    { id: 'off' as const, label: 'Text only', hint: 'Molty shows words and emotes. No microphone, no speaker.' },
   ].filter((o) => o !== null);
+}
+
+/** Which of voiceOptions the current mode is. */
+export function voiceOn(s: VoiceStatus): VoiceMode {
+  if (s.mode === 'off' || s.mode === 'cloud') return s.mode;
+  if (!s.box.paired) return 'cloud';
+  return s.cloud !== 'none' ? 'auto' : 'box';
 }
 
 /** What fills the wait until the agent speaks; a local model needs a box that offers one. */
-export function gapOptions(s: VoiceStatus): SetupOption<GapFill>[] {
+export function gapOptions(s: VoiceStatus): Choice<GapFill>[] {
   return [
-    s.first_words?.available ? { id: 'local' as const, label: 'First words', hint: 'a small model on your voice box starts the reply' } : null,
-    { id: 'phrases' as const, label: 'Filler phrases', hint: 'a short “Hmm…” when the agent is slow' },
-    { id: 'off' as const, label: 'Nothing', hint: 'animations only' },
+    s.first_words?.available ? { id: 'local' as const, label: 'First words', hint: 'A small model on your computer starts the sentence, and your agent finishes it.' } : null,
+    { id: 'phrases' as const, label: 'A short phrase', hint: 'Molty says something like “Hmm…” if your agent is slow.' },
+    { id: 'off' as const, label: 'Stay quiet', hint: 'Only the thinking animation.' },
   ].filter((o) => o !== null);
 }
 
-/** Who picks Molty's emotes while you talk: only the engines available now. */
-export function reflexOptions(s: VoiceStatus): SetupOption<ReflexMode>[] {
-  const has = s.reflex?.engines;
-  return REFLEX_MODES.filter((m) => m.id !== 'auto' && (m.id === 'off' || m.id === 'keywords' || has?.[m.id]))
-    .map((m) => ({ id: m.id, label: m.id === 'local' ? 'Voice box' : m.id === 'off' ? 'Off' : m.id === 'keywords' ? 'Keywords' : m.label, hint: m.hint }));
+export const gapOn = (s: VoiceStatus, fillerMs: number | undefined): GapFill =>
+  s.first_words?.mode === 'opener' ? 'local' : fillerMs === FILLER_OFF ? 'off' : 'phrases';
+
+/** Saves a gap choice on both sides: the relay's first words, the device's filler (a tuned delay stays). */
+export async function applyGap(t: VoiceTarget, id: GapFill, device: { fluid(o: { filler_ms: number }): Promise<unknown>; creatureState(): Promise<{ filler_ms?: number }> }) {
+  const s = await setVoice(t, { first_words: id === 'local' ? 'opener' : 'off' });
+  if (id === 'off') await device.fluid({ filler_ms: FILLER_OFF });
+  else if (id === 'phrases' && !(await device.creatureState()).filler_ms) await device.fluid({ filler_ms: FILLER_DEFAULT_MS });
+  return s;
 }
+
+const REACT: Partial<Record<ReflexMode, Choice<ReflexMode>>> = {
+  off: { id: 'off', label: 'Stay still', hint: 'Molty only reacts when your agent asks it to.' },
+  local: { id: 'local', label: 'Small model on my computer', hint: 'Free and private. Runs on your voice box.' },
+  jev: { id: 'jev', label: 'Jev', hint: 'Fast reactions from a hosted TypeSafe model.' },
+  openai: { id: 'openai', label: 'OpenAI', hint: 'Reactions from a hosted OpenAI model.' },
+  keywords: { id: 'keywords', label: 'Word list', hint: 'Free and simple. Reacts to words it recognises.' },
+};
+
+/** Who picks Molty's reactions while you talk: only the engines available now. */
+export function reflexOptions(s: VoiceStatus): Choice<ReflexMode>[] {
+  const has = s.reflex?.engines;
+  return (['off', 'local', 'jev', 'openai', 'keywords'] as const).filter((m) => m === 'off' || m === 'keywords' || has?.[m]).map((m) => REACT[m]!);
+}
+
+export const reflexOn = (r: ReflexStatus | undefined): ReflexMode | undefined => (r?.mode === 'auto' ? r.engine ?? undefined : r?.mode);

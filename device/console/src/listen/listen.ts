@@ -13,8 +13,8 @@ export const LISTEN_CHOICES: ReadonlyArray<{ id: string; ms: number; label: stri
   { id: '10s', ms: 10000, label: '10 s' },
   { id: '15s', ms: 15000, label: '15 s' },
   { id: '20s', ms: 20000, label: '20 s' },
-  { id: '30s', ms: 30000, label: '30 s (default)' },
-  { id: 'unlimited', ms: LISTEN_UNLIMITED, label: 'unlimited' },
+  { id: '30s', ms: 30000, label: '30 s' },
+  { id: 'unlimited', ms: LISTEN_UNLIMITED, label: 'No limit' },
 ];
 
 /** A value the device takes: 0 or 5000..30000, an integer. */

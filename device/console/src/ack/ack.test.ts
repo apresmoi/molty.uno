@@ -4,7 +4,6 @@ import { ACK_CHOICES, ackChoice, ackSupported, ackValid } from './ack';
 describe('turn acknowledgement setting', () => {
   it('offers chirp + thinking (the default), thinking only, off', () => {
     expect(ACK_CHOICES.map((c) => c.id)).toEqual(['chirp', 'thinking', 'off']);
-    expect(ACK_CHOICES[0].label).toMatch(/default/);
     expect(ACK_CHOICES.every((c) => ackValid(c.id))).toBe(true);
   });
   it('takes only what the device takes', () => {
