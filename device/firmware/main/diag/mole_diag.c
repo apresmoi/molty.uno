@@ -2,6 +2,8 @@
  * one memcpy per log line, two uint16 stores per frame, a 1 Hz sampler. */
 #include "mole_diag.h"
 #include "log_upload.h"
+#include "heap_guard.h"
+#include "mole_fluid.h"
 #include "link/link_client.h"
 #include "link/link_audio.h"
 
@@ -367,6 +369,10 @@ static const char *volatile s_alloc_fail_fn;
 static uint32_t s_alloc_fail_reported;
 static uint32_t s_late_max_total;
 static esp_ping_handle_t s_ping;
+static atomic_bool s_ping_on;          /* the session runs (paused while the station is down) */
+static atomic_bool s_sta_up;           /* associated: only then is there an AP to ask for its rssi */
+static heap_guard_t s_hg;              /* the sampler's */
+static uint32_t s_int_blocks;          /* internal heap: allocated blocks (last sample) */
 
 static void alloc_failed(size_t size, uint32_t caps, const char *fn)
 {
@@ -442,7 +448,10 @@ static void ping_timeout(esp_ping_handle_t h, void *a)
 
 static void start_ping(void)
 {
-    if (s_ping) return;
+    if (s_ping) {                                  /* back after a drop: the same gateway, resumed */
+        if (!atomic_exchange(&s_ping_on, true)) esp_ping_start(s_ping);
+        return;
+    }
     esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
     esp_netif_ip_info_t ip;
     if (!sta || esp_netif_get_ip_info(sta, &ip) != ESP_OK || !ip.gw.addr) return;
@@ -454,8 +463,15 @@ static void start_ping(void)
     cfg.task_stack_size = 3072; cfg.task_prio = 2;
     cfg.interface = esp_netif_get_netif_impl_index(sta);
     esp_ping_callbacks_t cbs = {.on_ping_success = ping_ok, .on_ping_timeout = ping_timeout};
-    if (esp_ping_new_session(&cfg, &cbs, &s_ping) == ESP_OK) esp_ping_start(s_ping);
+    if (esp_ping_new_session(&cfg, &cbs, &s_ping) == ESP_OK) { esp_ping_start(s_ping); atomic_store(&s_ping_on, true); }
     else s_ping = NULL;
+}
+
+/* the station is gone: no gateway to ping (a send a second into a dead route, and its
+ * "ping_sock: send error" line, while the outage lasts) */
+static void pause_ping(void)
+{
+    if (s_ping && atomic_exchange(&s_ping_on, false)) esp_ping_stop(s_ping);
 }
 
 static void wifi_evt(void *arg, esp_event_base_t base, int32_t id, void *data)
@@ -464,19 +480,39 @@ static void wifi_evt(void *arg, esp_event_base_t base, int32_t id, void *data)
     if (base == WIFI_EVENT) {
         if (id == WIFI_EVENT_STA_DISCONNECTED) {
             wifi_event_sta_disconnected_t *d = data;
-            mole_diag_event(true, "wifi.disconnected reason=%u rssi=%d", d ? d->reason : 0, d ? d->rssi : 0);
-        } else if (id == WIFI_EVENT_STA_CONNECTED) mole_diag_event(false, "wifi.connected");
+            /* once per outage: a reconnect that fails again (every 1..30 s, net/wifi_retry.h) is not news */
+            static bool logged;
+            if (atomic_exchange(&s_sta_up, false) || !logged)
+                mole_diag_event(true, "wifi.disconnected reason=%u rssi=%d", d ? d->reason : 0, d ? d->rssi : 0);
+            logged = true;
+            pause_ping();
+        } else if (id == WIFI_EVENT_STA_CONNECTED) { atomic_store(&s_sta_up, true); mole_diag_event(false, "wifi.connected"); }
+        /* (a later outage logs its first failure again: s_sta_up was true) */
         else if (id == WIFI_EVENT_STA_BEACON_TIMEOUT) mole_diag_event(true, "wifi.beacon_timeout");
     } else if (base == IP_EVENT) {
         if (id == IP_EVENT_STA_GOT_IP) { mole_diag_event(false, "wifi.got_ip"); start_ping(); }
-        else if (id == IP_EVENT_STA_LOST_IP) mole_diag_event(true, "wifi.lost_ip");
+        else if (id == IP_EVENT_STA_LOST_IP) { mole_diag_event(true, "wifi.lost_ip"); pause_ping(); }
     }
 }
 
 static int8_t rssi_now(void)
 {
+    /* not associated: 0 without asking — the driver answers that call with a
+     * "W wifi: Haven't to connect to a suitable AP now!" line, once a second for an outage */
+    if (!atomic_load(&s_sta_up)) return 0;
     wifi_ap_record_t ap;
     return esp_wifi_sta_get_ap_info(&ap) == ESP_OK ? ap.rssi : 0;
+}
+
+/* The heap guard's report (heap_guard.h): what holds internal RAM that could give some back,
+ * and what the link / audio were doing. */
+static void heap_low_report(uint32_t free_now, const multi_heap_info_t *in)
+{
+    char top[64]; top_tasks_str(top, sizeof(top), 3);
+    mole_diag_event(true, "heap.low int=%lu largest=%u blk=%u fluid_int=%d wifi=%d link=%d audio=%d top=%s",
+                    (unsigned long)free_now, (unsigned)in->largest_free_block, (unsigned)in->allocated_blocks,
+                    mole_fluid_internal_fields(), atomic_load(&s_sta_up) ? 1 : 0, link_client_connected() ? 1 : 0,
+                    link_audio_busy() ? 1 : 0, top);
 }
 
 static void sampler_task(void *arg)
@@ -503,7 +539,12 @@ static void sampler_task(void *arg)
         tl_t e = {0};
         e.t_s = (uint32_t)(now / 1000000);
         e.int_min = int_min; int_min = UINT32_MAX;
-        e.int_largest = (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+        /* one walk for both: the largest block and the allocated-block count (a leak of small
+         * blocks shows as blk climbing while int falls; heap_caps_get_largest_free_block walks too) */
+        multi_heap_info_t in;
+        heap_caps_get_info(&in, MALLOC_CAP_INTERNAL);
+        e.int_largest = (uint32_t)in.largest_free_block;
+        s_int_blocks = (uint32_t)in.allocated_blocks;
         e.psram_free = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
         e.sim_n = s_sim.win_n; e.sim_max = s_sim.win_max; s_sim.win_n = 0; s_sim.win_max = 0;
         e.panel_n = s_panel.win_n; e.panel_max = s_panel.win_max; s_panel.win_n = 0; s_panel.win_max = 0;
@@ -526,6 +567,12 @@ static void sampler_task(void *arg)
         if (s_tl) s_tl[s_tl_n % TL_N] = e;
         s_tl_n++;
 
+        /* internal RAM self-protection: warn once per episode, give the fluid's share back */
+        const int hg = heap_guard_step(&s_hg, f);
+        if (hg & HG_LOW) heap_low_report(f, &in);
+        if (hg & HG_SHED) mole_fluid_shed_internal();
+        if (hg & HG_OK) mole_diag_event(false, "heap.ok int=%lu after episode %lu", (unsigned long)f, (unsigned long)s_hg.episodes);
+
         uint32_t fails = atomic_load(&s_alloc_fail);
         if (fails != s_alloc_fail_reported) {
             mole_diag_event(true, "heap.alloc_fail n=%lu last_size=%u caps=0x%x fn=%s int_free=%lu",
@@ -537,9 +584,9 @@ static void sampler_task(void *arg)
         bool bad = e.sim_max > 250 || e.panel_max > 250 || e.probe0 > 250 || e.probe1 > 250 || e.late > 250 ||
                    (sent && lost == sent);
         if (bad || ticks % 100 == 0) {           /* every 10 s, or immediately on trouble */
-            char top[96]; top_tasks_str(top, sizeof(top), 4);
-            mole_diag_event(false, "%s int=%lu/%lu sim=%u/%ums pan=%u/%ums pr=%u/%ums late=%u gw=%d(%u/%u) rssi=%d l=%u %s",
-                            bad ? "TL!" : "TL", (unsigned long)e.int_min, (unsigned long)e.int_largest,
+            char top[96]; top_tasks_str(top, sizeof(top), 3);
+            mole_diag_event(false, "%s int=%lu/%lu blk=%lu sim=%u/%ums pan=%u/%ums pr=%u/%ums late=%u gw=%d(%u/%u) rssi=%d l=%u %s",
+                            bad ? "TL!" : "TL", (unsigned long)e.int_min, (unsigned long)e.int_largest, (unsigned long)s_int_blocks,
                             e.sim_n, e.sim_max, e.panel_n, e.panel_max, e.probe0, e.probe1, e.late,
                             e.gw_rtt, (unsigned)lost, (unsigned)sent, e.rssi, e.flags, top);
         }

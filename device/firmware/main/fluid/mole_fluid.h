@@ -111,6 +111,12 @@ void mole_fluid_cue_mood(int mood, unsigned text_ver);
 unsigned mole_fluid_text_ver(void);
 /** A say played to its end (link_audio_tick): the director may give a happy flash once the
  *  creature is back and idle (fd_turn_spoken). Safe from any task. */
+/* The heap guard (diag/heap_guard.h): internal RAM is running out — the sim's hot fields move
+ * to PSRAM (rebuilt on the task's next frame, same grid; and every later build too). Slower
+ * frames, never a starved Wi-Fi. Any task. */
+void mole_fluid_shed_internal(void);
+/* how many of the sim's hot fields sit in internal RAM (the last frame's count) */
+int mole_fluid_internal_fields(void);
 void mole_fluid_spoke(void);
 /** The listen window an agent gets when it gives none (link_audio.c, cmd listen without ms):
  *  0 = unlimited or 5000..30000 ms (link_protocol.h LINK_LISTEN_*), 30000 out of the box.
