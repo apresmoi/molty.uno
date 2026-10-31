@@ -24,6 +24,12 @@ class SlowVoice extends FakeVoice {
     if (this.delayMs) await new Promise((r) => setTimeout(r, this.delayMs));
     return super.tts(text, opts);
   }
+  /** STT that takes a while: the transcript (and so the filler's arming) comes after the listen's end. */
+  sttDelayMs = 0;
+  async stt(pcm: Int16Array) {
+    if (this.sttDelayMs) await new Promise((r) => setTimeout(r, this.sttDelayMs));
+    return super.stt(pcm);
+  }
 }
 
 interface Dev {
@@ -99,10 +105,11 @@ function device(room: DeviceRoom, sock: FakeSocket, dev: Dev) {
   return { log, says, moods, refused, firstFrame, done, listenEnd };
 }
 
-async function setup(dev: Dev = {}, opts: { ttsDelayMs?: number; samples?: number; classifier?: UtteranceClassifier; heard?: string; reflexKeys?: { jev?: string }; fetch?: (r: Request) => Promise<Response> } = {}) {
+async function setup(dev: Dev = {}, opts: { ttsDelayMs?: number; sttDelayMs?: number; samples?: number; classifier?: UtteranceClassifier; heard?: string; reflexKeys?: { jev?: string }; fetch?: (r: Request) => Promise<Response> } = {}) {
   const voice = new SlowVoice();
   voice.ttsSamples = opts.samples ?? 4800; // 0.3 s
   voice.delayMs = opts.ttsDelayMs ?? 0;
+  voice.sttDelayMs = opts.sttDelayMs ?? 0;
   if (opts.heard) voice.sttText = opts.heard;
   const ctx = makeRoom({ timings: FAST, voice, classifier: opts.classifier, reflexKeys: opts.reflexKeys, fetch: opts.fetch });
   const sock = await connect(ctx.room, ctx.host, undefined, LINK, { caps: CAPS });
@@ -355,7 +362,9 @@ describe("auto filler", () => {
     expect(fillerMs(undefined)).toBe(FILLER_DEFAULT_MS);
     expect(fillerMs(0)).toBe(0);
     expect(fillerMs(1500)).toBe(1500);
-    expect(fillerMs(999)).toBe(FILLER_DEFAULT_MS);
+    expect(fillerMs(400)).toBe(400);
+    expect(fillerMs(399)).toBe(FILLER_DEFAULT_MS);
+    expect(fillerMs(999)).toBe(999);
     expect(fillerMs(9000)).toBe(FILLER_DEFAULT_MS);
     const w = await setup({});
     const t = (await w.room.talk(w.token, { say: "Hi." })) as any;
@@ -557,4 +566,85 @@ describe("whose fillers, and which one", () => {
     const t3 = (await slow.room.talk(slow.token, { say: "Hi." })) as any;
     expect(await fillerOf(slow, t3.result.job)).toMatchObject({ category: "question", classifier: "keywords" });
   }, 15000);
+});
+
+describe("a fast filler (400..1500 ms): the delay is counted from the listen's end, nothing adds to it", () => {
+  const traceOf = async (w: Awaited<ReturnType<typeof setup>>, turn: string) => {
+    await until(async () => ((await w.room.ownerActivity(LINK, { action: "get", query: { kind: "trace", job: turn } })) as any).result.entries.some((e: any) => e.ev === "filler"), 3000);
+    return ((await w.room.ownerActivity(LINK, { action: "get", query: { kind: "trace", job: turn } })) as any).result.entries.find((e: any) => e.ev === "filler")?.data;
+  };
+  const slowClassifier: UtteranceClassifier = { name: "slow", classify: () => new Promise((r) => setTimeout(() => r("hard"), 3000)) };
+
+  it("400 ms: fires ~400 ms after the listen's end even with a slow STT and a classifier that is not in yet (the keywords pick; no wait for its budget)", async () => {
+    const w = await setup({ fillerMs: 400 }, { sttDelayMs: 250, heard: "what time is it?", classifier: slowClassifier });
+    const talk = (await w.room.talk(w.token, { say: "Hi." })) as any;
+    expect(talk.result.filler_in_ms).toBeLessThanOrEqual(400 - 200); // the STT ate most of the delay already
+    const end = w.dev.listenEnd()!.at;
+    await until(() => w.dev.says().length === 2, 2000);
+    const filler = w.dev.says()[1];
+    expect(filler.at - end).toBeGreaterThanOrEqual(380);
+    expect(filler.at - end).toBeLessThan(400 + 120); // the old await on the classifier's 400 ms budget would land ~650+
+    const d = await traceOf(w, talk.result.job);
+    expect(d).toMatchObject({ category: "question", classifier: "keywords", phrase: "good_question" });
+    expect(d.first_audio_ms).toBeLessThan(400 + 120);
+  }, 10000);
+
+  it("a classifier that is in by the moment still decides (it ran in parallel with the delay)", async () => {
+    const w = await setup({ fillerMs: 500 }, { classifier: { name: "quickish", classify: () => new Promise((r) => setTimeout(() => r("hard"), 150)) } });
+    const talk = (await w.room.talk(w.token, { say: "Hi." })) as any;
+    const end = w.dev.listenEnd()!.at;
+    await until(() => w.dev.says().length === 2, 2000);
+    expect(w.dev.says()[1].at - end).toBeLessThan(500 + 120);
+    expect(await traceOf(w, talk.result.job)).toMatchObject({ phrase: "let_me_think", category: "hard", classifier: "quickish" });
+  }, 10000);
+
+  it("the delay is from the listen's end, not from when the transcript came back: a slow STT shortens the wait, never lengthens it", async () => {
+    const w = await setup({ fillerMs: 800 }, { sttDelayMs: 300 });
+    await w.room.talk(w.token, { say: "Hi." });
+    const end = w.dev.listenEnd()!.at;
+    await until(() => w.dev.says().length === 2, 2000);
+    const at = w.dev.says()[1].at - end;
+    expect(at).toBeGreaterThanOrEqual(780);
+    expect(at).toBeLessThan(800 + 120);
+  }, 10000);
+
+  it("shake to talk at 400 ms: the filler follows the utterance's emit within the delay", async () => {
+    const w = await setup({ fillerMs: 400 }, { classifier: slowClassifier });
+    await w.room.socketMessage(w.sock, JSON.stringify({ t: "evt", name: "shake", data: { peak_g: 2.4, reversals: 5, ms: 900, listen: "shake-1" } }));
+    await until(() => !!w.dev.listenEnd());
+    const end = w.dev.listenEnd()!.at;
+    await until(() => w.dev.says().length === 1, 2000);
+    expect(w.dev.says()[0].at - end).toBeGreaterThanOrEqual(380);
+    expect(w.dev.says()[0].at - end).toBeLessThan(400 + 120);
+  }, 10000);
+
+  it("agent first wins: its answer right after the turn (well inside 400 ms) skips the filler", async () => {
+    const w = await setup({ fillerMs: 400 });
+    await w.room.talk(w.token, { say: "Hi." });
+    expect((await w.room.talk(w.token, { say: "Noon.", listen: false })) as any).toMatchObject({ ok: true });
+    await sleep(700);
+    expect(w.dev.says().map((s) => s.text)).toEqual(["Hi.", "Noon."]);
+    // a mood counts too
+    const m = await setup({ fillerMs: 400 });
+    await m.room.talk(m.token, { say: "Hi." });
+    await m.room.command(m.token, "mood", { mood: "thinking", hold_s: 20 });
+    await sleep(700);
+    expect(m.dev.says().map((s) => s.text)).toEqual(["Hi."]);
+  }, 10000);
+
+  it("filler first: the agent's reply arriving while it plays queues right behind it, seamless", async () => {
+    const w = await setup({ fillerMs: 500 }, { samples: 9600 });
+    await w.room.talk(w.token, { say: "Hi." });
+    await until(() => w.dev.says().length === 2, 2000);
+    const filler = w.dev.says()[1];
+    expect(FILLER_TEXTS).toContain(filler.text);
+    const ans = (await w.room.talk(w.token, { say: "Here you go.", listen: false })) as any;
+    expect(ans).toMatchObject({ ok: true, result: { status: "done" } });
+    expect(w.dev.refused()).toEqual([]);
+    const fDone = w.dev.done(filler.job)!.at;
+    const a = w.dev.says()[2];
+    expect(a.text).toBe("Here you go.");
+    expect(a.at).toBeGreaterThanOrEqual(fDone);
+    expect(a.at - fDone).toBeLessThan(80);
+  }, 10000);
 });

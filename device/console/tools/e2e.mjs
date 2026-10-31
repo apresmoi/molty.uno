@@ -499,6 +499,14 @@ const canvasStats = (page) => page.evaluate(() => {
   await fillerRow.getByRole('button', { name: 'after 1.5 s' }).click();
   await fillerRow.locator('button[aria-pressed="true"]', { hasText: 'after 1.5 s' }).waitFor();
   ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).filler_ms === 1500), 'settings molty: 1.5 s filler delay sent to the device (filler_ms 1500)');
+  ok(JSON.stringify(await fillerRow.getByRole('button').allInnerTexts()) === JSON.stringify(['off', 'after 0.5 s', 'after 0.8 s', 'after 1.5 s', 'after 2.5 s (default)', 'after 3.5 s']), 'settings molty: filler chips are off, 0.5, 0.8, 1.5, 2.5 (default), 3.5 s');
+  for (const [label, ms] of [['after 0.5 s', 500], ['after 0.8 s', 800]]) {
+    await fillerRow.getByRole('button', { name: label, exact: true }).click();
+    await fillerRow.locator('button[aria-pressed="true"]', { hasText: label }).waitFor();
+    ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).filler_ms === ms), `settings molty: ${label} filler delay sent to the device (filler_ms ${ms})`);
+    const st = await (await fetch(`${MOCK}/api/creature/state`)).json();
+    ok(st.filler_ms === ms, `settings molty: the device keeps filler_ms ${ms}`);
+  }
   await fillerRow.getByRole('button', { name: 'after 2.5 s (default)' }).click();
   await fillerRow.locator('button[aria-pressed="true"]', { hasText: 'after 2.5 s' }).waitFor();
   const shakeRow = page.getByRole('group', { name: 'shake to talk' });

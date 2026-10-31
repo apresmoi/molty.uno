@@ -35,7 +35,8 @@ First public release.
   audio the relay pre-synthesises in Molty's current voice and caches; `quick {id}` /
   `molty_quick` plays one at once with no TTS, and the agent's talk queues right behind it.
   When nobody answers a human turn within the owner's delay (console "filler": off or
-  1.5–5 s, 2.5 s by default; firmware reports `filler_ms` per listen), Molty says a built-in
+  0.4–5 s — chips 0.5 / 0.8 / 1.5 / 2.5 / 3.5 s —, 2.5 s by default, counted from the listen's
+  end with nothing added (the classifier runs in parallel); firmware reports `filler_ms` per listen), Molty says a built-in
   filler itself; the agent's reply queues after it. Draft openers, quick phrases and fillers
   share one lead-in queue and one pre-synthesised speech path; a played opener counts as the
   agent answering (no filler); fillers and quicks appear in the turn trace. Agents may mark their

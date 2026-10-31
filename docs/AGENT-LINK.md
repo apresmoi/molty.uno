@@ -377,7 +377,8 @@ human stops ─▶ chirp + thinking (device)
   agent | builtin, owner?}` (`first_audio_ms`: after the human stopped; `owner`: whose fillers).
 - **The auto filler.** When a human turn ends with words — a shake's `utterance`, or a talk
   whose listen heard something — and no agent does anything (any job, `mood`, `show`, `act`,
-  a state patch, a draft's opener) within the owner's delay counted from the end of speech, the
+  a state patch, a draft's opener) within the owner's delay counted from the listen's end (the
+  end frame, or the box's turn end) — not from when the transcript came back — the
   relay starts a relay-owned quick (no agent, never claims the turn):
   - **Whose:** the fillers (`filler: true`) of the agent that last answered a human turn here
     (the last turn claimer, or the last agent to talk); none → the built-ins; that agent turned
@@ -390,8 +391,11 @@ human stops ─▶ chirp + thinking (device)
   - **Classifier:** one path — [Molty's reflex](#reflex) (`DeviceRoom.fillerCategory`): the
     category the reflex already decided for those exact words, else one call of the owner's
     engine (`jev` / `openai` with a key), the keywords engine when the reflex is off or has no
-    key. It runs when the turn ends (seconds before the filler) with `CLASSIFY_BUDGET_MS` (400 ms);
-    a throw, an unknown category or the deadline → the keywords. `RoomDeps.classifier`
+    key. It starts when the turn ends, in parallel with the delay, with `CLASSIFY_BUDGET_MS` (400 ms);
+    a throw, an unknown category, the deadline, or a verdict not in by the filler's moment → the
+    keywords. Nothing adds to the owner's delay: the filler never waits for the classifier, the
+    pool is looked up when armed, the audio comes from the phrase cache (warmed during the listen).
+    A delay shorter than the STT's own latency fires as soon as the words are in. `RoomDeps.classifier`
     (`UtteranceClassifier {name, classify(text)}`, `services/relay/src/core/phrases.ts`) overrides
     it for tests or other hosts. The trace's `classifier` names the engine that decided. Not while anything holds the speaker, the human is talking, a question or an explicit mood is
   in flight, or the device has no speaker. Its audio is warmed during the listen. After it,
@@ -400,10 +404,12 @@ human stops ─▶ chirp + thinking (device)
   ms_ago}}` (`force:true` plays it anyway). Recorded in the activity log as a `quick` job with
   `data.filler:true` and `data.turn` (owner view; no agent).
 - **Delay setting.** The owner's choice, console Settings › Molty "filler" (`POST
-  /api/creature/state {filler_ms}`: `0` = off or 1500..5000, GET reports it, NVS like
+  /api/creature/state {filler_ms}`: `0` = off or 400..5000 — chips off / 0.5 / 0.8 / 1.5 / 2.5 /
+  3.5 s —, GET reports it, NVS like
   `ring_color`; `link_filler_setting_ok`); every listen answer reports it (`filler_ms`).
   Firmware that does not report it: 2500 ms. The `utterance` event and talk's result carry
-  `filler_in_ms` (ms from then until the filler; absent = off or nothing heard).
+  `filler_in_ms` (ms from then until the filler; absent = off or nothing heard). A relay older
+  than the 400 ms floor reads 400..1499 as not reported (2500).
 
 ### Shake to talk
 
@@ -920,7 +926,7 @@ device dials; agents/CLI use its http(s) twin (`ws://h` → `http://h`, `wss://h
 | `POST /api/link/forget` | `202 {ok:true, pending:true}` | `500` |
 | `POST /api/creature/state {ring_color}` (with the other fluid fields) | the state JSON; saved to NVS; `GET` reports `ring_color` as `"#rrggbb"` or `"accent"` (older firmware: absent — the console hides the setting) | `{ok:false, error}` when not `"#rrggbb"` / `"accent"` |
 | `POST /api/creature/state {listen_ms}` (with the other fluid fields) | the state JSON; saved to NVS: the listen window an agent gets when it gives none, `5000..30000` or `0` = unlimited (300 s safety ceiling); `GET` reports `listen_ms` (older firmware: absent — the console hides the setting) | `{ok:false, error}` when not an integer 5000..30000 or 0 |
-| `POST /api/creature/state {filler_ms}` (with the other fluid fields) | the state JSON; saved to NVS: the [auto filler](#quick-phrases-and-the-auto-filler)'s delay, `0` = off or `1500..5000` (2500 out of the box); `GET` reports `filler_ms` and every listen answer carries it (older firmware: absent — the console hides the setting, the relay uses 2500) | `{ok:false, error}` when not an integer 1500..5000 or 0 |
+| `POST /api/creature/state {filler_ms}` (with the other fluid fields) | the state JSON; saved to NVS: the [auto filler](#quick-phrases-and-the-auto-filler)'s delay, `0` = off or `400..5000` (2500 out of the box); `GET` reports `filler_ms` and every listen answer carries it (older firmware: absent — the console hides the setting, the relay uses 2500) | `{ok:false, error}` when not an integer 400..5000 or 0 |
 | `GET /api/update` (firmware with the `update` cap; older firmware: not found) | `200 {ok:true, state:"idle"\|"downloading"\|"flashing"\|"rebooting"\|"failed", version?, progress?: 0..1, error?}` | — |
 | `POST /api/update {version, url, sha256, size}` (any Content-Type) | `202 {ok:true, state:"downloading"}`; then as `cmd update` after an accept (no on-screen question: the click in the console is the consent, the same trust as `POST /api/ota`) | `400 bad_url` (not an official release URL), `409 busy` |
 
