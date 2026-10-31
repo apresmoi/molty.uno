@@ -1250,7 +1250,7 @@ esp_err_t mole_fluid_creature_state_set_json(const char *body) {
         if (cJSON_IsString(j) && link_ack_parse(j->valuestring, &m)) ack = (int)m;
         else ret = ESP_ERR_INVALID_ARG;
     }
-    /* filler_ms: 0 (off) or 1500..5000 — the auto filler's delay, kept in NVS */
+    /* filler_ms: 0 (off) or 400..5000 — the auto filler's delay, kept in NVS */
     int32_t filler = -1;                               /* -1: not given */
     if ((j = cJSON_GetObjectItem(root, "filler_ms"))) {
         if (cJSON_IsNumber(j) && link_filler_setting_ok(j->valuedouble)) filler = (int32_t)j->valuedouble;

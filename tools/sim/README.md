@@ -49,7 +49,7 @@ make sim-test                                                # (5)
    force-aligns the received say audio on the box, prints the table. ~6 min for the default suite.
 4. Bridge tuning goes straight to `molty-voice run`: `--turn-end`, `--turn-end-hold`, `--turn-end-skip`.
    Other knobs: `--agent llm --llm-model …`, `--agent-gap-ms N`, `--filler-ms N` (the sim device's
-   auto filler setting: 0 = off, 1500..5000, default 2500; -1 = not reported), `--align none`, `--no-audio`.
+   auto filler setting: 0 = off, 400..5000, default 2500; -1 = not reported), `--align none`, `--no-audio`.
    A slow agent with and without Molty's own filler: `make sim SIM_ARGS='scenarios/slow-agent.yaml
    --agent-gap-ms 6000 --filler-ms 0 --align none'`, then the same with `--filler-ms 2500`; compare
    `silence` (`gap` stays ~6 s either way).

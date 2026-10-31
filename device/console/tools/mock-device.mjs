@@ -137,7 +137,7 @@ createServer(async (req, res) => {
       if (o.ring_color !== undefined && !(o.ring_color === 'accent' || /^#[0-9a-fA-F]{6}$/.test(o.ring_color))) return json(res, { ok: false, error: 'invalid_args' }, 400);
       if (o.listen_ms !== undefined && !(Number.isInteger(o.listen_ms) && (o.listen_ms === 0 || (o.listen_ms >= 5000 && o.listen_ms <= 30000)))) return json(res, { ok: false, error: 'invalid_args' }, 400);
       if (o.ack !== undefined && !['chirp', 'thinking', 'off'].includes(o.ack)) return json(res, { ok: false, error: 'invalid_args' }, 400);
-      if (o.filler_ms !== undefined && !(Number.isInteger(o.filler_ms) && (o.filler_ms === 0 || (o.filler_ms >= 1500 && o.filler_ms <= 5000)))) return json(res, { ok: false, error: 'invalid_args' }, 400);
+      if (o.filler_ms !== undefined && !(Number.isInteger(o.filler_ms) && (o.filler_ms === 0 || (o.filler_ms >= 400 && o.filler_ms <= 5000)))) return json(res, { ok: false, error: 'invalid_args' }, 400);
       if (o.shake_talk !== undefined && typeof o.shake_talk !== 'boolean') return json(res, { ok: false, error: 'invalid_args' }, 400);
       if (o.idle_life !== undefined && !['lively', 'calm', 'off'].includes(o.idle_life)) return json(res, { ok: false, error: 'invalid_args' }, 400);
       for (const k of ['text', 'wpm', 'palette', 'ring_color', 'listen_ms', 'ack', 'filler_ms', 'shake_talk', 'idle_life']) if (o[k] !== undefined) fluid[k] = o[k];
