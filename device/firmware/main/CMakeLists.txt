@@ -34,6 +34,7 @@ idf_component_register(
         "app_main.c"
         # net: USB-C NCM + Wi-Fi + mDNS, the HTTP API, console page + SPIFFS
         "net/network.c"
+        "net/wifi_retry.c"       # reconnect after a Wi-Fi drop (host-tested)
         "net/http.c"
         "net/console_store.c"
         "net/improv_proto.c"     # Wi-Fi setup over a serial console (boards with MOLTY_CAP_SERIAL)
@@ -77,6 +78,7 @@ idf_component_register(
         # diag: log ring, perf histograms, /api/diag + /api/log
         "diag/mole_diag.c"
         "diag/log_upload.c"     # activity log: job tags, upload filter + frames, persist policy (host-tested)
+        "diag/heap_guard.c"     # internal-RAM self-protection: warn + shed (host-tested)
     INCLUDE_DIRS
         "."
         "net"
