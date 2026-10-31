@@ -61,6 +61,52 @@ export interface AudioHeader {
    * from sample `sample` of the stream (16 kHz, from its first sample).
    */
   w?: Array<[number, number]>;
+  /**
+   * Optional, device -> relay on listen frames (firmware cap `trace`, docs/AGENT-LINK.md "Turn
+   * trace"): `ct` capture ms of the frame's first sample from the listen's mic start; `lv` one
+   * level byte per 100 ms chunk (hex, = clamp(round(2·(dBFS+100)), 0, 200)); `cl` samples
+   * saturated after the mic gain; `rt` failed send attempts before it went out; `wq` ms it
+   * waited on the device between capture and send. Malformed values are dropped, never fatal.
+   */
+  ct?: number;
+  lv?: string;
+  cl?: number;
+  rt?: number;
+  wq?: number;
+  /** Optional, on the end frame: the device's listen summary (DEVICE_TRACE_KEYS, ints). */
+  tr?: Record<string, number>;
+}
+
+/** The end frame's `tr` keys and their accepted ranges (anything else is dropped). */
+export const DEVICE_TRACE_KEYS: Record<string, [number, number]> = {
+  wall: [0, 600000],
+  cap: [0, 600000],
+  sent: [0, 100000],
+  fail: [0, 100000],
+  drop: [0, 100000],
+  dropms: [0, 600000],
+  r0: [-127, 0],
+  r1: [-127, 0],
+  gain: [1, 64],
+  pk: [0, 1000],
+  set: [0, 5000],
+  setc: [0, 1],
+};
+
+const intIn = (v: unknown, lo: number, hi: number): v is number => typeof v === "number" && Number.isInteger(v) && v >= lo && v <= hi;
+
+/** The trace fields of a device listen frame header (AudioHeader ct/lv/cl/rt/wq/tr), validated. */
+function traceFields(h: Record<string, unknown>, out: AudioHeader) {
+  if (intIn(h.ct, 0, 600000)) out.ct = h.ct;
+  if (typeof h.lv === "string" && /^(?:[0-9a-fA-F]{2}){1,16}$/.test(h.lv)) out.lv = h.lv.toLowerCase();
+  if (intIn(h.cl, 1, 100000)) out.cl = h.cl;
+  if (intIn(h.rt, 1, 1000)) out.rt = h.rt;
+  if (intIn(h.wq, 0, 600000)) out.wq = h.wq;
+  if (isRecord(h.tr)) {
+    const tr: Record<string, number> = {};
+    for (const [k, [lo, hi]] of Object.entries(DEVICE_TRACE_KEYS)) if (intIn(h.tr[k], lo, hi)) tr[k] = h.tr[k] as number;
+    if (Object.keys(tr).length) out.tr = tr;
+  }
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -135,5 +181,6 @@ export function decodeAudioFrame(bytes: Uint8Array): DecodedAudio | undefined {
   // Unknown or malformed reasons are dropped, never fatal.
   if (typeof header.reason === "string" && /^[a-z_]{1,16}$/.test(header.reason)) out.reason = header.reason;
   if (typeof header.speech_ms === "number" && Number.isInteger(header.speech_ms) && header.speech_ms >= 0 && header.speech_ms <= 600000) out.speech_ms = header.speech_ms;
+  traceFields(header, out);
   return { header: out, payload };
 }

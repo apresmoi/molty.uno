@@ -31,7 +31,7 @@ const INSTRUCTIONS =
   `Tools operate a physical Molty device through the molty-relay. Pair first with molty_pair (no token needed), then send the returned agent_token as 'Authorization: Bearer <token>'. For conversation use molty_talk: ONE call per turn speaks your reply, then listens and returns what the human said ({heard, reason}); moods (listening, thinking, speaking) are automatic, so don't call molty_mood around talking. When the human finishes, Molty acknowledges it by itself at once (a soft chirp, then thinking): go straight to your answer, no "let me think" filler; if the answer needs long work (tools, search), still say a short spoken ack first or keep thinking up with molty_mood, so the human is never left in silence. Keep spoken replies to 1-2 sentences (inline cues like [happy] or [nod] in them set mood / gesture as you speak). For a decision the human can answer with a tap use molty_ask: say the question, offer 1-${MAX_ASK_OPTIONS} options of at most ${MAX_ASK_LABEL} characters ("yes", "no", "later"); answer is null on timeout/cancelled/offline. molty_say / molty_listen return a job immediately (wait:true blocks until done); poll a job with molty_wait (<= 8 s per call). ` +
   `Molty also emits events (${AGENT_EVENT_TYPES.join(", ")}) into your own inbox: unread ones ride along on every tool result as 'events' plus a 'Molty: ...' line; molty_events pulls/waits for them; molty_webhook registers an HTTPS request the relay sends you per event. A shake means the human wants to talk: Molty listens by itself and you get one 'utterance' event {turn_id, text, ...}: answer it at once with molty_talk {say, in_reply_to: turn_id} (the first agent to answer claims the turn; others get turn_claimed). Other events: react briefly, once per moment. Full guide: the molty agent skill, ${SKILL_HOME} (Claude Code / Codex: the molty plugin). This relay speaks agent api_version ${API_VERSION} (also in molty_status relay.api_version); what this Molty can do is relay.caps. When your human asks to check Molty for updates (any wording), call molty_updates and follow its 'actions'; ask before molty_update.`;
 
-type Prop = { type: string | string[]; description: string; enum?: string[]; items?: { type: "string"; enum?: string[] } | { anyOf: JsonObject[] } };
+type Prop = { type: string | string[]; description: string; enum?: string[]; items?: { type: "string"; enum?: string[] } | { anyOf: JsonObject[] }; additionalProperties?: { type: "number" } };
 type Schema = { type: "object"; properties: Record<string, Prop>; required: string[]; additionalProperties: false };
 interface ToolDef {
   name: string;
@@ -51,6 +51,12 @@ const VAD_PROPS: Schema["properties"] = {
   ack: { type: ["boolean", "string"], description: `Molty's own acknowledgement when the human finishes (a soft chirp + thinking, ${ACK_THINK_S} s max, before you answer): true (default) = the human's setting; "silent" = thinking without the chirp; false = none. Leave it out unless you acknowledge yourself.` },
 };
 
+/** say / talk / ask: the agent's own latency report (core/commands.ts clientTiming). */
+const CLIENT_TIMING: Prop = {
+  type: "object",
+  additionalProperties: { type: "number" },
+  description: "Optional: your own latency for this turn, in ms (up to 8 keys, lower case, numbers 0..3600000), e.g. {received_ms, model_ms}: event received -> this call, your model's run. Include it to help debug latency: it lands in the turn's trace (activity log), never on Molty.",
+};
 const IN_REPLY_TO: Prop = {
   type: "string",
   description: "The turn_id of the `utterance` you are answering (the human shook Molty and spoke). The first agent to answer a turn claims it; other agents get turn_claimed for 60 s. Adds timings.turn {id, reply, first_audio} (ms after the utterance).",
@@ -154,6 +160,7 @@ export const TOOLS: ToolDef[] = [
         text: { type: "string", description: "Text to synthesize, at most 4096 bytes." },
         voice: { type: "string", description: "Optional relay TTS voice (provider-specific, e.g. luna for Workers AI Aura)." },
         in_reply_to: IN_REPLY_TO,
+        client_timing: CLIENT_TIMING,
         wait: { type: "boolean", description: `true: block until spoken (at most ${TALK_BUDGET_MS / 1000} s, then {job, status:"pending"} for molty_wait).` },
       },
       ["text"],
@@ -177,6 +184,7 @@ export const TOOLS: ToolDef[] = [
       listen_ms: { type: "integer", description: LISTEN_MS_DOC },
       voice: { type: "string", description: "Optional relay TTS voice." },
       in_reply_to: IN_REPLY_TO,
+      client_timing: CLIENT_TIMING,
       ...VAD_PROPS,
     }),
     auth: true,
@@ -200,6 +208,7 @@ export const TOOLS: ToolDef[] = [
         },
         timeout_s: { type: "integer", description: `Seconds the options stay up waiting for a tap, 1..${MAX_ASK_TIMEOUT_S}; default ${DEFAULT_ASK_TIMEOUT_S}.` },
         voice: { type: "string", description: "Optional relay TTS voice for 'say'." },
+        client_timing: CLIENT_TIMING,
       },
       ["options"],
     ),

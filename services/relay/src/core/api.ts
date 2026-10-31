@@ -149,8 +149,8 @@ export interface AgentApi {
 export type VoiceMode = "auto" | "box" | "cloud";
 export const VOICE_MODES: readonly VoiceMode[] = ["auto", "box", "cloud"];
 
-/** Owner activity log: read the merged timeline (raw query params), or set "log transcripts". */
-export type ActivityOwnerRequest = { action: "get"; query: Record<string, unknown> } | { action: "set"; transcripts: unknown };
+/** Owner activity log: read the merged timeline (raw query params), or set "log transcripts" / "keep audio" (either or both). */
+export type ActivityOwnerRequest = { action: "get"; query: Record<string, unknown> } | { action: "set"; transcripts?: unknown; keep_audio?: unknown };
 
 /** Owner settings for the voice box: read, change (mode / default box voice), or unpair the box. */
 export type VoiceOwnerRequest = { action: "get" } | { action: "set"; mode?: unknown; voice?: unknown } | { action: "unpair" };
@@ -165,6 +165,11 @@ export interface OwnerApi {
   voiceSettings(linkCode: string, req: VoiceOwnerRequest): Promise<Outcome>;
   /** `{entries, next, more, transcripts, limits}` (core/activity.ts); set: changes "log transcripts" first. */
   ownerActivity(linkCode: string, req: ActivityOwnerRequest): Promise<Outcome>;
+  /**
+   * One kept listen's audio (core/audio-keep.ts) as a WAV file: `{wav}` bytes. The owner only
+   * (link code); agents have no route to it. not_found when never kept or expired.
+   */
+  ownerAudio(linkCode: string, job: string): Promise<Outcome<{ wav: Uint8Array }>>;
 }
 
 export interface RelayBackend {

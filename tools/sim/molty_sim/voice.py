@@ -37,6 +37,8 @@ class Clip:
     speech: list[tuple[float, float]] = field(default_factory=list)  # voiced intervals
     noise: dict = field(default_factory=lambda: {"kind": "none"})
     seed: int = 0
+    imu: list | None = None  # a shake turn: IMU samples (ax, ay, az, ms from the mic start)
+    handling_s: float = 0.0  # ...and how long the hand kept shaking after the mic opened
 
     @property
     def speech_end_s(self) -> float | None:
@@ -191,7 +193,7 @@ class Synth:
     async def clip(self, turn: Turn) -> Clip:
         seed = int(hashlib.sha1(turn.id.encode()).hexdigest()[:8], 16)
         if turn.kind == "silence":
-            return Clip(np.zeros(0, np.float32), noise=turn.noise, seed=seed)
+            return with_shake(Clip(np.zeros(0, np.float32), noise=turn.noise, seed=seed), turn.shake)
         if turn.kind == "wav":
             x, rate = read_wav(turn.wav)
             x = resample(x, rate)
@@ -208,7 +210,24 @@ class Synth:
         lead = np.zeros(int(turn.lead_s * RATE), np.float32)
         x = np.concatenate([lead, x]).astype(np.float32)
         words = [(w, round(s + turn.lead_s, 3)) for w, s in words]
-        return Clip(x, text=turn.text, words=words, speech=speech_intervals(x), noise=turn.noise, seed=seed)
+        return with_shake(Clip(x, text=turn.text, words=words, speech=speech_intervals(x), noise=turn.noise, seed=seed), turn.shake)
+
+
+def with_shake(c: Clip, shake: dict | None) -> Clip:
+    """A shake turn: the hand's handling noise mixed in from the mic start (the speech intervals stay
+    the human's own), and the IMU trace the device's settle detector reads. Seeded by the turn."""
+    if not shake:
+        return c
+    from .uplink import handling_noise, shake_imu
+
+    h = handling_noise(shake["after_s"], seed=c.seed, peak=shake.get("noise_peak", 0.9))
+    x = c.pcm if len(c.pcm) >= len(h) else np.concatenate([c.pcm, np.zeros(len(h) - len(c.pcm), np.float32)])
+    x = x.copy()
+    x[: len(h)] += h
+    c.pcm = x.astype(np.float32)
+    c.imu = shake_imu(shake["peak_g"], shake["after_s"], seed=c.seed)
+    c.handling_s = shake["after_s"]
+    return c
 
 
 def quietest(x: np.ndarray, a: int, b: int, win: int = 160) -> int:

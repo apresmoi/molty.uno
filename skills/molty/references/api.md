@@ -138,10 +138,17 @@ curl -sS -X POST "$MOLTY_RELAY/v1/devices/$MOLTY_DEVICE/talk" \
 #     "reason":"silence","ms":{"tts_first_audio":…,"speech":…,"listen":…,"stt":…,"total":…},"timings":{…}}}
 ```
 
-Body: `{"say"?: s, "listen"?: true, "listen_ms"?: 0..30000 (omit: the human's setting, 30000 out of the box; 0 = unlimited), "voice"?, "end_silence_ms"?, "no_speech_ms"?, "vad"?, "ring_color"?, "ack"?, "in_reply_to"?}`.
+Body: `{"say"?: s, "listen"?: true, "listen_ms"?: 0..30000 (omit: the human's setting, 30000 out of the box; 0 = unlimited), "voice"?, "end_silence_ms"?, "no_speech_ms"?, "vad"?, "ring_color"?, "ack"?, "in_reply_to"?, "client_timing"?}`.
 
 - `in_reply_to` (talk and say): the `turn_id` of the `utterance` you answer (see
   [events.md](events.md#shake-to-talk)).
+- `client_timing` (talk, say and ask): **include client_timing to help debug latency** — what your
+  own side spent on this turn, in ms: an object of at most 8 keys (lower case, `a-z0-9_`), numbers
+  only, each 0..3600000, e.g. `{"received_ms":120,"model_ms":900}`. Suggested keys: `received_ms`
+  (the event reached you → this call), `model_ms` (your model's run), `tool_ms`, `queue_ms`,
+  `total_ms`. Anything else is `400 invalid_args`. Stored in the job's `timings.client` and, when the
+  call answers a human turn, in that turn's trace: the owner sees it on the console's Activity
+  timeline next to the relay's own timings ([talking-fast.md](talking-fast.md#measure-yourself)).
 - **End of turn is automatic**: don't pass `vad` / `end_silence_ms`. Details in
   [talking-fast.md](talking-fast.md#end-of-turn).
 - `ring_color` (talk and listen): the listening ring's colour, a colour name or `"#rrggbb"` as
@@ -183,7 +190,7 @@ curl -sS -X POST "$MOLTY_RELAY/v1/devices/$MOLTY_DEVICE/ask" \
 #     "ms":{"tts_first_audio":…,"speech":…,"answer":…,"total":…},"timings":{…}}}
 ```
 
-Body: `{"say"?: s, "options": [1..5 labels], "timeout_s"?: 1..120 (default 30), "voice"?}`.
+Body: `{"say"?: s, "options": [1..5 labels], "timeout_s"?: 1..120 (default 30), "voice"?, "client_timing"?}` (`client_timing` as in Talk).
 Speaks `say` (put the question there), then shows the options on the round screen and returns
 the one the human tapped: `answer` (its label) and `index`. Blocks and finishes like talk
 (24 s, then `202` pending — a long `timeout_s` is fine, finish it with the jobs URL).

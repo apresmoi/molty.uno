@@ -10,6 +10,13 @@ and audio:
   once per chunk and ends the listen with the relay's reason, sending what is buffered as the
   end frame. The end frame carries reason + speech_ms (only when known), like the firmware.
   The turn acknowledgement (link_ack_decide) is decided at the end, as on the device.
+- the listen uplink (docs/AGENT-LINK.md "Turn trace", molty_sim/uplink.py): every frame carries
+  the trace fields (ct, lv, cl, rt, wq; the end frame `tr`); frames wait in a resend ring and a
+  send that fails (a scenario `stall:` window) is retried in order — the mic keeps being read.
+- shake to talk: `shake()` starts the device's own listen (`shake-<n>`), sends `evt shake`
+  naming it, keeps the audio until the relay adopts it (`cmd listen {adopt}`) or declines it
+  (`listen_stop`), 3 s at most; the audio before the IMU shows the shake settled is trimmed.
+- hints: `{"t":"hint"}` frames are recorded (the firmware's listener reactions are visual only).
 - say: frames are "played" on a model of the speaker: a frame starts when it arrives or when
   the previous one ends (a gap = an underrun), the chirp of the previous listen delays the
   start by up to ~110 ms (it is cut), say.done goes when the last sample has left the DMA.
@@ -32,6 +39,7 @@ from websockets.asyncio.client import connect as ws_connect
 from websockets.exceptions import ConnectionClosed
 
 from . import vad as vadm
+from .uplink import Settle, UpFrame, UplinkRing, clipped, in_windows, level_byte, settle_trim
 from .voice import Mic
 
 log = logging.getLogger("molty_sim.device")
@@ -51,7 +59,11 @@ ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz23456789"
 SIM_PREFIX = "molty-sim"
 
 # The Waveshare 1.46's hello (device/firmware/main/link/link_identity.c: speaker + mic + touch).
-CAPS_146 = ["fluid", "say", "say_cues", "listen", "listen_stop", "listen_window", "ack", "show", "mood", "creature", "ask", "update"]
+CAPS_146 = ["fluid", "say", "say_cues", "listen", "listen_stop", "listen_window", "ack", "shake_talk", "trace", "hints",
+            "show", "mood", "creature", "ask", "update"]
+ADOPT_WINDOW_MS = 3000  # LINK_SHAKE_ADOPT_MS: a shake's listen nobody adopted by then ends quietly
+RETRY_S = 0.1  # a failed uplink send is retried this often
+FLUSH_S = 15.0  # the end frame waits at most this long for the ring to drain
 BOARD_146 = "waveshare-esp32-s3-touch-lcd-1.46"
 ACK_NAMES = ("off", "thinking", "chirp")
 
@@ -119,6 +131,14 @@ class ListenRec:
     ack_end_at: float | None = None  # when the chirp would finish
     error: str | None = None
     done: asyncio.Event = field(default_factory=asyncio.Event)
+    # shake to talk: the device's own id, and the relay's adoption (its listen args) / decline
+    local: str | None = None
+    adopt: dict | None = None
+    declined: bool = False
+    trim_ms: int | None = None  # the shake's handling noise cut from the start
+    trim_capped: bool = False
+    up: list[dict] = field(default_factory=list)  # every header sent (trace fields included)
+    hints: list[str] = field(default_factory=list)  # relay hints that named this listen
 
 
 @dataclass
@@ -156,6 +176,24 @@ class SayRec:
         return np.frombuffer(b"".join(self.pcm), dtype="<i2")
 
 
+@dataclass
+class _Rec:
+    """What record() carries from one chunk to the next (link_audio.c rec_t)."""
+
+    v: vadm.Vad
+    total: int
+    pos_ms: float = 0.0  # mic ms of the next sample taken
+    pos_ms_start: float = 0.0
+    acc: list = field(default_factory=list)
+    have: int = 0
+    done: int = 0
+    seq: int = 0
+    frame_ct: float = 0.0
+    lv: list = field(default_factory=list)
+    cl: int = 0
+    peak: int = 0
+
+
 class SimDevice:
     def __init__(self, relay: str, device_id: str, key: bytes | None = None, *, fw: str = "0.1.0",
                  caps: list[str] | None = None, board: str = BOARD_146, listen_setting_ms: int = 30000,
@@ -170,6 +208,12 @@ class SimDevice:
         self.tap_delay_s, self.accept = tap_delay_s, accept
         self.link_code = new_link_code()
         self.welcomed = asyncio.Event()
+        self.features: list[str] = []
+        self.stall_for: Callable[[str], list[tuple[float, float]]] = lambda job: []  # uplink stalls (mic s)
+        self.imu_for: Callable[[str], list | None] = lambda job: None  # a shake's IMU trace
+        self.mic_gain, self.rssi = 6, -55
+        self.hints: list[dict] = []
+        self._shake_n = 0
         self.closed: tuple[int, str] | None = None
         self.mic_for: Callable[[str], Mic] = lambda job: Mic(None)
         self.listens: dict[str, ListenRec] = {}
@@ -235,12 +279,18 @@ class SimDevice:
     async def _on_text(self, f: dict) -> None:
         t = f.get("t")
         if t == "welcome":
+            self.features = list(f.get("features") or [])
             self.welcomed.set()
             self.note("welcome")
         elif t == "pair.request":
             self._spawn(self._pair(f))
         elif t == "cmd":
             await self._on_cmd(f)
+        elif t == "hint":
+            self.hints.append({"job": f.get("job"), "k": f.get("k"), "at": time.monotonic()})
+            rec = self.listens.get(f.get("job")) if isinstance(f.get("job"), str) else None
+            if rec is not None and self._busy == rec.job and rec.end_at is None and f.get("k") in ("pause", "question"):
+                rec.hints.append(f["k"])
         elif t in ("pong", "forgotten"):
             pass
 
@@ -290,24 +340,34 @@ class SimDevice:
         self.mood = "speaking"
         await self._reply(f, True, {})
 
-    async def _cmd_listen(self, f: dict, a: dict) -> None:
-        job = a.get("job")
+    def _listen_args(self, a: dict) -> tuple[int, bool, int, int, str] | None:
+        """The listen's window / VAD / ack args, checked like the firmware (None: invalid_args)."""
         ms = a.get("ms", None)
-        if not isinstance(job, str):
-            return await self._reply(f, False, error="invalid_args")
         if ms is None:
             window = self.listen_setting_ms
         elif isinstance(ms, bool) or not isinstance(ms, (int, float)) or not 0 <= ms <= LISTEN_MAX_MS or ms != int(ms):
-            return await self._reply(f, False, error="invalid_args")
+            return None
         else:
             window = int(ms)
         vad_on = a.get("vad", True)
         es, ns = a.get("end_silence_ms", 700), a.get("no_speech_ms", 4000)
         if not isinstance(vad_on, bool) or not (isinstance(es, int) and 300 <= es <= 3000) or not (isinstance(ns, int) and 1000 <= ns <= 10000):
-            return await self._reply(f, False, error="invalid_args")
+            return None
         ack = ack_arg(a, self.ack_setting)
         if ack is None:
+            return None
+        return window, vad_on, es, ns, ack
+
+    async def _cmd_listen(self, f: dict, a: dict) -> None:
+        job = a.get("job")
+        if not isinstance(job, str):
             return await self._reply(f, False, error="invalid_args")
+        if "adopt" in a:
+            return await self._cmd_adopt(f, a, job)
+        args = self._listen_args(a)
+        if args is None:
+            return await self._reply(f, False, error="invalid_args")
+        window, vad_on, es, ns, ack = args
         if self._busy:
             return await self._reply(f, False, error="busy")
         self._busy = job
@@ -318,13 +378,49 @@ class SimDevice:
         cfg = vadm.VadCfg(enabled=vad_on, max_ms=window or LISTEN_CEILING_MS, end_silence_ms=es, no_speech_ms=ns)
         self._spawn(self._record(rec, cfg))
 
+    async def _cmd_adopt(self, f: dict, a: dict, job: str) -> None:
+        """cmd listen {job, adopt: <local id>, …}: the relay takes the shake's listen as `job`."""
+        local = a.get("adopt")
+        args = self._listen_args(a)
+        if not isinstance(local, str) or not local or args is None:
+            return await self._reply(f, False, error="invalid_args")
+        rec = self.listens.get(local)
+        if rec is None or rec.local != local or self._busy != local or rec.adopt is not None or rec.declined or rec.end_at is not None:
+            return await self._reply(f, False, error="listen_gone")
+        window, vad_on, es, ns, ack = args
+        rec.adopt = {"job": job, "cfg": vadm.VadCfg(enabled=vad_on, max_ms=window or LISTEN_CEILING_MS, end_silence_ms=es, no_speech_ms=ns)}
+        rec.job, rec.args, rec.window_ms, rec.vad, rec.ack_mode = job, dict(a), window, vad_on, ack
+        self.listens[job] = rec
+        self._busy = job
+        await self._reply(f, True, {"job": job, "ms": window, "ack": ack})
+
+    async def shake(self, peak_g: float = 8.2, reversals: int = 4, ms: int = 420) -> str | None:
+        """The human shakes Molty: with shake to talk (the relay adopts), a listen of its own at once
+        and `evt shake` naming it; otherwise the plain shake. Returns the local listen id (or None)."""
+        data = {"peak_g": round(peak_g, 2), "reversals": reversals, "ms": ms}
+        if self._busy or "listen_adopt" not in self.features:
+            await self._send_json({"t": "evt", "name": "shake", "data": data})
+            return None
+        self._shake_n += 1
+        local = f"shake-{self._shake_n}"
+        window = self.listen_setting_ms
+        rec = ListenRec(job=local, args={}, cmd_at=time.monotonic(), window_ms=window, vad=True, ack_mode=self.ack_setting, local=local)
+        self.listens[local] = rec
+        self._busy = local
+        self.mood = "listening"
+        self._spawn(self._record(rec, vadm.VadCfg(max_ms=window or LISTEN_CEILING_MS)))
+        await self._send_json({"t": "evt", "name": "shake", "data": {**data, "listen": local}})
+        return local
+
     async def _cmd_listen_stop(self, f: dict, a: dict) -> None:
         job, reason = a.get("job"), a.get("reason", "turn_end")
         if not isinstance(job, str) or reason not in ("turn_end", "no_speech"):
             return await self._reply(f, False, error="invalid_args")
         rec = self.listens.get(job)
         mine = self._busy == job and rec is not None and rec.end_at is None
-        if mine and job not in self._stop:
+        if mine and rec.local == job and rec.adopt is None:
+            rec.declined = True  # a shake's listen the relay will not adopt: it ends quietly
+        elif mine and job not in self._stop:
             self._stop[job] = reason
             rec.stop_at, rec.stop_reason = time.monotonic(), reason
             rec.stop_mic_s = rec.stop_at - rec.mic_open_at
@@ -333,49 +429,141 @@ class SimDevice:
     # ---------------- listen: the mic ----------------
 
     async def _record(self, rec: ListenRec, cfg: vadm.VadCfg) -> None:
+        """link_audio.c record(): 100 ms chunks in real time; a shake's listen trims its handling
+        noise, keeps its audio until adopted; frames go to the uplink ring, the sender drains it."""
         mic = self.mic_for(rec.job)
-        v = vadm.Vad(cfg)
-        total = 16 * (rec.window_ms or LISTEN_CEILING_MS)
+        imu = list(self.imu_for(rec.job) or []) if rec.local else []
+        settle = Settle() if rec.local and imu else None
+        stalls = self.stall_for(rec.job)
         loop = asyncio.get_running_loop()
         rec.mic_open_at = time.monotonic()
         t0 = loop.time()
-        acc: list[np.ndarray] = []
-        have = done = seq = k = 0
-        verdict = vadm.CONTINUE
+        ring = UplinkRing()
+        wake = asyncio.Event()
+        state = {"capturing": True}
+        sender = asyncio.create_task(self._sender(rec, ring, stalls, t0, wake, state))
+        st = _Rec(vadm.Vad(cfg), 16 * (rec.window_ms or LISTEN_CEILING_MS))
+        pre: list[np.ndarray] = []  # a shake's audio until it is adopted
+        held: list[np.ndarray] = []  # ...and before it settled
+        k = 0
         reason = None
+        unclaimed = False
+        pending = rec.local is not None
+
+        def push(end: bool, why: str | None) -> None:
+            pcm = np.concatenate(st.acc).astype("<i2") if st.acc else np.zeros(0, "<i2")
+            h = {"s": rec.job, "seq": st.seq, "kind": "pcm16", "rate": RATE, "end": end, "ct": round(st.frame_ct),
+                 "lv": "".join(f"{b:02x}" for b in st.lv)}
+            if st.cl:
+                h["cl"] = st.cl
+            if end and why:
+                h["reason"] = why
+                if st.v.speech_known():
+                    h["speech_ms"] = st.v.speech_ms
+            if end:
+                tr = {"wall": round((loop.time() - t0) * 1000), "cap": round(st.done / 16), "r0": self.rssi, "r1": self.rssi,
+                      "gain": self.mic_gain, "pk": round(st.peak * 1000 / 32767)}
+                if rec.local:
+                    tr["set"] = rec.trim_ms or 0
+                    if rec.trim_capped:
+                        tr["setc"] = 1
+                h["tr"] = tr
+            for gone in ring.push(UpFrame(st.seq, h, pcm.tobytes(), loop.time(), len(pcm))):
+                self.note("uplink.drop", job=rec.job, seq=gone.seq)
+            wake.set()
+            st.seq += 1
+            st.acc, st.have, st.lv, st.cl = [], 0, [], 0
+            st.frame_ct = st.pos_ms
+
+        def take(piece: np.ndarray) -> int:
+            """One chunk into the frame being built and the VAD; the frame goes when full or ended."""
+            got = min(len(piece), st.total - st.done, FRAME - st.have)
+            piece = piece[:got]
+            if st.have == 0:
+                st.frame_ct = st.pos_ms
+            st.acc.append(piece)
+            st.have += got
+            st.done += got
+            st.pos_ms += got / 16
+            st.lv.append(level_byte(piece))
+            st.cl += clipped(piece)
+            st.peak = max(st.peak, int(np.max(np.abs(piece.astype(np.int32)))) if got else 0)
+            verdict = st.v.feed(piece)
+            if verdict == vadm.CONTINUE and st.done >= st.total:
+                verdict = vadm.END_MAX
+            if st.have >= FRAME or verdict != vadm.CONTINUE:
+                push(verdict != vadm.CONTINUE, vadm.REASONS.get(verdict))
+            return verdict
+
+        verdict = vadm.CONTINUE
         try:
             while verdict == vadm.CONTINUE:
-                stop = self._stop.get(rec.job)
-                if stop:
-                    reason = stop
-                    await self._send_up(rec, seq, acc, True, reason, v)
-                    break
+                if pending:
+                    if rec.declined or sum(len(p) for p in pre) >= 16 * ADOPT_WINDOW_MS:
+                        unclaimed, reason = True, "declined" if rec.declined else "unclaimed"
+                        break
+                    if rec.adopt is not None:  # the relay's listen from here: the audio so far replays through it
+                        pending = False
+                        st = _Rec(vadm.Vad(rec.adopt["cfg"]), 16 * (rec.window_ms or LISTEN_CEILING_MS), pos_ms=st.pos_ms_start)
+                        for p in pre:
+                            verdict = take(p)
+                            if verdict != vadm.CONTINUE:
+                                break
+                        pre = []
+                        if verdict != vadm.CONTINUE:
+                            reason = vadm.REASONS.get(verdict)
+                            break
+                        continue
+                else:
+                    stop = self._stop.get(rec.job)
+                    if stop:
+                        reason = stop
+                        push(True, reason)
+                        break
                 k += 1
                 wait = t0 + k * CHUNK / RATE - loop.time()  # the chunk is captured when its 100 ms are over
                 if wait > 0:
                     await asyncio.sleep(wait)
                 chunk = mic.read(CHUNK)
-                got = min(CHUNK, total - done, FRAME - have)
-                acc.append(chunk[:got])
-                have += got
-                done += got
-                verdict = v.feed(chunk[:got])
-                if verdict == vadm.CONTINUE and done >= total:
-                    verdict = vadm.END_MAX
-                if have >= FRAME or verdict != vadm.CONTINUE:
-                    end = verdict != vadm.CONTINUE
-                    reason = vadm.REASONS.get(verdict) if end else None
-                    await self._send_up(rec, seq, acc, end, reason, v)
-                    seq += 1
-                    acc, have = [], 0
+                pieces = [chunk]
+                if settle is not None and not settle.done:
+                    held.append(chunk)
+                    now_ms = k * CHUNK * 1000 // RATE
+                    while imu and imu[0][3] <= now_ms and not settle.done:
+                        ax, ay, az, ms = imu.pop(0)
+                        settle.feed(ax, ay, az, ms)
+                    settle.tick(now_ms)
+                    if not settle.done:
+                        continue
+                    rec.trim_ms, rec.trim_capped = settle.at_ms, settle.capped
+                    kept = settle_trim(np.concatenate(held), settle.at_ms)
+                    held = []
+                    st.pos_ms = st.pos_ms_start = settle.at_ms
+                    pieces = [kept[i : i + CHUNK] for i in range(0, len(kept), CHUNK)]
+                for piece in pieces:
+                    if pending:
+                        pre.append(piece)
+                        continue
+                    verdict = take(piece)
+                    if verdict != vadm.CONTINUE:
+                        reason = vadm.REASONS.get(verdict)
+                        break
         except ConnectionClosed:
             rec.error = "link_closed"
             reason = "error"
+        state["capturing"] = False
+        wake.set()
+        try:
+            await asyncio.wait_for(sender, FLUSH_S)
+        except (TimeoutError, asyncio.TimeoutError):
+            sender.cancel()
+            rec.error = rec.error or "flush_timeout"
         rec.end_at = time.monotonic()
-        rec.end_mic_s = done / RATE
+        rec.end_mic_s = st.done / RATE + (rec.trim_ms or 0) / 1000
         rec.reason = reason
+        v = st.v
         rec.speech_ms = v.speech_ms if v.speech_known() else None
-        rec.ack = ack_decide(rec.ack_mode, reason, v.speech_known(), v.speech_ms)
+        rec.ack = "off" if unclaimed else ack_decide(rec.ack_mode, reason, v.speech_known(), v.speech_ms)
         if rec.ack == "chirp":
             self._chirp_until = rec.end_at + CHIRP_S
             rec.ack_end_at = self._chirp_until
@@ -385,15 +573,35 @@ class SimDevice:
             self._busy = None
         rec.done.set()
 
-    async def _send_up(self, rec: ListenRec, seq: int, acc: list[np.ndarray], end: bool, reason: str | None, v: vadm.Vad) -> None:
-        pcm = np.concatenate(acc).astype("<i2").tobytes() if acc else b""
-        h = {"s": rec.job, "seq": seq, "kind": "pcm16", "rate": RATE, "end": end}
-        if end and reason:
-            h["reason"] = reason
-            if v.speech_known():
-                h["speech_ms"] = v.speech_ms
-        await self._send_bin(encode_frame(h, pcm))
-        rec.frames.append((time.monotonic(), seq, len(pcm) // 2))
+    async def _sender(self, rec: ListenRec, ring: UplinkRing, stalls: list[tuple[float, float]], t0: float, wake: asyncio.Event, state: dict) -> None:
+        """The uplink: oldest frame first; a send inside a stall window fails and is retried in order."""
+        loop = asyncio.get_running_loop()
+        while True:
+            f = ring.head()
+            if f is None:
+                if not state["capturing"]:
+                    return
+                wake.clear()
+                await wake.wait()
+                continue
+            if in_windows(loop.time() - t0, stalls):
+                ring.failed()
+                self.note("uplink.send_fail", job=rec.job, seq=f.seq, rt=f.rt)
+                await asyncio.sleep(RETRY_S)
+                continue
+            h = dict(f.header)
+            if f.rt:
+                h["rt"] = f.rt
+            h["wq"] = max(0, round((loop.time() - f.captured_at) * 1000))
+            if h.get("end"):
+                h["tr"] = {**h["tr"], "sent": ring.sent + 1, "fail": ring.fails}
+                if ring.dropped:
+                    h["tr"].update(drop=ring.dropped, dropms=round(ring.dropped_samples / 16))
+            await self._send_bin(encode_frame(h, f.pcm))
+            ring.sent_one()
+            rec.frames.append((time.monotonic(), f.seq, f.samples))
+            rec.up.append(h)
+
 
     # ---------------- say: the speaker ----------------
 

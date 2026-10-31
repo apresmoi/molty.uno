@@ -61,7 +61,7 @@ export const ACTIVITY_LIMITS = {
   argMax: 120,
 } as const;
 
-export const ACTIVITY_KINDS = ["call", "job", "device", "device_log", "pair", "voice_box", "settings"] as const;
+export const ACTIVITY_KINDS = ["call", "job", "device", "device_log", "pair", "voice_box", "settings", "trace"] as const;
 export type ActivityKind = (typeof ACTIVITY_KINDS)[number];
 
 /** One timeline entry. `who` (the agent token's hash prefix) is internal: never returned. */
@@ -119,6 +119,8 @@ interface Chunk {
 }
 interface Cfg {
   transcripts: boolean;
+  /** Keep the last listens' audio for debugging (core/audio-keep.ts); off when absent. */
+  keep_audio?: boolean;
 }
 /** Highest device line seq stored, per boot (the last few boots). */
 type DevCursor = Record<string, number>;
@@ -144,6 +146,9 @@ const JOB_TAG_RE = /^[A-Za-z0-9_-]{1,32}$/;
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 const printable = (s: string) => s.replace(/[\u0000-\u001f\u007f]/g, " ");
 
+/** Hex series of a turn trace (dev.lv, box.pause): long hex strings that are data, not secrets. */
+const TRACE_HEX_KEYS = new Set(["lv", "pause"]);
+
 /** Credentials inside free text (a say, a heard line, a device log line): replaced in place. */
 const SECRET_IN_TEXT = /Bearer\s+[A-Za-z0-9._~+/=-]+|molty-[a-z2-9]{10}\.[A-Za-z0-9_-]{20,}/g;
 
@@ -154,6 +159,8 @@ const SECRET_IN_TEXT = /Bearer\s+[A-Za-z0-9._~+/=-]+|molty-[a-z2-9]{10}\.[A-Za-z
  */
 function scrub(v: unknown, key: string, depth: number): JsonObject[string] | undefined {
   if (typeof v === "string") {
+    // a turn trace's level / pause series (core/trace.ts): plain hex, never a credential
+    if (TRACE_HEX_KEYS.has(key) && /^[0-9a-f]*$/.test(v)) return v;
     if (SECRET_KEY.test(key) || SECRET_VALUE.test(v.trim())) return "[secret]";
     return v.replace(SECRET_IN_TEXT, "[secret]");
   }
@@ -231,6 +238,16 @@ function redact(e: ActivityDraft): boolean {
   if (e.kind === "call") strip(e.args, TRANSCRIPT_ARGS);
   if (e.kind === "job") strip(e.data, TRANSCRIPT_DATA);
   if (e.kind === "device" && e.ev === "utterance") strip(e.data, ["text"]); // shake to talk: what the human said
+  // a turn trace (core/trace.ts): the box's words and the word its end-of-turn rule judged
+  const box = e.kind === "job" && isRecord(e.data?.trace) && isRecord(e.data.trace.box) ? (e.data.trace.box as JsonObject) : undefined;
+  if (box && Array.isArray(box.words) && box.words.length) {
+    box.words = [];
+    did = true;
+  }
+  if (box && isRecord(box.end) && typeof box.end.word === "string" && box.end.word) {
+    box.end.word = "";
+    did = true;
+  }
   return did;
 }
 
@@ -242,7 +259,7 @@ export function lineLevel(text: string): string {
 }
 
 /** A job entry's view of a finished job record (core/room.ts JobRecord). */
-export function jobDraft(rec: { job: string; kind: string; status: string; created: number; updated: number; result?: JsonObject; error?: string; detail?: unknown; phase?: unknown }, by: Who | undefined): ActivityDraft {
+export function jobDraft(rec: { job: string; kind: string; status: string; created: number; updated: number; result?: JsonObject; error?: string; detail?: unknown; phase?: unknown; trace?: JsonObject; audio?: boolean }, by: Who | undefined): ActivityDraft {
   const r = rec.result ?? {};
   const t = isRecord(r.timings) ? (r.timings as JsonObject) : undefined;
   const data: JsonObject = { status: rec.status };
@@ -268,6 +285,9 @@ export function jobDraft(rec: { job: string; kind: string; status: string; creat
   if (heard !== undefined) data.heard = heard;
   if (said !== undefined) data.said = said;
   if (typeof rec.phase === "string") data.phase = rec.phase;
+  // a listen's turn trace (core/trace.ts, already capped) and whether its audio is kept (owner download)
+  if (rec.trace) data.trace = rec.trace;
+  if (rec.audio) data.audio = true;
   return {
     ts: rec.created,
     kind: "job",
@@ -472,6 +492,13 @@ export class ActivityLog {
     return (await this.kv.get<Cfg>(KEY.cfg)) ?? { transcripts: true };
   }
 
+  async setKeepAudio(on: boolean): Promise<Cfg> {
+    const cfg = { ...(await this.settings()), keep_audio: on };
+    await this.chain;
+    await this.kv.put(KEY.cfg, cfg);
+    return cfg;
+  }
+
   async setTranscripts(on: boolean): Promise<Cfg> {
     const cfg = { ...(await this.settings()), transcripts: on };
     await this.chain; // entries queued before the change are written under the old setting
@@ -479,7 +506,16 @@ export class ActivityLog {
     return cfg;
   }
 
-  /** Forget: every activity key (the room deletes the `al:` prefix itself; this is for direct use). */
+  /**
+   * Resolves once every write queued so far has run. Forget awaits it before deleting the `al:`
+   * prefix, so a write queued (or running) before the forget never lands after the wipe; the
+   * room's own generation (room.ts roomGen) keeps its delayed writes from being queued at all.
+   */
+  settle(): Promise<void> {
+    return this.chain;
+  }
+
+  /** Forget: every activity key. */
   async wipe(): Promise<void> {
     await this.chain;
     for (const key of (await this.kv.list(ACTIVITY_PREFIX)).keys()) await this.kv.delete(key);

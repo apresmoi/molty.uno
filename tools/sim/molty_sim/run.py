@@ -169,6 +169,8 @@ async def conversation(dev: SimDevice, rest: Rest, agent, turns, clips, closing)
     for i, t in enumerate(turns):
         clip = clips[t.id]
         dev.mic_for = lambda job, c=clip: Mic(c)
+        dev.imu_for = lambda job, c=clip: c.imu
+        dev.stall_for = lambda job, w=list(t.stalls): w
         t_think = time.monotonic()
         say_text = t.say if i == 0 else await agent.reply(t.say, prev_heard, history)
         before_s, before_l = set(dev.says), set(dev.listens)
@@ -178,12 +180,19 @@ async def conversation(dev: SimDevice, rest: Rest, agent, turns, clips, closing)
                      "think_ms": round((t_req - t_think) * 1000) if i else None}
         print(f"[{i + 1}/{len(turns)}] {t.id}: {'Molty: ' + repr(say_text[:50]) + ' / ' if say_text else ''}human: {t.text[:60]!r}", flush=True)
         try:
-            res = await rest.talk(say_text, listen_ms=t.listen_ms)
+            if t.shake:
+                res = await shake_turn(dev, rest, t, say_text)
+            else:
+                res = await rest.talk(say_text, listen_ms=t.listen_ms)
         except RelayError as e:
             res = {"error": e.body.get("error"), "message": e.body.get("message")}
         t_ret = time.monotonic()
         say = next((dev.says[k] for k in dev.says if k not in before_s), None)
         lis = next((dev.listens[k] for k in dev.listens if k not in before_l), None)
+        if lis is not None:
+            row["uplink"] = {"frames": len(lis.up), "resent": sum(1 for h in lis.up if h.get("rt")),
+                             "tr": next((h.get("tr") for h in lis.up if h.get("end")), None), "trim_ms": lis.trim_ms,
+                             "hints": list(lis.hints)}
         if lis is not None:
             await asyncio.wait_for(lis.done.wait(), 10)
         if rows and say is not None:
@@ -211,6 +220,22 @@ async def conversation(dev: SimDevice, rest: Rest, agent, turns, clips, closing)
         if "gap_ms" not in r:
             r.update(turn_metrics(_facts(r, None)))
     return rows
+
+
+async def shake_turn(dev: SimDevice, rest: Rest, t, say_text: str | None) -> dict:
+    """Molty says its line (no listen), then the human shakes it and speaks: the device's own
+    listen, adopted by the relay; its job (the turn) read back like a talk's listen."""
+    if say_text:
+        await rest.talk(say_text, listen=False)
+    local = await dev.shake(peak_g=t.shake["peak_g"])
+    if local is None:
+        return {"error": "shake_not_listening"}
+    lis = dev.listens[local]
+    await asyncio.wait_for(lis.done.wait(), 40)
+    if lis.adopt is None:
+        return {"error": "not_adopted", "message": lis.reason or ""}
+    r = await rest.job(lis.job)
+    return {"heard": r.get("text", ""), "reason": r.get("reason"), "timings": {"listen": r.get("timings") or {}}}
 
 
 def _facts(row: dict, next_play_at: float | None) -> TurnFacts:

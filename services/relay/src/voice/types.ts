@@ -54,6 +54,11 @@ export interface SttStreamOptions {
   noSpeechMs?: number;
   /** The stream failed while it was still open (the backend went away mid-listen). */
   onFail?: () => void;
+  /**
+   * A listener hint from the backend while the human talks (voice box `stt.hint`): `pause` (a
+   * mid-turn pause began) or `question` (a word ending in "?"). Only while the stream is open.
+   */
+  onHint?: (k: "pause" | "question") => void;
 }
 
 /** One streaming transcription (VoiceProvider.sttStream). */
@@ -64,4 +69,6 @@ export interface SttStream {
   end(): Promise<string>;
   /** Drop it: nobody wants the transcript (no speech, the listen failed). Idempotent. */
   abort(): void;
+  /** The backend's own trace of this transcription (voice box `stt.trace`, the latest), if any. */
+  trace?(): Record<string, unknown> | undefined;
 }

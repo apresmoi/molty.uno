@@ -53,6 +53,8 @@ esp_err_t esp_websocket_client_start(esp_websocket_client_handle_t ws) {
     starts++; ws->connected=true; callback(NULL,NULL,WEBSOCKET_EVENT_CONNECTED,NULL);
     /* scenario 5: a relay that takes log uploads (and gives its clock); else an older one */
     text_event(scenario==5 ? "{\"t\":\"welcome\",\"now\":1790000000000,\"log\":{\"max_lines\":48}}" : "{\"t\":\"welcome\"}");
+    /* the relay's listener hints (cap hints): handed to link_audio; a malformed one is not */
+    if (scenario==5) { text_event("{\"t\":\"hint\",\"job\":5,\"k\":\"pause\"}"); text_event("{\"t\":\"hint\",\"job\":\"j1\",\"k\":\"question\"}"); }
     return ESP_OK;
 }
 esp_err_t esp_websocket_client_stop(esp_websocket_client_handle_t ws) { ws->connected=false; stops++; return ESP_OK; }
@@ -99,6 +101,8 @@ static bool relay_adopts;
 void link_audio_relay_adopts(bool on) { relay_adopts=on; }
 void link_pair_cancel(void) {}
 void link_audio_tick(void) {}
+static char hint_job[64], hint_kind[16]; static unsigned hints;
+void link_audio_hint(const char *job, const char *kind) { snprintf(hint_job,sizeof(hint_job),"%s",job); snprintf(hint_kind,sizeof(hint_kind),"%s",kind); hints++; }
 /* link_ask.c: ticked every loop, its question cancelled whenever the session goes */
 static unsigned ask_cancels, ask_ticks, ask_cancels_connected;
 void link_ask_cancel(void) { ask_cancels++; if (link_client_connected()) ask_cancels_connected++; }
@@ -207,6 +211,7 @@ int main(void) {
     assert(ask_ticks>0 && ask_cancels>0 && !ask_cancels_connected);
     assert(welcomes>0);
     assert(!relay_adopts);   /* a welcome without listen_adopt: no shake to talk */
+    assert(hints==1 && !strcmp(hint_job,"j1") && !strcmp(hint_kind,"question"));
     assert(!strcmp(error_code(LINK_CMD_REFUSED),"bad_url") && !strcmp(error_code(ESP_ERR_INVALID_STATE),"busy"));
     puts("LINK CLIENT PASS: code update without reconnect, forget ack/timeout/offline, close codes, 5-minute auth retry, API status, welcome → self-update, refusal codes, log uploads only for a relay that asks (prev boot first, backlog bound, job end, 2 s gap, time sync)");
 }
