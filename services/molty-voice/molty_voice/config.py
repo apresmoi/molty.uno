@@ -46,6 +46,11 @@ class Config:
     # pause must last this many seconds of model steps above the threshold first (a word
     # arriving meanwhile restarts it). 0 = Unmute's rule (end at the first paused step).
     turn_end_hold_s: float = 1.2
+    # STT language anchor (molty_voice/kyutai.py stream_head): this English line, spoken once by the
+    # box's own TTS (default voice), goes before every listen so stt-1b-en_fr's transcript stays in
+    # English instead of locking into another script (Persian / Chinese spellings of English).
+    # "" turns it off (the 1 s silence prefix stays).
+    stt_prompt: str = "Okay, so here is what I think."
     # TTS: drop the near-silent lead of each stream's first frame (<= 80 ms) so the voice starts sooner.
     trim_lead: bool = True
     # Molty's reflex (molty_voice/reflex.py): a small emotion classifier on the CPU over the human's

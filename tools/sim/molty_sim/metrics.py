@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import statistics
+import unicodedata
 from dataclasses import dataclass
 
 from .align import FILLERS, norm
@@ -27,6 +28,13 @@ def wer(ref: str, hyp: str) -> float | None:
             cur = min(d[j] + 1, d[j - 1] + 1, prev + (r[i - 1] != h[j - 1]))
             prev, d[j] = d[j], cur
     return d[len(h)] / len(r)
+
+
+def foreign_script(text: str) -> bool:
+    """A letter English / French never write: outside the Latin script, or past Latin Extended-B
+    (Vietnamese's stacked diacritics). The STT spelled the speech in another language's script
+    (stt-1b-en_fr locking into Persian / Chinese / Vietnamese on its first words; molty_voice/kyutai.py stream_head)."""
+    return any(c.isalpha() and (ord(c) > 0x24F or not unicodedata.name(c, "").startswith("LATIN")) for c in text)
 
 
 @dataclass
@@ -117,6 +125,7 @@ def summarize(turns: list[dict], cue_errs: list[int]) -> dict:
     s["false_no_speech"] = sum(1 for t in turns if t.get("false_no_speech"))
     s["missed_no_speech"] = sum(1 for t in turns if t.get("missed_no_speech"))
     s["reason_ok"] = sum(1 for t in turns if t.get("ok"))
+    s["foreign_script"] = sum(1 for t in turns if t.get("foreign_script"))
     s["errors"] = sum(1 for t in turns if t.get("error"))
     s["underruns"] = sum(t.get("say_underruns", 0) or 0 for t in turns)
     s["acks"] = {a: sum(1 for t in turns if t.get("ack") == a) for a in ("chirp", "thinking", "off")}
