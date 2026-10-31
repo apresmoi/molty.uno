@@ -39,10 +39,15 @@ device id, and the agent token in its secret store — never in chat.
   away — no `events` / `status` call first, no bookkeeping.
 - **Short replies.** At most 2 sentences (~25 words) per talk; a long answer becomes several
   turns ("want the rest?"). Seven-second replies make every turn feel slow.
-- **Quick phrase first.** If you will reason before answering, your FIRST call is
+- **Speak before you think.** No reasoning or other tool before your first talk. Needs work?
+  First talk says what you'll do and carries `[working]`, then work, then answer. Don't explain
+  your timings or tool calls unless they ask.
+- **Quick phrase only for a slow start.** A run that can't talk within a second starts with
   `POST $MOLTY_RELAY/v1/devices/<id>/cmd {"name":"quick","args":{"id":"hmm","in_reply_to":"<turn_id>"}}`
-  (cached audio, plays at once), then think, then talk — it follows the phrase seamlessly. Register
-  your own phrases once ([talking-fast.md](../talking-fast.md#quick-phrases)).
+  (cached audio, plays at once). Register your own phrases once
+  ([talking-fast.md](../talking-fast.md#quick-phrases)).
+- **Never leave a pending talk.** A talk can answer `202 pending` while they keep talking: follow
+  its job to the end before you exit, or their words arrive only as a new `utterance` wake.
 - **Molty may already have filled.** A hosted bot's cold start (often 5–7 s) usually exceeds the
   owner's filler delay (2.5 s by default): Molty then says a filler ("Hmm…") itself. Put
   `{{event.data.filler_in_ms}}` in your webhook body to know how long you had; if your `quick`
