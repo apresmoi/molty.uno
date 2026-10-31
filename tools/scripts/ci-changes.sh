@@ -13,7 +13,7 @@
 # Tests: tools/scripts/ci-changes.test.sh.
 set -euo pipefail
 
-JOBS="console console_e2e boards firmware firmware_test relay cli creatures website"
+JOBS="console console_e2e boards firmware firmware_test relay cli creatures website python"
 # one variable per job (on_<job>); bash 3.2 (macOS) has no associative arrays
 for j in $JOBS; do eval "on_$j=false"; done
 all=false
@@ -74,6 +74,11 @@ else
     esac
 
     case "$p" in
+      # tools/sim installs molty-voice (editable): a voice change can break the sim
+      services/molty-voice/*|tools/sim/*) hit python ;;
+    esac
+
+    case "$p" in
       apps/cli/*) hit cli ;;
       apps/website/*) hit website ;;
     esac
@@ -88,11 +93,9 @@ else
 
     case "$p" in
       # Covered by hygiene alone (no build job): the skill's plugin packaging, the
-      # hygiene/version/skill checks, the release-only packager, licences, and the
-      # parts with no CI job yet (tools/sim, services/molty-voice).
+      # hygiene/version/skill checks, the release-only packager and licences.
       .claude-plugin/*|.codex-plugin/*|.agents/*|LICENSE \
-      |tools/scripts/hygiene.sh|tools/scripts/check-skill.mjs|tools/scripts/version.mjs \
-      |tools/sim/*|services/molty-voice/*)
+      |tools/scripts/hygiene.sh|tools/scripts/check-skill.mjs|tools/scripts/version.mjs)
         known=true ;;
     esac
 

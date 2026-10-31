@@ -8,6 +8,12 @@ All notable changes to Molty are recorded here. One version covers the whole pro
 
 First public release.
 
+- **Wi-Fi rssi is reported again**: since the reconnect fix, timeline lines and `/api/diag` read
+  `rssi=0` whenever the boot connect had associated before the diagnostics registered their
+  Wi-Fi hooks (almost always), until the first drop. The diagnostics now start from the
+  station's state as `network.c` tracks it, so rssi is sampled while associated and still
+  skipped while the station is down. Host test: `sta_watch_test.c`.
+
 - **Wi-Fi comes back after a drop, and internal RAM defends itself**: the firmware never
   reconnected a station that lost its AP (ESP-IDF does not do it by itself), so one weak-signal
   drop left Molty offline until a reboot — no relay, no OTA over Wi-Fi — while internal RAM kept

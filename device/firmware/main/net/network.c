@@ -54,6 +54,7 @@ typedef enum {
 } wifi_portal_state_t;
 
 static volatile wifi_portal_state_t s_wifi_state = WIFI_PORTAL_STATE_SETUP_NEEDED;
+static volatile bool s_sta_associated;   /* STA_CONNECTED .. STA_DISCONNECTED (net_wifi_associated) */
 static char s_ssid_buf[64]  = {};
 static char s_ip_buf[20]    = {};
 
@@ -339,6 +340,9 @@ void net_mdns_start(void)
 static void wifi_event_handler(void *arg, esp_event_base_t base,
                                int32_t event_id, void *data)
 {
+    if (base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) s_sta_associated = true;
+    else if (base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) s_sta_associated = false;
+
     if (base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED && s_sta_netif) {
         // Link-local IPv6 so mDNS can answer AAAA: the responder never sends an
         // NSEC "no AAAA" record, so macOS getaddrinfo waited 5 s on every
@@ -541,6 +545,8 @@ static esp_err_t handler_status(httpd_req_t *r)
 // Triggers a blocking WiFi scan, sorts by RSSI descending, returns up to 12.
 // ─────────────────────────────────────────────────────────────────────────────
 bool net_wifi_ready(void) { return s_wifi_op != NULL; }
+
+bool net_wifi_associated(void) { return s_sta_associated; }
 
 bool net_wifi_ip(char *ip, size_t len)
 {

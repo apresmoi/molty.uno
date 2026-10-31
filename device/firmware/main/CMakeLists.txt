@@ -79,6 +79,7 @@ idf_component_register(
         "diag/mole_diag.c"
         "diag/log_upload.c"     # activity log: job tags, upload filter + frames, persist policy (host-tested)
         "diag/heap_guard.c"     # internal-RAM self-protection: warn + shed (host-tested)
+        "diag/sta_watch.c"      # the station state the diag samples rssi by (host-tested)
     INCLUDE_DIRS
         "."
         "net"

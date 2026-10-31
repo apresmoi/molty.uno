@@ -6,7 +6,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MAP="$HERE/ci-changes.sh"
-ALL="console console_e2e boards firmware firmware_test relay cli creatures website"
+ALL="console console_e2e boards firmware firmware_test relay cli creatures website python"
 fail=0
 
 # expect <name> <expected jobs, space-separated, or ""> <path>...
@@ -45,7 +45,9 @@ expect "creatures .molty"  "$FW console_e2e creatures website firmware_test" dev
 expect "relay only"        "relay"                    services/relay/src/worker.ts
 expect "cli only"          "cli"                      apps/cli/cmd/molty/main.go
 expect "website only"      "website"                  apps/website/src/pages/index.astro
-expect "sim / voice"       ""                         tools/sim/molty_sim/run.py services/molty-voice/x.py
+expect "sim / voice"       "python"                   tools/sim/molty_sim/run.py services/molty-voice/x.py
+expect "voice only"        "python"                   services/molty-voice/molty_voice/bridge.py
+expect "sim only"          "python"                   tools/sim/scenarios/default.yaml
 expect "hygiene scripts"   ""                         tools/scripts/hygiene.sh tools/scripts/check-skill.mjs LICENSE
 expect "nothing"           ""
 expect "workflow change"   "$ALL"                     .github/workflows/ci.yml

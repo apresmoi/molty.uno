@@ -3,6 +3,8 @@
 #include "mole_diag.h"
 #include "log_upload.h"
 #include "heap_guard.h"
+#include "sta_watch.h"
+#include "net/network.h"
 #include "mole_fluid.h"
 #include "link/link_client.h"
 #include "link/link_audio.h"
@@ -370,7 +372,8 @@ static uint32_t s_alloc_fail_reported;
 static uint32_t s_late_max_total;
 static esp_ping_handle_t s_ping;
 static atomic_bool s_ping_on;          /* the session runs (paused while the station is down) */
-static atomic_bool s_sta_up;           /* associated: only then is there an AP to ask for its rssi */
+static sta_watch_t s_sta;              /* associated: only then is there an AP to ask for its rssi */
+static portMUX_TYPE s_sta_mux = portMUX_INITIALIZER_UNLOCKED;
 static heap_guard_t s_hg;              /* the sampler's */
 static uint32_t s_int_blocks;          /* internal heap: allocated blocks (last sample) */
 
@@ -481,25 +484,36 @@ static void wifi_evt(void *arg, esp_event_base_t base, int32_t id, void *data)
         if (id == WIFI_EVENT_STA_DISCONNECTED) {
             wifi_event_sta_disconnected_t *d = data;
             /* once per outage: a reconnect that fails again (every 1..30 s, net/wifi_retry.h) is not news */
-            static bool logged;
-            if (atomic_exchange(&s_sta_up, false) || !logged)
-                mole_diag_event(true, "wifi.disconnected reason=%u rssi=%d", d ? d->reason : 0, d ? d->rssi : 0);
-            logged = true;
+            portENTER_CRITICAL(&s_sta_mux);
+            bool news = sta_watch_event(&s_sta, STA_WATCH_EV_DISCONNECTED);
+            portEXIT_CRITICAL(&s_sta_mux);
+            if (news) mole_diag_event(true, "wifi.disconnected reason=%u rssi=%d", d ? d->reason : 0, d ? d->rssi : 0);
             pause_ping();
-        } else if (id == WIFI_EVENT_STA_CONNECTED) { atomic_store(&s_sta_up, true); mole_diag_event(false, "wifi.connected"); }
-        /* (a later outage logs its first failure again: s_sta_up was true) */
-        else if (id == WIFI_EVENT_STA_BEACON_TIMEOUT) mole_diag_event(true, "wifi.beacon_timeout");
+        } else if (id == WIFI_EVENT_STA_CONNECTED) {
+            portENTER_CRITICAL(&s_sta_mux);
+            sta_watch_event(&s_sta, STA_WATCH_EV_CONNECTED);
+            portEXIT_CRITICAL(&s_sta_mux);
+            mole_diag_event(false, "wifi.connected");
+        } else if (id == WIFI_EVENT_STA_BEACON_TIMEOUT) mole_diag_event(true, "wifi.beacon_timeout");
     } else if (base == IP_EVENT) {
         if (id == IP_EVENT_STA_GOT_IP) { mole_diag_event(false, "wifi.got_ip"); start_ping(); }
         else if (id == IP_EVENT_STA_LOST_IP) { mole_diag_event(true, "wifi.lost_ip"); pause_ping(); }
     }
 }
 
+static bool sta_up(void)
+{
+    portENTER_CRITICAL(&s_sta_mux);
+    bool up = sta_watch_up(&s_sta);
+    portEXIT_CRITICAL(&s_sta_mux);
+    return up;
+}
+
 static int8_t rssi_now(void)
 {
     /* not associated: 0 without asking — the driver answers that call with a
      * "W wifi: Haven't to connect to a suitable AP now!" line, once a second for an outage */
-    if (!atomic_load(&s_sta_up)) return 0;
+    if (!sta_up()) return 0;
     wifi_ap_record_t ap;
     return esp_wifi_sta_get_ap_info(&ap) == ESP_OK ? ap.rssi : 0;
 }
@@ -511,7 +525,7 @@ static void heap_low_report(uint32_t free_now, const multi_heap_info_t *in)
     char top[64]; top_tasks_str(top, sizeof(top), 3);
     mole_diag_event(true, "heap.low int=%lu largest=%u blk=%u fluid_int=%d wifi=%d link=%d audio=%d top=%s",
                     (unsigned long)free_now, (unsigned)in->largest_free_block, (unsigned)in->allocated_blocks,
-                    mole_fluid_internal_fields(), atomic_load(&s_sta_up) ? 1 : 0, link_client_connected() ? 1 : 0,
+                    mole_fluid_internal_fields(), sta_up() ? 1 : 0, link_client_connected() ? 1 : 0,
                     link_audio_busy() ? 1 : 0, top);
 }
 
@@ -934,6 +948,12 @@ void mole_diag_start(void)
     esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_evt, NULL);
     esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_evt, NULL);
     esp_event_handler_register(IP_EVENT, IP_EVENT_STA_LOST_IP, wifi_evt, NULL);
+    /* the boot connect usually associated before these handlers existed: start from network.c's
+     * state (it listens from before esp_wifi_start), or rssi reads 0 until the first reconnect */
+    bool assoc = net_wifi_associated();
+    portENTER_CRITICAL(&s_sta_mux);
+    sta_watch_seed(&s_sta, assoc);
+    portEXIT_CRITICAL(&s_sta_mux);
     start_ping();                                      /* if already associated */
     /* stacks in PSRAM: internal RAM is the device's scarcest resource. Only the
      * persist task (SPIFFS = flash ops = caches off) needs an internal stack. */
