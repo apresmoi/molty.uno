@@ -10,6 +10,7 @@
 // Node host can serve it unchanged.
 
 import { type AgentApi, type FirmwareNotice, type Inbox, type JobView, type Outcome, type RelayBackend, bearer, tokenDevice } from "../core/api.js";
+import { BUILTIN_PHRASES, FILLER_DEFAULT_MS, PHRASE_LIMITS } from "../core/phrases.js";
 import { ACK_THINK_S, ACTIONS, COLORS, DEFAULT_ASK_COLORS, DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, LISTEN_CEILING_MS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, MAX_DRAFTS_PER_TURN, MAX_DRAFT_NEW_WORDS, MAX_LISTEN_MS, MAX_MOOD_HOLD_S, MAX_OPENER_WORDS, MOODS, REACT_ACTIONS, REACT_MIN_GAP_MS, REACT_MOODS, TALK_BUDGET_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
 import { NOTES_LIMITS } from "../core/notes.js";
 
@@ -29,7 +30,7 @@ export const SUPPORTED_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"];
 export const SERVER_INFO = { name: "molty-relay", title: `Molty relay (api v${API_VERSION})`, version: RELAY_VERSION };
 const MAX_BODY = 256 * 1024;
 const INSTRUCTIONS =
-  `Tools operate a physical Molty device through the molty-relay. Pair first with molty_pair (no token needed), then send the returned agent_token as 'Authorization: Bearer <token>'. For conversation use molty_talk: ONE call per turn speaks your reply, then listens and returns what the human said ({heard, reason}); moods (listening, thinking, speaking) are automatic, so don't call molty_mood around talking. When the human finishes, Molty acknowledges it by itself at once (a soft chirp, then thinking): go straight to your answer, no "let me think" filler; if the answer needs long work (tools, search), still say a short spoken ack first or keep thinking up with molty_mood, so the human is never left in silence. Keep spoken replies to 1-2 sentences (inline cues like [happy] or [nod] in them set mood / gesture as you speak). For a decision the human can answer with a tap use molty_ask: say the question, offer 1-${MAX_ASK_OPTIONS} options of at most ${MAX_ASK_LABEL} characters ("yes", "no", "later"); answer is null on timeout/cancelled/offline. molty_say / molty_listen return a job immediately (wait:true blocks until done); poll a job with molty_wait (<= 8 s per call). ` +
+  `Tools operate a physical Molty device through the molty-relay. Pair first with molty_pair (no token needed), then send the returned agent_token as 'Authorization: Bearer <token>'. For conversation use molty_talk: ONE call per turn speaks your reply, then listens and returns what the human said ({heard, reason}); moods (listening, thinking, speaking) are automatic, so don't call molty_mood around talking. When the human finishes, Molty acknowledges it by itself at once (a soft chirp, then thinking). If you will think for more than a moment, FIRST play a quick phrase (molty_quick {id}: cached audio, plays at once, e.g. "hmm", "let_me_think"), before you start reasoning, then answer with molty_talk (it follows the phrase seamlessly); register your own phrases once with molty_phrases. Nothing from you within a few seconds and Molty says a filler itself. Keep spoken replies to 1-2 sentences (inline cues like [happy] or [nod] in them set mood / gesture as you speak). For a decision the human can answer with a tap use molty_ask: say the question, offer 1-${MAX_ASK_OPTIONS} options of at most ${MAX_ASK_LABEL} characters ("yes", "no", "later"); answer is null on timeout/cancelled/offline. molty_say / molty_listen return a job immediately (wait:true blocks until done); poll a job with molty_wait (<= 8 s per call). ` +
   `Molty also emits events (${AGENT_EVENT_TYPES.join(", ")}) into your own inbox: unread ones ride along on every tool result as 'events' plus a 'Molty: ...' line; molty_events pulls/waits for them; molty_webhook registers an HTTPS request the relay sends you per event. A shake means the human wants to talk: Molty listens by itself and you get one 'utterance' event {turn_id, text, ...}: answer it at once with molty_talk {say, in_reply_to: turn_id} (the first agent to answer claims the turn; others get turn_claimed). While they are still talking you may get 'utterance.partial' events (context only): never speak then (human_speaking); you may molty_draft a short opener (played the instant they finish, if their last words don't change the meaning) and molty_react with a mood or a gesture (screen only). Other events: react briefly, once per moment. Full guide: the molty agent skill, ${SKILL_HOME} (Claude Code / Codex: the molty plugin). This relay speaks agent api_version ${API_VERSION} (also in molty_status relay.api_version); what this Molty can do is relay.caps. When your human asks to check Molty for updates (any wording), call molty_updates and follow its 'actions'; ask before molty_update.`;
 
 type Prop = { type: string | string[]; description: string; enum?: string[]; items?: { type: "string"; enum?: string[] } | { anyOf: JsonObject[] }; additionalProperties?: { type: "number" } };
@@ -168,6 +169,46 @@ export const TOOLS: ToolDef[] = [
     ),
     auth: true,
     run: (api, t, a) => commandWait(api, t, "say", a),
+  },
+  {
+    name: "molty_quick",
+    description: `Play a quick phrase NOW: its audio is cached in Molty's voice, so it starts at once (no speech synthesis) and the call returns at once: {job, phrase, text, cached}. Use it the moment you know you will think for more than a moment, BEFORE you start reasoning; then answer with molty_talk / molty_say, which queues right after the phrase (no audio_busy). Built-ins: ${BUILTIN_PHRASES.map((p) => `${p.id} ("${p.text}")`).join(", ")}; register your own with molty_phrases. Claims the human's turn like molty_say (in_reply_to). If Molty already said its own filler for this turn (nobody answered within the owner's delay, ${FILLER_DEFAULT_MS} ms by default) it is skipped: {skipped:"filled", filler:{phrase, text, ms_ago}} — go straight to your answer (force:true plays it anyway).`,
+    inputSchema: obj(
+      {
+        id: { type: "string", description: 'Phrase id: yours (molty_phrases) or a built-in, e.g. "hmm".' },
+        in_reply_to: IN_REPLY_TO,
+        force: { type: "boolean", description: "true: play even right after Molty's own filler." },
+      },
+      ["id"],
+    ),
+    auth: true,
+    run: (api, t, a) => api.command(t, "quick", a),
+  },
+  {
+    name: "molty_phrases",
+    description: `Your own quick phrases for molty_quick, in your voice and personality: list (default), set (upsert {id, text} items; their audio is synthesised now, in Molty's current voice, and re-synthesised when the voice changes) or delete (id, or ids; ids:["*"] = all yours). At most ${PHRASE_LIMITS.perAgent} phrases, each at most ${PHRASE_LIMITS.textMax} characters (inline cues allowed); an id of yours shadows a built-in of the same id. Returns {phrases:[{id, text, ready}], builtins:[{id, text, ready, shadowed?}], limits, voice} (ready = cached: plays with zero delay). Mark some filler:true (with for: question | request | hard | any) and Molty's own filler — when you are slow to answer a turn — is yours, picked to fit what the human said; builtins:false turns the built-ins off for you. Set them once, e.g. [{"id":"hmm","text":"Hmm…","filler":true},{"id":"think","text":"Ooh, let me think about that.","filler":true,"for":"hard"}].`,
+    inputSchema: obj({
+      action: { type: "string", enum: ["list", "set", "delete"], description: "list (default without phrases), set (default with phrases), delete." },
+      phrases: {
+        type: "array",
+        items: {
+          anyOf: [
+            {
+              type: "object",
+              properties: { id: { type: "string" }, text: { type: "string" }, filler: { type: "boolean" }, for: { type: "string", enum: ["question", "request", "hard", "any"] } },
+              required: ["id", "text"],
+              additionalProperties: false,
+            },
+          ],
+        },
+        description: `set: 1..${PHRASE_LIMITS.perAgent} {id, text, filler?, for?}: id 1..24 of a-z 0-9 _ -, text 1..${PHRASE_LIMITS.textMax} characters; filler:true = Molty may say it as its own filler while you think (after a turn you answered); for = the turns it fits: question | request | hard | any (default).`,
+      },
+      builtins: { type: "boolean", description: "set: false = you never use or see the built-in phrases (Molty's filler for you then uses only your filler:true phrases, or none); true = back on." },
+      id: { type: "string", description: "delete: one phrase id." },
+      ids: { type: "array", items: { type: "string" }, description: 'delete: several phrase ids, or ["*"] for all of yours.' },
+    }),
+    auth: true,
+    run: (api, t, a) => api.phrases(t, a),
   },
   {
     name: "molty_listen",
@@ -507,6 +548,7 @@ function capturingInbox(api: AgentApi): { api: AgentApi; taken: Inbox[]; fwNotic
       draft: (t, r) => keep(api.draft(t, r)),
       react: (t, r) => keep(api.react(t, r)),
       notes: (t, r) => keep(api.notes(t, r)),
+      phrases: (t, r) => keep(api.phrases(t, r)),
     },
   };
 }

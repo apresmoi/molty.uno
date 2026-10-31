@@ -43,6 +43,9 @@ class TurnFacts:
     end_at: float | None  # wall: end frame left
     next_play_at: float | None  # wall: the next say's first sample reaches the speaker
     ack: str = "off"
+    # wall: Molty's FIRST voice after the human stopped — the relay's own filler, an agent's quick
+    # phrase or its answer, whichever came first (None: the answer itself, next_play_at)
+    first_voice_at: float | None = None
 
 
 def turn_metrics(f: TurnFacts) -> dict:
@@ -61,6 +64,10 @@ def turn_metrics(f: TurnFacts) -> dict:
     m["ack"] = f.ack
     if spoke and f.mic_open_at is not None and f.next_play_at is not None:
         m["gap_ms"] = round((f.next_play_at - (f.mic_open_at + f.speech_end_s)) * 1000)
+    # perceived silence: the human stops -> Molty says anything at all (a filler counts)
+    voice = f.first_voice_at if f.first_voice_at is not None else f.next_play_at
+    if spoke and f.mic_open_at is not None and voice is not None:
+        m["silence_ms"] = round((min(voice, f.next_play_at or voice) - (f.mic_open_at + f.speech_end_s)) * 1000)
     if spoke and f.mic_open_at is not None and f.end_at is not None and f.ack != "off":
         m["ack_after_eos_ms"] = round((f.end_at - (f.mic_open_at + f.speech_end_s)) * 1000)
     m["ok"] = f.reason == f.expect and not m["false_cutoff"]
@@ -86,7 +93,8 @@ def stats(xs: list) -> dict | None:
 SUMMARY_KEYS = [
     ("eos_to_turn_end_ms", "end of speech -> turn end (listen_stop at device)"),
     ("stt_final_ms", "STT final after the end frame (relay)"),
-    ("gap_ms", "perceived gap: human stops -> Molty's next voice"),
+    ("gap_ms", "gap: human stops -> the agent's answer at the speaker"),
+    ("silence_ms", "perceived silence: human stops -> Molty's first voice (filler or answer)"),
     ("ack_after_eos_ms", "human stops -> device ack (chirp/thinking)"),
     ("tts_first_audio_ms", "say: request -> first audio at the device"),
     ("relay_first_audio_ms", "say: relay first_audio timing"),
@@ -112,6 +120,7 @@ def summarize(turns: list[dict], cue_errs: list[int]) -> dict:
     s["errors"] = sum(1 for t in turns if t.get("error"))
     s["underruns"] = sum(t.get("say_underruns", 0) or 0 for t in turns)
     s["acks"] = {a: sum(1 for t in turns if t.get("ack") == a) for a in ("chirp", "thinking", "off")}
+    s["fillers"] = sum(1 for t in turns if t.get("filler"))
     return s
 
 

@@ -17,6 +17,7 @@ COLS = [
     ("wer", "WER"),
     ("stt_final_ms", "stt"),
     ("gap_ms", "gap"),
+    ("silence_ms", "silence"),
     ("tts_first_audio_ms", "say 1st"),
     ("cue_err_ms", "cue"),
     ("say_underruns", "dry"),
@@ -64,7 +65,7 @@ def summary_lines(s: dict, md: bool = False) -> list[str]:
     out.append("")
     out.append(f"turns {s['turns']}: reason as expected {s['reason_ok']}, false cut-offs {s['false_cutoffs']}, "
                f"false no_speech {s['false_no_speech']}, missed no_speech {s['missed_no_speech']}, errors {s['errors']}, "
-               f"say underruns {s['underruns']}, acks {s['acks']}")
+               f"say underruns {s['underruns']}, acks {s['acks']}, relay fillers {s.get('fillers', 0)}")
     if s.get("alignment_selfcheck_ms"):
         out.append(f"alignment self-check (human clips, TTS onset - MMS onset): {s['alignment_selfcheck_ms']}")
     return out
@@ -86,6 +87,8 @@ def write(out: Path, meta: dict, rows: list[dict], summary: dict) -> None:
                   f"lost speech {r.get('speech_lost_ms')} ms")
         if r.get("gap_parts_ms"):
             md.append(f"- gap {r.get('gap_ms')} ms = {r['gap_parts_ms']}")
+        if r.get("silence_ms") is not None:
+            md.append(f"- perceived silence {r['silence_ms']} ms" + (f" (Molty's filler first: {r['filler']!r})" if r.get("filler") else ""))
         md.append(f"- say: request→first audio {r.get('tts_first_audio_ms')} ms (relay first_audio {r.get('relay_first_audio_ms')}), "
                   f"chirp delay {r.get('chirp_delay_ms')} ms, underruns {r.get('say_underruns')} ({r.get('say_underrun_ms')} ms), "
                   f"cues {r.get('say_cues')} (late {r.get('cues_late')}), cue error median {r.get('cue_err_ms')} ms, |p90| {r.get('cue_abs_p90_ms')} ms")

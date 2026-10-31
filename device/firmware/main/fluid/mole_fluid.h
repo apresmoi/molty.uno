@@ -125,6 +125,11 @@ int mole_fluid_ack_mode(void);
  *  /api/creature/state {idle_life} (GET reports it), NVS. The listener reactions follow it
  *  (link/listen_react.h: off = none). Safe from any task, before init too. */
 int mole_fluid_idle_life(void);
+/** The auto filler's delay (link_protocol.h LINK_FILLER_*: 0 = off, else 1500..5000 ms, 2500 out
+ *  of the box): reported in every listen's answer, the relay acts on it. POST
+ *  /api/creature/state {filler_ms} (GET reports it), kept in NVS like ring_color. Safe from any
+ *  task, before init too. */
+uint32_t mole_fluid_filler_ms(void);
 /** Shake to talk (link_protocol.h): whether a shake starts a listen by itself. POST
  *  /api/creature/state {shake_talk: bool} (GET reports it), kept in NVS like ring_color; on
  *  out of the box. Safe from any task, before init too. */

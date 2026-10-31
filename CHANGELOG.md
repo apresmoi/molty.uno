@@ -20,6 +20,18 @@ First public release.
   runs every engine on each phrase; every decision (engine, latency, size, pick, confidence,
   outcome, fallback) is in the turn trace and the Activity timeline. `molty-sim reflex-bench`
   scores the engines on 40 labelled phrases.
+- **Quick phrases and the auto filler**: agents register their own short phrases
+  (`molty_phrases`, ≤ 20 × 60 characters; built-ins `hmm`, `let_me_think`, `one_sec`, …) whose
+  audio the relay pre-synthesises in Molty's current voice and caches; `quick {id}` /
+  `molty_quick` plays one at once with no TTS, and the agent's talk queues right behind it.
+  When nobody answers a human turn within the owner's delay (console "filler": off or
+  1.5–5 s, 2.5 s by default; firmware reports `filler_ms` per listen), Molty says a built-in
+  filler itself; the agent's reply queues after it. Draft openers, quick phrases and fillers
+  share one lead-in queue and one pre-synthesised speech path; a played opener counts as the
+  agent answering (no filler); fillers and quicks appear in the turn trace. Agents may mark their
+  phrases `filler: true` (`for: question | request | hard | any`) and turn the built-ins off; Molty's
+  filler uses the last answering agent's fillers, picked by the utterance's category from a
+  pluggable classifier — Molty's reflex engine when it is on, keywords otherwise.
 
 - **Expressive Molty**: inline mood / action cues in what agents say (`"[happy] Build passed!
   … [nod]"`: stripped from the speech and the screen, fired on their word — firmware cap

@@ -151,6 +151,7 @@ describe("shake to talk", () => {
       ms: { speech: 900, stt: expect.any(Number) },
       trigger: "shake",
       device: { caps: CAPS, mood: "thinking", voice: "fake" },
+      filler_in_ms: expect.any(Number), // Molty's own filler, unless an agent answers first (core/phrases.ts)
     });
     // once: nothing more arrives, and the turn's job holds the listen result
     await new Promise((r) => setTimeout(r, 60));

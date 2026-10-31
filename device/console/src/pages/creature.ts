@@ -1,6 +1,6 @@
 // Molty (settings): pick a Molty from the catalog (sent to the device as a .molty file),
 // and play with the fluid — state, speed-reader text + WPM, palette, listening ring colour,
-// listen window, turn acknowledgement, shake to talk, idle life, tap-to-ripple.
+// listen window, turn acknowledgement, auto filler, shake to talk, idle life, tap-to-ripple.
 import { UnsupportedError } from '../api/device';
 import type { FluidOrder, FluidState } from '../api/types';
 import type { AppCtx } from '../app';
@@ -11,6 +11,7 @@ import { preview } from '../ui/preview';
 import { RING_CHOICES, ringChoice, ringSupported } from '../ring/ring';
 import { LISTEN_CHOICES, listenChoice, listenSupported } from '../listen/listen';
 import { ACK_CHOICES, ackChoice, ackSupported } from '../ack/ack';
+import { FILLER_CHOICES, fillerChoice, fillerSupported } from '../filler/filler';
 import { IDLE_CHOICES, idleChoice, idleSupported } from '../idle/idle';
 import { SHAKE_CHOICES, shakeChoice, shakeSupported } from '../shake/shake';
 
@@ -35,6 +36,9 @@ export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
   const ackLabel = h('label', { hidden: true }, 'acknowledge');
   const ackRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'acknowledge', hidden: true });
   const ackHint = h('p', { class: 'dim small', hidden: true }, 'what Molty does the moment you finish speaking, before the agent answers — so there is never dead air');
+  const fillerLabel = h('label', { hidden: true }, 'filler');
+  const fillerRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'filler', hidden: true });
+  const fillerHint = h('p', { class: 'dim small', hidden: true }, 'when the agent is still quiet this long after you finish, Molty says a short "hmm…" or "let me think" itself — the agent’s answer follows right after');
   const shakeLabel = h('label', { hidden: true }, 'shake to talk');
   const shakeRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'shake to talk', hidden: true });
   const shakeHint = h('p', { class: 'dim small', hidden: true }, 'shake Molty and just speak — it listens at once and your agent gets your words; off: a shake is only a nudge');
@@ -65,6 +69,7 @@ export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
         ringLabel, ringRow,
         listenLabel, listenRow, listenHint,
         ackLabel, ackRow, ackHint,
+        fillerLabel, fillerRow, fillerHint,
         shakeLabel, shakeRow, shakeHint,
         idleLabel, idleRow, idleHint,
         h('label', null, 'speed reader'), text,
@@ -105,6 +110,12 @@ export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
     if (ackOn) mount(ackRow, ACK_CHOICES.map((c) =>
       h('button', { type: 'button', class: 'chip' + (ak === c.id ? ' on' : ''), 'aria-pressed': String(ak === c.id),
         onclick: () => order({ ack: c.id }) }, c.label)));
+    const fillerOn = fillerSupported(s);   /* older firmware: the relay's default (2.5 s) */
+    fillerLabel.hidden = fillerRow.hidden = fillerHint.hidden = !fillerOn;
+    const fl = fillerChoice(s?.filler_ms);
+    if (fillerOn) mount(fillerRow, FILLER_CHOICES.map((c) =>
+      h('button', { type: 'button', class: 'chip' + (fl === c.id ? ' on' : ''), 'aria-pressed': String(fl === c.id),
+        onclick: () => order({ filler_ms: c.ms }) }, c.label)));
     const shakeOn = shakeSupported(s);   /* older firmware: a shake is only an event */
     shakeLabel.hidden = shakeRow.hidden = shakeHint.hidden = !shakeOn;
     const sk = shakeChoice(s?.shake_talk);

@@ -824,6 +824,7 @@ static esp_err_t start(const cJSON *args, bool listen, cJSON **out)
     cJSON_AddStringToObject(result, "job", j->valuestring);
     if (listen) cJSON_AddNumberToObject(result, "ms", window);   /* the window it applies (0 = unlimited) */
     if (listen) cJSON_AddStringToObject(result, "ack", link_ack_name(ack));   /* the relay leaves thinking to us */
+    if (listen) cJSON_AddNumberToObject(result, "filler_ms", mole_fluid_filler_ms());   /* the relay's auto filler (0 = off) */
     esp_err_t e;
     if (listen) {
         mole_fluid_listen_color(ring);       /* before the mic opens the ring (record) */
@@ -887,6 +888,7 @@ static esp_err_t adopt(const cJSON *args, const cJSON *local, cJSON **out)
     cJSON_AddStringToObject(result, "job", a.job);
     cJSON_AddNumberToObject(result, "ms", window);
     cJSON_AddStringToObject(result, "ack", link_ack_name(a.ack));
+    cJSON_AddNumberToObject(result, "filler_ms", mole_fluid_filler_ms());
     *out = result;
     return ESP_OK;
 }

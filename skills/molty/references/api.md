@@ -78,6 +78,7 @@ Success: `200 {"ok":true,"result":{…}}`. Unknown argument keys are rejected.
 | `act` | `{"action": a}` | `{action}` | a one-shot gesture over the current mood (see [Gestures](#gestures-act-and-inline-cues)); needs `act` in `relay.caps` (`409 unsupported` / `firmware_too_old` otherwise) |
 | `show` | `{"text": s, "wpm"?: 100..800}` | — | speed-reader text in the fluid, ≤ 16384 bytes, default 300 wpm; returns when it starts |
 | `say` | `{"text": s, "voice"?: id, "in_reply_to"?: turn_id}` | `{job}` immediately | relay TTS → speaker (streamed sentence by sentence), text shown in sync; ≤ 4096 bytes; job done → `{ms, text, timings}` (`text` without its [inline cues](#gestures-act-and-inline-cues) like `[happy]`); `in_reply_to`: see [events.md](events.md#shake-to-talk) |
+| `quick` | `{"id": phrase, "in_reply_to"?: turn_id, "force"?: bool}` | `{job, phrase, text, cached}` immediately, or `{skipped:"filled", filler}` | plays a cached [quick phrase](#quick-phrases) at once (no speech synthesis); your next say / talk queues right behind it |
 | `listen` | `{"ms"?: 0..30000, "end_silence_ms"?: 300..3000, "no_speech_ms"?: 1000..10000, "vad"?: bool, "ring_color"?: c, "ack"?: true\|false\|"silent"}` | `{job}` immediately | records the mic until the human finishes (the window is a ceiling: omit `ms` for the human's own setting, 30000 ms out of the box; `0` = unlimited, 5 min safety ceiling), relay STT; job done → `{text, duration_ms, peak, rms, reason, speech_ms?, timings}` |
 | `state` | `{}` = read · `{"state": {…}}` or flat fields = patch | creature state JSON | low-level creature state, same as the device's `/api/creature/state` |
 | `volume` | `{"volume": 0..21}` | — | speaker volume, 0 = mute |
@@ -128,6 +129,49 @@ Molty), `blink`, `wobble`, `stretch`, `look_up`, `yawn`. It never changes what i
 never cancels a question; while words or a question cover the creature it waits up to 3 s,
 then is dropped. Silent, ~0.3–2.6 s. A `nod` while they talk (listening) is fine.
 
+## Quick phrases
+
+A quick phrase is a short line ("Hmm…", "Let me think.") whose audio the relay has already
+synthesised in Molty's current voice and cached: `quick {id}` plays it **at once** and the call
+returns at once. Use it the moment you know you will think for more than a moment, **before**
+you start reasoning; then answer with talk / say as usual — it **queues right behind the
+phrase** (no `audio_busy`; its speech is synthesised while the phrase plays, so it follows with
+no synthesis gap, only a device round trip).
+
+```sh
+curl -sS -X POST "$MOLTY_RELAY/v1/devices/$MOLTY_DEVICE/cmd" \
+  -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"name":"quick","args":{"id":"let_me_think","in_reply_to":"<turn_id>"}}'
+# → {"ok":true,"result":{"job":"…","phrase":"let_me_think","text":"Let me think.","cached":true}}
+```
+
+- **Built-ins** (every agent, no registration): `hmm` "Hmm…", `let_me_think` "Let me think.",
+  `one_sec` "One sec.", `let_me_see` "Let me see.", `good_question` "Good question.", `on_it`
+  "On it.", `checking` "Checking.".
+- **Your own**, in your voice and personality — set them once:
+  `POST $MOLTY_RELAY/v1/devices/<id>/phrases {"phrases":[{"id":"think","text":"Ooh, let me think about that."}]}`
+  (upsert; MCP `molty_phrases {action:"set", phrases}`); `GET …/phrases` lists yours and the
+  built-ins with `ready` (cached in the current voice); `DELETE …/phrases?id=think` (`id=*` = all
+  yours). At most 20 phrases, each ≤ 60 characters (inline cues allowed); ids 1–24 of `a-z 0-9 _ -`;
+  yours shadow a built-in of the same id. `"builtins": false` (in a set) turns the built-ins off for
+  you (not listed, not playable).
+- **Your own fillers.** Mark phrases `"filler": true` (optionally `"for": "question" | "request" |
+  "hard" | "any"`): when you last answered a turn and are slow on the next, Molty's own filler is
+  yours, picked to fit what the human said (a question → your `question` one, else an `any` one). Their audio is synthesised when you set them and again
+  whenever Molty's voice changes; only you see and play yours.
+- A quick claims the human's turn like a say (`in_reply_to`, `turn_claimed`).
+- After it, with nothing queued, Molty goes back to `thinking`.
+- **Molty's own filler.** When the human finishes a turn with words (an `utterance`, or a talk
+  that heard them) and no agent does anything (talk, say, quick, mood, …) within the owner's
+  delay (default 2.5 s, console setting: off or 1.5–5 s), Molty says a filler itself: yours if you
+  answered the last turn and have fillers, else a built-in that fits the turn (`good_question`
+  after a question, `on_it` / `checking` after a request, `let_me_think` after something hard,
+  else `hmm` / `one_sec` / `let_me_see`).
+  The `utterance` and talk's result carry `filler_in_ms` (ms until that happens; absent = off).
+  A `quick` right after Molty's filler is skipped — `{"skipped":"filled","filler":{phrase, text,
+  ms_ago}}` — so the human never hears two fillers in a row; just answer (`"force":true` plays it
+  anyway). Your answer arriving while the filler plays queues right after it.
+
 ## Talk (one call per conversation turn)
 
 ```sh
@@ -158,7 +202,7 @@ Body: `{"say"?: s, "listen"?: true, "listen_ms"?: 0..30000 (omit: the human's se
   `"silent"` = thinking without the chirp, `false` = none.
 
 Speaks `say` (if given), then listens until the human stops talking (or the window ends), then
-returns the transcript as `heard`. `reason`:
+returns the transcript as `heard` (with `filler_in_ms`: see [Quick phrases](#quick-phrases)). `reason`:
 
 | reason | meaning |
 |---|---|
@@ -302,7 +346,7 @@ Ignore fields you don't know.
 ## MCP (optional)
 
 The same features are a remote MCP server at `$MOLTY_RELAY/mcp` (streamable HTTP, bearer
-auth). Tools: `molty_pair` (no token needed), `molty_talk`, `molty_ask`, `molty_status`, `molty_mood`, `molty_act`,
+auth). Tools: `molty_pair` (no token needed), `molty_talk`, `molty_quick`, `molty_phrases`, `molty_ask`, `molty_status`, `molty_mood`, `molty_act`,
 `molty_show`, `molty_say`, `molty_listen`, `molty_wait`, `molty_state`,
 `molty_volume`, `molty_imu`, `molty_diag`, `molty_log`, `molty_events`,
 `molty_webhook`, `molty_updates`, `molty_update`, `molty_activity`, `molty_draft`, `molty_react`,

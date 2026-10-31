@@ -409,7 +409,8 @@ describe("reflex in the room", () => {
       fetch: async (r) => {
         calls.push(r.clone());
         if (slow) return new Promise((_, rej) => r.signal.addEventListener("abort", () => rej(new Error("aborted"))));
-        return Response.json({ model: "jev-1.14.0", answers: { reaction: { type: "choice", choice: "happy", confidence: 0.97, probabilities: { happy: 0.97 } } }, usage: { input_tokens: 398 } });
+        // with the category in the same answer: the filler reuses it (no second call at the turn's end)
+        return Response.json({ model: "jev-1.14.0", answers: { reaction: { type: "choice", choice: "happy", confidence: 0.97, probabilities: { happy: 0.97 } }, category: { type: "choice", choice: "other", confidence: 0.9 } }, usage: { input_tokens: 398 } });
       },
     });
     expect(((await set(w, { reflex: "jev" })) as any).result.reflex).toMatchObject({ mode: "jev", engine: "jev", engines: { jev: true, openai: false } });
@@ -464,8 +465,8 @@ describe("reflex in the room", () => {
       fetch: async (r) => {
         urls.push(r.url);
         return r.url.includes("openai")
-          ? Response.json({ model: "gpt-6-luna", answers: [{ type: "choice", name: "reaction", choice: "surprised", confidence: 0.8, probabilities: [{ value: "surprised", probability: 0.9 }] }], usage: { input_tokens: 150 } })
-          : Response.json({ model: "jev-1.14.0", answers: { reaction: { type: "choice", choice: "happy", confidence: 0.9, probabilities: { happy: 0.9 } } }, usage: { input_tokens: 400 } });
+          ? Response.json({ model: "gpt-6-luna", answers: [{ type: "choice", name: "reaction", choice: "surprised", confidence: 0.8, probabilities: [{ value: "surprised", probability: 0.9 }] }, { type: "choice", name: "category", choice: "other", confidence: 0.9 }], usage: { input_tokens: 150 } })
+          : Response.json({ model: "jev-1.14.0", answers: { reaction: { type: "choice", choice: "happy", confidence: 0.9, probabilities: { happy: 0.9 } }, category: { type: "choice", choice: "other", confidence: 0.9 } }, usage: { input_tokens: 400 } });
       },
       box: { reflex: true, reflexFor: (text) => (text.endsWith(".") ? { n: text.split(" ").length, pick: "happy", conf: 0.7, ms: 30, chars: text.length } : undefined) },
     });
