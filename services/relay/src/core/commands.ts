@@ -17,6 +17,9 @@ export const COMMANDS = ["status", "state", "mood", "show", "say", "quick", "lis
 export const GESTURE_INPUTS = ["tap", "double_tap", "button_accept", "button_reject"] as const;
 export const GESTURE_ACTIONS = ["none", "talk", "event", "stop"] as const;
 export const GESTURES_CAP = "gestures";
+/** Firmware that keeps a say or listen through a short link drop (its hello names it; welcome answers). */
+export const RESUME_CAP = "resume";
+export const RESUME_FEATURE = "resume";
 export type CommandName = (typeof COMMANDS)[number];
 
 export const MAX_SHOW_BYTES = 16384;

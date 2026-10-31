@@ -16,6 +16,8 @@
  *   peek      the oldest frame, marked in flight (the sender sends it outside the lock).
  *   sent      the in-flight frame went up: it leaves the ring.
  *   failed    the in-flight frame did not: it stays first, its rt (failed tries) + 1.
+ *   rewind    the link dropped: frames "sent" may have died in the TCP buffers. Back to the seq
+ *             the relay says it needs next; sent frames stay in the ring until overwritten.
  *   drop_all  flush deadline / cancel: every frame but the in-flight one leaves, counted
  *             (keep_end: the end frame stays, so the relay still learns the listen ended).
  */
@@ -25,7 +27,7 @@
 #include <stdint.h>
 
 #define UPLINK_SLOT_SAMPLES 4800        /* 300 ms @16 kHz: one uplink frame               */
-#define UPLINK_SLOTS        33          /* 33 x 300 ms = 9.9 s of audio waiting at most (<= 10 s) */
+#define UPLINK_SLOTS        66          /* 66 x 300 ms = 19.8 s: a link drop's window (15 s, link_audio.c) + what was sent just before it */
 #define UPLINK_LV_MAX       4           /* level bytes per frame (3 x 100 ms + a partial) */
 
 typedef struct {
@@ -44,6 +46,7 @@ typedef struct {
     uplink_meta_t meta[UPLINK_SLOTS];
     int16_t *pcm;                /* UPLINK_SLOTS * UPLINK_SLOT_SAMPLES, the caller's storage */
     int head, count;
+    int retained;                /* frames before head that went up and are still intact (rewind) */
     bool inflight;               /* meta[head] is being sent                                 */
     uint32_t sent, fail, drop, drop_samples;
 } uplink_t;
@@ -59,6 +62,8 @@ bool uplink_push(uplink_t *u, const uplink_meta_t *m, const int16_t *pcm);
 const uplink_meta_t *uplink_peek(uplink_t *u, const int16_t **pcm);
 void uplink_sent(uplink_t *u);
 void uplink_failed(uplink_t *u);
+/** Queue again from `seq` (the relay's next). False: that frame is gone (or one is in flight). */
+bool uplink_rewind(uplink_t *u, uint32_t seq);
 /** Drop every queued frame except the one in flight (and the end frame when keep_end). */
 void uplink_drop_all(uplink_t *u, bool keep_end);
 int  uplink_pending(const uplink_t *u);

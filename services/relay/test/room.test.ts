@@ -38,7 +38,7 @@ describe("device auth (TOFU)", () => {
   it("claims an unknown device_id on first hello and welcomes it", async () => {
     const { room, host, kv } = makeRoom();
     const s = await connect(room, host);
-    expect(s.last("welcome")).toEqual({ t: "welcome", features: ["listen_adopt"], now: expect.any(Number), log: { max_lines: 48 } });
+    expect(s.last("welcome")).toEqual({ t: "welcome", features: ["listen_adopt", "resume"], now: expect.any(Number), log: { max_lines: 48 } });
     expect(s.meta?.stage).toBe("live");
     expect((await kv.get<{ key_hash: string }>("device"))?.key_hash).toMatch(/^[0-9a-f]{64}$/);
   });
