@@ -648,7 +648,6 @@ static esp_err_t record(const audio_job_t *job)
              * settings); the ring swells with the voice (~10 Hz), live audio drives the reactions */
             vad_feed(&r.vad, chunk, got);
             const float level = vad_level(&r.vad);
-            mole_fluid_listen_level(level);
             react_live(level, now_ms() - r.t_mic0);
             /* kept for the relay (its verdict waits for the relay's settings) */
             if (got > pre_max - pre_n) got = pre_max - pre_n;
@@ -670,7 +669,6 @@ static esp_err_t record(const audio_job_t *job)
         const size_t skip = trim_apply(&trim, chunk, got);   /* a trim the mic had not reached yet */
         rec_take(&r, chunk + skip, got - skip);
         const float level = vad_level(&r.vad);
-        mole_fluid_listen_level(level);
         react_live(level, now_ms() - r.t_mic0);
     }
     if (settling) atomic_store(&s_settling, false);
