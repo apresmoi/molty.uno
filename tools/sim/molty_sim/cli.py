@@ -35,7 +35,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--turn-end-skip", type=int, help="bridge: steps ignored at a listen's start (molty-voice --turn-end-skip)")
     r.add_argument("--agent", choices=["scripted", "llm"], default="scripted")
     r.add_argument("--agent-gap-ms", type=int, default=0, help="fixed agent think time added before each reply (default 0)")
-    r.add_argument("--filler-ms", type=int, default=2500, help="the sim device's auto filler setting: 0 = off, 1500..5000 (default 2500); -1 = not reported (older firmware)")
+    r.add_argument("--filler-ms", type=int, default=2500, help="the sim device's auto filler setting: 0 = off, 400..5000 (default 2500); -1 = not reported (older firmware)")
     r.add_argument("--llm-url", default=os.environ.get("MOLTY_SIM_LLM_URL", "http://127.0.0.1:11434"), help="OpenAI-compatible base URL for --agent llm (env MOLTY_SIM_LLM_URL)")
     r.add_argument("--llm-model", default=os.environ.get("MOLTY_SIM_LLM_MODEL", "llama3.2:3b"))
     r.add_argument("--align", choices=["mms", "none"], default="mms", help="say-cue ground truth: forced alignment on the box, or skip")

@@ -163,7 +163,7 @@ curl -sS -X POST "$MOLTY_RELAY/v1/devices/$MOLTY_DEVICE/cmd" \
 - After it, with nothing queued, Molty goes back to `thinking`.
 - **Molty's own filler.** When the human finishes a turn with words (an `utterance`, or a talk
   that heard them) and no agent does anything (talk, say, quick, mood, …) within the owner's
-  delay (default 2.5 s, console setting: off or 1.5–5 s), Molty says a filler itself: yours if you
+  delay (default 2.5 s, console setting: off or 0.4–5 s — owners who set 0.5 s hear it almost at once), Molty says a filler itself: yours if you
   answered the last turn and have fillers, else a built-in that fits the turn (`good_question`
   after a question, `on_it` / `checking` after a request, `let_me_think` after something hard,
   else `hmm` / `one_sec` / `let_me_see`).

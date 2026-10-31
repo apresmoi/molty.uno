@@ -112,7 +112,7 @@ behind the phrase and follows it seamlessly (its speech is synthesised while the
   answered: Molty says no filler then.
 - **Vary them**; match the moment (`checking` before a lookup, `good_question` only after one).
 - **Molty fills by itself when you are slow.** No agent action within the owner's delay (2.5 s by
-  default) after the human finishes: Molty says a built-in filler. `filler_in_ms` in the
+  default, as short as 0.4 s) after the human finishes: Molty says a built-in filler. `filler_in_ms` in the
   `utterance` / talk result says how long you have. A `quick` after Molty's filler is skipped
   (`{"skipped":"filled"}`): go straight to your answer — never two fillers in a row.
 

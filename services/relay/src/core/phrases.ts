@@ -78,9 +78,14 @@ export const BUILTIN_PHRASES: readonly Phrase[] = [
 /** The built-in filler pool: every built-in, each used only for the turns it fits (`for`). */
 export const FILLER_POOL: readonly string[] = BUILTIN_PHRASES.map((p) => p.id);
 
-/** The auto filler delay (owner setting, device `filler_ms`): 0 = off, else FILLER_MIN_MS..FILLER_MAX_MS. */
+/**
+ * The auto filler delay (owner setting, device `filler_ms`): 0 = off, else FILLER_MIN_MS..FILLER_MAX_MS,
+ * counted from the listen's end (the end frame / the box's turn end). Nothing after that adds to
+ * it: the classifier runs in parallel (a verdict not in by then → the keywords), the pool and its
+ * audio are ready before the moment. Below the STT's own latency it fires as soon as the words are known.
+ */
 export const FILLER_DEFAULT_MS = 2500;
-export const FILLER_MIN_MS = 1500;
+export const FILLER_MIN_MS = 400;
 export const FILLER_MAX_MS = 5000;
 /** An agent's quick within this long of a relay filler (and with nothing of its own since) is skipped: "filled". */
 export const FILL_SKIP_MS = 30000;
@@ -110,7 +115,8 @@ export function pickFiller(pool: readonly Phrase[], category: UtteranceCategory,
  * Classifies a human utterance for the auto filler. By default the room uses Molty's reflex
  * (DeviceRoom.fillerCategory: the reflex decision already made on those words, else one call of the
  * owner's engine — jev / openai / keywords); RoomDeps.classifier overrides it (tests, other hosts).
- * Either gets at most CLASSIFY_BUDGET_MS; a miss, a throw or a timeout falls back to the keywords.
+ * Either gets at most CLASSIFY_BUDGET_MS, and never more than the filler's own delay (it runs in
+ * parallel with it); a miss, a throw, a timeout or a verdict not in by the filler's moment → the keywords.
  */
 export interface UtteranceClassifier {
   readonly name: string;
