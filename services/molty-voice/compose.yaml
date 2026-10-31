@@ -1,0 +1,54 @@
+# Your voice box: Kyutai STT and TTS on your GPU, and the bridge that dials out to the relay.
+# Everything it keeps (compiled server, models, pairing token) goes in ./data.
+x-moshi: &moshi
+  image: molty-moshi-server:e348e56
+  build:
+    # Kyutai's server image, pinned
+    context: https://github.com/kyutai-labs/unmute.git#e348e567c7020d40020412024f7aa03c38a3bc3e:services/moshi-server
+    dockerfile: public.Dockerfile
+  network_mode: bridge   # the default network: no new subnet to allocate
+  restart: unless-stopped
+  environment:
+    HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN:-}
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+
+services:
+  stt:
+    <<: *moshi
+    command: ["worker", "--config", "configs/stt.toml"]
+    ports: ["127.0.0.1:8090:8080"]
+    volumes:
+      - ./moshi/start.sh:/app/start_moshi_server_public.sh:ro
+      - ./moshi/stt.toml:/app/configs/stt.toml:ro
+      - ${MOLTY_VOICE_DATA:-./data}/hf-cache:/root/.cache/huggingface
+      - ${MOLTY_VOICE_DATA:-./data}/uv-cache:/root/.cache/uv
+      - ${MOLTY_VOICE_DATA:-./data}/cargo-stt:/root/.cargo/registry
+      - ${MOLTY_VOICE_DATA:-./data}/target-stt:/app/target
+
+  tts:
+    <<: *moshi
+    command: ["worker", "--config", "configs/tts.toml"]
+    ports: ["127.0.0.1:8089:8080"]
+    volumes:
+      - ./moshi/start.sh:/app/start_moshi_server_public.sh:ro
+      - ./moshi/tts.toml:/app/configs/tts.toml:ro
+      - ${MOLTY_VOICE_DATA:-./data}/hf-cache:/root/.cache/huggingface
+      - ${MOLTY_VOICE_DATA:-./data}/uv-cache:/root/.cache/uv
+      - ${MOLTY_VOICE_DATA:-./data}/cargo-tts:/root/.cargo/registry
+      - ${MOLTY_VOICE_DATA:-./data}/target-tts:/app/target
+
+  bridge:
+    build: .
+    image: molty-voice
+    network_mode: host   # reaches STT, TTS and Ollama on 127.0.0.1; dials out, no inbound ports
+    restart: unless-stopped
+    command: ["run", "--reflex", "--opener"]
+    volumes:
+      - ${MOLTY_VOICE_DATA:-./data}/config:/root/.config/molty-voice
+      - ${MOLTY_VOICE_DATA:-./data}/hf-cache:/root/.cache/huggingface

@@ -1,4 +1,4 @@
-"""molty-voice pair | run | unpair."""
+"""molty-voice pair | run | unpair | check."""
 
 from __future__ import annotations
 
@@ -129,6 +129,19 @@ def cmd_run(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_check(a: argparse.Namespace) -> int:
+    """Speaks a line through TTS and hears it back through STT: no relay, no pairing needed."""
+    cfg = load(Path(a.config) if a.config else None)
+    b = Bridge(cfg)
+    for _ in range(3):  # the TTS now and then clips a line; the check is strict about the words
+        asyncio.run(b._make_prompt())
+        if b.stt_prompt is not None:
+            print(f"ok: STT heard TTS say {cfg.stt_prompt!r}")
+            return 0
+    print(f"failed: is STT at {cfg.stt_url} and TTS at {cfg.tts_url} up? See the logs above.", file=sys.stderr)
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="molty-voice", description="Your own STT/TTS for molty.UNO: bridges a local Kyutai moshi-server to the relay.")
     p.add_argument("--config", help=f"config file (default {default_path()})")
@@ -161,7 +174,8 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--no-tts", action="store_true", help="serve STT only")
 
     sub.add_parser("unpair", help="revoke this box's token and forget it")
+    sub.add_parser("check", help="test STT and TTS with a round trip, without the relay")
     a = p.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     logging.getLogger("websockets").setLevel(logging.WARNING)
-    return {"pair": cmd_pair, "run": cmd_run, "unpair": cmd_unpair}[a.cmd](a)
+    return {"pair": cmd_pair, "run": cmd_run, "unpair": cmd_unpair, "check": cmd_check}[a.cmd](a)
