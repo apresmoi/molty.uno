@@ -123,7 +123,7 @@ import {
 } from "./phrases.js";
 import { ListenTrace, SeqOrder, TRACE_LIMITS, capTrace } from "./trace.js";
 import { AUDIO_KEEP, AUDIO_PREFIX, AudioKeep, wav } from "./audio-keep.js";
-import { EngineBench, REFLEX, REFLEX_MODES, REFLEX_SHOW, type ReflexEngine, type ReflexMode, type ReflexPick, ReflexSession, UTTERANCE_CATEGORIES, type UtteranceCategory, categoryOf, keywordCategory, parseBoxReflex, resolveEngine } from "./reflex.js";
+import { DEFAULT_LIVELINESS, EngineBench, LIVELINESS, type Liveliness, REFLEX, REFLEX_MODES, REFLEX_SHOW, REFLEX_SOFT, type ReflexEngine, isLiveliness, type ReflexMode, type ReflexPick, ReflexSession, UTTERANCE_CATEGORIES, type UtteranceCategory, categoryOf, keywordCategory, parseBoxReflex, resolveEngine } from "./reflex.js";
 
 export interface SocketMeta {
   /** hello: device not yet authenticated; live: the device; voice: a voice box (authenticated at upgrade). */
@@ -410,6 +410,8 @@ interface VoiceCfg {
   reflex?: ReflexMode;
   /** Reflex compare mode: every available engine runs on each chunk (trace), only `reflex` fires. */
   reflex_compare?: boolean;
+  /** How lively the reflex is (core/reflex.ts REFLEX_LIVELINESS; absent = DEFAULT_LIVELINESS). */
+  liveliness?: Liveliness;
 }
 /** The connected box's voice.hello (KV `vbox`). */
 interface BoxInfo {
@@ -661,6 +663,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private reactTimer: unknown;
   /** The reflex's last reaction (core/reflex.ts), and its model engines refused for good. */
   private lastReflexAt = 0;
+  /** The reflex's soft curious glance alternates its side. */
+  private reflexGlance = 0;
   private readonly reflexBench = new EngineBench();
   private readonly reflexKeys: { jev?: string; openai?: string };
   /** The latest listen's reflex (its categories outlive the listen: the filler asks right after the turn). */
@@ -2912,7 +2916,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const mode = cfg.reflex ?? "off";
     if (mode === "off") return undefined;
     const avail = { local: !!this.boxSocket()?.getMeta()?.box?.reflex, jev: !!this.reflexKeys.jev, openai: !!this.reflexKeys.openai };
-    const session = new ReflexSession({
+    const session: ReflexSession = new ReflexSession({
       mode,
       compare: !!cfg.reflex_compare,
       avail,
@@ -2920,11 +2924,13 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       fetch: this.fetcher,
       clock: this.clock,
       bench: this.reflexBench,
-      fire: (pick) => this.reflexFire(buf, pick),
+      liveliness: cfg.liveliness ?? DEFAULT_LIVELINESS,
+      // the session's profile (an unknown stored value falls back to the default there)
+      fire: (pick, soft): Promise<string> => this.reflexFire(buf, pick, soft, session.profile.gapMs),
       note: (n) => buf.trace.reflex({ ...n, at: n.at - buf.trace.t0 }),
     });
     this.lastReflex = session;
-    buf.trace.relay.reflex_cfg = { mode, engine: session.engine, ...(session.fallback ? { fb: session.fallback } : {}), ...(cfg.reflex_compare ? { compare: session.engines } : {}) };
+    buf.trace.relay.reflex_cfg = { mode, engine: session.engine, lv: session.liveliness, ...(session.fallback ? { fb: session.fallback } : {}), ...(cfg.reflex_compare ? { compare: session.engines } : {}) };
     return session;
   }
 
@@ -2961,23 +2967,26 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   }
 
   /**
-   * Shows a reflex pick through the react path — screen only, never a sound. Not when the listen is
-   * over, an owner screen is up, an agent reacted this turn (agents win) or within REFLEX.gapMs of
+   * Shows a reflex pick through the react path — screen only, never a sound: in full (REFLEX_SHOW)
+   * or, a mild pick, as its softer gesture (REFLEX_SOFT). Not when the listen is over, an owner
+   * screen is up, an agent reacted this turn (agents win) or within `gapMs` (the liveliness's) of
    * any react / reflex. Resolves "ok" or why not.
    */
-  private async reflexFire(buf: ListenBuffer, pick: Exclude<ReflexPick, "none">): Promise<string> {
+  private async reflexFire(buf: ListenBuffer, pick: Exclude<ReflexPick, "none">, soft: boolean, gapMs: number): Promise<string> {
     const live = () => !buf.ended && this.listenBuf === buf;
     if (!live()) return "closed";
     const turn = this.openTurn?.id === buf.job ? this.openTurn : undefined;
-    const show = REFLEX_SHOW[pick];
+    const glance = pick === "curious" && soft ? (this.reflexGlance % 2 ? "glance_right" : "glance_left") : undefined;
+    const show: { mood: "happy" | "surprised" | "thinking" } | { action: string } = soft ? { action: glance ?? REFLEX_SOFT[pick] } : REFLEX_SHOW[pick];
     const caps = this.liveSocket()?.getMeta()?.caps;
     if ("mood" in show ? !caps?.includes(REACT_CAP) : !caps?.includes(FEATURES.act.cap)) return "unsupported";
     if (await this.ownerScreen()) return "screen";
     // after the reads: an agent's react or the listen's end may have come meanwhile
     if (!live()) return "closed";
-    if (turn?.agentReacted || this.clock.now() - this.lastReactAt < REFLEX.gapMs) return "agent";
-    if (this.clock.now() - this.lastReflexAt < REFLEX.gapMs) return "rate_limited";
+    if (turn?.agentReacted || this.clock.now() - this.lastReactAt < gapMs) return "agent";
+    if (this.clock.now() - this.lastReflexAt < gapMs) return "rate_limited";
     this.lastReflexAt = this.clock.now();
+    if (glance) this.reflexGlance++;
     const res = "mood" in show ? await this.sendCmd("mood", { mood: show.mood, hold_s: 0, react: true }) : await this.sendCmd("act", { action: show.action });
     if (!res.ok) return res.error;
     if ("mood" in show) {
@@ -3204,8 +3213,13 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         if (req.reflex_compare) cfg.reflex_compare = true;
         else delete cfg.reflex_compare;
       }
+      if (req.liveliness !== undefined) {
+        if (!isLiveliness(req.liveliness)) return fail("invalid_args", `liveliness must be one of ${LIVELINESS.join(", ")}`);
+        if (req.liveliness === DEFAULT_LIVELINESS) delete cfg.liveliness;
+        else cfg.liveliness = req.liveliness;
+      }
       await this.kv.put<VoiceCfg>(K.voiceCfg, cfg);
-      await this.activity.record({ ts: this.clock.now(), kind: "settings", ev: "voice", data: { mode: cfg.mode, voice: cfg.voice ?? null, ...(req.reflex !== undefined || req.reflex_compare !== undefined ? { reflex: cfg.reflex ?? "off", reflex_compare: !!cfg.reflex_compare } : {}) } });
+      await this.activity.record({ ts: this.clock.now(), kind: "settings", ev: "voice", data: { mode: cfg.mode, voice: cfg.voice ?? null, ...(req.reflex !== undefined || req.reflex_compare !== undefined ? { reflex: cfg.reflex ?? "off", reflex_compare: !!cfg.reflex_compare } : {}), ...(req.liveliness !== undefined ? { liveliness: cfg.liveliness ?? DEFAULT_LIVELINESS } : {}) } });
       void this.rewarmPhrases(); // quick phrases follow Molty's voice (core/phrases.ts)
     }
     return { ok: true, result: await this.voiceView() };
@@ -3297,6 +3311,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         engine: now?.engine ?? null,
         ...(now?.fallback ? { fallback: now.fallback } : {}),
         timeout_ms: REFLEX.timeoutMs,
+        liveliness: isLiveliness(cfg.liveliness) ? cfg.liveliness : DEFAULT_LIVELINESS,
       },
       box: {
         paired: !!tok,

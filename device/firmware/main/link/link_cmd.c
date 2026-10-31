@@ -187,6 +187,8 @@ static esp_err_t cmd_mood(const cJSON *args, cJSON **out)
     if (e == ESP_OK && explicit_mood) atomic_fetch_add(&s_mood_gen, 1);
     mood_unlock();
     if (e == ESP_OK && explicit_mood) link_ask_cancel();
+    /* a react mood over the listening (not the relay's return to it): Molty's own nods wait */
+    if (e == ESP_OK && !explicit_mood && strcmp(mood, "listening")) link_audio_external_react(LINK_REACT_SHOW_MS);
     return e;
 }
 
@@ -200,6 +202,7 @@ static esp_err_t cmd_act(const cJSON *args, cJSON **out)
     esp_err_t e = mole_creature_select("fluid");
     if (e != ESP_OK) return e;
     mole_fluid_act(act);
+    link_audio_external_react((uint32_t)(cute_act_dur(act) * 1000.f));   /* during a listen: ours wait */
     cJSON *j = cJSON_CreateObject();
     if (!j) return ESP_ERR_NO_MEM;
     cJSON_AddStringToObject(j, "action", cute_act_name(act));

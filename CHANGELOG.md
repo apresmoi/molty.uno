@@ -20,6 +20,16 @@ First public release.
   runs every engine on each phrase; every decision (engine, latency, size, pick, confidence,
   outcome, fallback) is in the turn trace and the Activity timeline. `molty-sim reflex-bench`
   scores the engines on 40 labelled phrases.
+  **Liveliness** (`liveliness` = calm | normal | lively, default normal, console Voice card): the
+  first decision at three words (no longer at a sentence end — short turns used to get theirs
+  after they closed), then every 3–6 words or 1.2–2.5 s; lower gates, and an unsure-but-plausible
+  pick shows as a small gesture (a glance, a look-up, a wiggle); one reflex per 1.5–3 s. A newer
+  phrase's answer wins over an older one still in flight (`stale`); at most two engine calls at
+  once. The voice box classifies every word count from three. On the device, Molty keeps an
+  attentive baseline while the human talks (a blink or a small glance on the voice's rhythm once
+  nothing moved it for 2.5 s; calm idle life 5 s; off: none), and its own listener reactions wait
+  for a reflex / agent react instead of cutting it short. `molty-sim reflex-turns` measures it
+  over whole spoken turns (fires per turn, time to the first reaction, false fires).
 - **Quick phrases and the auto filler**: agents register their own short phrases
   (`molty_phrases`, ≤ 20 × 60 characters; built-ins `hmm`, `let_me_think`, `one_sec`, …) whose
   audio the relay pre-synthesises in Molty's current voice and caches; `quick {id}` /

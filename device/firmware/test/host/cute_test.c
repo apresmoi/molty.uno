@@ -265,6 +265,48 @@ static void test_act_render(const char *path, const char *outdir) {
     fluid_frame_destroy(fr); fluid_draw_destroy(d); fluid_sim_destroy(s);
 }
 
+/* the reflex over a listen is visible: from the listening mood, each gesture the relay's reflex
+ * or the device's baseline plays (services/relay REFLEX_SHOW / REFLEX_SOFT, listen_react.h) and each
+ * react mood moves the creature's target well away from a twin that only keeps listening */
+static void test_listen_visible(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    static uint8_t buf[CUTE_MAX_FILE + 16];
+    size_t n = fread(buf, 1, sizeof(buf), f); fclose(f);
+    const char *err;
+    if (cute_spec_parse(buf, n, &S, &err) != 0) return;
+    const int W = 52, H = 32, N = W * H;
+    fluid_sim_t *s = fluid_sim_create(W, H, FLUID_STAGE_REF);
+    float *rest = calloc(N, sizeof(float));
+    /* gestures (act), then the react moods (-1 - mood) */
+    static const int shows[] = { CA_NOD, CA_BOUNCE, CA_PEEK, CA_LOOK_UP, CA_WIGGLE, CA_WOBBLE, CA_GLANCE_LEFT, CA_GLANCE_RIGHT, CA_BLINK,
+                                 -1 - CM_SURPRISED, -1 - CM_HAPPY };
+    for (size_t i = 0; i < sizeof(shows) / sizeof(shows[0]); i++) {
+        cute_rt_t *rt = cute_rt_create(&S, 99), *twin = cute_rt_create(&S, 99);
+        cute_rt_set_mood(rt, CM_LISTENING); cute_rt_set_mood(twin, CM_LISTENING);
+        for (int k = 0; k < 60; k++) { cute_rt_update(rt, 1.f / 30.f); cute_rt_update(twin, 1.f / 30.f); }
+        const int a = shows[i];
+        if (a >= 0) cute_rt_act(rt, a); else cute_rt_set_mood(rt, -1 - a);
+        const char *name = a >= 0 ? cute_act_name(a) : (-1 - a) == CM_SURPRISED ? "mood surprised" : "mood happy";
+        const int frames = a >= 0 ? (int)ceilf(cute_act_dur(a) * 30.f) : 45;   /* a react mood: the relay's 1.5 s */
+        float diff = 0.f;
+        for (int k = 0; k < frames; k++) {
+            cute_rt_update(rt, 1.f / 30.f); cute_rt_update(twin, 1.f / 30.f);
+            cute_rt_raster(twin, W, H); cute_rt_fill(twin, s, 1.f);
+            for (int c = 0; c < N; c++) rest[c] = s->T[c] / FQ_UNIT;
+            cute_rt_raster(rt, W, H); cute_rt_fill(rt, s, 1.f);
+            float dk = 0.f;
+            for (int c = 0; c < N; c++) dk += fabsf(s->T[c] / FQ_UNIT - rest[c]);
+            if (dk > diff) diff = dk;
+        }
+        CHECK(diff > 15.f, "over listening, %s barely shows (Σ|ΔT| %.2f)", name, diff);
+        printf("  %-14s listening + %-15s peak Σ|ΔT| %6.1f\n", S.id, name, diff);
+        cute_rt_destroy(rt); cute_rt_destroy(twin);
+    }
+    free(rest);
+    fluid_sim_destroy(s);
+}
+
 int main(int argc, char **argv) {
     const char *outdir = NULL, *golden = NULL, *first = NULL;
     printf("cute runtime host test\n");
@@ -278,6 +320,10 @@ int main(int argc, char **argv) {
     if (golden) test_act_golden(golden);
     else CHECK(0, "no act golden given (-g act_golden.txt)");
     if (first) test_act_render(first, outdir);
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "-o") || !strcmp(argv[i], "-g")) { i++; continue; }
+        test_listen_visible(argv[i]);
+    }
     printf("%d passed, %d failed\n", s_pass, s_fail);
     return s_fail ? 1 : 0;
 }

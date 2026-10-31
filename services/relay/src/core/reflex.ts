@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 // Molty's reflex (docs/AGENT-LINK.md "Reflex"): while the human speaks, Molty reacts on its own to
 // WHAT they say — with any agent, also one that never watches partials. Each reflex chunk of the
-// box's text so far (a sentence end, or REFLEX.everyWords new words) is classified into one
-// reaction and shown screen-only through the react path (room.ts reflexFire): agents' own reacts
-// win, owner screens block it, one per REFLEX.gapMs, visual only.
+// box's text so far (from REFLEX.firstWords words, then every few new words or a little speech
+// time: the owner's liveliness, REFLEX_LIVELINESS) is classified into one reaction, gated by the
+// liveliness (a confident pick shows in full, a plausible one as its softer gesture) and shown
+// screen-only through the react path (room.ts reflexFire): agents' own reacts win, owner screens
+// block it, one per the liveliness's gap, visual only.
 //
-//   box stt.partial ─▶ reflexDue ─▶ chunk n ─▶ engine (owner setting `reflex`) ─▶ pick ─▶ fire
+//   box stt.partial ─▶ reflexDue ─▶ chunk n ─▶ engine (owner setting `reflex`) ─▶ reflexGate ─▶ fire
 //                                     │  local:    the box's own classifier (stt.reflex {n, …}: no extra hop)
 //                                     │  jev:      TypeSafe System One, one Choice  (TYPESAFE_API_KEY)
 //                                     │  openai:   OpenAI Decisions, one choice      (OPENAI_API_KEY)
@@ -34,25 +36,48 @@ export const UTTERANCE_CATEGORIES = ["question", "request", "hard", "other"] as 
 export type UtteranceCategory = (typeof UTTERANCE_CATEGORIES)[number];
 
 export const REFLEX = {
-  /** A chunk once this many new words arrived since the last one... */
-  everyWords: 6,
-  /** ...or at a sentence end with a new word; never before the text has this many words. */
-  minWords: 2,
-  /** Chunks classified per listen (a ramble stays bounded). */
-  maxPerListen: 12,
+  /** The first chunk once the text has this many words (the box classifies every word count from here). */
+  firstWords: 3,
+  /** Chunks classified per listen (a ramble stays bounded: ~40 s of speech at the lively cadence). */
+  maxPerListen: 40,
+  /** Remote calls of the configured engine in flight at once; a chunk due beyond that waits for the next word. */
+  maxInFlight: 2,
   /** One engine call; then the keywords answer instead (never blocks the listen). */
   timeoutMs: 600,
-  /** At most one reflex per this long (the agents' react limit), and none this long after an agent's react. */
-  gapMs: 3000,
   /** The text an engine sees: the last this many characters of the text so far. */
   maxChars: 400,
-  /** Confidence an engine's pick needs to be shown (below: none). */
-  gate: { local: 0.35, jev: 0.5, openai: 0.5, keywords: 0.5 } as Record<ReflexEngine, number>,
   /** A remote engine refused for good (bad key, no access): not called again for this long. */
   benchMs: 10 * 60 * 1000,
   /** Reflex decisions kept in one listen's trace. */
-  traceEntries: 40,
+  traceEntries: 60,
 };
+
+/** How lively Molty is while the human talks (owner setting `liveliness`, default normal). */
+export const LIVELINESS = ["calm", "normal", "lively"] as const;
+export type Liveliness = (typeof LIVELINESS)[number];
+export const DEFAULT_LIVELINESS: Liveliness = "normal";
+export interface ReflexProfile {
+  /** A chunk once this many new words arrived since the last one, or a sentence end, or everyMs of speech with a new word. */
+  everyWords: number;
+  everyMs: number;
+  /** At most one reflex per this long, and none this long after an agent's react. */
+  gapMs: number;
+  /** Confidence an engine's pick needs to be shown in full. */
+  gate: Record<ReflexEngine, number>;
+  /** Below the gate: still shown as its softer gesture (REFLEX_SOFT) when the engine's `none` is under `none` and the best reaction reaches `min`. */
+  mild?: { none: number; min: number };
+}
+/**
+ * Tuned on tools/sim's labelled partials (scenarios/reflex.yaml) and whole turns
+ * (scenarios/reflex-turns.yaml) with Jev's probabilities: see tools/sim/README.md "Reflex over
+ * whole turns". calm is the old behaviour's caution with the earlier first chunk.
+ */
+export const REFLEX_LIVELINESS: Record<Liveliness, ReflexProfile> = {
+  calm: { everyWords: 6, everyMs: 2500, gapMs: 3000, gate: { local: 0.35, jev: 0.5, openai: 0.5, keywords: 0.5 } },
+  normal: { everyWords: 4, everyMs: 1500, gapMs: 2000, gate: { local: 0.3, jev: 0.4, openai: 0.4, keywords: 0.5 }, mild: { none: 0.6, min: 0.3 } },
+  lively: { everyWords: 3, everyMs: 1200, gapMs: 1500, gate: { local: 0.25, jev: 0.35, openai: 0.35, keywords: 0.5 }, mild: { none: 0.75, min: 0.2 } },
+};
+export const isLiveliness = (v: unknown): v is Liveliness => typeof v === "string" && (LIVELINESS as readonly string[]).includes(v);
 
 /** How each reaction is shown: a react mood (firmware cap `react`) or a one-shot gesture (cap `act`). */
 export const REFLEX_SHOW: Record<Exclude<ReflexPick, "none">, { mood: "happy" | "surprised" | "thinking" } | { action: string }> = {
@@ -61,6 +86,14 @@ export const REFLEX_SHOW: Record<Exclude<ReflexPick, "none">, { mood: "happy" | 
   sad: { action: "nod" },
   laugh: { action: "bounce" },
   curious: { action: "peek" },
+};
+/** A mild pick's softer gesture (cap `act`): a plausible reaction, shown small. curious alternates its glance. */
+export const REFLEX_SOFT: Record<Exclude<ReflexPick, "none">, string> = {
+  surprised: "look_up",
+  happy: "wiggle",
+  sad: "nod",
+  laugh: "wobble",
+  curious: "glance_left",
 };
 
 /** The question every model engine answers (Jev criteria, OpenAI choice descriptions). */
@@ -86,10 +119,12 @@ export const CATEGORY_CRITERIA: Record<UtteranceCategory, string> = {
 /** One engine's answer for one chunk. */
 export interface ReflexVerdict {
   engine: ReflexEngine;
-  /** After the confidence gate (below it: none). */
+  /** The engine's choice; after reflexGate (the session's), what Molty shows (none: nothing). */
   pick: ReflexPick;
-  /** The engine's top choice when the gate turned it into none. */
+  /** After reflexGate: the engine's own choice when the gate changed it. */
   raw?: ReflexPick;
+  /** After reflexGate: a mild pick, shown as its softer gesture. */
+  soft?: boolean;
   conf?: number;
   p?: Partial<Record<ReflexPick, number>>;
   ms: number;
@@ -114,23 +149,44 @@ export function reflexInput(text: string): string {
 }
 
 /**
- * Is a reflex chunk due for `text` (the box's text so far), the last chunk having had `prevN` words?
- * Returns the chunk's word count `n` (its id: the box's stt.reflex names it), or undefined.
- * Same rule as molty_voice/reflex.py reflex_due.
+ * Is a reflex chunk due for `text` (the box's text so far), the last chunk having had `prevN` words
+ * `sinceMs` ago? The first from REFLEX.firstWords words, then with a new word once `everyWords` new
+ * words came, the text ends a sentence, or `everyMs` passed. Returns the chunk's word count `n` (its
+ * id: the box's stt.reflex names it), or undefined. The box classifies every word count from
+ * REFLEX.firstWords (molty_voice/reflex.py reflex_due), so any n the relay picks has its verdict.
  */
-export function reflexDue(prevN: number, text: string): number | undefined {
+export function reflexDue(prevN: number, text: string, sinceMs: number, p: ReflexProfile = REFLEX_LIVELINESS[DEFAULT_LIVELINESS]): number | undefined {
   const n = words(text).length;
-  if (n < REFLEX.minWords) return undefined;
+  if (n < REFLEX.firstWords) return undefined;
   const added = n - prevN;
-  if (added >= REFLEX.everyWords || (added >= 1 && sentenceEnd(text))) return n;
+  if (added < 1) return undefined;
+  if (prevN === 0 || added >= p.everyWords || sentenceEnd(text) || sinceMs >= p.everyMs) return n;
   return undefined;
 }
 
 const round2 = (x: number) => Math.round(x * 100) / 100;
 
-function gated(engine: ReflexEngine, raw: ReflexPick, conf: number): Pick<ReflexVerdict, "pick" | "raw"> {
-  if (raw === "none" || conf >= REFLEX.gate[engine]) return { pick: raw };
-  return { pick: "none", raw };
+/**
+ * What Molty shows for an engine's verdict at a liveliness: its choice in full at or above the
+ * engine's gate; below it, the most likely reaction as its softer gesture when the profile allows
+ * mild picks, `none` is unsure (under mild.none) and that reaction is plausible (mild.min); else
+ * nothing. A request is never curiosity ("can you set a timer?": the keywords' and the box's rule too).
+ */
+export function reflexGate(v: ReflexVerdict, p: ReflexProfile): ReflexVerdict {
+  const { soft: _s, raw: _r, ...base } = v;
+  const choice = v.pick;
+  const conf = v.conf ?? 0;
+  let out: ReflexVerdict;
+  if (choice !== "none" && conf >= p.gate[v.engine]) out = { ...base, pick: choice };
+  else {
+    let alt: Exclude<ReflexPick, "none"> | undefined;
+    for (const k of REFLEX_PICKS) if (k !== "none" && (v.p?.[k] ?? -1) > (alt ? (v.p?.[alt] ?? -1) : -1)) alt = k;
+    const pn = v.p?.none;
+    if (p.mild && alt && pn !== undefined && pn < p.mild.none && (v.p?.[alt] ?? 0) >= p.mild.min) out = { ...base, pick: alt, soft: true, ...(choice !== alt ? { raw: choice } : {}) };
+    else out = choice === "none" ? { ...base, pick: "none" } : { ...base, pick: "none", raw: choice };
+  }
+  if (out.pick === "curious" && v.cat === "request") return { ...base, pick: "none", raw: choice };
+  return out;
 }
 
 // ---------------------------------------------------------------- keywords
@@ -253,7 +309,7 @@ export function parseJev(body: unknown): Parsed {
   const usage = isObj(body) && isObj((body as Record<string, unknown>).usage) ? ((body as Record<string, unknown>).usage as Record<string, unknown>) : {};
   const c = (body as { answers: Record<string, unknown> }).answers.category;
   return {
-    ...gated("jev", a.choice, conf),
+    pick: a.choice,
     ...(isObj(c) ? category(c.choice, c.confidence, isObj(c.probabilities) ? c.probabilities : undefined) : {}),
     conf: round2(conf),
     p: isObj(a.probabilities) ? probs(a.probabilities) : {},
@@ -275,7 +331,7 @@ export function parseOpenAI(body: unknown): Parsed {
   const cm: Record<string, unknown> = {};
   if (isObj(c) && Array.isArray(c.probabilities)) for (const e of c.probabilities) if (isObj(e) && typeof e.value === "string") cm[e.value] = e.probability;
   return {
-    ...gated("openai", a.choice, conf),
+    pick: a.choice,
     ...(isObj(c) && c.type === "choice" ? category(c.choice, c.confidence, cm) : {}),
     conf: round2(conf),
     p: probs(pm),
@@ -349,7 +405,7 @@ export async function remoteReflex(
   }
 }
 
-/** A box `stt.reflex` frame's verdict (the local engine), validated; undefined when unusable. */
+/** A box `stt.reflex` frame's verdict (the local engine), validated (not gated: reflexGate); undefined when unusable. */
 export function parseBoxReflex(f: Record<string, unknown>): (ReflexVerdict & { n: number }) | undefined {
   const n = f.n;
   if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > 100000 || !isPick(f.pick)) return undefined;
@@ -359,7 +415,7 @@ export function parseBoxReflex(f: Record<string, unknown>): (ReflexVerdict & { n
   return {
     n,
     engine: "local",
-    ...gated("local", f.pick, conf),
+    pick: f.pick,
     ...category(f.cat, f.cat_conf, isObj(f.cat_p) ? f.cat_p : undefined),
     conf: round2(conf),
     p: isObj(f.p) ? probs(f.p) : {},
@@ -412,13 +468,15 @@ export interface ReflexNote {
   tk?: number;
   pick: ReflexPick;
   raw?: ReflexPick;
+  /** A mild pick: shown as its softer gesture. */
+  soft?: boolean;
   c?: number;
   /** Probabilities in REFLEX_PICKS order (absent = unknown). */
   p?: Array<number | null>;
   /** The utterance category, and its confidence. */
   cat?: UtteranceCategory;
   cc?: number;
-  /** This engine's pick was the one to show: "ok", or why it did not (rate_limited, agent, screen, closed, unsupported, …). */
+  /** This engine's pick was the one to show: "ok", or why it did not (rate_limited, agent, screen, closed, unsupported, stale: a newer chunk already answered, …). */
   fired?: string;
   /** It answered for the configured engine, which failed (that reason). */
   fb?: string;
@@ -436,8 +494,10 @@ export interface ReflexSessionDeps {
   clock: ReflexTimer;
   timeoutMs?: number;
   bench?: EngineBench;
-  /** Show the pick (room.ts: gating + the react path); resolves "ok" or why not. */
-  fire(pick: Exclude<ReflexPick, "none">): Promise<string>;
+  /** The owner's liveliness (cadence + gates; absent: DEFAULT_LIVELINESS). */
+  liveliness?: Liveliness;
+  /** Show the pick (room.ts: gating + the react path), soft = its softer gesture; resolves "ok" or why not. */
+  fire(pick: Exclude<ReflexPick, "none">, soft: boolean): Promise<string>;
   note(n: ReflexNote): void;
 }
 
@@ -445,6 +505,7 @@ const toNote = (n: number, at: number, v: ReflexVerdict): ReflexNote => {
   const out: ReflexNote = { n, at, e: v.engine, ms: v.ms, ch: v.chars, pick: v.pick };
   if (v.tokens !== undefined) out.tk = v.tokens;
   if (v.raw !== undefined) out.raw = v.raw;
+  if (v.soft) out.soft = true;
   if (v.conf !== undefined) out.c = v.conf;
   if (v.p && Object.keys(v.p).length) out.p = REFLEX_PICKS.map((k) => v.p?.[k] ?? null);
   if (v.cat) out.cat = v.cat;
@@ -454,16 +515,27 @@ const toNote = (n: number, at: number, v: ReflexVerdict): ReflexNote => {
 };
 
 /**
- * The reflex of one listen: chunks the box's text so far, asks the configured engine (and, in
- * compare mode, every other available one), fires the configured engine's pick — or the keywords'
- * when it fails or misses REFLEX.timeoutMs. Never blocks: everything runs beside the listen.
+ * The reflex of one listen: chunks the box's text so far at the liveliness's cadence, asks the
+ * configured engine (and, in compare mode, every other available one), gates its verdict
+ * (reflexGate) and fires it — or the keywords' when it fails or misses REFLEX.timeoutMs. A verdict
+ * that comes back after a newer chunk's is stale (noted, not shown); at most REFLEX.maxInFlight
+ * calls of the configured engine run at once (a chunk due beyond that waits for the next word).
+ * Never blocks: everything runs beside the listen.
  */
 export class ReflexSession {
   readonly engine: ReflexEngine;
   readonly fallback?: string;
+  readonly liveliness: Liveliness;
+  readonly profile: ReflexProfile;
   private readonly d: ReflexSessionDeps;
   private lastN = 0;
+  private lastAt = 0;
+  /** The newest chunk whose configured-engine verdict came back (older ones landing later are stale). */
+  private answeredN = 0;
+  private inFlight = 0;
   chunks = 0;
+  /** Chunks due while REFLEX.maxInFlight calls were out (deferred to a later word). */
+  deferred = 0;
   private closed = false;
   private readonly ctl = new AbortController();
   /** Local verdicts by chunk n, and who waits for them. */
@@ -479,6 +551,8 @@ export class ReflexSession {
 
   constructor(d: ReflexSessionDeps) {
     this.d = d;
+    this.liveliness = isLiveliness(d.liveliness) ? d.liveliness : DEFAULT_LIVELINESS;
+    this.profile = REFLEX_LIVELINESS[this.liveliness];
     const now = d.clock.now();
     const bench = d.bench;
     const avail: ReflexAvail = {
@@ -508,10 +582,18 @@ export class ReflexSession {
   /** The box's text so far: starts a chunk when one is due. */
   text(text: string): void {
     if (this.closed || this.chunks >= REFLEX.maxPerListen) return;
-    const n = reflexDue(this.lastN, text);
+    const now = this.d.clock.now();
+    const n = reflexDue(this.lastN, text, now - this.lastAt, this.profile);
     if (n === undefined) return;
+    if ((this.engine === "jev" || this.engine === "openai") && this.inFlight >= REFLEX.maxInFlight) {
+      this.deferred++;
+      return;
+    }
     this.lastN = n;
+    this.lastAt = now;
     this.chunks++;
+    // the box's verdicts for word counts the relay skipped are of no use any more
+    for (const k of this.local.keys()) if (k < n) this.local.delete(k);
     const p = this.chunk(n, text).catch(() => {});
     this.pending.add(p);
     void p.then(() => this.pending.delete(p));
@@ -522,14 +604,14 @@ export class ReflexSession {
     if (this.closed) return;
     const { n, ...verdict } = v;
     if (this.localDone.has(n)) {
-      if (this.d.compare || this.engine === "local") this.d.note({ ...toNote(n, this.d.clock.now(), verdict), late: true });
+      if (this.d.compare || this.engine === "local") this.d.note({ ...toNote(n, this.d.clock.now(), reflexGate(verdict, this.profile)), late: true });
       return;
     }
     const w = this.waiters.get(n);
     if (w) {
       this.waiters.delete(n);
       for (const f of w) f(verdict);
-    } else this.local.set(n, verdict);
+    } else if (n > this.lastN && this.local.size < REFLEX.maxPerListen) this.local.set(n, verdict); // (a word count the relay skipped: dropped)
   }
 
   /** The listen ended: in-flight calls are aborted, nothing more fires or is noted. */
@@ -593,10 +675,16 @@ export class ReflexSession {
       const v = await this.run(e, n, text);
       if (this.closed) return;
       this.d.bench?.note(v, this.d.clock.now());
-      this.d.note(toNote(n, this.d.clock.now(), v));
+      this.d.note(toNote(n, this.d.clock.now(), v.error ? v : reflexGate(v, this.profile)));
     });
     const main = (async () => {
-      let v = await this.run(this.engine, n, text);
+      this.inFlight++;
+      let v: ReflexVerdict;
+      try {
+        v = await this.run(this.engine, n, text);
+      } finally {
+        this.inFlight--;
+      }
       if (this.closed) return;
       this.d.bench?.note(v, this.d.clock.now());
       let fb = this.fallback;
@@ -606,10 +694,13 @@ export class ReflexSession {
         fb = v.error;
         v = keywordReflex(text);
       }
+      v = reflexGate(v, this.profile);
       const note = toNote(n, this.d.clock.now(), v);
       if (fb) note.fb = fb;
       if (v.cat && (!this.latest || this.latest.n <= n)) this.latest = { n, cat: v.cat, engine: v.engine };
-      note.fired = v.pick === "none" ? "none" : await this.d.fire(v.pick);
+      const stale = n < this.answeredN;
+      if (!stale) this.answeredN = n;
+      note.fired = v.pick === "none" ? "none" : stale ? "stale" : await this.d.fire(v.pick, !!v.soft);
       if (!this.closed) this.d.note(note);
     })();
     await Promise.all([main, ...others]);

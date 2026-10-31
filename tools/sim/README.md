@@ -143,6 +143,43 @@ cd tools/sim && .venv/bin/molty-sim reflex-bench --box <ssh host of your box> --
   category accuracy, p50 / p90 latency (remote: one call from this machine; local: the box's
   inference), mean input tokens, $ per 1000 partials (input tokens × list price).
 
+## Reflex over whole turns: `molty-sim reflex-turns`
+
+The reflex as the human sees it: each turn of `scenarios/reflex-turns.yaml` (8 to react to, 4 long
+explanatory ones like Juan's, 6 neutral instructions) is spoken in real time, one partial per word
+at 150 wpm, through the relay's own `ReflexSession` (`services/relay/tools/reflex-turns.ts`), with
+the room's fire gate emulated; the listen closes 600 ms after the last word.
+
+```sh
+git archive main services/relay/src services/relay/tools | tar -x -C /tmp/main   # the code before, to compare
+cd tools/sim && .venv/bin/molty-sim reflex-turns before=jev@/tmp/main/services/relay \
+    calm=jev:calm normal=jev:normal lively=jev:lively --detail
+```
+
+Configs are `label=engine[:liveliness][@relay_dir]`. Columns: fires per react turn, react turns
+with a reaction, the median time from the first word to the first reaction, decisions that
+landed after the turn closed, fires per explain turn and its longest stretch with no reflex,
+false fires on neutral turns, and engine decisions per turn (cost: ~$0.03 per 1000 Jev calls).
+
+Before / after the liveliness change (Jev, 2026-10-31; `before` = main's code):
+
+| config | react: fires/turn | react: turns with a reaction | first reaction (ms from first word) | after the turn closed | explain: fires/turn | explain: longest still (s) | neutral: false fires | decisions/turn |
+|---|---|---|---|---|---|---|---|---|
+| before (jev) | 0.9 | 7/8 | 2170 | 0 | 0.8 | 15.1 | 0 | 3.3 |
+| calm (jev) | 1.1 | 7/8 | 988 | 0 | 0.5 | 15.4 | 0 | 3.8 |
+| normal (jev) | 1.6 | 8/8 | 973 | 0 | 1.0 | 14.7 | 0 | 4.9 |
+| lively (jev) | 2.0 | 8/8 | 964 | 0 | 2.5 | 12.0 | 0 | 6.1 |
+| before (keywords) | 1.0 | 8/8 | 2000 | 0 | 1.2 | 13.8 | 0 | 3.3 |
+| lively (keywords) | 2.1 | 8/8 | 800 | 0 | 2.2 | 12.9 | 0 | 6.1 |
+
+The reflex alone cannot fill a calm explanation: Jev says `none` at 0.9+ on two of the four
+explain turns at every chunk, and lowering its gates further fires on the neutral ones. The
+device's attentive baseline (`listen_react.h`, host-tested) covers that: a micro-motion at most
+~2.9 s apart while a voice is heard (lively idle life), which the sim does not render.
+
+On the labelled phrases (`reflex-bench --liveliness …`, Jev): before 38/40, calm 38/40, normal
+40/40, lively 40/40, no false fires on the 6 neutral phrases at any liveliness.
+
 ## Caveats
 
 - The local relay runs on this Mac, not Cloudflare's edge, and the bridge reaches Kyutai through an

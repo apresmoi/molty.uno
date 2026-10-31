@@ -118,6 +118,10 @@ bool link_listen_setting_ok(double v);
 #define LINK_FILLER_OFF        0u
 /* A valid setting: 0 (off) or LINK_FILLER_MIN_MS..LINK_FILLER_MAX_MS, an integer. */
 bool link_filler_setting_ok(double v);
+/* A react mood (`mood {react:true}`) shows over the listening about this long before the relay
+ * sends `listening` again (services/relay reactShowMs): the device's own listener reactions wait
+ * for it (link_audio_external_react). */
+#define LINK_REACT_SHOW_MS     1500u
 /* The turn acknowledgement (cap "ack"): when a listen that heard speech ends, the device
  * itself plays a short chirp and shows `thinking` (held LINK_ACK_THINK_S, or until the
  * agent's next say / mood / ask / listen), so the human never waits in dead air while the

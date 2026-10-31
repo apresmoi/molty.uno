@@ -1,4 +1,4 @@
-"""molty-sim run | check | measure | show | reflex-bench — see tools/sim/README.md."""
+"""molty-sim run | check | measure | show | reflex-bench | reflex-turns — see tools/sim/README.md."""
 
 from __future__ import annotations
 
@@ -55,6 +55,13 @@ def main(argv: list[str] | None = None) -> int:
     rb.add_argument("--box", default=os.environ.get("MOLTY_SIM_BOX", "voicebox"), help="ssh host of the voice box, for local (env MOLTY_SIM_BOX)")
     rb.add_argument("--misses", action="store_true", help="also list each engine's wrong picks")
     rb.add_argument("--json", help="write the scores here too")
+    rb.add_argument("--liveliness", choices=["calm", "normal", "lively"], default="normal", help="the relay's gate (core/reflex.ts REFLEX_LIVELINESS)")
+
+    rt = sub.add_parser("reflex-turns", help="Molty's reflex over whole spoken turns: fires per turn, time to first reaction, false fires (scenarios/reflex-turns.yaml)")
+    rt.add_argument("configs", nargs="+", help="label=engine[:liveliness][@relay_dir], e.g. after=jev:lively")
+    rt.add_argument("--set", default=None, help="turns (default scenarios/reflex-turns.yaml)")
+    rt.add_argument("--detail", action="store_true", help="also list each turn's reactions")
+    rt.add_argument("--json", help="write every turn's decisions here too")
 
     sh = sub.add_parser("show", help="print the summary table of a finished run")
     sh.add_argument("run_dir")
@@ -75,7 +82,11 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "reflex-bench":
         from . import reflex_bench
 
-        return reflex_bench.main([e.strip() for e in a.engines.split(",") if e.strip()], a.set or str(reflex_bench.DEFAULT_SET), a.box, a.misses, a.json)
+        return reflex_bench.main([e.strip() for e in a.engines.split(",") if e.strip()], a.set or str(reflex_bench.DEFAULT_SET), a.box, a.misses, a.json, a.liveliness)
+    if a.cmd == "reflex-turns":
+        from . import reflex_turns
+
+        return reflex_turns.main(a.configs, a.set or str(reflex_turns.DEFAULT_SET), a.detail, a.json)
     if a.cmd == "measure":
         from .measure import measure
 

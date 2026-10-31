@@ -27,3 +27,7 @@ void link_audio_imu(float ax, float ay, float az, uint32_t ms);
  * voice box heard a pause / a question in the running listen — Molty may react (a nod, a
  * glance: listen_react.h). Ignored unless `job` is the running listen. */
 void link_audio_hint(const char *job, const char *kind);
+/* Link task: the relay just showed a reaction on the creature during the running listen (an
+ * `act`, or a `mood {react:true}`) that plays for hold_ms: Molty's own listener reactions
+ * (listen_react.h) wait for it instead of cutting it short. No-op outside a listen. */
+void link_audio_external_react(uint32_t hold_ms);

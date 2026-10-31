@@ -22,6 +22,8 @@ bool link_pair_active(void) { return false; }
 esp_err_t link_audio_say(const cJSON *a, cJSON **o) { (void)a;(void)o; return ESP_OK; }
 esp_err_t link_audio_listen(const cJSON *a, cJSON **o) { (void)a;(void)o; return ESP_OK; }
 esp_err_t link_audio_listen_stop(const cJSON *a, cJSON **o) { (void)a;(void)o; return ESP_OK; }
+static uint32_t s_ext_hold_ms, s_ext_n;   /* link_audio_external_react calls (the relay's reaction over a listen) */
+void link_audio_external_react(uint32_t hold_ms) { s_ext_hold_ms = hold_ms; s_ext_n++; }
 static unsigned ask_cancels, ask_cmds;
 void link_ask_cancel(void) { ask_cancels++; }
 esp_err_t link_ask_cmd(const cJSON *a, cJSON **o) { (void)a;(void)o; ask_cmds++; return ESP_OK; }
@@ -55,9 +57,14 @@ int main(void) {
     assert(run("show","{\"text\":\"hi\"}")==ESP_OK && link_cmd_mood_gen()==g+2);
     /* a react (mood {react:true}, cap "react") shows the mood but is not explicit: the listen's
      * ack and idle fallback stay, and it never cancels a question; a non-bool react is refused */
+    s_ext_n=0;
     assert(run("mood","{\"mood\":\"surprised\",\"hold_s\":0,\"react\":true}")==ESP_OK && link_cmd_mood_gen()==g+2);
     assert(strstr(sdk_state,"\"mood\":\"surprised\""));
-    assert(run("mood","{\"mood\":\"happy\",\"react\":false}")==ESP_OK && link_cmd_mood_gen()==g+3);
+    /* ...and tells the listen it plays (Molty's own listener reactions wait for it); the relay's
+     * return to `listening` and an explicit mood do not */
+    assert(s_ext_n==1 && s_ext_hold_ms==LINK_REACT_SHOW_MS);
+    assert(run("mood","{\"mood\":\"listening\",\"hold_s\":0,\"react\":true}")==ESP_OK && s_ext_n==1);
+    assert(run("mood","{\"mood\":\"happy\",\"react\":false}")==ESP_OK && link_cmd_mood_gen()==g+3 && s_ext_n==1);
     assert(run("mood","{\"mood\":\"happy\",\"react\":1}")==ESP_ERR_INVALID_ARG && link_cmd_mood_gen()==g+3);
     /* local HTTP state bodies: only a top-level mood string counts */
     assert(link_cmd_state_set_explicit("{\"mood\":\"sleepy\",\"hold_s\":30}")==ESP_OK && link_cmd_mood_gen()==g+4);
@@ -123,7 +130,9 @@ int main(void) {
      * cancelled, not an explicit mood); unknown actions refused */
     unsigned ga=link_cmd_mood_gen(); c=ask_cancels; strcpy(sdk_state,"");
     cJSON *ao=NULL, *aa=cJSON_Parse("{\"action\":\"nod\"}");
+    s_ext_n=0;
     assert(link_cmd_run("act",aa,&ao)==ESP_OK && acted==CA_NOD && acts==1 && !strcmp(cJSON_GetObjectItem(ao,"action")->valuestring,"nod"));
+    assert(s_ext_n==1 && s_ext_hold_ms==(uint32_t)(cute_act_dur(CA_NOD)*1000.f));   /* the gesture's length: a listen's own reactions wait */
     cJSON_Delete(aa); cJSON_Delete(ao);
     assert(link_cmd_mood_gen()==ga && ask_cancels==c && !sdk_state[0]);
     assert(run("act","{\"action\":\"dance\"}")==ESP_ERR_INVALID_ARG && run("act","{}")==ESP_ERR_INVALID_ARG && acts==1);
@@ -132,5 +141,5 @@ int main(void) {
     assert(link_cmd_run("update",a,&out)==LINK_CMD_REFUSED && update_cmds==1 && !strcmp(link_cmd_refusal(),"wrong_board"));
     cJSON_Delete(a);
     cJSON_Delete(sdk_sent);
-    puts("LINK CMD PASS: explicit moods counted (link mood cmd, local state POST) under the mood lock, own/rejected moods not; screen commands cancel a question only once accepted; act never takes the screen");
+    puts("LINK CMD PASS: explicit moods counted (link mood cmd, local state POST) under the mood lock, own/rejected moods not; screen commands cancel a question only once accepted; act never takes the screen; react moods / acts hold the listen's own reactions for their length");
 }

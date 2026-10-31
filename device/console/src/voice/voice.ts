@@ -22,6 +22,13 @@ export const REFLEX_MODES: ReadonlyArray<{ id: ReflexMode; label: string; hint: 
   { id: 'openai', label: 'OpenAI', hint: 'OpenAI Decisions, gpt-6-luna (the relay’s OPENAI_API_KEY)' },
   { id: 'keywords', label: 'keywords', hint: 'a quick word list on the relay, no key' },
 ];
+/** How lively the reflex is while the human talks (the relay's REFLEX_LIVELINESS: cadence + gates). */
+export type Liveliness = 'calm' | 'normal' | 'lively';
+export const LIVELINESS: ReadonlyArray<{ id: Liveliness; label: string; hint: string }> = [
+  { id: 'calm', label: 'calm', hint: 'only clear reactions, at most one every 3 s' },
+  { id: 'normal', label: 'normal', hint: 'clear reactions in full, likely ones as a small gesture, every 2 s at most' },
+  { id: 'lively', label: 'lively', hint: 'reacts sooner and more often (every 1.5 s at most): small gestures for anything plausible' },
+];
 export interface ReflexStatus {
   mode: ReflexMode;
   compare: boolean;
@@ -30,6 +37,8 @@ export interface ReflexStatus {
   engine: ReflexEngine | null;
   fallback?: string;
   timeout_ms: number;
+  /** Absent on relays from before the setting (they behave like calm). */
+  liveliness?: Liveliness;
 }
 
 export interface VoiceStatus {
@@ -90,7 +99,7 @@ async function call(t: VoiceTarget, method: 'GET' | 'POST' | 'DELETE', body: unk
 }
 
 export const getVoice = (t: VoiceTarget, f: typeof fetch = fetch) => call(t, 'GET', undefined, f);
-export const setVoice = (t: VoiceTarget, patch: { mode?: VoiceMode; voice?: string | null; reflex?: ReflexMode; reflex_compare?: boolean }, f: typeof fetch = fetch) => call(t, 'POST', patch, f);
+export const setVoice = (t: VoiceTarget, patch: { mode?: VoiceMode; voice?: string | null; reflex?: ReflexMode; reflex_compare?: boolean; liveliness?: Liveliness }, f: typeof fetch = fetch) => call(t, 'POST', patch, f);
 export const unpairBox = (t: VoiceTarget, f: typeof fetch = fetch) => call(t, 'DELETE', undefined, f);
 
 /** One status line for the box. */
