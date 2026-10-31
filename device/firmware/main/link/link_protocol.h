@@ -113,10 +113,11 @@ bool link_listen_setting_ok(double v);
  * ring_color) and reports it in every listen's answer (`filler_ms`): 0 = off, else
  * LINK_FILLER_MIN_MS..LINK_FILLER_MAX_MS; LINK_FILLER_DEFAULT_MS out of the box. */
 #define LINK_FILLER_DEFAULT_MS 2500u
-#define LINK_FILLER_MIN_MS     1500u
+#define LINK_FILLER_MIN_MS     400u
 #define LINK_FILLER_MAX_MS     5000u
 #define LINK_FILLER_OFF        0u
-/* A valid setting: 0 (off) or LINK_FILLER_MIN_MS..LINK_FILLER_MAX_MS, an integer. */
+/* A valid setting: 0 (off) or LINK_FILLER_MIN_MS..LINK_FILLER_MAX_MS, an integer. 400 ms: Molty's
+ * filler lands almost as soon as the words are in (the relay counts from the listen's end). */
 bool link_filler_setting_ok(double v);
 /* A react mood (`mood {react:true}`) shows over the listening about this long before the relay
  * sends `listening` again (services/relay reactShowMs): the device's own listener reactions wait

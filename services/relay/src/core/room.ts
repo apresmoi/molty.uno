@@ -484,8 +484,14 @@ interface FillWatch {
   ack?: string;
   /** When the human stopped (relay clock). */
   endAt: number;
-  /** The utterance's category for a context-picked filler (classified when armed). */
+  /** The utterance's category for a context-picked filler (classified when armed, in parallel with the delay). */
   category: Promise<{ category: UtteranceCategory; by: string }>;
+  /** The classifier's verdict once in (fireFiller never waits for it: not in yet → the keywords). */
+  settled?: { category: UtteranceCategory; by: string };
+  /** The utterance (the keywords fallback when the classifier is not in by the filler's moment). */
+  text: string;
+  /** The filler pool, looked up when armed (in parallel with the delay). */
+  pool: Promise<{ pool: readonly Phrase[]; source: "agent" | "builtin"; owner?: string } | undefined>;
 }
 
 /** One agent's held draft for the open turn (core/partials.ts). */
@@ -3949,7 +3955,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (delay === undefined) return;
     const caps = this.liveSocket()?.getMeta()?.caps;
     if (caps && !caps.includes("say")) return;
-    const w: FillWatch = { turn, seq, timer: undefined, endAt: r.endAt, category: this.classify(r.text), ...(r.ack ? { ack: r.ack } : {}) };
+    // the classifier and the pool lookup run NOW, in parallel with the delay: neither adds to it
+    const w: FillWatch = { turn, seq, timer: undefined, endAt: r.endAt, text: r.text, category: this.classify(r.text), pool: this.fillerPool(), ...(r.ack ? { ack: r.ack } : {}) };
+    void w.category.then((c) => (w.settled = c));
+    w.pool.catch(() => undefined); // cancelled before its moment: nobody awaits it
     w.timer = this.clock.setTimeout(() => {
       if (this.fillWatch !== w) return;
       this.fillWatch = undefined;
@@ -3966,9 +3975,11 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   /** The filler's moment: only when no agent did anything since the turn and nothing owns the speaker, the screen or the floor. */
   private async fireFiller(w: FillWatch): Promise<void> {
     const skip = (why: string) => this.log("filler skipped", { device: this.deviceId, turn: w.turn, why });
-    // everything that waits first; the checks and the start below run with no await in between
-    const { category, by: classifier } = await w.category;
-    const src = await this.fillerPool();
+    // everything that waits first; the checks and the start below run with no await in between.
+    // The classifier had until now (it ran in parallel with the delay): not in yet → the keywords,
+    // never a wait past the owner's delay.
+    const { category, by: classifier } = w.settled ?? { category: keywordCategory(w.text), by: "keywords" };
+    const src = await w.pool.catch(() => undefined); // a failed lookup: no filler, never a stray rejection
     if (!src) return skip("no_fillers"); // the answering agent turned the built-ins off and has none of its own
     const p = pickFiller(src.pool, category, this.lastFiller);
     if (!p) return skip("no_fit"); // nothing in the pool fits this kind of turn
