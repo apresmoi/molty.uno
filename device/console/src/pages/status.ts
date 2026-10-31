@@ -13,7 +13,7 @@ const voiceSummary = (v: VoiceStatus) => {
   const who = voiceOn(v);
   if (who === 'off') return 'Text only';
   const r = reflexOn(v.reflex);
-  return [who === 'cloud' ? 'Cloud voice' : 'My voice box', v.first_words?.mode === 'opener' ? 'first words' : null, r && r !== 'off' ? 'reactions' : null].filter(Boolean).join(', ');
+  return [who === 'cloud' ? 'Cloud voice' : 'Voice box', v.first_words?.mode === 'opener' ? 'first words' : null, r && r !== 'off' ? 'reactions' : null].filter(Boolean).join(', ');
 };
 
 export function statusPage(root: HTMLElement, { api }: AppCtx) {
