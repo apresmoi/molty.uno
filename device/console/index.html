@@ -3,9 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="dark light" />
     <title>molty</title>
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='7' fill='%23000' stroke='%239fe8c4'/%3E%3C/svg%3E" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22%3E%3Cstyle%3Erect%7Banimation:r 4s ease-in-out infinite%7D%23b%7Banimation-name:f%7D%40keyframes r%7B0%25,35%25,100%25%7Btransform:translateY(0)%7D50%25,85%25%7Btransform:translateY(-18px)%7D%7D%40keyframes f%7B0%25,35%25,100%25%7Btransform:translateY(0)%7D50%25,85%25%7Btransform:translateY(18px)%7D%7D%40media (prefers-reduced-motion:reduce)%7Brect%7Banimation:none%7D%7D%3C/style%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%2231%22 fill=%22%23000%22 stroke=%22%231d2320%22 stroke-width=%222%22/%3E%3Cg fill=%22%239fe8c4%22%3E%3Crect x=%2216%22 y=%2234%22 width=%2214%22 height=%2214%22/%3E%3Crect id=%22b%22 x=%2234%22 y=%2216%22 width=%2214%22 height=%2214%22/%3E%3C/g%3E%3C/svg%3E" />
+    <script>
+      // the same choice as molty.uno: stored, else the system's; before paint
+      try {
+        const t = localStorage.getItem("molty-theme");
+        document.documentElement.dataset.theme = t ?? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+      } catch {}
+    </script>
   </head>
   <body>
     <div id="app"></div>

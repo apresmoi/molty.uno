@@ -3,6 +3,7 @@
 import { DeviceApi } from './api/device';
 import { defaultCatalog, type CreatureCatalog } from './catalog/catalog';
 import { animateBraille } from './ui/braille';
+import { brand, themeToggle } from './ui/brand';
 import { h, mount, type Page } from './ui/dom';
 import { statusPage } from './pages/status';
 import { wifiPage } from './pages/wifi';
@@ -42,8 +43,8 @@ export function start(root: HTMLElement) {
   const target = api.base ? h('span', { class: 'target', title: 'device override (?device=)' }, '→ ', api.label) : null;
   const shell = h('div', { class: 'shell' },
     h('header', null,
-      h('a', { class: 'brand', href: '#/status' }, h('span', { class: 'mark' }, '⣿'), ' molty'),
-      target, nav),
+      brand('#/status'),
+      target, nav, themeToggle()),
     field, main,
     h('footer', null, 'molty console ⠂ ', h('a', { href: '#/setup/wifi' }, 'run setup again'), ' ⠂ ', h('a', { href: '#/licences' }, 'licences')));
   const setup = h('div', { class: 'setup-root' });
@@ -62,7 +63,7 @@ export function start(root: HTMLElement) {
       shell.hidden = true; setup.hidden = false;
       document.body.classList.add('in-setup');
       const page = h('section', { class: 'page', 'data-page': 'setup' });
-      mount(setup, page);
+      mount(setup, h('header', null, brand(), themeToggle()), page);
       mount(main);
       cleanup = setupPage(page, ctx, b || 'wifi');
       return;
