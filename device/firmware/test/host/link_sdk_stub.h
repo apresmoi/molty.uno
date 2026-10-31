@@ -115,7 +115,8 @@ extern uint32_t sdk_sync_up;
 extern int64_t sdk_sync_wall;
 extern cJSON *(*sdk_log_frame)(bool prev, uint32_t *cursor, int max_lines, int backlog);
 typedef void *esp_event_base_t;
-typedef struct { int close_status_code, op_code, data_len, payload_len, payload_offset; char *data_ptr; bool fin; } esp_websocket_event_data_t;
+typedef struct { int error_type, esp_transport_sock_errno, esp_tls_stack_err; } esp_websocket_error_codes_t;
+typedef struct { esp_websocket_error_codes_t error_handle; int close_status_code, op_code, data_len, payload_len, payload_offset; char *data_ptr; bool fin; } esp_websocket_event_data_t;
 enum { WEBSOCKET_EVENT_DISCONNECTED, WEBSOCKET_EVENT_CLOSED, WEBSOCKET_EVENT_ERROR,
        WEBSOCKET_EVENT_CONNECTED, WEBSOCKET_EVENT_DATA, WEBSOCKET_EVENT_ANY };
 typedef struct sdk_ws *esp_websocket_client_handle_t;
