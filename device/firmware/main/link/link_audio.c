@@ -49,6 +49,8 @@ static atomic_int s_stop;
 static char s_job[LINK_STREAM_MAX];
 static uint32_t s_seq;
 static int64_t s_last_frame;
+static atomic_uint s_gen;                              /* bumped by begin(): names one job */
+static atomic_uint s_req;                              /* a gesture's stop or cancel: gen << 1 | what */
 static uint32_t s_job_t0_ms;                           /* the running job began (for a tap's guard) */
 static volatile uint32_t s_stat_frames, s_stat_bytes;   /* diag: frames/bytes of the current job */
 static const char *s_end_reason;                       /* diag: why the last listen ended */
@@ -779,6 +781,7 @@ esp_err_t link_audio_init(void)
 /* The job's bookkeeping, then the audio task gets it. */
 static void begin(const audio_job_t *job, bool cued)
 {
+    atomic_fetch_add(&s_gen, 1);
     strcpy(s_job, job->job);
     s_job_t0_ms = now_ms();
     s_mood_gen0 = link_cmd_mood_gen();   /* after our own listening/speaking mood */
@@ -965,13 +968,24 @@ bool link_audio_listening(uint32_t *age_ms)
 
 bool link_audio_say_waiting(void) { return s_busy && !s_listen && s_stat_frames == 0; }
 
-void link_audio_tap_stop(void) { atomic_store(&s_stop, STOP_TAP); }
+uint32_t link_audio_job_gen(void) { return atomic_load(&s_gen); }
+
+/* From the sense task. The job may end, and another begin, before this lands: the link task
+ * (which starts jobs) applies it in link_audio_tick, and only to the job it was asked for. */
+void link_audio_request(uint32_t gen, link_audio_req_t what) { atomic_store(&s_req, gen << 1 | (uint32_t)what); }
+
+static void apply_request(void)
+{
+    const uint32_t req = atomic_exchange(&s_req, 0);
+    if (!req || !s_busy || req >> 1 != atomic_load(&s_gen)) return;
+    if ((req & 1) == LINK_AUDIO_REQ_CANCEL) link_audio_cancel();
+    else atomic_store(&s_stop, STOP_TAP);
+}
 
 void link_audio_stop_any(void)
 {
-    if (!s_busy) return;
-    if (s_listen && link_client_connected()) link_audio_tap_stop();
-    else link_audio_cancel();
+    const uint32_t gen = link_audio_job_gen();
+    link_audio_request(gen, s_listen && link_client_connected() ? LINK_AUDIO_REQ_STOP : LINK_AUDIO_REQ_CANCEL);
 }
 
 /* cmd say_cancel {job}: the relay gave THAT say up (its job failed): stop waiting for audio
@@ -1052,6 +1066,7 @@ esp_err_t link_audio_receive(const void *data, size_t len)
 
 void link_audio_tick(void)
 {
+    apply_request();
     if (atomic_exchange(&s_shake_req, false)) shake_talk();
     if (!s_busy) return;
     if (!s_listen && link_say_stalled((uint32_t)((esp_timer_get_time() - s_last_frame) / 1000), s_stat_frames)) link_audio_cancel();

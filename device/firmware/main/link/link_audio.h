@@ -25,7 +25,11 @@ bool link_audio_listening(uint32_t *age_ms);
 /* A say is running with no audio received yet. Any task. */
 bool link_audio_say_waiting(void);
 /* Ends the running listen; what was recorded goes up, reason "tap". Any task. */
-void link_audio_tap_stop(void);
+typedef enum { LINK_AUDIO_REQ_STOP = 0, LINK_AUDIO_REQ_CANCEL = 1 } link_audio_req_t;
+/** The running job's name: read it BEFORE looking at the job's state, then hand it to _request. */
+uint32_t link_audio_job_gen(void);
+/** Stop and send (a listen) or cancel THAT job; ignored if it has already ended. */
+void link_audio_request(uint32_t gen, link_audio_req_t what);
 /* A bound `stop`: ends the listen (or drops it with the link down), or cuts the say. Any task. */
 void link_audio_stop_any(void);
 esp_err_t link_audio_say_cancel(const cJSON *args, cJSON **result);

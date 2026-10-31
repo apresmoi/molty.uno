@@ -114,6 +114,25 @@ describe("a talk's words nobody collected", () => {
     expect(late.result.result).toMatchObject({ delivered_as: "utterance", turn_id: r.result.job });
   });
 
+  it("are marked for an agent that reads the job while they go out", async () => {
+    const w = await setup({ listenAfter: 40, end: { reason: "turn_end" } }, { timings: { talkBudgetMs: 5 } });
+    const r = (await w.room.talk(w.token, {})) as any;
+    const kv = (w.room as any).kv;
+    const put = kv.put.bind(kv);
+    let poll: Promise<any> | undefined;
+    kv.put = async (k: string, v: any) => {
+      if (!poll && v?.result?.delivered_as) {
+        poll = w.room.job(w.token, r.result.job, 0);
+        await pause(10);
+      }
+      return put(k, v);
+    };
+    await pause(150);
+    expect(poll).toBeDefined();
+    expect((await poll).result.result).toMatchObject({ delivered_as: "utterance" });
+    expect(await utterances(w)).toHaveLength(1);
+  });
+
   it("are not repeated when the talk call itself returned them", async () => {
     const w = await setup({ end: { reason: "turn_end" } });
     const r = (await w.room.talk(w.token, {})) as any;

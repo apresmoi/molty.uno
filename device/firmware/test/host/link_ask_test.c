@@ -29,7 +29,8 @@ bool link_audio_gesture_talk(void) { talks++; return true; }
 void link_audio_stop_any(void) { stops++; }
 bool link_audio_listening(uint32_t *age) { (void)age; return false; }
 bool link_audio_say_waiting(void) { return false; }
-void link_audio_tap_stop(void) { }
+uint32_t link_audio_job_gen(void) { return 0; }
+void link_audio_request(uint32_t gen, link_audio_req_t what) { (void)gen; (void)what; }
 void link_audio_cancel(void) { }
 void mole_fluid_set_status(int status) { (void)status; }
 void mole_fluid_listen(bool on) { (void)on; }
