@@ -666,6 +666,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private roomGen = 0;
   /** Talk jobs that heard the human, until an agent reads the result (or it goes out as an utterance). */
   private readonly uncollected = new Set<string>();
+  /** The fallback has claimed these words; its `delivered_as` marker lands when the promise does. */
+  private readonly delivering = new Map<string, Promise<void>>();
   private updTimer: unknown;
   /** The human is talking (an adopted shake listen): agents may only draft and react. */
   private openTurn: OpenTurn | undefined;
@@ -1234,10 +1236,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       const rec = await this.kv.get<JobRecord>(K.job(jobId));
       if (rec?.by && rec.by.who !== this.who(a).who) return fail("not_found");
     }
-    const out = await this.runJob(jobId, waitMs);
+    let out = await this.runJob(jobId, waitMs);
     // A failed job is an error to every surface: nothing rides along on it.
     if (out.ok && out.result.status === "failed") return out;
-    if (out.ok && out.result.status === "done") this.uncollected.delete(jobId);
+    if (out.ok && out.result.status === "done" && (await this.collect(jobId))) out = await this.runJob(jobId, 0);
     return this.ride(a, out);
   }
 
@@ -1277,12 +1279,15 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (!started.ok) return started;
     const job = started.result.job as string;
     if (after) this.noteFollow(after, job);
-    const out = await this.runJob(job, Math.max(0, this.t.talkBudgetMs - (this.clock.now() - t0)));
+    let out = await this.runJob(job, Math.max(0, this.t.talkBudgetMs - (this.clock.now() - t0)));
     if (!out.ok) return out;
+    if (out.result.status === "done" && (await this.collect(job))) {
+      out = await this.runJob(job, 0);
+      if (!out.ok) return out;
+    }
     const v = out.result;
     if (v.status === "failed") return fail(v.error ?? "failed", `talk job ${job} failed`, { job });
     if (v.status === "done") {
-      this.uncollected.delete(job);
       return this.ride(a, { ok: true, result: { ...(v.result ?? {}), job, status: "done" } });
     }
     return this.ride(a, {
@@ -1753,14 +1758,32 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   }
 
   /**
+   * An agent read a done job: its words are the agent's now, unless the fallback claimed them
+   * first. Then wait for the marker; true means read the job again, so the agent sees `delivered_as`.
+   */
+  private async collect(id: string): Promise<boolean> {
+    if (this.uncollected.delete(id)) return false;
+    const marked = this.delivering.get(id);
+    if (!marked) return false;
+    await marked;
+    return true;
+  }
+
+  /**
    * A talk's listen heard the human and nobody read the result (the agent's run ended on `pending`):
    * their words go out as a normal `utterance`, a new turn. The job says so, for an agent that reads it after all.
    */
   private async deliverUncollected(id: string, r: Extract<ListenResult, { ok: true }>, gen: number) {
     if (!this.uncollected.delete(id) || gen !== this.roomGen) return;
     // the job has ended (setJob refuses): only this marker is added to its result
-    const rec = await this.kv.get<JobRecord>(K.job(id));
-    if (rec) await this.kv.put(K.job(id), { ...rec, result: { ...(rec.result ?? {}), delivered_as: "utterance", turn_id: id } });
+    const marked = (async () => {
+      const rec = await this.kv.get<JobRecord>(K.job(id));
+      if (rec) await this.kv.put(K.job(id), { ...rec, result: { ...(rec.result ?? {}), delivered_as: "utterance", turn_id: id } });
+    })();
+    this.delivering.set(id, marked);
+    await marked;
+    // long enough for a read that began before the marker to come back and look again
+    this.clock.setTimeout(() => this.delivering.delete(id), this.t.collectGraceMs);
     const text = r.text.trim();
     await this.kv.put<TurnRecord>(K.turn, { id, at: this.clock.now() });
     const data = utteranceData({

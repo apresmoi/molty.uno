@@ -734,7 +734,7 @@ static void shake_run(audio_job_t *job,int adopt,const char *args) {
     complete(record(job)); sdk_rx_fill=NULL; adopt_at=decline_at=cancel_at=stop_at=-1; adopt_args=NULL;
 }
 /* a tap: the rec stops with what it has, reason tap, acknowledged; a bound `talk`; a say's first-audio watchdog */
-static void stop_tap_at_chunk_10(int16_t *buf, size_t n, unsigned i) { (void)buf; (void)n; if (i==10) link_audio_tap_stop(); }
+static void stop_tap_at_chunk_10(int16_t *buf, size_t n, unsigned i) { (void)buf; (void)n; if (i==10) { link_audio_request(link_audio_job_gen(), LINK_AUDIO_REQ_STOP); apply_request(); } }
 static void test_tap_and_watchdog(void) {
     audio_job_t job; uint32_t age=99;
     listen_job(8000,&job); assert(link_audio_listening(&age)); sdk_rx_chunks=0; sdk_rx_fill=stop_tap_at_chunk_10;
@@ -762,7 +762,11 @@ static void test_tap_and_watchdog(void) {
     assert(link_audio_say_cancel(a,&r)==ESP_OK && !cJSON_IsTrue(cJSON_GetObjectItem(r,"cancelling")) && !atomic_load(&s_cancel)); cJSON_Delete(r); cJSON_Delete(a);
     complete(record(&job));
     /* stop: a listen ends and sends, a say is cut */
-    begin_say(); link_audio_stop_any(); assert(atomic_load(&s_cancel)); complete(play());
+    begin_say(); link_audio_stop_any(); apply_request(); assert(atomic_load(&s_cancel)); complete(play());
+    /* a tap on a job that ended is not applied to the next one */
+    begin_say(); { uint32_t old=link_audio_job_gen(); complete(play()); link_audio_tick();
+      begin_say(); link_audio_request(old, LINK_AUDIO_REQ_CANCEL); apply_request(); assert(!atomic_load(&s_cancel));
+      link_audio_request(link_audio_job_gen(), LINK_AUDIO_REQ_CANCEL); apply_request(); assert(atomic_load(&s_cancel)); complete(play()); link_audio_tick(); }
     /* a bound talk is the shake's listen even with the shake setting off; nothing to report when none starts */
     shake_setting=false; sdk_caps&=~MOLTY_CAP_IMU; link_audio_relay_adopts(true);
     unsigned b=sent; assert(link_audio_gesture_talk()); link_audio_tick();

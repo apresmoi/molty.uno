@@ -150,11 +150,12 @@ static void sense_task(void *arg)
         if (guarded || pairing) tapper.pending = false;   /* a tap waiting for its pair was a phantom */
         if (atomic_exchange(&s_tap, false) && !link_pair_active()) {
             uint32_t age = 0;
+            const uint32_t gen = link_audio_job_gen();
             const bool listening = link_audio_listening(&age);
             switch (gesture_tap_route(listening, age, link_client_connected(), link_audio_say_waiting(), guarded)) {
-            case GESTURE_TAP_STOP_LISTEN: mole_diag_event(false, "sense.tap stop listen"); link_audio_tap_stop(); break;
-            case GESTURE_TAP_DROP_LISTEN: mole_diag_event(false, "sense.tap drop listen"); link_audio_cancel(); break;
-            case GESTURE_TAP_CANCEL_SAY:  mole_diag_event(false, "sense.tap cancel say");  link_audio_cancel(); break;
+            case GESTURE_TAP_STOP_LISTEN: mole_diag_event(false, "sense.tap stop listen"); link_audio_request(gen, LINK_AUDIO_REQ_STOP); break;
+            case GESTURE_TAP_DROP_LISTEN: mole_diag_event(false, "sense.tap drop listen"); link_audio_request(gen, LINK_AUDIO_REQ_CANCEL); break;
+            case GESTURE_TAP_CANCEL_SAY:  mole_diag_event(false, "sense.tap cancel say");  link_audio_request(gen, LINK_AUDIO_REQ_CANCEL); break;
             case GESTURE_TAP_GESTURE:
                 taps_do(gesture_tapper_feed(&tapper, now, gesture_binds_get(mole_fluid_gestures(), GESTURE_IN_DOUBLE_TAP) != GESTURE_DO_NONE), now, &tap_l);
                 break;
