@@ -4,11 +4,12 @@
 // (GET /api/link), the same "on Molty's network = owner" model as every local setting.
 // Pure: the Voice card (ui/voice-card.ts) renders what these return.
 
-export type VoiceMode = 'auto' | 'box' | 'cloud';
+export type VoiceMode = 'auto' | 'box' | 'cloud' | 'off';
 export const VOICE_MODES: ReadonlyArray<{ id: VoiceMode; label: string; hint: string }> = [
   { id: 'auto', label: 'auto', hint: 'the voice box when it is on, else the cloud' },
   { id: 'box', label: 'box only', hint: 'the voice box or nothing' },
   { id: 'cloud', label: 'cloud', hint: 'the relay’s cloud voice' },
+  { id: 'off', label: 'text only', hint: 'no voice: Molty shows what the agent says and doesn’t listen' },
 ];
 
 /** Molty's reflex (docs/AGENT-LINK.md "Reflex"): who classifies what the human says while they talk. */
@@ -49,6 +50,8 @@ export interface VoiceStatus {
   cloud: string;
   /** Who would speak / transcribe right now: "box", the cloud's name, or voice_box_offline. */
   serving: { tts: string; stt: string };
+  /** Absent on relays from before first words. */
+  first_words?: { mode: 'off' | 'opener'; available: boolean };
   /** Absent on relays from before the reflex. */
   reflex?: ReflexStatus;
   box: {
@@ -111,7 +114,7 @@ export function boxLine(s: VoiceStatus): { text: string; kind: 'ok' | 'warn' | '
   return { text: `${name} ⠂ connected${can ? ` ⠂ ${can}` : ''}${s.box.version ? ` ⠂ v${s.box.version}` : ''}`, kind: 'ok' };
 }
 
-const who = (v: string, s: VoiceStatus) => (v === 'box' ? 'voice box' : v === 'voice_box_offline' ? 'nobody (box offline)' : `cloud (${v || s.cloud})`);
+const who = (v: string, s: VoiceStatus) => (v === 'box' ? 'voice box' : v === 'voice_box_offline' ? 'nobody (box offline)' : v === 'voice_off' ? 'nobody (text only)' : `cloud (${v || s.cloud})`);
 
 /** "speaks with … ⠂ listens with …". */
 export function servingLine(s: VoiceStatus): string {
@@ -157,4 +160,33 @@ export function reflexLine(r: ReflexStatus | undefined): string {
   if (!r || r.mode === 'off' || !r.engine) return '';
   const why = r.fallback ? ` (${WHY[r.fallback] ?? r.fallback} for ${r.mode === 'local' ? 'the box' : r.mode === 'jev' ? 'Jev' : 'OpenAI'})` : '';
   return `reacts with ${ENGINE_NAME[r.engine]}${why}${r.compare ? ' ⠂ comparing every engine in the activity log' : ''}`;
+}
+
+/** One answer of a setup question. */
+export interface SetupOption<T extends string = string> { id: T; label: string; hint: string }
+export type GapFill = 'off' | 'phrases' | 'local';
+
+/** The setup's voice answers: only the ones this owner's tools can do. */
+export function voiceOptions(s: VoiceStatus): SetupOption<VoiceMode>[] {
+  return [
+    s.cloud !== 'none' ? { id: 'cloud' as const, label: 'Cloud voice', hint: s.cloud } : null,
+    s.box.paired ? { id: 'box' as const, label: 'My voice box', hint: s.box.name ?? 'voice box' } : null,
+    { id: 'off' as const, label: 'Text only', hint: 'I show words and emote; no mic, no speaker' },
+  ].filter((o) => o !== null);
+}
+
+/** What fills the wait until the agent speaks; a local model needs a box that offers one. */
+export function gapOptions(s: VoiceStatus): SetupOption<GapFill>[] {
+  return [
+    s.first_words?.available ? { id: 'local' as const, label: 'First words', hint: 'a small model on your voice box starts the reply' } : null,
+    { id: 'phrases' as const, label: 'Filler phrases', hint: 'a short “Hmm…” when the agent is slow' },
+    { id: 'off' as const, label: 'Nothing', hint: 'animations only' },
+  ].filter((o) => o !== null);
+}
+
+/** Who picks Molty's emotes while you talk: only the engines available now. */
+export function reflexOptions(s: VoiceStatus): SetupOption<ReflexMode>[] {
+  const has = s.reflex?.engines;
+  return REFLEX_MODES.filter((m) => m.id !== 'auto' && (m.id === 'off' || m.id === 'keywords' || has?.[m.id]))
+    .map((m) => ({ id: m.id, label: m.id === 'local' ? 'Voice box' : m.id === 'off' ? 'Off' : m.id === 'keywords' ? 'Keywords' : m.label, hint: m.hint }));
 }
