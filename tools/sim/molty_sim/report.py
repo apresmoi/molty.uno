@@ -15,6 +15,7 @@ COLS = [
     ("false_cutoff", "cut"),
     ("speech_lost_ms", "lost"),
     ("wer", "WER"),
+    ("foreign_script", "script"),
     ("stt_final_ms", "stt"),
     ("gap_ms", "gap"),
     ("silence_ms", "silence"),
@@ -25,11 +26,11 @@ COLS = [
 ]
 
 
-def _cell(v) -> str:
+def _cell(v, key: str = "") -> str:
     if v is None:
         return "–"
     if isinstance(v, bool):
-        return "CUT" if v else ""
+        return ("FOREIGN" if key == "foreign_script" else "CUT") if v else ""
     if isinstance(v, float):
         return f"{v:.2f}"
     return str(v)
@@ -37,7 +38,7 @@ def _cell(v) -> str:
 
 def table(rows: list[dict], summary: dict, md: bool = False) -> str:
     head = [h for _, h in COLS]
-    body = [[_cell(r.get(k)) for k, _ in COLS] for r in rows]
+    body = [[_cell(r.get(k), k) for k, _ in COLS] for r in rows]
     if md:
         lines = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
         lines += ["| " + " | ".join(b) + " |" for b in body]
@@ -65,7 +66,8 @@ def summary_lines(s: dict, md: bool = False) -> list[str]:
     out.append("")
     out.append(f"turns {s['turns']}: reason as expected {s['reason_ok']}, false cut-offs {s['false_cutoffs']}, "
                f"false no_speech {s['false_no_speech']}, missed no_speech {s['missed_no_speech']}, errors {s['errors']}, "
-               f"say underruns {s['underruns']}, acks {s['acks']}, relay fillers {s.get('fillers', 0)}")
+               f"say underruns {s['underruns']}, acks {s['acks']}, relay fillers {s.get('fillers', 0)}, "
+               f"foreign-script transcripts {s.get('foreign_script', 0)}")
     if s.get("alignment_selfcheck_ms"):
         out.append(f"alignment self-check (human clips, TTS onset - MMS onset): {s['alignment_selfcheck_ms']}")
     return out

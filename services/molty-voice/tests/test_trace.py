@@ -163,7 +163,8 @@ def test_one_pause_hint_per_pause_not_per_paused_step():
 
 
 def decisions(msgs):
-    return [m for m in msgs if m["t"] not in ("stt.partial", "stt.trace", "stt.hint")]
+    # the final's wall-clock "ms" differs run to run: the decision is everything else
+    return [{k: v for k, v in m.items() if k != "ms"} for m in msgs if m["t"] not in ("stt.partial", "stt.trace", "stt.hint")]
 
 
 def test_a_throwing_observer_never_changes_turn_end_or_final(monkeypatch):
