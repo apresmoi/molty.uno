@@ -164,6 +164,12 @@ cJSON *link_evt_shake_frame(double peak_g, int reversals, unsigned ms, const cha
 bool link_welcome_has(const cJSON *welcome, const char *name);
 cJSON *link_evt_tap_frame(double x, double y);
 cJSON *link_evt_button_frame(bool accept);
+cJSON *link_evt_double_tap_frame(double x, double y);
+/* A say's watchdog: no audio at all is given up on far sooner than a stream that stops
+ * (the relay's job has failed, or the link lost it; the creature is hidden meanwhile). */
+#define LINK_SAY_FIRST_AUDIO_MS 8000u
+#define LINK_SAY_STALL_MS       30000u
+bool link_say_stalled(uint32_t idle_ms, uint32_t frames);
 /* A colour on the wire: "#rrggbb" (hex digits either case) → 0xRRGGBB. Anything else → false. */
 bool link_color_parse(const char *s, uint32_t *rgb);
 /* An optional colour field (listen's "ring_color"): absent → *rgb = -1 and true; a

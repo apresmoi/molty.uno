@@ -6,7 +6,8 @@ Molty talks back. When your human touches it, the relay records an event:
 |---|---|
 | `shake` | `{"peak_g": 2.4, "reversals": 5, "ms": 900}`; with shake to talk also `"listening": true, "turn_id": "…"` — Molty is already listening: do nothing, its `utterance` follows |
 | `utterance` | `{"turn_id": "molty-…j_…", "text": "what's on my calendar?", "reason": "turn_end", "ms": {"speech": 1800, "stt": 120}, "trigger": "shake", "device": {"caps": […], "mood": "thinking", "voice": "box"}, "filler_in_ms": 2300}` — the human's words, once per turn (see Shake to talk); `filler_in_ms`: Molty says its own filler that much later unless you act first ([api.md](api.md#quick-phrases)) |
-| `tap` | `{"x": 0..1, "y": 0..1}` (screen position) |
+| `tap` | `{"x": 0..1, "y": 0..1}` (screen position). Only when `tap` is bound to `event` (the default); a tap during a recording stops it instead, and a shake's phantom taps are dropped |
+| `double_tap` | `{"x": 0..1, "y": 0..1}`. Only when `double_tap` is bound to `event` (out of the box a double tap talks) |
 | `button` | `{"id": "accept"}` or `{"id": "reject"}` — the board's physical buttons. Not an answer to a question: they mean acknowledge / dismiss whatever you showed (see [etiquette.md](etiquette.md)). Answers to a question come only as `answer` |
 | `answer` | `{"job": "…", "index": 0, "label": "yes"}`, or `{"job", "index": null, "label": null, "reason": "timeout"}` — how an ask ended |
 | `utterance.partial` | `{"turn_id": "…", "seq": 1, "text_so_far": "what's on my calendar", "new_text": "what's on my calendar", "elapsed_ms": 3200}` — the human is **still talking**: context only (see While the human speaks) |
@@ -133,3 +134,11 @@ Molty the next time you touch it (ride-along), so say so instead of promising to
 
 Use events, not polling: never poll `imu` (or `status`) in a loop to detect motion — it is slow,
 misses short gestures, and keeps Molty's link busy.
+
+## An `utterance` from a talk nobody collected
+
+`trigger` is `"shake"` for Molty's own listen. It is `"talk"` when your `talk` heard the human but no
+agent read the result within 5 s (your run ended on `status: "pending"`): their words become a normal
+new turn, so they are not lost. Answer it as any other. Reading that job later returns the same
+result plus `"delivered_as": "utterance", "turn_id": …`: it went out already, so answer once.
+A `talk` that returned the words, or a job you followed to `done`, never does this.

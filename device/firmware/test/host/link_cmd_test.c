@@ -18,10 +18,15 @@ char *mole_diag_log_text(uint32_t s, size_t m, uint32_t *n, bool j) { (void)s;(v
 esp_err_t mole_fluid_set_text(const char *t, int len) { (void)t;(void)len; return ESP_OK; }
 static int acted = -1, acts;
 void mole_fluid_act(int a) { acted = a; acts++; }
+/* the bindings (mole_fluid.c, NVS): what cmd gestures passes through */
+static const cJSON *gestures_given; static esp_err_t gestures_answer = ESP_OK;
+esp_err_t mole_fluid_gestures_apply(const cJSON *b) { gestures_given = b; return gestures_answer; }
+cJSON *mole_fluid_gestures_json(void) { cJSON *o = cJSON_CreateObject(); cJSON_AddStringToObject(o, "tap", "event"); return o; }
 bool link_pair_active(void) { return false; }
 esp_err_t link_audio_say(const cJSON *a, cJSON **o) { (void)a;(void)o; return ESP_OK; }
 esp_err_t link_audio_listen(const cJSON *a, cJSON **o) { (void)a;(void)o; return ESP_OK; }
 esp_err_t link_audio_listen_stop(const cJSON *a, cJSON **o) { (void)a;(void)o; return ESP_OK; }
+esp_err_t link_audio_say_cancel(const cJSON *a, cJSON **o) { (void)a;(void)o; return ESP_OK; }
 static uint32_t s_ext_hold_ms, s_ext_n;   /* link_audio_external_react calls (the relay's reaction over a listen) */
 void link_audio_external_react(uint32_t hold_ms) { s_ext_hold_ms = hold_ms; s_ext_n++; }
 static unsigned ask_cancels, ask_cmds;
@@ -44,6 +49,13 @@ static esp_err_t run(const char *name, const char *args) {
 }
 int main(void) {
     link_cmd_init();
+    /* gestures: read, set; a refusal changes and answers nothing */
+    { cJSON *r=NULL, *a=cJSON_Parse("{}");
+      assert(link_cmd_run("gestures",a,&r)==ESP_OK && !gestures_given && cJSON_GetObjectItem(r,"bindings")); cJSON_Delete(r); cJSON_Delete(a);
+      a=cJSON_Parse("{\"bindings\":{\"tap\":\"talk\"}}"); r=NULL;
+      assert(link_cmd_run("gestures",a,&r)==ESP_OK && gestures_given); cJSON_Delete(r);
+      gestures_answer=ESP_ERR_INVALID_ARG; r=NULL;
+      assert(link_cmd_run("gestures",a,&r)==ESP_ERR_INVALID_ARG && !r); gestures_answer=ESP_OK; cJSON_Delete(a); }
     unsigned g=link_cmd_mood_gen();
     /* the device's own moods (listening / speaking / idle around a job) are not explicit */
     assert(link_cmd_mood("listening",-1)==ESP_OK && link_cmd_mood_gen()==g);

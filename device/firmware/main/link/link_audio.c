@@ -44,11 +44,12 @@ static atomic_bool s_cancel, s_end;
 /* listen_stop: the relay called the end of the listen (semantic end-of-turn from its STT,
  * or nobody spoke) — end the recording now, as if the VAD had fired, with that reason.
  * Listen only; reset per job. 0: not stopped; else the STOP_* reason. */
-enum { STOP_NONE, STOP_TURN_END, STOP_NO_SPEECH };
+enum { STOP_NONE, STOP_TURN_END, STOP_NO_SPEECH, STOP_TAP };
 static atomic_int s_stop;
 static char s_job[LINK_STREAM_MAX];
 static uint32_t s_seq;
 static int64_t s_last_frame;
+static uint32_t s_job_t0_ms;                           /* the running job began (for a tap's guard) */
 static volatile uint32_t s_stat_frames, s_stat_bytes;   /* diag: frames/bytes of the current job */
 static const char *s_end_reason;                       /* diag: why the last listen ended */
 static uint32_t s_speech_ms;
@@ -79,6 +80,7 @@ typedef struct {
 static adopt_t s_adopt;
 static bool s_tagged;                                 /* the running job began an activity-log tag (link task) */                               /* written before WAIT → ADOPTED */
 static atomic_bool s_relay_adopts;                    /* the relay's welcome lists listen_adopt */
+static atomic_bool s_shake_gesture;                   /* ...it is a bound gesture's `talk`, no shake */
 static atomic_bool s_shake_req;                       /* a shake handed over by the sense task */
 static double s_shake_peak; static int s_shake_rev; static unsigned s_shake_ms;   /* before s_shake_req */
 static unsigned s_shake_n;                            /* local listen ids: shake-<n> */
@@ -630,7 +632,7 @@ static esp_err_t record(const audio_job_t *job)
             if (stop != STOP_NONE) {
                 /* the relay's end of the listen: what is buffered goes out as the final frame, with
                  * the relay's reason — no_speech is acknowledged like the device's own (no chirp) */
-                rec_end(&r, stop == STOP_NO_SPEECH ? "no_speech" : "turn_end");
+                rec_end(&r, stop == STOP_NO_SPEECH ? "no_speech" : stop == STOP_TAP ? "tap" : "turn_end");
                 break;
             }
         }
@@ -778,6 +780,7 @@ esp_err_t link_audio_init(void)
 static void begin(const audio_job_t *job, bool cued)
 {
     strcpy(s_job, job->job);
+    s_job_t0_ms = now_ms();
     s_mood_gen0 = link_cmd_mood_gen();   /* after our own listening/speaking mood */
     s_seq = 0; s_stat_frames = 0; s_stat_bytes = 0; s_busy = true; s_listen = job->listen; s_last_frame = esp_timer_get_time();
     s_cued = cued; s_cue_next = 0;
@@ -934,12 +937,57 @@ static esp_err_t local_listen(char id[LINK_STREAM_MAX])
 static void shake_talk(void)
 {
     char id[LINK_STREAM_MAX] = "";
+    const bool from_gesture = atomic_exchange(&s_shake_gesture, false);
     if (shake_talk_ok() && local_listen(id) != ESP_OK) id[0] = 0;
-    mole_diag_event(false, "sense.shake talk=%s", id[0] ? id : "no");
+    mole_diag_event(false, "sense.%s talk=%s", from_gesture ? "gesture" : "shake", id[0] ? id : "no");
     if (!link_client_connected()) return;
+    if (from_gesture && !id[0]) return;                /* nothing listens: not a shake to report */
     cJSON *j = link_evt_shake_frame(s_shake_peak, s_shake_rev, s_shake_ms, id[0] ? id : NULL);
     if (j) link_send_json(j);
     cJSON_Delete(j);
+}
+
+bool link_audio_gesture_talk(void)
+{
+    if (!s_jobs || !molty_board_has(MOLTY_CAP_MIC)) return false;
+    s_shake_peak = 0; s_shake_rev = 0; s_shake_ms = 0;
+    atomic_store(&s_shake_gesture, true);
+    atomic_store(&s_shake_req, true);
+    return true;
+}
+
+bool link_audio_listening(uint32_t *age_ms)
+{
+    if (!s_busy || !s_listen) return false;
+    if (age_ms) *age_ms = now_ms() - s_job_t0_ms;
+    return true;
+}
+
+bool link_audio_say_waiting(void) { return s_busy && !s_listen && s_stat_frames == 0; }
+
+void link_audio_tap_stop(void) { atomic_store(&s_stop, STOP_TAP); }
+
+void link_audio_stop_any(void)
+{
+    if (!s_busy) return;
+    if (s_listen && link_client_connected()) link_audio_tap_stop();
+    else link_audio_cancel();
+}
+
+/* cmd say_cancel {job}: the relay gave THAT say up (its job failed): stop waiting for audio
+ * that will not come. Any other job, or none, is answered {cancelling:false}. */
+esp_err_t link_audio_say_cancel(const cJSON *args, cJSON **out)
+{
+    const cJSON *j = cJSON_GetObjectItemCaseSensitive(args, "job");
+    if (!cJSON_IsString(j) || !j->valuestring[0] || strlen(j->valuestring) >= sizeof(s_job)) return ESP_ERR_INVALID_ARG;
+    const bool mine = s_busy && !s_listen && !strcmp(j->valuestring, s_job);
+    if (mine) link_audio_cancel();
+    cJSON *result = cJSON_CreateObject();
+    if (!result) return ESP_ERR_NO_MEM;
+    cJSON_AddStringToObject(result, "job", j->valuestring);
+    cJSON_AddBoolToObject(result, "cancelling", mine);
+    *out = result;
+    return ESP_OK;
 }
 
 bool link_audio_shake(double peak_g, int reversals, unsigned ms)
@@ -1006,7 +1054,7 @@ void link_audio_tick(void)
 {
     if (atomic_exchange(&s_shake_req, false)) shake_talk();
     if (!s_busy) return;
-    if (!s_listen && esp_timer_get_time() - s_last_frame > 30000000) link_audio_cancel();
+    if (!s_listen && link_say_stalled((uint32_t)((esp_timer_get_time() - s_last_frame) / 1000), s_stat_frames)) link_audio_cancel();
     esp_err_t e;
     if (xQueueReceive(s_done, &e, 0) != pdTRUE) return;
     drain(); /* worker has acknowledged completion; discard any late PCM */

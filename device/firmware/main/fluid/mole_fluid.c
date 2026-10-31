@@ -56,6 +56,7 @@
 #include "mole_diag.h"
 #include "esp_private/esp_clk.h"
 #include "cJSON.h"
+#include "gesture.h"
 #include "nvs.h"
 #include "link_protocol.h"   /* link_color_parse */
 
@@ -168,6 +169,10 @@ static uint32_t filler_setting_load(void);
 static bool     s_shake_talk = true;
 static bool     s_shake_talk_loaded = false;
 static bool     shake_talk_load(void);
+/* the gesture bindings (NVS "fluid"/"gestures", gesture.h; loaded once) */
+static uint32_t s_gestures;
+static bool     s_gestures_loaded = false;
+static uint32_t gestures_load(void);
 /* idle life (NVS "fluid"/"idle_life", the console's setting; FD_IDLE_*, lively by default) */
 static int      s_idle_life = FD_IDLE_DEFAULT;
 static bool     s_idle_life_loaded = false;
@@ -300,6 +305,13 @@ static void show_word(int idx) {
     const ftok_t *t = &s_toks[idx];
     fluid_text_set_word(s_tx, s_sim, s_ttext + t->off, t->len, t->orp);
     if (s_tint) tint_letters();
+}
+
+static cJSON *gestures_json(uint32_t packed) {
+    cJSON *o = cJSON_CreateObject();
+    for (int i = 0; o && i < GESTURE_IN_COUNT; i++)
+        cJSON_AddStringToObject(o, GESTURE_INPUT_NAMES[i], GESTURE_ACTION_NAMES[gesture_binds_get(packed, (gesture_input_t)i)]);
+    return o;
 }
 
 /* ── State machine (task) ───────────────────────────────────────────────────── */
@@ -1129,6 +1141,8 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     const uint32_t filler_ms = s_filler_ms;
     if (!s_shake_talk_loaded) { s_shake_talk = shake_talk_load(); s_shake_talk_loaded = true; }
     const bool shake_talk = s_shake_talk;
+    if (!s_gestures_loaded) { s_gestures = gestures_load(); s_gestures_loaded = true; }
+    const uint32_t gestures = s_gestures;
     if (!s_idle_life_loaded) { s_idle_life = idle_life_load(); s_idle_life_loaded = true; }
     const int idle_life = s_idle_life;
     char cname[40], cerr[40];
@@ -1168,6 +1182,7 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     cJSON_AddStringToObject(root, "ack", link_ack_name((link_ack_t)ack));
     cJSON_AddNumberToObject(root, "filler_ms", filler_ms);   /* 0 = off */
     cJSON_AddBoolToObject(root, "shake_talk", shake_talk);
+    cJSON_AddItemToObject(root, "gestures", gestures_json(gestures));
     cJSON_AddStringToObject(root, "idle_life", FD_IDLE_NAMES[idle_life]);
     cJSON_AddStringToObject(root, "edge_mode",   FLUID_EDGE_NAMES[c.edge_mode]);
     cJSON_AddStringToObject(root, "grid",        grid);
@@ -1270,6 +1285,8 @@ esp_err_t mole_fluid_creature_state_set_json(const char *body) {
         if (cJSON_IsBool(j)) shake = cJSON_IsTrue(j) ? 1 : 0;
         else ret = ESP_ERR_INVALID_ARG;
     }
+    /* gestures: {tap|double_tap|button_accept|button_reject: none|talk|event|stop}, kept in NVS */
+    if ((j = cJSON_GetObjectItem(root, "gestures")) && mole_fluid_gestures_apply(j) != ESP_OK) ret = ESP_ERR_INVALID_ARG;
     /* idle_life: "lively" | "calm" | "off" — how much the creature moves by itself, kept in NVS */
     int idle = -1;                                     /* -1: not given */
     if ((j = cJSON_GetObjectItem(root, "idle_life"))) {
@@ -1614,6 +1631,51 @@ static bool shake_talk_load(void) {
         nvs_close(h);
     }
     return v != 0;
+}
+
+static uint32_t gestures_load(void) {
+    nvs_handle_t h;
+    int32_t v = -1;
+    if (nvs_open("fluid", NVS_READONLY, &h) == ESP_OK) {
+        if (nvs_get_i32(h, "gestures", &v) != ESP_OK) v = -1;
+        nvs_close(h);
+    }
+    return v >= 0 && gesture_binds_valid((uint32_t)v) ? (uint32_t)v : gesture_binds_default();
+}
+
+uint32_t mole_fluid_gestures(void) {
+    if (!s_mutex) return gestures_load();                /* before init: straight from NVS */
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (!s_gestures_loaded) { s_gestures = gestures_load(); s_gestures_loaded = true; }
+    const uint32_t v = s_gestures;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+cJSON *mole_fluid_gestures_json(void) { return gestures_json(mole_fluid_gestures()); }
+
+esp_err_t mole_fluid_gestures_apply(const cJSON *bindings) {
+    if (!cJSON_IsObject(bindings)) return ESP_ERR_INVALID_ARG;
+    uint32_t next = mole_fluid_gestures();
+    const cJSON *it;
+    cJSON_ArrayForEach(it, bindings) {
+        const int in = gesture_input_lookup(it->string);
+        const int act = cJSON_IsString(it) ? gesture_action_lookup(it->valuestring) : -1;
+        if (in < 0 || act < 0) return ESP_ERR_INVALID_ARG;   /* all or nothing */
+        next = gesture_binds_set(next, (gesture_input_t)in, (gesture_action_t)act);
+    }
+    nvs_handle_t h;
+    esp_err_t ne = nvs_open("fluid", NVS_READWRITE, &h);
+    if (ne == ESP_OK) {
+        ne = nvs_set_i32(h, "gestures", (int32_t)next);
+        if (ne == ESP_OK) ne = nvs_commit(h);
+        nvs_close(h);
+    }
+    if (ne != ESP_OK) { ESP_LOGW(TAG, "gestures not saved (%s)", esp_err_to_name(ne)); return ne; }
+    if (s_mutex) xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_gestures = next; s_gestures_loaded = true;
+    if (s_mutex) xSemaphoreGive(s_mutex);
+    return ESP_OK;
 }
 
 bool mole_fluid_shake_talk(void) {
