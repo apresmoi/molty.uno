@@ -50,7 +50,7 @@ static char s_job[LINK_STREAM_MAX];
 static uint32_t s_seq;
 static int64_t s_last_frame;
 static atomic_uint s_gen;                              /* bumped by begin(): names one job */
-static atomic_uint s_req;                              /* a gesture's stop or cancel: gen << 1 | what */
+static atomic_uint s_gesture_req;                              /* a gesture's stop or cancel: gen << 1 | what */
 static uint32_t s_job_t0_ms;                           /* the running job began (for a tap's guard) */
 static volatile uint32_t s_stat_frames, s_stat_bytes;   /* diag: frames/bytes of the current job */
 static const char *s_end_reason;                       /* diag: why the last listen ended */
@@ -972,11 +972,11 @@ uint32_t link_audio_job_gen(void) { return atomic_load(&s_gen); }
 
 /* From the sense task. The job may end, and another begin, before this lands: the link task
  * (which starts jobs) applies it in link_audio_tick, and only to the job it was asked for. */
-void link_audio_request(uint32_t gen, link_audio_req_t what) { atomic_store(&s_req, gen << 1 | (uint32_t)what); }
+void link_audio_request(uint32_t gen, link_audio_req_t what) { atomic_store(&s_gesture_req, gen << 1 | (uint32_t)what); }
 
 static void apply_request(void)
 {
-    const uint32_t req = atomic_exchange(&s_req, 0);
+    const uint32_t req = atomic_exchange(&s_gesture_req, 0);
     if (!req || !s_busy || req >> 1 != atomic_load(&s_gen)) return;
     if ((req & 1) == LINK_AUDIO_REQ_CANCEL) link_audio_cancel();
     else atomic_store(&s_stop, STOP_TAP);
