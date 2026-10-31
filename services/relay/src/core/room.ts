@@ -54,7 +54,7 @@ import {
   type ActivityOwnerRequest,
 } from "./api.js";
 import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
-import { WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, GESTURES_CAP, RESUME_CAP, RESUME_FEATURE, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
+import { DEFAULT_WPM, WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, GESTURES_CAP, RESUME_CAP, RESUME_FEATURE, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
 import { FIRST_WORDS_MODES, type FirstWordsMode, OPENER, type OpenerMessage, guardOpener, hangs, pushHistory, stripRepeat } from "./opener.js";
 import { PcmFeed, estimateSpeechMs, splitSpeech, synthesize } from "./speech.js";
 import { DEFAULT_PARTIAL_POLICY, DRAFT_DROPPED_EVENT, DRAFT_USED_EVENT, type DropReason, PARTIAL_EVENT, PartialChunker, PauseTracker, judgeDraft, words } from "./partials.js";
@@ -617,6 +617,7 @@ const fail = (error: string, message?: string, details?: JsonObject): { ok: fals
  * Commands refused while the human is talking (an open shake turn, `human_speaking`): they make a
  * sound or take the screen. (talk / ask likewise; `state` only when it patches.) Agents draft and react instead.
  */
+const VOICE_OFF = "voice_off";
 const HUSHED: readonly string[] = ["say", "quick", "listen", "mood", "show", "act"];
 
 /** An event as agents see it: the internal recipient (`to`) never leaves the relay. */
@@ -1131,6 +1132,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     }
     if (cmd.name === "quick") {
       if (live.getMeta()?.caps && !live.getMeta()!.caps!.includes("say")) return fail("unsupported", "this device has no speaker");
+      if (await this.voiceIsOff()) return { ok: true, result: { skipped: VOICE_OFF } };
       return this.quick(hash, by, cmd.args, cmd.in_reply_to);
     }
     if (cmd.job) {
@@ -1141,6 +1143,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         return fail("unsupported", `this device has no ${cmd.name === "say" ? "speaker" : "microphone"}`);
       }
       if (cmd.name === "listen") {
+        if (await this.voiceIsOff()) return fail(VOICE_OFF, "voice is off: Molty is text only and does not listen");
         const w = this.listenWindow(cmd.args.ms as number | undefined);
         if (!w.ok) return w;
       }
@@ -1193,6 +1196,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
           connected_since: meta?.since ?? null,
           // Who would speak now: the cloud provider, "box" (the owner's voice box), or voice_box_offline (box mode, no box).
           voice: await this.voiceName(),
+          setup: await this.setupChoices(),
           events,
           webhook: agent.webhook ? (redactWebhook(agent.webhook) as JsonObject) : null,
           firmware: firmware as unknown as JsonObject,
@@ -1808,7 +1812,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private async runSay(id: string, args: JsonObject, created: number, ready?: Promise<void>, prepared?: Prepared) {
     const text = args.text as string;
     const voice = typeof args.voice === "string" ? args.voice : undefined;
-    const pre = prepared ?? (ready ? await this.prepareSpeech(text, voice) : undefined);
+    const pre = prepared ?? (ready && !(await this.voiceIsOff()) ? await this.prepareSpeech(text, voice) : undefined);
     if (ready) await ready;
     // prepared speech (an opener) goes to the device at once; the "running" write lands meanwhile
     const running = this.setJob(id, { status: "running" });
@@ -1904,7 +1908,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
 
   /** say (optional) then listen, one job holding the audio lock across both, so nothing slips in between. `ready`: as runSay. */
   private async runTalk(id: string, args: TalkArgs, created: number, ready?: Promise<void>) {
-    const pre = ready && args.say !== undefined ? await this.prepareSpeech(args.say, args.voice) : undefined;
+    const off = await this.voiceIsOff();
+    const pre = ready && args.say !== undefined && !off ? await this.prepareSpeech(args.say, args.voice) : undefined;
     if (ready) await ready;
     await this.setJob(id, { status: "running" });
     const reply = args as unknown as JsonObject; // talk() adds {turn, called} when it answers a human turn
@@ -1927,7 +1932,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (args.client_timing) timings.client = args.client_timing;
     // the human turn this talk answers, in that turn's trace (an `ev:"reply"` entry), once the say is over
     if (reply.turn) await this.replyTrace(id, "talk", reply, timings);
-    if (args.listen) {
+    if (args.listen && !off) {
       const l = await this.record(id, args.listen_ms, { ...args.vad, ...(args.ring_color !== undefined ? { ring_color: args.ring_color } : {}), ...(args.ack !== undefined ? { ack: args.ack } : {}) });
       if (!l.ok) return this.finishJob(id, { status: "failed", error: l.error });
       heard = l;
@@ -1951,7 +1956,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       ms.stt = (l.timings.stt as number) ?? 0;
       timings.listen = l.timings;
     } else {
-      result.reason = "spoken";
+      result.reason = off ? VOICE_OFF : "spoken";
     }
     ms.total = this.clock.now() - created;
     timings.total = ms.total;
@@ -2075,13 +2080,20 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const wantsWork = !!marks?.some((m) => m[1] === WORKING_MOOD);
     const kept = marks?.filter((m) => m[1] !== WORKING_MOOD && (working || !WORKING_ACTIONS.includes(m[1])));
     const rev = this.screenRev;
-    const r = await this.speakNow(id, text, voice, untilDone || wantsWork, kept, prepared);
+    const r = (await this.voiceIsOff()) ? await this.showInstead(text) : await this.speakNow(id, text, voice, untilDone || wantsWork, kept, prepared);
     // an explicit mood during the say (the work was called off) has the last word
     if (r.ok && wantsWork && working && rev === this.screenRev && this.screenInFlight === 0) {
       const m = await this.sendCmd("mood", { mood: WORKING_MOOD });
       if (!m.ok) this.log("auto mood failed", { device: this.deviceId, mood: WORKING_MOOD, error: m.error });
     }
     return r;
+  }
+
+  /** Voice off: the words go on the screen. */
+  private async showInstead(text: string): Promise<SpeakResult> {
+    const start = this.clock.now();
+    const res = await this.sendCmd("show", { text, wpm: DEFAULT_WPM });
+    return res.ok ? { ok: true, start, ms: 0, timings: { voice: "off" } } : { ok: false, error: res.error };
   }
 
   private async speakNow(id: string, text: string, voice: string | undefined, untilDone: boolean, marks?: SayMarks, prepared?: Prepared): Promise<SpeakResult> {
@@ -2835,7 +2847,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       this.openTurn = { id, startAt: now, chunker: new PartialChunker(policy, now), drafts: new Map() };
       return { ok: true, result: {} };
     };
-    const started = !caps || caps.includes("listen") ? await this.startJob("listen", { adopt: local, trigger: "shake" }, true, undefined, open) : fail("unsupported");
+    const hears = (!caps || caps.includes("listen")) && !(await this.voiceIsOff());
+    const started = hears ? await this.startJob("listen", { adopt: local, trigger: "shake" }, true, undefined, open) : fail("unsupported");
     if (started.ok) return started.result.job as string;
     // audio busy (a say / listen crossed the shake): the device ends its listen quietly
     void this.sendCmd("listen_stop", { job: local, reason: "no_speech" }).then((r) => {
@@ -3484,6 +3497,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
    */
   private async pickVoice(kind: "tts" | "stt"): Promise<VoicePick> {
     const cfg = await this.voiceCfg();
+    if (cfg.mode === "off") return { ok: false, error: VOICE_OFF, message: "voice is off: Molty is text only" };
     const cloud: VoicePick = { ok: true, provider: this.voice, name: this.voice.name, mode: cfg.mode, box: false, cfg };
     if (cfg.mode === "cloud") return cloud;
     const s = this.boxSocket();
@@ -3492,6 +3506,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       return { ok: false, error: BOX_OFFLINE, message: s ? `the voice box offers no ${kind.toUpperCase()}` : "no voice box is connected (voice_mode is box)" };
     }
     return cloud;
+  }
+
+  private async voiceIsOff(): Promise<boolean> {
+    return (await this.voiceCfg()).mode === "off";
   }
 
   private async voiceName(): Promise<string> {
@@ -3615,6 +3633,12 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const q = parseActivityQuery(params);
     if (typeof q === "string") return fail("invalid_args", q);
     return { ok: true, result: (await this.activity.query(q, { who: this.who(a).who })) as unknown as JsonObject };
+  }
+
+  /** What the owner chose in setup, for the agent. */
+  private async setupChoices(): Promise<JsonObject> {
+    const cfg = await this.voiceCfg();
+    return { voice: cfg.mode, first_words: cfg.first_words ?? "off", reflex: cfg.reflex ?? "off" };
   }
 
   private async voiceView(): Promise<JsonObject> {

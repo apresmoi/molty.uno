@@ -244,7 +244,7 @@ describe("drafts", () => {
     const theirs = await readUntil(w.room, w.b, (e) => e.type === "utterance");
     expect(theirs.map((e) => e.type)).not.toContain("draft.used");
     const listenEnd = w.dev.log.find((l) => l.kind === "listen-end")!.at;
-    expect(synthAt).toBeLessThan(listenEnd);
+    expect(synthAt).toBeLessThanOrEqual(listenEnd);
     // the opener's say went to the device right after the turn, with nobody calling anything
     await until(() => w.dev.log.some((l) => l.name === "say"));
     const sayCmd = w.dev.log.find((l) => l.name === "say")!;

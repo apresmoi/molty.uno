@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { VoiceApiError, boxLine, getVoice, latencyLine, pairCommand, servingLine, setVoice, unpairBox, voiceChoices, voiceLabel, type VoiceStatus } from './voice';
+import { gapOptions, reflexOptions, voiceOptions, VoiceApiError, boxLine, getVoice, latencyLine, pairCommand, servingLine, setVoice, unpairBox, voiceChoices, voiceLabel, type VoiceStatus } from './voice';
 
 const T = { relay: 'https://relay.example', deviceId: 'molty-k7m2w9c4ya', linkCode: 'K7QX2MPA' };
 
@@ -81,5 +81,24 @@ describe('reflex setting', () => {
     expect(reflexLine(rx())).toBe('reacts with Jev');
     expect(reflexLine(rx({ mode: 'openai', engine: 'keywords', fallback: 'no_key', compare: true }))).toBe('reacts with keywords (no key on the relay for OpenAI) ⠂ comparing every engine in the activity log');
     expect(reflexLine(rx({ mode: 'auto', engine: 'local' }))).toBe('reacts with the voice box');
+  });
+});
+
+describe('setup hides what the owner\'s tools can\'t do', () => {
+  const ids = (o: Array<{ id: string }>) => o.map((x) => x.id);
+  const engines = { local: false, jev: false, openai: false, keywords: true };
+  const rx = (e = engines) => ({ reflex: { mode: 'off' as const, compare: false, engines: e, engine: null, timeout_ms: 1 } });
+
+  it('voice: no box, no box choice; no cloud provider, no cloud choice; text only always', () => {
+    expect(ids(voiceOptions(status({}, { paired: false })))).toEqual(['cloud', 'off']);
+    expect(ids(voiceOptions(status({ cloud: 'none' })))).toEqual(['box', 'off']);
+  });
+  it('gap: first words only with a box that offers them', () => {
+    expect(ids(gapOptions(status()))).toEqual(['phrases', 'off']);
+    expect(ids(gapOptions(status({ first_words: { mode: 'off', available: true } })))).toEqual(['local', 'phrases', 'off']);
+  });
+  it('reflex: only engines available now, keywords and off always', () => {
+    expect(ids(reflexOptions(status(rx())))).toEqual(['off', 'keywords']);
+    expect(ids(reflexOptions(status(rx({ ...engines, local: true, jev: true }))))).toEqual(['off', 'local', 'jev', 'keywords']);
   });
 });

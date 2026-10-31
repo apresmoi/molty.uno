@@ -52,6 +52,7 @@ const STATUS: Record<string, number> = {
   unauthorized: 401,
   forbidden: 403,
   voice_box_offline: 503,
+  voice_off: 409,
   invalid_args: 400,
   unknown_command: 400,
   bad_request: 400,
