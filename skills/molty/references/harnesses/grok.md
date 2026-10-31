@@ -37,6 +37,8 @@ device id, and the agent token in its secret store — never in chat.
 - **Act on the payload.** The webhook body already holds `text` and `turn_id`: call
   `POST $MOLTY_RELAY/v1/devices/<id>/talk {"say":"<answer>","in_reply_to":"<turn_id>"}` straight
   away — no `events` / `status` call first, no bookkeeping.
+- **Short replies.** At most 2 sentences (~25 words) per talk; a long answer becomes several
+  turns ("want the rest?"). Seven-second replies make every turn feel slow.
 - **Quick phrase first.** If you will reason before answering, your FIRST call is
   `POST $MOLTY_RELAY/v1/devices/<id>/cmd {"name":"quick","args":{"id":"hmm","in_reply_to":"<turn_id>"}}`
   (cached audio, plays at once), then think, then talk — it follows the phrase seamlessly. Register
