@@ -77,12 +77,16 @@ export interface BoxOpts {
   reflex?: boolean;
   /** Its stt.reflex for the text so far (called after each stt.partial of a listen started with reflex:true); undefined: none. */
   reflexFor?: (text: string) => Record<string, unknown> | undefined;
+  /** The box offers first words: its line for the human's words (undefined: it never answers). */
+  openerLine?: (text: string) => string | undefined;
+  openerMs?: number;
 }
 
 export function box(room: DeviceRoom, sock: FakeSocket, speech: () => Speech, o: BoxOpts = {}) {
   const tts: Array<{ at: number; text: string }> = [];
   const got: Record<string, number> = {};
   const starts: Array<Record<string, unknown>> = [];
+  const openers: Array<Record<string, any>> = [];
   const turned = new Set<string>();
   const text = sock.sendText.bind(sock);
   const say = (m: unknown) => void room.socketMessage(sock, JSON.stringify(m));
@@ -96,6 +100,11 @@ export function box(room: DeviceRoom, sock: FakeSocket, speech: () => Speech, o:
         void room.socketMessage(sock, encodeAudioFrame({ s: f.id, seq: 0, kind: "pcm16", rate: 16000, end: false }, new Uint8Array(new Int16Array(3200).fill(500).buffer)));
         say({ t: "tts.end", id: f.id });
       }, o.ttsMs ?? 5);
+    }
+    if (f.t === "opener") {
+      openers.push(f);
+      const line = o.openerLine?.(f.text);
+      if (line !== undefined) setTimeout(() => !sock.closed && say({ t: "opener.result", id: f.id, text: line, ms: 1 }), o.openerMs ?? 1);
     }
     if (f.t === "stt.start") {
       got[f.id] = 0;
@@ -119,7 +128,7 @@ export function box(room: DeviceRoom, sock: FakeSocket, speech: () => Speech, o:
       say({ t: "stt.turn_end", id });
     }
   };
-  return { tts, starts, hello: () => room.socketMessage(sock, JSON.stringify({ t: "voice.hello", name: "gpu box", version: "0.1.0", voices: ["a.wav"], stt: true, tts: true, ...(o.reflex ? { reflex: true } : {}) })) };
+  return { tts, starts, openers, hello: () => room.socketMessage(sock, JSON.stringify({ t: "voice.hello", name: "gpu box", version: "0.1.0", voices: ["a.wav"], ...(o.openerLine ? { opener: true } : {}), stt: true, tts: true, ...(o.reflex ? { reflex: true } : {}) })) };
 }
 
 export async function setup(

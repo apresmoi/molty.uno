@@ -284,3 +284,96 @@ def test_tts_lead_trim_can_be_turned_off():
     seen = _tts_run({"trim_lead": False}, lead=960)
     assert len(seen["audio"]) // 2 == 4 * 2400 * 2 // 3
     assert [(i, s) for i, s, _ in seen["words"]] == [(0, 0.0), (1, 0.12)]
+
+
+# ---------------- first words (molty_voice/opener.py) ----------------
+
+
+def test_opener_prompt_has_history_and_keeps_it_short():
+    from molty_voice import opener
+
+    hist = [{"role": "human" if i % 2 == 0 else "molty", "text": f"m{i}"} for i in range(9)]
+    body = opener.request_body("qwen3:1.7b", "and tomorrow?", hist)
+    user = body["messages"][1]["content"]
+    assert user.endswith("Human: and tomorrow?\nMolty:")
+    assert "m4" in user and "m3" not in user  # the last five only
+    assert "Molty: m7" in user and "Human: m8" in user
+    assert body["think"] is False and body["keep_alive"] == -1 and body["stream"] is False
+
+
+def test_opener_clean_keeps_one_plain_line():
+    from molty_voice import opener
+
+    assert opener.clean('"Hmm, the weather,"\nHuman: more') == "Hmm, the weather,"
+    assert opener.clean("Molty: So,") == "So,"
+    assert opener.clean("/here come the buttons,") == "here come the buttons,"
+    assert opener.clean("¿Cómo, a ver") == "¿Cómo, a ver"
+
+
+def test_opener_generate_and_warm_against_a_fake_ollama():
+    import http.server
+    import threading
+
+    from molty_voice import opener
+
+    seen = []
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            seen.append(json.loads(self.rfile.read(int(self.headers["content-length"]))))
+            out = json.dumps({"message": {"content": "Hmm, the weather,\nnoise"}}).encode()
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(out)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        url = f"http://127.0.0.1:{srv.server_port}"
+        out = opener.generate(url, "m", "hi", [])
+        assert out["text"] == "Hmm, the weather," and out["model"] == "m" and isinstance(out["ms"], int)
+        assert opener.warm(url, "m") is True and seen[-1]["keep_alive"] == -1
+    finally:
+        srv.shutdown()
+    assert opener.warm("http://127.0.0.1:9", "m", 0.2) is False  # no model: the box does not offer it
+
+
+def test_bridge_answers_opener_only_when_ready(monkeypatch):
+    from molty_voice import opener
+
+    async def go():
+        b = Bridge(Config(opener=True))
+        sent = []
+
+        async def send(obj):
+            sent.append(obj)
+
+        b._send_json = send
+        monkeypatch.setattr(opener, "generate", lambda *a, **k: {"text": "So,", "ms": 3, "model": "m"})
+        await b._on_text(json.dumps({"t": "opener", "id": "t1", "text": "hi", "history": []}))
+        await asyncio.sleep(0.02)
+        assert sent == []  # not offered: not answered
+        b.opener_ready = True
+        await b._on_text(json.dumps({"t": "opener", "id": "t2", "text": "hi", "history": [{"role": "human", "text": "x"}, 3]}))
+        for _ in range(50):
+            if sent:
+                break
+            await asyncio.sleep(0.01)
+        assert sent == [{"t": "opener.result", "id": "t2", "text": "So,", "ms": 3, "model": "m"}]
+
+        def boom(*a, **k):
+            raise RuntimeError("model down")
+
+        monkeypatch.setattr(opener, "generate", boom)
+        sent.clear()
+        await b._on_text(json.dumps({"t": "opener", "id": "t3", "text": "hi"}))
+        for _ in range(50):
+            if sent:
+                break
+            await asyncio.sleep(0.01)
+        assert sent[0]["id"] == "t3" and "text" not in sent[0]  # silence, never a crash
+
+    asyncio.run(go())
