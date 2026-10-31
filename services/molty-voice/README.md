@@ -69,6 +69,8 @@ molty-voice run --default-voice expresso/ex03-ex01_calm_001_channel2_1081s.wav \
 Flags override the config file (`--name`, `--voices a.wav,b.wav`, `--no-stt`, `--no-tts`,
 `--api-key`, `--reflex`).
 
+**Live conversation** (experiment): `--live` (or `"live": true`) offers OpenAI's `gpt-live-1` when `~/.config/molty-voice/openai.key` exists (`live_key_file`; mode 0600). The owner's `conversation: "live"` (`POST /v1/devices/<id>/voice`, link code) then answers a shake or double tap on the model directly, no agent: half duplex, closed on a tap, after `live_quiet_s` (20 s) of quiet and at 10 min. Billed per second ($0.05/min on 2026-10-31). If it can't open, the shake goes to the agents as usual.
+
 **First words**: `--opener` (or `"opener": true` in the config) offers the relay a very small model that
 starts Molty's reply before the agent can speak. It needs Ollama on the box with the model pulled:
 `ollama pull gemma3:4b` (`opener_url`, `opener_model` in the config). The bridge loads it on connect

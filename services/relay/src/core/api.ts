@@ -81,7 +81,7 @@ export const TERMINAL: readonly JobStatus[] = ["done", "failed"];
 
 export interface JobView {
   job: string;
-  kind: "say" | "listen" | "talk" | "ask" | "update" | "quick";
+  kind: "say" | "listen" | "talk" | "ask" | "update" | "quick" | "live";
   status: JobStatus;
   result?: JsonObject;
   error?: string;
@@ -177,7 +177,7 @@ export const VOICE_MODES: readonly VoiceMode[] = ["auto", "box", "cloud"];
 export type ActivityOwnerRequest = { action: "get"; query: Record<string, unknown> } | { action: "set"; transcripts?: unknown; keep_audio?: unknown };
 
 /** Owner settings for the voice box: read, change (mode / default box voice), or unpair the box. */
-export type VoiceOwnerRequest = { action: "get" } | { action: "set"; mode?: unknown; voice?: unknown; reflex?: unknown; reflex_compare?: unknown; first_words?: unknown; liveliness?: unknown } | { action: "unpair" };
+export type VoiceOwnerRequest = { action: "get" } | { action: "set"; mode?: unknown; voice?: unknown; reflex?: unknown; reflex_compare?: unknown; first_words?: unknown; conversation?: unknown; liveliness?: unknown } | { action: "unpair" };
 
 /**
  * The device owner's calls (the setup console). Authenticated by the device's CURRENT

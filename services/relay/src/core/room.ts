@@ -102,9 +102,9 @@ import {
   renderRequest,
   signatureHeader,
 } from "./webhook.js";
-import type { SttStream, VoiceProvider } from "../voice/types.js";
+import type { SttStream, SttStreamOptions, VoiceProvider } from "../voice/types.js";
 import { ACTIVITY_LIMITS, ACTIVITY_PREFIX, ActivityLog, type Who, jobDraft, parseActivityQuery } from "./activity.js";
-import { BOX_OFFLINE, RemoteVoiceProvider } from "../voice/remote.js";
+import { BOX_OFFLINE, type LiveSession, RemoteVoiceProvider } from "../voice/remote.js";
 import {
   type AgentPhrases,
   BUILTIN_PHRASES,
@@ -137,7 +137,7 @@ export interface SocketMeta {
   /** voice: the box token's hash (revocation closes the socket). */
   tok?: string;
   /** voice: what the box offers, set by its voice.hello (absent = not greeted yet: not used). */
-  box?: { stt: boolean; tts: boolean; reflex?: boolean; opener?: boolean };
+  box?: { stt: boolean; tts: boolean; reflex?: boolean; opener?: boolean; live?: boolean };
   /**
    * voice: replaced / revoked / unpaired. Set BEFORE the socket is closed, in its own
    * serialized metadata (survives hibernation): the host may keep listing a closing socket
@@ -182,6 +182,9 @@ export interface RoomTimings {
   /** First words (core/opener.ts): how long the box may take, how long a line may hang. */
   openerDeadlineMs: number;
   openerHangMs: number;
+  /** A live conversation: how long the box may take to open it (under the device's 3 s adopt window), and to close it. */
+  liveStartMs: number;
+  liveCloseMs: number;
   /** ask: after the device's own timeout_ms, how long the relay waits for its `answer` before resolving `timeout` itself. */
   askGraceMs: number;
   /** update: how long the on-screen "update?" waits for a tap (sent as timeout_ms); the relay adds askGraceMs. */
@@ -212,6 +215,8 @@ export const DEFAULT_TIMINGS: RoomTimings = {
   collectGraceMs: 5000,
   openerDeadlineMs: OPENER.deadlineMs,
   openerHangMs: OPENER.hangMs,
+  liveStartMs: 2500,
+  liveCloseMs: 2000,
   askGraceMs: 5000,
   updateConfirmMs: 60000,
   updateMs: 5 * 60 * 1000,
@@ -425,6 +430,8 @@ interface VoiceCfg {
   liveliness?: Liveliness;
   /** First words (core/opener.ts): the box's small model starts the reply (absent = off: the filler). */
   first_words?: FirstWordsMode;
+  /** A shake or double tap talks to the box's live model (core/live below) instead of the agents (absent = agent). */
+  conversation?: "live";
 }
 /** The connected box's voice.hello (KV `vbox`). */
 interface BoxInfo {
@@ -447,7 +454,7 @@ interface BoxStats {
 /** Which provider serves one say / listen. */
 type VoicePick = { ok: true; provider: VoiceProvider; name: string; mode: VoiceMode; box: boolean; cfg: VoiceCfg } | { ok: false; error: string; message: string };
 
-type JobKind = "say" | "listen" | "talk" | "ask" | "update" | "quick";
+type JobKind = "say" | "listen" | "talk" | "ask" | "update" | "quick" | "live";
 
 /** How an ask ended: a tap (index + label) or no answer (reason). */
 type AskAnswer = { index: number; label: string; reason?: undefined } | { index: null; label: null; reason: "timeout" | "cancelled" | "offline" };
@@ -470,6 +477,19 @@ interface Prepared {
   cached?: boolean;
   /** ...synthesised just now on a cache miss (then cached). */
   fresh?: boolean;
+}
+
+/** A live conversation (runLive): what the box sent that the job has not played yet. */
+interface LiveState {
+  session?: LiveSession;
+  replies: Array<{ feed: PcmFeed; gapMs?: number }>;
+  words: { heard: string; said: string };
+  ended: boolean;
+  end?: { reason: string; billedS?: number; error?: string };
+  /** A reply or the end arrived: ends the listen in progress. */
+  wake?: () => void;
+  /** The box answered live.stop. */
+  closed?: () => void;
 }
 
 /** The relay itself, as the owner of a lead-in (Molty's own filler): anyone's answer may follow it. */
@@ -682,6 +702,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   /** A queued job waiting for the audio lock of `after` (the owner's follow-up behind its opener). */
   private handoff: { after: string; job: string; go: () => void; lead?: string } | undefined;
   private opener: OpenerPlay | undefined;
+  /** The live conversation now (runLive). */
+  private live: LiveState | undefined;
   private lastReactAt = 0;
   private reactTimer: unknown;
   /** The reflex's last reaction (core/reflex.ts), and its model engines refused for good. */
@@ -1643,7 +1665,9 @@ export class DeviceRoom implements AgentApi, OwnerApi {
               ? this.runUpdate(id, args)
               : kind === "quick"
                 ? this.runQuick(id, args, now, ready)
-                : this.runTalk(id, args as unknown as TalkArgs, now, ready);
+                : kind === "live"
+                  ? this.runLive(id, args)
+                  : this.runTalk(id, args as unknown as TalkArgs, now, ready);
     run
       .catch((e: unknown) => this.finishJob(id, { status: "failed", error: errorCode(e) }))
       .finally(() => {
@@ -2251,7 +2275,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   }
 
   /** `extra`: the device listen args besides job/ms/rate (VAD knobs, ring_color), passed through. `ms` undefined: the device's setting. */
-  private async record(id: string, ms: number | undefined, extra: JsonObject = {}): Promise<ListenResult> {
+  private async record(id: string, ms: number | undefined, extra: JsonObject = {}, live?: (opts: SttStreamOptions) => SttStream): Promise<ListenResult> {
     this.cancelFiller(); // a new listen: whatever turn was waiting for a filler is over
     this.cancelHang();
     this.lastFill = undefined; // ...and a filler of an earlier turn no longer skips anyone's quick
@@ -2273,11 +2297,13 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     // end_silence_ms), nor on the cloud path or older firmware: those keep the device VAD.
     const semantic = pick.box && extra.vad === undefined && extra.end_silence_ms === undefined && !!this.liveSocket()?.getMeta()?.caps?.includes("listen_stop");
     // Molty's reflex (core/reflex.ts): only on the box's streaming STT (its words while the human talks)
-    if (pick.provider.sttStream && pick.box) buf.reflex = this.reflexFor(buf, pick.cfg);
+    if (!live && pick.provider.sttStream && pick.box) buf.reflex = this.reflexFor(buf, pick.cfg);
     // Streaming STT (voice box): opened before the mic, so every chunk goes out the moment it arrives.
-    if (pick.provider.sttStream) {
+    if (live || pick.provider.sttStream) {
       try {
-        buf.stream = pick.provider.sttStream({
+        const provider = pick.provider;
+        const open = live ?? ((o: SttStreamOptions) => provider.sttStream!(o));
+        buf.stream = open({
           onTurnEnd: (reason) => this.onTurnEnd(buf, reason),
           onFail: () => this.onBoxFail(buf),
           onHint: (k) => this.onHint(buf, k),
@@ -2652,6 +2678,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
    */
   private async adoptShake(local: string): Promise<string | undefined> {
     const caps = this.liveSocket()?.getMeta()?.caps;
+    const live = await this.liveConversation(local);
+    if (live) return live;
     const policy = { ...policyFor(await this.kv.get<SpeechStats>(K.speech)), lead_ms: this.t.partialLeadMs };
     const open = async (id: string): Promise<Outcome<JsonObject>> => {
       const now = this.clock.now();
@@ -2666,6 +2694,140 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     });
     this.log("shake listen declined", { device: this.deviceId, error: started.error });
     return undefined;
+  }
+
+  /**
+   * The owner's `conversation: "live"`: the shake's listen becomes a live conversation job. Undefined:
+   * not asked for, or it could not open (logged), and the shake takes the agents' path as ever.
+   */
+  private async liveConversation(local: string): Promise<string | undefined> {
+    if ((await this.voiceCfg()).conversation !== "live" || !this.boxSocket()?.getMeta()?.box?.live) return undefined;
+    const caps = this.liveSocket()?.getMeta()?.caps;
+    const fallback = async (why: string) => {
+      await this.activity.record({ ts: this.clock.now(), kind: "trace", ev: "live", data: { fallback: why } });
+      return undefined;
+    };
+    if (!caps?.includes("listen_stop") || !caps.includes(LISTEN_WINDOW_CAP) || !caps.includes("say")) return fallback("firmware");
+    if (this.audioJob || this.live) return fallback("audio_busy");
+    const pick = await this.pickVoice("stt");
+    if (!pick.ok || !pick.box) return fallback("not_on_the_box");
+    const state: LiveState = { replies: [], words: { heard: "", said: "" }, ended: false };
+    const session = await this.box.liveStart(
+      {
+        onReply: (feed, gapMs) => {
+          state.replies.push({ feed, gapMs });
+          state.wake?.();
+        },
+        onWords: (who, text) => {
+          state.words[who] += text;
+        },
+        onEnd: (reason, billedS, error) => {
+          state.ended = true;
+          state.end = { reason, billedS, error };
+          state.wake?.();
+          state.closed?.();
+        },
+      },
+      this.t.liveStartMs,
+    );
+    if (typeof session === "string") return fallback(session);
+    if (this.audioJob || this.live) {
+      session.stop();
+      return fallback("audio_busy");
+    }
+    state.session = session;
+    this.live = state;
+    const started = await this.startJob("live", { adopt: local }, true);
+    if (started.ok) return started.result.job as string;
+    this.live = undefined;
+    session.stop();
+    return fallback(started.error);
+  }
+
+  /**
+   * A live conversation: turns of the device's mic (one listen, sent to the box) and of the model's
+   * reply (one say, played from the box's frames), half duplex because the device does one or the
+   * other. Ends when the box closes it (quiet, its cap, a failure), on a tap, or when a turn breaks.
+   * The session is closed on every way out: it is billed per second.
+   */
+  private async runLive(id: string, args: JsonObject) {
+    const live = this.live;
+    const session = live?.session;
+    if (!live || !session) return this.finishJob(id, { status: "failed", error: "live_gone" });
+    const t0 = this.clock.now();
+    let why = "";
+    let turns = 0;
+    let adopt: JsonObject = args;
+    let empties = 0;
+    const play = async (): Promise<boolean> => {
+      for (let reply = live.replies.shift(); reply; reply = live.replies.shift()) {
+        const pick = await this.pickVoice("tts");
+        if (!pick.ok) return (why = pick.error), false;
+        const r = await this.speakNow(id, "…", undefined, true, undefined, { pick, feed: reply.feed, at: this.clock.now() });
+        if (!r.ok) {
+          reply.feed.end();
+          return (why = r.error), false;
+        }
+        turns++;
+        const heard = live.words.heard.trim();
+        const said = live.words.said.trim();
+        live.words = { heard: "", said: "" };
+        await this.activity.record({ ts: this.clock.now(), kind: "trace", ev: "live", job: id, data: { turn: turns, ...(reply.gapMs !== undefined ? { gap_ms: reply.gapMs } : {}), first_audio_ms: r.timings.first_audio ?? null, heard, said } as JsonObject });
+      }
+      return true;
+    };
+    try {
+      await this.setJob(id, { status: "running" });
+      while (!live.ended) {
+        session.listen();
+        const r = await this.record(id, 0, { ...adopt, ack: "off" }, (opts) => {
+          live.wake = () => opts.onTurnEnd?.(live.ended ? "no_speech" : undefined);
+          if (live.replies.length || live.ended) queueMicrotask(live.wake);
+          return session.stream();
+        });
+        live.wake = undefined;
+        adopt = {};
+        // a reply can come before the first mic frame; a device that keeps sending nothing is broken
+        empties = !r.ok && r.error === "no_audio" && !live.replies.length ? empties + 1 : 0;
+        if ((!r.ok && r.error !== "no_audio") || empties >= 3) {
+          why = r.ok ? "no_audio" : r.error;
+          break;
+        }
+        if (r.ok && r.reason === "tap") {
+          why = "tap";
+          break;
+        }
+        if (!(await play())) break;
+      }
+    } catch (e) {
+      why = errorCode(e); // a broken turn ends the conversation like any other way out
+    } finally {
+      for (const reply of live.replies) reply.feed.end();
+      session.stop();
+      if (!live.ended) {
+        await new Promise<void>((resolve) => {
+          const timer = this.clock.setTimeout(resolve, this.t.liveCloseMs);
+          live.closed = () => {
+            this.clock.clearTimeout(timer);
+            resolve();
+          };
+        });
+      }
+      this.live = undefined;
+    }
+    const end = live.end;
+    const reason = why || end?.reason || "ended";
+    await this.activity.record({
+      ts: this.clock.now(),
+      kind: "trace",
+      ev: "live",
+      job: id,
+      data: { closed: reason, seconds: Math.round((this.clock.now() - t0) / 1000), turns, ...(end?.billedS !== undefined ? { billed_s: end.billedS } : {}), ...(end?.error ? { error: end.error } : {}) },
+    });
+    void this.sendCmd("mood", { mood: "idle" }).then((m) => {
+      if (!m.ok) this.log("auto mood failed", { device: this.deviceId, mood: "idle", error: m.error });
+    });
+    await this.finishJob(id, { status: "done", result: { reason, turns } });
   }
 
   /** The open turn is still being listened to (its listen has not ended). */
@@ -3230,6 +3392,12 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       case "stt.trace":
       case "stt.reflex":
       case "opener.result":
+      case "live.started":
+      case "live.reply":
+      case "live.reply_end":
+      case "live.heard":
+      case "live.said":
+      case "live.end":
         if (meta.box) this.box.onText(sock, frame);
         return;
       default:
@@ -3248,7 +3416,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const now = this.clock.now();
     // reflex: the box runs Molty's reflex classifier (stt.reflex; only boxes that say so are asked)
     const reflex = f.reflex === true && f.stt === true;
-    sock.setMeta({ ...meta, box: { stt: f.stt, tts: f.tts, ...(reflex ? { reflex } : {}), ...(f.opener === true ? { opener: true } : {}) } });
+    sock.setMeta({ ...meta, box: { stt: f.stt, tts: f.tts, ...(reflex ? { reflex } : {}), ...(f.opener === true ? { opener: true } : {}), ...(f.live === true ? { live: true } : {}) } });
     await this.kv.put<BoxInfo>(K.vbox, { name: f.name as string, version: (f.version as string | undefined) ?? "", voices, stt: f.stt, tts: f.tts, ...(reflex ? { reflex } : {}), since: now });
     const cfg = await this.voiceCfg();
     sock.sendText(JSON.stringify({ t: "voice.welcome", device_id: this.deviceId, mode: cfg.mode, voice: cfg.voice ?? null }));
@@ -3371,6 +3539,11 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         if (req.first_words === "off") delete cfg.first_words;
         else cfg.first_words = req.first_words as FirstWordsMode;
       }
+      if (req.conversation !== undefined) {
+        if (req.conversation !== "agent" && req.conversation !== "live") return fail("invalid_args", "conversation must be agent or live");
+        if (req.conversation === "agent") delete cfg.conversation;
+        else cfg.conversation = "live";
+      }
       if (req.liveliness !== undefined) {
         if (!isLiveliness(req.liveliness)) return fail("invalid_args", `liveliness must be one of ${LIVELINESS.join(", ")}`);
         if (req.liveliness === DEFAULT_LIVELINESS) delete cfg.liveliness;
@@ -3462,6 +3635,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       cloud: this.voice.name,
       serving: { tts: await serving("tts"), stt: sttServing },
       first_words: { mode: cfg.first_words ?? "off", available: !!connected?.getMeta()?.box?.opener },
+      conversation: { mode: cfg.conversation ?? "agent", available: !!connected?.getMeta()?.box?.live },
       reflex: {
         mode,
         compare: !!cfg.reflex_compare,

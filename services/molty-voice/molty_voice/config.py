@@ -63,6 +63,11 @@ class Config:
     opener: bool = False
     opener_url: str = "http://127.0.0.1:11434"
     opener_model: str = "gemma3:4b"
+    # A live conversation (molty_voice/live.py): OpenAI's gpt-live-1 answers on Molty directly, offered to
+    # the relay (voice.hello live) when on and the key's file exists. The owner's `conversation` picks it.
+    live: bool = False
+    live_key_file: str = ""
+    live_quiet_s: float = 20.0
 
     def __repr__(self) -> str:  # never show the token
         d = asdict(self)
