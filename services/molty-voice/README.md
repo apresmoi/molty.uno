@@ -67,7 +67,14 @@ molty-voice run --default-voice expresso/ex03-ex01_calm_001_channel2_1081s.wav \
 ```
 
 Flags override the config file (`--name`, `--voices a.wav,b.wav`, `--no-stt`, `--no-tts`,
-`--api-key`). Exit codes:
+`--api-key`, `--reflex`).
+
+**Molty's reflex** (docs/AGENT-LINK.md "Reflex"): `--reflex` (or `"reflex": true` in the config)
+loads a small emotion classifier — `SamLowe/roberta-base-go_emotions-onnx`, int8 ONNX, ~125 MB,
+on the CPU (~35 ms a phrase with 4 threads; nothing on the GPU next to Kyutai) — and offers it
+to the relay. Install its extras first: `uv tool install './services/molty-voice[reflex]'`. The
+model downloads from Hugging Face on the first run. Without the extras the box logs a warning
+and offers no reflex. The owner picks the engine in the console (box = this classifier). Exit codes:
 
 - `2`: not paired.
 - `3`: the relay refused the token (unpaired or replaced). Run `pair` again.

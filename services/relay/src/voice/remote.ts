@@ -14,6 +14,8 @@
 //                {"t":"stt.final","id","text","ms"?} | {"t":"stt.final","id","error"}
 //   box → relay  {"t":"stt.hint","id","k":"pause"|"question"}? (while the human talks: the room forwards it to Molty)
 //                {"t":"stt.trace","id","trace":{…}}? (before stt.turn_end and stt.final: the latest is kept, core/trace.ts)
+//                {"t":"stt.reflex","id","n","pick","conf","p","ms","chars","tokens"?}? (only when stt.start said reflex:true:
+//                the box's classifier on reflex chunk n, core/reflex.ts)
 //
 // Every request is bound to the socket it went out on: when that socket closes
 // or is replaced, drop() fails its requests at once (`voice_box_offline`), so
@@ -54,6 +56,8 @@ interface SttOp {
   hint(k: "pause" | "question"): void;
   /** stt.partial from the box: the text so far, only while the audio is still flowing. */
   partial(text: string): void;
+  /** stt.reflex from the box, while the audio is still flowing. */
+  reflex(frame: Record<string, unknown>): void;
   ms?: JsonObject;
   /** The box's latest stt.trace. */
   trace?: JsonObject;
@@ -187,10 +191,13 @@ export class RemoteVoiceProvider implements VoiceProvider {
         if (state !== "open" || turned) return;
         opts.onPartial?.(text);
       },
+      reflex: (frame) => {
+        if (state === "open" && !turned) opts.onReflex?.(frame);
+      },
     };
     this.sttOps.set(id, op);
     try {
-      ch.sendText(JSON.stringify({ t: "stt.start", id, rate: SAMPLE_RATE, ...(opts.noSpeechMs !== undefined ? { no_speech_ms: opts.noSpeechMs } : {}) }));
+      ch.sendText(JSON.stringify({ t: "stt.start", id, rate: SAMPLE_RATE, ...(opts.noSpeechMs !== undefined ? { no_speech_ms: opts.noSpeechMs } : {}), ...(opts.reflex ? { reflex: true } : {}) }));
     } catch {
       op.settle(new Error(BOX_OFFLINE));
     }
@@ -255,6 +262,9 @@ export class RemoteVoiceProvider implements VoiceProvider {
       const op = this.sttOps.get(id);
       const t = op && op.ch.same(from) ? cleanBoxTrace(frame.trace) : undefined;
       if (op && t) op.trace = t;
+    } else if (frame.t === "stt.reflex") {
+      const op = this.sttOps.get(id);
+      if (op && op.ch.same(from)) op.reflex(frame);
     } else if (frame.t === "stt.partial") {
       const op = this.sttOps.get(id);
       if (op && op.ch.same(from) && typeof frame.text === "string") op.partial(frame.text.trim().slice(0, 4000));

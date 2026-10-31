@@ -106,6 +106,7 @@ import { ACTIVITY_LIMITS, ACTIVITY_PREFIX, ActivityLog, type Who, jobDraft, pars
 import { BOX_OFFLINE, RemoteVoiceProvider } from "../voice/remote.js";
 import { ListenTrace, SeqOrder, TRACE_LIMITS, capTrace } from "./trace.js";
 import { AUDIO_KEEP, AUDIO_PREFIX, AudioKeep, wav } from "./audio-keep.js";
+import { EngineBench, REFLEX, REFLEX_MODES, REFLEX_SHOW, type ReflexEngine, type ReflexMode, type ReflexPick, ReflexSession, type UtteranceCategory, categoryOf, parseBoxReflex, resolveEngine } from "./reflex.js";
 
 export interface SocketMeta {
   /** hello: device not yet authenticated; live: the device; voice: a voice box (authenticated at upgrade). */
@@ -118,7 +119,7 @@ export interface SocketMeta {
   /** voice: the box token's hash (revocation closes the socket). */
   tok?: string;
   /** voice: what the box offers, set by its voice.hello (absent = not greeted yet: not used). */
-  box?: { stt: boolean; tts: boolean };
+  box?: { stt: boolean; tts: boolean; reflex?: boolean };
   /**
    * voice: replaced / revoked / unpaired. Set BEFORE the socket is closed, in its own
    * serialized metadata (survives hibernation): the host may keep listing a closing socket
@@ -230,6 +231,8 @@ export interface RoomDeps {
   resolveHost?: Resolver;
   /** Latest firmware release (core/releases.ts); absent = always "unavailable". */
   releases?: ReleaseSource;
+  /** The reflex's model engines (core/reflex.ts): Worker secrets TYPESAFE_API_KEY / OPENAI_API_KEY. Never logged. */
+  reflexKeys?: { jev?: string; openai?: string };
 }
 
 interface DeviceRecord {
@@ -355,6 +358,8 @@ interface ListenBuffer {
   roomGen: number;
   /** The box's word arrivals (its stt.partial): the human's pauses, for the calibration. */
   pauses: PauseTracker;
+  /** Molty's own reactions to what the human says (core/reflex.ts), when the owner turned it on. */
+  reflex?: ReflexSession;
 }
 
 /** A finished listen's trace, until its job's activity entry is written (finishJob). */
@@ -377,6 +382,10 @@ interface VoiceCfg {
   mode: VoiceMode;
   /** Default voice for the box when the agent gives none. */
   voice?: string;
+  /** Molty's reflex (core/reflex.ts): which engine classifies what the human says (absent = off). */
+  reflex?: ReflexMode;
+  /** Reflex compare mode: every available engine runs on each chunk (trace), only `reflex` fires. */
+  reflex_compare?: boolean;
 }
 /** The connected box's voice.hello (KV `vbox`). */
 interface BoxInfo {
@@ -385,6 +394,8 @@ interface BoxInfo {
   voices: string[];
   stt: boolean;
   tts: boolean;
+  /** It runs the reflex classifier (stt.reflex). */
+  reflex?: boolean;
   since: number;
 }
 /** The box's last measured latencies (KV `vstat`). */
@@ -443,6 +454,8 @@ interface OpenTurn {
   chunker: PartialChunker;
   timer?: unknown;
   drafts: Map<string, HeldDraft>;
+  /** An agent reacted during this turn: the reflex yields to it for the rest of the turn. */
+  agentReacted?: boolean;
 }
 
 /** The opener being spoken for a turn, and who owns it (their follow-up queues behind it). */
@@ -583,6 +596,12 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private opener: OpenerPlay | undefined;
   private lastReactAt = 0;
   private reactTimer: unknown;
+  /** The reflex's last reaction (core/reflex.ts), and its model engines refused for good. */
+  private lastReflexAt = 0;
+  private readonly reflexBench = new EngineBench();
+  private readonly reflexKeys: { jev?: string; openai?: string };
+  /** The latest listen's reflex (its categories outlive the listen: the filler asks right after the turn). */
+  private lastReflex: ReflexSession | undefined;
   /** Writes to the calibration record are serialized (read-modify-write from several paths). */
   private speechChain: Promise<unknown> = Promise.resolve();
 
@@ -598,6 +617,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     this.fetcher = deps.fetch ?? ((req) => globalThis.fetch(req));
     this.resolveHost = deps.resolveHost;
     this.releases = deps.releases ?? NO_RELEASES;
+    this.reflexKeys = { ...(deps.reflexKeys?.jev ? { jev: deps.reflexKeys.jev } : {}), ...(deps.reflexKeys?.openai ? { openai: deps.reflexKeys.openai } : {}) };
     this.box = new RemoteVoiceProvider(() => this.boxSocket(), this.clock);
     this.activity = new ActivityLog({ deviceId: this.deviceId, kv: this.kv, clock: this.clock, log: this.log });
     this.audioKeep = new AudioKeep(this.kv, this.clock);
@@ -1965,6 +1985,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     // also calls no_speech. Not when the agent tuned the device VAD itself (vad /
     // end_silence_ms), nor on the cloud path or older firmware: those keep the device VAD.
     const semantic = pick.box && extra.vad === undefined && extra.end_silence_ms === undefined && !!this.liveSocket()?.getMeta()?.caps?.includes("listen_stop");
+    // Molty's reflex (core/reflex.ts): only on the box's streaming STT (its words while the human talks)
+    if (pick.provider.sttStream && pick.box) buf.reflex = this.reflexFor(buf, pick.cfg);
     // Streaming STT (voice box): opened before the mic, so every chunk goes out the moment it arrives.
     if (pick.provider.sttStream) {
       try {
@@ -1973,6 +1995,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
           onFail: () => this.onBoxFail(buf),
           onHint: (k) => this.onHint(buf, k),
           onPartial: (text) => this.onPartial(buf, text),
+          ...(buf.reflex?.wantsLocal ? { reflex: true, onReflex: (f: Record<string, unknown>) => this.onBoxReflex(buf, f) } : {}),
           ...(semantic ? { noSpeechMs: typeof extra.no_speech_ms === "number" ? extra.no_speech_ms : BOX_NO_SPEECH_MS } : {}),
         });
         if (semantic && !buf.boxFailed) {
@@ -1980,6 +2003,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
           extra = { ...extra, vad: false };
         }
       } catch (e) {
+        buf.reflex?.close();
+        buf.reflex = undefined;
         if (pick.mode !== "auto") return { ok: false, error: errorCode(e) };
         // auto: the box vanished between the pick and the open: the cloud, batch.
         fallback = errorCode(e);
@@ -1995,6 +2020,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       throw e;
     } finally {
       buf.stream?.abort(); // no-op once its final text is in
+      buf.reflex?.close();
       this.clock.clearTimeout(buf.gapTimer);
     }
     return this.traced(buf, r);
@@ -2377,6 +2403,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private onPartial(buf: ListenBuffer, text: string) {
     if (buf.ended || this.listenBuf !== buf) return;
     buf.pauses.update(text, this.clock.now());
+    buf.reflex?.text(text);
     const turn = this.openTurn;
     if (!turn || turn.id !== buf.job) return;
     this.emitPartial(turn, turn.chunker.update(text, this.clock.now()));
@@ -2706,6 +2733,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const res = args.mood !== undefined ? await this.sendCmd("mood", { mood: args.mood, hold_s: 0, react: true }) : await this.sendCmd("act", { action: args.action });
     this.turnTrace(turn)?.react(what, now, res.ok ? "ok" : res.error);
     if (!res.ok) return res;
+    turn.agentReacted = true; // the reflex yields to the agent for the rest of this turn
     await this.updateSpeech((s) => ({ ...s, totals: { ...s.totals, reacts: s.totals.reacts + 1 } }));
     // a gesture plays over the listening and ends by itself
     if (args.action !== undefined) return this.ride(a, { ok: true, result: { turn_id: turn.id, shown: args.action, next_after_ms: REACT_MIN_GAP_MS } });
@@ -2716,6 +2744,92 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       void this.sendCmd("mood", { mood: "listening", hold_s: 0, react: true });
     }, this.t.reactShowMs);
     return this.ride(a, { ok: true, result: { turn_id: turn.id, shown: args.mood, for_ms: this.t.reactShowMs, next_after_ms: REACT_MIN_GAP_MS } });
+  }
+
+  // ---------------- Molty's reflex (core/reflex.ts, docs/AGENT-LINK.md "Reflex") ----------------
+
+  /** The owner's reflex setting for one box-streamed listen (undefined: off). */
+  private reflexFor(buf: ListenBuffer, cfg: VoiceCfg): ReflexSession | undefined {
+    const mode = cfg.reflex ?? "off";
+    if (mode === "off") return undefined;
+    const avail = { local: !!this.boxSocket()?.getMeta()?.box?.reflex, jev: !!this.reflexKeys.jev, openai: !!this.reflexKeys.openai };
+    const session = new ReflexSession({
+      mode,
+      compare: !!cfg.reflex_compare,
+      avail,
+      keys: this.reflexKeys,
+      fetch: this.fetcher,
+      clock: this.clock,
+      bench: this.reflexBench,
+      fire: (pick) => this.reflexFire(buf, pick),
+      note: (n) => buf.trace.reflex({ ...n, at: n.at - buf.trace.t0 }),
+    });
+    this.lastReflex = session;
+    buf.trace.relay.reflex_cfg = { mode, engine: session.engine, ...(session.fallback ? { fb: session.fallback } : {}), ...(cfg.reflex_compare ? { compare: session.engines } : {}) };
+    return session;
+  }
+
+  /** The box's classifier verdict for one reflex chunk (stt.reflex), while that listen runs. */
+  private onBoxReflex(buf: ListenBuffer, f: Record<string, unknown>) {
+    if (buf.ended || this.listenBuf !== buf) return;
+    const v = parseBoxReflex(f);
+    if (v) buf.reflex?.onLocal(v);
+  }
+
+  /**
+   * The utterance category of `text` (the latest partial or final) for a context-picked filler: the
+   * reflex's own answer for those words when it has one, else one call of the owner's reflex engine
+   * (keywords when the reflex is off, keyless or failing). The filler-category seam of feat/quick-phrases.
+   */
+  async fillerCategory(text: string): Promise<{ category: UtteranceCategory; engine: ReflexEngine; ms: number }> {
+    const latest = this.lastReflex?.latest;
+    if (latest && latest.n === words(text).length) return { category: latest.cat, engine: latest.engine, ms: 0 };
+    const mode = (await this.voiceCfg()).reflex ?? "off";
+    const engine = mode === "off" ? "keywords" : resolveEngine(mode, { local: false, jev: !!this.reflexKeys.jev, openai: !!this.reflexKeys.openai }).engine;
+    return categoryOf(text, { engine, keys: this.reflexKeys, fetch: this.fetcher, clock: this.clock });
+  }
+
+  /** Something owns Molty's screen besides the listen: a question, a pairing code, an update. */
+  private async ownerScreen(): Promise<boolean> {
+    if (this.pendingAsks.size) return true;
+    const now = this.clock.now();
+    const pid = await this.kv.get<string>(K.pairCurrent);
+    if (pid) {
+      const p = await this.kv.get<PairRecord>(K.pair(pid));
+      if (p && p.status === "pending" && p.expires > now) return true;
+    }
+    return !!(await this.kv.get<UpdateRecord>(K.upd));
+  }
+
+  /**
+   * Shows a reflex pick through the react path — screen only, never a sound. Not when the listen is
+   * over, an owner screen is up, an agent reacted this turn (agents win) or within REFLEX.gapMs of
+   * any react / reflex. Resolves "ok" or why not.
+   */
+  private async reflexFire(buf: ListenBuffer, pick: Exclude<ReflexPick, "none">): Promise<string> {
+    const live = () => !buf.ended && this.listenBuf === buf;
+    if (!live()) return "closed";
+    const turn = this.openTurn?.id === buf.job ? this.openTurn : undefined;
+    const show = REFLEX_SHOW[pick];
+    const caps = this.liveSocket()?.getMeta()?.caps;
+    if ("mood" in show ? !caps?.includes(REACT_CAP) : !caps?.includes(FEATURES.act.cap)) return "unsupported";
+    if (await this.ownerScreen()) return "screen";
+    // after the reads: an agent's react or the listen's end may have come meanwhile
+    if (!live()) return "closed";
+    if (turn?.agentReacted || this.clock.now() - this.lastReactAt < REFLEX.gapMs) return "agent";
+    if (this.clock.now() - this.lastReflexAt < REFLEX.gapMs) return "rate_limited";
+    this.lastReflexAt = this.clock.now();
+    const res = "mood" in show ? await this.sendCmd("mood", { mood: show.mood, hold_s: 0, react: true }) : await this.sendCmd("act", { action: show.action });
+    if (!res.ok) return res.error;
+    if ("mood" in show) {
+      this.clock.clearTimeout(this.reactTimer);
+      this.reactTimer = this.clock.setTimeout(() => {
+        // back to listening — unless the human finished meanwhile (the device's own ack owns the screen then)
+        if (!live()) return;
+        void this.sendCmd("mood", { mood: "listening", hold_s: 0, react: true });
+      }, this.t.reactShowMs);
+    }
+    return "ok";
   }
 
   /** The open turn's listen trace (core/trace.ts), while its listen runs. */
@@ -2794,6 +2908,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       case "stt.turn_end":
       case "stt.hint":
       case "stt.trace":
+      case "stt.reflex":
         if (meta.box) this.box.onText(sock, frame);
         return;
       default:
@@ -2804,14 +2919,16 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private async onBoxHello(sock: DeviceSocket, meta: SocketMeta, f: Record<string, unknown>) {
     const str = (v: unknown, max: number) => typeof v === "string" && v.length > 0 && v.length <= max && !/[\u0000-\u001f\u007f]/.test(v);
     const voices = Array.isArray(f.voices) ? f.voices.filter((v): v is string => str(v, 200)).slice(0, 64) : [];
-    if (!str(f.name, 64) || (f.version !== undefined && !str(f.version, 32)) || typeof f.stt !== "boolean" || typeof f.tts !== "boolean") {
+    if (!str(f.name, 64) || (f.version !== undefined && !str(f.version, 32)) || typeof f.stt !== "boolean" || typeof f.tts !== "boolean" || (f.reflex !== undefined && typeof f.reflex !== "boolean")) {
       return sock.close(CLOSE_PROTOCOL, "malformed voice.hello");
     }
     // Unpaired since the upgrade (revoke / unpair / forget close it too, but never trust a stale socket).
     if (!meta.tok || !(await this.kv.get<TokenRecord>(K.token(meta.tok)))) return sock.close(CLOSE_UNAUTHORIZED, "voice box token revoked");
     const now = this.clock.now();
-    sock.setMeta({ ...meta, box: { stt: f.stt, tts: f.tts } });
-    await this.kv.put<BoxInfo>(K.vbox, { name: f.name as string, version: (f.version as string | undefined) ?? "", voices, stt: f.stt, tts: f.tts, since: now });
+    // reflex: the box runs Molty's reflex classifier (stt.reflex; only boxes that say so are asked)
+    const reflex = f.reflex === true && f.stt === true;
+    sock.setMeta({ ...meta, box: { stt: f.stt, tts: f.tts, ...(reflex ? { reflex } : {}) } });
+    await this.kv.put<BoxInfo>(K.vbox, { name: f.name as string, version: (f.version as string | undefined) ?? "", voices, stt: f.stt, tts: f.tts, ...(reflex ? { reflex } : {}), since: now });
     const cfg = await this.voiceCfg();
     sock.sendText(JSON.stringify({ t: "voice.welcome", device_id: this.deviceId, mode: cfg.mode, voice: cfg.voice ?? null }));
     this.log("voice box connected", { device: this.deviceId, stt: f.stt, tts: f.tts });
@@ -2917,8 +3034,18 @@ export class DeviceRoom implements AgentApi, OwnerApi {
           return fail("invalid_args", "voice must be a voice name of 1..200 printable characters, or null for the box's default");
         } else cfg.voice = req.voice;
       }
+      if (req.reflex !== undefined) {
+        if (!REFLEX_MODES.includes(req.reflex as ReflexMode)) return fail("invalid_args", `reflex must be one of ${REFLEX_MODES.join(", ")}`);
+        if (req.reflex === "off") delete cfg.reflex;
+        else cfg.reflex = req.reflex as ReflexMode;
+      }
+      if (req.reflex_compare !== undefined) {
+        if (typeof req.reflex_compare !== "boolean") return fail("invalid_args", "reflex_compare must be true or false");
+        if (req.reflex_compare) cfg.reflex_compare = true;
+        else delete cfg.reflex_compare;
+      }
       await this.kv.put<VoiceCfg>(K.voiceCfg, cfg);
-      await this.activity.record({ ts: this.clock.now(), kind: "settings", ev: "voice", data: { mode: cfg.mode, voice: cfg.voice ?? null } });
+      await this.activity.record({ ts: this.clock.now(), kind: "settings", ev: "voice", data: { mode: cfg.mode, voice: cfg.voice ?? null, ...(req.reflex !== undefined || req.reflex_compare !== undefined ? { reflex: cfg.reflex ?? "off", reflex_compare: !!cfg.reflex_compare } : {}) } });
     }
     return { ok: true, result: await this.voiceView() };
   }
@@ -2990,11 +3117,26 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       const p = await this.pickVoice(k);
       return p.ok ? p.name : p.error;
     };
+    // the reflex: what each engine needs (local: a connected box with the classifier; jev / openai: the relay's key)
+    const local = !!connected?.getMeta()?.box?.reflex;
+    const avail = { local, jev: !!this.reflexKeys.jev, openai: !!this.reflexKeys.openai };
+    const mode = cfg.reflex ?? "off";
+    const sttServing = await serving("stt");
+    const now = mode === "off" ? null : resolveEngine(mode, { ...avail, local: local && sttServing === "box" });
     return {
       mode: cfg.mode,
       voice: cfg.voice ?? null,
       cloud: this.voice.name,
-      serving: { tts: await serving("tts"), stt: await serving("stt") },
+      serving: { tts: await serving("tts"), stt: sttServing },
+      reflex: {
+        mode,
+        compare: !!cfg.reflex_compare,
+        engines: { ...avail, keywords: true },
+        // the engine the next listen would fire with (null: off), and why not the chosen one
+        engine: now?.engine ?? null,
+        ...(now?.fallback ? { fallback: now.fallback } : {}),
+        timeout_ms: REFLEX.timeoutMs,
+      },
       box: {
         paired: !!tok,
         name: tok?.agent_name ?? null,

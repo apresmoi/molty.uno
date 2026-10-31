@@ -151,3 +151,13 @@ describe('keep audio + download', () => {
     await expect(getAudio(T, J, f)).rejects.toMatchObject({ code: 'not_found' });
   });
 });
+
+describe('reflex in the trace', () => {
+  it('one line per decision: engine, pick, category, latency, tokens, outcome; never words', async () => {
+    const { reflexLabel } = await import('./trace');
+    expect(reflexLabel({ n: 6, e: 'jev', ms: 212.4, tk: 670, pick: 'happy', c: 0.97, cat: 'other', fired: 'ok' })).toBe('reflex jev: happy 97% ⠂ other ⠂ 212 ms ⠂ 670 tok → shown (6 words)');
+    expect(reflexLabel({ n: 6, e: 'jev', ms: 600, pick: 'none', err: 'timeout' })).toBe('reflex jev: timeout ⠂ 600 ms (6 words)');
+    expect(reflexLabel({ n: 6, e: 'keywords', ms: 0, pick: 'surprised', c: 1, fired: 'rate_limited', fb: 'timeout' })).toBe('reflex keywords: surprised ⠂ 0 ms → not shown: rate_limited (fallback: timeout) (6 words)');
+    expect(reflexLabel({ n: 9, e: 'local', ms: 700, pick: 'sad', c: 0.8, late: true })).toBe('reflex local: sad 80% (late) ⠂ 700 ms (9 words)');
+  });
+});

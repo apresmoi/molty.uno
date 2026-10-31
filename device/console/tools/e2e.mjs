@@ -31,6 +31,7 @@ const VOICE_CORS = { 'access-control-allow-origin': '*', 'access-control-allow-m
 const voiceRelay = {
   calls: [],
   state: { mode: 'auto', voice: null, cloud: 'workers-ai', serving: { tts: 'box', stt: 'box' },
+    reflex: { mode: 'off', compare: false, engines: { local: true, jev: true, openai: false, keywords: true }, engine: null, timeout_ms: 600 },
     box: { paired: true, name: 'voice box', paired_at: 1, connected: true, connected_since: 2, reported_name: 'voice box', version: '0.1.0',
       voices: ['expresso/ex03-ex01_happy_001_channel1_334s.wav', 'expresso/ex03-ex01_calm_001_channel2_1081s.wav'], stt: true, tts: true, last: { stt_ms: 310, tts_first_audio_ms: 240 } } },
   async route(r) {
@@ -40,7 +41,10 @@ const voiceRelay = {
     this.calls.push({ method: req.method(), code, body: req.postData() });
     if (code !== 'K7QX2MPA') return r.fulfill({ status: 401, headers: VOICE_CORS, contentType: 'application/json', body: '{"ok":false,"error":"unauthorized"}' });
     const st = this.state;
-    if (req.method() === 'POST') { const b = JSON.parse(req.postData() || '{}'); if (b.mode) st.mode = b.mode; if (b.voice !== undefined) st.voice = b.voice; if (st.mode === 'cloud') st.serving = { tts: 'workers-ai', stt: 'workers-ai' }; }
+    if (req.method() === 'POST') { const b = JSON.parse(req.postData() || '{}'); if (b.mode) st.mode = b.mode; if (b.voice !== undefined) st.voice = b.voice;
+      if (b.reflex) { st.reflex.mode = b.reflex; st.reflex.engine = b.reflex === 'off' ? null : b.reflex === 'openai' ? 'keywords' : b.reflex === 'auto' ? 'local' : b.reflex; st.reflex.fallback = b.reflex === 'openai' ? 'no_key' : undefined; }
+      if (b.reflex_compare !== undefined) st.reflex.compare = b.reflex_compare;
+      if (st.mode === 'cloud') st.serving = { tts: 'workers-ai', stt: 'workers-ai' }; }
     if (req.method() === 'DELETE') { st.box = { ...st.box, paired: false, name: null, connected: false, voices: [] }; st.serving = { tts: 'workers-ai', stt: 'workers-ai' }; }
     return r.fulfill({ status: 200, headers: VOICE_CORS, contentType: 'application/json', body: JSON.stringify({ ok: true, result: st }) });
   },
@@ -61,7 +65,11 @@ const SHAKE_TRACE = {
   box: { v: 1, step_ms: 80, skip: 12, thr: 0.6, hold_s: 1.2, audio_s: 5.36, act: [[0.4, 1.9]], pause: 'ffc0402010102040a0d0e0f0', pause_every: 2,
     words: [['I', 0.5, 0.6], ['measured', 0.6, 1.0], ['it,', 1.0, 1.2], ['from', 1.6, 1.9]],
     end: { at: 4.32, rule: 'hold', word: 'from', held_s: 1.2, ema: 0.71 }, final_ms: 212 },
-  relay: { voice: 'box', cmd: 40, first_frame: 480, turn_end: 4500, end: 4540, stt: 210, utterance: 4900 },
+  relay: { voice: 'box', cmd: 40, first_frame: 480, turn_end: 4500, end: 4540, stt: 210, utterance: 4900,
+    reflex_cfg: { mode: 'jev', engine: 'jev', compare: ['jev', 'local', 'keywords'] },
+    reflex: [{ n: 4, at: 1500, e: 'jev', ms: 212, ch: 19, tk: 670, pick: 'surprised', c: 0.91, cat: 'other', cc: 0.8, fired: 'ok' },
+      { n: 4, at: 1330, e: 'local', ms: 34, ch: 19, tk: 9, pick: 'none', raw: 'happy', c: 0.3, cat: 'other' },
+      { n: 4, at: 1290, e: 'keywords', ms: 0, ch: 19, pick: 'none', cat: 'other' }] },
 };
 const T0 = Date.parse('2026-10-30T19:00:00Z');
 const activityRelay = {
@@ -343,6 +351,20 @@ const canvasStats = (page) => page.evaluate(() => {
   await vc.getByLabel('box voice').selectOption('expresso/ex03-ex01_calm_001_channel2_1081s.wav');
   await page.waitForFunction(() => document.querySelector('.voice select')?.value === 'expresso/ex03-ex01_calm_001_channel2_1081s.wav');
   ok(voiceRelay.calls.some((c) => c.method === 'POST' && JSON.parse(c.body).voice === 'expresso/ex03-ex01_calm_001_channel2_1081s.wav'), 'settings voice: default box voice sent');
+  // the reflex: Molty's own reactions while you talk, its engine, compare mode
+  const rx = vc.getByRole('group', { name: 'reflex' });
+  ok(await rx.getByRole('button', { name: 'off' }).getAttribute('aria-pressed') === 'true', 'settings reflex: off by default');
+  ok((await rx.getByRole('button', { name: 'OpenAI' }).getAttribute('class')).includes('dim'), 'settings reflex: an engine without its key is dimmed');
+  await rx.getByRole('button', { name: 'Jev' }).click();
+  await rx.locator('button[aria-pressed="true"]', { hasText: 'Jev' }).waitFor();
+  ok(voiceRelay.calls.some((c) => c.method === 'POST' && JSON.parse(c.body).reflex === 'jev'), 'settings reflex: engine sent to the relay');
+  await vc.getByText('reacts with Jev', { exact: true }).waitFor();
+  await vc.getByLabel('compare reflex engines').check();
+  await vc.getByText('reacts with Jev ⠂ comparing every engine in the activity log').waitFor();
+  ok(voiceRelay.calls.some((c) => c.method === 'POST' && JSON.parse(c.body).reflex_compare === true), 'settings reflex: compare sent to the relay');
+  await rx.getByRole('button', { name: 'OpenAI' }).click();
+  await vc.getByText('reacts with keywords (no key on the relay for OpenAI) ⠂ comparing every engine in the activity log').waitFor();
+  ok(true, 'settings reflex: a keyless engine says it falls back to keywords');
   await vc.locator('summary', { hasText: 'Pair another voice box' }).click();
   ok((await vc.locator('code').innerText()) === 'molty-voice pair --relay https://molty-relay.example.workers.dev --device molty-k7m2w9c4ya --link-code K7QX2MPA', 'settings voice: pair command for the box');
   ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'settings voice: no horizontal scroll at 390px');
@@ -377,7 +399,8 @@ const canvasStats = (page) => page.evaluate(() => {
   const evs = tl.getByLabel('turn events');
   for (const t of ['shake 8.2 g, 4 reversals', 'shake noise trimmed: 340 ms', 'frame 2 resent after 2 failed sends, waited 2.7 s', 'frames 3 never arrived',
     'end of turn: a mid-sentence pause held (last word “from”), held 1.2 s', 'utterance sent to the agents', 'webhook → Claude: 200 in 180 ms',
-    'Claude answered (talk) 2.1 s after the utterance', 'Claude reports: received 120 ms ⠂ model 900 ms']) ok(await evs.getByText(t, { exact: true }).isVisible(), `trace: event "${t}"`);
+    'Claude answered (talk) 2.1 s after the utterance', 'Claude reports: received 120 ms ⠂ model 900 ms',
+    'reflex jev: surprised 91% ⠂ other ⠂ 212 ms ⠂ 670 tok → shown (4 words)', 'reflex local: none 30% (happy below the gate) ⠂ other ⠂ 34 ms ⠂ 9 tok (4 words)']) ok(await evs.getByText(t, { exact: true }).isVisible(), `trace: event "${t}"`);
   ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'trace: no horizontal scroll at 390px');
   await shot(page, '11e-activity-trace');
   const dl = page.waitForEvent('download');
