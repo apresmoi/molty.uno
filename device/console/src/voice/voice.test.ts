@@ -66,3 +66,20 @@ describe('voice card text', () => {
     expect(pairCommand(T)).toBe('molty-voice pair --relay https://relay.example --device molty-k7m2w9c4ya --link-code K7QX2MPA');
   });
 });
+
+describe('reflex setting', () => {
+  const rx = (o: Partial<import('./voice').ReflexStatus> = {}) => ({ mode: 'jev' as const, compare: false, engines: { local: true, jev: true, openai: false, keywords: true }, engine: 'jev' as const, timeout_ms: 600, ...o });
+  it('posts the engine and compare mode', async () => {
+    const { f, calls } = fakeFetch({ body: { ok: true, result: status({ reflex: rx() }) } });
+    await setVoice(T, { reflex: 'jev', reflex_compare: true }, f);
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ reflex: 'jev', reflex_compare: true });
+  });
+  it('says who reacts, and why not the chosen engine', async () => {
+    const { reflexLine } = await import('./voice');
+    expect(reflexLine(undefined)).toBe('');
+    expect(reflexLine(rx({ mode: 'off', engine: null }))).toBe('');
+    expect(reflexLine(rx())).toBe('reacts with Jev');
+    expect(reflexLine(rx({ mode: 'openai', engine: 'keywords', fallback: 'no_key', compare: true }))).toBe('reacts with keywords (no key on the relay for OpenAI) ⠂ comparing every engine in the activity log');
+    expect(reflexLine(rx({ mode: 'auto', engine: 'local' }))).toBe('reacts with the voice box');
+  });
+});

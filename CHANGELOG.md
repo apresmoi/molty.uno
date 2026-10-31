@@ -8,6 +8,19 @@ All notable changes to Molty are recorded here. One version covers the whole pro
 
 First public release.
 
+- **Molty's reflex**: Molty reacts by itself to what the human says while they talk, with any
+  agent (also one that never reads partials). Each phrase of the voice box's live transcript is
+  classified into a reaction (surprised, happy, sad, laugh, curious, none) and an utterance
+  category (question, request, hard, other) and shown screen-only through the react path —
+  agents' reacts win, never over a question / pairing / update, one per 3 s. Four engines behind
+  one owner setting (`reflex` = off | auto | local | jev | openai | keywords, console Voice card):
+  a small CPU emotion model on the voice box (`molty-voice --reflex`), TypeSafe Jev
+  (`TYPESAFE_API_KEY`), OpenAI Decisions (`OPENAI_API_KEY`) and a keyword heuristic, which also
+  answers whenever the chosen engine has no key or misses its 600 ms deadline. A compare mode
+  runs every engine on each phrase; every decision (engine, latency, size, pick, confidence,
+  outcome, fallback) is in the turn trace and the Activity timeline. `molty-sim reflex-bench`
+  scores the engines on 40 labelled phrases.
+
 - **Expressive Molty**: inline mood / action cues in what agents say (`"[happy] Build passed!
   … [nod]"`: stripped from the speech and the screen, fired on their word — firmware cap
   `say_marks`); `act {action}` / `molty_act` one-shot gestures (wiggle, nod, shake_head,

@@ -81,13 +81,13 @@ class FakeMoshi:
                 return
 
 
-async def with_servers(relay_handler, moshi: FakeMoshi, cfg_extra=None, process_request=None):
+async def with_servers(relay_handler, moshi: FakeMoshi, cfg_extra=None, process_request=None, bridge_kwargs=None):
     async with serve(moshi.handler, "127.0.0.1", 0) as ms, serve(relay_handler, "127.0.0.1", 0, process_request=process_request) as rs:
         mport = ms.sockets[0].getsockname()[1]
         rport = rs.sockets[0].getsockname()[1]
         cfg = Config(relay=f"http://127.0.0.1:{rport}", device_id=DEVICE, token=TOKEN, name="test box",
                      stt_url=f"ws://127.0.0.1:{mport}/api/asr-streaming", tts_url=f"ws://127.0.0.1:{mport}/api/tts_streaming", **(cfg_extra or {}))
-        bridge = Bridge(cfg)
+        bridge = Bridge(cfg, **(bridge_kwargs or {}))
         await asyncio.wait_for(bridge.serve_once(), 10)
         return bridge
 

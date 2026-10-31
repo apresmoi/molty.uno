@@ -53,6 +53,11 @@ usually talks), never word by word, none before the turn ran ~3 s. `seq` counts 
   `draft.dropped`), and **`react`** with a mood on the screen (no sound, ≤ 1 per 3 s). See
   [api.md](api.md#while-the-human-speaks-draft-and-react) and
   [talking-fast.md](talking-fast.md#drafts-a-head-start-not-an-answer).
+- **Molty reacts on its own too** (its *reflex*, when the owner turned it on): while they talk it
+  shows a reaction to what they say (surprised, happy, a nod, a bounce, a peek) — screen only, at
+  most one per 3 s, never over a question, a pairing or an update. You need do nothing for it, and
+  it works with agents that never read partials. **Your `react` wins**: once you react in a turn,
+  the reflex stays quiet for the rest of that turn. Don't echo it with your own reacts.
 - Webhooks get partials **only when you ask** (`"events": ["utterance.partial", "utterance", …]`):
   they are chatty. Pull and ride-along carry them as usual. `draft.used` / `draft.dropped` reach
   only the agent that drafted.

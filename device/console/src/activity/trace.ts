@@ -149,6 +149,14 @@ export function traceModel(jobEntry: ActivityEntry | undefined, extra: ActivityE
   for (const p of Array.isArray(relay.partials) ? relay.partials : []) if (Array.isArray(p)) ev(num(p[1]), 'relay', `partial ${p[0]} to the agents (${p[2]} words so far)`);
   for (const d of Array.isArray(relay.drafts) ? relay.drafts : []) if (Array.isArray(d)) ev(num(d[1]), 'agent', `an opener drafted on partial ${d[0]}`);
   for (const r of Array.isArray(relay.reacts) ? relay.reacts : []) if (Array.isArray(r)) ev(num(r[1]), 'agent', `react ${r[0]}${r[2] === 'ok' ? '' : ` → ${r[2]}`}`, r[2] === 'ok' ? 'ok' : 'warn');
+  // Molty's reflex (docs/AGENT-LINK.md "Reflex"): one line per decision; in compare mode every engine's
+  for (const r of Array.isArray(relay.reflex) ? relay.reflex : []) {
+    const x = obj(r);
+    if (!x) continue;
+    ev(num(x.at), 'relay', reflexLabel(x), x.fired === 'ok' ? 'ok' : x.err ? 'warn' : 'info');
+  }
+  const rcfg = obj(relay.reflex_cfg);
+  if (rcfg && str(rcfg.fb)) summary.push({ text: `reflex: ${rcfg.mode} unavailable (${rcfg.fb}), keywords instead`, tone: 'warn' });
   const draft = obj(relay.draft);
   if (draft && num(draft.used) !== undefined) ev(num(draft.opener_at), 'relay', `drafted opener played (partial ${draft.used}, ${num(draft.new_words) ?? 0} words after it)`, 'ok');
   if (draft && Array.isArray(draft.dropped) && draft.dropped.length) summary.push({ text: `draft${draft.dropped.length > 1 ? 's' : ''} dropped: ${draft.dropped.join(', ')}`, tone: 'warn' });
@@ -202,3 +210,15 @@ export function clientTimingLine(ct: Record<string, unknown>): string {
 
 /** "-140 ms" / "+4.7 s" from t0, for the event list. */
 export const fmtAt = (ms: number) => `${ms < 0 ? '−' : '+'}${s(Math.abs(ms))}`;
+
+/** One reflex decision as a timeline line: engine, pick (+ category), latency, and what became of it. */
+export function reflexLabel(x: Record<string, any>): string {
+  const conf = typeof x.c === 'number' && x.e !== 'keywords' ? ` ${Math.round(x.c * 100)}%` : '';
+  const raw = x.raw ? ` (${x.raw} below the gate)` : '';
+  const cat = typeof x.cat === 'string' ? ` ⠂ ${x.cat}` : '';
+  const head = x.err ? `reflex ${x.e}: ${x.err}${x.late ? ' (late)' : ''}` : `reflex ${x.e}: ${x.pick}${conf}${raw}${cat}${x.late ? ' (late)' : ''}`;
+  const size = `${typeof x.ms === 'number' ? ` ⠂ ${Math.round(x.ms)} ms` : ''}${typeof x.tk === 'number' ? ` ⠂ ${x.tk} tok` : ''}`;
+  const fired = x.fired === undefined ? '' : x.fired === 'ok' ? ' → shown' : x.fired === 'none' ? '' : ` → not shown: ${x.fired}`;
+  const fb = x.fb ? ` (fallback: ${x.fb})` : '';
+  return `${head}${size}${fired}${fb} (${x.n} words)`;
+}

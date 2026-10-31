@@ -48,6 +48,11 @@ class Config:
     turn_end_hold_s: float = 1.2
     # TTS: drop the near-silent lead of each stream's first frame (<= 80 ms) so the voice starts sooner.
     trim_lead: bool = True
+    # Molty's reflex (molty_voice/reflex.py): a small emotion classifier on the CPU over the human's
+    # words, offered to the relay (voice.hello reflex) when on and its model loads.
+    reflex: bool = False
+    reflex_model: str = "SamLowe/roberta-base-go_emotions-onnx"
+    reflex_threads: int = 4
 
     def __repr__(self) -> str:  # never show the token
         d = asdict(self)

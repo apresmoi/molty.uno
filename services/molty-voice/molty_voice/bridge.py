@@ -16,6 +16,8 @@ Wire (docs/AGENT-LINK.md "Voice box"): JSON text control messages + binary audio
                  {"t":"stt.final","id","text","ms":{...}} | {"t":"stt.final","id","error"}
                  {"t":"stt.trace","id","trace":{...}} right before each stt.turn_end and stt.final (molty_voice/trace.py)
                  {"t":"stt.hint","id","k":"pause"|"question"} while the human talks (Molty's listener reactions)
+                 {"t":"stt.reflex","id","n","pick","conf","p","ms","chars","tokens","model"} per reflex chunk, only when
+                 stt.start said "reflex": true and this box offers it (voice.hello "reflex": true; molty_voice/reflex.py)
   both           {"t":"ping"} / {"t":"pong"} (the relay answers pings without waking up)
 """
 
@@ -37,6 +39,7 @@ from . import __version__, framing
 from .audio import DEVICE_RATE, MODEL_RATE, Resampler, fade_in, float_to_pcm16, quiet_lead
 from .config import Config
 from .kyutai import SttSession, synthesize
+from .reflex import ReflexTracker
 from .trace import SttTrace
 
 log = logging.getLogger("molty_voice")
@@ -57,8 +60,11 @@ def voice_url(relay: str, device_id: str) -> str:
 
 
 class Bridge:
-    def __init__(self, cfg: Config, *, connect=ws_connect, kyutai_connect=ws_connect):
+    def __init__(self, cfg: Config, *, connect=ws_connect, kyutai_connect=ws_connect, reflex_model=None):
         self.cfg = cfg
+        # the reflex classifier (molty_voice/reflex.py), loaded on the first connect when cfg.reflex; tests inject one
+        self.reflex = reflex_model
+        self._reflex_tried = reflex_model is not None
         self._connect = connect
         self._kconnect = kyutai_connect
         self._ws = None
@@ -95,8 +101,15 @@ class Bridge:
                 raise Fatal(f"the relay refused this voice box (HTTP {e.response.status_code}): it was unpaired or the token is wrong — run `molty-voice pair` again") from e
             raise
         self._ws = ws
+        if self.cfg.reflex and self.cfg.stt and not self._reflex_tried:
+            self._reflex_tried = True
+            from .reflex import load
+            self.reflex = await asyncio.to_thread(load, self.cfg.reflex_model, self.cfg.reflex_threads)
         try:
-            await self._send_json({"t": "voice.hello", "name": self.cfg.name, "version": __version__, "voices": self.cfg.voices, "stt": self.cfg.stt, "tts": self.cfg.tts})
+            hello = {"t": "voice.hello", "name": self.cfg.name, "version": __version__, "voices": self.cfg.voices, "stt": self.cfg.stt, "tts": self.cfg.tts}
+            if self.reflex is not None and self.cfg.stt:
+                hello["reflex"] = True
+            await self._send_json(hello)
             last_rx = time.monotonic()
             keepalive = asyncio.create_task(self._keepalive(lambda: last_rx))
             try:
@@ -162,7 +175,8 @@ class Bridge:
                 self._stt[mid] = q
                 ns = m.get("no_speech_ms")
                 no_speech_s = ns / 1000 if isinstance(ns, int) and not isinstance(ns, bool) and 1000 <= ns <= 10000 else None
-                self._stt_tasks[mid] = asyncio.create_task(self._run_stt(mid, q, no_speech_s))
+                reflex = m.get("reflex") is True and self.reflex is not None
+                self._stt_tasks[mid] = asyncio.create_task(self._run_stt(mid, q, no_speech_s, reflex))
         elif t == "stt.end" and isinstance(mid, str):
             if mid in self._stt:
                 self._stt[mid].put_nowait(("end", None))
@@ -254,9 +268,27 @@ class Bridge:
 
     # ---------------- STT ----------------
 
-    async def _run_stt(self, mid: str, q: asyncio.Queue, no_speech_s: float | None = None) -> None:
+    async def _run_stt(self, mid: str, q: asyncio.Queue, no_speech_s: float | None = None, reflex: bool = False) -> None:
+        tracker = ReflexTracker() if reflex else None
+        reflex_tasks: set[asyncio.Task] = set()
+
+        async def classify(n: int, text: str) -> None:
+            # off the event loop: the STT keeps flowing while the CPU classifies
+            try:
+                v = await asyncio.to_thread(self.reflex.classify, text)
+                await self._send_json({"t": "stt.reflex", "id": mid, "n": n, **v})
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001 - a reflex must never cost the turn
+                log.warning("stt %s: reflex failed: %s: %s", mid, type(e).__name__, e)
+
         async def partial(text: str) -> None:
             await self._send_json({"t": "stt.partial", "id": mid, "text": text})
+            n = tracker.due(text) if tracker else None
+            if n is not None:
+                task = asyncio.create_task(classify(n, text))
+                reflex_tasks.add(task)
+                task.add_done_callback(reflex_tasks.discard)
 
         trace = SttTrace(self.cfg.turn_end, self.cfg.turn_end_skip_steps, self.cfg.turn_end_hold_s)
 
@@ -314,6 +346,8 @@ class Bridge:
             await send_trace()
             await self._send_json({"t": "stt.final", "id": mid, "error": str(e)[:200] or "stt failed"})
         finally:
+            for task in list(reflex_tasks):
+                task.cancel()
             await s.close()  # frees the server channel at once
             self._stt.pop(mid, None)
             self._stt_tasks.pop(mid, None)
