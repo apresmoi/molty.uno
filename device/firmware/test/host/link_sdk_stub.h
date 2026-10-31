@@ -90,6 +90,7 @@ void molty_mic_stream_stop(void);
 uint8_t molty_mic_gain(void);
 extern uint8_t sdk_mic_gain;
 void vTaskDelay(unsigned ticks);
+extern void (*sdk_delay_hook)(void);   /* the tests: runs on every delay */
 extern esp_err_t sdk_rx_error;
 extern unsigned sdk_rx_chunks;
 extern bool sdk_rx_open;   /* the mic stream is open */

@@ -160,6 +160,10 @@ cJSON *link_evt_shake_frame(double peak_g, int reversals, unsigned ms, const cha
  * welcome lists LINK_FEATURE_ADOPT. */
 #define LINK_SHAKE_ADOPT_MS 3000u
 #define LINK_FEATURE_ADOPT  "listen_adopt"
+/* The relay holds a say or listen through a short drop: the hello's `resume` names what the
+ * device kept, the welcome's `resume` answers {job, ok, next?} (docs/AGENT-LINK.md). */
+#define LINK_FEATURE_RESUME "resume"
+#define LINK_RESUME_WINDOW_MS 15000u      /* a job is held this long after the link went */
 /* The relay's welcome {"t":"welcome","features":[...]} lists `name` (absent list: none). */
 bool link_welcome_has(const cJSON *welcome, const char *name);
 cJSON *link_evt_tap_frame(double x, double y);

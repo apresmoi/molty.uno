@@ -32,6 +32,7 @@ bool link_audio_say_waiting(void) { return false; }
 uint32_t link_audio_job_gen(void) { return 0; }
 void link_audio_request(uint32_t gen, link_audio_req_t what) { (void)gen; (void)what; }
 void link_audio_cancel(void) { }
+bool link_audio_held(void) { return false; }
 void mole_fluid_set_status(int status) { (void)status; }
 void mole_fluid_listen(bool on) { (void)on; }
 void mole_fluid_listen_level(float level) { (void)level; }

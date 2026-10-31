@@ -27,6 +27,11 @@ a full model round trip on your side). The human hears your latency as silence.
 - To end the conversation, `molty_talk {"say":"…","listen":false}` (speak without listening).
 - Measure yourself (below).
 
+## Weak Wi-Fi
+
+Don't retry a turn because it got slow: with firmware cap `resume`, a job in `reconnecting` picks up
+where it was when Molty returns, the human's words and yours. Retrying would talk over it.
+
 ## Measure yourself
 
 - `in_reply_to` adds `timings.turn` `{id, reply, first_audio}` (ms from the utterance to your call

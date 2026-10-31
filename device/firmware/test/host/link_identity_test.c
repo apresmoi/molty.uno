@@ -20,7 +20,7 @@ int main(void)
     assert(cJSON_GetObjectItem(hello,"key") && cJSON_GetObjectItem(hello,"link_code"));
     assert(!strcmp(cJSON_GetObjectItem(hello,"board")->valuestring,"test-board"));
     char *caps=cJSON_PrintUnformatted(cJSON_GetObjectItem(hello,"caps"));
-    assert(!strcmp(caps,"[\"fluid\",\"say\",\"say_cues\",\"say_marks\",\"listen\",\"listen_stop\",\"listen_window\",\"ack\",\"shake_talk\",\"trace\",\"hints\",\"say_cancel\",\"gestures\",\"show\",\"mood\",\"act\",\"creature\",\"working\",\"react\",\"ask\",\"update\",\"log_upload\"]")); free(caps);
+    assert(!strcmp(caps,"[\"fluid\",\"say\",\"say_cues\",\"say_marks\",\"listen\",\"listen_stop\",\"listen_window\",\"ack\",\"shake_talk\",\"trace\",\"hints\",\"resume\",\"say_cancel\",\"gestures\",\"show\",\"mood\",\"act\",\"creature\",\"working\",\"react\",\"ask\",\"update\",\"log_upload\"]")); free(caps);
     cJSON_Delete(hello);
     /* no speaker / mic (the 1.28): no say / listen, so the relay refuses those jobs */
     sdk_caps &= ~(MOLTY_CAP_SPEAKER | MOLTY_CAP_MIC);
