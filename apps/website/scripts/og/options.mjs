@@ -11,7 +11,63 @@ const base = `
   .og-line { width: auto; margin: 0; color: var(--m-ink); font: 26px / 1.3 var(--m-font-mono); }
 `;
 
+/** B2's layout: the device at ~95 % of the card (screen 550 px, bezel ~600), the wordmark
+ *  82 px at 34 % down the screen, under the glass's highlight: its corners sit ≥ 30 px inside
+ *  the circle (5.24 em wide, half-width 215 px ≤ √(245² − 88²) = 229). Companions: 260 px slots, veiled toward the edge. */
+const FAMILY = `${base}
+  .og > .og-screen { position: absolute; left: 325px; top: 40px; width: 550px; aspect-ratio: 1; }
+  .og-screen > .og-word { position: absolute; left: 50%; top: 34%; translate: -50% 0; font-size: 82px; line-height: 1; white-space: nowrap; }
+  .og-screen > .og-under { position: absolute; left: 50%; bottom: -5%; translate: -50% 0; width: 330px; aspect-ratio: 1; margin: 0; }
+  .og > .og-side-zone { position: absolute; top: 0; width: 330px; height: 630px; }
+  .og > .og-side-zone.og-left { left: 0; }
+  .og > .og-side-zone.og-right { right: 0; }
+  .og > .og-companion { position: absolute; top: 200px; width: 260px; aspect-ratio: 1; margin: 0; }
+  .og > .og-companion.og-left { left: 30px; }
+  .og > .og-companion.og-right { right: 30px; }
+  .og > .og-veil { position: absolute; top: 0; width: 300px; height: 630px; pointer-events: none; z-index: 1; }
+  .og > .og-veil.og-left { left: 0; background: linear-gradient(to right, rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0.15)); }
+  .og > .og-veil.og-right { right: 0; background: linear-gradient(to left, rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0.15)); }
+`;
+
+const STIR = [
+  [0, 0, 300, 180],
+  [900, 0, 300, 180],
+  [0, 480, 300, 150],
+  [900, 480, 300, 150],
+];
+
 export const OPTIONS = [
+  // B2 ("family"): B at max size, the wordmark fitted inside the screen's chord, and the side
+  // areas alive (a stirred, pooled field; two companions half veiled). The centre square
+  // (device + wordmark + main Molty) stands alone. Rendered once per main Molty below.
+  {
+    name: 'family-duck',
+    file: 'B2-duck',
+    moltyDir: 'b2',
+    prefix: 'B2-',
+    molty: 'cute-duck',
+    companions: ['cute-bunny', 'cute-octopus'],
+    themes: ['dark'],
+    square: true,
+    wordDelay: 0.3,
+    // the wordmark fully condensed (band), the companions left whole (stir above and below them)
+    pick: { from: 1500, to: 6500, face: '.og-under', band: [0.9, 1.2], stir: STIR },
+    css: FAMILY,
+  },
+  {
+    name: 'family-bunny',
+    file: 'B2-bunny',
+    moltyDir: 'b2',
+    prefix: 'B2-',
+    molty: 'cute-bunny',
+    companions: ['cute-duck', 'cute-ghost'],
+    themes: ['dark'],
+    square: true,
+    wordDelay: 0.3,
+    // the wordmark fully condensed (band), the companions left whole (stir above and below them)
+    pick: { from: 1500, to: 6500, face: '.og-under', band: [0.9, 1.2], white: 235, stir: STIR },
+    css: FAMILY,
+  },
   // The device IS the image (hardware brands' cards: Playdate, Tidbyt, Analogue): the round
   // device centred at ~88 % of the card's height, everything that matters in the centre square
   // (messengers crop to it; X may trim top and bottom), few big elements (previews are tiny).
