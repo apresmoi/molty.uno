@@ -4,6 +4,8 @@ import { h, mount, note } from '../ui/dom';
 import { bars, errText, uptime } from '../ui/fmt';
 import { preview } from '../ui/preview';
 import { updateCard } from '../ui/update-card';
+import { linkContext } from '../ui/agent-link';
+import { getVoice, type VoiceStatus } from '../voice/voice';
 
 export function statusPage(root: HTMLElement, { api }: AppCtx) {
   const pv = preview(api, { size: 300 });
@@ -14,7 +16,7 @@ export function statusPage(root: HTMLElement, { api }: AppCtx) {
     h('h1', null, 'hello ', h('span', { class: 'dim' }, '⠶ this is your molty')),
     h('div', { class: 'split' }, pv.el, h('div', null, facts, upd.el, msg)));
 
-  let alive = true, timer = 0;
+  let alive = true, timer = 0, voice: VoiceStatus | null = null;
   const row = (k: string, v: unknown, cls = '') => [h('dt', null, k), h('dd', { class: cls }, v as string)];
 
   const refresh = async () => {
@@ -25,6 +27,11 @@ export function statusPage(root: HTMLElement, { api }: AppCtx) {
     const r = reg.status === 'fulfilled' ? (reg.value as CreatureRegistry) : null;
     const s = st.status === 'fulfilled' ? (st.value as FluidState) : null;
     const l = ln.status === 'fulfilled' ? (ln.value as LinkInfo) : null;
+    if (!voice && l?.device_id && l.link_code) {
+      const c = linkContext(l);
+      voice = await getVoice({ relay: c.relay, deviceId: c.deviceId, linkCode: c.linkCode }).catch(() => null);
+      if (!alive) return;
+    }
     mount(msg, !i && info.status === 'rejected' ? note('err', errText(info.reason)) : null);
     mount(facts,
       row('device', l?.device_id ?? '—', 'hi'),
@@ -35,6 +42,7 @@ export function statusPage(root: HTMLElement, { api }: AppCtx) {
         w?.state === 'connected' ? 'ok' : 'warn'),
       row('address', w?.ip ?? '—'),
       row('molty', r ? r.current : '—'),
+      row('voice', h('a', { href: '#/voice' }, voice ? `${voice.serving.tts ?? voice.mode}${voice.first_words?.mode === 'opener' ? ' ⠂ first words' : ''} ⠂ reflex ${voice.reflex?.mode ?? 'off'}` : 'settings')),
       row('state', s ? `${s.state}${s.autoplay ? ' · autoplay' : ''}${s.palette ? ' · ' + s.palette : ''}` : '—'),
       row('fps', s?.fps !== undefined ? `${s.fps.toFixed(1)}` : '—'),
       row('memory', i ? `${Math.round(i.free_heap / 1024)} KB heap ⠂ ${Math.round(i.free_psram / 1024)} KB psram free` : '—'),
