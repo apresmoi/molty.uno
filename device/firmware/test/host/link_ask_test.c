@@ -23,6 +23,15 @@ int xTaskDelayUntil(TickType_t *wake, TickType_t period) { (void)wake; (void)per
 static bool pairing;
 bool link_pair_active(void) { return pairing; }
 void mole_fluid_event(mole_fluid_event_t ev) { (void)ev; }
+static uint32_t binds; static int talks, stops;
+uint32_t mole_fluid_gestures(void) { return binds; }
+bool link_audio_gesture_talk(void) { talks++; return true; }
+void link_audio_stop_any(void) { stops++; }
+bool link_audio_listening(uint32_t *age) { (void)age; return false; }
+bool link_audio_say_waiting(void) { return false; }
+uint32_t link_audio_job_gen(void) { return 0; }
+void link_audio_request(uint32_t gen, link_audio_req_t what) { (void)gen; (void)what; }
+void link_audio_cancel(void) { }
 void mole_fluid_set_status(int status) { (void)status; }
 void mole_fluid_listen(bool on) { (void)on; }
 void mole_fluid_listen_level(float level) { (void)level; }
@@ -150,6 +159,18 @@ static void test_deadline(void) {
 }
 
 int main(void) {
+    /* the buttons do what they are bound to; a pending question comes first */
+    sdk_now = 90000000;
+    binds = gesture_binds_set(gesture_binds_default(), GESTURE_IN_BUTTON_REJECT, GESTURE_DO_TALK);
+    button_do(false); assert(talks == 1 && nframes == 0);
+    button_do(true); assert(talks == 1 && nframes == 1 && strstr(last(), "\"button\""));   /* event: today's behaviour */
+    binds = gesture_binds_set(binds, GESTURE_IN_BUTTON_ACCEPT, GESTURE_DO_STOP);
+    button_do(true); assert(stops == 1 && nframes == 1);
+    binds = gesture_binds_set(binds, GESTURE_IN_BUTTON_ACCEPT, GESTURE_DO_NONE);
+    button_do(true); assert(stops == 1 && nframes == 1);
+    assert(ask(YNI) == ESP_OK);
+    button_do(false); assert(talks == 1 && nframes == 2);                      /* an open question: an event, whatever is bound */
+    link_ask_cancel(); nframes = 0; shows = 0; dones = 0; binds = gesture_binds_default();
     /* no touch: nothing could answer → unsupported, nothing on screen */
     sdk_caps &= ~MOLTY_CAP_TOUCH;
     assert(ask(YNI) == ESP_ERR_NOT_SUPPORTED && !shows && !link_ask_pending());

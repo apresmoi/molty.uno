@@ -11,7 +11,7 @@
 
 import { type AgentApi, type FirmwareNotice, type Inbox, type JobView, type Outcome, type RelayBackend, bearer, tokenDevice } from "../core/api.js";
 import { BUILTIN_PHRASES, FILLER_DEFAULT_MS, PHRASE_LIMITS } from "../core/phrases.js";
-import { ACK_THINK_S, ACTIONS, COLORS, DEFAULT_ASK_COLORS, DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, LISTEN_CEILING_MS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, MAX_DRAFTS_PER_TURN, MAX_DRAFT_NEW_WORDS, MAX_LISTEN_MS, MAX_MOOD_HOLD_S, MAX_OPENER_WORDS, MOODS, REACT_ACTIONS, REACT_MIN_GAP_MS, REACT_MOODS, TALK_BUDGET_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
+import { ACK_THINK_S, ACTIONS, GESTURE_INPUTS, COLORS, DEFAULT_ASK_COLORS, DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, LISTEN_CEILING_MS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, MAX_DRAFTS_PER_TURN, MAX_DRAFT_NEW_WORDS, MAX_LISTEN_MS, MAX_MOOD_HOLD_S, MAX_OPENER_WORDS, MOODS, REACT_ACTIONS, REACT_MIN_GAP_MS, REACT_MOODS, TALK_BUDGET_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
 import { NOTES_LIMITS } from "../core/notes.js";
 
 /** say / talk / ask: inline [mood] / [action] cues in the spoken text. */
@@ -139,6 +139,13 @@ export const TOOLS: ToolDef[] = [
     inputSchema: obj({ action: { type: "string", description: `One of ${ACTIONS.join(", ")}.`, enum: [...ACTIONS] } }, ["action"]),
     auth: true,
     run: (api, t, a) => api.command(t, "act", a),
+  },
+  {
+    name: "molty_gestures",
+    description: `Read or change what the human's inputs do (cap gestures; kept on the device). Inputs: ${GESTURE_INPUTS.join(", ")}. Actions: none, talk (Molty listens, like a shake), event (you get the event), stop (ends the current listen or speech). No args reads them. Only change them when your human asks.`,
+    inputSchema: obj({ bindings: { type: "object", description: "input -> action; inputs left out keep theirs." } }),
+    auth: true,
+    run: (api, t, a) => api.command(t, "gestures", a),
   },
   {
     name: "molty_show",

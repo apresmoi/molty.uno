@@ -244,7 +244,7 @@ link_ack_t link_ack_decide(link_ack_t mode, const char *reason, bool speech_know
                            bool screen_taken, bool has_speaker)
 {
     if (mode <= LINK_ACK_OFF || mode > LINK_ACK_CHIRP || screen_taken || !reason) return LINK_ACK_OFF;
-    bool heard = !strcmp(reason, "turn_end") ||
+    bool heard = !strcmp(reason, "turn_end") || !strcmp(reason, "tap") ||
                  (!strcmp(reason, "silence") && (!speech_known || speech_ms > 0)) ||
                  (!strcmp(reason, "max") && speech_known && speech_ms >= LINK_ACK_MIN_SPEECH_MS);
     if (!heard) return LINK_ACK_OFF;
@@ -290,6 +290,21 @@ cJSON *link_evt_tap_frame(double x, double y)
         cJSON_AddNumberToObject(data, "y", round(clamp01(y) * 1000) / 1000);
     }
     return j;
+}
+
+cJSON *link_evt_double_tap_frame(double x, double y)
+{
+    cJSON *data, *j = evt("double_tap", &data);
+    if (j) {
+        cJSON_AddNumberToObject(data, "x", round(clamp01(x) * 1000) / 1000);
+        cJSON_AddNumberToObject(data, "y", round(clamp01(y) * 1000) / 1000);
+    }
+    return j;
+}
+
+bool link_say_stalled(uint32_t idle_ms, uint32_t frames)
+{
+    return idle_ms >= (frames ? LINK_SAY_STALL_MS : LINK_SAY_FIRST_AUDIO_MS);
 }
 
 cJSON *link_evt_button_frame(bool accept)

@@ -733,6 +733,50 @@ static void shake_run(audio_job_t *job,int adopt,const char *args) {
     adopt_at=adopt; adopt_args=args; adopt_e=-99; adopt_ack[0]=0; sdk_rx_chunks=0; sdk_rx_fill=shake_fill;
     complete(record(job)); sdk_rx_fill=NULL; adopt_at=decline_at=cancel_at=stop_at=-1; adopt_args=NULL;
 }
+/* a tap: the rec stops with what it has, reason tap, acknowledged; a bound `talk`; a say's first-audio watchdog */
+static void stop_tap_at_chunk_10(int16_t *buf, size_t n, unsigned i) { (void)buf; (void)n; if (i==10) { link_audio_request(link_audio_job_gen(), LINK_AUDIO_REQ_STOP); apply_request(); } }
+static void test_tap_and_watchdog(void) {
+    audio_job_t job; uint32_t age=99;
+    listen_job(8000,&job); assert(link_audio_listening(&age)); sdk_rx_chunks=0; sdk_rx_fill=stop_tap_at_chunk_10;
+    complete(record(&job)); sdk_rx_fill=NULL;
+    assert(bin_ends==1 && !strcmp(bin_reason,"tap") && !strcmp(s_end_reason,"tap") && bin_bytes>0);
+    assert(!link_audio_busy() && !strcmp(sdk_mood,"thinking"));        /* acknowledged: a normal end of turn */
+    assert(!link_audio_listening(NULL));
+    /* no audio yet: waiting, gives up after 8 s; the first frame ends the wait */
+    begin_say(); assert(link_audio_say_waiting());
+    sdk_now+=7000000; link_audio_tick(); assert(!atomic_load(&s_cancel));
+    sdk_now+=1100000; link_audio_tick(); assert(atomic_load(&s_cancel));
+    complete(play()); assert(!link_audio_busy() && !strcmp(sdk_mood,"idle"));
+    begin_say(); receive_pcm(0,false); assert(!link_audio_say_waiting());
+    sdk_now+=9000000; link_audio_tick(); assert(!atomic_load(&s_cancel));       /* mid-stream: the 30 s one */
+    sdk_now+=21100000; link_audio_tick(); assert(atomic_load(&s_cancel));
+    complete(play());
+    /* say_cancel: only that say */
+    begin_say(); cJSON *a=cJSON_CreateObject(),*r=NULL; cJSON_AddStringToObject(a,"job","other");
+    assert(link_audio_say_cancel(a,&r)==ESP_OK && !cJSON_IsTrue(cJSON_GetObjectItem(r,"cancelling")) && !atomic_load(&s_cancel)); cJSON_Delete(r);
+    cJSON_ReplaceItemInObject(a,"job",cJSON_CreateString("molty-abcdefghij.j_1")); r=NULL;
+    assert(link_audio_say_cancel(a,&r)==ESP_OK && cJSON_IsTrue(cJSON_GetObjectItem(r,"cancelling")) && atomic_load(&s_cancel)); cJSON_Delete(r); cJSON_Delete(a);
+    complete(play());
+    /* a listen: say_cancel leaves it alone */
+    listen_job(1000,&job); a=cJSON_CreateObject(); cJSON_AddStringToObject(a,"job",job.job); r=NULL;
+    assert(link_audio_say_cancel(a,&r)==ESP_OK && !cJSON_IsTrue(cJSON_GetObjectItem(r,"cancelling")) && !atomic_load(&s_cancel)); cJSON_Delete(r); cJSON_Delete(a);
+    complete(record(&job));
+    /* stop: a listen ends and sends, a say is cut */
+    begin_say(); link_audio_stop_any(); apply_request(); assert(atomic_load(&s_cancel)); complete(play());
+    /* a tap on a job that ended is not applied to the next one */
+    begin_say(); { uint32_t old=link_audio_job_gen(); link_audio_cancel(); complete(play()); link_audio_tick();
+      begin_say(); link_audio_request(old, LINK_AUDIO_REQ_CANCEL); apply_request(); assert(!atomic_load(&s_cancel));
+      link_audio_request(link_audio_job_gen(), LINK_AUDIO_REQ_CANCEL); apply_request(); assert(atomic_load(&s_cancel)); complete(play()); link_audio_tick(); }
+    /* a bound talk is the shake's listen even with the shake setting off; nothing to report when none starts */
+    shake_setting=false; sdk_caps&=~MOLTY_CAP_IMU; link_audio_relay_adopts(true);
+    unsigned b=sent; assert(link_audio_gesture_talk()); link_audio_tick();
+    assert(link_audio_busy() && sent==b+1 && !strcmp(field("name"),"shake"));
+    assert(cJSON_IsNumber(cJSON_GetObjectItem(cJSON_GetObjectItem(sdk_sent,"data"),"peak_g")));
+    b=sent; assert(link_audio_gesture_talk()); link_audio_tick(); assert(sent==b);   /* busy: no plain shake nudge */
+    sdk_rx_fill=NULL; audio_job_t got; assert(xQueueReceive(s_jobs,&got,0)==pdTRUE); link_audio_cancel(); complete(record(&got));
+    shake_setting=true; sdk_caps|=MOLTY_CAP_IMU; link_audio_relay_adopts(false);
+}
+
 static void test_shake_talk(void) {
     audio_job_t job;
     /* the adoption flow, sample for sample: on a board without an IMU (no settle trim —
@@ -985,7 +1029,7 @@ int main(void) {
     sdk_count_cjson();                    /* the soak counts cJSON blocks too */
     assert(link_audio_init()==ESP_OK && link_pair_init()==ESP_OK);
     s_up_inline = true;   /* no sender task on the host: record() sends as it queues */
-    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop(); test_listen_window(); test_say_cues(); test_say_marks(); test_chirp_sound(); test_ack(); test_shake_talk(); test_shake_settle(); test_resend(); test_reactions(); test_soak();
+    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop(); test_listen_window(); test_say_cues(); test_say_marks(); test_chirp_sound(); test_ack(); test_shake_talk(); test_tap_and_watchdog(); test_shake_settle(); test_resend(); test_reactions(); test_soak();
     /* activity log: every accepted job (done, failed, cancelled, refused frames, adopted shakes) ended its tag */
     assert(sdk_job_begins>0 && sdk_job_begins==sdk_job_ends);
     cJSON_Delete(sdk_sent); free(s_jobs); free(s_done); free(s_ring);

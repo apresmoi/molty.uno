@@ -54,7 +54,7 @@ import {
   type ActivityOwnerRequest,
 } from "./api.js";
 import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
-import { WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
+import { WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, GESTURES_CAP, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
 import { PcmFeed, estimateSpeechMs, splitSpeech, synthesize } from "./speech.js";
 import { DEFAULT_PARTIAL_POLICY, DRAFT_DROPPED_EVENT, DRAFT_USED_EVENT, type DropReason, PARTIAL_EVENT, PartialChunker, PauseTracker, judgeDraft, words } from "./partials.js";
 import { CALIBRATION, type DraftOutcome, type SpeechStats, addOutcome, addTurn, emptyStats, markMisfire, policyFor, speechSummary } from "./calibration.js";
@@ -176,6 +176,8 @@ export interface RoomTimings {
   thinkHoldS: number;
   /** Longest a blocking talk call holds the request before answering {status:"pending"}. */
   talkBudgetMs: number;
+  /** A talk heard the human and nobody read the result after this: it goes out as an `utterance`. */
+  collectGraceMs: number;
   /** ask: after the device's own timeout_ms, how long the relay waits for its `answer` before resolving `timeout` itself. */
   askGraceMs: number;
   /** update: how long the on-screen "update?" waits for a tap (sent as timeout_ms); the relay adds askGraceMs. */
@@ -203,6 +205,7 @@ export const DEFAULT_TIMINGS: RoomTimings = {
   sayDoneGraceMs: 2500,
   thinkHoldS: THINK_HOLD_S,
   talkBudgetMs: TALK_BUDGET_MS,
+  collectGraceMs: 5000,
   askGraceMs: 5000,
   updateConfirmMs: 60000,
   updateMs: 5 * 60 * 1000,
@@ -213,6 +216,8 @@ export const DEFAULT_TIMINGS: RoomTimings = {
 
 /** Firmware cap: say {cues:true} and frames with "w" word cues (the text follows the voice). */
 const SAY_CUES_CAP = "say_cues";
+/** Firmware cap: `cmd say_cancel {job}` drops a say the relay gave up on. */
+const SAY_CANCEL_CAP = "say_cancel";
 /** Firmware cap (with say_cues): say {marks:[[word, name]...]} fires each [mood]/[action] cue of the text at its word's cue. */
 const SAY_MARKS_CAP = "say_marks";
 /** Word cues one frame header carries (each ≤ 17 B: the header stays under 512 B). */
@@ -659,6 +664,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
    * tail, kept audio) checks it and writes nothing for a forgotten device.
    */
   private roomGen = 0;
+  /** Talk jobs that heard the human, until an agent reads the result (or it goes out as an utterance). */
+  private readonly uncollected = new Set<string>();
+  /** The fallback has claimed these words; its `delivered_as` marker lands when the promise does. */
+  private readonly delivering = new Map<string, Promise<void>>();
   private updTimer: unknown;
   /** The human is talking (an adopted shake listen): agents may only draft and react. */
   private openTurn: OpenTurn | undefined;
@@ -1031,6 +1040,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         return fail("unsupported", "this Molty has no working mood (no `working` in its caps)");
       }
     }
+    if (cmd.name === "gestures") {
+      const caps = live.getMeta()?.caps;
+      if (caps && !caps.includes(GESTURES_CAP)) return fail("unsupported", "this Molty's firmware has no gesture settings: update it");
+    }
     if (cmd.name === "quick") {
       if (live.getMeta()?.caps && !live.getMeta()!.caps!.includes("say")) return fail("unsupported", "this device has no speaker");
       return this.quick(hash, by, cmd.args, cmd.in_reply_to);
@@ -1231,9 +1244,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       const rec = await this.kv.get<JobRecord>(K.job(jobId));
       if (rec?.by && rec.by.who !== this.who(a).who) return fail("not_found");
     }
-    const out = await this.runJob(jobId, waitMs);
+    let out = await this.runJob(jobId, waitMs);
     // A failed job is an error to every surface: nothing rides along on it.
     if (out.ok && out.result.status === "failed") return out;
+    if (out.ok && out.result.status === "done" && (await this.collect(jobId))) out = await this.runJob(jobId, 0);
     return this.ride(a, out);
   }
 
@@ -1273,11 +1287,17 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (!started.ok) return started;
     const job = started.result.job as string;
     if (after) this.noteFollow(after, job);
-    const out = await this.runJob(job, Math.max(0, this.t.talkBudgetMs - (this.clock.now() - t0)));
+    let out = await this.runJob(job, Math.max(0, this.t.talkBudgetMs - (this.clock.now() - t0)));
     if (!out.ok) return out;
+    if (out.result.status === "done" && (await this.collect(job))) {
+      out = await this.runJob(job, 0);
+      if (!out.ok) return out;
+    }
     const v = out.result;
     if (v.status === "failed") return fail(v.error ?? "failed", `talk job ${job} failed`, { job });
-    if (v.status === "done") return this.ride(a, { ok: true, result: { ...(v.result ?? {}), job, status: "done" } });
+    if (v.status === "done") {
+      return this.ride(a, { ok: true, result: { ...(v.result ?? {}), job, status: "done" } });
+    }
     return this.ride(a, {
       ok: true,
       result: { job, status: "pending", state: v.status, hint: "still talking: call molty_wait {job} (REST: GET /v1/jobs/<job>?wait_s=8) for the result" },
@@ -1671,6 +1691,13 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (this.opener?.job === id) this.opener.endedAt = this.clock.now();
     this.tasks.delete(id);
     this.releaseAudio(id);
+    // Failed speech: the device may have taken the say (its answer lost, the audio never sent) and
+    // would wait for frames with the creature hidden. Fire and forget; another job is a no-op there.
+    if (patch.status === "failed" && ended && (ended.kind === "say" || ended.kind === "talk" || ended.kind === "quick") && this.liveSocket()?.getMeta()?.caps?.includes(SAY_CANCEL_CAP)) {
+      void this.sendCmd("say_cancel", { job: id }).then((c) => {
+        if (!c.ok) this.log("say_cancel failed", { device: this.deviceId, job: id, error: c.error });
+      });
+    }
     this.notify(this.jobWaiters, id);
     if (jt?.tail) {
       await jt.tail;
@@ -1738,6 +1765,50 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (trigger === "shake" && this.opener?.turn !== id && [...(await this.kv.list<TokenRecord>("tok:")).values()].some((t) => t.role !== "voice")) this.armFiller(id, r, seq);
   }
 
+  /**
+   * An agent read a done job: its words are the agent's now, unless the fallback claimed them
+   * first. Then wait for the marker; true means read the job again, so the agent sees `delivered_as`.
+   */
+  private async collect(id: string): Promise<boolean> {
+    if (this.uncollected.delete(id)) return false;
+    const marked = this.delivering.get(id);
+    if (!marked) return false;
+    await marked;
+    return true;
+  }
+
+  /**
+   * A talk's listen heard the human and nobody read the result (the agent's run ended on `pending`):
+   * their words go out as a normal `utterance`, a new turn. The job says so, for an agent that reads it after all.
+   */
+  private async deliverUncollected(id: string, r: Extract<ListenResult, { ok: true }>, gen: number) {
+    if (!this.uncollected.delete(id) || gen !== this.roomGen) return;
+    // the job has ended (setJob refuses): only this marker is added to its result
+    const marked = (async () => {
+      const rec = await this.kv.get<JobRecord>(K.job(id));
+      if (rec) await this.kv.put(K.job(id), { ...rec, result: { ...(rec.result ?? {}), delivered_as: "utterance", turn_id: id } });
+    })();
+    this.delivering.set(id, marked);
+    await marked;
+    // long enough for a read that began before the marker to come back and look again
+    this.clock.setTimeout(() => this.delivering.delete(id), this.t.collectGraceMs);
+    const text = r.text.trim();
+    await this.kv.put<TurnRecord>(K.turn, { id, at: this.clock.now() });
+    const data = utteranceData({
+      turn_id: id,
+      text,
+      reason: r.reason,
+      speech_ms: r.speech_ms ?? r.duration_ms,
+      stt_ms: (r.timings.stt as number) ?? 0,
+      trigger: "talk",
+      caps: this.liveSocket()?.getMeta()?.caps ?? [],
+      ack: r.ack,
+      voice: await this.voiceName(),
+    });
+    await this.appendEvent(UTTERANCE_EVENT, data, true);
+    await this.activity.record({ ts: this.clock.now(), kind: "device", ev: "utterance", job: id, data: { text: text.slice(0, 500), reason: r.reason, trigger: "talk", words: words(text).length } });
+  }
+
   /** say (optional) then listen, one job holding the audio lock across both, so nothing slips in between. `ready`: as runSay. */
   private async runTalk(id: string, args: TalkArgs, created: number, ready?: Promise<void>) {
     const pre = ready && args.say !== undefined ? await this.prepareSpeech(args.say, args.voice) : undefined;
@@ -1771,6 +1842,12 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       const fill = this.fillerIn(l);
       if (fill !== undefined) result.filler_in_ms = fill;
       await this.noteHeard(l);
+      // the conversation goes on: the next answer is timed from these words, whatever turn id it names
+      if (reply.turn && l.text.trim()) {
+        const turnId = (reply.turn as { id: string }).id;
+        const at = this.clock.now();
+        await this.kv.update<TurnRecord, void>(K.turn, (cur) => (cur?.id === turnId ? { next: { ...cur, heard_at: at }, result: undefined } : { result: undefined }));
+      }
       ms.listen = (l.timings.record as number) ?? 0;
       ms.stt = (l.timings.stt as number) ?? 0;
       timings.listen = l.timings;
@@ -1781,9 +1858,16 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     timings.total = ms.total;
     this.logTimings(id, "talk", timings);
     const seq = this.agentSeq; // before the agent has the result: its next call stands the filler down
+    // before the job ends: a waiting talk / wait collects it while finishJob wakes them
+    if (heard?.text.trim()) this.uncollected.add(id);
     await this.finishJob(id, { status: "done", result: { ...result, ms, timings } });
     // the human spoke: the agent now thinks; nothing from it in time → Molty fills itself
     if (heard) this.armFiller(id, heard, seq);
+    if (this.uncollected.has(id)) {
+      const gen = this.roomGen;
+      const words = heard!;
+      this.clock.setTimeout(() => void this.deliverUncollected(id, words, gen), this.t.collectGraceMs);
+    }
   }
 
   /**

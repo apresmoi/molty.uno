@@ -256,6 +256,8 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   `""`. `speech_ms` alone never skips STT (firmware before this change sent `speech_ms:0` with
   `vad:false`). Older firmware sends no reason: STT as before, reason derived (`max` window
   full, `ended` stopped early, `no_speech` empty transcript).
+- `say_cancel` (cap `say_cancel`): relay sends `cmd say_cancel {job}` when a say / talk / quick job fails: the device stops waiting for that say's audio (`{job, cancelling}`; any other job is a no-op). Without audio a say also gives up by itself after 8 s (30 s once frames have arrived).
+- `gestures` (cap `gestures`): `cmd gestures {bindings?}` sets `{tap|double_tap|button_accept|button_reject: none|talk|event|stop}` (NVS) and answers `{bindings}`; a tap during a recording ends it with reason `tap`, whatever is bound.
 - `listen_stop` (cap `listen_stop`, boards with a mic): relay sends `cmd listen_stop {job, reason}`
   when its STT called the end of the listen (a [voice box](#voice-box) `stt.turn_end`): `reason`
   `"turn_end"` (the human finished) or `"no_speech"` (the box heard nobody). The device ends THAT
@@ -850,6 +852,7 @@ pairing). Rate-limited on the device. `shake`, `tap` and `button` reach agents t
 | `say.done` | `{job}` | a `say` finished playing (its last PCM left the speaker) |
 | `shake` | `{peak_g, reversals, ms, listen?}` | the board was shaken (boards with an IMU): ≥ 3 sign reversals of > 1.2 g dynamic acceleration on one axis within 800 ms; ≤ 1 per 2 s. `peak_g` largest dynamic acceleration (g), `ms` first peak → detection; `listen` the local id of the listen it started ([Shake to talk](#shake-to-talk)) |
 | `tap` | `{x, y}` | a finger touched the screen (boards with touch); 0..1 of the panel from the top left; ≤ 4/s |
+| `double_tap` | `{x, y}` | two taps within 350 ms, when bound to `event` (out of the box a double tap talks) |
 | `button` | `{id: "accept"\|"reject"}` | a button was pressed (the board's accept / reject buttons); ≤ 4/s. For agents it means acknowledge / dismiss, never an answer (answers come only from `ask`) |
 | `answer` | `{job, index, label}` · `{job, index: null, reason: "timeout"\|"cancelled"}` | an `ask` ended: tapped (0-based `index`, `label` verbatim), timed out, or cancelled; one per job, never rate-limited |
 
