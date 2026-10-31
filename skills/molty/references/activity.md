@@ -34,6 +34,7 @@ A failed `talk` / `ask` / `update` carries its `job` id next to `error` (the hel
 
 - `data.voice.fallback` set → the owner's voice box failed and the cloud answered ([voice-box.md](voice-box.md)).
 - a `device` `disconnect` inside the job → Molty's Wi-Fi dropped: tell your human, retry once.
+- slow end of turn → `timings.listen.end_of_turn`: `silence_ms` (last word to the box's decision), `behind_ms` (the box's lag behind the audio), `rule`, `thr`, `hold_s`. Only with a voice box.
 - slow `timings.turn.reply` → your own latency ([talking-fast.md](talking-fast.md)); send
   `client_timing` so the split between your receive, your model and the relay is visible.
 - a `trace` `webhook` entry with an `error` or a slow `ms` → your endpoint, not Molty.
