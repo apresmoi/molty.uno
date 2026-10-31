@@ -489,10 +489,58 @@ static void test_ask_args(void)
     cJSON_free(t); cJSON_Delete(f);
 }
 
+/* the turn trace on listen frames (cap "trace", docs/AGENT-LINK.md "Turn trace"): exact keys,
+ * left-out zeros, the end frame's tr; the header never outgrows LINK_HEADER_MAX — the trace
+ * gives way (tr, then lv), never the frame */
+static void test_trace_frames(void)
+{
+    char f[LINK_HEADER_MAX + 2];
+    link_frame_t h = {.stream = "molty-abcdefghij.j_AbCdEfGhIjKlMnOp", .seq = 3, .trace = true, .ct = 900, .wq = 12, .nlv = 3, .lv = {0, 0x9c, 200}};
+    int n = link_frame_header(f, sizeof(f), &h);
+    assert(n > 0 && !strcmp(f, "{\"s\":\"molty-abcdefghij.j_AbCdEfGhIjKlMnOp\",\"seq\":3,\"kind\":\"pcm16\",\"rate\":16000,\"end\":false,\"ct\":900,\"lv\":\"009cc8\",\"wq\":12}\n"));
+    h.cl = 18; h.rt = 2;
+    n = link_frame_header(f, sizeof(f), &h);
+    assert(n > 0 && strstr(f, ",\"cl\":18,\"rt\":2,\"wq\":12}"));
+    link_trace_end_t tr = {.wall = 8970, .cap = 5400, .sent = 18, .fail = 3, .drop = 1, .dropms = 300, .has_rssi0 = true, .r0 = -69,
+                           .has_rssi1 = true, .r1 = -79, .gain = 6, .pk = 998, .shake = true, .set = 340, .setc = false};
+    h.end = true; h.reason = "turn_end"; h.speech_ms = 1200; h.speech_known = true; h.tr = &tr; h.cl = 0; h.rt = 0;
+    n = link_frame_header(f, sizeof(f), &h);
+    assert(n > 0 && !strcmp(f, "{\"s\":\"molty-abcdefghij.j_AbCdEfGhIjKlMnOp\",\"seq\":3,\"kind\":\"pcm16\",\"rate\":16000,\"end\":true,"
+                               "\"reason\":\"turn_end\",\"speech_ms\":1200,\"ct\":900,\"lv\":\"009cc8\",\"wq\":12,"
+                               "\"tr\":{\"wall\":8970,\"cap\":5400,\"sent\":18,\"fail\":3,\"drop\":1,\"dropms\":300,\"r0\":-69,\"r1\":-79,\"gain\":6,\"pk\":998,\"set\":340,\"setc\":0}}\n"));
+    /* no rssi known, not a shake: those keys left out */
+    tr.has_rssi0 = tr.has_rssi1 = false; tr.shake = false;
+    n = link_frame_header(f, sizeof(f), &h);
+    assert(n > 0 && !strstr(f, "\"r0\"") && !strstr(f, "\"set\"") && strstr(f, "\"gain\":6,\"pk\":998}"));
+    /* parsing ignores them (the say path reads frames with the same parser) */
+    link_frame_t g; const uint8_t *pcm; size_t pl;
+    assert(link_frame_parse(f, (size_t)n, &g, &pcm, &pl) && g.seq == 3 && g.end && pl == 0);
+    /* worst case: a 128-char stream id and every number at its widest — still a frame */
+    link_frame_t w = {.seq = UINT32_MAX, .end = true, .reason = "no_speech", .speech_ms = UINT32_MAX, .speech_known = true,
+                      .trace = true, .ct = UINT32_MAX, .cl = UINT32_MAX, .rt = UINT32_MAX, .wq = UINT32_MAX, .nlv = 4, .lv = {200, 200, 200, 200}};
+    memset(w.stream, 'x', 128); w.stream[128] = 0;
+    link_trace_end_t big = {UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, true, true, -2147483647, -2147483647,
+                            UINT32_MAX, UINT32_MAX, true, UINT32_MAX, true};
+    w.tr = &big;
+    n = link_frame_header(f, sizeof(f), &w);
+    assert(n > 0 && n <= LINK_HEADER_MAX + 1 && !strstr(f, "\"tr\""));    /* the tr gave way */
+    assert(link_frame_parse(f, (size_t)n, &g, &pcm, &pl) && g.end);
+    /* a realistic job id keeps everything */
+    strcpy(w.stream, "molty-abcdefghij.j_AbCdEfGhIjKlMnOp");
+    n = link_frame_header(f, sizeof(f), &w);
+    assert(n > 0 && n <= LINK_HEADER_MAX + 1 && strstr(f, "\"tr\"") && strstr(f, "\"lv\""));
+    /* the level byte: 2 * (dBFS + 100), 0..200 */
+    assert(link_level_byte(0, 1600) == 0 && link_level_byte(1, 0) == 0);
+    assert(link_level_byte(32768.0 * 32768.0 * 1600, 1600) == 200);           /* 0 dBFS */
+    const double a = 32768.0 * pow(10, -20.0 / 20);                             /* -20 dBFS */
+    assert(link_level_byte(a * a * 1600, 1600) == 160);
+    assert(link_level_byte(1e-6, 1600) == 0);                                    /* below -100 dBFS */
+}
+
 int main(void)
 {
     test_codes(); test_moods(); test_frames(); test_cues(); test_marks(); test_identity_and_urls(); test_control_frames();
-    test_mood_args(); test_listen_args(); test_listen_window(); test_ack(); test_event_frames(); test_restore(); test_ask_args();
-    puts("LINK HOST PASS: audio/control/event frames, random IDs, code alphabet, URLs, close retry policy, moods + hold_s, listen args + window, turn ack rules, say cues + marks, act, restore, ask args + answer frames");
+    test_mood_args(); test_listen_args(); test_listen_window(); test_ack(); test_event_frames(); test_restore(); test_ask_args(); test_trace_frames();
+    puts("LINK HOST PASS: audio/control/event frames, random IDs, code alphabet, URLs, close retry policy, moods + hold_s, listen args + window, turn ack rules, say cues + marks, act, restore, ask args + answer frames, turn-trace frames (ct lv cl rt wq, end tr, size bound, level byte)");
     return 0;
 }

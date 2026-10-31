@@ -121,6 +121,10 @@ uint32_t mole_fluid_listen_window(void);
  *  2 chirp — the default). POST /api/creature/state {ack: "chirp"|"thinking"|"off"} (GET
  *  reports it), kept in NVS like ring_color. Safe from any task, before init too. */
 int mole_fluid_ack_mode(void);
+/** Idle life (fluid_director.h FD_IDLE_*: 0 off, 1 calm, 2 lively — the default). POST
+ *  /api/creature/state {idle_life} (GET reports it), NVS. The listener reactions follow it
+ *  (link/listen_react.h: off = none). Safe from any task, before init too. */
+int mole_fluid_idle_life(void);
 /** Shake to talk (link_protocol.h): whether a shake starts a listen by itself. POST
  *  /api/creature/state {shake_talk: bool} (GET reports it), kept in NVS like ring_color; on
  *  out of the box. Safe from any task, before init too. */
