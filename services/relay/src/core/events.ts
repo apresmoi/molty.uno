@@ -13,6 +13,7 @@
 // Everything else (say.done, link_code, ...) stays internal to the relay.
 
 import { MAX_ASK_LABEL, MAX_ASK_OPTIONS } from "./commands.js";
+import { DRAFT_DROPPED_EVENT, DRAFT_USED_EVENT, PARTIAL_EVENT } from "./partials.js";
 import { isRecord, type JsonObject } from "./protocol.js";
 
 export interface AgentEvent {
@@ -22,6 +23,8 @@ export interface AgentEvent {
   /** Relay receive time, unix ms. */
   ts: number;
   data: JsonObject;
+  /** Internal (never returned): the one agent token hash this event is for (draft.used / draft.dropped). Absent = every agent. */
+  to?: string;
 }
 
 export const INBOX_LIMITS = {
@@ -86,8 +89,17 @@ export const ASK_NO_ANSWER = ["timeout", "cancelled", "offline"] as const;
  */
 export const UTTERANCE_EVENT = "utterance";
 
-/** Every type an agent can receive and filter on (webhook `events`): device events + utterance. */
-export const AGENT_EVENT_TYPES = [...Object.keys(SHAPES), UTTERANCE_EVENT];
+/** Every type an agent can receive and filter on (webhook `events`): device events + the relay's own. */
+export const AGENT_EVENT_TYPES = [...Object.keys(SHAPES), UTTERANCE_EVENT, PARTIAL_EVENT, DRAFT_USED_EVENT, DRAFT_DROPPED_EVENT];
+
+/** Chatty types a webhook gets only when its `events` names them (never by default). Pull and ride-along carry them. */
+export const OPT_IN_EVENTS: readonly string[] = [PARTIAL_EVENT];
+
+/** What a webhook without `events` receives. */
+export const DEFAULT_WEBHOOK_EVENTS = AGENT_EVENT_TYPES.filter((t) => !OPT_IN_EVENTS.includes(t));
+
+/** Does a webhook with this `events` list (absent = the default) want `type`? */
+export const webhookWants = (events: string[] | undefined, type: string) => (events ? events.includes(type) : !OPT_IN_EVENTS.includes(type));
 
 /** One representative event per type: webhook templates are dry-run against every type they will receive. */
 export const SAMPLE_EVENTS: Record<string, AgentEvent> = {
@@ -107,6 +119,24 @@ export const SAMPLE_EVENTS: Record<string, AgentEvent> = {
       trigger: "shake",
       device: { caps: ["say", "listen", "shake_talk"], mood: "thinking", voice: "box" },
     },
+  },
+  [PARTIAL_EVENT]: {
+    id: "e6",
+    type: PARTIAL_EVENT,
+    ts: 0,
+    data: { turn_id: "molty-xxxxxxxxxx.j_sample01", seq: 1, text_so_far: "what's on my calendar", new_text: "what's on my calendar", elapsed_ms: 3200 },
+  },
+  [DRAFT_USED_EVENT]: {
+    id: "e7",
+    type: DRAFT_USED_EVENT,
+    ts: 0,
+    data: { turn_id: "molty-xxxxxxxxxx.j_sample01", based_on: 1, opener: "Let me look.", new_words: 1 },
+  },
+  [DRAFT_DROPPED_EVENT]: {
+    id: "e8",
+    type: DRAFT_DROPPED_EVENT,
+    ts: 0,
+    data: { turn_id: "molty-xxxxxxxxxx.j_sample01", based_on: 1, reason: "new_words", new_words: 9 },
   },
 };
 
@@ -134,6 +164,12 @@ export function eventSentence(ev: AgentEvent): string {
         : `Molty was shaken (peak ${Number(d.peak_g).toFixed(1)} g)`;
     case UTTERANCE_EVENT:
       return `The human said to Molty: "${String(d.text ?? "")}"`;
+    case PARTIAL_EVENT:
+      return `The human is still talking to Molty (context only, don't answer yet): "${String(d.text_so_far ?? "")}"`;
+    case DRAFT_USED_EVENT:
+      return `Molty is speaking your opener "${String(d.opener ?? "")}": you have the turn, continue with in_reply_to`;
+    case DRAFT_DROPPED_EVENT:
+      return `Your draft opener was dropped (${String(d.reason ?? "")}): answer the utterance as usual`;
     case "tap":
       return "Molty's screen was tapped";
     case "button":

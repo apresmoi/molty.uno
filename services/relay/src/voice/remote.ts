@@ -52,6 +52,8 @@ interface SttOp {
   turnEnd(reason?: "no_speech"): void;
   /** stt.hint from the box, while the audio is still flowing. */
   hint(k: "pause" | "question"): void;
+  /** stt.partial from the box: the text so far, only while the audio is still flowing. */
+  partial(text: string): void;
   ms?: JsonObject;
   /** The box's latest stt.trace. */
   trace?: JsonObject;
@@ -181,6 +183,10 @@ export class RemoteVoiceProvider implements VoiceProvider {
       hint: (k) => {
         if (state === "open" && !turned) opts.onHint?.(k);
       },
+      partial: (text) => {
+        if (state !== "open" || turned) return;
+        opts.onPartial?.(text);
+      },
     };
     this.sttOps.set(id, op);
     try {
@@ -249,6 +255,9 @@ export class RemoteVoiceProvider implements VoiceProvider {
       const op = this.sttOps.get(id);
       const t = op && op.ch.same(from) ? cleanBoxTrace(frame.trace) : undefined;
       if (op && t) op.trace = t;
+    } else if (frame.t === "stt.partial") {
+      const op = this.sttOps.get(id);
+      if (op && op.ch.same(from) && typeof frame.text === "string") op.partial(frame.text.trim().slice(0, 4000));
     } else if (frame.t === "stt.final") {
       const op = this.sttOps.get(id);
       if (!op || !op.ch.same(from)) return;
@@ -256,7 +265,7 @@ export class RemoteVoiceProvider implements VoiceProvider {
       if (isRecord(frame.ms)) op.ms = frame.ms as JsonObject;
       op.settle(undefined, typeof frame.text === "string" ? frame.text.trim().slice(0, 4000) : "");
     }
-    // stt.partial is informational: the final text is what counts.
+    // stt.partial is informational (onPartial: the relay's partial transcripts): the final text is what counts.
   }
 
   /** A binary frame from the box: TTS audio for one of our requests. */

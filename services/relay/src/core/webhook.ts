@@ -12,7 +12,7 @@
 
 import { b64urlEncode, randomBytes } from "./crypto.js";
 import { isRecord } from "./protocol.js";
-import { AGENT_EVENT_TYPES, type AgentEvent, SAMPLE_EVENTS, eventSentence } from "./events.js";
+import { AGENT_EVENT_TYPES, type AgentEvent, DEFAULT_WEBHOOK_EVENTS, SAMPLE_EVENTS, eventSentence } from "./events.js";
 
 export const WEBHOOK_METHODS = ["POST", "GET", "PUT", "PATCH"] as const;
 export type WebhookMethod = (typeof WEBHOOK_METHODS)[number];
@@ -398,7 +398,7 @@ export function redactWebhook(w: WebhookRecord) {
     headers: Object.keys(w.headers),
     content_type: w.content_type ?? (w.body === undefined ? "application/json" : "text/plain; charset=utf-8"),
     custom_body: w.body !== undefined,
-    events: w.events ?? AGENT_EVENT_TYPES,
+    events: w.events ?? DEFAULT_WEBHOOK_EVENTS,
     active: !w.disabled,
     consecutive_failures: w.fails,
     ...(w.disabled ? { disabled: w.disabled } : {}),

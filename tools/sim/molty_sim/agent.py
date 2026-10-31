@@ -5,6 +5,8 @@
   gap held constant so the pipeline's own latency shows.
 - `LlmAgent`: an OpenAI-compatible chat endpoint (e.g. Ollama on the box) writes each reply
   from what Molty heard; its real think time is part of the gap and reported apart.
+- `EventPump`: the agent's inbox as one stream — a long-poll loop plus the events riding along on
+  every other response (reading them marks them read, so both feed the same queue, deduped by id).
 """
 
 from __future__ import annotations
@@ -47,6 +49,33 @@ class Rest:
     def __init__(self, base: str, device_id: str):
         self.base, self.device = base.rstrip("/"), device_id
         self.token: str | None = None
+        self.on_events = None  # callable(list[event]): ride-along events of every response
+
+    def _ride(self, out: dict) -> dict:
+        if self.on_events and isinstance(out, dict) and out.get("events"):
+            self.on_events(out["events"])
+        return out
+
+    async def call(self, method: str, path: str, body: dict | None = None, timeout: float = 60) -> tuple[int, dict]:
+        status, out = await http(method, f"{self.base}{path}", body, token=self.token, timeout=timeout)
+        return status, self._ride(out)
+
+    async def events(self, wait_s: int = 25) -> list[dict]:
+        status, out = await http("GET", f"{self.base}/v1/devices/{self.device}/events?wait_s={wait_s}", token=self.token, timeout=wait_s + 15)
+        if status >= 400:
+            raise RelayError(status, out)
+        return out.get("events") or []
+
+    async def draft(self, turn_id: str, based_on: int, opener: str, **kw) -> tuple[int, dict]:
+        return await self.call("POST", f"/v1/devices/{self.device}/draft", {"turn_id": turn_id, "based_on": based_on, "opener": opener, **kw})
+
+    async def react(self, turn_id: str, mood: str | None = None, action: str | None = None) -> tuple[int, dict]:
+        body = {"turn_id": turn_id, **({"mood": mood} if mood else {}), **({"action": action} if action else {})}
+        return await self.call("POST", f"/v1/devices/{self.device}/react", body)
+
+    async def speech(self, link_code: str) -> dict:
+        _, out = await http("GET", f"{self.base}/v1/devices/{self.device}/speech", headers={"X-Molty-Link-Code": link_code})
+        return out.get("result") or out
 
     async def pair(self, link_code: str, name: str, role: str | None = None) -> str:
         body = {"device_id": self.device, "link_code": link_code, "agent_name": name, "wait_s": 0}
@@ -61,11 +90,12 @@ class Rest:
 
     async def talk(self, say: str | None, listen: bool = True, **args) -> dict:
         body = {k: v for k, v in {"say": say, "listen": listen, **args}.items() if v is not None}
-        status, out = await http("POST", f"{self.base}/v1/devices/{self.device}/talk", body, token=self.token, timeout=60)
+        status, out = await self.call("POST", f"/v1/devices/{self.device}/talk", body)
         return await self._job(status, out)
 
-    async def say(self, text: str) -> dict:
-        status, out = await http("POST", f"{self.base}/v1/devices/{self.device}/cmd", {"name": "say", "args": {"text": text}, "wait": True}, token=self.token, timeout=60)
+    async def say(self, text: str, in_reply_to: str | None = None) -> dict:
+        args = {"text": text, **({"in_reply_to": in_reply_to} if in_reply_to else {})}
+        status, out = await self.call("POST", f"/v1/devices/{self.device}/cmd", {"name": "say", "args": args, "wait": True})
         return await self._job(status, out)
 
     async def job(self, job: str) -> dict:
@@ -90,6 +120,53 @@ class Rest:
     async def voice_status(self, link_code: str) -> dict:
         _, out = await http("GET", f"{self.base}/v1/devices/{self.device}/voice", headers={"X-Molty-Link-Code": link_code})
         return out.get("result") or out
+
+
+class EventPump:
+    """Every event this agent gets, once, in order of arrival: a long-poll loop + ride-alongs."""
+
+    def __init__(self, rest: Rest):
+        self.rest = rest
+        self.q: asyncio.Queue = asyncio.Queue()
+        self.seen: set[str] = set()
+        self.log: list[tuple[float, dict]] = []
+        self._task: asyncio.Task | None = None
+        rest.on_events = self.feed
+
+    def feed(self, events: list[dict]) -> None:
+        for e in events:
+            if e.get("id") in self.seen:
+                continue
+            self.seen.add(e.get("id"))
+            at = time.monotonic()
+            self.log.append((at, e))
+            self.q.put_nowait((at, e))
+
+    async def _loop(self) -> None:
+        while True:
+            try:
+                self.feed(await self.rest.events(25))
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - a blip: poll again
+                await asyncio.sleep(0.5)
+
+    def start(self) -> None:
+        self._task = asyncio.create_task(self._loop())
+
+    async def stop(self) -> None:
+        if self._task:
+            self._task.cancel()
+
+    async def next(self, timeout: float) -> tuple[float, dict] | None:
+        try:
+            return await asyncio.wait_for(self.q.get(), timeout)
+        except asyncio.TimeoutError:
+            return None
+
+    def drain(self) -> None:
+        while not self.q.empty():
+            self.q.get_nowait()
 
 
 class ScriptedAgent:

@@ -72,3 +72,16 @@ First public release.
 - **Release assets**: per board, OTA image and full factory image
   (`molty-X.Y.Z-<board>-{ota,factory}.bin`); console page, CLI binaries for
   linux/darwin/windows × amd64/arm64, `SHA256SUMS`.
+- **While the human speaks** (relay + firmware + skill): during a shake turn agents get
+  `utterance.partial` chunks by meaning (sentence end, ~1/3 of the human's usual turn, none
+  before 3 s) as context only; their `say` / `talk` / `ask` / `mood` / `show` get `409
+  human_speaking`. They may `draft` an opener — synthesised while the human talks, played the
+  instant they finish when the last words don't change the meaning (`draft.used`, the follow-up
+  queues behind it with no gap; else `draft.dropped`) — and `react` with a mood (screen only,
+  firmware cap `react`: not an explicit mood, so the turn's chirp stays) or a gesture (`act`).
+  Partials, drafts, reacts and the draft outcome are in the turn trace. The relay calibrates
+  from usage (turn length, speech rate, pauses, draft outcomes → partial points and the draft
+  threshold; owner `GET /v1/devices/<id>/speech`, console **speech habits** card, activity
+  log). Per-agent private notes (`/v1/notes`, `molty_notes`) for the behaviour ledger.
+  Webhooks get partials only when `events` names them
+  ([docs/AGENT-LINK.md](docs/AGENT-LINK.md#while-the-human-speaks)).

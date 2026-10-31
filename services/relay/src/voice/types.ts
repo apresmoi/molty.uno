@@ -59,6 +59,11 @@ export interface SttStreamOptions {
    * mid-turn pause began) or `question` (a word ending in "?"). Only while the stream is open.
    */
   onHint?: (k: "pause" | "question") => void;
+  /**
+   * The transcript so far, while the human is still talking (the voice box: every word). Only
+   * while the stream is open; informational — the final text from end() is what counts.
+   */
+  onPartial?: (textSoFar: string) => void;
 }
 
 /** One streaming transcription (VoiceProvider.sttStream). */

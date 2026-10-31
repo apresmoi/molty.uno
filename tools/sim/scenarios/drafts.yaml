@@ -1,0 +1,89 @@
+# While the human speaks (docs/AGENT-LINK.md): the human SHAKES Molty and talks; the relay sends
+# `utterance.partial` chunks; a scripted drafting agent drafts one opener (the first partial that
+# contains `when`) and maybe reacts, then answers. Every turn runs twice: `baseline` (no drafts:
+# answer the utterance) and `drafts`. `answer` names the opener family that fits the FULL
+# utterance: a played opener of another family is a wrong opener. Late words that flip the meaning
+# ("…but not on Sunday", "…actually, tomorrow") must get the draft dropped.
+# Run: make sim SIM_ARGS='scenarios/drafts.yaml --align none'
+name: drafts
+shake: true
+arms: [baseline, drafts]
+defaults:
+  lead_s: 0.6
+  level_db: -24
+  noise: {kind: pink, db: -62}
+turns:
+  - id: calendar
+    user: "Hey Molty, what's on my calendar this afternoon? I think there's a call at three."
+    draft: {when: "calendar", opener: "Let me look.", family: lookup}
+    react: {when: "calendar", action: nod}
+    answer: lookup
+    reply: "You have the design call at three, then nothing until six."
+    follow: "You have the design call at three, then nothing until six."
+    tags: [fits]
+
+  - id: alarm-flip
+    user: "Can you set an alarm for seven tomorrow morning, {pause 0.5} but not on Sunday."
+    draft: {when: "alarm", opener: "Sure, alarm at seven.", family: confirm}
+    answer: hedge
+    reply: "Okay, seven every morning except Sunday."
+    tags: [late-flip, flip-word]
+
+  - id: weather
+    user: "So I'm heading out in a bit with the dog. Is it going to rain later?"
+    draft: {when: "heading out", opener: "Let me check the sky.", family: lookup}
+    answer: lookup
+    reply: "Dry until eight, then light rain."
+    tags: [fits]
+
+  - id: plants-flip
+    user: "Remind me to water the plants tonight. {pause 0.6} Actually no, tomorrow morning is better."
+    draft: {when: "plants", opener: "Okay, tonight it is.", family: confirm}
+    answer: hedge
+    reply: "Got it, tomorrow morning for the plants."
+    tags: [late-flip, flip-word]
+
+  - id: long-day
+    user: "I had such a long day today, honestly. Tell me something funny, please."
+    draft: {when: "long day", opener: "Oh no, a long one.", family: empathy}
+    answer: empathy
+    reply: "Here's one: I told my plant a joke and it wet itself laughing."
+    follow: "Here's one: I told my plant a joke and it wet itself laughing."
+    tags: [fits]
+
+  - id: song
+    user: "What was the name of that song from yesterday? The one with the piano at the start."
+    draft: {when: "song", opener: "Hmm, let me think.", family: lookup}
+    answer: lookup
+    reply: "I think that was Harvest Moon."
+    tags: [fits]
+
+  - id: lights-twist
+    user: "Turn on the living room lights for me. {pause 0.4} The bedroom ones, I mean."
+    draft: {when: "lights", opener: "Living room lights, on.", family: commit}
+    answer: modify
+    reply: "Bedroom lights on."
+    tags: [late-twist, no-flip-word]
+
+  - id: ramble
+    user: "Well, it started badly because the train was late again, so I got to the office after nine, and then the meeting ran over. Anyway, what should I cook tonight?"
+    draft: {when: "train", opener: "Oof, what a morning.", family: empathy}
+    react: {when: "late again", mood: surprised}
+    answer: empathy
+    reply: "Something easy: pasta with lemon and garlic."
+    tags: [long, ramble]
+
+  - id: bug-fixed
+    user: "I finally fixed the bug that was bothering me all week! Can you play something to celebrate?"
+    draft: {when: "fixed", opener: "Nice, well done!", family: celebrate}
+    react: {when: "fixed", mood: happy}
+    answer: celebrate
+    reply: "Playing your victory playlist."
+    tags: [fits, react]
+
+  - id: short
+    user: "What time is it?"
+    draft: {when: "time", opener: "Let me see.", family: lookup}
+    answer: lookup
+    reply: "It's ten past four."
+    tags: [short, no-partials]

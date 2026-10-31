@@ -145,6 +145,13 @@ export function traceModel(jobEntry: ActivityEntry | undefined, extra: ActivityE
   ev(endAt, 'relay', `listen ended${str(dev.end) ? `: ${dev.end}` : ''}${num(dev.speech_ms) !== undefined ? `, ${s(dev.speech_ms)} of speech` : ''}`);
   if (num(relay.stt) !== undefined) ev((endAt ?? 0) + relay.stt, 'relay', `transcript ready: ${s(relay.stt)} after the end${num(box.final_ms) !== undefined ? ` (box ${s(box.final_ms)})` : ''}${str(relay.voice) ? ` ⠂ ${relay.voice === 'box' ? 'voice box' : relay.voice}` : ''}`);
   if (str(relay.fallback)) summary.push({ text: `voice box fell back to the cloud: ${relay.fallback}`, tone: 'warn' });
+  // while the human spoke (docs/AGENT-LINK.md "While the human speaks"): counts only, never words
+  for (const p of Array.isArray(relay.partials) ? relay.partials : []) if (Array.isArray(p)) ev(num(p[1]), 'relay', `partial ${p[0]} to the agents (${p[2]} words so far)`);
+  for (const d of Array.isArray(relay.drafts) ? relay.drafts : []) if (Array.isArray(d)) ev(num(d[1]), 'agent', `an opener drafted on partial ${d[0]}`);
+  for (const r of Array.isArray(relay.reacts) ? relay.reacts : []) if (Array.isArray(r)) ev(num(r[1]), 'agent', `react ${r[0]}${r[2] === 'ok' ? '' : ` → ${r[2]}`}`, r[2] === 'ok' ? 'ok' : 'warn');
+  const draft = obj(relay.draft);
+  if (draft && num(draft.used) !== undefined) ev(num(draft.opener_at), 'relay', `drafted opener played (partial ${draft.used}, ${num(draft.new_words) ?? 0} words after it)`, 'ok');
+  if (draft && Array.isArray(draft.dropped) && draft.dropped.length) summary.push({ text: `draft${draft.dropped.length > 1 ? 's' : ''} dropped: ${draft.dropped.join(', ')}`, tone: 'warn' });
   const utter = num(relay.utterance);
   ev(utter, 'relay', 'utterance sent to the agents');
 

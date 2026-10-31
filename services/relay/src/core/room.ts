@@ -54,8 +54,11 @@ import {
   type ActivityOwnerRequest,
 } from "./api.js";
 import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
-import { ACK_CAP, ACK_MODES, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk } from "./commands.js";
+import { ACK_CAP, ACK_MODES, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
 import { PcmFeed, estimateSpeechMs, splitSpeech, synthesize } from "./speech.js";
+import { DEFAULT_PARTIAL_POLICY, DRAFT_DROPPED_EVENT, DRAFT_USED_EVENT, type DropReason, PARTIAL_EVENT, PartialChunker, PauseTracker, judgeDraft, words } from "./partials.js";
+import { CALIBRATION, type DraftOutcome, type SpeechStats, addOutcome, addTurn, emptyStats, markMisfire, policyFor, speechSummary } from "./calibration.js";
+import { NOTES_PREFIX, type NotesRequest, notesKey, notesOp } from "./notes.js";
 import { b64Decode, b64urlEncode, randomBytes, randomDigits, safeEqual, sha256Hex } from "./crypto.js";
 import {
   CLOSE_FORGOTTEN,
@@ -75,7 +78,7 @@ import {
   type JsonObject,
 } from "./protocol.js";
 import { type Clock, type KV, sleep } from "./store.js";
-import { AGENT_EVENT_TYPES, type AgentEvent, INBOX_LIMITS, SAMPLE_EVENTS, UTTERANCE_EVENT, agentEventData, eventId } from "./events.js";
+import { type AgentEvent, DEFAULT_WEBHOOK_EVENTS, INBOX_LIMITS, SAMPLE_EVENTS, UTTERANCE_EVENT, agentEventData, eventId, webhookWants } from "./events.js";
 import { LISTEN_ADOPT_FEATURE, LOCAL_LISTEN_RE, type TurnClaim, type TurnRecord, claimTurn, turnTimings, utteranceData } from "./turns.js";
 import { API_VERSION, FEATURES, compareVersions } from "./version.js";
 import type { ReleaseLookup, ReleaseSource } from "./releases.js";
@@ -163,6 +166,10 @@ export interface RoomTimings {
   updateMs: number;
   /** voice box: after the listen ended, how long its streaming STT may take for the final text. */
   boxSttFinalMs: number;
+  /** react: how long a react's mood shows before Molty returns to listening. */
+  reactShowMs: number;
+  /** partials: none before an open turn ran this long (PartialPolicy.lead_ms; a shorter turn gets none). */
+  partialLeadMs: number;
 }
 
 export const DEFAULT_TIMINGS: RoomTimings = {
@@ -182,6 +189,8 @@ export const DEFAULT_TIMINGS: RoomTimings = {
   updateConfirmMs: 60000,
   updateMs: 5 * 60 * 1000,
   boxSttFinalMs: 5000,
+  reactShowMs: REACT_SHOW_MS,
+  partialLeadMs: DEFAULT_PARTIAL_POLICY.lead_ms,
 };
 
 /** Firmware cap: say {cues:true} and frames with "w" word cues (the text follows the voice). */
@@ -344,6 +353,8 @@ interface ListenBuffer {
   relayEnded?: boolean;
   /** DeviceRoom.roomGen when it began: a forget since then voids its delayed writes. */
   roomGen: number;
+  /** The box's word arrivals (its stt.partial): the human's pauses, for the calibration. */
+  pauses: PauseTracker;
 }
 
 /** A finished listen's trace, until its job's activity entry is written (finishJob). */
@@ -396,9 +407,58 @@ interface PendingAsk {
 }
 type SpeakResult = { ok: true; start: number; ms: number; timings: JsonObject } | { ok: false; error: string };
 type ListenResult = (
-  | { ok: true; start: number; text: string; reason: string; speech_ms?: number; duration_ms: number; peak: number; rms: number; timings: JsonObject; ack?: string }
+  | { ok: true; start: number; text: string; reason: string; speech_ms?: number; duration_ms: number; peak: number; rms: number; timings: JsonObject; ack?: string; pauses: PauseTracker }
   | { ok: false; error: string }
 ) & { trace?: ListenTrace; audio?: boolean };
+
+/** Speech whose synthesis already started (a draft's opener, a queued follow-up): speak() plays it. */
+interface Prepared {
+  pick: Extract<VoicePick, { ok: true }>;
+  feed: PcmFeed;
+  at: number;
+}
+
+/** One agent's held draft for the open turn (core/partials.ts). */
+interface HeldDraft {
+  hash: string;
+  by: Who;
+  based_on: number;
+  basedText: string;
+  opener: string;
+  max_new_words: number;
+  voice?: string;
+  prepared: Prepared;
+  at: number;
+  /** Drafts this agent made this turn (replacements included). */
+  n: number;
+}
+
+/**
+ * The open human turn: a shake's adopted listen, from its adoption until its utterance (or its
+ * end without one). While it is open agents may only draft and react (human_speaking otherwise).
+ */
+interface OpenTurn {
+  id: string;
+  startAt: number;
+  chunker: PartialChunker;
+  timer?: unknown;
+  drafts: Map<string, HeldDraft>;
+}
+
+/** The opener being spoken for a turn, and who owns it (their follow-up queues behind it). */
+interface OpenerPlay {
+  job: string;
+  turn: string;
+  hash: string;
+  /** The draft outcome's time in the stats (a misfire turns that `used` around). */
+  usedAt: number;
+  /** When the opener's job ended. */
+  endedAt?: number;
+  /** Its owner's follow-up queued behind it (startJob `after`). */
+  follow?: string;
+  /** A misfire was counted for it already. */
+  counted?: boolean;
+}
 
 function concat(a: Int16Array, b: Int16Array): Int16Array {
   if (a.length === 0) return b;
@@ -430,6 +490,8 @@ const K = {
   vstat: "vstat",
   /** The latest human turn (shake to talk, core/turns.ts). */
   turn: "turn",
+  /** How this Molty's human talks: the calibration record (core/calibration.ts). */
+  speech: "speech",
 };
 
 /** Device-facing name of a voice box pairing (the console shows it next to the code). */
@@ -443,6 +505,15 @@ const fail = (error: string, message?: string, details?: JsonObject): { ok: fals
   ...(message === undefined ? {} : { message }),
   ...(details ? { details } : {}),
 });
+
+/**
+ * Commands refused while the human is talking (an open shake turn, `human_speaking`): they make a
+ * sound or take the screen. (talk / ask likewise; `state` only when it patches.) Agents draft and react instead.
+ */
+const HUSHED: readonly string[] = ["say", "listen", "mood", "show", "act"];
+
+/** An event as agents see it: the internal recipient (`to`) never leaves the relay. */
+const publicEvent = ({ to: _to, ...ev }: AgentEvent): AgentEvent => ev;
 
 /** Update phases a device reports between accept and its reboot. */
 const UPDATE_PHASES = ["accepted", "downloading", "flashing", "rebooting"];
@@ -505,6 +576,15 @@ export class DeviceRoom implements AgentApi, OwnerApi {
    */
   private roomGen = 0;
   private updTimer: unknown;
+  /** The human is talking (an adopted shake listen): agents may only draft and react. */
+  private openTurn: OpenTurn | undefined;
+  /** A queued job waiting for the audio lock of `after` (the owner's follow-up behind its opener). */
+  private handoff: { after: string; job: string; go: () => void } | undefined;
+  private opener: OpenerPlay | undefined;
+  private lastReactAt = 0;
+  private reactTimer: unknown;
+  /** Writes to the calibration record are serialized (read-modify-write from several paths). */
+  private speechChain: Promise<unknown> = Promise.resolve();
 
   constructor(deps: RoomDeps) {
     this.deviceId = deps.deviceId;
@@ -708,10 +788,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     this.audioKeep.generation++;
     this.jobTraces.clear(); // (a trace tail ends with dropInFlight below: its entry is then void)
     await this.activity.settle(); // activity writes queued before the forget land BEFORE the wipe, never after
-    for (const prefix of ["tok:", "pair:", "job:", "ev:", "cur:", "whq:", ACTIVITY_PREFIX, AUDIO_PREFIX]) {
+    for (const prefix of ["tok:", "pair:", "job:", "ev:", "cur:", "whq:", NOTES_PREFIX, ACTIVITY_PREFIX, AUDIO_PREFIX]) {
       for (const key of (await this.kv.list(prefix)).keys()) await this.kv.delete(key);
     }
-    for (const key of [K.device, K.link, K.pairCurrent, K.evSeq, K.evRate, K.skillEv, K.origin, K.devinfo, K.upd, K.voiceCfg, K.vbox, K.vstat, K.turn]) await this.kv.delete(key);
+    for (const key of [K.device, K.link, K.pairCurrent, K.evSeq, K.evRate, K.skillEv, K.origin, K.devinfo, K.upd, K.voiceCfg, K.vbox, K.vstat, K.turn, K.speech]) await this.kv.delete(key);
     // Its token is gone with the rest: so is the voice box.
     this.closeBoxes(() => true, CLOSE_UNAUTHORIZED, "device forgotten");
     this.log("device forgotten", { device: this.deviceId });
@@ -783,7 +863,14 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     await this.activity.record({ ts: this.clock.now(), kind: "pair", ev: "revoked", ...this.who(a), ...(a.rec.role === "voice" ? { data: { role: "voice" } } : {}) });
     await this.kv.delete(K.token(a.hash));
     await this.kv.delete(K.cur(a.hash));
+    await this.kv.delete(notesKey(a.hash));
     await this.dropDeliveries(a.hash);
+    // its held draft goes with it (nobody would continue that opener)
+    const held = this.openTurn?.drafts.get(a.hash);
+    if (held) {
+      this.openTurn!.drafts.delete(a.hash);
+      held.prepared.feed.end();
+    }
     if (a.rec.role === "voice") await this.forgetBox((m) => m.tok === a.hash, "voice box token revoked");
     return { ok: true, result: { revoked: true } };
   }
@@ -807,6 +894,11 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     } catch (e) {
       if (e instanceof CommandError) return fail(e.code, e.message);
       throw e;
+    }
+    // the human is talking: nothing that makes a sound or takes the screen (draft / react instead)
+    if (HUSHED.includes(cmd.name) || (cmd.name === "state" && Object.keys(cmd.args).length > 0)) {
+      const hush = this.humanSpeaking();
+      if (hush) return hush;
     }
     const live = this.liveSocket();
     if (!live) return fail("device_offline");
@@ -838,7 +930,11 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         if (!pre.ok) return pre;
         const called = this.clock.now();
         const sayArgs = cmd.client_timing ? { ...cmd.args, client_timing: cmd.client_timing } : cmd.args;
-        return this.startJob("say", sayArgs, true, by, () => this.claimFor(hash, cmd.in_reply_to, called));
+        // its own opener is playing: this say queues behind it and starts the moment it ends
+        const after = this.followUpOf(hash);
+        const started = await this.startJob("say", sayArgs, true, by, () => this.claimFor(hash, cmd.in_reply_to, called), after ? { after } : {});
+        if (started.ok && after && this.opener?.job === after) this.opener.follow = started.result.job as string;
+        return started;
       }
       return this.startJob(cmd.name as "say" | "listen", cmd.args, true, by);
     }
@@ -1031,6 +1127,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       if (e instanceof CommandError) return fail(e.code, e.message);
       throw e;
     }
+    const hush = this.humanSpeaking();
+    if (hush) return hush;
     const live = this.liveSocket();
     if (!live) return fail("device_offline");
     const caps = live.getMeta()?.caps;
@@ -1044,9 +1142,11 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     // the claim is taken only once the talk holds the audio lock (a refused talk claims nothing)
     const pre = await this.claimCheck(a.hash, args.in_reply_to);
     if (!pre.ok) return pre;
-    const started = await this.startJob("talk", args as unknown as JsonObject, true, this.who(a), () => this.claimFor(a.hash, args.in_reply_to, t0));
+    const after = this.followUpOf(a.hash);
+    const started = await this.startJob("talk", args as unknown as JsonObject, true, this.who(a), () => this.claimFor(a.hash, args.in_reply_to, t0), after ? { after } : {});
     if (!started.ok) return started;
     const job = started.result.job as string;
+    if (after && this.opener?.job === after) this.opener.follow = job;
     const out = await this.runJob(job, Math.max(0, this.t.talkBudgetMs - (this.clock.now() - t0)));
     if (!out.ok) return out;
     const v = out.result;
@@ -1073,6 +1173,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       if (e instanceof CommandError) return fail(e.code, e.message);
       throw e;
     }
+    const hush = this.humanSpeaking();
+    if (hush) return hush;
     const live = this.liveSocket();
     if (!live) return fail("device_offline");
     // Firmware lists `ask` in caps only on boards with a touch screen. Caps say whether it can;
@@ -1325,21 +1427,38 @@ export class DeviceRoom implements AgentApi, OwnerApi {
    * `admit`: runs once the audio lock is held (taken synchronously with its check), before the
    * job exists; a failure releases the lock and is the call's answer, success adds args. A turn
    * claim goes here, so only an admitted say / talk ever claims the human's turn.
+   *
+   * `takeover`: the job holding the lock hands it straight to this one (a shake's listen to its
+   * turn's opener: nothing can slip in between). `after`: when that job holds the lock, this one
+   * queues behind it and gets the lock the moment it ends (an opener's follow-up; one at a time).
+   * `prepared`: a say's speech whose synthesis already started (a draft's opener).
    */
-  private async startJob(kind: JobKind, args: JsonObject, audio = true, by?: Who, admit?: () => Promise<Outcome<JsonObject>>): Promise<Outcome> {
-    // the running job's id is not disclosed: it may be another agent's
-    if (audio && this.audioJob) return fail("audio_busy", "another say / listen / talk is still running on Molty");
+  private async startJob(
+    kind: JobKind,
+    args: JsonObject,
+    audio = true,
+    by?: Who,
+    admit?: (id: string) => Promise<Outcome<JsonObject>>,
+    opts: { takeover?: string; after?: string; prepared?: Prepared } = {},
+  ): Promise<Outcome> {
     const id = `${this.deviceId}.j_${b64urlEncode(randomBytes(12))}`;
-    if (audio) this.audioJob = id;
+    let ready: Promise<void> | undefined;
+    if (audio && this.audioJob) {
+      if (opts.takeover !== undefined && this.audioJob === opts.takeover) this.audioJob = id;
+      else if (opts.after !== undefined && this.audioJob === opts.after && !this.handoff) ready = new Promise<void>((go) => (this.handoff = { after: opts.after!, job: id, go }));
+      // the running job's id is not disclosed: it may be another agent's
+      else return fail("audio_busy", "another say / listen / talk is still running on Molty");
+    } else if (audio) this.audioJob = id;
     if (admit) {
       let ok: Outcome<JsonObject>;
       try {
-        ok = await admit();
+        ok = await admit(id);
       } catch (e) {
         ok = fail(errorCode(e));
       }
       if (!ok.ok) {
-        if (this.audioJob === id) this.audioJob = undefined;
+        this.dropHandoff(id);
+        this.releaseAudio(id);
         return ok;
       }
       args = { ...args, ...ok.result };
@@ -1347,24 +1466,41 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const now = this.clock.now();
     this.tasks.add(id);
     await this.kv.put<JobRecord>(K.job(id), { job: id, kind, status: "queued", created: now, updated: now, ...(by ? { by } : {}) });
-    void this.purgeJobs(now);
+    if (opts.takeover === undefined) void this.purgeJobs(now); // an opener's path stays short: the next job purges
     const run =
       kind === "say"
-        ? this.runSay(id, args, now)
+        ? this.runSay(id, args, now, ready, opts.prepared)
         : kind === "listen"
           ? this.runListen(id, args, now)
           : kind === "ask"
             ? this.runAsk(id, args as unknown as AskArgs, now)
             : kind === "update"
               ? this.runUpdate(id, args)
-              : this.runTalk(id, args as unknown as TalkArgs, now);
+              : this.runTalk(id, args as unknown as TalkArgs, now, ready);
     run
       .catch((e: unknown) => this.finishJob(id, { status: "failed", error: errorCode(e) }))
       .finally(() => {
         this.tasks.delete(id);
-        if (this.audioJob === id) this.audioJob = undefined;
+        this.dropHandoff(id);
+        this.releaseAudio(id);
       });
     return { ok: true, result: { job: id } };
+  }
+
+  /** The audio lock of `id` ends: to the job queued behind it (startJob `after`), else free. */
+  private releaseAudio(id: string) {
+    if (this.audioJob !== id) return;
+    const h = this.handoff;
+    if (h && h.after === id) {
+      this.handoff = undefined;
+      this.audioJob = h.job;
+      h.go();
+    } else this.audioJob = undefined;
+  }
+
+  /** A queued job that will not run any more leaves the queue. */
+  private dropHandoff(id: string) {
+    if (this.handoff?.job === id) this.handoff = undefined;
   }
 
   /** The record as written, or undefined when there was none to change (missing or already ended). */
@@ -1390,8 +1526,9 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     // the device's end frame still on its way (after the box's turn end): the agent gets the
     // result now; the entry follows once that frame's diagnostics are in (<= TRACE_TAIL_MS)
     if (!jt?.tail) await entry();
+    if (this.opener?.job === id) this.opener.endedAt = this.clock.now();
     this.tasks.delete(id);
-    if (this.audioJob === id) this.audioJob = undefined;
+    this.releaseAudio(id);
     this.notify(this.jobWaiters, id);
     if (jt?.tail) {
       await jt.tail;
@@ -1410,10 +1547,21 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     this.log("job timings", { device: this.deviceId, job: id, kind, ...timings });
   }
 
-  private async runSay(id: string, args: JsonObject, created: number) {
-    await this.setJob(id, { status: "running" });
+  /**
+   * `ready`: the job is queued behind its owner's opener (startJob `after`): its speech is
+   * synthesised NOW and it plays the moment the opener ends. `prepared`: already synthesising.
+   */
+  private async runSay(id: string, args: JsonObject, created: number, ready?: Promise<void>, prepared?: Prepared) {
     const text = args.text as string;
-    const r = await this.speak(id, text, typeof args.voice === "string" ? args.voice : undefined, false, args.marks as SayMarks | undefined);
+    const voice = typeof args.voice === "string" ? args.voice : undefined;
+    const pre = prepared ?? (ready ? await this.prepareSpeech(text, voice) : undefined);
+    if (ready) await ready;
+    // prepared speech (an opener) goes to the device at once; the "running" write lands meanwhile
+    const running = this.setJob(id, { status: "running" });
+    if (!prepared) await running;
+    // an opener played to its turn's end: the follow-up starts once its last sample left (say.done)
+    const r = pre && !("pick" in pre) ? pre : await this.speak(id, text, voice, args.opener === true, args.marks as SayMarks | undefined, pre);
+    await running;
     if (!r.ok) return this.finishJob(id, { status: "failed", error: r.error });
     const timings: JsonObject = { queue: r.start - created, ...r.timings, total: this.clock.now() - created };
     if (isRecord(args.turn)) timings.turn = this.answerTimings(args, r.start + (r.timings.first_audio as number));
@@ -1424,22 +1572,28 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   }
 
   private async runListen(id: string, args: JsonObject, created: number) {
-    await this.setJob(id, { status: "running" });
     const { ms, trigger, ...listenArgs } = args;
-    const r = await this.record(id, ms as number | undefined, listenArgs);
-    if (!r.ok) return this.finishJob(id, { status: "failed", error: r.error });
-    if (trigger === "shake") {
-      await this.emitUtterance(id, r);
-      if (r.trace && r.text.trim()) r.trace.relay.utterance = this.clock.now() - r.trace.t0;
+    let r: ListenResult | undefined;
+    try {
+      await this.setJob(id, { status: "running" });
+      r = await this.record(id, ms as number | undefined, listenArgs);
+    } finally {
+      // a shake's turn ends with its listen, however that ends: drafts settle, the utterance goes
+      // out, and agents may speak again (never left human_speaking by a throw)
+      if (trigger === "shake") await this.endTurn(id, r?.ok ? r : undefined);
+      else if (r?.ok) await this.noteHeard(r);
     }
+    if (!r.ok) return this.finishJob(id, { status: "failed", error: r.error });
     const timings: JsonObject = { queue: r.start - created, ...r.timings, total: this.clock.now() - created };
     this.logTimings(id, "listen", timings);
     const extra: JsonObject = r.speech_ms !== undefined ? { speech_ms: r.speech_ms } : {};
     await this.finishJob(id, { status: "done", result: { text: r.text, duration_ms: r.duration_ms, peak: r.peak, rms: r.rms, reason: r.reason, ...extra, timings } });
   }
 
-  /** say (optional) then listen, one job holding the audio lock across both, so nothing slips in between. */
-  private async runTalk(id: string, args: TalkArgs, created: number) {
+  /** say (optional) then listen, one job holding the audio lock across both, so nothing slips in between. `ready`: as runSay. */
+  private async runTalk(id: string, args: TalkArgs, created: number, ready?: Promise<void>) {
+    const pre = ready && args.say !== undefined ? await this.prepareSpeech(args.say, args.voice) : undefined;
+    if (ready) await ready;
     await this.setJob(id, { status: "running" });
     const reply = args as unknown as JsonObject; // talk() adds {turn, called} when it answers a human turn
     const ms: JsonObject = {};
@@ -1448,7 +1602,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (args.say !== undefined) {
       // The device's say.done is required before the mic opens (it must not record its own
       // voice); none within playback + sayDoneGraceMs fails the turn with playback_timeout.
-      const s = await this.speak(id, args.say, args.voice, true, args.marks);
+      const s = pre && !("pick" in pre) ? pre : await this.speak(id, args.say, args.voice, true, args.marks, pre);
       if (!s.ok) return this.finishJob(id, { status: "failed", error: s.error });
       result.said = args.say;
       ms.tts_first_audio = (s.timings.first_audio as number) ?? 0;
@@ -1464,6 +1618,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       if (!l.ok) return this.finishJob(id, { status: "failed", error: l.error });
       Object.assign(result, { heard: l.text, reason: l.reason, duration_ms: l.duration_ms, peak: l.peak, rms: l.rms });
       if (l.speech_ms !== undefined) result.speech_ms = l.speech_ms;
+      await this.noteHeard(l);
       ms.listen = (l.timings.record as number) ?? 0;
       ms.stt = (l.timings.stt as number) ?? 0;
       timings.listen = l.timings;
@@ -1491,7 +1646,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     let firstAudioAt: number | undefined;
     if (args.say !== undefined) {
       const s = await this.speak(id, args.say, args.voice, true, args.marks);
-      if (this.audioJob === id) this.audioJob = undefined;
+      this.releaseAudio(id);
       if (s.ok) firstAudioAt = s.start + ((s.timings.first_audio as number) ?? 0);
       if (!s.ok) return this.finishJob(id, { status: "failed", error: s.error });
       result.said = args.say;
@@ -1572,16 +1727,11 @@ export class DeviceRoom implements AgentApi, OwnerApi {
    * device is only told once the first audio exists, so such a failure never
    * touches it.
    */
-  private async speak(id: string, text: string, voice: string | undefined, untilDone: boolean, marks?: SayMarks): Promise<SpeakResult> {
+  private async speak(id: string, text: string, voice: string | undefined, untilDone: boolean, marks?: SayMarks, prepared?: Prepared): Promise<SpeakResult> {
     const t0 = this.clock.now();
-    const pick = await this.pickVoice("tts");
-    if (!pick.ok) return { ok: false, error: pick.error };
-    const feed = new PcmFeed();
-    // The agent's voice passes through; with none, the box uses the owner's default box voice.
-    const ttsVoice = voice ?? (pick.box ? pick.cfg.voice : undefined);
-    // The box streams: its first audio does not wait on the text's length, so sentences are not cut
-    // apart for it (every cut is a seam of trailing + leading silence and a prosody restart).
-    void synthesize(pick.provider, splitSpeech(text, { streaming: pick.box }), { voice: ttsVoice }, feed, this.clock, this.t.ttsTimeoutMs);
+    const ready = prepared ?? (await this.prepareSpeech(text, voice));
+    if (!("pick" in ready)) return ready;
+    const { pick, feed } = ready;
     const wait = (ms: number) => feed.waitFor((f, d) => this.clock.setTimeout(f, d), (h) => this.clock.clearTimeout(h), ms);
     let carry: Int16Array = new Int16Array(0);
     const absorb = () => {
@@ -1748,6 +1898,23 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     }
   }
 
+  /**
+   * Starts synthesising `text` into a feed nobody drains yet (speak() streams it later): a draft's
+   * opener while the human still talks, a follow-up while its opener plays. The feed ends (and the
+   * synthesis stops) with speak(), or with feed.end() when it will never be played.
+   */
+  private async prepareSpeech(text: string, voice: string | undefined): Promise<Prepared | { ok: false; error: string }> {
+    const pick = await this.pickVoice("tts");
+    if (!pick.ok) return { ok: false, error: pick.error };
+    const feed = new PcmFeed();
+    // The agent's voice passes through; with none, the box uses the owner's default box voice.
+    const ttsVoice = voice ?? (pick.box ? pick.cfg.voice : undefined);
+    // The box streams: its first audio does not wait on the text's length, so sentences are not cut
+    // apart for it (every cut is a seam of trailing + leading silence and a prosody restart).
+    void synthesize(pick.provider, splitSpeech(text, { streaming: pick.box }), { voice: ttsVoice }, feed, this.clock, this.t.ttsTimeoutMs);
+    return { pick, feed, at: this.clock.now() };
+  }
+
   /** Closes a say stream on the device that never got (or will get no more) audio: a header-only end frame. */
   private endStream(id: string, sock: DeviceSocket, seq: number) {
     try {
@@ -1790,7 +1957,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const shake = local ? this.shakes.get(local) : undefined;
     if (local) this.shakes.delete(local);
     if (shake) trace.shake = { at: shake.at - t0, ...shake.data };
-    const buf: ListenBuffer = { job: id, chunks: [], bytes: 0, ended: false, screenRev: this.screenRev, trace, order: new SeqOrder<DecodedAudio>(), roomGen: this.roomGen };
+    const buf: ListenBuffer = { job: id, chunks: [], bytes: 0, ended: false, screenRev: this.screenRev, trace, order: new SeqOrder<DecodedAudio>(), roomGen: this.roomGen, pauses: new PauseTracker() };
     let fallback: string | undefined;
     // Semantic end of turn by default: when the voice box serves this listen and the firmware
     // can be stopped by it (listen_stop), the box's end of turn is THE end — the device's
@@ -1805,6 +1972,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
           onTurnEnd: (reason) => this.onTurnEnd(buf, reason),
           onFail: () => this.onBoxFail(buf),
           onHint: (k) => this.onHint(buf, k),
+          onPartial: (text) => this.onPartial(buf, text),
           ...(semantic ? { noSpeechMs: typeof extra.no_speech_ms === "number" ? extra.no_speech_ms : BOX_NO_SPEECH_MS } : {}),
         });
         if (semantic && !buf.boxFailed) {
@@ -2000,6 +2168,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         ...(fallback ? { voice_fallback: fallback } : {}),
       },
       ...(buf.deviceAck ? { ack: buf.deviceAck } : {}),
+      pauses: buf.pauses,
     };
   }
 
@@ -2146,6 +2315,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private async onShake(data: Record<string, unknown>) {
     const clean = agentEventData("shake", data);
     if (!clean) return;
+    await this.noteMisfire();
     if (typeof data.listen === "string" && LOCAL_LISTEN_RE.test(data.listen)) {
       // the adopted listen's turn trace starts with its shake (record() takes it by the local id)
       this.shakes.set(data.listen, { at: this.clock.now(), data: { peak_g: clean.peak_g ?? null, rev: clean.reversals ?? null, ms: clean.ms ?? null } });
@@ -2157,10 +2327,20 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     await this.activity.device("shake", clean);
   }
 
-  /** The shake's listen as a relay listen job (`cmd listen {adopt}`), or declined. Returns the job id. */
+  /**
+   * The shake's listen as a relay listen job (`cmd listen {adopt}`), or declined. Returns the job id.
+   * Adopted: the human's turn is OPEN from here until its utterance (human_speaking for agents'
+   * say / talk / ask / mood / show; drafts and reacts accepted), with this device's partial policy.
+   */
   private async adoptShake(local: string): Promise<string | undefined> {
     const caps = this.liveSocket()?.getMeta()?.caps;
-    const started = !caps || caps.includes("listen") ? await this.startJob("listen", { adopt: local, trigger: "shake" }) : fail("unsupported");
+    const policy = { ...policyFor(await this.kv.get<SpeechStats>(K.speech)), lead_ms: this.t.partialLeadMs };
+    const open = async (id: string): Promise<Outcome<JsonObject>> => {
+      const now = this.clock.now();
+      this.openTurn = { id, startAt: now, chunker: new PartialChunker(policy, now), drafts: new Map() };
+      return { ok: true, result: {} };
+    };
+    const started = !caps || caps.includes("listen") ? await this.startJob("listen", { adopt: local, trigger: "shake" }, true, undefined, open) : fail("unsupported");
     if (started.ok) return started.result.job as string;
     // audio busy (a say / listen crossed the shake): the device ends its listen quietly
     void this.sendCmd("listen_stop", { job: local, reason: "no_speech" }).then((r) => {
@@ -2170,29 +2350,211 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     return undefined;
   }
 
+  /** The open turn is still being listened to (its listen has not ended). */
+  private turnLive(turn: OpenTurn): boolean {
+    return this.listenBuf?.job === turn.id && !this.listenBuf.ended;
+  }
+
+  /** The human is still talking (an open shake turn): agents may not speak or take the screen. */
+  private humanSpeaking(): ReturnType<typeof fail> | undefined {
+    const t = this.openTurn;
+    if (!t) return undefined;
+    if (!this.tasks.has(t.id) && this.audioJob !== t.id) {
+      // its listen is gone (it can only end through endTurn; this is a backstop)
+      this.closeTurn(t);
+      return undefined;
+    }
+    return fail("human_speaking", `the human is still talking to Molty (turn ${t.id}): stay quiet until their utterance; meanwhile only molty_draft and molty_react are accepted`, { turn_id: t.id });
+  }
+
+  private closeTurn(t: OpenTurn) {
+    if (t.timer !== undefined) this.clock.clearTimeout(t.timer);
+    t.timer = undefined;
+    if (this.openTurn === t) this.openTurn = undefined;
+  }
+
+  /** The box's text so far (any listen it streams): pauses for the calibration, partials for an open turn. */
+  private onPartial(buf: ListenBuffer, text: string) {
+    if (buf.ended || this.listenBuf !== buf) return;
+    buf.pauses.update(text, this.clock.now());
+    const turn = this.openTurn;
+    if (!turn || turn.id !== buf.job) return;
+    this.emitPartial(turn, turn.chunker.update(text, this.clock.now()));
+  }
+
+  /** One partial out (if due), then a timer for words that wait (the human paused mid-chunk). */
+  private emitPartial(turn: OpenTurn, p: ReturnType<PartialChunker["check"]>) {
+    if (p) {
+      void this.appendEvent(PARTIAL_EVENT, { turn_id: turn.id, ...p }, true);
+      this.turnTrace(turn)?.partial(p.seq, words(p.text_so_far).length, this.clock.now());
+    }
+    if (turn.timer !== undefined) this.clock.clearTimeout(turn.timer);
+    turn.timer = undefined;
+    const due = turn.chunker.dueAt();
+    if (due === undefined) return;
+    turn.timer = this.clock.setTimeout(() => {
+      turn.timer = undefined;
+      if (this.openTurn !== turn || !this.turnLive(turn)) return;
+      this.emitPartial(turn, turn.chunker.check(this.clock.now()));
+    }, Math.max(0, due - this.clock.now()) + 5);
+  }
+
   /**
-   * The shake's listen ended. Heard words → the latest turn (KV, before the event so the
-   * fastest answer finds it) and ONE `utterance` event to every agent (inbox + webhooks).
-   * Nobody spoke (no_speech, or STT heard nothing): nothing at all.
+   * The shake's listen ended (`r` undefined: it failed). Settles the turn, in this order:
+   * 1. drafts are judged against the final words (core/partials.ts judgeDraft): the first that holds
+   *    wins, the rest are dropped;
+   * 2. heard words → the latest turn (KV, before any event so the fastest answer finds it), claimed by
+   *    the winner when there is one;
+   * 3. the winner's opener takes the listen's audio lock directly and plays at once (after the device's
+   *    ack chirp); the turn closes (agents may speak again);
+   * 4. events: draft.used / draft.dropped (each to its agent only), then ONE `utterance` to every agent;
+   * 5. the activity log and the calibration record.
+   * Nobody spoke (no_speech, or STT heard nothing): no utterance at all, drafts dropped.
    */
-  private async emitUtterance(id: string, r: Extract<ListenResult, { ok: true }>) {
-    const text = r.text.trim();
-    if (!text) return;
-    await this.kv.put<TurnRecord>(K.turn, { id, at: this.clock.now() });
-    const data = utteranceData({
-      turn_id: id,
-      text,
-      reason: r.reason,
-      speech_ms: r.speech_ms ?? r.duration_ms,
-      stt_ms: (r.timings.stt as number) ?? 0,
-      trigger: "shake",
-      caps: this.liveSocket()?.getMeta()?.caps ?? [],
-      ack: r.ack,
-      voice: await this.voiceName(),
+  private async endTurn(id: string, r: Extract<ListenResult, { ok: true }> | undefined) {
+    const turn = this.openTurn?.id === id ? this.openTurn : undefined;
+    const now = this.clock.now();
+    const text = r?.text.trim() ?? "";
+    const drafts = turn ? [...turn.drafts.values()].sort((a, b) => a.at - b.at) : [];
+    const drops: Array<{ d: HeldDraft; reason: DropReason; new_words?: number }> = [];
+    let winner: { d: HeldDraft; new_words: number; job?: string } | undefined;
+    try {
+      for (const d of drafts) {
+        if (!r) drops.push({ d, reason: "turn_failed" });
+        else if (!text) drops.push({ d, reason: "no_speech" });
+        else if (d.prepared.feed.done && d.prepared.feed.error !== undefined) drops.push({ d, reason: "synth_failed" });
+        else {
+          const v = judgeDraft(d.basedText, text, d.max_new_words);
+          if (!v.ok) drops.push({ d, reason: v.reason, new_words: v.new_words });
+          else if (winner) drops.push({ d, reason: "turn_claimed", new_words: v.new_words });
+          else winner = { d, new_words: v.new_words };
+        }
+      }
+      // the opener goes out FIRST (its cmd say before any storage write); the turn stays open — every
+      // other say refused human_speaking — until the record below is written and the turn closes
+      if (winner) {
+        const w = winner.d;
+        const started = await this.startJob(
+          "say",
+          { text: w.opener, opener: true, ...(w.voice ? { voice: w.voice } : {}), turn: { id, at: now } as unknown as JsonObject, called: now },
+          true,
+          w.by,
+          undefined,
+          { takeover: id, prepared: w.prepared },
+        );
+        if (started.ok) {
+          winner.job = started.result.job as string;
+          this.opener = { job: winner.job, turn: id, hash: w.hash, usedAt: now };
+        } else {
+          // cannot happen while the listen holds the lock; never leave the turn claimed for nothing
+          drops.push({ d: w, reason: "turn_failed", new_words: winner.new_words });
+          winner = undefined;
+        }
+      }
+      if (text) await this.kv.put<TurnRecord>(K.turn, { id, at: now, ...(winner ? { by: winner.d.hash } : {}) });
+    } finally {
+      if (turn) this.closeTurn(turn);
+    }
+    for (const { d, reason, new_words } of drops) {
+      d.prepared.feed.end();
+      await this.appendEvent(DRAFT_DROPPED_EVENT, { turn_id: id, based_on: d.based_on, reason, ...(new_words !== undefined ? { new_words } : {}) }, true, d.hash);
+      await this.activity.record({ ts: now, kind: "device", ev: DRAFT_DROPPED_EVENT, job: id, agent: d.by.agent, who: d.by.who, ok: true, data: { reason, based_on: d.based_on, ...(new_words !== undefined ? { new_words } : {}) } });
+    }
+    if (winner) {
+      const w = winner.d;
+      await this.appendEvent(DRAFT_USED_EVENT, { turn_id: id, based_on: w.based_on, opener: w.opener, new_words: winner.new_words, job: winner.job! }, true, w.hash);
+      await this.activity.record({ ts: now, kind: "device", ev: DRAFT_USED_EVENT, job: id, agent: w.by.agent, who: w.by.who, ok: true, data: { opener: w.opener, based_on: w.based_on, new_words: winner.new_words, say_job: winner.job! } });
+    }
+    const partials = turn?.chunker.seq ?? 0;
+    // the turn trace: how its drafts ended (no openers' words, only the outcome)
+    if (r?.trace && drafts.length) {
+      r.trace.relay.draft = {
+        ...(winner ? { used: winner.d.based_on, new_words: winner.new_words, opener_at: now - r.trace.t0 } : {}),
+        ...(drops.length ? { dropped: drops.map((x) => x.reason) } : {}),
+      };
+    }
+    if (r && text) {
+      const data = utteranceData({
+        turn_id: id,
+        text,
+        reason: r.reason,
+        speech_ms: r.speech_ms ?? r.duration_ms,
+        stt_ms: (r.timings.stt as number) ?? 0,
+        trigger: "shake",
+        caps: this.liveSocket()?.getMeta()?.caps ?? [],
+        ack: r.ack,
+        voice: await this.voiceName(),
+      });
+      // an agent's opener is already playing: the turn is taken (others stay quiet)
+      if (winner) data.claimed = true;
+      // agent-facing, one per turn: not subject to the device event rate cap
+      await this.appendEvent(UTTERANCE_EVENT, data, true);
+      if (r.trace) r.trace.relay.utterance = this.clock.now() - r.trace.t0;
+      await this.activity.record({
+        ts: this.clock.now(),
+        kind: "device",
+        ev: "utterance",
+        job: id,
+        data: { text: text.slice(0, 500), reason: r.reason, trigger: "shake", words: words(text).length, partials, drafts: drafts.length, ...(winner ? { draft: "used" } : {}) },
+      });
+    }
+    // the calibration: this turn's habits and every draft's outcome
+    if (r && text) await this.noteHeard(r);
+    if (partials || drafts.length) {
+      await this.updateSpeech((s) => {
+        let next: SpeechStats = { ...s, totals: { ...s.totals, partials: s.totals.partials + partials, drafts: s.totals.drafts + drafts.length } };
+        for (const { reason } of drops) next = addOutcome(next, reason as DraftOutcome, now);
+        if (winner) next = addOutcome(next, "used", now);
+        return next;
+      });
+    }
+  }
+
+  /** A heard listen's habits (words, length, pauses) into the calibration record. */
+  private async noteHeard(r: Extract<ListenResult, { ok: true }>) {
+    const n = words(r.text.trim()).length;
+    if (!n) return;
+    await this.updateSpeech((s) => addTurn(s, { at: this.clock.now(), words: n, ms: r.speech_ms ?? r.duration_ms, pauses: r.pauses.pauses, max_pause_ms: r.pauses.max_pause_ms }));
+  }
+
+  /**
+   * A shake while the last opener (or its follow-up) plays, or just after it: the human cut in —
+   * that opener was probably wrong (calibration: `used` → `misfire`). Counted once per opener.
+   */
+  private async noteMisfire() {
+    const o = this.opener;
+    if (!o || o.counted) return;
+    const playing = this.audioJob !== undefined && (this.audioJob === o.job || this.audioJob === o.follow);
+    const now = this.clock.now();
+    if (!playing && !(o.endedAt !== undefined && now - o.endedAt <= CALIBRATION.misfireMs)) return;
+    o.counted = true;
+    await this.updateSpeech((s) => markMisfire(s, o.usedAt, now));
+    await this.activity.record({ ts: now, kind: "device", ev: "draft.misfire", job: o.turn, data: { say_job: o.job } });
+  }
+
+  /** Serialized read-modify-write of the calibration record; a changed threshold or policy goes to the activity log. */
+  private updateSpeech(fn: (s: SpeechStats) => SpeechStats): Promise<void> {
+    const run = this.speechChain.then(async () => {
+      const before = (await this.kv.get<SpeechStats>(K.speech)) ?? emptyStats(this.clock.now());
+      const after = fn(before);
+      await this.kv.put(K.speech, after);
+      const p0 = policyFor(before);
+      const p1 = policyFor(after);
+      const changed: JsonObject = {};
+      if (before.threshold !== after.threshold) changed.threshold = { from: before.threshold, to: after.threshold };
+      if (p0.source !== p1.source || p0.every_words !== p1.every_words || p0.every_ms !== p1.every_ms) {
+        changed.partials = { source: p1.source, every_words: p1.every_words, every_ms: p1.every_ms, lead_ms: p1.lead_ms };
+      }
+      if (Object.keys(changed).length) await this.activity.record({ ts: this.clock.now(), kind: "settings", ev: "calibration", data: { ...changed, turns: after.turns.length } });
     });
-    // agent-facing, one per turn: not subject to the device event rate cap
-    await this.appendEvent(UTTERANCE_EVENT, data, true);
-    await this.activity.record({ ts: this.clock.now(), kind: "device", ev: "utterance", job: id, data: { text: text.slice(0, 500), reason: r.reason, trigger: "shake" } });
+    this.speechChain = run.catch((e: unknown) => this.log("speech stats failed", { device: this.deviceId, error: errorCode(e) }));
+    return this.speechChain as Promise<void>;
+  }
+
+  /** The job a say / talk by `hash` queues behind: its own draft opener, while that plays. */
+  private followUpOf(hash: string): string | undefined {
+    const o = this.opener;
+    return o && o.hash === hash && this.audioJob === o.job && !o.follow ? o.job : undefined;
   }
 
   /** Would a say / talk by `hash` be refused the latest turn? Read only: nothing is claimed. */
@@ -2240,6 +2602,155 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private answerTimings(args: JsonObject, firstAudioAt?: number): JsonObject {
     const turn = args.turn as unknown as { id: string; at: number };
     return turnTimings(turn, args.called as number, firstAudioAt);
+  }
+
+  // =====================================================================
+  // While the human speaks (core/partials.ts, docs/AGENT-LINK.md "While the human speaks")
+  // =====================================================================
+
+  async draft(token: string, req: unknown): Promise<Outcome> {
+    return this.logged(token, "draft", req, () => this.draftNow(token, req));
+  }
+
+  /**
+   * Holds a short opener for the open turn, based on one of its partials; its audio is synthesised
+   * now, while the human still talks. One draft per agent per turn (a new one replaces it), at most
+   * MAX_DRAFTS_PER_TURN made. Settled in endTurn.
+   */
+  private async draftNow(token: string, req: unknown): Promise<Outcome> {
+    const a = await this.agentAuth(token);
+    if ("ok" in a) return a;
+    let args;
+    try {
+      args = validateDraft(req);
+    } catch (e) {
+      if (e instanceof CommandError) return fail(e.code, e.message);
+      throw e;
+    }
+    const turn = this.openTurn;
+    if (!turn || turn.id !== args.turn_id || !this.turnLive(turn)) return this.turnClosed(args.turn_id);
+    const caps = this.liveSocket()?.getMeta()?.caps;
+    if (caps && !caps.includes("say")) return fail("unsupported", "this device has no speaker");
+    const basedText = turn.chunker.textOf(args.based_on);
+    if (basedText === undefined) return fail("invalid_args", `based_on must be the seq of a partial of this turn (1..${turn.chunker.seq} so far)`);
+    if ((turn.drafts.get(a.hash)?.n ?? 0) >= MAX_DRAFTS_PER_TURN) return fail("rate_limited", `at most ${MAX_DRAFTS_PER_TURN} drafts per turn: keep the one you have`);
+    const threshold = (await this.kv.get<SpeechStats>(K.speech))?.threshold ?? CALIBRATION.threshold.initial;
+    const max = Math.min(args.max_new_words ?? threshold, threshold);
+    // re-based on a newer partial with the same words: its audio is already (being) synthesised — keep it
+    const same = turn.drafts.get(a.hash);
+    const reuse = same && same.opener === args.opener && same.voice === args.voice && !(same.prepared.feed.done && same.prepared.feed.error !== undefined);
+    const prepared = reuse ? same.prepared : await this.prepareSpeech(args.opener, args.voice);
+    if (!("pick" in prepared)) return fail(prepared.error, "no voice to pre-synthesise the opener with");
+    // the human may have finished while the voice was picked
+    if (this.openTurn !== turn || !this.turnLive(turn)) {
+      if (!reuse) prepared.feed.end();
+      return this.turnClosed(args.turn_id);
+    }
+    const prev = turn.drafts.get(a.hash);
+    if (prev) {
+      if (prev.prepared !== prepared) prev.prepared.feed.end();
+      void this.appendEvent(DRAFT_DROPPED_EVENT, { turn_id: turn.id, based_on: prev.based_on, reason: "replaced" }, true, a.hash);
+    }
+    this.turnTrace(turn)?.draft(args.based_on, this.clock.now());
+    turn.drafts.set(a.hash, {
+      hash: a.hash,
+      by: this.who(a),
+      based_on: args.based_on,
+      basedText,
+      opener: args.opener,
+      max_new_words: max,
+      ...(args.voice ? { voice: args.voice } : {}),
+      prepared,
+      at: this.clock.now(),
+      n: (prev?.n ?? 0) + 1,
+    });
+    return this.ride(a, { ok: true, result: { turn_id: turn.id, based_on: args.based_on, status: "held", max_new_words: max, threshold } });
+  }
+
+  async react(token: string, req: unknown): Promise<Outcome> {
+    return this.logged(token, "react", req, () => this.reactNow(token, req));
+  }
+
+  /**
+   * A mood over the listening animation while the human talks: screen only (the firmware's
+   * `mood {react:true}` never counts as an explicit mood, so the turn's acknowledgement stays),
+   * back to listening after reactShowMs, at most one per REACT_MIN_GAP_MS per Molty.
+   */
+  private async reactNow(token: string, req: unknown): Promise<Outcome> {
+    const a = await this.agentAuth(token);
+    if ("ok" in a) return a;
+    let args;
+    try {
+      args = validateReact(req);
+    } catch (e) {
+      if (e instanceof CommandError) return fail(e.code, e.message);
+      throw e;
+    }
+    const turn = this.openTurn;
+    if (!turn || turn.id !== args.turn_id || !this.turnLive(turn)) return this.turnClosed(args.turn_id);
+    // a mood needs firmware that shows it without counting it (cap react); a gesture is the device's
+    // act (cap act), which never takes the screen from the listen in the first place
+    const caps = this.liveSocket()?.getMeta()?.caps;
+    const what = args.mood ?? args.action;
+    if (args.mood !== undefined && !caps?.includes(REACT_CAP)) {
+      return fail("unsupported", "this Molty's firmware can't show a react mood over its listening (no `react` in its caps): update Molty (molty_updates)");
+    }
+    if (args.action !== undefined && !caps?.includes(FEATURES.act.cap)) return fail("unsupported", "this Molty has no gestures (no `act` in its caps)");
+    const now = this.clock.now();
+    const wait = this.lastReactAt + REACT_MIN_GAP_MS - now;
+    if (wait > 0) {
+      this.turnTrace(turn)?.react(what, now, "rate_limited");
+      return fail("rate_limited", `one react per ${REACT_MIN_GAP_MS / 1000} s on a Molty: try again in ${wait} ms`, { retry_after_ms: wait });
+    }
+    this.lastReactAt = now;
+    const res = args.mood !== undefined ? await this.sendCmd("mood", { mood: args.mood, hold_s: 0, react: true }) : await this.sendCmd("act", { action: args.action });
+    this.turnTrace(turn)?.react(what, now, res.ok ? "ok" : res.error);
+    if (!res.ok) return res;
+    await this.updateSpeech((s) => ({ ...s, totals: { ...s.totals, reacts: s.totals.reacts + 1 } }));
+    // a gesture plays over the listening and ends by itself
+    if (args.action !== undefined) return this.ride(a, { ok: true, result: { turn_id: turn.id, shown: args.action, next_after_ms: REACT_MIN_GAP_MS } });
+    this.clock.clearTimeout(this.reactTimer);
+    this.reactTimer = this.clock.setTimeout(() => {
+      // back to listening — unless the human finished meanwhile (the device's own ack owns the screen then)
+      if (this.openTurn !== turn || !this.turnLive(turn)) return;
+      void this.sendCmd("mood", { mood: "listening", hold_s: 0, react: true });
+    }, this.t.reactShowMs);
+    return this.ride(a, { ok: true, result: { turn_id: turn.id, shown: args.mood, for_ms: this.t.reactShowMs, next_after_ms: REACT_MIN_GAP_MS } });
+  }
+
+  /** The open turn's listen trace (core/trace.ts), while its listen runs. */
+  private turnTrace(turn: OpenTurn): ListenTrace | undefined {
+    return this.listenBuf?.job === turn.id ? this.listenBuf.trace : undefined;
+  }
+
+  private turnClosed(turnId: string) {
+    return fail("turn_closed", "that human turn is not open (they finished, or it is not the current turn): answer its utterance as usual", { turn_id: turnId });
+  }
+
+  async notes(token: string, req: NotesRequest): Promise<Outcome> {
+    // the log keeps the op and the key, never the value (notes are private to their agent)
+    const summary: JsonObject = { action: String(req.action) };
+    if ("key" in req && typeof req.key === "string") summary.key = req.key;
+    return this.logged(token, "notes", summary, async () => {
+      const a = await this.agentAuth(token);
+      if ("ok" in a) return a;
+      if (!isRecord(req) || !["list", "get", "put", "delete"].includes(req.action as string)) return fail("invalid_args", "action must be list, get, put or delete");
+      const out = await notesOp(this.kv, a.hash, req, this.clock.now());
+      return out.ok ? this.ride(a, out) : fail(out.error, out.message);
+    });
+  }
+
+  /** Owner: how this Molty's human talks, the partial policy and the draft record (link-code auth). */
+  async speechStats(linkCode: string, req: { action: "get" | "reset" }): Promise<Outcome> {
+    const denied = await this.ownerAuth(linkCode);
+    if (denied) return denied;
+    if (req.action === "reset") {
+      await this.speechChain;
+      await this.kv.delete(K.speech);
+      await this.activity.record({ ts: this.clock.now(), kind: "settings", ev: "calibration", data: { reset: true } });
+    }
+    await this.speechChain;
+    return { ok: true, result: speechSummary(await this.kv.get<SpeechStats>(K.speech)) as unknown as JsonObject };
   }
 
   // =====================================================================
@@ -2502,14 +3013,17 @@ export class DeviceRoom implements AgentApi, OwnerApi {
 
   // ---------------- agent events: inbox ----------------
 
-  /** Serialized so concurrent frames cannot race the sequence counter. `relay`: relay-generated, not rate-limited. */
-  private appendEvent(type: string, data: JsonObject, relay = false): Promise<void> {
-    const run = this.evChain.then(() => this.doAppend(type, data, relay));
+  /**
+   * Serialized so concurrent frames cannot race the sequence counter. `relay`: relay-generated, not
+   * rate-limited. `to`: one agent's token hash — only that agent reads it and only its webhook gets it.
+   */
+  private appendEvent(type: string, data: JsonObject, relay = false, to?: string): Promise<void> {
+    const run = this.evChain.then(() => this.doAppend(type, data, relay, to));
     this.evChain = run.catch(() => {});
     return run;
   }
 
-  private async doAppend(type: string, data: JsonObject, relay: boolean) {
+  private async doAppend(type: string, data: JsonObject, relay: boolean, to?: string) {
     const now = this.clock.now();
     if (!relay) {
       const rate = (await this.kv.get<RateRecord>(K.evRate)) ?? { start: now, n: 0, dropped: 0 };
@@ -2524,7 +3038,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     }
     const seq = ((await this.kv.get<number>(K.evSeq)) ?? 0) + 1;
     await this.kv.put(K.evSeq, seq);
-    const ev: AgentEvent = { id: eventId(seq), type, ts: now, data };
+    const ev: AgentEvent = { id: eventId(seq), type, ts: now, data, ...(to ? { to } : {}) };
     await this.kv.put(K.ev(seq), ev);
     for (const [key, old] of await this.kv.list<AgentEvent>("ev:")) {
       const oldSeq = Number(key.slice(3));
@@ -2533,8 +3047,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     this.notify(this.inboxWaiters, "inbox");
     let queued = false;
     for (const [key, tok] of await this.kv.list<TokenRecord>("tok:")) {
-      if (!tok.webhook || tok.webhook.disabled || (tok.webhook.events && !tok.webhook.events.includes(type))) continue;
       const hash = key.slice(4);
+      if (!tok.webhook || tok.webhook.disabled || !webhookWants(tok.webhook.events, type) || (to && to !== hash)) continue;
       await this.kv.put<Delivery>(K.whq(hash, seq), { tok: hash, seq, attempt: 0, due: now });
       queued = true;
     }
@@ -2554,9 +3068,9 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const now = this.clock.now();
     const unread = [...(await this.kv.list<AgentEvent>("ev:")).entries()]
       .map(([key, ev]) => ({ seq: Number(key.slice(3)), ev }))
-      .filter((e) => e.seq > from && now - e.ev.ts <= INBOX_LIMITS.maxAgeMs);
+      .filter((e) => e.seq > from && now - e.ev.ts <= INBOX_LIMITS.maxAgeMs && (!e.ev.to || e.ev.to === hash));
     const page = unread.slice(0, limit);
-    return { events: page.map((e) => e.ev), next: page.length ? page[page.length - 1].seq : from, more: unread.length > page.length, cursor };
+    return { events: page.map((e) => publicEvent(e.ev)), next: page.length ? page[page.length - 1].seq : from, more: unread.length > page.length, cursor };
   }
 
   private async advance(hash: string, cursor: number, next: number) {
@@ -2681,7 +3195,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     // Revision this registration was based on; compared atomically when writing.
     const revision = a.rec.wh_rev ?? 0;
     // Dry run against every event type the webhook will receive, to URLs that pass the guard.
-    const types = parsed.value.events ?? AGENT_EVENT_TYPES;
+    const types = parsed.value.events ?? DEFAULT_WEBHOOK_EVENTS;
     const rendered: RenderedRequest[] = [];
     for (const type of types) {
       try {
@@ -2768,8 +3282,9 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private async deliver(key: string, d: Delivery) {
     const tokKey = K.token(d.tok);
     const before = await this.kv.get<TokenRecord>(tokKey);
-    const ev = await this.kv.get<AgentEvent>(K.ev(d.seq));
-    if (!before?.webhook || before.webhook.disabled || !ev || (before.webhook.events && !before.webhook.events.includes(ev.type))) return this.kv.delete(key);
+    const stored = await this.kv.get<AgentEvent>(K.ev(d.seq));
+    if (!before?.webhook || before.webhook.disabled || !stored || !webhookWants(before.webhook.events, stored.type) || (stored.to && stored.to !== d.tok)) return this.kv.delete(key);
+    const ev = publicEvent(stored);
     const hook = before.webhook;
     let error: DeliveryError | undefined;
     let status: number | null = null;
