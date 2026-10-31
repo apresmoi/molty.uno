@@ -214,6 +214,8 @@ class SttSession:
         turn_end_hold_s: float = 1.2,
         on_no_speech: Callable[[], Awaitable[None]] | None = None,
         no_speech_s: float | None = None,
+        observer=None,
+        on_hint: Callable[[str], Awaitable[None]] | None = None,
         connect=ws_connect,
     ):
         self.url, self.api_key, self.flush_s, self.on_word, self._connect = url, api_key, flush_s, on_word, connect
@@ -222,6 +224,9 @@ class SttSession:
         # nobody spoke within no_speech_s (None: off): the relay turned the device's VAD off
         self.on_no_speech, self.no_speech_s = on_no_speech, no_speech_s
         self._finishing = False
+        # turn trace (molty_voice/trace.py SttTrace): told every Word / EndWord / Step before the
+        # flush; its hints (pause / question) go to on_hint
+        self.observer, self.on_hint = observer, on_hint
         self.energy = EnergyGate()
         self.words: list[str] = []
         self._rs = Resampler(DEVICE_RATE, MODEL_RATE)
@@ -247,16 +252,27 @@ class SttSession:
                 if t == "Word":
                     self.words.append(str(d.get("text", "")))
                     self.pause.word(self.words[-1])
+                    hint = self._observe("word", self.words[-1], d.get("start_time")) if not self._finishing else None
                     if self.on_word:
                         await self.on_word(" ".join(self.words))
+                    await self._hint(hint)
+                elif t == "EndWord":
+                    self._observe("end_word", d.get("stop_time"))
                 elif t == "Step":
                     prs = d.get("prs") or []
-                    # after finish() began, the flush silence is ours, not the human's pause
-                    if len(prs) > 2 and self.pause.update(prs[2]) and not self._finishing and self.on_turn_end:
-                        await self.on_turn_end()
-                    elif (len(prs) > 2 and self.no_speech_s and self.on_no_speech and not self._finishing
-                          and self.pause.no_speech(self.no_speech_s, voice_recent=self.energy.recent(self.pause.steps))):
-                        await self.on_no_speech()
+                    if len(prs) > 2:
+                        # after finish() began, the flush silence is ours, not the human's pause
+                        fired = self.pause.update(prs[2])
+                        turn = bool(fired and not self._finishing and self.on_turn_end)
+                        ns = bool(not turn and self.no_speech_s and self.on_no_speech and not self._finishing
+                                  and self.pause.no_speech(self.no_speech_s, voice_recent=self.energy.recent(self.pause.steps)))
+                        hint = self._observe("step", self.pause, prs[2], turn, ns) if not self._finishing else None
+                        if turn:
+                            await self.on_turn_end()
+                        elif ns:
+                            await self.on_no_speech()
+                        else:
+                            await self._hint(hint)
                 elif t == "Marker" and d.get("id") == self._marker_id:
                     self._marker_seen = True
                     return
@@ -275,6 +291,28 @@ class SttSession:
             if not self._marker_seen and not self._failure:
                 self._failure = "stt receiver ended without the marker"
             self._ended.set()  # wake finish(): it decides by _marker_seen / _failure
+
+    def _observe(self, what: str, *args):
+        """The turn trace's observer, strictly best effort: a failure there is logged once and the
+        observer dropped — it never touches the transcript or a decision."""
+        if self.observer is None:
+            return None
+        try:
+            return getattr(self.observer, what)(*args)
+        except Exception as e:  # noqa: BLE001 - observation must never break transcription
+            log.warning("stt trace observer failed (%s), tracing off for this listen: %s: %s", what, type(e).__name__, e)
+            self.observer = None
+            return None
+
+    async def _hint(self, kind) -> None:
+        """A listen hint, best effort (a failing callback is logged once, then hints stop)."""
+        if not kind or self.on_hint is None:
+            return
+        try:
+            await self.on_hint(kind)
+        except Exception as e:  # noqa: BLE001 - a hint must never break transcription
+            log.warning("stt hint callback failed, hints off for this listen: %s: %s", type(e).__name__, e)
+            self.on_hint = None
 
     async def _send_frames(self, x: np.ndarray, final: bool = False) -> None:
         buf = np.concatenate([self._pending, x]) if self._pending.size else x

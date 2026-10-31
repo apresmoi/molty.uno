@@ -14,6 +14,8 @@ Wire (docs/AGENT-LINK.md "Voice box"): JSON text control messages + binary audio
                  {"t":"stt.turn_end","id","reason":"no_speech"} (instead, once: nobody spoke within no_speech_ms —
                  sent only when stt.start carried it, i.e. Molty's own VAD is off and the box decides the end)
                  {"t":"stt.final","id","text","ms":{...}} | {"t":"stt.final","id","error"}
+                 {"t":"stt.trace","id","trace":{...}} right before each stt.turn_end and stt.final (molty_voice/trace.py)
+                 {"t":"stt.hint","id","k":"pause"|"question"} while the human talks (Molty's listener reactions)
   both           {"t":"ping"} / {"t":"pong"} (the relay answers pings without waking up)
 """
 
@@ -35,6 +37,7 @@ from . import __version__, framing
 from .audio import DEVICE_RATE, MODEL_RATE, Resampler, fade_in, float_to_pcm16, quiet_lead
 from .config import Config
 from .kyutai import SttSession, synthesize
+from .trace import SttTrace
 
 log = logging.getLogger("molty_voice")
 
@@ -255,18 +258,40 @@ class Bridge:
         async def partial(text: str) -> None:
             await self._send_json({"t": "stt.partial", "id": mid, "text": text})
 
+        trace = SttTrace(self.cfg.turn_end, self.cfg.turn_end_skip_steps, self.cfg.turn_end_hold_s)
+
+        trace_ok = [True]
+
+        async def send_trace(final_ms: int | None = None) -> None:
+            # best effort: the decision / final that follows always goes, whatever happens here
+            if not trace_ok[0]:
+                return
+            try:
+                await self._send_json({"t": "stt.trace", "id": mid, "trace": trace.to_json(final_ms)})
+            except Exception as e:  # noqa: BLE001 - a trace must never cost the turn
+                trace_ok[0] = False
+                log.warning("stt %s: trace failed, no more traces for this listen: %s: %s", mid, type(e).__name__, e)
+
         async def turn_end() -> None:
-            log.info("stt %s: end of turn", mid)
+            log.info("stt %s: end of turn (%s)", mid, (trace.end or {}).get("rule"))
+            await send_trace()
             await self._send_json({"t": "stt.turn_end", "id": mid})
 
         async def no_speech() -> None:
             log.info("stt %s: nobody spoke within %.1f s", mid, no_speech_s)
+            await send_trace()
             await self._send_json({"t": "stt.turn_end", "id": mid, "reason": "no_speech"})
+
+        async def hint(k: str) -> None:
+            try:
+                await self._send_json({"t": "stt.hint", "id": mid, "k": k})
+            except Exception as e:  # noqa: BLE001 - best effort, like the trace
+                log.warning("stt %s: hint failed: %s: %s", mid, type(e).__name__, e)
 
         s = SttSession(self.cfg.stt_url, self.cfg.api_key, flush_s=self.cfg.stt_flush_s, on_word=partial,
                        on_turn_end=turn_end, turn_end_threshold=self.cfg.turn_end,
                        turn_end_skip_steps=self.cfg.turn_end_skip_steps, turn_end_hold_s=self.cfg.turn_end_hold_s,
-                       on_no_speech=no_speech, no_speech_s=no_speech_s, connect=self._kconnect)
+                       on_no_speech=no_speech, no_speech_s=no_speech_s, observer=trace, on_hint=hint, connect=self._kconnect)
         t_end = None
         try:
             await s.open()
@@ -278,6 +303,7 @@ class Bridge:
                 t_end = time.monotonic()
                 text = await s.finish()
                 ms = {"final": round((time.monotonic() - t_end) * 1000)}
+                await send_trace(ms["final"])
                 await self._send_json({"t": "stt.final", "id": mid, "text": text, "ms": ms})
                 log.info("stt %s: final %d ms after the end: %r", mid, ms["final"], text[:80])
                 return
@@ -285,6 +311,7 @@ class Bridge:
             raise
         except Exception as e:  # noqa: BLE001 - surfaced to the relay as an error, never as an empty transcript
             log.warning("stt %s failed: %s", mid, e)
+            await send_trace()
             await self._send_json({"t": "stt.final", "id": mid, "error": str(e)[:200] or "stt failed"})
         finally:
             await s.close()  # frees the server channel at once
