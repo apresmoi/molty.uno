@@ -26,6 +26,7 @@ func (MappedMoods) Map(mood string) (MoodPlan, error) {
 		"idle":      {.04, 3, "#d49070"},
 		"listening": {.06, 1.5, "#60b8ff"},
 		"thinking":  {.10, .8, "#b090ef"},
+		"working":   {.10, .8, "#b090ef"},
 		"speaking":  {.14, .5, "#70d8a0"},
 		"happy":     {.12, 1, "#ffce60"},
 	}

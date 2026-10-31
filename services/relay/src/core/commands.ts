@@ -4,9 +4,14 @@
 import { isRecord, type JsonObject } from "./protocol.js";
 import { parseCues, speechWords } from "./speech.js";
 
-export const MOODS = ["idle", "listening", "thinking", "speaking", "happy", "sleepy", "surprised"] as const;
+export const MOODS = ["idle", "listening", "thinking", "speaking", "happy", "sleepy", "surprised", "working"] as const;
 /** One-shot gestures over the current mood (`act`, and `[name]` cues in say text). */
-export const ACTIONS = ["wiggle", "nod", "shake_head", "bounce", "peek", "glance_left", "glance_right", "blink", "wobble", "stretch", "look_up", "yawn"] as const;
+export const ACTIONS = ["wiggle", "nod", "shake_head", "bounce", "peek", "glance_left", "glance_right", "blink", "wobble", "stretch", "look_up", "yawn", "inspect", "paddle"] as const;
+/** Need the firmware cap `working`: older firmware refuses them (a say's cue is dropped, not refused). */
+export const WORKING_CAP = "working";
+export const WORKING_ACTIONS: readonly string[] = ["inspect", "paddle"];
+/** A say's `[working]` cue: never a device mark. The relay plays the say to its end, then sets the mood. */
+export const WORKING_MOOD = "working";
 export const COMMANDS = ["status", "state", "mood", "show", "say", "quick", "listen", "volume", "imu", "diag", "log", "act"] as const;
 export type CommandName = (typeof COMMANDS)[number];
 
@@ -349,6 +354,8 @@ export function validateTalk(raw: unknown): TalkArgs {
   only(args, ["say", "listen", "listen_ms", "voice", "ring_color", "ack", "in_reply_to", "client_timing", ...VAD_KEYS]);
   if (args.listen !== undefined && typeof args.listen !== "boolean") throw invalid("listen must be a boolean");
   const out: TalkArgs = { listen: args.listen !== false, vad: vadArgs(args) };
+  // `[working]`: off to work after this line, nobody to listen for (unless listen is asked for)
+  if (args.listen === undefined && typeof args.say === "string" && parseCues(args.say).marks.some((m) => m[1] === WORKING_MOOD)) out.listen = false;
   const lm = listenMs(args.listen_ms, "listen_ms");
   if (lm !== undefined) out.listen_ms = lm;
   if (args.say !== undefined) {
@@ -456,7 +463,7 @@ export const REACT_MOODS = ["happy", "surprised", "thinking"] as const;
  * Actions a react may play (screen only): the device's gestures (`act`, cap `act`) — the same ONE
  * list as molty_act and the inline [nod] cues, so a new gesture is a new react action too.
  */
-export const REACT_ACTIONS: readonly string[] = ACTIONS;
+export const REACT_ACTIONS: readonly string[] = ACTIONS.filter((a) => !WORKING_ACTIONS.includes(a));
 /** At most one react per this long, per Molty (one screen). */
 export const REACT_MIN_GAP_MS = 3000;
 /** How long a react shows before Molty returns to listening. */

@@ -16,7 +16,7 @@ const OUT = resolve(dirname(fileURLToPath(import.meta.url)), '../../firmware/tes
 const lines = [
   '# act_golden.txt — creature action curves, written by device/creatures/tools/act-golden.mjs',
   '# from device/creatures/js/actions.js (do not edit by hand). Columns: action t then the pose',
-  '# offset: pos xyz, rot xyz, head xyz, spine xyz, squash, lid, look xy, mouth.',
+  '# offset: pos xyz, rot xyz, head xyz, spine xyz, squash, lid, look xy, mouth, zoom, focus.',
 ];
 for (const [name, dur] of Object.entries(ACTIONS)) {
   const ts = [];

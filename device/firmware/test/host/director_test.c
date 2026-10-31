@@ -238,6 +238,74 @@ static void test_yawn(void) {
     CHECK(s_nact == 0 && fd_asleep(&D), "off: dozes off without a yawn");
 }
 
+static bool is_work_act(int a) {
+    return a == CA_INSPECT || a == CA_PADDLE || a == CA_PEEK || a == CA_GLANCE_LEFT || a == CA_GLANCE_RIGHT ||
+           a == CA_STRETCH || a == CA_WIGGLE;
+}
+
+static void test_working(void) {
+    boot(true);
+    run(1.f, false);
+    int n = s_nact;
+    fd_agent_work(&D, -1.f);
+    frame(false);
+    CHECK(fd_working(&D) && s_nact == n + 1, "working: the first action at once");
+    /* the loop: actions keep coming, varied, none twice running, only work actions, with both big ones */
+    run(115.f, false);
+    int repeats = 0, others = 0, inspect = 0, paddle = 0;
+    for (int i = n; i < s_nact; i++) {
+        if (i > n && s_act[i] == s_act[i - 1]) repeats++;
+        if (!is_work_act(s_act[i])) others++;
+        inspect += s_act[i] == CA_INSPECT; paddle += s_act[i] == CA_PADDLE;
+    }
+    CHECK(s_nact - n >= 25, "working: %d actions in 115 s", s_nact - n);
+    CHECK(!repeats && !others, "working: %d repeats, %d non-work actions", repeats, others);
+    CHECK(inspect >= 3 && paddle >= 3, "working: inspect x%d, paddle x%d", inspect, paddle);
+    /* the TTL: a dead agent cannot leave it on */
+    CHECK(fd_working(&D), "working: still on at 115 s");
+    run(6.f, false);
+    CHECK(!fd_working(&D), "working: over by itself after 120 s");
+    n = s_nact;
+    run(5.f, false);
+    CHECK(s_nact <= n + 1, "working over: the loop stops");
+
+    /* no yawn, no doze, however long it lasts (the quiet clock is at the edge) */
+    boot(true);
+    run(296.f, false);
+    fd_agent_work(&D, -1.f);
+    run(100.f, false);
+    CHECK(!fd_asleep(&D) && fd_working(&D), "working: never dozes off");
+    for (int i = 0; i < s_nact; i++) if (s_act[i] == CA_YAWN) { CHECK(0, "working: yawned"); break; }
+
+    /* what ends it: any mood (speaking is how a say starts), a listen / say / question taking the screen */
+    boot(true); run(1.f, false);
+    fd_agent_work(&D, -1.f); run(1.f, false);
+    fd_agent_mood(&D, CM_SPEAKING, -1.f);
+    CHECK(!fd_working(&D), "a mood ends working");
+    fd_agent_work(&D, -1.f); run(1.f, false);
+    fd_set_busy(&D, true, false); frame(false);
+    CHECK(!fd_working(&D), "a listen or say taking the screen ends working");
+    fd_set_busy(&D, false, false);
+    fd_agent_work(&D, -1.f); run(1.f, false);
+    fd_set_busy(&D, false, true); frame(false);
+    CHECK(!fd_working(&D), "a question ends working");
+    fd_set_busy(&D, false, false);
+
+    /* the say's own end: working arrives while the say still owns the screen, and survives it */
+    fd_set_busy(&D, true, false); frame(false);
+    fd_agent_work(&D, -1.f); fd_set_busy(&D, true, false); frame(false);
+    CHECK(fd_working(&D), "working asked for at a say's end is kept");
+    n = s_nact;
+    fd_set_busy(&D, false, false); run(10.f, false);
+    CHECK(fd_working(&D) && s_nact > n, "...and plays once the say lets go");
+
+    /* a short hold; a long one is capped */
+    fd_agent_work(&D, 2.f); run(2.5f, false);
+    CHECK(!fd_working(&D), "working: hold_s ends it sooner");
+    fd_agent_work(&D, 3000.f); run(121.f, false);
+    CHECK(!fd_working(&D), "working: hold_s cannot outlast the TTL");
+}
+
 static void test_agent_acts(void) {
     boot(true);
     run(1.f, false);
@@ -476,6 +544,7 @@ int main(void) {
     test_idle_life();
     test_yawn();
     test_agent_acts();
+    test_working();
     test_listen_reacts();
     test_convo();
     test_sleep();
