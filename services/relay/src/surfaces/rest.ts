@@ -3,7 +3,7 @@
 //   POST   /v1/pair                     {device_id, link_code, agent_name}  (no token; long-polls <= 120 s)
 //   POST   /v1/devices/<id>/cmd         {name, args, wait?}   -> {ok:true,result} | {ok:false,error}
 //                                       (say/listen + wait:true: blocks <= 24 s -> result {job, status:"done", ...} | 202 {job, status:"pending"})
-//   POST   /v1/devices/<id>/talk        {say?, listen?, listen_ms?, voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?, ack?, in_reply_to?}
+//   POST   /v1/devices/<id>/talk        {say?, listen?, listen_ms?, voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?, ack?, in_reply_to?, client_timing?}
 //                                       (in_reply_to / a say's: an utterance's turn_id; another agent answered it first -> 409 turn_claimed)
 //                                       -> {ok:true, result:{job, status:"done", heard, said?, reason, ms, timings}} | 202 pending
 //   POST   /v1/devices/<id>/ask         {say?, options[1..5], timeout_s?, voice?}
@@ -18,6 +18,7 @@
 //   GET|POST|DELETE /v1/devices/<id>/voice  owner voice-box settings (header X-Molty-Link-Code: the
 //                                       device's current link code; CORS, for the device-served console):
 //                                       read / {mode?, voice?} / unpair the voice box
+//   GET    /v1/devices/<id>/activity/audio/<job>  owner only (link code): a kept listen's audio as audio/wav
 //   GET|POST /v1/devices/<id>/activity   owner activity log (same link-code auth + CORS):
 //                                       ?since=a42|<unix ms>&limit&agent&kind=a,b&job&errors=1 -> {entries, next, more,
 //                                       transcripts, limits}; POST {transcripts: bool} sets "log transcripts"
@@ -236,6 +237,8 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
   const voice = /^\/v1\/devices\/([^/]+)\/voice$/.exec(path);
   if (voice) return voiceOwner(request, voice[1], backend);
 
+  const audio = /^\/v1\/devices\/([^/]+)\/activity\/audio\/([^/]+)$/.exec(path);
+  if (audio) return activityAudio(request, audio[1], audio[2], backend);
   const activity = /^\/v1\/devices\/([^/]+)\/activity$/.exec(path);
   if (activity) return activityOwner(request, activity[1], backend);
 
@@ -307,10 +310,32 @@ async function activityOwner(request: Request, rawId: string, backend: RelayBack
   else if (request.method === "POST") {
     const b = await body(request);
     if (!b) return cors(failure({ error: "bad_request", message: "body must be a JSON object" }));
-    req = { action: "set", transcripts: b.transcripts };
+    req = { action: "set", transcripts: b.transcripts, keep_audio: b.keep_audio };
   } else return cors(json({ ok: false, error: "method_not_allowed" }, 405));
   const out = await api.ownerActivity(code, req);
   return cors(out.ok ? json({ ok: true, result: out.result }) : failure(out));
+}
+
+/**
+ * Owner: one kept listen's audio as WAV (core/audio-keep.ts), by the device's current link code
+ * only — no bearer token is read here, so an agent can never fetch it.
+ */
+async function activityAudio(request: Request, rawId: string, rawJob: string, backend: RelayBackend): Promise<Response> {
+  const cors = (r: Response) => {
+    for (const [k, v] of Object.entries(OWNER_CORS)) r.headers.set(k, v);
+    return r;
+  };
+  if (request.method === "OPTIONS") return cors(new Response(null, { status: 204 }));
+  if (request.method !== "GET") return cors(json({ ok: false, error: "method_not_allowed" }, 405));
+  const id = decodeURIComponent(rawId);
+  const job = decodeURIComponent(rawJob);
+  if (!DEVICE_ID_RE.test(id) || jobDevice(job) !== id) return cors(failure({ error: "not_found" }));
+  const api = backend.device(id);
+  if (!api.ownerAudio) return cors(failure({ error: "not_found" }));
+  const out = await api.ownerAudio(request.headers.get("x-molty-link-code") ?? "", job);
+  if (!out.ok) return cors(failure(out));
+  const name = `${job.replace(/[^A-Za-z0-9_.-]/g, "_")}.wav`;
+  return cors(new Response(out.result.wav, { status: 200, headers: { "content-type": "audio/wav", "content-disposition": `attachment; filename="${name}"`, "cache-control": "no-store" } }));
 }
 
 /** Owner voice-box settings: authenticated by the device's current link code (OwnerApi). */

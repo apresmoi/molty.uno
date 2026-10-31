@@ -43,6 +43,7 @@ function device(room: DeviceRoom, sock: FakeSocket, mic: Mic = {}) {
     if (!held) throw new Error("no held listen");
     const { job, n } = held;
     held = undefined;
+    // seq: the next one after the frames sent (extra.seq when the test streamed its own frames)
     void room.socketMessage(sock, new TextEncoder().encode(JSON.stringify({ s: job, seq: n ? 1 : 0, kind: "pcm16", rate: 16000, end: true, ...extra })));
   };
   const origText = sock.sendText.bind(sock);
@@ -203,7 +204,10 @@ describe("molty_talk", () => {
 
   // The firmware's exact vad:false end-frame header (device/firmware/test/host/link_audio_pair_test.c
   // asserts this string): VAD off measured nothing, so there is no speech_ms.
-  const FW_VAD_OFF_END = '{"s":"listen1","seq":16,"kind":"pcm16","rate":16000,"end":true,"reason":"max"}';
+  // (with the turn-trace fields firmware with the cap `trace` adds; core/trace.ts)
+  const FW_VAD_OFF_END =
+    '{"s":"listen1","seq":16,"kind":"pcm16","rate":16000,"end":true,"reason":"max","ct":4800,"lv":"0000","wq":0,' +
+    '"tr":{"wall":0,"cap":5000,"sent":17,"fail":0,"drop":0,"dropms":0,"r0":-40,"r1":-40,"gain":8,"pk":0}}';
 
   it("vad:false (firmware end frame: reason max, no speech_ms) is transcribed", async () => {
     const w = await setup({ samples: 3200, endRaw: FW_VAD_OFF_END });
@@ -552,7 +556,7 @@ describe("listen window", () => {
     const job = r.result.job;
     const chunk = new Uint8Array(new Int16Array(8000).fill(4000).buffer); // 0.5 s, 16000 B
     for (let i = 0; i < 62; i++) await w.room.socketMessage(w.sock, encodeAudioFrame({ s: job, seq: i, kind: "pcm16", rate: 16000, end: false }, chunk));
-    w.dev.endListen({ reason: "turn_end" });
+    w.dev.endListen({ reason: "turn_end", seq: 62 });
     const v = (await w.room.job(w.token, job, 3000)) as any;
     expect(v.result).toMatchObject({ status: "done", result: { duration_ms: 31000 } });
   });

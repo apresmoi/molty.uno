@@ -190,6 +190,31 @@ export interface Validated {
   job: boolean;
   /** say: the human turn (an `utterance`'s turn_id) this answers (core/turns.ts); relay-only. */
   in_reply_to?: string;
+  /** say: the agent's own latency report (clientTiming); relay-only. */
+  client_timing?: JsonObject;
+}
+
+/**
+ * `client_timing` (say / talk / ask; relay-only, never sent to the device): the agent's own
+ * latency report for this call — up to CLIENT_TIMING_KEYS keys of ms, e.g. received_ms (event in
+ * hand -> call), model_ms, tool_ms. Kept in the job's timings.client and the turn's trace.
+ */
+export const CLIENT_TIMING_KEYS = 8;
+export const CLIENT_TIMING_MAX_MS = 3600000;
+const CLIENT_TIMING_KEY_RE = /^[a-z][a-z0-9_]{0,31}$/;
+export function clientTiming(v: unknown): JsonObject | undefined {
+  if (v === undefined) return undefined;
+  const msg = `client_timing must be an object of up to ${CLIENT_TIMING_KEYS} numbers (ms, 0..${CLIENT_TIMING_MAX_MS}) with keys like received_ms, model_ms (lower case, digits, _; <= 32 chars)`;
+  if (!isRecord(v)) throw invalid(msg);
+  const keys = Object.keys(v);
+  if (keys.length > CLIENT_TIMING_KEYS) throw invalid(msg);
+  const out: JsonObject = {};
+  for (const k of keys) {
+    const x = v[k];
+    if (!CLIENT_TIMING_KEY_RE.test(k) || typeof x !== "number" || !Number.isFinite(x) || x < 0 || x > CLIENT_TIMING_MAX_MS) throw invalid(msg);
+    out[k] = Math.round(x * 10) / 10;
+  }
+  return out;
 }
 
 /** An `utterance`'s turn_id (the listen job's id): what say / talk name in `in_reply_to`. */
@@ -241,14 +266,15 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
         job: false,
       };
     case "say": {
-      only(args, ["text", "voice", "in_reply_to"]);
+      only(args, ["text", "voice", "in_reply_to", "client_timing"]);
       // relay-only `marks` (the text's [cues]): room.ts sends them to firmware with say_marks
       const said = sayText(args.text, "text");
       const out: JsonObject = { text: said.text };
       if (said.marks.length) out.marks = said.marks;
       if (args.voice !== undefined) out.voice = voiceId(args.voice);
       const reply = turnId(args.in_reply_to);
-      return { name: n, args: out, job: true, ...(reply !== undefined ? { in_reply_to: reply } : {}) };
+      const ct = clientTiming(args.client_timing);
+      return { name: n, args: out, job: true, ...(reply !== undefined ? { in_reply_to: reply } : {}), ...(ct ? { client_timing: ct } : {}) };
     }
     case "listen": {
       only(args, ["ms", "ring_color", "ack", ...VAD_KEYS]);
@@ -301,13 +327,15 @@ export interface TalkArgs {
   ack?: AckArg;
   /** The human turn (an `utterance`'s turn_id) this answers (core/turns.ts). */
   in_reply_to?: string;
+  /** The agent's own latency report (clientTiming): timings.client and the turn's trace. */
+  client_timing?: JsonObject;
 }
 
 /** molty_talk / POST /v1/devices/<id>/talk: `{say?, listen? (default true), listen_ms? (0 = unlimited, 1..30000; default the device's setting, 30000 out of the box), voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?, ack?, in_reply_to?}`. */
 export function validateTalk(raw: unknown): TalkArgs {
   const args = raw === undefined || raw === null ? {} : raw;
   if (!isRecord(args)) throw invalid("args must be an object");
-  only(args, ["say", "listen", "listen_ms", "voice", "ring_color", "ack", "in_reply_to", ...VAD_KEYS]);
+  only(args, ["say", "listen", "listen_ms", "voice", "ring_color", "ack", "in_reply_to", "client_timing", ...VAD_KEYS]);
   if (args.listen !== undefined && typeof args.listen !== "boolean") throw invalid("listen must be a boolean");
   const out: TalkArgs = { listen: args.listen !== false, vad: vadArgs(args) };
   const lm = listenMs(args.listen_ms, "listen_ms");
@@ -323,6 +351,8 @@ export function validateTalk(raw: unknown): TalkArgs {
   if (ack !== undefined) out.ack = ack;
   const reply = turnId(args.in_reply_to);
   if (reply !== undefined) out.in_reply_to = reply;
+  const ct = clientTiming(args.client_timing);
+  if (ct) out.client_timing = ct;
   if (out.say === undefined && !out.listen) throw invalid("give say, or listen (or both)");
   return out;
 }
@@ -345,6 +375,10 @@ export interface AskArgs {
   /** options[i]'s colour, resolved "#rrggbb" (given, else DEFAULT_ASK_COLORS[i]). */
   colors: string[];
   timeout_s: number;
+  /** The agent's own latency report (clientTiming): timings.client. */
+  client_timing?: JsonObject;
+  /** The human turn this question answers: traced (a `reply` entry), never claimed. */
+  in_reply_to?: string;
 }
 
 /**
@@ -355,7 +389,7 @@ export interface AskArgs {
 export function validateAsk(raw: unknown): AskArgs {
   const args = raw === undefined || raw === null ? {} : raw;
   if (!isRecord(args)) throw invalid("args must be an object");
-  only(args, ["say", "options", "timeout_s", "voice"]);
+  only(args, ["say", "options", "timeout_s", "voice", "client_timing", "in_reply_to"]);
   const opts = args.options;
   if (!Array.isArray(opts) || opts.length < 1 || opts.length > MAX_ASK_OPTIONS) {
     throw invalid(`options must be a list of 1..${MAX_ASK_OPTIONS} short labels, e.g. ["yes","no"]`);
@@ -388,5 +422,9 @@ export function validateAsk(raw: unknown): AskArgs {
     if (said.marks.length) out.marks = said.marks;
   }
   if (args.voice !== undefined) out.voice = voiceId(args.voice);
+  const ct = clientTiming(args.client_timing);
+  if (ct) out.client_timing = ct;
+  const reply = turnId(args.in_reply_to);
+  if (reply !== undefined) out.in_reply_to = reply;
   return out;
 }

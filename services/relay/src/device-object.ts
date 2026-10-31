@@ -205,6 +205,9 @@ export class MoltyDevice extends DurableObject<Env> {
   activityLog(deviceId: string, token: string, req: unknown): Promise<Outcome> {
     return this.room(deviceId).activityLog(token, req);
   }
+  ownerAudio(deviceId: string, linkCode: string, job: string): Promise<Outcome<{ wav: Uint8Array }>> {
+    return this.room(deviceId).ownerAudio(linkCode, job);
+  }
 
   // ---- the `releases` singleton (never a device room) ----
   releaseLookup(mode: LookupMode): Promise<ReleaseLookup> {
