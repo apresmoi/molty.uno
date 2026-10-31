@@ -3,7 +3,8 @@
 Each engine runs the code it runs in production, one sentence at a time:
   keywords / jev / openai  the relay's core/reflex.ts, via services/relay/tools/reflex-bench.ts (Node)
   local                    the box's molty_voice/reflex.py, over ssh on the voice box (CPU, its own venv)
-and the table compares them: reaction accuracy (after each engine's confidence gate), false fires on
+and the table compares them: reaction accuracy (after the relay's gate at the chosen liveliness:
+a confident pick in full, a mild one as its soft gesture — counted as that reaction), false fires on
 neutral sentences, utterance-category accuracy, p50 / p90 latency, input tokens, and the cost of
 1000 partials. Latency: remote engines include the network from this machine; local is the box's
 inference only (its verdict rides the box's existing socket right after the partial: no extra hop).
@@ -30,8 +31,11 @@ DEFAULT_SET = SIM_DIR / "scenarios" / "reflex.yaml"
 ENGINES = ("local", "jev", "openai", "keywords")
 REACTIONS = ("surprised", "happy", "sad", "laugh", "curious", "none")
 CATEGORIES = ("question", "request", "hard", "other")
-# the relay's gate for the box's raw verdicts (core/reflex.ts REFLEX.gate.local; tests/test_reflex_bench.py checks it)
-LOCAL_GATE = 0.35
+# the relay's gate for the box's raw verdicts, per liveliness (core/reflex.ts REFLEX_LIVELINESS: gate.local
+# and mild; tests/test_reflex_bench.py checks them against the source)
+LIVELINESS = ("calm", "normal", "lively")
+LOCAL_GATE = {"calm": 0.35, "normal": 0.3, "lively": 0.25}
+MILD = {"calm": None, "normal": (0.6, 0.3), "lively": (0.75, 0.2)}
 # $ per million input tokens (core/reflex.ts PRICE_PER_MTOK); local and keywords cost nothing per call
 PRICE_PER_MTOK = {"jev": 0.042, "openai": 0.1}
 KEY_ENV = {"jev": "TYPESAFE_API_KEY", "openai": "OPENAI_API_KEY"}
@@ -88,11 +92,24 @@ def load(path: str | Path = DEFAULT_SET) -> list[Item]:
     return items
 
 
-def gate_local(v: dict) -> dict:
-    """The relay's handling of a box verdict: below the gate the pick is none."""
-    if v.get("pick") != "none" and float(v.get("conf", 0)) < LOCAL_GATE:
-        return {**v, "raw": v["pick"], "pick": "none"}
-    return v
+def gate_local(v: dict, liveliness: str = "normal") -> dict:
+    """The relay's reflexGate on a box verdict: in full at the gate; below it a mild pick (soft) when
+    `none` is unsure and a reaction plausible; else none. A request is never curiosity."""
+    choice, conf, p = v.get("pick", "none"), float(v.get("conf", 0)), v.get("p") or {}
+    base = {k: x for k, x in v.items() if k not in ("raw", "soft")}
+    if choice != "none" and conf >= LOCAL_GATE[liveliness]:
+        out = {**base, "pick": choice}
+    else:
+        alts = [k for k in REACTIONS if k != "none" and k in p]
+        alt = max(alts, key=lambda k: p[k]) if alts else None
+        mild = MILD[liveliness]
+        if mild and alt and "none" in p and p["none"] < mild[0] and p[alt] >= mild[1]:
+            out = {**base, "pick": alt, "soft": True, **({"raw": choice} if choice != alt else {})}
+        else:
+            out = {**base, "pick": "none", **({"raw": choice} if choice != "none" else {})}
+    if out["pick"] == "curious" and v.get("cat") == "request":
+        return {**base, "pick": "none", "raw": choice}
+    return out
 
 
 def score(engine: str, items: list[Item], verdicts: list[dict]) -> Score:
@@ -124,19 +141,19 @@ def _lines(items: list[Item]) -> str:
     return "".join(json.dumps({"text": it.text}) + "\n" for it in items)
 
 
-def run_relay_engine(engine: str, items: list[Item]) -> list[dict]:
-    cmd = ["node", "--experimental-strip-types", "--no-warnings", "--import", "./tools/ts-resolve.mjs", "tools/reflex-bench.ts", engine]
+def run_relay_engine(engine: str, items: list[Item], liveliness: str = "normal") -> list[dict]:
+    cmd = ["node", "--experimental-strip-types", "--no-warnings", "--import", "./tools/ts-resolve.mjs", "tools/reflex-bench.ts", engine, liveliness]
     out = subprocess.run(cmd, cwd=RELAY_DIR, input=_lines(items), capture_output=True, text=True, check=True, timeout=600)
     return [json.loads(x) for x in out.stdout.splitlines() if x.strip()]
 
 
-def run_local(items: list[Item], box: str, lab: str = "~/molty-voice/reflex-lab") -> list[dict]:
+def run_local(items: list[Item], box: str, lab: str = "~/molty-voice/reflex-lab", liveliness: str = "normal") -> list[dict]:
     """The box's classifier in its own venv (`lab`/.venv with molty-voice[reflex] deps): never the running service."""
     subprocess.run(["ssh", box, f"mkdir -p {lab}/src/molty_voice"], check=True, timeout=60)
     subprocess.run(["rsync", "-a", "--delete", "--exclude", "__pycache__", f"{VOICE_DIR / 'molty_voice'}/", f"{box}:{lab}/src/molty_voice/"], check=True, timeout=120)
     remote = f"cd {lab}/src && ../.venv/bin/python -m molty_voice.reflex bench"
     out = subprocess.run(["ssh", box, remote], input=_lines(items), capture_output=True, text=True, check=True, timeout=900)
-    return [gate_local(json.loads(x)) for x in out.stdout.splitlines() if x.strip()]
+    return [gate_local(json.loads(x), liveliness) for x in out.stdout.splitlines() if x.strip()]
 
 
 def fmt_ms(x: float | None) -> str:
@@ -158,13 +175,13 @@ def table(scores: list[Score], skipped: dict[str, str] | None = None) -> str:
     return "\n".join(rows)
 
 
-def bench(engines: list[str], items: list[Item], box: str) -> tuple[list[Score], dict[str, str]]:
+def bench(engines: list[str], items: list[Item], box: str, liveliness: str = "normal") -> tuple[list[Score], dict[str, str]]:
     scores, skipped = [], {}
     for e in engines:
         if e in KEY_ENV and not os.environ.get(KEY_ENV[e]):
             skipped[e] = f"{KEY_ENV[e]} not set"
             continue
-        verdicts = run_local(items, box) if e == "local" else run_relay_engine(e, items)
+        verdicts = run_local(items, box, liveliness=liveliness) if e == "local" else run_relay_engine(e, items, liveliness)
         if len(verdicts) != len(items):
             raise RuntimeError(f"{e}: {len(verdicts)} verdicts for {len(items)} items")
         scores.append(score(e, items, verdicts))
@@ -179,10 +196,10 @@ def misses(scores: list[Score]) -> str:
     return "\n".join(out)
 
 
-def main(engines: list[str], set_path: str, box: str, show_misses: bool, out_json: str | None) -> int:
+def main(engines: list[str], set_path: str, box: str, show_misses: bool, out_json: str | None, liveliness: str = "normal") -> int:
     items = load(set_path)
-    scores, skipped = bench(engines, items, box)
-    print(f"{len(items)} labelled partials ({shlex.quote(str(set_path))})\n")
+    scores, skipped = bench(engines, items, box, liveliness)
+    print(f"{len(items)} labelled partials ({shlex.quote(str(set_path))}), liveliness {liveliness}\n")
     print(table(scores, skipped))
     if show_misses:
         print()

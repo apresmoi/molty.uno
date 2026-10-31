@@ -15,10 +15,32 @@ void react_init(react_t *r, const react_cfg_t *cfg, int idle)
 static int play(react_t *r, int what, uint32_t t, bool blocked)
 {
     if (what == REACT_NONE || r->idle == REACT_IDLE_OFF || blocked || t < r->cfg.warmup_ms) return REACT_NONE;
+    if (r->ext && t < r->ext_until + r->cfg.ext_settle_ms) return REACT_NONE;   /* the relay's reaction plays */
     const uint32_t gap = r->idle == REACT_IDLE_CALM ? r->cfg.calm_gap_ms : r->cfg.gap_ms;
     if (r->reacted && t - r->last_at < gap) return REACT_NONE;
     r->reacted = true; r->last_at = t; r->count++;
     return what;
+}
+
+void react_external(react_t *r, uint32_t t, uint32_t hold_ms)
+{
+    const uint32_t until = t + hold_ms;
+    if (!r->ext || until > r->ext_until) r->ext_until = until;
+    r->ext = true;
+}
+
+/* The baseline: a micro-motion due at t? (A voice heard lately, and nothing moved Molty for a beat.) */
+static int baseline(react_t *r, uint32_t t, bool dip)
+{
+    if (!r->heard || t - r->voiced_at > r->cfg.beat_hold_ms) return REACT_NONE;
+    uint32_t still = r->voice0;                               /* the stillness began: the voice's start, */
+    if (r->reacted && r->last_at > still) still = r->last_at; /* our last reaction,                      */
+    if (r->ext && r->ext_until > still) still = r->ext_until; /* or the end of the relay's               */
+    if (t < still) return REACT_NONE;
+    const uint32_t beat = r->idle == REACT_IDLE_CALM ? r->cfg.calm_beat_ms : r->cfg.beat_ms;
+    if (t - still < beat || (!dip && t - still < beat + r->cfg.beat_late_ms)) return REACT_NONE;
+    static const int CYCLE[] = { REACT_BLINK, REACT_GLANCE_LEFT, REACT_BLINK, REACT_GLANCE_RIGHT };
+    return CYCLE[r->beat % (int)(sizeof(CYCLE) / sizeof(CYCLE[0]))];
 }
 
 int react_level(react_t *r, float level, uint32_t t, bool blocked)
@@ -26,6 +48,10 @@ int react_level(react_t *r, float level, uint32_t t, bool blocked)
     const uint32_t dt = r->have_t && t > r->last_t ? t - r->last_t : 100;
     r->last_t = t; r->have_t = true;
     int what = REACT_NONE;
+    const bool voiced = level >= r->cfg.speech_level;
+    const bool dip = r->voiced && !voiced;                   /* the voice falls: a beat of its rhythm */
+    r->voiced = voiced;
+    if (voiced) { if (!r->heard) r->voice0 = t; r->heard = true; r->voiced_at = t; }
     if (level >= r->cfg.speech_level) {
         /* a voice after a long quiet: perk up */
         if (r->quiet_run >= r->cfg.perk_quiet_ms && level > r->cfg.perk_level) what = REACT_PERK;
@@ -40,6 +66,11 @@ int react_level(react_t *r, float level, uint32_t t, bool blocked)
         }
     } else {
         r->speech_run = 0;                        /* in between: neither run grows */
+    }
+    if (what == REACT_NONE && (what = baseline(r, t, dip)) != REACT_NONE) {
+        const int out = play(r, what, t, blocked);
+        if (out != REACT_NONE) { r->beat++; r->baselines++; }
+        return out;
     }
     return play(r, what, t, blocked);
 }

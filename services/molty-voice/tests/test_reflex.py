@@ -12,18 +12,18 @@ from molty_voice.reflex import GO_MAP, PICKS, ReflexTracker, category, fold, ref
 from test_bridge import DEVICE, FakeMoshi, with_servers
 
 
-def test_the_chunk_rule_matches_the_relay():
-    # the same table as services/relay/test/reflex.test.ts "reflex chunks"
+def test_every_word_count_the_relay_may_pick_is_classified():
+    # the relay's reflexDue (services/relay/test/reflex.test.ts "reflex chunks") picks its chunks among
+    # the word counts from FIRST_WORDS (3) on: the box classifies each new one, so any pick has a verdict
     assert reflex_due(0, "hi.") is None
-    assert reflex_due(0, "hi there") is None
-    assert reflex_due(0, "hi there.") == 2
-    assert reflex_due(2, "hi there.") is None
-    assert reflex_due(2, "hi there. so I was") is None
-    assert reflex_due(2, "hi there. so I was thinking about the") == 8
-    assert reflex_due(2, "hi there. so I was...") is None
-    assert reflex_due(2, "hi there. you know what?") == 5
+    assert reflex_due(0, "hi there.") is None
+    assert reflex_due(0, "hi there you") == 3
+    assert reflex_due(3, "hi there you") is None  # nothing new
+    assert reflex_due(3, "hi there you know") == 4
+    assert reflex_due(3, "hi there. you know what?") == 5  # two words in one partial
     t = ReflexTracker(max_chunks=2)
-    assert [t.due(x) for x in ["a b.", "a b. c d.", "a b. c d. e f."]] == [2, 4, None]
+    assert [t.due(x) for x in ["a b.", "a b. c", "a b. c d.", "a b. c d. e f."]] == [None, 3, 4, None]
+    assert ReflexTracker().max == 120
     long = "word " * 200 + "the end"
     assert len(reflex_input(long)) <= 400 and reflex_input(long).endswith("the end")
 
@@ -51,7 +51,7 @@ def test_category_rules_match_the_relay_and_the_model_adds_questions():
 
 
 class LiveMoshi(FakeMoshi):
-    """STT words while the audio still flows (the real server's way): two words on the 2nd chunk."""
+    """STT words while the audio still flows (the real server's way): three words on the 2nd chunk."""
 
     async def stt(self, ws):
         sess = {"samples": 0, "closed": False, "marker": None, "after": 0}
@@ -64,7 +64,8 @@ class LiveMoshi(FakeMoshi):
                     n += 1
                     if n == 2:
                         await ws.send(msgpack.packb({"type": "Word", "text": "hello", "start_time": 0.1}))
-                        await ws.send(msgpack.packb({"type": "Word", "text": "molty.", "start_time": 0.4}))
+                        await ws.send(msgpack.packb({"type": "Word", "text": "there", "start_time": 0.3}))
+                        await ws.send(msgpack.packb({"type": "Word", "text": "molty.", "start_time": 0.5}))
                 elif d["type"] == "Audio":
                     sess["after"] += 1
                     if sess["after"] == 3:
@@ -115,11 +116,11 @@ def test_stt_reflex_after_the_chunk_word_only_when_asked():
     seen = _listen(model, {"reflex": True})
     assert seen["hello"]["reflex"] is True
     order = [(f["t"], f.get("text") or f.get("n")) for f in seen["frames"] if f["t"] in ("stt.partial", "stt.reflex")]
-    # "hello" is too short; "hello molty." ends a sentence: chunk n=2, its verdict right after that partial
-    assert order[:3] == [("stt.partial", "hello"), ("stt.partial", "hello molty."), ("stt.reflex", 2)]
+    # under three words nothing; the third word: n=3, its verdict right after that partial
+    assert order[:4] == [("stt.partial", "hello"), ("stt.partial", "hello there"), ("stt.partial", "hello there molty."), ("stt.reflex", 3)]
     r = next(f for f in seen["frames"] if f["t"] == "stt.reflex")
-    assert r == {"t": "stt.reflex", "id": "s1", "n": 2, "pick": "happy", "conf": 0.8, "p": {"happy": 0.8, "none": 0.1}, "ms": 12.5, "chars": 12, "tokens": 5, "model": "stub"}
-    assert model.texts == ["hello molty."]
+    assert r == {"t": "stt.reflex", "id": "s1", "n": 3, "pick": "happy", "conf": 0.8, "p": {"happy": 0.8, "none": 0.1}, "ms": 12.5, "chars": 18, "tokens": 5, "model": "stub"}
+    assert model.texts == ["hello there molty."]
 
     # a listen that did not ask: no classification at all
     model2 = StubModel()
@@ -139,4 +140,4 @@ def test_a_failing_model_never_costs_the_turn():
             raise RuntimeError("onnx exploded")
 
     seen = _listen(Broken(), {"reflex": True})
-    assert seen["frames"][-1]["t"] == "stt.final" and seen["frames"][-1]["text"] == "hello molty."
+    assert seen["frames"][-1]["t"] == "stt.final" and seen["frames"][-1]["text"] == "hello there molty."

@@ -4,8 +4,12 @@
 import { describe, expect, it } from "vitest";
 import {
   EngineBench,
+  LIVELINESS,
   REFLEX,
+  REFLEX_LIVELINESS,
   REFLEX_PICKS,
+  REFLEX_SHOW,
+  REFLEX_SOFT,
   type ReflexNote,
   ReflexSession,
   type ReflexVerdict,
@@ -19,6 +23,7 @@ import {
   parseJev,
   parseOpenAI,
   reflexDue,
+  reflexGate,
   reflexInput,
   remoteReflex,
   resolveEngine,
@@ -33,15 +38,43 @@ const KEY_OAI = "sk-secret-openai-0123456789";
 // ---------------------------------------------------------------- pure
 
 describe("reflex chunks", () => {
-  it("a sentence end with a new word, or everyWords new words; never under minWords", () => {
-    expect(reflexDue(0, "hi.")).toBeUndefined();
-    expect(reflexDue(0, "hi there")).toBeUndefined();
-    expect(reflexDue(0, "hi there.")).toBe(2);
-    expect(reflexDue(2, "hi there.")).toBeUndefined(); // nothing new
-    expect(reflexDue(2, "hi there. so I was")).toBeUndefined();
-    expect(reflexDue(2, "hi there. so I was thinking about the")).toBe(8);
-    expect(reflexDue(2, "hi there. so I was...")).toBeUndefined(); // an ellipsis ends nothing
-    expect(reflexDue(2, "hi there. you know what?")).toBe(5);
+  const { calm, normal, lively } = REFLEX_LIVELINESS;
+  it("the first at REFLEX.firstWords words (no sentence end needed), then every few new words, a sentence end or a little speech time", () => {
+    expect(REFLEX.firstWords).toBe(3);
+    expect(reflexDue(0, "hi.", 0, normal)).toBeUndefined();
+    expect(reflexDue(0, "hi there.", 0, normal)).toBeUndefined(); // under three words, even at a sentence end
+    expect(reflexDue(0, "what's up, Molty", 0, normal)).toBe(3); // the first chunk: three words, mid-sentence
+    expect(reflexDue(0, "what's up, Molty", 0, calm)).toBe(3); // every liveliness
+    expect(reflexDue(3, "what's up, Molty", 9000, normal)).toBeUndefined(); // nothing new, however long
+    expect(reflexDue(3, "what's up, Molty what are you", 100, normal)).toBeUndefined(); // 3 new words: normal waits for 4
+    expect(reflexDue(3, "what's up, Molty what are you", 100, lively)).toBe(6); // lively: 3
+    expect(reflexDue(3, "what's up, Molty what are you doing", 100, normal)).toBe(7);
+    expect(reflexDue(3, "what's up, Molty what are you doing", 100, calm)).toBeUndefined(); // calm: 6
+    expect(reflexDue(3, "what's up, Molty what", normal.everyMs, normal)).toBe(4); // a little speech time with a new word
+    expect(reflexDue(3, "what's up, Molty what", normal.everyMs - 1, normal)).toBeUndefined();
+    expect(reflexDue(3, "what's up, Molty what", lively.everyMs, lively)).toBe(4);
+    expect(reflexDue(3, "what's up, Molty? you know?", 100, normal)).toBe(5); // a sentence end
+    expect(reflexDue(3, "what's up, Molty so I was...", 100, normal)).toBeUndefined(); // an ellipsis ends nothing
+  });
+
+  it("the livelinesses are ordered: livelier = sooner, more often, lower gates, mild picks", () => {
+    expect(LIVELINESS).toEqual(["calm", "normal", "lively"]);
+    for (const [a, b] of [
+      [calm, normal],
+      [normal, lively],
+    ]) {
+      expect(b.everyWords).toBeLessThanOrEqual(a.everyWords);
+      expect(b.everyMs).toBeLessThanOrEqual(a.everyMs);
+      expect(b.gapMs).toBeLessThan(a.gapMs);
+      for (const e of ["local", "jev", "openai"] as const) expect(b.gate[e]).toBeLessThan(a.gate[e]);
+      expect(b.mild?.none ?? 0).toBeGreaterThan(a.mild?.none ?? 0);
+    }
+    expect(calm.mild).toBeUndefined();
+    expect(lively.gapMs).toBe(1500);
+    expect(normal.gapMs).toBe(2000);
+    // every soft gesture is a one-shot act, never a mood (the listening stays up)
+    for (const v of Object.values(REFLEX_SOFT)) expect(typeof v).toBe("string");
+    expect(Object.keys(REFLEX_SOFT).sort()).toEqual(Object.keys(REFLEX_SHOW).sort());
   });
 
   it("an engine sees the last maxChars characters, cut at a word", () => {
@@ -139,10 +172,11 @@ describe("model engines: request and answer", () => {
     expect(b.questions[1]).toMatchObject({ type: "choice", name: "category" });
     expect(b.questions[1].choices.map((c: any) => c.value)).toEqual([...UTTERANCE_CATEGORIES]);
   });
-  it("parses answers, gates low confidence to none (keeping the raw pick), flags junk and refusals", () => {
+  it("parses answers (ungated: the engine's own choice), flags junk and refusals", () => {
     const jev = { model: "jev-1.14.0", answers: { reaction: { type: "choice", choice: "happy", confidence: 0.98, probabilities: { happy: 0.98, surprised: 0.02, bogus: 3 } } }, usage: { input_tokens: 398, output_tokens: 63 } };
     expect(parseJev(jev)).toEqual({ pick: "happy", conf: 0.98, p: { happy: 0.98, surprised: 0.02 }, tokens: 398, model: "jev-1.14.0" });
-    expect(parseJev({ ...jev, answers: { reaction: { ...jev.answers.reaction, confidence: 0.2 } } })).toMatchObject({ pick: "none", raw: "happy", conf: 0.2 });
+    // not gated here (the session gates at the owner's liveliness: reflexGate)
+    expect(parseJev({ ...jev, answers: { reaction: { ...jev.answers.reaction, confidence: 0.2 } } })).toMatchObject({ pick: "happy", conf: 0.2 });
     expect(parseJev({ answers: {} })).toEqual({ pick: "none", error: "bad_response" });
     const oai = { model: "gpt-6-luna", answers: [{ type: "choice", name: "reaction", choice: "laugh", confidence: 0.7, probabilities: [{ value: "laugh", probability: 0.8 }, { value: "none", probability: 0.2 }] }], usage: { input_tokens: 120 } };
     expect(parseOpenAI(oai)).toEqual({ pick: "laugh", conf: 0.7, p: { laugh: 0.8, none: 0.2 }, tokens: 120, model: "gpt-6-luna" });
@@ -154,9 +188,9 @@ describe("model engines: request and answer", () => {
     expect(parseOpenAI(oc)).toMatchObject({ pick: "laugh", cat: "request", catConf: 0.9, catP: { request: 0.95 } });
     expect(parseJev({ ...jev, answers: { ...jev.answers, category: { type: "choice", choice: "bogus" } } }).cat).toBeUndefined();
   });
-  it("the box's stt.reflex is validated and gated like the others", () => {
+  it("the box's stt.reflex is validated like the others (ungated)", () => {
     expect(parseBoxReflex({ n: 5, pick: "sad", conf: 0.9, p: { sad: 0.9 }, ms: 34.6, chars: 20, tokens: 7 })).toMatchObject({ n: 5, engine: "local", pick: "sad", ms: 35, tokens: 7 });
-    expect(parseBoxReflex({ n: 5, pick: "sad", conf: 0.1 })).toMatchObject({ pick: "none", raw: "sad" });
+    expect(parseBoxReflex({ n: 5, pick: "sad", conf: 0.1 })).toMatchObject({ pick: "sad", conf: 0.1 });
     expect(parseBoxReflex({ n: 0, pick: "sad" })).toBeUndefined();
     expect(parseBoxReflex({ n: 3, pick: "angry" })).toBeUndefined();
   });
@@ -201,6 +235,51 @@ describe("model engines: request and answer", () => {
   });
 });
 
+describe("the liveliness gate (reflexGate)", () => {
+  const { calm, normal, lively } = REFLEX_LIVELINESS;
+  const jev = (pick: string, conf: number, p: Record<string, number>, extra: Partial<ReflexVerdict> = {}): ReflexVerdict => ({ engine: "jev", pick: pick as any, conf, p, ms: 1, chars: 1, ...extra });
+  const g = (v: ReflexVerdict, prof = normal) => {
+    const o = reflexGate(v, prof);
+    return [o.pick, o.soft ?? false, o.raw ?? null];
+  };
+  it("a confident pick shows in full at or above the engine's gate; below it, none (the raw choice kept)", () => {
+    expect(g(jev("happy", 0.45, { happy: 0.5, none: 0.4 }), normal)).toEqual(["happy", false, null]); // normal jev gate 0.4
+    expect(g(jev("happy", 0.45, { happy: 0.5, none: 0.4 }), calm)).toEqual(["none", false, "happy"]); // calm 0.5, no mild
+    expect(g(jev("happy", 0.4, {}), normal)).toEqual(["happy", false, null]); // at the gate
+    expect(g(jev("happy", 0.39, {}), normal)).toEqual(["none", false, "happy"]); // no probabilities: no mild pick
+    expect(g({ engine: "local", pick: "sad", conf: 0.28, ms: 1, chars: 1 }, normal)).toEqual(["none", false, "sad"]);
+    expect(g({ engine: "local", pick: "sad", conf: 0.28, ms: 1, chars: 1 }, lively)).toEqual(["sad", false, null]);
+  });
+  it("mild: `none` unsure and a reaction plausible → that reaction's softer gesture (normal, lively; never calm)", () => {
+    // "So I've been thinking" (Jev, real): none 0.58, curious 0.42
+    const thinking = jev("none", 0.5, { curious: 0.42, none: 0.58 });
+    expect(g(thinking, normal)).toEqual(["curious", true, "none"]);
+    expect(g(thinking, lively)).toEqual(["curious", true, "none"]);
+    expect(g(thinking, calm)).toEqual(["none", false, null]);
+    // Juan's explanatory turns: none ≈ 0.7, curious ≈ 0.25 → only lively shows it
+    const explain = jev("none", 0.68, { curious: 0.27, none: 0.73 });
+    expect(g(explain, normal)).toEqual(["none", false, null]);
+    expect(g(explain, lively)).toEqual(["curious", true, "none"]);
+    // sure it is nothing: nothing, at every liveliness
+    for (const prof of [calm, normal, lively]) expect(g(jev("none", 0.95, { curious: 0.04, none: 0.95 }), prof)).toEqual(["none", false, null]);
+    // a below-gate pick that is also the most likely reaction: soft, no raw
+    expect(g(jev("happy", 0.3, { happy: 0.35, none: 0.5 }), normal)).toEqual(["happy", true, null]);
+    // under mild.min: nothing
+    expect(g(jev("none", 0.5, { curious: 0.29, none: 0.55 }), normal)).toEqual(["none", false, null]);
+  });
+  it("a request is never curiosity, in full or mild", () => {
+    expect(g(jev("none", 0.52, { curious: 0.48, none: 0.52 }, { cat: "request" }), lively)).toEqual(["none", false, "none"]);
+    expect(g(jev("curious", 0.9, { curious: 0.9 }, { cat: "request" }), lively)).toEqual(["none", false, "curious"]);
+    expect(g(jev("curious", 0.9, { curious: 0.9 }, { cat: "question" }), lively)).toEqual(["curious", false, null]);
+  });
+  it("keywords (no probabilities) are all-or-nothing at every liveliness", () => {
+    for (const prof of [calm, normal, lively]) {
+      expect(reflexGate(keywordReflex("haha that's hilarious"), prof)).toMatchObject({ pick: "laugh" });
+      expect(reflexGate(keywordReflex("I need to buy milk"), prof).pick).toBe("none");
+    }
+  });
+});
+
 // ---------------------------------------------------------------- one listen's session (no room)
 
 describe("reflex session", () => {
@@ -217,8 +296,8 @@ describe("reflex session", () => {
       keys: { jev: KEY_JEV },
       fetch: async () => jevAnswer("happy"),
       clock: realClock,
-      fire: async (p) => {
-        fired.push(p);
+      fire: async (p, soft) => {
+        fired.push(soft ? `${p}~` : p);
         return "ok";
       },
       note: (n) => notes.push(n),
@@ -226,10 +305,103 @@ describe("reflex session", () => {
     });
     return { s, notes, fired };
   }
+  /** A hand-driven clock (no timers needed by the keywords engine). */
+  const manual = () => {
+    const c = { t: 1000, now: () => c.t, setTimeout: (f: () => void, ms: number) => setTimeout(f, ms), clearTimeout: (h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>) };
+    return c;
+  };
+  const say = (s: ReflexSession, text: string, c?: { t: number }, perWordMs = 0) => {
+    const w = text.split(" ");
+    for (let i = 1; i <= w.length; i++) {
+      if (c) c.t += perWordMs;
+      s.text(w.slice(0, i).join(" "));
+    }
+  };
+
+  it("cadence: the first decision at three words, then every few words by liveliness (one word per partial)", async () => {
+    const text = "so I was walking home and the street was empty and quiet tonight";
+    const chunks: Record<string, number[]> = {};
+    for (const lv of LIVELINESS) {
+      const { s, notes } = make({ mode: "keywords", keys: {}, liveliness: lv });
+      expect(s.liveliness).toBe(lv);
+      say(s, text);
+      await s.idle();
+      chunks[lv] = notes.map((n) => n.n);
+    }
+    expect(chunks).toEqual({ calm: [3, 9], normal: [3, 7, 11], lively: [3, 6, 9, 12] });
+    expect(make({ mode: "keywords", keys: {} }).s.liveliness).toBe("normal"); // the default
+    expect(make({ mode: "keywords", keys: {}, liveliness: "loud" as any }).s.liveliness).toBe("normal");
+  });
+
+  it("cadence: a slow speaker gets a decision once everyMs of speech passed, with a new word", async () => {
+    const c = manual();
+    const { s, notes } = make({ mode: "keywords", keys: {}, clock: c, liveliness: "normal" });
+    say(s, "well I think", c, 100); // 3 words: the first chunk
+    c.t += REFLEX_LIVELINESS.normal.everyMs - 1;
+    s.text("well I think that"); // one new word, not yet everyMs: nothing
+    c.t += 1;
+    s.text("well I think that"); // everyMs since the last chunk, a word it has not seen: due
+    c.t += 5000;
+    s.text("well I think that"); // nothing new: nothing, however long
+    await s.idle();
+    expect(notes.map((n) => n.n)).toEqual([3, 4]);
+  });
+
+  it("a mild pick fires its soft gesture; the trace notes it soft with the engine's raw choice", async () => {
+    const { s, notes, fired } = make({
+      fetch: async () => Response.json({ model: "jev-1.14.0", answers: { reaction: { type: "choice", choice: "none", confidence: 0.5, probabilities: { curious: 0.42, none: 0.58 } } }, usage: { input_tokens: 300 } }),
+    });
+    s.text("So I've been thinking");
+    await s.idle();
+    expect(fired).toEqual(["curious~"]);
+    expect(notes[0]).toMatchObject({ n: 4, pick: "curious", soft: true, raw: "none", c: 0.5, fired: "ok" });
+  });
+
+  it("an older chunk's verdict landing after a newer one's is stale: noted, never shown", async () => {
+    let k = 0;
+    const { s, notes, fired } = make({
+      fetch: async () => {
+        const mine = ++k;
+        await new Promise((r) => setTimeout(r, mine === 1 ? 120 : 10)); // the first call is the slow one
+        return jevAnswer(mine === 1 ? "sad" : "happy");
+      },
+    });
+    s.text("I just got");
+    s.text("I just got the job.");
+    await s.idle();
+    expect(fired).toEqual(["happy"]);
+    expect(notes.map((n) => [n.n, n.pick, n.fired])).toEqual([
+      [5, "happy", "ok"],
+      [3, "sad", "stale"],
+    ]);
+  });
+
+  it("at most REFLEX.maxInFlight calls at once: a chunk due beyond that waits for a later word (no pile-up)", async () => {
+    let calls = 0;
+    const release: Array<() => void> = [];
+    const { s, notes } = make({
+      liveliness: "lively",
+      fetch: async () => {
+        calls++;
+        await new Promise<void>((r) => release.push(r));
+        return jevAnswer("happy");
+      },
+    });
+    say(s, "one two three four five six seven eight nine");
+    expect(calls).toBe(REFLEX.maxInFlight);
+    expect(s.deferred).toBeGreaterThan(0);
+    release.splice(0).forEach((r) => r());
+    await new Promise((r) => setTimeout(r, 5));
+    s.text("one two three four five six seven eight nine ten");
+    expect(calls).toBe(REFLEX.maxInFlight + 1); // the next word: due again
+    release.splice(0).forEach((r) => r());
+    await s.idle();
+    expect(notes.map((n) => n.n)).toEqual([3, 6, 10]);
+  });
 
   it("fires the configured engine's pick, noted with latency, size, tokens and probabilities", async () => {
     const { s, notes, fired } = make();
-    s.text("I just got");
+    s.text("I just");
     s.text("I just got the job.");
     await s.idle();
     expect(fired).toEqual(["happy"]);
@@ -334,13 +506,15 @@ describe("reflex in the room", () => {
     expect(cmds(w)).toEqual([{ mood: { mood: "surprised", hold_s: 0, react: true } }, { mood: { mood: "listening", hold_s: 0, react: true } }]);
     expect(w.dev.log.filter((l) => l.name === "say" || l.kind === "frame")).toEqual([]);
     const t = await trace(w, turn);
-    expect(t.relay.reflex_cfg).toEqual({ mode: "keywords", engine: "keywords" });
+    expect(t.relay.reflex_cfg).toEqual({ mode: "keywords", engine: "keywords", lv: "normal" });
     expect(t.relay.reflex.map((n: ReflexNote) => [n.n, n.e, n.pick, n.fired])).toEqual([
-      [6, "keywords", "surprised", "ok"], // six words
+      [3, "keywords", "surprised", "ok"], // three words: "oh my god", mid-sentence
+      [7, "keywords", "surprised", "rate_limited"], // four new words (normal)
       [8, "keywords", "surprised", "rate_limited"], // the sentence end
+      [12, "keywords", "laugh", "rate_limited"],
       [13, "keywords", "laugh", "rate_limited"],
     ]);
-    expect(t.relay.reflex[0]).toMatchObject({ ms: 0, ch: 20, at: expect.any(Number) });
+    expect(t.relay.reflex[0]).toMatchObject({ ms: 0, ch: 9, at: expect.any(Number) });
     expect(JSON.stringify(t)).not.toMatch(/job|funny/);
   });
 
@@ -353,6 +527,7 @@ describe("reflex in the room", () => {
     await readUntil(w.room, w.a, (e) => e.type === "utterance");
     const t = await trace(w, turn);
     expect(t.relay.reflex.map((n: ReflexNote) => [n.pick, n.fired])).toEqual([
+      ["none", "none"],
       ["none", "none"],
       ["surprised", "agent"],
       ["surprised", "agent"],
@@ -368,7 +543,7 @@ describe("reflex in the room", () => {
     expect((await w.room.react(w.a, { turn_id: turn, action: "nod" })).ok).toBe(true);
     const reactedAt = Date.now();
     await readUntil(w.room, w.a, (e) => e.type === "utterance", [], 8000);
-    expect(Date.now() - reactedAt).toBeGreaterThan(REFLEX.gapMs); // the last chunk came after the gap
+    expect(Date.now() - reactedAt).toBeGreaterThan(REFLEX_LIVELINESS.normal.gapMs); // the last chunk came after the gap
     const t = await trace(w, turn);
     expect(t.relay.reflex.at(-1)).toMatchObject({ pick: "surprised", fired: "agent" });
     expect(cmds(w)).toEqual([{ act: { action: "nod" } }]);
@@ -381,12 +556,12 @@ describe("reflex in the room", () => {
     await w.kv.put("pair:p1", { id: "p1", req: "r", code: "123456", agent_name: "x", created: Date.now(), expires: Date.now() + 60000, status: "pending" });
     let turn = await w.shake({ words: words("oh my god I just got the job."), chunkMs: 30 });
     await readUntil(w.room, w.a, (e) => e.type === "utterance");
-    expect((await trace(w, turn)).relay.reflex.map((n: ReflexNote) => n.fired)).toEqual(["screen", "screen"]);
+    expect((await trace(w, turn)).relay.reflex.map((n: ReflexNote) => n.fired)).toEqual(["screen", "screen", "screen"]);
     await w.kv.delete("paircur");
     await w.kv.put("upd", { job: "u", from: "1", to: "2", phase: "confirm", deadline: Date.now() + 60000 });
     turn = await w.shake({ words: words("oh my god I just got the job."), chunkMs: 30 }, "shake-2");
     await readUntil(w.room, w.a, (e) => e.type === "utterance" && e.data.turn_id === turn);
-    expect((await trace(w, turn)).relay.reflex.map((n: ReflexNote) => n.fired)).toEqual(["screen", "screen"]);
+    expect((await trace(w, turn)).relay.reflex.map((n: ReflexNote) => n.fired)).toEqual(["screen", "screen", "screen"]);
     expect(cmds(w)).toEqual([]);
   });
 
@@ -395,7 +570,7 @@ describe("reflex in the room", () => {
     await set(w, { reflex: "keywords" });
     const turn = await w.shake({ words: words("oh my god I just got the job."), chunkMs: 30 });
     await readUntil(w.room, w.a, (e) => e.type === "utterance");
-    expect((await trace(w, turn)).relay.reflex.map((n: ReflexNote) => n.fired)).toEqual(["unsupported", "unsupported"]);
+    expect((await trace(w, turn)).relay.reflex.map((n: ReflexNote) => n.fired)).toEqual(["unsupported", "unsupported", "unsupported"]);
     expect(cmds(w)).toEqual([]);
   });
 
@@ -416,16 +591,24 @@ describe("reflex in the room", () => {
     expect(((await set(w, { reflex: "jev" })) as any).result.reflex).toMatchObject({ mode: "jev", engine: "jev", engines: { jev: true, openai: false } });
     let turn = await w.shake({ words: words("I just got the job."), chunkMs: 30 });
     await readUntil(w.room, w.a, (e) => e.type === "utterance");
-    expect(calls.map((c) => [c.url, c.headers.get("authorization")])).toEqual([["https://api.typesafe.ai/v1/systemone", `Bearer ${KEY_JEV}`]]);
-    expect(JSON.parse(await calls[0].text()).state).toEqual({ human_said_so_far: "I just got the job." });
+    // two chunks: three words ("I just got"), then the sentence end
+    expect(calls.map((c) => [c.url, c.headers.get("authorization")])).toEqual([
+      ["https://api.typesafe.ai/v1/systemone", `Bearer ${KEY_JEV}`],
+      ["https://api.typesafe.ai/v1/systemone", `Bearer ${KEY_JEV}`],
+    ]);
+    expect(JSON.parse(await calls[0].text()).state).toEqual({ human_said_so_far: "I just got" });
+    expect(JSON.parse(await calls[1].text()).state).toEqual({ human_said_so_far: "I just got the job." });
     let t = await trace(w, turn);
-    expect(t.relay.reflex).toEqual([expect.objectContaining({ e: "jev", pick: "happy", c: 0.97, tk: 398, fired: "ok" })]);
+    expect(t.relay.reflex).toEqual([
+      expect.objectContaining({ n: 3, e: "jev", pick: "happy", c: 0.97, tk: 398, fired: "ok" }),
+      expect.objectContaining({ n: 5, e: "jev", pick: "happy", fired: "rate_limited" }),
+    ]);
     await until(() => cmds(w).length === 2);
     expect(cmds(w)[0]).toEqual({ mood: { mood: "happy", hold_s: 0, react: true } });
 
     // the API hangs: the keywords' pick fires at the timeout, while the human still talks
     slow = true;
-    await new Promise((r) => setTimeout(r, REFLEX.gapMs)); // past the reflex gap
+    await new Promise((r) => setTimeout(r, REFLEX_LIVELINESS.normal.gapMs)); // past the reflex gap
     turn = await w.shake({ words: words("oh my god no way. " + "and then we went on and on about it for a long while more".repeat(1)), chunkMs: 60 }, "shake-2");
     await readUntil(w.room, w.a, (e) => e.type === "utterance" && e.data.turn_id === turn, [], 6000);
     t = await trace(w, turn);
@@ -443,15 +626,19 @@ describe("reflex in the room", () => {
     const w = await setup({
       reflexKeys: { jev: KEY_JEV },
       fetch: async (r) => (calls.push(r.url), new Response("{}")),
-      box: { reflex: true, reflexFor: (text) => (text.endsWith(".") ? { n: text.split(" ").length, pick: "sad", conf: 0.88, p: { sad: 0.88, none: 0.1 }, cat: "other", cat_conf: 0.7, ms: 34, chars: text.length, tokens: 9 } : undefined) },
+      // the box classifies every word count from three (molty_voice/reflex.py): the relay picks its chunks among them
+      box: { reflex: true, reflexFor: (text) => (text.split(" ").length < 3 ? undefined : text.includes("died") ? { n: text.split(" ").length, pick: "sad", conf: 0.88, p: { sad: 0.88, none: 0.1 }, cat: "other", cat_conf: 0.7, ms: 34, chars: text.length, tokens: 9 } : { n: text.split(" ").length, pick: "none", conf: 0.9, p: { none: 0.9 }, ms: 30, chars: text.length }) },
     });
     expect(((await set(w, { reflex: "auto" })) as any).result.reflex).toMatchObject({ mode: "auto", engine: "local", engines: { local: true, jev: true } });
     const turn = await w.shake({ words: words("my old dog died yesterday."), chunkMs: 30 });
     await readUntil(w.room, w.a, (e) => e.type === "utterance");
     expect(w.box.starts.at(-1)).toMatchObject({ reflex: true });
     const t = await trace(w, turn);
-    expect(t.relay.reflex_cfg).toEqual({ mode: "auto", engine: "local" });
-    expect(t.relay.reflex).toEqual([expect.objectContaining({ n: 5, e: "local", pick: "sad", c: 0.88, ms: 34, tk: 9, fired: "ok", p: [null, null, 0.88, null, null, 0.1], cat: "other", cc: 0.7 })]);
+    expect(t.relay.reflex_cfg).toEqual({ mode: "auto", engine: "local", lv: "normal" });
+    expect(t.relay.reflex).toEqual([
+      expect.objectContaining({ n: 3, e: "local", pick: "none", fired: "none" }),
+      expect.objectContaining({ n: 5, e: "local", pick: "sad", c: 0.88, ms: 34, tk: 9, fired: "ok", p: [null, null, 0.88, null, null, 0.1], cat: "other", cc: 0.7 }),
+    ]);
     expect(cmds(w)).toEqual([{ act: { action: "nod" } }]);
     expect(calls).toEqual([]);
     // the filler's seam: the reflex's own category for those words, no new call
@@ -468,7 +655,7 @@ describe("reflex in the room", () => {
           ? Response.json({ model: "gpt-6-luna", answers: [{ type: "choice", name: "reaction", choice: "surprised", confidence: 0.8, probabilities: [{ value: "surprised", probability: 0.9 }] }, { type: "choice", name: "category", choice: "other", confidence: 0.9 }], usage: { input_tokens: 150 } })
           : Response.json({ model: "jev-1.14.0", answers: { reaction: { type: "choice", choice: "happy", confidence: 0.9, probabilities: { happy: 0.9 } }, category: { type: "choice", choice: "other", confidence: 0.9 } }, usage: { input_tokens: 400 } });
       },
-      box: { reflex: true, reflexFor: (text) => (text.endsWith(".") ? { n: text.split(" ").length, pick: "happy", conf: 0.7, ms: 30, chars: text.length } : undefined) },
+      box: { reflex: true, reflexFor: (text) => (text.split(" ").length >= 3 ? { n: text.split(" ").length, pick: "happy", conf: 0.7, ms: 30, chars: text.length } : undefined) },
     });
     const v = ((await set(w, { reflex: "openai", reflex_compare: true })) as any).result.reflex;
     expect(v).toMatchObject({ mode: "openai", compare: true, engine: "openai" });
@@ -476,10 +663,15 @@ describe("reflex in the room", () => {
     await readUntil(w.room, w.a, (e) => e.type === "utterance");
     expect(w.box.starts.at(-1)).toMatchObject({ reflex: true });
     const t = await trace(w, turn);
-    expect(t.relay.reflex_cfg).toEqual({ mode: "openai", engine: "openai", compare: ["openai", "local", "jev", "keywords"] });
-    expect(t.relay.reflex.map((n: ReflexNote) => n.e).sort()).toEqual(["jev", "keywords", "local", "openai"]);
-    expect(t.relay.reflex.filter((n: ReflexNote) => n.fired !== undefined)).toEqual([expect.objectContaining({ e: "openai", pick: "surprised", fired: "ok" })]);
-    expect(urls.sort()).toEqual(["https://api.openai.com/v1/decisions", "https://api.typesafe.ai/v1/systemone"]);
+    expect(t.relay.reflex_cfg).toEqual({ mode: "openai", engine: "openai", lv: "normal", compare: ["openai", "local", "jev", "keywords"] });
+    // two chunks ("guess what I", "… job."), every engine on each; the configured one fires once (then the gap)
+    expect(t.relay.reflex.filter((n: ReflexNote) => n.n === 3).map((n: ReflexNote) => n.e).sort()).toEqual(["jev", "keywords", "local", "openai"]);
+    expect(t.relay.reflex.filter((n: ReflexNote) => n.n === 6).map((n: ReflexNote) => n.e).sort()).toEqual(["jev", "keywords", "local", "openai"]);
+    expect(t.relay.reflex.filter((n: ReflexNote) => n.fired !== undefined).map((n: ReflexNote) => [n.n, n.e, n.pick, n.fired])).toEqual([
+      [3, "openai", "surprised", "ok"],
+      [6, "openai", "surprised", "rate_limited"],
+    ]);
+    expect(urls.sort()).toEqual(["https://api.openai.com/v1/decisions", "https://api.openai.com/v1/decisions", "https://api.typesafe.ai/v1/systemone", "https://api.typesafe.ai/v1/systemone"]);
     await until(() => cmds(w).length === 2);
     expect(cmds(w)[0]).toEqual({ mood: { mood: "surprised", hold_s: 0, react: true } });
   });
@@ -497,6 +689,67 @@ describe("reflex in the room", () => {
     const settings = ((await w.room.ownerActivity(w.link, { action: "get", query: { kind: "settings" } })) as any).result.entries.map((e: any) => e.data);
     expect(settings).toEqual(expect.arrayContaining([{ mode: "auto", voice: null, reflex: "openai", reflex_compare: true }, { mode: "auto", voice: null, reflex: "off", reflex_compare: true }]));
     expect((await rest(w.backend, "", "POST", `/v1/devices/${DEVICE}/voice`, { reflex: "jev" }, { "x-molty-link-code": "WRONG234" })).status).toBe(401);
+  });
+});
+
+describe("liveliness in the room", () => {
+  const set = (w: Awaited<ReturnType<typeof setup>>, body: Record<string, unknown>) => w.room.voiceSettings(w.link, { action: "set", ...body });
+  const cmds = (w: Awaited<ReturnType<typeof setup>>) => w.dev.log.filter((l) => l.name === "mood" || l.name === "act").map((l) => ({ [l.name!]: l.args }));
+  const trace = async (w: Awaited<ReturnType<typeof setup>>, job: string) => {
+    let entry: any;
+    await until(async () => {
+      entry = ((await w.room.ownerActivity(w.link, { action: "get", query: { job, kind: "job" } })) as any).result.entries[0];
+      return !!entry;
+    });
+    return entry.data.trace;
+  };
+  // Jev unsure: none 0.58, curious 0.42 (a mild pick at normal and lively)
+  const mildJev = async () =>
+    Response.json({ model: "jev-1.14.0", answers: { reaction: { type: "choice", choice: "none", confidence: 0.5, probabilities: { curious: 0.42, none: 0.58 } }, category: { type: "choice", choice: "other", confidence: 0.9 } }, usage: { input_tokens: 300 } });
+  const ramble = "so I was thinking about the bridge and the box and how the words".split(" "); // 14 words
+
+  it("the owner setting: calm | normal | lively, default normal, validated, logged, through REST", async () => {
+    const w = await setup();
+    expect(((await w.room.voiceSettings(w.link, { action: "get" })) as any).result.reflex.liveliness).toBe("normal");
+    expect(await set(w, { liveliness: "hyper" })).toMatchObject({ ok: false, error: "invalid_args" });
+    expect(await set(w, { liveliness: 2 })).toMatchObject({ ok: false, error: "invalid_args" });
+    const r = await rest(w.backend, "", "POST", `/v1/devices/${DEVICE}/voice`, { liveliness: "lively" }, { "x-molty-link-code": w.link });
+    expect(r.body.result.reflex.liveliness).toBe("lively");
+    expect(((await set(w, { liveliness: "calm" })) as any).result.reflex.liveliness).toBe("calm");
+    expect(((await set(w, { liveliness: "normal" })) as any).result.reflex.liveliness).toBe("normal");
+    const settings = ((await w.room.ownerActivity(w.link, { action: "get", query: { kind: "settings" } })) as any).result.entries.map((e: any) => e.data.liveliness).filter(Boolean);
+    expect(settings.sort()).toEqual(["calm", "lively", "normal"]);
+    expect((await rest(w.backend, "", "POST", `/v1/devices/${DEVICE}/voice`, { liveliness: "lively" }, { "x-molty-link-code": "WRONG234" })).status).toBe(401);
+  });
+
+  for (const [lv, expected] of [
+    ["normal", [[3, "ok"], [7, "rate_limited"], [11, "rate_limited"]]],
+    ["lively", [[3, "ok"], [6, "rate_limited"], [9, "rate_limited"], [12, "ok"]]],
+  ] as const) {
+    it(`${lv}: its cadence and gap; a mild pick shows as its soft gesture (a glance, sides alternating), never a mood`, async () => {
+      const w = await setup({ reflexKeys: { jev: KEY_JEV }, fetch: mildJev });
+      await set(w, { reflex: "jev", liveliness: lv });
+      const turn = await w.shake({ words: ramble, chunkMs: 200 }, `shake-${lv}`);
+      await readUntil(w.room, w.a, (e) => e.type === "utterance", [], 8000);
+      const t = await trace(w, turn);
+      expect(t.relay.reflex_cfg).toMatchObject({ engine: "jev", lv });
+      expect(t.relay.reflex.slice(0, expected.length).map((n: ReflexNote) => [n.n, n.fired])).toEqual(expected);
+      expect(t.relay.reflex[0]).toMatchObject({ pick: "curious", soft: true, raw: "none", c: 0.5 });
+      expect(cmds(w)).toEqual(lv === "lively" ? [{ act: { action: "glance_left" } }, { act: { action: "glance_right" } }] : [{ act: { action: "glance_left" } }]);
+    }, 12000);
+  }
+
+  it("calm: the same unsure verdicts show nothing", async () => {
+    const w = await setup({ reflexKeys: { jev: KEY_JEV }, fetch: mildJev });
+    await set(w, { reflex: "jev", liveliness: "calm" });
+    const turn = await w.shake({ words: ramble.slice(0, 9), chunkMs: 30 }, "shake-calm");
+    await readUntil(w.room, w.a, (e) => e.type === "utterance");
+    const t = await trace(w, turn);
+    expect(t.relay.reflex.map((n: ReflexNote) => [n.n, n.pick, n.fired])).toEqual([
+      [3, "none", "none"],
+      [9, "none", "none"],
+    ]);
+    expect(cmds(w)).toEqual([]);
   });
 });
 

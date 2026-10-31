@@ -219,11 +219,11 @@ export const fmtAt = (ms: number) => `${ms < 0 ? '−' : '+'}${s(Math.abs(ms))}`
 /** One reflex decision as a timeline line: engine, pick (+ category), latency, and what became of it. */
 export function reflexLabel(x: Record<string, any>): string {
   const conf = typeof x.c === 'number' && x.e !== 'keywords' ? ` ${Math.round(x.c * 100)}%` : '';
-  const raw = x.raw ? ` (${x.raw} below the gate)` : '';
+  const raw = x.soft ? ` (mild${x.raw ? `: ${x.raw} on top` : ''})` : x.raw ? ` (${x.raw} below the gate)` : '';
   const cat = typeof x.cat === 'string' ? ` ⠂ ${x.cat}` : '';
   const head = x.err ? `reflex ${x.e}: ${x.err}${x.late ? ' (late)' : ''}` : `reflex ${x.e}: ${x.pick}${conf}${raw}${cat}${x.late ? ' (late)' : ''}`;
   const size = `${typeof x.ms === 'number' ? ` ⠂ ${Math.round(x.ms)} ms` : ''}${typeof x.tk === 'number' ? ` ⠂ ${x.tk} tok` : ''}`;
-  const fired = x.fired === undefined ? '' : x.fired === 'ok' ? ' → shown' : x.fired === 'none' ? '' : ` → not shown: ${x.fired}`;
+  const fired = x.fired === undefined ? '' : x.fired === 'ok' ? (x.soft ? ' → shown small' : ' → shown') : x.fired === 'none' ? '' : ` → not shown: ${x.fired}`;
   const fb = x.fb ? ` (fallback: ${x.fb})` : '';
   return `${head}${size}${fired}${fb} (${x.n} words)`;
 }

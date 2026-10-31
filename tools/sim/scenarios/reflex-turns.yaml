@@ -1,0 +1,42 @@
+# Molty's reflex over whole turns: each text is spoken word by word (one stt.partial per word, at
+# `wpm`, default 150), the listen closing `end_ms` after the last word (the box's end of turn). For
+# `molty-sim reflex-turns` (molty_sim/reflex_turns.py): fires per turn, time to the first reaction,
+# decisions that landed after the turn closed, and false fires on neutral turns.
+#
+# kind:
+#   react    something Molty should visibly react to (feelings, news, a joke, a question to it)
+#   explain  a long explanatory turn (Juan's real ones): a few mild reactions are the point
+#            (Molty looks engaged), none is "frozen"; not scored as false fires
+#   neutral  a plain instruction or fact: any reaction is a false fire
+wpm: 150
+end_ms: 600
+turns:
+  # Juan's real short turn (jev decided curious only after the turn closed)
+  - {id: whats-up, kind: react, text: "What's up, Molty? What are you doing?"}
+  - {id: got-job, kind: react, text: "Guess what, I just got the job!"}
+  - {id: grandma, kind: react, text: "My grandmother passed away on Sunday and I'm still a bit shaken."}
+  - {id: coffee, kind: react, text: "Haha, the cat just knocked my coffee onto the dog."}
+  - {id: snow, kind: react, text: "Oh my god, it's snowing in May, can you believe it?"}
+  - {id: italy, kind: react, text: "I'm so excited, we're going to Italy next week for the whole summer."}
+  - {id: fridge, kind: react, text: "How does a fridge actually keep things cold inside?"}
+  - {id: lonely, kind: react, text: "Honestly I've been feeling pretty lonely since everyone moved away last spring."}
+  # long explanatory turns, like Juan's (jev: none at 0.65-0.84 on nearly every chunk)
+  - id: bridge
+    kind: explain
+    text: "So I've been thinking about how we should structure the bridge, because right now the relay does all the classification and the box only streams the words, and I wonder if it would be faster to move the reflex onto the box itself, since it already has the words anyway."
+  - id: firmware
+    kind: explain
+    text: "Okay so the thing with the firmware is that the display driver needs to run on the second core, and the audio task has to stay on the first one, otherwise the frames stutter when the mic is open, which is exactly what happened yesterday when I tried it."
+  - id: day
+    kind: explain
+    text: "Today I went to the market in the morning and then I spent most of the afternoon cleaning up the workshop, and in the evening I finally got the new soldering station working, which took way longer than it should have."
+  - id: plan
+    kind: explain
+    text: "What I want to do next week is finish the enclosure, print three test shells in different colours, and then pick the one that feels the softest in the hand before we order the silicone."
+  # neutral: instructions and plain facts (any reaction is a false fire)
+  - {id: timer, kind: neutral, text: "Can you set a timer for ten minutes?"}
+  - {id: plumber, kind: neutral, text: "Remind me to call the plumber at five."}
+  - {id: jazz, kind: neutral, text: "Play some jazz in the living room."}
+  - {id: milk, kind: neutral, text: "I need to buy milk and eggs on the way home."}
+  - {id: meeting, kind: neutral, text: "The meeting moved to Thursday at three in the small room."}
+  - {id: lights, kind: neutral, text: "Turn off the lights in the kitchen please."}

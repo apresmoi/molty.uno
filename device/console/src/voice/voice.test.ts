@@ -71,8 +71,8 @@ describe('reflex setting', () => {
   const rx = (o: Partial<import('./voice').ReflexStatus> = {}) => ({ mode: 'jev' as const, compare: false, engines: { local: true, jev: true, openai: false, keywords: true }, engine: 'jev' as const, timeout_ms: 600, ...o });
   it('posts the engine and compare mode', async () => {
     const { f, calls } = fakeFetch({ body: { ok: true, result: status({ reflex: rx() }) } });
-    await setVoice(T, { reflex: 'jev', reflex_compare: true }, f);
-    expect(JSON.parse(String(calls[0].init.body))).toEqual({ reflex: 'jev', reflex_compare: true });
+    await setVoice(T, { reflex: 'jev', reflex_compare: true, liveliness: 'lively' }, f);
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ reflex: 'jev', reflex_compare: true, liveliness: 'lively' });
   });
   it('says who reacts, and why not the chosen engine', async () => {
     const { reflexLine } = await import('./voice');
