@@ -554,10 +554,11 @@ static void gen(cute_rt_t *rt, int mood, pose_t *p, float t, jit_t *j, float env
         break;
     }
     case CM_SLEEPY: {
-        p->head[0] = 0.32f * j->a; p->spine[0] = 0.08f; p->rot[0] = 0.06f; p->pos[1] = -0.025f;
+        /* asleep, not down: eyes shut and a slight nod; a low head and half-open eyes read as sad */
+        p->head[0] = 0.12f * j->a; p->spine[0] = 0.04f; p->rot[0] = 0.03f; p->pos[1] = -0.015f;
         float per = 7 * j->f, c = fmodf(t, per) / per;
         if (c > 0.75f) { float q = (c - 0.75f) / 0.25f; p->head[0] += 0.25f * sinf(PI_F * q) * (q < 0.8f ? 1.f : -0.5f); }
-        p->lid = 0.72f + 0.18f * (0.5f + 0.5f * sinf(TAU_F * t / 6));
+        p->lid = 1.f;
         p->eye = EYE_SLEEPY;
         break;
     }
@@ -847,7 +848,7 @@ static void kit_limbs(cute_rt_t *rt, const pose_t *P, const layer_t *L, float dt
         node_t *n = &rt->nodes[rt->sock[CS_SIDE][r].node]; int sd = rt->sock[CS_SIDE][r].side;
         set3(n->rot, n->brot[0] - 0.15f * w[CM_HAPPY] * S->limb_side * sinf(TAU_F * 7 * t + 1), n->brot[1], n->brot[2] + sd * spread);
     }
-    float droop = (w[CM_SLEEPY] * 0.6f - w[CM_LISTENING] * 0.18f - w[CM_SURPRISED] * 0.2f + w[CM_HAPPY] * 0.14f * sinf(TAU_F * 4 * t) + L->ear) * S->limb_ear;
+    float droop = (w[CM_SLEEPY] * 0.2f - w[CM_LISTENING] * 0.18f - w[CM_SURPRISED] * 0.2f + w[CM_HAPPY] * 0.14f * sinf(TAU_F * 4 * t) + L->ear) * S->limb_ear;
     for (int r = 0; r < rt->nsock[CS_EAR]; r++) {
         node_t *n = &rt->nodes[rt->sock[CS_EAR][r].node]; int sd = rt->sock[CS_EAR][r].side;
         set3(n->rot, n->brot[0] + (w[CM_LISTENING] * -0.25f + lagX * 0.8f) * S->limb_ear, n->brot[1], n->brot[2] - sd * droop + lagZ * 1.3f * S->limb_ear);

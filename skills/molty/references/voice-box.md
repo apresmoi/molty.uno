@@ -3,7 +3,7 @@
 Some owners run Molty's speech on their own GPU: Kyutai STT/TTS behind `molty-voice`, a
 "voice box" that pairs with Molty like an agent (same tap) and dials out to the relay. You never
 talk to it: you call `talk` / `say` / `listen` / `ask` exactly as always, and the relay routes the
-speech through the box. Setup is the owner's job
+speech through the box. Setup is the owner's job, with Docker and an NVIDIA GPU
 ([services/molty-voice/README](https://github.com/apresmoi/molty.uno/tree/main/services/molty-voice)); the ways Molty can
 speak at all are in [voice.md](voice.md).
 
