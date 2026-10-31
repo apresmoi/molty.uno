@@ -57,13 +57,13 @@ function compose([html, opt]) {
     return h;
   };
   /** A Molty slot (the hero's, one Molty, no cycling), with or without its device. */
-  const moltySlot = (cls, device) => {
+  const moltySlot = (cls, device, id = opt.molty) => {
     const s = slot.cloneNode(false);
-    s.dataset.fluidMolty = opt.molty;
+    s.dataset.fluidMolty = id;
     s.dataset.fluidDelay = String(opt.moltyDelay ?? 0.3);
     delete s.dataset.fluidEvery;
     delete s.dataset.fluidRunIn;
-    s.classList.add(cls);
+    s.classList.add(...cls.split(' '));
     const img = still.cloneNode(false);
     s.append(img);
     if (device) s.append(heroDevice.cloneNode(true));
@@ -81,6 +81,17 @@ function compose([html, opt]) {
     const mark = el('div', 'og-mark');
     mark.append(brand.cloneNode(true));
     card.append(moltySlot('og-screen', true), mark);
+  } else if (opt.name.startsWith('family')) {
+    // B2: the brand on a max-size screen, the main Molty under it, and the sides alive: the
+    // fluid pools there and two companions emerge from it, half veiled (dimmer, smaller)
+    const screen = el('div', 'og-screen');
+    screen.append(heroDevice.cloneNode(true), word('molty.UNO', 'og-word'), moltySlot('og-under', false));
+    const side = (cls, id) => {
+      const zone = el('div', `og-side-zone ${cls}`);
+      zone.setAttribute('data-fluid-pool', '');
+      return [zone, moltySlot(`og-companion ${cls}`, false, id), el('div', `og-veil ${cls}`)];
+    };
+    card.append(screen, ...side('og-left', opt.companions[0]), ...side('og-right', opt.companions[1]));
   } else if (opt.name === 'brand') {
     // the brand ON the screen: the fluid condenses the wordmark there, the Molty under it
     const screen = el('div', 'og-screen');
@@ -114,7 +125,7 @@ function compose([html, opt]) {
 
 /** Inked pixels in a box of a screenshot: far from the card's background (its top-left
  *  pixel), past the field's dim braille, in either theme. */
-async function ink(png, box, bright = false) {
+async function ink(png, box, bright = 0) {
   const clip = { left: Math.max(0, Math.round(box.x)), top: Math.max(0, Math.round(box.y)) };
   clip.width = Math.min(1200 - clip.left, Math.round(box.width));
   clip.height = Math.min(630 - clip.top, Math.round(box.height));
@@ -122,28 +133,45 @@ async function ink(png, box, bright = false) {
   const { data: bg } = await sharp(png).extract({ left: 0, top: 0, width: 1, height: 1 }).removeAlpha().raw().toBuffer({ resolveWithObject: true });
   let n = 0;
   for (let i = 0; i < data.length; i += info.channels)
-    if (bright ? Math.min(data[i], data[i + 1], data[i + 2]) > 200 : Math.abs(data[i] - bg[0]) + Math.abs(data[i + 1] - bg[1]) + Math.abs(data[i + 2] - bg[2]) > 240) n++;
+    if (bright ? Math.min(data[i], data[i + 1], data[i + 2]) > bright : Math.abs(data[i] - bg[0]) + Math.abs(data[i + 1] - bg[1]) + Math.abs(data[i + 2] - bg[2]) > 240) n++;
   return n;
 }
 
 /** The moment, from frames every ~20 ms across a window (ms after the card is ready): the one
- *  whose Molty's face reads best (the most near-white pixels in its slot: its eyes). With a
- *  `band`, only frames that catch the wordmark MID-condense count (its ink within that share
- *  of its final ink: half fluid, half letters); the condense takes ~0.4 s, so a fixed delay
- *  would land on either side of it. */
-async function pickFrame(page, { from, to, band }) {
-  const slot = await page.locator('[data-fluid-molty]').boundingBox();
-  const word = band && (await page.locator('.og-word').boundingBox());
+ *  whose Molty (`face`: its slot) reads best (the most near-white pixels, every channel over
+ *  `white`: its eyes; raise it for a pale Molty, so its body does not count). With a `band`,
+ *  only frames whose wordmark ink is within that share of its
+ *  final ink count: mid-condense (half fluid, half letters; the condense takes ~0.4 s, so a
+ *  fixed delay would land on either side of it) or fully formed. */
+async function pickFrame(page, { from, to, band, face = '[data-fluid-molty]', white = 200, stir }) {
+  const slot = await page.locator(face).first().boundingBox();
+  const word = band && (await page.locator('.og-word').first().boundingBox());
   await page.waitForTimeout(from);
   const frames = [];
-  for (const end = Date.now() + (to - from); Date.now() < end; ) frames.push(await page.screenshot());
-  let pool = await Promise.all(frames.map(async (png) => ({ png, m: await ink(png, slot, true), w: 1 })));
+  const end = Date.now() + (to - from);
+  // `stir`: the pointer sweeps these boxes meanwhile and taps in them (the page fluid's window
+  // pointer: a move drags the field, a pointerdown ripples it), so the field there flows
+  // instead of resting as faint dots
+  const stirring = stir && (async () => {
+    for (let k = 0; Date.now() < end; k++)
+      for (const [x, y, w, h] of stir) {
+        const at = (a) => [x + w * (0.5 + 0.42 * Math.cos(a)), y + h * (0.5 + 0.42 * Math.sin(a * 1.7))];
+        await page.mouse.move(...at(k * 2.3), { steps: 2 });
+        await page.mouse.down();
+        await page.mouse.up();
+        await page.mouse.move(...at(k * 2.3 + 1.4), { steps: 4 });
+        await page.waitForTimeout(60);
+      }
+  })();
+  while (Date.now() < end) frames.push(await page.screenshot());
+  await stirring;
+  let pool = await Promise.all(frames.map(async (png) => ({ png, m: await ink(png, slot, white), w: 1 })));
   if (band) {
     await page.waitForTimeout(2000);
     const full = await ink(await page.screenshot(), word);
     for (const f of pool) f.w = (await ink(f.png, word)) / full;
     pool = pool.filter((f) => f.w >= band[0] && f.w <= band[1]);
-    if (!pool.length) throw new Error('no frame caught the wordmark mid-condense');
+    if (!pool.length) throw new Error(`no frame has the wordmark in its band (${band})`);
   }
   const best = pool.sort((a, b) => b.m - a.m)[0];
   console.log(`     ${frames.length} frames${band ? `, wordmark at ${(best.w * 100).toFixed(0)} % of its ink` : ''}`);
@@ -203,6 +231,14 @@ for (const opt of OPTIONS) {
       const sheet = sheets.find((x) => x.stem === stem) ?? (sheets.push({ stem, cards: [] }), sheets.at(-1));
       const label = (id) => `${opt.prefix ?? ''}${catalog.find((c) => c.id === id)?.name ?? id}`;
       sheet.cards.push(...moltys.map((id) => [file(id), label(id)]));
+    } else if (opt.moltyDir) {
+      // a card with its own folder (B2): <outDir>/<moltyDir>/<file>.png, on that folder's sheet
+      mkdirSync(`${OUT}/${opt.moltyDir}`, { recursive: true });
+      const file = `${opt.moltyDir}/${opt.file}${suffix}`;
+      jobs.push(() => render(opt, theme, file));
+      const stem = `${opt.moltyDir}/contact-sheet${suffix}`;
+      const sheet = sheets.find((x) => x.stem === stem) ?? (sheets.push({ stem, cards: [] }), sheets.at(-1));
+      sheet.cards.push([file, opt.file]);
     } else jobs.push(() => render(opt, theme, `${opt.file}${suffix}`));
   }
 }
