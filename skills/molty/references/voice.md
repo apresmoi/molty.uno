@@ -29,7 +29,8 @@ emote with `mood`. Speak through your own channel (the terminal, chat) for anyth
 - **`relay.caps`** (from `status`): `say` / `listen` = this board has a speaker / mic. That is
   hardware, not the voice: check the next point too.
 - **`relay.voice`** (from `status`): who would speak right now — `box` (the owner's voice box),
-  the cloud provider's name (`workers-ai`, `openai`), `none` (no voice), or `voice_box_offline`
+  the cloud provider's name (`workers-ai`, `openai`), `none` (no voice), `voice_off` (the owner chose
+  text only), or `voice_box_offline`
   (the owner chose `box` and it is down).
 - **Every say / listen timing** carries `voice` (`timings.voice`; for talk / ask
   `timings.say.voice` and `timings.listen.voice`), and the activity log records it per job.
@@ -39,3 +40,11 @@ emote with `mood`. Speak through your own channel (the terminal, chat) for anyth
 
 Check `relay.voice` once after pairing and when speech misbehaves; don't call `status` before
 every turn.
+
+## Text only
+
+The owner can turn voice off in setup. `relay.voice` is then `voice_off`, and `relay.setup` says what
+they chose (`{voice, first_words, reflex}`). `say`, `talk` and `ask` show your words on the screen,
+and a talk returns `reason: "voice_off"` without listening. `listen` fails with `voice_off`, `quick`
+answers `{skipped: "voice_off"}`, and a shake is declined, so no `utterance` arrives. Cues still work.
+Reach the human with `ask` buttons, emotes, and your normal chat.
