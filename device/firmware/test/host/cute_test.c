@@ -9,7 +9,8 @@
  *     <outdir>/<id>_moods.ppm when an outdir is given;
  *   - plays every one-shot action (cute_act.h) over idle: each one moves the creature's
  *     target, ends back where it started, and costs little per frame (timed against idle);
- *     <outdir>/<id>_acts.ppm shows each action at its peak.
+ *     <outdir>/<id>_acts.ppm shows each action at its peak, <id>_work.ppm the work actions
+ *     (inspect, paddle) in real time.
  * And once: the actions' curves equal their JS twin's (device/creatures/js/actions.js),
  * sample for sample, as pinned in act_golden.txt (-g <file>); every action starts and ends
  * at a zero offset and never jumps between frames.
@@ -123,6 +124,21 @@ static float pose_mag(const cute_act_pose_t *p) {
 }
 
 /* the JS twin's samples (act_golden.txt) against cute_act_pose */
+/* paddle's strokes: odd and even (both sides), each once, none as it settles; nothing else splashes */
+static void test_splash(void) {
+    int n = 0, sides[2] = { 0 }, last = 0;
+    const float d = cute_act_dur(CA_PADDLE);
+    for (float t = 1.f / 60.f; t <= d; t += 1.f / 60.f) {
+        int k = cute_act_splash(CA_PADDLE, t - 1.f / 60.f, t);
+        if (!k) continue;
+        n++; sides[k & 1]++;
+        CHECK(k > last && t <= d - CUTE_PADDLE_REST_S, "paddle: stroke %d at %.2f s", k, t);
+        last = k;
+    }
+    CHECK(n >= 4 && sides[0] && sides[1], "paddle: %d strokes (%d / %d a side)", n, sides[0], sides[1]);
+    CHECK(!cute_act_splash(CA_NOD, 0.f, 1.f), "only paddle splashes");
+}
+
 static void test_act_golden(const char *path) {
     FILE *f = fopen(path, "r");
     if (!f) { CHECK(0, "open %s", path); return; }
@@ -131,16 +147,16 @@ static void test_act_golden(const char *path) {
     float last_t[CUTE_N_ACTS] = { 0 };
     while (fgets(line, sizeof(line), f)) {
         if (line[0] == '#') continue;
-        float t, v[17];
-        int n = sscanf(line, "%31s %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f", name, &t,
-                       &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7], &v[8], &v[9], &v[10], &v[11], &v[12], &v[13], &v[14], &v[15], &v[16]);
-        if (n != 19) { CHECK(0, "act golden: bad row %s", line); continue; }
+        float t, v[19];
+        int n = sscanf(line, "%31s %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f", name, &t,
+                       &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7], &v[8], &v[9], &v[10], &v[11], &v[12], &v[13], &v[14], &v[15], &v[16], &v[17], &v[18]);
+        if (n != 21) { CHECK(0, "act golden: bad row %s", line); continue; }
         int a = cute_act_lookup(name);
         if (a < 0) { CHECK(0, "act golden: the JS has an action the firmware lacks: %s", name); continue; }
         seen[a]++; last_t[a] = t; rows++;
         cute_act_pose_t p; cute_act_pose(a, t, &p);
         const float *c = (const float *)&p;
-        for (int k = 0; k < 17; k++) if (fabsf(c[k] - v[k]) > 2e-4f) {
+        for (int k = 0; k < 19; k++) if (fabsf(c[k] - v[k]) > 2e-4f) {
             if (bad++ < 5) printf("  act %s t=%.2f field %d: C %.6f JS %.6f\n", name, t, k, c[k], v[k]);
         }
     }
@@ -256,6 +272,46 @@ static void test_act_render(const char *path, const char *outdir) {
           (acting - idle) / REPS * 1e6, whole * 1e6);
     cute_rt_destroy(rt);
     if (outdir) {
+        /* the work actions over time, the fluid live, splashes too: 8 stills of each. For framing and timing: without the device's frame loop the surface reads rougher than it does there */
+        enum { WORK_STILLS = 16 };
+        uint16_t *still[WORK_STILLS];
+        cute_rt_t *wk = cute_rt_create(&S, 99);
+        fluid_sim_t *ws = fluid_sim_create(W, H, FLUID_STAGE_REF);
+        ws->edge_w = 1.f;
+        int n_still = 0; float clock = 0.f;
+        for (int part = 0; part < 2; part++) {
+            const int act = part ? CA_PADDLE : CA_INSPECT, total = (int)(cute_act_dur(act) * 30.f);
+            for (int pre = 0; pre < 60; pre++) {
+                cute_rt_update(wk, 1.f / 30.f); cute_rt_raster(wk, W, H); cute_rt_fill(wk, ws, 1.f);
+                ws->p.hold = 1.f; ws->p.relax_up = 2.6f; ws->p.relax_down = 3.4f; ws->p.tint_rate = 12.f;
+                fluid_sim_background(ws, clock, 0.5f, (pre & 1) == 0); fluid_sim_swirl_field(ws);
+                fluid_sim_step(ws, 1.f / 60); fluid_sim_step(ws, 1.f / 60); fluid_sim_color(ws, 1.f / 30); clock += 1.f / 30.f;
+            }
+            cute_rt_act(wk, act);
+            float t0 = 0.f;
+            for (int k = 0; k < total; k++) {
+                cute_rt_update(wk, 1.f / 30.f); cute_rt_raster(wk, W, H); cute_rt_fill(wk, ws, 1.f);
+                const float at = cute_rt_act_time(wk);
+                const int stroke = cute_act_splash(cute_rt_acting(wk), t0, at);
+                t0 = at;
+                if (stroke) fluid_sim_impulse(ws, stroke & 1 ? -0.6f : 0.6f, 0.5f, 1.2f, 0.09f);
+                fluid_sim_background(ws, clock, 0.5f, (k & 1) == 0); fluid_sim_swirl_field(ws);
+                fluid_sim_step(ws, 1.f / 60); fluid_sim_step(ws, 1.f / 60); fluid_sim_color(ws, 1.f / 30); fluid_sim_view(ws);
+                clock += 1.f / 30.f;
+                if (k % (total / 8) == total / 16 && n_still < (part + 1) * 8) {
+                    still[n_still] = calloc(FLUID_STAGE_REF * FLUID_STAGE_REF, 2);
+                    fluid_sim_snapshot(ws, fr, false);
+                    fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, clock, 0.f, NULL, 0, " .:-=+*#", font };
+                    int y0, y1; fluid_draw(d, fr, still[n_still++], &o, &y0, &y1);
+                }
+            }
+        }
+        char wp[512]; const char *wid = strncmp(S.id, "cute-", 5) == 0 ? S.id + 5 : S.id;
+        snprintf(wp, sizeof(wp), "%s/%s_work.ppm", outdir, wid);
+        write_sheet(wp, still, n_still);
+        for (int k = 0; k < n_still; k++) free(still[k]);
+        fluid_sim_destroy(ws); cute_rt_destroy(wk);
+
         char p[512]; const char *id = strncmp(S.id, "cute-", 5) == 0 ? S.id + 5 : S.id;
         snprintf(p, sizeof(p), "%s/%s_acts.ppm", outdir, id);
         write_sheet(p, fbs, CUTE_N_ACTS);
@@ -317,6 +373,7 @@ int main(int argc, char **argv) {
         test_file(argv[i], outdir);
     }
     test_act_curves();
+    test_splash();
     if (golden) test_act_golden(golden);
     else CHECK(0, "no act golden given (-g act_golden.txt)");
     if (first) test_act_render(first, outdir);

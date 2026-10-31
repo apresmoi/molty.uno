@@ -38,7 +38,9 @@ extern "C" {
     X(WOBBLE, "wobble", 1.6f)      \
     X(STRETCH, "stretch", 1.8f)    \
     X(LOOK_UP, "look_up", 1.6f)    \
-    X(YAWN, "yawn", 2.6f)
+    X(YAWN, "yawn", 2.6f)          \
+    X(INSPECT, "inspect", 4.8f)    \
+    X(PADDLE, "paddle", 3.6f)
 
 #define CUTE_ACT_ENUM(id, name, dur) CA_##id,
 enum { CUTE_ACTIONS(CUTE_ACT_ENUM) CUTE_N_ACTS };
@@ -68,7 +70,12 @@ static inline int cute_act_lookup(const char *s) {
 typedef struct {
     float pos[3], rot[3], head[3], spine[3];
     float squash, lid, look[2], mouth;
+    float zoom, focus;   /* the camera: 0 = framed as usual; zoom × larger, focus 0..1 toward an eye */
 } cute_act_pose_t;
+
+/* paddle's strokes: one splash every CUTE_PADDLE_STROKE_S, none in its last CUTE_PADDLE_REST_S */
+#define CUTE_PADDLE_STROKE_S 0.625f
+#define CUTE_PADDLE_REST_S   0.4f
 
 /* smoothstep 0..1 of x */
 static inline float cute_act_ss(float x) { x = x < 0.f ? 0.f : x > 1.f ? 1.f : x; return x * x * (3.f - 2.f * x); }
@@ -167,8 +174,39 @@ static inline void cute_act_pose(int a, float t, cute_act_pose_t *o) {
         o->mouth = t < 2.2f ? 0.85f * m : 0.f;
         break;
     }
+    case CA_INSPECT: {           /* right up to the camera, one eye filling the screen: looks around, backs off */
+        float e = cute_act_env(t, d, 0.9f, 0.9f), s = sinf(TAU * 0.55f * (t - 0.9f));
+        float look = cute_act_ss((t - 0.9f) / 0.4f) * e;
+        o->zoom = 5.5f * e;
+        o->focus = e;
+        o->look[0] = 0.8f * s * look;
+        o->look[1] = 0.25f * sinf(TAU * 0.3f * (t - 0.9f)) * look;
+        o->head[1] = 0.1f * s * look;
+        o->lid = cute_act_bump(t, 3.2f, 3.5f);
+        break;
+    }
+    case CA_PADDLE: {            /* bobbing in the water, rocking with each stroke (cute_act_splash) */
+        float e = cute_act_env(t, d, 0.3f, 0.5f), b = sinf(TAU * 1.6f * t);
+        o->pos[1] = 0.05f * e * b;
+        o->rot[2] = 0.1f * e * sinf(TAU * 0.8f * t);
+        o->spine[0] = 0.08f * e;
+        o->head[0] = 0.1f * e;
+        o->look[1] = -0.4f * e;
+        o->squash = -0.04f * e * b;
+        break;
+    }
     default: break;
     }
+}
+
+/**
+ * The stroke that falls in action `a`'s time (t0, t1]: its number (1, 2, ...; odd = one side,
+ * even = the other), 0 = none. The fluid ripples at each one: the action's real splash.
+ */
+static inline int cute_act_splash(int a, float t0, float t1) {
+    if (a != CA_PADDLE || t1 > cute_act_dur(a) - CUTE_PADDLE_REST_S) return 0;
+    int k0 = (int)floorf(t0 / CUTE_PADDLE_STROKE_S), k1 = (int)floorf(t1 / CUTE_PADDLE_STROKE_S);
+    return k1 > k0 ? k1 : 0;
 }
 
 #ifdef __cplusplus
