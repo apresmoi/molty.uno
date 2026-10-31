@@ -40,7 +40,8 @@ else
     case "$p" in
       # the console: its own sources + the creature engine and .molty files it imports
       # (vite aliases @viewer/@molty) and its e2e loads; firmware bakes the built page
-      device/console/*|device/creatures/*) hit console console_e2e firmware ;;
+      # (the console's colours and type come from the website's tokens)
+      device/console/*|device/creatures/*|apps/website/src/styles/tokens.css) hit console console_e2e firmware ;;
     esac
     case "$p" in
       # the website renders the console's Molty catalog (@molty-catalog)

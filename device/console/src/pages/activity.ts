@@ -288,29 +288,29 @@ function traceSvg(m: TraceModel): SVGElement {
   const W = 360, H = 118, span = Math.max(1, m.to - m.from);
   const x = (at: number) => +(((at - m.from) / span) * W).toFixed(1);
   const kids: SVGElement[] = [];
-  const tone = (t: string) => (t === 'err' ? 'var(--err)' : t === 'warn' ? 'var(--warn)' : t === 'ok' ? 'var(--accent)' : 'var(--dim)');
+  const tone = (t: string) => (t === 'err' ? 'var(--err)' : t === 'warn' ? 'var(--m-warn)' : t === 'ok' ? 'var(--m-accent)' : 'var(--m-dim)');
   for (const e of m.events) kids.push(svg('line', { x1: x(e.at), x2: x(e.at), y1: 0, y2: 100, stroke: tone(e.tone), 'stroke-width': 0.6, 'stroke-dasharray': '2 2', opacity: 0.8 }, svg('title', {}, `${fmtAt(e.at)} ${e.label}`)));
   // level: -90 dBFS = empty, 0 dBFS = full (30 px)
   const bw = Math.max(0.6, (100 / span) * W - 0.3);
   for (const l of m.levels) {
     const v = Math.max(0, Math.min(1, (l.db + 90) / 90)), hh = Math.max(0.5, v * 30);
-    kids.push(svg('rect', { x: x(l.at), y: 32 - hh, width: bw, height: hh, fill: 'var(--accent)', opacity: 0.75 }));
+    kids.push(svg('rect', { x: x(l.at), y: 32 - hh, width: bw, height: hh, fill: 'var(--m-accent)', opacity: 0.75 }));
   }
   for (const c of m.clips) kids.push(svg('circle', { cx: x(c.at + 50), cy: 3, r: 2, fill: 'var(--err)' }, svg('title', {}, `${c.n} clipped`)));
-  for (const [a, b] of m.speech) kids.push(svg('rect', { x: x(a), y: 38, width: Math.max(1, x(b) - x(a)), height: 6, rx: 2, fill: 'var(--accent)', opacity: 0.5 }));
-  for (const w of m.words) kids.push(svg('line', { x1: x(w.at), x2: x(w.at), y1: 46, y2: 52, stroke: 'var(--ink)', 'stroke-width': 0.8 }, svg('title', {}, w.text)));
+  for (const [a, b] of m.speech) kids.push(svg('rect', { x: x(a), y: 38, width: Math.max(1, x(b) - x(a)), height: 6, rx: 2, fill: 'var(--m-accent)', opacity: 0.5 }));
+  for (const w of m.words) kids.push(svg('line', { x1: x(w.at), x2: x(w.at), y1: 46, y2: 52, stroke: 'var(--m-ink)', 'stroke-width': 0.8 }, svg('title', {}, w.text)));
   if (m.pause.length > 1) {
     const pts = m.pause.map((p) => `${x(p.at)},${(78 - p.v * 22).toFixed(1)}`).join(' ');
-    kids.push(svg('polyline', { points: pts, fill: 'none', stroke: 'var(--warn)', 'stroke-width': 1 }));
-    if (m.threshold !== undefined) kids.push(svg('line', { x1: 0, x2: W, y1: 78 - m.threshold * 22, y2: 78 - m.threshold * 22, stroke: 'var(--faint)', 'stroke-dasharray': '3 3' }));
+    kids.push(svg('polyline', { points: pts, fill: 'none', stroke: 'var(--m-warn)', 'stroke-width': 1 }));
+    if (m.threshold !== undefined) kids.push(svg('line', { x1: 0, x2: W, y1: 78 - m.threshold * 22, y2: 78 - m.threshold * 22, stroke: 'var(--m-faint)', 'stroke-dasharray': '3 3' }));
   }
-  for (const f of m.frames) kids.push(svg('circle', { cx: x(f.at), cy: 88, r: f.rt ? 2.4 : 1.6, fill: f.rt ? 'var(--warn)' : 'var(--dim)' }, svg('title', {}, `frame ${f.seq}${f.rt ? `, ${f.rt} failed sends` : ''}`)));
+  for (const f of m.frames) kids.push(svg('circle', { cx: x(f.at), cy: 88, r: f.rt ? 2.4 : 1.6, fill: f.rt ? 'var(--m-warn)' : 'var(--m-dim)' }, svg('title', {}, `frame ${f.seq}${f.rt ? `, ${f.rt} failed sends` : ''}`)));
   const lostEv = m.events.filter((e) => e.tone === 'err' && e.lane === 'relay');
   for (const e of lostEv) kids.push(svg('rect', { x: x(e.at) - 2, y: 84, width: 4, height: 8, fill: 'var(--err)' }));
   // t0 gets a label only when it is clear of both ends (labels ~40 px wide)
   const axis = [m.from, ...(x(0) > 40 && x(0) < W - 40 ? [0] : []), m.to].filter((v, i, a) => a.indexOf(v) === i);
-  for (const t of axis) kids.push(svg('text', { x: Math.min(W - 2, Math.max(2, x(t))), y: 112, 'font-size': 9, fill: 'var(--dim)', 'text-anchor': t === m.from ? 'start' : t === m.to ? 'end' : 'middle' }, fmtAt(t)));
+  for (const t of axis) kids.push(svg('text', { x: Math.min(W - 2, Math.max(2, x(t))), y: 112, 'font-size': 9, fill: 'var(--m-dim)', 'text-anchor': t === m.from ? 'start' : t === m.to ? 'end' : 'middle' }, fmtAt(t)));
   const labels: Array<[number, string]> = [[12, 'level'], [44, 'speech'], [70, 'pause'], [91, 'frames']];
-  for (const [y, t] of labels) kids.push(svg('text', { x: W - 1, y, 'font-size': 8, fill: 'var(--faint)', 'text-anchor': 'end' }, t));
+  for (const [y, t] of labels) kids.push(svg('text', { x: W - 1, y, 'font-size': 8, fill: 'var(--m-faint)', 'text-anchor': 'end' }, t));
   return svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'act-trace-svg', role: 'img', 'aria-label': 'turn timeline' }, ...kids);
 }

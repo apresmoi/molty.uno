@@ -359,6 +359,11 @@ const canvasStats = (page) => page.evaluate(() => {
   ok(true, 'settings agent: shows a pending pair');
   ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'settings agent: no horizontal scroll at 390px');
   await shot(page, '11-settings-agent');
+  const themeBefore = await page.evaluate(() => document.documentElement.dataset.theme);
+  await page.locator('header .theme').click();
+  ok(await page.evaluate((was) => { const t = document.documentElement.dataset.theme; return t !== was && localStorage.getItem('molty-theme') === t; }, themeBefore), 'theme: the switch flips and keeps the theme');
+  await shot(page, '11-settings-agent-other-theme');
+  await page.locator('header .theme').click();
   await mock('decide', { ok: true });
   // Voice card: the owner's voice box, through the relay with the link code from GET /api/link
   const vc = page.locator('.voice.card');
