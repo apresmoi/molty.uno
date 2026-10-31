@@ -2,7 +2,7 @@
 // chrome); afterwards the settings tabs (#/<page>). Hash routing keeps it one static file.
 import { DeviceApi } from './api/device';
 import { defaultCatalog, type CreatureCatalog } from './catalog/catalog';
-import { animateBraille } from './ui/braille';
+import { brand, themeToggle } from './ui/brand';
 import { h, mount, type Page } from './ui/dom';
 import { statusPage } from './pages/status';
 import { wifiPage } from './pages/wifi';
@@ -21,10 +21,10 @@ export interface AppCtx {
 
 const PAGES: Array<{ id: string; label: string; page: Page }> = [
   { id: 'status', label: 'home', page: statusPage },
-  { id: 'wifi', label: 'wi-fi', page: wifiPage },
   { id: 'molty', label: 'molty', page: creaturePage },
-  { id: 'agent', label: 'agent', page: agentPage },
   { id: 'voice', label: 'voice', page: voicePage },
+  { id: 'agent', label: 'agent', page: agentPage },
+  { id: 'wifi', label: 'wi-fi', page: wifiPage },
   { id: 'activity', label: 'activity', page: activityPage },
   { id: 'diag', label: 'diag', page: diagPage },
 ];
@@ -40,17 +40,15 @@ export function start(root: HTMLElement) {
   const catalog = defaultCatalog();
   const nav = h('nav', { 'aria-label': 'pages' });
   const main = h('main');
-  const field = h('pre', { class: 'field', 'aria-hidden': 'true' });
   const target = api.base ? h('span', { class: 'target', title: 'device override (?device=)' }, '→ ', api.label) : null;
   const shell = h('div', { class: 'shell' },
     h('header', null,
-      h('a', { class: 'brand', href: '#/status' }, h('span', { class: 'mark' }, '⣿'), ' molty'),
-      target, nav),
-    field, main,
+      brand('#/status'),
+      target, nav, themeToggle()),
+    main,
     h('footer', null, 'molty console ⠂ ', h('a', { href: '#/setup/wifi' }, 'run setup again'), ' ⠂ ', h('a', { href: '#/licences' }, 'licences')));
   const setup = h('div', { class: 'setup-root' });
   mount(root, shell, setup);
-  animateBraille(field, 64, 3, 0.42);
 
   let cleanup: (() => void) | void;
   const route = () => {
@@ -64,7 +62,7 @@ export function start(root: HTMLElement) {
       shell.hidden = true; setup.hidden = false;
       document.body.classList.add('in-setup');
       const page = h('section', { class: 'page', 'data-page': 'setup' });
-      mount(setup, page);
+      mount(setup, h('header', null, brand(), themeToggle()), page);
       mount(main);
       cleanup = setupPage(page, ctx, b || 'wifi');
       return;

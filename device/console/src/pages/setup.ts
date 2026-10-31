@@ -12,12 +12,12 @@ import type { LinkInfo, WifiNetwork, WifiStatus } from '../api/types';
 import { pairBaseline, pairView } from '../agents/pairing';
 import type { AppCtx } from '../app';
 import type { CreatureEntry } from '../catalog/catalog';
-import { FILLER_DEFAULT_MS, FILLER_OFF } from '../filler/filler';
 import { linkContext, linkPanel, relayLine } from '../ui/agent-link';
 import { h, mount } from '../ui/dom';
 import { errText } from '../ui/fmt';
 import { moltyScreen } from '../ui/screen';
-import { gapOptions, getVoice, reflexOptions, setVoice, voiceOptions, type GapFill, type ReflexMode, type SetupOption, type VoiceMode, type VoiceStatus, type VoiceTarget } from '../voice/voice';
+import { applyGap, gapOptions, getVoice, reflexOn, reflexOptions, setVoice, voiceOn, voiceOptions, type GapFill, type ReflexMode, type VoiceMode, type VoiceStatus, type VoiceTarget } from '../voice/voice';
+import { choices, type Choice } from '../ui/kit';
 
 type Step = 'wifi' | 'pass' | 'joining' | 'molty' | 'agent' | 'tap' | 'voice' | 'gap' | 'reflex' | 'done';
 /** Signal as the mock's block bars (▂▄▆█, _ for missing). */
@@ -251,7 +251,7 @@ export function setupPage(root: HTMLElement, { api, catalog }: AppCtx, first = '
   }
 
   // ── 4. Voice, the gap, reflex: what the owner's tools can do ─────────────────
-  let voice: VoiceStatus | null = null, target: VoiceTarget | null = null, saving = false, saveErr = '';
+  let voice: VoiceStatus | null = null, target: VoiceTarget | null = null, saveErr = '';
 
   /** Asks the relay once; one that can't answer (offline, too old) skips these steps. */
   async function loadVoice() {
@@ -263,25 +263,18 @@ export function setupPage(root: HTMLElement, { api, catalog }: AppCtx, first = '
     } catch { if (alive && step === 'voice') go('done'); }
   }
 
-  function chooser<T extends string>(q: string, hint: string, options: SetupOption<T>[], on: T | undefined, pick: (id: T) => Promise<void>) {
+  function chooser<T extends string>(q: string, hint: string, options: Choice<T>[], on: T | undefined, pick: (id: T) => Promise<void>) {
     say(q, saveErr ? `Couldn’t save that (${saveErr})` : hint);
-    mount(body, h('div', { class: 'list' }, options.map((o) => h('button', {
-      class: 'opt choice' + (o.id === on ? ' on' : ''), type: 'button',
-      onclick: async () => {
-        if (saving) return;
-        saving = true; saveErr = '';
-        try { await pick(o.id); } catch (e) { saveErr = errText(e); }
-        saving = false;
-        if (saveErr) render();
-      },
-    }, h('span', null, o.label), h('span', { class: 'meta' }, o.hint)))));
+    mount(body, choices(q, options, on, async (id) => {
+      saveErr = '';
+      try { await pick(id); } catch (e) { saveErr = errText(e); render(); }
+    }));
   }
 
   function renderVoice() {
     if (!voice) { say('Should I talk?'); return mount(body, wait('Asking the relay…')); }
     const v = voice;
-    const on = v.mode === 'auto' ? (v.serving.tts === 'box' ? 'box' : 'cloud') : v.mode;
-    chooser<VoiceMode>('Should I talk?', 'You can change this any time', voiceOptions(v), on, async (id) => {
+    chooser<VoiceMode>('Should I talk?', 'You can change this any time', voiceOptions(v), voiceOn(v), async (id) => {
       voice = await setVoice(target!, { mode: id });
       go(id === 'off' ? 'done' : 'gap');
     });
@@ -289,17 +282,14 @@ export function setupPage(root: HTMLElement, { api, catalog }: AppCtx, first = '
 
   function renderGap() {
     const on = voice!.first_words?.mode === 'opener' ? 'local' : undefined;
-    chooser<GapFill>('Agents can be slow. What should I do meanwhile?', 'Until your agent speaks', gapOptions(voice!), on, async (id) => {
-      voice = await setVoice(target!, { first_words: id === 'local' ? 'opener' : 'off' });
-      // a delay the owner tuned stays
-      if (id === 'off') await api.fluid({ filler_ms: FILLER_OFF });
-      else if (id === 'phrases' && !(await api.creatureState()).filler_ms) await api.fluid({ filler_ms: FILLER_DEFAULT_MS });
+    chooser<GapFill>('Agents can be slow. What should I do meanwhile?', 'Until your agent answers', gapOptions(voice!), on, async (id) => {
+      voice = await applyGap(target!, id, api);
       go('reflex');
     });
   }
 
   function renderReflex() {
-    chooser<ReflexMode>('Should I react while you talk?', 'Who picks my emotes', reflexOptions(voice!), voice!.reflex?.mode, async (id) => {
+    chooser<ReflexMode>('Should I react while you talk?', 'Little reactions while you speak', reflexOptions(voice!), reflexOn(voice!.reflex), async (id) => {
       voice = await setVoice(target!, { reflex: id });
       go('done');
     });

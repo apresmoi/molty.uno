@@ -14,6 +14,7 @@ import { getSpeech, resetSpeech, SpeechApiError, speechRows, type SpeechStats } 
 import { linkContext } from '../ui/agent-link';
 import { h, mount, note } from '../ui/dom';
 import { errText } from '../ui/fmt';
+import { more, pageHead, section, toggle } from '../ui/kit';
 
 const POLL_MS = 3000;
 const LINK_MS = 60000;   // the link code rotates every 15 min
@@ -42,9 +43,8 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
   const msg = h('div', { 'aria-live': 'polite' });
   const list = h('div', { class: 'act-list' });
   mount(root,
-    h('h1', null, 'activity ', h('span', { class: 'dim' }, '⠶ what happened, and who did it')),
-    h('p', { class: 'lede' }, 'Every agent call and turn on this Molty, the device’s own log lines for it, and what Molty itself did — the last 24 h, kept by the relay.'),
-    controls, msg, list, habits, settings);
+    ...pageHead('Activity', 'What happened on this Molty and which agent did it, for the last 24 hours.'),
+    controls, msg, list, settings, more('How you talk', habits));
 
   async function loadLink() {
     clearTimeout(linkTimer);
@@ -88,7 +88,7 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
       } catch (e) {
         if (e instanceof ActivityApiError && e.code === 'unsupported') unsupported = true;
         else if (e instanceof ActivityApiError && e.code === 'unauthorized') void loadLink();   // the code rotated
-        else problem = e instanceof ActivityApiError && e.code === 'unreachable' ? 'can’t reach the relay — is Molty online?' : (e as Error).message;
+        else problem = e instanceof ActivityApiError && e.code === 'unreachable' ? 'Can’t reach the relay. Is Molty online?' : (e as Error).message;
       } finally { busy = false; }
       // re-render only on news: an open select or a scrolled list must survive the poll
       const sig = `${entries.length}|${next}|${transcripts}|${keepAudio}|${problem}|${loaded}|${unsupported}|${speechAt}`;
@@ -140,37 +140,22 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
     if (key === controlsKey) return;
     controlsKey = key;
     const agentSel = h('select', { 'aria-label': 'agent', onchange: (ev: Event) => { filters.agent = (ev.target as HTMLSelectElement).value || undefined; render(); } },
-      h('option', { value: '', selected: !filters.agent }, 'all agents'),
+      h('option', { value: '', selected: !filters.agent }, 'All agents'),
       agents.map((a) => h('option', { value: a, selected: filters.agent === a }, a)));
     const kindSel = h('select', { 'aria-label': 'kind', onchange: (ev: Event) => { filters.kind = (ev.target as HTMLSelectElement).value || undefined; render(); } },
-      h('option', { value: '', selected: !filters.kind }, 'everything'),
+      h('option', { value: '', selected: !filters.kind }, 'Everything'),
       ACTIVITY_KINDS.map((k) => h('option', { value: k.id, selected: filters.kind === k.id }, k.label)));
     const errs = h('button', { type: 'button', class: 'chip' + (filters.errors ? ' on' : ''), 'aria-pressed': String(!!filters.errors),
-      onclick: () => { filters.errors = !filters.errors; render(); } }, 'errors only');
+      onclick: () => { filters.errors = !filters.errors; render(); } }, 'Errors only');
     mount(controls, h('div', { class: 'row act-filters' }, agentSel, kindSel, errs));
   }
 
   function renderSettings() {
     if (!loaded) { mount(settings); return; }
-    mount(settings, h('div', { class: 'card' },
-      h('div', { class: 'row' }, h('b', { class: 'hi' }, 'log transcripts'), h('span', { class: 'dim small' }, 'what Molty heard and said, in this log')),
-      h('div', { class: 'chips', role: 'group', 'aria-label': 'log transcripts' },
-        [['on', true], ['off', false]].map(([label, on]) => h('button', {
-          type: 'button', class: 'chip' + (transcripts === on ? ' on' : ''), 'aria-pressed': String(transcripts === on),
-          onclick: () => void toggleTranscripts(on as boolean),
-        }, label as string))),
-      h('p', { class: 'dim small' }, transcripts ? 'on: turns keep the words (agents only ever see their own).' : 'off: new turns keep timings and outcomes only; the words are never stored.')),
-      keepAudio === undefined ? null : h('div', { class: 'card' },
-        h('div', { class: 'row' }, h('b', { class: 'hi' }, 'keep audio for debugging'), h('span', { class: 'dim small' }, 'what the mic heard, as a wav per turn')),
-        h('div', { class: 'chips', role: 'group', 'aria-label': 'keep audio for debugging' },
-          [['on', true], ['off', false]].map(([label, on]) => h('button', {
-            type: 'button', class: 'chip' + (keepAudio === on ? ' on' : ''), 'aria-pressed': String(keepAudio === on),
-            disabled: !transcripts && on === true,
-            onclick: () => void toggleKeepAudio(on as boolean),
-          }, label as string))),
-        h('p', { class: 'dim small' }, !transcripts
-          ? 'off while transcripts are off: no audio is kept.'
-          : `${keepAudio ? 'on' : 'off (default)'}: the relay keeps the last ${audioInfo.turns} turns' audio (up to ${audioInfo.max_s} s each) for ${audioInfo.max_age_h} h, then deletes it. Only you can download it here — agents never can.`)));
+    mount(settings, section('Privacy', 'What the relay keeps. Agents only ever see their own turns.',
+      toggle('Keep the words', transcripts ? 'What Molty heard and said is stored in this log.' : 'New turns keep timings and outcomes only, never the words.', transcripts, toggleTranscripts),
+      keepAudio === undefined ? null : !transcripts ? h('p', { class: 'why' }, 'No audio is kept while the words are off.')
+        : toggle('Keep recordings for debugging', `The last ${audioInfo.turns} turns (up to ${audioInfo.max_s} s each), deleted after ${audioInfo.max_age_h} h. Only you can download them, here.`, keepAudio, toggleKeepAudio)));
   }
 
   async function startOver() {
@@ -184,11 +169,11 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
   function renderHabits() {
     if (!loaded || !speech) { mount(habits); return; }
     const rows = speechRows(speech);
-    mount(habits, h('div', { class: 'card' },
-      h('div', { class: 'row' }, h('b', { class: 'hi' }, 'speech habits'), h('span', { class: 'dim small' }, 'how you talk to Molty, learned by the relay')),
+    mount(habits, h('div', null,
+      h('div', { class: 'row' }, h('span', { class: 'why' }, 'Learned by the relay to tune how it listens.')),
       h('dl', { class: 'facts', 'aria-label': 'speech habits' }, rows.map(([k, v]) => [h('dt', null, k), h('dd', null, v)])),
       h('p', { class: 'dim small' }, 'Agents get your words in chunks while you talk (context only) and may have a short opener ready; the relay tunes both to how you speak.'),
-      h('button', { type: 'button', class: 'chip', onclick: () => void startOver() }, 'start over')));
+      h('button', { type: 'button', class: 'link', onclick: () => void startOver() }, 'Start over')));
   }
 
   function groupEl(g: Group) {
@@ -255,12 +240,12 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
     renderControls();
     renderHabits();
     renderSettings();
-    if (unsupported) { mount(msg, note('warn', 'this relay has no activity log yet.')); mount(list); return; }
+    if (unsupported) { mount(msg, note('warn', 'This relay has no activity log yet.')); mount(list); return; }
     mount(msg, problem ? note('warn', problem) : null);
-    if (!loaded) { mount(list, problem ? null : h('p', { class: 'dim' }, 'asking the relay…')); return; }
+    if (!loaded) { mount(list, problem ? null : h('p', { class: 'dim' }, 'Asking the relay…')); return; }
     const groups = filterGroups(groupEntries(entries), filters).reverse();   // newest first
     if (!groups.length) {
-      mount(list, h('p', { class: 'dim' }, entries.length ? 'nothing matches these filters.' : 'nothing yet — pair an agent and talk to Molty.'));
+      mount(list, h('p', { class: 'dim' }, entries.length ? 'Nothing matches these filters.' : 'Nothing yet. Pair an agent and talk to Molty.'));
       return;
     }
     mount(list, groups.map(groupEl));
@@ -288,29 +273,29 @@ function traceSvg(m: TraceModel): SVGElement {
   const W = 360, H = 118, span = Math.max(1, m.to - m.from);
   const x = (at: number) => +(((at - m.from) / span) * W).toFixed(1);
   const kids: SVGElement[] = [];
-  const tone = (t: string) => (t === 'err' ? 'var(--err)' : t === 'warn' ? 'var(--warn)' : t === 'ok' ? 'var(--accent)' : 'var(--dim)');
+  const tone = (t: string) => (t === 'err' ? 'var(--err)' : t === 'warn' ? 'var(--m-warn)' : t === 'ok' ? 'var(--m-accent)' : 'var(--m-dim)');
   for (const e of m.events) kids.push(svg('line', { x1: x(e.at), x2: x(e.at), y1: 0, y2: 100, stroke: tone(e.tone), 'stroke-width': 0.6, 'stroke-dasharray': '2 2', opacity: 0.8 }, svg('title', {}, `${fmtAt(e.at)} ${e.label}`)));
   // level: -90 dBFS = empty, 0 dBFS = full (30 px)
   const bw = Math.max(0.6, (100 / span) * W - 0.3);
   for (const l of m.levels) {
     const v = Math.max(0, Math.min(1, (l.db + 90) / 90)), hh = Math.max(0.5, v * 30);
-    kids.push(svg('rect', { x: x(l.at), y: 32 - hh, width: bw, height: hh, fill: 'var(--accent)', opacity: 0.75 }));
+    kids.push(svg('rect', { x: x(l.at), y: 32 - hh, width: bw, height: hh, fill: 'var(--m-accent)', opacity: 0.75 }));
   }
   for (const c of m.clips) kids.push(svg('circle', { cx: x(c.at + 50), cy: 3, r: 2, fill: 'var(--err)' }, svg('title', {}, `${c.n} clipped`)));
-  for (const [a, b] of m.speech) kids.push(svg('rect', { x: x(a), y: 38, width: Math.max(1, x(b) - x(a)), height: 6, rx: 2, fill: 'var(--accent)', opacity: 0.5 }));
-  for (const w of m.words) kids.push(svg('line', { x1: x(w.at), x2: x(w.at), y1: 46, y2: 52, stroke: 'var(--ink)', 'stroke-width': 0.8 }, svg('title', {}, w.text)));
+  for (const [a, b] of m.speech) kids.push(svg('rect', { x: x(a), y: 38, width: Math.max(1, x(b) - x(a)), height: 6, rx: 2, fill: 'var(--m-accent)', opacity: 0.5 }));
+  for (const w of m.words) kids.push(svg('line', { x1: x(w.at), x2: x(w.at), y1: 46, y2: 52, stroke: 'var(--m-ink)', 'stroke-width': 0.8 }, svg('title', {}, w.text)));
   if (m.pause.length > 1) {
     const pts = m.pause.map((p) => `${x(p.at)},${(78 - p.v * 22).toFixed(1)}`).join(' ');
-    kids.push(svg('polyline', { points: pts, fill: 'none', stroke: 'var(--warn)', 'stroke-width': 1 }));
-    if (m.threshold !== undefined) kids.push(svg('line', { x1: 0, x2: W, y1: 78 - m.threshold * 22, y2: 78 - m.threshold * 22, stroke: 'var(--faint)', 'stroke-dasharray': '3 3' }));
+    kids.push(svg('polyline', { points: pts, fill: 'none', stroke: 'var(--m-warn)', 'stroke-width': 1 }));
+    if (m.threshold !== undefined) kids.push(svg('line', { x1: 0, x2: W, y1: 78 - m.threshold * 22, y2: 78 - m.threshold * 22, stroke: 'var(--m-faint)', 'stroke-dasharray': '3 3' }));
   }
-  for (const f of m.frames) kids.push(svg('circle', { cx: x(f.at), cy: 88, r: f.rt ? 2.4 : 1.6, fill: f.rt ? 'var(--warn)' : 'var(--dim)' }, svg('title', {}, `frame ${f.seq}${f.rt ? `, ${f.rt} failed sends` : ''}`)));
+  for (const f of m.frames) kids.push(svg('circle', { cx: x(f.at), cy: 88, r: f.rt ? 2.4 : 1.6, fill: f.rt ? 'var(--m-warn)' : 'var(--m-dim)' }, svg('title', {}, `frame ${f.seq}${f.rt ? `, ${f.rt} failed sends` : ''}`)));
   const lostEv = m.events.filter((e) => e.tone === 'err' && e.lane === 'relay');
   for (const e of lostEv) kids.push(svg('rect', { x: x(e.at) - 2, y: 84, width: 4, height: 8, fill: 'var(--err)' }));
   // t0 gets a label only when it is clear of both ends (labels ~40 px wide)
   const axis = [m.from, ...(x(0) > 40 && x(0) < W - 40 ? [0] : []), m.to].filter((v, i, a) => a.indexOf(v) === i);
-  for (const t of axis) kids.push(svg('text', { x: Math.min(W - 2, Math.max(2, x(t))), y: 112, 'font-size': 9, fill: 'var(--dim)', 'text-anchor': t === m.from ? 'start' : t === m.to ? 'end' : 'middle' }, fmtAt(t)));
+  for (const t of axis) kids.push(svg('text', { x: Math.min(W - 2, Math.max(2, x(t))), y: 112, 'font-size': 9, fill: 'var(--m-dim)', 'text-anchor': t === m.from ? 'start' : t === m.to ? 'end' : 'middle' }, fmtAt(t)));
   const labels: Array<[number, string]> = [[12, 'level'], [44, 'speech'], [70, 'pause'], [91, 'frames']];
-  for (const [y, t] of labels) kids.push(svg('text', { x: W - 1, y, 'font-size': 8, fill: 'var(--faint)', 'text-anchor': 'end' }, t));
+  for (const [y, t] of labels) kids.push(svg('text', { x: W - 1, y, 'font-size': 8, fill: 'var(--m-faint)', 'text-anchor': 'end' }, t));
   return svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'act-trace-svg', role: 'img', 'aria-label': 'turn timeline' }, ...kids);
 }
