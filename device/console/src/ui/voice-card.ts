@@ -96,7 +96,7 @@ export function voiceCard(fetchImpl: typeof fetch = (...a) => fetch(...a)): Voic
         h('input', { type: 'checkbox', checked: rx.compare, 'aria-label': 'compare reflex engines',
           onchange: (ev: Event) => { const on = (ev.target as HTMLInputElement).checked; void act((t) => setVoice(t, { reflex_compare: on }, fetchImpl)); } }),
         'compare: run every available engine on each phrase (activity log), show only this one') : null) : null;
-    const fw = (s as unknown as { first_words?: { mode: string; available: boolean } }).first_words;
+    const fw = s.first_words;
     const firstWords = fw ? h('label', { class: 'row small' },
       h('input', { type: 'checkbox', checked: fw.mode === 'opener', 'aria-label': 'first words',
         onchange: (ev: Event) => { const on = (ev.target as HTMLInputElement).checked; void act((t) => setVoice(t, { first_words: on ? 'opener' : 'off' }, fetchImpl)); } }),

@@ -99,7 +99,7 @@ Read the one you need, when you need it.
 - [talking-fast.md](references/talking-fast.md) — drafts, end of turn, the ack chirp, `no_speech`, latency rules.
 - [personalize.md](references/personalize.md) — learning your human; gestures, phrases, wake: what they can customise.
 - [etiquette.md](references/etiquette.md) — when to speak, emotes, keeping your own behaviour ledger (relay notes if you have no memory).
-- [voice.md](references/voice.md) — the ways Molty gets a voice, and what each means for you.
+- [voice.md](references/voice.md) — how Molty gets a voice, or text only: what each means for you.
 - [voice-box.md](references/voice-box.md) — the owner's own GPU voice box: what agents see.
 - [updates.md](references/updates.md) — firmware updates, `api_version`, updating this skill.
 - [activity.md](references/activity.md) — `molty_activity`: debug your own turns.
