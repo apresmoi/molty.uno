@@ -135,6 +135,18 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   lost in the [turn trace](#turn-trace) — and what waited flows on. Streaming STT always gets the
   audio in seq order. Frames after the end (or after the box's turn end) are dropped as before
   (counted `late`). Older firmware sends in order and never resends: nothing changes for it.
+- **Link drops** (firmware cap `resume`, relay feature `resume` in the welcome). A say or an
+  adopted listen outlives a dropped socket for `LINK_RESUME_WINDOW_MS` (15 s); a shake's listen not
+  yet adopted, or a relay without the feature, is cancelled as before. The next hello names what
+  the device holds: `resume: {job, kind:"say", next}` (the frame it needs next), `{job, kind:"listen"}`,
+  or `{job, kind:"say", done:true}` (played out offline). The welcome answers
+  `resume: {job, ok, next?}`: `ok:false` drops the job; a listen's `next` is the first frame the
+  relay lacks, and the device resends from there, including frames that died in its TCP buffers
+  (sent frames stay in the uplink ring until their slot is needed). The relay keeps a say's frames
+  and resends the missed ones, same seq and cues, at the normal pace; it waits `resumeWindowMs` (20 s,
+  it may notice later than the device) and won't replay audio older than `resumeMaxAgeMs`. A
+  hello that doesn't name the job ends the wait at once. A tap during a drop ends the recording: it
+  goes up on reconnect. The device's first-audio (8 s) and mid-stream (30 s) watchdogs keep running.
 - **Turn trace fields** (listen frames, firmware cap `trace`; all optional, a malformed one is
   dropped, never fatal; older relays ignore them): `ct` capture ms of the frame's first sample
   from the listen's mic start (a shake listen: from the shake's mic start; after a settle trim

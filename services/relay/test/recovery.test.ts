@@ -214,3 +214,217 @@ describe("gestures", () => {
     expect(await w.room.command(w.token, "gestures", {})).toMatchObject({ ok: false, error: "unsupported" });
   });
 });
+
+describe("a link drop (cap `resume`)", () => {
+  const RESUME_CAPS = [...CAPS, "resume"];
+  const FRAME = 3200;
+  const pcm = () => new Uint8Array(FRAME);
+  const up = (w: { room: DeviceRoom }, sock: FakeSocket, job: string, seq: number, end = false) =>
+    w.room.socketMessage(sock, encodeAudioFrame({ s: job, seq, kind: "pcm16", rate: 16000, end, ...(end ? { reason: "turn_end", speech_ms: 500 } : {}) }, pcm()));
+
+  /** A new connection saying hello with what it still holds; returns its welcome. */
+  async function back(w: any, resume: Record<string, unknown> | undefined, onFrame?: (f: any) => void) {
+    const sock = await connect(w.room, w.host, undefined, LINK, { caps: RESUME_CAPS, ...(resume ? { resume } : {}) });
+    const bin = sock.sendBinary.bind(sock);
+    sock.sendBinary = (b: Uint8Array) => {
+      bin(b);
+      onFrame?.(decodeAudioFrame(b)!);
+    };
+    return { sock };
+  }
+
+  /** A listen whose frames this test sends by hand. */
+  async function listening(timings: Record<string, number> = {}) {
+    const w = await setup({ listenAfter: 100000 }, { caps: RESUME_CAPS, timings });
+    const p = w.room.talk(w.token, {}) as Promise<any>;
+    await until(() => w.dev.cmds.some((c) => c.name === "listen"));
+    const job = w.dev.cmds.find((c) => c.name === "listen")!.args.job as string;
+    await pause(5);
+    return { w, p, job };
+  }
+
+  const welcomeOf = (sock: FakeSocket) => {
+    return (sock as any).last("welcome");
+  };
+
+  it("a listen survives: the device resends from what the relay has; one complete turn, nothing lost or twice", async () => {
+    const { w, p, job } = await listening({ talkBudgetMs: 3000 });
+    await up(w, w.sock, job, 0);
+    await up(w, w.sock, job, 1);
+    w.sock.close(1006, "gone");
+    await pause(20);
+    const during = (await w.room.job(w.token, job, 0)) as any;
+    expect(during.result.status).toBe("reconnecting");
+    const { sock } = await back(w, { job, kind: "listen", next: 4 });
+    expect(welcomeOf(sock).resume).toEqual({ job, ok: true, next: 2 });
+    // seq 1 went twice (it was in flight), 2 and 3 are new
+    await up(w, sock, job, 1);
+    await up(w, sock, job, 2);
+    await up(w, sock, job, 3, true);
+    const r = await p;
+    expect(r.result.status).toBe("done");
+    expect(r.result.duration_ms).toBe(400);
+    expect(r.result.heard).toBeTruthy();
+    await pause(150);
+    expect(await utterances(w)).toHaveLength(0);
+  });
+
+  it("a second drop in the same listen is handled the same way", async () => {
+    const { w, p, job } = await listening({ talkBudgetMs: 3000 });
+    await up(w, w.sock, job, 0);
+    w.sock.close(1006, "gone");
+    const a = await back(w, { job, kind: "listen" });
+    expect(welcomeOf(a.sock).resume.next).toBe(1);
+    await up(w, a.sock, job, 1);
+    a.sock.close(1006, "again");
+    const b = await back(w, { job, kind: "listen" });
+    expect(welcomeOf(b.sock).resume.next).toBe(2);
+    await up(w, b.sock, job, 2, true);
+    expect((await p).result.duration_ms).toBe(300);
+  });
+
+  it("past the window a listen fails as before", async () => {
+    const { w, p, job } = await listening({ resumeWindowMs: 40, talkBudgetMs: 3000 });
+    await up(w, w.sock, job, 0);
+    w.sock.close(1006, "gone");
+    const r = await p;
+    expect(r).toMatchObject({ ok: false, error: "device_offline" });
+    const { sock } = await back(w, { job, kind: "listen" });
+    expect(welcomeOf(sock).resume).toEqual({ job, ok: false }); // the device drops it
+  });
+
+  it("a device back without the listen fails it at once, without waiting out the window", async () => {
+    const { w, p, job } = await listening({ resumeWindowMs: 60000, talkBudgetMs: 3000 });
+    await up(w, w.sock, job, 0);
+    w.sock.close(1006, "gone");
+    await back(w, undefined);
+    expect(await p).toMatchObject({ ok: false, error: "device_offline" });
+  });
+
+  it("old firmware (no cap) fails a listen at once, as before", async () => {
+    const w = await setup({ listenAfter: 100000 });
+    const p = w.room.talk(w.token, {}) as Promise<any>;
+    await until(() => w.dev.cmds.some((c) => c.name === "listen"));
+    await pause(5);
+    w.sock.close(1006, "gone");
+    expect(await p).toMatchObject({ ok: false, error: "device_offline" });
+  });
+
+  /** A say: frames are collected; a test decides when the device drops. say.done only on request. */
+  async function saying(timings: Record<string, number> = {}) {
+    const w = await setup({}, { caps: RESUME_CAPS, timings: { sayDoneGraceMs: 100, ...timings } });
+    const frames: any[] = [];
+    let silent = false;
+    const bin = w.sock.sendBinary;
+    w.sock.sendBinary = (b: Uint8Array) => {
+      if (silent) return;
+      frames.push(decodeAudioFrame(b)!);
+      if (!decodeAudioFrame(b)!.header.end) bin(b);
+    };
+    return { w, frames, mute: () => (silent = true) };
+  }
+  const LONG = "One two three four five six seven eight nine ten. Eleven twelve thirteen fourteen fifteen sixteen.";
+
+  it("a say resumes from what the device has, without restarting; the talk never sees device_offline", async () => {
+    const { w, frames } = await saying();
+    const p = w.room.talk(w.token, { say: LONG, listen: false }) as Promise<any>;
+    await until(() => frames.length >= 2);
+    const job = frames[0].header.s as string;
+    const have = frames.length;
+    w.sock.close(1006, "gone");
+    await pause(20);
+    expect(((await w.room.job(w.token, job, 0)) as any).result.status).toBe("reconnecting");
+    const seqs: number[] = [];
+    let sock!: FakeSocket;
+    const b = await back(w, { job, kind: "say", next: have - 1 }, (f) => {
+      seqs.push(f.header.seq);
+      if (f.header.end) setTimeout(() => void w.room.socketMessage(sock, JSON.stringify({ t: "evt", name: "say.done", data: { job } })), 1);
+    });
+    sock = b.sock;
+    const r = await p;
+    expect(r.ok).toBe(true);
+    expect(r.result.status).toBe("done");
+    expect(seqs[0]).toBe(have - 1); // what it missed, not the start
+    expect(seqs).toEqual(seqs.map((_, i) => have - 1 + i)); // in order, no holes, no repeats
+  });
+
+  it("a second drop during a say resumes again", async () => {
+    const { w, frames } = await saying();
+    const p = w.room.talk(w.token, { say: LONG, listen: false }) as Promise<any>;
+    await until(() => frames.length >= 1);
+    const job = frames[0].header.s as string;
+    w.sock.close(1006, "gone");
+    const seen: number[] = [];
+    const a = await back(w, { job, kind: "say", next: 1 }, (f) => seen.push(f.header.seq));
+    await until(() => seen.length >= 1);
+    const next = seen[seen.length - 1] + 1;
+    a.sock.close(1006, "again");
+    const seqs: number[] = [];
+    let sock!: FakeSocket;
+    const b = await back(w, { job, kind: "say", next }, (f) => {
+      seqs.push(f.header.seq);
+      if (f.header.end) setTimeout(() => void w.room.socketMessage(sock, JSON.stringify({ t: "evt", name: "say.done", data: { job } })), 1);
+    });
+    sock = b.sock;
+    expect((await p).ok).toBe(true);
+    expect(seqs[0]).toBe(next);
+  });
+
+  it("a say the device finished offline is done, not replayed", async () => {
+    const { w, frames } = await saying();
+    const p = w.room.talk(w.token, { say: "Short.", listen: false }) as Promise<any>;
+    await until(() => frames.some((f) => f.header.end));
+    const job = frames[0].header.s as string;
+    w.sock.close(1006, "gone");
+    const seqs: number[] = [];
+    await back(w, { job, kind: "say", done: true }, (f) => seqs.push(f.header.seq));
+    expect((await p).ok).toBe(true);
+    expect(seqs).toEqual([]);
+  });
+
+  it("past the window a say fails as before", async () => {
+    const { w, frames } = await saying({ resumeWindowMs: 40 });
+    const p = w.room.talk(w.token, { say: LONG, listen: false }) as Promise<any>;
+    await until(() => frames.length >= 1);
+    w.sock.close(1006, "gone");
+    expect(await p).toMatchObject({ ok: false, error: "device_offline" });
+  });
+
+  it("audio too old is not replayed", async () => {
+    const { w, frames } = await saying({ resumeMaxAgeMs: 10 });
+    const p = w.room.talk(w.token, { say: LONG, listen: false }) as Promise<any>;
+    await until(() => frames.length >= 1);
+    const job = frames[0].header.s as string;
+    w.sock.close(1006, "gone");
+    await pause(40);
+    await back(w, { job, kind: "say", next: 0 });
+    expect(await p).toMatchObject({ ok: false, error: "device_offline" });
+  });
+
+  it("a device back without the say fails it at once", async () => {
+    const { w, frames } = await saying({ resumeWindowMs: 60000 });
+    const p = w.room.talk(w.token, { say: LONG, listen: false }) as Promise<any>;
+    await until(() => frames.length >= 1);
+    w.sock.close(1006, "gone");
+    await back(w, undefined);
+    expect(await p).toMatchObject({ ok: false, error: "device_offline" });
+  });
+
+  it("a silently dead socket: playback_timeout waits for the device's hello", async () => {
+    const { w, frames, mute } = await saying();
+    const p = w.room.talk(w.token, { say: "Short." }) as Promise<any>; // it listens next: needs say.done
+    await until(() => frames.length >= 1);
+    const job = frames[0].header.s as string;
+    mute();
+    await pause(1800); // past playback + grace: the old relay had already failed it
+    let sock!: FakeSocket;
+    const b = await back(w, { job, kind: "say", next: frames.length }, (f) => {
+      if (f.header.end) setTimeout(() => void w.room.socketMessage(sock, JSON.stringify({ t: "evt", name: "say.done", data: { job } })), 1);
+    });
+    sock = b.sock;
+    await until(() => (sock as any).last("cmd")?.name === "listen");
+    expect((sock as any).last("cmd")?.name).toBe("listen");
+    sock.close(1006, "done with this test");
+    await p;
+});
+});

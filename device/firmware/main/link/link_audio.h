@@ -32,6 +32,14 @@ uint32_t link_audio_job_gen(void);
 void link_audio_request(uint32_t gen, link_audio_req_t what);
 /* A bound `stop`: ends the listen (or drops it with the link down), or cuts the say. Any task. */
 void link_audio_stop_any(void);
+/** The link went (link task, before it reads as down): a job the relay can pick up is held, any other cancelled. */
+void link_audio_link_down(void);
+/** A job is waiting for the link: a tap may still end a listen, it goes up on reconnect. */
+bool link_audio_held(void);
+/** Add what the device holds to the hello (`resume`). */
+void link_audio_resume_hello(cJSON *hello);
+/** The relay's welcome: pick up or drop what was held, and learn whether it can hold at all. */
+void link_audio_resume_welcome(const cJSON *welcome);
 esp_err_t link_audio_say_cancel(const cJSON *args, cJSON **result);
 /* Link task: the relay's welcome listed listen_adopt (true), or the link went down (false). */
 void link_audio_relay_adopts(bool on);

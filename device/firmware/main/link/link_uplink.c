@@ -31,6 +31,7 @@ static void drop_at(uplink_t *u, int i)
 bool uplink_push(uplink_t *u, const uplink_meta_t *m, const int16_t *pcm)
 {
     if (m->n > UPLINK_SLOT_SAMPLES) return false;
+    if (u->retained && u->count + u->retained >= UPLINK_SLOTS) u->retained--;   /* the oldest sent frame's slot */
     if (u->count == UPLINK_SLOTS) {
         int victim = -1;                     /* the oldest unsent, not in flight, not the end */
         for (int i = u->inflight ? 1 : 0; i < u->count && victim < 0; i++)
@@ -61,6 +62,20 @@ void uplink_sent(uplink_t *u)
     u->sent++;
     u->head = (u->head + 1) % UPLINK_SLOTS;
     u->count--;
+    if (u->count + u->retained < UPLINK_SLOTS) u->retained++;
+}
+
+bool uplink_rewind(uplink_t *u, uint32_t seq)
+{
+    if (u->inflight) return false;
+    if (u->count && u->meta[u->head].seq == seq) return true;
+    for (int back = 1; back <= u->retained; back++) {
+        const int at = (u->head - back + UPLINK_SLOTS) % UPLINK_SLOTS;
+        if (u->meta[at].seq != seq) continue;
+        u->head = at; u->count += back; u->retained -= back; u->sent -= (uint32_t)back;
+        return true;
+    }
+    return !u->count && !u->retained;
 }
 
 void uplink_failed(uplink_t *u)
