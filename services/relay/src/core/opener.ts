@@ -72,6 +72,10 @@ const COMMON = set(`
   voy vamos dejame deja haber a ver dame momento segundo rato cosa tema pregunta
   eso esto esta este estas estos ese esa
   puedo podemos quiero
+  your you you're tu vos
+  huh wow oof yikes nice cool great lovely tricky wild fun sad awful terrible fantastic wonderful rough tough
+  really truly definitely certainly honestly maybe perhaps about that that's those these
+  uf uh guau genial bárbaro tremendo
 `);
 
 const LEAD_INS = set("ok okay alright right sure yeah well so hmm hm ah oh ugh hey hi hola bueno vale dale claro");
@@ -99,7 +103,9 @@ const CLAIMS: Array<[RegExp, string]> = [
 /** "crashing", "crashes", "crash" → one form. */
 function stem(word: string): string {
   const w = word.replace(/'s$/, "");
-  return w.length >= 5 ? w.replace(/(ing|ed|es|s|e)$/, "") : w;
+  if (w.length < 5) return w;
+  // "quitting" → "quit", "stopped" → "stop"
+  return w.replace(/(ing|ed|es|s|e)$/, "").replace(/([bdgklmnprt])\1$/, "$1");
 }
 
 /** Is `w` one of `known`, allowing for an ending? */
@@ -134,7 +140,7 @@ export function guardOpener(line: unknown, human: string, history: readonly Open
   // "did the tests pass?" → "tests passed": their word, turned into the answer
   for (const w of ws) if (/(ed|ó|é)$/.test(w) && w.length >= 5 && !said.has(w) && heard.some((h) => stem(h) === stem(w))) return { ok: false, why: "claim" };
   // "is the door locked?" → "locked, right": a question for yes or no, answered yes
-  if (YES_NO.test(human.trim()) && (/\b(right|yeah|yep|sure|claro|dale)\W*$/i.test(text) || body.every((w) => said.has(w) || LEAD_INS.has(w)) && body.length <= 2)) return { ok: false, why: "verdict" };
+  if (YES_NO.test(human.trim()) && (/\b(right|yeah|yep|sure|claro|dale|certainly|definitely|really|absolutely)\W*$/i.test(text) || body.every((w) => said.has(w) || LEAD_INS.has(w)) && body.length <= 2)) return { ok: false, why: "verdict" };
   // the few-shot's Spanish leaking into another language
   if (/^a ?ver\b/.test(ws.join(" ")) && !SPANISH.test(human)) return { ok: false, why: "language" };
   // "remind me to call my sister" → "calling my sister": their words, the wrong person

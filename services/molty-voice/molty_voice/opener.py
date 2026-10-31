@@ -4,7 +4,7 @@ The relay asks at the end of the human's turn (`{"t":"opener","id","text","histo
 and answers itself with what it may say: this module only writes a line. Whether the line may be
 spoken is the relay's call (services/relay core/opener.ts guardOpener), whichever model wrote it.
 
-Model: `qwen3:1.7b` on the box's Ollama, loaded and kept loaded (about 30 ms to the first word,
+Model: `gemma3:4b` on the box's Ollama, loaded and kept loaded (about 30 ms to the first word,
 about 60 ms for a line; research/openers-eval.md). `python -m molty_voice.opener` writes one line per
 JSON line `{"text","history"}` on stdin (the eval's way in).
 """
@@ -21,7 +21,7 @@ import urllib.request
 log = logging.getLogger("molty_voice")
 
 DEFAULT_URL = "http://127.0.0.1:11434"
-DEFAULT_MODEL = "qwen3:1.7b"
+DEFAULT_MODEL = "gemma3:4b"
 MAX_HISTORY = 5
 MAX_CHARS = 600
 
@@ -32,7 +32,7 @@ Rules:
 - Speak as Molty answering them: never repeat their sentence back. "me" in their words means "you" in yours.
 - Never give the answer, a fact, a name or a number they did not say. Never say something is done. No yes or no.
 - It starts a sentence, so end with a comma. Never ask a question. Don't start every line the same way.
-- Same language as their last message. Plain words only.
+- Same language as their last message. Plain words only. Never copy their whole sentence.
 
 Examples:
 Human: what's the capital of Peru?
@@ -49,10 +49,6 @@ Human: show me the photos
 Molty: Here come the photos,
 Human: can you make it faster?
 Molty: Making it faster,
-Human: qué hora es en Tokio?
-Molty: A ver, la hora en Tokio,
-Human: hola, cómo va?
-Molty: Hola, por acá,
 Human: say hello
 Molty: Hello there,
 Human: good morning!

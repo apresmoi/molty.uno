@@ -22,6 +22,13 @@ const traces = async (w: any, turn: string) => {
 };
 
 describe("guardOpener", () => {
+  it("lets natural gap-fillers through: other forms of their words, and plain reactions", () => {
+    expect(guardOpener("Ugh, quitting your job,", "I think I'm going to quit my job", []).ok).toBe(true);
+    expect(guardOpener("Awful ending, really,", "the ending was awful", []).ok).toBe(true);
+  });
+  it("still refuses an answer to a yes or no question", () => {
+    expect(guardOpener("Enough for tonight, certainly.", "is that enough for tonight?", []).ok).toBe(false);
+  });
   const ok = (line: string, human: string, hist: any[] = []) => guardOpener(line, human, hist);
 
   it("lets through the start of a reply built from their words", () => {
