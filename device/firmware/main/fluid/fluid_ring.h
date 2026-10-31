@@ -41,6 +41,8 @@
  * On the device: 26-27 fps while spoken to (32-34 otherwise); full-voice 0.50 fell to 19. */
 
 /* ── presence ──────────────────────────────────────────────────────────────── */
+/* 0: a listen shows only the circle. 1: the voice also ripples the water (off: it was too much) */
+#define RING_WAVES        0
 /* the voice plays the water: louder is taller and closer together, a murmur is small and far apart */
 #define RING_GAP_SOFT     1.10f    /* time to the next wave after a barely-there syllable    */
 #define RING_S_CURVE      1.2f     /* height follows level^this: quiet stays gentle          */
