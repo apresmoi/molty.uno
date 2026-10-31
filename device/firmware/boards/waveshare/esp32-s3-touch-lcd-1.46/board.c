@@ -134,5 +134,10 @@ const molty_board_t molty_board_desc = {
     .imu_get        = qmi8658_get,
     .speaker        = &s_speaker,
     .mic            = &s_mic,
+    /* 6, not the old 8: at 8 a real turn saturated 18 samples (peak 1.22 of full scale after
+     * the box's resample) — close speech on this MSM mic has no headroom there. 6 gives
+     * 2.5 dB; quiet speech loses nothing the VAD (relative to its noise floor) or the STT
+     * notices. The trace's "cl" / "pk" (docs/AGENT-LINK.md "Turn trace") show it per turn. */
+    .mic_gain       = 6,
     .button_pressed = button_pressed,
 };

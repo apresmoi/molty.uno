@@ -358,11 +358,19 @@ bool link_frame_parse(const void *data, size_t len, link_frame_t *h,
     return ok;
 }
 
-int link_frame_header(char *out, size_t cap, const link_frame_t *h)
+uint8_t link_level_byte(double sum_sq, uint32_t n)
 {
-    if (!out || !h || !valid_stream(h->stream)) return -1;
+    if (!n || !(sum_sq > 0)) return 0;
+    const double db = 20.0 * log10(sqrt(sum_sq / n) / 32768.0);
+    const double b = floor(2.0 * (db + 100.0) + 0.5);
+    return b <= 0 ? 0 : b >= 200 ? 200 : (uint8_t)b;
+}
+
+/* the header JSON; level 0: everything, 1: without "tr", 2: without "tr" and "lv" */
+static char *frame_json(const link_frame_t *h, int level)
+{
     cJSON *j = cJSON_CreateObject();
-    if (!j) return -1;
+    if (!j) return NULL;
     cJSON_AddStringToObject(j, "s", h->stream);
     cJSON_AddNumberToObject(j, "seq", h->seq);
     cJSON_AddStringToObject(j, "kind", "pcm16");
@@ -372,14 +380,55 @@ int link_frame_header(char *out, size_t cap, const link_frame_t *h)
         cJSON_AddStringToObject(j, "reason", h->reason);
         if (h->speech_known) cJSON_AddNumberToObject(j, "speech_ms", h->speech_ms);
     }
+    if (h->trace) {
+        cJSON_AddNumberToObject(j, "ct", h->ct);
+        if (level < 2 && h->nlv) {
+            char lv[2 * 4 + 1]; static const char hex[] = "0123456789abcdef";
+            int n = h->nlv > 4 ? 4 : h->nlv;
+            for (int i = 0; i < n; i++) { lv[2 * i] = hex[h->lv[i] >> 4]; lv[2 * i + 1] = hex[h->lv[i] & 15]; }
+            lv[2 * n] = 0;
+            cJSON_AddStringToObject(j, "lv", lv);
+        }
+        if (h->cl) cJSON_AddNumberToObject(j, "cl", h->cl);
+        if (h->rt) cJSON_AddNumberToObject(j, "rt", h->rt);
+        cJSON_AddNumberToObject(j, "wq", h->wq);
+        if (level < 1 && h->tr) {
+            const link_trace_end_t *t = h->tr;
+            cJSON *o = cJSON_AddObjectToObject(j, "tr");
+            if (o) {
+                cJSON_AddNumberToObject(o, "wall", t->wall);
+                cJSON_AddNumberToObject(o, "cap", t->cap);
+                cJSON_AddNumberToObject(o, "sent", t->sent);
+                cJSON_AddNumberToObject(o, "fail", t->fail);
+                cJSON_AddNumberToObject(o, "drop", t->drop);
+                cJSON_AddNumberToObject(o, "dropms", t->dropms);
+                if (t->has_rssi0) cJSON_AddNumberToObject(o, "r0", t->r0);
+                if (t->has_rssi1) cJSON_AddNumberToObject(o, "r1", t->r1);
+                cJSON_AddNumberToObject(o, "gain", t->gain);
+                cJSON_AddNumberToObject(o, "pk", t->pk);
+                if (t->shake) { cJSON_AddNumberToObject(o, "set", t->set); cJSON_AddNumberToObject(o, "setc", t->setc ? 1 : 0); }
+            }
+        }
+    }
     char *json = cJSON_PrintUnformatted(j);
     cJSON_Delete(j);
-    if (!json) return -1;
-    size_t n = strlen(json);
-    if (n > LINK_HEADER_MAX || cap < n + 2) { cJSON_free(json); return -1; }
-    memcpy(out, json, n); out[n] = '\n'; out[n + 1] = 0;
-    cJSON_free(json);
-    return (int)n + 1;
+    return json;
+}
+
+int link_frame_header(char *out, size_t cap, const link_frame_t *h)
+{
+    if (!out || !h || !valid_stream(h->stream)) return -1;
+    for (int level = 0; level < 3; level++) {
+        char *json = frame_json(h, level);
+        if (!json) return -1;
+        size_t n = strlen(json);
+        if (n > LINK_HEADER_MAX) { cJSON_free(json); continue; }   /* the trace gives way, never the frame */
+        if (cap < n + 2) { cJSON_free(json); return -1; }
+        memcpy(out, json, n); out[n] = '\n'; out[n + 1] = 0;
+        cJSON_free(json);
+        return (int)n + 1;
+    }
+    return -1;
 }
 
 bool link_color_parse(const char *s, uint32_t *rgb)

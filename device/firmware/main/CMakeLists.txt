@@ -57,6 +57,8 @@ idf_component_register(
         "link/link_client.c"
         "link/link_cmd.c"
         "link/link_audio.c"
+        "link/link_uplink.c"     # the listen's uplink ring: resend in order (plain C, host-tested)
+        "link/listen_react.c"    # listener reactions: nod / glance / perk while the human speaks (host-tested)
         "link/link_pair.c"
         "link/link_ask.c"        # ask: a question answered by a tap
         # update: firmware self-update (link `update`, /api/update, the mark-valid guard)
@@ -67,6 +69,7 @@ idf_component_register(
         "audio/chirp.c"          # the turn acknowledgement blip (link_audio)
         # sense: device events (IMU shake, taps, buttons) for the agent + the fluid
         "sense/gesture.c"
+        "sense/shake_settle.c"   # shake to talk: when the handling noise is over (host-tested)
         "sense/sense.c"
         # board: the seam to the hardware (molty_board.h) + the selected board's drivers
         "board/molty_board.c"

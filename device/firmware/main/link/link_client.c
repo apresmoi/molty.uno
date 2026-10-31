@@ -374,6 +374,11 @@ static void link_task(void *arg)
                         cJSON *pong = cJSON_CreateObject();
                         cJSON_AddStringToObject(pong, "t", "pong"); link_send_json(pong); cJSON_Delete(pong);
                     } else if (link_client_connected() && !strcmp(t->valuestring, "cmd")) command(j);
+                    else if (link_client_connected() && !strcmp(t->valuestring, "hint")) {
+                        /* the voice box heard a pause / a question in the running listen (cap hints) */
+                        const cJSON *hj = cJSON_GetObjectItemCaseSensitive(j, "job"), *hk = cJSON_GetObjectItemCaseSensitive(j, "k");
+                        if (cJSON_IsString(hj) && cJSON_IsString(hk)) link_audio_hint(hj->valuestring, hk->valuestring);
+                    }
                     else if (link_client_connected() && !strcmp(t->valuestring, "pair.request")) {
                         xSemaphoreTake(s_config, portMAX_DELAY);
                         link_pair_request(j);

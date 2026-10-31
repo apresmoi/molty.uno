@@ -104,6 +104,7 @@ const molty_board_t molty_board_desc = {
     .imu_get        = NULL,                    /* void f(molty_imu_sample_t *out)      */
     .speaker        = NULL,                    /* const molty_speaker_ops_t *           */
     .mic            = NULL,                    /* const molty_mic_ops_t *               */
+    .mic_gain       = 0,                       /* listen gain 1..32; 0 = 8 (molty_board.h) */
     .button_pressed = button_pressed,
     .battery_mv     = NULL,                    /* int  f(void), millivolts             */
 };

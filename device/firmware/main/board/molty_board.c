@@ -246,6 +246,11 @@ esp_err_t molty_mic_stream_start(uint32_t rate_hz, uint32_t chunk_ms, uint8_t ga
     return MIC ? B.mic->stream_start(rate_hz, chunk_ms, gain) : ESP_ERR_NOT_SUPPORTED;
 }
 
+uint8_t molty_mic_gain(void)
+{
+    return B.mic_gain ? B.mic_gain : 8;
+}
+
 esp_err_t molty_mic_stream_read(int16_t *buf, size_t chunk_samples, size_t *got)
 {
     return MIC ? B.mic->stream_read(buf, chunk_samples, got) : ESP_ERR_NOT_SUPPORTED;

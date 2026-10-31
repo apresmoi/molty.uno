@@ -90,6 +90,7 @@ static void sense_task(void *arg)
         molty_imu_sample_t s;
         if (imu && molty_imu_get(&s) && s.ms != last_imu) {
             last_imu = s.ms;
+            link_audio_imu(s.ax, s.ay, s.az, s.ms);       /* a shake's listen: has the handling stopped? */
             gesture_shake_t sh;
             if (pairing) gesture_reset(&g);
             else if (gesture_feed(&g, s.ax, s.ay, s.az, s.ms, &sh)) {
