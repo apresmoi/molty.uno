@@ -281,6 +281,22 @@ static esp_err_t cmd_log(const cJSON *args, cJSON **out)
     return ESP_OK;
 }
 
+/* cmd gestures {bindings?: {input: action, ...}}: changes those inputs (kept on the device),
+ * answers every binding. Refused whole if anything is unknown. */
+static esp_err_t cmd_gestures(const cJSON *args, cJSON **out)
+{
+    const cJSON *b = cJSON_GetObjectItemCaseSensitive(args, "bindings");
+    if (b) {
+        esp_err_t e = mole_fluid_gestures_apply(b);
+        if (e != ESP_OK) return e;
+    }
+    cJSON *j = cJSON_CreateObject();
+    if (!j) return ESP_ERR_NO_MEM;
+    cJSON_AddItemToObject(j, "bindings", mole_fluid_gestures_json());
+    *out = j;
+    return ESP_OK;
+}
+
 void link_cmd_init(void)
 {
     link_cmd_register("diag", cmd_diag); link_cmd_register("log", cmd_log);
@@ -289,6 +305,8 @@ void link_cmd_init(void)
     link_cmd_register("act", cmd_act);
     link_cmd_register("say", link_audio_say); link_cmd_register("listen", link_audio_listen);
     link_cmd_register("listen_stop", link_audio_listen_stop);
+    link_cmd_register("say_cancel", link_audio_say_cancel);
+    link_cmd_register("gestures", cmd_gestures);
     link_cmd_register("volume", cmd_volume); link_cmd_register("imu", cmd_imu);
     link_cmd_register("ask", link_ask_cmd);
     link_cmd_register("update", self_update_cmd);

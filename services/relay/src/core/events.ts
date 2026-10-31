@@ -53,6 +53,7 @@ const int = (v: unknown, lo: number, hi: number) => Number.isInteger(v) && num(v
 const SHAPES: Record<string, (d: Record<string, unknown>) => JsonObject | undefined> = {
   shake: (d) => (num(d.peak_g, 0, 64) && int(d.reversals, 0, 1000) && int(d.ms, 0, 600000) ? { peak_g: d.peak_g as number, reversals: d.reversals as number, ms: d.ms as number } : undefined),
   tap: (d) => (num(d.x, 0, 1) && num(d.y, 0, 1) ? { x: d.x as number, y: d.y as number } : undefined),
+  double_tap: (d) => (num(d.x, 0, 1) && num(d.y, 0, 1) ? { x: d.x as number, y: d.y as number } : undefined),
   button: (d) => (d.id === "accept" || d.id === "reject" ? { id: d.id } : undefined),
   answer: answerShape,
 };
@@ -84,7 +85,7 @@ export const ASK_NO_ANSWER = ["timeout", "cancelled", "offline"] as const;
 /**
  * Relay-generated (not device) event: the human said something to Molty on its own initiative
  * (shake to talk, core/turns.ts). One per heard turn; never sent for no_speech. Data
- * `{turn_id, text, reason, ms:{speech, stt}, trigger:"shake", device:{caps, mood, voice}}`.
+ * `{turn_id, text, reason, ms:{speech, stt}, trigger:"shake"|"talk", device:{caps, mood, voice}}`.
  * Filterable like device events; a device can never send it.
  */
 export const UTTERANCE_EVENT = "utterance";
@@ -105,6 +106,7 @@ export const webhookWants = (events: string[] | undefined, type: string) => (eve
 export const SAMPLE_EVENTS: Record<string, AgentEvent> = {
   shake: { id: "e1", type: "shake", ts: 0, data: { peak_g: 2.4, reversals: 5, ms: 900 } },
   tap: { id: "e2", type: "tap", ts: 0, data: { x: 0.5, y: 0.5 } },
+  double_tap: { id: "e9", type: "double_tap", ts: 0, data: { x: 0.5, y: 0.5 } },
   button: { id: "e3", type: "button", ts: 0, data: { id: "accept" } },
   answer: { id: "e4", type: "answer", ts: 0, data: { job: "molty-xxxxxxxxxx.j_sample00", index: 0, label: "yes" } },
   [UTTERANCE_EVENT]: {
@@ -174,6 +176,8 @@ export function eventSentence(ev: AgentEvent): string {
       return `Your draft opener was dropped (${String(d.reason ?? "")}): answer the utterance as usual`;
     case "tap":
       return "Molty's screen was tapped";
+    case "double_tap":
+      return "Molty's screen was double-tapped";
     case "button":
       return `Molty's ${d.id} button was pressed`;
     case "answer":

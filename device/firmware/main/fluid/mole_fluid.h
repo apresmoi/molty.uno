@@ -38,6 +38,7 @@
 #pragma once
 
 #include "esp_err.h"
+#include "cJSON.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -138,6 +139,11 @@ uint32_t mole_fluid_filler_ms(void);
  *  /api/creature/state {shake_talk: bool} (GET reports it), kept in NVS like ring_color; on
  *  out of the box. Safe from any task, before init too. */
 bool mole_fluid_shake_talk(void);
+/* The gesture bindings (gesture.h, packed): what tap, double tap and the buttons do.
+ * /api/creature/state {gestures: {tap: "talk", ...}} and cmd gestures; GET reports them. */
+uint32_t mole_fluid_gestures(void);
+cJSON *mole_fluid_gestures_json(void);
+esp_err_t mole_fluid_gestures_apply(const cJSON *bindings);
 
 /** A question (link_ask.c, the link task) — the screen follows what the link wants:
  *  show   n (1..FLUID_ASK_MAX) labels condense out of the fluid in their sectors

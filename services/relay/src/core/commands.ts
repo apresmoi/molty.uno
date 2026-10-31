@@ -12,7 +12,11 @@ export const WORKING_CAP = "working";
 export const WORKING_ACTIONS: readonly string[] = ["inspect", "paddle"];
 /** A say's `[working]` cue: never a device mark. The relay plays the say to its end, then sets the mood. */
 export const WORKING_MOOD = "working";
-export const COMMANDS = ["status", "state", "mood", "show", "say", "quick", "listen", "volume", "imu", "diag", "log", "act"] as const;
+export const COMMANDS = ["status", "state", "mood", "show", "say", "quick", "listen", "volume", "imu", "diag", "log", "act", "gestures"] as const;
+/** What the human's inputs can do (`gestures`; firmware: sense/gesture.h). */
+export const GESTURE_INPUTS = ["tap", "double_tap", "button_accept", "button_reject"] as const;
+export const GESTURE_ACTIONS = ["none", "talk", "event", "stop"] as const;
+export const GESTURES_CAP = "gestures";
 export type CommandName = (typeof COMMANDS)[number];
 
 export const MAX_SHOW_BYTES = 16384;
@@ -317,6 +321,17 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
     case "volume":
       only(args, ["volume"]);
       return { name: n, args: { volume: int(args.volume, "volume", 0, 21) }, job: false };
+    case "gestures": {
+      // Empty = read; {bindings: {input: action, ...}} changes those inputs and keeps the rest.
+      only(args, ["bindings"]);
+      if (args.bindings === undefined) return { name: n, args: {}, job: false };
+      if (!isRecord(args.bindings) || Object.keys(args.bindings).length === 0) throw invalid("bindings must be a non-empty object");
+      for (const [input, action] of Object.entries(args.bindings)) {
+        if (!(GESTURE_INPUTS as readonly string[]).includes(input)) throw invalid(`bindings keys must be among ${GESTURE_INPUTS.join(", ")}`);
+        if (typeof action !== "string" || !(GESTURE_ACTIONS as readonly string[]).includes(action)) throw invalid(`${input} must be one of ${GESTURE_ACTIONS.join(", ")}`);
+      }
+      return { name: n, args: { bindings: args.bindings as JsonObject }, job: false };
+    }
     case "act":
       only(args, ["action"]);
       if (typeof args.action !== "string" || !(ACTIONS as readonly string[]).includes(args.action)) {

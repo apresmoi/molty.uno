@@ -198,6 +198,9 @@ static void test_ack(void)
 {
     const link_ack_t C = LINK_ACK_CHIRP, T = LINK_ACK_THINKING, O = LINK_ACK_OFF;
     /* which ends acknowledge: speech heard */
+    assert(link_ack_decide(C, "tap", false, 0, false, true) == C);          /* a tap ended the turn: acknowledged like the relay's */
+    assert(link_say_stalled(8000, 0) && !link_say_stalled(7999, 0));        /* no audio at all: 8 s */
+    assert(link_say_stalled(30000, 1) && !link_say_stalled(29999, 1));      /* mid-stream: 30 s */
     assert(link_ack_decide(C, "turn_end", false, 0, false, true) == C);     /* the relay's end of turn: speech by definition */
     assert(link_ack_decide(C, "turn_end", true, 0, false, true) == C);
     assert(link_ack_decide(C, "silence", true, 900, false, true) == C);
