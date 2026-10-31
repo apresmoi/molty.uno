@@ -1891,8 +1891,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const working = !!this.liveSocket()?.getMeta()?.caps?.includes(WORKING_CAP);
     const wantsWork = !!marks?.some((m) => m[1] === WORKING_MOOD);
     const kept = marks?.filter((m) => m[1] !== WORKING_MOOD && (working || !WORKING_ACTIONS.includes(m[1])));
+    const rev = this.screenRev;
     const r = await this.speakNow(id, text, voice, untilDone || wantsWork, kept, prepared);
-    if (r.ok && wantsWork && working) {
+    // an explicit mood during the say (the work was called off) has the last word
+    if (r.ok && wantsWork && working && rev === this.screenRev && this.screenInFlight === 0) {
       const m = await this.sendCmd("mood", { mood: WORKING_MOOD });
       if (!m.ok) this.log("auto mood failed", { device: this.deviceId, mood: WORKING_MOOD, error: m.error });
     }
