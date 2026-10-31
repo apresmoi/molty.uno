@@ -410,6 +410,21 @@ describe("a link drop (cap `resume`)", () => {
     expect(await p).toMatchObject({ ok: false, error: "device_offline" });
   });
 
+  it("a say.done past the grace opens the mic at once, not after the replacement wait", async () => {
+    const { w, frames } = await saying({ resumeWindowMs: 5000 });
+    const p = w.room.talk(w.token, { say: "Short." }) as Promise<any>;
+    await until(() => frames.length >= 1);
+    const job = frames[0].header.s as string;
+    await until(async () => ((await w.room.job(w.token, job, 0)) as any).result.status === "reconnecting");
+    const t = Date.now();
+    void w.room.socketMessage(w.sock, JSON.stringify({ t: "evt", name: "say.done", data: { job } }));
+    await until(() => (w.sock as any).last("cmd")?.name === "listen");
+    expect(Date.now() - t).toBeLessThan(1000);
+    expect(((await w.room.job(w.token, job, 0)) as any).result.status).toBe("running");
+    w.sock.close(1006, "done with this test");
+    await p;
+  });
+
   it("a silently dead socket: playback_timeout waits for the device's hello", async () => {
     const { w, frames, mute } = await saying();
     const p = w.room.talk(w.token, { say: "Short." }) as Promise<any>; // it listens next: needs say.done
