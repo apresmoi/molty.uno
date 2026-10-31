@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { RelayBackend } from "../src/core/api.js";
 import type { ReleaseInfo, ReleaseLookup, ReleaseSource } from "../src/core/releases.js";
 import type { DeviceRoom } from "../src/core/room.js";
-import { MemoryKV } from "../src/core/store.js";
+import { type Clock, MemoryKV } from "../src/core/store.js";
 import { API_VERSION, FEATURES } from "../src/core/version.js";
 import { handleMcp } from "../src/surfaces/mcp.js";
 import { handleRest } from "../src/surfaces/rest.js";
@@ -55,12 +55,12 @@ function device(room: DeviceRoom, sock: FakeSocket) {
   return { cmds, ctl, evt, updates: () => cmds.filter((c) => c.name === "update") };
 }
 
-async function setup(opts: { fw?: string; caps?: string[]; board?: string | null; release?: ReleaseInfo | null; state?: ReleaseLookup["state"]; kv?: MemoryKV; timings?: Record<string, number> } = {}) {
+async function setup(opts: { fw?: string; caps?: string[]; board?: string | null; release?: ReleaseInfo | null; state?: ReleaseLookup["state"]; kv?: MemoryKV; timings?: Record<string, number>; clock?: Clock } = {}) {
   const releases = new Releases();
   releases.set(opts.release === undefined ? release() : opts.release, opts.state);
   const kv = opts.kv ?? new MemoryKV();
   const host = new FakeHost();
-  const ctx = makeRoom({ kv, host, releases, timings: { ...FAST, ...opts.timings } });
+  const ctx = makeRoom({ kv, host, releases, timings: { ...FAST, ...opts.timings }, ...(opts.clock ? { clock: opts.clock } : {}) });
   const hello = { fw: opts.fw ?? "0.1.0", caps: opts.caps ?? ["say", "listen"], ...(opts.board === null ? {} : { board: opts.board ?? B146 }) };
   const sock = await connect(ctx.room, host, KEY, LINK, hello);
   const dev = device(ctx.room, sock);
@@ -360,6 +360,16 @@ describe("molty_update", () => {
     expect(await q.kv.get("upd")).toBeUndefined();
   });
 
+  it("a deadline timer that fires early re-arms: the update still times out (it never hangs until the call budget)", async () => {
+    // Timers fire up to 40 ms before the clock reaches the deadline, as Node's sometimes do on a busy runner.
+    const early: Clock = { now: () => Date.now(), setTimeout: (fn, ms) => setTimeout(fn, Math.max(0, ms - 40)), clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>) };
+    const w = await setup({ caps: CAPS, clock: early, timings: { talkBudgetMs: 3000 } });
+    const t0 = Date.now();
+    const out = await w.room.update(w.token, {});
+    expect(out).toMatchObject({ ok: false, error: "update_timeout" });
+    expect(Date.now() - t0).toBeLessThan(2000);
+  });
+
   it("nobody answers the on-screen question, or the device never comes back: update_timeout", async () => {
     const w = await setup({ caps: CAPS });
     const out = await w.room.update(w.token, {});
@@ -369,8 +379,7 @@ describe("molty_update", () => {
     await v.dev.evt({ job, state: "accepted" });
     await sleep(FAST.updateMs + 50);
     expect(await v.room.job(v.token, job, 0)).toMatchObject({ ok: true, result: { status: "failed", error: "update_timeout", detail: expect.stringMatching(/did not come back/) } });
-    // Two real-time update flows back to back (~1–2 s idle, past 5 s on a loaded CI runner).
-  }, 15000);
+  });
 
   it("up to date, no release, dev build, no image for the board, no checksum, release list down, offline", async () => {
     const cur = await setup({ fw: "0.2.0", caps: CAPS });
