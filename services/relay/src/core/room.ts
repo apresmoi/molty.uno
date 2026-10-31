@@ -1174,7 +1174,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   /** Fails the update job once its deadline passed (also checked lazily, after an eviction). */
   private async checkUpdateDeadline(): Promise<void> {
     const u = await this.kv.get<UpdateRecord>(K.upd);
-    if (!u || this.clock.now() < u.deadline) return;
+    if (!u) return;
+    // A timer may fire a little before the clock reaches the deadline: re-arm for the rest
+    // instead of returning, or the update would never time out (the caller waits its whole budget).
+    if (this.clock.now() < u.deadline) return this.armUpdateTimer(u.deadline - this.clock.now());
     const detail =
       u.phase === "confirm"
         ? u.acked === false
