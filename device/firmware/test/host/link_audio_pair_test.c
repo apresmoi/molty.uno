@@ -764,7 +764,7 @@ static void test_tap_and_watchdog(void) {
     /* stop: a listen ends and sends, a say is cut */
     begin_say(); link_audio_stop_any(); apply_request(); assert(atomic_load(&s_cancel)); complete(play());
     /* a tap on a job that ended is not applied to the next one */
-    begin_say(); { uint32_t old=link_audio_job_gen(); complete(play()); link_audio_tick();
+    begin_say(); { uint32_t old=link_audio_job_gen(); link_audio_cancel(); complete(play()); link_audio_tick();
       begin_say(); link_audio_request(old, LINK_AUDIO_REQ_CANCEL); apply_request(); assert(!atomic_load(&s_cancel));
       link_audio_request(link_audio_job_gen(), LINK_AUDIO_REQ_CANCEL); apply_request(); assert(atomic_load(&s_cancel)); complete(play()); link_audio_tick(); }
     /* a bound talk is the shake's listen even with the shake setting off; nothing to report when none starts */
