@@ -1,18 +1,27 @@
 // Live screen preview: polls GET /api/framebuffer (~2 fps, never overlapping) into a
-// round canvas. Optional onTap(x, y) gets device-normalized coords (-1..1, y down —
+// round canvas. Each frame costs the device about half its frame rate while it sends, so
+// pages start it on request (auto: only where the preview is the point, like setup). Optional onTap(x, y) gets device-normalized coords (-1..1, y down —
 // the same convention as the fluid's touch input).
 import type { DeviceApi } from '../api/device';
 import { h } from './dom';
 
 export interface Preview { el: HTMLElement; stop(): void }
 
-export function preview(api: DeviceApi, opts: { size?: number; onTap?: (x: number, y: number) => void; periodMs?: number } = {}): Preview {
+export function preview(api: DeviceApi, opts: { size?: number; onTap?: (x: number, y: number) => void; periodMs?: number; auto?: boolean } = {}): Preview {
   const period = opts.periodMs ?? 500;
   const canvas = h('canvas', { width: 412, height: 412, class: 'screen', 'aria-label': 'live device screen' });
   const ring = h('div', { class: 'tapring' });
-  const status = h('div', { class: 'pv-status' }, 'connecting…');
+  let running = !!opts.auto;
+  const status = h('div', { class: 'pv-status' }, running ? 'connecting…' : 'Live view is off: it slows Molty while it runs.');
+  const toggle = h('button', { type: 'button', class: 'link', onclick: () => {
+    running = !running;
+    toggle.textContent = running ? 'Stop live view' : 'Show live view';
+    clearTimeout(timer);
+    if (running) { status.textContent = 'connecting…'; void loop(); }
+    else status.textContent = 'Live view is off: it slows Molty while it runs.';
+  } }, running ? 'Stop live view' : 'Show live view');
   const el = h('div', { class: 'preview' + (opts.onTap ? ' tappable' : ''), style: opts.size ? `--pv:${opts.size}px` : undefined },
-    h('div', { class: 'screen-wrap' }, canvas, ring), status);
+    h('div', { class: 'screen-wrap' }, canvas, ring), status, opts.auto ? null : toggle);
   const ctx = canvas.getContext('2d')!;
   let img: ImageData | null = null;
   let alive = true, timer = 0, frames = 0, since = performance.now(), fails = 0;
@@ -26,12 +35,12 @@ export function preview(api: DeviceApi, opts: { size?: number; onTap?: (x: numbe
   };
 
   const loop = async () => {
-    if (!alive) return;
+    if (!alive || !running) return;
     if (document.hidden) { timer = window.setTimeout(loop, 1000); return; }
     const t0 = performance.now();
     try {
       const f = await api.framebuffer();
-      if (!alive) return;
+      if (!alive || !running) return;
       draw(f.width, f.height, f.rgb);
       frames++; fails = 0;
       const dt = (performance.now() - since) / 1000;
@@ -43,7 +52,7 @@ export function preview(api: DeviceApi, opts: { size?: number; onTap?: (x: numbe
     }
     timer = window.setTimeout(loop, Math.max(60, period - (performance.now() - t0)));
   };
-  loop();
+  if (running) void loop();
 
   if (opts.onTap) {
     canvas.addEventListener('click', (ev) => {
