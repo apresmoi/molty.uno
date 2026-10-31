@@ -71,10 +71,10 @@ Each helper follows a long turn (`202 pending`) to its end.
   the `shake` with `"listening": true`. `turn_claimed`: stay quiet.
 - **Never speak while they talk**: `utterance.partial` is context (`human_speaking`). Only
   `draft` an opener (`draft.used`: continue it) or `react` (Molty also reacts by itself; yours wins).
-- **Thinking more than a moment? FIRST play a quick phrase** — one call, `quick {id}`
-  (`quick.sh hmm`), before you start reasoning — then talk (it follows seamlessly).
-  Register your own phrases in your voice once (`molty_phrases`). Fast answer: none needed.
-- **Short.** 1–2 sentences; a short first sentence starts audio sooner.
+- **First call on every wake: `quick {id}`** (yours or a built-in), before you reason —
+  unless you answer within a second. Skipped by itself if Molty already filled. Then talk
+  (it follows seamlessly). Register your own phrases once (`molty_phrases`).
+- **Short: ≤ 2 sentences, ~25 words a turn.** Split longer answers; speech time is wait time.
 - **Emote inline, sparingly:** `"[happy] Build passed!"`, `"Done. [nod]"` — cues are never
   spoken or shown and fire on their word; one per sentence at most; don't fidget
   ([etiquette.md](references/etiquette.md#emotes)).
