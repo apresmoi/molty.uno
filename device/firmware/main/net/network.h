@@ -22,6 +22,9 @@ typedef struct { char ssid[33]; int8_t rssi; bool open; } net_ap_t;
 
 /** True once net_wifi_init() has run (the radio exists). */
 bool      net_wifi_ready(void);
+/** True while the station is associated with an AP (STA_CONNECTED .. STA_DISCONNECTED; network.c
+ *  listens from before esp_wifi_start, so a connect made before a later listener is not missed). */
+bool      net_wifi_associated(void);
 /** Join `ssid` and, once connected, save it to NVS (namespace "wifi"). Blocks up to
  *  timeout_ms. ESP_OK connected; ESP_FAIL the AP refused / disconnected; ESP_ERR_TIMEOUT. */
 esp_err_t net_wifi_join(const char *ssid, const char *pass, uint32_t timeout_ms);
