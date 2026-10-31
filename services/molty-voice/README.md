@@ -135,6 +135,16 @@ moshi-server on 127.0.0.1, and mounts the paired config read-only. Pair on the h
   you talk it sends `stt.hint` `pause` (a mid-sentence pause begins) and `question` (a word ends
   in `?`), at most one per 1.5 s of audio: the relay passes them to Molty, which nods / glances
   as a listener. Older relays ignore both.
+- **Stream head / language anchor** (`molty_voice/kyutai.py` `stream_head`): every STT stream
+  opens with Kyutai's 1 s digital-silence prefix, then an English audio prompt (`stt_prompt` in
+  the config, default "Okay, so here is what I think.", spoken once by the box's own TTS in the
+  default voice and checked once through the STT — a take the STT does not hear as exactly that
+  line is dropped and made again later) and 0.8 s of silence, then a marker; every word before
+  that marker comes back is the prompt's and is dropped. Without it stt-1b-en_fr sometimes locks
+  its transcript into another script on the first words (English heard as Persian or Chinese
+  spelling: about a third of the start offsets for the turns affected). `"stt_prompt": ""` turns
+  the prompt off (the prefix stays). Cost: ~5 s of head audio, ~0.4 s of model time at the start
+  of each listen, caught up within the first second.
 - **TTS:** One connection per request (the relay groups sentences up to ~220 characters for the
   box; connecting costs ~1 ms, so there is no pool). The box sends the words, then `Eos`. The
   24 kHz float audio streams back resampled to 16 kHz PCM16, in ≤ 16 KB frames. The quiet lead

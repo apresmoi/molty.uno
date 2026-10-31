@@ -58,6 +58,12 @@ make sim-test                                                # (5)
    the turn-trace uplink: shake settle, resend ring, trace header fields, shake to talk; react moods / gestures,
    the drafts scenario and metrics).
 
+**Script-lock suite** (`scenarios/script.yaml`): English turns the STT spelled in another script
+(Persian / Chinese), each at a few sub-frame start offsets; the `script` column flags such a
+transcript (`FOREIGN`) and the summary counts them. TTS voices never trigger it, so the suite plays
+real kept turns from `scenarios/recordings/` (gitignored — a person's voice, never commit it; copy
+the relay's kept turn WAVs there under the names in the file).
+
 **Turn-trace suite** (`scenarios/trace.yaml`, `make sim SIM_ARGS=scenarios/trace.yaml`): `shake-noise`
 (a turn started by an 8.2 g shake: seeded handling noise on the mic for the shake's first 0.45 s, an IMU
 trace for the device's settle rule, the listen adopted by the relay), `shake-quick`, and `wifi-stall`

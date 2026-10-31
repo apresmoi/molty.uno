@@ -86,7 +86,8 @@ async def with_servers(relay_handler, moshi: FakeMoshi, cfg_extra=None, process_
         mport = ms.sockets[0].getsockname()[1]
         rport = rs.sockets[0].getsockname()[1]
         cfg = Config(relay=f"http://127.0.0.1:{rport}", device_id=DEVICE, token=TOKEN, name="test box",
-                     stt_url=f"ws://127.0.0.1:{mport}/api/asr-streaming", tts_url=f"ws://127.0.0.1:{mport}/api/tts_streaming", **(cfg_extra or {}))
+                     stt_url=f"ws://127.0.0.1:{mport}/api/asr-streaming", tts_url=f"ws://127.0.0.1:{mport}/api/tts_streaming",
+                     **{"stt_prompt": "", **(cfg_extra or {})})
         bridge = Bridge(cfg, **(bridge_kwargs or {}))
         await asyncio.wait_for(bridge.serve_once(), 10)
         return bridge

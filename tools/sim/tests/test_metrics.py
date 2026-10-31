@@ -1,7 +1,7 @@
 import pytest
 
 from molty_sim.align import cue_errors, match, mms_word, norm
-from molty_sim.metrics import TurnFacts, pct, stats, summarize, turn_metrics, wer
+from molty_sim.metrics import TurnFacts, foreign_script, pct, stats, summarize, turn_metrics, wer
 
 
 def test_wer_ignores_case_punctuation_fillers_and_numbers():
@@ -117,3 +117,15 @@ def test_first_voice_and_agent_say_pick_the_filler_apart():
 
     assert agent_say(Dev, {"a"}, "Sunny all day.") is answer  # not the filler that started meanwhile
     assert agent_say(Dev, {"a", "b", "c"}, "x") is None
+
+
+def test_foreign_script_flags_english_spelled_in_another_script():
+    # live turns of 2026-10-31: "can you do the one where you're eating" heard as Persian / Chinese
+    assert foreign_script("کن یه دود اون و یه ایتنگ")
+    assert foreign_script("你要 跟 一 度 的 忘 地 越 一定")
+    assert foreign_script("Nhà cán nhiêu đủ được quán đã giờ ý tính.")  # Vietnamese diacritics
+    assert not foreign_script("Can you do the one where you are eating?")
+    assert not foreign_script("Ça va, déjà vu — 2 meters, 100%!")
+    assert not foreign_script("")
+    s = summarize([{"foreign_script": True}, {"foreign_script": False}, {}], [])
+    assert s["foreign_script"] == 1

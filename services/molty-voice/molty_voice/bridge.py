@@ -73,6 +73,11 @@ class Bridge:
         self._stt: dict[str, asyncio.Queue] = {}
         self._stt_tasks: dict[str, asyncio.Task] = {}
         self.connected = asyncio.Event()
+        # the STT language anchor (cfg.stt_prompt as float32 @24 kHz), synthesized by the box's TTS
+        # in the background; until it is there (or when it cannot be made) listens go without it
+        self.stt_prompt: np.ndarray | None = None
+        self._prompt_task: asyncio.Task | None = None
+        self._prompt_tried = -1e9
 
     # ---------------- relay connection ----------------
 
@@ -110,6 +115,7 @@ class Bridge:
             if self.reflex is not None and self.cfg.stt:
                 hello["reflex"] = True
             await self._send_json(hello)
+            self._ensure_prompt()
             last_rx = time.monotonic()
             keepalive = asyncio.create_task(self._keepalive(lambda: last_rx))
             try:
@@ -170,6 +176,7 @@ class Bridge:
             if task:
                 task.cancel()
         elif t == "stt.start" and isinstance(mid, str):
+            self._ensure_prompt()
             if mid not in self._stt:
                 q: asyncio.Queue = asyncio.Queue()
                 self._stt[mid] = q
@@ -195,8 +202,61 @@ class Bridge:
         if q is not None and f.payload:
             q.put_nowait(("audio", f.payload))
 
+    PROMPT_RETRY_S = 30.0
+
+    def _ensure_prompt(self) -> None:
+        """Starts making the STT language anchor when it is wanted, missing and not being made
+        (again at most every PROMPT_RETRY_S: Kyutai TTS may come up after the bridge)."""
+        if not (self.cfg.stt and self.cfg.stt_prompt.strip()) or self.stt_prompt is not None:
+            return
+        if (self._prompt_task and not self._prompt_task.done()) or time.monotonic() - self._prompt_tried < self.PROMPT_RETRY_S:
+            return
+        self._prompt_tried = time.monotonic()
+        self._prompt_task = asyncio.create_task(self._make_prompt())
+
+    async def _make_prompt(self) -> None:
+        chunks: list[np.ndarray] = []
+
+        async def keep(pcm: np.ndarray) -> None:
+            chunks.append(pcm)
+
+        try:
+            await asyncio.wait_for(synthesize(self.cfg.tts_url, self.cfg.api_key, self.cfg.stt_prompt, self.cfg.default_voice, keep,
+                                              connect=self._kconnect), 20)
+            x = np.concatenate(chunks).astype(np.float32)
+            x = x[quiet_lead(x, MODEL_RATE):]  # the TTS's breath before and after the line: model time for nothing
+            x = x[: len(x) - quiet_lead(x[::-1], MODEL_RATE)]
+            if not 0.5 <= len(x) / MODEL_RATE <= 8.0:
+                raise ValueError(f"prompt audio is {len(x) / MODEL_RATE:.1f} s")
+            # Kyutai TTS samples: now and then a line comes out clipped or slurred. An anchor the STT
+            # does not hear as exactly the line would steer nothing (or leak a word): check it once.
+            heard = await asyncio.wait_for(self._transcribe(x), 20)
+            if _words(heard) != _words(self.cfg.stt_prompt):
+                raise ValueError(f"the stt heard the anchor as {heard[:80]!r}")
+            self.stt_prompt = x
+            log.info("stt language anchor ready: %r, %.1f s", self.cfg.stt_prompt, len(x) / MODEL_RATE)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 - listens go on without it; tried again later
+            log.warning("stt language anchor not made (listens go without it for now): %s: %s", type(e).__name__, e)
+
+    async def _transcribe(self, x: np.ndarray) -> str:
+        s = SttSession(self.cfg.stt_url, self.cfg.api_key, flush_s=self.cfg.stt_flush_s, turn_end_threshold=0, connect=self._kconnect)
+        try:
+            await s.open()
+            # 1 s of silence after the line, like Kyutai's reference client: the last word is only
+            # sent once the model writes something after it (the marker alone can beat it)
+            await s.feed_model(np.concatenate([x, np.zeros(MODEL_RATE, dtype=np.float32)]))
+            return await s.finish()
+        finally:
+            await s.close()
+
     async def _cancel_all(self) -> None:
         tasks = list(self._tts.values()) + list(self._stt_tasks.values())
+        if self._prompt_task is not None and not self._prompt_task.done():
+            tasks.append(self._prompt_task)  # cut short by the disconnect: made again on the next connect
+            self._prompt_tried = -1e9
+        self._prompt_task = None
         self._tts.clear()
         self._stt.clear()
         self._stt_tasks.clear()
@@ -323,7 +383,8 @@ class Bridge:
         s = SttSession(self.cfg.stt_url, self.cfg.api_key, flush_s=self.cfg.stt_flush_s, on_word=partial,
                        on_turn_end=turn_end, turn_end_threshold=self.cfg.turn_end,
                        turn_end_skip_steps=self.cfg.turn_end_skip_steps, turn_end_hold_s=self.cfg.turn_end_hold_s,
-                       on_no_speech=no_speech, no_speech_s=no_speech_s, observer=trace, on_hint=hint, connect=self._kconnect)
+                       on_no_speech=no_speech, no_speech_s=no_speech_s, observer=trace, on_hint=hint,
+                       prompt=self.stt_prompt, connect=self._kconnect)
         t_end = None
         try:
             await s.open()
@@ -351,6 +412,10 @@ class Bridge:
             await s.close()  # frees the server channel at once
             self._stt.pop(mid, None)
             self._stt_tasks.pop(mid, None)
+
+
+def _words(text: str) -> list[str]:
+    return re.sub(r"[^a-z0-9' ]+", " ", text.lower()).split()
 
 
 def _why(e: BaseException) -> str:

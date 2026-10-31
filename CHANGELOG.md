@@ -20,6 +20,13 @@ First public release.
   blocks) so a slow leak shows as a climbing count. Host tests: the reconnect and guard
   policies, the shed, and a 200-round link soak that every allocation of a turn is given back.
 
+- **Voice box transcripts stay in English**: some English turns came back spelled in Persian or
+  Chinese script (the STT model, stt-1b-en_fr, locked into another script on the first words —
+  no audio or transport fault). Every listen now opens with Kyutai's 1 s silence prefix and a
+  short English line spoken by the box's own TTS (`stt_prompt`), whose words are cut from the
+  transcript. `molty-sim` flags such transcripts (`script` column) and `scenarios/script.yaml`
+  replays real kept turns that did it.
+
 - **Molty's reflex**: Molty reacts by itself to what the human says while they talk, with any
   agent (also one that never reads partials). Each phrase of the voice box's live transcript is
   classified into a reaction (surprised, happy, sad, laugh, curious, none) and an utterance

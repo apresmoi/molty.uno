@@ -10,7 +10,7 @@ from websockets.asyncio.server import serve
 from molty_voice import framing
 from molty_voice.bridge import Bridge
 from molty_voice.config import Config
-from molty_voice.kyutai import FRAME_S, PausePredictor, sentence_complete
+from molty_voice.kyutai import FRAME_S, PREFIX_STEPS, PausePredictor, sentence_complete
 
 DEVICE = "molty-k7m2q9xa4c"
 TOKEN = DEVICE + "." + "A" * 43
@@ -211,7 +211,8 @@ class VadMoshi:
                     loud_n = loud_n + 1 if loud else 0
                     if loud_n >= self.word_after and not said:
                         said = True
-                        await ws.send(msgpack.packb({"type": "Word", "text": self.word, "start_time": 0.1}))
+                        # like moshi-server: times count from the stream's start, the silence prefix included
+                        await ws.send(msgpack.packb({"type": "Word", "text": self.word, "start_time": PREFIX_STEPS * FRAME_S + 0.1}))
                     speaking = loud_n > self.lag
                     await ws.send(msgpack.packb({"type": "Step", "step_idx": 0, "prs": [0.0, 0.0, 0.0 if speaking else 0.95, 0.0]}, use_single_float=True))
                 elif d["type"] == "Marker":
@@ -251,7 +252,7 @@ def run_listen_all(chunks, start_extra=None, moshi=None, **cfg_extra):
     async def main():
         async with serve(moshi.handler, "127.0.0.1", 0) as ms, serve(relay, "127.0.0.1", 0) as rs:
             mp, rp = ms.sockets[0].getsockname()[1], rs.sockets[0].getsockname()[1]
-            cfg = Config(relay=f"http://127.0.0.1:{rp}", device_id=DEVICE, token=TOKEN, stt_url=f"ws://127.0.0.1:{mp}/api/asr-streaming", tts_url="ws://127.0.0.1:1/x", **cfg_extra)
+            cfg = Config(relay=f"http://127.0.0.1:{rp}", device_id=DEVICE, token=TOKEN, stt_url=f"ws://127.0.0.1:{mp}/api/asr-streaming", tts_url="ws://127.0.0.1:1/x", **{"stt_prompt": "", **cfg_extra})
             await asyncio.wait_for(Bridge(cfg).serve_once(), 10)
 
     asyncio.run(main())

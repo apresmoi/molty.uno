@@ -1,0 +1,24 @@
+# Script-lock suite: English turns the STT spelled in another script (2026-10-31 live turns heard as
+# Persian / Chinese — "کن یه دود اون و یه ایتنگ" = "can you do the one where you're eating").
+# Pure model behaviour of stt-1b-en_fr on the stream's first words, sensitive to where the speech
+# falls on the 80 ms model frame grid — hence each recording at several lead_s (sub-frame offsets).
+# The fix is the stream head (services/molty-voice molty_voice/kyutai.py stream_head: Kyutai's 1 s
+# silence prefix + an English audio prompt). Pass: `script` column empty, summary
+# "foreign-script transcripts 0". TTS voices never reproduce it (0/86 tried); it needs real turns:
+# copy kept turn audio (the relay's `audio_kept` WAVs, 16 kHz mono) to scenarios/recordings/
+# (gitignored: they are a person's voice — never commit them) under the names below.
+#   make sim SIM_ARGS='scenarios/script.yaml --align none'
+name: script
+defaults:
+  level_db: -24          # each recording plays at its own active level (per turn): the level moves the outcome
+  noise: {kind: none}     # the recordings carry their own room tone
+turns:
+  - {id: eating-a0, say: "Want another one?", wav: recordings/script-eating-a.wav, level_db: -25.08, text: "Can you do the one where you are eating?", lead_s: 0.0}
+  - {id: eating-a2, say: "Want another one?", wav: recordings/script-eating-a.wav, level_db: -25.08, text: "Can you do the one where you are eating?", lead_s: 0.02}
+  - {id: eating-a4, say: "Want another one?", wav: recordings/script-eating-a.wav, level_db: -25.08, text: "Can you do the one where you are eating?", lead_s: 0.04}
+  - {id: eating-a8, say: "Want another one?", wav: recordings/script-eating-a.wav, level_db: -25.08, text: "Can you do the one where you are eating?", lead_s: 0.08}
+  - {id: eating-b0, say: "Which one now?", wav: recordings/script-eating-b.wav, level_db: -23.08, text: "Can you do the one that you are eating?", lead_s: 0.0}
+  - {id: eating-b2, say: "Which one now?", wav: recordings/script-eating-b.wav, level_db: -23.08, text: "Can you do the one that you are eating?", lead_s: 0.02}
+  - {id: eating-b4, say: "Which one now?", wav: recordings/script-eating-b.wav, level_db: -23.08, text: "Can you do the one that you are eating?", lead_s: 0.04}
+  - {id: eating-b8, say: "Which one now?", wav: recordings/script-eating-b.wav, level_db: -23.08, text: "Can you do the one that you are eating?", lead_s: 0.08}
+  - {id: control, say: "Anything else?", wav: recordings/script-control.wav, level_db: -22.56, text: "But can you do it now?", lead_s: 0.0}
