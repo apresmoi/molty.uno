@@ -79,9 +79,8 @@ void mole_fluid_event(mole_fluid_event_t ev);
 void mole_fluid_set_status(int status);
 
 /** The listening ring (link_audio.c, the audio task): on while the mic records a `listen`
- *  — each rise of `level` (0..1, the VAD's mic level, ~10 Hz) drops a touch-style ripple
- *  in the water around the creature (in its listening mood), a quiet room a small slow one,
- *  and a faint line of the fluid marks the rim; off melts it back. Knobs: fluid_ring.h. Never shown while a question
+ *  — each rise of `level` (0..1, the VAD's mic level, ~10 Hz) sends a round wave from a fixed circle at the rim across the
+ *  screen (in its listening mood), a quiet room a faint slow one; off melts it back. Knobs: fluid_ring.h. Never shown while a question
  *  is on screen. Its colour: mole_fluid_listen_color (the listen's ring_color, 0xRRGGBB;
  *  -1 = the device default, POST /api/creature/state {ring_color: "#rrggbb"|"accent"},
  *  kept in NVS, else the palette's accent; fluid_ring_rgb). Safe from any task; a no-op

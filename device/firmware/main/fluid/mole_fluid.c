@@ -583,10 +583,10 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     read_tilt(cfg->tilt);
     float ox = s_gx * FLUID_TILT_LEAN, oy = s_gy * FLUID_TILT_LEAN;
 
-    /* a listen on the water, never over a question: each rise of the voice drops a
-     * touch-style ripple and a faint line marks the rim (fluid_ring.h). The line is a target
-     * of the fluid, around whatever the state shows. */
-    const int ring_drop = fluid_ring_tick(&s_rg, rdt, s_listen && !asking, s_level);
+    /* a listen on the water, never over a question: a fixed circle at the rim, and each rise of
+     * the voice sends a round wave from it across the screen (fluid_ring.h). The circle is a
+     * target of the fluid, around whatever the state shows. */
+    const int ring_wave = fluid_ring_tick(&s_rg, rdt, s_listen && !asking, s_level);
     const float acc = cfg->palette == FLUID_PAL_PASTEL ? 0.f : 1.f;   /* mono palettes: the accent */
 
     switch (asking ? ST_TEXT : s_cur) {
@@ -649,9 +649,10 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     if (n == 4) s_acc = 0.f;
     fluid_sim_color(s, n * FLUID_STEP);                    /* colour rides the same flow, once per frame */
     fluid_sim_view(s);
+    fluid_ring_pin(s, &s_rg, fluid_ring_rgb(s_ring_rgb, s_ring_def, cfg->palette), acc);
     s_shimmer = 0.12f + (thinking ? 0.35f : 0.f) + cfg->mic * 0.4f;
 
-    if (ring_drop) ripple(s_rg.drop_x, s_rg.drop_y, s_rg.drop_s, RING_DROP_R);   /* the voice touches the water */
+    if (ring_wave) fluid_ring_ping(s, &s_rg);              /* the voice rings the water */
     /* a question's faint dividers: in while it waits, out once it was answered */
     bool div_on = s_ask.scr.phase == FLUID_ASK_SHOW && s_ask.n >= 2;
     s_div = div_on ? fminf(1.f, s_div + rdt / DIV_FADE_S) : fmaxf(0.f, s_div - rdt / DIV_FADE_S);
