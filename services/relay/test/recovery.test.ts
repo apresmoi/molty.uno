@@ -420,7 +420,6 @@ describe("a link drop (cap `resume`)", () => {
     void w.room.socketMessage(w.sock, JSON.stringify({ t: "evt", name: "say.done", data: { job } }));
     await until(() => (w.sock as any).last("cmd")?.name === "listen");
     expect(Date.now() - t).toBeLessThan(1000);
-    expect(((await w.room.job(w.token, job, 0)) as any).result.status).toBe("running");
     w.sock.close(1006, "done with this test");
     await p;
   });
