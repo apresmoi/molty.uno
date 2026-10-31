@@ -8,6 +8,14 @@ All notable changes to Molty are recorded here. One version covers the whole pro
 
 First public release.
 
+- **A tap ends a recording and sends it**, and a tap while speech has not started cancels the wait;
+  a shake's phantom taps are ignored. Molty gives up on a say with no audio after 8 s (was 30 s), and the
+  relay cancels a say whose job failed, so the creature comes back at once.
+- **Choose what tap, double tap and the two buttons do** (none, talk, event, stop): device console and the
+  `gestures` command. Out of the box a double tap talks.
+- **Words are no longer lost when an agent stops following a talk**: unread after 5 s, they go out as an
+  `utterance`. Reply times of a long conversation on one turn id now count from its last words.
+
 - **Wi-Fi rssi is reported again**: since the reconnect fix, timeline lines and `/api/diag` read
   `rssi=0` whenever the boot connect had associated before the diagnostics registered their
   Wi-Fi hooks (almost always), until the first drop. The diagnostics now start from the

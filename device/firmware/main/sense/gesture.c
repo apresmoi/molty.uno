@@ -38,7 +38,11 @@ bool gesture_feed(gesture_t *g, float ax, float ay, float az, uint32_t ms, gestu
     }
     const float mag = sqrtf(mag2);
     if (g->cooling) {
-        if ((int32_t)(ms - g->cool_until) < 0) { g->in_peak = false; return false; }
+        if ((int32_t)(ms - g->cool_until) < 0) {
+            g->in_peak = false;
+            if (mag > g->cfg.peak_g) g->last_shake = ms;      /* still shaking: taps stay phantoms */
+            return false;
+        }
         g->cooling = false;
     }
 
@@ -77,9 +81,83 @@ bool gesture_feed(gesture_t *g, float ax, float ay, float az, uint32_t ms, gestu
     if (rev < g->cfg.reversals) return false;
     if (out) *out = (gesture_shake_t){ pk, rev, ms - first };
     g->npeaks = 0; g->in_peak = false;
+    g->shook = true; g->last_shake = ms;
     g->cooling = true; g->cool_until = ms + g->cfg.cooldown_ms;
     return true;
 }
+
+bool gesture_tap_guarded(const gesture_t *g, uint32_t now_ms) {
+    if (g->shook && now_ms - g->last_shake < GESTURE_TAP_SHAKE_MS) return true;
+    return g->npeaks >= 2 && now_ms - g->peaks[g->npeaks - 1].ms < GESTURE_TAP_MOTION_MS;
+}
+
+gesture_tap_route_t gesture_tap_route(bool listening, uint32_t listen_age_ms, bool connected,
+                                      bool say_waiting, bool guarded) {
+    if (guarded) return GESTURE_TAP_IGNORE;
+    if (listening) {
+        if (listen_age_ms < GESTURE_TAP_LISTEN_GUARD_MS) return GESTURE_TAP_IGNORE;
+        return connected ? GESTURE_TAP_STOP_LISTEN : GESTURE_TAP_DROP_LISTEN;
+    }
+    return say_waiting ? GESTURE_TAP_CANCEL_SAY : GESTURE_TAP_GESTURE;
+}
+
+gesture_taps_t gesture_tapper_feed(gesture_tapper_t *t, uint32_t now_ms, bool double_bound) {
+    if (!double_bound) {
+        t->pending = false;
+        return GESTURE_TAPS_SINGLE;
+    }
+    if (t->pending) {
+        const uint32_t gap = now_ms - t->t0;
+        if (gap < GESTURE_TAP_BOUNCE_MS) return GESTURE_TAPS_NONE;
+        if (gap <= GESTURE_DOUBLE_TAP_MS) { t->pending = false; return GESTURE_TAPS_DOUBLE; }
+    }
+    /* a later touch than the window: the poll normally got there first */
+    const bool late = t->pending;
+    t->pending = true; t->t0 = now_ms;
+    return late ? GESTURE_TAPS_SINGLE : GESTURE_TAPS_NONE;
+}
+
+gesture_taps_t gesture_tapper_poll(gesture_tapper_t *t, uint32_t now_ms) {
+    if (!t->pending || now_ms - t->t0 <= GESTURE_DOUBLE_TAP_MS) return GESTURE_TAPS_NONE;
+    t->pending = false;
+    return GESTURE_TAPS_SINGLE;
+}
+
+const char *const GESTURE_INPUT_NAMES[GESTURE_IN_COUNT] = { "tap", "double_tap", "button_accept", "button_reject" };
+const char *const GESTURE_ACTION_NAMES[GESTURE_DO_COUNT] = { "none", "talk", "event", "stop" };
+
+gesture_action_t gesture_binds_get(uint32_t packed, gesture_input_t in) {
+    return (gesture_action_t)((packed >> (4u * (unsigned)in)) & 0xFu);
+}
+
+uint32_t gesture_binds_set(uint32_t packed, gesture_input_t in, gesture_action_t a) {
+    const unsigned at = 4u * (unsigned)in;
+    return (packed & ~(0xFu << at)) | ((uint32_t)a << at);
+}
+
+uint32_t gesture_binds_default(void) {
+    uint32_t p = 0;
+    p = gesture_binds_set(p, GESTURE_IN_TAP, GESTURE_DO_EVENT);
+    p = gesture_binds_set(p, GESTURE_IN_DOUBLE_TAP, GESTURE_DO_TALK);
+    p = gesture_binds_set(p, GESTURE_IN_BUTTON_ACCEPT, GESTURE_DO_EVENT);
+    p = gesture_binds_set(p, GESTURE_IN_BUTTON_REJECT, GESTURE_DO_EVENT);
+    return p;
+}
+
+bool gesture_binds_valid(uint32_t packed) {
+    if (packed >> (4u * GESTURE_IN_COUNT)) return false;
+    for (int i = 0; i < GESTURE_IN_COUNT; i++)
+        if ((int)gesture_binds_get(packed, (gesture_input_t)i) >= GESTURE_DO_COUNT) return false;
+    return true;
+}
+
+static int name_index(const char *const *names, int n, const char *name) {
+    if (!name) return -1;
+    for (int i = 0; i < n; i++) if (!strcmp(names[i], name)) return i;
+    return -1;
+}
+int gesture_input_lookup(const char *name) { return name_index(GESTURE_INPUT_NAMES, GESTURE_IN_COUNT, name); }
+int gesture_action_lookup(const char *name) { return name_index(GESTURE_ACTION_NAMES, GESTURE_DO_COUNT, name); }
 
 bool gesture_limit_allow(gesture_limit_t *l, uint32_t now_ms) {
     if (l->used && now_ms - l->last_ms < l->min_ms) return false;

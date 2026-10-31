@@ -760,7 +760,7 @@ describe("review fixes", () => {
     const { backend, token } = await surfaceWorld();
     const ok = await mcpCall(backend, "molty_webhook", { url: "https://hooks.example.org/x", events: ["shake"] }, token);
     expect(ok.structuredContent).toMatchObject({ ok: true, webhook: { events: ["shake"] } });
-    expect((await mcpCall(backend, "molty_webhook", { url: "https://hooks.example.org/x", events: ["wave"] }, token)).structuredContent.message).toBe("events must be a list of shake, tap, button, answer, utterance, utterance.partial, draft.used, draft.dropped");
+    expect((await mcpCall(backend, "molty_webhook", { url: "https://hooks.example.org/x", events: ["wave"] }, token)).structuredContent.message).toBe("events must be a list of shake, tap, double_tap, button, answer, utterance, utterance.partial, draft.used, draft.dropped");
   });
 });
 

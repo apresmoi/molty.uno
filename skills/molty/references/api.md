@@ -82,6 +82,7 @@ Success: `200 {"ok":true,"result":{…}}`. Unknown argument keys are rejected.
 | `listen` | `{"ms"?: 0..30000, "end_silence_ms"?: 300..3000, "no_speech_ms"?: 1000..10000, "vad"?: bool, "ring_color"?: c, "ack"?: true\|false\|"silent"}` | `{job}` immediately | records the mic until the human finishes (the window is a ceiling: omit `ms` for the human's own setting, 30000 ms out of the box; `0` = unlimited, 5 min safety ceiling), relay STT; job done → `{text, duration_ms, peak, rms, reason, speech_ms?, timings}` |
 | `state` | `{}` = read · `{"state": {…}}` or flat fields = patch | creature state JSON | low-level creature state, same as the device's `/api/creature/state` |
 | `volume` | `{"volume": 0..21}` | — | speaker volume, 0 = mute |
+| `gestures` | `{"bindings"?: {input: action}}` | what tap, double tap and the buttons do: [Gestures](#gestures-what-tap-double-tap-and-the-buttons-do) |
 | `imu` | — | ax/ay/az (g), gx/gy/gz (°/s), ms | one motion-sensor snapshot |
 | `diag` | `{"timeline"?: 0..180}` | diagnostics JSON | frame/CPU/heap/network health; timeline = seconds of 1 Hz rows |
 | `log` | `{"since"?: n, "max"?: 1024..32768}` | `{next, text}` | device log tail; pass `next` back as `since` |
@@ -128,6 +129,30 @@ setting). You add expression in two ways:
 Molty), `blink`, `wobble`, `stretch`, `look_up`, `yawn`. It never changes what is shown and
 never cancels a question; while words or a question cover the creature it waits up to 3 s,
 then is dropped. Silent, ~0.3–2.6 s. A `nod` while they talk (listening) is fine.
+
+## Gestures: what tap, double tap and the buttons do
+
+The human can choose (cap `gestures`; older firmware: `unsupported`). Kept on the device; also in the
+device console and in `status` as `gestures`. Tell them it exists; change it only when they ask.
+
+```sh
+curl -sS -X POST "$MOLTY_RELAY/v1/devices/$MOLTY_DEVICE/cmd" -H "authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"name":"gestures","args":{"bindings":{"button_reject":"talk","tap":"none"}}}'
+# -> {"bindings":{"tap":"none","double_tap":"talk","button_accept":"event","button_reject":"talk"}}
+# no args reads them. MCP: molty_gestures {bindings?}
+```
+
+| input | default | | action | does |
+|---|---|---|---|---|
+| `tap` | `event` | | `none` | nothing |
+| `double_tap` | `talk` | | `talk` | Molty listens, as after a shake: you get one `utterance` |
+| `button_accept` (BOOT) | `event` | | `event` | you get the `tap` / `double_tap` / `button` event |
+| `button_reject` (PWR) | `event` | | `stop` | ends the listen and sends it, or cuts the speech (that say's job then fails) |
+
+Always first, whatever is bound: a pairing and an open question take their inputs; a tap during a
+recording stops and sends it (`reason: "tap"`, after its first second); a tap while speech has not
+started yet cancels the wait. With `double_tap` bound, a single tap's event comes 350 ms later.
 
 ## Quick phrases
 
@@ -185,7 +210,10 @@ curl -sS -X POST "$MOLTY_RELAY/v1/devices/$MOLTY_DEVICE/talk" \
 Body: `{"say"?: s, "listen"?: true, "listen_ms"?: 0..30000 (omit: the human's setting, 30000 out of the box; 0 = unlimited), "voice"?, "end_silence_ms"?, "no_speech_ms"?, "vad"?, "ring_color"?, "ack"?, "in_reply_to"?, "client_timing"?}`.
 
 - `in_reply_to` (talk and say): the `turn_id` of the `utterance` you answer (see
-  [events.md](events.md#shake-to-talk)).
+  [events.md](events.md#shake-to-talk)). Reply timings count from the last words a talk heard, not from the
+  utterance, so a long conversation on one id reads true.
+- Never end your run on `status: "pending"`: follow the job. If you do, the words it hears come back as an
+  `utterance` ([events.md](events.md)).
 - `client_timing` (talk, say and ask): **include client_timing to help debug latency** — what your
   own side spent on this turn, in ms: an object of at most 8 keys (lower case, `a-z0-9_`), numbers
   only, each 0..3600000, e.g. `{"received_ms":120,"model_ms":900}`. Suggested keys: `received_ms`
@@ -206,6 +234,7 @@ returns the transcript as `heard` (with `filler_in_ms`: see [Quick phrases](#qui
 
 | reason | meaning |
 |---|---|
+| `tap` | the human tapped the screen to end it: what they said so far, an ordinary end of turn |
 | `silence` | they finished |
 | `turn_end` | they finished, called by the owner's voice box from what they said: treat it like `silence` |
 | `no_speech` | nobody spoke: `heard` is `""` |
@@ -346,7 +375,7 @@ Ignore fields you don't know.
 ## MCP (optional)
 
 The same features are a remote MCP server at `$MOLTY_RELAY/mcp` (streamable HTTP, bearer
-auth). Tools: `molty_pair` (no token needed), `molty_talk`, `molty_quick`, `molty_phrases`, `molty_ask`, `molty_status`, `molty_mood`, `molty_act`,
+auth). Tools: `molty_pair` (no token needed), `molty_talk`, `molty_quick`, `molty_phrases`, `molty_ask`, `molty_status`, `molty_mood`, `molty_act`, `molty_gestures`,
 `molty_show`, `molty_say`, `molty_listen`, `molty_wait`, `molty_state`,
 `molty_volume`, `molty_imu`, `molty_diag`, `molty_log`, `molty_events`,
 `molty_webhook`, `molty_updates`, `molty_update`, `molty_activity`, `molty_draft`, `molty_react`,

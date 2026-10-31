@@ -131,6 +131,62 @@ static void test_limit(void) {
     CHECK(gesture_limit_allow(&z, 0) && !gesture_limit_allow(&z, 1999) && gesture_limit_allow(&z, 2000), "first at t=0, then 2 s");
 }
 
+/* a shake's phantom taps are guarded; a lone knock is not */
+static void test_tap_guard(void) {
+    gesture_t g; gesture_init(&g, NULL); gesture_shake_t sh; uint32_t t = 1000;
+    gesture_feed(&g, 0, 0, 1, t, &sh);
+    CHECK(!gesture_tap_guarded(&g, t), "quiet: not guarded");
+    t += 20; gesture_feed(&g, 3, 0, 1, t, &sh); t += 20; gesture_feed(&g, 0, 0, 1, t, &sh);
+    CHECK(!gesture_tap_guarded(&g, t), "one knock: a finger's tap is real");
+    bool shook = false;
+    for (int i = 0; i < 24 && !shook; i++) { t += 60; shook = gesture_feed(&g, i % 2 ? -3.f : 3.f, 0, 1, t, &sh); if (i == 2) CHECK(gesture_tap_guarded(&g, t), "strokes under way: guarded"); }
+    CHECK(shook, "the shake fired");
+    CHECK(gesture_tap_guarded(&g, t + GESTURE_TAP_SHAKE_MS - 1), "just after a shake: guarded");
+    CHECK(!gesture_tap_guarded(&g, t + GESTURE_TAP_SHAKE_MS), "a second later: free");
+    t += 100; gesture_feed(&g, 3, 0, 1, t, &sh);
+    CHECK(gesture_tap_guarded(&g, t + GESTURE_TAP_SHAKE_MS - 1), "still shaking in the cooldown: the guard follows");
+    t += 5000; CHECK(!gesture_tap_guarded(&g, t), "strokes long gone: free");
+}
+
+static void test_tap_route(void) {
+    CHECK(gesture_tap_route(true, 999, true, false, false) == GESTURE_TAP_IGNORE, "first second of a recording");
+    CHECK(gesture_tap_route(true, 1000, true, false, false) == GESTURE_TAP_STOP_LISTEN, "stop and send");
+    CHECK(gesture_tap_route(true, 1000, false, false, false) == GESTURE_TAP_DROP_LISTEN, "link down: drop");
+    CHECK(gesture_tap_route(true, 5000, true, false, true) == GESTURE_TAP_IGNORE, "a shake's phantom never stops it");
+    CHECK(gesture_tap_route(false, 0, true, true, false) == GESTURE_TAP_CANCEL_SAY, "say waiting: cancel");
+    CHECK(gesture_tap_route(false, 0, true, true, true) == GESTURE_TAP_IGNORE, "...not by a phantom");
+    CHECK(gesture_tap_route(false, 0, true, false, false) == GESTURE_TAP_GESTURE, "speech playing or idle: as bound");
+}
+
+static void test_tapper(void) {
+    gesture_tapper_t t = { 0 };
+    CHECK(gesture_tapper_feed(&t, 100, false) == GESTURE_TAPS_SINGLE, "no double bound: at once");
+    CHECK(gesture_tapper_feed(&t, 100, true) == GESTURE_TAPS_NONE, "double bound: waits");
+    CHECK(gesture_tapper_poll(&t, 100 + GESTURE_DOUBLE_TAP_MS) == GESTURE_TAPS_NONE, "inside the window");
+    CHECK(gesture_tapper_poll(&t, 101 + GESTURE_DOUBLE_TAP_MS) == GESTURE_TAPS_SINGLE, "window over: one tap");
+    CHECK(gesture_tapper_poll(&t, 2000) == GESTURE_TAPS_NONE, "reported once");
+    CHECK(gesture_tapper_feed(&t, 3000, true) == GESTURE_TAPS_NONE, "first");
+    CHECK(gesture_tapper_feed(&t, 3020, true) == GESTURE_TAPS_NONE, "a bounce is the same touch");
+    CHECK(gesture_tapper_feed(&t, 3200, true) == GESTURE_TAPS_DOUBLE, "second: double");
+    CHECK(gesture_tapper_poll(&t, 4000) == GESTURE_TAPS_NONE, "a double leaves no single");
+}
+
+static void test_binds(void) {
+    uint32_t p = gesture_binds_default();
+    CHECK(gesture_binds_valid(p), "default valid");
+    CHECK(gesture_binds_get(p, GESTURE_IN_TAP) == GESTURE_DO_EVENT, "tap: event");
+    CHECK(gesture_binds_get(p, GESTURE_IN_DOUBLE_TAP) == GESTURE_DO_TALK, "double tap: talk");
+    CHECK(gesture_binds_get(p, GESTURE_IN_BUTTON_ACCEPT) == GESTURE_DO_EVENT, "accept: event");
+    CHECK(gesture_binds_get(p, GESTURE_IN_BUTTON_REJECT) == GESTURE_DO_EVENT, "reject: event");
+    p = gesture_binds_set(p, GESTURE_IN_BUTTON_REJECT, GESTURE_DO_STOP);
+    CHECK(gesture_binds_get(p, GESTURE_IN_BUTTON_REJECT) == GESTURE_DO_STOP, "set");
+    CHECK(gesture_binds_get(p, GESTURE_IN_TAP) == GESTURE_DO_EVENT, "others kept");
+    CHECK(!gesture_binds_valid(0x9u), "an unknown action in NVS is refused");
+    CHECK(!gesture_binds_valid(0x10000u), "extra bits are refused");
+    CHECK(gesture_input_lookup("double_tap") == GESTURE_IN_DOUBLE_TAP && gesture_input_lookup("nose") < 0, "input names");
+    CHECK(gesture_action_lookup("stop") == GESTURE_DO_STOP && gesture_action_lookup("dance") < 0, "action names");
+}
+
 int main(void) {
     printf("gesture host test\n");
     test_shake_once();
@@ -138,6 +194,10 @@ int main(void) {
     test_cooldown();
     test_reset();
     test_limit();
+    test_tap_guard();
+    test_tap_route();
+    test_tapper();
+    test_binds();
     printf("%d passed, %d failed\n", s_pass, s_fail);
     return s_fail ? 1 : 0;
 }

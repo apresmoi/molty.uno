@@ -23,6 +23,8 @@ export interface TurnRecord {
   at: number;
   /** Token hash of the agent that claimed it (its first say / talk). */
   by?: string;
+  /** When its conversation last heard the human (a talk's listen): answers are timed from here, not from `at`. */
+  heard_at?: number;
 }
 
 /** What a say / talk may do about the open turn. `turn`: the turn it answers (for timings). */
@@ -39,7 +41,7 @@ export type TurnClaim = { ok: true; turn?: { id: string; at: number }; next?: Tu
 export function claimTurn(cur: TurnRecord | undefined, hash: string, inReplyTo: string | undefined, now: number): TurnClaim {
   if (!cur || now - cur.at > TURN_HOLD_MS) return { ok: true };
   if (inReplyTo !== undefined && inReplyTo !== cur.id) return { ok: true };
-  const turn = { id: cur.id, at: cur.at };
+  const turn = { id: cur.id, at: cur.heard_at ?? cur.at };
   if (!cur.by) return { ok: true, turn, next: { ...cur, by: hash } };
   if (cur.by === hash) return { ok: true, turn };
   return { ok: false, turn: cur.id };
@@ -56,7 +58,8 @@ export interface UtteranceInput {
   reason: string;
   speech_ms: number;
   stt_ms: number;
-  trigger: "shake";
+  /** shake: Molty's own listen. talk: a talk's listen whose result no agent collected. */
+  trigger: "shake" | "talk";
   caps: string[];
   /** The device's acknowledgement for this listen ("chirp" | "thinking" | "off"), absent on older firmware. */
   ack?: string;

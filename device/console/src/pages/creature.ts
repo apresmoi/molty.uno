@@ -14,6 +14,7 @@ import { ACK_CHOICES, ackChoice, ackSupported } from '../ack/ack';
 import { FILLER_CHOICES, fillerChoice, fillerSupported } from '../filler/filler';
 import { IDLE_CHOICES, idleChoice, idleSupported } from '../idle/idle';
 import { SHAKE_CHOICES, shakeChoice, shakeSupported } from '../shake/shake';
+import { GESTURE_ACTIONS, GESTURE_INPUTS, gestureChoice, gesturesSupported } from '../shake/gestures';
 
 const STATES = ['blob', 'creature', 'thinking', 'text', 'autoplay'];
 const EFFECTS = ['ripple', 'vortex', 'wave'];
@@ -39,6 +40,12 @@ export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
   const fillerLabel = h('label', { hidden: true }, 'filler');
   const fillerRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'filler', hidden: true });
   const fillerHint = h('p', { class: 'dim small', hidden: true }, 'when the agent is still quiet this long after you finish, Molty says a short "hmm…" or "let me think" itself — the agent’s answer follows right after');
+  const gestureRows = GESTURE_INPUTS.map((input) => ({
+    input,
+    label: h('label', { hidden: true }, input.label),
+    row: h('div', { class: 'chips', role: 'group', 'aria-label': input.label, hidden: true }),
+  }));
+  const gestureHint = h('p', { class: 'dim small', hidden: true }, 'a tap always stops a recording and sends it, and a question always takes the tap');
   const shakeLabel = h('label', { hidden: true }, 'shake to talk');
   const shakeRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'shake to talk', hidden: true });
   const shakeHint = h('p', { class: 'dim small', hidden: true }, 'shake Molty and just speak — it listens at once and your agent gets your words; off: a shake is only a nudge');
@@ -71,6 +78,7 @@ export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
         ackLabel, ackRow, ackHint,
         fillerLabel, fillerRow, fillerHint,
         shakeLabel, shakeRow, shakeHint,
+        ...gestureRows.flatMap((g) => [g.label, g.row]), gestureHint,
         idleLabel, idleRow, idleHint,
         h('label', null, 'speed reader'), text,
         h('div', { class: 'row' }, wpm, wpmOut),
@@ -122,6 +130,15 @@ export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
     if (shakeOn) mount(shakeRow, SHAKE_CHOICES.map((c) =>
       h('button', { type: 'button', class: 'chip' + (sk === c.on ? ' on' : ''), 'aria-pressed': String(sk === c.on),
         onclick: () => order({ shake_talk: c.on }) }, c.label)));
+    const gesturesOn = gesturesSupported(s);   /* older firmware: taps and buttons are only events */
+    gestureHint.hidden = !gesturesOn;
+    for (const g of gestureRows) {
+      g.label.hidden = g.row.hidden = !gesturesOn;
+      const on = gestureChoice(s?.gestures, g.input);
+      if (gesturesOn) mount(g.row, GESTURE_ACTIONS.map((a) =>
+        h('button', { type: 'button', class: 'chip' + (on === a.id ? ' on' : ''), 'aria-pressed': String(on === a.id),
+          onclick: () => order({ gestures: { [g.input.id]: a.id } }) }, a.label)));
+    }
     const idleOn = idleSupported(s);   /* older firmware has no idle actions */
     idleLabel.hidden = idleRow.hidden = idleHint.hidden = !idleOn;
     const il = idleChoice(s?.idle_life);
