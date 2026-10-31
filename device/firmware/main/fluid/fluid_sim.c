@@ -28,9 +28,10 @@
  * one block: the internal heap is fragmented into regions, so one ~50 KB block often
  * fails where 3 KB fields fit. */
 #define FLUID_INTERNAL_RESERVE (32 * 1024)
+static volatile bool s_internal_ok = true;          /* fluid_sim_allow_internal() */
 static void *calloc_fast(size_t n, bool *internal) {
     void *p = NULL;
-    if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >= n + FLUID_INTERNAL_RESERVE)
+    if (s_internal_ok && heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >= n + FLUID_INTERNAL_RESERVE)
         p = heap_caps_calloc(1, n, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     *internal = p != NULL;
     return p ? p : heap_caps_calloc(1, n, MALLOC_CAP_SPIRAM);
@@ -38,8 +39,12 @@ static void *calloc_fast(size_t n, bool *internal) {
 #else
 #define FLUID_CALLOC(n) calloc(1, (n))
 #define FLUID_FREE(p)   free(p)
-static void *calloc_fast(size_t n, bool *internal) { *internal = true; return calloc(1, n); }
+/* the host has one heap: "internal" is only the bookkeeping the device would do */
+static volatile bool s_internal_ok = true;
+static void *calloc_fast(size_t n, bool *internal) { *internal = s_internal_ok; return calloc(1, n); }
 #endif
+
+void fluid_sim_allow_internal(bool on) { s_internal_ok = on; }
 
 #define TAU 6.2831853f
 #define INV_UNIT (1.f / FQ_UNIT)

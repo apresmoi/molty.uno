@@ -13,6 +13,7 @@
  */
 #include "network.h"
 #include "http.h"
+#include "wifi_retry.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -32,6 +33,7 @@
 #include "lwip/esp_netif_net_stack.h"
 #include "esp_netif_defaults.h"
 #include "esp_wifi.h"
+#include "esp_timer.h"
 #include "nvs.h"
 #include "tinyusb.h"
 #include "tinyusb_net.h"
@@ -75,6 +77,33 @@ static bool s_unique_delegate_present = false;
 #define WIFI_FAIL_BIT       BIT1
 static EventGroupHandle_t s_wifi_event_group = NULL;
 static SemaphoreHandle_t  s_wifi_op = NULL;       /* one join or scan at a time */
+
+// ── Reconnect after a drop (wifi_retry.h): IDF never reconnects a station by itself ──
+static wifi_retry_t       s_retry;                /* the event handler's (the default event loop) */
+static esp_timer_handle_t s_retry_timer = NULL;
+static volatile bool      s_joining = false;      /* a join owns the radio: it reports its own result */
+
+static void retry_timer_cb(void *arg)
+{
+    (void)arg;
+    if (s_joining || !s_wifi_op) return;          /* a join reports its own result */
+    if (xSemaphoreTake(s_wifi_op, 0) != pdTRUE) { /* a scan has the radio: try again after it */
+        esp_timer_start_once(s_retry_timer, (uint64_t)WIFI_RETRY_MIN_MS * 1000);
+        return;
+    }
+    s_wifi_state = WIFI_PORTAL_STATE_CONNECTING;
+    esp_err_t e = esp_wifi_connect();
+    xSemaphoreGive(s_wifi_op);
+    if (e != ESP_OK) ESP_LOGW(TAG, "reconnect: esp_wifi_connect %s", esp_err_to_name(e));
+}
+
+static void retry_after(int32_t ms)
+{
+    if (ms < 0 || !s_retry_timer) return;
+    esp_timer_stop(s_retry_timer);                 /* one pending retry at most */
+    ESP_LOGI(TAG, "Wi-Fi dropped: reconnecting in %ld ms", (long)ms);
+    esp_timer_start_once(s_retry_timer, (uint64_t)ms * 1000);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // NVS helpers — namespace "wifi", keys "ssid" / "pass"
@@ -324,7 +353,10 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
         }
 #endif
     } else if (base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        s_wifi_state = WIFI_PORTAL_STATE_DISCONNECTED;
+        /* a forget already said "setup needed": that one is never retried */
+        retry_after(wifi_retry_event(&s_retry, s_wifi_state == WIFI_PORTAL_STATE_SETUP_NEEDED
+                                     ? WIFI_RETRY_EV_FORGET : WIFI_RETRY_EV_DISCONNECTED, s_joining));
+        if (s_wifi_state != WIFI_PORTAL_STATE_SETUP_NEEDED) s_wifi_state = WIFI_PORTAL_STATE_DISCONNECTED;
         if (s_wifi_event_group) {
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
         }
@@ -354,6 +386,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
         ip_event_got_ip_t *ev = (ip_event_got_ip_t *)data;
         snprintf(s_ip_buf, sizeof(s_ip_buf), IPSTR, IP2STR(&ev->ip_info.ip));
         s_wifi_state = WIFI_PORTAL_STATE_CONNECTED;
+        wifi_retry_event(&s_retry, WIFI_RETRY_EV_GOT_IP, s_joining);
         if (s_wifi_event_group) {
             xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
         }
@@ -419,6 +452,9 @@ esp_err_t net_wifi_init(void)
     s_wifi_event_group = xEventGroupCreate();
     s_wifi_op = xSemaphoreCreateMutex();
     if (!s_wifi_event_group || !s_wifi_op) return ESP_ERR_NO_MEM;
+    wifi_retry_init(&s_retry);
+    const esp_timer_create_args_t retry_args = { .callback = retry_timer_cb, .name = "wifi_retry" };
+    ESP_RETURN_ON_ERROR(esp_timer_create(&retry_args, &s_retry_timer), TAG, "retry timer");
 
     s_sta_netif = esp_netif_create_default_wifi_sta();
 
@@ -457,6 +493,7 @@ esp_err_t net_wifi_init(void)
         esp_wifi_set_config(WIFI_IF_STA, &wcfg);
         strncpy(s_ssid_buf, saved_ssid, sizeof(s_ssid_buf) - 1);
         s_wifi_state = WIFI_PORTAL_STATE_CONNECTING;
+        wifi_retry_event(&s_retry, WIFI_RETRY_EV_CONNECT, false);   /* a drop from here is retried */
         esp_wifi_connect();
         // Don't block here — let it connect in background while HTTP server comes up
     }
@@ -658,6 +695,8 @@ esp_err_t net_wifi_join(const char *ssid, const char *pass, uint32_t timeout_ms)
 {
     if (!s_wifi_op) return ESP_ERR_INVALID_STATE;
     xSemaphoreTake(s_wifi_op, portMAX_DELAY);
+    s_joining = true;                              /* its own disconnects are not drops to retry */
+    if (s_retry_timer) esp_timer_stop(s_retry_timer);
 
     // Disconnect if currently connected
     if (s_wifi_state == WIFI_PORTAL_STATE_CONNECTED ||
@@ -698,6 +737,7 @@ esp_err_t net_wifi_join(const char *ssid, const char *pass, uint32_t timeout_ms)
         s_wifi_state = WIFI_PORTAL_STATE_DISCONNECTED;
         e = (bits & WIFI_FAIL_BIT) ? ESP_FAIL : ESP_ERR_TIMEOUT;
     }
+    s_joining = false;
     xSemaphoreGive(s_wifi_op);
     return e;
 }
