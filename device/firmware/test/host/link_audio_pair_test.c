@@ -10,7 +10,8 @@
 static unsigned rotations, sent;
 static esp_err_t send_error;
 static const char *field(const char *key) { cJSON *j=cJSON_GetObjectItem(sdk_sent,key); assert(cJSON_IsString(j)); return j->valuestring; }
-bool link_client_connected(void) { return true; }
+static bool link_up=true;
+bool link_client_connected(void) { return link_up; }
 esp_err_t link_send_json(const cJSON *j) {
     cJSON_Delete(sdk_sent); sdk_sent=cJSON_Duplicate(j,true); sent++; return send_error;
 }
@@ -730,6 +731,83 @@ static void shake_run(audio_job_t *job,int adopt,const char *args) {
 }
 /* a tap: the rec stops with what it has, reason tap, acknowledged; a bound `talk`; a say's first-audio watchdog */
 static void stop_tap_at_chunk_10(int16_t *buf, size_t n, unsigned i) { (void)buf; (void)n; if (i==10) { link_audio_request(link_audio_job_gen(), LINK_AUDIO_REQ_STOP); apply_request(); } }
+/* a link drop: a held job survives it, the hello names it, the welcome picks it up or drops it */
+static cJSON *welcome_with(const char *job, bool ok, int next) {
+    cJSON *w=cJSON_CreateObject(), *f=cJSON_AddArrayToObject(w,"features");
+    cJSON_AddItemToArray(f,cJSON_CreateString("resume"));
+    if (job) { cJSON *r=cJSON_AddObjectToObject(w,"resume"); cJSON_AddStringToObject(r,"job",job); cJSON_AddBoolToObject(r,"ok",ok);
+      if (next>=0) cJSON_AddNumberToObject(r,"next",next); }
+    return w;
+}
+static void relay_resumes(bool on) { cJSON *w=cJSON_CreateObject(), *f=cJSON_AddArrayToObject(w,"features");
+    if (on) cJSON_AddItemToArray(f,cJSON_CreateString("resume"));
+    link_audio_resume_welcome(w); cJSON_Delete(w); }
+static char drop_job[LINK_STREAM_MAX]; static int drop_at_chunk=-1, back_after_delays=-1, drop_next; static bool dropped;
+static void drop_back(void) {
+    link_up=true;
+    { unsigned before=bin_frames; up_kick(); assert(bin_frames==before); }   /* nothing goes before the relay says from where */
+    bin_seq=drop_next; bin_bytes=0;
+    cJSON *w=welcome_with(drop_job,true,drop_next); link_audio_resume_welcome(w); cJSON_Delete(w);
+}
+static void drop_fill(int16_t *buf, size_t n, unsigned chunk) {
+    (void)buf; (void)n;
+    if ((int)chunk==drop_at_chunk && !dropped) { dropped=true; link_audio_link_down(); link_up=false; assert(link_audio_held()); }
+}
+static void drop_delay(void) {
+    if (!dropped) return;
+    if (back_after_delays>0 && --back_after_delays==0) { drop_back(); dropped=false; }
+    if (back_after_delays<0) link_audio_tick();
+}
+static void test_link_drop(void) {
+    /* a relay that cannot hold: as before */
+    relay_resumes(false);
+    begin_say(); link_audio_link_down(); assert(atomic_load(&s_cancel) && !link_audio_held()); complete(play()); link_audio_tick();
+    /* a say mid-stream: held, named with the next frame it needs; resumed; the stream goes on */
+    relay_resumes(true);
+    begin_say(); receive_pcm(0,false); receive_pcm(1,false);
+    link_audio_link_down(); assert(!atomic_load(&s_cancel) && link_audio_held());
+    cJSON *h=cJSON_CreateObject(); link_audio_resume_hello(h);
+    cJSON *r=cJSON_GetObjectItem(h,"resume");
+    assert(r && !strcmp(cJSON_GetObjectItem(r,"job")->valuestring,s_job) && !strcmp(cJSON_GetObjectItem(r,"kind")->valuestring,"say") && cJSON_GetObjectItem(r,"next")->valueint==2);
+    cJSON_Delete(h);
+    cJSON *w=welcome_with(s_job,true,-1); link_audio_resume_welcome(w); cJSON_Delete(w);
+    assert(!link_audio_held() && !atomic_load(&s_cancel));
+    receive_pcm(2,true); assert(!atomic_load(&s_cancel)); complete(play()); link_audio_tick();
+    /* refused: dropped */
+    begin_say(); link_audio_link_down(); assert(link_audio_held());
+    w=welcome_with(s_job,false,-1); link_audio_resume_welcome(w); cJSON_Delete(w);
+    assert(!link_audio_held() && atomic_load(&s_cancel)); complete(play()); link_audio_tick();
+    /* a welcome that does not name it (a relay that forgot): dropped */
+    begin_say(); link_audio_link_down(); relay_resumes(true); assert(atomic_load(&s_cancel) && !link_audio_held()); complete(play()); link_audio_tick();
+    /* the window: past it the job goes, and a second drop does not restart the clock */
+    begin_say(); receive_pcm(0,false); link_audio_link_down();
+    sdk_now+=LINK_RESUME_WINDOW_MS*1000ull/2; s_last_frame=sdk_now; link_audio_tick(); assert(!atomic_load(&s_cancel));
+    link_audio_link_down();
+    sdk_now+=LINK_RESUME_WINDOW_MS*1000ull/2+1000; s_last_frame=sdk_now; link_audio_tick();
+    assert(atomic_load(&s_cancel) && !link_audio_held()); complete(play()); link_audio_tick();
+    /* a say played out offline: the next hello says so, once */
+    begin_say(); strcpy(s_job,"j_off"); link_audio_link_down(); link_up=false; complete(ESP_OK);
+    h=cJSON_CreateObject(); link_audio_resume_hello(h); r=cJSON_GetObjectItem(h,"resume");
+    assert(r && !strcmp(cJSON_GetObjectItem(r,"job")->valuestring,"j_off") && cJSON_IsTrue(cJSON_GetObjectItem(r,"done"))); cJSON_Delete(h);
+    relay_resumes(true); link_up=true;
+    h=cJSON_CreateObject(); link_audio_resume_hello(h); assert(!cJSON_GetObjectItem(h,"resume")); cJSON_Delete(h);
+    /* a listen: recording goes on through the drop and past its end; nothing lost, the relay's next wins */
+    relay_resumes(true);
+    audio_job_t job; listen_job_with(3000,",\"vad\":false",&job); strcpy(drop_job,s_job); sdk_rx_chunks=0;
+    drop_at_chunk=6; back_after_delays=3; drop_next=1; sdk_rx_fill=drop_fill; sdk_delay_hook=drop_delay;
+    complete(record(&job)); sdk_rx_fill=NULL; sdk_delay_hook=NULL;
+    assert(bin_ends==1 && !link_audio_held() && !strcmp(bin_reason,"max"));
+    assert(bin_bytes==96000-9600);    /* frame 1 (the relay's next) to the end: 10 frames, the first one kept out */
+    assert(tr_num("drop")==0);
+    /* the link never comes back: the tick's window ends it, the flush gives up, nothing goes */
+    listen_job_with(600,",\"vad\":false",&job); strcpy(drop_job,s_job); sdk_rx_chunks=0;
+    drop_at_chunk=2; back_after_delays=-1; sdk_rx_fill=drop_fill; sdk_delay_hook=drop_delay; bin_frames=0;
+    complete(record(&job)); sdk_rx_fill=NULL; sdk_delay_hook=NULL;
+    assert(!link_audio_held()); link_up=true;
+    link_audio_tick();
+    relay_resumes(false);
+}
+
 static void test_tap_and_watchdog(void) {
     audio_job_t job; uint32_t age=99;
     listen_job(8000,&job); assert(link_audio_listening(&age)); sdk_rx_chunks=0; sdk_rx_fill=stop_tap_at_chunk_10;
@@ -889,12 +967,12 @@ static void test_resend(void) {
     complete(record(&job));
     assert(send_fails==4 && bin_frames==17 && bin_bytes==160000 && bin_ends==1 && !strcmp(bin_reason,"max"));
     assert(bin_max_rt==4 && tr_num("fail")==4 && tr_num("drop")==0 && tr_num("sent")==17);
-    /* the link stalls for the whole 15 s window (50 frames): the ring keeps 33 (9.9 s), the
-     * oldest 17 go (seq 0..16, 5.1 s), the rest goes up in order once the link is back */
-    listen_job_with(15000,",\"vad\":false",&job); sdk_rx_chunks=0; rx_chunk_limit=150; send_fail_until=fail_while_recording; gaps_ok=true;
+    /* the link stalls for a whole 30 s window (100 frames): the ring keeps 66 (19.8 s), the
+     * oldest 34 go (seq 0..33, 10.2 s), the rest goes up in order once the link is back */
+    listen_job_with(30000,",\"vad\":false",&job); sdk_rx_chunks=0; rx_chunk_limit=300; send_fail_until=fail_while_recording; gaps_ok=true;
     complete(record(&job)); send_fail_until=NULL;
-    assert(bin_ends==1 && bin_frames==UPLINK_SLOTS && !strcmp(bin_reason,"max") && tr_num("drop")==17 && tr_num("dropms")==5100);
-    assert(bin_first_ct==5100);                                      /* the first frame kept: seq 17 */
+    assert(bin_ends==1 && bin_frames==UPLINK_SLOTS && !strcmp(bin_reason,"max") && tr_num("drop")==34 && tr_num("dropms")==10200);
+    assert(bin_first_ct==10200);                                     /* the first frame kept: seq 17 */
     /* stalled past the flush deadline (3 s + 1 s for the end frame): it gives up, nothing more */
     listen_job_with(1000,",\"vad\":false",&job); send_fail_left=100000; gaps_ok=false;
     complete(record(&job)); assert(!bin_frames && !link_audio_busy()); send_fail_left=0;
@@ -1024,7 +1102,7 @@ int main(void) {
     sdk_count_cjson();                    /* the soak counts cJSON blocks too */
     assert(link_audio_init()==ESP_OK && link_pair_init()==ESP_OK);
     s_up_inline = true;   /* no sender task on the host: record() sends as it queues */
-    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop(); test_listen_window(); test_say_cues(); test_say_marks(); test_chirp_sound(); test_ack(); test_shake_talk(); test_tap_and_watchdog(); test_shake_settle(); test_resend(); test_reactions(); test_soak();
+    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop(); test_listen_window(); test_say_cues(); test_say_marks(); test_chirp_sound(); test_ack(); test_shake_talk(); test_tap_and_watchdog(); test_link_drop(); test_shake_settle(); test_resend(); test_reactions(); test_soak();
     /* activity log: every accepted job (done, failed, cancelled, refused frames, adopted shakes) ended its tag */
     assert(sdk_job_begins>0 && sdk_job_begins==sdk_job_ends);
     cJSON_Delete(sdk_sent); free(s_jobs); free(s_done); free(s_ring);

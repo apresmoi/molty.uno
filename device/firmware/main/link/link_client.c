@@ -205,6 +205,7 @@ static void disconnect(const char *why)
 {
     mole_diag_event(true, "link.disconnect why=%s close=%u int_free=%u", why, atomic_load(&s_close_code),
                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    link_audio_link_down();   /* before it reads as down: a flushing listen must not take it for the end */
     atomic_store(&s_connected, false);
     xSemaphoreTake(s_send, portMAX_DELAY);
     esp_websocket_client_handle_t ws = s_ws; s_ws = NULL;
@@ -214,7 +215,7 @@ static void disconnect(const char *why)
     rx_msg_t m;
     while (xQueueReceive(s_rxq, &m, 0) == pdTRUE) free(m.data);
     link_audio_relay_adopts(false);
-    link_audio_cancel(); link_pair_cancel(); link_ask_cancel();   /* link down: no event */
+    link_pair_cancel(); link_ask_cancel();   /* link down: no event */
 }
 
 static esp_err_t connect_session(void)
@@ -362,6 +363,7 @@ static void link_task(void *arg)
             if (m.open) {
                 xSemaphoreTake(s_config, portMAX_DELAY);
                 cJSON *hello = link_identity_hello();
+                link_audio_resume_hello(hello);
                 strcpy(announced, link_identity_code());
                 xSemaphoreGive(s_config);
                 if (!hello || link_send_json(hello) != ESP_OK) atomic_store(&s_lost, true);
@@ -377,6 +379,7 @@ static void link_task(void *arg)
                         mole_diag_event(false, "link.welcome after %ums", (unsigned)((now - started) / 1000));
                         self_update_welcomed();   /* a freshly updated image: valid now (update_core.h) */
                         link_audio_relay_adopts(link_welcome_has(j, LINK_FEATURE_ADOPT));   /* shake to talk */
+                        link_audio_resume_welcome(j);
                         log_welcome(j, now);
                         backoff = 1; last_pong = now; last_ping = now;
                     } else if (!strcmp(t->valuestring, "pong")) last_pong = now;

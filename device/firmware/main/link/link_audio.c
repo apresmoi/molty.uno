@@ -49,6 +49,10 @@ static atomic_int s_stop;
 static char s_job[LINK_STREAM_MAX];
 static uint32_t s_seq;
 static int64_t s_last_frame;
+static atomic_bool s_relay_resumes;                    /* the relay's welcome lists resume */
+static atomic_bool s_held;                             /* a drop: this job waits for the link */
+static int64_t s_held_at;                              /* link task */
+static char s_done_offline[LINK_STREAM_MAX];           /* a say played out while the link was down: its say.done (link task) */
 static atomic_uint s_gen;                              /* bumped by begin(): names one job */
 static atomic_uint s_gesture_req;                              /* a gesture's stop or cancel: gen << 1 | what */
 static uint32_t s_job_t0_ms;                           /* the running job began (for a tap's guard) */
@@ -203,6 +207,7 @@ _Static_assert(REC_FRAME_SAMPLES == UPLINK_SLOT_SAMPLES, "one uplink slot holds 
  * goes. s_up_gen tells a send finishing late from the next listen's queue. */
 #define UP_FLUSH_MS   3000
 #define UP_END_MS     1000
+#define UP_FLUSH_PER_FRAME_MS 150
 #define UP_BACKOFF_MIN 100
 #define UP_BACKOFF_MAX 400
 static uplink_t s_up;                                  /* under s_up_lock */
@@ -268,7 +273,7 @@ static void up_pump(void)
 {
     up_lock(); const uint32_t gen = s_up_gen; up_unlock();
     if (gen != s_up_pump_gen) { s_up_pump_gen = gen; s_up_retry_at = 0; s_up_backoff = 0; }   /* a new listen: no old back-off */
-    while (link_client_connected()) {
+    while (link_client_connected() && !atomic_load(&s_held)) {
         const int64_t now = esp_timer_get_time() / 1000;
         if (!s_up_inline && now < s_up_retry_at) return;
         const int r = up_try();
@@ -327,8 +332,15 @@ static void up_flush(void)
     for (;;) {
         up_lock(); const int left = uplink_pending(&s_up); up_unlock();
         if (!left) return;
-        if (atomic_load(&s_cancel) || !link_client_connected()) { up_abort(); return; }
         const int64_t now = esp_timer_get_time() / 1000;
+        if (atomic_load(&s_cancel)) { up_abort(); return; }
+        if (atomic_load(&s_held)) {
+            /* the link's back first: a backlog of up to 15 s gets its own time to go */
+            deadline = now + UP_FLUSH_MS + (int64_t)left * UP_FLUSH_PER_FRAME_MS; late = false;
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+        if (!link_client_connected()) { up_abort(); return; }
         if (now >= deadline) {
             if (late) { up_abort(); return; }
             late = true; deadline = now + UP_END_MS;
@@ -972,6 +984,53 @@ uint32_t link_audio_job_gen(void) { return atomic_load(&s_gen); }
  * (which starts jobs) applies it in link_audio_tick, and only to the job it was asked for. */
 void link_audio_request(uint32_t gen, link_audio_req_t what) { atomic_store(&s_gesture_req, gen << 1 | (uint32_t)what); }
 
+bool link_audio_held(void) { return atomic_load(&s_held); }
+
+void link_audio_link_down(void)
+{
+    const bool keep = atomic_load(&s_relay_resumes) && s_busy && atomic_load(&s_pend) != PEND_WAIT && !atomic_load(&s_cancel);
+    if (!keep) { atomic_store(&s_held, false); link_audio_cancel(); return; }
+    if (!atomic_exchange(&s_held, true)) {
+        s_held_at = esp_timer_get_time();
+        mole_diag_event(false, "audio.held %s", s_listen ? "listen" : "say");
+    }
+}
+
+void link_audio_resume_hello(cJSON *hello)
+{
+    if (!hello) return;
+    const bool held = atomic_load(&s_held) && s_busy;
+    if (!held && !s_done_offline[0]) return;
+    cJSON *r = cJSON_AddObjectToObject(hello, "resume");
+    if (!r) return;
+    cJSON_AddStringToObject(r, "job", held ? s_job : s_done_offline);
+    cJSON_AddStringToObject(r, "kind", held && s_listen ? "listen" : "say");
+    if (!held) cJSON_AddBoolToObject(r, "done", true);
+    else if (!s_listen) cJSON_AddNumberToObject(r, "next", s_seq);
+}
+
+void link_audio_resume_welcome(const cJSON *welcome)
+{
+    atomic_store(&s_relay_resumes, link_welcome_has(welcome, LINK_FEATURE_RESUME));
+    s_done_offline[0] = 0;
+    if (!atomic_load(&s_held)) return;
+    const cJSON *r = cJSON_GetObjectItemCaseSensitive(welcome, "resume");
+    const cJSON *job = cJSON_GetObjectItemCaseSensitive(r, "job");
+    const bool ok = s_busy && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(r, "ok")) && cJSON_IsString(job) && !strcmp(job->valuestring, s_job);
+    if (ok && s_listen) {
+        const cJSON *next = cJSON_GetObjectItemCaseSensitive(r, "next");
+        up_lock();
+        /* a frame that cannot be had again is a gap the relay reports as lost */
+        if (cJSON_IsNumber(next) && !uplink_rewind(&s_up, (uint32_t)next->valuedouble)) s_up.drop++;
+        up_unlock();
+    }
+    if (ok) s_last_frame = esp_timer_get_time();
+    else link_audio_cancel();
+    mole_diag_event(!ok, "audio.resume %s", ok ? "ok" : "refused");
+    atomic_store(&s_held, false);
+    if (ok && s_listen) up_kick();
+}
+
 static void apply_request(void)
 {
     const uint32_t req = atomic_exchange(&s_gesture_req, 0);
@@ -983,7 +1042,7 @@ static void apply_request(void)
 void link_audio_stop_any(void)
 {
     const uint32_t gen = link_audio_job_gen();
-    link_audio_request(gen, s_listen && link_client_connected() ? LINK_AUDIO_REQ_STOP : LINK_AUDIO_REQ_CANCEL);
+    link_audio_request(gen, s_listen && (link_client_connected() || atomic_load(&s_held)) ? LINK_AUDIO_REQ_STOP : LINK_AUDIO_REQ_CANCEL);
 }
 
 /* cmd say_cancel {job}: the relay gave THAT say up (its job failed): stop waiting for audio
@@ -1067,11 +1126,17 @@ void link_audio_tick(void)
     apply_request();
     if (atomic_exchange(&s_shake_req, false)) shake_talk();
     if (!s_busy) return;
+    if (atomic_load(&s_held) && esp_timer_get_time() - s_held_at > (int64_t)LINK_RESUME_WINDOW_MS * 1000) {
+        atomic_store(&s_held, false);
+        mole_diag_event(true, "audio.held gave up");
+        link_audio_cancel();
+    }
     if (!s_listen && link_say_stalled((uint32_t)((esp_timer_get_time() - s_last_frame) / 1000), s_stat_frames)) link_audio_cancel();
     esp_err_t e;
     if (xQueueReceive(s_done, &e, 0) != pdTRUE) return;
     drain(); /* worker has acknowledged completion; discard any late PCM */
     s_busy = false;
+    atomic_store(&s_held, false);
     /* Back to idle only if nobody chose a mood while the job ran: an explicit mood
      * (with its own hold_s, fluid_director) outlives the listen/say it arrived in. */
     /* A listen that heard speech is acknowledged (s_ack, decided at its end): `thinking`
@@ -1095,6 +1160,8 @@ void link_audio_tick(void)
     if (!s_listen && e == ESP_OK && !atomic_load(&s_cancel) && link_client_connected()) {
         cJSON *j = link_say_done_frame(s_job);
         if (j) { link_send_json(j); cJSON_Delete(j); }
+    } else if (!s_listen && e == ESP_OK && !atomic_load(&s_cancel) && atomic_load(&s_relay_resumes)) {
+        strcpy(s_done_offline, s_job);   /* the relay waits for it: the next hello says so */
     }
     if (s_tagged) mole_diag_job_end(s_job);   /* every end (done, failed, cancelled) passes here; the link uploads its lines */
     s_tagged = false;
