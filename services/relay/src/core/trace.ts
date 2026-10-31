@@ -8,6 +8,7 @@
 // Pure and host-neutral: room.ts feeds it.
 
 import { type AudioHeader, type JsonObject, isRecord } from "./protocol.js";
+import type { ReflexNote } from "./reflex.js";
 
 export const TRACE_LIMITS = {
   /** JSON bytes of one stored trace (trimmed to fit, `trimmed: true`). */
@@ -24,6 +25,8 @@ export const TRACE_LIMITS = {
   hints: 16,
   /** Partials / drafts / reacts noted per listen (core/partials.ts: at most 8 partials, 3 drafts an agent). */
   turnNotes: 16,
+  /** Reflex decisions noted per listen (core/reflex.ts: 12 chunks, up to 4 engines each in compare mode). */
+  reflex: 40,
 } as const;
 
 /**
@@ -106,6 +109,8 @@ export class ListenTrace {
   readonly partials: Array<[number, number, number]> = [];
   readonly drafts: Array<[number, number]> = [];
   readonly reacts: Array<[string, number, string]> = [];
+  /** Molty's reflex (core/reflex.ts): one note per engine decision, `at` ms from t0 — counts and codes, never words. */
+  readonly reflexes: ReflexNote[] = [];
   /** Relay timings and facts (ms from t0), set by room.ts. */
   readonly relay: JsonObject = {};
 
@@ -150,6 +155,11 @@ export class ListenTrace {
     if (this.reacts.length < TRACE_LIMITS.turnNotes) this.reacts.push([what, at - this.t0, outcome]);
   }
 
+  /** A reflex decision (its `at` already ms from t0). */
+  reflex(n: ReflexNote): void {
+    if (this.reflexes.length < TRACE_LIMITS.reflex) this.reflexes.push(n);
+  }
+
   /** The whole trace (uncapped: capTrace() it before storing). */
   build(): JsonObject {
     const dev: JsonObject = {};
@@ -192,6 +202,7 @@ export class ListenTrace {
     if (this.partials.length) relay.partials = this.partials;
     if (this.drafts.length) relay.drafts = this.drafts;
     if (this.reacts.length) relay.reacts = this.reacts;
+    if (this.reflexes.length) relay.reflex = this.reflexes.map((r) => ({ ...r })) as unknown as JsonObject[string];
     return { v: 1, trigger: this.trigger, t0: this.t0, dev, ...(this.box ? { box: this.box } : {}), relay };
   }
 }
@@ -227,7 +238,7 @@ const keepEnds = <T>(a: T[], n: number): T[] => (a.length <= 2 * n ? a : [...a.s
 
 /**
  * The trace as stored: at most `max` bytes of JSON. Trimmed in this order until it fits: the
- * frame list (first/last 8, then gone), the box's pause trace (halved, then gone), the box's
+ * frame list (first/last 8, then gone), the reflex's probabilities, then its decisions (newest 12), the box's pause trace (halved, then gone), the box's
  * words (last 16, then gone), the device levels (halved by max: `lv_ms` per byte), the box's
  * activity spans (first/last 8, then gone); last resort: box and device detail dropped.
  */
@@ -247,6 +258,21 @@ export function capTrace(trace: JsonObject, max: number = TRACE_LIMITS.maxBytes)
     return true;
   });
   steps.push(() => (Array.isArray(dev.frames) ? (delete dev.frames, true) : false));
+  // reflex: probabilities first, then the newest 12 decisions
+  const relay = (isRecord(t.relay) ? t.relay : {}) as JsonObject;
+  steps.push(() => {
+    const r = relay.reflex;
+    if (!Array.isArray(r) || !r.some((x) => isRecord(x) && x.p !== undefined)) return false;
+    for (const x of r) if (isRecord(x)) delete x.p;
+    return true;
+  });
+  steps.push(() => {
+    const r = relay.reflex;
+    if (!Array.isArray(r) || r.length <= 12) return false;
+    relay.reflex_n = r.length;
+    relay.reflex = r.slice(-12);
+    return true;
+  });
   // box pause
   for (let i = 0; i < 6; i++)
     steps.push(() => {

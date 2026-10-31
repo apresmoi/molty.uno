@@ -17,7 +17,7 @@
 //   GET|PUT|DELETE /v1/webhook          read / register (secret once) / remove the caller's webhook
 //   GET|POST|DELETE /v1/devices/<id>/voice  owner voice-box settings (header X-Molty-Link-Code: the
 //                                       device's current link code; CORS, for the device-served console):
-//                                       read / {mode?, voice?} / unpair the voice box
+//                                       read / {mode?, voice?, reflex?, reflex_compare?} / unpair the voice box
 //   GET    /v1/devices/<id>/activity/audio/<job>  owner only (link code): a kept listen's audio as audio/wav
 //   GET|POST /v1/devices/<id>/activity   owner activity log (same link-code auth + CORS):
 //                                       ?since=a42|<unix ms>&limit&agent&kind=a,b&job&errors=1 -> {entries, next, more,
@@ -402,7 +402,7 @@ async function voiceOwner(request: Request, rawId: string, backend: RelayBackend
   else if (request.method === "POST") {
     const b = await body(request);
     if (!b) return cors(failure({ error: "bad_request", message: "body must be a JSON object" }));
-    req = { action: "set", mode: b.mode, voice: b.voice };
+    req = { action: "set", mode: b.mode, voice: b.voice, reflex: b.reflex, reflex_compare: b.reflex_compare };
   } else return cors(json({ ok: false, error: "method_not_allowed" }, 405));
   const out = await api.voiceSettings(code, req);
   return cors(out.ok ? json({ ok: true, result: out.result }) : failure(out));

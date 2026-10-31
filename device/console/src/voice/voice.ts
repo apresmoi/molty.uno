@@ -11,6 +11,27 @@ export const VOICE_MODES: ReadonlyArray<{ id: VoiceMode; label: string; hint: st
   { id: 'cloud', label: 'cloud', hint: 'the relay’s cloud voice' },
 ];
 
+/** Molty's reflex (docs/AGENT-LINK.md "Reflex"): who classifies what the human says while they talk. */
+export type ReflexMode = 'off' | 'auto' | 'local' | 'jev' | 'openai' | 'keywords';
+export type ReflexEngine = 'local' | 'jev' | 'openai' | 'keywords';
+export const REFLEX_MODES: ReadonlyArray<{ id: ReflexMode; label: string; hint: string }> = [
+  { id: 'off', label: 'off', hint: 'Molty only reacts when an agent asks it to' },
+  { id: 'auto', label: 'auto', hint: 'the voice box’s classifier, else Jev with a key, else keywords' },
+  { id: 'local', label: 'box', hint: 'a small emotion model on the voice box (no extra hop, free)' },
+  { id: 'jev', label: 'Jev', hint: 'TypeSafe Jev (the relay’s TYPESAFE_API_KEY)' },
+  { id: 'openai', label: 'OpenAI', hint: 'OpenAI Decisions, gpt-6-luna (the relay’s OPENAI_API_KEY)' },
+  { id: 'keywords', label: 'keywords', hint: 'a quick word list on the relay, no key' },
+];
+export interface ReflexStatus {
+  mode: ReflexMode;
+  compare: boolean;
+  engines: Record<ReflexEngine, boolean>;
+  /** The engine the next listen fires with (null: off), and why not the chosen one. */
+  engine: ReflexEngine | null;
+  fallback?: string;
+  timeout_ms: number;
+}
+
 export interface VoiceStatus {
   mode: VoiceMode;
   /** Default box voice (null: the box's own default). */
@@ -19,6 +40,8 @@ export interface VoiceStatus {
   cloud: string;
   /** Who would speak / transcribe right now: "box", the cloud's name, or voice_box_offline. */
   serving: { tts: string; stt: string };
+  /** Absent on relays from before the reflex. */
+  reflex?: ReflexStatus;
   box: {
     paired: boolean;
     name: string | null;
@@ -67,7 +90,7 @@ async function call(t: VoiceTarget, method: 'GET' | 'POST' | 'DELETE', body: unk
 }
 
 export const getVoice = (t: VoiceTarget, f: typeof fetch = fetch) => call(t, 'GET', undefined, f);
-export const setVoice = (t: VoiceTarget, patch: { mode?: VoiceMode; voice?: string | null }, f: typeof fetch = fetch) => call(t, 'POST', patch, f);
+export const setVoice = (t: VoiceTarget, patch: { mode?: VoiceMode; voice?: string | null; reflex?: ReflexMode; reflex_compare?: boolean }, f: typeof fetch = fetch) => call(t, 'POST', patch, f);
 export const unpairBox = (t: VoiceTarget, f: typeof fetch = fetch) => call(t, 'DELETE', undefined, f);
 
 /** One status line for the box. */
@@ -115,4 +138,14 @@ export function voiceLabel(path: string): string {
 /** The pairing command for the box, filled with this Molty's relay, id and current code. */
 export function pairCommand(t: VoiceTarget): string {
   return `molty-voice pair --relay ${t.relay} --device ${t.deviceId} --link-code ${t.linkCode}`;
+}
+
+const ENGINE_NAME: Record<ReflexEngine, string> = { local: 'the voice box', jev: 'Jev', openai: 'OpenAI', keywords: 'keywords' };
+const WHY: Record<string, string> = { no_key: 'no key on the relay', unavailable: 'no voice box classifier' };
+
+/** "reacts with …" for the reflex, or '' when it is off / unknown. */
+export function reflexLine(r: ReflexStatus | undefined): string {
+  if (!r || r.mode === 'off' || !r.engine) return '';
+  const why = r.fallback ? ` (${WHY[r.fallback] ?? r.fallback} for ${r.mode === 'local' ? 'the box' : r.mode === 'jev' ? 'Jev' : 'OpenAI'})` : '';
+  return `reacts with ${ENGINE_NAME[r.engine]}${why}${r.compare ? ' ⠂ comparing every engine in the activity log' : ''}`;
 }

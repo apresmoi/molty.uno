@@ -40,15 +40,8 @@ export interface PartialData {
   elapsed_ms: number;
 }
 
-/** Whitespace-split words, as the transcript shows them. */
-export function words(text: string): string[] {
-  return text.split(/\s+/).filter(Boolean);
-}
-
-/** A word for comparison: lowercase, letters / digits / apostrophes only ("Today," = "today"). */
-export function normWord(w: string): string {
-  return w.toLowerCase().replace(/[’`]/g, "'").replace(/[^\p{L}\p{N}']+/gu, "");
-}
+export { normWord, sentenceEnd, words } from "./words.js";
+import { normWord, sentenceEnd, words } from "./words.js";
 
 const norm = (ws: string[]) => ws.map(normWord).filter(Boolean);
 
@@ -56,13 +49,6 @@ function commonPrefix(a: string[], b: string[]): number {
   let i = 0;
   while (i < a.length && i < b.length && a[i] === b[i]) i++;
   return i;
-}
-
-/** The text ends a sentence: its last word ends with . ? ! (closing quotes allowed), not an ellipsis. */
-export function sentenceEnd(text: string): boolean {
-  const t = text.trim();
-  if (/(\.\.\.|…)["')\]]*$/.test(t)) return false;
-  return /[.?!]["')\]]*$/.test(t);
 }
 
 /**

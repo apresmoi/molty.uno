@@ -191,7 +191,11 @@ npx wrangler tail molty-relay
 2. Firmware updates read the GitHub Releases of `RELEASES_REPO` (`wrangler.jsonc` var). Optional
    secret `GITHUB_TOKEN` raises GitHub's rate limit (`npx wrangler secret put GITHUB_TOKEN`); see
    docs/AGENT-LINK.md "Firmware updates".
-3. The `OPENAI_API_KEY` secret is optional. Set it only to use `--var VOICE_PROVIDER:openai`, or set `VOICE_PROVIDER` to `openai` under `vars` in `wrangler.jsonc`.
+3. The `OPENAI_API_KEY` secret is optional. Set it to use `--var VOICE_PROVIDER:openai` (or `VOICE_PROVIDER` `openai` under `vars` in `wrangler.jsonc`), and for the reflex's `openai` engine.
+   Molty's reflex (docs/AGENT-LINK.md "Reflex"; owner setting, off by default) brings your own keys:
+   `npx wrangler secret put TYPESAFE_API_KEY` for the `jev` engine (TypeSafe System One), the same
+   `OPENAI_API_KEY` for `openai` (OpenAI Decisions). Neither is needed for `local` (the voice box) or
+   `keywords`; a chosen engine without its key answers with the keywords. Keys are never logged.
 4. Smoke-test after deploy:
    - Pair a fake device against `wss://molty-relay.<subdomain>.workers.dev`.
    - Call `molty_say` to confirm real Aura TTS. This is the first point where the `@cf/deepgram/aura-2-en` linear16/wav output path is exercised for real.

@@ -477,6 +477,54 @@ turn end ─▶ judge drafts ─┬─ holds: opener plays at once (after the ch
 - **Targeted events.** `draft.used` / `draft.dropped` are stored with their recipient (never
   returned): only that token's pull / ride-along / webhook sees them.
 
+### Reflex
+
+Molty reacts by itself to **what** the human says while they talk — with any agent, also one that
+never reads partials. An owner setting (`reflex` in the [voice owner API](#owner-api-console),
+the console's Voice card; default `off`). Code: `services/relay/src/core/reflex.ts`, room.ts
+"Molty's reflex", `services/molty-voice/molty_voice/reflex.py`.
+
+```
+box stt.partial ─▶ reflex chunk n ─▶ engine ─▶ pick + category ─▶ gates ─▶ mood {react:true} | act
+                   (a sentence end,    local:    the box's classifier, stt.reflex {n,…}
+                    or 6 new words;    jev:      TypeSafe System One (TYPESAFE_API_KEY)
+                    ≥ 2 words; ≤ 12)   openai:   OpenAI Decisions, gpt-6-luna (OPENAI_API_KEY)
+                                       keywords: relay heuristic, no key
+                    error / no answer in 600 ms ─▶ keywords' pick instead (never blocks the listen)
+```
+
+- **When**: on every listen the voice box streams (shake turns and agents' listens). A chunk is
+  the text so far once it ends a sentence (with a new word) or has 6 new words since the last
+  chunk, from 2 words on, at most 12 per listen (`reflexDue`; the box uses the same rule).
+- **Engines** (`reflex` = `off | auto | local | jev | openai | keywords`; `auto` = local when the
+  box serves the listen and offers its classifier, else jev with a key, else keywords). Each
+  answers a reaction (`surprised happy sad laugh curious none`) and, in the same call, the
+  utterance **category** (`question request hard other`, for context-picked fillers). The model
+  engines see the last 400 characters of the text so far. A pick below its engine's confidence
+  gate (local 0.35, jev / openai 0.5) is `none`. A chosen engine that cannot run (no key, no box
+  classifier) answers with the keywords, saying why (`fallback`); one refused for good
+  (HTTP 400/401/403/404) is benched for 10 min.
+- **Shown** through the react path, screen only: surprised / happy → `mood {mood, hold_s:0,
+  react:true}` (cap `react`; back to `listening` after 1.5 s), sad → `act nod`, laugh → `act
+  bounce`, curious → `act peek` (cap `act`). Not fired (and noted why): the listen ended
+  (`closed`), an owner screen is up — a pending question, a pairing code, an update (`screen`) —,
+  an agent reacted this turn or within 3 s (`agent`: **agents' reacts win**, the reflex never
+  limits theirs), another reflex within 3 s (`rate_limited`), the firmware lacks the cap
+  (`unsupported`).
+- **Compare** (`reflex_compare: true`): every available engine runs on each chunk, in parallel;
+  only the chosen one fires. All decisions go in the turn trace.
+- **Turn trace** (`relay.reflex_cfg {mode, engine, fb?, compare?}`, `relay.reflex [{n, at, e, ms,
+  ch, tk?, pick, raw?, c?, p?, cat?, cc?, fired?, fb?, err?, late?}]`): per decision the chunk
+  (`n` words), when (ms from t0), the engine, its latency, input characters and tokens, the pick
+  (and the raw pick below the gate), confidence, probabilities in the order above, the category,
+  whether and how it fired, the fallback reason, the error. Never words. Capped: probabilities
+  go first, then all but the newest 12 decisions.
+- **Keys**: Worker secrets (`wrangler secret put TYPESAFE_API_KEY`, `… OPENAI_API_KEY`), never
+  logged or traced; errors are codes (`timeout`, `http_401`, `network`, …).
+- **Fillers**: `DeviceRoom.fillerCategory(text)` gives the category of the latest partial / final
+  text — the reflex's own answer for those words when it has one, else one call of the owner's
+  engine (keywords when off or failing).
+
 ### Calibration
 
 The relay keeps one record per Molty of how its human talks (KV `speech`,
@@ -1211,18 +1259,19 @@ the request id in `s`.
 
 | Direction | Message |
 |---|---|
-| box → relay | `{"t":"voice.hello","name","version","voices":[…],"stt":bool,"tts":bool}`: first frame; the box is used only after it |
+| box → relay | `{"t":"voice.hello","name","version","voices":[…],"stt":bool,"tts":bool,"reflex"?:bool}`: first frame; the box is used only after it. `reflex: true`: it runs the [reflex](#reflex) classifier (stt.reflex) |
 | relay → box | `{"t":"voice.welcome","device_id","mode","voice"}` |
 | relay → box | `{"t":"tts","id","text","voice"?}`: one sentence-sized segment (the relay keeps one segment of lookahead) |
 | box → relay | binary frames `s=id` (PCM16 @16 kHz, as synthesised), then `{"t":"tts.end","id"}` or `{"t":"tts.end","id","error"}` |
 | box → relay | `{"t":"tts.word","id","i","text","start_s"}` (optional, in order, before the tts.end): word `i` of the text (whitespace-split) is spoken from `start_s` s into this tts's audio as sent — moshi-server's `Text {text, start_s, stop_s}` less one 80 ms step (its counter runs one step ahead: measured +91 ms median against forced alignment) and less the quiet lead the box trimmed from the stream's first frame (≤ 70 ms). The relay turns it into the device's word cues; malformed ones are ignored |
 | relay → box | `{"t":"tts.cancel","id"}`: nobody will play it (device gone, turn failed, segment timeout) |
-| relay → box | `{"t":"stt.start","id","rate":16000,"no_speech_ms"?}` at listen start (`no_speech_ms` 1000..10000 only when the device VAD is off for this listen: the box then calls no_speech), binary frames `s=id` as Molty records, `{"t":"stt.end","id"}` at the device's end frame |
+| relay → box | `{"t":"stt.start","id","rate":16000,"no_speech_ms"?,"reflex"?:true}` at listen start (`reflex` only to a box that offered it, when this listen's [reflex](#reflex) uses the local engine) (`no_speech_ms` 1000..10000 only when the device VAD is off for this listen: the box then calls no_speech), binary frames `s=id` as Molty records, `{"t":"stt.end","id"}` at the device's end frame |
 | relay → box | `{"t":"stt.cancel","id"}`: no speech, or the listen failed |
 | box → relay | `{"t":"stt.partial","id","text"}` (optional, ignored by the relay), `{"t":"stt.final","id","text","ms"?}` or `{"t":"stt.final","id","error"}` |
 | box → relay | `{"t":"stt.turn_end","id","reason":"no_speech"}` (only when `stt.start` carried `no_speech_ms`; at most once, never after a word or a turn end): nobody spoke for `no_speech_ms` of captured audio — no word, no voice activity (the model's `prs[2]` below 0.3 for 3 steps restarts the clock; a loud frame in the last ~0.5 s postpones the verdict) — and nobody is speaking right then. The relay ends the listen as the device's own no_speech: `listen_stop {job, reason:"no_speech"}` (no chirp, no thinking), `stt.cancel`, `reason:"no_speech"`, `heard:""` |
 | box → relay | `{"t":"stt.turn_end","id"}` (optional, at most once per listen): the human finished. The relay ends the listen there (`cmd listen_stop` to firmware with the cap, `stt.end` to the box at once); see `listen_stop` above |
 | box → relay | `{"t":"stt.hint","id","k":"pause"\|"question"}` (optional, while the human talks; ≥ 1.5 s apart): `pause` = a mid-turn pause began (the pause estimate crossed the threshold after a word, before any turn end), `question` = a word ending in `?` arrived. Forwarded to firmware with the cap `hints` as `hint` while that listen is open; dropped otherwise |
+| box → relay | `{"t":"stt.reflex","id","n","pick","conf","p":{…},"cat","cat_conf","ms","chars","tokens","model"}` (only after `stt.start` with `reflex: true`): the box's classifier on [reflex](#reflex) chunk `n` (the text so far had `n` words), right after that word's `stt.partial`. The relay validates it, gates `conf` and uses it for that chunk; late or unknown chunks are only noted |
 | box → relay | `{"t":"stt.trace","id","trace":{…}}` (optional): the box's side of the [turn trace](#turn-trace), sent right before `stt.turn_end` (either kind) and again right before `stt.final` (the last one wins, ≤ 8 KB, known keys only). An older relay ignores both |
 
 ### Selection: `voice_mode`
@@ -1280,10 +1329,12 @@ the console is served by the device.
 - **Auth model:** being on Molty's network makes you the owner, the same model as every
   local device setting. The console reads the code from `GET /api/link`; it rotates every
   15 min and after each pairing.
-- **GET** returns `{mode, voice, cloud, serving:{tts, stt}, box:{paired, name, paired_at,
+- **GET** returns `{mode, voice, cloud, serving:{tts, stt}, reflex:{mode, compare, engines:{local,
+  jev, openai, keywords}, engine, fallback?, timeout_ms}, box:{paired, name, paired_at,
   connected, connected_since, reported_name, version, voices, stt, tts, last:{stt_ms,
-  tts_first_audio_ms, …}}}`.
-- **POST** `{mode?, voice?}` changes the settings (`voice: null` = the box's default).
+  tts_first_audio_ms, …}}}` (`reflex.engine`: what the next listen fires with, null when off).
+- **POST** `{mode?, voice?, reflex?, reflex_compare?}` changes the settings (`voice: null` = the
+  box's default; `reflex` one of `off auto local jev openai keywords`, see [Reflex](#reflex)).
 - **DELETE** unpairs the box.
 - **Errors:** `401` for a wrong or expired code, `400 invalid_args`.
 

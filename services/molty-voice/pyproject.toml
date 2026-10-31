@@ -13,6 +13,8 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=8"]
+# Molty's reflex (molty_voice/reflex.py): a small CPU emotion classifier (ONNX), ~150 MB with its model.
+reflex = ["onnxruntime>=1.18", "tokenizers>=0.19", "huggingface_hub>=0.23"]
 
 [project.scripts]
 molty-voice = "molty_voice.cli:main"

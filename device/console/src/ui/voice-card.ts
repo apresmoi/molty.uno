@@ -5,8 +5,8 @@
 // relay can't be reached, a note when an action fails).
 import type { LinkInfo } from '../api/types';
 import {
-  VOICE_MODES, VoiceApiError, boxLine, getVoice, latencyLine, pairCommand, servingLine, setVoice, unpairBox, voiceChoices, voiceLabel,
-  type VoiceMode, type VoiceStatus, type VoiceTarget,
+  REFLEX_MODES, VOICE_MODES, VoiceApiError, boxLine, getVoice, latencyLine, pairCommand, reflexLine, servingLine, setVoice, unpairBox, voiceChoices, voiceLabel,
+  type ReflexMode, type VoiceMode, type VoiceStatus, type VoiceTarget,
 } from '../voice/voice';
 import { linkContext } from './agent-link';
 import { confirmButton, copyButton, h, mount, note } from './dom';
@@ -72,11 +72,30 @@ export function voiceCard(fetchImpl: typeof fetch = (...a) => fetch(...a)): Voic
     }, h('option', { value: '', selected: !s.voice }, 'the box’s default'),
       choices.map((v) => h('option', { value: v, selected: s.voice === v, title: v }, voiceLabel(v)))) : null;
     const lat = latencyLine(s);
+    const rx = s.reflex;
+    const reflex = rx ? h('div', null,
+      h('label', null, 'reflex'),
+      h('p', { class: 'dim small' }, 'Molty reacts by itself to what you say, while you talk (screen only; an agent’s own reaction wins)'),
+      h('div', { class: 'chips', role: 'group', 'aria-label': 'reflex' },
+        REFLEX_MODES.map((m) => {
+          const missing = (m.id === 'jev' || m.id === 'openai' || m.id === 'local') && !rx.engines[m.id];
+          return h('button', {
+            type: 'button', class: 'chip' + (rx.mode === m.id ? ' on' : '') + (missing ? ' dim' : ''), 'aria-pressed': String(rx.mode === m.id),
+            title: m.hint + (missing ? ' — not available now: keywords instead' : ''),
+            onclick: () => rx.mode !== m.id && void act((t) => setVoice(t, { reflex: m.id as ReflexMode }, fetchImpl)),
+          }, m.label);
+        })),
+      reflexLine(rx) ? h('p', { class: 'dim small' }, reflexLine(rx)) : null,
+      rx.mode !== 'off' ? h('label', { class: 'row small' },
+        h('input', { type: 'checkbox', checked: rx.compare, 'aria-label': 'compare reflex engines',
+          onchange: (ev: Event) => { const on = (ev.target as HTMLInputElement).checked; void act((t) => setVoice(t, { reflex_compare: on }, fetchImpl)); } }),
+        'compare: run every available engine on each phrase (activity log), show only this one') : null) : null;
     mount(el, head,
       h('p', { class: `small ${line.kind === 'ok' ? 'ok' : line.kind === 'warn' ? 'warn' : 'dim'}` }, line.text),
       h('label', null, 'mode'), modes,
       h('p', { class: 'dim small' }, servingLine(s)),
       lat ? h('p', { class: 'dim small' }, lat) : null,
+      reflex,
       select ? h('div', { class: 'row' }, h('label', null, 'box voice'), select) : null,
       s.box.paired ? h('div', { class: 'row' }, h('span', { class: 'dim small' }, 'the box’s token stops working; pair again to bring it back'),
         confirmButton('Unpair voice box', 'Sure? Unpair', () => void act((t) => unpairBox(t, fetchImpl)))) : null,

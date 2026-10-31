@@ -1,4 +1,4 @@
-"""molty-sim run | check | measure | show — see tools/sim/README.md."""
+"""molty-sim run | check | measure | show | reflex-bench — see tools/sim/README.md."""
 
 from __future__ import annotations
 
@@ -48,6 +48,13 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("measure", help="offline numbers for the turn-trace fixes: shake noise trim, Wi-Fi stall resend, mic gain (no box, no relay)")
 
+    rb = sub.add_parser("reflex-bench", help="Molty's reflex engines on labelled partials: accuracy, latency, cost (scenarios/reflex.yaml)")
+    rb.add_argument("--set", default=None, help="labelled set (default scenarios/reflex.yaml)")
+    rb.add_argument("--engines", default="local,jev,openai,keywords", help="comma-separated: local,jev,openai,keywords")
+    rb.add_argument("--box", default=os.environ.get("MOLTY_SIM_BOX", "voicebox"), help="ssh host of the voice box, for local (env MOLTY_SIM_BOX)")
+    rb.add_argument("--misses", action="store_true", help="also list each engine's wrong picks")
+    rb.add_argument("--json", help="write the scores here too")
+
     sh = sub.add_parser("show", help="print the summary table of a finished run")
     sh.add_argument("run_dir")
 
@@ -64,6 +71,10 @@ def main(argv: list[str] | None = None) -> int:
         if sc.shake:
             print(f"shake turns, arms {sc.arms}")
         return 0
+    if a.cmd == "reflex-bench":
+        from . import reflex_bench
+
+        return reflex_bench.main([e.strip() for e in a.engines.split(",") if e.strip()], a.set or str(reflex_bench.DEFAULT_SET), a.box, a.misses, a.json)
     if a.cmd == "measure":
         from .measure import measure
 
