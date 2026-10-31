@@ -55,8 +55,9 @@ usually talks), never word by word, none before the turn ran ~3 s. `seq` counts 
   [api.md](api.md#while-the-human-speaks-draft-and-react) and
   [talking-fast.md](talking-fast.md#drafts-a-head-start-not-an-answer).
 - **Molty reacts on its own too** (its *reflex*, when the owner turned it on): while they talk it
-  shows a reaction to what they say (surprised, happy, a nod, a bounce, a peek) — screen only, at
-  most one per 3 s, never over a question, a pairing or an update. You need do nothing for it, and
+  shows a reaction to what they say (surprised, happy, a nod, a bounce, a peek, or a small glance
+  when it is only likely) — screen only, from the third word on, at most one per 1.5–3 s (the
+  owner's liveliness), never over a question, a pairing or an update. You need do nothing for it, and
   it works with agents that never read partials. **Your `react` wins**: once you react in a turn,
   the reflex stays quiet for the rest of that turn. Don't echo it with your own reacts.
 - Webhooks get partials **only when you ask** (`"events": ["utterance.partial", "utterance", …]`):

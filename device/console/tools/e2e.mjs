@@ -31,7 +31,7 @@ const VOICE_CORS = { 'access-control-allow-origin': '*', 'access-control-allow-m
 const voiceRelay = {
   calls: [],
   state: { mode: 'auto', voice: null, cloud: 'workers-ai', serving: { tts: 'box', stt: 'box' },
-    reflex: { mode: 'off', compare: false, engines: { local: true, jev: true, openai: false, keywords: true }, engine: null, timeout_ms: 600 },
+    reflex: { mode: 'off', compare: false, engines: { local: true, jev: true, openai: false, keywords: true }, engine: null, timeout_ms: 600, liveliness: 'normal' },
     box: { paired: true, name: 'voice box', paired_at: 1, connected: true, connected_since: 2, reported_name: 'voice box', version: '0.1.0',
       voices: ['expresso/ex03-ex01_happy_001_channel1_334s.wav', 'expresso/ex03-ex01_calm_001_channel2_1081s.wav'], stt: true, tts: true, last: { stt_ms: 310, tts_first_audio_ms: 240 } } },
   async route(r) {
@@ -44,6 +44,7 @@ const voiceRelay = {
     if (req.method() === 'POST') { const b = JSON.parse(req.postData() || '{}'); if (b.mode) st.mode = b.mode; if (b.voice !== undefined) st.voice = b.voice;
       if (b.reflex) { st.reflex.mode = b.reflex; st.reflex.engine = b.reflex === 'off' ? null : b.reflex === 'openai' ? 'keywords' : b.reflex === 'auto' ? 'local' : b.reflex; st.reflex.fallback = b.reflex === 'openai' ? 'no_key' : undefined; }
       if (b.reflex_compare !== undefined) st.reflex.compare = b.reflex_compare;
+      if (b.liveliness !== undefined) st.reflex.liveliness = b.liveliness;
       if (st.mode === 'cloud') st.serving = { tts: 'workers-ai', stt: 'workers-ai' }; }
     if (req.method() === 'DELETE') { st.box = { ...st.box, paired: false, name: null, connected: false, voices: [] }; st.serving = { tts: 'workers-ai', stt: 'workers-ai' }; }
     return r.fulfill({ status: 200, headers: VOICE_CORS, contentType: 'application/json', body: JSON.stringify({ ok: true, result: st }) });
@@ -362,6 +363,12 @@ const canvasStats = (page) => page.evaluate(() => {
   await vc.getByLabel('compare reflex engines').check();
   await vc.getByText('reacts with Jev ⠂ comparing every engine in the activity log').waitFor();
   ok(voiceRelay.calls.some((c) => c.method === 'POST' && JSON.parse(c.body).reflex_compare === true), 'settings reflex: compare sent to the relay');
+  // liveliness: normal by default, lively sent to the relay and shown pressed
+  const lv = vc.getByRole('group', { name: 'liveliness' });
+  ok(await lv.getByRole('button', { name: 'normal' }).getAttribute('aria-pressed') === 'true', 'settings reflex: liveliness normal by default');
+  await lv.getByRole('button', { name: 'lively' }).click();
+  await lv.locator('button[aria-pressed="true"]', { hasText: 'lively' }).waitFor();
+  ok(voiceRelay.calls.some((c) => c.method === 'POST' && JSON.parse(c.body).liveliness === 'lively'), 'settings reflex: liveliness sent to the relay');
   await rx.getByRole('button', { name: 'OpenAI' }).click();
   await vc.getByText('reacts with keywords (no key on the relay for OpenAI) ⠂ comparing every engine in the activity log').waitFor();
   ok(true, 'settings reflex: a keyless engine says it falls back to keywords');

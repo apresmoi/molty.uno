@@ -5,8 +5,8 @@
 // relay can't be reached, a note when an action fails).
 import type { LinkInfo } from '../api/types';
 import {
-  REFLEX_MODES, VOICE_MODES, VoiceApiError, boxLine, getVoice, latencyLine, pairCommand, reflexLine, servingLine, setVoice, unpairBox, voiceChoices, voiceLabel,
-  type ReflexMode, type VoiceMode, type VoiceStatus, type VoiceTarget,
+  LIVELINESS, REFLEX_MODES, VOICE_MODES, VoiceApiError, boxLine, getVoice, latencyLine, pairCommand, reflexLine, servingLine, setVoice, unpairBox, voiceChoices, voiceLabel,
+  type Liveliness, type ReflexMode, type VoiceMode, type VoiceStatus, type VoiceTarget,
 } from '../voice/voice';
 import { linkContext } from './agent-link';
 import { confirmButton, copyButton, h, mount, note } from './dom';
@@ -86,6 +86,12 @@ export function voiceCard(fetchImpl: typeof fetch = (...a) => fetch(...a)): Voic
           }, m.label);
         })),
       reflexLine(rx) ? h('p', { class: 'dim small' }, reflexLine(rx)) : null,
+      rx.mode !== 'off' && rx.liveliness ? h('div', { class: 'row' }, h('label', null, 'liveliness'),
+        h('div', { class: 'chips', role: 'group', 'aria-label': 'liveliness' },
+          LIVELINESS.map((l) => h('button', {
+            type: 'button', class: 'chip' + (rx.liveliness === l.id ? ' on' : ''), 'aria-pressed': String(rx.liveliness === l.id), title: l.hint,
+            onclick: () => rx.liveliness !== l.id && void act((t) => setVoice(t, { liveliness: l.id as Liveliness }, fetchImpl)),
+          }, l.label)))) : null,
       rx.mode !== 'off' ? h('label', { class: 'row small' },
         h('input', { type: 'checkbox', checked: rx.compare, 'aria-label': 'compare reflex engines',
           onchange: (ev: Event) => { const on = (ev.target as HTMLInputElement).checked; void act((t) => setVoice(t, { reflex_compare: on }, fetchImpl)); } }),

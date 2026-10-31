@@ -387,6 +387,7 @@ static int settle_check(uint32_t audio_ms)
 /* ── listener reactions (listen_react.h): fed by live chunks and the relay's hints ── */
 static react_t s_react;                                /* the audio task's */
 static atomic_int s_hint;                              /* REACT_HINT_* waiting, 0 none */
+static atomic_uint s_ext_hold;                         /* the relay's reaction waiting: its ms, 0 none */
 
 static void react_play(int what)
 {
@@ -395,6 +396,7 @@ static void react_play(int what)
     case REACT_GLANCE_LEFT:  mole_fluid_act(CA_GLANCE_LEFT); break;
     case REACT_GLANCE_RIGHT: mole_fluid_act(CA_GLANCE_RIGHT); break;
     case REACT_PERK:         mole_fluid_act(CA_LOOK_UP); break;
+    case REACT_BLINK:        mole_fluid_act(CA_BLINK); break;
     default: return;
     }
     mole_diag_event(false, "audio.react %d", what);
@@ -404,9 +406,17 @@ static void react_play(int what)
 static void react_live(float level, uint32_t t)
 {
     const bool blocked = screen_owned();
+    const unsigned ext = atomic_exchange(&s_ext_hold, 0);
+    if (ext) react_external(&s_react, t, ext);         /* the relay's reaction plays: ours wait */
     const int hint = atomic_exchange(&s_hint, 0);
     if (hint) react_play(react_hint(&s_react, hint, t, blocked));
     react_play(react_level(&s_react, level, t, blocked));
+}
+
+void link_audio_external_react(uint32_t hold_ms)
+{
+    if (!s_busy || !s_listen || !hold_ms) return;
+    atomic_store(&s_ext_hold, hold_ms);
 }
 
 void link_audio_hint(const char *job, const char *kind)

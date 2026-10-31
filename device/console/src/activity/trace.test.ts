@@ -168,5 +168,8 @@ describe('reflex in the trace', () => {
     expect(reflexLabel({ n: 6, e: 'jev', ms: 600, pick: 'none', err: 'timeout' })).toBe('reflex jev: timeout ⠂ 600 ms (6 words)');
     expect(reflexLabel({ n: 6, e: 'keywords', ms: 0, pick: 'surprised', c: 1, fired: 'rate_limited', fb: 'timeout' })).toBe('reflex keywords: surprised ⠂ 0 ms → not shown: rate_limited (fallback: timeout) (6 words)');
     expect(reflexLabel({ n: 9, e: 'local', ms: 700, pick: 'sad', c: 0.8, late: true })).toBe('reflex local: sad 80% (late) ⠂ 700 ms (9 words)');
+    // a mild pick (liveliness): shown as its small gesture; a stale one never shown
+    expect(reflexLabel({ n: 4, e: 'jev', ms: 230, pick: 'curious', soft: true, raw: 'none', c: 0.5, fired: 'ok' })).toBe('reflex jev: curious 50% (mild: none on top) ⠂ 230 ms → shown small (4 words)');
+    expect(reflexLabel({ n: 3, e: 'jev', ms: 900, pick: 'sad', c: 0.9, fired: 'stale' })).toBe('reflex jev: sad 90% ⠂ 900 ms → not shown: stale (3 words)');
   });
 });

@@ -32,9 +32,20 @@ def test_score_and_table():
 
 def test_local_gate_and_prices_match_the_relay():
     src = (rb.RELAY_DIR / "src" / "core" / "reflex.ts").read_text()
-    gate = re.search(r"gate: \{ local: ([0-9.]+)", src)
-    assert gate and float(gate.group(1)) == rb.LOCAL_GATE
+    for lv in rb.LIVELINESS:
+        line = re.search(rf"^  {lv}: \{{(.*)\}},$", src, re.M)
+        assert line, lv
+        gate = re.search(r"gate: \{ local: ([0-9.]+)", line.group(1))
+        assert gate and float(gate.group(1)) == rb.LOCAL_GATE[lv]
+        mild = re.search(r"mild: \{ none: ([0-9.]+), min: ([0-9.]+) \}", line.group(1))
+        assert (None if not mild else (float(mild.group(1)), float(mild.group(2)))) == rb.MILD[lv]
     price = re.search(r"PRICE_PER_MTOK[^=]*= \{ jev: ([0-9.]+), openai: ([0-9.]+) \}", src)
     assert price and (float(price.group(1)), float(price.group(2))) == (rb.PRICE_PER_MTOK["jev"], rb.PRICE_PER_MTOK["openai"])
     assert rb.gate_local({"pick": "sad", "conf": 0.2}) == {"pick": "none", "raw": "sad", "conf": 0.2}
     assert rb.gate_local({"pick": "sad", "conf": 0.5})["pick"] == "sad"
+    assert rb.gate_local({"pick": "sad", "conf": 0.28}, "lively")["pick"] == "sad"
+    # mild (the relay's reflexGate): none unsure, a reaction plausible → soft
+    v = {"pick": "none", "conf": 0.58, "p": {"curious": 0.42, "none": 0.58}}
+    assert rb.gate_local(v, "normal") == {**v, "pick": "curious", "soft": True, "raw": "none"}
+    assert rb.gate_local(v, "calm")["pick"] == "none"
+    assert rb.gate_local({**v, "cat": "request"}, "lively")["pick"] == "none"

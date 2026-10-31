@@ -1,15 +1,21 @@
 // The relay's reflex engines on a list of texts, for tools/sim `molty-sim reflex-bench`:
-//   node --experimental-strip-types --import ./tools/ts-resolve.mjs tools/reflex-bench.ts <engine> < items.jsonl
-// stdin: one {"text": ...} per line; stdout: one verdict per line {pick, raw?, conf?, cat?, ms, chars, tokens?, error?}.
+//   node --experimental-strip-types --import ./tools/ts-resolve.mjs tools/reflex-bench.ts <engine> [liveliness] < items.jsonl
+// stdin: one {"text": ...} per line; stdout: one verdict per line {pick, raw?, soft?, conf?, p?, cat?, ms, chars, tokens?, error?},
+// gated at the liveliness (default normal) as the relay's session gates it (reflexGate).
 // engine: keywords | jev (TYPESAFE_API_KEY) | openai (OPENAI_API_KEY). The exact code the relay runs
 // (src/core/reflex.ts), called one at a time so each latency is one call's. Keys come from the
 // environment and are never printed.
 import { createInterface } from "node:readline";
-import { keywordReflex, remoteReflex } from "../src/core/reflex.ts";
+import { DEFAULT_LIVELINESS, REFLEX_LIVELINESS, isLiveliness, keywordReflex, reflexGate, remoteReflex } from "../src/core/reflex.ts";
 
 const engine = process.argv[2];
 if (!["keywords", "jev", "openai"].includes(engine)) {
   console.error("usage: reflex-bench.ts keywords|jev|openai < items.jsonl");
+  process.exit(2);
+}
+const lv = process.argv[3] ?? DEFAULT_LIVELINESS;
+if (!isLiveliness(lv)) {
+  console.error(`liveliness: calm | normal | lively`);
   process.exit(2);
 }
 const key = engine === "jev" ? process.env.TYPESAFE_API_KEY : engine === "openai" ? process.env.OPENAI_API_KEY : undefined;
@@ -29,6 +35,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     v = keywordReflex(text);
     v.ms = performance.now() - t0;
   } else v = await remoteReflex(engine as "jev" | "openai", text, { key, fetch: (r) => fetch(r), clock, timeoutMs });
-  const { engine: _e, p: _p, catP: _cp, ...out } = v;
+  if (!v.error) v = reflexGate(v, REFLEX_LIVELINESS[lv]);
+  const { engine: _e, catP: _cp, ...out } = v;
   process.stdout.write(JSON.stringify({ ...out, ms: Math.round(v.ms * 10) / 10 }) + "\n");
 }
