@@ -65,7 +65,7 @@ static inline int16_t sat16(float x) { return fq(x, 1.f); }   /* raw-unit store 
 
 void fluid_params_default(fluid_params_t *p) {
     memset(p, 0, sizeof(*p));
-    p->c2 = 0.11f;  p->damp = 0.975f; p->leak = 0.985f;
+    p->c2 = 0.11f;  p->damp = 0.975f; p->leak = 0.985f; p->shade = 0.9f;
     p->attract = 70.f; p->drag = 2.6f; p->vmax = 30.f;
     p->relax_up = 1.1f; p->relax_down = 1.8f; p->tint_rate = 3.f;
     p->swirl = 0.7f; p->swirl_freq = 1.6f;
@@ -559,7 +559,7 @@ void fluid_sim_color(fluid_sim_t *s, float dt) {
 void fluid_sim_view(fluid_sim_t *s) {
     const int W = s->W, H = s->H;
     const int16_t *h = s->h, *ink = s->ink;
-    const float rk = s->p.refr * 6.f * 0.5f * INV_H, rkA = rk / s->A, crest = s->p.crest * 0.55f;
+    const float rk = s->p.refr * 6.f * 0.5f * INV_H, rkA = rk / s->A, crest = s->p.crest * 0.55f, shade = s->p.shade;
     const float xmax = W - 1.001f, ymax = H - 1.001f;
     int16_t *view = s->view;
     FLUID_PROF_BEGIN(c0);
@@ -572,7 +572,7 @@ void fluid_sim_view(fluid_sim_t *s) {
         int x0 = (int)x, y0 = (int)y;
         float sm = bilerp16(ink, W, y0 * W + x0, x - x0, y - y0) * INV_UNIT;
         float hc = h[k] * INV_H;
-        float val = sm * (1.f + 0.9f * hc) + crest * (hc > 0.f ? hc : 0.f);
+        float val = sm * (1.f + shade * hc) + crest * (hc > 0.f ? hc : 0.f);
         view[k] = (int16_t)((val < 0.f ? 0.f : val > 1.f ? 1.f : val) * FQ_UNIT + 0.5f);
     }
     FLUID_PROF_END(FP_VIEW, c0);

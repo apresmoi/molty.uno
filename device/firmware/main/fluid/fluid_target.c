@@ -365,7 +365,8 @@ int fluid_ring_tick(fluid_ring_t *r, float dt, bool on, float level) {
     if (r->on <= 0.5f) { r->low = lv; r->gap = 0.f; r->since = 0.f; return 0; }
     const bool voice = lv >= RING_ONSET_MIN;
     if (voice && r->gap <= 0.f && (lv - r->low >= RING_ONSET_RISE || r->since >= RING_HOLD_S)) {
-        ring_due(r, RING_PING_S_MIN + (RING_PING_S_MAX - RING_PING_S_MIN) * lv);
+        ring_due(r, RING_PING_S_MIN + (RING_PING_S_MAX - RING_PING_S_MIN) * powf(lv, RING_S_CURVE));
+        r->gap = RING_GAP_SOFT + (RING_GAP_S - RING_GAP_SOFT) * lv;
         r->low = lv;
         return 1;
     }
@@ -422,24 +423,6 @@ void fluid_target_ring(fluid_sim_t *s, const fluid_ring_t *r, uint32_t rgb, floa
         if (t < 0.5f) s->tcol[c->k] = fluid_pack_rgba8((rgb >> 16 & 255) / 255.f, (rgb >> 8 & 255) / 255.f, (rgb & 255) / 255.f, acc);
     }
     FLUID_PROF_END(FP_TARGET, c0);
-}
-
-void fluid_ring_pin(fluid_sim_t *s, const fluid_ring_t *r, uint32_t rgb, float acc) {
-    if (!(r->on > 0.f) || !ring_geom(s)) return;
-    const ring_cell_t *c = (const ring_cell_t *)s->ring_geom;
-    const float reach = RING_CORE + RING_SOFT, isoft = 1.f / RING_SOFT, ink = r->ink * RING_PIN;
-    const fluid_rgba16_t tint = { (uint16_t)((rgb >> 16 & 255) * 257u), (uint16_t)((rgb >> 8 & 255) * 257u), (uint16_t)((rgb & 255) * 257u),
-                                  (uint16_t)(acc * 65535.f) };
-    for (int n = 0; n < s->ring_n; n++, c++) {
-        const float d = fabsf(c->off) * c->ifoot;
-        if (d >= reach) continue;
-        float t = (d - RING_CORE) * isoft;
-        t = t < 0.f ? 0.f : t;
-        const float v = ink * (1.f - t * t * (3.f - 2.f * t));
-        if (v * FQ_UNIT <= (float)s->view[c->k]) continue;
-        s->view[c->k] = fq(v, FQ_UNIT);
-        s->col[c->k] = tint;
-    }
 }
 
 void fluid_ring_ping(fluid_sim_t *s, const fluid_ring_t *r) {

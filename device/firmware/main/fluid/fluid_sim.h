@@ -65,6 +65,7 @@ typedef struct {
     float relax_up, relax_down, tint_rate;
     float swirl, swirl_freq;           /* ambient eddies                                 */
     float refr, crest;                 /* ripple refraction + crest highlight            */
+    float shade;                       /* ink brightens with the wave's height by this   */
     float speed_mul, hold;
     /* the dim background fluid: an ink floor in EVERY state */
     float bg_level, bg_freq, bg_drift, bg_speed, bg_rim, bg_mob;
@@ -272,8 +273,6 @@ typedef struct {
 } fluid_ring_t;
 int  fluid_ring_tick(fluid_ring_t *r, float dt, bool on, float level);
 void fluid_ring_ping(fluid_sim_t *s, const fluid_ring_t *r);
-/** After fluid_sim_view: the circle stays on screen at its fixed radius while waves stir the ink under it. */
-void fluid_ring_pin(fluid_sim_t *s, const fluid_ring_t *r, uint32_t rgb, float acc);
 void fluid_target_ring(fluid_sim_t *s, const fluid_ring_t *r, uint32_t rgb, float acc);
 
 /* ── renderer (render.js) ─────────────────────────────────────────────────── */
