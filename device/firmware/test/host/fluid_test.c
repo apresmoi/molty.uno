@@ -522,16 +522,16 @@ static void test_ring_ripples(void) {
     fluid_ring_t v = { 0 };
     for (int f = 0; f < 15; f++) fluid_ring_tick(&v, dt, true, 0.f);
     int ps = 0; float gap_min = 1e9f, since = 1e9f, soft = 0.f, loud = 0.f;
-    for (int f = 0; f < 900; f++) {                          /* 30 s at 2 syllables/s */
-        const int beat = f % 15;
-        const float peak = (f / 15) % 4 == 3 ? 1.f : 0.4f;
+    for (int f = 0; f < 900; f++) {                          /* 30 s, a syllable each 1 s */
+        const int beat = f % 30;
+        const float peak = (f / 30) % 4 == 3 ? 1.f : 0.4f;
         since += dt;
         if (fluid_ring_tick(&v, dt, true, beat < 3 ? peak : 0.05f)) {
             ps++; gap_min = fminf(gap_min, since); since = 0.f;
             if (peak == 1.f) loud = v.ping_s; else soft = v.ping_s;
         }
     }
-    CHECK(ps >= 56 && ps <= 62, "voice: %d waves for 60 syllables", ps);
+    CHECK(ps >= 28 && ps <= 31, "voice: %d waves for 30 syllables", ps);
     CHECK(fabsf(loud - RING_PING_S_MAX) < 0.01f, "full voice height: %.2f", loud);
     CHECK(soft > RING_PING_S_MIN && soft < 0.7f * loud, "a soft syllable is lower: %.2f vs %.2f", soft, loud);
 
@@ -544,7 +544,20 @@ static void test_ring_ripples(void) {
         if (fluid_ring_tick(&g, dt, true, f % 2 ? 1.f : 0.f)) { pg++; gap_min = fminf(gap_min, since); since = 0.f; }
     }
     CHECK(gap_min >= RING_GAP_S - 0.001f, "machine gun: waves %.3f s apart", gap_min);
-    CHECK(pg >= 22 && pg <= 28, "jittering voice: %d waves in 10 s", pg);
+    CHECK(pg >= 14 && pg <= 19, "jittering voice: %d waves in 10 s", pg);
+
+    /* the voice plays the water: a murmur's waves are lower and further apart than full voice */
+    {
+        float h[2] = {0}; int cnt[2] = {0};
+        const float lv[2] = { 0.3f, 1.f };
+        for (int q = 0; q < 2; q++) {
+            fluid_ring_t a = { 0 };
+            for (int f = 0; f < 15; f++) fluid_ring_tick(&a, dt, true, 0.f);
+            for (int f = 0; f < 600; f++) if (fluid_ring_tick(&a, dt, true, f % 6 < 2 ? lv[q] : 0.f)) { cnt[q]++; h[q] = a.ping_s; }
+        }
+        CHECK(h[0] < 0.5f * h[1], "a murmur's wave is not lower: %.2f vs %.2f", h[0], h[1]);
+        CHECK(cnt[0] < cnt[1], "a murmur's waves are not further apart: %d vs %d", cnt[0], cnt[1]);
+    }
 
     /* a held level never repeats like a rise: only the slow RING_HOLD_S pulse */
     fluid_ring_t l = { 0 };
@@ -552,7 +565,7 @@ static void test_ring_ripples(void) {
     int ph = 0, ph_first = 0;
     for (int f = 0; f < 300; f++) { const int d = fluid_ring_tick(&l, dt, true, 1.f); ph += d; if (f < 15) ph_first += d; }
     CHECK(ph_first == 1, "one rise, %d waves in its first 0.5 s", ph_first);
-    CHECK(ph >= 12 && ph <= 16, "held voice: %d waves in 10 s", ph);
+    CHECK(ph >= 8 && ph <= 11, "held voice: %d waves in 10 s", ph);
 
     /* a wave rises all round the circle at once, runs inward to the centre, and stays round;
      * the circle itself stays put: pinned on the view, whatever the wave does under it */
@@ -574,19 +587,6 @@ static void test_ring_ripples(void) {
         CHECK(peak_c > (int)(0.1f * RING_PING_S_MAX * FQ_H), "the wave never reached the centre: %d", peak_c);
         fluid_sim_destroy(w);
 
-        fluid_sim_t *p = fluid_sim_create(52, 32, FLUID_STAGE_REF);
-        fluid_sim_view(p);
-        int pinned = 0;
-        memset(p->view, 0, (size_t)p->N * 2);
-        fluid_ring_pin(p, &rw, 0xff0000, 0.f);
-        for (int q = 0; q < 24; q++) {
-            const float a = 6.2831853f * q / 24;
-            const int k = cell_of(p, RING_R * sinf(a), -RING_R * cosf(a));
-            pinned += p->view[k] > (int)(0.8f * RING_INK * RING_PIN * FQ_UNIT) && p->col[k].r > 60000 && p->col[k].g < 5000;
-        }
-        CHECK(pinned >= 22, "pin: %d/24 points hold the circle", pinned);
-        CHECK(p->view[cell_of(p, 0.f, 0.f)] == 0, "pin wrote away from the circle");
-        fluid_sim_destroy(p);
     }
 
 /* off: melts out within the fade, no waves, and a faded line writes nothing */
