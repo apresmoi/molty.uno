@@ -76,7 +76,7 @@ export interface EventsRequest {
 
 export type WebhookRequest = { action: "get" } | { action: "delete" } | { action: "set"; spec: Record<string, unknown> };
 
-export type JobStatus = "queued" | "running" | "done" | "failed";
+export type JobStatus = "queued" | "running" | "reconnecting" | "done" | "failed";
 export const TERMINAL: readonly JobStatus[] = ["done", "failed"];
 
 export interface JobView {
