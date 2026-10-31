@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { gapOptions, reflexOptions, voiceOptions, VoiceApiError, boxLine, getVoice, latencyLine, pairCommand, servingLine, setVoice, unpairBox, voiceChoices, voiceLabel, type VoiceStatus } from './voice';
+import { gapOn, voiceOn, gapOptions, reflexOptions, voiceOptions, VoiceApiError, boxLine, getVoice, latencyLine, pairCommand, servingLine, setVoice, unpairBox, voiceChoices, voiceLabel, type VoiceStatus } from './voice';
 
 const T = { relay: 'https://relay.example', deviceId: 'molty-k7m2w9c4ya', linkCode: 'K7QX2MPA' };
 
@@ -44,9 +44,9 @@ describe('voice box owner API', () => {
 
 describe('voice card text', () => {
   it('says whether a box is paired / connected', () => {
-    expect(boxLine(status())).toEqual({ text: 'gpu box ⠂ connected ⠂ listens + speaks ⠂ v0.1.0', kind: 'ok' });
+    expect(boxLine(status())).toEqual({ text: 'gpu box is connected.', kind: 'ok' });
     expect(boxLine(status({}, { connected: false })).kind).toBe('warn');
-    expect(boxLine(status({}, { paired: false })).text).toBe('no voice box paired');
+    expect(boxLine(status({}, { paired: false })).text).toBe('No voice box paired.');
   });
   it('says who serves now', () => {
     expect(servingLine(status())).toBe('Molty uses: voice box');
@@ -92,6 +92,17 @@ describe('setup hides what the owner\'s tools can\'t do', () => {
   it('voice: no box, no box choice; no cloud provider, no cloud choice; text only always', () => {
     expect(ids(voiceOptions(status({}, { paired: false })))).toEqual(['cloud', 'off']);
     expect(ids(voiceOptions(status({ cloud: 'none' })))).toEqual(['box', 'off']);
+    expect(ids(voiceOptions(status()))).toEqual(['auto', 'cloud', 'off']);
+  });
+  it('voice: shows what the mode means, whatever mode an older setting left', () => {
+    expect(voiceOn(status({ mode: 'box' }))).toBe('auto');
+    expect(voiceOn(status({ mode: 'auto' }, { paired: false }))).toBe('cloud');
+    expect(voiceOn(status({ mode: 'off' }))).toBe('off');
+  });
+  it('gap: first words win, a zero delay means quiet', () => {
+    expect(gapOn(status({ first_words: { mode: 'opener', available: true } }), 0)).toBe('local');
+    expect(gapOn(status(), 0)).toBe('off');
+    expect(gapOn(status(), 600)).toBe('phrases');
   });
   it('gap: first words only with a box that offers them', () => {
     expect(ids(gapOptions(status()))).toEqual(['phrases', 'off']);

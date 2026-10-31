@@ -14,6 +14,7 @@ import { getSpeech, resetSpeech, SpeechApiError, speechRows, type SpeechStats } 
 import { linkContext } from '../ui/agent-link';
 import { h, mount, note } from '../ui/dom';
 import { errText } from '../ui/fmt';
+import { more, pageHead, section, toggle } from '../ui/kit';
 
 const POLL_MS = 3000;
 const LINK_MS = 60000;   // the link code rotates every 15 min
@@ -42,9 +43,8 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
   const msg = h('div', { 'aria-live': 'polite' });
   const list = h('div', { class: 'act-list' });
   mount(root,
-    h('h1', null, 'activity ', h('span', { class: 'dim' }, '⠶ what happened, and who did it')),
-    h('p', { class: 'lede' }, 'Every agent call and turn on this Molty, the device’s own log lines for it, and what Molty itself did — the last 24 h, kept by the relay.'),
-    controls, msg, list, habits, settings);
+    ...pageHead('Activity', 'What happened on this Molty and which agent did it, for the last 24 hours.'),
+    controls, msg, list, settings, more('How you talk', habits));
 
   async function loadLink() {
     clearTimeout(linkTimer);
@@ -88,7 +88,7 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
       } catch (e) {
         if (e instanceof ActivityApiError && e.code === 'unsupported') unsupported = true;
         else if (e instanceof ActivityApiError && e.code === 'unauthorized') void loadLink();   // the code rotated
-        else problem = e instanceof ActivityApiError && e.code === 'unreachable' ? 'can’t reach the relay — is Molty online?' : (e as Error).message;
+        else problem = e instanceof ActivityApiError && e.code === 'unreachable' ? 'Can’t reach the relay. Is Molty online?' : (e as Error).message;
       } finally { busy = false; }
       // re-render only on news: an open select or a scrolled list must survive the poll
       const sig = `${entries.length}|${next}|${transcripts}|${keepAudio}|${problem}|${loaded}|${unsupported}|${speechAt}`;
@@ -140,37 +140,22 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
     if (key === controlsKey) return;
     controlsKey = key;
     const agentSel = h('select', { 'aria-label': 'agent', onchange: (ev: Event) => { filters.agent = (ev.target as HTMLSelectElement).value || undefined; render(); } },
-      h('option', { value: '', selected: !filters.agent }, 'all agents'),
+      h('option', { value: '', selected: !filters.agent }, 'All agents'),
       agents.map((a) => h('option', { value: a, selected: filters.agent === a }, a)));
     const kindSel = h('select', { 'aria-label': 'kind', onchange: (ev: Event) => { filters.kind = (ev.target as HTMLSelectElement).value || undefined; render(); } },
-      h('option', { value: '', selected: !filters.kind }, 'everything'),
+      h('option', { value: '', selected: !filters.kind }, 'Everything'),
       ACTIVITY_KINDS.map((k) => h('option', { value: k.id, selected: filters.kind === k.id }, k.label)));
     const errs = h('button', { type: 'button', class: 'chip' + (filters.errors ? ' on' : ''), 'aria-pressed': String(!!filters.errors),
-      onclick: () => { filters.errors = !filters.errors; render(); } }, 'errors only');
+      onclick: () => { filters.errors = !filters.errors; render(); } }, 'Errors only');
     mount(controls, h('div', { class: 'row act-filters' }, agentSel, kindSel, errs));
   }
 
   function renderSettings() {
     if (!loaded) { mount(settings); return; }
-    mount(settings, h('div', { class: 'card' },
-      h('div', { class: 'row' }, h('b', { class: 'hi' }, 'log transcripts'), h('span', { class: 'dim small' }, 'what Molty heard and said, in this log')),
-      h('div', { class: 'chips', role: 'group', 'aria-label': 'log transcripts' },
-        [['on', true], ['off', false]].map(([label, on]) => h('button', {
-          type: 'button', class: 'chip' + (transcripts === on ? ' on' : ''), 'aria-pressed': String(transcripts === on),
-          onclick: () => void toggleTranscripts(on as boolean),
-        }, label as string))),
-      h('p', { class: 'dim small' }, transcripts ? 'on: turns keep the words (agents only ever see their own).' : 'off: new turns keep timings and outcomes only; the words are never stored.')),
-      keepAudio === undefined ? null : h('div', { class: 'card' },
-        h('div', { class: 'row' }, h('b', { class: 'hi' }, 'keep audio for debugging'), h('span', { class: 'dim small' }, 'what the mic heard, as a wav per turn')),
-        h('div', { class: 'chips', role: 'group', 'aria-label': 'keep audio for debugging' },
-          [['on', true], ['off', false]].map(([label, on]) => h('button', {
-            type: 'button', class: 'chip' + (keepAudio === on ? ' on' : ''), 'aria-pressed': String(keepAudio === on),
-            disabled: !transcripts && on === true,
-            onclick: () => void toggleKeepAudio(on as boolean),
-          }, label as string))),
-        h('p', { class: 'dim small' }, !transcripts
-          ? 'off while transcripts are off: no audio is kept.'
-          : `${keepAudio ? 'on' : 'off (default)'}: the relay keeps the last ${audioInfo.turns} turns' audio (up to ${audioInfo.max_s} s each) for ${audioInfo.max_age_h} h, then deletes it. Only you can download it here — agents never can.`)));
+    mount(settings, section('Privacy', 'What the relay keeps. Agents only ever see their own turns.',
+      toggle('Keep the words', transcripts ? 'What Molty heard and said is stored in this log.' : 'New turns keep timings and outcomes only, never the words.', transcripts, toggleTranscripts),
+      keepAudio === undefined ? null : !transcripts ? h('p', { class: 'why' }, 'No audio is kept while the words are off.')
+        : toggle('Keep recordings for debugging', `The last ${audioInfo.turns} turns (up to ${audioInfo.max_s} s each), deleted after ${audioInfo.max_age_h} h. Only you can download them, here.`, keepAudio, toggleKeepAudio)));
   }
 
   async function startOver() {
@@ -184,11 +169,11 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
   function renderHabits() {
     if (!loaded || !speech) { mount(habits); return; }
     const rows = speechRows(speech);
-    mount(habits, h('div', { class: 'card' },
-      h('div', { class: 'row' }, h('b', { class: 'hi' }, 'speech habits'), h('span', { class: 'dim small' }, 'how you talk to Molty, learned by the relay')),
+    mount(habits, h('div', null,
+      h('div', { class: 'row' }, h('span', { class: 'why' }, 'Learned by the relay to tune how it listens.')),
       h('dl', { class: 'facts', 'aria-label': 'speech habits' }, rows.map(([k, v]) => [h('dt', null, k), h('dd', null, v)])),
       h('p', { class: 'dim small' }, 'Agents get your words in chunks while you talk (context only) and may have a short opener ready; the relay tunes both to how you speak.'),
-      h('button', { type: 'button', class: 'chip', onclick: () => void startOver() }, 'start over')));
+      h('button', { type: 'button', class: 'link', onclick: () => void startOver() }, 'Start over')));
   }
 
   function groupEl(g: Group) {
@@ -255,12 +240,12 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
     renderControls();
     renderHabits();
     renderSettings();
-    if (unsupported) { mount(msg, note('warn', 'this relay has no activity log yet.')); mount(list); return; }
+    if (unsupported) { mount(msg, note('warn', 'This relay has no activity log yet.')); mount(list); return; }
     mount(msg, problem ? note('warn', problem) : null);
-    if (!loaded) { mount(list, problem ? null : h('p', { class: 'dim' }, 'asking the relay…')); return; }
+    if (!loaded) { mount(list, problem ? null : h('p', { class: 'dim' }, 'Asking the relay…')); return; }
     const groups = filterGroups(groupEntries(entries), filters).reverse();   // newest first
     if (!groups.length) {
-      mount(list, h('p', { class: 'dim' }, entries.length ? 'nothing matches these filters.' : 'nothing yet — pair an agent and talk to Molty.'));
+      mount(list, h('p', { class: 'dim' }, entries.length ? 'Nothing matches these filters.' : 'Nothing yet. Pair an agent and talk to Molty.'));
       return;
     }
     mount(list, groups.map(groupEl));

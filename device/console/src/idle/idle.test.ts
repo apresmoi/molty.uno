@@ -4,7 +4,6 @@ import { IDLE_CHOICES, idleChoice, idleSupported, idleValid } from './idle';
 describe('idle life setting', () => {
   it('offers lively (the default), calm, off', () => {
     expect(IDLE_CHOICES.map((c) => c.id)).toEqual(['lively', 'calm', 'off']);
-    expect(IDLE_CHOICES[0].label).toMatch(/default/);
     expect(IDLE_CHOICES.every((c) => idleValid(c.id))).toBe(true);
   });
   it('takes only what the device takes', () => {
