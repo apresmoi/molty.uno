@@ -82,7 +82,7 @@ Success: `200 {"ok":true,"result":{…}}`. Unknown argument keys are rejected.
 | `listen` | `{"ms"?: 0..30000, "end_silence_ms"?: 300..3000, "no_speech_ms"?: 1000..10000, "vad"?: bool, "ring_color"?: c, "ack"?: true\|false\|"silent"}` | `{job}` immediately | records the mic until the human finishes (the window is a ceiling: omit `ms` for the human's own setting, 30000 ms out of the box; `0` = unlimited, 5 min safety ceiling), relay STT; job done → `{text, duration_ms, peak, rms, reason, speech_ms?, timings}` |
 | `state` | `{}` = read · `{"state": {…}}` or flat fields = patch | creature state JSON | low-level creature state, same as the device's `/api/creature/state` |
 | `volume` | `{"volume": 0..21}` | — | speaker volume, 0 = mute |
-| `gestures` | `{"bindings"?: {input: action}}` | what tap, double tap and the buttons do: [Gestures](#gestures-what-tap-double-tap-and-the-buttons-do) |
+| `gestures` | `{"bindings"?: {input: action}}` | `{bindings}` | what tap, double tap and the buttons do: [Gestures](#gestures-what-tap-double-tap-and-the-buttons-do) |
 | `imu` | — | ax/ay/az (g), gx/gy/gz (°/s), ms | one motion-sensor snapshot |
 | `diag` | `{"timeline"?: 0..180}` | diagnostics JSON | frame/CPU/heap/network health; timeline = seconds of 1 Hz rows |
 | `log` | `{"since"?: n, "max"?: 1024..32768}` | `{next, text}` | device log tail; pass `next` back as `since` |
