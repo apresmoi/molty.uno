@@ -37,3 +37,7 @@ speak at all are in [voice.md](voice.md).
   anything. Try the turn once more.
 - Slow or garbled turns: read the job in the [activity log](activity.md) (`data.voice`,
   `data.timings`) before blaming the network.
+
+## Live conversation (experiment)
+
+A box started with `--live` and an owner who set `conversation: "live"` answer a shake or double tap on OpenAI's `gpt-live-1` directly. You are not in that conversation: its `shake` still says `listening: true`, no `utterance` follows, and your `say` or `talk` meanwhile gets `audio_busy`. It ends on a tap, after 20 s of quiet or at 10 min. The activity log has each turn and how long the session ran (`kind=trace`, `ev=live`).

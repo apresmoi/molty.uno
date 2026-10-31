@@ -80,6 +80,10 @@ export interface BoxOpts {
   /** The box offers first words: its line for the human's words (undefined: it never answers). */
   openerLine?: (text: string) => string | undefined;
   openerMs?: number;
+  /** The box offers a live conversation: called with each live.* frame from the relay. */
+  live?: (f: Record<string, any>, say: (m: unknown) => void, audio: (id: string, samples: number) => void) => void;
+  /** ...and each mic frame it gets for one. */
+  liveMic?: (id: string, bytes: number) => void;
 }
 
 export function box(room: DeviceRoom, sock: FakeSocket, speech: () => Speech, o: BoxOpts = {}) {
@@ -106,6 +110,9 @@ export function box(room: DeviceRoom, sock: FakeSocket, speech: () => Speech, o:
       const line = o.openerLine?.(f.text);
       if (line !== undefined) setTimeout(() => !sock.closed && say({ t: "opener.result", id: f.id, text: line, ms: 1 }), o.openerMs ?? 1);
     }
+    if (typeof f.t === "string" && f.t.startsWith("live.")) {
+      o.live?.(f, say, (id, samples) => void room.socketMessage(sock, encodeAudioFrame({ s: id, seq: 0, kind: "pcm16", rate: 16000, end: false }, new Uint8Array(samples * 2))));
+    }
     if (f.t === "stt.start") {
       got[f.id] = 0;
       starts.push(f);
@@ -115,7 +122,7 @@ export function box(room: DeviceRoom, sock: FakeSocket, speech: () => Speech, o:
   sock.sendBinary = (b: Uint8Array) => {
     const fr = decodeAudioFrame(b)!;
     const id = fr.header.s;
-    if (got[id] === undefined) return;
+    if (got[id] === undefined) return void o.liveMic?.(id, fr.payload.length);
     const w = speech().words;
     const n = Math.min(w.length, ++got[id]);
     if (n <= w.length && got[id] <= w.length) {
@@ -128,7 +135,7 @@ export function box(room: DeviceRoom, sock: FakeSocket, speech: () => Speech, o:
       say({ t: "stt.turn_end", id });
     }
   };
-  return { tts, starts, openers, hello: () => room.socketMessage(sock, JSON.stringify({ t: "voice.hello", name: "gpu box", version: "0.1.0", voices: ["a.wav"], ...(o.openerLine ? { opener: true } : {}), stt: true, tts: true, ...(o.reflex ? { reflex: true } : {}) })) };
+  return { tts, starts, openers, hello: () => room.socketMessage(sock, JSON.stringify({ t: "voice.hello", ...(o.live ? { live: true } : {}), name: "gpu box", version: "0.1.0", voices: ["a.wav"], ...(o.openerLine ? { opener: true } : {}), stt: true, tts: true, ...(o.reflex ? { reflex: true } : {}) })) };
 }
 
 export async function setup(

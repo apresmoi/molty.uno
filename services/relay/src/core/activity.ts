@@ -241,6 +241,7 @@ function redact(e: ActivityDraft): boolean {
   if (e.kind === "call") strip(e.args, TRANSCRIPT_ARGS);
   if (e.kind === "job") strip(e.data, TRANSCRIPT_DATA);
   if (e.kind === "device" && e.ev === "utterance") strip(e.data, ["text"]); // shake to talk: what the human said
+  if (e.kind === "trace" && e.ev === "live") strip(e.data, ["heard", "said"]);
   if (e.kind === "trace" && e.ev === "opener") strip(e.data, ["text"]); // first words: made of what the human said
   // a turn trace (core/trace.ts): the box's words and the word its end-of-turn rule judged
   const box = e.kind === "job" && isRecord(e.data?.trace) && isRecord(e.data.trace.box) ? (e.data.trace.box as JsonObject) : undefined;

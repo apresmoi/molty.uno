@@ -16,6 +16,11 @@
 //                {"t":"stt.trace","id","trace":{…}}? (before stt.turn_end and stt.final: the latest is kept, core/trace.ts)
 //                {"t":"stt.reflex","id","n","pick","conf","p","ms","chars","tokens"?}? (only when stt.start said reflex:true:
 //                the box's classifier on reflex chunk n, core/reflex.ts)
+//   relay → box  {"t":"live.start","id"}, pcm16 frames (s=id) as the device sends them, {"t":"live.listen","id"} (Molty
+//                has played everything: the mic is on again), {"t":"live.stop","id"}
+//   box → relay  {"t":"live.started","id"}, {"t":"live.reply","id","gap_ms"?} then pcm16 frames (s=id), {"t":"live.reply_end","id"},
+//                {"t":"live.heard","id","text"}, {"t":"live.said","id","text"}, {"t":"live.end","id","reason","billed_s"?,"error"?}
+//                A live conversation (molty_voice/live.py): the box talks to the model, the room plays turns.
 //
 // Every request is bound to the socket it went out on: when that socket closes
 // or is replaced, drop() fails its requests at once (`voice_box_offline`), so
@@ -26,6 +31,27 @@ import { bytesToPcm16, pcm16ToBytes } from "../core/audio.js";
 import { PcmFeed, type SynthTimer } from "../core/speech.js";
 import { cleanBoxTrace } from "../core/trace.js";
 import type { SttStream, SttStreamOptions, TtsOptions, VoiceProvider } from "./types.js";
+
+/** A live conversation's handlers (`liveStart`): each is called on the box's frames, in order. */
+export interface LiveHandlers {
+  /** A reply began: its audio goes into `feed`, which ends with the reply. */
+  onReply(feed: PcmFeed, gapMs: number | undefined): void;
+  /** The box closed the session (quiet, cap, a model failure) or went away. Once. */
+  onEnd(reason: string, billedS: number | undefined, error: string | undefined): void;
+  /** A piece of the transcript, either side. */
+  onWords(who: "heard" | "said", text: string): void;
+}
+
+/** A live conversation on the box, started (`liveStart` resolved). */
+export interface LiveSession {
+  readonly id: string;
+  /** The mic's frames, for the length of one device listen. */
+  stream(): SttStream;
+  /** Molty has played everything: the box may send the mic again. */
+  listen(): void;
+  /** Close the session. Idempotent; the box also closes by itself on quiet, on its cap and when this socket goes. */
+  stop(): void;
+}
 
 /** The socket the box is on (a DeviceSocket in the room). */
 export interface BoxChannel {
@@ -46,6 +72,12 @@ interface TtsOp {
   ch: BoxChannel;
   feed: PcmFeed;
   onWord?: (i: number, startS: number) => void;
+}
+interface LiveOp {
+  ch: BoxChannel;
+  feed?: PcmFeed;
+  started?: (ok: true | string) => void;
+  h: LiveHandlers;
 }
 interface SttOp {
   ch: BoxChannel;
@@ -68,6 +100,7 @@ export class RemoteVoiceProvider implements VoiceProvider {
   private readonly ttsOps = new Map<string, TtsOp>();
   private readonly sttOps = new Map<string, SttOp>();
   private readonly openerOps = new Map<string, { ch: BoxChannel; done(line: string | undefined): void }>();
+  private readonly liveOps = new Map<string, LiveOp>();
   private seq = 0;
 
   constructor(
@@ -112,6 +145,90 @@ export class RemoteVoiceProvider implements VoiceProvider {
         done(undefined);
       }
     });
+  }
+
+  // ---------------- a live conversation (molty_voice/live.py) ----------------
+
+  /** Opens a session on the box: the session, or why not (no box, it failed, not started within `ms`). */
+  liveStart(h: LiveHandlers, ms: number): Promise<LiveSession | string> {
+    const ch = this.link();
+    if (!ch) return Promise.resolve(BOX_OFFLINE);
+    const id = this.newId("s");
+    const op: LiveOp = { ch, h };
+    this.liveOps.set(id, op);
+    const stop = () => {
+      if (!this.liveOps.has(id)) return;
+      this.sendQuiet(ch, { t: "live.stop", id });
+    };
+    return new Promise((resolve) => {
+      const handle = this.timer.setTimeout(() => op.started?.("live_start_timeout"), ms);
+      op.started = (r) => {
+        op.started = undefined;
+        this.timer.clearTimeout(handle);
+        if (r !== true) {
+          stop(); // a session the box may still be opening must not stay open, billed
+          this.liveOps.delete(id);
+          resolve(r);
+          return;
+        }
+        resolve({
+          id,
+          stream: () => this.liveStream(ch, id),
+          listen: () => {
+            if (this.liveOps.has(id)) this.sendQuiet(ch, { t: "live.listen", id });
+          },
+          stop,
+        });
+      };
+      try {
+        ch.sendText(JSON.stringify({ t: "live.start", id }));
+      } catch {
+        op.started(BOX_OFFLINE);
+      }
+    });
+  }
+
+  private liveStream(ch: BoxChannel, id: string): SttStream {
+    let seq = 0;
+    return {
+      push: (pcm) => {
+        if (!this.liveOps.has(id) || pcm.length === 0) return;
+        try {
+          for (let i = 0; i < pcm.length; i += FRAME_SAMPLES) {
+            ch.sendBinary(encodeAudioFrame({ s: id, seq: seq++, kind: "pcm16", rate: SAMPLE_RATE, end: false }, pcm16ToBytes(pcm.subarray(i, i + FRAME_SAMPLES))));
+          }
+        } catch {
+          /* the box is gone: drop() ends the session */
+        }
+      },
+      end: () => Promise.resolve(""),
+      abort: () => {},
+    };
+  }
+
+  private liveEnd(id: string, op: LiveOp, reason: string, billedS: number | undefined, error: string | undefined) {
+    this.liveOps.delete(id);
+    op.feed?.end();
+    op.feed = undefined;
+    if (op.started) op.started(error ?? reason);
+    else op.h.onEnd(reason, billedS, error);
+  }
+
+  private onLiveText(op: LiveOp, id: string, frame: Record<string, unknown>) {
+    if (frame.t === "live.started") op.started?.(true);
+    else if (frame.t === "live.reply") {
+      op.feed?.end();
+      op.feed = new PcmFeed();
+      op.h.onReply(op.feed, typeof frame.gap_ms === "number" && Number.isFinite(frame.gap_ms) ? frame.gap_ms : undefined);
+    } else if (frame.t === "live.reply_end") {
+      op.feed?.end();
+      op.feed = undefined;
+    } else if ((frame.t === "live.heard" || frame.t === "live.said") && typeof frame.text === "string") {
+      op.h.onWords(frame.t === "live.heard" ? "heard" : "said", frame.text.slice(0, 4000));
+    } else if (frame.t === "live.end") {
+      const billed = typeof frame.billed_s === "number" && Number.isFinite(frame.billed_s) ? frame.billed_s : undefined;
+      this.liveEnd(id, op, typeof frame.reason === "string" ? frame.reason.slice(0, 40) : "ended", billed, typeof frame.error === "string" ? frame.error.slice(0, 200) : undefined);
+    }
   }
 
   // ---------------- TTS ----------------
@@ -265,6 +382,11 @@ export class RemoteVoiceProvider implements VoiceProvider {
   onText(from: BoxChannel, frame: Record<string, unknown>): void {
     const id = typeof frame.id === "string" ? frame.id : undefined;
     if (!id) return;
+    const live = typeof frame.t === "string" && frame.t.startsWith("live.") ? this.liveOps.get(id) : undefined;
+    if (live) {
+      if (live.ch.same(from)) this.onLiveText(live, id, frame);
+      return;
+    }
     if (frame.t === "opener.result") {
       const op = this.openerOps.get(id);
       if (op && op.ch.same(from)) op.done(typeof frame.text === "string" ? frame.text.slice(0, 400) : undefined);
@@ -307,6 +429,11 @@ export class RemoteVoiceProvider implements VoiceProvider {
 
   /** A binary frame from the box: TTS audio for one of our requests. */
   onAudio(from: BoxChannel, header: AudioHeader, payload: Uint8Array): void {
+    const live = this.liveOps.get(header.s);
+    if (live) {
+      if (live.ch.same(from)) live.feed?.push(bytesToPcm16(payload));
+      return;
+    }
     const op = this.ttsOps.get(header.s);
     if (!op || !op.ch.same(from)) return;
     op.feed.push(bytesToPcm16(payload));
@@ -323,6 +450,10 @@ export class RemoteVoiceProvider implements VoiceProvider {
     for (const op of [...this.sttOps.values()]) {
       if (only && !op.ch.same(only)) continue;
       op.settle(new Error(code));
+    }
+    for (const [id, op] of [...this.liveOps]) {
+      if (only && !op.ch.same(only)) continue;
+      this.liveEnd(id, op, code, undefined, code);
     }
   }
 

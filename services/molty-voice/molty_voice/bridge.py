@@ -20,6 +20,8 @@ Wire (docs/AGENT-LINK.md "Voice box"): JSON text control messages + binary audio
                  stt.start said "reflex": true and this box offers it (voice.hello "reflex": true; molty_voice/reflex.py)
                  {"t":"opener.result","id","text","ms","model"} answers {"t":"opener","id","text","history"}, only
                  on a box that offers it (voice.hello "opener": true; molty_voice/opener.py); no "text": no line
+                 {"t":"live.start","id"} / frames (s=id) / {"t":"live.listen","id"} / {"t":"live.stop","id"} on a box that
+                 offers it (voice.hello "live": true; molty_voice/live.py, which answers live.* frames)
   both           {"t":"ping"} / {"t":"pong"} (the relay answers pings without waking up)
 """
 
@@ -38,7 +40,7 @@ import numpy as np
 from websockets.asyncio.client import connect as ws_connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
-from . import __version__, framing, opener
+from . import __version__, framing, live, opener
 from .audio import DEVICE_RATE, MODEL_RATE, Resampler, fade_in, float_to_pcm16, quiet_lead
 from .config import Config
 from .kyutai import SttSession, synthesize
@@ -63,15 +65,17 @@ def voice_url(relay: str, device_id: str) -> str:
 
 
 class Bridge:
-    def __init__(self, cfg: Config, *, connect=ws_connect, kyutai_connect=ws_connect, reflex_model=None):
+    def __init__(self, cfg: Config, *, connect=ws_connect, kyutai_connect=ws_connect, live_connect=ws_connect, reflex_model=None):
         self.cfg = cfg
         # the reflex classifier (molty_voice/reflex.py), loaded on the first connect when cfg.reflex; tests inject one
         self.reflex = reflex_model
         self._reflex_tried = reflex_model is not None
         self.opener_ready = False
         self._opener_tasks: set[asyncio.Task] = set()
+        self._live: dict[str, tuple[live.LiveSession, asyncio.Task]] = {}
         self._connect = connect
         self._kconnect = kyutai_connect
+        self._live_connect = live_connect
         self._ws = None
         self._send_lock = asyncio.Lock()
         self._tts: dict[str, asyncio.Task] = {}
@@ -123,6 +127,8 @@ class Bridge:
                 hello["reflex"] = True
             if self.opener_ready:
                 hello["opener"] = True
+            if self.cfg.live and live.available(self.cfg.live_key_file):
+                hello["live"] = True
             await self._send_json(hello)
             self._ensure_prompt()
             last_rx = time.monotonic()
@@ -182,6 +188,14 @@ class Bridge:
                 task = asyncio.create_task(self._run_opener(mid, m["text"], m.get("history")))
                 self._opener_tasks.add(task)
                 task.add_done_callback(self._opener_tasks.discard)
+        elif t == "live.start" and isinstance(mid, str):
+            await self._live_start(mid)
+        elif t == "live.listen" and isinstance(mid, str):
+            if mid in self._live:
+                self._live[mid][0].listen()
+        elif t == "live.stop" and isinstance(mid, str):
+            if mid in self._live:
+                self._live[mid][0].stop()
         elif t == "tts" and isinstance(mid, str) and isinstance(m.get("text"), str):
             if mid not in self._tts:
                 self._tts[mid] = asyncio.create_task(self._run_tts(mid, m["text"], m.get("voice")))
@@ -212,9 +226,37 @@ class Bridge:
             f = framing.decode(data)
         except framing.FrameError:
             return
+        lv = self._live.get(f.s)
+        if lv is not None:
+            lv[0].mic(f.payload)
+            return
         q = self._stt.get(f.s)
         if q is not None and f.payload:
             q.put_nowait(("audio", f.payload))
+
+    async def _live_start(self, mid: str) -> None:
+        async def say(obj: dict) -> None:
+            await self._send_json({**obj, "id": mid})
+
+        async def audio(pcm: bytes) -> None:
+            for fr in framing.chunks(mid, pcm, seq[0]):
+                await self._send(fr)
+                seq[0] += 1
+
+        seq = [0]
+        if not self.cfg.live or self._live or mid in self._live:
+            await say({"t": "live.end", "reason": "refused", "error": "refused"})
+            return
+        try:
+            with open(live.key_path(self.cfg.live_key_file)) as fh:
+                key = fh.read().strip()
+        except OSError:
+            await say({"t": "live.end", "reason": "error", "error": "no_key"})
+            return
+        session = live.LiveSession(say, audio, self._live_connect, key, quiet_s=self.cfg.live_quiet_s)
+        task = asyncio.create_task(session.run())
+        self._live[mid] = (session, task)
+        task.add_done_callback(lambda _t: self._live.pop(mid, None))
 
     PROMPT_RETRY_S = 30.0
 
@@ -266,7 +308,8 @@ class Bridge:
             await s.close()
 
     async def _cancel_all(self) -> None:
-        tasks = list(self._tts.values()) + list(self._stt_tasks.values())
+        tasks = list(self._tts.values()) + list(self._stt_tasks.values()) + [t for _s, t in self._live.values()]
+        self._live.clear()
         if self._prompt_task is not None and not self._prompt_task.done():
             tasks.append(self._prompt_task)  # cut short by the disconnect: made again on the next connect
             self._prompt_tried = -1e9

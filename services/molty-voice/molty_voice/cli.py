@@ -97,6 +97,8 @@ def cmd_run(a: argparse.Namespace) -> int:
             setattr(cfg, k, v)
     if a.voices:
         cfg.voices = [v.strip() for v in a.voices.split(",") if v.strip()]
+    if a.live is not None:
+        cfg.live = a.live
     if a.turn_end is not None:
         cfg.turn_end = a.turn_end
     if a.turn_end_skip is not None:
@@ -155,6 +157,8 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--turn-end-hold", type=float, help=f"seconds a pause must last before it ends a turn mid-sentence, i.e. when the last word has no . ? ! (default {d.turn_end_hold_s}; 0 = end at the first paused step)")
     pr.add_argument("--opener", action=argparse.BooleanOptionalAction, default=None,
                     help=f"offer first words: a small Ollama model starts Molty's reply (default {d.opener})")
+    pr.add_argument("--live", action=argparse.BooleanOptionalAction, default=None,
+                    help=f"offer a live conversation on OpenAI's gpt-live-1 (default {d.live})")
     pr.add_argument("--reflex", action=argparse.BooleanOptionalAction, default=None,
                     help=f"run Molty's reflex classifier on the CPU (needs molty-voice[reflex]; default {d.reflex})")
     pr.add_argument("--no-stt", action="store_true", help="serve TTS only")
