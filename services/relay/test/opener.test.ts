@@ -26,6 +26,15 @@ describe("guardOpener", () => {
     expect(guardOpener("Ugh, quitting your job,", "I think I'm going to quit my job", []).ok).toBe(true);
     expect(guardOpener("Awful ending, really,", "the ending was awful", []).ok).toBe(true);
   });
+  it("new plain words fill the gap; a new name does not", () => {
+    expect(guardOpener("That sounds quite strange,", "what they were like", []).ok).toBe(true);
+    expect(guardOpener("Maybe David knows,", "who disagreed?", [])).toEqual({ ok: false, why: "unknown_word" });
+    expect(guardOpener("Canberra, I think,", "what's the capital of Australia?", [])).toEqual({ ok: false, why: "unknown_word" });
+  });
+  it("refuses a statement about the world, curly apostrophe or not", () => {
+    expect(guardOpener("It’s almost midnight,", "what time is it?", []).ok).toBe(false);
+    expect(guardOpener("It fluctuates wildly,", "how much is a bitcoin?", []).ok).toBe(false);
+  });
   it("still refuses an answer to a yes or no question", () => {
     expect(guardOpener("Enough for tonight, certainly.", "is that enough for tonight?", []).ok).toBe(false);
   });
