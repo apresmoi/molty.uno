@@ -272,6 +272,28 @@ describe("drafts", () => {
     expect(actB.result.entries.some((e: any) => String(e.ev ?? "").startsWith("draft"))).toBe(false);
   });
 
+  it("one queue for every lead-in: a played opener counts as the agent answering (no auto filler), an opener that is a cached quick phrase plays from the cache, and a quick follows the opener like a say", async () => {
+    const w = await setup({ ttsMs: 30 });
+    // the drafter's quick phrase, cached in the box voice
+    expect(((await w.room.phrases(w.a, { phrases: [{ id: "sec", text: "One sec, looking." }] })) as any).result.phrases[0].ready).toBe(true);
+    const turn = await w.shake({ words: "what's on my calendar. for today".split(" "), chunkMs: 40 });
+    const seen = await readUntil(w.room, w.a, (e) => e.type === "utterance.partial");
+    const p = seen.find((e) => e.type === "utterance.partial")!;
+    expect((await w.room.draft(w.a, { turn_id: turn, based_on: p.data.seq, opener: "One sec, looking." })).ok).toBe(true);
+    const mine = await readUntil(w.room, w.a, (e) => e.type === "utterance", seen);
+    expect(mine.find((e) => e.type === "utterance")!.data.filler_in_ms).toBeUndefined(); // an opener is playing: no filler
+    // the opener came from the phrase cache: one TTS request in all (the phrase's own)
+    expect(w.box.tts.filter((t) => t.text === "One sec, looking.")).toHaveLength(1);
+    // the drafter's quick queues behind its opener exactly like a say (one hand-over path)
+    const q = (await w.room.command(w.a, "quick", { id: "hmm", in_reply_to: turn })) as any;
+    expect(q).toMatchObject({ ok: true, result: { phrase: "hmm" } });
+    await until(() => w.dev.log.filter((l) => l.name === "say").length === 2);
+    expect(w.dev.log.filter((l) => l.name === "say").map((l) => l.args.text)).toEqual(["One sec, looking.", "Hmm…"]);
+    // ...and nobody's filler after it (the opener was the agent answering), well past the 2.5 s default
+    await new Promise((r) => setTimeout(r, 2900));
+    expect(w.dev.log.filter((l) => l.name === "say")).toHaveLength(2);
+  }, 10000);
+
   it("dropped when late words exceed the threshold or flip the meaning: draft.dropped to the drafter, nothing played, the turn stays open to answer", async () => {
     for (const [words, reason] of [
       ["can you set an alarm. for seven and also one for eight and another at nine thirty please", "new_words"],

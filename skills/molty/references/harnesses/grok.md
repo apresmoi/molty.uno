@@ -37,6 +37,14 @@ device id, and the agent token in its secret store — never in chat.
 - **Act on the payload.** The webhook body already holds `text` and `turn_id`: call
   `POST $MOLTY_RELAY/v1/devices/<id>/talk {"say":"<answer>","in_reply_to":"<turn_id>"}` straight
   away — no `events` / `status` call first, no bookkeeping.
+- **Quick phrase first.** If you will reason before answering, your FIRST call is
+  `POST $MOLTY_RELAY/v1/devices/<id>/cmd {"name":"quick","args":{"id":"hmm","in_reply_to":"<turn_id>"}}`
+  (cached audio, plays at once), then think, then talk — it follows the phrase seamlessly. Register
+  your own phrases once ([talking-fast.md](../talking-fast.md#quick-phrases)).
+- **Molty may already have filled.** A hosted bot's cold start (often 5–7 s) usually exceeds the
+  owner's filler delay (2.5 s by default): Molty then says a filler ("Hmm…") itself. Put
+  `{{event.data.filler_in_ms}}` in your webhook body to know how long you had; if your `quick`
+  answers `{"skipped":"filled"}`, Molty already filled — go straight to your answer, don't double up.
 - **Use your fastest model** for the reply; escalate only for real work, and then say one short
   line first ([talking-fast.md](../talking-fast.md)).
 - **Keep a warm session** if your platform allows it (a kept-alive conversation per Molty beats a

@@ -41,6 +41,7 @@ class Options:
     tuning: list[str] = field(default_factory=list)  # passed to `molty-voice run`
     agent: str = "scripted"
     agent_gap_ms: int = 0
+    filler_ms: int | None = 2500  # the sim device's auto filler setting (0 = off; None = not reported, like older firmware)
     llm_url: str = "http://127.0.0.1:11434"
     llm_model: str = "llama3.2:3b"
     align: str = "mms"  # mms | none
@@ -108,7 +109,7 @@ async def run(o: Options) -> Path:
             procs.append(p)
             device_id, key = new_device_id(), None
         fw = (stack.ROOT / "VERSION").read_text().strip()
-        dev = SimDevice(_ws(relay_http), device_id, key, fw=fw)
+        dev = SimDevice(_ws(relay_http), device_id, key, fw=fw, filler_ms=o.filler_ms)
         dev_task = asyncio.create_task(dev.run())
         await asyncio.wait_for(dev.welcomed.wait(), 20)
         print(f"sim device {device_id} welcomed by {'the local relay' if not o.relay else relay_http}", flush=True)
@@ -142,7 +143,7 @@ async def run(o: Options) -> Path:
         summary = summarize(rows, cue_errs)
         summary["alignment_selfcheck_ms"] = selfcheck
         meta = {"run": ts, "scenario": sc.name, "relay": "local wrangler dev" if not o.relay else relay_http, "device": device_id,
-                "fw": fw, "caps": dev.caps, "bridge_tuning": o.tuning, "agent": agent.name, "agent_gap_ms": o.agent_gap_ms,
+                "fw": fw, "caps": dev.caps, "bridge_tuning": o.tuning, "agent": agent.name, "agent_gap_ms": o.agent_gap_ms, "filler_ms": o.filler_ms,
                 "align": o.align, "box": o.box}
         if o.keep_audio:
             for t in turns:
@@ -346,7 +347,7 @@ async def conversation(dev: SimDevice, rest: Rest, agent, turns, clips, closing)
         except RelayError as e:
             res = {"error": e.body.get("error"), "message": e.body.get("message")}
         t_ret = time.monotonic()
-        say = next((dev.says[k] for k in dev.says if k not in before_s), None)
+        say = agent_say(dev, before_s, say_text)
         lis = next((dev.listens[k] for k in dev.listens if k not in before_l), None)
         if lis is not None:
             row["uplink"] = {"frames": len(lis.up), "resent": sum(1 for h in lis.up if h.get("rt")),
@@ -355,7 +356,7 @@ async def conversation(dev: SimDevice, rest: Rest, agent, turns, clips, closing)
         if lis is not None:
             await asyncio.wait_for(lis.done.wait(), 10)
         if rows and say is not None:
-            finish_gap(rows[-1], say, t_req, t_ret_prev)
+            finish_gap(rows[-1], say, t_req, t_ret_prev, dev)
         row.update(say_metrics(say, t_req, (res.get("timings") or {}).get("say") or {}))
         row.update(listen_row(t, clip, lis, res, t_ret))
         row["_say"], row["_listen"] = say, lis
@@ -372,9 +373,9 @@ async def conversation(dev: SimDevice, rest: Rest, agent, turns, clips, closing)
                 res = await rest.say(text)
             except RelayError as e:
                 res = {"error": e.body.get("error")}
-            say = next((dev.says[k] for k in dev.says if k not in before_s), None)
+            say = agent_say(dev, before_s, text)
             if rows and say is not None:
-                finish_gap(rows[-1], say, t_req, t_ret_prev)
+                finish_gap(rows[-1], say, t_req, t_ret_prev, dev)
     for r in rows:  # turns whose next say never came: their gap stays unmeasured
         if "gap_ms" not in r:
             r.update(turn_metrics(_facts(r, None)))
@@ -397,15 +398,33 @@ async def shake_turn(dev: SimDevice, rest: Rest, t, say_text: str | None) -> dic
     return {"heard": r.get("text", ""), "reason": r.get("reason"), "timings": {"listen": r.get("timings") or {}}}
 
 
-def _facts(row: dict, next_play_at: float | None) -> TurnFacts:
+def _facts(row: dict, next_play_at: float | None, first_voice_at: float | None = None) -> TurnFacts:
     f = row["_facts"]
-    return TurnFacts(**{**f, "next_play_at": next_play_at})
+    return TurnFacts(**{**f, "next_play_at": next_play_at, "first_voice_at": first_voice_at})
 
 
-def finish_gap(row: dict, say, t_req: float, t_ret_prev: float | None) -> None:
-    """The previous listen's gap: its end of speech -> this say's first sample at the speaker."""
-    row.update(turn_metrics(_facts(row, say.play_start)))
+def agent_say(dev, before: set, text: str | None):
+    """The agent's own say among the new ones (a relay filler may have started meanwhile)."""
+    new = [dev.says[k] for k in dev.says if k not in before]
+    return next((s for s in new if s.text == text), new[-1] if new else None)
+
+
+def first_voice(says, after: float, until: float | None):
+    """Molty's first say that reached the speaker in [after, until]: a filler, a quick, or the answer."""
+    heard = [s for s in says if s.play_start is not None and s.play_start >= after and (until is None or s.play_start <= until)]
+    return min(heard, key=lambda s: s.play_start, default=None)
+
+
+def finish_gap(row: dict, say, t_req: float, t_ret_prev: float | None, dev=None) -> None:
+    """The previous listen's gap: its end of speech -> this say's first sample at the speaker; and
+    its perceived silence: -> Molty's first voice of any kind (the relay's filler counts)."""
     lis = row.get("_listen")
+    first = None
+    if dev is not None and lis is not None and row.get("speech_end_s") is not None and lis.mic_open_at is not None:
+        first = first_voice(dev.says.values(), lis.mic_open_at + row["speech_end_s"], say.play_start)
+    if first is not None and first is not say:
+        row["filler"] = first.text
+    row.update(turn_metrics(_facts(row, say.play_start, first.play_start if first is not None else None)))
     if lis is None or row.get("speech_end_s") is None or say.play_start is None:
         return
     eos = lis.mic_open_at + row["speech_end_s"]

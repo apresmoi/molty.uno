@@ -241,7 +241,8 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   `reason:"max"`); sent only when the agent gave one — absent, the device applies its own
   setting (console, 5..30 s or unlimited, NVS, 30000 out of the box; `POST /api/creature/state
   {listen_ms}`), like `ring_color`. Its answer carries the window it applies: `{job, ms}`
-  (`0` = unlimited; cap `ack` firmware adds `ack`, see [Turn acknowledgement](#turn-acknowledgement)), and the relay waits that long (the ceiling for 0) + 5 s for the end frame.
+  (`0` = unlimited; cap `ack` firmware adds `ack`, see [Turn acknowledgement](#turn-acknowledgement);
+  newer firmware adds `filler_ms`, the owner's [auto filler](#quick-phrases-and-the-auto-filler) delay), and the relay waits that long (the ceiling for 0) + 5 s for the end frame.
   The mic streams in 100 ms chunks: no device buffer is sized by the window. **Older firmware**
   (no cap) takes 1..10000 and always gets `ms` (10000 when the agent gave none); an agent's
   `0` or > 10000 is refused up front, `409 unsupported`. The VAD knobs only when the agent gave them: `end_silence_ms`
@@ -274,7 +275,7 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   id) declines it, whatever the reason: it ends quietly.
 - `listen {job, adopt: <local id>, rate, ms?, vad?, end_silence_ms?, no_speech_ms?, ack?}`
   ([Shake to talk](#shake-to-talk)): the relay takes the listen the device began on a shake as
-  its job `job`. Checked like a listen; answered like one (`{job, ms, ack}`); refused
+  its job `job`. Checked like a listen; answered like one (`{job, ms, ack, filler_ms}`); refused
   `listen_gone` when that listen is not waiting any more (never `busy`).
 
 
@@ -329,6 +330,81 @@ so firmware with the cap `ack` acknowledges the turn **itself, locally, at once*
   validates it and forwards it only to firmware with the cap. The device's listen answer
   reports what it will do (`ack`: `chirp` | `thinking` | `off`).
 
+### Quick phrases and the auto filler
+
+A slow agent (a cold start, a big model) leaves seconds of silence after the human finishes;
+the chirp is not words. Two relay features fill it (`services/relay/src/core/phrases.ts`):
+
+```
+human stops ─▶ chirp + thinking (device)
+   agent: quick {id} ─▶ cached audio at once ─▶ talk queued behind it ─▶ answer, no TTS gap
+   no agent action within filler_ms ─▶ relay: a built-in filler ─▶ agent's answer queues behind it
+```
+
+- **Quick phrases.** Each agent registers its own short phrases (`phr:<token hash>`; ≤ 20, each
+  ≤ 60 characters, ids `[a-z0-9][a-z0-9_-]{0,23}`, inline cues allowed; `filler: true` = Molty may
+  use it as its own filler for this agent; `for: question | request | hard | any` = the turns it
+  fits; REST `GET|POST|DELETE /v1/devices/<id>/phrases`, MCP `molty_phrases`); built-ins for
+  everyone: `hmm`, `one_sec`, `let_me_see` (any), `let_me_think` (hard), `good_question`
+  (question), `on_it`, `checking` (request). An agent's id shadows a built-in for that agent;
+  nobody else sees or plays its phrases. `builtins: false` (set) turns the built-ins off for that
+  agent: not listed, `quick` with a built-in id → `not_found`.
+- **Pre-synthesis + cache.** A phrase's audio (PCM + word cues) is synthesised when it is
+  registered, in the voice Molty speaks with now (`voice_mode`, the box's default voice), and
+  cached per voice + text (`pcm:` meta, `pcmd:` 64 KB chunks; ≤ 64 entries, least recently used
+  evicted; ≤ 8 s of audio). When the voice changes (owner setting, the box connects or goes away)
+  every cached text and every agent's phrase is re-synthesised in the background. A miss
+  (evicted, a new voice) synthesises once at play time, then it is cached.
+- **`quick {id, in_reply_to?, force?}`** (relay command, `POST …/cmd`, MCP `molty_quick`): a
+  job of kind `quick`, answered at once `{job, phrase, text, cached}`. It streams the cached
+  audio as a say (`cmd say` with the exact `ms`, frames with the cached cues): no TTS call. It
+  claims the human's turn like a say. It waits for its `say.done` (the speaker is free), then:
+  nothing queued behind it → `mood thinking` (sent before the lock is released, so it can never
+  land after the next say). Job result `{phrase, text, ms, cached, timings}`.
+- **Lead-ins: one queue.** A draft's opener ([While the human speaks](#while-the-human-speaks)),
+  a quick phrase and Molty's own filler are the same thing to the relay: a *lead-in* job owned
+  by an agent (the relay, for the filler). While one holds the audio lock, its owner's next
+  `say` / `talk` / `quick` — anyone's, behind the filler — is admitted and queued behind it
+  (one at a time) instead of `audio_busy`: its job starts at once (its speech is synthesised
+  while the lead-in plays) and it gets the lock — then sends `cmd say` — the moment the
+  lead-in's `say.done` arrives. The gap is one device round trip, no synthesis. Another agent
+  still gets `audio_busy` (or `turn_claimed`). All three play pre-synthesised speech through the
+  same path (`prepareSpeech`): a quick from the phrase cache, an opener from the cache when its
+  text is a cached phrase (else synthesised while the human talks). A played opener counts as
+  its agent answering: no auto filler for that turn.
+- **Turn trace.** An agent's quick answering a turn is its `reply` (`op: "quick"`); Molty's filler
+  is an `ev: "filler"` entry `{job, phrase, text, first_audio_ms, category, classifier, source:
+  agent | builtin, owner?}` (`first_audio_ms`: after the human stopped; `owner`: whose fillers).
+- **The auto filler.** When a human turn ends with words — a shake's `utterance`, or a talk
+  whose listen heard something — and no agent does anything (any job, `mood`, `show`, `act`,
+  a state patch, a draft's opener) within the owner's delay counted from the end of speech, the
+  relay starts a relay-owned quick (no agent, never claims the turn):
+  - **Whose:** the fillers (`filler: true`) of the agent that last answered a human turn here
+    (the last turn claimer, or the last agent to talk); none → the built-ins; that agent turned
+    the built-ins off (`builtins: false`) and has none → no filler at all.
+  - **Which:** picked by the category of the human's utterance — `question` → a `for:
+    "question"` phrase ("Good question."), `request` → `request` ("On it.", "Checking."), `hard`
+    → `hard` ("Let me think."), else (`other`, or nothing made for that category) an `any`
+    phrase ("Hmm…", "One sec.", "Let me see."); nothing fits → no filler. Never the same phrase
+    twice in a row when another fits.
+  - **Classifier:** one path — [Molty's reflex](#reflex) (`DeviceRoom.fillerCategory`): the
+    category the reflex already decided for those exact words, else one call of the owner's
+    engine (`jev` / `openai` with a key), the keywords engine when the reflex is off or has no
+    key. It runs when the turn ends (seconds before the filler) with `CLASSIFY_BUDGET_MS` (400 ms);
+    a throw, an unknown category or the deadline → the keywords. `RoomDeps.classifier`
+    (`UtteranceClassifier {name, classify(text)}`, `services/relay/src/core/phrases.ts`) overrides
+    it for tests or other hosts. The trace's `classifier` names the engine that decided. Not while anything holds the speaker, the human is talking, a question or an explicit mood is
+  in flight, or the device has no speaker. Its audio is warmed during the listen. After it,
+  `thinking` again (unless the turn's `ack` was off). An agent's `quick` within 30 s of it with
+  nothing else from that agent since is skipped: `{skipped:"filled", filler:{phrase, text,
+  ms_ago}}` (`force:true` plays it anyway). Recorded in the activity log as a `quick` job with
+  `data.filler:true` and `data.turn` (owner view; no agent).
+- **Delay setting.** The owner's choice, console Settings › Molty "filler" (`POST
+  /api/creature/state {filler_ms}`: `0` = off or 1500..5000, GET reports it, NVS like
+  `ring_color`; `link_filler_setting_ok`); every listen answer reports it (`filler_ms`).
+  Firmware that does not report it: 2500 ms. The `utterance` event and talk's result carry
+  `filler_in_ms` (ms from then until the filler; absent = off or nothing heard).
+
 ### Shake to talk
 
 The human shakes Molty and just speaks: no agent round trip before the mic opens (with an agent
@@ -367,7 +443,7 @@ shake ─▶ device: listening at once (ring + mood), audio kept locally
   reaches agents). Agents should not react to it: the utterance follows.
 - **Utterance.** When the listen ended with words (a non-empty transcript), the relay stores the
   turn and appends ONE `utterance` event (relay-generated, not rate-capped, never accepted from a
-  device): `{turn_id, text, reason, ms:{speech, stt}, trigger:"shake", device:{caps, mood, voice}}`.
+  device): `{turn_id, text, reason, ms:{speech, stt}, trigger:"shake", device:{caps, mood, voice}, filler_in_ms?}` (`filler_in_ms`: see [Quick phrases](#quick-phrases-and-the-auto-filler)).
   `turn_id` is the listen job's id (`GET /v1/jobs/<turn_id>` has the full listen result);
   `ms.speech` the measured speech (else the recording's length), `ms.stt` the transcription's
   tail; `device.mood` what Molty shows now (`thinking`: its acknowledgement, unless `ack` is off →
@@ -643,8 +719,9 @@ What the screen does between commands (`device/firmware/main/fluid/fluid_directo
 | `react` (relay) | `{turn_id, mood}` or `{turn_id, action}` | `{turn_id, shown, for_ms, next_after_ms}` | only during an open turn; ≤ 1 per 3 s |
 | `show` | `{text, wpm?}` | — | speed reader in the fluid; back to the creature 1.5 s after the last word |
 | `say` | `{text, voice?, in_reply_to?}` | `{job}` immediately | relay does TTS (streamed per sentence) + streams; device sets `speaking`, shows text in sync. `text` may carry [inline cues](#inline-cues-and-actions). Job result `{ms, text, timings}` (`text` as spoken, cues stripped). `unsupported` without a speaker; `in_reply_to` / `turn_claimed`: [Shake to talk](#shake-to-talk) |
+| `quick` (relay) | `{id, in_reply_to?, force?}` | `{job, phrase, text, cached}` immediately, or `{skipped:"filled", filler}` | a cached [quick phrase](#quick-phrases-and-the-auto-filler), streamed as a say with no TTS; the same agent's next say / talk queues behind it; `not_found` for an unknown id |
 | `listen` | `{ms? 0..30000 (0 = unlimited; omit = the device's setting, 30000 out of the box), end_silence_ms?, no_speech_ms?, vad?, ring_color?}` | `{job}` immediately | device sets `listening`, streams mic, stops at end of speech ([Listen end of speech](#listen-end-of-speech-device-vad)); relay STT → job result `{text, duration_ms, peak, rms, reason, speech_ms?, timings}`. `unsupported` without a mic |
-| `talk` (relay) | `{say?, listen?=true, listen_ms? 0..30000 (as listen's ms), voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?}` | blocks ≤ 24 s | say then listen in one job: `{job, status:"done", heard, said?, reason, speech_ms?, ms:{tts_first_audio, speech, listen, stt, total}, timings}`; over 24 s `{job, status:"pending"}` |
+| `talk` (relay) | `{say?, listen?=true, listen_ms? 0..30000 (as listen's ms), voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?}` | blocks ≤ 24 s | say then listen in one job: `{job, status:"done", heard, said?, reason, speech_ms?, filler_in_ms?, ms:{tts_first_audio, speech, listen, stt, total}, timings}` (`filler_in_ms`: [auto filler](#quick-phrases-and-the-auto-filler)); over 24 s `{job, status:"pending"}` |
 | `updates` (relay) | — | `{api_version, firmware, actions}` | "check Molty for updates": [Firmware updates](#firmware-updates) |
 | `update` (relay → device) | — (agent) · `{job, version, url, sha256, size, timeout_ms}` (device) | job | install the latest release after an on-screen confirm; `unsupported` without the `update` cap |
 | `ask` (relay) | `{say?, options: 1..5 items — a label of 1..8 printable ASCII (unique, case-insensitive) or {label, color?}, timeout_s? 1..120 =30, voice?}` | blocks ≤ 24 s | say, then device `ask`, then the tap: `{job, status:"done", answer: label\|null, index: int\|null, reason?: "timeout"\|"cancelled"\|"offline", said?, ms:{tts_first_audio?, speech?, answer, total}, timings:{queue, say?, ask:{cmd, wait}, total}}`; over 24 s `{job, status:"pending"}` (finish with `molty_wait`). Holds the audio lock only while speaking. `unsupported` without `ask` in caps (no touch) or, with `say`, without a speaker |
@@ -789,7 +866,8 @@ bearer is `agent_token` = `<device_id>.<base64url(32 bytes)>`; the prefix only r
 | same with `wait:true` (say/listen) | `200 {ok:true, result:{job, status:"done", ...job result}}`; still running after 24 s: `202 {ok:true, result:{job, status:"pending", state}}` | as above; a failed job → its error, still carrying the `events` / `firmware_update` the call already consumed |
 | `POST /v1/devices/<id>/talk {say?, listen?, listen_ms?, voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?, ack?, in_reply_to?}` | `200 {ok:true, result:{job, status:"done", heard, said?, reason, speech_ms?, ms, timings}}` (`timings.turn` when it answered a turn); `202` pending as above | 400 `invalid_args`, 401, 409 `human_speaking` (the human is still talking)/`turn_claimed` (another agent answers this human turn, [Shake to talk](#shake-to-talk))/`audio_busy`/`unsupported`/`device_offline`, 504 `playback_timeout` (no `say.done`), job errors |
 | `POST /v1/devices/<id>/ask {say?, options, timeout_s?, voice?}` | `200 {ok:true, result:{job, status:"done", answer, index, reason?, said?, ms, timings}}` (a timeout / cancelled / offline ask is `200` with `answer:null`); `202` pending as above | 400 `invalid_args` (with the reason, e.g. a label over 8 chars), 401, 409 `audio_busy` (with `say`)/`unsupported`/`device_offline`, 504 `playback_timeout`, device-reported codes |
-| `GET /v1/jobs/<job>[?wait_s=0..8]` | `200 {job, kind:"say"\|"listen"\|"talk"\|"ask"\|"update", status:"queued"\|"running"\|"done"\|"failed", phase?, result?, error?, detail?}`; say done `{ms, text, timings}`, listen done `{text, duration_ms, peak, rms, reason, speech_ms?, timings}`, talk / ask done as `/talk` / `/ask`, update as below | 401, 404 `not_found` |
+| `GET\|POST\|DELETE /v1/devices/<id>/phrases` (`POST {phrases:[{id, text}]}` upserts; `DELETE ?id=a,b` or `?id=*`) | `200 {ok:true, result:{phrases:[{id, text, ready}], builtins:[{id, text, ready, shadowed?}], limits:{per_agent, text_max}, voice}}` ([Quick phrases](#quick-phrases-and-the-auto-filler)) | 400 `invalid_args` (over 20 phrases, text over 60 characters, bad id), 401 |
+| `GET /v1/jobs/<job>[?wait_s=0..8]` | `200 {job, kind:"say"\|"listen"\|"talk"\|"ask"\|"update"\|"quick", status:"queued"\|"running"\|"done"\|"failed", phase?, result?, error?, detail?}`; say done `{ms, text, timings}`, listen done `{text, duration_ms, peak, rms, reason, speech_ms?, timings}`, talk / ask done as `/talk` / `/ask`, update as below | 401, 404 `not_found` |
 | `GET /v1/devices/<id>/updates` | `200 {ok:true, result:{api_version, firmware, actions}}` ([Firmware updates](#firmware-updates)) | 401 |
 | `POST /v1/devices/<id>/update {}` | `200 {ok:true, result:{status:"up_to_date", current, latest}}`; a job: `200 {ok:true, result:{job, status:"done", outcome:"updated", from, to}}` or `{…, outcome:"declined", reason?}`, `202 {ok:true, result:{job, status:"pending", phase, hint}}` | 400 `invalid_args` (any argument), 401, 409 `unsupported` (+ `current, latest, how`) / `device_offline` / `no_build` / `no_checksum` / `unknown_version`, 503 `release_unavailable`, job errors `update_failed` / `rolled_back` / `update_timeout` (with `message`) |
 | `GET /v1/releases/latest[?board=<board>]` (no token) | `200 {ok:true, release_check, latest:null\|{version, tag, prerelease, published_at, notes_url, notes}, board:null\|{name, ota:{url, size, sha256}}, features:[{feature, cap, needs}]}`, CORS `*`, `cache-control: public, max-age=300` | 400 bad board, 429 rate limited |
@@ -818,6 +896,7 @@ device dials; agents/CLI use its http(s) twin (`ws://h` → `http://h`, `wss://h
 | `POST /api/link/forget` | `202 {ok:true, pending:true}` | `500` |
 | `POST /api/creature/state {ring_color}` (with the other fluid fields) | the state JSON; saved to NVS; `GET` reports `ring_color` as `"#rrggbb"` or `"accent"` (older firmware: absent — the console hides the setting) | `{ok:false, error}` when not `"#rrggbb"` / `"accent"` |
 | `POST /api/creature/state {listen_ms}` (with the other fluid fields) | the state JSON; saved to NVS: the listen window an agent gets when it gives none, `5000..30000` or `0` = unlimited (300 s safety ceiling); `GET` reports `listen_ms` (older firmware: absent — the console hides the setting) | `{ok:false, error}` when not an integer 5000..30000 or 0 |
+| `POST /api/creature/state {filler_ms}` (with the other fluid fields) | the state JSON; saved to NVS: the [auto filler](#quick-phrases-and-the-auto-filler)'s delay, `0` = off or `1500..5000` (2500 out of the box); `GET` reports `filler_ms` and every listen answer carries it (older firmware: absent — the console hides the setting, the relay uses 2500) | `{ok:false, error}` when not an integer 1500..5000 or 0 |
 | `GET /api/update` (firmware with the `update` cap; older firmware: not found) | `200 {ok:true, state:"idle"\|"downloading"\|"flashing"\|"rebooting"\|"failed", version?, progress?: 0..1, error?}` | — |
 | `POST /api/update {version, url, sha256, size}` (any Content-Type) | `202 {ok:true, state:"downloading"}`; then as `cmd update` after an accept (no on-screen question: the click in the console is the consent, the same trust as `POST /api/ota`) | `400 bad_url` (not an official release URL), `409 busy` |
 

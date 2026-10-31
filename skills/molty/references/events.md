@@ -5,7 +5,7 @@ Molty talks back. When your human touches it, the relay records an event:
 | type | data |
 |---|---|
 | `shake` | `{"peak_g": 2.4, "reversals": 5, "ms": 900}`; with shake to talk also `"listening": true, "turn_id": "…"` — Molty is already listening: do nothing, its `utterance` follows |
-| `utterance` | `{"turn_id": "molty-…j_…", "text": "what's on my calendar?", "reason": "turn_end", "ms": {"speech": 1800, "stt": 120}, "trigger": "shake", "device": {"caps": […], "mood": "thinking", "voice": "box"}}` — the human's words, once per turn (see Shake to talk) |
+| `utterance` | `{"turn_id": "molty-…j_…", "text": "what's on my calendar?", "reason": "turn_end", "ms": {"speech": 1800, "stt": 120}, "trigger": "shake", "device": {"caps": […], "mood": "thinking", "voice": "box"}, "filler_in_ms": 2300}` — the human's words, once per turn (see Shake to talk); `filler_in_ms`: Molty says its own filler that much later unless you act first ([api.md](api.md#quick-phrases)) |
 | `tap` | `{"x": 0..1, "y": 0..1}` (screen position) |
 | `button` | `{"id": "accept"}` or `{"id": "reject"}` — the board's physical buttons. Not an answer to a question: they mean acknowledge / dismiss whatever you showed (see [etiquette.md](etiquette.md)). Answers to a question come only as `answer` |
 | `answer` | `{"job": "…", "index": 0, "label": "yes"}`, or `{"job", "index": null, "label": null, "reason": "timeout"}` — how an ask ended |
@@ -27,7 +27,8 @@ with the human's words — nothing at all when nobody spoke. You also get the `s
 
 1. On `utterance`: answer at once with `molty_talk {"say": "<your answer>", "in_reply_to": "<turn_id>"}`
    (REST `POST …/talk`; helper `talk.sh "…" --reply <turn_id>`). Molty already chirped and shows
-   `thinking`: no "yeah?", no "let me check". Keep listening (`listen` default true) for a
+   `thinking`: no "yeah?". If you will think for more than a moment, first play a quick phrase
+   (`quick {id, in_reply_to}`), then talk. Keep listening (`listen` default true) for a
    back-and-forth, or `"listen": false` to finish.
 2. **The first agent to answer a turn claims it.** For 60 s other agents' `say` / `talk` get
    `409 turn_claimed` (not `audio_busy`): that's fine, stay quiet. All paired agents get the

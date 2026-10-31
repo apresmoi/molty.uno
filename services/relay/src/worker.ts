@@ -42,6 +42,7 @@ interface DeviceRpc {
   react(id: string, token: string, req: unknown): ReturnType<AgentApi["react"]>;
   notes(id: string, token: string, req: Parameters<AgentApi["notes"]>[1]): ReturnType<AgentApi["notes"]>;
   speechStats(id: string, linkCode: string, req: Parameters<OwnerApi["speechStats"]>[1]): ReturnType<OwnerApi["speechStats"]>;
+  phrases(id: string, token: string, req: unknown): ReturnType<AgentApi["phrases"]>;
 }
 
 function backendFor(env: Env): RelayBackend {
@@ -69,6 +70,7 @@ function backendFor(env: Env): RelayBackend {
         react: (token, req) => stub.react(id, token, req),
         notes: (token, req) => stub.notes(id, token, req),
         speechStats: (linkCode, req) => stub.speechStats(id, linkCode, req),
+        phrases: (token, req) => stub.phrases(id, token, req),
       };
     },
   };

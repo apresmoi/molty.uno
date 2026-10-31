@@ -104,9 +104,26 @@ import {
 import type { SttStream, VoiceProvider } from "../voice/types.js";
 import { ACTIVITY_LIMITS, ACTIVITY_PREFIX, ActivityLog, type Who, jobDraft, parseActivityQuery } from "./activity.js";
 import { BOX_OFFLINE, RemoteVoiceProvider } from "../voice/remote.js";
+import {
+  type AgentPhrases,
+  BUILTIN_PHRASES,
+  FILL_SKIP_MS,
+  PHRASE_LIMITS,
+  PHRASE_PREFIXES,
+  type Phrase,
+  type PhraseAudio,
+  PhraseCache,
+  builtin,
+  fillerMs,
+  mergePhrases,
+  pickFiller,
+  validatePhrasesRequest,
+  CLASSIFY_BUDGET_MS,
+  type UtteranceClassifier,
+} from "./phrases.js";
 import { ListenTrace, SeqOrder, TRACE_LIMITS, capTrace } from "./trace.js";
 import { AUDIO_KEEP, AUDIO_PREFIX, AudioKeep, wav } from "./audio-keep.js";
-import { EngineBench, REFLEX, REFLEX_MODES, REFLEX_SHOW, type ReflexEngine, type ReflexMode, type ReflexPick, ReflexSession, type UtteranceCategory, categoryOf, parseBoxReflex, resolveEngine } from "./reflex.js";
+import { EngineBench, REFLEX, REFLEX_MODES, REFLEX_SHOW, type ReflexEngine, type ReflexMode, type ReflexPick, ReflexSession, UTTERANCE_CATEGORIES, type UtteranceCategory, categoryOf, keywordCategory, parseBoxReflex, resolveEngine } from "./reflex.js";
 
 export interface SocketMeta {
   /** hello: device not yet authenticated; live: the device; voice: a voice box (authenticated at upgrade). */
@@ -233,6 +250,11 @@ export interface RoomDeps {
   releases?: ReleaseSource;
   /** The reflex's model engines (core/reflex.ts): Worker secrets TYPESAFE_API_KEY / OPENAI_API_KEY. Never logged. */
   reflexKeys?: { jev?: string; openai?: string };
+  /**
+   * Classifies the human's utterance for the auto filler (question / request / hard / other: core/phrases.ts
+   * UtteranceClassifier). Default: Molty's reflex (fillerCategory: the owner's engine, keywords when off). Tests override it.
+   */
+  classifier?: UtteranceClassifier;
 }
 
 interface DeviceRecord {
@@ -344,6 +366,8 @@ interface ListenBuffer {
   lost?: boolean;
   /** The device ended the listen with reason "error": its capture failed. */
   captureFailed?: boolean;
+  /** The auto filler delay for this turn (core/phrases.ts fillerMs of the listen's ack). */
+  fillerMs?: number;
   /** The turn trace being gathered (core/trace.ts). */
   trace: ListenTrace;
   /** Frames in seq order (the device resends what failed; core/trace.ts SeqOrder). */
@@ -408,7 +432,7 @@ interface BoxStats {
 /** Which provider serves one say / listen. */
 type VoicePick = { ok: true; provider: VoiceProvider; name: string; mode: VoiceMode; box: boolean; cfg: VoiceCfg } | { ok: false; error: string; message: string };
 
-type JobKind = "say" | "listen" | "talk" | "ask" | "update";
+type JobKind = "say" | "listen" | "talk" | "ask" | "update" | "quick";
 
 /** How an ask ended: a tap (index + label) or no answer (reason). */
 type AskAnswer = { index: number; label: string; reason?: undefined } | { index: null; label: null; reason: "timeout" | "cancelled" | "offline" };
@@ -418,15 +442,48 @@ interface PendingAsk {
 }
 type SpeakResult = { ok: true; start: number; ms: number; timings: JsonObject } | { ok: false; error: string };
 type ListenResult = (
-  | { ok: true; start: number; text: string; reason: string; speech_ms?: number; duration_ms: number; peak: number; rms: number; timings: JsonObject; ack?: string; pauses: PauseTracker }
+  | { ok: true; start: number; text: string; reason: string; speech_ms?: number; duration_ms: number; peak: number; rms: number; timings: JsonObject; ack?: string; pauses: PauseTracker; endAt: number; fillerMs: number }
   | { ok: false; error: string }
 ) & { trace?: ListenTrace; audio?: boolean };
 
-/** Speech whose synthesis already started (a draft's opener, a queued follow-up): speak() plays it. */
+/** Speech whose synthesis already started (a draft's opener, a queued follow-up, a quick phrase): speak() plays it. */
 interface Prepared {
   pick: Extract<VoicePick, { ok: true }>;
   feed: PcmFeed;
   at: number;
+  /** The whole audio came from the phrase cache (core/phrases.ts): no TTS at all. */
+  cached?: boolean;
+  /** ...synthesised just now on a cache miss (then cached). */
+  fresh?: boolean;
+}
+
+/** The relay itself, as the owner of a lead-in (Molty's own filler): anyone's answer may follow it. */
+const RELAY_LEAD = "relay";
+
+/**
+ * The short lead-in playing now — a draft's opener, a quick phrase, or Molty's own filler — and who
+ * owns it: that agent's next say / talk / quick (anyone's, behind the relay's filler) queues behind it
+ * (startJob `after`) and starts the moment it ends. One mechanism for all three.
+ */
+interface LeadPlay {
+  job: string;
+  /** An agent's token hash, or RELAY_LEAD. */
+  hash: string;
+  /** The job queued behind it. */
+  follow?: string;
+}
+
+/** The auto filler armed for one human turn (in flight: a timer). */
+interface FillWatch {
+  turn: string;
+  timer: unknown;
+  /** agentSeq when armed: anything an agent does after that stands the filler down. */
+  seq: number;
+  ack?: string;
+  /** When the human stopped (relay clock). */
+  endAt: number;
+  /** The utterance's category for a context-picked filler (classified when armed). */
+  category: Promise<{ category: UtteranceCategory; by: string }>;
 }
 
 /** One agent's held draft for the open turn (core/partials.ts). */
@@ -503,6 +560,10 @@ const K = {
   vstat: "vstat",
   /** The latest human turn (shake to talk, core/turns.ts). */
   turn: "turn",
+  /** An agent's quick phrases (core/phrases.ts). */
+  phrases: (hash: string) => `phr:${hash}`,
+  /** The token hash of the agent that last answered a human turn (whose fillers Molty uses). */
+  lastAnswerer: "fillby",
   /** How this Molty's human talks: the calibration record (core/calibration.ts). */
   speech: "speech",
 };
@@ -523,7 +584,7 @@ const fail = (error: string, message?: string, details?: JsonObject): { ok: fals
  * Commands refused while the human is talking (an open shake turn, `human_speaking`): they make a
  * sound or take the screen. (talk / ask likewise; `state` only when it patches.) Agents draft and react instead.
  */
-const HUSHED: readonly string[] = ["say", "listen", "mood", "show", "act"];
+const HUSHED: readonly string[] = ["say", "quick", "listen", "mood", "show", "act"];
 
 /** An event as agents see it: the internal recipient (`to`) never leaves the relay. */
 const publicEvent = ({ to: _to, ...ev }: AgentEvent): AgentEvent => ev;
@@ -545,6 +606,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private readonly fetcher: NonNullable<RoomDeps["fetch"]>;
   private readonly resolveHost: RoomDeps["resolveHost"];
   private readonly releases: ReleaseSource;
+  /** An override of the filler's classifier (RoomDeps.classifier); absent = Molty's reflex (fillerCategory). */
+  private readonly classifier: UtteranceClassifier | undefined;
   /** The voice box, spoken to over whichever voice socket is live (in-flight requests only). */
   private readonly box: RemoteVoiceProvider;
   /** The activity log (core/activity.ts): every hook below is one `this.activity.*` call. */
@@ -592,7 +655,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   /** The human is talking (an adopted shake listen): agents may only draft and react. */
   private openTurn: OpenTurn | undefined;
   /** A queued job waiting for the audio lock of `after` (the owner's follow-up behind its opener). */
-  private handoff: { after: string; job: string; go: () => void } | undefined;
+  private handoff: { after: string; job: string; go: () => void; lead?: string } | undefined;
   private opener: OpenerPlay | undefined;
   private lastReactAt = 0;
   private reactTimer: unknown;
@@ -604,6 +667,17 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private lastReflex: ReflexSession | undefined;
   /** Writes to the calibration record are serialized (read-modify-write from several paths). */
   private speechChain: Promise<unknown> = Promise.resolve();
+  /** The lead-in playing now (draft opener, quick phrase, filler): its follow-up queues behind it. */
+  private lead: LeadPlay | undefined;
+  /** Bumped by everything an agent starts or shows (jobs incl. a draft's opener, mood / show / act / state): the auto filler stands down. */
+  private agentSeq = 0;
+  private fillWatch: FillWatch | undefined;
+  /** The last auto filler: an agent's quick right after it (same turn, nothing else since) is skipped ("filled"). */
+  private lastFill: { turn: string; job: string; phrase: string; text: string; at: number; seq: number } | undefined;
+  private lastFiller: string | undefined;
+  /** Phrase syntheses in flight, by voice + text (deduped). */
+  private readonly synthing = new Map<string, Promise<PhraseAudio | undefined>>();
+  private readonly phraseCache: PhraseCache;
 
   constructor(deps: RoomDeps) {
     this.deviceId = deps.deviceId;
@@ -618,9 +692,11 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     this.resolveHost = deps.resolveHost;
     this.releases = deps.releases ?? NO_RELEASES;
     this.reflexKeys = { ...(deps.reflexKeys?.jev ? { jev: deps.reflexKeys.jev } : {}), ...(deps.reflexKeys?.openai ? { openai: deps.reflexKeys.openai } : {}) };
+    this.classifier = deps.classifier;
     this.box = new RemoteVoiceProvider(() => this.boxSocket(), this.clock);
     this.activity = new ActivityLog({ deviceId: this.deviceId, kv: this.kv, clock: this.clock, log: this.log });
     this.audioKeep = new AudioKeep(this.kv, this.clock);
+    this.phraseCache = new PhraseCache(this.kv, () => this.clock.now());
   }
 
   // =====================================================================
@@ -684,7 +760,11 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (stage === "live") void this.activity.device("disconnect", closed);
     else if (stage === "voice" && sock.getMeta()?.box) void this.activity.record({ ts: this.clock.now(), kind: "voice_box", ev: "disconnect", data: closed });
     // A voice box that goes away fails its own requests at once (auto mode falls back, box mode fails).
-    if (sock.getMeta()?.stage === "voice") return this.box.drop(sock);
+    if (sock.getMeta()?.stage === "voice") {
+      this.box.drop(sock);
+      if (sock.getMeta()?.box) void this.rewarmPhrases(); // auto mode: the cloud's voice speaks now
+      return;
+    }
     if (sock.getMeta()?.stage !== "live") return;
     // The runtime may still list the closing socket; anything else live is a replacement.
     if (this.liveSocket(sock)) return;
@@ -808,10 +888,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     this.audioKeep.generation++;
     this.jobTraces.clear(); // (a trace tail ends with dropInFlight below: its entry is then void)
     await this.activity.settle(); // activity writes queued before the forget land BEFORE the wipe, never after
-    for (const prefix of ["tok:", "pair:", "job:", "ev:", "cur:", "whq:", NOTES_PREFIX, ACTIVITY_PREFIX, AUDIO_PREFIX]) {
+    for (const prefix of ["tok:", "pair:", "job:", "ev:", "cur:", "whq:", NOTES_PREFIX, ACTIVITY_PREFIX, AUDIO_PREFIX, ...PHRASE_PREFIXES]) {
       for (const key of (await this.kv.list(prefix)).keys()) await this.kv.delete(key);
     }
-    for (const key of [K.device, K.link, K.pairCurrent, K.evSeq, K.evRate, K.skillEv, K.origin, K.devinfo, K.upd, K.voiceCfg, K.vbox, K.vstat, K.turn, K.speech]) await this.kv.delete(key);
+    for (const key of [K.device, K.link, K.pairCurrent, K.evSeq, K.evRate, K.skillEv, K.origin, K.devinfo, K.upd, K.voiceCfg, K.vbox, K.vstat, K.turn, K.speech, K.lastAnswerer]) await this.kv.delete(key);
     // Its token is gone with the rest: so is the voice box.
     this.closeBoxes(() => true, CLOSE_UNAUTHORIZED, "device forgotten");
     this.log("device forgotten", { device: this.deviceId });
@@ -883,6 +963,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     await this.activity.record({ ts: this.clock.now(), kind: "pair", ev: "revoked", ...this.who(a), ...(a.rec.role === "voice" ? { data: { role: "voice" } } : {}) });
     await this.kv.delete(K.token(a.hash));
     await this.kv.delete(K.cur(a.hash));
+    await this.kv.delete(K.phrases(a.hash));
     await this.kv.delete(notesKey(a.hash));
     await this.dropDeliveries(a.hash);
     // its held draft goes with it (nobody would continue that opener)
@@ -932,6 +1013,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         if (caps) return fail("unsupported", "this Molty has no gestures (no `act` in its caps)");
       }
     }
+    if (cmd.name === "quick") {
+      if (live.getMeta()?.caps && !live.getMeta()!.caps!.includes("say")) return fail("unsupported", "this device has no speaker");
+      return this.quick(hash, by, cmd.args, cmd.in_reply_to);
+    }
     if (cmd.job) {
       // A device that lists its caps and leaves say/listen out has no speaker/mic
       // (device/firmware/boards/): refuse before spending a TTS call. No caps = older firmware.
@@ -953,7 +1038,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         // its own opener is playing: this say queues behind it and starts the moment it ends
         const after = this.followUpOf(hash);
         const started = await this.startJob("say", sayArgs, true, by, () => this.claimFor(hash, cmd.in_reply_to, called), after ? { after } : {});
-        if (started.ok && after && this.opener?.job === after) this.opener.follow = started.result.job as string;
+        if (started.ok && after) this.noteFollow(after, started.result.job as string);
         return started;
       }
       return this.startJob(cmd.name as "say" | "listen", cmd.args, true, by);
@@ -970,6 +1055,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       }
       if (res.ok) this.screenRev++;
     } else res = await this.sendCmd(cmd.name, cmd.args);
+    // the agent is on it (a feeling, text, a gesture): Molty's own filler stands down
+    if (res.ok && (cmd.name === "mood" || cmd.name === "show" || cmd.name === "act" || (cmd.name === "state" && Object.keys(cmd.args).length > 0))) this.agentSeq++;
     if (!res.ok || cmd.name !== "status") return res;
     const sock = this.liveSocket();
     const meta = sock?.getMeta();
@@ -1162,11 +1249,12 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     // the claim is taken only once the talk holds the audio lock (a refused talk claims nothing)
     const pre = await this.claimCheck(a.hash, args.in_reply_to);
     if (!pre.ok) return pre;
+    await this.kv.put(K.lastAnswerer, a.hash); // a talk converses with the human: Molty's fillers are its own
     const after = this.followUpOf(a.hash);
     const started = await this.startJob("talk", args as unknown as JsonObject, true, this.who(a), () => this.claimFor(a.hash, args.in_reply_to, t0), after ? { after } : {});
     if (!started.ok) return started;
     const job = started.result.job as string;
-    if (after && this.opener?.job === after) this.opener.follow = job;
+    if (after) this.noteFollow(after, job);
     const out = await this.runJob(job, Math.max(0, this.t.talkBudgetMs - (this.clock.now() - t0)));
     if (!out.ok) return out;
     const v = out.result;
@@ -1452,6 +1540,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
    * turn's opener: nothing can slip in between). `after`: when that job holds the lock, this one
    * queues behind it and gets the lock the moment it ends (an opener's follow-up; one at a time).
    * `prepared`: a say's speech whose synthesis already started (a draft's opener).
+   * `lead`: this job is a lead-in (a draft's opener, a quick phrase, Molty's filler) owned by that
+   * token hash (or RELAY_LEAD): once it holds the lock, its owner's follow-up may queue behind it.
    */
   private async startJob(
     kind: JobKind,
@@ -1459,16 +1549,17 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     audio = true,
     by?: Who,
     admit?: (id: string) => Promise<Outcome<JsonObject>>,
-    opts: { takeover?: string; after?: string; prepared?: Prepared } = {},
+    opts: { takeover?: string; after?: string; prepared?: Prepared; lead?: string } = {},
   ): Promise<Outcome> {
     const id = `${this.deviceId}.j_${b64urlEncode(randomBytes(12))}`;
     let ready: Promise<void> | undefined;
     if (audio && this.audioJob) {
-      if (opts.takeover !== undefined && this.audioJob === opts.takeover) this.audioJob = id;
-      else if (opts.after !== undefined && this.audioJob === opts.after && !this.handoff) ready = new Promise<void>((go) => (this.handoff = { after: opts.after!, job: id, go }));
+      if (opts.takeover !== undefined && this.audioJob === opts.takeover) this.takeLock(id, opts.lead);
+      else if (opts.after !== undefined && this.audioJob === opts.after && !this.handoff)
+        ready = new Promise<void>((go) => (this.handoff = { after: opts.after!, job: id, go, ...(opts.lead !== undefined ? { lead: opts.lead } : {}) }));
       // the running job's id is not disclosed: it may be another agent's
       else return fail("audio_busy", "another say / listen / talk is still running on Molty");
-    } else if (audio) this.audioJob = id;
+    } else if (audio) this.takeLock(id, opts.lead);
     if (admit) {
       let ok: Outcome<JsonObject>;
       try {
@@ -1483,6 +1574,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       }
       args = { ...args, ...ok.result };
     }
+    // anything an agent starts (a draft's opener too) means it is answering: Molty's own filler stands down
+    if (by) this.agentSeq++;
     const now = this.clock.now();
     this.tasks.add(id);
     await this.kv.put<JobRecord>(K.job(id), { job: id, kind, status: "queued", created: now, updated: now, ...(by ? { by } : {}) });
@@ -1496,7 +1589,9 @@ export class DeviceRoom implements AgentApi, OwnerApi {
             ? this.runAsk(id, args as unknown as AskArgs, now)
             : kind === "update"
               ? this.runUpdate(id, args)
-              : this.runTalk(id, args as unknown as TalkArgs, now, ready);
+              : kind === "quick"
+                ? this.runQuick(id, args, now, ready)
+                : this.runTalk(id, args as unknown as TalkArgs, now, ready);
     run
       .catch((e: unknown) => this.finishJob(id, { status: "failed", error: errorCode(e) }))
       .finally(() => {
@@ -1507,15 +1602,24 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     return { ok: true, result: { job: id } };
   }
 
+  /** `id` holds the audio lock now; a lead-in (`lead`: its owner) becomes the one its follow-up may queue behind. */
+  private takeLock(id: string, lead?: string) {
+    this.audioJob = id;
+    this.lead = lead !== undefined ? { job: id, hash: lead } : undefined;
+  }
+
   /** The audio lock of `id` ends: to the job queued behind it (startJob `after`), else free. */
   private releaseAudio(id: string) {
     if (this.audioJob !== id) return;
     const h = this.handoff;
     if (h && h.after === id) {
       this.handoff = undefined;
-      this.audioJob = h.job;
+      this.takeLock(h.job, h.lead);
       h.go();
-    } else this.audioJob = undefined;
+    } else {
+      this.audioJob = undefined;
+      this.lead = undefined;
+    }
   }
 
   /** A queued job that will not run any more leaves the queue. */
@@ -1594,9 +1698,12 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private async runListen(id: string, args: JsonObject, created: number) {
     const { ms, trigger, ...listenArgs } = args;
     let r: ListenResult | undefined;
+    // before the turn ends (an opener, the utterance): whatever an agent does in answer stands the filler down
+    let seq = this.agentSeq;
     try {
       await this.setJob(id, { status: "running" });
       r = await this.record(id, ms as number | undefined, listenArgs);
+      seq = this.agentSeq;
     } finally {
       // a shake's turn ends with its listen, however that ends: drafts settle, the utterance goes
       // out, and agents may speak again (never left human_speaking by a throw)
@@ -1608,6 +1715,9 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     this.logTimings(id, "listen", timings);
     const extra: JsonObject = r.speech_ms !== undefined ? { speech_ms: r.speech_ms } : {};
     await this.finishJob(id, { status: "done", result: { text: r.text, duration_ms: r.duration_ms, peak: r.peak, rms: r.rms, reason: r.reason, ...extra, timings } });
+    // shake to talk: every agent got the utterance; nobody answers in time → Molty fills itself
+    // (only when some agent is paired to answer at all; a draft's opener already answered)
+    if (trigger === "shake" && this.opener?.turn !== id && [...(await this.kv.list<TokenRecord>("tok:")).values()].some((t) => t.role !== "voice")) this.armFiller(id, r, seq);
   }
 
   /** say (optional) then listen, one job holding the audio lock across both, so nothing slips in between. `ready`: as runSay. */
@@ -1616,6 +1726,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (ready) await ready;
     await this.setJob(id, { status: "running" });
     const reply = args as unknown as JsonObject; // talk() adds {turn, called} when it answers a human turn
+    let heard: Extract<ListenResult, { ok: true }> | undefined;
     const ms: JsonObject = {};
     const timings: JsonObject = { queue: this.clock.now() - created };
     const result: JsonObject = {};
@@ -1636,8 +1747,11 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (args.listen) {
       const l = await this.record(id, args.listen_ms, { ...args.vad, ...(args.ring_color !== undefined ? { ring_color: args.ring_color } : {}), ...(args.ack !== undefined ? { ack: args.ack } : {}) });
       if (!l.ok) return this.finishJob(id, { status: "failed", error: l.error });
+      heard = l;
       Object.assign(result, { heard: l.text, reason: l.reason, duration_ms: l.duration_ms, peak: l.peak, rms: l.rms });
       if (l.speech_ms !== undefined) result.speech_ms = l.speech_ms;
+      const fill = this.fillerIn(l);
+      if (fill !== undefined) result.filler_in_ms = fill;
       await this.noteHeard(l);
       ms.listen = (l.timings.record as number) ?? 0;
       ms.stt = (l.timings.stt as number) ?? 0;
@@ -1648,7 +1762,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     ms.total = this.clock.now() - created;
     timings.total = ms.total;
     this.logTimings(id, "talk", timings);
+    const seq = this.agentSeq; // before the agent has the result: its next call stands the filler down
     await this.finishJob(id, { status: "done", result: { ...result, ms, timings } });
+    // the human spoke: the agent now thinks; nothing from it in time → Molty fills itself
+    if (heard) this.armFiller(id, heard, seq);
   }
 
   /**
@@ -1764,7 +1881,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     // synthesis: its round trip to the device no longer sits between the first audio and the
     // first frame. Elsewhere (the cloud can take a second) it waits for the first audio, so
     // the device never shows a say whose voice is still far off.
-    const early = pick.box;
+    const early = pick.box && !ready.cached; // cached audio is all there: cmd say with its exact length
     let sock: DeviceSocket | undefined;
     let cuesOn = false;
     const sayCmd = (ms: number) => {
@@ -1897,7 +2014,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         this.sayDone.delete(id);
       }
       const tEnd = this.clock.now();
-      if (pick.box) await this.noteBoxStats({ tts_first_audio_ms: tFirst - t0, tts_at: tEnd });
+      if (pick.box && !ready.cached) await this.noteBoxStats({ tts_first_audio_ms: tFirst - t0, tts_at: tEnd });
       return {
         ok: true,
         start: t0,
@@ -1909,6 +2026,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
           stream: lastSent - firstSent,
           play: tEnd - firstSent,
           voice: pick.name,
+          ...(ready.cached ? { cached: true } : {}),
         },
       };
     } catch (e) {
@@ -1923,7 +2041,24 @@ export class DeviceRoom implements AgentApi, OwnerApi {
    * opener while the human still talks, a follow-up while its opener plays. The feed ends (and the
    * synthesis stops) with speak(), or with feed.end() when it will never be played.
    */
-  private async prepareSpeech(text: string, voice: string | undefined): Promise<Prepared | { ok: false; error: string }> {
+  private async prepareSpeech(text: string, voice: string | undefined, phrase?: "cache" | "if_cached"): Promise<Prepared | { ok: false; error: string }> {
+    // A quick phrase (or an opener that happens to be one): its cached audio in the current voice —
+    // "cache" synthesises and caches it on a miss, "if_cached" streams a miss as any speech.
+    if (phrase && voice === undefined) {
+      const v = await this.voiceNow();
+      if (!v.ok) return { ok: false, error: v.error };
+      let audio = await this.phraseCache.get(v.vkey, text);
+      const fresh = !audio;
+      if (!audio && phrase === "cache") audio = await this.synthPhrase(v, text);
+      if (audio) {
+        const feed = new PcmFeed();
+        for (let o = 0; o < audio.pcm.length; o += this.t.sayChunkSamples) feed.push(audio.pcm.subarray(o, o + this.t.sayChunkSamples));
+        for (const [w, smp] of audio.cues) feed.cue(w, smp);
+        feed.end();
+        return { pick: v.pick, feed, at: this.clock.now(), cached: true, ...(fresh ? { fresh: true } : {}) };
+      }
+      if (phrase === "cache") return { ok: false, error: "tts_failed" };
+    }
     const pick = await this.pickVoice("tts");
     if (!pick.ok) return { ok: false, error: pick.error };
     const feed = new PcmFeed();
@@ -1968,6 +2103,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
 
   /** `extra`: the device listen args besides job/ms/rate (VAD knobs, ring_color), passed through. `ms` undefined: the device's setting. */
   private async record(id: string, ms: number | undefined, extra: JsonObject = {}): Promise<ListenResult> {
+    this.cancelFiller(); // a new listen: whatever turn was waiting for a filler is over
+    this.lastFill = undefined; // ...and a filler of an earlier turn no longer skips anyone's quick
     const t0 = this.clock.now();
     let pick = await this.pickVoice("stt");
     if (!pick.ok) return { ok: false, error: pick.error };
@@ -2111,6 +2248,9 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       tAck = this.clock.now();
       const did = res.result.ack;
       if (typeof did === "string" && (ACK_MODES as readonly string[]).includes(did)) buf.deviceAck = did as (typeof ACK_MODES)[number];
+      // the owner's auto filler delay (device setting; absent on older firmware: the default)
+      buf.fillerMs = fillerMs(res.result.filler_ms);
+      if (buf.fillerMs) void this.warmFillers(); // the filler's audio is ready long before it is needed
       const acked = res.result.ms;
       ms = typeof acked === "number" && Number.isFinite(acked) && acked >= 0 ? acked || LISTEN_CEILING_MS : (w.result.ms ?? LISTEN_CEILING_MS) || LISTEN_CEILING_MS;
       if (!buf.ended) {
@@ -2195,6 +2335,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       },
       ...(buf.deviceAck ? { ack: buf.deviceAck } : {}),
       pauses: buf.pauses,
+      endAt: tEnd,
+      fillerMs: buf.fillerMs ?? fillerMs(undefined),
     };
   }
 
@@ -2467,7 +2609,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
           true,
           w.by,
           undefined,
-          { takeover: id, prepared: w.prepared },
+          { takeover: id, prepared: w.prepared, lead: w.hash },
         );
         if (started.ok) {
           winner.job = started.result.job as string;
@@ -2479,6 +2621,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         }
       }
       if (text) await this.kv.put<TurnRecord>(K.turn, { id, at: now, ...(winner ? { by: winner.d.hash } : {}) });
+      if (text && winner) await this.kv.put(K.lastAnswerer, winner.d.hash);
     } finally {
       if (turn) this.closeTurn(turn);
     }
@@ -2514,6 +2657,11 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       });
       // an agent's opener is already playing: the turn is taken (others stay quiet)
       if (winner) data.claimed = true;
+      // otherwise: when Molty says its own filler unless an agent acts first (core/phrases.ts)
+      else {
+        const fill = this.fillerIn(r);
+        if (fill !== undefined) data.filler_in_ms = fill;
+      }
       // agent-facing, one per turn: not subject to the device event rate cap
       await this.appendEvent(UTTERANCE_EVENT, data, true);
       if (r.trace) r.trace.relay.utterance = this.clock.now() - r.trace.t0;
@@ -2578,10 +2726,19 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     return this.speechChain as Promise<void>;
   }
 
-  /** The job a say / talk by `hash` queues behind: its own draft opener, while that plays. */
+  /**
+   * The job a say / talk / quick by `hash` queues behind: the lead-in playing now (startJob `lead`) —
+   * its own draft opener or quick phrase, or Molty's own filler (anyone's answer follows that).
+   */
   private followUpOf(hash: string): string | undefined {
-    const o = this.opener;
-    return o && o.hash === hash && this.audioJob === o.job && !o.follow ? o.job : undefined;
+    const l = this.lead;
+    return l && (l.hash === hash || l.hash === RELAY_LEAD) && this.audioJob === l.job && !l.follow && !this.handoff ? l.job : undefined;
+  }
+
+  /** `job` was queued behind the lead-in `after`: nothing else may queue there (and an opener's misfire counts its follow-up). */
+  private noteFollow(after: string, job: string) {
+    if (this.lead?.job === after) this.lead.follow = job;
+    if (this.opener?.job === after) this.opener.follow = job;
   }
 
   /** Would a say / talk by `hash` be refused the latest turn? Read only: nothing is claimed. */
@@ -2606,6 +2763,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       return out.ok && out.next ? { next: out.next, result: out } : { result: out };
     });
     if (!c.ok) return fail("turn_claimed", `another agent is already answering the human's turn ${c.turn}: stay quiet (or answer the next one)`, { turn_id: c.turn });
+    if (c.turn) await this.kv.put(K.lastAnswerer, hash); // the agent answering the human now: Molty's fillers are its own
     return { ok: true, result: c.turn ? { turn: c.turn as unknown as JsonObject } : {} };
   }
 
@@ -2614,7 +2772,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
    * listen job), attributed to the answering agent — when it called, its first audio, and its
    * own client_timing. Never throws (the trace must not break the answer).
    */
-  private async replyTrace(id: string, op: "say" | "talk" | "ask", args: JsonObject, timings: JsonObject) {
+  private async replyTrace(id: string, op: "say" | "talk" | "ask" | "quick", args: JsonObject, timings: JsonObject) {
     const turn = isRecord(timings.turn) ? timings.turn : undefined;
     if (!turn || typeof turn.id !== "string") return;
     const by = (await this.kv.get<JobRecord>(K.job(id)))?.by;
@@ -2666,7 +2824,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     // re-based on a newer partial with the same words: its audio is already (being) synthesised — keep it
     const same = turn.drafts.get(a.hash);
     const reuse = same && same.opener === args.opener && same.voice === args.voice && !(same.prepared.feed.done && same.prepared.feed.error !== undefined);
-    const prepared = reuse ? same.prepared : await this.prepareSpeech(args.opener, args.voice);
+    // an opener that is one of the agent's quick phrases (or a built-in) plays from the phrase cache
+    const prepared = reuse ? same.prepared : await this.prepareSpeech(args.opener, args.voice, "if_cached");
     if (!("pick" in prepared)) return fail(prepared.error, "no voice to pre-synthesise the opener with");
     // the human may have finished while the voice was picked
     if (this.openTurn !== turn || !this.turnLive(turn)) {
@@ -2933,6 +3092,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     sock.sendText(JSON.stringify({ t: "voice.welcome", device_id: this.deviceId, mode: cfg.mode, voice: cfg.voice ?? null }));
     this.log("voice box connected", { device: this.deviceId, stt: f.stt, tts: f.tts });
     await this.activity.record({ ts: now, kind: "voice_box", ev: "connect", data: { name: f.name as string, stt: f.stt, tts: f.tts } });
+    void this.rewarmPhrases(); // auto mode: the box's voice speaks now; quick phrases follow it
   }
 
   /** The greeted voice box socket, if any. */
@@ -3046,6 +3206,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       }
       await this.kv.put<VoiceCfg>(K.voiceCfg, cfg);
       await this.activity.record({ ts: this.clock.now(), kind: "settings", ev: "voice", data: { mode: cfg.mode, voice: cfg.voice ?? null, ...(req.reflex !== undefined || req.reflex_compare !== undefined ? { reflex: cfg.reflex ?? "off", reflex_compare: !!cfg.reflex_compare } : {}) } });
+      void this.rewarmPhrases(); // quick phrases follow Molty's voice (core/phrases.ts)
     }
     return { ok: true, result: await this.voiceView() };
   }
@@ -3511,6 +3672,313 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         },
       );
     });
+  }
+
+  // =====================================================================
+  // Quick phrases and the auto filler (core/phrases.ts, docs/AGENT-LINK.md "Quick phrases")
+  // =====================================================================
+
+  async phrases(token: string, req: unknown): Promise<Outcome> {
+    return this.logged(token, "phrases", req, () => this.phrasesNow(token, req));
+  }
+
+  private async phrasesNow(token: string, req: unknown): Promise<Outcome> {
+    const a = await this.agentAuth(token);
+    if ("ok" in a) return a;
+    let r;
+    try {
+      r = validatePhrasesRequest(req);
+    } catch (e) {
+      if (e instanceof CommandError) return fail(e.code, e.message);
+      throw e;
+    }
+    const key = K.phrases(a.hash);
+    if (r.action === "set") {
+      const add = r.phrases;
+      const now = this.clock.now();
+      const builtins = r.builtins;
+      const merged = await this.kv.update<AgentPhrases, Phrase[] | undefined>(key, (cur) => {
+        const m = mergePhrases(cur?.phrases ?? [], add);
+        const b = builtins ?? cur?.builtins;
+        return m ? { next: { phrases: m, at: now, ...(b === false ? { builtins: false } : {}) }, result: m } : { result: undefined };
+      });
+      if (!merged) return fail("invalid_args", `at most ${PHRASE_LIMITS.perAgent} phrases per agent: delete some first (molty_phrases {action:"delete", id})`);
+      // their audio, in Molty's current voice, now (bounded: a slow voice keeps warming after the answer)
+      await Promise.race([this.warmTexts(add.map((p) => p.text)), sleep(this.clock, PHRASE_LIMITS.warmBudgetMs)]);
+    } else if (r.action === "delete") {
+      const ids = r.ids;
+      await this.kv.update<AgentPhrases, void>(key, (cur) => {
+        if (!cur) return { result: undefined };
+        const left = ids[0] === "*" ? [] : cur.phrases.filter((p) => !ids.includes(p.id));
+        return { next: left.length || cur.builtins === false ? { ...cur, phrases: left } : null, result: undefined };
+      });
+    }
+    return this.ride(a, { ok: true, result: await this.phraseView(a.hash) });
+  }
+
+  /** The list an agent sees: its own phrases, the built-ins, whether each is ready (cached) in Molty's current voice. */
+  private async phraseView(hash: string): Promise<JsonObject> {
+    const rec = await this.kv.get<AgentPhrases>(K.phrases(hash));
+    const mine = rec?.phrases ?? [];
+    const useBuiltins = rec?.builtins !== false;
+    const v = await this.voiceNow();
+    const ready = async (text: string) => (v.ok ? this.phraseCache.has(v.vkey, text) : false);
+    const own: JsonObject[] = [];
+    for (const p of mine) own.push({ id: p.id, text: p.text, ...(p.filler ? { filler: true } : {}), for: p.for ?? "any", ready: await ready(p.text) });
+    const builtins: JsonObject[] = [];
+    // builtins off: this agent neither uses nor sees them
+    if (useBuiltins) for (const p of BUILTIN_PHRASES) builtins.push({ id: p.id, text: p.text, for: p.for ?? "any", ready: await ready(p.text), ...(mine.some((m) => m.id === p.id) ? { shadowed: true } : {}) });
+    return { phrases: own, builtins, builtins_enabled: useBuiltins, limits: { per_agent: PHRASE_LIMITS.perAgent, text_max: PHRASE_LIMITS.textMax }, voice: v.ok ? v.pick.name : v.error };
+  }
+
+  /** An agent's phrase by id: its own first (it may shadow a built-in), else the built-in (unless it turned them off). */
+  private async findPhrase(hash: string, id: string): Promise<Phrase | undefined> {
+    const rec = await this.kv.get<AgentPhrases>(K.phrases(hash));
+    return rec?.phrases.find((p) => p.id === id) ?? (rec?.builtins === false ? undefined : builtin(id));
+  }
+
+  /**
+   * Molty's filler pool now: the fillers (`filler: true`) of the agent that last answered a human
+   * turn here; that agent has none → the built-ins, unless it turned them off (then no filler).
+   */
+  private async fillerPool(): Promise<{ pool: readonly Phrase[]; source: "agent" | "builtin"; owner?: string } | undefined> {
+    const hash = await this.kv.get<string>(K.lastAnswerer);
+    const rec = typeof hash === "string" ? await this.kv.get<AgentPhrases>(K.phrases(hash)) : undefined;
+    const own = rec?.phrases.filter((p) => p.filler) ?? [];
+    if (own.length) {
+      const tok = await this.kv.get<TokenRecord>(K.token(hash!));
+      return { pool: own, source: "agent", ...(tok ? { owner: tok.agent_name } : {}) };
+    }
+    if (rec?.builtins === false) return undefined;
+    return { pool: BUILTIN_PHRASES, source: "builtin" };
+  }
+
+  /**
+   * `quick {id, in_reply_to?, force?}`: a lead-in from the phrase cache (prepareSpeech "cache"),
+   * answered at once ({job}). Claims the human's turn like a say. Right after Molty's own filler for
+   * the same turn (and nothing from this agent since) it is skipped — `{skipped:"filled", filler}` —
+   * so the human never hears two fillers in a row; `force` plays it anyway, queued behind the
+   * filler. Its own follow-up say / talk queues behind it (startJob `after` / `lead`).
+   */
+  private async quick(hash: string, by: Who | undefined, args: JsonObject, inReplyTo?: string): Promise<Outcome> {
+    const id = args.id as string;
+    const phrase = await this.findPhrase(hash, id);
+    if (!phrase) return fail("not_found", `no phrase "${id}": register it (molty_phrases set) or use a built-in: ${BUILTIN_PHRASES.map((p) => p.id).join(", ")}`);
+    const pre = await this.claimCheck(hash, inReplyTo);
+    if (!pre.ok) return pre;
+    const lf = this.lastFill;
+    const now = this.clock.now();
+    if (args.force !== true && lf && lf.seq === this.agentSeq && now - lf.at < FILL_SKIP_MS && (inReplyTo === undefined || inReplyTo === lf.turn)) {
+      return { ok: true, result: { skipped: "filled", phrase: phrase.id, filler: { phrase: lf.phrase, text: lf.text, ms_ago: now - lf.at }, hint: "Molty already said a filler for this turn: go straight to your answer (talk)" } };
+    }
+    const v = await this.voiceNow();
+    if (!v.ok) return fail(v.error, v.message);
+    const cached = await this.phraseCache.has(v.vkey, phrase.text);
+    const jobArgs: JsonObject = { id: phrase.id, text: phrase.text, ...(phrase.marks ? { marks: phrase.marks } : {}) };
+    const after = this.followUpOf(hash);
+    const started = await this.startJob("quick", jobArgs, true, by, () => this.claimFor(hash, inReplyTo, now), { lead: hash, ...(after ? { after } : {}) });
+    if (!started.ok) return started;
+    if (after) this.noteFollow(after, started.result.job as string);
+    return { ok: true, result: { job: started.result.job as string, phrase: phrase.id, text: phrase.text, cached } };
+  }
+
+  /** A quick phrase job (an agent's, or Molty's filler): the cached audio streamed as a say; thinking after it unless something follows. */
+  private async runQuick(id: string, args: JsonObject, created: number, ready?: Promise<void>) {
+    const text = args.text as string;
+    const filler = args.filler === true;
+    const pre = await this.prepareSpeech(text, undefined, "cache");
+    const t0 = this.clock.now();
+    if (ready) await ready;
+    const waited = this.clock.now() - t0;
+    await this.setJob(id, { status: "running" });
+    const rev = this.screenRev;
+    const r = "pick" in pre ? await this.speak(id, text, undefined, true, args.marks as SayMarks | undefined, pre) : pre;
+    // Nothing queued behind it: back to thinking (the agent is still working on the answer) — sent
+    // while this job still holds the speaker, so it never lands after the say that comes next.
+    const followed = this.handoff?.after === id;
+    if (r.ok && !followed && !(filler && args.ack === "off") && rev === this.screenRev && this.screenInFlight === 0 && this.pendingAsks.size === 0) {
+      void this.sendCmd("mood", { mood: "thinking", hold_s: this.t.thinkHoldS }).then((m) => {
+        if (!m.ok) this.log("auto mood failed", { device: this.deviceId, mood: "thinking", error: m.error });
+      });
+    }
+    this.releaseAudio(id); // the queued answer's say goes out now, not after the bookkeeping below
+    if (!r.ok) return this.finishJob(id, { status: "failed", error: r.error });
+    const cached = "pick" in pre && !pre.fresh;
+    const timings: JsonObject = { queue: r.start - created, ...(waited ? { after_lead: waited } : {}), ...r.timings, total: this.clock.now() - created };
+    if (isRecord(args.turn)) timings.turn = this.answerTimings(args, r.start + (r.timings.first_audio as number));
+    this.logTimings(id, "quick", timings);
+    const result: JsonObject = { phrase: args.id as string, text, ms: r.ms, cached, timings };
+    if (filler) Object.assign(result, { filler: true, turn: args.for_turn as string, category: args.category as string, source: args.source as string, ...(typeof args.owner === "string" ? { owner: args.owner } : {}) });
+    await this.finishJob(id, { status: "done", result });
+    // the turn trace: an agent's quick answering a turn (ev "reply", op quick), Molty's own filler (ev "filler")
+    if (filler && typeof args.for_turn === "string") {
+      const data: JsonObject = {
+        job: id,
+        phrase: args.id as string,
+        text,
+        first_audio_ms: r.start + ((r.timings.first_audio as number) ?? 0) - (args.end_at as number),
+        // why this one: the utterance's category (and who classified it), whose pool it came from
+        category: args.category as string,
+        classifier: args.classifier as string,
+        source: args.source as string,
+        ...(typeof args.owner === "string" ? { owner: args.owner } : {}),
+      };
+      await this.activity.record({ ts: this.clock.now(), kind: "trace", ev: "filler", job: args.for_turn, data });
+    } else await this.replyTrace(id, "quick", args, timings);
+  }
+
+  /** Who speaks now and in which voice: the phrase cache's key. */
+  private async voiceNow(): Promise<{ ok: true; pick: Extract<VoicePick, { ok: true }>; vkey: string; ttsVoice?: string } | { ok: false; error: string; message?: string }> {
+    const p = await this.pickVoice("tts");
+    if (!p.ok) return p;
+    const ttsVoice = p.box ? p.cfg.voice : undefined;
+    return { ok: true, pick: p, vkey: `${p.name}|${ttsVoice ?? ""}`, ...(ttsVoice !== undefined ? { ttsVoice } : {}) };
+  }
+
+  /** One synthesis per voice + text at a time (warming and a play share it); the result is cached. */
+  private synthPhrase(v: { pick: Extract<VoicePick, { ok: true }>; vkey: string; ttsVoice?: string }, text: string): Promise<PhraseAudio | undefined> {
+    const key = `${v.vkey}\n${text}`;
+    let p = this.synthing.get(key);
+    if (!p) {
+      p = this.doSynth(v, text).finally(() => this.synthing.delete(key));
+      this.synthing.set(key, p);
+    }
+    return p;
+  }
+
+  private async doSynth(v: { pick: Extract<VoicePick, { ok: true }>; vkey: string; ttsVoice?: string }, text: string): Promise<PhraseAudio | undefined> {
+    const feed = new PcmFeed();
+    await synthesize(v.pick.provider, splitSpeech(text, { streaming: v.pick.box }), { voice: v.ttsVoice }, feed, this.clock, this.t.ttsTimeoutMs);
+    if (feed.error !== undefined) {
+      this.log("phrase synthesis failed", { device: this.deviceId, error: errorCode(feed.error) });
+      return undefined;
+    }
+    let pcm: Int16Array = new Int16Array(0);
+    for (const p of feed.take()) pcm = concat(pcm, p);
+    if (pcm.length === 0) return undefined;
+    const audio: PhraseAudio = { text, pcm, cues: feed.takeCues(), voice: v.pick.name };
+    try {
+      await this.phraseCache.put(v.vkey, audio);
+    } catch (e) {
+      this.log("phrase cache write failed", { device: this.deviceId, error: errorCode(e) });
+    }
+    return audio;
+  }
+
+  /** Synthesises (and caches) the texts not cached yet in the current voice, a few at a time. */
+  private async warmTexts(texts: string[]): Promise<void> {
+    const v = await this.voiceNow();
+    if (!v.ok) return;
+    const todo: string[] = [];
+    for (const t of new Set(texts)) if (!(await this.phraseCache.has(v.vkey, t))) todo.push(t);
+    const work = todo.slice(0, PHRASE_LIMITS.cacheEntries);
+    const worker = async () => {
+      for (let t = work.shift(); t !== undefined; t = work.shift()) await this.synthPhrase(v, t);
+    };
+    await Promise.all(Array.from({ length: Math.min(PHRASE_LIMITS.warmConcurrency, work.length) }, worker));
+  }
+
+  /** The filler pool's audio, warmed during the listen (only what is not cached yet: once per voice). */
+  private async warmFillers(): Promise<void> {
+    const p = await this.fillerPool();
+    if (p) await this.warmTexts(p.pool.map((x) => x.text));
+  }
+
+  /**
+   * The utterance's category for a context-picked filler — ONE path: Molty's reflex
+   * (fillerCategory: the reflex's decision on those words, or one call of the owner's engine,
+   * keywords when it is off), or RoomDeps.classifier when given. CLASSIFY_BUDGET_MS at most; a throw,
+   * an unknown category or the deadline → the keywords. `by`: the engine that decided.
+   */
+  private async classify(text: string): Promise<{ category: UtteranceCategory; by: string }> {
+    const valid = (c: unknown): c is UtteranceCategory => (UTTERANCE_CATEGORIES as readonly unknown[]).includes(c);
+    try {
+      if (this.classifier) {
+        const c = await withTimeout(this.clock, Promise.resolve(this.classifier.classify(text)), CLASSIFY_BUDGET_MS, "classify_timeout");
+        if (valid(c)) return { category: c, by: this.classifier.name };
+      } else {
+        const r = await withTimeout(this.clock, this.fillerCategory(text), CLASSIFY_BUDGET_MS, "classify_timeout");
+        if (valid(r.category)) return { category: r.category, by: r.engine };
+      }
+    } catch (e) {
+      this.log("filler classifier failed", { device: this.deviceId, classifier: this.classifier?.name ?? "reflex", error: errorCode(e) });
+    }
+    return { category: keywordCategory(text), by: "keywords" };
+  }
+
+  /** The voice changed (owner setting, the box came or went): re-synthesise what was in use, and every agent's phrases. */
+  private async rewarmPhrases(): Promise<void> {
+    try {
+      const texts = await this.phraseCache.texts();
+      for (const rec of (await this.kv.list<AgentPhrases>("phr:")).values()) for (const p of rec.phrases) texts.push(p.text);
+      if (texts.length) await this.warmTexts(texts);
+    } catch (e) {
+      this.log("phrase rewarm failed", { device: this.deviceId, error: errorCode(e) });
+    }
+  }
+
+  /** ms from now until Molty's own filler for this heard turn (absent: off, or nothing was heard). */
+  private fillerIn(r: Extract<ListenResult, { ok: true }>): number | undefined {
+    if (!r.fillerMs || !r.text.trim()) return undefined;
+    return Math.max(0, r.endAt + r.fillerMs - this.clock.now());
+  }
+
+  /**
+   * A human turn ended with words (`turn`: the listen / talk job): unless an agent does anything
+   * (a job — a draft's opener too —, a mood, text, a gesture) after `seq` within the owner's delay
+   * counted from the end of speech, Molty says a filler itself (fireFiller).
+   */
+  private armFiller(turn: string, r: Extract<ListenResult, { ok: true }>, seq: number) {
+    this.cancelFiller();
+    const delay = this.fillerIn(r);
+    if (delay === undefined) return;
+    const caps = this.liveSocket()?.getMeta()?.caps;
+    if (caps && !caps.includes("say")) return;
+    const w: FillWatch = { turn, seq, timer: undefined, endAt: r.endAt, category: this.classify(r.text), ...(r.ack ? { ack: r.ack } : {}) };
+    w.timer = this.clock.setTimeout(() => {
+      if (this.fillWatch !== w) return;
+      this.fillWatch = undefined;
+      void this.fireFiller(w);
+    }, delay);
+    this.fillWatch = w;
+  }
+
+  private cancelFiller() {
+    if (this.fillWatch) this.clock.clearTimeout(this.fillWatch.timer);
+    this.fillWatch = undefined;
+  }
+
+  /** The filler's moment: only when no agent did anything since the turn and nothing owns the speaker, the screen or the floor. */
+  private async fireFiller(w: FillWatch): Promise<void> {
+    const skip = (why: string) => this.log("filler skipped", { device: this.deviceId, turn: w.turn, why });
+    // everything that waits first; the checks and the start below run with no await in between
+    const { category, by: classifier } = await w.category;
+    const src = await this.fillerPool();
+    if (!src) return skip("no_fillers"); // the answering agent turned the built-ins off and has none of its own
+    const p = pickFiller(src.pool, category, this.lastFiller);
+    if (!p) return skip("no_fit"); // nothing in the pool fits this kind of turn
+    if (this.agentSeq !== w.seq) return skip("agent");
+    if (this.audioJob || this.openTurn || this.pendingAsks.size || this.screenInFlight || !this.liveSocket()) return skip("busy");
+    const id = p.id;
+    const seq = this.agentSeq;
+    // relay-owned lead-in: no agent, claims no turn; anyone's say / talk / quick queues right after it
+    const jobArgs: JsonObject = {
+      id: p.id,
+      text: p.text,
+      ...(p.marks ? { marks: p.marks } : {}),
+      filler: true,
+      for_turn: w.turn,
+      end_at: w.endAt,
+      category,
+      classifier,
+      source: src.source,
+      ...(src.owner ? { owner: src.owner } : {}),
+      ...(w.ack ? { ack: w.ack } : {}),
+    };
+    const started = await this.startJob("quick", jobArgs, true, undefined, undefined, { lead: RELAY_LEAD });
+    if (!started.ok) return skip(started.error);
+    this.lastFiller = id;
+    this.lastFill = { turn: w.turn, job: started.result.job as string, phrase: id, text: p.text, at: this.clock.now(), seq };
   }
 
   // ---------------- waiter plumbing ----------------

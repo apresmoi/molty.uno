@@ -1,0 +1,31 @@
+# A slow agent (a hosted bot's cold start + a big model): run it with a fixed think time and
+# compare the perceived silence with Molty's auto filler on and off (services/relay/src/core/phrases.ts):
+#   make sim SIM_ARGS='scenarios/slow-agent.yaml --agent-gap-ms 6000 --filler-ms 2500 --align none'
+#   make sim SIM_ARGS='scenarios/slow-agent.yaml --agent-gap-ms 6000 --filler-ms 0 --align none'
+# Report: `silence` (human stops -> Molty's first voice, a filler counts) vs `gap` (-> the answer).
+name: slow-agent
+defaults:
+  lead_s: 0.6
+  level_db: -24
+  noise: {kind: pink, db: -62}
+closing: "Okay, talk soon!"
+turns:
+  - id: hello
+    say: "Hey, I'm here. What's up?"
+    user: "What's the weather going to be like this weekend?"
+    tags: [question, slow-agent]
+
+  - id: plan
+    say: "Sunny on Saturday, rain on Sunday."
+    user: "Then can you plan a picnic for Saturday afternoon?"
+    tags: [question, slow-agent]
+
+  - id: who
+    say: "Sure, a picnic it is."
+    user: "Invite my sister and her two kids too."
+    tags: [statement, slow-agent]
+
+  - id: thanks
+    say: "Done, they're invited."
+    user: "Great, thank you."
+    tags: [short, slow-agent]

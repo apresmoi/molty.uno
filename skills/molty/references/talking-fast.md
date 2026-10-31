@@ -13,6 +13,9 @@ a full model round trip on your side). The human hears your latency as silence.
   `listen` → `molty_wait`.
 - **Use your fastest model for conversation.** Escalate to a bigger model or tools only for real
   work — and then say one short line first ("Checking your calendar.") so the human hears you.
+- **Thinking for more than a moment? Play a quick phrase FIRST** — `quick {id}`, one call that
+  plays cached audio at once — before you start reasoning, then answer with talk (it follows
+  the phrase seamlessly). See [Quick phrases](#quick-phrases).
 - **Short first sentence.** Audio starts after the first sentence is synthesised.
 - **Keep replies to 1–2 short sentences.** Speech time is latency: the human waits for every word
   before they can answer.
@@ -81,13 +84,37 @@ turn-taking.
 
 **Molty acknowledges the turn itself.** The moment the human finishes, Molty plays a short,
 soft chirp and shows `thinking` — on the device, before you have even seen the transcript
-(the human picks chirp + thinking, thinking only, or off). So **go straight to your answer**:
-no "hmm", "let me think" or "got it" opener. Pass `"ack": false` (or `"silent"`) only when you
-acknowledge in your own way.
+(the human picks chirp + thinking, thinking only, or off). So when your answer is ready at
+once, **go straight to your answer**: no "got it" opener. Pass `"ack": false` (or `"silent"`)
+only when you acknowledge in your own way.
 
-**Never leave the human in silence.** The device's `thinking` lasts 30 s. If your answer needs
-longer work (tools, search, a build), first send a short spoken ack ("On it — give me a minute.")
-with `say`, or re-send `mood thinking` with a `hold_s` that covers the work, then answer.
+**Never leave the human in silence.** The chirp is not words: past a second or two the silence
+feels long. If you will think (a slow model, a cold start, tools, search), **play a quick phrase
+first** (below), then answer. For long work, also re-send `mood thinking` with a `hold_s` that
+covers it (the device's `thinking` lasts 30 s).
+
+## Quick phrases
+
+**Before you start reasoning, play a quick phrase**: `quick {id}` (REST
+`POST …/cmd {"name":"quick","args":{"id":"hmm","in_reply_to":"<turn_id>"}}`, MCP `molty_quick`,
+helper `quick.sh hmm --reply <turn_id>`). Its audio is cached in Molty's voice: it starts at
+once and the call returns at once. Then think, and answer with talk as usual — your talk queues
+behind the phrase and follows it seamlessly (its speech is synthesised while the phrase plays).
+
+- **Make them yours, once**: register a few phrases in your own voice and personality
+  (`molty_phrases {action:"set", phrases:[{"id":"think","text":"Ooh, let me think about that.","filler":true,"for":"hard"}]}`,
+  REST `POST …/phrases`; at most 20, ≤ 60 characters each). `filler: true` ones become Molty's
+  own filler when you are slow (by `for`: question / request / hard / any); `builtins: false`
+  drops the built-ins for you. Built-ins for everyone: `hmm`,
+  `let_me_think`, `one_sec`, `let_me_see`, `good_question`, `on_it`, `checking`.
+- **A draft opener is a lead-in too**: your quick / talk after it queues behind it the same way,
+  and an opener that is one of your phrases plays from the cache. A played opener already
+  answered: Molty says no filler then.
+- **Vary them**; match the moment (`checking` before a lookup, `good_question` only after one).
+- **Molty fills by itself when you are slow.** No agent action within the owner's delay (2.5 s by
+  default) after the human finishes: Molty says a built-in filler. `filler_in_ms` in the
+  `utterance` / talk result says how long you have. A `quick` after Molty's filler is skipped
+  (`{"skipped":"filled"}`): go straight to your answer — never two fillers in a row.
 
 ## no_speech
 
