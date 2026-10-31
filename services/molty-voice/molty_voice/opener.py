@@ -4,8 +4,7 @@ The relay asks at the end of the human's turn (`{"t":"opener","id","text","histo
 and answers itself with what it may say: this module only writes a line. Whether the line may be
 spoken is the relay's call (services/relay core/opener.ts guardOpener), whichever model wrote it.
 
-Model: `gemma3:4b` on the box's Ollama, loaded and kept loaded (about 30 ms to the first word,
-about 60 ms for a line; research/openers-eval.md). `python -m molty_voice.opener` writes one line per
+Model: `gemma3:4b` on the box's Ollama, loaded and kept loaded (about 130 ms for a line from the box). `python -m molty_voice.opener` writes one line per
 JSON line `{"text","history"}` on stdin (the eval's way in).
 """
 
@@ -25,42 +24,40 @@ DEFAULT_MODEL = "gemma3:4b"
 MAX_HISTORY = 5
 MAX_CHARS = 600
 
-SYSTEM = """You are Molty, a small desk creature in a spoken conversation. Someone smarter will finish your sentence in a moment: you only say the FIRST few words of Molty's reply, so they flow into the rest.
+SYSTEM = """You are the quick first voice of Molty, a small desk creature in a spoken conversation. Someone smarter continues your words a moment later. Write only the first 2 to 6 words of the reply they will give.
 
 Rules:
-- At most 6 words. Name their topic. Use the earlier messages to know what "it" or "that" means.
-- Speak as Molty answering them: never repeat their sentence back. "me" in their words means "you" in yours.
-- Never give the answer, a fact, a name or a number they did not say. Never say something is done. No yes or no.
-- It starts a sentence, so end with a comma. Never ask a question. Don't start every line the same way.
-- Same language as their last message. Plain words only. Never copy their whole sentence.
+- Follow the whole conversation: react to what the human means, in your own words.
+- Don't repeat their sentence. At most one word of theirs, the topic.
+- State nothing: no fact, answer, result, opinion, promise, or claim about what happened. Yes or no is an answer too.
+- It must lead into more words, so end with a comma or "so". Never a question.
+- Same language as their last message. Plain words.
 
 Examples:
 Human: what's the capital of Peru?
-Molty: Hmm, Peru's capital,
+Molty: Okay, for Peru,
 Human: how long did that take?
-Molty: Let me see how long,
+Molty: Right, so the timing,
 Human: my laptop keeps crashing
-Molty: Ugh, crashing again,
+Molty: Oh no, okay, so
 Human: play some jazz
-Molty: Some jazz, right,
-Human: remind me to call mom
-Molty: Calling mom, sure,
-Human: show me the photos
-Molty: Here come the photos,
-Human: can you make it faster?
-Molty: Making it faster,
-Human: say hello
-Molty: Hello there,
+Molty: Sure, let me,
+Human: I think we should rewrite the parser
+Molty: Hmm, so about that,
+Human: it's too much, make it softer
+Molty: Got it, softer, so
+Human: why are you so slow?
+Molty: Yeah, the thing is,
 Human: good morning!
 Molty: Hey, good morning,
-Human: I think we should rewrite the parser
-Molty: Hmm, rewriting the parser,
+Human: hola, qué hora es en Tokio?
+Molty: Bueno, a ver,
 
 With earlier messages:
 Human: can you check the build?
 Molty: It failed on the linker.
 Human: why?
-Molty: So why the linker failed,"""
+Molty: So, looking at that,"""
 
 
 def clean(line: str) -> str:
@@ -85,7 +82,7 @@ def request_body(model: str, text: str, history: list[dict] | None, keep_alive: 
         "stream": False,
         "think": False,
         "keep_alive": keep_alive,
-        "options": {"num_predict": 18, "temperature": 0.3, "stop": ["\n", "Human:"]},
+        "options": {"num_predict": 18, "temperature": 0.4, "stop": ["\n", "Human:"]},
         "messages": messages(text, history),
     }
 
