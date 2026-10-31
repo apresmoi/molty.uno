@@ -26,3 +26,10 @@ echo "→ rebooting into new image, waiting for rejoin ..."
 sleep 3
 for i in $(seq 1 40); do ping -c1 -t1 "$HOST" >/dev/null 2>&1 && { echo "back up after ~$((i+3))s"; exit 0; }; sleep 1; done
 echo "did not rejoin in time (rollback may revert on next reset)"; exit 1
+
+# The console lives in its own partition: an app update leaves the old one being served.
+DIST="$HERE/../console/dist/index.html"
+if [[ -f "$DIST" ]]; then
+  echo "→ uploading the console"
+  curl -sS -m 60 -X POST "$B/dev/html" -H 'content-type: text/html' --data-binary @"$DIST" | head -c 200; echo
+fi
