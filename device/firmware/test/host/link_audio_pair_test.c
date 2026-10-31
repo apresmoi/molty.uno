@@ -745,7 +745,8 @@ static cJSON *welcome_with(const char *job, bool ok, int next) {
     return w;
 }
 static void relay_resumes(bool on) { cJSON *w=cJSON_CreateObject(), *f=cJSON_AddArrayToObject(w,"features");
-    if (on) cJSON_AddItemToArray(f,cJSON_CreateString("resume")); link_audio_resume_welcome(w); cJSON_Delete(w); }
+    if (on) cJSON_AddItemToArray(f,cJSON_CreateString("resume"));
+    link_audio_resume_welcome(w); cJSON_Delete(w); }
 static char drop_job[LINK_STREAM_MAX]; static int drop_at_chunk=-1, back_after_delays=-1, drop_next; static bool dropped;
 static void drop_back(void) {
     link_up=true;
