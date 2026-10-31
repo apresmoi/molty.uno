@@ -6,9 +6,10 @@
 import { UnsupportedError } from '../api/device';
 import type { AppCtx } from '../app';
 import {
-  ACTIVITY_KINDS, ActivityApiError, agentsOf, entryLine, filterGroups, fmtMs, getActivity, groupEntries, mergeEntries, setTranscripts, timingRows, transcript, voiceLine,
+  ACTIVITY_KINDS, ActivityApiError, agentsOf, audioFileName, entryLine, filterGroups, fmtMs, getActivity, getAudio, groupEntries, mergeEntries, setKeepAudio, setTranscripts, timingRows, transcript, voiceLine,
   type ActivityEntry, type ActivityTarget, type Filters, type Group,
 } from '../activity/activity';
+import { fmtAt, traceModel, type TraceModel } from '../activity/trace';
 import { linkContext } from '../ui/agent-link';
 import { h, mount, note } from '../ui/dom';
 import { errText } from '../ui/fmt';
@@ -24,6 +25,8 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
   let entries: ActivityEntry[] = [];
   let next = '';
   let loaded = false, unsupported = false, transcripts = true;
+  let keepAudio: boolean | undefined;   // undefined: this relay has no such setting
+  let audioInfo = { turns: 5, max_s: 30, max_age_h: 24 };
   let problem: string | null = null;
   const filters: Filters = {};
   const open = new Set<string>();
@@ -67,6 +70,8 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
           entries = mergeEntries(entries, p.entries);
           if (p.next) next = p.next;
           transcripts = p.transcripts;
+          keepAudio = p.keep_audio;
+          if (p.audio) audioInfo = p.audio;
           if (!p.more || !next) break;
         }
         loaded = true; problem = null;
@@ -76,7 +81,7 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
         else problem = e instanceof ActivityApiError && e.code === 'unreachable' ? 'can’t reach the relay — is Molty online?' : (e as Error).message;
       } finally { busy = false; }
       // re-render only on news: an open select or a scrolled list must survive the poll
-      const sig = `${entries.length}|${next}|${transcripts}|${problem}|${loaded}|${unsupported}`;
+      const sig = `${entries.length}|${next}|${transcripts}|${keepAudio}|${problem}|${loaded}|${unsupported}`;
       if (sig !== lastSig) { lastSig = sig; render(); }
     }
     if (alive && !unsupported) timer = window.setTimeout(() => void poll(), POLL_MS);
@@ -90,6 +95,32 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
     try { transcripts = (await setTranscripts(target, on)).transcripts; problem = null; }
     catch (e) { problem = `not saved: ${(e as Error).message}`; }
     render();
+  }
+
+  async function toggleKeepAudio(on: boolean) {
+    if (!target || on === keepAudio) return;
+    try { const p = await setKeepAudio(target, on); keepAudio = p.keep_audio ?? on; problem = null; }
+    catch (e) { problem = `not saved: ${(e as Error).message}`; }
+    render();
+  }
+
+  async function download(job: string, btn: HTMLButtonElement) {
+    if (!target) return;
+    const label = btn.textContent;
+    btn.disabled = true; btn.textContent = 'downloading…';
+    try {
+      const blob = await getAudio(target, job);
+      const url = URL.createObjectURL(blob);
+      const a = h('a', { href: url, download: audioFileName(job), style: 'display:none' });
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      btn.textContent = 'saved ⠿';
+    } catch (e) {
+      btn.textContent = e instanceof ActivityApiError && e.code === 'not_found' ? 'audio expired' : `failed: ${(e as Error).message}`;
+    } finally {
+      btn.disabled = false;
+      setTimeout(() => { btn.textContent = label; }, 2500);
+    }
   }
 
   let controlsKey = '';
@@ -118,7 +149,18 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
           type: 'button', class: 'chip' + (transcripts === on ? ' on' : ''), 'aria-pressed': String(transcripts === on),
           onclick: () => void toggleTranscripts(on as boolean),
         }, label as string))),
-      h('p', { class: 'dim small' }, transcripts ? 'on: turns keep the words (agents only ever see their own).' : 'off: new turns keep timings and outcomes only; the words are never stored.')));
+      h('p', { class: 'dim small' }, transcripts ? 'on: turns keep the words (agents only ever see their own).' : 'off: new turns keep timings and outcomes only; the words are never stored.')),
+      keepAudio === undefined ? null : h('div', { class: 'card' },
+        h('div', { class: 'row' }, h('b', { class: 'hi' }, 'keep audio for debugging'), h('span', { class: 'dim small' }, 'what the mic heard, as a wav per turn')),
+        h('div', { class: 'chips', role: 'group', 'aria-label': 'keep audio for debugging' },
+          [['on', true], ['off', false]].map(([label, on]) => h('button', {
+            type: 'button', class: 'chip' + (keepAudio === on ? ' on' : ''), 'aria-pressed': String(keepAudio === on),
+            disabled: !transcripts && on === true,
+            onclick: () => void toggleKeepAudio(on as boolean),
+          }, label as string))),
+        h('p', { class: 'dim small' }, !transcripts
+          ? 'off while transcripts are off: no audio is kept.'
+          : `${keepAudio ? 'on' : 'off (default)'}: the relay keeps the last ${audioInfo.turns} turns' audio (up to ${audioInfo.max_s} s each) for ${audioInfo.max_age_h} h, then deletes it. Only you can download it here — agents never can.`)));
   }
 
   function groupEl(g: Group) {
@@ -156,10 +198,29 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
       heard !== null ? h('p', { class: 'small act-heard' }, h('span', { class: 'dim' }, 'heard '), heard === 'redacted' ? h('i', { class: 'dim' }, 'redacted') : `“${heard}”`) : null,
       ans !== undefined ? h('p', { class: 'small' }, h('span', { class: 'dim' }, 'answer '), ans === null ? 'none' : String(ans)) : null,
       rows.length ? h('dl', { class: 'facts act-timings', 'aria-label': 'stage timings' }, rows.map(([k, v]) => [h('dt', null, k), h('dd', null, v)])) : null,
+      j?.data?.audio ? h('p', null, h('button', { type: 'button', class: 'ghost small', onclick: (ev: Event) => void download(g.job!, ev.currentTarget as HTMLButtonElement) }, 'download audio (wav)')) : null,
+      timelineEl(g),
       g.lines.length ? h('pre', { class: 'log act-lines', 'aria-label': 'device log' }, g.lines.map((l) => {
         const lv = l.data?.level;
         return h('span', { class: `act-line ${lv === 'E' ? 'err' : lv === 'W' ? 'warn' : ''}` }, `${clock(l.ts)} ${l.data?.text ?? ''}${l.data?.approx ? ' ~' : ''}\n`);
       })) : h('p', { class: 'dim small' }, 'no device lines for this turn'));
+  }
+
+  function timelineEl(g: Group) {
+    const m = traceModel(g.jobEntry, g.traces);
+    if (!m) return null;
+    const key = `${g.key}#trace`;
+    const top = m.summary[0];
+    const d = h('details', { class: 'act-trace', open: open.has(key) },
+      h('summary', null, h('span', { class: 'dim' }, 'timeline '), h('span', { class: `tone-${top.tone}` }, top.text)),
+      m.summary.length > 1 ? h('ul', { class: 'act-sum', 'aria-label': 'trace summary' }, m.summary.slice(1).map((x) => h('li', { class: `tone-${x.tone}` }, x.text))) : null,
+      traceSvg(m),
+      m.rssi ? h('p', { class: 'dim small' }, `Wi-Fi ${m.rssi[0] ?? '?'} → ${m.rssi[1] ?? '?'} dBm`) : null,
+      m.words.length ? h('p', { class: 'small act-words', 'aria-label': 'words' }, h('span', { class: 'dim' }, 'words '), m.words.map((w) => `${w.text}@${fmtAt(w.at)}`).join(' ')) : null,
+      h('ol', { class: 'act-events', 'aria-label': 'turn events' }, m.events.map((e) =>
+        h('li', { class: `tone-${e.tone}` }, h('span', { class: 'dim act-at' }, fmtAt(e.at)), h('span', { class: 'dim act-lane' }, e.lane), h('span', null, e.label)))));
+    d.addEventListener('toggle', () => { if (d.open) open.add(key); else open.delete(key); });
+    return d;
   }
 
   function render() {
@@ -179,4 +240,48 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
   render();
   void loadLink();
   return () => { alive = false; clearTimeout(timer); clearTimeout(linkTimer); document.removeEventListener('visibilitychange', onVisible); };
+}
+
+const NS = 'http://www.w3.org/2000/svg';
+function svg(tag: string, attrs: Record<string, string | number>, ...kids: Array<SVGElement | string>): SVGElement {
+  const el = document.createElementNS(NS, tag) as SVGElement;
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, String(v));
+  for (const c of kids) el.append(c);
+  return el;
+}
+
+/**
+ * The turn as one picture, ms from t0 left to right: the mic level (100 ms bars, clipping in
+ * red), the box's speech spans and words, its pause estimate against the threshold, the frames
+ * as they reached the relay (resent amber, lost red), and every event as a tick.
+ */
+function traceSvg(m: TraceModel): SVGElement {
+  const W = 360, H = 118, span = Math.max(1, m.to - m.from);
+  const x = (at: number) => +(((at - m.from) / span) * W).toFixed(1);
+  const kids: SVGElement[] = [];
+  const tone = (t: string) => (t === 'err' ? 'var(--err)' : t === 'warn' ? 'var(--warn)' : t === 'ok' ? 'var(--accent)' : 'var(--dim)');
+  for (const e of m.events) kids.push(svg('line', { x1: x(e.at), x2: x(e.at), y1: 0, y2: 100, stroke: tone(e.tone), 'stroke-width': 0.6, 'stroke-dasharray': '2 2', opacity: 0.8 }, svg('title', {}, `${fmtAt(e.at)} ${e.label}`)));
+  // level: -90 dBFS = empty, 0 dBFS = full (30 px)
+  const bw = Math.max(0.6, (100 / span) * W - 0.3);
+  for (const l of m.levels) {
+    const v = Math.max(0, Math.min(1, (l.db + 90) / 90)), hh = Math.max(0.5, v * 30);
+    kids.push(svg('rect', { x: x(l.at), y: 32 - hh, width: bw, height: hh, fill: 'var(--accent)', opacity: 0.75 }));
+  }
+  for (const c of m.clips) kids.push(svg('circle', { cx: x(c.at + 50), cy: 3, r: 2, fill: 'var(--err)' }, svg('title', {}, `${c.n} clipped`)));
+  for (const [a, b] of m.speech) kids.push(svg('rect', { x: x(a), y: 38, width: Math.max(1, x(b) - x(a)), height: 6, rx: 2, fill: 'var(--accent)', opacity: 0.5 }));
+  for (const w of m.words) kids.push(svg('line', { x1: x(w.at), x2: x(w.at), y1: 46, y2: 52, stroke: 'var(--ink)', 'stroke-width': 0.8 }, svg('title', {}, w.text)));
+  if (m.pause.length > 1) {
+    const pts = m.pause.map((p) => `${x(p.at)},${(78 - p.v * 22).toFixed(1)}`).join(' ');
+    kids.push(svg('polyline', { points: pts, fill: 'none', stroke: 'var(--warn)', 'stroke-width': 1 }));
+    if (m.threshold !== undefined) kids.push(svg('line', { x1: 0, x2: W, y1: 78 - m.threshold * 22, y2: 78 - m.threshold * 22, stroke: 'var(--faint)', 'stroke-dasharray': '3 3' }));
+  }
+  for (const f of m.frames) kids.push(svg('circle', { cx: x(f.at), cy: 88, r: f.rt ? 2.4 : 1.6, fill: f.rt ? 'var(--warn)' : 'var(--dim)' }, svg('title', {}, `frame ${f.seq}${f.rt ? `, ${f.rt} failed sends` : ''}`)));
+  const lostEv = m.events.filter((e) => e.tone === 'err' && e.lane === 'relay');
+  for (const e of lostEv) kids.push(svg('rect', { x: x(e.at) - 2, y: 84, width: 4, height: 8, fill: 'var(--err)' }));
+  // t0 gets a label only when it is clear of both ends (labels ~40 px wide)
+  const axis = [m.from, ...(x(0) > 40 && x(0) < W - 40 ? [0] : []), m.to].filter((v, i, a) => a.indexOf(v) === i);
+  for (const t of axis) kids.push(svg('text', { x: Math.min(W - 2, Math.max(2, x(t))), y: 112, 'font-size': 9, fill: 'var(--dim)', 'text-anchor': t === m.from ? 'start' : t === m.to ? 'end' : 'middle' }, fmtAt(t)));
+  const labels: Array<[number, string]> = [[12, 'level'], [44, 'speech'], [70, 'pause'], [91, 'frames']];
+  for (const [y, t] of labels) kids.push(svg('text', { x: W - 1, y, 'font-size': 8, fill: 'var(--faint)', 'text-anchor': 'end' }, t));
+  return svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'act-trace-svg', role: 'img', 'aria-label': 'turn timeline' }, ...kids);
 }

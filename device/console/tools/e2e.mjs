@@ -48,7 +48,21 @@ const voiceRelay = {
 
 // The relay's owner activity API (GET|POST /v1/devices/<id>/activity, X-Molty-Link-Code), faked here:
 // two agents, a done talk (timings + device lines), a failed talk (voice_box_offline), a disconnect, a pairing.
-const JA = 'molty-k7m2w9c4ya.j_Qm9vZ2llV29vZ2ll', JB = 'molty-k7m2w9c4ya.j_R3Jva2JvdEZhaWxz';
+const JA = 'molty-k7m2w9c4ya.j_Qm9vZ2llV29vZ2ll', JB = 'molty-k7m2w9c4ya.j_R3Jva2JvdEZhaWxz', JC = 'molty-k7m2w9c4ya.j_U2hha2VUdXJuVHJj';
+// A shake turn with its trace (docs/AGENT-LINK.md "Turn trace"): a hard shake (noise trimmed), a
+// Wi-Fi stall (failed sends, a resent frame, a lost one), clipping, the box's words and a turn end
+// by the mid-sentence hold, the webhook delivered (200 in 180 ms) and the agent's reply with client_timing.
+const SHAKE_TRACE = {
+  v: 1, trigger: 'shake', t0: 0,
+  dev: { shake: { at: -140, peak_g: 8.2, rev: 4, ms: 420 }, set: 340, setc: 0, wall: 8970, cap: 5400, gain: 6, pk: 998,
+    lv: '2a3c6e8ca0b4b4a8a0948c8078706c6460', lv0: 340, clip: [[7, 18]], clip_n: 18,
+    frames: [[0, 340, 520, 0, 40], [1, 640, 820, 0, 40], [2, 940, 3900, 2, 2700], [4, 1540, 4000, 0, 2200], [5, 1840, 4100, 0, 1900]],
+    sent: 5, fail: 2, resent: 1, lost: [[3, 3]], lost_ms: 300, rssi: [-69, -79], end: 'turn_end', speech_ms: 1200 },
+  box: { v: 1, step_ms: 80, skip: 12, thr: 0.6, hold_s: 1.2, audio_s: 5.36, act: [[0.4, 1.9]], pause: 'ffc0402010102040a0d0e0f0', pause_every: 2,
+    words: [['I', 0.5, 0.6], ['measured', 0.6, 1.0], ['it,', 1.0, 1.2], ['from', 1.6, 1.9]],
+    end: { at: 4.32, rule: 'hold', word: 'from', held_s: 1.2, ema: 0.71 }, final_ms: 212 },
+  relay: { voice: 'box', cmd: 40, first_frame: 480, turn_end: 4500, end: 4540, stt: 210, utterance: 4900 },
+};
 const T0 = Date.parse('2026-10-30T19:00:00Z');
 const activityRelay = {
   calls: [],
@@ -67,7 +81,22 @@ const activityRelay = {
     { id: 'a9', ts: T0 + 240000, kind: 'call', job: JB, agent: 'Grokbot', op: 'talk', ok: false, error: 'voice_box_offline', ms: 18, args: { say: 'Hello there', listen: true } },
     { id: 'a10', ts: T0 + 240010, kind: 'job', job: JB, agent: 'Grokbot', op: 'talk', ok: false, error: 'voice_box_offline', ms: 12, data: { status: 'failed', error: 'voice_box_offline' } },
     { id: 'a11', ts: T0 + 240015, kind: 'device_log', job: JB, data: { text: 'E (240015) agent_link: say refused: no stream', level: 'E', boot: 74, seq: 990 } },
+    { id: 'a12', ts: T0 + 300000, kind: 'job', job: JC, op: 'listen', ok: true, ms: 5100,
+      data: { status: 'done', reason: 'turn_end', heard: 'I measured it, from', audio: true, voice: { stt: 'box' }, timings: { cmd: 40, record: 4460, stt: 210, voice: 'box' }, trace: { ...SHAKE_TRACE, t0: T0 + 300000 } } },
+    { id: 'a13', ts: T0 + 305080, kind: 'trace', ev: 'webhook', job: JC, agent: 'Claude', data: { status: 200, ms: 180, attempt: 1 } },
+    { id: 'a14', ts: T0 + 307000, kind: 'trace', ev: 'reply', job: JC, agent: 'Claude', data: { op: 'talk', reply_ms: 2100, first_audio_ms: 2600, client_timing: { received_ms: 120, model_ms: 900 } } },
   ],
+  keepAudio: false,
+  audioCalls: [],
+  async audio(r) {
+    const req = r.request();
+    if (req.method() === 'OPTIONS') return r.fulfill({ status: 204, headers: VOICE_CORS });
+    const code = req.headers()['x-molty-link-code'];
+    this.audioCalls.push({ url: req.url(), code });
+    if (code !== 'K7QX2MPA') return r.fulfill({ status: 401, headers: VOICE_CORS, contentType: 'application/json', body: '{"ok":false,"error":"unauthorized"}' });
+    const wav = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(40)]);
+    return r.fulfill({ status: 200, headers: VOICE_CORS, contentType: 'audio/wav', body: wav });
+  },
   async route(r) {
     const req = r.request();
     if (req.method() === 'OPTIONS') return r.fulfill({ status: 204, headers: VOICE_CORS });
@@ -75,13 +104,17 @@ const activityRelay = {
     const u = new URL(req.url());
     this.calls.push({ method: req.method(), code, since: u.searchParams.get('since'), body: req.postData() });
     if (code !== 'K7QX2MPA') return r.fulfill({ status: 401, headers: VOICE_CORS, contentType: 'application/json', body: '{"ok":false,"error":"unauthorized"}' });
-    if (req.method() === 'POST') this.transcripts = JSON.parse(req.postData() || '{}').transcripts !== false;
+    if (req.method() === 'POST') {
+      const b = JSON.parse(req.postData() || '{}');
+      if (typeof b.transcripts === 'boolean') this.transcripts = b.transcripts;
+      if (typeof b.keep_audio === 'boolean') this.keepAudio = b.keep_audio;
+    }
     const since = u.searchParams.get('since');
     const after = since && req.method() === 'GET' ? Number(since.slice(1)) : 0;
     const entries = this.entries.filter((e) => Number(e.id.slice(1)) > after);
     const next = `a${this.entries.length}`;
     return r.fulfill({ status: 200, headers: VOICE_CORS, contentType: 'application/json',
-      body: JSON.stringify({ ok: true, result: { entries: req.method() === 'POST' ? [] : entries, next, more: false, transcripts: this.transcripts, limits: { max_age_h: 24, max_entries: 3000 } } }) });
+      body: JSON.stringify({ ok: true, result: { entries: req.method() === 'POST' ? [] : entries, next, more: false, transcripts: this.transcripts, keep_audio: this.keepAudio, audio: { turns: 5, max_s: 30, max_age_h: 24 }, limits: { max_age_h: 24, max_entries: 3000 } } }) });
   },
 };
 
@@ -94,6 +127,7 @@ async function newPage(tag, { offline = false, viewport = PHONE } = {}) {
   await ctx.route('**/v1/releases/latest*', async (r) => r.fulfill({ response: await ctx.request.get(`${MOCK}/__mock/release?${new URL(r.request().url()).searchParams}`), headers: { 'access-control-allow-origin': '*' } }));
   await ctx.route('**/v1/devices/*/voice', (r) => voiceRelay.route(r));
   await ctx.route('**/v1/devices/*/activity*', (r) => activityRelay.route(r));
+  await ctx.route('**/v1/devices/*/activity/audio/*', (r) => activityRelay.audio(r));
   const page = await ctx.newPage();
   page.on('console', (m) => {
     if (m.type() !== 'error' && m.type() !== 'warning') return;
@@ -302,21 +336,50 @@ const canvasStats = (page) => page.evaluate(() => {
   const turns = page.locator('.act-turn');
   await turns.first().waitFor({ timeout: 5000 });
   ok(activityRelay.calls.every((c) => c.code === 'K7QX2MPA'), 'activity: relay calls carry the current link code');
-  ok(await turns.count() === 2, 'activity: two turns (one per job)');
+  ok(await turns.count() === 3, 'activity: three turns (one per job)');
   ok(await page.locator('.act-item', { hasText: 'molty disconnected ⠂ close 1006' }).count() === 1, 'activity: device disconnect with its close code');
   // the agent's name is the row's own column, the line says what happened (not the name twice)
   const pairRow = page.locator('.act-item', { hasText: 'Grokbot' }).filter({ hasText: 'paired' });
   ok(await pairRow.count() === 1 && !(await pairRow.innerText()).includes('Grokbot Grokbot'), 'activity: pairing shown');
-  ok((await turns.first().locator('summary').innerText()).includes('Grokbot'), 'activity: newest turn first');
-  const done = turns.filter({ hasText: 'Claude' });
-  await done.locator('summary').click();
+  ok((await turns.first().locator(':scope > summary').innerText()).includes('listen'), 'activity: newest turn first');
+  ok((await turns.nth(1).locator(':scope > summary').innerText()).includes('Grokbot'), 'activity: then the older ones');
+  // the shake turn: its trace as a timeline, the webhook and the reply joined to it, its audio
+  const shakeTurn = turns.first();
+  ok((await shakeTurn.locator(':scope > summary').innerText()).includes('molty'), 'activity: a shake listen is molty’s own (not the webhook’s agent)');
+  await shakeTurn.locator(':scope > summary').click();
+  const tl = shakeTurn.locator('details.act-trace');
+  ok((await tl.locator('summary').innerText()).includes('lost 3.2 s of audio (captured 5.4 s in 9.0 s)'), 'trace: summary leads with the lost audio');
+  await tl.locator('summary').click();
+  ok(await tl.getByRole('img', { name: 'turn timeline' }).isVisible(), 'trace: timeline picture');
+  const sum = tl.getByLabel('trace summary');
+  for (const t of ['18 samples clipped (mic gain 6)', '2 failed sends, 1 frame resent', 'shake noise trimmed 340 ms', 'weak Wi-Fi (-79 dBm)']) ok(await sum.getByText(t).isVisible(), `trace: summary "${t}"`);
+  const evs = tl.getByLabel('turn events');
+  for (const t of ['shake 8.2 g, 4 reversals', 'shake noise trimmed: 340 ms', 'frame 2 resent after 2 failed sends, waited 2.7 s', 'frames 3 never arrived',
+    'end of turn: a mid-sentence pause held (last word “from”), held 1.2 s', 'utterance sent to the agents', 'webhook → Claude: 200 in 180 ms',
+    'Claude answered (talk) 2.1 s after the utterance', 'Claude reports: received 120 ms ⠂ model 900 ms']) ok(await evs.getByText(t, { exact: true }).isVisible(), `trace: event "${t}"`);
+  ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'trace: no horizontal scroll at 390px');
+  await shot(page, '11e-activity-trace');
+  const dl = page.waitForEvent('download');
+  await shakeTurn.getByRole('button', { name: 'download audio (wav)' }).click();
+  const file = await dl;
+  ok(file.suggestedFilename() === 'molty-j_U2hha2VUdXJuVHJj.wav', 'audio: saved as molty-<job>.wav');
+  ok(activityRelay.audioCalls.length === 1 && activityRelay.audioCalls[0].code === 'K7QX2MPA' && activityRelay.audioCalls[0].url.endsWith(`/activity/audio/${encodeURIComponent(JC)}`) && !activityRelay.audioCalls[0].url.includes('K7QX2MPA'),
+    'audio: fetched with the link code header, not in the URL');
+  const ka = page.getByRole('group', { name: 'keep audio for debugging' });
+  ok(await ka.getByRole('button', { name: 'off' }).getAttribute('aria-pressed') === 'true', 'keep audio: off by default');
+  await ka.getByRole('button', { name: 'on' }).click();
+  await ka.locator('button[aria-pressed="true"]', { hasText: 'on' }).waitFor();
+  ok(activityRelay.calls.some((c) => c.method === 'POST' && JSON.parse(c.body).keep_audio === true), 'keep audio: on sent to the relay');
+  await shakeTurn.locator(':scope > summary').click();   // fold it back: the rest of the walk-through reads the others
+  const done = turns.filter({ has: page.locator('summary', { hasText: 'Claude' }) });
+  await done.locator(':scope > summary').click();
   ok(await done.getByLabel('stage timings').getByText('say · tts_first_byte').isVisible(), 'activity: expanded turn shows stage timings');
   ok(await done.getByText('speaks with voice box ⠂ listens with voice box').isVisible(), 'activity: voice provider');
   ok(await done.getByText('“yes please, green tea”').isVisible(), 'activity: heard text');
   ok(await done.getByLabel('device log').getByText('mic gain clipped twice').isVisible(), 'activity: the turn’s device line');
   ok(await done.locator('.act-line.warn').count() === 1, 'activity: W device line highlighted');
   await wait(3500);   // one live poll (since=next) must keep the expanded turn open
-  ok(activityRelay.calls.some((c) => c.method === 'GET' && c.since === 'a11'), 'activity: live poll asks since the last id');
+  ok(activityRelay.calls.some((c) => c.method === 'GET' && c.since === 'a14'), 'activity: live poll asks since the last id');
   ok(await done.getAttribute('open') !== null, 'activity: an expanded turn survives the live poll');
   await shot(page, '11c-activity');
   await page.getByRole('button', { name: 'errors only' }).click();
@@ -332,6 +395,7 @@ const canvasStats = (page) => page.evaluate(() => {
   await tr.getByRole('button', { name: 'off' }).click();
   await tr.locator('button[aria-pressed="true"]', { hasText: 'off' }).waitFor();
   ok(activityRelay.calls.some((c) => c.method === 'POST' && JSON.parse(c.body).transcripts === false), 'activity: transcripts off sent to the relay');
+  ok(await page.getByRole('group', { name: 'keep audio for debugging' }).getByRole('button', { name: 'on' }).isDisabled(), 'keep audio: can’t be turned on while transcripts are off');
   ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'activity: no horizontal scroll at 390px');
   await shot(page, '11d-activity-errors');
 
