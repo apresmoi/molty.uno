@@ -44,6 +44,7 @@ nav a.here::before { content: "[ "; color: inherit; }
 nav a.here::after { content: " ]"; }
 header .theme { margin-left: auto; color: var(--m-dim); }
 nav + .theme { margin-left: 0; }
+@media (max-width: 40rem) { :root { --m-header-height: 96px; } header { flex-wrap: wrap; align-content: center; row-gap: 0; } header .theme { margin-left: auto; } nav { order: 3; flex-basis: 100%; margin-right: 0; } }
 @media (max-width: 62rem) { header { gap: var(--m-space-3); padding-inline: var(--m-gutter); } nav { gap: var(--m-space-3); } }
 .steps { display: flex; gap: 14px; list-style: none; margin: 0; padding: 0; color: var(--m-faint); font-size: 12px; }
 .steps .done { color: var(--m-dim); }
