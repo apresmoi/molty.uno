@@ -170,8 +170,9 @@ export interface AgentApi {
   phrases(token: string, req: unknown): Promise<Outcome>;
 }
 
-export type VoiceMode = "auto" | "box" | "cloud";
-export const VOICE_MODES: readonly VoiceMode[] = ["auto", "box", "cloud"];
+/** off: text only. Molty shows what agents say and never listens. */
+export type VoiceMode = "auto" | "box" | "cloud" | "off";
+export const VOICE_MODES: readonly VoiceMode[] = ["auto", "box", "cloud", "off"];
 
 /** Owner activity log: read the merged timeline (raw query params), or set "log transcripts" / "keep audio" (either or both). */
 export type ActivityOwnerRequest = { action: "get"; query: Record<string, unknown> } | { action: "set"; transcripts?: unknown; keep_audio?: unknown };

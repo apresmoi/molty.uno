@@ -1,6 +1,6 @@
 // Headless Chromium walk-through against the mock device (tools/mock-device.mjs on
 // :8170 — start it with `pnpm mock` after `pnpm build`), at phone width (390 px):
-//   1. the 5-step setup flow (Wi-Fi → Molty → Agent → Tap → Done), screenshot per step
+//   1. the 5-step setup flow (Wi-Fi → Molty → Agent → Tap → Voice → Done), screenshot per step
 //   2. the same Molty step with the three.js CDN blocked → live device preview fallback
 //   3. the settings pages (agent single-message design, molty picker, degraded firmware)
 // Then an optional READ-ONLY pass against a real device via ?device= (GETs only, plus
@@ -196,7 +196,7 @@ const canvasStats = (page) => page.evaluate(() => {
   await page.locator('.setup .opt', { hasText: 'FRITZ!Box' }).waitFor();
   ok((await bubble(page)).startsWith('Hi! Which Wi-Fi should I use?'), 'wifi: bubble asks one question');
   ok(await page.locator('.setup .opt.net').count() === 3, 'wifi: scanned list deduped (3 networks)');
-  ok(await page.locator('.prog').innerText() === '● Wi-Fi   ○ Molty   ○ Agent', 'wifi: progress line');
+  ok(await page.locator('.prog').innerText() === '● Wi-Fi   ○ Molty   ○ Agent   ○ Voice', 'wifi: progress line');
   await page.locator('.fstage canvas').first().waitFor({ timeout: 15000 });
   await wait(1200);
   await noOverflow(page, 'wifi');
@@ -293,13 +293,34 @@ const canvasStats = (page) => page.evaluate(() => {
   await mock('pair', { agent_name: 'Grok', code: '1937' });
   await page.locator('.setup .bubble', { hasText: 'Tap me' }).waitFor({ timeout: 5000 });
   await mock('decide', { ok: true });
+  // Voice, the gap, reflex: only what the owner's tools can do
+  await page.locator('.setup .bubble', { hasText: 'Should I talk?' }).waitFor({ timeout: 5000 });
+  await page.locator('.setup .opt', { hasText: 'Text only' }).waitFor();
+  ok(await page.locator('.setup .opt', { hasText: 'My voice box' }).count() === 1, 'voice: a paired box is offered');
+  await shot(page, '07b-voice');
+  await page.locator('.setup .opt', { hasText: 'My voice box' }).click();
+  await page.locator('.setup .bubble', { hasText: 'What should I do meanwhile?' }).waitFor();
+  ok(await page.locator('.setup .opt', { hasText: 'First words' }).count() === 0, 'gap: no local model on offer, no choice');
+  await shot(page, '07c-gap');
+  await page.locator('.setup .opt', { hasText: 'Filler phrases' }).click();
+  await page.locator('.setup .bubble', { hasText: 'react while you talk' }).waitFor();
+  ok(await page.locator('.setup .opt', { hasText: 'OpenAI' }).count() === 0, 'reflex: an engine with no key is hidden');
+  await shot(page, '07d-reflex');
+  await page.locator('.setup .opt', { hasText: 'Off' }).click();
+  ok(voiceRelay.calls.some((c) => c.body?.includes('"mode":"box"')) && voiceRelay.calls.some((c) => c.body?.includes('"reflex":"off"')), 'setup saved its choices on the relay');
   await page.locator('.setup .bubble', { hasText: 'I’m Frog, and Grok is my brain.' }).waitFor({ timeout: 5000 });
   ok(true, 'done: "I’m Frog, and Grok is my brain."');
-  ok(await page.locator('.prog').innerText() === '✓ Wi-Fi   ✓ Molty   ✓ Agent', 'done: progress all ticked');
+  ok(await page.locator('.prog').innerText() === '✓ Wi-Fi   ✓ Molty   ✓ Agent   ✓ Voice', 'done: progress all ticked');
   await wait(2500);
   ok((await canvasStats(page)).lit > 2000, 'done: Molty keeps dancing on the screen');
   await noOverflow(page, 'done');
   await shot(page, '08-done');
+  // text only: no gap or reflex questions
+  await page.evaluate(() => { location.hash = '#/setup/voice'; });
+  await page.locator('.setup .opt', { hasText: 'Text only' }).click();
+  await page.locator('.setup .bubble', { hasText: 'I’m Frog' }).waitFor({ timeout: 5000 });
+  ok(voiceRelay.calls.some((c) => c.body?.includes('"mode":"off"')), 'text only: saved, straight to done');
+  voiceRelay.state.mode = 'auto'; voiceRelay.state.serving = { tts: 'box', stt: 'box' };
   await page.getByRole('button', { name: 'Open Molty' }).click();
   await page.waitForURL(/#\/status/);
   await page.locator('.facts dd.hi', { hasText: 'molty-k7m2w9c4ya' }).waitFor();
