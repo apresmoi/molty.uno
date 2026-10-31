@@ -15,6 +15,7 @@ const TAU = Math.PI * 2;
 export const ACTIONS = {
   wiggle: 1.4, nod: 1.2, shake_head: 1.3, bounce: 1.2, peek: 2.2,
   glance_left: 1.4, glance_right: 1.4, blink: 0.35, wobble: 1.6, stretch: 1.8, look_up: 1.6, yawn: 2.6,
+  inspect: 4.8, paddle: 3.6,
 };
 export const ACTION_NAMES = Object.keys(ACTIONS);
 
@@ -23,7 +24,7 @@ const env = (t, d, a, r) => ss(t / a) * ss((d - t) / r);
 const bump = (t, a, b) => (t < a || t > b ? 0 : Math.sin(Math.PI * (t - a) / (b - a)));
 
 export function zeroAction() {
-  return { pos: { x: 0, y: 0, z: 0 }, rot: { x: 0, y: 0, z: 0 }, head: { x: 0, y: 0, z: 0 }, spine: { x: 0, y: 0, z: 0 }, squash: 0, lid: 0, look: { x: 0, y: 0 }, mouth: 0 };
+  return { pos: { x: 0, y: 0, z: 0 }, rot: { x: 0, y: 0, z: 0 }, head: { x: 0, y: 0, z: 0 }, spine: { x: 0, y: 0, z: 0 }, squash: 0, lid: 0, look: { x: 0, y: 0 }, mouth: 0, zoom: 0, focus: 0 };
 }
 
 /** The pose offset of action `name` at its time t; all zero outside 0..duration. */
@@ -110,6 +111,27 @@ export function actionPose(name, t) {
       o.mouth = t < 2.2 ? 0.85 * m : 0;
       break;
     }
+    case 'inspect': { // the firmware's camera follows zoom + focus (cute_rig.c); the authoring stage doesn't
+      const e = env(t, d, 0.9, 0.9), s = Math.sin(TAU * 0.55 * (t - 0.9));
+      const look = ss((t - 0.9) / 0.4) * e;
+      o.zoom = 5.5 * e;
+      o.focus = e;
+      o.look.x = 0.8 * s * look;
+      o.look.y = 0.25 * Math.sin(TAU * 0.3 * (t - 0.9)) * look;
+      o.head.y = 0.1 * s * look;
+      o.lid = bump(t, 3.2, 3.5);
+      break;
+    }
+    case 'paddle': {
+      const e = env(t, d, 0.3, 0.5), b = Math.sin(TAU * 1.6 * t);
+      o.pos.y = 0.05 * e * b;
+      o.rot.z = 0.1 * e * Math.sin(TAU * 0.8 * t);
+      o.spine.x = 0.08 * e;
+      o.head.x = 0.1 * e;
+      o.look.y = -0.4 * e;
+      o.squash = -0.04 * e * b;
+      break;
+    }
   }
   return o;
 }
@@ -117,5 +139,5 @@ export function actionPose(name, t) {
 /** The offsets as one flat row, in cute_act_pose_t's field order (the golden's columns). */
 export function actionRow(o) {
   return [o.pos.x, o.pos.y, o.pos.z, o.rot.x, o.rot.y, o.rot.z, o.head.x, o.head.y, o.head.z,
-    o.spine.x, o.spine.y, o.spine.z, o.squash, o.lid, o.look.x, o.look.y, o.mouth];
+    o.spine.x, o.spine.y, o.spine.z, o.squash, o.lid, o.look.x, o.look.y, o.mouth, o.zoom, o.focus];
 }

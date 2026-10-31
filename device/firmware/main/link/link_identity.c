@@ -100,6 +100,7 @@ cJSON *link_identity_hello(void)
     if (molty_board_has(MOLTY_CAP_MIC)) caps[n++] = "trace";   /* listen frames carry the turn trace (ct, lv, cl, rt, wq; end: tr) */
     if (molty_board_has(MOLTY_CAP_MIC)) caps[n++] = "hints";   /* takes {"t":"hint"} while listening: listener reactions */
     caps[n++] = "show"; caps[n++] = "mood"; caps[n++] = "act"; caps[n++] = "creature";
+    caps[n++] = "working";   /* mood working; actions inspect, paddle */
     caps[n++] = "react";   /* mood {react:true}: shown, never counted as an explicit mood (the turn's ack stays) */
     if (molty_board_has(MOLTY_CAP_TOUCH)) caps[n++] = "ask";   /* answered by a tap */
     if (molty_board_has(MOLTY_CAP_TOUCH)) caps[n++] = "update";   /* self-update, confirmed by a tap */

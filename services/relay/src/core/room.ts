@@ -54,7 +54,7 @@ import {
   type ActivityOwnerRequest,
 } from "./api.js";
 import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
-import { ACK_CAP, ACK_MODES, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
+import { WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
 import { PcmFeed, estimateSpeechMs, splitSpeech, synthesize } from "./speech.js";
 import { DEFAULT_PARTIAL_POLICY, DRAFT_DROPPED_EVENT, DRAFT_USED_EVENT, type DropReason, PARTIAL_EVENT, PartialChunker, PauseTracker, judgeDraft, words } from "./partials.js";
 import { CALIBRATION, type DraftOutcome, type SpeechStats, addOutcome, addTurn, emptyStats, markMisfire, policyFor, speechSummary } from "./calibration.js";
@@ -1023,6 +1023,14 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         if (caps) return fail("unsupported", "this Molty has no gestures (no `act` in its caps)");
       }
     }
+    if ((cmd.name === "mood" && cmd.args.mood === WORKING_MOOD) || (cmd.name === "act" && WORKING_ACTIONS.includes(cmd.args.action as string))) {
+      const caps = live.getMeta()?.caps;
+      if (!caps?.includes(WORKING_CAP)) {
+        const old = tooOld("working", await this.facts(), await this.releases.latest("wait"));
+        if (old) return fail("firmware_too_old", `this needs Molty firmware ${old.needed} or newer; this Molty runs ${old.current}`, old);
+        return fail("unsupported", "this Molty has no working mood (no `working` in its caps)");
+      }
+    }
     if (cmd.name === "quick") {
       if (live.getMeta()?.caps && !live.getMeta()!.caps!.includes("say")) return fail("unsupported", "this device has no speaker");
       return this.quick(hash, by, cmd.args, cmd.in_reply_to);
@@ -1874,7 +1882,26 @@ export class DeviceRoom implements AgentApi, OwnerApi {
    * device is only told once the first audio exists, so such a failure never
    * touches it.
    */
-  private async speak(id: string, text: string, voice: string | undefined, untilDone: boolean, marks?: SayMarks, prepared?: Prepared): Promise<SpeakResult> {
+  /**
+   * speakNow, and the cues the device must not get: `[working]` waits for the say's real end
+   * (say.done), then becomes the mood, so the say's own "back to idle" cannot undo it; the
+   * working gestures go only to firmware that has them.
+   */
+  private async speak(id: string, text: string, voice: string | undefined, untilDone: boolean, marks?: SayMarks, prepared?: Prepared) {
+    const working = !!this.liveSocket()?.getMeta()?.caps?.includes(WORKING_CAP);
+    const wantsWork = !!marks?.some((m) => m[1] === WORKING_MOOD);
+    const kept = marks?.filter((m) => m[1] !== WORKING_MOOD && (working || !WORKING_ACTIONS.includes(m[1])));
+    const rev = this.screenRev;
+    const r = await this.speakNow(id, text, voice, untilDone || wantsWork, kept, prepared);
+    // an explicit mood during the say (the work was called off) has the last word
+    if (r.ok && wantsWork && working && rev === this.screenRev && this.screenInFlight === 0) {
+      const m = await this.sendCmd("mood", { mood: WORKING_MOOD });
+      if (!m.ok) this.log("auto mood failed", { device: this.deviceId, mood: WORKING_MOOD, error: m.error });
+    }
+    return r;
+  }
+
+  private async speakNow(id: string, text: string, voice: string | undefined, untilDone: boolean, marks?: SayMarks, prepared?: Prepared): Promise<SpeakResult> {
     const t0 = this.clock.now();
     const ready = prepared ?? (await this.prepareSpeech(text, voice));
     if (!("pick" in ready)) return ready;
@@ -3817,7 +3844,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     // Nothing queued behind it: back to thinking (the agent is still working on the answer) — sent
     // while this job still holds the speaker, so it never lands after the say that comes next.
     const followed = this.handoff?.after === id;
-    if (r.ok && !followed && !(filler && args.ack === "off") && rev === this.screenRev && this.screenInFlight === 0 && this.pendingAsks.size === 0) {
+    const toWork = (args.marks as SayMarks | undefined)?.some((m) => m[1] === WORKING_MOOD);
+    if (r.ok && !followed && !toWork && !(filler && args.ack === "off") && rev === this.screenRev && this.screenInFlight === 0 && this.pendingAsks.size === 0) {
       void this.sendCmd("mood", { mood: "thinking", hold_s: this.t.thinkHoldS }).then((m) => {
         if (!m.ok) this.log("auto mood failed", { device: this.deviceId, mood: "thinking", error: m.error });
       });
