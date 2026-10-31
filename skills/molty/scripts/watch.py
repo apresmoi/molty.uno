@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Molty events, one line each (utterance, shake, tap, button, answer, ...).
+"""Molty events, one line each (utterance, utterance.partial, draft.used / draft.dropped, shake, tap, button, answer, ...).
 
 watch.py               forever, from now on (run it under a monitor / in the background)
 watch.py --once [N]    your unread events (waiting up to N s, default 0), then exit
@@ -40,7 +40,15 @@ def show(events):
     for e in events:
         t, data = e.get("type"), e.get("data") or {}
         if t == "utterance":
-            print(f"MOLTY utterance: {data.get('text')!r} (reason {data.get('reason')}, turn {data.get('turn_id')})", flush=True)
+            claimed = ", claimed by another agent's opener: stay quiet" if data.get("claimed") else ""
+            print(f"MOLTY utterance: {data.get('text')!r} (reason {data.get('reason')}, turn {data.get('turn_id')}{claimed})", flush=True)
+        elif t == "utterance.partial":
+            # context only: the human is still talking (say/talk get human_speaking until the utterance)
+            print(f"MOLTY partial (still talking, don't answer): {data.get('text_so_far')!r} (turn {data.get('turn_id')}, seq {data.get('seq')})", flush=True)
+        elif t == "draft.used":
+            print(f"MOLTY draft.used: your opener {data.get('opener')!r} is playing: continue with --reply {data.get('turn_id')}", flush=True)
+        elif t == "draft.dropped":
+            print(f"MOLTY draft.dropped ({data.get('reason')}): answer the utterance as usual (turn {data.get('turn_id')})", flush=True)
         else:
             print(f"MOLTY {t}: {json.dumps(data)[:160]}", flush=True)
 

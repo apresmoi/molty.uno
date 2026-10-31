@@ -9,9 +9,11 @@ Molty talks back. When your human touches it, the relay records an event:
 | `tap` | `{"x": 0..1, "y": 0..1}` (screen position) |
 | `button` | `{"id": "accept"}` or `{"id": "reject"}` — the board's physical buttons. Not an answer to a question: they mean acknowledge / dismiss whatever you showed (see [etiquette.md](etiquette.md)). Answers to a question come only as `answer` |
 | `answer` | `{"job": "…", "index": 0, "label": "yes"}`, or `{"job", "index": null, "label": null, "reason": "timeout"}` — how an ask ended |
+| `utterance.partial` | `{"turn_id": "…", "seq": 1, "text_so_far": "what's on my calendar", "new_text": "what's on my calendar", "elapsed_ms": 3200}` — the human is **still talking**: context only (see While the human speaks) |
+| `draft.used` | `{"turn_id", "based_on", "opener", "new_words", "job"}` — to you only: your draft's opener is playing, you own the turn |
+| `draft.dropped` | `{"turn_id", "based_on", "reason", "new_words"?}` — to you only: your draft will not be spoken; answer the `utterance` as usual |
 
-Ignore event types you don't know: more will come (e.g. partial transcripts while the human is still
-talking — never speak while the human talks).
+Ignore event types you don't know: more will come. Whatever comes, never speak while the human talks.
 
 Each event is `{"id":"e42","type":"shake","ts":<unix ms>,"data":{…}}`.
 
@@ -34,6 +36,26 @@ with the human's words — nothing at all when nobody spoke. You also get the `s
    call and to your first audio — your real response time.
 
 The setting off (or older firmware): a plain `shake` (no `listening`) — a nudge, as before.
+
+An `utterance` with `"claimed": true`: another agent's draft opener already answers it — stay quiet.
+
+## While the human speaks
+
+With the owner's voice box, a longer turn also brings **`utterance.partial`** events while the
+human is still talking: chunks by meaning (a sentence end, or about a third of how long this human
+usually talks), never word by word, none before the turn ran ~3 s. `seq` counts them per turn,
+`text_so_far` is everything heard so far, `new_text` what this one adds.
+
+- **They are context, not a question.** The relay enforces it: until the `utterance`, your `say` /
+  `talk` / `ask` / `mood` / `show` get `409 human_speaking`. Think ahead; don't answer.
+- Two things are allowed meanwhile: **`draft`** a short opener (played the instant they finish, if
+  their last words don't change the meaning — then `draft.used` and the turn is yours; otherwise
+  `draft.dropped`), and **`react`** with a mood on the screen (no sound, ≤ 1 per 3 s). See
+  [api.md](api.md#while-the-human-speaks-draft-and-react) and
+  [talking-fast.md](talking-fast.md#drafts-a-head-start-not-an-answer).
+- Webhooks get partials **only when you ask** (`"events": ["utterance.partial", "utterance", …]`):
+  they are chatty. Pull and ride-along carry them as usual. `draft.used` / `draft.dropped` reach
+  only the agent that drafted.
 
 ## Inbox
 
@@ -66,6 +88,9 @@ Helper: `watch.py` (forever) or `watch.py --once [wait_s]`.
 ```json
 {"url":"https://<your-host>/…","method"?:"POST","headers"?:{…},"body"?:"<template>","content_type"?:"application/json","events"?:["utterance"]}
 ```
+
+`events` limits the types sent; without it you get every type **except `utterance.partial`**,
+which a webhook only gets when it names it.
 
 - The relay sends it per event, filling `{{event.type}}` `{{event.id}}` `{{event.ts}}`
   `{{event.data}}` `{{event.data.<field>}}` (nested up to 3 deep: `{{event.data.ms.speech}}`,

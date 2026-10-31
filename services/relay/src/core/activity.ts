@@ -5,9 +5,12 @@
 // What lands here: one entry per authenticated agent call (op, args summary with secrets
 // stripped, outcome), one per job end (stage timings, voice provider + fallback, reason,
 // heard / said), device events (connect / disconnect with close codes, refused hellos,
-// shake / tap / button), pairing changes, voice box connect / disconnect / unpair, owner
-// setting changes, and the device's own log lines (device -> relay `log` frames), which
-// carry the job id of the work they belong to. Device uptime becomes wall time here.
+// shake / tap / button, a turn's utterance with its words / partials / drafts counts, each
+// draft's outcome — used / dropped, to its agent — and misfires), pairing changes, voice box
+// connect / disconnect / unpair, owner setting changes and calibration changes (the partial
+// policy, the draft threshold), and the device's own log lines (device -> relay `log` frames),
+// which carry the job id of the work they belong to. Device uptime becomes wall time here.
+// Notes (core/notes.ts) log their op and key only, never a value.
 //
 // Storage: entries are appended into chunks `al:c:<n>` (<= CHUNK_ENTRIES entries and
 // <= CHUNK_BYTES of JSON each); `al:h` points at the head and tail chunk. An append is
@@ -138,7 +141,7 @@ const SECRET_KEY = /secret|token|key|auth|passw|cookie|signature|credential|link
 /** An agent token, or anything shaped like a bearer credential. */
 const SECRET_VALUE = /^(?:Bearer\s+\S+|molty-[a-z2-9]{10}\.[A-Za-z0-9_-]{20,}|[A-Za-z0-9_-]{40,})$/;
 /** Transcript-bearing fields: of call args (say / talk / ask / show) and of job data. */
-const TRANSCRIPT_ARGS = ["text", "say"];
+const TRANSCRIPT_ARGS = ["text", "say", "opener"];
 const TRANSCRIPT_DATA = ["heard", "said", "text"];
 /** Polls: logged only when they fail (a long-polling agent would wash the log out). */
 const QUIET_OPS = new Set(["wait", "events", "activity"]);
@@ -248,6 +251,7 @@ function redact(e: ActivityDraft): boolean {
     box.end.word = "";
     did = true;
   }
+  if (e.kind === "device" && e.ev === "draft.used") strip(e.data, ["opener"]); // what Molty said first
   return did;
 }
 

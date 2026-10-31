@@ -61,5 +61,18 @@ what you did through Molty and how your human responded:
   acknowledged, dismissed, ignored, said stop).
 - Read it before you act on Molty; let it change what you do: drop what they dismiss or ignore,
   keep what they answer, keep what they invented (a double shake that means "later").
+- Note reactions and openers too: a `react` mid-sentence (did they smile, or lose their
+  thread?), a draft opener that landed or was dropped, a `draft.used` they cut into with a shake
+  (the relay counts that as a misfire). Openers that keep getting dropped are too specific.
 - Never store transcripts or anything sensitive in it; never put the token there.
 - It is yours, per human and per Molty: other agents keep their own.
+- **No memory of your own?** Keep it in the relay's notes, private to your token:
+  `PUT $MOLTY_RELAY/v1/notes {"key":"ledger","value":[…]}` / MCP `molty_notes`
+  ([api.md](api.md#notes-your-private-ledger-store)). Read it at the start of a session.
+
+## While the human talks
+
+They are mid-sentence: **no sound from you** (the relay refuses it anyway: `human_speaking`). At
+most a `react` (a mood on the screen, no sound) when something they say deserves it — one per
+moment, not a running commentary — and a quiet `draft`. Interrupting a person is the fastest way
+to make Molty feel like a machine.

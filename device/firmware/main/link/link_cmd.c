@@ -170,16 +170,23 @@ static esp_err_t cmd_state(const cJSON *args, cJSON **out)
     return state_get(out);
 }
 
+/* `react:true` (cap "react"): an agent's reaction while the human is still talking (the relay
+ * sends it only during an open shake turn, then `listening` again after ~1.5 s). It shows the mood
+ * but is NOT an explicit one: the listen's end still acknowledges the turn (chirp + thinking,
+ * link_ack_decide) and still falls back to idle, and a pending question stays up. */
 static esp_err_t cmd_mood(const cJSON *args, cJSON **out)
 {
     (void)out;
     const char *mood; double hold_s;
     if (!link_mood_args(args, &mood, &hold_s)) return ESP_ERR_INVALID_ARG;
+    const cJSON *react = cJSON_GetObjectItemCaseSensitive(args, "react");
+    if (react && !cJSON_IsBool(react)) return ESP_ERR_INVALID_ARG;
+    bool explicit_mood = !cJSON_IsTrue(react);
     mood_lock();
     esp_err_t e = link_cmd_mood(mood, hold_s);
-    if (e == ESP_OK) atomic_fetch_add(&s_mood_gen, 1);
+    if (e == ESP_OK && explicit_mood) atomic_fetch_add(&s_mood_gen, 1);
     mood_unlock();
-    if (e == ESP_OK) link_ask_cancel();
+    if (e == ESP_OK && explicit_mood) link_ask_cancel();
     return e;
 }
 

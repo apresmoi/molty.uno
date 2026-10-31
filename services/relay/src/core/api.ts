@@ -2,7 +2,10 @@
 // only this; hosts (Durable Object, Node) implement RelayBackend.
 
 import type { AgentEvent } from "./events.js";
+import type { NotesRequest } from "./notes.js";
 import type { JsonObject } from "./protocol.js";
+
+export type { NotesRequest };
 
 export type ErrorCode =
   | "unauthorized"
@@ -12,6 +15,10 @@ export type ErrorCode =
   | "device_timeout"
   | "audio_busy"
   | "turn_claimed"
+  | "human_speaking"
+  | "turn_closed"
+  | "rate_limited"
+  | "too_large"
   | "unsupported"
   | "not_found"
   | "bad_link_code"
@@ -144,6 +151,17 @@ export interface AgentApi {
    * them; never another agent's. `req`: {since?, limit?, kind?, job?, errors?} (raw; parsed here).
    */
   activityLog(token: string, req: unknown): Promise<Outcome>;
+  /**
+   * While the human is still talking (an open shake turn): hold a short opener for their turn
+   * (core/partials.ts). `{turn_id, based_on, opener, max_new_words?, voice?}` → `{turn_id,
+   * based_on, status:"held", max_new_words}`; the relay pre-synthesises it and, at the turn's end,
+   * plays it at once (draft.used) or drops it (draft.dropped).
+   */
+  draft(token: string, req: unknown): Promise<Outcome>;
+  /** While the human is still talking: a mood (screen only, no sound) over the listening animation, ≤ 1 per 3 s. */
+  react(token: string, req: unknown): Promise<Outcome>;
+  /** This agent's private notes (core/notes.ts): list / get / put / delete; no other token can read them. */
+  notes(token: string, req: NotesRequest): Promise<Outcome>;
 }
 
 export type VoiceMode = "auto" | "box" | "cloud";
@@ -170,6 +188,8 @@ export interface OwnerApi {
    * (link code); agents have no route to it. not_found when never kept or expired.
    */
   ownerAudio(linkCode: string, job: string): Promise<Outcome<{ wav: Uint8Array }>>;
+  /** How this Molty's human talks and what the relay derived from it (core/calibration.ts); reset: start over. */
+  speechStats(linkCode: string, req: { action: "get" | "reset" }): Promise<Outcome>;
 }
 
 export interface RelayBackend {

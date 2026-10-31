@@ -118,6 +118,26 @@ const activityRelay = {
   },
 };
 
+// The relay's owner speech API (GET|DELETE /v1/devices/<id>/speech, X-Molty-Link-Code): a calibrated human.
+const speechRelay = {
+  calls: [],
+  stats: {
+    turns: { sampled: 12, total: 30, needed: 8 }, words: { median: 14, p25: 8, p75: 22 }, seconds: { median: 4.6, p25: 2.9, p75: 7.1 },
+    wpm: 182, pauses: { per_turn: 1, max_ms: 900 }, policy: { source: 'calibrated', lead_ms: 3000, every_words: 5, every_ms: 2000, max_per_turn: 8 },
+    drafts: { made: 10, used: 6, misfires: 1, dropped: { new_words: 2, meaning: 1 }, use_rate: 0.7, misfire_rate: 0.14, threshold: 5, threshold_bounds: [1, 10] },
+    partials: 20, reacts: 3, updated: T0,
+  },
+  async route(r) {
+    const req = r.request();
+    if (req.method() === 'OPTIONS') return r.fulfill({ status: 204, headers: VOICE_CORS });
+    const code = req.headers()['x-molty-link-code'];
+    this.calls.push({ method: req.method(), code });
+    if (code !== 'K7QX2MPA') return r.fulfill({ status: 401, headers: VOICE_CORS, contentType: 'application/json', body: '{"ok":false,"error":"unauthorized"}' });
+    if (req.method() === 'DELETE') this.stats = { ...this.stats, turns: { sampled: 0, total: 0, needed: 8 }, words: { median: null, p25: null, p75: null }, seconds: { median: null, p25: null, p75: null }, wpm: null, pauses: { per_turn: null, max_ms: null }, policy: { ...this.stats.policy, source: 'defaults', every_words: 8, every_ms: 4000 }, drafts: { ...this.stats.drafts, made: 0, used: 0, misfires: 0, dropped: {}, use_rate: null, misfire_rate: null, threshold: 4 }, partials: 0, reacts: 0 };
+    return r.fulfill({ status: 200, headers: VOICE_CORS, contentType: 'application/json', body: JSON.stringify({ ok: true, result: this.stats }) });
+  },
+};
+
 const browser = await chromium.launch();
 async function newPage(tag, { offline = false, viewport = PHONE } = {}) {
   const ctx = await browser.newContext({ viewport, deviceScaleFactor: 2 });
@@ -128,6 +148,7 @@ async function newPage(tag, { offline = false, viewport = PHONE } = {}) {
   await ctx.route('**/v1/devices/*/voice', (r) => voiceRelay.route(r));
   await ctx.route('**/v1/devices/*/activity*', (r) => activityRelay.route(r));
   await ctx.route('**/v1/devices/*/activity/audio/*', (r) => activityRelay.audio(r));
+  await ctx.route('**/v1/devices/*/speech', (r) => speechRelay.route(r));
   const page = await ctx.newPage();
   page.on('console', (m) => {
     if (m.type() !== 'error' && m.type() !== 'warning') return;
@@ -398,6 +419,17 @@ const canvasStats = (page) => page.evaluate(() => {
   ok(await page.getByRole('group', { name: 'keep audio for debugging' }).getByRole('button', { name: 'on' }).isDisabled(), 'keep audio: can’t be turned on while transcripts are off');
   ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'activity: no horizontal scroll at 390px');
   await shot(page, '11d-activity-errors');
+  // speech habits: the relay's calibration, read with the link code; "start over" resets it
+  const habits = page.getByLabel('speech habits');
+  await habits.waitFor();
+  ok(speechRelay.calls.every((c) => c.code === 'K7QX2MPA'), 'speech habits: relay calls carry the current link code');
+  ok(await habits.getByText('14 words, 4.6 s (usually 8–22 words)').isVisible(), 'speech habits: a typical turn');
+  ok(await habits.getByText('tuned: every 5 words or 2 s, none in the first 3 s').isVisible(), 'speech habits: the partial policy');
+  ok(await habits.getByText(/6 played of 10 drafted \(70 %\)/).isVisible(), 'speech habits: the draft record');
+  await page.getByRole('button', { name: 'start over' }).click();
+  await habits.getByText('none drafted yet').waitFor();
+  ok(speechRelay.calls.some((c) => c.method === 'DELETE'), 'speech habits: start over resets on the relay');
+  ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'speech habits: no horizontal scroll at 390px');
 
   await page.goto(`${MOCK}/#/molty`);
   await page.locator('.creature img').first().waitFor();
