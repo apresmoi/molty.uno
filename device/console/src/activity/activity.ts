@@ -140,7 +140,7 @@ export function isError(e: ActivityEntry): boolean {
   return false;
 }
 
-export interface Filters { agent?: string; kind?: string; errors?: boolean }
+export interface Filters { agent?: string; kind?: string; errors?: boolean; q?: string }
 
 /** One turn (a job's call + job end + its device lines) or one standalone entry. */
 export interface Group {
@@ -205,10 +205,24 @@ export function groupEntries(entries: ActivityEntry[]): Group[] {
 
 /** Filters groups: agent (a group's agent), kind (any entry of that kind), errors only (any error in it). */
 export function filterGroups(groups: Group[], f: Filters): Group[] {
+  const words = (f.q ?? '').toLowerCase().split(/\s+/).filter(Boolean);
   return groups.filter((g) =>
-    (!f.agent || g.agent === f.agent)
+    (!words.length || matches(g, words))
+    && (!f.agent || g.agent === f.agent)
     && (!f.kind || g.entries.some((e) => e.kind === f.kind))
     && (!f.errors || g.outcome === 'failed' || g.outcome === 'error' || g.entries.some(isError)));
+}
+
+/** Every word appears somewhere in the turn: its line, the words said, its device log, any field. */
+function matches(g: Group, words: string[]): boolean {
+  const text = `${g.agent ?? 'molty'} ${g.op} ${entryLine(g.entries[0])} ${JSON.stringify(g.entries)}`.toLowerCase();
+  return words.every((w) => text.includes(w));
+}
+
+/** The rows to draw for a scroll position: [first, end) of n fixed-height rows, plus a margin. */
+export function visibleRange(scrollTop: number, height: number, rowH: number, n: number, margin = 10): [number, number] {
+  const first = Math.max(0, Math.floor(scrollTop / rowH) - margin);
+  return [first, Math.min(n, Math.ceil((scrollTop + height) / rowH) + margin)];
 }
 
 /** The agent names seen, sorted. */

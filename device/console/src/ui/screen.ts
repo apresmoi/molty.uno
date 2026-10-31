@@ -51,7 +51,7 @@ export function moltyScreen(api: DeviceApi, px = 248): MoltyScreen {
       try { stage ??= new Ctor(px); } catch (e) { console.info('molty: fluid stage failed', e); Ctor = null; }
     }
     if (Ctor && stage) { stage.setSize(px); el.replaceChildren(stage.el); mode = 'fluid'; apply(); }
-    else { pv = preview(api, { size: px }); el.replaceChildren(pv.el); mode = 'device'; }
+    else { pv = preview(api, { auto: true, size: px }); el.replaceChildren(pv.el); mode = 'device'; }
     el.dataset.mode = mode;
   });
   const set = (c: Cmd) => { cmd = c; apply(); };

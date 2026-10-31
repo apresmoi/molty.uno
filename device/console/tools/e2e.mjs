@@ -491,22 +491,30 @@ const canvasStats = (page) => page.evaluate(() => {
   await page.locator('.chip.dim', { hasText: 'Voice box' }).first().waitFor();
   ok(voiceRelay.calls.some((c) => c.method === 'DELETE'), 'settings voice: unpair');
 
+  await page.goto(`${MOCK}/#/status`);
+  await page.getByRole('button', { name: 'Show live view' }).waitFor();
+  await wait(1200);
+  ok(!(await mockLog()).slice(-40).some((l) => l.path === '/api/framebuffer'), 'live view: off until asked for, it slows Molty');
+  await page.getByRole('button', { name: 'Show live view' }).click();
+  await page.locator('.pv-status', { hasText: /^live/ }).waitFor({ timeout: 8000 });
+  ok(true, 'live view: starts when asked for');
   // Activity: the relay's merged timeline, grouped by turn, through the link code from GET /api/link
   await page.goto(`${MOCK}/#/activity`);
-  const turns = page.locator('.act-turn');
-  await turns.first().waitFor({ timeout: 5000 });
+  const row = (t) => page.locator('.act-row', { hasText: t });
+  const open = async (t) => { await row(t).click(); await page.locator('.act-detail-head').waitFor(); return page.locator('.act-detail'); };
+  await page.locator('.act-row').first().waitFor({ timeout: 5000 });
   ok(activityRelay.calls.every((c) => c.code === 'K7QX2MPA'), 'activity: relay calls carry the current link code');
-  ok(await turns.count() === 3, 'activity: three turns (one per job)');
-  ok(await page.locator('.act-item', { hasText: 'molty disconnected ⠂ close 1006' }).count() === 1, 'activity: device disconnect with its close code');
+  ok(activityRelay.calls[0].since === 'a0', 'activity: loads the whole kept log, not just the last page');
+  ok(await row('voice_box_offline').count() === 1 && await row('listen').count() === 1, 'activity: one line per turn');
+  ok(await row('molty disconnected ⠂ close 1006').count() === 1, 'activity: device disconnect with its close code');
   // the agent's name is the row's own column, the line says what happened (not the name twice)
-  const pairRow = page.locator('.act-item', { hasText: 'Grokbot' }).filter({ hasText: 'paired' });
+  const pairRow = page.locator('.act-row', { hasText: 'Grokbot' }).filter({ hasText: 'paired' });
   ok(await pairRow.count() === 1 && !(await pairRow.innerText()).includes('Grokbot Grokbot'), 'activity: pairing shown');
-  ok((await turns.first().locator(':scope > summary').innerText()).includes('listen'), 'activity: newest turn first');
-  ok((await turns.nth(1).locator(':scope > summary').innerText()).includes('Grokbot'), 'activity: then the older ones');
+  ok((await page.locator('.act-row').last().innerText()).includes('listen'), 'activity: newest line at the bottom');
+  ok(await page.evaluate(() => { const t = document.querySelector('.act-term'); return t.scrollTop + t.clientHeight >= t.scrollHeight - 1; }), 'activity: opens on the newest line');
   // the shake turn: its trace as a timeline, the webhook and the reply joined to it, its audio
-  const shakeTurn = turns.first();
-  ok((await shakeTurn.locator(':scope > summary').innerText()).includes('molty'), 'activity: a shake listen is molty’s own (not the webhook’s agent)');
-  await shakeTurn.locator(':scope > summary').click();
+  ok((await row('listen').innerText()).includes('molty'), 'activity: a shake listen is molty’s own (not the webhook’s agent)');
+  const shakeTurn = await open('listen');
   const tl = shakeTurn.locator('details.act-trace');
   ok((await tl.locator('summary').innerText()).includes('lost 3.2 s of audio (captured 5.4 s in 9.0 s)'), 'trace: summary leads with the lost audio');
   await tl.locator('summary').click();
@@ -531,9 +539,7 @@ const canvasStats = (page) => page.evaluate(() => {
   await ka.click();
   await page.locator('.switch.on[aria-label="Keep recordings for debugging"]').waitFor();
   ok(activityRelay.calls.some((c) => c.method === 'POST' && JSON.parse(c.body).keep_audio === true), 'keep audio: on sent to the relay');
-  await shakeTurn.locator(':scope > summary').click();   // fold it back: the rest of the walk-through reads the others
-  const done = turns.filter({ has: page.locator('summary', { hasText: 'Claude' }) });
-  await done.locator(':scope > summary').click();
+  const done = await open(/Claude\s*talk/);
   ok(await done.getByLabel('stage timings').getByText('say · tts_first_byte').isVisible(), 'activity: expanded turn shows stage timings');
   ok(await done.getByText('speaks with voice box ⠂ listens with voice box').isVisible(), 'activity: voice provider');
   ok(await done.getByText('“yes please, green tea”').isVisible(), 'activity: heard text');
@@ -541,16 +547,24 @@ const canvasStats = (page) => page.evaluate(() => {
   ok(await done.locator('.act-line.warn').count() === 1, 'activity: W device line highlighted');
   await wait(3500);   // one live poll (since=next) must keep the expanded turn open
   ok(activityRelay.calls.some((c) => c.method === 'GET' && c.since === 'a14'), 'activity: live poll asks since the last id');
-  ok(await done.getAttribute('open') !== null, 'activity: an expanded turn survives the live poll');
+  ok(await done.getByText('“yes please, green tea”').isVisible(), 'activity: an open turn survives the live poll');
   await shot(page, '11c-activity');
   await page.getByRole('button', { name: 'Errors only' }).click();
-  await page.locator('.act-turn', { hasText: 'Claude' }).waitFor({ state: 'detached' });
-  ok(await page.locator('.act-turn').count() === 1 && (await page.locator('.act-turn').innerText()).includes('voice_box_offline'), 'activity: errors only → just the failed turn');
-  ok(await page.locator('.act-item').count() === 0, 'activity: errors only hides the ok events');
+  await row('Claude').first().waitFor({ state: 'detached' });
+  ok(await page.locator('.act-row').count() === 1 && (await page.locator('.act-row').innerText()).includes('voice_box_offline'), 'activity: errors only → just the failed turn');
   await page.getByRole('button', { name: 'Errors only' }).click();
   await page.getByLabel('agent', { exact: true }).selectOption('Grokbot');
-  ok(await page.locator('.act-turn').count() === 1 && await page.locator('.act-item', { hasText: 'Claude' }).count() === 0, 'activity: agent filter');
+  ok(await row('voice_box_offline').count() === 1 && await row('Claude').count() === 0, 'activity: agent filter');
   await page.getByLabel('agent', { exact: true }).selectOption('');
+  await page.keyboard.press('/');
+  ok(await page.getByLabel('search the log').evaluate((el) => el === document.activeElement), 'search: / focuses it');
+  await page.keyboard.type('GREEN tea');
+  ok(await page.locator('.act-row').count() === 1 && await row('talk').count() === 1, 'search: finds the turn by what was heard, any case');
+  ok((await page.locator('.act-status').innerText()).includes('1 of'), 'search: says how many match');
+  await page.keyboard.type(' nope');
+  ok(await page.locator('.act-row').count() === 0 && await page.locator('.act-status', { hasText: 'Nothing matches.' }).isVisible(), 'search: every word must match');
+  await page.keyboard.press('Escape');
+  ok(await page.locator('.act-row').count() > 1, 'search: Escape clears it');
   const tr = page.getByRole('switch', { name: 'Keep the words' });
   ok(await tr.getAttribute('aria-checked') === 'true', 'activity: transcripts on by default');
   await tr.click();
@@ -672,7 +686,8 @@ if (REAL) {
   const page = await newPage('real', { viewport: { width: 1100, height: 900 } });
   await page.goto(`${MOCK}/?device=${encodeURIComponent(REAL)}#/status`);
   await page.locator('.facts dd', { hasText: /^molty-/ }).waitFor({ state: 'attached', timeout: 15000 });
-  await page.locator('.pv-status', { hasText: 'live' }).waitFor({ timeout: 15000 });
+  await page.getByRole('button', { name: 'Show live view' }).click();
+  await page.locator('.pv-status', { hasText: /^live/ }).waitFor({ timeout: 15000 });
   await shot(page, '20-status-real');
   await page.goto(`${MOCK}/?device=${encodeURIComponent(REAL)}#/agent`);
   await page.locator('.msg pre', { hasText: 'molty-' }).waitFor({ timeout: 10000 });

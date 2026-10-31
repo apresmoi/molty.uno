@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ActivityApiError, agentsOf, entryLine, filterGroups, getActivity, groupEntries, isError, mergeEntries, setTranscripts, timingRows, transcript, voiceLine,
+  ActivityApiError, agentsOf, entryLine, filterGroups, getActivity, groupEntries, isError, mergeEntries, setTranscripts, timingRows, transcript, visibleRange, voiceLine,
   type ActivityEntry,
 } from './activity';
 
@@ -111,5 +111,22 @@ describe('turn details', () => {
   it('summarises standalone entries', () => {
     expect(entryLine(E[4])).toBe('molty disconnected ⠂ close 1006');
     expect(entryLine(E[0])).toBe('paired');
+  });
+});
+
+describe('search and the visible window', () => {
+  const gs = groupEntries([
+    { id: 'a1', ts: 1, kind: 'job', job: 'j1', op: 'talk', data: { heard: 'Green tea please' } },
+    { id: 'a2', ts: 2, kind: 'device_log', job: 'j2', data: { text: 'wifi lost' } },
+  ] as never);
+  it('needs every word, anywhere in the turn, in any case', () => {
+    expect(filterGroups(gs, { q: 'GREEN please' }).map((g) => g.job)).toEqual(['j1']);
+    expect(filterGroups(gs, { q: 'green wifi' })).toEqual([]);
+    expect(filterGroups(gs, { q: '  ' })).toHaveLength(2);
+  });
+  it('draws only what is on screen', () => {
+    expect(visibleRange(0, 240, 24, 3000, 0)).toEqual([0, 10]);
+    expect(visibleRange(2400, 240, 24, 3000, 5)).toEqual([95, 115]);
+    expect(visibleRange(71760, 240, 24, 3000, 5)).toEqual([2985, 3000]);
   });
 });
