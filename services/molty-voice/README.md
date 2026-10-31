@@ -69,6 +69,12 @@ molty-voice run --default-voice expresso/ex03-ex01_calm_001_channel2_1081s.wav \
 Flags override the config file (`--name`, `--voices a.wav,b.wav`, `--no-stt`, `--no-tts`,
 `--api-key`, `--reflex`).
 
+**First words**: `--opener` (or `"opener": true` in the config) offers the relay a very small model that
+starts Molty's reply before the agent can speak. It needs Ollama on the box with the model pulled:
+`ollama pull qwen3:1.7b` (`opener_url`, `opener_model` in the config). The bridge loads it on connect
+and keeps it loaded (about 1.4 GB; about 60 ms a line). No model: a warning, and no first words. The owner
+turns it on in the console; the relay's guard decides what may be said.
+
 **Molty's reflex** (docs/AGENT-LINK.md "Reflex"): `--reflex` (or `"reflex": true` in the config)
 loads a small emotion classifier — `SamLowe/roberta-base-go_emotions-onnx`, int8 ONNX, ~125 MB,
 on the CPU (~35 ms a phrase with 4 threads; nothing on the GPU next to Kyutai) — and offers it
