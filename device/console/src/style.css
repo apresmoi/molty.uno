@@ -257,3 +257,4 @@ pre.act-lines { max-height: 260px; margin: 8px 0 0; }
 .tone-err { color: var(--err); }
 .tone-warn { color: var(--warn); }
 .tone-ok { color: var(--accent); }
+.setup .opt.choice { flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; }

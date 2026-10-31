@@ -121,7 +121,8 @@ esp_err_t molty_mic_stream_read(int16_t *buf, size_t n, size_t *got) {
 uint8_t sdk_mic_gain = 8;
 uint8_t molty_mic_gain(void) { return sdk_mic_gain; }
 /* a task delay: the clock moves on */
-void vTaskDelay(unsigned ticks) { sdk_now+=(int64_t)ticks*1000; }
+void (*sdk_delay_hook)(void);
+void vTaskDelay(unsigned ticks) { sdk_now+=(int64_t)ticks*1000; if (sdk_delay_hook) sdk_delay_hook(); }
 void molty_mic_stream_stop(void) { assert(sdk_rx_open); sdk_rx_open=false; }
 uint32_t sdk_caps = 0xFFFFFFFFu;
 bool molty_board_has(uint32_t caps) { return caps && (sdk_caps & caps) == caps; }

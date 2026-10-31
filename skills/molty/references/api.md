@@ -43,6 +43,9 @@ curl -sS -X POST "$MOLTY_RELAY/v1/pair" \
 |---|---|---|
 | `bad_link_code` | 403 | code wrong or already used (it rotates every 15 min and after each pairing) — ask the human for a fresh setup message |
 | `device_offline` | 409 | Molty is not connected to the relay — ask the human to check its Wi-Fi/power |
+
+**Short drops are invisible (firmware cap `resume`).** If Molty loses the link mid-turn, its say or listen waits for it: the job reads `"status":"reconnecting"`, a talk comes back as usual once Molty returns (it may take up to ~15 s longer, or `202 pending`: follow it), and nothing is lost or spoken twice. Past the window it fails with `device_offline`, as on older firmware.
+
 | `pair_busy` | 409 | another pairing is awaiting a tap — wait a bit, retry |
 | `rejected` | 403 | the human declined — do not retry unless asked |
 | `timeout` | 408 | nobody tapped in time — retry once the human is ready (on `bad_link_code`, ask for a fresh setup message) |
@@ -360,7 +363,7 @@ your token deletes them.
 |---|---|
 | `401 unauthorized` | bad/missing/revoked token |
 | `400 invalid_args` / `unknown_command` | the call itself is wrong; `message` says why |
-| `409 device_offline` | Molty is not connected (Wi-Fi/power), or dropped off mid-listen |
+| `409 device_offline` | Molty is not connected (Wi-Fi/power), or stayed away past the ~15 s a drop is waited for |
 | `409 audio_busy` | another say/listen is running: wait for it, retry once |
 | `409 unsupported` | the board lacks it (no speaker or mic: `say`/`listen` absent from `relay.caps`; no touch: no ask) |
 | `409 turn_claimed` | another agent is already answering the human's turn: stay quiet ([events.md](events.md#shake-to-talk)) |
