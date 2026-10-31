@@ -415,7 +415,7 @@ describe("a link drop (cap `resume`)", () => {
     const p = w.room.talk(w.token, { say: "Short." }) as Promise<any>;
     await until(() => frames.length >= 1);
     const job = frames[0].header.s as string;
-    await until(async () => ((await w.room.job(w.token, job, 0)) as any).result.status === "reconnecting");
+    while (((await w.room.job(w.token, job, 0)) as any).result.status !== "reconnecting") await pause(5); // past the grace
     const t = Date.now();
     void w.room.socketMessage(w.sock, JSON.stringify({ t: "evt", name: "say.done", data: { job } }));
     await until(() => (w.sock as any).last("cmd")?.name === "listen");
