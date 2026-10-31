@@ -1,57 +1,47 @@
-/* fluid_ring.h — the listening ring's look and motion: EVERY tuning knob in one place.
+/* fluid_ring.h — how a listen looks and moves: EVERY tuning knob in one place.
  *
- * The ring is the fluid itself (fluid_target_ring, a target like the creature's), not a
- * pixel overlay: a thin, soft line just inside the rim that BREATHES — the whole circle
- * expands and contracts, slow and shallow when the room is quiet, quicker and deeper (and
- * a little further out) while the human speaks — and "pings" the fluid's own wave field
- * from the whole rim at once, so circular ripples run inward toward Molty with the voice.
- * Nothing moves around the ring: every point of it does the same thing.
+ * Molty shows it is listening on the water itself. Each syllable-like rise of the voice
+ * drops one touch-style impulse (fluid_sim_impulse, what a fingertip does in poll_touch) at
+ * a new spot, so circular ripples spread and overlap as you speak. A quiet room gets a small
+ * slow drop, so a silent listen still reads as awake. Around it a nearly invisible tinted line
+ * (fluid_target_ring, a target like the creature's) marks the rim and carries ring_color.
  *
  * Units: radii and lengths in stage units (1 = the rim; at 412 px one unit = 206 px, and
  * on the 52×32 grid a cell is ≈ 0.038 wide × 0.0625 tall). Level = the VAD mic level
- * 0..1 (vad_level: room ≈ 0, close speech ≈ 1), arriving at ~10 Hz and smoothed per frame.
+ * 0..1 (vad_level: the loudest moment of each ~100 ms chunk over the room's floor; room ≈ 0,
+ * close speech ≈ 1). Syllables run ~4 Hz, so 10 Hz peaks do show their rises and dips.
  * Tune on the device: change a value, `make firmware`, flash, listen. */
 #pragma once
 
-/* ── shape ─────────────────────────────────────────────────────────────────── */
+/* ── the line: a whisper of the fluid just inside the rim ─────────────────────── */
 #define RING_R            0.875f   /* centre line, of the radius                          */
-#define RING_CORE         0.10f    /* full-ink core, half-width in CELLS (along the ring's
-                                    * normal: a cell is 8 px wide, 13 px tall at 412 / 52×32) */
-#define RING_SOFT         0.90f    /* soft falloff beyond the core, in cells: core + soft =
-                                    * 1 makes an anti-aliased line ONE cell thick at every
-                                    * angle (the old ring was a 2–3 cell band); thinner than
-                                    * that and it breaks up where it falls between two rows */
-
-/* ── strength (target ink 0..1; the creature is ~1, the dim background ~0.1) ──── */
-#define RING_INK          0.30f    /* the calm line                                       */
-#define RING_INK_LEVEL    0.16f    /* + this at full voice (brighter while spoken to)     */
-
-/* ── breathing: the whole ring expands and contracts (no motion around it) ─────── */
-#define RING_BREATH_HZ_IDLE   0.25f  /* breaths/s when quiet (calm, slow)                     */
-#define RING_BREATH_HZ_LEVEL  1.6f   /* + this at full voice (a quicker pulse while spoken to) */
-#define RING_BREATH_AMP_IDLE  0.008f /* radius in/out when quiet (≈ 1.6 px)                   */
-#define RING_BREATH_AMP_LEVEL 0.012f /* + this at full voice (≈ 2.5 px; 0.02 in all ≈ 4 px)     */
-#define RING_SWELL            0.008f /* the ring sits this much further out at full voice (≈ 1.6 px) */
-#define RING_INK_BREATH       0.25f  /* ink rides the breath: out ×(1+this), in ×(1−this)     */
+#define RING_CORE         0.10f    /* full-ink core, half-width in CELLS along the normal  */
+#define RING_SOFT         1.60f    /* soft falloff beyond the core, in cells               */
+#define RING_INK          0.11f    /* target ink (the creature is ~1, the dim background ~0.1) */
+#define RING_INK_LEVEL    0.03f    /* + this at full voice                                 */
 
 /* ── the voice ─────────────────────────────────────────────────────────────── */
-#define RING_LEVEL_GAIN   1.4f     /* mic level × this (clamped to 1): normal speech moves it fully */
-#define RING_ATTACK_S     0.08f    /* level smoothing toward louder (10 Hz in → no steps)  */
-#define RING_DECAY_S      0.45f    /* ...toward quieter: silence settles back to the calm line */
+#define RING_ATTACK_S     0.08f    /* ink's level smoothing toward louder                  */
+#define RING_DECAY_S      0.45f    /* ...toward quieter                                    */
+#define RING_ONSET_MIN    0.22f    /* below this level it is the room, not a voice          */
+#define RING_ONSET_RISE   0.16f    /* a syllable: the level rose this much over its recent low */
+#define RING_LOW_RISE_S   0.40f    /* the recent low creeps up to the level this slowly     */
+#define RING_GAP_S        0.30f    /* never two drops closer than this    */
+#define RING_HOLD_S       0.55f    /* a voice with no rises (a held vowel, a clipped level)
+                                    * still drops this often                                */
 
-/* ── pings: a ripple of the fluid's own surface from the WHOLE rim at once — radially
- *    symmetric, so a circular wave runs inward across the window toward Molty ──────── */
-#define RING_PING_IDLE    0.08f    /* pings/s when quiet (one every ~12 s)                */
-#define RING_PING_LEVEL   0.2f     /* + pings/s at full voice (one every ~3.5 s)          */
-#define RING_PING_S_IDLE  0.03f    /* a quiet ping's height (fluid_sim_impulse units)     */
-#define RING_PING_S_LEVEL 0.08f    /* + height at full voice                              */
-#define RING_PING_WIDTH   0.03f    /* the rim bump's radial width, stage units            */
-/* Frame budget: every ripple of the surface redraws glyph cells across the screen, and
- * redrawn cells are what the device pays for. A rim ping moves cells ALL round the circle
- * (a point ping did not), so pings are the expensive knob: each extra 0.1 ping/s at full
- * voice ≈ +15–20 redrawn cells/frame while spoken to. With these values the ring redraws
- * no more cells than the rotating version did (host bench: 292 vs 295 per frame over a
- * listen, 374 vs 377 while spoken to). Raise pings or the breath in small steps. */
+/* ── the drops: the same impulse as a touch (poll_touch: 1.6, radius 0.09) ────── */
+#define RING_DROP_R       0.09f    /* impulse radius, stage units                           */
+#define RING_DROP_S_MIN   0.50f    /* a soft syllable's height (fluid_sim_impulse units)    */
+#define RING_DROP_S_MAX   1.60f    /* full voice: exactly a fingertip                       */
+#define RING_DROP_REACH   0.72f    /* drops land within this radius of the centre           */
+#define RING_QUIET_S      3.50f    /* quiet room: one small drop this often                 */
+#define RING_QUIET_DROP_S 0.30f    /* ...this high                                          */
+/* Frame budget: every ripple redraws glyph cells, and redrawn cells are what the device pays
+ * for; the drop rate and height are the expensive knobs. Host bench, a blob and 40 s of
+ * phrases at 4 Hz syllables, cells per frame: 592 with these values at ~2 drops/s, against 518
+ * for the old breathing line with rim pings and 299 with no listen; a quiet room costs 321
+ * against the old 369. Raise them in small steps and watch fps on the device. */
 
 /* ── presence ──────────────────────────────────────────────────────────────── */
 #define RING_FADE_S       0.3f     /* fade in when a listen starts / melt out when it ends */
