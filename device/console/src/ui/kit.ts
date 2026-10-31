@@ -3,7 +3,7 @@
 import { h } from './dom';
 
 type Kid = Parameters<typeof h>[2];
-export interface Choice<T extends string = string> { id: T; label: string; hint?: string; sw?: string }
+export interface Choice<T extends string = string> { id: T; label: string; hint?: string; sw?: string; /** Not set up here: shown dim, and what it needs. */ need?: string }
 
 /** What a page is for, in one line. */
 export const pageHead = (title: string, why: string) => [h('h1', null, title), h('p', { class: 'lede' }, why)];
@@ -28,7 +28,7 @@ export const choices = <T extends string>(name: string, options: ReadonlyArray<C
 /** Small answers that fit on a line or two. */
 export const pills = <T extends string>(name: string, options: ReadonlyArray<Choice<T>>, on: T | undefined, pick: (id: T) => unknown) =>
   h('div', { class: 'chips', role: 'group', 'aria-label': name }, options.map((o) => h('button', {
-    type: 'button', class: 'chip' + (o.id === on ? ' on' : ''), 'aria-pressed': String(o.id === on), style: o.sw ? `--sw:${o.sw}` : undefined, title: o.hint, onclick: picking(() => pick(o.id)),
+    type: 'button', class: 'chip' + (o.id === on ? ' on' : '') + (o.need ? ' dim' : ''), 'aria-pressed': String(o.id === on), style: o.sw ? `--sw:${o.sw}` : undefined, title: o.hint, onclick: picking(() => pick(o.id)),
   }, o.sw ? h('span', { class: 'swatch' }) : null, o.label)));
 
 /** "Label, what it means" on the left, its control on the right. */

@@ -20,6 +20,16 @@ p { margin: 6px 0 12px; }
 .why:last-child { margin-bottom: 0; }
 .sec { margin: 32px 0; padding-top: 24px; border-top: 1px solid var(--m-line); }
 .lede + .sec, .lede + div > .sec:first-child { border-top: 0; padding-top: 0; margin-top: 0; }
+.sec.tight { margin: 16px 0; padding-top: 16px; }
+.sec.tight h2 { margin-bottom: 8px; }
+.sec.tight .field:last-child { padding-bottom: 0; }
+.sec.tight .status + .field, .sec.tight .chips + .field { margin-top: 10px; }
+.needs { margin-top: 10px; padding: 12px 14px; border: 1px dashed var(--m-line); border-radius: var(--m-radius); font-size: 13px; line-height: 1.45; }
+.needs p { margin: 0 0 8px; }
+.needs ol { margin: 0; padding-left: 18px; }
+.needs li { margin-top: 6px; }
+.needs .copy { margin-top: 4px; }
+.needs .copy code { word-break: normal; overflow-wrap: anywhere; }
 .sub { margin-top: 20px; }
 .sub.first { margin-top: 12px; }
 .status { font-size: 13px; margin: 12px 0 0; }
@@ -119,6 +129,8 @@ form.connect .row { margin-top: 12px; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip { min-height: 40px; padding: 8px 12px; border: 1px solid var(--m-line); border-radius: var(--m-radius); color: var(--m-ink); background: var(--m-panel); font-size: 13px; line-height: 1.2; }
+.chip.dim { color: var(--m-dim); border-style: dashed; }
+.chip.dim::after { content: " +"; }
 .chip:hover:not(:disabled) { border-color: var(--m-dim); color: var(--m-ink); }
 .chip.on, .chip.on:hover:not(:disabled) { border-color: var(--m-accent); background: var(--m-accent-soft); color: var(--m-ink); font-weight: 600; }
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--sw); margin-right: 7px; }
@@ -142,7 +154,7 @@ form.connect .row { margin-top: 12px; }
 .why + .field { margin-top: 4px; }
 .field-text { min-width: 0; flex: 1; }
 .field-label { font-size: var(--m-text-base); }
-.field select { width: 132px; flex: none; }
+.field select { width: 180px; flex: none; }
 .switch { flex: none; width: 48px; height: 28px; padding: 3px; border: 1px solid var(--m-faint); border-radius: 14px; background: var(--m-panel); display: flex; }
 .switch span { width: 20px; height: 20px; border-radius: 50%; background: var(--m-dim); transition: transform .15s; }
 .switch.on { background: var(--m-accent); border-color: var(--m-accent); }
