@@ -9,7 +9,7 @@ import { parseCues, speechWords } from "../src/core/speech.js";
 import type { TtsOptions } from "../src/voice/types.js";
 import { handleMcp } from "../src/surfaces/mcp.js";
 import { handleRest } from "../src/surfaces/rest.js";
-import { DEVICE, type FakeSocket, FakeVoice, LINK, connect, makeRoom } from "./helpers.js";
+import { DEVICE, type FakeSocket, FakeVoice, LINK, connect, makeRoom, spoken } from "./helpers.js";
 
 const FAST = { cmdTimeoutMs: 300, pairWindowMs: 400, sayChunkSamples: 1600, sayLeadFrames: 2, listenGraceMs: 200, sayDoneGraceMs: 300 };
 const CAPS = ["say", "say_cues", "say_marks", "listen", "act", "ask"];
@@ -258,7 +258,7 @@ describe("say cues on the device", () => {
     const r = await mcp(w.backend, w.token, "molty_talk", { say: "[happy] Hi [nod] there." });
     expect(r.isError).toBe(false);
     expect(r.structuredContent).toMatchObject({ status: "done", said: "Hi there.", heard: "hello molty" });
-    expect(w.voice.ttsCalls.map((c) => c.text)).toEqual(["Hi there."]);
+    expect(spoken(w.voice.ttsCalls.map((c) => c.text))).toEqual(["Hi there."]);
     const cmd = w.dev.cmds("say")[0];
     expect(cmd.text).toBe("Hi there.");
     expect(cmd.marks).toEqual([[0, "happy"], [1, "nod"]]);

@@ -7,7 +7,7 @@ import { decodeAudioFrame, encodeAudioFrame } from "../src/core/protocol.js";
 import type { DeviceRoom } from "../src/core/room.js";
 import { handleMcp } from "../src/surfaces/mcp.js";
 import { handleRest } from "../src/surfaces/rest.js";
-import { DEVICE, type FakeHost, type FakeSocket, LINK, connect, makeRoom } from "./helpers.js";
+import { DEVICE, type FakeHost, type FakeSocket, LINK, connect, makeRoom, spoken } from "./helpers.js";
 
 const FAST = { cmdTimeoutMs: 300, pairWindowMs: 400, sayChunkSamples: 1600, sayLeadFrames: 2, listenGraceMs: 200, sayDoneGraceMs: 300, boxSttFinalMs: 300 };
 const NEXT = ["NEWC2345", "NEWD2345", "NEWE2345", "NEWF2345"];
@@ -309,7 +309,7 @@ describe("voice socket", () => {
       expect(old.sock.meta?.retired).toBe(true); // in the serialized attachment: survives hibernation
       const out = await w.room.talk(w.token, { say: "Hi there." });
       expect(out).toMatchObject({ ok: true, result: { heard: "box heard 3 chunks", timings: { say: { voice: "box" }, listen: { voice: "box" } } } });
-      expect(fresh.tts).toHaveLength(1);
+      expect(spoken(fresh.tts.map((f) => f.text))).toHaveLength(1);
       expect(old.control.filter((f) => f.t === "tts" || f.t === "stt.start")).toHaveLength(0);
     });
 
@@ -381,7 +381,7 @@ describe("provider selection (voice_mode)", () => {
     const w = await setup({ box: false });
     const out = await w.room.talk(w.token, { say: "Hi." });
     expect(out).toMatchObject({ ok: true, result: { heard: "hello molty", timings: { say: { voice: "fake" }, listen: { voice: "fake" } } } });
-    expect(w.voice.ttsCalls).toHaveLength(1);
+    expect(spoken(w.voice.ttsCalls.map((c) => c.text))).toHaveLength(1);
     expect(w.voice.sttCalls).toHaveLength(1);
   });
 
@@ -740,5 +740,29 @@ describe("say word cues from the voice box", () => {
     // segment 2 starts at 3200: word 3 at its own 0.05 s, word 4 estimated
     expect(cues.get(3)).toBe(3200 + 800);
     expect(cues.get(4)).toBe(3200 + Math.round((3200 * 5) / 11));
+  });
+});
+
+describe("quick phrases follow the voice (core/phrases.ts)", () => {
+  it("registered on the box; re-synthesised when the owner changes the voice and when the box goes (auto: the cloud speaks); plays stay TTS-free", async () => {
+    const w = await setup();
+    const text = "Hmm, let me check.";
+    const set = (await w.room.phrases(w.token, { phrases: [{ id: "check", text }] })) as any;
+    expect(set.result).toMatchObject({ voice: "box", phrases: [{ id: "check", ready: true }] });
+    expect(w.box!.tts.filter((f) => f.text === text).map((f) => f.voice)).toEqual([undefined]);
+    // the owner picks another box voice: the phrase is synthesised again, in it
+    await w.room.voiceSettings(w.link, { action: "set", voice: "b.wav" });
+    await until(() => w.box!.tts.filter((f) => f.text === text).length === 2);
+    expect(w.box!.tts.filter((f) => f.text === text).map((f) => f.voice)).toEqual([undefined, "b.wav"]);
+    for (let i = 0; i < 100 && !((await w.room.phrases(w.token, {})) as any).result.phrases[0].ready; i++) await new Promise((r) => setTimeout(r, 5));
+    const before = w.box!.tts.length;
+    const q = (await w.room.command(w.token, "quick", { id: "check" })) as any;
+    expect(q).toMatchObject({ ok: true, result: { cached: true } });
+    expect(await w.room.job(w.token, q.result.job, 3000)).toMatchObject({ ok: true, result: { status: "done", result: { timings: { voice: "box", cached: true } } } });
+    expect(w.box!.tts.length).toBe(before); // no TTS for the play
+    // the box goes away (auto mode): the cloud's voice now, the phrase follows it
+    w.box!.sock.close(1006, "gone");
+    await until(() => w.voice.ttsCalls.some((c) => c.text === text));
+    expect(w.voice.ttsCalls.filter((c) => c.text === text)).toHaveLength(1);
   });
 });

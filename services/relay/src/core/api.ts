@@ -81,7 +81,7 @@ export const TERMINAL: readonly JobStatus[] = ["done", "failed"];
 
 export interface JobView {
   job: string;
-  kind: "say" | "listen" | "talk" | "ask" | "update";
+  kind: "say" | "listen" | "talk" | "ask" | "update" | "quick";
   status: JobStatus;
   result?: JsonObject;
   error?: string;
@@ -162,6 +162,12 @@ export interface AgentApi {
   react(token: string, req: unknown): Promise<Outcome>;
   /** This agent's private notes (core/notes.ts): list / get / put / delete; no other token can read them. */
   notes(token: string, req: NotesRequest): Promise<Outcome>;
+  /**
+   * This agent's quick phrases (core/phrases.ts): `{action:"list"}` | `{action:"set", phrases:[{id,
+   * text}]}` (upsert; the audio is synthesised now, in the device's voice) | `{action:"delete", id |
+   * ids}` (raw; validated here). Always answers the list: `{phrases, builtins, limits, voice}`.
+   */
+  phrases(token: string, req: unknown): Promise<Outcome>;
 }
 
 export type VoiceMode = "auto" | "box" | "cloud";

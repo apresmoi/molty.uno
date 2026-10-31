@@ -200,7 +200,7 @@ class _Rec:
 class SimDevice:
     def __init__(self, relay: str, device_id: str, key: bytes | None = None, *, fw: str = "0.1.0",
                  caps: list[str] | None = None, board: str = BOARD_146, listen_setting_ms: int = 30000,
-                 ack_setting: str = "chirp", tap_delay_s: float = 0.3, accept: bool = True):
+                 ack_setting: str = "chirp", tap_delay_s: float = 0.3, accept: bool = True, filler_ms: int | None = 2500):
         if not device_id.startswith(SIM_PREFIX):
             raise ValueError(f"a sim device id starts with {SIM_PREFIX!r} (it must never impersonate a real Molty)")
         self.relay = relay.rstrip("/")
@@ -208,6 +208,9 @@ class SimDevice:
         self.key = key or secrets.token_bytes(32)
         self.fw, self.caps, self.board = fw, list(caps or CAPS_146), board
         self.listen_setting_ms, self.ack_setting = listen_setting_ms, ack_setting
+        # the owner's auto filler delay (console "filler", NVS), reported in every listen answer like
+        # the firmware; None = older firmware (not reported: the relay's default applies)
+        self.filler_ms = filler_ms
         self.tap_delay_s, self.accept = tap_delay_s, accept
         self.link_code = new_link_code()
         self.welcomed = asyncio.Event()
@@ -390,7 +393,7 @@ class SimDevice:
         rec = ListenRec(job=job, args=dict(a), cmd_at=time.monotonic(), window_ms=window, vad=vad_on, ack_mode=ack, mood_gen0=self._mood_gen)
         self.listens[job] = rec
         self.mood = "listening"
-        await self._reply(f, True, {"job": job, "ms": window, "ack": ack})
+        await self._reply(f, True, {"job": job, "ms": window, "ack": ack, **({"filler_ms": self.filler_ms} if self.filler_ms is not None else {})})
         cfg = vadm.VadCfg(enabled=vad_on, max_ms=window or LISTEN_CEILING_MS, end_silence_ms=es, no_speech_ms=ns)
         self._spawn(self._record(rec, cfg))
 

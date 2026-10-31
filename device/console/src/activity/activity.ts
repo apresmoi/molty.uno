@@ -274,7 +274,7 @@ export function entryLine(e: ActivityEntry): string {
     case 'pair': return `${e.ev === 'approved' ? 'paired' : e.ev === 'revoked' ? 'unpaired' : `pairing ${e.ev ?? ''}`}${d.role === 'voice' ? ' (voice box)' : ''}`;
     case 'voice_box': return `voice box ${e.ev ?? ''}${d.name ? ` ⠂ ${d.name}` : ''}${d.code ? ` ⠂ close ${d.code}` : ''}`;
     case 'settings': return `settings: ${e.ev ?? ''} ${JSON.stringify(d)}`;
-    case 'trace': return `${e.ev === 'webhook' ? 'webhook' : e.ev === 'reply' ? 'reply' : `trace ${e.ev ?? ''}`}${typeof d.status === 'number' ? ` ⠂ ${d.status}` : ''}${typeof d.ms === 'number' ? ` ⠂ ${fmtMs(d.ms)}` : ''}${d.error ? ` ⠂ ${d.error}` : ''}`;
+    case 'trace': return `${e.ev === 'webhook' ? 'webhook' : e.ev === 'reply' ? 'reply' : e.ev === 'filler' ? 'filler' : `trace ${e.ev ?? ''}`}${typeof d.status === 'number' ? ` ⠂ ${d.status}` : ''}${typeof d.ms === 'number' ? ` ⠂ ${fmtMs(d.ms)}` : ''}${d.error ? ` ⠂ ${d.error}` : ''}`;
     case 'call': return `${e.op ?? 'call'}${e.ok === false ? ` → ${e.error ?? 'error'}` : ''}${e.args && Object.keys(e.args).length ? ` ${JSON.stringify(e.args)}` : ''}`;
     default: return `${e.kind}${e.ev ? ` ${e.ev}` : ''}`;
   }

@@ -193,6 +193,11 @@ bool link_listen_setting_ok(double v)
     return v == floor(v) && (v == LINK_LISTEN_UNLIMITED || (v >= LINK_LISTEN_SET_MIN && v <= LINK_LISTEN_MAX_MS));
 }
 
+bool link_filler_setting_ok(double v)
+{
+    return v == floor(v) && (v == LINK_FILLER_OFF || (v >= LINK_FILLER_MIN_MS && v <= LINK_FILLER_MAX_MS));
+}
+
 bool link_listen_window(const cJSON *args, uint32_t dflt, uint32_t *window, uint32_t *record_ms)
 {
     if (!window || !record_ms) return false;

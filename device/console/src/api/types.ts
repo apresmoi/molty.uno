@@ -78,6 +78,8 @@ export interface FluidState {
   listen_ms?: number;
   /** What Molty does itself when you finish speaking: "chirp" | "thinking" | "off" (newer firmware). */
   ack?: string;
+  /** Molty's own filler when no agent answered this long after you finished: 0 = off or 1500..5000 ms (newer firmware). */
+  filler_ms?: number;
   /** Whether a shake makes Molty start listening by itself (newer firmware). */
   shake_talk?: boolean;
   /** How much Molty moves by itself when nobody drives it: "lively" | "calm" | "off" (newer firmware). */
@@ -98,6 +100,7 @@ export interface FluidOrder {
   ring_color?: string; // "#rrggbb" | "accent" — the listening ring's default, kept on the device
   listen_ms?: number; // 0 (unlimited) | 5000..30000 — the default listen window, kept on the device
   ack?: string; // "chirp" | "thinking" | "off" — the turn acknowledgement, kept on the device
+  filler_ms?: number; // 0 (off) | 1500..5000 — the auto filler's delay, kept on the device
   shake_talk?: boolean; // a shake starts a listen by itself (shake to talk), kept on the device
   idle_life?: string; // "lively" | "calm" | "off" — small idle actions when nobody drives it, kept on the device
   ripple?: { x: number; y: number; strength?: number }; // x,y in -1..1, y down

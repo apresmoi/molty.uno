@@ -224,6 +224,9 @@ export class MoltyDevice extends DurableObject<Env> {
   speechStats(deviceId: string, linkCode: string, req: { action: "get" | "reset" }): Promise<Outcome> {
     return this.room(deviceId).speechStats(linkCode, req);
   }
+  phrases(deviceId: string, token: string, req: unknown): Promise<Outcome> {
+    return this.room(deviceId).phrases(token, req);
+  }
 
   // ---- the `releases` singleton (never a device room) ----
   releaseLookup(mode: LookupMode): Promise<ReleaseLookup> {

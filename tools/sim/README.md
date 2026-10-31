@@ -48,7 +48,11 @@ make sim-test                                                # (5)
    and a local `molty-voice` (config in the run dir, deleted at the end), plays the default suite,
    force-aligns the received say audio on the box, prints the table. ~6 min for the default suite.
 4. Bridge tuning goes straight to `molty-voice run`: `--turn-end`, `--turn-end-hold`, `--turn-end-skip`.
-   Other knobs: `--agent llm --llm-model …`, `--agent-gap-ms N`, `--align none`, `--no-audio`.
+   Other knobs: `--agent llm --llm-model …`, `--agent-gap-ms N`, `--filler-ms N` (the sim device's
+   auto filler setting: 0 = off, 1500..5000, default 2500; -1 = not reported), `--align none`, `--no-audio`.
+   A slow agent with and without Molty's own filler: `make sim SIM_ARGS='scenarios/slow-agent.yaml
+   --agent-gap-ms 6000 --filler-ms 0 --align none'`, then the same with `--filler-ms 2500`; compare
+   `silence` (`gap` stays ~6 s either way).
    `molty-sim check [scenario]` parses a scenario offline; `molty-sim show runs/<ts>` reprints a run.
 5. Unit tests of the harness itself (scenario parsing, metrics, VAD port, mic framing, listen_stop,
    the turn-trace uplink: shake settle, resend ring, trace header fields, shake to talk; react moods / gestures,
@@ -75,7 +79,8 @@ does not start with `molty-sim`, so it can never impersonate a real Molty.
 | `cut` / `lost` | turn ended while the clip still had > 150 ms of speech / how much |
 | `WER` | relay transcript vs scenario text (case, punctuation, fillers ignored) |
 | `stt` | relay `timings.listen.stt`: end frame → STT final |
-| `gap` | human stops → Molty's next voice at the speaker; `gap_parts_ms` splits it into eos→turn end, turn end→agent has the transcript, agent think, request→voice |
+| `gap` | human stops → the agent's answer at the speaker; `gap_parts_ms` splits it into eos→turn end, turn end→agent has the transcript, agent think, request→voice |
+| `silence` | human stops → Molty's FIRST voice at the speaker: the relay's auto filler, a quick phrase or the answer (what the human hears as dead air); `filler` names a relay filler that came first |
 | `say 1st` | agent's request → first say audio at the device (relay `first_audio` also kept) |
 | `cue` | median (word cue − forced-aligned word onset) in the received say audio; + = text late |
 | `dry` | say underruns at the speaker |

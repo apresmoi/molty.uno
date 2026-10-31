@@ -174,6 +174,11 @@ export function traceModel(jobEntry: ActivityEntry | undefined, extra: ActivityE
       const bad = !!d.error || status === undefined || status < 200 || status > 299;
       ev(at, 'agent', `webhook → ${who}: ${status ?? d.error ?? 'failed'}${num(d.ms) !== undefined ? ` in ${s(d.ms)}` : ''}${num(d.attempt) && d.attempt > 1 ? ` (attempt ${d.attempt})` : ''}`, bad ? 'err' : 'ok');
       if (bad) summary.push({ text: `webhook to ${who} failed: ${d.error ?? status ?? 'unknown'}`, tone: 'err' });
+    } else if (e.ev === 'filler') {
+      // Molty's own filler (no agent answered within the owner's delay): when it was heard after the human stopped
+      const first = num(d.first_audio_ms);
+      const at = t0 !== undefined ? e.ts - t0 : undefined;
+      ev(at, 'relay', `Molty said its own filler${str(d.text) ? ` "${str(d.text)}"` : ''}${first !== undefined ? `, ${s(first)} after the human stopped` : ''} (no agent yet)`, 'info');
     } else if (e.ev === 'reply') {
       const rep = num(d.reply_ms), first = num(d.first_audio_ms);
       const at = utter !== undefined && rep !== undefined ? utter + rep : t0 !== undefined ? e.ts - t0 : undefined;

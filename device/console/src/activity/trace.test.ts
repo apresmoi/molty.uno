@@ -27,6 +27,8 @@ const job: ActivityEntry = { id: 'a5', ts: T0, kind: 'job', job: J, op: 'listen'
 const hook: ActivityEntry = { id: 'a6', ts: T0 + 5080, kind: 'trace', ev: 'webhook', job: J, agent: 'Claude', data: { status: 200, ms: 180, attempt: 1 } };
 const reply: ActivityEntry = { id: 'a7', ts: T0 + 7000, kind: 'trace', ev: 'reply', job: J, agent: 'Claude', data: { op: 'talk', reply_ms: 2100, first_audio_ms: 2600, client_timing: { received_ms: 120, model_ms: 900 } } };
 
+const filler: ActivityEntry = { id: 'a8', ts: T0 + 7500, kind: 'trace', ev: 'filler', job: J, data: { job: 'molty-x.j_f', phrase: 'hmm', text: 'Hmm…', first_audio_ms: 2550 } };
+
 describe('trace helpers', () => {
   it('decodes the level hex (byte = 2·(dBFS+100))', () => {
     expect(hexBytes('00c8zz64')).toEqual([0, 200, 100]);
@@ -42,6 +44,13 @@ describe('trace helpers', () => {
 });
 
 describe('traceModel', () => {
+  it('shows Molty\'s own filler (the auto filler) on the relay lane, when it was heard', () => {
+    const m = traceModel(job, [hook, filler])!;
+    const f = m.events.find((e) => e.label.startsWith('Molty said its own filler'))!;
+    expect(f.label).toBe('Molty said its own filler "Hmm…", 2.5 s after the human stopped (no agent yet)');
+    expect(f.lane).toBe('relay');
+    expect(f.at).toBe(7500);
+  });
   it('places a trimmed level strip by the relay\'s lv0 and lv_ms', () => {
     const t = { ...trace, dev: { ...trace.dev, lv: '5a64', lv0: 300, lv_ms: 200 } };
     const m = traceModel({ ...job, data: { ...job.data, trace: t } })!;

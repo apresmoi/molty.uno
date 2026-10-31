@@ -20,6 +20,7 @@ const FAST = { cmdTimeoutMs: 15_000, pairWindowMs: 400_000 };
 /** Manual time; timers run on real time scaled down 100x (5 s = 50 ms) and advance `t` when they fire. */
 class TestClock implements Clock {
   t = Date.now();
+  constructor(private scale = 100) {}
   now() {
     return this.t;
   }
@@ -27,7 +28,7 @@ class TestClock implements Clock {
     return globalThis.setTimeout(() => {
       this.t += ms;
       fn();
-    }, ms / 100);
+    }, ms / this.scale);
   }
   clearTimeout(h: unknown) {
     globalThis.clearTimeout(h as ReturnType<typeof setTimeout>);
@@ -52,8 +53,8 @@ function autoAnswer(room: DeviceRoom, sock: FakeSocket) {
   };
 }
 
-async function world(opts: { kv?: MemoryKV; host?: FakeHost; fetchImpl?: (r: Request) => Promise<Response>; resolve?: (h: string) => Promise<string[]> } = {}) {
-  const clock = new TestClock();
+async function world(opts: { kv?: MemoryKV; host?: FakeHost; fetchImpl?: (r: Request) => Promise<Response>; resolve?: (h: string) => Promise<string[]>; scale?: number } = {}) {
+  const clock = new TestClock(opts.scale);
   const alarms: number[] = [];
   const sent: Sent[] = [];
   const logs: string[] = [];
@@ -676,7 +677,10 @@ describe("review fixes", () => {
   });
 
   it("P2-8: long-polls are capped per token and per device; an aborted poll frees its slot at once", async () => {
-    const w = await world();
+    // Real-time clock: the open polls must not expire mid-test (at the 100x scale their 200 ms
+    // deadline could pass on a loaded runner, freeing a slot and turning too_many_polls into ok).
+    // Every poll here ends by abort or by the tap, so nothing waits its full 20 s.
+    const w = await world({ scale: 1 });
     const a = await w.pairAgent("a");
     const b = await w.pairAgent("b");
     const c1 = new AbortController();
@@ -688,7 +692,7 @@ describe("review fixes", () => {
     const t0 = Date.now();
     c1.abort();
     expect(await p1).toMatchObject({ ok: false, error: "cancelled" });
-    expect(Date.now() - t0).toBeLessThan(100); // freed now, not at its 200 ms (scaled) deadline
+    expect(Date.now() - t0).toBeLessThan(100); // freed now, not at its 20 s deadline
     const p3 = w.room.events(a, { wait_ms: 20_000 }); // slot freed by the abort
     const saved = INBOX_LIMITS.pollsPerDevice;
     INBOX_LIMITS.pollsPerDevice = 3;

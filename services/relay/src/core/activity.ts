@@ -275,17 +275,18 @@ export function jobDraft(rec: { job: string; kind: string; status: string; creat
     if (typeof s.voice === "string") voice[k] = s.voice;
     if (typeof s.voice_fallback === "string") voice.fallback = s.voice_fallback;
   };
-  if (rec.kind === "say") stage(t, "tts");
+  if (rec.kind === "say" || rec.kind === "quick") stage(t, "tts");
   else if (rec.kind === "listen") stage(t, "stt");
   else if (t) {
     stage(t.say, "tts");
     stage(t.listen, "stt");
   }
   if (Object.keys(voice).length) data.voice = voice;
-  for (const k of ["reason", "answer", "index", "outcome", "speech_ms", "duration_ms"]) if (r[k] !== undefined) data[k] = r[k];
+  // quick: the phrase, whether its audio was cached, and Molty's own filler (relay-owned, `turn` = the human turn it filled)
+  for (const k of ["reason", "answer", "index", "outcome", "speech_ms", "duration_ms", "phrase", "cached", "filler", "turn", "category", "source"]) if (r[k] !== undefined) data[k] = r[k];
   const text = (v: unknown) => (typeof v === "string" ? clip(v, ACTIVITY_LIMITS.textMax) : undefined);
   const heard = rec.kind === "listen" ? text(r.text) : text(r.heard);
-  const said = rec.kind === "say" ? text(r.text) : text(r.said);
+  const said = rec.kind === "say" || rec.kind === "quick" ? text(r.text) : text(r.said);
   if (heard !== undefined) data.heard = heard;
   if (said !== undefined) data.said = said;
   if (typeof rec.phase === "string") data.phase = rec.phase;
