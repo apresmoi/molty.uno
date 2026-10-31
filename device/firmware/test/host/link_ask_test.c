@@ -34,7 +34,6 @@ void link_audio_request(uint32_t gen, link_audio_req_t what) { (void)gen; (void)
 void link_audio_cancel(void) { }
 void mole_fluid_set_status(int status) { (void)status; }
 void mole_fluid_listen(bool on) { (void)on; }
-void mole_fluid_listen_level(float level) { (void)level; }
 void mole_fluid_listen_color(int32_t rgb) { (void)rgb; }
 int fd_status_from(bool wifi, bool relay, bool auth) { (void)wifi; (void)relay; (void)auth; return 0; }
 void link_client_health(bool *w, bool *r, bool *a) { *w = *r = true; *a = false; }

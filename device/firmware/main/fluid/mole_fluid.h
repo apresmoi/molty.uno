@@ -86,7 +86,6 @@ void mole_fluid_set_status(int status);
  *  kept in NVS, else the palette's accent; fluid_ring_rgb). Safe from any task; a no-op
  *  before init. */
 void mole_fluid_listen(bool on);
-void mole_fluid_listen_level(float level);
 void mole_fluid_listen_color(int32_t rgb);
 /** A say's text follows its voice (link_audio.c, cap say_cues): word < 0 starts following:
  *  the text shows no word until word 0 is reached (its own clock stops); word ≥ 0 shows up to that word (the

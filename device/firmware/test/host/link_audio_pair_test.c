@@ -84,9 +84,8 @@ static void speech_fill(int16_t *buf,size_t n,unsigned chunk) {
 }
 void link_identity_rotate(void) { rotations++; }
 /* the screen's listening ring (mole_fluid.c) and the pending question (link_ask.c) */
-static bool ring_on; static unsigned ring_ons, ring_levels; static float ring_peak, ring_last;
+static bool ring_on; static unsigned ring_ons;
 void mole_fluid_listen(bool on) { if (on) { assert(!ring_on); ring_ons++; } ring_on=on; }
-void mole_fluid_listen_level(float l) { assert(ring_on && l>=0.f && l<=1.f); ring_levels++; ring_last=l; if (l>ring_peak) ring_peak=l; }
 static int32_t ring_color = -9; static unsigned ring_colors;
 void mole_fluid_listen_color(int32_t rgb) { assert(!ring_on); ring_colors++; ring_color=rgb; }
 static uint32_t listen_setting = 30000;   /* the console's setting (mole_fluid.c, NVS) */
@@ -442,17 +441,13 @@ static void test_unsupported(void) {
     audio_job_t job; assert(xQueueReceive(s_jobs,&job,0)!=pdTRUE);
     sdk_caps = 0xFFFFFFFFu;
 }
-/* The listening ring is on exactly while the mic records a listen, fed the mic level
- * per 100 ms chunk (loud while someone speaks, ~0 in a quiet room), off however the
+/* The listening ring is on exactly while the mic records a listen, off however the
  * listen ends; say never lights it. */
 static void test_ring(void) {
-    audio_job_t job; listen_job(2000,&job); ring_ons=ring_levels=0; ring_peak=0.f; sdk_rx_chunks=0;
+    audio_job_t job; listen_job(2000,&job); ring_ons=0;
     assert(!ring_on);                                 /* nothing until the mic actually records */
     complete(record(&job));
-    assert(!ring_on && ring_ons==1 && ring_levels==sdk_rx_chunks && ring_peak<0.2f);
-    listen_job(8000,&job); ring_ons=ring_levels=0; ring_peak=0.f; sdk_rx_chunks=0; sdk_rx_fill=speech_fill;
-    complete(record(&job)); sdk_rx_fill=NULL;
-    assert(!ring_on && ring_ons==1 && ring_levels==sdk_rx_chunks && ring_peak>0.8f && ring_last<0.2f);
+    assert(!ring_on && ring_ons==1);
     listen_job(5000,&job); sdk_rx_error=ESP_ERR_TIMEOUT;   /* a mic failure ends it too */
     complete(record(&job)); sdk_rx_error=ESP_OK; assert(!ring_on);
     listen_job(5000,&job); link_audio_cancel(); complete(record(&job)); assert(!ring_on);
