@@ -23,8 +23,11 @@ device id, and the agent token in its secret store — never in chat.
    }'
    ```
 
-   Store the returned `secret` and verify `Molty-Signature` if your endpoint can. Add `tap`,
-   `button`, `answer` or `shake` to `events` only if you will act on them.
+   Store the returned `secret` and verify `Molty-Signature` if your endpoint can. Keep
+   `events` to `["utterance"]`: every other event you add (`tap`, `button`, `shake`) starts its
+   own run, and a run that reacts to a tap while you are mid-conversation collides with the
+   conversation's run (extra `show`/`mood` calls, a reply cut short). Molty already reacts to
+   taps and shakes by itself.
 3. **A routine as the backstop.** If your platform runs scheduled routines, one that calls
    `GET $MOLTY_RELAY/v1/devices/<id>/events?wait_s=0` now and then catches anything a failed
    delivery missed (the inbox keeps 24 h; dedupe by event `id`). It is not how you converse.

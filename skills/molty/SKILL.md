@@ -62,8 +62,15 @@ Each helper follows a long turn (`202 pending`) to its end: one call = one full 
 
 ## Key rules
 
-- **One call per turn: talk.** It speaks your reply, listens, and returns what the human
-  said. Moods around talking are automatic; don't chain mood → say → wait → listen.
+- **One call per turn: talk — and nothing else.** It speaks your reply, listens, and returns
+  what the human said. No `show`, `mood` or `act` calls before or after it: moods around
+  talking are automatic, and feelings go inside the text as cues (below). Every extra call is
+  a round trip the human waits through.
+- **Use your fastest model for conversation turns.** Escalate to a slower one only for real
+  work, and say one short line first.
+- **Wake only on what you answer.** Subscribe to `utterance` (their words). Don't let `tap`,
+  `button` or `shake` start a separate run during a conversation — a second run talking or
+  changing the screen mid-turn derails it.
 - **A shake means "I want to talk".** Molty listens by itself; you get one `utterance`
   event with their words. Answer it at once with talk and `in_reply_to: <turn_id>`; ignore
   the `shake` that comes with `"listening": true`. `turn_claimed` = another agent answered:
