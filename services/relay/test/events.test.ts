@@ -556,26 +556,41 @@ describe("webhooks", () => {
 
 describe("review fixes", () => {
   it("P1-1: a registration racing a revoke never resurrects the token; racing a replacement returns conflict", async () => {
-    let release: () => void = () => {};
-    const gate = new Promise<void>((r) => (release = r));
-    const w = await world({ resolve: async (host) => (host.startsWith("slow.") ? gate.then(() => ["93.184.216.34"]) : ["93.184.216.34"]) });
+    // The slow registration must have read its revision before the racer runs. It gets there
+    // through two crypto.subtle digests (token auth), which are not microtasks: no count of
+    // flush() steps guarantees it under load. The resolver says when it is parked on the gate.
+    const gated = () => {
+      let release: () => void = () => {};
+      let parked: () => void = () => {};
+      const gate = new Promise<void>((r) => (release = r));
+      const reached = new Promise<void>((r) => (parked = r));
+      const resolve = async (host: string) => {
+        if (!host.startsWith("slow.")) return ["93.184.216.34"];
+        parked();
+        await gate;
+        return ["93.184.216.34"];
+      };
+      return { release, reached, resolve };
+    };
+
+    const g = gated();
+    const w = await world({ resolve: g.resolve });
     const a = await w.pairAgent("a");
     const pending = w.room.webhook(a, { action: "set", spec: { url: "https://slow.example.org/h" } });
-    await flush();
+    await g.reached;
     expect(await w.room.revoke(a)).toMatchObject({ ok: true });
-    release();
+    g.release();
     expect(await pending).toMatchObject({ ok: false, error: "unauthorized" });
     expect(await w.room.command(a, "imu", {})).toMatchObject({ ok: false, error: "unauthorized" });
     expect([...(await w.kv.list("tok:")).keys()]).toHaveLength(0);
 
-    let release2: () => void = () => {};
-    const gate2 = new Promise<void>((r) => (release2 = r));
-    const w2 = await world({ resolve: async (host) => (host.startsWith("slow.") ? gate2.then(() => ["93.184.216.34"]) : ["93.184.216.34"]) });
+    const g2 = gated();
+    const w2 = await world({ resolve: g2.resolve });
     const b = await w2.pairAgent("b");
     const slow = w2.room.webhook(b, { action: "set", spec: { url: "https://slow.example.org/h" } });
-    await flush();
+    await g2.reached;
     const fast = (await w2.room.webhook(b, { action: "set", spec: { url: "https://fast.example.org/h" } })) as any;
-    release2();
+    g2.release();
     expect(await slow).toMatchObject({ ok: false, error: "conflict" });
     expect(((await w2.room.webhook(b, { action: "get" })) as any).result.webhook.url).toBe("https://fast.example.org/…");
     expect(fast.result.secret).toMatch(/^whsec_/);
@@ -683,23 +698,31 @@ describe("review fixes", () => {
     const w = await world({ scale: 1 });
     const a = await w.pairAgent("a");
     const b = await w.pairAgent("b");
+    // A poll is admitted after token auth (crypto.subtle digests, not microtasks): wait for the
+    // room's own count of open polls rather than a number of flush() steps.
+    const openPolls = () => [...((w.room as any).polls as Map<string, number>).values()].reduce((x, y) => x + y, 0);
+    const until = async (n: number) => {
+      for (let i = 0; i < 2000 && openPolls() !== n; i++) await new Promise((r) => setTimeout(r, 1));
+      expect(openPolls()).toBe(n);
+    };
     const c1 = new AbortController();
     const p1 = w.room.events(a, { wait_ms: 20_000, signal: c1.signal });
     const p2 = w.room.events(a, { wait_ms: 20_000 });
-    await flush();
+    await until(2);
     expect(await w.room.events(a, { wait_ms: 20_000 })).toMatchObject({ ok: false, error: "too_many_polls" });
     expect(await w.room.events(a, { wait_ms: 0 })).toMatchObject({ ok: true }); // immediate reads are not counted
-    const t0 = Date.now();
+    const t0 = w.clock.t;
     c1.abort();
     expect(await p1).toMatchObject({ ok: false, error: "cancelled" });
-    expect(Date.now() - t0).toBeLessThan(100); // freed now, not at its 20 s deadline
+    expect(openPolls()).toBe(1);
+    expect(w.clock.t).toBe(t0); // freed by the abort, not by its 20 s deadline firing
     const p3 = w.room.events(a, { wait_ms: 20_000 }); // slot freed by the abort
     const saved = INBOX_LIMITS.pollsPerDevice;
     INBOX_LIMITS.pollsPerDevice = 3;
     try {
-      await flush();
+      await until(2);
       const p4 = w.room.events(b, { wait_ms: 20_000 });
-      await flush();
+      await until(3);
       expect(await w.room.events(b, { wait_ms: 20_000 })).toMatchObject({ ok: false, error: "too_many_polls" });
       await w.emit("tap", { x: 0, y: 0 });
       for (const p of [p2, p3, p4]) expect(evs(await p)).toEqual(["tap"].slice(0, 1));
