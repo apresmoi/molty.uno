@@ -110,7 +110,7 @@ setting). You add expression in two ways:
 - A cue is never spoken and never shown: the relay strips it from the speech and the on-screen
   words. It fires when the word after it is spoken (the same timing that shows each word with
   its voice); a cue after the last word fires when the speech ends.
-- Names: any mood (idle, listening, thinking, speaking, happy, sleepy, surprised) or action
+- Names: any mood (idle, listening, thinking, speaking, happy, sleepy, surprised, working) or action
   (below), any case; `[shake head]` = `[shake-head]` = `[shake_head]`. Unknown or malformed
   cues are dropped silently, and a lone `[` or `]` is dropped too. **A literal bracket: escape
   it**, `\[` and `\]` (in JSON: `"\\[1\\]"`).
@@ -124,9 +124,24 @@ setting). You add expression in two ways:
   don't fire.
 - Cues never take the screen from a question or an update, and never cancel one.
 
+**Working: one call, then get on with it.** A `[working]` cue anywhere in a say or talk plays the
+line to its end, then Molty keeps busy on its own: inspect, paddle, peek, glances, stretch and
+wiggle in a varied loop, until your next say, any other mood, a listen or a question, or 120 s
+(a dead agent cannot leave it on).
+
+```json
+{"say": "Searching for that. [working]"}
+```
+
+A talk with `[working]` does not listen unless you pass `"listen": true`. Going straight to work
+without a line: `mood {"mood": "working"}` (`hold_s` can only shorten it; call again to extend). Needs the firmware cap `working`: without it the cue and the two new actions are
+dropped from a say, which still plays, and direct `mood` / `act` calls answer `firmware_too_old`
+or `unsupported`.
+
 **`act {action}`** — a one-shot gesture over the current mood, when you are not speaking:
 `wiggle`, `nod`, `shake_head`, `bounce`, `peek`, `glance_left`, `glance_right` (as you look at
-Molty), `blink`, `wobble`, `stretch`, `look_up`, `yawn`. It never changes what is shown and
+Molty), `blink`, `wobble`, `stretch`, `look_up`, `yawn`, `inspect` (right up to the camera, one eye filling the screen), `paddle`
+(bobbing and splashing in the water). It never changes what is shown and
 never cancels a question; while words or a question cover the creature it waits up to 3 s,
 then is dropped. Silent, ~0.3–2.6 s. A `nod` while they talk (listening) is fine.
 

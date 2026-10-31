@@ -101,7 +101,7 @@ bool link_mood_map(const char *mood, const char **state)
     static const struct { const char *mood, *state; } map[] = {
         {"idle", "creature"}, {"listening", "creature"}, {"thinking", "creature"},
         {"speaking", "creature"}, {"happy", "creature"}, {"sleepy", "creature"},
-        {"surprised", "creature"},
+        {"surprised", "creature"}, {"working", "creature"},
     };
     if (!mood || !state) return false;
     for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); i++) {

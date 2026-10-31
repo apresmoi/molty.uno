@@ -41,6 +41,8 @@ fits "I'll be quiet now". `hold_s` keeps any mood up to an hour; use it sparingl
 - **Don't fidget.** Molty already has its own idle life (glances, blinks, stretches); don't add
   `act` calls to "keep it alive", and never loop gestures. An `act` answers a moment: a `nod`
   when they tell you something, a `shake_head` at a bad result, a `bounce` for real good news.
+- **Going off to work?** One short line with `[working]`, `"Searching for that. [working]"`: Molty
+  keeps itself busy until you speak again. Never send gestures one by one to fill the wait.
 - Match the words: `[happy]` on bad news, or `[sleepy]` mid-task, confuses more than it charms.
 
 ## Keep a behaviour ledger

@@ -103,6 +103,7 @@ typedef struct {
     float fps, frame_ms, sim_ms, wait_ms, draw_ms, flush_ms, energy, err;
     float prof_ms[FP_N];                       /* per-phase EMA, ms per frame */
     int   mood, ctris, status, act;
+    bool  working;
     bool  internal, autoplay, asleep;
     int   n_internal, n_blk;
     int   state, fx, reel, word_idx, nwords, inside, grid_w, grid_h, cells_drawn;
@@ -189,6 +190,7 @@ static int     s_ripn = 0;
 /* creature (.molty) — the blob is handed over under s_mutex, built by the task */
 static uint8_t *s_cute_blob = NULL;  static size_t s_cute_len = 0;   /* pending load (PSRAM) */
 static int      s_req_mood = -1;
+static bool     s_req_work = false;             /* mood `working` (fd_agent_work; s_req_hold_s) */
 static float    s_req_hold_s = -1.f;                /* with s_req_mood: < 0 = its default */
 static char     s_cute_name[40] = "", s_cute_err[40] = "";
 static cute_rt_t *s_cute = NULL;                    /* task-owned                        */
@@ -581,13 +583,10 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     read_tilt(cfg->tilt);
     float ox = s_gx * FLUID_TILT_LEAN, oy = s_gy * FLUID_TILT_LEAN;
 
-    /* the listening ring: fades in while a listen records (never over a question), a
-     * thin line that breathes — the whole circle in and out, calm when quiet, quicker and
-     * deeper with the voice (smoothed in the tick) — and pings the surface from the whole
-     * rim, circular ripples running inward. It is a
-     * target of the fluid, around whatever the state shows (the creature, in its
-     * listening mood, stays in the middle). */
-    const int ring_pings = fluid_ring_tick(&s_rg, rdt, s_listen && !asking, s_level);
+    /* a listen on the water, never over a question: each rise of the voice drops a
+     * touch-style ripple and a faint line marks the rim (fluid_ring.h). The line is a target
+     * of the fluid, around whatever the state shows. */
+    const int ring_drop = fluid_ring_tick(&s_rg, rdt, s_listen && !asking, s_level);
     const float acc = cfg->palette == FLUID_PAL_PASTEL ? 0.f : 1.f;   /* mono palettes: the accent */
 
     switch (asking ? ST_TEXT : s_cur) {
@@ -597,6 +596,13 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     case ST_CREATURE:
         if (s_cute) {
             cute_rt_update(s_cute, rdt);                   /* mood engine + kit + behaviours */
+            {   /* paddle's strokes splash the real water, either side of the creature */
+                static float act_t0;
+                const float at = cute_rt_act_time(s_cute);
+                const int stroke = cute_act_splash(cute_rt_acting(s_cute), at < act_t0 ? 0.f : act_t0, at);
+                act_t0 = at;
+                if (stroke) ripple(stroke & 1 ? -0.6f : 0.6f, 0.5f, 1.2f, 0.09f);
+            }
             cute_rt_raster(s_cute, s->W, s->H);
             cute_rt_fill(s_cute, s, swell);
             s_cute_tris = cute_rt_tris(s_cute);
@@ -645,7 +651,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     fluid_sim_view(s);
     s_shimmer = 0.12f + (thinking ? 0.35f : 0.f) + cfg->mic * 0.4f;
 
-    if (ring_pings) fluid_ring_ping(s, &s_rg);             /* a circular ripple from the whole rim */
+    if (ring_drop) ripple(s_rg.drop_x, s_rg.drop_y, s_rg.drop_s, RING_DROP_R);   /* the voice touches the water */
     /* a question's faint dividers: in while it waits, out once it was answered */
     bool div_on = s_ask.scr.phase == FLUID_ASK_SHOW && s_ask.n >= 2;
     s_div = div_on ? fminf(1.f, s_div + rdt / DIV_FADE_S) : fmaxf(0.f, s_div - rdt / DIV_FADE_S);
@@ -844,6 +850,7 @@ static void fluid_task(void *arg) {
         nrip = s_ripn; memcpy(rip, s_ripq, sizeof(rip)); s_ripn = 0;
         uint8_t *cblob = s_cute_blob; size_t clen = s_cute_len; s_cute_blob = NULL;
         int req_mood = s_req_mood; s_req_mood = -1;
+        bool req_work = s_req_work; s_req_work = false;
         float req_hold_s = s_req_hold_s;
         int req_act = s_req_act; s_req_act = -1;
         bool spoke = s_req_spoke; s_req_spoke = false;
@@ -895,7 +902,8 @@ static void fluid_task(void *arg) {
         /* the director: state first (it may end the reel), then the mood over it */
         if (req_reel) fd_autoplay(&s_dir);
         if (req >= 0) fd_request_state(&s_dir, req, req_fx, req_hold);
-        if (req_mood >= 0) fd_agent_mood(&s_dir, req_mood, req_hold_s);
+        if (req_work) fd_agent_work(&s_dir, req_hold_s);
+        else if (req_mood >= 0) fd_agent_mood(&s_dir, req_mood, req_hold_s);
         else if (activity) fd_activity(&s_dir);
         if (user) fd_user(&s_dir);
         if (shake) fd_shake(&s_dir);
@@ -952,6 +960,7 @@ static void fluid_task(void *arg) {
         s_stats.autoplay = s_dir.autoplay; s_stats.asleep = fd_asleep(&s_dir); s_stats.status = fd_status(&s_dir);
         s_stats.mood = s_cute ? cute_rt_mood(s_cute) : -1; s_stats.ctris = s_cute_tris;
         s_stats.act = s_cute ? cute_rt_acting(s_cute) : -1;
+        s_stats.working = fd_working(&s_dir);
         s_stats.inside = s_sim->inside; s_stats.grid_w = s_sim->W; s_stats.grid_h = s_sim->H;
         s_stats.internal = s_sim->internal;
         s_stats.n_internal = s_sim->n_internal; s_stats.n_blk = s_sim->n_blk;
@@ -1162,6 +1171,7 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     cJSON_AddNumberToObject(root, "wpm",         c.wpm);
     cJSON_AddStringToObject(root, "mood",        st.mood >= 0 ? CUTE_MOOD_NAMES[st.mood] : "");
     cJSON_AddBoolToObject  (root, "asleep",      st.asleep);
+    cJSON_AddBoolToObject(root, "working",       st.working);
     cJSON_AddStringToObject(root, "act",         st.act >= 0 ? cute_act_name(st.act) : "");   /* the action playing */
     cJSON_AddStringToObject(root, "indicator",   FD_STATUS_NAMES[st.status]);
     {
@@ -1403,9 +1413,10 @@ esp_err_t mole_fluid_creature_state_set_json(const char *body) {
     if ((j = cJSON_GetObjectItem(root, "mood")) && cJSON_IsString(j)) {
         int m = -1;
         for (int k = 0; k < CUTE_N_MOODS; k++) if (!strcmp(j->valuestring, CUTE_MOOD_NAMES[k])) m = k;
-        if (m < 0) ret = ESP_ERR_INVALID_ARG;
+        const bool work = !strcmp(j->valuestring, "working");
+        if (m < 0 && !work) ret = ESP_ERR_INVALID_ARG;
         else {
-            s_req_mood = m; s_req_hold_s = hold_s;
+            s_req_mood = work ? CM_IDLE : m; s_req_work = work; s_req_hold_s = hold_s;
             /* a mood alone means "show me the creature in that mood" */
             if (!state_given) { s_req_state = ST_CREATURE; s_req_fx = 0; }
         }

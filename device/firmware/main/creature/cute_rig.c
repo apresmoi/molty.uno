@@ -310,6 +310,7 @@ struct cute_rt {
     float beh_lid;
     /* camera + raster */
     float cam_t[3], cam_x[3], cam_y[3], cam_z[3], cam_half;
+    float cam_zoom, cam_focus;                     /* an action's camera (cute_act.h): this frame's */
     int   rW, rH, tris;
     float *zbuf; uint32_t *cbuf;                   /* (2W)×(4H) samples */
     float *vbuf; int vcap;                         /* per-mesh camera-space vertices      */
@@ -610,6 +611,7 @@ void cute_rt_act(cute_rt_t *rt, int act) {
     rt->act = act; rt->act_t = 0.f;
 }
 int cute_rt_acting(const cute_rt_t *rt) { return rt ? rt->act : -1; }
+float cute_rt_act_time(const cute_rt_t *rt) { return rt && rt->act >= 0 ? rt->act_t : 0.f; }
 
 /* the action layer: offsets added after the springs (the curves are smooth already, and a
  * nod must not be swallowed by the head's 1.5 Hz spring); look before the saccade clamp,
@@ -625,15 +627,16 @@ static void act_add(pose_t *p, const cute_act_pose_t *a, float w) {
 static float act_layer(cute_rt_t *rt, float dt, pose_t *p) {
     float lid = 0.f;
     cute_act_pose_t a;
+    rt->cam_zoom = rt->cam_focus = 0.f;
     if (rt->pact >= 0) {                               /* the replaced one, out over 0.25 s */
         rt->pact_t += dt; rt->pact_w -= dt / 0.25f;
         if (rt->pact_w <= 0.f || rt->pact_t > cute_act_dur(rt->pact)) rt->pact = -1;
-        else { cute_act_pose(rt->pact, rt->pact_t, &a); act_add(p, &a, rt->pact_w); lid = rt->pact_w * a.lid; }
+        else { cute_act_pose(rt->pact, rt->pact_t, &a); act_add(p, &a, rt->pact_w); lid = rt->pact_w * a.lid; rt->cam_zoom = rt->pact_w * a.zoom; rt->cam_focus = rt->pact_w * a.focus; }
     }
     if (rt->act >= 0) {
         rt->act_t += dt;
         if (rt->act_t > cute_act_dur(rt->act)) rt->act = -1;
-        else { cute_act_pose(rt->act, rt->act_t, &a); act_add(p, &a, 1.f); lid = fmaxf(lid, a.lid); }
+        else { cute_act_pose(rt->act, rt->act_t, &a); act_add(p, &a, 1.f); lid = fmaxf(lid, a.lid); rt->cam_zoom += a.zoom; rt->cam_focus += a.focus; }
     }
     return lid;
 }
@@ -1204,7 +1207,13 @@ void cute_rt_raster(cute_rt_t *rt, int W, int H) {
     const uint32_t tagbits = (uint32_t)rt->tag << 24;
     fluid_prof[FP_C_CLEAR] += fluid_cycles() - cc;
     static const float LD[3] = { 0.33333333f, 0.66666667f, 0.66666667f };   /* normalize(0.5, 1, 1) */
-    const float inv_h = 1.f / rt->cam_half, hx = 0.5f * SW * inv_h, hy = 0.5f * SH * inv_h;
+    const float inv_h = (1.f + rt->cam_zoom) / rt->cam_half, hx = 0.5f * SW * inv_h, hy = 0.5f * SH * inv_h;
+    /* the camera's centre: the usual one, or (an action's focus) on the eye nearer the camera */
+    float ct[3] = { rt->cam_t[0], rt->cam_t[1], rt->cam_t[2] };
+    if (rt->cam_focus > 0.f) {
+        v3_t eye = m_apply(&rt->nodes[rt->eyes[0].g].world, 0.f, 0.f, 0.f);
+        ct[0] += rt->cam_focus * (eye.x - ct[0]); ct[1] += rt->cam_focus * (eye.y - ct[1]); ct[2] += rt->cam_focus * (eye.z - ct[2]);
+    }
     int tris = 0;
     int bx0 = SW, bx1 = 0, by0 = SH, by1 = 0;           /* union of rasterised bboxes */
     for (int m = 0; m < rt->nm; m++) {
@@ -1219,7 +1228,7 @@ void cute_rt_raster(cute_rt_t *rt, int W, int H) {
         for (int i = 0; i < g->nv; i++) {
             const float *v = g->v + i * 3;
             v3_t p = m_apply(Wm, v[0], v[1], v[2]);
-            float q[3] = { p.x - rt->cam_t[0], p.y - rt->cam_t[1], p.z - rt->cam_t[2] };
+            float q[3] = { p.x - ct[0], p.y - ct[1], p.z - ct[2] };
             float *o = rt->vbuf + i * 6;
             o[0] = (q[0] * rt->cam_x[0] + q[1] * rt->cam_x[1] + q[2] * rt->cam_x[2]) * hx + 0.5f * SW;
             o[1] = 0.5f * SH - (q[0] * rt->cam_y[0] + q[1] * rt->cam_y[1] + q[2] * rt->cam_y[2]) * hy;
