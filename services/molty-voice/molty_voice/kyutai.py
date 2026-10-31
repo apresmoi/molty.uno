@@ -41,6 +41,37 @@ FRAME_S = FRAME / MODEL_RATE
 # 3 voices: raw start_s is late by median +91 ms (mean +85, sd 94); minus one step the mean
 # error is +5 ms. The spread (sd ~90 ms) is the model's own and stays.
 TTS_WORD_LATE_S = FRAME_S
+# Every STT stream opens with a HEAD the model transcribes before the capture: Kyutai's 1 s
+# digital-silence prefix (`stt_config.audio_silence_prefix_seconds`; the model was trained with it,
+# their reference clients send it), then — when the box has one — an English audio PROMPT and
+# 0.8 s of silence, exactly Kyutai's prompting recipe (delayed-streams-modeling
+# stt_from_file_with_prompt_pytorch.py: "steering the model towards ... a language").
+#
+# Why the prompt: stt-1b-en_fr's text vocabulary holds other scripts, and on some of Juan's turns
+# the text stream locks into one on its first words — "کن یه دود اون و یه ایتنگ" is "can you do the
+# one where you're eating" spelled in Persian. Pure model behaviour, no transport fault: the kept
+# turn audio streamed straight into moshi-server (greedy) garbles at 25-35 % of sub-frame start
+# offsets (0 % for clean turns), at the box's temperature 0.25 4-10 times in 10; with the prompt
+# 0 of 80 greedy (2 prompts x 20 offsets x 2 turns) and 0 of 30 through SttSession at 0.25. The
+# silence prefix alone does not fix it (it only moves the offset). The head's Steps and Words never
+# reach the human's side (pause predictor, trace, partials, transcript); word times stay capture-relative.
+SILENCE_PREFIX_S = 1.0
+PREFIX_STEPS = math.ceil(SILENCE_PREFIX_S / FRAME_S)  # ceil like the reference: 13 steps
+PROMPT_GAP_S = 0.8
+HEAD_MARKER = 0  # the marker after a prompted head (finish() uses 1)
+
+
+def stream_head(prompt: np.ndarray | None = None) -> tuple[np.ndarray, float]:
+    """(audio @24 kHz in whole model frames, prompt end in s): what goes before the capture.
+
+    Without a prompt: the silence prefix alone, and the prompt "ends" at 0 (no Word is the head's)."""
+    pre = np.zeros(PREFIX_STEPS * FRAME, dtype=np.float32)
+    if prompt is None or len(prompt) == 0:
+        return pre, 0.0
+    p = np.asarray(prompt, dtype=np.float32)
+    head = np.concatenate([pre, p, np.zeros(int(PROMPT_GAP_S * MODEL_RATE), dtype=np.float32)])
+    head = np.concatenate([head, np.zeros((-len(head)) % FRAME, dtype=np.float32)])
+    return head, (len(pre) + len(p)) / MODEL_RATE
 
 
 class KyutaiError(RuntimeError):
@@ -216,6 +247,7 @@ class SttSession:
         no_speech_s: float | None = None,
         observer=None,
         on_hint: Callable[[str], Awaitable[None]] | None = None,
+        prompt: np.ndarray | None = None,
         connect=ws_connect,
     ):
         self.url, self.api_key, self.flush_s, self.on_word, self._connect = url, api_key, flush_s, on_word, connect
@@ -239,25 +271,49 @@ class SttSession:
         self._marker_seen = False
         self._failure: str | None = None
         self._marker_id = 1
+        # The stream head (stream_head): its Steps are never the human's (the pause predictor, the
+        # trace and the energy gate see the capture only), nor its Words. With a prompt, a HEAD
+        # marker follows the head: the server returns it once the head is transcribed (its audio
+        # + the model delay), so every Word before it is the head's — the prompt's own, or one the
+        # model completes a clipped prompt with in the gap. The capture's first word can only end
+        # (and so arrive) after it: its audio follows the head.
+        self._head, self._prompt_end_s = stream_head(prompt)
+        self._head_steps_left = len(self._head) // FRAME
+        self._head_s = len(self._head) / MODEL_RATE
+        self._head_open = self._prompt_end_s > 0  # until the head marker is back
 
     async def open(self) -> None:
         self._ws = await self._connect(self.url, additional_headers=_headers(self.api_key), max_size=None, ping_interval=None)
         self._recv = asyncio.create_task(self._receive())
+        for i in range(0, len(self._head), FRAME):  # before any capture audio can go (feed() awaits open())
+            await self._ws.send(_pack({"type": "Audio", "pcm": self._head[i : i + FRAME].tolist()}))
+        if self._head_open:
+            await self._ws.send(_pack({"type": "Marker", "id": HEAD_MARKER}))
+
+    def _capture_time(self, t):
+        """A server word time (s since the stream began) -> s since the capture began (after the head)."""
+        if isinstance(t, (int, float)) and not isinstance(t, bool) and math.isfinite(t):
+            return max(0.0, t - self._head_s)
+        return t
 
     async def _receive(self) -> None:
         try:
             async for m in self._ws:
                 d = msgpack.unpackb(m, raw=False)
                 t = d.get("type") if isinstance(d, dict) else None
-                if t == "Word":
+                if t == "Word" and self._head_open:
+                    pass  # the prompt's own transcript: not the human's (its EndWord finds no word in the trace)
+                elif t == "Word":
                     self.words.append(str(d.get("text", "")))
                     self.pause.word(self.words[-1])
-                    hint = self._observe("word", self.words[-1], d.get("start_time")) if not self._finishing else None
+                    hint = self._observe("word", self.words[-1], self._capture_time(d.get("start_time"))) if not self._finishing else None
                     if self.on_word:
                         await self.on_word(" ".join(self.words))
                     await self._hint(hint)
                 elif t == "EndWord":
-                    self._observe("end_word", d.get("stop_time"))
+                    self._observe("end_word", self._capture_time(d.get("stop_time")))
+                elif t == "Step" and self._head_steps_left > 0:
+                    self._head_steps_left -= 1  # the head's own step
                 elif t == "Step":
                     prs = d.get("prs") or []
                     if len(prs) > 2:
@@ -273,6 +329,8 @@ class SttSession:
                             await self.on_no_speech()
                         else:
                             await self._hint(hint)
+                elif t == "Marker" and d.get("id") == HEAD_MARKER:
+                    self._head_open = False
                 elif t == "Marker" and d.get("id") == self._marker_id:
                     self._marker_seen = True
                     return
@@ -331,6 +389,11 @@ class SttSession:
     def _check(self) -> None:
         if self._failure:
             raise KyutaiError(self._failure)
+
+    async def feed_model(self, x: np.ndarray) -> None:
+        """Audio already at the model's rate (float32 @24 kHz), e.g. a clip to check."""
+        self._check()
+        await self._send_frames(np.asarray(x, dtype=np.float32))
 
     async def feed(self, pcm16: bytes) -> None:
         self._check()

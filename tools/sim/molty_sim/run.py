@@ -17,7 +17,7 @@ import numpy as np
 from . import align, report, stack
 from .agent import EventPump, LlmAgent, RelayError, Rest, ScriptedAgent
 from .device import CUE_LEAD_S, SimDevice, new_device_id
-from .metrics import ShakeFacts, TurnFacts, drafts_summary, shake_metrics, summarize, turn_metrics, wer
+from .metrics import ShakeFacts, TurnFacts, drafts_summary, foreign_script, shake_metrics, summarize, turn_metrics, wer
 from .scenario import Scenario
 from .voice import Clip, Mic, Synth, write_wav
 
@@ -468,6 +468,7 @@ def listen_row(t, clip: Clip, lis, res: dict, t_ret: float) -> dict:
         "heard": res.get("heard"),
         "error": res.get("error"),
         "wer": round(wer(t.text, res.get("heard") or ""), 3) if t.text and not res.get("error") else None,
+        "foreign_script": foreign_script(res.get("heard") or ""),
         "speech_end_s": clip.speech_end_s,
         "stt_final_ms": tim.get("stt"),
         "relay_turn_end_ms": tim.get("turn_end"),
