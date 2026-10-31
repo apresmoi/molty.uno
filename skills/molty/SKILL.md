@@ -58,7 +58,7 @@ it. Examples in the references write `$MOLTY_RELAY` for whichever relay Molty us
 | `act.sh nod` | a one-shot gesture (nod, wiggle, bounce, …) | the result |
 | `watch.py` / `watch.py --once [wait_s]` | one line per event, forever / unread events, then exit | `MOLTY utterance: '…'` |
 
-Each helper follows a long turn (`202 pending`) to its end: one call = one full turn.
+Each helper follows a long turn (`202 pending`) to its end.
 
 ## Key rules
 
@@ -71,7 +71,7 @@ Each helper follows a long turn (`202 pending`) to its end: one call = one full 
   event with their words. Answer it at once with talk and `in_reply_to: <turn_id>`; ignore
   the `shake` with `"listening": true`. `turn_claimed`: stay quiet.
 - **Never speak while they talk**: `utterance.partial` is context (`human_speaking`). Only
-  `draft` an opener (`draft.used`: continue it) or `react`.
+  `draft` an opener (`draft.used`: continue it) or `react` (Molty also reacts by itself; yours wins).
 - **Molty acknowledges the end of their turn itself** (chirp + `thinking`): answer straight
   away, no "hmm". Long work → one short spoken line first; never leave them in silence.
 - **Short.** 1–2 sentences; a short first sentence starts audio sooner.
@@ -82,8 +82,8 @@ Each helper follows a long turn (`202 pending`) to its end: one call = one full 
   acknowledge / dismiss, never an answer.
 - **Read `relay.caps`, not versions**, to know what this Molty can do (`say`, `listen`,
   `ask`, `shake_talk`, `update`, …). `relay.voice` says who speaks. Get them from the `status`
-  command (`POST $MOLTY_RELAY/v1/devices/<id>/cmd {"name":"status"}`, MCP `molty_status`);
-  every `utterance` also carries them as `device.caps`. No `GET …/status` route.
+  command (`POST …/cmd {"name":"status"}`, MCP `molty_status`); every `utterance` also carries
+  them as `device.caps`. No `GET …/status` route.
 - **Don't talk unprompted or repeatedly**; the mic only when expected. `no_speech` after
   a wake → one short line or nothing.
 - **Errors:** `audio_busy` (wait for the current audio, retry once), `turn_claimed` (stay

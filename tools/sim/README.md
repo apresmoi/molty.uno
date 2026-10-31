@@ -117,6 +117,27 @@ make sim SIM_ARGS='scenarios/drafts.yaml --align none'
 The run ends with the relay's own calibration (`GET /v1/devices/<id>/speech`): turns sampled, the
 partial policy and the draft threshold after the run.
 
+## Reflex engines: `molty-sim reflex-bench`
+
+Molty's reflex engines (docs/AGENT-LINK.md "Reflex") on 40 labelled partial sentences
+(`scenarios/reflex.yaml`: a reaction and an utterance category each), the production code of
+each engine, one sentence at a time:
+
+```sh
+make sim-env
+cd tools/sim && .venv/bin/molty-sim reflex-bench --box <ssh host of your box> --misses
+```
+
+- `keywords`, `jev`, `openai`: the relay's `core/reflex.ts` through `services/relay/tools/reflex-bench.ts`
+  (Node type stripping). `jev` needs `TYPESAFE_API_KEY`, `openai` `OPENAI_API_KEY` in the
+  environment (skipped without; never printed).
+- `local`: `molty_voice/reflex.py` on the box over ssh, in its own venv
+  `~/molty-voice/reflex-lab/.venv` (`onnxruntime tokenizers huggingface_hub numpy`; the code is
+  rsynced to `~/molty-voice/reflex-lab/src`) — never the running service.
+- Columns: reaction accuracy after each engine's gate, false fires on the neutral sentences,
+  category accuracy, p50 / p90 latency (remote: one call from this machine; local: the box's
+  inference), mean input tokens, $ per 1000 partials (input tokens × list price).
+
 ## Caveats
 
 - The local relay runs on this Mac, not Cloudflare's edge, and the bridge reaches Kyutai through an

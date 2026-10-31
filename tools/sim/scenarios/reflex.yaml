@@ -1,0 +1,52 @@
+# Molty's reflex: labelled partial sentences (what the box's STT hands the relay while the human is
+# still talking), for `molty-sim reflex-bench` (molty_sim/reflex_bench.py). Each has the reaction
+# Molty should show (surprised | happy | sad | laugh | curious | none) and the utterance category a
+# context-picked filler would use (question | request | hard | other; core/reflex.ts CATEGORY_CRITERIA).
+# Partials end mid-thought on purpose: that is what the engines see.
+items:
+  # surprise
+  - {text: "Oh my god, you won't believe what just happened.", reaction: surprised, category: other}
+  - {text: "Guess what, I ran into my old teacher at the airport", reaction: surprised, category: other}
+  - {text: "No way, the package arrived a week early.", reaction: surprised, category: other}
+  - {text: "Wait, the power just went out in the whole building", reaction: surprised, category: other}
+  - {text: "I opened the door and there was a deer in the kitchen.", reaction: surprised, category: other}
+  - {text: "Whoa, it's snowing in May.", reaction: surprised, category: other}
+  - {text: "Out of nowhere my brother called from Japan", reaction: surprised, category: other}
+  # joy
+  - {text: "I just got the job!", reaction: happy, category: other}
+  - {text: "We finally finished the kitchen and it looks amazing.", reaction: happy, category: other}
+  - {text: "My sister had her baby this morning, a little girl", reaction: happy, category: other}
+  - {text: "I passed my driving test today.", reaction: happy, category: other}
+  - {text: "Thank you so much, that really made my day.", reaction: happy, category: other}
+  - {text: "The team won the championship last night and we were all", reaction: happy, category: other}
+  - {text: "I'm so excited, we're going to Italy next week.", reaction: happy, category: other}
+  # sadness
+  - {text: "My grandmother passed away on Sunday.", reaction: sad, category: other}
+  - {text: "I didn't get the scholarship after all.", reaction: sad, category: other}
+  - {text: "My dog has been sick all week and the vet said", reaction: sad, category: other}
+  - {text: "I feel really lonely since everyone moved away.", reaction: sad, category: other}
+  - {text: "We broke up last night.", reaction: sad, category: other}
+  - {text: "Honestly today was a terrible day at work", reaction: sad, category: other}
+  - {text: "I miss her so much.", reaction: sad, category: other}
+  # humour
+  - {text: "So a horse walks into a bar and the bartender says", reaction: laugh, category: other}
+  - {text: "Haha, the cat just knocked my coffee onto the dog.", reaction: laugh, category: other}
+  - {text: "Knock knock.", reaction: laugh, category: other}
+  - {text: "I tried to bake bread and it came out as a brick, lol.", reaction: laugh, category: other}
+  - {text: "My dad wore his shirt inside out to the wedding and nobody told him", reaction: laugh, category: other}
+  - {text: "Why don't skeletons fight each other? They don't have the guts.", reaction: laugh, category: other}
+  # questions (curious)
+  - {text: "What's the weather like tomorrow?", reaction: curious, category: question}
+  - {text: "Why is the sky blue?", reaction: curious, category: hard}
+  - {text: "How does a fridge actually keep things cold?", reaction: curious, category: hard}
+  - {text: "Do you know when the next train leaves?", reaction: curious, category: question}
+  - {text: "I wonder what the moon is made of.", reaction: curious, category: question}
+  - {text: "Should I take the new job or stay where I am?", reaction: curious, category: hard}
+  - {text: "Is it going to rain this afternoon?", reaction: curious, category: question}
+  # neutral
+  - {text: "Remind me to call the plumber at five.", reaction: none, category: request}
+  - {text: "Can you set a timer for ten minutes?", reaction: none, category: request}
+  - {text: "Play some jazz in the living room.", reaction: none, category: request}
+  - {text: "I need to buy milk and eggs on the way home", reaction: none, category: other}
+  - {text: "The meeting moved to Thursday at three.", reaction: none, category: other}
+  - {text: "Help me plan the budget for next month.", reaction: none, category: hard}

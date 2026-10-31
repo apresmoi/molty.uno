@@ -242,6 +242,8 @@ curl -sS -X POST "$MOLTY_RELAY/v1/devices/$DEVICE/react" -H "authorization: Bear
   animation for ~1.5 s, then Molty listens on. Or `{turn_id, action}`: one of the gestures of
   `act` (`nod`, `wiggle`, …), played over the listening. At most one per 3 s per Molty (`429 rate_limited`
   with `retry_after_ms`). Firmware without `react` (a mood) / `act` (an action) in `relay.caps`: `409 unsupported`.
+  Molty's own reflex (an owner setting) reacts by itself while they talk; it never limits your
+  react, and after yours it stays quiet for the rest of the turn.
 
 ## Notes (your private ledger store)
 
