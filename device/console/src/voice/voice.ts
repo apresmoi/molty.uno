@@ -99,7 +99,7 @@ async function call(t: VoiceTarget, method: 'GET' | 'POST' | 'DELETE', body: unk
 }
 
 export const getVoice = (t: VoiceTarget, f: typeof fetch = fetch) => call(t, 'GET', undefined, f);
-export const setVoice = (t: VoiceTarget, patch: { mode?: VoiceMode; voice?: string | null; reflex?: ReflexMode; reflex_compare?: boolean; liveliness?: Liveliness }, f: typeof fetch = fetch) => call(t, 'POST', patch, f);
+export const setVoice = (t: VoiceTarget, patch: { first_words?: 'off' | 'opener'; mode?: VoiceMode; voice?: string | null; reflex?: ReflexMode; reflex_compare?: boolean; liveliness?: Liveliness }, f: typeof fetch = fetch) => call(t, 'POST', patch, f);
 export const unpairBox = (t: VoiceTarget, f: typeof fetch = fetch) => call(t, 'DELETE', undefined, f);
 
 /** One status line for the box. */

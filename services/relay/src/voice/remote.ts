@@ -67,6 +67,7 @@ export class RemoteVoiceProvider implements VoiceProvider {
   readonly name = "box";
   private readonly ttsOps = new Map<string, TtsOp>();
   private readonly sttOps = new Map<string, SttOp>();
+  private readonly openerOps = new Map<string, { ch: BoxChannel; done(line: string | undefined): void }>();
   private seq = 0;
 
   constructor(
@@ -88,6 +89,29 @@ export class RemoteVoiceProvider implements VoiceProvider {
   /** How many requests are in flight (tests, status). */
   get pending(): number {
     return this.ttsOps.size + this.sttOps.size;
+  }
+
+  // ---------------- first words (core/opener.ts) ----------------
+
+  /** The box's small model starts the reply: its line, or undefined (no line, no box, gave up by `ms`). */
+  opener(text: string, history: ReadonlyArray<{ role: string; text: string }>, ms: number): Promise<string | undefined> {
+    const ch = this.link();
+    if (!ch) return Promise.resolve(undefined);
+    const id = this.newId("t");
+    return new Promise((resolve) => {
+      const handle = this.timer.setTimeout(() => done(undefined), ms);
+      const done = (line: string | undefined) => {
+        this.timer.clearTimeout(handle);
+        this.openerOps.delete(id);
+        resolve(line);
+      };
+      this.openerOps.set(id, { ch, done });
+      try {
+        ch.sendText(JSON.stringify({ t: "opener", id, text, history: history.map((m) => ({ role: m.role, text: m.text })) }));
+      } catch {
+        done(undefined);
+      }
+    });
   }
 
   // ---------------- TTS ----------------
@@ -241,7 +265,10 @@ export class RemoteVoiceProvider implements VoiceProvider {
   onText(from: BoxChannel, frame: Record<string, unknown>): void {
     const id = typeof frame.id === "string" ? frame.id : undefined;
     if (!id) return;
-    if (frame.t === "tts.end") {
+    if (frame.t === "opener.result") {
+      const op = this.openerOps.get(id);
+      if (op && op.ch.same(from)) op.done(typeof frame.text === "string" ? frame.text.slice(0, 400) : undefined);
+    } else if (frame.t === "tts.end") {
       const op = this.ttsOps.get(id);
       if (!op || !op.ch.same(from)) return;
       op.feed.end(typeof frame.error === "string" && frame.error ? new Error(BOX_ERROR) : undefined);
