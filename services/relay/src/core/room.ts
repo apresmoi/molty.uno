@@ -66,6 +66,7 @@ import {
   MAX_LISTEN_BYTES,
   PONG_TEXT,
   SAMPLE_RATE,
+  type DecodedAudio,
   decodeAudioFrame,
   encodeAudioFrame,
   isRecord,
@@ -100,6 +101,8 @@ import {
 import type { SttStream, VoiceProvider } from "../voice/types.js";
 import { ACTIVITY_LIMITS, ACTIVITY_PREFIX, ActivityLog, type Who, jobDraft, parseActivityQuery } from "./activity.js";
 import { BOX_OFFLINE, RemoteVoiceProvider } from "../voice/remote.js";
+import { ListenTrace, SeqOrder, TRACE_LIMITS, capTrace } from "./trace.js";
+import { AUDIO_KEEP, AUDIO_PREFIX, AudioKeep, wav } from "./audio-keep.js";
 
 export interface SocketMeta {
   /** hello: device not yet authenticated; live: the device; voice: a voice box (authenticated at upgrade). */
@@ -329,7 +332,34 @@ interface ListenBuffer {
   lost?: boolean;
   /** The device ended the listen with reason "error": its capture failed. */
   captureFailed?: boolean;
+  /** The turn trace being gathered (core/trace.ts). */
+  trace: ListenTrace;
+  /** Frames in seq order (the device resends what failed; core/trace.ts SeqOrder). */
+  order: SeqOrder<DecodedAudio>;
+  /** Gives a seq gap up after TRACE_LIMITS.gapMs. */
+  gapTimer?: unknown;
+  /** The device's own end frame arrived (its `tr` summary is in the trace). */
+  devEnd?: boolean;
+  /** The relay ended the listen (the box's turn end / no_speech / failure): the device's end frame comes after. */
+  relayEnded?: boolean;
+  /** DeviceRoom.roomGen when it began: a forget since then voids its delayed writes. */
+  roomGen: number;
 }
+
+/** A finished listen's trace, until its job's activity entry is written (finishJob). */
+interface JobTrace {
+  trace: ListenTrace;
+  audio: boolean;
+  /** Resolves once the device's end frame came (or TRACE_TAIL_MS passed): absent = it already had. */
+  tail?: Promise<void>;
+}
+
+/**
+ * After a listen ended without the device's end frame (the box's turn end: the device stops
+ * within ~100 ms), its frames still count for the trace — header diagnostics only, never audio
+ * — for at most this long; the job's activity entry waits for it (the agent's result does not).
+ */
+const TRACE_TAIL_MS = 3000;
 
 /** Owner voice settings (KV `voicecfg`). */
 interface VoiceCfg {
@@ -365,9 +395,10 @@ interface PendingAsk {
   resolve(a: AskAnswer): void;
 }
 type SpeakResult = { ok: true; start: number; ms: number; timings: JsonObject } | { ok: false; error: string };
-type ListenResult =
+type ListenResult = (
   | { ok: true; start: number; text: string; reason: string; speech_ms?: number; duration_ms: number; peak: number; rms: number; timings: JsonObject; ack?: string }
-  | { ok: false; error: string };
+  | { ok: false; error: string }
+) & { trace?: ListenTrace; audio?: boolean };
 
 function concat(a: Int16Array, b: Int16Array): Int16Array {
   if (a.length === 0) return b;
@@ -460,6 +491,19 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private readonly polls = new Map<string, number>();
   private evChain: Promise<void> = Promise.resolve();
   private cmdSeq = 0;
+  /** The owner's kept listen audio (core/audio-keep.ts). */
+  private readonly audioKeep: AudioKeep;
+  /** Shakes whose listen awaits adoption, by the device's local listen id (turn trace). */
+  private readonly shakes = new Map<string, { at: number; data: JsonObject }>();
+  /** Finished listens' traces by job, until finishJob writes them (core/trace.ts). */
+  private readonly jobTraces = new Map<string, JobTrace>();
+  /** The last listen that ended before the device's end frame: its late frames' diagnostics (TRACE_TAIL_MS). */
+  private traceTail: { buf: ListenBuffer; done: () => void; over: Promise<void> } | undefined;
+  /**
+   * Bumped FIRST by forget: work that finishes later (a job's delayed activity entry, a trace
+   * tail, kept audio) checks it and writes nothing for a forgotten device.
+   */
+  private roomGen = 0;
   private updTimer: unknown;
 
   constructor(deps: RoomDeps) {
@@ -476,6 +520,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     this.releases = deps.releases ?? NO_RELEASES;
     this.box = new RemoteVoiceProvider(() => this.boxSocket(), this.clock);
     this.activity = new ActivityLog({ deviceId: this.deviceId, kv: this.kv, clock: this.clock, log: this.log });
+    this.audioKeep = new AudioKeep(this.kv, this.clock);
   }
 
   // =====================================================================
@@ -551,6 +596,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   }
 
   private dropInFlight(error: string) {
+    // the device is gone: no end frame will come — a trace tail ends now (its entry without tr)
+    this.traceTail?.done();
     for (const [id, p] of this.pendingCmds) {
       this.clock.clearTimeout(p.timer);
       this.pendingCmds.delete(id);
@@ -656,7 +703,12 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   }
 
   private async onForget(sock: DeviceSocket) {
-    for (const prefix of ["tok:", "pair:", "job:", "ev:", "cur:", "whq:", ACTIVITY_PREFIX]) {
+    // before any await: nothing in flight may write the forgotten device's activity or audio back
+    this.roomGen++;
+    this.audioKeep.generation++;
+    this.jobTraces.clear(); // (a trace tail ends with dropInFlight below: its entry is then void)
+    await this.activity.settle(); // activity writes queued before the forget land BEFORE the wipe, never after
+    for (const prefix of ["tok:", "pair:", "job:", "ev:", "cur:", "whq:", ACTIVITY_PREFIX, AUDIO_PREFIX]) {
       for (const key of (await this.kv.list(prefix)).keys()) await this.kv.delete(key);
     }
     for (const key of [K.device, K.link, K.pairCurrent, K.evSeq, K.evRate, K.skillEv, K.origin, K.devinfo, K.upd, K.voiceCfg, K.vbox, K.vstat, K.turn]) await this.kv.delete(key);
@@ -785,7 +837,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         const pre = await this.claimCheck(hash, cmd.in_reply_to);
         if (!pre.ok) return pre;
         const called = this.clock.now();
-        return this.startJob("say", cmd.args, true, by, () => this.claimFor(hash, cmd.in_reply_to, called));
+        const sayArgs = cmd.client_timing ? { ...cmd.args, client_timing: cmd.client_timing } : cmd.args;
+        return this.startJob("say", sayArgs, true, by, () => this.claimFor(hash, cmd.in_reply_to, called));
       }
       return this.startJob(cmd.name as "say" | "listen", cmd.args, true, by);
     }
@@ -1032,8 +1085,11 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       if (caps) return fail("unsupported", "this device has no touch screen for answers: use molty_talk instead");
     }
     if (caps && args.say !== undefined && !caps.includes("say")) return fail("unsupported", "this device has no speaker: ask without say, or show the question first");
+    // in_reply_to naming the open turn: traced (a `reply` entry), never claimed — an ask never takes the floor
+    const turn = args.in_reply_to !== undefined ? await this.kv.get<TurnRecord>(K.turn) : undefined;
+    const answers: JsonObject = turn && turn.id === args.in_reply_to ? { turn: { id: turn.id, at: turn.at }, called: t0 } : {};
     // Only the spoken part needs the speaker; waiting for the tap holds no audio lock.
-    const started = await this.startJob("ask", args as unknown as JsonObject, args.say !== undefined, this.who(a));
+    const started = await this.startJob("ask", { ...(args as unknown as JsonObject), ...answers }, args.say !== undefined, this.who(a));
     if (!started.ok) return started;
     const job = started.result.job as string;
     const out = await this.runJob(job, Math.max(0, this.t.talkBudgetMs - (this.clock.now() - t0)));
@@ -1321,11 +1377,26 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   }
 
   private async finishJob(id: string, patch: Partial<JobRecord> & { status: "done" | "failed" }) {
+    // a listen's turn trace goes with its activity entry (built now: everything is in, failures too)
+    const jt = this.jobTraces.get(id);
+    this.jobTraces.delete(id);
+    const gen = this.roomGen;
     const ended = await this.setJob(id, patch);
-    if (ended) await this.activity.record(jobDraft(ended, ended.by));
+    const entry = async () => {
+      if (!ended || gen !== this.roomGen) return; // forgotten meanwhile: nothing is written back
+      const traced = jt ? { trace: capTrace(jt.trace.build()), ...(jt.audio ? { audio: true } : {}) } : {};
+      await this.activity.record(jobDraft({ ...ended, ...traced }, ended.by));
+    };
+    // the device's end frame still on its way (after the box's turn end): the agent gets the
+    // result now; the entry follows once that frame's diagnostics are in (<= TRACE_TAIL_MS)
+    if (!jt?.tail) await entry();
     this.tasks.delete(id);
     if (this.audioJob === id) this.audioJob = undefined;
     this.notify(this.jobWaiters, id);
+    if (jt?.tail) {
+      await jt.tail;
+      await entry();
+    }
   }
 
   private async purgeJobs(now: number) {
@@ -1346,8 +1417,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (!r.ok) return this.finishJob(id, { status: "failed", error: r.error });
     const timings: JsonObject = { queue: r.start - created, ...r.timings, total: this.clock.now() - created };
     if (isRecord(args.turn)) timings.turn = this.answerTimings(args, r.start + (r.timings.first_audio as number));
+    if (isRecord(args.client_timing)) timings.client = args.client_timing;
     this.logTimings(id, "say", timings);
     await this.finishJob(id, { status: "done", result: { ms: r.ms, text, timings } });
+    await this.replyTrace(id, "say", args, timings);
   }
 
   private async runListen(id: string, args: JsonObject, created: number) {
@@ -1355,7 +1428,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const { ms, trigger, ...listenArgs } = args;
     const r = await this.record(id, ms as number | undefined, listenArgs);
     if (!r.ok) return this.finishJob(id, { status: "failed", error: r.error });
-    if (trigger === "shake") await this.emitUtterance(id, r);
+    if (trigger === "shake") {
+      await this.emitUtterance(id, r);
+      if (r.trace && r.text.trim()) r.trace.relay.utterance = this.clock.now() - r.trace.t0;
+    }
     const timings: JsonObject = { queue: r.start - created, ...r.timings, total: this.clock.now() - created };
     this.logTimings(id, "listen", timings);
     const extra: JsonObject = r.speech_ms !== undefined ? { speech_ms: r.speech_ms } : {};
@@ -1380,6 +1456,9 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       timings.say = s.timings;
       if (reply.turn) timings.turn = this.answerTimings(reply, s.start + (ms.tts_first_audio as number));
     } else if (reply.turn) timings.turn = this.answerTimings(reply);
+    if (args.client_timing) timings.client = args.client_timing;
+    // the human turn this talk answers, in that turn's trace (an `ev:"reply"` entry), once the say is over
+    if (reply.turn) await this.replyTrace(id, "talk", reply, timings);
     if (args.listen) {
       const l = await this.record(id, args.listen_ms, { ...args.vad, ...(args.ring_color !== undefined ? { ring_color: args.ring_color } : {}), ...(args.ack !== undefined ? { ack: args.ack } : {}) });
       if (!l.ok) return this.finishJob(id, { status: "failed", error: l.error });
@@ -1409,14 +1488,23 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const ms: JsonObject = {};
     const timings: JsonObject = { queue: this.clock.now() - created };
     const result: JsonObject = {};
+    let firstAudioAt: number | undefined;
     if (args.say !== undefined) {
       const s = await this.speak(id, args.say, args.voice, true, args.marks);
       if (this.audioJob === id) this.audioJob = undefined;
+      if (s.ok) firstAudioAt = s.start + ((s.timings.first_audio as number) ?? 0);
       if (!s.ok) return this.finishJob(id, { status: "failed", error: s.error });
       result.said = args.say;
       ms.tts_first_audio = (s.timings.first_audio as number) ?? 0;
       ms.speech = (s.timings.play as number) ?? 0;
       timings.say = s.timings;
+    }
+    // a question answering the human's turn (in_reply_to): in that turn's trace, once its say is over
+    const reply = args as unknown as JsonObject;
+    if (isRecord(reply.turn)) {
+      timings.turn = this.answerTimings(reply, firstAudioAt);
+      if (args.client_timing) timings.client = args.client_timing;
+      await this.replyTrace(id, "ask", reply, timings);
     }
     const tAsk = this.clock.now();
     let settle!: (a: AskAnswer) => void;
@@ -1460,6 +1548,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     ms.total = tEnd - created;
     timings.ask = { cmd: tAck - tAsk, wait: tEnd - tAck };
     timings.total = ms.total;
+    if (args.client_timing) timings.client ??= args.client_timing;
     this.logTimings(id, "ask", timings);
     // Inbox first, then the result: the asking call's own ride-along reliably carries it (marked read).
     // Answers are agent-driven (one per ask), so they bypass the device event rate cap.
@@ -1695,7 +1784,13 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const t0 = this.clock.now();
     let pick = await this.pickVoice("stt");
     if (!pick.ok) return { ok: false, error: pick.error };
-    const buf: ListenBuffer = { job: id, chunks: [], bytes: 0, ended: false, screenRev: this.screenRev };
+    // the turn trace (core/trace.ts): an adopted shake listen carries its shake
+    const local = typeof extra.adopt === "string" ? extra.adopt : undefined;
+    const trace = new ListenTrace(t0, local ? "shake" : "agent");
+    const shake = local ? this.shakes.get(local) : undefined;
+    if (local) this.shakes.delete(local);
+    if (shake) trace.shake = { at: shake.at - t0, ...shake.data };
+    const buf: ListenBuffer = { job: id, chunks: [], bytes: 0, ended: false, screenRev: this.screenRev, trace, order: new SeqOrder<DecodedAudio>(), roomGen: this.roomGen };
     let fallback: string | undefined;
     // Semantic end of turn by default: when the voice box serves this listen and the firmware
     // can be stopped by it (listen_stop), the box's end of turn is THE end — the device's
@@ -1709,6 +1804,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         buf.stream = pick.provider.sttStream({
           onTurnEnd: (reason) => this.onTurnEnd(buf, reason),
           onFail: () => this.onBoxFail(buf),
+          onHint: (k) => this.onHint(buf, k),
           ...(semantic ? { noSpeechMs: typeof extra.no_speech_ms === "number" ? extra.no_speech_ms : BOX_NO_SPEECH_MS } : {}),
         });
         if (semantic && !buf.boxFailed) {
@@ -1722,10 +1818,85 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         pick = { ...pick, provider: this.voice, name: this.voice.name, box: false };
       }
     }
+    let r: ListenResult;
     try {
-      return await this.recordInto(buf, pick, id, ms, extra, t0, fallback);
+      r = await this.recordInto(buf, pick, id, ms, extra, t0, fallback);
+    } catch (e) {
+      // STT failed (stt_timeout, a provider error): the job fails with this error — its trace stays
+      await this.traced(buf, { ok: false, error: errorCode(e) });
+      throw e;
     } finally {
       buf.stream?.abort(); // no-op once its final text is in
+      this.clock.clearTimeout(buf.gapTimer);
+    }
+    return this.traced(buf, r);
+  }
+
+  /** A listen's result with its trace (the box's own part too) and, when the owner keeps audio, its PCM stored. */
+  private async traced(buf: ListenBuffer, r: ListenResult): Promise<ListenResult> {
+    const t = buf.trace;
+    t.lost = buf.order.lost;
+    t.dup = buf.order.dup;
+    const box = buf.stream?.trace?.();
+    if (box) t.box = box as JsonObject;
+    let audio = false;
+    if (buf.roomGen !== this.roomGen) return { ...r, trace: t }; // forgotten meanwhile: nothing kept, nothing logged
+    if (buf.bytes > 0) {
+      try {
+        // the generation BEFORE the setting is read: a wipe after this read voids the store
+        const gen = this.audioKeep.generation;
+        const cfg = await this.activity.settings();
+        if (cfg.keep_audio && cfg.transcripts) audio = await this.audioKeep.store(buf.job, buf.chunks, gen);
+        if (audio) await this.scheduleDeliveries(); // the alarm also expires kept audio
+      } catch (e) {
+        this.log("keep audio failed", { device: this.deviceId, error: errorCode(e) });
+      }
+    }
+    if (audio) t.relay.audio_kept = true;
+    // kept for finishJob (bounded: a job always finishes; never more than a few listens in flight)
+    if (buf.roomGen !== this.roomGen) return { ...r, trace: t }; // forgotten during the audio store: register nothing
+    const jt: JobTrace = { trace: t, audio };
+    if (this.traceTail?.buf === buf) jt.tail = this.traceTail.over;
+    this.jobTraces.set(buf.job, jt);
+    while (this.jobTraces.size > 8) this.jobTraces.delete(this.jobTraces.keys().next().value!);
+    return { ...r, trace: t, ...(audio ? { audio } : {}) };
+  }
+
+  /** Late frames of `buf` (diagnostics only) until the device's end frame or TRACE_TAIL_MS. */
+  /**
+   * The listen's audio acceptance just stopped (record's end): when the relay ended it and the
+   * device's end frame has not come, that job's later frames go to the trace — header
+   * diagnostics only — from this very moment until that end frame or TRACE_TAIL_MS.
+   */
+  private beginTail(buf: ListenBuffer) {
+    if (!buf.relayEnded || buf.devEnd || buf.lost || !this.liveSocket()) return;
+    this.traceTail?.done(); // one tail at a time: an older one is over
+    let resolve!: () => void;
+    const over = new Promise<void>((r) => (resolve = r));
+    const timer = this.clock.setTimeout(() => tail.done(), TRACE_TAIL_MS);
+    const tail = {
+      buf,
+      over,
+      done: () => {
+        this.clock.clearTimeout(timer);
+        if (this.traceTail === tail) this.traceTail = undefined;
+        resolve();
+      },
+    };
+    this.traceTail = tail;
+  }
+
+  /** A listener hint from the voice box (stt.hint) → Molty (cap `hints`), while that listen is open. */
+  private onHint(buf: ListenBuffer, k: "pause" | "question") {
+    if (buf.ended || this.listenBuf !== buf) return;
+    const sock = this.liveSocket();
+    if (!sock?.getMeta()?.caps?.includes("hints")) return;
+    if (buf.trace.hints.length >= TRACE_LIMITS.hints) return;
+    buf.trace.hint(k, this.clock.now());
+    try {
+      sock.sendText(JSON.stringify({ t: "hint", job: buf.job, k }));
+    } catch {
+      /* the device is gone: the listen ends anyway */
     }
   }
 
@@ -1758,9 +1929,14 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         });
       }
     } finally {
-      if (this.listenBuf === buf) this.listenBuf = undefined;
+      if (this.listenBuf === buf) {
+        this.listenBuf = undefined;
+        this.beginTail(buf); // same step: no frame of this job falls between the two
+      }
     }
     const tEnd = buf.endAt ?? this.clock.now();
+    const rt = buf.trace.relay; // the turn trace's relay side (ms from the listen's start)
+    Object.assign(rt, { voice: pick.name, cmd: tAck - t0, end: tEnd - t0 }, buf.firstAt ? { first_frame: buf.firstAt - t0 } : {}, buf.turnEndAt !== undefined ? { turn_end: buf.turnEndAt - t0 } : {});
     // A listen that broke is an error, never "nobody spoke" (no_speech) nor an empty success:
     // the device went away mid-listen, or its capture failed (end frame reason "error").
     if (buf.lost) return { ok: false, error: "device_offline" };
@@ -1805,6 +1981,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (buf.thinking) this.autoMood(buf, text ? "thinking" : "idle");
     const duration = durationMs(pcm.length);
     const reason = buf.reason ?? (!text ? "no_speech" : duration >= ms - 100 ? "max" : "ended");
+    Object.assign(rt, { voice: served, stt: sttMs }, fallback ? { fallback } : {});
     return {
       ok: true,
       start: t0,
@@ -1853,6 +2030,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (buf.ended || this.listenBuf !== buf) return;
     const now = this.clock.now();
     buf.ended = true;
+    buf.relayEnded = true;
     buf.endAt = now;
     buf.turnEndAt = now;
     // no_speech (the box heard nobody, device VAD off): as the device's own no_speech — no STT, transcript ""
@@ -1888,8 +2066,50 @@ export class DeviceRoom implements AgentApi, OwnerApi {
 
   private onAudio(bytes: Uint8Array) {
     const frame = decodeAudioFrame(bytes);
+    if (!frame) return;
+    const tail = this.traceTail;
+    if (tail && frame.header.s === tail.buf.job) {
+      // a listen already over: its trace takes the frame's diagnostics, never its audio
+      const tb = tail.buf;
+      if (tb.order.offer(frame.header.seq, frame, this.clock.now()) === "dup") return;
+      tb.trace.frame(frame.header, frame.payload.byteLength, this.clock.now());
+      tb.trace.late++;
+      if (frame.header.end) tail.done();
+      return;
+    }
     const buf = this.listenBuf;
-    if (!frame || !buf || buf.ended || frame.header.s !== buf.job) return;
+    if (!buf || frame.header.s !== buf.job) return;
+    // In seq order: the device resends a frame that failed to go out, so one may come late or twice.
+    const now = this.clock.now();
+    const ready = buf.order.offer(frame.header.seq, frame, now);
+    if (ready === "dup") return;
+    // noted in the trace either way: the device's end frame (its `tr` summary) follows a box turn end
+    buf.trace.frame(frame.header, frame.payload.byteLength, now);
+    if (frame.header.end) buf.devEnd = true;
+    if (buf.ended) {
+      buf.trace.late += Math.max(1, ready.length); // after the end (or the box's turn end): dropped, as ever — counted
+      return;
+    }
+    this.takeFrames(buf, ready);
+  }
+
+  /** Frames now in order: taken one by one; a gap still open is given up after TRACE_LIMITS.gapMs. */
+  private takeFrames(buf: ListenBuffer, frames: DecodedAudio[]) {
+    for (const f of frames) {
+      if (buf.ended) buf.trace.late++;
+      else this.takeFrame(buf, f);
+    }
+    this.clock.clearTimeout(buf.gapTimer);
+    buf.gapTimer = undefined;
+    const since = buf.ended ? undefined : buf.order.waitingSince();
+    if (since === undefined) return;
+    buf.gapTimer = this.clock.setTimeout(() => {
+      buf.gapTimer = undefined;
+      if (this.listenBuf === buf && !buf.ended) this.takeFrames(buf, buf.order.skip());
+    }, Math.max(0, since + TRACE_LIMITS.gapMs - this.clock.now()));
+  }
+
+  private takeFrame(buf: ListenBuffer, frame: DecodedAudio) {
     if (buf.bytes + frame.payload.byteLength <= MAX_LISTEN_BYTES && frame.payload.byteLength > 0) {
       buf.chunks.push(frame.payload.slice());
       buf.bytes += frame.payload.byteLength;
@@ -1927,6 +2147,9 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const clean = agentEventData("shake", data);
     if (!clean) return;
     if (typeof data.listen === "string" && LOCAL_LISTEN_RE.test(data.listen)) {
+      // the adopted listen's turn trace starts with its shake (record() takes it by the local id)
+      this.shakes.set(data.listen, { at: this.clock.now(), data: { peak_g: clean.peak_g ?? null, rev: clean.reversals ?? null, ms: clean.ms ?? null } });
+      while (this.shakes.size > 4) this.shakes.delete(this.shakes.keys().next().value!);
       const job = await this.adoptShake(data.listen);
       if (job) Object.assign(clean, { listening: true, turn_id: job });
     }
@@ -1997,6 +2220,22 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     return { ok: true, result: c.turn ? { turn: c.turn as unknown as JsonObject } : {} };
   }
 
+  /**
+   * A say / talk that answers a human turn: one `trace` entry `ev:"reply"` on that turn (its
+   * listen job), attributed to the answering agent — when it called, its first audio, and its
+   * own client_timing. Never throws (the trace must not break the answer).
+   */
+  private async replyTrace(id: string, op: "say" | "talk" | "ask", args: JsonObject, timings: JsonObject) {
+    const turn = isRecord(timings.turn) ? timings.turn : undefined;
+    if (!turn || typeof turn.id !== "string") return;
+    const by = (await this.kv.get<JobRecord>(K.job(id)))?.by;
+    const data: JsonObject = { op, job: id };
+    if (typeof turn.reply === "number") data.reply_ms = turn.reply;
+    if (typeof turn.first_audio === "number") data.first_audio_ms = turn.first_audio;
+    if (isRecord(args.client_timing)) data.client_timing = args.client_timing;
+    await this.activity.record({ ts: this.clock.now(), kind: "trace", ev: "reply", job: turn.id, ...(by ? { agent: by.agent, who: by.who } : {}), data });
+  }
+
   /** timings.turn of an answer: the call and its first audio, in ms after the utterance. */
   private answerTimings(args: JsonObject, firstAudioAt?: number): JsonObject {
     const turn = args.turn as unknown as { id: string; at: number };
@@ -2042,6 +2281,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       case "stt.final":
       case "stt.partial":
       case "stt.turn_end":
+      case "stt.hint":
+      case "stt.trace":
         if (meta.box) this.box.onText(sock, frame);
         return;
       default:
@@ -2178,10 +2419,19 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const denied = await this.ownerAuth(linkCode);
     if (denied) return denied;
     if (req.action === "set") {
-      if (typeof req.transcripts !== "boolean") return fail("invalid_args", "transcripts must be true or false");
+      if (req.transcripts === undefined && req.keep_audio === undefined) return fail("invalid_args", "give transcripts and/or keep_audio (true or false)");
+      if (req.transcripts !== undefined && typeof req.transcripts !== "boolean") return fail("invalid_args", "transcripts must be true or false");
+      if (req.keep_audio !== undefined && typeof req.keep_audio !== "boolean") return fail("invalid_args", "keep_audio must be true or false");
       const before = await this.activity.settings();
-      await this.activity.setTranscripts(req.transcripts);
-      if (before.transcripts !== req.transcripts) await this.activity.record({ ts: this.clock.now(), kind: "settings", ev: "activity", data: { transcripts: req.transcripts } });
+      if (typeof req.transcripts === "boolean") await this.activity.setTranscripts(req.transcripts);
+      if (typeof req.keep_audio === "boolean") await this.activity.setKeepAudio(req.keep_audio);
+      const after = await this.activity.settings();
+      // no transcripts means no audio either: what is kept goes now (and when keep_audio goes off)
+      if (!after.transcripts || !after.keep_audio) await this.audioKeep.wipe();
+      const changed: JsonObject = {};
+      if (before.transcripts !== after.transcripts) changed.transcripts = after.transcripts;
+      if (!!before.keep_audio !== !!after.keep_audio) changed.keep_audio = !!after.keep_audio;
+      if (Object.keys(changed).length) await this.activity.record({ ts: this.clock.now(), kind: "settings", ev: "activity", data: changed });
     }
     const q = parseActivityQuery(req.action === "get" ? req.query : {});
     if (typeof q === "string") return fail("invalid_args", q);
@@ -2189,8 +2439,24 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const cfg = await this.activity.settings();
     return {
       ok: true,
-      result: { ...page, transcripts: cfg.transcripts, limits: { max_age_h: ACTIVITY_LIMITS.maxAgeMs / 3600000, max_entries: ACTIVITY_LIMITS.chunkEntries * ACTIVITY_LIMITS.maxChunks } } as unknown as JsonObject,
+      result: {
+        ...page,
+        transcripts: cfg.transcripts,
+        keep_audio: !!cfg.keep_audio,
+        audio: { turns: AUDIO_KEEP.turns, max_s: AUDIO_KEEP.maxMs / 1000, max_age_h: AUDIO_KEEP.maxAgeMs / 3600000 },
+        limits: { max_age_h: ACTIVITY_LIMITS.maxAgeMs / 3600000, max_entries: ACTIVITY_LIMITS.chunkEntries * ACTIVITY_LIMITS.maxChunks },
+      } as unknown as JsonObject,
     };
+  }
+
+  /** Owner: one kept listen's audio as WAV (link-code auth; agents never reach this). */
+  async ownerAudio(linkCode: string, job: string): Promise<Outcome<{ wav: Uint8Array }>> {
+    const denied = await this.ownerAuth(linkCode);
+    if (denied) return denied as Outcome<{ wav: Uint8Array }>;
+    if (typeof job !== "string" || !job.startsWith(`${this.deviceId}.j_`)) return fail("not_found");
+    const pcm = await this.audioKeep.get(job);
+    if (!pcm) return fail("not_found", "no audio kept for this turn (keep audio is off, or it expired after 24 h)");
+    return { ok: true, result: { wav: wav(pcm) } };
   }
 
   /** Agent: its own entries only (+ its jobs' device lines and the device's connects around them). */
@@ -2470,11 +2736,14 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (!this.scheduler) return;
     let next = Infinity;
     for (const d of (await this.kv.list<Delivery>("whq:")).values()) next = Math.min(next, d.due);
+    // kept debug audio expires on the same alarm (core/audio-keep.ts)
+    next = Math.min(next, (await this.audioKeep.nextExpiry()) ?? Infinity);
     if (next !== Infinity) await this.scheduler.setAlarm(Math.max(next, this.clock.now()));
   }
 
   /** Host alarm handler: delivers due webhook requests, then reschedules. */
   async alarm(): Promise<void> {
+    await this.audioKeep.purge();
     const now = this.clock.now();
     const byToken = new Map<string, Array<[string, Delivery]>>();
     for (const [key, d] of await this.kv.list<Delivery>("whq:")) {
@@ -2503,6 +2772,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (!before?.webhook || before.webhook.disabled || !ev || (before.webhook.events && !before.webhook.events.includes(ev.type))) return this.kv.delete(key);
     const hook = before.webhook;
     let error: DeliveryError | undefined;
+    let status: number | null = null;
+    const tSend = this.clock.now();
     try {
       // One deadline over DNS, signing and the request itself.
       await this.withDeadline(async (signal) => {
@@ -2521,6 +2792,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         } catch {
           /* ignore */
         }
+        status = res.status;
         if (res.status < 200 || res.status > 299) throw new WebhookFailure(`http_${res.status}`);
       });
     } catch (e) {
@@ -2529,6 +2801,19 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     // Delivery stats are written atomically onto the CURRENT record, and only if
     // it still holds this webhook: never resurrect or overwrite a newer config.
     const now = this.clock.now();
+    // an utterance's delivery is part of its turn's trace (core/trace.ts): status, latency, attempt
+    if (ev.type === UTTERANCE_EVENT && typeof ev.data.turn_id === "string") {
+      await this.activity.record({
+        ts: now,
+        kind: "trace",
+        ev: "webhook",
+        job: ev.data.turn_id,
+        agent: before.agent_name,
+        who: d.tok.slice(0, 16),
+        ok: !error,
+        data: { status, ms: now - tSend, attempt: d.attempt + 1, after_ms: now - ev.ts, ...(error ? { error } : {}) },
+      });
+    }
     const w = await this.kv.update<TokenRecord, WebhookRecord | undefined>(tokKey, (cur) => {
       if (!cur?.webhook || cur.webhook.secret !== hook.secret) return { result: undefined };
       const next = { ...cur.webhook };

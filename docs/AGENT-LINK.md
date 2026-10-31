@@ -93,8 +93,10 @@ firmware whose window is optional, 0..30000 or unlimited — see `listen` below;
 boards with a mic and an IMU, firmware whose shake can start a listen — see [Shake to talk](#shake-to-talk)), `ask` only when it
 has a touch screen (and firmware that implements `ask`), and `update` when the firmware can
 install a release itself ([Firmware updates](#firmware-updates)), `act` when it plays one-shot
-gestures ([Inline cues and actions](#inline-cues-and-actions)), and `log_upload` when it
-sends its log lines to the relay ([Activity log](#activity-log)); the relay answers
+gestures ([Inline cues and actions](#inline-cues-and-actions)), `log_upload` when it
+sends its log lines to the relay ([Activity log](#activity-log)), `trace` when its listen frames
+carry the [turn trace](#turn-trace) fields, and `hints` when it takes `hint` frames (listener
+reactions, [Turn trace](#turn-trace)); the relay answers
 those commands `409 unsupported` up front, without calling TTS, when the device left them
 out — or `409 firmware_too_old` when `fw` is older than the feature's minimum firmware
 (`FEATURES` in `services/relay/src/core/version.ts`): caps say whether it can, the version says why not. The device itself answers a command its board cannot do with `error:"unsupported"`
@@ -125,6 +127,31 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
 - Stream IDs allow 1–128 characters; omitted `end` means false. Header-only binary
   frames (without a newline/payload) are accepted. PCM payloads contain whole int16 samples.
   Text-frame limit is 64 KiB, independently of the audio-frame limit.
+- **Listen frames are ordered by `seq`** (0, 1, 2, … per listen). Firmware with the cap `trace`
+  keeps a frame whose send failed (a ring of ≤ 10 s on the device) and resends it in order, same
+  seq; it skips a seq only when that ring overflowed (the audio is gone). The relay takes frames
+  in seq order: a frame ahead of a gap waits (≤ 64 frames); a duplicate is dropped; a gap still
+  open 1 s after the first frame waiting behind it (the end frame included) is given up — counted
+  lost in the [turn trace](#turn-trace) — and what waited flows on. Streaming STT always gets the
+  audio in seq order. Frames after the end (or after the box's turn end) are dropped as before
+  (counted `late`). Older firmware sends in order and never resends: nothing changes for it.
+- **Turn trace fields** (listen frames, firmware cap `trace`; all optional, a malformed one is
+  dropped, never fatal; older relays ignore them): `ct` capture ms of the frame's first sample
+  from the listen's mic start (a shake listen: from the shake's mic start; after a settle trim
+  the first frame's `ct` is the trim); `lv` hex, one byte per 100 ms chunk of the frame = the
+  chunk's RMS level `clamp(round(2·(dBFS+100)), 0, 200)` (0 = ≤ −100 dBFS or silence, 200 = 0
+  dBFS); `cl` samples saturated after the mic gain (omitted when 0); `rt` failed send attempts
+  of this frame before it went out (omitted when 0); `wq` ms it waited on the device between its
+  capture end and its send. The end frame adds `tr` (the whole header stays ≤ 512 B):
+  `{wall, cap, sent, fail, drop, dropms, r0, r1, gain, pk, set, setc}` — ms from mic open to
+  the end, ms of audio captured (after the trim), frames sent, failed send attempts, frames
+  dropped by the device ring and their ms, RSSI (dBm) at the listen's start and end, the mic
+  gain, the peak |sample| in ‰ of full scale, and for a shake listen the ms of handling noise
+  trimmed and `setc:1` when that settle hit its cap ([Shake to talk](#shake-to-talk)).
+- **`hint`** (relay → device, firmware cap `hints`): `{"t":"hint","job":"<listen job>","k":"pause"|"question"}`,
+  fire-and-forget (no `res`), forwarded from the voice box's `stt.hint` while that listen is open.
+  The device ignores a hint for anything but its running listen; older firmware ignores the
+  unknown `t`. What the device does with it: [Turn trace](#turn-trace) › listener reactions.
 - `say`: relay sends `cmd say {job,text,ms,rate:16000,voice?,cues?}`; device starts `speaking`
   and text immediately, then acknowledges. Relay sends 320 ms PCM frames (`s` = job id),
   with three lead frames and paced delivery thereafter. TTS is streamed: the relay sends
@@ -359,13 +386,27 @@ shake ─▶ device: listening at once (ring + mood), audio kept locally
   claimed. `in_reply_to` naming an older turn (the human has spoken again since) goes ahead
   unclaimed and uncorrelated. With a claimed turn the answer's `timings.turn` is
   `{id, reply, first_audio}`: ms from the utterance to the call and to its first audio.
+  `say` / `talk` / `ask` take an optional **`client_timing`**: the agent's own latency for this
+  call, in ms — an object of ≤ 8 keys (`[a-z][a-z0-9_]{0,31}`), each a number 0..3600000, e.g.
+  `{received_ms, model_ms}` (event received → this call, the model's run); anything else
+  `invalid_args`. Relay-only (never sent to Molty): kept in the job's `timings.client` and, for a
+  say / talk / ask answering a turn, in that turn's [trace](#turn-trace) (`ev:"reply"`). `ask`
+  also takes `in_reply_to` (checked like say / talk's): naming the open turn it is traced as a
+  reply (and gets `timings.turn`), but an ask never claims the turn.
+- **Shake handling noise** (firmware cap `trace`): the shake itself is loud in the mic. The
+  device drops the audio of an adopted shake listen until the IMU shows the shake has settled —
+  `| |a| − 1 g | < 0.15 g` for 150 ms, from the mic start, capped at 600 ms — and fades the
+  first 10 ms it keeps in; nothing before that point is counted, sent or fed to the VAD. The
+  end frame's `tr.set` / `tr.setc` say how much went (boards without an IMU trim nothing).
 - **Reserved, not built:** `utterance.partial` (words while the human is still talking), `draft`
   and `react` events during an open human turn. Whatever comes, agents must not speak while the
   human talks; agents should ignore event types they do not know.
 
 ### Listen end of speech (device VAD)
 
-`device/firmware/main/audio/vad.h` — energy VAD on the 16 kHz mic stream (gain 8), 20 ms
+`device/firmware/main/audio/vad.h` — energy VAD on the 16 kHz mic stream (the board's mic gain:
+`mic_gain` in `molty_board_t`, 6 on the 1.46 — lowered from 8 after a real clip saturated
+18 samples at 8; 8 when a board leaves it 0), 20 ms
 frames, RMS in dBFS against an adaptive noise floor:
 
 - **Floor**: minimum frame energy over the last 3 s. The first 300 ms only measure it; the
@@ -1061,6 +1102,8 @@ the request id in `s`.
 | box → relay | `{"t":"stt.partial","id","text"}` (optional, ignored by the relay), `{"t":"stt.final","id","text","ms"?}` or `{"t":"stt.final","id","error"}` |
 | box → relay | `{"t":"stt.turn_end","id","reason":"no_speech"}` (only when `stt.start` carried `no_speech_ms`; at most once, never after a word or a turn end): nobody spoke for `no_speech_ms` of captured audio — no word, no voice activity (the model's `prs[2]` below 0.3 for 3 steps restarts the clock; a loud frame in the last ~0.5 s postpones the verdict) — and nobody is speaking right then. The relay ends the listen as the device's own no_speech: `listen_stop {job, reason:"no_speech"}` (no chirp, no thinking), `stt.cancel`, `reason:"no_speech"`, `heard:""` |
 | box → relay | `{"t":"stt.turn_end","id"}` (optional, at most once per listen): the human finished. The relay ends the listen there (`cmd listen_stop` to firmware with the cap, `stt.end` to the box at once); see `listen_stop` above |
+| box → relay | `{"t":"stt.hint","id","k":"pause"\|"question"}` (optional, while the human talks; ≥ 1.5 s apart): `pause` = a mid-turn pause began (the pause estimate crossed the threshold after a word, before any turn end), `question` = a word ending in `?` arrived. Forwarded to firmware with the cap `hints` as `hint` while that listen is open; dropped otherwise |
+| box → relay | `{"t":"stt.trace","id","trace":{…}}` (optional): the box's side of the [turn trace](#turn-trace), sent right before `stt.turn_end` (either kind) and again right before `stt.final` (the last one wins, ≤ 8 KB, known keys only). An older relay ignores both |
 
 ### Selection: `voice_mode`
 
@@ -1144,12 +1187,13 @@ can be read in one place instead of lining up the agent's memory, the device log
 | kind | when | fields |
 |---|---|---|
 | `call` | every authenticated agent call (successful `wait` / `events` polls are skipped: they would wash the log out) | `agent`, `op` (`talk`, `say`, `mood`, `status`, …), `args` (summary: secrets stripped), `ok` / `error` / `message`, `ms`, `job` when it made or names one; `status` adds `data.rssi` |
-| `job` | a job ends (`ts` = its start) | `op` (job kind), `agent`, `ok` / `error`, `ms`, `data: {status, timings, voice:{tts?, stt?, fallback?}, reason?, heard?, said?, answer?, index?, outcome?, phase?}` |
+| `job` | a job ends (`ts` = its start) | `op` (job kind), `agent`, `ok` / `error`, `ms`, `data: {status, timings, voice:{tts?, stt?, fallback?}, reason?, heard?, said?, answer?, index?, outcome?, phase?, trace?, audio?}` — `trace`: a listen's (listen / talk / adopted shake) [turn trace](#turn-trace), failed ones too; `audio: true`: its audio is kept ([Keep audio](#keep-audio-for-debugging)) |
+| `trace` | later facts about a turn (`job` = the turn's listen job): `webhook` (each delivery attempt of its `utterance`), `reply` (a say / talk answering it) | `ev`, `agent`, `data` ([Turn trace](#turn-trace)) |
 | `device` | `connect` (`fw`, `board`), `disconnect` (`code`: the close code), `refused` (wrong device key), `shake` / `tap` / `button`, `utterance` (shake to talk: `job` = its `turn_id`, `data: {text, reason, trigger}`; the text is a transcript) | `ev`, `data` |
 | `device_log` | the device's own log lines (below) | `job` when tagged, `data: {text, level: E\|W\|I\|D\|V\|EVT, boot, seq, prev?, approx?}` |
 | `pair` | `approved` / `rejected` / `timeout` / `revoked` | `ev`, `agent` |
 | `voice_box` | `connect` / `disconnect` / `unpaired` | `ev`, `data` |
-| `settings` | owner changes: `voice` (mode, voice), `activity` (transcripts) | `ev`, `data` |
+| `settings` | owner changes: `voice` (mode, voice), `activity` (transcripts, keep_audio) | `ev`, `data` |
 
 Every entry is `{id:"a<seq>", ts, kind, …}`. A refused answer to someone else's turn is a `call`
 with `error: "turn_claimed"`; the adopted shake listen is a `job` with no agent (owner only). Failed `talk` / `ask` / `update` calls also return
@@ -1207,9 +1251,10 @@ few). Soft resets (panic, watchdog, OTA restart) are covered by the no-init RAM 
 
 - **Owner** (console): `GET /v1/devices/<id>/activity?since=a42|<unix ms>&limit=1..500&agent=<name>&kind=call,job&job=<job id>&errors=1`
   with `X-Molty-Link-Code` (same auth and CORS as the [voice owner API](#owner-api-console)) →
-  `{entries, next, more, transcripts, limits:{max_age_h, max_entries}}`, entries oldest first.
+  `{entries, next, more, transcripts, keep_audio, audio:{turns, max_s, max_age_h}, limits:{max_age_h, max_entries}}`, entries oldest first.
   `since=a<id>`: entries after it, `limit` at most (`more` when cut; resume from `next`); no
-  `since`: the newest `limit` (default 200). `POST {transcripts: true|false}` sets the setting.
+  `since`: the newest `limit` (default 200). `POST {transcripts?: bool, keep_audio?: bool}` (one
+  or both) sets the settings.
 - **Agents**: `GET /v1/activity?since&limit&kind&job&errors` (bearer) or MCP `molty_activity` →
   `{entries, next, more}`: **only that agent's own** calls, jobs and pairing, the device lines of
   its own jobs, and the device's connects / disconnects within its jobs' spans (5 s before to
@@ -1218,6 +1263,86 @@ few). Soft resets (panic, watchdog, OTA restart) are covered by the no-init RAM 
   "Its own jobs" means the relay's job record says that agent's token started them (written by
   the relay when the job is created); naming a job id in a call never makes it yours. An
   `audio_busy` refusal does not name the running job.
+
+### Keep audio for debugging
+
+An owner setting, **off by default** (console Activity › "keep audio", `POST …/activity
+{keep_audio: true}`). While on **and** log transcripts are on, the relay keeps each listen's
+audio as it received it (PCM16 @16 kHz, seq order, the first 30 s): the newest **5** listens,
+each deleted **24 h** after capture (on write, on read and on the room's alarm, which is
+scheduled for it beside webhook deliveries). Storage: `aud:` keys, 64 KB pieces (≤ ~4.8 MB per
+device). Transcripts off ⇒ none is kept and what was kept is deleted; keep audio off deletes it
+too; forgetting the device deletes it. The job entry says `data.audio: true`.
+
+Download: `GET /v1/devices/<id>/activity/audio/<job id>` with `X-Molty-Link-Code` → `200
+audio/wav` (CORS like the activity route), `401` wrong code, `404 not_found` when never kept or
+expired. **Owner only**: the route reads the link code alone — no agent token opens it, and
+there is no agent route to audio.
+
+## Turn trace
+
+Everything about one listen in one place, so a bad turn (garbage transcript, lost audio, a slow
+answer) can be read without a device log, a box log and a `wrangler tail`. Code:
+`services/relay/src/core/trace.ts` (relay), the frame fields above (device), `stt.trace` (box).
+
+Stored with the job: the listen's activity `job` entry carries `data.trace` (≤ **4096 B** of
+UTF-8 JSON; when bigger, trimmed in this order until it fits — the frame list to its first/last 8,
+the box's pause series halved then dropped, its words to the last 16 then dropped, the device
+levels halved by max (`lv_ms` per byte), the box's activity spans; `trimmed: true`). Never in the
+agent-facing job result. Older firmware or bridge: those parts are simply absent. A listen the
+relay ended (the box's turn end / no_speech) usually ends before the device's own end frame: its
+later frames still count for the trace — header diagnostics (`tr`, levels, `late`) only, their
+audio goes nowhere — from the moment the relay stopped taking its audio until that end frame,
+3 s, or the device's disconnect; the job's entry is written then, once (the agent's result never
+waits for it). Forgetting the device voids every such delayed write (entry, kept audio). A listen whose STT failed (`stt_timeout`, a provider error)
+keeps its trace on the failed job's entry.
+
+```json
+{"v":1,"trigger":"shake","t0":1793410484862,
+ "dev":{"shake":{"at":-140,"peak_g":8.2,"rev":4,"ms":420},"set":340,"setc":0,"wall":1400,"cap":1060,
+        "gain":6,"pk":998,"lv":"a0b0c0a1a1a1a2a2a290","lv0":340,"clip":[[3,3]],"clip_n":3,
+        "frames":[[0,340,0,0,20],[2,940,1,0,30],[1,640,1,2,1500],[3,1240,2,0,null]],
+        "sent":4,"fail":2,"resent":1,"late":1,"dup":1,"rssi":[-69,-79],"end":"turn_end"},
+ "box":{"v":1,"step_ms":80,"skip":12,"thr":0.6,"hold_s":1.2,"audio_s":1.2,"act":[[0.3,1]],
+        "pause":"ffeeddccbb","pause_every":2,"words":[["hi",0.32,0.5],["Molty,",0.5,null],["today?",0.9,1.1]],
+        "end":{"at":1.12,"rule":"punct","word":"today?","held_s":0,"ema":0.71},"final_ms":7},
+ "relay":{"voice":"box","cmd":2,"first_frame":1,"turn_end":2,"end":2,"stt":4,"utterance":6,"hints":[["question",1]]}}
+```
+
+- `t0`: relay ms when the listen began; every other relay time (`dev.frames` arrivals,
+  `dev.shake.at`, `relay.*`, hints) is ms from it.
+- `dev`: the shake (its event's arrival, peak g, reversals, its detection ms), the device's `tr`
+  summary, `lv` the levels over the whole listen in capture order (one byte per 100 ms, as the
+  frames' `lv`; a hole between frames reads `00`; `lv0` = the `ct` of its first byte), `clip`
+  `[[chunk index, saturated samples]…]`, `frames` `[[seq, ct, arrival, rt, wq]…]` in arrival order,
+  `sent` / `fail` / `resent`, `lost` `[[from seq, to seq]…]` (gaps the relay gave up),
+  `lost_ms` (the device's dropped audio), `late` / `dup`, `rssi` `[start, end]`, the end `reason`
+  and `speech_ms`.
+- `box`: the voice box's `stt.trace` — `act` speech-activity spans and `words`
+  `[[text, start, stop|null]…]` in audio seconds, `pause` the pause estimate (one byte = round(EMA·255)
+  per `pause_every` 80 ms steps), `end` the end-of-turn decision (`at` audio s, `rule`: `punct` the
+  last word ended a sentence / `hold` a mid-sentence pause that lasted the hold / `unmute` hold 0,
+  `word`, `held_s`, `ema`), `ns` the no-speech decision (`at`, `quiet_s`, `ema`, `why`),
+  `final_ms` the transcript's tail after the end.
+- `relay`: who transcribed (`voice`, `fallback`), `cmd` (listen acknowledged), `first_frame`,
+  `turn_end` (the box's), `end` (the end frame or turn end), `stt` (ms of transcription after
+  the end), `utterance` (when it went to the agents), `hints` `[[k, ms]…]` forwarded to Molty,
+  `audio_kept`.
+- Log transcripts off: the box's `words` and the end's `word` are emptied before the write.
+
+Later facts are `trace` entries on the turn (`job` = its listen job id), attributed to the agent
+(an agent sees only its own, an owner all):
+- `ev:"webhook"` — each delivery attempt of the turn's `utterance` to an agent's webhook:
+  `ok`, `data:{status (HTTP, null when none came), ms (the request), attempt, after_ms (from the
+  utterance to the delivery's end), error?}`.
+- `ev:"reply"` — a say / talk answering the turn (claimed, or `in_reply_to` it) or an ask with
+  `in_reply_to` it, once its say has played: `data:{op, job (the reply's job), reply_ms, first_audio_ms, client_timing?}`.
+
+**Listener reactions** (firmware cap `hints`): while the human speaks, Molty reacts by itself —
+visual only, subtle, never over a question / pairing / update, never with idle life off: a nod
+at a natural pause (the box's `pause` hint, else the device's own level-based pause), a glance at
+a question (`question` hint), a small look-up when the voice starts after a quiet stretch. None
+in the first second of a listen, ≥ 2.5 s apart (5 s with idle life "calm").
 
 ## Default relay
 
