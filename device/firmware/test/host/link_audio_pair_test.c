@@ -876,10 +876,13 @@ static void test_resend(void) {
 /* Listener reactions (listen_react.h) inside a real listen: the box's hints and the mic level
  * drive mole_fluid_act; never with idle life off or a question on screen. */
 static int hint_at_chunk=-1; static const char *hint_kind="pause"; static int react_speech=-1;   /* first chunk of 0.8 s of voice, -1 none */
+static bool react_talk=false;      /* a voice the whole listen: 300 ms of speech, a 100 ms dip, … (no pause nods) */
+static int ext_at_chunk=-1;        /* the relay's reaction (a 2.2 s peek) arrives at this chunk */
 static void react_fill(int16_t *buf,size_t n,unsigned chunk) {
     sdk_now+=100000;                                                 /* 100 ms per chunk */
     memset(buf,0,n*2);
-    if (react_speech>=0 && (int)chunk>=react_speech && (int)chunk<react_speech+8) for (size_t i=0;i<n;i++) buf[i]=(int16_t)(3000.0*sin((chunk*1600+i)*0.06));
+    if ((react_speech>=0 && (int)chunk>=react_speech && (int)chunk<react_speech+8) || (react_talk && chunk%4!=3)) for (size_t i=0;i<n;i++) buf[i]=(int16_t)(3000.0*sin((chunk*1600+i)*0.06));
+    if ((int)chunk==ext_at_chunk) link_audio_external_react(2200);
     if ((int)chunk==hint_at_chunk) link_audio_hint("listen1",hint_kind);
     if (chunk==hint_at_chunk+1u) link_audio_hint("someone-else",hint_kind);   /* not the running listen: ignored */
 }
@@ -909,6 +912,20 @@ static void test_reactions(void) {
     react_speech=12; mark_n=0; listen_job_with(3000,",\"vad\":false",&job);
     sdk_rx_chunks=0; complete(record(&job)); react_speech=-1;
     assert(mark_n==1 && !strcmp(mark_what[0],"look_up"));
+    /* the relay's reaction (a reflex peek at 1.2 s, 2.2 s long) plays over the listen: the box's
+     * pause hint at 1.5 s nods no more (it would cut the peek short) */
+    ext_at_chunk=12; hint_at_chunk=15; hint_kind="pause"; mark_n=0; listen_job_with(3000,",\"vad\":false",&job);
+    sdk_rx_chunks=0; complete(record(&job)); assert(mark_n==0); ext_at_chunk=-1; hint_at_chunk=-1;
+    /* the attentive baseline: a voice the whole listen, no pause and no hint — Molty still moves,
+     * a blink on a dip of the voice ~2.5 s in, a glance a beat later */
+    react_talk=true; mark_n=0; listen_job_with(6000,",\"vad\":false",&job);
+    sdk_rx_chunks=0; complete(record(&job)); react_talk=false;
+    assert(mark_n==2 && !strcmp(mark_what[0],"blink") && !strcmp(mark_what[1],"glance_left"));
+    /* ...not with idle life off */
+    idle_setting=0; react_talk=true; mark_n=0; listen_job_with(6000,",\"vad\":false",&job);
+    sdk_rx_chunks=0; complete(record(&job)); react_talk=false; idle_setting=2; assert(mark_n==0);
+    /* the relay's reaction outside a listen: ignored */
+    link_audio_external_react(2200); assert(atomic_load(&s_ext_hold)==0);
     /* a hint after the listen: ignored (no job running) */
     link_audio_hint("listen1","pause"); assert(atomic_load(&s_hint)==0);
     sdk_rx_fill=NULL; hint_at_chunk=-1;
@@ -921,5 +938,5 @@ int main(void) {
     /* activity log: every accepted job (done, failed, cancelled, refused frames, adopted shakes) ended its tag */
     assert(sdk_job_begins>0 && sdk_job_begins==sdk_job_ends);
     cJSON_Delete(sdk_sent); free(s_jobs); free(s_done); free(s_ring);
-    puts("LINK AUDIO/PAIR PASS: job tags begin/end on every path, paced PCM, final playback drain, errors, cmd-time text/mood, explicit moods outlive jobs, pairing reasons, board caps, listening ring (+ ring_color), ask cancellation, listen_stop (turn_end; no_speech never acknowledged), listen window (30 s, unlimited, setting), say word cues follow playback, turn acknowledgement (chirp + thinking: which ends ack, opt-outs, setting, screen owners, cut by the next job), shake to talk (a local listen at once, adopted by the relay with its job id + end of turn and the audio replayed, or ending quietly: unclaimed / declined / link down; never over another owner, the setting, or a relay that does not adopt), shake settle trim (510 ms: stillness confirmed, capped 600, no IMU), uplink resend in order + overflow drops oldest + flush deadline, listener reactions (hints, warmup, idle off, owners)");
+    puts("LINK AUDIO/PAIR PASS: job tags begin/end on every path, paced PCM, final playback drain, errors, cmd-time text/mood, explicit moods outlive jobs, pairing reasons, board caps, listening ring (+ ring_color), ask cancellation, listen_stop (turn_end; no_speech never acknowledged), listen window (30 s, unlimited, setting), say word cues follow playback, turn acknowledgement (chirp + thinking: which ends ack, opt-outs, setting, screen owners, cut by the next job), shake to talk (a local listen at once, adopted by the relay with its job id + end of turn and the audio replayed, or ending quietly: unclaimed / declined / link down; never over another owner, the setting, or a relay that does not adopt), shake settle trim (510 ms: stillness confirmed, capped 600, no IMU), uplink resend in order + overflow drops oldest + flush deadline, listener reactions (hints, warmup, idle off, owners, the relay's reaction never cut short, the baseline while a voice talks)");
 }

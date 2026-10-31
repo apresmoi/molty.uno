@@ -1,7 +1,8 @@
 """Molty's reflex on the box: a small emotion classifier over the human's words while they talk.
 
 The relay asks for it per listen (`stt.start` with `reflex: true`, docs/AGENT-LINK.md "Reflex").
-At each reflex chunk of the text so far — the same rule as the relay's core/reflex.ts reflexDue —
+At every new word count of the text so far from FIRST_WORDS on (the relay's core/reflex.ts reflexDue
+picks its chunks among those, at the owner's liveliness, so each one it picks has a verdict),
 the box classifies the text and sends `{"t":"stt.reflex","id","n","pick","conf","p","ms","chars","tokens","model"}`
 right after that word's `stt.partial`: no extra network hop, the box already has the words.
 
@@ -24,8 +25,10 @@ import time
 
 log = logging.getLogger("molty_voice")
 
-EVERY_WORDS = 6
-MIN_WORDS = 2
+# the relay's REFLEX.firstWords: its first chunk, and every word count from there may be one
+FIRST_WORDS = 3
+# word counts classified per listen (~35 ms of CPU each); the relay picks at most 40 of them
+MAX_CHUNKS = 120
 PICKS = ("surprised", "happy", "sad", "laugh", "curious", "none")
 DEFAULT_MODEL = "SamLowe/roberta-base-go_emotions-onnx"
 MAX_CHARS = 400
@@ -80,14 +83,11 @@ def sentence_end(text: str) -> bool:
 
 
 def reflex_due(prev_n: int, text: str) -> int | None:
-    """The chunk's word count when one is due (same rule as the relay's reflexDue), else None."""
+    """The word count to classify: every new one from FIRST_WORDS on (the relay's chunks are among them), else None."""
     n = len(text.split())
-    if n < MIN_WORDS:
+    if n < FIRST_WORDS or n <= prev_n:
         return None
-    added = n - prev_n
-    if added >= EVERY_WORDS or (added >= 1 and sentence_end(text)):
-        return n
-    return None
+    return n
 
 
 def reflex_input(text: str) -> str:
@@ -154,7 +154,7 @@ def load(repo: str = DEFAULT_MODEL, threads: int = 4) -> ReflexModel | None:
 class ReflexTracker:
     """One listen's chunks: feed every text so far, get the chunk's n when one is due."""
 
-    def __init__(self, max_chunks: int = 12):
+    def __init__(self, max_chunks: int = MAX_CHUNKS):
         self.n = 0
         self.chunks = 0
         self.max = max_chunks

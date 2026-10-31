@@ -25,8 +25,8 @@ export const TRACE_LIMITS = {
   hints: 16,
   /** Partials / drafts / reacts noted per listen (core/partials.ts: at most 8 partials, 3 drafts an agent). */
   turnNotes: 16,
-  /** Reflex decisions noted per listen (core/reflex.ts: 12 chunks, up to 4 engines each in compare mode). */
-  reflex: 40,
+  /** Reflex decisions noted per listen (core/reflex.ts: up to 40 chunks, up to 4 engines each in compare mode). */
+  reflex: 80,
 } as const;
 
 /**

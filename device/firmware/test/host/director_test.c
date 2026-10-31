@@ -280,6 +280,38 @@ static void test_agent_acts(void) {
     CHECK(s_nact == n + 1, "unknown actions are ignored");
 }
 
+/* the reflex during a listen (services/relay reflexFire): the listen holds `listening`; a react mood
+ * (mood {react:true} → the creature state + the mood) shows at once, without a melt, and the relay's
+ * `listening` comes back the same way; its gestures and the device's baseline (act) play at once —
+ * also with idle life off (that only stops Molty's own idle actions) */
+static void test_listen_reacts(void) {
+    boot(true);
+    run(1.f, false);
+    fd_set_busy(&D, true, false);                 /* the listen (mole_fluid: s_listen) */
+    request(FD_ST_CREATURE, false); fd_agent_mood(&D, CM_LISTENING, 0.f); frame(false);
+    const int melts = s_melts;
+    CHECK(fd_mood(&D) == CM_LISTENING, "listening: %d", fd_mood(&D));
+    static const int moods[] = { CM_SURPRISED, CM_HAPPY };
+    for (int i = 0; i < 2; i++) {
+        request(FD_ST_CREATURE, false); fd_agent_mood(&D, moods[i], 0.f); frame(false);
+        CHECK(fd_mood(&D) == moods[i] && D.cur == FD_ST_CREATURE, "a reflex react mood shows over the listen: %d", fd_mood(&D));
+        run(1.5f, false);
+        CHECK(fd_mood(&D) == moods[i], "held until the relay's listening (hold_s 0): %d", fd_mood(&D));
+        request(FD_ST_CREATURE, false); fd_agent_mood(&D, CM_LISTENING, 0.f); frame(false);
+        CHECK(fd_mood(&D) == CM_LISTENING, "back to listening: %d", fd_mood(&D));
+    }
+    CHECK(s_melts == melts, "react moods never melt the creature (%d melts)", s_melts - melts);
+    fd_set_idle_life(&D, FD_IDLE_OFF);
+    static const int acts[] = { CA_NOD, CA_BOUNCE, CA_PEEK, CA_LOOK_UP, CA_WIGGLE, CA_WOBBLE, CA_GLANCE_LEFT, CA_GLANCE_RIGHT, CA_BLINK };
+    for (int i = 0; i < (int)(sizeof(acts) / sizeof(acts[0])); i++) {
+        const int n = s_nact;
+        fd_agent_act(&D, acts[i]); frame(false);
+        CHECK(s_nact == n + 1 && s_act[n] == acts[i], "%s plays at once over the listen (idle life off)", cute_act_name(acts[i]));
+        CHECK(fd_mood(&D) == CM_LISTENING, "...and leaves the listening mood: %d", fd_mood(&D));
+        run(cute_act_dur(acts[i]), false);
+    }
+}
+
 static void test_convo(void) {
     boot(true);
     request(FD_ST_TEXT, false);                   /* a say: its words */
@@ -444,6 +476,7 @@ int main(void) {
     test_idle_life();
     test_yawn();
     test_agent_acts();
+    test_listen_reacts();
     test_convo();
     test_sleep();
     test_agent_moods();
