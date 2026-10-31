@@ -530,9 +530,9 @@ const canvasStats = (page) => page.evaluate(() => {
     const st = await (await fetch(`${MOCK}/api/creature/state`)).json();
     ok(st.filler_ms === ms, `settings molty: the device keeps filler_ms ${ms}`);
   }
-  await page.goto(`${MOCK}/#/molty`);
   await fillerRow.getByRole('button', { name: 'after 2.5 s (default)' }).click();
   await fillerRow.locator('button[aria-pressed="true"]', { hasText: 'after 2.5 s' }).waitFor();
+  await page.goto(`${MOCK}/#/molty`);
   const shakeRow = page.getByRole('group', { name: 'shake to talk' });
   ok(await shakeRow.getByRole('button', { name: 'on (default)' }).getAttribute('aria-pressed') === 'true', 'settings molty: shake to talk defaults to on');
   await shakeRow.getByRole('button', { name: 'off' }).click();
