@@ -5,13 +5,11 @@ description: Connect to your human's Molty (the round desk device that talks) an
 
 # Molty
 
-Molty is a small physical desk creature next to your human: a round touch screen, a
-speaker, a microphone and a motion sensor. It is a thin client, not an agent. It holds a
-link to a relay, and you drive it over plain HTTPS (or MCP): show text in its fluid
-"creature" display, set its mood, speak through its speaker and listen through its mic (the
-relay does the speech: [voice.md](references/voice.md)), ask questions answered with a tap,
-and hear what the human does to it. You are its brain for as
-long as your human keeps you paired.
+Molty is a small desk creature next to your human: a round touch screen, a speaker, a mic
+and a motion sensor. It is a thin client, not an agent: you drive it over HTTPS (or MCP) via
+a relay — show text, set its mood, speak and listen (the relay does the speech:
+[voice.md](references/voice.md)), ask tap questions, hear what the human does to it. You are
+its brain while your human keeps you paired.
 
 Resolve `<skill-dir>` to this file's directory.
 
@@ -53,6 +51,7 @@ it. Examples in the references write `$MOLTY_RELAY` for whichever relay Molty us
 | `talk.sh "text"` | speak, then listen until the human finishes | `HEARD: '…' \| reason …` |
 | `talk.sh "text" --no-listen` | speak only | — |
 | `talk.sh "text" --reply <turn_id>` | answer an `utterance` (claims the turn) | `HEARD: …` |
+| `quick.sh <id> [--reply <turn_id>]` | play a cached quick phrase now | the job |
 | `ask.sh "question" yes no later` | speak + 1–5 tap buttons (labels ≤ 8 chars) | `ANSWER: yes \| index 0` |
 | `mood.sh happy [hold_s]` | set a mood | the result |
 | `act.sh nod` | a one-shot gesture (nod, wiggle, bounce, …) | the result |
@@ -72,8 +71,9 @@ Each helper follows a long turn (`202 pending`) to its end.
   the `shake` with `"listening": true`. `turn_claimed`: stay quiet.
 - **Never speak while they talk**: `utterance.partial` is context (`human_speaking`). Only
   `draft` an opener (`draft.used`: continue it) or `react` (Molty also reacts by itself; yours wins).
-- **Molty acknowledges the end of their turn itself** (chirp + `thinking`): answer straight
-  away, no "hmm". Long work → one short spoken line first; never leave them in silence.
+- **Thinking more than a moment? FIRST play a quick phrase** — one call, `quick {id}`
+  (`quick.sh hmm`), before you start reasoning — then talk (it follows seamlessly).
+  Register your own phrases in your voice once (`molty_phrases`). Fast answer: none needed.
 - **Short.** 1–2 sentences; a short first sentence starts audio sooner.
 - **Emote inline, sparingly:** `"[happy] Build passed!"`, `"Done. [nod]"` — cues are never
   spoken or shown and fire on their word; one per sentence at most; don't fidget
@@ -83,9 +83,8 @@ Each helper follows a long turn (`202 pending`) to its end.
 - **Read `relay.caps`, not versions**, to know what this Molty can do (`say`, `listen`,
   `ask`, `shake_talk`, `update`, …). `relay.voice` says who speaks. Get them from the `status`
   command (`POST …/cmd {"name":"status"}`, MCP `molty_status`); every `utterance` also carries
-  them as `device.caps`. No `GET …/status` route.
-- **Don't talk unprompted or repeatedly**; the mic only when expected. `no_speech` after
-  a wake → one short line or nothing.
+  them as `device.caps`.
+- **Don't talk unprompted or repeatedly.** `no_speech` after a wake → one short line or nothing.
 - **Errors:** `audio_busy` (wait for the current audio, retry once), `turn_claimed` (stay
   quiet), `device_offline` (tell them another way),
   `voice_box_offline` (their voice box is down), `listen_failed` (the recording broke:

@@ -107,6 +107,17 @@ bool link_listen_args(const cJSON *args, bool *vad, unsigned *end_silence_ms, un
 bool link_listen_window(const cJSON *args, uint32_t dflt, uint32_t *window, uint32_t *record_ms);
 /* A valid device setting: 0 (unlimited) or LINK_LISTEN_SET_MIN..LINK_LISTEN_MAX_MS. */
 bool link_listen_setting_ok(double v);
+/* The auto filler (docs/AGENT-LINK.md "Quick phrases"): when a human turn ends with speech and
+ * no agent answers within this delay, the RELAY has Molty say a short filler ("Hmm…") itself.
+ * The device only keeps the owner's setting (POST /api/creature/state {filler_ms}, NVS like
+ * ring_color) and reports it in every listen's answer (`filler_ms`): 0 = off, else
+ * LINK_FILLER_MIN_MS..LINK_FILLER_MAX_MS; LINK_FILLER_DEFAULT_MS out of the box. */
+#define LINK_FILLER_DEFAULT_MS 2500u
+#define LINK_FILLER_MIN_MS     1500u
+#define LINK_FILLER_MAX_MS     5000u
+#define LINK_FILLER_OFF        0u
+/* A valid setting: 0 (off) or LINK_FILLER_MIN_MS..LINK_FILLER_MAX_MS, an integer. */
+bool link_filler_setting_ok(double v);
 /* The turn acknowledgement (cap "ack"): when a listen that heard speech ends, the device
  * itself plays a short chirp and shows `thinking` (held LINK_ACK_THINK_S, or until the
  * agent's next say / mood / ask / listen), so the human never waits in dead air while the

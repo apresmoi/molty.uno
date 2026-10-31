@@ -31,6 +31,9 @@
 //   PUT    /v1/notes {key, value}       store (value: any JSON, <= 8 KB; <= 64 keys / 32 KB per token: 413 too_large)
 //   DELETE /v1/notes?key=k              remove one key
 //   GET|DELETE /v1/devices/<id>/speech  owner (link code, CORS): the human's speech habits + calibration; DELETE resets
+//   GET|POST|DELETE /v1/devices/<id>/phrases  the caller's quick phrases (core/phrases.ts): list / {phrases:[{id,text}]}
+//                                       (upsert, audio synthesised now) / ?id=a,b (or ?id=* = all) -> {ok, result:{phrases, builtins, limits, voice}}
+//                                       (play one: POST .../cmd {name:"quick", args:{id, in_reply_to?, force?}})
 //
 // A voice box token (pair role "voice") is refused on every agent route: 403 forbidden.
 //
@@ -214,6 +217,25 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
     }
     if (!out.ok) return failed(out);
     return json({ ok: true, result: out.result, ...extra(out) }, out.result.status === "pending" ? 202 : 200);
+  }
+
+  const phrases = /^\/v1\/devices\/([^/]+)\/phrases$/.exec(path);
+  if (phrases) {
+    const id = decodeURIComponent(phrases[1]);
+    if (!DEVICE_ID_RE.test(id)) return failure({ error: "not_found" });
+    if (tokenDevice(token) !== id) return failure({ error: "unauthorized" });
+    let req: Record<string, unknown>;
+    if (request.method === "GET") req = { action: "list" };
+    else if (request.method === "POST" || request.method === "PUT") {
+      const b = await body(request);
+      if (!b) return failure({ error: "bad_request", message: "body must be a JSON object: {phrases:[{id, text}]}" });
+      req = { action: "set", ...b };
+    } else if (request.method === "DELETE") {
+      const ids = (url.searchParams.get("id") ?? "").split(",").filter(Boolean);
+      req = { action: "delete", ids };
+    } else return json({ ok: false, error: "method_not_allowed" }, 405);
+    const out = await backend.device(id).phrases(token!, req);
+    return out.ok ? json({ ok: true, result: out.result, ...extra(out) }) : failed(out);
   }
 
   const events = /^\/v1\/devices\/([^/]+)\/events$/.exec(path);

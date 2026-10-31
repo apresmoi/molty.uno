@@ -2,6 +2,12 @@ import { DeviceRoom, type DeviceSocket, type RoomDeps, type RoomTimings, type So
 import { MemoryKV, realClock } from "../src/core/store.js";
 import { b64Encode } from "../src/core/crypto.js";
 import type { VoiceProvider } from "../src/voice/types.js";
+import { BUILTIN_PHRASES } from "../src/core/phrases.js";
+
+/** Texts of the built-in quick phrases: the relay warms the next auto filler's audio during a listen (core/phrases.ts). */
+export const FILLER_TEXTS: ReadonlySet<string> = new Set(BUILTIN_PHRASES.map((p) => p.text));
+/** TTS texts other than the filler warm-up. */
+export const spoken = (texts: string[]) => texts.filter((t) => !FILLER_TEXTS.has(t));
 
 export const DEVICE = "molty-k7m2q9xa4c";
 export const KEY = b64Encode(new Uint8Array(32).fill(7));
@@ -74,7 +80,7 @@ export class FakeVoice implements VoiceProvider {
   }
 }
 
-export function makeRoom(opts: { kv?: MemoryKV; host?: FakeHost; voice?: FakeVoice; timings?: Partial<RoomTimings> } & Partial<Pick<RoomDeps, "clock" | "scheduler" | "fetch" | "resolveHost" | "log" | "releases" | "reflexKeys">> = {}) {
+export function makeRoom(opts: { kv?: MemoryKV; host?: FakeHost; voice?: FakeVoice; timings?: Partial<RoomTimings> } & Partial<Pick<RoomDeps, "clock" | "scheduler" | "fetch" | "resolveHost" | "log" | "releases" | "classifier" | "reflexKeys">> = {}) {
   const kv = opts.kv ?? new MemoryKV();
   const host = opts.host ?? new FakeHost();
   const voice = opts.voice ?? new FakeVoice();
@@ -91,6 +97,7 @@ export function makeRoom(opts: { kv?: MemoryKV; host?: FakeHost; voice?: FakeVoi
     log: opts.log,
     releases: opts.releases,
     reflexKeys: opts.reflexKeys,
+    classifier: opts.classifier,
   });
   host.onClose = (s) => room.socketClose(s, s.closed?.code);
   return { room, kv, host, voice };

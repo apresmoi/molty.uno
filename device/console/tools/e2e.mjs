@@ -484,6 +484,16 @@ const canvasStats = (page) => page.evaluate(() => {
   ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).ack === 'off'), 'settings molty: acknowledgement off sent to the device (ack off)');
   await ackRow.getByRole('button', { name: 'chirp + thinking (default)' }).click();
   await ackRow.locator('button[aria-pressed="true"]', { hasText: 'chirp + thinking' }).waitFor();
+  const fillerRow = page.getByRole('group', { name: 'filler' });
+  ok(await fillerRow.getByRole('button', { name: 'after 2.5 s (default)' }).getAttribute('aria-pressed') === 'true', 'settings molty: filler defaults to after 2.5 s');
+  await fillerRow.getByRole('button', { name: 'off' }).click();
+  await fillerRow.locator('button[aria-pressed="true"]', { hasText: 'off' }).waitFor();
+  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).filler_ms === 0), 'settings molty: filler off sent to the device (filler_ms 0)');
+  await fillerRow.getByRole('button', { name: 'after 1.5 s' }).click();
+  await fillerRow.locator('button[aria-pressed="true"]', { hasText: 'after 1.5 s' }).waitFor();
+  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).filler_ms === 1500), 'settings molty: 1.5 s filler delay sent to the device (filler_ms 1500)');
+  await fillerRow.getByRole('button', { name: 'after 2.5 s (default)' }).click();
+  await fillerRow.locator('button[aria-pressed="true"]', { hasText: 'after 2.5 s' }).waitFor();
   const shakeRow = page.getByRole('group', { name: 'shake to talk' });
   ok(await shakeRow.getByRole('button', { name: 'on (default)' }).getAttribute('aria-pressed') === 'true', 'settings molty: shake to talk defaults to on');
   await shakeRow.getByRole('button', { name: 'off' }).click();

@@ -96,7 +96,7 @@ def test_listen_streams_300ms_frames_and_honours_listen_stop():
         dev.mic_for = lambda job: Mic(clip)
         await dev._on_cmd({"t": "cmd", "id": "c1", "name": "listen", "args": {"job": "L1", "rate": 16000, "vad": False}})
         res = json.loads(dev._ws.sent[0])
-        assert res["ok"] and res["result"] == {"job": "L1", "ms": 30000, "ack": "chirp"}
+        assert res["ok"] and res["result"] == {"job": "L1", "ms": 30000, "ack": "chirp", "filler_ms": 2500}  # the owner's filler setting, as the firmware
         await asyncio.sleep(0.75)  # two full 300 ms frames out, a third building
         await dev._on_cmd({"t": "cmd", "id": "c2", "name": "listen_stop", "args": {"job": "L1", "reason": "turn_end"}})
         rec = dev.listens["L1"]

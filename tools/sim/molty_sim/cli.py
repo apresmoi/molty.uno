@@ -35,6 +35,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--turn-end-skip", type=int, help="bridge: steps ignored at a listen's start (molty-voice --turn-end-skip)")
     r.add_argument("--agent", choices=["scripted", "llm"], default="scripted")
     r.add_argument("--agent-gap-ms", type=int, default=0, help="fixed agent think time added before each reply (default 0)")
+    r.add_argument("--filler-ms", type=int, default=2500, help="the sim device's auto filler setting: 0 = off, 1500..5000 (default 2500); -1 = not reported (older firmware)")
     r.add_argument("--llm-url", default=os.environ.get("MOLTY_SIM_LLM_URL", "http://127.0.0.1:11434"), help="OpenAI-compatible base URL for --agent llm (env MOLTY_SIM_LLM_URL)")
     r.add_argument("--llm-model", default=os.environ.get("MOLTY_SIM_LLM_MODEL", "llama3.2:3b"))
     r.add_argument("--align", choices=["mms", "none"], default="mms", help="say-cue ground truth: forced alignment on the box, or skip")
@@ -91,7 +92,7 @@ def main(argv: list[str] | None = None) -> int:
             tuning += [flag, str(v)]
     o = Options(scenario=scenario.load(a.scenario), box=a.box, tunnel=not a.no_tunnel, tts_port=a.tts_port, stt_port=a.stt_port,
                 relay=a.relay, allow_remote=a.allow_remote, bridge=not a.no_bridge, tuning=tuning, agent=a.agent,
-                agent_gap_ms=a.agent_gap_ms, llm_url=a.llm_url, llm_model=a.llm_model, align=a.align, align_python=a.align_python,
+                agent_gap_ms=a.agent_gap_ms, filler_ms=None if a.filler_ms < 0 else a.filler_ms, llm_url=a.llm_url, llm_model=a.llm_model, align=a.align, align_python=a.align_python,
                 keep_audio=not a.no_audio, only=a.only.split(",") if a.only else None, drafter=a.drafter)
     try:
         asyncio.run(run(o))

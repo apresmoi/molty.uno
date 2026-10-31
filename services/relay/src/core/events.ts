@@ -118,6 +118,8 @@ export const SAMPLE_EVENTS: Record<string, AgentEvent> = {
       ms: { speech: 1800, stt: 120 },
       trigger: "shake",
       device: { caps: ["say", "listen", "shake_talk"], mood: "thinking", voice: "box" },
+      // ms until Molty says its own filler unless an agent acts first (core/phrases.ts); absent when off
+      filler_in_ms: 2300,
     },
   },
   [PARTIAL_EVENT]: {

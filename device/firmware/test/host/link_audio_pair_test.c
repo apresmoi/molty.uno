@@ -125,6 +125,8 @@ static int idle_setting = 2;   /* lively (fluid_director.h FD_IDLE_LIVELY) */
 int mole_fluid_idle_life(void) { return idle_setting; }
 static int ack_setting = LINK_ACK_CHIRP;   /* the console's acknowledgement setting (mole_fluid.c, NVS) */
 int mole_fluid_ack_mode(void) { return ack_setting; }
+static uint32_t filler_setting = 2500;    /* the console's auto filler delay (mole_fluid.c, NVS) */
+uint32_t mole_fluid_filler_ms(void) { return filler_setting; }
 /* shake to talk: the console's setting (mole_fluid.c, NVS), an update writing the spare slot
  * (self_update.c), and link_cmd.c's refusal codes */
 static bool shake_setting = true, update_busy;
@@ -273,6 +275,8 @@ static const char *ack_listen_ms(unsigned ms, const char *extra, void (*fill)(in
     esp_err_t e=link_audio_listen(args,&res); cJSON_Delete(args);
     if (e!=ESP_OK) { assert(e==ESP_ERR_INVALID_ARG && !res && !link_audio_busy()); return NULL; }
     cJSON *ak=cJSON_GetObjectItem(res,"ack"); assert(cJSON_IsString(ak));
+    /* every listen answer reports the auto filler setting, for the relay to act on */
+    cJSON *fm=cJSON_GetObjectItem(res,"filler_ms"); assert(cJSON_IsNumber(fm) && fm->valuedouble==filler_setting);
     snprintf(acked,sizeof(acked),"%s",ak->valuestring); cJSON_Delete(res);
     audio_job_t job; assert(xQueueReceive(s_jobs,&job,0)==pdTRUE && job.listen);
     bin_frames=bin_bytes=bin_ends=bin_seq=0; bin_reason[0]=0; bin_speech_ms=-1;
@@ -700,7 +704,8 @@ static void shake_fill(int16_t *buf,size_t n,unsigned chunk) {
         char a[256]; snprintf(a,sizeof(a),"{\"job\":\"" RELAY_JOB "\",\"rate\":16000,\"adopt\":\"shake-%u\"%s}",s_shake_n,adopt_args?adopt_args:"");
         cJSON *args=cJSON_Parse(a),*res=NULL;
         adopt_e=link_audio_listen(args,&res); cJSON_Delete(args);
-        if (res) { snprintf(adopt_ack,sizeof(adopt_ack),"%s",cJSON_GetObjectItem(res,"ack")->valuestring); adopt_ms=cJSON_GetObjectItem(res,"ms")->valuedouble; }
+        if (res) { snprintf(adopt_ack,sizeof(adopt_ack),"%s",cJSON_GetObjectItem(res,"ack")->valuestring); adopt_ms=cJSON_GetObjectItem(res,"ms")->valuedouble;
+                   assert(cJSON_GetObjectItem(res,"filler_ms")->valuedouble==filler_setting); }   /* the adopted listen reports the filler setting too */
         cJSON_Delete(res);
     }
     if ((int)chunk==decline_at) { char id[24]; snprintf(id,sizeof(id),"shake-%u",s_shake_n); assert(stop_cmd(id)); }

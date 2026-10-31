@@ -7,7 +7,7 @@ import { parseCues, speechWords } from "./speech.js";
 export const MOODS = ["idle", "listening", "thinking", "speaking", "happy", "sleepy", "surprised"] as const;
 /** One-shot gestures over the current mood (`act`, and `[name]` cues in say text). */
 export const ACTIONS = ["wiggle", "nod", "shake_head", "bounce", "peek", "glance_left", "glance_right", "blink", "wobble", "stretch", "look_up", "yawn"] as const;
-export const COMMANDS = ["status", "state", "mood", "show", "say", "listen", "volume", "imu", "diag", "log", "act"] as const;
+export const COMMANDS = ["status", "state", "mood", "show", "say", "quick", "listen", "volume", "imu", "diag", "log", "act"] as const;
 export type CommandName = (typeof COMMANDS)[number];
 
 export const MAX_SHOW_BYTES = 16384;
@@ -182,6 +182,9 @@ function vadArgs(args: Record<string, unknown>): JsonObject {
   return out;
 }
 
+/** A quick phrase's id (core/phrases.ts): 1..24 of a-z 0-9 _ -. */
+export const PHRASE_ID_RE = /^[a-z0-9][a-z0-9_-]{0,23}$/;
+
 export interface Validated {
   name: CommandName;
   /** Args forwarded to the device. */
@@ -275,6 +278,14 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
       const reply = turnId(args.in_reply_to);
       const ct = clientTiming(args.client_timing);
       return { name: n, args: out, job: true, ...(reply !== undefined ? { in_reply_to: reply } : {}), ...(ct ? { client_timing: ct } : {}) };
+    }
+    case "quick": {
+      // a cached phrase (core/phrases.ts): {id, in_reply_to?, force?}; relay-only, never forwarded as is
+      only(args, ["id", "in_reply_to", "force"]);
+      if (typeof args.id !== "string" || !PHRASE_ID_RE.test(args.id)) throw invalid('id must be a phrase id (1..24 of a-z 0-9 _ -), e.g. "hmm"');
+      if (args.force !== undefined && typeof args.force !== "boolean") throw invalid("force must be a boolean");
+      const reply = turnId(args.in_reply_to);
+      return { name: n, args: { id: args.id, ...(args.force === true ? { force: true } : {}) }, job: true, ...(reply !== undefined ? { in_reply_to: reply } : {}) };
     }
     case "listen": {
       only(args, ["ms", "ring_color", "ack", ...VAD_KEYS]);

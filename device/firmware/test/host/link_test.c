@@ -177,6 +177,10 @@ static void test_listen_window(void)
     /* the console's setting: 0 or 5..30 s */
     assert(link_listen_setting_ok(0) && link_listen_setting_ok(5000) && link_listen_setting_ok(30000));
     assert(!link_listen_setting_ok(4999) && !link_listen_setting_ok(30001) && !link_listen_setting_ok(10000.5) && !link_listen_setting_ok(-1));
+    /* the auto filler's delay: 0 (off) or 1.5..5 s */
+    assert(link_filler_setting_ok(0) && link_filler_setting_ok(1500) && link_filler_setting_ok(2500) && link_filler_setting_ok(5000));
+    assert(!link_filler_setting_ok(1499) && !link_filler_setting_ok(5001) && !link_filler_setting_ok(2500.5) && !link_filler_setting_ok(-1));
+    assert(LINK_FILLER_DEFAULT_MS == 2500 && LINK_FILLER_OFF == 0);
 }
 
 /* The turn acknowledgement's rules (link_ack_decide) and its args / setting names. */
