@@ -360,6 +360,7 @@ const canvasStats = (page) => page.evaluate(() => {
   ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'settings agent: no horizontal scroll at 390px');
   await shot(page, '11-settings-agent');
   await mock('decide', { ok: true });
+  await page.goto(`${MOCK}/#/voice`);
   // Voice card: the owner's voice box, through the relay with the link code from GET /api/link
   const vc = page.locator('.voice.card');
   await vc.locator('p', { hasText: 'voice box ⠂ connected ⠂ listens + speaks' }).waitFor({ timeout: 5000 });
@@ -494,6 +495,7 @@ const canvasStats = (page) => page.evaluate(() => {
   await ringRow.getByRole('button', { name: 'violet' }).click();
   await ringRow.locator('button[aria-pressed="true"]', { hasText: 'violet' }).waitFor();
   ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).ring_color === '#b197fc'), 'settings molty: ring colour sent to the device');
+  await page.goto(`${MOCK}/#/voice`);
   const listenRow = page.getByRole('group', { name: 'listen window' });
   ok(await listenRow.getByRole('button', { name: '30 s (default)' }).getAttribute('aria-pressed') === 'true', 'settings molty: listen window defaults to 30 s');
   await listenRow.getByRole('button', { name: 'unlimited' }).click();
@@ -528,6 +530,7 @@ const canvasStats = (page) => page.evaluate(() => {
     const st = await (await fetch(`${MOCK}/api/creature/state`)).json();
     ok(st.filler_ms === ms, `settings molty: the device keeps filler_ms ${ms}`);
   }
+  await page.goto(`${MOCK}/#/molty`);
   await fillerRow.getByRole('button', { name: 'after 2.5 s (default)' }).click();
   await fillerRow.locator('button[aria-pressed="true"]', { hasText: 'after 2.5 s' }).waitFor();
   const shakeRow = page.getByRole('group', { name: 'shake to talk' });
