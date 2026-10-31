@@ -71,7 +71,7 @@ Flags override the config file (`--name`, `--voices a.wav,b.wav`, `--no-stt`, `-
 
 **First words**: `--opener` (or `"opener": true` in the config) offers the relay a very small model that
 starts Molty's reply before the agent can speak. It needs Ollama on the box with the model pulled:
-`ollama pull qwen3:1.7b` (`opener_url`, `opener_model` in the config). The bridge loads it on connect
+`ollama pull gemma3:4b` (`opener_url`, `opener_model` in the config). The bridge loads it on connect
 and keeps it loaded (about 1.4 GB; about 60 ms a line). No model: a warning, and no first words. The owner
 turns it on in the console; the relay's guard decides what may be said.
 

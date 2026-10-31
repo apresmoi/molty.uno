@@ -62,7 +62,7 @@ class Config:
     # to the relay (voice.hello opener) when on and the model answers. The owner's `first_words` picks it.
     opener: bool = False
     opener_url: str = "http://127.0.0.1:11434"
-    opener_model: str = "qwen3:1.7b"
+    opener_model: str = "gemma3:4b"
 
     def __repr__(self) -> str:  # never show the token
         d = asdict(self)
