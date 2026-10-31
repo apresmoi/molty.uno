@@ -6,6 +6,10 @@ All notable changes to Molty are recorded here. One version covers the whole pro
 
 ## Unreleased
 
+- Working mood: `[working]` in a say or talk (or `mood working`) keeps Molty busy after the
+  line, in a varied loop, until the agent speaks again or 120 s. New actions `inspect` (one eye
+  right up to the camera) and `paddle` (bobbing, with real splashes). Firmware cap `working`.
+
 First public release.
 
 - **Wi-Fi rssi is reported again**: since the reconnect fix, timeline lines and `/api/diag` read
