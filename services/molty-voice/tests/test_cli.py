@@ -4,6 +4,7 @@ import stat
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+from molty_voice import cli
 from molty_voice.cli import main
 from molty_voice.config import load
 
@@ -81,3 +82,24 @@ def test_run_passes_the_end_of_turn_flags_to_the_bridge(tmp_path, monkeypatch):
     assert (seen[-1].turn_end_hold_s, seen[-1].turn_end, seen[-1].turn_end_skip_steps) == (0.0, 0.7, 8)
     assert main(["--config", str(path), "run", "--turn-end-hold", "2.5"]) == 0
     assert seen[-1].turn_end_hold_s == 2.5
+
+
+def test_check_passes_when_the_round_trip_does(monkeypatch, tmp_path, capsys):
+    tried = []
+
+    async def make_prompt(self):
+        tried.append(1)
+        if len(tried) == 2:
+            self.stt_prompt = object()
+
+    monkeypatch.setattr(cli.Bridge, "_make_prompt", make_prompt)
+    assert cli.main(["--config", str(tmp_path / "none.json"), "check"]) == 0
+    assert len(tried) == 2 and "ok" in capsys.readouterr().out
+
+
+def test_check_fails_when_the_round_trip_never_does(monkeypatch, tmp_path):
+    async def make_prompt(self):
+        pass
+
+    monkeypatch.setattr(cli.Bridge, "_make_prompt", make_prompt)
+    assert cli.main(["--config", str(tmp_path / "none.json"), "check"]) == 1
