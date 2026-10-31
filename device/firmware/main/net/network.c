@@ -39,6 +39,7 @@
 #include "tinyusb_net.h"
 #include "apps/dhcpserver/dhcpserver_options.h"
 #include "sdkconfig.h"
+#include "mole_diag.h"
 
 static const char *TAG = "net";
 
@@ -337,9 +338,26 @@ void net_mdns_start(void)
 // ─────────────────────────────────────────────────────────────────────────────
 // WiFi event handler — used only for the blocking connect attempt in set_creds
 // ─────────────────────────────────────────────────────────────────────────────
+/* Join the strongest AP of the SSID, not the first one a fast scan finds. Costs a full-channel
+ * scan on each join (about 2 s more). No RSSI floor: a weak link beats none. */
+static void sta_config_range(wifi_config_t *c)
+{
+    c->sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    c->sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+    c->sta.failure_retry_cnt = 2;
+}
+
 static void wifi_event_handler(void *arg, esp_event_base_t base,
                                int32_t event_id, void *data)
 {
+    if (base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED && data) {
+        const wifi_event_sta_connected_t *c = data;
+        mole_diag_event(false, "wifi.join bssid=%02x:%02x:%02x:%02x:%02x:%02x ch=%u", c->bssid[0], c->bssid[1],
+                        c->bssid[2], c->bssid[3], c->bssid[4], c->bssid[5], c->channel);
+    } else if (base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED && data) {
+        const wifi_event_sta_disconnected_t *c = data;
+        mole_diag_event(true, "wifi.drop reason=%u rssi=%d bssid=..:%02x:%02x", c->reason, c->rssi, c->bssid[4], c->bssid[5]);
+    }
     if (base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) s_sta_associated = true;
     else if (base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) s_sta_associated = false;
 
@@ -483,6 +501,9 @@ esp_err_t net_wifi_init(void)
     // Molty is an interactive surface on USB power; latency wins. Runtime knob:
     // POST /api/diag/wifi_ps?mode=none|min|max.
     esp_wifi_set_ps(WIFI_PS_NONE);
+    // Range over peak rate: voice needs far less than 20 MHz gives, and 40 MHz loses signal.
+    esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+    esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT20);
 
     // If there are saved credentials, connect now so /api/status can return
     // "connected" immediately after the portal starts.
@@ -494,6 +515,7 @@ esp_err_t net_wifi_init(void)
         wifi_config_t wcfg = {};
         strncpy((char *)wcfg.sta.ssid,     saved_ssid, sizeof(wcfg.sta.ssid)     - 1);
         strncpy((char *)wcfg.sta.password, saved_pass, sizeof(wcfg.sta.password) - 1);
+        sta_config_range(&wcfg);
         esp_wifi_set_config(WIFI_IF_STA, &wcfg);
         strncpy(s_ssid_buf, saved_ssid, sizeof(s_ssid_buf) - 1);
         s_wifi_state = WIFI_PORTAL_STATE_CONNECTING;
@@ -715,7 +737,8 @@ esp_err_t net_wifi_join(const char *ssid, const char *pass, uint32_t timeout_ms)
     wifi_config_t wcfg = {};
     strncpy((char *)wcfg.sta.ssid,     ssid, sizeof(wcfg.sta.ssid)     - 1);
     strncpy((char *)wcfg.sta.password, pass, sizeof(wcfg.sta.password) - 1);
-    esp_wifi_set_config(WIFI_IF_STA, &wcfg);
+    sta_config_range(&wcfg);
+        esp_wifi_set_config(WIFI_IF_STA, &wcfg);
 
     strncpy(s_ssid_buf, ssid, sizeof(s_ssid_buf) - 1);
     s_ssid_buf[sizeof(s_ssid_buf) - 1] = '\0';
