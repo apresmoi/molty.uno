@@ -134,6 +134,10 @@ fluid_sim_t *fluid_sim_create(int W, int H, int stage);
  *  the FLUID_GRID limits (412 → 52×32, 240 → 30×19). */
 void         fluid_grid_for_stage(int stage, int *W, int *H);
 void         fluid_sim_destroy(fluid_sim_t *s);
+/** Whether sims created from now on may put hot fields in internal DRAM (default: yes,
+ *  while 32 KB stay free). Off: every field in PSRAM — the heap guard's shed
+ *  (diag/heap_guard.h) gives the internal RAM back to Wi-Fi / TLS / the LCD. */
+void         fluid_sim_allow_internal(bool on);
 /** Gaussian bump in the height field; x,y in −1..1 stage space. */
 void  fluid_sim_impulse(fluid_sim_t *s, float x, float y, float strength, float radius);
 /** Push the flow around (x,y) (a drag on the stage). */

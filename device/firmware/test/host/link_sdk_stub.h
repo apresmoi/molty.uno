@@ -59,6 +59,8 @@ void *xRingbufferReceiveUpTo(RingbufHandle_t, size_t *, unsigned, size_t);
 void vRingbufferReturnItem(RingbufHandle_t, void *);
 int xRingbufferSend(RingbufHandle_t, const void *, size_t, unsigned);
 void *heap_caps_malloc(size_t, int);
+extern long sdk_heap_live;   /* live heap_caps_* + (after sdk_count_cjson) cJSON blocks */
+void sdk_count_cjson(void);
 /* molty_board.h: the board seam. sdk_caps = what the stub board has (all by default);
  * the accept / reject buttons read sdk_gpio[0] / sdk_gpio[6] (BOOT / PWR, active low). */
 #define MOLTY_CAP_DISPLAY     (1u << 0)

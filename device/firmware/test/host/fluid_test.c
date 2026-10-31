@@ -763,6 +763,16 @@ int main(void) {
     for (int g = 0; g < 3; g++) for (int st = 0; st < ST_N; st++) run_state(grids[g][0], grids[g][1], st, NULL, NULL);
     CHECK(fluid_sim_create(8, 8, FLUID_STAGE_REF) == NULL, "out-of-range grid accepted");
     { int gw, gh; fluid_grid_for_stage(FLUID_STAGE_REF, &gw, &gh); CHECK(gw == 52 && gh == 32, "412 default grid %dx%d", gw, gh); }
+    {   /* the heap guard's shed (fluid_sim_allow_internal): a sim built after it keeps no hot
+         * field in internal RAM (the device's calloc_fast; the host keeps its bookkeeping) */
+        fluid_sim_t *a = fluid_sim_create(52, 32, FLUID_STAGE_REF);
+        CHECK(a && a->n_internal == a->n_blk && a->internal, "default: hot fields internal (%d/%d)", a ? a->n_internal : -1, a ? a->n_blk : -1);
+        fluid_sim_allow_internal(false);
+        fluid_sim_t *b = fluid_sim_create(52, 32, FLUID_STAGE_REF);
+        CHECK(b && b->n_internal == 0 && !b->internal, "shed: %d hot fields still internal", b ? b->n_internal : -1);
+        fluid_sim_allow_internal(true);
+        fluid_sim_destroy(a); fluid_sim_destroy(b);
+    }
     test_panel(240, 240);
     test_panel(320, 240);
     test_panel(FLUID_STAGE_REF, FLUID_STAGE_REF);
