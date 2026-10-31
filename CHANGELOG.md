@@ -78,7 +78,8 @@ First public release.
   human_speaking`. They may `draft` an opener — synthesised while the human talks, played the
   instant they finish when the last words don't change the meaning (`draft.used`, the follow-up
   queues behind it with no gap; else `draft.dropped`) — and `react` with a mood (screen only,
-  firmware cap `react`: not an explicit mood, so the turn's chirp stays). The relay calibrates
+  firmware cap `react`: not an explicit mood, so the turn's chirp stays) or a gesture (`act`).
+  Partials, drafts, reacts and the draft outcome are in the turn trace. The relay calibrates
   from usage (turn length, speech rate, pauses, draft outcomes → partial points and the draft
   threshold; owner `GET /v1/devices/<id>/speech`, console **speech habits** card, activity
   log). Per-agent private notes (`/v1/notes`, `molty_notes`) for the behaviour ledger.
