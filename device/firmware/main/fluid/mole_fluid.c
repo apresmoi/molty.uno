@@ -587,6 +587,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
      * the voice sends a round wave from it across the screen (fluid_ring.h). The circle is a
      * target of the fluid, around whatever the state shows. */
     const int ring_wave = fluid_ring_tick(&s_rg, rdt, s_listen && !asking, s_level);
+#if RING_WAVES
     /* listening: waves bend the screen and don't light it (no flashing), and travel a little slower */
     static fluid_params_t base;
     if (!(s_rg.on > 0.f)) base = s->p;
@@ -597,6 +598,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         s->p.crest = base.crest * (1.f - on);
         s->p.shade = base.shade * (1.f - on);
     }
+#endif
     const float acc = cfg->palette == FLUID_PAL_PASTEL ? 0.f : 1.f;   /* mono palettes: the accent */
 
     switch (asking ? ST_TEXT : s_cur) {
@@ -661,7 +663,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     fluid_sim_view(s);
     s_shimmer = 0.12f + (thinking ? 0.35f : 0.f) + cfg->mic * 0.4f;
 
-    if (ring_wave) fluid_ring_ping(s, &s_rg);              /* the voice rings the water */
+    if (RING_WAVES && ring_wave) fluid_ring_ping(s, &s_rg);              /* the voice rings the water */
     /* a question's faint dividers: in while it waits, out once it was answered */
     bool div_on = s_ask.scr.phase == FLUID_ASK_SHOW && s_ask.n >= 2;
     s_div = div_on ? fminf(1.f, s_div + rdt / DIV_FADE_S) : fmaxf(0.f, s_div - rdt / DIV_FADE_S);
