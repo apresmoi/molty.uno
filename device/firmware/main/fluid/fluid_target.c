@@ -341,46 +341,56 @@ void fluid_target_arc(fluid_sim_t *s, float rc, float hw, float a0, float a1, fl
     fluid_target_arcs(s, rc, &a, 1, acc);
 }
 
-/* ── the listening ring: a thin line of the fluid that breathes (knobs: fluid_ring.h) ── */
+/* ── the listening ring: voice-driven drops and a faint line (knobs: fluid_ring.h) ── */
 
 static inline float wrap1(float t) { return t - floorf(t); }
+
+/* Each drop lands somewhere new: the golden angle round a sunflower spiral spreads them
+ * evenly with no clusters, and with no RNG. */
+static void ring_drop(fluid_ring_t *r, float strength) {
+    r->n_drops++;
+    const float rad = RING_DROP_REACH * sqrtf(wrap1((float)r->n_drops * 0.618034f));
+    const float turns = wrap1((float)r->n_drops * 0.381966f);
+    r->drop_x = rad * fluid_sin_turns(turns);
+    r->drop_y = rad * fluid_sin_turns(wrap1(turns + 0.25f));
+    r->drop_s = strength;
+    r->gap = RING_GAP_S; r->since = 0.f;
+}
 
 int fluid_ring_tick(fluid_ring_t *r, float dt, bool on, float level) {
     if (!(dt > 0.f)) dt = 0.f;
     r->on = on ? fminf(1.f, r->on + dt / RING_FADE_S) : fmaxf(0.f, r->on - dt / RING_FADE_S);
-    /* the level holds between its ~10 Hz updates: a one-pole follower turns its steps into
-     * glides (fast up, slow down), and the breath's rate is integrated into its phase, so
-     * a change of pace never makes it jump */
-    const float lv = on && isfinite(level) ? fluid_clamp01(level * RING_LEVEL_GAIN) : 0.f;
+    const float lv = on && isfinite(level) ? fluid_clamp01(level) : 0.f;
+    /* the level holds between its ~10 Hz updates: a one-pole follower turns its steps into glides */
     r->lvl += (lv - r->lvl) * (1.f - expf(-dt / (lv > r->lvl ? RING_ATTACK_S : RING_DECAY_S)));
-    const float L = r->lvl;
-    r->ph = wrap1(r->ph + dt * (RING_BREATH_HZ_IDLE + RING_BREATH_HZ_LEVEL * L));
-    const float b = fluid_sin_turns(r->ph);                    /* −1 in .. +1 out */
-    r->dr = RING_SWELL * L + (RING_BREATH_AMP_IDLE + RING_BREATH_AMP_LEVEL * L) * b;
-    r->ink = r->on * (RING_INK + RING_INK_LEVEL * L) * (1.f + RING_INK_BREATH * b);
-    /* pings: more and stronger with the voice; at most one a frame */
-    int n = 0;
-    if (r->on > 0.5f) {
-        r->ping_acc += dt * (RING_PING_IDLE + RING_PING_LEVEL * L);
-        if (r->ping_acc >= 1.f) { r->ping_acc -= 1.f; n = 1; }
-        if (r->ping_acc >= 1.f) r->ping_acc = 0.999f;
-    } else r->ping_acc = 0.f;
-    r->ping_s = RING_PING_S_IDLE + RING_PING_S_LEVEL * L;
-    return n;
+    r->ink = r->on * (RING_INK + RING_INK_LEVEL * r->lvl);
+
+    /* a rise over the recent low is a syllable; firing re-arms on the level itself, so
+     * only a dip and a new rise fire again */
+    if (lv < r->low) r->low = lv;
+    else r->low += (lv - r->low) * (1.f - expf(-dt / RING_LOW_RISE_S));
+    r->gap = fmaxf(0.f, r->gap - dt);
+    r->since += dt;
+    if (r->on <= 0.5f) { r->low = lv; r->gap = 0.f; r->since = 0.f; return 0; }
+    const bool voice = lv >= RING_ONSET_MIN;
+    if (voice && r->gap <= 0.f && (lv - r->low >= RING_ONSET_RISE || r->since >= RING_HOLD_S)) {
+        ring_drop(r, RING_DROP_S_MIN + (RING_DROP_S_MAX - RING_DROP_S_MIN) * lv);
+        r->low = lv;
+        return 1;
+    }
+    if (!voice && r->since >= RING_QUIET_S) { ring_drop(r, RING_QUIET_DROP_S); return 1; }
+    return 0;
 }
 
-/* The ring's cells, once per grid: every cell the ring (any breath) or a ping can reach,
- * with its offset from the centre line and its reach across the line — so a frame costs
- * no sqrt or division per cell. Thickness is in cells along the ring's normal: a cell's
- * extent across a line with unit normal n is |nx|·cw + |ny|·ch, so the line stays one
- * cell thick (and anti-aliased) at 12 o'clock and at 3 o'clock alike. */
+/* The line's cells, once per grid, with their offset from the centre line and their reach
+ * across it, so a frame costs no sqrt or division per cell. Thickness is in cells along the
+ * ring's normal: a cell's extent across a line with unit normal n is |nx|·cw + |ny|·ch, so
+ * the line is equally soft at 12 o'clock and at 3 o'clock. */
 typedef struct {
     uint16_t k;                        /* cell                                            */
     float off;                         /* radius − RING_R, stage units                    */
     float ifoot;                       /* 1 / the cell's extent across the ring (stage)   */
 } ring_cell_t;
-
-#define RING_FAR (RING_SWELL + RING_BREATH_AMP_IDLE + RING_BREATH_AMP_LEVEL)   /* the deepest breath */
 
 static bool ring_geom(fluid_sim_t *s) {
     if (s->ring_geom) return true;
@@ -394,8 +404,7 @@ static bool ring_geom(fluid_sim_t *s) {
             const float x = s->xs[i], y = s->ys[j], rad = sqrtf(x * x + y * y);
             if (rad < 1e-6f) continue;
             const float foot = (fabsf(x) * cw + fabsf(y) * ch) / rad, off = rad - RING_R;
-            const float reach = fmaxf(RING_FAR + (RING_CORE + RING_SOFT) * foot, RING_FAR + 2.f * RING_PING_WIDTH);
-            if (fabsf(off) >= reach) continue;
+            if (fabsf(off) >= (RING_CORE + RING_SOFT) * foot) continue;
             if (c) { c->k = (uint16_t)k; c->off = off; c->ifoot = 1.f / foot; c++; }
             else n++;
         }
@@ -411,29 +420,17 @@ void fluid_target_ring(fluid_sim_t *s, const fluid_ring_t *r, uint32_t rgb, floa
     if (!(r->on > 0.f) || !ring_geom(s)) return;
     FLUID_PROF_BEGIN(c0);
     const ring_cell_t *c = (const ring_cell_t *)s->ring_geom;
-    const float reach = RING_CORE + RING_SOFT, isoft = 1.f / RING_SOFT, dr = r->dr, ink = r->ink;
+    const float reach = RING_CORE + RING_SOFT, isoft = 1.f / RING_SOFT, ink = r->ink;
     for (int n = 0; n < s->ring_n; n++, c++) {
-        const float d = fabsf(c->off - dr) * c->ifoot;        /* cells from the line */
+        const float d = fabsf(c->off) * c->ifoot;              /* cells from the line */
         if (d >= reach) continue;
         float t = (d - RING_CORE) * isoft;                     /* 0..1 across the soft edge */
         t = t < 0.f ? 0.f : t;
         arc_cell(s, c->k, ink * (1.f - t * t * (3.f - 2.f * t)), rgb, acc);
+        /* too faint for arc_cell's "where it dominates": the line still wears ring_color */
+        if (t < 0.5f) s->tcol[c->k] = fluid_pack_rgba8((rgb >> 16 & 255) / 255.f, (rgb >> 8 & 255) / 255.f, (rgb & 255) / 255.f, acc);
     }
     FLUID_PROF_END(FP_TARGET, c0);
-}
-
-void fluid_ring_ping(fluid_sim_t *s, const fluid_ring_t *r) {
-    if (!(r->ping_s > 0.f) || !ring_geom(s)) return;
-    /* a gaussian bump of the surface all along the ring (where it is now): symmetric, so
-     * the wave it starts is a circle running inward across the window */
-    const ring_cell_t *c = (const ring_cell_t *)s->ring_geom;
-    const float iw = 1.f / RING_PING_WIDTH, amp = r->ping_s * FQ_H;
-    for (int n = 0; n < s->ring_n; n++, c++) {
-        const float u = (c->off - r->dr) * iw;
-        if (u * u >= 4.f) continue;
-        const float h = (float)s->h[c->k] + amp * expf(-u * u * 2.f);
-        s->h[c->k] = (int16_t)(h > 32767.f ? 32767.f : h < -32768.f ? -32768.f : h);
-    }
 }
 
 uint32_t fluid_ring_rgb(int32_t given, int32_t dflt, int palette) {
