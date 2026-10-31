@@ -18,8 +18,10 @@
     "format": "node scripts/checks/format.mjs --write",
     "og": "node scripts/generate-og.mjs",
     "readme": "node scripts/readme/generate.mjs",
+    "og-options": "node scripts/og/generate-options.mjs",
     "screens": "node e2e/screens.mjs",
     "first-load": "node e2e/first-load.mjs",
+    "theme-label": "node e2e/theme-label.mjs",
     "stage-firmware": "node scripts/stage-firmware.mjs"
   },
   "dependencies": {
