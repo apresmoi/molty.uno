@@ -49,8 +49,13 @@ device id, and the agent token in its secret store — never in chat.
   answers `{"skipped":"filled"}`, Molty already filled — go straight to your answer, don't double up.
 - **Use your fastest model** for the reply; escalate only for real work, and then say one short
   line first ([talking-fast.md](../talking-fast.md)).
-- **Keep a warm session** if your platform allows it (a kept-alive conversation per Molty beats a
-  cold start per event).
+- **Stay warm for 30 s after a conversation.** When the conversation ends (your last
+  `"listen": false`, or `no_speech`), don't exit: long-poll
+  `GET $MOLTY_RELAY/v1/devices/<id>/events?since=<next>&wait_s=25` for **at most 30 s in total**.
+  A follow-up shake inside that window reaches you already running (no cold start): answer its
+  `utterance` with talk + `in_reply_to` as usual. Your webhook may start a second run for the same
+  shake — whichever claims the turn first answers; the other gets `409 turn_claimed` and exits
+  quietly. After 30 s with nothing, exit (a waiting run still costs usage; keep the window short).
 - `talk` returns the human's next words in `heard`: answer again in the same run while they keep
   talking; end with `"listen": false`.
 - `409 turn_claimed` → another agent answered: stop quietly.
