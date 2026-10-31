@@ -5,7 +5,7 @@
 // code (header X-Molty-Link-Code), like the Voice card (voice/voice.ts).
 // Pure: the Activity page (pages/activity.ts) renders what these return.
 
-export type ActivityKind = 'call' | 'job' | 'device' | 'device_log' | 'pair' | 'voice_box' | 'settings';
+export type ActivityKind = 'call' | 'job' | 'device' | 'device_log' | 'pair' | 'voice_box' | 'settings' | 'trace';
 export const ACTIVITY_KINDS: ReadonlyArray<{ id: ActivityKind; label: string }> = [
   { id: 'call', label: 'agent calls' },
   { id: 'job', label: 'turns' },
@@ -14,6 +14,7 @@ export const ACTIVITY_KINDS: ReadonlyArray<{ id: ActivityKind; label: string }> 
   { id: 'pair', label: 'pairing' },
   { id: 'voice_box', label: 'voice box' },
   { id: 'settings', label: 'settings' },
+  { id: 'trace', label: 'turn traces' },
 ];
 
 export interface ActivityEntry {
@@ -38,6 +39,9 @@ export interface ActivityPage {
   next: string;
   more: boolean;
   transcripts: boolean;
+  /** "keep audio for debugging" (owner setting); undefined: this relay has no such setting. */
+  keep_audio?: boolean;
+  audio?: { turns: number; max_s: number; max_age_h: number };
   limits?: { max_age_h: number; max_entries: number };
 }
 
@@ -80,12 +84,42 @@ async function call(t: ActivityTarget, method: 'GET' | 'POST', q: ActivityQuery,
       throw new ActivityApiError(b?.error === 'not_found' ? 'unsupported' : String(b?.error ?? `http_${res.status}`), b?.message);
     }
     const r = b.result ?? {};
-    return { entries: Array.isArray(r.entries) ? r.entries : [], next: String(r.next ?? q.since ?? ''), more: !!r.more, transcripts: r.transcripts !== false, limits: r.limits };
+    return { entries: Array.isArray(r.entries) ? r.entries : [], next: String(r.next ?? q.since ?? ''), more: !!r.more, transcripts: r.transcripts !== false,
+      ...(typeof r.keep_audio === 'boolean' ? { keep_audio: r.keep_audio } : {}), ...(r.audio && typeof r.audio === 'object' ? { audio: r.audio } : {}), limits: r.limits };
   } finally { clearTimeout(timer); }
 }
 
 export const getActivity = (t: ActivityTarget, q: ActivityQuery = {}, f: typeof fetch = fetch) => call(t, 'GET', q, undefined, f);
 export const setTranscripts = (t: ActivityTarget, on: boolean, f: typeof fetch = fetch) => call(t, 'POST', {}, { transcripts: on }, f);
+export const setKeepAudio = (t: ActivityTarget, on: boolean, f: typeof fetch = fetch) => call(t, 'POST', {}, { keep_audio: on }, f);
+
+/**
+ * A kept turn's audio (owner only): GET <relay>/v1/devices/<id>/activity/audio/<job> with the
+ * link code header → the WAV blob. Errors: not_found (expired / never kept), unauthorized, unreachable.
+ */
+export async function getAudio(t: ActivityTarget, job: string, fetchImpl: typeof fetch = fetch, timeoutMs = 20000): Promise<Blob> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    let res: Response;
+    try {
+      res = await fetchImpl(`${t.relay.replace(/\/+$/, '')}/v1/devices/${encodeURIComponent(t.deviceId)}/activity/audio/${encodeURIComponent(job)}`, {
+        method: 'GET', headers: { 'x-molty-link-code': t.linkCode }, signal: ctl.signal, cache: 'no-store',
+      });
+    } catch {
+      throw new ActivityApiError('unreachable', 'can’t reach the relay');
+    }
+    if (!res.ok) {
+      let b: any = null;
+      try { b = await res.json(); } catch { /* not JSON */ }
+      throw new ActivityApiError(String(b?.error ?? (res.status === 404 ? 'not_found' : `http_${res.status}`)), b?.message);
+    }
+    return await res.blob();
+  } finally { clearTimeout(timer); }
+}
+
+/** File name for a turn's audio: molty-<job tag>.wav. */
+export const audioFileName = (job: string) => `molty-${job.split('.').pop() ?? 'turn'}.wav`;
 
 const seqOf = (id: string) => { const m = /^a(\d+)$/.exec(id); return m ? Number(m[1]) : NaN; };
 
@@ -125,6 +159,8 @@ export interface Group {
   call?: ActivityEntry;
   jobEntry?: ActivityEntry;
   lines: ActivityEntry[];
+  /** The turn's later trace facts (webhook deliveries, the agent's reply). */
+  traces: ActivityEntry[];
   entries: ActivityEntry[];
 }
 
@@ -136,7 +172,7 @@ export function groupEntries(entries: ActivityEntry[]): Group[] {
     if (e.job) {
       let g = byJob.get(e.job);
       if (!g) {
-        g = { key: e.job, job: e.job, ts: e.ts, op: 'job', outcome: 'pending', lines: [], entries: [] };
+        g = { key: e.job, job: e.job, ts: e.ts, op: 'job', outcome: 'pending', lines: [], traces: [], entries: [] };
         byJob.set(e.job, g);
         groups.push(g);
       }
@@ -145,13 +181,15 @@ export function groupEntries(entries: ActivityEntry[]): Group[] {
       if (e.kind === 'call') g.call = e;
       else if (e.kind === 'job') g.jobEntry = e;
       else if (e.kind === 'device_log') g.lines.push(e);
+      else if (e.kind === 'trace') g.traces.push(e);
       continue;
     }
-    groups.push({ key: e.id, ts: e.ts, agent: e.agent, op: e.op ?? e.ev ?? e.kind, outcome: isError(e) ? 'error' : 'ok', error: e.error, ms: e.ms, lines: e.kind === 'device_log' ? [e] : [], entries: [e] });
+    groups.push({ key: e.id, ts: e.ts, agent: e.agent, op: e.op ?? e.ev ?? e.kind, outcome: isError(e) ? 'error' : 'ok', error: e.error, ms: e.ms, lines: e.kind === 'device_log' ? [e] : [], traces: e.kind === 'trace' ? [e] : [], entries: [e] });
   }
   for (const g of byJob.values()) {
     const j = g.jobEntry, c = g.call;
-    g.agent = j?.agent ?? c?.agent ?? g.entries.find((e) => e.agent)?.agent;
+    // a shake's listen has no agent: the agents its trace entries name (webhooks, replies) are not its owner
+    g.agent = j?.agent ?? c?.agent ?? g.entries.find((e) => e.agent && e.kind !== 'trace')?.agent;
     g.op = j?.op ?? c?.op ?? 'job';
     if (j) {
       const failed = j.ok === false || j.data?.status === 'failed' || !!j.error;
@@ -236,6 +274,7 @@ export function entryLine(e: ActivityEntry): string {
     case 'pair': return `${e.ev === 'approved' ? 'paired' : e.ev === 'revoked' ? 'unpaired' : `pairing ${e.ev ?? ''}`}${d.role === 'voice' ? ' (voice box)' : ''}`;
     case 'voice_box': return `voice box ${e.ev ?? ''}${d.name ? ` ⠂ ${d.name}` : ''}${d.code ? ` ⠂ close ${d.code}` : ''}`;
     case 'settings': return `settings: ${e.ev ?? ''} ${JSON.stringify(d)}`;
+    case 'trace': return `${e.ev === 'webhook' ? 'webhook' : e.ev === 'reply' ? 'reply' : `trace ${e.ev ?? ''}`}${typeof d.status === 'number' ? ` ⠂ ${d.status}` : ''}${typeof d.ms === 'number' ? ` ⠂ ${fmtMs(d.ms)}` : ''}${d.error ? ` ⠂ ${d.error}` : ''}`;
     case 'call': return `${e.op ?? 'call'}${e.ok === false ? ` → ${e.error ?? 'error'}` : ''}${e.args && Object.keys(e.args).length ? ` ${JSON.stringify(e.args)}` : ''}`;
     default: return `${e.kind}${e.ev ? ` ${e.ev}` : ''}`;
   }

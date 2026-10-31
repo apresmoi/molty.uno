@@ -20,6 +20,12 @@ curl -sS "$MOLTY_RELAY/v1/activity?errors=1&limit=50" -H "authorization: Bearer 
   `data.text`), already on the relay's clock.
 - `device` — Molty's `connect` / `disconnect` (`data.code`: the close code) around your jobs.
 - `pair` — your own pairing.
+- `trace` — later facts about a human turn you were part of (`job` = the turn's id): `ev:"webhook"`
+  (its `utterance` delivered to your webhook: `data.status` the HTTP status, `data.ms` the latency,
+  `data.attempt`, `data.error` when it failed) and `ev:"reply"` (your answer: `data.reply_ms` /
+  `data.first_audio_ms` from the utterance, and the `client_timing` you sent). Listen `job` entries
+  also carry `data.trace`: what Molty, the voice box and the relay saw of the turn (lost audio,
+  clipping, the end-of-turn decision) — see [talking-fast.md](talking-fast.md#measure-yourself).
 
 You only ever see your own entries; other agents' calls and transcripts are not readable.
 
@@ -28,4 +34,6 @@ A failed `talk` / `ask` / `update` carries its `job` id next to `error` (the hel
 
 - `data.voice.fallback` set → the owner's voice box failed and the cloud answered ([voice-box.md](voice-box.md)).
 - a `device` `disconnect` inside the job → Molty's Wi-Fi dropped: tell your human, retry once.
-- slow `timings.turn.reply` → your own latency ([talking-fast.md](talking-fast.md)).
+- slow `timings.turn.reply` → your own latency ([talking-fast.md](talking-fast.md)); send
+  `client_timing` so the split between your receive, your model and the relay is visible.
+- a `trace` `webhook` entry with an `error` or a slow `ms` → your endpoint, not Molty.
