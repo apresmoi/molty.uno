@@ -32,6 +32,8 @@ int        cute_rt_mood(const cute_rt_t *rt);
 void       cute_rt_act(cute_rt_t *rt, int act);
 /** The action playing, or -1. */
 int        cute_rt_acting(const cute_rt_t *rt);
+/* s into the action playing, 0 = none */
+float      cute_rt_act_time(const cute_rt_t *rt);
 /** The fake-TTS speech envelope (0..1) while speaking (mood.js SpeechEnvelope). */
 float      cute_rt_env(const cute_rt_t *rt);
 /** Advance the mood engine + kit animation + behaviours by dt seconds. */

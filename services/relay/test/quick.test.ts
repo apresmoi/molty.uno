@@ -14,7 +14,7 @@ import { handleRest } from "../src/surfaces/rest.js";
 import { DEVICE, type FakeSocket, FakeVoice, LINK, connect, flush, makeRoom } from "./helpers.js";
 
 const FAST = { cmdTimeoutMs: 300, pairWindowMs: 400, sayChunkSamples: 1600, sayLeadFrames: 2, listenGraceMs: 200, sayDoneGraceMs: 300 };
-const CAPS = ["say", "say_cues", "listen", "listen_stop", "listen_window", "ack", "shake_talk"];
+const CAPS = ["working", "say", "say_cues", "listen", "listen_stop", "listen_window", "ack", "shake_talk"];
 const FILLER_TEXTS = FILLER_POOL.map((id) => BUILTIN_PHRASES.find((p) => p.id === id)!.text);
 
 /** TTS that takes a while (a cloud provider): what a queued talk overlaps with the phrase. */
@@ -269,6 +269,22 @@ describe("quick then talk: one seamless answer", () => {
     await until(() => w.dev.moods().length > 0);
     expect(w.dev.moods()[0]).toMatchObject({ mood: "thinking", hold_s: expect.any(Number) });
     expect(w.dev.moods()[0].at).toBeLessThanOrEqual(w.dev.done(q.result.job)!.at + 50);
+  });
+
+  it("a say's [working] becomes the mood at its end; an explicit mood during the say wins", async () => {
+    const w = await setup();
+    const a = await w.room.command(w.token, "say", { text: "Looking. [working]" });
+    expect(a.ok).toBe(true);
+    await until(() => w.dev.moods().some((x) => x.mood === "working"));
+    expect(w.dev.moods().map((x) => x.mood)).toContain("working");
+
+    const b = await setup();
+    const said = (await b.room.command(b.token, "say", { text: "Looking. [working]" })) as any;
+    expect(said.ok).toBe(true);
+    await b.room.command(b.token, "mood", { mood: "idle" });
+    await until(() => !!b.dev.done(said.result.job));
+    await new Promise((r) => setTimeout(r, 400));
+    expect(b.dev.moods().map((x) => x.mood)).not.toContain("working");
   });
 
   it("only its own agent may queue behind a phrase: another agent gets audio_busy (or turn_claimed in a turn)", async () => {

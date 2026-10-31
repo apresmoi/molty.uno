@@ -746,7 +746,7 @@ What the screen does between commands (`device/firmware/main/fluid/fluid_directo
 | `status` | — | fw, uptime, creature, state, mood, fps, rssi | relay adds `relay` {api_version, online, board, caps, voice, ...} |
 | `state` | `{state, ...}` | creature state JSON | passthrough to `/api/creature/state` semantics |
 | `mood` | `{mood, hold_s?}` (device also `react?`) | — | idle listening thinking speaking happy sleepy surprised; `hold_s` 0..3600 (0 = until the next mood; default: happy/surprised revert, the rest persist). `react:true` (relay-sent, cap `react`): shown but not an explicit mood ([While the human speaks](#while-the-human-speaks)) |
-| `act` | `{action}` | `{action}` | a one-shot gesture over the current mood: wiggle nod shake_head bounce peek glance_left glance_right blink wobble stretch look_up yawn ([Inline cues and actions](#inline-cues-and-actions)); `unsupported` / `firmware_too_old` without the `act` cap |
+| `act` | `{action}` | `{action}` | a one-shot gesture over the current mood: inspect paddle (cap `working`) wiggle nod shake_head bounce peek glance_left glance_right blink wobble stretch look_up yawn ([Inline cues and actions](#inline-cues-and-actions)); `unsupported` / `firmware_too_old` without the `act` cap |
 | `draft` (relay) | `{turn_id, based_on, opener, max_new_words?, voice?}` | `{turn_id, based_on, status:"held", max_new_words, threshold}` | only during an open turn ([While the human speaks](#while-the-human-speaks)) |
 | `react` (relay) | `{turn_id, mood}` or `{turn_id, action}` | `{turn_id, shown, for_ms, next_after_ms}` | only during an open turn; ≤ 1 per 3 s |
 | `show` | `{text, wpm?}` | — | speed reader in the fluid; back to the creature 1.5 s after the last word |

@@ -2,7 +2,7 @@
 // and the agent gesture command `act`.
 import { describe, expect, it } from "vitest";
 import type { RelayBackend } from "../src/core/api.js";
-import { ACTIONS, MAX_SAY_MARKS, validateAsk, validateCommand, validateTalk } from "../src/core/commands.js";
+import { ACTIONS, MAX_SAY_MARKS, REACT_ACTIONS, validateAsk, validateCommand, validateTalk } from "../src/core/commands.js";
 import { decodeAudioFrame, encodeAudioFrame } from "../src/core/protocol.js";
 import type { DeviceRoom } from "../src/core/room.js";
 import { parseCues, speechWords } from "../src/core/speech.js";
@@ -346,5 +346,49 @@ describe("act", () => {
     expect(act.inputSchema.properties.action.enum).toEqual([...ACTIONS]);
     for (const a of ACTIONS) expect(act.description).toContain(a);
     for (const n of ["molty_say", "molty_talk", "molty_ask"]) expect(tools.find((t) => t.name === n).description).toMatch(/\[happy\].*\\\[/);
+  });
+});
+
+describe("the working mood", () => {
+  it("[working] is a cue: never spoken, never shown, and a talk with it does not listen", () => {
+    const p = parseCues("Searching for that. [working]");
+    expect(p.text).toBe("Searching for that.");
+    expect(p.marks).toEqual([[3, "working"]]);
+    const t = validateTalk({ say: "Searching for that. [working]" }) as { say: string; listen: boolean };
+    expect(t.say).toBe("Searching for that.");
+    expect(t.listen).toBe(false);
+    expect((validateTalk({ say: "Hi. [working]", listen: true }) as { listen: boolean }).listen).toBe(true);
+    expect((validateTalk({ say: "Hi." }) as { listen: boolean }).listen).toBe(true);
+  });
+  it("mood and the actions validate; the reflex never picks them", () => {
+    expect(validateCommand("mood", { mood: "working" }).args).toEqual({ mood: "working" });
+    for (const action of ["inspect", "paddle"]) {
+      expect(ACTIONS as readonly string[]).toContain(action);
+      expect(REACT_ACTIONS).not.toContain(action);
+    }
+  });
+  it("the say's [working] leaves the device's marks; the mood comes only after say.done", async () => {
+    const w = await setup({ caps: [...CAPS, "working"] });
+    await say(w, "Searching for that. [nod] [working]");
+    const sayCmd = w.dev.cmds("say")[0];
+    expect(JSON.stringify(sayCmd)).not.toContain("working");
+    expect(sayCmd.marks).toEqual([[3, "nod"]]);
+    expect(sayCmd.text ?? "").not.toContain("[");
+    expect(spoken(w.voice.ttsCalls.map((c) => c.text)).join(" ")).toBe("Searching for that.");
+    const at = (pred: (l: any) => boolean) => w.dev.log.findIndex(pred);
+    const moodAt = at((l) => l.kind === "cmd" && l.name === "mood" && l.args.mood === "working");
+    expect(moodAt).toBeGreaterThan(-1);
+    expect(moodAt).toBeGreaterThan(at((l) => l.kind === "frame" && l.head.end));
+  });
+  it("old firmware: the cue and the gestures drop, the say still plays; direct use is refused", async () => {
+    const w = await setup();
+    await say(w, "On it. [paddle] [working]");
+    expect(w.dev.cmds("say")[0].marks).toBeUndefined();
+    expect(w.dev.cmds("mood").some((a: any) => a.mood === "working")).toBe(false);
+    const mood = await w.room.command(w.token, "mood", { mood: "working" });
+    const act = await w.room.command(w.token, "act", { action: "inspect" });
+    expect(mood.ok).toBe(false);
+    expect(act.ok).toBe(false);
+    expect(w.dev.cmds("act").length).toBe(0);
   });
 });
