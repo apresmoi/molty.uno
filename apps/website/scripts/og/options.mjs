@@ -11,61 +11,77 @@ const base = `
   .og-line { width: auto; margin: 0; color: var(--m-ink); font: 26px / 1.3 var(--m-font-mono); }
 `;
 
-/** B2's layout: the device at ~95 % of the card (screen 550 px, bezel ~600), the wordmark
- *  82 px at 34 % down the screen, under the glass's highlight: its corners sit ≥ 30 px inside
- *  the circle (5.24 em wide, half-width 215 px ≤ √(245² − 88²) = 229). Companions: 260 px slots, veiled toward the edge. */
+/** B3's layout (B2 polished, the same composition): the device at ~95 % of the card (screen
+ *  550 px, bezel ~600). The wordmark 88 px at 33 % down the screen, under the glass's
+ *  highlight: its glyphs (5.24 em wide, from ~5 px below the box top) keep ≥ 30 px inside the
+ *  circle (half-width 231 px ≤ √(245² − 79²) = 232). The main Molty's 280 px slot from 44.5 %
+ *  down: its body ends ~10 % above the slot's foot, inside the rim. Companions: 270 px slots
+ *  in the plain field, a veil only over the card's outer 150 px. */
 const FAMILY = `${base}
   .og > .og-screen { position: absolute; left: 325px; top: 40px; width: 550px; aspect-ratio: 1; }
-  .og-screen > .og-word { position: absolute; left: 50%; top: 34%; translate: -50% 0; font-size: 82px; line-height: 1; white-space: nowrap; }
-  .og-screen > .og-under { position: absolute; left: 50%; bottom: -5%; translate: -50% 0; width: 330px; aspect-ratio: 1; margin: 0; }
-  .og > .og-side-zone { position: absolute; top: 0; width: 330px; height: 630px; }
+  .og-screen > .og-word { position: absolute; left: 50%; top: 33%; translate: -50% 0; font-size: 88px; font-weight: 800; line-height: 1; white-space: nowrap; }
+  .og-screen > .og-under { position: absolute; left: 50%; top: 44.5%; translate: -50% 0; width: 280px; aspect-ratio: 1; margin: 0; }
+  .og > .og-side-zone { position: absolute; top: 0; width: 300px; height: 630px; }
   .og > .og-side-zone.og-left { left: 0; }
   .og > .og-side-zone.og-right { right: 0; }
-  .og > .og-companion { position: absolute; top: 200px; width: 260px; aspect-ratio: 1; margin: 0; }
-  .og > .og-companion.og-left { left: 30px; }
-  .og > .og-companion.og-right { right: 30px; }
-  .og > .og-veil { position: absolute; top: 0; width: 300px; height: 630px; pointer-events: none; z-index: 1; }
-  .og > .og-veil.og-left { left: 0; background: linear-gradient(to right, rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0.15)); }
-  .og > .og-veil.og-right { right: 0; background: linear-gradient(to left, rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0.15)); }
+  .og > .og-companion { position: absolute; top: 180px; width: 270px; aspect-ratio: 1; margin: 0; }
+  .og > .og-companion.og-left { left: 28px; }
+  .og > .og-companion.og-right { right: 28px; }
+  .og > .og-veil { position: absolute; top: 0; width: 150px; height: 630px; pointer-events: none; z-index: 1; }
+  .og > .og-veil.og-left { left: 0; background: linear-gradient(to right, rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0)); }
+  .og > .og-veil.og-right { right: 0; background: linear-gradient(to left, rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0)); }
 `;
 
-const STIR = [
-  [0, 0, 300, 180],
-  [900, 0, 300, 180],
-  [0, 480, 300, 150],
-  [900, 480, 300, 150],
-];
+/** The settled window: every Molty is asked to hold the `listening` mood (front-on, attentive;
+ *  the showcase's data-fluid-act) once formed, and the frames come from inside that 4 s hold,
+ *  after its 0.7 s fade-in: no hops, turns or glass beats. The card pass: both companions
+ *  formed together, eyes open. The screen pass: the wordmark whole and still, the main
+ *  Molty's eyes open (not mid-blink). */
+const WINDOW = { act: 'mood:listening', from: 2300, to: 5300 };
+const SIDES = { ...WINDOW, face: '.og-companion', white: 225, share: true, settled: '.og-companion' };
+const SCREEN_PICK = { ...WINDOW, face: '.og-under', band: [0.96, 1.1] };
+
+/** The screen pass: B3's screen at 2× (1100 px) in a 1300 px viewport, everything inside it
+ *  scaled with it (the wordmark 176 px, the Molty's slot 560 px). */
+const SCREEN_CSS = `
+  html, body { margin: 0; width: 1300px; height: 1300px; overflow: hidden; background: var(--m-bg); }
+  .og { position: relative; box-sizing: border-box; width: 1300px; height: 1300px; }
+  .og > :not(astro-island) { position: relative; z-index: 1; }
+  .og > .og-screen { position: absolute; left: 100px; top: 100px; width: 1100px; aspect-ratio: 1; }
+  .og-screen > .og-word { position: absolute; left: 50%; top: 33%; translate: -50% 0; font-size: 176px; font-weight: 800; line-height: 1; white-space: nowrap; }
+  .og-screen > .og-under { position: absolute; left: 50%; top: 44.5%; translate: -50% 0; width: 560px; aspect-ratio: 1; margin: 0; }
+`;
+const SCREEN = { scale: 2, viewport: { width: 1300, height: 1300 }, css: SCREEN_CSS, pick: SCREEN_PICK, bezel: 1.1, lift: 1.35 };
 
 export const OPTIONS = [
-  // B2 ("family"): B at max size, the wordmark fitted inside the screen's chord, and the side
-  // areas alive (a stirred, pooled field; two companions half veiled). The centre square
-  // (device + wordmark + main Molty) stands alone. Rendered once per main Molty below.
+  // B3 ("family"): the brand on a max-size screen, the main Molty under it, two companions
+  // at the sides; the centre square (device + wordmark + main Molty) stands alone. Captured
+  // SETTLED (no pointer), in two real renders: the card (companions formed together) and a
+  // 2× screen (wordmark whole, the main Molty's best face) set into it. Once per main Molty.
   {
     name: 'family-duck',
-    file: 'B2-duck',
-    moltyDir: 'b2',
-    prefix: 'B2-',
+    file: 'B3-duck',
+    moltyDir: 'b3',
     molty: 'cute-duck',
     companions: ['cute-bunny', 'cute-octopus'],
     themes: ['dark'],
     square: true,
     wordDelay: 0.3,
-    // the wordmark fully condensed (band), the companions left whole (stir above and below them)
-    pick: { from: 1500, to: 6500, face: '.og-under', band: [0.9, 1.2], stir: STIR },
+    pick: SIDES,
+    screen: SCREEN,
     css: FAMILY,
   },
   {
     name: 'family-bunny',
-    file: 'B2-bunny',
-    moltyDir: 'b2',
-    prefix: 'B2-',
+    file: 'B3-bunny',
+    moltyDir: 'b3',
     molty: 'cute-bunny',
     companions: ['cute-duck', 'cute-ghost'],
     themes: ['dark'],
     square: true,
     wordDelay: 0.3,
-    // the wordmark fully condensed (band), the companions left whole (stir above and below them)
-    pick: { from: 1500, to: 6500, face: '.og-under', band: [0.9, 1.2], white: 235, stir: STIR },
+    pick: SIDES,
+    screen: { ...SCREEN, pick: { ...SCREEN_PICK, white: 235 } },
     css: FAMILY,
   },
   // The device IS the image (hardware brands' cards: Playdate, Tidbyt, Analogue): the round

@@ -82,16 +82,17 @@ function compose([html, opt]) {
     mark.append(brand.cloneNode(true));
     card.append(moltySlot('og-screen', true), mark);
   } else if (opt.name.startsWith('family')) {
-    // B2: the brand on a max-size screen, the main Molty under it, and the sides alive: the
-    // fluid pools there and two companions emerge from it, half veiled (dimmer, smaller)
+    // B3: the brand on a max-size screen, the main Molty under it, and two companions in the
+    // fluid at the sides (`pool`: the field pools there; a veil fades the card's outer edges)
     const screen = el('div', 'og-screen');
     screen.append(heroDevice.cloneNode(true), word('molty.UNO', 'og-word'), moltySlot('og-under', false));
     const side = (cls, id) => {
       const zone = el('div', `og-side-zone ${cls}`);
-      zone.setAttribute('data-fluid-pool', '');
+      if (opt.pool) zone.setAttribute('data-fluid-pool', '');
       return [zone, moltySlot(`og-companion ${cls}`, false, id), el('div', `og-veil ${cls}`)];
     };
-    card.append(screen, ...side('og-left', opt.companions[0]), ...side('og-right', opt.companions[1]));
+    if (opt.only === 'screen') card.append(screen);
+    else card.append(screen, ...side('og-left', opt.companions[0]), ...side('og-right', opt.companions[1]));
   } else if (opt.name === 'brand') {
     // the brand ON the screen: the fluid condenses the wordmark there, the Molty under it
     const screen = el('div', 'og-screen');
@@ -138,34 +139,55 @@ async function ink(png, box, bright = 0) {
 }
 
 /** The moment, from frames every ~20 ms across a window (ms after the card is ready): the one
- *  whose Molty (`face`: its slot) reads best (the most near-white pixels, every channel over
- *  `white`: its eyes; raise it for a pale Molty, so its body does not count). With a `band`,
- *  only frames whose wordmark ink is within that share of its
- *  final ink count: mid-condense (half fluid, half letters; the condense takes ~0.4 s, so a
- *  fixed delay would land on either side of it) or fully formed. */
-async function pickFrame(page, { from, to, band, face = '[data-fluid-molty]', white = 200, stir }) {
-  const slot = await page.locator(face).first().boundingBox();
+ *  whose Molty reads best (`face`: its slot, or several: the most near-white pixels, every
+ *  channel over `white`: its eyes; raise it for a pale Molty, so its body does not count;
+ *  `share`: as a share of the Molty's ink, so a turned or melting Molty cannot win on size;
+ *  `act`: a mood every Molty holds through the window, see below). With a `band`,
+ *  only frames whose wordmark ink is within that share of its final ink count: mid-condense
+ *  (half fluid, half letters; the condense takes ~0.4 s, so a fixed delay would land on
+ *  either side of it) or fully formed and still. With `settled` (a selector), only frames
+ *  where those Moltys are formed together: the least formed of them (its ink against its own
+ *  peak) within `slack` of the best frame's, so none is mid-hop or melting. With `stir`, the pointer sweeps and taps those
+ *  boxes meanwhile (a move drags the field, a pointerdown ripples it). */
+async function pickFrame(page, { from, to, band, face = '[data-fluid-molty]', white = 200, settled, slack = 0.06, share = false, act, stir }) {
+  const faces = await Promise.all((await page.locator(face).all()).map((l) => l.boundingBox()));
   const word = band && (await page.locator('.og-word').first().boundingBox());
-  await page.waitForTimeout(from);
+  const others = settled ? await Promise.all((await page.locator(settled).all()).map((l) => l.boundingBox())) : [];
+  if (act) {
+    // `act`: every Molty is asked to hold a mood (data-fluid-act, as the showcase asks it: held
+    // MOOD_HOLD = 4 s) once it has formed (~1.5 s), so the window sees one steady, front-on pose
+    await page.waitForTimeout(1500);
+    await page.evaluate((a) => document.querySelectorAll('[data-fluid-molty]').forEach((el) => (el.dataset.fluidAct = `${a}#1`)), act);
+    await page.waitForTimeout(from - 1500);
+  } else await page.waitForTimeout(from);
   const frames = [];
   const end = Date.now() + (to - from);
-  // `stir`: the pointer sweeps these boxes meanwhile and taps in them (the page fluid's window
-  // pointer: a move drags the field, a pointerdown ripples it), so the field there flows
-  // instead of resting as faint dots
-  const stirring = stir && (async () => {
-    for (let k = 0; Date.now() < end; k++)
-      for (const [x, y, w, h] of stir) {
-        const at = (a) => [x + w * (0.5 + 0.42 * Math.cos(a)), y + h * (0.5 + 0.42 * Math.sin(a * 1.7))];
-        await page.mouse.move(...at(k * 2.3), { steps: 2 });
-        await page.mouse.down();
-        await page.mouse.up();
-        await page.mouse.move(...at(k * 2.3 + 1.4), { steps: 4 });
-        await page.waitForTimeout(60);
-      }
-  })();
+  const stirring =
+    stir &&
+    (async () => {
+      for (let k = 0; Date.now() < end; k++)
+        for (const [x, y, w, h] of stir) {
+          const at = (a) => [x + w * (0.5 + 0.42 * Math.cos(a)), y + h * (0.5 + 0.42 * Math.sin(a * 1.7))];
+          await page.mouse.move(...at(k * 2.3), { steps: 2 });
+          await page.mouse.down();
+          await page.mouse.up();
+          await page.mouse.move(...at(k * 2.3 + 1.4), { steps: 4 });
+          await page.waitForTimeout(60);
+        }
+    })();
   while (Date.now() < end) frames.push(await page.screenshot());
   await stirring;
-  let pool = await Promise.all(frames.map(async (png) => ({ png, m: await ink(png, slot, white), w: 1 })));
+  let pool = await Promise.all(
+    frames.map(async (png) => ({
+      png,
+      e: await Promise.all(faces.map(async (b) => (await ink(png, b, white)) / Math.max(1, await ink(png, b)) ** (share ? 1 : 0))),
+      w: 1,
+      c: await Promise.all(others.map((b) => ink(png, b))),
+    })),
+  );
+  // several faces: each one's eyes against its own best frame, summed (all of them facing us)
+  const eyes = faces.map((_, i) => Math.max(1, ...pool.map((f) => f.e[i])));
+  for (const f of pool) f.m = f.e.reduce((sum, e, i) => sum + e / eyes[i], 0);
   if (band) {
     await page.waitForTimeout(2000);
     const full = await ink(await page.screenshot(), word);
@@ -173,14 +195,24 @@ async function pickFrame(page, { from, to, band, face = '[data-fluid-molty]', wh
     pool = pool.filter((f) => f.w >= band[0] && f.w <= band[1]);
     if (!pool.length) throw new Error(`no frame has the wordmark in its band (${band})`);
   }
+  if (others.length) {
+    // each Molty's ink against its own peak; the frames where the least-formed of them is
+    // within `slack` of the best such frame (they rarely all peak on the same frame)
+    const peak = others.map((_, i) => Math.max(...pool.map((f) => f.c[i])));
+    for (const f of pool) f.r = Math.min(...f.c.map((c, i) => c / peak[i]));
+    const top = Math.max(...pool.map((f) => f.r));
+    pool = pool.filter((f) => f.r >= top - slack);
+    console.log(`     companions: least formed at ${(top * 100).toFixed(0)} % of its peak at best`);
+  }
   const best = pool.sort((a, b) => b.m - a.m)[0];
-  console.log(`     ${frames.length} frames${band ? `, wordmark at ${(best.w * 100).toFixed(0)} % of its ink` : ''}`);
+  console.log(`     ${frames.length} frames, ${pool.length} eligible${band ? `, wordmark at ${(best.w * 100).toFixed(0)} % of its ink` : ''}`);
   return best.png;
 }
 
-/** One card: compose, serve, wait for the fluid (and its Molty), capture → <OUT>/<stem>.png. */
-async function render(opt, theme, stem) {
-  const ctx = await browser.newContext({ viewport: { width: 1200, height: 630 }, deviceScaleFactor: 1, colorScheme: theme });
+/** One page: compose, serve, wait for the fluid (and its Moltys), pick its frame. Returns the
+ *  PNG and the screen's box (.og-screen), or null in OG_BURST mode (frames written instead). */
+async function capture(opt, theme, stem, viewport = { width: 1200, height: 630 }) {
+  const ctx = await browser.newContext({ viewport, deviceScaleFactor: 1, colorScheme: theme });
   const page = await ctx.newPage();
   page.on('pageerror', (e) => console.error(`${stem}: pageerror ${e.message}`));
   await page.goto(BASE + '/robots.txt');
@@ -191,6 +223,7 @@ async function render(opt, theme, stem) {
   await page.waitForFunction(() => document.documentElement.dataset.fluid === 'live', null, { timeout: 20000 });
   if (opt.molty) await page.waitForFunction(() => document.documentElement.dataset.fluidMoltys === 'live', null, { timeout: 20000 });
   if (opt.waitFor) await page.waitForSelector(opt.waitFor, { timeout: 30000 });
+  let shot = null;
   if (BURST) {
     mkdirSync(`${OUT}/burst`, { recursive: true });
     for (let i = 0; i < 24; i++) {
@@ -199,13 +232,53 @@ async function render(opt, theme, stem) {
     }
   } else {
     const png = opt.pick ? await pickFrame(page, opt.pick) : (await page.waitForTimeout(opt.settle), await page.screenshot());
-    await sharp(png).toFile(`${OUT}/${stem}.png`);
-    await sharp(png).resize(600, 315).toFile(`${OUT}/${stem}-600.png`);
-    // a messenger's centre-square crop (iMessage, WhatsApp): what survives it
-    if (opt.square) await sharp(png).extract({ left: 285, top: 0, width: 630, height: 630 }).toFile(`${OUT}/${stem}-square.png`);
-    console.log(`wrote ${OUT}/${stem}.png (+ -600${opt.square ? ', -square' : ''})`);
+    const screen = await page.locator('.og-screen').first().boundingBox().catch(() => null);
+    shot = { png, screen };
   }
   await ctx.close();
+  return shot;
+}
+
+/** `opt.screen`: the device and its screen come from a second, larger render of the same
+ *  page (the screen `scale`× wider in its own viewport, so the fluid's 144-column grid is
+ *  that much finer against the wordmark and the Molty; the site at its crispest), picked at
+ *  its own best moment, downscaled and set into the card over its own device: a square of
+ *  `bezel`× the screen, clipped to a circle (the bezel's outer edge), the screen's ink lifted
+ *  ×`lift` (see below). Both are real renders. */
+async function inset(card, at, sub, from, bezel, lift = 1) {
+  const side = Math.round(from.width * bezel);
+  const out = Math.round(at.width * bezel);
+  const circle = (r) => Buffer.from(`<svg width="${out}" height="${out}"><circle cx="${out / 2}" cy="${out / 2}" r="${r}" fill="#fff"/></svg>`);
+  const scaled = await sharp(sub)
+    .extract({ left: Math.round(from.x + from.width / 2 - side / 2), top: Math.round(from.y + from.height / 2 - side / 2), width: side, height: side })
+    .resize(out, out, { kernel: 'lanczos3' })
+    .png()
+    .toBuffer();
+  const ring = await sharp(scaled).composite([{ input: circle(out / 2 - 0.5), blend: 'dest-in' }]).png().toBuffer();
+  // halving the render averages each braille dot with the gaps around it: `lift` brings the
+  // screen's ink back to the page's own brightness (inside the screen only, not the bezel)
+  const screen = await sharp(scaled).linear(lift, 0).composite([{ input: circle(at.width / 2 - 1), blend: 'dest-in' }]).png().toBuffer();
+  const left = Math.round(at.x + at.width / 2 - out / 2);
+  const top = Math.round(at.y + at.height / 2 - out / 2);
+  return sharp(card).composite([{ input: ring, left, top }, { input: screen, left, top }]).png().toBuffer();
+}
+
+/** One card → <OUT>/<stem>.png, its 600×315 preview and (opt.square) its centre square. */
+async function render(opt, theme, stem) {
+  const shot = await capture(opt, theme, stem);
+  if (!shot) return;
+  let { png } = shot;
+  if (opt.screen) {
+    const { scale, viewport, css, pick, bezel, lift } = opt.screen;
+    const fine = await capture({ ...opt, only: 'screen', css, pick }, theme, `${stem}-screen`, viewport);
+    png = await inset(png, shot.screen, fine.png, fine.screen, bezel, lift);
+    console.log(`     screen set in from a ${scale}× render`);
+  }
+  await sharp(png).toFile(`${OUT}/${stem}.png`);
+  await sharp(png).resize(600, 315).toFile(`${OUT}/${stem}-600.png`);
+  // a messenger's centre-square crop (iMessage, WhatsApp): what survives it
+  if (opt.square) await sharp(png).extract({ left: 285, top: 0, width: 630, height: 630 }).toFile(`${OUT}/${stem}-square.png`);
+  console.log(`wrote ${OUT}/${stem}.png (+ -600${opt.square ? ', -square' : ''})`);
 }
 
 /** OG_MOLTYS=all (or a comma list of ids): every card with a Molty once per Molty, as
@@ -232,7 +305,7 @@ for (const opt of OPTIONS) {
       const label = (id) => `${opt.prefix ?? ''}${catalog.find((c) => c.id === id)?.name ?? id}`;
       sheet.cards.push(...moltys.map((id) => [file(id), label(id)]));
     } else if (opt.moltyDir) {
-      // a card with its own folder (B2): <outDir>/<moltyDir>/<file>.png, on that folder's sheet
+      // a card with its own folder (B3): <outDir>/<moltyDir>/<file>.png, on that folder's sheet
       mkdirSync(`${OUT}/${opt.moltyDir}`, { recursive: true });
       const file = `${opt.moltyDir}/${opt.file}${suffix}`;
       jobs.push(() => render(opt, theme, file));
