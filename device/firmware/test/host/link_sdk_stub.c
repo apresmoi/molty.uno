@@ -103,7 +103,7 @@ cJSON *mole_diag_log_prev_frame(uint32_t *c, int m, int b) { return sdk_log_fram
 esp_err_t sdk_rx_error;
 unsigned sdk_rx_chunks;
 void (*sdk_rx_fill)(int16_t *buf, size_t n, unsigned chunk);
-static bool sdk_rx_open;
+bool sdk_rx_open;
 esp_err_t molty_mic_stream_start(uint32_t rate, uint32_t ms, uint8_t gain) {
     assert(rate==16000 && ms>0 && gain>0 && !sdk_rx_open); sdk_rx_open=true; return ESP_OK;
 }
@@ -112,6 +112,10 @@ esp_err_t molty_mic_stream_read(int16_t *buf, size_t n, size_t *got) {
     if (sdk_rx_fill) sdk_rx_fill(buf,n,sdk_rx_chunks); else memset(buf,0,n*2);
     *got=n; sdk_rx_chunks++; return ESP_OK;
 }
+uint8_t sdk_mic_gain = 8;
+uint8_t molty_mic_gain(void) { return sdk_mic_gain; }
+/* a task delay: the clock moves on */
+void vTaskDelay(unsigned ticks) { sdk_now+=(int64_t)ticks*1000; }
 void molty_mic_stream_stop(void) { assert(sdk_rx_open); sdk_rx_open=false; }
 uint32_t sdk_caps = 0xFFFFFFFFu;
 bool molty_board_has(uint32_t caps) { return caps && (sdk_caps & caps) == caps; }

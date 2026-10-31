@@ -51,7 +51,7 @@ PY
 for test in identity audio_pair client cmd ask; do
   extra=()
   if [ "$test" = identity ]; then extra+=("$LINK/link_identity.c"); fi
-  if [ "$test" = audio_pair ]; then extra+=("$AUDIO/vad.c" "$AUDIO/chirp.c"); fi
+  if [ "$test" = audio_pair ]; then extra+=("$AUDIO/vad.c" "$AUDIO/chirp.c" "$LINK/link_uplink.c" "$LINK/listen_react.c" "$HERE/../../main/sense/shake_settle.c"); fi
   if [ "$test" = ask ]; then extra+=("$HERE/../../main/fluid/fluid_ask.c" "$HERE/../../main/sense/gesture.c"); fi
   cc -std=c11 -Wall -Wextra -Werror -O2 ${LINK_TEST_CFLAGS:-} \
     -I"$OUT/stubs" -I"$OUT" -I"$HERE" -I"$LINK" -I"$AUDIO" -I"$HERE/../../main/fluid" -I"$HERE/../../main/creature" -I"$HERE/../../main/sense" -I"$HERE/../../main/update" -I"$HERE/../../main/diag" -I"$IDF_JSON" \

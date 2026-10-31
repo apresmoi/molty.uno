@@ -68,6 +68,10 @@ class Rest:
         status, out = await http("POST", f"{self.base}/v1/devices/{self.device}/cmd", {"name": "say", "args": {"text": text}, "wait": True}, token=self.token, timeout=60)
         return await self._job(status, out)
 
+    async def job(self, job: str) -> dict:
+        """A job by id, once it is over (e.g. the relay's listen job of a shake: its turn_id)."""
+        return await self._job(200, {"ok": True, "result": {"job": job, "status": "running"}})
+
     async def _job(self, status: int, out: dict) -> dict:
         if not out.get("ok"):
             raise RelayError(status, out)

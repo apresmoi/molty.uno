@@ -3,6 +3,7 @@
 #include "cJSON.h"
 #include "esp_err.h"
 #include <stddef.h>
+#include <stdint.h>
 esp_err_t link_audio_init(void);
 esp_err_t link_audio_say(const cJSON *args, cJSON **result);
 esp_err_t link_audio_listen(const cJSON *args, cJSON **result);
@@ -18,3 +19,11 @@ bool link_audio_busy(void);
 bool link_audio_shake(double peak_g, int reversals, unsigned ms);
 /* Link task: the relay's welcome listed listen_adopt (true), or the link went down (false). */
 void link_audio_relay_adopts(bool on);
+/* Shake to talk: the sense task's IMU samples (g, esp_timer ms), every one. While a shake's
+ * listen waits for the shake to settle (shake_settle.h) they decide where its audio begins;
+ * otherwise a no-op. Any task. */
+void link_audio_imu(float ax, float ay, float az, uint32_t ms);
+/* Link task: the relay's hint {"t":"hint","job","k":"pause"|"question"} (cap "hints"): the
+ * voice box heard a pause / a question in the running listen — Molty may react (a nod, a
+ * glance: listen_react.h). Ignored unless `job` is the running listen. */
+void link_audio_hint(const char *job, const char *kind);

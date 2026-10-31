@@ -16,6 +16,22 @@
 #define LINK_MESSAGE_MAX (LINK_HEADER_MAX + 1 + LINK_PCM_MAX)
 #define LINK_CUES_MAX 32        /* word cues one frame header may carry (≤ 512 B header) */
 #define LINK_CUE_WORDS 512      /* words of one say that can be cued (the reader's tokens) */
+/* Device→relay listen end frame (cap "trace"): the listen's own account, header "tr"
+ * (docs/AGENT-LINK.md "Turn trace"). has_* false: that key is left out. */
+typedef struct {
+    uint32_t wall;          /* ms from the mic opening to its end                       */
+    uint32_t cap;           /* ms of audio captured (after a shake's settle trim)        */
+    uint32_t sent;          /* frames sent, this one included                            */
+    uint32_t fail;          /* failed send attempts in all                               */
+    uint32_t drop, dropms;  /* frames (and their ms) dropped: the device's ring overflowed */
+    bool has_rssi0, has_rssi1;
+    int r0, r1;             /* Wi-Fi rssi (dBm) at the listen's start / end               */
+    uint32_t gain;          /* the mic gain                                              */
+    uint32_t pk;            /* peak |sample|, permille of full scale                      */
+    bool shake;             /* a shake's listen: "set" / "setc" are written              */
+    uint32_t set;           /* ms of leading handling noise trimmed                      */
+    bool setc;              /* the settle hit its cap                                    */
+} link_trace_end_t;
 typedef struct {
     char stream[LINK_STREAM_MAX];
     uint32_t seq;
@@ -35,7 +51,20 @@ typedef struct {
     uint16_t ncues;
     uint16_t cue_word[LINK_CUES_MAX];
     uint32_t cue_sample[LINK_CUES_MAX];
+    /* Device→relay listen frames (cap "trace", written only when `trace`): "ct" capture ms
+     * of the frame's first sample from the mic start, "lv" one hex byte per 100 ms chunk
+     * (link_level_byte), "cl" saturated samples (left out when 0), "rt" failed sends of
+     * this frame before (left out when 0), "wq" ms it waited on the device; the end frame
+     * adds "tr" (when tr is set). Should the header outgrow LINK_HEADER_MAX, "tr" then "lv"
+     * are left out: the frame always goes. Parsing does not read them. */
+    bool trace;
+    uint32_t ct, cl, rt, wq;
+    uint8_t nlv, lv[4];
+    const link_trace_end_t *tr;
 } link_frame_t;
+/* A chunk's level byte for "lv": its RMS in dBFS → clamp(round(2 * (dBFS + 100)), 0, 200)
+ * (0 = digital silence or <= -100 dBFS, 200 = full scale). sum_sq: Σ s² over n samples. */
+uint8_t link_level_byte(double sum_sq, uint32_t n);
 /* The newline is not counted in header_len. Payload is a borrowed byte view. */
 bool link_frame_parse(const void *data, size_t len, link_frame_t *h,
                       const uint8_t **pcm, size_t *pcm_len);

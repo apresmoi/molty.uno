@@ -85,8 +85,12 @@ uint32_t molty_speaker_stream_played(void);
 esp_err_t molty_mic_stream_start(uint32_t, uint32_t, uint8_t);
 esp_err_t molty_mic_stream_read(int16_t *, size_t, size_t *);
 void molty_mic_stream_stop(void);
+uint8_t molty_mic_gain(void);
+extern uint8_t sdk_mic_gain;
+void vTaskDelay(unsigned ticks);
 extern esp_err_t sdk_rx_error;
 extern unsigned sdk_rx_chunks;
+extern bool sdk_rx_open;   /* the mic stream is open */
 /* mic samples for read #chunk (NULL: digital silence) */
 extern void (*sdk_rx_fill)(int16_t *buf, size_t n, unsigned chunk);
 #define tskNO_AFFINITY 0x7fffffff

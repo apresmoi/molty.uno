@@ -1,0 +1,33 @@
+# Turn-trace suite (docs/AGENT-LINK.md "Turn trace"): the two field failures of 2026-10-31.
+#   shake-noise  a HARD shake (8.2 g) starts the listen: the hand's handling noise is on the mic
+#                for the first ~0.45 s (the old firmware sent it to STT -> a garbage transcript);
+#                the device must trim it once the IMU shows Molty is still again.
+#   wifi-stall   the uplink fails for 3 s mid-utterance (weak Wi-Fi, rssi -69..-79): the old
+#                firmware dropped what it could not send (8.97 s listen, 5.4 s arrived); the
+#                device must resend it in order and the transcript must be whole.
+# The noise is synthetic and seeded by the turn id (molty_sim/uplink.py): every run is identical.
+# Offline numbers (no box, no relay): `molty-sim measure`.
+name: trace
+defaults:
+  lead_s: 0.8
+  level_db: -24
+  noise: {kind: pink, db: -62}
+turns:
+  - id: shake-noise
+    say: "I'm here if you need me."
+    shake: {peak_g: 8.2, after_s: 0.45}
+    user: "Hey Molty, can you remind me to call my sister tonight?"
+    tags: [shake, handling-noise]
+
+  - id: shake-quick
+    say: "Okay, anything else?"
+    shake: {peak_g: 3.0, after_s: 0.1}
+    lead_s: 0.4
+    user: "Yes, what's the weather tomorrow?"
+    tags: [shake, early-speech]
+
+  - id: wifi-stall
+    say: "Tell me about your weekend plans."
+    stall: {at_s: 2.0, for_s: 3.0}
+    user: "On Saturday we're driving to the lake, and on Sunday I want to finally fix the bike and clean the garage."
+    tags: [stall, resend]

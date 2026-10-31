@@ -246,3 +246,14 @@ button.pill.done { background: var(--faint); color: var(--ink); }
 pre.act-lines { max-height: 260px; margin: 8px 0 0; }
 .act-line.err { color: var(--err); }
 .act-line.warn { color: var(--warn); }
+.act-trace { margin: 8px 0; }
+.act-trace summary { cursor: pointer; font-size: 12px; }
+.act-trace-svg { display: block; width: 100%; height: auto; margin: 6px 0; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+.act-sum, .act-events { margin: 4px 0; padding: 0; list-style: none; font-size: 12px; }
+.act-events li { display: flex; gap: 8px; overflow-wrap: anywhere; }
+.act-at { min-width: 5.5ch; text-align: right; flex: none; }
+.act-lane { min-width: 6ch; flex: none; }
+.act-words { overflow-wrap: anywhere; }
+.tone-err { color: var(--err); }
+.tone-warn { color: var(--warn); }
+.tone-ok { color: var(--accent); }

@@ -12,6 +12,8 @@
 //   box → relay  {"t":"stt.partial","id","text"}?  {"t":"stt.turn_end","id","reason"?}? (the human finished — or,
 //                with reason "no_speech", nobody spoke within no_speech_ms: end the listen now)
 //                {"t":"stt.final","id","text","ms"?} | {"t":"stt.final","id","error"}
+//   box → relay  {"t":"stt.hint","id","k":"pause"|"question"}? (while the human talks: the room forwards it to Molty)
+//                {"t":"stt.trace","id","trace":{…}}? (before stt.turn_end and stt.final: the latest is kept, core/trace.ts)
 //
 // Every request is bound to the socket it went out on: when that socket closes
 // or is replaced, drop() fails its requests at once (`voice_box_offline`), so
@@ -20,6 +22,7 @@ import { b64urlEncode, randomBytes } from "../core/crypto.js";
 import { type AudioHeader, type JsonObject, MAX_AUDIO_PAYLOAD_BYTES, SAMPLE_RATE, encodeAudioFrame, isRecord } from "../core/protocol.js";
 import { bytesToPcm16, pcm16ToBytes } from "../core/audio.js";
 import { PcmFeed, type SynthTimer } from "../core/speech.js";
+import { cleanBoxTrace } from "../core/trace.js";
 import type { SttStream, SttStreamOptions, TtsOptions, VoiceProvider } from "./types.js";
 
 /** The socket the box is on (a DeviceSocket in the room). */
@@ -47,7 +50,11 @@ interface SttOp {
   settle(err: Error | undefined, text?: string): void;
   /** stt.turn_end from the box: once, and only while the audio is still flowing. */
   turnEnd(reason?: "no_speech"): void;
+  /** stt.hint from the box, while the audio is still flowing. */
+  hint(k: "pause" | "question"): void;
   ms?: JsonObject;
+  /** The box's latest stt.trace. */
+  trace?: JsonObject;
 }
 
 export class RemoteVoiceProvider implements VoiceProvider {
@@ -144,7 +151,7 @@ export class RemoteVoiceProvider implements VoiceProvider {
     return s.end();
   }
 
-  sttStream(opts: SttStreamOptions = {}): SttStream & { readonly id: string; readonly boxMs: () => JsonObject | undefined } {
+  sttStream(opts: SttStreamOptions = {}): SttStream & { readonly id: string; readonly boxMs: () => JsonObject | undefined; trace(): JsonObject | undefined } {
     const ch = this.channel();
     const id = this.newId("s");
     let seq = 0;
@@ -171,6 +178,9 @@ export class RemoteVoiceProvider implements VoiceProvider {
         turned = true;
         opts.onTurnEnd?.(reason);
       },
+      hint: (k) => {
+        if (state === "open" && !turned) opts.onHint?.(k);
+      },
     };
     this.sttOps.set(id, op);
     try {
@@ -181,6 +191,7 @@ export class RemoteVoiceProvider implements VoiceProvider {
     return {
       id,
       boxMs: () => op.ms,
+      trace: () => op.trace,
       push: (pcm) => {
         if (state !== "open" || pcm.length === 0) return;
         try {
@@ -230,6 +241,14 @@ export class RemoteVoiceProvider implements VoiceProvider {
     } else if (frame.t === "stt.turn_end") {
       const op = this.sttOps.get(id);
       if (op && op.ch.same(from)) op.turnEnd(frame.reason === "no_speech" ? "no_speech" : undefined);
+    } else if (frame.t === "stt.hint") {
+      const op = this.sttOps.get(id);
+      if (op && op.ch.same(from) && (frame.k === "pause" || frame.k === "question")) op.hint(frame.k);
+    } else if (frame.t === "stt.trace") {
+      // kept on the op itself (still reachable once the op settled: the room reads it at the listen's end)
+      const op = this.sttOps.get(id);
+      const t = op && op.ch.same(from) ? cleanBoxTrace(frame.trace) : undefined;
+      if (op && t) op.trace = t;
     } else if (frame.t === "stt.final") {
       const op = this.sttOps.get(id);
       if (!op || !op.ch.same(from)) return;

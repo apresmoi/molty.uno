@@ -1557,6 +1557,15 @@ bool mole_fluid_shake_talk(void) {
     return on;
 }
 
+int mole_fluid_idle_life(void) {
+    if (!s_mutex) return idle_life_load();               /* before init: straight from NVS */
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (!s_idle_life_loaded) { s_idle_life = idle_life_load(); s_idle_life_loaded = true; }
+    const int v = s_idle_life;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
 int mole_fluid_ack_mode(void) {
     if (!s_mutex) return ack_setting_load();             /* before init: straight from NVS */
     xSemaphoreTake(s_mutex, portMAX_DELAY);

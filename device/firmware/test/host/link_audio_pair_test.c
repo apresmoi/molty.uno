@@ -17,18 +17,34 @@ esp_err_t link_send_json(const cJSON *j) {
 static unsigned bin_frames, bin_bytes, bin_ends, bin_seq;
 static char bin_reason[16]; static int bin_speech_ms;   /* -1: speech_ms absent */
 static char bin_end_header[512];                          /* the exact end-frame header */
+/* resend tests: sends fail while send_fail_left > 0 (or while send_fail_until says so);
+ * gaps_ok: seqs may jump (frames the device dropped), never go back */
+static unsigned send_fail_left, send_fails, bin_max_rt; static bool (*send_fail_until)(void); static bool gaps_ok;
+static int16_t bin_first_pcm[4800]; static size_t bin_first_n; static unsigned bin_first_ct;
 esp_err_t link_send_binary(const void *data,size_t size) {
+    if (send_fail_left || (send_fail_until && send_fail_until())) { if (send_fail_left) send_fail_left--; send_fails++; return ESP_FAIL; }
     link_frame_t h; const uint8_t *pcm; size_t bytes;
     assert(link_frame_parse(data,size,&h,&pcm,&bytes) && size<=16384);
-    assert(h.seq==bin_seq++ && !bin_ends);       /* ordered, nothing after end */
+    assert(!bin_ends);                                    /* nothing after end */
+    if (gaps_ok) { assert(h.seq>=bin_seq); bin_seq=h.seq+1; } else assert(h.seq==bin_seq++);   /* ordered */
     /* the end frame alone carries {reason, speech_ms?}: speech_ms only when measured */
     const char *nl=memchr(data,'\n',size); cJSON *hj=cJSON_ParseWithLength(data,nl?(size_t)(nl-(const char *)data):size);
     cJSON *r=cJSON_GetObjectItem(hj,"reason"), *sm=cJSON_GetObjectItem(hj,"speech_ms");
     assert(h.end ? cJSON_IsString(r) && (!sm || cJSON_IsNumber(sm)) : !r && !sm);
+    /* the trace on every listen frame: ct, wq always; rt only after a failed try; tr only at the end */
+    cJSON *ct=cJSON_GetObjectItem(hj,"ct"), *rt=cJSON_GetObjectItem(hj,"rt"), *tr=cJSON_GetObjectItem(hj,"tr");
+    assert(cJSON_IsNumber(ct) && cJSON_IsNumber(cJSON_GetObjectItem(hj,"wq")) && (h.end ? cJSON_IsObject(tr) : !tr));
+    if (rt) { assert(rt->valueint>0); if ((unsigned)rt->valueint>bin_max_rt) bin_max_rt=(unsigned)rt->valueint; }
+    if (!bin_frames) { bin_first_n=bytes/2; memcpy(bin_first_pcm,pcm,bytes); bin_first_ct=(unsigned)ct->valueint; }
     if (h.end) { snprintf(bin_reason,sizeof(bin_reason),"%s",r->valuestring); bin_speech_ms=sm?sm->valueint:-1; }
     if (h.end) snprintf(bin_end_header,sizeof(bin_end_header),"%.*s",(int)(nl?(size_t)(nl-(const char *)data):size),(const char *)data);
     cJSON_Delete(hj);
     bin_frames++; bin_bytes+=bytes; bin_ends+=h.end; return ESP_OK;
+}
+/* a number in the end frame's "tr" (-1: absent) */
+static int tr_num(const char *key) {
+    cJSON *hj=cJSON_Parse(bin_end_header), *v=cJSON_GetObjectItem(cJSON_GetObjectItem(hj,"tr"),key);
+    int out=cJSON_IsNumber(v)?v->valueint:-1; cJSON_Delete(hj); return out;
 }
 static void listen_job_with(unsigned ms, const char *extra, audio_job_t *job) {
     char a[192]; snprintf(a,sizeof(a),"{\"job\":\"listen1\",\"ms\":%u,\"rate\":16000%s}",ms,extra);
@@ -105,6 +121,8 @@ void link_cmd_mood_unless(unsigned gen0,const char *mood,double hold_s) { if (mo
 void link_cmd_mood_idle_unless(unsigned gen0) { link_cmd_mood_unless(gen0,"idle",-1); }
 static bool ask_pending;             /* link_ask.c: a question on screen */
 bool link_ask_pending(void) { return ask_pending; }
+static int idle_setting = 2;   /* lively (fluid_director.h FD_IDLE_LIVELY) */
+int mole_fluid_idle_life(void) { return idle_setting; }
 static int ack_setting = LINK_ACK_CHIRP;   /* the console's acknowledgement setting (mole_fluid.c, NVS) */
 int mole_fluid_ack_mode(void) { return ack_setting; }
 /* shake to talk: the console's setting (mole_fluid.c, NVS), an update writing the spare slot
@@ -174,7 +192,11 @@ static void test_say(void) {
     /* VAD off measured nothing: no speech_ms (a 0 made the relay skip STT). This exact
      * header is the fixture in services/relay/test/talk.test.ts ("vad:false end frame"). */
     assert(bin_speech_ms==-1);
-    assert(!strcmp(bin_end_header,"{\"s\":\"listen1\",\"seq\":16,\"kind\":\"pcm16\",\"rate\":16000,\"end\":true,\"reason\":\"max\"}"));
+    /* ...plus the turn trace (cap "trace", docs/AGENT-LINK.md "Turn trace"): ct, lv (two
+     * 100 ms chunks of digital silence), wq, and the end frame's tr */
+    assert(!strcmp(bin_end_header,"{\"s\":\"listen1\",\"seq\":16,\"kind\":\"pcm16\",\"rate\":16000,\"end\":true,\"reason\":\"max\","
+                   "\"ct\":4800,\"lv\":\"0000\",\"wq\":0,\"tr\":{\"wall\":0,\"cap\":5000,\"sent\":17,\"fail\":0,\"drop\":0,\"dropms\":0,"
+                   "\"r0\":-40,\"r1\":-40,\"gain\":8,\"pk\":0}}"));
     /* End of speech (default on): nobody speaks → the listen ends at no_speech_ms 4 s
      * (13 full frames + a 100 ms tail with end:true), the mic stops there. */
     listen_job(8000,&job); sdk_rx_chunks=0;
@@ -653,8 +675,27 @@ static void test_say_marks(void) {
 #define RELAY_JOB "molty-abcdefghij.j_shake01"
 static int adopt_at = -1, decline_at = -1, cancel_at = -1, stop_at = -1; static const char *adopt_args;
 static esp_err_t adopt_e; static char adopt_ack[16]; static double adopt_ms;
+/* the IMU while a shake's listen records (sense task → link_audio_imu, 50 Hz): shaken (3 g
+ * strokes) until shake_imu_ms, still after; -2 = shaken all along; -3 = no IMU samples at all.
+ * Handling noise (full-scale rattle) fills the audio while it is shaken. */
+static int shake_imu_ms = 0;
+static void shake_imu(unsigned chunk, int16_t *buf, size_t n) {
+    if (shake_imu_ms == -3) return;
+    const uint32_t t0 = s_settle.t0;
+    for (unsigned k = 0; k < 5; k++) {
+        const unsigned t = chunk * 100 + k * 20;
+        const bool shaken = shake_imu_ms == -2 || (int)t < shake_imu_ms;
+        link_audio_imu(shaken ? (k & 1 ? 3.f : -3.f) : 0.f, 0.f, shaken ? 0.5f : 1.f, t0 + t);
+    }
+    if (shake_imu_ms == 0) return;
+    for (size_t i = 0; i < n; i++) {
+        const unsigned t = (chunk * 1600 + (unsigned)i) / 16;
+        if (shake_imu_ms == -2 || (int)t < shake_imu_ms) buf[i] = (int16_t)(i & 1 ? 30000 : -30000);
+    }
+}
 static void shake_fill(int16_t *buf,size_t n,unsigned chunk) {
     speech_fill(buf,n,chunk);
+    shake_imu(chunk,buf,n);
     if ((int)chunk==adopt_at) {
         char a[256]; snprintf(a,sizeof(a),"{\"job\":\"" RELAY_JOB "\",\"rate\":16000,\"adopt\":\"shake-%u\"%s}",s_shake_n,adopt_args?adopt_args:"");
         cJSON *args=cJSON_Parse(a),*res=NULL;
@@ -689,6 +730,9 @@ static void shake_run(audio_job_t *job,int adopt,const char *args) {
 }
 static void test_shake_talk(void) {
     audio_job_t job;
+    /* the adoption flow, sample for sample: on a board without an IMU (no settle trim —
+     * test_shake_settle pins the trim) */
+    sdk_caps&=~MOLTY_CAP_IMU;
     link_audio_relay_adopts(true);
     /* adopted after 5 chunks (500 ms) with semantic end of turn (vad:false): the relay's job id
      * on every frame, every sample from the shake on (21 chunks read = 21 chunks up: the first
@@ -751,17 +795,126 @@ static void test_shake_talk(void) {
     /* the setting off, or no mic: not taken at all — the sense task sends the plain shake */
     shake_setting=false; b=sent; assert(!link_audio_shake(2.4,5,900)); link_audio_tick(); assert(sent==b && !link_audio_busy());
     shake_setting=true;
-    sdk_caps&=~MOLTY_CAP_MIC; assert(!link_audio_shake(2.4,5,900)); sdk_caps=0xFFFFFFFFu;
+    sdk_caps&=~MOLTY_CAP_MIC; assert(!link_audio_shake(2.4,5,900)); sdk_caps=0xFFFFFFFFu&~MOLTY_CAP_IMU;
     /* back on: it talks again */
     assert(shake(&job) && talked()); shake_run(&job,-1,"");
-    listen_setting=30000;
+    listen_setting=30000; sdk_caps=0xFFFFFFFFu;
+}
+
+/* The shake's handling noise (shake_settle.h): the listen's audio begins where the IMU shows
+ * the shake settled (still for 150 ms, the run's start; 600 ms at most); the trimmed lead is
+ * never sent, the first kept 10 ms fade in, the end frame's tr says how much went. */
+static void test_shake_settle(void) {
+    audio_job_t job;
+    link_audio_relay_adopts(true); listen_setting=5000;
+    /* shaken for 350 ms: still from the 360 ms sample on, confirmed 150 ms later → 510 ms trimmed
+     * (adopted at 200 ms, before it settled: the replay waits for the settle) */
+    shake_imu_ms=350;
+    assert(shake(&job)); stop_at=20; shake_run(&job,2,",\"vad\":false");
+    assert(adopt_e==ESP_OK && bin_ends==1 && !strcmp(bin_reason,"turn_end"));
+    assert(bin_bytes==(21u*1600u-510u*16u)*2u);                     /* every sample after the settle, none before */
+    assert(tr_num("set")==510 && tr_num("setc")==0 && bin_first_ct==510);
+    assert(bin_first_pcm[0]==0);                                     /* faded in */
+    int peak=0; for (size_t i=0;i<bin_first_n;i++) { int a=abs(bin_first_pcm[i]); if (a>peak) peak=a; }
+    assert(peak<2000);                                               /* no 30000 rattle went up */
+    /* shaken all along: capped at 600 ms */
+    shake_imu_ms=-2;
+    assert(shake(&job)); stop_at=20; shake_run(&job,2,",\"vad\":false");
+    assert(tr_num("set")==600 && tr_num("setc")==1 && bin_bytes==(21u*1600u-600u*16u)*2u && bin_first_ct==600);
+    /* no IMU sample at all (a stalled sensor): the cap, on the audio's clock */
+    shake_imu_ms=-3;
+    assert(shake(&job)); stop_at=20; shake_run(&job,2,",\"vad\":false");
+    assert(tr_num("set")==600 && tr_num("setc")==1);
+    /* a board without an IMU: nothing trimmed (no shake listen is possible there anyway) */
+    sdk_caps&=~MOLTY_CAP_IMU;
+    assert(shake(&job)); stop_at=20; shake_run(&job,2,",\"vad\":false");
+    assert(tr_num("set")==0 && tr_num("setc")==0 && bin_bytes==21u*3200u && bin_first_ct==0);
+    sdk_caps=0xFFFFFFFFu; shake_imu_ms=0; listen_setting=30000;
+}
+
+/* The uplink never waits on the network and never loses a frame it could still send: a send
+ * that fails keeps its frame, the same seq goes again, in order, and the listen ends normally
+ * (it used to end in error). A ring overflow drops the OLDEST unsent frames (a seq gap,
+ * counted in tr); cancel drops everything. */
+static unsigned rx_chunk_limit;
+static bool fail_while_recording(void) { return sdk_rx_open && sdk_rx_chunks < rx_chunk_limit; }
+static void test_resend(void) {
+    audio_job_t job;
+    /* 4 failed tries early in a 5 s listen: all 17 frames arrive, in order; the end says fail=4 */
+    listen_job_with(5000,",\"vad\":false",&job); send_fail_left=4; send_fails=0; bin_max_rt=0;
+    complete(record(&job));
+    assert(send_fails==4 && bin_frames==17 && bin_bytes==160000 && bin_ends==1 && !strcmp(bin_reason,"max"));
+    assert(bin_max_rt==4 && tr_num("fail")==4 && tr_num("drop")==0 && tr_num("sent")==17);
+    /* the link stalls for the whole 15 s window (50 frames): the ring keeps 33 (9.9 s), the
+     * oldest 17 go (seq 0..16, 5.1 s), the rest goes up in order once the link is back */
+    listen_job_with(15000,",\"vad\":false",&job); sdk_rx_chunks=0; rx_chunk_limit=150; send_fail_until=fail_while_recording; gaps_ok=true;
+    complete(record(&job)); send_fail_until=NULL;
+    assert(bin_ends==1 && bin_frames==UPLINK_SLOTS && !strcmp(bin_reason,"max") && tr_num("drop")==17 && tr_num("dropms")==5100);
+    assert(bin_first_ct==5100);                                      /* the first frame kept: seq 17 */
+    /* stalled past the flush deadline (3 s + 1 s for the end frame): it gives up, nothing more */
+    listen_job_with(1000,",\"vad\":false",&job); send_fail_left=100000; gaps_ok=false;
+    complete(record(&job)); assert(!bin_frames && !link_audio_busy()); send_fail_left=0;
+    /* the next listen starts clean: seq 0, nothing of the old queue */
+    listen_job_with(1000,",\"vad\":false",&job); complete(record(&job));
+    assert(bin_frames==4 && bin_ends==1 && tr_num("drop")==0 && tr_num("fail")==0);
+    /* the sender's back-off belongs to its listen: a new listen (a new generation) sends its
+     * first frame at once, not after the old listen's back-off (the sender task's path) */
+    s_up_inline=false; bin_frames=bin_seq=bin_ends=0;
+    up_begin("old"); uplink_meta_t m={.seq=0,.n=0}; up_lock(); uplink_push(&s_up,&m,NULL); up_unlock();
+    send_fail_left=1; up_pump(); assert(send_fails && !bin_frames && s_up_retry_at>esp_timer_get_time()/1000);
+    up_pump(); assert(!bin_frames);                                  /* still backing off */
+    up_begin("new"); up_lock(); uplink_push(&s_up,&m,NULL); up_unlock();
+    up_pump(); assert(bin_frames==1 && !uplink_pending(&s_up));     /* same instant: sent */
+    s_up_inline=true;
+}
+
+/* Listener reactions (listen_react.h) inside a real listen: the box's hints and the mic level
+ * drive mole_fluid_act; never with idle life off or a question on screen. */
+static int hint_at_chunk=-1; static const char *hint_kind="pause"; static int react_speech=-1;   /* first chunk of 0.8 s of voice, -1 none */
+static void react_fill(int16_t *buf,size_t n,unsigned chunk) {
+    sdk_now+=100000;                                                 /* 100 ms per chunk */
+    memset(buf,0,n*2);
+    if (react_speech>=0 && (int)chunk>=react_speech && (int)chunk<react_speech+8) for (size_t i=0;i<n;i++) buf[i]=(int16_t)(3000.0*sin((chunk*1600+i)*0.06));
+    if ((int)chunk==hint_at_chunk) link_audio_hint("listen1",hint_kind);
+    if (chunk==hint_at_chunk+1u) link_audio_hint("someone-else",hint_kind);   /* not the running listen: ignored */
+}
+static void test_reactions(void) {
+    audio_job_t job;
+    /* a pause hint 1.5 s in: one nod */
+    mark_n=0; listen_job_with(3000,",\"vad\":false",&job); sdk_rx_fill=react_fill; hint_at_chunk=15; hint_kind="pause";
+    sdk_rx_chunks=0; complete(record(&job));
+    assert(mark_n==1 && !strcmp(mark_what[0],"nod"));
+    /* a question: a glance */
+    mark_n=0; listen_job_with(3000,",\"vad\":false",&job); hint_kind="question";
+    sdk_rx_chunks=0; complete(record(&job));
+    assert(mark_n==1 && !strncmp(mark_what[0],"glance_",7));
+    /* in the first second: nothing */
+    mark_n=0; listen_job_with(3000,",\"vad\":false",&job); hint_at_chunk=3; hint_kind="pause";
+    sdk_rx_chunks=0; complete(record(&job)); assert(mark_n==0);
+    /* idle life off: nothing; a question on screen: nothing */
+    idle_setting=0; mark_n=0; listen_job_with(3000,",\"vad\":false",&job); hint_at_chunk=15;
+    sdk_rx_chunks=0; complete(record(&job)); assert(mark_n==0); idle_setting=2;
+    ask_pending=true; mark_n=0; listen_job_with(3000,",\"vad\":false",&job);
+    sdk_rx_chunks=0; complete(record(&job)); assert(mark_n==0); ask_pending=false;
+    /* no box at all: the device's own pause (0.8 s of voice from the start, then quiet) → a nod */
+    react_speech=0; hint_at_chunk=-1; mark_n=0; listen_job_with(3000,",\"vad\":false",&job);
+    sdk_rx_chunks=0; complete(record(&job));
+    assert(mark_n==1 && !strcmp(mark_what[0],"nod"));
+    /* a voice after 1.2 s of quiet: Molty perks up (its pause 1.2 s later falls in the gap) */
+    react_speech=12; mark_n=0; listen_job_with(3000,",\"vad\":false",&job);
+    sdk_rx_chunks=0; complete(record(&job)); react_speech=-1;
+    assert(mark_n==1 && !strcmp(mark_what[0],"look_up"));
+    /* a hint after the listen: ignored (no job running) */
+    link_audio_hint("listen1","pause"); assert(atomic_load(&s_hint)==0);
+    sdk_rx_fill=NULL; hint_at_chunk=-1;
 }
 
 int main(void) {
     assert(link_audio_init()==ESP_OK && link_pair_init()==ESP_OK);
-    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop(); test_listen_window(); test_say_cues(); test_say_marks(); test_chirp_sound(); test_ack(); test_shake_talk();
+    s_up_inline = true;   /* no sender task on the host: record() sends as it queues */
+    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop(); test_listen_window(); test_say_cues(); test_say_marks(); test_chirp_sound(); test_ack(); test_shake_talk(); test_shake_settle(); test_resend(); test_reactions();
     /* activity log: every accepted job (done, failed, cancelled, refused frames, adopted shakes) ended its tag */
     assert(sdk_job_begins>0 && sdk_job_begins==sdk_job_ends);
     cJSON_Delete(sdk_sent); free(s_jobs); free(s_done); free(s_ring);
-    puts("LINK AUDIO/PAIR PASS: job tags begin/end on every path, paced PCM, final playback drain, errors, cmd-time text/mood, explicit moods outlive jobs, pairing reasons, board caps, listening ring (+ ring_color), ask cancellation, listen_stop (turn_end; no_speech never acknowledged), listen window (30 s, unlimited, setting), say word cues follow playback, turn acknowledgement (chirp + thinking: which ends ack, opt-outs, setting, screen owners, cut by the next job), shake to talk (a local listen at once, adopted by the relay with its job id + end of turn and the audio replayed, or ending quietly: unclaimed / declined / link down; never over another owner, the setting, or a relay that does not adopt)");
+    puts("LINK AUDIO/PAIR PASS: job tags begin/end on every path, paced PCM, final playback drain, errors, cmd-time text/mood, explicit moods outlive jobs, pairing reasons, board caps, listening ring (+ ring_color), ask cancellation, listen_stop (turn_end; no_speech never acknowledged), listen window (30 s, unlimited, setting), say word cues follow playback, turn acknowledgement (chirp + thinking: which ends ack, opt-outs, setting, screen owners, cut by the next job), shake to talk (a local listen at once, adopted by the relay with its job id + end of turn and the audio replayed, or ending quietly: unclaimed / declined / link down; never over another owner, the setting, or a relay that does not adopt), shake settle trim (510 ms: stillness confirmed, capped 600, no IMU), uplink resend in order + overflow drops oldest + flush deadline, listener reactions (hints, warmup, idle off, owners)");
 }

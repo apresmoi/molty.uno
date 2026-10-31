@@ -221,7 +221,12 @@ class VadMoshi:
 
 
 def run_listen(chunks, start_extra=None, moshi=None, **cfg_extra):
-    """Streams `chunks` (True = speech, False = silence) as 200 ms device frames; returns the relay's messages for s1."""
+    """Streams `chunks` (True = speech, False = silence) as 200 ms device frames; returns the relay's messages for s1
+    (the decisions: partials, traces and hints left out — run_listen_all has every message)."""
+    return [m for m in run_listen_all(chunks, start_extra, moshi, **cfg_extra) if m["t"] not in ("stt.partial", "stt.trace", "stt.hint")]
+
+
+def run_listen_all(chunks, start_extra=None, moshi=None, **cfg_extra):
     moshi = moshi or VadMoshi()
     msgs = []
 
@@ -237,8 +242,7 @@ def run_listen(chunks, start_extra=None, moshi=None, **cfg_extra):
         await ws.send(json.dumps({"t": "stt.end", "id": "s1"}))
         while True:
             d = json.loads(await ws.recv())
-            if d["t"] != "stt.partial":
-                msgs.append(d)
+            msgs.append(d)
             if d["t"] == "stt.final":
                 break
         await asyncio.sleep(0.1)

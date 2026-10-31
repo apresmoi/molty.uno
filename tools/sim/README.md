@@ -50,7 +50,17 @@ make sim-test                                                # (5)
 4. Bridge tuning goes straight to `molty-voice run`: `--turn-end`, `--turn-end-hold`, `--turn-end-skip`.
    Other knobs: `--agent llm --llm-model …`, `--agent-gap-ms N`, `--align none`, `--no-audio`.
    `molty-sim check [scenario]` parses a scenario offline; `molty-sim show runs/<ts>` reprints a run.
-5. Unit tests of the harness itself (scenario parsing, metrics, VAD port, mic framing, listen_stop).
+5. Unit tests of the harness itself (scenario parsing, metrics, VAD port, mic framing, listen_stop,
+   the turn-trace uplink: shake settle, resend ring, trace header fields, shake to talk).
+
+**Turn-trace suite** (`scenarios/trace.yaml`, `make sim SIM_ARGS=scenarios/trace.yaml`): `shake-noise`
+(a turn started by an 8.2 g shake: seeded handling noise on the mic for the shake's first 0.45 s, an IMU
+trace for the device's settle rule, the listen adopted by the relay), `shake-quick`, and `wifi-stall`
+(the uplink fails 3 s mid-utterance: the sim device keeps the frames and resends them in order).
+Scenario keys: `shake: {peak_g, after_s, noise_peak}`, `stall: {at_s, for_s}` (or a list).
+`molty-sim measure` prints the same fixes' numbers offline (no box, no relay): what a shake listen sends
+in its first 600 ms with / without the settle trim, a 9 s listen with a 3 s stall through the old uplink
+vs the resend ring, and saturated samples of a loud clip at mic gain 8 vs 6.
 
 Deployed relay (only on purpose): `--relay https://… --allow-remote` uses a separate, persisted
 `molty-sim…` device (`state/`, 0600) and its own bridge pairing. The sim refuses any device id that

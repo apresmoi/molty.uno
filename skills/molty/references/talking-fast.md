@@ -22,8 +22,19 @@ a full model round trip on your side). The human hears your latency as silence.
 - **Use events, not polling** ([events.md](events.md)).
 - **A decision → `molty_ask`**, not a spoken yes/no: one call says the question and returns the tap.
 - To end the conversation, `molty_talk {"say":"…","listen":false}` (speak without listening).
-- Measure yourself: `in_reply_to` adds `timings.turn` `{id, reply, first_audio}` (ms from the
-  utterance to your call and to your first audio).
+- Measure yourself (below).
+
+## Measure yourself
+
+- `in_reply_to` adds `timings.turn` `{id, reply, first_audio}` (ms from the utterance to your call
+  and to your first audio).
+- **Include `client_timing` to help debug latency**: on `talk` / `say` / `ask`, an object of what
+  your side spent, in ms — numbers only, at most 8 keys, e.g.
+  `"client_timing": {"received_ms": 120, "model_ms": 900}` (`received_ms` = the event reached you →
+  this call, `model_ms` = your model's run; `tool_ms`, `queue_ms`, `total_ms` if you have them).
+  It costs nothing, never reaches the device, and lands in the turn's trace: the owner's Activity
+  timeline then shows shake → speech → end of turn → webhook → your work → your first audio in one
+  line, so a slow turn is found in seconds instead of guessed at. Details: [api.md](api.md#talk-one-call-per-conversation-turn).
 
 ## End of turn
 

@@ -1,4 +1,4 @@
-"""molty-sim run | synth | show — see tools/sim/README.md."""
+"""molty-sim run | check | measure | show — see tools/sim/README.md."""
 
 from __future__ import annotations
 
@@ -45,6 +45,8 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("check", help="parse a scenario and print its turns (no network)")
     s.add_argument("scenario", nargs="?", default=str(DEFAULT_SCENARIO))
 
+    sub.add_parser("measure", help="offline numbers for the turn-trace fixes: shake noise trim, Wi-Fi stall resend, mic gain (no box, no relay)")
+
     sh = sub.add_parser("show", help="print the summary table of a finished run")
     sh.add_argument("run_dir")
 
@@ -56,6 +58,11 @@ def main(argv: list[str] | None = None) -> int:
         for t in sc.turns:
             src = t.markup and t.markup.pauses or t.wav or (f"silence {t.silence_s}s" if t.kind == "silence" else "")
             print(f"{t.index + 1:2d}. {t.id:22s} {t.kind:7s} expect {t.expect:9s} listen_ms {t.listen_ms!s:5s} {t.text[:50]!r} {src}")
+        return 0
+    if a.cmd == "measure":
+        from .measure import measure
+
+        print(json.dumps(measure(), indent=2))
         return 0
     if a.cmd == "show":
         d = json.loads((Path(a.run_dir) / "report.json").read_text())
