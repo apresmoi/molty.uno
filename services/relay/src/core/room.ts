@@ -55,6 +55,7 @@ import {
 } from "./api.js";
 import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
 import { WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, GESTURES_CAP, RESUME_CAP, RESUME_FEATURE, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
+import { FIRST_WORDS_MODES, type FirstWordsMode, OPENER, type OpenerMessage, guardOpener, hangs, pushHistory, stripRepeat } from "./opener.js";
 import { PcmFeed, estimateSpeechMs, splitSpeech, synthesize } from "./speech.js";
 import { DEFAULT_PARTIAL_POLICY, DRAFT_DROPPED_EVENT, DRAFT_USED_EVENT, type DropReason, PARTIAL_EVENT, PartialChunker, PauseTracker, judgeDraft, words } from "./partials.js";
 import { CALIBRATION, type DraftOutcome, type SpeechStats, addOutcome, addTurn, emptyStats, markMisfire, policyFor, speechSummary } from "./calibration.js";
@@ -136,7 +137,7 @@ export interface SocketMeta {
   /** voice: the box token's hash (revocation closes the socket). */
   tok?: string;
   /** voice: what the box offers, set by its voice.hello (absent = not greeted yet: not used). */
-  box?: { stt: boolean; tts: boolean; reflex?: boolean };
+  box?: { stt: boolean; tts: boolean; reflex?: boolean; opener?: boolean };
   /**
    * voice: replaced / revoked / unpaired. Set BEFORE the socket is closed, in its own
    * serialized metadata (survives hibernation): the host may keep listing a closing socket
@@ -182,6 +183,9 @@ export interface RoomTimings {
   talkBudgetMs: number;
   /** A talk heard the human and nobody read the result after this: it goes out as an `utterance`. */
   collectGraceMs: number;
+  /** First words (core/opener.ts): how long the box may take, how long a line may hang. */
+  openerDeadlineMs: number;
+  openerHangMs: number;
   /** ask: after the device's own timeout_ms, how long the relay waits for its `answer` before resolving `timeout` itself. */
   askGraceMs: number;
   /** update: how long the on-screen "update?" waits for a tap (sent as timeout_ms); the relay adds askGraceMs. */
@@ -212,6 +216,8 @@ export const DEFAULT_TIMINGS: RoomTimings = {
   thinkHoldS: THINK_HOLD_S,
   talkBudgetMs: TALK_BUDGET_MS,
   collectGraceMs: 5000,
+  openerDeadlineMs: OPENER.deadlineMs,
+  openerHangMs: OPENER.hangMs,
   askGraceMs: 5000,
   updateConfirmMs: 60000,
   updateMs: 5 * 60 * 1000,
@@ -427,6 +433,8 @@ interface VoiceCfg {
   reflex_compare?: boolean;
   /** How lively the reflex is (core/reflex.ts REFLEX_LIVELINESS; absent = DEFAULT_LIVELINESS). */
   liveliness?: Liveliness;
+  /** First words (core/opener.ts): the box's small model starts the reply (absent = off: the filler). */
+  first_words?: FirstWordsMode;
 }
 /** The connected box's voice.hello (KV `vbox`). */
 interface BoxInfo {
@@ -459,7 +467,7 @@ interface PendingAsk {
 }
 type SpeakResult = { ok: true; start: number; ms: number; timings: JsonObject } | { ok: false; error: string };
 type ListenResult = (
-  | { ok: true; start: number; text: string; reason: string; speech_ms?: number; duration_ms: number; peak: number; rms: number; timings: JsonObject; ack?: string; pauses: PauseTracker; endAt: number; fillerMs: number }
+  | { ok: true; opener?: string; start: number; text: string; reason: string; speech_ms?: number; duration_ms: number; peak: number; rms: number; timings: JsonObject; ack?: string; pauses: PauseTracker; endAt: number; fillerMs: number }
   | { ok: false; error: string }
 ) & { trace?: ListenTrace; audio?: boolean };
 
@@ -709,6 +717,12 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   /** The last auto filler: an agent's quick right after it (same turn, nothing else since) is skipped ("filled"). */
   private lastFill: { turn: string; job: string; phrase: string; text: string; at: number; seq: number } | undefined;
   private lastFiller: string | undefined;
+  /** The conversation so far for first words (core/opener.ts): in memory only, never with transcripts off. */
+  private history: OpenerMessage[] = [];
+  /** The line said for the latest turn: the agent continues it (a repeat of it is cut). */
+  private spokenOpener: { turn: string; text: string; at: number } | undefined;
+  /** First words left mid-sentence: nothing from any agent in time → a short closing. */
+  private hangWatch: ReturnType<Clock["setTimeout"]> | undefined;
   /** Phrase syntheses in flight, by voice + text (deduped). */
   private readonly synthing = new Map<string, Promise<PhraseAudio | undefined>>();
   private readonly phraseCache: PhraseCache;
@@ -1079,7 +1093,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private async runCommand(agent: TokenRecord, name: string, args: unknown, hash = "", by?: Who): Promise<Outcome> {
     let cmd;
     try {
-      cmd = validateCommand(name, args);
+      cmd = validateCommand(name, name === "say" && isRecord(args) ? this.continued(args as JsonObject, "text") : args);
     } catch (e) {
       if (e instanceof CommandError) return fail(e.code, e.message);
       throw e;
@@ -1330,7 +1344,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if ("ok" in a) return a;
     let args: TalkArgs;
     try {
-      args = validateTalk(req);
+      args = validateTalk(isRecord(req) ? this.continued(req as JsonObject, "say") : req);
     } catch (e) {
       if (e instanceof CommandError) return fail(e.code, e.message);
       throw e;
@@ -1801,6 +1815,13 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const r = pre && !("pick" in pre) ? pre : await this.speak(id, text, voice, args.opener === true, args.marks as SayMarks | undefined, pre);
     await running;
     if (!r.ok) return this.finishJob(id, { status: "failed", error: r.error });
+    await this.noteSaid(text);
+    // first words with nothing queued behind them: back to thinking, the agent is on it
+    if (args.first_words === true && this.handoff?.after !== id && this.screenInFlight === 0 && this.pendingAsks.size === 0) {
+      void this.sendCmd("mood", { mood: "thinking", hold_s: this.t.thinkHoldS }).then((m) => {
+        if (!m.ok) this.log("auto mood failed", { device: this.deviceId, mood: "thinking", error: m.error });
+      });
+    }
     const timings: JsonObject = { queue: r.start - created, ...r.timings, total: this.clock.now() - created };
     if (isRecord(args.turn)) timings.turn = this.answerTimings(args, r.start + (r.timings.first_audio as number));
     if (isRecord(args.client_timing)) timings.client = args.client_timing;
@@ -1874,6 +1895,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       ack: r.ack,
       voice: await this.voiceName(),
     });
+    if (r.opener) data.opener = r.opener;
     await this.appendEvent(UTTERANCE_EVENT, data, true);
     await this.activity.record({ ts: this.clock.now(), kind: "device", ev: "utterance", job: id, data: { text: text.slice(0, 500), reason: r.reason, trigger: "talk", words: words(text).length } });
   }
@@ -1894,6 +1916,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       const s = pre && !("pick" in pre) ? pre : await this.speak(id, args.say, args.voice, true, args.marks, pre);
       if (!s.ok) return this.finishJob(id, { status: "failed", error: s.error });
       result.said = args.say;
+      await this.noteSaid(args.say);
       ms.tts_first_audio = (s.timings.first_audio as number) ?? 0;
       ms.speech = (s.timings.play as number) ?? 0;
       timings.say = s.timings;
@@ -1908,6 +1931,11 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       heard = l;
       Object.assign(result, { heard: l.text, reason: l.reason, duration_ms: l.duration_ms, peak: l.peak, rms: l.rms });
       if (l.speech_ms !== undefined) result.speech_ms = l.speech_ms;
+      const first = await this.firstWords(id, l);
+      if (first) {
+        result.opener = first;
+        l.opener = first;
+      }
       const fill = this.fillerIn(l);
       if (fill !== undefined) result.filler_in_ms = fill;
       await this.noteHeard(l);
@@ -2393,6 +2421,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   /** `extra`: the device listen args besides job/ms/rate (VAD knobs, ring_color), passed through. `ms` undefined: the device's setting. */
   private async record(id: string, ms: number | undefined, extra: JsonObject = {}): Promise<ListenResult> {
     this.cancelFiller(); // a new listen: whatever turn was waiting for a filler is over
+    this.cancelHang();
     this.lastFill = undefined; // ...and a filler of an earlier turn no longer skips anyone's quick
     const t0 = this.clock.now();
     let pick = await this.pickVoice("stt");
@@ -2914,6 +2943,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
           winner = undefined;
         }
       }
+      if (r && text && !winner && [...(await this.kv.list<TokenRecord>("tok:")).values()].some((t) => t.role !== "voice")) {
+        const first = await this.firstWords(id, r);
+        if (first) r.opener = first;
+      }
       if (text) await this.kv.put<TurnRecord>(K.turn, { id, at: now, ...(winner ? { by: winner.d.hash } : {}) });
       if (text && winner) await this.kv.put(K.lastAnswerer, winner.d.hash);
     } finally {
@@ -2949,6 +2982,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         ack: r.ack,
         voice: await this.voiceName(),
       });
+      if (r.opener) data.opener = r.opener;
       // an agent's opener is already playing: the turn is taken (others stay quiet)
       if (winner) data.claimed = true;
       // otherwise: when Molty says its own filler unless an agent acts first (core/phrases.ts)
@@ -2983,6 +3017,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private async noteHeard(r: Extract<ListenResult, { ok: true }>) {
     const n = words(r.text.trim()).length;
     if (!n) return;
+    await this.remember("human", r.text);
     await this.updateSpeech((s) => addTurn(s, { at: this.clock.now(), words: n, ms: r.speech_ms ?? r.duration_ms, pauses: r.pauses.pauses, max_pause_ms: r.pauses.max_pause_ms }));
   }
 
@@ -3367,6 +3402,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       case "stt.hint":
       case "stt.trace":
       case "stt.reflex":
+      case "opener.result":
         if (meta.box) this.box.onText(sock, frame);
         return;
       default:
@@ -3385,7 +3421,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const now = this.clock.now();
     // reflex: the box runs Molty's reflex classifier (stt.reflex; only boxes that say so are asked)
     const reflex = f.reflex === true && f.stt === true;
-    sock.setMeta({ ...meta, box: { stt: f.stt, tts: f.tts, ...(reflex ? { reflex } : {}) } });
+    sock.setMeta({ ...meta, box: { stt: f.stt, tts: f.tts, ...(reflex ? { reflex } : {}), ...(f.opener === true ? { opener: true } : {}) } });
     await this.kv.put<BoxInfo>(K.vbox, { name: f.name as string, version: (f.version as string | undefined) ?? "", voices, stt: f.stt, tts: f.tts, ...(reflex ? { reflex } : {}), since: now });
     const cfg = await this.voiceCfg();
     sock.sendText(JSON.stringify({ t: "voice.welcome", device_id: this.deviceId, mode: cfg.mode, voice: cfg.voice ?? null }));
@@ -3503,6 +3539,11 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         if (req.reflex_compare) cfg.reflex_compare = true;
         else delete cfg.reflex_compare;
       }
+      if (req.first_words !== undefined) {
+        if (!FIRST_WORDS_MODES.includes(req.first_words as FirstWordsMode)) return fail("invalid_args", `first_words must be one of ${FIRST_WORDS_MODES.join(", ")}`);
+        if (req.first_words === "off") delete cfg.first_words;
+        else cfg.first_words = req.first_words as FirstWordsMode;
+      }
       if (req.liveliness !== undefined) {
         if (!isLiveliness(req.liveliness)) return fail("invalid_args", `liveliness must be one of ${LIVELINESS.join(", ")}`);
         if (req.liveliness === DEFAULT_LIVELINESS) delete cfg.liveliness;
@@ -3593,6 +3634,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       voice: cfg.voice ?? null,
       cloud: this.voice.name,
       serving: { tts: await serving("tts"), stt: sttServing },
+      first_words: { mode: cfg.first_words ?? "off", available: !!connected?.getMeta()?.box?.opener },
       reflex: {
         mode,
         compare: !!cfg.reflex_compare,
@@ -4255,6 +4297,73 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private cancelFiller() {
     if (this.fillWatch) this.clock.clearTimeout(this.fillWatch.timer);
     this.fillWatch = undefined;
+  }
+
+  private cancelHang() {
+    if (this.hangWatch !== undefined) this.clock.clearTimeout(this.hangWatch);
+    this.hangWatch = undefined;
+  }
+
+  /**
+   * First words (core/opener.ts), while the turn's listen still holds the audio lock: the box's small
+   * model starts the reply, the guard decides, and the line plays at once with the agent's answer
+   * queued behind it. With the setting on and a box that offers it this replaces the filler, also
+   * when no line survives: silence, never a generic line. Returns what is being said.
+   */
+  private async firstWords(turn: string, r: Extract<ListenResult, { ok: true }>): Promise<string | undefined> {
+    if ((await this.voiceCfg()).first_words !== "opener" || !this.boxSocket()?.getMeta()?.box?.opener) return undefined;
+    const human = r.text.trim();
+    if (!human) return undefined;
+    r.fillerMs = 0;
+    const caps = this.liveSocket()?.getMeta()?.caps;
+    if (caps && !caps.includes("say")) return undefined;
+    const t0 = this.clock.now();
+    const history = (await this.activity.settings()).transcripts ? this.history.filter((m) => t0 - m.at <= OPENER.historyTtlMs) : [];
+    const line = await this.box.opener(human, history, this.t.openerDeadlineMs);
+    const ms = this.clock.now() - t0;
+    const v = guardOpener(line, human, history);
+    const why = line === undefined ? "no_line" : v.ok ? undefined : v.why;
+    await this.activity.record({ ts: this.clock.now(), kind: "trace", ev: "opener", job: turn, data: { ms, ...(why ? { dropped: why } : {}), ...(line ? { text: line } : {}) } });
+    if (!v.ok || this.audioJob !== turn || !this.liveSocket() || this.pendingAsks.size) return undefined;
+    const seq = this.agentSeq;
+    const started = await this.startJob("say", { text: v.text, first_words: true }, true, undefined, undefined, { takeover: turn, lead: RELAY_LEAD });
+    if (!started.ok) return undefined;
+    const job = started.result.job as string;
+    this.spokenOpener = { turn, text: v.text, at: this.clock.now() };
+    // an agent's quick right after it is skipped: the human already heard Molty start
+    this.lastFill = { turn, job, phrase: "first_words", text: v.text, at: this.clock.now(), seq };
+    if (hangs(v.text)) {
+      this.hangWatch = this.clock.setTimeout(() => {
+        this.hangWatch = undefined;
+        if (this.agentSeq !== seq || this.audioJob || this.openTurn || this.pendingAsks.size || !this.liveSocket()) return;
+        void this.startJob("say", { text: OPENER.closing, first_words: true }, true, undefined, undefined, { lead: RELAY_LEAD });
+      }, this.t.openerHangMs);
+    }
+    return v.text;
+  }
+
+  /** The agent's answer after first words: the same words again are cut, and the log says so. */
+  private continued(args: JsonObject, field: "say" | "text"): JsonObject {
+    const o = this.spokenOpener;
+    const say = args[field];
+    if (!o || typeof say !== "string") return args;
+    const { text, repeated } = stripRepeat(say, o.text);
+    this.spokenOpener = undefined; // only its first answer continues it
+    if (!repeated) return args;
+    void this.activity.record({ ts: this.clock.now(), kind: "trace", ev: "opener", job: o.turn, data: { repeated: true } });
+    return { ...args, [field]: text };
+  }
+
+  private async remember(role: OpenerMessage["role"], text: string) {
+    if (!(await this.activity.settings()).transcripts) {
+      this.history = [];
+      return;
+    }
+    this.history = pushHistory(this.history, { role, text, at: this.clock.now() });
+  }
+
+  private async noteSaid(text: string) {
+    await this.remember("molty", text);
   }
 
   /** The filler's moment: only when no agent did anything since the turn and nothing owns the speaker, the screen or the floor. */

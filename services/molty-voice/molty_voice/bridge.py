@@ -18,12 +18,15 @@ Wire (docs/AGENT-LINK.md "Voice box"): JSON text control messages + binary audio
                  {"t":"stt.hint","id","k":"pause"|"question"} while the human talks (Molty's listener reactions)
                  {"t":"stt.reflex","id","n","pick","conf","p","ms","chars","tokens","model"} per reflex chunk, only when
                  stt.start said "reflex": true and this box offers it (voice.hello "reflex": true; molty_voice/reflex.py)
+                 {"t":"opener.result","id","text","ms","model"} answers {"t":"opener","id","text","history"}, only
+                 on a box that offers it (voice.hello "opener": true; molty_voice/opener.py); no "text": no line
   both           {"t":"ping"} / {"t":"pong"} (the relay answers pings without waking up)
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import random
@@ -35,7 +38,7 @@ import numpy as np
 from websockets.asyncio.client import connect as ws_connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
-from . import __version__, framing
+from . import __version__, framing, opener
 from .audio import DEVICE_RATE, MODEL_RATE, Resampler, fade_in, float_to_pcm16, quiet_lead
 from .config import Config
 from .kyutai import SttSession, synthesize
@@ -65,6 +68,8 @@ class Bridge:
         # the reflex classifier (molty_voice/reflex.py), loaded on the first connect when cfg.reflex; tests inject one
         self.reflex = reflex_model
         self._reflex_tried = reflex_model is not None
+        self.opener_ready = False
+        self._opener_tasks: set[asyncio.Task] = set()
         self._connect = connect
         self._kconnect = kyutai_connect
         self._ws = None
@@ -110,10 +115,14 @@ class Bridge:
             self._reflex_tried = True
             from .reflex import load
             self.reflex = await asyncio.to_thread(load, self.cfg.reflex_model, self.cfg.reflex_threads)
+        if self.cfg.opener and not self.opener_ready:
+            self.opener_ready = await asyncio.to_thread(opener.warm, self.cfg.opener_url, self.cfg.opener_model)
         try:
             hello = {"t": "voice.hello", "name": self.cfg.name, "version": __version__, "voices": self.cfg.voices, "stt": self.cfg.stt, "tts": self.cfg.tts}
             if self.reflex is not None and self.cfg.stt:
                 hello["reflex"] = True
+            if self.opener_ready:
+                hello["opener"] = True
             await self._send_json(hello)
             self._ensure_prompt()
             last_rx = time.monotonic()
@@ -168,6 +177,11 @@ class Bridge:
         if t == "voice.welcome":
             log.info("connected to the relay for %s (mode %s)", m.get("device_id"), m.get("mode"))
             self.connected.set()
+        elif t == "opener" and isinstance(mid, str) and isinstance(m.get("text"), str):
+            if self.opener_ready:
+                task = asyncio.create_task(self._run_opener(mid, m["text"], m.get("history")))
+                self._opener_tasks.add(task)
+                task.add_done_callback(self._opener_tasks.discard)
         elif t == "tts" and isinstance(mid, str) and isinstance(m.get("text"), str):
             if mid not in self._tts:
                 self._tts[mid] = asyncio.create_task(self._run_tts(mid, m["text"], m.get("voice")))
@@ -274,6 +288,16 @@ class Bridge:
         if isinstance(asked, str) and VOICE_RE.match(asked) and ".." not in asked and asked.endswith((".wav", ".safetensors")):
             return asked
         return self.cfg.default_voice
+
+    async def _run_opener(self, mid: str, text: str, history) -> None:
+        hist = [h for h in history if isinstance(h, dict)] if isinstance(history, list) else []
+        try:
+            out = await asyncio.to_thread(opener.generate, self.cfg.opener_url, self.cfg.opener_model, text, hist)
+        except Exception as e:  # noqa: BLE001 - a line is never worth the turn: silence
+            log.warning("opener %s failed: %s: %s", mid, type(e).__name__, e)
+            out = {"ms": 0, "model": self.cfg.opener_model}
+        with contextlib.suppress(Exception):
+            await self._send_json({"t": "opener.result", "id": mid, **out})
 
     async def _run_tts(self, mid: str, text: str, voice) -> None:
         rs = Resampler(MODEL_RATE, DEVICE_RATE)

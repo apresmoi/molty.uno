@@ -67,6 +67,20 @@ synthesised, so Molty speaks the instant they finish — right after its chirp, 
   when they say something good, a `surprised` at news — screen only, ≤ 1 per 3 s. Note what landed in your
   [ledger](etiquette.md#keep-a-behaviour-ledger).
 
+## First words: Molty starts, you continue
+
+The owner's setting `first_words` (voice box with `--opener`) makes a very small model start the reply
+the moment the human finishes, about half a second before anyone else could: "Hmm, the weather in Berlin,".
+It replaces the filler. The `utterance` and talk's result then carry **`opener`: words already spoken**.
+
+- **Write only the continuation**: `opener` "Hmm, the weather in Berlin," → say "rain until noon." It queues
+  behind the line with no gap; don't read the line again. An exact repeat is cut and logged.
+- It knows nothing: it names the topic and never answers. Often there is no line (the model was late, or
+  the relay's guard refused it): no `opener`, Molty stayed silent, answer as usual.
+- A line left mid-sentence and nothing from you for 15 s: Molty adds "Hmm, give me a moment." A mood or a
+  `[working]` line in time stops that.
+- The activity log shows each line as `trace` `ev:"opener"` `{text, ms, dropped?, repeated?}`.
+
 ## End of turn
 
 **End of turn is automatic**: don't pass `vad` / `end_silence_ms`. With the owner's voice box the

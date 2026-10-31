@@ -44,6 +44,8 @@ static void close_event(unsigned code) {
 esp_websocket_client_handle_t esp_websocket_client_init(const esp_websocket_client_config_t *cfg) {
     assert(!strcmp(cfg->uri,"ws://192.168.1.2:8787/v1/device?id=molty-abcdefghij"));
     assert(cfg->disable_auto_reconnect && cfg->crt_bundle_attach);
+    /* a radio stall rides on TCP retransmit; the component aborts when this runs out */
+    assert(cfg->network_timeout_ms>=15000 && cfg->pingpong_timeout_sec>cfg->network_timeout_ms/1000);
     return calloc(1,sizeof(struct sdk_ws));
 }
 esp_err_t esp_websocket_register_events(esp_websocket_client_handle_t ws,int id,void (*fn)(void *,esp_event_base_t,int32_t,void *),void *arg) {
@@ -79,7 +81,7 @@ int esp_websocket_client_send_text(esp_websocket_client_handle_t ws,const char *
     }
     cJSON_Delete(j); return n;
 }
-int esp_websocket_client_send_bin(esp_websocket_client_handle_t ws,const void *p,int n,unsigned ticks) { (void)ws;(void)p;(void)ticks;return n; }
+int esp_websocket_client_send_bin(esp_websocket_client_handle_t ws,const void *p,int n,unsigned ticks) { (void)ws;(void)p;assert(ticks>=10000);return n; }
 esp_err_t link_identity_init(void) { return ESP_OK; }
 const char *link_identity_id(void) { return "molty-abcdefghij"; }
 const char *link_identity_code(void) { return test_code; }

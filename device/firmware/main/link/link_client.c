@@ -90,14 +90,21 @@ static void log_upload(int64_t now_us)
     cJSON_Delete(f);
 }
 
+/* A write or mid-frame read that times out ends the session (the component aborts: a frame half
+ * sent cannot be resumed), so these outlast a radio stall and let TCP retransmit through it. At
+ * 2 s / 5 s a dip to -90 dBm killed the socket and the speech with it. Dead links still die: a
+ * lost peer fails the next write, and pongs time out at 40 s. */
+#define LINK_SEND_TIMEOUT_MS    10000
+#define LINK_NETWORK_TIMEOUT_MS 15000
+
 static esp_err_t send_data(const void *data, size_t len, bool binary)
 {
     if (!s_send || !data) return ESP_ERR_INVALID_STATE;
     xSemaphoreTake(s_send, portMAX_DELAY);
     int n = -1;
     if (s_ws && esp_websocket_client_is_connected(s_ws)) {
-        n = binary ? esp_websocket_client_send_bin(s_ws, data, (int)len, pdMS_TO_TICKS(2000))
-                   : esp_websocket_client_send_text(s_ws, data, (int)len, pdMS_TO_TICKS(2000));
+        n = binary ? esp_websocket_client_send_bin(s_ws, data, (int)len, pdMS_TO_TICKS(LINK_SEND_TIMEOUT_MS))
+                   : esp_websocket_client_send_text(s_ws, data, (int)len, pdMS_TO_TICKS(LINK_SEND_TIMEOUT_MS));
     }
     xSemaphoreGive(s_send);
     if (n != (int)len) mole_diag_event(true, "link.send_fail %s len=%u n=%d", binary ? "bin" : "text", (unsigned)len, n);
@@ -125,6 +132,9 @@ static void websocket_event(void *arg, esp_event_base_t base, int32_t id, void *
     if (id == WEBSOCKET_EVENT_DISCONNECTED || id == WEBSOCKET_EVENT_CLOSED || id == WEBSOCKET_EVENT_ERROR) {
         if (!atomic_load(&s_lost)) {
             /* transport/TLS detail is in the ring already: esp-tls + websocket_client ESP_LOGE lines */
+            if (id == WEBSOCKET_EVENT_ERROR && d)
+                mole_diag_event(true, "link.ws_cause type=%d sock_errno=%d tls=0x%x", (int)d->error_handle.error_type,
+                                d->error_handle.esp_transport_sock_errno, (unsigned)d->error_handle.esp_tls_stack_err);
             mole_diag_event(true, "link.ws_%s close=%u",
                             id == WEBSOCKET_EVENT_ERROR ? "error" : id == WEBSOCKET_EVENT_CLOSED ? "closed" : "disconnected",
                             atomic_load(&s_close_code));
@@ -222,7 +232,7 @@ static esp_err_t connect_session(void)
          * component's default prio 5 it froze sim + panel for 1050 ms on every
          * (re)connect (/api/diag stall.sim gap=1050ms, websocket_task 100%). */
         .task_prio = 1,
-        .network_timeout_ms = 5000, .ping_interval_sec = 20, .pingpong_timeout_sec = 40,
+        .network_timeout_ms = LINK_NETWORK_TIMEOUT_MS, .ping_interval_sec = 20, .pingpong_timeout_sec = 40,
     };
     esp_websocket_client_handle_t ws = esp_websocket_client_init(&cfg);
     if (!ws) return ESP_ERR_NO_MEM;

@@ -248,7 +248,8 @@ Body: `{"say"?: s, "listen"?: true, "listen_ms"?: 0..30000 (omit: the human's se
   `"silent"` = thinking without the chirp, `false` = none.
 
 Speaks `say` (if given), then listens until the human stops talking (or the window ends), then
-returns the transcript as `heard` (with `filler_in_ms`: see [Quick phrases](#quick-phrases)). `reason`:
+returns the transcript as `heard` (with `filler_in_ms`: see [Quick phrases](#quick-phrases); with `opener` when
+Molty already started the reply: [First words](talking-fast.md#first-words-molty-starts-you-continue)). `reason`:
 
 | reason | meaning |
 |---|---|
