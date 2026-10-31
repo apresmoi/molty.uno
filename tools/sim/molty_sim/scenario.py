@@ -30,6 +30,22 @@
 
 User text markup: `{pause S}` inserts S seconds of silence at that point (between words, or
 before the first word = a later start). Fillers are plain words ("um", "uh").
+
+Shake turns (docs/AGENT-LINK.md "While the human speaks") — `shake: true` at the top level: the
+human SHAKES Molty and speaks (no `say` before); a scripted drafting agent answers. Each turn runs
+once per arm (`arms`, default [baseline, drafts]): baseline answers the `utterance`; drafts may
+`draft` an opener on a partial and `react`, then continue (draft.used) or answer in full.
+
+    shake: true
+    arms: [baseline, drafts]
+    turns:
+      - id: alarm-flip
+        user: "Can you set an alarm for seven tomorrow {pause 0.5} but not on Sunday"
+        draft: {when: "alarm", opener: "Sure, setting it.", family: confirm}   # first partial containing `when`
+        react: {when: "seven", mood: happy}                                     # optional, screen only
+        answer: hedge                      # the opener family that fits the FULL utterance
+        reply: "Okay: seven every day but Sunday."          # the full answer (baseline, or a dropped draft)
+        follow: "Every day but Sunday, then."               # after a played opener (default: reply)
 """
 
 from __future__ import annotations
@@ -113,6 +129,12 @@ class Turn:
     llm: dict | None = None
     shake: dict | None = None  # {peak_g, after_s, noise_peak}: shake to talk, with handling noise
     stalls: list[tuple[float, float]] = field(default_factory=list)  # uplink stall windows (mic s)
+    # shake turns (drafts)
+    draft: dict | None = None  # {when, opener, family}
+    react: dict | None = None  # {when, mood}
+    answer: str | None = None  # the opener family that fits the full utterance
+    reply: str | None = None
+    follow: str | None = None
 
 
 @dataclass
@@ -121,10 +143,16 @@ class Scenario:
     turns: list[Turn]
     closing: str | None = None
     source: Path | None = None
+    shake: bool = False
+    arms: list[str] = field(default_factory=lambda: ["baseline", "drafts"])
 
 
 TURN_KEYS = {"id", "say", "user", "wav", "text", "silence_s", "voice", "lead_s", "level_db", "noise", "listen_ms", "expect", "tags",
-             "shake", "stall"}
+             "shake", "stall", "draft", "react", "answer", "reply", "follow"}
+ARMS = ("baseline", "drafts")
+REACT_MOODS = ("happy", "surprised", "thinking")
+# react actions: the device's gestures (services/relay/src/core/commands.ts ACTIONS)
+REACT_ACTIONS = ("wiggle", "nod", "shake_head", "bounce", "peek", "glance_left", "glance_right", "blink", "wobble", "stretch", "look_up", "yawn")
 DEFAULT_KEYS = {"voices", "lead_s", "level_db", "noise", "listen_ms", "voice"}
 
 
@@ -212,9 +240,44 @@ def parse(data: dict, source: Path | None = None) -> Scenario:
         t.expect = raw.get("expect") or ("no_speech" if t.kind == "silence" else "turn_end")
         if t.expect not in EXPECTS:
             raise ScenarioError(f"turn {tid}: expect must be one of {EXPECTS}")
+        _shake_keys(t, raw, bool(data.get("shake")))
         turns.append(t)
+    arms = data.get("arms") or list(ARMS)
+    if not isinstance(arms, list) or not arms or any(a not in ARMS for a in arms):
+        raise ScenarioError(f"arms must be a non-empty list of {ARMS}")
     return Scenario(name=str(data.get("name") or (source.stem if source else "scenario")), turns=turns,
-                    closing=data.get("closing"), source=source)
+                    closing=data.get("closing"), source=source, shake=bool(data.get("shake")), arms=list(arms))
+
+
+def _shake_keys(t: Turn, raw: dict, shake: bool) -> None:
+    keys = [k for k in ("draft", "react", "answer", "reply", "follow") if raw.get(k) is not None]
+    if keys and not shake:
+        raise ScenarioError(f"turn {t.id}: {keys} need `shake: true` at the top level")
+    if not shake:
+        return
+    if t.say:
+        raise ScenarioError(f"turn {t.id}: a shake turn has no `say` (the human starts)")
+    d = raw.get("draft")
+    if d is not None:
+        if not isinstance(d, dict) or set(d) - {"when", "opener", "family"} or not all(isinstance(d.get(k), str) and d.get(k) for k in ("when", "opener", "family")):
+            raise ScenarioError(f"turn {t.id}: draft is {{when, opener, family}} (strings)")
+        t.draft = dict(d)
+    r = raw.get("react")
+    if r is not None:
+        ok = isinstance(r, dict) and not set(r) - {"when", "mood", "action"} and isinstance(r.get("when"), str) and (
+            (r.get("mood") in REACT_MOODS and "action" not in r) or (r.get("action") in REACT_ACTIONS and "mood" not in r))
+        if not ok:
+            raise ScenarioError(f"turn {t.id}: react is {{when, mood: {'|'.join(REACT_MOODS)}}} or {{when, action: <a gesture>}}")
+        t.react = dict(r)
+    for k in ("answer", "reply", "follow"):
+        v = raw.get(k)
+        if v is not None and not (isinstance(v, str) and v.strip()):
+            raise ScenarioError(f"turn {t.id}: {k} must be text")
+        setattr(t, k, v)
+    if t.kind != "silence" and not t.reply:
+        raise ScenarioError(f"turn {t.id}: a shake turn needs `reply` (what the agent answers)")
+    if t.draft and not t.answer:
+        raise ScenarioError(f"turn {t.id}: a turn with a draft needs `answer` (the opener family that fits the full utterance)")
 
 
 def load(path: str | Path) -> Scenario:

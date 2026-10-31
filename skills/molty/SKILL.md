@@ -64,16 +64,17 @@ Each helper follows a long turn (`202 pending`) to its end: one call = one full 
 
 - **One call per turn: talk, nothing else.** It speaks, listens and returns their words. No
   `show`/`mood`/`act` around it (moods are automatic; feelings go in the text as cues).
-- **Fastest model for chat turns**; a slower one only for real work, after one short line.
+- **Fastest model for chat turns**; a slower one only for real work, after a short line.
 - **Wake only on `utterance`.** A run started by a `tap`/`button`/`shake` mid-conversation
   collides with the conversation's run.
 - **A shake means "I want to talk".** Molty listens by itself; you get one `utterance`
   event with their words. Answer it at once with talk and `in_reply_to: <turn_id>`; ignore
-  the `shake` that comes with `"listening": true`. `turn_claimed` = another agent answered:
-  stay quiet.
+  the `shake` with `"listening": true`. `turn_claimed`: stay quiet.
+- **Never speak while they talk**: `utterance.partial` is context (`human_speaking`). Only
+  `draft` an opener (`draft.used`: continue it) or `react`.
 - **Molty acknowledges the end of their turn itself** (chirp + `thinking`): answer straight
   away, no "hmm". Long work → one short spoken line first; never leave them in silence.
-- **Short.** 1–2 sentences; a short first sentence starts the audio sooner.
+- **Short.** 1–2 sentences; a short first sentence starts audio sooner.
 - **Emote inline, sparingly:** `"[happy] Build passed!"`, `"Done. [nod]"` — cues are never
   spoken or shown and fire on their word; one per sentence at most; don't fidget
   ([etiquette.md](references/etiquette.md#emotes)).
@@ -82,12 +83,12 @@ Each helper follows a long turn (`202 pending`) to its end: one call = one full 
 - **Read `relay.caps`, not versions**, to know what this Molty can do (`say`, `listen`,
   `ask`, `shake_talk`, `update`, …). `relay.voice` says who speaks. Get them from the `status`
   command (`POST $MOLTY_RELAY/v1/devices/<id>/cmd {"name":"status"}`, MCP `molty_status`);
-  every `utterance` also carries them as `device.caps`. There is no `GET …/status` route.
-- **Don't talk unprompted or repeatedly**; the mic only when they expect it. `no_speech`
-  after a wake → one short line or nothing.
+  every `utterance` also carries them as `device.caps`. No `GET …/status` route.
+- **Don't talk unprompted or repeatedly**; the mic only when expected. `no_speech` after
+  a wake → one short line or nothing.
 - **Errors:** `audio_busy` (wait for the current audio, retry once), `turn_claimed` (stay
-  quiet), `device_offline` (Molty's Wi-Fi/power: tell them another way),
-  `voice_box_offline` (their GPU voice box is down), `listen_failed` (the recording broke:
+  quiet), `device_offline` (tell them another way),
+  `voice_box_offline` (their voice box is down), `listen_failed` (the recording broke:
   try once more). A failed turn carries its `job` id: look it up in the
   [activity log](references/activity.md).
 
@@ -97,8 +98,8 @@ Read the one you need, when you need it.
 
 - [api.md](references/api.md) — pairing in full, REST commands, talk, ask, errors, MCP, revoke.
 - [events.md](references/events.md) — event types, the `utterance`, inbox, long-poll, webhooks and templates, the CLI stream.
-- [talking-fast.md](references/talking-fast.md) — end of turn, the ack chirp, `no_speech`, latency rules.
-- [etiquette.md](references/etiquette.md) — when to speak, emotes, keeping your own behaviour ledger.
+- [talking-fast.md](references/talking-fast.md) — drafts, end of turn, the ack chirp, `no_speech`, latency rules.
+- [etiquette.md](references/etiquette.md) — when to speak, emotes, keeping your own behaviour ledger (relay notes if you have no memory).
 - [voice.md](references/voice.md) — the ways Molty gets a voice, and what each means for you.
 - [voice-box.md](references/voice-box.md) — the owner's own GPU voice box: what agents see.
 - [updates.md](references/updates.md) — firmware updates, `api_version`, updating this skill.

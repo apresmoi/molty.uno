@@ -428,3 +428,70 @@ export function validateAsk(raw: unknown): AskArgs {
   if (reply !== undefined) out.in_reply_to = reply;
   return out;
 }
+
+// ---- while the human speaks: draft and react (core/partials.ts) ----
+
+/** A draft's opener: one short spoken line (it plays the instant the human finishes). */
+export const MAX_OPENER_BYTES = 200;
+export const MAX_OPENER_WORDS = 24;
+/** max_new_words an agent may ask for; the relay's calibrated threshold caps it (calibration.ts). */
+export const MAX_DRAFT_NEW_WORDS = 20;
+/** Drafts one agent may make per human turn (each new one replaces its previous). */
+export const MAX_DRAFTS_PER_TURN = 3;
+
+/** Moods a react may show over the listening animation (screen only: the mic is open). */
+export const REACT_MOODS = ["happy", "surprised", "thinking"] as const;
+/**
+ * Actions a react may play (screen only): the device's gestures (`act`, cap `act`) — the same ONE
+ * list as molty_act and the inline [nod] cues, so a new gesture is a new react action too.
+ */
+export const REACT_ACTIONS: readonly string[] = ACTIONS;
+/** At most one react per this long, per Molty (one screen). */
+export const REACT_MIN_GAP_MS = 3000;
+/** How long a react shows before Molty returns to listening. */
+export const REACT_SHOW_MS = 1500;
+/** Firmware cap: `mood {react:true}` shows a mood without counting as an explicit one (the turn's ack stays). */
+export const REACT_CAP = "react";
+
+export interface DraftArgs {
+  turn_id: string;
+  based_on: number;
+  opener: string;
+  max_new_words?: number;
+  voice?: string;
+}
+
+/** molty_draft / POST /v1/devices/<id>/draft: `{turn_id, based_on, opener, max_new_words?, voice?}`. */
+export function validateDraft(raw: unknown): DraftArgs {
+  if (!isRecord(raw)) throw invalid("args must be an object");
+  only(raw, ["turn_id", "based_on", "opener", "max_new_words", "voice"]);
+  if (typeof raw.turn_id !== "string" || !TURN_ID_RE.test(raw.turn_id)) throw invalid("turn_id must be the open turn's id (from utterance.partial)");
+  const out: DraftArgs = {
+    turn_id: raw.turn_id,
+    based_on: int(raw.based_on, "based_on", 1, 1000),
+    opener: text(raw.opener, "opener", MAX_OPENER_BYTES).trim(),
+  };
+  if (!out.opener) throw invalid("opener must be a nonempty string");
+  if (out.opener.split(/\s+/).length > MAX_OPENER_WORDS) throw invalid(`opener must be at most ${MAX_OPENER_WORDS} words: a short line that fits whatever comes next`);
+  if (raw.max_new_words !== undefined) out.max_new_words = int(raw.max_new_words, "max_new_words", 0, MAX_DRAFT_NEW_WORDS);
+  if (raw.voice !== undefined) out.voice = voiceId(raw.voice);
+  return out;
+}
+
+export type ReactArgs = { turn_id: string; mood: (typeof REACT_MOODS)[number]; action?: undefined } | { turn_id: string; action: string; mood?: undefined };
+
+/** molty_react / POST /v1/devices/<id>/react: `{turn_id, mood}` or `{turn_id, action}`. */
+export function validateReact(raw: unknown): ReactArgs {
+  if (!isRecord(raw)) throw invalid("args must be an object");
+  only(raw, ["turn_id", "mood", "action"]);
+  if (typeof raw.turn_id !== "string" || !TURN_ID_RE.test(raw.turn_id)) throw invalid("turn_id must be the open turn's id (from utterance.partial)");
+  if ((raw.mood === undefined) === (raw.action === undefined)) throw invalid("give mood or action (one of them)");
+  if (raw.mood !== undefined) {
+    if (typeof raw.mood !== "string" || !(REACT_MOODS as readonly string[]).includes(raw.mood)) throw invalid(`mood must be one of ${REACT_MOODS.join(", ")}`);
+    return { turn_id: raw.turn_id, mood: raw.mood as (typeof REACT_MOODS)[number] };
+  }
+  if (typeof raw.action !== "string" || !REACT_ACTIONS.includes(raw.action)) {
+    throw invalid(`action must be one of ${REACT_ACTIONS.join(", ")}`);
+  }
+  return { turn_id: raw.turn_id, action: raw.action };
+}

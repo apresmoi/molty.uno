@@ -17,6 +17,8 @@ and audio:
   naming it, keeps the audio until the relay adopts it (`cmd listen {adopt}`) or declines it
   (`listen_stop`), 3 s at most; the audio before the IMU shows the shake settled is trimmed.
 - hints: `{"t":"hint"}` frames are recorded (the firmware's listener reactions are visual only).
+- mood: an explicit mood counts (the listen's ack is skipped: link_ack_decide screen_taken);
+  `react:true` shows it without counting (cap `react`). Every mood is recorded with its time.
 - say: frames are "played" on a model of the speaker: a frame starts when it arrives or when
   the previous one ends (a gap = an underrun), the chirp of the previous listen delays the
   start by up to ~110 ms (it is cut), say.done goes when the last sample has left the DMA.
@@ -60,7 +62,7 @@ SIM_PREFIX = "molty-sim"
 
 # The Waveshare 1.46's hello (device/firmware/main/link/link_identity.c: speaker + mic + touch).
 CAPS_146 = ["fluid", "say", "say_cues", "listen", "listen_stop", "listen_window", "ack", "shake_talk", "trace", "hints",
-            "show", "mood", "creature", "ask", "update"]
+            "show", "mood", "act", "creature", "react", "ask", "update"]
 ADOPT_WINDOW_MS = 3000  # LINK_SHAKE_ADOPT_MS: a shake's listen nobody adopted by then ends quietly
 RETRY_S = 0.1  # a failed uplink send is retried this often
 FLUSH_S = 15.0  # the end frame waits at most this long for the ring to drain
@@ -139,6 +141,7 @@ class ListenRec:
     trim_capped: bool = False
     up: list[dict] = field(default_factory=list)  # every header sent (trace fields included)
     hints: list[str] = field(default_factory=list)  # relay hints that named this listen
+    mood_gen0: int = 0  # explicit moods counted when it began (an explicit one meanwhile: no ack)
 
 
 @dataclass
@@ -227,6 +230,8 @@ class SimDevice:
         self._chirp_until = 0.0
         self._send_lock = asyncio.Lock()
         self._tasks: set[asyncio.Task] = set()
+        self.moods: list[tuple[float, str, bool]] = []  # (wall, mood, react); acts as (wall, "act:<name>", True)
+        self._mood_gen = 0
 
     # ---------------- link ----------------
 
@@ -314,8 +319,19 @@ class SimDevice:
         name, a = f.get("name"), f.get("args") or {}
         if name == "status":
             return await self._reply(f, True, {"fw": self.fw, "uptime": 1, "creature": "fluid", "state": "creature", "mood": self.mood, "fps": 30, "rssi": -50})
+        if name == "act":  # a gesture over whatever shows (never an explicit mood, never a sound)
+            if not isinstance(a.get("action"), str):
+                return await self._reply(f, False, error="invalid_args")
+            self.moods.append((time.monotonic(), f"act:{a['action']}", True))
+            return await self._reply(f, True, {"action": a["action"]})
         if name == "mood":
+            react = a.get("react", False)
+            if not isinstance(react, bool):
+                return await self._reply(f, False, error="invalid_args")
             self.mood = str(a.get("mood", self.mood))
+            self.moods.append((time.monotonic(), self.mood, react))
+            if not react:
+                self._mood_gen += 1  # explicit: the running listen's ack is skipped
             return await self._reply(f, True, {"mood": self.mood})
         if name in ("show", "state", "volume", "creature"):
             return await self._reply(f, True, {})
@@ -371,7 +387,7 @@ class SimDevice:
         if self._busy:
             return await self._reply(f, False, error="busy")
         self._busy = job
-        rec = ListenRec(job=job, args=dict(a), cmd_at=time.monotonic(), window_ms=window, vad=vad_on, ack_mode=ack)
+        rec = ListenRec(job=job, args=dict(a), cmd_at=time.monotonic(), window_ms=window, vad=vad_on, ack_mode=ack, mood_gen0=self._mood_gen)
         self.listens[job] = rec
         self.mood = "listening"
         await self._reply(f, True, {"job": job, "ms": window, "ack": ack})
@@ -404,7 +420,7 @@ class SimDevice:
         self._shake_n += 1
         local = f"shake-{self._shake_n}"
         window = self.listen_setting_ms
-        rec = ListenRec(job=local, args={}, cmd_at=time.monotonic(), window_ms=window, vad=True, ack_mode=self.ack_setting, local=local)
+        rec = ListenRec(job=local, args={}, cmd_at=time.monotonic(), window_ms=window, vad=True, ack_mode=self.ack_setting, local=local, mood_gen0=self._mood_gen)
         self.listens[local] = rec
         self._busy = local
         self.mood = "listening"
@@ -563,7 +579,7 @@ class SimDevice:
         rec.reason = reason
         v = st.v
         rec.speech_ms = v.speech_ms if v.speech_known() else None
-        rec.ack = "off" if unclaimed else ack_decide(rec.ack_mode, reason, v.speech_known(), v.speech_ms)
+        rec.ack = "off" if unclaimed else ack_decide(rec.ack_mode, reason, v.speech_known(), v.speech_ms, screen_taken=self._mood_gen != rec.mood_gen0)
         if rec.ack == "chirp":
             self._chirp_until = rec.end_at + CHIRP_S
             rec.ack_end_at = self._chirp_until

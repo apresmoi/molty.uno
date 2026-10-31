@@ -38,6 +38,10 @@ interface DeviceRpc {
   ownerActivity(id: string, linkCode: string, req: Parameters<OwnerApi["ownerActivity"]>[1]): ReturnType<OwnerApi["ownerActivity"]>;
   activityLog(id: string, token: string, req: unknown): ReturnType<AgentApi["activityLog"]>;
   ownerAudio(id: string, linkCode: string, job: string): ReturnType<OwnerApi["ownerAudio"]>;
+  draft(id: string, token: string, req: unknown): ReturnType<AgentApi["draft"]>;
+  react(id: string, token: string, req: unknown): ReturnType<AgentApi["react"]>;
+  notes(id: string, token: string, req: Parameters<AgentApi["notes"]>[1]): ReturnType<AgentApi["notes"]>;
+  speechStats(id: string, linkCode: string, req: Parameters<OwnerApi["speechStats"]>[1]): ReturnType<OwnerApi["speechStats"]>;
 }
 
 function backendFor(env: Env): RelayBackend {
@@ -61,6 +65,10 @@ function backendFor(env: Env): RelayBackend {
         ownerActivity: (linkCode, req) => stub.ownerActivity(id, linkCode, req),
         activityLog: (token, req) => stub.activityLog(id, token, req),
         ownerAudio: (linkCode, job) => stub.ownerAudio(id, linkCode, job),
+        draft: (token, req) => stub.draft(id, token, req),
+        react: (token, req) => stub.react(id, token, req),
+        notes: (token, req) => stub.notes(id, token, req),
+        speechStats: (linkCode, req) => stub.speechStats(id, linkCode, req),
       };
     },
   };

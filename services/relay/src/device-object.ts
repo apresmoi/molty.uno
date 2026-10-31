@@ -3,7 +3,7 @@
 // storage, sockets and RPC. Hibernation rule: the authenticated-device flag
 // lives in each socket's serialized attachment (SocketMeta), never here.
 import { DurableObject } from "cloudflare:workers";
-import { type ActivityOwnerRequest, type EventsRequest, type JobView, type Outcome, type PairRequest, type PairResult, type VoiceOwnerRequest, type WebhookRequest, bearer } from "./core/api.js";
+import { type ActivityOwnerRequest, type EventsRequest, type JobView, type NotesRequest, type Outcome, type PairRequest, type PairResult, type VoiceOwnerRequest, type WebhookRequest, bearer } from "./core/api.js";
 import { PING_TEXT, PONG_TEXT } from "./core/protocol.js";
 import { type DeviceSocket, DeviceRoom, type SocketMeta } from "./core/room.js";
 import { type KV, realClock } from "./core/store.js";
@@ -207,6 +207,18 @@ export class MoltyDevice extends DurableObject<Env> {
   }
   ownerAudio(deviceId: string, linkCode: string, job: string): Promise<Outcome<{ wav: Uint8Array }>> {
     return this.room(deviceId).ownerAudio(linkCode, job);
+  }
+  draft(deviceId: string, token: string, req: unknown): Promise<Outcome> {
+    return this.room(deviceId).draft(token, req);
+  }
+  react(deviceId: string, token: string, req: unknown): Promise<Outcome> {
+    return this.room(deviceId).react(token, req);
+  }
+  notes(deviceId: string, token: string, req: NotesRequest): Promise<Outcome> {
+    return this.room(deviceId).notes(token, req);
+  }
+  speechStats(deviceId: string, linkCode: string, req: { action: "get" | "reset" }): Promise<Outcome> {
+    return this.room(deviceId).speechStats(linkCode, req);
   }
 
   // ---- the `releases` singleton (never a device room) ----

@@ -100,6 +100,16 @@ describe('traceModel', () => {
     expect(m.summary[0]).toEqual({ text: 'clean turn: nothing lost, nothing clipped', tone: 'ok' });
     expect(m.events.map((e) => e.label)).toEqual(['mic open', 'listen ended', 'transcript ready: 400 ms after the end ⠂ workers-ai']);
   });
+  it('while the human spoke: partials, a draft, reacts and the opener that played (counts, never words)', () => {
+    const relay = { cmd: 0, end: 5000, partials: [[1, 3000, 4], [2, 4200, 9]], drafts: [[1, 3100]], reacts: [['nod', 3050, 'ok'], ['happy', 3300, 'rate_limited']],
+      draft: { used: 1, new_words: 2, opener_at: 5200 }, utterance: 5250 };
+    const m = traceModel({ ...job, data: { trace: { v: 1, trigger: 'shake', t0: T0, relay } } })!;
+    const labels = m.events.map((e) => e.label);
+    expect(labels).toEqual(expect.arrayContaining(['partial 1 to the agents (4 words so far)', 'partial 2 to the agents (9 words so far)', 'an opener drafted on partial 1',
+      'react nod', 'react happy → rate_limited', 'drafted opener played (partial 1, 2 words after it)', 'utterance sent to the agents']));
+    const dropped = traceModel({ ...job, data: { trace: { v: 1, trigger: 'shake', t0: T0, relay: { cmd: 0, draft: { dropped: ['meaning'] } } } } })!;
+    expect(dropped.summary.map((x) => x.text)).toContain('draft dropped: meaning');
+  });
   it('a failed webhook and a no-speech decision', () => {
     const m = traceModel({ ...job, data: { trace: { t0: T0, box: { ns: { at: 8, quiet_s: 8, why: 'no word, no voice activity for 8.0 s' } }, relay: { cmd: 0 } } } },
       [{ ...hook, data: { status: 503, ms: 90, attempt: 2, error: 'http_503' } }])!;

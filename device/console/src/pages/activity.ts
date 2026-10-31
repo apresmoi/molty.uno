@@ -10,6 +10,7 @@ import {
   type ActivityEntry, type ActivityTarget, type Filters, type Group,
 } from '../activity/activity';
 import { fmtAt, traceModel, type TraceModel } from '../activity/trace';
+import { getSpeech, resetSpeech, SpeechApiError, speechRows, type SpeechStats } from '../speech/speech';
 import { linkContext } from '../ui/agent-link';
 import { h, mount, note } from '../ui/dom';
 import { errText } from '../ui/fmt';
@@ -31,15 +32,19 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
   const filters: Filters = {};
   const open = new Set<string>();
   let lastSig = '';
+  let speech: SpeechStats | null = null;
+  let speechAt = 0;
+  const SPEECH_MS = 30000;   // the habits change per turn: no need to poll them every 3 s
 
   const controls = h('div', { class: 'act-controls' });
   const settings = h('div', { class: 'act-settings' });
+  const habits = h('div', { class: 'act-speech' });
   const msg = h('div', { 'aria-live': 'polite' });
   const list = h('div', { class: 'act-list' });
   mount(root,
     h('h1', null, 'activity ', h('span', { class: 'dim' }, '⠶ what happened, and who did it')),
     h('p', { class: 'lede' }, 'Every agent call and turn on this Molty, the device’s own log lines for it, and what Molty itself did — the last 24 h, kept by the relay.'),
-    controls, msg, list, settings);
+    controls, msg, list, habits, settings);
 
   async function loadLink() {
     clearTimeout(linkTimer);
@@ -75,13 +80,18 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
           if (!p.more || !next) break;
         }
         loaded = true; problem = null;
+        if (Date.now() - speechAt > SPEECH_MS) {
+          speechAt = Date.now();
+          try { speech = await getSpeech(target); }
+          catch (e) { speech = null; if (!(e instanceof SpeechApiError)) throw e; }
+        }
       } catch (e) {
         if (e instanceof ActivityApiError && e.code === 'unsupported') unsupported = true;
         else if (e instanceof ActivityApiError && e.code === 'unauthorized') void loadLink();   // the code rotated
         else problem = e instanceof ActivityApiError && e.code === 'unreachable' ? 'can’t reach the relay — is Molty online?' : (e as Error).message;
       } finally { busy = false; }
       // re-render only on news: an open select or a scrolled list must survive the poll
-      const sig = `${entries.length}|${next}|${transcripts}|${keepAudio}|${problem}|${loaded}|${unsupported}`;
+      const sig = `${entries.length}|${next}|${transcripts}|${keepAudio}|${problem}|${loaded}|${unsupported}|${speechAt}`;
       if (sig !== lastSig) { lastSig = sig; render(); }
     }
     if (alive && !unsupported) timer = window.setTimeout(() => void poll(), POLL_MS);
@@ -163,6 +173,24 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
           : `${keepAudio ? 'on' : 'off (default)'}: the relay keeps the last ${audioInfo.turns} turns' audio (up to ${audioInfo.max_s} s each) for ${audioInfo.max_age_h} h, then deletes it. Only you can download it here — agents never can.`)));
   }
 
+  async function startOver() {
+    if (!target) return;
+    try { speech = await resetSpeech(target); speechAt = Date.now(); problem = null; }
+    catch (e) { problem = `not reset: ${(e as Error).message}`; }
+    render();
+  }
+
+  /** How the human talks and what the relay tuned from it (docs/AGENT-LINK.md "Calibration"); hidden on a relay without it. */
+  function renderHabits() {
+    if (!loaded || !speech) { mount(habits); return; }
+    const rows = speechRows(speech);
+    mount(habits, h('div', { class: 'card' },
+      h('div', { class: 'row' }, h('b', { class: 'hi' }, 'speech habits'), h('span', { class: 'dim small' }, 'how you talk to Molty, learned by the relay')),
+      h('dl', { class: 'facts', 'aria-label': 'speech habits' }, rows.map(([k, v]) => [h('dt', null, k), h('dd', null, v)])),
+      h('p', { class: 'dim small' }, 'Agents get your words in chunks while you talk (context only) and may have a short opener ready; the relay tunes both to how you speak.'),
+      h('button', { type: 'button', class: 'chip', onclick: () => void startOver() }, 'start over')));
+  }
+
   function groupEl(g: Group) {
     const failed = g.outcome === 'failed' || g.outcome === 'error';
     const badge = h('span', { class: `badge ${failed ? 'warn' : g.outcome === 'pending' ? '' : 'ok'}` },
@@ -225,6 +253,7 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
 
   function render() {
     renderControls();
+    renderHabits();
     renderSettings();
     if (unsupported) { mount(msg, note('warn', 'this relay has no activity log yet.')); mount(list); return; }
     mount(msg, problem ? note('warn', problem) : null);

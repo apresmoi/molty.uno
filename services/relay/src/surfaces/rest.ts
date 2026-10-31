@@ -23,6 +23,14 @@
 //                                       ?since=a42|<unix ms>&limit&agent&kind=a,b&job&errors=1 -> {entries, next, more,
 //                                       transcripts, limits}; POST {transcripts: bool} sets "log transcripts"
 //   GET    /v1/activity[?since&limit&kind&job&errors]  the CALLING agent's own activity -> {ok, result:{entries, next, more}}
+//   POST   /v1/devices/<id>/draft       {turn_id, based_on, opener, max_new_words?, voice?}  while the human talks (an open
+//                                       shake turn): hold an opener -> {ok, result:{turn_id, based_on, status:"held", max_new_words}}
+//   POST   /v1/devices/<id>/react       {turn_id, mood|action}  while the human talks: screen only -> {ok, result:{shown, for_ms}}
+//                                       (say / talk / ask / mood / show meanwhile: 409 human_speaking; react > 1 per 3 s: 429 rate_limited)
+//   GET    /v1/notes[?key=k]            the caller's private notes: list, or one key -> {key, value, updated}
+//   PUT    /v1/notes {key, value}       store (value: any JSON, <= 8 KB; <= 64 keys / 32 KB per token: 413 too_large)
+//   DELETE /v1/notes?key=k              remove one key
+//   GET|DELETE /v1/devices/<id>/speech  owner (link code, CORS): the human's speech habits + calibration; DELETE resets
 //
 // A voice box token (pair role "voice") is refused on every agent route: 403 forbidden.
 //
@@ -51,6 +59,10 @@ const STATUS: Record<string, number> = {
   device_offline: 409,
   audio_busy: 409,
   turn_claimed: 409,
+  human_speaking: 409,
+  turn_closed: 409,
+  rate_limited: 429,
+  too_large: 413,
   unsupported: 409,
   firmware_too_old: 409,
   no_build: 409,
@@ -171,7 +183,7 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
     return jobResponse(waited, out, extra);
   }
 
-  const turn = /^\/v1\/devices\/([^/]+)\/(talk|ask)$/.exec(path);
+  const turn = /^\/v1\/devices\/([^/]+)\/(talk|ask|draft|react)$/.exec(path);
   if (turn) {
     if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
     const id = decodeURIComponent(turn[1]);
@@ -180,7 +192,7 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
     const b = await body(request);
     if (!b) return failure({ error: "bad_request", message: "body must be a JSON object" });
     const api = backend.device(id);
-    const out = await (turn[2] === "ask" ? api.ask(token!, b) : api.talk(token!, b));
+    const out = await (turn[2] === "ask" ? api.ask(token!, b) : turn[2] === "draft" ? api.draft(token!, b) : turn[2] === "react" ? api.react(token!, b) : api.talk(token!, b));
     if (!out.ok) return failed(out);
     return json({ ok: true, result: out.result, ...extra(out) }, out.result.status === "pending" ? 202 : 200);
   }
@@ -233,6 +245,24 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
     } else return json({ ok: false, error: "method_not_allowed" }, 405);
     return out.ok ? json({ ok: true, result: out.result, ...extra(out) }) : failed(out);
   }
+
+  if (path === "/v1/notes") {
+    const dev = tokenDevice(token);
+    if (!dev) return failure({ error: "unauthorized" });
+    const key = url.searchParams.get("key");
+    let out: Outcome;
+    if (request.method === "GET") out = await backend.device(dev).notes(token!, key === null ? { action: "list" } : { action: "get", key });
+    else if (request.method === "DELETE") out = await backend.device(dev).notes(token!, { action: "delete", key: key ?? undefined });
+    else if (request.method === "PUT") {
+      const b = await body(request);
+      if (!b) return failure({ error: "bad_request", message: "body must be a JSON object {key, value}" });
+      out = await backend.device(dev).notes(token!, { action: "put", key: b.key, value: b.value });
+    } else return json({ ok: false, error: "method_not_allowed" }, 405);
+    return out.ok ? json({ ok: true, result: out.result, ...extra(out) }) : failed(out);
+  }
+
+  const speech = /^\/v1\/devices\/([^/]+)\/speech$/.exec(path);
+  if (speech) return speechOwner(request, speech[1], backend);
 
   const voice = /^\/v1\/devices\/([^/]+)\/voice$/.exec(path);
   if (voice) return voiceOwner(request, voice[1], backend);
@@ -336,6 +366,22 @@ async function activityAudio(request: Request, rawId: string, rawJob: string, ba
   if (!out.ok) return cors(failure(out));
   const name = `${job.replace(/[^A-Za-z0-9_.-]/g, "_")}.wav`;
   return cors(new Response(out.result.wav, { status: 200, headers: { "content-type": "audio/wav", "content-disposition": `attachment; filename="${name}"`, "cache-control": "no-store" } }));
+}
+
+/** Owner speech stats + calibration (core/calibration.ts): the device's current link code, like the voice settings. */
+async function speechOwner(request: Request, rawId: string, backend: RelayBackend): Promise<Response> {
+  const cors = (r: Response) => {
+    for (const [k, v] of Object.entries(OWNER_CORS)) r.headers.set(k, v);
+    return r;
+  };
+  if (request.method === "OPTIONS") return cors(new Response(null, { status: 204 }));
+  const id = decodeURIComponent(rawId);
+  if (!DEVICE_ID_RE.test(id)) return cors(failure({ error: "not_found" }));
+  const api = backend.device(id);
+  if (!api.speechStats) return cors(failure({ error: "not_found" }));
+  if (request.method !== "GET" && request.method !== "DELETE") return cors(json({ ok: false, error: "method_not_allowed" }, 405));
+  const out = await api.speechStats(request.headers.get("x-molty-link-code") ?? "", { action: request.method === "GET" ? "get" : "reset" });
+  return cors(out.ok ? json({ ok: true, result: out.result }) : failure(out));
 }
 
 /** Owner voice-box settings: authenticated by the device's current link code (OwnerApi). */
