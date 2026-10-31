@@ -73,9 +73,9 @@ Each helper follows a long turn (`202 pending`) to its end.
   and `in_reply_to: <turn_id>`. `turn_claimed`: stay quiet.
 - **Never speak while they talk**: `utterance.partial` is context. (`human_speaking`). Only `draft`
   or `react`.
-- **Slow wake (cold start, or ack not ready)?** `quick {id}` is cached, instant audio. Skipped
-  by itself if Molty already filled; talk follows seamlessly. Vary them; register your own
-  (`molty_phrases`).
+- **Slow wake?** `quick {id}` is cached, instant audio; skipped if Molty already filled. Vary them;
+  register your own (`molty_phrases`).
+- **`opener` on a turn: already spoken.** Continue from it, don't repeat.
 - **Short: ≤ 2 sentences, ~25 words a turn.** Split longer answers; speech time is wait time.
 - **Emote inline, sparingly:** `"[happy] Build passed!"`, `"Done. [nod]"` — never spoken or
   shown; one per sentence at most ([etiquette.md](references/etiquette.md#emotes)).

@@ -1009,6 +1009,8 @@ cJSON *mole_diag_json(int timeline_secs)
     cJSON_AddNumberToObject(net, "rssi", rssi_now());
     wifi_ps_type_t ps = WIFI_PS_NONE; esp_wifi_get_ps(&ps);
     cJSON_AddStringToObject(net, "wifi_ps", ps == WIFI_PS_NONE ? "none" : ps == WIFI_PS_MIN_MODEM ? "min" : "max");
+    int8_t tx_qdbm = 0;
+    if (esp_wifi_get_max_tx_power(&tx_qdbm) == ESP_OK) cJSON_AddNumberToObject(net, "tx_dbm", tx_qdbm / 4.0);
     cJSON_AddNumberToObject(net, "gw_ping_sent", s_ping_sent_total);
     cJSON_AddNumberToObject(net, "gw_ping_lost", s_ping_lost_total);
     cJSON_AddNumberToObject(net, "gw_rtt_last_ms", atomic_load(&s_ping_rtt_last));

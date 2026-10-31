@@ -448,7 +448,7 @@ static void test_fluid_ring(void) {
     fluid_sim_destroy(h);
 }
 
-/* a listen on the water (fluid_ring.h): voice-driven drops, and only a whisper of a line */
+/* a listen on the water (fluid_ring.h): a fixed circle, and the voice's round waves from it */
 static fluid_ring_t g_rg;
 static float g_level;
 static void ring_tick_fill(fluid_sim_t *s, float t) {
@@ -456,7 +456,7 @@ static void ring_tick_fill(fluid_sim_t *s, float t) {
     fluid_ring_tick(&g_rg, 1.f / 30, true, g_level);
     fluid_target_ring(s, &g_rg, 0xb197fc, 0.f);
 }
-static void ring_old(fluid_sim_t *s, float t) {        /* the ring before: a breathing band */
+static void ring_old(fluid_sim_t *s, float t) {        /* the first ring: a stronger band */
     (void)t;
     fluid_target_arc(s, 0.875f + 0.006f, 0.022f, 0.f, 6.2831853f, 0.8f, 0xb197fc, 0.f);
 }
@@ -478,7 +478,7 @@ static void test_ring_ripples(void) {
     run_arcs(s, 45, ring_tick_fill);
     run_arcs(z, 45, NULL);
     run_arcs(o, 45, ring_old);
-    /* still a whole (faint) ring of the fluid in its colour, the creature untouched in the middle */
+    /* a whole ring of the fluid in its colour, the creature untouched in the middle */
     int lit = 0, tinted = 0; float cr, cg, cb;
     rgb_of(0xb197fc, &cr, &cg, &cb);
     for (int q = 0; q < 24; q++) {
@@ -497,51 +497,45 @@ static void test_ring_ripples(void) {
     CHECK(tinted >= 20, "calm ring: %d/24 rays carry its colour", tinted);
     int kc = cell_of(s, 0.f, 0.f);
     CHECK(abs(s->view[kc] - z->view[kc]) / FQ_UNIT < 0.15f, "the creature in the middle stays");
-    /* thinner and softer than the old band: far less ink pooled at the edge */
+    /* softer than the first band: less ink pooled at the edge */
     double vs, ts, vo, to;
     ring_excess(s, z, &vs, &ts); ring_excess(o, z, &vo, &to);
     if (getenv("RING_STATS")) printf("  ring excess: target %.1f (old %.1f), view %.1f (old %.1f)\n", ts, to, vs, vo);
-    CHECK(ts < 0.35 * to && vs < 0.35 * vo, "calm ring not faint: target %.1f vs old %.1f, view %.1f vs old %.1f", ts, to, vs, vo);
+    CHECK(ts < 0.8 * to && vs < 0.8 * vo, "calm ring not softer: target %.1f vs old %.1f, view %.1f vs old %.1f", ts, to, vs, vo);
     fluid_sim_destroy(s); fluid_sim_destroy(z); fluid_sim_destroy(o);
 
-    /* quiet: only the odd small drop */
+    /* quiet: only the odd faint wave */
     fluid_ring_t r = { 0 };
     const float dt = 1.f / 30;
     int pq = 0;
     for (int f = 0; f < 900; f++) {                          /* 30 s */
-        if (fluid_ring_tick(&r, dt, true, 0.f)) { pq++; CHECK(r.drop_s == RING_QUIET_DROP_S, "quiet drop height %.2f", r.drop_s); }
+        if (fluid_ring_tick(&r, dt, true, 0.f)) { pq++; CHECK(r.ping_s == RING_QUIET_PING_S, "quiet wave height %.2f", r.ping_s); }
     }
-    CHECK(pq >= 7 && pq <= 9, "quiet: %d drops in 30 s", pq);
+    CHECK(pq >= 7 && pq <= 9, "quiet: %d waves in 30 s", pq);
 
     /* a room with a little noise under the voice threshold stays as quiet */
     int pn = 0;
     for (int f = 0; f < 900; f++) pn += fluid_ring_tick(&r, dt, true, 0.1f + 0.1f * ((f / 3) % 2));
-    CHECK(pn <= pq + 1, "room noise: %d drops vs %d quiet", pn, pq);
+    CHECK(pn <= pq + 1, "room noise: %d waves vs %d quiet", pn, pq);
 
-    /* syllables (a new level each 0.1 s, as vad_level): one drop per rise, louder is higher,
-     * each landing somewhere new inside the water */
+    /* syllables (a new level each 0.1 s, as vad_level): one wave per rise, louder is higher */
     fluid_ring_t v = { 0 };
     for (int f = 0; f < 15; f++) fluid_ring_tick(&v, dt, true, 0.f);
-    int ps = 0, overlap = 0; float gap_min = 1e9f, since = 1e9f, soft = 0.f, loud = 0.f, reach = 0.f, px = 9.f, py = 9.f;
-    for (int f = 0; f < 900; f++) {                          /* 30 s at 2 syllables/s */
-        const int beat = f % 15;
-        const float peak = (f / 15) % 4 == 3 ? 1.f : 0.4f;
+    int ps = 0; float gap_min = 1e9f, since = 1e9f, soft = 0.f, loud = 0.f;
+    for (int f = 0; f < 900; f++) {                          /* 30 s, a syllable each 1 s */
+        const int beat = f % 30;
+        const float peak = (f / 30) % 4 == 3 ? 1.f : 0.4f;
         since += dt;
         if (fluid_ring_tick(&v, dt, true, beat < 3 ? peak : 0.05f)) {
             ps++; gap_min = fminf(gap_min, since); since = 0.f;
-            if (peak == 1.f) loud = v.drop_s; else soft = v.drop_s;
-            reach = fmaxf(reach, sqrtf(v.drop_x * v.drop_x + v.drop_y * v.drop_y));
-            overlap += hypotf(v.drop_x - px, v.drop_y - py) < 2.f * RING_DROP_R;
-            px = v.drop_x; py = v.drop_y;
+            if (peak == 1.f) loud = v.ping_s; else soft = v.ping_s;
         }
     }
-    CHECK(ps >= 56 && ps <= 62, "voice: %d drops for 60 syllables", ps);
-    CHECK(fabsf(loud - RING_DROP_S_MAX) < 0.01f, "full voice is a fingertip: %.2f", loud);
-    CHECK(soft > RING_DROP_S_MIN && soft < 0.6f * loud, "a soft syllable is lower: %.2f vs %.2f", soft, loud);
-    CHECK(reach > 0.5f * RING_DROP_REACH && reach <= RING_DROP_REACH + 1e-3f, "drops reach %.2f", reach);
-    CHECK(overlap == 0, "%d drops landed on the one before", overlap);
+    CHECK(ps >= 28 && ps <= 31, "voice: %d waves for 30 syllables", ps);
+    CHECK(fabsf(loud - RING_PING_S_MAX) < 0.01f, "full voice height: %.2f", loud);
+    CHECK(soft > RING_PING_S_MIN && soft < 0.7f * loud, "a soft syllable is lower: %.2f vs %.2f", soft, loud);
 
-    /* the gap: a level jumping 0 ↔ 1 every frame never drops closer than RING_GAP_S */
+/* the gap: a level jumping 0 ↔ 1 every frame never drops closer than RING_GAP_S */
     fluid_ring_t g = { 0 };
     for (int f = 0; f < 15; f++) fluid_ring_tick(&g, dt, true, 0.f);
     int pg = 0; since = 1e9f; gap_min = 1e9f;
@@ -549,34 +543,58 @@ static void test_ring_ripples(void) {
         since += dt;
         if (fluid_ring_tick(&g, dt, true, f % 2 ? 1.f : 0.f)) { pg++; gap_min = fminf(gap_min, since); since = 0.f; }
     }
-    CHECK(gap_min >= RING_GAP_S - 0.001f, "machine gun: drops %.3f s apart", gap_min);
-    CHECK(pg >= 28 && pg <= 34, "jittering voice: %d drops in 10 s", pg);
+    CHECK(gap_min >= RING_GAP_S - 0.001f, "machine gun: waves %.3f s apart", gap_min);
+    CHECK(pg >= 14 && pg <= 19, "jittering voice: %d waves in 10 s", pg);
+
+    /* the voice plays the water: a murmur's waves are lower and further apart than full voice */
+    {
+        float h[2] = {0}; int cnt[2] = {0};
+        const float lv[2] = { 0.3f, 1.f };
+        for (int q = 0; q < 2; q++) {
+            fluid_ring_t a = { 0 };
+            for (int f = 0; f < 15; f++) fluid_ring_tick(&a, dt, true, 0.f);
+            for (int f = 0; f < 600; f++) if (fluid_ring_tick(&a, dt, true, f % 6 < 2 ? lv[q] : 0.f)) { cnt[q]++; h[q] = a.ping_s; }
+        }
+        CHECK(h[0] < 0.5f * h[1], "a murmur's wave is not lower: %.2f vs %.2f", h[0], h[1]);
+        CHECK(cnt[0] < cnt[1], "a murmur's waves are not further apart: %d vs %d", cnt[0], cnt[1]);
+    }
 
     /* a held level never repeats like a rise: only the slow RING_HOLD_S pulse */
     fluid_ring_t l = { 0 };
     for (int f = 0; f < 15; f++) fluid_ring_tick(&l, dt, true, 0.f);
     int ph = 0, ph_first = 0;
     for (int f = 0; f < 300; f++) { const int d = fluid_ring_tick(&l, dt, true, 1.f); ph += d; if (f < 15) ph_first += d; }
-    CHECK(ph_first == 1, "one rise, %d drops in its first 0.5 s", ph_first);
-    CHECK(ph >= 15 && ph <= 20, "held voice: %d drops in 10 s", ph);
+    CHECK(ph_first == 1, "one rise, %d waves in its first 0.5 s", ph_first);
+    CHECK(ph >= 8 && ph <= 11, "held voice: %d waves in 10 s", ph);
 
-    /* a drop is the touch impulse: rings spread through the real sim from where it lands */
+    /* a wave rises all round the circle at once, runs inward to the centre, and stays round;
+     * the circle itself stays put: pinned on the view, whatever the wave does under it */
     {
         fluid_sim_t *w = fluid_sim_create(52, 32, FLUID_STAGE_REF);
-        fluid_sim_impulse(w, 0.3f, 0.2f, RING_DROP_S_MAX, RING_DROP_R);
-        const int kd = cell_of(w, 0.3f, 0.2f), kf = cell_of(w, 0.3f, -0.1f);
-        CHECK(w->h[kd] > 0 && w->h[kf] == 0, "drop: %d at the spot, %d far off", w->h[kd], w->h[kf]);
-        for (int f = 0; f < 24; f++) fluid_sim_step(w, 1.f / 60);
-        CHECK(w->h[kf] != 0, "the ripple never spread");
+        fluid_ring_t rw = { .on = 1.f, .ink = RING_INK, .ping_s = RING_PING_S_MAX };
+        const float rb = RING_R - RING_PING_IN;
+        int risen = 0;
+        fluid_ring_ping(w, &rw);
+        for (int q = 0; q < 24; q++) {
+            const float a = 6.2831853f * q / 24;
+            risen += w->h[cell_of(w, rb * sinf(a), -rb * cosf(a))] > (int)(0.3f * RING_PING_S_MAX * FQ_H);
+        }
+        CHECK(risen >= 22, "ping: %d/24 points of the circle rose", risen);
+        const int kc0 = cell_of(w, 0.f, 0.f);
+        CHECK(w->h[kc0] == 0, "ping touched the centre at once");
+        int peak_c = 0;
+        for (int f = 0; f < 180; f++) { fluid_sim_step(w, 1.f / 60); peak_c = fmax(peak_c, abs(w->h[kc0])); }
+        CHECK(peak_c > (int)(0.1f * RING_PING_S_MAX * FQ_H), "the wave never reached the centre: %d", peak_c);
         fluid_sim_destroy(w);
+
     }
 
-    /* off: melts out within the fade, no drops, and a faded line writes nothing */
+/* off: melts out within the fade, no waves, and a faded line writes nothing */
     int poff = 0;
     for (int f = 0; f * dt < RING_FADE_S + dt; f++) { const int d = fluid_ring_tick(&v, dt, false, 1.f); if (v.on <= 0.5f) poff += d; }
     CHECK(v.on == 0.f, "off: still %.2f after the fade", v.on);
     for (int f = 0; f < 150; f++) poff += fluid_ring_tick(&v, dt, false, 1.f);
-    CHECK(poff == 0 && v.lvl < 0.05f, "off: %d drops, level %.2f", poff, v.lvl);
+    CHECK(poff == 0 && v.lvl < 0.05f, "off: %d waves, level %.2f", poff, v.lvl);
     fluid_sim_t *e = fluid_sim_create(52, 32, FLUID_STAGE_REF);
     fluid_target_blob(e, 0.f, 1.f, 0.f, 0.f);
     int16_t *T0 = malloc((size_t)e->N * 2); memcpy(T0, e->T, (size_t)e->N * 2);

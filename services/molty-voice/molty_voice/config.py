@@ -58,6 +58,11 @@ class Config:
     reflex: bool = False
     reflex_model: str = "SamLowe/roberta-base-go_emotions-onnx"
     reflex_threads: int = 4
+    # First words (molty_voice/opener.py): a very small model on Ollama starts Molty's reply, offered
+    # to the relay (voice.hello opener) when on and the model answers. The owner's `first_words` picks it.
+    opener: bool = False
+    opener_url: str = "http://127.0.0.1:11434"
+    opener_model: str = "gemma3:4b"
 
     def __repr__(self) -> str:  # never show the token
         d = asdict(self)
