@@ -949,7 +949,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const data = isRecord(frame.data) ? frame.data : {};
     this.lastEvents.set(frame.name, { data, at: this.clock.now() });
     if (this.lastEvents.size > 32) this.lastEvents.delete(this.lastEvents.keys().next().value!);
-    if (frame.name === "say.done" && typeof data.job === "string") this.sayDone.get(data.job)?.();
+    if (frame.name === "say.done" && typeof data.job === "string") {
+      this.sayDone.get(data.job)?.();
+      this.sayWake.get(data.job)?.(); // it may be late: the wait for a replacement socket ends here too
+    }
     if (frame.name === "link_code") await this.onLinkCode(data.link_code);
     if (frame.name === "answer") return this.onAnswer(data); // its inbox event is appended when the ask job ends
     if (frame.name === "update") return this.onUpdateEvent(data); // relay-internal: drives the molty_update job
@@ -2290,6 +2293,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
           if (!untilDone || silent) break;
           silent = true;
           await this.waitForReplacement(id, sock!);
+          if (done) void this.setJob(id, { status: "running" });
         }
         // untilDone (talk): only the device's say.done proves the speaker is free. An
         // elapsed estimate is not playback: never report success (or open the mic) on it.
