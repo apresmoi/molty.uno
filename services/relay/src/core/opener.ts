@@ -147,9 +147,20 @@ export function guardOpener(line: unknown, human: string, history: readonly Open
   if (/\bme\b/.test(ws.join(" ").replace(/\b(let|give) me\b/g, "")) || (ws.includes("my") && said.has("my"))) return { ok: false, why: "parrot" };
   if (/\d/.test(text) && !(text.match(/\d+/g) ?? []).every((n) => said.has(n))) return { ok: false, why: "number" };
   for (const w of ws) if (NUMBER_WORDS.has(w) && !said.has(w)) return { ok: false, why: "number" };
-  for (const [re, why] of CLAIMS) if (re.test(text) && !re.test(human)) return { ok: false, why };
+  const straight = text.replace(/’/g, "'");
+  for (const [re, why] of CLAIMS) if (re.test(straight) && !re.test(human)) return { ok: false, why };
+  // "It went to Ana": a sentence about the world, which only the agent can know
+  if (/^(it|she|he|they|we)\b/i.test(straight)) return { ok: false, why: "result" };
   const known = new Set([...said, ...history.flatMap((m) => tokens(m.text))]);
-  for (const w of ws) if (!COMMON.has(w) && !knownWord(w, known)) return { ok: false, why: "unknown_word" };
+  // it only fills the gap: new plain words may pass, a new name may not. A capital mid-line is a
+  // name; a sentence's first word has a capital anyway, so only forms that can't be one pass there
+  const raw = text.match(/[\p{L}\p{N}]+(?:['’][\p{L}]+)?/gu) ?? [];
+  for (let i = 0; i < raw.length; i++) {
+    const w = raw[i]!.toLowerCase().replace(/’/g, "'");
+    if (COMMON.has(w) || knownWord(w, known) || !/^\p{Lu}/u.test(raw[i]!)) continue;
+    if (i === 0 && /(ing|ly|ful)$/.test(w)) continue;
+    return { ok: false, why: "unknown_word" };
+  }
   return { ok: true, text };
 }
 
