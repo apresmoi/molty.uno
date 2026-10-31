@@ -554,6 +554,19 @@ describe("keep audio for debugging (owner only)", () => {
 describe("review round 1: the trace survives a relay-side end and a failed STT", () => {
   const TR = { wall: 1400, cap: 1060, sent: 3, fail: 0, r0: -70, r1: -71, gain: 6, pk: 500 };
 
+  it("a box's end of turn says where its time went: silence, the model's lag, the settings", async () => {
+    const w = await setup({ box: true });
+    const talk = w.room.talk(w.token, {});
+    await until(() => !!w.dev.lastListen() && !!w.box!.sttId());
+    const job = w.dev.lastListen().job;
+    const id = w.box!.sttId();
+    await w.dev.frame(job, { seq: 0, ct: 0, lv: "a0" }, 4800, 11); // 300 ms of audio reached the relay
+    await w.box!.say({ t: "stt.trace", id, trace: { thr: 0.6, hold_s: 1.2, words: [["hi", 0.1, 0.15]], end: { at: 0.25, rule: "hold" } } });
+    await w.box!.say({ t: "stt.turn_end", id });
+    const r = (await talk) as any;
+    expect(r.result.timings.listen.end_of_turn).toEqual({ silence_ms: 100, behind_ms: 50, rule: "hold", thr: 0.6, hold_s: 1.2 });
+  });
+
   it("P1: after the box's turn end the device's end frame (its tr) still lands in the job's trace — header only, never audio; the agent's result does not wait", async () => {
     const w = await setup({ box: true, finalTrace: BOX_TRACE });
     const talk = w.room.talk(w.token, {});
