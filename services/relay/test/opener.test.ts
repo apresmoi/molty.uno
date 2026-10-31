@@ -35,6 +35,13 @@ describe("guardOpener", () => {
     expect(guardOpener("It’s almost midnight,", "what time is it?", []).ok).toBe(false);
     expect(guardOpener("It fluctuates wildly,", "how much is a bitcoin?", []).ok).toBe(false);
   });
+  it("refuses a statement, a hidden yes or number, and a promise, but an acknowledgement passes", () => {
+    expect(guardOpener("Berlin was quite busy,", "what's it like in Berlin?", [])).toEqual({ ok: false, why: "result" });
+    expect(guardOpener("Bueno, sí, so", "ganó el partido?", [])).toEqual({ ok: false, why: "verdict" });
+    expect(guardOpener("Roughly, so billions.", "how old is the universe?", [])).toEqual({ ok: false, why: "number" });
+    expect(guardOpener("Sure, I will.", "is it going to rain tomorrow?", []).ok).toBe(false);
+    expect(guardOpener("Got it, softer, so", "make it softer", []).ok).toBe(true);
+  });
   it("still refuses an answer to a yes or no question", () => {
     expect(guardOpener("Enough for tonight, certainly.", "is that enough for tonight?", []).ok).toBe(false);
   });

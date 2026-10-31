@@ -3,10 +3,9 @@
 //   turn end ─▶ the box's small model (molty_voice/opener.py; the last few messages + the human's
 //   words) ─▶ guardOpener ─▶ TTS ─▶ Molty speaks ─▶ the agent continues from `opener`
 //
-// The model only starts a sentence: it knows nothing the agent knows. So the guard is a whitelist,
-// not a blacklist: every word of the line must be the human's, come from the recent conversation,
-// or be a common filler word. A name or a fact the model made up has nowhere to come from, and
-// the fallback is silence, never a generic line.
+// The model only starts a sentence and knows nothing the agent knows: the line just fills the gap.
+// So new plain words may pass, but a name, a number, a yes or no, a result or a statement about the
+// world may not. The fallback is silence, never a generic line.
 
 export const FIRST_WORDS_MODES = ["off", "opener"] as const;
 export type FirstWordsMode = (typeof FIRST_WORDS_MODES)[number];
@@ -83,6 +82,8 @@ const LEAD_INS = set("ok okay alright right sure yeah well so hmm hm ah oh ugh h
 const YES_NO = /^(is|are|was|were|am|did|do|does|has|have|had|can|could|will|would|should|isn't|aren't|didn't|doesn't|won't|es|son|fue|está|hay|tiene)\b/i;
 const SPANISH = /[áéíóúñ¿¡]|\b(que|de|el|la|los|las|un|una|por|para|hola|como|cuanto|estoy|mi)\b/i;
 
+const VERDICTS = set("yes yup yep nope si");
+
 const NUMBER_WORDS = set(`
   zero two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen
   eighteen nineteen twenty thirty forty fifty sixty seventy eighty ninety hundred thousand million billion half
@@ -94,7 +95,7 @@ const CLAIMS: Array<[RegExp, string]> = [
   [/^(yes|no|nope|yup|si|sí)\b/i, "verdict"],
   [/\b(done|finished|completed|listo|hecho|terminado|termine|termin[eé]|encontr[eé]|arreglado)\b/i, "claim"],
   [/\bi(?:'ve| have)\s+\p{L}+/iu, "claim"],
-  [/\b(found|fixed|sent|added|saved|booked|scheduled|reminded|created|updated|deleted|called|played|got it)\b/i, "claim"],
+  [/\b(found|fixed|sent|added|saved|booked|scheduled|reminded|created|updated|deleted|called|played|i will|i'll)\b/i, "claim"],
   [/\b(took|takes|took a|equals|because)\b/i, "result"],
   [/\b(it's|it is|it was|it will|there's|there is|there are|they are|they're|answer is|result is)\b/i, "result"],
   [/\b(es|son|fue|fueron|será|sera|hay)\b/i, "result"],
@@ -146,11 +147,12 @@ export function guardOpener(line: unknown, human: string, history: readonly Open
   // "remind me to call my sister" → "calling my sister": their words, the wrong person
   if (/\bme\b/.test(ws.join(" ").replace(/\b(let|give) me\b/g, "")) || (ws.includes("my") && said.has("my"))) return { ok: false, why: "parrot" };
   if (/\d/.test(text) && !(text.match(/\d+/g) ?? []).every((n) => said.has(n))) return { ok: false, why: "number" };
-  for (const w of ws) if (NUMBER_WORDS.has(w) && !said.has(w)) return { ok: false, why: "number" };
+  for (const w of ws) if ((NUMBER_WORDS.has(w) || NUMBER_WORDS.has(w.replace(/s$/, ""))) && !said.has(w)) return { ok: false, why: "number" };
+  if (ws.some((w) => VERDICTS.has(w))) return { ok: false, why: "verdict" };
   const straight = text.replace(/’/g, "'");
   for (const [re, why] of CLAIMS) if (re.test(straight) && !re.test(human)) return { ok: false, why };
-  // "It went to Ana": a sentence about the world, which only the agent can know
-  if (/^(it|she|he|they|we)\b/i.test(straight)) return { ok: false, why: "result" };
+  // "It went to Ana", "Berlin was quite busy": a sentence about the world, which only the agent can know
+  if (/^(it|she|he|they|we)\b/i.test(straight) || /\b(is|are|was|were|has|had|looks?|looked|seems?|seemed)\b/i.test(straight)) return { ok: false, why: "result" };
   const known = new Set([...said, ...history.flatMap((m) => tokens(m.text))]);
   // it only fills the gap: new plain words may pass, a new name may not. A capital mid-line is a
   // name; a sentence's first word has a capital anyway, so only forms that can't be one pass there
