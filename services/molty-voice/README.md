@@ -120,6 +120,14 @@ moshi-server on 127.0.0.1, and mounts the paired config read-only. Pair on the h
   the model's `prs[2]` under 0.3 for 3 steps restarts the clock, and a loud frame in the last
   ~0.5 s postpones the verdict. `--turn-end-skip` sets how many 80 ms steps at a listen's start
   the end-of-turn rule ignores (default 12, as Unmute).
+- **Turn trace and hints** (`molty_voice/trace.py`): right before each `stt.turn_end` and before
+  `stt.final` the box sends `stt.trace` — the model's speech-activity spans, the pause estimate
+  (downsampled), every word with its start/stop time, the end-of-turn decision (when, which rule:
+  `punct` / `hold` / `unmute`, the word judged, the hold that elapsed) or the no-speech decision,
+  and the final's latency; ≤ 3 KB. The relay stores it with the turn (console › activity). While
+  you talk it sends `stt.hint` `pause` (a mid-sentence pause begins) and `question` (a word ends
+  in `?`), at most one per 1.5 s of audio: the relay passes them to Molty, which nods / glances
+  as a listener. Older relays ignore both.
 - **TTS:** One connection per request (the relay groups sentences up to ~220 characters for the
   box; connecting costs ~1 ms, so there is no pool). The box sends the words, then `Eos`. The
   24 kHz float audio streams back resampled to 16 kHz PCM16, in ≤ 16 KB frames. The quiet lead

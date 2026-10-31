@@ -18,6 +18,12 @@
         text: "yes please"                         # its transcript, for WER
       - id: quiet
         silence_s: 10                              # nobody speaks (expect no_speech)
+      - id: shaken
+        shake: {peak_g: 8.2, after_s: 0.45}        # the human shakes Molty: it listens by itself (shake to talk),
+        user: "Hey, are you there?"                #   handling noise for after_s from the mic start, then speech
+      - id: stalled
+        stall: {at_s: 1.5, for_s: 3.0}             # the uplink fails for 3 s from mic time 1.5 s (Wi-Fi stall)
+        user: "..."                                #   (a list of such windows works too)
       - id: persona                                # reserved: an LLM writes the line (not implemented yet)
         user: {llm: {persona: "...", prompt: "..."}}
     closing: "Okay, talk soon."                    # Molty's last line after the last turn (optional)
@@ -105,6 +111,8 @@ class Turn:
     expect: str = "turn_end"
     tags: list[str] = field(default_factory=list)
     llm: dict | None = None
+    shake: dict | None = None  # {peak_g, after_s, noise_peak}: shake to talk, with handling noise
+    stalls: list[tuple[float, float]] = field(default_factory=list)  # uplink stall windows (mic s)
 
 
 @dataclass
@@ -115,7 +123,8 @@ class Scenario:
     source: Path | None = None
 
 
-TURN_KEYS = {"id", "say", "user", "wav", "text", "silence_s", "voice", "lead_s", "level_db", "noise", "listen_ms", "expect", "tags"}
+TURN_KEYS = {"id", "say", "user", "wav", "text", "silence_s", "voice", "lead_s", "level_db", "noise", "listen_ms", "expect", "tags",
+             "shake", "stall"}
 DEFAULT_KEYS = {"voices", "lead_s", "level_db", "noise", "listen_ms", "voice"}
 
 
@@ -186,6 +195,20 @@ def parse(data: dict, source: Path | None = None) -> Scenario:
         else:
             t.kind = "silence"
             t.silence_s = _num(raw["silence_s"], f"{tid}.silence_s", 0.1, 300)
+        if raw.get("shake") is not None:
+            sh = raw["shake"]
+            if not isinstance(sh, dict) or set(sh) - {"peak_g", "after_s", "noise_peak"}:
+                raise ScenarioError(f"turn {tid}: shake must be a mapping of peak_g / after_s / noise_peak")
+            t.shake = {"peak_g": _num(sh.get("peak_g", 8.0), f"{tid}.shake.peak_g", 1.2, 16),
+                       "after_s": _num(sh.get("after_s", 0.4), f"{tid}.shake.after_s", 0, 2),
+                       "noise_peak": _num(sh.get("noise_peak", 0.9), f"{tid}.shake.noise_peak", 0, 1)}
+        if raw.get("stall") is not None:
+            st = raw["stall"]
+            for w in st if isinstance(st, list) else [st]:
+                if not isinstance(w, dict) or set(w) != {"at_s", "for_s"}:
+                    raise ScenarioError(f"turn {tid}: stall must be {{at_s, for_s}} or a list of them")
+                a = _num(w["at_s"], f"{tid}.stall.at_s", 0, 300)
+                t.stalls.append((a, a + _num(w["for_s"], f"{tid}.stall.for_s", 0.05, 30)))
         t.expect = raw.get("expect") or ("no_speech" if t.kind == "silence" else "turn_end")
         if t.expect not in EXPECTS:
             raise ScenarioError(f"turn {tid}: expect must be one of {EXPECTS}")
