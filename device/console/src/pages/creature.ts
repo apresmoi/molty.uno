@@ -1,6 +1,6 @@
 // Molty (settings): pick a Molty from the catalog (sent to the device as a .molty file),
 // and play with the fluid — state, speed-reader text + WPM, palette, listening ring colour,
-// listen window, turn acknowledgement, auto filler, shake to talk, idle life, tap-to-ripple.
+// shake to talk, gestures, idle life, tap-to-ripple. How Molty talks is on the voice page.
 import { UnsupportedError } from '../api/device';
 import type { FluidOrder, FluidState } from '../api/types';
 import type { AppCtx } from '../app';
@@ -9,9 +9,6 @@ import { h, mount, note } from '../ui/dom';
 import { debounce, errText } from '../ui/fmt';
 import { preview } from '../ui/preview';
 import { RING_CHOICES, ringChoice, ringSupported } from '../ring/ring';
-import { LISTEN_CHOICES, listenChoice, listenSupported } from '../listen/listen';
-import { ACK_CHOICES, ackChoice, ackSupported } from '../ack/ack';
-import { FILLER_CHOICES, fillerChoice, fillerSupported } from '../filler/filler';
 import { IDLE_CHOICES, idleChoice, idleSupported } from '../idle/idle';
 import { SHAKE_CHOICES, shakeChoice, shakeSupported } from '../shake/shake';
 import { GESTURE_ACTIONS, GESTURE_INPUTS, gestureChoice, gesturesSupported } from '../shake/gestures';
@@ -31,15 +28,6 @@ export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
   const palRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'palette' });
   const ringLabel = h('label', { hidden: true }, 'listening ring');
   const ringRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'listening ring colour', hidden: true });
-  const listenLabel = h('label', { hidden: true }, 'listen window');
-  const listenRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'listen window', hidden: true });
-  const listenHint = h('p', { class: 'dim small', hidden: true }, 'how long Molty listens at most when an agent doesn’t say — it stops as soon as you finish anyway; unlimited still stops after 5 minutes');
-  const ackLabel = h('label', { hidden: true }, 'acknowledge');
-  const ackRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'acknowledge', hidden: true });
-  const ackHint = h('p', { class: 'dim small', hidden: true }, 'what Molty does the moment you finish speaking, before the agent answers — so there is never dead air');
-  const fillerLabel = h('label', { hidden: true }, 'filler');
-  const fillerRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'filler', hidden: true });
-  const fillerHint = h('p', { class: 'dim small', hidden: true }, 'when the agent is still quiet this long after you finish, Molty says a short "hmm…" or "let me think" itself — the agent’s answer follows right after');
   const gestureRows = GESTURE_INPUTS.map((input) => ({
     input,
     label: h('label', { hidden: true }, input.label),
@@ -74,9 +62,6 @@ export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
         h('label', null, 'state'), stateRow,
         h('label', null, 'palette'), palRow,
         ringLabel, ringRow,
-        listenLabel, listenRow, listenHint,
-        ackLabel, ackRow, ackHint,
-        fillerLabel, fillerRow, fillerHint,
         shakeLabel, shakeRow, shakeHint,
         ...gestureRows.flatMap((g) => [g.label, g.row]), gestureHint,
         idleLabel, idleRow, idleHint,
@@ -106,24 +91,6 @@ export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
       h('button', { type: 'button', class: 'chip' + (ring === c.id ? ' on' : ''), 'aria-pressed': String(ring === c.id),
         style: c.id === 'accent' ? '' : `--sw:${c.value}`, onclick: () => order({ ring_color: c.value }) },
         c.id === 'accent' ? null : h('span', { class: 'swatch' }), c.id === 'accent' ? 'accent (default)' : c.id)));
-    const listenOn = listenSupported(s);   /* older firmware has no listen setting */
-    listenLabel.hidden = listenRow.hidden = listenHint.hidden = !listenOn;
-    const lw = listenChoice(s?.listen_ms);
-    if (listenOn) mount(listenRow, LISTEN_CHOICES.map((c) =>
-      h('button', { type: 'button', class: 'chip' + (lw === c.id ? ' on' : ''), 'aria-pressed': String(lw === c.id),
-        onclick: () => order({ listen_ms: c.ms }) }, c.label)));
-    const ackOn = ackSupported(s);   /* older firmware does not acknowledge turns itself */
-    ackLabel.hidden = ackRow.hidden = ackHint.hidden = !ackOn;
-    const ak = ackChoice(s?.ack);
-    if (ackOn) mount(ackRow, ACK_CHOICES.map((c) =>
-      h('button', { type: 'button', class: 'chip' + (ak === c.id ? ' on' : ''), 'aria-pressed': String(ak === c.id),
-        onclick: () => order({ ack: c.id }) }, c.label)));
-    const fillerOn = fillerSupported(s);   /* older firmware: the relay's default (2.5 s) */
-    fillerLabel.hidden = fillerRow.hidden = fillerHint.hidden = !fillerOn;
-    const fl = fillerChoice(s?.filler_ms);
-    if (fillerOn) mount(fillerRow, FILLER_CHOICES.map((c) =>
-      h('button', { type: 'button', class: 'chip' + (fl === c.id ? ' on' : ''), 'aria-pressed': String(fl === c.id),
-        onclick: () => order({ filler_ms: c.ms }) }, c.label)));
     const shakeOn = shakeSupported(s);   /* older firmware: a shake is only an event */
     shakeLabel.hidden = shakeRow.hidden = shakeHint.hidden = !shakeOn;
     const sk = shakeChoice(s?.shake_talk);
