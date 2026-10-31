@@ -81,8 +81,14 @@ void vRingbufferReturnItem(RingbufHandle_t r, void *p) { (void)r; free(p); }
 int xRingbufferSend(RingbufHandle_t r, const void *p, size_t n, unsigned t) {
     (void)t; if(n>r->cap-r->len) return 0; memcpy(r->data+r->len,p,n); r->len+=n; return pdTRUE;
 }
-void *heap_caps_malloc(size_t n, int caps) { (void)caps; return malloc(n); }
-void heap_caps_free(void *p) { free(p); }
+/* live blocks through the firmware's allocators (heap_caps_* here, cJSON via sdk_count_cjson):
+ * the soak tests (link_audio_pair_test.c test_soak) hold this flat across many turns */
+long sdk_heap_live;
+void *heap_caps_malloc(size_t n, int caps) { (void)caps; void *p=malloc(n); if (p) sdk_heap_live++; return p; }
+void heap_caps_free(void *p) { if (p) sdk_heap_live--; free(p); }
+static void *count_malloc(size_t n) { void *p=malloc(n); if (p) sdk_heap_live++; return p; }
+static void count_free(void *p) { if (p) sdk_heap_live--; free(p); }
+void sdk_count_cjson(void) { cJSON_Hooks h={.malloc_fn=count_malloc,.free_fn=count_free}; cJSON_InitHooks(&h); }
 size_t heap_caps_get_free_size(int caps) { (void)caps; return 100000; }
 int xTaskCreatePinnedToCoreWithCaps(void (*fn)(void *), const char *name, unsigned stack, void *arg, unsigned prio, void *out, int core, int caps) {
     (void)core; (void)caps; return xTaskCreate(fn, name, stack, arg, prio, out);

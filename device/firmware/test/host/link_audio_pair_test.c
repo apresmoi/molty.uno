@@ -931,12 +931,63 @@ static void test_reactions(void) {
     sdk_rx_fill=NULL; hint_at_chunk=-1;
 }
 
+/* Soak: an hour of turns, many times over — every allocation a turn makes is given back on
+ * every path (the internal-RAM leak hunt of 2026-10-31: a starved heap killed Wi-Fi after ~1 h).
+ * One round = what a Grok turn does on the link: a quick phrase / filler and a reply (say with
+ * word cues + marks), a listen with partial reactions, box hints and a relay reaction, a shake
+ * listen adopted and ended by the relay, one declined, a listen cancelled mid-way (link down),
+ * one whose sends fail and resend, a listen_stop no_speech, a cancelled say, a say whose
+ * stream is malformed, a say whose speaker fails. Live blocks (heap_caps_* + cJSON) must not
+ * move across SOAK_ROUNDS rounds — one block lost per turn fails it. */
+#define SOAK_ROUNDS 200
+static void stop_at_chunk_10_no_speech(int16_t *buf,size_t n,unsigned chunk) {
+    memset(buf,0,n*2);
+    if (chunk==10) stop_no_speech();
+}
+static void soak_round(void) {
+    audio_job_t job;
+    /* the quick phrase / filler, then the reply: say {cues, marks} */
+    mark_n=0; cue_n=0; cue_last=-9;
+    assert(say_with(",\"cues\":true,\"marks\":[[0,\"happy\"],[2,\"nod\"],[4,\"wiggle\"]]"));
+    assert(receive_cued(0,false,"[[0,0],[1,3000]]")==ESP_OK && receive_cued(1,true,"[[2,6000],[3,9000]]")==ESP_OK);
+    complete(play());
+    /* listen with the reflex reacting over the link, box hints, the device's own reactions */
+    mark_n=0; listen_job_with(3000,",\"vad\":false",&job); sdk_rx_fill=react_fill; hint_at_chunk=15; hint_kind="pause"; ext_at_chunk=5;
+    sdk_rx_chunks=0; complete(record(&job)); sdk_rx_fill=NULL; hint_at_chunk=-1; ext_at_chunk=-1;
+    /* shake → local listen → adopted → the relay's end of turn; then one declined */
+    if (shake(&job) && talked()) { stop_at=10; shake_run(&job,3,",\"vad\":false"); }
+    if (shake(&job) && talked()) { decline_at=3; shake_run(&job,-1,NULL); }
+    /* the link drops mid-listen (link_client.c disconnect → link_audio_cancel) */
+    listen_job_with(3000,",\"vad\":false",&job); sdk_rx_chunks=0; sdk_rx_fill=shake_fill; cancel_at=5;
+    complete(record(&job)); sdk_rx_fill=NULL; cancel_at=-1;
+    /* weak Wi-Fi: sends fail, frames resend */
+    listen_job_with(1000,",\"vad\":false",&job); send_fail_left=3; complete(record(&job)); send_fail_left=0;
+    /* nobody spoke: the relay's listen_stop no_speech */
+    listen_job_with(5000,",\"vad\":false",&job); sdk_rx_chunks=0; sdk_rx_fill=stop_at_chunk_10_no_speech;
+    complete(record(&job)); sdk_rx_fill=NULL;
+    /* a say cancelled, a say whose stream is malformed, a say whose speaker fails */
+    begin_say(); receive_pcm(0,false); link_audio_cancel(); complete(play());
+    assert(say_with(",\"cues\":true")); assert(receive_cued(0,false,"[[0]]")==ESP_ERR_INVALID_ARG); complete(play());
+    begin_say(); receive_pcm(0,true); sdk_play_error=ESP_FAIL; complete(play()); sdk_play_error=ESP_OK;
+    assert(!link_audio_busy());
+}
+static void test_soak(void) {
+    link_audio_relay_adopts(true); listen_setting=5000;
+    const uint32_t caps0=sdk_caps; sdk_caps&=~MOLTY_CAP_IMU;
+    soak_round();                                     /* warm-up: lazily created state settles */
+    const long live0=sdk_heap_live;
+    for (int i=0;i<SOAK_ROUNDS;i++) soak_round();
+    if (sdk_heap_live!=live0) { fprintf(stderr,"soak: %ld live blocks before, %ld after %d rounds\n",live0,sdk_heap_live,SOAK_ROUNDS); assert(0); }
+    sdk_caps=caps0;
+}
+
 int main(void) {
+    sdk_count_cjson();                    /* the soak counts cJSON blocks too */
     assert(link_audio_init()==ESP_OK && link_pair_init()==ESP_OK);
     s_up_inline = true;   /* no sender task on the host: record() sends as it queues */
-    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop(); test_listen_window(); test_say_cues(); test_say_marks(); test_chirp_sound(); test_ack(); test_shake_talk(); test_shake_settle(); test_resend(); test_reactions();
+    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop(); test_listen_window(); test_say_cues(); test_say_marks(); test_chirp_sound(); test_ack(); test_shake_talk(); test_shake_settle(); test_resend(); test_reactions(); test_soak();
     /* activity log: every accepted job (done, failed, cancelled, refused frames, adopted shakes) ended its tag */
     assert(sdk_job_begins>0 && sdk_job_begins==sdk_job_ends);
     cJSON_Delete(sdk_sent); free(s_jobs); free(s_done); free(s_ring);
-    puts("LINK AUDIO/PAIR PASS: job tags begin/end on every path, paced PCM, final playback drain, errors, cmd-time text/mood, explicit moods outlive jobs, pairing reasons, board caps, listening ring (+ ring_color), ask cancellation, listen_stop (turn_end; no_speech never acknowledged), listen window (30 s, unlimited, setting), say word cues follow playback, turn acknowledgement (chirp + thinking: which ends ack, opt-outs, setting, screen owners, cut by the next job), shake to talk (a local listen at once, adopted by the relay with its job id + end of turn and the audio replayed, or ending quietly: unclaimed / declined / link down; never over another owner, the setting, or a relay that does not adopt), shake settle trim (510 ms: stillness confirmed, capped 600, no IMU), uplink resend in order + overflow drops oldest + flush deadline, listener reactions (hints, warmup, idle off, owners, the relay's reaction never cut short, the baseline while a voice talks)");
+    puts("LINK AUDIO/PAIR PASS: job tags begin/end on every path, paced PCM, final playback drain, errors, cmd-time text/mood, explicit moods outlive jobs, pairing reasons, board caps, listening ring (+ ring_color), ask cancellation, listen_stop (turn_end; no_speech never acknowledged), listen window (30 s, unlimited, setting), say word cues follow playback, turn acknowledgement (chirp + thinking: which ends ack, opt-outs, setting, screen owners, cut by the next job), shake to talk (a local listen at once, adopted by the relay with its job id + end of turn and the audio replayed, or ending quietly: unclaimed / declined / link down; never over another owner, the setting, or a relay that does not adopt), shake settle trim (510 ms: stillness confirmed, capped 600, no IMU), uplink resend in order + overflow drops oldest + flush deadline, listener reactions (hints, warmup, idle off, owners, the relay's reaction never cut short, the baseline while a voice talks), soak: 200 turn rounds (say cues/marks, reacts/hints, shake adopt/decline, link drop, resend, no_speech, failed says) give back every block");
 }

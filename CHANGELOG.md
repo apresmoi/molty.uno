@@ -8,6 +8,18 @@ All notable changes to Molty are recorded here. One version covers the whole pro
 
 First public release.
 
+- **Wi-Fi comes back after a drop, and internal RAM defends itself**: the firmware never
+  reconnected a station that lost its AP (ESP-IDF does not do it by itself), so one weak-signal
+  drop left Molty offline until a reboot — no relay, no OTA over Wi-Fi — while internal RAM kept
+  sinking (2 KB after ~1 h, LCD flushes failing). Now a drop is retried (1 s doubling to 30 s,
+  for as long as it takes; never during a join or after a forget). While the station is down the
+  sampler no longer asks the driver for an rssi every second and the gateway ping pauses. A heap
+  guard watches internal free RAM: 3 s under 12 KB logs one `heap.low` with the suspects and
+  moves the fluid's hot fields to PSRAM (frees what it held; slower frames, never a starved
+  radio); `heap.ok` once 20 KB stay free. Timeline lines carry `blk=` (allocated internal
+  blocks) so a slow leak shows as a climbing count. Host tests: the reconnect and guard
+  policies, the shed, and a 200-round link soak that every allocation of a turn is given back.
+
 - **Molty's reflex**: Molty reacts by itself to what the human says while they talk, with any
   agent (also one that never reads partials). Each phrase of the voice box's live transcript is
   classified into a reaction (surprised, happy, sad, laugh, curious, none) and an utterance
