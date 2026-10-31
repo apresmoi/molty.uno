@@ -68,6 +68,27 @@ int main(void) {
     uplink_sent(&u); uplink_failed(&u); assert(u.sent == 2 && u.fail == 1);
     /* a frame bigger than a slot is refused */
     uplink_meta_t big = {.seq = 9, .n = UPLINK_SLOT_SAMPLES + 1}; assert(!uplink_push(&u, &big, pcm));
+    /* rewind: what went up stays until its slot is needed; the relay names where to go again */
+    uplink_reset(&u);
+    for (uint32_t s = 0; s < 5; s++) push(&u, s, false);
+    for (uint32_t s = 0; s < 3; s++) assert(send_ok(&u) == s);
+    assert(uplink_rewind(&u, 1) && uplink_pending(&u) == 4);
+    for (uint32_t s = 1; s < 5; s++) assert(send_ok(&u) == s);
+    assert(uplink_rewind(&u, 4) && uplink_pending(&u) == 1 && send_ok(&u) == 4);
+    assert(uplink_pending(&u) == 0 && !uplink_rewind(&u, 99));
+    uplink_reset(&u);
+    assert(uplink_rewind(&u, 0));                /* nothing yet: nothing to resend */
+    /* the ring reuses the oldest sent slots, never a queued frame */
+    for (uint32_t s = 0; s < 4; s++) push(&u, s, false);
+    for (uint32_t s = 0; s < 4; s++) assert(send_ok(&u) == s);
+    for (uint32_t s = 4; s < UPLINK_SLOTS + 2; s++) push(&u, s, false);
+    assert(uplink_pending(&u) == UPLINK_SLOTS - 2 && u.drop == 0);
+    assert(!uplink_rewind(&u, 0));               /* overwritten */
+    assert(!uplink_rewind(&u, UPLINK_SLOTS));    /* that slot holds a queued frame now, not a sent one */
+    assert(uplink_rewind(&u, 3));
+    assert(send_ok(&u) == 3);
+    /* in flight: not touched */
+    { const int16_t *p; uplink_peek(&u, &p); assert(!uplink_rewind(&u, 3)); uplink_failed(&u); }
     puts("UPLINK PASS: in order, resend keeps the seq (rt), overflow drops the oldest unsent (not in flight, never the end), drop_all, bounds");
     return 0;
 }

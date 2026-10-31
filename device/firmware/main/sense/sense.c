@@ -152,7 +152,7 @@ static void sense_task(void *arg)
             uint32_t age = 0;
             const uint32_t gen = link_audio_job_gen();
             const bool listening = link_audio_listening(&age);
-            switch (gesture_tap_route(listening, age, link_client_connected(), link_audio_say_waiting(), guarded)) {
+            switch (gesture_tap_route(listening, age, link_client_connected() || link_audio_held(), link_audio_say_waiting(), guarded)) {
             case GESTURE_TAP_STOP_LISTEN: mole_diag_event(false, "sense.tap stop listen"); link_audio_request(gen, LINK_AUDIO_REQ_STOP); break;
             case GESTURE_TAP_DROP_LISTEN: mole_diag_event(false, "sense.tap drop listen"); link_audio_request(gen, LINK_AUDIO_REQ_CANCEL); break;
             case GESTURE_TAP_CANCEL_SAY:  mole_diag_event(false, "sense.tap cancel say");  link_audio_request(gen, LINK_AUDIO_REQ_CANCEL); break;

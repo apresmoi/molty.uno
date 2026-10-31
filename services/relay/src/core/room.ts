@@ -54,7 +54,7 @@ import {
   type ActivityOwnerRequest,
 } from "./api.js";
 import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
-import { DEFAULT_WPM, WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, GESTURES_CAP, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
+import { DEFAULT_WPM, WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, GESTURES_CAP, RESUME_CAP, RESUME_FEATURE, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
 import { FIRST_WORDS_MODES, type FirstWordsMode, OPENER, type OpenerMessage, guardOpener, hangs, pushHistory, stripRepeat } from "./opener.js";
 import { PcmFeed, estimateSpeechMs, splitSpeech, synthesize } from "./speech.js";
 import { DEFAULT_PARTIAL_POLICY, DRAFT_DROPPED_EVENT, DRAFT_USED_EVENT, type DropReason, PARTIAL_EVENT, PartialChunker, PauseTracker, judgeDraft, words } from "./partials.js";
@@ -122,7 +122,7 @@ import {
   CLASSIFY_BUDGET_MS,
   type UtteranceClassifier,
 } from "./phrases.js";
-import { ListenTrace, SeqOrder, TRACE_LIMITS, capTrace } from "./trace.js";
+import { ListenTrace, SeqOrder, TRACE_LIMITS, capTrace, turnEndTiming } from "./trace.js";
 import { AUDIO_KEEP, AUDIO_PREFIX, AudioKeep, wav } from "./audio-keep.js";
 import { DEFAULT_LIVELINESS, EngineBench, LIVELINESS, type Liveliness, REFLEX, REFLEX_MODES, REFLEX_SHOW, REFLEX_SOFT, type ReflexEngine, isLiveliness, type ReflexMode, type ReflexPick, ReflexSession, UTTERANCE_CATEGORIES, type UtteranceCategory, categoryOf, keywordCategory, parseBoxReflex, resolveEngine } from "./reflex.js";
 
@@ -173,6 +173,10 @@ export interface RoomTimings {
   sayLeadFrames: number;
   /** talk: after the stream's playback end, how long to wait for the device's say.done before opening the mic. */
   sayDoneGraceMs: number;
+  /** A dropped device (cap `resume`) may come back this long after it went: its say and listen wait. */
+  resumeWindowMs: number;
+  /** A say is not picked up from audio sent longer ago than this: the moment has passed. */
+  resumeMaxAgeMs: number;
   /** Automatic `thinking` hold after end of speech. */
   thinkHoldS: number;
   /** Longest a blocking talk call holds the request before answering {status:"pending"}. */
@@ -207,6 +211,8 @@ export const DEFAULT_TIMINGS: RoomTimings = {
   sayChunkSamples: 5120, // 320 ms, 10240 B
   sayLeadFrames: 3,
   sayDoneGraceMs: 2500,
+  resumeWindowMs: 20000, // the device gives up at LINK_RESUME_WINDOW_MS (15 s), and the relay may notice later
+  resumeMaxAgeMs: 20000,
   thinkHoldS: THINK_HOLD_S,
   talkBudgetMs: TALK_BUDGET_MS,
   collectGraceMs: 5000,
@@ -375,12 +381,18 @@ interface ListenBuffer {
   boxFailed?: boolean;
   /** The device's socket closed (or was replaced) before its end frame. */
   lost?: boolean;
+  /** The socket went and the device may come back (cap `resume`): gives the listen up after resumeWindowMs. */
+  holdTimer?: unknown;
+  /** Moves the listen's backstop: its frames arrive late after a drop. */
+  extend?: () => void;
   /** The device ended the listen with reason "error": its capture failed. */
   captureFailed?: boolean;
   /** The auto filler delay for this turn (core/phrases.ts fillerMs of the listen's ack). */
   fillerMs?: number;
   /** The turn trace being gathered (core/trace.ts). */
   trace: ListenTrace;
+  /** Where the box's end of turn spent its time (turnEndTiming). */
+  turnEnd?: JsonObject;
   /** Frames in seq order (the device resends what failed; core/trace.ts SeqOrder). */
   order: SeqOrder<DecodedAudio>;
   /** Gives a seq gap up after TRACE_LIMITS.gapMs. */
@@ -641,6 +653,11 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private readonly jobWaiters = new Map<string, Set<() => void>>();
   private readonly tasks = new Set<string>();
   private readonly sayDone = new Map<string, () => void>();
+  /** Says in progress: a device coming back picks these up (its hello's `resume`). */
+  private readonly sayActive = new Set<string>();
+  /** What the hello said about a say; undefined `next`: the device no longer has it. */
+  private readonly sayResumed = new Map<string, { next?: number; done?: boolean }>();
+  private readonly sayWake = new Map<string, () => void>();
   /** Asks shown (or being shown) on the device, by job: the device's `answer` resolves them. */
   private readonly pendingAsks = new Map<string, PendingAsk>();
   private listenBuf: ListenBuffer | undefined;
@@ -802,14 +819,14 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (sock.getMeta()?.stage !== "live") return;
     // The runtime may still list the closing socket; anything else live is a replacement.
     if (this.liveSocket(sock)) return;
-    this.dropInFlight("device_offline");
+    this.dropInFlight("device_offline", !!sock.getMeta()?.caps?.includes(RESUME_CAP));
   }
 
   private liveSocket(except?: DeviceSocket): DeviceSocket | undefined {
     return this.host.sockets().find((s) => (!except || !s.same(except)) && s.getMeta()?.stage === "live");
   }
 
-  private dropInFlight(error: string) {
+  private dropInFlight(error: string, resumable = false) {
     // the device is gone: no end frame will come — a trace tail ends now (its entry without tr)
     this.traceTail?.done();
     for (const [id, p] of this.pendingCmds) {
@@ -818,15 +835,67 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       p.resolve(fail(error));
     }
     if (this.listenBuf && !this.listenBuf.ended) {
-      this.listenBuf.ended = true;
-      this.listenBuf.lost = true; // the device went away mid-listen: an error, never "nobody spoke"
-      this.listenBuf.wake?.();
+      if (resumable) this.holdListen(this.listenBuf);
+      else this.loseListen(this.listenBuf);
     }
+    if (resumable) for (const id of this.sayActive) void this.setJob(id, { status: "reconnecting" });
     // The device that showed the question is gone: nobody can answer it.
     for (const [job, p] of this.pendingAsks) {
       this.pendingAsks.delete(job);
       p.resolve({ index: null, label: null, reason: "offline" });
     }
+  }
+
+  private loseListen(buf: ListenBuffer) {
+    this.clock.clearTimeout(buf.holdTimer);
+    buf.holdTimer = undefined;
+    buf.ended = true;
+    buf.lost = true; // the device went away mid-listen: an error, never "nobody spoke"
+    buf.wake?.();
+  }
+
+  /** The device keeps recording through a drop: the listen waits for it to come back and resend. */
+  private holdListen(buf: ListenBuffer) {
+    this.clock.clearTimeout(buf.holdTimer);
+    this.clock.clearTimeout(buf.gapTimer); // what the gap waits for comes after the resume
+    buf.extend?.();
+    buf.holdTimer = this.clock.setTimeout(() => {
+      if (this.listenBuf === buf && !buf.ended) this.loseListen(buf);
+    }, this.t.resumeWindowMs);
+    void this.setJob(buf.job, { status: "reconnecting" });
+  }
+
+  /**
+   * A device says hello: what it still holds (`resume`) meets what the relay waits for. Returns the
+   * welcome's answer: `ok:false` makes the device drop that job; a listen's `next` is the first
+   * frame the relay does not have (the device resends from there, also what died in its TCP buffers).
+   */
+  private settleResume(raw: unknown): JsonObject | undefined {
+    const r = isRecord(raw) && typeof raw.job === "string" ? raw : undefined;
+    const buf = this.listenBuf;
+    let answer: JsonObject | undefined;
+    if (r && r.kind === "listen" && buf && !buf.ended && buf.job === r.job) {
+      this.clock.clearTimeout(buf.holdTimer);
+      buf.holdTimer = undefined;
+      buf.extend?.();
+      void this.setJob(buf.job, { status: "running" });
+      answer = { job: buf.job, ok: true, next: buf.order.next };
+    } else if (r && r.kind === "say" && this.sayActive.has(r.job as string)) {
+      const id = r.job as string;
+      if (r.done === true) this.sayDone.get(id)?.();
+      this.sayResumed.set(id, { next: typeof r.next === "number" ? r.next : undefined, done: r.done === true });
+      this.sayWake.get(id)?.();
+      void this.setJob(id, { status: "running" });
+      answer = { job: id, ok: true };
+    } else if (r) answer = { job: r.job as string, ok: false };
+    // what the device did not name it no longer has: no need to wait out the window
+    if (buf && buf.holdTimer !== undefined && !(answer?.ok && answer.job === buf.job)) this.loseListen(buf);
+    for (const id of this.sayActive) {
+      if (answer?.ok && answer.job === id) continue;
+      this.sayResumed.set(id, {});
+      this.sayWake.get(id)?.();
+    }
+    return answer;
   }
 
   private async onHello(sock: DeviceSocket, frame: Record<string, unknown>) {
@@ -847,14 +916,16 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const previous = this.liveSocket(sock);
     sock.setMeta({ stage: "live", opened: sock.getMeta()?.opened ?? this.clock.now(), fw: hello.fw, caps: hello.caps, board: hello.board, since: this.clock.now() });
     if (previous) {
+      const resumable = !!previous.getMeta()?.caps?.includes(RESUME_CAP);
       previous.close(CLOSE_REPLACED, "replaced by a newer connection");
-      this.dropInFlight("device_offline");
+      this.dropInFlight("device_offline", resumable);
     }
+    const resume = this.settleResume(frame.resume);
     if (hello.link_code) await this.kv.put(K.link, { code: hello.link_code, at: this.clock.now() });
     await this.kv.put<DevInfo>(K.devinfo, { fw: hello.fw ?? null, board: hello.board ?? null, caps: hello.caps ?? null, at: this.clock.now() });
     // features: what this relay does for the device (listen_adopt: shake to talk, core/turns.ts);
     // now: the relay's clock (the device's time sync for log uploads); log: uploads welcome (core/activity.ts)
-    sock.sendText(JSON.stringify({ t: "welcome", features: [LISTEN_ADOPT_FEATURE], now: this.clock.now(), log: { max_lines: ACTIVITY_LIMITS.deviceLinesAdvertised } }));
+    sock.sendText(JSON.stringify({ t: "welcome", features: [LISTEN_ADOPT_FEATURE, RESUME_FEATURE], ...(resume ? { resume } : {}), now: this.clock.now(), log: { max_lines: ACTIVITY_LIMITS.deviceLinesAdvertised } }));
     await this.activity.device("connect", { fw: hello.fw ?? null, board: hello.board ?? null, ...(typeof frame.rssi === "number" ? { rssi: frame.rssi } : {}) });
     // Back from an update's reboot (or a reconnect during one): settle it by the version it runs.
     await this.settleUpdate(hello.fw ?? null);
@@ -2045,7 +2116,12 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const early = pick.box && !ready.cached; // cached audio is all there: cmd say with its exact length
     let sock: DeviceSocket | undefined;
     let cuesOn = false;
+    let resumable = false;
+    let cmdMs = 0;
+    this.sayActive.add(id);
     const sayCmd = (ms: number) => {
+      cmdMs = ms;
+      resumable = !!sock!.getMeta()?.caps?.includes(RESUME_CAP);
       const deviceArgs: JsonObject = { job: id, text, ms, rate: SAMPLE_RATE };
       if (voice) deviceArgs.voice = voice;
       // Firmware with say_cues shows each word when the speaker reaches it: the frames carry
@@ -2087,7 +2163,16 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         cmd = sayCmd(announced);
       }
       let cues: Array<[number, number]> = [];
-      const res = await cmd!;
+      let res = await cmd!;
+      if (!res.ok && res.error === "device_offline" && resumable) {
+        // the drop came first: the device still has the say (carry on), or never got it (ask again)
+        const back = await this.sayReattach(id);
+        const live = this.liveSocket();
+        if (live) {
+          sock = live;
+          res = back?.next !== undefined ? { ok: true, result: {} } : await sayCmd(cmdMs);
+        }
+      }
       if (!res.ok) return { ok: false, error: res.error };
 
       let done = false;
@@ -2102,20 +2187,56 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       let samples = 0;
       let ended = false;
       let tSynth = feed.done ? tFirst : 0;
+      // every frame so far: a device coming back gets what it missed, same seq, same cues
+      const sentFrames: Array<{ bytes: Uint8Array; ms: number; at: number }> = [];
+      const out = (live: DeviceSocket, bytes: Uint8Array, ms: number) => {
+        sentFrames.push({ bytes, ms, at: this.clock.now() });
+        try {
+          live.sendBinary(bytes);
+        } catch (e) {
+          if (!resumable) throw e; // else it goes again from the device's own count
+        }
+      };
+      /** The device's socket, after waiting for it through a drop and giving it what it missed. */
+      const liveNow = async (): Promise<DeviceSocket> => {
+        for (;;) {
+          const live = this.liveSocket();
+          if (live && live.same(sock!)) return live;
+          if (!resumable) throw new CodedError("device_offline");
+          const back = await this.sayReattach(id);
+          if (done) return this.liveSocket() ?? sock!;
+          if (back?.next === undefined) throw new CodedError("device_offline");
+          sock = this.liveSocket();
+          if (!sock) throw new CodedError("device_offline");
+          const missed = sentFrames.slice(back.next);
+          if (missed.length && this.clock.now() - missed[0].at > this.t.resumeMaxAgeMs) throw new CodedError("device_offline");
+          playEnd = this.clock.now();
+          for (const f of missed) {
+            const w = playEnd - lead - this.clock.now();
+            if (w > 0) await sleep(this.clock, w);
+            if (!this.liveSocket()?.same(sock)) break; // dropped again: the loop waits again
+            try {
+              sock.sendBinary(f.bytes);
+            } catch {
+              break;
+            }
+            playEnd = Math.max(playEnd, this.clock.now()) + f.ms;
+          }
+        }
+      };
       const send = async (pcm: Int16Array, end: boolean) => {
         if (seq > 0) {
           const w = playEnd - lead - this.clock.now();
           if (w > 0) await sleep(this.clock, w);
         }
-        const live = this.liveSocket();
-        if (!live || !live.same(sock!)) throw new CodedError("device_offline");
+        const live = await liveNow();
         if (cuesOn) absorbCues(cues);
         // cues ride ahead of (or with) their audio; more than a header holds go in header-only frames first
         while (cuesOn && end && cues.length > SAY_CUES_PER_FRAME) {
-          live.sendBinary(encodeAudioFrame({ s: id, seq: seq++, kind: "pcm16", rate: SAMPLE_RATE, end: false, w: cues.splice(0, SAY_CUES_PER_FRAME) }, new Uint8Array(0)));
+          out(live, encodeAudioFrame({ s: id, seq: seq++, kind: "pcm16", rate: SAMPLE_RATE, end: false, w: cues.splice(0, SAY_CUES_PER_FRAME) }, new Uint8Array(0)), 0);
         }
         const w = cuesOn && cues.length ? cues.splice(0, SAY_CUES_PER_FRAME) : undefined;
-        live.sendBinary(encodeAudioFrame({ s: id, seq: seq++, kind: "pcm16", rate: SAMPLE_RATE, end, ...(w ? { w } : {}) }, pcm16ToBytes(pcm)));
+        out(live, encodeAudioFrame({ s: id, seq: seq++, kind: "pcm16", rate: SAMPLE_RATE, end, ...(w ? { w } : {}) }, pcm16ToBytes(pcm)), (pcm.length * 1000) / SAMPLE_RATE);
         const now = this.clock.now();
         if (!firstSent) firstSent = now;
         lastSent = now;
@@ -2156,8 +2277,20 @@ export class DeviceRoom implements AgentApi, OwnerApi {
           await wait(carry.length ? hungryIn : this.t.ttsTimeoutMs);
         }
         // Playback ends ~ when the stream would have, unless the device says so first.
-        const left = playEnd - this.clock.now() + (untilDone ? this.t.sayDoneGraceMs : 0);
-        if (left > 0 && !done) await Promise.race([doneSignal, sleep(this.clock, left)]);
+        let silent = false; // the socket looked fine and the device went quiet: it may be on its way back
+        for (;;) {
+          const left = playEnd - this.clock.now() + (untilDone ? this.t.sayDoneGraceMs : 0);
+          if (left > 0 && !done) await Promise.race([doneSignal, sleep(this.clock, left), new Promise<void>((r) => this.sayWake.set(id, r))]);
+          this.sayWake.delete(id);
+          if (done || !resumable) break;
+          if (!this.liveSocket()?.same(sock!)) {
+            await liveNow();
+            continue;
+          }
+          if (!untilDone || silent) break;
+          silent = true;
+          await this.waitForReplacement(id, sock!);
+        }
         // untilDone (talk): only the device's say.done proves the speaker is free. An
         // elapsed estimate is not playback: never report success (or open the mic) on it.
         if (untilDone && !done) return { ok: false, error: this.liveSocket()?.same(sock!) ? "playback_timeout" : "device_offline" };
@@ -2173,6 +2306,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         return { ok: false, error: errorCode(e) };
       } finally {
         this.sayDone.delete(id);
+        this.sayWake.delete(id);
       }
       const tEnd = this.clock.now();
       if (pick.box && !ready.cached) await this.noteBoxStats({ tts_first_audio_ms: tFirst - t0, tts_at: tEnd });
@@ -2193,8 +2327,44 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     } catch (e) {
       return { ok: false, error: errorCode(e) };
     } finally {
+      this.sayActive.delete(id);
+      this.sayResumed.delete(id);
       feed.end(); // stops synthesis nobody will play
     }
+  }
+
+  /** Waits for the device's hello to say what became of this say (undefined: the window passed). */
+  private async sayReattach(id: string): Promise<{ next?: number; done?: boolean } | undefined> {
+    let got = this.sayResumed.get(id);
+    if (!got) {
+      void this.setJob(id, { status: "reconnecting" });
+      await new Promise<void>((resolve) => {
+        const timer = this.clock.setTimeout(resolve, this.t.resumeWindowMs);
+        this.sayWake.set(id, () => {
+          this.clock.clearTimeout(timer);
+          resolve();
+        });
+      });
+      this.sayWake.delete(id);
+      got = this.sayResumed.get(id);
+    }
+    this.sayResumed.delete(id);
+    return got;
+  }
+
+  /** The socket looks alive but say.done never came: if the link died silently a new hello is coming. */
+  private async waitForReplacement(id: string, sock: DeviceSocket) {
+    void this.setJob(id, { status: "reconnecting" });
+    await new Promise<void>((resolve) => {
+      const timer = this.clock.setTimeout(resolve, this.t.resumeWindowMs);
+      this.sayWake.set(id, () => {
+        this.clock.clearTimeout(timer);
+        resolve();
+      });
+    });
+    this.sayWake.delete(id);
+    if (this.liveSocket()?.same(sock)) return;
+    void this.setJob(id, { status: "running" });
   }
 
   /**
@@ -2417,7 +2587,11 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       ms = typeof acked === "number" && Number.isFinite(acked) && acked >= 0 ? acked || LISTEN_CEILING_MS : (w.result.ms ?? LISTEN_CEILING_MS) || LISTEN_CEILING_MS;
       if (!buf.ended) {
         await new Promise<void>((resolve) => {
-          const timer = this.clock.setTimeout(resolve, ms + this.t.listenGraceMs);
+          let timer = this.clock.setTimeout(resolve, ms + this.t.listenGraceMs);
+          buf.extend = () => {
+            this.clock.clearTimeout(timer);
+            timer = this.clock.setTimeout(resolve, ms + this.t.listenGraceMs);
+          };
           buf.wake = () => {
             this.clock.clearTimeout(timer);
             resolve();
@@ -2425,6 +2599,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         });
       }
     } finally {
+      this.clock.clearTimeout(buf.holdTimer);
       if (this.listenBuf === buf) {
         this.listenBuf = undefined;
         this.beginTail(buf); // same step: no frame of this job falls between the two
@@ -2492,6 +2667,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         stt: sttMs,
         ...(buf.firstAt ? { first_frame: buf.firstAt - tAck } : {}),
         ...(buf.turnEndAt !== undefined ? { turn_end: buf.turnEndAt - tAck } : {}),
+        ...(buf.turnEnd ? { end_of_turn: buf.turnEnd } : {}),
         voice: served,
         ...(fallback ? { voice_fallback: fallback } : {}),
       },
@@ -2532,6 +2708,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     buf.relayEnded = true;
     buf.endAt = now;
     buf.turnEndAt = now;
+    buf.turnEnd = turnEndTiming(buf.stream?.trace?.() as JsonObject | undefined, buf.bytes / 32); // 16 kHz, 16 bit
     // no_speech (the box heard nobody, device VAD off): as the device's own no_speech — no STT, transcript ""
     buf.reason = why === "no_speech" ? "no_speech" : "turn_end";
     if (this.liveSocket()?.getMeta()?.caps?.includes("listen_stop")) {
