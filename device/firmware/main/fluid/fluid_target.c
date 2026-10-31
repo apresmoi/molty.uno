@@ -343,35 +343,10 @@ void fluid_target_arc(fluid_sim_t *s, float rc, float hw, float a0, float a1, fl
 
 /* ── the listening ring: a fixed circle, and the voice's waves from it (knobs: fluid_ring.h) ── */
 
-static void ring_due(fluid_ring_t *r, float strength) {
-    r->ping_s = strength;
-    r->gap = RING_GAP_S; r->since = 0.f;
-}
-
-int fluid_ring_tick(fluid_ring_t *r, float dt, bool on, float level) {
+void fluid_ring_tick(fluid_ring_t *r, float dt, bool on) {
     if (!(dt > 0.f)) dt = 0.f;
     r->on = on ? fminf(1.f, r->on + dt / RING_FADE_S) : fmaxf(0.f, r->on - dt / RING_FADE_S);
-    const float lv = on && isfinite(level) ? fluid_clamp01(level) : 0.f;
-    /* the level holds between its ~10 Hz updates: a one-pole follower turns its steps into glides */
-    r->lvl += (lv - r->lvl) * (1.f - expf(-dt / (lv > r->lvl ? RING_ATTACK_S : RING_DECAY_S)));
-    r->ink = r->on * (RING_INK + RING_INK_LEVEL * r->lvl);
-
-    /* a rise over the recent low is a syllable; firing re-arms on the level itself, so
-     * only a dip and a new rise fire again */
-    if (lv < r->low) r->low = lv;
-    else r->low += (lv - r->low) * (1.f - expf(-dt / RING_LOW_RISE_S));
-    r->gap = fmaxf(0.f, r->gap - dt);
-    r->since += dt;
-    if (r->on <= 0.5f) { r->low = lv; r->gap = 0.f; r->since = 0.f; return 0; }
-    const bool voice = lv >= RING_ONSET_MIN;
-    if (voice && r->gap <= 0.f && (lv - r->low >= RING_ONSET_RISE || r->since >= RING_HOLD_S)) {
-        ring_due(r, RING_PING_S_MIN + (RING_PING_S_MAX - RING_PING_S_MIN) * powf(lv, RING_S_CURVE));
-        r->gap = RING_GAP_SOFT + (RING_GAP_S - RING_GAP_SOFT) * lv;
-        r->low = lv;
-        return 1;
-    }
-    if (!voice && r->since >= RING_QUIET_S) { ring_due(r, RING_QUIET_PING_S); return 1; }
-    return 0;
+    r->ink = r->on * RING_INK;
 }
 
 /* The ring's cells, once per grid, with their offset from the centre line and their reach
@@ -396,7 +371,7 @@ static bool ring_geom(fluid_sim_t *s) {
             const float x = s->xs[i], y = s->ys[j], rad = sqrtf(x * x + y * y);
             if (rad < 1e-6f) continue;
             const float foot = (fabsf(x) * cw + fabsf(y) * ch) / rad, off = rad - RING_R;
-            if (fabsf(off) >= fmaxf((RING_CORE + RING_SOFT) * foot, 2.f * RING_PING_WIDTH + RING_PING_IN)) continue;
+            if (fabsf(off) >= (RING_CORE + RING_SOFT) * foot) continue;
             if (c) { c->k = (uint16_t)k; c->off = off; c->ifoot = 1.f / foot; c++; }
             else n++;
         }
@@ -423,18 +398,6 @@ void fluid_target_ring(fluid_sim_t *s, const fluid_ring_t *r, uint32_t rgb, floa
         if (t < 0.5f) s->tcol[c->k] = fluid_pack_rgba8((rgb >> 16 & 255) / 255.f, (rgb >> 8 & 255) / 255.f, (rgb & 255) / 255.f, acc);
     }
     FLUID_PROF_END(FP_TARGET, c0);
-}
-
-void fluid_ring_ping(fluid_sim_t *s, const fluid_ring_t *r) {
-    if (!(r->ping_s > 0.f) || !ring_geom(s)) return;
-    const ring_cell_t *c = (const ring_cell_t *)s->ring_geom;
-    const float iw = 1.f / RING_PING_WIDTH, amp = r->ping_s * FQ_H;
-    for (int n = 0; n < s->ring_n; n++, c++) {
-        const float u = (c->off + RING_PING_IN) * iw;
-        if (u * u >= 4.f) continue;
-        const float h = (float)s->h[c->k] + amp * expf(-u * u * 2.f);
-        s->h[c->k] = (int16_t)(h > 32767.f ? 32767.f : h < -32768.f ? -32768.f : h);
-    }
 }
 
 uint32_t fluid_ring_rgb(int32_t given, int32_t dflt, int palette) {

@@ -122,7 +122,7 @@ import {
   CLASSIFY_BUDGET_MS,
   type UtteranceClassifier,
 } from "./phrases.js";
-import { ListenTrace, SeqOrder, TRACE_LIMITS, capTrace } from "./trace.js";
+import { ListenTrace, SeqOrder, TRACE_LIMITS, capTrace, turnEndTiming } from "./trace.js";
 import { AUDIO_KEEP, AUDIO_PREFIX, AudioKeep, wav } from "./audio-keep.js";
 import { DEFAULT_LIVELINESS, EngineBench, LIVELINESS, type Liveliness, REFLEX, REFLEX_MODES, REFLEX_SHOW, REFLEX_SOFT, type ReflexEngine, isLiveliness, type ReflexMode, type ReflexPick, ReflexSession, UTTERANCE_CATEGORIES, type UtteranceCategory, categoryOf, keywordCategory, parseBoxReflex, resolveEngine } from "./reflex.js";
 
@@ -381,6 +381,8 @@ interface ListenBuffer {
   fillerMs?: number;
   /** The turn trace being gathered (core/trace.ts). */
   trace: ListenTrace;
+  /** Where the box's end of turn spent its time (turnEndTiming). */
+  turnEnd?: JsonObject;
   /** Frames in seq order (the device resends what failed; core/trace.ts SeqOrder). */
   order: SeqOrder<DecodedAudio>;
   /** Gives a seq gap up after TRACE_LIMITS.gapMs. */
@@ -2480,6 +2482,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         stt: sttMs,
         ...(buf.firstAt ? { first_frame: buf.firstAt - tAck } : {}),
         ...(buf.turnEndAt !== undefined ? { turn_end: buf.turnEndAt - tAck } : {}),
+        ...(buf.turnEnd ? { end_of_turn: buf.turnEnd } : {}),
         voice: served,
         ...(fallback ? { voice_fallback: fallback } : {}),
       },
@@ -2520,6 +2523,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     buf.relayEnded = true;
     buf.endAt = now;
     buf.turnEndAt = now;
+    buf.turnEnd = turnEndTiming(buf.stream?.trace?.() as JsonObject | undefined, buf.bytes / 32); // 16 kHz, 16 bit
     // no_speech (the box heard nobody, device VAD off): as the device's own no_speech — no STT, transcript ""
     buf.reason = why === "no_speech" ? "no_speech" : "turn_end";
     if (this.liveSocket()?.getMeta()?.caps?.includes("listen_stop")) {

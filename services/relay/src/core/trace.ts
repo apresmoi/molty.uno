@@ -209,6 +209,26 @@ export class ListenTrace {
 
 const BOX_KEYS = ["v", "step_ms", "skip", "thr", "hold_s", "audio_s", "act", "pause", "pause_every", "words", "end", "ns", "final_ms"];
 
+/**
+ * Where an end of turn's time went, from the box's trace (`end`, `words`; audio seconds):
+ * `silence_ms` from the last word's end to the box's decision, `behind_ms` from that decision to
+ * the audio the relay had received when it heard of it (the model's lag and the hops), plus the settings.
+ */
+export function turnEndTiming(box: JsonObject | undefined, heardMs: number): JsonObject | undefined {
+  const end = box?.end;
+  if (!isRecord(end) || typeof end.at !== "number") return undefined;
+  const words = Array.isArray(box!.words) ? (box!.words as unknown[]) : [];
+  const last = words.at(-1);
+  const stop = Array.isArray(last) ? (last[2] ?? last[1]) : undefined;
+  return {
+    ...(typeof stop === "number" ? { silence_ms: Math.round((end.at - stop) * 1000) } : {}),
+    behind_ms: Math.max(0, Math.round(heardMs - end.at * 1000)),
+    ...(typeof end.rule === "string" ? { rule: end.rule } : {}),
+    thr: box!.thr ?? null,
+    hold_s: box!.hold_s ?? null,
+  };
+}
+
 /** A voice box `stt.trace` payload: known keys only, bounded; undefined when unusable. */
 export function cleanBoxTrace(v: unknown): JsonObject | undefined {
   if (!isRecord(v)) return undefined;
