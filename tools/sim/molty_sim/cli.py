@@ -40,6 +40,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--align", choices=["mms", "none"], default="mms", help="say-cue ground truth: forced alignment on the box, or skip")
     r.add_argument("--align-python", default=os.environ.get("MOLTY_SIM_ALIGN_PYTHON", "python3"), help="python with torchaudio on the box (env MOLTY_SIM_ALIGN_PYTHON)")
     r.add_argument("--no-audio", action="store_true", help="don't keep WAVs in the run directory")
+    r.add_argument("--drafter", choices=["careful", "naive"], default="careful", help="shake scenarios: careful = no (re)draft once a turn-around word (but, not, actually, …) was heard; naive = always re-base on the latest partial")
     r.add_argument("-v", "--verbose", action="store_true")
 
     s = sub.add_parser("check", help="parse a scenario and print its turns (no network)")
@@ -58,6 +59,10 @@ def main(argv: list[str] | None = None) -> int:
         for t in sc.turns:
             src = t.markup and t.markup.pauses or t.wav or (f"silence {t.silence_s}s" if t.kind == "silence" else "")
             print(f"{t.index + 1:2d}. {t.id:22s} {t.kind:7s} expect {t.expect:9s} listen_ms {t.listen_ms!s:5s} {t.text[:50]!r} {src}")
+            if sc.shake and (t.draft or t.react):
+                print(f"    draft {t.draft} react {t.react} fits {t.answer}")
+        if sc.shake:
+            print(f"shake turns, arms {sc.arms}")
         return 0
     if a.cmd == "measure":
         from .measure import measure
@@ -66,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if a.cmd == "show":
         d = json.loads((Path(a.run_dir) / "report.json").read_text())
-        print(report.table(d["turns"], d["summary"]))
+        print(report.shake_table(d["turns"], d["summary"]) if d["turns"] and "arm" in d["turns"][0] else report.table(d["turns"], d["summary"]))
         return 0
 
     tuning = []
@@ -76,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
     o = Options(scenario=scenario.load(a.scenario), box=a.box, tunnel=not a.no_tunnel, tts_port=a.tts_port, stt_port=a.stt_port,
                 relay=a.relay, allow_remote=a.allow_remote, bridge=not a.no_bridge, tuning=tuning, agent=a.agent,
                 agent_gap_ms=a.agent_gap_ms, llm_url=a.llm_url, llm_model=a.llm_model, align=a.align, align_python=a.align_python,
-                keep_audio=not a.no_audio, only=a.only.split(",") if a.only else None)
+                keep_audio=not a.no_audio, only=a.only.split(",") if a.only else None, drafter=a.drafter)
     try:
         asyncio.run(run(o))
     except KeyboardInterrupt:

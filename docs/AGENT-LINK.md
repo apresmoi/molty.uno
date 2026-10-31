@@ -76,7 +76,7 @@ Molty (home Wi-Fi) ──outbound WSS──▶ molty-relay (Cloudflare Worker + 
 
 ## Device ↔ relay wire (WS/WSS `/v1/device?id=<device_id>`)
 
-First frame from device: `{"t":"hello","id":"molty-k7m2w9c4ya","key":"<b64 device_key>","fw":"...","caps":["fluid","say","say_cues","say_marks","listen","listen_stop","listen_window","ack","shake_talk","show","mood","act","creature","ask","log_upload"],"board":"waveshare-esp32-s3-touch-lcd-1.46","link_code":"..."}`
+First frame from device: `{"t":"hello","id":"molty-k7m2w9c4ya","key":"<b64 device_key>","fw":"...","caps":["fluid","say","say_cues","say_marks","listen","listen_stop","listen_window","ack","shake_talk","show","mood","act","creature","react","ask","log_upload"],"board":"waveshare-esp32-s3-touch-lcd-1.46","link_code":"..."}`
 → relay answers `{"t":"welcome","features":["listen_adopt"],"now":<relay unix ms>,"log":{"max_lines":48}}` or closes with 4401.
 `features` lists what the relay does for the device (`listen_adopt`: it adopts a listen the device
 began by itself — [Shake to talk](#shake-to-talk)); `now` is the device's time sync and `log` says the
@@ -398,9 +398,119 @@ shake ─▶ device: listening at once (ring + mood), audio kept locally
   `| |a| − 1 g | < 0.15 g` for 150 ms, from the mic start, capped at 600 ms — and fades the
   first 10 ms it keeps in; nothing before that point is counted, sent or fed to the VAD. The
   end frame's `tr.set` / `tr.setc` say how much went (boards without an IMU trim nothing).
-- **Reserved, not built:** `utterance.partial` (words while the human is still talking), `draft`
-  and `react` events during an open human turn. Whatever comes, agents must not speak while the
-  human talks; agents should ignore event types they do not know.
+- **While the human is still talking** the turn is *open*: agents get `utterance.partial`, may
+  `draft` an opener and `react` with a mood, and nothing else — [While the human speaks](#while-the-human-speaks).
+  Agents should ignore event types they do not know.
+
+### While the human speaks
+
+From the adoption of a shake's listen until its utterance (or its end without one) the human's
+turn is **open**. Code: `services/relay/src/core/partials.ts` (chunking, judging),
+`core/calibration.ts` (the human's habits), `core/room.ts` "While the human speaks".
+
+```
+box stt.partial (each word) ─▶ chunker ─▶ utterance.partial {turn_id, seq, text_so_far, new_text, elapsed_ms} ─▶ every agent
+                                  (a sentence end · N new words · T s — whichever first; none before 3 s)
+agent: draft {turn_id, based_on, opener, max_new_words?} ─▶ held, its audio synthesised now (cached)
+agent: react {turn_id, mood|action}                        ─▶ mood {react:true} (back to listening) | act {action}
+agent: say / talk / ask / mood / act / show / listen / state ─▶ 409 human_speaking {turn_id}
+turn end ─▶ judge drafts ─┬─ holds: opener plays at once (after the chirp), claims the turn ─▶ draft.used (to it)
+                          └─ else ─▶ draft.dropped {reason} (to it) — today's path
+          ─▶ ONE utterance (claimed: true when an opener plays)
+```
+
+- **Partials** (`utterance.partial`, relay-generated, every agent's inbox): only with the voice
+  box (its streaming STT sends the text so far on every word; the cloud path has none). Chunked
+  by meaning, never token by token: one goes out when the text so far ends a sentence (Kyutai
+  punctuation; not an ellipsis), or `every_words` new words arrived, or `every_ms` passed since
+  the last one with a new word waiting — whichever first — and never before the turn ran
+  `lead_ms` (3 s: a shorter turn gets none), at most 8 per turn. `seq` counts from 1 per turn;
+  `text_so_far` is all heard so far (an STT revision counts new words from where the texts
+  differ), `new_text` what this one adds, `elapsed_ms` since the adoption. Webhooks get them
+  only when their `events` names `utterance.partial` (never by default: chatty); pull and
+  ride-along carry them.
+- **human_speaking.** While the turn is open the relay refuses every agent's `say`, `talk`,
+  `ask`, `mood`, `act`, `show`, `listen` and patching `state` with `409 human_speaking {turn_id}` (before
+  `turn_claimed` / `audio_busy`; nothing reaches the device). Reads (`status`, `state` without a
+  patch, `diag`, …) go through. The turn closes however its listen ends (a box failure, the device
+  dropping: drafts are dropped `turn_failed`).
+- **`draft {turn_id, based_on, opener, max_new_words?, voice?}`** (`POST /v1/devices/<id>/draft`,
+  MCP `molty_draft`): `based_on` the `seq` of one of this turn's partials, `opener` ≤ 200 bytes and
+  ≤ 24 words, `max_new_words` 0..20 — capped by the relay's calibrated threshold (default 4),
+  which is also the default. Held silently; its audio is synthesised at once (the TTS the next say
+  would use) and kept until the turn ends. One per agent per turn: a new one replaces it (the old
+  one `draft.dropped {reason:"replaced"}`; re-based with the same `opener` and `voice`, its audio is
+  kept, not synthesised again), at most 3 made (`429 rate_limited`). The turn not open
+  (any more): `409 turn_closed`. → `{turn_id, based_on, status:"held", max_new_words, threshold}`.
+- **At the turn's end** (`judgeDraft`), drafts in the order they were made: the final transcript
+  must still begin with `based_on`'s text (one revised last word tolerated; else `revised`), none
+  of the words it adds may be a turn-around word (`but`, `not`, `no`, `never`, `actually`,
+  `instead`, `wait`, `cancel`, `except`, `unless`, `don't`, … `FLIP_WORDS`; else `meaning`), and it
+  may add at most the draft's `max_new_words` (else `new_words`). The first that holds wins —
+  later holding drafts are `turn_claimed` — if its synthesis did not fail (`synth_failed`). Nobody
+  spoke: `no_speech`, a broken listen: `turn_failed`.
+- **The winner**: the turn record is written claimed by its agent (the `turn_claimed` rules of
+  [Shake to talk](#shake-to-talk) apply from here), the listen hands its audio lock straight to a
+  `say` job of the cached opener (no other call can slip in; its `cmd say` goes out before the turn
+  record is written, the turn staying open meanwhile), and the device plays it at once —
+  its `cmd say` arrives while the ack chirp plays and starts when the chirp ends. Then
+  `draft.used {turn_id, based_on, opener, new_words, job}` to that agent only, before the
+  `utterance` (which says `claimed: true`). That agent's next `say` / `talk` (with `in_reply_to` or
+  without) **queues behind the opener**: a `queued` job whose speech is synthesised meanwhile and
+  whose `cmd say` goes out the moment the opener's `say.done` arrives. Other agents: `turn_claimed`.
+- **Dropped drafts**: `draft.dropped {turn_id, based_on, reason, new_words?}` to their agent only,
+  their synthesis stopped; the utterance goes out unclaimed — today's path.
+- **`react {turn_id, mood}` or `{turn_id, action}`** (`POST /v1/devices/<id>/react`, MCP
+  `molty_react`): `mood` one of `happy`, `surprised`, `thinking` (`REACT_MOODS`), or `action` one of
+  the device's gestures (`REACT_ACTIONS` = `ACTIONS`, the list of `act` and inline cues). Screen
+  only — no sound while the mic is open. An action is the device's `cmd act {action}` (cap `act`:
+  a one-shot gesture that never takes the screen from the listen). The relay sends `cmd mood {mood, hold_s:0, react:true}` and, after
+  1.5 s, `mood {mood:"listening", hold_s:0, react:true}` unless the listen ended meanwhile. The
+  firmware (cap `react`) shows a react mood without counting it as an explicit one: the listen's
+  end still acknowledges the turn (chirp + thinking) and falls back to idle, and a pending
+  question stays up. Without the cap: `409 unsupported` (a plain mood would cancel the
+  acknowledgement). At most one per 3 s per Molty (`429 rate_limited {retry_after_ms}`).
+- **In the turn trace** ([Turn trace](#turn-trace), `relay`): `partials` `[[seq, ms, words], …]`,
+  `drafts` `[[based_on, ms], …]`, `reacts` `[[mood|action, ms, "ok"|error], …]` (ms from the
+  trace's t0; counts only, never words), `draft` `{used?: based_on, new_words?, opener_at?,
+  dropped?: [reasons]}` and `utterance` (when it went out).
+- **Targeted events.** `draft.used` / `draft.dropped` are stored with their recipient (never
+  returned): only that token's pull / ride-along / webhook sees them.
+
+### Calibration
+
+The relay keeps one record per Molty of how its human talks (KV `speech`,
+`services/relay/src/core/calibration.ts`), from every heard listen (shake turns and agents'
+listens): words, length (the measured speech, else the recording), and pauses (gaps ≥ 600 ms
+between the box's word arrivals); the last 50 turns. And every draft's outcome (the last 30).
+
+- **Partial policy** for the next turn: the defaults (`every_words` 8, `every_ms` 4000) until 8
+  turns are in; then `every_words` = median words / 3 (4..20) and `every_ms` = median length / 3
+  (2..8 s), so a typical turn gets partials at about 1/3 and 2/3, then its utterance. `lead_ms`
+  stays 3 s: a turn predicted shorter gets none.
+- **Draft threshold** (the most words a draft survives), 1..10, starts at 4. After every 6 judged
+  outcomes (`used`, `misfire`, `new_words`, `meaning`) it moves one step on the last 20: more
+  than 25 % of the spoken openers were misfires → −1; more than 40 % of judged drafts died of
+  `new_words` while misfires stay ≤ 10 % → +1. A **misfire** is a shake while an opener (or its
+  queued follow-up) plays or within 2 s after the opener ended: the human cut in.
+- **Visible** to the owner: `GET /v1/devices/<id>/speech` (link-code auth + CORS, like the
+  [voice owner API](#owner-api-console)) → `{turns:{sampled, total, needed}, words, seconds
+  {median, p25, p75}, wpm, pauses:{per_turn, max_ms}, policy, drafts:{made, used, misfires,
+  dropped, use_rate, misfire_rate, threshold, threshold_bounds}, partials, reacts, updated}`;
+  `DELETE` resets it. The console's activity page shows it as the **speech habits** card. A
+  changed policy or threshold is a `settings` / `calibration` entry in the [activity log](#activity-log).
+
+### Notes
+
+A small private key-value store per agent token (`services/relay/src/core/notes.ts`), so an agent
+without memory of its own can keep its behaviour ledger (what it tried through Molty and how the
+human responded). `GET /v1/notes` (list: `{keys:[{key, bytes, updated}], bytes, limits}`),
+`GET /v1/notes?key=k` (`{key, value, updated}`; `value: null` when unset), `PUT /v1/notes {key,
+value}`, `DELETE /v1/notes?key=k`; MCP `molty_notes {action: list|get|put|delete, key?, value?}`.
+Keys 1..64 of `[A-Za-z0-9._:-]`; values any JSON, ≤ 8 KB each, ≤ 64 keys and ≤ 32 KB per token
+(`413 too_large`, checked in one atomic read-check-write). One document per token (`note:<token
+hash>`): no other token reads or writes it; revoking the token or forgetting the device deletes
+it. The activity log records the op and the key, never the value.
 
 ### Listen end of speech (device VAD)
 
@@ -479,8 +589,10 @@ What the screen does between commands (`device/firmware/main/fluid/fluid_directo
 |---|---|---|---|
 | `status` | — | fw, uptime, creature, state, mood, fps, rssi | relay adds `relay` {api_version, online, board, caps, voice, ...} |
 | `state` | `{state, ...}` | creature state JSON | passthrough to `/api/creature/state` semantics |
-| `mood` | `{mood, hold_s?}` | — | idle listening thinking speaking happy sleepy surprised; `hold_s` 0..3600 (0 = until the next mood; default: happy/surprised revert, the rest persist) |
+| `mood` | `{mood, hold_s?}` (device also `react?`) | — | idle listening thinking speaking happy sleepy surprised; `hold_s` 0..3600 (0 = until the next mood; default: happy/surprised revert, the rest persist). `react:true` (relay-sent, cap `react`): shown but not an explicit mood ([While the human speaks](#while-the-human-speaks)) |
 | `act` | `{action}` | `{action}` | a one-shot gesture over the current mood: wiggle nod shake_head bounce peek glance_left glance_right blink wobble stretch look_up yawn ([Inline cues and actions](#inline-cues-and-actions)); `unsupported` / `firmware_too_old` without the `act` cap |
+| `draft` (relay) | `{turn_id, based_on, opener, max_new_words?, voice?}` | `{turn_id, based_on, status:"held", max_new_words, threshold}` | only during an open turn ([While the human speaks](#while-the-human-speaks)) |
+| `react` (relay) | `{turn_id, mood}` or `{turn_id, action}` | `{turn_id, shown, for_ms, next_after_ms}` | only during an open turn; ≤ 1 per 3 s |
 | `show` | `{text, wpm?}` | — | speed reader in the fluid; back to the creature 1.5 s after the last word |
 | `say` | `{text, voice?, in_reply_to?}` | `{job}` immediately | relay does TTS (streamed per sentence) + streams; device sets `speaking`, shows text in sync. `text` may carry [inline cues](#inline-cues-and-actions). Job result `{ms, text, timings}` (`text` as spoken, cues stripped). `unsupported` without a speaker; `in_reply_to` / `turn_claimed`: [Shake to talk](#shake-to-talk) |
 | `listen` | `{ms? 0..30000 (0 = unlimited; omit = the device's setting, 30000 out of the box), end_silence_ms?, no_speech_ms?, vad?, ring_color?}` | `{job}` immediately | device sets `listening`, streams mic, stops at end of speech ([Listen end of speech](#listen-end-of-speech-device-vad)); relay STT → job result `{text, duration_ms, peak, rms, reason, speech_ms?, timings}`. `unsupported` without a mic |
@@ -605,11 +717,13 @@ constants: `device/firmware/main/sense/gesture.h`.
   `molty_wait`, `molty_state`, `molty_volume`, `molty_imu`, `molty_diag`, `molty_log`, plus the
   relay-only `molty_talk`, `molty_ask`, `molty_events`, `molty_webhook` ([Events](#events-device--agents)),
   `molty_updates` and `molty_update` ([Firmware updates](#firmware-updates)), `molty_activity`
-  ([Activity log](#activity-log)). Shared names
+  ([Activity log](#activity-log)), `molty_draft`, `molty_react` ([While the human speaks](#while-the-human-speaks)),
+  `molty_notes` ([Notes](#notes)). Shared names
   have the same semantics as the local stdio MCP in `apps/cli/`.
 - **REST** `POST /v1/devices/<id>/cmd {name,args,wait?}`, `POST /v1/devices/<id>/talk`, `POST /v1/devices/<id>/ask`, `GET /v1/jobs/<job>`,
   `GET /v1/devices/<id>/events`, `GET|PUT|DELETE /v1/webhook`, `GET /v1/devices/<id>/updates`,
-  `POST /v1/devices/<id>/update`, `GET /v1/activity`, same bearer. `GET /v1/releases/latest?board=` needs none (public).
+  `POST /v1/devices/<id>/update`, `GET /v1/activity`, `POST /v1/devices/<id>/draft`, `POST /v1/devices/<id>/react`,
+  `GET|PUT|DELETE /v1/notes`, same bearer. `GET /v1/releases/latest?board=` needs none (public).
 - **`GET /skill.md`** (and `/skill`), no auth: **deprecated**, a `301` to the skill's raw
   `SKILL.md` on GitHub for agents set up before the plugin ([Agent skill](#agent-skill-and-api_version)).
 - **CLI** `molty --relay <url> --token <t> ...`, or `molty pair` once and the saved link (see [CLI.md](CLI.md)).
@@ -623,9 +737,9 @@ bearer is `agent_token` = `<device_id>.<base64url(32 bytes)>`; the prefix only r
 |---|---|---|
 | `POST /v1/pair {device_id, link_code, agent_name, role?}` (no token; long-polls ≤ 120 s; `role:"voice"` pairs a [voice box](#voice-box)) | `200 {ok:true, agent_token, device_id, agent_name, code, api_version}` (+ `role:"voice"` for a box) | `{ok:false, error}`: `bad_link_code` 403, `rejected` 403, `timeout` 408, `device_offline` / `pair_busy` 409 |
 | same with `wait_s` < 120, or `{device_id, pair_id}` to resume | `202 {ok:true, status:"pending", pair_id, code, expires_in_s}` while undecided | as above |
-| `POST /v1/devices/<id>/cmd {name, args}` | `200 {ok:true, result:{...}}`; `say`/`listen` → `{ok:true, result:{job}}` | `{ok:false, error:"code"}`: 401 bad/missing bearer, 400 `invalid_args`/`unknown_command`, 409 `device_offline`/`turn_claimed` (`say`)/`audio_busy`/`unsupported`, 504 `device_timeout`, 502 device-reported codes |
+| `POST /v1/devices/<id>/cmd {name, args}` | `200 {ok:true, result:{...}}`; `say`/`listen` → `{ok:true, result:{job}}` | `{ok:false, error:"code"}`: 401 bad/missing bearer, 400 `invalid_args`/`unknown_command`, 409 `device_offline`/`human_speaking` (`say`/`listen`/`mood`/`show`/`state` patch during an open turn)/`turn_claimed` (`say`)/`audio_busy`/`unsupported`, 504 `device_timeout`, 502 device-reported codes |
 | same with `wait:true` (say/listen) | `200 {ok:true, result:{job, status:"done", ...job result}}`; still running after 24 s: `202 {ok:true, result:{job, status:"pending", state}}` | as above; a failed job → its error, still carrying the `events` / `firmware_update` the call already consumed |
-| `POST /v1/devices/<id>/talk {say?, listen?, listen_ms?, voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?, ack?, in_reply_to?}` | `200 {ok:true, result:{job, status:"done", heard, said?, reason, speech_ms?, ms, timings}}` (`timings.turn` when it answered a turn); `202` pending as above | 400 `invalid_args`, 401, 409 `turn_claimed` (another agent answers this human turn, [Shake to talk](#shake-to-talk))/`audio_busy`/`unsupported`/`device_offline`, 504 `playback_timeout` (no `say.done`), job errors |
+| `POST /v1/devices/<id>/talk {say?, listen?, listen_ms?, voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?, ack?, in_reply_to?}` | `200 {ok:true, result:{job, status:"done", heard, said?, reason, speech_ms?, ms, timings}}` (`timings.turn` when it answered a turn); `202` pending as above | 400 `invalid_args`, 401, 409 `human_speaking` (the human is still talking)/`turn_claimed` (another agent answers this human turn, [Shake to talk](#shake-to-talk))/`audio_busy`/`unsupported`/`device_offline`, 504 `playback_timeout` (no `say.done`), job errors |
 | `POST /v1/devices/<id>/ask {say?, options, timeout_s?, voice?}` | `200 {ok:true, result:{job, status:"done", answer, index, reason?, said?, ms, timings}}` (a timeout / cancelled / offline ask is `200` with `answer:null`); `202` pending as above | 400 `invalid_args` (with the reason, e.g. a label over 8 chars), 401, 409 `audio_busy` (with `say`)/`unsupported`/`device_offline`, 504 `playback_timeout`, device-reported codes |
 | `GET /v1/jobs/<job>[?wait_s=0..8]` | `200 {job, kind:"say"\|"listen"\|"talk"\|"ask"\|"update", status:"queued"\|"running"\|"done"\|"failed", phase?, result?, error?, detail?}`; say done `{ms, text, timings}`, listen done `{text, duration_ms, peak, rms, reason, speech_ms?, timings}`, talk / ask done as `/talk` / `/ask`, update as below | 401, 404 `not_found` |
 | `GET /v1/devices/<id>/updates` | `200 {ok:true, result:{api_version, firmware, actions}}` ([Firmware updates](#firmware-updates)) | 401 |
@@ -633,6 +747,9 @@ bearer is `agent_token` = `<device_id>.<base64url(32 bytes)>`; the prefix only r
 | `GET /v1/releases/latest[?board=<board>]` (no token) | `200 {ok:true, release_check, latest:null\|{version, tag, prerelease, published_at, notes_url, notes}, board:null\|{name, ota:{url, size, sha256}}, features:[{feature, cap, needs}]}`, CORS `*`, `cache-control: public, max-age=300` | 400 bad board, 429 rate limited |
 | `DELETE /v1/token` | `200 {ok:true, result:{revoked:true}}` | 401 |
 | `GET /v1/devices/<id>/events[?since=e41&wait_s=0..25]` | `200 {ok:true, events:[{id,type,ts,data}], next, more}` | 401, 400 `invalid_args`, 429 `too_many_polls` |
+| `POST /v1/devices/<id>/draft {turn_id, based_on, opener, max_new_words?, voice?}` | `200 {ok:true, result:{turn_id, based_on, status:"held", max_new_words, threshold}}` | 400 `invalid_args`, 401, 409 `turn_closed` / `unsupported`, 429 `rate_limited`, 503 `voice_box_offline` |
+| `POST /v1/devices/<id>/react {turn_id, mood}` | `200 {ok:true, result:{turn_id, shown, for_ms, next_after_ms}}` | 400 `invalid_args`, 401, 409 `turn_closed` / `unsupported`, 429 `rate_limited {retry_after_ms}` |
+| `GET /v1/notes[?key=k]` · `PUT /v1/notes {key, value}` · `DELETE /v1/notes?key=k` | `200 {ok:true, result:{…}}` ([Notes](#notes)) | 400 `invalid_args`, 401, 413 `too_large` |
 | `PUT /v1/webhook {url, method?, headers?, body?, content_type?, events?}` | `200 {ok:true, result:{webhook, secret, secret_note, dry_run}}` | 401, 400 `invalid_args` (with the reason), 409 `conflict` |
 | `GET` / `DELETE /v1/webhook` | `200 {ok:true, result:{webhook\|null}}` / `{removed}` | 401 |
 
@@ -680,7 +797,7 @@ mode suits that agent.
 ```
 device evt ──WSS──▶ DeviceRoom.onEvt
                      ├─ allow-list + shape check (shake, tap, button, answer; rest stays internal)
-                     │    (+ relay-generated: utterance)
+                     │    (+ relay-generated: utterance, utterance.partial, draft.used / draft.dropped to one agent)
                      ├─ cap 30/min/device (excess dropped, counted)
                      └─ ev:<seq> ring (200 / 24 h, DO storage)
                           │  one read cursor per agent token (cur:<token hash>)
@@ -708,8 +825,10 @@ The relay stores `{id:"e<seq>", type, ts:<relay unix ms>, data}`; `seq` increase
 `offline` when the relay resolved it because the device dropped, or `timeout` when the device never
 reported), appended before the job's result is published, so the asking call's own ride-along
 carries it. Answers are not counted against the per-device rate cap (one per ask).
-`utterance` ([Shake to talk](#shake-to-talk)) is relay-generated: a device frame named
-`utterance` is dropped; agents receive and filter it like the device events.
+`utterance` ([Shake to talk](#shake-to-talk)), `utterance.partial`, `draft.used` and `draft.dropped`
+([While the human speaks](#while-the-human-speaks)) are relay-generated: a device frame with one of
+those names is dropped; agents receive and filter them like the device events (the draft events
+reach only the agent that drafted).
 
 ### Inbox and cursor
 
@@ -747,7 +866,7 @@ an agent sees events the next time it calls anything (ride-along).
 ```
 {"url": "https://…", "method"?: "POST"|"GET"|"PUT"|"PATCH",
  "headers"?: {"Authorization": "Bearer …"}, "body"?: "<template>", "content_type"?: "application/json",
- "events"?: ["shake", "tap", "button", "answer", "utterance"]}
+ "events"?: ["shake", "tap", "button", "answer", "utterance", "utterance.partial", "draft.used", "draft.dropped"]}
 ```
 
 - Placeholders in `url` (URL-encoded) and `body`: `{{event.type}}` `{{event.id}}` `{{event.ts}}`
@@ -762,7 +881,8 @@ an agent sees events the next time it calls anything (ride-along).
   `{{event.data.peak_g|0}}` (the default is literal text, escaped like a string), else
   `null` in a JSON body and empty elsewhere — so `"peak": {{event.data.peak_g}}` stays valid
   JSON for a tap.
-- `events` (optional) limits which event types are sent; default all. A conversational agent
+- `events` (optional) limits which event types are sent; default all but `utterance.partial`,
+  which a webhook gets only when `events` names it (it is chatty). A conversational agent
   wants `["utterance"]`: the payload is self-contained — `{{event.data.text}}` (the words),
   `{{event.data.turn_id}}` (for `in_reply_to`), `{{event.data.reason}}`, `{{event.data.ms.speech}}`,
   `{{event.data.ms.stt}}`, `{{event.data.trigger}}`, `{{event.data.device.mood}}`,
@@ -1189,11 +1309,11 @@ can be read in one place instead of lining up the agent's memory, the device log
 | `call` | every authenticated agent call (successful `wait` / `events` polls are skipped: they would wash the log out) | `agent`, `op` (`talk`, `say`, `mood`, `status`, …), `args` (summary: secrets stripped), `ok` / `error` / `message`, `ms`, `job` when it made or names one; `status` adds `data.rssi` |
 | `job` | a job ends (`ts` = its start) | `op` (job kind), `agent`, `ok` / `error`, `ms`, `data: {status, timings, voice:{tts?, stt?, fallback?}, reason?, heard?, said?, answer?, index?, outcome?, phase?, trace?, audio?}` — `trace`: a listen's (listen / talk / adopted shake) [turn trace](#turn-trace), failed ones too; `audio: true`: its audio is kept ([Keep audio](#keep-audio-for-debugging)) |
 | `trace` | later facts about a turn (`job` = the turn's listen job): `webhook` (each delivery attempt of its `utterance`), `reply` (a say / talk answering it) | `ev`, `agent`, `data` ([Turn trace](#turn-trace)) |
-| `device` | `connect` (`fw`, `board`), `disconnect` (`code`: the close code), `refused` (wrong device key), `shake` / `tap` / `button`, `utterance` (shake to talk: `job` = its `turn_id`, `data: {text, reason, trigger}`; the text is a transcript) | `ev`, `data` |
+| `device` | `connect` (`fw`, `board`), `disconnect` (`code`: the close code), `refused` (wrong device key), `shake` / `tap` / `button`, `utterance` (shake to talk: `job` = its `turn_id`, `data: {text, reason, trigger, words, partials, drafts, draft?}`; the text is a transcript), `draft.used` / `draft.dropped` (`job` = the turn, `agent`: the drafter — visible to it; `data: {opener?, reason?, based_on, new_words?, say_job?}`), `draft.misfire` (a shake over an opener) | `ev`, `data` |
 | `device_log` | the device's own log lines (below) | `job` when tagged, `data: {text, level: E\|W\|I\|D\|V\|EVT, boot, seq, prev?, approx?}` |
 | `pair` | `approved` / `rejected` / `timeout` / `revoked` | `ev`, `agent` |
 | `voice_box` | `connect` / `disconnect` / `unpaired` | `ev`, `data` |
-| `settings` | owner changes: `voice` (mode, voice), `activity` (transcripts, keep_audio) | `ev`, `data` |
+| `settings` | owner changes: `voice` (mode, voice), `activity` (transcripts, keep_audio); `calibration` (the relay's own: `threshold {from, to}`, `partials {source, every_words, every_ms, lead_ms}`, `reset`) | `ev`, `data` |
 
 Every entry is `{id:"a<seq>", ts, kind, …}`. A refused answer to someone else's turn is a `call`
 with `error: "turn_claimed"`; the adopted shake listen is a `job` with no agent (owner only). Failed `talk` / `ask` / `update` calls also return
@@ -1206,7 +1326,9 @@ one sanitizer at the log's single write path, for every entry kind and field; we
 registrations keep only the redacted URL (origin), the method, the number of headers and
 whether a body template is set.
 
-**Transcripts** (`heard`, `said`, say / show text in call args, an `utterance`'s text) are kept by default (≤ 500
+`notes` calls keep the op and the key, never the value.
+
+**Transcripts** (`heard`, `said`, say / show text and draft openers in call args, an `utterance`'s text, a `draft.used` opener) are kept by default (≤ 500
 chars each). The owner's setting **log transcripts: off** removes them *before the write*
 (the entry keeps its metadata and gets `redacted: true`); turning it on again affects new
 entries only.

@@ -36,6 +36,29 @@ a full model round trip on your side). The human hears your latency as silence.
   timeline then shows shake → speech → end of turn → webhook → your work → your first audio in one
   line, so a slow turn is found in seconds instead of guessed at. Details: [api.md](api.md#talk-one-call-per-conversation-turn).
 
+## Drafts: a head start, not an answer
+
+Partials (`utterance.partial`, [events.md](events.md#while-the-human-speaks)) let you think while
+the human talks. The fastest answer starts with a **draft opener** the relay has already
+synthesised, so Molty speaks the instant they finish — right after its chirp, no gap.
+
+- **Draft only what fits any ending.** "Sure —", "Good question.", "Let me look.", "Oh nice." —
+  never the answer itself, never a commitment ("Done, alarm set for seven"): their last words may
+  turn it around ("…but not today"), and an opener that has played cannot be taken back.
+- **Base it on the latest partial** (`based_on: seq`): re-draft the same opener on each new
+  partial (its audio is kept), and stop drafting once you hear a turn-around word — the relay only
+  checks the words *after* `based_on`. The relay drops it (`draft.dropped`) when the
+  final words add more than `max_new_words` or contain a turn-around word (but, not, actually,
+  wait, …); leave `max_new_words` out unless you want it stricter — the relay tunes its own
+  threshold from how drafts fare with this human.
+- **On `draft.used`, continue — don't repeat.** Your opener is playing and the turn is yours: send
+  the rest with `molty_talk` / `molty_say {in_reply_to: turn_id}` at once. It queues right behind
+  the opener (synthesised while the opener plays) and starts the moment it ends.
+- **On `draft.dropped`, answer the `utterance` as usual.** Nothing was said.
+- **React sparingly** (`react {turn_id, mood|action}`): a `nod` while they explain, a `happy`
+  when they say something good, a `surprised` at news — screen only, ≤ 1 per 3 s. Note what landed in your
+  [ledger](etiquette.md#keep-a-behaviour-ledger).
+
 ## End of turn
 
 **End of turn is automatic**: don't pass `vad` / `end_silence_ms`. With the owner's voice box the

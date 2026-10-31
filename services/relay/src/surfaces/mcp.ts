@@ -10,7 +10,8 @@
 // Node host can serve it unchanged.
 
 import { type AgentApi, type FirmwareNotice, type Inbox, type JobView, type Outcome, type RelayBackend, bearer, tokenDevice } from "../core/api.js";
-import { ACK_THINK_S, ACTIONS, COLORS, DEFAULT_ASK_COLORS, DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, LISTEN_CEILING_MS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, MAX_LISTEN_MS, MAX_MOOD_HOLD_S, MOODS, TALK_BUDGET_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
+import { ACK_THINK_S, ACTIONS, COLORS, DEFAULT_ASK_COLORS, DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, LISTEN_CEILING_MS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, MAX_DRAFTS_PER_TURN, MAX_DRAFT_NEW_WORDS, MAX_LISTEN_MS, MAX_MOOD_HOLD_S, MAX_OPENER_WORDS, MOODS, REACT_ACTIONS, REACT_MIN_GAP_MS, REACT_MOODS, TALK_BUDGET_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
+import { NOTES_LIMITS } from "../core/notes.js";
 
 /** say / talk / ask: inline [mood] / [action] cues in the spoken text. */
 const CUES_DOC = `The text may carry inline cues like [happy] or [nod] (a mood: ${MOODS.join(", ")}; or a gesture: ${ACTIONS.join(", ")}): they are never spoken nor shown, and fire when the word after them is spoken; write a literal bracket as \\[.`;
@@ -29,7 +30,7 @@ export const SERVER_INFO = { name: "molty-relay", title: `Molty relay (api v${AP
 const MAX_BODY = 256 * 1024;
 const INSTRUCTIONS =
   `Tools operate a physical Molty device through the molty-relay. Pair first with molty_pair (no token needed), then send the returned agent_token as 'Authorization: Bearer <token>'. For conversation use molty_talk: ONE call per turn speaks your reply, then listens and returns what the human said ({heard, reason}); moods (listening, thinking, speaking) are automatic, so don't call molty_mood around talking. When the human finishes, Molty acknowledges it by itself at once (a soft chirp, then thinking): go straight to your answer, no "let me think" filler; if the answer needs long work (tools, search), still say a short spoken ack first or keep thinking up with molty_mood, so the human is never left in silence. Keep spoken replies to 1-2 sentences (inline cues like [happy] or [nod] in them set mood / gesture as you speak). For a decision the human can answer with a tap use molty_ask: say the question, offer 1-${MAX_ASK_OPTIONS} options of at most ${MAX_ASK_LABEL} characters ("yes", "no", "later"); answer is null on timeout/cancelled/offline. molty_say / molty_listen return a job immediately (wait:true blocks until done); poll a job with molty_wait (<= 8 s per call). ` +
-  `Molty also emits events (${AGENT_EVENT_TYPES.join(", ")}) into your own inbox: unread ones ride along on every tool result as 'events' plus a 'Molty: ...' line; molty_events pulls/waits for them; molty_webhook registers an HTTPS request the relay sends you per event. A shake means the human wants to talk: Molty listens by itself and you get one 'utterance' event {turn_id, text, ...}: answer it at once with molty_talk {say, in_reply_to: turn_id} (the first agent to answer claims the turn; others get turn_claimed). Other events: react briefly, once per moment. Full guide: the molty agent skill, ${SKILL_HOME} (Claude Code / Codex: the molty plugin). This relay speaks agent api_version ${API_VERSION} (also in molty_status relay.api_version); what this Molty can do is relay.caps. When your human asks to check Molty for updates (any wording), call molty_updates and follow its 'actions'; ask before molty_update.`;
+  `Molty also emits events (${AGENT_EVENT_TYPES.join(", ")}) into your own inbox: unread ones ride along on every tool result as 'events' plus a 'Molty: ...' line; molty_events pulls/waits for them; molty_webhook registers an HTTPS request the relay sends you per event. A shake means the human wants to talk: Molty listens by itself and you get one 'utterance' event {turn_id, text, ...}: answer it at once with molty_talk {say, in_reply_to: turn_id} (the first agent to answer claims the turn; others get turn_claimed). While they are still talking you may get 'utterance.partial' events (context only): never speak then (human_speaking); you may molty_draft a short opener (played the instant they finish, if their last words don't change the meaning) and molty_react with a mood or a gesture (screen only). Other events: react briefly, once per moment. Full guide: the molty agent skill, ${SKILL_HOME} (Claude Code / Codex: the molty plugin). This relay speaks agent api_version ${API_VERSION} (also in molty_status relay.api_version); what this Molty can do is relay.caps. When your human asks to check Molty for updates (any wording), call molty_updates and follow its 'actions'; ask before molty_update.`;
 
 type Prop = { type: string | string[]; description: string; enum?: string[]; items?: { type: "string"; enum?: string[] } | { anyOf: JsonObject[] }; additionalProperties?: { type: "number" } };
 type Schema = { type: "object"; properties: Record<string, Prop>; required: string[]; additionalProperties: false };
@@ -216,6 +217,50 @@ export const TOOLS: ToolDef[] = [
     run: (api, t, a) => api.ask(t, a),
   },
   {
+    name: "molty_draft",
+    description: `While the human is STILL TALKING (after an 'utterance.partial' {turn_id, seq, text_so_far}): hold a short spoken opener for your answer. The relay synthesises it now and plays it the instant they finish (right after Molty's chirp), claiming the turn for you — but only if the final words add at most max_new_words beyond that partial and none of them turns the meaning (but, not, actually, …); otherwise you get 'draft.dropped' {reason} and answer the 'utterance' as usual. On 'draft.used' your opener is playing: CONTINUE it (don't repeat it) with molty_talk / molty_say {in_reply_to: turn_id}, which queues right behind it with no gap. Openers must fit any ending: "Sure —", "Good question.", "Let me check." (<= ${MAX_OPENER_WORDS} words). A new draft replaces yours (<= ${MAX_DRAFTS_PER_TURN} per turn). Returns {turn_id, based_on, status:"held", max_new_words (the relay caps it with its own calibrated threshold)}; turn_closed when they already finished.`,
+    inputSchema: obj(
+      {
+        turn_id: { type: "string", description: "The open turn's id (utterance.partial turn_id)." },
+        based_on: { type: "integer", description: "The seq of the partial your opener answers." },
+        opener: { type: "string", description: `The opener, spoken as is: one short line (<= ${MAX_OPENER_WORDS} words) that fits whatever they add.` },
+        max_new_words: { type: "integer", description: `Drop the draft if the final transcript adds more than this many words after based_on's text (0..${MAX_DRAFT_NEW_WORDS}; default and ceiling: the relay's calibrated threshold).` },
+        voice: { type: "string", description: "Optional relay TTS voice (use the same for the follow-up)." },
+      },
+      ["turn_id", "based_on", "opener"],
+    ),
+    auth: true,
+    run: (api, t, a) => api.draft(t, a),
+  },
+  {
+    name: "molty_react",
+    description: `While the human is STILL TALKING (an open turn, after 'utterance.partial'): show a reaction on Molty's screen over its listening animation — no sound (the mic is open) — for ~1.5 s, then it listens on. mood: ${REACT_MOODS.join(", ")}${REACT_ACTIONS.length ? `; or action: ${REACT_ACTIONS.join(", ")}` : ""}. At most one per ${REACT_MIN_GAP_MS / 1000} s per Molty (rate_limited with retry_after_ms). Sparingly: a nod to what they just said, not a running commentary. turn_closed when they already finished; unsupported on firmware without the react cap.`,
+    inputSchema: obj(
+      {
+        turn_id: { type: "string", description: "The open turn's id (utterance.partial turn_id)." },
+        mood: { type: "string", description: `One of ${REACT_MOODS.join(", ")}.`, enum: [...REACT_MOODS] },
+        ...(REACT_ACTIONS.length ? { action: { type: "string", description: `One of ${REACT_ACTIONS.join(", ")}.`, enum: [...REACT_ACTIONS] } } : {}),
+      },
+      ["turn_id"],
+    ),
+    auth: true,
+    run: (api, t, a) => api.react(t, a),
+  },
+  {
+    name: "molty_notes",
+    description: `Your PRIVATE notes on this Molty, kept by the relay for your token only (no other agent and not the owner's log can read the values): keep your behaviour ledger here when you have no memory of your own — what you tried (a react, an opener, a joke) and how the human responded — and read it at the start of a session. action: list (keys + sizes), get {key}, put {key, value: any JSON}, delete {key}. Limits: ${NOTES_LIMITS.keys} keys, ${NOTES_LIMITS.valueBytes / 1024} KB per value, ${NOTES_LIMITS.totalBytes / 1024} KB in all (too_large beyond). Deleted with your token.`,
+    inputSchema: obj(
+      {
+        action: { type: "string", description: "list, get, put or delete.", enum: ["list", "get", "put", "delete"] },
+        key: { type: "string", description: "1..64 characters: letters, digits and . _ : - (e.g. ledger, ledger:reacts)." },
+        value: { type: ["string", "number", "boolean", "object", "array"], description: "put: the value, any JSON (e.g. a list of {tried, response} entries)." },
+      },
+      ["action"],
+    ),
+    auth: true,
+    run: (api, t, a) => api.notes(t, a as never),
+  },
+  {
     name: "molty_updates",
     description:
       "Check Molty for updates, in one call: use it whenever your human asks to check Molty for updates (any wording). Returns {api_version, firmware:{current, board, online, latest|null, status: current|update_available|no_build_for_board|no_release|unknown, update_available, notes_url, needed_for:[{feature, what, needs, released}], can_self_update, release_check}, actions:[plain-language steps]}. Follow 'actions' in order: when firmware is behind ASK your human before calling molty_update. Marks the reported release as seen for you. The skill itself updates with the molty plugin, not through the relay.",
@@ -249,7 +294,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "molty_events",
-    description: `Your unread Molty events (${AGENT_EVENT_TYPES.join(", ")}), oldest first: {events:[{id, type, ts, data}], next, more}. Default since = your read cursor (each event is returned to you once; it advances). wait_s (0..${INBOX_LIMITS.mcpWaitS}, default 0) long-polls until an event arrives. since = an event id (e.g. e41) re-reads after it. shake {peak_g, reversals, ms, listening?, turn_id?} (listening: Molty is already listening, wait for the utterance); utterance {turn_id, text, reason, ms:{speech, stt}, trigger, device:{caps, mood, voice}} (the human's words after a shake: answer with molty_talk {say, in_reply_to: turn_id}); tap {x, y} in 0..1; button {id: accept|reject} (physical buttons: acknowledge / dismiss what you showed, never an answer); answer {job, index, label, reason?} (how a molty_ask ended).`,
+    description: `Your unread Molty events (${AGENT_EVENT_TYPES.join(", ")}), oldest first: {events:[{id, type, ts, data}], next, more}. Default since = your read cursor (each event is returned to you once; it advances). wait_s (0..${INBOX_LIMITS.mcpWaitS}, default 0) long-polls until an event arrives. since = an event id (e.g. e41) re-reads after it. shake {peak_g, reversals, ms, listening?, turn_id?} (listening: Molty is already listening, wait for the utterance); utterance {turn_id, text, reason, ms:{speech, stt}, trigger, device:{caps, mood, voice}, claimed?} (the human's words after a shake: answer with molty_talk {say, in_reply_to: turn_id}; claimed:true = another agent's opener already answers it); utterance.partial {turn_id, seq, text_so_far, new_text, elapsed_ms} (they are STILL talking: context only, never answer it — molty_draft / molty_react at most); draft.used {turn_id, based_on, opener, new_words} / draft.dropped {turn_id, based_on, reason, new_words?} (your draft's fate, to you only); tap {x, y} in 0..1; button {id: accept|reject} (physical buttons: acknowledge / dismiss what you showed, never an answer); answer {job, index, label, reason?} (how a molty_ask ended).`,
     inputSchema: obj({
       since: { type: "string", description: "Event id to read after, e.g. e41; default your cursor." },
       wait_s: { type: "integer", description: `Seconds to wait for a new event, 0..${INBOX_LIMITS.mcpWaitS}; default 0.` },
@@ -459,6 +504,9 @@ function capturingInbox(api: AgentApi): { api: AgentApi; taken: Inbox[]; fwNotic
       updates: (t) => keep(api.updates(t)),
       update: (t, r) => keep(api.update(t, r)),
       activityLog: (t, r) => keep(api.activityLog(t, r)),
+      draft: (t, r) => keep(api.draft(t, r)),
+      react: (t, r) => keep(api.react(t, r)),
+      notes: (t, r) => keep(api.notes(t, r)),
     },
   };
 }

@@ -51,7 +51,8 @@ make sim-test                                                # (5)
    Other knobs: `--agent llm --llm-model …`, `--agent-gap-ms N`, `--align none`, `--no-audio`.
    `molty-sim check [scenario]` parses a scenario offline; `molty-sim show runs/<ts>` reprints a run.
 5. Unit tests of the harness itself (scenario parsing, metrics, VAD port, mic framing, listen_stop,
-   the turn-trace uplink: shake settle, resend ring, trace header fields, shake to talk).
+   the turn-trace uplink: shake settle, resend ring, trace header fields, shake to talk; react moods / gestures,
+   the drafts scenario and metrics).
 
 **Turn-trace suite** (`scenarios/trace.yaml`, `make sim SIM_ARGS=scenarios/trace.yaml`): `shake-noise`
 (a turn started by an 8.2 g shake: seeded handling noise on the mic for the shake's first 0.45 s, an IMU
@@ -85,6 +86,36 @@ arrival lateness, relay timings. Cue ground truth is MMS forced alignment (torch
 box's CPU over ssh (`molty_sim/mms_remote.py`, `MOLTY_SIM_ALIGN_PYTHON`); the STT's word
 `start_time` is not used for it — it lands ~0.25 s late with a word-length-dependent spread. The
 alignment self-check aligns the human's clips too (their onsets are known from the TTS).
+
+## Shake turns: partials, drafts, reacts
+
+`scenarios/drafts.yaml` (`shake: true`) plays the human **shaking** Molty and talking: the sim device
+starts a listen at once under a local id, the relay adopts it (`cmd listen {adopt}`) and sends
+`utterance.partial` chunks to the agent. A scripted **drafting agent** (its whole inbox as one stream:
+a long-poll plus every ride-along) drafts one opener on the first partial that contains the turn's
+`draft.when`, reacts on `react.when`, then answers: `follow` after a played opener (`draft.used`,
+queued behind it), else `reply`. Each turn runs once per arm (`arms`, default `baseline` then
+`drafts`, back to back on the same audio). `answer` names the opener family that fits the FULL
+utterance, so a played opener of another family counts as wrong. Device moods are recorded:
+`react:true` ones never cancel the turn's acknowledgement, like the firmware.
+
+```sh
+make sim SIM_ARGS='scenarios/drafts.yaml --align none'
+```
+
+| column / summary | meaning |
+|---|---|
+| `parts` / `1st part` | partials this turn / the first one's `elapsed_ms` |
+| `gap` | the human's last voiced sample → Molty's first sample at the speaker (opener or reply) |
+| gap saved | per turn, baseline gap − drafts gap (paired) |
+| `draft` / `dropped` | the opener played (`draft.used`) / the relay's drop reason |
+| `wrong` | a played opener whose family does not fit what the human finally said |
+| saved / lost by relay | dropped openers that would have been wrong / would have fit |
+| `seam` | the opener's last sample → the follow-up's first (it queues behind the opener) |
+| `react lag` | the triggering word spoken → the react mood at the device (also request → device) |
+
+The run ends with the relay's own calibration (`GET /v1/devices/<id>/speech`): turns sampled, the
+partial policy and the draft threshold after the run.
 
 ## Caveats
 

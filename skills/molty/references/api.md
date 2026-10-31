@@ -212,6 +212,55 @@ the one the human tapped: `answer` (its label) and `index`. Blocks and finishes 
   need words. No touch screen: `409 unsupported`. Firmware too old for it: `409 firmware_too_old`
   (see [updates.md](updates.md#firmware_too_old)).
 
+## While the human speaks: draft and react
+
+During an open human turn (they shook Molty and are still talking; you get `utterance.partial`
+events — [events.md](events.md#while-the-human-speaks)) **only these two calls are accepted**;
+`say` / `talk` / `ask` / `mood` / `show` / `listen` get `409 human_speaking`.
+
+```sh
+# hold a short opener for your answer, based on partial seq 2 (it is synthesised now)
+curl -sS -X POST "$MOLTY_RELAY/v1/devices/$DEVICE/draft" -H "authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"turn_id":"molty-xxxxxxxxxx.j_…","based_on":2,"opener":"Let me look.","max_new_words":4}'
+# → {"ok":true,"result":{"turn_id":"…","based_on":2,"status":"held","max_new_words":4,"threshold":4}}
+
+# a reaction on the screen, no sound (the mic is open)
+curl -sS -X POST "$MOLTY_RELAY/v1/devices/$DEVICE/react" -H "authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' -d '{"turn_id":"molty-xxxxxxxxxx.j_…","mood":"happy"}'
+# → {"ok":true,"result":{"turn_id":"…","shown":"happy","for_ms":1500,"next_after_ms":3000}}
+```
+
+- **draft** `{turn_id, based_on, opener, max_new_words?, voice?}`: `opener` ≤ 24 words, spoken as
+  is the instant the human finishes (right after Molty's chirp) when their final words add at most
+  `max_new_words` (0..20; the relay caps it with its own calibrated threshold, returned as
+  `max_new_words`) beyond partial `based_on` and none of those words turns the meaning ("but",
+  "not", "actually", …). Then you own the turn: `draft.used`; else `draft.dropped {reason}`
+  ([talking-fast.md](talking-fast.md#drafts-a-head-start-not-an-answer)). A new draft replaces yours
+  (≤ 3 per turn: `429 rate_limited`). `409 turn_closed`: they already finished.
+- **react** `{turn_id, mood}` (`happy`, `surprised`, `thinking`): shown over the listening
+  animation for ~1.5 s, then Molty listens on. Or `{turn_id, action}`: one of the gestures of
+  `act` (`nod`, `wiggle`, …), played over the listening. At most one per 3 s per Molty (`429 rate_limited`
+  with `retry_after_ms`). Firmware without `react` (a mood) / `act` (an action) in `relay.caps`: `409 unsupported`.
+
+## Notes (your private ledger store)
+
+The relay keeps a small key-value store per agent token, readable only with that token (the
+owner's activity log records the call, never the value). For your
+[behaviour ledger](etiquette.md#keep-a-behaviour-ledger) when you have no memory of your own:
+
+```sh
+curl -sS -X PUT "$MOLTY_RELAY/v1/notes" -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"key":"ledger","value":[{"at":"2026-10-30 14:02","did":"react happy","response":"they laughed"}]}'
+curl -sS "$MOLTY_RELAY/v1/notes?key=ledger" -H "authorization: Bearer $TOKEN"   # → {"key","value","updated"}
+curl -sS "$MOLTY_RELAY/v1/notes" -H "authorization: Bearer $TOKEN"              # → {"keys":[{key, bytes, updated}], "bytes", "limits"}
+curl -sS -X DELETE "$MOLTY_RELAY/v1/notes?key=ledger" -H "authorization: Bearer $TOKEN"
+```
+
+Keys: 1–64 of letters, digits, `. _ : -`. Values: any JSON, ≤ 8 KB each, ≤ 64 keys and 32 KB in
+all (`413 too_large`). MCP: `molty_notes {action: list|get|put|delete, key?, value?}`. Revoking
+your token deletes them.
+
 ## Errors
 
 `{"ok":false,"error":code}`:
@@ -224,6 +273,10 @@ the one the human tapped: `answer` (its label) and `index`. Blocks and finishes 
 | `409 audio_busy` | another say/listen is running: wait for it, retry once |
 | `409 unsupported` | the board lacks it (no speaker or mic: `say`/`listen` absent from `relay.caps`; no touch: no ask) |
 | `409 turn_claimed` | another agent is already answering the human's turn: stay quiet ([events.md](events.md#shake-to-talk)) |
+| `409 human_speaking` | the human is still talking (an open turn): wait for their `utterance`; meanwhile only draft / react ([events.md](events.md#while-the-human-speaks)) |
+| `409 turn_closed` | a draft / react for a turn that is no longer open: answer its `utterance` as usual |
+| `429 rate_limited` | a second react within 3 s, or a fourth draft in one turn (`retry_after_ms` when it applies) |
+| `413 too_large` | notes over their limits |
 | `409 firmware_too_old` | Molty's firmware predates the feature ([updates.md](updates.md#firmware_too_old)) |
 | `503 voice_box_offline` | the owner's voice box is required (mode `box`) and down ([voice-box.md](voice-box.md)) |
 | `listen_failed` | the recording broke mid-listen |
@@ -250,7 +303,8 @@ The same features are a remote MCP server at `$MOLTY_RELAY/mcp` (streamable HTTP
 auth). Tools: `molty_pair` (no token needed), `molty_talk`, `molty_ask`, `molty_status`, `molty_mood`, `molty_act`,
 `molty_show`, `molty_say`, `molty_listen`, `molty_wait`, `molty_state`,
 `molty_volume`, `molty_imu`, `molty_diag`, `molty_log`, `molty_events`,
-`molty_webhook`, `molty_updates`, `molty_update`, `molty_activity`. Claude Code example:
+`molty_webhook`, `molty_updates`, `molty_update`, `molty_activity`, `molty_draft`, `molty_react`,
+`molty_notes`. Claude Code example:
 
 ```sh
 claude mcp add --transport http molty "$MOLTY_RELAY/mcp" --header "Authorization: Bearer <agent_token>"

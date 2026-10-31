@@ -22,6 +22,8 @@ export const TRACE_LIMITS = {
   boxBytes: 8192,
   /** Hints forwarded per listen, noted in the trace. */
   hints: 16,
+  /** Partials / drafts / reacts noted per listen (core/partials.ts: at most 8 partials, 3 drafts an agent). */
+  turnNotes: 16,
 } as const;
 
 /**
@@ -100,6 +102,10 @@ export class ListenTrace {
   shake?: JsonObject;
   box?: JsonObject;
   readonly hints: Array<[string, number]> = [];
+  /** While the human talks (core/partials.ts), ms from t0: partials [seq, ms, words], drafts [based_on, ms], reacts [mood|action, ms, ok|error]. */
+  readonly partials: Array<[number, number, number]> = [];
+  readonly drafts: Array<[number, number]> = [];
+  readonly reacts: Array<[string, number, string]> = [];
   /** Relay timings and facts (ms from t0), set by room.ts. */
   readonly relay: JsonObject = {};
 
@@ -127,6 +133,21 @@ export class ListenTrace {
 
   hint(k: string, at: number): void {
     if (this.hints.length < TRACE_LIMITS.hints) this.hints.push([k, at - this.t0]);
+  }
+
+  /** An utterance.partial that went out (no words: only their count). */
+  partial(seq: number, words: number, at: number): void {
+    if (this.partials.length < TRACE_LIMITS.turnNotes) this.partials.push([seq, at - this.t0, words]);
+  }
+
+  /** A draft held for this turn (based on partial `basedOn`). */
+  draft(basedOn: number, at: number): void {
+    if (this.drafts.length < TRACE_LIMITS.turnNotes) this.drafts.push([basedOn, at - this.t0]);
+  }
+
+  /** A react asked for during this turn, and how it went ("ok" or the error code). */
+  react(what: string, at: number, outcome: string): void {
+    if (this.reacts.length < TRACE_LIMITS.turnNotes) this.reacts.push([what, at - this.t0, outcome]);
   }
 
   /** The whole trace (uncapped: capTrace() it before storing). */
@@ -168,6 +189,9 @@ export class ListenTrace {
     if (this.speechMs !== undefined) dev.speech_ms = this.speechMs;
     const relay: JsonObject = { ...this.relay };
     if (this.hints.length) relay.hints = this.hints;
+    if (this.partials.length) relay.partials = this.partials;
+    if (this.drafts.length) relay.drafts = this.drafts;
+    if (this.reacts.length) relay.reacts = this.reacts;
     return { v: 1, trigger: this.trigger, t0: this.t0, dev, ...(this.box ? { box: this.box } : {}), relay };
   }
 }

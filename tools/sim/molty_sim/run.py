@@ -7,6 +7,7 @@ import base64
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,9 +15,9 @@ from pathlib import Path
 import numpy as np
 
 from . import align, report, stack
-from .agent import LlmAgent, RelayError, Rest, ScriptedAgent
+from .agent import EventPump, LlmAgent, RelayError, Rest, ScriptedAgent
 from .device import CUE_LEAD_S, SimDevice, new_device_id
-from .metrics import TurnFacts, summarize, turn_metrics, wer
+from .metrics import ShakeFacts, TurnFacts, drafts_summary, shake_metrics, summarize, turn_metrics, wer
 from .scenario import Scenario
 from .voice import Clip, Mic, Synth, write_wav
 
@@ -46,6 +47,7 @@ class Options:
     align_python: str = "python3"
     keep_audio: bool = True
     only: list[str] | None = None  # turn ids
+    drafter: str = "careful"  # shake turns: careful (no draft once a turn-around word was heard) | naive
 
     @property
     def tts_url(self) -> str:
@@ -125,6 +127,8 @@ async def run(o: Options) -> Path:
             raise RuntimeError(f"the voice box never showed as connected: {vs}")
         print(f"voice box connected (mode {vs.get('mode')}); bridge tuning: {' '.join(o.tuning) or 'defaults'}", flush=True)
 
+        if sc.shake:
+            return await shake_run(o, out, ts, dev, rest, turns, clips, fw, device_id, relay_http)
         agent = (LlmAgent(o.llm_url, o.llm_model, o.agent_gap_ms) if o.agent == "llm" else ScriptedAgent(o.agent_gap_ms))
         rows = await conversation(dev, rest, agent, turns, clips, sc.closing)
         await asyncio.sleep(0.5)
@@ -159,6 +163,161 @@ async def run(o: Options) -> Path:
             p.stop()
         if voice_cfg.exists():  # the voice token never outlives the run
             voice_cfg.unlink()
+
+
+async def shake_run(o: Options, out: Path, ts: str, dev: SimDevice, rest: Rest, turns, clips, fw: str, device_id: str, relay_http: str) -> Path:
+    """A shake scenario: every turn once per arm, then the drafts report (no say-cue alignment: not measured here)."""
+    pump = EventPump(rest)
+    pump.start()
+    try:
+        rows = await shake_conversation(dev, rest, pump, turns, clips, o.scenario.arms, o.agent_gap_ms, o.drafter)
+    finally:
+        await pump.stop()
+    speech = await rest.speech(dev.link_code)
+    summary = drafts_summary(rows)
+    summary["calibration"] = speech
+    meta = {"run": ts, "scenario": o.scenario.name, "relay": "local wrangler dev" if not o.relay else relay_http, "device": device_id,
+            "fw": fw, "caps": dev.caps, "bridge_tuning": o.tuning, "agent": f"scripted drafter ({o.drafter})", "agent_gap_ms": o.agent_gap_ms,
+            "arms": o.scenario.arms, "box": o.box}
+    if o.keep_audio:
+        for t in turns:
+            c = clips[t.id]
+            write_wav(out / "audio" / f"{t.index:02d}-{t.id}.user.wav", Mic(c).read(len(c.pcm) + 16000))
+    report.write_shake(out, meta, rows, summary)
+    print(report.shake_table(rows, summary), flush=True)
+    print(f"\nreport: {out / 'report.md'}", flush=True)
+    return out
+
+
+async def shake_conversation(dev: SimDevice, rest: Rest, pump: EventPump, turns, clips, arms: list[str], gap_ms: int = 0, drafter: str = "careful") -> list[dict]:
+    rows: list[dict] = []
+    n = len(turns) * len(arms)
+    for t in turns:
+        for arm in arms:
+            print(f"[{len(rows) + 1}/{n}] {t.id} ({arm}): human: {t.text[:60]!r}", flush=True)
+            row = await shake_turn(dev, rest, pump, t, clips[t.id], arm, gap_ms, drafter)
+            rows.append(row)
+            print(f"      heard {row.get('heard')!r} gap {row.get('gap_ms')} ms partials {row.get('partials')}"
+                  + (f" draft {'used' if row.get('used') else row.get('dropped') or row.get('draft_error') or '—'}" if arm == "drafts" else ""), flush=True)
+            await asyncio.sleep(1.5)  # Molty idle again, well past the misfire window
+    return rows
+
+
+MAX_DRAFTS = 3  # per turn (relay MAX_DRAFTS_PER_TURN)
+# what a careful drafter listens for (services/relay/src/core/partials.ts FLIP_WORDS): once heard, no (re)draft
+FLIP_WORDS = {"but", "not", "no", "nope", "never", "don't", "dont", "doesn't", "didn't", "isn't", "won't", "can't", "cannot",
+              "shouldn't", "wouldn't", "except", "unless", "actually", "instead", "wait", "cancel", "although", "however", "rather"}
+
+
+def heard_flip(text: str) -> bool:
+    return any(re.sub(r"[^\w']+", "", w.lower().replace("’", "'")) in FLIP_WORDS for w in text.split())
+
+
+async def shake_turn(dev: SimDevice, rest: Rest, pump: EventPump, t, clip: Clip, arm: str, gap_ms: int = 0, drafter: str = "careful") -> dict:
+    """The human shakes Molty and speaks; the scripted agent drafts / reacts (arm drafts) and answers."""
+    dev.mic_for = lambda job, c=clip: Mic(c)
+    pump.drain()
+    before = set(dev.says)
+    moods0 = len(dev.moods)
+    row: dict = {"id": t.id, "arm": arm, "text": t.text, "tags": t.tags, "answer": t.answer}
+    local = await dev.shake()
+    rec = dev.listens.get(local) if local else None
+    if rec is None:
+        row["error"] = "device_busy"
+        return row
+    turn_id = None
+    partials: list[dict] = []
+    drafted = react = used = dropped = utt = None
+    end = time.monotonic() + 45
+    while utt is None:
+        got = await pump.next(max(0.05, end - time.monotonic()))
+        if got is None:
+            break
+        at, e = got
+        typ, d = e.get("type"), e.get("data") or {}
+        if typ == "shake" and d.get("turn_id"):
+            turn_id = d["turn_id"]
+        elif typ == "utterance.partial" and d.get("turn_id") == turn_id:
+            partials.append({"at": at, **d})
+            if arm != "drafts":
+                continue
+            so_far = d.get("text_so_far", "").lower()
+            # the skill's advice: base the opener on the LATEST partial (a new draft replaces the old; <= 3 a turn)
+            careful_stop = drafter == "careful" and heard_flip(so_far)
+            if t.draft and not careful_stop and t.draft["when"].lower() in so_far and (drafted is None or (drafted["ok"] and drafted["n"] < MAX_DRAFTS)):
+                st, b = await rest.draft(turn_id, d["seq"], t.draft["opener"])
+                n = (drafted or {}).get("n", 0) + 1
+                if b.get("ok") or drafted is None:
+                    drafted = {"at": time.monotonic(), "seq": d["seq"], "n": n, "ok": bool(b.get("ok")), "error": None if b.get("ok") else b.get("error")}
+            if t.react and react is None and t.react["when"].lower() in so_far:
+                sent = time.monotonic()
+                st, b = await rest.react(turn_id, **{k: t.react[k] for k in ("mood", "action") if k in t.react})
+                react = {"sent": sent, "error": None if b.get("ok") else b.get("error"), "words": len(d.get("text_so_far", "").split())}
+        elif typ == "draft.used" and d.get("turn_id") == turn_id:
+            used = d
+        elif typ == "draft.dropped" and d.get("turn_id") == turn_id and d.get("reason") != "replaced":
+            dropped = d
+        elif typ == "utterance" and d.get("turn_id") == turn_id:
+            utt = d
+    await asyncio.wait_for(rec.done.wait(), 15)
+    row.update({"turn_id": turn_id, "heard": (utt or {}).get("text"), "claimed": bool((utt or {}).get("claimed")),
+                "partial_texts": [p.get("text_so_far") for p in partials], "first_partial_ms": partials[0].get("elapsed_ms") if partials else None,
+                "draft_seq": (drafted or {}).get("seq"), "opener": t.draft["opener"] if drafted else None,
+                "drop_new_words": (dropped or {}).get("new_words")})
+    if utt is None:
+        row["error"] = "no_utterance"
+    else:
+        if gap_ms:
+            await asyncio.sleep(gap_ms / 1000)
+        text = (t.follow or t.reply) if used else t.reply
+        try:
+            await rest.say(text, in_reply_to=turn_id)
+        except RelayError as e:
+            row["error"] = e.body.get("error")
+    says = [dev.says[k] for k in dev.says if k not in before]
+    for sy in says:
+        try:
+            await asyncio.wait_for(sy.done.wait(), 20)
+        except asyncio.TimeoutError:
+            pass
+    opener = dev.says.get(used.get("job")) if used else None
+    follow = next((sy for sy in says if sy is not opener), None) if opener else None
+    starts = [sy.play_start for sy in says if sy.play_start is not None]
+    shown = None
+    if react and not react["error"]:
+        want = t.react.get("mood") or f"act:{t.react.get('action')}"
+        shown = next((at for at, mood, r in dev.moods[moods0:] if r and mood == want), None)
+    word_at = None
+    if react and clip.words:
+        k = min(react["words"], len(clip.words)) - 1
+        word_at = rec.mic_open_at + clip.words[k][1] if k >= 0 else None
+    facts = ShakeFacts(
+        arm=arm,
+        speech_end_at=rec.mic_open_at + clip.speech_end_s if clip.speech_end_s is not None else None,
+        first_voice_at=min(starts) if starts else None,
+        partials=len(partials),
+        drafted=bool(drafted and drafted["ok"]),
+        draft_error=(drafted or {}).get("error"),
+        used=used is not None,
+        dropped=(dropped or {}).get("reason"),
+        family=t.draft["family"] if drafted else None,
+        answer=t.answer,
+        opener_end_at=opener.cursor if opener else None,
+        follow_start_at=follow.play_start if follow else None,
+        react_sent_at=react["sent"] if react else None,
+        react_shown_at=shown,
+        react_word_at=word_at,
+        react_error=(react or {}).get("error"),
+        ack=rec.ack,
+    )
+    row.update(shake_metrics(facts))
+    # where the gap goes: eos → listen end (end of turn) → the first say's cmd → its first frame → its first sample played
+    first = min((sy for sy in says if sy.play_start is not None), key=lambda sy: sy.play_start, default=None)
+    if first is not None and facts.speech_end_at is not None and rec.end_at is not None:
+        ms = lambda a, b: round((b - a) * 1000) if a is not None and b is not None else None  # noqa: E731
+        row["gap_parts_ms"] = {"eos_to_turn_end": ms(facts.speech_end_at, rec.end_at), "turn_end_to_say_cmd": ms(rec.end_at, first.cmd_at),
+                               "say_cmd_to_first_frame": ms(first.cmd_at, first.first_at), "first_frame_to_play": ms(first.first_at, first.play_start)}
+    return row
 
 
 async def conversation(dev: SimDevice, rest: Rest, agent, turns, clips, closing) -> list[dict]:

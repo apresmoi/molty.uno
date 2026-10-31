@@ -53,17 +53,23 @@ int main(void) {
     assert(run("mood","{\"mood\":\"furious\"}")==ESP_ERR_INVALID_ARG && link_cmd_mood_gen()==g+2);
     assert(run("mood","{\"mood\":\"happy\",\"hold_s\":-1}")==ESP_ERR_INVALID_ARG && link_cmd_mood_gen()==g+2);
     assert(run("show","{\"text\":\"hi\"}")==ESP_OK && link_cmd_mood_gen()==g+2);
+    /* a react (mood {react:true}, cap "react") shows the mood but is not explicit: the listen's
+     * ack and idle fallback stay, and it never cancels a question; a non-bool react is refused */
+    assert(run("mood","{\"mood\":\"surprised\",\"hold_s\":0,\"react\":true}")==ESP_OK && link_cmd_mood_gen()==g+2);
+    assert(strstr(sdk_state,"\"mood\":\"surprised\""));
+    assert(run("mood","{\"mood\":\"happy\",\"react\":false}")==ESP_OK && link_cmd_mood_gen()==g+3);
+    assert(run("mood","{\"mood\":\"happy\",\"react\":1}")==ESP_ERR_INVALID_ARG && link_cmd_mood_gen()==g+3);
     /* local HTTP state bodies: only a top-level mood string counts */
-    assert(link_cmd_state_set_explicit("{\"mood\":\"sleepy\",\"hold_s\":30}")==ESP_OK && link_cmd_mood_gen()==g+3);
-    assert(link_cmd_state_set_explicit("{\"state\":\"text\",\"text\":\"my \\\"mood\\\" is fine\"}")==ESP_OK && link_cmd_mood_gen()==g+3);
-    assert(link_cmd_state_set_explicit("{\"state\":\"blob\"}")==ESP_OK && link_cmd_mood_gen()==g+3);
-    assert(link_cmd_state_set_explicit("not json \"mood\"")==ESP_OK && link_cmd_mood_gen()==g+3);
+    assert(link_cmd_state_set_explicit("{\"mood\":\"sleepy\",\"hold_s\":30}")==ESP_OK && link_cmd_mood_gen()==g+4);
+    assert(link_cmd_state_set_explicit("{\"state\":\"text\",\"text\":\"my \\\"mood\\\" is fine\"}")==ESP_OK && link_cmd_mood_gen()==g+4);
+    assert(link_cmd_state_set_explicit("{\"state\":\"blob\"}")==ESP_OK && link_cmd_mood_gen()==g+4);
+    assert(link_cmd_state_set_explicit("not json \"mood\"")==ESP_OK && link_cmd_mood_gen()==g+4);
     /* the creature reads "mood" case-insensitively with escapes decoded: count those too */
-    assert(link_cmd_state_set_explicit("{\"Mood\":\"happy\"}")==ESP_OK && link_cmd_mood_gen()==g+4);
-    assert(link_cmd_state_set_explicit("{\"\\u006dood\":\"happy\"}")==ESP_OK && link_cmd_mood_gen()==g+5);
+    assert(link_cmd_state_set_explicit("{\"Mood\":\"happy\"}")==ESP_OK && link_cmd_mood_gen()==g+5);
+    assert(link_cmd_state_set_explicit("{\"\\u006dood\":\"happy\"}")==ESP_OK && link_cmd_mood_gen()==g+6);
     /* the link's raw state command with a mood is explicit too */
-    assert(run("state","{\"mood\":\"happy\"}")==ESP_OK && link_cmd_mood_gen()==g+6);
-    assert(run("state","{\"state\":\"blob\"}")==ESP_OK && link_cmd_mood_gen()==g+6);
+    assert(run("state","{\"mood\":\"happy\"}")==ESP_OK && link_cmd_mood_gen()==g+7);
+    assert(run("state","{\"state\":\"blob\"}")==ESP_OK && link_cmd_mood_gen()==g+7);
     /* the race: an explicit mood's apply + count, and a job end's check + idle, share one
      * lock (HTTP task vs link task). Every mood write below must run with it held. */
     sdk_state_locked=false; assert(link_cmd_state_set_explicit("{\"mood\":\"happy\"}")==ESP_OK && sdk_state_locked);
@@ -97,6 +103,7 @@ int main(void) {
     unsigned c=ask_cancels;
     assert(run("show","{\"text\":\"hi\"}")==ESP_OK && ask_cancels==c+1);
     assert(run("mood","{\"mood\":\"happy\"}")==ESP_OK && ask_cancels==c+2);
+    assert(run("mood","{\"mood\":\"happy\",\"react\":true}")==ESP_OK && ask_cancels==c+2);   /* a react leaves it up */
     assert(run("state","{\"palette\":\"green\"}")==ESP_OK && ask_cancels==c+3);
     assert(run("state","{}")==ESP_OK && run("status","{}")==ESP_OK && run("diag","{}")==ESP_OK && ask_cancels==c+3);
     assert(run("volume","{\"volume\":3}")==ESP_OK && run("imu","{}")==ESP_ERR_NOT_SUPPORTED && ask_cancels==c+3);
