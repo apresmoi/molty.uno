@@ -317,3 +317,9 @@ pre.act-lines { max-height: 260px; margin: 8px 0 0; }
 .tone-err { color: var(--err); }
 .tone-warn { color: var(--m-warn); }
 .tone-ok { color: var(--m-accent); }
+
+/* Behavior: one tab per stage */
+.tabs { display: flex; flex-wrap: wrap; gap: 4px 20px; margin: 0 0 20px; border-bottom: 1px solid var(--m-line); }
+.tabs button { background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 10px 0; min-height: var(--tap); color: var(--m-dim); font: inherit; cursor: pointer; }
+.tabs button:hover { color: var(--m-ink); }
+.tabs button.here { color: var(--m-accent); border-bottom-color: var(--m-accent); }

@@ -43,7 +43,7 @@ export function statusPage(root: HTMLElement, { api }: AppCtx) {
     const boxDown = voice && boxLine(voice).kind === 'warn';
     mount(rows,
       statusRow('Creature', s?.creature_info?.name ?? r?.current ?? '…', 'dim', '#/molty'),
-      statusRow('Voice', voice ? voiceSummary(voice) + (boxDown ? ' (box offline)' : '') : l ? 'See settings' : '…', boxDown ? 'warn' : 'dim', '#/voice'),
+      statusRow('Voice', voice ? voiceSummary(voice) + (boxDown ? ' (box offline)' : '') : l ? 'See settings' : '…', boxDown ? 'warn' : 'dim', '#/behavior/speaking'),
       statusRow('Agent', !l ? '…' : l.connected ? (l.last_pair?.ok ? `${l.last_pair.agent_name} is connected` : 'Connected') : 'Not connected', l?.connected ? 'ok' : 'warn', '#/agent'),
       statusRow('Wi-Fi', !w ? '…' : up ? `${w.ssid} ${bars(w.rssi)}` : w.state.replace('_', ' '), up ? 'ok' : 'warn', '#/wifi'));
     mount(facts,
