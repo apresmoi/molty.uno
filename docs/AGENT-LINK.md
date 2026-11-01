@@ -403,9 +403,7 @@ human stops ─▶ chirp + thinking (device)
     phrase ("Hmm…", "One sec.", "Let me see."); nothing fits → no filler. Never the same phrase
     twice in a row when another fits.
   - **Classifier:** one path — [Molty's reflex](#reflex) (`DeviceRoom.fillerCategory`): the
-    category the reflex already decided for those exact words, else one call of the owner's
-    engine (`jev` / `openai` with a key), the keywords engine when the reflex is off or has no
-    key. It starts when the turn ends, in parallel with the delay, with `CLASSIFY_BUDGET_MS` (400 ms);
+    category the reflex already decided for those exact words, else the keywords engine. It starts when the turn ends, in parallel with the delay, with `CLASSIFY_BUDGET_MS` (400 ms);
     a throw, an unknown category, the deadline, or a verdict not in by the filler's moment → the
     keywords. Nothing adds to the owner's delay: the filler never waits for the classifier, the
     pool is looked up when armed, the audio comes from the phrase cache (warmed during the listen).
@@ -582,10 +580,10 @@ the console's Voice card; default `off`). Code: `services/relay/src/core/reflex.
 
 ```
 box stt.partial ─▶ reflex chunk n ─▶ engine ─▶ pick + category ─▶ liveliness gate ─▶ fire gates ─▶ mood {react:true} | act
-                   (3 words, then     local:    the box's classifier, stt.reflex {n,…}       full / soft / none
-                    every few words,  jev:      TypeSafe System One (TYPESAFE_API_KEY)
-                    a sentence end    openai:   OpenAI Decisions, gpt-6-luna (OPENAI_API_KEY)
-                    or ~1.2–2.5 s;    keywords: relay heuristic, no key
+                   (3 words, then     local:    the box's verdict, stt.reflex {n,…}          full / soft / none
+                    every few words,            (its classifier, or a hosted model with the owner's key on the box)
+                    a sentence end    keywords: relay heuristic
+                    or ~1.2–2.5 s;
                     ≤ 40)             error / no answer in 600 ms ─▶ keywords' pick instead (never blocks the listen)
 ```
 
@@ -600,7 +598,7 @@ box stt.partial ─▶ reflex chunk n ─▶ engine ─▶ pick + category ─�
 - **Liveliness** (owner setting `liveliness` = `calm | normal | lively`, default `normal`; the
   console's Voice card; `REFLEX_LIVELINESS`):
 
-  | | every | gap (any react / reflex) | full pick at (local / jev, openai) | mild pick |
+  | | every | gap (any react / reflex) | full pick at (classifier / hosted on the box) | mild pick |
   |---|---|---|---|---|
   | calm | 6 words or 2.5 s | 3 s | 0.35 / 0.5 | — |
   | normal | 4 words or 1.5 s | 2 s | 0.3 / 0.4 | `none` < 0.6 and a reaction ≥ 0.3 |
@@ -610,14 +608,13 @@ box stt.partial ─▶ reflex chunk n ─▶ engine ─▶ pick + category ─�
   `wiggle`, sad → `nod`, laugh → `wobble`, curious → `glance_left` / `glance_right` (alternating).
   A request is never curiosity, in full or mild. Tuned with `molty-sim reflex-turns` /
   `reflex-bench` (tools/sim/README.md).
-- **Engines** (`reflex` = `off | auto | local | jev | openai | keywords`; `auto` = local when the
-  box serves the listen and offers its classifier, else jev with a key, else keywords). Each
+- **Engines** (`reflex` = `off | auto | local | keywords`; `auto` = local when the
+  box serves the listen and offers a verdict, else keywords). Each
   answers a reaction (`surprised happy sad laugh curious none`) and, in the same call, the
   utterance **category** (`question request hard other`, for context-picked fillers). The model
   engines see the last 400 characters of the text so far. A pick below its engine's gate at the
-  liveliness is `none` (or mild, above). A chosen engine that cannot run (no key, no box
-  classifier) answers with the keywords, saying why (`fallback`); one refused for good
-  (HTTP 400/401/403/404) is benched for 10 min.
+  liveliness is `none` (or mild, above). `local` with no box offering it answers with the keywords,
+  saying why (`fallback`). Reactions need a box's live transcript: a listen on the cloud voice has none.
 - **Shown** through the react path, screen only: surprised / happy → `mood {mood, hold_s:0,
   react:true}` (cap `react`; back to `listening` after 1.5 s), sad → `act nod`, laugh → `act
   bounce`, curious → `act peek` (cap `act`); a mild pick → its soft gesture. Not fired (and noted
@@ -639,8 +636,8 @@ box stt.partial ─▶ reflex chunk n ─▶ engine ─▶ pick + category ─�
   pick (and the engine's own choice when the gate changed it; `soft` for a mild one), confidence, probabilities in the order above, the category,
   whether and how it fired, the fallback reason, the error. Never words. Capped: probabilities
   go first, then all but the newest 12 decisions.
-- **Keys**: Worker secrets (`wrangler secret put TYPESAFE_API_KEY`, `… OPENAI_API_KEY`), never
-  logged or traced; errors are codes (`timeout`, `http_401`, `network`, …).
+- **Keys**: the relay holds none. A hosted model's key stays on the box (`TYPESAFE_API_KEY` or
+  `OPENAI_API_KEY` in its environment), which marks those verdicts `hosted: true`.
 - **Fillers**: `DeviceRoom.fillerCategory(text)` gives the category of the latest partial / final
   text — the reflex's own answer for those words when it has one, else one call of the owner's
   engine (keywords when off or failing).
@@ -1454,11 +1451,11 @@ the console is served by the device.
   local device setting. The console reads the code from `GET /api/link`; it rotates every
   15 min and after each pairing.
 - **GET** returns `{mode, voice, cloud, serving:{tts, stt}, reflex:{mode, compare, engines:{local,
-  jev, openai, keywords}, engine, fallback?, timeout_ms, liveliness}, box:{paired, name, paired_at,
+  keywords}, engine, fallback?, timeout_ms, liveliness}, box:{paired, name, paired_at,
   connected, connected_since, reported_name, version, voices, stt, tts, last:{stt_ms,
   tts_first_audio_ms, …}}}` (`reflex.engine`: what the next listen fires with, null when off).
 - **POST** `{mode?, voice?, reflex?, reflex_compare?, liveliness?}` changes the settings (`voice:
-  null` = the box's default; `reflex` one of `off auto local jev openai keywords`, `liveliness` one
+  null` = the box's default; `reflex` one of `off auto local keywords`, `liveliness` one
   of `calm normal lively`, see [Reflex](#reflex)).
 - **DELETE** unpairs the box.
 - **Errors:** `401` for a wrong or expired code, `400 invalid_args`.

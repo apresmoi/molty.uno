@@ -51,14 +51,14 @@ def main(argv: list[str] | None = None) -> int:
 
     rb = sub.add_parser("reflex-bench", help="Molty's reflex engines on labelled partials: accuracy, latency, cost (scenarios/reflex.yaml)")
     rb.add_argument("--set", default=None, help="labelled set (default scenarios/reflex.yaml)")
-    rb.add_argument("--engines", default="local,jev,openai,keywords", help="comma-separated: local,jev,openai,keywords")
+    rb.add_argument("--engines", default="local,keywords", help="comma-separated: local,keywords")
     rb.add_argument("--box", default=os.environ.get("MOLTY_SIM_BOX", "voicebox"), help="ssh host of the voice box, for local (env MOLTY_SIM_BOX)")
     rb.add_argument("--misses", action="store_true", help="also list each engine's wrong picks")
     rb.add_argument("--json", help="write the scores here too")
     rb.add_argument("--liveliness", choices=["calm", "normal", "lively"], default="normal", help="the relay's gate (core/reflex.ts REFLEX_LIVELINESS)")
 
     rt = sub.add_parser("reflex-turns", help="Molty's reflex over whole spoken turns: fires per turn, time to first reaction, false fires (scenarios/reflex-turns.yaml)")
-    rt.add_argument("configs", nargs="+", help="label=engine[:liveliness][@relay_dir], e.g. after=jev:lively")
+    rt.add_argument("configs", nargs="+", help="label=engine[:liveliness][@relay_dir], e.g. after=keywords:lively")
     rt.add_argument("--set", default=None, help="turns (default scenarios/reflex-turns.yaml)")
     rt.add_argument("--detail", action="store_true", help="also list each turn's reactions")
     rt.add_argument("--json", help="write every turn's decisions here too")

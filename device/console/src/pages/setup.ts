@@ -16,7 +16,7 @@ import { linkContext, linkPanel, relayLine } from '../ui/agent-link';
 import { h, mount } from '../ui/dom';
 import { errText } from '../ui/fmt';
 import { moltyScreen } from '../ui/screen';
-import { applyGap, gapOptions, getVoice, reflexOn, reflexOptions, setVoice, voiceOn, voiceOptions, type GapFill, type ReflexMode, type VoiceMode, type VoiceStatus, type VoiceTarget } from '../voice/voice';
+import { applyGap, gapOptions, reactsHere, getVoice, reflexOn, reflexOptions, setVoice, voiceOn, voiceOptions, type GapFill, type ReflexMode, type VoiceMode, type VoiceStatus, type VoiceTarget } from '../voice/voice';
 import { choices, type Choice } from '../ui/kit';
 
 type Step = 'wifi' | 'pass' | 'joining' | 'molty' | 'agent' | 'tap' | 'voice' | 'gap' | 'reflex' | 'done';
@@ -284,7 +284,7 @@ export function setupPage(root: HTMLElement, { api, catalog }: AppCtx, first = '
     const on = voice!.first_words?.mode === 'opener' ? 'local' : undefined;
     chooser<GapFill>('Agents can be slow. What should I do meanwhile?', 'Until your agent answers', gapOptions(voice!), on, async (id) => {
       voice = await applyGap(target!, id, api);
-      go('reflex');
+      go(reactsHere(voice) ? 'reflex' : 'done');
     });
   }
 

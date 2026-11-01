@@ -1,6 +1,7 @@
-# molty-voice — your own voice box for Molty
+# molty-voice — the Molty box
 
-Run Molty's speech on your own GPU instead of the cloud: Kyutai's
+An optional second deployment. Molty works without it, on the relay's cloud voice or as text only.
+Add a Molty box when you want speech on your own GPU, live reactions while you talk, or first words: Kyutai's
 [moshi-server](https://github.com/kyutai-labs/delayed-streams-modeling) does STT and TTS,
 and `molty-voice` bridges it to the Molty relay.
 
@@ -16,7 +17,7 @@ Molty ──WSS──▶ relay ◀──WSS── molty-voice ──ws://127.0.0
 - Speech-to-text streams while you talk, so the transcript arrives about 0.1–0.5 s after
   you stop speaking instead of after a 3–8 s batch upload.
 - If the box goes offline, the relay falls back to its cloud voice (mode `auto`, the
-  default). The modes are set on the agent page of Molty's console:
+  default). The modes are set under Behavior → speaking on Molty's console:
   - `auto`: the box when it's connected, else the cloud
   - `box`: the box only
   - `cloud`: the cloud only
@@ -26,8 +27,8 @@ Wire protocol: `docs/AGENT-LINK.md`, section "Voice box".
 ## Deploy
 
 You need Docker with Compose, an NVIDIA GPU with its container toolkit, and the Molty relay's
-address. On Molty's console, the **agent** page shows the device id and the current link code; the
-code rotates every 15 minutes. Then, from a checkout of this repo:
+address. On Molty's console, Behavior → speaking → Molty box gives the pair command with your device id and
+current link code; the code rotates every 15 minutes. Then, from a checkout of this repo:
 
 ```sh
 cd services/molty-voice
@@ -60,7 +61,7 @@ Then use `molty-voice pair`, `check` and `run` directly; `examples/molty-voice.s
 
 ## Pairing
 
-The console names the request after `--name` (default `voice box`). The token is stored with
+The console names the request after `--name` (default `Molty box`). The token is stored with
 mode 0600 and never printed.
 
 Pairing a new box replaces the old one: the relay keeps one voice box per device.
@@ -68,7 +69,7 @@ Pairing a new box replaces the old one: the relay keeps one voice box per device
 To unpair, use either:
 
 - `molty-voice unpair`, or
-- **unpair** on the console's Voice card.
+- **Unpair** under Behavior → speaking on the console.
 
 ## Run
 
@@ -87,6 +88,12 @@ Flags override the config file (`--name`, `--voices a.wav,b.wav`, `--no-stt`, `-
 starts Molty's reply before the agent can speak. The bridge loads it on connect
 and keeps it loaded (about 3.9 GB; about 150 ms a line). No model: a warning, and no first words. The owner
 turns it on in the console; the relay's guard decides what may be said.
+
+**Reactions with a hosted model:** put your own `TYPESAFE_API_KEY` (Jev) or `OPENAI_API_KEY` in
+`.env`, then `docker compose up -d bridge` (a systemd install: `~/.config/molty-voice/reflex.env`, see
+`examples/molty-voice.service`). The key stays on this computer and the relay never sees it.
+The box then answers with that model instead of the classifier below. It makes one call per spoken
+word from the third on. A refused key rests for 10 minutes and logs why.
 
 **Molty's reflex** (docs/AGENT-LINK.md "Reflex"): `--reflex` (or `"reflex": true` in the config)
 loads a small emotion classifier — `SamLowe/roberta-base-go_emotions-onnx`, int8 ONNX, ~125 MB,

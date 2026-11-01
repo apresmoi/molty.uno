@@ -113,14 +113,16 @@ class Bridge:
         self._ws = ws
         if self.cfg.reflex and self.cfg.stt and not self._reflex_tried:
             self._reflex_tried = True
+            from . import reflex_hosted
             from .reflex import load
-            self.reflex = await asyncio.to_thread(load, self.cfg.reflex_model, self.cfg.reflex_threads)
+            self.reflex = reflex_hosted.load() or await asyncio.to_thread(load, self.cfg.reflex_model, self.cfg.reflex_threads)
         if self.cfg.opener and not self.opener_ready:
             self.opener_ready = await asyncio.to_thread(opener.warm, self.cfg.opener_url, self.cfg.opener_model)
         try:
             hello = {"t": "voice.hello", "name": self.cfg.name, "version": __version__, "voices": self.cfg.voices, "stt": self.cfg.stt, "tts": self.cfg.tts}
             if self.reflex is not None and self.cfg.stt:
                 hello["reflex"] = True
+                hello["reflex_engine"] = getattr(self.reflex, "engine", "classifier")
             if self.opener_ready:
                 hello["opener"] = True
             await self._send_json(hello)
