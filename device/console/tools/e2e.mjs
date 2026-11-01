@@ -28,12 +28,15 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // The relay's owner voice-box API (GET|POST|DELETE /v1/devices/<id>/voice, X-Molty-Link-Code), faked here.
 const VOICE_CORS = { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS', 'access-control-allow-headers': 'content-type, x-molty-link-code' };
+const stranger = () => ({ mode: 'auto', voice: null, cloud: 'workers-ai', serving: { tts: 'workers-ai', stt: 'workers-ai' }, first_words: { mode: 'off', available: false },
+  reflex: { mode: 'off', compare: false, engines: { local: false, jev: false, openai: false, keywords: true }, engine: null, timeout_ms: 600, liveliness: 'normal' },
+  box: { paired: false, name: null, paired_at: null, connected: false, connected_since: null, reported_name: null, version: null, voices: [], stt: false, tts: false, last: {} } });
+const boxOnline = () => ({ paired: true, name: 'ROOM-PC', paired_at: 1, connected: true, connected_since: 2, reported_name: 'ROOM-PC', version: '0.1.0',
+  voices: ['expresso/ex03-ex01_happy_001_channel1_334s.wav', 'expresso/ex03-ex01_calm_001_channel2_1081s.wav'], stt: true, tts: true, last: { stt_ms: 310, tts_first_audio_ms: 240 } });
 const voiceRelay = {
   calls: [],
-  state: { mode: 'auto', voice: null, cloud: 'workers-ai', serving: { tts: 'box', stt: 'box' },
-    reflex: { mode: 'off', compare: false, engines: { local: true, jev: true, openai: false, keywords: true }, engine: null, timeout_ms: 600, liveliness: 'normal' },
-    box: { paired: true, name: 'voice box', paired_at: 1, connected: true, connected_since: 2, reported_name: 'voice box', version: '0.1.0',
-      voices: ['expresso/ex03-ex01_happy_001_channel1_334s.wav', 'expresso/ex03-ex01_calm_001_channel2_1081s.wav'], stt: true, tts: true, last: { stt_ms: 310, tts_first_audio_ms: 240 } } },
+  // A stranger on a public relay: cloud voice, no voice box, no keys.
+  state: stranger(),
   async route(r) {
     const req = r.request();
     if (req.method() === 'OPTIONS') return r.fulfill({ status: 204, headers: VOICE_CORS });
@@ -43,10 +46,11 @@ const voiceRelay = {
     const st = this.state;
     if (req.method() === 'POST') { const b = JSON.parse(req.postData() || '{}'); if (b.mode) st.mode = b.mode; if (b.voice !== undefined) st.voice = b.voice;
       if (b.reflex) { st.reflex.mode = b.reflex; st.reflex.engine = b.reflex === 'off' ? null : b.reflex === 'openai' ? 'keywords' : b.reflex === 'auto' ? 'local' : b.reflex; st.reflex.fallback = b.reflex === 'openai' ? 'no_key' : undefined; }
+      if (b.first_words) st.first_words.mode = b.first_words;
       if (b.reflex_compare !== undefined) st.reflex.compare = b.reflex_compare;
       if (b.liveliness !== undefined) st.reflex.liveliness = b.liveliness;
       if (st.mode === 'cloud') st.serving = { tts: 'workers-ai', stt: 'workers-ai' }; }
-    if (req.method() === 'DELETE') { st.box = { ...st.box, paired: false, name: null, connected: false, voices: [] }; st.serving = { tts: 'workers-ai', stt: 'workers-ai' }; }
+    if (req.method() === 'DELETE') { st.mode = 'auto'; st.box = { ...st.box, paired: false, name: null, connected: false, voices: [] }; st.serving = { tts: 'workers-ai', stt: 'workers-ai' }; }
     return r.fulfill({ status: 200, headers: VOICE_CORS, contentType: 'application/json', body: JSON.stringify({ ok: true, result: st }) });
   },
 };
@@ -296,18 +300,18 @@ const canvasStats = (page) => page.evaluate(() => {
   // Voice, the gap, reflex: only what the owner's tools can do
   await page.locator('.setup .bubble', { hasText: 'Should I talk?' }).waitFor({ timeout: 5000 });
   await page.locator('.setup .opt', { hasText: 'Text only' }).waitFor();
-  ok(await page.locator('.setup .opt', { hasText: 'My voice box' }).count() === 1, 'voice: a paired box is offered');
+  ok(await page.locator('.setup .opt', { hasText: 'Voice box' }).count() === 0, 'voice: no voice box here, no such choice');
   await shot(page, '07b-voice');
-  await page.locator('.setup .opt', { hasText: 'My voice box' }).click();
+  await page.locator('.setup .opt', { hasText: 'Cloud' }).click();
   await page.locator('.setup .bubble', { hasText: 'What should I do meanwhile?' }).waitFor();
   ok(await page.locator('.setup .opt', { hasText: 'First words' }).count() === 0, 'gap: no local model on offer, no choice');
   await shot(page, '07c-gap');
-  await page.locator('.setup .opt', { hasText: 'Filler phrases' }).click();
+  await page.locator('.setup .opt', { hasText: 'A phrase' }).click();
   await page.locator('.setup .bubble', { hasText: 'react while you talk' }).waitFor();
   ok(await page.locator('.setup .opt', { hasText: 'OpenAI' }).count() === 0, 'reflex: an engine with no key is hidden');
   await shot(page, '07d-reflex');
   await page.locator('.setup .opt', { hasText: 'Off' }).click();
-  ok(voiceRelay.calls.some((c) => c.body?.includes('"mode":"box"')) && voiceRelay.calls.some((c) => c.body?.includes('"reflex":"off"')), 'setup saved its choices on the relay');
+  ok(voiceRelay.calls.some((c) => c.body?.includes('"mode":"cloud"')) && voiceRelay.calls.some((c) => c.body?.includes('"reflex":"off"')), 'setup saved its choices on the relay');
   await page.locator('.setup .bubble', { hasText: 'I’m Frog, and Grok is my brain.' }).waitFor({ timeout: 5000 });
   ok(true, 'done: "I’m Frog, and Grok is my brain."');
   ok(await page.locator('.prog').innerText() === '✓ Wi-Fi   ✓ Molty   ✓ Agent   ✓ Voice', 'done: progress all ticked');
@@ -320,10 +324,10 @@ const canvasStats = (page) => page.evaluate(() => {
   await page.locator('.setup .opt', { hasText: 'Text only' }).click();
   await page.locator('.setup .bubble', { hasText: 'I’m Frog' }).waitFor({ timeout: 5000 });
   ok(voiceRelay.calls.some((c) => c.body?.includes('"mode":"off"')), 'text only: saved, straight to done');
-  voiceRelay.state.mode = 'auto'; voiceRelay.state.serving = { tts: 'box', stt: 'box' };
+  voiceRelay.state = stranger();
   await page.getByRole('button', { name: 'Open Molty' }).click();
   await page.waitForURL(/#\/status/);
-  await page.locator('.facts dd.hi', { hasText: 'molty-k7m2w9c4ya' }).waitFor();
+  await page.locator('.facts dd', { hasText: 'molty-k7m2w9c4ya' }).waitFor({ state: 'attached' });
   await page.goto(`${MOCK}/`);
   await page.waitForURL(/#\/status/);
   ok(true, 'after setup, / opens the status page');
@@ -355,106 +359,190 @@ const canvasStats = (page) => page.evaluate(() => {
   await page.locator('.msg pre', { hasText: 'molty-k7m2w9c4ya' }).waitFor();
   ok(await page.getByRole('button', { name: 'Copy message' }).isVisible(), 'settings agent: same single-message design');
   await mock('pair', { agent_name: 'Claude', code: '5150' });
-  await page.locator('.link-state', { hasText: 'tap molty to accept Claude' }).waitFor({ timeout: 5000 });
+  await page.locator('.note.warn', { hasText: 'Tap Molty to accept Claude' }).waitFor({ timeout: 5000 });
   ok(true, 'settings agent: shows a pending pair');
   ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'settings agent: no horizontal scroll at 390px');
   await shot(page, '11-settings-agent');
+  const themeBefore = await page.evaluate(() => document.documentElement.dataset.theme);
+  await page.locator('header .theme').click();
+  ok(await page.evaluate((was) => { const t = document.documentElement.dataset.theme; return t !== was && localStorage.getItem('molty-theme') === t; }, themeBefore), 'theme: the switch flips and keeps the theme');
+  await shot(page, '11-settings-agent-other-theme');
+  await page.locator('header .theme').click();
   await mock('decide', { ok: true });
   await page.goto(`${MOCK}/#/voice`);
-  // Voice card: the owner's voice box, through the relay with the link code from GET /api/link
-  const vc = page.locator('.voice.card');
-  await vc.locator('p', { hasText: 'voice box ⠂ connected ⠂ listens + speaks' }).waitFor({ timeout: 5000 });
+  // Behavior: one tab per stage, and it only ever claims what this deployment has
+  await page.locator('section[data-page="behavior"]').waitFor();
+  const tabTo = (t) => page.getByRole('tab', { name: t }).click();
+  const SHOTS = process.env.VOICE_SHOTS;
+  const states = async (name, themes = ['dark']) => {
+    if (!SHOTS) return;
+    mkdirSync(SHOTS, { recursive: true });
+    for (const theme of themes) {
+      await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), theme);
+      for (const [w, size] of [['phone', PHONE], ['desk', { width: 1280, height: 900 }]]) {
+        await page.setViewportSize(size);
+        await page.evaluate(() => scrollTo(0, 0));
+        await wait(500);   // colours finish their transition
+        await page.screenshot({ path: `${SHOTS}/${name}-${theme}-${w}.png`, fullPage: true });
+      }
+    }
+    await page.setViewportSize(PHONE);
+  };
+  const pressed = (group) => group.locator('button[aria-pressed="true"]');
+  const posted = (k, v) => voiceRelay.calls.some((c) => c.method === 'POST' && JSON.parse(c.body)[k] === v);
+  const modes = page.getByRole('group', { name: /molty.s voice/ });
+  const gap = page.getByRole('group', { name: 'waiting for your agent' });
+  const rx = page.getByRole('group', { name: 'reactions' });
+  const needs = page.locator('.needs');
+  // a stranger: nothing set up
+  voiceRelay.calls.length = 0;
+  await tabTo('speaking');
+  await page.locator('.status', { hasText: 'Speech runs in the cloud' }).waitFor({ timeout: 5000 });
   ok(voiceRelay.calls.every((c) => c.code === 'K7QX2MPA'), 'settings voice: relay calls carry the current link code');
-  ok(await vc.getByText('last turn: transcript 0.31 s after you stop').isVisible(), 'settings voice: last latencies');
-  const modes = vc.getByRole('group', { name: 'voice mode' });
-  ok(await modes.getByRole('button', { name: 'auto' }).getAttribute('aria-pressed') === 'true', 'settings voice: mode auto by default');
-  await modes.getByRole('button', { name: 'cloud' }).click();
-  await modes.locator('button[aria-pressed="true"]', { hasText: 'cloud' }).waitFor();
-  ok(voiceRelay.calls.some((c) => c.method === 'POST' && JSON.parse(c.body).mode === 'cloud'), 'settings voice: mode sent to the relay');
-  await vc.getByLabel('box voice').selectOption('expresso/ex03-ex01_calm_001_channel2_1081s.wav');
-  await page.waitForFunction(() => document.querySelector('.voice select')?.value === 'expresso/ex03-ex01_calm_001_channel2_1081s.wav');
-  ok(voiceRelay.calls.some((c) => c.method === 'POST' && JSON.parse(c.body).voice === 'expresso/ex03-ex01_calm_001_channel2_1081s.wav'), 'settings voice: default box voice sent');
-  // the reflex: Molty's own reactions while you talk, its engine, compare mode
-  const rx = vc.getByRole('group', { name: 'reflex' });
-  ok(await rx.getByRole('button', { name: 'off' }).getAttribute('aria-pressed') === 'true', 'settings reflex: off by default');
-  ok((await rx.getByRole('button', { name: 'OpenAI' }).getAttribute('class')).includes('dim'), 'settings reflex: an engine without its key is dimmed');
-  await rx.getByRole('button', { name: 'Jev' }).click();
-  await rx.locator('button[aria-pressed="true"]', { hasText: 'Jev' }).waitFor();
-  ok(voiceRelay.calls.some((c) => c.method === 'POST' && JSON.parse(c.body).reflex === 'jev'), 'settings reflex: engine sent to the relay');
-  await vc.getByText('reacts with Jev', { exact: true }).waitFor();
-  await vc.getByLabel('compare reflex engines').check();
-  await vc.getByText('reacts with Jev ⠂ comparing every engine in the activity log').waitFor();
-  ok(voiceRelay.calls.some((c) => c.method === 'POST' && JSON.parse(c.body).reflex_compare === true), 'settings reflex: compare sent to the relay');
-  // liveliness: normal by default, lively sent to the relay and shown pressed
-  const lv = vc.getByRole('group', { name: 'liveliness' });
-  ok(await lv.getByRole('button', { name: 'normal' }).getAttribute('aria-pressed') === 'true', 'settings reflex: liveliness normal by default');
-  await lv.getByRole('button', { name: 'lively' }).click();
-  await lv.locator('button[aria-pressed="true"]', { hasText: 'lively' }).waitFor();
-  ok(voiceRelay.calls.some((c) => c.method === 'POST' && JSON.parse(c.body).liveliness === 'lively'), 'settings reflex: liveliness sent to the relay');
-  await rx.getByRole('button', { name: 'OpenAI' }).click();
-  await vc.getByText('reacts with keywords (no key on the relay for OpenAI) ⠂ comparing every engine in the activity log').waitFor();
-  ok(true, 'settings reflex: a keyless engine says it falls back to keywords');
-  await vc.locator('summary', { hasText: 'Pair another voice box' }).click();
-  ok((await vc.locator('code').innerText()) === 'molty-voice pair --relay https://molty-relay.example.workers.dev --device molty-k7m2w9c4ya --link-code K7QX2MPA', 'settings voice: pair command for the box');
-  ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'settings voice: no horizontal scroll at 390px');
-  const listenRow = page.getByRole('group', { name: 'listen window' });
-  ok(await listenRow.getByRole('button', { name: '30 s (default)' }).getAttribute('aria-pressed') === 'true', 'settings voice: listen window defaults to 30 s');
-  await listenRow.getByRole('button', { name: 'unlimited' }).click();
-  await listenRow.locator('button[aria-pressed="true"]', { hasText: 'unlimited' }).waitFor();
-  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).listen_ms === 0), 'settings voice: unlimited listen window sent to the device (listen_ms 0)');
-  await listenRow.getByRole('button', { name: '10 s' }).click();
-  await listenRow.locator('button[aria-pressed="true"]', { hasText: '10 s' }).waitFor();
-  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).listen_ms === 10000), 'settings voice: 10 s listen window sent to the device');
-  const ackRow = page.getByRole('group', { name: 'acknowledge' });
-  ok(await ackRow.getByRole('button', { name: 'chirp + thinking (default)' }).getAttribute('aria-pressed') === 'true', 'settings voice: acknowledge defaults to chirp + thinking');
-  await ackRow.getByRole('button', { name: 'thinking only' }).click();
-  await ackRow.locator('button[aria-pressed="true"]', { hasText: 'thinking only' }).waitFor();
-  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).ack === 'thinking'), 'settings voice: "thinking only" acknowledgement sent to the device (ack thinking)');
-  await ackRow.getByRole('button', { name: 'off' }).click();
-  await ackRow.locator('button[aria-pressed="true"]', { hasText: 'off' }).waitFor();
-  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).ack === 'off'), 'settings voice: acknowledgement off sent to the device (ack off)');
-  await ackRow.getByRole('button', { name: 'chirp + thinking (default)' }).click();
-  await ackRow.locator('button[aria-pressed="true"]', { hasText: 'chirp + thinking' }).waitFor();
-  const fillerRow = page.getByRole('group', { name: 'filler' });
-  ok(await fillerRow.getByRole('button', { name: 'after 2.5 s (default)' }).getAttribute('aria-pressed') === 'true', 'settings voice: filler defaults to after 2.5 s');
-  await fillerRow.getByRole('button', { name: 'off' }).click();
-  await fillerRow.locator('button[aria-pressed="true"]', { hasText: 'off' }).waitFor();
-  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).filler_ms === 0), 'settings voice: filler off sent to the device (filler_ms 0)');
-  await fillerRow.getByRole('button', { name: 'after 1.5 s' }).click();
-  await fillerRow.locator('button[aria-pressed="true"]', { hasText: 'after 1.5 s' }).waitFor();
-  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).filler_ms === 1500), 'settings voice: 1.5 s filler delay sent to the device (filler_ms 1500)');
-  ok(JSON.stringify(await fillerRow.getByRole('button').allInnerTexts()) === JSON.stringify(['off', 'after 0.5 s', 'after 0.8 s', 'after 1.5 s', 'after 2.5 s (default)', 'after 3.5 s']), 'settings voice: filler chips are off, 0.5, 0.8, 1.5, 2.5 (default), 3.5 s');
-  for (const [label, ms] of [['after 0.5 s', 500], ['after 0.8 s', 800]]) {
-    await fillerRow.getByRole('button', { name: label, exact: true }).click();
-    await fillerRow.locator('button[aria-pressed="true"]', { hasText: label }).waitFor();
-    ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).filler_ms === ms), `settings molty: ${label} filler delay sent to the device (filler_ms ${ms})`);
-    const st = await (await fetch(`${MOCK}/api/creature/state`)).json();
-    ok(st.filler_ms === ms, `settings molty: the device keeps filler_ms ${ms}`);
-  }
-  await fillerRow.getByRole('button', { name: 'after 2.5 s (default)' }).click();
-  await fillerRow.locator('button[aria-pressed="true"]', { hasText: 'after 2.5 s' }).waitFor();
+  ok((await pressed(modes).innerText()).includes('Cloud'), 'settings voice: a stranger is on the cloud');
+  ok(await page.locator('.chip.dim', { hasText: 'Voice box' }).count() === 1, 'settings voice: what is not set up stays visible, dim');
+  await states('stranger', ['dark', 'light']);
+  await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
+  ok(await page.evaluate(() => document.documentElement.scrollHeight) < 1150, 'settings voice: about one screen without the panels');
+  await modes.getByRole('button', { name: /Voice box/ }).click();
+  await needs.waitFor();
+  ok((await needs.locator('code').first().innerText()) === 'molty-voice pair --relay https://molty-relay.example.workers.dev --device molty-k7m2w9c4ya --link-code K7QX2MPA', 'settings voice: the box asks for a deployment and gives the pair command');
+  ok((await needs.locator('a').first().getAttribute('href')).endsWith('/services/molty-voice/README.md'), 'settings voice: links the voice box in the repo');
+  ok(!posted('mode', 'auto') && !posted('mode', 'box'), 'settings voice: an option that is not set up never saves');
+  await states('stranger-voice-box-needs');
+  await tabTo('thinking');
+  await gap.getByRole('button', { name: /First words/ }).click();
+  await needs.locator('code', { hasText: 'molty-voice run --opener' }).waitFor();
+  ok(await needs.count() === 1 && !posted('first_words', 'opener'), 'settings voice: first words ask for a box with the model');
+  await tabTo('listening');
+  await page.getByRole('switch', { name: 'React while you talk' }).click();
+  await rx.waitFor();
+  ok(posted('reflex', 'auto'), 'settings reactions: turning them on lets the relay pick what works');
+  ok(await page.locator('.chip.dim', { hasText: 'Jev' }).count() === 1, 'settings voice: a missing engine stays visible, dim');
+  await rx.getByRole('button', { name: /Jev/ }).click();
+  await needs.locator('code', { hasText: 'npx wrangler secret put TYPESAFE_API_KEY' }).waitFor();
+  ok((await needs.innerText()).includes('never stores yours') && !posted('reflex', 'jev'), 'settings voice: Jev asks for your own relay and key');
+  await states('stranger-jev-needs');
+  ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'settings voice: panels fit at 390px');
+  await rx.getByRole('button', { name: 'Word list' }).click();
+  await pressed(rx).filter({ hasText: 'Word list' }).waitFor();
+  ok(await needs.count() === 0 && posted('reflex', 'keywords'), 'settings voice: a working engine saves and closes the panel');
+  await page.getByLabel('how expressive').selectOption('lively');
+  await page.waitForFunction(() => document.querySelector('select[aria-label="how expressive"]')?.value === 'lively');
+  ok(posted('liveliness', 'lively'), 'settings voice: how expressive sent to the relay');
+  await page.getByRole('switch', { name: 'React while you talk' }).click();
+  await rx.waitFor({ state: 'detached' });
+  ok(posted('reflex', 'off'), 'settings reactions: the switch turns them off');
+  await page.getByRole('switch', { name: 'React while you talk' }).click();
+  await rx.waitFor();
+  // the wait: one choice over the relay and the device; the delay only for a phrase
+  await tabTo('thinking');
+  ok((await pressed(gap).innerText()).includes('A phrase'), 'settings voice: a phrase by default');
+  const delay = page.getByLabel('filler delay');
+  await delay.selectOption({ label: '1.5 s' });
+  await page.waitForFunction(() => document.querySelector('select[aria-label="filler delay"]')?.selectedOptions[0]?.textContent === '1.5 s');
+  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).filler_ms === 1500), 'settings voice: the delay is sent to the device');
+  await gap.getByRole('button', { name: 'Quiet' }).click();
+  await pressed(gap).filter({ hasText: 'Quiet' }).waitFor();
+  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).filler_ms === 0), 'settings voice: quiet turns the filler off');
+  ok(await delay.count() === 0, 'settings voice: no delay when quiet');
+  await gap.getByRole('button', { name: 'A phrase' }).click();
+  await delay.waitFor();
+  ok((await (await fetch(`${MOCK}/api/creature/state`)).json()).filler_ms === 2500, 'settings voice: a phrase brings the default delay back');
+  await tabTo('listening');
+  const listenRow = page.getByLabel('longest it listens');
+  await listenRow.selectOption({ label: 'No limit' });
+  await page.waitForFunction(() => document.querySelector('select[aria-label="longest it listens"]')?.selectedOptions[0]?.textContent === 'No limit');
+  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).listen_ms === 0), 'settings voice: no limit sent to the device (listen_ms 0)');
+  await listenRow.selectOption({ label: '30 s' });
+  const ackRow = page.getByLabel('when you finish');
+  await ackRow.selectOption({ label: 'Think only' });
+  await page.waitForFunction(() => document.querySelector('select[aria-label="when you finish"]')?.selectedOptions[0]?.textContent === 'Think only');
+  await wait(400);
+  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).ack === 'thinking'), 'settings voice: acknowledgement sent to the device');
+  await ackRow.selectOption({ label: 'Chirp and think' });
   await shot(page, '11b-settings-voice');
-  await vc.getByRole('button', { name: 'Unpair voice box' }).click();
-  await vc.getByRole('button', { name: 'Sure? Unpair' }).click();
-  await vc.locator('p', { hasText: 'no voice box paired' }).waitFor();
+  await tabTo('speaking');
+  await modes.getByRole('button', { name: /Text only/ }).click();
+  await pressed(modes).filter({ hasText: 'Text only' }).waitFor();
+  await tabTo('listening');
+  await page.getByText('Molty is text only').waitFor();
+  ok(await rx.count() === 0 && await listenRow.count() === 0, 'settings voice: text only has nothing to set while listening');
+  await tabTo('thinking');
+  ok(await gap.count() === 0, 'settings voice: text only has no wait to fill');
+  await tabTo('listening');
+  // your own relay, with keys
+  voiceRelay.state = stranger(); voiceRelay.state.reflex.engines = { local: false, jev: true, openai: true, keywords: true }; voiceRelay.state.reflex.mode = 'keywords'; voiceRelay.state.reflex.engine = 'keywords';
+  await page.reload();
+  await rx.getByRole('button', { name: 'Jev' }).waitFor({ timeout: 8000 });
+  ok(await page.locator('.chip.dim', { hasText: 'Jev' }).count() === 0, 'settings voice: a relay with the key offers Jev');
+  await rx.getByRole('button', { name: 'Jev' }).click();
+  await pressed(rx).filter({ hasText: 'Jev' }).waitFor();
+  ok(posted('reflex', 'jev'), 'settings voice: engine sent to the relay');
+  await states('own-relay-keys');
+  // a chosen engine that lost its key says so
+  voiceRelay.state.reflex = { ...voiceRelay.state.reflex, mode: 'openai', engine: 'keywords', fallback: 'no_key', engines: { local: false, jev: false, openai: false, keywords: true } };
+  await page.reload();
+  await page.locator('.status.warn', { hasText: 'OpenAI isn’t set up here, so Molty is using Word list instead.' }).waitFor({ timeout: 8000 });
+  ok(true, 'settings voice: a chosen engine without a key says so');
+  // a voice box, online
+  voiceRelay.state = stranger(); voiceRelay.state.box = boxOnline(); voiceRelay.state.serving = { tts: 'box', stt: 'box' }; voiceRelay.state.first_words = { mode: 'opener', available: true };
+  voiceRelay.state.reflex.engines.local = true; voiceRelay.state.reflex.mode = 'local'; voiceRelay.state.reflex.engine = 'local';
+  await page.reload();
+  await tabTo('speaking');
+  await page.locator('.status.ok', { hasText: 'Your voice box is connected.' }).waitFor({ timeout: 8000 });
+  await page.getByLabel('voice', { exact: true }).selectOption('expresso/ex03-ex01_calm_001_channel2_1081s.wav');
+  await page.waitForFunction(() => document.querySelector('select[aria-label="voice"]')?.value === 'expresso/ex03-ex01_calm_001_channel2_1081s.wav');
+  ok(posted('voice', 'expresso/ex03-ex01_calm_001_channel2_1081s.wav'), 'settings voice: the voice is sent to the relay');
+  await states('box-online');
+  ok((await page.locator('.srow', { hasText: 'Status' }).innerText()).includes('Connected') && (await page.locator('.srow', { hasText: 'Hears you' }).innerText()).includes('Yes'), 'settings speaking: the voice box says how it is set up');
+  ok((await page.locator('.needs a').getAttribute('href')).endsWith('/services/molty-voice/README.md'), 'settings speaking: links how to configure the box');
+  ok(!(await page.locator('section.page').innerText()).includes('ROOM-PC'), 'settings speaking: never the machine’s name');
+  ok(await page.getByText('last turn: transcript 0.31 s after you stop').isVisible(), 'settings speaking: last latencies');
+  await tabTo('listening');
+  await page.locator('.more > summary', { hasText: 'Advanced' }).click();
+  await page.getByRole('switch', { name: 'Compare reaction engines' }).click();
+  await page.locator('.switch.on[aria-label="Compare reaction engines"]').waitFor();
+  ok(posted('reflex_compare', true), 'settings voice: compare sent to the relay');
+  // and offline: who is really speaking
+  voiceRelay.state.box.connected = false; voiceRelay.state.serving = { tts: 'workers-ai', stt: 'workers-ai' }; voiceRelay.state.first_words.available = false;
+  await tabTo('speaking');
+  await page.reload();
+  await page.locator('.status.warn', { hasText: 'Your voice box is offline, so the cloud is speaking for now.' }).waitFor({ timeout: 8000 });
+  await tabTo('thinking');
+  ok(await page.locator('.status.warn', { hasText: 'First words are on, but no voice box is offering them' }).count() === 1, 'settings voice: an offline box says who speaks, and that first words stopped');
+  await states('box-offline');
+  await tabTo('speaking');
+  await page.locator('.more > summary', { hasText: 'Replace or remove' }).click();
+  await page.getByRole('button', { name: 'Unpair voice box' }).click();
+  await page.getByRole('button', { name: 'Sure? Unpair' }).click();
+  await page.locator('.chip.dim', { hasText: 'Voice box' }).waitFor();
   ok(voiceRelay.calls.some((c) => c.method === 'DELETE'), 'settings voice: unpair');
 
+  await page.goto(`${MOCK}/#/status`);
+  await page.getByRole('button', { name: 'Show live view' }).waitFor();
+  await wait(1200);
+  ok(!(await mockLog()).slice(-40).some((l) => l.path === '/api/framebuffer'), 'live view: off until asked for, it slows Molty');
+  await page.getByRole('button', { name: 'Show live view' }).click();
+  await page.locator('.pv-status', { hasText: /^live/ }).waitFor({ timeout: 8000 });
+  ok(true, 'live view: starts when asked for');
   // Activity: the relay's merged timeline, grouped by turn, through the link code from GET /api/link
   await page.goto(`${MOCK}/#/activity`);
-  const turns = page.locator('.act-turn');
-  await turns.first().waitFor({ timeout: 5000 });
+  const row = (t) => page.locator('.act-row', { hasText: t });
+  const open = async (t) => { await row(t).click(); await page.locator('.act-detail-head').waitFor(); return page.locator('.act-detail'); };
+  await page.locator('.act-row').first().waitFor({ timeout: 5000 });
   ok(activityRelay.calls.every((c) => c.code === 'K7QX2MPA'), 'activity: relay calls carry the current link code');
-  ok(await turns.count() === 3, 'activity: three turns (one per job)');
-  ok(await page.locator('.act-item', { hasText: 'molty disconnected ⠂ close 1006' }).count() === 1, 'activity: device disconnect with its close code');
+  ok(activityRelay.calls[0].since === 'a0', 'activity: loads the whole kept log, not just the last page');
+  ok(await row('voice_box_offline').count() === 1 && await row('listen').count() === 1, 'activity: one line per turn');
+  ok(await row('molty disconnected ⠂ close 1006').count() === 1, 'activity: device disconnect with its close code');
   // the agent's name is the row's own column, the line says what happened (not the name twice)
-  const pairRow = page.locator('.act-item', { hasText: 'Grokbot' }).filter({ hasText: 'paired' });
+  const pairRow = page.locator('.act-row', { hasText: 'Grokbot' }).filter({ hasText: 'paired' });
   ok(await pairRow.count() === 1 && !(await pairRow.innerText()).includes('Grokbot Grokbot'), 'activity: pairing shown');
-  ok((await turns.first().locator(':scope > summary').innerText()).includes('listen'), 'activity: newest turn first');
-  ok((await turns.nth(1).locator(':scope > summary').innerText()).includes('Grokbot'), 'activity: then the older ones');
+  ok((await page.locator('.act-row').last().innerText()).includes('listen'), 'activity: newest line at the bottom');
+  ok(await page.evaluate(() => { const t = document.querySelector('.act-term'); return t.scrollTop + t.clientHeight >= t.scrollHeight - 1; }), 'activity: opens on the newest line');
   // the shake turn: its trace as a timeline, the webhook and the reply joined to it, its audio
-  const shakeTurn = turns.first();
-  ok((await shakeTurn.locator(':scope > summary').innerText()).includes('molty'), 'activity: a shake listen is molty’s own (not the webhook’s agent)');
-  await shakeTurn.locator(':scope > summary').click();
+  ok((await row('listen').innerText()).includes('molty'), 'activity: a shake listen is molty’s own (not the webhook’s agent)');
+  const shakeTurn = await open('listen');
   const tl = shakeTurn.locator('details.act-trace');
   ok((await tl.locator('summary').innerText()).includes('lost 3.2 s of audio (captured 5.4 s in 9.0 s)'), 'trace: summary leads with the lost audio');
   await tl.locator('summary').click();
@@ -474,14 +562,12 @@ const canvasStats = (page) => page.evaluate(() => {
   ok(file.suggestedFilename() === 'molty-j_U2hha2VUdXJuVHJj.wav', 'audio: saved as molty-<job>.wav');
   ok(activityRelay.audioCalls.length === 1 && activityRelay.audioCalls[0].code === 'K7QX2MPA' && activityRelay.audioCalls[0].url.endsWith(`/activity/audio/${encodeURIComponent(JC)}`) && !activityRelay.audioCalls[0].url.includes('K7QX2MPA'),
     'audio: fetched with the link code header, not in the URL');
-  const ka = page.getByRole('group', { name: 'keep audio for debugging' });
-  ok(await ka.getByRole('button', { name: 'off' }).getAttribute('aria-pressed') === 'true', 'keep audio: off by default');
-  await ka.getByRole('button', { name: 'on' }).click();
-  await ka.locator('button[aria-pressed="true"]', { hasText: 'on' }).waitFor();
+  const ka = page.getByRole('switch', { name: 'Keep recordings for debugging' });
+  ok(await ka.getAttribute('aria-checked') === 'false', 'keep audio: off by default');
+  await ka.click();
+  await page.locator('.switch.on[aria-label="Keep recordings for debugging"]').waitFor();
   ok(activityRelay.calls.some((c) => c.method === 'POST' && JSON.parse(c.body).keep_audio === true), 'keep audio: on sent to the relay');
-  await shakeTurn.locator(':scope > summary').click();   // fold it back: the rest of the walk-through reads the others
-  const done = turns.filter({ has: page.locator('summary', { hasText: 'Claude' }) });
-  await done.locator(':scope > summary').click();
+  const done = await open(/Claude\s*talk/);
   ok(await done.getByLabel('stage timings').getByText('say · tts_first_byte').isVisible(), 'activity: expanded turn shows stage timings');
   ok(await done.getByText('speaks with voice box ⠂ listens with voice box').isVisible(), 'activity: voice provider');
   ok(await done.getByText('“yes please, green tea”').isVisible(), 'activity: heard text');
@@ -489,73 +575,76 @@ const canvasStats = (page) => page.evaluate(() => {
   ok(await done.locator('.act-line.warn').count() === 1, 'activity: W device line highlighted');
   await wait(3500);   // one live poll (since=next) must keep the expanded turn open
   ok(activityRelay.calls.some((c) => c.method === 'GET' && c.since === 'a14'), 'activity: live poll asks since the last id');
-  ok(await done.getAttribute('open') !== null, 'activity: an expanded turn survives the live poll');
+  ok(await done.getByText('“yes please, green tea”').isVisible(), 'activity: an open turn survives the live poll');
   await shot(page, '11c-activity');
-  await page.getByRole('button', { name: 'errors only' }).click();
-  await page.locator('.act-turn', { hasText: 'Claude' }).waitFor({ state: 'detached' });
-  ok(await page.locator('.act-turn').count() === 1 && (await page.locator('.act-turn').innerText()).includes('voice_box_offline'), 'activity: errors only → just the failed turn');
-  ok(await page.locator('.act-item').count() === 0, 'activity: errors only hides the ok events');
-  await page.getByRole('button', { name: 'errors only' }).click();
+  await page.getByRole('button', { name: 'Errors only' }).click();
+  await row('Claude').first().waitFor({ state: 'detached' });
+  ok(await page.locator('.act-row').count() === 1 && (await page.locator('.act-row').innerText()).includes('voice_box_offline'), 'activity: errors only → just the failed turn');
+  await page.getByRole('button', { name: 'Errors only' }).click();
   await page.getByLabel('agent', { exact: true }).selectOption('Grokbot');
-  ok(await page.locator('.act-turn').count() === 1 && await page.locator('.act-item', { hasText: 'Claude' }).count() === 0, 'activity: agent filter');
+  ok(await row('voice_box_offline').count() === 1 && await row('Claude').count() === 0, 'activity: agent filter');
   await page.getByLabel('agent', { exact: true }).selectOption('');
-  const tr = page.getByRole('group', { name: 'log transcripts' });
-  ok(await tr.getByRole('button', { name: 'on' }).getAttribute('aria-pressed') === 'true', 'activity: transcripts on by default');
-  await tr.getByRole('button', { name: 'off' }).click();
-  await tr.locator('button[aria-pressed="true"]', { hasText: 'off' }).waitFor();
-  ok(activityRelay.calls.some((c) => c.method === 'POST' && JSON.parse(c.body).transcripts === false), 'activity: transcripts off sent to the relay');
-  ok(await page.getByRole('group', { name: 'keep audio for debugging' }).getByRole('button', { name: 'on' }).isDisabled(), 'keep audio: can’t be turned on while transcripts are off');
+  await page.keyboard.press('/');
+  ok(await page.getByLabel('search the log').evaluate((el) => el === document.activeElement), 'search: / focuses it');
+  await page.keyboard.type('GREEN tea');
+  ok(await page.locator('.act-row').count() === 1 && await row('talk').count() === 1, 'search: finds the turn by what was heard, any case');
+  ok((await page.locator('.act-status').innerText()).includes('1 of'), 'search: says how many match');
+  await page.keyboard.type(' nope');
+  ok(await page.locator('.act-row').count() === 0 && await page.locator('.act-status', { hasText: 'Nothing matches.' }).isVisible(), 'search: every word must match');
+  await page.keyboard.press('Escape');
+  ok(await page.locator('.act-row').count() > 1, 'search: Escape clears it');
+  const tr = page.getByRole('switch', { name: 'Keep the words' });
+  ok(await tr.getAttribute('aria-checked') === 'true', 'activity: transcripts on by default');
+  await tr.click();
+  await page.locator('.switch:not(.on)[aria-label="Keep the words"]').waitFor();
+  ok(await page.getByRole('switch', { name: 'Keep recordings for debugging' }).count() === 0, 'keep audio: not offered while the words are off');
   ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'activity: no horizontal scroll at 390px');
   await shot(page, '11d-activity-errors');
   // speech habits: the relay's calibration, read with the link code; "start over" resets it
+  await page.locator('.more > summary', { hasText: 'How you talk' }).click();
   const habits = page.getByLabel('speech habits');
   await habits.waitFor();
   ok(speechRelay.calls.every((c) => c.code === 'K7QX2MPA'), 'speech habits: relay calls carry the current link code');
   ok(await habits.getByText('14 words, 4.6 s (usually 8–22 words)').isVisible(), 'speech habits: a typical turn');
   ok(await habits.getByText('tuned: every 5 words or 2 s, none in the first 3 s').isVisible(), 'speech habits: the partial policy');
   ok(await habits.getByText(/6 played of 10 drafted \(70 %\)/).isVisible(), 'speech habits: the draft record');
-  await page.getByRole('button', { name: 'start over' }).click();
+  await page.getByRole('button', { name: 'Start over' }).click();
   await habits.getByText('none drafted yet').waitFor();
   ok(speechRelay.calls.some((c) => c.method === 'DELETE'), 'speech habits: start over resets on the relay');
   ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'speech habits: no horizontal scroll at 390px');
 
   await page.goto(`${MOCK}/#/molty`);
-  await page.locator('.creature img').first().waitFor();
-  ok(await page.locator('.creature').count() === 29, 'settings molty: 29 Moltys with thumbnails');
-  await page.locator('.creature', { hasText: 'Owl' }).click();
-  await page.getByRole('button', { name: 'send Owl to molty' }).click();
+  await page.locator('.strip .tile img').first().waitFor();
+  ok(await page.locator('.strip .tile img').count() === 29, 'settings molty: 29 Moltys with thumbnails');
+  await page.locator('.strip .tile', { hasText: 'Owl' }).click();
   await page.locator('.note.ok', { hasText: 'moving in' }).waitFor();
   ok((await mockLog()).some((l) => l.path === '/api/creature/file?name=cute-owl' && l.head === 'MLTY'), 'settings molty: upload');
   const ringRow = page.getByRole('group', { name: 'listening ring colour' });
-  ok(await ringRow.getByRole('button', { name: 'accent (default)' }).getAttribute('aria-pressed') === 'true', 'settings molty: listening ring defaults to the accent');
-  await ringRow.getByRole('button', { name: 'violet' }).click();
-  await ringRow.locator('button[aria-pressed="true"]', { hasText: 'violet' }).waitFor();
+  ok(await ringRow.getByRole('button', { name: 'Match colours' }).getAttribute('aria-pressed') === 'true', 'settings molty: listening ring defaults to the accent');
+  await ringRow.getByRole('button', { name: 'Violet' }).click();
+  await ringRow.locator('button[aria-pressed="true"]', { hasText: 'Violet' }).waitFor();
   ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).ring_color === '#b197fc'), 'settings molty: ring colour sent to the device');
-  const shakeRow = page.getByRole('group', { name: 'shake to talk' });
-  ok(await shakeRow.getByRole('button', { name: 'on (default)' }).getAttribute('aria-pressed') === 'true', 'settings molty: shake to talk defaults to on');
-  await shakeRow.getByRole('button', { name: 'off' }).click();
-  await shakeRow.locator('button[aria-pressed="true"]', { hasText: 'off' }).waitFor();
-  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).shake_talk === false), 'settings molty: shake to talk off sent to the device (shake_talk false)');
-  await shakeRow.getByRole('button', { name: 'on (default)' }).click();
-  await shakeRow.locator('button[aria-pressed="true"]', { hasText: 'on' }).waitFor();
-  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).shake_talk === true), 'settings molty: shake to talk back on (shake_talk true)');
+  const shake = page.getByLabel('shake', { exact: true });
+  ok(await shake.inputValue() === 'on', 'settings molty: shake to talk defaults to on');
+  await shake.selectOption('off');
+  await page.waitForFunction(async () => (await (await fetch('/api/creature/state')).json()).shake_talk === false);
+  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).shake_talk === false), 'settings molty: shake to talk off sent to the device');
+  await page.locator('body').click({ position: { x: 1, y: 200 } });
+  await page.getByLabel('double tap', { exact: true }).selectOption('stop');
+  await page.waitForFunction(async () => (await (await fetch('/api/creature/state')).json()).gestures?.double_tap === 'stop');
+  ok(true, 'settings molty: a gesture is sent to the device');
+  await page.locator('body').click({ position: { x: 1, y: 200 } });
   const idleRow = page.getByRole('group', { name: 'idle life' });
-  ok(await idleRow.getByRole('button', { name: 'lively (default)' }).getAttribute('aria-pressed') === 'true', 'settings molty: idle life defaults to lively');
-  await idleRow.getByRole('button', { name: 'calm' }).click();
-  await idleRow.locator('button[aria-pressed="true"]', { hasText: 'calm' }).waitFor();
-  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).idle_life === 'calm'), 'settings molty: calm idle life sent to the device (idle_life calm)');
-  await idleRow.getByRole('button', { name: 'off' }).click();
-  await idleRow.locator('button[aria-pressed="true"]', { hasText: 'off' }).waitFor();
-  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).idle_life === 'off'), 'settings molty: idle life off sent to the device (idle_life off)');
-  await idleRow.getByRole('button', { name: 'lively (default)' }).click();
-  await idleRow.locator('button[aria-pressed="true"]', { hasText: 'lively' }).waitFor();
-  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).idle_life === 'lively'), 'settings molty: idle life back to lively (idle_life lively)');
+  ok((await idleRow.locator('button[aria-pressed="true"]').innerText()) === 'Lively', 'settings molty: idle life defaults to lively');
+  await idleRow.getByRole('button', { name: 'Calm' }).click();
+  await idleRow.locator('button[aria-pressed="true"]', { hasText: 'Calm' }).waitFor();
+  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).idle_life === 'calm'), 'settings molty: calm idle life sent to the device');
   ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'settings molty: no horizontal scroll at 390px');
   await shot(page, '12-settings-molty');
 
   await mock('config', { file: false });
-  await page.getByRole('button', { name: 'send Owl to molty' }).click();
-  await page.locator('.note.warn', { hasText: "can't take new moltys yet" }).waitFor();
+  await page.locator('.strip .tile', { hasText: 'Fox' }).click();
+  await page.locator('.note.warn', { hasText: 'can’t take new creatures yet' }).waitFor();
   ok(true, 'settings molty: creature-file 404 → graceful notice');
 
   // pre-contract firmware: link without pair/last_pair still waits; no link at all → skip offered
@@ -599,7 +688,7 @@ const canvasStats = (page) => page.evaluate(() => {
   await page.locator('.update .note', { hasText: /updated to \d+\.\d+\.\d+ ✓/ }).waitFor({ timeout: 15000 });
   const post = (await mockLog()).find((l) => l.path === '/api/update');
   ok(!!post && /releases\/download\/v.*-ota\.bin/.test(JSON.parse(post.body).url) && JSON.parse(post.body).sha256 === 'd'.repeat(64), 'update: self-updating firmware gets Update, which posts the relay’s official image + sha256');
-  ok((await page.locator('.facts dd').nth(1).innerText()).startsWith((await (await fetch(`${MOCK}/__mock/release`)).json()).latest.version), 'update: status shows the new firmware afterwards');
+  ok((await page.locator('.facts dd').nth(1).textContent()).startsWith((await (await fetch(`${MOCK}/__mock/release`)).json()).latest.version), 'update: status shows the new firmware afterwards');
   await shot(page, '15-update-self');
   // the new image does not stick: Molty comes back on the old firmware -> rolled back, Update offered again
   await mock('config', { reset: true, update: true, rollback: true });
@@ -624,8 +713,9 @@ const canvasStats = (page) => page.evaluate(() => {
 if (REAL) {
   const page = await newPage('real', { viewport: { width: 1100, height: 900 } });
   await page.goto(`${MOCK}/?device=${encodeURIComponent(REAL)}#/status`);
-  await page.locator('.facts dd.hi', { hasText: /^molty-/ }).waitFor({ timeout: 15000 });
-  await page.locator('.pv-status', { hasText: 'live' }).waitFor({ timeout: 15000 });
+  await page.locator('.facts dd', { hasText: /^molty-/ }).waitFor({ state: 'attached', timeout: 15000 });
+  await page.getByRole('button', { name: 'Show live view' }).click();
+  await page.locator('.pv-status', { hasText: /^live/ }).waitFor({ timeout: 15000 });
   await shot(page, '20-status-real');
   await page.goto(`${MOCK}/?device=${encodeURIComponent(REAL)}#/agent`);
   await page.locator('.msg pre', { hasText: 'molty-' }).waitFor({ timeout: 10000 });

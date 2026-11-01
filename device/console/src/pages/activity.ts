@@ -6,7 +6,7 @@
 import { UnsupportedError } from '../api/device';
 import type { AppCtx } from '../app';
 import {
-  ACTIVITY_KINDS, ActivityApiError, agentsOf, audioFileName, entryLine, filterGroups, fmtMs, getActivity, getAudio, groupEntries, mergeEntries, setKeepAudio, setTranscripts, timingRows, transcript, voiceLine,
+  ACTIVITY_KINDS, ActivityApiError, agentsOf, audioFileName, entryLine, filterGroups, fmtMs, getActivity, getAudio, groupEntries, mergeEntries, setKeepAudio, setTranscripts, timingRows, transcript, visibleRange, voiceLine,
   type ActivityEntry, type ActivityTarget, type Filters, type Group,
 } from '../activity/activity';
 import { fmtAt, traceModel, type TraceModel } from '../activity/trace';
@@ -14,11 +14,15 @@ import { getSpeech, resetSpeech, SpeechApiError, speechRows, type SpeechStats } 
 import { linkContext } from '../ui/agent-link';
 import { h, mount, note } from '../ui/dom';
 import { errText } from '../ui/fmt';
+import { more, pageHead, section, toggle } from '../ui/kit';
 
 const POLL_MS = 3000;
 const LINK_MS = 60000;   // the link code rotates every 15 min
+const ROW = 24;          // px, one line of the log: .act-row in style.css
+const PAGE = 500;        // the relay's largest page
+const KEEP = 4000;       // above the relay's 3072 entries, so the whole 24 h stays searchable
 
-const clock = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+const clock = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 
 export function activityPage(root: HTMLElement, { api }: AppCtx) {
   let alive = true, timer = 0, linkTimer = 0, busy = false;
@@ -32,6 +36,10 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
   const filters: Filters = {};
   const open = new Set<string>();
   let lastSig = '';
+  let shown: Group[] = [];
+  let selected: string | null = null;
+  let detailSig = '';
+  let follow = true;   // stay on the newest line until they scroll up
   let speech: SpeechStats | null = null;
   let speechAt = 0;
   const SPEECH_MS = 30000;   // the habits change per turn: no need to poll them every 3 s
@@ -40,11 +48,17 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
   const settings = h('div', { class: 'act-settings' });
   const habits = h('div', { class: 'act-speech' });
   const msg = h('div', { 'aria-live': 'polite' });
-  const list = h('div', { class: 'act-list' });
+  const search = h('input', { type: 'search', class: 'act-search', placeholder: 'Search words, errors, agents…', 'aria-label': 'search the log',
+    oninput: () => { filters.q = search.value; renderList(); },
+    onkeydown: (ev: KeyboardEvent) => { if (ev.key === 'Escape') { search.value = ''; filters.q = ''; renderList(); } } }) as HTMLInputElement;
+  const rows = h('div', { class: 'act-rows' });
+  const term = h('div', { class: 'act-term', tabindex: '0', role: 'listbox', 'aria-label': 'activity log', onscroll: onScroll, onkeydown: onTermKey }, rows);
+  const newest = h('button', { type: 'button', class: 'act-newest', onclick: () => { follow = true; renderList(); } }, '↓ newest');
+  const status = h('div', { class: 'act-status dim', 'aria-live': 'polite' });
+  const detail = h('div', { class: 'act-detail' });
   mount(root,
-    h('h1', null, 'activity ', h('span', { class: 'dim' }, '⠶ what happened, and who did it')),
-    h('p', { class: 'lede' }, 'Every agent call and turn on this Molty, the device’s own log lines for it, and what Molty itself did — the last 24 h, kept by the relay.'),
-    controls, msg, list, habits, settings);
+    ...pageHead('Activity', 'What happened on this Molty and which agent did it, for the last 24 hours.'),
+    search, controls, msg, h('div', { class: 'act-log' }, term, newest, status), detail, settings, more('How you talk', habits));
 
   async function loadLink() {
     clearTimeout(linkTimer);
@@ -69,10 +83,10 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
     if (!busy && !document.hidden) {
       busy = true;
       try {
-        // first load: the newest page; then everything after the last id, page by page
-        for (let i = 0; i < 5; i++) {
-          const p = await getActivity(target, next ? { since: next, limit: 200 } : { limit: 200 });
-          entries = mergeEntries(entries, p.entries);
+        // from the oldest kept entry, page by page, then everything after the last id
+        for (let i = 0; i < 10; i++) {
+          const p = await getActivity(target, { since: next || 'a0', limit: PAGE });
+          entries = mergeEntries(entries, p.entries, KEEP);
           if (p.next) next = p.next;
           transcripts = p.transcripts;
           keepAudio = p.keep_audio;
@@ -88,7 +102,7 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
       } catch (e) {
         if (e instanceof ActivityApiError && e.code === 'unsupported') unsupported = true;
         else if (e instanceof ActivityApiError && e.code === 'unauthorized') void loadLink();   // the code rotated
-        else problem = e instanceof ActivityApiError && e.code === 'unreachable' ? 'can’t reach the relay — is Molty online?' : (e as Error).message;
+        else problem = e instanceof ActivityApiError && e.code === 'unreachable' ? 'Can’t reach the relay. Is Molty online?' : (e as Error).message;
       } finally { busy = false; }
       // re-render only on news: an open select or a scrolled list must survive the poll
       const sig = `${entries.length}|${next}|${transcripts}|${keepAudio}|${problem}|${loaded}|${unsupported}|${speechAt}`;
@@ -99,6 +113,12 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
 
   const onVisible = () => { if (!document.hidden) void poll(); };
   document.addEventListener('visibilitychange', onVisible);
+  const onSlash = (ev: KeyboardEvent) => {
+    if (ev.key !== '/' || (ev.target as HTMLElement).closest('input, select, textarea')) return;
+    ev.preventDefault();
+    search.focus();
+  };
+  document.addEventListener('keydown', onSlash);
 
   async function toggleTranscripts(on: boolean) {
     if (!target || on === transcripts) return;
@@ -140,37 +160,22 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
     if (key === controlsKey) return;
     controlsKey = key;
     const agentSel = h('select', { 'aria-label': 'agent', onchange: (ev: Event) => { filters.agent = (ev.target as HTMLSelectElement).value || undefined; render(); } },
-      h('option', { value: '', selected: !filters.agent }, 'all agents'),
+      h('option', { value: '', selected: !filters.agent }, 'All agents'),
       agents.map((a) => h('option', { value: a, selected: filters.agent === a }, a)));
     const kindSel = h('select', { 'aria-label': 'kind', onchange: (ev: Event) => { filters.kind = (ev.target as HTMLSelectElement).value || undefined; render(); } },
-      h('option', { value: '', selected: !filters.kind }, 'everything'),
+      h('option', { value: '', selected: !filters.kind }, 'Everything'),
       ACTIVITY_KINDS.map((k) => h('option', { value: k.id, selected: filters.kind === k.id }, k.label)));
     const errs = h('button', { type: 'button', class: 'chip' + (filters.errors ? ' on' : ''), 'aria-pressed': String(!!filters.errors),
-      onclick: () => { filters.errors = !filters.errors; render(); } }, 'errors only');
+      onclick: () => { filters.errors = !filters.errors; render(); } }, 'Errors only');
     mount(controls, h('div', { class: 'row act-filters' }, agentSel, kindSel, errs));
   }
 
   function renderSettings() {
     if (!loaded) { mount(settings); return; }
-    mount(settings, h('div', { class: 'card' },
-      h('div', { class: 'row' }, h('b', { class: 'hi' }, 'log transcripts'), h('span', { class: 'dim small' }, 'what Molty heard and said, in this log')),
-      h('div', { class: 'chips', role: 'group', 'aria-label': 'log transcripts' },
-        [['on', true], ['off', false]].map(([label, on]) => h('button', {
-          type: 'button', class: 'chip' + (transcripts === on ? ' on' : ''), 'aria-pressed': String(transcripts === on),
-          onclick: () => void toggleTranscripts(on as boolean),
-        }, label as string))),
-      h('p', { class: 'dim small' }, transcripts ? 'on: turns keep the words (agents only ever see their own).' : 'off: new turns keep timings and outcomes only; the words are never stored.')),
-      keepAudio === undefined ? null : h('div', { class: 'card' },
-        h('div', { class: 'row' }, h('b', { class: 'hi' }, 'keep audio for debugging'), h('span', { class: 'dim small' }, 'what the mic heard, as a wav per turn')),
-        h('div', { class: 'chips', role: 'group', 'aria-label': 'keep audio for debugging' },
-          [['on', true], ['off', false]].map(([label, on]) => h('button', {
-            type: 'button', class: 'chip' + (keepAudio === on ? ' on' : ''), 'aria-pressed': String(keepAudio === on),
-            disabled: !transcripts && on === true,
-            onclick: () => void toggleKeepAudio(on as boolean),
-          }, label as string))),
-        h('p', { class: 'dim small' }, !transcripts
-          ? 'off while transcripts are off: no audio is kept.'
-          : `${keepAudio ? 'on' : 'off (default)'}: the relay keeps the last ${audioInfo.turns} turns' audio (up to ${audioInfo.max_s} s each) for ${audioInfo.max_age_h} h, then deletes it. Only you can download it here — agents never can.`)));
+    mount(settings, section('Privacy', 'What the relay keeps. Agents only ever see their own turns.',
+      toggle('Keep the words', transcripts ? 'What Molty heard and said is stored in this log.' : 'New turns keep timings and outcomes only, never the words.', transcripts, toggleTranscripts),
+      keepAudio === undefined ? null : !transcripts ? h('p', { class: 'why' }, 'No audio is kept while the words are off.')
+        : toggle('Keep recordings for debugging', `The last ${audioInfo.turns} turns (up to ${audioInfo.max_s} s each), deleted after ${audioInfo.max_age_h} h. Only you can download them, here.`, keepAudio, toggleKeepAudio)));
   }
 
   async function startOver() {
@@ -184,29 +189,64 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
   function renderHabits() {
     if (!loaded || !speech) { mount(habits); return; }
     const rows = speechRows(speech);
-    mount(habits, h('div', { class: 'card' },
-      h('div', { class: 'row' }, h('b', { class: 'hi' }, 'speech habits'), h('span', { class: 'dim small' }, 'how you talk to Molty, learned by the relay')),
+    mount(habits, h('div', null,
+      h('div', { class: 'row' }, h('span', { class: 'why' }, 'Learned by the relay to tune how it listens.')),
       h('dl', { class: 'facts', 'aria-label': 'speech habits' }, rows.map(([k, v]) => [h('dt', null, k), h('dd', null, v)])),
       h('p', { class: 'dim small' }, 'Agents get your words in chunks while you talk (context only) and may have a short opener ready; the relay tunes both to how you speak.'),
-      h('button', { type: 'button', class: 'chip', onclick: () => void startOver() }, 'start over')));
+      h('button', { type: 'button', class: 'link', onclick: () => void startOver() }, 'Start over')));
   }
 
-  function groupEl(g: Group) {
-    const failed = g.outcome === 'failed' || g.outcome === 'error';
-    const badge = h('span', { class: `badge ${failed ? 'warn' : g.outcome === 'pending' ? '' : 'ok'}` },
-      failed ? (g.error ?? 'error') : g.outcome === 'pending' ? 'running' : g.outcome === 'done' ? 'done' : 'ok');
-    const head = [
-      h('span', { class: 'dim act-time' }, clock(g.ts)),
+  const failed = (g: Group) => g.outcome === 'failed' || g.outcome === 'error';
+
+  /** One line of the log. A fixed height is what lets the list draw only what is on screen. */
+  function rowEl(g: Group, i: number) {
+    return h('div', { class: 'act-row' + (failed(g) ? ' err' : '') + (g.key === selected ? ' on' : ''), style: `top:${i * ROW}px`, role: 'option', 'aria-selected': String(g.key === selected), 'data-kind': g.entries[0].kind,
+      onclick: () => { select(g.key === selected ? null : g.key); } },
+      h('span', { class: 'dim' }, clock(g.ts)),
       h('b', { class: 'act-agent' }, g.agent ?? 'molty'),
       h('span', { class: 'act-op' }, g.job ? g.op : entryLine(g.entries[0])),
-      g.ms !== undefined ? h('span', { class: 'dim' }, fmtMs(g.ms)) : null,
-      g.job || failed ? badge : null,
-    ];
-    if (!g.job) return h('div', { class: 'act-item' + (failed ? ' err' : ''), 'data-kind': g.entries[0].kind }, ...head);
-    const d = h('details', { class: 'act-turn' + (failed ? ' err' : ''), open: open.has(g.key) },
-      h('summary', null, ...head), turnBody(g));
-    d.addEventListener('toggle', () => { if (d.open) open.add(g.key); else open.delete(g.key); });
-    return d;
+      h('span', { class: 'dim' }, g.ms !== undefined ? fmtMs(g.ms) : ''),
+      h('span', { class: failed(g) ? 'tone-err' : 'dim' }, failed(g) ? (g.error ?? 'error') : g.outcome === 'pending' ? 'running' : g.job ? 'done' : ''));
+  }
+
+  function drawRows() {
+    const [from, to] = visibleRange(term.scrollTop, term.clientHeight, ROW, shown.length);
+    mount(rows, shown.slice(from, to).map((g, i) => rowEl(g, from + i)));
+  }
+
+  function onScroll() {
+    follow = term.scrollTop + term.clientHeight >= term.scrollHeight - ROW;
+    newest.classList.toggle('show', !follow);
+    drawRows();
+  }
+
+  function select(key: string | null) {
+    selected = key;
+    drawRows();
+    renderDetail();
+  }
+
+  function onTermKey(ev: KeyboardEvent) {
+    const step = ({ ArrowDown: 1, ArrowUp: -1, PageDown: 15, PageUp: -15 } as Record<string, number>)[ev.key];
+    if (!step || !shown.length) return;
+    ev.preventDefault();
+    const at = shown.findIndex((g) => g.key === selected);
+    const i = Math.max(0, Math.min(shown.length - 1, (at < 0 ? shown.length : at) + step));
+    if (i * ROW < term.scrollTop) term.scrollTop = i * ROW;
+    else if ((i + 1) * ROW > term.scrollTop + term.clientHeight) term.scrollTop = (i + 1) * ROW - term.clientHeight;
+    select(shown[i].key);
+  }
+
+  function renderDetail() {
+    const g = shown.find((x) => x.key === selected);
+    const sig = g ? `${g.key}|${g.entries.length}|${g.jobEntry?.data?.status ?? ''}` : '';
+    if (sig === detailSig) return;   // an open timeline or a scrolled device log must survive the poll
+    detailSig = sig;
+    if (!g) { mount(detail); return; }
+    mount(detail, h('div', { class: 'row act-detail-head' },
+      h('b', null, `${clock(g.ts)} ${g.agent ?? 'molty'} ${g.job ? g.op : ''}`),
+      h('button', { type: 'button', class: 'link', onclick: () => select(null) }, 'Close')),
+      g.job ? turnBody(g) : h('p', { class: 'small' }, entryLine(g.entries[0])));
   }
 
   function turnBody(g: Group) {
@@ -255,20 +295,27 @@ export function activityPage(root: HTMLElement, { api }: AppCtx) {
     renderControls();
     renderHabits();
     renderSettings();
-    if (unsupported) { mount(msg, note('warn', 'this relay has no activity log yet.')); mount(list); return; }
-    mount(msg, problem ? note('warn', problem) : null);
-    if (!loaded) { mount(list, problem ? null : h('p', { class: 'dim' }, 'asking the relay…')); return; }
-    const groups = filterGroups(groupEntries(entries), filters).reverse();   // newest first
-    if (!groups.length) {
-      mount(list, h('p', { class: 'dim' }, entries.length ? 'nothing matches these filters.' : 'nothing yet — pair an agent and talk to Molty.'));
-      return;
-    }
-    mount(list, groups.map(groupEl));
+    mount(msg, unsupported ? note('warn', 'This relay has no activity log yet.') : problem ? note('warn', problem) : null);
+    renderList();
+  }
+
+  function renderList() {
+    const all = loaded ? groupEntries(entries) : [];
+    shown = filterGroups(all, filters);   // oldest first, the newest at the bottom like a terminal
+    rows.style.height = `${shown.length * ROW}px`;
+    status.textContent = unsupported ? '' : !loaded ? (problem ? '' : 'Asking the relay…')
+      : !all.length ? 'Nothing yet. Pair an agent and talk to Molty.'
+      : !shown.length ? 'Nothing matches.'
+      : `${shown.length === all.length ? all.length : `${shown.length} of ${all.length}`} lines`;
+    if (follow) term.scrollTop = term.scrollHeight;
+    newest.classList.toggle('show', !follow);
+    drawRows();
+    renderDetail();
   }
 
   render();
   void loadLink();
-  return () => { alive = false; clearTimeout(timer); clearTimeout(linkTimer); document.removeEventListener('visibilitychange', onVisible); };
+  return () => { alive = false; clearTimeout(timer); clearTimeout(linkTimer); document.removeEventListener('visibilitychange', onVisible); document.removeEventListener('keydown', onSlash); };
 }
 
 const NS = 'http://www.w3.org/2000/svg';
@@ -288,29 +335,29 @@ function traceSvg(m: TraceModel): SVGElement {
   const W = 360, H = 118, span = Math.max(1, m.to - m.from);
   const x = (at: number) => +(((at - m.from) / span) * W).toFixed(1);
   const kids: SVGElement[] = [];
-  const tone = (t: string) => (t === 'err' ? 'var(--err)' : t === 'warn' ? 'var(--warn)' : t === 'ok' ? 'var(--accent)' : 'var(--dim)');
+  const tone = (t: string) => (t === 'err' ? 'var(--err)' : t === 'warn' ? 'var(--m-warn)' : t === 'ok' ? 'var(--m-accent)' : 'var(--m-dim)');
   for (const e of m.events) kids.push(svg('line', { x1: x(e.at), x2: x(e.at), y1: 0, y2: 100, stroke: tone(e.tone), 'stroke-width': 0.6, 'stroke-dasharray': '2 2', opacity: 0.8 }, svg('title', {}, `${fmtAt(e.at)} ${e.label}`)));
   // level: -90 dBFS = empty, 0 dBFS = full (30 px)
   const bw = Math.max(0.6, (100 / span) * W - 0.3);
   for (const l of m.levels) {
     const v = Math.max(0, Math.min(1, (l.db + 90) / 90)), hh = Math.max(0.5, v * 30);
-    kids.push(svg('rect', { x: x(l.at), y: 32 - hh, width: bw, height: hh, fill: 'var(--accent)', opacity: 0.75 }));
+    kids.push(svg('rect', { x: x(l.at), y: 32 - hh, width: bw, height: hh, fill: 'var(--m-accent)', opacity: 0.75 }));
   }
   for (const c of m.clips) kids.push(svg('circle', { cx: x(c.at + 50), cy: 3, r: 2, fill: 'var(--err)' }, svg('title', {}, `${c.n} clipped`)));
-  for (const [a, b] of m.speech) kids.push(svg('rect', { x: x(a), y: 38, width: Math.max(1, x(b) - x(a)), height: 6, rx: 2, fill: 'var(--accent)', opacity: 0.5 }));
-  for (const w of m.words) kids.push(svg('line', { x1: x(w.at), x2: x(w.at), y1: 46, y2: 52, stroke: 'var(--ink)', 'stroke-width': 0.8 }, svg('title', {}, w.text)));
+  for (const [a, b] of m.speech) kids.push(svg('rect', { x: x(a), y: 38, width: Math.max(1, x(b) - x(a)), height: 6, rx: 2, fill: 'var(--m-accent)', opacity: 0.5 }));
+  for (const w of m.words) kids.push(svg('line', { x1: x(w.at), x2: x(w.at), y1: 46, y2: 52, stroke: 'var(--m-ink)', 'stroke-width': 0.8 }, svg('title', {}, w.text)));
   if (m.pause.length > 1) {
     const pts = m.pause.map((p) => `${x(p.at)},${(78 - p.v * 22).toFixed(1)}`).join(' ');
-    kids.push(svg('polyline', { points: pts, fill: 'none', stroke: 'var(--warn)', 'stroke-width': 1 }));
-    if (m.threshold !== undefined) kids.push(svg('line', { x1: 0, x2: W, y1: 78 - m.threshold * 22, y2: 78 - m.threshold * 22, stroke: 'var(--faint)', 'stroke-dasharray': '3 3' }));
+    kids.push(svg('polyline', { points: pts, fill: 'none', stroke: 'var(--m-warn)', 'stroke-width': 1 }));
+    if (m.threshold !== undefined) kids.push(svg('line', { x1: 0, x2: W, y1: 78 - m.threshold * 22, y2: 78 - m.threshold * 22, stroke: 'var(--m-faint)', 'stroke-dasharray': '3 3' }));
   }
-  for (const f of m.frames) kids.push(svg('circle', { cx: x(f.at), cy: 88, r: f.rt ? 2.4 : 1.6, fill: f.rt ? 'var(--warn)' : 'var(--dim)' }, svg('title', {}, `frame ${f.seq}${f.rt ? `, ${f.rt} failed sends` : ''}`)));
+  for (const f of m.frames) kids.push(svg('circle', { cx: x(f.at), cy: 88, r: f.rt ? 2.4 : 1.6, fill: f.rt ? 'var(--m-warn)' : 'var(--m-dim)' }, svg('title', {}, `frame ${f.seq}${f.rt ? `, ${f.rt} failed sends` : ''}`)));
   const lostEv = m.events.filter((e) => e.tone === 'err' && e.lane === 'relay');
   for (const e of lostEv) kids.push(svg('rect', { x: x(e.at) - 2, y: 84, width: 4, height: 8, fill: 'var(--err)' }));
   // t0 gets a label only when it is clear of both ends (labels ~40 px wide)
   const axis = [m.from, ...(x(0) > 40 && x(0) < W - 40 ? [0] : []), m.to].filter((v, i, a) => a.indexOf(v) === i);
-  for (const t of axis) kids.push(svg('text', { x: Math.min(W - 2, Math.max(2, x(t))), y: 112, 'font-size': 9, fill: 'var(--dim)', 'text-anchor': t === m.from ? 'start' : t === m.to ? 'end' : 'middle' }, fmtAt(t)));
+  for (const t of axis) kids.push(svg('text', { x: Math.min(W - 2, Math.max(2, x(t))), y: 112, 'font-size': 9, fill: 'var(--m-dim)', 'text-anchor': t === m.from ? 'start' : t === m.to ? 'end' : 'middle' }, fmtAt(t)));
   const labels: Array<[number, string]> = [[12, 'level'], [44, 'speech'], [70, 'pause'], [91, 'frames']];
-  for (const [y, t] of labels) kids.push(svg('text', { x: W - 1, y, 'font-size': 8, fill: 'var(--faint)', 'text-anchor': 'end' }, t));
+  for (const [y, t] of labels) kids.push(svg('text', { x: W - 1, y, 'font-size': 8, fill: 'var(--m-faint)', 'text-anchor': 'end' }, t));
   return svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'act-trace-svg', role: 'img', 'aria-label': 'turn timeline' }, ...kids);
 }

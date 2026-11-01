@@ -9,9 +9,9 @@ export const IDLE_DEFAULT = 'lively';
 
 /** The chips, in order. */
 export const IDLE_CHOICES: ReadonlyArray<{ id: string; label: string }> = [
-  { id: 'lively', label: 'lively (default)' },
-  { id: 'calm', label: 'calm' },
-  { id: 'off', label: 'off' },
+  { id: 'lively', label: 'Lively' },
+  { id: 'calm', label: 'Calm' },
+  { id: 'off', label: 'Still' },
 ];
 
 /** A value the device takes. */

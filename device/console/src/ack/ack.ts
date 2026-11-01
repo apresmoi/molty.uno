@@ -8,9 +8,9 @@ export const ACK_DEFAULT = 'chirp';
 
 /** The chips, in order. */
 export const ACK_CHOICES: ReadonlyArray<{ id: string; label: string }> = [
-  { id: 'chirp', label: 'chirp + thinking (default)' },
-  { id: 'thinking', label: 'thinking only' },
-  { id: 'off', label: 'off' },
+  { id: 'chirp', label: 'Chirp and think' },
+  { id: 'thinking', label: 'Think only' },
+  { id: 'off', label: 'Nothing' },
 ];
 
 /** A value the device takes. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { gapOptions, reflexOptions, voiceOptions, VoiceApiError, boxLine, getVoice, latencyLine, pairCommand, servingLine, setVoice, unpairBox, voiceChoices, voiceLabel, type VoiceStatus } from './voice';
+import { allGaps, allReactions, allVoices, gapNote, reflexNote, setupSteps, gapOn, voiceOn, gapOptions, reflexOptions, voiceOptions, VoiceApiError, boxLine, getVoice, latencyLine, pairCommand, servingLine, setVoice, unpairBox, voiceChoices, voiceLabel, type VoiceStatus } from './voice';
 
 const T = { relay: 'https://relay.example', deviceId: 'molty-k7m2w9c4ya', linkCode: 'K7QX2MPA' };
 
@@ -44,9 +44,9 @@ describe('voice box owner API', () => {
 
 describe('voice card text', () => {
   it('says whether a box is paired / connected', () => {
-    expect(boxLine(status())).toEqual({ text: 'gpu box ⠂ connected ⠂ listens + speaks ⠂ v0.1.0', kind: 'ok' });
+    expect(boxLine(status())).toEqual({ text: 'Your voice box is connected. The cloud takes over if it goes offline.', kind: 'ok' });
     expect(boxLine(status({}, { connected: false })).kind).toBe('warn');
-    expect(boxLine(status({}, { paired: false })).text).toBe('no voice box paired');
+    expect(boxLine(status({}, { paired: false })).text).toBe('Speech runs in the cloud. Nothing to install.');
   });
   it('says who serves now', () => {
     expect(servingLine(status())).toBe('Molty uses: voice box');
@@ -74,13 +74,10 @@ describe('reflex setting', () => {
     await setVoice(T, { reflex: 'jev', reflex_compare: true, liveliness: 'lively' }, f);
     expect(JSON.parse(String(calls[0].init.body))).toEqual({ reflex: 'jev', reflex_compare: true, liveliness: 'lively' });
   });
-  it('says who reacts, and why not the chosen engine', async () => {
-    const { reflexLine } = await import('./voice');
-    expect(reflexLine(undefined)).toBe('');
-    expect(reflexLine(rx({ mode: 'off', engine: null }))).toBe('');
-    expect(reflexLine(rx())).toBe('reacts with Jev');
-    expect(reflexLine(rx({ mode: 'openai', engine: 'keywords', fallback: 'no_key', compare: true }))).toBe('reacts with keywords (no key on the relay for OpenAI) ⠂ comparing every engine in the activity log');
-    expect(reflexLine(rx({ mode: 'auto', engine: 'local' }))).toBe('reacts with the voice box');
+  it('says when the chosen engine is not really running', () => {
+    expect(reflexNote(status({ reflex: rx({ mode: 'off', engine: null }) })).kind).toBe('dim');
+    expect(reflexNote(status({ reflex: rx() })).kind).toBe('dim');
+    expect(reflexNote(status({ reflex: rx({ mode: 'openai', engine: 'keywords', fallback: 'no_key' }) }))).toEqual({ text: 'OpenAI isn’t set up here, so Molty is using Word list instead.', kind: 'warn' });
   });
 });
 
@@ -90,15 +87,52 @@ describe('setup hides what the owner\'s tools can\'t do', () => {
   const rx = (e = engines) => ({ reflex: { mode: 'off' as const, compare: false, engines: e, engine: null, timeout_ms: 1 } });
 
   it('voice: no box, no box choice; no cloud provider, no cloud choice; text only always', () => {
-    expect(ids(voiceOptions(status({}, { paired: false })))).toEqual(['cloud', 'off']);
-    expect(ids(voiceOptions(status({ cloud: 'none' })))).toEqual(['box', 'off']);
+    expect(ids(voiceOptions(status({}, { paired: false })))).toEqual(['off', 'cloud']);
+    expect(ids(voiceOptions(status({ cloud: 'none' })))).toEqual(['off', 'box']);
+    expect(ids(voiceOptions(status()))).toEqual(['off', 'cloud', 'auto']);
+  });
+  it('voice: shows what the mode means, whatever mode an older setting left', () => {
+    expect(voiceOn(status({ mode: 'box' }))).toBe('auto');
+    expect(voiceOn(status({ mode: 'auto' }, { paired: false }))).toBe('cloud');
+    expect(voiceOn(status({ mode: 'off' }))).toBe('off');
+  });
+  it('gap: first words win, a zero delay means quiet', () => {
+    expect(gapOn(status({ first_words: { mode: 'opener', available: true } }), 0)).toBe('local');
+    expect(gapOn(status(), 0)).toBe('off');
+    expect(gapOn(status(), 600)).toBe('phrases');
   });
   it('gap: first words only with a box that offers them', () => {
-    expect(ids(gapOptions(status()))).toEqual(['phrases', 'off']);
-    expect(ids(gapOptions(status({ first_words: { mode: 'off', available: true } })))).toEqual(['local', 'phrases', 'off']);
+    expect(ids(gapOptions(status()))).toEqual(['off', 'phrases']);
+    expect(ids(gapOptions(status({ first_words: { mode: 'off', available: true } })))).toEqual(['off', 'phrases', 'local']);
+  });
+  it('voice page: what is missing stays visible and says what it needs, never a name', () => {
+    const needs = (o: Array<{ id: string; need?: string }>) => o.filter((x) => x.need).map((x) => x.need);
+    expect(needs(allVoices(status({}, { paired: false })))).toEqual(['box']);
+    expect(needs(allVoices(status({ cloud: 'none' })))).toEqual(['cloud']);
+    expect(needs(allGaps(status()))).toEqual(['opener']);
+    expect(needs(allReactions(status(rx())))).toEqual(['local', 'jev', 'openai']);
+    expect(needs(allReactions(status(rx({ ...engines, jev: true }))))).toEqual(['local', 'openai']);
+    expect(JSON.stringify(boxLine(status()))).not.toContain('gpu box');
+    expect(JSON.stringify(allVoices(status()))).not.toContain('gpu box');
+  });
+  it('an offline box says who is really speaking', () => {
+    expect(boxLine(status({ serving: { tts: 'workers-ai', stt: 'workers-ai' } }, { connected: false })).text).toContain('the cloud is speaking');
+    expect(boxLine(status({ serving: { tts: 'voice_box_offline', stt: 'voice_box_offline' } }, { connected: false })).text).toContain('can’t speak');
+    expect(boxLine(status({ cloud: 'none' }, { paired: false })).kind).toBe('warn');
+  });
+  it('first words chosen with nothing offering them say so', () => {
+    expect(gapNote(status({ first_words: { mode: 'opener', available: false } }), 'local').kind).toBe('warn');
+    expect(gapNote(status({ first_words: { mode: 'opener', available: true } }), 'local').kind).toBe('dim');
+  });
+  it('the steps are exact: this Molty\'s pair command, the real secret names, and no key ever on this relay', () => {
+    expect(setupSteps('box', T).steps.map((x) => x.code)).toContain(pairCommand(T));
+    expect(setupSteps('jev', T).steps.map((x) => x.code)).toContain('npx wrangler secret put TYPESAFE_API_KEY');
+    expect(setupSteps('openai', T).steps.map((x) => x.code)).toContain('npx wrangler secret put OPENAI_API_KEY');
+    expect(setupSteps('opener', T).steps.map((x) => x.code)).toContain('molty-voice run --opener');
+    expect(setupSteps('local', T).steps.map((x) => x.code)).toContain('molty-voice run --reflex');
   });
   it('reflex: only engines available now, keywords and off always', () => {
     expect(ids(reflexOptions(status(rx())))).toEqual(['off', 'keywords']);
-    expect(ids(reflexOptions(status(rx({ ...engines, local: true, jev: true }))))).toEqual(['off', 'local', 'jev', 'keywords']);
+    expect(ids(reflexOptions(status(rx({ ...engines, local: true, jev: true }))))).toEqual(['off', 'keywords', 'local', 'jev']);
   });
 });

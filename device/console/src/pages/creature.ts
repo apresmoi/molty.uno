@@ -1,159 +1,121 @@
-// Molty (settings): pick a Molty from the catalog (sent to the device as a .molty file),
-// and play with the fluid — state, speed-reader text + WPM, palette, listening ring colour,
-// shake to talk, gestures, idle life, tap-to-ripple. How Molty talks is on the voice page.
+// Molty: who lives in the water, how it looks and how it behaves. Tapping a creature sends it;
+// the playground for trying the fluid is closed until asked for.
 import { UnsupportedError } from '../api/device';
 import type { FluidOrder, FluidState } from '../api/types';
 import type { AppCtx } from '../app';
 import type { CreatureEntry } from '../catalog/catalog';
 import { h, mount, note } from '../ui/dom';
 import { debounce, errText } from '../ui/fmt';
+import { dropdown, field, more, pills, section } from '../ui/kit';
 import { preview } from '../ui/preview';
 import { RING_CHOICES, ringChoice, ringSupported } from '../ring/ring';
 import { IDLE_CHOICES, idleChoice, idleSupported } from '../idle/idle';
-import { SHAKE_CHOICES, shakeChoice, shakeSupported } from '../shake/shake';
+import { shakeChoice, shakeSupported } from '../shake/shake';
 import { GESTURE_ACTIONS, GESTURE_INPUTS, gestureChoice, gesturesSupported } from '../shake/gestures';
 
-const STATES = ['blob', 'creature', 'thinking', 'text', 'autoplay'];
-const EFFECTS = ['ripple', 'vortex', 'wave'];
+const STATES = ['blob', 'creature', 'thinking', 'text', 'autoplay', 'effect:ripple', 'effect:vortex', 'effect:wave'];
 const PALETTES: Record<string, string> = { green: '#7cf29a', amber: '#ffb347', pastel: '#c9b6ff' };
+const cap = (w: string) => w[0].toUpperCase() + w.slice(1);
 
 export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
-  let alive = true, timer = 0, chosen: CreatureEntry | null = null, fluid: FluidState | null = null;
-  const cards = h('div', { class: 'cards', role: 'listbox', 'aria-label': 'moltys' });
-  const send = h('button', { class: 'primary', type: 'button', disabled: true, onclick: () => upload() }, 'send to molty');
-  const sendMsg = h('div');
-  const current = h('div', { class: 'dim small' });
+  let alive = true, timer = 0, picked: string | null = null, sending: string | null = null, fluid: FluidState | null = null, list: CreatureEntry[] = [], sig = '';
+  const strip = h('div', { class: 'strip', role: 'group', 'aria-label': 'choose a creature' });
+  const sendMsg = h('div', { 'aria-live': 'polite' });
+  const look = h('div');
+  const behave = h('div');
+  const play = h('div');
   const ctlMsg = h('div');
-  const stateRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'state' });
-  const palRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'palette' });
-  const ringLabel = h('label', { hidden: true }, 'listening ring');
-  const ringRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'listening ring colour', hidden: true });
-  const gestureRows = GESTURE_INPUTS.map((input) => ({
-    input,
-    label: h('label', { hidden: true }, input.label),
-    row: h('div', { class: 'chips', role: 'group', 'aria-label': input.label, hidden: true }),
-  }));
-  const gestureHint = h('p', { class: 'dim small', hidden: true }, 'a tap always stops a recording and sends it, and a question always takes the tap');
-  const shakeLabel = h('label', { hidden: true }, 'shake to talk');
-  const shakeRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'shake to talk', hidden: true });
-  const shakeHint = h('p', { class: 'dim small', hidden: true }, 'shake Molty and just speak — it listens at once and your agent gets your words; off: a shake is only a nudge');
-  const idleLabel = h('label', { hidden: true }, 'idle life');
-  const idleRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'idle life', hidden: true });
-  const idleHint = h('p', { class: 'dim small', hidden: true }, 'how much Molty moves by itself when nobody drives it — glances, blinks, stretches, a yawn before dozing; always silent');
-  const text = h('textarea', { rows: 3, placeholder: 'words for the speed reader…', 'aria-label': 'reader text' });
+  const text = h('textarea', { rows: 2, placeholder: 'Words for Molty to read…', 'aria-label': 'reader text' });
   const wpm = h('input', { type: 'range', min: 100, max: 800, step: 25, value: '300', 'aria-label': 'words per minute' });
   const wpmOut = h('output', null, '300 wpm');
   const word = h('div', { class: 'word', 'aria-live': 'polite' });
+  const file = h('input', { type: 'file', accept: '.molty', hidden: true, 'aria-label': 'your own creature file', onchange: () => { const f = file.files?.[0]; if (f) void uploadOwn(f); file.value = ''; } });
 
   const order = async (o: FluidOrder, quiet = false) => {
     try { const s = await api.fluid(o); if (alive) { fluid = s; renderControls(); mount(ctlMsg); } }
     catch (e) { if (!quiet) mount(ctlMsg, note('err', errText(e))); }
   };
-  const pv = preview(api, { size: 320, onTap: (x, y) => order({ ripple: { x, y } }, true) });
+  const pv = preview(api, { size: 300, onTap: (x, y) => order({ ripple: { x, y } }, true) });
   const sendWpm = debounce((v: number) => order({ wpm: v }), 350);
 
   mount(root,
-    h('h1', null, 'molty ', h('span', { class: 'dim' }, '⠶ who lives in the water')),
-    cards, h('div', { class: 'row' }, current, send), sendMsg,
-    h('h2', null, 'the fluid'),
     h('div', { class: 'split' },
-      h('div', null, pv.el, h('p', { class: 'dim small center' }, 'tap the screen to make a ripple')),
-      h('div', { class: 'controls' },
-        h('label', null, 'state'), stateRow,
-        h('label', null, 'palette'), palRow,
-        ringLabel, ringRow,
-        shakeLabel, shakeRow, shakeHint,
-        ...gestureRows.flatMap((g) => [g.label, g.row]), gestureHint,
-        idleLabel, idleRow, idleHint,
-        h('label', null, 'speed reader'), text,
-        h('div', { class: 'row' }, wpm, wpmOut),
-        h('div', { class: 'row' }, word, h('button', { type: 'button', onclick: () => order({ text: text.value, wpm: +wpm.value, state: 'text' }) }, 'read it ⠶')),
-        ctlMsg)));
+      h('div', { class: 'stick' }, pv.el, h('p', { class: 'why center' }, 'Tap the screen to make a ripple')),
+      h('div', null,
+        h('h1', null, 'Molty'),
+        h('p', { class: 'lede' }, 'Who lives in the water. Tap one to send it.'),
+        strip, sendMsg, file,
+        look, behave, ctlMsg,
+        more('Playground', play, h('label', null, 'Read this'), text,
+          h('div', { class: 'row' }, wpm, wpmOut),
+          h('div', { class: 'row' }, word, h('button', { type: 'button', class: 'primary', onclick: () => order({ text: text.value, wpm: +wpm.value, state: 'text' }) }, 'Read it'))))));
 
   wpm.addEventListener('input', () => { wpmOut.textContent = `${wpm.value} wpm`; sendWpm(+wpm.value); });
 
   function renderControls() {
     const s = fluid;
     const active = s?.autoplay ? 'autoplay' : s?.state ?? '';
-    mount(stateRow,
-      STATES.map((st) => h('button', { type: 'button', class: 'chip' + (active === st ? ' on' : ''), 'aria-pressed': String(active === st), onclick: () => order({ state: st }) }, st)),
-      EFFECTS.map((fx) => {
-        const v = `effect:${fx}`;
-        return h('button', { type: 'button', class: 'chip fx' + (active === v ? ' on' : ''), 'aria-pressed': String(active === v), onclick: () => order({ state: v }) }, fx);
-      }));
-    mount(palRow, Object.entries(PALETTES).map(([p, c]) =>
-      h('button', { type: 'button', class: 'chip' + (s?.palette === p ? ' on' : ''), 'aria-pressed': String(s?.palette === p), style: `--sw:${c}`, onclick: () => order({ palette: p }) },
-        h('span', { class: 'swatch' }), p)));
-    const ringOn = ringSupported(s);   /* older firmware has no ring setting */
-    ringLabel.hidden = ringRow.hidden = !ringOn;
-    const ring = ringChoice(s?.ring_color);
-    if (ringOn) mount(ringRow, RING_CHOICES.map((c) =>
-      h('button', { type: 'button', class: 'chip' + (ring === c.id ? ' on' : ''), 'aria-pressed': String(ring === c.id),
-        style: c.id === 'accent' ? '' : `--sw:${c.value}`, onclick: () => order({ ring_color: c.value }) },
-        c.id === 'accent' ? null : h('span', { class: 'swatch' }), c.id === 'accent' ? 'accent (default)' : c.id)));
-    const shakeOn = shakeSupported(s);   /* older firmware: a shake is only an event */
-    shakeLabel.hidden = shakeRow.hidden = shakeHint.hidden = !shakeOn;
-    const sk = shakeChoice(s?.shake_talk);
-    if (shakeOn) mount(shakeRow, SHAKE_CHOICES.map((c) =>
-      h('button', { type: 'button', class: 'chip' + (sk === c.on ? ' on' : ''), 'aria-pressed': String(sk === c.on),
-        onclick: () => order({ shake_talk: c.on }) }, c.label)));
-    const gesturesOn = gesturesSupported(s);   /* older firmware: taps and buttons are only events */
-    gestureHint.hidden = !gesturesOn;
-    for (const g of gestureRows) {
-      g.label.hidden = g.row.hidden = !gesturesOn;
-      const on = gestureChoice(s?.gestures, g.input);
-      if (gesturesOn) mount(g.row, GESTURE_ACTIONS.map((a) =>
-        h('button', { type: 'button', class: 'chip' + (on === a.id ? ' on' : ''), 'aria-pressed': String(on === a.id),
-          onclick: () => order({ gestures: { [g.input.id]: a.id } }) }, a.label)));
+    // redraw only on news: an open dropdown must survive the poll
+    const next = JSON.stringify([active, s?.palette, s?.ring_color, s?.shake_talk, s?.gestures, s?.idle_life]);
+    if (next !== sig && document.activeElement?.tagName !== 'SELECT') {
+      sig = next;
+      mount(play, h('label', null, 'What the water does'),
+        pills('state', STATES.map((id) => ({ id, label: cap(id.replace('effect:', '')) })), active, (id) => order({ state: id })));
+      mount(look, section('Look', null,
+        h('div', { class: 'sub first' }, h('label', null, 'Colours'),
+          pills('palette', Object.entries(PALETTES).map(([id, sw]) => ({ id, label: cap(id), sw })), s?.palette, (p) => order({ palette: p }))),
+        ringSupported(s) ? h('div', { class: 'sub' }, h('label', null, 'Circle while listening'),
+          pills('listening ring colour', RING_CHOICES.map((c) => ({ id: c.id, label: c.id === 'accent' ? 'Match colours' : cap(c.id), sw: c.id === 'accent' ? undefined : c.value })), ringChoice(s?.ring_color) as string,
+            (id) => order({ ring_color: RING_CHOICES.find((c) => c.id === id)!.value }))) : null));
+      const ON = GESTURE_ACTIONS.map((a) => ({ id: a.id, label: cap(a.label) }));
+      mount(behave,
+        idleSupported(s) ? section('When nobody’s talking', 'Small movements by itself: glances, blinks, a stretch. Always silent.',
+          pills('idle life', IDLE_CHOICES, idleChoice(s?.idle_life), (id) => order({ idle_life: id }))) : null,
+        shakeSupported(s) || gesturesSupported(s) ? section('Touch and motion', 'What each one does. A tap always stops a recording and sends it.',
+          shakeSupported(s) ? field('Shake', 'Start talking to your agent', dropdown('shake', [{ id: 'on', label: 'Talk' }, { id: 'off', label: 'Tell agent' }], shakeChoice(s?.shake_talk) ? 'on' : 'off', (id) => order({ shake_talk: id === 'on' }))) : null,
+          gesturesSupported(s) ? GESTURE_INPUTS.map((g) => field(cap(g.label), null,
+            dropdown(g.label, ON, gestureChoice(s?.gestures, g), (a) => order({ gestures: { [g.id]: a } })))) : null) : null);
     }
-    const idleOn = idleSupported(s);   /* older firmware has no idle actions */
-    idleLabel.hidden = idleRow.hidden = idleHint.hidden = !idleOn;
-    const il = idleChoice(s?.idle_life);
-    if (idleOn) mount(idleRow, IDLE_CHOICES.map((c) =>
-      h('button', { type: 'button', class: 'chip' + (il === c.id ? ' on' : ''), 'aria-pressed': String(il === c.id),
-        onclick: () => order({ idle_life: c.id }) }, c.label)));
     if (s && document.activeElement !== wpm && s.wpm) { wpm.value = String(s.wpm); wpmOut.textContent = `${s.wpm} wpm`; }
     if (s && !text.value && s.text) text.value = s.text;
-    word.textContent = s?.word ? `⠶ ${s.word}` : s?.nwords ? `${s.word_idx ?? 0}/${s.nwords} words` : '';
+    word.textContent = s?.word ? s.word : s?.nwords ? `${s.word_idx ?? 0}/${s.nwords} words` : '';
   }
 
+  function renderStrip() {
+    const on = sending ?? picked ?? fluid?.creature_info?.name ?? null;
+    mount(strip, list.map((c) => h('button', {
+      type: 'button', class: 'tile' + (on === c.name ? ' on' : ''), 'aria-pressed': String(on === c.name), 'aria-busy': sending === c.name ? 'true' : undefined,
+      onclick: () => { if (!sending && picked !== c.name) void send(c); },
+    }, c.thumb ? h('img', { src: c.thumb, alt: '', width: 64, height: 64 }) : h('span', { class: 'ph' }), h('span', { class: 'n' }, sending === c.name ? 'Sending…' : c.name))),
+    h('button', { type: 'button', class: 'tile', onclick: () => file.click() }, h('span', { class: 'ph' }, '+'), h('span', { class: 'n' }, 'Your own')));
+  }
+
+  async function deliver(name: string, id: string, bytes: () => Promise<Uint8Array>) {
+    if (sending) return;
+    sending = name; renderStrip(); mount(sendMsg);
+    try {
+      await api.uploadCreature(id, await bytes());
+      await api.fluid({ state: 'creature' }).catch(() => {});
+      picked = name;
+      mount(sendMsg, note('ok', `${name} is moving in.`));
+    } catch (e) {
+      mount(sendMsg, e instanceof UnsupportedError
+        ? note('warn', 'This firmware can’t take new creatures yet. An update will add it.')
+        : note('err', `Couldn’t send ${name}: ${errText(e)}`));
+    } finally { sending = null; if (alive) renderStrip(); }
+  }
+  const send = (c: CreatureEntry) => deliver(c.name, c.id, () => catalog.fetchFile(c));
+  const uploadOwn = (f: File) => { const id = f.name.replace(/\.molty$/, ''); return deliver(id, id, async () => new Uint8Array(await f.arrayBuffer())); };
+
   const poll = async () => {
-    const [reg, st] = await Promise.allSettled([api.creatures(), api.creatureState()]);
+    const st = await api.creatureState().catch(() => null);
     if (!alive) return;
-    if (reg.status === 'fulfilled') {
-      const cur = reg.value.current;
-      mount(current, 'on molty now: ', h('b', null, cur || 'nothing'),
-        cur && cur !== 'fluid' && reg.value.available.includes('fluid')
-          ? [' ⠂ ', h('button', { type: 'button', class: 'ghost small', onclick: async () => { try { await api.selectCreature('fluid'); poll(); } catch (e) { mount(ctlMsg, note('err', errText(e))); } } }, 'wake the fluid')] : null);
-    }
-    if (st.status === 'fulfilled') { fluid = st.value; renderControls(); }
+    if (st) { const before = fluid?.creature_info?.name; fluid = st; renderControls(); if (before !== st.creature_info?.name && !picked) renderStrip(); }
     timer = window.setTimeout(poll, 2500);
   };
 
-  function renderCards(list: CreatureEntry[]) {
-    mount(cards, list.map((c) => h('button', {
-      type: 'button', role: 'option', class: 'creature' + (chosen?.id === c.id ? ' on' : ''), 'aria-selected': String(chosen?.id === c.id),
-      onclick: () => { chosen = c; send.disabled = false; send.textContent = `send ${c.name} to molty`; renderCards(list); mount(sendMsg); },
-    }, c.thumb ? h('img', { src: c.thumb, alt: '', width: 72, height: 72 }) : null, h('b', null, c.name), c.blurb ? h('span', { class: 'dim small' }, c.blurb) : null)));
-  }
-
-  async function upload() {
-    if (!chosen) return;
-    send.disabled = true; const label = send.textContent; send.textContent = 'sending ⠴';
-    try {
-      const bytes = await catalog.fetchFile(chosen);
-      await api.uploadCreature(chosen.id, bytes);
-      await api.fluid({ state: 'creature' }).catch(() => {});
-      mount(sendMsg, note('ok', `${chosen.name} is moving in ⠶`));
-      poll();
-    } catch (e) {
-      mount(sendMsg, e instanceof UnsupportedError
-        ? note('warn', 'this firmware can\'t take new moltys yet — an update will add it. the fluid below still works.')
-        : note('err', errText(e)));
-    } finally { send.disabled = false; send.textContent = label; }
-  }
-
-  catalog.list().then((l) => alive && renderCards(l), (e) => mount(cards, note('err', `catalog (${catalog.label}): ${errText(e)}`)));
+  mount(strip, h('p', { class: 'why' }, 'Loading creatures…'));
+  catalog.list().then((l) => { if (alive) { list = l; renderStrip(); } }, (e) => mount(strip, note('err', `Couldn’t load the creatures (${catalog.label}): ${errText(e)}`)));
   renderControls(); poll();
   return () => { alive = false; clearTimeout(timer); pv.stop(); };
 }
