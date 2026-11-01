@@ -87,9 +87,9 @@ describe('setup hides what the owner\'s tools can\'t do', () => {
   const rx = (e = engines) => ({ reflex: { mode: 'off' as const, compare: false, engines: e, engine: null, timeout_ms: 1 } });
 
   it('voice: no box, no box choice; no cloud provider, no cloud choice; text only always', () => {
-    expect(ids(voiceOptions(status({}, { paired: false })))).toEqual(['cloud', 'off']);
-    expect(ids(voiceOptions(status({ cloud: 'none' })))).toEqual(['box', 'off']);
-    expect(ids(voiceOptions(status()))).toEqual(['auto', 'cloud', 'off']);
+    expect(ids(voiceOptions(status({}, { paired: false })))).toEqual(['off', 'cloud']);
+    expect(ids(voiceOptions(status({ cloud: 'none' })))).toEqual(['off', 'box']);
+    expect(ids(voiceOptions(status()))).toEqual(['off', 'cloud', 'auto']);
   });
   it('voice: shows what the mode means, whatever mode an older setting left', () => {
     expect(voiceOn(status({ mode: 'box' }))).toBe('auto');
@@ -102,8 +102,8 @@ describe('setup hides what the owner\'s tools can\'t do', () => {
     expect(gapOn(status(), 600)).toBe('phrases');
   });
   it('gap: first words only with a box that offers them', () => {
-    expect(ids(gapOptions(status()))).toEqual(['phrases', 'off']);
-    expect(ids(gapOptions(status({ first_words: { mode: 'off', available: true } })))).toEqual(['local', 'phrases', 'off']);
+    expect(ids(gapOptions(status()))).toEqual(['off', 'phrases']);
+    expect(ids(gapOptions(status({ first_words: { mode: 'off', available: true } })))).toEqual(['off', 'phrases', 'local']);
   });
   it('voice page: what is missing stays visible and says what it needs, never a name', () => {
     const needs = (o: Array<{ id: string; need?: string }>) => o.filter((x) => x.need).map((x) => x.need);

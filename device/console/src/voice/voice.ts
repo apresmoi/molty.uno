@@ -152,9 +152,9 @@ export type GapFill = 'off' | 'phrases' | 'local';
 export function allVoices(s: VoiceStatus): Choice<VoiceMode>[] {
   const cloud = s.cloud !== 'none';
   return [
-    { id: cloud ? 'auto' : 'box', label: 'Voice box', hint: 'Speech runs on your own computer.', need: s.box.paired ? undefined : 'box' },
-    { id: 'cloud', label: 'Cloud', hint: 'Speech runs in the cloud. Nothing to install.', need: cloud ? undefined : 'cloud' },
     { id: 'off', label: 'Text only', hint: 'Molty shows words and emotes. No microphone, no speaker.' },
+    { id: 'cloud', label: 'Cloud', hint: 'Speech runs in the cloud. Nothing to install.', need: cloud ? undefined : 'cloud' },
+    { id: cloud ? 'auto' : 'box', label: 'Voice box', hint: 'Speech runs on your own computer.', need: s.box.paired ? undefined : 'box' },
   ];
 }
 
@@ -169,9 +169,9 @@ export function voiceOn(s: VoiceStatus): VoiceMode {
 /** What fills the wait until the agent speaks. */
 export function allGaps(s: VoiceStatus): Choice<GapFill>[] {
   return [
-    { id: 'local', label: 'First words', hint: 'A small model on your voice box starts the sentence, and your agent finishes it.', need: s.first_words?.available ? undefined : 'opener' },
-    { id: 'phrases', label: 'A phrase', hint: 'Molty says something like “Hmm…” if your agent is slow.' },
     { id: 'off', label: 'Quiet', hint: 'Only the thinking animation.' },
+    { id: 'phrases', label: 'A phrase', hint: 'Molty says something like “Hmm…” if your agent is slow.' },
+    { id: 'local', label: 'First words', hint: 'Molty starts answering at once with a small model on your voice box, then your agent takes over.', need: s.first_words?.available ? undefined : 'opener' },
   ];
 }
 
@@ -222,7 +222,7 @@ export const gapOptions = (s: VoiceStatus) => ready(allGaps(s));
 export const reflexOptions = (s: VoiceStatus) => ready(allReactions(s));
 
 const REPO = 'https://github.com/apresmoi/molty.uno/blob/main';
-const BOX_DOCS = `${REPO}/services/molty-voice/README.md`;
+export const BOX_DOCS = `${REPO}/services/molty-voice/README.md`;
 const RELAY_DOCS = `${REPO}/skills/molty/references/self-hosting.md`;
 
 export interface Step { text: string; code?: string; href?: string }

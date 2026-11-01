@@ -8,7 +8,7 @@ import { statusPage } from './pages/status';
 import { wifiPage } from './pages/wifi';
 import { creaturePage } from './pages/creature';
 import { agentPage } from './pages/agent';
-import { voicePage } from './pages/voice';
+import { behaviorPage } from './pages/behavior';
 import { activityPage } from './pages/activity';
 import { diagPage } from './pages/diag';
 import { licencesPage } from './pages/licences';
@@ -22,13 +22,13 @@ export interface AppCtx {
 const PAGES: Array<{ id: string; label: string; page: Page }> = [
   { id: 'status', label: 'home', page: statusPage },
   { id: 'molty', label: 'molty', page: creaturePage },
-  { id: 'voice', label: 'voice', page: voicePage },
+  { id: 'behavior', label: 'behavior', page: behaviorPage },
   { id: 'agent', label: 'agent', page: agentPage },
   { id: 'wifi', label: 'wi-fi', page: wifiPage },
   { id: 'activity', label: 'activity', page: activityPage },
   { id: 'diag', label: 'diag', page: diagPage },
 ];
-const ALIAS: Record<string, string> = { creature: 'molty' };
+const ALIAS: Record<string, string> = { creature: 'molty', voice: 'behavior' };
 const LICENCES = { id: 'licences', label: 'licences', page: licencesPage };   // footer link, not a tab
 
 const store = {
