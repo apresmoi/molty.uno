@@ -19,7 +19,7 @@ function fakeFetch(reply: { status?: number; body: unknown } | Error) {
   return { f, calls };
 }
 
-describe('voice box owner API', () => {
+describe('Molty box owner API', () => {
   it('reads with the current link code as a header, never in the URL', async () => {
     const { f, calls } = fakeFetch({ body: { ok: true, result: status() } });
     expect((await getVoice(T, f)).mode).toBe('auto');
@@ -44,13 +44,13 @@ describe('voice box owner API', () => {
 
 describe('voice card text', () => {
   it('says whether a box is paired / connected', () => {
-    expect(boxLine(status())).toEqual({ text: 'Your voice box is connected. The cloud takes over if it goes offline.', kind: 'ok' });
+    expect(boxLine(status())).toEqual({ text: 'Your Molty box is connected. The cloud takes over if it goes offline.', kind: 'ok' });
     expect(boxLine(status({}, { connected: false })).kind).toBe('warn');
     expect(boxLine(status({}, { paired: false })).text).toBe('Speech runs in the cloud. Nothing to install.');
   });
   it('says who serves now', () => {
-    expect(servingLine(status())).toBe('Molty uses: voice box');
-    expect(servingLine(status({ serving: { tts: 'box', stt: 'workers-ai' } }))).toBe('speaks with voice box ⠂ listens with cloud (workers-ai)');
+    expect(servingLine(status())).toBe('Molty uses: Molty box');
+    expect(servingLine(status({ serving: { tts: 'box', stt: 'workers-ai' } }))).toBe('speaks with Molty box ⠂ listens with cloud (workers-ai)');
     expect(servingLine(status({ serving: { tts: 'voice_box_offline', stt: 'voice_box_offline' } }))).toBe('Molty uses: nobody (box offline)');
   });
   it('shows the last latencies only once measured', () => {
@@ -63,28 +63,28 @@ describe('voice card text', () => {
     expect(voiceLabel('unmute-prod-website/default_voice.wav')).toBe('default voice');
   });
   it('pair command is filled with this Molty', () => {
-    expect(pairCommand(T)).toBe('molty-voice pair --relay https://relay.example --device molty-k7m2w9c4ya --link-code K7QX2MPA');
+    expect(pairCommand(T)).toBe('docker compose run --rm --no-deps bridge pair --relay https://relay.example --device molty-k7m2w9c4ya --link-code K7QX2MPA');
   });
 });
 
 describe('reflex setting', () => {
-  const rx = (o: Partial<import('./voice').ReflexStatus> = {}) => ({ mode: 'jev' as const, compare: false, engines: { local: true, jev: true, openai: false, keywords: true }, engine: 'jev' as const, timeout_ms: 600, ...o });
-  it('posts the engine and compare mode', async () => {
+  const rx = (o: Partial<import('./voice').ReflexStatus> = {}) => ({ mode: 'local' as const, engines: { local: true, keywords: true }, engine: 'local' as const, timeout_ms: 600, ...o });
+  it('posts the engine', async () => {
     const { f, calls } = fakeFetch({ body: { ok: true, result: status({ reflex: rx() }) } });
-    await setVoice(T, { reflex: 'jev', reflex_compare: true, liveliness: 'lively' }, f);
-    expect(JSON.parse(String(calls[0].init.body))).toEqual({ reflex: 'jev', reflex_compare: true, liveliness: 'lively' });
+    await setVoice(T, { reflex: 'local', liveliness: 'lively' }, f);
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ reflex: 'local', liveliness: 'lively' });
   });
   it('says when the chosen engine is not really running', () => {
     expect(reflexNote(status({ reflex: rx({ mode: 'off', engine: null }) })).kind).toBe('dim');
     expect(reflexNote(status({ reflex: rx() })).kind).toBe('dim');
-    expect(reflexNote(status({ reflex: rx({ mode: 'openai', engine: 'keywords', fallback: 'no_key' }) }))).toEqual({ text: 'OpenAI isn’t set up here, so Molty is using Word list instead.', kind: 'warn' });
+    expect(reflexNote(status({ reflex: rx({ mode: 'local', engine: 'keywords', fallback: 'unavailable' }) }))).toEqual({ text: 'Molty box isn’t set up here, so Molty is using Word list instead.', kind: 'warn' });
   });
 });
 
 describe('setup hides what the owner\'s tools can\'t do', () => {
   const ids = (o: Array<{ id: string }>) => o.map((x) => x.id);
-  const engines = { local: false, jev: false, openai: false, keywords: true };
-  const rx = (e = engines) => ({ reflex: { mode: 'off' as const, compare: false, engines: e, engine: null, timeout_ms: 1 } });
+  const engines = { local: false, keywords: true };
+  const rx = (e = engines) => ({ reflex: { mode: 'off' as const, engines: e, engine: null, timeout_ms: 1 } });
 
   it('voice: no box, no box choice; no cloud provider, no cloud choice; text only always', () => {
     expect(ids(voiceOptions(status({}, { paired: false })))).toEqual(['off', 'cloud']);
@@ -110,8 +110,7 @@ describe('setup hides what the owner\'s tools can\'t do', () => {
     expect(needs(allVoices(status({}, { paired: false })))).toEqual(['box']);
     expect(needs(allVoices(status({ cloud: 'none' })))).toEqual(['cloud']);
     expect(needs(allGaps(status()))).toEqual(['opener']);
-    expect(needs(allReactions(status(rx())))).toEqual(['local', 'jev', 'openai']);
-    expect(needs(allReactions(status(rx({ ...engines, jev: true }))))).toEqual(['local', 'openai']);
+    expect(needs(allReactions(status(rx())))).toEqual(['local']);
     expect(JSON.stringify(boxLine(status()))).not.toContain('gpu box');
     expect(JSON.stringify(allVoices(status()))).not.toContain('gpu box');
   });
@@ -126,13 +125,12 @@ describe('setup hides what the owner\'s tools can\'t do', () => {
   });
   it('the steps are exact: this Molty\'s pair command, the real secret names, and no key ever on this relay', () => {
     expect(setupSteps('box', T).steps.map((x) => x.code)).toContain(pairCommand(T));
-    expect(setupSteps('jev', T).steps.map((x) => x.code)).toContain('npx wrangler secret put TYPESAFE_API_KEY');
-    expect(setupSteps('openai', T).steps.map((x) => x.code)).toContain('npx wrangler secret put OPENAI_API_KEY');
-    expect(setupSteps('opener', T).steps.map((x) => x.code)).toContain('molty-voice run --opener');
-    expect(setupSteps('local', T).steps.map((x) => x.code)).toContain('molty-voice run --reflex');
+    expect(setupSteps('local', T).steps.map((x) => x.code)).toContain('TYPESAFE_API_KEY=your-key');
+    expect(setupSteps('reactions', T).title).toContain('Molty box');
+    expect(setupSteps('opener', T).steps.map((x) => x.code)).toContain('ollama pull gemma3:4b');
   });
   it('reflex: only engines available now, keywords and off always', () => {
-    expect(ids(reflexOptions(status(rx())))).toEqual(['off', 'keywords']);
-    expect(ids(reflexOptions(status(rx({ ...engines, local: true, jev: true }))))).toEqual(['off', 'keywords', 'local', 'jev']);
+    expect(ids(reflexOptions(status({ ...rx(), serving: { tts: 'workers-ai', stt: 'workers-ai' } })))).toEqual([]); // no box hearing: no live words to react to
+    expect(ids(reflexOptions(status(rx({ ...engines, local: true }))))).toEqual(['off', 'keywords', 'local']);
   });
 });

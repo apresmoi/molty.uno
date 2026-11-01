@@ -1,7 +1,7 @@
 """molty-sim reflex-bench: Molty's reflex engines on labelled partial sentences (scenarios/reflex.yaml).
 
 Each engine runs the code it runs in production, one sentence at a time:
-  keywords / jev / openai  the relay's core/reflex.ts, via services/relay/tools/reflex-bench.ts (Node)
+  keywords                 the relay's core/reflex.ts, via services/relay/tools/reflex-bench.ts (Node)
   local                    the box's molty_voice/reflex.py, over ssh on the voice box (CPU, its own venv)
 and the table compares them: reaction accuracy (after the relay's gate at the chosen liveliness:
 a confident pick in full, a mild one as its soft gesture — counted as that reaction), false fires on
@@ -28,7 +28,7 @@ RELAY_DIR = REPO / "services" / "relay"
 VOICE_DIR = REPO / "services" / "molty-voice"
 DEFAULT_SET = SIM_DIR / "scenarios" / "reflex.yaml"
 
-ENGINES = ("local", "jev", "openai", "keywords")
+ENGINES = ("local", "keywords")
 REACTIONS = ("surprised", "happy", "sad", "laugh", "curious", "none")
 CATEGORIES = ("question", "request", "hard", "other")
 # the relay's gate for the box's raw verdicts, per liveliness (core/reflex.ts REFLEX_LIVELINESS: gate.local
@@ -36,9 +36,6 @@ CATEGORIES = ("question", "request", "hard", "other")
 LIVELINESS = ("calm", "normal", "lively")
 LOCAL_GATE = {"calm": 0.35, "normal": 0.3, "lively": 0.25}
 MILD = {"calm": None, "normal": (0.6, 0.3), "lively": (0.75, 0.2)}
-# $ per million input tokens (core/reflex.ts PRICE_PER_MTOK); local and keywords cost nothing per call
-PRICE_PER_MTOK = {"jev": 0.042, "openai": 0.1}
-KEY_ENV = {"jev": "TYPESAFE_API_KEY", "openai": "OPENAI_API_KEY"}
 
 
 @dataclass
@@ -78,9 +75,7 @@ class Score:
 
     @property
     def cost_per_1000(self) -> float:
-        if self.engine not in PRICE_PER_MTOK or not self.tokens:
-            return 0.0
-        return statistics.mean(self.tokens) * PRICE_PER_MTOK[self.engine] / 1e6 * 1000
+        return 0.0  # keywords and the box's classifier cost nothing per call
 
 
 def load(path: str | Path = DEFAULT_SET) -> list[Item]:
@@ -178,9 +173,6 @@ def table(scores: list[Score], skipped: dict[str, str] | None = None) -> str:
 def bench(engines: list[str], items: list[Item], box: str, liveliness: str = "normal") -> tuple[list[Score], dict[str, str]]:
     scores, skipped = [], {}
     for e in engines:
-        if e in KEY_ENV and not os.environ.get(KEY_ENV[e]):
-            skipped[e] = f"{KEY_ENV[e]} not set"
-            continue
         verdicts = run_local(items, box, liveliness=liveliness) if e == "local" else run_relay_engine(e, items, liveliness)
         if len(verdicts) != len(items):
             raise RuntimeError(f"{e}: {len(verdicts)} verdicts for {len(items)} items")

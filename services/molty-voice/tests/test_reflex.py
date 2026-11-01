@@ -3,11 +3,13 @@ the GoEmotions fold, and stt.reflex through the bridge with a stub model (no onn
 
 import asyncio
 import json
+import urllib.error
 
 import msgpack
 import numpy as np
+import pytest
 
-from molty_voice import framing
+from molty_voice import framing, reflex_hosted
 from molty_voice.reflex import GO_MAP, PICKS, ReflexTracker, category, fold, reflex_due, reflex_input, rule_category
 from test_bridge import DEVICE, FakeMoshi, with_servers
 
@@ -141,3 +143,52 @@ def test_a_failing_model_never_costs_the_turn():
 
     seen = _listen(Broken(), {"reflex": True})
     assert seen["frames"][-1]["t"] == "stt.final" and seen["frames"][-1]["text"] == "hello there molty."
+
+
+def test_hosted_verdict_uses_the_owners_key_and_marks_itself_hosted():
+    seen = {}
+
+    def post(url, body):
+        seen.update(url=url, body=body)
+        return {"model": "jev-1", "usage": {"input_tokens": 300}, "answers": {
+            "reaction": {"choice": "happy", "confidence": 0.9, "probabilities": {"happy": 0.9, "none": 0.1, "odd": 1}},
+            "category": {"choice": "other", "confidence": 0.8}}}
+
+    v = reflex_hosted.HostedReflex("jev", "sk-secret", post=post).classify("I got the job")
+    assert seen["url"] == reflex_hosted.JEV_URL and seen["body"]["state"]["human_said_so_far"] == "I got the job"
+    assert "sk-secret" not in json.dumps(v)
+    assert v["hosted"] is True and v["pick"] == "happy" and v["p"] == {"happy": 0.9, "none": 0.1}
+    assert v["cat"] == "other" and v["tokens"] == 300 and v["chars"] == 13
+
+
+def test_hosted_openai_answer_shape():
+    answer = {"answers": [
+        {"type": "choice", "name": "reaction", "choice": "sad", "confidence": 0.7, "probabilities": [{"value": "sad", "probability": 0.7}]},
+        {"type": "choice", "name": "category", "choice": "hard", "confidence": 0.6}]}
+    v = reflex_hosted.HostedReflex("openai", "k", post=lambda u, b: answer).classify("my dog died")
+    assert (v["pick"], v["p"], v["cat"]) == ("sad", {"sad": 0.7}, "hard")
+
+
+def test_hosted_junk_raises_so_the_relay_falls_back():
+    with pytest.raises(ValueError):
+        reflex_hosted.HostedReflex("openai", "k", post=lambda u, b: {"answers": [{"type": "refusal", "name": "reaction"}]}).classify("hello there you")
+
+
+def test_hosted_refused_key_rests_instead_of_asking_at_every_word():
+    calls = []
+
+    def post(url, body):
+        calls.append(url)
+        raise urllib.error.HTTPError(url, 401, "no", {}, None)
+
+    m = reflex_hosted.HostedReflex("jev", "bad", post=post)
+    for _ in range(2):
+        with pytest.raises(RuntimeError):
+            m.classify("hello there you")
+    assert len(calls) == 1
+
+
+def test_hosted_load_picks_the_key_it_finds_and_none_without():
+    assert reflex_hosted.load({}) is None
+    assert reflex_hosted.load({"OPENAI_API_KEY": "a"}).engine == "openai"
+    assert reflex_hosted.load({"OPENAI_API_KEY": "a", "TYPESAFE_API_KEY": "b"}).engine == "jev"

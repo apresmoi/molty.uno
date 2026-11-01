@@ -12,7 +12,7 @@ import { errText } from '../ui/fmt';
 import { dropdown, field, more, pageHead, pills, statusRow, toggle, type Choice } from '../ui/kit';
 import {
   BOX_DOCS, LIVELINESS, VoiceApiError, allGaps, allReactions, allVoices, applyGap, boxLine, gapNote, gapOn, getVoice, latencyLine, pairCommand, reflexNote, reflexOn, setVoice, setupSteps, unpairBox, voiceChoices, voiceLabel, voiceOn,
-  type GapFill, type Note, type VoiceStatus, type VoiceTarget,
+  reactsHere, type GapFill, type Note, type Step, type VoiceStatus, type VoiceTarget,
 } from '../voice/voice';
 
 const RELAY_MS = 10000, DEVICE_MS = 3000;
@@ -67,11 +67,13 @@ export function behaviorPage(root: HTMLElement, { api }: AppCtx) {
       ...(rest as never[]));
   };
 
+  const stepsBox = (title: string, steps: Step[]) => h('div', { class: 'needs' }, h('p', null, title), h('ol', null, steps.map((st) => h('li', null,
+    st.href ? h('a', { href: st.href, target: '_blank', rel: 'noopener' }, st.text) : st.text,
+    st.code ? h('div', { class: 'copy' }, h('code', null, st.code), copyButton(() => st.code!, 'Copy', 'Copied', 'pill')) : null))));
+
   function needs(need: string) {
     const { title, steps } = setupSteps(need, target);
-    return h('div', { class: 'needs' }, h('p', null, title), h('ol', null, steps.map((st) => h('li', null,
-      st.href ? h('a', { href: st.href, target: '_blank', rel: 'noopener' }, st.text) : st.text,
-      st.code ? h('div', { class: 'copy' }, h('code', null, st.code), copyButton(() => st.code!, 'Copy', 'Copied', 'pill')) : null))));
+    return stepsBox(title, steps);
   }
 
   const whoSpeaks = (v: VoiceStatus) => {
@@ -99,12 +101,16 @@ export function behaviorPage(root: HTMLElement, { api }: AppCtx) {
   const whileTalking = (v: VoiceStatus) => {
     const r = v.reflex;
     if (!r) return null;
+    const what = 'Molty’s face responds to what you say, before your agent answers.';
+    if (!reactsHere(v)) {
+      const { title, steps } = setupSteps('reactions', target);
+      return h('section', { class: 'sec tight' }, h('h2', null, 'Reactions'), h('p', { class: 'why' }, what), stepsBox(title, steps));
+    }
     const on = reflexOn(r);
-    const react = toggle('React while you talk', 'Molty’s face responds to what you say, before your agent answers.', on !== 'off', (c) => save((t) => setVoice(t, { reflex: c ? 'auto' : 'off' })));
+    const react = toggle('React while you talk', what, on !== 'off', (c) => save((t) => setVoice(t, { reflex: c ? 'auto' : 'off' })));
     if (on === 'off') return h('section', { class: 'sec tight' }, h('h2', null, 'Reactions'), react);
     return decide('Reactions', [react, h('p', { class: 'why' }, 'What Molty uses to understand you:')], allReactions(v).filter((o) => o.id !== 'off'), on, (id) => save((t) => setVoice(t, { reflex: id })), reflexNote(v),
-      r.liveliness ? field('How expressive', 'How often and how strongly Molty reacts.', dropdown('how expressive', LIVELINESS, r.liveliness, (id) => save((t) => setVoice(t, { liveliness: id })))) : null,
-      keep('Advanced', toggle('Compare reaction engines', 'Runs every engine on each phrase and writes the results to Activity. Molty only shows the chosen one.', r.compare, (c) => save((t) => setVoice(t, { reflex_compare: c })))));
+      r.liveliness ? field('How expressive', 'How often and how strongly Molty reacts.', dropdown('how expressive', LIVELINESS, r.liveliness, (id) => save((t) => setVoice(t, { liveliness: id })))) : null);
   };
 
   const listenWindow = (f: FluidState) => {
@@ -115,26 +121,26 @@ export function behaviorPage(root: HTMLElement, { api }: AppCtx) {
       ack ? field('When you finish', 'What Molty does the moment you stop talking.', dropdown('when you finish', ACK_CHOICES, ackChoice(f.ack), (id) => order({ ack: id }))) : null);
   };
 
-  /** The voice box in use: how it is set up right now, and where to change that. */
+  /** The Molty box in use: how it is set up right now, and where to change that. */
   function boxNow(v: VoiceStatus) {
     const lat = latencyLine(v);
     const cmd = target ? h('code', null, pairCommand(target)) : null;
     const can = (label: string, on: boolean) => statusRow(label, on ? 'Yes' : 'No', 'dim');
-    return h('div', { class: 'needs' }, h('p', null, 'What your voice box does right now'),
+    return h('div', { class: 'needs' }, h('p', null, 'What your Molty box does right now'),
       statusRow('Status', v.box.connected ? 'Connected' : 'Offline', v.box.connected ? 'ok' : 'warn'),
       can('Hears you', v.box.stt),
       can('Speaks', v.box.tts),
       can('Starts answers', !!v.first_words?.available),
-      can('Picks reactions', !!v.reflex?.engines.local),
+      statusRow('Reacts with', v.box.reflex_engine === 'classifier' ? 'Its small model' : v.box.reflex_engine === 'jev' ? 'Jev' : v.box.reflex_engine === 'openai' ? 'OpenAI' : 'Nothing yet', 'dim'),
       lat ? h('p', { class: 'why' }, lat) : null,
-      h('p', null, h('a', { href: BOX_DOCS, target: '_blank', rel: 'noopener' }, 'How to set up or change your voice box')),
+      h('p', null, h('a', { href: BOX_DOCS, target: '_blank', rel: 'noopener' }, 'How to set up or change your Molty box')),
       keep('Replace or remove it',
-        target ? h('div', { class: 'sub' }, h('label', null, 'Use a different voice box'),
+        target ? h('div', { class: 'sub' }, h('label', null, 'Use a different Molty box'),
           h('p', { class: 'why' }, 'Run this on that computer, then tap Molty when it shows the code. The code changes every 15 minutes.'),
           h('div', { class: 'copy' }, cmd, copyButton(() => cmd?.textContent || '', 'Copy', 'Copied', 'pill'))) : null,
-        h('div', { class: 'sub' }, h('label', null, 'Remove this voice box'),
+        h('div', { class: 'sub' }, h('label', null, 'Remove this Molty box'),
           h('p', { class: 'why' }, 'Its access stops working. You can pair it again later.'),
-          confirmButton('Unpair voice box', 'Sure? Unpair', () => void save((t) => unpairBox(t))))));
+          confirmButton('Unpair Molty box', 'Sure? Unpair', () => void save((t) => unpairBox(t))))));
   }
 
   const textOnly = h('p', { class: 'status dim' }, 'Molty is text only, so there is nothing to set here. Pick a voice under Speaking.');

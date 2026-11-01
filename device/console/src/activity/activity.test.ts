@@ -99,9 +99,9 @@ describe('turn details', () => {
     expect(timingRows(E[2].data!.timings)).toEqual([['queue', '2 ms'], ['say · tts_first_byte', '240 ms'], ['say · voice', 'box'], ['total', '3.0 s']]);
   });
   it('names the voice provider and a fallback', () => {
-    expect(voiceLine(E[2])).toBe('speaks with voice box');
+    expect(voiceLine(E[2])).toBe('speaks with Molty box');
     expect(voiceLine({ id: 'x', ts: 0, kind: 'job', op: 'talk', data: { voice: { tts: 'box', stt: 'workers-ai', fallback: 'stt_timeout' } } }))
-      .toBe('speaks with voice box ⠂ listens with cloud (workers-ai) ⠂ fell back to the cloud: stt_timeout');
+      .toBe('speaks with Molty box ⠂ listens with cloud (workers-ai) ⠂ fell back to the cloud: stt_timeout');
   });
   it('shows heard/said, or redacted', () => {
     expect(transcript(E[2], 'heard')).toBe('hi');

@@ -20,12 +20,11 @@ def test_score_and_table():
         {"pick": "curious", "cat": "request", "ms": 100, "tokens": 400},
         {"pick": "none", "cat": "question", "ms": 300, "tokens": 500, "error": "timeout"},
     ]
-    s = rb.score("jev", items, verdicts)
+    s = rb.score("local", items, verdicts)
     assert (s.reaction_ok, s.false_fires, s.neutral, s.category_ok, s.errors) == (1, 1, 1, 2, 1)
     assert (s.pct(0.5), s.pct(0.9)) == (200, 300)
-    assert abs(s.cost_per_1000 - 500 * 0.042 / 1e6 * 1000) < 1e-12
     t = rb.table([s, rb.score("keywords", items, [{"pick": "happy", "ms": 0}] * 3)], {"openai": "OPENAI_API_KEY not set"})
-    assert "| jev | 1/3 (33%) | 1/1 | 2/3 (67%) | 200 | 300 | 500 | 0.0210 | 1 |" in t
+    assert "| local | 1/3 (33%) | 1/1 | 2/3 (67%) | 200 | 300 | 500 | 0.0000 | 1 |" in t
     assert "| keywords | 1/3 (33%) | 1/1 | — |" in t
     assert "| openai | skipped: OPENAI_API_KEY not set |" in t
 
@@ -39,8 +38,6 @@ def test_local_gate_and_prices_match_the_relay():
         assert gate and float(gate.group(1)) == rb.LOCAL_GATE[lv]
         mild = re.search(r"mild: \{ none: ([0-9.]+), min: ([0-9.]+) \}", line.group(1))
         assert (None if not mild else (float(mild.group(1)), float(mild.group(2)))) == rb.MILD[lv]
-    price = re.search(r"PRICE_PER_MTOK[^=]*= \{ jev: ([0-9.]+), openai: ([0-9.]+) \}", src)
-    assert price and (float(price.group(1)), float(price.group(2))) == (rb.PRICE_PER_MTOK["jev"], rb.PRICE_PER_MTOK["openai"])
     assert rb.gate_local({"pick": "sad", "conf": 0.2}) == {"pick": "none", "raw": "sad", "conf": 0.2}
     assert rb.gate_local({"pick": "sad", "conf": 0.5})["pick"] == "sad"
     assert rb.gate_local({"pick": "sad", "conf": 0.28}, "lively")["pick"] == "sad"

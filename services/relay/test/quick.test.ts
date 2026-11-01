@@ -105,13 +105,13 @@ function device(room: DeviceRoom, sock: FakeSocket, dev: Dev) {
   return { log, says, moods, refused, firstFrame, done, listenEnd };
 }
 
-async function setup(dev: Dev = {}, opts: { ttsDelayMs?: number; sttDelayMs?: number; samples?: number; classifier?: UtteranceClassifier; heard?: string; reflexKeys?: { jev?: string }; fetch?: (r: Request) => Promise<Response> } = {}) {
+async function setup(dev: Dev = {}, opts: { ttsDelayMs?: number; sttDelayMs?: number; samples?: number; classifier?: UtteranceClassifier; heard?: string; fetch?: (r: Request) => Promise<Response> } = {}) {
   const voice = new SlowVoice();
   voice.ttsSamples = opts.samples ?? 4800; // 0.3 s
   voice.delayMs = opts.ttsDelayMs ?? 0;
   voice.sttDelayMs = opts.sttDelayMs ?? 0;
   if (opts.heard) voice.sttText = opts.heard;
-  const ctx = makeRoom({ timings: FAST, voice, classifier: opts.classifier, reflexKeys: opts.reflexKeys, fetch: opts.fetch });
+  const ctx = makeRoom({ timings: FAST, voice, classifier: opts.classifier, fetch: opts.fetch });
   const sock = await connect(ctx.room, ctx.host, undefined, LINK, { caps: CAPS });
   const d = device(ctx.room, sock, dev);
   const pairAgent = async (name: string) => {
@@ -552,24 +552,6 @@ describe("whose fillers, and which one", () => {
     expect(w.dev.says()[1].text).toBe("Mmm, I hear you.");
   }, 10000);
 
-  it("with Molty's reflex on, the filler's category comes from the owner's engine (jev); off: the keywords", async () => {
-    const calls: string[] = [];
-    const w = await setup({ fillerMs: 1500 }, {
-      heard: "I had a long day",
-      reflexKeys: { jev: "ts-secret-key-0123456789" },
-      fetch: async (r) => {
-        calls.push(r.url);
-        return Response.json({ model: "jev-1.14.0", answers: { reaction: { type: "choice", choice: "none", confidence: 0.9 }, category: { type: "choice", choice: "hard", confidence: 0.9 } }, usage: { input_tokens: 300 } });
-      },
-    });
-    expect(((await w.room.voiceSettings(LINK, { action: "set", reflex: "jev" } as any)) as any).ok).toBe(true);
-    const t = (await w.room.talk(w.token, { say: "Hi." })) as any;
-    expect(await fillerOf(w, t.result.job)).toMatchObject({ phrase: "let_me_think", category: "hard", classifier: "jev" });
-    expect(calls.filter((u) => u.includes("typesafe"))).toHaveLength(1);
-    const off = await setup({ fillerMs: 1500 }, { heard: "what time is it?" });
-    const t2 = (await off.room.talk(off.token, { say: "Hi." })) as any;
-    expect(await fillerOf(off, t2.result.job)).toMatchObject({ category: "question", classifier: "keywords" });
-  }, 15000);
 
   it("a pluggable classifier picks the category (a reaction engine); a slow or broken one falls back to the keywords", async () => {
     const w = await setup({ fillerMs: 1500 }, { classifier: { name: "reflex-test", classify: async () => "hard" } });

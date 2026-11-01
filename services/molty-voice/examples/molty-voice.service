@@ -7,6 +7,8 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+# Optional: TYPESAFE_API_KEY or OPENAI_API_KEY for hosted reactions. Keep this file 0600.
+EnvironmentFile=-%h/.config/molty-voice/reflex.env
 # pipx/uv tool install puts the entry point here; adjust if yours differs
 ExecStart=%h/.local/bin/molty-voice run
 Restart=on-failure

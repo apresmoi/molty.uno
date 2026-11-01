@@ -139,7 +139,6 @@ export async function setup(
     agents?: number;
     box?: Omit<BoxOpts, "ttsMs">;
     fetch?: (r: Request) => Promise<Response>;
-    reflexKeys?: { jev?: string; openai?: string };
     log?: (msg: string, data?: Record<string, unknown>) => void;
   } = {},
 ) {
@@ -147,7 +146,6 @@ export async function setup(
   const ctx = makeRoom({
     timings: { ...FAST, ...o.timings },
     scheduler: { setAlarm: async () => {} },
-    reflexKeys: o.reflexKeys,
     log: o.log,
     fetch:
       o.fetch ??

@@ -29,7 +29,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 // The relay's owner voice-box API (GET|POST|DELETE /v1/devices/<id>/voice, X-Molty-Link-Code), faked here.
 const VOICE_CORS = { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS', 'access-control-allow-headers': 'content-type, x-molty-link-code' };
 const stranger = () => ({ mode: 'auto', voice: null, cloud: 'workers-ai', serving: { tts: 'workers-ai', stt: 'workers-ai' }, first_words: { mode: 'off', available: false },
-  reflex: { mode: 'off', compare: false, engines: { local: false, jev: false, openai: false, keywords: true }, engine: null, timeout_ms: 600, liveliness: 'normal' },
+  reflex: { mode: 'off', engines: { local: false, keywords: true }, engine: null, timeout_ms: 600, liveliness: 'normal' },
   box: { paired: false, name: null, paired_at: null, connected: false, connected_since: null, reported_name: null, version: null, voices: [], stt: false, tts: false, last: {} } });
 const boxOnline = () => ({ paired: true, name: 'ROOM-PC', paired_at: 1, connected: true, connected_since: 2, reported_name: 'ROOM-PC', version: '0.1.0',
   voices: ['expresso/ex03-ex01_happy_001_channel1_334s.wav', 'expresso/ex03-ex01_calm_001_channel2_1081s.wav'], stt: true, tts: true, last: { stt_ms: 310, tts_first_audio_ms: 240 } });
@@ -45,9 +45,8 @@ const voiceRelay = {
     if (code !== 'K7QX2MPA') return r.fulfill({ status: 401, headers: VOICE_CORS, contentType: 'application/json', body: '{"ok":false,"error":"unauthorized"}' });
     const st = this.state;
     if (req.method() === 'POST') { const b = JSON.parse(req.postData() || '{}'); if (b.mode) st.mode = b.mode; if (b.voice !== undefined) st.voice = b.voice;
-      if (b.reflex) { st.reflex.mode = b.reflex; st.reflex.engine = b.reflex === 'off' ? null : b.reflex === 'openai' ? 'keywords' : b.reflex === 'auto' ? 'local' : b.reflex; st.reflex.fallback = b.reflex === 'openai' ? 'no_key' : undefined; }
+      if (b.reflex) { st.reflex.mode = b.reflex; st.reflex.engine = b.reflex === 'off' ? null : b.reflex === 'auto' ? 'local' : b.reflex; }
       if (b.first_words) st.first_words.mode = b.first_words;
-      if (b.reflex_compare !== undefined) st.reflex.compare = b.reflex_compare;
       if (b.liveliness !== undefined) st.reflex.liveliness = b.liveliness;
       if (st.mode === 'cloud') st.serving = { tts: 'workers-ai', stt: 'workers-ai' }; }
     if (req.method() === 'DELETE') { st.mode = 'auto'; st.box = { ...st.box, paired: false, name: null, connected: false, voices: [] }; st.serving = { tts: 'workers-ai', stt: 'workers-ai' }; }
@@ -300,18 +299,15 @@ const canvasStats = (page) => page.evaluate(() => {
   // Voice, the gap, reflex: only what the owner's tools can do
   await page.locator('.setup .bubble', { hasText: 'Should I talk?' }).waitFor({ timeout: 5000 });
   await page.locator('.setup .opt', { hasText: 'Text only' }).waitFor();
-  ok(await page.locator('.setup .opt', { hasText: 'Voice box' }).count() === 0, 'voice: no voice box here, no such choice');
+  ok(await page.locator('.setup .opt', { hasText: 'Molty box' }).count() === 0, 'voice: no voice box here, no such choice');
   await shot(page, '07b-voice');
   await page.locator('.setup .opt', { hasText: 'Cloud' }).click();
   await page.locator('.setup .bubble', { hasText: 'What should I do meanwhile?' }).waitFor();
   ok(await page.locator('.setup .opt', { hasText: 'First words' }).count() === 0, 'gap: no local model on offer, no choice');
   await shot(page, '07c-gap');
   await page.locator('.setup .opt', { hasText: 'A phrase' }).click();
-  await page.locator('.setup .bubble', { hasText: 'react while you talk' }).waitFor();
-  ok(await page.locator('.setup .opt', { hasText: 'OpenAI' }).count() === 0, 'reflex: an engine with no key is hidden');
-  await shot(page, '07d-reflex');
-  await page.locator('.setup .opt', { hasText: 'Off' }).click();
-  ok(voiceRelay.calls.some((c) => c.body?.includes('"mode":"cloud"')) && voiceRelay.calls.some((c) => c.body?.includes('"reflex":"off"')), 'setup saved its choices on the relay');
+  ok(voiceRelay.calls.some((c) => c.body?.includes('"mode":"cloud"')), 'setup saved its choices on the relay');
+  ok(await page.locator('.setup .bubble', { hasText: 'react while you talk' }).count() === 0, 'setup: no box, no reactions question');
   await page.locator('.setup .bubble', { hasText: 'I’m Frog, and Grok is my brain.' }).waitFor({ timeout: 5000 });
   ok(true, 'done: "I’m Frog, and Grok is my brain."');
   ok(await page.locator('.prog').innerText() === '✓ Wi-Fi   ✓ Molty   ✓ Agent   ✓ Voice', 'done: progress all ticked');
@@ -400,41 +396,24 @@ const canvasStats = (page) => page.evaluate(() => {
   await page.locator('.status', { hasText: 'Speech runs in the cloud' }).waitFor({ timeout: 5000 });
   ok(voiceRelay.calls.every((c) => c.code === 'K7QX2MPA'), 'settings voice: relay calls carry the current link code');
   ok((await pressed(modes).innerText()).includes('Cloud'), 'settings voice: a stranger is on the cloud');
-  ok(await page.locator('.chip.dim', { hasText: 'Voice box' }).count() === 1, 'settings voice: what is not set up stays visible, dim');
+  ok(await page.locator('.chip.dim', { hasText: 'Molty box' }).count() === 1, 'settings voice: what is not set up stays visible, dim');
   await states('stranger', ['dark', 'light']);
   await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
   ok(await page.evaluate(() => document.documentElement.scrollHeight) < 1150, 'settings voice: about one screen without the panels');
-  await modes.getByRole('button', { name: /Voice box/ }).click();
+  await modes.getByRole('button', { name: /Molty box/ }).click();
   await needs.waitFor();
-  ok((await needs.locator('code').first().innerText()) === 'molty-voice pair --relay https://molty-relay.example.workers.dev --device molty-k7m2w9c4ya --link-code K7QX2MPA', 'settings voice: the box asks for a deployment and gives the pair command');
+  ok((await needs.locator('code').first().innerText()) === 'docker compose run --rm --no-deps bridge pair --relay https://molty-relay.example.workers.dev --device molty-k7m2w9c4ya --link-code K7QX2MPA', 'settings voice: the box asks for a deployment and gives the pair command');
   ok((await needs.locator('a').first().getAttribute('href')).endsWith('/services/molty-voice/README.md'), 'settings voice: links the voice box in the repo');
   ok(!posted('mode', 'auto') && !posted('mode', 'box'), 'settings voice: an option that is not set up never saves');
   await states('stranger-voice-box-needs');
   await tabTo('thinking');
   await gap.getByRole('button', { name: /First words/ }).click();
-  await needs.locator('code', { hasText: 'molty-voice run --opener' }).waitFor();
+  await needs.locator('code', { hasText: 'ollama pull gemma3:4b' }).waitFor();
   ok(await needs.count() === 1 && !posted('first_words', 'opener'), 'settings voice: first words ask for a box with the model');
   await tabTo('listening');
-  await page.getByRole('switch', { name: 'React while you talk' }).click();
-  await rx.waitFor();
-  ok(posted('reflex', 'auto'), 'settings reactions: turning them on lets the relay pick what works');
-  ok(await page.locator('.chip.dim', { hasText: 'Jev' }).count() === 1, 'settings voice: a missing engine stays visible, dim');
-  await rx.getByRole('button', { name: /Jev/ }).click();
-  await needs.locator('code', { hasText: 'npx wrangler secret put TYPESAFE_API_KEY' }).waitFor();
-  ok((await needs.innerText()).includes('never stores yours') && !posted('reflex', 'jev'), 'settings voice: Jev asks for your own relay and key');
-  await states('stranger-jev-needs');
+  await needs.locator('p', { hasText: 'Reactions need a Molty box' }).waitFor();
+  ok(await page.getByRole('switch', { name: 'React while you talk' }).count() === 0 && await rx.count() === 0, 'settings reactions: no box, no switch that would do nothing');
   ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'settings voice: panels fit at 390px');
-  await rx.getByRole('button', { name: 'Word list' }).click();
-  await pressed(rx).filter({ hasText: 'Word list' }).waitFor();
-  ok(await needs.count() === 0 && posted('reflex', 'keywords'), 'settings voice: a working engine saves and closes the panel');
-  await page.getByLabel('how expressive').selectOption('lively');
-  await page.waitForFunction(() => document.querySelector('select[aria-label="how expressive"]')?.value === 'lively');
-  ok(posted('liveliness', 'lively'), 'settings voice: how expressive sent to the relay');
-  await page.getByRole('switch', { name: 'React while you talk' }).click();
-  await rx.waitFor({ state: 'detached' });
-  ok(posted('reflex', 'off'), 'settings reactions: the switch turns them off');
-  await page.getByRole('switch', { name: 'React while you talk' }).click();
-  await rx.waitFor();
   // the wait: one choice over the relay and the device; the delay only for a phrase
   await tabTo('thinking');
   ok((await pressed(gap).innerText()).includes('A phrase'), 'settings voice: a phrase by default');
@@ -471,26 +450,12 @@ const canvasStats = (page) => page.evaluate(() => {
   await tabTo('thinking');
   ok(await gap.count() === 0, 'settings voice: text only has no wait to fill');
   await tabTo('listening');
-  // your own relay, with keys
-  voiceRelay.state = stranger(); voiceRelay.state.reflex.engines = { local: false, jev: true, openai: true, keywords: true }; voiceRelay.state.reflex.mode = 'keywords'; voiceRelay.state.reflex.engine = 'keywords';
-  await page.reload();
-  await rx.getByRole('button', { name: 'Jev' }).waitFor({ timeout: 8000 });
-  ok(await page.locator('.chip.dim', { hasText: 'Jev' }).count() === 0, 'settings voice: a relay with the key offers Jev');
-  await rx.getByRole('button', { name: 'Jev' }).click();
-  await pressed(rx).filter({ hasText: 'Jev' }).waitFor();
-  ok(posted('reflex', 'jev'), 'settings voice: engine sent to the relay');
-  await states('own-relay-keys');
-  // a chosen engine that lost its key says so
-  voiceRelay.state.reflex = { ...voiceRelay.state.reflex, mode: 'openai', engine: 'keywords', fallback: 'no_key', engines: { local: false, jev: false, openai: false, keywords: true } };
-  await page.reload();
-  await page.locator('.status.warn', { hasText: 'OpenAI isn’t set up here, so Molty is using Word list instead.' }).waitFor({ timeout: 8000 });
-  ok(true, 'settings voice: a chosen engine without a key says so');
-  // a voice box, online
+  // a Molty box, online
   voiceRelay.state = stranger(); voiceRelay.state.box = boxOnline(); voiceRelay.state.serving = { tts: 'box', stt: 'box' }; voiceRelay.state.first_words = { mode: 'opener', available: true };
   voiceRelay.state.reflex.engines.local = true; voiceRelay.state.reflex.mode = 'local'; voiceRelay.state.reflex.engine = 'local';
   await page.reload();
   await tabTo('speaking');
-  await page.locator('.status.ok', { hasText: 'Your voice box is connected.' }).waitFor({ timeout: 8000 });
+  await page.locator('.status.ok', { hasText: 'Your Molty box is connected.' }).waitFor({ timeout: 8000 });
   await page.getByLabel('voice', { exact: true }).selectOption('expresso/ex03-ex01_calm_001_channel2_1081s.wav');
   await page.waitForFunction(() => document.querySelector('select[aria-label="voice"]')?.value === 'expresso/ex03-ex01_calm_001_channel2_1081s.wav');
   ok(posted('voice', 'expresso/ex03-ex01_calm_001_channel2_1081s.wav'), 'settings voice: the voice is sent to the relay');
@@ -500,23 +465,31 @@ const canvasStats = (page) => page.evaluate(() => {
   ok(!(await page.locator('section.page').innerText()).includes('ROOM-PC'), 'settings speaking: never the machine’s name');
   ok(await page.getByText('last turn: transcript 0.31 s after you stop').isVisible(), 'settings speaking: last latencies');
   await tabTo('listening');
-  await page.locator('.more > summary', { hasText: 'Advanced' }).click();
-  await page.getByRole('switch', { name: 'Compare reaction engines' }).click();
-  await page.locator('.switch.on[aria-label="Compare reaction engines"]').waitFor();
-  ok(posted('reflex_compare', true), 'settings voice: compare sent to the relay');
+  await rx.getByRole('button', { name: 'Word list' }).click();
+  await pressed(rx).filter({ hasText: 'Word list' }).waitFor();
+  ok(posted('reflex', 'keywords'), 'settings reactions: a working option saves');
+  await page.getByLabel('how expressive').selectOption('lively');
+  await page.waitForFunction(() => document.querySelector('select[aria-label="how expressive"]')?.value === 'lively');
+  ok(posted('liveliness', 'lively'), 'settings reactions: how expressive sent to the relay');
+  await page.getByRole('switch', { name: 'React while you talk' }).click();
+  await rx.waitFor({ state: 'detached' });
+  ok(posted('reflex', 'off'), 'settings reactions: the switch turns them off');
+  await page.getByRole('switch', { name: 'React while you talk' }).click();
+  await rx.waitFor();
+  ok(posted('reflex', 'auto'), 'settings reactions: and back on');
   // and offline: who is really speaking
   voiceRelay.state.box.connected = false; voiceRelay.state.serving = { tts: 'workers-ai', stt: 'workers-ai' }; voiceRelay.state.first_words.available = false;
   await tabTo('speaking');
   await page.reload();
-  await page.locator('.status.warn', { hasText: 'Your voice box is offline, so the cloud is speaking for now.' }).waitFor({ timeout: 8000 });
+  await page.locator('.status.warn', { hasText: 'Your Molty box is offline, so the cloud is speaking for now.' }).waitFor({ timeout: 8000 });
   await tabTo('thinking');
-  ok(await page.locator('.status.warn', { hasText: 'First words are on, but no voice box is offering them' }).count() === 1, 'settings voice: an offline box says who speaks, and that first words stopped');
+  ok(await page.locator('.status.warn', { hasText: 'First words are on, but no Molty box is offering them' }).count() === 1, 'settings voice: an offline box says who speaks, and that first words stopped');
   await states('box-offline');
   await tabTo('speaking');
   await page.locator('.more > summary', { hasText: 'Replace or remove' }).click();
-  await page.getByRole('button', { name: 'Unpair voice box' }).click();
+  await page.getByRole('button', { name: 'Unpair Molty box' }).click();
   await page.getByRole('button', { name: 'Sure? Unpair' }).click();
-  await page.locator('.chip.dim', { hasText: 'Voice box' }).waitFor();
+  await page.locator('.chip.dim', { hasText: 'Molty box' }).waitFor();
   ok(voiceRelay.calls.some((c) => c.method === 'DELETE'), 'settings voice: unpair');
 
   await page.goto(`${MOCK}/#/status`);
@@ -569,7 +542,7 @@ const canvasStats = (page) => page.evaluate(() => {
   ok(activityRelay.calls.some((c) => c.method === 'POST' && JSON.parse(c.body).keep_audio === true), 'keep audio: on sent to the relay');
   const done = await open(/Claude\s*talk/);
   ok(await done.getByLabel('stage timings').getByText('say · tts_first_byte').isVisible(), 'activity: expanded turn shows stage timings');
-  ok(await done.getByText('speaks with voice box ⠂ listens with voice box').isVisible(), 'activity: voice provider');
+  ok(await done.getByText('speaks with Molty box ⠂ listens with Molty box').isVisible(), 'activity: voice provider');
   ok(await done.getByText('“yes please, green tea”').isVisible(), 'activity: heard text');
   ok(await done.getByLabel('device log').getByText('mic gain clipped twice').isVisible(), 'activity: the turn’s device line');
   ok(await done.locator('.act-line.warn').count() === 1, 'activity: W device line highlighted');

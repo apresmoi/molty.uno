@@ -152,7 +152,7 @@ def main(argv: list[str] | None = None) -> int:
     pp.add_argument("--relay", required=True, help="relay origin, e.g. https://molty-relay.example.workers.dev")
     pp.add_argument("--device", required=True, help="device id, molty-xxxxxxxxxx")
     pp.add_argument("--link-code", required=True, help="the 8-character code from Molty's console")
-    pp.add_argument("--name", default="voice box", help="name shown next to the code (default: voice box)")
+    pp.add_argument("--name", default="Molty box", help="name shown next to the code (default: Molty box)")
 
     pr = sub.add_parser("run", help="connect to the relay and serve STT/TTS (reconnects on its own)")
     d = Config()

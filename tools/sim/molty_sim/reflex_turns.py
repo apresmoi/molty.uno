@@ -4,7 +4,7 @@ Each turn is spoken in real time, one partial per word, through the relay's own 
 (services/relay/tools/reflex-turns.ts, Node type stripping) with the room's fire gate emulated, and
 the listen closes `end_ms` after the last word. Configs compare cadence / gates / liveliness:
 
-  label=engine[:liveliness][@relay_dir]   e.g. before=jev@/tmp/main/services/relay  after=jev:lively
+  label=engine[:liveliness][@relay_dir]   e.g. before=keywords@/tmp/main/services/relay  after=keywords:lively
 
 (`@relay_dir` runs another checkout's relay, e.g. main's, for a before / after table.) Columns, by
 turn kind (react / explain / neutral): fires per turn, turns with a reaction, time from the first
@@ -29,7 +29,6 @@ REPO = SIM_DIR.parent.parent
 RELAY_DIR = REPO / "services" / "relay"
 DEFAULT_SET = SIM_DIR / "scenarios" / "reflex-turns.yaml"
 KINDS = ("react", "explain", "neutral")
-KEY_ENV = {"jev": "TYPESAFE_API_KEY", "openai": "OPENAI_API_KEY"}
 
 
 @dataclass
@@ -144,10 +143,6 @@ def detail(label: str, results: list[dict]) -> str:
 def main(configs: list[str], set_path: str, show_detail: bool, out_json: str | None) -> int:
     turns = load(set_path)
     cs = [parse_config(s) for s in configs]
-    for c in cs:
-        if c.engine in KEY_ENV and not os.environ.get(KEY_ENV[c.engine]):
-            print(f"{c.label}: {KEY_ENV[c.engine]} not set")
-            return 3
     with ThreadPoolExecutor(max_workers=len(cs)) as ex:
         results = list(ex.map(lambda c: run_config(c, turns), cs))
     rows = [summarize(c.label, r) for c, r in zip(cs, results)]

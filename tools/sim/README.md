@@ -139,9 +139,8 @@ make sim-env
 cd tools/sim && .venv/bin/molty-sim reflex-bench --box <ssh host of your box> --misses
 ```
 
-- `keywords`, `jev`, `openai`: the relay's `core/reflex.ts` through `services/relay/tools/reflex-bench.ts`
-  (Node type stripping). `jev` needs `TYPESAFE_API_KEY`, `openai` `OPENAI_API_KEY` in the
-  environment (skipped without; never printed).
+- `keywords`: the relay's `core/reflex.ts` through `services/relay/tools/reflex-bench.ts` (Node type
+  stripping).
 - `local`: `molty_voice/reflex.py` on the box over ssh, in its own venv
   `~/molty-voice/reflex-lab/.venv` (`onnxruntime tokenizers huggingface_hub numpy`; the code is
   rsynced to `~/molty-voice/reflex-lab/src`) — never the running service.

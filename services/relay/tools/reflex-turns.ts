@@ -5,20 +5,15 @@
 // (src/core/reflex.ts) — and the listen closes end_ms after the last word. The room's fire gate is
 // emulated (closed after the listen, one reflex per the liveliness's gap). stdout: one line per turn
 // {id, kind, words, speech_ms, fires: [{at, pick, soft?}], decisions: [{n, at, pick, raw?, c?, fired?, err?}]},
-// times in ms from the first word. engine: keywords | jev (TYPESAFE_API_KEY, never printed).
+// times in ms from the first word. engine: keywords.
 import { createInterface } from "node:readline";
 import * as R from "../src/core/reflex.ts";
 
 const engine = process.argv[2];
 const liveliness = process.argv[3];
-if (!["keywords", "jev", "openai"].includes(engine)) {
-  console.error("usage: reflex-turns.ts keywords|jev|openai [calm|normal|lively] < turns.jsonl");
+if (engine !== "keywords") {
+  console.error("usage: reflex-turns.ts keywords [calm|normal|lively] < turns.jsonl");
   process.exit(2);
-}
-const keys = { jev: process.env.TYPESAFE_API_KEY, openai: process.env.OPENAI_API_KEY };
-if (engine !== "keywords" && !keys[engine as "jev" | "openai"]) {
-  console.error(`${engine}: no key in the environment`);
-  process.exit(3);
 }
 const clock = { now: () => performance.now(), setTimeout: (f: () => void, ms: number) => setTimeout(f, ms), clearTimeout: (h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>) };
 // the room's reflex gap for this liveliness (before the liveliness setting: REFLEX.gapMs)
@@ -43,10 +38,7 @@ for await (const line of createInterface({ input: process.stdin })) {
   const decisions: Array<Record<string, unknown>> = [];
   const session = new R.ReflexSession({
     mode: engine,
-    compare: false,
-    avail: { local: false, jev: !!keys.jev, openai: !!keys.openai },
-    keys,
-    fetch: (r: Request) => fetch(r),
+    avail: { local: false },
     clock,
     ...(liveliness ? { liveliness } : {}),
     fire: async (pick: string, soft?: boolean) => {
