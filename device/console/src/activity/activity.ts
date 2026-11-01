@@ -12,7 +12,7 @@ export const ACTIVITY_KINDS: ReadonlyArray<{ id: ActivityKind; label: string }> 
   { id: 'device', label: 'device events' },
   { id: 'device_log', label: 'device log' },
   { id: 'pair', label: 'pairing' },
-  { id: 'voice_box', label: 'voice box' },
+  { id: 'voice_box', label: 'Molty box' },
   { id: 'settings', label: 'settings' },
   { id: 'trace', label: 'turn traces' },
 ];
@@ -250,7 +250,7 @@ export function timingRows(t: Record<string, unknown> | undefined): Array<[strin
   return rows;
 }
 
-const providerName = (v: string) => (v === 'box' ? 'voice box' : `cloud (${v})`);
+const providerName = (v: string) => (v === 'box' ? 'Molty box' : `cloud (${v})`);
 
 /** "speaks with voice box ⠂ listens with cloud (workers-ai) ⠂ fell back: box_timeout", or '' when unknown. */
 export function voiceLine(j: ActivityEntry | undefined): string {
@@ -286,7 +286,7 @@ export function entryLine(e: ActivityEntry): string {
     case 'device_log': return String(d.text ?? '');
     // the agent's name is the row's own column: not repeated here
     case 'pair': return `${e.ev === 'approved' ? 'paired' : e.ev === 'revoked' ? 'unpaired' : `pairing ${e.ev ?? ''}`}${d.role === 'voice' ? ' (voice box)' : ''}`;
-    case 'voice_box': return `voice box ${e.ev ?? ''}${d.name ? ` ⠂ ${d.name}` : ''}${d.code ? ` ⠂ close ${d.code}` : ''}`;
+    case 'voice_box': return `Molty box ${e.ev ?? ''}${d.name ? ` ⠂ ${d.name}` : ''}${d.code ? ` ⠂ close ${d.code}` : ''}`;
     case 'settings': return `settings: ${e.ev ?? ''} ${JSON.stringify(d)}`;
     case 'trace': return `${e.ev === 'webhook' ? 'webhook' : e.ev === 'reply' ? 'reply' : e.ev === 'filler' ? 'filler' : `trace ${e.ev ?? ''}`}${typeof d.status === 'number' ? ` ⠂ ${d.status}` : ''}${typeof d.ms === 'number' ? ` ⠂ ${fmtMs(d.ms)}` : ''}${d.error ? ` ⠂ ${d.error}` : ''}`;
     case 'call': return `${e.op ?? 'call'}${e.ok === false ? ` → ${e.error ?? 'error'}` : ''}${e.args && Object.keys(e.args).length ? ` ${JSON.stringify(e.args)}` : ''}`;

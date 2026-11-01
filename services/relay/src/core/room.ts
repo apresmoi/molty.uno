@@ -124,7 +124,7 @@ import {
 } from "./phrases.js";
 import { ListenTrace, SeqOrder, TRACE_LIMITS, capTrace, turnEndTiming } from "./trace.js";
 import { AUDIO_KEEP, AUDIO_PREFIX, AudioKeep, wav } from "./audio-keep.js";
-import { DEFAULT_LIVELINESS, EngineBench, LIVELINESS, type Liveliness, REFLEX, REFLEX_MODES, REFLEX_SHOW, REFLEX_SOFT, type ReflexEngine, isLiveliness, type ReflexMode, type ReflexPick, ReflexSession, UTTERANCE_CATEGORIES, type UtteranceCategory, categoryOf, keywordCategory, parseBoxReflex, resolveEngine } from "./reflex.js";
+import { DEFAULT_LIVELINESS, LIVELINESS, type Liveliness, REFLEX, REFLEX_MODES, REFLEX_SHOW, REFLEX_SOFT, type ReflexEngine, isLiveliness, type ReflexMode, type ReflexPick, ReflexSession, UTTERANCE_CATEGORIES, type UtteranceCategory, keywordCategory, parseBoxReflex, resolveEngine } from "./reflex.js";
 
 export interface SocketMeta {
   /** hello: device not yet authenticated; live: the device; voice: a voice box (authenticated at upgrade). */
@@ -137,7 +137,7 @@ export interface SocketMeta {
   /** voice: the box token's hash (revocation closes the socket). */
   tok?: string;
   /** voice: what the box offers, set by its voice.hello (absent = not greeted yet: not used). */
-  box?: { stt: boolean; tts: boolean; reflex?: boolean; opener?: boolean };
+  box?: { stt: boolean; tts: boolean; reflex?: boolean; reflex_engine?: string; opener?: boolean };
   /**
    * voice: replaced / revoked / unpaired. Set BEFORE the socket is closed, in its own
    * serialized metadata (survives hibernation): the host may keep listing a closing socket
@@ -265,8 +265,6 @@ export interface RoomDeps {
   resolveHost?: Resolver;
   /** Latest firmware release (core/releases.ts); absent = always "unavailable". */
   releases?: ReleaseSource;
-  /** The reflex's model engines (core/reflex.ts): Worker secrets TYPESAFE_API_KEY / OPENAI_API_KEY. Never logged. */
-  reflexKeys?: { jev?: string; openai?: string };
   /**
    * Classifies the human's utterance for the auto filler (question / request / hard / other: core/phrases.ts
    * UtteranceClassifier). Default: Molty's reflex (fillerCategory: the owner's engine, keywords when off). Tests override it.
@@ -431,8 +429,6 @@ interface VoiceCfg {
   voice?: string;
   /** Molty's reflex (core/reflex.ts): which engine classifies what the human says (absent = off). */
   reflex?: ReflexMode;
-  /** Reflex compare mode: every available engine runs on each chunk (trace), only `reflex` fires. */
-  reflex_compare?: boolean;
   /** How lively the reflex is (core/reflex.ts REFLEX_LIVELINESS; absent = DEFAULT_LIVELINESS). */
   liveliness?: Liveliness;
   /** First words (core/opener.ts): the box's small model starts the reply (absent = off: the filler). */
@@ -628,6 +624,12 @@ const UPDATE_PHASES = ["accepted", "downloading", "flashing", "rebooting"];
 
 const NO_RELEASES: ReleaseSource = { latest: async () => ({ release: null, state: "unavailable", checked_at: null }) };
 
+/** The owner's reflex setting; the hosted engines it once named now run on the box. */
+const reflexModeOf = (cfg: VoiceCfg): ReflexMode => {
+  const m: string = cfg.reflex ?? "off";
+  return m === "jev" || m === "openai" ? "local" : (m as ReflexMode);
+};
+
 export class DeviceRoom implements AgentApi, OwnerApi {
   readonly deviceId: string;
   private readonly kv: KV;
@@ -706,8 +708,6 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private lastReflexAt = 0;
   /** The reflex's soft curious glance alternates its side. */
   private reflexGlance = 0;
-  private readonly reflexBench = new EngineBench();
-  private readonly reflexKeys: { jev?: string; openai?: string };
   /** The latest listen's reflex (its categories outlive the listen: the filler asks right after the turn). */
   private lastReflex: ReflexSession | undefined;
   /** Writes to the calibration record are serialized (read-modify-write from several paths). */
@@ -742,7 +742,6 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     this.fetcher = deps.fetch ?? ((req) => globalThis.fetch(req));
     this.resolveHost = deps.resolveHost;
     this.releases = deps.releases ?? NO_RELEASES;
-    this.reflexKeys = { ...(deps.reflexKeys?.jev ? { jev: deps.reflexKeys.jev } : {}), ...(deps.reflexKeys?.openai ? { openai: deps.reflexKeys.openai } : {}) };
     this.classifier = deps.classifier;
     this.box = new RemoteVoiceProvider(() => this.boxSocket(), this.clock);
     this.activity = new ActivityLog({ deviceId: this.deviceId, kv: this.kv, clock: this.clock, log: this.log });
@@ -3259,24 +3258,20 @@ export class DeviceRoom implements AgentApi, OwnerApi {
 
   /** The owner's reflex setting for one box-streamed listen (undefined: off). */
   private reflexFor(buf: ListenBuffer, cfg: VoiceCfg): ReflexSession | undefined {
-    const mode = cfg.reflex ?? "off";
+    const mode = reflexModeOf(cfg);
     if (mode === "off") return undefined;
-    const avail = { local: !!this.boxSocket()?.getMeta()?.box?.reflex, jev: !!this.reflexKeys.jev, openai: !!this.reflexKeys.openai };
+    const avail = { local: !!this.boxSocket()?.getMeta()?.box?.reflex };
     const session: ReflexSession = new ReflexSession({
       mode,
-      compare: !!cfg.reflex_compare,
       avail,
-      keys: this.reflexKeys,
-      fetch: this.fetcher,
       clock: this.clock,
-      bench: this.reflexBench,
       liveliness: cfg.liveliness ?? DEFAULT_LIVELINESS,
       // the session's profile (an unknown stored value falls back to the default there)
       fire: (pick, soft): Promise<string> => this.reflexFire(buf, pick, soft, session.profile.gapMs),
       note: (n) => buf.trace.reflex({ ...n, at: n.at - buf.trace.t0 }),
     });
     this.lastReflex = session;
-    buf.trace.relay.reflex_cfg = { mode, engine: session.engine, lv: session.liveliness, ...(session.fallback ? { fb: session.fallback } : {}), ...(cfg.reflex_compare ? { compare: session.engines } : {}) };
+    buf.trace.relay.reflex_cfg = { mode, engine: session.engine, lv: session.liveliness, ...(session.fallback ? { fb: session.fallback } : {}) };
     return session;
   }
 
@@ -3289,15 +3284,13 @@ export class DeviceRoom implements AgentApi, OwnerApi {
 
   /**
    * The utterance category of `text` (the latest partial or final) for a context-picked filler: the
-   * reflex's own answer for those words when it has one, else one call of the owner's reflex engine
-   * (keywords when the reflex is off, keyless or failing). The filler-category seam of feat/quick-phrases.
+   * reflex's own answer for those words when it has one, else the keywords'. The filler-category
+   * seam of feat/quick-phrases.
    */
   async fillerCategory(text: string): Promise<{ category: UtteranceCategory; engine: ReflexEngine; ms: number }> {
     const latest = this.lastReflex?.latest;
     if (latest && latest.n === words(text).length) return { category: latest.cat, engine: latest.engine, ms: 0 };
-    const mode = (await this.voiceCfg()).reflex ?? "off";
-    const engine = mode === "off" ? "keywords" : resolveEngine(mode, { local: false, jev: !!this.reflexKeys.jev, openai: !!this.reflexKeys.openai }).engine;
-    return categoryOf(text, { engine, keys: this.reflexKeys, fetch: this.fetcher, clock: this.clock });
+    return { category: keywordCategory(text), engine: "keywords", ms: 0 };
   }
 
   /** Something owns Molty's screen besides the listen: a question, a pairing code, an update. */
@@ -3442,7 +3435,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const now = this.clock.now();
     // reflex: the box runs Molty's reflex classifier (stt.reflex; only boxes that say so are asked)
     const reflex = f.reflex === true && f.stt === true;
-    sock.setMeta({ ...meta, box: { stt: f.stt, tts: f.tts, ...(reflex ? { reflex } : {}), ...(f.opener === true ? { opener: true } : {}) } });
+    sock.setMeta({ ...meta, box: { stt: f.stt, tts: f.tts, ...(reflex ? { reflex } : {}), ...(typeof f.reflex_engine === "string" && f.reflex_engine.length <= 20 ? { reflex_engine: f.reflex_engine } : {}), ...(f.opener === true ? { opener: true } : {}) } });
     await this.kv.put<BoxInfo>(K.vbox, { name: f.name as string, version: (f.version as string | undefined) ?? "", voices, stt: f.stt, tts: f.tts, ...(reflex ? { reflex } : {}), since: now });
     const cfg = await this.voiceCfg();
     sock.sendText(JSON.stringify({ t: "voice.welcome", device_id: this.deviceId, mode: cfg.mode, voice: cfg.voice ?? null }));
@@ -3560,11 +3553,6 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         if (req.reflex === "off") delete cfg.reflex;
         else cfg.reflex = req.reflex as ReflexMode;
       }
-      if (req.reflex_compare !== undefined) {
-        if (typeof req.reflex_compare !== "boolean") return fail("invalid_args", "reflex_compare must be true or false");
-        if (req.reflex_compare) cfg.reflex_compare = true;
-        else delete cfg.reflex_compare;
-      }
       if (req.first_words !== undefined) {
         if (!FIRST_WORDS_MODES.includes(req.first_words as FirstWordsMode)) return fail("invalid_args", `first_words must be one of ${FIRST_WORDS_MODES.join(", ")}`);
         if (req.first_words === "off") delete cfg.first_words;
@@ -3576,7 +3564,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         else cfg.liveliness = req.liveliness;
       }
       await this.kv.put<VoiceCfg>(K.voiceCfg, cfg);
-      await this.activity.record({ ts: this.clock.now(), kind: "settings", ev: "voice", data: { mode: cfg.mode, voice: cfg.voice ?? null, ...(req.reflex !== undefined || req.reflex_compare !== undefined ? { reflex: cfg.reflex ?? "off", reflex_compare: !!cfg.reflex_compare } : {}), ...(req.liveliness !== undefined ? { liveliness: cfg.liveliness ?? DEFAULT_LIVELINESS } : {}) } });
+      await this.activity.record({ ts: this.clock.now(), kind: "settings", ev: "voice", data: { mode: cfg.mode, voice: cfg.voice ?? null, ...(req.reflex !== undefined ? { reflex: cfg.reflex ?? "off" } : {}), ...(req.liveliness !== undefined ? { liveliness: cfg.liveliness ?? DEFAULT_LIVELINESS } : {}) } });
       void this.rewarmPhrases(); // quick phrases follow Molty's voice (core/phrases.ts)
     }
     return { ok: true, result: await this.voiceView() };
@@ -3642,7 +3630,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   /** What the owner chose in setup, for the agent. */
   private async setupChoices(): Promise<JsonObject> {
     const cfg = await this.voiceCfg();
-    return { voice: cfg.mode, first_words: cfg.first_words ?? "off", reflex: cfg.reflex ?? "off" };
+    return { voice: cfg.mode, first_words: cfg.first_words ?? "off", reflex: reflexModeOf(cfg) };
   }
 
   private async voiceView(): Promise<JsonObject> {
@@ -3655,10 +3643,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       const p = await this.pickVoice(k);
       return p.ok ? p.name : p.error;
     };
-    // the reflex: what each engine needs (local: a connected box with the classifier; jev / openai: the relay's key)
+    // the reflex: local needs a connected box offering it
     const local = !!connected?.getMeta()?.box?.reflex;
-    const avail = { local, jev: !!this.reflexKeys.jev, openai: !!this.reflexKeys.openai };
-    const mode = cfg.reflex ?? "off";
+    const avail = { local };
+    const mode = reflexModeOf(cfg);
     const sttServing = await serving("stt");
     const now = mode === "off" ? null : resolveEngine(mode, { ...avail, local: local && sttServing === "box" });
     return {
@@ -3669,7 +3657,6 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       first_words: { mode: cfg.first_words ?? "off", available: !!connected?.getMeta()?.box?.opener },
       reflex: {
         mode,
-        compare: !!cfg.reflex_compare,
         engines: { ...avail, keywords: true },
         // the engine the next listen would fire with (null: off), and why not the chosen one
         engine: now?.engine ?? null,
@@ -3682,6 +3669,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         name: tok?.agent_name ?? null,
         paired_at: tok?.created ?? null,
         connected: !!connected,
+        reflex_engine: connected?.getMeta()?.box?.reflex_engine ?? null,
         connected_since: connected && info ? info.since : null,
         reported_name: connected && info ? info.name : null,
         version: connected && info ? info.version : null,

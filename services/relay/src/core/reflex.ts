@@ -8,21 +8,19 @@
 // block it, one per the liveliness's gap, visual only.
 //
 //   box stt.partial ─▶ reflexDue ─▶ chunk n ─▶ engine (owner setting `reflex`) ─▶ reflexGate ─▶ fire
-//                                     │  local:    the box's own classifier (stt.reflex {n, …}: no extra hop)
-//                                     │  jev:      TypeSafe System One, one Choice  (TYPESAFE_API_KEY)
-//                                     │  openai:   OpenAI Decisions, one choice      (OPENAI_API_KEY)
-//                                     │  keywords: a relay-side heuristic, no key
+//                                     │  local:    the Molty box's verdict (stt.reflex {n, …}): its classifier or a hosted
+//                                     │            model it calls with the owner's own key. The relay holds no key.
+//                                     │  keywords: a relay-side heuristic
 //                                     └─ error / REFLEX.timeoutMs ─▶ keywords (fallback reason noted)
-//   compare: every available engine runs on each chunk (noted in the turn trace), only the configured one fires.
 //
 // Host-neutral, no TypeScript-only runtime syntax (tools/reflex-bench.ts runs it under Node's type
-// stripping). Errors are codes only: a key or a response body never reaches a log or a trace.
+// stripping). Errors are codes only.
 
 import { sentenceEnd, words } from "./words.js";
 
-export const REFLEX_MODES = ["off", "auto", "local", "jev", "openai", "keywords"] as const;
+export const REFLEX_MODES = ["off", "auto", "local", "keywords"] as const;
 export type ReflexMode = (typeof REFLEX_MODES)[number];
-export const REFLEX_ENGINES = ["local", "jev", "openai", "keywords"] as const;
+export const REFLEX_ENGINES = ["local", "keywords"] as const;
 export type ReflexEngine = (typeof REFLEX_ENGINES)[number];
 /** What Molty may show; `none` shows nothing. The order is the trace's probability order. */
 export const REFLEX_PICKS = ["surprised", "happy", "sad", "laugh", "curious", "none"] as const;
@@ -40,14 +38,10 @@ export const REFLEX = {
   firstWords: 3,
   /** Chunks classified per listen (a ramble stays bounded: ~40 s of speech at the lively cadence). */
   maxPerListen: 40,
-  /** Remote calls of the configured engine in flight at once; a chunk due beyond that waits for the next word. */
-  maxInFlight: 2,
   /** One engine call; then the keywords answer instead (never blocks the listen). */
   timeoutMs: 600,
   /** The text an engine sees: the last this many characters of the text so far. */
   maxChars: 400,
-  /** A remote engine refused for good (bad key, no access): not called again for this long. */
-  benchMs: 10 * 60 * 1000,
   /** Reflex decisions kept in one listen's trace. */
   traceEntries: 60,
 };
@@ -63,7 +57,7 @@ export interface ReflexProfile {
   /** At most one reflex per this long, and none this long after an agent's react. */
   gapMs: number;
   /** Confidence an engine's pick needs to be shown in full. */
-  gate: Record<ReflexEngine, number>;
+  gate: Record<ReflexEngine | "hosted", number>;
   /** Below the gate: still shown as its softer gesture (REFLEX_SOFT) when the engine's `none` is under `none` and the best reaction reaches `min`. */
   mild?: { none: number; min: number };
 }
@@ -73,9 +67,9 @@ export interface ReflexProfile {
  * whole turns". calm is the old behaviour's caution with the earlier first chunk.
  */
 export const REFLEX_LIVELINESS: Record<Liveliness, ReflexProfile> = {
-  calm: { everyWords: 6, everyMs: 2500, gapMs: 3000, gate: { local: 0.35, jev: 0.5, openai: 0.5, keywords: 0.5 } },
-  normal: { everyWords: 4, everyMs: 1500, gapMs: 2000, gate: { local: 0.3, jev: 0.4, openai: 0.4, keywords: 0.5 }, mild: { none: 0.6, min: 0.3 } },
-  lively: { everyWords: 3, everyMs: 1200, gapMs: 1500, gate: { local: 0.25, jev: 0.35, openai: 0.35, keywords: 0.5 }, mild: { none: 0.75, min: 0.2 } },
+  calm: { everyWords: 6, everyMs: 2500, gapMs: 3000, gate: { local: 0.35, hosted: 0.5, keywords: 0.5 } },
+  normal: { everyWords: 4, everyMs: 1500, gapMs: 2000, gate: { local: 0.3, hosted: 0.4, keywords: 0.5 }, mild: { none: 0.6, min: 0.3 } },
+  lively: { everyWords: 3, everyMs: 1200, gapMs: 1500, gate: { local: 0.25, hosted: 0.35, keywords: 0.5 }, mild: { none: 0.75, min: 0.2 } },
 };
 export const isLiveliness = (v: unknown): v is Liveliness => typeof v === "string" && (LIVELINESS as readonly string[]).includes(v);
 
@@ -96,29 +90,11 @@ export const REFLEX_SOFT: Record<Exclude<ReflexPick, "none">, string> = {
   curious: "glance_left",
 };
 
-/** The question every model engine answers (Jev criteria, OpenAI choice descriptions). */
-export const REFLEX_QUESTION =
-  "Molty is a small creature on the desk, listening to its human, who is still talking: this is only what they said so far. Which visible reaction should Molty show right now?";
-export const REFLEX_CRITERIA: Record<ReflexPick, string> = {
-  surprised: "astonishing or unexpected news, disbelief, shock (no way, guess what, you won't believe)",
-  happy: "good news, joy, excitement, pride, gratitude, love, celebrating",
-  sad: "sad or bad news: loss, grief, illness, disappointment, loneliness, a bad day",
-  laugh: "a joke, a pun, something funny or silly, or the human laughing",
-  curious: "a question, or the human wondering about something",
-  none: "ordinary talk: instructions, facts, plans, small talk, or unclear / mixed feelings — no visible reaction",
-};
-
-export const CATEGORY_QUESTION = "What kind of thing is the human saying to Molty so far?";
-export const CATEGORY_CRITERIA: Record<UtteranceCategory, string> = {
-  question: "a simple question with a quick answer (a fact, the time, the weather, yes or no)",
-  request: "asks Molty to do something: set, remind, play, send, turn on, add, call, show, stop",
-  hard: "needs real thought: explain why or how, advice, a decision, a plan, a comparison, an opinion, or something emotionally heavy",
-  other: "statements, stories, feelings, small talk, thanks — nothing to answer or do yet",
-};
-
 /** One engine's answer for one chunk. */
 export interface ReflexVerdict {
   engine: ReflexEngine;
+  /** The box answered with a hosted model (its probabilities run higher: its own gate). */
+  hosted?: boolean;
   /** The engine's choice; after reflexGate (the session's), what Molty shows (none: nothing). */
   pick: ReflexPick;
   /** After reflexGate: the engine's own choice when the gate changed it. */
@@ -177,7 +153,7 @@ export function reflexGate(v: ReflexVerdict, p: ReflexProfile): ReflexVerdict {
   const choice = v.pick;
   const conf = v.conf ?? 0;
   let out: ReflexVerdict;
-  if (choice !== "none" && conf >= p.gate[v.engine]) out = { ...base, pick: choice };
+  if (choice !== "none" && conf >= p.gate[v.hosted ? "hosted" : v.engine]) out = { ...base, pick: choice };
   else {
     let alt: Exclude<ReflexPick, "none"> | undefined;
     for (const k of REFLEX_PICKS) if (k !== "none" && (v.p?.[k] ?? -1) > (alt ? (v.p?.[alt] ?? -1) : -1)) alt = k;
@@ -236,39 +212,7 @@ export function keywordReflex(text: string): ReflexVerdict {
   return { ...base, pick: "none", conf: 1 };
 }
 
-// ---------------------------------------------------------------- model engines: request + parse
-
-export const JEV_URL = "https://api.typesafe.ai/v1/systemone";
-export const JEV_MODEL = "jev-latest";
-export const OPENAI_URL = "https://api.openai.com/v1/decisions";
-export const OPENAI_MODEL = "gpt-6-luna";
-/** $ per million input tokens (output is free on both): the bench's cost estimate. */
-export const PRICE_PER_MTOK: Record<"jev" | "openai", number> = { jev: 0.042, openai: 0.1 };
-
-/** TypeSafe System One: one Choice over the reactions (docs.typesafe.ai api/system-one, primitives/choice). */
-export function jevBody(text: string): Record<string, unknown> {
-  return {
-    model: JEV_MODEL,
-    state: { human_said_so_far: reflexInput(text) },
-    questions: {
-      reaction: { type: "choice", instructions: REFLEX_QUESTION, criteria: REFLEX_CRITERIA },
-      category: { type: "choice", instructions: CATEGORY_QUESTION, criteria: CATEGORY_CRITERIA },
-    },
-  };
-}
-
-/** OpenAI Decisions (developers.openai.com/api/reference/resources/decisions): one choice question. */
-export function openaiBody(text: string): Record<string, unknown> {
-  return {
-    model: OPENAI_MODEL,
-    input: `The human, so far: ${JSON.stringify(reflexInput(text))}`,
-    questions: [
-      { type: "choice", name: "reaction", instructions: REFLEX_QUESTION, choices: REFLEX_PICKS.map((value) => ({ value, description: REFLEX_CRITERIA[value] })) },
-      { type: "choice", name: "category", instructions: CATEGORY_QUESTION, choices: UTTERANCE_CATEGORIES.map((value) => ({ value, description: CATEGORY_CRITERIA[value] })) },
-    ],
-    prompt_cache_key: "molty-reflex",
-  };
-}
+// ---------------------------------------------------------------- the box's verdict
 
 const isCat = (v: unknown): v is UtteranceCategory => typeof v === "string" && (UTTERANCE_CATEGORIES as readonly string[]).includes(v);
 const isPick = (v: unknown): v is ReflexPick => typeof v === "string" && (REFLEX_PICKS as readonly string[]).includes(v);
@@ -302,109 +246,11 @@ function category(choice: unknown, conf: unknown, pm: Record<string, unknown> | 
   return { cat: choice, catConf: round2(num01(conf) ?? 0), ...(pm ? { catP: catProbs(pm) } : {}) };
 }
 
-export function parseJev(body: unknown): Parsed {
-  const a = isObj(body) && isObj(body.answers) ? body.answers.reaction : undefined;
-  if (!isObj(a) || !isPick(a.choice)) return { pick: "none", error: "bad_response" };
-  const conf = num01(a.confidence) ?? 0;
-  const usage = isObj(body) && isObj((body as Record<string, unknown>).usage) ? ((body as Record<string, unknown>).usage as Record<string, unknown>) : {};
-  const c = (body as { answers: Record<string, unknown> }).answers.category;
-  return {
-    pick: a.choice,
-    ...(isObj(c) ? category(c.choice, c.confidence, isObj(c.probabilities) ? c.probabilities : undefined) : {}),
-    conf: round2(conf),
-    p: isObj(a.probabilities) ? probs(a.probabilities) : {},
-    ...(typeof usage.input_tokens === "number" ? { tokens: usage.input_tokens } : {}),
-    ...(isObj(body) && typeof body.model === "string" ? { model: body.model.slice(0, 40) } : {}),
-  };
-}
-
-export function parseOpenAI(body: unknown): Parsed {
-  const list = isObj(body) && Array.isArray(body.answers) ? body.answers : [];
-  const a = list.find((x) => isObj(x) && x.name === "reaction") ?? list[0];
-  const c = list.find((x) => isObj(x) && x.name === "category");
-  if (isObj(a) && a.type === "refusal") return { pick: "none", error: "refused" };
-  if (!isObj(a) || !isPick(a.choice)) return { pick: "none", error: "bad_response" };
-  const conf = num01(a.confidence) ?? 0;
-  const pm: Record<string, unknown> = {};
-  if (Array.isArray(a.probabilities)) for (const e of a.probabilities) if (isObj(e) && typeof e.value === "string") pm[e.value] = e.probability;
-  const usage = isObj(body) && isObj((body as Record<string, unknown>).usage) ? ((body as Record<string, unknown>).usage as Record<string, unknown>) : {};
-  const cm: Record<string, unknown> = {};
-  if (isObj(c) && Array.isArray(c.probabilities)) for (const e of c.probabilities) if (isObj(e) && typeof e.value === "string") cm[e.value] = e.probability;
-  return {
-    pick: a.choice,
-    ...(isObj(c) && c.type === "choice" ? category(c.choice, c.confidence, cm) : {}),
-    conf: round2(conf),
-    p: probs(pm),
-    ...(typeof usage.input_tokens === "number" ? { tokens: usage.input_tokens } : {}),
-    ...(isObj(body) && typeof body.model === "string" ? { model: body.model.slice(0, 40) } : {}),
-  };
-}
-
 export interface ReflexTimer {
   now(): number;
   setTimeout(fn: () => void, ms: number): unknown;
   clearTimeout(handle: unknown): void;
 }
-export type Fetcher = (req: Request) => Promise<Response>;
-
-/**
- * One call to a model engine, bounded by `timeoutMs` (then aborted: error "timeout"). Never throws;
- * the key goes into the Authorization header only.
- */
-export async function remoteReflex(
-  engine: "jev" | "openai",
-  text: string,
-  o: { key: string | undefined; fetch: Fetcher; clock: ReflexTimer; timeoutMs?: number; signal?: AbortSignal },
-): Promise<ReflexVerdict> {
-  const input = reflexInput(text);
-  const t0 = o.clock.now();
-  const base = { engine, chars: input.length };
-  if (!o.key) return { ...base, pick: "none", ms: 0, error: "no_key" };
-  if (o.signal?.aborted) return { ...base, pick: "none", ms: 0, error: "closed" };
-  // The deadline races the call itself: it holds even when a fetch implementation ignores the abort
-  // (a Request's derived signal is not guaranteed to follow its controller everywhere).
-  const ctl = new AbortController();
-  let stop!: (why: "timeout" | "closed") => void;
-  const stopped = new Promise<"timeout" | "closed">((r) => (stop = r));
-  const timer = o.clock.setTimeout(() => stop("timeout"), o.timeoutMs ?? REFLEX.timeoutMs);
-  const outer = () => stop("closed");
-  o.signal?.addEventListener("abort", outer, { once: true });
-  void stopped.then(() => ctl.abort());
-  const fail = (error: string): ReflexVerdict => ({ ...base, pick: "none", ms: o.clock.now() - t0, error });
-  try {
-    const req = new Request(engine === "jev" ? JEV_URL : OPENAI_URL, {
-      method: "POST",
-      headers: { authorization: `Bearer ${o.key}`, "content-type": "application/json" },
-      body: JSON.stringify(engine === "jev" ? jevBody(input) : openaiBody(input)),
-      signal: ctl.signal,
-    });
-    const call = (async () => {
-      let res: Response;
-      try {
-        res = await o.fetch(req);
-      } catch {
-        return fail("network");
-      }
-      if (!res.ok) {
-        res.body?.cancel().catch(() => {});
-        return fail(`http_${res.status}`);
-      }
-      let body: unknown;
-      try {
-        body = await res.json();
-      } catch {
-        return fail("bad_response");
-      }
-      const parsed = engine === "jev" ? parseJev(body) : parseOpenAI(body);
-      return { ...base, ...parsed, ms: o.clock.now() - t0 };
-    })();
-    return await Promise.race([call, stopped.then(fail)]);
-  } finally {
-    o.clock.clearTimeout(timer);
-    o.signal?.removeEventListener("abort", outer);
-  }
-}
-
 /** A box `stt.reflex` frame's verdict (the local engine), validated (not gated: reflexGate); undefined when unusable. */
 export function parseBoxReflex(f: Record<string, unknown>): (ReflexVerdict & { n: number }) | undefined {
   const n = f.n;
@@ -415,6 +261,7 @@ export function parseBoxReflex(f: Record<string, unknown>): (ReflexVerdict & { n
   return {
     n,
     engine: "local",
+    ...(f.hosted === true ? { hosted: true } : {}),
     pick: f.pick,
     ...category(f.cat, f.cat_conf, isObj(f.cat_p) ? f.cat_p : undefined),
     conf: round2(conf),
@@ -431,27 +278,12 @@ export function parseBoxReflex(f: Record<string, unknown>): (ReflexVerdict & { n
 export interface ReflexAvail {
   /** The voice box streams this listen and offers its classifier (hello `reflex: true`). */
   local: boolean;
-  jev: boolean;
-  openai: boolean;
 }
 
-/** The engine a mode fires with, given what is available (auto: local, else jev, else keywords). */
+/** The engine a mode fires with, given what is available (auto: local, else keywords). */
 export function resolveEngine(mode: Exclude<ReflexMode, "off">, a: ReflexAvail): { engine: ReflexEngine; fallback?: string } {
-  if (mode === "auto") return { engine: a.local ? "local" : a.jev ? "jev" : "keywords" };
-  if (mode === "keywords") return { engine: "keywords" };
-  if (a[mode]) return { engine: mode };
-  return { engine: "keywords", fallback: mode === "local" ? "unavailable" : "no_key" };
-}
-
-/** Remote engines refused for good (401/403/404/400) are benched for REFLEX.benchMs. */
-export class EngineBench {
-  private readonly until = new Map<string, number>();
-  ok(engine: string, now: number): boolean {
-    return (this.until.get(engine) ?? 0) <= now;
-  }
-  note(v: ReflexVerdict, now: number): void {
-    if (v.error && /^http_(400|401|403|404)$/.test(v.error)) this.until.set(v.engine, now + REFLEX.benchMs);
-  }
+  if (mode === "keywords" || (mode === "auto" && !a.local)) return { engine: "keywords" };
+  return a.local ? { engine: "local" } : { engine: "keywords", fallback: "unavailable" };
 }
 
 // ---------------------------------------------------------------- one listen's reflex
@@ -481,19 +313,15 @@ export interface ReflexNote {
   /** It answered for the configured engine, which failed (that reason). */
   fb?: string;
   err?: string;
-  /** compare: it answered after the configured engine's deadline. */
+  /** It answered after the deadline. */
   late?: boolean;
 }
 
 export interface ReflexSessionDeps {
   mode: Exclude<ReflexMode, "off">;
-  compare: boolean;
   avail: ReflexAvail;
-  keys: { jev?: string; openai?: string };
-  fetch: Fetcher;
   clock: ReflexTimer;
   timeoutMs?: number;
-  bench?: EngineBench;
   /** The owner's liveliness (cadence + gates; absent: DEFAULT_LIVELINESS). */
   liveliness?: Liveliness;
   /** Show the pick (room.ts: gating + the react path), soft = its softer gesture; resolves "ok" or why not. */
@@ -516,10 +344,8 @@ const toNote = (n: number, at: number, v: ReflexVerdict): ReflexNote => {
 
 /**
  * The reflex of one listen: chunks the box's text so far at the liveliness's cadence, asks the
- * configured engine (and, in compare mode, every other available one), gates its verdict
- * (reflexGate) and fires it — or the keywords' when it fails or misses REFLEX.timeoutMs. A verdict
- * that comes back after a newer chunk's is stale (noted, not shown); at most REFLEX.maxInFlight
- * calls of the configured engine run at once (a chunk due beyond that waits for the next word).
+ * engine, gates its verdict (reflexGate) and fires it — or the keywords' when it misses
+ * REFLEX.timeoutMs. A verdict that comes back after a newer chunk's is stale (noted, not shown).
  * Never blocks: everything runs beside the listen.
  */
 export class ReflexSession {
@@ -532,12 +358,8 @@ export class ReflexSession {
   private lastAt = 0;
   /** The newest chunk whose configured-engine verdict came back (older ones landing later are stale). */
   private answeredN = 0;
-  private inFlight = 0;
   chunks = 0;
-  /** Chunks due while REFLEX.maxInFlight calls were out (deferred to a later word). */
-  deferred = 0;
   private closed = false;
-  private readonly ctl = new AbortController();
   /** Local verdicts by chunk n, and who waits for them. */
   private readonly local = new Map<number, ReflexVerdict>();
   private readonly waiters = new Map<number, Array<(v: ReflexVerdict) => void>>();
@@ -546,37 +368,19 @@ export class ReflexSession {
   private readonly pending = new Set<Promise<void>>();
   /** The configured engine's (or its fallback's) latest category, by chunk. */
   latest: { n: number; cat: UtteranceCategory; engine: ReflexEngine } | undefined;
-  /** What this listen can use (keys present, not benched). */
-  private readonly avail: ReflexAvail;
 
   constructor(d: ReflexSessionDeps) {
     this.d = d;
     this.liveliness = isLiveliness(d.liveliness) ? d.liveliness : DEFAULT_LIVELINESS;
     this.profile = REFLEX_LIVELINESS[this.liveliness];
-    const now = d.clock.now();
-    const bench = d.bench;
-    const avail: ReflexAvail = {
-      local: d.avail.local,
-      jev: d.avail.jev && !!d.keys.jev && (!bench || bench.ok("jev", now)),
-      openai: d.avail.openai && !!d.keys.openai && (!bench || bench.ok("openai", now)),
-    };
-    this.avail = avail;
-    const r = resolveEngine(d.mode, avail);
+    const r = resolveEngine(d.mode, d.avail);
     this.engine = r.engine;
     if (r.fallback) this.fallback = r.fallback;
   }
 
-  /** Engines that run on each chunk: the configured one, plus (compare) every other available one. */
-  get engines(): ReflexEngine[] {
-    if (!this.d.compare) return [this.engine];
-    const all: ReflexEngine[] = [this.engine];
-    for (const e of REFLEX_ENGINES) if (e !== this.engine && (e === "keywords" || this.avail[e])) all.push(e);
-    return all;
-  }
-
   /** Does this listen want the box's classifier (stt.start `reflex: true`)? */
   get wantsLocal(): boolean {
-    return this.engines.includes("local");
+    return this.engine === "local";
   }
 
   /** The box's text so far: starts a chunk when one is due. */
@@ -585,10 +389,6 @@ export class ReflexSession {
     const now = this.d.clock.now();
     const n = reflexDue(this.lastN, text, now - this.lastAt, this.profile);
     if (n === undefined) return;
-    if ((this.engine === "jev" || this.engine === "openai") && this.inFlight >= REFLEX.maxInFlight) {
-      this.deferred++;
-      return;
-    }
     this.lastN = n;
     this.lastAt = now;
     this.chunks++;
@@ -604,7 +404,7 @@ export class ReflexSession {
     if (this.closed) return;
     const { n, ...verdict } = v;
     if (this.localDone.has(n)) {
-      if (this.d.compare || this.engine === "local") this.d.note({ ...toNote(n, this.d.clock.now(), reflexGate(verdict, this.profile)), late: true });
+      if (this.engine === "local") this.d.note({ ...toNote(n, this.d.clock.now(), reflexGate(verdict, this.profile)), late: true });
       return;
     }
     const w = this.waiters.get(n);
@@ -614,10 +414,9 @@ export class ReflexSession {
     } else if (n > this.lastN && this.local.size < REFLEX.maxPerListen) this.local.set(n, verdict); // (a word count the relay skipped: dropped)
   }
 
-  /** The listen ended: in-flight calls are aborted, nothing more fires or is noted. */
+  /** The listen ended: nothing more fires or is noted. */
   close(): void {
     this.closed = true;
-    this.ctl.abort();
     for (const [n, w] of this.waiters) {
       this.localDone.add(n);
       for (const f of w) f({ engine: "local", pick: "none", ms: 0, chars: 0, error: "closed" });
@@ -625,99 +424,54 @@ export class ReflexSession {
     this.waiters.clear();
   }
 
-  /**
-   * The utterance category of `text` (the filler's question, feat/quick-phrases): the latest chunk's
-   * when it covered all of `text`'s words, else one call of the configured engine now (keywords on
-   * failure / timeout; the box's classifier is only asked by chunk, so local answers by keywords here).
-   */
-  async category(text: string): Promise<{ category: UtteranceCategory; engine: ReflexEngine; ms: number }> {
-    if (this.latest && this.latest.n === words(text).length) return { category: this.latest.cat, engine: this.latest.engine, ms: 0 };
-    return categoryOf(text, { engine: this.engine, keys: this.d.keys, fetch: this.d.fetch, clock: this.d.clock, timeoutMs: this.d.timeoutMs });
-  }
-
   /** Settles when every chunk started so far is done (tests, the bench). */
   async idle(): Promise<void> {
     while (this.pending.size) await Promise.all([...this.pending]);
   }
 
-  private run(engine: ReflexEngine, n: number, text: string): Promise<ReflexVerdict> {
+  private run(n: number, text: string): Promise<ReflexVerdict> {
+    if (this.engine === "keywords") return Promise.resolve(keywordReflex(text));
     const timeoutMs = this.d.timeoutMs ?? REFLEX.timeoutMs;
-    if (engine === "keywords") return Promise.resolve(keywordReflex(text));
-    if (engine === "local") {
-      const t0 = this.d.clock.now();
-      const have = this.local.get(n);
-      if (have) {
-        this.local.delete(n);
-        return Promise.resolve(have);
-      }
-      return new Promise((resolve) => {
-        const timer = this.d.clock.setTimeout(() => {
-          const w = this.waiters.get(n);
-          if (!w) return;
-          this.waiters.delete(n);
-          this.localDone.add(n);
-          for (const f of w) f({ engine: "local", pick: "none", ms: this.d.clock.now() - t0, chars: reflexInput(text).length, error: "timeout" });
-        }, timeoutMs);
-        const list = this.waiters.get(n) ?? [];
-        list.push((v) => {
-          this.d.clock.clearTimeout(timer);
-          resolve(v);
-        });
-        this.waiters.set(n, list);
-      });
+    const t0 = this.d.clock.now();
+    const have = this.local.get(n);
+    if (have) {
+      this.local.delete(n);
+      return Promise.resolve(have);
     }
-    return remoteReflex(engine, text, { key: this.d.keys[engine], fetch: this.d.fetch, clock: this.d.clock, timeoutMs, signal: this.ctl.signal });
+    return new Promise((resolve) => {
+      const timer = this.d.clock.setTimeout(() => {
+        const w = this.waiters.get(n);
+        if (!w) return;
+        this.waiters.delete(n);
+        this.localDone.add(n);
+        for (const f of w) f({ engine: "local", pick: "none", ms: this.d.clock.now() - t0, chars: reflexInput(text).length, error: "timeout" });
+      }, timeoutMs);
+      const list = this.waiters.get(n) ?? [];
+      list.push((v) => {
+        this.d.clock.clearTimeout(timer);
+        resolve(v);
+      });
+      this.waiters.set(n, list);
+    });
   }
 
   private async chunk(n: number, text: string): Promise<void> {
-    const engines = this.engines;
-    const others = engines.slice(1).map(async (e) => {
-      const v = await this.run(e, n, text);
-      if (this.closed) return;
-      this.d.bench?.note(v, this.d.clock.now());
-      this.d.note(toNote(n, this.d.clock.now(), v.error ? v : reflexGate(v, this.profile)));
-    });
-    const main = (async () => {
-      this.inFlight++;
-      let v: ReflexVerdict;
-      try {
-        v = await this.run(this.engine, n, text);
-      } finally {
-        this.inFlight--;
-      }
-      if (this.closed) return;
-      this.d.bench?.note(v, this.d.clock.now());
-      let fb = this.fallback;
-      if (v.error) {
-        // the configured engine has no answer in time: the keywords' answer instead
-        this.d.note(toNote(n, this.d.clock.now(), v));
-        fb = v.error;
-        v = keywordReflex(text);
-      }
-      v = reflexGate(v, this.profile);
-      const note = toNote(n, this.d.clock.now(), v);
-      if (fb) note.fb = fb;
-      if (v.cat && (!this.latest || this.latest.n <= n)) this.latest = { n, cat: v.cat, engine: v.engine };
-      const stale = n < this.answeredN;
-      if (!stale) this.answeredN = n;
-      note.fired = v.pick === "none" ? "none" : stale ? "stale" : await this.d.fire(v.pick, !!v.soft);
-      if (!this.closed) this.d.note(note);
-    })();
-    await Promise.all([main, ...others]);
+    let v = await this.run(n, text);
+    if (this.closed) return;
+    let fb = this.fallback;
+    if (v.error) {
+      // the engine has no answer in time: the keywords' answer instead
+      this.d.note(toNote(n, this.d.clock.now(), v));
+      fb = v.error;
+      v = keywordReflex(text);
+    }
+    v = reflexGate(v, this.profile);
+    const note = toNote(n, this.d.clock.now(), v);
+    if (fb) note.fb = fb;
+    if (v.cat && (!this.latest || this.latest.n <= n)) this.latest = { n, cat: v.cat, engine: v.engine };
+    const stale = n < this.answeredN;
+    if (!stale) this.answeredN = n;
+    note.fired = v.pick === "none" ? "none" : stale ? "stale" : await this.d.fire(v.pick, !!v.soft);
+    if (!this.closed) this.d.note(note);
   }
-}
-
-/**
- * One category answer outside a listen's chunks: the model engine when it is jev / openai with a key,
- * the keywords otherwise or when it fails. Never throws, never longer than the engine timeout.
- */
-export async function categoryOf(
-  text: string,
-  o: { engine: ReflexEngine; keys: { jev?: string; openai?: string }; fetch: Fetcher; clock: ReflexTimer; timeoutMs?: number },
-): Promise<{ category: UtteranceCategory; engine: ReflexEngine; ms: number }> {
-  if ((o.engine === "jev" || o.engine === "openai") && o.keys[o.engine]) {
-    const v = await remoteReflex(o.engine, text, { key: o.keys[o.engine], fetch: o.fetch, clock: o.clock, timeoutMs: o.timeoutMs });
-    if (!v.error && v.cat) return { category: v.cat, engine: o.engine, ms: v.ms };
-  }
-  return { category: keywordCategory(text), engine: "keywords", ms: 0 };
 }

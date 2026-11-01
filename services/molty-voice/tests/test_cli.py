@@ -21,7 +21,7 @@ def fake_relay(calls):
             body = json.loads(self.rfile.read(int(self.headers["content-length"])))
             calls.append(body)
             if "pair_id" in body:
-                code, out = 200, {"ok": True, "agent_token": TOKEN, "device_id": DEVICE, "agent_name": "voice box", "code": "4821", "role": "voice"}
+                code, out = 200, {"ok": True, "agent_token": TOKEN, "device_id": DEVICE, "agent_name": "Molty box", "code": "4821", "role": "voice"}
             else:
                 code, out = 202, {"ok": True, "status": "pending", "pair_id": "p_" + "a" * 22, "code": "4821", "expires_in_s": 120}
             data = json.dumps(out).encode()
@@ -45,7 +45,7 @@ def test_pair_asks_for_role_voice_shows_the_code_and_stores_the_token_0600(tmp_p
     finally:
         srv.shutdown()
     assert rc == 0
-    assert calls[0] == {"device_id": DEVICE, "link_code": "K7M2W9C4", "agent_name": "voice box", "role": "voice", "wait_s": 0}
+    assert calls[0] == {"device_id": DEVICE, "link_code": "K7M2W9C4", "agent_name": "Molty box", "role": "voice", "wait_s": 0}
     assert calls[1]["pair_id"] == "p_" + "a" * 22
     out = capsys.readouterr()
     assert "4821" in out.out

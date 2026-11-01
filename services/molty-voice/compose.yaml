@@ -49,6 +49,10 @@ services:
     network_mode: host   # reaches STT, TTS and Ollama on 127.0.0.1; dials out, no inbound ports
     restart: unless-stopped
     command: ["run", "--reflex", "--opener"]
+    environment:
+      # Optional: reactions through a hosted model, with your own key. Set one in .env; it stays on this box.
+      TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     volumes:
       - ${MOLTY_VOICE_DATA:-./data}/config:/root/.config/molty-voice
       - ${MOLTY_VOICE_DATA:-./data}/hf-cache:/root/.cache/huggingface
