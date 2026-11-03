@@ -207,7 +207,8 @@ Compared over the full reels (every scene, mood and gesture) against the approve
 - **Living layer ears**: the head's spring follow-through no longer feels the body's vertical speed (a small term).
 - **Cat's held tail** (tail up, tail wrapped): the lab bends the chain toward set directions from wherever it is each
   frame; the package carries rotations solved at build time for the cat sitting, standing and arched, blended by those
-  channels. Close at rest; in between (and with the spine swaying) the tail follows a slightly different path.
+  channels. Close sitting, happy and loafed. Arched (surprised) it stands straighter and taller than the code's hooked
+  bottle brush, the one difference that shows in the reel.
 - **Cat's stalk**: the leg lift while planted uses a two-term series for 1 - 1/cos(asin x) (under 0.1% off).
 - **Duck's waddle swing**: the foot's return uses a cosine where the code used a smoothstep (under 2% of the stride).
 - **Octopus pointing**: an arm lifts when the glance points its way by the glance's amount, not past a threshold, so it
@@ -216,5 +217,6 @@ Compared over the full reels (every scene, mood and gesture) against the approve
 - **The duck's idle "quiet" gate** is read before the creature's own gestures and moods add to the pose this frame, so a
   pose that tips the head far forward may start an idle event a frame early.
 - **The octopus's surprised clock** runs from the last time it was surprised, so leaving the mood early lets its sharp
-  moments run on as the weight fades (the code froze them at their settled values).
+  moments run on as the weight fades (the code froze them at their settled values). In the reel it stays pale a beat
+  longer after a fright.
 - **2D sprites**: not carried (section 9).
