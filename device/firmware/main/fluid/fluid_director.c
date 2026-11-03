@@ -225,6 +225,10 @@ void fd_shake(fluid_director_t *d) {
     d->flash = CM_SURPRISED; d->flash_left = FLASH_SURPRISED_S;
 }
 
+void fd_set_scene(fluid_director_t *d, bool playing) { d->scene_on = playing; }
+
+bool fd_scene_wanted(const fluid_director_t *d) { return target(d) == FD_ST_SCENE; }
+
 void fd_set_status(fluid_director_t *d, int status) {
     if (status >= 0 && status < FD_STATUS_COUNT) d->status = status;
 }
@@ -246,6 +250,8 @@ void fd_tick(fluid_director_t *d, float dt, bool text_done) {
         if (d->reel < 0 || (reading ? text_done : d->reel_t >= REEL[d->reel].dur)) reel_step(d);
     } else if (reading && !d->text_hold && d->text_done_t >= d->cfg.text_return_s) {
         go(d, FD_ST_CREATURE, 0);          /* show / say: back to the creature */
+    } else if (d->cur == FD_ST_SCENE && !d->pending && !d->scene_on) {
+        go(d, FD_ST_CREATURE, 0);          /* the scene ended (ttl, dur, clear) */
     }
 
     if (d->held_left > 0.f && (d->held_left -= dt) <= 0.f) {

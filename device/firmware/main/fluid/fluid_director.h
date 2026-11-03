@@ -33,6 +33,9 @@
  *                after work_ttl_s: an agent that died cannot leave it on.
  *   reader       "text" returns to the creature 1.5 s after its last word, unless the
  *                request held it (the pairing code, the Improv "hi").
+ *   scene        a package's layout (scene_player.h) on screen: requested like any state;
+ *                when the player has nothing left (its ttl or dur ended, the queue is empty,
+ *                scene.clear) it goes back to the creature. Never idle life over it.
  *   status       Wi-Fi / relay / auth trouble as a debounced indicator code for the
  *                screen's edge: never a state or mood change.
  *
@@ -58,7 +61,7 @@ extern const char *const FD_IDLE_NAMES[FD_IDLE_COUNT];   /* "off" "calm" "lively
 #define FD_IDLE_DEFAULT FD_IDLE_LIVELY
 
 /* States, in mole_fluid.c's order (its per-state relax rates are indexed by them). */
-enum { FD_ST_BLOB, FD_ST_THINKING, FD_ST_TEXT, FD_ST_FX, FD_ST_CREATURE, FD_ST_COUNT };
+enum { FD_ST_BLOB, FD_ST_THINKING, FD_ST_TEXT, FD_ST_FX, FD_ST_CREATURE, FD_ST_SCENE, FD_ST_COUNT };
 
 /* Status indicator codes (fd_status), worst first in fd_status_from. */
 enum { FD_STATUS_OK, FD_STATUS_WIFI, FD_STATUS_RELAY, FD_STATUS_AUTH, FD_STATUS_COUNT };
@@ -114,6 +117,7 @@ typedef struct {
     float work_left;                  /* s of `working` left, 0 = not working          */
     float work_gap;                   /* s until the next work action                  */
     int   work_last;                  /* the last work action (no immediate repeat)    */
+    bool  scene_on;                   /* the scene player has a scene (fd_set_scene)    */
     int   status, shown;              /* reported / on screen                          */
     float status_t;                   /* s the reported status has differed from shown */
 } fluid_director_t;
@@ -155,6 +159,11 @@ bool  fd_working(const fluid_director_t *d);
 void  fd_turn_spoken(fluid_director_t *d);
 /** The action to start on the creature now (an agent's, or idle life's), -1 = none. */
 int   fd_take_act(fluid_director_t *d);
+/** Whether the scene player has a scene, once per frame: the scene state with none left
+ *  goes back to the creature on the next fd_tick. */
+void  fd_set_scene(fluid_director_t *d, bool playing);
+/** The state shown or on its way is the scene (a scene not wanted is dropped). */
+bool  fd_scene_wanted(const fluid_director_t *d);
 /** Report the link status (FD_STATUS_*); shown after status_after_s, hidden at once. */
 void  fd_set_status(fluid_director_t *d, int status);
 /** Advance by dt seconds. text_done: the reader is holding its last word. */
