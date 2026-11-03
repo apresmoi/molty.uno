@@ -62,7 +62,7 @@ function asset(pkg, name) {
 
 /** A sphere wearing an equirectangular image, lit from `side` with `lit` of its disc lit; the dark side hides what is behind. */
 function ball(pkg, it, t, put) {
-  const img = asset(pkg, it.img), pa = Math.acos(Math.max(-1, Math.min(1, 2 * it.lit - 1))), side = it.side < 0 ? -1 : 1, L = [Math.sin(pa) * side, Math.cos(pa)];
+  const img = it.img ? asset(pkg, it.img) : null, plain = hex(it.color), pa = Math.acos(Math.max(-1, Math.min(1, 2 * it.lit - 1))), side = it.side < 0 ? -1 : 1, L = [Math.sin(pa) * side, Math.cos(pa)];
   // a nearly full body has no terminator to show its roundness: the form light sits off to one side (the lab's rule)
   const off = Math.max(0, 1 - pa / 0.9), K0 = [L[0] - 0.5 * off, 0.5 * off, L[1]], kn = Math.hypot(...K0), K = K0.map((v) => v / kn), turn = it.spin * t * DEG;
   each([it.x - it.r, it.x + it.r, it.y - it.r, it.y + it.r], (sx, sy, gx, gy) => {
@@ -72,9 +72,9 @@ function ball(pkg, it, t, put) {
     // the dark side hides what is behind it, with a faint earthshine so a thin crescent still reads as a ball
     if (lit <= 0) return put(sx, sy, hash(sx, sy) < 0.05 ? EARTHSHINE : null);
     const lon = Math.atan2(u, z) + turn, lat = Math.asin(Math.max(-1, Math.min(1, v)));
-    const i = Math.floor((((lon / (2 * Math.PI) + 0.5) % 1) + 1) % 1 * img.w), j = Math.min(img.h - 1, Math.floor((0.5 - lat / Math.PI) * img.h)), k = img.at(i, j);
+    const k = img ? img.at(Math.floor((((lon / (2 * Math.PI) + 0.5) % 1) + 1) % 1 * img.w), Math.min(img.h - 1, Math.floor((0.5 - lat / Math.PI) * img.h))) : 1;
     if (!k) return put(sx, sy, null);
-    const col = img.rgb[k], lum = (0.3 * col[0] + 0.59 * col[1] + 0.11 * col[2]) / 255;
+    const col = img ? img.rgb[k] : plain, lum = (0.3 * col[0] + 0.59 * col[1] + 0.11 * col[2]) / 255;
     const form = Math.max(0, u * K[0] + v * K[1] + z * K[2]), tone = Math.min(1.08, (0.1 + 1.05 * form ** 0.85) * (0.55 + 0.45 * z ** 0.5));
     const density = Math.min(1, 0.72 + 0.4 * Math.sqrt(lit)) * Math.min(1, 0.3 + lum);
     if (density <= BAYER[((sy & 3) << 2) | (sx & 3)]) return put(sx, sy, null);

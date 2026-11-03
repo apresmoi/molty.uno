@@ -4,19 +4,22 @@
 // the firmware's pkg_parse / scene_player implement the same rules in C.
 
 export const MAX_PKG_BYTES = 256 * 1024;
-export const NAME_RE = /^[a-z0-9-]{1,32}$/;
-export const PARAM_RE = /^[a-z_][a-z0-9_]{0,31}$/;
+/** A package id (its file and install id). */
+export const ID_RE = /^[a-z0-9-]{1,32}$/;
+/** Asset, layout, param and list field names: what the firmware's parser takes. */
+export const NAME_RE = /^[A-Za-z0-9_-]{1,24}$/;
 export const COLOR_RE = /^#[0-9a-f]{6}$/;
 export const PARAM_TYPES = ['number', 'text', 'list'];
-export const LIMITS = { items: 128, list: 64, text: 64, points: 64, assetSide: 256 };
+/** The firmware's limits (docs/PACKAGES.md "What the firmware accepts"). */
+export const LIMITS = { assets: 64, assetSide: 128, layouts: 32, items: 64, params: 8, points: 16, text: 40, scene: 128, letters: 40, list: 32, fields: 8 };
 
-// Field value types: num, text, color, asset (any asset), image (an image asset), points ([[x,y], ...]).
+// Field value types: num, text, color, asset (any asset), image (an image asset); pts holds [x, y] numbers.
 const COMMON = { k: 'kind', on: 'num', off: 'num', color: 'color', each: 'list', polar: 'polar' };
 const POS = { x: 'num', y: 'num' };
 export const ITEMS = {
   ring: { r: 'num', w: 'num' },
   arc: { r: 'num', w: 'num', a0: 'num', a1: 'num' },
-  ticks: { r: 'num', len: 'num', n: 'num', a0: 'num' },
+  ticks: { r: 'num', len: 'num', n: 'num', a0: 'num', w: 'num' },
   line: { pts: 'points', w: 'num' },
   curve: { pts: 'points', w: 'num' },
   disc: { ...POS, r: 'num' },
@@ -24,25 +27,24 @@ export const ITEMS = {
   glyph: { ...POS, size: 'num', asset: 'asset', rot: 'num' },
   text: { ...POS, size: 'num', str: 'text' },
 };
-const REQUIRED = { ring: ['r'], arc: ['r', 'a0', 'a1'], ticks: ['r', 'len', 'n'], line: ['pts'], curve: ['pts'], disc: ['r'], ball: ['r', 'img'], glyph: ['size', 'asset'], text: ['size', 'str'] };
-/** Defaults a missing field takes (docs/PACKAGES.md "Items"). */
-export const DEFAULTS = { color: '#ffffff', x: 0, y: 0, w: 0, a0: 0, lit: 1, side: 1, spin: 0, rot: 0, on: 0 };
+const REQUIRED = { ring: ['r'], arc: ['r'], ticks: ['r'], line: ['pts'], curve: ['pts'], disc: ['r'], ball: ['r'], glyph: ['asset'], text: ['str'] };
+/** Defaults a missing field takes (the firmware's, docs/PACKAGES.md). A ball without img is shaded in its colour. */
+export const DEFAULTS = { color: '#ffffff', x: 0, y: 0, on: 0, a0: 0, a1: 360, n: 12, len: 0.1, size: 0.12, w: 0.03, lit: 1, side: 1, spin: 0, rot: 0 };
 // which param type a field of each value type may bind to
-const BINDS = { num: 'number', text: 'text', color: 'text', asset: 'text', image: 'text', points: 'list', list: 'list' };
+const BINDS = { num: 'number', text: 'text', color: 'text', asset: 'text', image: 'text', list: 'list' };
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
-const isPoints = (v) => Array.isArray(v) && v.length <= LIMITS.points && v.every((p) => Array.isArray(p) && p.length === 2 && p.every(isNum));
-const ref = (v) => (typeof v === 'string' && /^[$@][a-z_][a-z0-9_]{0,31}$/.test(v) ? v : null);
+const ref = (v) => (typeof v === 'string' && /^[$@][A-Za-z0-9_-]{1,24}$/.test(v) ? v : null);
+const isText = (v) => typeof v === 'string' && /^[\x20-\x7e]*$/.test(v) && v.length <= LIMITS.text && !/^[$@]/.test(v);
 
 /** A literal's check against a field type; returns an error string or ''. */
 function literal(type, v, assets) {
   switch (type) {
     case 'num': return isNum(v) ? '' : 'must be a number';
-    case 'text': return typeof v === 'string' && v.length <= LIMITS.text ? '' : `must be text of at most ${LIMITS.text} characters`;
+    case 'text': return isText(v) ? '' : `must be printable ASCII of at most ${LIMITS.text} characters, not starting with $ or @`;
     case 'color': return typeof v === 'string' && COLOR_RE.test(v) ? '' : 'must be #rrggbb';
     case 'asset': return assets[v] ? '' : `names no asset (${JSON.stringify(v)})`;
     case 'image': return assets[v]?.kind === 'image' ? '' : `names no image asset (${JSON.stringify(v)})`;
-    case 'points': return isPoints(v) ? '' : `must be a list of up to ${LIMITS.points} [x, y] points`;
     default: return 'cannot be a literal';
   }
 }
@@ -54,14 +56,16 @@ export function checkPackage(pkg, id) {
   const top = ['v', 'id', 'name', 'version', 'kind', 'assets', 'layouts', 'creature'];
   for (const k of Object.keys(pkg)) if (!top.includes(k)) bad.push(`unknown top-level field ${k}`);
   if (pkg.v !== 'molty-pkg/1') bad.push('v must be "molty-pkg/1"');
-  if (!NAME_RE.test(pkg.id ?? '') || (id && pkg.id !== id)) bad.push(`id must be ${id ?? '[a-z0-9-]{1,32}'}`);
+  if (!ID_RE.test(pkg.id ?? '') || (id && pkg.id !== id)) bad.push(`id must be ${id ?? '[a-z0-9-]{1,32}'}`);
   if (typeof pkg.name !== 'string' || !pkg.name || pkg.name.length > 32) bad.push('name must be 1..32 characters');
   if (!/^\d+\.\d+\.\d+$/.test(pkg.version ?? '')) bad.push('version must be X.Y.Z');
   if (pkg.kind !== 'scenes' && pkg.kind !== 'creature') bad.push('kind must be scenes or creature');
   const assets = pkg.assets ?? {};
+  if (Object.keys(assets).length > LIMITS.assets) bad.push(`at most ${LIMITS.assets} assets`);
+  if (Object.keys(pkg.layouts ?? {}).length > LIMITS.layouts) bad.push(`at most ${LIMITS.layouts} layouts`);
   for (const [name, a] of Object.entries(assets)) {
     const at = `asset ${name}`;
-    if (!NAME_RE.test(name)) bad.push(`${at}: name must be [a-z0-9-]{1,32}`);
+    if (!NAME_RE.test(name)) bad.push(`${at}: name must be [A-Za-z0-9_-]{1,24}`);
     if (![a.w, a.h].every((v) => Number.isInteger(v) && v >= 1 && v <= LIMITS.assetSide)) { bad.push(`${at}: w, h must be 1..${LIMITS.assetSide}`); continue; }
     if (a.kind === 'mask') {
       if (Object.keys(a).sort().join() !== 'bits,h,kind,w') bad.push(`${at}: a mask has exactly kind, w, h, bits`);
@@ -76,12 +80,13 @@ export function checkPackage(pkg, id) {
   if (pkg.kind === 'scenes' && (!pkg.layouts || !Object.keys(pkg.layouts).length)) bad.push('a scenes package needs layouts');
   for (const [name, l] of Object.entries(pkg.layouts ?? {})) {
     const at = `layout ${name}`;
-    if (!NAME_RE.test(name)) bad.push(`${at}: name must be [a-z0-9-]{1,32}`);
+    if (!NAME_RE.test(name)) bad.push(`${at}: name must be [A-Za-z0-9_-]{1,24}`);
     for (const k of Object.keys(l)) if (!['dur', 'params', 'items'].includes(k)) bad.push(`${at}: unknown field ${k}`);
     if (!isNum(l.dur) || l.dur < 0) bad.push(`${at}: dur must be a number >= 0`);
     const params = l.params ?? {}, used = new Set();
+    if (Object.keys(params).length > LIMITS.params) bad.push(`${at}: at most ${LIMITS.params} params`);
     for (const [p, t] of Object.entries(params)) {
-      if (!PARAM_RE.test(p)) bad.push(`${at}: param name ${p} must be [a-z_][a-z0-9_]{0,31}`);
+      if (!NAME_RE.test(p)) bad.push(`${at}: param name ${p} must be [A-Za-z0-9_-]{1,24}`);
       if (!PARAM_TYPES.includes(t)) bad.push(`${at}: param ${p} type must be one of ${PARAM_TYPES.join(', ')}`);
     }
     if (!Array.isArray(l.items) || !l.items.length || l.items.length > LIMITS.items) { bad.push(`${at}: items must be 1..${LIMITS.items}`); continue; }
@@ -102,6 +107,7 @@ export function checkPackage(pkg, id) {
         if (!type) { bad.push(`${where}: unknown field ${f} for ${it.k}`); continue; }
         if (f === 'k') continue;
         if (f === 'each') { if (!ref(v)?.startsWith('$')) bad.push(`${where}: each must be "$<list param>"`); else value(f, 'list', v); continue; }
+        if (f === 'pts') { if (!Array.isArray(v) || v.length < 2 || v.length > LIMITS.points || !v.every((p) => Array.isArray(p) && p.length === 2)) bad.push(`${where}: pts must be 2..${LIMITS.points} [x, y] points`); else v.flat().forEach((e) => value(f, 'num', e)); continue; }
         if (f === 'polar') { if (!Array.isArray(v) || v.length !== 2) bad.push(`${where}: polar must be [angle, radius]`); else v.forEach((e) => value(f, 'num', e)); continue; }
         value(f, type, v);
       }
@@ -128,8 +134,10 @@ export function bind(pkg, layoutName, params = {}) {
     const v = params[p];
     if (v === undefined) throw new ParamError(`missing param ${p}`);
     if (t === 'number' && !isNum(v)) throw new ParamError(`${p} must be a number`);
-    if (t === 'text' && (typeof v !== 'string' || v.length > LIMITS.text)) throw new ParamError(`${p} must be text of at most ${LIMITS.text} characters`);
+    if (t === 'text' && !isText(v)) throw new ParamError(`${p} must be printable ASCII of at most ${LIMITS.text} characters`);
     if (t === 'list' && (!Array.isArray(v) || v.length > LIMITS.list)) throw new ParamError(`${p} must be a list of at most ${LIMITS.list}`);
+    // each element a flat object of a few numbers or texts
+    if (t === 'list' && !v.every((e) => e && typeof e === 'object' && !Array.isArray(e) && Object.keys(e).length <= LIMITS.fields && Object.entries(e).every(([k, x]) => NAME_RE.test(k) && (isNum(x) || isText(x))))) throw new ParamError(`${p} elements must be flat objects of at most ${LIMITS.fields} numbers or texts`);
   }
   const out = [];
   for (const it of l.items) {
@@ -149,11 +157,15 @@ export function bind(pkg, layoutName, params = {}) {
       const o = { k: it.k };
       for (const [f, v] of Object.entries(it)) {
         if (f === 'k' || f === 'each') continue;
+        if (f === 'pts') { o.pts = v.map((pt) => pt.map((e) => get(f, 'num', e))); continue; }
         if (f === 'polar') { const [a, r] = v.map((e) => get(f, 'num', e)); o.x = r * Math.cos((a * Math.PI) / 180); o.y = r * Math.sin((a * Math.PI) / 180); continue; }
         o[f] = get(f, fields[f], v);
       }
       out.push({ ...DEFAULTS, off: l.dur > 0 ? l.dur : Infinity, ...o });
     }
   }
+  if (out.length > LIMITS.scene) throw new ParamError(`the scene expands to ${out.length} items (at most ${LIMITS.scene})`);
+  const letters = out.filter((it) => it.k === 'text').reduce((n, it) => n + it.str.length, 0);
+  if (letters > LIMITS.letters) throw new ParamError(`the scene has ${letters} letters of text (at most ${LIMITS.letters})`);
   return out;
 }
