@@ -1,0 +1,26 @@
+{
+  "cat": {
+    "name": "Cat",
+    "version": "1.0.0",
+    "kind": "creature",
+    "path": "packages/cat/cat.json",
+    "size": 26816,
+    "sha256": "b8f3d593aa062925b08a1c96daf4f376e94d751954491e7099bfb1f96ebecede"
+  },
+  "duck": {
+    "name": "Duck",
+    "version": "1.0.0",
+    "kind": "creature",
+    "path": "packages/duck/duck.json",
+    "size": 27635,
+    "sha256": "598f507266e3f6cd4ea6218101f64206e8a402090523d6e8a13b911cdf086212"
+  },
+  "octopus": {
+    "name": "Octopus",
+    "version": "1.0.0",
+    "kind": "creature",
+    "path": "packages/octopus/octopus.json",
+    "size": 30866,
+    "sha256": "efa7c5b58f90a5e47a97e1e2d17fb436288e64e6f24c81a718d26aa8de796eaf"
+  }
+}
