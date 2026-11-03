@@ -94,8 +94,9 @@ const eqOf = (name, date, obs) => A.Equator(A.Body[name], date, obs, true, true)
 const offset = (body, centre, date, obs) => { const b = obs ? eqOf(body, date, obs) : geoEq(body, date), c = obs ? eqOf(centre, date, obs) : geoEq(centre, date); let dra = (b.ra - c.ra) * 15; if (dra > 180) dra -= 360; if (dra < -180) dra += 360; return [-dra * Math.cos(c.dec * RAD), b.dec - c.dec]; };
 const radiusDeg = (km, au) => Math.atan(km / (au * 149597870.7)) / RAD;
 const R_KM = { Sun: 695700, Moon: 1737.4 };
+const clamp2 = (v) => Math.max(-2, Math.min(2, v)); // off the glass either way; the device takes -2..2
 /** n samples of a moving body as keyframes over a layout of `dur` s: {x, y, on, off}. */
-const keyframes = (fn, dur = 6, n = 14) => Array.from({ length: n }, (_, i) => { const [x, y] = fn(i / (n - 1)), on = 0.3 + ((dur - 0.6) * i) / n; return { x: r2(x), y: r2(y), on: r2(on), off: r2(i === n - 1 ? dur : 0.3 + ((dur - 0.6) * (i + 1)) / n) }; });
+const keyframes = (fn, dur = 6, n = 14) => Array.from({ length: n }, (_, i) => { const [x, y] = fn(i / (n - 1)), on = 0.3 + ((dur - 0.6) * i) / n; return { x: r2(clamp2(x)), y: r2(clamp2(y)), on: r2(on), off: r2(i === n - 1 ? dur : 0.3 + ((dur - 0.6) * (i + 1)) / n) }; });
 const across = (body, centre, t0, t1, scale, obs) => (u) => offset(body, centre, new Date(t0 + (t1 - t0) * u), obs).map((v) => v * scale);
 const angle = (x, y, d) => A.AngleBetween(A.GeoVector(A.Body[x], d, true), A.GeoVector(A.Body[y], d, true));
 const closest = (x, y, d, stepMs, n) => { let best = d, bs = angle(x, y, d); for (let k = -n; k <= n; k++) { const dd = new Date(d.getTime() + k * stepMs), v = angle(x, y, dd); if (v < bs) { bs = v; best = dd; } } return [best, bs]; };

@@ -34,13 +34,16 @@ export const DEFAULTS = { color: '#ffffff', x: 0, y: 0, on: 0, a0: 0, a1: 360, n
 const BINDS = { num: 'number', text: 'text', color: 'text', asset: 'text', image: 'text', list: 'list' };
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+/** The range each numeric field must lie in, literal or bound (the firmware's pkg_num_ok); angles otherwise. */
+const RANGE = { x: [-2, 2], y: [-2, 2], r: [0, 2], w: [0, 0.5], len: [-1, 1], n: [1, 120], size: [0, 2], lit: [0, 1], spin: [-720, 720], on: [0, 600], off: [0, 600] };
+const inRange = (f, v) => { if (f === 'side') return v === -1 || v === 1; if (f === 'n' && !Number.isInteger(v)) return false; if (f === 'size' && v <= 0) return false; const [lo, hi] = RANGE[f] ?? [-720, 720]; return v >= lo && v <= hi; };
 const ref = (v) => (typeof v === 'string' && /^[$@][A-Za-z0-9_-]{1,24}$/.test(v) ? v : null);
 const isText = (v) => typeof v === 'string' && /^[\x20-\x7e]*$/.test(v) && v.length <= LIMITS.text && !/^[$@]/.test(v);
 
 /** A literal's check against a field type; returns an error string or ''. */
-function literal(type, v, assets) {
+function literal(type, v, assets, f) {
   switch (type) {
-    case 'num': return isNum(v) ? '' : 'must be a number';
+    case 'num': return !isNum(v) ? 'must be a number' : f && !inRange(f, v) ? `is out of range (${v})` : '';
     case 'text': return isText(v) ? '' : `must be printable ASCII of at most ${LIMITS.text} characters, not starting with $ or @`;
     case 'color': return typeof v === 'string' && COLOR_RE.test(v) ? '' : 'must be #rrggbb';
     case 'asset': return assets[v] ? '' : `names no asset (${JSON.stringify(v)})`;
@@ -93,9 +96,9 @@ export function checkPackage(pkg, id) {
     l.items.forEach((it, i) => {
       const where = `${at} item ${i}`, fields = { ...COMMON, ...ITEMS[it.k] };
       if (!ITEMS[it.k]) return bad.push(`${where}: unknown k ${JSON.stringify(it.k)}`);
-      const value = (f, type, v) => {
+      const value = (f, type, v, rf = f) => {
         const r = ref(v);
-        if (!r) { const e = literal(type, v, assets); if (e) bad.push(`${where}: ${f} ${e}`); return; }
+        if (!r) { const e = literal(type, v, assets, rf); if (e) bad.push(`${where}: ${f} ${e}`); return; }
         if (r[0] === '$') {
           const p = r.slice(1); used.add(p);
           if (!params[p]) bad.push(`${where}: ${f} reads $${p}, which is not a param`);
@@ -107,8 +110,8 @@ export function checkPackage(pkg, id) {
         if (!type) { bad.push(`${where}: unknown field ${f} for ${it.k}`); continue; }
         if (f === 'k') continue;
         if (f === 'each') { if (!ref(v)?.startsWith('$')) bad.push(`${where}: each must be "$<list param>"`); else value(f, 'list', v); continue; }
-        if (f === 'pts') { if (!Array.isArray(v) || v.length < 2 || v.length > LIMITS.points || !v.every((p) => Array.isArray(p) && p.length === 2)) bad.push(`${where}: pts must be 2..${LIMITS.points} [x, y] points`); else v.flat().forEach((e) => value(f, 'num', e)); continue; }
-        if (f === 'polar') { if (!Array.isArray(v) || v.length !== 2) bad.push(`${where}: polar must be [angle, radius]`); else v.forEach((e) => value(f, 'num', e)); continue; }
+        if (f === 'pts') { if (!Array.isArray(v) || v.length < 2 || v.length > LIMITS.points || !v.every((p) => Array.isArray(p) && p.length === 2)) bad.push(`${where}: pts must be 2..${LIMITS.points} [x, y] points`); else v.flat().forEach((e, i) => value(f, 'num', e, i & 1 ? 'y' : 'x')); continue; }
+        if (f === 'polar') { if (!Array.isArray(v) || v.length !== 2) bad.push(`${where}: polar must be [angle, radius]`); else v.forEach((e, i) => value(f, 'num', e, i ? 'r' : 'a0')); continue; }
         value(f, type, v);
       }
       if ('polar' in it && ('x' in it || 'y' in it)) bad.push(`${where}: polar replaces x, y: give one or the other`);
@@ -145,20 +148,20 @@ export function bind(pkg, layoutName, params = {}) {
     const rows = it.each ? params[it.each.slice(1)] : [null];
     for (const row of rows) {
       if (it.each && (row === null || typeof row !== 'object' || Array.isArray(row))) throw new ParamError(`${it.each} elements must be objects`);
-      const get = (f, type, v) => {
+      const get = (f, type, v, rf = f) => {
         const r = ref(v);
         if (!r) return v;
         const got = r[0] === '$' ? params[r.slice(1)] : row[r.slice(1)];
         if (got === undefined) throw new ParamError(`${f}: ${r} is missing`);
-        const e = literal(type, got, pkg.assets);
+        const e = literal(type, got, pkg.assets, rf);
         if (e) throw new ParamError(`${f} (${r}) ${e}`);
         return got;
       };
       const o = { k: it.k };
       for (const [f, v] of Object.entries(it)) {
         if (f === 'k' || f === 'each') continue;
-        if (f === 'pts') { o.pts = v.map((pt) => pt.map((e) => get(f, 'num', e))); continue; }
-        if (f === 'polar') { const [a, r] = v.map((e) => get(f, 'num', e)); o.x = r * Math.cos((a * Math.PI) / 180); o.y = r * Math.sin((a * Math.PI) / 180); continue; }
+        if (f === 'pts') { o.pts = v.map((pt) => pt.map((e, i) => get(f, 'num', e, i ? 'y' : 'x'))); continue; }
+        if (f === 'polar') { const [a, r] = v.map((e, i) => get(f, 'num', e, i ? 'r' : 'a0')); o.x = r * Math.cos((a * Math.PI) / 180); o.y = r * Math.sin((a * Math.PI) / 180); continue; }
         o[f] = get(f, fields[f], v);
       }
       out.push({ ...DEFAULTS, off: l.dur > 0 ? l.dur : Infinity, ...o });
