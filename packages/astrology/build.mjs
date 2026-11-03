@@ -12,6 +12,7 @@ const n3 = (v) => +v.toFixed(3) + 0;
 const TAU = Math.PI * 2;
 const DIM = '#3a3e4e', GRID = '#565b72', INK = '#c8cce0', SIGN_INK = ['#ff9a7a', '#a8d890', '#9fc0ff'];
 export const SIGNS = ['aries', 'taurus', 'gemini', 'cancer', 'leo', 'virgo', 'libra', 'scorpio', 'sagittarius', 'capricorn', 'aquarius', 'pisces'];
+const ASPECT_INK = { sextiles: '#6fe0a0', squares: '#ff6a55', trines: '#7fb0ff', oppositions: '#ff5fa0' };
 export const BODIES = { sun: '#ffd678', moon: '#e6e6e0', mercury: '#c8bcb0', venus: '#fff0c4', mars: '#ff7a55', jupiter: '#ffc266', saturn: '#e8d890', uranus: '#9fe3e0', neptune: '#8fb4ff', pluto: '#c0a0d0' };
 
 // ---- strokes, in a -1..1 box, y up
@@ -130,31 +131,31 @@ const wheel = () => [
   ...SIGNS.map((s, i) => ({ k: 'glyph', asset: s, size: 0.09, polar: [n3((195 + 30 * i) % 360), 0.825], color: SIGN_INK[i % 3] })),
 ];
 const num = 'number', text = 'text', list = 'list';
-const body = (name, on, off, r, spin) => ({ k: 'ball', on, off, x: 0, y: 0, r, img: name, lit: `$${name}_lit`, side: `$${name}_side`, spin });
-const PLANETS = ['mercury', 'venus', 'mars', 'jupiter', 'saturn'];
-// The lab's tonight shots: moon, the five bright planets, then the moon's sign.
-const T = [0.2, 3.2, 5.48, 7.72, 9.96, 12.21, 14.45, 18.57];
-const SPIN = { mercury: 2, venus: 3, mars: 7, jupiter: 29, saturn: 17, sun: 6 }; // degrees per second, for show
+// The lab's tonight is a run of shots; here each is its own small layout, and the skill queues them:
+// globe (the moon, then each planet), saturn (with its rings), sign (the moon's sign).
+const SPIN = { sun: 6 }; // degrees per second, for show
+const each = (list, item) => ({ ...item, each: list });
 const layouts = {
-  tonight: {
-    dur: 18.77,
-    params: { moon_lit: num, moon_side: num, ...Object.fromEntries(PLANETS.flatMap((p) => [[`${p}_lit`, num], [`${p}_side`, num]])), rings: text, sign: text },
+  globe: { dur: 2.5, params: { img: text, lit: num, side: num, r: num, spin: num }, items: [{ k: 'ball', r: '$r', img: '$img', lit: '$lit', side: '$side', spin: '$spin' }] },
+  saturn: {
+    dur: 2.5,
+    params: { lit: num, side: num, rings: text },
     items: [
-      { k: 'ball', on: T[0], off: T[1], x: 0, y: 0, r: 0.62, img: 'moon', lit: '$moon_lit', side: '$moon_side', spin: 0 },
-      ...PLANETS.slice(0, 4).map((p, i) => body(p, T[i + 1], T[i + 2], 0.58, SPIN[p])),
-      { k: 'glyph', on: T[5], off: T[6], x: 0, y: 0, size: 1.462, asset: '$rings', rot: 180, color: '#ead9a0' },
-      body('saturn', T[5], T[6], 0.34, SPIN.saturn),
-      { k: 'glyph', on: T[5], off: T[6], x: 0, y: 0, size: 1.462, asset: '$rings', rot: 0, color: '#ead9a0' },
-      { k: 'glyph', on: T[6], off: T[7], x: 0, y: 0, size: 1.2, asset: '$sign', color: '#ffe9b0' },
+      { k: 'glyph', size: 1.462, asset: '$rings', rot: 180, color: '#ead9a0' },
+      { k: 'ball', r: 0.34, img: 'saturn', lit: '$lit', side: '$side', spin: 17 },
+      { k: 'glyph', size: 1.462, asset: '$rings', rot: 0, color: '#ead9a0' },
     ],
   },
+  sign: { dur: 4, params: { sign: text }, items: [{ k: 'glyph', size: 1.2, asset: '$sign', color: '#ffe9b0' }] },
+  // bodies: {g: glyph asset, a: chart angle, r: radius, c: colour}; each aspect list: lines {x1, y1, x2, y2} in its colour
   chart: {
     dur: 0,
-    params: { inner: num, aspects: list, ...Object.fromEntries(Object.keys(BODIES).flatMap((b) => [[b, num], [`${b}_r`, num]])) },
+    params: { inner: num, bodies: list, ...Object.fromEntries(Object.keys(ASPECT_INK).map((k) => [k, list])) },
     items: [
       ...wheel(), { k: 'ring', r: '$inner', color: DIM },
-      { k: 'line', each: '$aspects', pts: '@p', color: '@c' },
-      ...Object.entries(BODIES).flatMap(([b, c]) => [{ k: 'ticks', r: 0.66, len: 0.07, n: 1, a0: `$${b}`, color: GRID }, { k: 'glyph', asset: `g-${b}`, size: 0.12, polar: [`$${b}`, `$${b}_r`], color: c }]),
+      ...Object.entries(ASPECT_INK).map(([k, c]) => each(`$${k}`, { k: 'line', pts: [['@x1', '@y1'], ['@x2', '@y2']], color: c })),
+      each('$bodies', { k: 'ticks', r: 0.66, len: 0.07, n: 1, a0: '@a', color: GRID }),
+      each('$bodies', { k: 'glyph', asset: '@g', size: 0.12, polar: ['@a', '@r'], color: '@c' }),
     ],
   },
   signs: (() => {
@@ -163,28 +164,27 @@ const layouts = {
     const one = SIGNS.map((s, i) => ({ k: 'glyph', on: n3(4.2 + i * 2.3), off: n3(4.2 + (i + 1) * 2.3), asset: s, size: 1.1, x: 0, y: 0, color: SIGN_INK[i % 3] }));
     return { dur: 36, params: {}, items: [...grid(0.2, 4.2), ...one, ...grid(31.8, 35.8)] };
   })(),
+  // a, b: the two bodies' chart angles (the arc runs a to b); lines: the aspect's figure and chord {x1, y1, x2, y2, c, on}
   aspect: {
     dur: 5,
-    params: { a: num, b: num, c: text, ga: text, gb: text, ca: text, cb: text, rb: num, fig: list, chord: list, deg: text, tx: num, ty: num },
+    params: { a: num, b: num, c: text, bodies: list, lines: list, deg: text, tx: num, ty: num },
     items: [
       ...wheel(),
       { k: 'ticks', r: 0.1, len: 0.62, n: 12, a0: 0, color: DIM }, { k: 'ring', r: 0.2, color: DIM }, { k: 'ring', r: 0.4, color: DIM }, { k: 'ring', r: 0.6, color: GRID },
-      { k: 'line', pts: '$fig', color: GRID },
-      { k: 'arc', on: 0.4, r: 0.28, w: 0.012, a0: '$a', a1: '$b', color: '$c' },
+      each('$lines', { k: 'line', on: '@on', pts: [['@x1', '@y1'], ['@x2', '@y2']], color: '@c' }),
+      { k: 'arc', on: 0.4, r: 0.28, a0: '$a', a1: '$b', color: '$c' },
       { k: 'ticks', r: 0, len: 0.6, n: 1, a0: '$a', color: '$c' },
       { k: 'ticks', on: 0.4, r: 0, len: 0.6, n: 1, a0: '$b', color: '$c' },
-      { k: 'line', on: 1.2, pts: '$chord', w: 0.012, color: '$c' },
       { k: 'text', on: 0.4, x: '$tx', y: '$ty', size: 0.2, str: '$deg', color: '#ffffff' },
-      { k: 'glyph', asset: '$ga', size: 0.13, polar: ['$a', 0.6], color: '$ca' },
-      { k: 'glyph', asset: '$gb', size: 0.13, polar: ['$b', '$rb'], color: '$cb' },
+      each('$bodies', { k: 'glyph', asset: '@g', size: 0.13, polar: ['@a', '@r'], color: '@c' }),
     ],
   },
   // Events: a body crossing another, from a path of keyframes {x, y, on, off} the skill computes.
-  transit: { dur: 6, params: { path: list }, items: [{ k: 'ball', x: 0, y: 0, r: 0.55, img: 'sun', lit: 1, side: 1, spin: SPIN.sun }, { k: 'disc', each: '$path', x: '@x', y: '@y', on: '@on', off: '@off', r: 0.05, color: '#000000' }] },
-  'solar-eclipse': { dur: 6, params: { path: list, moon_r: num }, items: [{ k: 'ball', x: 0, y: 0, r: 0.5, img: 'sun', lit: 1, side: 1, spin: SPIN.sun }, { k: 'disc', each: '$path', x: '@x', y: '@y', on: '@on', off: '@off', r: '$moon_r', color: '#000000' }] },
-  occultation: { dur: 6, params: { path: list, planet: text }, items: [{ k: 'ball', x: 0, y: 0, r: 0.09, img: '$planet', lit: 1, side: 1, spin: 10 }, { k: 'ball', each: '$path', x: '@x', y: '@y', on: '@on', off: '@off', r: 0.45, img: 'moon', lit: 0.99, side: 1, spin: 0 }] },
-  appulse: { dur: 6, params: { path: list, a: text, b: text }, items: [{ k: 'ball', x: 0, y: 0, r: 0.2, img: '$a', lit: 1, side: 1, spin: 10 }, { k: 'ball', each: '$path', x: '@x', y: '@y', on: '@on', off: '@off', r: 0.13, img: '$b', lit: 1, side: 1, spin: 10 }] },
-  'lunar-eclipse': { dur: 6, params: { path: list, umbra: num, pen: num, moon_r: num }, items: [{ k: 'ring', r: '$pen', color: DIM }, { k: 'ring', r: '$umbra', color: '#8a3a2a' }, { k: 'ball', each: '$path', x: '@x', y: '@y', on: '@on', off: '@off', r: '$moon_r', img: '@img', lit: 1, side: 1, spin: 0 }] },
+  transit: { dur: 6, params: { path: list }, items: [{ k: 'ball', r: 0.55, img: 'sun', spin: SPIN.sun }, { k: 'disc', each: '$path', x: '@x', y: '@y', on: '@on', off: '@off', r: 0.05, color: '#000000' }] },
+  'solar-eclipse': { dur: 6, params: { path: list, moon_r: num }, items: [{ k: 'ball', r: 0.5, img: 'sun', spin: SPIN.sun }, { k: 'disc', each: '$path', x: '@x', y: '@y', on: '@on', off: '@off', r: '$moon_r', color: '#000000' }] },
+  occultation: { dur: 6, params: { path: list, planet: text }, items: [{ k: 'ball', r: 0.09, img: '$planet', spin: 10 }, { k: 'ball', each: '$path', x: '@x', y: '@y', on: '@on', off: '@off', r: 0.45, img: 'moon', lit: 0.99 }] },
+  appulse: { dur: 6, params: { path: list, a: text, b: text }, items: [{ k: 'ball', r: 0.2, img: '$a', spin: 10 }, { k: 'ball', each: '$path', x: '@x', y: '@y', on: '@on', off: '@off', r: 0.13, img: '$b', spin: 10 }] },
+  'lunar-eclipse': { dur: 6, params: { path: list, umbra: num, pen: num, moon_r: num }, items: [{ k: 'ring', r: '$pen', color: DIM }, { k: 'ring', r: '$umbra', color: '#8a3a2a' }, { k: 'ball', each: '$path', x: '@x', y: '@y', on: '@on', off: '@off', r: '$moon_r', img: '@img' }] },
 };
 
 const pkg = { v: 'molty-pkg/1', id: 'astrology', name: 'Astrology', version: '1.0.0', kind: 'scenes', assets, layouts };
