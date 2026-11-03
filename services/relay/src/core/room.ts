@@ -54,7 +54,7 @@ import {
   type ActivityOwnerRequest,
 } from "./api.js";
 import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
-import { DEFAULT_WPM, WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, GESTURES_CAP, RESUME_CAP, RESUME_FEATURE, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
+import { DEFAULT_WPM, PKG_CAP, SCENE_CAP, WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, GESTURES_CAP, RESUME_CAP, RESUME_FEATURE, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
 import { FIRST_WORDS_MODES, type FirstWordsMode, OPENER, type OpenerMessage, guardOpener, hangs, pushHistory, stripRepeat } from "./opener.js";
 import { PcmFeed, estimateSpeechMs, splitSpeech, synthesize } from "./speech.js";
 import { DEFAULT_PARTIAL_POLICY, DRAFT_DROPPED_EVENT, DRAFT_USED_EVENT, type DropReason, PARTIAL_EVENT, PartialChunker, PauseTracker, judgeDraft, words } from "./partials.js";
@@ -192,6 +192,10 @@ export interface RoomTimings {
   updateConfirmMs: number;
   /** update: from the human's accept until the device is back on the new firmware. */
   updateMs: number;
+  /** pkg.install: how long the on-screen "install?" waits for a tap (sent as timeout_ms). */
+  pkgConfirmMs: number;
+  /** pkg.install: from the cmd until the device's `pkg` event (the tap, the download, the hash check). */
+  pkgInstallMs: number;
   /** voice box: after the listen ended, how long its streaming STT may take for the final text. */
   boxSttFinalMs: number;
   /** react: how long a react's mood shows before Molty returns to listening. */
@@ -221,6 +225,8 @@ export const DEFAULT_TIMINGS: RoomTimings = {
   askGraceMs: 5000,
   updateConfirmMs: 60000,
   updateMs: 5 * 60 * 1000,
+  pkgConfirmMs: 60000,
+  pkgInstallMs: 120000, // the tap, then at most 256 KB to download and hash
   boxSttFinalMs: 5000,
   reactShowMs: REACT_SHOW_MS,
   partialLeadMs: DEFAULT_PARTIAL_POLICY.lead_ms,
@@ -459,7 +465,7 @@ interface BoxStats {
 /** Which provider serves one say / listen. */
 type VoicePick = { ok: true; provider: VoiceProvider; name: string; mode: VoiceMode; box: boolean; cfg: VoiceCfg } | { ok: false; error: string; message: string };
 
-type JobKind = "say" | "listen" | "talk" | "ask" | "update" | "quick";
+type JobKind = "say" | "listen" | "talk" | "ask" | "update" | "quick" | "pkg";
 
 /** How an ask ended: a tap (index + label) or no answer (reason). */
 type AskAnswer = { index: number; label: string; reason?: undefined } | { index: null; label: null; reason: "timeout" | "cancelled" | "offline" };
@@ -660,6 +666,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private readonly sayWake = new Map<string, () => void>();
   /** Asks shown (or being shown) on the device, by job: the device's `answer` resolves them. */
   private readonly pendingAsks = new Map<string, PendingAsk>();
+  /** pkg.install jobs waiting for the device's `pkg` event: job -> {package id, settle}. */
+  private readonly pendingPkgs = new Map<string, { id: string; settle(o: Outcome<JsonObject>): void }>();
   private listenBuf: ListenBuffer | undefined;
   private audioJob: string | undefined;
   /**
@@ -956,6 +964,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (frame.name === "link_code") await this.onLinkCode(data.link_code);
     if (frame.name === "answer") return this.onAnswer(data); // its inbox event is appended when the ask job ends
     if (frame.name === "update") return this.onUpdateEvent(data); // relay-internal: drives the molty_update job
+    if (frame.name === "pkg") return this.onPkgEvent(data); // relay-internal: ends the pkg.install job
     if (frame.name === "shake") return this.onShake(data); // may start the shake's listen job
     const clean = agentEventData(frame.name, data);
     if (clean) await this.appendEvent(frame.name, clean);
@@ -1129,6 +1138,12 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         return fail("unsupported", "this Molty has no working mood (no `working` in its caps)");
       }
     }
+    if (cmd.name.startsWith("pkg.") || cmd.name.startsWith("scene.")) {
+      // packages and scenes (docs/PACKAGES.md): caps are the truth, a device without them is a clean 409
+      const pkg = cmd.name.startsWith("pkg.");
+      if (!live.getMeta()?.caps?.includes(pkg ? PKG_CAP : SCENE_CAP)) return fail("unsupported", `this Molty's firmware has no ${pkg ? "packages" : "scenes"} (no \`${pkg ? PKG_CAP : SCENE_CAP}\` in its caps): update it`);
+      if (cmd.name === "pkg.install") return this.startJob("pkg", cmd.args, false, by);
+    }
     if (cmd.name === "gestures") {
       const caps = live.getMeta()?.caps;
       if (caps && !caps.includes(GESTURES_CAP)) return fail("unsupported", "this Molty's firmware has no gesture settings: update it");
@@ -1166,7 +1181,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       return this.startJob(cmd.name as "say" | "listen", cmd.args, true, by);
     }
     let res: Outcome<JsonObject>;
-    if (cmd.name === "mood") {
+    if (cmd.name === "mood" || cmd.name === "scene.play") {
       // Counted only once the device took it: a refused mood (pairing prompt up, bad
       // state) must not silence the automatic thinking/idle that follows.
       this.screenInFlight++;
@@ -1178,7 +1193,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       if (res.ok) this.screenRev++;
     } else res = await this.sendCmd(cmd.name, cmd.args);
     // the agent is on it (a feeling, text, a gesture): Molty's own filler stands down
-    if (res.ok && (cmd.name === "mood" || cmd.name === "show" || cmd.name === "act" || (cmd.name === "state" && Object.keys(cmd.args).length > 0))) this.agentSeq++;
+    if (res.ok && (cmd.name === "mood" || cmd.name === "show" || cmd.name === "act" || cmd.name === "scene.play" || (cmd.name === "state" && Object.keys(cmd.args).length > 0))) this.agentSeq++;
     if (!res.ok || cmd.name !== "status") return res;
     const sock = this.liveSocket();
     const meta = sock?.getMeta();
@@ -1528,6 +1543,44 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     };
   }
 
+  /**
+   * pkg.install (docs/PACKAGES.md): the device asks its owner and answers the cmd at once ({job, id},
+   * or a refusal); the outcome comes later as its `pkg` event. The bytes never pass through here.
+   */
+  private async runPkgInstall(id: string, args: JsonObject) {
+    await this.setJob(id, { status: "running", phase: "confirm" });
+    let settle!: (o: Outcome<JsonObject>) => void;
+    let ended: Outcome<JsonObject> | undefined;
+    const done = new Promise<Outcome<JsonObject>>((resolve) => (settle = (o) => resolve((ended ??= o))));
+    // registered before the cmd goes out: the event may overtake the cmd's `res`
+    this.pendingPkgs.set(id, { id: args.id as string, settle });
+    const timer = this.clock.setTimeout(() => settle(fail("pkg_timeout", "Molty did not report the install in time: nobody tapped its question, or the download stalled; pkg.list shows whether it landed")), this.t.pkgInstallMs);
+    try {
+      const res = await this.sendCmd("pkg.install", { ...args, job: id, timeout_ms: this.t.pkgConfirmMs });
+      // a refusal comes in the res; a lost ack (device_timeout) may still be followed by the event
+      if (!res.ok && res.error !== "device_timeout") settle(res);
+      const out = await done;
+      await this.finishJob(id, out.ok ? { status: "done", result: out.result } : { status: "failed", error: out.error, ...(out.message ? { detail: out.message } : {}) });
+    } finally {
+      this.clock.clearTimeout(timer);
+      this.pendingPkgs.delete(id);
+    }
+  }
+
+  /** Device `pkg {job?, id, state: installed|declined|failed, version?, reason?, error?}`: ends its pkg.install job, once. */
+  private async onPkgEvent(data: Record<string, unknown>) {
+    const short = (v: unknown) => (typeof v === "string" && /^[\x20-\x7e]{1,64}$/.test(v) ? v : undefined);
+    const job = typeof data.job === "string" ? data.job : [...this.pendingPkgs].find(([, p]) => p.id === data.id)?.[0];
+    const p = job ? this.pendingPkgs.get(job) : undefined;
+    if (!p || data.id !== p.id) return;
+    const reason = short(data.reason), error = short(data.error), version = short(data.version);
+    if (data.state === "installed") p.settle({ ok: true, result: { installed: p.id, ...(version ? { version } : {}) } });
+    else if (data.state === "declined") p.settle(fail("declined", reason === "timeout" ? "nobody tapped Molty's install question in time" : reason === "cancelled" ? "Molty's install question was cancelled" : "your human said no on Molty"));
+    else if (data.state === "failed") p.settle(fail(error && /^[a-z0-9_]+$/.test(error) ? error : "install_failed", `Molty could not install ${p.id}${error ? ` (${error})` : ""}`));
+    else return;
+    await this.activity.device("pkg", { job: job!, id: p.id, state: data.state as string, ...(reason ? { reason } : {}), ...(error ? { error } : {}), ...(version ? { version } : {}) });
+  }
+
   /** Sends `cmd update` and arms the deadline; the rest is driven by device events and the next hello. */
   private async runUpdate(id: string, args: JsonObject) {
     const now = this.clock.now();
@@ -1721,6 +1774,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
               ? this.runUpdate(id, args)
               : kind === "quick"
                 ? this.runQuick(id, args, now, ready)
+                : kind === "pkg"
+                  ? this.runPkgInstall(id, args)
                 : this.runTalk(id, args as unknown as TalkArgs, now, ready);
     run
       .catch((e: unknown) => this.finishJob(id, { status: "failed", error: errorCode(e) }))
