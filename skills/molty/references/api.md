@@ -89,6 +89,12 @@ Success: `200 {"ok":true,"result":{…}}`. Unknown argument keys are rejected.
 | `imu` | — | ax/ay/az (g), gx/gy/gz (°/s), ms | one motion-sensor snapshot |
 | `diag` | `{"timeline"?: 0..180}` | diagnostics JSON | frame/CPU/heap/network health; timeline = seconds of 1 Hz rows |
 | `log` | `{"since"?: n, "max"?: 1024..32768}` | `{next, text}` | device log tail; pass `next` back as `since` |
+| `pkg.install` | `{"id", "url", "sha256", "size", "name"}` (an entry of the repo's `packages/index.json`) | `{job}`; done → `{installed, version}` | Molty asks its human with one tap, downloads the file itself and checks its sha256 ([packages](#packages-and-scenes)); errors `declined` (said no, or no tap in time), `pkg_timeout`, `bad_url`, `too_big`, `hash_mismatch`, `bad_package`, `no_space`, `busy` |
+| `pkg.remove` | `{"id"}` | `{removed}` | `not_installed` if it is not there |
+| `pkg.list` | none | `{packages: [{id, name, version, kind, size}]}` | what this Molty has installed |
+| `scene.play` | `{"pkg", "layout", "params"?: {…}, "ttl_s"?: 1..600}` | none | replaces the screen with a package's layout, drawn from a few params (≤ 2048 bytes); back to the creature after `ttl_s` (default 60); `not_installed`, `no_layout`, `bad_params` |
+| `scene.queue` | same as `scene.play` | none | plays after the current scene ends |
+| `scene.clear` | none | none | melts back to the creature |
 
 **Timing.** Short commands answer inline within ~10 s. `say` and `listen` are
 **async jobs**: they return `{job}` at once; poll `GET /v1/jobs/<job>?wait_s=0..8` until
@@ -96,7 +102,8 @@ Success: `200 {"ok":true,"result":{…}}`. Unknown argument keys are rejected.
 (`{"name":"say","args":{…},"wait":true}`) and the call blocks until the job is done (at most
 24 s; past that `202` with `{"job","status":"pending"}`, finish with the jobs URL). Only one
 audio job runs at a time (`409 audio_busy`) — wait for a `say` to finish before the
-next `say`/`listen`.
+next `say`/`listen`. `pkg.install` is a job too (it waits for the human's tap): add `"wait": true`
+or poll its job.
 
 ## Gestures: act and inline cues
 
@@ -391,11 +398,20 @@ Any successful authenticated response may also carry, additively at the top leve
 
 Ignore fields you don't know.
 
+## Packages and scenes
+
+A package is data only (shapes, images, layouts) that teaches Molty to draw something new; it
+lives in the repo (`packages/`, listed in `packages/index.json`) and Molty downloads it itself.
+The commands need `pkg` / `scene` in `relay.caps` (`409 unsupported` otherwise). Don't drive
+them by hand: a skill that knows the package sends them, e.g. **molty-astro** for the sky
+(`https://github.com/apresmoi/molty.uno/tree/main/skills/molty-astro`). The format:
+`https://github.com/apresmoi/molty.uno/blob/main/docs/PACKAGES.md`.
+
 ## MCP (optional)
 
 The same features are a remote MCP server at `$MOLTY_RELAY/mcp` (streamable HTTP, bearer
 auth). Tools: `molty_pair` (no token needed), `molty_talk`, `molty_quick`, `molty_phrases`, `molty_ask`, `molty_status`, `molty_mood`, `molty_act`, `molty_gestures`,
-`molty_show`, `molty_say`, `molty_listen`, `molty_wait`, `molty_state`,
+`molty_package`, `molty_scene`, `molty_show`, `molty_say`, `molty_listen`, `molty_wait`, `molty_state`,
 `molty_volume`, `molty_imu`, `molty_diag`, `molty_log`, `molty_events`,
 `molty_webhook`, `molty_updates`, `molty_update`, `molty_activity`, `molty_draft`, `molty_react`,
 `molty_notes`. Claude Code example:

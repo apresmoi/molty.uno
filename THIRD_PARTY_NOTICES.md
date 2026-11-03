@@ -117,6 +117,10 @@ Serial:
 - atob-lite 2.0.0 — MIT. tslib 2.8.1 — © Microsoft, 0BSD.
 Apache-2.0 text: https://www.apache.org/licenses/LICENSE-2.0.txt
 
+## molty-astro skill (skills/molty-astro, vendored)
+- astronomy-engine 2.1.19 (scripts/vendor/astronomy.min.js): Copyright (c) 2019-2023 Don Cross, MIT License (its
+  full text heads the file).
+
 ## Hosted services (no code licence; terms of use apply)
 The optional cloud relay calls Cloudflare Workers AI models @cf/deepgram/aura-2-en
 (TTS) and @cf/openai/whisper-large-v3-turbo (STT), governed by Cloudflare's and the
