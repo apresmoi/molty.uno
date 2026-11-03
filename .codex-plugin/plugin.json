@@ -20,7 +20,7 @@
   "interface": {
     "displayName": "Molty",
     "shortDescription": "Talk to your human through Molty",
-    "longDescription": "Connect your agent to Molty, the round desk device that talks: pair with a tap, talk and listen in one call per turn, ask tap-button questions, show moods, and answer when your human shakes Molty and speaks. One skill: the Molty agent API, event handling, latency and etiquette rules, and shell helpers.",
+    "longDescription": "Connect your agent to Molty, the round desk device that talks: pair with a tap, talk and listen in one call per turn, ask tap-button questions, show moods, and answer when your human shakes Molty and speaks. Two skills: molty (the Molty agent API, event handling, latency and etiquette rules, and shell helpers) and molty-astro (the real sky drawn on Molty's screen).",
     "developerName": "apresmoi",
     "category": "Productivity",
     "capabilities": [

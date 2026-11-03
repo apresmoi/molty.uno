@@ -81,7 +81,7 @@ export const TERMINAL: readonly JobStatus[] = ["done", "failed"];
 
 export interface JobView {
   job: string;
-  kind: "say" | "listen" | "talk" | "ask" | "update" | "quick";
+  kind: "say" | "listen" | "talk" | "ask" | "update" | "quick" | "pkg";
   status: JobStatus;
   result?: JsonObject;
   error?: string;

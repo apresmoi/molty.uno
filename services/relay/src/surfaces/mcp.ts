@@ -11,7 +11,7 @@
 
 import { type AgentApi, type FirmwareNotice, type Inbox, type JobView, type Outcome, type RelayBackend, bearer, tokenDevice } from "../core/api.js";
 import { BUILTIN_PHRASES, FILLER_DEFAULT_MS, PHRASE_LIMITS } from "../core/phrases.js";
-import { ACK_THINK_S, ACTIONS, GESTURE_INPUTS, COLORS, DEFAULT_ASK_COLORS, DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, LISTEN_CEILING_MS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, MAX_DRAFTS_PER_TURN, MAX_DRAFT_NEW_WORDS, MAX_LISTEN_MS, MAX_MOOD_HOLD_S, MAX_OPENER_WORDS, MOODS, REACT_ACTIONS, REACT_MIN_GAP_MS, REACT_MOODS, TALK_BUDGET_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
+import { ACK_THINK_S, ACTIONS, GESTURE_INPUTS, COLORS, DEFAULT_ASK_COLORS, DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, LISTEN_CEILING_MS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, MAX_DRAFTS_PER_TURN, MAX_DRAFT_NEW_WORDS, MAX_LISTEN_MS, MAX_MOOD_HOLD_S, MAX_OPENER_WORDS, MAX_SCENE_PARAMS_BYTES, MAX_SCENE_TTL_S, MOODS, REACT_ACTIONS, REACT_MIN_GAP_MS, REACT_MOODS, TALK_BUDGET_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
 import { NOTES_LIMITS } from "../core/notes.js";
 
 /** say / talk / ask: inline [mood] / [action] cues in the spoken text. */
@@ -65,7 +65,7 @@ const IN_REPLY_TO: Prop = {
 };
 
 /** say/listen with `wait: true` block on their job (bounded), returning what molty_wait would. */
-async function commandWait(api: AgentApi, t: string, name: "say" | "listen", a: Record<string, unknown>): Promise<Outcome<JsonObject>> {
+async function commandWait(api: AgentApi, t: string, name: "say" | "listen" | "pkg.install", a: Record<string, unknown>): Promise<Outcome<JsonObject>> {
   const { wait, ...args } = a;
   const start = Date.now();
   const out = await api.command(t, name, args);
@@ -139,6 +139,40 @@ export const TOOLS: ToolDef[] = [
     inputSchema: obj({ action: { type: "string", description: `One of ${ACTIONS.join(", ")}.`, enum: [...ACTIONS] } }, ["action"]),
     auth: true,
     run: (api, t, a) => api.command(t, "act", a),
+  },
+  {
+    name: "molty_package",
+    description: `Packages (cap pkg): data-only drawings a Molty keeps, e.g. the astrology package (docs/PACKAGES.md). op list -> {packages:[{id, name, version, kind, size}]}; op remove {id}; op install {id, url, sha256, size, name} from the repo's packages/index.json: Molty asks its owner with one tap, downloads the file itself, checks its sha256 and stores it -> {installed, version}, or declined, bad_url, too_big, hash_mismatch, no_space, busy. install is a job: wait true blocks at most ${TALK_BUDGET_MS / 1000} s, then {job, status:"pending"} (molty_wait). Use a skill that knows the package (molty-astro), not raw calls.`,
+    inputSchema: obj(
+      {
+        op: { type: "string", enum: ["install", "remove", "list"], description: "install, remove or list." },
+        id: { type: "string", description: "Package id (a-z 0-9 -), for install and remove." },
+        url: { type: "string", description: "install: the package file's raw URL in the repo." },
+        sha256: { type: "string", description: "install: the file's sha256 (hex), from packages/index.json." },
+        size: { type: "integer", description: "install: the file's size in bytes." },
+        name: { type: "string", description: "install: the name Molty shows in its question." },
+        wait: { type: "boolean", description: "install: block until it is installed (bounded)." },
+      },
+      ["op"],
+    ),
+    auth: true,
+    run: (api, t, { op, ...a }) => (op === "install" ? commandWait(api, t, "pkg.install", a) : api.command(t, `pkg.${op}`, a)),
+  },
+  {
+    name: "molty_scene",
+    description: `Scenes (cap scene): op play {pkg, layout, params, ttl_s} replaces the screen with an installed package's layout, drawn from a few params (<= ${MAX_SCENE_PARAMS_BYTES} bytes of JSON); op queue plays it after the current one; op clear melts back to the creature. ttl_s (default 60, max ${MAX_SCENE_TTL_S}): back to the creature when it ends. Errors not_installed, no_layout, bad_params.`,
+    inputSchema: obj(
+      {
+        op: { type: "string", enum: ["play", "queue", "clear"], description: "play, queue or clear." },
+        pkg: { type: "string", description: "Installed package id." },
+        layout: { type: "string", description: "One of the package's layouts." },
+        params: { type: "object", description: "The layout's params." },
+        ttl_s: { type: "integer", description: `Seconds before Molty returns to the creature, 1..${MAX_SCENE_TTL_S}; default 60.` },
+      },
+      ["op"],
+    ),
+    auth: true,
+    run: (api, t, { op, ...a }) => api.command(t, `scene.${op}`, a),
   },
   {
     name: "molty_gestures",

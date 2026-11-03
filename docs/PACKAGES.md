@@ -73,6 +73,19 @@ and geometry in **glass units**: the round window has radius 1, `x` right, `y` u
 **Polar placement:** `"polar": [angle, radius]` may replace `x`, `y` on any item that has them.
 Nothing else: no expressions, no loops beyond `each`, no code. Every bound value is type-checked against `params`.
 
+### Checks and the reference player (repo side)
+
+- `packages/tools/format.mjs` holds the rules above and the firmware's limits (section 3); `tools/scripts/check-packages.mjs`
+  (run by `hygiene.sh`) applies them to every package, checks the index's size and sha256 and that `build.mjs` reproduces the file.
+- `packages/tools/play.mjs` draws a layout with its params onto the 1.46's braille lattice (52 x 32 cells of 2 x 4 dots) as a 412 px PNG:
+  `node packages/tools/play.mjs astrology chart --params '{…}' --t 1`, or `--commands <file> --stills <dir>` to replay the
+  `scene.*` commands a skill printed with `--dry-run`. What it does where the table is silent, for the firmware to compare:
+  a ball's dark side hides what is behind it (with a faint earthshine) and an image's index 0 shows nothing; a `disc` in
+  `#000000` clears what is under it (a body passing in front of the Sun); a mask lights a dot when it covers any part of it;
+  `text` uses the device's 5x7 font, `size` being the glyph height.
+- Param types: `number`, `text` (printable ASCII), `list` (flat objects, for `each`). `pts` is a literal list of points whose
+  coordinates may be bindings (`[["@x1", "@y1"], ["@x2", "@y2"]]`).
+
 ## 2. Commands (agent -> relay -> device)
 
 Over the existing command path (`link_cmd_register`), gated by device caps `pkg` and `scene`. The relay validates shapes and sizes.
@@ -134,8 +147,28 @@ Every declared param must be sent, and nothing else.
 A skill that uses a package (first: `skills/molty-astro`) keeps all domain knowledge on the agent's side. It reads `packages/index.json`,
 sends `pkg.install` once, then `scene.play` / `scene.queue` with a few params. Astrology maths runs in the skill, never on the device and never in the relay.
 
+`skills/molty-astro/scripts/astro.mjs` reads `pkg.list` and installs only when the package is missing or older than the
+index; it waits for the install job (the owner's tap, at most about 2 min) and reinstalls once when a scene answers
+`not_installed`. Its scenes stay under 1 KB of command each (a run of small layouts queued: at most 8 wait on the device).
+
 ## 5. Creature packages
 
 `kind: "creature"`: one Molty, its body and all its behaviour as data (moods, gestures, walk, fidgets, ambient effects), in the motion format
 the creature team defines (`docs/CREATURES.md`). Duck, cat and octopus ship as packages and are also baked into the firmware image as defaults,
 so a new device has them without a download. `POST /api/creature/select?id=` (console) or `creature.select { id }` (agent) swaps the active one.
+
+## 6. Relay
+
+`services/relay/src/core/commands.ts` validates, `room.ts` gates and forwards; nothing about any package is in the relay.
+
+- Caps: `pkg.*` need `pkg`, `scene.*` need `scene` in the device's hello caps; otherwise `409 unsupported` and nothing is sent.
+- `pkg.install` `{ id, url (https, at most 512 bytes), sha256 (64 lower-case hex), size (1..262144), name (1..32 printable ASCII) }`.
+  The host allowlist is the firmware's alone. The relay runs it as a job (agent: `{job}`; REST `wait: true` blocks at most
+  24 s; `GET /v1/jobs/<job>`; MCP `molty_package`): it adds `job` and `timeout_ms` (60 s for the tap), takes the device's
+  refusal from the `res`, and ends the job on the device's `pkg` event for that job (or, without `job`, that id):
+  `installed` -> `{ installed, version }`; `declined` -> error `declined` (the reason in its message); `failed` -> its `error`.
+  No event within 120 s: `pkg_timeout`.
+- `pkg.remove` `{ id }`, `pkg.list` `{}`, `scene.clear` `{}`: forwarded as they are.
+- `scene.play` / `scene.queue` `{ pkg, layout, params (an object, at most 2048 bytes of JSON), ttl_s (1..600, default 60) }`:
+  `ttl_s` is always sent. `scene.play` counts as the agent taking the screen (like `mood`): the relay's automatic moods stand down.
+- MCP: `molty_package { op: install|remove|list, … }`, `molty_scene { op: play|queue|clear, … }`.
