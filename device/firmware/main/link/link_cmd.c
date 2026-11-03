@@ -4,6 +4,7 @@
 #include "link_pair.h"
 #include "link_ask.h"
 #include "self_update.h"
+#include "pkg_cmd.h"
 #include "mole_creature.h"
 #include "molty_board.h"
 #include "sdkconfig.h"
@@ -20,7 +21,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
-static struct { const char *name; link_cmd_handler_t handler; } s_registry[16];
+#define LINK_CMD_MAX 24
+static struct { const char *name; link_cmd_handler_t handler; } s_registry[LINK_CMD_MAX];
 static size_t s_count;
 static char s_mood[16] = "idle";
 /* Bumped by every explicit mood (the link's `mood` command, a local POST with a mood)
@@ -92,7 +94,7 @@ esp_err_t link_cmd_register(const char *name, link_cmd_handler_t handler)
     for (size_t i = 0; i < s_count; i++) {
         if (!strcmp(name, s_registry[i].name)) { s_registry[i].handler = handler; return ESP_OK; }
     }
-    if (s_count == 16) return ESP_ERR_NO_MEM;
+    if (s_count == LINK_CMD_MAX) return ESP_ERR_NO_MEM;
     s_registry[s_count].name = name; s_registry[s_count++].handler = handler;
     return ESP_OK;
 }
@@ -310,6 +312,10 @@ void link_cmd_init(void)
     link_cmd_register("volume", cmd_volume); link_cmd_register("imu", cmd_imu);
     link_cmd_register("ask", link_ask_cmd);
     link_cmd_register("update", self_update_cmd);
+    link_cmd_register("pkg.install", pkg_cmd_install); link_cmd_register("pkg.remove", pkg_cmd_remove);
+    link_cmd_register("pkg.list", pkg_cmd_list);
+    link_cmd_register("scene.play", pkg_cmd_scene_play); link_cmd_register("scene.queue", pkg_cmd_scene_queue);
+    link_cmd_register("scene.clear", pkg_cmd_scene_clear);
 }
 
 static const char *s_refusal = "device_error";

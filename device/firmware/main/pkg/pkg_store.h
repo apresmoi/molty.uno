@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * pkg_store.h — installed packages on flash (docs/PACKAGES.md sections 2 and 3).
+ * pkg_store.h: installed packages on flash (docs/PACKAGES.md sections 2 and 3).
  *
  * Plain C + cJSON + stdio, no FreeRTOS / ESP-IDF: pkg_cmd.c wires it to the link, the
  * ask screen, esp_http_client and mbedtls (root "/spiffs/pkg"); test/host/pkg_test.c runs
@@ -11,7 +11,7 @@
  *             with PKG_URL_PREFIX (the only host the firmware names), use only [A-Za-z0-9._/-]
  *             after it, no "..", and end in ".json". Refusals: "invalid_args", "bad_url",
  *             "too_big" (size > PKG_FILE_MAX).
- *   install   pkg_install: download (verified TLS on the device) at most `size` bytes, check
+ *   install   pkg_fetch then pkg_store_put: download (verified TLS on the device) at most `size` bytes, check
  *             the SHA-256 and the exact size ("too_big" / "hash_mismatch"), parse it strictly
  *             ("bad_package": also when its id is not the one asked for), keep it within the
  *             quota ("no_space"), write it, then the index. Nothing is kept on any failure.
@@ -71,10 +71,13 @@ typedef struct {
     void (*sha_finish)(void *ctx, uint8_t out[32]);
 } pkg_io_t;
 
-/* Download, verify, parse and store r's package into root, using buf (r->size + 1 bytes).
- * NULL: installed, *out its index entry. Else "download" | "too_big" | "hash_mismatch" |
- * "bad_package" | "no_space" (open's own code for a connection failure). */
-const char *pkg_install(const char *root, const pkg_req_t *r, const pkg_io_t *io, uint8_t *buf, pkg_entry_t *out);
+/* Download r's package into buf (r->size + 1 bytes), checking its size and SHA-256. NULL,
+ * or "download" | "too_big" | "hash_mismatch" (open's own code for a connection failure).
+ * No lock needed: nothing is written. */
+const char *pkg_fetch(const pkg_req_t *r, const pkg_io_t *io, uint8_t *buf);
+/* Parse and store fetched bytes (r->size of buf) into root. NULL: installed, *out its index
+ * entry. Else "bad_package" | "no_space". One writer at a time (pkg_cmd.c's lock). */
+const char *pkg_store_put(const char *root, const pkg_req_t *r, const uint8_t *buf, pkg_entry_t *out);
 /* "no_space" when size more bytes (replacing id's) would pass the quota; else NULL. */
 const char *pkg_store_room(const char *root, const char *id, uint32_t size);
 /* Installed packages (their files present), up to max. */

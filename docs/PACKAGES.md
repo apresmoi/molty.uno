@@ -9,7 +9,7 @@ repo packages/<id>/      built package files live here (source of truth for now)
           │  the agent's skill says "install <id>"            (one tiny command through the relay)
           ▼
 device    asks the owner with one tap, downloads the file straight from the repo, checks its SHA-256,
-          keeps it in flash (/spiffs/pkg/<id>.json)
+          keeps it in flash (under /spiffs/pkg/)
           │  the agent says "play <layout> of <id> with these few params"   (a few hundred bytes)
           ▼
 screen    the device draws the layout from the package's own shapes and images
@@ -79,25 +79,53 @@ Over the existing command path (`link_cmd_register`), gated by device caps `pkg`
 
 | command | args | result |
 |---|---|---|
-| `pkg.install` | `{ id, url, sha256, size, name }` | the device asks the owner with one tap ("Install Astrology, 41 KB?"). Accept: download, verify, store. `{ installed: id, version }`, or error `declined`, `bad_url`, `too_big`, `hash_mismatch`, `no_space`, `busy` |
+| `pkg.install` | `{ id, url, sha256, size, name, job?, timeout_ms? }` | the device asks the owner with one tap, then answers at once `{ job?, id }` (or refuses: `invalid_args`, `bad_url`, `too_big`, `no_space`, `busy`, `unsupported` without touch). The outcome comes later as one event `{"t":"evt","name":"pkg","data":{ job?, id, state, ... }}`: `installed` (+`version`), `declined` (+`reason`: `declined`, `timeout`, `cancelled`) or `failed` (+`error`: `hash_mismatch`, `too_big`, `bad_package`, `no_space`, `download`, `tls`, `http_<code>`) |
 | `pkg.remove` | `{ id }` | `{ removed: id }` or `not_installed` |
 | `pkg.list` | `{}` | `{ packages: [{ id, name, version, kind, size }] }` |
-| `scene.play` | `{ pkg, layout, params, ttl_s }` | replaces what is on screen with the layout. `not_installed`, `no_layout`, `bad_params` |
-| `scene.queue` | same as play | plays after the current one ends |
+| `scene.play` | `{ pkg, layout, params, ttl_s }` | replaces what is on screen (and the queue) with the layout: `{ pkg, layout, ttl_s }`. `not_installed`, `no_layout`, `bad_params`, `bad_package`, `invalid_args` |
+| `scene.queue` | same as play | plays after the current one ends (at once when nothing plays); `busy` when 8 wait already |
 | `scene.clear` | `{}` | melts back to the creature |
 
 - **URL allowlist:** `url` must start with `https://raw.githubusercontent.com/apresmoi/molty.uno/` (one constant in firmware, the only place a host is named).
   The device downloads directly from there; package bytes never pass through the relay.
 - **ttl_s** (default 60, max 600): an agent that died cannot leave a scene on screen. Back to the creature when it ends.
 - A scene lives in RAM. Reboot = the creature.
+- **Why install answers at once (firmware):** commands run on the link task, which also has to see the owner's tap,
+  so it cannot wait for the question and the download. Same shape as `update`: refusals in the `res`, the outcome as an event.
+- **The question:** the ask screen's labels are 8 letters with no header, so it shows the package name (its first 8
+  letters, green) and `no` (white). The size is not shown; it is checked against 256 KB and the quota instead.
+  The name shown is the one the agent sent; the stored name and version are the file's own.
+- **Download:** straight from the allowlisted URL over verified TLS; redirects are not followed. The URL may use only
+  `[A-Za-z0-9._/-]` after the prefix, no `..` or `//`, and must end in `.json`.
+- Another screen owner (a say's words, a mood that shows the creature) drops the scene; a question covers it and it
+  flows back after. Last writer wins.
 
 ## 3. On the device
 
-- `main/pkg/`: `pkg_store` (install, remove, list, open; files under `/spiffs/pkg/`, an index file, 1 MB quota),
+- `main/pkg/`: `pkg_store` (install, remove, list, open; files under `/spiffs/pkg/`, an index file, 1 MB quota;
+  a file is named by the first 8 hex digits of its SHA-256, `/spiffs/pkg/<sha8>.json`, because SPIFFS names are at
+  most 31 characters; `index.json` maps ids to files),
   `pkg_parse` (strict, bounded JSON parse into PSRAM structs; rejects anything unknown).
 - `main/scene/`: `scene_player` (a fill target beside blob, text and creature: `FD_ST_SCENE` in the director; rasterises the items into the fluid's target field each frame; handles on/off, ttl and the queue).
 - SPIFFS can vanish (a factory flash overwrites it): a missing file is reported as not installed, and the agent reinstalls.
 - Local API on molty.local for the console: `GET /api/pkg`, `DELETE /api/pkg?id=`, `POST /api/scene` (same args as `scene.play`), `POST /api/creature/select?id=`.
+  Answers `{ ok: true, ... }` or `{ ok: false, error }`. `GET /api/creature/state` adds `scene: { pkg, layout, ttl_left }` while one plays.
+
+### What the firmware accepts (as built)
+
+Limits: 64 assets of at most 128 × 128 px, 16 palette colours; 32 layouts of at most 64 items and 8 params; 16 points a
+line or curve; names `[A-Za-z0-9_-]{1,24}`; texts printable ASCII, at most 40 characters. A scene expands to at most 128
+items and 40 letters in all; a list param has at most 32 elements, each a flat object of up to 8 numbers or texts.
+Every declared param must be sent, and nothing else.
+
+- `mask` bits and `image` nibbles are one continuous stream, rows top to bottom, no padding per row (high nibble first).
+- `ring`, `arc` and `ticks` are centred on the glass centre. `ticks` run from `r` to `r + len` (negative `len`: inward),
+  the first at `a0`. `w` (line width, default 0.03) is also allowed on `ticks`, `line` and `curve`.
+- `glyph` `size` is the asset's width (height keeps its aspect); `text` `size` is the type size; both in glass units.
+- `ball`: `lit` 0..1, `side` -1 or 1, `spin` in degrees per second; `img` (optional) wraps the sphere as an
+  equirectangular map.
+- Defaults: `color` #ffffff, `x` / `y` 0, `on` 0, `off` none, `a0` 0, `a1` 360, `n` 12, `len` 0.1, `size` 0.12, `lit` 1, `side` 1.
+- `"$name"` and `"@field"` are always bindings; a literal text cannot start with `$` or `@`.
 
 ## 4. Agents
 

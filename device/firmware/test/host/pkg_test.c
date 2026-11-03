@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * pkg_test.c — host test for main/pkg: the strict parser (pkg_parse.c) and the store
+ * pkg_test.c: host test for main/pkg: the strict parser (pkg_parse.c) and the store
  * (pkg_store.c) against a temporary directory and a fake download.
  *
  * Checks: the sample package (fixtures/shapes.json) parses with its assets, layouts, params
@@ -172,6 +172,10 @@ static void test_parse(void) {
 }
 
 static const char *ROOT;
+static const char *pkg_install(const char *root, const pkg_req_t *r, const pkg_io_t *io, uint8_t *buf, pkg_entry_t *out) {
+    const char *e = pkg_fetch(r, io, buf);
+    return e ? e : pkg_store_put(root, r, buf, out);
+}
 static char s_sha[65];
 
 static pkg_req_t req(const char *id, const char *body_sha, uint32_t size) {

@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * pkg_parse.c — a package file into bounded structs, strictly (pkg_parse.h).
+ * pkg_parse.c: a package file into bounded structs, strictly (pkg_parse.h).
  * Plain C: built into the firmware and by test/host/pkg_test.c.
  */
 #include "pkg_parse.h"

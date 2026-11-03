@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * scene_test.c — host test for main/scene/scene_player.c with the director
+ * scene_test.c: host test for main/scene/scene_player.c with the director
  * (main/fluid/fluid_director.c), on the sample package (fixtures/shapes.json).
  *
  * Checks: binding ($param), repetition (each / @field) and polar placement give the
