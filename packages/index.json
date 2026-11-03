@@ -1,0 +1,10 @@
+{
+  "astrology": {
+    "name": "Astrology",
+    "version": "1.0.0",
+    "kind": "scenes",
+    "path": "packages/astrology/astrology.json",
+    "size": 75232,
+    "sha256": "03db96b8b942ae53f1e5f985bb931a245e2f45d474178bb38e5d748642dace11"
+  }
+}
