@@ -125,6 +125,8 @@ Every declared param must be sent, and nothing else.
 - `ball`: `lit` 0..1, `side` -1 or 1, `spin` in degrees per second; `img` (optional) wraps the sphere as an
   equirectangular map.
 - Defaults: `color` #ffffff, `x` / `y` 0, `on` 0, `off` none, `a0` 0, `a1` 360, `n` 12, `len` 0.1, `size` 0.12, `lit` 1, `side` 1.
+- Items paint in order, each covering what is under it: a `disc` of `#000000` erases, a `ball` covers its whole disc
+  (its dark side too, with a faint earthshine), as `packages/tools/play.mjs` draws them. A scene queue holds 8.
 - `"$name"` and `"@field"` are always bindings; a literal text cannot start with `$` or `@`.
 
 ## 4. Agents

@@ -10,6 +10,8 @@
  * unknown layout is "no_layout"; a scene ends at its ttl (or its dur) and the director
  * goes back to the creature; the queue plays in order, play replaces it, clear empties it;
  * the fill draws what is on (on / off) where it should, and lights a ball from its side.
+ * Painter's order: a black disc erases, a ball's dark side hides what is behind it. The
+ * astrology team's package parses and every command its skill sends builds, fills and queues.
  * Then a frame-cost estimate: a busy layout (1 ring, 12 glyphs, 10 balls, 40 letters)
  * against the creature's own update + raster + fill on the same host.
  *
@@ -103,6 +105,13 @@ static void test_build(void) {
 
 /* ── ttl, dur, the queue, back to the creature ─────────────────────────────── */
 
+static char *read_file(const char *p, size_t *len) {
+    FILE *f = fopen(p, "rb"); if (!f) return NULL;
+    fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
+    char *b = malloc((size_t)n + 1); *len = fread(b, 1, (size_t)n, f); b[*len] = 0; fclose(f);
+    return b;
+}
+
 static fluid_director_t D;
 static scene_player_t SP;
 static void frame(void) {
@@ -156,6 +165,20 @@ static void test_player(void) {
     CHECK(!strcmp(order, "abc"), "played in order: %s", order);
     CHECK(D.cur == FD_ST_CREATURE && !scene_playing(&SP), "then the creature");
 
+    /* a reading queues one scene per body: 1 playing + 7 waiting, all in order */
+    char seven[16] = ""; no = 0; last = 0;
+    const char *const names[] = { "a", "b", "c", "d", "e", "f", "g", "h" };
+    for (int i = 0; i < 8; i++) CHECK(scene_queue(&SP, titled(names[i], 1.f)), "queued %s", names[i]);
+    CHECK(SP.nq == 7, "7 wait behind the one playing (%d)", SP.nq);
+    fd_request_state(&D, FD_ST_SCENE, 0, false);
+    for (int n = 0; n < 300; n++) {
+        if (shown() != last && shown() != '-' && no < 15) seven[no++] = shown();
+        last = shown();
+        frame();
+    }
+    CHECK(!strcmp(seven, "abcdefgh"), "the eight played in order: %s", seven);
+    CHECK(D.cur == FD_ST_CREATURE, "then the creature");
+
     /* play replaces the queue; a full queue refuses; clear empties */
     scene_play(&SP, titled("x", 5.f));
     for (int i = 0; i < SCENE_QUEUE_MAX; i++) scene_queue(&SP, titled("q", 5.f));
@@ -199,6 +222,103 @@ static void test_fill(void) {
     CHECK(ink_at(s, 0.6f * 0.7071f, -0.6f * 0.7071f) == 0.f, "the arc spans 0..90 only");
     fluid_sim_destroy(s);
     scene_free(sc);
+}
+
+/* painter's order (packages/tools/play.mjs): a later item covers an earlier one, a black
+ * disc erases, a ball's dark side hides what is behind it */
+static const char *OCCLUDE =
+    "{\"v\":\"molty-pkg/1\",\"id\":\"occlude\",\"name\":\"Occlude\",\"version\":\"1\",\"kind\":\"scenes\",\"layouts\":{"
+    "\"erase\":{\"items\":[{\"k\":\"disc\",\"r\":0.4},{\"k\":\"disc\",\"r\":0.15,\"color\":\"#000000\"}]},"
+    "\"under\":{\"items\":[{\"k\":\"disc\",\"r\":0.15,\"color\":\"#000000\"},{\"k\":\"disc\",\"r\":0.4}]},"
+    "\"cover\":{\"items\":[{\"k\":\"disc\",\"r\":0.4,\"color\":\"#ff0000\"},{\"k\":\"disc\",\"r\":0.15,\"color\":\"#0000ff\"}]},"
+    "\"ring\":{\"items\":[{\"k\":\"ring\",\"r\":0.2,\"w\":0.06}]},"
+    "\"dark\":{\"items\":[{\"k\":\"ring\",\"r\":0.2,\"w\":0.06},{\"k\":\"ball\",\"r\":0.35,\"lit\":0}]},"
+    "\"half\":{\"items\":[{\"k\":\"ring\",\"r\":0.2,\"w\":0.06},{\"k\":\"ball\",\"r\":0.35,\"lit\":0.5,\"side\":1}]}}}";
+
+static fluid_sim_t *fill_layout(pkg_t *p, const char *layout) {
+    const char *err;
+    scene_t *sc = scene_build(p, layout, NULL, 0, &err);
+    CHECK(sc, "%s builds (%s)", layout, err ? err : "");
+    fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
+    fluid_letter_t L[SCENE_LETTERS]; int nl;
+    scene_fill(s, sc, 0.5f, L, &nl);
+    scene_free(sc);
+    return s;
+}
+
+static void test_occlusion(void) {
+    const char *err;
+    pkg_t *p = pkg_parse(OCCLUDE, strlen(OCCLUDE), &err);
+    CHECK(p, "the occlusion package parses (%s)", err ? err : "");
+    if (!p) return;
+    fluid_sim_t *s = fill_layout(p, "erase");
+    CHECK(ink_at(s, 0.f, 0.f) < 0.02f && ink_at(s, 0.3f, 0.f) > 0.5f, "a black disc erases what is under it (%.2f), not around it", ink_at(s, 0.f, 0.f));
+    fluid_sim_destroy(s);
+    s = fill_layout(p, "under");
+    CHECK(ink_at(s, 0.f, 0.f) > 0.5f, "a black disc under a later one is covered (%.2f)", ink_at(s, 0.f, 0.f));
+    fluid_sim_destroy(s);
+    s = fill_layout(p, "cover");
+    const uint32_t c = s->tcol[16 * 52 + 26];
+    CHECK((c >> 16 & 255) > 200 && (c & 255) < 50, "a later dimmer-or-equal item still takes the colour (blue over red: %06x)", c & 0xffffff);
+    fluid_sim_destroy(s);
+    s = fill_layout(p, "ring");
+    const float bare_r = ink_at(s, 0.2f, 0.f), bare_l = ink_at(s, -0.2f, 0.f);
+    fluid_sim_destroy(s);
+    s = fill_layout(p, "dark");
+    CHECK(bare_r > 0.5f && ink_at(s, 0.2f, 0.f) < 0.12f && ink_at(s, -0.2f, 0.f) < 0.12f,
+          "an unlit ball hides the ring behind it (%.2f -> %.2f)", bare_r, ink_at(s, 0.2f, 0.f));
+    fluid_sim_destroy(s);
+    s = fill_layout(p, "half");
+    CHECK(bare_l > 0.5f && ink_at(s, -0.2f, 0.f) < 0.12f && ink_at(s, 0.2f, 0.f) > 0.5f,
+          "a half-lit ball: its dark left side hides the ring (%.2f), its lit right side shows itself (%.2f)", ink_at(s, -0.2f, 0.f), ink_at(s, 0.2f, 0.f));
+    fluid_sim_destroy(s);
+    pkg_unref(p);
+}
+
+/* ── a real package: every command the molty-astro skill sends (fixtures/astrology*, copied from
+ * the astrology team's packages/astrology/astrology.json and `astro.mjs <scene> --dry-run`) ── */
+
+static void test_real_package(const char *dir) {
+    char path[512]; size_t len; const char *err;
+    snprintf(path, sizeof(path), "%s/astrology.json", dir);
+    char *buf = read_file(path, &len);
+    const size_t plen = len;
+    pkg_t *p = buf ? pkg_parse(buf, len, &err) : NULL;
+    free(buf);
+    CHECK(p, "the real package parses (%s)", buf ? err : "missing");
+    if (!p) return;
+    snprintf(path, sizeof(path), "%s/astrology-commands.jsonl", dir);
+    char *cmds = read_file(path, &len);
+    scene_player_t sp = { 0 };
+    bool seen[PKG_LAYOUTS_MAX] = { 0 };
+    int ncmd = 0, deepest = 0;
+    fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
+    for (char *line = cmds ? strtok(cmds, "\n") : NULL; line; line = strtok(NULL, "\n"), ncmd++) {
+        cJSON *c = cJSON_Parse(line), *a = cJSON_GetObjectItem(c, "args");
+        const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(c, "name")), *layout = cJSON_GetStringValue(cJSON_GetObjectItem(a, "layout"));
+        scene_t *sc = scene_build(p, layout, cJSON_GetObjectItem(a, "params"), (float)cJSON_GetNumberValue(cJSON_GetObjectItem(a, "ttl_s")), &err);
+        CHECK(sc, "%s %s builds (%s)", name, layout, err ? err : "");
+        if (!sc) { cJSON_Delete(c); continue; }
+        for (int i = 0; i < p->nlayouts; i++) if (!strcmp(p->layouts[i].name, layout)) seen[i] = true;
+        fluid_letter_t L[SCENE_LETTERS]; int nl, lit = 0;
+        scene_fill(s, sc, sc->dur > 0.f ? sc->dur / 2 : 1.f, L, &nl);
+        for (int k = 0; k < s->N; k++) lit += s->T[k] > 0.2f * FQ_UNIT;
+        CHECK(lit > 10, "%s draws something (%d cells; a thin crescent is ~20)", layout, lit);
+        if (!strcmp(name, "scene.play")) scene_play(&sp, sc);
+        else CHECK(scene_queue(&sp, sc), "%s queued", layout);
+        if (sp.nq > deepest) deepest = sp.nq;
+        cJSON_Delete(c);
+    }
+    int all = 0;
+    for (int i = 0; i < p->nlayouts; i++) all += seen[i];
+    CHECK(ncmd >= 15 && all == p->nlayouts, "%d commands played every layout (%d of %d)", ncmd, all, p->nlayouts);
+    CHECK(deepest >= 6, "the skill queues %d at once, within the queue", deepest);
+    printf("  real package: %d layouts, %d commands, %zu B parsed into %zu B, deepest queue %d\n", p->nlayouts, ncmd, plen, p->used, deepest);
+    scene_clear(&sp);
+    fluid_sim_destroy(s);
+    free(cmds);
+    CHECK(p->refs == 1, "its scenes gave their references back");
+    pkg_unref(p);
 }
 
 /* ── frame cost: a busy layout against the creature on the same host ─────── */
@@ -248,21 +368,18 @@ static void bench(const char *molty) {
     scene_free(sc);
 }
 
-static char *read_file(const char *p, size_t *len) {
-    FILE *f = fopen(p, "rb"); if (!f) return NULL;
-    fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
-    char *b = malloc((size_t)n + 1); *len = fread(b, 1, (size_t)n, f); b[*len] = 0; fclose(f);
-    return b;
-}
-
 int main(int argc, char **argv) {
     size_t len; const char *err;
-    char *fix = argc > 1 ? read_file(argv[1], &len) : NULL;
-    if (!fix || !(P = pkg_parse(fix, len, &err))) { printf("usage: scene_test fixtures/shapes.json creature.molty\n"); return 2; }
+    char path[512];
+    snprintf(path, sizeof(path), "%s/shapes.json", argc > 1 ? argv[1] : ".");
+    char *fix = read_file(path, &len);
+    if (!fix || !(P = pkg_parse(fix, len, &err))) { printf("usage: scene_test fixtures-dir creature.molty\n"); return 2; }
     free(fix);
     test_build();
     test_player();
     test_fill();
+    test_occlusion();
+    test_real_package(argv[1]);
     bench(argc > 2 ? argv[2] : "");
     CHECK(P->refs == 1, "every scene gave its package reference back (%d)", P->refs);
     pkg_unref(P);
