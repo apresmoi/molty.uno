@@ -107,5 +107,12 @@ sends `pkg.install` once, then `scene.play` / `scene.queue` with a few params. A
 ## 5. Creature packages
 
 `kind: "creature"`: one Molty, its body and all its behaviour as data (moods, gestures, walk, fidgets, ambient effects), in the motion format
-the creature team defines (`docs/CREATURES.md`). Duck, cat and octopus ship as packages and are also baked into the firmware image as defaults,
+of [`docs/CREATURES.md`](CREATURES.md). Duck, cat and octopus ship as packages and are also baked into the firmware image as defaults,
 so a new device has them without a download. `POST /api/creature/select?id=` (console) or `creature.select { id }` (agent) swaps the active one.
+
+- The file carries `creature` instead of `assets` and `layouts`: `{ body, walk, groups, events, base, gestures, moods, post, tints, ambient }`.
+  At most **32 KB** (tighter than the 256 KB of a scenes package), so a device holds the three defaults and a few more in RAM at once.
+- Built by `packages/<id>/build.mjs` with the shared helpers in `tools/creatures/kit.mjs`; `make packages` rebuilds them all and their
+  `packages/index.json` entries.
+- The reference player is `device/creatures/js/creature-player.js` (the C port follows it, hash included). `make creatures-test` checks
+  the player's rules and that every creature package plays clean within the format's limits and matches its index entry.

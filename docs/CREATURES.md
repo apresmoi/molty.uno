@@ -187,7 +187,7 @@ device later, it should come from the same rig (an orthographic side render), no
 
 ```sh
 node packages/duck/build.mjs        # writes packages/duck/duck.json and its packages/index.json entry
-node --test tools/creatures/        # the player's rules, and every creature package plays clean within its limits
+node --test tools/creatures/*.test.mjs   # the player's rules, and every creature package plays clean within its limits
 ```
 
 `tools/creatures/kit.mjs` holds the body helpers (the lab's) and the generators for the layers every Molty shares: the
