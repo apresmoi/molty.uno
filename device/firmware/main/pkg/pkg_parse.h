@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * pkg_parse.h — a package file (docs/PACKAGES.md section 1) into bounded structs, strictly.
+ * pkg_parse.h: a package file (docs/PACKAGES.md section 1) into bounded structs, strictly.
  *
  * Plain C + cJSON, no FreeRTOS / ESP-IDF: pkg_cmd.c parses on the link task (one
  * allocation in PSRAM on the device), test/host/pkg_test.c runs the same code.

@@ -70,6 +70,16 @@ esp_err_t mole_fluid_append_text(const char *chunk, int len);
 esp_err_t mole_fluid_creature_file_put(const uint8_t *buf, size_t len, const char **err);
 esp_err_t mole_fluid_creature_file_get(uint8_t **out, size_t *len, bool *is_default);
 
+/** A package's scene (scene/scene_player.h) on the fluid, the FD_ST_SCENE state: PLAY
+ *  replaces what plays and the queue, QUEUE plays it after the queue (at once when nothing
+ *  plays), CLEAR (sc NULL) drops everything; with nothing left the creature comes back.
+ *  Another state taking the screen (a say's words, a mood's creature) drops the scene. Takes
+ *  sc on ESP_OK (freed on the fluid task); ESP_ERR_INVALID_STATE when the queue is full;
+ *  ESP_ERR_INVALID_STATE before init. Safe from any task. */
+typedef enum { MOLE_SCENE_PLAY, MOLE_SCENE_QUEUE, MOLE_SCENE_CLEAR } mole_scene_op_t;
+struct scene;
+esp_err_t mole_fluid_scene(mole_scene_op_t op, struct scene *sc);
+
 /** Something happened to the device (sense.c): a shake (a brief surprised flash) or a
  *  button press (wakes a sleepy creature). Safe from any task; a no-op before init. */
 typedef enum { MOLE_FLUID_SHAKE, MOLE_FLUID_BUTTON } mole_fluid_event_t;

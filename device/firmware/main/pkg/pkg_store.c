@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * pkg_store.c — installed packages on flash (pkg_store.h).
+ * pkg_store.c: installed packages on flash (pkg_store.h).
  * Plain C: built into the firmware and by test/host/pkg_test.c.
  */
 #include "pkg_store.h"
@@ -180,7 +180,7 @@ const char *pkg_store_room(const char *root, const char *id, uint32_t size) {
 }
 
 /* at most r->size bytes into buf, hashed as they come */
-static const char *fetch(const pkg_req_t *r, const pkg_io_t *io, uint8_t *buf, uint8_t digest[32]) {
+const char *pkg_fetch(const pkg_req_t *r, const pkg_io_t *io, uint8_t *buf) {
     int64_t cl = -1;
     const char *e = io->open(io->ctx, r->url, &cl);
     if (e) { io->close(io->ctx); return e; }
@@ -198,15 +198,11 @@ static const char *fetch(const pkg_req_t *r, const pkg_io_t *io, uint8_t *buf, u
     io->sha_finish(io->ctx, d);
     io->close(io->ctx);
     if (e) return e;
-    if (got != r->size || memcmp(d, r->sha256, 32)) return "hash_mismatch";
-    memcpy(digest, d, 32);
-    return NULL;
+    return got != r->size || memcmp(d, r->sha256, 32) ? "hash_mismatch" : NULL;
 }
 
-const char *pkg_install(const char *root, const pkg_req_t *r, const pkg_io_t *io, uint8_t *buf, pkg_entry_t *out) {
-    uint8_t d[32];
-    const char *e = fetch(r, io, buf, d);
-    if (e) return e;
+const char *pkg_store_put(const char *root, const pkg_req_t *r, const uint8_t *buf, pkg_entry_t *out) {
+    const char *e;
     pkg_t *p = pkg_parse((const char *)buf, r->size, &e);
     if (!p) return "bad_package";
     pkg_entry_t ent = { .kind = p->kind, .size = r->size };
@@ -214,7 +210,7 @@ const char *pkg_install(const char *root, const pkg_req_t *r, const pkg_io_t *io
     strcpy(ent.id, p->id); strcpy(ent.name, p->name); strcpy(ent.version, p->version);
     pkg_unref(p);
     if (!same) return "bad_package";
-    for (int i = 0; i < 32; i++) snprintf(ent.sha256 + 2 * i, 3, "%02x", d[i]);
+    for (int i = 0; i < 32; i++) snprintf(ent.sha256 + 2 * i, 3, "%02x", r->sha256[i]);   /* = the bytes' (pkg_fetch) */
     snprintf(ent.file, sizeof(ent.file), "%.8s.json", ent.sha256);
     if ((e = pkg_store_room(root, r->id, r->size))) return e;
 

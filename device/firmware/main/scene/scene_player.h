@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * scene_player.h — a package's layout on screen (docs/PACKAGES.md sections 1 to 3).
+ * scene_player.h: a package's layout on screen (docs/PACKAGES.md sections 1 to 3).
  *
  * Plain C, no FreeRTOS / ESP-IDF: pkg_cmd.c builds scenes on the link task, mole_fluid.c
  * plays them on the fluid task (FD_ST_SCENE, fluid_director.h), test/host/scene_test.c
@@ -55,7 +55,7 @@ typedef struct {
     float x, y, r, w, a0, a1, len, size, lit, side, spin, rot;
 } scene_item_t;
 
-typedef struct {
+typedef struct scene {
     pkg_t *pkg;                         /* one reference, dropped by scene_free            */
     char pkg_id[PKG_ID_MAX + 1], layout[PKG_KEY_MAX + 1];
     float dur, ttl;

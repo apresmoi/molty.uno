@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pkg_build.sh — host build + run of the package tests: the strict parser and the store
+# pkg_build.sh: host build + run of the package tests: the strict parser and the store
 # (pkg_test.c: main/pkg) and the scene player with the director (scene_test.c: main/scene,
 # main/fluid), on fixtures/shapes.json; scene_test also estimates a busy scene's frame cost
 # against the creature (duck.molty). cJSON from ESP-IDF: set IDF_PATH (default ~/esp/esp-idf).

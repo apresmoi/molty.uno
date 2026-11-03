@@ -31,6 +31,7 @@
 #include "fluid_sim.h"
 #include "fluid_director.h"
 #include "fluid_ask.h"
+#include "scene_player.h"
 #include "cute_rig.h"
 #include "cute_act.h"
 #include "glyph_rsvp.h"
@@ -86,11 +87,11 @@ static const char *DEFAULT_TEXT =
 /* ── States (the director decides which, fluid_director.h) ─────────────────── */
 
 enum { ST_BLOB = FD_ST_BLOB, ST_THINKING = FD_ST_THINKING, ST_TEXT = FD_ST_TEXT,
-       ST_FX = FD_ST_FX, ST_CREATURE = FD_ST_CREATURE };
+       ST_FX = FD_ST_FX, ST_CREATURE = FD_ST_CREATURE, ST_SCENE = FD_ST_SCENE };
 
 /* relax rates per kind of target (text must condense within one word's time) */
-static const float RATE_UP[]   = { 1.6f, 1.6f, 7.f, 1.8f, 2.6f };
-static const float RATE_DOWN[] = { 2.0f, 2.0f, 2.4f, 2.2f, 3.4f };
+static const float RATE_UP[FD_ST_COUNT]   = { 1.6f, 1.6f, 7.f, 1.8f, 2.6f, 2.6f };
+static const float RATE_DOWN[FD_ST_COUNT] = { 2.0f, 2.0f, 2.4f, 2.2f, 3.4f, 3.4f };
 
 /* ── Shared config / requests (httpd ↔ task, under s_mutex) ─────────────────── */
 
@@ -103,6 +104,8 @@ typedef struct {
     float fps, frame_ms, sim_ms, wait_ms, draw_ms, flush_ms, energy, err;
     float prof_ms[FP_N];                       /* per-phase EMA, ms per frame */
     int   mood, ctris, status, act;
+    char  scene_pkg[PKG_ID_MAX + 1], scene_layout[PKG_KEY_MAX + 1];   /* "" = none */
+    float scene_left;                          /* s until it ends                  */
     bool  working;
     bool  internal, autoplay, asleep;
     int   n_internal, n_blk;
@@ -179,6 +182,10 @@ static bool     s_idle_life_loaded = false;
 static int      idle_life_load(void);
 static int      s_req_act = -1;                 /* an agent's action (act / a say's mark)  */
 static bool     s_req_spoke = false;            /* a say played to its end                 */
+/* scenes (mole_fluid_scene): ops wait here for the task, which owns the player */
+typedef struct { mole_scene_op_t op; scene_t *sc; } scene_op_t;
+static scene_op_t s_scene_ops[SCENE_QUEUE_MAX + 2];
+static int        s_scene_nops, s_scene_nq;      /* pending ops; the player's queue (task's copy) */
 static bool     s_req_shed = false;             /* the heap guard: hot fields → PSRAM (mole_fluid_shed_internal) */
 /* a say's mood marks tint its words from the cued word on (mole_fluid_cue_mood):
  * 0 = the palette's colours, else FLUID_RGB | 0xRRGGBB */
@@ -227,6 +234,7 @@ static struct {
 static bool  s_listen = false;                  /* task copy of s_listen_in */
 static int32_t s_ring_rgb = -1, s_ring_def = -1;   /* task copies of s_ring_in / s_ring_dflt */
 static fluid_ring_t s_rg;                       /* the listening ring (fluid_ring.h)     */
+static scene_player_t s_sp;                     /* the scene on screen + its queue        */
 static float s_div = 0.f;
 static int   s_div_n = 0;
 static fluid_overlay_t s_ov;                    /* this frame's, from sim_frame          */
@@ -513,9 +521,15 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
      * status. A question, a listen or a say owns the screen (no idle life); a question's
      * labels cover the creature (no action plays under them). */
     const bool covered = s_ask.scr.phase != FLUID_ASK_NONE;
+    scene_tick(&s_sp, rdt);
+    /* a scene after a scene (play over one, or the queue's next): it flows in; from another
+     * state, entering the scene state did that this frame (its clock is still 0) */
+    if (scene_take_start(&s_sp) && s_cur == ST_SCENE && s_dir.state_t > 0.f) { fd_replay(&s_dir); ripple(0.f, 0.f, 0.6f, 0.2f); }
+    fd_set_scene(&s_dir, scene_playing(&s_sp));
     fd_set_busy(&s_dir, s_listen || s_follow, covered);
     fd_tick(&s_dir, rdt, s_cur == ST_TEXT && s_word_until > 1e8f && !s_follow);
     direct(cfg);
+    if (scene_playing(&s_sp) && !fd_scene_wanted(&s_dir)) scene_clear(&s_sp);   /* another state took the screen */
     {   /* an action to start: an agent's, or idle life's (never a sound) */
         int a = fd_take_act(&s_dir);
         if (a >= 0 && s_cute) cute_rt_act(s_cute, a);
@@ -565,7 +579,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     } else if (s_cur == ST_TEXT) {
         s_noverlay = s_tx->nletters;
         memcpy(s_overlay, s_tx->letters, sizeof(fluid_letter_t) * (size_t)s_noverlay);
-    } else {
+    } else if (s_cur != ST_SCENE) {                        /* a scene's letters: scene_fill below */
         s_melt_t += rdt; s_melt = s_melt_t;
         if (s_melt_t > 0.8f) s_noverlay = 0;               /* condensed letters melt away */
     }
@@ -591,6 +605,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     case ST_TEXT:     fluid_text_fill(s_tx, s, s_tnow); break;
     case ST_FX:       fluid_target_effect(s, s_cur_fx, s_tnow, swell, ox, oy); break;
     case ST_THINKING: fluid_target_blob(s, s_tnow * 1.4f, swell * 0.85f, ox, oy); break;
+    case ST_SCENE:    scene_fill(s, s_sp.cur, s_sp.t, s_overlay, &s_noverlay); break;
     case ST_CREATURE:
         if (s_cute) {
             cute_rt_update(s_cute, rdt);                   /* mood engine + kit + behaviours */
@@ -851,6 +866,9 @@ static void fluid_task(void *arg) {
         float req_hold_s = s_req_hold_s;
         int req_act = s_req_act; s_req_act = -1;
         bool spoke = s_req_spoke; s_req_spoke = false;
+        scene_op_t sops[SCENE_QUEUE_MAX + 2];
+        const int nsops = s_scene_nops;
+        memcpy(sops, s_scene_ops, sizeof(scene_op_t) * (size_t)nsops); s_scene_nops = 0;
         bool shed = s_req_shed; s_req_shed = false;
         if (!s_idle_life_loaded) { s_idle_life = idle_life_load(); s_idle_life_loaded = true; }
         int idle_life = s_idle_life;
@@ -899,6 +917,12 @@ static void fluid_task(void *arg) {
         /* the director: state first (it may end the reel), then the mood over it */
         if (req_reel) fd_autoplay(&s_dir);
         if (req >= 0) fd_request_state(&s_dir, req, req_fx, req_hold);
+        for (int q = 0; q < nsops; q++) {                   /* scenes, in the order they came */
+            if (sops[q].op == MOLE_SCENE_PLAY) scene_play(&s_sp, sops[q].sc);
+            else if (sops[q].op == MOLE_SCENE_CLEAR) scene_clear(&s_sp);
+            else if (!scene_queue(&s_sp, sops[q].sc)) scene_free(sops[q].sc);
+        }
+        if (nsops && scene_playing(&s_sp)) { fd_request_state(&s_dir, ST_SCENE, 0, false); fd_activity(&s_dir); }
         if (req_work) fd_agent_work(&s_dir, req_hold_s);
         else if (req_mood >= 0) fd_agent_mood(&s_dir, req_mood, req_hold_s);
         else if (activity) fd_activity(&s_dir);
@@ -912,7 +936,7 @@ static void fluid_task(void *arg) {
             if (s_cur == ST_TEXT && s_ask.scr.phase == FLUID_ASK_NONE) tint_letters();
         }
         fd_set_status(&s_dir, status);
-        ask_follow(&want, req >= 0 || req_mood >= 0 || req_reel, &cfg);
+        ask_follow(&want, req >= 0 || req_mood >= 0 || req_reel || nsops > 0, &cfg);
         direct(&cfg);
         for (int q = 0; q < nrip; q++) ripple(rip[q][0], rip[q][1], rip[q][2], 0.09f);
         if (now - last_touch >= FLUID_TOUCH_US) { poll_touch(); last_touch = now; }
@@ -958,6 +982,10 @@ static void fluid_task(void *arg) {
         s_stats.mood = s_cute ? cute_rt_mood(s_cute) : -1; s_stats.ctris = s_cute_tris;
         s_stats.act = s_cute ? cute_rt_acting(s_cute) : -1;
         s_stats.working = fd_working(&s_dir);
+        s_scene_nq = s_sp.nq;
+        snprintf(s_stats.scene_pkg, sizeof(s_stats.scene_pkg), "%s", s_sp.cur ? s_sp.cur->pkg_id : "");
+        snprintf(s_stats.scene_layout, sizeof(s_stats.scene_layout), "%s", s_sp.cur ? s_sp.cur->layout : "");
+        s_stats.scene_left = s_sp.cur ? scene_end(s_sp.cur) - s_sp.t : 0.f;
         s_stats.inside = s_sim->inside; s_stats.grid_w = s_sim->W; s_stats.grid_h = s_sim->H;
         s_stats.internal = s_sim->internal;
         s_stats.n_internal = s_sim->n_internal; s_stats.n_blk = s_sim->n_blk;
@@ -1111,6 +1139,11 @@ void mole_fluid_creature_deinit(void) {
         s_dtask = NULL;
     }
     atomic_store(&s_glass_ask, 0);                   /* nothing of the fluid on the panel now */
+    scene_clear(&s_sp);
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    for (int q = 0; q < s_scene_nops; q++) scene_free(s_scene_ops[q].sc);
+    s_scene_nops = s_scene_nq = 0;
+    xSemaphoreGive(s_mutex);
     free_grid();
     cute_rt_destroy(s_cute); s_cute = NULL;
     ESP_LOGI(TAG, "fluid creature deinit");
@@ -1127,6 +1160,7 @@ static const char *state_name(int st, int fx, char *buf, size_t n) {
     case ST_THINKING: return "thinking";
     case ST_TEXT:     return "text";
     case ST_CREATURE: return "creature";
+    case ST_SCENE:    return "scene";
     case ST_FX:       snprintf(buf, n, "effect:%s", FLUID_FX_NAMES[fx]); return buf;
     default:          return "blob";
     }
@@ -1169,6 +1203,12 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     cJSON_AddStringToObject(root, "mood",        st.mood >= 0 ? CUTE_MOOD_NAMES[st.mood] : "");
     cJSON_AddBoolToObject  (root, "asleep",      st.asleep);
     cJSON_AddBoolToObject(root, "working",       st.working);
+    if (st.scene_pkg[0]) {                     /* the scene on screen: pkg, layout, s left */
+        cJSON *sc = cJSON_AddObjectToObject(root, "scene");
+        cJSON_AddStringToObject(sc, "pkg", st.scene_pkg);
+        cJSON_AddStringToObject(sc, "layout", st.scene_layout);
+        cJSON_AddNumberToObject(sc, "ttl_left", roundf(st.scene_left));
+    }
     cJSON_AddStringToObject(root, "act",         st.act >= 0 ? cute_act_name(st.act) : "");   /* the action playing */
     cJSON_AddStringToObject(root, "indicator",   FD_STATUS_NAMES[st.status]);
     {
@@ -1468,6 +1508,18 @@ esp_err_t mole_fluid_set_text(const char *text, int len) {
     set_text_locked(text, len);
     xSemaphoreGive(s_mutex);
     return ESP_OK;
+}
+
+esp_err_t mole_fluid_scene(mole_scene_op_t op, scene_t *sc) {
+    if (!s_mutex || !s_run) return ESP_ERR_INVALID_STATE;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    /* the queue as it will be once the pending ops ran: play / clear empty it */
+    int nq = s_scene_nq;
+    for (int q = 0; q < s_scene_nops; q++) nq = s_scene_ops[q].op == MOLE_SCENE_QUEUE ? nq + 1 : 0;
+    const bool full = s_scene_nops >= (int)(sizeof(s_scene_ops) / sizeof(s_scene_ops[0])) || (op == MOLE_SCENE_QUEUE && nq >= SCENE_QUEUE_MAX);
+    if (!full) s_scene_ops[s_scene_nops++] = (scene_op_t){ op, sc };
+    xSemaphoreGive(s_mutex);
+    return full ? ESP_ERR_INVALID_STATE : ESP_OK;
 }
 
 void mole_fluid_event(mole_fluid_event_t ev) {

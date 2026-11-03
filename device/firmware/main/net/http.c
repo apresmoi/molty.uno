@@ -49,6 +49,7 @@
 #include "link_client.h"
 #include "link_cmd.h"
 #include "self_update.h"
+#include "pkg_cmd.h"
 
 static const char *TAG = "http";
 
@@ -1457,6 +1458,7 @@ esp_err_t http_server_start(void)
     ESP_RETURN_ON_ERROR(net_http_register(server), TAG, "wifi routes");
     ESP_RETURN_ON_ERROR(link_http_register(server), TAG, "link routes");
     ESP_RETURN_ON_ERROR(self_update_http_register(server), TAG, "update routes");
+    ESP_RETURN_ON_ERROR(pkg_http_register(server), TAG, "package routes");
     ESP_RETURN_ON_ERROR(mole_diag_http_register(server), TAG, "diag routes");
     httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, handler_404);
 

@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * scene_player.c — a package's layout on screen (scene_player.h).
+ * scene_player.c: a package's layout on screen (scene_player.h).
  * Plain C: built into the firmware and by test/host/scene_test.c.
  */
 #include "scene_player.h"

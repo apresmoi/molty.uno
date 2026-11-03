@@ -65,6 +65,11 @@ idf_component_register(
         # update: firmware self-update (link `update`, /api/update, the mark-valid guard)
         "update/update_core.c"   # the rules (plain C, host-tested)
         "update/self_update.c"
+        # pkg + scene: packages (data only) and their layouts on screen (docs/PACKAGES.md)
+        "pkg/pkg_parse.c"        # the strict parser (plain C, host-tested)
+        "pkg/pkg_store.c"        # install / list / remove under /spiffs/pkg (plain C, host-tested)
+        "pkg/pkg_cmd.c"          # pkg.* + scene.* commands, the download, /api/pkg + /api/scene
+        "scene/scene_player.c"   # binding, timing, queue, the fill (plain C, host-tested)
         # audio: listen end-of-speech detection (plain C, host-tested)
         "audio/vad.c"
         "audio/chirp.c"          # the turn acknowledgement blip (link_audio)
@@ -87,6 +92,8 @@ idf_component_register(
         "creature"
         "link"
         "update"
+        "pkg"
+        "scene"
         "audio"
         "sense"
         "board"
@@ -168,6 +175,7 @@ set_source_files_properties(
     "fluid/fluid_draw.c"
     "fluid/mole_fluid.c"
     "creature/cute_rig.c"
+    "scene/scene_player.c"
     ${MOLTY_BOARD_FAST_SRCS}
     PROPERTIES COMPILE_OPTIONS "-O2;-fno-math-errno"
 )
