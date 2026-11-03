@@ -199,10 +199,17 @@ bool scene_take_start(scene_player_t *p) { bool s = p->started; p->started = fal
 
 typedef struct { fluid_sim_t *s; float soft; } ctx_t;
 
-static inline void paint(fluid_sim_t *s, int k, float v, uint32_t rgb) {
-    if (v <= 0.004f || !s->mask[k] || v * FQ_UNIT <= s->T[k]) return;
-    s->T[k] = fq(v, FQ_UNIT);
-    s->tcol[k] = fluid_pack_rgba8((rgb >> 16 & 255) / 255.f, (rgb >> 8 & 255) / 255.f, (rgb & 255) / 255.f, 0.f);
+/* Painter's order, as the reference player (packages/tools/play.mjs): an item covers what is
+ * under it by `a` (its coverage, 0..1, the soft edge), leaving ink v in colour rgb. A black
+ * disc leaves no ink (an eclipse, a transit); a ball covers its whole disc, dark side too. */
+static inline void paint(fluid_sim_t *s, int k, float a, float v, uint32_t rgb) {
+    if (a <= 0.004f || !s->mask[k]) return;
+    const float t = s->T[k] * (1.f / FQ_UNIT);
+    s->T[k] = fq(t + (v - t) * a, FQ_UNIT);
+    const uint32_t c = s->tcol[k];
+    const float r = (c & 255) / 255.f, g = (c >> 8 & 255) / 255.f, b = (c >> 16 & 255) / 255.f;
+    s->tcol[k] = fluid_pack_rgba8(r + ((rgb >> 16 & 255) / 255.f - r) * a, g + ((rgb >> 8 & 255) / 255.f - g) * a,
+                                  b + ((rgb & 255) / 255.f - b) * a, 0.f);
 }
 
 /* the cells whose centres lie in a glass-space box (y up) */
@@ -225,7 +232,7 @@ static void segment(const ctx_t *c, float ax, float ay, float bx, float by, floa
         float u = (px * dx + py * dy) * il2;
         u = u < 0.f ? 0.f : u > 1.f ? 1.f : u;
         const float ex = px - u * dx, ey = py - u * dy, d = sqrtf(ex * ex + ey * ey);
-        if (d < reach) paint(s, j * s->W + i, SCENE_INK * (1.f - fluid_smooth(hw, reach, d)), rgb);
+        if (d < reach) paint(s, j * s->W + i, 1.f - fluid_smooth(hw, reach, d), SCENE_INK, rgb);
     }
 }
 
@@ -246,7 +253,7 @@ static void ring(const ctx_t *c, const scene_item_t *it, bool arc) {
             if (a < 0.f) a += 360.f;
             if (a > span) continue;
         }
-        paint(s, j * s->W + i, SCENE_INK * (1.f - fluid_smooth(hw, reach, d)), it->rgb);
+        paint(s, j * s->W + i, 1.f - fluid_smooth(hw, reach, d), SCENE_INK, it->rgb);
     }
 }
 
@@ -257,7 +264,7 @@ static void disc(const ctx_t *c, float cx, float cy, float r, uint32_t rgb) {
     cells(s, cx - ro, cy - ro, cx + ro, cy + ro, &i0, &i1, &j0, &j1);
     for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) {
         const float x = s->xs[i] - cx, y = -s->ys[j] - cy, d = sqrtf(x * x + y * y);
-        if (d < ro) paint(s, j * s->W + i, SCENE_INK * (1.f - fluid_smooth(r - c->soft * 0.5f, ro, d)), rgb);
+        if (d < ro) paint(s, j * s->W + i, 1.f - fluid_smooth(r - c->soft * 0.5f, ro, d), rgb ? SCENE_INK : 0.f, rgb);
     }
 }
 
@@ -289,16 +296,19 @@ static void ball(const ctx_t *c, const scene_item_t *it, const pkg_asset_t *img,
         const float edge = 1.f - fluid_smooth(r - c->soft * 0.5f, ro, d);
         float nx = x / r, ny = y / r, rr = nx * nx + ny * ny;
         if (rr > 0.999f) { const float k = 0.9995f / sqrtf(rr); nx *= k; ny *= k; rr = nx * nx + ny * ny; }
-        const float nz = sqrtf(1.f - rr), lum = 0.18f + 0.82f * fluid_smooth(-0.08f, 0.12f, nx * lx + nz * lz);
+        /* the dark side: a faint earthshine, opaque all the same (it hides what is behind) */
+        const float nz = sqrtf(1.f - rr), lit = fluid_smooth(-0.08f, 0.12f, nx * lx + nz * lz), lum = 0.18f + 0.82f * lit;
         uint32_t rgb = it->rgb;
+        float ink = SCENE_INK * (0.08f + 0.92f * lit);
         if (img) {
             float u = (atan2f(nx, nz) + turn) * (0.5f / 3.1415927f) + 0.5f;
             u -= floorf(u);
             const int ix = (int)(u * img->w) % img->w, iy = (int)((0.5f - asinf(ny) / 3.1415927f) * img->h);
             const int q = px4(img, ix, iy < 0 ? 0 : iy >= img->h ? img->h - 1 : iy);
             if (q) rgb = img->pal[q];
+            else ink = 0.f;                                     /* a hole in the image: nothing, as play.mjs */
         }
-        paint(s, j * s->W + i, SCENE_INK * edge * (0.3f + 0.7f * lum), shade(rgb, lum));
+        paint(s, j * s->W + i, edge, ink, shade(rgb, lum));
     }
 }
 
@@ -324,7 +334,7 @@ static void glyph(const ctx_t *c, const scene_item_t *it, const pkg_asset_t *a) 
         }
         if (!cov) continue;
         const uint32_t rgb = a->kind == PA_MASK ? it->rgb : (uint32_t)(cr / cov) << 16 | (uint32_t)(cg / cov) << 8 | (uint32_t)(cb / cov);
-        paint(s, j * s->W + i, SCENE_INK * cov / 9.f, rgb);
+        paint(s, j * s->W + i, cov / 9.f, SCENE_INK, rgb);
     }
 }
 
@@ -344,7 +354,7 @@ static void text(const ctx_t *c, const scene_t *sc, const scene_item_t *it, flui
         const float px = (i + 0.5f) * cwp, py = (j + 0.5f) * chp;
         if (py <= y0 || py >= y0 + lh) continue;
         const int li = (int)floorf((px - x0) / adv);
-        if (li >= 0 && li < it->nstr && str[li] != ' ') paint(s, j * s->W + i, 0.62f, it->rgb);
+        if (li >= 0 && li < it->nstr && str[li] != ' ') paint(s, j * s->W + i, 1.f, 0.62f, it->rgb);
     }
 }
 

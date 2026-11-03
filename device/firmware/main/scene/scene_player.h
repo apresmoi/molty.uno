@@ -18,7 +18,8 @@
  *             > 0) or its ttl_s, whichever comes first; then the next one in the queue, else
  *             nothing: the director goes back to the creature.
  *   fill      each frame, the scene's visible items (on ≤ t < off) rasterised into the
- *             sim's target (T + tcol); the strongest item wins a cell. Text items also
+ *             sim's target (T + tcol) in painter's order: a later item covers an earlier one
+ *             (a black disc erases, a ball's dark side hides what is behind). Text items also
  *             hand their letters to the renderer's crisp overlay (at most SCENE_LETTERS).
  * Geometry is in glass units: the round window has radius 1, x right, y up, angles in
  * degrees, 0 = right, counter-clockwise.
