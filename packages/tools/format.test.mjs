@@ -32,6 +32,7 @@ test('the static check catches every kind of broken reference', () => {
     'indexes past the palette': (p) => (p.assets.face.px = Buffer.from([0x21]).toString('base64')),
     'must be #rrggbb': (p) => (p.layouts.one.items[0].color = 'red'),
     'polar replaces x, y': (p) => (p.layouts.one.items[2].x = 0),
+    'is out of range': (p) => (p.layouts.one.items[2].size = 3),
     'pts must be 2..16': (p) => (p.layouts.one.items[1].pts = [[0, 0]]),
     'at most 8 params': (p) => Object.assign(p.layouts.one.params, Object.fromEntries('abcdef'.split('').map((k) => [k, 'number']))),
     'name must be [A-Za-z0-9_-]{1,24}': (p) => (p.assets['a.b'] = p.assets.dot),
@@ -42,7 +43,7 @@ test('the static check catches every kind of broken reference', () => {
 
 test('binding rejects missing, unknown and mistyped params, and resolves each, polar and defaults', () => {
   const p = base(), ok = { r: 0.5, marks: [{ a: 90 }], g: 'dot' };
-  for (const bad of [{ r: 0.5, marks: [] }, { ...ok, x: 1 }, { ...ok, r: '0.5' }, { ...ok, g: 'star' }, { ...ok, g: '$x' }, { ...ok, marks: [{ b: 1 }] }, { ...ok, marks: [3] }, { ...ok, marks: [{ a: [1, 2] }] }, { ...ok, marks: Array(33).fill({ a: 1 }) }]) assert.throws(() => bind(p, 'one', bad), ParamError, JSON.stringify(bad));
+  for (const bad of [{ r: 0.5, marks: [] }, { ...ok, x: 1 }, { ...ok, r: '0.5' }, { ...ok, g: 'star' }, { ...ok, g: '$x' }, { ...ok, marks: [{ b: 1 }] }, { ...ok, marks: [3] }, { ...ok, marks: [{ a: [1, 2] }] }, { ...ok, marks: Array(33).fill({ a: 1 }) }, { ...ok, r: 2.5 }]) assert.throws(() => bind(p, 'one', bad), ParamError, JSON.stringify(bad));
   assert.throws(() => bind(p, 'two', ok), /no_layout/);
   const items = bind(p, 'one', { ...ok, marks: [{ a: 90 }, { a: 180 }] });
   assert.equal(items.length, 4);
