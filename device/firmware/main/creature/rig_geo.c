@@ -122,7 +122,7 @@ bool rg_sphere(geo_t *g, int w, int h, const float *s, float pinch, bool tear) {
     return true;
 }
 
-/* CylinderGeometry(rTop, rBottom, h, radial) — also ConeGeometry (rTop = 0) */
+/* CylinderGeometry(rTop, rBottom, h, radial), also ConeGeometry (rTop = 0) */
 bool rg_cylinder(geo_t *g, float rt, float rb, float h, int rs) {
     gbuild_t b;
     if (!gb_init(&b, g, 2 * (rs + 1) + 2 * (2 * rs + 1), 4 * rs)) return false;

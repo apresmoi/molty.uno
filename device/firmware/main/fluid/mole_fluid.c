@@ -1134,7 +1134,7 @@ esp_err_t mole_fluid_creature_init(void) {
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
         return ESP_ERR_NO_MEM;
     }
-    {   /* the chosen creature (boot_creature) — built on the task */
+    {   /* the chosen creature (boot_creature), built on the task */
         size_t clen = 0; bool pkg = false; char id[PKG_ID_MAX + 1];
         uint8_t *cb = boot_creature(&clen, &pkg, id);
         if (cb) queue_creature(cb, clen, pkg, id);
