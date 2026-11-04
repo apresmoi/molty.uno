@@ -65,8 +65,14 @@ molty.uno/build restates this table as "Will my board work?"
 3. **Display.** Write (or reuse) a driver with: a `width×height` RGB565 framebuffer in
    PSRAM, stored byte-swapped (high byte first in memory: the panel's wire order), a full
    flush, and a flush of full-width rows `[y0, y1)`. The 1.28's `lcd_gc9a01.c` is a
-   minimal SPI example on IDF's `esp_lcd` panel IO. The fluid only ever writes the
-   framebuffer and flushes rows; it is sized at runtime (below).
+   minimal SPI example on IDF's `esp_lcd` panel IO. It is sized at runtime (below).
+   Optional, and worth it: `blit(x, y, w, h, px)`, which sends a packed window from the
+   caller's buffer and returns once the buffer may be reused (the 1.46's `mole_lcd_blit`
+   waits for `on_color_trans_done`). With it the fluid sends only the windows that
+   changed, drawn in a small internal-RAM buffer the panel's DMA reads as is, and never
+   touches the PSRAM framebuffer in its frame loop (it draws there only for
+   `/api/framebuffer`). Without it, each window is copied into the framebuffer and its
+   rows flushed. Windows start and end on multiples of 4 px (the SPD2010 needs that).
 4. **Optional parts.** Touch returns panel pixels in the framebuffer's orientation.
    The IMU sample is the *device* frame — x right, y up as the screen is read — so map
    your chip's axes (`boards/common/qmi8658.c` takes `axes`, e.g. `{2, 1, 3}`; check by

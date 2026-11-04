@@ -73,8 +73,8 @@ static const char *TAG = "mole_fluid";
 #define FLUID_TEXT_MAX     4096
 #define FLUID_MAX_TOKENS   512
 #define FLUID_STEP         (1.f / 60.f)
-#define FLUID_FRAME_TICKS  3          /* 100 Hz tick → 30 ms → 33.3 fps cap     */
-#define FLUID_SLEEP_TICKS  5          /* asleep (slow breathing): 20 fps, less CPU */
+#define FLUID_FRAME_US     30000      /* 33.3 fps cap                            */
+#define FLUID_SLEEP_US     50000      /* asleep (slow breathing): 20 fps, less CPU */
 #define FLUID_TOUCH_US     16000      /* touch poll ≤ 60 Hz (shared I2C bus)    */
 #define FLUID_TILT_ACCEL   25.f       /* cells/s² of flow bias per g of tilt    */
 #define FLUID_TILT_LEAN    0.12f      /* stage units a target leans per g       */
@@ -103,7 +103,7 @@ typedef struct {
 } fluid_cfg_t;
 
 typedef struct {
-    float fps, frame_ms, sim_ms, wait_ms, draw_ms, flush_ms, energy, err;
+    float fps, frame_ms, pre_ms, sim_ms, wait_ms, draw_ms, flush_ms, energy, err;
     float prof_ms[FP_N];                       /* per-phase EMA, ms per frame */
     int   mood, ctris, status, act;
     char  scene_pkg[PKG_ID_MAX + 1], scene_layout[PKG_KEY_MAX + 1];   /* "" = none */
@@ -277,6 +277,14 @@ static bool  s_touch_down = false;
 static float s_tpx = 0.f, s_tpy = 0.f;
 static int   s_last_tx = 0, s_last_ty = 0;
 static volatile bool s_full_flush = true;
+/* the drawer's window buffer (fluid_draw_send): internal DMA-capable RAM, which the panel's
+ * DMA reads as is. The frame never goes through the PSRAM framebuffer: drawing and
+ * copying it there every frame took PSRAM bandwidth the sim on core 1 waits for. */
+#define FLUID_WIN_ROWS 14                       /* a 412 px panel's cell row in one window */
+static uint16_t *s_win = NULL;
+static int       s_win_px = 0;
+static volatile bool s_fb_want = false;         /* /api/framebuffer: draw the frame there too */
+static SemaphoreHandle_t s_fb_done = NULL;
 static int   s_cpu_mhz = 160;
 
 /* ── Text: tokenise + schedule (same rules as mole_reader.c / reader.js) ───── */
@@ -471,16 +479,18 @@ static esp_err_t build_grid(int W, int H) {
 
 static int64_t s_touch_t0;            /* sim: tap seen, not yet handed to the drawer */
 static volatile int64_t s_dtouch;     /* drawer: tap time riding with the current frame */
-static void poll_touch(void) {
-    uint16_t xs[MOLTY_TOUCH_MAX_POINTS], ys[MOLTY_TOUCH_MAX_POINTS];
-    int n = molty_touch_poll(xs, ys, MOLTY_TOUCH_MAX_POINTS);
+/* the touch panel's last read (the drawer polls it, off the sim's core: ~1 ms of I2C and
+ * waits a poll); s_mutex */
+typedef struct { int n; uint16_t x, y; int64_t t; unsigned seq; } touch_read_t;
+static touch_read_t s_tp;
+static void poll_touch(int n, const uint16_t *xs, const uint16_t *ys, int64_t t) {
     if (n <= 0) { s_touch_down = false; return; }
     float x = (float)(xs[0] - s_ox) / (float)s_stage * 2.f - 1.f, y = (float)(ys[0] - s_oy) / (float)s_stage * 2.f - 1.f;
     if (!s_touch_down) {                                    /* tap = ripple */
         s_touch_down = true; s_tpx = x; s_tpy = y; s_last_tx = xs[0]; s_last_ty = ys[0];
         ripple(x, y, 1.6f, 0.09f);
         fd_user(&s_dir);                                    /* wakes a sleepy creature */
-        if (!s_touch_t0) s_touch_t0 = esp_timer_get_time();
+        if (!s_touch_t0) s_touch_t0 = t;
         return;
     }
     /* the SPD2010 sometimes reports a garbage coordinate: a finger can't move >140 px
@@ -823,7 +833,19 @@ esp_err_t mole_fluid_creature_file_get(uint8_t **out, size_t *len, bool *is_defa
     return *out ? ESP_OK : ESP_ERR_NOT_FOUND;
 }
 
-/* ── Drawer task (core 0): rasterise + flush the latest snapshot ─────────────── */
+/* ── Drawer task (core 0): what changed in the latest snapshot, to the panel ──── */
+
+static int send_win(void *ctx, int x, int y, int w, int h, const uint16_t *px) {
+    (void)ctx;
+    return molty_display_blit(x, y, w, h, px) == ESP_OK ? 0 : 1;
+}
+
+esp_err_t mole_fluid_framebuffer_sync(void) {
+    if (!s_run || !s_fb_done) return ESP_ERR_INVALID_STATE;
+    xSemaphoreTake(s_fb_done, 0);
+    s_fb_want = true;
+    return xSemaphoreTake(s_fb_done, pdMS_TO_TICKS(500)) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
+}
 
 static void draw_task(void *arg) {
     (void)arg;
@@ -832,7 +854,8 @@ static void draw_task(void *arg) {
     float dms = 0.f, lms = 0.f, pema[2] = { 0.f, 0.f };
     /* director status → mark at the screen's edge (fluid_draw_mark) */
     static const int MARK[FD_STATUS_COUNT] = { FLUID_MARK_NONE, FLUID_MARK_ARC, FLUID_MARK_DOT, FLUID_MARK_ALERT };
-    int mark_drawn = FLUID_MARK_NONE;
+    int mark_drawn = FLUID_MARK_NONE, pal_drawn = -1;
+    int64_t last_touch = 0;
     fluid_overlay_t ov_drawn = { 0 };                   /* the overlay on screen */
     while (s_run) {
         esp_task_wdt_reset();
@@ -840,27 +863,40 @@ static void draw_task(void *arg) {
         if (!s_run) { xSemaphoreGive(s_idle); break; }
         int64_t t0 = esp_timer_get_time();
         int64_t touch_t = s_dtouch; s_dtouch = 0;
-        uint16_t *fb = molty_display_framebuffer();
-        int y0 = 0, y1 = 0, nc = 0;
+        if (t0 - last_touch >= FLUID_TOUCH_US) {        /* for the sim's next frame */
+            uint16_t xs[MOLTY_TOUCH_MAX_POINTS] = { 0 }, ys[MOLTY_TOUCH_MAX_POINTS] = { 0 };
+            const int n = molty_touch_poll(xs, ys, MOLTY_TOUCH_MAX_POINTS);
+            xSemaphoreTake(s_mutex, portMAX_DELAY);
+            s_tp = (touch_read_t){ n, xs[0], ys[0], t0, s_tp.seq + 1 };
+            xSemaphoreGive(s_mutex);
+            last_touch = t0;
+        }
+        uint16_t *fb = molty_display_framebuffer();   /* NULL: the display is down */
+        int nc = 0;
         int ds = s_dstatus, mark = ds > 0 && ds < FD_STATUS_COUNT ? MARK[ds] : FLUID_MARK_NONE;
-        /* the mark appears or goes: one full repaint (cells under it are not dirty) */
-        bool full = s_full_flush || mark != mark_drawn;
+        /* the mark appears, goes or changes colour: one full repaint (cells under it are not dirty) */
+        bool full = s_full_flush || mark != mark_drawn || s_dopts.palette != pal_drawn;
         const fluid_overlay_t ov = s_dov;
         const unsigned ask_seq = s_dask;
+        int64_t t1 = t0;
         if (fb && s_draw && s_frame) {
-            if (full) { memset(fb, 0, (size_t)s_fb_w * s_fb_h * sizeof(uint16_t)); s_draw->force = true; }
+            if (full) s_draw->force = true;
             /* overlays blend over the pixel under them: redraw the cells under the last
              * one (restores what it covered) and the next one, then draw it on top */
             else { fluid_draw_overlay_dirty(s_draw, &ov_drawn); fluid_draw_overlay_dirty(s_draw, &ov); }
-            nc = fluid_draw(s_draw, s_frame, fb, &s_dopts, &y0, &y1);
-            fluid_draw_overlay(s_draw, fb, s_dopts.palette, &ov);
-            fluid_draw_mark(s_draw, fb, s_dopts.palette, mark);    /* over any redrawn cell */
-            ov_drawn = ov;
-        }
-        int64_t t1 = esp_timer_get_time();
-        if (fb) {
-            if (full) { molty_display_flush(); s_full_flush = false; mark_drawn = mark; }
-            else if (y1 > y0) molty_display_flush_rows(y0, y1);
+            nc = fluid_draw_cells(s_draw, s_frame, &s_dopts);
+            t1 = esp_timer_get_time();
+            bool sent = fluid_draw_send(s_draw, &s_dopts, &ov, mark, full, s_win, s_win_px, send_win, NULL) >= 0;
+            s_full_flush = !sent;                       /* a window that failed: repaint all */
+            mark_drawn = mark; pal_drawn = s_dopts.palette; ov_drawn = ov;
+            if (s_fb_want) {                            /* the same frame into the framebuffer */
+                const fluid_rect_t t = { fb, s_fb_w, 0, 0, s_fb_w, s_fb_h };
+                fluid_draw_rect(s_draw, &s_dopts, &t, true);
+                fluid_draw_overlay(s_draw, &t, s_dopts.palette, &ov);
+                fluid_draw_mark(s_draw, &t, s_dopts.palette, mark);
+                s_fb_want = false;
+                xSemaphoreGive(s_fb_done);
+            }
             atomic_store(&s_glass_ask, ask_seq);        /* on the panel now */
         }
         int64_t t2 = esp_timer_get_time();
@@ -884,15 +920,24 @@ static void draw_task(void *arg) {
 
 /* ── Sim task (core 1) ───────────────────────────────────────────────────────── */
 
+static void pace_wake(void *task) { xTaskNotifyGive((TaskHandle_t)task); }
+
 static void fluid_task(void *arg) {
     (void)arg;
     /* TWDT: re-created on every select → self-subscribe; delete before exit */
     esp_err_t wdt_err = esp_task_wdt_add(NULL);
     if (wdt_err != ESP_OK) ESP_LOGW(TAG, "esp_task_wdt_add failed (%s)", esp_err_to_name(wdt_err));
 
-    int64_t prev = esp_timer_get_time(), last_touch = 0;
-    float fps = 0.f, sms = 0.f, wms = 0.f, fms = 0.f;
-    TickType_t wake = xTaskGetTickCount();
+    int64_t prev = esp_timer_get_time();
+    unsigned tp_seen = 0;
+    float fps = 0.f, pms = 0.f, sms = 0.f, wms = 0.f, fms = 0.f;
+    /* paced on the microsecond clock: the 100 Hz tick rounds every overrun up to the next
+     * 10 ms, which made 31 ms frames come every 37 to 50 ms */
+    esp_timer_handle_t pace = NULL;
+    const esp_timer_create_args_t pace_args = { .callback = pace_wake, .arg = xTaskGetCurrentTaskHandle(), .name = "fluid_pace" };
+    ESP_ERROR_CHECK(esp_timer_create(&pace_args, &pace));
+    int64_t next = esp_timer_get_time();
+    bool overran = false;
 
     while (s_run) {
         esp_task_wdt_reset();
@@ -923,6 +968,7 @@ static void fluid_task(void *arg) {
         const int nsops = s_scene_nops;
         memcpy(sops, s_scene_ops, sizeof(scene_op_t) * (size_t)nsops); s_scene_nops = 0;
         bool shed = s_req_shed; s_req_shed = false;
+        const touch_read_t tp = s_tp;
         if (!s_idle_life_loaded) { s_idle_life = idle_life_load(); s_idle_life_loaded = true; }
         int idle_life = s_idle_life;
         uint32_t tint = s_tint_in;
@@ -992,7 +1038,7 @@ static void fluid_task(void *arg) {
         ask_follow(&want, req >= 0 || req_mood >= 0 || req_reel || nsops > 0, &cfg);
         direct(&cfg);
         for (int q = 0; q < nrip; q++) ripple(rip[q][0], rip[q][1], rip[q][2], 0.09f);
-        if (now - last_touch >= FLUID_TOUCH_US) { poll_touch(); last_touch = now; }
+        if (tp.seq != tp_seen) { poll_touch(tp.n, &tp.x, &tp.y, tp.t); tp_seen = tp.seq; }
 
         int64_t t0 = esp_timer_get_time();
         sim_frame(rdt, &cfg);
@@ -1018,6 +1064,7 @@ static void fluid_task(void *arg) {
         mole_diag_sim_frame(raw_dt_us, (uint32_t)(t1 - t0));
         /* stats (EMA) */
         fps = fps > 0.f ? fps * 0.93f + (1.f / fmaxf(rdt, 1e-3f)) * 0.07f : 30.f;
+        pms = pms * 0.9f + (t0 - now) / 1000.f * 0.1f;
         sms = sms * 0.9f + (t1 - t0) / 1000.f * 0.1f;
         wms = wms * 0.9f + (t2 - t1) / 1000.f * 0.1f;
         fms = fms * 0.9f + (t3 - t0) / 1000.f * 0.1f;
@@ -1028,7 +1075,7 @@ static void fluid_task(void *arg) {
         }
         xSemaphoreTake(s_mutex, portMAX_DELAY);
         memcpy(s_stats.prof_ms, prof_ema, sizeof(float) * FP_DSAMPLE);
-        s_stats.fps = fps; s_stats.frame_ms = fms; s_stats.sim_ms = sms; s_stats.wait_ms = wms;
+        s_stats.fps = fps; s_stats.frame_ms = fms; s_stats.pre_ms = pms; s_stats.sim_ms = sms; s_stats.wait_ms = wms;
         s_stats.energy = s_sim->energy; s_stats.err = s_sim->err;
         s_stats.state = s_cur; s_stats.fx = s_cur_fx; s_stats.reel = s_dir.autoplay ? s_dir.reel : -1;
         s_stats.autoplay = s_dir.autoplay; s_stats.asleep = fd_asleep(&s_dir); s_stats.status = fd_status(&s_dir);
@@ -1050,18 +1097,16 @@ static void fluid_task(void *arg) {
         }
         xSemaphoreGive(s_mutex);
 
-        /* pace at 33.3 fps. An overrun frame used to always vTaskDelay(1): at a
-         * 100 Hz tick that turned every 31 ms frame into a 40 ms one (p50 39.9 ms,
-         * 27 fps, measured via /api/diag 2026-10-25). Now an overrun starts the
-         * next frame at once — but never twice in a row, so lower-priority core-1
-         * work still gets at least one tick every other frame. */
-        static bool overran;
-        if (xTaskDelayUntil(&wake, fd_asleep(&s_dir) ? FLUID_SLEEP_TICKS : FLUID_FRAME_TICKS) == pdFALSE) {
-            if (overran) vTaskDelay(1);
-            overran = !overran;
-            wake = xTaskGetTickCount();
-        } else overran = false;
+        /* pace at 33.3 fps. An overrun starts the next frame at once, but never twice in
+         * a row: lower-priority core-1 work still gets 1 ms every other frame. */
+        next += fd_asleep(&s_dir) ? FLUID_SLEEP_US : FLUID_FRAME_US;
+        int64_t wait = next - esp_timer_get_time();
+        if (wait <= 0) { next = esp_timer_get_time(); wait = overran ? 1000 : 0; overran = !overran; }
+        else overran = false;
+        if (wait > 0 && esp_timer_start_once(pace, (uint64_t)wait) == ESP_OK) ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
     }
+    esp_timer_stop(pace);
+    esp_timer_delete(pace);
     esp_task_wdt_delete(NULL);
     xSemaphoreGive(s_done);
     vTaskDelete(NULL);
@@ -1075,7 +1120,8 @@ static esp_err_t alloc_bufs(void) {
     if (!s_wdone) s_wdone = xSemaphoreCreateBinary();
     if (!s_go) s_go = xSemaphoreCreateBinary();
     if (!s_idle) s_idle = xSemaphoreCreateBinary();
-    if (!s_mutex || !s_done || !s_wdone || !s_go || !s_idle) return ESP_ERR_NO_MEM;
+    if (!s_fb_done) s_fb_done = xSemaphoreCreateBinary();
+    if (!s_mutex || !s_done || !s_wdone || !s_go || !s_idle || !s_fb_done) return ESP_ERR_NO_MEM;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     if (!s_stage) {                              /* the board's display, once */
         s_fb_w = molty_display_width(); s_fb_h = molty_display_height();
@@ -1133,6 +1179,12 @@ esp_err_t mole_fluid_creature_init(void) {
         ESP_LOGE(TAG, "sim alloc failed (%dx%d), PSRAM free %u", W, H,
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
         return ESP_ERR_NO_MEM;
+    }
+    if (!s_win) {                                /* after the grid: its hot fields come first */
+        s_win_px = s_fb_w * FLUID_WIN_ROWS;
+        s_win = heap_caps_malloc((size_t)s_win_px * sizeof(uint16_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        if (!s_win) s_win = heap_caps_malloc((size_t)s_win_px * sizeof(uint16_t), MALLOC_CAP_SPIRAM);   /* bounced, slower */
+        if (!s_win) { free_grid(); return ESP_ERR_NO_MEM; }
     }
     {   /* the chosen creature (boot_creature), built on the task */
         size_t clen = 0; bool pkg = false; char id[PKG_ID_MAX + 1];
@@ -1294,10 +1346,13 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     cJSON_AddStringToObject(root, "word",        st.word);
     cJSON_AddNumberToObject(root, "word_idx",    st.word_idx);
     cJSON_AddNumberToObject(root, "nwords",      st.nwords);
-    /* read-only timing (EMA, ms). Core 1: sim_ms, wait_ms (blocked on the drawer),
-     * frame_ms (sim + wait + snapshot, excludes pacing). Core 0: draw_ms, flush_ms. */
+    /* read-only timing (EMA, ms). Core 1: pre_ms (input, requests, director before the
+     * sim), sim_ms, wait_ms (blocked on the drawer), frame_ms (sim + wait + snapshot,
+     * excludes pacing). Core 0: draw_ms (which cells changed), flush_ms (the changed
+     * windows drawn and sent to the panel). */
     cJSON_AddNumberToObject(root, "fps",         roundf(st.fps * 10.f) / 10.f);
     cJSON_AddNumberToObject(root, "frame_ms",    roundf(st.frame_ms * 100.f) / 100.f);
+    cJSON_AddNumberToObject(root, "pre_ms",      roundf(st.pre_ms * 100.f) / 100.f);
     cJSON_AddNumberToObject(root, "sim_ms",      roundf(st.sim_ms * 100.f) / 100.f);
     cJSON_AddNumberToObject(root, "wait_ms",     roundf(st.wait_ms * 100.f) / 100.f);
     cJSON_AddNumberToObject(root, "draw_ms",     roundf(st.draw_ms * 100.f) / 100.f);
