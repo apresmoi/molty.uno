@@ -39,7 +39,7 @@ expect "firmware boards"   "$FW firmware_test website" device/firmware/boards/wa
 expect "firmware scripts"  "$FW"                      tools/scripts/firmware-boards.py
 expect "host tests only"   "firmware_test"            device/firmware/test/host/cute_test.c
 expect "console only"      "$FW console_e2e"          device/console/src/main.ts
-expect "console catalog"   "$FW console_e2e website"  device/console/src/catalog/catalog.json
+expect "website catalog"   "$FW console_e2e creatures website" device/creatures/catalog/catalog.json
 expect "creatures js"      "$FW console_e2e creatures website" device/creatures/js/cute/duck.js
 expect "creatures .molty"  "$FW console_e2e creatures website firmware_test" device/creatures/molty/duck.molty
 expect "creature player js" "$FW console_e2e creatures website firmware_test" device/creatures/js/creature-player.js

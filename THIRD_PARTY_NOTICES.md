@@ -89,8 +89,6 @@ drivers of one board.
 
 ## Device console (single-file HTML, also stored in the firmware SPIFFS image)
 - Vite runtime helper — © 2019-present VoidZero Inc. and Vite contributors, MIT.
-- three.js r170 — © 2010-2024 three.js authors, MIT. Loaded at runtime from
-  https://cdn.jsdelivr.net/npm/three@0.170.0/ (not bundled).
 - glyphcss field synth (port) — © 2025 Layoutit, MIT (text above).
 
 ## molty CLI (Go binary)

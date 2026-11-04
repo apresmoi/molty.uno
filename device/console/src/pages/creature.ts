@@ -1,10 +1,9 @@
-// Molty (settings): pick a Molty from the catalog (sent to the device as a .molty file),
-// and play with the fluid — state, speed-reader text + WPM, palette, listening ring colour,
+// Molty (settings): pick a Molty from the device's creature packages (GET /api/creature/list,
+// POST /api/creature/select), and play with the fluid: state, speed-reader text + WPM, palette, listening ring colour,
 // shake to talk, gestures, idle life, tap-to-ripple. How Molty talks is on the voice page.
 import { UnsupportedError } from '../api/device';
 import type { FluidOrder, FluidState } from '../api/types';
 import type { AppCtx } from '../app';
-import type { CreatureEntry } from '../catalog/catalog';
 import { h, mount, note } from '../ui/dom';
 import { debounce, errText } from '../ui/fmt';
 import { preview } from '../ui/preview';
@@ -17,13 +16,10 @@ const STATES = ['blob', 'creature', 'thinking', 'text', 'autoplay'];
 const EFFECTS = ['ripple', 'vortex', 'wave'];
 const PALETTES: Record<string, string> = { green: '#7cf29a', amber: '#ffb347', pastel: '#c9b6ff' };
 
-export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
-  let alive = true, timer = 0, chosen: CreatureEntry | null = null, fluid: FluidState | null = null;
+export function creaturePage(root: HTMLElement, { api }: AppCtx) {
+  let alive = true, timer = 0, fluid: FluidState | null = null;
   const pkgs = h('div', { class: 'chips', role: 'group', 'aria-label': 'creatures' });
   const pkgMsg = h('div');
-  const cards = h('div', { class: 'cards', role: 'listbox', 'aria-label': 'moltys' });
-  const send = h('button', { class: 'primary', type: 'button', disabled: true, onclick: () => upload() }, 'send to molty');
-  const sendMsg = h('div');
   const current = h('div', { class: 'dim small' });
   const ctlMsg = h('div');
   const stateRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'state' });
@@ -56,9 +52,7 @@ export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
 
   mount(root,
     h('h1', null, 'molty ', h('span', { class: 'dim' }, '⠶ who lives in the water')),
-    h('h2', null, 'Creatures'), pkgs, pkgMsg,
-    h('h2', null, 'Catalog'),
-    cards, h('div', { class: 'row' }, current, send), sendMsg,
+    pkgs, current, pkgMsg,
     h('h2', null, 'the fluid'),
     h('div', { class: 'split' },
       h('div', null, pv.el, h('p', { class: 'dim small center' }, 'tap the screen to make a ripple')),
@@ -128,7 +122,7 @@ export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
         const on = l.current === c.id;
         return h('button', { type: 'button', class: 'chip' + (on ? ' on' : ''), 'aria-pressed': String(on), onclick: () => pickPkg(c.id) }, on ? `✓ ${c.name}` : c.name);
       }));
-    } catch (e) { if (!(e instanceof UnsupportedError)) mount(pkgMsg, note('err', errText(e))); }   /* older firmware has no packages */
+    } catch (e) { mount(pkgMsg, e instanceof UnsupportedError ? note('warn', 'this firmware has no creature packages yet: an update adds them') : note('err', errText(e))); }
   }
   async function pickPkg(id: string) {
     try { await api.selectCreaturePackage(id); mount(pkgMsg); } catch (e) { mount(pkgMsg, note('err', errText(e))); }
@@ -148,30 +142,6 @@ export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
     timer = window.setTimeout(poll, 2500);
   };
 
-  function renderCards(list: CreatureEntry[]) {
-    mount(cards, list.map((c) => h('button', {
-      type: 'button', role: 'option', class: 'creature' + (chosen?.id === c.id ? ' on' : ''), 'aria-selected': String(chosen?.id === c.id),
-      onclick: () => { chosen = c; send.disabled = false; send.textContent = `send ${c.name} to molty`; renderCards(list); mount(sendMsg); },
-    }, c.thumb ? h('img', { src: c.thumb, alt: '', width: 72, height: 72 }) : null, h('b', null, c.name), c.blurb ? h('span', { class: 'dim small' }, c.blurb) : null)));
-  }
-
-  async function upload() {
-    if (!chosen) return;
-    send.disabled = true; const label = send.textContent; send.textContent = 'sending ⠴';
-    try {
-      const bytes = await catalog.fetchFile(chosen);
-      await api.uploadCreature(chosen.id, bytes);
-      await api.fluid({ state: 'creature' }).catch(() => {});
-      mount(sendMsg, note('ok', `${chosen.name} is moving in ⠶`));
-      poll(); loadPkgs();
-    } catch (e) {
-      mount(sendMsg, e instanceof UnsupportedError
-        ? note('warn', 'this firmware can\'t take new moltys yet — an update will add it. the fluid below still works.')
-        : note('err', errText(e)));
-    } finally { send.disabled = false; send.textContent = label; }
-  }
-
-  catalog.list().then((l) => alive && renderCards(l), (e) => mount(cards, note('err', `catalog (${catalog.label}): ${errText(e)}`)));
   renderControls(); poll(); loadPkgs();
   return () => { alive = false; clearTimeout(timer); pv.stop(); };
 }

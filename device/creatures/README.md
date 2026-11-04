@@ -8,7 +8,7 @@ device/creatures/
 ├── js/
 │   ├── cute/         cute kit: kit.js (defineCreature) + one file per creature pack — see cute/README.md
 │   ├── fluid/        fluid-of-characters engine (sim, targets, renderer, speed reader, sound)
-│   ├── setup/        fluid-stage.js — the animated round screen the console embeds
+│   ├── setup/        fluid-stage.js: the setup mock's round screen + the website's thumbnails
 │   ├── mood.js       mood engine (idle, listening, thinking, speaking, happy, sleepy, surprised)
 │   ├── actions.js    one-shot actions (nod, wiggle, glances, yawn, …): MoodEngine.act(name);
 │   │                 the firmware twin is cute_act.h, pinned by tools/act-golden.mjs
@@ -16,7 +16,8 @@ device/creatures/
 │   ├── stage.js      3D viewport + 412×412 device preview
 │   ├── catalog.js    viewer roster
 │   └── main.js       viewer UI
-├── molty/            the 29 exported .molty files (bundled into the console)
+├── molty/            the 29 exported .molty files (the website offers them for download)
+├── catalog/          their names + fluid thumbnails for the website (apps/website/scripts/thumbs.mjs)
 ├── tools/            molty-export.mjs (spec → .molty), molty-behaviours.mjs (hook stand-ins),
 │                     act-golden.mjs (actions.js → the firmware's act_golden.txt)
 ├── index.html        creature viewer: moods, pokes, autopilot, device preview, compare A|B
