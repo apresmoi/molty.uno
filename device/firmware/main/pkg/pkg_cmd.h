@@ -17,7 +17,12 @@
  *   scene.play / scene.queue {pkg, layout, params?, ttl_s?} → {pkg, layout, ttl_s};
  *            not_installed, no_layout, bad_params, bad_package, busy (queue full).
  *   scene.clear {} → {}: back to the creature.
- *   local    GET /api/pkg, DELETE /api/pkg?id=, POST /api/scene (scene.play's args).
+ *   creature.select {id} → {id, name}: a built-in or installed creature package becomes the
+ *            creature, and the choice survives a reboot; not_installed, bad_package.
+ *   creature.list {} → {current, creatures: [{id, name, version, source}]} ("builtin" or
+ *            "installed"; current "" while an uploaded .molty is the creature).
+ *   local    GET /api/pkg, DELETE /api/pkg?id=, POST /api/scene (scene.play's args),
+ *            GET /api/creature/list, POST /api/creature/select?id=.
  */
 #pragma once
 #include "cJSON.h"
@@ -30,4 +35,6 @@ esp_err_t pkg_cmd_list(const cJSON *args, cJSON **result);
 esp_err_t pkg_cmd_scene_play(const cJSON *args, cJSON **result);
 esp_err_t pkg_cmd_scene_queue(const cJSON *args, cJSON **result);
 esp_err_t pkg_cmd_scene_clear(const cJSON *args, cJSON **result);
+esp_err_t pkg_cmd_creature_select(const cJSON *args, cJSON **result);
+esp_err_t pkg_cmd_creature_list(const cJSON *args, cJSON **result);
 esp_err_t pkg_http_register(httpd_handle_t server);

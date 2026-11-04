@@ -39,6 +39,7 @@ static const char *pkg_ran;
 #define PKG_STUB(fn, name) esp_err_t fn(const cJSON *a, cJSON **o) { (void)a;(void)o; pkg_ran = name; return ESP_OK; }
 PKG_STUB(pkg_cmd_install, "pkg.install") PKG_STUB(pkg_cmd_remove, "pkg.remove") PKG_STUB(pkg_cmd_list, "pkg.list")
 PKG_STUB(pkg_cmd_scene_play, "scene.play") PKG_STUB(pkg_cmd_scene_queue, "scene.queue") PKG_STUB(pkg_cmd_scene_clear, "scene.clear")
+PKG_STUB(pkg_cmd_creature_select, "creature.select") PKG_STUB(pkg_cmd_creature_list, "creature.list")
 
 /* self_update.c's screen writer, extracted verbatim by link_build.sh */
 #include "update_screen.inc"
@@ -156,9 +157,9 @@ int main(void) {
     /* update is registered; a handler's own refusal code reads back */
     cJSON *out=NULL, *a=cJSON_Parse("{}");
     assert(link_cmd_run("update",a,&out)==LINK_CMD_REFUSED && update_cmds==1 && !strcmp(link_cmd_refusal(),"wrong_board"));
-    /* every package and scene command is registered, past the old 16-command table */
-    const char *pkgs[]={"pkg.install","pkg.remove","pkg.list","scene.play","scene.queue","scene.clear"};
-    for (int i=0;i<6;i++) { pkg_ran=NULL; assert(link_cmd_run(pkgs[i],a,&out)==ESP_OK && pkg_ran && !strcmp(pkg_ran,pkgs[i])); }
+    /* every package, scene and creature command is registered, past the old 16-command table */
+    const char *pkgs[]={"pkg.install","pkg.remove","pkg.list","scene.play","scene.queue","scene.clear","creature.select","creature.list"};
+    for (int i=0;i<8;i++) { pkg_ran=NULL; assert(link_cmd_run(pkgs[i],a,&out)==ESP_OK && pkg_ran && !strcmp(pkg_ran,pkgs[i])); }
     cJSON_Delete(a);
     cJSON_Delete(sdk_sent);
     puts("LINK CMD PASS: explicit moods counted (link mood cmd, local state POST) under the mood lock, own/rejected moods not; screen commands cancel a question only once accepted; act never takes the screen; react moods / acts hold the listen's own reactions for their length");

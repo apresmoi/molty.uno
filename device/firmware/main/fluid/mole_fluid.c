@@ -34,6 +34,8 @@
 #include "scene_player.h"
 #include "cute_rig.h"
 #include "cute_act.h"
+#include "creature_pkg.h"
+#include "pkg_creature.h"
 #include "glyph_rsvp.h"
 #include "molty_board.h"
 
@@ -193,14 +195,27 @@ static uint32_t s_tint_in = 0;
 static float   s_ripq[FLUID_RIPPLE_Q][3];
 static int     s_ripn = 0;
 
-/* creature (.molty) — the blob is handed over under s_mutex, built by the task */
+/* the creature: a creature package (s_cpk, docs/PACKAGES.md section 5) or a .molty (s_cute).
+ * The file is handed over under s_mutex and built by the task. */
 static uint8_t *s_cute_blob = NULL;  static size_t s_cute_len = 0;   /* pending load (PSRAM) */
+static bool     s_cute_pkg = false;                 /* the pending file is a creature package */
+static char     s_cr_id[PKG_ID_MAX + 1] = "";       /* the package shown or on its way; "" = .molty */
 static int      s_req_mood = -1;
 static bool     s_req_work = false;             /* mood `working` (fd_agent_work; s_req_hold_s) */
 static float    s_req_hold_s = -1.f;                /* with s_req_mood: < 0 = its default */
 static char     s_cute_name[40] = "", s_cute_err[40] = "";
 static cute_rt_t *s_cute = NULL;                    /* task-owned                        */
+static cpk_t    *s_cpk = NULL;                      /* task-owned                        */
 static int      s_cute_tris = 0;
+
+/* the creature on screen, whichever kind (task only) */
+static bool  cr_loaded(void) { return s_cpk || s_cute; }
+static void  cr_set_mood(int m) { if (s_cpk) me_set_mood(cpk_engine(s_cpk), m); else if (s_cute) cute_rt_set_mood(s_cute, m); }
+static int   cr_mood(void) { return s_cpk ? me_mood(cpk_engine(s_cpk)) : s_cute ? cute_rt_mood(s_cute) : -1; }
+static void  cr_act(int a) { if (s_cpk) me_act(cpk_engine(s_cpk), a); else if (s_cute) cute_rt_act(s_cute, a); }
+static int   cr_acting(void) { return s_cpk ? me_acting(cpk_engine(s_cpk)) : s_cute ? cute_rt_acting(s_cute) : -1; }
+static float cr_act_time(void) { return s_cpk ? me_act_time(cpk_engine(s_cpk)) : cute_rt_act_time(s_cute); }
+static float cr_env(void) { return s_cpk ? me_env(cpk_engine(s_cpk)) : cute_rt_env(s_cute); }
 
 /* ── Task-owned state ───────────────────────────────────────────────────────── */
 
@@ -334,7 +349,7 @@ static void ripple(float x, float y, float strength, float radius) {
 static void enter_state(int st, int fx, const fluid_cfg_t *cfg) {
     int from = s_cur;
     if (s_cur == ST_FX) fluid_effect_exit(s_sim, s_cur_fx);
-    if (st == ST_CREATURE && !s_cute) st = ST_BLOB;   /* no creature loaded */
+    if (st == ST_CREATURE && !cr_loaded()) st = ST_BLOB;   /* no creature loaded */
     s_sim->edge_w = st == ST_CREATURE ? 1.f : 0.f;      /* solid eyes once settled */
     if (st == ST_TEXT) {
         if (s_ntok == 0) { strcpy(s_ttext, "..."); tokenize(); }
@@ -367,12 +382,12 @@ static void enter_state(int st, int fx, const fluid_cfg_t *cfg) {
 }
 
 /* the director's pending transition, if any, then its mood on the creature (moods blend
- * inside the creature: cute_rt_set_mood fades between them and ignores the same mood) */
+ * inside the creature: its mood engine fades between them and ignores the same mood) */
 static void direct(const fluid_cfg_t *cfg) {
     int st, fx;
     /* a question owns the screen: the director's transitions wait under it */
     if (s_ask.scr.phase == FLUID_ASK_NONE && fd_take(&s_dir, &st, &fx)) enter_state(st, fx, cfg);
-    if (s_cute) cute_rt_set_mood(s_cute, fd_mood(&s_dir));
+    cr_set_mood(fd_mood(&s_dir));
 }
 
 /* ── A question (the link's ask): labels condense in their sectors ─────────── */
@@ -532,7 +547,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     if (scene_playing(&s_sp) && !fd_scene_wanted(&s_dir)) scene_clear(&s_sp);   /* another state took the screen */
     {   /* an action to start: an agent's, or idle life's (never a sound) */
         int a = fd_take_act(&s_dir);
-        if (a >= 0 && s_cute) cute_rt_act(s_cute, a);
+        if (a >= 0) cr_act(a);
     }
 
     const bool asking = s_ask.scr.phase != FLUID_ASK_NONE;
@@ -607,18 +622,18 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     case ST_THINKING: fluid_target_blob(s, s_tnow * 1.4f, swell * 0.85f, ox, oy); break;
     case ST_SCENE:    scene_fill(s, s_sp.cur, s_sp.t, s_overlay, &s_noverlay); break;
     case ST_CREATURE:
-        if (s_cute) {
-            cute_rt_update(s_cute, rdt);                   /* mood engine + kit + behaviours */
+        if (cr_loaded()) {
+            if (s_cpk) cpk_frame(s_cpk, s, rdt, swell);    /* engine + player + body + ambient + fill */
+            else cute_rt_update(s_cute, rdt);              /* mood engine + kit + behaviours */
             {   /* paddle's strokes splash the real water, either side of the creature */
                 static float act_t0;
-                const float at = cute_rt_act_time(s_cute);
-                const int stroke = cute_act_splash(cute_rt_acting(s_cute), at < act_t0 ? 0.f : act_t0, at);
+                const float at = cr_act_time();
+                const int stroke = cute_act_splash(cr_acting(), at < act_t0 ? 0.f : act_t0, at);
                 act_t0 = at;
                 if (stroke) ripple(stroke & 1 ? -0.6f : 0.6f, 0.5f, 1.2f, 0.09f);
             }
-            cute_rt_raster(s_cute, s->W, s->H);
-            cute_rt_fill(s_cute, s, swell);
-            s_cute_tris = cute_rt_tris(s_cute);
+            if (s_cute) { cute_rt_raster(s_cute, s->W, s->H); cute_rt_fill(s_cute, s, swell); }
+            s_cute_tris = s_cpk ? cpk_tris(s_cpk) : cute_rt_tris(s_cute);
         } else {
             fluid_target_blob(s, s_tnow, swell, ox, oy);   /* creature unloaded while showing */
         }
@@ -643,9 +658,9 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
 
     /* surface drivers (main.js): thinking = the motor's fine standing shimmer; the creature's
      * speech envelope rings the surface from its mouth; mic adds shimmer + random drops */
-    int cmood = (s_cur == ST_CREATURE && s_cute && !asking) ? cute_rt_mood(s_cute) : -1;
+    int cmood = (s_cur == ST_CREATURE && cr_loaded() && !asking) ? cr_mood() : -1;
     bool thinking = s_cur == ST_THINKING || cmood == CM_THINKING;
-    float level = cmood == CM_SPEAKING ? cute_rt_env(s_cute) : 0.f;
+    float level = cmood == CM_SPEAKING ? cr_env() : 0.f;
     s->osc.x = 0.f; s->osc.y = cmood == CM_SPEAKING ? 0.12f : 0.f;
     s->osc.amp = (cmood == CM_SPEAKING ? 1.2f : thinking ? 0.25f : 0.5f) * level;
     s->osc.freq = 2.5f + 6.f * 0.4f;
@@ -682,26 +697,31 @@ static esp_err_t alloc_bufs(void);
 extern const uint8_t _binary_default_molty_start[];
 extern const uint8_t _binary_default_molty_end[];
 
-static void load_creature(const uint8_t *buf, size_t len) {
-    cute_spec_t *spec = heap_caps_malloc(sizeof(cute_spec_t), MALLOC_CAP_SPIRAM);
-    const char *err = "oom";
+static void load_creature(const uint8_t *buf, size_t len, bool pkg) {
+    const char *err = "oom", *name = "";
+    cute_spec_t *spec = NULL;
     cute_rt_t *rt = NULL;
-    if (spec && cute_spec_parse(buf, len, spec, &err) == 0) {
+    cpk_t *k = NULL;
+    if (pkg) {
+        k = cpk_create((const char *)buf, len, esp_random(), &err);
+        if (k) name = cp_name(cpk_player(k));
+    } else if ((spec = heap_caps_malloc(sizeof(cute_spec_t), MALLOC_CAP_SPIRAM)) && cute_spec_parse(buf, len, spec, &err) == 0) {
         rt = cute_rt_create(spec, esp_random());
         if (!rt) err = "oom";
+        else name = spec->name;
     }
-    if (rt) {
-        int mood = s_cute ? cute_rt_mood(s_cute) : CM_IDLE;
-        cute_rt_destroy(s_cute);
-        s_cute = rt;
-        cute_rt_set_mood(s_cute, mood);
-        ESP_LOGI(TAG, "creature '%s' loaded (%u B, %d parts)", spec->name, (unsigned)len, spec->nparts);
+    if (rt || k) {
+        const int mood = cr_loaded() ? cr_mood() : CM_IDLE;
+        cute_rt_destroy(s_cute); cpk_destroy(s_cpk);
+        s_cute = rt; s_cpk = k;
+        cr_set_mood(mood);
+        ESP_LOGI(TAG, "creature '%s' loaded (%u B, %s)", name, (unsigned)len, pkg ? "package" : ".molty");
     } else {
         ESP_LOGW(TAG, "creature load failed: %s", err);
     }
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    if (rt) { strncpy(s_cute_name, spec->name, sizeof(s_cute_name) - 1); s_cute_err[0] = '\0'; }
-    else strncpy(s_cute_err, err, sizeof(s_cute_err) - 1);
+    if (rt || k) { strlcpy(s_cute_name, name, sizeof(s_cute_name)); s_cute_err[0] = '\0'; }
+    else strlcpy(s_cute_err, err, sizeof(s_cute_err));
     xSemaphoreGive(s_mutex);
     heap_caps_free(spec);
 }
@@ -718,7 +738,7 @@ static uint8_t *read_file(const char *path, size_t *len) {
     return b;
 }
 
-/* the stored creature (or the tmp left by a crash between remove and rename), else the
+/* the uploaded .molty (or the tmp left by a crash between remove and rename), else the
  * firmware default; the CRC check in cute_spec_parse makes a torn file harmless */
 static uint8_t *creature_bytes(size_t *len, bool *is_default) {
     uint8_t *b = read_file(CUTE_PATH, len);
@@ -732,10 +752,28 @@ static uint8_t *creature_bytes(size_t *len, bool *is_default) {
     return b;
 }
 
-static void queue_creature(uint8_t *blob, size_t len) {   /* takes ownership */
+/* the creature a boot shows: the one chosen last; with none chosen yet, an uploaded .molty
+ * (a Molty from before creature packages keeps its creature), else the first built-in one */
+static uint8_t *boot_creature(size_t *len, bool *pkg, char id[PKG_ID_MAX + 1]) {
+    struct stat st;
+    const bool chosen = pkgc_chosen(id);
+    if (!chosen && (stat(CUTE_PATH, &st) == 0 || stat(CUTE_TMP_PATH, &st) == 0)) id[0] = 0;
+    else if (!id[0] || !pkg_id_ok(id)) strlcpy(id, PKGC_BUILTINS[0].id, PKG_ID_MAX + 1);
+    if (id[0]) {
+        uint8_t *b = (uint8_t *)pkgc_bytes(id, len);
+        if (!b && strcmp(id, PKGC_BUILTINS[0].id)) { strlcpy(id, PKGC_BUILTINS[0].id, PKG_ID_MAX + 1); b = (uint8_t *)pkgc_bytes(id, len); }   /* removed since */
+        if (b) { *pkg = true; return b; }
+    }
+    bool dflt;
+    *pkg = false; id[0] = 0;
+    return creature_bytes(len, &dflt);
+}
+
+static void queue_creature(uint8_t *blob, size_t len, bool pkg, const char *id) {   /* takes ownership */
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     if (s_cute_blob) heap_caps_free(s_cute_blob);
-    s_cute_blob = blob; s_cute_len = len;
+    s_cute_blob = blob; s_cute_len = len; s_cute_pkg = pkg;
+    strlcpy(s_cr_id, id, sizeof(s_cr_id));
     xSemaphoreGive(s_mutex);
 }
 
@@ -758,9 +796,24 @@ esp_err_t mole_fluid_creature_file_put(const uint8_t *buf, size_t len, const cha
     remove(CUTE_PATH);
     if (rename(CUTE_TMP_PATH, CUTE_PATH) != 0) { if (err) *err = "spiffs_rename"; return ESP_FAIL; }
     uint8_t *copy = heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
-    if (copy) { memcpy(copy, buf, len); queue_creature(copy, len); }       /* hot reload */
+    if (copy) { memcpy(copy, buf, len); queue_creature(copy, len, false, ""); }   /* hot reload */
+    pkgc_choose("");                                                          /* the upload is the choice now */
     if (err) *err = "ok";
     return ESP_OK;
+}
+
+esp_err_t mole_fluid_creature_package(const char *id, char *json, size_t len) {
+    if (alloc_bufs() != ESP_OK) { heap_caps_free(json); return ESP_ERR_NO_MEM; }
+    queue_creature((uint8_t *)json, len, true, id);
+    return ESP_OK;
+}
+
+void mole_fluid_creature_id(char *id, size_t n) {
+    id[0] = 0;
+    if (!s_mutex) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    strlcpy(id, s_cr_id, n);
+    xSemaphoreGive(s_mutex);
 }
 
 esp_err_t mole_fluid_creature_file_get(uint8_t **out, size_t *len, bool *is_default) {
@@ -860,7 +913,7 @@ static void fluid_task(void *arg) {
         req = s_req_state; req_fx = s_req_fx; req_hold = s_req_text_hold; s_req_state = -1;
         req_reel = s_req_reel; s_req_reel = false;
         nrip = s_ripn; memcpy(rip, s_ripq, sizeof(rip)); s_ripn = 0;
-        uint8_t *cblob = s_cute_blob; size_t clen = s_cute_len; s_cute_blob = NULL;
+        uint8_t *cblob = s_cute_blob; size_t clen = s_cute_len; s_cute_blob = NULL; const bool cpkg = s_cute_pkg;
         int req_mood = s_req_mood; s_req_mood = -1;
         bool req_work = s_req_work; s_req_work = false;
         float req_hold_s = s_req_hold_s;
@@ -913,7 +966,7 @@ static void fluid_task(void *arg) {
                     s_word_until = s_tnow;                              /* while holding the last */
             }
         }
-        if (cblob) { load_creature(cblob, clen); heap_caps_free(cblob); fd_set_creature(&s_dir, s_cute != NULL); }
+        if (cblob) { load_creature(cblob, clen, cpkg); heap_caps_free(cblob); fd_set_creature(&s_dir, cr_loaded()); }
         /* the director: state first (it may end the reel), then the mood over it */
         if (req_reel) fd_autoplay(&s_dir);
         if (req >= 0) fd_request_state(&s_dir, req, req_fx, req_hold);
@@ -979,8 +1032,8 @@ static void fluid_task(void *arg) {
         s_stats.energy = s_sim->energy; s_stats.err = s_sim->err;
         s_stats.state = s_cur; s_stats.fx = s_cur_fx; s_stats.reel = s_dir.autoplay ? s_dir.reel : -1;
         s_stats.autoplay = s_dir.autoplay; s_stats.asleep = fd_asleep(&s_dir); s_stats.status = fd_status(&s_dir);
-        s_stats.mood = s_cute ? cute_rt_mood(s_cute) : -1; s_stats.ctris = s_cute_tris;
-        s_stats.act = s_cute ? cute_rt_acting(s_cute) : -1;
+        s_stats.mood = cr_mood(); s_stats.ctris = s_cute_tris;
+        s_stats.act = cr_acting();
         s_stats.working = fd_working(&s_dir);
         s_scene_nq = s_sp.nq;
         snprintf(s_stats.scene_pkg, sizeof(s_stats.scene_pkg), "%s", s_sp.cur ? s_sp.cur->pkg_id : "");
@@ -1081,10 +1134,10 @@ esp_err_t mole_fluid_creature_init(void) {
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
         return ESP_ERR_NO_MEM;
     }
-    {   /* the stored creature (or the firmware default) — built on the task */
-        size_t clen = 0; bool dflt = false;
-        uint8_t *cb = creature_bytes(&clen, &dflt);
-        if (cb) queue_creature(cb, clen);
+    {   /* the chosen creature (boot_creature) — built on the task */
+        size_t clen = 0; bool pkg = false; char id[PKG_ID_MAX + 1];
+        uint8_t *cb = boot_creature(&clen, &pkg, id);
+        if (cb) queue_creature(cb, clen, pkg, id);
     }
     /* boot: the director wants the creature (the stored or default .molty queued above
      * loads on the task's first frame); the blob stands in only if none loads */
@@ -1146,6 +1199,7 @@ void mole_fluid_creature_deinit(void) {
     xSemaphoreGive(s_mutex);
     free_grid();
     cute_rt_destroy(s_cute); s_cute = NULL;
+    cpk_destroy(s_cpk); s_cpk = NULL;
     ESP_LOGI(TAG, "fluid creature deinit");
 }
 
@@ -1185,8 +1239,8 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     const uint32_t gestures = s_gestures;
     if (!s_idle_life_loaded) { s_idle_life = idle_life_load(); s_idle_life_loaded = true; }
     const int idle_life = s_idle_life;
-    char cname[40], cerr[40];
-    memcpy(cname, s_cute_name, sizeof(cname)); memcpy(cerr, s_cute_err, sizeof(cerr));
+    char cname[40], cerr[40], cid[PKG_ID_MAX + 1];
+    memcpy(cname, s_cute_name, sizeof(cname)); memcpy(cerr, s_cute_err, sizeof(cerr)); memcpy(cid, s_cr_id, sizeof(cid));
     cJSON *root = cJSON_CreateObject();
     if (root) cJSON_AddStringToObject(root, "text", s_text ? s_text : "");
     xSemaphoreGive(s_mutex);
@@ -1215,6 +1269,7 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
         cJSON *cj = cJSON_AddObjectToObject(root, "creature_info");
         if (cj) {
             cJSON_AddStringToObject(cj, "name", cname);
+            cJSON_AddStringToObject(cj, "package", cid);   /* "" = a .molty */
             cJSON_AddNumberToObject(cj, "tris", st.ctris);
             if (cerr[0]) cJSON_AddStringToObject(cj, "error", cerr);
         }
