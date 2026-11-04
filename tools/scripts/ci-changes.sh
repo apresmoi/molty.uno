@@ -53,8 +53,9 @@ else
       device/creatures/*) hit creatures website ;;
     esac
     case "$p" in
-      # cute_build.sh tests the exported .molty files
-      device/creatures/molty/*) hit firmware_test ;;
+      # cute_build.sh tests the exported .molty files; creature_build.sh replays the JS
+      # creature player (and the mood engine and actions it reads) against the C one
+      device/creatures/molty/*|device/creatures/js/creature-player.js|device/creatures/js/mood.js|device/creatures/js/actions.js) hit firmware_test ;;
     esac
 
     case "$p" in
