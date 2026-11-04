@@ -53,6 +53,7 @@ idf_component_register(
         "creature/cute_spec.c"
         "creature/cute_rig.c"
         "creature/mood_engine.c"   # the shared pose (js/mood.js): moods, blinks, springs, actions
+        "creature/rig_geo.c"       # 3×4 affine maths + the three.js geometries both runtimes mesh with
         # link: agent link to the relay (WSS, pairing, audio)
         "link/link_protocol.c"
         "link/link_identity.c"

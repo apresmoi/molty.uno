@@ -17,6 +17,7 @@ cc -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -O2 \
   "$MAIN/creature/cute_spec.c" \
   "$MAIN/creature/cute_rig.c" \
   "$MAIN/creature/mood_engine.c" \
+  "$MAIN/creature/rig_geo.c" \
   "$MAIN/fluid/fluid_sim.c" \
   "$MAIN/fluid/fluid_target.c" \
   "$MAIN/fluid/fluid_draw.c" \
