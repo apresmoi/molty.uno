@@ -7,10 +7,22 @@
  *   strict    broken copies of a package (unknown key, op, bone, group; a wrong type; over
  *             the limits) are refused with a reason.
  *
- * Usage: creature_test <packages dir> <golden dir>   (test/host/creature_build.sh)
+ *   render    each creature through the device's whole frame (mood engine, player, body,
+ *             ambient, fill, fluid, glyphs): every mood fills the target, the eyes are holes,
+ *             and with an out dir, one 412 px frame per mood (<id>_<mood>.ppm) to compare
+ *             with the lab's clips.
+ *   bench     the frame's creature work against the .molty duck's on the host, scaled to the
+ *             device's ~11 ms for the latter at 33 fps (as scene_test does).
+ *
+ * Usage: creature_test <packages dir> <golden dir> <duck.molty> [out dir]   (test/host/creature_build.sh)
  */
 #include "creature_player.h"
+#include "creature_pkg.h"
 #include "cute_act.h"
+#include "cute_rig.h"
+#include "fluid_sim.h"
+
+#include <time.h>
 
 #include <math.h>
 #include <stdio.h>
@@ -198,12 +210,113 @@ static void test_hash(void) {
     for (int i = 0; i < 5; i++) CHECK(cp_hash(in[i]) == js[i], "hash(%g) = %.17g, JS %.17g", in[i], cp_hash(in[i]), js[i]);
 }
 
+
+/* ── the device's frame, end to end ───────────────────────────────────────── */
+
+static const uint8_t *font(char ch) {
+    static const uint8_t full[7] = { 0x1f, 0x1f, 0x1f, 0x1f, 0x1f, 0x1f, 0x1f };
+    (void)ch; return full;
+}
+static void write_ppm(const char *path, const uint16_t *fb) {
+    FILE *f = fopen(path, "wb");
+    if (!f) return;
+    fprintf(f, "P6\n%d %d\n255\n", FLUID_STAGE_REF, FLUID_STAGE_REF);
+    for (int i = 0; i < FLUID_STAGE_REF * FLUID_STAGE_REF; i++) {
+        uint16_t le = (uint16_t)((fb[i] >> 8) | (fb[i] << 8));
+        unsigned char c[3] = { (unsigned char)((le >> 11) << 3), (unsigned char)(((le >> 5) & 63) << 2), (unsigned char)((le & 31) << 3) };
+        fwrite(c, 1, 3, f);
+    }
+    fclose(f);
+}
+static double now_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e6 + t.tv_nsec / 1e3; }
+
+static const char *const MOOD_NAMES[CP_N_MOODS] = { "idle", "listening", "thinking", "speaking", "happy", "sleepy", "surprised" };
+
+/* every mood for 2.5 s (a gesture in each), through the fluid and the glyphs, as mole_fluid.c runs it */
+static double test_render(const char *pkgdir, const char *id, const char *outdir) {
+    char path[512]; size_t len;
+    snprintf(path, sizeof(path), "%s/%s/%s.json", pkgdir, id, id);
+    char *json = slurp(path, &len);
+    const char *err = NULL;
+    cpk_t *k = json ? cpk_create(json, len, 1234, &err) : NULL;
+    CHECK(k != NULL, "%s: create (%s)", id, err ? err : "no file");
+    if (!k) { free(json); return 0; }
+    const int W = 52, H = 32;
+    fluid_sim_t *s = fluid_sim_create(W, H, FLUID_STAGE_REF);
+    fluid_draw_t *d = fluid_draw_create(W, H, FLUID_STAGE_REF, FLUID_STAGE_REF);
+    fluid_frame_t *fr = fluid_frame_create(W, H);
+    uint16_t *fb = calloc(FLUID_STAGE_REF * FLUID_STAGE_REF, 2);
+    s->edge_w = 1.f;
+    int worst = 0, eyes = 0; double us = 0; int timed = 0;
+    for (int m = 0; m < CP_N_MOODS; m++) {
+        me_set_mood(cpk_engine(k), m);
+        float ink = 0; int holes = 0;
+        for (int f = 0; f < 75; f++) {
+            const float t = f / 30.f;
+            if (f == 20) me_act(cpk_engine(k), (m * 3 + 1) % CA_INSPECT);
+            s->p.hold = fminf(1.f, t / 1.2f);
+            s->p.relax_up = 2.6f; s->p.relax_down = 3.4f; s->p.tint_rate = 3 + 9 * s->p.hold;
+            const double t0 = now_us();
+            cpk_frame(k, s, 1.f / 30.f, 1.f);
+            us += now_us() - t0; timed++;
+            fluid_sim_background(s, t, 0.5f, (f & 1) == 0);
+            fluid_sim_swirl_field(s);
+            fluid_sim_step(s, 1.f / 60); fluid_sim_step(s, 1.f / 60);
+            fluid_sim_color(s, 1.f / 30);
+            fluid_sim_view(s);
+            fluid_sim_snapshot(s, fr, false);
+            fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, t, 0.f, NULL, 0, " .:-=+*#", font };
+            int y0, y1;
+            fluid_draw(d, fr, fb, &o, &y0, &y1);
+            if (cpk_tris(k) > worst) worst = cpk_tris(k);
+        }
+        const float *cov, *lum, *r, *g, *b; const uint8_t *hole;
+        cb_cells(cpk_body(k), &cov, &lum, &r, &g, &b, &hole);
+        for (int q = 0; q < W * H; q++) { ink += s->T[q] / FQ_UNIT; holes += hole[q]; }
+        CHECK(ink > 20.f, "%s %s: the target is nearly empty (%.1f)", id, MOOD_NAMES[m], ink);
+        eyes += holes;
+        printf("  %-8s %-10s ink %6.1f  holes %3d  tris %d\n", id, MOOD_NAMES[m], ink, holes, cpk_tris(k));
+        if (outdir) { snprintf(path, sizeof(path), "%s/%s_%s.ppm", outdir, id, MOOD_NAMES[m]); write_ppm(path, fb); }
+    }
+    CHECK(eyes > 0, "%s: no dark holes (the eyes) in any mood", id);
+    CHECK(worst > 100 && worst < 4000, "%s: %d triangles drawn", id, worst);
+    free(fb); fluid_frame_destroy(fr); fluid_draw_destroy(d); fluid_sim_destroy(s);
+    cpk_destroy(k); free(json);
+    return us / timed;
+}
+
+/* the .molty duck's update + raster + fill on the host: the work the device does in ~11 ms */
+static double bench_v1(const char *molty) {
+    static uint8_t buf[CUTE_MAX_FILE + 16];
+    static cute_spec_t spec;
+    FILE *f = fopen(molty, "rb");
+    size_t n = f ? fread(buf, 1, sizeof(buf), f) : 0;
+    if (f) fclose(f);
+    const char *err;
+    if (!n || cute_spec_parse(buf, n, &spec, &err) != 0) return 0;
+    cute_rt_t *rt = cute_rt_create(&spec, 99);
+    fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
+    for (int k = 0; k < 30; k++) cute_rt_update(rt, 1.f / 30);
+    double t0 = now_us();
+    for (int k = 0; k < 1500; k++) { if (k % 200 == 0) cute_rt_set_mood(rt, k / 200 % CUTE_N_MOODS); cute_rt_update(rt, 1.f / 30); cute_rt_raster(rt, 52, 32); cute_rt_fill(rt, s, 1.f); }
+    const double us = (now_us() - t0) / 1500;
+    fluid_sim_destroy(s); cute_rt_destroy(rt);
+    return us;
+}
+
 int main(int argc, char **argv) {
-    if (argc < 3) { printf("usage: creature_test <packages dir> <golden dir>\n"); return 2; }
+    if (argc < 4) { printf("usage: creature_test <packages dir> <golden dir> <duck.molty> [out dir]\n"); return 2; }
     printf("creature player host test\n");
     test_hash();
     for (const char *const *id = (const char *const[]){ "duck", "cat", "octopus", NULL }; *id; id++) test_golden(argv[1], argv[2], *id);
     test_strict(argv[1]);
+    const double v1 = bench_v1(argv[3]);
+    CHECK(v1 > 0, "the .molty duck to compare with (%s)", argv[3]);
+    for (const char *const *id = (const char *const[]){ "duck", "cat", "octopus", NULL }; *id; id++) {
+        const double us = test_render(argv[1], *id, argc > 4 ? argv[4] : NULL), ms = 11.0 * us / (v1 > 0 ? v1 : 1), frame = 30.0 - 11.0 + ms;
+        printf("  bench %-8s host %.1f us a frame (the .molty duck %.1f us): device estimate %.1f ms, frame %.1f ms = %.0f fps\n",
+               *id, us, v1, ms, frame, 1000.0 / (frame > 30.0 ? frame : 30.0));
+    }
     printf("%d passed, %d failed\n", s_pass, s_fail);
     return s_fail ? 1 : 0;
 }

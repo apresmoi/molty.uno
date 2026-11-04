@@ -46,7 +46,7 @@ extern "C" {
 #define CP_ID_MAX       32
 #define CP_NAME_MAX     32
 
-enum { CP_ELLIPSOID, CP_BOX, CP_CONE, CP_CYLINDER, CP_TUBE };
+enum { CPS_ELLIPSOID, CPS_BOX, CPS_CONE, CPS_CYLINDER, CPS_TUBE };
 enum { CP_EYE_NORMAL, CP_EYE_WIDE, CP_EYE_HAPPY, CP_EYE_SLEEPY, CP_EYE_SQUINT };
 #define CP_N_MOODS 7             /* idle listening thinking speaking happy sleepy surprised   */
 
@@ -58,13 +58,13 @@ typedef struct {
 } cp_bone_t;
 
 typedef struct {
-    uint8_t type;                /* CP_ELLIPSOID ..                                             */
+    uint8_t type;                /* CPS_ELLIPSOID ..                                             */
     int16_t bone;                /* -1 = the root                                               */
     int16_t pal;                 /* palette index, -1 = a literal colour (rgb)                  */
     uint8_t rgb[3];
     float pos[3], rot[3];
     float size[3];               /* ellipsoid radii, box sides                                  */
-    float r, r2, h;              /* cone / cylinder (r2 = top radius, default r), tube radius    */
+    float r, r2, h;              /* cylinder top r, bottom r2 (default r); cone r; tube radius   */
     uint8_t seg[2];              /* ellipsoid w, h; cone / cylinder / tube segments             */
     uint8_t npath;
     float path[CP_PATH_MAX][3];

@@ -945,11 +945,11 @@ static int body_c(cx_t *x, const cJSON *bj) {
         TRY(vec3(x, e, "rot", P->rot, "creature: part rot"));
         const cJSON *seg = cJSON_GetObjectItemCaseSensitive(e, "seg");
         float sg[2] = { 0, 0 };
-        if (P->type == CP_ELLIPSOID) { sg[0] = 12; sg[1] = 8; if (seg) TRY(nums(x, seg, 2, 3, 32, sg, "creature: seg")); }
+        if (P->type == CPS_ELLIPSOID) { sg[0] = 12; sg[1] = 8; if (seg) TRY(nums(x, seg, 2, 3, 32, sg, "creature: seg")); }
         else if (seg) TRY(numf(x, seg, 1, 64, &sg[0], "creature: seg"));
-        else sg[0] = P->type == CP_CONE ? 8 : P->type == CP_CYLINDER ? 10 : 32;
+        else sg[0] = P->type == CPS_CONE ? 8 : P->type == CPS_CYLINDER ? 10 : 32;
         P->seg[0] = (uint8_t)sg[0]; P->seg[1] = (uint8_t)sg[1];
-        if (P->type == CP_ELLIPSOID || P->type == CP_BOX) {
+        if (P->type == CPS_ELLIPSOID || P->type == CPS_BOX) {
             const cJSON *sz = cJSON_GetObjectItemCaseSensitive(e, "size");
             if (!sz) FAIL(x, "creature: part size");
             TRY(nums(x, sz, 3, 0, 100, P->size, "creature: part size"));
@@ -958,10 +958,10 @@ static int body_c(cx_t *x, const cJSON *bj) {
             if (!r) FAIL(x, "creature: part r");
             TRY(numf(x, r, 0, 100, &P->r, "creature: part r"));
             TRY(optnum(x, e, "r2", 0, 100, P->r, &P->r2, "creature: part r2"));
-            if (P->type != CP_TUBE) {
+            if (P->type != CPS_TUBE) {
                 if (!cJSON_GetObjectItemCaseSensitive(e, "h")) FAIL(x, "creature: part h");
                 TRY(optnum(x, e, "h", 0, 100, 0, &P->h, "creature: part h"));
-                if (P->seg[0] < 3) FAIL(x, "creature: seg");
+                if (P->seg[0] < 3 || P->seg[0] > 32) FAIL(x, "creature: seg");
             } else {
                 const cJSON *path = cJSON_GetObjectItemCaseSensitive(e, "path");
                 int n = cJSON_GetArraySize(path);
