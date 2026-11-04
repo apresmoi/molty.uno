@@ -45,7 +45,7 @@ static inline float clampf(float v, float a, float b) { return v < a ? a : v > b
  * mesh with facets of about LOD_PX samples, drawn while the camera is not zoomed in: the
  * same picture for fewer triangles (an eye's glint is 250 facets in a few samples) */
 #define LOD_PX 1.5f
-typedef struct { geo_t g, lod; int16_t bone; int16_t pal; uint8_t rgb[3]; m34_t local; } mesh_t;
+typedef struct { geo_t g, lod; float *fn, *fn_lod; int16_t bone; int16_t pal; uint8_t rgb[3]; m34_t local; } mesh_t;   /* fn: local face normals */
 
 struct cb {
     int nb, nm, focus_bone;
@@ -96,6 +96,17 @@ static inline float rsqrt(float x) {
 }
 static void cross3(float *o, const float *a, const float *b) { o[0] = a[1] * b[2] - a[2] * b[1]; o[1] = a[2] * b[0] - a[0] * b[2]; o[2] = a[0] * b[1] - a[1] * b[0]; }
 
+/* each face's normal in the mesh's own frame (unnormalised): culled and lit without its vertices */
+static float *face_normals(const geo_t *g) {
+    float *fn = CB_CALLOC((size_t)g->nt * 3 * sizeof(float) + 4);
+    for (int t = 0; fn && t < g->nt; t++) {
+        const float *a = g->v + g->t[t * 3] * 3, *b = g->v + g->t[t * 3 + 1] * 3, *c = g->v + g->t[t * 3 + 2] * 3;
+        const float e1[3] = { b[0] - a[0], b[1] - a[1], b[2] - a[2] }, e2[3] = { c[0] - a[0], c[1] - a[1], c[2] - a[2] };
+        cross3(fn + t * 3, e1, e2);
+    }
+    return fn;
+}
+
 /* renderer.mjs frame(): looking from VIEW, centred on the projected bounds of the body at
  * rest (every other vertex, as the lab samples them), the furthest one at FIT of the glass */
 static void fit(cb_t *b) {
@@ -140,7 +151,7 @@ cb_t *cb_create(const cp_t *c) {
         case CPS_CYLINDER:  ok = rg_cylinder(&me->g, p->r, p->r2, p->h, p->seg[0]); break;
         default:           ok = rg_tube(&me->g, (const float (*)[3])p->path, p->npath, p->seg[0], p->r); break;
         }
-        if (!ok) { cb_destroy(b); return NULL; }
+        if (!ok || !(me->fn = face_normals(&me->g))) { b->nm++; cb_destroy(b); return NULL; }
         me->bone = p->bone; me->pal = p->pal; memcpy(me->rgb, p->rgb, 3);
         me->local = trs(p->pos, p->rot, NULL);
         if (me->g.nv > b->vcap) b->vcap = me->g.nv;
@@ -155,7 +166,7 @@ cb_t *cb_create(const cp_t *c) {
 
 void cb_destroy(cb_t *b) {
     if (!b) return;
-    for (int m = 0; m < b->nm; m++) { CB_FREE(b->mesh[m].g.v); CB_FREE(b->mesh[m].g.t); CB_FREE(b->mesh[m].lod.v); CB_FREE(b->mesh[m].lod.t); }
+    for (int m = 0; m < b->nm; m++) { mesh_t *me = &b->mesh[m]; CB_FREE(me->g.v); CB_FREE(me->g.t); CB_FREE(me->lod.v); CB_FREE(me->lod.t); CB_FREE(me->fn); CB_FREE(me->fn_lod); }
     CB_FREE(b->vbuf); CB_FREE(b->zbuf); CB_FREE(b->cbuf);
     CB_FREE(b->cov); CB_FREE(b->lum); CB_FREE(b->cr); CB_FREE(b->cg); CB_FREE(b->cb); CB_FREE(b->hole);
     CB_FREE(b);
@@ -180,12 +191,13 @@ static void build_lods(cb_t *b, const cp_body_t *B, int W) {
     for (int m = 0; m < b->nm; m++) {
         mesh_t *me = &b->mesh[m];
         const cp_part_t *p = &B->parts[m];
-        CB_FREE(me->lod.v); CB_FREE(me->lod.t); memset(&me->lod, 0, sizeof(me->lod));
+        CB_FREE(me->lod.v); CB_FREE(me->lod.t); CB_FREE(me->fn_lod); memset(&me->lod, 0, sizeof(me->lod)); me->fn_lod = NULL;
         if (p->type != CPS_ELLIPSOID) continue;
         const float r = fmaxf(p->size[0], fmaxf(p->size[1], p->size[2])) * px;
         const int w = (int)ceilf(6.2831853f * r / LOD_PX), h = (int)ceilf(3.1415927f * r / LOD_PX);
         const int lw = w < 6 ? 6 : w, lh = h < 4 ? 4 : h;
-        if (lw < p->seg[0] || lh < p->seg[1]) rg_sphere(&me->lod, lw < p->seg[0] ? lw : p->seg[0], lh < p->seg[1] ? lh : p->seg[1], p->size, 0, false);
+        if ((lw < p->seg[0] || lh < p->seg[1]) && rg_sphere(&me->lod, lw < p->seg[0] ? lw : p->seg[0], lh < p->seg[1] ? lh : p->seg[1], p->size, 0, false)
+            && !(me->fn_lod = face_normals(&me->lod))) { CB_FREE(me->lod.v); CB_FREE(me->lod.t); memset(&me->lod, 0, sizeof(me->lod)); }
     }
 }
 
@@ -217,7 +229,9 @@ void cb_raster(cb_t *b, const cp_t *c, int W, int H, float zoom, float focus) {
     int tris = 0;
     for (int m = 0; m < b->nm; m++) {
         const mesh_t *me = &b->mesh[m];
-        const geo_t *ge = zoom < 0.05f && me->lod.nv ? &me->lod : &me->g;
+        const bool lod = zoom < 0.05f && me->lod.nv;
+        const geo_t *ge = lod ? &me->lod : &me->g;
+        const float *fn = lod ? me->fn_lod : me->fn;
         const m34_t Wm = rg_mul(&b->world[me->bone < 0 ? b->nb : me->bone], &me->local);
         const float det = rg_det(&Wm);
         if (fabsf(det) < 1e-12f) continue;                        /* collapsed (scale 0) */
@@ -236,18 +250,26 @@ void cb_raster(cb_t *b, const cp_t *c, int W, int H, float zoom, float focus) {
             const float off = k == 0 ? 0.5f * SW - cx * hx : k == 1 ? 0.5f * SH + cy * hy : 0.f;
             for (int j = 0; j < 4; j++) V.m[k * 4 + j] = sc * (ax[0] * Wm.m[j] + ax[1] * Wm.m[4 + j] + ax[2] * Wm.m[8 + j]) + (j == 3 ? off : 0.f);
         }
+        /* a face's world normal is cof(M)·n (the rows' cross products): front when it meets the camera */
+        const float r0[3] = { Wm.m[0], Wm.m[1], Wm.m[2] }, r1[3] = { Wm.m[4], Wm.m[5], Wm.m[6] }, r2[3] = { Wm.m[8], Wm.m[9], Wm.m[10] };
+        float c0[3], c1[3], c2[3], cz[3];
+        cross3(c0, r1, r2); cross3(c1, r2, r0); cross3(c2, r0, r1);
+        const float sd = det < 0.f ? -1.f : 1.f;                  /* a mirrored mesh turns its faces inside out */
+        for (int k = 0; k < 3; k++) { c0[k] *= sd; c1[k] *= sd; c2[k] *= sd; }
+        for (int k = 0; k < 3; k++) cz[k] = b->cam_z[0] * c0[k] + b->cam_z[1] * c1[k] + b->cam_z[2] * c2[k];
         float *vb = b->vbuf;
         for (int i = 0; i < ge->nv; i++) {
             const float *v = ge->v + i * 3;
             const v3_t p = rg_apply(&V, v[0], v[1], v[2]);
             vb[i * 3] = p.x; vb[i * 3 + 1] = p.y; vb[i * 3 + 2] = p.z;
         }
-        const bool flip = det < 0.f;
         for (int t = 0; t < ge->nt; t++) {
+            const float *nl = fn + t * 3;
+            if (nl[0] * cz[0] + nl[1] * cz[1] + nl[2] * cz[2] <= 0.f) continue;   /* faces away */
             const uint16_t *ix = ge->t + t * 3;
             const float *A = vb + ix[0] * 3, *Bv = vb + ix[1] * 3, *C = vb + ix[2] * 3;
             const float area = (Bv[0] - A[0]) * (C[1] - A[1]) - (C[0] - A[0]) * (Bv[1] - A[1]);   /* y down: front ⇔ area < 0 */
-            if (area == 0.f || ((area < 0.f) == flip)) continue;
+            if (area == 0.f) continue;
             /* the sample centres (x + 0.5) inside the bounds: a facet between two is skipped here */
             const float fx0 = fmaxf(0.f, fminf(A[0], fminf(Bv[0], C[0])) - 0.5f), fx1 = fminf(SW - 1.f, fmaxf(A[0], fmaxf(Bv[0], C[0])) - 0.5f);
             const float fy0 = fmaxf(0.f, fminf(A[1], fminf(Bv[1], C[1])) - 0.5f), fy1 = fminf(SH - 1.f, fmaxf(A[1], fmaxf(Bv[1], C[1])) - 0.5f);
@@ -271,12 +293,8 @@ void cb_raster(cb_t *b, const cp_t *c, int W, int H, float zoom, float focus) {
                     const float w2 = sa - w0 - w1;
                     if (w0 < 0.f || w1 < 0.f || w2 < 0.f) continue;
                     if (!lit) {   /* the face's world normal, toward the camera; flat Lambert, key + ambient */
-                        const float *l0 = ge->v + ix[0] * 3, *l1 = ge->v + ix[1] * 3, *l2 = ge->v + ix[2] * 3;
-                        const v3_t pa = rg_apply(&Wm, l0[0], l0[1], l0[2]), pb = rg_apply(&Wm, l1[0], l1[1], l1[2]), pc = rg_apply(&Wm, l2[0], l2[1], l2[2]);
-                        const float e1[3] = { pb.x - pa.x, pb.y - pa.y, pb.z - pa.z }, e2[3] = { pc.x - pa.x, pc.y - pa.y, pc.z - pa.z };
-                        float n[3]; cross3(n, e1, e2);
-                        float nd = dot3(n, L) * rsqrt(dot3(n, n));
-                        if (dot3(n, b->cam_z) < 0) nd = -nd;
+                        const float n[3] = { dot3(c0, nl), dot3(c1, nl), dot3(c2, nl) };
+                        const float nd = dot3(n, L) * rsqrt(dot3(n, n));
                         const float shade = fminf(1.f, AMB + KEY * fmaxf(0.f, nd));
                         col = (uint32_t)(rgb[0] * shade + 0.5f) | (uint32_t)(rgb[1] * shade + 0.5f) << 8 | (uint32_t)(rgb[2] * shade + 0.5f) << 16 | tagbits;
                         ia = 1.f / sa; lit = true; tris++;
