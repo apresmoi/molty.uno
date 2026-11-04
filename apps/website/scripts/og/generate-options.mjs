@@ -284,7 +284,7 @@ async function render(opt, theme, stem) {
 /** OG_MOLTYS=all (or a comma list of ids): every card with a Molty once per Molty, as
  *  <outDir>/<moltyDir>/<prefix><name>[-light].png (moltyDir: the option's, else its name), plus
  *  a labelled contact-sheet[-light].png there (one per folder). */
-const catalog = JSON.parse(readFileSync(new URL('../../../../device/console/src/catalog/catalog.json', import.meta.url), 'utf8')).creatures;
+const catalog = JSON.parse(readFileSync(new URL('../../../../device/creatures/catalog/catalog.json', import.meta.url), 'utf8')).creatures;
 const moltys = process.env.OG_MOLTYS === 'all' ? catalog.map((c) => c.id) : process.env.OG_MOLTYS?.split(',');
 const short = (id) => id.replace(/^cute-/, '');
 const jobs = [];

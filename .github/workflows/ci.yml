@@ -30,7 +30,7 @@ name: CI
 #   creatures             device/creatures/**
 #   website               apps/website/**, docs/**, root *.md (CONTRIBUTING.md is
 #                         synced), device/creatures/** (@creatures, @molty-files, synced
-#                         READMEs), device/console/src/catalog/** (@molty-catalog),
+#                         READMEs, @molty-catalog),
 #                         device/firmware/boards/** (repoBoards.ts, setup-match.test.ts)
 #   hygiene               always (secrets, paths, licences, versions, skill: check-skill
 #                         reads the relay sources, so a relay change is covered here)

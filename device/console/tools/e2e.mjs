@@ -1,14 +1,14 @@
 // Headless Chromium walk-through against the mock device (tools/mock-device.mjs on
 // :8170 — start it with `pnpm mock` after `pnpm build`), at phone width (390 px):
 //   1. the 5-step setup flow (Wi-Fi → Molty → Agent → Tap → Voice → Done), screenshot per step
-//   2. the same Molty step with the three.js CDN blocked → live device preview fallback
+//   2. the same Molty step offline (the fluid needs no network) and with ?nostage
 //   3. the settings pages (agent single-message design, molty picker, degraded firmware)
 // Then an optional READ-ONLY pass against a real device via ?device= (GETs only, plus
-// harmless fluid orders that it restores). It never scans, connects, forgets or uploads there.
+// harmless fluid orders that it restores). It never scans, connects, forgets or selects there.
 //
 //   node tools/e2e.mjs [outDir] [realDevice]
 import { chromium } from 'playwright';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 
 const OUT = process.argv[2] ?? './e2e-out';
 const REAL = process.argv[3] ?? '';
@@ -17,8 +17,7 @@ const PHONE = { width: 390, height: 844 };
 mkdirSync(OUT, { recursive: true });
 
 const errors = [];
-// Known-benign: headless-GPU readback notes from the viewer engine (three → canvas), our
-// own canvas sampling, and the CDN request the offline pass blocks on purpose.
+// Known-benign: headless-GPU readback notes and our own canvas sampling.
 const BENIGN = [/GL Driver Message/, /willReadFrequently/];
 const checks = [];
 const ok = (cond, what) => { checks.push(`${cond ? 'PASS' : 'FAIL'} ${what}`); if (!cond) process.exitCode = 1; };
@@ -151,7 +150,7 @@ const browser = await chromium.launch();
 async function newPage(tag, { offline = false, viewport = PHONE } = {}) {
   const ctx = await browser.newContext({ viewport, deviceScaleFactor: 2 });
   await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: MOCK });
-  if (offline) await ctx.route('https://cdn.jsdelivr.net/**', (r) => r.abort('internetdisconnected'));
+  if (offline) await ctx.route((u) => !u.href.startsWith(MOCK), (r) => r.abort('internetdisconnected'));
   // The status page asks the device's relay for the latest release: answer from the mock.
   await ctx.route('**/v1/releases/latest*', async (r) => r.fulfill({ response: await ctx.request.get(`${MOCK}/__mock/release?${new URL(r.request().url()).searchParams}`), headers: { 'access-control-allow-origin': '*' } }));
   await ctx.route('**/v1/devices/*/voice', (r) => voiceRelay.route(r));
@@ -169,7 +168,7 @@ async function newPage(tag, { offline = false, viewport = PHONE } = {}) {
   // navigation or a reload): not a failure of the page, and timing-dependent on CI.
   page.on('requestfailed', (r) => {
     if (r.failure()?.errorText === 'net::ERR_ABORTED') return;
-    if (!(offline && r.url().includes('cdn.jsdelivr.net'))) errors.push(`[${tag}] requestfailed: ${r.url()} ${r.failure()?.errorText}`);
+    if (!(offline && !r.url().startsWith(MOCK))) errors.push(`[${tag}] requestfailed: ${r.url()} ${r.failure()?.errorText}`);
   });
   return page;
 }
@@ -188,7 +187,7 @@ const canvasStats = (page) => page.evaluate(() => {
 
 // ── 1. setup flow ─────────────────────────────────────────────────────────────
 {
-  await mock('config', { link: true, file: true, reset: true, wifi: 'none' });
+  await mock('config', { link: true, reset: true, wifi: 'none' });
   const page = await newPage('setup');
   await page.goto(`${MOCK}/`);
   await page.waitForURL(/#\/setup\/wifi/);
@@ -218,30 +217,27 @@ const canvasStats = (page) => page.evaluate(() => {
   ok(sc.at(-1)?.ssid === 'FRITZ!Box 7590 QX' && sc.at(-1)?.password === 'hunter2hunter2', 'set_creds body {ssid,password}');
   ok((await bubble(page)).startsWith('Connected! Now, who should I be?'), 'wifi → molty auto-advance on success');
 
-  // Molty
-  await page.locator('.setup .tile img').first().waitFor();
-  const tiles = await page.locator('.setup .tile').count();
-  ok(tiles === 29, `molty: grid has all 29 Moltys (${tiles})`);
-  const thumbsOk = await page.evaluate(() => [...document.querySelectorAll('.setup .tile img')].every((i) => i.complete && i.naturalWidth === 160));
-  ok(thumbsOk, 'molty: 29 bundled thumbnails decoded');
+  // Molty: the device's creature packages, GET /api/creature/list
+  await page.locator('.setup .tile').first().waitFor();
+  const tiles = await page.locator('.setup .tile').allInnerTexts();
+  ok(tiles.join() === 'Duck,Cat,Octopus', `molty: grid has exactly the device's Moltys (${tiles.join(', ')})`);
   ok(!/creature/i.test(await page.locator('.setup').innerText()), 'molty: no "creature" in the copy');
-  ok(await page.getByRole('button', { name: 'Pick one' }).isDisabled(), 'molty: button disabled until a pick');
-  await page.locator('.setup .tile', { hasText: 'Frog' }).click();
+  ok(await page.locator('.setup .tile.on').innerText() === 'Duck' && await page.getByRole('button', { name: 'Choose Duck' }).isEnabled(), 'molty: the one on the device is marked ("Choose Duck")');
+  await page.locator('.setup .tile', { hasText: 'Octopus' }).click();
   await page.locator('.setup .bubble small', { hasText: 'On your Molty now' }).waitFor();
   const log = await mockLog();
-  const up = log.filter((l) => l.path.startsWith('/api/creature/file'));
-  const frog = readFileSync(new URL('../../creatures/molty/frog.molty', import.meta.url));
-  ok(up.length === 1 && up[0].path === '/api/creature/file?name=cute-frog' && up[0].bytes === frog.length && up[0].head === 'MLTY', `molty: frog.molty uploaded raw (${up[0]?.bytes} B, magic ${up[0]?.head})`);
-  ok(up[0]?.ctype?.startsWith('text/plain'), 'molty: upload is a CORS-simple request');
+  const sel = log.filter((l) => l.path.startsWith('/api/creature/select'));
+  ok(sel.length === 1 && sel[0].path === '/api/creature/select?id=octopus' && sel[0].method === 'POST', `molty: picking calls select (${sel.map((l) => l.path)})`);
+  ok(!log.some((l) => l.path.startsWith('/api/creature/file')), 'molty: nothing uploaded');
   ok(log.some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).state === 'creature'), 'molty: device told to show the creature state');
-  ok(await page.getByRole('button', { name: 'Choose Frog' }).isEnabled(), 'molty: "Choose Frog"');
-  ok((await page.locator('.fstage').getAttribute('data-mode')) === 'fluid', 'molty: round screen runs the real fluid engine (three from CDN)');
-  await wait(3500); // let it emerge and start dancing
-  const st = await canvasStats(page);
-  ok(st.lit > 2000, `molty: Frog drawn on the round screen (${st.lit} lit px)`);
+  ok((await (await fetch(`${MOCK}/api/creature/list`)).json()).current === 'octopus', 'molty: the device now plays Octopus');
+  ok(await page.getByRole('button', { name: 'Choose Octopus' }).isEnabled(), 'molty: "Choose Octopus"');
+  await page.locator('.fstage[data-mode="device"] .pv-status', { hasText: 'live' }).waitFor({ timeout: 10000 });
+  ok(true, 'molty: the round screen shows the device itself (it alone plays the package)');
+  await wait(1000);
   await noOverflow(page, 'molty');
   await shot(page, '03-molty');
-  await page.getByRole('button', { name: 'Choose Frog' }).click();
+  await page.getByRole('button', { name: 'Choose Octopus' }).click();
 
   // Agent
   await page.waitForURL(/#\/setup\/agent/);
@@ -277,6 +273,7 @@ const canvasStats = (page) => page.evaluate(() => {
   await mock('pair', { agent_name: 'Grok', code: '4821' });
   await page.locator('.setup .bubble', { hasText: 'Tap me if you see this code' }).waitFor({ timeout: 5000 });
   ok((await bubble(page)).includes('Grok wants to connect'), 'tap: auto-advance on pair, names the agent');
+  ok((await page.locator('.fstage').getAttribute('data-mode')) === 'fluid', 'tap: round screen runs the real fluid engine');
   await wait(2500);
   const tap = await canvasStats(page);
   ok(tap.lit > 800 && tap.orange < 40, `tap: code condensed in the fluid, uniform (lit ${tap.lit}, orange ${tap.orange})`);
@@ -308,17 +305,17 @@ const canvasStats = (page) => page.evaluate(() => {
   await shot(page, '07d-reflex');
   await page.locator('.setup .opt', { hasText: 'Off' }).click();
   ok(voiceRelay.calls.some((c) => c.body?.includes('"mode":"box"')) && voiceRelay.calls.some((c) => c.body?.includes('"reflex":"off"')), 'setup saved its choices on the relay');
-  await page.locator('.setup .bubble', { hasText: 'I’m Frog, and Grok is my brain.' }).waitFor({ timeout: 5000 });
-  ok(true, 'done: "I’m Frog, and Grok is my brain."');
+  await page.locator('.setup .bubble', { hasText: 'I’m Octopus, and Grok is my brain.' }).waitFor({ timeout: 5000 });
+  ok(true, 'done: "I’m Octopus, and Grok is my brain."');
   ok(await page.locator('.prog').innerText() === '✓ Wi-Fi   ✓ Molty   ✓ Agent   ✓ Voice', 'done: progress all ticked');
-  await wait(2500);
-  ok((await canvasStats(page)).lit > 2000, 'done: Molty keeps dancing on the screen');
+  await wait(1500);
+  ok((await canvasStats(page)).lit > 2000, 'done: the device\'s Molty on the screen');
   await noOverflow(page, 'done');
   await shot(page, '08-done');
   // text only: no gap or reflex questions
   await page.evaluate(() => { location.hash = '#/setup/voice'; });
   await page.locator('.setup .opt', { hasText: 'Text only' }).click();
-  await page.locator('.setup .bubble', { hasText: 'I’m Frog' }).waitFor({ timeout: 5000 });
+  await page.locator('.setup .bubble', { hasText: 'I’m Octopus' }).waitFor({ timeout: 5000 });
   ok(voiceRelay.calls.some((c) => c.body?.includes('"mode":"off"')), 'text only: saved, straight to done');
   voiceRelay.state.mode = 'auto'; voiceRelay.state.serving = { tts: 'box', stt: 'box' };
   await page.getByRole('button', { name: 'Open Molty' }).click();
@@ -331,19 +328,26 @@ const canvasStats = (page) => page.evaluate(() => {
   await page.context().close();
 }
 
-// ── 2. offline: no three.js → live device preview on the round screen ──────
+// ── 2. the round screen offline, with ?nostage, and firmware without packages ──
 {
   await mock('config', { reset: true });
   const page = await newPage('offline', { offline: true });
-  await page.goto(`${MOCK}/#/setup/molty`);
+  await page.goto(`${MOCK}/#/setup/wifi`);
+  await page.locator('.fstage[data-mode="fluid"] canvas').waitFor({ timeout: 10000 });
+  await wait(1500);
+  ok((await canvasStats(page)).lit > 800, 'offline: the fluid runs with no network (nothing loaded from a CDN)');
+  await page.goto(`${MOCK}/?nostage#/setup/wifi`);
   await page.locator('.fstage[data-mode="device"] .pv-status', { hasText: 'live' }).waitFor({ timeout: 20000 });
-  ok(true, 'offline: round screen falls back to the live device preview');
-  await page.locator('.setup .tile', { hasText: 'Duck' }).click();
-  await page.locator('.setup .bubble small', { hasText: 'On your Molty now' }).waitFor();
-  ok((await mockLog()).some((l) => l.path === '/api/creature/file?name=cute-duck' && l.head === 'MLTY'), 'offline: picking still uploads the bundled .molty');
-  await wait(800);
-  await noOverflow(page, 'offline molty');
-  await shot(page, '10-molty-offline');
+  ok(true, '?nostage: the round screen is the live device preview');
+  await mock('config', { pkgs: false });
+  await page.goto(`${MOCK}/?nostage#/setup/molty`);
+  await page.locator('.setup .bubble small', { hasText: 'My firmware can’t change who I am yet' }).waitFor();
+  ok(await page.locator('.setup .tile').count() === 0, 'no packages: older firmware says so, shows no Moltys');
+  await page.getByRole('button', { name: 'Skip for now' }).click();
+  await page.waitForURL(/#\/setup\/agent/);
+  ok(true, 'no packages: skip goes on to the agent');
+  await noOverflow(page, 'molty without packages');
+  await shot(page, '10-molty-no-packages');
   await page.context().close();
 }
 
@@ -521,17 +525,13 @@ const canvasStats = (page) => page.evaluate(() => {
 
   await page.goto(`${MOCK}/#/molty`);
   const pk = page.getByRole('group', { name: 'creatures' });
-  await pk.getByRole('button', { name: 'Duck' }).waitFor();
-  ok(await pk.locator('[aria-pressed="true"]').count() === 0, 'settings molty: an uploaded .molty leaves no package marked');
+  await pk.getByRole('button', { name: '✓ Duck' }).waitFor();
+  ok((await pk.getByRole('button').allInnerTexts()).join() === '✓ Duck,Cat,Octopus', 'settings molty: exactly the device\'s Moltys, the current one marked');
+  ok(await page.locator('.creature, .cards').count() === 0, 'settings molty: no bundled catalog');
   await pk.getByRole('button', { name: 'Cat' }).click();
   await pk.getByRole('button', { name: '✓ Cat' }).waitFor();
   ok(await pk.getByRole('button', { name: 'Duck' }).getAttribute('aria-pressed') === 'false', 'settings molty: picking Cat marks Cat and unmarks the rest');
-  await page.locator('.creature img').first().waitFor();
-  ok(await page.locator('.creature').count() === 29, 'settings molty: 29 Moltys with thumbnails');
-  await page.locator('.creature', { hasText: 'Owl' }).click();
-  await page.getByRole('button', { name: 'send Owl to molty' }).click();
-  await page.locator('.note.ok', { hasText: 'moving in' }).waitFor();
-  ok((await mockLog()).some((l) => l.path === '/api/creature/file?name=cute-owl' && l.head === 'MLTY'), 'settings molty: upload');
+  ok((await mockLog()).some((l) => l.method === 'POST' && l.path === '/api/creature/select?id=cat'), 'settings molty: picking calls select');
   const ringRow = page.getByRole('group', { name: 'listening ring colour' });
   ok(await ringRow.getByRole('button', { name: 'accent (default)' }).getAttribute('aria-pressed') === 'true', 'settings molty: listening ring defaults to the accent');
   await ringRow.getByRole('button', { name: 'violet' }).click();
@@ -559,10 +559,10 @@ const canvasStats = (page) => page.evaluate(() => {
   ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'settings molty: no horizontal scroll at 390px');
   await shot(page, '12-settings-molty');
 
-  await mock('config', { file: false });
-  await page.getByRole('button', { name: 'send Owl to molty' }).click();
-  await page.locator('.note.warn', { hasText: "can't take new moltys yet" }).waitFor();
-  ok(true, 'settings molty: creature-file 404 → graceful notice');
+  await mock('config', { pkgs: false });
+  await page.reload();
+  await page.locator('.note.warn', { hasText: 'no creature packages yet' }).waitFor();
+  ok(true, 'settings molty: firmware without packages → graceful notice');
 
   // pre-contract firmware: link without pair/last_pair still waits; no link at all → skip offered
   await mock('legacy', { on: true });
@@ -577,7 +577,7 @@ const canvasStats = (page) => page.evaluate(() => {
   await page.locator('.setup .bubble', { hasText: '!' }).waitFor();
   ok((await bubble(page)).includes('Give me a brain any time'), 'no /api/link → "Skip for now" → done');
   await shot(page, '13-link-unsupported-done');
-  await mock('config', { reset: true, link: true, file: true });
+  await mock('config', { reset: true, link: true });
   await page.context().close();
 }
 

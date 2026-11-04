@@ -37,7 +37,7 @@ export default defineConfig({
       alias: [
         { find: '@creatures', replacement: repoPath('../../device/creatures/js') },
         { find: '@molty-files', replacement: repoPath('../../device/creatures/molty') },
-        { find: '@molty-catalog', replacement: repoPath('../../device/console/src/catalog') },
+        { find: '@molty-catalog', replacement: repoPath('../../device/creatures/catalog') },
       ],
     },
     server: { fs: { allow: ['../..'] } },
