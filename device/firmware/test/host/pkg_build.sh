@@ -25,6 +25,6 @@ cc -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Werror -O2 \
   -I"$MAIN/pkg" -I"$MAIN/scene" -I"$MAIN/fluid" -I"$MAIN/creature" -I"$IDF_JSON" \
   "$HERE/scene_test.c" "${SCENE_SRC:-$MAIN/scene/scene_player.c}" "$MAIN/pkg/pkg_parse.c" \
   "$MAIN/fluid/fluid_director.c" "$MAIN/fluid/fluid_sim.c" "$MAIN/fluid/fluid_target.c" "$MAIN/fluid/fluid_draw.c" \
-  "$MAIN/creature/cute_spec.c" "$MAIN/creature/cute_rig.c" \
+  "$MAIN/creature/cute_spec.c" "$MAIN/creature/cute_rig.c" "$MAIN/creature/mood_engine.c" \
   "$OUT/cJSON.o" -lm -o "$OUT/scene_test"
 "$OUT/scene_test" "$HERE/fixtures" "$MOLTY/duck.molty"

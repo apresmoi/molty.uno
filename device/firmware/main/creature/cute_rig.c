@@ -7,6 +7,7 @@
  */
 #include "cute_rig.h"
 #include "cute_act.h"
+#include "mood_engine.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -256,23 +257,10 @@ typedef struct {
 
 typedef struct { int node; int side; } srec_t;
 
-/* mood engine pose (mood.js zeroPose) */
-typedef struct {
-    float pos[3], rot[3], head[3], spine[3];
-    float squash, lid, look[2], mouth;
-    int   eye;                 /* 0 normal 1 wide 2 happy 3 sleepy */
-    int   mood;
-} pose_t;
-enum { EYE_NORMAL, EYE_WIDE, EYE_HAPPY, EYE_SLEEPY };
-
-typedef struct { float k, d, x, v; } spring_t;
-typedef struct { float a, f; int side; float next_glance, glance_until; int glance_dir; } jit_t;
-
-typedef struct { float t, phrase_end, pause_end, rate, phase, value, syll_amp; } speech_t;
+typedef me_pose_t pose_t;
 
 typedef struct { float eased; float next, t0; float spin; bool init; } term_state_t;
 typedef struct { int g, inner, scl, ball, half, hl1, hl2, arc; int side; } eye_t;
-typedef struct { float next, phase, hold, value; bool dbl, second; } eblink_t;
 
 struct cute_rt {
     cute_spec_t spec;
@@ -296,21 +284,13 @@ struct cute_rt {
     struct { float x, vx, z, vz, last_y; } spring;
     struct { float sleep, since; } lid_state;
     float norm_k, env_min[3], env_max[3], rise;
-    /* mood engine */
-    int mood, prev; float et, prev_t, fade, fade_dur, anticip, time;
-    jit_t j, pj; speech_t env; float env_value;
-    eblink_t eblink;
-    struct { float next, x, y; } saccade;
-    spring_t sp_h[3], sp_b[3], sp_py, sp_sq;
+    mood_engine_t eng;
     pose_t pose;
-    /* one-shot action (cute_act.h): the one playing, and the one it replaced fading out */
-    int act, pact; float act_t, pact_t, pact_w;
     /* behaviours */
     term_state_t bst[CUTE_MAX_BEHAV][CUTE_MAX_TERMS];
     float beh_lid;
     /* camera + raster */
     float cam_t[3], cam_x[3], cam_y[3], cam_z[3], cam_half;
-    float cam_zoom, cam_focus;                     /* an action's camera (cute_act.h): this frame's */
     int   rW, rH, tris;
     float *zbuf; uint32_t *cbuf;                   /* (2W)×(4H) samples */
     float *vbuf; int vcap;                         /* per-mesh camera-space vertices      */
@@ -493,202 +473,14 @@ static void build_face(cute_rt_t *rt) {
     }
 }
 
-/* ── mood engine (js/mood.js) ───────────────────────────────────────────────────────── */
+/* ── mood engine (mood_engine.c) ───────────────────────────────────────────────────── */
 
-static float jit(cute_rt_t *rt, float p) { return 1.f + rand_ab(rt, -p, p); }
-static jit_t new_jit(cute_rt_t *rt) {
-    jit_t j = { jit(rt, 0.15f), jit(rt, 0.15f), rnd(rt) < 0.5f ? -1 : 1, rand_ab(rt, 3, 8), 0, 1 };
-    return j;
-}
-static void zero_pose(pose_t *p) { memset(p, 0, sizeof(*p)); p->eye = EYE_NORMAL; }
-
-static float speech_update(cute_rt_t *rt, speech_t *e, float dt) {
-    e->t += dt;
-    if (e->t > e->phrase_end && e->pause_end == 0.f) e->pause_end = e->t + rand_ab(rt, 0.25f, 0.7f);
-    if (e->pause_end != 0.f && e->t > e->pause_end) { e->pause_end = 0; e->phrase_end = e->t + rand_ab(rt, 1.2f, 3); e->rate = rand_ab(rt, 4, 5); }
-    bool speaking = e->pause_end == 0.f;
-    float prev = e->phase;
-    e->phase += dt * e->rate;
-    if (floorf(e->phase) != floorf(prev)) e->syll_amp = rand_ab(rt, 0.45f, 1);
-    float s = sinf(TAU_F * e->phase); if (s < 0) s = 0;
-    float target = speaking ? powf(s, 0.7f) * e->syll_amp : 0.f;
-    float k = target > e->value ? 1.f - expf(-dt * 40) : 1.f - expf(-dt * 14);
-    e->value += (target - e->value) * k;
-    return e->value;
-}
-
-static void gen(cute_rt_t *rt, int mood, pose_t *p, float t, jit_t *j, float env) {
-    switch (mood) {
-    case CM_IDLE:
-        p->head[2] = 0.05f * j->a;
-        p->head[1] = 0.08f * sinf(TAU_F * t / (9 * j->f));
-        p->rot[2] = 0.015f * sinf(TAU_F * t / (6 * j->f));
-        break;
-    case CM_LISTENING:
-        p->spine[0] = 0.14f * j->a; p->rot[0] = 0.05f; p->pos[2] = 0.05f;
-        p->head[2] = 0.22f * j->a * j->side;
-        p->head[0] = -0.06f + 0.05f * fmaxf(0.f, sinf(TAU_F * t / (2.6f * j->f)));
-        p->eye = EYE_WIDE; p->look[1] = 0.1f;
-        break;
-    case CM_THINKING:
-        p->rot[2] = 0.07f * sinf(TAU_F * t / (3.2f * j->f));
-        p->pos[1] = 0.015f * sinf(TAU_F * t / (2.4f * j->f));
-        p->head[0] = -0.28f * j->a; p->head[1] = 0.32f * j->side; p->head[2] = 0.1f * j->side;
-        p->look[0] = 0.7f * j->side; p->look[1] = 0.7f;
-        break;
-    case CM_SPEAKING:
-        p->squash = 0.06f * env; p->pos[1] = 0.018f * env;
-        p->head[0] = -0.05f * env + 0.03f * sinf(TAU_F * t / 1.7f);
-        p->head[2] = 0.06f * sinf(TAU_F * t / (3.3f * j->f));
-        p->mouth = env;
-        if (t > j->next_glance) { j->glance_until = t + rand_ab(rt, 0.5f, 0.9f); j->next_glance = t + rand_ab(rt, 3, 8); j->glance_dir = rnd(rt) < 0.5f ? -1 : 1; }
-        if (t < j->glance_until) { p->look[0] = 0.8f * j->glance_dir; p->head[1] = 0.12f * j->glance_dir; }
-        break;
-    case CM_HAPPY: {
-        float f = 2.1f * j->f, hop = fabsf(sinf(PI_F * f * t));
-        p->pos[1] = 0.13f * j->a * hop;
-        p->squash = hop < 0.25f ? -0.12f * (1 - hop / 0.25f) : 0.05f * hop;
-        p->head[2] = 0.12f * sinf(TAU_F * f * 0.5f * t);
-        p->rot[1] = 0.1f * sinf(TAU_F * f * 0.25f * t);
-        p->eye = EYE_HAPPY; p->mouth = 0.35f;
-        break;
-    }
-    case CM_SLEEPY: {
-        /* asleep, not down: eyes shut and a slight nod; a low head and half-open eyes read as sad */
-        p->head[0] = 0.12f * j->a; p->spine[0] = 0.04f; p->rot[0] = 0.03f; p->pos[1] = -0.015f;
-        float per = 7 * j->f, c = fmodf(t, per) / per;
-        if (c > 0.75f) { float q = (c - 0.75f) / 0.25f; p->head[0] += 0.25f * sinf(PI_F * q) * (q < 0.8f ? 1.f : -0.5f); }
-        p->lid = 1.f;
-        p->eye = EYE_SLEEPY;
-        break;
-    }
-    case CM_SURPRISED:
-        if (t < 0.12f) p->squash = -0.14f * sinf(PI_F * t / 0.12f);
-        else if (t < 0.6f) { float q = (t - 0.12f) / 0.48f; p->pos[1] = 0.17f * sinf(PI_F * q); p->squash = 0.16f * (1 - q) - 0.04f; }
-        else { float q = fminf(1.f, (t - 0.6f) / 0.6f); p->squash = -0.04f * (1 - q); }
-        p->spine[0] = -0.1f; p->rot[0] = -0.05f; p->head[0] = -0.1f;
-        p->eye = EYE_WIDE; p->mouth = 0.55f;
-        break;
-    }
-}
-
-static void lerp_pose(pose_t *o, const pose_t *a, const pose_t *b, float w) {
-    for (int k = 0; k < 3; k++) {
-        o->pos[k] = a->pos[k] + (b->pos[k] - a->pos[k]) * w; o->rot[k] = a->rot[k] + (b->rot[k] - a->rot[k]) * w;
-        o->head[k] = a->head[k] + (b->head[k] - a->head[k]) * w; o->spine[k] = a->spine[k] + (b->spine[k] - a->spine[k]) * w;
-    }
-    o->squash = a->squash + (b->squash - a->squash) * w; o->lid = a->lid + (b->lid - a->lid) * w; o->mouth = a->mouth + (b->mouth - a->mouth) * w;
-    o->look[0] = a->look[0] + (b->look[0] - a->look[0]) * w; o->look[1] = a->look[1] + (b->look[1] - a->look[1]) * w;
-    o->eye = w < 0.5f ? a->eye : b->eye;
-}
-static float spring_step(spring_t *s, float target, float dt) {
-    float a = s->k * (target - s->x) - s->d * s->v; s->v += a * dt; s->x += s->v * dt; return s->x;
-}
-
-static void engine_init(cute_rt_t *rt) {
-    rt->mood = CM_IDLE; rt->prev = -1; rt->fade = 1; rt->fade_dur = 0.7f;
-    rt->j = new_jit(rt); rt->pj = rt->j;
-    rt->env.phrase_end = rand_ab(rt, 1.2f, 3); rt->env.rate = rand_ab(rt, 4, 5); rt->env.syll_amp = 1;
-    rt->eblink.next = rand_ab(rt, 2, 6); rt->eblink.phase = -1;
-    rt->saccade.next = rand_ab(rt, 0.2f, 0.6f);
-    for (int k = 0; k < 3; k++) { rt->sp_h[k] = (spring_t){ 90, 9, 0, 0 }; rt->sp_b[k] = (spring_t){ 45, 7, 0, 0 }; }
-    rt->sp_sq = (spring_t){ 160, 9, 0, 0 };
-    rt->sp_py = (spring_t){ 220, 14, 0, 0 };
-    rt->act = rt->pact = -1;
-}
-
-void cute_rt_set_mood(cute_rt_t *rt, int mood) {
-    if (!rt || mood < 0 || mood >= CUTE_N_MOODS || mood == rt->mood) return;
-    rt->prev = rt->mood; rt->pj = rt->j; rt->prev_t = rt->et;
-    rt->mood = mood; rt->et = 0; rt->fade = 0; rt->fade_dur = rand_ab(rt, 0.5f, 1.0f);
-    rt->j = new_jit(rt);
-    rt->anticip = 0.0001f;
-}
-int cute_rt_mood(const cute_rt_t *rt) { return rt ? rt->mood : 0; }
-
-void cute_rt_act(cute_rt_t *rt, int act) {
-    if (!rt || act < 0 || act >= CUTE_N_ACTS) return;
-    if (rt->act >= 0) { rt->pact = rt->act; rt->pact_t = rt->act_t; rt->pact_w = 1.f; }   /* fades out */
-    rt->act = act; rt->act_t = 0.f;
-}
-int cute_rt_acting(const cute_rt_t *rt) { return rt ? rt->act : -1; }
-float cute_rt_act_time(const cute_rt_t *rt) { return rt && rt->act >= 0 ? rt->act_t : 0.f; }
-
-/* the action layer: offsets added after the springs (the curves are smooth already, and a
- * nod must not be swallowed by the head's 1.5 Hz spring); look before the saccade clamp,
- * lid after the blink (taken as max) */
-static void act_add(pose_t *p, const cute_act_pose_t *a, float w) {
-    for (int k = 0; k < 3; k++) {
-        p->pos[k] += w * a->pos[k]; p->rot[k] += w * a->rot[k];
-        p->head[k] += w * a->head[k]; p->spine[k] += w * a->spine[k];
-    }
-    p->squash += w * a->squash; p->mouth = fmaxf(p->mouth, w * a->mouth);
-    p->look[0] += w * a->look[0]; p->look[1] += w * a->look[1];
-}
-static float act_layer(cute_rt_t *rt, float dt, pose_t *p) {
-    float lid = 0.f;
-    cute_act_pose_t a;
-    rt->cam_zoom = rt->cam_focus = 0.f;
-    if (rt->pact >= 0) {                               /* the replaced one, out over 0.25 s */
-        rt->pact_t += dt; rt->pact_w -= dt / 0.25f;
-        if (rt->pact_w <= 0.f || rt->pact_t > cute_act_dur(rt->pact)) rt->pact = -1;
-        else { cute_act_pose(rt->pact, rt->pact_t, &a); act_add(p, &a, rt->pact_w); lid = rt->pact_w * a.lid; rt->cam_zoom = rt->pact_w * a.zoom; rt->cam_focus = rt->pact_w * a.focus; }
-    }
-    if (rt->act >= 0) {
-        rt->act_t += dt;
-        if (rt->act_t > cute_act_dur(rt->act)) rt->act = -1;
-        else { cute_act_pose(rt->act, rt->act_t, &a); act_add(p, &a, 1.f); lid = fmaxf(lid, a.lid); rt->cam_zoom += a.zoom; rt->cam_focus += a.focus; }
-    }
-    return lid;
-}
-float cute_rt_env(const cute_rt_t *rt) { return rt ? rt->env_value : 0.f; }
-
-static void engine_update(cute_rt_t *rt, float dt, pose_t *p) {
-    dt = fminf(dt, 0.05f);
-    rt->time += dt; rt->et += dt; rt->prev_t += dt;
-    rt->env_value = (rt->mood == CM_SPEAKING || rt->prev == CM_SPEAKING) ? speech_update(rt, &rt->env, dt) : 0.f;
-    pose_t cur; zero_pose(&cur); gen(rt, rt->mood, &cur, rt->et, &rt->j, rt->env_value);
-    *p = cur;
-    if (rt->fade < 1.f && rt->prev >= 0) {
-        rt->fade = fminf(1.f, rt->fade + dt / rt->fade_dur);
-        pose_t old; zero_pose(&old); gen(rt, rt->prev, &old, rt->prev_t, &rt->pj, rt->env_value);
-        float w = rt->fade * rt->fade * (3 - 2 * rt->fade);
-        lerp_pose(p, &old, &cur, w);
-    }
-    bool sleepy = rt->mood == CM_SLEEPY;
-    float period = sleepy ? 5 * rt->j.f : 3.5f * rt->j.f, amp = sleepy ? 0.04f : 0.025f;
-    p->squash += amp * sinf(TAU_F * rt->time / period);
-    if (rt->anticip > 0) {
-        rt->anticip += dt; float q = rt->anticip / 0.18f;
-        if (q >= 1) rt->anticip = 0; else { p->squash -= 0.07f * sinf(PI_F * q); p->head[0] += 0.08f * sinf(PI_F * q); }
-    }
-    for (int k = 0; k < 3; k++) p->head[k] = spring_step(&rt->sp_h[k], p->head[k], dt);
-    for (int k = 0; k < 3; k++) p->rot[k] = spring_step(&rt->sp_b[k], p->rot[k], dt);
-    p->pos[1] = spring_step(&rt->sp_py, p->pos[1], dt);
-    p->squash = spring_step(&rt->sp_sq, p->squash, dt);
-    const float act_lid = act_layer(rt, dt, p);
-    rt->saccade.next -= dt;
-    if (rt->saccade.next <= 0) { rt->saccade.next = rand_ab(rt, 0.2f, 0.6f); rt->saccade.x = rand_ab(rt, -0.08f, 0.08f); rt->saccade.y = rand_ab(rt, -0.06f, 0.06f); }
-    p->look[0] = clampf(p->look[0] + rt->saccade.x, -1, 1);
-    p->look[1] = clampf(p->look[1] + rt->saccade.y, -1, 1);
-    /* blinks: 2–6 s, 80 ms close / 50–100 hold / 150 open; 1 in 8 doubles */
-    eblink_t *b = &rt->eblink;
-    b->next -= dt;
-    if (b->phase < 0 && b->next <= 0) { b->phase = 0; b->hold = rand_ab(rt, 0.05f, 0.1f); b->dbl = !b->second && rnd(rt) < 1.f / 8; b->second = false; }
-    if (b->phase >= 0) {
-        b->phase += dt; float c = 0.08f, h = c + b->hold, o = h + 0.15f;
-        b->value = b->phase < c ? b->phase / c : b->phase < h ? 1.f : b->phase < o ? 1.f - (b->phase - h) / 0.15f : 0.f;
-        if (b->phase >= o) {
-            b->phase = -1; b->value = 0;
-            bool engaged = rt->mood == CM_LISTENING || rt->mood == CM_SPEAKING;
-            b->next = b->dbl ? rand_ab(rt, 0.2f, 0.4f) : engaged ? rand_ab(rt, 2, 4) : rand_ab(rt, 4, 7);
-            if (b->dbl) { b->dbl = false; b->second = true; }
-        }
-    }
-    p->lid = clampf(fmaxf(p->lid, 0) + b->value * (1 - p->lid), 0, 1);
-    p->lid = fmaxf(p->lid, act_lid);
-    p->mood = rt->mood;
-}
+void cute_rt_set_mood(cute_rt_t *rt, int mood) { if (rt) me_set_mood(&rt->eng, mood); }
+int cute_rt_mood(const cute_rt_t *rt) { return rt ? rt->eng.mood : 0; }
+void cute_rt_act(cute_rt_t *rt, int act) { if (rt) me_act(&rt->eng, act); }
+int cute_rt_acting(const cute_rt_t *rt) { return rt ? rt->eng.act : -1; }
+float cute_rt_act_time(const cute_rt_t *rt) { return rt ? me_act_time(&rt->eng) : 0.f; }
+float cute_rt_env(const cute_rt_t *rt) { return rt ? rt->eng.env_value : 0.f; }
 
 /* ── kit animation (CuteCreature.update / MOTIONS / _face / _limbs) ─────────────────── */
 
@@ -1043,7 +835,7 @@ void cute_rt_update(cute_rt_t *rt, float dt) {
     if (!rt) return;
     FLUID_PROF_BEGIN(c0);
     dt = fminf(dt, 1.f / 30.f);                        /* CreatureTarget.update clamps both */
-    engine_update(rt, dt, &rt->pose);
+    me_update(&rt->eng, dt, &rt->pose);
     kit_update(rt, dt, &rt->pose);
     world_update(rt);
     FLUID_PROF_END(FP_C_UPDATE, c0);
@@ -1141,8 +933,8 @@ cute_rt_t *cute_rt_create(const cute_spec_t *S, uint32_t seed) {
     rt->flick.next = rand_ab(rt, 2, 5); rt->flick.t = -1;
     rt->lid_state.since = 9;
     rt->w[CM_IDLE] = 1;
-    engine_init(rt);
-    zero_pose(&rt->pose);
+    me_init(&rt->eng, rnd(rt) * 4294967040.f + 1);
+    memset(&rt->pose, 0, sizeof(rt->pose));
 
     /* normalise in the rest pose: height 1, or bulk / 0.9 for squat wide creatures */
     kit_update(rt, 0, &rt->pose);
@@ -1208,12 +1000,12 @@ void cute_rt_raster(cute_rt_t *rt, int W, int H) {
     const uint32_t tagbits = (uint32_t)rt->tag << 24;
     fluid_prof[FP_C_CLEAR] += fluid_cycles() - cc;
     static const float LD[3] = { 0.33333333f, 0.66666667f, 0.66666667f };   /* normalize(0.5, 1, 1) */
-    const float inv_h = (1.f + rt->cam_zoom) / rt->cam_half, hx = 0.5f * SW * inv_h, hy = 0.5f * SH * inv_h;
+    const float inv_h = (1.f + rt->eng.cam_zoom) / rt->cam_half, hx = 0.5f * SW * inv_h, hy = 0.5f * SH * inv_h;
     /* the camera's centre: the usual one, or (an action's focus) on the eye nearer the camera */
     float ct[3] = { rt->cam_t[0], rt->cam_t[1], rt->cam_t[2] };
-    if (rt->cam_focus > 0.f) {
+    if (rt->eng.cam_focus > 0.f) {
         v3_t eye = m_apply(&rt->nodes[rt->eyes[0].g].world, 0.f, 0.f, 0.f);
-        ct[0] += rt->cam_focus * (eye.x - ct[0]); ct[1] += rt->cam_focus * (eye.y - ct[1]); ct[2] += rt->cam_focus * (eye.z - ct[2]);
+        ct[0] += rt->eng.cam_focus * (eye.x - ct[0]); ct[1] += rt->eng.cam_focus * (eye.y - ct[1]); ct[2] += rt->eng.cam_focus * (eye.z - ct[2]);
     }
     int tris = 0;
     int bx0 = SW, bx1 = 0, by0 = SH, by1 = 0;           /* union of rasterised bboxes */
