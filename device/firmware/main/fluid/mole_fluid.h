@@ -48,6 +48,10 @@ extern "C" {
 esp_err_t mole_fluid_creature_init(void);
 void      mole_fluid_creature_deinit(void);
 esp_err_t mole_fluid_creature_render(void);
+/** The frame on the panel into the board's framebuffer (the drawer sends the panel only
+ *  windows, from internal RAM): call before reading it. Waits for the next frame, up to
+ *  500 ms; ESP_ERR_INVALID_STATE when the fluid is not running. */
+esp_err_t mole_fluid_framebuffer_sync(void);
 esp_err_t mole_fluid_creature_state_get_json(char **out);
 esp_err_t mole_fluid_creature_state_set_json(const char *body);
 
