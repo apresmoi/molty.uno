@@ -270,6 +270,24 @@ static double test_render(const char *pkgdir, const char *id, const char *outdir
             fluid_draw(d, fr, fb, &o, &y0, &y1);
             if (cpk_tris(k) > worst) worst = cpk_tris(k);
         }
+        /* the body only revisits the cells it or the marks wrote: re-rastered now (last frame's
+         * marks still in its cells), it matches a body rastered from nothing at this pose */
+        {
+            cb_t *fresh = cb_create(cpk_player(k)), *live = (cb_t *)cpk_body(k);
+            const mood_engine_t *e = cpk_engine(k);
+            cb_raster(live, cpk_player(k), W, H, e->cam_zoom, e->cam_focus);
+            cb_raster(fresh, cpk_player(k), W, H, e->cam_zoom, e->cam_focus);
+            const float *c1[5], *c2[5]; const uint8_t *h1, *h2;
+            cb_cells(live, &c1[0], &c1[1], &c1[2], &c1[3], &c1[4], &h1);
+            cb_cells(fresh, &c2[0], &c2[1], &c2[2], &c2[3], &c2[4], &h2);
+            int stale = 0;
+            for (int q = 0; q < W * H; q++) {
+                stale += h1[q] != h2[q];
+                for (int a = 0; a < 5; a++) stale += c1[a][q] != c2[a][q];
+            }
+            CHECK(stale == 0, "%s %s: %d cell values differ from a body rastered afresh", id, MOOD_NAMES[m], stale);
+            cb_destroy(fresh);
+        }
         const float *cov, *lum, *r, *g, *b; const uint8_t *hole;
         cb_cells(cpk_body(k), &cov, &lum, &r, &g, &b, &hole);
         for (int q = 0; q < W * H; q++) { ink += s->T[q] / FQ_UNIT; holes += hole[q]; }
