@@ -8,6 +8,7 @@
 #include "cute_rig.h"
 #include "cute_act.h"
 #include "mood_engine.h"
+#include "rig_geo.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -30,211 +31,6 @@
 
 static inline float clampf(float v, float a, float b) { return v < a ? a : v > b ? b : v; }
 static inline float bump(float q, float a, float b) { return (q < a || q > b) ? 0.f : sinf(PI_F * (q - a) / (b - a)); }
-
-/* ── small linear algebra: 3×4 affine, row-major [r00 r01 r02 tx | r10 … ty | r20 … tz] ── */
-
-typedef struct { float m[12]; } m34_t;
-typedef struct { float x, y, z; } v3_t;
-
-
-static m34_t m_mul(const m34_t *a, const m34_t *b) {
-    m34_t r;
-    for (int i = 0; i < 3; i++) {
-        const float *A = a->m + i * 4;
-        for (int j = 0; j < 3; j++) r.m[i * 4 + j] = A[0] * b->m[j] + A[1] * b->m[4 + j] + A[2] * b->m[8 + j];
-        r.m[i * 4 + 3] = A[0] * b->m[3] + A[1] * b->m[7] + A[2] * b->m[11] + A[3];
-    }
-    return r;
-}
-static inline v3_t m_apply(const m34_t *a, float x, float y, float z) {
-    v3_t r = { a->m[0] * x + a->m[1] * y + a->m[2] * z + a->m[3],
-               a->m[4] * x + a->m[5] * y + a->m[6] * z + a->m[7],
-               a->m[8] * x + a->m[9] * y + a->m[10] * z + a->m[11] };
-    return r;
-}
-static float m_det(const m34_t *a) {
-    const float *m = a->m;
-    return m[0] * (m[5] * m[10] - m[6] * m[9]) - m[1] * (m[4] * m[10] - m[6] * m[8]) + m[2] * (m[4] * m[9] - m[5] * m[8]);
-}
-/* 3×3 rotation for one axis */
-static void rot_axis(float *R, int axis, float a) {
-    float c = cosf(a), s = sinf(a);
-    memset(R, 0, 9 * sizeof(float));
-    if (axis == 0) { R[0] = 1; R[4] = c; R[5] = -s; R[7] = s; R[8] = c; }
-    else if (axis == 1) { R[0] = c; R[2] = s; R[4] = 1; R[6] = -s; R[8] = c; }
-    else { R[0] = c; R[1] = -s; R[3] = s; R[4] = c; R[8] = 1; }
-}
-static void mat3_mul(float *o, const float *a, const float *b) {
-    float t[9];
-    for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) t[i * 3 + j] = a[i * 3] * b[j] + a[i * 3 + 1] * b[3 + j] + a[i * 3 + 2] * b[6 + j];
-    memcpy(o, t, sizeof(t));
-}
-/* three.js Euler orders: 'XYZ' → Rx·Ry·Rz (the order string read left to right) */
-static const uint8_t ORDERS[6][3] = { { 0, 1, 2 }, { 1, 0, 2 }, { 2, 0, 1 }, { 0, 2, 1 }, { 1, 2, 0 }, { 2, 1, 0 } };
-static void euler_mat(float *R, const float *e, int order) {
-    float A[9], B[9], C[9];
-    const uint8_t *o = ORDERS[order];
-    rot_axis(A, o[0], e[o[0]]); rot_axis(B, o[1], e[o[1]]); rot_axis(C, o[2], e[o[2]]);
-    mat3_mul(R, A, B); mat3_mul(R, R, C);
-}
-/* quaternion.setFromUnitVectors(+z, n) → rotation matrix (shortest arc) */
-static void rot_from_z(float *R, v3_t n) {
-    float r = n.z + 1.f, qx, qy, qz, qw;
-    if (r < 1e-6f) { qx = 0; qy = -1; qz = 0; qw = 0; }      /* n = −z: 180° about y (three picks −from.z,0,from.x) */
-    else { qx = -n.y; qy = n.x; qz = 0; qw = r; }           /* cross(z, n) = (−n.y, n.x, 0) */
-    float l = sqrtf(qx * qx + qy * qy + qz * qz + qw * qw);
-    qx /= l; qy /= l; qz /= l; qw /= l;
-    R[0] = 1 - 2 * (qy * qy + qz * qz); R[1] = 2 * (qx * qy - qz * qw); R[2] = 2 * (qx * qz + qy * qw);
-    R[3] = 2 * (qx * qy + qz * qw); R[4] = 1 - 2 * (qx * qx + qz * qz); R[5] = 2 * (qy * qz - qx * qw);
-    R[6] = 2 * (qx * qz - qy * qw); R[7] = 2 * (qy * qz + qx * qw); R[8] = 1 - 2 * (qx * qx + qy * qy);
-}
-
-/* ── geometry (three.js generators, same vertex/index order and winding) ─────────────── */
-
-typedef struct { int nv, nt; float *v; uint16_t *t; float bmin[3], bmax[3]; } geo_t;
-
-typedef struct { geo_t *g; int nv, nt, cv, ct; } gbuild_t;
-
-static bool gb_init(gbuild_t *b, geo_t *g, int nv, int nt) {
-    b->g = g; b->nv = b->nt = 0; b->cv = nv; b->ct = nt;
-    g->v = CUTE_CALLOC((size_t)nv * 3 * sizeof(float));
-    g->t = CUTE_CALLOC((size_t)nt * 3 * sizeof(uint16_t));
-    return g->v && g->t;
-}
-static int gb_v(gbuild_t *b, float x, float y, float z) {
-    if (b->nv >= b->cv) return b->nv - 1;
-    float *p = b->g->v + b->nv * 3; p[0] = x; p[1] = y; p[2] = z;
-    return b->nv++;
-}
-static void gb_t(gbuild_t *b, int a, int c, int d) {
-    if (b->nt >= b->ct) return;
-    uint16_t *p = b->g->t + b->nt * 3; p[0] = (uint16_t)a; p[1] = (uint16_t)c; p[2] = (uint16_t)d; b->nt++;
-}
-static void gb_done(gbuild_t *b) {
-    geo_t *g = b->g; g->nv = b->nv; g->nt = b->nt;
-    for (int k = 0; k < 3; k++) { g->bmin[k] = 1e9f; g->bmax[k] = -1e9f; }
-    for (int i = 0; i < g->nv; i++) for (int k = 0; k < 3; k++) {
-        float v = g->v[i * 3 + k];
-        if (v < g->bmin[k]) g->bmin[k] = v;
-        if (v > g->bmax[k]) g->bmax[k] = v;
-    }
-}
-
-/* SphereGeometry(1, w, h) scaled, optional teardrop pinch toward +y */
-static bool geo_sphere(geo_t *g, int w, int h, const float *s, float pinch, bool tear) {
-    gbuild_t b;
-    if (!gb_init(&b, g, (w + 1) * (h + 1), 2 * w * h)) return false;
-    for (int iy = 0; iy <= h; iy++) {
-        float v = (float)iy / h, st = sinf(v * PI_F), ct = cosf(v * PI_F);
-        for (int ix = 0; ix <= w; ix++) {
-            float u = (float)ix / w;
-            float x = -cosf(u * TAU_F) * st, y = ct, z = sinf(u * TAU_F) * st;
-            if (tear) { float k = 1.f - pinch * powf((y + 1.f) * 0.5f, 1.6f); x *= k; z *= k; }
-            gb_v(&b, x * s[0], y * s[1], z * s[2]);
-        }
-    }
-    for (int iy = 0; iy < h; iy++) for (int ix = 0; ix < w; ix++) {
-        int a = iy * (w + 1) + ix + 1, bb = iy * (w + 1) + ix, c = (iy + 1) * (w + 1) + ix, d = (iy + 1) * (w + 1) + ix + 1;
-        if (iy != 0) gb_t(&b, a, bb, d);
-        if (iy != h - 1) gb_t(&b, bb, c, d);
-    }
-    gb_done(&b);
-    return true;
-}
-
-/* CylinderGeometry(rTop, rBottom, h, radial) — also ConeGeometry (rTop = 0) */
-static bool geo_cylinder(geo_t *g, float rt, float rb, float h, int rs) {
-    gbuild_t b;
-    if (!gb_init(&b, g, 2 * (rs + 1) + 2 * (2 * rs + 1), 4 * rs)) return false;
-    float hh = h * 0.5f;
-    int idx[2][33];
-    for (int y = 0; y <= 1; y++) {
-        float r = y * (rb - rt) + rt;
-        for (int x = 0; x <= rs; x++) { float th = (float)x / rs * TAU_F; idx[y][x] = gb_v(&b, r * sinf(th), -y * h + hh, r * cosf(th)); }
-    }
-    for (int x = 0; x < rs; x++) {
-        int a = idx[0][x], bb = idx[1][x], c = idx[1][x + 1], d = idx[0][x + 1];
-        if (rt > 0.f) gb_t(&b, a, bb, d);
-        if (rb > 0.f) gb_t(&b, bb, c, d);
-    }
-    for (int top = 1; top >= 0; top--) {
-        float r = top ? rt : rb, sign = top ? 1.f : -1.f;
-        if (r <= 0.f) continue;
-        int c0 = b.nv;
-        for (int x = 0; x < rs; x++) gb_v(&b, 0, hh * sign, 0);
-        int r0 = b.nv;
-        for (int x = 0; x <= rs; x++) { float th = (float)x / rs * TAU_F; gb_v(&b, r * sinf(th), hh * sign, r * cosf(th)); }
-        for (int x = 0; x < rs; x++) {
-            int c = c0 + x, i = r0 + x;
-            if (top) gb_t(&b, i, i + 1, c); else gb_t(&b, i + 1, i, c);
-        }
-    }
-    gb_done(&b);
-    return true;
-}
-
-/* CapsuleGeometry(r, len, capSeg, radial): LatheGeometry of two arcs (Path.getPoints) */
-static bool geo_capsule(geo_t *g, float r, float len, int cap, int rs) {
-    float px[80], py[80]; int np = 0;
-    int div = cap * 2;                                         /* EllipseCurve resolution = divisions·2 */
-    for (int i = 0; i <= div && np < 80; i++) { float a = 1.5f * PI_F + (float)i / div * (0.5f * PI_F); px[np] = r * cosf(a); py[np] = -len * 0.5f + r * sinf(a); np++; }
-    for (int i = 0; i <= div && np < 80; i++) {
-        float a = (float)i / div * (0.5f * PI_F), x = r * cosf(a), y = len * 0.5f + r * sinf(a);
-        if (fabsf(x - px[np - 1]) < 1e-6f && fabsf(y - py[np - 1]) < 1e-6f) continue;
-        px[np] = x; py[np] = y; np++;
-    }
-    gbuild_t b;
-    if (!gb_init(&b, g, (rs + 1) * np, 2 * rs * (np - 1))) return false;
-    for (int i = 0; i <= rs; i++) {
-        float phi = (float)i / rs * TAU_F, s = sinf(phi), c = cosf(phi);
-        for (int j = 0; j < np; j++) gb_v(&b, px[j] * s, py[j], px[j] * c);
-    }
-    for (int i = 0; i < rs; i++) for (int j = 0; j < np - 1; j++) {
-        int base = j + i * np, a = base, bb = base + np, c = base + np + 1, d = base + 1;
-        gb_t(&b, a, bb, d); gb_t(&b, c, d, bb);
-    }
-    gb_done(&b);
-    return true;
-}
-
-/* TorusGeometry(R, tube, radial, tubular, arc) */
-static bool geo_torus(geo_t *g, float R, float tube, int radial, int tub, float arc) {
-    gbuild_t b;
-    if (!gb_init(&b, g, (radial + 1) * (tub + 1), 2 * radial * tub)) return false;
-    for (int j = 0; j <= radial; j++) for (int i = 0; i <= tub; i++) {
-        float u = (float)i / tub * arc, v = (float)j / radial * TAU_F;
-        gb_v(&b, (R + tube * cosf(v)) * cosf(u), (R + tube * cosf(v)) * sinf(u), tube * sinf(v));
-    }
-    for (int j = 1; j <= radial; j++) for (int i = 1; i <= tub; i++) {
-        int a = (tub + 1) * j + i - 1, bb = (tub + 1) * (j - 1) + i - 1, c = (tub + 1) * (j - 1) + i, d = (tub + 1) * j + i;
-        gb_t(&b, a, bb, d); gb_t(&b, bb, c, d);
-    }
-    gb_done(&b);
-    return true;
-}
-
-/* CircleGeometry(r, seg, thetaStart, thetaLength), faces +z */
-static bool geo_circle(geo_t *g, float r, int seg, float t0, float tl) {
-    gbuild_t b;
-    if (!gb_init(&b, g, seg + 2, seg)) return false;
-    gb_v(&b, 0, 0, 0);
-    for (int s = 0; s <= seg; s++) { float th = t0 + (float)s / seg * tl; gb_v(&b, r * cosf(th), r * sinf(th), 0); }
-    for (int i = 1; i <= seg; i++) gb_t(&b, i, i + 1, 0);
-    gb_done(&b);
-    return true;
-}
-
-static bool geo_box(geo_t *g, const float *s) {
-    gbuild_t b;
-    if (!gb_init(&b, g, 8, 12)) return false;
-    float x = s[0] * 0.5f, y = s[1] * 0.5f, z = s[2] * 0.5f;
-    for (int k = 0; k < 8; k++) gb_v(&b, (k & 1) ? x : -x, (k & 2) ? y : -y, (k & 4) ? z : -z);
-    static const uint8_t T[12][3] = { { 1, 3, 7 }, { 1, 7, 5 }, { 0, 4, 6 }, { 0, 6, 2 }, { 2, 6, 7 }, { 2, 7, 3 },
-                                      { 0, 1, 5 }, { 0, 5, 4 }, { 4, 5, 7 }, { 4, 7, 6 }, { 0, 2, 3 }, { 0, 3, 1 } };
-    for (int k = 0; k < 12; k++) gb_t(&b, T[k][0], T[k][1], T[k][2]);
-    gb_done(&b);
-    return true;
-}
 
 /* ── rig nodes + meshes ─────────────────────────────────────────────────────────────── */
 
@@ -336,7 +132,7 @@ static v3_t surf_point(const cute_rt_t *rt, float u, float v, float lift, float 
     v3_t n = { x / (fr[0] * fr[0]), y / (fr[1] * fr[1]), z / (fr[2] * fr[2]) };
     float nl = sqrtf(n.x * n.x + n.y * n.y + n.z * n.z);
     n.x /= nl; n.y /= nl; n.z /= nl;
-    if (R) rot_from_z(R, n);
+    if (R) rg_rot_from_z(R, n);
     v3_t p = { x + n.x * lift + fo[0], y + n.y * lift + fo[1], z + n.z * lift + fo[2] };
     return p;
 }
@@ -355,14 +151,14 @@ static int part_geometry(cute_rt_t *rt, const cute_part_t *p) {
     bool ok = false;
     const float *a = p->params;
     switch (p->type) {
-    case CP_ELLIPSOID: ok = geo_sphere(g, p->seg_a, p->seg_b, a, 0, false); break;
-    case CP_TEARDROP:  ok = geo_sphere(g, p->seg_a, p->seg_b, a, a[3], true); break;
-    case CP_CAPSULE:   ok = geo_capsule(g, a[0], a[1], p->seg_b, p->seg_a); break;
-    case CP_CONE:      ok = geo_cylinder(g, 0, a[0], a[1], p->seg_a); break;
-    case CP_CYLINDER:  ok = geo_cylinder(g, a[0], a[1], a[2], p->seg_a); break;
-    case CP_TORUS:     ok = geo_torus(g, a[0], a[1], p->seg_a, p->seg_b, a[2]); break;
-    case CP_BOX:       ok = geo_box(g, a); break;
-    case CP_DISC:      ok = geo_circle(g, a[0], p->seg_a, 0, TAU_F); break;
+    case CP_ELLIPSOID: ok = rg_sphere(g, p->seg_a, p->seg_b, a, 0, false); break;
+    case CP_TEARDROP:  ok = rg_sphere(g, p->seg_a, p->seg_b, a, a[3], true); break;
+    case CP_CAPSULE:   ok = rg_capsule(g, a[0], a[1], p->seg_b, p->seg_a); break;
+    case CP_CONE:      ok = rg_cylinder(g, 0, a[0], a[1], p->seg_a); break;
+    case CP_CYLINDER:  ok = rg_cylinder(g, a[0], a[1], a[2], p->seg_a); break;
+    case CP_TORUS:     ok = rg_torus(g, a[0], a[1], p->seg_a, p->seg_b, a[2]); break;
+    case CP_BOX:       ok = rg_box(g, a); break;
+    case CP_DISC:      ok = rg_circle(g, a[0], p->seg_a, 0, TAU_F); break;
     }
     if (!ok) { rt->ng--; return -1; }
     if (p->has_offset) for (int i = 0; i < g->nv; i++) for (int k = 0; k < 3; k++) g->v[i * 3 + k] += p->offset[k];
@@ -413,10 +209,10 @@ static void build_face(cute_rt_t *rt) {
     const cute_spec_t *S = &rt->spec;
     int g_disc = geo_new(rt), g_half = geo_new(rt), g_dot = geo_new(rt), g_arc = geo_new(rt);
     if (g_arc < 0) return;
-    geo_circle(&rt->geos[g_disc], 1, 16, 0, TAU_F);
-    geo_circle(&rt->geos[g_half], 1, 10, PI_F, PI_F);
-    geo_circle(&rt->geos[g_dot], 1, 7, 0, TAU_F);
-    geo_torus(&rt->geos[g_arc], 0.72f, 0.26f, 3, 6, PI_F);
+    rg_circle(&rt->geos[g_disc], 1, 16, 0, TAU_F);
+    rg_circle(&rt->geos[g_half], 1, 10, PI_F, PI_F);
+    rg_circle(&rt->geos[g_dot], 1, 7, 0, TAU_F);
+    rg_torus(&rt->geos[g_arc], 0.72f, 0.26f, 3, 6, PI_F);
     for (int e = 0; e < 2; e++) {
         int side = e == 0 ? 1 : -1;
         rt->eyes[e].side = side;
@@ -435,10 +231,10 @@ static void build_face(cute_rt_t *rt) {
     if (S->mouth_type == CMT_SMILE || S->mouth_type == CMT_CAT) {
         int g_marc = geo_new(rt), g_open = geo_new(rt), g_openD = geo_new(rt), g_tongue = geo_new(rt);
         if (g_tongue >= 0) {
-            geo_torus(&rt->geos[g_marc], 1, 0.3f, 3, 6, PI_F);
-            geo_circle(&rt->geos[g_open], 1, 12, 0, TAU_F);
-            geo_circle(&rt->geos[g_openD], 1, 10, PI_F, PI_F);
-            geo_circle(&rt->geos[g_tongue], 1, 8, 0, TAU_F);
+            rg_torus(&rt->geos[g_marc], 1, 0.3f, 3, 6, PI_F);
+            rg_circle(&rt->geos[g_open], 1, 12, 0, TAU_F);
+            rg_circle(&rt->geos[g_openD], 1, 10, PI_F, PI_F);
+            rg_circle(&rt->geos[g_tongue], 1, 8, 0, TAU_F);
             rt->mouth_g = node_add(rt, rt->n_head);
             bool cat = S->mouth_type == CMT_CAT;
             rt->n_closed = cat ? 2 : 1;
@@ -460,7 +256,7 @@ static void build_face(cute_rt_t *rt) {
     if (S->has_cheeks) {
         int g_ch = geo_new(rt);
         if (g_ch >= 0) {
-            geo_circle(&rt->geos[g_ch], 1, 9, 0, TAU_F);
+            rg_circle(&rt->geos[g_ch], 1, 9, 0, TAU_F);
             for (int c = 0; c < 2; c++) {
                 int nd = node_add(rt, rt->n_head);
                 mesh_add(rt, nd, g_ch, S->col_cheek, 255, false, 1);
@@ -821,13 +617,13 @@ static void world_update(cute_rt_t *rt) {
         bool rotated = n->rot[0] != 0.f || n->rot[1] != 0.f || n->rot[2] != 0.f;
         if (n->use_rm) {
             memcpy(R, n->rm, sizeof(R));
-            if (rotated) { float E[9]; euler_mat(E, n->rot, n->order); mat3_mul(R, R, E); }
-        } else if (rotated) euler_mat(R, n->rot, n->order);
+            if (rotated) { float E[9]; rg_euler(E, n->rot, n->order); rg_mat3_mul(R, R, E); }
+        } else if (rotated) rg_euler(R, n->rot, n->order);
         else { static const float I[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 }; memcpy(R, I, sizeof(R)); }
         m34_t L = { { R[0] * n->scale[0], R[1] * n->scale[1], R[2] * n->scale[2], n->pos[0],
                       R[3] * n->scale[0], R[4] * n->scale[1], R[5] * n->scale[2], n->pos[1],
                       R[6] * n->scale[0], R[7] * n->scale[1], R[8] * n->scale[2], n->pos[2] } };
-        n->world = n->parent >= 0 ? m_mul(&rt->nodes[n->parent].world, &L) : L;
+        n->world = n->parent >= 0 ? rg_mul(&rt->nodes[n->parent].world, &L) : L;
     }
 }
 
@@ -851,7 +647,7 @@ static void rest_bbox(cute_rt_t *rt, float *mn, float *mx) {
         const geo_t *g = &rt->geos[me->geo];
         const m34_t *W = &rt->nodes[me->node].world;
         for (int c = 0; c < 8; c++) {   /* box corners → world AABB (three Box3.applyMatrix4) */
-            v3_t p = m_apply(W, (c & 1) ? g->bmax[0] : g->bmin[0], (c & 2) ? g->bmax[1] : g->bmin[1], (c & 4) ? g->bmax[2] : g->bmin[2]);
+            v3_t p = rg_apply(W, (c & 1) ? g->bmax[0] : g->bmin[0], (c & 2) ? g->bmax[1] : g->bmin[1], (c & 4) ? g->bmax[2] : g->bmin[2]);
             float v[3] = { p.x, p.y, p.z };
             for (int k = 0; k < 3; k++) { if (v[k] < mn[k]) mn[k] = v[k]; if (v[k] > mx[k]) mx[k] = v[k]; }
         }
@@ -1004,7 +800,7 @@ void cute_rt_raster(cute_rt_t *rt, int W, int H) {
     /* the camera's centre: the usual one, or (an action's focus) on the eye nearer the camera */
     float ct[3] = { rt->cam_t[0], rt->cam_t[1], rt->cam_t[2] };
     if (rt->eng.cam_focus > 0.f) {
-        v3_t eye = m_apply(&rt->nodes[rt->eyes[0].g].world, 0.f, 0.f, 0.f);
+        v3_t eye = rg_apply(&rt->nodes[rt->eyes[0].g].world, 0.f, 0.f, 0.f);
         ct[0] += rt->eng.cam_focus * (eye.x - ct[0]); ct[1] += rt->eng.cam_focus * (eye.y - ct[1]); ct[2] += rt->eng.cam_focus * (eye.z - ct[2]);
     }
     int tris = 0;
@@ -1014,13 +810,13 @@ void cute_rt_raster(cute_rt_t *rt, int W, int H) {
         if (!me->visible) continue;
         const geo_t *g = &rt->geos[me->geo];
         const m34_t *Wm = &rt->nodes[me->node].world;
-        float det = m_det(Wm);
+        float det = rg_det(Wm);
         if (fabsf(det) < 1e-12f || g->nv > rt->vcap) continue;  /* collapsed (scale 0) */
         uint32_t cv = fluid_cycles();
         /* camera-space vertices, once per mesh: screen x, y (samples), depth z; world p for normals */
         for (int i = 0; i < g->nv; i++) {
             const float *v = g->v + i * 3;
-            v3_t p = m_apply(Wm, v[0], v[1], v[2]);
+            v3_t p = rg_apply(Wm, v[0], v[1], v[2]);
             float q[3] = { p.x - ct[0], p.y - ct[1], p.z - ct[2] };
             float *o = rt->vbuf + i * 6;
             o[0] = (q[0] * rt->cam_x[0] + q[1] * rt->cam_x[1] + q[2] * rt->cam_x[2]) * hx + 0.5f * SW;
