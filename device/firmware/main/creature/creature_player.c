@@ -63,7 +63,7 @@ enum { M_NONE, M_ABS, M_POS, M_NEG, M_SQ };
 enum { X_NUM, X_A, X_DRAW, X_ATTR, X_IDX, X_LOCAL, X_CH, X_WIDE };
 
 typedef struct { uint8_t op, mod, src, np; uint16_t si; double sv; prm_t p[4]; } fac_t;
-typedef struct { prm_t g; uint16_t f0; uint8_t nf; } term_t;
+typedef struct { prm_t g; float gf; uint16_t f0; uint8_t nf; } term_t;   /* gf: a number g as a float */
 typedef struct { uint16_t t0, nt; } terms_t;
 
 enum { D_SLOT, D_LOCAL, D_BONE };
@@ -273,12 +273,22 @@ static float factor(cp_t *c, const fac_t *f) {
     }
 }
 
+/* most factors read a channel or a local as is: that float, without factor()'s doubles
+ * (a float through a double and back is itself) */
+static inline float factor_v(cp_t *c, const fac_t *f) {
+    if (f->op == O_V && f->mod == M_NONE && (f->src == X_CH || f->src == X_LOCAL)) {
+        c->frame_factors++;
+        return f->src == X_CH ? c->C[f->si] : c->L[f->si];
+    }
+    return factor(c, f);
+}
+
 static float terms(cp_t *c, terms_t t) {
     float s = 0;
     for (int k = 0; k < t.nt; k++) {
         const term_t *T = &c->term[t.t0 + k];
-        float v = (float)prm(c, &T->g);
-        for (int j = 0; j < T->nf && v != 0.f; j++) v *= factor(c, &c->fac[T->f0 + j]);
+        float v = T->g.k == P_NUM ? T->gf : (float)prm(c, &T->g);
+        for (int j = 0; j < T->nf && v != 0.f; j++) v *= factor_v(c, &c->fac[T->f0 + j]);
         s += v;
     }
     return s;
@@ -294,6 +304,14 @@ static void hist_push(cp_t *c, int hi, double v) {
 }
 
 static void channel(cp_t *c, const ch_t *h) {
+    /* a bone's offset, stateless: in floats, the same numbers (a double product of two
+     * floats is exact, so rounding it is the float product) without the soft doubles */
+    if (h->dst == D_BONE && h->prop < 6 && !(h->flags & (F_INT | F_D | F_LP | F_SP))) {
+        float v = terms(c, h->t);
+        if (h->flags & F_CL) v = clf(v, h->cl[0], h->cl[1]);
+        c->out[h->to == GROUP_BONE ? c->group[c->I->group].bone[c->ii] : h->to][h->prop] += (h->flags & F_UNW ? 1.f : c->B.w) * v;
+        return;
+    }
     double v = terms(c, h->t);
     const double dt = c->dt;
     if (h->flags & (F_INT | F_D | F_LP | F_SP)) {
@@ -757,6 +775,7 @@ static int terms_c(cx_t *x, const cJSON *a, terms_t *t) {
         term_t *T = &c->term[c->nterm++];
         T->f0 = (uint16_t)c->nfac; T->nf = (uint8_t)(n - 1);
         TRY(param(x, tv->child, &T->g));
+        T->gf = (float)T->g.a;
         for (const cJSON *f = tv->child->next; f; f = f->next) TRY(factor_c(x, f, &c->fac[c->nfac++]));
         t->nt++;
     }
