@@ -499,12 +499,15 @@ int cp_ambient(cp_t *c, const cp_env_t *env, cp_mark_t *out, int max) {
     amb_t A = { env, 0, 0, -1, 1, 0, out, 0, max };
     const float dt = env->dt, win = env->win, t = (float)c->time;
     const int W = env->W, H = env->H;
-    float sx = 0, sy = 0;
-    for (int k = 0; k < W * H; k++) if (env->cov[k] > 0) {
-        float x = (((float)(k % W) + 0.5f) / W * 2 - 1) * win, y = (1 - ((float)(k / W) + 0.5f) / H * 2) * win;
-        sx += x; sy += y; A.sn++;
-        if (y > A.top) A.top = y;
-        if (y < A.bot) A.bot = y;
+    float sx = 0, sy = 0, cx[64];
+    for (int i = 0; i < W && i < 64; i++) cx[i] = (((float)i + 0.5f) / W * 2 - 1) * win;   /* the divides once a column */
+    for (int j = 0; j < H; j++) {
+        const float y = (1 - ((float)j + 0.5f) / H * 2) * win;
+        for (int i = 0; i < W; i++) if (env->cov[j * W + i] > 0) {
+            sx += i < 64 ? cx[i] : (((float)i + 0.5f) / W * 2 - 1) * win; sy += y; A.sn++;
+            if (y > A.top) A.top = y;
+            if (y < A.bot) A.bot = y;
+        }
     }
     A.ox = A.sn ? sx / A.sn : 0; A.oy = A.sn ? sy / A.sn : 0;
     A.top = fminf(A.top, A.oy + 0.5f); A.bot = fmaxf(A.bot, A.oy - 0.45f);
