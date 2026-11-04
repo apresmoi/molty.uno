@@ -21,7 +21,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
-#define LINK_CMD_MAX 24
+#define LINK_CMD_MAX 32
 static struct { const char *name; link_cmd_handler_t handler; } s_registry[LINK_CMD_MAX];
 static size_t s_count;
 static char s_mood[16] = "idle";
@@ -316,6 +316,7 @@ void link_cmd_init(void)
     link_cmd_register("pkg.list", pkg_cmd_list);
     link_cmd_register("scene.play", pkg_cmd_scene_play); link_cmd_register("scene.queue", pkg_cmd_scene_queue);
     link_cmd_register("scene.clear", pkg_cmd_scene_clear);
+    link_cmd_register("creature.select", pkg_cmd_creature_select); link_cmd_register("creature.list", pkg_cmd_creature_list);
 }
 
 static const char *s_refusal = "device_error";

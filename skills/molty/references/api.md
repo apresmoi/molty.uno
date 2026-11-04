@@ -95,6 +95,8 @@ Success: `200 {"ok":true,"result":{…}}`. Unknown argument keys are rejected.
 | `scene.play` | `{"pkg", "layout", "params"?: {…}, "ttl_s"?: 1..600}` | none | replaces the screen with a package's layout, drawn from a few params (≤ 2048 bytes); back to the creature after `ttl_s` (default 60); `not_installed`, `no_layout`, `bad_params` |
 | `scene.queue` | same as `scene.play` | none | plays after the current scene ends |
 | `scene.clear` | none | none | melts back to the creature |
+| `creature.select` | `{"id"}` | `{id, name}` | which creature Molty is: a built-in one (`duck`, `cat`, `octopus`) or an installed creature package (`kind: "creature"`); kept across reboots; `not_installed`, `bad_package` |
+| `creature.list` | none | `{current, creatures: [{id, name, version, source}]}` | the creatures this Molty can be (`source`: `builtin` or `installed`) |
 
 **Timing.** Short commands answer inline within ~10 s. `say` and `listen` are
 **async jobs**: they return `{job}` at once; poll `GET /v1/jobs/<job>?wait_s=0..8` until
