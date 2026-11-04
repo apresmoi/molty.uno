@@ -54,7 +54,7 @@ import {
   type ActivityOwnerRequest,
 } from "./api.js";
 import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
-import { DEFAULT_WPM, PKG_CAP, SCENE_CAP, WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, GESTURES_CAP, RESUME_CAP, RESUME_FEATURE, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
+import { CREATURES_CAP, DEFAULT_WPM, PKG_CAP, SCENE_CAP, WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, GESTURES_CAP, RESUME_CAP, RESUME_FEATURE, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
 import { FIRST_WORDS_MODES, type FirstWordsMode, OPENER, type OpenerMessage, guardOpener, hangs, pushHistory, stripRepeat } from "./opener.js";
 import { PcmFeed, estimateSpeechMs, splitSpeech, synthesize } from "./speech.js";
 import { DEFAULT_PARTIAL_POLICY, DRAFT_DROPPED_EVENT, DRAFT_USED_EVENT, type DropReason, PARTIAL_EVENT, PartialChunker, PauseTracker, judgeDraft, words } from "./partials.js";
@@ -1143,6 +1143,9 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       const pkg = cmd.name.startsWith("pkg.");
       if (!live.getMeta()?.caps?.includes(pkg ? PKG_CAP : SCENE_CAP)) return fail("unsupported", `this Molty's firmware has no ${pkg ? "packages" : "scenes"} (no \`${pkg ? PKG_CAP : SCENE_CAP}\` in its caps): update it`);
       if (cmd.name === "pkg.install") return this.startJob("pkg", cmd.args, false, by);
+    }
+    if (cmd.name.startsWith("creature.") && !live.getMeta()?.caps?.includes(CREATURES_CAP)) {
+      return fail("unsupported", `this Molty's firmware has no creature packages (no \`${CREATURES_CAP}\` in its caps): update it`);
     }
     if (cmd.name === "gestures") {
       const caps = live.getMeta()?.caps;
