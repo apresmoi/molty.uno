@@ -63,6 +63,10 @@ export interface CreatureRegistry {
   available: string[];
 }
 
+/** One creature package on the device (GET /api/creature/list). */
+export interface CreaturePackage { id: string; name: string; version: string; source: 'builtin' | 'installed'; }
+export interface CreatureList { ok: true; current: string; creatures: CreaturePackage[]; } // current "" = an uploaded .molty is shown
+
 /** Fluid creature state (GET/POST /api/creature/state while current == "fluid"). */
 export interface FluidState {
   ok: true;
