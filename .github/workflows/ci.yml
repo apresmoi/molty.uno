@@ -20,7 +20,8 @@ name: CI
 #   firmware, boards      device/firmware/** (not test/), tools/scripts/firmware-*,
 #                         and everything console runs on (it bakes the console page);
 #                         console + boards run whenever firmware does (artifact, matrix)
-#   firmware-test         device/firmware/**, device/creatures/molty/** (cute_build.sh)
+#   firmware-test         device/firmware/**, device/creatures/molty/** (cute_build.sh),
+#                         the JS creature player + mood engine + actions (creature_build.sh)
 #   relay                 services/relay/**, skills/molty/** (skill.test.ts),
 #                         docs/AGENT-LINK.md (events.test.ts)
 #   cli                   apps/cli/**
@@ -339,6 +340,12 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      # creature_build.sh writes its goldens with the JS creature player (tools/creatures/golden.mjs)
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
 
       # LINK_TEST_CFLAGS lives in the Makefile target: glibc hides strdup under -std=c11.
       - name: Host tests
