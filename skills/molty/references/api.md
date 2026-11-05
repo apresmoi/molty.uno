@@ -81,6 +81,7 @@ Success: `200 {"ok":true,"result":{…}}`. Unknown argument keys are rejected.
 | `act` | `{"action": a}` | `{action}` | a one-shot gesture over the current mood (see [Gestures](#gestures-act-and-inline-cues)); needs `act` in `relay.caps` (`409 unsupported` / `firmware_too_old` otherwise) |
 | `show` | `{"text": s, "wpm"?: 100..800}` | — | speed-reader text in the fluid, ≤ 16384 bytes, default 300 wpm; returns when it starts |
 | `say` | `{"text": s, "voice"?: id, "in_reply_to"?: turn_id}` | `{job}` immediately | relay TTS → speaker (streamed sentence by sentence), text shown in sync; ≤ 4096 bytes; job done → `{ms, text, timings}` (`text` without its [inline cues](#gestures-act-and-inline-cues) like `[happy]`); `in_reply_to`: see [events.md](events.md#shake-to-talk) |
+| `keep` | `{"words"?: m, "in_reply_to"?: turn_id}` | `{keep, said, late?, words, playing, sent, wpm}` | with an `opener`: Molty never plays past word m; your reply starts with those words ([First words](talking-fast.md#first-words-molty-starts-you-take-over)) |
 | `quick` | `{"id": phrase, "in_reply_to"?: turn_id, "force"?: bool}` | `{job, phrase, text, cached}` immediately, or `{skipped:"filled", filler}` | plays a cached [quick phrase](#quick-phrases) at once (no speech synthesis); your next say / talk queues right behind it |
 | `listen` | `{"ms"?: 0..30000, "end_silence_ms"?: 300..3000, "no_speech_ms"?: 1000..10000, "vad"?: bool, "ring_color"?: c, "ack"?: true\|false\|"silent"}` | `{job}` immediately | records the mic until the human finishes (the window is a ceiling: omit `ms` for the human's own setting, 30000 ms out of the box; `0` = unlimited, 5 min safety ceiling), relay STT; job done → `{text, duration_ms, peak, rms, reason, speech_ms?, timings}` |
 | `state` | `{}` = read · `{"state": {…}}` or flat fields = patch | creature state JSON | low-level creature state, same as the device's `/api/creature/state` |
@@ -258,7 +259,7 @@ Body: `{"say"?: s, "listen"?: true, "listen_ms"?: 0..30000 (omit: the human's se
 
 Speaks `say` (if given), then listens until the human stops talking (or the window ends), then
 returns the transcript as `heard` (with `filler_in_ms`: see [Quick phrases](#quick-phrases); with `opener` when
-Molty already started the reply: [First words](talking-fast.md#first-words-molty-starts-you-continue)). `reason`:
+Molty is starting the reply: [First words](talking-fast.md#first-words-molty-starts-you-take-over)). `reason`:
 
 | reason | meaning |
 |---|---|
