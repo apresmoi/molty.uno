@@ -299,6 +299,8 @@ def test_opener_prompt_has_history_and_keeps_it_short():
     assert "m4" in user and "m3" not in user  # the last five only
     assert "Molty: m7" in user and "Human: m8" in user
     assert body["think"] is False and body["keep_alive"] == -1 and body["stream"] is False
+    # a line is the real start of the answer, 12 to 20 words: room to write it, never a ramble
+    assert "12 to 20 words" in body["messages"][0]["content"] and 40 <= body["options"]["num_predict"] <= 64
 
 
 def test_opener_clean_keeps_one_plain_line():

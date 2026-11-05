@@ -42,8 +42,6 @@ private one, see [self-hosting](references/self-hosting.md)).
    [Codex](references/harnesses/codex.md), [Grok](references/harnesses/grok.md),
    [OpenClaw and other long-lived agents](references/harnesses/openclaw.md).
 
-The default relay is `https://molty-relay.alicenet.workers.dev`; `MOLTY_RELAY` overrides it.
-
 ## Helpers (`<skill-dir>/scripts/`)
 
 | Script | Does | Prints |
@@ -57,8 +55,6 @@ The default relay is `https://molty-relay.alicenet.workers.dev`; `MOLTY_RELAY` o
 | `mood.sh happy [hold_s]` | set a mood | the result |
 | `act.sh nod` | a one-shot gesture (nod, wiggle, bounce, …) | the result |
 | `watch.py` / `watch.py --once [wait_s]` | one line per event, forever / unread events, then exit | `MOLTY utterance: '…'` |
-
-Each helper follows a long turn (`202 pending`) to its end.
 
 ## Key rules
 
@@ -79,7 +75,8 @@ Each helper follows a long turn (`202 pending`) to its end.
   or `react`.
 - **Slow wake?** `quick {id}` is cached, instant audio; skipped if Molty already filled. Vary them;
   register your own (`molty_phrases`).
-- **`opener` on a turn: already spoken.** Continue from it, don't repeat.
+- **`opener`: Molty is saying it now.** First call: `keep {words: m, in_reply_to}`, then start
+  your reply with those m words ([talking-fast.md](references/talking-fast.md#first-words-molty-starts-you-take-over)).
 - **Short: ≤ 2 sentences, ~25 words a turn.** Split longer answers; speech time is wait time.
 - **Emote inline, sparingly:** `"[happy] Build passed!"`, `"Done. [nod]"` — never spoken or
   shown; one per sentence at most ([etiquette.md](references/etiquette.md#emotes)).
@@ -94,8 +91,6 @@ Each helper follows a long turn (`202 pending`) to its end.
   [activity log](references/activity.md).
 
 ## References
-
-Read the one you need, when you need it.
 
 - [api.md](references/api.md) — pairing in full, REST commands, talk, ask, errors, MCP, revoke.
 - [events.md](references/events.md) — event types, the `utterance`, inbox, webhooks, the CLI stream.
