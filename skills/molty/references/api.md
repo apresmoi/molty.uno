@@ -76,7 +76,7 @@ Success: `200 {"ok":true,"result":{…}}`. Unknown argument keys are rejected.
 
 | name | args | result | notes |
 |---|---|---|---|
-| `status` | — | fw, uptime, creature, state, mood, fps, rssi + `relay` {api_version, online, connected_since, board, caps, voice, events, webhook, firmware} | cheap; use it to check Molty is online |
+| `status` | — | fw, uptime, creature, state, mood, fps, rssi + `relay` {api_version, online, connected_since, board, caps, voice, events, webhook, firmware, creature} | cheap; use it to check Molty is online; `relay.creature`: who you are on screen |
 | `mood` | `{"mood": m, "hold_s"?: s}` | — | m ∈ idle, listening, thinking, speaking, happy, sleepy, surprised; happy/surprised revert by themselves, `hold_s` (0 < s ≤ 3600) sets how long any mood stays |
 | `act` | `{"action": a}` | `{action}` | a one-shot gesture over the current mood (see [Gestures](#gestures-act-and-inline-cues)); needs `act` in `relay.caps` (`409 unsupported` / `firmware_too_old` otherwise) |
 | `show` | `{"text": s, "wpm"?: 100..800}` | — | speed-reader text in the fluid, ≤ 16384 bytes, default 300 wpm; returns when it starts |
@@ -156,6 +156,8 @@ Molty), `blink`, `wobble`, `stretch`, `look_up`, `yawn`, `inspect` (right up to 
 (bobbing and splashing in the water). It never changes what is shown and
 never cancels a question; while words or a question cover the creature it waits up to 3 s,
 then is dropped. Silent, ~0.3–2.6 s. A `nod` while they talk (listening) is fine.
+Your creature plays the ones in `device.creature.gestures` (moods: `.moods`); each looks as its
+`about` line says on that animal ([creature.md](creature.md)).
 
 ## Gestures: what tap, double tap and the buttons do
 
