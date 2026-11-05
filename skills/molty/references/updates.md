@@ -25,7 +25,9 @@ claude plugin marketplace update molty && claude plugin update molty@molty   # C
 codex plugin marketplace upgrade molty && codex plugin add molty@molty         # Codex
 ```
 
-Then start a new session. Agents without a plugin system read the skill from GitHub:
+Then start a new session. `device.skill` on each `utterance` (`relay.skill` in `status`) is the
+newest version; [CHANGES.md](../CHANGES.md) says what each version added and which files to re-read.
+Agents without a plugin system read the skill from GitHub:
 `https://github.com/apresmoi/molty.uno/tree/main/skills/molty` (raw files under
 `https://raw.githubusercontent.com/apresmoi/molty.uno/main/skills/molty/`).
 

@@ -5,7 +5,7 @@ Molty talks back. When your human touches it, the relay records an event:
 | type | data |
 |---|---|
 | `shake` | `{"peak_g": 2.4, "reversals": 5, "ms": 900}`; with shake to talk also `"listening": true, "turn_id": "…"` — Molty is already listening: do nothing, its `utterance` follows |
-| `utterance` | `{"turn_id": "molty-…j_…", "text": "what's on my calendar?", "reason": "turn_end", "ms": {"speech": 1800, "stt": 120}, "trigger": "shake", "device": {"caps": […], "mood": "thinking", "voice": "box", "creature": {…}}, "filler_in_ms": 2300}`: the human's words, once per turn (see Shake to talk); `device.creature`: who you are on screen now ([creature.md](creature.md)); `opener`: the words Molty is saying now, `opener_wpm` their pace: keep and take over ([First words](talking-fast.md#first-words-molty-starts-you-take-over)); `filler_in_ms`: Molty says its own filler that much later unless you act first ([api.md](api.md#quick-phrases)) |
+| `utterance` | `{"turn_id": "molty-…j_…", "text": "what's on my calendar?", "reason": "turn_end", "ms": {"speech": 1800, "stt": 120}, "trigger": "shake", "device": {"caps": […], "mood": "thinking", "voice": "box", "creature": {…}}, "filler_in_ms": 2300}`: the human's words, once per turn (see Shake to talk); `device.creature`: who you are on screen now ([creature.md](creature.md)); `device.skill`: the skill's newest version ([CHANGES.md](../CHANGES.md)); `opener`: the words Molty is saying now, `opener_wpm` their pace: keep and take over ([First words](talking-fast.md#first-words-molty-starts-you-take-over)); `filler_in_ms`: Molty says its own filler that much later unless you act first ([api.md](api.md#quick-phrases)) |
 | `tap` | `{"x": 0..1, "y": 0..1}` (screen position). Only when `tap` is bound to `event` (the default); a tap during a recording stops it instead, and a shake's phantom taps are dropped |
 | `double_tap` | `{"x": 0..1, "y": 0..1}`. Only when `double_tap` is bound to `event` (out of the box a double tap talks) |
 | `button` | `{"id": "accept"}` or `{"id": "reject"}` — the board's physical buttons. Not an answer to a question: they mean acknowledge / dismiss whatever you showed (see [etiquette.md](etiquette.md)). Answers to a question come only as `answer` |
@@ -110,8 +110,9 @@ which a webhook only gets when it names it.
   quotes in the human's words can't break it); `{{event.data}}` and non-string fields insert JSON
   (write them unquoted).
 - For conversation, a body like
-  `{"message":"Molty: the human said \"{{event.data.text}}\" (turn {{event.data.turn_id}})"}` with
-  `"events":["utterance"]` hands your runtime everything it needs: no confirming call.
+  `{"message":"Molty: the human said \"{{event.data.text}}\" (turn {{event.data.turn_id}}). Molty is already saying: \"{{event.data.opener|(nothing)}}\""}` with
+  `"events":["utterance"]` hands your runtime everything it needs: no confirming call. Leave out
+  `opener` and every reply waits for Molty's sentence to end ("I mean, …").
 - Header values are stored and never shown again. The response has a dry run for a sample
   event and a `secret`, once: every request carries
   `Molty-Signature: t=<unix ms>,v2=<hex hmac_sha256(secret, t \n METHOD \n path?query \n body)>`

@@ -80,7 +80,10 @@ export class FakeVoice implements VoiceProvider {
   }
 }
 
-export function makeRoom(opts: { kv?: MemoryKV; host?: FakeHost; voice?: FakeVoice; timings?: Partial<RoomTimings> } & Partial<Pick<RoomDeps, "clock" | "scheduler" | "fetch" | "resolveHost" | "log" | "releases" | "classifier" | "reflexKeys" | "packagesRef">> = {}) {
+/** The skill's CHANGES.md on GitHub: tests that don't pass `skillChanges` never see the room read it. */
+const CHANGES_RE = /\/skills\/molty\/CHANGES\.md$/;
+
+export function makeRoom(opts: { kv?: MemoryKV; host?: FakeHost; voice?: FakeVoice; timings?: Partial<RoomTimings>; skillChanges?: string } & Partial<Pick<RoomDeps, "clock" | "scheduler" | "fetch" | "resolveHost" | "log" | "releases" | "classifier" | "reflexKeys" | "packagesRef">> = {}) {
   const kv = opts.kv ?? new MemoryKV();
   const host = opts.host ?? new FakeHost();
   const voice = opts.voice ?? new FakeVoice();
@@ -92,7 +95,10 @@ export function makeRoom(opts: { kv?: MemoryKV; host?: FakeHost; voice?: FakeVoi
     host,
     timings: opts.timings,
     scheduler: opts.scheduler,
-    fetch: opts.fetch,
+    fetch: async (req: Request) => {
+      if (CHANGES_RE.test(req.url)) return opts.skillChanges ? new Response(opts.skillChanges) : new Response("offline in tests", { status: 503 });
+      return opts.fetch ? opts.fetch(req) : new Response("offline in tests", { status: 503 });
+    },
     resolveHost: opts.resolveHost,
     log: opts.log,
     releases: opts.releases,
