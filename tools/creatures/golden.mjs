@@ -3,7 +3,7 @@
 // reference player (device/creatures/js/creature-player.js) for every mood, every gesture and a walk, and writes what went in
 // and what came out of each frame, for test/host/creature_test.c to replay and compare.
 //   node tools/creatures/golden.mjs <out dir> [seconds]      writes <out dir>/<id>.golden for every creature package
-// Per frame:  i dt <pose 18> eye mood act act_t act_n prev prev_t prev_w prev_n <walk 7>   (- for no action)
+// Per frame:  i dt <pose 18> eye mood act act_t act_n prev prev_t prev_w prev_n <walk 7> work   (- for no action; work 0/1)
 //             o <pose 18> <every bone then root: rx ry rz px py pz sx sy sz> <tints: per depth, per palette entry 0xrrggbb>
 //             a <marks: kind x y size color d rot>... | <impulses: x y k r>... | <push: x y vx vy r>      (octopus: ambient)
 // The ambient sees a fixed coverage (a disc), so it does not depend on a renderer.
@@ -28,14 +28,14 @@ for (const id of readdirSync(ROOT).filter((d) => existsSync(new URL(`${d}/${d}.j
   const cr = pkg.creature, c = creaturePlayer(cr, { actionPose, ACTIONS }), eng = new MoodEngine(), ids = cr.body.bones.map((b) => b.id).concat('root');
   const depths = [...new Set(cr.body.bones.map((b) => b.d ?? 0))].sort((a, b) => a - b), pal = Object.keys(cr.body.palette);
   const bone = () => ({ rotation: { x: 0, y: 0, z: 0 }, position: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } });
-  const acts = Object.keys(ACTIONS).filter((a) => a !== 'inspect'); let q = 0, plays = 0;
+  const acts = [...new Set([...Object.keys(ACTIONS), ...Object.keys(c.gestures)])].filter((a) => a !== 'inspect'); let q = 0, plays = 0;
   const L = [`creature ${id} bones ${ids.length} ${ids.join(' ')} depths ${depths.length} ${depths.join(' ')} palette ${pal.length} ${pal.join(' ')}`];
   for (let f = 0; f < SEC * 30; f++) {
-    const t = f * DT; if (f % 90 === 0) eng.set(MOODS[(f / 90) % MOODS.length]); if (f % 45 === 20) { eng.act(acts[(f / 45 | 0) % acts.length]); plays++; eng.action.n = plays; }
+    const t = f * DT; if (f % 90 === 0) eng.set(MOODS[(f / 90) % MOODS.length]); if (f % 45 === 20) { const g = acts[(f / 45 | 0) % acts.length]; eng.act(g, c.gestures[g]); plays++; eng.action.n = plays; }
     const p = eng.update(DT), walking = Math.floor(t / 10) % 3 === 1, k = walking ? 1 : 0; q = (q + DT * c.move.hz * k) % 1;
-    const w = { q, k, go: k, along: 0.3 * Math.sin(t), side: 0.2 * Math.sin(t * 0.7), fz: 0, up: k }, a = eng.action, pa = eng.prevAction;
-    L.push(['i', DT, ...POSE.map((k) => n(get(p, k))), Math.max(0, EYES.indexOf(p.eye)), MOODS.indexOf(p.mood), a ? a.name : '-', n(a?.t ?? 0), a?.n ?? 0, pa ? pa.name : '-', n(pa?.t ?? 0), n(pa?.w ?? 0), pa?.n ?? 0, ...WALK.map((k) => n(w[k]))].join(' '));
-    c.move.move(p, w); c.pose(p, DT, { action: a, prevAction: pa });
+    const work = Math.floor(t / 7) % 4 === 3, w = { q, k, go: k, along: 0.3 * Math.sin(t), side: 0.2 * Math.sin(t * 0.7), fz: 0, up: k }, a = eng.action, pa = eng.prevAction;
+    L.push(['i', DT, ...POSE.map((k) => n(get(p, k))), Math.max(0, EYES.indexOf(p.eye)), MOODS.indexOf(p.mood), a ? a.name : '-', n(a?.t ?? 0), a?.n ?? 0, pa ? pa.name : '-', n(pa?.t ?? 0), n(pa?.w ?? 0), pa?.n ?? 0, ...WALK.map((k) => n(w[k])), work ? 1 : 0].join(' '));
+    c.move.move(p, w); c.pose(p, DT, { action: a, prevAction: pa, work });
     const bones = new Map(ids.map((b) => [b, bone()])); c.apply(bones);
     const o = ['o', ...POSE.map((k) => n(get(p, k)))];
     for (const b of ids) { const g = bones.get(b); o.push(...[g.rotation.x, g.rotation.y, g.rotation.z, g.position.x, g.position.y, g.position.z, g.scale.x, g.scale.y, g.scale.z].map(n)); }

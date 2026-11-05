@@ -3,7 +3,7 @@
 // to bring one eye round, flicks, flaps and folds its wings, wags its tail a beat late. Every gesture is reseeded each play.
 // Its own channels: duck.wl/wr wing spread, wx wings swept back, bill, tuck (head under the wing), puff, neck (head up or thrust),
 // fl/fr foot lift, kl/kr foot kick, zl/zr foot reach, feet (paddles spread).
-import { ch, sin, cos, nz, env, bump, ss, ssd, ex, lin, lt, gt, clamp, pos, neg, snap, sgn, rnd, E, P, eyes, mouth, merge, LR, alive, living, blinkBurst, writePackage } from '../../tools/creatures/kit.mjs';
+import { ch, sin, cos, nz, env, bump, ss, ssd, ex, lin, lt, gt, clamp, pos, neg, snap, sgn, rnd, E, P, eyes, mouth, merge, LR, alive, living, ponder, blinkBurst, writePackage } from '../../tools/creatures/kit.mjs';
 import { ACTIONS } from '../../device/creatures/js/actions.js';
 const ID = 'duck', a = 'a', T = '@t';
 const mul = (terms, g, ...f) => terms.map(([k, ...x]) => [k * g, ...x, ...f]); // scale a term list and multiply in more factors
@@ -158,7 +158,7 @@ const about = {
   moods: {
     idle: 'stands and keeps busy with small things: a ruffle, a tail wag, a preen, a nibble',
     listening: 'cocks its head so one eye faces you and goes still',
-    thinking: 'looks up with one eye, then the other, the bill nibbling at nothing',
+    thinking: 'looks up with one eye, then the other, bill nibbling; now and then a tilt, a blink, a ruffle',
     speaking: 'the bill moves with the words and the wings lift a little',
     happy: 'flaps its wings in bursts, wags its tail fast, bobs its head and hops',
     sleepy: 'settles down, tucks its bill into its back, draws one foot up and fluffs out',
@@ -166,6 +166,10 @@ const about = {
   },
 };
 const pkg = { v: 'molty-pkg/1', id: ID, name: 'Duck', version: '1.0.0', kind: 'creature',
-  creature: { about, body: { palette, ...body }, walk, groups: live.groups, events: { ...fid.events, ...live.events, ...events }, base: fid.base, gestures, moods, post: [...pose, ...live.post, ...rig] } };
+  creature: { about, body: { palette, ...body }, walk, groups: live.groups, events: { ...fid.events, ...live.events, ...events, ponder: ponder({
+    // the duck's own: a wing ruffles, the bill nibbles, it cocks its head to bring one eye round
+    ruffle: { len: 1, ch: [ch('duck.wl', [[0.35, bump(a, 0, 1)]]), ch('duck.wr', [[0.35, bump(a, 0.05, 1)]])] },
+    nibble: { len: 1.2, ch: [ch('duck.bill', [[0.4, bump(a, 0, 1.2), ['abs:sin', a, 4]]])] },
+    cock: { len: 1.5, ch: [ch('head.z', [[0.3, sgn(0), bump(a, 0, 1.5)]]), ch('look.y', [[0.4, bump(a, 0.1, 1.5)]])] } }) }, base: fid.base, gestures, moods, post: [...pose, ...live.post, ...rig] } };
 const out = writePackage(new URL(`./${ID}.json`, import.meta.url).pathname, pkg);
 console.log(ID, out.size, 'bytes', out.sha256);

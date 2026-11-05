@@ -24,6 +24,8 @@ char *mole_fluid_creature_info(unsigned *gen) {
 }
 static int acted = -1, acts;
 void mole_fluid_act(int a) { acted = a; acts++; }
+/* the creature's gestures: the shared ones, and one of its own (a package's eat) */
+int mole_fluid_gesture(const char *name, float *dur) { int a = cute_act_lookup(name); if (a >= 0) { *dur = cute_act_dur(a); return a; } if (!strcmp(name, "eat")) { *dur = 4.6f; return CUTE_N_ACTS; } return -1; }
 /* the bindings (mole_fluid.c, NVS): what cmd gestures passes through */
 static const cJSON *gestures_given; static esp_err_t gestures_answer = ESP_OK;
 esp_err_t mole_fluid_gestures_apply(const cJSON *b) { gestures_given = b; return gestures_answer; }
@@ -159,7 +161,12 @@ int main(void) {
     assert(s_ext_n==1 && s_ext_hold_ms==(uint32_t)(cute_act_dur(CA_NOD)*1000.f));   /* the gesture's length: a listen's own reactions wait */
     cJSON_Delete(aa); cJSON_Delete(ao);
     assert(link_cmd_mood_gen()==ga && ask_cancels==c && !sdk_state[0]);
-    assert(run("act","{\"action\":\"dance\"}")==ESP_ERR_INVALID_ARG && run("act","{}")==ESP_ERR_INVALID_ARG && acts==1);
+    assert(run("act","{\"action\":\"dance\"}")==LINK_CMD_REFUSED && !strcmp(link_cmd_refusal(),"unknown_gesture") && acts==1);
+    assert(run("act","{\"action\":\"Dance!\"}")==ESP_ERR_INVALID_ARG && run("act","{}")==ESP_ERR_INVALID_ARG && acts==1);
+    aa=cJSON_Parse("{\"action\":\"eat\"}"); ao=NULL; s_ext_n=0;   /* the creature's own: played for its own length */
+    assert(link_cmd_run("act",aa,&ao)==ESP_OK && acted==CUTE_N_ACTS && acts==2 && !strcmp(cJSON_GetObjectItem(ao,"action")->valuestring,"eat"));
+    assert(s_ext_n==1 && s_ext_hold_ms==4600);
+    cJSON_Delete(aa); cJSON_Delete(ao);
     /* update is registered; a handler's own refusal code reads back */
     cJSON *out=NULL, *a=cJSON_Parse("{}");
     assert(link_cmd_run("update",a,&out)==LINK_CMD_REFUSED && update_cmds==1 && !strcmp(link_cmd_refusal(),"wrong_board"));

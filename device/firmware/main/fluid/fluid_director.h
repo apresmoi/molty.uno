@@ -28,7 +28,8 @@
  *                persist until the next command. hold_s overrides either.
  *   working      the agent is off doing something (mood `working`): the creature on screen
  *                keeps busy, one work action (cute_act.h) after another, short gaps, never
- *                the same twice in a row, no dozing off. It ends with any mood (a say's
+ *                the same twice in a row, no dozing off. A creature package lives it its own
+ *                way instead (fd_set_own_work: its `work` input, small expressions of its own). It ends with any mood (a say's
  *                speaking too), when a listen, say or question takes the screen, or by itself
  *                after work_ttl_s: an agent that died cannot leave it on.
  *   reader       "text" returns to the creature 1.5 s after its last word, unless the
@@ -106,7 +107,7 @@ typedef struct {
     float next_idle;                  /* s of idle life until the next idle action     */
     int   last_idle;                  /* the last idle action (no immediate repeat)    */
     int   act_req;                    /* an agent's action waiting for the creature, -1 */
-    float act_req_ttl;
+    float act_req_ttl, act_req_dur;
     int   act_start;                  /* the action to start now (fd_take_act), -1     */
     float acting_left;                /* s the action handed out still plays           */
     bool  yawned;                     /* this quiet spell's yawn was played            */
@@ -117,6 +118,7 @@ typedef struct {
     float work_left;                  /* s of `working` left, 0 = not working          */
     float work_gap;                   /* s until the next work action                  */
     int   work_last;                  /* the last work action (no immediate repeat)    */
+    bool  own_work;                   /* the creature lives its own working life: no work actions */
     bool  scene_on;                   /* the scene player has a scene (fd_set_scene)    */
     int   status, shown;              /* reported / on screen                          */
     float status_t;                   /* s the reported status has differed from shown */
@@ -147,13 +149,17 @@ void  fd_set_idle_life(fluid_director_t *d, int level);
 /** Who owns the screen this frame: busy = a question, a listen or a say (no idle life);
  *  covered = a question's labels are over the creature (no action plays). */
 void  fd_set_busy(fluid_director_t *d, bool busy, bool covered);
-/** An agent's one-shot action (cute_act.h CA_*): plays once the creature is on screen and
- *  uncovered (fd_take_act), or is dropped after act_ttl_s. Counts as agent activity. */
-void  fd_agent_act(fluid_director_t *d, int act);
+/** An agent's one-shot action (cute_act.h CA_*, or the creature's own gesture) that plays dur s: plays once
+ *  the creature is on screen and uncovered (fd_take_act), or is dropped after act_ttl_s. Counts as agent
+ *  activity. */
+void  fd_agent_act(fluid_director_t *d, int act, float dur);
 /** The agent is working (mood `working`): held idle, work actions in a loop. hold_s <= 0 or
  *  beyond work_ttl_s: work_ttl_s. Asking again restarts the clock. Counts as agent activity. */
 void  fd_agent_work(fluid_director_t *d, float hold_s);
 bool  fd_working(const fluid_director_t *d);
+/** The creature on screen lives its own working life (a creature package: its `work` input, docs/CREATURES.md):
+ *  working hands out no work actions, the creature does it its own, calmer way. */
+void  fd_set_own_work(fluid_director_t *d, bool own);
 /** A say played to its end: a happy flash if the creature is back, idle, within
  *  convo_window_s (idle life on, at most one per convo_gap_s). */
 void  fd_turn_spoken(fluid_director_t *d);

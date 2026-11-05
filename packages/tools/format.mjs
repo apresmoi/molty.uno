@@ -2,6 +2,7 @@
 // molty-pkg/1 (docs/PACKAGES.md): the item table, a package's static check, and binding a
 // layout's params into plain items. Shared by tools/scripts/check-packages.mjs and play.mjs;
 // the firmware's pkg_parse / scene_player implement the same rules in C.
+import { ACTIONS } from '../../device/creatures/js/actions.js';
 
 export const MAX_PKG_BYTES = 256 * 1024;
 /** A package id (its file and install id). */
@@ -53,6 +54,19 @@ function literal(type, v, assets, f) {
 }
 
 const b64len = (n) => Math.ceil(n / 3) * 4;
+/** A creature's gestures (docs/CREATURES.md section 1): a shared one (actions.js) keeps its length; any other name is the
+ *  creature's own and says how long it plays. The firmware's creature_player.c takes the same. */
+export const GESTURE_RE = /^[a-z][a-z0-9_]{0,23}$/;
+export const GESTURE_DUR = [0.2, 10];
+function gestureProblems(cr) {
+  const bad = [];
+  for (const [n, g] of Object.entries(cr?.gestures ?? {})) {
+    if (!GESTURE_RE.test(n)) bad.push(`gesture ${n}: name must be [a-z][a-z0-9_]{0,23}`);
+    else if (n in ACTIONS) { if (g?.dur !== undefined) bad.push(`gesture ${n}: a shared gesture keeps its own length (no dur)`); }
+    else if (!(typeof g?.dur === 'number' && g.dur >= GESTURE_DUR[0] && g.dur <= GESTURE_DUR[1])) bad.push(`gesture ${n}: its own gesture needs dur, ${GESTURE_DUR[0]}..${GESTURE_DUR[1]} s`);
+  }
+  return bad;
+}
 /** A creature's `about` (docs/CREATURES.md section 1): its look, and one line for every gesture and mood it plays (idle always). */
 export const ABOUT_MAX = { look: 240, line: 100 };
 function aboutProblems(cr) {
@@ -81,7 +95,7 @@ export function checkPackage(pkg, id) {
   if (typeof pkg.name !== 'string' || !pkg.name || pkg.name.length > 32) bad.push('name must be 1..32 characters');
   if (!/^\d+\.\d+\.\d+$/.test(pkg.version ?? '')) bad.push('version must be X.Y.Z');
   if (pkg.kind !== 'scenes' && pkg.kind !== 'creature') bad.push('kind must be scenes or creature');
-  if (pkg.kind === 'creature') bad.push(...aboutProblems(pkg.creature));
+  if (pkg.kind === 'creature') bad.push(...aboutProblems(pkg.creature), ...gestureProblems(pkg.creature));
   const assets = pkg.assets ?? {};
   if (Object.keys(assets).length > LIMITS.assets) bad.push(`at most ${LIMITS.assets} assets`);
   if (Object.keys(pkg.layouts ?? {}).length > LIMITS.layouts) bad.push(`at most ${LIMITS.layouts} layouts`);

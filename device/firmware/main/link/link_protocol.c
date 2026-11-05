@@ -145,12 +145,16 @@ bool link_marks_parse(const cJSON *args, link_mark_t marks[LINK_MARKS_MAX], int 
     return true;
 }
 
-bool link_act_args(const cJSON *args, int *act)
+bool link_act_args(const cJSON *args, const char **name)
 {
     const cJSON *a = cJSON_GetObjectItemCaseSensitive(args, "action");
-    if (!act || !cJSON_IsString(a)) return false;
-    *act = cute_act_lookup(a->valuestring);
-    return *act >= 0;
+    if (!name || !cJSON_IsString(a)) return false;
+    const char *s = a->valuestring;
+    size_t n = strlen(s);
+    if (n < 1 || n > LINK_GESTURE_MAX || s[0] < 'a' || s[0] > 'z') return false;
+    for (size_t i = 0; i < n; i++) if (!((s[i] >= 'a' && s[i] <= 'z') || (s[i] >= '0' && s[i] <= '9') || s[i] == '_')) return false;
+    *name = s;
+    return true;
 }
 
 bool link_mood_args(const cJSON *args, const char **mood, double *hold_s)

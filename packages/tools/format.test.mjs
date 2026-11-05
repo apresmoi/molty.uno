@@ -46,6 +46,7 @@ test('a creature describes how it looks and every gesture and mood it plays', ()
     about: { look: 'A small round demo.', gestures: { nod: 'dips its head' }, moods: { idle: 'sits still', happy: 'beams' } } } });
   const about = (mut) => { const p = creature(); mut(p.creature); return checkPackage(p, 'demo'); };
   assert.deepEqual(about(() => {}), []);
+  assert.deepEqual(about((c) => { c.gestures.eat = { ch: [], dur: 4 }; c.about.gestures.eat = 'eats from a bowl'; }), []);
   const cases = {
     'needs about': (c) => delete c.about,
     'about.look must be': (c) => (c.about.look = 'x'.repeat(241)),
@@ -54,6 +55,9 @@ test('a creature describes how it looks and every gesture and mood it plays', ()
     'does not play wave': (c) => (c.about.gestures.wave = 'waves'),
     'about.moods.happy must be': (c) => (c.about.moods.happy = 'beams\u2014wide'),
     'unknown field': (c) => (c.about.voice = 'squeaky'),
+    'its own gesture needs dur': (c) => { c.gestures.eat = { ch: [] }; c.about.gestures.eat = 'eats'; },
+    'keeps its own length': (c) => (c.gestures.nod.dur = 2),
+    'name must be': (c) => { c.gestures.Eat = { ch: [], dur: 2 }; c.about.gestures.Eat = 'eats'; },
   };
   for (const [want, mut] of Object.entries(cases)) assert.ok(about(mut).some((m) => m.includes(want)), `${want}: ${about(mut)}`);
 });

@@ -154,11 +154,13 @@ export class MoodEngine {
     this.envValue = 0;
     this.action = null; this.prevAction = null; // one-shot gestures (actions.js), {name, t, w}
   }
-  /** Play a one-shot action (actions.js) over the current mood; a newer one replaces it (the old fades out over 0.25 s). */
-  act(name) {
-    if (ACTIONS[name] === undefined) return;
+  /** Play a one-shot action over the current mood; a newer one replaces it (the old fades out over 0.25 s). A shared one
+   *  (actions.js) has its own length; a creature's own gesture (a package's) gives dur and adds no shared pose. */
+  act(name, dur) {
+    const d = ACTIONS[name] ?? dur;
+    if (!(d > 0)) return;
     if (this.action) this.prevAction = { ...this.action, w: 1 };
-    this.action = { name, t: 0 };
+    this.action = { name, t: 0, dur: d };
   }
   // the action layer (cute_act.h / cute_rig.c act_layer): offsets after the springs, look
   // before the saccade clamp; returns the action's lid (taken as max after the blink)
@@ -172,13 +174,13 @@ export class MoodEngine {
     const pa = this.prevAction;
     if (pa) {
       pa.t += dt; pa.w -= dt / 0.25;
-      if (pa.w <= 0 || pa.t > ACTIONS[pa.name]) this.prevAction = null;
+      if (pa.w <= 0 || pa.t > pa.dur) this.prevAction = null;
       else { const a = actionPose(pa.name, pa.t); add(a, pa.w); lid = pa.w * a.lid; }
     }
     const ca = this.action;
     if (ca) {
       ca.t += dt;
-      if (ca.t > ACTIONS[ca.name]) this.action = null;
+      if (ca.t > ca.dur) this.action = null;
       else { const a = actionPose(ca.name, ca.t); add(a, 1); lid = Math.max(lid, a.lid); }
     }
     return lid;

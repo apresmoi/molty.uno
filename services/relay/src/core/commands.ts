@@ -5,7 +5,10 @@ import { isRecord, type JsonObject } from "./protocol.js";
 import { parseCues, speechWords } from "./speech.js";
 
 export const MOODS = ["idle", "listening", "thinking", "speaking", "happy", "sleepy", "surprised", "working"] as const;
-/** One-shot gestures over the current mood (`act`, and `[name]` cues in say text). */
+/** The shared one-shot gestures every creature plays (`act`, and `[name]` cues in say text). A creature package adds its
+ *  own (the cat's eat): `act` takes any gesture name, and the device answers unknown_gesture for one its creature lacks
+ *  (its gestures: the device's creature event, device.creature.gestures). */
+export const GESTURE_RE = /^[a-z][a-z0-9_]{0,23}$/;
 export const ACTIONS = ["wiggle", "nod", "shake_head", "bounce", "peek", "glance_left", "glance_right", "blink", "wobble", "stretch", "look_up", "yawn", "inspect", "paddle"] as const;
 /** Need the firmware cap `working`: older firmware refuses them (a say's cue is dropped, not refused). */
 export const WORKING_CAP = "working";
@@ -395,8 +398,8 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
     }
     case "act":
       only(args, ["action"]);
-      if (typeof args.action !== "string" || !(ACTIONS as readonly string[]).includes(args.action)) {
-        throw invalid(`action must be one of ${ACTIONS.join(", ")}`);
+      if (typeof args.action !== "string" || !GESTURE_RE.test(args.action)) {
+        throw invalid(`action must be a gesture name: one of the creature's (device.creature.gestures), e.g. ${ACTIONS.join(", ")}`);
       }
       return { name: n, args: { action: args.action }, job: false };
   }
