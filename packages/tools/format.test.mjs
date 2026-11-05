@@ -41,6 +41,23 @@ test('the static check catches every kind of broken reference', () => {
   for (const [want, mut] of Object.entries(cases)) assert.ok(problems(mut).some((m) => m.includes(want)), `${want}: ${problems(mut)}`);
 });
 
+test('a creature describes how it looks and every gesture and mood it plays', () => {
+  const creature = () => ({ v: 'molty-pkg/1', id: 'demo', name: 'Demo', version: '1.0.0', kind: 'creature', creature: { gestures: { nod: {} }, moods: { happy: {} },
+    about: { look: 'A small round demo.', gestures: { nod: 'dips its head' }, moods: { idle: 'sits still', happy: 'beams' } } } });
+  const about = (mut) => { const p = creature(); mut(p.creature); return checkPackage(p, 'demo'); };
+  assert.deepEqual(about(() => {}), []);
+  const cases = {
+    'needs about': (c) => delete c.about,
+    'about.look must be': (c) => (c.about.look = 'x'.repeat(241)),
+    'has no line for nod': (c) => delete c.about.gestures.nod,
+    'has no line for idle': (c) => delete c.about.moods.idle,
+    'does not play wave': (c) => (c.about.gestures.wave = 'waves'),
+    'about.moods.happy must be': (c) => (c.about.moods.happy = 'beams\u2014wide'),
+    'unknown field': (c) => (c.about.voice = 'squeaky'),
+  };
+  for (const [want, mut] of Object.entries(cases)) assert.ok(about(mut).some((m) => m.includes(want)), `${want}: ${about(mut)}`);
+});
+
 test('binding rejects missing, unknown and mistyped params, and resolves each, polar and defaults', () => {
   const p = base(), ok = { r: 0.5, marks: [{ a: 90 }], g: 'dot' };
   for (const bad of [{ r: 0.5, marks: [] }, { ...ok, x: 1 }, { ...ok, r: '0.5' }, { ...ok, g: 'star' }, { ...ok, g: '$x' }, { ...ok, marks: [{ b: 1 }] }, { ...ok, marks: [3] }, { ...ok, marks: [{ a: [1, 2] }] }, { ...ok, marks: Array(33).fill({ a: 1 }) }, { ...ok, r: 2.5 }]) assert.throws(() => bind(p, 'one', bad), ParamError, JSON.stringify(bad));

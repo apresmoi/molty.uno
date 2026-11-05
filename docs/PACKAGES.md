@@ -157,7 +157,8 @@ index; it waits for the install job (the owner's tap, at most about 2 min) and r
 of [`docs/CREATURES.md`](CREATURES.md). Duck, cat and octopus ship as packages and are also baked into the firmware image as defaults,
 so a new device has them without a download. `POST /api/creature/select?id=` (console) or `creature.select { id }` (agent) swaps the active one.
 
-- The file carries `creature` instead of `assets` and `layouts`: `{ body, walk, groups, events, base, gestures, moods, post, tints, ambient }`.
+- The file carries `creature` instead of `assets` and `layouts`: `{ about, body, walk, groups, events, base, gestures, moods, post, tints, ambient }`
+  (`about`: how it looks and a line per gesture and mood, for the agent; [CREATURES.md](CREATURES.md) section 1).
   At most **32 KB** (tighter than the 256 KB of a scenes package), so a device holds the three defaults and a few more in RAM at once.
 - Built by `packages/<id>/build.mjs` with the shared helpers in `tools/creatures/kit.mjs`; `make packages` rebuilds them all and their
   `packages/index.json` entries.
@@ -176,6 +177,8 @@ so a new device has them without a download. `POST /api/creature/select?id=` (co
 - **The choice:** `creature.select { id }` (cap `creatures`) or `POST /api/creature/select?id=` answers `{ id, name }` once the file
   parsed (else `not_installed`, `bad_package`, `invalid_args`) and is kept in NVS. `creature.list {}` / `GET /api/creature/list`:
   `{ current, creatures: [{ id, name, version, source: "builtin" | "installed" }] }`.
+- **Who it is:** `GET /api/creature/state` lists a package's `creature_info.gestures` and `.moods` (idle and its own); the link
+  sends `{"t":"evt","name":"creature","data":{ id, name, about, gestures, moods }}` on each welcome and each change.
 - **The .molty creatures stay:** uploading one (`POST /api/creature/file`, the console's catalog) makes it the creature and the choice
   (`current` is then `""`). A device that never chose keeps an uploaded .molty; otherwise it boots on the first built-in package.
   A chosen package that was removed since falls back to the first built-in.

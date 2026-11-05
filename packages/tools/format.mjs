@@ -53,6 +53,24 @@ function literal(type, v, assets, f) {
 }
 
 const b64len = (n) => Math.ceil(n / 3) * 4;
+/** A creature's `about` (docs/CREATURES.md section 1): its look, and one line for every gesture and mood it plays (idle always). */
+export const ABOUT_MAX = { look: 240, line: 100 };
+function aboutProblems(cr) {
+  const ab = cr?.about, bad = [], says = (v, max) => typeof v === 'string' && /^[\x20-\x7e]+$/.test(v) && v.length <= max;
+  if (!ab || typeof ab !== 'object') return ['a creature needs about { look, gestures, moods }'];
+  for (const k of Object.keys(ab)) if (!['look', 'gestures', 'moods'].includes(k)) bad.push(`about: unknown field ${k}`);
+  if (!says(ab.look, ABOUT_MAX.look)) bad.push(`about.look must be printable ASCII of 1..${ABOUT_MAX.look} characters`);
+  const want = { gestures: Object.keys(cr.gestures ?? {}), moods: [...new Set(['idle', ...Object.keys(cr.moods ?? {})])] };
+  for (const [k, names] of Object.entries(want)) {
+    const lines = ab[k] ?? {};
+    for (const n of names) if (!(n in lines)) bad.push(`about.${k} has no line for ${n}`);
+    for (const [n, v] of Object.entries(lines)) {
+      if (!names.includes(n)) bad.push(`about.${k}.${n}: the creature does not play ${n}`);
+      else if (!says(v, ABOUT_MAX.line)) bad.push(`about.${k}.${n} must be printable ASCII of 1..${ABOUT_MAX.line} characters`);
+    }
+  }
+  return bad;
+}
 /** Every problem with a parsed package, as strings (empty = valid). */
 export function checkPackage(pkg, id) {
   const bad = [];
@@ -63,6 +81,7 @@ export function checkPackage(pkg, id) {
   if (typeof pkg.name !== 'string' || !pkg.name || pkg.name.length > 32) bad.push('name must be 1..32 characters');
   if (!/^\d+\.\d+\.\d+$/.test(pkg.version ?? '')) bad.push('version must be X.Y.Z');
   if (pkg.kind !== 'scenes' && pkg.kind !== 'creature') bad.push('kind must be scenes or creature');
+  if (pkg.kind === 'creature') bad.push(...aboutProblems(pkg.creature));
   const assets = pkg.assets ?? {};
   if (Object.keys(assets).length > LIMITS.assets) bad.push(`at most ${LIMITS.assets} assets`);
   if (Object.keys(pkg.layouts ?? {}).length > LIMITS.layouts) bad.push(`at most ${LIMITS.layouts} layouts`);

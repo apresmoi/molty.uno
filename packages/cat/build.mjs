@@ -145,7 +145,35 @@ const fid = alive(ID, { fidget: 0.8 }), live = living(body, { limbs: { hop: 0.15
 // the shared tail swing turns every joint about the same two axes, which for this curled tail twists the upper joints about themselves
 // and leaves the base to swing the whole curve like a stick; the cat's own chain (above) replaces it
 const shared = /^(_wag|_wa|_tx|_ty|tail\d*:r[xy])$/, lived = live.post.filter((c) => !shared.test(c[0]));
+// about: what a person sees on the round screen, for the agent that speaks as this Molty (docs/CREATURES.md section 1)
+const about = {
+  look: 'A slim lavender cat sitting up straight, with pointy ears pink inside, green eyes, a pink nose and whiskers. A white patch on its chest, and a long darker purple tail curls up behind it.',
+  gestures: {
+    wiggle: 'crouches low and shimmies its hips as if about to pounce, the tail tip twitching',
+    nod: 'a slow cat nod: the eyes close, the head sinks and comes back up',
+    shake_head: 'rattles its head quickly, the ears flapping, then one last ear flick',
+    bounce: 'crouches, wiggles its bum and pounces with its front paws out, landing low',
+    peek: 'goes low with only its head up, ears pricked, the eyes sweeping slowly',
+    glance_left: 'its ears turn to its left first, then the eyes and the head follow',
+    glance_right: 'its ears turn to its right first, then the eyes and the head follow',
+    blink: 'a blink with a little ear flick',
+    wobble: 'a whole-body shake from the head down to the tail, the fur puffing out',
+    stretch: 'a downward dog: front paws out, chest down, bum and tail up',
+    look_up: 'sits up tall with its head tipped back at a bird overhead, the jaw chattering',
+    yawn: 'a big yawn, the jaw wide with the tongue curled, ears flat, then a lick',
+    paddle: 'bats at something with one paw, the other paw joining once',
+  },
+  moods: {
+    idle: 'sits with its chest swaying a little, ears swiveling, tail tip curling, slow blinks',
+    listening: 'both ears prick toward you and it goes still, only the tail tip twitching',
+    thinking: 'eyes half closed, one ear turned back, the tail sweeping slowly',
+    speaking: 'the chin lifts with each meow and the ears move a little',
+    happy: 'slow blinks, the tail straight up with a quivering tip, kneading with its paws',
+    sleepy: 'curls down into a loaf, paws tucked, the tail wrapped round, chin down',
+    surprised: 'the back arched high, fur standing up, the tail a bottle brush, ears flat',
+  },
+};
 const pkg = { v: 'molty-pkg/1', id: ID, name: 'Cat', version: '1.0.0', kind: 'creature',
-  creature: { body: { palette, ...body }, walk, groups: live.groups, events: { ...fid.events, ...live.events }, base: fid.base, gestures, moods, post: [...pose, ...lived, ...rig] } };
+  creature: { about, body: { palette, ...body }, walk, groups: live.groups, events: { ...fid.events, ...live.events }, base: fid.base, gestures, moods, post: [...pose, ...lived, ...rig] } };
 const out = writePackage(new URL(`./${ID}.json`, import.meta.url).pathname, pkg);
 console.log(ID, out.size, 'bytes', out.sha256);

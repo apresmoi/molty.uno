@@ -137,7 +137,35 @@ const rig = [
 ];
 
 const fid = alive(ID, { fidget: 1.1, shake: 1 }), live = living(body, { sides: false, motions: [blinkBurst(5)] });
+// about: what a person sees on the round screen, for the agent that speaks as this Molty (docs/CREATURES.md section 1)
+const about = {
+  look: 'A round yellow duckling, mostly head, with a small orange bill, pink cheeks and a little tuft on top. Stubby wings at its sides, a short tail behind and two big orange paddle feet.',
+  gestures: {
+    wiggle: 'waggles its tail end fast while its body rocks and its head stays level',
+    nod: 'bobs its head forward two or three times, the bill clicking at the bottom',
+    shake_head: 'shakes its head fast as if shaking off water, the bill rattling, then ruffles',
+    bounce: 'crouches, then hops up with its wings thrown open and lands soft',
+    peek: 'ducks down low, then stretches up tall and cranes about, one eye then the other',
+    glance_left: 'snaps its head round to its left so one eye looks, holds still, snaps back',
+    glance_right: 'snaps its head round to its right so one eye looks, holds still, snaps back',
+    blink: 'a quick blink with a tiny dip of the head',
+    wobble: 'loses its footing and tips over, wings shooting out, then steps to catch itself',
+    stretch: 'sweeps one wing and leg out behind, then arches both wings up over its back',
+    look_up: 'tips its head right over so one eye faces the sky and scans in little snaps',
+    yawn: 'a big yawn, the bill gaping wide and quivering, the wings easing out, then a shiver',
+    paddle: 'sits low as if afloat and kicks its feet in turn, turning a little with each stroke',
+  },
+  moods: {
+    idle: 'stands and keeps busy with small things: a ruffle, a tail wag, a preen, a nibble',
+    listening: 'cocks its head so one eye faces you and goes still',
+    thinking: 'looks up with one eye, then the other, the bill nibbling at nothing',
+    speaking: 'the bill moves with the words and the wings lift a little',
+    happy: 'flaps its wings in bursts, wags its tail fast, bobs its head and hops',
+    sleepy: 'settles down, tucks its bill into its back, draws one foot up and fluffs out',
+    surprised: 'puffs right up, throws its wings out, stretches tall and steps back',
+  },
+};
 const pkg = { v: 'molty-pkg/1', id: ID, name: 'Duck', version: '1.0.0', kind: 'creature',
-  creature: { body: { palette, ...body }, walk, groups: live.groups, events: { ...fid.events, ...live.events, ...events }, base: fid.base, gestures, moods, post: [...pose, ...live.post, ...rig] } };
+  creature: { about, body: { palette, ...body }, walk, groups: live.groups, events: { ...fid.events, ...live.events, ...events }, base: fid.base, gestures, moods, post: [...pose, ...live.post, ...rig] } };
 const out = writePackage(new URL(`./${ID}.json`, import.meta.url).pathname, pkg);
 console.log(ID, out.size, 'bytes', out.sha256);

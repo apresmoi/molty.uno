@@ -140,7 +140,35 @@ const ambient = {
   current: { ch: ['_cx', '_cy', '_cvx', '_cvy'], r: 0.4 } };
 
 const fid = alive(ID), live = living(body, { gait: { type: 'float', height: 0.03, amp: 1.2, rate: 0.9 }, motions: [breathe('head', 'sy', 0.025, 0.5), blinkBurst(4)] });
+// about: what a person sees on the round screen, for the agent that speaks as this Molty (docs/CREATURES.md section 1)
+const about = {
+  look: 'A soft pink octopus with a big round head, darker pink spots, pink cheeks and a pale belly. Eight curly arms spread out below it, and bubbles drift up around it as if under water.',
+  gestures: {
+    wiggle: 'the skirt of arms ripples round and the body twists on it',
+    nod: 'the whole body dips twice, the arms pressing down to push it back up',
+    shake_head: 'swivels side to side on its arms, the arms trailing each turn',
+    bounce: 'jets straight up, arms snapped shut, then floats down like a parachute',
+    peek: 'flattens down to hide, then its eyes rise and look round',
+    glance_left: 'looks to its left, turns a little, and an arm on that side lifts',
+    glance_right: 'looks to its right, turns a little, and an arm on that side lifts',
+    blink: 'blinks with a little squeeze and lets out one small bubble',
+    wobble: 'wobbles like jelly, each wave smaller, the arms a beat behind',
+    stretch: 'reaches every arm out as far as it goes, then lets go with a shiver',
+    look_up: 'tips back, lifts its front arms and watches bubbles rise',
+    yawn: 'fills right up, holds, then lets it all out in a gush of bubbles',
+    paddle: 'swirls one arm round and round in the water, rocking against it',
+  },
+  moods: {
+    idle: 'breathes slowly, and now and then one arm wanders off to feel about',
+    listening: 'curls its arms in, leans in a little and holds still',
+    thinking: 'an arm comes up to its face, the tips drum, dark clouds cross its skin',
+    speaking: 'its front arms gesture as it talks, a soft ripple running round them',
+    happy: 'flushes rosier, floats up and turns slowly, the arms rippling',
+    sleepy: 'goes limp and pale, sinks low, and dreams in waves of colour',
+    surprised: 'blanches white, bunches its arms, shoots back and squirts ink',
+  },
+};
 const pkg = { v: 'molty-pkg/1', id: ID, name: 'Octopus', version: '1.0.0', kind: 'creature',
-  creature: { body: { palette, ...body }, walk, groups: { ...live.groups, arms }, events: { ...fid.events, ...live.events, ...events }, base: fid.base, gestures, moods, post: [...pose, ...live.post, ...rig], tints, ambient } };
+  creature: { about, body: { palette, ...body }, walk, groups: { ...live.groups, arms }, events: { ...fid.events, ...live.events, ...events }, base: fid.base, gestures, moods, post: [...pose, ...live.post, ...rig], tints, ambient } };
 const out = writePackage(new URL(`./${ID}.json`, import.meta.url).pathname, pkg);
 console.log(ID, out.size, 'bytes', out.sha256);
