@@ -12,8 +12,8 @@
     "version": "1.0.0",
     "kind": "creature",
     "path": "packages/cat/cat.json",
-    "size": 26816,
-    "sha256": "b8f3d593aa062925b08a1c96daf4f376e94d751954491e7099bfb1f96ebecede"
+    "size": 27707,
+    "sha256": "845473301948d6c5565a2178af21828c285e3aa5f13ad076761b2bfe54272d77"
   },
   "duck": {
     "name": "Duck",
