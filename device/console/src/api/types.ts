@@ -100,6 +100,8 @@ export interface FluidState {
 /** Partial order accepted by POST /api/creature/state for the fluid creature. */
 export interface FluidOrder {
   state?: string; // blob | thinking | text | creature | autoplay | effect:ripple|vortex|wave
+  act?: string; // a one-shot gesture (cute_act.h names), as the link's act
+  mood?: string; // idle | listening | thinking | speaking | happy | sleepy | surprised, as the link's mood
   text?: string;
   wpm?: number; // 100..800
   palette?: string; // green | amber | pastel

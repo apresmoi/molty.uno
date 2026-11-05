@@ -1,10 +1,10 @@
 // Mock Molty: serves dist/index.html at "/" plus the device API the console uses,
-// so write flows (Wi-Fi connect/forget, creature upload, relay change) can be
+// so write flows (Wi-Fi connect/forget, creature select, relay change) can be
 // exercised without touching a real device.
 //
 //   node tools/mock-device.mjs [port=8170]
 //   GET  /__mock/log            -> recorded non-GET requests (path + body)
-//   POST /__mock/config {link,file,reset,wifi:'none'}  -> toggle features (false = route 404s like old
+//   POST /__mock/config {link,pkgs,reset,wifi:'none'}  -> toggle features (false = route 404s like old
 //        firmware); reset restores Wi-Fi + link; wifi:'none' starts with no saved network
 //   POST /__mock/pair {agent_name, code}   -> an agent asks to pair: GET /api/link shows `pair`
 //   POST /__mock/decide {ok, reason}       -> the human tapped (ok) / it failed: pair → last_pair (seq+1)
@@ -22,7 +22,7 @@ const dist = new URL('../dist/index.html', import.meta.url);
 const VERSION = readFileSync(new URL('../../../VERSION', import.meta.url), 'utf8').trim();
 const W = 412;
 
-const cfg = { link: true, file: true, update: false, rollback: false, fail: false };
+const cfg = { link: true, pkgs: true, update: false, rollback: false, fail: false };
 const BOARD = 'waveshare-esp32-s3-touch-lcd-1.46';
 const NEXT = VERSION.replace(/^(\d+)\.(\d+)\..*$/, (_, a, b) => `${a}.${+b + 1}.0`);
 let fw = VERSION;
@@ -41,11 +41,11 @@ const log = [];
 const WIFI0 = { state: 'connected', ssid: 'home-wifi', ip: '192.168.1.32', rssi: -61 };
 const wifi = { ...WIFI0 };
 const fluid = {
-  ok: true, creature: 'fluid', state: 'blob', autoplay: false, text: 'hello, i am molty. i breathe in ascii.', wpm: 300,
+  ok: true, creature: 'fluid', state: 'creature', autoplay: false, mood: 'idle', act: '', creature_info: { name: 'Duck', package: 'duck', tris: 620 }, text: 'hello, i am molty. i breathe in ascii.', wpm: 300,
   palette: 'pastel', ring_color: 'accent', listen_ms: 30000, ack: 'chirp', filler_ms: 2500, shake_talk: true, idle_life: 'lively', word: '', word_idx: 0, nwords: 7, fps: 33.1,
 };
 let current = 'fluid';
-let pkg = 'duck';   // selected creature package; '' once a .molty upload is shown
+let pkg = 'duck';   // the selected creature package: a device that never chose plays the first built-in
 const PKGS = [['duck', 'Duck', 'builtin'], ['cat', 'Cat', 'builtin'], ['octopus', 'Octopus', 'builtin']].map(([id, name, source]) => ({ id, name, version: '1.0.0', source }));
 const LINK0 = { device_id: 'molty-k7m2w9c4ya', link_code: 'K7QX2MPA', relay_url: 'wss://molty-relay.example.workers.dev', connected: true, auth_failed: false, close_code: 0,
   pair: null, last_pair: { seq: 3, agent_name: 'an-older-agent', ok: true } };
@@ -97,7 +97,7 @@ createServer(async (req, res) => {
   if (p === '/__mock/log') return json(res, log);
   if (p === '/__mock/config') {
     const c = b();
-    if (c.reset) { fw = VERSION; upd = { state: 'idle' }; cfg.update = false; cfg.rollback = false; cfg.fail = false; Object.assign(wifi, WIFI0); Object.assign(link, structuredClone(LINK0)); legacy = false; current = 'fluid'; delete c.reset; }
+    if (c.reset) { fw = VERSION; upd = { state: 'idle' }; cfg.update = false; cfg.rollback = false; cfg.fail = false; Object.assign(wifi, WIFI0); Object.assign(link, structuredClone(LINK0)); legacy = false; current = 'fluid'; pkg = 'duck'; cfg.pkgs = true; delete c.reset; }
     if (c.wifi === 'none') Object.assign(wifi, { state: 'setup_needed', ssid: undefined, ip: undefined, rssi: undefined });
     delete c.wifi;
     Object.assign(cfg, c); log.length = 0; return json(res, { ok: true, cfg });
@@ -132,8 +132,9 @@ createServer(async (req, res) => {
     case 'POST /api/forget': Object.assign(wifi, { state: 'setup_needed', ssid: undefined, ip: undefined, rssi: undefined }); return json(res, { ok: true });
     case 'GET /api/creature': return json(res, { ok: true, current, available: ['eye', 'claude', 'glyph', 'reader', 'fluid', 'ui'] });
     case 'POST /api/creature': { const n = b().name; if (!['eye', 'claude', 'glyph', 'reader', 'fluid', 'ui'].includes(n)) return json(res, { ok: false, error: 'not_found' }); current = n; return json(res, { ok: true, current, available: [] }); }
-    case 'GET /api/creature/list': return json(res, { ok: true, current: pkg, creatures: PKGS });
+    case 'GET /api/creature/list': if (!cfg.pkgs) return notFound(res); return json(res, { ok: true, current: pkg, creatures: PKGS });
     case 'POST /api/creature/select': {
+      if (!cfg.pkgs) return notFound(res);
       const c = PKGS.find((x) => x.id === url.searchParams.get('id'));
       if (!c) return json(res, { ok: false, error: 'not_installed' });
       pkg = c.id; return json(res, { ok: true, id: c.id, name: c.name });
@@ -148,19 +149,13 @@ createServer(async (req, res) => {
       if (o.filler_ms !== undefined && !(Number.isInteger(o.filler_ms) && (o.filler_ms === 0 || (o.filler_ms >= 400 && o.filler_ms <= 5000)))) return json(res, { ok: false, error: 'invalid_args' }, 400);
       if (o.shake_talk !== undefined && typeof o.shake_talk !== 'boolean') return json(res, { ok: false, error: 'invalid_args' }, 400);
       if (o.idle_life !== undefined && !['lively', 'calm', 'off'].includes(o.idle_life)) return json(res, { ok: false, error: 'invalid_args' }, 400);
-      for (const k of ['text', 'wpm', 'palette', 'ring_color', 'listen_ms', 'ack', 'filler_ms', 'shake_talk', 'idle_life']) if (o[k] !== undefined) fluid[k] = o[k];
+      for (const k of ['act', 'mood', 'text', 'wpm', 'palette', 'ring_color', 'listen_ms', 'ack', 'filler_ms', 'shake_talk', 'idle_life']) if (o[k] !== undefined) fluid[k] = o[k];
       if (o.text) fluid.nwords = o.text.split(/\s+/).filter(Boolean).length;
       return json(res, fluid);
     }
     case 'GET /api/framebuffer':
       res.writeHead(200, { 'content-type': 'image/x-portable-pixmap', 'access-control-allow-origin': '*', 'cache-control': 'no-store' });
       return res.end(frame());
-    case 'POST /api/creature/file':
-      if (!cfg.file) return notFound(res);
-      if (raw.length > 16384) return json(res, { ok: false, error: 'bad_size_max_16kb' });
-      if (raw.subarray(0, 4).toString('latin1') !== 'MLTY') return json(res, { ok: false, error: 'bad_magic' });
-      pkg = '';
-      return json(res, { ok: true, bytes: raw.length });
     case 'GET /api/update': return cfg.update ? json(res, { ok: true, ...upd }) : notFound(res);
     case 'POST /api/update': {
       if (!cfg.update) return notFound(res);
