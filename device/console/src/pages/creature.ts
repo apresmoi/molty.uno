@@ -1,6 +1,6 @@
 // Molty (settings): pick a Molty from the device's creature packages (GET /api/creature/list,
-// POST /api/creature/select), and play with the fluid: state, speed-reader text + WPM, palette, listening ring colour,
-// shake to talk, gestures, idle life, tap-to-ripple. How Molty talks is on the voice page.
+// POST /api/creature/select), and play with the fluid: creature or text, every gesture and mood of the creature,
+// speed-reader text + WPM, palette, listening ring colour, shake to talk, input gestures, idle life, tap-to-ripple. How Molty talks is on the voice page.
 import { UnsupportedError } from '../api/device';
 import type { FluidOrder, FluidState } from '../api/types';
 import type { AppCtx } from '../app';
@@ -11,9 +11,9 @@ import { RING_CHOICES, ringChoice, ringSupported } from '../ring/ring';
 import { IDLE_CHOICES, idleChoice, idleSupported } from '../idle/idle';
 import { SHAKE_CHOICES, shakeChoice, shakeSupported } from '../shake/shake';
 import { GESTURE_ACTIONS, GESTURE_INPUTS, gestureChoice, gesturesSupported } from '../shake/gestures';
+import { creatureMoves, moveLabel } from '../moves/moves';
 
-const STATES = ['blob', 'creature', 'thinking', 'text', 'autoplay'];
-const EFFECTS = ['ripple', 'vortex', 'wave'];
+const STATES = ['creature', 'text'];
 const PALETTES: Record<string, string> = { green: '#7cf29a', amber: '#ffb347', pastel: '#c9b6ff' };
 
 export function creaturePage(root: HTMLElement, { api }: AppCtx) {
@@ -23,6 +23,8 @@ export function creaturePage(root: HTMLElement, { api }: AppCtx) {
   const current = h('div', { class: 'dim small' });
   const ctlMsg = h('div');
   const stateRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'state' });
+  const actRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'gestures' });
+  const moodRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'moods' });
   const palRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'palette' });
   const ringLabel = h('label', { hidden: true }, 'listening ring');
   const ringRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'listening ring colour', hidden: true });
@@ -34,10 +36,10 @@ export function creaturePage(root: HTMLElement, { api }: AppCtx) {
   const gestureHint = h('p', { class: 'dim small', hidden: true }, 'a tap always stops a recording and sends it, and a question always takes the tap');
   const shakeLabel = h('label', { hidden: true }, 'shake to talk');
   const shakeRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'shake to talk', hidden: true });
-  const shakeHint = h('p', { class: 'dim small', hidden: true }, 'shake Molty and just speak — it listens at once and your agent gets your words; off: a shake is only a nudge');
+  const shakeHint = h('p', { class: 'dim small', hidden: true }, 'shake Molty and just speak: it listens at once and your agent gets your words; off: a shake is only a nudge');
   const idleLabel = h('label', { hidden: true }, 'idle life');
   const idleRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'idle life', hidden: true });
-  const idleHint = h('p', { class: 'dim small', hidden: true }, 'how much Molty moves by itself when nobody drives it — glances, blinks, stretches, a yawn before dozing; always silent');
+  const idleHint = h('p', { class: 'dim small', hidden: true }, 'how much Molty moves by itself when nobody drives it: glances, blinks, stretches, a yawn before dozing; always silent');
   const text = h('textarea', { rows: 3, placeholder: 'words for the speed reader…', 'aria-label': 'reader text' });
   const wpm = h('input', { type: 'range', min: 100, max: 800, step: 25, value: '300', 'aria-label': 'words per minute' });
   const wpmOut = h('output', null, '300 wpm');
@@ -58,6 +60,8 @@ export function creaturePage(root: HTMLElement, { api }: AppCtx) {
       h('div', null, pv.el, h('p', { class: 'dim small center' }, 'tap the screen to make a ripple')),
       h('div', { class: 'controls' },
         h('label', null, 'state'), stateRow,
+        h('label', null, 'gestures'), actRow,
+        h('label', null, 'moods'), moodRow,
         h('label', null, 'palette'), palRow,
         ringLabel, ringRow,
         shakeLabel, shakeRow, shakeHint,
@@ -72,13 +76,12 @@ export function creaturePage(root: HTMLElement, { api }: AppCtx) {
 
   function renderControls() {
     const s = fluid;
-    const active = s?.autoplay ? 'autoplay' : s?.state ?? '';
-    mount(stateRow,
-      STATES.map((st) => h('button', { type: 'button', class: 'chip' + (active === st ? ' on' : ''), 'aria-pressed': String(active === st), onclick: () => order({ state: st }) }, st)),
-      EFFECTS.map((fx) => {
-        const v = `effect:${fx}`;
-        return h('button', { type: 'button', class: 'chip fx' + (active === v ? ' on' : ''), 'aria-pressed': String(active === v), onclick: () => order({ state: v }) }, fx);
-      }));
+    const chips = (row: HTMLElement, names: string[], on: unknown, send: (n: string) => FluidOrder, label = (n: string) => n) =>
+      mount(row, names.map((n) => h('button', { type: 'button', class: 'chip' + (on === n ? ' on' : ''), 'aria-pressed': String(on === n), onclick: () => order(send(n)) }, label(n))));
+    const moves = creatureMoves(s);
+    chips(stateRow, STATES, s?.state, (state) => ({ state }));
+    chips(actRow, moves.acts, s?.act, (act) => ({ act }), moveLabel);
+    chips(moodRow, moves.moods, s?.mood, (mood) => ({ mood }));
     mount(palRow, Object.entries(PALETTES).map(([p, c]) =>
       h('button', { type: 'button', class: 'chip' + (s?.palette === p ? ' on' : ''), 'aria-pressed': String(s?.palette === p), style: `--sw:${c}`, onclick: () => order({ palette: p }) },
         h('span', { class: 'swatch' }), p)));

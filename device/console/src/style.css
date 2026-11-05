@@ -105,8 +105,6 @@ form.connect .row { margin-top: 12px; }
 .art { margin: 0 0 6px; color: var(--accent); font: 14px/1.05 var(--mono); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
-.chip.fx { border-style: dashed; }
-.chip.fx.on { border-style: solid; }
 .swatch { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--sw); margin-right: 6px; vertical-align: 1px; }
 .controls .row { margin-top: 8px; }
 .word { color: var(--accent); min-height: 1.5em; }
