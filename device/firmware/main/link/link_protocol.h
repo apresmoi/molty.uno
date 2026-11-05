@@ -209,8 +209,10 @@ typedef struct { uint16_t word; bool act; int8_t id; } link_mark_t;   /* id: CM_
 bool link_marks_parse(const cJSON *args, link_mark_t marks[LINK_MARKS_MAX], int *n);
 /* A mood mark's name (its id, the creature's order); "" when out of range. */
 const char *link_mood_name(int id);
-/* act {action}: one of cute_act.h's names → *act (CA_*). */
-bool link_act_args(const cJSON *args, int *act);
+/* act {action}: a gesture's name, [a-z][a-z0-9_]{0,23} → *name (into args). Whether the creature
+ * plays it is the creature's (mole_fluid_gesture): the shared ones (cute_act.h) and its package's own. */
+#define LINK_GESTURE_MAX 24
+bool link_act_args(const cJSON *args, const char **name);
 /* After the pairing code / the Improv "hi": the state body to go back to (malloc'd),
  * the saved one unless it was text or the demo reel, which become the creature. */
 char *link_restore_body(const char *saved_state_json);

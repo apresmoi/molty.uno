@@ -206,6 +206,15 @@ static float    s_req_hold_s = -1.f;                /* with s_req_mood: < 0 = it
 static char     s_cute_name[40] = "", s_cute_err[40] = "";
 static char    *s_cr_info;            /* the creature as the agent is told (cp_info), PSRAM; NULL before a load */
 static unsigned s_cr_gen;             /* moves when s_cr_info does */
+static struct { char name[25]; float dur; } s_own[ME_OWN_MAX];   /* the creature's own gestures (a package's), ids CUTE_N_ACTS + i */
+static int      s_nown;
+/* a gesture by name: a shared one (cute_act.h) or the creature's own; -1 for one it lacks (s_mutex held) */
+static int gesture_of(const char *name) {
+    const int a = cute_act_lookup(name);
+    for (int i = 0; a < 0 && name && i < s_nown; i++) if (!strcmp(s_own[i].name, name)) return CUTE_N_ACTS + i;
+    return a;
+}
+static const char *gesture_name(int a) { return a >= CUTE_N_ACTS && a < CUTE_N_ACTS + s_nown ? s_own[a - CUTE_N_ACTS].name : a >= 0 ? cute_act_name(a) : ""; }
 static cute_rt_t *s_cute = NULL;                    /* task-owned                        */
 static cpk_t    *s_cpk = NULL;                      /* task-owned                        */
 static int      s_cute_tris = 0;
@@ -215,6 +224,7 @@ static bool  cr_loaded(void) { return s_cpk || s_cute; }
 static void  cr_set_mood(int m) { if (s_cpk) me_set_mood(cpk_engine(s_cpk), m); else if (s_cute) cute_rt_set_mood(s_cute, m); }
 static int   cr_mood(void) { return s_cpk ? me_mood(cpk_engine(s_cpk)) : s_cute ? cute_rt_mood(s_cute) : -1; }
 static void  cr_act(int a) { if (s_cpk) me_act(cpk_engine(s_cpk), a); else if (s_cute) cute_rt_act(s_cute, a); }
+static float cr_act_dur(int a) { return s_cpk ? me_act_dur(cpk_engine(s_cpk), a) : cute_act_dur(a); }
 static int   cr_acting(void) { return s_cpk ? me_acting(cpk_engine(s_cpk)) : s_cute ? cute_rt_acting(s_cute) : -1; }
 static float cr_act_time(void) { return s_cpk ? me_act_time(cpk_engine(s_cpk)) : cute_rt_act_time(s_cute); }
 static float cr_env(void) { return s_cpk ? me_env(cpk_engine(s_cpk)) : cute_rt_env(s_cute); }
@@ -635,7 +645,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     case ST_SCENE:    scene_fill(s, s_sp.cur, s_sp.t, s_overlay, &s_noverlay); break;
     case ST_CREATURE:
         if (cr_loaded()) {
-            if (s_cpk) cpk_frame(s_cpk, s, rdt, swell);    /* engine + player + body + ambient + fill */
+            if (s_cpk) { cpk_set_work(s_cpk, fd_working(&s_dir)); cpk_frame(s_cpk, s, rdt, swell); }    /* engine + player + body + ambient + fill */
             else cute_rt_update(s_cute, rdt);              /* mood engine + kit + behaviours */
             {   /* paddle's strokes splash the real water, either side of the creature */
                 static float act_t0;
@@ -745,7 +755,17 @@ static void load_creature(const uint8_t *buf, size_t len, bool pkg) {
     if (rt || k) { strlcpy(s_cute_name, name, sizeof(s_cute_name)); s_cute_err[0] = '\0'; }
     else strlcpy(s_cute_err, err, sizeof(s_cute_err));
     if (info) { heap_caps_free(s_cr_info); s_cr_info = info; s_cr_gen++; }
+    if (rt || k) {                                     /* its own gestures, for the link and the HTTP API to find by name */
+        s_nown = k ? cp_own_gestures(cpk_player(k)) : 0;
+        if (s_nown > ME_OWN_MAX) s_nown = ME_OWN_MAX;
+        for (int i = 0; i < s_nown; i++) {
+            strlcpy(s_own[i].name, cp_gesture_name(cpk_player(k), CUTE_N_ACTS + i), sizeof(s_own[i].name));
+            s_own[i].dur = cp_gesture_dur(cpk_player(k), CUTE_N_ACTS + i);
+        }
+        s_req_act = -1;                                /* an id meant for the creature that was */
+    }
     xSemaphoreGive(s_mutex);
+    if (rt || k) fd_set_own_work(&s_dir, k != NULL);
     heap_caps_free(spec);
 }
 
@@ -1050,7 +1070,7 @@ static void fluid_task(void *arg) {
         if (user) fd_user(&s_dir);
         if (shake) fd_shake(&s_dir);
         fd_set_idle_life(&s_dir, idle_life);
-        if (req_act >= 0) fd_agent_act(&s_dir, req_act);
+        if (req_act >= 0) fd_agent_act(&s_dir, req_act, cr_act_dur(req_act));
         if (spoke) fd_turn_spoken(&s_dir);
         if (tint != s_tint) {                      /* a say's mood mark: its words from now on */
             s_tint = tint;
@@ -1316,6 +1336,8 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     char cname[40], cerr[40], cid[PKG_ID_MAX + 1];
     memcpy(cname, s_cute_name, sizeof(cname)); memcpy(cerr, s_cute_err, sizeof(cerr)); memcpy(cid, s_cr_id, sizeof(cid));
     cJSON *info = s_cr_info ? cJSON_Parse(s_cr_info) : NULL;   /* its gestures and moods (a package's) */
+    char actn[25];
+    strlcpy(actn, gesture_name(st.act), sizeof(actn));
     cJSON *root = cJSON_CreateObject();
     if (root) cJSON_AddStringToObject(root, "text", s_text ? s_text : "");
     xSemaphoreGive(s_mutex);
@@ -1338,7 +1360,7 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
         cJSON_AddStringToObject(sc, "layout", st.scene_layout);
         cJSON_AddNumberToObject(sc, "ttl_left", roundf(st.scene_left));
     }
-    cJSON_AddStringToObject(root, "act",         st.act >= 0 ? cute_act_name(st.act) : "");   /* the action playing */
+    cJSON_AddStringToObject(root, "act",         actn);   /* the gesture playing */
     cJSON_AddStringToObject(root, "indicator",   FD_STATUS_NAMES[st.status]);
     {
         cJSON *cj = cJSON_AddObjectToObject(root, "creature_info");
@@ -1491,7 +1513,7 @@ esp_err_t mole_fluid_creature_state_set_json(const char *body) {
     /* act: a one-shot action (cute_act.h) on the creature, as the link's `act` */
     int act = -2;                                      /* -2: not given */
     if ((j = cJSON_GetObjectItem(root, "act"))) {
-        act = cJSON_IsString(j) ? cute_act_lookup(j->valuestring) : -1;
+        act = cJSON_IsString(j) ? gesture_of(j->valuestring) : -1;
         if (act < 0) ret = ESP_ERR_INVALID_ARG;
     }
     if (shake >= 0) {
@@ -1697,10 +1719,19 @@ void mole_fluid_text_cue_end(void) {
 }
 
 void mole_fluid_act(int act) {
-    if (!s_mutex || act < 0 || act >= CUTE_N_ACTS) return;
+    if (!s_mutex || act < 0) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    s_req_act = act;
+    if (act < CUTE_N_ACTS + s_nown) s_req_act = act;
     xSemaphoreGive(s_mutex);
+}
+
+int mole_fluid_gesture(const char *name, float *dur) {
+    if (!s_mutex) return -1;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    const int a = gesture_of(name);
+    if (dur) *dur = a >= CUTE_N_ACTS ? s_own[a - CUTE_N_ACTS].dur : cute_act_dur(a);
+    xSemaphoreGive(s_mutex);
+    return a;
 }
 
 /* a say's mood mark → its colour for the words (the relay's COLORS, commands.ts) */

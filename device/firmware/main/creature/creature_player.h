@@ -29,7 +29,7 @@
 extern "C" {
 #endif
 
-#define CP_FILE_MAX     (32 * 1024)
+#define CP_FILE_MAX     (40 * 1024)
 #define CP_BONES_MAX    96
 #define CP_PARTS_MAX    96
 #define CP_PALETTE_MAX  32
@@ -84,9 +84,11 @@ typedef struct {
     float squash, lid, mouth, look[2], prowl;
     int eye;                     /* CP_EYE_*                                                    */
     int mood;                    /* 0..CP_N_MOODS-1 (cute_spec.h CM_*)                          */
+    bool work;                   /* the agent is working (input `work`): read only               */
 } cp_pose_t;
 
-/* a gesture play: act = cute_act.h CA_* (-1 none), t its clock, n a number new for each play */
+/* a gesture play: act = a play id (cp_gesture: cute_act.h CA_*, or CUTE_N_ACTS + i for the creature's own i-th; -1 none),
+ * t its clock, n a number new for each play */
 typedef struct { int act; float t; unsigned n; } cp_action_t;
 typedef struct { float q, k, go, along, side, fz, up; } cp_walk_t;
 
@@ -113,10 +115,18 @@ const char *cp_id(const cp_t *c);
 const char *cp_name(const cp_t *c);
 const char *cp_version(const cp_t *c);
 /** What an agent is told about this creature, as JSON: {id, name, about?, gestures, moods}. about is the
- *  package's own (its look, a line per gesture and mood); gestures are those it plays that this firmware
- *  knows, moods idle and its own, in the firmware's order. */
+ *  package's own (its look, a line per gesture and mood); gestures every one it defines (shared and its
+ *  own), moods idle and its own, in the firmware's order. */
 const char *cp_info(const cp_t *c);
 const cp_body_t *cp_body(const cp_t *c);
+/** Gestures by name: a shared one (cute_act.h, any creature plays it) is its CA_* id; one of the creature's own is
+ *  CUTE_N_ACTS + i; -1 for a name it lacks. Its length in seconds (0 for none) and name ("" for none). c may be NULL
+ *  (shared ones only). */
+int   cp_gesture(const cp_t *c, const char *name);
+float cp_gesture_dur(const cp_t *c, int act);
+const char *cp_gesture_name(const cp_t *c, int act);
+/** How many gestures of its own it has (play ids CUTE_N_ACTS .. + n - 1). */
+int   cp_own_gestures(const cp_t *c);
 /** The bone index of `id`, nbones for "root", -1 for none. */
 int   cp_bone_find(const cp_t *c, const char *id);
 /** Play one frame: every layer in order (walk, events, base, gestures, moods, post). p is the

@@ -345,12 +345,16 @@ static void test_marks(void)
     for (size_t i = 0; i < sizeof(bad) / sizeof(*bad); i++) assert(!marks(bad[i], m, &n) && n == 0);
     assert(!link_mood_name(-1)[0] && !link_mood_name(7)[0] && !strcmp(link_mood_name(6), "surprised"));
     /* act {action} */
-    int act = -1;
+    const char *act = NULL;
     for (int a = 0; a < CUTE_N_ACTS; a++) {
         char b[64]; snprintf(b, sizeof(b), "{\"action\":\"%s\"}", cute_act_name(a));
-        cJSON *j = cJSON_Parse(b); assert(link_act_args(j, &act) && act == a); cJSON_Delete(j);
+        cJSON *j = cJSON_Parse(b); assert(link_act_args(j, &act) && !strcmp(act, cute_act_name(a))); cJSON_Delete(j);
     }
-    const char *nope[] = { "{}", "{\"action\":1}", "{\"action\":\"dance\"}", "{\"action\":\"NOD\"}", "{\"action\":\"\"}" };
+    {   /* any gesture-shaped name: the creature says whether it plays it (a package's own, like eat) */
+        cJSON *j = cJSON_Parse("{\"action\":\"eat\"}"); assert(link_act_args(j, &act) && !strcmp(act, "eat")); cJSON_Delete(j);
+    }
+    const char *nope[] = { "{}", "{\"action\":1}", "{\"action\":\"NOD\"}", "{\"action\":\"\"}", "{\"action\":\"9lives\"}",
+                           "{\"action\":\"eat now\"}", "{\"action\":\"abcdefghijklmnopqrstuvwxy\"}" };
     for (size_t i = 0; i < sizeof(nope) / sizeof(*nope); i++) { cJSON *j = cJSON_Parse(nope[i]); assert(!link_act_args(j, &act)); cJSON_Delete(j); }
 }
 

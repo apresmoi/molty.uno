@@ -120,10 +120,14 @@ void mole_fluid_listen_color(int32_t rgb);
  *  over — the reader's own pace takes whatever is left, then it ends as usual. */
 void mole_fluid_text_cue(int word);
 void mole_fluid_text_cue_end(void);
-/** A one-shot action (cute_act.h CA_*) on the creature (link_cmd.c `act`, a say's action
- *  mark): it plays once the creature is on screen and no question covers it, waiting up to
- *  3 s (fluid_director.h). Safe from any task; a no-op before init. */
+/** A one-shot gesture on the creature (link_cmd.c `act`, a say's action mark): a cute_act.h CA_* id
+ *  or one of the creature's own (mole_fluid_gesture). It plays once the creature is on screen and no
+ *  question covers it, waiting up to 3 s (fluid_director.h). Safe from any task; a no-op before init. */
 void mole_fluid_act(int act);
+/** The gesture `name` of the creature now: a shared one (cute_act.h, every creature plays them) or one
+ *  of its package's own (CUTE_N_ACTS + i), its length in *dur (NULL: not wanted); -1 for a name it
+ *  lacks. Safe from any task. */
+int  mole_fluid_gesture(const char *name, float *dur);
 /** A say's mood mark reached its word (link_audio.c, cap say_marks): the reader's words
  *  — if text_ver is still the loaded text, i.e. the say's own — take that mood's colour from there on (happy amber, surprised cyan, thinking violet,
  *  sleepy blue, listening green; idle / speaking the palette's), until the next text. The

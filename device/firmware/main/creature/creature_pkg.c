@@ -26,6 +26,7 @@ struct cpk {
     cp_t *cp;
     cb_t *body;
     mood_engine_t eng;
+    bool work;
     cp_mark_t marks[MARKS_MAX];
 };
 
@@ -36,6 +37,9 @@ cpk_t *cpk_create(const char *json, size_t len, uint32_t seed, const char **err)
     if (k->cp && !(k->body = cb_create(k->cp))) *err = "oom";
     if (!k->body) { cpk_destroy(k); return NULL; }
     me_init(&k->eng, seed);
+    float dur[ME_OWN_MAX]; const int n = cp_own_gestures(k->cp) < ME_OWN_MAX ? cp_own_gestures(k->cp) : ME_OWN_MAX;
+    for (int i = 0; i < n; i++) dur[i] = cp_gesture_dur(k->cp, CUTE_N_ACTS + i);
+    me_own(&k->eng, dur, n);
     return k;
 }
 
@@ -47,6 +51,7 @@ void cpk_destroy(cpk_t *k) {
 }
 
 mood_engine_t *cpk_engine(cpk_t *k) { return &k->eng; }
+void cpk_set_work(cpk_t *k, bool on) { if (k) k->work = on; }
 const cp_t *cpk_player(const cpk_t *k) { return k->cp; }
 const cb_t *cpk_body(const cpk_t *k) { return k->body; }
 int cpk_tris(const cpk_t *k) { return k ? cb_tris(k->body) : 0; }
@@ -59,7 +64,7 @@ void cpk_frame(cpk_t *k, fluid_sim_t *s, float dt, float swell) {
     FLUID_PROF_BEGIN(c0);
     me_pose_t e;
     me_update(&k->eng, dt, &e);
-    cp_pose_t p = { .squash = e.squash, .lid = e.lid, .mouth = e.mouth, .eye = e.eye, .mood = e.mood };
+    cp_pose_t p = { .squash = e.squash, .lid = e.lid, .mouth = e.mouth, .eye = e.eye, .mood = e.mood, .work = k->work };
     memcpy(p.pos, e.pos, sizeof(p.pos)); memcpy(p.rot, e.rot, sizeof(p.rot)); memcpy(p.head, e.head, sizeof(p.head));
     memcpy(p.spine, e.spine, sizeof(p.spine)); memcpy(p.look, e.look, sizeof(p.look));
     const mood_engine_t *g = &k->eng;

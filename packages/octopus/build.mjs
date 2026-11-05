@@ -5,7 +5,7 @@
 // Its own channels (0 at rest): reach, limp, curl, ring (a wave round the skirt), swirl (one arm circles), chin (an arm to its face),
 // drum (tips tap in turn), talk (front arms gesture), point (+/- one side's arm lifts), drag (arms trail a turn), ex/exI (one arm feels
 // about), twitch, flex (arms push down), swell (the mantle fills), far (shot back), flush (+ rosier, - pale), cloud, puff/gush/jet/ink (bubbles).
-import { ch, sin, cos, nz, env, bump, ss, ssd, ex, lin, lt, gt, clamp, E, B, P, CHAIN, eyes, mouth, merge, LR, labHash, alive, living, blinkBurst, breathe, writePackage } from '../../tools/creatures/kit.mjs';
+import { ch, sin, cos, nz, env, bump, ss, ssd, ex, lin, lt, gt, clamp, E, B, P, CHAIN, eyes, mouth, merge, LR, labHash, alive, living, ponder, sgn, blinkBurst, breathe, writePackage } from '../../tools/creatures/kit.mjs';
 import { ACTIONS } from '../../device/creatures/js/actions.js';
 const ID = 'octopus', a = 'a', T = '@t', TAU = Math.PI * 2, D = (n) => ACTIONS[n];
 
@@ -161,7 +161,7 @@ const about = {
   moods: {
     idle: 'breathes slowly, and now and then one arm wanders off to feel about',
     listening: 'curls its arms in, leans in a little and holds still',
-    thinking: 'an arm comes up to its face, the tips drum, dark clouds cross its skin',
+    thinking: 'an arm comes up to its face, the tips drum, dark clouds cross it; now and then a glance, a blink',
     speaking: 'its front arms gesture as it talks, a soft ripple running round them',
     happy: 'flushes rosier, floats up and turns slowly, the arms rippling',
     sleepy: 'goes limp and pale, sinks low, and dreams in waves of colour',
@@ -169,6 +169,8 @@ const about = {
   },
 };
 const pkg = { v: 'molty-pkg/1', id: ID, name: 'Octopus', version: '1.0.0', kind: 'creature',
-  creature: { about, body: { palette, ...body }, walk, groups: { ...live.groups, arms }, events: { ...fid.events, ...live.events, ...events }, base: fid.base, gestures, moods, post: [...pose, ...live.post, ...rig], tints, ambient } };
+  creature: { about, body: { palette, ...body }, walk, groups: { ...live.groups, arms }, events: { ...fid.events, ...live.events, ...events, ponder: ponder({
+    // the octopus's own: a cloud crosses its skin, an arm curls, the tips drum
+    cloud: { ch: [ch('cloud', [[0.8, bump(a, 0, 1.6)]])] }, curl: { ch: [ch('curl', [[0.5, bump(a, 0, 1.6)]])] }, drum: { len: 1.2, ch: [ch('drum', [[0.8, bump(a, 0, 1.2)]])] } }) }, base: fid.base, gestures, moods, post: [...pose, ...live.post, ...rig], tints, ambient } };
 const out = writePackage(new URL(`./${ID}.json`, import.meta.url).pathname, pkg);
 console.log(ID, out.size, 'bytes', out.sha256);

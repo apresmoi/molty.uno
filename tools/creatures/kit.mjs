@@ -152,6 +152,21 @@ export function living(body, { limbs = {}, gait = {}, quad, sides = true, tailFr
   for (const m of motions) post.push(...m(groups));
   return { post, events, groups };
 }
+/**
+ * Life while it waits on the agent (thinking, or `work`: the agent is off working): now and then one small expression, picked at
+ * random, never a big gesture. Shared: a glance aside, a head tilt, a double blink, a look up, and a little yawn once it has been
+ * thinking a while. `own` adds the creature's own members ({ name: { len, ch } }).
+ */
+export function ponder(own = {}, { gap = [2, 5] } = {}) {
+  const side = sgn(0), b = (x, y) => bump('a', x, y), long = gt('@m.thinking', 14);
+  return { first: 1.2, gap, len: 1.6, gate: [[1, '@is.thinking'], [1, '@work']], pick: {
+    glance: { ch: [ch('look.x', [[0.7, side, b(0, 1.6)]]), ch('head.y', [[0.16, side, b(0.1, 1.6)]])] },
+    tilt: { len: 1.4, ch: [ch('head.z', [[0.14, side, b(0, 1.4)]])] },
+    blink: { len: 0.7, ch: [ch('lid', [[1, b(0, 0.25)], [1, b(0.35, 0.6)]], { op: 'max' })] },
+    up: { len: 1.8, ch: [ch('look.y', [[0.55, b(0, 1.8)]]), ch('head.x', [[-0.1, b(0.1, 1.8)]])] },
+    yawn: { len: 1.8, ch: [ch('mouth', [[0.55, '@is.thinking', long, b(0.2, 1.6)]], { op: 'max' }), ch('lid', [[0.55, '@is.thinking', long, b(0.2, 1.7)]], { op: 'max' }), ch('head.x', [[-0.14, '@is.thinking', long, b(0.1, 1.7)]])] },
+    ...own } };
+}
 // the spec's own motions: a blink in bursts on the eyes, a breath on a bone, a pulse
 export const blinkBurst = (seed, amp = -0.9, hz = 1.2, chance = 0.28, width = 0.22) => (groups) => { groups.eyes.attr.bk = groups.eyes.bones.map((_, i) => +(seed + i * 5.1).toFixed(2));
   return [{ each: 'eyes', ch: [ch(':sy', [[amp, ['chance', '@t', 1 / hz, '$bk', chance], ['bumpr', '@t', hz, 0, 0, width]]])] }]; };

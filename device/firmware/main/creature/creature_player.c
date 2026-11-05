@@ -39,7 +39,7 @@ static const char *const PROPS[11] = { "rx", "ry", "rz", "px", "py", "pz", "sx",
 #define N_UNSHARE 15
 
 /* the value store: these slots first, in this order; then every name the creature uses */
-enum { S_POSE = 0, S_T = 18, S_DT, S_ACT, S_WALK, S_IS = S_WALK + 7, S_W = S_IS + 7, S_W6 = S_W + 7,
+enum { S_POSE = 0, S_T = 18, S_DT, S_ACT, S_WORK, S_WALK, S_IS = S_WALK + 7, S_W = S_IS + 7, S_W6 = S_W + 7,
        S_NOW = S_W6 + 7, S_M = S_NOW + 7, S_EYE = S_M + 7, S_FIXED = S_EYE + 4 };
 
 /* ── the compiled program ─────────────────────────────────────────────────── */
@@ -101,7 +101,7 @@ typedef struct {
     bool run; int ri; double ra, rseed, rlen;
 } event_t;
 
-typedef struct { list_t l; int act; bool replace, now; int mood; } block_t;
+typedef struct { list_t l; int act; bool replace, now; int mood; float dur; char name[25]; } block_t;   /* gestures: act, dur, name */
 typedef struct { uint16_t ch; bool wave; float wave_v[3]; int16_t to[CP_PALETTE_MAX], neg[CP_PALETTE_MAX]; uint8_t rgb[2][CP_PALETTE_MAX][3]; } tint_t;
 
 /* ambient */
@@ -152,6 +152,7 @@ struct cp {
     block_t *gest; int ngest;
     block_t mood[16]; int nmood;
     int gest_of[32];             /* cute_act index -> gesture block, -1 none                     */
+    int own[32], nown;           /* its own gestures (no shared one): play id CUTE_N_ACTS + i      */
     event_t ev[CP_EVENTS_MAX]; int nev;
     tint_t *tint; int ntint;
     /* ambient */
@@ -363,6 +364,26 @@ static void list(cp_t *c, list_t l) {
     }
 }
 
+/* the gesture block a play id plays: a shared one's (cute_act.h) if the creature has its own take, or one of its own */
+static int gest_block(const cp_t *c, int act) {
+    return act >= 0 && act < CUTE_N_ACTS ? c->gest_of[act] : act >= CUTE_N_ACTS && act < CUTE_N_ACTS + c->nown ? c->own[act - CUTE_N_ACTS] : -1;
+}
+int cp_gesture(const cp_t *c, const char *name) {
+    const int a = cute_act_lookup(name);
+    if (a >= 0 || !c || !name) return a;
+    for (int i = 0; i < c->nown; i++) if (!strcmp(c->gest[c->own[i]].name, name)) return CUTE_N_ACTS + i;
+    return -1;
+}
+float cp_gesture_dur(const cp_t *c, int act) {
+    if (act >= 0 && act < CUTE_N_ACTS) return cute_act_dur(act);
+    return c && act >= CUTE_N_ACTS && act < CUTE_N_ACTS + c->nown ? c->gest[c->own[act - CUTE_N_ACTS]].dur : 0.f;
+}
+const char *cp_gesture_name(const cp_t *c, int act) {
+    if (act >= 0 && act < CUTE_N_ACTS) return cute_act_name(act);
+    return c && act >= CUTE_N_ACTS && act < CUTE_N_ACTS + c->nown ? c->gest[c->own[act - CUTE_N_ACTS]].name : "";
+}
+int cp_own_gestures(const cp_t *c) { return c ? c->nown : 0; }
+
 /* a block at its own clock, length, seed and weight (JS `at`) */
 static void at(cp_t *c, list_t l, double a, double dur, double seed, double w) {
     c->B.a = a; c->B.dur = dur; c->B.seed = seed; c->B.w = (float)w;
@@ -394,7 +415,8 @@ void cp_pose(cp_t *c, cp_pose_t *p, double dt, const cp_action_t *act, const cp_
     const float wv[7] = { wk ? wk->q : 0, wk ? wk->k : 0, wk ? wk->go : 0, wk ? wk->along : 0, wk ? wk->side : 0, wk ? wk->fz : 0, wk ? wk->up : 0 };
     for (int k = 0; k < 7; k++) c->C[S_WALK + k] = wv[k];
     c->C[S_T] = (float)c->time; c->Cd[S_T] = c->time; c->C[S_DT] = (float)dt;
-    c->C[S_ACT] = act && act->act >= 0 && act->act < 32 && act->act != CA_INSPECT ? 1.f : 0.f;
+    c->C[S_ACT] = act && act->act >= 0 && act->act != CA_INSPECT ? 1.f : 0.f;
+    c->C[S_WORK] = p->work ? 1.f : 0.f;
 
     at(c, c->walk.l, c->C[S_WALK], 1, 0, 1);
 
@@ -424,10 +446,10 @@ void cp_pose(cp_t *c, cp_pose_t *p, double dt, const cp_action_t *act, const cp_
     for (int k = 0; k < 2; k++) {        /* the gesture fading out, then the one playing */
         const cp_action_t *a = plays[k];
         const double w = k ? 1 : prev_w;
-        const int gi = a && a->act >= 0 && a->act < 32 ? c->gest_of[a->act] : -1;
+        const int gi = a ? gest_block(c, a->act) : -1;
         if (gi < 0 || w <= 0) continue;
         const block_t *g = &c->gest[gi];
-        if (g->replace) {
+        if (g->replace && g->act >= 0) {
             cute_act_pose_t o; cute_act_pose(a->act, a->t, &o);
             const float sh[N_UNSHARE] = { o.pos[0], o.pos[1], o.pos[2], o.rot[0], o.rot[1], o.rot[2], o.head[0], o.head[1], o.head[2],
                                           o.spine[0], o.spine[1], o.spine[2], o.squash, o.look[0], o.look[1] };
@@ -438,7 +460,7 @@ void cp_pose(cp_t *c, cp_pose_t *p, double dt, const cp_action_t *act, const cp_
         const unsigned other = k ? (prev ? prev->n : 0) : (act ? act->n : 0);
         int si = c->seed_n[0] == a->n ? 0 : c->seed_n[1] == a->n ? 1 : -1;
         if (si < 0) { si = c->seed_n[0] == other && other ? 1 : 0; c->seed_n[si] = a->n; c->seed_v[si] = fmod(a->t * 977.0 + c->time * 31, 9973); }
-        at(c, g->l, a->t, cute_act_dur(a->act), c->seed_v[si], w);
+        at(c, g->l, a->t, g->dur, c->seed_v[si], w);
     }
     for (int m = 0; m < c->nmood; m++) {
         const block_t *b = &c->mood[m];
@@ -1029,7 +1051,7 @@ static int groups_c(cx_t *x, const cJSON *gj) {
 }
 
 static int block_c(cx_t *x, const cJSON *bj, block_t *b, const char *flag) {
-    const char *const K[] = { "ch", flag, NULL };
+    const char *const K[] = { "ch", flag, flag && !strcmp(flag, "replace") ? "dur" : NULL, NULL };
     TRY(keys_only(x, bj, K, "creature: block"));
     const cJSON *f = flag ? cJSON_GetObjectItemCaseSensitive(bj, flag) : NULL;
     if (f && !cJSON_IsBool(f) && !cJSON_IsNumber(f)) FAIL(x, "creature: block");
@@ -1251,6 +1273,14 @@ static int walk_c(cx_t *x, const cJSON *wj) {
     return list_c(x, cJSON_GetObjectItemCaseSensitive(wj, "ch"), &x->c->walk.l);
 }
 
+/* a gesture's name, as agents send it: [a-z][a-z0-9_]{0,23} (packages/tools/format.mjs GESTURE_RE) */
+static bool gesture_name(const char *s) {
+    size_t n = s ? strlen(s) : 0;
+    if (n < 1 || n > 24 || s[0] < 'a' || s[0] > 'z') return false;
+    for (size_t i = 0; i < n; i++) if (!((s[i] >= 'a' && s[i] <= 'z') || (s[i] >= '0' && s[i] <= '9') || s[i] == '_')) return false;
+    return true;
+}
+
 /* about: { look, gestures: { name: line }, moods: { name: line } }, words only (packages/tools/format.mjs checks them all) */
 static bool words_ok(const cJSON *v, size_t max) {
     const size_t n = cJSON_IsString(v) ? strlen(v->valuestring) : 0;
@@ -1272,14 +1302,14 @@ static int about_c(cx_t *x, const cJSON *ab) {
     return 0;
 }
 
-/* cp_info: id, name, about, and what it plays: its gestures this firmware knows, idle and its moods */
+/* cp_info: id, name, about, and what it plays: its gestures (shared and its own), idle and its moods */
 static char *info_c(const cp_t *c, const cJSON *ab) {
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "id", c->id);
     cJSON_AddStringToObject(o, "name", c->name);
     if (ab) cJSON_AddItemToObject(o, "about", cJSON_Duplicate(ab, true));
     cJSON *g = cJSON_AddArrayToObject(o, "gestures"), *m = cJSON_AddArrayToObject(o, "moods");
-    for (int i = 0; i < c->ngest; i++) if (c->gest[i].act >= 0) cJSON_AddItemToArray(g, cJSON_CreateString(cute_act_name(c->gest[i].act)));
+    for (int i = 0; i < c->ngest; i++) cJSON_AddItemToArray(g, cJSON_CreateString(c->gest[i].name));
     for (int k = 0; k < CP_N_MOODS; k++) {
         bool has = k == 0;
         for (int i = 0; i < c->nmood; i++) has |= c->mood[i].mood == k;
@@ -1296,7 +1326,7 @@ static const char *compile(cp_t *c, const cJSON *cr) {
     static const char *const CK[] = { "about", "body", "walk", "groups", "events", "base", "gestures", "moods", "post", "tints", "ambient", NULL };
     if (keys_only(&x, cr, CK, "creature: unknown key") < 0) return x.err;
     for (int k = 0; k < 18; k++) slot(&x, POSE[k]);
-    slot(&x, "t"); slot(&x, "dt"); slot(&x, "act");
+    slot(&x, "t"); slot(&x, "dt"); slot(&x, "act"); slot(&x, "work");
     char nm[CP_NAME_MAX + 1];
     for (int k = 0; k < 7; k++) { snprintf(nm, sizeof(nm), "walk.%s", WALK[k]); slot(&x, nm); }
     static const char *const PRE[5] = { "is", "w", "w6", "now", "m" };
@@ -1317,8 +1347,13 @@ static const char *compile(cp_t *c, const cJSON *cr) {
         for (const cJSON *g = gj->child; g; g = g->next) {
             block_t *b = &c->gest[c->ngest];
             if (block_c(&x, g, b, "replace") < 0) return x.err;
-            b->act = cute_act_lookup(g->string);   /* an action this firmware lacks: compiled, never played */
-            if (b->act >= 0 && b->act < 32) c->gest_of[b->act] = c->ngest;
+            /* a shared gesture (cute_act.h) keeps its length; any other name is the creature's own and says how long it plays */
+            const cJSON *dj = cJSON_GetObjectItemCaseSensitive(g, "dur");
+            if (!gesture_name(g->string)) return "creature: gesture name";
+            snprintf(b->name, sizeof(b->name), "%s", g->string);
+            b->act = cute_act_lookup(g->string);
+            if (b->act >= 0) { if (dj) return "creature: gesture dur"; b->dur = cute_act_dur(b->act); c->gest_of[b->act] = c->ngest; }
+            else { double d; if (num(&x, dj, 0.2, 10, &d, "creature: gesture dur") < 0) return x.err; b->dur = (float)d; c->own[c->nown++] = c->ngest; }
             c->ngest++;
         }
     }

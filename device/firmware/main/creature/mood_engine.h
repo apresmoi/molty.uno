@@ -27,6 +27,7 @@ typedef struct {
     int   mood;                /* CM_*                                                     */
 } me_pose_t;
 
+#define ME_OWN_MAX 32
 typedef struct { float k, d, x, v; } spring_t;
 typedef struct { float a, f; int side; float next_glance, glance_until; int glance_dir; } jit_t;
 typedef struct { float t, phrase_end, pause_end, rate, phase, value, syll_amp; } speech_t;
@@ -42,13 +43,19 @@ typedef struct {
     /* actions: the one playing and the one it replaced; n numbers each play from 1 */
     int act, pact; float act_t, pact_t, pact_w; unsigned act_n, pact_n, plays;
     float cam_zoom, cam_focus;   /* the actions' camera this frame (cute_act_pose_t)       */
+    int nown; float own_dur[ME_OWN_MAX];   /* the creature's own gestures: ids CUTE_N_ACTS + i */
 } mood_engine_t;
 
 void  me_init(mood_engine_t *e, uint32_t seed);
 /* fades from the mood it was in (the same mood is ignored) */
 void  me_set_mood(mood_engine_t *e, int mood);
 int   me_mood(const mood_engine_t *e);
-/* plays a cute_act.h action over the mood; a newer one replaces it */
+/* the creature's own gestures (a package's, creature_player.h cp_gesture): their lengths; ids CUTE_N_ACTS + i
+ * play them with no shared pose (the package moves the body) */
+void  me_own(mood_engine_t *e, const float *dur, int n);
+/* a gesture's length: cute_act.h's, or the creature's own; 0 for none */
+float me_act_dur(const mood_engine_t *e, int act);
+/* plays a gesture (cute_act.h, or the creature's own) over the mood; a newer one replaces it */
 void  me_act(mood_engine_t *e, int act);
 int   me_acting(const mood_engine_t *e);
 float me_act_time(const mood_engine_t *e);

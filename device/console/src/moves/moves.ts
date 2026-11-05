@@ -1,6 +1,6 @@
 // The creature's gestures and moods (Molty settings): played with POST /api/creature/state
 // {act} or {mood}, the same setter an agent's act and mood reach; GET reports the one
-// playing as `act` and `mood`. A package lists its own under creature_info.gestures and
+// playing as `act` and `mood`. A package lists its own (shared ones and its own, the cat's eat) under creature_info.gestures and
 // .moods when the firmware reports them; until then the firmware's whole vocabulary
 // (creature/cute_act.h CUTE_ACTIONS, cute_spec.c CUTE_MOOD_NAMES), which every creature plays.
 

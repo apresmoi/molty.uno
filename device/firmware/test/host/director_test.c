@@ -310,30 +310,30 @@ static void test_agent_acts(void) {
     boot(true);
     run(1.f, false);
     int n = s_nact;
-    fd_agent_act(&D, CA_NOD);
+    fd_agent_act(&D, CA_NOD, cute_act_dur(CA_NOD));
     frame(false);
     CHECK(s_nact == n + 1 && s_act[n] == CA_NOD, "an agent's nod plays at once");
     CHECK(fd_mood(&D) == CM_IDLE && s_melts == 1, "an action changes no mood, no state");
 
     fd_set_busy(&D, true, false);                 /* listening: the creature is shown */
-    fd_agent_act(&D, CA_BOUNCE); frame(false);
+    fd_agent_act(&D, CA_BOUNCE, cute_act_dur(CA_BOUNCE)); frame(false);
     CHECK(s_act[s_nact - 1] == CA_BOUNCE, "an agent's action plays during a listen");
     fd_set_busy(&D, false, true);                 /* a question covers it */
     n = s_nact;
-    fd_agent_act(&D, CA_WIGGLE); run(2.5f, false);
+    fd_agent_act(&D, CA_WIGGLE, cute_act_dur(CA_WIGGLE)); run(2.5f, false);
     CHECK(s_nact == n, "covered by a question: the action waits");
     fd_set_busy(&D, false, false); frame(false);
     CHECK(s_nact == n + 1 && s_act[n] == CA_WIGGLE, "uncovered within 3 s: it plays");
     fd_set_busy(&D, false, true);
     n = s_nact;
-    fd_agent_act(&D, CA_PEEK); run(3.1f, false);
+    fd_agent_act(&D, CA_PEEK, cute_act_dur(CA_PEEK)); run(3.1f, false);
     fd_set_busy(&D, false, false); run(1.f, false);
     CHECK(s_nact == n, "covered over 3 s: dropped");
 
     /* a say's action mark: the text is on screen; it plays when the creature is back */
     request(FD_ST_TEXT, false);
     n = s_nact;
-    fd_agent_act(&D, CA_NOD); run(0.5f, true);
+    fd_agent_act(&D, CA_NOD, cute_act_dur(CA_NOD)); run(0.5f, true);
     CHECK(s_nact == n, "words on screen: the action waits");
     run(1.2f, true);                              /* 1.5 s after the last word: the creature */
     CHECK(D.cur == FD_ST_CREATURE && s_nact == n + 1 && s_act[n] == CA_NOD, "the creature is back: it plays");
@@ -342,10 +342,31 @@ static void test_agent_acts(void) {
     run(302.f, false);
     CHECK(fd_asleep(&D), "asleep");
     n = s_nact;
-    fd_agent_act(&D, CA_WIGGLE); frame(false);
+    fd_agent_act(&D, CA_WIGGLE, cute_act_dur(CA_WIGGLE)); frame(false);
     CHECK(!fd_asleep(&D) && s_nact == n + 1, "an action wakes it and plays");
-    fd_agent_act(&D, -1); fd_agent_act(&D, CUTE_N_ACTS); frame(false);
+    fd_agent_act(&D, -1, 1.f); fd_agent_act(&D, CUTE_N_ACTS, 0.f); frame(false);
     CHECK(s_nact == n + 1, "unknown actions are ignored");
+
+    /* the creature's own gesture (an id past cute_act.h's) plays for its own length: nothing else starts over it */
+    boot(true); run(1.f, false);
+    n = s_nact;
+    fd_agent_act(&D, CUTE_N_ACTS, 30.f); frame(false);
+    CHECK(s_nact == n + 1 && s_act[n] == CUTE_N_ACTS, "its own gesture plays");
+    run(29.f, false);
+    CHECK(s_nact == n + 1, "nothing starts over its own gesture's 30 s (%d)", s_nact - n - 1);
+    run(60.f, false);
+    CHECK(s_nact > n + 1, "idle life after it");
+}
+
+/* a creature package lives its own working life: working hands it no work actions */
+static void test_own_work(void) {
+    boot(true); run(1.f, false);
+    fd_set_own_work(&D, true);
+    const int n = s_nact;
+    fd_agent_work(&D, -1.f); run(60.f, false);
+    CHECK(fd_working(&D) && s_nact == n, "own working life: %d work actions handed out", s_nact - n);
+    fd_set_own_work(&D, false); run(5.f, false);
+    CHECK(s_nact > n, "the loop again for a creature without one");
 }
 
 /* the reflex during a listen (services/relay reflexFire): the listen holds `listening`; a react mood
@@ -373,7 +394,7 @@ static void test_listen_reacts(void) {
     static const int acts[] = { CA_NOD, CA_BOUNCE, CA_PEEK, CA_LOOK_UP, CA_WIGGLE, CA_WOBBLE, CA_GLANCE_LEFT, CA_GLANCE_RIGHT, CA_BLINK };
     for (int i = 0; i < (int)(sizeof(acts) / sizeof(acts[0])); i++) {
         const int n = s_nact;
-        fd_agent_act(&D, acts[i]); frame(false);
+        fd_agent_act(&D, acts[i], cute_act_dur(acts[i])); frame(false);
         CHECK(s_nact == n + 1 && s_act[n] == acts[i], "%s plays at once over the listen (idle life off)", cute_act_name(acts[i]));
         CHECK(fd_mood(&D) == CM_LISTENING, "...and leaves the listening mood: %d", fd_mood(&D));
         run(cute_act_dur(acts[i]), false);
@@ -545,6 +566,7 @@ int main(void) {
     test_yawn();
     test_agent_acts();
     test_working();
+    test_own_work();
     test_listen_reacts();
     test_convo();
     test_sleep();

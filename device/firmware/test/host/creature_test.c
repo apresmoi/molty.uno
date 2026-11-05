@@ -105,10 +105,11 @@ static void test_golden(const char *pkgdir, const char *goldir, const char *id) 
                               &p.spine[0], &p.spine[1], &p.spine[2], &p.squash, &p.lid, &p.mouth, &p.look[0], &p.look[1], &p.prowl };
             for (int q = 0; q < 18; q++) *pv[q] = (float)num(&k);
             p.eye = (int)num(&k); p.mood = (int)num(&k);
-            const char *an = tok(&k); act.act = cute_act_lookup(an); act.t = (float)num(&k); act.n = (unsigned)num(&k); has_act = strcmp(an, "-") != 0;
-            const char *pn = tok(&k); prev.act = cute_act_lookup(pn); prev.t = (float)num(&k); prev_w = (float)num(&k); prev.n = (unsigned)num(&k); has_prev = strcmp(pn, "-") != 0;
+            const char *an = tok(&k); act.act = cp_gesture(c, an); act.t = (float)num(&k); act.n = (unsigned)num(&k); has_act = strcmp(an, "-") != 0;
+            const char *pn = tok(&k); prev.act = cp_gesture(c, pn); prev.t = (float)num(&k); prev_w = (float)num(&k); prev.n = (unsigned)num(&k); has_prev = strcmp(pn, "-") != 0;
             float *wv[7] = { &w.q, &w.k, &w.go, &w.along, &w.side, &w.fz, &w.up };
             for (int q = 0; q < 7; q++) *wv[q] = (float)num(&k);
+            p.work = num(&k) != 0;
             cp_pose(c, &p, dt, has_act ? &act : NULL, has_prev ? &prev : NULL, prev_w, &w);
             if (cp_factors(c) > worst_f) worst_f = cp_factors(c);
             frames++;
@@ -199,11 +200,15 @@ static void test_strict(const char *pkgdir) {
     refused(j, "\"palette\":{", "\"palette\":{\"x\":\"red\",", "a colour that is not #rrggbb");
     refused(j, "\"kind\":\"creature\"", "\"kind\":\"scenes\"", "not a creature");
     refused(j, ",[\"sin\",\"a\"", ",[\"sin\",\"a\",1,2,3,4", "too many op params");
+    refused(j, "\"gestures\":{\"wiggle\":{", "\"gestures\":{\"twirl\":{\"ch\":[]},\"wiggle\":{", "its own gesture without dur");
+    refused(j, "\"gestures\":{\"wiggle\":{", "\"gestures\":{\"twirl\":{\"ch\":[],\"dur\":11},\"wiggle\":{", "its own gesture too long");
+    refused(j, "\"gestures\":{\"wiggle\":{", "\"gestures\":{\"Twirl\":{\"ch\":[],\"dur\":1},\"wiggle\":{", "a gesture name agents cannot send");
+    refused(j, "\"gestures\":{\"wiggle\":{", "\"gestures\":{\"nod\":{\"ch\":[],\"dur\":1},\"wiggle\":{", "a shared gesture with a length of its own");
     refused(j, "\"emit\":{", "\"emit\":{\"x\":{\"p\":\"nope\",\"at\":\"floor\"},", "an emitter of an unknown kind");
     const char *err = NULL;
     CHECK(cp_create(j, len - 12, &err) == NULL, "a truncated file is accepted");
     char *big = malloc(CP_FILE_MAX + 2); memset(big, ' ', CP_FILE_MAX + 1); big[CP_FILE_MAX + 1] = 0;
-    CHECK(cp_create(big, CP_FILE_MAX + 1, &err) == NULL && !strcmp(err, "too_big"), "over 32 KB is accepted");
+    CHECK(cp_create(big, CP_FILE_MAX + 1, &err) == NULL && !strcmp(err, "too_big"), "over 40 KB is accepted");
     free(big);
     free(j);
 }
@@ -330,11 +335,11 @@ static void test_planted(const char *pkgdir, const char *id) {
     float rest[16][2], held[16], worst = 0;
     char where[48] = "";
     /* idle, then each mood and back, then each gesture from idle */
-    for (int seg = -1; seg < CUTE_N_MOODS - 1 + CUTE_N_ACTS; seg++) {
+    for (int seg = -1; seg < CUTE_N_MOODS - 1 + CUTE_N_ACTS + cp_own_gestures(cpk_player(k)); seg++) {   /* its own gestures too */
         const int mood = seg >= 0 && seg < CUTE_N_MOODS - 1 ? seg + 1 : CM_IDLE, act = seg >= CUTE_N_MOODS - 1 ? seg - (CUTE_N_MOODS - 1) : -1;
         me_set_mood(e, mood);
         if (act >= 0) me_act(e, act);
-        const int frames = act >= 0 ? (int)((cute_act_dur(act) + 0.5f) * 30) : 6 * 30;
+        const int frames = act >= 0 ? (int)((me_act_dur(e, act) + 0.5f) * 30) : 6 * 30;
         float far = 0;
         for (int f = 0; f < frames; f++) {
             cpk_frame(k, s, 1.f / 30.f, 1.f);
@@ -358,7 +363,7 @@ static void test_planted(const char *pkgdir, const char *id) {
             }
             far = fmaxf(far, fabsf(dx));
         }
-        const char *name = act >= 0 ? cute_act_name(act) : MOOD_NAMES[mood];
+        const char *name = act >= 0 ? cp_gesture_name(cpk_player(k), act) : MOOD_NAMES[mood];
         if (far > worst) { worst = far; snprintf(where, sizeof(where), "%s", name); }
         printf("  %-8s planted %-12s feet moved %4.1f px\n", id, name, far);
     }
@@ -412,12 +417,44 @@ static void test_info(const char *pkgdir, const char *id) {
     free(json);
 }
 
+/* a gesture of the package's own (the cat's eat): found by name, played by the device's engine for its own length with
+ * the package moving the body (the bowl, shown only while it plays), listed for agents; a name it lacks is -1 */
+static void test_own(const char *pkgdir) {
+    char path[512]; size_t len;
+    snprintf(path, sizeof(path), "%s/cat/cat.json", pkgdir);
+    char *json = slurp(path, &len);
+    const char *err = NULL;
+    cpk_t *k = json ? cpk_create(json, len, 5, &err) : NULL;
+    CHECK(k != NULL, "cat: create (%s)", err ? err : "no file");
+    if (!k) { free(json); return; }
+    const cp_t *c = cpk_player(k);
+    const int eat = cp_gesture(c, "eat"), bowl = cp_bone_find(c, "bowl");
+    CHECK(eat >= CUTE_N_ACTS && cp_own_gestures(c) >= 1 && !strcmp(cp_gesture_name(c, eat), "eat"), "cat: eat is its own gesture (%d)", eat);
+    CHECK(cp_gesture(c, "nod") == CA_NOD && cp_gesture(c, "fly") < 0 && cp_gesture(NULL, "eat") < 0 && cp_gesture(c, NULL) < 0, "cat: gesture lookup");
+    CHECK(cp_gesture_dur(c, eat) > 3.f && cp_gesture_dur(c, eat) < 6.f && cp_gesture_dur(c, CA_NOD) == cute_act_dur(CA_NOD), "cat: eat lasts %.2f s", cp_gesture_dur(c, eat));
+    CHECK(strstr(cp_info(c), "\"eat\"") != NULL, "cat: eat is not in its info");
+    fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
+    mood_engine_t *e = cpk_engine(k);
+    cpk_frame(k, s, 1.f / 30, 1.f);
+    const float before = cp_bone_out(c, bowl)[6];
+    me_act(e, eat);
+    CHECK(me_acting(e) == eat, "cat: eat does not play");
+    float most = 0; int f = 0;
+    for (; f < 300 && me_acting(e) == eat; f++) { cpk_frame(k, s, 1.f / 30, 1.f); most = fmaxf(most, cp_bone_out(c, bowl)[6]); }
+    CHECK(fabsf(f / 30.f - cp_gesture_dur(c, eat)) < 0.1f, "cat: eat played %.2f s", f / 30.f);
+    CHECK(before < 0.01f && most > 0.95f && cp_bone_out(c, bowl)[6] < 0.01f, "cat: the bowl %.3f, then %.3f, then %.3f", before, most, cp_bone_out(c, bowl)[6]);
+    me_act(e, CUTE_N_ACTS + cp_own_gestures(c));
+    CHECK(me_acting(e) < 0, "an id past its own gestures plays");
+    fluid_sim_destroy(s); cpk_destroy(k); free(json);
+}
+
 int main(int argc, char **argv) {
     if (argc < 4) { printf("usage: creature_test <packages dir> <golden dir> <duck.molty> [out dir]\n"); return 2; }
     printf("creature player host test\n");
     test_hash();
     for (const char *const *id = (const char *const[]){ "duck", "cat", "octopus", NULL }; *id; id++) test_golden(argv[1], argv[2], *id);
     test_strict(argv[1]);
+    test_own(argv[1]);
     for (const char *const *id = (const char *const[]){ "duck", "cat", "octopus", NULL }; *id; id++) test_info(argv[1], *id);
     for (const char *const *id = (const char *const[]){ "duck", "cat", NULL }; *id; id++) test_planted(argv[1], *id);
     const double v1 = bench_v1(argv[3]);

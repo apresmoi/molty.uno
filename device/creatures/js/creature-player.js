@@ -3,7 +3,8 @@
 //
 //   const c = creaturePlayer(pkg.creature, { actionPose, ACTIONS });
 //   c.move.move(p, walkState)          the walk engine's current cycle (q, k, go, along, side, fz, up)
-//   c.pose(p, dt)                      every layer, in order; writes the shared pose back into p
+//   c.gestures                         { name: seconds } for every gesture it plays (a shared one's length is ACTIONS')
+//   c.pose(p, dt, ctx)                 every layer, in order; writes the shared pose back into p (ctx: action, prevAction, work)
 //   c.apply(bones)                     adds this frame's bone outputs to bones reset to rest (Map id -> {rotation, position, scale})
 //   c.tints()                          [[paletteName, '#rrggbb'], ...] for this frame
 //   c.ambient(env)                     particles and currents on the glass (env: dt, cov, W, H, win, mark, impulse, push)
@@ -121,6 +122,7 @@ export function creaturePlayer(cr, { actionPose, ACTIONS } = {}) {
   // the layers, in play order: walk, events, base, gestures, moods, post
   const walk = cr.walk ?? {}, L = { walk: block(walk), base: block({ ch: cr.base }), post: block({ ch: cr.post }) };
   const gest = Object.fromEntries(Object.entries(cr.gestures ?? {}).map(([k, g]) => [k, block(g)]));
+  const gdur = Object.fromEntries(Object.entries(cr.gestures ?? {}).map(([k, g]) => [k, ACTIONS?.[k] ?? g.dur ?? 1])); // a shared gesture keeps its length; the creature's own carry theirs
   const moods = Object.fromEntries(Object.entries(cr.moods ?? {}).map(([k, m]) => [k, block(m)]));
   const events = Object.entries(cr.events ?? {}).map(([name, e]) => { const pick = e.pick ? Object.entries(e.pick).map(([k, m]) => ({ k, len: m.len ?? e.len, run: list(m.ch) })) : [{ k: name, len: e.len, run: list(e.ch) }];
     return { name, e, pick, gate: e.gate && list([['_gate', e.gate]])[0], wt: e.w && list([['_w', e.w]])[0], stop: e.stop && list([['_stop', e.stop]])[0], gap: param(e.gap ?? 0), len: pick.map((p) => param(p.len ?? 1)), run: null, next: e.first ?? 0, n: 0 }; });
@@ -136,6 +138,7 @@ export function creaturePlayer(cr, { actionPose, ACTIONS } = {}) {
       surge: (q) => { if (!surge) return 1; C['walk.q'] = q; return sub(surge, '_surge'); }, move(p, m) { walkIn = m; } },
     quad: walk.quad,
     get factors() { return frameFactors; },
+    gestures: gdur,
     pose(p, step, ctx = {}) {
       dt = step; time += dt; frameFactors = 0; out.clear();
       for (const k in C) if (!keepers.has(k) && !/^(w6?|m)\./.test(k)) C[k] = 0; // every channel starts the frame at 0 but the kept ones, the mood weights and clocks
@@ -144,7 +147,7 @@ export function creaturePlayer(cr, { actionPose, ACTIONS } = {}) {
       for (const m of MOODS) { const on = m === mood ? 1 : 0; C['is.' + m] = on; C['w.' + m] += (on - C['w.' + m]) * (1 - Math.exp(-dt * 4)); C['w6.' + m] += (on - C['w6.' + m]) * (1 - Math.exp(-dt * 6)); C['now.' + m] = on || C['w.' + m]; if (m !== mood) C['m.' + m] += dt; }
       C['m.' + mood] += dt; for (const e of EYES) C['eye.' + e] = p.eye === e ? 1 : 0;
       for (const k of WALK) C['walk.' + k] = walkIn[k] ?? 0; C.t = time; C.dt = dt; const act = ctx.action, prev = ctx.prevAction;
-      C.act = act && act.name !== 'inspect' ? 1 : 0;
+      C.act = act && act.name !== 'inspect' ? 1 : 0; C.work = ctx.work ? 1 : 0;
       at(L.walk, C['walk.q'], 1, 0, 1, L.walk.run);
       for (const E of events) {
         if (E.run) { E.run.a += dt; if (E.run.a > E.run.len || (E.stop && sub(E.stop, '_stop') > 0.5)) { E.run = null; B.seed = time * 3.7 + E.n; E.next = time + E.gap(); } }
@@ -155,7 +158,7 @@ export function creaturePlayer(cr, { actionPose, ACTIONS } = {}) {
       at(L.base, time, 0, 0, 1, L.base.run);
       for (const [a, w] of [[prev, prev?.w ?? 0], [act, 1]]) { const g = a && gest[a.name]; if (!g || w <= 0) continue;
         if (g.b.replace !== false && actionPose) { const o = actionPose(a.name, a.t); for (const k of UNSHARE) { const [x, y] = k.split('.'); C[k] -= w * (y ? o[x][y] : o[x]); } }
-        at(g, a.t, ACTIONS?.[a.name] ?? 1, a.seed ??= (a.t * 977 + time * 31) % 9973, w, g.run); }
+        at(g, a.t, gdur[a.name], a.seed ??= (a.t * 977 + time * 31) % 9973, w, g.run); }
       for (const [m, b] of Object.entries(moods)) { const w = b.b.now ? C['now.' + m] : C['w.' + m]; if (w > 0.01) at(b, C['m.' + m], 0, (wm[m] ?? 0) * 13.7 + MOODS.indexOf(m), w, b.run); }
       at(L.post, time, 0, 0, 1, L.post.run);
       for (const k of POSE) { const [a, b] = k.split('.'); if (b) p[a][b] = C[k]; else p[a] = C[k]; }

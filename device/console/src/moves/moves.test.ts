@@ -10,6 +10,9 @@ describe('creature gestures and moods', () => {
   it('uses the package lists the device reports', () => {
     expect(creatureMoves({ creature_info: { gestures: ['nod', 'paddle'], moods: ['happy'] } })).toEqual({ acts: ['nod', 'paddle'], moods: ['happy'] });
   });
+  it('shows a package gesture of its own (the cat eats) with the shared ones', () => {
+    expect(creatureMoves({ creature_info: { gestures: ['nod', 'eat'] } }).acts).toEqual(['nod', 'eat']);
+  });
   it('labels without underscores', () => {
     expect(moveLabel('glance_left')).toBe('glance left');
   });

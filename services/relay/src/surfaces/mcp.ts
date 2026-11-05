@@ -139,8 +139,8 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "molty_act",
-    description: `Play a one-shot gesture over the current mood: ${ACTIONS.join(", ")}. It never changes what is shown; while words or a question cover the creature it waits up to 3 s, then is dropped. To gesture while speaking, put [nod] etc. in the say text instead.`,
-    inputSchema: obj({ action: { type: "string", description: `One of ${ACTIONS.join(", ")}.`, enum: [...ACTIONS] } }, ["action"]),
+    description: `Play a one-shot gesture over the current mood: one of the creature's gestures (device.creature.gestures; every creature plays ${ACTIONS.join(", ")}, and a creature package may add its own, like the cat's eat). unknown_gesture for one it lacks. It never changes what is shown; while words or a question cover the creature it waits up to 3 s, then is dropped. To gesture while speaking, put [nod] etc. in the say text instead.`,
+    inputSchema: obj({ action: { type: "string", description: `A gesture of the creature (device.creature.gestures), e.g. ${ACTIONS.join(", ")}.` } }, ["action"]),
     auth: true,
     run: (api, t, a) => api.command(t, "act", a),
   },

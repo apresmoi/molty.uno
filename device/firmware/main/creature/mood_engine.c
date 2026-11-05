@@ -134,8 +134,20 @@ void me_set_mood(mood_engine_t *e, int mood) {
 }
 int me_mood(const mood_engine_t *e) { return e ? e->mood : 0; }
 
+void me_own(mood_engine_t *e, const float *dur, int n) {
+    if (!e) return;
+    e->nown = n < 0 ? 0 : n > ME_OWN_MAX ? ME_OWN_MAX : n;
+    for (int i = 0; i < e->nown; i++) e->own_dur[i] = dur[i];
+    if (e->act >= CUTE_N_ACTS) e->act = -1;           /* a gesture of the creature that was */
+    if (e->pact >= CUTE_N_ACTS) e->pact = -1;
+}
+float me_act_dur(const mood_engine_t *e, int act) {
+    if (act >= 0 && act < CUTE_N_ACTS) return cute_act_dur(act);
+    return e && act >= CUTE_N_ACTS && act < CUTE_N_ACTS + e->nown ? e->own_dur[act - CUTE_N_ACTS] : 0.f;
+}
+
 void me_act(mood_engine_t *e, int act) {
-    if (!e || act < 0 || act >= CUTE_N_ACTS) return;
+    if (!e || me_act_dur(e, act) <= 0.f) return;
     if (e->act >= 0) { e->pact = e->act; e->pact_t = e->act_t; e->pact_w = 1.f; e->pact_n = e->act_n; }   /* fades out */
     e->act = act; e->act_t = 0.f; e->act_n = ++e->plays;
 }
@@ -159,12 +171,12 @@ static float act_layer(mood_engine_t *e, float dt, me_pose_t *p) {
     e->cam_zoom = e->cam_focus = 0.f;
     if (e->pact >= 0) {                               /* the replaced one, out over 0.25 s */
         e->pact_t += dt; e->pact_w -= dt / 0.25f;
-        if (e->pact_w <= 0.f || e->pact_t > cute_act_dur(e->pact)) e->pact = -1;
+        if (e->pact_w <= 0.f || e->pact_t > me_act_dur(e, e->pact)) e->pact = -1;
         else { cute_act_pose(e->pact, e->pact_t, &a); act_add(p, &a, e->pact_w); lid = e->pact_w * a.lid; e->cam_zoom = e->pact_w * a.zoom; e->cam_focus = e->pact_w * a.focus; }
     }
     if (e->act >= 0) {
         e->act_t += dt;
-        if (e->act_t > cute_act_dur(e->act)) e->act = -1;
+        if (e->act_t > me_act_dur(e, e->act)) e->act = -1;
         else { cute_act_pose(e->act, e->act_t, &a); act_add(p, &a, 1.f); lid = fmaxf(lid, a.lid); e->cam_zoom += a.zoom; e->cam_focus += a.focus; }
     }
     return lid;

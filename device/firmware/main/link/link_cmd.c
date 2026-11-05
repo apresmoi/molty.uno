@@ -202,20 +202,23 @@ static esp_err_t cmd_mood(const cJSON *args, cJSON **out)
     return e;
 }
 
-/* act {action}: a one-shot gesture on the creature (cute_act.h). It never takes the screen:
- * no mood change, no question cancelled, not counted as an explicit mood; while the words or
- * a question cover the creature it waits up to 3 s (fluid_director.h), then is dropped. */
+/* act {action}: a one-shot gesture on the creature (cute_act.h's shared ones, or its package's
+ * own; unknown_gesture for a name it lacks). It never takes the screen: no mood change, no
+ * question cancelled, not counted as an explicit mood; while the words or a question cover the
+ * creature it waits up to 3 s (fluid_director.h), then is dropped. */
 static esp_err_t cmd_act(const cJSON *args, cJSON **out)
 {
-    int act;
-    if (!link_act_args(args, &act)) return ESP_ERR_INVALID_ARG;
+    const char *name; float dur = 0;
+    if (!link_act_args(args, &name)) return ESP_ERR_INVALID_ARG;
+    const int act = mole_fluid_gesture(name, &dur);
+    if (act < 0) return link_cmd_refuse("unknown_gesture");
     esp_err_t e = mole_creature_select("fluid");
     if (e != ESP_OK) return e;
     mole_fluid_act(act);
-    link_audio_external_react((uint32_t)(cute_act_dur(act) * 1000.f));   /* during a listen: ours wait */
+    link_audio_external_react((uint32_t)(dur * 1000.f));   /* during a listen: ours wait */
     cJSON *j = cJSON_CreateObject();
     if (!j) return ESP_ERR_NO_MEM;
-    cJSON_AddStringToObject(j, "action", cute_act_name(act));
+    cJSON_AddStringToObject(j, "action", name);
     *out = j;
     return ESP_OK;
 }
