@@ -268,7 +268,7 @@ Molty is starting the reply: [First words](talking-fast.md#first-words-molty-sta
 
 | reason | meaning |
 |---|---|
-| `tap` | the human tapped the screen to end it: what they said so far, an ordinary end of turn |
+| `tap` | the human tapped the screen to end it: what they said so far, an ordinary end of turn; `heard` `""` means "done, thanks": say nothing |
 | `silence` | they finished |
 | `turn_end` | they finished, called by the owner's voice box from what they said: treat it like `silence` |
 | `no_speech` | nobody spoke: `heard` is `""` |

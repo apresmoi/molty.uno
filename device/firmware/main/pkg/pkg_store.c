@@ -103,13 +103,19 @@ static bool entry_from(const cJSON *j, pkg_entry_t *e) {
     return true;
 }
 
+/* the root known to have no index yet (nothing ever installed): SPIFFS scans the whole
+ * partition to miss a file, and the flash reads stall the screen for ~300 ms. Only save() writes one */
+static char s_no_index[96];
+
 /* every entry of the index (files present or not); a lost index (or index.tmp left by a
  * reset mid-write) is read back */
 static int load(const char *root, pkg_entry_t *out, int max) {
+    if (!strcmp(s_no_index, root)) return 0;
     char p[96]; size_t len = 0;
     path(p, sizeof(p), root, "index.json");
     char *buf = slurp(p, 16384, &len);
     if (!buf) { path(p, sizeof(p), root, "index.tmp"); buf = slurp(p, 16384, &len); }
+    if (!buf) { snprintf(s_no_index, sizeof(s_no_index), "%s", root); return 0; }
     cJSON *j = buf ? cJSON_ParseWithLength(buf, len) : NULL;
     STORE_FREE(buf);
     int n = 0;
@@ -140,6 +146,7 @@ static bool save(const char *root, const pkg_entry_t *e, int n) {
     if (!txt) return false;
     char tmp[96], dst[96];
     path(tmp, sizeof(tmp), root, "index.tmp"); path(dst, sizeof(dst), root, "index.json");
+    s_no_index[0] = 0;
     FILE *f = fopen(tmp, "wb");
     size_t len = strlen(txt);
     bool ok = f && fwrite(txt, 1, len, f) == len;
