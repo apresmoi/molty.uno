@@ -1,0 +1,1 @@
+A small cat that lives on the screen, with its own moods and gestures. Built into every Molty; install only for a newer version.
