@@ -79,7 +79,7 @@ import {
   type JsonObject,
 } from "./protocol.js";
 import { type Clock, type KV, sleep } from "./store.js";
-import { type AgentEvent, DEFAULT_WEBHOOK_EVENTS, INBOX_LIMITS, SAMPLE_EVENTS, UTTERANCE_EVENT, agentEventData, eventId, webhookWants } from "./events.js";
+import { type AgentEvent, CREATURE_EVENT, DEFAULT_WEBHOOK_EVENTS, type DeviceCreature, INBOX_LIMITS, SAMPLE_EVENTS, UTTERANCE_EVENT, agentEventData, creatureData, eventId, webhookWants } from "./events.js";
 import { LISTEN_ADOPT_FEATURE, LOCAL_LISTEN_RE, type TurnClaim, type TurnRecord, claimTurn, turnTimings, utteranceData } from "./turns.js";
 import { API_VERSION, FEATURES, compareVersions } from "./version.js";
 import type { ReleaseLookup, ReleaseSource } from "./releases.js";
@@ -605,6 +605,8 @@ const K = {
   lastAnswerer: "fillby",
   /** How this Molty's human talks: the calibration record (core/calibration.ts). */
   speech: "speech",
+  /** The creature on its screen, as the device last reported it (events.ts creatureData). */
+  creature: "creature",
 };
 
 /** Device-facing name of a voice box pairing (the console shows it next to the code). */
@@ -966,6 +968,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (frame.name === "update") return this.onUpdateEvent(data); // relay-internal: drives the molty_update job
     if (frame.name === "pkg") return this.onPkgEvent(data); // relay-internal: ends the pkg.install job
     if (frame.name === "shake") return this.onShake(data); // may start the shake's listen job
+    if (frame.name === CREATURE_EVENT) return this.onCreature(data); // kept; agents hear of a change
     const clean = agentEventData(frame.name, data);
     if (clean) await this.appendEvent(frame.name, clean);
     if (clean) await this.activity.device(frame.name, clean);
@@ -995,6 +998,23 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     p.resolve(answer);
   }
 
+  /** Device `creature` (on each welcome and each change): kept for utterances and status; a new one is an event. */
+  private async onCreature(data: Record<string, unknown>) {
+    const c = creatureData(data);
+    if (!c) return;
+    const prev = await this.kv.get<DeviceCreature>(K.creature);
+    if (prev && JSON.stringify(prev) === JSON.stringify(c)) return;
+    await this.kv.put<DeviceCreature>(K.creature, c);
+    await this.appendEvent(CREATURE_EVENT, c as JsonObject, true);
+  }
+
+  /** The utterance's `device` learns who Molty is now (its creature), when the device said. */
+  private async withCreature(data: JsonObject): Promise<JsonObject> {
+    const c = await this.kv.get<DeviceCreature>(K.creature);
+    if (c) (data.device as JsonObject).creature = c as JsonObject;
+    return data;
+  }
+
   private async onLinkCode(code: unknown) {
     if (typeof code === "string" && LINK_CODE_RE.test(code)) await this.kv.put(K.link, { code, at: this.clock.now() });
   }
@@ -1008,7 +1028,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     for (const prefix of ["tok:", "pair:", "job:", "ev:", "cur:", "whq:", NOTES_PREFIX, ACTIVITY_PREFIX, AUDIO_PREFIX, ...PHRASE_PREFIXES]) {
       for (const key of (await this.kv.list(prefix)).keys()) await this.kv.delete(key);
     }
-    for (const key of [K.device, K.link, K.pairCurrent, K.evSeq, K.evRate, K.skillEv, K.origin, K.devinfo, K.upd, K.voiceCfg, K.vbox, K.vstat, K.turn, K.speech, K.lastAnswerer]) await this.kv.delete(key);
+    for (const key of [K.device, K.link, K.pairCurrent, K.evSeq, K.evRate, K.skillEv, K.origin, K.devinfo, K.upd, K.voiceCfg, K.vbox, K.vstat, K.turn, K.speech, K.lastAnswerer, K.creature]) await this.kv.delete(key);
     // Its token is gone with the rest: so is the voice box.
     this.closeBoxes(() => true, CLOSE_UNAUTHORIZED, "device forgotten");
     this.log("device forgotten", { device: this.deviceId });
@@ -1218,6 +1238,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
           // Who would speak now: the cloud provider, "box" (the owner's voice box), or voice_box_offline (box mode, no box).
           voice: await this.voiceName(),
           setup: await this.setupChoices(),
+          // who Molty is now: the creature on screen, its look and moves (null: the firmware does not say)
+          creature: ((await this.kv.get<DeviceCreature>(K.creature)) ?? null) as JsonObject | null,
           events,
           webhook: agent.webhook ? (redactWebhook(agent.webhook) as JsonObject) : null,
           firmware: firmware as unknown as JsonObject,
@@ -1963,7 +1985,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       voice: await this.voiceName(),
     });
     if (r.opener) data.opener = r.opener;
-    await this.appendEvent(UTTERANCE_EVENT, data, true);
+    await this.appendEvent(UTTERANCE_EVENT, await this.withCreature(data), true);
     await this.activity.record({ ts: this.clock.now(), kind: "device", ev: "utterance", job: id, data: { text: text.slice(0, 500), reason: r.reason, trigger: "talk", words: words(text).length } });
   }
 
@@ -3070,7 +3092,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         if (fill !== undefined) data.filler_in_ms = fill;
       }
       // agent-facing, one per turn: not subject to the device event rate cap
-      await this.appendEvent(UTTERANCE_EVENT, data, true);
+      await this.appendEvent(UTTERANCE_EVENT, await this.withCreature(data), true);
       if (r.trace) r.trace.relay.utterance = this.clock.now() - r.trace.t0;
       await this.activity.record({
         ts: this.clock.now(),

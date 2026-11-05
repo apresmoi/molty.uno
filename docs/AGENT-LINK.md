@@ -463,7 +463,7 @@ shake ─▶ device: listening at once (ring + mood), audio kept locally
   reaches agents). Agents should not react to it: the utterance follows.
 - **Utterance.** When the listen ended with words (a non-empty transcript), the relay stores the
   turn and appends ONE `utterance` event (relay-generated, not rate-capped, never accepted from a
-  device): `{turn_id, text, reason, ms:{speech, stt}, trigger:"shake", device:{caps, mood, voice}, filler_in_ms?}` (`filler_in_ms`: see [Quick phrases](#quick-phrases-and-the-auto-filler)).
+  device): `{turn_id, text, reason, ms:{speech, stt}, trigger:"shake", device:{caps, mood, voice, creature?}, filler_in_ms?}` (`creature`: who Molty is now, see [Events](#firmware-contract); `filler_in_ms`: see [Quick phrases](#quick-phrases-and-the-auto-filler)).
   `turn_id` is the listen job's id (`GET /v1/jobs/<turn_id>` has the full listen result);
   `ms.speech` the measured speech (else the recording's length), `ms.stt` the transcription's
   tail; `device.mood` what Molty shows now (`thinking`: its acknowledgement, unless `ack` is off →
@@ -755,7 +755,7 @@ What the screen does between commands (`device/firmware/main/fluid/fluid_directo
 
 | name | args | result | notes |
 |---|---|---|---|
-| `status` | — | fw, uptime, creature, state, mood, fps, rssi | relay adds `relay` {api_version, online, board, caps, voice, ...} |
+| `status` | — | fw, uptime, creature, state, mood, fps, rssi | relay adds `relay` {api_version, online, board, caps, voice, creature, ...} |
 | `state` | `{state, ...}` | creature state JSON | passthrough to `/api/creature/state` semantics |
 | `mood` | `{mood, hold_s?}` (device also `react?`) | — | idle listening thinking speaking happy sleepy surprised; `hold_s` 0..3600 (0 = until the next mood; default: happy/surprised revert, the rest persist). `react:true` (relay-sent, cap `react`): shown but not an explicit mood ([While the human speaks](#while-the-human-speaks)) |
 | `act` | `{action}` | `{action}` | a one-shot gesture over the current mood: inspect paddle (cap `working`) wiggle nod shake_head bounce peek glance_left glance_right blink wobble stretch look_up yawn ([Inline cues and actions](#inline-cues-and-actions)); `unsupported` / `firmware_too_old` without the `act` cap |
@@ -867,6 +867,7 @@ pairing). Rate-limited on the device. `shake`, `tap` and `button` reach agents t
 | `double_tap` | `{x, y}` | two taps within 350 ms, when bound to `event` (out of the box a double tap talks) |
 | `button` | `{id: "accept"\|"reject"}` | a button was pressed (the board's accept / reject buttons); ≤ 4/s. For agents it means acknowledge / dismiss, never an answer (answers come only from `ask`) |
 | `answer` | `{job, index, label}` · `{job, index: null, reason: "timeout"\|"cancelled"}` | an `ask` ended: tapped (0-based `index`, `label` verbatim), timed out, or cancelled; one per job, never rate-limited |
+| `creature` | `{id, name, about?, gestures?, moods?}` | after each welcome and whenever the creature on screen changes: a package's `cp_info` (`about` {look, gestures, moods}: its own words, [CREATURES.md](CREATURES.md) section 1; `gestures` it plays that the firmware knows; `moods` idle and its own), `{id: "", name}` for a `.molty`. Relay-internal: kept per device (below) |
 
 The device reacts to a shake by itself (a brief `surprised`), agent or not. While a `listen`
 records, a thin line of the fluid itself condenses just inside the screen's rim around Molty
@@ -991,6 +992,12 @@ device evt ──WSS──▶ DeviceRoom.onEvt
 | `tap` | `{x: 0..1, y: 0..1}` (screen position, unit square) |
 | `button` | `{id: "accept" \| "reject"}` |
 | `answer` | `{job, index: int 0..4 \| null, label?: string, reason?: "timeout" \| "cancelled"}`, checked against the pending ask (see the `ask` wire bullet) |
+
+**Who Molty is.** The device's `creature` frame (Device events) is checked and bounded (`creatureData` in
+`services/relay/src/core/events.ts`: id `[a-z0-9-]{0,32}`, name 1..32, look ≤ 240 and lines ≤ 100 printable ASCII, at
+most 32 names a list; anything else drops the frame) and kept per device (KV `creature`). Agents get it as
+`device.creature` on every `utterance`, as `relay.creature` in `status` (`null` until the device said), and as a
+relay-generated `creature` event when it differs from the one kept (webhooks only when their `events` name it).
 
 The relay stores `{id:"e<seq>", type, ts:<relay unix ms>, data}`; `seq` increases per device.
 `answer` is stored once per ended ask as `{job, index, label|null, reason?}` (`reason` also
