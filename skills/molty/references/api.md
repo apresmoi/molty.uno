@@ -90,7 +90,8 @@ Success: `200 {"ok":true,"result":{…}}`. Unknown argument keys are rejected.
 | `imu` | — | ax/ay/az (g), gx/gy/gz (°/s), ms | one motion-sensor snapshot |
 | `diag` | `{"timeline"?: 0..180}` | diagnostics JSON | frame/CPU/heap/network health; timeline = seconds of 1 Hz rows |
 | `log` | `{"since"?: n, "max"?: 1024..32768}` | `{next, text}` | device log tail; pass `next` back as `since` |
-| `pkg.install` | `{"id", "url", "sha256", "size", "name"}` (an entry of the repo's `packages/index.json`) | `{job}`; done → `{installed, version}` | Molty asks its human with one tap, downloads the file itself and checks its sha256 ([packages](#packages-and-scenes)); errors `declined` (said no, or no tap in time), `pkg_timeout`, `bad_url`, `too_big`, `hash_mismatch`, `bad_package`, `no_space`, `busy` |
+| `pkg.available` | none | `{ref, device, packages: [{id, name, version, kind, description, layouts?, skills?, install, installed?, update?}]}` | every package that exists, to offer your human ([packages](#packages-and-scenes)); works with Molty offline; `catalog_unavailable` when the repo's index can't be read |
+| `pkg.install` | `{"id", "url", "sha256", "size", "name"}` (an entry's `install` from `pkg.available`) | `{job}`; done → `{installed, version}` | Molty asks its human with one tap, downloads the file itself and checks its sha256 ([packages](#packages-and-scenes)); errors `declined` (said no, or no tap in time), `pkg_timeout`, `bad_url`, `too_big`, `hash_mismatch`, `bad_package`, `no_space`, `busy` |
 | `pkg.remove` | `{"id"}` | `{removed}` | `not_installed` if it is not there |
 | `pkg.list` | none | `{packages: [{id, name, version, kind, size}]}` | what this Molty has installed |
 | `scene.play` | `{"pkg", "layout", "params"?: {…}, "ttl_s"?: 1..600}` | none | replaces the screen with a package's layout, drawn from a few params (≤ 2048 bytes); back to the creature after `ttl_s` (default 60); `not_installed`, `no_layout`, `bad_params` |
@@ -407,10 +408,21 @@ Ignore fields you don't know.
 
 A package is data only (shapes, images, layouts) that teaches Molty to draw something new; it
 lives in the repo (`packages/`, listed in `packages/index.json`) and Molty downloads it itself.
-The commands need `pkg` / `scene` in `relay.caps` (`409 unsupported` otherwise). Don't drive
-them by hand: a skill that knows the package sends them, e.g. **molty-astro** for the sky
-(`https://github.com/apresmoi/molty.uno/tree/main/skills/molty-astro`). The format:
-`https://github.com/apresmoi/molty.uno/blob/main/docs/PACKAGES.md`.
+The commands need `pkg` / `scene` in `relay.caps` (`409 unsupported` otherwise); `pkg.available` needs neither.
+
+**Finding one.** `pkg.available` (MCP `molty_package {op: "available"}`) is the catalog: each entry's
+`description` is a line to pitch it with ("I can draw the sky on Molty: want the astrology package?"),
+`installed` is the version this Molty has (null = not yet; absent = Molty offline or without packages),
+`update: true` when a newer one exists. Creature packages (duck, cat, octopus) are built in: offer them
+only for an update, and switch with `creature.select`.
+
+**Installing.** Pass the entry's `install` object as is to `pkg.install` (`wait: true`). Tell your human
+first: Molty shows the package's name and they tap it to accept (`declined` = they said no or didn't tap
+in a minute; don't retry unasked). Installs are kept; never reinstall what is `installed` and current.
+
+**Playing.** Don't send `scene.*` by hand: the entry's `skills` know the package, e.g. **molty-astro**
+for the sky (`https://github.com/apresmoi/molty.uno/tree/main/skills/molty-astro`); its `layouts` are
+what it can draw. The format: `https://github.com/apresmoi/molty.uno/blob/main/docs/PACKAGES.md`.
 
 ## MCP (optional)
 
