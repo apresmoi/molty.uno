@@ -1,7 +1,7 @@
 // First words (core/opener.ts): the guard, and the relay's path from the box's line to the agent's continuation.
 
 import { describe, expect, it } from "vitest";
-import { guardOpener, hangs, pushHistory, stripRepeat } from "../src/core/opener.js";
+import { afterShared, clauseEnd, guardOpener, hangs, planReply, pushHistory } from "../src/core/opener.js";
 import { readUntil, setup, until } from "./turn-harness.js";
 
 const msg = (role: "human" | "molty", text: string) => ({ role, text, at: 0 });
@@ -28,7 +28,7 @@ describe("guardOpener", () => {
   });
   it("new plain words fill the gap; a new name does not", () => {
     expect(guardOpener("That sounds quite strange,", "what they were like", []).ok).toBe(true);
-    expect(guardOpener("Maybe David knows,", "who disagreed?", [])).toEqual({ ok: false, why: "unknown_word" });
+    expect(guardOpener("So David knows,", "who disagreed?", [])).toEqual({ ok: false, why: "unknown_word" });
     expect(guardOpener("Canberra, I think,", "what's the capital of Australia?", [])).toEqual({ ok: false, why: "unknown_word" });
   });
   it("refuses a statement about the world, curly apostrophe or not", () => {
@@ -73,7 +73,11 @@ describe("guardOpener", () => {
     ["Okay, the weather in Berlin,", "the weather in Berlin", "parrot"],
     ["Calling my sister,", "call my sister", "parrot"],
     ["Which one?", "pick one", "question"],
-    ["a b c d e f g h i j", "a b c d e f g h i j k", "long"],
+    ["a b c d e f g h i j k l m n o p q r s t u v w", "hello", "long"],
+    ["The tests didn't run, so let me look.", "did the tests pass?", "result"],
+    ["Rust, probably, for a first language.", "rust or go first?", "guess"],
+    ["Ooh, that's a good question, let me look.", "what's a black hole?", "meta"],
+    ["Octopuses, aren't they clever? Let me tell you one.", "tell me an octopus joke", "question"],
     ["no_think", "hello", "format"],
     ["oh yeah/", "hello", "format"],
     ["A ver, the president,", "who is the president?", "language"],
@@ -92,13 +96,47 @@ describe("guardOpener", () => {
   });
 });
 
-describe("stripRepeat", () => {
-  it("cuts the opener once, keeps cues, leaves anything else alone", () => {
-    expect(stripRepeat("Hmm, the weather in Berlin, it's raining.", LINE)).toEqual({ text: "It's raining.", repeated: true });
-    expect(stripRepeat("[happy] Hmm, the weather in Berlin, it's raining.", LINE)).toEqual({ text: "[happy] It's raining.", repeated: true });
-    expect(stripRepeat("It's raining in Berlin.", LINE)).toEqual({ text: "It's raining in Berlin.", repeated: false });
-    expect(stripRepeat(LINE, LINE)).toEqual({ text: LINE, repeated: false }); // nothing left to say
-    expect(stripRepeat("anything", undefined)).toEqual({ text: "anything", repeated: false });
+describe("overlap: afterShared, clauseEnd, planReply", () => {
+  const W = "Okay, the weather in Berlin, for tomorrow, let me walk you through it.".split(" ");
+  const line = (o: { sent: number; ended?: boolean; stop?: number; keep?: number }) => ({ words: W, ended: false, ...o });
+
+  it("afterShared: the line's words the reply starts with, word for word, cues to the front", () => {
+    expect(afterShared("Okay, the weather in Berlin, rain until noon.", W)).toEqual({ n: 5, rest: "rain until noon." });
+    expect(afterShared("[happy] okay the WEATHER, sunny.", W)).toEqual({ n: 3, rest: "[happy] sunny." });
+    expect(afterShared("Okay, the [nod] weather in Berlin, rain.", W, 3)).toEqual({ n: 3, rest: "[nod] in Berlin, rain." });
+    expect(afterShared("Rain until noon.", W)).toEqual({ n: 0, rest: "Rain until noon." });
+    expect(afterShared("Okay, the weather", W)).toEqual({ n: 3, rest: "" }); // nothing else to say
+    expect(afterShared("Okay, the weather. Sunny.", ["Okay,", "the", "weather."])).toEqual({ n: 3, rest: "Sunny." });
+  });
+
+  it("clauseEnd: the words up to the comma or stop of the clause playing", () => {
+    expect(clauseEnd(W, 0)).toBe(0);
+    expect(clauseEnd(W, 1)).toBe(1);
+    expect(clauseEnd(W, 2)).toBe(5);
+    expect(clauseEnd(W, 6)).toBe(7);
+    expect(clauseEnd(W, 9)).toBe(W.length);
+  });
+
+  it("switch: the reply branches where the line has not got yet", () => {
+    expect(planReply("Okay, the weather in Berlin, rain until noon.", line({ sent: 3 }))).toEqual({ stop: 5, text: "rain until noon.", how: "switch" });
+    expect(planReply("Okay, the weather in Berlin, rain.", line({ sent: 2, keep: 5 }))).toEqual({ stop: 5, text: "rain.", how: "switch" });
+    expect(planReply("rain until noon.", line({ sent: 2 }), 5)).toEqual({ stop: 5, text: "rain until noon.", how: "switch" }); // keep named on the reply
+  });
+
+  it("pause: the line stopped at the kept word, the reply follows it", () => {
+    expect(planReply("Okay, the weather in Berlin, rain.", line({ sent: 5, ended: true, stop: 5, keep: 5 }))).toEqual({ stop: 5, text: "rain.", how: "switch" });
+  });
+
+  it("past the branch point: the clause ends, then a repair and the reply without what was said", () => {
+    expect(planReply("Okay, the weather, rain until noon.", line({ sent: 6 }))).toEqual({ stop: 7, text: "I mean, rain until noon.", how: "repair" });
+    expect(planReply("Okay, the weather, rain.", line({ sent: 13, ended: true, stop: 13 }))).toEqual({ stop: 13, text: "I mean, rain.", how: "repair" });
+    // the reply repeats the line up to the clause end anyway: no repair needed
+    expect(planReply("Okay, the weather in Berlin, for tomorrow, rain.", line({ sent: 6 }))).toEqual({ stop: 7, text: "rain.", how: "switch" });
+  });
+
+  it("a reply that ignores the line: it plays after the clause playing now", () => {
+    expect(planReply("Rain until noon.", line({ sent: 2 }))).toEqual({ stop: 5, text: "Rain until noon.", how: "after" });
+    expect(planReply("Rain until noon.", line({ sent: 13, ended: true, stop: 13 }))).toEqual({ stop: 13, text: "Rain until noon.", how: "after" });
   });
 });
 
@@ -166,7 +204,7 @@ describe("first words", () => {
     expect((await traces(w, turn))[0].data).toMatchObject({ dropped: "unknown_word", text: "Canberra, I think," });
   });
 
-  it("the agent's answer queues behind the line, in order, with a repeat cut and logged", async () => {
+  it("the agent's answer queues behind the line, in order, without the line's words, and the log says how", async () => {
     const w = await world({ ttsMs: 40 });
     const turn = await w.shake(SPEECH);
     const u = await utterance(w);
@@ -174,8 +212,8 @@ describe("first words", () => {
     const said = (await w.room.command(w.a, "say", { text: `${LINE} it's raining.`, in_reply_to: turn })) as any;
     expect(said.ok).toBe(true);
     await until(() => says(w).length === 2);
-    expect(says(w)).toEqual([LINE, "It's raining."]);
-    expect((await traces(w, turn)).some((e: any) => e.data.repeated)).toBe(true);
+    expect(says(w)).toEqual([LINE, "it's raining."]);
+    expect((await traces(w, turn)).some((e: any) => e.data.reply === "switch")).toBe(true);
   });
 
   it("left hanging: a short closing after a while, once; an agent acting in time stops it", async () => {

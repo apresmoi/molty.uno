@@ -425,6 +425,42 @@ human stops ─▶ chirp + thinking (device)
   `filler_in_ms` (ms from then until the filler; absent = off or nothing heard). A relay older
   than the 400 ms floor reads 400..1499 as not reported (2500).
 
+### First words
+
+With the owner's `first_words: "opener"` and a box that offers it (`voice.hello opener`), the
+box's small model (`services/molty-voice/molty_voice/opener.py`) writes the real start of the
+answer the moment the human finishes: 12 to 20 words in short clauses (react, say the topic back,
+lead into the answer), never a fact. The relay's guard (`core/opener.ts guardOpener`) refuses a
+line with a name, a number, a yes or no, a result, a guess, talk about the conversation or a
+question; then nothing is said. A line that passes plays at once (a relay-owned lead-in) and
+replaces the auto filler.
+
+- **The plan.** The `utterance` (and a talk's result) carries `opener` (the whole planned line,
+  playing now) and `opener_wpm` (how fast lines are spoken, measured on the last one).
+- **`keep {words?, in_reply_to?}`** (relay command, `POST …/cmd`, MCP `molty_keep`): with `words`
+  (m), it claims the turn and the line's first m words: the relay never plays past word m. Its
+  audio goes out about a second ahead of the speaker, so word m+1 may already be on its way:
+  then the line finishes the clause on the wire and the result says so. Result `{keep, said,
+  late?, words, playing, sent, wpm}` (`keep`: the words that will be played, `said`: those
+  words, `playing` / `sent`: the word playing now and the words already sent, from the stream's
+  own timing and the TTS word cues). No `words`: the same position, nothing claimed. No line on
+  this turn: `{keep: null}`.
+- **The reply** (`say` / `talk` answering the turn) starts with the line's first m words word for
+  word, or passes `keep: m` and sends only what follows. The relay plans it once
+  (`core/opener.ts planReply`): the line not yet past word m → it stops there and the reply's
+  words take over (speech synthesised meanwhile, `cmd say` on the line's `say.done`); the line
+  already stopped at m (after a keep) and nothing came → Molty pauses there (the `hmm` built-in,
+  then `thinking`) and the reply follows when it comes; the line already past m → it finishes
+  the clause playing, then `"I mean,"` and the reply without the words already said; a reply
+  that ignores the line → it plays after the clause playing now. The reply's case is kept: a
+  continuation in lower case starts without the TTS's sentence-start pause.
+- **Never busy.** A lead-in (a draft's opener, first words, the closing below) hands the speaker
+  on only at its `say.done`: a reply queued behind it never meets a device still playing.
+- **Left hanging.** A line that stops mid-sentence and nothing from any agent within 15 s:
+  Molty says "Hmm, give me a moment." once.
+- **Trace.** `ev: "opener"` entries on the turn: `{text, ms, dropped?}` (the line), `{keep,
+  asked, sent}` (a keep), `{reply: switch | repair | after, stop, words}` (the reply's plan).
+
 ### Shake to talk
 
 The human shakes Molty and just speaks: no agent round trip before the mic opens (with an agent
@@ -762,7 +798,8 @@ What the screen does between commands (`device/firmware/main/fluid/fluid_directo
 | `draft` (relay) | `{turn_id, based_on, opener, max_new_words?, voice?}` | `{turn_id, based_on, status:"held", max_new_words, threshold}` | only during an open turn ([While the human speaks](#while-the-human-speaks)) |
 | `react` (relay) | `{turn_id, mood}` or `{turn_id, action}` | `{turn_id, shown, for_ms, next_after_ms}` | only during an open turn; ≤ 1 per 3 s |
 | `show` | `{text, wpm?}` | — | speed reader in the fluid; back to the creature 1.5 s after the last word |
-| `say` | `{text, voice?, in_reply_to?}` | `{job}` immediately | relay does TTS (streamed per sentence) + streams; device sets `speaking`, shows text in sync. `text` may carry [inline cues](#inline-cues-and-actions). Job result `{ms, text, timings}` (`text` as spoken, cues stripped). `unsupported` without a speaker; `in_reply_to` / `turn_claimed`: [Shake to talk](#shake-to-talk) |
+| `say` | `{text, voice?, in_reply_to?, keep?}` | `{job}` immediately | relay does TTS (streamed per sentence) + streams; device sets `speaking`, shows text in sync. `text` may carry [inline cues](#inline-cues-and-actions). Job result `{ms, text, timings}` (`text` as spoken, cues stripped). `unsupported` without a speaker; `in_reply_to` / `turn_claimed`: [Shake to talk](#shake-to-talk) |
+| `keep` (relay) | `{words?, in_reply_to?}` | `{keep, said, late?, words, playing, sent, wpm}` or `{keep: null}` | [first words](#first-words): the reply continues after the line's first `words` words |
 | `quick` (relay) | `{id, in_reply_to?, force?}` | `{job, phrase, text, cached}` immediately, or `{skipped:"filled", filler}` | a cached [quick phrase](#quick-phrases-and-the-auto-filler), streamed as a say with no TTS; the same agent's next say / talk queues behind it; `not_found` for an unknown id |
 | `listen` | `{ms? 0..30000 (0 = unlimited; omit = the device's setting, 30000 out of the box), end_silence_ms?, no_speech_ms?, vad?, ring_color?}` | `{job}` immediately | device sets `listening`, streams mic, stops at end of speech ([Listen end of speech](#listen-end-of-speech-device-vad)); relay STT → job result `{text, duration_ms, peak, rms, reason, speech_ms?, timings}`. `unsupported` without a mic |
 | `talk` (relay) | `{say?, listen?=true, listen_ms? 0..30000 (as listen's ms), voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?}` | blocks ≤ 24 s | say then listen in one job: `{job, status:"done", heard, said?, reason, speech_ms?, filler_in_ms?, ms:{tts_first_audio, speech, listen, stt, total}, timings}` (`filler_in_ms`: [auto filler](#quick-phrases-and-the-auto-filler)); over 24 s `{job, status:"pending"}` |

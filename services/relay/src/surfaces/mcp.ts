@@ -59,6 +59,10 @@ const CLIENT_TIMING: Prop = {
   additionalProperties: { type: "number" },
   description: "Optional: your own latency for this turn, in ms (up to 8 keys, lower case, numbers 0..3600000), e.g. {received_ms, model_ms}: event received -> this call, your model's run. Include it to help debug latency: it lands in the turn's trace (activity log), never on Molty.",
 };
+const KEEP: Prop = {
+  type: "integer",
+  description: "Optional, with an utterance's `opener`: your text is what follows the opener's first `keep` words (instead of starting with them word for word).",
+};
 const IN_REPLY_TO: Prop = {
   type: "string",
   description: "The turn_id of the `utterance` you are answering (the human shook Molty and spoke). The first agent to answer a turn claims it; other agents get turn_claimed for 60 s. Adds timings.turn {id, reply, first_audio} (ms after the utterance).",
@@ -203,6 +207,7 @@ export const TOOLS: ToolDef[] = [
         text: { type: "string", description: "Text to synthesize, at most 4096 bytes." },
         voice: { type: "string", description: "Optional relay TTS voice (provider-specific, e.g. luna for Workers AI Aura)." },
         in_reply_to: IN_REPLY_TO,
+        keep: KEEP,
         client_timing: CLIENT_TIMING,
         wait: { type: "boolean", description: `true: block until spoken (at most ${TALK_BUDGET_MS / 1000} s, then {job, status:"pending"} for molty_wait).` },
       },
@@ -224,6 +229,16 @@ export const TOOLS: ToolDef[] = [
     ),
     auth: true,
     run: (api, t, a) => api.command(t, "quick", a),
+  },
+  {
+    name: "molty_keep",
+    description: `First words: an utterance with \`opener\` means Molty is already speaking those planned words (opener_wpm words a minute). Claim your branch point at once, with your fastest model, before you think: keep {words: m, in_reply_to}. Molty never plays past word m; start your reply with the opener's first m words word for word (or pass keep: m on molty_talk / molty_say and send only what follows), and it switches to your words at word m. Too late for m: {keep, late:true}: Molty finishes the clause playing now; start your reply with \`said\`. Without words: where it is ({words, playing, sent, wpm}). Claims the turn like molty_say.`,
+    inputSchema: obj({
+      words: { type: "integer", description: "How many of the opener's words your reply keeps (0..its length)." },
+      in_reply_to: IN_REPLY_TO,
+    }),
+    auth: true,
+    run: (api, t, a) => api.command(t, "keep", a),
   },
   {
     name: "molty_phrases",
@@ -267,6 +282,7 @@ export const TOOLS: ToolDef[] = [
       listen_ms: { type: "integer", description: LISTEN_MS_DOC },
       voice: { type: "string", description: "Optional relay TTS voice." },
       in_reply_to: IN_REPLY_TO,
+      keep: KEEP,
       client_timing: CLIENT_TIMING,
       ...VAD_PROPS,
     }),
