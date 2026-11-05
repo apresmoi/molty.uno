@@ -84,6 +84,7 @@ import { LISTEN_ADOPT_FEATURE, LOCAL_LISTEN_RE, type TurnClaim, type TurnRecord,
 import { API_VERSION, FEATURES, compareVersions } from "./version.js";
 import type { ReleaseLookup, ReleaseSource } from "./releases.js";
 import { PackageCatalog } from "./catalog.js";
+import { SkillVersion } from "./skill-version.js";
 import { type DeviceFacts, type FirmwareBlock, CONSOLE_HINT, firmwareBlock, howToUpdate, installable, tooOld, updateActions } from "./updates.js";
 import {
   type DeliveryError,
@@ -692,6 +693,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private readonly resolveHost: RoomDeps["resolveHost"];
   private readonly releases: ReleaseSource;
   private readonly catalog: PackageCatalog;
+  private readonly skillVersion: SkillVersion;
   /** An override of the filler's classifier (RoomDeps.classifier); absent = Molty's reflex (fillerCategory). */
   private readonly classifier: UtteranceClassifier | undefined;
   /** The voice box, spoken to over whichever voice socket is live (in-flight requests only). */
@@ -799,6 +801,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     this.resolveHost = deps.resolveHost;
     this.releases = deps.releases ?? NO_RELEASES;
     this.catalog = new PackageCatalog(this.fetcher, this.clock, deps.packagesRef);
+    this.skillVersion = new SkillVersion(this.fetcher, this.clock, this.catalog.ref);
     this.reflexKeys = { ...(deps.reflexKeys?.jev ? { jev: deps.reflexKeys.jev } : {}), ...(deps.reflexKeys?.openai ? { openai: deps.reflexKeys.openai } : {}) };
     this.classifier = deps.classifier;
     this.box = new RemoteVoiceProvider(() => this.boxSocket(), this.clock);
@@ -1055,10 +1058,11 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     await this.appendEvent(CREATURE_EVENT, c as JsonObject, true);
   }
 
-  /** The utterance's `device` learns who Molty is now (its creature), when the device said. */
-  private async withCreature(data: JsonObject): Promise<JsonObject> {
-    const c = await this.kv.get<DeviceCreature>(K.creature);
+  /** The utterance's `device` learns who Molty is now (its creature, when the device said) and the skill's newest version. */
+  private async withDevice(data: JsonObject): Promise<JsonObject> {
+    const c = await this.kv.get<DeviceCreature>(K.creature), skill = this.skillVersion.peek();
     if (c) (data.device as JsonObject).creature = c as JsonObject;
+    if (skill) (data.device as JsonObject).skill = skill;
     return data;
   }
 
@@ -1289,6 +1293,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
           setup: await this.setupChoices(),
           // who Molty is now: the creature on screen, its look and moves (null: the firmware does not say)
           creature: ((await this.kv.get<DeviceCreature>(K.creature)) ?? null) as JsonObject | null,
+          // the skill's newest version (skills/molty/CHANGES.md); null until GitHub has answered once
+          skill: this.skillVersion.peek() ?? null,
           events,
           webhook: agent.webhook ? (redactWebhook(agent.webhook) as JsonObject) : null,
           firmware: firmware as unknown as JsonObject,
@@ -2066,7 +2072,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       voice: await this.voiceName(),
     });
     if (r.opener) Object.assign(data, { opener: r.opener, opener_wpm: this.lineWpm });
-    await this.appendEvent(UTTERANCE_EVENT, await this.withCreature(data), true);
+    await this.appendEvent(UTTERANCE_EVENT, await this.withDevice(data), true);
     await this.activity.record({ ts: this.clock.now(), kind: "device", ev: "utterance", job: id, data: { text: text.slice(0, 500), reason: r.reason, trigger: "talk", words: words(text).length } });
   }
 
@@ -3196,7 +3202,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         if (fill !== undefined) data.filler_in_ms = fill;
       }
       // agent-facing, one per turn: not subject to the device event rate cap
-      await this.appendEvent(UTTERANCE_EVENT, await this.withCreature(data), true);
+      await this.appendEvent(UTTERANCE_EVENT, await this.withDevice(data), true);
       if (r.trace) r.trace.relay.utterance = this.clock.now() - r.trace.t0;
       await this.activity.record({
         ts: this.clock.now(),

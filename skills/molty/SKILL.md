@@ -33,7 +33,7 @@ private one, see [self-hosting](references/self-hosting.md)).
    a Relay? Run it with `MOLTY_RELAY=<that relay>` in front; it is stored too. Without a shell, pair over REST or
    MCP: [api.md](references/api.md#pair).
 2. **The agent token is a secret.** Never print, echo or paste it — not in chat, logs,
-   commits or on the device. It is scoped to this one Molty; the human can revoke it.
+   commits or on the device.
 3. **Say hello once**, short: `"<skill-dir>/scripts/talk.sh" "Hi, I'm here." --no-listen`,
    then tell your human it worked.
 4. **Hear Molty.** Pick how you receive events from your harness:
@@ -61,17 +61,15 @@ private one, see [self-hosting](references/self-hosting.md)).
   tool. No planning, lookups or status checks.
   - Can answer from what you know → one `talk`, the answer. Nothing else in the turn.
   - Needs any work (search, tools, a long think) → say what you'll do and start working:
-    `talk {"say":"Searching for that. [working]"}`. Molty animates itself, its own small
-    moves, until you speak again. Never send gestures to fill the wait. Over ~20 s of work: another one-liner saying
+    `talk {"say":"Searching for that. [working]"}`. Molty animates itself until you
+    speak again. Never send gestures to fill the wait. Over ~20 s of work: another one-liner saying
     where you are, `[working]` again. Then answer.
 - **Fastest model for that first line**, always; a slower one only for the work behind it.
-- **Follow a `202 pending` talk to its end.** Never finish a run with a talk unread: their
-  words are in it.
+- **Follow a `202 pending` talk to its end**: their words are in it.
 - **Wake only on `utterance`** unless your human gave an input a job: other runs collide.
 - **A shake means "I want to talk".** You get one `utterance` with their words: answer with talk
   and `in_reply_to: <turn_id>`. `turn_claimed`: stay quiet.
-- **Never speak while they talk**: `utterance.partial` is context. (`human_speaking`). Only `draft`
-  or `react`.
+- **Never speak while they talk** (`utterance.partial`, `human_speaking`): only `draft` or `react`.
 - **Slow wake?** `quick {id}` is cached, instant audio; skipped if Molty already filled. Vary them;
   register your own (`molty_phrases`).
 - **`opener`: Molty is saying it now.** First call: `keep {words: m, in_reply_to}`, then start
@@ -84,7 +82,9 @@ private one, see [self-hosting](references/self-hosting.md)).
   acknowledge / dismiss, never an answer.
 - **New drawings** (astrology, ...): `pkg.available` lists them to offer; install takes your human's
   tap; then use the package's skill ([packages](references/api.md#packages-and-scenes)).
-- **Read `relay.caps`, not versions** (`status` command, or `device.caps` on an `utterance`).
+- **Read `relay.caps`, not versions** (`status`, or `device.caps` on an `utterance`).
+- **This skill is version 2026.11.05.** `device.skill` (utterance) or `relay.skill` (status) newer?
+  Read CHANGES.md from GitHub, re-read the files it names, tell your human what's new in one line.
 - **Don't talk unprompted or repeatedly.** `no_speech` after a wake → one short line or nothing.
 - **Errors:** `audio_busy` (wait for the current audio, retry once), `turn_claimed` (stay
   quiet), `device_offline` (tell them another way),
@@ -93,13 +93,13 @@ private one, see [self-hosting](references/self-hosting.md)).
 
 ## References
 
-- [api.md](references/api.md) — pairing in full, REST commands, talk, ask, errors, MCP, revoke.
+- [api.md](references/api.md) — pairing, REST commands, talk, ask, errors, MCP.
 - [events.md](references/events.md) — event types, the `utterance`, inbox, webhooks, the CLI stream.
 - [talking-fast.md](references/talking-fast.md) — drafts, end of turn, the ack chirp, latency rules.
 - [personalize.md](references/personalize.md) — learning your human; what they can customise.
 - [etiquette.md](references/etiquette.md) — when to speak, emotes, your ledger.
 - [voice.md](references/voice.md) — how Molty gets a voice, or text only: what each means for you.
 - [voice-box.md](references/voice-box.md) — the owner's own GPU voice box.
+- [CHANGES.md](CHANGES.md) — what is new, by skill version.
 - [updates.md](references/updates.md) — firmware updates, `api_version`, updating this skill.
 - [activity.md](references/activity.md) — `molty_activity`: debug your own turns.
-- [self-hosting.md](references/self-hosting.md) — run your own private relay.
