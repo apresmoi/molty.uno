@@ -112,6 +112,10 @@ void  cp_destroy(cp_t *c);
 const char *cp_id(const cp_t *c);
 const char *cp_name(const cp_t *c);
 const char *cp_version(const cp_t *c);
+/** What an agent is told about this creature, as JSON: {id, name, about?, gestures, moods}. about is the
+ *  package's own (its look, a line per gesture and mood); gestures are those it plays that this firmware
+ *  knows, moods idle and its own, in the firmware's order. */
+const char *cp_info(const cp_t *c);
 const cp_body_t *cp_body(const cp_t *c);
 /** The bone index of `id`, nbones for "root", -1 for none. */
 int   cp_bone_find(const cp_t *c, const char *id);

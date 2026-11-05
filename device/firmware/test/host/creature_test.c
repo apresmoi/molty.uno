@@ -6,6 +6,8 @@
  *             the same pose, bone outputs, palette and ambient, every frame.
  *   strict    broken copies of a package (unknown key, op, bone, group; a wrong type; over
  *             the limits) are refused with a reason.
+ *   info      cp_info, what the device tells the relay: the package's about, its gestures,
+ *             idle and its moods.
  *
  *   render    each creature through the device's whole frame (mood engine, player, body,
  *             ambient, fill, fluid, glyphs): every mood fills the target, the eyes are holes,
@@ -21,6 +23,7 @@
 #include "cute_act.h"
 #include "cute_rig.h"
 #include "fluid_sim.h"
+#include "cJSON.h"
 
 #include <time.h>
 
@@ -185,7 +188,9 @@ static void test_strict(const char *pkgdir) {
     char *j = slurp(path, &len);
     CHECK(j != NULL, "octopus.json");
     if (!j) return;
-    refused(j, "\"creature\":{\"body\"", "\"creature\":{\"extra\":1,\"body\"", "an unknown key");
+    refused(j, "\"creature\":{\"about\"", "\"creature\":{\"extra\":1,\"about\"", "an unknown key");
+    refused(j, "\"about\":{\"look\":\"", "\"about\":{\"voice\":\"squeaky\",\"look\":\"", "an unknown about key");
+    refused(j, "\"about\":{\"look\":\"A", "\"about\":{\"look\":\"\\tA", "a look that is not printable words");
     refused(j, "[\"sin\",", "[\"sine\",", "an unknown op");
     refused(j, "[\"pos:", "[\"wat:", "an unknown modifier");
     refused(j, "\"bone\":\"head\"", "\"bone\":\"noggin\"", "a part on an unknown bone");
@@ -381,12 +386,39 @@ static double bench_v1(const char *molty) {
     return us;
 }
 
+/* cp_info lists every gesture and mood the package plays and carries its about, line for line */
+static void test_info(const char *pkgdir, const char *id) {
+    char path[512]; size_t len;
+    snprintf(path, sizeof(path), "%s/%s/%s.json", pkgdir, id, id);
+    char *json = slurp(path, &len);
+    const char *err = NULL;
+    cp_t *c = json ? cp_create(json, len, &err) : NULL;
+    CHECK(c != NULL, "%s: create (%s)", id, err ? err : "no file");
+    if (!c) { free(json); return; }
+    cJSON *pkg = cJSON_Parse(json), *info = cJSON_Parse(cp_info(c));
+    const cJSON *cr = cJSON_GetObjectItem(pkg, "creature"), *ab = cJSON_GetObjectItem(info, "about");
+    CHECK(info && !strcmp(cJSON_GetObjectItem(info, "id")->valuestring, id), "%s: info id", id);
+    CHECK(!strcmp(cJSON_GetObjectItem(info, "name")->valuestring, cp_name(c)), "%s: info name", id);
+    CHECK(cJSON_Compare(ab, cJSON_GetObjectItem(cr, "about"), true), "%s: info about is not the package's", id);
+    const cJSON *g = cJSON_GetObjectItem(info, "gestures"), *m = cJSON_GetObjectItem(info, "moods"), *e;
+    CHECK(cJSON_GetArraySize(g) == cJSON_GetArraySize(cJSON_GetObjectItem(cr, "gestures")), "%s: %d gestures listed", id, cJSON_GetArraySize(g));
+    cJSON_ArrayForEach(e, g) CHECK(cJSON_GetObjectItem(cJSON_GetObjectItem(cr, "gestures"), e->valuestring) && cJSON_GetObjectItem(cJSON_GetObjectItem(ab, "gestures"), e->valuestring), "%s: gesture %s", id, e->valuestring);
+    CHECK(cJSON_GetArraySize(m) >= 1 && !strcmp(cJSON_GetArrayItem(m, 0)->valuestring, "idle"), "%s: idle first", id);
+    int own = 0;
+    cJSON_ArrayForEach(e, m) { own += !!cJSON_GetObjectItem(cJSON_GetObjectItem(cr, "moods"), e->valuestring); CHECK(cJSON_GetObjectItem(cJSON_GetObjectItem(ab, "moods"), e->valuestring) != NULL, "%s: no about for mood %s", id, e->valuestring); }
+    CHECK(own == cJSON_GetArraySize(cJSON_GetObjectItem(cr, "moods")), "%s: %d of its moods listed", id, own);
+    cJSON_Delete(pkg); cJSON_Delete(info);
+    cp_destroy(c);
+    free(json);
+}
+
 int main(int argc, char **argv) {
     if (argc < 4) { printf("usage: creature_test <packages dir> <golden dir> <duck.molty> [out dir]\n"); return 2; }
     printf("creature player host test\n");
     test_hash();
     for (const char *const *id = (const char *const[]){ "duck", "cat", "octopus", NULL }; *id; id++) test_golden(argv[1], argv[2], *id);
     test_strict(argv[1]);
+    for (const char *const *id = (const char *const[]){ "duck", "cat", "octopus", NULL }; *id; id++) test_info(argv[1], *id);
     for (const char *const *id = (const char *const[]){ "duck", "cat", NULL }; *id; id++) test_planted(argv[1], *id);
     const double v1 = bench_v1(argv[3]);
     CHECK(v1 > 0, "the .molty duck to compare with (%s)", argv[3]);

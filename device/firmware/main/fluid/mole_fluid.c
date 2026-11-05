@@ -204,6 +204,8 @@ static int      s_req_mood = -1;
 static bool     s_req_work = false;             /* mood `working` (fd_agent_work; s_req_hold_s) */
 static float    s_req_hold_s = -1.f;                /* with s_req_mood: < 0 = its default */
 static char     s_cute_name[40] = "", s_cute_err[40] = "";
+static char    *s_cr_info;            /* the creature as the agent is told (cp_info), PSRAM; NULL before a load */
+static unsigned s_cr_gen;             /* moves when s_cr_info does */
 static cute_rt_t *s_cute = NULL;                    /* task-owned                        */
 static cpk_t    *s_cpk = NULL;                      /* task-owned                        */
 static int      s_cute_tris = 0;
@@ -729,9 +731,20 @@ static void load_creature(const uint8_t *buf, size_t len, bool pkg) {
     } else {
         ESP_LOGW(TAG, "creature load failed: %s", err);
     }
+    /* what the agent is told: the package's own info; a .molty only has its name */
+    char *info = NULL;
+    if (rt || k) {
+        cJSON *o = k ? NULL : cJSON_CreateObject();
+        if (o) { cJSON_AddStringToObject(o, "id", ""); cJSON_AddStringToObject(o, "name", name); }
+        char *mo = o ? cJSON_PrintUnformatted(o) : NULL;
+        const char *src = k ? cp_info(cpk_player(k)) : mo;
+        if (src && (info = heap_caps_malloc(strlen(src) + 1, MALLOC_CAP_SPIRAM))) strcpy(info, src);
+        cJSON_free(mo); cJSON_Delete(o);
+    }
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     if (rt || k) { strlcpy(s_cute_name, name, sizeof(s_cute_name)); s_cute_err[0] = '\0'; }
     else strlcpy(s_cute_err, err, sizeof(s_cute_err));
+    if (info) { heap_caps_free(s_cr_info); s_cr_info = info; s_cr_gen++; }
     xSemaphoreGive(s_mutex);
     heap_caps_free(spec);
 }
@@ -816,6 +829,15 @@ esp_err_t mole_fluid_creature_package(const char *id, char *json, size_t len) {
     if (alloc_bufs() != ESP_OK) { heap_caps_free(json); return ESP_ERR_NO_MEM; }
     queue_creature((uint8_t *)json, len, true, id);
     return ESP_OK;
+}
+
+char *mole_fluid_creature_info(unsigned *gen) {
+    if (!s_mutex) return NULL;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    char *out = s_cr_info && s_cr_gen != *gen ? malloc(strlen(s_cr_info) + 1) : NULL;
+    if (out) { strcpy(out, s_cr_info); *gen = s_cr_gen; }
+    xSemaphoreGive(s_mutex);
+    return out;
 }
 
 void mole_fluid_creature_id(char *id, size_t n) {
@@ -1293,10 +1315,11 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     const int idle_life = s_idle_life;
     char cname[40], cerr[40], cid[PKG_ID_MAX + 1];
     memcpy(cname, s_cute_name, sizeof(cname)); memcpy(cerr, s_cute_err, sizeof(cerr)); memcpy(cid, s_cr_id, sizeof(cid));
+    cJSON *info = s_cr_info ? cJSON_Parse(s_cr_info) : NULL;   /* its gestures and moods (a package's) */
     cJSON *root = cJSON_CreateObject();
     if (root) cJSON_AddStringToObject(root, "text", s_text ? s_text : "");
     xSemaphoreGive(s_mutex);
-    if (!root) return ESP_ERR_NO_MEM;
+    if (!root) { cJSON_Delete(info); return ESP_ERR_NO_MEM; }
 
     char sb[24], grid[12];
     snprintf(grid, sizeof(grid), "%dx%d", c.grid_w, c.grid_h);
@@ -1324,8 +1347,13 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
             cJSON_AddStringToObject(cj, "package", cid);   /* "" = a .molty */
             cJSON_AddNumberToObject(cj, "tris", st.ctris);
             if (cerr[0]) cJSON_AddStringToObject(cj, "error", cerr);
+            for (const char *const *k = (const char *const[]){ "gestures", "moods", NULL }; *k; k++) {
+                cJSON *l = cJSON_DetachItemFromObjectCaseSensitive(info, *k);
+                if (l) cJSON_AddItemToObject(cj, *k, l);
+            }
         }
     }
+    cJSON_Delete(info);
     cJSON_AddStringToObject(root, "palette",     FLUID_PAL_NAMES[c.palette]);
     {   /* the listening ring's default colour: the console's setting, else the accent */
         char rb[12];

@@ -262,6 +262,15 @@ static cJSON *evt(const char *name, cJSON **data)
 
 static double clamp01(double v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
 
+cJSON *link_evt_creature_frame(const char *info)
+{
+    cJSON *data = info ? cJSON_Parse(info) : NULL, *j = cJSON_IsObject(data) ? frame("evt") : NULL;
+    if (!j) { cJSON_Delete(data); return NULL; }
+    cJSON_AddStringToObject(j, "name", "creature");
+    cJSON_AddItemToObject(j, "data", data);
+    return j;
+}
+
 cJSON *link_evt_shake_frame(double peak_g, int reversals, unsigned ms, const char *listen)
 {
     cJSON *data, *j = evt("shake", &data);

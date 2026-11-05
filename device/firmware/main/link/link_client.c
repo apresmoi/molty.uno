@@ -287,6 +287,7 @@ static void link_task(void *arg)
     unsigned backoff = 1;
     int64_t next = 0, started = 0, last_ping = 0, last_pong = 0, forget_deadline = 0;
     char announced[9] = "";
+    unsigned creature_sent = 0;   /* the creature's generation the relay has (link_cmd_creature_frame) */
     for (;;) {
         int64_t now = esp_timer_get_time();
         bool reset = atomic_exchange(&s_reconnect, false);
@@ -343,6 +344,13 @@ static void link_task(void *arg)
             else atomic_store(&s_lost, true);
             cJSON_Delete(code);
         }
+        if (link_client_connected()) {   /* the creature on screen, after each welcome and each change */
+            unsigned gen = creature_sent;
+            cJSON *cf = link_cmd_creature_frame(&gen);
+            if (cf && link_send_json(cf) == ESP_OK) creature_sent = gen;
+            else if (cf) atomic_store(&s_lost, true);
+            cJSON_Delete(cf);
+        }
         bool online = wifi_ready();
         if (session && (!online || atomic_load(&s_lost) ||
             (!link_client_connected() && now - started > 15000000) ||
@@ -381,6 +389,7 @@ static void link_task(void *arg)
                         link_audio_relay_adopts(link_welcome_has(j, LINK_FEATURE_ADOPT));   /* shake to talk */
                         link_audio_resume_welcome(j);
                         log_welcome(j, now);
+                        creature_sent = 0;
                         backoff = 1; last_pong = now; last_ping = now;
                     } else if (!strcmp(t->valuestring, "pong")) last_pong = now;
                     else if (!strcmp(t->valuestring, "ping")) {
