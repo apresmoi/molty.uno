@@ -18,7 +18,9 @@ screen    the device draws the layout from the package's own shapes and images
 ## 1. The package file
 
 One JSON file, `packages/<id>/<id>.json`, at most **256 KB**. Built from sources by `packages/<id>/build.mjs`.
-`packages/index.json` lists every package: `{ "<id>": { "name", "version", "kind", "path", "size", "sha256" } }`.
+`packages/index.json` lists every package: `{ "<id>": { "name", "version", "kind", "description", "layouts"?, "skills"?, "path", "size", "sha256" } }`.
+`description` is one line from `packages/<id>/description.txt` (what it adds, for an agent to pitch it to its human); a scenes
+package lists its `layouts` and the `skills` that play it (those whose `molty.json` names it). `packages/tools/index.mjs` builds an entry.
 `tools/scripts/check-packages.mjs` validates every package and the index (size, hash, schema, every reference resolves).
 
 ```jsonc
