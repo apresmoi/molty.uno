@@ -12,7 +12,7 @@ export const WORKING_CAP = "working";
 export const WORKING_ACTIONS: readonly string[] = ["inspect", "paddle"];
 /** A say's `[working]` cue: never a device mark. The relay plays the say to its end, then sets the mood. */
 export const WORKING_MOOD = "working";
-export const COMMANDS = ["status", "state", "mood", "show", "say", "quick", "listen", "volume", "imu", "diag", "log", "act", "gestures", "pkg.install", "pkg.remove", "pkg.list", "scene.play", "scene.queue", "scene.clear", "creature.select", "creature.list"] as const;
+export const COMMANDS = ["status", "state", "mood", "show", "say", "quick", "keep", "listen", "volume", "imu", "diag", "log", "act", "gestures", "pkg.install", "pkg.remove", "pkg.list", "scene.play", "scene.queue", "scene.clear", "creature.select", "creature.list"] as const;
 /** What the human's inputs can do (`gestures`; firmware: sense/gesture.h). */
 export const GESTURE_INPUTS = ["tap", "double_tap", "button_accept", "button_reject"] as const;
 export const GESTURE_ACTIONS = ["none", "talk", "event", "stop"] as const;
@@ -39,6 +39,8 @@ export const MAX_SCENE_TTL_S = 600;
 
 export const MAX_SHOW_BYTES = 16384;
 export const MAX_SAY_BYTES = 4096;
+/** keep: the most first words a reply can continue after (a line is at most OPENER.maxWords). */
+export const MAX_KEEP_WORDS = 64;
 /** Inline `[mood]` / `[action]` cues kept per say (core/speech.ts parseCues): later ones are dropped. */
 export const MAX_SAY_MARKS = 16;
 /** A say's marks: [word index of the stripped text, mood or action name]; fired when that word's cue plays. */
@@ -318,6 +320,13 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
       if (args.force !== undefined && typeof args.force !== "boolean") throw invalid("force must be a boolean");
       const reply = turnId(args.in_reply_to);
       return { name: n, args: { id: args.id, ...(args.force === true ? { force: true } : {}) }, job: true, ...(reply !== undefined ? { in_reply_to: reply } : {}) };
+    }
+    case "keep": {
+      // first words (core/opener.ts): {words?, in_reply_to?}; relay-only. No words: where the line is
+      only(args, ["words", "in_reply_to"]);
+      const reply = turnId(args.in_reply_to);
+      const out: JsonObject = args.words === undefined ? {} : { words: int(args.words, "words", 0, MAX_KEEP_WORDS) };
+      return { name: n, args: out, job: false, ...(reply !== undefined ? { in_reply_to: reply } : {}) };
     }
     case "listen": {
       only(args, ["ms", "ring_color", "ack", ...VAD_KEYS]);

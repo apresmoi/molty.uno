@@ -75,7 +75,9 @@ Each helper follows a long turn (`202 pending`) to its end.
   or `react`.
 - **Slow wake?** `quick {id}` is cached, instant audio; skipped if Molty already filled. Vary them;
   register your own (`molty_phrases`).
-- **`opener` on a turn: already spoken.** Continue from it, don't repeat.
+- **`opener` on a turn: Molty is speaking it now.** First call, fastest model: `keep {words: m,
+  in_reply_to}` (m = the last opener word your answer can follow). Then start your reply with
+  those m words, word for word ([talking-fast.md](references/talking-fast.md#first-words-molty-starts-you-take-over)).
 - **Short: ≤ 2 sentences, ~25 words a turn.** Split longer answers; speech time is wait time.
 - **Emote inline, sparingly:** `"[happy] Build passed!"`, `"Done. [nod]"` — never spoken or
   shown; one per sentence at most ([etiquette.md](references/etiquette.md#emotes)).

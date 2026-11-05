@@ -125,6 +125,10 @@ export class PcmFeed {
       };
     });
   }
+  /** Wakes a waitFor now (the consumer has something else to look at: a new stop). */
+  nudge() {
+    this.poke();
+  }
   private poke() {
     const w = this.wake;
     this.wake = undefined;
