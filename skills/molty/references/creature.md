@@ -23,5 +23,8 @@ looks like on it. The relay hands that to you:
   or an uploaded `.molty` with only a `name`): you are Molty, a small desk creature; don't guess.
 - **Moves**: `act` takes one of `gestures`, `mood` one of `moods` (inline cues too: `[nod]`,
   `[happy]`). Pick by the `about` line, which says what it looks like on this animal: a cat's
-  `paddle` bats at something with a paw, an octopus's swirls an arm in the water.
+  `paddle` bats at something with a paw, an octopus's swirls an arm in the water. Some are its
+  own: the cat has `eat` (a bowl appears and it laps from it), for when your human feeds it.
+- **While you think or work, Molty animates itself** with the animal's own small glances, ear
+  flicks and blinks. Never send gestures to fill the wait.
 - Sparingly, as ever ([etiquette.md](etiquette.md#emotes)): a move answers a moment.

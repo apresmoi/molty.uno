@@ -5,7 +5,7 @@ as data. The device plays it. The firmware has no duck, cat or octopus code; it 
 a fixed list of factor ops, and nothing about what they draw.
 
 ```
-packages/<id>/build.mjs ──node──▶ packages/<id>/<id>.json (≤ 32 KB) ──▶ player (JS reference: device/creatures/js/creature-player.js;
+packages/<id>/build.mjs ──node──▶ packages/<id>/<id>.json (≤ 40 KB) ──▶ player (JS reference: device/creatures/js/creature-player.js;
         uses tools/creatures/kit.mjs                    C port: main/creature/creature_player.c) ──▶ bone transforms, colours, marks
 ```
 
@@ -24,7 +24,7 @@ of that code became a channel; nothing was dropped on purpose (losses are listed
     "groups":   { "<name>": { "bones": [ids], "attr": { "<k>": [one number per bone] } } },
     "events":   { "<name>": Event },
     "base":     [channels],
-    "gestures": { "<action>": { "ch": [channels], "replace": true } },
+    "gestures": { "<action>": { "ch": [channels], "replace": true, "dur": 4.6 } },
     "moods":    { "<mood>": { "ch": [channels], "now": false } },
     "post":     [channels],
     "tints":    [Tint],
@@ -36,6 +36,12 @@ person sees on the round screen (at most 240 characters), and one line for every
 `idle` included, on what that looks like on this animal (at most 100 characters each; printable ASCII).
 `packages/tools/format.mjs` checks it is complete. The device sends it to the relay with the gestures and moods it plays
 (`cp_info`; [AGENT-LINK.md](AGENT-LINK.md#device-events)), and agents get it as `device.creature`.
+
+**Gestures** are named `[a-z][a-z0-9_]{0,23}`. A shared one (`js/actions.js`, `cute_act.h`: nod, wiggle, ...) plays over the
+shared pose and keeps its length (no `dur`); any other name is the creature's **own** gesture and gives its length, `dur` 0.2..10 s
+(the cat's `eat`). Every creature plays the shared ones; an agent's `act` plays one of its own too, and the device answers
+`unknown_gesture` for a name the creature lacks. Its parts may exist only for it: the cat's bowl is a bone scaled from 0 to 1
+by a channel (`bowl:s`, `op: "="`), like its tongue.
 
 Bones may carry `sit` and `fold` (a leg's seated position and folded length, read by the kit's generators at build time),
 `wave` (an arm joint's axis, joint and arm index, the same) and `d` (depth down its chain, for colour that ripples).
@@ -108,7 +114,7 @@ A stateful channel (`int lp sp d`) sets by default. Its state is its own; the va
 ## 3. Inputs
 
 Every frame starts with every channel at 0 except: the shared pose (`pos.x/y/z rot.x/y/z head.x/y/z spine.x/y/z squash lid
-mouth look.x/y prowl`), `t` and `dt`, `act` (1 while a gesture plays), the walk (`walk.q k go along side fz up`), per mood
+mouth look.x/y prowl`), `t` and `dt`, `act` (1 while a gesture plays), `work` (1 while the agent is working: mood `working`), the walk (`walk.q k go along side fz up`), per mood
 `is.<m>` (1 or 0), `w.<m>` (weight, eased at 4/s), `w6.<m>` (eased at 6/s), `now.<m>` (1 at once when it comes, the
 weight as it leaves), `m.<m>` (seconds since it last came), the eye word `eye.wide/happy/sleepy/squint`, and `keep` channels.
 Moods are `idle listening thinking speaking happy sleepy surprised`.
@@ -127,6 +133,13 @@ Moods are `idle listening thinking speaking happy sleepy surprised`.
 
 Draws (`~n`, ranges) are new each time a block plays: each gesture play, each time a mood comes, each event. A block's
 weight scales what it writes to the pose and own channels; scratch, locals and stateful channels are never weighted.
+
+### Waiting on the agent
+
+Each package carries a `ponder` event (`kit.mjs` `ponder`): gated on `is.thinking` and `work`, it picks one small expression
+every 2 to 5 s: a glance aside, a head tilt, a double blink, a look up, a little yawn once it has thought 14 s, and the
+animal's own (the cat's ear flick and tail swish, the duck's ruffle and nibble, the octopus's passing cloud and curl). The
+firmware chooses nothing: while a package creature is on screen, `working` hands it no work actions (`fd_set_own_work`).
 
 ## 5. Bones
 
@@ -157,13 +170,13 @@ At most 64 live particles.
 
 | | limit | duck / cat / octopus |
 |---|---|---|
-| file | 32 KB | 29.0 / 28.8 / 31.8 KB |
-| bones, parts | 96, 96 | 13, 18 / 21, 39 / 37, 45 |
-| channels (all blocks) | 512 | 318 / 366 / 242 |
-| terms, factors | 1024, 2048 | 465, 792 / 540, 714 / 328, 478 |
+| file | 40 KB | 30.1 / 31.4 / 32.8 KB |
+| bones, parts | 96, 96 | 13, 18 / 22, 41 / 37, 45 |
+| channels (all blocks) | 512 | 334 / 398 / 254 |
+| terms, factors | 1024, 2048 | 482, 824 / 598, 826 / 341, 500 |
 | factors in one term | 8 | |
 | group instances, attributes | 64, 32 | octopus 32 × 24 |
-| events | 16 | 7 / 6 / 4 |
+| events | 16 | 8 / 7 / 5 |
 | history | 1 s per channel | |
 | live particles | 64 | |
 

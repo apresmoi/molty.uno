@@ -794,7 +794,7 @@ What the screen does between commands (`device/firmware/main/fluid/fluid_directo
 | `status` | — | fw, uptime, creature, state, mood, fps, rssi | relay adds `relay` {api_version, online, board, caps, voice, creature, ...} |
 | `state` | `{state, ...}` | creature state JSON | passthrough to `/api/creature/state` semantics |
 | `mood` | `{mood, hold_s?}` (device also `react?`) | — | idle listening thinking speaking happy sleepy surprised; `hold_s` 0..3600 (0 = until the next mood; default: happy/surprised revert, the rest persist). `react:true` (relay-sent, cap `react`): shown but not an explicit mood ([While the human speaks](#while-the-human-speaks)) |
-| `act` | `{action}` | `{action}` | a one-shot gesture over the current mood: inspect paddle (cap `working`) wiggle nod shake_head bounce peek glance_left glance_right blink wobble stretch look_up yawn ([Inline cues and actions](#inline-cues-and-actions)); `unsupported` / `firmware_too_old` without the `act` cap |
+| `act` | `{action}` | `{action}` | a one-shot gesture over the current mood: inspect paddle (cap `working`) wiggle nod shake_head bounce peek glance_left glance_right blink wobble stretch look_up yawn, or one of the creature's own (`unknown_gesture` for a name it lacks; [Inline cues and actions](#inline-cues-and-actions)); `unsupported` / `firmware_too_old` without the `act` cap |
 | `draft` (relay) | `{turn_id, based_on, opener, max_new_words?, voice?}` | `{turn_id, based_on, status:"held", max_new_words, threshold}` | only during an open turn ([While the human speaks](#while-the-human-speaks)) |
 | `react` (relay) | `{turn_id, mood}` or `{turn_id, action}` | `{turn_id, shown, for_ms, next_after_ms}` | only during an open turn; ≤ 1 per 3 s |
 | `show` | `{text, wpm?}` | — | speed reader in the fluid; back to the creature 1.5 s after the last word |
@@ -874,13 +874,22 @@ idle life of its own.
   while words or a question cover the creature it waits up to 3 s, then is dropped. A sleeping
   creature wakes for it. Local twin: `POST /api/creature/state {act: "nod"}`; GET reports the
   action playing as `act`.
+- **A creature's own gestures.** `ACTIONS` are the shared ones every creature plays; a creature
+  package may add gestures of its own by name ([CREATURES.md](CREATURES.md#1-the-package), the cat's
+  `eat`). The relay takes any `act` name `[a-z][a-z0-9_]{0,23}` (`GESTURE_RE`) and forwards it; the
+  device plays it if its creature has it (`creature_info.gestures`, the `creature` event's
+  `gestures`) and refuses one it lacks with `unknown_gesture`. Inline cues stay the shared ones.
 
 **Idle life** (`fluid_director.h`). With nobody driving it, the creature plays one small action
 from a weighted library every 10–40 s — glance left / right, blink (×3 weight), look up (×2),
 wobble, stretch (×1.5) — never the same one twice in a row; "calm" keeps the small ones every
 20–60 s; "off" plays none. Only while the creature is on screen, in `idle`, awake, and nothing
 owns the screen: never during a say, a listen, a question, an update or pairing screen, the
-turn acknowledgement's `thinking` or any agent mood. After 5 min without touch or agent activity
+turn acknowledgement's `thinking` or any agent mood. While Molty waits on the agent (`thinking`,
+or `working`) a creature package lives on in its own small way: its `ponder` event picks a
+glance, a tilt, a blink, an ear flick now and then (a yawn once it has thought a while), as data
+in the package, gated on the `thinking` mood and the `work` input; working then hands such a
+creature none of the firmware's work actions (inspect, paddle, ...). A `.molty` creature keeps them. After 5 min without touch or agent activity
 it **yawns**, then dozes off (`sleepy`; off: no yawn). A say that played to its end, the
 creature back and idle within 8 s: one `happy` flash (at most one a minute). The console's
 setting: Settings › Molty "idle life" (`POST /api/creature/state {idle_life:

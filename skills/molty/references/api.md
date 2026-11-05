@@ -158,7 +158,9 @@ Molty), `blink`, `wobble`, `stretch`, `look_up`, `yawn`, `inspect` (right up to 
 never cancels a question; while words or a question cover the creature it waits up to 3 s,
 then is dropped. Silent, ~0.3–2.6 s. A `nod` while they talk (listening) is fine.
 Your creature plays the ones in `device.creature.gestures` (moods: `.moods`); each looks as its
-`about` line says on that animal ([creature.md](creature.md)).
+`about` line says on that animal ([creature.md](creature.md)). A creature may have gestures of its
+own beyond these (the cat's `eat`: a red bowl of milk, ~4.6 s): `act` takes any name in its
+`gestures`, and one it lacks is refused with `unknown_gesture`. Inline cues take the shared ones only.
 
 ## Gestures: what tap, double tap and the buttons do
 

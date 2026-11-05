@@ -159,7 +159,7 @@ so a new device has them without a download. `POST /api/creature/select?id=` (co
 
 - The file carries `creature` instead of `assets` and `layouts`: `{ about, body, walk, groups, events, base, gestures, moods, post, tints, ambient }`
   (`about`: how it looks and a line per gesture and mood, for the agent; [CREATURES.md](CREATURES.md) section 1).
-  At most **32 KB** (tighter than the 256 KB of a scenes package), so a device holds the three defaults and a few more in RAM at once.
+  At most **40 KB** (tighter than the 256 KB of a scenes package), so a device holds the three defaults and a few more in RAM at once.
 - Built by `packages/<id>/build.mjs` with the shared helpers in `tools/creatures/kit.mjs`; `make packages` rebuilds them all and their
   `packages/index.json` entries.
 - The reference player is `device/creatures/js/creature-player.js` (the C port follows it, hash included). `make creatures-test` checks
