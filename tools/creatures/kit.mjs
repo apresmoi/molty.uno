@@ -93,11 +93,15 @@ export function living(body, { limbs = {}, gait = {}, quad, sides = true, tailFr
   if (gait.type === 'float') { const k = gait.amp ?? 1, r = gait.rate ?? 1;
     post.push(ch('_lift', [[gait.height ?? 0.08, lin(w('sleepy'), 1, -0.6)]], { lp: 6 }), ch('_Lpy', [[0.03 * k, sin('@t', r / 2.6)]]), ch('_Lrz', [[0.045 * k, sin('@t', r / 3.4)]]), ch('_Lrx', [[0.03 * k, sin('@t', r / 4.1)]])); }
   events.tilt = { first: 2.5, gap: [3.5, 7], len: 1.5, ch: [ch('_Lhz', [[0.2, sgn(0), bump('a', 0, 1.5), '@w6.idle'], [0.12, sgn(0), bump('a', 0, 1.5), w('listening')]])] };
-  const hop = 1 - A.hop;
+  const hop = 1 - A.hop, plant = gait.type !== 'float', over = plant && !quad && has('torso') ? 'torso' : null;
+  const moved = (a) => (plant ? [[1, '@pos.' + a, '@walk.k']] : [[1, '@pos.' + a]]);
   post.push(ch('_py', hop ? [[1, '@pos.y'], [-hop, pos('@pos.y')]] : [[1, '@pos.y']]), ...(hop ? [ch('_spare', [[hop, pos('@pos.y')]])] : []), ch('_Lpy', [[0.35, w('happy'), '@_py']]), ch('_ry', [[1, '@_py'], [1, '@_Lpy']]),
-    ch('root:px', [[1, '@pos.x']]), ch('root:py', [[1, '@_ry'], [1, '@_lift']]), ch('root:pz', [[1, '@pos.z']]),
+    ch('root:px', moved('x')), ch('root:py', [[1, '@_ry'], [1, '@_lift']]), ch('root:pz', moved('z')),
     ch('root:rx', [[1, '@rot.x'], [1, '@_Lrx']]), ch('root:ry', [[1, '@rot.y']]), ch('root:rz', [[1, '@rot.z'], [1, '@_Lrz']]),
     ch('_sq', [[1.25 * A.squash, '@squash']]), ch('_spin', [[1, '@rot.y']], { d: [-8, 8], lp: 8 }));
+  // the feet stay planted: only walking carries the body across the floor. Standing, the sway moves the body over its feet
+  // (a quad's legs hang from it, so it stays put); a float drifts as it likes
+  if (over) post.push(...['x', 'z'].map((a) => ch(`${over}:p${a}`, [[1, '@pos.' + a, lin('@walk.k', 1, -1)]])));
   if (has('torso')) post.push(ch('torso:sq', [[1, '@_sq']]), ch('torso:rx', [[0.5, '@spine.x'], [0.3, '@head.x']]), ch('torso:ry', [[0.5, '@spine.y']]), ch('torso:rz', [[0.5, '@spine.z']]));
   if (has('head')) post.push(ch('head:sq', [[0.5, '@_sq']]), ch('head:sq', [[-1, '@_sq', ['rcp', '@_sq', 1, 1]]]), ch('head:rx', [[0.45, '@head.x'], ...(hop ? [[-1.5, '@_spare']] : [])]), ch('head:ry', [[1, '@head.y']]), ch('head:rz', [[1, '@head.z'], [1, '@_Lhz']]));
   const ears = by(/^(ear|gill)[LR]$/), wings = sides ? by(/^(wing|fin)[LR]$/) : [];
@@ -110,6 +114,10 @@ export function living(body, { limbs = {}, gait = {}, quad, sides = true, tailFr
     post.push(ch(g.id + ':rx', [[-0.15 * A.side, w('happy'), sin('@t', 7, 1)]]), ch(g.id + ':rz', [[0.55 * s * A.side, w('happy')], [0.5 * s * A.side, w('happy'), sin('@t', 7)], [0.95 * s * A.side, w('surprised')], [0.18 * s * A.side, w('speaking')], [0.16 * s * A.side, w('speaking'), sin('@t', 1.4)], [0.12 * s * A.side, w('listening')], [-0.12 * s * A.side, w('sleepy')]])); }
   // standing up: the body tips over the legs, the head stays level
   if (quad && has('torso') && has('head')) post.push(ch('_bp', [[quad.pitch, '@prowl'], [1, '@body']]), ch('torso:rx', [[1, '@_bp']]), ch('head:rx', [[-0.9, '@_bp']]), ch('torso:py', [[quad.rise, '@prowl']]), ch('head:pz', [[-quad.neck, '@prowl']]));
+  // standing, the tipped body swings the hips back and the shoulders forward: it moves back by as much, so the paws keep their centre
+  if (quad && has('torso')) { const legs = by(/^leg[FB][LR]$/), base = (b) => (b.parent === 'hips' ? body.bones.find((h) => h.id === 'hips').pos : [0, 0, 0]);
+    const dz = legs.reduce((d, b) => { const o = base(b), y = o[1] + b.pos[1], z = o[2] + b.pos[2]; return d + y * Math.sin(quad.pitch) + z * Math.cos(quad.pitch) - (o[2] + b.sit[2]); }, 0) / legs.length;
+    if (legs.length) post.push(ch('root:pz', [[+(-dz).toFixed(4), '@prowl']])); }
   if (has('hips')) post.push(ch('_hb', [[1, '@hips.bend'], [-0.06, '@_spin']], { cl: [-0.5, 0.5] }), ch('hips:ry', [[1, '@_hb', cos('@_bp', 1 / (2 * Math.PI))], [1, '@hips.roll', sin('@_bp', 1 / (2 * Math.PI))]]), ch('hips:rz', [[-1, '@_hb', sin('@_bp', 1 / (2 * Math.PI))], [1, '@hips.roll', cos('@_bp', 1 / (2 * Math.PI))]]));
   for (const b of by(/^leg[FB][LR]$/)) { const k = b.id.slice(3), back = k[0] === 'B', up = `@legs.${k}.up`, sit = b.sit, fold = b.fold ?? 1;
     for (const [a, i] of [['px', 0], ['py', 1], ['pz', 2]]) { const d = sit[i] - b.pos[i]; if (Math.abs(d) > 1e-4) post.push(ch(`${b.id}:${a}`, [[d], [-d, '@prowl']])); }
