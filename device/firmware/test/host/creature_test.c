@@ -303,6 +303,65 @@ static double test_render(const char *pkgdir, const char *id, const char *outdir
     return us / timed;
 }
 
+/* standing, the feet stay where they are: idle, every mood and every gesture with the walk at
+ * zero, the feet (the lowest part of each foot or shin bone, as the device draws it) keep their
+ * mean x on the glass within PLANT_PX of where they stood, a lifted foot counted where it left
+ * the floor. A foot may move in the air and a leg may fold; only walking carries the body.
+ * PLANT_PX is a glyph cell (412 / 52 px): less than the device can draw as a move. */
+#define PLANT_PX 8.f
+#define LIFT     0.01f    /* above the lowest foot by more than this (body units, ~3 px): in the air */
+static void test_planted(const char *pkgdir, const char *id) {
+    char path[512]; size_t len;
+    snprintf(path, sizeof(path), "%s/%s/%s.json", pkgdir, id, id);
+    char *json = slurp(path, &len);
+    const char *err = NULL;
+    cpk_t *k = json ? cpk_create(json, len, 77, &err) : NULL;
+    CHECK(k != NULL, "%s: create (%s)", id, err ? err : "no file");
+    if (!k) { free(json); return; }
+    fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
+    mood_engine_t *e = cpk_engine(k);
+    const cp_body_t *B = cp_body(cpk_player(k));
+    int foot[16], nf = 0;                    /* a part per foot: the lowest on its bone */
+    float rest[16][2], held[16], worst = 0;
+    char where[48] = "";
+    /* idle, then each mood and back, then each gesture from idle */
+    for (int seg = -1; seg < CUTE_N_MOODS - 1 + CUTE_N_ACTS; seg++) {
+        const int mood = seg >= 0 && seg < CUTE_N_MOODS - 1 ? seg + 1 : CM_IDLE, act = seg >= CUTE_N_MOODS - 1 ? seg - (CUTE_N_MOODS - 1) : -1;
+        me_set_mood(e, mood);
+        if (act >= 0) me_act(e, act);
+        const int frames = act >= 0 ? (int)((cute_act_dur(act) + 0.5f) * 30) : 6 * 30;
+        float far = 0;
+        for (int f = 0; f < frames; f++) {
+            cpk_frame(k, s, 1.f / 30.f, 1.f);
+            const cb_t *b = cpk_body(k);
+            if (!nf) for (int i = 0; i < B->nbones; i++) {
+                if (strncmp(B->bones[i].id, "foot", 4) && strncmp(B->bones[i].id, "shin", 4)) continue;
+                int lo = -1; float ylo = -1, g[3];
+                for (int q = 0; q < B->nparts; q++) if (B->parts[q].bone == i) { cb_glass(b, i, B->parts[q].pos, g); if (g[1] > ylo) { ylo = g[1]; lo = q; } }
+                if (lo >= 0 && nf < 16) foot[nf++] = lo;
+            }
+            float g[16][3], floor = 1e9f, dx = 0;
+            for (int i = 0; i < nf; i++) {
+                cb_glass(b, B->parts[foot[i]].bone, B->parts[foot[i]].pos, g[i]);
+                g[i][0] *= FLUID_STAGE_REF;
+                if (seg < 0 && f == 0) { rest[i][0] = g[i][0]; rest[i][1] = g[i][2]; held[i] = g[i][0]; }
+                floor = fminf(floor, g[i][2] - rest[i][1]);
+            }
+            for (int i = 0; i < nf; i++) {   /* on the floor (no higher than the lowest foot); in the air it counts where it left */
+                if (g[i][2] - rest[i][1] <= floor + LIFT) held[i] = g[i][0];
+                dx += (held[i] - rest[i][0]) / nf;
+            }
+            far = fmaxf(far, fabsf(dx));
+        }
+        const char *name = act >= 0 ? cute_act_name(act) : MOOD_NAMES[mood];
+        if (far > worst) { worst = far; snprintf(where, sizeof(where), "%s", name); }
+        printf("  %-8s planted %-12s feet moved %4.1f px\n", id, name, far);
+    }
+    CHECK(nf >= 2, "%s: %d feet found", id, nf);
+    CHECK(worst <= PLANT_PX, "%s: standing, the feet slid %.1f px (%s); at most %.0f", id, worst, where, PLANT_PX);
+    fluid_sim_destroy(s); cpk_destroy(k); free(json);
+}
+
 /* the .molty duck's update + raster + fill on the host: the work the device does in ~11 ms */
 static double bench_v1(const char *molty) {
     static uint8_t buf[CUTE_MAX_FILE + 16];
@@ -328,6 +387,7 @@ int main(int argc, char **argv) {
     test_hash();
     for (const char *const *id = (const char *const[]){ "duck", "cat", "octopus", NULL }; *id; id++) test_golden(argv[1], argv[2], *id);
     test_strict(argv[1]);
+    for (const char *const *id = (const char *const[]){ "duck", "cat", NULL }; *id; id++) test_planted(argv[1], *id);
     const double v1 = bench_v1(argv[3]);
     CHECK(v1 > 0, "the .molty duck to compare with (%s)", argv[3]);
     for (const char *const *id = (const char *const[]){ "duck", "cat", "octopus", NULL }; *id; id++) {

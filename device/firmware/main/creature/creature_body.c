@@ -419,6 +419,14 @@ void cb_cells(const cb_t *b, const float **cov, const float **lum, const float *
     *cov = b->cov; *lum = b->lum; *r = b->cr; *g = b->cg; *bl = b->cb; *hole = b->hole;
 }
 
+void cb_glass(const cb_t *b, int bone, const float at[3], float out[3]) {
+    const v3_t p = rg_apply(&b->world[bone < 0 || bone > b->nb ? b->nb : bone], at[0], at[1], at[2]);
+    const float q[3] = { p.x, p.y, p.z };
+    out[0] = 0.5f + 0.5f * (dot3(q, b->cam_x) - b->cam_c[0]) / b->half;
+    out[1] = 0.5f - 0.5f * (dot3(q, b->cam_y) - b->cam_c[1]) / b->half;
+    out[2] = p.y;
+}
+
 /* ── the glass: marks over the cells (renderer.mjs stamp) ─────────────────── */
 
 /* the radius a mark's outline stays within: [lo, hi] of its size */
