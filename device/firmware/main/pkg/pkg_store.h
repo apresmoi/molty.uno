@@ -37,6 +37,7 @@ extern "C" {
 #define PKG_URL_MAX      384
 #define PKG_QUOTA        (1024 * 1024)  /* bytes of packages, all together                 */
 #define PKG_INSTALLED_MAX 32
+#define PKG_ROOT         "/spiffs/pkg"  /* the store on the device                         */
 #define PKG_JOB_MAX      129            /* = LINK_STREAM_MAX: 1..128 chars                 */
 #define PKG_ASK_MS       60000          /* the install question, by default               */
 

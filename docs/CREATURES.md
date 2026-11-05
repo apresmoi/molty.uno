@@ -6,7 +6,7 @@ a fixed list of factor ops, and nothing about what they draw.
 
 ```
 packages/<id>/build.mjs ──node──▶ packages/<id>/<id>.json (≤ 32 KB) ──▶ player (JS reference: device/creatures/js/creature-player.js;
-        uses tools/creatures/kit.mjs                                            C port: next phase) ──▶ bone transforms, colours, marks
+        uses tools/creatures/kit.mjs                    C port: main/creature/creature_player.c) ──▶ bone transforms, colours, marks
 ```
 
 The motion model is the one the lab's animals were written in (`molty-creature-lab/animals/kinds`): a shared pose from the
@@ -174,6 +174,14 @@ were 100 cycles a factor). The compiled program (24 bytes a factor, 8 a term, 16
 
 The C port must match the JS player's semantics, including the hash: murmur3 fmix32 of floor(16 n), so the same package
 draws the same numbers on both.
+
+**As built** (`main/creature/creature_player.c`): channel values are float; the clocks (time, mood clocks, a block's clock,
+integrated phases) and the hash's argument are double, and the periodic ops (`sin nz frac cyc bumpr step pulse dz steps chance
+flap`) form their argument in double, so a creature moves the same after a day on as after a minute. It is built without fused
+multiply-adds (`-ffp-contract=off`): a hash's argument must round as JS rounds it. Against the JS player's goldens it agrees to
+1e-6 on the pose and 1e-4 on the bones, with every draw and every ambient particle the same. On the host the player is 2 to
+10 µs a frame; the body's raster (2 to 3 thousand facets of the lab's 14×10 ellipsoids, a coarser mesh for an ellipsoid whose
+facets are under a sample while the camera is not zoomed) is most of the creature's cost.
 
 ## 9. 2D sprites
 

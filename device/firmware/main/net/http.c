@@ -1256,10 +1256,10 @@ static esp_err_t handler_info(httpd_req_t *r)
 // Streams the live framebuffer (the board's display size, 412×412 on the 1.46) as a
 // binary PPM (P6). The framebuffer (molty_display_framebuffer()) holds RGB565
 // byte-swapped for the SPI panel's wire
-// order; we swap back and expand 5/6/5 bits to 8 bits per channel.
-// Consistency: there is no framebuffer lock, so we memcpy the whole 339 KB
-// buffer first (sub-millisecond) and convert from the copy; a frame can still,
-// rarely, be part-old/part-new.
+// order; we swap back and expand 5/6/5 bits to 8 bits per channel. The fluid
+// keeps no framebuffer (it sends the panel only what changed): it draws the frame
+// on the panel into it on request first. We memcpy the whole 339 KB buffer
+// (sub-millisecond) and convert from the copy.
 // ═════════════════════════════════════════════════════════════════════════════
 static inline void rgb565_be_to_rgb888(uint16_t stored, uint8_t *out /* r,g,b */)
 {
@@ -1283,6 +1283,7 @@ static esp_err_t handler_framebuffer(httpd_req_t *r)
     size_t fb_bytes = (size_t)W * H * sizeof(uint16_t);
     uint16_t *snap = (uint16_t *)heap_caps_malloc(fb_bytes, MALLOC_CAP_SPIRAM);
     if (!snap) return http_send_json(r, "{\"ok\":false,\"error\":\"oom\"}");
+    mole_fluid_framebuffer_sync();     // the fluid sends the panel windows, not this buffer
     memcpy(snap, live_fb, fb_bytes);   // the "snapshot" — see consistency note above
 
     size_t rgb_chunk_bytes = (size_t)FB_PARITY_ROWS_PER_CHUNK * W * 3;

@@ -19,7 +19,7 @@
 // a real HTTP 404/405/501 is always UnsupportedError.
 
 import type {
-  CreatureRegistry, DeviceInfo, FluidOrder, FluidState, Frame, LinkInfo,
+  CreatureList, CreatureRegistry, DeviceInfo, FluidOrder, FluidState, Frame, LinkInfo,
   WifiConnectResult, WifiNetwork, WifiStatus, Diag, OtaResult, UpdateState,
 } from './types';
 import type { UpdateTarget } from '../update/update';
@@ -153,6 +153,9 @@ export class DeviceApi {
   // ── creatures ──────────────────────────────────────────────────────────────
   creatures() { return this.get<CreatureRegistry>('/api/creature'); }
   selectCreature(name: string) { return this.post<CreatureRegistry>('/api/creature', { name }); }
+  creatureList() { return this.get<CreatureList>('/api/creature/list'); }
+  /** Pick an installed package (persists across reboots); throws DeviceError not_installed | bad_package | invalid_args. */
+  selectCreaturePackage(id: string) { return this.json<{ ok: true; id: string; name: string }>('/api/creature/select?id=' + encodeURIComponent(id), { method: 'POST' }); }
   creatureState() { return this.get<FluidState>('/api/creature/state'); }
   fluid(order: FluidOrder) { return this.post<FluidState>('/api/creature/state', order); }
 

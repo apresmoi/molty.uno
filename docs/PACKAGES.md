@@ -164,11 +164,28 @@ so a new device has them without a download. `POST /api/creature/select?id=` (co
 - The reference player is `device/creatures/js/creature-player.js` (the C port follows it, hash included). `make creatures-test` checks
   the player's rules and that every creature package plays clean within the format's limits and matches its index entry.
 
+### On the device (as built)
+
+- `main/creature/creature_player.c` plays a package exactly as the JS player does (`test/host/creature_build.sh` replays goldens
+  `tools/creatures/golden.mjs` writes from the JS player: every mood, gesture and a walk, pose, bones, palette and ambient, for every
+  creature package). `creature_body.c` meshes the parts as three.js does and draws them the lab renderer's way (its camera, light and
+  "dither" style; eyes are holes in the colour). `creature_pkg.c` is one frame: the mood engine (`mood_engine.c`, the .molty runtime's
+  too), the player, the body, the ambient. The device stands still: the walk layer plays with the walk at rest.
+- **Built-in:** every `kind: "creature"` package in `packages/index.json` is embedded as it is at build time (`main/CMakeLists.txt`
+  generates the table); nothing in the firmware names one. An installed package with a built-in's id replaces it.
+- **The choice:** `creature.select { id }` (cap `creatures`) or `POST /api/creature/select?id=` answers `{ id, name }` once the file
+  parsed (else `not_installed`, `bad_package`, `invalid_args`) and is kept in NVS. `creature.list {}` / `GET /api/creature/list`:
+  `{ current, creatures: [{ id, name, version, source: "builtin" | "installed" }] }`.
+- **The .molty creatures stay:** uploading one (`POST /api/creature/file`, the console's catalog) makes it the creature and the choice
+  (`current` is then `""`). A device that never chose keeps an uploaded .molty; otherwise it boots on the first built-in package.
+  A chosen package that was removed since falls back to the first built-in.
+
 ## 6. Relay
 
 `services/relay/src/core/commands.ts` validates, `room.ts` gates and forwards; nothing about any package is in the relay.
 
-- Caps: `pkg.*` need `pkg`, `scene.*` need `scene` in the device's hello caps; otherwise `409 unsupported` and nothing is sent.
+- Caps: `pkg.*` need `pkg`, `scene.*` need `scene`, `creature.*` need `creatures` in the device's hello caps; otherwise
+  `409 unsupported` and nothing is sent.
 - `pkg.install` `{ id, url (https, at most 512 bytes), sha256 (64 lower-case hex), size (1..262144), name (1..32 printable ASCII) }`.
   The host allowlist is the firmware's alone. The relay runs it as a job (agent: `{job}`; REST `wait: true` blocks at most
   24 s; `GET /v1/jobs/<job>`; MCP `molty_package`): it adds `job` and `timeout_ms` (60 s for the tap), takes the device's
@@ -176,6 +193,7 @@ so a new device has them without a download. `POST /api/creature/select?id=` (co
   `installed` -> `{ installed, version }`; `declined` -> error `declined` (the reason in its message); `failed` -> its `error`.
   No event within 120 s: `pkg_timeout`.
 - `pkg.remove` `{ id }`, `pkg.list` `{}`, `scene.clear` `{}`: forwarded as they are.
+- `creature.select` `{ id }` and `creature.list` `{}` need the cap `creatures`; forwarded as they are.
 - `scene.play` / `scene.queue` `{ pkg, layout, params (an object, at most 2048 bytes of JSON), ttl_s (1..600, default 60) }`:
   `ttl_s` is always sent. `scene.play` counts as the agent taking the screen (like `mood`): the relay's automatic moods stand down.
 - MCP: `molty_package { op: install|remove|list, … }`, `molty_scene { op: play|queue|clear, … }`.

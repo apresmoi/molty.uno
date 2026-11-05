@@ -34,6 +34,8 @@
 #include "scene_player.h"
 #include "cute_rig.h"
 #include "cute_act.h"
+#include "creature_pkg.h"
+#include "pkg_creature.h"
 #include "glyph_rsvp.h"
 #include "molty_board.h"
 
@@ -71,8 +73,8 @@ static const char *TAG = "mole_fluid";
 #define FLUID_TEXT_MAX     4096
 #define FLUID_MAX_TOKENS   512
 #define FLUID_STEP         (1.f / 60.f)
-#define FLUID_FRAME_TICKS  3          /* 100 Hz tick → 30 ms → 33.3 fps cap     */
-#define FLUID_SLEEP_TICKS  5          /* asleep (slow breathing): 20 fps, less CPU */
+#define FLUID_FRAME_US     30000      /* 33.3 fps cap                            */
+#define FLUID_SLEEP_US     50000      /* asleep (slow breathing): 20 fps, less CPU */
 #define FLUID_TOUCH_US     16000      /* touch poll ≤ 60 Hz (shared I2C bus)    */
 #define FLUID_TILT_ACCEL   25.f       /* cells/s² of flow bias per g of tilt    */
 #define FLUID_TILT_LEAN    0.12f      /* stage units a target leans per g       */
@@ -101,7 +103,7 @@ typedef struct {
 } fluid_cfg_t;
 
 typedef struct {
-    float fps, frame_ms, sim_ms, wait_ms, draw_ms, flush_ms, energy, err;
+    float fps, frame_ms, pre_ms, sim_ms, wait_ms, draw_ms, flush_ms, energy, err;
     float prof_ms[FP_N];                       /* per-phase EMA, ms per frame */
     int   mood, ctris, status, act;
     char  scene_pkg[PKG_ID_MAX + 1], scene_layout[PKG_KEY_MAX + 1];   /* "" = none */
@@ -193,14 +195,27 @@ static uint32_t s_tint_in = 0;
 static float   s_ripq[FLUID_RIPPLE_Q][3];
 static int     s_ripn = 0;
 
-/* creature (.molty) — the blob is handed over under s_mutex, built by the task */
+/* the creature: a creature package (s_cpk, docs/PACKAGES.md section 5) or a .molty (s_cute).
+ * The file is handed over under s_mutex and built by the task. */
 static uint8_t *s_cute_blob = NULL;  static size_t s_cute_len = 0;   /* pending load (PSRAM) */
+static bool     s_cute_pkg = false;                 /* the pending file is a creature package */
+static char     s_cr_id[PKG_ID_MAX + 1] = "";       /* the package shown or on its way; "" = .molty */
 static int      s_req_mood = -1;
 static bool     s_req_work = false;             /* mood `working` (fd_agent_work; s_req_hold_s) */
 static float    s_req_hold_s = -1.f;                /* with s_req_mood: < 0 = its default */
 static char     s_cute_name[40] = "", s_cute_err[40] = "";
 static cute_rt_t *s_cute = NULL;                    /* task-owned                        */
+static cpk_t    *s_cpk = NULL;                      /* task-owned                        */
 static int      s_cute_tris = 0;
+
+/* the creature on screen, whichever kind (task only) */
+static bool  cr_loaded(void) { return s_cpk || s_cute; }
+static void  cr_set_mood(int m) { if (s_cpk) me_set_mood(cpk_engine(s_cpk), m); else if (s_cute) cute_rt_set_mood(s_cute, m); }
+static int   cr_mood(void) { return s_cpk ? me_mood(cpk_engine(s_cpk)) : s_cute ? cute_rt_mood(s_cute) : -1; }
+static void  cr_act(int a) { if (s_cpk) me_act(cpk_engine(s_cpk), a); else if (s_cute) cute_rt_act(s_cute, a); }
+static int   cr_acting(void) { return s_cpk ? me_acting(cpk_engine(s_cpk)) : s_cute ? cute_rt_acting(s_cute) : -1; }
+static float cr_act_time(void) { return s_cpk ? me_act_time(cpk_engine(s_cpk)) : cute_rt_act_time(s_cute); }
+static float cr_env(void) { return s_cpk ? me_env(cpk_engine(s_cpk)) : cute_rt_env(s_cute); }
 
 /* ── Task-owned state ───────────────────────────────────────────────────────── */
 
@@ -262,6 +277,14 @@ static bool  s_touch_down = false;
 static float s_tpx = 0.f, s_tpy = 0.f;
 static int   s_last_tx = 0, s_last_ty = 0;
 static volatile bool s_full_flush = true;
+/* the drawer's window buffer (fluid_draw_send): internal DMA-capable RAM, which the panel's
+ * DMA reads as is. The frame never goes through the PSRAM framebuffer: drawing and
+ * copying it there every frame took PSRAM bandwidth the sim on core 1 waits for. */
+#define FLUID_WIN_ROWS 14                       /* a 412 px panel's cell row in one window */
+static uint16_t *s_win = NULL;
+static int       s_win_px = 0;
+static volatile bool s_fb_want = false;         /* /api/framebuffer: draw the frame there too */
+static SemaphoreHandle_t s_fb_done = NULL;
 static int   s_cpu_mhz = 160;
 
 /* ── Text: tokenise + schedule (same rules as mole_reader.c / reader.js) ───── */
@@ -334,7 +357,7 @@ static void ripple(float x, float y, float strength, float radius) {
 static void enter_state(int st, int fx, const fluid_cfg_t *cfg) {
     int from = s_cur;
     if (s_cur == ST_FX) fluid_effect_exit(s_sim, s_cur_fx);
-    if (st == ST_CREATURE && !s_cute) st = ST_BLOB;   /* no creature loaded */
+    if (st == ST_CREATURE && !cr_loaded()) st = ST_BLOB;   /* no creature loaded */
     s_sim->edge_w = st == ST_CREATURE ? 1.f : 0.f;      /* solid eyes once settled */
     if (st == ST_TEXT) {
         if (s_ntok == 0) { strcpy(s_ttext, "..."); tokenize(); }
@@ -367,12 +390,12 @@ static void enter_state(int st, int fx, const fluid_cfg_t *cfg) {
 }
 
 /* the director's pending transition, if any, then its mood on the creature (moods blend
- * inside the creature: cute_rt_set_mood fades between them and ignores the same mood) */
+ * inside the creature: its mood engine fades between them and ignores the same mood) */
 static void direct(const fluid_cfg_t *cfg) {
     int st, fx;
     /* a question owns the screen: the director's transitions wait under it */
     if (s_ask.scr.phase == FLUID_ASK_NONE && fd_take(&s_dir, &st, &fx)) enter_state(st, fx, cfg);
-    if (s_cute) cute_rt_set_mood(s_cute, fd_mood(&s_dir));
+    cr_set_mood(fd_mood(&s_dir));
 }
 
 /* ── A question (the link's ask): labels condense in their sectors ─────────── */
@@ -456,16 +479,18 @@ static esp_err_t build_grid(int W, int H) {
 
 static int64_t s_touch_t0;            /* sim: tap seen, not yet handed to the drawer */
 static volatile int64_t s_dtouch;     /* drawer: tap time riding with the current frame */
-static void poll_touch(void) {
-    uint16_t xs[MOLTY_TOUCH_MAX_POINTS], ys[MOLTY_TOUCH_MAX_POINTS];
-    int n = molty_touch_poll(xs, ys, MOLTY_TOUCH_MAX_POINTS);
+/* the touch panel's last read (the drawer polls it, off the sim's core: ~1 ms of I2C and
+ * waits a poll); s_mutex */
+typedef struct { int n; uint16_t x, y; int64_t t; unsigned seq; } touch_read_t;
+static touch_read_t s_tp;
+static void poll_touch(int n, const uint16_t *xs, const uint16_t *ys, int64_t t) {
     if (n <= 0) { s_touch_down = false; return; }
     float x = (float)(xs[0] - s_ox) / (float)s_stage * 2.f - 1.f, y = (float)(ys[0] - s_oy) / (float)s_stage * 2.f - 1.f;
     if (!s_touch_down) {                                    /* tap = ripple */
         s_touch_down = true; s_tpx = x; s_tpy = y; s_last_tx = xs[0]; s_last_ty = ys[0];
         ripple(x, y, 1.6f, 0.09f);
         fd_user(&s_dir);                                    /* wakes a sleepy creature */
-        if (!s_touch_t0) s_touch_t0 = esp_timer_get_time();
+        if (!s_touch_t0) s_touch_t0 = t;
         return;
     }
     /* the SPD2010 sometimes reports a garbage coordinate: a finger can't move >140 px
@@ -532,7 +557,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     if (scene_playing(&s_sp) && !fd_scene_wanted(&s_dir)) scene_clear(&s_sp);   /* another state took the screen */
     {   /* an action to start: an agent's, or idle life's (never a sound) */
         int a = fd_take_act(&s_dir);
-        if (a >= 0 && s_cute) cute_rt_act(s_cute, a);
+        if (a >= 0) cr_act(a);
     }
 
     const bool asking = s_ask.scr.phase != FLUID_ASK_NONE;
@@ -607,18 +632,18 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     case ST_THINKING: fluid_target_blob(s, s_tnow * 1.4f, swell * 0.85f, ox, oy); break;
     case ST_SCENE:    scene_fill(s, s_sp.cur, s_sp.t, s_overlay, &s_noverlay); break;
     case ST_CREATURE:
-        if (s_cute) {
-            cute_rt_update(s_cute, rdt);                   /* mood engine + kit + behaviours */
+        if (cr_loaded()) {
+            if (s_cpk) cpk_frame(s_cpk, s, rdt, swell);    /* engine + player + body + ambient + fill */
+            else cute_rt_update(s_cute, rdt);              /* mood engine + kit + behaviours */
             {   /* paddle's strokes splash the real water, either side of the creature */
                 static float act_t0;
-                const float at = cute_rt_act_time(s_cute);
-                const int stroke = cute_act_splash(cute_rt_acting(s_cute), at < act_t0 ? 0.f : act_t0, at);
+                const float at = cr_act_time();
+                const int stroke = cute_act_splash(cr_acting(), at < act_t0 ? 0.f : act_t0, at);
                 act_t0 = at;
                 if (stroke) ripple(stroke & 1 ? -0.6f : 0.6f, 0.5f, 1.2f, 0.09f);
             }
-            cute_rt_raster(s_cute, s->W, s->H);
-            cute_rt_fill(s_cute, s, swell);
-            s_cute_tris = cute_rt_tris(s_cute);
+            if (s_cute) { cute_rt_raster(s_cute, s->W, s->H); cute_rt_fill(s_cute, s, swell); }
+            s_cute_tris = s_cpk ? cpk_tris(s_cpk) : cute_rt_tris(s_cute);
         } else {
             fluid_target_blob(s, s_tnow, swell, ox, oy);   /* creature unloaded while showing */
         }
@@ -643,9 +668,9 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
 
     /* surface drivers (main.js): thinking = the motor's fine standing shimmer; the creature's
      * speech envelope rings the surface from its mouth; mic adds shimmer + random drops */
-    int cmood = (s_cur == ST_CREATURE && s_cute && !asking) ? cute_rt_mood(s_cute) : -1;
+    int cmood = (s_cur == ST_CREATURE && cr_loaded() && !asking) ? cr_mood() : -1;
     bool thinking = s_cur == ST_THINKING || cmood == CM_THINKING;
-    float level = cmood == CM_SPEAKING ? cute_rt_env(s_cute) : 0.f;
+    float level = cmood == CM_SPEAKING ? cr_env() : 0.f;
     s->osc.x = 0.f; s->osc.y = cmood == CM_SPEAKING ? 0.12f : 0.f;
     s->osc.amp = (cmood == CM_SPEAKING ? 1.2f : thinking ? 0.25f : 0.5f) * level;
     s->osc.freq = 2.5f + 6.f * 0.4f;
@@ -682,26 +707,31 @@ static esp_err_t alloc_bufs(void);
 extern const uint8_t _binary_default_molty_start[];
 extern const uint8_t _binary_default_molty_end[];
 
-static void load_creature(const uint8_t *buf, size_t len) {
-    cute_spec_t *spec = heap_caps_malloc(sizeof(cute_spec_t), MALLOC_CAP_SPIRAM);
-    const char *err = "oom";
+static void load_creature(const uint8_t *buf, size_t len, bool pkg) {
+    const char *err = "oom", *name = "";
+    cute_spec_t *spec = NULL;
     cute_rt_t *rt = NULL;
-    if (spec && cute_spec_parse(buf, len, spec, &err) == 0) {
+    cpk_t *k = NULL;
+    if (pkg) {
+        k = cpk_create((const char *)buf, len, esp_random(), &err);
+        if (k) name = cp_name(cpk_player(k));
+    } else if ((spec = heap_caps_malloc(sizeof(cute_spec_t), MALLOC_CAP_SPIRAM)) && cute_spec_parse(buf, len, spec, &err) == 0) {
         rt = cute_rt_create(spec, esp_random());
         if (!rt) err = "oom";
+        else name = spec->name;
     }
-    if (rt) {
-        int mood = s_cute ? cute_rt_mood(s_cute) : CM_IDLE;
-        cute_rt_destroy(s_cute);
-        s_cute = rt;
-        cute_rt_set_mood(s_cute, mood);
-        ESP_LOGI(TAG, "creature '%s' loaded (%u B, %d parts)", spec->name, (unsigned)len, spec->nparts);
+    if (rt || k) {
+        const int mood = cr_loaded() ? cr_mood() : CM_IDLE;
+        cute_rt_destroy(s_cute); cpk_destroy(s_cpk);
+        s_cute = rt; s_cpk = k;
+        cr_set_mood(mood);
+        ESP_LOGI(TAG, "creature '%s' loaded (%u B, %s)", name, (unsigned)len, pkg ? "package" : ".molty");
     } else {
         ESP_LOGW(TAG, "creature load failed: %s", err);
     }
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    if (rt) { strncpy(s_cute_name, spec->name, sizeof(s_cute_name) - 1); s_cute_err[0] = '\0'; }
-    else strncpy(s_cute_err, err, sizeof(s_cute_err) - 1);
+    if (rt || k) { strlcpy(s_cute_name, name, sizeof(s_cute_name)); s_cute_err[0] = '\0'; }
+    else strlcpy(s_cute_err, err, sizeof(s_cute_err));
     xSemaphoreGive(s_mutex);
     heap_caps_free(spec);
 }
@@ -718,7 +748,7 @@ static uint8_t *read_file(const char *path, size_t *len) {
     return b;
 }
 
-/* the stored creature (or the tmp left by a crash between remove and rename), else the
+/* the uploaded .molty (or the tmp left by a crash between remove and rename), else the
  * firmware default; the CRC check in cute_spec_parse makes a torn file harmless */
 static uint8_t *creature_bytes(size_t *len, bool *is_default) {
     uint8_t *b = read_file(CUTE_PATH, len);
@@ -732,10 +762,28 @@ static uint8_t *creature_bytes(size_t *len, bool *is_default) {
     return b;
 }
 
-static void queue_creature(uint8_t *blob, size_t len) {   /* takes ownership */
+/* the creature a boot shows: the one chosen last; with none chosen yet, an uploaded .molty
+ * (a Molty from before creature packages keeps its creature), else the first built-in one */
+static uint8_t *boot_creature(size_t *len, bool *pkg, char id[PKG_ID_MAX + 1]) {
+    struct stat st;
+    const bool chosen = pkgc_chosen(id);
+    if (!chosen && (stat(CUTE_PATH, &st) == 0 || stat(CUTE_TMP_PATH, &st) == 0)) id[0] = 0;
+    else if (!id[0] || !pkg_id_ok(id)) strlcpy(id, PKGC_BUILTINS[0].id, PKG_ID_MAX + 1);
+    if (id[0]) {
+        uint8_t *b = (uint8_t *)pkgc_bytes(id, len);
+        if (!b && strcmp(id, PKGC_BUILTINS[0].id)) { strlcpy(id, PKGC_BUILTINS[0].id, PKG_ID_MAX + 1); b = (uint8_t *)pkgc_bytes(id, len); }   /* removed since */
+        if (b) { *pkg = true; return b; }
+    }
+    bool dflt;
+    *pkg = false; id[0] = 0;
+    return creature_bytes(len, &dflt);
+}
+
+static void queue_creature(uint8_t *blob, size_t len, bool pkg, const char *id) {   /* takes ownership */
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     if (s_cute_blob) heap_caps_free(s_cute_blob);
-    s_cute_blob = blob; s_cute_len = len;
+    s_cute_blob = blob; s_cute_len = len; s_cute_pkg = pkg;
+    strlcpy(s_cr_id, id, sizeof(s_cr_id));
     xSemaphoreGive(s_mutex);
 }
 
@@ -758,9 +806,24 @@ esp_err_t mole_fluid_creature_file_put(const uint8_t *buf, size_t len, const cha
     remove(CUTE_PATH);
     if (rename(CUTE_TMP_PATH, CUTE_PATH) != 0) { if (err) *err = "spiffs_rename"; return ESP_FAIL; }
     uint8_t *copy = heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
-    if (copy) { memcpy(copy, buf, len); queue_creature(copy, len); }       /* hot reload */
+    if (copy) { memcpy(copy, buf, len); queue_creature(copy, len, false, ""); }   /* hot reload */
+    pkgc_choose("");                                                          /* the upload is the choice now */
     if (err) *err = "ok";
     return ESP_OK;
+}
+
+esp_err_t mole_fluid_creature_package(const char *id, char *json, size_t len) {
+    if (alloc_bufs() != ESP_OK) { heap_caps_free(json); return ESP_ERR_NO_MEM; }
+    queue_creature((uint8_t *)json, len, true, id);
+    return ESP_OK;
+}
+
+void mole_fluid_creature_id(char *id, size_t n) {
+    id[0] = 0;
+    if (!s_mutex) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    strlcpy(id, s_cr_id, n);
+    xSemaphoreGive(s_mutex);
 }
 
 esp_err_t mole_fluid_creature_file_get(uint8_t **out, size_t *len, bool *is_default) {
@@ -770,7 +833,19 @@ esp_err_t mole_fluid_creature_file_get(uint8_t **out, size_t *len, bool *is_defa
     return *out ? ESP_OK : ESP_ERR_NOT_FOUND;
 }
 
-/* ── Drawer task (core 0): rasterise + flush the latest snapshot ─────────────── */
+/* ── Drawer task (core 0): what changed in the latest snapshot, to the panel ──── */
+
+static int send_win(void *ctx, int x, int y, int w, int h, const uint16_t *px) {
+    (void)ctx;
+    return molty_display_blit(x, y, w, h, px) == ESP_OK ? 0 : 1;
+}
+
+esp_err_t mole_fluid_framebuffer_sync(void) {
+    if (!s_run || !s_fb_done) return ESP_ERR_INVALID_STATE;
+    xSemaphoreTake(s_fb_done, 0);
+    s_fb_want = true;
+    return xSemaphoreTake(s_fb_done, pdMS_TO_TICKS(500)) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
+}
 
 static void draw_task(void *arg) {
     (void)arg;
@@ -779,7 +854,8 @@ static void draw_task(void *arg) {
     float dms = 0.f, lms = 0.f, pema[2] = { 0.f, 0.f };
     /* director status → mark at the screen's edge (fluid_draw_mark) */
     static const int MARK[FD_STATUS_COUNT] = { FLUID_MARK_NONE, FLUID_MARK_ARC, FLUID_MARK_DOT, FLUID_MARK_ALERT };
-    int mark_drawn = FLUID_MARK_NONE;
+    int mark_drawn = FLUID_MARK_NONE, pal_drawn = -1;
+    int64_t last_touch = 0;
     fluid_overlay_t ov_drawn = { 0 };                   /* the overlay on screen */
     while (s_run) {
         esp_task_wdt_reset();
@@ -787,27 +863,40 @@ static void draw_task(void *arg) {
         if (!s_run) { xSemaphoreGive(s_idle); break; }
         int64_t t0 = esp_timer_get_time();
         int64_t touch_t = s_dtouch; s_dtouch = 0;
-        uint16_t *fb = molty_display_framebuffer();
-        int y0 = 0, y1 = 0, nc = 0;
+        if (t0 - last_touch >= FLUID_TOUCH_US) {        /* for the sim's next frame */
+            uint16_t xs[MOLTY_TOUCH_MAX_POINTS] = { 0 }, ys[MOLTY_TOUCH_MAX_POINTS] = { 0 };
+            const int n = molty_touch_poll(xs, ys, MOLTY_TOUCH_MAX_POINTS);
+            xSemaphoreTake(s_mutex, portMAX_DELAY);
+            s_tp = (touch_read_t){ n, xs[0], ys[0], t0, s_tp.seq + 1 };
+            xSemaphoreGive(s_mutex);
+            last_touch = t0;
+        }
+        uint16_t *fb = molty_display_framebuffer();   /* NULL: the display is down */
+        int nc = 0;
         int ds = s_dstatus, mark = ds > 0 && ds < FD_STATUS_COUNT ? MARK[ds] : FLUID_MARK_NONE;
-        /* the mark appears or goes: one full repaint (cells under it are not dirty) */
-        bool full = s_full_flush || mark != mark_drawn;
+        /* the mark appears, goes or changes colour: one full repaint (cells under it are not dirty) */
+        bool full = s_full_flush || mark != mark_drawn || s_dopts.palette != pal_drawn;
         const fluid_overlay_t ov = s_dov;
         const unsigned ask_seq = s_dask;
+        int64_t t1 = t0;
         if (fb && s_draw && s_frame) {
-            if (full) { memset(fb, 0, (size_t)s_fb_w * s_fb_h * sizeof(uint16_t)); s_draw->force = true; }
+            if (full) s_draw->force = true;
             /* overlays blend over the pixel under them: redraw the cells under the last
              * one (restores what it covered) and the next one, then draw it on top */
             else { fluid_draw_overlay_dirty(s_draw, &ov_drawn); fluid_draw_overlay_dirty(s_draw, &ov); }
-            nc = fluid_draw(s_draw, s_frame, fb, &s_dopts, &y0, &y1);
-            fluid_draw_overlay(s_draw, fb, s_dopts.palette, &ov);
-            fluid_draw_mark(s_draw, fb, s_dopts.palette, mark);    /* over any redrawn cell */
-            ov_drawn = ov;
-        }
-        int64_t t1 = esp_timer_get_time();
-        if (fb) {
-            if (full) { molty_display_flush(); s_full_flush = false; mark_drawn = mark; }
-            else if (y1 > y0) molty_display_flush_rows(y0, y1);
+            nc = fluid_draw_cells(s_draw, s_frame, &s_dopts);
+            t1 = esp_timer_get_time();
+            bool sent = fluid_draw_send(s_draw, &s_dopts, &ov, mark, full, s_win, s_win_px, send_win, NULL) >= 0;
+            s_full_flush = !sent;                       /* a window that failed: repaint all */
+            mark_drawn = mark; pal_drawn = s_dopts.palette; ov_drawn = ov;
+            if (s_fb_want) {                            /* the same frame into the framebuffer */
+                const fluid_rect_t t = { fb, s_fb_w, 0, 0, s_fb_w, s_fb_h };
+                fluid_draw_rect(s_draw, &s_dopts, &t, true);
+                fluid_draw_overlay(s_draw, &t, s_dopts.palette, &ov);
+                fluid_draw_mark(s_draw, &t, s_dopts.palette, mark);
+                s_fb_want = false;
+                xSemaphoreGive(s_fb_done);
+            }
             atomic_store(&s_glass_ask, ask_seq);        /* on the panel now */
         }
         int64_t t2 = esp_timer_get_time();
@@ -831,15 +920,24 @@ static void draw_task(void *arg) {
 
 /* ── Sim task (core 1) ───────────────────────────────────────────────────────── */
 
+static void pace_wake(void *task) { xTaskNotifyGive((TaskHandle_t)task); }
+
 static void fluid_task(void *arg) {
     (void)arg;
     /* TWDT: re-created on every select → self-subscribe; delete before exit */
     esp_err_t wdt_err = esp_task_wdt_add(NULL);
     if (wdt_err != ESP_OK) ESP_LOGW(TAG, "esp_task_wdt_add failed (%s)", esp_err_to_name(wdt_err));
 
-    int64_t prev = esp_timer_get_time(), last_touch = 0;
-    float fps = 0.f, sms = 0.f, wms = 0.f, fms = 0.f;
-    TickType_t wake = xTaskGetTickCount();
+    int64_t prev = esp_timer_get_time();
+    unsigned tp_seen = 0;
+    float fps = 0.f, pms = 0.f, sms = 0.f, wms = 0.f, fms = 0.f;
+    /* paced on the microsecond clock: the 100 Hz tick rounds every overrun up to the next
+     * 10 ms, which made 31 ms frames come every 37 to 50 ms */
+    esp_timer_handle_t pace = NULL;
+    const esp_timer_create_args_t pace_args = { .callback = pace_wake, .arg = xTaskGetCurrentTaskHandle(), .name = "fluid_pace" };
+    ESP_ERROR_CHECK(esp_timer_create(&pace_args, &pace));
+    int64_t next = esp_timer_get_time();
+    bool overran = false;
 
     while (s_run) {
         esp_task_wdt_reset();
@@ -860,7 +958,7 @@ static void fluid_task(void *arg) {
         req = s_req_state; req_fx = s_req_fx; req_hold = s_req_text_hold; s_req_state = -1;
         req_reel = s_req_reel; s_req_reel = false;
         nrip = s_ripn; memcpy(rip, s_ripq, sizeof(rip)); s_ripn = 0;
-        uint8_t *cblob = s_cute_blob; size_t clen = s_cute_len; s_cute_blob = NULL;
+        uint8_t *cblob = s_cute_blob; size_t clen = s_cute_len; s_cute_blob = NULL; const bool cpkg = s_cute_pkg;
         int req_mood = s_req_mood; s_req_mood = -1;
         bool req_work = s_req_work; s_req_work = false;
         float req_hold_s = s_req_hold_s;
@@ -870,6 +968,7 @@ static void fluid_task(void *arg) {
         const int nsops = s_scene_nops;
         memcpy(sops, s_scene_ops, sizeof(scene_op_t) * (size_t)nsops); s_scene_nops = 0;
         bool shed = s_req_shed; s_req_shed = false;
+        const touch_read_t tp = s_tp;
         if (!s_idle_life_loaded) { s_idle_life = idle_life_load(); s_idle_life_loaded = true; }
         int idle_life = s_idle_life;
         uint32_t tint = s_tint_in;
@@ -913,7 +1012,7 @@ static void fluid_task(void *arg) {
                     s_word_until = s_tnow;                              /* while holding the last */
             }
         }
-        if (cblob) { load_creature(cblob, clen); heap_caps_free(cblob); fd_set_creature(&s_dir, s_cute != NULL); }
+        if (cblob) { load_creature(cblob, clen, cpkg); heap_caps_free(cblob); fd_set_creature(&s_dir, cr_loaded()); }
         /* the director: state first (it may end the reel), then the mood over it */
         if (req_reel) fd_autoplay(&s_dir);
         if (req >= 0) fd_request_state(&s_dir, req, req_fx, req_hold);
@@ -939,7 +1038,7 @@ static void fluid_task(void *arg) {
         ask_follow(&want, req >= 0 || req_mood >= 0 || req_reel || nsops > 0, &cfg);
         direct(&cfg);
         for (int q = 0; q < nrip; q++) ripple(rip[q][0], rip[q][1], rip[q][2], 0.09f);
-        if (now - last_touch >= FLUID_TOUCH_US) { poll_touch(); last_touch = now; }
+        if (tp.seq != tp_seen) { poll_touch(tp.n, &tp.x, &tp.y, tp.t); tp_seen = tp.seq; }
 
         int64_t t0 = esp_timer_get_time();
         sim_frame(rdt, &cfg);
@@ -965,6 +1064,7 @@ static void fluid_task(void *arg) {
         mole_diag_sim_frame(raw_dt_us, (uint32_t)(t1 - t0));
         /* stats (EMA) */
         fps = fps > 0.f ? fps * 0.93f + (1.f / fmaxf(rdt, 1e-3f)) * 0.07f : 30.f;
+        pms = pms * 0.9f + (t0 - now) / 1000.f * 0.1f;
         sms = sms * 0.9f + (t1 - t0) / 1000.f * 0.1f;
         wms = wms * 0.9f + (t2 - t1) / 1000.f * 0.1f;
         fms = fms * 0.9f + (t3 - t0) / 1000.f * 0.1f;
@@ -975,12 +1075,12 @@ static void fluid_task(void *arg) {
         }
         xSemaphoreTake(s_mutex, portMAX_DELAY);
         memcpy(s_stats.prof_ms, prof_ema, sizeof(float) * FP_DSAMPLE);
-        s_stats.fps = fps; s_stats.frame_ms = fms; s_stats.sim_ms = sms; s_stats.wait_ms = wms;
+        s_stats.fps = fps; s_stats.frame_ms = fms; s_stats.pre_ms = pms; s_stats.sim_ms = sms; s_stats.wait_ms = wms;
         s_stats.energy = s_sim->energy; s_stats.err = s_sim->err;
         s_stats.state = s_cur; s_stats.fx = s_cur_fx; s_stats.reel = s_dir.autoplay ? s_dir.reel : -1;
         s_stats.autoplay = s_dir.autoplay; s_stats.asleep = fd_asleep(&s_dir); s_stats.status = fd_status(&s_dir);
-        s_stats.mood = s_cute ? cute_rt_mood(s_cute) : -1; s_stats.ctris = s_cute_tris;
-        s_stats.act = s_cute ? cute_rt_acting(s_cute) : -1;
+        s_stats.mood = cr_mood(); s_stats.ctris = s_cute_tris;
+        s_stats.act = cr_acting();
         s_stats.working = fd_working(&s_dir);
         s_scene_nq = s_sp.nq;
         snprintf(s_stats.scene_pkg, sizeof(s_stats.scene_pkg), "%s", s_sp.cur ? s_sp.cur->pkg_id : "");
@@ -997,18 +1097,16 @@ static void fluid_task(void *arg) {
         }
         xSemaphoreGive(s_mutex);
 
-        /* pace at 33.3 fps. An overrun frame used to always vTaskDelay(1): at a
-         * 100 Hz tick that turned every 31 ms frame into a 40 ms one (p50 39.9 ms,
-         * 27 fps, measured via /api/diag 2026-10-25). Now an overrun starts the
-         * next frame at once — but never twice in a row, so lower-priority core-1
-         * work still gets at least one tick every other frame. */
-        static bool overran;
-        if (xTaskDelayUntil(&wake, fd_asleep(&s_dir) ? FLUID_SLEEP_TICKS : FLUID_FRAME_TICKS) == pdFALSE) {
-            if (overran) vTaskDelay(1);
-            overran = !overran;
-            wake = xTaskGetTickCount();
-        } else overran = false;
+        /* pace at 33.3 fps. An overrun starts the next frame at once, but never twice in
+         * a row: lower-priority core-1 work still gets 1 ms every other frame. */
+        next += fd_asleep(&s_dir) ? FLUID_SLEEP_US : FLUID_FRAME_US;
+        int64_t wait = next - esp_timer_get_time();
+        if (wait <= 0) { next = esp_timer_get_time(); wait = overran ? 1000 : 0; overran = !overran; }
+        else overran = false;
+        if (wait > 0 && esp_timer_start_once(pace, (uint64_t)wait) == ESP_OK) ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
     }
+    esp_timer_stop(pace);
+    esp_timer_delete(pace);
     esp_task_wdt_delete(NULL);
     xSemaphoreGive(s_done);
     vTaskDelete(NULL);
@@ -1022,7 +1120,8 @@ static esp_err_t alloc_bufs(void) {
     if (!s_wdone) s_wdone = xSemaphoreCreateBinary();
     if (!s_go) s_go = xSemaphoreCreateBinary();
     if (!s_idle) s_idle = xSemaphoreCreateBinary();
-    if (!s_mutex || !s_done || !s_wdone || !s_go || !s_idle) return ESP_ERR_NO_MEM;
+    if (!s_fb_done) s_fb_done = xSemaphoreCreateBinary();
+    if (!s_mutex || !s_done || !s_wdone || !s_go || !s_idle || !s_fb_done) return ESP_ERR_NO_MEM;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     if (!s_stage) {                              /* the board's display, once */
         s_fb_w = molty_display_width(); s_fb_h = molty_display_height();
@@ -1081,10 +1180,16 @@ esp_err_t mole_fluid_creature_init(void) {
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
         return ESP_ERR_NO_MEM;
     }
-    {   /* the stored creature (or the firmware default) — built on the task */
-        size_t clen = 0; bool dflt = false;
-        uint8_t *cb = creature_bytes(&clen, &dflt);
-        if (cb) queue_creature(cb, clen);
+    if (!s_win) {                                /* after the grid: its hot fields come first */
+        s_win_px = s_fb_w * FLUID_WIN_ROWS;
+        s_win = heap_caps_malloc((size_t)s_win_px * sizeof(uint16_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        if (!s_win) s_win = heap_caps_malloc((size_t)s_win_px * sizeof(uint16_t), MALLOC_CAP_SPIRAM);   /* bounced, slower */
+        if (!s_win) { free_grid(); return ESP_ERR_NO_MEM; }
+    }
+    {   /* the chosen creature (boot_creature), built on the task */
+        size_t clen = 0; bool pkg = false; char id[PKG_ID_MAX + 1];
+        uint8_t *cb = boot_creature(&clen, &pkg, id);
+        if (cb) queue_creature(cb, clen, pkg, id);
     }
     /* boot: the director wants the creature (the stored or default .molty queued above
      * loads on the task's first frame); the blob stands in only if none loads */
@@ -1146,6 +1251,7 @@ void mole_fluid_creature_deinit(void) {
     xSemaphoreGive(s_mutex);
     free_grid();
     cute_rt_destroy(s_cute); s_cute = NULL;
+    cpk_destroy(s_cpk); s_cpk = NULL;
     ESP_LOGI(TAG, "fluid creature deinit");
 }
 
@@ -1185,8 +1291,8 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     const uint32_t gestures = s_gestures;
     if (!s_idle_life_loaded) { s_idle_life = idle_life_load(); s_idle_life_loaded = true; }
     const int idle_life = s_idle_life;
-    char cname[40], cerr[40];
-    memcpy(cname, s_cute_name, sizeof(cname)); memcpy(cerr, s_cute_err, sizeof(cerr));
+    char cname[40], cerr[40], cid[PKG_ID_MAX + 1];
+    memcpy(cname, s_cute_name, sizeof(cname)); memcpy(cerr, s_cute_err, sizeof(cerr)); memcpy(cid, s_cr_id, sizeof(cid));
     cJSON *root = cJSON_CreateObject();
     if (root) cJSON_AddStringToObject(root, "text", s_text ? s_text : "");
     xSemaphoreGive(s_mutex);
@@ -1215,6 +1321,7 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
         cJSON *cj = cJSON_AddObjectToObject(root, "creature_info");
         if (cj) {
             cJSON_AddStringToObject(cj, "name", cname);
+            cJSON_AddStringToObject(cj, "package", cid);   /* "" = a .molty */
             cJSON_AddNumberToObject(cj, "tris", st.ctris);
             if (cerr[0]) cJSON_AddStringToObject(cj, "error", cerr);
         }
@@ -1239,10 +1346,13 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     cJSON_AddStringToObject(root, "word",        st.word);
     cJSON_AddNumberToObject(root, "word_idx",    st.word_idx);
     cJSON_AddNumberToObject(root, "nwords",      st.nwords);
-    /* read-only timing (EMA, ms). Core 1: sim_ms, wait_ms (blocked on the drawer),
-     * frame_ms (sim + wait + snapshot, excludes pacing). Core 0: draw_ms, flush_ms. */
+    /* read-only timing (EMA, ms). Core 1: pre_ms (input, requests, director before the
+     * sim), sim_ms, wait_ms (blocked on the drawer), frame_ms (sim + wait + snapshot,
+     * excludes pacing). Core 0: draw_ms (which cells changed), flush_ms (the changed
+     * windows drawn and sent to the panel). */
     cJSON_AddNumberToObject(root, "fps",         roundf(st.fps * 10.f) / 10.f);
     cJSON_AddNumberToObject(root, "frame_ms",    roundf(st.frame_ms * 100.f) / 100.f);
+    cJSON_AddNumberToObject(root, "pre_ms",      roundf(st.pre_ms * 100.f) / 100.f);
     cJSON_AddNumberToObject(root, "sim_ms",      roundf(st.sim_ms * 100.f) / 100.f);
     cJSON_AddNumberToObject(root, "wait_ms",     roundf(st.wait_ms * 100.f) / 100.f);
     cJSON_AddNumberToObject(root, "draw_ms",     roundf(st.draw_ms * 100.f) / 100.f);

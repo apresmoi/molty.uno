@@ -5,7 +5,8 @@
  * Pin reference: Waveshare 1.46 demo bundle: Arduino/examples/LVGL_Arduino/Display_SPD2010.h
  *
  * Notes:
- *  - No double-buffering, no DMA streaming.  Single PSRAM framebuffer + panel_draw_bitmap flush.
+ *  - Single PSRAM framebuffer + panel_draw_bitmap flush; mole_lcd_blit sends a caller's
+ *    window and waits for its last chunk (on_color_trans_done).
  *  - The TCA9554PWR I/O expander controls the LCD RST line (EXIO_PIN1 = bit 0).
  *  - The I2C bus is passed in by board.c, which creates it.
  *  - PSRAM allocation uses MALLOC_CAP_SPIRAM.  The framebuffer is 412*412*2 = 339,488 bytes.
@@ -20,6 +21,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
@@ -54,14 +56,7 @@ static const char *TAG = "mole_lcd";
 static esp_lcd_panel_handle_t s_panel   = NULL;
 static uint16_t              *s_fb      = NULL;   /* PSRAM framebuffer */
 
-/* Packed-staging scratch for partial (sub-row-width) flushes — see
- * mole_lcd_flush_rect's header comment (mole_lcd.h) for why this exists (the
- * panel's draw_bitmap has no stride parameter). Sized to budgets.md §1.2's
- * "Dirty-rect packed staging" line (65,536 B); allocated once, lazily, in
- * PSRAM (same MALLOC_CAP_SPIRAM convention as the framebuffer itself). */
-#define MOLE_LCD_STAGING_MAX_BYTES 65536
-#define MOLE_LCD_STAGING_MAX_PX    (MOLE_LCD_STAGING_MAX_BYTES / sizeof(uint16_t))
-static uint16_t *s_staging = NULL;
+static SemaphoreHandle_t      s_sent    = NULL;   /* given when a color transfer went out */
 
 /* ── Helpers ────────────────────────────────────────────────────────────────── */
 
@@ -76,6 +71,16 @@ static esp_err_t backlight_on(void)
     };
     ESP_RETURN_ON_ERROR(gpio_config(&io_cfg), TAG, "backlight gpio_config");
     return gpio_set_level(LCD_BL_GPIO, 1);
+}
+
+static bool IRAM_ATTR color_sent(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t *e, void *ctx)
+{
+    (void)io; (void)e; (void)ctx;
+    BaseType_t woken = pdFALSE;
+    xSemaphoreGiveFromISR(s_sent, &woken);
+    portYIELD_FROM_ISR(woken);   /* the SPI driver drops the return value: without this the
+                                  * blit waited for the next tick, up to 10 ms a window */
+    return woken == pdTRUE;
 }
 
 /* ── Public API ─────────────────────────────────────────────────────────────── */
@@ -93,6 +98,9 @@ esp_err_t mole_lcd_init(i2c_master_bus_handle_t bus)
     ESP_RETURN_ON_ERROR(mole_tca9554_set_pin(LCD_RST_EXIO, 1), TAG, "rst high");
     vTaskDelay(pdMS_TO_TICKS(120));
     ESP_LOGI(TAG, "LCD RST toggled via TCA9554 EXIO_PIN2");
+
+    s_sent = xSemaphoreCreateBinary();
+    if (!s_sent) return ESP_ERR_NO_MEM;
 
     /* 2. Init SPI2 host for Quad-SPI */
     spi_bus_config_t bus_cfg = {
@@ -122,7 +130,7 @@ esp_err_t mole_lcd_init(i2c_master_bus_handle_t bus)
          * scarce internal heap per flush — starving Wi-Fi, TLS and, once it ran
          * dry, the flush itself ("send color failed", 2026-10-25). */
         .trans_queue_depth  = 2,
-        .on_color_trans_done = NULL,
+        .on_color_trans_done = color_sent,
         .user_ctx           = NULL,
         .lcd_cmd_bits       = 32,          /* QSPI cmd width */
         .lcd_param_bits     = 8,
@@ -164,19 +172,6 @@ esp_err_t mole_lcd_init(i2c_master_bus_handle_t bus)
     }
     ESP_LOGI(TAG, "PSRAM framebuffer allocated: %u bytes @ %p", (unsigned)fb_bytes, s_fb);
 
-    /* 6b. Packed-staging scratch for mole_lcd_flush_rect / mole_lcd_blit's
-     * partial-width push (see mole_lcd.h). Non-fatal if it fails to allocate
-     * — mole_lcd_flush_rect simply returns ESP_ERR_NO_MEM and callers fall
-     * back to a full mole_lcd_flush(), never a garbled partial one. */
-    s_staging = (uint16_t *)heap_caps_malloc(MOLE_LCD_STAGING_MAX_BYTES, MALLOC_CAP_SPIRAM);
-    if (!s_staging) {
-        ESP_LOGW(TAG, "Failed to allocate %u-byte PSRAM staging buffer — partial-rect flush disabled",
-                 (unsigned)MOLE_LCD_STAGING_MAX_BYTES);
-    } else {
-        ESP_LOGI(TAG, "PSRAM packed-staging buffer allocated: %u bytes @ %p",
-                 (unsigned)MOLE_LCD_STAGING_MAX_BYTES, s_staging);
-    }
-
     /* 7. Backlight on */
     ESP_RETURN_ON_ERROR(backlight_on(), TAG, "backlight_on");
 
@@ -192,68 +187,13 @@ esp_err_t mole_lcd_init(i2c_master_bus_handle_t bus)
     return ESP_OK;
 }
 
-/* Pushes the (x,y,w,h) window ALREADY WRITTEN into s_fb to the panel, staging
- * it through s_staging in <=MOLE_LCD_STAGING_MAX_PX-sized row-chunks so the
- * panel always receives a tightly-packed (no stride gap) buffer — see
- * mole_lcd_flush_rect's header comment (mole_lcd.h) for why this is required
- * (the panel's draw_bitmap has no stride parameter; a raw strided pointer into
- * s_fb produces a sheared image for any w < MOLE_LCD_WIDTH). Shared by
- * mole_lcd_blit (after it writes the caller's data into s_fb) and
- * mole_lcd_flush_rect (which reads a window someone else already painted into
- * s_fb, e.g. the fluid drawer). */
-static esp_err_t lcd_push_rect_staged(int x, int y, int w, int h)
+esp_err_t mole_lcd_blit(int x, int y, int w, int h, const uint16_t *px)
 {
-    if (!s_staging) return ESP_ERR_NO_MEM;
-    int rows_per_chunk = (int)(MOLE_LCD_STAGING_MAX_PX / (size_t)w);
-    if (rows_per_chunk < 1) rows_per_chunk = 1; /* w alone should never exceed 412 <= MAX_PX */
-    for (int y0 = 0; y0 < h; y0 += rows_per_chunk) {
-        int chunk_h = h - y0;
-        if (chunk_h > rows_per_chunk) chunk_h = rows_per_chunk;
-        for (int row = 0; row < chunk_h; row++) {
-            memcpy(s_staging + (size_t)row * w,
-                   s_fb + (size_t)(y + y0 + row) * MOLE_LCD_WIDTH + x,
-                   (size_t)w * sizeof(uint16_t));
-        }
-        esp_err_t e = esp_lcd_panel_draw_bitmap(s_panel, x, y + y0, x + w, y + y0 + chunk_h,
-                                                 (const void *)s_staging);
-        if (e != ESP_OK) return e;
-    }
-    return ESP_OK;
-}
-
-esp_err_t mole_lcd_blit(int x, int y, int w, int h, const uint16_t *rgb565)
-{
-    if (!s_panel || !s_fb) return ESP_ERR_INVALID_STATE;
-    if (x < 0 || y < 0 || w <= 0 || h <= 0) return ESP_ERR_INVALID_ARG;
-    if (x + w > MOLE_LCD_WIDTH || y + h > MOLE_LCD_HEIGHT) return ESP_ERR_INVALID_ARG;
-
-    /* Write the region into the PSRAM framebuffer */
-    for (int row = 0; row < h; row++) {
-        uint16_t *dst = s_fb + (y + row) * MOLE_LCD_WIDTH + x;
-        const uint16_t *src = rgb565 + row * w;
-        memcpy(dst, src, (size_t)w * sizeof(uint16_t));
-    }
-
-    /* Push the updated rectangle to the panel. Full-width rows (w ==
-     * MOLE_LCD_WIDTH) have no stride gap, so a direct pointer into s_fb is
-     * already tightly packed — skip the staging copy in that (common,
-     * mole_lcd_flush_rows-equivalent) case. Any narrower window MUST go
-     * through the packed-staging path (see lcd_push_rect_staged). */
-    if (w == MOLE_LCD_WIDTH) {
-        return esp_lcd_panel_draw_bitmap(s_panel, x, y, x + w, y + h,
-                                         (const void *)(s_fb + (size_t)y * MOLE_LCD_WIDTH + x));
-    }
-    return lcd_push_rect_staged(x, y, w, h);
-}
-
-esp_err_t mole_lcd_fill(uint16_t color)
-{
-    if (!s_panel || !s_fb) return ESP_ERR_INVALID_STATE;
-    size_t n = (size_t)MOLE_LCD_WIDTH * MOLE_LCD_HEIGHT;
-    for (size_t i = 0; i < n; i++) s_fb[i] = color;
-    return esp_lcd_panel_draw_bitmap(s_panel,
-        0, 0, MOLE_LCD_WIDTH, MOLE_LCD_HEIGHT,
-        (const void *)s_fb);
+    if (!s_panel) return ESP_ERR_INVALID_STATE;
+    xSemaphoreTake(s_sent, 0);                          /* a flush's leftover give */
+    esp_err_t e = esp_lcd_panel_draw_bitmap(s_panel, x, y, x + w, y + h, px);
+    if (e == ESP_OK && xSemaphoreTake(s_sent, pdMS_TO_TICKS(100)) != pdTRUE) e = ESP_ERR_TIMEOUT;
+    return e;
 }
 
 int mole_lcd_width(void)  { return MOLE_LCD_WIDTH; }
@@ -279,18 +219,4 @@ esp_err_t mole_lcd_flush_rows(int y0, int y1)
     return esp_lcd_panel_draw_bitmap(s_panel,
         0, y0, MOLE_LCD_WIDTH, y1,
         (const void *)(s_fb + (size_t)y0 * MOLE_LCD_WIDTH));
-}
-
-esp_err_t mole_lcd_flush_rect(int x, int y, int w, int h)
-{
-    if (!s_panel || !s_fb) return ESP_ERR_INVALID_STATE;
-    if (x < 0 || y < 0 || w <= 0 || h <= 0) return ESP_ERR_INVALID_ARG;
-    if (x + w > MOLE_LCD_WIDTH || y + h > MOLE_LCD_HEIGHT) return ESP_ERR_INVALID_ARG;
-
-    if (w == MOLE_LCD_WIDTH) {
-        /* No stride gap — same fast path as mole_lcd_flush_rows. */
-        return esp_lcd_panel_draw_bitmap(s_panel, x, y, x + w, y + h,
-                                         (const void *)(s_fb + (size_t)y * MOLE_LCD_WIDTH + x));
-    }
-    return lcd_push_rect_staged(x, y, w, h);
 }

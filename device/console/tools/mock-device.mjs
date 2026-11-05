@@ -45,6 +45,8 @@ const fluid = {
   palette: 'pastel', ring_color: 'accent', listen_ms: 30000, ack: 'chirp', filler_ms: 2500, shake_talk: true, idle_life: 'lively', word: '', word_idx: 0, nwords: 7, fps: 33.1,
 };
 let current = 'fluid';
+let pkg = 'duck';   // selected creature package; '' once a .molty upload is shown
+const PKGS = [['duck', 'Duck', 'builtin'], ['cat', 'Cat', 'builtin'], ['octopus', 'Octopus', 'builtin']].map(([id, name, source]) => ({ id, name, version: '1.0.0', source }));
 const LINK0 = { device_id: 'molty-k7m2w9c4ya', link_code: 'K7QX2MPA', relay_url: 'wss://molty-relay.example.workers.dev', connected: true, auth_failed: false, close_code: 0,
   pair: null, last_pair: { seq: 3, agent_name: 'an-older-agent', ok: true } };
 const link = structuredClone(LINK0);
@@ -130,6 +132,12 @@ createServer(async (req, res) => {
     case 'POST /api/forget': Object.assign(wifi, { state: 'setup_needed', ssid: undefined, ip: undefined, rssi: undefined }); return json(res, { ok: true });
     case 'GET /api/creature': return json(res, { ok: true, current, available: ['eye', 'claude', 'glyph', 'reader', 'fluid', 'ui'] });
     case 'POST /api/creature': { const n = b().name; if (!['eye', 'claude', 'glyph', 'reader', 'fluid', 'ui'].includes(n)) return json(res, { ok: false, error: 'not_found' }); current = n; return json(res, { ok: true, current, available: [] }); }
+    case 'GET /api/creature/list': return json(res, { ok: true, current: pkg, creatures: PKGS });
+    case 'POST /api/creature/select': {
+      const c = PKGS.find((x) => x.id === url.searchParams.get('id'));
+      if (!c) return json(res, { ok: false, error: 'not_installed' });
+      pkg = c.id; return json(res, { ok: true, id: c.id, name: c.name });
+    }
     case 'GET /api/creature/state': return json(res, fluid);
     case 'POST /api/creature/state': {
       const o = b();
@@ -151,6 +159,7 @@ createServer(async (req, res) => {
       if (!cfg.file) return notFound(res);
       if (raw.length > 16384) return json(res, { ok: false, error: 'bad_size_max_16kb' });
       if (raw.subarray(0, 4).toString('latin1') !== 'MLTY') return json(res, { ok: false, error: 'bad_magic' });
+      pkg = '';
       return json(res, { ok: true, bytes: raw.length });
     case 'GET /api/update': return cfg.update ? json(res, { ok: true, ...upd }) : notFound(res);
     case 'POST /api/update': {

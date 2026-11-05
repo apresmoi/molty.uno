@@ -12,7 +12,7 @@ export const WORKING_CAP = "working";
 export const WORKING_ACTIONS: readonly string[] = ["inspect", "paddle"];
 /** A say's `[working]` cue: never a device mark. The relay plays the say to its end, then sets the mood. */
 export const WORKING_MOOD = "working";
-export const COMMANDS = ["status", "state", "mood", "show", "say", "quick", "listen", "volume", "imu", "diag", "log", "act", "gestures", "pkg.install", "pkg.remove", "pkg.list", "scene.play", "scene.queue", "scene.clear"] as const;
+export const COMMANDS = ["status", "state", "mood", "show", "say", "quick", "listen", "volume", "imu", "diag", "log", "act", "gestures", "pkg.install", "pkg.remove", "pkg.list", "scene.play", "scene.queue", "scene.clear", "creature.select", "creature.list"] as const;
 /** What the human's inputs can do (`gestures`; firmware: sense/gesture.h). */
 export const GESTURE_INPUTS = ["tap", "double_tap", "button_accept", "button_reject"] as const;
 export const GESTURE_ACTIONS = ["none", "talk", "event", "stop"] as const;
@@ -24,9 +24,10 @@ export type CommandName = (typeof COMMANDS)[number];
 
 // ---- packages (docs/PACKAGES.md): data-only drawings a Molty downloads itself, played with a few params ----
 
-/** Firmware caps: pkg.* need `pkg`, scene.* need `scene`. Anything else is a clean 409 unsupported. */
+/** Firmware caps: pkg.* need `pkg`, scene.* need `scene`, creature.* need `creatures`. Anything else is a clean 409 unsupported. */
 export const PKG_CAP = "pkg";
 export const SCENE_CAP = "scene";
+export const CREATURES_CAP = "creatures";
 export const PKG_ID_RE = /^[a-z0-9-]{1,32}$/;
 /** A package file's ceiling; the device downloads it straight from the url: its bytes never pass through the relay. */
 export const MAX_PKG_BYTES = 262144;
@@ -367,6 +368,10 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
     case "pkg.remove":
       only(args, ["id"]);
       return { name: n, args: { id: pkgId(args.id, "id") }, job: false };
+    case "creature.select":
+      only(args, ["id"]);
+      return { name: n, args: { id: pkgId(args.id, "id") }, job: false };
+    case "creature.list":
     case "pkg.list":
     case "scene.clear":
       only(args, []);
