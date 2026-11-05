@@ -73,6 +73,7 @@ const STATUS: Record<string, number> = {
   no_checksum: 409,
   unknown_version: 409,
   release_unavailable: 503,
+  catalog_unavailable: 503,
   pair_busy: 409,
   device_timeout: 504,
   playback_timeout: 504,

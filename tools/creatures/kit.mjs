@@ -4,6 +4,7 @@
 import { writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname } from 'node:path';
+import { indexEntry } from '../../packages/tools/index.mjs';
 
 // ---- terms: a channel is [name, terms, options]; a term is [gain, ...factors]; a factor is [op, source, ...params] or '@channel'
 export const ch = (name, terms, o) => (o ? [name, terms, o] : [name, terms]);
@@ -179,7 +180,7 @@ export function writePackage(file, pkg) {
   const size = Buffer.byteLength(text + '\n'), sha256 = createHash('sha256').update(text + '\n').digest('hex');
   // packages/index.json: this package's entry, the others left as they are
   const idx = new URL('../../packages/index.json', import.meta.url), all = existsSync(idx) ? JSON.parse(readFileSync(idx, 'utf8')) : {};
-  all[pkg.id] = { name: pkg.name, version: pkg.version, kind: pkg.kind, path: `packages/${pkg.id}/${pkg.id}.json`, size, sha256 };
+  all[pkg.id] = indexEntry(pkg, Buffer.from(text + '\n'));
   writeFileSync(idx, JSON.stringify(Object.fromEntries(Object.entries(all).sort(([a], [b]) => (a < b ? -1 : 1))), null, 2) + '\n');
   return { size, sha256 };
 }

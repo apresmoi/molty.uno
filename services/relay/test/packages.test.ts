@@ -3,7 +3,9 @@
 import { describe, expect, it } from "vitest";
 import type { RelayBackend } from "../src/core/api.js";
 import { CommandError, MAX_PKG_BYTES, MAX_SCENE_PARAMS_BYTES, validateCommand } from "../src/core/commands.js";
-import type { DeviceRoom } from "../src/core/room.js";
+import type { DeviceRoom, RoomDeps } from "../src/core/room.js";
+import { CATALOG_LIMITS } from "../src/core/catalog.js";
+import { realClock } from "../src/core/store.js";
 import { handleMcp } from "../src/surfaces/mcp.js";
 import { handleRest } from "../src/surfaces/rest.js";
 import { DEVICE, type FakeSocket, LINK, connect, makeRoom } from "./helpers.js";
@@ -14,7 +16,7 @@ const SHA = "7d618cba219c6e97b7706c43a352ee6b4a6253ab84ad61c954a4c9ae0dbf8be2";
 const INSTALL = { id: "astrology", url: "https://raw.githubusercontent.com/apresmoi/molty.uno/main/packages/astrology/astrology.json", sha256: SHA, size: 75232, name: "Astrology" };
 const PLAY = { pkg: "astrology", layout: "tonight", params: { moon_lit: 0.499, moon_side: -1, sign: "leo" } };
 
-type Opts = { caps?: string[]; installMs?: number; refuse?: string; outcome?: object | null };
+type Opts = { caps?: string[]; installMs?: number; refuse?: string; outcome?: object | null; installed?: object[] } & Pick<RoomDeps, "fetch" | "clock" | "packagesRef">;
 /**
  * A device that answers every cmd at once. pkg.install: `refuse` in the res, else {job, id} and, after
  * `installMs` (the owner's tap and the download), its `pkg` event (`outcome`; null = never).
@@ -29,7 +31,7 @@ function device(room: DeviceRoom, sock: FakeSocket, opts: Opts = {}) {
     if (f.t !== "cmd") return;
     cmds.push({ name: f.name, args: f.args });
     const install = f.name === "pkg.install";
-    const res = install && opts.refuse ? { ok: false, error: opts.refuse } : { ok: true, result: install ? { job: f.args.job, id: f.args.id } : f.name === "pkg.list" ? { packages: [] } : {} };
+    const res = install && opts.refuse ? { ok: false, error: opts.refuse } : { ok: true, result: install ? { job: f.args.job, id: f.args.id } : f.name === "pkg.list" ? { packages: opts.installed ?? [] } : {} };
     setTimeout(() => void room.socketMessage(sock, JSON.stringify({ t: "res", id: f.id, ...res })), 1);
     const ev = opts.outcome === undefined ? { state: "installed", version: "1.0.0" } : opts.outcome;
     if (install && !opts.refuse && ev) setTimeout(() => void room.socketMessage(sock, JSON.stringify({ t: "evt", name: "pkg", data: { job: f.args.job, id: f.args.id, ...ev } })), opts.installMs ?? 5);
@@ -38,7 +40,7 @@ function device(room: DeviceRoom, sock: FakeSocket, opts: Opts = {}) {
 }
 
 async function setup(opts: Opts = {}) {
-  const ctx = makeRoom({ timings: FAST });
+  const ctx = makeRoom({ timings: FAST, fetch: opts.fetch, clock: opts.clock, packagesRef: opts.packagesRef });
   const sock = await connect(ctx.room, ctx.host, undefined, LINK, { caps: opts.caps ?? CAPS });
   const dev = device(ctx.room, sock, opts);
   const out = await ctx.room.pair({ device_id: DEVICE, link_code: LINK, agent_name: "astro" });
@@ -186,5 +188,91 @@ describe("package and scene commands: forwarding", () => {
     expect((await mcp(w.backend, w.token, "molty_scene", { op: "clear" })).isError).toBe(false);
     expect((await mcp(w.backend, w.token, "molty_scene", { op: "play", ...PLAY, ttl_s: 9999 })).structuredContent).toMatchObject({ error: "invalid_args" });
     expect(w.dev.cmds.map((c) => c.name)).toEqual(["pkg.install", "scene.play", "scene.clear"]);
+  });
+});
+
+// pkg.available: the repo's packages/index.json (fetched, cached briefly), each entry ready for pkg.install.
+const INDEX = {
+  astrology: { name: "Astrology", version: "1.1.0", kind: "scenes", description: "Draws the sky.", layouts: ["chart", "signs"], skills: ["molty-astro"], path: "packages/astrology/astrology.json", size: 72667, sha256: SHA },
+  duck: { name: "Duck", version: "1.0.0", kind: "creature", description: "A duck.", path: "packages/duck/duck.json", size: 29651, sha256: SHA },
+  broken: { name: "Broken", version: "1.0.0", kind: "scenes", path: "../../etc/passwd", size: 10, sha256: SHA },
+};
+const RAW = "https://raw.githubusercontent.com/apresmoi/molty.uno/";
+function github(answer: () => Response | Promise<Response> = () => new Response(JSON.stringify(INDEX))) {
+  const urls: string[] = [];
+  const fetch = async (req: Request) => {
+    urls.push(req.url);
+    return answer();
+  };
+  return { fetch, urls };
+}
+
+describe("pkg.available: the catalog", () => {
+  it("lists every valid index entry with its install args, marked with what this Molty has; fetched once while fresh", async () => {
+    const gh = github();
+    const w = await setup({ fetch: gh.fetch, installed: [{ id: "astrology", name: "Astrology", version: "1.0.0", kind: "scenes", size: 1 }] });
+    const out = (await cmd(w, "pkg.available", {})).body;
+    expect(out).toMatchObject({ ok: true, result: { ref: "main", device: "online" } });
+    const [astro, duck, ...rest] = out.result.packages;
+    expect(rest).toEqual([]);
+    expect(astro).toEqual({
+      id: "astrology", name: "Astrology", version: "1.1.0", kind: "scenes", description: "Draws the sky.", layouts: ["chart", "signs"], skills: ["molty-astro"],
+      install: { id: "astrology", url: `${RAW}main/packages/astrology/astrology.json`, sha256: SHA, size: 72667, name: "Astrology" },
+      installed: "1.0.0", update: true,
+    });
+    expect(duck).toMatchObject({ id: "duck", installed: null });
+    expect(duck.update).toBeUndefined();
+    expect(validateCommand("pkg.install", astro.install)).toMatchObject({ name: "pkg.install", args: astro.install });
+    await cmd(w, "pkg.available", {});
+    expect(gh.urls).toEqual([`${RAW}main/packages/index.json`]);
+    expect(w.dev.sent("pkg.list")).toHaveLength(2);
+  });
+
+  it("needs no device: offline or without packages it is the catalog alone", async () => {
+    const w = await setup({ fetch: github().fetch });
+    (w.room as any).liveSocket().close(1006, "gone");
+    expect((await cmd(w, "pkg.available", {})).body).toMatchObject({ ok: true, result: { device: "offline", packages: [{ id: "astrology" }, { id: "duck" }] } });
+    const old = await setup({ fetch: github().fetch, caps: ["say", "listen"] });
+    const res = (await cmd(old, "pkg.available", {})).body;
+    expect(res).toMatchObject({ ok: true, result: { device: "unsupported" } });
+    expect(res.result.packages[0].installed).toBeUndefined();
+    expect(old.dev.cmds).toEqual([]);
+  });
+
+  it("the index unreachable: 503 catalog_unavailable, retried only after a pause; a later failure serves the last good list", async () => {
+    let t = 1_000_000, down = true;
+    const clock = { ...realClock, now: () => t };
+    const gh = github(() => (down ? new Response("404: Not Found", { status: 404 }) : new Response(JSON.stringify(INDEX))));
+    const w = await setup({ fetch: gh.fetch, clock });
+    const r = await cmd(w, "pkg.available", {});
+    expect(r.status).toBe(503);
+    expect(r.body).toMatchObject({ ok: false, error: "catalog_unavailable", message: expect.stringMatching(/^catalog unavailable: GitHub answered 404/) });
+    await cmd(w, "pkg.available", {});
+    expect(gh.urls).toHaveLength(1);
+    t += CATALOG_LIMITS.failRetryMs;
+    down = false;
+    expect((await cmd(w, "pkg.available", {})).body).toMatchObject({ ok: true });
+    t += CATALOG_LIMITS.freshMs;
+    down = true;
+    expect((await cmd(w, "pkg.available", {})).body).toMatchObject({ ok: true, result: { packages: [{ id: "astrology" }, { id: "duck" }] } });
+    expect(gh.urls).toHaveLength(3);
+    const dead = await setup({ fetch: async () => { throw new TypeError("network"); } });
+    expect((await cmd(dead, "pkg.available", {})).body).toMatchObject({ error: "catalog_unavailable", message: expect.stringMatching(/could not be reached/) });
+  });
+
+  it("the ref is configurable; one that is not a branch or tag never fetches", async () => {
+    const gh = github();
+    const w = await setup({ fetch: gh.fetch, packagesRef: "release/1.2" });
+    expect((await cmd(w, "pkg.available", {})).body.result.packages[0].install.url).toBe(`${RAW}release/1.2/packages/astrology/astrology.json`);
+    const bad = github();
+    const b = await setup({ fetch: bad.fetch, packagesRef: "../evil" });
+    expect((await cmd(b, "pkg.available", {})).body).toMatchObject({ error: "catalog_unavailable", message: expect.stringMatching(/PACKAGES_REF/) });
+    expect(bad.urls).toEqual([]);
+    expect(code(() => validateCommand("pkg.available", { ref: "dev" }))).toBe("invalid_args");
+  });
+
+  it("MCP molty_package op available", async () => {
+    const w = await setup({ fetch: github().fetch });
+    expect((await mcp(w.backend, w.token, "molty_package", { op: "available" })).structuredContent).toMatchObject({ device: "online", packages: [{ id: "astrology", install: { name: "Astrology" } }, { id: "duck" }] });
   });
 });

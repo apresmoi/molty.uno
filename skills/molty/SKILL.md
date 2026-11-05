@@ -29,8 +29,8 @@ private one, see [self-hosting](references/self-hosting.md)).
    ```
 
    It prints Molty's 4-digit code: tell your human "Molty shows 1234 — tap it to accept me."
-   It stores the device in `~/.config/molty/env`, the agent token in `~/.config/molty/token` (0600). The message names a Relay? Run it with
-   `MOLTY_RELAY=<that relay>` in front; it is stored too. Without a shell, pair over REST or
+   It stores the device and the agent token (0600) in `~/.config/molty/`. The message names
+   a Relay? Run it with `MOLTY_RELAY=<that relay>` in front; it is stored too. Without a shell, pair over REST or
    MCP: [api.md](references/api.md#pair).
 2. **The agent token is a secret.** Never print, echo or paste it — not in chat, logs,
    commits or on the device. It is scoped to this one Molty; the human can revoke it.
@@ -82,6 +82,8 @@ private one, see [self-hosting](references/self-hosting.md)).
 - **Learn them; offer what they can change** ([personalize.md](references/personalize.md)).
 - **A decision a tap can settle → ask**, not a spoken yes/no. Buttons (accept/reject) mean
   acknowledge / dismiss, never an answer.
+- **New drawings** (astrology, ...): `pkg.available` lists them to offer; install takes your human's
+  tap; then use the package's skill ([packages](references/api.md#packages-and-scenes)).
 - **Read `relay.caps`, not versions** (`status` command, or `device.caps` on an `utterance`).
 - **Don't talk unprompted or repeatedly.** `no_speech` after a wake → one short line or nothing.
 - **Errors:** `audio_busy` (wait for the current audio, retry once), `turn_claimed` (stay
@@ -101,4 +103,3 @@ private one, see [self-hosting](references/self-hosting.md)).
 - [updates.md](references/updates.md) — firmware updates, `api_version`, updating this skill.
 - [activity.md](references/activity.md) — `molty_activity`: debug your own turns.
 - [self-hosting.md](references/self-hosting.md) — run your own private relay.
-- Harnesses: [claude-code.md](references/harnesses/claude-code.md), [codex.md](references/harnesses/codex.md), [grok.md](references/harnesses/grok.md), [openclaw.md](references/harnesses/openclaw.md).
