@@ -109,9 +109,9 @@ static int work_pick(fluid_director_t *d) {
     return pick;
 }
 
-static void start_act(fluid_director_t *d, int act) {
+static void start_act(fluid_director_t *d, int act, float dur) {
     d->act_start = act;
-    d->acting_left = cute_act_dur(act);
+    d->acting_left = dur;
 }
 
 /* queue a transition; the creature falls back to the blob while none is loaded */
@@ -189,6 +189,8 @@ void fd_agent_work(fluid_director_t *d, float hold_s) {
 
 bool fd_working(const fluid_director_t *d) { return d->work_left > 0.f; }
 
+void fd_set_own_work(fluid_director_t *d, bool own) { d->own_work = own; }
+
 void fd_user(fluid_director_t *d) { d->asleep = false; d->quiet = 0.f; d->yawned = false; }
 
 void fd_set_idle_life(fluid_director_t *d, int level) {
@@ -203,9 +205,9 @@ void fd_set_busy(fluid_director_t *d, bool busy, bool covered) {
     d->busy = busy || covered; d->covered = covered;
 }
 
-void fd_agent_act(fluid_director_t *d, int act) {
-    if (act < 0 || act >= CUTE_N_ACTS) return;
-    d->act_req = act; d->act_req_ttl = d->cfg.act_ttl_s;
+void fd_agent_act(fluid_director_t *d, int act, float dur) {
+    if (act < 0 || dur <= 0.f) return;
+    d->act_req = act; d->act_req_dur = dur; d->act_req_ttl = d->cfg.act_ttl_s;
     fd_activity(d);
 }
 
@@ -224,6 +226,10 @@ void fd_shake(fluid_director_t *d) {
     fd_user(d);
     d->flash = CM_SURPRISED; d->flash_left = FLASH_SURPRISED_S;
 }
+
+void fd_set_scene(fluid_director_t *d, bool playing) { d->scene_on = playing; }
+
+bool fd_scene_wanted(const fluid_director_t *d) { return target(d) == FD_ST_SCENE; }
 
 void fd_set_status(fluid_director_t *d, int status) {
     if (status >= 0 && status < FD_STATUS_COUNT) d->status = status;
@@ -246,6 +252,8 @@ void fd_tick(fluid_director_t *d, float dt, bool text_done) {
         if (d->reel < 0 || (reading ? text_done : d->reel_t >= REEL[d->reel].dur)) reel_step(d);
     } else if (reading && !d->text_hold && d->text_done_t >= d->cfg.text_return_s) {
         go(d, FD_ST_CREATURE, 0);          /* show / say: back to the creature */
+    } else if (d->cur == FD_ST_SCENE && !d->pending && !d->scene_on) {
+        go(d, FD_ST_CREATURE, 0);          /* the scene ended (ttl, dur, clear) */
     }
 
     if (d->held_left > 0.f && (d->held_left -= dt) <= 0.f) {
@@ -259,16 +267,16 @@ void fd_tick(fluid_director_t *d, float dt, bool text_done) {
     /* an agent's action: once the creature is on screen and nothing covers it */
     const bool shown = !d->autoplay && !d->pending && d->cur == FD_ST_CREATURE;
     if (d->act_req >= 0) {
-        if (shown && !d->covered) { start_act(d, d->act_req); d->act_req = -1; }
+        if (shown && !d->covered) { start_act(d, d->act_req, d->act_req_dur); d->act_req = -1; }
         else if ((d->act_req_ttl -= dt) <= 0.f) d->act_req = -1;
     }
 
     /* working: the agent is busy, so is the creature (fd_agent_work woke it; work_ttl_s < sleep_after_s) */
     if (d->work_left > 0.f) {
         if ((d->work_left -= dt) <= 0.f) { d->work_left = 0.f; d->next_idle = idle_gap(d); }
-        else if (shown && !d->busy && d->acting_left <= 0.f && d->act_start < 0 && d->act_req < 0 && (d->work_gap -= dt) <= 0.f) {
+        else if (!d->own_work && shown && !d->busy && d->acting_left <= 0.f && d->act_start < 0 && d->act_req < 0 && (d->work_gap -= dt) <= 0.f) {
             d->work_last = work_pick(d);
-            start_act(d, d->work_last);
+            start_act(d, d->work_last, cute_act_dur(d->work_last));
             d->work_gap = d->cfg.work_gap_min_s + (d->cfg.work_gap_max_s - d->cfg.work_gap_min_s) * frand(d);
         }
     }
@@ -282,7 +290,7 @@ void fd_tick(fluid_director_t *d, float dt, bool text_done) {
                       d->idle_life != FD_IDLE_OFF && d->acting_left <= 0.f && d->act_start < 0;
     if (free && !d->yawned && d->quiet >= d->cfg.sleep_after_s - d->cfg.yawn_lead_s) {
         d->yawned = true;                  /* dozing off: a yawn first */
-        start_act(d, CA_YAWN);
+        start_act(d, CA_YAWN, cute_act_dur(CA_YAWN));
     } else if (free && d->convo_left > 0.f) {
         if ((d->convo_delay -= dt) <= 0.f) {   /* a say ended well: a happy flash */
             d->flash = CM_HAPPY; d->flash_left = FLASH_HAPPY_S;
@@ -291,7 +299,7 @@ void fd_tick(fluid_director_t *d, float dt, bool text_done) {
         }
     } else if (free && (d->next_idle -= dt) <= 0.f) {
         int a = idle_pick(d);
-        if (a >= 0) { start_act(d, a); d->last_idle = a; }
+        if (a >= 0) { start_act(d, a, cute_act_dur(a)); d->last_idle = a; }
         d->next_idle = idle_gap(d);
     }
     if (d->convo_left > 0.f && (d->convo_left -= dt) <= 0.f) d->convo_left = 0.f;

@@ -16,8 +16,16 @@ esp_err_t molty_speaker_set_volume(uint8_t vol) { (void)vol; return ESP_OK; }
 cJSON *mole_diag_json(int t) { (void)t; return cJSON_CreateObject(); }
 char *mole_diag_log_text(uint32_t s, size_t m, uint32_t *n, bool j) { (void)s;(void)m;(void)n;(void)j; return NULL; }
 esp_err_t mole_fluid_set_text(const char *t, int len) { (void)t;(void)len; return ESP_OK; }
+/* the creature on screen (mole_fluid.c): its info and generation */
+static unsigned fluid_creature_gen; static const char *fluid_creature_info;
+char *mole_fluid_creature_info(unsigned *gen) {
+    if (!fluid_creature_info || *gen==fluid_creature_gen) return NULL;
+    *gen=fluid_creature_gen; return strdup(fluid_creature_info);
+}
 static int acted = -1, acts;
 void mole_fluid_act(int a) { acted = a; acts++; }
+/* the creature's gestures: the shared ones, and one of its own (a package's eat) */
+int mole_fluid_gesture(const char *name, float *dur) { int a = cute_act_lookup(name); if (a >= 0) { *dur = cute_act_dur(a); return a; } if (!strcmp(name, "eat")) { *dur = 4.6f; return CUTE_N_ACTS; } return -1; }
 /* the bindings (mole_fluid.c, NVS): what cmd gestures passes through */
 static const cJSON *gestures_given; static esp_err_t gestures_answer = ESP_OK;
 esp_err_t mole_fluid_gestures_apply(const cJSON *b) { gestures_given = b; return gestures_answer; }
@@ -34,6 +42,12 @@ void link_ask_cancel(void) { ask_cancels++; }
 esp_err_t link_ask_cmd(const cJSON *a, cJSON **o) { (void)a;(void)o; ask_cmds++; return ESP_OK; }
 static unsigned update_cmds;
 esp_err_t self_update_cmd(const cJSON *a, cJSON **o) { (void)a;(void)o; update_cmds++; return link_cmd_refuse("wrong_board"); }
+/* packages and scenes (pkg_cmd.c): which one ran */
+static const char *pkg_ran;
+#define PKG_STUB(fn, name) esp_err_t fn(const cJSON *a, cJSON **o) { (void)a;(void)o; pkg_ran = name; return ESP_OK; }
+PKG_STUB(pkg_cmd_install, "pkg.install") PKG_STUB(pkg_cmd_remove, "pkg.remove") PKG_STUB(pkg_cmd_list, "pkg.list")
+PKG_STUB(pkg_cmd_scene_play, "scene.play") PKG_STUB(pkg_cmd_scene_queue, "scene.queue") PKG_STUB(pkg_cmd_scene_clear, "scene.clear")
+PKG_STUB(pkg_cmd_creature_select, "creature.select") PKG_STUB(pkg_cmd_creature_list, "creature.list")
 
 /* self_update.c's screen writer, extracted verbatim by link_build.sh */
 #include "update_screen.inc"
@@ -147,11 +161,33 @@ int main(void) {
     assert(s_ext_n==1 && s_ext_hold_ms==(uint32_t)(cute_act_dur(CA_NOD)*1000.f));   /* the gesture's length: a listen's own reactions wait */
     cJSON_Delete(aa); cJSON_Delete(ao);
     assert(link_cmd_mood_gen()==ga && ask_cancels==c && !sdk_state[0]);
-    assert(run("act","{\"action\":\"dance\"}")==ESP_ERR_INVALID_ARG && run("act","{}")==ESP_ERR_INVALID_ARG && acts==1);
+    assert(run("act","{\"action\":\"dance\"}")==LINK_CMD_REFUSED && !strcmp(link_cmd_refusal(),"unknown_gesture") && acts==1);
+    assert(run("act","{\"action\":\"Dance!\"}")==ESP_ERR_INVALID_ARG && run("act","{}")==ESP_ERR_INVALID_ARG && acts==1);
+    aa=cJSON_Parse("{\"action\":\"eat\"}"); ao=NULL; s_ext_n=0;   /* the creature's own: played for its own length */
+    assert(link_cmd_run("act",aa,&ao)==ESP_OK && acted==CUTE_N_ACTS && acts==2 && !strcmp(cJSON_GetObjectItem(ao,"action")->valuestring,"eat"));
+    assert(s_ext_n==1 && s_ext_hold_ms==4600);
+    cJSON_Delete(aa); cJSON_Delete(ao);
     /* update is registered; a handler's own refusal code reads back */
     cJSON *out=NULL, *a=cJSON_Parse("{}");
     assert(link_cmd_run("update",a,&out)==LINK_CMD_REFUSED && update_cmds==1 && !strcmp(link_cmd_refusal(),"wrong_board"));
+    /* every package, scene and creature command is registered, past the old 16-command table */
+    const char *pkgs[]={"pkg.install","pkg.remove","pkg.list","scene.play","scene.queue","scene.clear","creature.select","creature.list"};
+    for (int i=0;i<8;i++) { pkg_ran=NULL; assert(link_cmd_run(pkgs[i],a,&out)==ESP_OK && pkg_ran && !strcmp(pkg_ran,pkgs[i])); }
     cJSON_Delete(a);
     cJSON_Delete(sdk_sent);
-    puts("LINK CMD PASS: explicit moods counted (link mood cmd, local state POST) under the mood lock, own/rejected moods not; screen commands cancel a question only once accepted; act never takes the screen; react moods / acts hold the listen's own reactions for their length");
+    /* the creature for the relay: nothing before one loaded, then its info once per generation */
+    { unsigned sent=0;
+      assert(!link_cmd_creature_frame(&sent));
+      fluid_creature_info="{\"id\":\"duck\",\"name\":\"Duck\",\"about\":{\"look\":\"A round yellow duckling.\"},\"gestures\":[\"nod\"],\"moods\":[\"idle\"]}"; fluid_creature_gen=1;
+      cJSON *f=link_cmd_creature_frame(&sent); assert(f && sent==1);
+      assert(!strcmp(cJSON_GetObjectItem(f,"t")->valuestring,"evt") && !strcmp(cJSON_GetObjectItem(f,"name")->valuestring,"creature"));
+      const cJSON *d=cJSON_GetObjectItem(f,"data");
+      assert(!strcmp(cJSON_GetObjectItem(d,"id")->valuestring,"duck") && cJSON_GetObjectItem(cJSON_GetObjectItem(d,"about"),"look") && cJSON_GetArraySize(cJSON_GetObjectItem(d,"gestures"))==1);
+      cJSON_Delete(f);
+      assert(!link_cmd_creature_frame(&sent));   /* unchanged: nothing */
+      fluid_creature_info="{\"id\":\"\",\"name\":\"Blob\"}"; fluid_creature_gen=2;
+      f=link_cmd_creature_frame(&sent); assert(f && sent==2 && !strcmp(cJSON_GetObjectItem(cJSON_GetObjectItem(f,"data"),"name")->valuestring,"Blob")); cJSON_Delete(f);
+      sent=0; f=link_cmd_creature_frame(&sent); assert(f && sent==2); cJSON_Delete(f);   /* a new welcome: again */
+    }
+    puts("LINK CMD PASS: explicit moods counted (link mood cmd, local state POST) under the mood lock, own/rejected moods not; screen commands cancel a question only once accepted; act never takes the screen; react moods / acts hold the listen's own reactions for their length; the creature frame once per change");
 }

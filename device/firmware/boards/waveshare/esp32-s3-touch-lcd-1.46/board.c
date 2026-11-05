@@ -3,7 +3,7 @@
  *
  * board.c — Waveshare ESP32-S3-Touch-LCD-1.46 (the reference board).
  *
- *   display  SPD2010 412×412 round, quad SPI, PSRAM framebuffer   mole_lcd.c
+ *   display  SPD2010 412×412 round, quad SPI, PSRAM fb + blit      mole_lcd.c
  *   touch    SPD2010, I2C 0x53, polled                             mole_touch.c
  *   imu      QMI8658, I2C 0x6B                                     boards/common/qmi8658.c
  *   speaker  PCM5101 DAC, I2S TX       ┐ lazily opened on first use mole_audio.c
@@ -129,6 +129,7 @@ const molty_board_t molty_board_desc = {
     .framebuffer = mole_lcd_framebuffer,
     .flush       = mole_lcd_flush,
     .flush_rows  = mole_lcd_flush_rows,
+    .blit        = mole_lcd_blit,
 
     .touch_poll     = mole_touch_poll,
     .imu_get        = qmi8658_get,

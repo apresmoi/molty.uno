@@ -145,12 +145,16 @@ bool link_marks_parse(const cJSON *args, link_mark_t marks[LINK_MARKS_MAX], int 
     return true;
 }
 
-bool link_act_args(const cJSON *args, int *act)
+bool link_act_args(const cJSON *args, const char **name)
 {
     const cJSON *a = cJSON_GetObjectItemCaseSensitive(args, "action");
-    if (!act || !cJSON_IsString(a)) return false;
-    *act = cute_act_lookup(a->valuestring);
-    return *act >= 0;
+    if (!name || !cJSON_IsString(a)) return false;
+    const char *s = a->valuestring;
+    size_t n = strlen(s);
+    if (n < 1 || n > LINK_GESTURE_MAX || s[0] < 'a' || s[0] > 'z') return false;
+    for (size_t i = 0; i < n; i++) if (!((s[i] >= 'a' && s[i] <= 'z') || (s[i] >= '0' && s[i] <= '9') || s[i] == '_')) return false;
+    *name = s;
+    return true;
 }
 
 bool link_mood_args(const cJSON *args, const char **mood, double *hold_s)
@@ -261,6 +265,15 @@ static cJSON *evt(const char *name, cJSON **data)
 }
 
 static double clamp01(double v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
+
+cJSON *link_evt_creature_frame(const char *info)
+{
+    cJSON *data = info ? cJSON_Parse(info) : NULL, *j = cJSON_IsObject(data) ? frame("evt") : NULL;
+    if (!j) { cJSON_Delete(data); return NULL; }
+    cJSON_AddStringToObject(j, "name", "creature");
+    cJSON_AddItemToObject(j, "data", data);
+    return j;
+}
 
 cJSON *link_evt_shake_frame(double peak_g, int reversals, unsigned ms, const char *listen)
 {

@@ -48,6 +48,10 @@ extern "C" {
 esp_err_t mole_fluid_creature_init(void);
 void      mole_fluid_creature_deinit(void);
 esp_err_t mole_fluid_creature_render(void);
+/** The frame on the panel into the board's framebuffer (the drawer sends the panel only
+ *  windows, from internal RAM): call before reading it. Waits for the next frame, up to
+ *  500 ms; ESP_ERR_INVALID_STATE when the fluid is not running. */
+esp_err_t mole_fluid_framebuffer_sync(void);
 esp_err_t mole_fluid_creature_state_get_json(char **out);
 esp_err_t mole_fluid_creature_state_set_json(const char *body);
 
@@ -69,6 +73,29 @@ esp_err_t mole_fluid_append_text(const char *chunk, int len);
 #include <stdint.h>
 esp_err_t mole_fluid_creature_file_put(const uint8_t *buf, size_t len, const char **err);
 esp_err_t mole_fluid_creature_file_get(uint8_t **out, size_t *len, bool *is_default);
+/**
+ * The creature package `id` (docs/PACKAGES.md section 5) as the creature, hot: json (len bytes,
+ * PSRAM) is taken over and built on the fluid task (checked first: cp_create). The choice
+ * itself is kept by the caller (pkg_creature.h). Safe from any task.
+ */
+esp_err_t mole_fluid_creature_package(const char *id, char *json, size_t len);
+/** What an agent is told about the creature on screen: cp_info's JSON for a package ({id, name,
+ *  about, gestures, moods}), {id: "", name} for a .molty. malloc'd (the caller frees) with *gen set to
+ *  its generation (it moves at each change), or NULL while it is still *gen (0: never seen) or before
+ *  the first creature loaded (link_cmd_creature_frame). Safe from any task. */
+char *mole_fluid_creature_info(unsigned *gen);
+/** The creature package shown or on its way into id (n bytes), "" for a .molty creature. */
+void mole_fluid_creature_id(char *id, size_t n);
+
+/** A package's scene (scene/scene_player.h) on the fluid, the FD_ST_SCENE state: PLAY
+ *  replaces what plays and the queue, QUEUE plays it after the queue (at once when nothing
+ *  plays), CLEAR (sc NULL) drops everything; with nothing left the creature comes back.
+ *  Another state taking the screen (a say's words, a mood's creature) drops the scene. Takes
+ *  sc on ESP_OK (freed on the fluid task); ESP_ERR_INVALID_STATE when the queue is full;
+ *  ESP_ERR_INVALID_STATE before init. Safe from any task. */
+typedef enum { MOLE_SCENE_PLAY, MOLE_SCENE_QUEUE, MOLE_SCENE_CLEAR } mole_scene_op_t;
+struct scene;
+esp_err_t mole_fluid_scene(mole_scene_op_t op, struct scene *sc);
 
 /** Something happened to the device (sense.c): a shake (a brief surprised flash) or a
  *  button press (wakes a sleepy creature). Safe from any task; a no-op before init. */
@@ -93,10 +120,14 @@ void mole_fluid_listen_color(int32_t rgb);
  *  over — the reader's own pace takes whatever is left, then it ends as usual. */
 void mole_fluid_text_cue(int word);
 void mole_fluid_text_cue_end(void);
-/** A one-shot action (cute_act.h CA_*) on the creature (link_cmd.c `act`, a say's action
- *  mark): it plays once the creature is on screen and no question covers it, waiting up to
- *  3 s (fluid_director.h). Safe from any task; a no-op before init. */
+/** A one-shot gesture on the creature (link_cmd.c `act`, a say's action mark): a cute_act.h CA_* id
+ *  or one of the creature's own (mole_fluid_gesture). It plays once the creature is on screen and no
+ *  question covers it, waiting up to 3 s (fluid_director.h). Safe from any task; a no-op before init. */
 void mole_fluid_act(int act);
+/** The gesture `name` of the creature now: a shared one (cute_act.h, every creature plays them) or one
+ *  of its package's own (CUTE_N_ACTS + i), its length in *dur (NULL: not wanted); -1 for a name it
+ *  lacks. Safe from any task. */
+int  mole_fluid_gesture(const char *name, float *dur);
 /** A say's mood mark reached its word (link_audio.c, cap say_marks): the reader's words
  *  — if text_ver is still the loaded text, i.e. the say's own — take that mood's colour from there on (happy amber, surprised cyan, thinking violet,
  *  sleepy blue, listening green; idle / speaking the palette's), until the next text. The

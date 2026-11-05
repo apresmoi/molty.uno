@@ -258,10 +258,10 @@ static void test_mark(int fb_w, int fb_h) {
     uint16_t *fb = calloc((size_t)fb_w * fb_h, sizeof(uint16_t));
     CHECK(d && fb, "mark alloc");
     if (!d || !fb) { free(fb); fluid_draw_destroy(d); return; }
-    CHECK(fluid_draw_mark(d, fb, FLUID_PAL_PASTEL, FLUID_MARK_NONE) == 0, "NONE draws");
+    CHECK(fluid_draw_mark(d, &(fluid_rect_t){ fb, fb_w, 0, 0, fb_w, fb_h }, FLUID_PAL_PASTEL, FLUID_MARK_NONE) == 0, "NONE draws");
     for (int m = FLUID_MARK_ARC; m < FLUID_MARK_COUNT; m++) {
         memset(fb, 0, (size_t)fb_w * fb_h * sizeof(uint16_t));
-        int n = fluid_draw_mark(d, fb, FLUID_PAL_GREEN, m), lit = 0, stray = 0;
+        int n = fluid_draw_mark(d, &(fluid_rect_t){ fb, fb_w, 0, 0, fb_w, fb_h }, FLUID_PAL_GREEN, m), lit = 0, stray = 0;
         float cx = d->ox + d->stage / 2.f, cy = d->oy + d->stage / 2.f, R = d->stage / 2.f;
         for (int y = 0; y < fb_h; y++) for (int x = 0; x < fb_w; x++) {
             if (!fb[y * fb_w + x]) continue;
@@ -323,11 +323,11 @@ static void test_overlay(void) {
     CHECK(!memcmp(fb, fb_ref, (size_t)P * P * 2), "same snapshot, different pixels");
     fluid_overlay_t none = { 0 }, divs = { 5, 1.f };
     CHECK(!fluid_overlay_on(&none) && fluid_overlay_on(&divs), "overlay_on");
-    CHECK(fluid_draw_overlay(d, fb, o.palette, &none) == 0, "empty overlay drew");
+    CHECK(fluid_draw_overlay(d, &(fluid_rect_t){ fb, P, 0, 0, P, P }, o.palette, &none) == 0, "empty overlay drew");
     /* dividers: on the 5 rays only, and off every label box of a 5-option layout */
     fluid_draw_overlay_dirty(d, &divs);
     fluid_draw(d, fr, fb, &o, &y0, &y1);
-    n = fluid_draw_overlay(d, fb, o.palette, &divs);
+    n = fluid_draw_overlay(d, &(fluid_rect_t){ fb, P, 0, 0, P, P }, o.palette, &divs);
     int lens[5] = { 8, 8, 8, 8, 8 }; float cx[5], cy[5], fs = fluid_ask_layout(5, lens, P, cx, cy);
     changed = stray = 0; long in_label = 0;
     for (int y = 0; y < P; y++) for (int x = 0; x < P; x++) {
@@ -350,15 +350,79 @@ static void test_overlay(void) {
     /* the same dividers again next frame: dirty + redraw + overlay = the same pixels */
     fluid_draw_overlay_dirty(d, &none); fluid_draw_overlay_dirty(d, &divs);
     fluid_draw(d, fr, fb, &o, &y0, &y1);
-    fluid_draw_overlay(d, fb, o.palette, &divs);
+    fluid_draw_overlay(d, &(fluid_rect_t){ fb, P, 0, 0, P, P }, o.palette, &divs);
     memcpy(fb1, fb, (size_t)P * P * 2);
     fluid_draw_overlay_dirty(d, &divs); fluid_draw_overlay_dirty(d, &divs);
     fluid_draw(d, fr, fb, &o, &y0, &y1);
-    fluid_draw_overlay(d, fb, o.palette, &divs);
+    fluid_draw_overlay(d, &(fluid_rect_t){ fb, P, 0, 0, P, P }, o.palette, &divs);
     CHECK(!memcmp(fb, fb1, (size_t)P * P * 2), "repeated dividers compounded");
     free(fb); free(fb_ref); free(fb1); fluid_frame_destroy(fr); fluid_draw_destroy(d); fluid_draw_destroy(ref); fluid_sim_destroy(s);
 }
 
+
+/* the panel fed windows by fluid_draw_send (no framebuffer) shows exactly the framebuffer
+ * the drawer used to keep (fluid_draw + overlay + mark, a full repaint when the mark
+ * or the palette changes), every frame: text letters, dividers coming and going, mark changes, rows
+ * split to fit a small buffer, a rectangular panel */
+typedef struct { uint16_t *panel; int w, h, n; } panel_t;
+static int to_panel(void *ctx, int x, int y, int w, int h, const uint16_t *px) {
+    panel_t *p = ctx;
+    if ((x & 3) || (w & 3 && x + w != p->w) || x + w > p->w || y + h > p->h) return 1;
+    for (int r = 0; r < h; r++) memcpy(p->panel + (size_t)(y + r) * p->w + x, px + (size_t)r * w, (size_t)w * 2);
+    p->n++;
+    return 0;
+}
+static void test_send(int fb_w, int fb_h, int max_px) {
+    int W, H; fluid_grid_for_stage(fb_w < fb_h ? fb_w : fb_h, &W, &H);
+    fluid_sim_t *s = fluid_sim_create(W, H, fb_w < fb_h ? fb_w : fb_h);
+    fluid_text_t *tx = fluid_text_create(s);
+    fluid_draw_t *ref = fluid_draw_create(W, H, fb_w, fb_h), *d = fluid_draw_create(W, H, fb_w, fb_h);
+    fluid_frame_t *fr = fluid_frame_create(W, H);
+    const size_t n = (size_t)fb_w * fb_h;
+    uint16_t *fb = calloc(n, 2), *buf = malloc((size_t)max_px * 2);
+    panel_t p = { calloc(n, 2), fb_w, fb_h, 0 };
+    CHECK(s && tx && ref && d && fr && fb && buf && p.panel, "send alloc");
+    if (!s || !tx || !ref || !d || !fr || !fb || !buf || !p.panel) return;
+    fluid_text_set_sentence(tx, 4.5f);
+    fluid_text_set_word(tx, s, "molty.", 6, 1);
+    fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, 0.f, 0.f, tx->letters, tx->nletters, " .,:;!+=*xX#@", stub_font };
+    fluid_overlay_t ov_drawn = { 0 };
+    int mark_drawn = -1, pal_drawn = -1, bad = -1, windows = 0;
+    long sent = 0;
+    for (int f = 0; f < 90 && bad < 0; f++) {
+        const float t = f / 30.f;
+        fluid_text_fill(tx, s, t);
+        fluid_sim_background(s, t, 0.5f, (f & 1) == 0);
+        fluid_sim_swirl_field(s);
+        fluid_sim_step(s, 1.f / 60); fluid_sim_step(s, 1.f / 60);
+        fluid_sim_color(s, 1.f / 30);
+        fluid_sim_view(s);
+        fluid_sim_snapshot(s, fr, false);
+        o.time = t; o.palette = f < 60 ? FLUID_PAL_PASTEL : FLUID_PAL_AMBER;
+        const fluid_overlay_t ov = { f >= 20 && f < 50 ? 5 : 0, f < 30 ? f / 30.f : 1.f };
+        const int mark = f < 40 ? FLUID_MARK_NONE : f < 70 ? FLUID_MARK_ARC : FLUID_MARK_ALERT;
+        const bool full = mark != mark_drawn || o.palette != pal_drawn;   /* the mark's colour */
+        int y0, y1;
+        if (full) { memset(fb, 0, n * 2); ref->force = d->force = true; }
+        else { fluid_draw_overlay_dirty(ref, &ov_drawn); fluid_draw_overlay_dirty(ref, &ov);
+               fluid_draw_overlay_dirty(d, &ov_drawn); fluid_draw_overlay_dirty(d, &ov); }
+        fluid_draw(ref, fr, fb, &o, &y0, &y1);
+        const fluid_rect_t all = { fb, fb_w, 0, 0, fb_w, fb_h };
+        fluid_draw_overlay(ref, &all, o.palette, &ov);
+        fluid_draw_mark(ref, &all, o.palette, mark);
+        fluid_draw_cells(d, fr, &o);
+        const int px = fluid_draw_send(d, &o, &ov, mark, full, buf, max_px, to_panel, &p);
+        CHECK(px >= 0, "%dx%d frame %d: send failed", fb_w, fb_h, f);
+        sent += px;
+        ov_drawn = ov; mark_drawn = mark; pal_drawn = o.palette;
+        if (memcmp(fb, p.panel, n * 2)) bad = f;
+    }
+    windows = p.n;
+    CHECK(bad < 0, "%dx%d (buffer %d px): the panel differs from the framebuffer at frame %d", fb_w, fb_h, max_px, bad);
+    CHECK(sent < 90L * (long)n, "%dx%d: every frame sent whole (%ld px)", fb_w, fb_h, sent);
+    printf("  send %dx%d, buffer %d px: %d windows, %.0f%% of the pixels a frame\n", fb_w, fb_h, max_px, windows, 100.0 * sent / (90.0 * n));
+    free(fb); free(buf); free(p.panel); fluid_frame_destroy(fr); fluid_draw_destroy(ref); fluid_draw_destroy(d); fluid_text_destroy(tx); fluid_sim_destroy(s);
+}
 
 /* ── rings of the fluid: the listening ring and a question's coloured arcs ───── */
 
@@ -702,6 +766,9 @@ int main(void) {
     test_mark(FLUID_STAGE_REF, FLUID_STAGE_REF);
     test_mark(240, 240);
     test_mark(320, 240);
+    test_send(FLUID_STAGE_REF, FLUID_STAGE_REF, FLUID_STAGE_REF * 14);
+    test_send(FLUID_STAGE_REF, FLUID_STAGE_REF, FLUID_STAGE_REF * 5);
+    test_send(320, 240, 320 * 14);
     printf("%d passed, %d failed\n", s_pass, s_fail);
     return s_fail ? 1 : 0;
 }

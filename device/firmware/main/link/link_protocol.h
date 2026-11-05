@@ -167,6 +167,9 @@ cJSON *link_evt_shake_frame(double peak_g, int reversals, unsigned ms, const cha
 /* The relay's welcome {"t":"welcome","features":[...]} lists `name` (absent list: none). */
 bool link_welcome_has(const cJSON *welcome, const char *name);
 cJSON *link_evt_tap_frame(double x, double y);
+/* {"t":"evt","name":"creature","data":<info>}: the creature on screen as the agent is told
+ * (mole_fluid_creature_info's JSON object), on each welcome and each change. NULL: not an object. */
+cJSON *link_evt_creature_frame(const char *info);
 cJSON *link_evt_button_frame(bool accept);
 cJSON *link_evt_double_tap_frame(double x, double y);
 /* A say's watchdog: no audio at all is given up on far sooner than a stream that stops
@@ -206,8 +209,10 @@ typedef struct { uint16_t word; bool act; int8_t id; } link_mark_t;   /* id: CM_
 bool link_marks_parse(const cJSON *args, link_mark_t marks[LINK_MARKS_MAX], int *n);
 /* A mood mark's name (its id, the creature's order); "" when out of range. */
 const char *link_mood_name(int id);
-/* act {action}: one of cute_act.h's names → *act (CA_*). */
-bool link_act_args(const cJSON *args, int *act);
+/* act {action}: a gesture's name, [a-z][a-z0-9_]{0,23} → *name (into args). Whether the creature
+ * plays it is the creature's (mole_fluid_gesture): the shared ones (cute_act.h) and its package's own. */
+#define LINK_GESTURE_MAX 24
+bool link_act_args(const cJSON *args, const char **name);
 /* After the pairing code / the Improv "hi": the state body to go back to (malloc'd),
  * the saved one unless it was text or the demo reel, which become the creature. */
 char *link_restore_body(const char *saved_state_json);

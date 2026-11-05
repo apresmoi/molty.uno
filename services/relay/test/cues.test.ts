@@ -25,7 +25,9 @@ function device(room: DeviceRoom, sock: FakeSocket) {
     if (f.t === "pair.request") setTimeout(() => void room.socketMessage(sock, JSON.stringify({ t: "pair.result", req: f.req, ok: true, link_code: "NEWC2345" })), 2);
     if (f.t !== "cmd") return;
     log.push({ at: Date.now(), kind: "cmd", name: f.name, args: f.args });
-    setTimeout(() => void room.socketMessage(sock, JSON.stringify({ t: "res", id: f.id, ok: true, result: {} })), 1);
+    // the device knows its creature's gestures: one it lacks is refused (firmware link_cmd.c cmd_act)
+    const res = f.name === "act" && f.args.action === "fly" ? { ok: false, error: "unknown_gesture" } : { ok: true, result: {} };
+    setTimeout(() => void room.socketMessage(sock, JSON.stringify({ t: "res", id: f.id, ...res })), 1);
     if (f.name === "listen") {
       setTimeout(() => {
         const pcm = new Uint8Array(new Int16Array(3200).fill(8000).buffer);
@@ -287,10 +289,11 @@ describe("say cues on the device", () => {
 });
 
 describe("act", () => {
-  it("validation: only {action}, one of ACTIONS", () => {
+  it("validation: only {action}, any gesture name (a creature package's own too: the device knows which it plays)", () => {
     expect(validateCommand("act", { action: "nod" })).toEqual({ name: "act", args: { action: "nod" }, job: false });
-    expect(() => validateCommand("act", { action: "dance" })).toThrow(/action must be one of wiggle, nod/);
-    expect(() => validateCommand("act", {})).toThrow(/action must be one of/);
+    expect(validateCommand("act", { action: "eat" })).toEqual({ name: "act", args: { action: "eat" }, job: false });
+    for (const action of ["Dance", "eat now", "9lives", "", "x".repeat(25), 3]) expect(() => validateCommand("act", { action })).toThrow(/action must be a gesture name/);
+    expect(() => validateCommand("act", {})).toThrow(/action must be a gesture name/);
     expect(() => validateCommand("act", { action: "nod", hold_s: 1 })).toThrow(/unknown argument hold_s/);
   });
 
@@ -326,8 +329,15 @@ describe("act", () => {
     const m = await mcp(w.backend, w.token, "molty_act", { action: "look_up" });
     expect(m.isError).toBe(false);
     expect(w.dev.cmds("act")).toEqual([{ action: "blink" }, { action: "look_up" }]);
-    const bad = await mcp(w.backend, w.token, "molty_act", { action: "dance" });
+    const bad = await mcp(w.backend, w.token, "molty_act", { action: "Dance!" });
     expect(bad.structuredContent).toMatchObject({ error: "invalid_args" });
+  });
+
+  it("a creature's own gesture goes to the device; one it lacks comes back unknown_gesture", async () => {
+    const w = await setup();
+    expect(await w.room.command(w.token, "act", { action: "eat" })).toEqual({ ok: true, result: {} });
+    expect(await w.room.command(w.token, "act", { action: "fly" })).toMatchObject({ ok: false, error: "unknown_gesture" });
+    expect(w.dev.cmds("act")).toEqual([{ action: "eat" }, { action: "fly" }]);
   });
 
   it("caps without act: unsupported; older firmware: firmware_too_old; nothing sent", async () => {
@@ -338,12 +348,13 @@ describe("act", () => {
     expect([...w.dev.cmds("act"), ...old.dev.cmds("act")]).toEqual([]);
   });
 
-  it("MCP tools/list has molty_act with the action list; say / talk / ask describe inline cues", async () => {
+  it("MCP tools/list has molty_act naming the shared gestures and the creature's own; say / talk / ask describe inline cues", async () => {
     const w = await setup();
     const tools = (await mcpRaw(w.backend, w.token, "tools/list", {})).result.tools as any[];
     const act = tools.find((t) => t.name === "molty_act");
     expect(act.inputSchema.required).toEqual(["action"]);
-    expect(act.inputSchema.properties.action.enum).toEqual([...ACTIONS]);
+    expect(act.inputSchema.properties.action.enum).toBeUndefined();
+    expect(act.description).toContain("device.creature.gestures");
     for (const a of ACTIONS) expect(act.description).toContain(a);
     for (const n of ["molty_say", "molty_talk", "molty_ask"]) expect(tools.find((t) => t.name === n).description).toMatch(/\[happy\].*\\\[/);
   });

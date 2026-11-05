@@ -157,6 +157,16 @@ esp_err_t molty_display_flush_rows(int y0, int y1)
     return (s_caps & MOLTY_CAP_DISPLAY) ? B.flush_rows(y0, y1) : ESP_ERR_INVALID_STATE;
 }
 
+esp_err_t molty_display_blit(int x, int y, int w, int h, const uint16_t *px)
+{
+    if (!(s_caps & MOLTY_CAP_DISPLAY)) return ESP_ERR_INVALID_STATE;
+    if (x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > B.width || y + h > B.height) return ESP_ERR_INVALID_ARG;
+    if (B.blit) return B.blit(x, y, w, h, px);
+    uint16_t *fb = B.framebuffer();
+    for (int r = 0; r < h; r++) memcpy(fb + (size_t)(y + r) * B.width + x, px + (size_t)r * w, (size_t)w * sizeof(uint16_t));
+    return B.flush_rows(y, y + h);
+}
+
 /* ── touch, IMU, buttons, battery ─────────────────────────────────────────── */
 
 int molty_touch_poll(uint16_t *xs, uint16_t *ys, int max)

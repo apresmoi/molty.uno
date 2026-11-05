@@ -244,13 +244,17 @@ void fluid_sim_impulse(fluid_sim_t *s, float x, float y, float strength, float r
 
 void fluid_sim_push(fluid_sim_t *s, float x, float y, float du, float dv, float radius) {
     float inv = 1.f / (radius * radius);
-    for (int j = 0; j < s->H; j++) for (int i = 0; i < s->W; i++) {
-        int k = j * s->W + i;
-        if (!s->mask[k]) continue;
-        float dx = s->xs[i] - x, dy = s->ys[j] - y, d2 = (dx * dx + dy * dy) * inv;
-        if (d2 > 3.9f) continue;                      /* w = e^-d2 < 0.02 */
-        float w = expf(-d2) * FQ_U;
-        s->u[k] = sat16((float)s->u[k] + du * w); s->v[k] = sat16((float)s->v[k] + dv * w);
+    for (int j = 0; j < s->H; j++) {
+        float dy = s->ys[j] - y;
+        if (dy * dy * inv > 3.9f) continue;            /* the whole row is out of reach */
+        for (int i = 0; i < s->W; i++) {
+            int k = j * s->W + i;
+            if (!s->mask[k]) continue;
+            float dx = s->xs[i] - x, d2 = (dx * dx + dy * dy) * inv;
+            if (d2 > 3.9f) continue;                  /* w = e^-d2 < 0.02 */
+            float w = expf(-d2) * FQ_U;
+            s->u[k] = sat16((float)s->u[k] + du * w); s->v[k] = sat16((float)s->v[k] + dv * w);
+        }
     }
 }
 

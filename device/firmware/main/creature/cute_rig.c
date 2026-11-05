@@ -7,6 +7,8 @@
  */
 #include "cute_rig.h"
 #include "cute_act.h"
+#include "mood_engine.h"
+#include "rig_geo.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -30,211 +32,6 @@
 static inline float clampf(float v, float a, float b) { return v < a ? a : v > b ? b : v; }
 static inline float bump(float q, float a, float b) { return (q < a || q > b) ? 0.f : sinf(PI_F * (q - a) / (b - a)); }
 
-/* ── small linear algebra: 3×4 affine, row-major [r00 r01 r02 tx | r10 … ty | r20 … tz] ── */
-
-typedef struct { float m[12]; } m34_t;
-typedef struct { float x, y, z; } v3_t;
-
-
-static m34_t m_mul(const m34_t *a, const m34_t *b) {
-    m34_t r;
-    for (int i = 0; i < 3; i++) {
-        const float *A = a->m + i * 4;
-        for (int j = 0; j < 3; j++) r.m[i * 4 + j] = A[0] * b->m[j] + A[1] * b->m[4 + j] + A[2] * b->m[8 + j];
-        r.m[i * 4 + 3] = A[0] * b->m[3] + A[1] * b->m[7] + A[2] * b->m[11] + A[3];
-    }
-    return r;
-}
-static inline v3_t m_apply(const m34_t *a, float x, float y, float z) {
-    v3_t r = { a->m[0] * x + a->m[1] * y + a->m[2] * z + a->m[3],
-               a->m[4] * x + a->m[5] * y + a->m[6] * z + a->m[7],
-               a->m[8] * x + a->m[9] * y + a->m[10] * z + a->m[11] };
-    return r;
-}
-static float m_det(const m34_t *a) {
-    const float *m = a->m;
-    return m[0] * (m[5] * m[10] - m[6] * m[9]) - m[1] * (m[4] * m[10] - m[6] * m[8]) + m[2] * (m[4] * m[9] - m[5] * m[8]);
-}
-/* 3×3 rotation for one axis */
-static void rot_axis(float *R, int axis, float a) {
-    float c = cosf(a), s = sinf(a);
-    memset(R, 0, 9 * sizeof(float));
-    if (axis == 0) { R[0] = 1; R[4] = c; R[5] = -s; R[7] = s; R[8] = c; }
-    else if (axis == 1) { R[0] = c; R[2] = s; R[4] = 1; R[6] = -s; R[8] = c; }
-    else { R[0] = c; R[1] = -s; R[3] = s; R[4] = c; R[8] = 1; }
-}
-static void mat3_mul(float *o, const float *a, const float *b) {
-    float t[9];
-    for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) t[i * 3 + j] = a[i * 3] * b[j] + a[i * 3 + 1] * b[3 + j] + a[i * 3 + 2] * b[6 + j];
-    memcpy(o, t, sizeof(t));
-}
-/* three.js Euler orders: 'XYZ' → Rx·Ry·Rz (the order string read left to right) */
-static const uint8_t ORDERS[6][3] = { { 0, 1, 2 }, { 1, 0, 2 }, { 2, 0, 1 }, { 0, 2, 1 }, { 1, 2, 0 }, { 2, 1, 0 } };
-static void euler_mat(float *R, const float *e, int order) {
-    float A[9], B[9], C[9];
-    const uint8_t *o = ORDERS[order];
-    rot_axis(A, o[0], e[o[0]]); rot_axis(B, o[1], e[o[1]]); rot_axis(C, o[2], e[o[2]]);
-    mat3_mul(R, A, B); mat3_mul(R, R, C);
-}
-/* quaternion.setFromUnitVectors(+z, n) → rotation matrix (shortest arc) */
-static void rot_from_z(float *R, v3_t n) {
-    float r = n.z + 1.f, qx, qy, qz, qw;
-    if (r < 1e-6f) { qx = 0; qy = -1; qz = 0; qw = 0; }      /* n = −z: 180° about y (three picks −from.z,0,from.x) */
-    else { qx = -n.y; qy = n.x; qz = 0; qw = r; }           /* cross(z, n) = (−n.y, n.x, 0) */
-    float l = sqrtf(qx * qx + qy * qy + qz * qz + qw * qw);
-    qx /= l; qy /= l; qz /= l; qw /= l;
-    R[0] = 1 - 2 * (qy * qy + qz * qz); R[1] = 2 * (qx * qy - qz * qw); R[2] = 2 * (qx * qz + qy * qw);
-    R[3] = 2 * (qx * qy + qz * qw); R[4] = 1 - 2 * (qx * qx + qz * qz); R[5] = 2 * (qy * qz - qx * qw);
-    R[6] = 2 * (qx * qz - qy * qw); R[7] = 2 * (qy * qz + qx * qw); R[8] = 1 - 2 * (qx * qx + qy * qy);
-}
-
-/* ── geometry (three.js generators, same vertex/index order and winding) ─────────────── */
-
-typedef struct { int nv, nt; float *v; uint16_t *t; float bmin[3], bmax[3]; } geo_t;
-
-typedef struct { geo_t *g; int nv, nt, cv, ct; } gbuild_t;
-
-static bool gb_init(gbuild_t *b, geo_t *g, int nv, int nt) {
-    b->g = g; b->nv = b->nt = 0; b->cv = nv; b->ct = nt;
-    g->v = CUTE_CALLOC((size_t)nv * 3 * sizeof(float));
-    g->t = CUTE_CALLOC((size_t)nt * 3 * sizeof(uint16_t));
-    return g->v && g->t;
-}
-static int gb_v(gbuild_t *b, float x, float y, float z) {
-    if (b->nv >= b->cv) return b->nv - 1;
-    float *p = b->g->v + b->nv * 3; p[0] = x; p[1] = y; p[2] = z;
-    return b->nv++;
-}
-static void gb_t(gbuild_t *b, int a, int c, int d) {
-    if (b->nt >= b->ct) return;
-    uint16_t *p = b->g->t + b->nt * 3; p[0] = (uint16_t)a; p[1] = (uint16_t)c; p[2] = (uint16_t)d; b->nt++;
-}
-static void gb_done(gbuild_t *b) {
-    geo_t *g = b->g; g->nv = b->nv; g->nt = b->nt;
-    for (int k = 0; k < 3; k++) { g->bmin[k] = 1e9f; g->bmax[k] = -1e9f; }
-    for (int i = 0; i < g->nv; i++) for (int k = 0; k < 3; k++) {
-        float v = g->v[i * 3 + k];
-        if (v < g->bmin[k]) g->bmin[k] = v;
-        if (v > g->bmax[k]) g->bmax[k] = v;
-    }
-}
-
-/* SphereGeometry(1, w, h) scaled, optional teardrop pinch toward +y */
-static bool geo_sphere(geo_t *g, int w, int h, const float *s, float pinch, bool tear) {
-    gbuild_t b;
-    if (!gb_init(&b, g, (w + 1) * (h + 1), 2 * w * h)) return false;
-    for (int iy = 0; iy <= h; iy++) {
-        float v = (float)iy / h, st = sinf(v * PI_F), ct = cosf(v * PI_F);
-        for (int ix = 0; ix <= w; ix++) {
-            float u = (float)ix / w;
-            float x = -cosf(u * TAU_F) * st, y = ct, z = sinf(u * TAU_F) * st;
-            if (tear) { float k = 1.f - pinch * powf((y + 1.f) * 0.5f, 1.6f); x *= k; z *= k; }
-            gb_v(&b, x * s[0], y * s[1], z * s[2]);
-        }
-    }
-    for (int iy = 0; iy < h; iy++) for (int ix = 0; ix < w; ix++) {
-        int a = iy * (w + 1) + ix + 1, bb = iy * (w + 1) + ix, c = (iy + 1) * (w + 1) + ix, d = (iy + 1) * (w + 1) + ix + 1;
-        if (iy != 0) gb_t(&b, a, bb, d);
-        if (iy != h - 1) gb_t(&b, bb, c, d);
-    }
-    gb_done(&b);
-    return true;
-}
-
-/* CylinderGeometry(rTop, rBottom, h, radial) — also ConeGeometry (rTop = 0) */
-static bool geo_cylinder(geo_t *g, float rt, float rb, float h, int rs) {
-    gbuild_t b;
-    if (!gb_init(&b, g, 2 * (rs + 1) + 2 * (2 * rs + 1), 4 * rs)) return false;
-    float hh = h * 0.5f;
-    int idx[2][33];
-    for (int y = 0; y <= 1; y++) {
-        float r = y * (rb - rt) + rt;
-        for (int x = 0; x <= rs; x++) { float th = (float)x / rs * TAU_F; idx[y][x] = gb_v(&b, r * sinf(th), -y * h + hh, r * cosf(th)); }
-    }
-    for (int x = 0; x < rs; x++) {
-        int a = idx[0][x], bb = idx[1][x], c = idx[1][x + 1], d = idx[0][x + 1];
-        if (rt > 0.f) gb_t(&b, a, bb, d);
-        if (rb > 0.f) gb_t(&b, bb, c, d);
-    }
-    for (int top = 1; top >= 0; top--) {
-        float r = top ? rt : rb, sign = top ? 1.f : -1.f;
-        if (r <= 0.f) continue;
-        int c0 = b.nv;
-        for (int x = 0; x < rs; x++) gb_v(&b, 0, hh * sign, 0);
-        int r0 = b.nv;
-        for (int x = 0; x <= rs; x++) { float th = (float)x / rs * TAU_F; gb_v(&b, r * sinf(th), hh * sign, r * cosf(th)); }
-        for (int x = 0; x < rs; x++) {
-            int c = c0 + x, i = r0 + x;
-            if (top) gb_t(&b, i, i + 1, c); else gb_t(&b, i + 1, i, c);
-        }
-    }
-    gb_done(&b);
-    return true;
-}
-
-/* CapsuleGeometry(r, len, capSeg, radial): LatheGeometry of two arcs (Path.getPoints) */
-static bool geo_capsule(geo_t *g, float r, float len, int cap, int rs) {
-    float px[80], py[80]; int np = 0;
-    int div = cap * 2;                                         /* EllipseCurve resolution = divisions·2 */
-    for (int i = 0; i <= div && np < 80; i++) { float a = 1.5f * PI_F + (float)i / div * (0.5f * PI_F); px[np] = r * cosf(a); py[np] = -len * 0.5f + r * sinf(a); np++; }
-    for (int i = 0; i <= div && np < 80; i++) {
-        float a = (float)i / div * (0.5f * PI_F), x = r * cosf(a), y = len * 0.5f + r * sinf(a);
-        if (fabsf(x - px[np - 1]) < 1e-6f && fabsf(y - py[np - 1]) < 1e-6f) continue;
-        px[np] = x; py[np] = y; np++;
-    }
-    gbuild_t b;
-    if (!gb_init(&b, g, (rs + 1) * np, 2 * rs * (np - 1))) return false;
-    for (int i = 0; i <= rs; i++) {
-        float phi = (float)i / rs * TAU_F, s = sinf(phi), c = cosf(phi);
-        for (int j = 0; j < np; j++) gb_v(&b, px[j] * s, py[j], px[j] * c);
-    }
-    for (int i = 0; i < rs; i++) for (int j = 0; j < np - 1; j++) {
-        int base = j + i * np, a = base, bb = base + np, c = base + np + 1, d = base + 1;
-        gb_t(&b, a, bb, d); gb_t(&b, c, d, bb);
-    }
-    gb_done(&b);
-    return true;
-}
-
-/* TorusGeometry(R, tube, radial, tubular, arc) */
-static bool geo_torus(geo_t *g, float R, float tube, int radial, int tub, float arc) {
-    gbuild_t b;
-    if (!gb_init(&b, g, (radial + 1) * (tub + 1), 2 * radial * tub)) return false;
-    for (int j = 0; j <= radial; j++) for (int i = 0; i <= tub; i++) {
-        float u = (float)i / tub * arc, v = (float)j / radial * TAU_F;
-        gb_v(&b, (R + tube * cosf(v)) * cosf(u), (R + tube * cosf(v)) * sinf(u), tube * sinf(v));
-    }
-    for (int j = 1; j <= radial; j++) for (int i = 1; i <= tub; i++) {
-        int a = (tub + 1) * j + i - 1, bb = (tub + 1) * (j - 1) + i - 1, c = (tub + 1) * (j - 1) + i, d = (tub + 1) * j + i;
-        gb_t(&b, a, bb, d); gb_t(&b, bb, c, d);
-    }
-    gb_done(&b);
-    return true;
-}
-
-/* CircleGeometry(r, seg, thetaStart, thetaLength), faces +z */
-static bool geo_circle(geo_t *g, float r, int seg, float t0, float tl) {
-    gbuild_t b;
-    if (!gb_init(&b, g, seg + 2, seg)) return false;
-    gb_v(&b, 0, 0, 0);
-    for (int s = 0; s <= seg; s++) { float th = t0 + (float)s / seg * tl; gb_v(&b, r * cosf(th), r * sinf(th), 0); }
-    for (int i = 1; i <= seg; i++) gb_t(&b, i, i + 1, 0);
-    gb_done(&b);
-    return true;
-}
-
-static bool geo_box(geo_t *g, const float *s) {
-    gbuild_t b;
-    if (!gb_init(&b, g, 8, 12)) return false;
-    float x = s[0] * 0.5f, y = s[1] * 0.5f, z = s[2] * 0.5f;
-    for (int k = 0; k < 8; k++) gb_v(&b, (k & 1) ? x : -x, (k & 2) ? y : -y, (k & 4) ? z : -z);
-    static const uint8_t T[12][3] = { { 1, 3, 7 }, { 1, 7, 5 }, { 0, 4, 6 }, { 0, 6, 2 }, { 2, 6, 7 }, { 2, 7, 3 },
-                                      { 0, 1, 5 }, { 0, 5, 4 }, { 4, 5, 7 }, { 4, 7, 6 }, { 0, 2, 3 }, { 0, 3, 1 } };
-    for (int k = 0; k < 12; k++) gb_t(&b, T[k][0], T[k][1], T[k][2]);
-    gb_done(&b);
-    return true;
-}
-
 /* ── rig nodes + meshes ─────────────────────────────────────────────────────────────── */
 
 typedef struct {
@@ -256,23 +53,10 @@ typedef struct {
 
 typedef struct { int node; int side; } srec_t;
 
-/* mood engine pose (mood.js zeroPose) */
-typedef struct {
-    float pos[3], rot[3], head[3], spine[3];
-    float squash, lid, look[2], mouth;
-    int   eye;                 /* 0 normal 1 wide 2 happy 3 sleepy */
-    int   mood;
-} pose_t;
-enum { EYE_NORMAL, EYE_WIDE, EYE_HAPPY, EYE_SLEEPY };
-
-typedef struct { float k, d, x, v; } spring_t;
-typedef struct { float a, f; int side; float next_glance, glance_until; int glance_dir; } jit_t;
-
-typedef struct { float t, phrase_end, pause_end, rate, phase, value, syll_amp; } speech_t;
+typedef me_pose_t pose_t;
 
 typedef struct { float eased; float next, t0; float spin; bool init; } term_state_t;
 typedef struct { int g, inner, scl, ball, half, hl1, hl2, arc; int side; } eye_t;
-typedef struct { float next, phase, hold, value; bool dbl, second; } eblink_t;
 
 struct cute_rt {
     cute_spec_t spec;
@@ -296,21 +80,13 @@ struct cute_rt {
     struct { float x, vx, z, vz, last_y; } spring;
     struct { float sleep, since; } lid_state;
     float norm_k, env_min[3], env_max[3], rise;
-    /* mood engine */
-    int mood, prev; float et, prev_t, fade, fade_dur, anticip, time;
-    jit_t j, pj; speech_t env; float env_value;
-    eblink_t eblink;
-    struct { float next, x, y; } saccade;
-    spring_t sp_h[3], sp_b[3], sp_py, sp_sq;
+    mood_engine_t eng;
     pose_t pose;
-    /* one-shot action (cute_act.h): the one playing, and the one it replaced fading out */
-    int act, pact; float act_t, pact_t, pact_w;
     /* behaviours */
     term_state_t bst[CUTE_MAX_BEHAV][CUTE_MAX_TERMS];
     float beh_lid;
     /* camera + raster */
     float cam_t[3], cam_x[3], cam_y[3], cam_z[3], cam_half;
-    float cam_zoom, cam_focus;                     /* an action's camera (cute_act.h): this frame's */
     int   rW, rH, tris;
     float *zbuf; uint32_t *cbuf;                   /* (2W)×(4H) samples */
     float *vbuf; int vcap;                         /* per-mesh camera-space vertices      */
@@ -356,7 +132,7 @@ static v3_t surf_point(const cute_rt_t *rt, float u, float v, float lift, float 
     v3_t n = { x / (fr[0] * fr[0]), y / (fr[1] * fr[1]), z / (fr[2] * fr[2]) };
     float nl = sqrtf(n.x * n.x + n.y * n.y + n.z * n.z);
     n.x /= nl; n.y /= nl; n.z /= nl;
-    if (R) rot_from_z(R, n);
+    if (R) rg_rot_from_z(R, n);
     v3_t p = { x + n.x * lift + fo[0], y + n.y * lift + fo[1], z + n.z * lift + fo[2] };
     return p;
 }
@@ -375,14 +151,14 @@ static int part_geometry(cute_rt_t *rt, const cute_part_t *p) {
     bool ok = false;
     const float *a = p->params;
     switch (p->type) {
-    case CP_ELLIPSOID: ok = geo_sphere(g, p->seg_a, p->seg_b, a, 0, false); break;
-    case CP_TEARDROP:  ok = geo_sphere(g, p->seg_a, p->seg_b, a, a[3], true); break;
-    case CP_CAPSULE:   ok = geo_capsule(g, a[0], a[1], p->seg_b, p->seg_a); break;
-    case CP_CONE:      ok = geo_cylinder(g, 0, a[0], a[1], p->seg_a); break;
-    case CP_CYLINDER:  ok = geo_cylinder(g, a[0], a[1], a[2], p->seg_a); break;
-    case CP_TORUS:     ok = geo_torus(g, a[0], a[1], p->seg_a, p->seg_b, a[2]); break;
-    case CP_BOX:       ok = geo_box(g, a); break;
-    case CP_DISC:      ok = geo_circle(g, a[0], p->seg_a, 0, TAU_F); break;
+    case CP_ELLIPSOID: ok = rg_sphere(g, p->seg_a, p->seg_b, a, 0, false); break;
+    case CP_TEARDROP:  ok = rg_sphere(g, p->seg_a, p->seg_b, a, a[3], true); break;
+    case CP_CAPSULE:   ok = rg_capsule(g, a[0], a[1], p->seg_b, p->seg_a); break;
+    case CP_CONE:      ok = rg_cylinder(g, 0, a[0], a[1], p->seg_a); break;
+    case CP_CYLINDER:  ok = rg_cylinder(g, a[0], a[1], a[2], p->seg_a); break;
+    case CP_TORUS:     ok = rg_torus(g, a[0], a[1], p->seg_a, p->seg_b, a[2]); break;
+    case CP_BOX:       ok = rg_box(g, a); break;
+    case CP_DISC:      ok = rg_circle(g, a[0], p->seg_a, 0, TAU_F); break;
     }
     if (!ok) { rt->ng--; return -1; }
     if (p->has_offset) for (int i = 0; i < g->nv; i++) for (int k = 0; k < 3; k++) g->v[i * 3 + k] += p->offset[k];
@@ -433,10 +209,10 @@ static void build_face(cute_rt_t *rt) {
     const cute_spec_t *S = &rt->spec;
     int g_disc = geo_new(rt), g_half = geo_new(rt), g_dot = geo_new(rt), g_arc = geo_new(rt);
     if (g_arc < 0) return;
-    geo_circle(&rt->geos[g_disc], 1, 16, 0, TAU_F);
-    geo_circle(&rt->geos[g_half], 1, 10, PI_F, PI_F);
-    geo_circle(&rt->geos[g_dot], 1, 7, 0, TAU_F);
-    geo_torus(&rt->geos[g_arc], 0.72f, 0.26f, 3, 6, PI_F);
+    rg_circle(&rt->geos[g_disc], 1, 16, 0, TAU_F);
+    rg_circle(&rt->geos[g_half], 1, 10, PI_F, PI_F);
+    rg_circle(&rt->geos[g_dot], 1, 7, 0, TAU_F);
+    rg_torus(&rt->geos[g_arc], 0.72f, 0.26f, 3, 6, PI_F);
     for (int e = 0; e < 2; e++) {
         int side = e == 0 ? 1 : -1;
         rt->eyes[e].side = side;
@@ -455,10 +231,10 @@ static void build_face(cute_rt_t *rt) {
     if (S->mouth_type == CMT_SMILE || S->mouth_type == CMT_CAT) {
         int g_marc = geo_new(rt), g_open = geo_new(rt), g_openD = geo_new(rt), g_tongue = geo_new(rt);
         if (g_tongue >= 0) {
-            geo_torus(&rt->geos[g_marc], 1, 0.3f, 3, 6, PI_F);
-            geo_circle(&rt->geos[g_open], 1, 12, 0, TAU_F);
-            geo_circle(&rt->geos[g_openD], 1, 10, PI_F, PI_F);
-            geo_circle(&rt->geos[g_tongue], 1, 8, 0, TAU_F);
+            rg_torus(&rt->geos[g_marc], 1, 0.3f, 3, 6, PI_F);
+            rg_circle(&rt->geos[g_open], 1, 12, 0, TAU_F);
+            rg_circle(&rt->geos[g_openD], 1, 10, PI_F, PI_F);
+            rg_circle(&rt->geos[g_tongue], 1, 8, 0, TAU_F);
             rt->mouth_g = node_add(rt, rt->n_head);
             bool cat = S->mouth_type == CMT_CAT;
             rt->n_closed = cat ? 2 : 1;
@@ -480,7 +256,7 @@ static void build_face(cute_rt_t *rt) {
     if (S->has_cheeks) {
         int g_ch = geo_new(rt);
         if (g_ch >= 0) {
-            geo_circle(&rt->geos[g_ch], 1, 9, 0, TAU_F);
+            rg_circle(&rt->geos[g_ch], 1, 9, 0, TAU_F);
             for (int c = 0; c < 2; c++) {
                 int nd = node_add(rt, rt->n_head);
                 mesh_add(rt, nd, g_ch, S->col_cheek, 255, false, 1);
@@ -493,202 +269,14 @@ static void build_face(cute_rt_t *rt) {
     }
 }
 
-/* ── mood engine (js/mood.js) ───────────────────────────────────────────────────────── */
+/* ── mood engine (mood_engine.c) ───────────────────────────────────────────────────── */
 
-static float jit(cute_rt_t *rt, float p) { return 1.f + rand_ab(rt, -p, p); }
-static jit_t new_jit(cute_rt_t *rt) {
-    jit_t j = { jit(rt, 0.15f), jit(rt, 0.15f), rnd(rt) < 0.5f ? -1 : 1, rand_ab(rt, 3, 8), 0, 1 };
-    return j;
-}
-static void zero_pose(pose_t *p) { memset(p, 0, sizeof(*p)); p->eye = EYE_NORMAL; }
-
-static float speech_update(cute_rt_t *rt, speech_t *e, float dt) {
-    e->t += dt;
-    if (e->t > e->phrase_end && e->pause_end == 0.f) e->pause_end = e->t + rand_ab(rt, 0.25f, 0.7f);
-    if (e->pause_end != 0.f && e->t > e->pause_end) { e->pause_end = 0; e->phrase_end = e->t + rand_ab(rt, 1.2f, 3); e->rate = rand_ab(rt, 4, 5); }
-    bool speaking = e->pause_end == 0.f;
-    float prev = e->phase;
-    e->phase += dt * e->rate;
-    if (floorf(e->phase) != floorf(prev)) e->syll_amp = rand_ab(rt, 0.45f, 1);
-    float s = sinf(TAU_F * e->phase); if (s < 0) s = 0;
-    float target = speaking ? powf(s, 0.7f) * e->syll_amp : 0.f;
-    float k = target > e->value ? 1.f - expf(-dt * 40) : 1.f - expf(-dt * 14);
-    e->value += (target - e->value) * k;
-    return e->value;
-}
-
-static void gen(cute_rt_t *rt, int mood, pose_t *p, float t, jit_t *j, float env) {
-    switch (mood) {
-    case CM_IDLE:
-        p->head[2] = 0.05f * j->a;
-        p->head[1] = 0.08f * sinf(TAU_F * t / (9 * j->f));
-        p->rot[2] = 0.015f * sinf(TAU_F * t / (6 * j->f));
-        break;
-    case CM_LISTENING:
-        p->spine[0] = 0.14f * j->a; p->rot[0] = 0.05f; p->pos[2] = 0.05f;
-        p->head[2] = 0.22f * j->a * j->side;
-        p->head[0] = -0.06f + 0.05f * fmaxf(0.f, sinf(TAU_F * t / (2.6f * j->f)));
-        p->eye = EYE_WIDE; p->look[1] = 0.1f;
-        break;
-    case CM_THINKING:
-        p->rot[2] = 0.07f * sinf(TAU_F * t / (3.2f * j->f));
-        p->pos[1] = 0.015f * sinf(TAU_F * t / (2.4f * j->f));
-        p->head[0] = -0.28f * j->a; p->head[1] = 0.32f * j->side; p->head[2] = 0.1f * j->side;
-        p->look[0] = 0.7f * j->side; p->look[1] = 0.7f;
-        break;
-    case CM_SPEAKING:
-        p->squash = 0.06f * env; p->pos[1] = 0.018f * env;
-        p->head[0] = -0.05f * env + 0.03f * sinf(TAU_F * t / 1.7f);
-        p->head[2] = 0.06f * sinf(TAU_F * t / (3.3f * j->f));
-        p->mouth = env;
-        if (t > j->next_glance) { j->glance_until = t + rand_ab(rt, 0.5f, 0.9f); j->next_glance = t + rand_ab(rt, 3, 8); j->glance_dir = rnd(rt) < 0.5f ? -1 : 1; }
-        if (t < j->glance_until) { p->look[0] = 0.8f * j->glance_dir; p->head[1] = 0.12f * j->glance_dir; }
-        break;
-    case CM_HAPPY: {
-        float f = 2.1f * j->f, hop = fabsf(sinf(PI_F * f * t));
-        p->pos[1] = 0.13f * j->a * hop;
-        p->squash = hop < 0.25f ? -0.12f * (1 - hop / 0.25f) : 0.05f * hop;
-        p->head[2] = 0.12f * sinf(TAU_F * f * 0.5f * t);
-        p->rot[1] = 0.1f * sinf(TAU_F * f * 0.25f * t);
-        p->eye = EYE_HAPPY; p->mouth = 0.35f;
-        break;
-    }
-    case CM_SLEEPY: {
-        /* asleep, not down: eyes shut and a slight nod; a low head and half-open eyes read as sad */
-        p->head[0] = 0.12f * j->a; p->spine[0] = 0.04f; p->rot[0] = 0.03f; p->pos[1] = -0.015f;
-        float per = 7 * j->f, c = fmodf(t, per) / per;
-        if (c > 0.75f) { float q = (c - 0.75f) / 0.25f; p->head[0] += 0.25f * sinf(PI_F * q) * (q < 0.8f ? 1.f : -0.5f); }
-        p->lid = 1.f;
-        p->eye = EYE_SLEEPY;
-        break;
-    }
-    case CM_SURPRISED:
-        if (t < 0.12f) p->squash = -0.14f * sinf(PI_F * t / 0.12f);
-        else if (t < 0.6f) { float q = (t - 0.12f) / 0.48f; p->pos[1] = 0.17f * sinf(PI_F * q); p->squash = 0.16f * (1 - q) - 0.04f; }
-        else { float q = fminf(1.f, (t - 0.6f) / 0.6f); p->squash = -0.04f * (1 - q); }
-        p->spine[0] = -0.1f; p->rot[0] = -0.05f; p->head[0] = -0.1f;
-        p->eye = EYE_WIDE; p->mouth = 0.55f;
-        break;
-    }
-}
-
-static void lerp_pose(pose_t *o, const pose_t *a, const pose_t *b, float w) {
-    for (int k = 0; k < 3; k++) {
-        o->pos[k] = a->pos[k] + (b->pos[k] - a->pos[k]) * w; o->rot[k] = a->rot[k] + (b->rot[k] - a->rot[k]) * w;
-        o->head[k] = a->head[k] + (b->head[k] - a->head[k]) * w; o->spine[k] = a->spine[k] + (b->spine[k] - a->spine[k]) * w;
-    }
-    o->squash = a->squash + (b->squash - a->squash) * w; o->lid = a->lid + (b->lid - a->lid) * w; o->mouth = a->mouth + (b->mouth - a->mouth) * w;
-    o->look[0] = a->look[0] + (b->look[0] - a->look[0]) * w; o->look[1] = a->look[1] + (b->look[1] - a->look[1]) * w;
-    o->eye = w < 0.5f ? a->eye : b->eye;
-}
-static float spring_step(spring_t *s, float target, float dt) {
-    float a = s->k * (target - s->x) - s->d * s->v; s->v += a * dt; s->x += s->v * dt; return s->x;
-}
-
-static void engine_init(cute_rt_t *rt) {
-    rt->mood = CM_IDLE; rt->prev = -1; rt->fade = 1; rt->fade_dur = 0.7f;
-    rt->j = new_jit(rt); rt->pj = rt->j;
-    rt->env.phrase_end = rand_ab(rt, 1.2f, 3); rt->env.rate = rand_ab(rt, 4, 5); rt->env.syll_amp = 1;
-    rt->eblink.next = rand_ab(rt, 2, 6); rt->eblink.phase = -1;
-    rt->saccade.next = rand_ab(rt, 0.2f, 0.6f);
-    for (int k = 0; k < 3; k++) { rt->sp_h[k] = (spring_t){ 90, 9, 0, 0 }; rt->sp_b[k] = (spring_t){ 45, 7, 0, 0 }; }
-    rt->sp_sq = (spring_t){ 160, 9, 0, 0 };
-    rt->sp_py = (spring_t){ 220, 14, 0, 0 };
-    rt->act = rt->pact = -1;
-}
-
-void cute_rt_set_mood(cute_rt_t *rt, int mood) {
-    if (!rt || mood < 0 || mood >= CUTE_N_MOODS || mood == rt->mood) return;
-    rt->prev = rt->mood; rt->pj = rt->j; rt->prev_t = rt->et;
-    rt->mood = mood; rt->et = 0; rt->fade = 0; rt->fade_dur = rand_ab(rt, 0.5f, 1.0f);
-    rt->j = new_jit(rt);
-    rt->anticip = 0.0001f;
-}
-int cute_rt_mood(const cute_rt_t *rt) { return rt ? rt->mood : 0; }
-
-void cute_rt_act(cute_rt_t *rt, int act) {
-    if (!rt || act < 0 || act >= CUTE_N_ACTS) return;
-    if (rt->act >= 0) { rt->pact = rt->act; rt->pact_t = rt->act_t; rt->pact_w = 1.f; }   /* fades out */
-    rt->act = act; rt->act_t = 0.f;
-}
-int cute_rt_acting(const cute_rt_t *rt) { return rt ? rt->act : -1; }
-float cute_rt_act_time(const cute_rt_t *rt) { return rt && rt->act >= 0 ? rt->act_t : 0.f; }
-
-/* the action layer: offsets added after the springs (the curves are smooth already, and a
- * nod must not be swallowed by the head's 1.5 Hz spring); look before the saccade clamp,
- * lid after the blink (taken as max) */
-static void act_add(pose_t *p, const cute_act_pose_t *a, float w) {
-    for (int k = 0; k < 3; k++) {
-        p->pos[k] += w * a->pos[k]; p->rot[k] += w * a->rot[k];
-        p->head[k] += w * a->head[k]; p->spine[k] += w * a->spine[k];
-    }
-    p->squash += w * a->squash; p->mouth = fmaxf(p->mouth, w * a->mouth);
-    p->look[0] += w * a->look[0]; p->look[1] += w * a->look[1];
-}
-static float act_layer(cute_rt_t *rt, float dt, pose_t *p) {
-    float lid = 0.f;
-    cute_act_pose_t a;
-    rt->cam_zoom = rt->cam_focus = 0.f;
-    if (rt->pact >= 0) {                               /* the replaced one, out over 0.25 s */
-        rt->pact_t += dt; rt->pact_w -= dt / 0.25f;
-        if (rt->pact_w <= 0.f || rt->pact_t > cute_act_dur(rt->pact)) rt->pact = -1;
-        else { cute_act_pose(rt->pact, rt->pact_t, &a); act_add(p, &a, rt->pact_w); lid = rt->pact_w * a.lid; rt->cam_zoom = rt->pact_w * a.zoom; rt->cam_focus = rt->pact_w * a.focus; }
-    }
-    if (rt->act >= 0) {
-        rt->act_t += dt;
-        if (rt->act_t > cute_act_dur(rt->act)) rt->act = -1;
-        else { cute_act_pose(rt->act, rt->act_t, &a); act_add(p, &a, 1.f); lid = fmaxf(lid, a.lid); rt->cam_zoom += a.zoom; rt->cam_focus += a.focus; }
-    }
-    return lid;
-}
-float cute_rt_env(const cute_rt_t *rt) { return rt ? rt->env_value : 0.f; }
-
-static void engine_update(cute_rt_t *rt, float dt, pose_t *p) {
-    dt = fminf(dt, 0.05f);
-    rt->time += dt; rt->et += dt; rt->prev_t += dt;
-    rt->env_value = (rt->mood == CM_SPEAKING || rt->prev == CM_SPEAKING) ? speech_update(rt, &rt->env, dt) : 0.f;
-    pose_t cur; zero_pose(&cur); gen(rt, rt->mood, &cur, rt->et, &rt->j, rt->env_value);
-    *p = cur;
-    if (rt->fade < 1.f && rt->prev >= 0) {
-        rt->fade = fminf(1.f, rt->fade + dt / rt->fade_dur);
-        pose_t old; zero_pose(&old); gen(rt, rt->prev, &old, rt->prev_t, &rt->pj, rt->env_value);
-        float w = rt->fade * rt->fade * (3 - 2 * rt->fade);
-        lerp_pose(p, &old, &cur, w);
-    }
-    bool sleepy = rt->mood == CM_SLEEPY;
-    float period = sleepy ? 5 * rt->j.f : 3.5f * rt->j.f, amp = sleepy ? 0.04f : 0.025f;
-    p->squash += amp * sinf(TAU_F * rt->time / period);
-    if (rt->anticip > 0) {
-        rt->anticip += dt; float q = rt->anticip / 0.18f;
-        if (q >= 1) rt->anticip = 0; else { p->squash -= 0.07f * sinf(PI_F * q); p->head[0] += 0.08f * sinf(PI_F * q); }
-    }
-    for (int k = 0; k < 3; k++) p->head[k] = spring_step(&rt->sp_h[k], p->head[k], dt);
-    for (int k = 0; k < 3; k++) p->rot[k] = spring_step(&rt->sp_b[k], p->rot[k], dt);
-    p->pos[1] = spring_step(&rt->sp_py, p->pos[1], dt);
-    p->squash = spring_step(&rt->sp_sq, p->squash, dt);
-    const float act_lid = act_layer(rt, dt, p);
-    rt->saccade.next -= dt;
-    if (rt->saccade.next <= 0) { rt->saccade.next = rand_ab(rt, 0.2f, 0.6f); rt->saccade.x = rand_ab(rt, -0.08f, 0.08f); rt->saccade.y = rand_ab(rt, -0.06f, 0.06f); }
-    p->look[0] = clampf(p->look[0] + rt->saccade.x, -1, 1);
-    p->look[1] = clampf(p->look[1] + rt->saccade.y, -1, 1);
-    /* blinks: 2–6 s, 80 ms close / 50–100 hold / 150 open; 1 in 8 doubles */
-    eblink_t *b = &rt->eblink;
-    b->next -= dt;
-    if (b->phase < 0 && b->next <= 0) { b->phase = 0; b->hold = rand_ab(rt, 0.05f, 0.1f); b->dbl = !b->second && rnd(rt) < 1.f / 8; b->second = false; }
-    if (b->phase >= 0) {
-        b->phase += dt; float c = 0.08f, h = c + b->hold, o = h + 0.15f;
-        b->value = b->phase < c ? b->phase / c : b->phase < h ? 1.f : b->phase < o ? 1.f - (b->phase - h) / 0.15f : 0.f;
-        if (b->phase >= o) {
-            b->phase = -1; b->value = 0;
-            bool engaged = rt->mood == CM_LISTENING || rt->mood == CM_SPEAKING;
-            b->next = b->dbl ? rand_ab(rt, 0.2f, 0.4f) : engaged ? rand_ab(rt, 2, 4) : rand_ab(rt, 4, 7);
-            if (b->dbl) { b->dbl = false; b->second = true; }
-        }
-    }
-    p->lid = clampf(fmaxf(p->lid, 0) + b->value * (1 - p->lid), 0, 1);
-    p->lid = fmaxf(p->lid, act_lid);
-    p->mood = rt->mood;
-}
+void cute_rt_set_mood(cute_rt_t *rt, int mood) { if (rt) me_set_mood(&rt->eng, mood); }
+int cute_rt_mood(const cute_rt_t *rt) { return rt ? rt->eng.mood : 0; }
+void cute_rt_act(cute_rt_t *rt, int act) { if (rt) me_act(&rt->eng, act); }
+int cute_rt_acting(const cute_rt_t *rt) { return rt ? rt->eng.act : -1; }
+float cute_rt_act_time(const cute_rt_t *rt) { return rt ? me_act_time(&rt->eng) : 0.f; }
+float cute_rt_env(const cute_rt_t *rt) { return rt ? rt->eng.env_value : 0.f; }
 
 /* ── kit animation (CuteCreature.update / MOTIONS / _face / _limbs) ─────────────────── */
 
@@ -1029,13 +617,13 @@ static void world_update(cute_rt_t *rt) {
         bool rotated = n->rot[0] != 0.f || n->rot[1] != 0.f || n->rot[2] != 0.f;
         if (n->use_rm) {
             memcpy(R, n->rm, sizeof(R));
-            if (rotated) { float E[9]; euler_mat(E, n->rot, n->order); mat3_mul(R, R, E); }
-        } else if (rotated) euler_mat(R, n->rot, n->order);
+            if (rotated) { float E[9]; rg_euler(E, n->rot, n->order); rg_mat3_mul(R, R, E); }
+        } else if (rotated) rg_euler(R, n->rot, n->order);
         else { static const float I[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 }; memcpy(R, I, sizeof(R)); }
         m34_t L = { { R[0] * n->scale[0], R[1] * n->scale[1], R[2] * n->scale[2], n->pos[0],
                       R[3] * n->scale[0], R[4] * n->scale[1], R[5] * n->scale[2], n->pos[1],
                       R[6] * n->scale[0], R[7] * n->scale[1], R[8] * n->scale[2], n->pos[2] } };
-        n->world = n->parent >= 0 ? m_mul(&rt->nodes[n->parent].world, &L) : L;
+        n->world = n->parent >= 0 ? rg_mul(&rt->nodes[n->parent].world, &L) : L;
     }
 }
 
@@ -1043,7 +631,7 @@ void cute_rt_update(cute_rt_t *rt, float dt) {
     if (!rt) return;
     FLUID_PROF_BEGIN(c0);
     dt = fminf(dt, 1.f / 30.f);                        /* CreatureTarget.update clamps both */
-    engine_update(rt, dt, &rt->pose);
+    me_update(&rt->eng, dt, &rt->pose);
     kit_update(rt, dt, &rt->pose);
     world_update(rt);
     FLUID_PROF_END(FP_C_UPDATE, c0);
@@ -1059,7 +647,7 @@ static void rest_bbox(cute_rt_t *rt, float *mn, float *mx) {
         const geo_t *g = &rt->geos[me->geo];
         const m34_t *W = &rt->nodes[me->node].world;
         for (int c = 0; c < 8; c++) {   /* box corners → world AABB (three Box3.applyMatrix4) */
-            v3_t p = m_apply(W, (c & 1) ? g->bmax[0] : g->bmin[0], (c & 2) ? g->bmax[1] : g->bmin[1], (c & 4) ? g->bmax[2] : g->bmin[2]);
+            v3_t p = rg_apply(W, (c & 1) ? g->bmax[0] : g->bmin[0], (c & 2) ? g->bmax[1] : g->bmin[1], (c & 4) ? g->bmax[2] : g->bmin[2]);
             float v[3] = { p.x, p.y, p.z };
             for (int k = 0; k < 3; k++) { if (v[k] < mn[k]) mn[k] = v[k]; if (v[k] > mx[k]) mx[k] = v[k]; }
         }
@@ -1141,8 +729,8 @@ cute_rt_t *cute_rt_create(const cute_spec_t *S, uint32_t seed) {
     rt->flick.next = rand_ab(rt, 2, 5); rt->flick.t = -1;
     rt->lid_state.since = 9;
     rt->w[CM_IDLE] = 1;
-    engine_init(rt);
-    zero_pose(&rt->pose);
+    me_init(&rt->eng, rnd(rt) * 4294967040.f + 1);
+    memset(&rt->pose, 0, sizeof(rt->pose));
 
     /* normalise in the rest pose: height 1, or bulk / 0.9 for squat wide creatures */
     kit_update(rt, 0, &rt->pose);
@@ -1208,12 +796,12 @@ void cute_rt_raster(cute_rt_t *rt, int W, int H) {
     const uint32_t tagbits = (uint32_t)rt->tag << 24;
     fluid_prof[FP_C_CLEAR] += fluid_cycles() - cc;
     static const float LD[3] = { 0.33333333f, 0.66666667f, 0.66666667f };   /* normalize(0.5, 1, 1) */
-    const float inv_h = (1.f + rt->cam_zoom) / rt->cam_half, hx = 0.5f * SW * inv_h, hy = 0.5f * SH * inv_h;
+    const float inv_h = (1.f + rt->eng.cam_zoom) / rt->cam_half, hx = 0.5f * SW * inv_h, hy = 0.5f * SH * inv_h;
     /* the camera's centre: the usual one, or (an action's focus) on the eye nearer the camera */
     float ct[3] = { rt->cam_t[0], rt->cam_t[1], rt->cam_t[2] };
-    if (rt->cam_focus > 0.f) {
-        v3_t eye = m_apply(&rt->nodes[rt->eyes[0].g].world, 0.f, 0.f, 0.f);
-        ct[0] += rt->cam_focus * (eye.x - ct[0]); ct[1] += rt->cam_focus * (eye.y - ct[1]); ct[2] += rt->cam_focus * (eye.z - ct[2]);
+    if (rt->eng.cam_focus > 0.f) {
+        v3_t eye = rg_apply(&rt->nodes[rt->eyes[0].g].world, 0.f, 0.f, 0.f);
+        ct[0] += rt->eng.cam_focus * (eye.x - ct[0]); ct[1] += rt->eng.cam_focus * (eye.y - ct[1]); ct[2] += rt->eng.cam_focus * (eye.z - ct[2]);
     }
     int tris = 0;
     int bx0 = SW, bx1 = 0, by0 = SH, by1 = 0;           /* union of rasterised bboxes */
@@ -1222,13 +810,13 @@ void cute_rt_raster(cute_rt_t *rt, int W, int H) {
         if (!me->visible) continue;
         const geo_t *g = &rt->geos[me->geo];
         const m34_t *Wm = &rt->nodes[me->node].world;
-        float det = m_det(Wm);
+        float det = rg_det(Wm);
         if (fabsf(det) < 1e-12f || g->nv > rt->vcap) continue;  /* collapsed (scale 0) */
         uint32_t cv = fluid_cycles();
         /* camera-space vertices, once per mesh: screen x, y (samples), depth z; world p for normals */
         for (int i = 0; i < g->nv; i++) {
             const float *v = g->v + i * 3;
-            v3_t p = m_apply(Wm, v[0], v[1], v[2]);
+            v3_t p = rg_apply(Wm, v[0], v[1], v[2]);
             float q[3] = { p.x - ct[0], p.y - ct[1], p.z - ct[2] };
             float *o = rt->vbuf + i * 6;
             o[0] = (q[0] * rt->cam_x[0] + q[1] * rt->cam_x[1] + q[2] * rt->cam_x[2]) * hx + 0.5f * SW;

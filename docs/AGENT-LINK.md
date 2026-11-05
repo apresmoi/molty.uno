@@ -425,6 +425,42 @@ human stops ─▶ chirp + thinking (device)
   `filler_in_ms` (ms from then until the filler; absent = off or nothing heard). A relay older
   than the 400 ms floor reads 400..1499 as not reported (2500).
 
+### First words
+
+With the owner's `first_words: "opener"` and a box that offers it (`voice.hello opener`), the
+box's small model (`services/molty-voice/molty_voice/opener.py`) writes the real start of the
+answer the moment the human finishes: 12 to 20 words in short clauses (react, say the topic back,
+lead into the answer), never a fact. The relay's guard (`core/opener.ts guardOpener`) refuses a
+line with a name, a number, a yes or no, a result, a guess, talk about the conversation or a
+question; then nothing is said. A line that passes plays at once (a relay-owned lead-in) and
+replaces the auto filler.
+
+- **The plan.** The `utterance` (and a talk's result) carries `opener` (the whole planned line,
+  playing now) and `opener_wpm` (how fast lines are spoken, measured on the last one).
+- **`keep {words?, in_reply_to?}`** (relay command, `POST …/cmd`, MCP `molty_keep`): with `words`
+  (m), it claims the turn and the line's first m words: the relay never plays past word m. Its
+  audio goes out about a second ahead of the speaker, so word m+1 may already be on its way:
+  then the line finishes the clause on the wire and the result says so. Result `{keep, said,
+  late?, words, playing, sent, wpm}` (`keep`: the words that will be played, `said`: those
+  words, `playing` / `sent`: the word playing now and the words already sent, from the stream's
+  own timing and the TTS word cues). No `words`: the same position, nothing claimed. No line on
+  this turn: `{keep: null}`.
+- **The reply** (`say` / `talk` answering the turn) starts with the line's first m words word for
+  word, or passes `keep: m` and sends only what follows. The relay plans it once
+  (`core/opener.ts planReply`): the line not yet past word m → it stops there and the reply's
+  words take over (speech synthesised meanwhile, `cmd say` on the line's `say.done`); the line
+  already stopped at m (after a keep) and nothing came → Molty pauses there (the `hmm` built-in,
+  then `thinking`) and the reply follows when it comes; the line already past m → it finishes
+  the clause playing, then `"I mean,"` and the reply without the words already said; a reply
+  that ignores the line → it plays after the clause playing now. The reply's case is kept: a
+  continuation in lower case starts without the TTS's sentence-start pause.
+- **Never busy.** A lead-in (a draft's opener, first words, the closing below) hands the speaker
+  on only at its `say.done`: a reply queued behind it never meets a device still playing.
+- **Left hanging.** A line that stops mid-sentence and nothing from any agent within 15 s:
+  Molty says "Hmm, give me a moment." once.
+- **Trace.** `ev: "opener"` entries on the turn: `{text, ms, dropped?}` (the line), `{keep,
+  asked, sent}` (a keep), `{reply: switch | repair | after, stop, words}` (the reply's plan).
+
 ### Shake to talk
 
 The human shakes Molty and just speaks: no agent round trip before the mic opens (with an agent
@@ -463,7 +499,7 @@ shake ─▶ device: listening at once (ring + mood), audio kept locally
   reaches agents). Agents should not react to it: the utterance follows.
 - **Utterance.** When the listen ended with words (a non-empty transcript), the relay stores the
   turn and appends ONE `utterance` event (relay-generated, not rate-capped, never accepted from a
-  device): `{turn_id, text, reason, ms:{speech, stt}, trigger:"shake", device:{caps, mood, voice}, filler_in_ms?}` (`filler_in_ms`: see [Quick phrases](#quick-phrases-and-the-auto-filler)).
+  device): `{turn_id, text, reason, ms:{speech, stt}, trigger:"shake", device:{caps, mood, voice, creature?}, filler_in_ms?}` (`creature`: who Molty is now, see [Events](#firmware-contract); `filler_in_ms`: see [Quick phrases](#quick-phrases-and-the-auto-filler)).
   `turn_id` is the listen job's id (`GET /v1/jobs/<turn_id>` has the full listen result);
   `ms.speech` the measured speech (else the recording's length), `ms.stt` the transcription's
   tail; `device.mood` what Molty shows now (`thinking`: its acknowledgement, unless `ack` is off →
@@ -755,14 +791,15 @@ What the screen does between commands (`device/firmware/main/fluid/fluid_directo
 
 | name | args | result | notes |
 |---|---|---|---|
-| `status` | — | fw, uptime, creature, state, mood, fps, rssi | relay adds `relay` {api_version, online, board, caps, voice, ...} |
+| `status` | — | fw, uptime, creature, state, mood, fps, rssi | relay adds `relay` {api_version, online, board, caps, voice, creature, ...} |
 | `state` | `{state, ...}` | creature state JSON | passthrough to `/api/creature/state` semantics |
 | `mood` | `{mood, hold_s?}` (device also `react?`) | — | idle listening thinking speaking happy sleepy surprised; `hold_s` 0..3600 (0 = until the next mood; default: happy/surprised revert, the rest persist). `react:true` (relay-sent, cap `react`): shown but not an explicit mood ([While the human speaks](#while-the-human-speaks)) |
-| `act` | `{action}` | `{action}` | a one-shot gesture over the current mood: inspect paddle (cap `working`) wiggle nod shake_head bounce peek glance_left glance_right blink wobble stretch look_up yawn ([Inline cues and actions](#inline-cues-and-actions)); `unsupported` / `firmware_too_old` without the `act` cap |
+| `act` | `{action}` | `{action}` | a one-shot gesture over the current mood: inspect paddle (cap `working`) wiggle nod shake_head bounce peek glance_left glance_right blink wobble stretch look_up yawn, or one of the creature's own (`unknown_gesture` for a name it lacks; [Inline cues and actions](#inline-cues-and-actions)); `unsupported` / `firmware_too_old` without the `act` cap |
 | `draft` (relay) | `{turn_id, based_on, opener, max_new_words?, voice?}` | `{turn_id, based_on, status:"held", max_new_words, threshold}` | only during an open turn ([While the human speaks](#while-the-human-speaks)) |
 | `react` (relay) | `{turn_id, mood}` or `{turn_id, action}` | `{turn_id, shown, for_ms, next_after_ms}` | only during an open turn; ≤ 1 per 3 s |
 | `show` | `{text, wpm?}` | — | speed reader in the fluid; back to the creature 1.5 s after the last word |
-| `say` | `{text, voice?, in_reply_to?}` | `{job}` immediately | relay does TTS (streamed per sentence) + streams; device sets `speaking`, shows text in sync. `text` may carry [inline cues](#inline-cues-and-actions). Job result `{ms, text, timings}` (`text` as spoken, cues stripped). `unsupported` without a speaker; `in_reply_to` / `turn_claimed`: [Shake to talk](#shake-to-talk) |
+| `say` | `{text, voice?, in_reply_to?, keep?}` | `{job}` immediately | relay does TTS (streamed per sentence) + streams; device sets `speaking`, shows text in sync. `text` may carry [inline cues](#inline-cues-and-actions). Job result `{ms, text, timings}` (`text` as spoken, cues stripped). `unsupported` without a speaker; `in_reply_to` / `turn_claimed`: [Shake to talk](#shake-to-talk) |
+| `keep` (relay) | `{words?, in_reply_to?}` | `{keep, said, late?, words, playing, sent, wpm}` or `{keep: null}` | [first words](#first-words): the reply continues after the line's first `words` words |
 | `quick` (relay) | `{id, in_reply_to?, force?}` | `{job, phrase, text, cached}` immediately, or `{skipped:"filled", filler}` | a cached [quick phrase](#quick-phrases-and-the-auto-filler), streamed as a say with no TTS; the same agent's next say / talk queues behind it; `not_found` for an unknown id |
 | `listen` | `{ms? 0..30000 (0 = unlimited; omit = the device's setting, 30000 out of the box), end_silence_ms?, no_speech_ms?, vad?, ring_color?}` | `{job}` immediately | device sets `listening`, streams mic, stops at end of speech ([Listen end of speech](#listen-end-of-speech-device-vad)); relay STT → job result `{text, duration_ms, peak, rms, reason, speech_ms?, timings}`. `unsupported` without a mic |
 | `talk` (relay) | `{say?, listen?=true, listen_ms? 0..30000 (as listen's ms), voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?}` | blocks ≤ 24 s | say then listen in one job: `{job, status:"done", heard, said?, reason, speech_ms?, filler_in_ms?, ms:{tts_first_audio, speech, listen, stt, total}, timings}` (`filler_in_ms`: [auto filler](#quick-phrases-and-the-auto-filler)); over 24 s `{job, status:"pending"}` |
@@ -837,13 +874,22 @@ idle life of its own.
   while words or a question cover the creature it waits up to 3 s, then is dropped. A sleeping
   creature wakes for it. Local twin: `POST /api/creature/state {act: "nod"}`; GET reports the
   action playing as `act`.
+- **A creature's own gestures.** `ACTIONS` are the shared ones every creature plays; a creature
+  package may add gestures of its own by name ([CREATURES.md](CREATURES.md#1-the-package), the cat's
+  `eat`). The relay takes any `act` name `[a-z][a-z0-9_]{0,23}` (`GESTURE_RE`) and forwards it; the
+  device plays it if its creature has it (`creature_info.gestures`, the `creature` event's
+  `gestures`) and refuses one it lacks with `unknown_gesture`. Inline cues stay the shared ones.
 
 **Idle life** (`fluid_director.h`). With nobody driving it, the creature plays one small action
 from a weighted library every 10–40 s — glance left / right, blink (×3 weight), look up (×2),
 wobble, stretch (×1.5) — never the same one twice in a row; "calm" keeps the small ones every
 20–60 s; "off" plays none. Only while the creature is on screen, in `idle`, awake, and nothing
 owns the screen: never during a say, a listen, a question, an update or pairing screen, the
-turn acknowledgement's `thinking` or any agent mood. After 5 min without touch or agent activity
+turn acknowledgement's `thinking` or any agent mood. While Molty waits on the agent (`thinking`,
+or `working`) a creature package lives on in its own small way: its `ponder` event picks a
+glance, a tilt, a blink, an ear flick now and then (a yawn once it has thought a while), as data
+in the package, gated on the `thinking` mood and the `work` input; working then hands such a
+creature none of the firmware's work actions (inspect, paddle, ...). A `.molty` creature keeps them. After 5 min without touch or agent activity
 it **yawns**, then dozes off (`sleepy`; off: no yawn). A say that played to its end, the
 creature back and idle within 8 s: one `happy` flash (at most one a minute). The console's
 setting: Settings › Molty "idle life" (`POST /api/creature/state {idle_life:
@@ -867,6 +913,7 @@ pairing). Rate-limited on the device. `shake`, `tap` and `button` reach agents t
 | `double_tap` | `{x, y}` | two taps within 350 ms, when bound to `event` (out of the box a double tap talks) |
 | `button` | `{id: "accept"\|"reject"}` | a button was pressed (the board's accept / reject buttons); ≤ 4/s. For agents it means acknowledge / dismiss, never an answer (answers come only from `ask`) |
 | `answer` | `{job, index, label}` · `{job, index: null, reason: "timeout"\|"cancelled"}` | an `ask` ended: tapped (0-based `index`, `label` verbatim), timed out, or cancelled; one per job, never rate-limited |
+| `creature` | `{id, name, about?, gestures?, moods?}` | after each welcome and whenever the creature on screen changes: a package's `cp_info` (`about` {look, gestures, moods}: its own words, [CREATURES.md](CREATURES.md) section 1; `gestures` it plays that the firmware knows; `moods` idle and its own), `{id: "", name}` for a `.molty`. Relay-internal: kept per device (below) |
 
 The device reacts to a shake by itself (a brief `surprised`), agent or not. While a `listen`
 records, a thin line of the fluid itself condenses just inside the screen's rim around Molty
@@ -991,6 +1038,12 @@ device evt ──WSS──▶ DeviceRoom.onEvt
 | `tap` | `{x: 0..1, y: 0..1}` (screen position, unit square) |
 | `button` | `{id: "accept" \| "reject"}` |
 | `answer` | `{job, index: int 0..4 \| null, label?: string, reason?: "timeout" \| "cancelled"}`, checked against the pending ask (see the `ask` wire bullet) |
+
+**Who Molty is.** The device's `creature` frame (Device events) is checked and bounded (`creatureData` in
+`services/relay/src/core/events.ts`: id `[a-z0-9-]{0,32}`, name 1..32, look ≤ 240 and lines ≤ 100 printable ASCII, at
+most 32 names a list; anything else drops the frame) and kept per device (KV `creature`). Agents get it as
+`device.creature` on every `utterance`, as `relay.creature` in `status` (`null` until the device said), and as a
+relay-generated `creature` event when it differs from the one kept (webhooks only when their `events` name it).
 
 The relay stores `{id:"e<seq>", type, ts:<relay unix ms>, data}`; `seq` increases per device.
 `answer` is stored once per ended ask as `{job, index, label|null, reason?}` (`reason` also

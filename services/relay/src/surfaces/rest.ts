@@ -2,7 +2,7 @@
 //
 //   POST   /v1/pair                     {device_id, link_code, agent_name}  (no token; long-polls <= 120 s)
 //   POST   /v1/devices/<id>/cmd         {name, args, wait?}   -> {ok:true,result} | {ok:false,error}
-//                                       (say/listen + wait:true: blocks <= 24 s -> result {job, status:"done", ...} | 202 {job, status:"pending"})
+//                                       (say/listen/pkg.install + wait:true: blocks <= 24 s -> result {job, status:"done", ...} | 202 {job, status:"pending"})
 //   POST   /v1/devices/<id>/talk        {say?, listen?, listen_ms?, voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?, ack?, in_reply_to?, client_timing?}
 //                                       (in_reply_to / a say's: an utterance's turn_id; another agent answered it first -> 409 turn_claimed)
 //                                       -> {ok:true, result:{job, status:"done", heard, said?, reason, ms, timings}} | 202 pending
@@ -73,6 +73,7 @@ const STATUS: Record<string, number> = {
   no_checksum: 409,
   unknown_version: 409,
   release_unavailable: 503,
+  catalog_unavailable: 503,
   pair_busy: 409,
   device_timeout: 504,
   playback_timeout: 504,
@@ -180,7 +181,7 @@ export async function handleRest(request: Request, backend: RelayBackend): Promi
     const t0 = Date.now();
     const out: Outcome = await api.command(token!, b.name as string, b.args);
     if (!out.ok) return failed(out);
-    if (b.wait !== true || (b.name !== "say" && b.name !== "listen")) return json({ ok: true, result: out.result, ...extra(out) });
+    if (b.wait !== true || (b.name !== "say" && b.name !== "listen" && b.name !== "pkg.install")) return json({ ok: true, result: out.result, ...extra(out) });
     // Block on the job. Both outcomes may carry ride-alongs (already marked read): hand over both,
     // whatever the job's outcome.
     const waited = await api.job(token!, out.result.job as string, Math.max(0, TALK_BUDGET_MS - (Date.now() - t0)));

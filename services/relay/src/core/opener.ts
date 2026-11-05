@@ -1,28 +1,37 @@
 // First words: the start of Molty's reply, said before the agent can speak.
 //
 //   turn end ─▶ the box's small model (molty_voice/opener.py; the last few messages + the human's
-//   words) ─▶ guardOpener ─▶ TTS ─▶ Molty speaks ─▶ the agent continues from `opener`
+//   words) ─▶ guardOpener ─▶ TTS ─▶ Molty speaks ─▶ the agent takes over at a word of the line
 //
-// The model only starts a sentence and knows nothing the agent knows: the line just fills the gap.
-// So new plain words may pass, but a name, a number, a yes or no, a result or a statement about the
-// world may not. The fallback is silence, never a generic line.
+// The model writes the real start of the answer (about 12 to 20 words in short clauses) and knows
+// nothing the agent knows. So new plain words may pass, but a name, a number, a yes or no, a result
+// or a statement about the world may not. The fallback is silence, never a generic line.
+//
+// Overlap (planReply): the agent reads the planned line, may claim a branch point (keep: m words),
+// and starts its reply with those m words; the relay stops the line there and plays the rest.
 
 export const FIRST_WORDS_MODES = ["off", "opener"] as const;
 export type FirstWordsMode = (typeof FIRST_WORDS_MODES)[number];
 
 export const OPENER = {
   /** The whole round trip to the box. Later than this the moment has passed: silence. */
-  deadlineMs: 500,
+  deadlineMs: 800,
   /** Messages (both sides) given to the model. */
   historyMessages: 5,
   /** Older than this the conversation is over: it is not context any more. */
   historyTtlMs: 10 * 60_000,
   historyChars: 300,
-  maxWords: 9,
-  maxChars: 70,
+  maxWords: 22,
+  maxChars: 150,
   /** No answer this long after a line left hanging mid-sentence: `closing`. */
   hangMs: 15_000,
   closing: "Hmm, give me a moment.",
+  /** Said between a line that went past the reply's branch point and the reply. */
+  repair: "I mean,",
+  /** Words per minute of a line until one has been measured (the box's voice, roughly). */
+  wpm: 170,
+  /** The sound of Molty pausing at a kept word, waiting for the agent (a built-in quick phrase). */
+  pause: "hmm",
 } as const;
 
 export interface OpenerMessage {
@@ -97,6 +106,9 @@ const CLAIMS: Array<[RegExp, string]> = [
   [/\bi(?:'ve| have)\s+\p{L}+/iu, "claim"],
   [/\b(found|fixed|sent|added|saved|booked|scheduled|reminded|created|updated|deleted|called|played|i will|i'll)\b/i, "claim"],
   [/\b(took|takes|took a|equals|because)\b/i, "result"],
+  [/\b\p{L}+n['’]t\b/iu, "result"], // "the tests didn't run", "it won't"
+  [/\b(maybe|perhaps|probably|certainly|definitely|likely|surely|quizás|quizas|seguro)\b/i, "guess"],
+  [/\b(question|interesting|fascinating|topic|pregunta|interesante)\b/i, "meta"], // "that's a good question": no line at all is better
   [/\b(it's|it is|it was|it will|there's|there is|there are|they are|they're|answer is|result is)\b/i, "result"],
   [/\b(es|son|fue|fueron|será|sera|hay)\b/i, "result"],
 ];
@@ -128,7 +140,7 @@ export function guardOpener(line: unknown, human: string, history: readonly Open
   if (!ws.length) return { ok: false, why: "empty" };
   if (ws.length > OPENER.maxWords || text.length > OPENER.maxChars) return { ok: false, why: "long" };
   if (/[\n*#_`<>[\]{}/\\]|->|\bhuman\b|\bmolty\b/i.test(text)) return { ok: false, why: "format" };
-  if (/\?\s*$/.test(text)) return { ok: false, why: "question" }; // it would wait for an answer nobody is listening for
+  if (/[?¿]/.test(text)) return { ok: false, why: "question" }; // it would wait for an answer nobody is listening for
   const heard = tokens(human);
   const said = new Set(heard);
   // their sentence back, even behind an "okay," ("okay, remind me to call my sister")
@@ -171,32 +183,94 @@ export function hangs(text: string): boolean {
   return !/[.!…]\s*$/.test(text);
 }
 
+const SAID_RE = /\[[^\]\n]*\]|[\p{L}\p{N}]+(?:['’][\p{L}]+)?/gu;
+
 /**
- * The agent said the opener again: those words go, once. Cues (`[happy]`) in front stay. Works on
- * the raw text so that cue positions stay right.
+ * How many of the line's `words` (as spoken, speechWords) `say` starts with, word for word (at most
+ * `limit`), and `say` after them. Case, accents and punctuation aside; cues (`[happy]`) among the
+ * repeated words move to the front. Works on the raw text so that cue positions stay right.
  */
-export function stripRepeat(say: string, opener: string | undefined): { text: string; repeated: boolean } {
-  const want = opener ? tokens(opener) : [];
-  if (!want.length) return { text: say, repeated: false };
-  const re = /\[[^\]\n]*\]|[\p{L}\p{N}]+(?:'[\p{L}]+)?/gu;
-  let i = 0;
-  let end = -1;
+export function afterShared(say: string, words: readonly string[], limit = words.length): { n: number; rest: string } {
+  const want: string[] = [];
+  const of: number[] = []; // the word each token belongs to
+  words.slice(0, limit).forEach((w, i) => {
+    for (const t of tokens(w)) {
+      want.push(t);
+      of.push(i);
+    }
+  });
+  let j = 0;
+  const whole = () => (j === want.length ? limit : of[j]!); // words fully said (a word without letters counts once reached)
+  let n = 0;
+  let end = 0;
   const cues: string[] = [];
-  for (const m of say.matchAll(re)) {
+  for (const m of say.matchAll(SAID_RE)) {
     if (m[0].startsWith("[")) {
       cues.push(m[0]);
       continue;
     }
-    if (tokens(m[0]).join("") !== want[i]) return { text: say, repeated: false };
-    if (++i === want.length) {
+    if (j === want.length || tokens(m[0])[0] !== want[j]) break;
+    j++;
+    if (whole() > n) {
+      n = whole();
       end = m.index + m[0].length;
-      break;
     }
   }
-  if (end < 0) return { text: say, repeated: false };
-  const rest = say.slice(end).replace(/^[\s,.;:!…-]+/, "");
-  if (![...rest].some((c) => /[\p{L}\p{N}]/u.test(c))) return { text: say, repeated: false }; // nothing else to say: leave it
-  return { text: (cues.length ? cues.join(" ") + " " : "") + rest[0]!.toUpperCase() + rest.slice(1), repeated: true };
+  if (!n) return { n, rest: say };
+  let rest = say.slice(end).replace(/^[\s,.;:!…-]+/, "");
+  if (![...rest].some((c) => /[\p{L}\p{N}]/u.test(c))) return { n, rest: "" };
+  if (/[.!?…]["')\]]*$/.test(words[n - 1]!)) rest = rest[0]!.toUpperCase() + rest.slice(1);
+  const front = cues.filter((c) => say.indexOf(c) < end);
+  return { n, rest: (front.length ? front.join(" ") + " " : "") + rest };
+}
+
+/** The end of the clause that word `from` (0-based) is in: words up to its comma or stop, counted. */
+export function clauseEnd(words: readonly string[], from: number): number {
+  if (from <= 0) return 0;
+  for (let c = from; c < words.length; c++) if (/[,.;:!?…]["')\]]*$/.test(words[c - 1]!)) return c;
+  return words.length;
+}
+
+/** The line as it plays: what the relay sent of it, and where it stops. */
+export interface LinePlay {
+  words: readonly string[];
+  /** Words whose audio has started going to the device (a stop before them is still possible). */
+  sent: number;
+  /** The stream is over: `stop` words were played. */
+  ended: boolean;
+  /** Words the relay plays of it (a keep, or a reply's plan); absent: all. */
+  stop?: number;
+  /** The agent's keep: its reply goes on after this many words. */
+  keep?: number;
+}
+
+export type ReplyPlan = { stop: number; text: string; how: "switch" | "repair" | "after" };
+
+/**
+ * An answer to the turn while (or after) its line plays: where the line stops and what is said after
+ * it. `keep`: the reply names its branch point (its text is then what follows those words);
+ * otherwise the line's words the reply starts with are its branch point (or the agent's keep).
+ * - switch: the line stops where the reply branches (it has not got further) and the rest follows;
+ * - repair: it already went further: it finishes its clause, then "I mean," and the reply, without
+ *   the words already spoken;
+ * - after: a reply that ignores the line plays after the clause playing now.
+ */
+export function planReply(say: string, line: LinePlay, keep?: number): ReplyPlan {
+  const { words } = line;
+  const k = afterShared(say, words).n;
+  const want = keep ?? line.keep ?? (k || undefined);
+  const stop = line.ended ? (line.stop ?? words.length) : want !== undefined && want >= line.sent ? want : clauseEnd(words, line.sent);
+  if (k >= stop) return { stop, text: afterShared(say, words, stop).rest, how: "switch" };
+  if (want === undefined) return { stop, text: say, how: "after" };
+  const own = keep !== undefined ? (k >= keep ? k : 0) : k; // the reply's words that repeat the line
+  if (stop <= want) {
+    // the line stopped short of the branch point (an explicit keep past it): its missing words go first
+    const gap = words.slice(stop, want).join(" ");
+    const rest = afterShared(say, words, own).rest;
+    return { stop, text: gap && rest ? `${gap} ${rest}` : gap || rest, how: "switch" };
+  }
+  const rest = afterShared(say, words, own).rest;
+  return { stop, text: rest ? `${OPENER.repair} ${rest}` : "", how: "repair" };
 }
 
 /** The conversation so far, newest last, kept short. */

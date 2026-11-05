@@ -1,18 +1,21 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: MIT
-// check-skill.mjs — the agent skill (skills/molty/) and its plugin packaging, checked
+// check-skill.mjs: the agent skills (skills/*/) and their plugin packaging, checked
 // against the repo (run by tools/scripts/hygiene.sh). The relay no longer serves the skill, so
-// what its tests used to pin about the served text is checked here instead:
-//   1. SKILL.md frontmatter (name, description) and a short core
+// what its tests used to pin about the served text is checked here instead. Every skill:
+//   1. SKILL.md frontmatter (name = its folder, description) and a short core
 //   2. every reference is linked from SKILL.md; every relative link (and #anchor) resolves
 //   3. no hard-coded relay host: curl examples use $MOLTY_RELAY; the official relay URL only
 //      where MOLTY_RELAY's default is defined
-//   4. the skill documents what the relay has: every command, mood, action and MCP tool, and the
+//   8. a molty.json sidecar, if any: the caps it needs, and the packages it installs exist in packages/index.json
+// The core skill (skills/molty/) also:
+//   4. documents what the relay has: every command, mood, action and MCP tool, and the
 //      api_version it targets equals the relay's API_VERSION
 //   5. load-bearing rules are still stated (shake to talk, ack, no_speech, caps, …)
+//   7. every place that names the skill's home agrees (relay redirect, MCP, console)
+// And the packaging:
 //   6. plugin manifests (Claude Code + Codex) agree; the plugin root (the repo) holds no
 //      symlinks and no script/document >= 256 KiB (the plugin loaders refuse both)
-//   7. every place that names the skill's home agrees (relay redirect, MCP, console)
 // Exits non-zero listing every problem.
 import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
@@ -39,64 +42,78 @@ function walk(dir, out = []) {
   }
   return out;
 }
-const mdFiles = walk(SKILL).filter((p) => p.endsWith('.md'));
-const allText = Object.fromEntries(walk(SKILL).filter((p) => !p.includes('__pycache__')).map((p) => [p, readFileSync(p, 'utf8')]));
-const skillMd = allText[join(SKILL, 'SKILL.md')];
-if (!skillMd) { console.error('::error::skills/molty/SKILL.md is missing'); process.exit(1); }
-
-// 1. frontmatter + size
-const fm = /^---\nname: ([a-z0-9-]+)\ndescription: (.+)\n---\n/.exec(skillMd);
-if (!fm) bad('SKILL.md must start with ---/name/description/--- frontmatter');
-else {
-  if (fm[1] !== 'molty') bad(`SKILL.md name is ${fm[1]}, expected molty`);
-  if (fm[2].length > 1024) bad(`SKILL.md description is ${fm[2].length} chars (max 1024)`);
-}
-if ([...skillMd].length > MAX_SKILL_CHARS) bad(`SKILL.md is ${[...skillMd].length} chars: keep the core under ${MAX_SKILL_CHARS}, move detail to references/`);
-if (readdirSync(join(ROOT, 'skills')).filter((n) => !n.startsWith('.')).join() !== 'molty') bad('skills/ must hold exactly one skill: molty');
-
-// 2. links
+const SKILLS = readdirSync(join(ROOT, 'skills')).filter((n) => !n.startsWith('.')).sort();
+if (!SKILLS.includes('molty')) bad('skills/ must hold the core skill: molty');
+const DEFAULT_RELAY = /https:\/\/molty-relay\.alicenet\.workers\.dev/;
 // GitHub's anchors: lower case, punctuation dropped except - and _, spaces to -
 const slug = (h) => h.trim().toLowerCase().replace(/[^\p{L}\p{N} _-]/gu, '').replace(/ /g, '-');
 const anchors = (text) => new Set([...text.matchAll(/^#{1,6} (.+)$/gm)].map((m) => slug(m[1])));
-for (const file of mdFiles) {
-  const text = allText[file];
-  for (const m of text.matchAll(/\]\(([^)\s]+)\)/g)) {
-    const target = m[1];
-    if (/^(https?:|mailto:)/.test(target)) continue;
-    const [path, anchor] = target.split('#');
-    const dest = path ? resolve(dirname(file), path) : file;
-    if (path && !dest.startsWith(SKILL)) { bad(`${rel(file)}: link ${target} leaves the skill (use a GitHub URL)`); continue; }
-    if (!existsSync(dest)) { bad(`${rel(file)}: broken link ${target}`); continue; }
-    if (anchor && dest.endsWith('.md') && !lstatSync(dest).isDirectory() && !anchors(readFileSync(dest, 'utf8')).has(anchor)) bad(`${rel(file)}: no heading #${anchor} in ${rel(dest)}`);
-  }
-}
-for (const file of mdFiles) {
-  if (file.endsWith('SKILL.md')) continue;
-  if (!skillMd.includes(`](${relative(SKILL, file)})`)) bad(`${rel(file)} is not linked from SKILL.md's index`);
-}
-for (const m of skillMd.matchAll(/`([a-z_]+\.(?:sh|py))\b/g)) if (!existsSync(join(SKILL, 'scripts', m[1]))) bad(`SKILL.md names scripts/${m[1]}, which does not exist`);
+const texts = (dir) => Object.fromEntries(walk(dir).filter((p) => !p.includes('__pycache__') && !p.includes('/vendor/')).map((p) => [p, readFileSync(p, 'utf8')]));
 
-// 3. relay hosts
-const DEFAULT_RELAY = /https:\/\/molty-relay\.alicenet\.workers\.dev/;
-for (const [file, text] of Object.entries(allText)) {
-  text.split('\n').forEach((line, i) => {
-    const at = `${rel(file)}:${i + 1}`;
-    for (const m of line.matchAll(/(?:https?|wss?):\/\/([^\s/`'")]+)/g)) {
-      const host = m[1];
-      if (host.includes('<') || host.startsWith('…') || host.startsWith('$')) continue; // placeholder
-      if (/^(github\.com|raw\.githubusercontent\.com|molty\.uno|example\.org)$/.test(host)) continue;
-      if (DEFAULT_RELAY.test(m[0]) && /MOLTY_RELAY|DEFAULT_RELAY|default relay/i.test(line)) continue;
-      bad(`${at}: hard-coded host ${host} (write $MOLTY_RELAY, or a <placeholder>)`);
+/** 1, 2, 3 and 8 for one skill folder; returns its texts. */
+function checkSkill(name) {
+  const dir = join(ROOT, 'skills', name), text = texts(dir), md = Object.keys(text).filter((p) => p.endsWith('.md')), skillMd = text[join(dir, 'SKILL.md')];
+  if (!skillMd) { bad(`skills/${name}/SKILL.md is missing`); return text; }
+  // 1. frontmatter + size
+  const fm = /^---\nname: ([a-z0-9-]+)\ndescription: (.+)\n---\n/.exec(skillMd);
+  if (!fm) bad(`skills/${name}/SKILL.md must start with ---/name/description/--- frontmatter`);
+  else {
+    if (fm[1] !== name) bad(`skills/${name}/SKILL.md name is ${fm[1]}, expected ${name}`);
+    if (fm[2].length > 1024) bad(`skills/${name}/SKILL.md description is ${fm[2].length} chars (max 1024)`);
+  }
+  if ([...skillMd].length > MAX_SKILL_CHARS) bad(`skills/${name}/SKILL.md is ${[...skillMd].length} chars: keep the core under ${MAX_SKILL_CHARS}, move detail to references/`);
+  // 2. links
+  for (const file of md) {
+    for (const m of text[file].matchAll(/\]\(([^)\s]+)\)/g)) {
+      const target = m[1];
+      if (/^(https?:|mailto:)/.test(target)) continue;
+      const [path, anchor] = target.split('#');
+      const dest = path ? resolve(dirname(file), path) : file;
+      if (path && !dest.startsWith(dir)) { bad(`${rel(file)}: link ${target} leaves the skill (use a GitHub URL)`); continue; }
+      if (!existsSync(dest)) { bad(`${rel(file)}: broken link ${target}`); continue; }
+      if (anchor && dest.endsWith('.md') && !lstatSync(dest).isDirectory() && !anchors(readFileSync(dest, 'utf8')).has(anchor)) bad(`${rel(file)}: no heading #${anchor} in ${rel(dest)}`);
     }
-    if (file.endsWith('.md') && /\bcurl\b/.test(line) && /\/v1\//.test(line) && !/\$MOLTY_RELAY|<[^>]+>\.workers\.dev/.test(line)) bad(`${at}: curl to the relay without $MOLTY_RELAY`);
-  });
+    if (!file.endsWith('SKILL.md') && !skillMd.includes(`](${relative(dir, file)})`)) bad(`${rel(file)} is not linked from SKILL.md's index`);
+  }
+  for (const m of skillMd.matchAll(/`([a-z_]+\.(?:sh|py|mjs))\b/g)) if (!existsSync(join(dir, 'scripts', m[1]))) bad(`skills/${name}/SKILL.md names scripts/${m[1]}, which does not exist`);
+  // 3. relay hosts
+  for (const [file, t] of Object.entries(text)) {
+    t.split('\n').forEach((line, i) => {
+      const at = `${rel(file)}:${i + 1}`;
+      for (const m of line.matchAll(/(?:https?|wss?):\/\/([^\s/`'")]+)/g)) {
+        const host = m[1];
+        if (host.includes('<') || host.startsWith('…') || host.startsWith('$')) continue; // placeholder
+        if (/^(github\.com|raw\.githubusercontent\.com|molty\.uno|example\.org)$/.test(host)) continue;
+        if (DEFAULT_RELAY.test(m[0]) && /MOLTY_RELAY|DEFAULT_RELAY|default relay/i.test(line)) continue;
+        bad(`${at}: hard-coded host ${host} (write $MOLTY_RELAY, or a <placeholder>)`);
+      }
+      if (file.endsWith('.md') && /\bcurl\b/.test(line) && /\/v1\//.test(line) && !/\$MOLTY_RELAY|<[^>]+>\.workers\.dev/.test(line)) bad(`${at}: curl to the relay without $MOLTY_RELAY`);
+    });
+  }
+  // 8. what the skill needs from a Molty, and the packages it installs
+  const side = join(dir, 'molty.json');
+  if (existsSync(side)) {
+    let m = {};
+    try { m = JSON.parse(readFileSync(side, 'utf8')); } catch (e) { bad(`${rel(side)}: ${e.message}`); }
+    const caps = commandsSrc.match(/export const \w+_CAP = "\w+"/g)?.map((c) => /"(\w+)"/.exec(c)[1]) ?? [];
+    for (const c of m.requires ?? []) if (!caps.includes(c) && !['say', 'listen'].includes(c)) bad(`${rel(side)}: requires unknown cap ${c} (not a *_CAP in services/relay/src/core/commands.ts)`);
+    const index = existsSync(join(ROOT, 'packages/index.json')) ? JSON.parse(read('packages/index.json')) : {};
+    for (const p of m.packages ?? []) if (!index[p]) bad(`${rel(side)}: package ${p} is not in packages/index.json`);
+    if (!['speech', 'none'].includes(m.fallback)) bad(`${rel(side)}: fallback must be speech or none`);
+  }
+  return text;
 }
-if (!DEFAULT_RELAY.test(read('device/console/src/agents/agents.ts'))) bad('the skill\'s default relay differs from the console\'s DEFAULT_RELAY');
+const commandsSrc = read('services/relay/src/core/commands.ts');
+const allText = {};
+for (const name of SKILLS) Object.assign(allText, checkSkill(name));
+const skillMd = allText[join(SKILL, 'SKILL.md')] ?? '';
+if (!existsSync(join(ROOT, 'device/console/src/agents/agents.ts')) || !DEFAULT_RELAY.test(read('device/console/src/agents/agents.ts'))) bad('the skill\'s default relay differs from the console\'s DEFAULT_RELAY');
 
 // 4. documented vs implemented
-const all = Object.values(allText).join('\n');
+const core = Object.fromEntries(Object.entries(allText).filter(([p]) => p.startsWith(SKILL + '/')));
+const all = Object.values(core).join('\n');
 const tsList = (src, name) => JSON.parse(`[${(new RegExp(`export const ${name} = \\[([^\\]]*)\\]`).exec(src) || [, ''])[1]}]`);
-const commands = read('services/relay/src/core/commands.ts');
+const commands = commandsSrc;
 const api = allText[join(SKILL, 'references/api.md')] ?? '';
 for (const c of tsList(commands, 'COMMANDS')) if (!api.includes(`| \`${c}\` |`)) bad(`api.md has no row for command ${c}`);
 for (const m of tsList(commands, 'MOODS')) if (!api.includes(m)) bad(`api.md does not list mood ${m}`);
@@ -178,4 +195,4 @@ if (problems.length) {
   console.log(`check-skill: FAILED (${problems.length})`);
   process.exit(1);
 }
-console.log(`check-skill: ok (${mdFiles.length} documents, ${tools.length} MCP tools, api_version ${relayApi})`);
+console.log(`check-skill: ok (${SKILLS.join(', ')}: ${Object.keys(allText).filter((p) => p.endsWith('.md')).length} documents, ${tools.length} MCP tools, api_version ${relayApi})`);

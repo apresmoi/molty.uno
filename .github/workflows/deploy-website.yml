@@ -20,7 +20,6 @@ on:
       - "apps/website/**"
       - "device/creatures/**"
       - "docs/**"
-      - "device/console/src/catalog/**"
       - "README.md"
       - "CONTRIBUTING.md"
       - "device/firmware/boards/**/board.json"

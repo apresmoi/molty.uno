@@ -1,0 +1,25 @@
+{"v": "molty-pkg/1", "id": "shapes", "name": "Shapes", "version": "1.0.0", "kind": "scenes",
+ "assets": {
+  "plus": {"kind": "mask", "w": 8, "h": 8, "bits": "GBgY//8YGBg="},
+  "halves": {"kind": "image", "w": 8, "h": 8, "px": "AREiIhERIiIRESIiEREiIhERIiIRESIiEREiIhERIiI=", "palette": ["#000000", "#ff8040", "#4080ff"]}
+ },
+ "layouts": {
+  "dial": {"dur": 6, "params": {"title": "text", "marks": "list", "lit": "number"}, "items": [
+   {"k": "ring", "r": 0.9, "w": 0.03, "color": "#ffffff"},
+   {"k": "ticks", "r": 0.9, "len": -0.08, "n": 12, "a0": 90},
+   {"k": "arc", "r": 0.6, "w": 0.04, "a0": 0, "a1": 90, "on": 1, "color": "#40ff80"},
+   {"k": "glyph", "each": "$marks", "asset": "@glyph", "polar": ["@a", 0.72], "size": 0.16, "color": "@color"},
+   {"k": "ball", "x": 0, "y": 0.1, "r": 0.25, "img": "halves", "lit": "$lit", "side": 1, "spin": 30},
+   {"k": "disc", "x": -0.5, "y": -0.5, "r": 0.08, "off": 3},
+   {"k": "line", "pts": [[-0.6, 0.6], [0.6, 0.6]], "w": 0.02},
+   {"k": "curve", "pts": [[-0.6, -0.2], [0, -0.35], [0.6, -0.2]]},
+   {"k": "text", "str": "$title", "y": -0.55, "size": 0.11}
+  ]},
+  "busy": {"params": {"glyphs": "list", "balls": "list", "caption": "text"}, "items": [
+   {"k": "ring", "r": 0.92, "w": 0.03},
+   {"k": "glyph", "each": "$glyphs", "asset": "plus", "polar": ["@a", 0.78], "size": 0.14},
+   {"k": "ball", "each": "$balls", "img": "halves", "polar": ["@a", "@r"], "r": 0.09, "lit": "@lit", "spin": 40},
+   {"k": "text", "str": "$caption", "y": -0.05, "size": 0.07}
+  ]}
+ }
+}

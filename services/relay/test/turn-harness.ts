@@ -25,8 +25,12 @@ export interface Speech {
 
 export type Log = Array<{ at: number; kind: string; name?: string; args?: any; job?: string }>;
 
-/** A device: answers cmds, adopts a shake's listen streaming one chunk per word, plays say streams (say.done 5 ms after the end). */
-export function device(room: DeviceRoom, sock: FakeSocket, speech: () => Speech) {
+/**
+ * A device: answers cmds, adopts a shake's listen streaming one chunk per word, plays say streams
+ * (say.done 5 ms after the end). `play`: like the real one, it plays in real time (say.done once
+ * the last sample played, `lagMs` after its arrival schedule) and refuses a say while one plays ("busy").
+ */
+export function device(room: DeviceRoom, sock: FakeSocket, speech: () => Speech, play?: { lagMs: number }) {
   const log: Log = [];
   let timers: ReturnType<typeof setTimeout>[] = [];
   let codes = 0;
@@ -38,6 +42,12 @@ export function device(room: DeviceRoom, sock: FakeSocket, speech: () => Speech)
     if (f.t === "pair.request") setTimeout(() => void room.socketMessage(sock, JSON.stringify({ t: "pair.result", req: f.req, ok: true, link_code: NEXT[codes++] })), 2);
     if (f.t !== "cmd") return;
     log.push({ at: Date.now(), kind: "cmd", name: f.name, args: f.args });
+    if (play && f.name === "say" && playing) {
+      log.push({ at: Date.now(), kind: "busy", job: f.args.job });
+      setTimeout(() => void room.socketMessage(sock, JSON.stringify({ t: "res", id: f.id, ok: false, error: "busy" })), 1);
+      return;
+    }
+    if (play && f.name === "say") playing = { job: f.args.job, until: 0 };
     const result = f.name === "listen" ? { job: f.args.job, ms: 30000, ack: "chirp" } : {};
     setTimeout(() => void room.socketMessage(sock, JSON.stringify({ t: "res", id: f.id, ok: true, result })), 1);
     if (f.name === "listen") {
@@ -60,14 +70,30 @@ export function device(room: DeviceRoom, sock: FakeSocket, speech: () => Speech)
     }
   };
   const firstFrame = new Map<string, number>();
+  /** Samples received per say job. */
+  const samples = new Map<string, number>();
+  let playing: { job: string; until: number } | undefined;
   sock.sendBinary = (b: Uint8Array) => {
     bin(b);
     const fr = decodeAudioFrame(b)!;
-    if (!firstFrame.has(fr.header.s)) firstFrame.set(fr.header.s, Date.now());
-    log.push({ at: Date.now(), kind: "frame", job: fr.header.s });
-    if (fr.header.end) setTimeout(() => void room.socketMessage(sock, JSON.stringify({ t: "evt", name: "say.done", data: { job: fr.header.s } })), 5);
+    const job = fr.header.s;
+    if (!firstFrame.has(job)) firstFrame.set(job, Date.now());
+    const n = fr.payload.byteLength / 2;
+    samples.set(job, (samples.get(job) ?? 0) + n);
+    log.push({ at: Date.now(), kind: "frame", job, args: { samples: n, end: !!fr.header.end } });
+    const done = () => void room.socketMessage(sock, JSON.stringify({ t: "evt", name: "say.done", data: { job } }));
+    if (play && playing?.job === job) {
+      playing.until = Math.max(playing.until, Date.now()) + (n * 1000) / 16000;
+      if (fr.header.end) {
+        const p = playing;
+        setTimeout(() => {
+          if (playing === p) playing = undefined;
+          done();
+        }, p.until - Date.now() + play.lagMs);
+      }
+    } else if (fr.header.end) setTimeout(done, 5);
   };
-  return { log, firstFrame };
+  return { log, firstFrame, samples };
 }
 
 /** The voice box: one more word per audio chunk as stt.partial, stt.turn_end after the last, the final on stt.end; TTS after `ttsMs`. */
@@ -80,6 +106,8 @@ export interface BoxOpts {
   /** The box offers first words: its line for the human's words (undefined: it never answers). */
   openerLine?: (text: string) => string | undefined;
   openerMs?: number;
+  /** TTS as the real box: per word a tts.word cue and `wordMs` of audio, a little faster than real time. */
+  wordMs?: number;
 }
 
 export function box(room: DeviceRoom, sock: FakeSocket, speech: () => Speech, o: BoxOpts = {}) {
@@ -93,7 +121,19 @@ export function box(room: DeviceRoom, sock: FakeSocket, speech: () => Speech, o:
   sock.sendText = (t: string) => {
     text(t);
     const f = JSON.parse(t);
-    if (f.t === "tts") {
+    if (f.t === "tts" && o.wordMs) {
+      tts.push({ at: Date.now(), text: f.text });
+      const n = f.text.split(/\s+/).filter(Boolean).length;
+      const per = (o.wordMs * 16000) / 1000;
+      for (let i = 0; i <= n; i++) {
+        setTimeout(() => {
+          if (sock.closed) return;
+          if (i === n) return say({ t: "tts.end", id: f.id });
+          say({ t: "tts.word", id: f.id, i, start_s: (i * o.wordMs!) / 1000 });
+          void room.socketMessage(sock, encodeAudioFrame({ s: f.id, seq: i, kind: "pcm16", rate: 16000, end: false }, new Uint8Array(new Int16Array(per).fill(500).buffer)));
+        }, (o.ttsMs ?? 5) + i * (o.wordMs! / 4));
+      }
+    } else if (f.t === "tts") {
       tts.push({ at: Date.now(), text: f.text });
       setTimeout(() => {
         if (sock.closed) return;
@@ -138,6 +178,8 @@ export async function setup(
     timings?: Record<string, number>;
     agents?: number;
     box?: Omit<BoxOpts, "ttsMs">;
+    /** The device plays in real time and refuses a say while one plays (device() `play`). */
+    play?: { lagMs: number };
     fetch?: (r: Request) => Promise<Response>;
     reflexKeys?: { jev?: string; openai?: string };
     log?: (msg: string, data?: Record<string, unknown>) => void;
@@ -159,7 +201,7 @@ export async function setup(
   });
   let speech: Speech = { words: "what's on my calendar today?".split(" ") };
   const sock = await connect(ctx.room, ctx.host, undefined, LINK, { caps: o.caps ?? CAPS });
-  const dev = device(ctx.room, sock, () => speech);
+  const dev = device(ctx.room, sock, () => speech, o.play);
   const pair = async (name: string, link: string, role?: "voice") => {
     const out = await ctx.room.pair({ device_id: DEVICE, link_code: link, agent_name: name, ...(role ? { role } : {}) });
     if (!out.ok || out.result.status !== "approved") throw new Error(JSON.stringify(out));
