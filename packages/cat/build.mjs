@@ -2,7 +2,7 @@
 // The cat as a creature package: slow and fluid, all in the spine, the ears and the tail. It never hops; it sits on planted hips and
 // lets the chest sway, loafs to sleep, arches when startled, kneads when happy, swats with a paw, and its ears say what it listens to.
 // Its own channels: chest.x/z sway over the hips; earF.l/r flatten (+) or prick (-); earT.l/r swivel; paw.l/r a front paw raised;
-// swat.l/r a raised paw swung sideways; tailUp, tailTip (quiver), tailWrap; fluff; yaw (a turn); stand, crouch, loaf, arch, dog (a stretch); tongue.
+// swat.l/r a raised paw swung sideways; tailUp, tailTip (quiver), tailWrap; fluff; stand, crouch, loaf, arch, dog (a stretch); tongue.
 import { ch, sin, cos, nz, env, bump, ss, ssd, ex, lin, lt, gt, clamp, pos, neg, E, B, C, CY, P, TAIL, eyes, mouth, merge, LR, alive, living, blinkBurst, breathe, aimChain, writePackage } from '../../tools/creatures/kit.mjs';
 import { ACTIONS } from '../../device/creatures/js/actions.js';
 const ID = 'cat', a = 'a', T = '@t', TAU = Math.PI * 2, D = (n) => ACTIONS[n];
@@ -56,7 +56,7 @@ const gestures = {
   wobble: { ch: [ch('head.z', [[0.24, ...atL(0)]]), ch('head.y', [[0.1, ...atL(0.02)]]), ch('chest.z', [[0.13, ...atL(0.07)]]), ch('hips.roll', [[0.25, ...atL(0.14)]]), ch('tail.y', [[0.7, ...atL(0.22)]]),
     ...both('earF', [[0.6, ex(a, 3, 0.03), ss(a, 0.03, 0.06), ['abs:sin', a, 7, -TAU * 7 * 0.03], ssd(a, D('wobble') - 0.3, 0.3)]]), ch('fluff', [[0.6, ex(a, 2), ssd(a, D('wobble') - 0.3, 0.3)]]), ch('lid', [[0.6, bump(a, 0, 0.6)]], { op: 'max' })] },
   // a downward dog: front paws walk out, the chest sinks, the bum and tail go up, eyes half shut
-  stretch: { ch: (() => { const e = env(a, D('stretch'), 0.45, 0.5), qb = bump(a, 0.3, D('stretch') - 0.2); return [ch('dog', [[1, e]]), ch('yaw', [[0.8, e]]), ch('head.x', [[-0.35, e]]), ch('lid', [[0.65, qb]], { op: 'max' }), ch('mouth', [[0.3, bump(a, 0.7, 1.4)]], { op: 'max' }), ch('tailUp', [[0.8, e]]), ch('tailTip', [[0.4, qb]]), ...both('earF', [[0.35, qb]])]; })() },
+  stretch: { ch: (() => { const e = env(a, D('stretch'), 0.45, 0.5), qb = bump(a, 0.3, D('stretch') - 0.2); return [ch('dog', [[1, e]]), ch('head.x', [[-0.35, e]]), ch('lid', [[0.65, qb]], { op: 'max' }), ch('mouth', [[0.3, bump(a, 0.7, 1.4)]], { op: 'max' }), ch('tailUp', [[0.8, e]]), ch('tailTip', [[0.4, qb]]), ...both('earF', [[0.35, qb]])]; })() },
   // a bird overhead: it sits up tall, ears pricked, head tipped right back, and the jaw chatters
   look_up: { ch: (() => { const e = env(a, D('look_up'), 0.2, 0.4), c = bump(a, 0.5, 1.2); return [ch('head.x', [[-0.5, e]]), ch('chest.x', [[-0.07, e]]), ch('squash', [[0.06, e]]), ch('look.y', [[0.9, e]]), ...both('earF', [[-0.6, e]]), ch('mouth', [[0.15, c], [0.15, c, sin(a, 7)]], { op: 'max' }), ch('tailTip', [[1, e]])]; })() },
   // a big cat yawn: head back, the jaw drops wide with the tongue curled out, ears flat, eyes squeezed shut; then a lick
@@ -83,7 +83,7 @@ const moods = {
   // happy: slow blinks, tail straight up with a quivering tip, kneading paws in turn
   happy: { ch: [ch('lid', [[0.45], [0.5, pulse(0.3, 81, 0.3)]], { op: 'max' }), ch('tailUp', [[1]]), ch('tailTip', [[1]]), ch('_t36', [[1, T], [0.36]]), ch('paw.l', [[0.35, pulse(1.4, 83, 0.45)]]), ch('paw.r', [[0.35, pulse(1.4, 83, 0.45, '@_t36')]]), ...both('earF', [[-0.2]]), ch('head.z', [[0.06, nz(T, 0.4, 87)]])] },
   // sleepy: down into a loaf, paws tucked away, the tail wrapped round, the chin on its chest
-  sleepy: { ch: [ch('loaf', [[1]]), ch('yaw', [[0.6]]), ch('tailWrap', [[1]]), ...both('earF', [[0.15]]), ch('lid', [[0.92]], { op: 'max' }), ch('head.x', [[0.15]]), ch('tailTip', [[0.3, pulse(0.2, 91, 0.2)]])] },
+  sleepy: { ch: [ch('loaf', [[1]]), ch('tailWrap', [[1]]), ...both('earF', [[0.15]]), ch('lid', [[0.92]], { op: 'max' }), ch('head.x', [[0.15]]), ch('tailTip', [[0.3, pulse(0.2, 91, 0.2)]])] },
   // surprised: the halloween cat: back arched high, every hair up, tail a bottle brush, ears flat
   surprised: { ch: [ch('arch', [[1]]), ch('fluff', [[1]]), ch('tailUp', [[0.9]]), ch('tailTip', [[0.4]]), ...both('earF', [[1]]), ch('pos.x', [[0.03, nz(T, 1.5, 97)]])] },
 };
@@ -128,7 +128,7 @@ const rig = [
   ch('_fold', [[1, '@loaf'], [0.5, '@crouch']]),
   ...[['legFL', 'l', 1], ['legFR', 'r', -1]].flatMap(([n, s, d]) => [ch(n + ':rx', [[-0.9, '@paw.' + s], [1.2, '@_fold'], [-0.75, '@dog']]), ch(n + ':rz', [[d * 0.8, '@paw.' + s], [1, '@swat.' + s]]), ch('shin' + n.slice(3) + ':rx', [[0.9, '@paw.' + s], [-2.4, '@_fold']])]),
   ...['legBL', 'legBR'].flatMap((n) => [ch(n + ':rx', [[-1, '@_fold']]), ch('shin' + n.slice(3) + ':rx', [[2.1, '@_fold']]), ch(n + ':sy', [[0.18, '@arch'], [0.1, '@dog']])]),
-  ch('hips:rx', [[-0.55, '@arch']]), ch('torso:s', [[0.07, '@fluff']]), ch('root:ry', [[1, '@yaw']]), ch('tail:s', [[0.4, '@fluff']]),
+  ch('hips:rx', [[-0.55, '@arch']]), ch('torso:s', [[0.07, '@fluff']]), ch('tail:s', [[0.4, '@fluff']]),
   // the tail: straight up with a hooked tip, or wrapped round the paws on the floor (solved at build time, sitting and standing)
   ...aimed(UP, '@_up'), ...aimed(WRAP, '@_wrap'),
   // what the tail is told: a swish and a lift at its base, kept for a second so each joint can play it back late; startled, it lashes.
