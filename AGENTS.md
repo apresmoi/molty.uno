@@ -20,6 +20,9 @@ make creatures         # re-export device/creatures/molty/*.molty (output must b
 - The `.molty` format spans `device/creatures/tools/molty-export.mjs` (writer),
   `device/firmware/main/creature/cute_spec.c` (reader) and `device/creatures/MOLTY-FORMAT.md` (spec);
   change them together and keep `make creatures` output byte-stable.
+- The creature package player spans `device/creatures/js/creature-player.js` and its C twin
+  `device/firmware/main/creature/creature_player.c`; change both: `make firmware-test` replays the JS player's goldens
+  (`tools/creatures/golden.mjs`) against the C one, hash and draws included.
 - Creature actions (`act`, say marks, idle life) span `device/firmware/main/creature/cute_act.h`
   and its JS twin `device/creatures/js/actions.js`; change both, then
   `node device/creatures/tools/act-golden.mjs` (output committed; the cute host test checks it).

@@ -520,6 +520,12 @@ const canvasStats = (page) => page.evaluate(() => {
   ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'speech habits: no horizontal scroll at 390px');
 
   await page.goto(`${MOCK}/#/molty`);
+  const pk = page.getByRole('group', { name: 'creatures' });
+  await pk.getByRole('button', { name: 'Duck' }).waitFor();
+  ok(await pk.locator('[aria-pressed="true"]').count() === 0, 'settings molty: an uploaded .molty leaves no package marked');
+  await pk.getByRole('button', { name: 'Cat' }).click();
+  await pk.getByRole('button', { name: '✓ Cat' }).waitFor();
+  ok(await pk.getByRole('button', { name: 'Duck' }).getAttribute('aria-pressed') === 'false', 'settings molty: picking Cat marks Cat and unmarks the rest');
   await page.locator('.creature img').first().waitFor();
   ok(await page.locator('.creature').count() === 29, 'settings molty: 29 Moltys with thumbnails');
   await page.locator('.creature', { hasText: 'Owl' }).click();

@@ -5,6 +5,8 @@
  */
 #include "pkg_cmd.h"
 #include "pkg_store.h"
+#include "pkg_creature.h"
+#include "creature_player.h"
 #include "scene_player.h"
 #include "link_ask.h"
 #include "link_cmd.h"
@@ -28,7 +30,6 @@
 #include "esp_tls_errors.h"
 #include "mbedtls/sha256.h"
 
-#define ROOT      "/spiffs/pkg"
 #define DL_STACK  8192                 /* the TLS handshake runs on this task */
 #define SPARE     16384                /* SPIFFS bytes left free beside a package */
 #define COLOR_YES 0x3ccf96             /* green, as the self-update's question */
@@ -129,7 +130,7 @@ static void download_task(void *arg)
     const char *e = buf ? pkg_fetch(&s_req, &io, buf) : "oom";
     if (!e) {
         lock();
-        e = pkg_store_put(ROOT, &s_req, buf, &ent);
+        e = pkg_store_put(PKG_ROOT, &s_req, buf, &ent);
         unlock();
     }
     heap_caps_free(buf);
@@ -154,7 +155,7 @@ static const char *room(const pkg_req_t *r)
 {
     size_t total = 0, used = 0;
     if (esp_spiffs_info("spiffs", &total, &used) != ESP_OK || used + r->size + SPARE > total) return "no_space";
-    return pkg_store_room(ROOT, r->id, r->size);
+    return pkg_store_room(PKG_ROOT, r->id, r->size);
 }
 
 esp_err_t pkg_cmd_install(const cJSON *args, cJSON **out)
@@ -192,7 +193,7 @@ static const char *id_arg(const cJSON *args)
 static const char *remove_pkg(const char *id)
 {
     lock();
-    const char *e = pkg_store_remove(ROOT, id);
+    const char *e = pkg_store_remove(PKG_ROOT, id);
     unlock();
     drop_cache(id);
     return e;
@@ -213,7 +214,7 @@ static cJSON *list_json(void)
 {
     pkg_entry_t *e = heap_caps_malloc(sizeof(pkg_entry_t) * PKG_INSTALLED_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     cJSON *j = cJSON_CreateObject(), *a = cJSON_AddArrayToObject(j, "packages");
-    int n = e ? pkg_store_list(ROOT, e, PKG_INSTALLED_MAX) : 0;
+    int n = e ? pkg_store_list(PKG_ROOT, e, PKG_INSTALLED_MAX) : 0;
     for (int i = 0; a && i < n; i++) cJSON_AddItemToArray(a, pkg_entry_json(&e[i]));
     heap_caps_free(e);
     return j;
@@ -231,9 +232,9 @@ esp_err_t pkg_cmd_list(const cJSON *args, cJSON **out)
 static const char *load(const char *id, pkg_t **out)
 {
     lock();
-    if (!(s_cache && !strcmp(s_cache->id, id) && pkg_store_find(ROOT, id, NULL))) {
+    if (!(s_cache && !strcmp(s_cache->id, id) && pkg_store_find(PKG_ROOT, id, NULL))) {
         size_t len = 0;
-        char *buf = pkg_store_read(ROOT, id, &len);
+        char *buf = pkg_store_read(PKG_ROOT, id, &len);
         const bool stored = buf != NULL;
         const char *err;
         pkg_t *p = stored ? pkg_parse(buf, len, &err) : NULL;
@@ -288,6 +289,64 @@ esp_err_t pkg_cmd_scene_clear(const cJSON *args, cJSON **out)
     return e != ESP_OK ? e : mole_fluid_scene(MOLE_SCENE_CLEAR, NULL);
 }
 
+/* ── creatures: the built-in and installed creature packages (pkg_creature.h) ── */
+
+/* {current, creatures: [{id, name, version, source}]} */
+static cJSON *creature_list_json(void)
+{
+    pkgc_entry_t *e = heap_caps_malloc(sizeof(pkgc_entry_t) * (PKG_INSTALLED_MAX + 8), MALLOC_CAP_SPIRAM);
+    cJSON *j = cJSON_CreateObject(), *a = cJSON_CreateArray();
+    if (!e || !j || !a) { heap_caps_free(e); cJSON_Delete(j); cJSON_Delete(a); return NULL; }
+    char cur[PKG_ID_MAX + 1];
+    mole_fluid_creature_id(cur, sizeof(cur));
+    cJSON_AddStringToObject(j, "current", cur);
+    const int n = pkgc_list(e, PKG_INSTALLED_MAX + 8);
+    for (int i = 0; i < n; i++) {
+        cJSON *o = cJSON_CreateObject();
+        if (!o) break;
+        cJSON_AddStringToObject(o, "id", e[i].id); cJSON_AddStringToObject(o, "name", e[i].name);
+        cJSON_AddStringToObject(o, "version", e[i].version); cJSON_AddStringToObject(o, "source", e[i].builtin ? "builtin" : "installed");
+        cJSON_AddItemToArray(a, o);
+    }
+    cJSON_AddItemToObject(j, "creatures", a);
+    heap_caps_free(e);
+    return j;
+}
+
+/* creature `id` becomes the creature (checked here: the answer is the outcome) and the choice */
+static const char *creature_select(const char *id, cJSON **out)
+{
+    if (!pkg_id_ok(id)) return "invalid_args";
+    size_t len = 0;
+    char *json = pkgc_bytes(id, &len);
+    if (!json) return "not_installed";
+    const char *err = NULL;
+    cp_t *c = cp_create(json, len, &err);
+    if (!c) { heap_caps_free(json); mole_diag_event(true, "creature.select %s: %s", id, err); return "bad_package"; }
+    cJSON *j = cJSON_CreateObject();
+    if (j) { cJSON_AddStringToObject(j, "id", id); cJSON_AddStringToObject(j, "name", cp_name(c)); }
+    cp_destroy(c);
+    if (!j) { heap_caps_free(json); return "oom"; }
+    if (mole_creature_select("fluid") != ESP_OK || mole_fluid_creature_package(id, json, len) != ESP_OK) { cJSON_Delete(j); return "busy"; }
+    pkgc_choose(id);
+    *out = j;
+    return NULL;
+}
+
+esp_err_t pkg_cmd_creature_select(const cJSON *args, cJSON **out)
+{
+    const cJSON *id = cJSON_GetObjectItemCaseSensitive(args, "id");
+    if (!cJSON_IsObject(args) || cJSON_GetArraySize(args) != 1 || !cJSON_IsString(id)) return ESP_ERR_INVALID_ARG;
+    const char *e = creature_select(id->valuestring, out);
+    return e ? refuse(e) : ESP_OK;
+}
+
+esp_err_t pkg_cmd_creature_list(const cJSON *args, cJSON **out)
+{
+    (void)args;
+    return (*out = creature_list_json()) ? ESP_OK : ESP_ERR_NO_MEM;
+}
+
 /* ── the local API (the console) ───────────────────────────────────────────── */
 
 static esp_err_t send_err(httpd_req_t *r, const char *e)
@@ -338,12 +397,26 @@ static esp_err_t http_scene(httpd_req_t *r)
     return e ? send_err(r, e) : send_obj(r, out);
 }
 
+static esp_err_t http_creature_list(httpd_req_t *r) { return send_obj(r, creature_list_json()); }
+
+static esp_err_t http_creature_select(httpd_req_t *r)
+{
+    char q[64] = "", id[PKG_ID_MAX + 2] = "";
+    if (httpd_req_get_url_query_str(r, q, sizeof(q)) != ESP_OK || httpd_query_key_value(q, "id", id, sizeof(id)) != ESP_OK)
+        return send_err(r, "invalid_args");
+    cJSON *out = NULL;
+    const char *e = creature_select(id, &out);
+    return e ? send_err(r, e) : send_obj(r, out);
+}
+
 esp_err_t pkg_http_register(httpd_handle_t server)
 {
     const httpd_uri_t routes[] = {
         {.uri = "/api/pkg",   .method = HTTP_GET,    .handler = http_list},
         {.uri = "/api/pkg",   .method = HTTP_DELETE, .handler = http_remove},
         {.uri = "/api/scene", .method = HTTP_POST,   .handler = http_scene},
+        {.uri = "/api/creature/list",   .method = HTTP_GET,  .handler = http_creature_list},
+        {.uri = "/api/creature/select", .method = HTTP_POST, .handler = http_creature_select},
     };
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
         esp_err_t e = httpd_register_uri_handler(server, &routes[i]);

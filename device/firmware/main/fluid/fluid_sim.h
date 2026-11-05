@@ -295,11 +295,20 @@ typedef struct {
     int16_t *dy;                       /* 4·H dot top y                                   */
     uint16_t *key, *col;               /* per-cell last-drawn (dots|kind, rgb565)         */
     uint8_t  *skip;
+    uint8_t  *dirty;                   /* per cell: changed this frame                    */
+    int16_t  *span;                    /* per row: first, last+1 changed cell (none: 0, 0) */
     int8_t   *yrow;                    /* fb row → dot row 0..3 inside its cell, or −1    */
-    uint8_t  rdirty[FLUID_GRID_MAX_W]; /* per cell of the row being drawn               */
+    struct {                           /* this frame's condensed letters, ready to draw   */
+        const uint8_t *gl; uint16_t c; int16_t x, y, w, h, cx0, cy0, cx1, cy1;
+    } lt[FLUID_MAX_LETTERS];
+    int nlt;
     void *block;
     bool force;                        /* redraw every cell next frame                    */
 } fluid_draw_t;
+
+/** A window of pixels to draw: px is pixel (x0, y0), rows `stride` px apart. A whole
+ *  framebuffer is { fb, fb_w, 0, 0, fb_w, fb_h }. */
+typedef struct { uint16_t *px; int stride, x0, y0, x1, y1; } fluid_rect_t;
 
 typedef struct {
     int   palette, edge_mode;
@@ -314,9 +323,18 @@ typedef struct {
 fluid_draw_t *fluid_draw_create(int W, int H, int fb_w, int fb_h);
 void fluid_draw_destroy(fluid_draw_t *d);
 /** Draw into the fb_w×fb_h rgb565-BE framebuffer, touching only cells that changed.
- *  Returns cells drawn; *y0,*y1 = dirty row band ([0,0) when nothing changed). */
+ *  Returns cells drawn; *y0,*y1 = dirty row band ([0,0) when nothing changed).
+ *  = fluid_draw_cells + fluid_draw_rect(whole fb, all = false). */
 int  fluid_draw(fluid_draw_t *d, const fluid_frame_t *f, uint16_t *fb,
                 const fluid_draw_opts_t *o, int *y0, int *y1);
+/** What each cell looks like this frame, which changed (d->dirty, d->span) and the
+ *  condensed letters. Returns the cells and letters to draw. */
+int  fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *f, const fluid_draw_opts_t *o);
+/** Draw the cells (the changed ones, or all = every one, over a cleared window) and the
+ *  letters inside t, from the last fluid_draw_cells. With all, t gets exactly what a
+ *  framebuffer kept by fluid_draw holds there: a panel can be sent just the windows that
+ *  changed, drawn in a small buffer, with no framebuffer behind them. */
+void fluid_draw_rect(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_rect_t *t, bool all);
 
 /** A small status mark at the bottom of the stage, just inside the round panel's edge,
  *  in the palette's colours, drawn over the fluid (the caller repaints everything once
@@ -324,7 +342,7 @@ int  fluid_draw(fluid_draw_t *d, const fluid_frame_t *f, uint16_t *fb,
  *  short dim arc · DOT: a dim dot · ALERT: a dot in the accent colour. */
 enum { FLUID_MARK_NONE, FLUID_MARK_ARC, FLUID_MARK_DOT, FLUID_MARK_ALERT, FLUID_MARK_COUNT };
 /** Returns the pixels written (0 for FLUID_MARK_NONE). */
-int  fluid_draw_mark(const fluid_draw_t *d, uint16_t *fb, int palette, int mark);
+int  fluid_draw_mark(const fluid_draw_t *d, const fluid_rect_t *t, int palette, int mark);
 
 /** The palette's accent colour, 0xRRGGBB (the listening ring's default). */
 uint32_t fluid_palette_accent(int palette);
@@ -345,8 +363,17 @@ static inline bool fluid_overlay_on(const fluid_overlay_t *ov) {
 }
 /** Mark the cells under ov for redraw by the next fluid_draw. */
 void fluid_draw_overlay_dirty(fluid_draw_t *d, const fluid_overlay_t *ov);
-/** Draw ov over the framebuffer. Returns the pixels touched. */
-int  fluid_draw_overlay(const fluid_draw_t *d, uint16_t *fb, int palette, const fluid_overlay_t *ov);
+/** Draw ov over the window t. Returns the pixels touched. */
+int  fluid_draw_overlay(const fluid_draw_t *d, const fluid_rect_t *t, int palette, const fluid_overlay_t *ov);
+
+/** Send a panel what changed since the last frame sent (everything when full), with no
+ *  framebuffer: each changed row of cells (x and width rounded out to multiples of 4, as
+ *  panels such as the SPD2010 take windows) is drawn whole into buf (max_px px; taller
+ *  rows go in parts): cells, letters, the overlay ov and the mark, then handed to send
+ *  (non-zero: stop). Returns the px sent, or -1. Call after fluid_draw_cells. */
+typedef int (*fluid_send_fn)(void *ctx, int x, int y, int w, int h, const uint16_t *px);
+int  fluid_draw_send(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_overlay_t *ov, int mark, bool full,
+                     uint16_t *buf, int max_px, fluid_send_fn send, void *ctx);
 
 #ifdef __cplusplus
 }

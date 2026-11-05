@@ -19,6 +19,8 @@ const PALETTES: Record<string, string> = { green: '#7cf29a', amber: '#ffb347', p
 
 export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
   let alive = true, timer = 0, chosen: CreatureEntry | null = null, fluid: FluidState | null = null;
+  const pkgs = h('div', { class: 'chips', role: 'group', 'aria-label': 'creatures' });
+  const pkgMsg = h('div');
   const cards = h('div', { class: 'cards', role: 'listbox', 'aria-label': 'moltys' });
   const send = h('button', { class: 'primary', type: 'button', disabled: true, onclick: () => upload() }, 'send to molty');
   const sendMsg = h('div');
@@ -54,6 +56,8 @@ export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
 
   mount(root,
     h('h1', null, 'molty ', h('span', { class: 'dim' }, '⠶ who lives in the water')),
+    h('h2', null, 'Creatures'), pkgs, pkgMsg,
+    h('h2', null, 'Catalog'),
     cards, h('div', { class: 'row' }, current, send), sendMsg,
     h('h2', null, 'the fluid'),
     h('div', { class: 'split' },
@@ -117,6 +121,20 @@ export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
     word.textContent = s?.word ? `⠶ ${s.word}` : s?.nwords ? `${s.word_idx ?? 0}/${s.nwords} words` : '';
   }
 
+  async function loadPkgs() {
+    try {
+      const l = await api.creatureList();
+      if (alive) mount(pkgs, l.creatures.map((c) => {
+        const on = l.current === c.id;
+        return h('button', { type: 'button', class: 'chip' + (on ? ' on' : ''), 'aria-pressed': String(on), onclick: () => pickPkg(c.id) }, on ? `✓ ${c.name}` : c.name);
+      }));
+    } catch (e) { if (!(e instanceof UnsupportedError)) mount(pkgMsg, note('err', errText(e))); }   /* older firmware has no packages */
+  }
+  async function pickPkg(id: string) {
+    try { await api.selectCreaturePackage(id); mount(pkgMsg); } catch (e) { mount(pkgMsg, note('err', errText(e))); }
+    loadPkgs();
+  }
+
   const poll = async () => {
     const [reg, st] = await Promise.allSettled([api.creatures(), api.creatureState()]);
     if (!alive) return;
@@ -145,7 +163,7 @@ export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
       await api.uploadCreature(chosen.id, bytes);
       await api.fluid({ state: 'creature' }).catch(() => {});
       mount(sendMsg, note('ok', `${chosen.name} is moving in ⠶`));
-      poll();
+      poll(); loadPkgs();
     } catch (e) {
       mount(sendMsg, e instanceof UnsupportedError
         ? note('warn', 'this firmware can\'t take new moltys yet — an update will add it. the fluid below still works.')
@@ -154,6 +172,6 @@ export function creaturePage(root: HTMLElement, { api, catalog }: AppCtx) {
   }
 
   catalog.list().then((l) => alive && renderCards(l), (e) => mount(cards, note('err', `catalog (${catalog.label}): ${errText(e)}`)));
-  renderControls(); poll();
+  renderControls(); poll(); loadPkgs();
   return () => { alive = false; clearTimeout(timer); pv.stop(); };
 }

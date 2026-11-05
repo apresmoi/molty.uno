@@ -48,6 +48,10 @@ extern "C" {
 esp_err_t mole_fluid_creature_init(void);
 void      mole_fluid_creature_deinit(void);
 esp_err_t mole_fluid_creature_render(void);
+/** The frame on the panel into the board's framebuffer (the drawer sends the panel only
+ *  windows, from internal RAM): call before reading it. Waits for the next frame, up to
+ *  500 ms; ESP_ERR_INVALID_STATE when the fluid is not running. */
+esp_err_t mole_fluid_framebuffer_sync(void);
 esp_err_t mole_fluid_creature_state_get_json(char **out);
 esp_err_t mole_fluid_creature_state_set_json(const char *body);
 
@@ -69,6 +73,14 @@ esp_err_t mole_fluid_append_text(const char *chunk, int len);
 #include <stdint.h>
 esp_err_t mole_fluid_creature_file_put(const uint8_t *buf, size_t len, const char **err);
 esp_err_t mole_fluid_creature_file_get(uint8_t **out, size_t *len, bool *is_default);
+/**
+ * The creature package `id` (docs/PACKAGES.md section 5) as the creature, hot: json (len bytes,
+ * PSRAM) is taken over and built on the fluid task (checked first: cp_create). The choice
+ * itself is kept by the caller (pkg_creature.h). Safe from any task.
+ */
+esp_err_t mole_fluid_creature_package(const char *id, char *json, size_t len);
+/** The creature package shown or on its way into id (n bytes), "" for a .molty creature. */
+void mole_fluid_creature_id(char *id, size_t n);
 
 /** A package's scene (scene/scene_player.h) on the fluid, the FD_ST_SCENE state: PLAY
  *  replaces what plays and the queue, QUEUE plays it after the queue (at once when nothing

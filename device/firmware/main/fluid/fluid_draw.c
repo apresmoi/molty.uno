@@ -11,7 +11,8 @@
  * streamline strokes (- \ | /) where the ink moves fast.
  *
  * Dirty cells only: each cell remembers (kind|dots, rgb565) and is cleared + redrawn
- * only when that changes; the caller flushes the returned row band. Cells under a
+ * only when that changes; the caller flushes the returned row band, or draws just the
+ * changed windows (fluid_draw_rect) into a small buffer for the panel. Cells under a
  * condensed speed-reader letter are the word's dark box: cleared every frame, then
  * the letters are drawn on top.
  */
@@ -137,14 +138,14 @@ fluid_draw_t *fluid_draw_create(int W, int H, int fb_w, int fb_h) {
     fluid_draw_t *d = FLUID_CALLOC(sizeof(fluid_draw_t));
     if (!d) return NULL;
     size_t N = (size_t)W * H;
-    size_t bytes = (size_t)(W + 1 + H + 1 + 2 * W + 4 * H) * sizeof(int16_t) + 2 * N * sizeof(uint16_t) + N + (size_t)fb_h;
+    size_t bytes = (size_t)(W + 1 + H + 1 + 2 * W + 6 * H) * sizeof(int16_t) + 2 * N * sizeof(uint16_t) + 2 * N + (size_t)fb_h;
     d->block = FLUID_CALLOC(bytes);
     if (!d->block) { FLUID_FREE(d); return NULL; }
     int16_t *p16 = (int16_t *)d->block;
-    d->cx = p16; d->cy = d->cx + W + 1; d->dx = d->cy + H + 1; d->dy = d->dx + 2 * W;
-    d->key = (uint16_t *)(d->dy + 4 * H); d->col = d->key + N;
-    d->skip = (uint8_t *)(d->col + N);
-    d->yrow = (int8_t *)(d->skip + N);
+    d->cx = p16; d->cy = d->cx + W + 1; d->dx = d->cy + H + 1; d->dy = d->dx + 2 * W; d->span = d->dy + 4 * H;
+    d->key = (uint16_t *)(d->span + 2 * H); d->col = d->key + N;
+    d->skip = (uint8_t *)(d->col + N); d->dirty = d->skip + N;
+    d->yrow = (int8_t *)(d->dirty + N);
     d->W = W; d->H = H;
     d->fb_w = fb_w; d->fb_h = fb_h;
     d->stage = fb_w < fb_h ? fb_w : fb_h;
@@ -175,23 +176,28 @@ void fluid_draw_destroy(fluid_draw_t *d) {
 
 /* ── primitives ──────────────────────────────────────────────────────────── */
 
+/* fb pixel (x, y) in the window t */
+static inline uint16_t *rect_px(const fluid_rect_t *t, int x, int y) {
+    return t->px + (size_t)(y - t->y0) * t->stride + (x - t->x0);
+}
+
 /* 5×7 glyph scaled (nearest) into the box (x0,y0,w,h), clipped to [cx0,cx1)×[cy0,cy1)
- * and to the fb_w×fb_h framebuffer */
-static void draw_glyph(uint16_t *fb, int fb_w, int fb_h, const uint8_t *gl, int x0, int y0, int w, int h, uint16_t c,
+ * and to the window t */
+static void draw_glyph(const fluid_rect_t *t, const uint8_t *gl, int x0, int y0, int w, int h, uint16_t c,
                        int cx0, int cy0, int cx1, int cy1) {
     if (!gl || w <= 0 || h <= 0) return;
-    if (cx0 < 0) cx0 = 0;
-    if (cy0 < 0) cy0 = 0;
-    if (cx1 > fb_w) cx1 = fb_w;
-    if (cy1 > fb_h) cy1 = fb_h;
+    if (cx0 < t->x0) cx0 = t->x0;
+    if (cy0 < t->y0) cy0 = t->y0;
+    if (cx1 > t->x1) cx1 = t->x1;
+    if (cy1 > t->y1) cy1 = t->y1;
     for (int py = 0; py < h; py++) {
         int y = y0 + py; if (y < cy0 || y >= cy1) continue;
         uint8_t bits = gl[py * 7 / h];
         if (!bits) continue;
-        uint16_t *row = fb + y * fb_w;
+        uint16_t *row = rect_px(t, t->x0, y);
         for (int px = 0; px < w; px++) {
             int x = x0 + px; if (x < cx0 || x >= cx1) continue;
-            if ((bits >> (4 - px * 5 / w)) & 1) row[x] = c;
+            if ((bits >> (4 - px * 5 / w)) & 1) row[x - t->x0] = c;
         }
     }
 }
@@ -287,9 +293,10 @@ static inline void cell_look(const fluid_draw_t *d, const fluid_frame_t *s, cons
     *key_out = dots > 0 ? (uint16_t)dots : (uint16_t)(KEY_GLYPH | glyph);
 }
 
-/* one pixel row of a glyph / stroke cell */
-static inline void raster_glyph_row(uint16_t *row, int y, int x0, int x1, int y0, int y1, uint16_t key, uint16_t col,
-                                    const fluid_draw_opts_t *o) {
+/* one pixel row of a glyph / stroke cell (x0..x1, y0..y1); row[0] is fb x = bx, written
+ * only inside [rx0, rx1) */
+static inline void raster_glyph_row(uint16_t *row, int bx, int rx0, int rx1, int y, int x0, int x1, int y0, int y1,
+                                    uint16_t key, uint16_t col, const fluid_draw_opts_t *o) {
     int cwp = x1 - x0, chp = y1 - y0;
     int gw = cwp - 2 < 5 ? (cwp < 5 ? cwp : 5) : cwp - 2, gh = chp - 3 < 7 ? chp : chp - 3;
     int gx = x0 + (cwp - gw) / 2, gy = y0 + (chp - gh) / 2;
@@ -299,22 +306,22 @@ static inline void raster_glyph_row(uint16_t *row, int y, int x0, int x1, int y0
     if (gch & 0x80) {                     /* streamline: 0 '-', 1 '\', 2 '|', 3 '/' */
         int x;
         switch (gch & 3) {
-        case 0:  if (py != gh / 2) return; for (x = gx; x < gx + gw; x++) row[x] = col; return;
+        case 0:  if (py != gh / 2) return; for (x = gx; x < gx + gw; x++) if (x >= rx0 && x < rx1) row[x - bx] = col; return;
         case 1:  x = gx + py * gw / gh; break;
         case 2:  x = gx + gw / 2; break;
         default: x = gx + gw - 1 - py * gw / gh; break;
         }
-        if (x >= x0 && x < x1) row[x] = col;
+        if (x >= x0 && x < x1 && x >= rx0 && x < rx1) row[x - bx] = col;
         return;
     }
     const uint8_t *gl = o->font((char)gch);
     uint8_t bits = gl ? gl[py * 7 / gh] : 0;
     if (!bits) return;
-    for (int px = 0; px < gw; px++) if ((bits >> (4 - px * 5 / gw)) & 1) row[gx + px] = col;
+    for (int px = 0; px < gw; px++)
+        if ((bits >> (4 - px * 5 / gw)) & 1 && gx + px >= rx0 && gx + px < rx1) row[gx + px - bx] = col;
 }
 
-int fluid_draw(fluid_draw_t *d, const fluid_frame_t *s, uint16_t *fb,
-               const fluid_draw_opts_t *o, int *y0out, int *y1out) {
+int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_opts_t *o) {
     const int W = s->W, H = s->H;
     const int pal = (o->palette >= 0 && o->palette < FLUID_PAL_COUNT) ? o->palette : FLUID_PAL_PASTEL;
     const bool mono = pal != FLUID_PAL_PASTEL;
@@ -323,10 +330,10 @@ int fluid_draw(fluid_draw_t *d, const fluid_frame_t *s, uint16_t *fb,
     fluid_draw_opts_t oo = *o; oo.ramp = ramp;
     const int rmax = (int)strlen(ramp) - 1;
     const float cw = (float)d->stage / W, ch = (float)d->stage / H;   /* letters are in stage px */
-    const int fb_w = d->fb_w, ox = d->ox, oy = d->oy;
+    const int ox = d->ox, oy = d->oy;
     const float melt = o->melt;
     const uint32_t frame = (uint32_t)(o->time * SHIMMER_HZ);
-    int dy0 = d->fb_h, dy1 = 0, drawn = 0;
+    int drawn = 0;
 
     /* condensed letters: which have enough ink, and which cells they cover (the box) */
     struct { int li; float ink, hh, acc, m; } shown[FLUID_MAX_LETTERS];
@@ -352,57 +359,32 @@ int fluid_draw(fluid_draw_t *d, const fluid_frame_t *s, uint16_t *fb,
         for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) d->skip[j * W + i] = 1;
     }
 
+    /* what each cell looks like; which changed */
     for (int j = 0; j < H; j++) {
-        /* A: what each cell of this row looks like; which changed */
         FLUID_PROF_BEGIN(c0);
-        bool any = false;
+        int i0 = W, i1 = 0;
         for (int i = 0; i < W; i++) {
             const int k = j * W + i;
             uint16_t key = KEY_EMPTY, col = 0;
             if (d->skip[k]) key = KEY_SKIP;
             else if (s->mask[k]) cell_look(d, s, &oo, i, j, k, rmax, frame, &key, &col);
             bool dirty = key == KEY_SKIP || d->force || key != d->key[k] || col != d->col[k];
-            d->rdirty[i] = dirty;
+            d->dirty[k] = dirty;
             if (dirty) {
-                any = true;
+                if (i < i0) i0 = i;
+                i1 = i + 1;
                 d->key[k] = key; d->col[k] = col;
                 if (key != KEY_EMPTY && key != KEY_SKIP) drawn++;
             }
         }
+        d->span[2 * j] = (int16_t)(i0 < i1 ? i0 : 0); d->span[2 * j + 1] = (int16_t)(i0 < i1 ? i1 : 0);
         FLUID_PROF_END(FP_DSAMPLE, c0);
-        if (!any) continue;
-        /* B: rasterise the changed cells, one pixel row at a time (sequential fb writes) */
-        uint32_t c1 = fluid_cycles();
-        const int ya = d->cy[j], yb = d->cy[j + 1];
-        if (ya < dy0) dy0 = ya;
-        if (yb > dy1) dy1 = yb;
-        for (int y = ya; y < yb; y++) {
-            uint16_t *row = fb + y * fb_w;
-            const int r = d->yrow[y];
-            for (int i = 0; i < W; i++) {
-                if (!d->rdirty[i]) continue;
-                const int k = j * W + i, x0 = d->cx[i], x1 = d->cx[i + 1];
-                const uint16_t key = d->key[k], col = d->col[k];
-                for (int x = x0; x < x1; x++) row[x] = 0;
-                if (key == KEY_EMPTY || key == KEY_SKIP) continue;
-                if (key < KEY_GLYPH) {
-                    if (r < 0) continue;
-                    for (int c = 0; c < 2; c++) {
-                        if (!(key & (1u << fluid_braille_bit(c, r)))) continue;
-                        uint16_t *px = row + d->dx[i * 2 + c];
-                        for (int q = 0; q < d->dot_w; q++) px[q] = col;
-                    }
-                } else {
-                    raster_glyph_row(row, y, x0, x1, ya, yb, key, col, &oo);
-                }
-            }
-        }
-        FLUID_PROF_END(FP_DRASTER, c1);
     }
     d->force = false;
 
     /* condensed letters ride the surface (y follows the wave height) and decode from
      * ramp glyphs into the real letter as ink arrives */
+    d->nlt = 0;
     for (int n = 0; n < nshown; n++) {
         const fluid_letter_t *L = &o->letters[shown[n].li];
         float ink = shown[n].ink, m = shown[n].m;
@@ -428,18 +410,104 @@ int fluid_draw(fluid_draw_t *d, const fluid_frame_t *s, uint16_t *fb,
         if (yoff > margin) yoff = margin;
         if (yoff < -margin) yoff = -margin;
         int gx = ox + (int)lrintf(L->x + (L->w - gw) * 0.5f), gy = oy + (int)lrintf(L->y) + margin + yoff;
-        draw_glyph(fb, fb_w, d->fb_h, o->font(c2), gx, gy, gw, gh, rgb565_be((int)r, (int)g, (int)b),
-                   ox + (int)floorf(L->x), oy + (int)floorf(L->y), ox + (int)ceilf(L->x + L->w), oy + (int)ceilf(L->y + L->h));
+        d->lt[d->nlt].gl = o->font(c2); d->lt[d->nlt].c = rgb565_be((int)r, (int)g, (int)b);
+        d->lt[d->nlt].x = (int16_t)gx; d->lt[d->nlt].y = (int16_t)gy; d->lt[d->nlt].w = (int16_t)gw; d->lt[d->nlt].h = (int16_t)gh;
+        d->lt[d->nlt].cx0 = (int16_t)(ox + (int)floorf(L->x)); d->lt[d->nlt].cy0 = (int16_t)(oy + (int)floorf(L->y));
+        d->lt[d->nlt].cx1 = (int16_t)(ox + (int)ceilf(L->x + L->w)); d->lt[d->nlt].cy1 = (int16_t)(oy + (int)ceilf(L->y + L->h));
+        d->nlt++;
         drawn++;
     }
+    return drawn;
+}
 
+void fluid_draw_rect(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_rect_t *t, bool all) {
+    const int W = d->W, H = d->H, bx = t->x0;
+    uint32_t c1 = fluid_cycles();
+    if (all) for (int y = t->y0; y < t->y1; y++) memset(rect_px(t, bx, y), 0, (size_t)(t->x1 - bx) * sizeof(uint16_t));
+    for (int j = 0; j < H; j++) {
+        const int ya = d->cy[j], yb = d->cy[j + 1];
+        const int y0 = ya > t->y0 ? ya : t->y0, y1 = yb < t->y1 ? yb : t->y1;
+        int i0 = all ? 0 : d->span[2 * j], i1 = all ? W : d->span[2 * j + 1];
+        while (i0 < i1 && d->cx[i0 + 1] <= t->x0) i0++;             /* the cells inside t */
+        while (i1 > i0 && d->cx[i1 - 1] >= t->x1) i1--;
+        if (y0 >= y1 || i0 >= i1) continue;
+        /* the cells, one pixel row at a time (sequential writes) */
+        for (int y = y0; y < y1; y++) {
+            uint16_t *row = rect_px(t, bx, y);
+            const int r = d->yrow[y];
+            for (int i = i0; i < i1; i++) {
+                const int k = j * W + i;
+                if (!all && !d->dirty[k]) continue;
+                const int cx0 = d->cx[i], cx1 = d->cx[i + 1];
+                const int x0 = cx0 > t->x0 ? cx0 : t->x0, x1 = cx1 < t->x1 ? cx1 : t->x1;
+                const uint16_t key = d->key[k], col = d->col[k];
+                if (!all) for (int x = x0; x < x1; x++) row[x - bx] = 0;
+                if (key == KEY_EMPTY || key == KEY_SKIP) continue;
+                if (key < KEY_GLYPH) {
+                    if (r < 0) continue;
+                    for (int c = 0; c < 2; c++) {
+                        if (!(key & (1u << fluid_braille_bit(c, r)))) continue;
+                        int a = d->dx[i * 2 + c], b = a + d->dot_w;
+                        if (a < t->x0) a = t->x0;
+                        if (b > t->x1) b = t->x1;
+                        for (int x = a; x < b; x++) row[x - bx] = col;
+                    }
+                } else {
+                    raster_glyph_row(row, bx, x0, x1, y, cx0, cx1, ya, yb, key, col, o);
+                }
+            }
+        }
+    }
+    for (int n = 0; n < d->nlt; n++)
+        draw_glyph(t, d->lt[n].gl, d->lt[n].x, d->lt[n].y, d->lt[n].w, d->lt[n].h, d->lt[n].c,
+                   d->lt[n].cx0, d->lt[n].cy0, d->lt[n].cx1, d->lt[n].cy1);
+    FLUID_PROF_END(FP_DRASTER, c1);
+}
+
+int fluid_draw_send(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_overlay_t *ov, int mark, bool full,
+                    uint16_t *buf, int max_px, fluid_send_fn send, void *ctx) {
+    int sent = 0;
+    for (int j = 0; j < (full ? 1 : d->H); j++) {
+        int x0 = 0, x1 = d->fb_w, y0 = 0, y1 = d->fb_h;
+        if (!full) {
+            if (d->span[2 * j] >= d->span[2 * j + 1]) continue;
+            x0 = d->cx[d->span[2 * j]] & ~3; x1 = (d->cx[d->span[2 * j + 1]] + 3) & ~3;
+            if (x1 > d->fb_w) x1 = d->fb_w;
+            y0 = d->cy[j]; y1 = d->cy[j + 1];
+        }
+        const int w = x1 - x0, rows = max_px / w;
+        if (rows < 1) return -1;
+        for (int y = y0; y < y1; y += rows) {
+            const int h = y1 - y < rows ? y1 - y : rows;
+            const fluid_rect_t t = { buf, w, x0, y, x1, y + h };
+            fluid_draw_rect(d, o, &t, true);
+            fluid_draw_overlay(d, &t, o->palette, ov);
+            fluid_draw_mark(d, &t, o->palette, mark);
+            if (send(ctx, x0, y, w, h, buf) != 0) return -1;
+            sent += w * h;
+        }
+    }
+    return sent;
+}
+
+int fluid_draw(fluid_draw_t *d, const fluid_frame_t *s, uint16_t *fb,
+               const fluid_draw_opts_t *o, int *y0out, int *y1out) {
+    const int drawn = fluid_draw_cells(d, s, o);
+    const fluid_rect_t t = { fb, d->fb_w, 0, 0, d->fb_w, d->fb_h };
+    fluid_draw_rect(d, o, &t, false);
+    int dy0 = d->fb_h, dy1 = 0;
+    for (int j = 0; j < d->H; j++) {
+        if (d->span[2 * j] >= d->span[2 * j + 1]) continue;
+        if (d->cy[j] < dy0) dy0 = d->cy[j];
+        if (d->cy[j + 1] > dy1) dy1 = d->cy[j + 1];
+    }
     *y0out = dy1 > dy0 ? dy0 : 0;
     *y1out = dy1 > dy0 ? dy1 : 0;
     return drawn;
 }
 
-int fluid_draw_mark(const fluid_draw_t *d, uint16_t *fb, int palette, int mark) {
-    if (!d || !fb || mark <= FLUID_MARK_NONE || mark >= FLUID_MARK_COUNT) return 0;
+int fluid_draw_mark(const fluid_draw_t *d, const fluid_rect_t *t, int palette, int mark) {
+    if (!d || !t || !t->px || mark <= FLUID_MARK_NONE || mark >= FLUID_MARK_COUNT) return 0;
     const int pal = (palette >= 0 && palette < FLUID_PAL_COUNT) ? palette : FLUID_PAL_PASTEL;
     const float *lo = PAL[pal][0], *c = mark == FLUID_MARK_ALERT ? PAL[pal][2] : PAL[pal][1];
     const float k = mark == FLUID_MARK_ALERT ? 0.8f : 0.4f;           /* subtle: well below the fluid */
@@ -453,17 +521,17 @@ int fluid_draw_mark(const fluid_draw_t *d, uint16_t *fb, int palette, int mark) 
     const float ext = arc ? span : dot;
     int x0 = (int)(cx - ext) - 1, x1 = (int)(cx + ext) + 2;
     int y0 = (int)(arc ? cy + sqrtf(r * r - span * span) - half : cy + r - dot) - 1, y1 = (int)(cy + r + (arc ? half : dot)) + 2;
-    if (x0 < 0) x0 = 0;
-    if (y0 < 0) y0 = 0;
-    if (x1 > d->fb_w) x1 = d->fb_w;
-    if (y1 > d->fb_h) y1 = d->fb_h;
+    if (x0 < t->x0) x0 = t->x0;
+    if (y0 < t->y0) y0 = t->y0;
+    if (x1 > t->x1) x1 = t->x1;
+    if (y1 > t->y1) y1 = t->y1;
     int n = 0;
     for (int y = y0; y < y1; y++) for (int x = x0; x < x1; x++) {
         float dx = x + 0.5f - cx, dy = y + 0.5f - cy;
         bool on;
         if (arc) { float dr = sqrtf(dx * dx + dy * dy) - r; on = dy > 0.f && fabsf(dx) <= span && fabsf(dr) <= half; }
         else { float ey = dy - r; on = dx * dx + ey * ey <= dot * dot; }
-        if (on) { fb[y * d->fb_w + x] = col; n++; }
+        if (on) { *rect_px(t, x, y) = col; n++; }
     }
     return n;
 }
@@ -523,8 +591,8 @@ static inline void blend(uint16_t *px, float r, float g, float b, float a) {
     *px = rgb565_be((int)(r0 + (r - r0) * a + 0.5f), (int)(g0 + (g - g0) * a + 0.5f), (int)(b0 + (b - b0) * a + 0.5f));
 }
 
-/* one anti-aliased (Wu) line, clipped to the framebuffer */
-static int wu_line(const fluid_draw_t *d, uint16_t *fb, float x0, float y0, float x1, float y1, const float *c, float a) {
+/* one anti-aliased (Wu) line, clipped to the window t */
+static int wu_line(const fluid_rect_t *t, float x0, float y0, float x1, float y1, const float *c, float a) {
     int n = 0;
     const bool steep = fabsf(y1 - y0) > fabsf(x1 - x0);
     if (steep) { float t = x0; x0 = y0; y0 = t; t = x1; x1 = y1; y1 = t; }
@@ -536,16 +604,16 @@ static int wu_line(const fluid_draw_t *d, uint16_t *fb, float x0, float y0, floa
         float f = y - (float)yi;
         for (int s2 = 0; s2 < 2; s2++) {
             int px = steep ? yi + s2 : x, py = steep ? x : yi + s2;
-            if (px < 0 || py < 0 || px >= d->fb_w || py >= d->fb_h) continue;
-            blend(&fb[py * d->fb_w + px], c[0], c[1], c[2], a * (s2 ? f : 1.f - f));
+            if (px < t->x0 || py < t->y0 || px >= t->x1 || py >= t->y1) continue;
+            blend(rect_px(t, px, py), c[0], c[1], c[2], a * (s2 ? f : 1.f - f));
             n++;
         }
     }
     return n;
 }
 
-int fluid_draw_overlay(const fluid_draw_t *d, uint16_t *fb, int palette, const fluid_overlay_t *ov) {
-    if (!d || !fb || !ov || !fluid_overlay_on(ov)) return 0;
+int fluid_draw_overlay(const fluid_draw_t *d, const fluid_rect_t *t, int palette, const fluid_overlay_t *ov) {
+    if (!d || !t || !t->px || !ov || !fluid_overlay_on(ov)) return 0;
     const int pal = (palette >= 0 && palette < FLUID_PAL_COUNT) ? palette : FLUID_PAL_PASTEL;
     float cx, cy, sc; ov_geom(d, &cx, &cy, &sc);
     int n = 0;
@@ -553,7 +621,7 @@ int fluid_draw_overlay(const fluid_draw_t *d, uint16_t *fb, int palette, const f
         const float R = d->stage * 0.5f, r0 = DIV_FROM * R, r1 = R - DIV_INSET * sc;
         for (int q = 0; q < ov->sectors; q++) {
             float a = 6.2831853f * q / ov->sectors, ux = sinf(a), uy = -cosf(a);
-            n += wu_line(d, fb, cx + ux * r0, cy + uy * r0, cx + ux * r1, cy + uy * r1, PAL[pal][1], DIV_ALPHA * ov->divider);
+            n += wu_line(t, cx + ux * r0, cy + uy * r0, cx + ux * r1, cy + uy * r1, PAL[pal][1], DIV_ALPHA * ov->divider);
         }
     }
     return n;
