@@ -1,7 +1,6 @@
 // Shell + router. First run lands in the setup flow (#/setup/<step>, full screen, no
 // chrome); afterwards the settings tabs (#/<page>). Hash routing keeps it one static file.
 import { DeviceApi } from './api/device';
-import { defaultCatalog, type CreatureCatalog } from './catalog/catalog';
 import { animateBraille } from './ui/braille';
 import { h, mount, type Page } from './ui/dom';
 import { statusPage } from './pages/status';
@@ -16,7 +15,6 @@ import { setupPage, SETUP_KEY } from './pages/setup';
 
 export interface AppCtx {
   api: DeviceApi;
-  catalog: CreatureCatalog;
 }
 
 const PAGES: Array<{ id: string; label: string; page: Page }> = [
@@ -37,7 +35,6 @@ const store = {
 
 export function start(root: HTMLElement) {
   const api = new DeviceApi();
-  const catalog = defaultCatalog();
   const nav = h('nav', { 'aria-label': 'pages' });
   const main = h('main');
   const field = h('pre', { class: 'field', 'aria-hidden': 'true' });
@@ -59,7 +56,7 @@ export function start(root: HTMLElement) {
     const [a, b] = hash.split('/');
     cleanup?.();
     window.scrollTo(0, 0);
-    const ctx: AppCtx = { api, catalog };
+    const ctx: AppCtx = { api };
     if (a === 'setup') {
       shell.hidden = true; setup.hidden = false;
       document.body.classList.add('in-setup');

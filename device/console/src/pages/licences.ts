@@ -12,7 +12,6 @@ const ITEMS: Array<[string, string]> = [
   ['Newlib', 'BSD-style licences'],
   ['Mozilla CA certificate bundle', 'MPL-2.0'],
   ['glyphcss ports (5x7 font, ramp, speed-reader ORP, field synth)', 'MIT — © 2025 Layoutit'],
-  ['three.js r170 (loaded from a CDN, not bundled)', 'MIT — three.js authors'],
   ['Vite runtime helper', 'MIT — VoidZero Inc. and Vite contributors'],
 ];
 

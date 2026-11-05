@@ -153,21 +153,11 @@ export class DeviceApi {
   // ── creatures ──────────────────────────────────────────────────────────────
   creatures() { return this.get<CreatureRegistry>('/api/creature'); }
   selectCreature(name: string) { return this.post<CreatureRegistry>('/api/creature', { name }); }
-  creatureList() { return this.get<CreatureList>('/api/creature/list'); }
+  creatureList() { return this.get<CreatureList>('/api/creature/list', undefined, true); }
   /** Pick an installed package (persists across reboots); throws DeviceError not_installed | bad_package | invalid_args. */
   selectCreaturePackage(id: string) { return this.json<{ ok: true; id: string; name: string }>('/api/creature/select?id=' + encodeURIComponent(id), { method: 'POST' }); }
   creatureState() { return this.get<FluidState>('/api/creature/state'); }
   fluid(order: FluidOrder) { return this.post<FluidState>('/api/creature/state', order); }
-
-  /** Upload a .molty creature file (POST /api/creature/file, raw body). */
-  uploadCreature(id: string, bytes: Uint8Array) {
-    return this.json<{ ok: true; [k: string]: unknown }>(
-      '/api/creature/file?name=' + encodeURIComponent(id),
-      { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: new Blob([bytes as BlobPart]) },
-      20000,
-      true,
-    );
-  }
 
   // ── diagnostics (firmware mole_diag: /api/diag, /api/log) ──────────────────
   diag(timeline = 0) { return this.get<Diag>(`/api/diag${timeline ? `?timeline=${timeline}` : ''}`, undefined, true); }
