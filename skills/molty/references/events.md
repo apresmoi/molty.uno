@@ -5,7 +5,7 @@ Molty talks back. When your human touches it, the relay records an event:
 | type | data |
 |---|---|
 | `shake` | `{"peak_g": 2.4, "reversals": 5, "ms": 900}`; with shake to talk also `"listening": true, "turn_id": "…"` — Molty is already listening: do nothing, its `utterance` follows |
-| `utterance` | `{"turn_id": "molty-…j_…", "text": "what's on my calendar?", "reason": "turn_end", "ms": {"speech": 1800, "stt": 120}, "trigger": "shake", "device": {"caps": […], "mood": "thinking", "voice": "box"}, "filler_in_ms": 2300}` — the human's words, once per turn (see Shake to talk); `opener`: words Molty already said, continue from them ([First words](talking-fast.md#first-words-molty-starts-you-continue)); `filler_in_ms`: Molty says its own filler that much later unless you act first ([api.md](api.md#quick-phrases)) |
+| `utterance` | `{"turn_id": "molty-…j_…", "text": "what's on my calendar?", "reason": "turn_end", "ms": {"speech": 1800, "stt": 120}, "trigger": "shake", "device": {"caps": […], "mood": "thinking", "voice": "box", "creature": {…}}, "filler_in_ms": 2300}` — the human's words, once per turn (see Shake to talk); `device.creature`: who you are on screen now ([creature.md](creature.md)); `opener`: words Molty already said, continue from them ([First words](talking-fast.md#first-words-molty-starts-you-continue)); `filler_in_ms`: Molty says its own filler that much later unless you act first ([api.md](api.md#quick-phrases)) |
 | `tap` | `{"x": 0..1, "y": 0..1}` (screen position). Only when `tap` is bound to `event` (the default); a tap during a recording stops it instead, and a shake's phantom taps are dropped |
 | `double_tap` | `{"x": 0..1, "y": 0..1}`. Only when `double_tap` is bound to `event` (out of the box a double tap talks) |
 | `button` | `{"id": "accept"}` or `{"id": "reject"}` — the board's physical buttons. Not an answer to a question: they mean acknowledge / dismiss whatever you showed (see [etiquette.md](etiquette.md)). Answers to a question come only as `answer` |
@@ -13,6 +13,7 @@ Molty talks back. When your human touches it, the relay records an event:
 | `utterance.partial` | `{"turn_id": "…", "seq": 1, "text_so_far": "what's on my calendar", "new_text": "what's on my calendar", "elapsed_ms": 3200}` — the human is **still talking**: context only (see While the human speaks) |
 | `draft.used` | `{"turn_id", "based_on", "opener", "new_words", "job"}` — to you only: your draft's opener is playing, you own the turn |
 | `draft.dropped` | `{"turn_id", "based_on", "reason", "new_words"?}` — to you only: your draft will not be spoken; answer the `utterance` as usual |
+| `creature` | `{"id": "duck", "name": "Duck", "about": {"look", "gestures", "moods"}, "gestures": […], "moods": […]}`: Molty's body changed, you are this creature from now on ([creature.md](creature.md)). Webhooks get it only when their `events` name it |
 
 Ignore event types you don't know: more will come. Whatever comes, never speak while the human talks.
 
