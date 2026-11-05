@@ -27,6 +27,7 @@ export type ErrorCode =
   | "timeout"
   | "firmware_too_old"
   | "release_unavailable"
+  | "catalog_unavailable"
   | "no_build"
   | "no_checksum"
   | "unknown_version"
