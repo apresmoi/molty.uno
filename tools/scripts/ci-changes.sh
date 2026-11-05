@@ -42,19 +42,16 @@ else
       # (vite aliases @viewer/@molty) and its e2e loads; firmware bakes the built page
       device/console/*|device/creatures/*) hit console console_e2e firmware ;;
     esac
-    case "$p" in
-      # the website renders the console's Molty catalog (@molty-catalog)
-      device/console/src/catalog/*) hit website ;;
-    esac
 
     case "$p" in
       # the creature exporter + its committed .molty output; the website renders the
-      # creatures (@creatures, @molty-files) and syncs their READMEs as docs
+      # creatures (@creatures, @molty-files, @molty-catalog) and syncs their READMEs as docs
       device/creatures/*) hit creatures website ;;
     esac
     case "$p" in
-      # cute_build.sh tests the exported .molty files
-      device/creatures/molty/*) hit firmware_test ;;
+      # cute_build.sh tests the exported .molty files; creature_build.sh replays the JS
+      # creature player (and the mood engine and actions it reads) against the C one
+      device/creatures/molty/*|device/creatures/js/creature-player.js|device/creatures/js/mood.js|device/creatures/js/actions.js) hit firmware_test ;;
     esac
 
     case "$p" in

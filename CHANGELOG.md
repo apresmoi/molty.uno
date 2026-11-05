@@ -6,6 +6,12 @@ All notable changes to Molty are recorded here. One version covers the whole pro
 
 ## Unreleased
 
+- **First words flow into the agent's reply**: the voice box writes a longer opener (12 to 20
+  words, the real start of the answer); the agent keeps its first m words (`keep`, MCP
+  `molty_keep`) and starts its reply with them, and Molty switches to the agent's words at word m.
+  Late or ignored: the line finishes its clause ("I mean," when the reply diverges). A reply queued
+  behind a lead-in no longer fails `busy`: it waits for the device's `say.done`.
+
 - Working mood: `[working]` in a say or talk (or `mood working`) keeps Molty busy after the
   line, in a varied loop, until the agent speaks again or 120 s. New actions `inspect` (one eye
   right up to the camera) and `paddle` (bobbing, with real splashes). Firmware cap `working`.

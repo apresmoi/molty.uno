@@ -4,6 +4,7 @@
 #include "link_pair.h"
 #include "link_ask.h"
 #include "self_update.h"
+#include "pkg_cmd.h"
 #include "mole_creature.h"
 #include "molty_board.h"
 #include "sdkconfig.h"
@@ -20,7 +21,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
-static struct { const char *name; link_cmd_handler_t handler; } s_registry[16];
+#define LINK_CMD_MAX 32
+static struct { const char *name; link_cmd_handler_t handler; } s_registry[LINK_CMD_MAX];
 static size_t s_count;
 static char s_mood[16] = "idle";
 /* Bumped by every explicit mood (the link's `mood` command, a local POST with a mood)
@@ -49,6 +51,14 @@ static void mood_lock(void)
 static void mood_unlock(void) { xSemaphoreGive(atomic_load(&s_mood_lock)); }
 
 unsigned link_cmd_mood_gen(void) { return atomic_load(&s_mood_gen); }
+
+cJSON *link_cmd_creature_frame(unsigned *gen)
+{
+    char *info = mole_fluid_creature_info(gen);
+    cJSON *f = link_evt_creature_frame(info);
+    free(info);
+    return f;
+}
 
 /* The same lookup the creature's setter uses (case-insensitive, escapes decoded), so
  * every body that sets a mood counts. */
@@ -92,7 +102,7 @@ esp_err_t link_cmd_register(const char *name, link_cmd_handler_t handler)
     for (size_t i = 0; i < s_count; i++) {
         if (!strcmp(name, s_registry[i].name)) { s_registry[i].handler = handler; return ESP_OK; }
     }
-    if (s_count == 16) return ESP_ERR_NO_MEM;
+    if (s_count == LINK_CMD_MAX) return ESP_ERR_NO_MEM;
     s_registry[s_count].name = name; s_registry[s_count++].handler = handler;
     return ESP_OK;
 }
@@ -192,20 +202,23 @@ static esp_err_t cmd_mood(const cJSON *args, cJSON **out)
     return e;
 }
 
-/* act {action}: a one-shot gesture on the creature (cute_act.h). It never takes the screen:
- * no mood change, no question cancelled, not counted as an explicit mood; while the words or
- * a question cover the creature it waits up to 3 s (fluid_director.h), then is dropped. */
+/* act {action}: a one-shot gesture on the creature (cute_act.h's shared ones, or its package's
+ * own; unknown_gesture for a name it lacks). It never takes the screen: no mood change, no
+ * question cancelled, not counted as an explicit mood; while the words or a question cover the
+ * creature it waits up to 3 s (fluid_director.h), then is dropped. */
 static esp_err_t cmd_act(const cJSON *args, cJSON **out)
 {
-    int act;
-    if (!link_act_args(args, &act)) return ESP_ERR_INVALID_ARG;
+    const char *name; float dur = 0;
+    if (!link_act_args(args, &name)) return ESP_ERR_INVALID_ARG;
+    const int act = mole_fluid_gesture(name, &dur);
+    if (act < 0) return link_cmd_refuse("unknown_gesture");
     esp_err_t e = mole_creature_select("fluid");
     if (e != ESP_OK) return e;
     mole_fluid_act(act);
-    link_audio_external_react((uint32_t)(cute_act_dur(act) * 1000.f));   /* during a listen: ours wait */
+    link_audio_external_react((uint32_t)(dur * 1000.f));   /* during a listen: ours wait */
     cJSON *j = cJSON_CreateObject();
     if (!j) return ESP_ERR_NO_MEM;
-    cJSON_AddStringToObject(j, "action", cute_act_name(act));
+    cJSON_AddStringToObject(j, "action", name);
     *out = j;
     return ESP_OK;
 }
@@ -310,6 +323,11 @@ void link_cmd_init(void)
     link_cmd_register("volume", cmd_volume); link_cmd_register("imu", cmd_imu);
     link_cmd_register("ask", link_ask_cmd);
     link_cmd_register("update", self_update_cmd);
+    link_cmd_register("pkg.install", pkg_cmd_install); link_cmd_register("pkg.remove", pkg_cmd_remove);
+    link_cmd_register("pkg.list", pkg_cmd_list);
+    link_cmd_register("scene.play", pkg_cmd_scene_play); link_cmd_register("scene.queue", pkg_cmd_scene_queue);
+    link_cmd_register("scene.clear", pkg_cmd_scene_clear);
+    link_cmd_register("creature.select", pkg_cmd_creature_select); link_cmd_register("creature.list", pkg_cmd_creature_list);
 }
 
 static const char *s_refusal = "device_error";

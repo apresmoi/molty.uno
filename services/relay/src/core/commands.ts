@@ -5,14 +5,17 @@ import { isRecord, type JsonObject } from "./protocol.js";
 import { parseCues, speechWords } from "./speech.js";
 
 export const MOODS = ["idle", "listening", "thinking", "speaking", "happy", "sleepy", "surprised", "working"] as const;
-/** One-shot gestures over the current mood (`act`, and `[name]` cues in say text). */
+/** The shared one-shot gestures every creature plays (`act`, and `[name]` cues in say text). A creature package adds its
+ *  own (the cat's eat): `act` takes any gesture name, and the device answers unknown_gesture for one its creature lacks
+ *  (its gestures: the device's creature event, device.creature.gestures). */
+export const GESTURE_RE = /^[a-z][a-z0-9_]{0,23}$/;
 export const ACTIONS = ["wiggle", "nod", "shake_head", "bounce", "peek", "glance_left", "glance_right", "blink", "wobble", "stretch", "look_up", "yawn", "inspect", "paddle"] as const;
 /** Need the firmware cap `working`: older firmware refuses them (a say's cue is dropped, not refused). */
 export const WORKING_CAP = "working";
 export const WORKING_ACTIONS: readonly string[] = ["inspect", "paddle"];
 /** A say's `[working]` cue: never a device mark. The relay plays the say to its end, then sets the mood. */
 export const WORKING_MOOD = "working";
-export const COMMANDS = ["status", "state", "mood", "show", "say", "quick", "listen", "volume", "imu", "diag", "log", "act", "gestures"] as const;
+export const COMMANDS = ["status", "state", "mood", "show", "say", "quick", "keep", "listen", "volume", "imu", "diag", "log", "act", "gestures", "pkg.install", "pkg.remove", "pkg.list", "pkg.available", "scene.play", "scene.queue", "scene.clear", "creature.select", "creature.list"] as const;
 /** What the human's inputs can do (`gestures`; firmware: sense/gesture.h). */
 export const GESTURE_INPUTS = ["tap", "double_tap", "button_accept", "button_reject"] as const;
 export const GESTURE_ACTIONS = ["none", "talk", "event", "stop"] as const;
@@ -22,8 +25,25 @@ export const RESUME_CAP = "resume";
 export const RESUME_FEATURE = "resume";
 export type CommandName = (typeof COMMANDS)[number];
 
+// ---- packages (docs/PACKAGES.md): data-only drawings a Molty downloads itself, played with a few params ----
+
+/** Firmware caps: pkg.* need `pkg`, scene.* need `scene`, creature.* need `creatures`. Anything else is a clean 409 unsupported. */
+export const PKG_CAP = "pkg";
+export const SCENE_CAP = "scene";
+export const CREATURES_CAP = "creatures";
+export const PKG_ID_RE = /^[a-z0-9-]{1,32}$/;
+/** A package file's ceiling; the device downloads it straight from the url: its bytes never pass through the relay. */
+export const MAX_PKG_BYTES = 262144;
+export const MAX_PKG_URL_BYTES = 512;
+/** A scene's params, as JSON: a few hundred bytes in practice (a path of keyframes is the biggest). */
+export const MAX_SCENE_PARAMS_BYTES = 2048;
+export const DEFAULT_SCENE_TTL_S = 60;
+export const MAX_SCENE_TTL_S = 600;
+
 export const MAX_SHOW_BYTES = 16384;
 export const MAX_SAY_BYTES = 4096;
+/** keep: the most first words a reply can continue after (a line is at most OPENER.maxWords). */
+export const MAX_KEEP_WORDS = 64;
 /** Inline `[mood]` / `[action]` cues kept per say (core/speech.ts parseCues): later ones are dropped. */
 export const MAX_SAY_MARKS = 16;
 /** A say's marks: [word index of the stripped text, mood or action name]; fired when that word's cue plays. */
@@ -104,6 +124,11 @@ function int(value: unknown, field: string, min: number, max: number, fallback?:
     throw invalid(`${field} must be an integer ${min}..${max}`);
   }
   return value;
+}
+
+function pkgId(v: unknown, field: string): string {
+  if (typeof v !== "string" || !PKG_ID_RE.test(v)) throw invalid(`${field} must be 1..32 of a-z 0-9 -`);
+  return v;
 }
 
 function voiceId(v: unknown): string {
@@ -201,7 +226,7 @@ export interface Validated {
   name: CommandName;
   /** Args forwarded to the device. */
   args: JsonObject;
-  /** say/listen are jobs: the agent gets `{job}` immediately. */
+  /** say/listen/pkg.install are jobs: the agent gets `{job}` immediately. */
   job: boolean;
   /** say: the human turn (an `utterance`'s turn_id) this answers (core/turns.ts); relay-only. */
   in_reply_to?: string;
@@ -299,6 +324,13 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
       const reply = turnId(args.in_reply_to);
       return { name: n, args: { id: args.id, ...(args.force === true ? { force: true } : {}) }, job: true, ...(reply !== undefined ? { in_reply_to: reply } : {}) };
     }
+    case "keep": {
+      // first words (core/opener.ts): {words?, in_reply_to?}; relay-only. No words: where the line is
+      only(args, ["words", "in_reply_to"]);
+      const reply = turnId(args.in_reply_to);
+      const out: JsonObject = args.words === undefined ? {} : { words: int(args.words, "words", 0, MAX_KEEP_WORDS) };
+      return { name: n, args: out, job: false, ...(reply !== undefined ? { in_reply_to: reply } : {}) };
+    }
     case "listen": {
       only(args, ["ms", "ring_color", "ack", ...VAD_KEYS]);
       const ms = listenMs(args.ms, "ms");
@@ -335,10 +367,40 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
       }
       return { name: n, args: { bindings: args.bindings as JsonObject }, job: false };
     }
+    case "pkg.install": {
+      // The device asks its owner with one tap, then downloads, verifies and stores: a job (room.ts runPkgInstall).
+      only(args, ["id", "url", "sha256", "size", "name"]);
+      const url = text(args.url, "url", MAX_PKG_URL_BYTES);
+      // the host allowlist is the firmware's (one constant there); the relay only checks the shape
+      if (!/^https:\/\/[\x21-\x7e]+$/.test(url)) throw invalid("url must be an https URL without spaces");
+      if (typeof args.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(args.sha256)) throw invalid("sha256 must be 64 lower-case hex digits");
+      if (typeof args.name !== "string" || !/^[\x20-\x7e]{1,32}$/.test(args.name)) throw invalid("name must be 1..32 printable ASCII characters (it is shown on Molty)");
+      return { name: n, args: { id: pkgId(args.id, "id"), url, sha256: args.sha256, size: int(args.size, "size", 1, MAX_PKG_BYTES), name: args.name }, job: true };
+    }
+    case "pkg.remove":
+      only(args, ["id"]);
+      return { name: n, args: { id: pkgId(args.id, "id") }, job: false };
+    case "creature.select":
+      only(args, ["id"]);
+      return { name: n, args: { id: pkgId(args.id, "id") }, job: false };
+    case "creature.list":
+    case "pkg.list":
+    case "pkg.available":
+    case "scene.clear":
+      only(args, []);
+      return { name: n, args: {}, job: false };
+    case "scene.play":
+    case "scene.queue": {
+      only(args, ["pkg", "layout", "params", "ttl_s"]);
+      const params = args.params ?? {};
+      if (!isRecord(params)) throw invalid("params must be an object of the layout's params");
+      if (new TextEncoder().encode(JSON.stringify(params)).byteLength > MAX_SCENE_PARAMS_BYTES) throw invalid(`params exceed ${MAX_SCENE_PARAMS_BYTES} bytes: send a few params, the package holds the drawing`);
+      return { name: n, args: { pkg: pkgId(args.pkg, "pkg"), layout: pkgId(args.layout, "layout"), params: params as JsonObject, ttl_s: int(args.ttl_s, "ttl_s", 1, MAX_SCENE_TTL_S, DEFAULT_SCENE_TTL_S) }, job: false };
+    }
     case "act":
       only(args, ["action"]);
-      if (typeof args.action !== "string" || !(ACTIONS as readonly string[]).includes(args.action)) {
-        throw invalid(`action must be one of ${ACTIONS.join(", ")}`);
+      if (typeof args.action !== "string" || !GESTURE_RE.test(args.action)) {
+        throw invalid(`action must be a gesture name: one of the creature's (device.creature.gestures), e.g. ${ACTIONS.join(", ")}`);
       }
       return { name: n, args: { action: args.action }, job: false };
   }

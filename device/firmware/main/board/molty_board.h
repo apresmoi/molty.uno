@@ -12,7 +12,9 @@
  *
  *   display   required: a w×h RGB565 framebuffer (byte-swapped, panel wire order)
  *             plus full / row-band flush. Round or rectangular; the fluid draws in
- *             its largest centred square.
+ *             its largest centred square. Optional blit: the fluid then sends only the
+ *             windows that changed, from a small internal-RAM buffer, and the
+ *             framebuffer (PSRAM) stays out of the frame loop.
  *   touch, imu, mic, speaker, accept / reject buttons, battery, usb_net, serial
  *             optional: leave the op NULL and drop the MOLTY_CAP_ bit. The core asks
  *             molty_board_has() and degrades — no mic/speaker: voice endpoints and
@@ -107,6 +109,7 @@ typedef struct {
     uint16_t *(*framebuffer)(void);
     esp_err_t (*flush)(void);
     esp_err_t (*flush_rows)(int y0, int y1);      /* full-width rows [y0, y1)                    */
+    esp_err_t (*blit)(int x, int y, int w, int h, const uint16_t *px);   /* optional: see molty_display_blit */
 
     /* optional — NULL when absent */
     int       (*touch_poll)(uint16_t *xs, uint16_t *ys, int max);   /* panel px; returns count  */
@@ -170,6 +173,11 @@ int molty_board_image_check(const uint8_t *img, size_t len, char *other, size_t 
 uint16_t *molty_display_framebuffer(void);           /* NULL when the display is down */
 esp_err_t molty_display_flush(void);
 esp_err_t molty_display_flush_rows(int y0, int y1);
+/** Send w×h px (packed rows, wire order) to the panel at (x, y); x and w are multiples of 4
+ *  (or w reaches the right edge). Returns once px may be reused. The board's blit leaves
+ *  the framebuffer as it was (whoever draws keeps it for /api/framebuffer); without one,
+ *  px is copied into the framebuffer and its rows flushed. */
+esp_err_t molty_display_blit(int x, int y, int w, int h, const uint16_t *px);
 
 /** Poll touch; feeds the pairing tap detector. 0 points without touch. */
 int       molty_touch_poll(uint16_t *xs, uint16_t *ys, int max);

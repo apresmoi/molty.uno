@@ -76,11 +76,12 @@ Success: `200 {"ok":true,"result":{…}}`. Unknown argument keys are rejected.
 
 | name | args | result | notes |
 |---|---|---|---|
-| `status` | — | fw, uptime, creature, state, mood, fps, rssi + `relay` {api_version, online, connected_since, board, caps, voice, events, webhook, firmware} | cheap; use it to check Molty is online |
+| `status` | — | fw, uptime, creature, state, mood, fps, rssi + `relay` {api_version, online, connected_since, board, caps, voice, events, webhook, firmware, creature} | cheap; use it to check Molty is online; `relay.creature`: who you are on screen |
 | `mood` | `{"mood": m, "hold_s"?: s}` | — | m ∈ idle, listening, thinking, speaking, happy, sleepy, surprised; happy/surprised revert by themselves, `hold_s` (0 < s ≤ 3600) sets how long any mood stays |
 | `act` | `{"action": a}` | `{action}` | a one-shot gesture over the current mood (see [Gestures](#gestures-act-and-inline-cues)); needs `act` in `relay.caps` (`409 unsupported` / `firmware_too_old` otherwise) |
 | `show` | `{"text": s, "wpm"?: 100..800}` | — | speed-reader text in the fluid, ≤ 16384 bytes, default 300 wpm; returns when it starts |
 | `say` | `{"text": s, "voice"?: id, "in_reply_to"?: turn_id}` | `{job}` immediately | relay TTS → speaker (streamed sentence by sentence), text shown in sync; ≤ 4096 bytes; job done → `{ms, text, timings}` (`text` without its [inline cues](#gestures-act-and-inline-cues) like `[happy]`); `in_reply_to`: see [events.md](events.md#shake-to-talk) |
+| `keep` | `{"words"?: m, "in_reply_to"?: turn_id}` | `{keep, said, late?, words, playing, sent, wpm}` | with an `opener`: Molty never plays past word m; your reply starts with those words ([First words](talking-fast.md#first-words-molty-starts-you-take-over)) |
 | `quick` | `{"id": phrase, "in_reply_to"?: turn_id, "force"?: bool}` | `{job, phrase, text, cached}` immediately, or `{skipped:"filled", filler}` | plays a cached [quick phrase](#quick-phrases) at once (no speech synthesis); your next say / talk queues right behind it |
 | `listen` | `{"ms"?: 0..30000, "end_silence_ms"?: 300..3000, "no_speech_ms"?: 1000..10000, "vad"?: bool, "ring_color"?: c, "ack"?: true\|false\|"silent"}` | `{job}` immediately | records the mic until the human finishes (the window is a ceiling: omit `ms` for the human's own setting, 30000 ms out of the box; `0` = unlimited, 5 min safety ceiling), relay STT; job done → `{text, duration_ms, peak, rms, reason, speech_ms?, timings}` |
 | `state` | `{}` = read · `{"state": {…}}` or flat fields = patch | creature state JSON | low-level creature state, same as the device's `/api/creature/state` |
@@ -89,6 +90,15 @@ Success: `200 {"ok":true,"result":{…}}`. Unknown argument keys are rejected.
 | `imu` | — | ax/ay/az (g), gx/gy/gz (°/s), ms | one motion-sensor snapshot |
 | `diag` | `{"timeline"?: 0..180}` | diagnostics JSON | frame/CPU/heap/network health; timeline = seconds of 1 Hz rows |
 | `log` | `{"since"?: n, "max"?: 1024..32768}` | `{next, text}` | device log tail; pass `next` back as `since` |
+| `pkg.available` | none | `{ref, device, packages: [{id, name, version, kind, description, layouts?, skills?, install, installed?, update?}]}` | every package that exists, to offer your human ([packages](#packages-and-scenes)); works with Molty offline; `catalog_unavailable` when the repo's index can't be read |
+| `pkg.install` | `{"id", "url", "sha256", "size", "name"}` (an entry's `install` from `pkg.available`) | `{job}`; done → `{installed, version}` | Molty asks its human with one tap, downloads the file itself and checks its sha256 ([packages](#packages-and-scenes)); errors `declined` (said no, or no tap in time), `pkg_timeout`, `bad_url`, `too_big`, `hash_mismatch`, `bad_package`, `no_space`, `busy` |
+| `pkg.remove` | `{"id"}` | `{removed}` | `not_installed` if it is not there |
+| `pkg.list` | none | `{packages: [{id, name, version, kind, size}]}` | what this Molty has installed |
+| `scene.play` | `{"pkg", "layout", "params"?: {…}, "ttl_s"?: 1..600}` | none | replaces the screen with a package's layout, drawn from a few params (≤ 2048 bytes); back to the creature after `ttl_s` (default 60); `not_installed`, `no_layout`, `bad_params` |
+| `scene.queue` | same as `scene.play` | none | plays after the current scene ends |
+| `scene.clear` | none | none | melts back to the creature |
+| `creature.select` | `{"id"}` | `{id, name}` | which creature Molty is: a built-in one (`duck`, `cat`, `octopus`) or an installed creature package (`kind: "creature"`); kept across reboots; `not_installed`, `bad_package` |
+| `creature.list` | none | `{current, creatures: [{id, name, version, source}]}` | the creatures this Molty can be (`source`: `builtin` or `installed`) |
 
 **Timing.** Short commands answer inline within ~10 s. `say` and `listen` are
 **async jobs**: they return `{job}` at once; poll `GET /v1/jobs/<job>?wait_s=0..8` until
@@ -96,7 +106,8 @@ Success: `200 {"ok":true,"result":{…}}`. Unknown argument keys are rejected.
 (`{"name":"say","args":{…},"wait":true}`) and the call blocks until the job is done (at most
 24 s; past that `202` with `{"job","status":"pending"}`, finish with the jobs URL). Only one
 audio job runs at a time (`409 audio_busy`) — wait for a `say` to finish before the
-next `say`/`listen`.
+next `say`/`listen`. `pkg.install` is a job too (it waits for the human's tap): add `"wait": true`
+or poll its job.
 
 ## Gestures: act and inline cues
 
@@ -147,6 +158,10 @@ Molty), `blink`, `wobble`, `stretch`, `look_up`, `yawn`, `inspect` (right up to 
 (bobbing and splashing in the water). It never changes what is shown and
 never cancels a question; while words or a question cover the creature it waits up to 3 s,
 then is dropped. Silent, ~0.3–2.6 s. A `nod` while they talk (listening) is fine.
+Your creature plays the ones in `device.creature.gestures` (moods: `.moods`); each looks as its
+`about` line says on that animal ([creature.md](creature.md)). A creature may have gestures of its
+own beyond these (the cat's `eat`: a red bowl of milk, ~4.6 s): `act` takes any name in its
+`gestures`, and one it lacks is refused with `unknown_gesture`. Inline cues take the shared ones only.
 
 ## Gestures: what tap, double tap and the buttons do
 
@@ -249,7 +264,7 @@ Body: `{"say"?: s, "listen"?: true, "listen_ms"?: 0..30000 (omit: the human's se
 
 Speaks `say` (if given), then listens until the human stops talking (or the window ends), then
 returns the transcript as `heard` (with `filler_in_ms`: see [Quick phrases](#quick-phrases); with `opener` when
-Molty already started the reply: [First words](talking-fast.md#first-words-molty-starts-you-continue)). `reason`:
+Molty is starting the reply: [First words](talking-fast.md#first-words-molty-starts-you-take-over)). `reason`:
 
 | reason | meaning |
 |---|---|
@@ -391,11 +406,31 @@ Any successful authenticated response may also carry, additively at the top leve
 
 Ignore fields you don't know.
 
+## Packages and scenes
+
+A package is data only (shapes, images, layouts) that teaches Molty to draw something new; it
+lives in the repo (`packages/`, listed in `packages/index.json`) and Molty downloads it itself.
+The commands need `pkg` / `scene` in `relay.caps` (`409 unsupported` otherwise); `pkg.available` needs neither.
+
+**Finding one.** `pkg.available` (MCP `molty_package {op: "available"}`) is the catalog: each entry's
+`description` is a line to pitch it with ("I can draw the sky on Molty: want the astrology package?"),
+`installed` is the version this Molty has (null = not yet; absent = Molty offline or without packages),
+`update: true` when a newer one exists. Creature packages (duck, cat, octopus) are built in: offer them
+only for an update, and switch with `creature.select`.
+
+**Installing.** Pass the entry's `install` object as is to `pkg.install` (`wait: true`). Tell your human
+first: Molty shows the package's name and they tap it to accept (`declined` = they said no or didn't tap
+in a minute; don't retry unasked). Installs are kept; never reinstall what is `installed` and current.
+
+**Playing.** Don't send `scene.*` by hand: the entry's `skills` know the package, e.g. **molty-astro**
+for the sky (`https://github.com/apresmoi/molty.uno/tree/main/skills/molty-astro`); its `layouts` are
+what it can draw. The format: `https://github.com/apresmoi/molty.uno/blob/main/docs/PACKAGES.md`.
+
 ## MCP (optional)
 
 The same features are a remote MCP server at `$MOLTY_RELAY/mcp` (streamable HTTP, bearer
-auth). Tools: `molty_pair` (no token needed), `molty_talk`, `molty_quick`, `molty_phrases`, `molty_ask`, `molty_status`, `molty_mood`, `molty_act`, `molty_gestures`,
-`molty_show`, `molty_say`, `molty_listen`, `molty_wait`, `molty_state`,
+auth). Tools: `molty_pair` (no token needed), `molty_talk`, `molty_keep`, `molty_quick`, `molty_phrases`, `molty_ask`, `molty_status`, `molty_mood`, `molty_act`, `molty_gestures`,
+`molty_package`, `molty_scene`, `molty_show`, `molty_say`, `molty_listen`, `molty_wait`, `molty_state`,
 `molty_volume`, `molty_imu`, `molty_diag`, `molty_log`, `molty_events`,
 `molty_webhook`, `molty_updates`, `molty_update`, `molty_activity`, `molty_draft`, `molty_react`,
 `molty_notes`. Claude Code example:

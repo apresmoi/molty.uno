@@ -17,6 +17,8 @@ export interface Env extends VoiceEnv, ReleaseEnv {
   /** Optional secrets for Molty's reflex engines (core/reflex.ts): `wrangler secret put TYPESAFE_API_KEY` / `OPENAI_API_KEY`. */
   TYPESAFE_API_KEY?: string;
   OPENAI_API_KEY?: string;
+  /** The branch or tag whose packages/index.json pkg.available lists (core/catalog.ts); default main. */
+  PACKAGES_REF?: string;
 }
 
 interface Attachment {
@@ -110,6 +112,7 @@ export class MoltyDevice extends DurableObject<Env> {
       // Workers have no socket-level resolver: DNS-over-HTTPS for the SSRF guard (services/relay/README.md "Webhooks").
       resolveHost: dohResolver(fetcher),
       releases: releaseSource(this.env.DEVICE as unknown as DurableObjectNamespace),
+      packagesRef: this.env.PACKAGES_REF || undefined,
       reflexKeys: { jev: this.env.TYPESAFE_API_KEY, openai: this.env.OPENAI_API_KEY },
     });
     return this.#room;

@@ -8,10 +8,9 @@
 // The sub-step lives in the hash (#/setup/<step>) via replaceState, so a reload or a
 // deep link (#/setup/agent) resumes there without re-mounting on every step.
 import { UnsupportedError } from '../api/device';
-import type { LinkInfo, WifiNetwork, WifiStatus } from '../api/types';
+import type { CreaturePackage, LinkInfo, WifiNetwork, WifiStatus } from '../api/types';
 import { pairBaseline, pairView } from '../agents/pairing';
 import type { AppCtx } from '../app';
-import type { CreatureEntry } from '../catalog/catalog';
 import { FILLER_DEFAULT_MS, FILLER_OFF } from '../filler/filler';
 import { linkContext, linkPanel, relayLine } from '../ui/agent-link';
 import { h, mount } from '../ui/dom';
@@ -25,7 +24,6 @@ const bars = (rssi: number) => { const n = rssi >= -55 ? 4 : rssi >= -67 ? 3 : r
 const STEP_N: Record<Step, number> = { wifi: 0, pass: 0, joining: 0, molty: 1, agent: 2, tap: 2, voice: 3, gap: 3, reflex: 3, done: 4 };
 const HASH_STEP: Record<string, Step> = { wifi: 'wifi', molty: 'molty', creature: 'molty', agent: 'agent', tap: 'agent', voice: 'voice', gap: 'voice', reflex: 'voice', done: 'done' };
 export const SETUP_KEY = 'molty.setup';
-const LOOK_KEY = 'molty.look';
 const VOICE_STEPS: Step[] = ['voice', 'gap', 'reflex'];
 
 const store = {
@@ -33,7 +31,7 @@ const store = {
   set(k: string, v: string) { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
 };
 
-export function setupPage(root: HTMLElement, { api, catalog }: AppCtx, first = 'wifi') {
+export function setupPage(root: HTMLElement, { api }: AppCtx, first = 'wifi') {
   let alive = true, step: Step = HASH_STEP[first] ?? 'wifi';
   const screen = moltyScreen(api, 248);
   const bubble = h('div', { class: 'bubble', 'aria-live': 'polite' });
@@ -44,8 +42,8 @@ export function setupPage(root: HTMLElement, { api, catalog }: AppCtx, first = '
   // shared state across steps
   let status: WifiStatus | null = null, nets: WifiNetwork[] | null = null, scanErr = '';
   let net = '', netOpen = false, wifiErr = '', joined = false;
-  let list: CreatureEntry[] = [];
-  let chosen: CreatureEntry | null = null;
+  let list: CreaturePackage[] | null = null, listErr = '';
+  let chosen: CreaturePackage | null = null;
   let agentName = '', pairFail = '', skipped = false;
 
   const say = (text: string, hint?: string) => mount(bubble, text, hint ? h('small', null, hint) : null);
@@ -62,7 +60,7 @@ export function setupPage(root: HTMLElement, { api, catalog }: AppCtx, first = '
     const n = STEP_N[s];
     prog.textContent = ['Wi-Fi', 'Molty', 'Agent', 'Voice'].map((t, i) => `${i < n ? '✓' : i === n ? '●' : '○'} ${t}`).join('   ');
     if (s === 'tap') { /* screen set by the poller (needs the code) */ }
-    else if (chosen && (s === 'molty' || s === 'agent' || s === 'done' || VOICE_STEPS.includes(s))) screen.show(chosen.id);
+    else if (chosen && (s === 'molty' || s === 'agent' || s === 'done' || VOICE_STEPS.includes(s))) screen.show();
     else screen.blob();
     if (s === 'agent' || s === 'tap') startPairPoll(); else stopPairPoll();
     if (VOICE_STEPS.includes(s) && !voice) { step = 'voice'; void loadVoice(); }
@@ -148,59 +146,61 @@ export function setupPage(root: HTMLElement, { api, catalog }: AppCtx, first = '
     }
   }
 
-  // ── 2. Molty ───────────────────────────────────────────────────────────────
-  let sendWant: CreatureEntry | null = null, sending = false, sendNote = '', fluidChecked = false;
+  // ── 2. Molty: the device's creature packages (GET /api/creature/list) ─────
+  let sendWant: CreaturePackage | null = null, sending = false, sendNote = '';
+  async function loadMoltys() {
+    try {
+      const l = await api.creatureList();
+      list = l.creatures; listErr = '';
+      chosen ??= list.find((c) => c.id === l.current) ?? null;
+    } catch (e) {
+      list = []; listErr = e instanceof UnsupportedError ? 'My firmware can’t change who I am yet' : `Couldn’t ask Molty (${errText(e)})`;
+    }
+    if (!alive) return;
+    if (chosen && (step === 'molty' || step === 'agent' || step === 'done' || VOICE_STEPS.includes(step))) screen.show();
+    if (step === 'molty' || step === 'done') render();
+  }
+  /** Picks are serialized; only the last one tapped while a select runs is sent next. */
   async function send() {
     if (sending) return;
     sending = true;
     while (sendWant) {
-      const e = sendWant; sendWant = null;
+      const c = sendWant; sendWant = null;
       sendNote = 'Sending…'; hintMolty();
       try {
-        await api.uploadCreature(e.id, await catalog.fetchFile(e));
-        await wakeFluid();
+        await api.selectCreaturePackage(c.id);
+        await api.fluid({ state: 'creature' }).catch(() => { /* best effort: the choice already landed */ });
         if (!sendWant) sendNote = 'On your Molty now';
       } catch (err) {
-        if (!sendWant) sendNote = err instanceof UnsupportedError ? 'My firmware can’t take new looks yet' : `Couldn’t send it (${errText(err)})`;
+        if (!sendWant) sendNote = `Couldn’t switch (${errText(err)})`;
       }
       hintMolty();
     }
     sending = false;
   }
-  /** Make the device show the uploaded Molty: the fluid creature, in its "creature" state. */
-  async function wakeFluid() {
-    try {
-      if (!fluidChecked) {
-        fluidChecked = true;
-        const reg = await api.creatures();
-        if (reg.current !== 'fluid' && reg.available.includes('fluid')) await api.selectCreature('fluid');
-      }
-      await api.fluid({ state: 'creature' });
-    } catch { /* best effort: the upload itself already landed */ }
-  }
   function hintMolty() {
     if (step !== 'molty') return;
-    say(joined ? 'Connected! Now, who should I be?' : 'Who should I be?', chosen ? sendNote || 'Tap one to bring it to life' : 'Tap one to bring it to life');
+    say(joined ? 'Connected! Now, who should I be?' : 'Who should I be?', listErr || (chosen && sendNote) || 'Tap one to bring it to life');
   }
 
   function renderMolty() {
     hintMolty();
-    const choose = big(chosen ? `Choose ${chosen.name}` : 'Pick one', () => { if (chosen) { store.set(LOOK_KEY, chosen.id); go('agent'); } }, !chosen);
+    const choose = big(chosen ? `Choose ${chosen.name}` : 'Pick one', () => { if (chosen) go('agent'); }, !chosen);
+    if (listErr) return mount(body, h('div', { class: 'foot' }, ghost('Skip for now', () => go('agent'))));
     const grid = h('div', { class: 'grid', role: 'listbox', 'aria-label': 'Moltys' });
-    const tiles = list.map((c) => {
+    const tiles = (list ?? []).map((c) => {
       const t = h('button', { class: 'tile' + (chosen?.id === c.id ? ' on' : ''), type: 'button', role: 'option', 'aria-selected': String(chosen?.id === c.id), 'data-id': c.id },
-        c.thumb ? h('img', { src: c.thumb, alt: '', width: 96, height: 96 }) : h('div', { class: 'ph' }, '⠴'),
         h('div', { class: 'n' }, c.name));
       t.addEventListener('click', () => {
         chosen = c;
         for (const x of tiles) { const on = x === t; x.classList.toggle('on', on); x.setAttribute('aria-selected', String(on)); }
         choose.disabled = false; choose.textContent = `Choose ${c.name}`;
-        screen.show(c.id);
+        screen.show();
         sendWant = c; send();
       });
       return t;
     });
-    mount(grid, list.length ? tiles : wait('Loading Moltys…'));
+    mount(grid, list ? tiles : wait('Loading Moltys…'));
     mount(body, grid, h('div', { class: 'foot' }, choose));
   }
 
@@ -314,14 +314,7 @@ export function setupPage(root: HTMLElement, { api, catalog }: AppCtx, first = '
   }
 
   // ── boot ───────────────────────────────────────────────────────────────────
-  catalog.list().then((l) => {
-    list = l;
-    const prev = store.get(LOOK_KEY);
-    chosen ??= l.find((c) => c.id === prev) ?? null;
-    if (!alive) return;
-    if (chosen && (step === 'molty' || step === 'agent' || step === 'done' || VOICE_STEPS.includes(step))) screen.show(chosen.id);
-    if (step === 'molty' || step === 'done') render();
-  }, () => { /* empty grid shows "Loading"; bundled catalog can't fail */ });
+  loadMoltys();
   go(step);
   if (step === 'wifi') loadWifi();
   return () => { alive = false; stopPairPoll(); screen.stop(); };

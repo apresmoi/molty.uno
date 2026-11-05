@@ -67,19 +67,29 @@ synthesised, so Molty speaks the instant they finish — right after its chirp, 
   when they say something good, a `surprised` at news — screen only, ≤ 1 per 3 s. Note what landed in your
   [ledger](etiquette.md#keep-a-behaviour-ledger).
 
-## First words: Molty starts, you continue
+## First words: Molty starts, you take over
 
-The owner's setting `first_words` (voice box with `--opener`) makes a very small model start the reply
-the moment the human finishes, about half a second before anyone else could: "Hmm, the weather in Berlin,".
-It replaces the filler. The `utterance` and talk's result then carry **`opener`: words already spoken**.
+The owner's setting `first_words` (voice box with `--opener`) makes a small model start the reply the
+moment the human finishes: 12 to 20 words that react and name the topic, never a fact. The `utterance`
+(and talk's result) carries **`opener`: the whole planned line, playing now**, and `opener_wpm`.
 
-- **Write only the continuation**: `opener` "Hmm, the weather in Berlin," → say "rain until noon." It queues
-  behind the line with no gap; don't read the line again. An exact repeat is cut and logged.
-- It knows nothing: it names the topic and never answers. Often there is no line (the model was late, or
-  the relay's guard refused it): no `opener`, Molty stayed silent, answer as usual.
-- A line left mid-sentence and nothing from you for 15 s: Molty adds "Hmm, give me a moment." A mood or a
-  `[working]` line in time stops that.
-- The activity log shows each line as `trace` `ev:"opener"` `{text, ms, dropped?, repeated?}`.
+1. **Keep first, with your fastest model, before any thinking**: `keep {words: m, in_reply_to}` (REST
+   `POST …/cmd {"name":"keep","args":{"words":m,"in_reply_to":"<turn_id>"}}`, MCP `molty_keep`).
+   m = the last word of the opener your answer can follow; prefer a clause end (after a comma or stop);
+   all of it is fine. Molty never plays past word m. Result `late: true`: too late for m, Molty
+   finishes its clause; use `keep` (the words it plays) and `said` instead.
+2. **Reply starting with those m words, word for word**, then your own: opener "Okay, the weather in
+   Berlin, for tomorrow, let me walk you through it." + keep 5 → say "Okay, the weather in Berlin, rain
+   until noon." Molty switches to your words at word 5 with no seam. Or pass `keep: 5` on talk / say
+   and send only "rain until noon." Write the continuation in lower case unless a sentence starts.
+3. Slow? Molty pauses at word m (a soft "hmm", then thinking) and goes on when your reply comes.
+
+- No keep and a late reply: Molty finishes the clause playing, says "I mean," and your reply without the
+  words already said. A reply that ignores the opener plays after the clause playing now. Both work; the
+  keep sounds best.
+- `keep` without `words`: where it is (`playing`, `sent`, `words`), nothing claimed.
+- Often there is no line (the model was late, or the guard refused it): no `opener`, answer as usual.
+- The activity log shows each line, keep and reply plan as `trace` `ev:"opener"`.
 
 ## End of turn
 

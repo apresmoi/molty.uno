@@ -89,8 +89,6 @@ drivers of one board.
 
 ## Device console (single-file HTML, also stored in the firmware SPIFFS image)
 - Vite runtime helper — © 2019-present VoidZero Inc. and Vite contributors, MIT.
-- three.js r170 — © 2010-2024 three.js authors, MIT. Loaded at runtime from
-  https://cdn.jsdelivr.net/npm/three@0.170.0/ (not bundled).
 - glyphcss field synth (port) — © 2025 Layoutit, MIT (text above).
 
 ## molty CLI (Go binary)
@@ -116,6 +114,10 @@ Serial:
 - pako 2.2.0 — © Vitaly Puzrin and Andrei Tuputcyn, MIT AND Zlib.
 - atob-lite 2.0.0 — MIT. tslib 2.8.1 — © Microsoft, 0BSD.
 Apache-2.0 text: https://www.apache.org/licenses/LICENSE-2.0.txt
+
+## molty-astro skill (skills/molty-astro, vendored)
+- astronomy-engine 2.1.19 (scripts/vendor/astronomy.min.js): Copyright (c) 2019-2023 Don Cross, MIT License (its
+  full text heads the file).
 
 ## Hosted services (no code licence; terms of use apply)
 The optional cloud relay calls Cloudflare Workers AI models @cf/deepgram/aura-2-en

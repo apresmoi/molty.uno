@@ -11,7 +11,7 @@
 
 import { type AgentApi, type FirmwareNotice, type Inbox, type JobView, type Outcome, type RelayBackend, bearer, tokenDevice } from "../core/api.js";
 import { BUILTIN_PHRASES, FILLER_DEFAULT_MS, PHRASE_LIMITS } from "../core/phrases.js";
-import { ACK_THINK_S, ACTIONS, GESTURE_INPUTS, COLORS, DEFAULT_ASK_COLORS, DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, LISTEN_CEILING_MS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, MAX_DRAFTS_PER_TURN, MAX_DRAFT_NEW_WORDS, MAX_LISTEN_MS, MAX_MOOD_HOLD_S, MAX_OPENER_WORDS, MOODS, REACT_ACTIONS, REACT_MIN_GAP_MS, REACT_MOODS, TALK_BUDGET_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
+import { ACK_THINK_S, ACTIONS, GESTURE_INPUTS, COLORS, DEFAULT_ASK_COLORS, DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, LISTEN_CEILING_MS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, MAX_DRAFTS_PER_TURN, MAX_DRAFT_NEW_WORDS, MAX_LISTEN_MS, MAX_MOOD_HOLD_S, MAX_OPENER_WORDS, MAX_SCENE_PARAMS_BYTES, MAX_SCENE_TTL_S, MOODS, REACT_ACTIONS, REACT_MIN_GAP_MS, REACT_MOODS, TALK_BUDGET_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
 import { NOTES_LIMITS } from "../core/notes.js";
 
 /** say / talk / ask: inline [mood] / [action] cues in the spoken text. */
@@ -31,7 +31,7 @@ export const SERVER_INFO = { name: "molty-relay", title: `Molty relay (api v${AP
 const MAX_BODY = 256 * 1024;
 const INSTRUCTIONS =
   `Tools operate a physical Molty device through the molty-relay. Pair first with molty_pair (no token needed), then send the returned agent_token as 'Authorization: Bearer <token>'. For conversation use molty_talk: ONE call per turn speaks your reply, then listens and returns what the human said ({heard, reason}); moods (listening, thinking, speaking) are automatic, so don't call molty_mood around talking. When the human finishes, Molty acknowledges it by itself at once (a soft chirp, then thinking). If you will think for more than a moment, FIRST play a quick phrase (molty_quick {id}: cached audio, plays at once, e.g. "hmm", "let_me_think"), before you start reasoning, then answer with molty_talk (it follows the phrase seamlessly); register your own phrases once with molty_phrases. Nothing from you within a few seconds and Molty says a filler itself. Keep spoken replies to 1-2 sentences (inline cues like [happy] or [nod] in them set mood / gesture as you speak). For a decision the human can answer with a tap use molty_ask: say the question, offer 1-${MAX_ASK_OPTIONS} options of at most ${MAX_ASK_LABEL} characters ("yes", "no", "later"); answer is null on timeout/cancelled/offline. molty_say / molty_listen return a job immediately (wait:true blocks until done); poll a job with molty_wait (<= 8 s per call). ` +
-  `Molty also emits events (${AGENT_EVENT_TYPES.join(", ")}) into your own inbox: unread ones ride along on every tool result as 'events' plus a 'Molty: ...' line; molty_events pulls/waits for them; molty_webhook registers an HTTPS request the relay sends you per event. A shake means the human wants to talk: Molty listens by itself and you get one 'utterance' event {turn_id, text, ...}: answer it at once with molty_talk {say, in_reply_to: turn_id} (the first agent to answer claims the turn; others get turn_claimed). While they are still talking you may get 'utterance.partial' events (context only): never speak then (human_speaking); you may molty_draft a short opener (played the instant they finish, if their last words don't change the meaning) and molty_react with a mood or a gesture (screen only). Other events: react briefly, once per moment. Full guide: the molty agent skill, ${SKILL_HOME} (Claude Code / Codex: the molty plugin). This relay speaks agent api_version ${API_VERSION} (also in molty_status relay.api_version); what this Molty can do is relay.caps. When your human asks to check Molty for updates (any wording), call molty_updates and follow its 'actions'; ask before molty_update.`;
+  `Molty also emits events (${AGENT_EVENT_TYPES.join(", ")}) into your own inbox: unread ones ride along on every tool result as 'events' plus a 'Molty: ...' line; molty_events pulls/waits for them; molty_webhook registers an HTTPS request the relay sends you per event. A shake means the human wants to talk: Molty listens by itself and you get one 'utterance' event {turn_id, text, ...}: answer it at once with molty_talk {say, in_reply_to: turn_id} (the first agent to answer claims the turn; others get turn_claimed). While they are still talking you may get 'utterance.partial' events (context only): never speak then (human_speaking); you may molty_draft a short opener (played the instant they finish, if their last words don't change the meaning) and molty_react with a mood or a gesture (screen only). You ARE Molty: your body is the creature on its screen (device.creature on an utterance, relay.creature in molty_status: {id, name, about:{look, gestures, moods}, gestures, moods}); speak as that animal, never invent another body, and pick gestures and moods by their about lines; a 'creature' event says it changed. Other events: react briefly, once per moment. Full guide: the molty agent skill, ${SKILL_HOME} (Claude Code / Codex: the molty plugin). This relay speaks agent api_version ${API_VERSION} (also in molty_status relay.api_version); what this Molty can do is relay.caps. When your human asks to check Molty for updates (any wording), call molty_updates and follow its 'actions'; ask before molty_update.`;
 
 type Prop = { type: string | string[]; description: string; enum?: string[]; items?: { type: "string"; enum?: string[] } | { anyOf: JsonObject[] }; additionalProperties?: { type: "number" } };
 type Schema = { type: "object"; properties: Record<string, Prop>; required: string[]; additionalProperties: false };
@@ -59,13 +59,17 @@ const CLIENT_TIMING: Prop = {
   additionalProperties: { type: "number" },
   description: "Optional: your own latency for this turn, in ms (up to 8 keys, lower case, numbers 0..3600000), e.g. {received_ms, model_ms}: event received -> this call, your model's run. Include it to help debug latency: it lands in the turn's trace (activity log), never on Molty.",
 };
+const KEEP: Prop = {
+  type: "integer",
+  description: "Optional, with an utterance's `opener`: your text is what follows the opener's first `keep` words (instead of starting with them word for word).",
+};
 const IN_REPLY_TO: Prop = {
   type: "string",
   description: "The turn_id of the `utterance` you are answering (the human shook Molty and spoke). The first agent to answer a turn claims it; other agents get turn_claimed for 60 s. Adds timings.turn {id, reply, first_audio} (ms after the utterance).",
 };
 
 /** say/listen with `wait: true` block on their job (bounded), returning what molty_wait would. */
-async function commandWait(api: AgentApi, t: string, name: "say" | "listen", a: Record<string, unknown>): Promise<Outcome<JsonObject>> {
+async function commandWait(api: AgentApi, t: string, name: "say" | "listen" | "pkg.install", a: Record<string, unknown>): Promise<Outcome<JsonObject>> {
   const { wait, ...args } = a;
   const start = Date.now();
   const out = await api.command(t, name, args);
@@ -115,7 +119,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "molty_status",
-    description: "Return the device's status (fw, uptime, creature, state, mood, fps, rssi) plus relay info: online, connected_since, caps, voice provider and the latest device events.",
+    description: "Return the device's status (fw, uptime, creature, state, mood, fps, rssi) plus relay info: online, connected_since, caps, voice provider, the latest device events and creature (who Molty is now: {id, name, about:{look, gestures, moods}, gestures, moods}).",
     inputSchema: obj({}),
     auth: true,
     run: (api, t) => api.command(t, "status", {}),
@@ -135,10 +139,44 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "molty_act",
-    description: `Play a one-shot gesture over the current mood: ${ACTIONS.join(", ")}. It never changes what is shown; while words or a question cover the creature it waits up to 3 s, then is dropped. To gesture while speaking, put [nod] etc. in the say text instead.`,
-    inputSchema: obj({ action: { type: "string", description: `One of ${ACTIONS.join(", ")}.`, enum: [...ACTIONS] } }, ["action"]),
+    description: `Play a one-shot gesture over the current mood: one of the creature's gestures (device.creature.gestures; every creature plays ${ACTIONS.join(", ")}, and a creature package may add its own, like the cat's eat). unknown_gesture for one it lacks. It never changes what is shown; while words or a question cover the creature it waits up to 3 s, then is dropped. To gesture while speaking, put [nod] etc. in the say text instead.`,
+    inputSchema: obj({ action: { type: "string", description: `A gesture of the creature (device.creature.gestures), e.g. ${ACTIONS.join(", ")}.` } }, ["action"]),
     auth: true,
     run: (api, t, a) => api.command(t, "act", a),
+  },
+  {
+    name: "molty_package",
+    description: `Packages (cap pkg): data-only drawings a Molty keeps, e.g. the astrology package (docs/PACKAGES.md). op available -> {ref, device, packages:[{id, name, version, kind, description, layouts?, skills?, install, installed?, update?}]}: every package that exists (works offline; installed = the version on this Molty or null, when it is online), for offering one to your human; pass an entry's install object as is to op install. catalog_unavailable when the repo's index can't be read. op list -> {packages:[{id, name, version, kind, size}]} (installed only); op remove {id}; op install {id, url, sha256, size, name}: Molty asks its owner with one tap, downloads the file itself, checks its sha256 and stores it -> {installed, version}, or declined, bad_url, too_big, hash_mismatch, no_space, busy. install is a job: wait true blocks at most ${TALK_BUDGET_MS / 1000} s, then {job, status:"pending"} (molty_wait). An entry's skills (molty-astro) know how to play it: use them, not raw scene calls.`,
+    inputSchema: obj(
+      {
+        op: { type: "string", enum: ["available", "install", "remove", "list"], description: "available (what exists), install, remove or list (what is installed)." },
+        id: { type: "string", description: "Package id (a-z 0-9 -), for install and remove." },
+        url: { type: "string", description: "install: the package file's raw URL in the repo." },
+        sha256: { type: "string", description: "install: the file's sha256 (hex), from packages/index.json." },
+        size: { type: "integer", description: "install: the file's size in bytes." },
+        name: { type: "string", description: "install: the name Molty shows in its question." },
+        wait: { type: "boolean", description: "install: block until it is installed (bounded)." },
+      },
+      ["op"],
+    ),
+    auth: true,
+    run: (api, t, { op, ...a }) => (op === "install" ? commandWait(api, t, "pkg.install", a) : api.command(t, `pkg.${op}`, a)),
+  },
+  {
+    name: "molty_scene",
+    description: `Scenes (cap scene): op play {pkg, layout, params, ttl_s} replaces the screen with an installed package's layout, drawn from a few params (<= ${MAX_SCENE_PARAMS_BYTES} bytes of JSON); op queue plays it after the current one; op clear melts back to the creature. ttl_s (default 60, max ${MAX_SCENE_TTL_S}): back to the creature when it ends. Errors not_installed, no_layout, bad_params.`,
+    inputSchema: obj(
+      {
+        op: { type: "string", enum: ["play", "queue", "clear"], description: "play, queue or clear." },
+        pkg: { type: "string", description: "Installed package id." },
+        layout: { type: "string", description: "One of the package's layouts." },
+        params: { type: "object", description: "The layout's params." },
+        ttl_s: { type: "integer", description: `Seconds before Molty returns to the creature, 1..${MAX_SCENE_TTL_S}; default 60.` },
+      },
+      ["op"],
+    ),
+    auth: true,
+    run: (api, t, { op, ...a }) => api.command(t, `scene.${op}`, a),
   },
   {
     name: "molty_gestures",
@@ -169,6 +207,7 @@ export const TOOLS: ToolDef[] = [
         text: { type: "string", description: "Text to synthesize, at most 4096 bytes." },
         voice: { type: "string", description: "Optional relay TTS voice (provider-specific, e.g. luna for Workers AI Aura)." },
         in_reply_to: IN_REPLY_TO,
+        keep: KEEP,
         client_timing: CLIENT_TIMING,
         wait: { type: "boolean", description: `true: block until spoken (at most ${TALK_BUDGET_MS / 1000} s, then {job, status:"pending"} for molty_wait).` },
       },
@@ -190,6 +229,16 @@ export const TOOLS: ToolDef[] = [
     ),
     auth: true,
     run: (api, t, a) => api.command(t, "quick", a),
+  },
+  {
+    name: "molty_keep",
+    description: `First words: an utterance with \`opener\` means Molty is already speaking those planned words (opener_wpm words a minute). Claim your branch point at once, with your fastest model, before you think: keep {words: m, in_reply_to}. Molty never plays past word m; start your reply with the opener's first m words word for word (or pass keep: m on molty_talk / molty_say and send only what follows), and it switches to your words at word m. Too late for m: {keep, late:true}: Molty finishes the clause playing now; start your reply with \`said\`. Without words: where it is ({words, playing, sent, wpm}). Claims the turn like molty_say.`,
+    inputSchema: obj({
+      words: { type: "integer", description: "How many of the opener's words your reply keeps (0..its length)." },
+      in_reply_to: IN_REPLY_TO,
+    }),
+    auth: true,
+    run: (api, t, a) => api.command(t, "keep", a),
   },
   {
     name: "molty_phrases",
@@ -233,6 +282,7 @@ export const TOOLS: ToolDef[] = [
       listen_ms: { type: "integer", description: LISTEN_MS_DOC },
       voice: { type: "string", description: "Optional relay TTS voice." },
       in_reply_to: IN_REPLY_TO,
+      keep: KEEP,
       client_timing: CLIENT_TIMING,
       ...VAD_PROPS,
     }),
@@ -342,7 +392,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "molty_events",
-    description: `Your unread Molty events (${AGENT_EVENT_TYPES.join(", ")}), oldest first: {events:[{id, type, ts, data}], next, more}. Default since = your read cursor (each event is returned to you once; it advances). wait_s (0..${INBOX_LIMITS.mcpWaitS}, default 0) long-polls until an event arrives. since = an event id (e.g. e41) re-reads after it. shake {peak_g, reversals, ms, listening?, turn_id?} (listening: Molty is already listening, wait for the utterance); utterance {turn_id, text, reason, ms:{speech, stt}, trigger, device:{caps, mood, voice}, claimed?} (the human's words after a shake: answer with molty_talk {say, in_reply_to: turn_id}; claimed:true = another agent's opener already answers it); utterance.partial {turn_id, seq, text_so_far, new_text, elapsed_ms} (they are STILL talking: context only, never answer it — molty_draft / molty_react at most); draft.used {turn_id, based_on, opener, new_words} / draft.dropped {turn_id, based_on, reason, new_words?} (your draft's fate, to you only); tap {x, y} in 0..1; button {id: accept|reject} (physical buttons: acknowledge / dismiss what you showed, never an answer); answer {job, index, label, reason?} (how a molty_ask ended).`,
+    description: `Your unread Molty events (${AGENT_EVENT_TYPES.join(", ")}), oldest first: {events:[{id, type, ts, data}], next, more}. Default since = your read cursor (each event is returned to you once; it advances). wait_s (0..${INBOX_LIMITS.mcpWaitS}, default 0) long-polls until an event arrives. since = an event id (e.g. e41) re-reads after it. shake {peak_g, reversals, ms, listening?, turn_id?} (listening: Molty is already listening, wait for the utterance); utterance {turn_id, text, reason, ms:{speech, stt}, trigger, device:{caps, mood, voice, creature?}, claimed?} (the human's words after a shake: answer with molty_talk {say, in_reply_to: turn_id}; claimed:true = another agent's opener already answers it); utterance.partial {turn_id, seq, text_so_far, new_text, elapsed_ms} (they are STILL talking: context only, never answer it — molty_draft / molty_react at most); draft.used {turn_id, based_on, opener, new_words} / draft.dropped {turn_id, based_on, reason, new_words?} (your draft's fate, to you only); tap {x, y} in 0..1; button {id: accept|reject} (physical buttons: acknowledge / dismiss what you showed, never an answer); answer {job, index, label, reason?} (how a molty_ask ended); creature {id, name, about, gestures, moods} (your body on Molty's screen changed: speak as it from now on).`,
     inputSchema: obj({
       since: { type: "string", description: "Event id to read after, e.g. e41; default your cursor." },
       wait_s: { type: "integer", description: `Seconds to wait for a new event, 0..${INBOX_LIMITS.mcpWaitS}; default 0.` },

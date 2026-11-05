@@ -10,6 +10,10 @@
 //   button {id:"accept"|"reject"}
 //   answer {job, index:int|null, label?:string, reason?:"timeout"|"cancelled"}
 //          (the human's tap on a molty_ask; also checked against the job's options in room.ts)
+//   creature {id, name, about?, gestures, moods}
+//          (the creature on screen, on each welcome and each change: kept per device and handed to
+//          agents as `device.creature` on utterances, `relay.creature` in status, and a `creature` event
+//          when it changes; see creatureData)
 // Everything else (say.done, link_code, ...) stays internal to the relay.
 
 import { MAX_ASK_LABEL, MAX_ASK_OPTIONS } from "./commands.js";
@@ -90,17 +94,74 @@ export const ASK_NO_ANSWER = ["timeout", "cancelled", "offline"] as const;
  */
 export const UTTERANCE_EVENT = "utterance";
 
-/** Every type an agent can receive and filter on (webhook `events`): device events + the relay's own. */
-export const AGENT_EVENT_TYPES = [...Object.keys(SHAPES), UTTERANCE_EVENT, PARTIAL_EVENT, DRAFT_USED_EVENT, DRAFT_DROPPED_EVENT];
+/**
+ * Relay-generated: the creature on Molty's screen changed (the device reported another one). Data:
+ * the creature, as `device.creature` on an utterance. A device `creature` frame is read by room.ts.
+ */
+export const CREATURE_EVENT = "creature";
 
-/** Chatty types a webhook gets only when its `events` names them (never by default). Pull and ride-along carry them. */
-export const OPT_IN_EVENTS: readonly string[] = [PARTIAL_EVENT];
+/** Who Molty is right now: the creature package on screen, its look and what it plays (docs/CREATURES.md). */
+export type DeviceCreature = {
+  /** The package id ("" for an uploaded .molty). */
+  id: string;
+  name: string;
+  /** How it looks, and one line per gesture and mood: what each looks like on this animal. */
+  about?: { look: string; gestures: Record<string, string>; moods: Record<string, string> };
+  /** The gestures (molty_act) and moods (molty_mood) it plays; absent for a .molty (every one). */
+  gestures?: string[];
+  moods?: string[];
+};
+
+export const CREATURE_LIMITS = { look: 240, line: 100, names: 32 };
+const CR_ID_RE = /^[a-z0-9-]{0,32}$/;
+const CR_NAME_RE = /^[A-Za-z0-9_-]{1,24}$/;
+const words = (v: unknown, max: number): v is string => typeof v === "string" && v.length >= 1 && v.length <= max && /^[\x20-\x7e]+$/.test(v);
+const names = (v: unknown): v is string[] => Array.isArray(v) && v.length <= CREATURE_LIMITS.names && v.every((n) => typeof n === "string" && CR_NAME_RE.test(n));
+const lines = (v: unknown): Record<string, string> | undefined => {
+  if (v === undefined) return {};
+  if (!isRecord(v) || Object.keys(v).length > CREATURE_LIMITS.names) return undefined;
+  for (const [k, l] of Object.entries(v)) if (!CR_NAME_RE.test(k) || !words(l, CREATURE_LIMITS.line)) return undefined;
+  return v as Record<string, string>;
+};
+
+/** The device's `creature` frame, checked and bounded (every field the firmware's, nothing else), or undefined to drop it. */
+export function creatureData(d: unknown): DeviceCreature | undefined {
+  if (!isRecord(d) || typeof d.id !== "string" || !CR_ID_RE.test(d.id) || !words(d.name, 32)) return undefined;
+  const out: DeviceCreature = { id: d.id, name: d.name };
+  if (d.about !== undefined) {
+    const a = d.about;
+    if (!isRecord(a) || !words(a.look, CREATURE_LIMITS.look)) return undefined;
+    const g = lines(a.gestures), m = lines(a.moods);
+    if (!g || !m) return undefined;
+    out.about = { look: a.look, gestures: g, moods: m };
+  }
+  for (const k of ["gestures", "moods"] as const) {
+    if (d[k] === undefined) continue;
+    if (!names(d[k])) return undefined;
+    out[k] = d[k] as string[];
+  }
+  return out;
+}
+
+/** Every type an agent can receive and filter on (webhook `events`): device events + the relay's own. */
+export const AGENT_EVENT_TYPES = [...Object.keys(SHAPES), UTTERANCE_EVENT, PARTIAL_EVENT, DRAFT_USED_EVENT, DRAFT_DROPPED_EVENT, CREATURE_EVENT];
+
+/** Types a webhook gets only when its `events` names them (never by default): chatty, or nothing to answer. Pull and ride-along carry them. */
+export const OPT_IN_EVENTS: readonly string[] = [PARTIAL_EVENT, CREATURE_EVENT];
 
 /** What a webhook without `events` receives. */
 export const DEFAULT_WEBHOOK_EVENTS = AGENT_EVENT_TYPES.filter((t) => !OPT_IN_EVENTS.includes(t));
 
 /** Does a webhook with this `events` list (absent = the default) want `type`? */
 export const webhookWants = (events: string[] | undefined, type: string) => (events ? events.includes(type) : !OPT_IN_EVENTS.includes(type));
+
+const SAMPLE_CREATURE: JsonObject = {
+  id: "duck",
+  name: "Duck",
+  about: { look: "A round yellow duckling with an orange bill.", gestures: { nod: "bobs its head forward" }, moods: { idle: "keeps busy with small things" } },
+  gestures: ["nod"],
+  moods: ["idle"],
+};
 
 /** One representative event per type: webhook templates are dry-run against every type they will receive. */
 export const SAMPLE_EVENTS: Record<string, AgentEvent> = {
@@ -119,11 +180,12 @@ export const SAMPLE_EVENTS: Record<string, AgentEvent> = {
       reason: "turn_end",
       ms: { speech: 1800, stt: 120 },
       trigger: "shake",
-      device: { caps: ["say", "listen", "shake_talk"], mood: "thinking", voice: "box" },
+      device: { caps: ["say", "listen", "shake_talk"], mood: "thinking", voice: "box", creature: SAMPLE_CREATURE },
       // ms until Molty says its own filler unless an agent acts first (core/phrases.ts); absent when off
       filler_in_ms: 2300,
     },
   },
+  [CREATURE_EVENT]: { id: "e10", type: CREATURE_EVENT, ts: 0, data: SAMPLE_CREATURE },
   [PARTIAL_EVENT]: {
     id: "e6",
     type: PARTIAL_EVENT,
@@ -170,6 +232,8 @@ export function eventSentence(ev: AgentEvent): string {
       return `The human said to Molty: "${String(d.text ?? "")}"`;
     case PARTIAL_EVENT:
       return `The human is still talking to Molty (context only, don't answer yet): "${String(d.text_so_far ?? "")}"`;
+    case CREATURE_EVENT:
+      return `Molty is now ${d.name}: speak as this creature (its look and moves are in the event)`;
     case DRAFT_USED_EVENT:
       return `Molty is speaking your opener "${String(d.opener ?? "")}": you have the turn, continue with in_reply_to`;
     case DRAFT_DROPPED_EVENT:

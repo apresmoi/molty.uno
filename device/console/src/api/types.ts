@@ -63,6 +63,10 @@ export interface CreatureRegistry {
   available: string[];
 }
 
+/** One creature package on the device (GET /api/creature/list). */
+export interface CreaturePackage { id: string; name: string; version: string; source: 'builtin' | 'installed'; }
+export interface CreatureList { ok: true; current: string; creatures: CreaturePackage[]; } // current "" = an uploaded .molty is shown
+
 /** Fluid creature state (GET/POST /api/creature/state while current == "fluid"). */
 export interface FluidState {
   ok: true;
@@ -96,6 +100,8 @@ export interface FluidState {
 /** Partial order accepted by POST /api/creature/state for the fluid creature. */
 export interface FluidOrder {
   state?: string; // blob | thinking | text | creature | autoplay | effect:ripple|vortex|wave
+  act?: string; // a one-shot gesture (cute_act.h names), as the link's act
+  mood?: string; // idle | listening | thinking | speaking | happy | sleepy | surprised, as the link's mood
   text?: string;
   wpm?: number; // 100..800
   palette?: string; // green | amber | pastel
