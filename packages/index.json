@@ -12,23 +12,23 @@
     "version": "1.0.0",
     "kind": "creature",
     "path": "packages/cat/cat.json",
-    "size": 27677,
-    "sha256": "07732c6ec8b62d5c4ee788db3bff19a1d6a532f4cf9a72676411cc76e1a869e5"
+    "size": 29513,
+    "sha256": "3e6bbbca9aa5adac1a234dc94e92d0619cf0dcba7345b607940a05b9ea9bdac2"
   },
   "duck": {
     "name": "Duck",
     "version": "1.0.0",
     "kind": "creature",
     "path": "packages/duck/duck.json",
-    "size": 27757,
-    "sha256": "78c415d0ce44e6f01af0bdada0e6b1b2d2df20af503b5d36ba3a633db8152291"
+    "size": 29651,
+    "sha256": "30101ace0159a92884856e68ee624edabaceac9b2febe7e44e53cad277ed40d8"
   },
   "octopus": {
     "name": "Octopus",
     "version": "1.0.0",
     "kind": "creature",
     "path": "packages/octopus/octopus.json",
-    "size": 30866,
-    "sha256": "efa7c5b58f90a5e47a97e1e2d17fb436288e64e6f24c81a718d26aa8de796eaf"
+    "size": 32593,
+    "sha256": "41fbbad7b5db23f40bce826eb57dac560472335efbb7ea2f5192b46261178366"
   }
 }

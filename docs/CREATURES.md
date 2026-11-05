@@ -18,6 +18,7 @@ of that code became a channel; nothing was dropped on purpose (losses are listed
 ```jsonc
 { "v": "molty-pkg/1", "id": "duck", "name": "Duck", "version": "1.0.0", "kind": "creature",
   "creature": {
+    "about":    { "look": "...", "gestures": { "<action>": "..." }, "moods": { "<mood>": "..." } },
     "body":     { "palette": {...}, "bones": [...], "parts": [...] },  // the lab's v2 rig (SPEC.md), unchanged
     "walk":     { "hz", "stride", "pace", "burst", "radial", "quad", "surge": [terms], "ch": [channels] },
     "groups":   { "<name>": { "bones": [ids], "attr": { "<k>": [one number per bone] } } },
@@ -29,6 +30,12 @@ of that code became a channel; nothing was dropped on purpose (losses are listed
     "tints":    [Tint],
     "ambient":  Ambient } }
 ```
+
+**About** is for the agent that speaks as this Molty, never for the player: `look`, 2 or 3 plain sentences on what a
+person sees on the round screen (at most 240 characters), and one line for every gesture and every mood it plays,
+`idle` included, on what that looks like on this animal (at most 100 characters each; printable ASCII).
+`packages/tools/format.mjs` checks it is complete. The device sends it to the relay with the gestures and moods it plays
+(`cp_info`; [AGENT-LINK.md](AGENT-LINK.md#device-events)), and agents get it as `device.creature`.
 
 Bones may carry `sit` and `fold` (a leg's seated position and folded length, read by the kit's generators at build time),
 `wave` (an arm joint's axis, joint and arm index, the same) and `d` (depth down its chain, for colour that ripples).
@@ -150,7 +157,7 @@ At most 64 live particles.
 
 | | limit | duck / cat / octopus |
 |---|---|---|
-| file | 32 KB | 27.6 / 26.8 / 30.9 KB |
+| file | 32 KB | 29.0 / 28.8 / 31.8 KB |
 | bones, parts | 96, 96 | 13, 18 / 21, 39 / 37, 45 |
 | channels (all blocks) | 512 | 318 / 366 / 242 |
 | terms, factors | 1024, 2048 | 465, 792 / 540, 714 / 328, 478 |
