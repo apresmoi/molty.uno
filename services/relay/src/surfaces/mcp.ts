@@ -146,10 +146,10 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "molty_package",
-    description: `Packages (cap pkg): data-only drawings a Molty keeps, e.g. the astrology package (docs/PACKAGES.md). op list -> {packages:[{id, name, version, kind, size}]}; op remove {id}; op install {id, url, sha256, size, name} from the repo's packages/index.json: Molty asks its owner with one tap, downloads the file itself, checks its sha256 and stores it -> {installed, version}, or declined, bad_url, too_big, hash_mismatch, no_space, busy. install is a job: wait true blocks at most ${TALK_BUDGET_MS / 1000} s, then {job, status:"pending"} (molty_wait). Use a skill that knows the package (molty-astro), not raw calls.`,
+    description: `Packages (cap pkg): data-only drawings a Molty keeps, e.g. the astrology package (docs/PACKAGES.md). op available -> {ref, device, packages:[{id, name, version, kind, description, layouts?, skills?, install, installed?, update?}]}: every package that exists (works offline; installed = the version on this Molty or null, when it is online), for offering one to your human; pass an entry's install object as is to op install. catalog_unavailable when the repo's index can't be read. op list -> {packages:[{id, name, version, kind, size}]} (installed only); op remove {id}; op install {id, url, sha256, size, name}: Molty asks its owner with one tap, downloads the file itself, checks its sha256 and stores it -> {installed, version}, or declined, bad_url, too_big, hash_mismatch, no_space, busy. install is a job: wait true blocks at most ${TALK_BUDGET_MS / 1000} s, then {job, status:"pending"} (molty_wait). An entry's skills (molty-astro) know how to play it: use them, not raw scene calls.`,
     inputSchema: obj(
       {
-        op: { type: "string", enum: ["install", "remove", "list"], description: "install, remove or list." },
+        op: { type: "string", enum: ["available", "install", "remove", "list"], description: "available (what exists), install, remove or list (what is installed)." },
         id: { type: "string", description: "Package id (a-z 0-9 -), for install and remove." },
         url: { type: "string", description: "install: the package file's raw URL in the repo." },
         sha256: { type: "string", description: "install: the file's sha256 (hex), from packages/index.json." },

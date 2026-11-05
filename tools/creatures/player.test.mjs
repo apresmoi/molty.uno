@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { indexEntry } from '../../packages/tools/index.mjs';
 import { creaturePlayer } from '../../device/creatures/js/creature-player.js';
 import { MoodEngine, MOODS } from '../../device/creatures/js/mood.js';
 import { actionPose, ACTIONS } from '../../device/creatures/js/actions.js';
@@ -47,7 +47,7 @@ for (const { id, file, pkg } of creatures) test(`creature package ${id}`, () => 
   assert.ok(statSync(file).size <= 40 * 1024, `${id} is ${statSync(file).size} bytes, over 40 KB`);
   for (const [v, max, what] of limits(pkg.creature)) assert.ok(v <= max, `${id}: ${v} ${what}, limit ${max}`);
   const idx = JSON.parse(readFileSync(new URL('index.json', ROOT)))[id], bytes = readFileSync(file);
-  assert.deepEqual(idx, { name: pkg.name, version: pkg.version, kind: 'creature', path: `packages/${id}/${id}.json`, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') });
+  assert.equal(idx.kind, 'creature'); assert.deepEqual(idx, indexEntry(pkg, bytes));
   const s = play(pkg, 90); assert.equal(s.wild, null, s.wild);
   assert.ok(s.worst < 6000, `${id}: ${s.worst} factors in one frame`);
 });

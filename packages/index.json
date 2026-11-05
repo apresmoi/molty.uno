@@ -3,6 +3,23 @@
     "name": "Astrology",
     "version": "1.0.0",
     "kind": "scenes",
+    "description": "Draws the sky on Molty, the zodiac wheel with aspects, planet globes, the signs, eclipses and transits. Play it with the molty-astro skill.",
+    "layouts": [
+      "globe",
+      "saturn",
+      "sign",
+      "chart",
+      "signs",
+      "aspect",
+      "transit",
+      "solar-eclipse",
+      "occultation",
+      "appulse",
+      "lunar-eclipse"
+    ],
+    "skills": [
+      "molty-astro"
+    ],
     "path": "packages/astrology/astrology.json",
     "size": 72667,
     "sha256": "2e7ef6f7559e6014bd005a1c610d34457192bc2c9a687b6072643d6cd89b39de"
@@ -11,6 +28,7 @@
     "name": "Cat",
     "version": "1.0.0",
     "kind": "creature",
+    "description": "A small cat that lives on the screen, with its own moods and gestures. Built into every Molty; install only for a newer version.",
     "path": "packages/cat/cat.json",
     "size": 32213,
     "sha256": "852668c4c6f7fae4fd6f0af6d9d4776405a5b7269c1682412c185ec6d62a96fa"
@@ -19,6 +37,7 @@
     "name": "Duck",
     "version": "1.0.0",
     "kind": "creature",
+    "description": "A round little duck that lives on the screen, with its own moods and gestures. Built into every Molty; install only for a newer version.",
     "path": "packages/duck/duck.json",
     "size": 30773,
     "sha256": "b402ea9f0b0e1241d8345805e49a4e92ea9ffbbd1fff7e917a05d0af62f47f4f"
@@ -27,6 +46,7 @@
     "name": "Octopus",
     "version": "1.0.0",
     "kind": "creature",
+    "description": "An octopus that lives on the screen, arms always moving, with its own moods and gestures. Built into every Molty; install only for a newer version.",
     "path": "packages/octopus/octopus.json",
     "size": 33575,
     "sha256": "ffaf36a2381a83cc6a783d77ac9b04822f796b0c0bb2298a932fc8c920e39397"

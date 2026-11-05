@@ -83,6 +83,7 @@ import { type AgentEvent, CREATURE_EVENT, DEFAULT_WEBHOOK_EVENTS, type DeviceCre
 import { LISTEN_ADOPT_FEATURE, LOCAL_LISTEN_RE, type TurnClaim, type TurnRecord, claimTurn, turnTimings, utteranceData } from "./turns.js";
 import { API_VERSION, FEATURES, compareVersions } from "./version.js";
 import type { ReleaseLookup, ReleaseSource } from "./releases.js";
+import { PackageCatalog } from "./catalog.js";
 import { type DeviceFacts, type FirmwareBlock, CONSOLE_HINT, firmwareBlock, howToUpdate, installable, tooOld, updateActions } from "./updates.js";
 import {
   type DeliveryError,
@@ -271,6 +272,8 @@ export interface RoomDeps {
   resolveHost?: Resolver;
   /** Latest firmware release (core/releases.ts); absent = always "unavailable". */
   releases?: ReleaseSource;
+  /** The branch or tag whose packages/index.json is the catalog (pkg.available, core/catalog.ts); default main. */
+  packagesRef?: string;
   /** The reflex's model engines (core/reflex.ts): Worker secrets TYPESAFE_API_KEY / OPENAI_API_KEY. Never logged. */
   reflexKeys?: { jev?: string; openai?: string };
   /**
@@ -688,6 +691,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private readonly fetcher: NonNullable<RoomDeps["fetch"]>;
   private readonly resolveHost: RoomDeps["resolveHost"];
   private readonly releases: ReleaseSource;
+  private readonly catalog: PackageCatalog;
   /** An override of the filler's classifier (RoomDeps.classifier); absent = Molty's reflex (fillerCategory). */
   private readonly classifier: UtteranceClassifier | undefined;
   /** The voice box, spoken to over whichever voice socket is live (in-flight requests only). */
@@ -794,6 +798,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     this.fetcher = deps.fetch ?? ((req) => globalThis.fetch(req));
     this.resolveHost = deps.resolveHost;
     this.releases = deps.releases ?? NO_RELEASES;
+    this.catalog = new PackageCatalog(this.fetcher, this.clock, deps.packagesRef);
     this.reflexKeys = { ...(deps.reflexKeys?.jev ? { jev: deps.reflexKeys.jev } : {}), ...(deps.reflexKeys?.openai ? { openai: deps.reflexKeys.openai } : {}) };
     this.classifier = deps.classifier;
     this.box = new RemoteVoiceProvider(() => this.boxSocket(), this.clock);
@@ -1180,6 +1185,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       const hush = this.humanSpeaking();
       if (hush) return hush;
     }
+    if (cmd.name === "pkg.available") return this.available();
     const live = this.liveSocket();
     if (!live) return fail("device_offline");
     if (cmd.name === "act") {
@@ -1633,6 +1639,26 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       this.clock.clearTimeout(timer);
       this.pendingPkgs.delete(id);
     }
+  }
+
+  /**
+   * pkg.available: the repo's catalog (needs no device), each entry marked with what this Molty has when
+   * it is online with packages: `installed` (its version or null) and `update` (the catalog's is newer).
+   */
+  private async available(): Promise<Outcome> {
+    const cat = await this.catalog.entries();
+    if (!cat.ok) return cat;
+    const live = this.liveSocket();
+    const device = !live ? "offline" : live.getMeta()?.caps?.includes(PKG_CAP) ? "online" : "unsupported";
+    const list = device === "online" ? await this.sendCmd("pkg.list", {}) : undefined;
+    const have = new Map<string, string>();
+    if (list?.ok && Array.isArray(list.result.packages)) for (const p of list.result.packages) if (isRecord(p) && typeof p.id === "string") have.set(p.id, String(p.version ?? ""));
+    const packages = cat.result.packages.map((e) => {
+      if (!list?.ok) return e;
+      const v = have.get(e.id);
+      return { ...e, installed: v ?? null, ...(v !== undefined && (compareVersions(e.version, v) ?? 0) > 0 ? { update: true } : {}) };
+    });
+    return { ok: true, result: { ref: cat.result.ref, device: list && !list.ok ? "unknown" : device, packages } };
   }
 
   /** Device `pkg {job?, id, state: installed|declined|failed, version?, reason?, error?}`: ends its pkg.install job, once. */

@@ -15,7 +15,7 @@ export const WORKING_CAP = "working";
 export const WORKING_ACTIONS: readonly string[] = ["inspect", "paddle"];
 /** A say's `[working]` cue: never a device mark. The relay plays the say to its end, then sets the mood. */
 export const WORKING_MOOD = "working";
-export const COMMANDS = ["status", "state", "mood", "show", "say", "quick", "keep", "listen", "volume", "imu", "diag", "log", "act", "gestures", "pkg.install", "pkg.remove", "pkg.list", "scene.play", "scene.queue", "scene.clear", "creature.select", "creature.list"] as const;
+export const COMMANDS = ["status", "state", "mood", "show", "say", "quick", "keep", "listen", "volume", "imu", "diag", "log", "act", "gestures", "pkg.install", "pkg.remove", "pkg.list", "pkg.available", "scene.play", "scene.queue", "scene.clear", "creature.select", "creature.list"] as const;
 /** What the human's inputs can do (`gestures`; firmware: sense/gesture.h). */
 export const GESTURE_INPUTS = ["tap", "double_tap", "button_accept", "button_reject"] as const;
 export const GESTURE_ACTIONS = ["none", "talk", "event", "stop"] as const;
@@ -385,6 +385,7 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
       return { name: n, args: { id: pkgId(args.id, "id") }, job: false };
     case "creature.list":
     case "pkg.list":
+    case "pkg.available":
     case "scene.clear":
       only(args, []);
       return { name: n, args: {}, job: false };
