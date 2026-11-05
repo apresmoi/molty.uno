@@ -27,7 +27,8 @@ make creatures         # re-export device/creatures/molty/*.molty (output must b
   and its JS twin `device/creatures/js/actions.js`; change both, then
   `node device/creatures/tools/act-golden.mjs` (output committed; the cute host test checks it).
   The action names are also `ACTIONS` in `services/relay/src/core/commands.ts` (check-skill
-  compares all three).
+  compares all three). These are the shared gestures; a creature package adds its own by name with a `dur`
+  (docs/CREATURES.md section 1): never list a package's gesture in firmware or relay code.
 - The default relay URL lives in exactly three constants (firmware Kconfig, console,
   CLI); see `docs/AGENT-LINK.md#default-relay`.
 - Don't put personal data (device IDs, IPs, account names, local paths) in code, tests

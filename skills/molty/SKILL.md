@@ -29,8 +29,7 @@ private one, see [self-hosting](references/self-hosting.md)).
    ```
 
    It prints Molty's 4-digit code: tell your human "Molty shows 1234 — tap it to accept me."
-   It stores the device in `~/.config/molty/env` and the agent token in
-   `~/.config/molty/token` (0600). The message names a Relay? Run it with
+   It stores the device in `~/.config/molty/env`, the agent token in `~/.config/molty/token` (0600). The message names a Relay? Run it with
    `MOLTY_RELAY=<that relay>` in front; it is stored too. Without a shell, pair over REST or
    MCP: [api.md](references/api.md#pair).
 2. **The agent token is a secret.** Never print, echo or paste it — not in chat, logs,
@@ -53,7 +52,7 @@ private one, see [self-hosting](references/self-hosting.md)).
 | `quick.sh <id> [--reply <turn_id>]` | play a cached quick phrase now | the job |
 | `ask.sh "question" yes no later` | speak + 1–5 tap buttons (labels ≤ 8 chars) | `ANSWER: yes \| index 0` |
 | `mood.sh happy [hold_s]` | set a mood | the result |
-| `act.sh nod` | a one-shot gesture (nod, wiggle, bounce, …) | the result |
+| `act.sh eat` | a gesture from `device.creature.gestures` (the cat has `eat`) | the result |
 | `watch.py` / `watch.py --once [wait_s]` | one line per event, forever / unread events, then exit | `MOLTY utterance: '…'` |
 
 ## Key rules
@@ -62,8 +61,8 @@ private one, see [self-hosting](references/self-hosting.md)).
   tool. No planning, lookups or status checks.
   - Can answer from what you know → one `talk`, the answer. Nothing else in the turn.
   - Needs any work (search, tools, a long think) → say what you'll do and start working:
-    `talk {"say":"Searching for that. [working]"}`. Molty animates by itself until you speak
-    again. Never send gestures to fill the wait. Over ~20 s of work: another one-liner saying
+    `talk {"say":"Searching for that. [working]"}`. Molty animates itself, its own small
+    moves, until you speak again. Never send gestures to fill the wait. Over ~20 s of work: another one-liner saying
     where you are, `[working]` again. Then answer.
 - **Fastest model for that first line**, always; a slower one only for the work behind it.
 - **Follow a `202 pending` talk to its end.** Never finish a run with a talk unread: their
