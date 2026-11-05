@@ -52,6 +52,14 @@ static void mood_unlock(void) { xSemaphoreGive(atomic_load(&s_mood_lock)); }
 
 unsigned link_cmd_mood_gen(void) { return atomic_load(&s_mood_gen); }
 
+cJSON *link_cmd_creature_frame(unsigned *gen)
+{
+    char *info = mole_fluid_creature_info(gen);
+    cJSON *f = link_evt_creature_frame(info);
+    free(info);
+    return f;
+}
+
 /* The same lookup the creature's setter uses (case-insensitive, escapes decoded), so
  * every body that sets a mood counts. */
 static void note_state_body(const char *body)

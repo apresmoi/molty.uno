@@ -16,6 +16,12 @@ esp_err_t molty_speaker_set_volume(uint8_t vol) { (void)vol; return ESP_OK; }
 cJSON *mole_diag_json(int t) { (void)t; return cJSON_CreateObject(); }
 char *mole_diag_log_text(uint32_t s, size_t m, uint32_t *n, bool j) { (void)s;(void)m;(void)n;(void)j; return NULL; }
 esp_err_t mole_fluid_set_text(const char *t, int len) { (void)t;(void)len; return ESP_OK; }
+/* the creature on screen (mole_fluid.c): its info and generation */
+static unsigned fluid_creature_gen; static const char *fluid_creature_info;
+char *mole_fluid_creature_info(unsigned *gen) {
+    if (!fluid_creature_info || *gen==fluid_creature_gen) return NULL;
+    *gen=fluid_creature_gen; return strdup(fluid_creature_info);
+}
 static int acted = -1, acts;
 void mole_fluid_act(int a) { acted = a; acts++; }
 /* the bindings (mole_fluid.c, NVS): what cmd gestures passes through */
@@ -162,5 +168,19 @@ int main(void) {
     for (int i=0;i<8;i++) { pkg_ran=NULL; assert(link_cmd_run(pkgs[i],a,&out)==ESP_OK && pkg_ran && !strcmp(pkg_ran,pkgs[i])); }
     cJSON_Delete(a);
     cJSON_Delete(sdk_sent);
-    puts("LINK CMD PASS: explicit moods counted (link mood cmd, local state POST) under the mood lock, own/rejected moods not; screen commands cancel a question only once accepted; act never takes the screen; react moods / acts hold the listen's own reactions for their length");
+    /* the creature for the relay: nothing before one loaded, then its info once per generation */
+    { unsigned sent=0;
+      assert(!link_cmd_creature_frame(&sent));
+      fluid_creature_info="{\"id\":\"duck\",\"name\":\"Duck\",\"about\":{\"look\":\"A round yellow duckling.\"},\"gestures\":[\"nod\"],\"moods\":[\"idle\"]}"; fluid_creature_gen=1;
+      cJSON *f=link_cmd_creature_frame(&sent); assert(f && sent==1);
+      assert(!strcmp(cJSON_GetObjectItem(f,"t")->valuestring,"evt") && !strcmp(cJSON_GetObjectItem(f,"name")->valuestring,"creature"));
+      const cJSON *d=cJSON_GetObjectItem(f,"data");
+      assert(!strcmp(cJSON_GetObjectItem(d,"id")->valuestring,"duck") && cJSON_GetObjectItem(cJSON_GetObjectItem(d,"about"),"look") && cJSON_GetArraySize(cJSON_GetObjectItem(d,"gestures"))==1);
+      cJSON_Delete(f);
+      assert(!link_cmd_creature_frame(&sent));   /* unchanged: nothing */
+      fluid_creature_info="{\"id\":\"\",\"name\":\"Blob\"}"; fluid_creature_gen=2;
+      f=link_cmd_creature_frame(&sent); assert(f && sent==2 && !strcmp(cJSON_GetObjectItem(cJSON_GetObjectItem(f,"data"),"name")->valuestring,"Blob")); cJSON_Delete(f);
+      sent=0; f=link_cmd_creature_frame(&sent); assert(f && sent==2); cJSON_Delete(f);   /* a new welcome: again */
+    }
+    puts("LINK CMD PASS: explicit moods counted (link mood cmd, local state POST) under the mood lock, own/rejected moods not; screen commands cancel a question only once accepted; act never takes the screen; react moods / acts hold the listen's own reactions for their length; the creature frame once per change");
 }

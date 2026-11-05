@@ -79,6 +79,11 @@ esp_err_t mole_fluid_creature_file_get(uint8_t **out, size_t *len, bool *is_defa
  * itself is kept by the caller (pkg_creature.h). Safe from any task.
  */
 esp_err_t mole_fluid_creature_package(const char *id, char *json, size_t len);
+/** What an agent is told about the creature on screen: cp_info's JSON for a package ({id, name,
+ *  about, gestures, moods}), {id: "", name} for a .molty. malloc'd (the caller frees) with *gen set to
+ *  its generation (it moves at each change), or NULL while it is still *gen (0: never seen) or before
+ *  the first creature loaded (link_cmd_creature_frame). Safe from any task. */
+char *mole_fluid_creature_info(unsigned *gen);
 /** The creature package shown or on its way into id (n bytes), "" for a .molty creature. */
 void mole_fluid_creature_id(char *id, size_t n);
 

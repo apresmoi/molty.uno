@@ -132,6 +132,7 @@ typedef struct { float x, y, k; } mote_t;
 
 struct cp {
     char id[CP_ID_MAX + 1], name[CP_NAME_MAX + 1], version[16];
+    char *info;                  /* cp_info: what an agent is told about this creature (JSON)    */
     cp_body_t body;
     /* names and values */
     int nslot, slot_cap;
@@ -1250,9 +1251,49 @@ static int walk_c(cx_t *x, const cJSON *wj) {
     return list_c(x, cJSON_GetObjectItemCaseSensitive(wj, "ch"), &x->c->walk.l);
 }
 
+/* about: { look, gestures: { name: line }, moods: { name: line } }, words only (packages/tools/format.mjs checks them all) */
+static bool words_ok(const cJSON *v, size_t max) {
+    const size_t n = cJSON_IsString(v) ? strlen(v->valuestring) : 0;
+    if (n < 1 || n > max) return false;
+    for (size_t i = 0; i < n; i++) if (v->valuestring[i] < 32 || v->valuestring[i] > 126) return false;
+    return true;
+}
+static int about_c(cx_t *x, const cJSON *ab) {
+    static const char *const AK[] = { "look", "gestures", "moods", NULL };
+    TRY(keys_only(x, ab, AK, "creature: about"));
+    const cJSON *look = cJSON_GetObjectItemCaseSensitive(ab, "look");
+    if (!words_ok(look, 240)) FAIL(x, "creature: about look");
+    for (int i = 0; i < 2; i++) {
+        const cJSON *l = cJSON_GetObjectItemCaseSensitive(ab, AK[i + 1]);
+        if (l && !cJSON_IsObject(l)) FAIL(x, "creature: about lines");
+        for (const cJSON *e = l ? l->child : NULL; e; e = e->next)
+            if (!key_name(e->string) || !words_ok(e, 100)) FAIL(x, "creature: about lines");
+    }
+    return 0;
+}
+
+/* cp_info: id, name, about, and what it plays: its gestures this firmware knows, idle and its moods */
+static char *info_c(const cp_t *c, const cJSON *ab) {
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "id", c->id);
+    cJSON_AddStringToObject(o, "name", c->name);
+    if (ab) cJSON_AddItemToObject(o, "about", cJSON_Duplicate(ab, true));
+    cJSON *g = cJSON_AddArrayToObject(o, "gestures"), *m = cJSON_AddArrayToObject(o, "moods");
+    for (int i = 0; i < c->ngest; i++) if (c->gest[i].act >= 0) cJSON_AddItemToArray(g, cJSON_CreateString(cute_act_name(c->gest[i].act)));
+    for (int k = 0; k < CP_N_MOODS; k++) {
+        bool has = k == 0;
+        for (int i = 0; i < c->nmood; i++) has |= c->mood[i].mood == k;
+        if (has) cJSON_AddItemToArray(m, cJSON_CreateString(MOODS[k]));
+    }
+    char *s = cJSON_PrintUnformatted(o), *out = s ? CP_MALLOC(strlen(s) + 1) : NULL;
+    if (out) strcpy(out, s);
+    cJSON_free(s); cJSON_Delete(o);
+    return out;
+}
+
 static const char *compile(cp_t *c, const cJSON *cr) {
     cx_t x = { .c = c };
-    static const char *const CK[] = { "body", "walk", "groups", "events", "base", "gestures", "moods", "post", "tints", "ambient", NULL };
+    static const char *const CK[] = { "about", "body", "walk", "groups", "events", "base", "gestures", "moods", "post", "tints", "ambient", NULL };
     if (keys_only(&x, cr, CK, "creature: unknown key") < 0) return x.err;
     for (int k = 0; k < 18; k++) slot(&x, POSE[k]);
     slot(&x, "t"); slot(&x, "dt"); slot(&x, "act");
@@ -1294,6 +1335,9 @@ static const char *compile(cp_t *c, const cJSON *cr) {
     terms_t st;   /* the walk engine's (the device stands still): checked, not played */
     if (surge && terms_c(&x, surge, &st) < 0) return x.err;
     if (tints_c(&x, cJSON_GetObjectItemCaseSensitive(cr, "tints")) < 0 || ambient_c(&x, cJSON_GetObjectItemCaseSensitive(cr, "ambient")) < 0) return x.err;
+    const cJSON *ab = cJSON_GetObjectItemCaseSensitive(cr, "about");
+    if (ab && about_c(&x, ab) < 0) return x.err;
+    if (!(c->info = info_c(c, ab))) return "oom";
     /* the mood weights and clocks are kept from frame to frame, like any name starting w. w6. m. */
     for (int s = 0; s < c->nslot; s++) {
         const char *n = c->slot[s].name;
@@ -1340,12 +1384,13 @@ void cp_destroy(cp_t *c) {
     if (!c) return;
     for (int g = 0; g < c->ngroup; g++) CP_FREE(c->group[g].attr);
     CP_FREE(c->slot); CP_FREE(c->C); CP_FREE(c->Cd); CP_FREE(c->fac); CP_FREE(c->term); CP_FREE(c->ch); CP_FREE(c->item);
-    CP_FREE(c->mix); CP_FREE(c->st); CP_FREE(c->hist); CP_FREE(c->gest); CP_FREE(c->tint);
+    CP_FREE(c->mix); CP_FREE(c->st); CP_FREE(c->hist); CP_FREE(c->gest); CP_FREE(c->tint); CP_FREE(c->info);
     CP_FREE(c);
 }
 
 const char *cp_id(const cp_t *c) { return c->id; }
 const char *cp_name(const cp_t *c) { return c->name; }
 const char *cp_version(const cp_t *c) { return c->version; }
+const char *cp_info(const cp_t *c) { return c->info; }
 const cp_body_t *cp_body(const cp_t *c) { return &c->body; }
 int cp_bone_find(const cp_t *c, const char *id) { return bone_of(c, id); }

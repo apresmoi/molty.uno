@@ -18,6 +18,10 @@ const char *link_cmd_current_mood(void);
 /* Count of explicit moods accepted so far (link `mood` command, local POST with a mood).
  * link_audio compares it across a job: completion reverts to idle only if unchanged. */
 unsigned link_cmd_mood_gen(void);
+/* The creature on screen for the relay ({"t":"evt","name":"creature"}, docs/AGENT-LINK.md): its
+ * frame when it is no longer *gen (the generation last sent, 0 after a welcome), *gen then its own;
+ * NULL while unchanged. Link task. */
+cJSON *link_cmd_creature_frame(unsigned *gen);
 /* A raw state set (local HTTP API, the link's `state` command): applied, and counted as an explicit mood when it
  * carries a top-level mood string (as the creature reads it), atomically against link_cmd_mood_idle_unless. */
 esp_err_t link_cmd_state_set_explicit(const char *body);
