@@ -12,14 +12,16 @@ device id, and the agent token in its secret store — never in chat.
 2. **Register a webhook** that wakes you with everything a turn needs
    ([events.md](../events.md#webhook)). Point it at whatever starts a run of yours — your own
    endpoint, your platform's message/run API, or a routine's trigger URL — with
-   `"events":["utterance"]` and a body template that carries the words and the turn id:
+   `"events":["utterance"]` and a body template that carries the words, the turn id, the words
+   Molty is already saying (`opener`), who is on screen (`device.creature.id`) and the newest
+   skill version (`device.skill`):
 
    ```sh
    curl -sS -X PUT "$MOLTY_RELAY/v1/webhook" -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{
      "url": "https://<your wake endpoint>",
      "headers": {"authorization": "Bearer <your endpoint secret>"},
      "events": ["utterance"],
-     "body": "{\"message\":\"Molty: the human said \\\"{{event.data.text}}\\\" (turn {{event.data.turn_id}}, device {{device}})\"}"
+     "body": "{\"message\":\"Molty: the human said \\\"{{event.data.text}}\\\" (turn {{event.data.turn_id}}, device {{device}}). Molty is already saying: \\\"{{event.data.opener|(nothing)}}\\\" at {{event.data.opener_wpm|0}} wpm. On screen: {{event.data.device.creature.id|(none)}}. Skill: {{event.data.device.skill|?}}\"}"
    }'
    ```
 
@@ -34,7 +36,8 @@ device id, and the agent token in its secret store — never in chat.
 
 ## On each wake
 
-- **Act on the payload.** The webhook body already holds `text` and `turn_id`: call
+- **Act on the payload.** The webhook body already holds `text`, `turn_id` and `opener`. An
+  opener? Your first call is `keep` ([talking-fast.md](../talking-fast.md#first-words-molty-starts-you-take-over)). Then call
   `POST $MOLTY_RELAY/v1/devices/<id>/talk {"say":"<answer>","in_reply_to":"<turn_id>"}` straight
   away — no `events` / `status` call first, no bookkeeping.
 - **Short replies.** At most 2 sentences (~25 words) per talk; a long answer becomes several

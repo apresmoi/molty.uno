@@ -1111,7 +1111,10 @@ an agent sees events the next time it calls anything (ride-along).
   wants `["utterance"]`: the payload is self-contained — `{{event.data.text}}` (the words),
   `{{event.data.turn_id}}` (for `in_reply_to`), `{{event.data.reason}}`, `{{event.data.ms.speech}}`,
   `{{event.data.ms.stt}}`, `{{event.data.trigger}}`, `{{event.data.device.mood}}`,
-  `{{event.data.device.voice}}`, `{{event.data.device.caps}}` (JSON) — so it can answer with no
+  `{{event.data.device.voice}}`, `{{event.data.device.caps}}` (JSON), `{{event.data.opener}}` and
+  `{{event.data.opener_wpm}}` (the words Molty is already saying, to `keep`),
+  `{{event.data.device.creature.id}}`, `{{event.data.device.skill}}` (the skill's newest version,
+  `skills/molty/CHANGES.md`) — so it can answer with no
   confirming `events` call, e.g. body
   `{"message": "Molty heard: \"{{event.data.text}}\" — answer with molty_talk {say, in_reply_to: \"{{event.data.turn_id}}\"}"}`.
 - No `body`: the relay's own `{"device":"molty-…","event":{id,type,ts,data}}`, `application/json`.
