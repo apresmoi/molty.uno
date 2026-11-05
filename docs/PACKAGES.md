@@ -147,7 +147,7 @@ Every declared param must be sent, and nothing else.
 ## 4. Agents
 
 A skill that uses a package (first: `skills/molty-astro`) keeps all domain knowledge on the agent's side. It reads `packages/index.json`,
-sends `pkg.install` once, then `scene.play` / `scene.queue` with a few params. Astrology maths runs in the skill, never on the device and never in the relay.
+(or the relay's `pkg.available`), sends `pkg.install` once, then `scene.play` / `scene.queue` with a few params. Astrology maths runs in the skill, never on the device and never in the relay.
 
 `skills/molty-astro/scripts/astro.mjs` reads `pkg.list` and installs only when the package is missing or older than the
 index; it waits for the install job (the owner's tap, at most about 2 min) and reinstalls once when a scene answers
@@ -198,7 +198,15 @@ so a new device has them without a download. `POST /api/creature/select?id=` (co
   `installed` -> `{ installed, version }`; `declined` -> error `declined` (the reason in its message); `failed` -> its `error`.
   No event within 120 s: `pkg_timeout`.
 - `pkg.remove` `{ id }`, `pkg.list` `{}`, `scene.clear` `{}`: forwarded as they are.
+- `pkg.available` `{}`: the catalog, what an agent offers its human (`core/catalog.ts`). The relay reads
+  `https://raw.githubusercontent.com/apresmoi/molty.uno/<ref>/packages/index.json` (`PACKAGES_REF`, default `main`; at most
+  every 5 min, 30 s after a failure; the last good list when a refresh fails) and answers
+  `{ ref, device, packages: [{ id, name, version, kind, description, layouts?, skills?, install, installed?, update? }] }`.
+  `install` is the exact args of `pkg.install` (its url at the same ref). It needs no device and no cap: `device` is `online`
+  (then it asks the device's `pkg.list`: `installed` is the version there or null, `update: true` when the index is newer),
+  `offline`, `unsupported` (no `pkg` cap) or `unknown` (its list failed). An entry the relay could not turn into valid
+  install args is left out. The index unreadable and nothing cached: `503 catalog_unavailable`.
 - `creature.select` `{ id }` and `creature.list` `{}` need the cap `creatures`; forwarded as they are.
 - `scene.play` / `scene.queue` `{ pkg, layout, params (an object, at most 2048 bytes of JSON), ttl_s (1..600, default 60) }`:
   `ttl_s` is always sent. `scene.play` counts as the agent taking the screen (like `mood`): the relay's automatic moods stand down.
-- MCP: `molty_package { op: install|remove|list, … }`, `molty_scene { op: play|queue|clear, … }`.
+- MCP: `molty_package { op: available|install|remove|list, … }`, `molty_scene { op: play|queue|clear, … }`.
