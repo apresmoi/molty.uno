@@ -48,6 +48,10 @@ void  cb_fill(cb_t *b, fluid_sim_t *s, float swell);
 int   cb_tris(const cb_t *b);
 /** The cells of the last raster + stamp: coverage, luminance, colour (0..1), holes. */
 void  cb_cells(const cb_t *b, const float **cov, const float **lum, const float **r, const float **g, const float **bl, const uint8_t **hole);
+/** Where point `at` on bone `bone` (its local coordinates; nbones = the root) was in the last
+ *  raster, framed as at rest (no zoom): out x right, y down, 0..1 across the glass, and its
+ *  height in the body's units (the floor at 0). */
+void  cb_glass(const cb_t *b, int bone, const float at[3], float out[3]);
 
 #ifdef __cplusplus
 }
