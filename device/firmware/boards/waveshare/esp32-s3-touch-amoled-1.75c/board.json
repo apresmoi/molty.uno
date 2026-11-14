@@ -1,0 +1,47 @@
+{
+  "name": "waveshare-esp32-s3-touch-amoled-1.75c",
+  "title": "Waveshare ESP32-S3-Touch-AMOLED-1.75C",
+  "vendor": "waveshare",
+  "url": "https://www.waveshare.com/esp32-s3-touch-amoled-1.75c.htm",
+  "target": "esp32s3",
+  "kconfig": "CONFIG_MOLTY_BOARD_WAVESHARE_ESP32_S3_TOUCH_AMOLED_1_75C",
+  "display": {
+    "width": 466,
+    "height": 466,
+    "shape": "round",
+    "controller": "CO5300 AMOLED (QSPI)"
+  },
+  "flash": "32MB",
+  "psram": "8MB octal",
+  "caps": [
+    "display",
+    "touch",
+    "imu",
+    "mic",
+    "speaker",
+    "btn_accept",
+    "btn_reject",
+    "battery",
+    "usb_net"
+  ],
+  "usb": [
+    {
+      "vid": "0x303a",
+      "pid": "0x1001",
+      "note": "ESP32-S3 USB-Serial/JTAG, download mode only (hold BOOT while plugging in); in its firmware USB-C is a network adapter, not a serial port"
+    }
+  ],
+  "detect": {
+    "chip": "ESP32-S3",
+    "psram": "8MB",
+    "flash": "32MB"
+  },
+  "status": "experimental",
+  "maintainer": "molty.UNO",
+  "buy": [
+    {
+      "label": "waveshare",
+      "url": "https://www.waveshare.com/esp32-s3-touch-amoled-1.75c.htm"
+    }
+  ]
+}
