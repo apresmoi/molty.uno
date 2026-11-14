@@ -176,7 +176,7 @@ static void test_binds(void) {
     CHECK(gesture_binds_valid(p), "default valid");
     CHECK(gesture_binds_get(p, GESTURE_IN_TAP) == GESTURE_DO_EVENT, "tap: event");
     CHECK(gesture_binds_get(p, GESTURE_IN_DOUBLE_TAP) == GESTURE_DO_TALK, "double tap: talk");
-    CHECK(gesture_binds_get(p, GESTURE_IN_BUTTON_ACCEPT) == GESTURE_DO_EVENT, "accept: event");
+    CHECK(gesture_binds_get(p, GESTURE_IN_BUTTON_ACCEPT) == GESTURE_DO_HOLD, "accept: held to talk");
     CHECK(gesture_binds_get(p, GESTURE_IN_BUTTON_REJECT) == GESTURE_DO_SCREEN, "reject: the screen switch");
     p = gesture_binds_set(p, GESTURE_IN_BUTTON_REJECT, GESTURE_DO_STOP);
     CHECK(gesture_binds_get(p, GESTURE_IN_BUTTON_REJECT) == GESTURE_DO_STOP, "set");

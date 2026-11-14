@@ -150,6 +150,7 @@ describe("shake to talk", () => {
       reason: "silence",
       ms: { speech: 900, stt: expect.any(Number) },
       trigger: "shake",
+      input: "shake",
       device: { caps: CAPS, mood: "thinking", voice: "fake" },
       filler_in_ms: expect.any(Number), // Molty's own filler, unless an agent answers first (core/phrases.ts)
     });

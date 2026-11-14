@@ -842,11 +842,23 @@ static void test_tap_and_watchdog(void) {
       link_audio_request(link_audio_job_gen(), LINK_AUDIO_REQ_CANCEL); apply_request(); assert(atomic_load(&s_cancel)); complete(play()); link_audio_tick(); }
     /* a bound talk is the shake's listen even with the shake setting off; nothing to report when none starts */
     shake_setting=false; sdk_caps&=~MOLTY_CAP_IMU; link_audio_relay_adopts(true);
-    unsigned b=sent; assert(link_audio_gesture_talk()); link_audio_tick();
+    unsigned b=sent; assert(link_audio_gesture_talk("double_tap")); link_audio_tick();
     assert(link_audio_busy() && sent==b+1 && !strcmp(field("name"),"shake"));
     assert(cJSON_IsNumber(cJSON_GetObjectItem(cJSON_GetObjectItem(sdk_sent,"data"),"peak_g")));
-    b=sent; assert(link_audio_gesture_talk()); link_audio_tick(); assert(sent==b);   /* busy: no plain shake nudge */
+    assert(!strcmp(cJSON_GetObjectItem(cJSON_GetObjectItem(sdk_sent,"data"),"input")->valuestring,"double_tap"));
+    b=sent; assert(link_audio_gesture_talk("double_tap")); link_audio_tick(); assert(sent==b);   /* busy: no plain shake nudge */
     sdk_rx_fill=NULL; audio_job_t got; assert(xQueueReceive(s_jobs,&got,0)==pdTRUE); link_audio_cancel(); complete(record(&got));
+    /* held to talk: no silence end, the event says so; let go, the listen stops and sends */
+    b=sent; link_audio_hold(true,"button_accept"); link_audio_tick();
+    cJSON *d=cJSON_GetObjectItem(sdk_sent,"data");
+    assert(sent==b+1 && cJSON_IsTrue(cJSON_GetObjectItem(d,"hold")) && !strcmp(cJSON_GetObjectItem(d,"input")->valuestring,"button_accept"));
+    assert(xQueueReceive(s_jobs,&got,0)==pdTRUE && got.listen && !got.vad);
+    link_audio_tick(); assert(atomic_load(&s_stop)==STOP_NONE);         /* still held */
+    link_audio_hold(false,NULL); link_audio_tick(); assert(atomic_load(&s_stop)==STOP_TAP);
+    link_audio_cancel(); complete(record(&got)); atomic_store(&s_stop,STOP_NONE);
+    /* let go before the link task began it: no listen, no event */
+    b=sent; link_audio_hold(true,"button_accept"); link_audio_hold(false,NULL); link_audio_tick();
+    assert(sent==b && xQueueReceive(s_jobs,&got,0)!=pdTRUE);
     shake_setting=true; sdk_caps|=MOLTY_CAP_IMU; link_audio_relay_adopts(false);
 }
 

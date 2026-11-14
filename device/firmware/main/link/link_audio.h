@@ -18,8 +18,13 @@ bool link_audio_busy(void);
  * event (naming the listen, or plain). */
 bool link_audio_shake(double peak_g, int reversals, unsigned ms);
 /* A bound gesture's `talk` (gesture.h): the same listen as a shake's, whatever the shake
- * setting says. Any task. False = no mic. */
-bool link_audio_gesture_talk(void);
+ * setting says; input names it on the shake event (gesture.h GESTURE_INPUT_NAMES). Any task.
+ * False = no mic. */
+bool link_audio_gesture_talk(const char *input);
+/* A button bound to `hold` (gesture.h): pressed (down), the gesture's listen with no silence
+ * end; let go, it stops and sends (as a tap's stop). Let go before the listen began: none.
+ * Any task. */
+void link_audio_hold(bool down, const char *input);
 /* A recording is running (and for how long). Any task. */
 bool link_audio_listening(uint32_t *age_ms);
 /* A say is running with no audio received yet. Any task. */

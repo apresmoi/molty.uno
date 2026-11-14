@@ -245,11 +245,14 @@ static void test_ack(void)
 
 static void test_event_frames(void)
 {
-    expect_json(link_evt_shake_frame(1.83456, 4, 412, NULL),
+    expect_json(link_evt_shake_frame(1.83456, 4, 412, NULL, NULL, false),
         "{\"t\":\"evt\",\"name\":\"shake\",\"data\":{\"peak_g\":1.83,\"reversals\":4,\"ms\":412}}");
     /* shake to talk: the listen the device began by itself, for the relay to adopt */
-    expect_json(link_evt_shake_frame(2.4, 5, 900, "shake-3"),
+    expect_json(link_evt_shake_frame(2.4, 5, 900, "shake-3", NULL, false),
         "{\"t\":\"evt\",\"name\":\"shake\",\"data\":{\"peak_g\":2.4,\"reversals\":5,\"ms\":900,\"listen\":\"shake-3\"}}");
+    /* a bound gesture's talk names its input; a held button says so */
+    expect_json(link_evt_shake_frame(0, 0, 0, "shake-4", "button_accept", true),
+        "{\"t\":\"evt\",\"name\":\"shake\",\"data\":{\"peak_g\":0,\"reversals\":0,\"ms\":0,\"listen\":\"shake-4\",\"input\":\"button_accept\",\"hold\":true}}");
     cJSON *w = cJSON_Parse("{\"t\":\"welcome\",\"features\":[\"x\",\"listen_adopt\"]}");
     assert(link_welcome_has(w, LINK_FEATURE_ADOPT) && !link_welcome_has(w, "listen") && !link_welcome_has(w, NULL));
     cJSON_Delete(w);

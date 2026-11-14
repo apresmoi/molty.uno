@@ -387,6 +387,8 @@ interface ListenBuffer {
   turnEndAt?: number;
   /** Semantic end of turn is THE end: the device's VAD was turned off for this listen (voice box + listen_stop). */
   semantic?: boolean;
+  /** A button held to talk: only its release (or the window) ends it, never an end of turn. */
+  hold?: boolean;
   /** The streaming STT failed while the listen was open. */
   boxFailed?: boolean;
   /** The device's socket closed (or was replaced) before its end frame. */
@@ -556,6 +558,8 @@ interface OpenTurn {
   drafts: Map<string, HeldDraft>;
   /** An agent reacted during this turn: the reflex yields to it for the rest of the turn. */
   agentReacted?: boolean;
+  /** What woke Molty: "shake" or the gesture bound to talk (the utterance's `input`). */
+  input: string;
 }
 
 /** The opener being spoken for a turn, and who owns it (their follow-up queues behind it). */
@@ -2654,6 +2658,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     this.cancelHang();
     this.line = undefined; // ...and the last turn's first words are not continued any more
     this.lastFill = undefined; // ...and a filler of an earlier turn no longer skips anyone's quick
+    const { hold, ...rest } = extra;
+    extra = hold === true ? { ...rest, vad: false } : rest; // held to talk: the release ends it, never a pause
     const t0 = this.clock.now();
     let pick = await this.pickVoice("stt");
     if (!pick.ok) return { ok: false, error: pick.error };
@@ -2663,14 +2669,14 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const shake = local ? this.shakes.get(local) : undefined;
     if (local) this.shakes.delete(local);
     if (shake) trace.shake = { at: shake.at - t0, ...shake.data };
-    const buf: ListenBuffer = { job: id, chunks: [], bytes: 0, ended: false, screenRev: this.screenRev, trace, order: new SeqOrder<DecodedAudio>(), roomGen: this.roomGen, pauses: new PauseTracker() };
+    const buf: ListenBuffer = { job: id, chunks: [], bytes: 0, ended: false, screenRev: this.screenRev, trace, order: new SeqOrder<DecodedAudio>(), roomGen: this.roomGen, pauses: new PauseTracker(), ...(hold === true ? { hold: true } : {}) };
     let fallback: string | undefined;
     // Semantic end of turn by default: when the voice box serves this listen and the firmware
     // can be stopped by it (listen_stop), the box's end of turn is THE end — the device's
     // silence VAD is turned off (it heard Molty's own tail and cut humans off), and the box
     // also calls no_speech. Not when the agent tuned the device VAD itself (vad /
     // end_silence_ms), nor on the cloud path or older firmware: those keep the device VAD.
-    const semantic = pick.box && extra.vad === undefined && extra.end_silence_ms === undefined && !!this.liveSocket()?.getMeta()?.caps?.includes("listen_stop");
+    const semantic = hold !== true && pick.box && extra.vad === undefined && extra.end_silence_ms === undefined && !!this.liveSocket()?.getMeta()?.caps?.includes("listen_stop");
     // Molty's reflex (core/reflex.ts): only on the box's streaming STT (its words while the human talks)
     if (pick.provider.sttStream && pick.box) buf.reflex = this.reflexFor(buf, pick.cfg);
     // Streaming STT (voice box): opened before the mic, so every chunk goes out the moment it arrives.
@@ -2919,7 +2925,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
    * (onAudio ignores an ended listen).
    */
   private onTurnEnd(buf: ListenBuffer, why?: "no_speech") {
-    if (buf.ended || this.listenBuf !== buf) return;
+    if (buf.ended || buf.hold || this.listenBuf !== buf) return;
     const now = this.clock.now();
     buf.ended = true;
     buf.relayEnded = true;
@@ -3044,7 +3050,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       // the adopted listen's turn trace starts with its shake (record() takes it by the local id)
       this.shakes.set(data.listen, { at: this.clock.now(), data: { peak_g: clean.peak_g ?? null, rev: clean.reversals ?? null, ms: clean.ms ?? null } });
       while (this.shakes.size > 4) this.shakes.delete(this.shakes.keys().next().value!);
-      const job = await this.adoptShake(data.listen);
+      const job = await this.adoptShake(data.listen, (clean.input as string | undefined) ?? "shake", clean.hold === true);
       if (job) Object.assign(clean, { listening: true, turn_id: job });
     }
     await this.appendEvent("shake", clean);
@@ -3056,16 +3062,16 @@ export class DeviceRoom implements AgentApi, OwnerApi {
    * Adopted: the human's turn is OPEN from here until its utterance (human_speaking for agents'
    * say / talk / ask / mood / show; drafts and reacts accepted), with this device's partial policy.
    */
-  private async adoptShake(local: string): Promise<string | undefined> {
+  private async adoptShake(local: string, input: string, hold: boolean): Promise<string | undefined> {
     const caps = this.liveSocket()?.getMeta()?.caps;
     const policy = { ...policyFor(await this.kv.get<SpeechStats>(K.speech)), lead_ms: this.t.partialLeadMs };
     const open = async (id: string): Promise<Outcome<JsonObject>> => {
       const now = this.clock.now();
-      this.openTurn = { id, startAt: now, chunker: new PartialChunker(policy, now), drafts: new Map() };
+      this.openTurn = { id, startAt: now, chunker: new PartialChunker(policy, now), drafts: new Map(), input };
       return { ok: true, result: {} };
     };
     const hears = (!caps || caps.includes("listen")) && !(await this.voiceIsOff());
-    const started = hears ? await this.startJob("listen", { adopt: local, trigger: "shake" }, true, undefined, open) : fail("unsupported");
+    const started = hears ? await this.startJob("listen", { adopt: local, trigger: "shake", ...(hold ? { hold: true } : {}) }, true, undefined, open) : fail("unsupported");
     if (started.ok) return started.result.job as string;
     // audio busy (a say / listen crossed the shake): the device ends its listen quietly
     void this.sendCmd("listen_stop", { job: local, reason: "no_speech" }).then((r) => {
@@ -3212,6 +3218,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         speech_ms: r.speech_ms ?? r.duration_ms,
         stt_ms: (r.timings.stt as number) ?? 0,
         trigger: "shake",
+        input: turn?.input ?? "shake",
         caps: this.liveSocket()?.getMeta()?.caps ?? [],
         ack: r.ack,
         voice: await this.voiceName(),
