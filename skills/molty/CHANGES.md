@@ -5,6 +5,15 @@ Newest first. Each heading is a version: when `device.skill` (on an `utterance`)
 the files they name from GitHub (`https://raw.githubusercontent.com/apresmoi/molty.uno/main/skills/molty/`),
 replace your copy, and tell your human what's new in one line.
 
+## 2026.11.14
+
+- **Do not disturb.** Your human can turn it on (a double press of Molty's PWR button). While it
+  is on you may speak, listen or ask only in reply to an `utterance` (`in_reply_to`); anything else
+  fails `do_not_disturb`. A `dnd` event tells you when it changes, `relay.dnd` in `status` says
+  where it is. Read `SKILL.md`, `references/events.md`.
+- **The PWR button is a screen switch** out of the box (gesture binding `screen`): a press turns
+  the screen off and on. Read `references/api.md` (Gestures).
+
 ## 2026.11.05
 
 - **You are the creature on screen.** `device.creature` on each `utterance` (and `relay.creature`

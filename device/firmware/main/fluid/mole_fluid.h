@@ -98,9 +98,20 @@ struct scene;
 esp_err_t mole_fluid_scene(mole_scene_op_t op, struct scene *sc);
 
 /** Something happened to the device (sense.c): a shake (a brief surprised flash) or a
- *  button press (wakes a sleepy creature). Safe from any task; a no-op before init. */
+ *  button press (wakes a sleepy creature). Either turns the screen back on. Safe from any
+ *  task; a no-op before init. */
 typedef enum { MOLE_FLUID_SHAKE, MOLE_FLUID_BUTTON } mole_fluid_event_t;
 void mole_fluid_event(mole_fluid_event_t ev);
+/** The screen off (false) or on (power.h's switch, sense.c's button). Off, the fluid stops
+ *  simulating and drawing (the CPU's share of the battery) and the panel goes to sleep
+ *  (molty_display_power; a board without it gets one black frame). Requests keep queueing
+ *  while it is off. It comes back on by itself for something the human must see: a touch
+ *  (that touch is not a tap), new words (a say, the pairing code), a question or a listen.
+ *  Safe from any task; a no-op before init. */
+void mole_fluid_screen(bool on);
+/** The screen is on (true before init). */
+bool mole_fluid_screen_on(void);
+
 /** The link's health as an FD_STATUS_* code (fluid_director.h): a small mark at the
  *  screen's edge, never a state change. One caller (sense.c). */
 void mole_fluid_set_status(int status);

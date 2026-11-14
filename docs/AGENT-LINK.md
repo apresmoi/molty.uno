@@ -913,7 +913,13 @@ pairing). Rate-limited on the device. `shake`, `tap` and `button` reach agents t
 | `double_tap` | `{x, y}` | two taps within 350 ms, when bound to `event` (out of the box a double tap talks) |
 | `button` | `{id: "accept"\|"reject"}` | a button was pressed (the board's accept / reject buttons); ≤ 4/s. For agents it means acknowledge / dismiss, never an answer (answers come only from `ask`) |
 | `answer` | `{job, index, label}` · `{job, index: null, reason: "timeout"\|"cancelled"}` | an `ask` ended: tapped (0-based `index`, `label` verbatim), timed out, or cancelled; one per job, never rate-limited |
+| `dnd` | `{on}` | after each welcome and each change (cap `dnd`): the human's do not disturb (the PWR button's double press, `POST /api/power`). Relay-internal: kept per device; while on, `say` / `quick` / `listen` / `talk` / `ask` without `in_reply_to` fail `do_not_disturb`, and agents get a `dnd` event on each change |
 | `creature` | `{id, name, about?, gestures?, moods?}` | after each welcome and whenever the creature on screen changes: a package's `cp_info` (`about` {look, gestures, moods}: its own words, [CREATURES.md](CREATURES.md) section 1; `gestures` it plays that the firmware knows; `moods` idle and its own), `{id: "", name}` for a `.molty`. Relay-internal: kept per device (below) |
+
+Screen off (the PWR button's `screen` binding, `POST /api/power {screen}`): the fluid stops
+simulating and drawing and the panel sleeps; a touch (not a tap), a shake, a button, new
+words, a question or a listen turns it back on. `GET /api/power` has the battery and the last
+12 h of per-minute samples (device/firmware/main/power/power.h).
 
 The device reacts to a shake by itself (a brief `surprised`), agent or not. While a `listen`
 records, a thin line of the fluid itself condenses just inside the screen's rim around Molty

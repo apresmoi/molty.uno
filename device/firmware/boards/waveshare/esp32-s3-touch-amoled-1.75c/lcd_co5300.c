@@ -168,6 +168,20 @@ esp_err_t lcd_co5300_init(void)
 
 uint16_t *lcd_co5300_framebuffer(void) { return s_fb; }
 
+esp_err_t lcd_co5300_power(bool on)
+{
+    if (!s_io) return ESP_ERR_INVALID_STATE;
+    if (!on) {
+        ESP_RETURN_ON_ERROR(reg(CMD_WRDISBV, (uint8_t[]){ 0 }, 1), TAG, "brightness");
+        ESP_RETURN_ON_ERROR(reg(0x28, NULL, 0), TAG, "DISPOFF");
+        return reg(0x10, NULL, 0);                      /* SLPIN */
+    }
+    ESP_RETURN_ON_ERROR(reg(0x11, NULL, 0), TAG, "SLPOUT");
+    vTaskDelay(pdMS_TO_TICKS(120));                     /* the datasheet's wake time */
+    ESP_RETURN_ON_ERROR(reg(0x29, NULL, 0), TAG, "DISPON");
+    return reg(CMD_WRDISBV, (uint8_t[]){ 0xFF }, 1);
+}
+
 esp_err_t lcd_co5300_flush(void)
 {
     if (!s_io || !s_fb) return ESP_ERR_INVALID_STATE;

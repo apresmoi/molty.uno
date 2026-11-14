@@ -54,7 +54,7 @@ import {
   type ActivityOwnerRequest,
 } from "./api.js";
 import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
-import { CREATURES_CAP, DEFAULT_WPM, PKG_CAP, SCENE_CAP, WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, GESTURES_CAP, RESUME_CAP, RESUME_FEATURE, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, MAX_KEEP_WORDS, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
+import { CREATURES_CAP, DND_CAP, DEFAULT_WPM, PKG_CAP, SCENE_CAP, WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, GESTURES_CAP, RESUME_CAP, RESUME_FEATURE, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, MAX_KEEP_WORDS, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
 import { FIRST_WORDS_MODES, type FirstWordsMode, type LinePlay, OPENER, type OpenerMessage, clauseEnd, guardOpener, hangs, planReply, pushHistory } from "./opener.js";
 import { PcmFeed, estimateSpeechMs, speechWords, splitSpeech, synthesize } from "./speech.js";
 import { DEFAULT_PARTIAL_POLICY, DRAFT_DROPPED_EVENT, DRAFT_USED_EVENT, type DropReason, PARTIAL_EVENT, PartialChunker, PauseTracker, judgeDraft, words } from "./partials.js";
@@ -79,7 +79,7 @@ import {
   type JsonObject,
 } from "./protocol.js";
 import { type Clock, type KV, sleep } from "./store.js";
-import { type AgentEvent, CREATURE_EVENT, DEFAULT_WEBHOOK_EVENTS, type DeviceCreature, INBOX_LIMITS, SAMPLE_EVENTS, UTTERANCE_EVENT, agentEventData, creatureData, eventId, webhookWants } from "./events.js";
+import { type AgentEvent, CREATURE_EVENT, DND_EVENT, DEFAULT_WEBHOOK_EVENTS, type DeviceCreature, INBOX_LIMITS, SAMPLE_EVENTS, UTTERANCE_EVENT, agentEventData, creatureData, eventId, webhookWants } from "./events.js";
 import { LISTEN_ADOPT_FEATURE, LOCAL_LISTEN_RE, type TurnClaim, type TurnRecord, claimTurn, turnTimings, utteranceData } from "./turns.js";
 import { API_VERSION, FEATURES, compareVersions } from "./version.js";
 import type { ReleaseLookup, ReleaseSource } from "./releases.js";
@@ -651,6 +651,8 @@ const K = {
   speech: "speech",
   /** The creature on its screen, as the device last reported it (events.ts creatureData). */
   creature: "creature",
+  /** Do not disturb, as the device last reported it (its `dnd` event). */
+  dnd: "dnd",
 };
 
 /** Device-facing name of a voice box pairing (the console shows it next to the code). */
@@ -1019,6 +1021,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (frame.name === "pkg") return this.onPkgEvent(data); // relay-internal: ends the pkg.install job
     if (frame.name === "shake") return this.onShake(data); // may start the shake's listen job
     if (frame.name === CREATURE_EVENT) return this.onCreature(data); // kept; agents hear of a change
+    if (frame.name === DND_EVENT) return this.onDnd(data); // kept; gates unprompted speech
     const clean = agentEventData(frame.name, data);
     if (clean) await this.appendEvent(frame.name, clean);
     if (clean) await this.activity.device(frame.name, clean);
@@ -1046,6 +1049,20 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     }
     this.pendingAsks.delete(job);
     p.resolve(answer);
+  }
+
+  /** Device `dnd` (on each welcome and each change): kept for the gate and status; a change is an event. */
+  private async onDnd(data: Record<string, unknown>) {
+    if (typeof data.on !== "boolean") return;
+    if (((await this.kv.get<boolean>(K.dnd)) ?? false) === data.on) return;
+    await this.kv.put<boolean>(K.dnd, data.on);
+    await this.appendEvent(DND_EVENT, { on: data.on }, true);
+  }
+
+  /** Do not disturb is on (a device that reports it, `dnd` in caps): unprompted speech, listens and questions are refused. */
+  private async disturbs(inReplyTo: string | undefined): Promise<ReturnType<typeof fail> | undefined> {
+    if (inReplyTo !== undefined || !this.liveSocket()?.getMeta()?.caps?.includes(DND_CAP) || !(await this.kv.get<boolean>(K.dnd))) return undefined;
+    return fail("do_not_disturb", "the human turned on do not disturb: speak, listen or ask only in reply to an utterance (in_reply_to)");
   }
 
   /** Device `creature` (on each welcome and each change): kept for utterances and status; a new one is an event. */
@@ -1189,6 +1206,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       const hush = this.humanSpeaking();
       if (hush) return hush;
     }
+    if (cmd.name === "say" || cmd.name === "quick" || cmd.name === "listen") {
+      const dnd = await this.disturbs(cmd.in_reply_to);
+      if (dnd) return dnd;
+    }
     if (cmd.name === "pkg.available") return this.available();
     const live = this.liveSocket();
     if (!live) return fail("device_offline");
@@ -1295,6 +1316,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
           creature: ((await this.kv.get<DeviceCreature>(K.creature)) ?? null) as JsonObject | null,
           // the skill's newest version (skills/molty/CHANGES.md); null until GitHub has answered once
           skill: this.skillVersion.peek() ?? null,
+          // do not disturb: speak, listen or ask only in reply to an utterance (null: the firmware does not say)
+          dnd: meta?.caps?.includes(DND_CAP) ? ((await this.kv.get<boolean>(K.dnd)) ?? false) : null,
           events,
           webhook: agent.webhook ? (redactWebhook(agent.webhook) as JsonObject) : null,
           firmware: firmware as unknown as JsonObject,
@@ -1453,7 +1476,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       if (e instanceof CommandError) return fail(e.code, e.message);
       throw e;
     }
-    const hush = this.humanSpeaking();
+    const hush = this.humanSpeaking() ?? (await this.disturbs(args.in_reply_to));
     if (hush) return hush;
     const live = this.liveSocket();
     if (!live) return fail("device_offline");
@@ -1506,7 +1529,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       if (e instanceof CommandError) return fail(e.code, e.message);
       throw e;
     }
-    const hush = this.humanSpeaking();
+    const hush = this.humanSpeaking() ?? (await this.disturbs(args.in_reply_to));
     if (hush) return hush;
     const live = this.liveSocket();
     if (!live) return fail("device_offline");

@@ -171,6 +171,8 @@ cJSON *link_evt_tap_frame(double x, double y);
  * (mole_fluid_creature_info's JSON object), on each welcome and each change. NULL: not an object. */
 cJSON *link_evt_creature_frame(const char *info);
 cJSON *link_evt_button_frame(bool accept);
+/* {"t":"evt","name":"dnd","data":{"on":bool}}: do not disturb (power.h), after each welcome and each change. */
+cJSON *link_evt_dnd_frame(bool on);
 cJSON *link_evt_double_tap_frame(double x, double y);
 /* A say's watchdog: no audio at all is given up on far sooner than a stream that stops
  * (the relay's job has failed, or the link lost it; the creature is hidden meanwhile). */

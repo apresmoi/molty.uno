@@ -102,6 +102,7 @@ cJSON *link_identity_hello(void)
     if (molty_board_has(MOLTY_CAP_SPEAKER) || molty_board_has(MOLTY_CAP_MIC)) caps[n++] = "resume";   /* keeps a say / listen through a short drop (hello.resume) */
     if (molty_board_has(MOLTY_CAP_SPEAKER)) caps[n++] = "say_cancel";   /* the relay may drop a say it gave up on */
     caps[n++] = "gestures";   /* cmd gestures: tap, double tap and the buttons do what the human chose */
+    caps[n++] = "dnd";   /* reports do not disturb (evt dnd); the relay holds back unprompted speech */
     caps[n++] = "show"; caps[n++] = "mood"; caps[n++] = "act"; caps[n++] = "creature";
     caps[n++] = "working";   /* mood working; actions inspect, paddle */
     caps[n++] = "react";   /* mood {react:true}: shown, never counted as an explicit mood (the turn's ack stays) */

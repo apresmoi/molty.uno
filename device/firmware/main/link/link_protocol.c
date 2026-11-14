@@ -327,6 +327,13 @@ cJSON *link_evt_button_frame(bool accept)
     return j;
 }
 
+cJSON *link_evt_dnd_frame(bool on)
+{
+    cJSON *data, *j = evt("dnd", &data);
+    if (j) cJSON_AddBoolToObject(data, "on", on);
+    return j;
+}
+
 char *link_restore_body(const char *saved_state_json)
 {
     cJSON *saved = saved_state_json ? cJSON_Parse(saved_state_json) : NULL;

@@ -9,7 +9,8 @@
  *   (boards with a serial console) → SPIFFS + console
  *   (net/console_store) → USB-C NCM (boards with usb_net) + mDNS + Wi-Fi
  *   (net/network) → board init (display, touch, IMU, ...) → "fluid" creature
- *   (fluid/) → agent link (link/) → device events (sense/) → diag tasks → HTTP
+ *   (fluid/) → agent link (link/) → device events (sense/) → diag tasks → power
+ *   (power/: dnd, battery history) → HTTP
  *   server (net/http)
  *   → OTA image validation (update/self_update) → /ws/imu task
  *
@@ -32,6 +33,7 @@
 #include "mole_fluid.h"
 #include "link_client.h"
 #include "sense.h"
+#include "power.h"
 #include "network.h"
 #include "console_store.h"
 #include "http.h"
@@ -119,6 +121,10 @@ void app_main(void)
 
     // Diagnostics sampler/persist tasks + Wi-Fi hooks (needs SPIFFS + Wi-Fi up).
     mole_diag_start();
+
+    // Do not disturb (NVS) + the battery history (SPIFFS): before the link's first welcome.
+    ret = power_start();
+    if (ret != ESP_OK) ESP_LOGW(TAG, "power history unavailable: %s", esp_err_to_name(ret));
 
     ESP_ERROR_CHECK(http_server_start());
 
