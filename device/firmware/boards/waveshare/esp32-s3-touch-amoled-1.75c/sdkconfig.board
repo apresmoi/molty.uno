@@ -1,0 +1,17 @@
+# Waveshare ESP32-S3-Touch-AMOLED-1.75C: layered over sdkconfig.defaults(.esp32s3)
+# when this board is built (device/firmware/CMakeLists.txt, tools/scripts/firmware-build.sh).
+CONFIG_MOLTY_BOARD_WAVESHARE_ESP32_S3_TOUCH_AMOLED_1_75C=y
+
+# Flash: 32 MB QIO (esptool on the board; the vendor demos' sdkconfig.defaults). The
+# partition table uses the first 16 MB; the header says 32 so the boot check
+# (molty_board.c: esp_flash_get_size against .flash_mb) matches the chip.
+CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+
+# PSRAM: 8 MB OPI (octal), in the ESP32-S3R8 package
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# Console: NONE. USB-C is the chip's native USB (GPIO19/20, no UART bridge), and
+# TinyUSB (the USB-C network) needs the peripheral USB-Serial-JTAG would take.
+CONFIG_ESP_CONSOLE_NONE=y
