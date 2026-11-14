@@ -18,7 +18,7 @@ export const WORKING_MOOD = "working";
 export const COMMANDS = ["status", "state", "mood", "show", "say", "quick", "keep", "listen", "volume", "imu", "diag", "log", "act", "gestures", "pkg.install", "pkg.remove", "pkg.list", "pkg.available", "scene.play", "scene.queue", "scene.clear", "creature.select", "creature.list"] as const;
 /** What the human's inputs can do (`gestures`; firmware: sense/gesture.h). */
 export const GESTURE_INPUTS = ["tap", "double_tap", "button_accept", "button_reject"] as const;
-export const GESTURE_ACTIONS = ["none", "talk", "event", "stop", "screen"] as const;
+export const GESTURE_ACTIONS = ["none", "talk", "event", "stop", "screen", "hold"] as const;
 /** The device reports do not disturb (its `dnd` event): the relay holds back unprompted speech. */
 export const DND_CAP = "dnd";
 export const GESTURES_CAP = "gestures";

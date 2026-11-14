@@ -148,9 +148,12 @@ bool link_ack_arg(const cJSON *args, link_ack_t setting, link_ack_t *mode);
 #define LINK_ACK_MIN_SPEECH_MS 160u
 link_ack_t link_ack_decide(link_ack_t mode, const char *reason, bool speech_known, uint32_t speech_ms,
                            bool screen_taken, bool has_speaker);
-/* shake {peak_g, reversals, ms, listen?}: listen = the id of the listen the device began by
- * itself on this shake (shake to talk), for the relay to adopt; NULL = a plain shake. */
-cJSON *link_evt_shake_frame(double peak_g, int reversals, unsigned ms, const char *listen);
+/* shake {peak_g, reversals, ms, listen?, input?, hold?}: listen = the id of the listen the device
+ * began by itself on this shake (shake to talk), for the relay to adopt; NULL = a plain shake.
+ * input: what woke it when it was not a shake (a bound gesture: "double_tap", "button_accept",
+ * ...; NULL = a shake). hold: a button held to talk: the listen ends when it is let go (or at
+ * its window), never on a pause. */
+cJSON *link_evt_shake_frame(double peak_g, int reversals, unsigned ms, const char *listen, const char *input, bool hold);
 /* Shake to talk (docs/AGENT-LINK.md "Shake to talk"): on a shake the device starts listening at
  * once, by itself, under a local id ("shake-<n>"), and names it in the shake event. The relay
  * adopts it with `cmd listen {job, adopt: <local id>, ...}` (its own job id and end-of-turn

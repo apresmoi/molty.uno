@@ -30,7 +30,9 @@ void mole_fluid_screen(bool on) { screen_on = on; }
 bool mole_fluid_screen_on(void) { return screen_on; }
 bool power_dnd(void) { return dnd; }
 void power_dnd_set(bool on) { dnd = on; }
-bool link_audio_gesture_talk(void) { talks++; return true; }
+bool link_audio_gesture_talk(const char *input) { (void)input; talks++; return true; }
+static int holds, releases;
+void link_audio_hold(bool down, const char *input) { (void)input; if (down) holds++; else releases++; }
 void link_audio_stop_any(void) { stops++; }
 bool link_audio_listening(uint32_t *age) { (void)age; return false; }
 bool link_audio_say_waiting(void) { return false; }
@@ -166,9 +168,15 @@ static void test_deadline(void) {
 int main(void) {
     /* the buttons do what they are bound to; a pending question comes first */
     sdk_now = 90000000;
+    binds = gesture_binds_default();
+    button_do(true); assert(holds == 1 && talks == 0 && nframes == 0);       /* BOOT: held to talk out of the box */
+    binds = gesture_binds_set(binds, GESTURE_IN_TAP, GESTURE_DO_HOLD);
+    taps_do(GESTURE_TAPS_SINGLE, sdk_now, &(gesture_limit_t){ .min_ms = 250 }); assert(holds == 1 && talks == 1);   /* a tap cannot be held: talk */
+    talks = 0;
     binds = gesture_binds_set(gesture_binds_default(), GESTURE_IN_BUTTON_REJECT, GESTURE_DO_TALK);
+    binds = gesture_binds_set(binds, GESTURE_IN_BUTTON_ACCEPT, GESTURE_DO_EVENT);
     button_do(false); assert(talks == 1 && nframes == 0);
-    button_do(true); assert(talks == 1 && nframes == 1 && strstr(last(), "\"button\""));   /* event: today's behaviour */
+    button_do(true); assert(talks == 1 && nframes == 1 && strstr(last(), "\"button\""));   /* event: as bound */
     binds = gesture_binds_set(binds, GESTURE_IN_BUTTON_ACCEPT, GESTURE_DO_STOP);
     button_do(true); assert(stops == 1 && nframes == 1);
     binds = gesture_binds_set(binds, GESTURE_IN_BUTTON_ACCEPT, GESTURE_DO_NONE);

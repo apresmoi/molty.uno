@@ -16,7 +16,7 @@
 //          when it changes; see creatureData)
 // Everything else (say.done, link_code, ...) stays internal to the relay.
 
-import { MAX_ASK_LABEL, MAX_ASK_OPTIONS } from "./commands.js";
+import { GESTURE_INPUTS, MAX_ASK_LABEL, MAX_ASK_OPTIONS } from "./commands.js";
 import { DRAFT_DROPPED_EVENT, DRAFT_USED_EVENT, PARTIAL_EVENT } from "./partials.js";
 import { isRecord, type JsonObject } from "./protocol.js";
 
@@ -55,7 +55,17 @@ const int = (v: unknown, lo: number, hi: number) => Number.isInteger(v) && num(v
 
 /** Allow-list + shape check. Returns the clean data, or undefined to drop the event. */
 const SHAPES: Record<string, (d: Record<string, unknown>) => JsonObject | undefined> = {
-  shake: (d) => (num(d.peak_g, 0, 64) && int(d.reversals, 0, 1000) && int(d.ms, 0, 600000) ? { peak_g: d.peak_g as number, reversals: d.reversals as number, ms: d.ms as number } : undefined),
+  // input: what woke Molty when it was not a shake (a gesture bound to talk / hold); hold: a button held to talk
+  shake: (d) =>
+    num(d.peak_g, 0, 64) && int(d.reversals, 0, 1000) && int(d.ms, 0, 600000)
+      ? {
+          peak_g: d.peak_g as number,
+          reversals: d.reversals as number,
+          ms: d.ms as number,
+          ...((GESTURE_INPUTS as readonly unknown[]).includes(d.input) ? { input: d.input as string } : {}),
+          ...(d.hold === true ? { hold: true } : {}),
+        }
+      : undefined,
   tap: (d) => (num(d.x, 0, 1) && num(d.y, 0, 1) ? { x: d.x as number, y: d.y as number } : undefined),
   double_tap: (d) => (num(d.x, 0, 1) && num(d.y, 0, 1) ? { x: d.x as number, y: d.y as number } : undefined),
   button: (d) => (d.id === "accept" || d.id === "reject" ? { id: d.id } : undefined),

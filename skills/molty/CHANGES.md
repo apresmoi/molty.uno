@@ -12,7 +12,10 @@ replace your copy, and tell your human what's new in one line.
   fails `do_not_disturb`. A `dnd` event tells you when it changes, `relay.dnd` in `status` says
   where it is. Read `SKILL.md`, `references/events.md`.
 - **The PWR button is a screen switch** out of the box (gesture binding `screen`): a press turns
-  the screen off and on. Read `references/api.md` (Gestures).
+  the screen off and on. **BOOT is held to talk** (binding `hold`): Molty listens while it is
+  held and sends on release. Read `references/api.md` (Gestures).
+- **What woke Molty:** an `utterance` has `input` (`shake`, `double_tap`, `button_accept`, ...).
+  Read `references/events.md`.
 
 ## 2026.11.05
 

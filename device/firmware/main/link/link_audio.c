@@ -87,6 +87,10 @@ static adopt_t s_adopt;
 static bool s_tagged;                                 /* the running job began an activity-log tag (link task) */                               /* written before WAIT → ADOPTED */
 static atomic_bool s_relay_adopts;                    /* the relay's welcome lists listen_adopt */
 static atomic_bool s_shake_gesture;                   /* ...it is a bound gesture's `talk`, no shake */
+static const char *s_shake_input;                     /* ...which input (GESTURE_INPUT_NAMES), before s_shake_req */
+static atomic_bool s_shake_hold;                      /* ...a button held to talk (link_audio_hold) */
+static atomic_bool s_hold_down;                       /* that button is down now */
+static bool s_hold_job; static uint32_t s_hold_gen;   /* link task: the hold's listen, its job gen */
 static atomic_bool s_shake_req;                       /* a shake handed over by the sense task */
 static double s_shake_peak; static int s_shake_rev; static unsigned s_shake_ms;   /* before s_shake_req */
 static unsigned s_shake_n;                            /* local listen ids: shake-<n> */
@@ -928,13 +932,13 @@ static bool shake_talk_ok(void)
 
 /* The shake's own listen, at once: the listening mood and ring, the device's window and
  * acknowledgement settings; nothing goes up until the relay adopts it. */
-static esp_err_t local_listen(char id[LINK_STREAM_MAX])
+static esp_err_t local_listen(char id[LINK_STREAM_MAX], bool hold)
 {
     audio_job_t job = {.listen = true, .pending = true, .ack = (link_ack_t)mole_fluid_ack_mode()};
     const uint32_t w = mole_fluid_listen_window();
     job.ms = w == LINK_LISTEN_UNLIMITED ? LINK_LISTEN_CEILING_MS : link_listen_setting_ok(w) ? w : LINK_LISTEN_DEFAULT_MS;
     const vad_cfg_t vad_def = VAD_CFG_DEFAULT;
-    job.vad = vad_def.enabled; job.end_silence_ms = vad_def.end_silence_ms; job.no_speech_ms = vad_def.no_speech_ms;
+    job.vad = vad_def.enabled && !hold;              /* held: the release ends it, never a pause */ job.end_silence_ms = vad_def.end_silence_ms; job.no_speech_ms = vad_def.no_speech_ms;
     mole_fluid_listen_color(-1);
     esp_err_t e = link_cmd_mood("listening", -1);
     if (e != ESP_OK) return e;
@@ -950,23 +954,39 @@ static esp_err_t local_listen(char id[LINK_STREAM_MAX])
 static void shake_talk(void)
 {
     char id[LINK_STREAM_MAX] = "";
-    const bool from_gesture = atomic_exchange(&s_shake_gesture, false);
-    if (shake_talk_ok() && local_listen(id) != ESP_OK) id[0] = 0;
-    mole_diag_event(false, "sense.%s talk=%s", from_gesture ? "gesture" : "shake", id[0] ? id : "no");
+    const bool from_gesture = atomic_exchange(&s_shake_gesture, false), hold = atomic_exchange(&s_shake_hold, false);
+    if (hold && !atomic_load(&s_hold_down)) return;    /* let go before it began */
+    if (shake_talk_ok() && local_listen(id, hold) != ESP_OK) id[0] = 0;
+    s_hold_job = hold && id[0]; s_hold_gen = link_audio_job_gen();
+    mole_diag_event(false, "sense.%s talk=%s", from_gesture ? s_shake_input : "shake", id[0] ? id : "no");
     if (!link_client_connected()) return;
     if (from_gesture && !id[0]) return;                /* nothing listens: not a shake to report */
-    cJSON *j = link_evt_shake_frame(s_shake_peak, s_shake_rev, s_shake_ms, id[0] ? id : NULL);
+    cJSON *j = link_evt_shake_frame(s_shake_peak, s_shake_rev, s_shake_ms, id[0] ? id : NULL, from_gesture ? s_shake_input : NULL, hold);
     if (j) link_send_json(j);
     cJSON_Delete(j);
 }
 
-bool link_audio_gesture_talk(void)
+bool link_audio_gesture_talk(const char *input)
 {
     if (!s_jobs || !molty_board_has(MOLTY_CAP_MIC)) return false;
-    s_shake_peak = 0; s_shake_rev = 0; s_shake_ms = 0;
+    s_shake_peak = 0; s_shake_rev = 0; s_shake_ms = 0; s_shake_input = input;
     atomic_store(&s_shake_gesture, true);
     atomic_store(&s_shake_req, true);
     return true;
+}
+
+void link_audio_hold(bool down, const char *input)
+{
+    atomic_store(&s_hold_down, down);
+    if (down) { atomic_store(&s_shake_hold, true); if (!link_audio_gesture_talk(input)) atomic_store(&s_shake_hold, false); }
+}
+
+/* Link task: the held button was let go: its listen (still the running job) stops and sends. */
+static void hold_release(void)
+{
+    if (!s_hold_job || atomic_load(&s_hold_down)) return;
+    s_hold_job = false;
+    if (s_busy && s_listen && link_audio_job_gen() == s_hold_gen) atomic_store(&s_stop, STOP_TAP);
 }
 
 bool link_audio_listening(uint32_t *age_ms)
@@ -1125,6 +1145,7 @@ void link_audio_tick(void)
 {
     apply_request();
     if (atomic_exchange(&s_shake_req, false)) shake_talk();
+    hold_release();
     if (!s_busy) return;
     if (atomic_load(&s_held) && esp_timer_get_time() - s_held_at > (int64_t)LINK_RESUME_WINDOW_MS * 1000) {
         atomic_store(&s_held, false);
