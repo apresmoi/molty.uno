@@ -5,9 +5,11 @@
  * fills the round panel as braille dots; states are targets it flows toward:
  * creature (the .molty, home: boot lands here), blob (stands in while no creature is
  * loaded), thinking, text (speed reader), effect:ripple|vortex|wave, and the demo reel
- * ("autoplay", on request only). What is shown when — the same-state guard, idle mood
- * flashes, sleep, the reader's return — is fluid_director.h. Touch → ripple, IMU tilt
- * → slosh.
+ * ("autoplay", on request only). At power on the boot screen comes first: "molty.uno"
+ * condenses out of the fluid, then the firmware default's creature paddles until the link is
+ * up and dissolves into the chosen one (fluid_director.h "boot screen"). What is shown
+ * when (the same-state guard, idle mood flashes, sleep, the reader's return) is
+ * fluid_director.h. Touch → ripple, IMU tilt → slosh.
  *
  * State via GET/POST /api/creature/state when "fluid" is active:
  *   POST {state: "creature"|"blob"|"thinking"|"text"|"effect:ripple"|"effect:vortex"
