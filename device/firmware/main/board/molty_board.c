@@ -79,7 +79,7 @@ static uint32_t caps_with_ops(void)
     if (!mic || !mic->record_raw || !mic->stream_start || !mic->stream_read || !mic->stream_stop ||
         !mic->stream_active) c &= ~MOLTY_CAP_MIC;
     if (!B.button_pressed) c &= ~(MOLTY_CAP_BTN_ACCEPT | MOLTY_CAP_BTN_REJECT);
-    if (!B.battery_mv) c &= ~MOLTY_CAP_BATTERY;
+    if (!B.battery) c &= ~MOLTY_CAP_BATTERY;
     return c;
 }
 
@@ -167,6 +167,12 @@ esp_err_t molty_display_blit(int x, int y, int w, int h, const uint16_t *px)
     return B.flush_rows(y, y + h);
 }
 
+esp_err_t molty_display_power(bool on)
+{
+    if (!(s_caps & MOLTY_CAP_DISPLAY)) return ESP_ERR_INVALID_STATE;
+    return B.display_power ? B.display_power(on) : ESP_ERR_NOT_SUPPORTED;
+}
+
 /* ── touch, IMU, buttons, battery ─────────────────────────────────────────── */
 
 int molty_touch_poll(uint16_t *xs, uint16_t *ys, int max)
@@ -192,13 +198,11 @@ bool molty_button_pressed(molty_button_t b)
     return (s_caps & need) && B.button_pressed(b);
 }
 
-esp_err_t molty_battery_mv(int *mv)
+esp_err_t molty_battery_read(molty_battery_t *out)
 {
+    *out = (molty_battery_t){ .pct = -1 };
     if (!(s_caps & MOLTY_CAP_BATTERY)) return ESP_ERR_NOT_SUPPORTED;
-    int v = B.battery_mv();
-    if (v < 0) return ESP_FAIL;
-    *mv = v;
-    return ESP_OK;
+    return B.battery(out);
 }
 
 /* ── speaker ──────────────────────────────────────────────────────────────── */

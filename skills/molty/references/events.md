@@ -13,6 +13,7 @@ Molty talks back. When your human touches it, the relay records an event:
 | `utterance.partial` | `{"turn_id": "…", "seq": 1, "text_so_far": "what's on my calendar", "new_text": "what's on my calendar", "elapsed_ms": 3200}` — the human is **still talking**: context only (see While the human speaks) |
 | `draft.used` | `{"turn_id", "based_on", "opener", "new_words", "job"}` — to you only: your draft's opener is playing, you own the turn |
 | `draft.dropped` | `{"turn_id", "based_on", "reason", "new_words"?}` — to you only: your draft will not be spoken; answer the `utterance` as usual |
+| `dnd` | `{"on": true}`: your human turned do not disturb on (or off). While on, speak, listen or ask only in reply to an `utterance` (`in_reply_to`); anything else fails `do_not_disturb` |
 | `creature` | `{"id": "duck", "name": "Duck", "about": {"look", "gestures", "moods"}, "gestures": […], "moods": […]}`: Molty's body changed, you are this creature from now on ([creature.md](creature.md)). Webhooks get it only when their `events` name it |
 
 Ignore event types you don't know: more will come. Whatever comes, never speak while the human talks.

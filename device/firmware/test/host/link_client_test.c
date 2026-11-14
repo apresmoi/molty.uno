@@ -18,6 +18,10 @@ cJSON *link_cmd_creature_frame(unsigned *gen) {
     *gen=creature_gen;
     return link_evt_creature_frame("{\"id\":\"duck\",\"name\":\"Duck\"}");
 }
+/* do not disturb (power.h): the switch, its generation, and the frames sent (the last one's on) */
+static unsigned dnd_gen=1, dnds; static bool dnd_on, dnd_last;
+bool power_dnd(void) { return dnd_on; }
+unsigned power_dnd_gen(void) { return dnd_gen; }
 /* activity log uploads: the {"t":"log"} frames sent, in order, and when */
 static unsigned logs, log_calls;
 static bool log_prev[8];
@@ -78,6 +82,10 @@ int esp_websocket_client_send_text(esp_websocket_client_handle_t ws,const char *
         assert(link_client_connected() && !strcmp(cJSON_GetObjectItem(cJSON_GetObjectItem(j,"data"),"id")->valuestring,"duck"));
         creatures++;
     }
+    if(!strcmp(type,"evt") && !strcmp(cJSON_GetObjectItem(j,"name")->valuestring,"dnd")) {
+        assert(link_client_connected());
+        dnd_last=cJSON_IsTrue(cJSON_GetObjectItem(cJSON_GetObjectItem(j,"data"),"on")); dnds++;
+    }
     if(!strcmp(type,"log")) {
         assert(logs<8); log_prev[logs]=cJSON_IsTrue(cJSON_GetObjectItem(j,"prev")); log_at[logs]=sdk_now; logs++;
     }
@@ -137,9 +145,9 @@ esp_err_t link_cmd_run(const char *name,const cJSON *args,cJSON **out) { (void)n
 static void tick(void) {
     assert(++steps<100); /* deterministic watch/termination condition */
     if(scenario==0) {
-        /* the creature went up once on the welcome; a new one goes up too, on the same socket */
-        if(link_client_connected() && !stage) { assert(creatures==1); strcpy(test_code,"JKLMNPQR"); creature_gen++; stage++; }
-        else if(codes) { assert(starts==1 && stops==0 && hellos==1 && creatures==2); longjmp(stopped,1); }
+        /* the creature and do not disturb went up once on the welcome; a change goes up too, on the same socket */
+        if(link_client_connected() && !stage) { assert(creatures==1 && dnds==1 && !dnd_last); strcpy(test_code,"JKLMNPQR"); creature_gen++; dnd_on=true; dnd_gen++; stage++; }
+        else if(codes) { assert(starts==1 && stops==0 && hellos==1 && creatures==2 && dnds==2 && dnd_last); longjmp(stopped,1); }
     } else if(scenario==5) {
         /* the previous boot's lines first, then this boot's backlog, 2 s apart */
         if(logs==2 && !stage) {
@@ -172,7 +180,7 @@ static void tick(void) {
         } else if(stage==2) {
             assert(starts==1); sdk_now=close_at+(injected_close==4401 ? 300000000LL : 1000000LL); stage=3;
         } else if(stage==3 && starts==2 && link_client_connected()) {
-            assert(!atomic_load(&s_auth) && creatures==2); longjmp(stopped,1);   /* again after the new welcome */
+            assert(!atomic_load(&s_auth) && creatures==2 && dnds==2); longjmp(stopped,1);   /* again after the new welcome */
         }
     }
 }
@@ -181,7 +189,7 @@ static void run(unsigned which,unsigned code) {
     strcpy(s_url,"ws://192.168.1.2:8787"); strcpy(test_code,"ABCDEFGH");
     atomic_store(&s_auth,false); atomic_store(&s_connected,false); atomic_store(&s_lost,false);
     atomic_store(&s_forget,false); atomic_store(&s_reconnect,false); atomic_store(&s_close_code,0);
-    starts=stops=hellos=codes=forgets=wipes=steps=stage=creatures=0;
+    starts=stops=hellos=codes=forgets=wipes=steps=stage=creatures=dnds=0; dnd_on=false; dnd_gen=1;
     sdk_now=close_at=forget_at=0; scenario=which; injected_close=code; sdk_wait=tick;
     logs=0; prev_left=which==5 ? 1 : 0; cur_left=which==5 ? 1 : 0;
     s_prev_done=false; s_prev_first=true; s_log_last=0; s_log_cur=s_prev_cur=0; s_log_max=0;

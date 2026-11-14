@@ -289,6 +289,10 @@ static bool  s_touch_down = false;
 static float s_tpx = 0.f, s_tpy = 0.f;
 static int   s_last_tx = 0, s_last_ty = 0;
 static volatile bool s_full_flush = true;
+static atomic_bool s_screen_want = true;        /* mole_fluid_screen                    */
+static atomic_bool s_screen = true;             /* on the glass now (the task switches it) */
+static bool  s_touch_mute = false;              /* the touch that woke the screen, until it lifts */
+#define FLUID_OFF_POLL_MS  50                   /* screen off: touch and wake checks       */
 /* the drawer's window buffer (fluid_draw_send): internal DMA-capable RAM, which the panel's
  * DMA reads as is. The frame never goes through the PSRAM framebuffer: drawing and
  * copying it there every frame took PSRAM bandwidth the sim on core 1 waits for. */
@@ -964,6 +968,28 @@ static void draw_task(void *arg) {
 
 static void pace_wake(void *task) { xTaskNotifyGive((TaskHandle_t)task); }
 
+/* The panel off / on, with the drawer idle (it never sends a window to a sleeping panel). */
+static void screen_switch(bool on) {
+    xSemaphoreTake(s_idle, portMAX_DELAY);
+    esp_err_t e = molty_display_power(on);
+    if (!on && e == ESP_ERR_NOT_SUPPORTED) {            /* no panel switch: a black frame */
+        uint16_t *fb = molty_display_framebuffer();
+        if (fb) { memset(fb, 0, (size_t)s_fb_w * s_fb_h * sizeof(uint16_t)); molty_display_flush(); }
+    }
+    s_full_flush = true;
+    atomic_store(&s_screen, on);
+    xSemaphoreGive(s_idle);
+    mole_diag_event(false, "fluid.screen %s (%s)", on ? "on" : "off", e == ESP_OK ? "panel" : esp_err_to_name(e));
+}
+
+/* Screen off: something the human must see is waiting (a request the task has not taken yet). */
+static bool screen_wanted(void) {
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool w = s_text_ver != s_seen_ver || (s_ask_want.active && s_ask_want.seq != s_ask.scr.seq) || (s_listen_in && !s_listen);
+    xSemaphoreGive(s_mutex);
+    return w;
+}
+
 static void fluid_task(void *arg) {
     (void)arg;
     /* TWDT: re-created on every select → self-subscribe; delete before exit */
@@ -983,6 +1009,15 @@ static void fluid_task(void *arg) {
 
     while (s_run) {
         esp_task_wdt_reset();
+        if (!atomic_load(&s_screen)) {                  /* off: no sim, no drawing */
+            uint16_t xs[MOLTY_TOUCH_MAX_POINTS], ys[MOLTY_TOUCH_MAX_POINTS];
+            const bool touched = molty_touch_poll(xs, ys, MOLTY_TOUCH_MAX_POINTS) > 0;
+            if (!touched && !screen_wanted() && !atomic_load(&s_screen_want)) { vTaskDelay(pdMS_TO_TICKS(FLUID_OFF_POLL_MS)); continue; }
+            s_touch_mute = touched;
+            atomic_store(&s_screen_want, true);
+            screen_switch(true);
+            prev = next = esp_timer_get_time();         /* no catching up on the time it was off */
+        } else if (!atomic_load(&s_screen_want)) { screen_switch(false); continue; }
         int64_t now = esp_timer_get_time();
         float rdt = (float)(now - prev) / 1e6f;
         uint32_t raw_dt_us = (uint32_t)(now - prev);
@@ -1080,7 +1115,11 @@ static void fluid_task(void *arg) {
         ask_follow(&want, req >= 0 || req_mood >= 0 || req_reel || nsops > 0, &cfg);
         direct(&cfg);
         for (int q = 0; q < nrip; q++) ripple(rip[q][0], rip[q][1], rip[q][2], 0.09f);
-        if (tp.seq != tp_seen) { poll_touch(tp.n, &tp.x, &tp.y, tp.t); tp_seen = tp.seq; }
+        if (tp.seq != tp_seen) {
+            if (s_touch_mute && tp.n == 0) s_touch_mute = false;
+            if (!s_touch_mute) poll_touch(tp.n, &tp.x, &tp.y, tp.t);
+            tp_seen = tp.seq;
+        }
 
         int64_t t0 = esp_timer_get_time();
         sim_frame(rdt, &cfg);
@@ -1353,6 +1392,7 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     cJSON_AddNumberToObject(root, "wpm",         c.wpm);
     cJSON_AddStringToObject(root, "mood",        st.mood >= 0 ? CUTE_MOOD_NAMES[st.mood] : "");
     cJSON_AddBoolToObject  (root, "asleep",      st.asleep);
+    cJSON_AddBoolToObject  (root, "screen",      mole_fluid_screen_on());
     cJSON_AddBoolToObject(root, "working",       st.working);
     if (st.scene_pkg[0]) {                     /* the scene on screen: pkg, layout, s left */
         cJSON *sc = cJSON_AddObjectToObject(root, "scene");
@@ -1687,7 +1727,11 @@ void mole_fluid_event(mole_fluid_event_t ev) {
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     if (ev == MOLE_FLUID_SHAKE) s_req_shake = true; else s_req_user = true;
     xSemaphoreGive(s_mutex);
+    atomic_store(&s_screen_want, true);
 }
+
+void mole_fluid_screen(bool on) { atomic_store(&s_screen_want, on); }
+bool mole_fluid_screen_on(void) { return atomic_load(&s_screen); }
 
 void mole_fluid_set_status(int status) {
     if (!s_mutex || status == s_status_in) return;    /* unlocked peek: only this caller writes it */

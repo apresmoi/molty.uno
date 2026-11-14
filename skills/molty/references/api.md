@@ -181,7 +181,8 @@ curl -sS -X POST "$MOLTY_RELAY/v1/devices/$MOLTY_DEVICE/cmd" -H "authorization: 
 | `tap` | `event` | | `none` | nothing |
 | `double_tap` | `talk` | | `talk` | Molty listens, as after a shake: you get one `utterance` |
 | `button_accept` (BOOT) | `event` | | `event` | you get the `tap` / `double_tap` / `button` event |
-| `button_reject` (PWR) | `event` | | `stop` | ends the listen and sends it, or cuts the speech (that say's job then fails) |
+| `button_reject` (PWR) | `screen` | | `stop` | ends the listen and sends it, or cuts the speech (that say's job then fails) |
+| | | | `screen` | a press turns the screen off and on, a double press do not disturb (a button's only; firmware with `dnd` in caps) |
 
 Always first, whatever is bound: a pairing and an open question take their inputs; a tap during a
 recording stops and sends it (`reason: "tap"`, after its first second); a tap while speech has not

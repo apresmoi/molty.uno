@@ -49,12 +49,14 @@ static esp_err_t battery_init(void)
     return adc_cali_create_scheme_curve_fitting(&cal, &s_cali);
 }
 
-static int battery_mv(void)
+/* Voltage only: no fuel gauge, no charger status. */
+static esp_err_t battery(molty_battery_t *out)
 {
     int raw = 0, mv = 0;
-    if (adc_oneshot_read(s_adc, s_bat_ch, &raw) != ESP_OK) return -1;
-    if (adc_cali_raw_to_voltage(s_cali, raw, &mv) != ESP_OK) return -1;
-    return mv * BOARD_BAT_DIVIDER;
+    if (adc_oneshot_read(s_adc, s_bat_ch, &raw) != ESP_OK) return ESP_FAIL;
+    if (adc_cali_raw_to_voltage(s_cali, raw, &mv) != ESP_OK) return ESP_FAIL;
+    out->mv = mv * BOARD_BAT_DIVIDER;
+    return ESP_OK;
 }
 
 static uint32_t init(void)
@@ -126,5 +128,5 @@ const molty_board_t molty_board_desc = {
     .touch_poll     = cst816s_poll,
     .imu_get        = qmi8658_get,
     .button_pressed = button_pressed,
-    .battery_mv     = battery_mv,
+    .battery        = battery,
 };

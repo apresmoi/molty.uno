@@ -25,6 +25,11 @@ bool link_pair_active(void) { return pairing; }
 void mole_fluid_event(mole_fluid_event_t ev) { (void)ev; }
 static uint32_t binds; static int talks, stops;
 uint32_t mole_fluid_gestures(void) { return binds; }
+static bool screen_on = true, dnd;
+void mole_fluid_screen(bool on) { screen_on = on; }
+bool mole_fluid_screen_on(void) { return screen_on; }
+bool power_dnd(void) { return dnd; }
+void power_dnd_set(bool on) { dnd = on; }
 bool link_audio_gesture_talk(void) { talks++; return true; }
 void link_audio_stop_any(void) { stops++; }
 bool link_audio_listening(uint32_t *age) { (void)age; return false; }
@@ -171,6 +176,17 @@ int main(void) {
     assert(ask(YNI) == ESP_OK);
     button_do(false); assert(talks == 1 && nframes == 2);                      /* an open question: an event, whatever is bound */
     link_ask_cancel(); nframes = 0; shows = 0; dones = 0; binds = gesture_binds_default();
+    /* the screen switch (PWR out of the box): a press, once the double window passed, flips the
+     * screen; a double press flips do not disturb and leaves the screen alone; no frame either way */
+    assert(gesture_binds_get(binds, GESTURE_IN_BUTTON_REJECT) == GESTURE_DO_SCREEN);
+    gesture_tapper_t pr = { 0 };
+    screen_do(gesture_tapper_feed(&pr, 1000, true)); assert(screen_on && !dnd);
+    screen_do(gesture_tapper_poll(&pr, 1200)); assert(screen_on);
+    screen_do(gesture_tapper_poll(&pr, 1400)); assert(!screen_on && !dnd);
+    screen_do(gesture_tapper_feed(&pr, 2000, true)); screen_do(gesture_tapper_feed(&pr, 2200, true));
+    screen_do(gesture_tapper_poll(&pr, 3000)); assert(!screen_on && dnd);
+    screen_do(gesture_tapper_feed(&pr, 4000, true)); screen_do(gesture_tapper_poll(&pr, 4400)); assert(screen_on && dnd);
+    assert(nframes == 0);
     /* no touch: nothing could answer → unsupported, nothing on screen */
     sdk_caps &= ~MOLTY_CAP_TOUCH;
     assert(ask(YNI) == ESP_ERR_NOT_SUPPORTED && !shows && !link_ask_pending());

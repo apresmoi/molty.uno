@@ -99,10 +99,13 @@ gesture_taps_t gesture_tapper_poll(gesture_tapper_t *t, uint32_t now_ms);
 
 /* The human's bindings: what each input does (cmd gestures, /api/creature/state, NVS). */
 typedef enum { GESTURE_IN_TAP, GESTURE_IN_DOUBLE_TAP, GESTURE_IN_BUTTON_ACCEPT, GESTURE_IN_BUTTON_REJECT, GESTURE_IN_COUNT } gesture_input_t;
-typedef enum { GESTURE_DO_NONE, GESTURE_DO_TALK, GESTURE_DO_EVENT, GESTURE_DO_STOP, GESTURE_DO_COUNT } gesture_action_t;
+/* screen (a button's): a press turns the screen off / on, a double press (GESTURE_DOUBLE_TAP_MS)
+ * toggles do not disturb (power.h). */
+typedef enum { GESTURE_DO_NONE, GESTURE_DO_TALK, GESTURE_DO_EVENT, GESTURE_DO_STOP, GESTURE_DO_SCREEN, GESTURE_DO_COUNT } gesture_action_t;
 extern const char *const GESTURE_INPUT_NAMES[GESTURE_IN_COUNT];
 extern const char *const GESTURE_ACTION_NAMES[GESTURE_DO_COUNT];
-/** One nibble per input. Default: everything sends its event, a double tap talks. */
+/** One nibble per input. Default: the reject button (PWR) is the screen switch, everything else
+ *  sends its event, a double tap talks. */
 uint32_t gesture_binds_default(void);
 /** False for a stored value that holds anything but valid actions. */
 bool gesture_binds_valid(uint32_t packed);

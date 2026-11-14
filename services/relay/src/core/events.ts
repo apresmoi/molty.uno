@@ -100,6 +100,14 @@ export const UTTERANCE_EVENT = "utterance";
  */
 export const CREATURE_EVENT = "creature";
 
+/**
+ * Relay-generated: the human turned do not disturb on or off (the PWR button's double press,
+ * the console). Data `{on}`. While on, agents speak, listen and ask only in reply to an
+ * utterance (in_reply_to); anything else is refused `do_not_disturb`. A device `dnd` frame is
+ * read by room.ts.
+ */
+export const DND_EVENT = "dnd";
+
 /** Who Molty is right now: the creature package on screen, its look and what it plays (docs/CREATURES.md). */
 export type DeviceCreature = {
   /** The package id ("" for an uploaded .molty). */
@@ -144,7 +152,7 @@ export function creatureData(d: unknown): DeviceCreature | undefined {
 }
 
 /** Every type an agent can receive and filter on (webhook `events`): device events + the relay's own. */
-export const AGENT_EVENT_TYPES = [...Object.keys(SHAPES), UTTERANCE_EVENT, PARTIAL_EVENT, DRAFT_USED_EVENT, DRAFT_DROPPED_EVENT, CREATURE_EVENT];
+export const AGENT_EVENT_TYPES = [...Object.keys(SHAPES), UTTERANCE_EVENT, PARTIAL_EVENT, DRAFT_USED_EVENT, DRAFT_DROPPED_EVENT, CREATURE_EVENT, DND_EVENT];
 
 /** Types a webhook gets only when its `events` names them (never by default): chatty, or nothing to answer. Pull and ride-along carry them. */
 export const OPT_IN_EVENTS: readonly string[] = [PARTIAL_EVENT, CREATURE_EVENT];
@@ -186,6 +194,7 @@ export const SAMPLE_EVENTS: Record<string, AgentEvent> = {
     },
   },
   [CREATURE_EVENT]: { id: "e10", type: CREATURE_EVENT, ts: 0, data: SAMPLE_CREATURE },
+  [DND_EVENT]: { id: "e11", type: DND_EVENT, ts: 0, data: { on: true } },
   [PARTIAL_EVENT]: {
     id: "e6",
     type: PARTIAL_EVENT,
@@ -234,6 +243,10 @@ export function eventSentence(ev: AgentEvent): string {
       return `The human is still talking to Molty (context only, don't answer yet): "${String(d.text_so_far ?? "")}"`;
     case CREATURE_EVENT:
       return `Molty is now ${d.name}: speak as this creature (its look and moves are in the event)`;
+    case DND_EVENT:
+      return d.on === true
+        ? "The human turned on do not disturb: speak, listen or ask only in reply to an utterance"
+        : "The human turned off do not disturb";
     case DRAFT_USED_EVENT:
       return `Molty is speaking your opener "${String(d.opener ?? "")}": you have the turn, continue with in_reply_to`;
     case DRAFT_DROPPED_EVENT:

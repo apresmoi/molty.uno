@@ -177,14 +177,14 @@ static void test_binds(void) {
     CHECK(gesture_binds_get(p, GESTURE_IN_TAP) == GESTURE_DO_EVENT, "tap: event");
     CHECK(gesture_binds_get(p, GESTURE_IN_DOUBLE_TAP) == GESTURE_DO_TALK, "double tap: talk");
     CHECK(gesture_binds_get(p, GESTURE_IN_BUTTON_ACCEPT) == GESTURE_DO_EVENT, "accept: event");
-    CHECK(gesture_binds_get(p, GESTURE_IN_BUTTON_REJECT) == GESTURE_DO_EVENT, "reject: event");
+    CHECK(gesture_binds_get(p, GESTURE_IN_BUTTON_REJECT) == GESTURE_DO_SCREEN, "reject: the screen switch");
     p = gesture_binds_set(p, GESTURE_IN_BUTTON_REJECT, GESTURE_DO_STOP);
     CHECK(gesture_binds_get(p, GESTURE_IN_BUTTON_REJECT) == GESTURE_DO_STOP, "set");
     CHECK(gesture_binds_get(p, GESTURE_IN_TAP) == GESTURE_DO_EVENT, "others kept");
     CHECK(!gesture_binds_valid(0x9u), "an unknown action in NVS is refused");
     CHECK(!gesture_binds_valid(0x10000u), "extra bits are refused");
     CHECK(gesture_input_lookup("double_tap") == GESTURE_IN_DOUBLE_TAP && gesture_input_lookup("nose") < 0, "input names");
-    CHECK(gesture_action_lookup("stop") == GESTURE_DO_STOP && gesture_action_lookup("dance") < 0, "action names");
+    CHECK(gesture_action_lookup("stop") == GESTURE_DO_STOP && gesture_action_lookup("screen") == GESTURE_DO_SCREEN && gesture_action_lookup("dance") < 0, "action names");
 }
 
 int main(void) {

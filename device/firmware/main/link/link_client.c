@@ -26,6 +26,7 @@
 #include <stdatomic.h>
 
 #include "sdkconfig.h"
+#include "power.h"
 #define LINK_DEFAULT_URL CONFIG_MOLTY_DEFAULT_RELAY   /* main/Kconfig.projbuild */
 static const char *TAG = "agent_link";
 static char s_url[LINK_URL_MAX] = LINK_DEFAULT_URL;
@@ -288,6 +289,7 @@ static void link_task(void *arg)
     int64_t next = 0, started = 0, last_ping = 0, last_pong = 0, forget_deadline = 0;
     char announced[9] = "";
     unsigned creature_sent = 0;   /* the creature's generation the relay has (link_cmd_creature_frame) */
+    unsigned dnd_sent = 0;        /* the do-not-disturb generation the relay has (power_dnd_gen) */
     for (;;) {
         int64_t now = esp_timer_get_time();
         bool reset = atomic_exchange(&s_reconnect, false);
@@ -350,6 +352,13 @@ static void link_task(void *arg)
             if (cf && link_send_json(cf) == ESP_OK) creature_sent = gen;
             else if (cf) atomic_store(&s_lost, true);
             cJSON_Delete(cf);
+            const unsigned dg = power_dnd_gen();
+            if (dg != dnd_sent) {             /* do not disturb, likewise */
+                cJSON *df = link_evt_dnd_frame(power_dnd());
+                if (df && link_send_json(df) == ESP_OK) dnd_sent = dg;
+                else if (df) atomic_store(&s_lost, true);
+                cJSON_Delete(df);
+            }
         }
         bool online = wifi_ready();
         if (session && (!online || atomic_load(&s_lost) ||
@@ -389,7 +398,7 @@ static void link_task(void *arg)
                         link_audio_relay_adopts(link_welcome_has(j, LINK_FEATURE_ADOPT));   /* shake to talk */
                         link_audio_resume_welcome(j);
                         log_welcome(j, now);
-                        creature_sent = 0;
+                        creature_sent = 0; dnd_sent = 0;
                         backoff = 1; last_pong = now; last_ping = now;
                     } else if (!strcmp(t->valuestring, "pong")) last_pong = now;
                     else if (!strcmp(t->valuestring, "ping")) {

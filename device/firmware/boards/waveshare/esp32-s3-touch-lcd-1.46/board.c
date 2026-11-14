@@ -130,6 +130,7 @@ const molty_board_t molty_board_desc = {
     .flush       = mole_lcd_flush,
     .flush_rows  = mole_lcd_flush_rows,
     .blit        = mole_lcd_blit,
+    .display_power = mole_lcd_power,
 
     .touch_poll     = mole_touch_poll,
     .imu_get        = qmi8658_get,

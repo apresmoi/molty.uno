@@ -9,7 +9,7 @@
  *   speaker  ES8311 DAC + NS4150B amp ┐ one duplex I2S port            audio_es.c
  *   mic      ES7210 ADC, two mics     ┘
  *   buttons  BOOT = accept, PWR = reject (pairing)
- *   battery  AXP2101 PMU, I2C 0x34: its VBAT ADC
+ *   battery  AXP2101 PMU, I2C 0x34: VBAT ADC, fuel gauge %, charger and VBUS status
  *   usb_net  native USB on the USB-C port (TinyUSB NCM)
  *
  * No power latch: the AXP2101 keeps the board on until a long PWR press. The display
@@ -30,12 +30,15 @@
 static const char *TAG = "board-1.75c";
 
 /* ── AXP2101 (register map: the vendor's 01_AXP2101 demo, axp2101_registers.h) ── */
-#define AXP_STATUS1     0x00        /* bit 3: battery present                    */
+#define AXP_STATUS1     0x00        /* bit 5: VBUS good, bit 3: battery present  */
+#define AXP_STATUS2     0x01        /* bits 7..5: 001 charging, 010 discharging  */
+#define AXP_GAUGE_CTRL  0x18        /* bit 3: fuel gauge on                      */
 #define AXP_IC_TYPE     0x03        /* 0x4A                                      */
 #define AXP_ADC_CTRL    0x30        /* bit 0: VBAT channel                       */
 #define AXP_VBAT_H      0x34        /* VBAT mV = (H & 0x1F) << 8 | L             */
 #define AXP_LDO_ON0     0x90        /* bit 0: ALDO1                              */
 #define AXP_ALDO1_V     0x92        /* bits 4..0: (mV - 500) / 100               */
+#define AXP_BAT_PCT     0xA4        /* fuel gauge, 0..100                        */
 
 static i2c_master_dev_handle_t s_pmu;
 
@@ -43,7 +46,7 @@ static esp_err_t pmu_rd(uint8_t r, uint8_t *v, size_t n) { return i2c_master_tra
 static esp_err_t pmu_wr(uint8_t r, uint8_t v) { return i2c_master_transmit(s_pmu, (uint8_t[]){ r, v }, 2, 50); }
 
 /* Make sure ALDO1 (A3V3) is on at 3.3 V, as the vendor's AXP demo sets it, and the
- * battery ADC runs. Leaves every other rail as the PMU booted it. */
+ * battery ADC and fuel gauge run. Leaves every other rail as the PMU booted it. */
 static esp_err_t pmu_init(i2c_master_bus_handle_t bus)
 {
     i2c_device_config_t cfg = { .dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = PMU_ADDR, .scl_speed_hz = 400000 };
@@ -60,15 +63,22 @@ static esp_err_t pmu_init(i2c_master_bus_handle_t bus)
     }
     if (e == ESP_OK) e = pmu_rd(AXP_ADC_CTRL, &adc, 1);
     if (e == ESP_OK && !(adc & 0x01)) e = pmu_wr(AXP_ADC_CTRL, adc | 0x01);
+    if (e == ESP_OK) e = pmu_rd(AXP_GAUGE_CTRL, &v, 1);
+    if (e == ESP_OK && !(v & 0x08)) e = pmu_wr(AXP_GAUGE_CTRL, v | 0x08);
     return e;
 }
 
-static int battery_mv(void)
+static esp_err_t battery(molty_battery_t *out)
 {
-    uint8_t st = 0, d[2];
-    if (pmu_rd(AXP_STATUS1, &st, 1) != ESP_OK || !(st & 0x08)) return -1;   /* no battery */
-    if (pmu_rd(AXP_VBAT_H, d, 2) != ESP_OK) return -1;
-    return ((d[0] & 0x1F) << 8) | d[1];
+    uint8_t st[2], d[2], pct = 0;
+    if (pmu_rd(AXP_STATUS1, st, 2) != ESP_OK) return ESP_FAIL;
+    if (!(st[0] & 0x08)) return ESP_ERR_NOT_FOUND;                          /* no cell */
+    if (pmu_rd(AXP_VBAT_H, d, 2) != ESP_OK) return ESP_FAIL;
+    out->mv = ((d[0] & 0x1F) << 8) | d[1];
+    out->pct = pmu_rd(AXP_BAT_PCT, &pct, 1) == ESP_OK && pct <= 100 ? pct : -1;
+    out->charging = (st[1] >> 5) == 0x01;
+    out->usb = (st[0] & 0x20) != 0;
+    return ESP_OK;
 }
 
 static uint32_t init(void)
@@ -153,6 +163,7 @@ const molty_board_t molty_board_desc = {
     .flush       = lcd_co5300_flush,
     .flush_rows  = lcd_co5300_flush_rows,
     .blit        = lcd_co5300_blit,
+    .display_power = lcd_co5300_power,
 
     .touch_poll     = cst9217_poll,
     .imu_get        = qmi8658_get,
@@ -162,5 +173,5 @@ const molty_board_t molty_board_desc = {
      * "pk"/"cl" in the turn trace (docs/AGENT-LINK.md); the 1.46's MSM mic needed 6. */
     .mic_gain       = 4,
     .button_pressed = button_pressed,
-    .battery_mv     = battery_mv,
+    .battery        = battery,
 };
