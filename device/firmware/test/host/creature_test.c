@@ -275,7 +275,7 @@ static double test_render(const char *pkgdir, const char *id, const char *outdir
             fluid_sim_color(s, 1.f / 30);
             fluid_sim_view(s);
             fluid_sim_snapshot(s, fr, false);
-            fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, t, 0.f, NULL, 0, " .:-=+*#", font };
+            fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, t, 0.f, NULL, 0, " .:-=+*#", font, NULL };
             int y0, y1;
             fluid_draw(d, fr, fb, &o, &y0, &y1);
             if (cpk_tris(k) > worst) worst = cpk_tris(k);

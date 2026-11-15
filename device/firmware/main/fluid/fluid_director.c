@@ -24,7 +24,7 @@ const fd_cfg_t FD_CFG_DEFAULT = {
     .text_return_s = 1.5f,
     .status_after_s = 10.f,       /* boot: Wi-Fi join + TLS take a few seconds */
     .work_ttl_s = 120.f, .work_gap_min_s = 0.5f, .work_gap_max_s = 1.6f,
-    .boot_word_s = 2.8f, .boot_ttl_s = 20.f, .boot_gap_s = 0.3f,
+    .boot_word_s = 2.8f,
     .bye_word_s = 1.8f, .bye_pond_s = 2.2f,
 };
 
@@ -47,9 +47,6 @@ static const work_item_t WORK_LIB[] = {
     { CA_GLANCE_RIGHT, 1.5f }, { CA_STRETCH, 1.f }, { CA_WIGGLE, 1.f },
 };
 #define WORK_N ((int)(sizeof(WORK_LIB) / sizeof(WORK_LIB[0])))
-/* the boot screen's creature paddling in place, round and round */
-static const int8_t BOOT_LOOP[] = { CA_PADDLE, CA_PADDLE, CA_WIGGLE };
-#define BOOT_N ((int)(sizeof(BOOT_LOOP) / sizeof(BOOT_LOOP[0])))
 /* an agent's quick moods, when it gives no hold_s */
 #define HOLD_HAPPY_S       3.0f
 #define HOLD_SURPRISED_S   2.0f
@@ -129,13 +126,12 @@ static void go(fluid_director_t *d, int st, int fx) {
 static int target(const fluid_director_t *d) { return d->pending ? d->next : d->cur; }
 static int target_fx(const fluid_director_t *d) { return d->pending ? d->next_fx : d->cur_fx; }
 
-/* the boot screen is over (fd_boot): the human's creature is due; the word gives way to it,
- * the boot's creature dissolves into it (the same one carries on). A request that follows
- * replaces that transition. */
+/* the boot screen is over (fd_boot): the word melts into the creature. A request that
+ * follows replaces that transition. */
 static void boot_end(fluid_director_t *d) {
     if (!d->boot) return;
-    if (d->boot == FD_BOOT_WORD || d->boot_home) go(d, FD_ST_CREATURE, 0);
-    d->boot = FD_BOOT_OFF; d->home_due = d->boot_home;
+    go(d, FD_ST_CREATURE, 0);
+    d->boot = false;
     d->next_idle = idle_gap(d);
 }
 
@@ -154,19 +150,18 @@ void fd_init(fluid_director_t *d, const fd_cfg_t *cfg, uint32_t seed) {
     go(d, FD_ST_CREATURE, 0);              /* home: the blob until a creature loads */
 }
 
-void fd_boot(fluid_director_t *d, bool home, bool wait) {
+void fd_boot(fluid_director_t *d) {
     if (d->bye) return;
-    d->boot = FD_BOOT_WORD; d->boot_t = 0.f; d->boot_step = 0;
-    d->boot_home = home; d->boot_wait = wait;
+    d->boot = true; d->boot_t = 0.f;
     d->text_hold = true;
     go(d, FD_ST_TEXT, 0);
 }
 
-bool fd_boot_word(const fluid_director_t *d) { return d->boot == FD_BOOT_WORD; }
+bool fd_boot_word(const fluid_director_t *d) { return d->boot; }
 
 void fd_bye(fluid_director_t *d) {
     if (d->bye) return;
-    d->boot = FD_BOOT_OFF; d->home_due = false;
+    d->boot = false;
     d->autoplay = false; d->held = CM_IDLE; d->held_left = -1.f;
     d->act_req = -1; d->work_left = 0.f; d->flash = -1; d->asleep = false;
     d->bye = true; d->bye_t = 0.f;
@@ -184,11 +179,6 @@ float fd_bye_level(const fluid_director_t *d) {
 
 bool fd_bye_done(const fluid_director_t *d) { return d->bye && d->bye_t >= d->cfg.bye_word_s + d->cfg.bye_pond_s; }
 
-bool fd_take_home(fluid_director_t *d) {
-    bool h = d->home_due;
-    d->home_due = false;
-    return h;
-}
 
 void fd_set_creature(fluid_director_t *d, bool loaded) {
     d->has_creature = loaded;
@@ -291,9 +281,7 @@ void fd_set_scene(fluid_director_t *d, bool playing) { d->scene_on = playing; }
 bool fd_scene_wanted(const fluid_director_t *d) { return target(d) == FD_ST_SCENE; }
 
 void fd_set_status(fluid_director_t *d, int status) {
-    if (status < 0 || status >= FD_STATUS_COUNT) return;
-    d->status = status;
-    d->link_ready = status == FD_STATUS_OK || status == FD_STATUS_AUTH;
+    if (status >= 0 && status < FD_STATUS_COUNT) d->status = status;
 }
 
 static void reel_step(fluid_director_t *d) {
@@ -337,21 +325,8 @@ void fd_tick(fluid_director_t *d, float dt, bool text_done) {
         else if ((d->act_req_ttl -= dt) <= 0.f) d->act_req = -1;
     }
 
-    /* the boot screen: the word, then the creature paddling until the link is ready */
-    if (d->boot) {
-        const bool ready = !d->boot_wait || d->link_ready;
-        d->boot_t += dt;
-        if (d->boot == FD_BOOT_WORD && d->boot_t >= d->cfg.boot_word_s) {
-            if (ready) boot_end(d);
-            else { d->boot = FD_BOOT_PLAY; d->boot_gap = 0.f; go(d, FD_ST_CREATURE, 0); }
-        } else if (d->boot == FD_BOOT_PLAY && (ready || d->boot_t >= d->cfg.boot_ttl_s)) {
-            boot_end(d);
-        } else if (d->boot == FD_BOOT_PLAY && shown && d->acting_left <= 0.f && d->act_start < 0 && (d->boot_gap -= dt) <= 0.f) {
-            const int a = BOOT_LOOP[d->boot_step++ % BOOT_N];
-            start_act(d, a, cute_act_dur(a));
-            d->boot_gap = d->cfg.boot_gap_s;
-        }
-    }
+    /* the boot screen: the word, then the creature */
+    if (d->boot && (d->boot_t += dt) >= d->cfg.boot_word_s) boot_end(d);
 
     /* working: the agent is busy, so is the creature (fd_agent_work woke it; work_ttl_s < sleep_after_s) */
     if (d->work_left > 0.f) {

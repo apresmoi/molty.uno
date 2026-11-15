@@ -32,7 +32,6 @@ static int s_fail = 0, s_pass = 0;
 
 static fluid_director_t D;
 static int s_melts;                       /* transitions executed (each one melts the shape) */
-static int s_homes;                       /* the human's creature loaded (fd_take_home)        */
 /* actions handed out (fd_take_act), as mole_fluid.c starts them on the creature */
 #define ACT_LOG 4096
 static int s_nact, s_act[ACT_LOG];
@@ -40,7 +39,6 @@ static double s_now, s_act_t[ACT_LOG];   /* double: a float clock drifts ~0.1 s 
 
 static void frame(bool text_done) {
     fd_tick(&D, DT, text_done);
-    if (fd_take_home(&D)) s_homes++;      /* loaded before the transition (mole_fluid.c direct) */
     int st, fx;
     if (fd_take(&D, &st, &fx)) s_melts++;
     int a = fd_take_act(&D);
@@ -73,26 +71,26 @@ static void test_boot(void) {
     CHECK(D.cur == FD_ST_CREATURE, "creature loaded later: shown, got %d", D.cur);
 }
 
-/* power on with the boot screen (mole_fluid.c's order: fd_init, fd_boot, then the boot's
+/* power on with the boot screen (mole_fluid.c's order: fd_init, fd_boot, then the human's
  * creature loads on frame one) */
-static void boot_screen(bool home, bool wait) {
+static void boot_screen(void) {
     fd_init(&D, NULL, 12345);
-    s_melts = 0; s_nact = 0; s_homes = 0; s_now = 0.f;
-    fd_boot(&D, home, wait);
+    s_melts = 0; s_nact = 0; s_now = 0.f;
+    fd_boot(&D);
     fd_set_creature(&D, true);
     frame(true);
 }
 
 /* power off: "bye!", the pond fading out, done; nothing interrupts it, even mid boot screen */
 static void test_bye(void) {
-    boot_screen(true, true);
+    boot_screen();
     run(1.f, true);
     fd_bye(&D);
     frame(true);
     CHECK(D.cur == FD_ST_TEXT && fd_bye_word(&D) && !fd_boot_word(&D) && !D.boot, "the word, the boot screen over");
     CHECK(fd_bye_level(&D) == 1.f && !fd_bye_done(&D), "full brightness while it says it");
     fd_request_state(&D, FD_ST_BLOB, 0, false); fd_agent_mood(&D, CM_HAPPY, 2.f); fd_agent_act(&D, CA_WIGGLE, 1.f); fd_autoplay(&D);
-    fd_boot(&D, true, true);
+    fd_boot(&D);
     run(1.7f, true);
     CHECK(D.cur == FD_ST_TEXT && D.held == CM_IDLE && !D.autoplay && !D.boot, "requests, moods, acts, autoplay, boot: all ignored");
     run(0.2f, true);
@@ -102,104 +100,41 @@ static void test_bye(void) {
     CHECK(l > 0.4f && l < 0.6f && !fd_bye_done(&D), "fading: %.2f halfway", l);
     run(1.2f, false);
     CHECK(fd_bye_level(&D) == 0.f && fd_bye_done(&D) && D.cur == FD_ST_FX, "black, done");
-    CHECK(!s_homes, "no home creature loads on the way out");
 }
 
 static void test_boot_screen(void) {
-    /* the word, the paddling, the link: dissolves into the human's creature */
-    boot_screen(true, true);
+    /* the word holds, then melts straight into the human's creature: no link wait, nothing played */
+    boot_screen();
     CHECK(D.cur == FD_ST_TEXT && fd_boot_word(&D) && s_melts == 1, "power on: the word (state %d)", D.cur);
-    run(2.7f, true);                      /* the reader holds its only word */
+    run(2.7f, true);
     CHECK(D.cur == FD_ST_TEXT && s_melts == 1 && fd_solidity(&D, 1.f) > 0.999f, "the word condensed and holds");
     run(0.2f, true);
-    CHECK(D.cur == FD_ST_CREATURE && D.boot == FD_BOOT_PLAY && s_melts == 2 && !s_homes, "then melts into the boot's creature");
-    for (int i = 0; i < 40; i++) { fd_set_status(&D, i < 20 ? -1 : FD_STATUS_WIFI); run(0.25f, false); }   /* sense.c: none yet, then no Wi-Fi */
-    CHECK(D.boot == FD_BOOT_PLAY && s_melts == 2, "no link yet: still paddling at %.1f s", D.boot_t);
-    bool loop = s_nact >= 3;
-    for (int i = 0; i < s_nact; i++) {
-        loop = loop && s_act[i] == (i % 3 == 2 ? CA_WIGGLE : CA_PADDLE);
-        if (i) loop = loop && s_act_t[i] - s_act_t[i - 1] >= cute_act_dur(s_act[i - 1]) && s_act_t[i] - s_act_t[i - 1] < cute_act_dur(s_act[i - 1]) + 0.5f;
-    }
-    CHECK(loop, "paddle, paddle, wiggle, back to back, nothing else: %d actions", s_nact);
-    fd_set_status(&D, FD_STATUS_OK);      /* the relay welcomed it */
-    frame(false);
-    CHECK(!D.boot && s_homes == 1 && s_melts == 3 && D.cur == FD_ST_CREATURE, "link up: the human's creature (%d homes, %d melts)", s_homes, s_melts);
-    int n = s_nact, melts = s_melts;
+    CHECK(!D.boot && D.cur == FD_ST_CREATURE && s_melts == 2 && !s_nact, "then melts into the creature");
+    int melts = s_melts;
     run(60.f, false);
-    CHECK(s_homes == 1 && s_melts == melts && s_nact > n, "home: idle life again, no further melt");
-    for (int i = n; i < s_nact; i++) CHECK(s_act[i] != CA_PADDLE, "no paddling after the boot (%d)", s_act[i]);
-
-    /* the human's creature is the boot's: it carries on, no melt */
-    boot_screen(false, true);
-    run(5.f, true);
-    fd_set_status(&D, FD_STATUS_OK); frame(false);
-    CHECK(!D.boot && !s_homes && s_melts == 2 && D.cur == FD_ST_CREATURE, "same creature carries on (%d melts)", s_melts);
-    boot_screen(false, false);
-    run(3.f, true);
-    CHECK(!D.boot && !s_homes && D.cur == FD_ST_CREATURE, "same creature, no Wi-Fi: the word gives way to it");
-    /* idle life never fires between two strokes, however soon it is due */
-    boot_screen(true, true);
-    D.cfg.lively_min_s = D.cfg.lively_max_s = 0.1f; D.next_idle = 0.1f;
-    run(10.f, true);
-    bool strokes = s_nact > 0;
-    for (int i = 0; i < s_nact; i++) strokes = strokes && (s_act[i] == CA_PADDLE || s_act[i] == CA_WIGGLE);
-    CHECK(strokes, "only strokes while it paddles (%d actions)", s_nact);
-
-    /* no link within the ttl: it goes home anyway; an auth refusal counts as settled */
-    boot_screen(true, true);
-    fd_set_status(&D, FD_STATUS_RELAY);
-    run(19.8f, true);
-    CHECK(D.boot == FD_BOOT_PLAY, "relay down: paddling at 19.8 s");
-    run(0.3f, false);
-    CHECK(!D.boot && s_homes == 1 && D.cur == FD_ST_CREATURE, "ttl: home after 20 s");
-    boot_screen(true, true);
-    run(4.f, true);
-    fd_set_status(&D, FD_STATUS_AUTH); frame(false);
-    CHECK(!D.boot && s_homes == 1, "auth refused: home at once");
-
-    /* no Wi-Fi configured: the word, then straight home (a fresh device never stalls) */
-    boot_screen(true, false);
-    run(2.7f, true);
-    CHECK(D.boot == FD_BOOT_WORD, "no Wi-Fi: the word first");
-    run(0.2f, true);
-    CHECK(!D.boot && s_homes == 1 && s_melts == 2 && D.cur == FD_ST_CREATURE && !s_nact, "then the human's creature, no paddling");
-    /* a link that came up while the word held: the same */
-    boot_screen(true, true);
-    fd_set_status(&D, FD_STATUS_OK);
-    run(3.f, true);
-    CHECK(!D.boot && s_homes == 1 && s_melts == 2 && !s_nact, "link up during the word: straight home");
+    CHECK(s_melts == melts && s_nact > 0, "home: idle life, no further melt");
 
     /* the screen is wanted: the pairing code during the word, held */
-    boot_screen(true, true);
+    boot_screen();
     run(1.f, true);
     request(FD_ST_TEXT, true);
-    CHECK(!D.boot && s_homes == 1 && D.cur == FD_ST_TEXT && D.text_hold && s_melts == 2, "pairing code ends the boot screen");
-    run(30.f, true);
-    CHECK(D.cur == FD_ST_TEXT && !s_nact, "and holds, no paddling under it");
-    /* a listen while it paddles: home at once, nothing more under the listen */
-    boot_screen(true, true);
-    run(5.f, true);
-    n = s_nact;
+    CHECK(!D.boot && D.cur == FD_ST_TEXT && D.text_hold && s_melts == 2, "pairing code ends the boot screen");
+    /* a listen, a question, a mood, an act, autoplay: each ends it */
+    boot_screen(); run(1.f, true);
     fd_set_busy(&D, true, false); frame(false);
-    CHECK(!D.boot && s_homes == 1 && D.cur == FD_ST_CREATURE && s_melts == 3, "a listen ends it: home");
-    run(10.f, false);
-    CHECK(s_nact == n, "nothing plays under the listen");
-    /* a question, a mood, an act, autoplay: each ends it */
-    boot_screen(false, true);
-    run(4.f, true);
+    CHECK(!D.boot && D.cur == FD_ST_CREATURE, "a listen ends it: the creature");
+    boot_screen(); run(1.f, true);
     fd_set_busy(&D, true, true); frame(false);
-    CHECK(!D.boot && !s_homes, "a question ends it (same creature: nothing to load)");
-    boot_screen(true, true);
-    run(1.f, true);
+    CHECK(!D.boot, "a question ends it");
+    boot_screen(); run(1.f, true);
     fd_agent_mood(&D, CM_HAPPY, -1.f); frame(false);
-    CHECK(!D.boot && s_homes == 1 && D.cur == FD_ST_CREATURE, "a mood during the word: the creature");
-    boot_screen(true, true);
-    run(4.f, true);
+    CHECK(!D.boot && D.cur == FD_ST_CREATURE, "a mood during the word: the creature");
+    boot_screen(); run(1.f, true);
     fd_agent_act(&D, CA_NOD, cute_act_dur(CA_NOD)); frame(false);
-    CHECK(!D.boot && s_homes == 1, "an act ends it");
-    boot_screen(true, true);
+    CHECK(!D.boot, "an act ends it");
+    boot_screen();
     fd_autoplay(&D); frame(true);
-    CHECK(!D.boot && D.autoplay && s_homes == 1, "autoplay ends it");
+    CHECK(!D.boot && D.autoplay, "autoplay ends it");
     /* without fd_boot nothing changes: test_boot */
 }
 

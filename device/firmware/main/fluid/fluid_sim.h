@@ -223,6 +223,7 @@ typedef struct {
 
 typedef struct {
     float *cov, *orp, *near, *near_s, *dark, *tmp;
+    uint8_t *dots;                     /* fluid_text_set_glyphs: each cell's braille dots  */
     void  *block;
     int    stage;                      /* the sim's stage side, px                        */
     float  plain_font;
@@ -235,6 +236,11 @@ void fluid_text_destroy(fluid_text_t *tx);
 /** Fix the type size for a sentence: ext = max over words of the wider pivot half. */
 void fluid_text_set_sentence(fluid_text_t *tx, float ext);
 void fluid_text_set_word(fluid_text_t *tx, const fluid_sim_t *s, const char *w, int len, int orp);
+/** A word in the fluid's own braille dots (the boot screen's "molty.uno"): its 5x7 letters
+ *  on the dot lattice (tx->dots, for fluid_draw_opts_t.dots), the fluid pooling under them
+ *  (cov), no ASCII letters (nletters 0). As wide as the stage allows; lowercase stays
+ *  lowercase. Then fluid_text_fill. */
+void fluid_text_set_glyphs(fluid_text_t *tx, const fluid_sim_t *s, const char *w);
 void fluid_text_fill(fluid_text_t *tx, fluid_sim_t *s, float t);
 
 /** A question's labels (fluid_ask.h lays them out): each centred at (cx, cy) stage px, one
@@ -316,6 +322,8 @@ typedef struct {
     const fluid_letter_t *letters; int nletters;
     const char *ramp;                  /* ASCII ramp, dark → bright                       */
     const uint8_t *(*font)(char);      /* 5×7 rows, bit (4-col); NULL → no ASCII/letters  */
+    const uint8_t *dots;               /* W×H braille dots drawn wherever the fluid's ink
+                                        * reaches them (fluid_text_set_glyphs), or NULL   */
 } fluid_draw_opts_t;
 
 /** W×H cells drawn into an fb_w×fb_h framebuffer; the stage is its largest centred

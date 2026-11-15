@@ -36,13 +36,10 @@
 #include "cute_act.h"
 #include "creature_pkg.h"
 #include "pkg_creature.h"
-#include "pkg_store.h"   /* PKG_INSTALLED_MAX */
-#include "network.h"     /* net_wifi_configured: the boot screen waits for the link */
 #include "glyph_rsvp.h"
 #include "molty_board.h"
 
 #include <string.h>
-#include <strings.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <sys/stat.h>
@@ -145,7 +142,7 @@ static bool    s_req_text_hold = false;         /* …"text" holding its last wo
 static bool    s_req_reel  = false;             /* pending autoplay restart         */
 static bool    s_req_activity = false;          /* a state / mood / text change came */
 static bool    s_req_shake = false, s_req_user = false;   /* sense.c: shake, button  */
-static int     s_status_in = -1;                /* link status (mole_fluid_set_status), -1 = none yet */
+static int     s_status_in = FD_STATUS_OK;      /* link status (mole_fluid_set_status) */
 /* the question the link wants on screen (mole_fluid_ask_*): seq = which one; pick = the
  * answer once it came (the task holds it, then leaves by itself) */
 typedef struct {
@@ -208,8 +205,6 @@ static uint8_t *s_cute_blob = NULL;  static size_t s_cute_len = 0;   /* pending 
 static bool     s_cute_pkg = false;                 /* the pending file is a creature package */
 static char     s_cr_id[PKG_ID_MAX + 1] = "";       /* the package shown or on its way; "" = .molty */
 static bool     s_booted = false;                   /* the boot screen played: once per power on */
-static uint8_t *s_home = NULL;  static size_t s_home_len = 0;   /* the human's creature, waiting out the boot screen */
-static bool     s_home_pkg = false;
 static int      s_req_mood = -1;
 static bool     s_req_work = false;             /* mood `working` (fd_agent_work; s_req_hold_s) */
 static float    s_req_hold_s = -1.f;                /* with s_req_mood: < 0 = its default */
@@ -303,6 +298,7 @@ static atomic_bool s_screen_want = true;        /* mole_fluid_screen            
 static atomic_bool s_screen = true;             /* on the glass now (the task switches it) */
 static atomic_bool s_bye = false, s_bye_done = false;   /* mole_fluid_goodbye; it ended   */
 static float    s_bye_lvl = 1.f;                    /* the panel's level the goodbye set */
+static bool     s_word_dots = false;                /* the boot word's dots (s_tx->dots) are drawn */
 static bool  s_touch_mute = false;              /* the touch that woke the screen, until it lifts */
 #define FLUID_OFF_POLL_MS  50                   /* screen off: touch and wake checks       */
 /* the drawer's window buffer (fluid_draw_send): internal DMA-capable RAM, which the panel's
@@ -387,11 +383,14 @@ static void enter_state(int st, int fx, const fluid_cfg_t *cfg) {
     if (s_cur == ST_FX) fluid_effect_exit(s_sim, s_cur_fx);
     if (st == ST_CREATURE && !cr_loaded()) st = ST_BLOB;   /* no creature loaded */
     s_sim->edge_w = st == ST_CREATURE ? 1.f : 0.f;      /* solid eyes once settled */
-    if (st == ST_TEXT && (fd_boot_word(&s_dir) || fd_bye_word(&s_dir))) {   /* boot / goodbye: one static label, held */
-        const char *w = fd_bye_word(&s_dir) ? BYE_WORD : BOOT_WORD;
-        const int n = (int)strlen(w);
+    s_word_dots = st == ST_TEXT ? fd_boot_word(&s_dir) : s_word_dots && s_cur == ST_TEXT;   /* kept through its melt */
+    if (st == ST_TEXT && fd_boot_word(&s_dir)) {   /* the boot screen's word, in the fluid's own dots */
+        fluid_text_set_glyphs(s_tx, s_sim, BOOT_WORD);
+        s_word = 0; s_word_until = 1e9f; s_text_hidden = false;
+    } else if (st == ST_TEXT && fd_bye_word(&s_dir)) {   /* the goodbye: one static label, held */
+        const int n = (int)strlen(BYE_WORD);
         fluid_text_set_sentence(s_tx, n / 2.f);
-        fluid_text_set_word(s_tx, s_sim, w, n, -1);
+        fluid_text_set_word(s_tx, s_sim, BYE_WORD, n, -1);
         s_word = 0; s_word_until = 1e9f; s_text_hidden = false;
     } else if (st == ST_TEXT) {
         if (s_ntok == 0) { strcpy(s_ttext, "..."); tokenize(); }
@@ -423,14 +422,10 @@ static void enter_state(int st, int fx, const fluid_cfg_t *cfg) {
     if (st == ST_FX) fluid_effect_enter(s_sim, fx);
 }
 
-static void home_load(void);
-
 /* the director's pending transition, if any, then its mood on the creature (moods blend
- * inside the creature: its mood engine fades between them and ignores the same mood). The
- * boot screen's end loads the human's creature first: the transition dissolves into it. */
+ * inside the creature: its mood engine fades between them and ignores the same mood) */
 static void direct(const fluid_cfg_t *cfg) {
     int st, fx;
-    if (fd_take_home(&s_dir)) home_load();
     /* a question owns the screen: the director's transitions wait under it */
     if (s_ask.scr.phase == FLUID_ASK_NONE && fd_take(&s_dir, &st, &fx)) enter_state(st, fx, cfg);
     cr_set_mood(fd_mood(&s_dir));
@@ -842,45 +837,9 @@ static uint8_t *boot_creature(size_t *len, bool *pkg, char id[PKG_ID_MAX + 1]) {
     return creature_bytes(len, &dflt);
 }
 
-/* the boot screen's creature (fluid_director.h "boot screen"): the firmware default (the
- * .molty mole_fluid_creature_file_get falls back to), played by the creature package that
- * goes by its name when there is one (installed first, then built in), so a human who chose
- * that creature sees the very same one carry on. The firmware names no creature: the
- * default's own name picks the package. */
-static uint8_t *boot_screen_creature(size_t *len, bool *pkg, char id[PKG_ID_MAX + 1]) {
-    const int max = PKGC_N_BUILTINS + PKG_INSTALLED_MAX;
-    cute_spec_t *spec = heap_caps_malloc(sizeof(cute_spec_t), MALLOC_CAP_SPIRAM);
-    pkgc_entry_t *e = heap_caps_malloc(sizeof(pkgc_entry_t) * (size_t)max, MALLOC_CAP_SPIRAM);
-    const char *err;
-    int k = -1;
-    if (spec && e && cute_spec_parse(_binary_default_molty_start,
-                                     (size_t)(_binary_default_molty_end - _binary_default_molty_start), spec, &err) == 0)
-        for (k = pkgc_list(e, max) - 1; k >= 0 && strcasecmp(e[k].name, spec->name); k--) {}
-    uint8_t *b = NULL;
-    if (k >= 0) { strlcpy(id, e[k].id, PKG_ID_MAX + 1); b = (uint8_t *)pkgc_bytes(id, len); }
-    heap_caps_free(spec); heap_caps_free(e);
-    *pkg = b != NULL;
-    if (b) return b;
-    id[0] = 0;
-    return default_bytes(len);
-}
-
-/* the boot screen ended: the human's creature it held back, now (on the task) */
-static void home_load(void) {
-    xSemaphoreTake(s_mutex, portMAX_DELAY);
-    uint8_t *b = s_home; const size_t n = s_home_len; const bool pkg = s_home_pkg;
-    s_home = NULL;
-    xSemaphoreGive(s_mutex);
-    if (!b) return;                                    /* chosen anew meanwhile (queue_creature) */
-    load_creature(b, n, pkg);
-    heap_caps_free(b);
-    fd_set_creature(&s_dir, cr_loaded());
-}
-
 static void queue_creature(uint8_t *blob, size_t len, bool pkg, const char *id) {   /* takes ownership */
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     if (s_cute_blob) heap_caps_free(s_cute_blob);
-    heap_caps_free(s_home); s_home = NULL;             /* a new choice outranks the one the boot screen held */
     s_cute_blob = blob; s_cute_len = len; s_cute_pkg = pkg;
     strlcpy(s_cr_id, id, sizeof(s_cr_id));
     xSemaphoreGive(s_mutex);
@@ -1203,6 +1162,8 @@ static void fluid_task(void *arg) {
             .shimmer = s_shimmer, .time = s_tnow, .melt = s_melt,
             .letters = s_dletters, .nletters = s_noverlay,
             .ramp = GC_RAMP_ASCII, .font = gc_font5x7,
+            /* the boot word, and its dots while it melts (each goes as the ink leaves it) */
+            .dots = s_word_dots && (s_cur == ST_TEXT || s_melt_t < 0.8f) ? s_tx->dots : NULL,
         };
         memcpy(s_dletters, s_overlay, sizeof(fluid_letter_t) * (size_t)s_noverlay);
         if (s_touch_t0) { s_dtouch = s_touch_t0; s_touch_t0 = 0; }
@@ -1337,27 +1298,16 @@ esp_err_t mole_fluid_creature_init(void) {
         if (!s_win) s_win = heap_caps_malloc((size_t)s_win_px * sizeof(uint16_t), MALLOC_CAP_SPIRAM);   /* bounced, slower */
         if (!s_win) { free_grid(); return ESP_ERR_NO_MEM; }
     }
-    /* the chosen creature (boot_creature), built on the task. At power on the boot screen's
-     * creature plays first and the chosen one waits in s_home, unless they are the same */
-    size_t clen = 0, blen = 0; bool pkg = false, bpkg = false; char id[PKG_ID_MAX + 1], bid[PKG_ID_MAX + 1];
-    uint8_t *cb = boot_creature(&clen, &pkg, id);
-    const bool boot = !s_booted;
-    uint8_t *bb = boot ? boot_screen_creature(&blen, &bpkg, bid) : NULL;
-    const bool home = bb && cb && !(pkg == bpkg && (pkg ? !strcmp(id, bid) : clen == blen && !memcmp(cb, bb, clen)));
-    s_booted = true;
-    if (home) {
-        queue_creature(bb, blen, bpkg, id);              /* reported as the chosen one already */
-        xSemaphoreTake(s_mutex, portMAX_DELAY);
-        s_home = cb; s_home_len = clen; s_home_pkg = pkg;
-        xSemaphoreGive(s_mutex);
-    } else {
-        heap_caps_free(bb);
+    {   /* the chosen creature (boot_creature), built on the task */
+        size_t clen = 0; bool pkg = false; char id[PKG_ID_MAX + 1];
+        uint8_t *cb = boot_creature(&clen, &pkg, id);
         if (cb) queue_creature(cb, clen, pkg, id);
     }
     /* boot: the director wants the creature (the one queued above loads on the task's first
-     * frame; the blob stands in only if none loads); at power on, the boot screen first */
+     * frame; the blob stands in only if none loads); at power on, the boot screen's word first */
     fd_init(&s_dir, NULL, esp_random());
-    if (boot) fd_boot(&s_dir, home, net_wifi_configured());
+    if (!s_booted) fd_boot(&s_dir);
+    s_booted = true;
     s_cur = ST_BLOB; s_cur_fx = 0; s_word = 0; s_ntok = 0;
     s_tnow = s_acc = 0.f; s_melt_t = 1e9f;
     s_gx = s_gy = 0.f; s_touch_down = false;
