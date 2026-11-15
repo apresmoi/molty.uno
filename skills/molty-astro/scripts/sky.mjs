@@ -62,15 +62,32 @@ export function tonight(date) {
   return { scenes, say: `Tonight's moon is ${pct} percent lit, ${s.moon.waxing ? 'waxing' : 'waning'}, in ${s.moon.sign}. Then Mercury, Venus, Mars, Jupiter and Saturn.`, facts: { moon: { lit: pct, waxing: s.moon.waxing, sign: s.moon.sign }, planets: Object.fromEntries(PLANETS.map((p) => { const lon = eclipticLon(p, date); return [p, `${Math.floor(mod360(lon) % 30)} ${signOf(lon)}`]; })) } };
 }
 const KIND_LIST = { sextile: 'sextiles', square: 'squares', trine: 'trines', opposition: 'oppositions' };
-/** A command's params stay small: the loosest aspects are left off the wheel until it fits. */
+/** A drawing's params stay small: the loosest aspects are left off the wheel until it fits (spot readings come on top). */
 export const MAX_PARAMS_BYTES = 900;
+// What a tap on the chart reads (a spot): each body and sign in a line or two.
+const MEANS = { Sun: 'who you are', Moon: 'what you feel', Mercury: 'how you think', Venus: 'what you love', Mars: 'how you act', Jupiter: 'where you grow', Saturn: 'where you work hard', Uranus: 'where you break the rules', Neptune: 'what you dream', Pluto: 'what changes you deep down' };
+const SIGN_MEANS = ['bold', 'steady', 'curious', 'caring', 'warm', 'careful', 'fair', 'intense', 'free', 'ambitious', 'original', 'dreamy'];
+const ELEMENTS = ['fire', 'earth', 'air', 'water'];
+const VERB = { conjunction: 'with', sextile: 'sextile', square: 'square', trine: 'trine', opposition: 'opposite' };
+const signIndex = (lon) => Math.floor(mod360(lon) / 30);
+function bodyReading(b, aspects) {
+  const i = signIndex(b.lon), with3 = aspects.filter((a) => a.a === b.name || a.b === b.name).slice(0, 3).map((a, k) => `${k ? VERB[a.name] : VERB[a.name][0].toUpperCase() + VERB[a.name].slice(1)} ${a.a === b.name ? a.b : a.a}`);
+  return `${b.name} in ${SIGNS[i]}, ${Math.floor(mod360(b.lon) % 30)} degrees: ${MEANS[b.name]}, ${SIGN_MEANS[i]}.${with3.length ? ` ${with3.join(', ')}.` : ''}`;
+}
+function signReading(i, bodies) {
+  const here = bodies.filter((b) => signIndex(b.lon) === i).map((b) => b.name);
+  return `${SIGNS[i]}, ${ELEMENTS[i % 4]} sign, ${SIGN_MEANS[i]}. ${here.length ? `Here: ${here.join(', ')}.` : 'Nothing here.'}`;
+}
 export function chart(date) {
   const s = sky(date), placed = placeBodies(s.bodies), inner = Math.min(...placed.map((b) => b.r)) - 0.07, aspects = findAspects(s.bodies);
   const line = (a) => { const [x1, y1] = polar(chartAngle(a.lonA), inner), [x2, y2] = polar(chartAngle(a.lonB), inner); return { x1: r2(x1), y1: r2(y1), x2: r2(x2), y2: r2(y2) }; };
   const build = (n) => { const params = { inner: r3(inner), bodies: placed.map((b) => ({ g: `g-${b.name.toLowerCase()}`, a: chartAngle(b.lon), r: r3(b.r), c: INK[b.name] })), ...Object.fromEntries(Object.values(KIND_LIST).map((k) => [k, []])) }; for (const a of aspects.filter((a) => a.angle > 0).slice(0, n)) params[KIND_LIST[a.name]].push(line(a)); return params; };
   let n = 32, params = build(n);
   while (n > 0 && JSON.stringify(params).length > MAX_PARAMS_BYTES) params = build(--n);
-  return { scenes: [['chart', params]], say: `The whole sky: ten bodies on the zodiac, ${aspects.length} aspects between them.`, facts: { bodies: Object.fromEntries(s.bodies.map((b) => [b.name, `${Math.floor(mod360(b.lon) % 30)} ${signOf(b.lon)}`])), aspects: aspects.map((a) => `${a.a} ${a.name} ${a.b} (orb ${a.orb.toFixed(1)})`), drawn: n } };
+  // the readings ride beside the drawing (its budget is the drawing's alone)
+  params.bodies.forEach((b, k) => Object.assign(b, { say: bodyReading(placed[k], aspects), id: placed[k].name.toLowerCase() }));
+  params.signs = SIGNS.map((name, i) => ({ a: (195 + 30 * i) % 360, say: signReading(i, s.bodies), id: name.toLowerCase() }));
+  return { scenes: [['chart', params]], say: `The whole sky: ten bodies on the zodiac, ${aspects.length} aspects between them. Tap a planet or a sign to read it.`, facts: { bodies: Object.fromEntries(s.bodies.map((b) => [b.name, `${Math.floor(mod360(b.lon) % 30)} ${signOf(b.lon)}`])), aspects: aspects.map((a) => `${a.a} ${a.name} ${a.b} (orb ${a.orb.toFixed(1)})`), drawn: n, tap: 'a tap on a body or a sign shows its reading; the tap event names it (spot)' } };
 }
 const FIG = { sextile: 6, square: 4, trine: 3, opposition: 2, conjunction: 1 };
 const GRID = '#565b72';

@@ -95,7 +95,7 @@ Success: `200 {"ok":true,"result":{…}}`. Unknown argument keys are rejected.
 | `pkg.install` | `{"id", "url", "sha256", "size", "name"}` (an entry's `install` from `pkg.available`) | `{job}`; done → `{installed, version}` | Molty asks its human with one tap, downloads the file itself and checks its sha256 ([packages](#packages-and-scenes)); errors `declined` (said no, or no tap in time), `pkg_timeout`, `bad_url`, `too_big`, `hash_mismatch`, `bad_package`, `no_space`, `busy` |
 | `pkg.remove` | `{"id"}` | `{removed}` | `not_installed` if it is not there |
 | `pkg.list` | none | `{packages: [{id, name, version, kind, size}]}` | what this Molty has installed |
-| `scene.play` | `{"pkg", "layout", "params"?: {…}, "ttl_s"?: 1..600}` | none | replaces the screen with a package's layout, drawn from a few params (≤ 2048 bytes); back to the creature after `ttl_s` (default 60); `not_installed`, `no_layout`, `bad_params` |
+| `scene.play` | `{"pkg", "layout", "params"?: {…}, "ttl_s"?: 1..600}` | none | replaces the screen with a package's layout, drawn from a few params (≤ 8192 bytes); back to the creature after `ttl_s` (default 60); `not_installed`, `no_layout`, `bad_params` |
 | `scene.queue` | same as `scene.play` | none | plays after the current scene ends |
 | `scene.clear` | none | none | melts back to the creature |
 | `creature.select` | `{"id"}` | `{id, name}` | which creature Molty is: a built-in one (`duck`, `cat`, `octopus`) or an installed creature package (`kind: "creature"`); kept across reboots; `not_installed`, `bad_package` |

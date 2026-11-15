@@ -170,6 +170,12 @@ void mole_fluid_shed_internal(void);
  * left above the sim's reserve (rebuilt on the task's next frame). Once a boot, never after
  * a shed. Any task. */
 void mole_fluid_allow_internal(void);
+
+/** A tap at panel pixel (px, py): on a spot of the scene on screen (scene_player.h), Molty
+ *  shows its reading as the subtitle. Non-zero (which spot) if it landed on one. Any task. */
+unsigned mole_fluid_spot_tap(int px, int py);
+/** That spot's id into id (size bytes; "" if it has none or its scene has gone). Any task. */
+void mole_fluid_spot_id(unsigned spot, char *id, size_t size);
 /* how many of the sim's hot fields sit in internal RAM (the last frame's count) */
 int mole_fluid_internal_fields(void);
 void mole_fluid_spoke(void);

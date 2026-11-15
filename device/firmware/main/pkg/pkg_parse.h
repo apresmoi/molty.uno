@@ -42,15 +42,16 @@ extern "C" {
 #define PKG_PARAMS_MAX    8             /* per layout                                       */
 #define PKG_PTS_MAX       16            /* per line / curve                                 */
 #define PKG_STR_MAX       40            /* a text item's characters (= the letter overlay)  */
+#define PKG_SAY_MAX       160           /* a spot's reading, characters                     */
 #define PKG_DUR_MAX       600.f         /* s                                                */
 
-enum { PK_RING, PK_ARC, PK_TICKS, PK_LINE, PK_CURVE, PK_DISC, PK_BALL, PK_GLYPH, PK_TEXT, PK_KINDS };
+enum { PK_RING, PK_ARC, PK_TICKS, PK_LINE, PK_CURVE, PK_DISC, PK_BALL, PK_GLYPH, PK_TEXT, PK_SPOT, PK_KINDS };
 extern const char *const PKG_KIND_NAMES[PK_KINDS];
 
 /* an item's fields; the numeric ones first (PF_NUMS) */
 enum { PF_X, PF_Y, PF_R, PF_W, PF_A0, PF_A1, PF_LEN, PF_N, PF_SIZE, PF_LIT, PF_SIDE, PF_SPIN,
        PF_ROT, PF_ON, PF_OFF, PF_PA, PF_PR, PF_NUMS = PF_PR + 1,
-       PF_COLOR = PF_NUMS, PF_ASSET, PF_STR, PF_COUNT };
+       PF_COLOR = PF_NUMS, PF_ASSET, PF_STR, PF_SAY, PF_ID, PF_COUNT };
 
 enum { PV_NONE, PV_NUM, PV_COLOR, PV_ASSET, PV_STR, PV_PARAM, PV_ELEM };
 typedef struct {

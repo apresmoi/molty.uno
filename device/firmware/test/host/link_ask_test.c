@@ -35,7 +35,11 @@ bool link_audio_gesture_talk(const char *input) { (void)input; talks++; return t
 static int holds, releases;
 void link_audio_hold(bool down, const char *input) { (void)input; if (down) holds++; else releases++; }
 void link_audio_stop_any(void) { stops++; }
-bool link_audio_listening(uint32_t *age) { (void)age; return false; }
+static bool listening;
+bool link_audio_listening(uint32_t *age) { (void)age; return listening; }
+static unsigned spot_hit;       /* the spot a tap lands on (mole_fluid.c), 0 none */
+unsigned mole_fluid_spot_tap(int px, int py) { (void)px; (void)py; return spot_hit; }
+void mole_fluid_spot_id(unsigned spot, char *id, size_t size) { snprintf(id, size, "%s", spot ? "mars" : ""); }
 bool link_audio_say_waiting(void) { return false; }
 uint32_t link_audio_job_gen(void) { return 0; }
 void link_audio_request(uint32_t gen, link_audio_req_t what) { (void)gen; (void)what; }
@@ -164,6 +168,29 @@ static void test_deadline(void) {
     assert(open_q("u11", 1000) == ESP_OK);
     sdk_now += 1000001; touch(206 - 100, 206); link_ask_tick();
     assert(dones == d0 + 2 && done_index == -1 && !strcmp(done_reason, "timeout"));
+}
+
+/* A tap on a scene's spot is the spot's (its reading shows), not a plain tap; a question's
+ * labels and a recording come first */
+static void test_spot(void) {
+    nframes = 0;
+    atomic_store(&s_tap, false); atomic_store(&s_spot, 0);
+    spot_hit = 0x105;
+    touch(100, 100);
+    assert(atomic_load(&s_spot) == 0x105 && !atomic_load(&s_tap));
+    atomic_store(&s_spot, 0);
+    listening = true;                       /* a tap that stops a recording does that */
+    touch(100, 100);
+    assert(!atomic_load(&s_spot) && atomic_load(&s_tap));
+    listening = false; atomic_store(&s_tap, false);
+    spot_hit = 0;
+    touch(100, 100);
+    assert(!atomic_load(&s_spot) && atomic_load(&s_tap));
+    atomic_store(&s_tap, false);
+    /* the agent hears which spot, whatever tap is bound to */
+    const unsigned n0 = nframes;
+    spot_do(0x105, sdk_now / 1000, &(gesture_limit_t){ .min_ms = 250 });
+    assert(nframes == n0 + 1 && strstr(last(), "\"name\":\"tap\"") && strstr(last(), "\"spot\":\"mars\""));
 }
 
 int main(void) {
@@ -321,6 +348,7 @@ int main(void) {
     assert(link_ask_open("u7", UL, UC, 2, 5000, on_done) == ESP_ERR_NOT_SUPPORTED);
     sdk_caps = 0xFFFFFFFFu;
     test_displayed();
+    test_spot();
     test_deadline();
     link_ask_cancel();
     /* activity log: every question shown (answered, timed out, cancelled, replaced) ended its tag */

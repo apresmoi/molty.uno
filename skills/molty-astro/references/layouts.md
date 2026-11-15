@@ -17,7 +17,7 @@ All go to `POST $MOLTY_RELAY/v1/devices/<device>/cmd` with `Authorization: Beare
    → `{installed, version}`, or `202 {job, status:"pending"}`: poll `GET $MOLTY_RELAY/v1/jobs/<job>?wait_s=8`
    (about 2 min at most; errors `declined`, `pkg_timeout`, `hash_mismatch`, …).
 4. **Play**: `{"name":"scene.play","args":{"pkg":"astrology","layout":"globe","params":{…},"ttl_s":8}}`,
-   then `scene.queue` for each next one (at most 8 wait). Keep `params` small (a few hundred bytes; at most 2048).
+   then `scene.queue` for each next one (at most 8 wait). Keep `params` small (a few hundred bytes, more with spot readings; at most 8192).
    Every declared param must be sent, nothing else; a list holds at most 32 flat objects. `not_installed` → install again, then play.
 5. `{"name":"scene.clear"}` melts back to the creature; `{"name":"pkg.remove","args":{"id":"astrology"}}` uninstalls.
 
