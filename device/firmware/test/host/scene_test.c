@@ -279,6 +279,91 @@ static void test_occlusion(void) {
     pkg_unref(p);
 }
 
+/* ── spots: a place to tap and the words for it; hairlines ─────────────────── */
+
+static const char *SPOTS =
+    "{\"v\":\"molty-pkg/1\",\"id\":\"spots\",\"name\":\"Spots\",\"version\":\"1\",\"kind\":\"scenes\",\"layouts\":{"
+    "\"map\":{\"params\":{\"list\":\"list\"},\"items\":["
+    "{\"k\":\"spot\",\"each\":\"$list\",\"polar\":[\"@a\",0.5],\"r\":0.2,\"say\":\"@say\",\"id\":\"@id\"},"
+    "{\"k\":\"spot\",\"x\":0,\"y\":0,\"r\":0.2,\"say\":\"the middle\",\"on\":1}]},"
+    "\"hair\":{\"items\":[{\"k\":\"line\",\"pts\":[[-0.8,-0.5],[0.8,0.3]],\"w\":0.012}]}}}";
+
+static void test_spots(void) {
+    const char *err;
+    pkg_t *p = pkg_parse(SPOTS, strlen(SPOTS), &err);
+    CHECK(p, "the spots package parses (%s)", err ? err : "");
+    if (!p) return;
+    char say[PKG_SAY_MAX + 2];
+    memset(say, 'a', PKG_SAY_MAX); say[PKG_SAY_MAX] = 0;
+    char params[1024];
+    snprintf(params, sizeof params, "{\"list\":[{\"a\":0,\"say\":\"%s\",\"id\":\"east\"},{\"a\":20,\"say\":\"north of east\",\"id\":\"ne\"}]}", say);
+    cJSON *j = cJSON_Parse(params);
+    scene_t *sc = scene_build(p, "map", j, 0, &err);
+    cJSON_Delete(j);
+    CHECK(sc && sc->nitems == 3, "spots build, a %d-letter reading too (%s)", PKG_SAY_MAX, err ? err : "");
+    if (sc) {
+        const scene_item_t *e = &sc->items[0];
+        CHECK(e->k == PK_SPOT && e->nstr == PKG_SAY_MAX && e->nsid == 4 && !memcmp(sc->say + e->sid, "east", 4), "its reading and id");
+        CHECK(sc->items[2].nsid == 0 && sc->items[2].nstr == 10, "a literal reading, no id");
+        CHECK(scene_spot_at(sc, 0.f, 0.55f, 0.f) == 0, "a tap on it");
+        const float nx = 0.5f * cosf(20.f * 0.017453293f), ny = 0.5f * sinf(20.f * 0.017453293f);
+        CHECK(scene_spot_at(sc, 0.f, nx, ny - 0.02f) == 1, "two overlap: the nearer centre wins");
+        CHECK(scene_spot_at(sc, 0.f, -0.5f, 0.f) == -1, "a tap on nothing");
+        CHECK(scene_spot_at(sc, 0.5f, 0.f, 0.f) == -1 && scene_spot_at(sc, 1.5f, 0.f, 0.f) == 2, "a spot is there from its on");
+        fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
+        fluid_letter_t L[FLUID_MAX_LETTERS]; int nl;
+        scene_fill(s, sc, 2.f, NULL, L, &nl, NULL);
+        int ink = 0;
+        for (int k = 0; k < s->N; k++) ink += s->T[k] != 0;
+        CHECK(ink == 0 && nl == 0, "a spot draws nothing (%d cells)", ink);
+        fluid_sim_destroy(s);
+    }
+    scene_free(sc);
+    say[PKG_SAY_MAX] = 'a'; say[PKG_SAY_MAX + 1] = 0;
+    snprintf(params, sizeof params, "{\"list\":[{\"a\":0,\"say\":\"%s\",\"id\":\"east\"}]}", say);
+    j = cJSON_Parse(params);
+    sc = scene_build(p, "map", j, 0, &err);
+    cJSON_Delete(j);
+    CHECK(!sc && !strcmp(err, "bad_params"), "a reading over %d letters", PKG_SAY_MAX);
+    scene_free(sc);
+    static const char *NO_SAY = "{\"v\":\"molty-pkg/1\",\"id\":\"x\",\"name\":\"X\",\"version\":\"1\",\"kind\":\"scenes\",\"layouts\":{\"a\":{\"items\":[{\"k\":\"spot\",\"r\":0.2}]}}}";
+    pkg_t *q = pkg_parse(NO_SAY, strlen(NO_SAY), &err);
+    CHECK(!q, "a spot needs its reading");
+    pkg_unref(q);
+
+    sc = scene_build(p, "hair", NULL, 0, &err);
+    fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
+    uint8_t *dots = calloc((size_t)s->N, 1);
+    fluid_letter_t L[FLUID_MAX_LETTERS]; int nl;
+    scene_fill(s, sc, 0.f, NULL, L, &nl, dots);
+    /* a hairline: one dot wide and unbroken. Each dot column it crosses shows its nearest dot,
+     * and no dot further than half a dot from it shows (a dithered soft edge scatters them) */
+    const int DW = 2 * s->W, DH = 4 * s->H;
+    const float half = 1.f / (float)(DW < DH ? DW : DH), ax = -0.8f, ay = -0.5f, bx = 0.8f, by = 0.3f;
+    int gaps = 0, cols = 0, strays = 0;
+    for (int dy = 0; dy < DH; dy++) for (int dx = 0; dx < DW; dx++) {
+        if (!(dots[(dy >> 2) * s->W + (dx >> 1)] & (1 << fluid_braille_bit(dx & 1, dy & 3)))) continue;
+        const float px = ((dx + 0.5f) / DW) * 2.f - 1.f - ax, py = 1.f - ((dy + 0.5f) / DH) * 2.f - ay;
+        const float l2 = (bx - ax) * (bx - ax) + (by - ay) * (by - ay);
+        float u = (px * (bx - ax) + py * (by - ay)) / l2;
+        u = u < 0.f ? 0.f : u > 1.f ? 1.f : u;
+        const float ex = px - u * (bx - ax), ey = py - u * (by - ay);
+        strays += sqrtf(ex * ex + ey * ey) > half * 1.01f;
+    }
+    for (int dx = 0; dx < DW; dx++) {
+        const float x = ((dx + 0.5f) / DW) * 2.f - 1.f;
+        if (x < -0.78f || x > 0.78f) continue;
+        const int dy = (int)((1.f - (ay + (by - ay) * (x - ax) / (bx - ax))) * 0.5f * DH);
+        gaps += !(dots[(dy >> 2) * s->W + (dx >> 1)] & (1 << fluid_braille_bit(dx & 1, dy & 3)));
+        cols++;
+    }
+    CHECK(cols > 80 && gaps == 0 && strays == 0, "a hairline: %d gaps in %d dot columns, %d stray dots", gaps, cols, strays);
+    free(dots);
+    fluid_sim_destroy(s);
+    scene_free(sc);
+    pkg_unref(p);
+}
+
 /* ── a real package: every command the molty-astro skill sends (fixtures/astrology*, copied from
  * the astrology team's packages/astrology/astrology.json and `astro.mjs <scene> --dry-run`) ── */
 
@@ -383,6 +468,7 @@ int main(int argc, char **argv) {
     test_player();
     test_fill();
     test_occlusion();
+    test_spots();
     test_real_package(argv[1]);
     bench(argc > 2 ? argv[2] : "");
     CHECK(P->refs == 1, "every scene gave its package reference back (%d)", P->refs);

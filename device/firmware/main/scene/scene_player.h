@@ -21,6 +21,8 @@
  *             sim's target (T + tcol) in painter's order: a later item covers an earlier one
  *             (a black disc erases, a ball's dark side hides what is behind). Text items also
  *             hand their letters to the renderer's crisp overlay (at most SCENE_LETTERS).
+ *   spots     a spot draws nothing: it is a disc a tap can land on (scene_spot_at), with the
+ *             words Molty shows for it (its reading, a subtitle) and an id the tap event names.
  * Geometry is in glass units: the round window has radius 1, x right, y up, angles in
  * degrees, 0 = right, counter-clockwise.
  */
@@ -40,6 +42,7 @@ extern "C" {
 #define SCENE_LIST_MAX    32            /* elements of a list param                        */
 #define SCENE_PTS_MAX     512           /* resolved line / curve points, all items         */
 #define SCENE_LETTERS     40            /* a scene's own text, letters (the overlay holds FLUID_MAX_LETTERS) */
+#define SCENE_SAY_CHARS   4096          /* its spots' readings and ids, characters          */
 #define SCENE_QUEUE_MAX   8
 #define SCENE_TTL_DEFAULT 60.f
 #define SCENE_TTL_MAX     600.f
@@ -51,7 +54,8 @@ typedef struct {
     uint8_t k;                          /* PK_*                                            */
     int16_t asset;                      /* index into the package's assets, -1 = none      */
     uint16_t pts, npts;                 /* line / curve: its points in scene_t.pts         */
-    uint16_t str, nstr;                 /* text: its letters in scene_t.chars              */
+    uint16_t str, nstr;                 /* text: its letters in scene_t.chars; spot: its reading in scene_t.say */
+    uint16_t sid, nsid;                 /* spot: its id in scene_t.say (nsid 0: none)       */
     int n;                              /* ticks                                           */
     uint32_t rgb;
     float on, off;                      /* off 0 = until the end                           */
@@ -62,10 +66,11 @@ typedef struct scene {
     pkg_t *pkg;                         /* one reference, dropped by scene_free            */
     char pkg_id[PKG_ID_MAX + 1], layout[PKG_KEY_MAX + 1];
     float dur, ttl;
-    int nitems, npts, nchars;
+    int nitems, npts, nchars, nsay;
     scene_item_t items[SCENE_ITEMS_MAX];
     float pts[SCENE_PTS_MAX][2];
     char chars[SCENE_LETTERS];
+    char say[SCENE_SAY_CHARS];
 } scene_t;
 
 /** Build a scene from layout `layout` of p with `params` (an object, or NULL for none) and
@@ -74,6 +79,9 @@ scene_t *scene_build(pkg_t *p, const char *layout, const cJSON *params, float tt
 void scene_free(scene_t *sc);
 /** When the scene ends, s from its start: min(dur if > 0, ttl). */
 float scene_end(const scene_t *sc);
+/** The spot a tap at (x, y) (glass units, y up) lands on at t s: of the visible spots whose
+ *  disc holds it, the one whose centre is nearest. Its item index, -1 for none. */
+int scene_spot_at(const scene_t *sc, float t, float x, float y);
 
 typedef struct {
     scene_t *cur;
@@ -81,6 +89,7 @@ typedef struct {
     int nq;
     float t;                            /* s since cur started                             */
     bool started;                       /* a scene started since the last scene_take_start  */
+    unsigned gen;                       /* counts the scenes started: which one cur is      */
 } scene_player_t;
 
 /** Replace what plays (and the queue) with sc. Takes ownership. */

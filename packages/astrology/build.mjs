@@ -149,15 +149,18 @@ const layouts = {
     ],
   },
   sign: { dur: 4, params: { sign: text }, items: [{ k: 'glyph', size: 1.2, asset: '$sign', color: '#ffe9b0' }] },
-  // bodies: {g: glyph asset, a: chart angle, r: radius, c: colour}; each aspect list: lines {x1, y1, x2, y2} in its colour
+  // bodies: {g: glyph asset, a: chart angle, r: radius, c: colour, say, id}; each aspect list: lines {x1, y1, x2, y2} in
+  // its colour; signs: {a: chart angle, say, id}. A tap on a body or a sign shows its say (a spot)
   chart: {
     dur: 0,
-    params: { inner: num, bodies: list, ...Object.fromEntries(Object.keys(ASPECT_INK).map((k) => [k, list])) },
+    params: { inner: num, bodies: list, signs: list, ...Object.fromEntries(Object.keys(ASPECT_INK).map((k) => [k, list])) },
     items: [
       ...wheel(), { k: 'ring', r: '$inner', w: HAIR, color: DIM },
       ...Object.entries(ASPECT_INK).map(([k, c]) => each(`$${k}`, { k: 'line', pts: [['@x1', '@y1'], ['@x2', '@y2']], w: HAIR, color: c })),
       each('$bodies', { k: 'ticks', r: 0.66, len: 0.07, n: 1, a0: '@a', w: HAIR, color: GRID }),
       each('$bodies', { k: 'glyph', asset: '@g', size: 0.12, polar: ['@a', '@r'], color: '@c' }),
+      each('$bodies', { k: 'spot', polar: ['@a', '@r'], r: 0.08, say: '@say', id: '@id' }),
+      each('$signs', { k: 'spot', polar: ['@a', 0.825], r: 0.07, say: '@say', id: '@id' }),
     ],
   },
   signs: (() => {
@@ -189,6 +192,6 @@ const layouts = {
   'lunar-eclipse': { dur: 6, params: { path: list, umbra: num, pen: num, moon_r: num }, items: [{ k: 'ring', r: '$pen', color: DIM }, { k: 'ring', r: '$umbra', color: '#8a3a2a' }, { k: 'ball', each: '$path', x: '@x', y: '@y', on: '@on', off: '@off', r: '$moon_r', img: '@img' }] },
 };
 
-const pkg = { v: 'molty-pkg/1', id: 'astrology', name: 'Astrology', version: '1.1.0', kind: 'scenes', assets, layouts };
+const pkg = { v: 'molty-pkg/1', id: 'astrology', name: 'Astrology', version: '1.2.0', kind: 'scenes', assets, layouts };
 writeFileSync(OUT, JSON.stringify(pkg) + '\n');
 console.log(`astrology.json: ${Object.keys(assets).length} assets, ${Object.keys(layouts).length} layouts, ${Buffer.byteLength(JSON.stringify(pkg)) + 1} bytes`);

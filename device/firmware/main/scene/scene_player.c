@@ -36,8 +36,9 @@ static bool name_ok(const char *s) {
     return true;
 }
 
+/* text values reach PKG_SAY_MAX (a spot's reading); a text item still takes SCENE_LETTERS */
 static bool scalar_ok(const cJSON *v) {
-    return (cJSON_IsNumber(v) && isfinite(v->valuedouble)) || (cJSON_IsString(v) && pkg_text_ok(v->valuestring, PKG_STR_MAX));
+    return (cJSON_IsNumber(v) && isfinite(v->valuedouble)) || (cJSON_IsString(v) && pkg_text_ok(v->valuestring, PKG_SAY_MAX));
 }
 
 /* every param declared, present, of its type; list elements flat objects of numbers / text */
@@ -53,7 +54,7 @@ static bool check_params(bind_t *b, const cJSON *params) {
         const cJSON *v = b->pv[i];
         switch (b->l->params[i].type) {
         case PP_NUMBER: if (!cJSON_IsNumber(v) || !isfinite(v->valuedouble)) return false; break;
-        case PP_TEXT:   if (!cJSON_IsString(v) || !pkg_text_ok(v->valuestring, PKG_STR_MAX)) return false; break;
+        case PP_TEXT:   if (!cJSON_IsString(v) || !pkg_text_ok(v->valuestring, PKG_SAY_MAX)) return false; break;
         default:
             if (!cJSON_IsArray(v) || cJSON_GetArraySize(v) > SCENE_LIST_MAX) return false;
             for (const cJSON *e = v->child; e; e = e->next) {
@@ -87,6 +88,20 @@ static const char *bound_text(const bind_t *b, const pkg_val_t *v, const cJSON *
     return cJSON_IsString(j) ? j->valuestring : NULL;
 }
 
+/* a literal or bound text field's value (NULL: unset or not text) */
+static const char *str_of(const bind_t *b, const pkg_val_t *v, const cJSON *el) {
+    return v->src == PV_STR ? v->s : v->src == PV_NONE ? NULL : bound_text(b, v, el);
+}
+
+/* s into the scene's spot text: its offset and length (max: the field's own limit) */
+static bool say_add(scene_t *sc, const char *s, size_t max, uint16_t *off, uint16_t *n) {
+    const size_t len = s ? strlen(s) : 0;
+    if (!len || len > max || sc->nsay + (int)len > SCENE_SAY_CHARS) return false;
+    *off = (uint16_t)sc->nsay; *n = (uint16_t)len;
+    memcpy(sc->say + sc->nsay, s, len); sc->nsay += (int)len;
+    return true;
+}
+
 static bool resolve(scene_t *sc, const bind_t *b, const pkg_item_t *it, const cJSON *el) {
     if (sc->nitems >= SCENE_ITEMS_MAX) return false;
     scene_item_t *o = &sc->items[sc->nitems];
@@ -116,8 +131,13 @@ static bool resolve(scene_t *sc, const bind_t *b, const pkg_item_t *it, const cJ
         if (o->asset < 0) return false;                         /* names nothing in the package */
     }
     if (it->k == PK_BALL && o->asset >= 0 && b->p->assets[o->asset].kind != PA_IMAGE) return false;
+    if (it->k == PK_SPOT) {
+        if (!say_add(sc, str_of(b, &f[PF_SAY], el), PKG_SAY_MAX, &o->str, &o->nstr)) return false;
+        const char *id = str_of(b, &f[PF_ID], el);
+        if (id && !say_add(sc, id, PKG_STR_MAX, &o->sid, &o->nsid)) return false;
+    }
     if (it->k == PK_TEXT) {
-        const char *s = f[PF_STR].src == PV_STR ? f[PF_STR].s : bound_text(b, &f[PF_STR], el);
+        const char *s = str_of(b, &f[PF_STR], el);
         size_t len = s ? strlen(s) : 0;
         if (!len || sc->nchars + (int)len > SCENE_LETTERS) return false;
         o->str = (uint16_t)sc->nchars; o->nstr = (uint16_t)len;
@@ -166,9 +186,21 @@ void scene_free(scene_t *sc) {
 
 float scene_end(const scene_t *sc) { return sc->dur > 0.f && sc->dur < sc->ttl ? sc->dur : sc->ttl; }
 
+int scene_spot_at(const scene_t *sc, float t, float x, float y) {
+    int best = -1;
+    float bd = 0.f;
+    for (int n = 0; sc && n < sc->nitems; n++) {
+        const scene_item_t *it = &sc->items[n];
+        if (it->k != PK_SPOT || t < it->on || (it->off > 0.f && t >= it->off)) continue;
+        const float dx = x - it->x, dy = y - it->y, d = dx * dx + dy * dy;
+        if (d <= it->r * it->r && (best < 0 || d < bd)) { best = n; bd = d; }
+    }
+    return best;
+}
+
 /* ── the player ────────────────────────────────────────────────────────────── */
 
-static void start(scene_player_t *p, scene_t *sc) { p->cur = sc; p->t = 0.f; p->started = sc != NULL; }
+static void start(scene_player_t *p, scene_t *sc) { p->cur = sc; p->t = 0.f; p->started = sc != NULL; p->gen++; }
 
 void scene_clear(scene_player_t *p) {
     scene_free(p->cur); p->cur = NULL;
@@ -237,9 +269,17 @@ static void cells(const canvas_t *s, float x0, float y0, float x1, float y1, int
     if (*j1 > s->H - 1) *j1 = s->H - 1;
 }
 
+/* A stroke no wider than a dot is a hairline: the dots within half a dot of it, solid. A soft
+ * edge there is all edge, and the Bayer threshold breaks it into scattered dots. */
+static inline float hair(const canvas_t *s) { return 1.f / (float)(s->W < s->H ? s->W : s->H); }   /* half a dot */
+static inline float reach_of(const ctx_t *c, float hw) { return hw <= hair(c->s) ? hair(c->s) : hw + c->soft; }
+static inline float cover(const ctx_t *c, float hw, float reach, float d) {
+    return hw <= hair(c->s) ? (d < reach ? 1.f : 0.f) : 1.f - fluid_smooth(hw, reach, d);
+}
+
 static void segment(const ctx_t *c, float ax, float ay, float bx, float by, float hw, uint32_t rgb) {
     canvas_t *s = c->s;
-    const float reach = hw + c->soft, dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy, il2 = l2 > 1e-9f ? 1.f / l2 : 0.f;
+    const float reach = reach_of(c, hw), dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy, il2 = l2 > 1e-9f ? 1.f / l2 : 0.f;
     int i0, i1, j0, j1;
     cells(s, fminf(ax, bx) - reach, fminf(ay, by) - reach, fmaxf(ax, bx) + reach, fmaxf(ay, by) + reach, &i0, &i1, &j0, &j1);
     for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) {
@@ -247,7 +287,7 @@ static void segment(const ctx_t *c, float ax, float ay, float bx, float by, floa
         float u = (px * dx + py * dy) * il2;
         u = u < 0.f ? 0.f : u > 1.f ? 1.f : u;
         const float ex = px - u * dx, ey = py - u * dy, d = sqrtf(ex * ex + ey * ey);
-        if (d < reach) paint(s, j * s->W + i, 1.f - fluid_smooth(hw, reach, d), SCENE_INK, rgb);
+        if (d < reach) paint(s, j * s->W + i, cover(c, hw, reach, d), SCENE_INK, rgb);
     }
 }
 
@@ -256,7 +296,7 @@ static void segment(const ctx_t *c, float ax, float ay, float bx, float by, floa
  * the screen's bounding box but a sliver of its dots. */
 static void ring(const ctx_t *c, const scene_item_t *it, bool arc) {
     canvas_t *s = c->s;
-    const float hw = it->w * 0.5f, reach = hw + c->soft, ro = it->r + reach, rin = it->r > reach ? it->r - reach : 0.f;
+    const float hw = it->w * 0.5f, reach = reach_of(c, hw), ro = it->r + reach, rin = it->r > reach ? it->r - reach : 0.f;
     float span = it->a1 - it->a0;
     const bool whole = !arc || span >= 360.f;
     span = fmodf(fmodf(span, 360.f) + 360.f, 360.f);
@@ -280,7 +320,7 @@ static void ring(const ctx_t *c, const scene_item_t *it, bool arc) {
                     if (a < 0.f) a += 360.f;
                     if (a > span) continue;
                 }
-                paint(s, j * s->W + i, 1.f - fluid_smooth(hw, reach, d), SCENE_INK, it->rgb);
+                paint(s, j * s->W + i, cover(c, hw, reach, d), SCENE_INK, it->rgb);
             }
         }
     }
@@ -503,6 +543,7 @@ static void paint_items(const ctx_t *c, const scene_t *sc, float t, fluid_letter
         case PK_BALL:  ball(c, it, a, t); break;
         case PK_GLYPH: if (a && !crisp(c, it, a, letters, nletters)) glyph(c, it, a); break;
         case PK_TEXT:  text(c, sc, it, letters, nletters); break;
+        case PK_SPOT:  break;                                  /* a place to tap, not a drawing */
         default: break;
         }
     }

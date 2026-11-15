@@ -9,6 +9,8 @@
  *   touch    tap edges handed over by sense_touch (the fluid task polls touch)
  *   status   every 0.5 s: Wi-Fi / relay / auth → mole_fluid_set_status (the edge mark)
  * A tap while a question (link `ask`) is pending is its answer (link_ask.c), not a tap event.
+ * A tap on a scene's spot shows the spot's reading and sends a tap event naming the spot,
+ * whatever tap is bound to (a recording still stops first).
  * A tap during a recording stops it and sends (after its first second), a tap while a say
  * waits for its first audio cancels the wait; otherwise tap, double tap and the two buttons do
  * what the human bound them to (gesture.h: none, talk, event, stop, and a button's screen:
@@ -33,6 +35,7 @@
 #include "link_audio.h"
 #include "mole_diag.h"
 #include "power.h"
+#include "pkg_parse.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -50,6 +53,7 @@
 
 static atomic_bool     s_tap;
 static _Atomic uint32_t s_tap_xy;            /* x << 16 | y, each 0..65535 of the panel    */
+static atomic_uint     s_spot;               /* a tap on a scene's spot (mole_fluid_spot_tap) */
 
 void sense_touch(int n, const uint16_t *xs, const uint16_t *ys)
 {
@@ -61,7 +65,11 @@ void sense_touch(int n, const uint16_t *xs, const uint16_t *ys)
         uint32_t x = w > 1 ? (uint32_t)xs[0] * 65535u / (uint32_t)(w - 1) : 0;
         uint32_t y = h > 1 ? (uint32_t)ys[0] * 65535u / (uint32_t)(h - 1) : 0;
         atomic_store(&s_tap_xy, (x > 65535u ? 65535u : x) << 16 | (y > 65535u ? 65535u : y));
-        atomic_store(&s_tap, true);
+        /* a scene's spot takes the tap (its reading shows), unless it stops a recording */
+        uint32_t age;
+        const unsigned spot = link_audio_listening(&age) ? 0 : mole_fluid_spot_tap(xs[0], ys[0]);
+        if (spot) atomic_store(&s_spot, spot);
+        else atomic_store(&s_tap, true);
     }
     down = n > 0;
 }
@@ -98,6 +106,19 @@ static void screen_do(gesture_taps_t presses)
 {
     if (presses == GESTURE_TAPS_SINGLE) mole_fluid_screen(!mole_fluid_screen_on());
     else if (presses == GESTURE_TAPS_DOUBLE) power_dnd_set(!power_dnd());
+}
+
+/* A tap on a spot: Molty shows its reading; the agent hears which spot (whatever tap is bound to). */
+static void spot_do(unsigned spot, uint32_t now, gesture_limit_t *limit)
+{
+    if (!gesture_limit_allow(limit, now)) return;
+    const uint32_t xy = atomic_load(&s_tap_xy);
+    char id[PKG_STR_MAX + 1];
+    mole_fluid_spot_id(spot, id, sizeof id);
+    cJSON *ev = link_evt_tap_frame((xy >> 16) / 65535.0, (xy & 0xFFFFu) / 65535.0);
+    if (ev && id[0]) cJSON_AddStringToObject(cJSON_GetObjectItemCaseSensitive(ev, "data"), "spot", id);
+    mole_diag_event(false, "sense.tap spot %s", id);
+    emit(ev);
 }
 
 static void taps_do(gesture_taps_t taps, uint32_t now, gesture_limit_t *limit)
@@ -184,6 +205,8 @@ static void sense_task(void *arg)
             }
         }
         taps_do(gesture_tapper_poll(&tapper, now), now, &tap_l);
+        const unsigned spot = atomic_exchange(&s_spot, 0);
+        if (spot && !pairing) spot_do(spot, now, &tap_l);
         xTaskDelayUntil(&wake, period);
     }
 }

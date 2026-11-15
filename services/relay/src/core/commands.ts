@@ -40,8 +40,8 @@ export const PKG_ID_RE = /^[a-z0-9-]{1,32}$/;
 /** A package file's ceiling; the device downloads it straight from the url: its bytes never pass through the relay. */
 export const MAX_PKG_BYTES = 262144;
 export const MAX_PKG_URL_BYTES = 512;
-/** A scene's params, as JSON: a few hundred bytes in practice (a path of keyframes is the biggest). */
-export const MAX_SCENE_PARAMS_BYTES = 2048;
+/** A scene's params, as JSON: a few hundred bytes for a drawing; a layout with spots carries their readings (the device holds 4096 characters of them). */
+export const MAX_SCENE_PARAMS_BYTES = 8192;
 export const DEFAULT_SCENE_TTL_S = 60;
 export const MAX_SCENE_TTL_S = 600;
 

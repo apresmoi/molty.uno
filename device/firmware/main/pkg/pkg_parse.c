@@ -19,7 +19,7 @@
 #define PKG_FREE(p)   free(p)
 #endif
 
-const char *const PKG_KIND_NAMES[PK_KINDS] = { "ring", "arc", "ticks", "line", "curve", "disc", "ball", "glyph", "text" };
+const char *const PKG_KIND_NAMES[PK_KINDS] = { "ring", "arc", "ticks", "line", "curve", "disc", "ball", "glyph", "text", "spot" };
 
 /* ── arena: 16 KB blocks, linked; the package struct sits at the head of the first ── */
 
@@ -188,13 +188,13 @@ static const char *parse_asset(arena_t *a, const cJSON *j, pkg_asset_t *as) {
 
 /* ── items ─────────────────────────────────────────────────────────────────── */
 
-enum { T_NUM, T_COLOR, T_ASSET, T_IMAGE, T_STR };
+enum { T_NUM, T_COLOR, T_ASSET, T_IMAGE, T_STR, T_SAY };
 #define KB(k) (1u << (k))
-#define XY (KB(PK_DISC) | KB(PK_BALL) | KB(PK_GLYPH) | KB(PK_TEXT))
-#define ALL 0x1FFu
+#define XY (KB(PK_DISC) | KB(PK_BALL) | KB(PK_GLYPH) | KB(PK_TEXT) | KB(PK_SPOT))
+#define ALL 0x3FFu
 static const struct { const char *key; uint8_t pf, type; uint16_t kinds; } FIELDS[] = {
     { "x", PF_X, T_NUM, XY }, { "y", PF_Y, T_NUM, XY },
-    { "r", PF_R, T_NUM, KB(PK_RING) | KB(PK_ARC) | KB(PK_TICKS) | KB(PK_DISC) | KB(PK_BALL) },
+    { "r", PF_R, T_NUM, KB(PK_RING) | KB(PK_ARC) | KB(PK_TICKS) | KB(PK_DISC) | KB(PK_BALL) | KB(PK_SPOT) },
     { "w", PF_W, T_NUM, KB(PK_RING) | KB(PK_ARC) | KB(PK_TICKS) | KB(PK_LINE) | KB(PK_CURVE) },
     { "a0", PF_A0, T_NUM, KB(PK_ARC) | KB(PK_TICKS) }, { "a1", PF_A1, T_NUM, KB(PK_ARC) },
     { "len", PF_LEN, T_NUM, KB(PK_TICKS) }, { "n", PF_N, T_NUM, KB(PK_TICKS) },
@@ -205,12 +205,14 @@ static const struct { const char *key; uint8_t pf, type; uint16_t kinds; } FIELD
     { "color", PF_COLOR, T_COLOR, ALL },
     { "img", PF_ASSET, T_IMAGE, KB(PK_BALL) }, { "asset", PF_ASSET, T_ASSET, KB(PK_GLYPH) },
     { "str", PF_STR, T_STR, KB(PK_TEXT) },
+    { "say", PF_SAY, T_SAY, KB(PK_SPOT) }, { "id", PF_ID, T_STR, KB(PK_SPOT) },
 };
 #define NFIELDS ((int)(sizeof(FIELDS) / sizeof(FIELDS[0])))
 /* what each kind cannot do without */
 static const uint32_t REQUIRED[PK_KINDS] = {
     [PK_RING] = KB(PF_R), [PK_ARC] = KB(PF_R) | KB(PF_A0) | KB(PF_A1), [PK_TICKS] = KB(PF_R) | KB(PF_N),
     [PK_DISC] = KB(PF_R), [PK_BALL] = KB(PF_R), [PK_GLYPH] = KB(PF_ASSET) | KB(PF_SIZE), [PK_TEXT] = KB(PF_STR),
+    [PK_SPOT] = KB(PF_R) | KB(PF_SAY),
 };
 
 typedef struct { const pkg_t *p; const pkg_layout_t *l; bool in_each; arena_t *a; } ictx_t;
@@ -258,7 +260,7 @@ static const char *parse_val(const ictx_t *c, const cJSON *j, int pf, int type, 
         return NULL;
     }
     default:
-        if (!cJSON_IsString(j) || !pkg_text_ok(j->valuestring, PKG_STR_MAX)) return "item: str";
+        if (!cJSON_IsString(j) || !pkg_text_ok(j->valuestring, type == T_SAY ? PKG_SAY_MAX : PKG_STR_MAX)) return "item: str";
         v->src = PV_STR; v->s = astr(c->a, j->valuestring);
         return v->s ? NULL : "oom";
     }

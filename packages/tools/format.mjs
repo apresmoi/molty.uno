@@ -12,9 +12,10 @@ export const NAME_RE = /^[A-Za-z0-9_-]{1,24}$/;
 export const COLOR_RE = /^#[0-9a-f]{6}$/;
 export const PARAM_TYPES = ['number', 'text', 'list'];
 /** The firmware's limits (docs/PACKAGES.md "What the firmware accepts"). */
-export const LIMITS = { assets: 64, assetSide: 128, layouts: 32, items: 64, params: 8, points: 16, text: 40, scene: 128, letters: 40, list: 32, fields: 8 };
+export const LIMITS = { assets: 64, assetSide: 128, layouts: 32, items: 64, params: 8, points: 16, text: 40, say: 160, sayChars: 4096, scene: 128, letters: 40, list: 32, fields: 8 };
 
-// Field value types: num, text, color, asset (any asset), image (an image asset); pts holds [x, y] numbers.
+// Field value types: num, text, say (a spot's reading, longer text), color, asset (any asset), image (an image asset);
+// pts holds [x, y] numbers.
 const COMMON = { k: 'kind', on: 'num', off: 'num', color: 'color', each: 'list', polar: 'polar' };
 const POS = { x: 'num', y: 'num' };
 export const ITEMS = {
@@ -27,25 +28,28 @@ export const ITEMS = {
   ball: { ...POS, r: 'num', img: 'image', lit: 'num', side: 'num', spin: 'num' },
   glyph: { ...POS, size: 'num', asset: 'asset', rot: 'num' },
   text: { ...POS, size: 'num', str: 'text' },
+  // a place to tap, drawn by nothing: Molty shows `say` as the subtitle, the tap event names `id`
+  spot: { ...POS, r: 'num', say: 'say', id: 'text' },
 };
-const REQUIRED = { ring: ['r'], arc: ['r'], ticks: ['r'], line: ['pts'], curve: ['pts'], disc: ['r'], ball: ['r'], glyph: ['asset'], text: ['str'] };
+const REQUIRED = { ring: ['r'], arc: ['r'], ticks: ['r'], line: ['pts'], curve: ['pts'], disc: ['r'], ball: ['r'], glyph: ['asset'], text: ['str'], spot: ['r', 'say'] };
 /** Defaults a missing field takes (the firmware's, docs/PACKAGES.md). A ball without img is shaded in its colour. */
 export const DEFAULTS = { color: '#ffffff', x: 0, y: 0, on: 0, a0: 0, a1: 360, n: 12, len: 0.1, size: 0.12, w: 0.03, lit: 1, side: 1, spin: 0, rot: 0 };
 // which param type a field of each value type may bind to
-const BINDS = { num: 'number', text: 'text', color: 'text', asset: 'text', image: 'text', list: 'list' };
+const BINDS = { num: 'number', text: 'text', say: 'text', color: 'text', asset: 'text', image: 'text', list: 'list' };
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 /** The range each numeric field must lie in, literal or bound (the firmware's pkg_num_ok); angles otherwise. */
 const RANGE = { x: [-2, 2], y: [-2, 2], r: [0, 2], w: [0, 0.5], len: [-1, 1], n: [1, 120], size: [0, 2], lit: [0, 1], spin: [-720, 720], on: [0, 600], off: [0, 600] };
 const inRange = (f, v) => { if (f === 'side') return v === -1 || v === 1; if (f === 'n' && !Number.isInteger(v)) return false; if (f === 'size' && v <= 0) return false; const [lo, hi] = RANGE[f] ?? [-720, 720]; return v >= lo && v <= hi; };
 const ref = (v) => (typeof v === 'string' && /^[$@][A-Za-z0-9_-]{1,24}$/.test(v) ? v : null);
-const isText = (v) => typeof v === 'string' && /^[\x20-\x7e]*$/.test(v) && v.length <= LIMITS.text && !/^[$@]/.test(v);
+const isText = (v, max = LIMITS.text) => typeof v === 'string' && /^[\x20-\x7e]*$/.test(v) && v.length <= max && !/^[$@]/.test(v);
 
 /** A literal's check against a field type; returns an error string or ''. */
 function literal(type, v, assets, f) {
   switch (type) {
     case 'num': return !isNum(v) ? 'must be a number' : f && !inRange(f, v) ? `is out of range (${v})` : '';
     case 'text': return isText(v) ? '' : `must be printable ASCII of at most ${LIMITS.text} characters, not starting with $ or @`;
+    case 'say': return isText(v, LIMITS.say) && v ? '' : `must be printable ASCII of 1..${LIMITS.say} characters, not starting with $ or @`;
     case 'color': return typeof v === 'string' && COLOR_RE.test(v) ? '' : 'must be #rrggbb';
     case 'asset': return assets[v] ? '' : `names no asset (${JSON.stringify(v)})`;
     case 'image': return assets[v]?.kind === 'image' ? '' : `names no image asset (${JSON.stringify(v)})`;
@@ -170,10 +174,11 @@ export function bind(pkg, layoutName, params = {}) {
     const v = params[p];
     if (v === undefined) throw new ParamError(`missing param ${p}`);
     if (t === 'number' && !isNum(v)) throw new ParamError(`${p} must be a number`);
-    if (t === 'text' && !isText(v)) throw new ParamError(`${p} must be printable ASCII of at most ${LIMITS.text} characters`);
+    // text values reach a spot's reading; a text item still takes LIMITS.text (its field's check)
+    if (t === 'text' && !isText(v, LIMITS.say)) throw new ParamError(`${p} must be printable ASCII of at most ${LIMITS.say} characters`);
     if (t === 'list' && (!Array.isArray(v) || v.length > LIMITS.list)) throw new ParamError(`${p} must be a list of at most ${LIMITS.list}`);
     // each element a flat object of a few numbers or texts
-    if (t === 'list' && !v.every((e) => e && typeof e === 'object' && !Array.isArray(e) && Object.keys(e).length <= LIMITS.fields && Object.entries(e).every(([k, x]) => NAME_RE.test(k) && (isNum(x) || isText(x))))) throw new ParamError(`${p} elements must be flat objects of at most ${LIMITS.fields} numbers or texts`);
+    if (t === 'list' && !v.every((e) => e && typeof e === 'object' && !Array.isArray(e) && Object.keys(e).length <= LIMITS.fields && Object.entries(e).every(([k, x]) => NAME_RE.test(k) && (isNum(x) || isText(x, LIMITS.say))))) throw new ParamError(`${p} elements must be flat objects of at most ${LIMITS.fields} numbers or texts`);
   }
   const out = [];
   for (const it of l.items) {
@@ -203,5 +208,7 @@ export function bind(pkg, layoutName, params = {}) {
   if (out.length > LIMITS.scene) throw new ParamError(`the scene expands to ${out.length} items (at most ${LIMITS.scene})`);
   const letters = out.filter((it) => it.k === 'text').reduce((n, it) => n + it.str.length, 0);
   if (letters > LIMITS.letters) throw new ParamError(`the scene has ${letters} letters of text (at most ${LIMITS.letters})`);
+  const said = out.filter((it) => it.k === 'spot').reduce((n, it) => n + it.say.length + (it.id?.length ?? 0), 0);
+  if (said > LIMITS.sayChars) throw new ParamError(`the scene's spots hold ${said} characters (at most ${LIMITS.sayChars})`);
   return out;
 }

@@ -68,6 +68,13 @@ and geometry in **glass units**: the round window has radius 1, `x` right, `y` u
 | `ball` | `x`, `y`, `r`, `img`, `lit` (0..1 lit fraction), `side` (-1/1 which side is lit), `spin` | a shaded sphere wearing an image asset |
 | `glyph` | `x`, `y`, `size`, `asset`, `rot` | a mask or image asset |
 | `text` | `x`, `y`, `size`, `str` | words, in the device font |
+| `spot` | `x`, `y`, `r`, `say`, `id` | nothing: a place to tap. Molty shows `say` as the subtitle; the `tap` event names `id` |
+
+**Spots** make a scene interactive with no round trip: the agent sends each spot's reading with the scene
+(`{ "k": "spot", "each": "$bodies", "polar": ["@a", "@r"], "r": 0.09, "say": "@say", "id": "@id" }`), and a tap on it
+shows that reading at once, word by word at reading pace. The agent also gets the `tap` event with `spot: <id>`, to say
+more if it wants. A spot takes the tap whatever tap is bound to (a tap that stops a recording still does that first).
+A say over the scene replaces the reading.
 
 **Binding:** any field value may be a string `"$name"`, read from the params the agent sent (`"$title"`, `"$lit"`).
 **Repetition:** an item with `"each": "$list"` is drawn once per element of that list param; inside it, `"@field"` reads the element
@@ -129,8 +136,9 @@ Over the existing command path (`link_cmd_register`), gated by device caps `pkg`
 ### What the firmware accepts (as built)
 
 Limits: 64 assets of at most 128 × 128 px, 16 palette colours; 32 layouts of at most 64 items and 8 params; 16 points a
-line or curve; names `[A-Za-z0-9_-]{1,24}`; texts printable ASCII, at most 40 characters. A scene expands to at most 128
-items and 40 letters in all; a list param has at most 32 elements, each a flat object of up to 8 numbers or texts.
+line or curve; names `[A-Za-z0-9_-]{1,24}`; texts printable ASCII, at most 40 characters (a spot's `say`: 160). A scene
+expands to at most 128 items and 40 letters in all, its spots' readings and ids to 4096 characters; a list param has at
+most 32 elements, each a flat object of up to 8 numbers or texts (up to 160 characters each).
 Every declared param must be sent, and nothing else.
 
 - `mask` bits and `image` nibbles are one continuous stream, rows top to bottom, no padding per row (high nibble first).
@@ -143,6 +151,9 @@ Every declared param must be sent, and nothing else.
 - Items paint in order, each covering what is under it: a `disc` of `#000000` erases, a `ball` covers its whole disc
   (its dark side too, with a faint earthshine), as `packages/tools/play.mjs` draws them. A scene queue holds 8.
 - `"$name"` and `"@field"` are always bindings; a literal text cannot start with `$` or `@`.
+- A `line`, `curve`, `ring`, `arc` or `ticks` no wider than a braille dot is a hairline: exactly the dots within half a dot
+  of it, solid, with no soft edge to dither.
+- A tap lands on the visible `spot` whose disc holds it, the nearest centre if several do.
 
 ## 4. Agents
 
@@ -207,6 +218,6 @@ so a new device has them without a download. `POST /api/creature/select?id=` (co
   `offline`, `unsupported` (no `pkg` cap) or `unknown` (its list failed). An entry the relay could not turn into valid
   install args is left out. The index unreadable and nothing cached: `503 catalog_unavailable`.
 - `creature.select` `{ id }` and `creature.list` `{}` need the cap `creatures`; forwarded as they are.
-- `scene.play` / `scene.queue` `{ pkg, layout, params (an object, at most 2048 bytes of JSON), ttl_s (1..600, default 60) }`:
+- `scene.play` / `scene.queue` `{ pkg, layout, params (an object, at most 8192 bytes of JSON), ttl_s (1..600, default 60) }`:
   `ttl_s` is always sent. `scene.play` counts as the agent taking the screen (like `mood`): the relay's automatic moods stand down.
 - MCP: `molty_package { op: available|install|remove|list, … }`, `molty_scene { op: play|queue|clear, … }`.

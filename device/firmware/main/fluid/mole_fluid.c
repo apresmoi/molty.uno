@@ -312,6 +312,20 @@ static bool     s_sub = false;                      /* a say over a scene: its w
 static int      s_sub_word = -1;                    /* the word the voice is on (-1: none yet) */
 static float    s_sub_until = 0.f;                  /* the last line stays this long after the say */
 static char     s_sub_line[SCENE_CAPTION_MAX];
+/* a tapped spot's reading: its words as the subtitle, at reading pace (PSRAM) */
+#define SPOT_READ_WPM  220
+#define SPOT_READ_HOLD 2.f                          /* s the last line stays */
+typedef struct { char text[PKG_SAY_MAX + 1]; ftok_t toks[PKG_SAY_MAX / 2 + 1]; int n, word; float next; } reading_t;
+static reading_t *s_rd;
+static bool       s_rd_on = false;
+/* the scene's spots for sense.c's taps (mole_fluid_spot_*): a copy of the scene on screen,
+ * made when it starts if it has any, under s_mutex (PSRAM) */
+static scene_t   *s_spot_sc;
+static bool       s_spot_on = false;
+static unsigned   s_spot_gen = 0;                   /* the player's gen it was copied at (0: none) */
+static float      s_spot_t = 0.f;                   /* the scene's clock, for spots' on / off */
+static atomic_uint s_spot_req;                      /* a tap on a spot: gen << 8 | item + 1, 0 none */
+#define SPOT_GEN(g) ((g) & 0xffffffu)
 static bool  s_touch_mute = false;              /* the touch that woke the screen, until it lifts */
 #define FLUID_OFF_POLL_MS  50                   /* screen off: touch and wake checks       */
 /* the drawer's window buffer (fluid_draw_send): internal DMA-capable RAM, which the panel's
@@ -330,31 +344,36 @@ static inline bool is_ws(char c) {
     return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v' || c == '\f';
 }
 
-static void tokenize(void) {
-    s_ntok = 0;
-    int len = (int)strlen(s_ttext), i = 0;
-    while (i < len && s_ntok < FLUID_MAX_TOKENS) {
+/* txt's words into toks (at most max): the count */
+static int tokenize_into(const char *txt, ftok_t *toks, int max) {
+    int n = 0, len = (int)strlen(txt), i = 0;
+    while (i < len && n < max) {
         int nl = 0;
-        while (i < len && is_ws(s_ttext[i])) { if (s_ttext[i] == '\n') nl++; i++; }
-        if (nl >= 2 && s_ntok > 0) s_toks[s_ntok - 1].para = 1;
+        while (i < len && is_ws(txt[i])) { if (txt[i] == '\n') nl++; i++; }
+        if (nl >= 2 && n > 0) toks[n - 1].para = 1;
         if (i >= len) break;
         int st = i;
-        while (i < len && !is_ws(s_ttext[i])) i++;
+        while (i < len && !is_ws(txt[i])) i++;
         int tl = i - st;
         if (tl > FLUID_WORD_LETTERS) tl = FLUID_WORD_LETTERS;   /* display cap */
-        gc_rsvp_orp_t orp = gc_rsvp_compute_orp(s_ttext + st, tl);
-        ftok_t *t = &s_toks[s_ntok++];
+        gc_rsvp_orp_t orp = gc_rsvp_compute_orp(txt + st, tl);
+        ftok_t *t = &toks[n++];
         t->off = (int16_t)st; t->len = (int16_t)tl; t->orp = (int16_t)orp.focal; t->core = (int16_t)orp.core_len; t->para = 0;
     }
+    return n;
+}
+
+static void tokenize(void) {
+    s_ntok = tokenize_into(s_ttext, s_toks, FLUID_MAX_TOKENS);
     /* A lone token is a static label (e.g. the pairing code), not a sequence:
      * centre it and drop the ORP accent letter (orp = -1, see fluid_text_set_word). */
     if (s_ntok == 1) s_toks[0].orp = -1;
 }
 
-static float word_delay_s(const ftok_t *t, int wpm) {
+static float word_delay_s(const char *txt, const ftok_t *t, int wpm) {
     float base = 60000.f / (float)(wpm < 1 ? 1 : wpm);
     float lf = t->core > 6 ? fminf(2.f, 1.f + 0.05f * (t->core - 6)) : 1.f;
-    const char *w = s_ttext + t->off;
+    const char *w = txt + t->off;
     int b = t->len - 1;
     while (b > 0 && (w[b] == '"' || w[b] == '\'' || w[b] == ')' || w[b] == ']')) b--;
     char last = b >= 0 ? w[b] : 0;
@@ -369,30 +388,48 @@ static void tint_letters(void) {
     for (int i = 0; i < s_tx->nletters; i++) s_tx->letters[i].rgb = s_tint;
 }
 
-/* the subtitle: the line (≤ SCENE_CAPTION_MAX characters, broken between words) holding the
- * word the voice is on, that word lit */
-static scene_caption_t sub_caption(void) {
+/* the subtitle: the line (≤ SCENE_CAPTION_MAX characters, broken between words) of txt's
+ * words holding word, that word lit */
+static scene_caption_t caption(const char *txt, const ftok_t *toks, int ntok, int word) {
     scene_caption_t c = { s_sub_line, 0, 0, 0 };
-    if (!s_sub || s_sub_word < 0 || s_sub_word >= s_ntok) return c;
+    if (word < 0 || word >= ntok) return c;
     int first = 0, len = 0;
-    for (int i = 0; i < s_ntok; i++) {
-        const int l = s_toks[i].len < SCENE_CAPTION_MAX ? s_toks[i].len : SCENE_CAPTION_MAX;
+    for (int i = 0; i < ntok; i++) {
+        const int l = toks[i].len < SCENE_CAPTION_MAX ? toks[i].len : SCENE_CAPTION_MAX;
         if (i > first && len + 1 + l > SCENE_CAPTION_MAX) {   /* a new line starts at word i */
-            if (s_sub_word < i) break;
+            if (word < i) break;
             first = i; len = 0;
         }
         len += (i > first) + l;
     }
-    for (int i = first; i < s_ntok; i++) {
-        const int l = s_toks[i].len < SCENE_CAPTION_MAX ? s_toks[i].len : SCENE_CAPTION_MAX;
+    for (int i = first; i < ntok; i++) {
+        const int l = toks[i].len < SCENE_CAPTION_MAX ? toks[i].len : SCENE_CAPTION_MAX;
         if (i > first && c.n + 1 + l > SCENE_CAPTION_MAX) break;
         if (i > first) s_sub_line[c.n++] = ' ';
-        if (i == s_sub_word) c.hi0 = c.n;
-        memcpy(s_sub_line + c.n, s_ttext + s_toks[i].off, (size_t)l);
+        if (i == word) c.hi0 = c.n;
+        memcpy(s_sub_line + c.n, txt + toks[i].off, (size_t)l);
         c.n += l;
-        if (i == s_sub_word) c.hi1 = c.n;
+        if (i == word) c.hi1 = c.n;
     }
     return c;
+}
+
+/* a say over the scene, else a tapped spot's reading */
+static scene_caption_t scene_caption(void) {
+    if (s_sub) return caption(s_ttext, s_toks, s_ntok, s_sub_word);
+    if (s_rd_on) return caption(s_rd->text, s_rd->toks, s_rd->n, s_rd->word);
+    return (scene_caption_t){ s_sub_line, 0, 0, 0 };
+}
+
+/* a tap landed on spot item n of sc: its reading, from its first word */
+static void read_spot(const scene_t *sc, int n) {
+    const scene_item_t *it = &sc->items[n];
+    memcpy(s_rd->text, sc->say + it->str, it->nstr);
+    s_rd->text[it->nstr] = '\0';
+    s_rd->n = tokenize_into(s_rd->text, s_rd->toks, PKG_SAY_MAX / 2 + 1);
+    s_rd->word = 0;
+    s_rd->next = s_tnow + word_delay_s(s_rd->text, &s_rd->toks[0], SPOT_READ_WPM);
+    s_rd_on = s_rd->n > 0;
 }
 
 static void show_word(int idx) {
@@ -446,7 +483,7 @@ static void enter_state(int st, int fx, const fluid_cfg_t *cfg) {
         s_text_hidden = s_follow && s_follow_word < 0;
         if (s_text_hidden) fluid_text_set_word(s_tx, s_sim, "", 0, 0);
         else show_word(0);
-        s_word_until = s_tnow + 0.55f + word_delay_s(&s_toks[0], cfg->wpm);   /* lead-in */
+        s_word_until = s_tnow + 0.55f + word_delay_s(s_ttext, &s_toks[0], cfg->wpm);   /* lead-in */
     }
     /* the transition: the old shape breaks up in eddies + a ring from its centre */
     float cx, cy;
@@ -638,6 +675,16 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         if (s_follow) { if (s_follow_word >= 0) s_sub_word = s_follow_word < s_ntok ? s_follow_word : s_ntok - 1; s_sub_until = s_tnow + 1.5f; }
         else if (s_tnow >= s_sub_until || s_cur != ST_SCENE) { s_sub = false; s_sub_word = -1; }
     }
+    {   /* a tapped spot: its reading, word by word, until the voice or another state takes over */
+        const unsigned spot = atomic_exchange(&s_spot_req, 0);
+        if (spot && s_cur == ST_SCENE && s_sp.cur && spot >> 8 == SPOT_GEN(s_sp.gen) && (int)(spot & 255) <= s_sp.cur->nitems)
+            read_spot(s_sp.cur, (int)(spot & 255) - 1);
+        if (s_rd_on && (s_sub || s_cur != ST_SCENE)) s_rd_on = false;
+        else if (s_rd_on && s_tnow >= s_rd->next) {
+            if (s_rd->word + 1 < s_rd->n) s_rd->next = s_tnow + word_delay_s(s_rd->text, &s_rd->toks[++s_rd->word], SPOT_READ_WPM);
+            else if (s_tnow >= s_rd->next + SPOT_READ_HOLD) s_rd_on = false;
+        }
+    }
     /* speed reader (paused under a question: the labels own s_tx) */
     if (!asking && s_cur == ST_TEXT && s_word < s_ntok && s_follow) {
         /* following a say: each word when the speaker reaches it (link_audio's cues),
@@ -649,17 +696,17 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
             show_word(s_word);
             ripple(0.f, 0.f, 0.45f + 0.6f * 0.3f, 0.12f);
         }
-        s_word_until = s_tnow + word_delay_s(&s_toks[s_word], cfg->wpm);
+        s_word_until = s_tnow + word_delay_s(s_ttext, &s_toks[s_word], cfg->wpm);
     } else if (!asking && s_cur == ST_TEXT && s_word < s_ntok && s_text_hidden) {
         /* the say ended (or failed) before word 0 was cued: the reader's own pace from word 0 */
         s_text_hidden = false;
         show_word(s_word);
-        s_word_until = s_tnow + word_delay_s(&s_toks[s_word], cfg->wpm);
+        s_word_until = s_tnow + word_delay_s(s_ttext, &s_toks[s_word], cfg->wpm);
     } else if (!asking && s_cur == ST_TEXT && s_word < s_ntok && s_tnow >= s_word_until) {
         s_word++;
         if (s_word < s_ntok) {
             show_word(s_word);
-            s_word_until = s_tnow + word_delay_s(&s_toks[s_word], cfg->wpm);
+            s_word_until = s_tnow + word_delay_s(s_ttext, &s_toks[s_word], cfg->wpm);
             ripple(0.f, 0.f, 0.45f + 0.6f * 0.3f, 0.12f);  /* a soft ring leaves the word */
         } else {
             s_word = s_ntok - 1; s_word_until = 1e9f;      /* hold the last word (the director
@@ -720,7 +767,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     case ST_FX:       fluid_target_effect(s, s_cur_fx, s_tnow, swell, ox, oy); break;
     case ST_THINKING: fluid_target_blob(s, s_tnow * 1.4f, swell * 0.85f, ox, oy); break;
     case ST_SCENE: {
-        const scene_caption_t cap = sub_caption();
+        const scene_caption_t cap = scene_caption();
         scene_fill(s, s_sp.cur, s_sp.t, &cap, s_overlay, &s_noverlay, s_sdots);
         break;
     }
@@ -1271,6 +1318,17 @@ static void fluid_task(void *arg) {
         s_stats.act = cr_acting();
         s_stats.working = fd_working(&s_dir);
         s_scene_nq = s_sp.nq;
+        {   /* the scene's spots, for taps: copied once per scene, and only if it has any */
+            const scene_t *sc = s_cur == ST_SCENE ? s_sp.cur : NULL;
+            if (!sc) { s_spot_on = false; s_spot_gen = 0; }
+            else if (s_spot_gen != SPOT_GEN(s_sp.gen)) {
+                s_spot_gen = SPOT_GEN(s_sp.gen);
+                s_spot_on = false;
+                for (int q = 0; q < sc->nitems && !s_spot_on; q++) s_spot_on = sc->items[q].k == PK_SPOT;
+                if (s_spot_on) memcpy(s_spot_sc, sc, sizeof(scene_t));
+            }
+            s_spot_t = s_sp.t;
+        }
         snprintf(s_stats.scene_pkg, sizeof(s_stats.scene_pkg), "%s", s_sp.cur ? s_sp.cur->pkg_id : "");
         snprintf(s_stats.scene_layout, sizeof(s_stats.scene_layout), "%s", s_sp.cur ? s_sp.cur->layout : "");
         s_stats.scene_left = s_sp.cur ? scene_end(s_sp.cur) - s_sp.t : 0.f;
@@ -1358,7 +1416,9 @@ esp_err_t mole_fluid_creature_init(void) {
     if (!s_toks)  s_toks  = heap_caps_malloc(FLUID_MAX_TOKENS * sizeof(ftok_t), MALLOC_CAP_SPIRAM);
     if (!s_sdots)   s_sdots   = heap_caps_calloc(1, FLUID_GRID_MAX_W * FLUID_GRID_MAX_H, MALLOC_CAP_SPIRAM);
     if (!s_sdots_d) s_sdots_d = heap_caps_calloc(1, FLUID_GRID_MAX_W * FLUID_GRID_MAX_H, MALLOC_CAP_SPIRAM);
-    if (!s_ttext || !s_toks || !s_sdots || !s_sdots_d) return ESP_ERR_NO_MEM;
+    if (!s_rd)      s_rd      = heap_caps_calloc(1, sizeof(reading_t), MALLOC_CAP_SPIRAM);
+    if (!s_spot_sc) s_spot_sc = heap_caps_calloc(1, sizeof(scene_t), MALLOC_CAP_SPIRAM);
+    if (!s_ttext || !s_toks || !s_sdots || !s_sdots_d || !s_rd || !s_spot_sc) return ESP_ERR_NO_MEM;
     s_ttext[0] = '\0';
     s_seen_ver = -1;
 
@@ -1936,6 +1996,32 @@ void mole_fluid_shed_internal(void) {
     if (!s_mutex) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     s_shed = s_req_regrid = true;
+    xSemaphoreGive(s_mutex);
+}
+
+unsigned mole_fluid_spot_tap(int px, int py) {
+    if (!s_mutex || !s_spot_sc || s_stage <= 0) return 0;
+    const float x = (float)(px - s_ox) / (float)s_stage * 2.f - 1.f, y = 1.f - (float)(py - s_oy) / (float)s_stage * 2.f;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    const int n = s_spot_on ? scene_spot_at(s_spot_sc, s_spot_t, x, y) : -1;
+    const unsigned spot = n < 0 || n > 254 ? 0 : s_spot_gen << 8 | (unsigned)(n + 1);
+    xSemaphoreGive(s_mutex);
+    if (spot) atomic_store(&s_spot_req, spot);
+    return spot;
+}
+
+void mole_fluid_spot_id(unsigned spot, char *id, size_t size) {
+    if (!size) return;
+    id[0] = '\0';
+    if (!s_mutex || !s_spot_sc || !spot) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    const int n = (int)(spot & 255) - 1;
+    if (s_spot_on && spot >> 8 == s_spot_gen && n < s_spot_sc->nitems) {
+        const scene_item_t *it = &s_spot_sc->items[n];
+        const size_t l = it->nsid < size ? it->nsid : size - 1;
+        memcpy(id, s_spot_sc->say + it->sid, l);
+        id[l] = '\0';
+    }
     xSemaphoreGive(s_mutex);
 }
 

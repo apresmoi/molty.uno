@@ -89,11 +89,11 @@ describe("package and scene commands: validation", () => {
     ]) expect(code(() => validateCommand("pkg.install", bad)), JSON.stringify(bad)).toBe("invalid_args");
   });
 
-  it("scene.play / queue: pkg, layout, params (an object, at most 2 KB), ttl_s 1..600 (default 60)", () => {
+  it("scene.play / queue: pkg, layout, params (an object, at most 8 KB), ttl_s 1..600 (default 60)", () => {
     expect(validateCommand("scene.play", PLAY)).toEqual({ name: "scene.play", args: { ...PLAY, ttl_s: 60 }, job: false });
     expect(validateCommand("scene.queue", { pkg: "astrology", layout: "signs" }).args).toEqual({ pkg: "astrology", layout: "signs", params: {}, ttl_s: 60 });
     expect(validateCommand("scene.play", { ...PLAY, ttl_s: 600 }).args.ttl_s).toBe(600);
-    const big = { path: Array.from({ length: 200 }, (_, i) => ({ x: i / 200, y: 0.5, on: i, off: i + 1 })) };
+    const big = { path: Array.from({ length: 600 }, (_, i) => ({ x: i / 600, y: 0.5, on: i, off: i + 1 })) };
     expect(JSON.stringify(big).length).toBeGreaterThan(MAX_SCENE_PARAMS_BYTES);
     for (const bad of [{ ...PLAY, params: big }, { ...PLAY, params: [1] }, { ...PLAY, ttl_s: 601 }, { ...PLAY, ttl_s: 0 }, { ...PLAY, layout: "../x" }, { ...PLAY, pkg: undefined }, { ...PLAY, color: "red" }]) {
       expect(code(() => validateCommand("scene.play", bad)), JSON.stringify(bad).slice(0, 80)).toBe("invalid_args");
