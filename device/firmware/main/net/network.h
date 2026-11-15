@@ -22,6 +22,8 @@ typedef struct { char ssid[33]; int8_t rssi; bool open; } net_ap_t;
 
 /** True once net_wifi_init() has run (the radio exists). */
 bool      net_wifi_ready(void);
+/** True when Wi-Fi credentials are saved (NVS "wifi"): the station will try to join. */
+bool      net_wifi_configured(void);
 /** True while the station is associated with an AP (STA_CONNECTED .. STA_DISCONNECTED; network.c
  *  listens from before esp_wifi_start, so a connect made before a later listener is not missed). */
 bool      net_wifi_associated(void);

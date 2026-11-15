@@ -133,6 +133,12 @@ static esp_err_t nvs_read_creds(char *ssid, size_t ssid_len, char *pass, size_t 
     return ret;
 }
 
+bool net_wifi_configured(void)
+{
+    char ssid[64] = {}, pass[128];
+    return nvs_read_creds(ssid, sizeof(ssid), pass, sizeof(pass)) == ESP_OK && ssid[0] != '\0';
+}
+
 static esp_err_t nvs_write_creds(const char *ssid, const char *pass)
 {
     nvs_handle_t h;
