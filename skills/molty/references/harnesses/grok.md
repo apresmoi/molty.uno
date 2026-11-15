@@ -45,6 +45,9 @@ device id, and the agent token in its secret store — never in chat.
 - **Speak before you think.** No reasoning or other tool before your first talk. Needs work?
   First talk says what you'll do and carries `[working]`, then work, then answer. Don't explain
   your timings or tool calls unless they ask.
+- **Long jobs show progress.** Several steps (an install, a build)? After each one:
+  `POST $MOLTY_RELAY/v1/devices/<id>/cmd {"name":"progress","args":{"pct":40,"step":"<a few words>"}}`
+  (no `pct` if you can't tell), and `{"done":true}` when finished. A ring fills on Molty's rim.
 - **Quick phrase only for a slow start.** A run that can't talk within a second starts with
   `POST $MOLTY_RELAY/v1/devices/<id>/cmd {"name":"quick","args":{"id":"hmm","in_reply_to":"<turn_id>"}}`
   (cached audio, plays at once). Register your own phrases once

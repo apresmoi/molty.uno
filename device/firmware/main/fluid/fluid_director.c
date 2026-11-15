@@ -24,6 +24,8 @@ const fd_cfg_t FD_CFG_DEFAULT = {
     .text_return_s = 1.5f,
     .status_after_s = 10.f,       /* boot: Wi-Fi join + TLS take a few seconds */
     .work_ttl_s = 120.f, .work_gap_min_s = 0.5f, .work_gap_max_s = 1.6f,
+    .boot_word_s = 2.8f,
+    .bye_word_s = 1.8f, .bye_pond_s = 2.2f,
 };
 
 /* flashes: a say that ended well (happy), a shake (surprised) */
@@ -124,6 +126,15 @@ static void go(fluid_director_t *d, int st, int fx) {
 static int target(const fluid_director_t *d) { return d->pending ? d->next : d->cur; }
 static int target_fx(const fluid_director_t *d) { return d->pending ? d->next_fx : d->cur_fx; }
 
+/* the boot screen is over (fd_boot): the word melts into the creature. A request that
+ * follows replaces that transition. */
+static void boot_end(fluid_director_t *d) {
+    if (!d->boot) return;
+    go(d, FD_ST_CREATURE, 0);
+    d->boot = false;
+    d->next_idle = idle_gap(d);
+}
+
 void fd_init(fluid_director_t *d, const fd_cfg_t *cfg, uint32_t seed) {
     *d = (fluid_director_t){ 0 };
     d->cfg = cfg ? *cfg : FD_CFG_DEFAULT;
@@ -139,6 +150,36 @@ void fd_init(fluid_director_t *d, const fd_cfg_t *cfg, uint32_t seed) {
     go(d, FD_ST_CREATURE, 0);              /* home: the blob until a creature loads */
 }
 
+void fd_boot(fluid_director_t *d) {
+    if (d->bye) return;
+    d->boot = true; d->boot_t = 0.f;
+    d->text_hold = true;
+    go(d, FD_ST_TEXT, 0);
+}
+
+bool fd_boot_word(const fluid_director_t *d) { return d->boot; }
+
+void fd_bye(fluid_director_t *d) {
+    if (d->bye) return;
+    d->boot = false;
+    d->autoplay = false; d->held = CM_IDLE; d->held_left = -1.f;
+    d->act_req = -1; d->work_left = 0.f; d->flash = -1; d->asleep = false;
+    d->bye = true; d->bye_t = 0.f;
+    d->text_hold = true;
+    go(d, FD_ST_TEXT, 0);
+}
+
+bool fd_bye_word(const fluid_director_t *d) { return d->bye && d->bye_t < d->cfg.bye_word_s; }
+
+float fd_bye_level(const fluid_director_t *d) {
+    if (!d->bye || d->bye_t <= d->cfg.bye_word_s) return 1.f;
+    const float f = 1.f - (d->bye_t - d->cfg.bye_word_s) / d->cfg.bye_pond_s;
+    return f > 0.f ? f : 0.f;
+}
+
+bool fd_bye_done(const fluid_director_t *d) { return d->bye && d->bye_t >= d->cfg.bye_word_s + d->cfg.bye_pond_s; }
+
+
 void fd_set_creature(fluid_director_t *d, bool loaded) {
     d->has_creature = loaded;
     if (loaded && d->want_creature && target(d) == FD_ST_BLOB) go(d, FD_ST_CREATURE, 0);
@@ -146,7 +187,9 @@ void fd_set_creature(fluid_director_t *d, bool loaded) {
 }
 
 void fd_request_state(fluid_director_t *d, int st, int fx, bool text_hold) {
+    if (d->bye) return;
     if (st < 0 || st >= FD_ST_COUNT) return;
+    boot_end(d);
     if (d->autoplay) { d->autoplay = false; d->held = CM_IDLE; d->held_left = -1.f; }
     if (st == FD_ST_TEXT) d->text_hold = text_hold;
     int mapped = st == FD_ST_CREATURE && !d->has_creature ? FD_ST_BLOB : st;
@@ -159,6 +202,8 @@ void fd_request_state(fluid_director_t *d, int st, int fx, bool text_hold) {
 }
 
 void fd_autoplay(fluid_director_t *d) {
+    if (d->bye) return;
+    boot_end(d);
     d->autoplay = true; d->reel = -1; d->reel_t = 0.f;
     d->flash = -1; d->asleep = false; d->convo_left = 0.f;
 }
@@ -173,7 +218,9 @@ void fd_activity(fluid_director_t *d) {
 }
 
 void fd_agent_mood(fluid_director_t *d, int mood, float hold_s) {
+    if (d->bye) return;
     if (mood < 0 || mood >= CUTE_N_MOODS) return;
+    boot_end(d);
     d->held = mood;
     d->work_left = 0.f;                    /* any mood ends `working` */
     d->held_left = mood == CM_IDLE ? -1.f : hold_s < 0.f ? fd_default_hold(mood) : hold_s == 0.f ? -1.f : hold_s;
@@ -201,12 +248,14 @@ void fd_set_idle_life(fluid_director_t *d, int level) {
 }
 
 void fd_set_busy(fluid_director_t *d, bool busy, bool covered) {
-    if ((busy || covered) && !d->busy) d->work_left = 0.f;   /* something took the screen: the work is over */
+    if ((busy || covered) && !d->busy) { d->work_left = 0.f; boot_end(d); }   /* something took the screen */
     d->busy = busy || covered; d->covered = covered;
 }
 
 void fd_agent_act(fluid_director_t *d, int act, float dur) {
+    if (d->bye) return;
     if (act < 0 || dur <= 0.f) return;
+    boot_end(d);
     d->act_req = act; d->act_req_dur = dur; d->act_req_ttl = d->cfg.act_ttl_s;
     fd_activity(d);
 }
@@ -244,6 +293,11 @@ static void reel_step(fluid_director_t *d) {
 
 void fd_tick(fluid_director_t *d, float dt, bool text_done) {
     d->state_t += dt;
+    if (d->bye) {                          /* the goodbye: the word, then the pond, then off */
+        d->bye_t += dt;
+        if (d->bye_t >= d->cfg.bye_word_s && target(d) != FD_ST_FX) go(d, FD_ST_FX, FLUID_FX_RIPPLE);
+        return;
+    }
     bool reading = d->cur == FD_ST_TEXT && !d->pending;
     d->text_done_t = reading && text_done ? d->text_done_t + dt : 0.f;
 
@@ -271,6 +325,9 @@ void fd_tick(fluid_director_t *d, float dt, bool text_done) {
         else if ((d->act_req_ttl -= dt) <= 0.f) d->act_req = -1;
     }
 
+    /* the boot screen: the word, then the creature */
+    if (d->boot && (d->boot_t += dt) >= d->cfg.boot_word_s) boot_end(d);
+
     /* working: the agent is busy, so is the creature (fd_agent_work woke it; work_ttl_s < sleep_after_s) */
     if (d->work_left > 0.f) {
         if ((d->work_left -= dt) <= 0.f) { d->work_left = 0.f; d->next_idle = idle_gap(d); }
@@ -286,7 +343,7 @@ void fd_tick(fluid_director_t *d, float dt, bool text_done) {
     if (shown && d->held == CM_IDLE) {
         if (!d->asleep && d->quiet >= d->cfg.sleep_after_s) { d->asleep = true; d->flash = -1; d->convo_left = 0.f; }
     }
-    const bool free = shown && d->held == CM_IDLE && !d->asleep && !d->busy && d->flash < 0 && d->work_left <= 0.f &&
+    const bool free = shown && !d->boot && d->held == CM_IDLE && !d->asleep && !d->busy && d->flash < 0 && d->work_left <= 0.f &&
                       d->idle_life != FD_IDLE_OFF && d->acting_left <= 0.f && d->act_start < 0;
     if (free && !d->yawned && d->quiet >= d->cfg.sleep_after_s - d->cfg.yawn_lead_s) {
         d->yawned = true;                  /* dozing off: a yawn first */

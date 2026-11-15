@@ -15,6 +15,7 @@
  */
 
 #pragma once
+#include <stdbool.h>
 
 #include <stdint.h>
 #include "esp_err.h"
@@ -63,6 +64,8 @@ uint16_t *mole_lcd_framebuffer(void);
  * Flush the entire framebuffer to the panel.
  * Call after directly writing into mole_lcd_framebuffer().
  */
+/** The backlight off (false) or on: the screen-off switch (molty_display_power). */
+esp_err_t mole_lcd_power(bool on);
 esp_err_t mole_lcd_flush(void);
 
 /**

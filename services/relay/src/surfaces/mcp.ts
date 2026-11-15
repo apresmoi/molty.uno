@@ -11,7 +11,7 @@
 
 import { type AgentApi, type FirmwareNotice, type Inbox, type JobView, type Outcome, type RelayBackend, bearer, tokenDevice } from "../core/api.js";
 import { BUILTIN_PHRASES, FILLER_DEFAULT_MS, PHRASE_LIMITS } from "../core/phrases.js";
-import { ACK_THINK_S, ACTIONS, GESTURE_INPUTS, COLORS, DEFAULT_ASK_COLORS, DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, LISTEN_CEILING_MS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, MAX_DRAFTS_PER_TURN, MAX_DRAFT_NEW_WORDS, MAX_LISTEN_MS, MAX_MOOD_HOLD_S, MAX_OPENER_WORDS, MAX_SCENE_PARAMS_BYTES, MAX_SCENE_TTL_S, MOODS, REACT_ACTIONS, REACT_MIN_GAP_MS, REACT_MOODS, TALK_BUDGET_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
+import { ACK_THINK_S, ACTIONS, GESTURE_INPUTS, COLORS, MAX_PROGRESS_STEP, DEFAULT_ASK_COLORS, DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, LISTEN_CEILING_MS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, MAX_DRAFTS_PER_TURN, MAX_DRAFT_NEW_WORDS, MAX_LISTEN_MS, MAX_MOOD_HOLD_S, MAX_OPENER_WORDS, MAX_SCENE_PARAMS_BYTES, MAX_SCENE_TTL_S, MOODS, REACT_ACTIONS, REACT_MIN_GAP_MS, REACT_MOODS, TALK_BUDGET_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
 import { NOTES_LIMITS } from "../core/notes.js";
 
 /** say / talk / ask: inline [mood] / [action] cues in the spoken text. */
@@ -143,6 +143,17 @@ export const TOOLS: ToolDef[] = [
     inputSchema: obj({ action: { type: "string", description: `A gesture of the creature (device.creature.gestures), e.g. ${ACTIONS.join(", ")}.` } }, ["action"]),
     auth: true,
     run: (api, t, a) => api.command(t, "act", a),
+  },
+  {
+    name: "molty_progress",
+    description: `Show how your work goes while you are off doing it (cap progress): a thin glowing line on the rim fills clockwise from 12 o'clock to pct, and the creature works meanwhile (mood working; never over Molty speaking or listening). No pct: a short line circles instead (you can't tell how far along you are). Send one at each step you finish, with step in a few words (kept in molty_activity for your human, never shown or spoken); done:true when you finish: the ring fills, flashes and melts, and the creature is happy. Without news for 120 s it melts by itself. It never speaks: tell them the result with molty_talk.`,
+    inputSchema: obj({
+      pct: { type: "number", description: "0..100: how far along. Leave it out if you can't tell." },
+      step: { type: "string", description: `The step you just finished, a few words (≤ ${MAX_PROGRESS_STEP} bytes), e.g. "downloaded the star map".` },
+      done: { type: "boolean", description: "true when the work is finished (or abandoned)." },
+    }),
+    auth: true,
+    run: (api, t, a) => api.command(t, "progress", a),
   },
   {
     name: "molty_package",

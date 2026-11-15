@@ -114,6 +114,11 @@ const pose = [
   ch('chest.x', [[1, '@rot.x', '@_seat', '@_still'], [0.045, '@_seat', '@_still', nz(T, 0.23, 101)]]),
   ch('_shs', [[1], [-2, ['chance', T, 1 / 0.13, 5, 0.5]]]), ch('chest.z', [[1, '@rot.z', '@_seat', '@_still'], [0.05, '@_seat', '@_still', nz(T, 0.19, 103)], [0.06, '@_seat', '@_still', ['pulse', T, 0.13, 107, 0.2], '@_shs']]),
   ch('rot.x', [[-1, '@_seat']], { op: '*' }), ch('rot.z', [[-1, '@_seat']], { op: '*' }),
+  // working (the agent is off on a job): head down over its paws, batting at something in turn, ears forward, the tail
+  // swishing; eased in and out so it settles to it. The ponder event still glances up now and then
+  ch('_wk', [[1, '@work']], { lp: 2.5 }), ch('head.x', [[0.24, '@_wk']]), ch('look.y', [[-0.55, '@_wk']]), ch('chest.x', [[0.05, '@_wk']]),
+  ...both('earF', [[-0.4, '@_wk']]), ch('_tw', [[1, T], [0.31]]), ch('paw.l', [[0.55, '@_wk', pulse(1.6, 131, 0.38)]]), ch('paw.r', [[0.55, '@_wk', pulse(1.6, 131, 0.38, '@_tw')]]),
+  ch('look.x', [[0.25, '@_wk', sin(T, 0.8)]]), ch('tail.y', [[0.45, '@_wk', sin(T, 0.5)]]), ch('tailTip', [[0.7, '@_wk']]), ch('lid', [[0.2, '@_wk']], { op: 'max' }),
   // the tail held up or wrapped round takes over from its swing, most at the base, least at the tip
   ch('_up', [[1, '@tailUp']], { cl: [0, 1] }), ch('_wrap', [[1, '@tailWrap', lin('@_up', 1, -1)]], { cl: [0, 1] }), ch('_hold', [[1, '@_up'], [1, '@_wrap']]),
 ];

@@ -39,12 +39,21 @@
  *                scene.clear) it goes back to the creature. Never idle life over it.
  *   status       Wi-Fi / relay / auth trouble as a debounced indicator code for the
  *                screen's edge: never a state or mood change.
+ *   boot screen  at power on only (fd_boot; without it boot lands on the creature as above):
+ *                the word "molty.uno" condenses in the fluid's own dots (mole_fluid.c), holds,
+ *                and after boot_word_s melts into the human's creature. Anything that wants
+ *                the screen ends it at once (any request, autoplay, a mood, work, an act, a
+ *                listen, a say, a question).
  *
  *            request(st)            last word + 1.5 s
  *   boot ──▶ CREATURE ──────────▶ TEXT ─────────────────┐
  *            ▲   │ mood: blend,        (hold: stays)     │
  *            │   │ flash 20–60 s, sleepy after 5 min     │
  *            └───┴───────────────────────────────────────┘
+ *   fd_boot: "molty.uno" (TEXT) ─ boot_word_s ─▶ CREATURE; anything wanting the screen ends
+ *            it on the spot.
+ *   fd_bye:  "bye!" (TEXT) ─ bye_word_s ─▶ the ripple pond, fading out ─ bye_pond_s ─▶ done
+ *            (fd_bye_done: the power goes off). Nothing ends it: every request is ignored.
  *   "autoplay" only: the reel (blob ▸ creature ▸ effects ▸ text) until any other request.
  */
 #pragma once
@@ -81,6 +90,9 @@ typedef struct {
     float status_after_s;             /* trouble must last this long before it shows   */
     float work_ttl_s;                 /* working ends by itself after this long: 120   */
     float work_gap_min_s, work_gap_max_s; /* between two work actions: 0.5..1.6        */
+    float boot_word_s;                /* boot screen: the word condenses, holds, melts: 2.8 */
+    float bye_word_s;                 /* power off: "bye!" condenses and holds: 1.8    */
+    float bye_pond_s;                 /* ...melts into a pond that fades to black: 2.2 */
 } fd_cfg_t;
 extern const fd_cfg_t FD_CFG_DEFAULT;
 
@@ -122,11 +134,24 @@ typedef struct {
     bool  scene_on;                   /* the scene player has a scene (fd_set_scene)    */
     int   status, shown;              /* reported / on screen                          */
     float status_t;                   /* s the reported status has differed from shown */
+    bool  boot;                       /* fd_boot: the word is up                       */
+    float boot_t;                     /* s into it                                     */
+    bool  bye;                        /* fd_bye: saying goodbye, the power goes off after */
+    float bye_t;                      /* s into it                                     */
 } fluid_director_t;
 
 /** Boot: autoplay off, the creature wanted (shown once fd_set_creature(true)). cfg NULL =
  *  FD_CFG_DEFAULT. */
 void  fd_init(fluid_director_t *d, const fd_cfg_t *cfg, uint32_t seed);
+/** Power on: the boot screen (the header's "boot screen") instead of landing on the creature. */
+void  fd_boot(fluid_director_t *d);
+bool  fd_boot_word(const fluid_director_t *d);   /* the text state shows the boot word */
+/** Power off: the goodbye (the header's "fd_bye"). Ends the boot screen, autoplay, moods and
+ *  acts; from here every request is ignored. */
+void  fd_bye(fluid_director_t *d);
+bool  fd_bye_word(const fluid_director_t *d);    /* the text state shows the goodbye word */
+float fd_bye_level(const fluid_director_t *d);   /* the panel's brightness, 1 → 0 over the pond */
+bool  fd_bye_done(const fluid_director_t *d);    /* the goodbye is over: power off now */
 /** A creature (.molty) is (not) loaded. Loading one while the creature was wanted but the
  *  blob stood in for it moves to the creature. */
 void  fd_set_creature(fluid_director_t *d, bool loaded);

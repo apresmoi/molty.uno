@@ -201,6 +201,8 @@ int mole_lcd_height(void) { return MOLE_LCD_HEIGHT; }
 
 uint16_t *mole_lcd_framebuffer(void) { return s_fb; }
 
+esp_err_t mole_lcd_power(bool on) { return gpio_set_level(LCD_BL_GPIO, on); }
+
 esp_err_t mole_lcd_flush(void)
 {
     if (!s_panel || !s_fb) return ESP_ERR_INVALID_STATE;

@@ -24,6 +24,8 @@ char *mole_fluid_creature_info(unsigned *gen) {
 }
 static int acted = -1, acts;
 void mole_fluid_act(int a) { acted = a; acts++; }
+static float prog_pct = -2.f; static int prog_n, prog_done;
+void mole_fluid_progress(float pct, bool done) { prog_pct = pct; prog_n++; prog_done += done; }
 /* the creature's gestures: the shared ones, and one of its own (a package's eat) */
 int mole_fluid_gesture(const char *name, float *dur) { int a = cute_act_lookup(name); if (a >= 0) { *dur = cute_act_dur(a); return a; } if (!strcmp(name, "eat")) { *dur = 4.6f; return CUTE_N_ACTS; } return -1; }
 /* the bindings (mole_fluid.c, NVS): what cmd gestures passes through */
@@ -167,6 +169,19 @@ int main(void) {
     assert(link_cmd_run("act",aa,&ao)==ESP_OK && acted==CUTE_N_ACTS && acts==2 && !strcmp(cJSON_GetObjectItem(ao,"action")->valuestring,"eat"));
     assert(s_ext_n==1 && s_ext_hold_ms==4600);
     cJSON_Delete(aa); cJSON_Delete(ao);
+    /* progress: the ring (pct, none = unknown), the creature working (an explicit mood) unless Molty
+     * speaks or listens; done: happy only if it was working; bad args touch nothing */
+    strcpy(sdk_state,""); ga=link_cmd_mood_gen();
+    assert(run("progress","{\"pct\":40}")==ESP_OK && prog_n==1 && prog_pct==40.f && !prog_done);
+    assert(strstr(sdk_state,"\"working\"") && link_cmd_mood_gen()==ga+1 && !strcmp(link_cmd_current_mood(),"working"));
+    assert(run("progress","{}")==ESP_OK && prog_n==2 && prog_pct==-1.f);
+    assert(run("progress","{\"pct\":101}")==ESP_ERR_INVALID_ARG && run("progress","{\"pct\":\"4\"}")==ESP_ERR_INVALID_ARG
+           && run("progress","{\"done\":1}")==ESP_ERR_INVALID_ARG && prog_n==2);
+    assert(run("progress","{\"done\":true}")==ESP_OK && prog_done==1 && !strcmp(link_cmd_current_mood(),"happy"));
+    assert(run("mood","{\"mood\":\"speaking\"}")==ESP_OK);
+    strcpy(sdk_state,""); ga=link_cmd_mood_gen();
+    assert(run("progress","{\"pct\":50}")==ESP_OK && !sdk_state[0] && link_cmd_mood_gen()==ga && !strcmp(link_cmd_current_mood(),"speaking"));
+    assert(run("progress","{\"done\":true}")==ESP_OK && prog_done==2 && !strcmp(link_cmd_current_mood(),"speaking"));
     /* update is registered; a handler's own refusal code reads back */
     cJSON *out=NULL, *a=cJSON_Parse("{}");
     assert(link_cmd_run("update",a,&out)==LINK_CMD_REFUSED && update_cmds==1 && !strcmp(link_cmd_refusal(),"wrong_board"));

@@ -16,6 +16,7 @@ cc -std=c11 -D_POSIX_C_SOURCE=199309L -Wall -Wextra -O2 -ffp-contract=off \
   "$HERE/fluid_golden_test.c" \
   "$FLUID/fluid_sim.c" \
   "$FLUID/fluid_target.c" \
+  "$FLUID/glyph_font.c" \
   "$FLUID/fluid_draw.c" \
   -lm \
   -o "$OUT/fluid_golden_test"

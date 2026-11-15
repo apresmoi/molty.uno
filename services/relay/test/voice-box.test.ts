@@ -663,6 +663,25 @@ describe("semantic end of turn is the default with a voice box", () => {
     expect(u.data).toMatchObject({ reason: "turn_end", trigger: "shake", turn_id: lastListen(w).job, device: { voice: "box" } });
   });
 
+  it("a button held to talk: the box's end of turn never cuts it (only the release or the window ends it); the utterance names the button", async () => {
+    const w = await setup({ caps: [...NEW_FW, "shake_talk"], chunks: 12, box: { turnEndAfter: 2 } });
+    const data = { peak_g: 0, reversals: 0, ms: 0, listen: "shake-1", input: "button_accept", hold: true };
+    await w.room.socketMessage(w.sock, JSON.stringify({ t: "evt", name: "shake", data }));
+    expect(lastListen(w)).toMatchObject({ adopt: "shake-1", vad: false });
+    expect(lastListen(w)).not.toHaveProperty("hold"); // relay-only
+    expect(sttStart(w)).not.toHaveProperty("no_speech_ms"); // nobody but the release decides
+    const seen: any[] = [];
+    await until(() => {
+      void w.room.events(w.token, { wait_ms: 0 }).then((r: any) => r.ok && seen.push(...r.result.events));
+      return seen.some((e) => e.type === "utterance");
+    }, 2000);
+    expect(seen.find((e) => e.type === "shake").data).toMatchObject({ input: "button_accept", hold: true });
+    const u = seen.find((e) => e.type === "utterance");
+    expect(w.dev.log.filter((l) => l.name === "listen_stop")).toHaveLength(0); // the box's turn_end after 2 chunks was ignored
+    expect(u.data).toMatchObject({ trigger: "shake", input: "button_accept", turn_id: lastListen(w).job });
+    expect(u.data.reason).not.toBe("turn_end");
+  });
+
   it("an agent that tunes the device VAD keeps it: vad or end_silence_ms given -> no vad:false, no no_speech_ms to the box", async () => {
     const w = await setup({ caps: NEW_FW, box: { turnEndAfter: 2 } });
     for (const args of [{ vad: true }, { end_silence_ms: 500 }, { vad: false }]) {

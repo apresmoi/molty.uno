@@ -5,9 +5,11 @@
  * fills the round panel as braille dots; states are targets it flows toward:
  * creature (the .molty, home: boot lands here), blob (stands in while no creature is
  * loaded), thinking, text (speed reader), effect:ripple|vortex|wave, and the demo reel
- * ("autoplay", on request only). What is shown when — the same-state guard, idle mood
- * flashes, sleep, the reader's return — is fluid_director.h. Touch → ripple, IMU tilt
- * → slosh.
+ * ("autoplay", on request only). At power on the boot screen comes first: "molty.uno"
+ * condenses out of the fluid, then the firmware default's creature paddles until the link is
+ * up and dissolves into the chosen one (fluid_director.h "boot screen"). What is shown
+ * when (the same-state guard, idle mood flashes, sleep, the reader's return) is
+ * fluid_director.h. Touch → ripple, IMU tilt → slosh.
  *
  * State via GET/POST /api/creature/state when "fluid" is active:
  *   POST {state: "creature"|"blob"|"thinking"|"text"|"effect:ripple"|"effect:vortex"
@@ -98,9 +100,25 @@ struct scene;
 esp_err_t mole_fluid_scene(mole_scene_op_t op, struct scene *sc);
 
 /** Something happened to the device (sense.c): a shake (a brief surprised flash) or a
- *  button press (wakes a sleepy creature). Safe from any task; a no-op before init. */
+ *  button press (wakes a sleepy creature). Either turns the screen back on. Safe from any
+ *  task; a no-op before init. */
 typedef enum { MOLE_FLUID_SHAKE, MOLE_FLUID_BUTTON } mole_fluid_event_t;
 void mole_fluid_event(mole_fluid_event_t ev);
+/** The screen off (false) or on (power.h's switch, sense.c's button). Off, the fluid stops
+ *  simulating and drawing (the CPU's share of the battery) and the panel goes to sleep
+ *  (molty_display_power; a board without it gets one black frame). Requests keep queueing
+ *  while it is off. It comes back on by itself for something the human must see: a touch
+ *  (that touch is not a tap), new words (a say, the pairing code), a question or a listen.
+ *  Safe from any task; a no-op before init. */
+void mole_fluid_screen(bool on);
+/** The screen is on (true before init). */
+bool mole_fluid_screen_on(void);
+/** Power off's goodbye (fluid_director.h "fd_bye"): the screen on, "bye!" condenses, melts
+ *  into a pond and the panel fades to black; then mole_fluid_goodbye_done. From here the
+ *  screen stays on and every request is ignored. Safe from any task. */
+void mole_fluid_goodbye(void);
+bool mole_fluid_goodbye_done(void);
+
 /** The link's health as an FD_STATUS_* code (fluid_director.h): a small mark at the
  *  screen's edge, never a state change. One caller (sense.c). */
 void mole_fluid_set_status(int status);
@@ -112,6 +130,11 @@ void mole_fluid_set_status(int status);
  *  -1 = the device default, POST /api/creature/state {ring_color: "#rrggbb"|"accent"},
  *  kept in NVS, else the palette's accent; fluid_ring_rgb). Safe from any task; a no-op
  *  before init. */
+/** The agent's progress (link `progress`): a thin line on the listening ring's circle, in mint, filling
+ *  clockwise from 12 o'clock to pct (0..100; < 0 = no percent: a comet circles). Each call keeps it up
+ *  (it melts after 120 s without one); done fills it, flashes and melts it. Under the listening
+ *  ring, never over a question. Safe from any task. */
+void mole_fluid_progress(float pct, bool done);
 void mole_fluid_listen(bool on);
 void mole_fluid_listen_color(int32_t rgb);
 /** A say's text follows its voice (link_audio.c, cap say_cues): word < 0 starts following:
@@ -143,6 +166,10 @@ unsigned mole_fluid_text_ver(void);
  * to PSRAM (rebuilt on the task's next frame, same grid; and every later build too). Slower
  * frames, never a starved Wi-Fi. Any task. */
 void mole_fluid_shed_internal(void);
+/* The network is up (the relay's first welcome): the hot fields may take the internal RAM
+ * left above the sim's reserve (rebuilt on the task's next frame). Once a boot, never after
+ * a shed. Any task. */
+void mole_fluid_allow_internal(void);
 /* how many of the sim's hot fields sit in internal RAM (the last frame's count) */
 int mole_fluid_internal_fields(void);
 void mole_fluid_spoke(void);

@@ -84,6 +84,7 @@ export const FEATURES = {
   update: { tool: "molty_update", cap: "update", min_fw: NEXT_FW, what: "Molty updating its own firmware" },
   act: { tool: "molty_act", cap: "act", min_fw: NEXT_FW, what: "gestures (nod, wiggle, …)" },
   working: { tool: "molty_working", cap: "working", min_fw: NEXT_FW, what: "the working mood and its gestures (inspect, paddle)" },
+  progress: { tool: "molty_progress", cap: "progress", min_fw: NEXT_FW, what: "a ring filling around the screen while the agent works" },
 } as const satisfies Record<string, Feature>;
 
 export type FeatureId = keyof typeof FEATURES;

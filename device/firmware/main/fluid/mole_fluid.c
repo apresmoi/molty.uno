@@ -85,6 +85,10 @@ static const char *TAG = "mole_fluid";
 
 static const char *DEFAULT_TEXT =
     "hello, i am molty. i breathe in ascii and i speak in ascii. touch the water.";
+/* the boot screen's word (fluid_director.h "boot screen"): condenses out of the fluid at power on */
+#define BOOT_WORD "molty.uno"
+/* ...and the goodbye's (fd_bye): before the power goes off */
+#define BYE_WORD "bye!"
 
 /* ── States (the director decides which, fluid_director.h) ─────────────────── */
 
@@ -188,7 +192,8 @@ static bool     s_req_spoke = false;            /* a say played to its end      
 typedef struct { mole_scene_op_t op; scene_t *sc; } scene_op_t;
 static scene_op_t s_scene_ops[SCENE_QUEUE_MAX + 2];
 static int        s_scene_nops, s_scene_nq;      /* pending ops; the player's queue (task's copy) */
-static bool     s_req_shed = false;             /* the heap guard: hot fields → PSRAM (mole_fluid_shed_internal) */
+static bool     s_req_regrid = false;           /* rebuild the grid: hot fields moved (shed / allow internal) */
+static bool     s_shed = false;                 /* the heap guard shed them: internal RAM stays off this boot */
 /* a say's mood marks tint its words from the cued word on (mole_fluid_cue_mood):
  * 0 = the palette's colours, else FLUID_RGB | 0xRRGGBB */
 static uint32_t s_tint_in = 0;
@@ -200,6 +205,7 @@ static int     s_ripn = 0;
 static uint8_t *s_cute_blob = NULL;  static size_t s_cute_len = 0;   /* pending load (PSRAM) */
 static bool     s_cute_pkg = false;                 /* the pending file is a creature package */
 static char     s_cr_id[PKG_ID_MAX + 1] = "";       /* the package shown or on its way; "" = .molty */
+static bool     s_booted = false;                   /* the boot screen played: once per power on */
 static int      s_req_mood = -1;
 static bool     s_req_work = false;             /* mood `working` (fd_agent_work; s_req_hold_s) */
 static float    s_req_hold_s = -1.f;                /* with s_req_mood: < 0 = its default */
@@ -261,6 +267,12 @@ static struct {
 static bool  s_listen = false;                  /* task copy of s_listen_in */
 static int32_t s_ring_rgb = -1, s_ring_def = -1;   /* task copies of s_ring_in / s_ring_dflt */
 static fluid_ring_t s_rg;                       /* the listening ring (fluid_ring.h)     */
+static fluid_progress_t s_pg;                   /* the agent's progress on the same line */
+static _Atomic int32_t s_prog_in = -1;          /* mole_fluid_progress: pct × 10, < 0 = no percent */
+static atomic_uint     s_prog_seq;              /* bumped by each progress                         */
+static atomic_bool     s_prog_end;              /* its done                                        */
+#define PROG_TTL_S     120.f                    /* no news this long: the ring melts (as `working`) */
+static float s_floor_w;                         /* the floor's weight, eased (p.floor)             */
 static scene_player_t s_sp;                     /* the scene on screen + its queue        */
 static float s_div = 0.f;
 static int   s_div_n = 0;
@@ -289,6 +301,13 @@ static bool  s_touch_down = false;
 static float s_tpx = 0.f, s_tpy = 0.f;
 static int   s_last_tx = 0, s_last_ty = 0;
 static volatile bool s_full_flush = true;
+static atomic_bool s_screen_want = true;        /* mole_fluid_screen                    */
+static atomic_bool s_screen = true;             /* on the glass now (the task switches it) */
+static atomic_bool s_bye = false, s_bye_done = false;   /* mole_fluid_goodbye; it ended   */
+static float    s_bye_lvl = 1.f;                    /* the panel's level the goodbye set */
+static bool     s_word_dots = false;                /* the boot word's dots (s_tx->dots) are drawn */
+static bool  s_touch_mute = false;              /* the touch that woke the screen, until it lifts */
+#define FLUID_OFF_POLL_MS  50                   /* screen off: touch and wake checks       */
 /* the drawer's window buffer (fluid_draw_send): internal DMA-capable RAM, which the panel's
  * DMA reads as is. The frame never goes through the PSRAM framebuffer: drawing and
  * copying it there every frame took PSRAM bandwidth the sim on core 1 waits for. */
@@ -371,7 +390,16 @@ static void enter_state(int st, int fx, const fluid_cfg_t *cfg) {
     if (s_cur == ST_FX) fluid_effect_exit(s_sim, s_cur_fx);
     if (st == ST_CREATURE && !cr_loaded()) st = ST_BLOB;   /* no creature loaded */
     s_sim->edge_w = st == ST_CREATURE ? 1.f : 0.f;      /* solid eyes once settled */
-    if (st == ST_TEXT) {
+    s_word_dots = st == ST_TEXT ? fd_boot_word(&s_dir) : s_word_dots && s_cur == ST_TEXT;   /* kept through its melt */
+    if (st == ST_TEXT && fd_boot_word(&s_dir)) {   /* the boot screen's word, in the fluid's own dots */
+        fluid_text_set_glyphs(s_tx, s_sim, BOOT_WORD);
+        s_word = 0; s_word_until = 1e9f; s_text_hidden = false;
+    } else if (st == ST_TEXT && fd_bye_word(&s_dir)) {   /* the goodbye: one static label, held */
+        const int n = (int)strlen(BYE_WORD);
+        fluid_text_set_sentence(s_tx, n / 2.f);
+        fluid_text_set_word(s_tx, s_sim, BYE_WORD, n, -1);
+        s_word = 0; s_word_until = 1e9f; s_text_hidden = false;
+    } else if (st == ST_TEXT) {
         if (s_ntok == 0) { strcpy(s_ttext, "..."); tokenize(); }
         float ext = 1.f;
         for (int i = 0; i < s_ntok; i++) {
@@ -564,6 +592,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     if (scene_take_start(&s_sp) && s_cur == ST_SCENE && s_dir.state_t > 0.f) { fd_replay(&s_dir); ripple(0.f, 0.f, 0.6f, 0.2f); }
     fd_set_scene(&s_dir, scene_playing(&s_sp));
     fd_set_busy(&s_dir, s_listen || s_follow, covered);
+    if (atomic_load(&s_bye) && !s_dir.bye) fd_bye(&s_dir);
     fd_tick(&s_dir, rdt, s_cur == ST_TEXT && s_word_until > 1e8f && !s_follow);
     direct(cfg);
     if (scene_playing(&s_sp) && !fd_scene_wanted(&s_dir)) scene_clear(&s_sp);   /* another state took the screen */
@@ -636,6 +665,18 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
      * the voice sends a round wave from it across the screen (fluid_ring.h). The circle is a
      * target of the fluid, around whatever the state shows. */
     fluid_ring_tick(&s_rg, rdt, s_listen && !asking);
+    {   /* the agent's progress: on from its first word until done, or PROG_TTL_S without news */
+        static unsigned seen; static float at = -1.f;
+        const unsigned q = atomic_load(&s_prog_seq);
+        if (q != seen) { seen = q; at = s_tnow; }
+        const bool done = atomic_exchange(&s_prog_end, false);
+        if (done) at = -1.f;
+        const int32_t pv = atomic_load(&s_prog_in);
+        fluid_progress_tick(&s_pg, rdt, at >= 0.f && s_tnow - at < PROG_TTL_S, pv < 0 ? -1.f : pv * 0.001f, done);
+    }
+    /* the floor: the dim fluid on a ground plane under a creature, flat behind anything else */
+    s_floor_w += ((s_cur == ST_CREATURE && !asking ? 1.f : 0.f) - s_floor_w) * fminf(1.f, 2.f * rdt);
+    s->p.floor = s_floor_w;
     const float acc = cfg->palette == FLUID_PAL_PASTEL ? 0.f : 1.f;   /* mono palettes: the accent */
 
     switch (asking ? ST_TEXT : s_cur) {
@@ -662,6 +703,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         break;
     default:          fluid_target_blob(s, s_tnow, swell, ox, oy); break;
     }
+    fluid_sim_floor_track(s, rdt, s_cur == ST_CREATURE && !asking && cr_loaded());   /* its feet, before the rings join T */
     if (asking) {                                          /* each button's border, in its colour */
         fluid_arc_t arcs[FLUID_ASK_MAX];
         for (int i = 0; i < s_ask.n; i++) {
@@ -671,6 +713,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         }
         fluid_target_arcs(s, FLUID_ASK_ARC_R, arcs, s_ask.n, acc);   /* one pass for all */
     } else {
+        fluid_target_progress(s, &s_pg, PROG_COLOR, acc);          /* under the listening ring: it wins */
         fluid_target_ring(s, &s_rg, fluid_ring_rgb(s_ring_rgb, s_ring_def, cfg->palette), acc);
     }
     /* the always-on dim fluid; its slow noise (and the eddies' ψ) refresh on
@@ -781,18 +824,21 @@ static uint8_t *read_file(const char *path, size_t *len) {
     return b;
 }
 
+/* the firmware default .molty, copied into PSRAM */
+static uint8_t *default_bytes(size_t *len) {
+    const size_t n = (size_t)(_binary_default_molty_end - _binary_default_molty_start);
+    uint8_t *b = heap_caps_malloc(n, MALLOC_CAP_SPIRAM);
+    if (b) { memcpy(b, _binary_default_molty_start, n); *len = n; }
+    return b;
+}
+
 /* the uploaded .molty (or the tmp left by a crash between remove and rename), else the
  * firmware default; the CRC check in cute_spec_parse makes a torn file harmless */
 static uint8_t *creature_bytes(size_t *len, bool *is_default) {
     uint8_t *b = read_file(CUTE_PATH, len);
     if (!b) b = read_file(CUTE_TMP_PATH, len);
     *is_default = b == NULL;
-    if (!b) {
-        size_t n = (size_t)(_binary_default_molty_end - _binary_default_molty_start);
-        b = heap_caps_malloc(n, MALLOC_CAP_SPIRAM);
-        if (b) { memcpy(b, _binary_default_molty_start, n); *len = n; }
-    }
-    return b;
+    return b ? b : default_bytes(len);
 }
 
 /* the creature a boot shows: the one chosen last; with none chosen yet, an uploaded .molty
@@ -964,6 +1010,28 @@ static void draw_task(void *arg) {
 
 static void pace_wake(void *task) { xTaskNotifyGive((TaskHandle_t)task); }
 
+/* The panel off / on, with the drawer idle (it never sends a window to a sleeping panel). */
+static void screen_switch(bool on) {
+    xSemaphoreTake(s_idle, portMAX_DELAY);
+    esp_err_t e = molty_display_power(on);
+    if (!on && e == ESP_ERR_NOT_SUPPORTED) {            /* no panel switch: a black frame */
+        uint16_t *fb = molty_display_framebuffer();
+        if (fb) { memset(fb, 0, (size_t)s_fb_w * s_fb_h * sizeof(uint16_t)); molty_display_flush(); }
+    }
+    s_full_flush = true;
+    atomic_store(&s_screen, on);
+    xSemaphoreGive(s_idle);
+    mole_diag_event(false, "fluid.screen %s (%s)", on ? "on" : "off", e == ESP_OK ? "panel" : esp_err_to_name(e));
+}
+
+/* Screen off: something the human must see is waiting (a request the task has not taken yet). */
+static bool screen_wanted(void) {
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool w = s_text_ver != s_seen_ver || (s_ask_want.active && s_ask_want.seq != s_ask.scr.seq) || (s_listen_in && !s_listen);
+    xSemaphoreGive(s_mutex);
+    return w;
+}
+
 static void fluid_task(void *arg) {
     (void)arg;
     /* TWDT: re-created on every select → self-subscribe; delete before exit */
@@ -983,6 +1051,15 @@ static void fluid_task(void *arg) {
 
     while (s_run) {
         esp_task_wdt_reset();
+        if (!atomic_load(&s_screen)) {                  /* off: no sim, no drawing */
+            uint16_t xs[MOLTY_TOUCH_MAX_POINTS], ys[MOLTY_TOUCH_MAX_POINTS];
+            const bool touched = molty_touch_poll(xs, ys, MOLTY_TOUCH_MAX_POINTS) > 0;
+            if (!touched && !screen_wanted() && !atomic_load(&s_screen_want)) { vTaskDelay(pdMS_TO_TICKS(FLUID_OFF_POLL_MS)); continue; }
+            s_touch_mute = touched;
+            atomic_store(&s_screen_want, true);
+            screen_switch(true);
+            prev = next = esp_timer_get_time();         /* no catching up on the time it was off */
+        } else if (!atomic_load(&s_screen_want)) { screen_switch(false); continue; }
         int64_t now = esp_timer_get_time();
         float rdt = (float)(now - prev) / 1e6f;
         uint32_t raw_dt_us = (uint32_t)(now - prev);
@@ -1009,7 +1086,7 @@ static void fluid_task(void *arg) {
         scene_op_t sops[SCENE_QUEUE_MAX + 2];
         const int nsops = s_scene_nops;
         memcpy(sops, s_scene_ops, sizeof(scene_op_t) * (size_t)nsops); s_scene_nops = 0;
-        bool shed = s_req_shed; s_req_shed = false;
+        bool regrid = s_req_regrid; s_req_regrid = false;
         const touch_read_t tp = s_tp;
         if (!s_idle_life_loaded) { s_idle_life = idle_life_load(); s_idle_life_loaded = true; }
         int idle_life = s_idle_life;
@@ -1027,10 +1104,10 @@ static void fluid_task(void *arg) {
         }
         xSemaphoreGive(s_mutex);
 
-        /* the heap guard: the same grid again, every hot field in PSRAM (internal RAM back to
-         * Wi-Fi / TLS / the LCD; slower frames, never a starved radio) */
-        const int shed_n = shed && s_sim ? s_sim->n_internal : 0;
-        if (!s_sim || s_sim->W != cfg.grid_w || s_sim->H != cfg.grid_h || shed_n > 0) {
+        /* hot fields moved: the same grid again, rebuilt into PSRAM (the heap guard: internal
+         * RAM back to Wi-Fi / TLS / the LCD) or into what internal RAM the network left */
+        const int was_n = s_sim ? s_sim->n_internal : 0;
+        if (!s_sim || s_sim->W != cfg.grid_w || s_sim->H != cfg.grid_h || regrid) {
             xSemaphoreTake(s_idle, portMAX_DELAY);          /* own the drawer's buffers */
             if (build_grid(cfg.grid_w, cfg.grid_h) != ESP_OK) {
                 ESP_LOGE(TAG, "grid %dx%d alloc failed — back to %dx%d", cfg.grid_w, cfg.grid_h, s_grid_w0, s_grid_h0);
@@ -1040,9 +1117,9 @@ static void fluid_task(void *arg) {
                 if (build_grid(s_grid_w0, s_grid_h0) != ESP_OK) { xSemaphoreGive(s_idle); vTaskDelay(pdMS_TO_TICKS(200)); continue; }
             }
             xSemaphoreGive(s_idle);
-            if (shed_n > 0)
-                mole_diag_event(true, "fluid.shed hot fields internal %d -> %d, int_free=%u", shed_n,
-                                s_sim ? s_sim->n_internal : -1, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+            if (regrid)
+                mole_diag_event(was_n > 0, "fluid.%s hot fields internal %d -> %d, int_free=%u", was_n > 0 ? "shed" : "internal",
+                                was_n, s_sim ? s_sim->n_internal : -1, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
             enter_state(s_cur, s_cur_fx, &cfg);         /* re-enter on the new grid */
             if (s_ask.scr.phase != FLUID_ASK_NONE) ask_apply();   /* ...and the question over it */
         }
@@ -1080,13 +1157,25 @@ static void fluid_task(void *arg) {
         ask_follow(&want, req >= 0 || req_mood >= 0 || req_reel || nsops > 0, &cfg);
         direct(&cfg);
         for (int q = 0; q < nrip; q++) ripple(rip[q][0], rip[q][1], rip[q][2], 0.09f);
-        if (tp.seq != tp_seen) { poll_touch(tp.n, &tp.x, &tp.y, tp.t); tp_seen = tp.seq; }
+        if (tp.seq != tp_seen) {
+            if (s_touch_mute && tp.n == 0) s_touch_mute = false;
+            if (!s_touch_mute) poll_touch(tp.n, &tp.x, &tp.y, tp.t);
+            tp_seen = tp.seq;
+        }
 
         int64_t t0 = esp_timer_get_time();
         sim_frame(rdt, &cfg);
         int64_t t1 = esp_timer_get_time();
         /* hand the frame to the drawer: wait until it finished the previous one */
         xSemaphoreTake(s_idle, portMAX_DELAY);
+        if (s_dir.bye) {   /* the goodbye's fade: the panel's level, with the drawer idle */
+            const float l = fd_bye_level(&s_dir);
+            if (s_bye_lvl - l >= 0.02f || (l <= 0.f && s_bye_lvl > 0.f)) {
+                s_bye_lvl = l;
+                molty_display_level((uint8_t)(255.f * l * l + 0.5f));
+            }
+            if (fd_bye_done(&s_dir)) atomic_store(&s_bye_done, true);
+        }
         int64_t t2 = esp_timer_get_time();
         fluid_sim_snapshot(s_sim, s_frame, cfg.edge_mode == FLUID_EDGE_OFF);
         s_dopts = (fluid_draw_opts_t){
@@ -1094,6 +1183,8 @@ static void fluid_task(void *arg) {
             .shimmer = s_shimmer, .time = s_tnow, .melt = s_melt,
             .letters = s_dletters, .nletters = s_noverlay,
             .ramp = GC_RAMP_ASCII, .font = gc_font5x7,
+            /* the boot word, and its dots while it melts (each goes as the ink leaves it) */
+            .dots = s_word_dots && (s_cur == ST_TEXT || s_melt_t < 0.8f) ? s_tx->dots : NULL,
         };
         memcpy(s_dletters, s_overlay, sizeof(fluid_letter_t) * (size_t)s_noverlay);
         if (s_touch_t0) { s_dtouch = s_touch_t0; s_touch_t0 = 0; }
@@ -1233,16 +1324,18 @@ esp_err_t mole_fluid_creature_init(void) {
         uint8_t *cb = boot_creature(&clen, &pkg, id);
         if (cb) queue_creature(cb, clen, pkg, id);
     }
-    /* boot: the director wants the creature (the stored or default .molty queued above
-     * loads on the task's first frame); the blob stands in only if none loads */
+    /* boot: the director wants the creature (the one queued above loads on the task's first
+     * frame; the blob stands in only if none loads); at power on, the boot screen's word first */
     fd_init(&s_dir, NULL, esp_random());
+    if (!s_booted) fd_boot(&s_dir);
+    s_booted = true;
     s_cur = ST_BLOB; s_cur_fx = 0; s_word = 0; s_ntok = 0;
     s_tnow = s_acc = 0.f; s_melt_t = 1e9f;
     s_gx = s_gy = 0.f; s_touch_down = false;
     s_ask.scr.phase = FLUID_ASK_NONE; s_ask.scr.seq = s_ask_want.seq;     /* a question from before is gone */
     s_dask = 0; atomic_store(&s_glass_ask, 0);
     s_follow = false; s_follow_word = 0; s_text_hidden = false;
-    s_rg = (fluid_ring_t){ 0 }; s_div = 0.f; s_ov = s_dov = (fluid_overlay_t){ 0 };   /* the fluid's own ring is in the sim */
+    s_rg = (fluid_ring_t){ 0 }; s_pg = (fluid_progress_t){ 0 }; s_div = 0.f; s_ov = s_dov = (fluid_overlay_t){ 0 };   /* the fluid's own ring is in the sim */
     s_sim->p.relax_up = RATE_UP[ST_BLOB]; s_sim->p.relax_down = RATE_DOWN[ST_BLOB];
 
     xSemaphoreTake(s_go, 0);                     /* fresh handshake: drawer idle, nothing queued */
@@ -1353,6 +1446,7 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     cJSON_AddNumberToObject(root, "wpm",         c.wpm);
     cJSON_AddStringToObject(root, "mood",        st.mood >= 0 ? CUTE_MOOD_NAMES[st.mood] : "");
     cJSON_AddBoolToObject  (root, "asleep",      st.asleep);
+    cJSON_AddBoolToObject  (root, "screen",      mole_fluid_screen_on());
     cJSON_AddBoolToObject(root, "working",       st.working);
     if (st.scene_pkg[0]) {                     /* the scene on screen: pkg, layout, s left */
         cJSON *sc = cJSON_AddObjectToObject(root, "scene");
@@ -1687,7 +1781,24 @@ void mole_fluid_event(mole_fluid_event_t ev) {
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     if (ev == MOLE_FLUID_SHAKE) s_req_shake = true; else s_req_user = true;
     xSemaphoreGive(s_mutex);
+    atomic_store(&s_screen_want, true);
 }
+
+void mole_fluid_screen(bool on) { if (!atomic_load(&s_bye)) atomic_store(&s_screen_want, on); }
+
+void mole_fluid_goodbye(void) {
+    atomic_store(&s_bye, true);
+    atomic_store(&s_screen_want, true);
+    if (!s_mutex) atomic_store(&s_bye_done, true);     /* fluid not up: nothing to show */
+}
+bool mole_fluid_goodbye_done(void) { return atomic_load(&s_bye_done); }
+
+void mole_fluid_progress(float pct, bool done) {
+    if (done) { atomic_store(&s_prog_end, true); return; }
+    atomic_store(&s_prog_in, pct < 0.f ? -1 : (int32_t)(fminf(pct, 100.f) * 10.f + 0.5f));
+    atomic_fetch_add(&s_prog_seq, 1);
+}
+bool mole_fluid_screen_on(void) { return atomic_load(&s_screen); }
 
 void mole_fluid_set_status(int status) {
     if (!s_mutex || status == s_status_in) return;    /* unlocked peek: only this caller writes it */
@@ -1767,7 +1878,15 @@ void mole_fluid_shed_internal(void) {
     fluid_sim_allow_internal(false);                   /* any sim built from now on, too */
     if (!s_mutex) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    s_req_shed = true;
+    s_shed = s_req_regrid = true;
+    xSemaphoreGive(s_mutex);
+}
+
+void mole_fluid_allow_internal(void) {
+    if (!s_mutex) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    static bool done;                                  /* once a boot; never after a shed */
+    if (!done && !s_shed) { done = s_req_regrid = true; fluid_sim_allow_internal(true); }
     xSemaphoreGive(s_mutex);
 }
 

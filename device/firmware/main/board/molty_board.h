@@ -15,6 +15,11 @@
  *             its largest centred square. Optional blit: the fluid then sends only the
  *             windows that changed, from a small internal-RAM buffer, and the
  *             framebuffer (PSRAM) stays out of the frame loop.
+ *             Optional display_power: the panel off (and back on) while the screen is
+ *             off (mole_fluid_screen); without it the fluid only stops drawing.
+ *             Optional display_level: the panel's brightness (the goodbye fades it).
+ *   power_off optional: the board cuts its own power (the PWR long press, power.c);
+ *             without it, or while USB keeps it up, the screen only goes off.
  *   touch, imu, mic, speaker, accept / reject buttons, battery, usb_net, serial
  *             optional: leave the op NULL and drop the MOLTY_CAP_ bit. The core asks
  *             molty_board_has() and degrades — no mic/speaker: voice endpoints and
@@ -73,6 +78,14 @@ typedef struct {
     uint32_t ms;        /* esp_timer uptime at capture */
 } molty_imu_sample_t;
 
+/* Battery: what the board can tell. pct and the flags are -1 / false where it cannot. */
+typedef struct {
+    int  mv;            /* cell voltage                                            */
+    int  pct;           /* charge 0..100 from the board's fuel gauge, -1 = none    */
+    bool charging;      /* the charger is filling the cell                         */
+    bool usb;           /* external power present                                  */
+} molty_battery_t;
+
 /* Speaker: blocking clip playback + one exclusive PCM16 mono stream (the link's say). */
 typedef struct {
     esp_err_t (*play_raw)(const int16_t *samples, size_t n, uint32_t rate_hz, int16_t amp_scale);
@@ -110,6 +123,9 @@ typedef struct {
     esp_err_t (*flush)(void);
     esp_err_t (*flush_rows)(int y0, int y1);      /* full-width rows [y0, y1)                    */
     esp_err_t (*blit)(int x, int y, int w, int h, const uint16_t *px);   /* optional: see molty_display_blit */
+    esp_err_t (*display_power)(bool on);          /* optional: panel off / on (sleep, backlight)  */
+    esp_err_t (*display_level)(uint8_t level);    /* optional: brightness 0..255 (255 at power on) */
+    esp_err_t (*power_off)(void);                 /* optional: cut the power; returns only on failure */
 
     /* optional — NULL when absent */
     int       (*touch_poll)(uint16_t *xs, uint16_t *ys, int max);   /* panel px; returns count  */
@@ -120,7 +136,7 @@ typedef struct {
                             * mic's sensitivity: the louder the mic, the lower (clipping is lost
                             * audio; the VAD follows its noise floor, so it needs no retune) */
     bool      (*button_pressed)(molty_button_t b);
-    int       (*battery_mv)(void);                                  /* <0 on a failed read      */
+    esp_err_t (*battery)(molty_battery_t *out);                     /* fails on a failed read   */
 } molty_board_t;
 
 /** Defined by the selected board's board.c. */
@@ -178,13 +194,20 @@ esp_err_t molty_display_flush_rows(int y0, int y1);
  *  the framebuffer as it was (whoever draws keeps it for /api/framebuffer); without one,
  *  px is copied into the framebuffer and its rows flushed. */
 esp_err_t molty_display_blit(int x, int y, int w, int h, const uint16_t *px);
+/** The panel off (false) or on. ESP_ERR_NOT_SUPPORTED when the board cannot; the caller
+ *  stops drawing either way. */
+esp_err_t molty_display_power(bool on);
+/** The panel's brightness, 0..255. ESP_ERR_NOT_SUPPORTED when the board cannot. */
+esp_err_t molty_display_level(uint8_t level);
+/** Cut the power. Returns only when it could not (ESP_ERR_NOT_SUPPORTED without the op). */
+esp_err_t molty_power_off(void);
 
 /** Poll touch; feeds the pairing tap detector. 0 points without touch. */
 int       molty_touch_poll(uint16_t *xs, uint16_t *ys, int max);
 /** Latest IMU sample; false (and *out zeroed) without an IMU. */
 bool      molty_imu_get(molty_imu_sample_t *out);
 bool      molty_button_pressed(molty_button_t b);    /* false without that button */
-esp_err_t molty_battery_mv(int *mv);
+esp_err_t molty_battery_read(molty_battery_t *out);
 
 esp_err_t molty_speaker_play(const int16_t *samples, size_t n, uint32_t rate_hz, int16_t amp_scale);
 esp_err_t molty_speaker_set_volume(uint8_t vol);
