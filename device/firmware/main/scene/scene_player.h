@@ -39,11 +39,13 @@ extern "C" {
 #define SCENE_ITEMS_MAX   128           /* resolved items (each expands)                   */
 #define SCENE_LIST_MAX    32            /* elements of a list param                        */
 #define SCENE_PTS_MAX     512           /* resolved line / curve points, all items         */
-#define SCENE_LETTERS     FLUID_MAX_LETTERS
+#define SCENE_LETTERS     40            /* a scene's own text, letters (the overlay holds FLUID_MAX_LETTERS) */
 #define SCENE_QUEUE_MAX   8
 #define SCENE_TTL_DEFAULT 60.f
 #define SCENE_TTL_MAX     600.f
 #define SCENE_INK         0.85f         /* a solid item's ink                              */
+#define SCENE_CRISP_MAX   0.25f         /* an upright mask glyph this small (glass units) is drawn
+                                         * crisp on the panel, like a letter, not in dots  */
 
 typedef struct {
     uint8_t k;                          /* PK_*                                            */
@@ -94,9 +96,21 @@ void scene_tick(scene_player_t *p, float dt);
 bool scene_take_start(scene_player_t *p);
 static inline bool scene_playing(const scene_player_t *p) { return p->cur != NULL; }
 
-/** Rasterise sc at t s into its run: T + tcol of every cell (zero outside the items),
- *  letters[0..*nletters) the crisp overlay of its text items (stage px). */
-void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, fluid_letter_t *letters, int *nletters);
+/* A subtitle over a scene: what Molty says while a drawing is up, one line at the bottom,
+ * the word being spoken (str[hi0..hi1)) brighter */
+#define SCENE_CAPTION_MAX   24          /* characters on the line                          */
+#define SCENE_CAPTION_Y     (-0.66f)    /* glass units, y up                               */
+#define SCENE_CAPTION_SIZE  0.11f       /* type size, glass units                          */
+#define SCENE_CAPTION_RGB   0x9aa0b8u
+#define SCENE_CAPTION_HI    0xffffffu
+typedef struct { const char *str; int n, hi0, hi1; } scene_caption_t;
+
+/** Rasterise sc at t s (and cap, if any, over it) on the braille dots: T + tcol of every
+ *  cell (zero outside the items; a cell's target is its densest dot), dots (W x H, may be
+ *  NULL) the dots each cell shows, letters[0..*nletters) the crisp overlay of its text
+ *  (stage px). */
+void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_t *cap,
+                fluid_letter_t *letters, int *nletters, uint8_t *dots);
 
 #ifdef __cplusplus
 }

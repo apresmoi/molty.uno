@@ -207,16 +207,20 @@ static void test_fill(void) {
     const char *err;
     scene_t *sc = build("dial", DIAL, 0, &err);
     fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
-    fluid_letter_t L[SCENE_LETTERS]; int nl = 0;
-    scene_fill(s, sc, 0.5f, L, &nl);
+    fluid_letter_t L[FLUID_MAX_LETTERS]; int nl = 0;
+    scene_fill(s, sc, 0.5f, NULL, L, &nl, NULL);
     CHECK(ink_at(s, 0.9f, 0.f) > 0.5f, "the ring at r 0.9 (%.2f)", ink_at(s, 0.9f, 0.f));
     CHECK(ink_at(s, -0.35f, 0.35f) == 0.f, "nothing where no item is");
     CHECK(ink_at(s, 0.6f * 0.7071f, 0.6f * 0.7071f) < 0.05f, "the arc is not on before 1 s");
     CHECK(ink_at(s, -0.5f, -0.5f) > 0.5f, "the disc is on before 3 s");
     CHECK(ink_at(s, 0.f, 0.72f) > 0.2f, "the glyph at polar 90 (%.2f)", ink_at(s, 0.f, 0.72f));
     CHECK(ink_at(s, 0.15f, 0.1f) > ink_at(s, -0.15f, 0.1f) + 0.1f, "the ball lit from the right (%.2f vs %.2f)", ink_at(s, 0.15f, 0.1f), ink_at(s, -0.15f, 0.1f));
-    CHECK(nl == 5 && L[0].ch == 'h' && L[4].ch == 'o' && L[0].rgb == (FLUID_RGB | 0xffffff) && L[0].y > FLUID_STAGE_REF / 2, "the title's letters, below the centre");
-    scene_fill(s, sc, 3.5f, L, &nl);
+    int nm = 0;
+    while (nm < nl && L[nm].mask) nm++;
+    CHECK(nm > 0 && L[0].mw > 0 && nl == nm + 5, "the small glyphs are crisp symbols (%d), then the title (%d letters)", nm, nl - nm);
+    const fluid_letter_t *T = L + nm;
+    CHECK(nl == nm + 5 && T[0].ch == 'h' && T[4].ch == 'o' && T[0].rgb == (FLUID_RGB | 0xffffff) && T[0].y > FLUID_STAGE_REF / 2, "the title's letters, below the centre");
+    scene_fill(s, sc, 3.5f, NULL, L, &nl, NULL);
     CHECK(ink_at(s, 0.6f * 0.7071f, 0.6f * 0.7071f) > 0.5f, "the arc is on after 1 s");
     CHECK(ink_at(s, -0.5f, -0.5f) == 0.f, "the disc is off after 3 s");
     CHECK(ink_at(s, 0.6f * 0.7071f, -0.6f * 0.7071f) == 0.f, "the arc spans 0..90 only");
@@ -240,8 +244,8 @@ static fluid_sim_t *fill_layout(pkg_t *p, const char *layout) {
     scene_t *sc = scene_build(p, layout, NULL, 0, &err);
     CHECK(sc, "%s builds (%s)", layout, err ? err : "");
     fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
-    fluid_letter_t L[SCENE_LETTERS]; int nl;
-    scene_fill(s, sc, 0.5f, L, &nl);
+    fluid_letter_t L[FLUID_MAX_LETTERS]; int nl;
+    scene_fill(s, sc, 0.5f, NULL, L, &nl, NULL);
     scene_free(sc);
     return s;
 }
@@ -300,8 +304,8 @@ static void test_real_package(const char *dir) {
         CHECK(sc, "%s %s builds (%s)", name, layout, err ? err : "");
         if (!sc) { cJSON_Delete(c); continue; }
         for (int i = 0; i < p->nlayouts; i++) if (!strcmp(p->layouts[i].name, layout)) seen[i] = true;
-        fluid_letter_t L[SCENE_LETTERS]; int nl, lit = 0;
-        scene_fill(s, sc, sc->dur > 0.f ? sc->dur / 2 : 1.f, L, &nl);
+        fluid_letter_t L[FLUID_MAX_LETTERS]; int nl, lit = 0;
+        scene_fill(s, sc, sc->dur > 0.f ? sc->dur / 2 : 1.f, NULL, L, &nl, NULL);
         for (int k = 0; k < s->N; k++) lit += s->T[k] > 0.2f * FQ_UNIT;
         CHECK(lit > 10, "%s draws something (%d cells; a thin crescent is ~20)", layout, lit);
         if (!strcmp(name, "scene.play")) scene_play(&sp, sc);
@@ -336,12 +340,12 @@ static void bench(const char *molty) {
     CHECK(sc && sc->nitems == 1 + 12 + 10 + 1 && sc->nchars == 40, "the busy layout: 1 ring, 12 glyphs, 10 balls, 40 letters (%s)", err ? err : "");
     if (!sc) return;
     fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
-    fluid_letter_t L[SCENE_LETTERS]; int nl;
+    fluid_letter_t L[FLUID_MAX_LETTERS]; int nl;
     const int N = 2000;
     double t0 = now_us();
-    for (int k = 0; k < N; k++) scene_fill(s, sc, k * DT, L, &nl);
+    for (int k = 0; k < N; k++) scene_fill(s, sc, k * DT, NULL, L, &nl, NULL);
     const double scene_us = (now_us() - t0) / N;
-    CHECK(nl == 40, "40 letters on the overlay");
+    CHECK(nl == 12 + 40, "12 crisp symbols and 40 letters on the overlay (%d)", nl);
 
     double creature_us = 0.;
     static uint8_t buf[CUTE_MAX_FILE + 16];

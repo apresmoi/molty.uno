@@ -203,6 +203,28 @@ static void draw_glyph(const fluid_rect_t *t, const uint8_t *gl, int x0, int y0,
     }
 }
 
+/* a symbol (fluid_letter_t.mask): its 1-bit image scaled into w x h px, nearest pixel */
+static void draw_mask(const fluid_rect_t *t, const uint8_t *m, int mw, int mh, int x0, int y0, int w, int h, uint16_t c,
+                      int cx0, int cy0, int cx1, int cy1) {
+    if (!m || w <= 0 || h <= 0) return;
+    if (cx0 < t->x0) cx0 = t->x0;
+    if (cy0 < t->y0) cy0 = t->y0;
+    if (cx1 > t->x1) cx1 = t->x1;
+    if (cy1 > t->y1) cy1 = t->y1;
+    for (int py = 0; py < h; py++) {
+        const int y = y0 + py;
+        if (y < cy0 || y >= cy1) continue;
+        const int my = py * mh / h;
+        uint16_t *row = rect_px(t, t->x0, y);
+        for (int px = 0; px < w; px++) {
+            const int x = x0 + px;
+            if (x < cx0 || x >= cx1) continue;
+            const int p = my * mw + px * mw / w;
+            if (m[p >> 3] >> (7 - (p & 7)) & 1) row[x - t->x0] = c;
+        }
+    }
+}
+
 /* no contour ring around the condensed letters: cells next to a letter only dither (and
  * none at all next to a word's dots) */
 static inline bool near_skip(const uint8_t *sk, int W, int H, int i, int j) {
@@ -404,6 +426,7 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
         const fluid_letter_t *L = &o->letters[shown[n].li];
         float ink = shown[n].ink, m = shown[n].m;
         char c2;
+        if (L->mask && ink <= 0.36f + m * 1.5f) continue;   /* a symbol: whole, once the ink is in */
         if (ink > 0.36f + m * 1.5f) c2 = L->ch;
         else { int idx = (int)lrintf(fmaxf(0.f, ink - m) * rmax); c2 = ramp[idx < 1 ? 1 : idx > rmax ? rmax : idx]; }
         float br = fminf(1.f, 0.55f + ink), r, g, b;
@@ -425,7 +448,9 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
         if (yoff > margin) yoff = margin;
         if (yoff < -margin) yoff = -margin;
         int gx = ox + (int)lrintf(L->x + (L->w - gw) * 0.5f), gy = oy + (int)lrintf(L->y) + margin + yoff;
-        d->lt[d->nlt].gl = o->font(c2); d->lt[d->nlt].c = rgb565_be((int)r, (int)g, (int)b);
+        if (L->mask) { gw = (int)lrintf(L->w); gh = (int)lrintf(L->h); gx = ox + (int)lrintf(L->x); gy = oy + (int)lrintf(L->y); }
+        d->lt[d->nlt].gl = L->mask ? NULL : o->font(c2); d->lt[d->nlt].c = rgb565_be((int)r, (int)g, (int)b);
+        d->lt[d->nlt].mask = L->mask; d->lt[d->nlt].mw = L->mw; d->lt[d->nlt].mh = L->mh;
         d->lt[d->nlt].x = (int16_t)gx; d->lt[d->nlt].y = (int16_t)gy; d->lt[d->nlt].w = (int16_t)gw; d->lt[d->nlt].h = (int16_t)gh;
         d->lt[d->nlt].cx0 = (int16_t)(ox + (int)floorf(L->x)); d->lt[d->nlt].cy0 = (int16_t)(oy + (int)floorf(L->y));
         d->lt[d->nlt].cx1 = (int16_t)(ox + (int)ceilf(L->x + L->w)); d->lt[d->nlt].cy1 = (int16_t)(oy + (int)ceilf(L->y + L->h));
@@ -473,9 +498,14 @@ void fluid_draw_rect(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fl
             }
         }
     }
-    for (int n = 0; n < d->nlt; n++)
-        draw_glyph(t, d->lt[n].gl, d->lt[n].x, d->lt[n].y, d->lt[n].w, d->lt[n].h, d->lt[n].c,
-                   d->lt[n].cx0, d->lt[n].cy0, d->lt[n].cx1, d->lt[n].cy1);
+    for (int n = 0; n < d->nlt; n++) {
+        if (d->lt[n].mask)
+            draw_mask(t, d->lt[n].mask, d->lt[n].mw, d->lt[n].mh, d->lt[n].x, d->lt[n].y, d->lt[n].w, d->lt[n].h, d->lt[n].c,
+                      d->lt[n].cx0, d->lt[n].cy0, d->lt[n].cx1, d->lt[n].cy1);
+        else
+            draw_glyph(t, d->lt[n].gl, d->lt[n].x, d->lt[n].y, d->lt[n].w, d->lt[n].h, d->lt[n].c,
+                       d->lt[n].cx0, d->lt[n].cy0, d->lt[n].cx1, d->lt[n].cy1);
+    }
     FLUID_PROF_END(FP_DRASTER, c1);
 }
 

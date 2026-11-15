@@ -40,7 +40,7 @@ extern "C" {
 #define FLUID_GRID_MAX_W  64
 #define FLUID_GRID_MIN_H  16
 #define FLUID_GRID_MAX_H  40
-#define FLUID_MAX_LETTERS 40       /* a question's 5 labels × 8 letters             */
+#define FLUID_MAX_LETTERS 64       /* a question's 5 labels × 8 letters; a chart's 22 symbols + a subtitle */
 #define FLUID_WORD_LETTERS 32      /* the speed reader's display cap per word        */
 
 /* ── profiling: CPU cycles per phase, accumulated until the caller resets ── */
@@ -247,6 +247,9 @@ typedef struct {
     float melt;                        /* this letter's own melt, added to the frame's    */
     uint32_t rgb;                      /* FLUID_RGB | 0xRRGGBB: its own colour (pastel);
                                         * 0 = the palette's                               */
+    const uint8_t *mask;               /* not a letter but a symbol: a 1-bit mw x mh image
+                                        * (rows MSB first) drawn crisp in the whole box   */
+    uint16_t mw, mh;
 } fluid_letter_t;
 #define FLUID_RGB 0x1000000u           /* "a colour is set" flag over 0xRRGGBB            */
 
@@ -348,7 +351,7 @@ typedef struct {
     int16_t  *span;                    /* per row: first, last+1 changed cell (none: 0, 0) */
     int8_t   *yrow;                    /* fb row → dot row 0..3 inside its cell, or −1    */
     struct {                           /* this frame's condensed letters, ready to draw   */
-        const uint8_t *gl; uint16_t c; int16_t x, y, w, h, cx0, cy0, cx1, cy1;
+        const uint8_t *gl, *mask; uint16_t c, mw, mh; int16_t x, y, w, h, cx0, cy0, cx1, cy1;
     } lt[FLUID_MAX_LETTERS];
     int nlt;
     void *block;
