@@ -18,6 +18,7 @@
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "mole_diag.h"
+#include "mole_fluid.h"
 #include "log_upload.h"
 #include "nvs.h"
 #include <stdlib.h>
@@ -395,6 +396,7 @@ static void link_task(void *arg)
                         atomic_store(&s_connected, true); atomic_store(&s_auth, false);
                         mole_diag_event(false, "link.welcome after %ums", (unsigned)((now - started) / 1000));
                         self_update_welcomed();   /* a freshly updated image: valid now (update_core.h) */
+                        mole_fluid_allow_internal();   /* the network holds its RAM now: the fluid may take what is left */
                         link_audio_relay_adopts(link_welcome_has(j, LINK_FEATURE_ADOPT));   /* shake to talk */
                         link_audio_resume_welcome(j);
                         log_welcome(j, now);

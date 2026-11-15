@@ -135,6 +135,8 @@ void link_ask_tick(void) { ask_ticks++; }
  * code a handler chose (link_cmd_refuse) is the res's error */
 static unsigned welcomes;
 void self_update_welcomed(void) { welcomes++; assert(link_client_connected()); }
+static unsigned allows;   /* the fluid may take internal RAM once the network is up */
+void mole_fluid_allow_internal(void) { allows++; assert(link_client_connected()); }
 const char *link_cmd_refusal(void) { return "bad_url"; }
 void link_pair_tick(void) {}
 void link_pair_status(cJSON *j) { cJSON_AddNullToObject(j,"pair"); cJSON_AddNullToObject(j,"last_pair"); }
@@ -234,7 +236,7 @@ int main(void) {
     disconnect("test"); free(s_rxq); cJSON_Delete(sdk_sent);
     /* every disconnect ended the question, with the link already marked down (no event) */
     assert(ask_ticks>0 && ask_cancels>0 && !ask_cancels_connected);
-    assert(welcomes>0);
+    assert(welcomes>0 && allows==welcomes);
     assert(!relay_adopts);   /* a welcome without listen_adopt: no shake to talk */
     assert(hints==1 && !strcmp(hint_job,"j1") && !strcmp(hint_kind,"question"));
     assert(!strcmp(error_code(LINK_CMD_REFUSED),"bad_url") && !strcmp(error_code(ESP_ERR_INVALID_STATE),"busy"));

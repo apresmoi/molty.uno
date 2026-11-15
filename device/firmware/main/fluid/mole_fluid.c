@@ -192,7 +192,8 @@ static bool     s_req_spoke = false;            /* a say played to its end      
 typedef struct { mole_scene_op_t op; scene_t *sc; } scene_op_t;
 static scene_op_t s_scene_ops[SCENE_QUEUE_MAX + 2];
 static int        s_scene_nops, s_scene_nq;      /* pending ops; the player's queue (task's copy) */
-static bool     s_req_shed = false;             /* the heap guard: hot fields → PSRAM (mole_fluid_shed_internal) */
+static bool     s_req_regrid = false;           /* rebuild the grid: hot fields moved (shed / allow internal) */
+static bool     s_shed = false;                 /* the heap guard shed them: internal RAM stays off this boot */
 /* a say's mood marks tint its words from the cued word on (mole_fluid_cue_mood):
  * 0 = the palette's colours, else FLUID_RGB | 0xRRGGBB */
 static uint32_t s_tint_in = 0;
@@ -1085,7 +1086,7 @@ static void fluid_task(void *arg) {
         scene_op_t sops[SCENE_QUEUE_MAX + 2];
         const int nsops = s_scene_nops;
         memcpy(sops, s_scene_ops, sizeof(scene_op_t) * (size_t)nsops); s_scene_nops = 0;
-        bool shed = s_req_shed; s_req_shed = false;
+        bool regrid = s_req_regrid; s_req_regrid = false;
         const touch_read_t tp = s_tp;
         if (!s_idle_life_loaded) { s_idle_life = idle_life_load(); s_idle_life_loaded = true; }
         int idle_life = s_idle_life;
@@ -1103,10 +1104,10 @@ static void fluid_task(void *arg) {
         }
         xSemaphoreGive(s_mutex);
 
-        /* the heap guard: the same grid again, every hot field in PSRAM (internal RAM back to
-         * Wi-Fi / TLS / the LCD; slower frames, never a starved radio) */
-        const int shed_n = shed && s_sim ? s_sim->n_internal : 0;
-        if (!s_sim || s_sim->W != cfg.grid_w || s_sim->H != cfg.grid_h || shed_n > 0) {
+        /* hot fields moved: the same grid again, rebuilt into PSRAM (the heap guard: internal
+         * RAM back to Wi-Fi / TLS / the LCD) or into what internal RAM the network left */
+        const int was_n = s_sim ? s_sim->n_internal : 0;
+        if (!s_sim || s_sim->W != cfg.grid_w || s_sim->H != cfg.grid_h || regrid) {
             xSemaphoreTake(s_idle, portMAX_DELAY);          /* own the drawer's buffers */
             if (build_grid(cfg.grid_w, cfg.grid_h) != ESP_OK) {
                 ESP_LOGE(TAG, "grid %dx%d alloc failed — back to %dx%d", cfg.grid_w, cfg.grid_h, s_grid_w0, s_grid_h0);
@@ -1116,9 +1117,9 @@ static void fluid_task(void *arg) {
                 if (build_grid(s_grid_w0, s_grid_h0) != ESP_OK) { xSemaphoreGive(s_idle); vTaskDelay(pdMS_TO_TICKS(200)); continue; }
             }
             xSemaphoreGive(s_idle);
-            if (shed_n > 0)
-                mole_diag_event(true, "fluid.shed hot fields internal %d -> %d, int_free=%u", shed_n,
-                                s_sim ? s_sim->n_internal : -1, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+            if (regrid)
+                mole_diag_event(was_n > 0, "fluid.%s hot fields internal %d -> %d, int_free=%u", was_n > 0 ? "shed" : "internal",
+                                was_n, s_sim ? s_sim->n_internal : -1, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
             enter_state(s_cur, s_cur_fx, &cfg);         /* re-enter on the new grid */
             if (s_ask.scr.phase != FLUID_ASK_NONE) ask_apply();   /* ...and the question over it */
         }
@@ -1877,7 +1878,15 @@ void mole_fluid_shed_internal(void) {
     fluid_sim_allow_internal(false);                   /* any sim built from now on, too */
     if (!s_mutex) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    s_req_shed = true;
+    s_shed = s_req_regrid = true;
+    xSemaphoreGive(s_mutex);
+}
+
+void mole_fluid_allow_internal(void) {
+    if (!s_mutex) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    static bool done;                                  /* once a boot; never after a shed */
+    if (!done && !s_shed) { done = s_req_regrid = true; fluid_sim_allow_internal(true); }
     xSemaphoreGive(s_mutex);
 }
 

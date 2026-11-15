@@ -166,6 +166,10 @@ unsigned mole_fluid_text_ver(void);
  * to PSRAM (rebuilt on the task's next frame, same grid; and every later build too). Slower
  * frames, never a starved Wi-Fi. Any task. */
 void mole_fluid_shed_internal(void);
+/* The network is up (the relay's first welcome): the hot fields may take the internal RAM
+ * left above the sim's reserve (rebuilt on the task's next frame). Once a boot, never after
+ * a shed. Any task. */
+void mole_fluid_allow_internal(void);
 /* how many of the sim's hot fields sit in internal RAM (the last frame's count) */
 int mole_fluid_internal_fields(void);
 void mole_fluid_spoke(void);
