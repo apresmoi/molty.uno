@@ -83,6 +83,28 @@ static void boot_screen(bool home, bool wait) {
     frame(true);
 }
 
+/* power off: "bye!", the pond fading out, done; nothing interrupts it, even mid boot screen */
+static void test_bye(void) {
+    boot_screen(true, true);
+    run(1.f, true);
+    fd_bye(&D);
+    frame(true);
+    CHECK(D.cur == FD_ST_TEXT && fd_bye_word(&D) && !fd_boot_word(&D) && !D.boot, "the word, the boot screen over");
+    CHECK(fd_bye_level(&D) == 1.f && !fd_bye_done(&D), "full brightness while it says it");
+    fd_request_state(&D, FD_ST_BLOB, 0, false); fd_agent_mood(&D, CM_HAPPY, 2.f); fd_agent_act(&D, CA_WIGGLE, 1.f); fd_autoplay(&D);
+    fd_boot(&D, true, true);
+    run(1.7f, true);
+    CHECK(D.cur == FD_ST_TEXT && D.held == CM_IDLE && !D.autoplay && !D.boot, "requests, moods, acts, autoplay, boot: all ignored");
+    run(0.2f, true);
+    CHECK(D.cur == FD_ST_FX && D.cur_fx == 0 /* FLUID_FX_RIPPLE */ && !fd_bye_word(&D), "then the pond");
+    run(1.1f, false);
+    const float l = fd_bye_level(&D);
+    CHECK(l > 0.4f && l < 0.6f && !fd_bye_done(&D), "fading: %.2f halfway", l);
+    run(1.2f, false);
+    CHECK(fd_bye_level(&D) == 0.f && fd_bye_done(&D) && D.cur == FD_ST_FX, "black, done");
+    CHECK(!s_homes, "no home creature loads on the way out");
+}
+
 static void test_boot_screen(void) {
     /* the word, the paddling, the link: dissolves into the human's creature */
     boot_screen(true, true);
@@ -687,6 +709,7 @@ int main(void) {
     test_agent_moods();
     test_shake();
     test_status();
+    test_bye();
     test_reel();
     test_replay();
     printf("%d passed, %d failed\n", s_pass, s_fail);

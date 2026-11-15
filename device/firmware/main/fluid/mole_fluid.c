@@ -90,6 +90,8 @@ static const char *DEFAULT_TEXT =
     "hello, i am molty. i breathe in ascii and i speak in ascii. touch the water.";
 /* the boot screen's word (fluid_director.h "boot screen"): condenses out of the fluid at power on */
 #define BOOT_WORD "molty.uno"
+/* ...and the goodbye's (fd_bye): before the power goes off */
+#define BYE_WORD "bye!"
 
 /* ── States (the director decides which, fluid_director.h) ─────────────────── */
 
@@ -299,6 +301,8 @@ static int   s_last_tx = 0, s_last_ty = 0;
 static volatile bool s_full_flush = true;
 static atomic_bool s_screen_want = true;        /* mole_fluid_screen                    */
 static atomic_bool s_screen = true;             /* on the glass now (the task switches it) */
+static atomic_bool s_bye = false, s_bye_done = false;   /* mole_fluid_goodbye; it ended   */
+static float    s_bye_lvl = 1.f;                    /* the panel's level the goodbye set */
 static bool  s_touch_mute = false;              /* the touch that woke the screen, until it lifts */
 #define FLUID_OFF_POLL_MS  50                   /* screen off: touch and wake checks       */
 /* the drawer's window buffer (fluid_draw_send): internal DMA-capable RAM, which the panel's
@@ -383,10 +387,11 @@ static void enter_state(int st, int fx, const fluid_cfg_t *cfg) {
     if (s_cur == ST_FX) fluid_effect_exit(s_sim, s_cur_fx);
     if (st == ST_CREATURE && !cr_loaded()) st = ST_BLOB;   /* no creature loaded */
     s_sim->edge_w = st == ST_CREATURE ? 1.f : 0.f;      /* solid eyes once settled */
-    if (st == ST_TEXT && fd_boot_word(&s_dir)) {   /* the boot screen's word: one static label, held */
-        const int n = (int)strlen(BOOT_WORD);
+    if (st == ST_TEXT && (fd_boot_word(&s_dir) || fd_bye_word(&s_dir))) {   /* boot / goodbye: one static label, held */
+        const char *w = fd_bye_word(&s_dir) ? BYE_WORD : BOOT_WORD;
+        const int n = (int)strlen(w);
         fluid_text_set_sentence(s_tx, n / 2.f);
-        fluid_text_set_word(s_tx, s_sim, BOOT_WORD, n, -1);
+        fluid_text_set_word(s_tx, s_sim, w, n, -1);
         s_word = 0; s_word_until = 1e9f; s_text_hidden = false;
     } else if (st == ST_TEXT) {
         if (s_ntok == 0) { strcpy(s_ttext, "..."); tokenize(); }
@@ -585,6 +590,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     if (scene_take_start(&s_sp) && s_cur == ST_SCENE && s_dir.state_t > 0.f) { fd_replay(&s_dir); ripple(0.f, 0.f, 0.6f, 0.2f); }
     fd_set_scene(&s_dir, scene_playing(&s_sp));
     fd_set_busy(&s_dir, s_listen || s_follow, covered);
+    if (atomic_load(&s_bye) && !s_dir.bye) fd_bye(&s_dir);
     fd_tick(&s_dir, rdt, s_cur == ST_TEXT && s_word_until > 1e8f && !s_follow);
     direct(cfg);
     if (scene_playing(&s_sp) && !fd_scene_wanted(&s_dir)) scene_clear(&s_sp);   /* another state took the screen */
@@ -1182,6 +1188,14 @@ static void fluid_task(void *arg) {
         int64_t t1 = esp_timer_get_time();
         /* hand the frame to the drawer: wait until it finished the previous one */
         xSemaphoreTake(s_idle, portMAX_DELAY);
+        if (s_dir.bye) {   /* the goodbye's fade: the panel's level, with the drawer idle */
+            const float l = fd_bye_level(&s_dir);
+            if (s_bye_lvl - l >= 0.02f || (l <= 0.f && s_bye_lvl > 0.f)) {
+                s_bye_lvl = l;
+                molty_display_level((uint8_t)(255.f * l * l + 0.5f));
+            }
+            if (fd_bye_done(&s_dir)) atomic_store(&s_bye_done, true);
+        }
         int64_t t2 = esp_timer_get_time();
         fluid_sim_snapshot(s_sim, s_frame, cfg.edge_mode == FLUID_EDGE_OFF);
         s_dopts = (fluid_draw_opts_t){
@@ -1799,7 +1813,14 @@ void mole_fluid_event(mole_fluid_event_t ev) {
     atomic_store(&s_screen_want, true);
 }
 
-void mole_fluid_screen(bool on) { atomic_store(&s_screen_want, on); }
+void mole_fluid_screen(bool on) { if (!atomic_load(&s_bye)) atomic_store(&s_screen_want, on); }
+
+void mole_fluid_goodbye(void) {
+    atomic_store(&s_bye, true);
+    atomic_store(&s_screen_want, true);
+    if (!s_mutex) atomic_store(&s_bye_done, true);     /* fluid not up: nothing to show */
+}
+bool mole_fluid_goodbye_done(void) { return atomic_load(&s_bye_done); }
 bool mole_fluid_screen_on(void) { return atomic_load(&s_screen); }
 
 void mole_fluid_set_status(int status) {

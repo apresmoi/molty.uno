@@ -182,6 +182,12 @@ esp_err_t lcd_co5300_power(bool on)
     return reg(CMD_WRDISBV, (uint8_t[]){ 0xFF }, 1);
 }
 
+esp_err_t lcd_co5300_level(uint8_t level)
+{
+    if (!s_io) return ESP_ERR_INVALID_STATE;
+    return reg(CMD_WRDISBV, &level, 1);
+}
+
 esp_err_t lcd_co5300_flush(void)
 {
     if (!s_io || !s_fb) return ESP_ERR_INVALID_STATE;

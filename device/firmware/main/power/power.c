@@ -25,6 +25,7 @@
 #include "freertos/semphr.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
+#include "esp_system.h"
 #include "esp_wifi.h"
 #include "nvs.h"
 #include "cJSON.h"
@@ -54,6 +55,7 @@ static bool      s_dnd;
 static unsigned  s_dnd_gen = 1;
 static TaskHandle_t s_task;
 static volatile bool s_dnd_dirty;           /* a change the task has not stored yet  */
+static volatile bool s_off;                 /* power_off: the goodbye, then off      */
 
 /* ── do not disturb ───────────────────────────────────────────────────────── */
 
@@ -69,6 +71,14 @@ void power_dnd_set(bool on)
     s_dnd_dirty = true;
     xSemaphoreGive(s_mux);
     mole_diag_event(false, "power.dnd %s", on ? "on" : "off");
+    xTaskNotifyGive(s_task);
+}
+
+void power_off(void)
+{
+    if (!s_task || s_off) return;
+    s_off = true;
+    mole_diag_event(false, "power.off goodbye");
     xTaskNotifyGive(s_task);
 }
 
@@ -120,6 +130,21 @@ static int8_t rssi_now(void)
     return esp_wifi_sta_get_ap_info(&ap) == ESP_OK ? ap.rssi : 0;
 }
 
+/* On the task: the goodbye plays (at most 8 s), the history is kept, the power goes. With
+ * USB keeping the board up it restarts instead: the boot screen says it heard. */
+static void off_now(void)
+{
+    link_audio_stop_any();
+    mole_fluid_goodbye();
+    for (int i = 0; i < 80 && !mole_fluid_goodbye_done(); i++) vTaskDelay(pdMS_TO_TICKS(100));
+    save();
+    mole_diag_event(false, "power.off now");
+    const esp_err_t e = molty_power_off();
+    mole_diag_event(false, "power.off failed (%s): restarting", esp_err_to_name(e));
+    vTaskDelay(pdMS_TO_TICKS(100));
+    esp_restart();
+}
+
 static void power_task(void *arg)
 {
     (void)arg;
@@ -128,6 +153,7 @@ static void power_task(void *arg)
     for (;;) {
         const TickType_t now = xTaskGetTickCount();
         if ((int32_t)(next - now) > 0) ulTaskNotifyTake(pdTRUE, next - now);
+        if (s_off) off_now();
         if (s_dnd_dirty) dnd_store();
         if ((int32_t)(xTaskGetTickCount() - next) < 0) continue;
         next += pdMS_TO_TICKS(1000);

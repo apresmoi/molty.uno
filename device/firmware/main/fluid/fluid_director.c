@@ -25,6 +25,7 @@ const fd_cfg_t FD_CFG_DEFAULT = {
     .status_after_s = 10.f,       /* boot: Wi-Fi join + TLS take a few seconds */
     .work_ttl_s = 120.f, .work_gap_min_s = 0.5f, .work_gap_max_s = 1.6f,
     .boot_word_s = 2.8f, .boot_ttl_s = 20.f, .boot_gap_s = 0.3f,
+    .bye_word_s = 1.8f, .bye_pond_s = 2.2f,
 };
 
 /* flashes: a say that ended well (happy), a shake (surprised) */
@@ -154,6 +155,7 @@ void fd_init(fluid_director_t *d, const fd_cfg_t *cfg, uint32_t seed) {
 }
 
 void fd_boot(fluid_director_t *d, bool home, bool wait) {
+    if (d->bye) return;
     d->boot = FD_BOOT_WORD; d->boot_t = 0.f; d->boot_step = 0;
     d->boot_home = home; d->boot_wait = wait;
     d->text_hold = true;
@@ -161,6 +163,26 @@ void fd_boot(fluid_director_t *d, bool home, bool wait) {
 }
 
 bool fd_boot_word(const fluid_director_t *d) { return d->boot == FD_BOOT_WORD; }
+
+void fd_bye(fluid_director_t *d) {
+    if (d->bye) return;
+    d->boot = FD_BOOT_OFF; d->home_due = false;
+    d->autoplay = false; d->held = CM_IDLE; d->held_left = -1.f;
+    d->act_req = -1; d->work_left = 0.f; d->flash = -1; d->asleep = false;
+    d->bye = true; d->bye_t = 0.f;
+    d->text_hold = true;
+    go(d, FD_ST_TEXT, 0);
+}
+
+bool fd_bye_word(const fluid_director_t *d) { return d->bye && d->bye_t < d->cfg.bye_word_s; }
+
+float fd_bye_level(const fluid_director_t *d) {
+    if (!d->bye || d->bye_t <= d->cfg.bye_word_s) return 1.f;
+    const float f = 1.f - (d->bye_t - d->cfg.bye_word_s) / d->cfg.bye_pond_s;
+    return f > 0.f ? f : 0.f;
+}
+
+bool fd_bye_done(const fluid_director_t *d) { return d->bye && d->bye_t >= d->cfg.bye_word_s + d->cfg.bye_pond_s; }
 
 bool fd_take_home(fluid_director_t *d) {
     bool h = d->home_due;
@@ -175,6 +197,7 @@ void fd_set_creature(fluid_director_t *d, bool loaded) {
 }
 
 void fd_request_state(fluid_director_t *d, int st, int fx, bool text_hold) {
+    if (d->bye) return;
     if (st < 0 || st >= FD_ST_COUNT) return;
     boot_end(d);
     if (d->autoplay) { d->autoplay = false; d->held = CM_IDLE; d->held_left = -1.f; }
@@ -189,6 +212,7 @@ void fd_request_state(fluid_director_t *d, int st, int fx, bool text_hold) {
 }
 
 void fd_autoplay(fluid_director_t *d) {
+    if (d->bye) return;
     boot_end(d);
     d->autoplay = true; d->reel = -1; d->reel_t = 0.f;
     d->flash = -1; d->asleep = false; d->convo_left = 0.f;
@@ -204,6 +228,7 @@ void fd_activity(fluid_director_t *d) {
 }
 
 void fd_agent_mood(fluid_director_t *d, int mood, float hold_s) {
+    if (d->bye) return;
     if (mood < 0 || mood >= CUTE_N_MOODS) return;
     boot_end(d);
     d->held = mood;
@@ -238,6 +263,7 @@ void fd_set_busy(fluid_director_t *d, bool busy, bool covered) {
 }
 
 void fd_agent_act(fluid_director_t *d, int act, float dur) {
+    if (d->bye) return;
     if (act < 0 || dur <= 0.f) return;
     boot_end(d);
     d->act_req = act; d->act_req_dur = dur; d->act_req_ttl = d->cfg.act_ttl_s;
@@ -279,6 +305,11 @@ static void reel_step(fluid_director_t *d) {
 
 void fd_tick(fluid_director_t *d, float dt, bool text_done) {
     d->state_t += dt;
+    if (d->bye) {                          /* the goodbye: the word, then the pond, then off */
+        d->bye_t += dt;
+        if (d->bye_t >= d->cfg.bye_word_s && target(d) != FD_ST_FX) go(d, FD_ST_FX, FLUID_FX_RIPPLE);
+        return;
+    }
     bool reading = d->cur == FD_ST_TEXT && !d->pending;
     d->text_done_t = reading && text_done ? d->text_done_t + dt : 0.f;
 

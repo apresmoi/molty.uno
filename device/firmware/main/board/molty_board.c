@@ -173,6 +173,14 @@ esp_err_t molty_display_power(bool on)
     return B.display_power ? B.display_power(on) : ESP_ERR_NOT_SUPPORTED;
 }
 
+esp_err_t molty_display_level(uint8_t level)
+{
+    if (!(s_caps & MOLTY_CAP_DISPLAY)) return ESP_ERR_INVALID_STATE;
+    return B.display_level ? B.display_level(level) : ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t molty_power_off(void) { return B.power_off ? B.power_off() : ESP_ERR_NOT_SUPPORTED; }
+
 /* ── touch, IMU, buttons, battery ─────────────────────────────────────────── */
 
 int molty_touch_poll(uint16_t *xs, uint16_t *ys, int max)

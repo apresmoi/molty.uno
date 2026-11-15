@@ -113,6 +113,11 @@ void mole_fluid_event(mole_fluid_event_t ev);
 void mole_fluid_screen(bool on);
 /** The screen is on (true before init). */
 bool mole_fluid_screen_on(void);
+/** Power off's goodbye (fluid_director.h "fd_bye"): the screen on, "bye!" condenses, melts
+ *  into a pond and the panel fades to black; then mole_fluid_goodbye_done. From here the
+ *  screen stays on and every request is ignored. Safe from any task. */
+void mole_fluid_goodbye(void);
+bool mole_fluid_goodbye_done(void);
 
 /** The link's health as an FD_STATUS_* code (fluid_director.h): a small mark at the
  *  screen's edge, never a state change. One caller (sense.c). */
