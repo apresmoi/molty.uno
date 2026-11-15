@@ -23,12 +23,15 @@
 #include "esp_heap_caps.h"
 #define FLUID_CALLOC(n) heap_caps_calloc(1, (n), MALLOC_CAP_SPIRAM)
 #define FLUID_FREE(p)   heap_caps_free(p)
-/* hot fields: each one in internal DRAM while ≥ 32 KB of internal heap stays free for
- * Wi-Fi / lwip / httpd / OTA, otherwise PSRAM (correct, just slower). Per field, not
- * one block: the internal heap is fragmented into regions, so one ~50 KB block often
- * fails where 3 KB fields fit. */
-#define FLUID_INTERNAL_RESERVE (32 * 1024)
-static volatile bool s_internal_ok = true;          /* fluid_sim_allow_internal() */
+/* hot fields: each one in internal DRAM while ≥ 40 KB of internal heap stays free, otherwise
+ * PSRAM (correct, just slower). Off until the network is up (mole_fluid_allow_internal):
+ * built before Wi-Fi and the relay's TLS, the fields left those too little (1.75C: 2 KB
+ * free at the link's handshake). The reserve covers a second TLS connection (a package or
+ * update download, ~16 KB measured) plus the heap guard's 12 KB floor. Per field, not one
+ * block: the internal heap is fragmented into regions, so one ~50 KB block often fails
+ * where 3 KB fields fit. */
+#define FLUID_INTERNAL_RESERVE (40 * 1024)
+static volatile bool s_internal_ok = false;         /* fluid_sim_allow_internal() */
 static void *calloc_fast(size_t n, bool *internal) {
     void *p = NULL;
     if (s_internal_ok && heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >= n + FLUID_INTERNAL_RESERVE)

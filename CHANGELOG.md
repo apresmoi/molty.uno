@@ -6,6 +6,9 @@ All notable changes to Molty are recorded here. One version covers the whole pro
 
 ## Unreleased
 
+- **No more starved boot**: the fluid takes internal RAM only once the relay link is up, and only what is
+  left above 40 KB. Before, it took it before Wi-Fi and TLS, leaving 2 KB at the link's handshake on the
+  1.75C (failed connects, LCD and USB errors until the heap guard gave it back).
 - **Progress ring**: agents send `progress {pct?, step?, done?}` (MCP `molty_progress`, cap
   `progress`) on long jobs. A thin mint line on the rim fills clockwise from 12 o'clock (no pct: a
   short line circles), the creature works meanwhile, and done flashes the ring and melts it. Steps
