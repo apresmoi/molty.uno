@@ -74,6 +74,7 @@ void fluid_params_default(fluid_params_t *p) {
     p->bg_level = 0.2f; p->bg_freq = 2.3f; p->bg_drift = 0.05f; p->bg_speed = 0.12f;
     p->bg_rim = 0.78f; p->bg_mob = 0.45f;
     p->bg_color[0] = 0.52f; p->bg_color[1] = 0.58f; p->bg_color[2] = 0.86f;
+    p->floor = 0.f; p->horizon = -0.05f;
 }
 
 /* ── create / destroy ────────────────────────────────────────────────────── */
@@ -258,29 +259,177 @@ void fluid_sim_push(fluid_sim_t *s, float x, float y, float du, float dv, float 
     }
 }
 
-/* floor = level · breath · (0.3 + 0.7·1.6·n²) · rimFade · BGM; colour → bgColor where it wins */
+/* ── the floor: the dim fluid on a ground plane ──────────────────────────────
+ * A camera at height FLOOR_EYE looks level: a screen row y below the horizon h sees the ground at
+ * depth z = (1 − h) / (y − h) (1 at the bottom edge), and x on screen is X / z there. The floor's
+ * noise is sampled at (X, z) on the plane, so it is wide and coarse near you and fine far off; it
+ * fades into an even haze toward the horizon (finer than the grid can show). Above the horizon the
+ * dim fluid stays flat and dimmer: the far wall. Ripples and the shadow live on the plane too. */
+#define FLOOR_HAZE      0.62f    /* the haze's floor term (the noise term's mean, n in 0..1)  */
+#define FLOOR_FOG       0.5f     /* the noise fades to haze over this much screen y below h    */
+#define FLOOR_NEAR      1.7f     /* the floor's brightness at the bottom ...                  */
+#define FLOOR_FAR       0.8f     /* ... and at the horizon                                   */
+#define FLOOR_WALL      0.35f    /* the wall's, above it                                     */
+#define FLOOR_EDGE      0.1f     /* screen y over which the wall meets the floor               */
+#define FLOOR_SCALE     0.45f    /* the plane's clouds, of the flat ones' frequency: big up close */
+#define RIPPLE_SPEED    0.45f    /* plane units/s                                             */
+#define RIPPLE_WAVE     0.16f    /* the crest's width, plane units (≥ ~3 cells up close)       */
+#define RIPPLE_LIFE     1.6f     /* s                                                         */
+#define RIPPLE_GAIN     0.9f     /* a step's crest height, in the water's own units (h)       */
+#define RIPPLE_LIGHT    0.7f     /* the crest's own light (the floor is dim): ink per unit height */
+#define SHADOW_DEPTH    0.75f    /* the shadow takes this much of the floor's ink             */
+
+static inline float floor_depth(float y, float h) { return (1.f - h) / fmaxf(y - h, 1e-3f); }
+
+/* the plane's own term for cell (i, j) at weight w (1 = all floor) */
+static float floor_term(const fluid_sim_t *s, int i, int j, float t, float flat) {
+    const fluid_params_t *p = &s->p;
+    const float h = p->horizon, y = s->ys[j], f = p->bg_freq * FLOOR_SCALE;
+    float term;
+    if (y > h) {
+        const float z = floor_depth(y, h), vis = fluid_smooth(0.f, FLOOR_FOG, y - h);   /* noise near, haze far */
+        const float n = vis > 0.01f ? fluid_noise3(s->xs[i] * z * f + t * p->bg_drift, z * f * 1.4f, t * p->bg_speed) : 0.f;
+        const float raw = 0.3f + 1.12f * n * n;
+        const float near = 1.f / z;                              /* 1 at the bottom, 0 at the horizon */
+        term = (FLOOR_HAZE + (raw - FLOOR_HAZE) * vis) * (FLOOR_FAR + (FLOOR_NEAR - FLOOR_FAR) * near);
+        const float e = fluid_smooth(h, h + FLOOR_EDGE, y);       /* the wall meets the floor softly */
+        term = flat * FLOOR_WALL + (term - flat * FLOOR_WALL) * e;
+    } else {
+        term = flat * FLOOR_WALL;
+    }
+    return term;
+}
+
+void fluid_sim_floor_ripple(fluid_sim_t *s, float x, float y, float amp) {
+    const float h = s->p.horizon;
+    if (!(y > h + FLOOR_EDGE) || !(amp > 0.f)) return;
+    int slot = 0;                                                  /* a free one, else the oldest */
+    for (int q = 0; q < FLUID_FLOOR_RIPPLES; q++) {
+        if (s->frip[q].amp <= 0.f) { slot = q; break; }
+        if (s->frip[q].age > s->frip[slot].age) slot = q;
+    }
+    const float z = floor_depth(y, h);
+    s->frip[slot] = (fluid_floor_ripple_t){ x * z, z, 0.f, amp };
+}
+
+/* the feet: the bottom of what the target holds above FEET_INK (the creature, before the dim floor
+ * and the rings join it). The grid is coarse (a row is ~0.06 units), so the feet are the ink-weighted
+ * centre of the lowest FEET_ROWS rows, smoothed: a cell flickering on is not a step. */
+#define FEET_INK     0.35f
+#define FEET_ROWS    3
+#define FEET_SMOOTH  8.f      /* 1/s, the feet's low-pass                                  */
+#define FEET_STRIDE  0.07f    /* stage units walked per step                               */
+#define FEET_HOP     0.075f    /* off the ground this high (~2 rows), coming down is a landing */
+#define FEET_REST_UP 1.5f     /* the ground follows the feet up at this rate (1/s); down at once */
+#define FEET_MOVING  0.2f     /* stage units/s: slower is a sway, not a walk               */
+#define FEET_GAP_S   0.3f     /* at most one ripple this often                             */
+#define FEET_SETTLE  1.5f     /* s after the feet appear before they ripple anything        */
+#define SHADOW_FADE  0.4f     /* s */
+
+void fluid_sim_floor_track(fluid_sim_t *s, float dt, bool creature) {
+    if (!(dt > 0.f)) dt = 0.f;
+    for (int q = 0; q < FLUID_FLOOR_RIPPLES; q++) {
+        fluid_floor_ripple_t *r = &s->frip[q];
+        if (r->amp > 0.f && (r->age += dt) >= RIPPLE_LIFE) r->amp = 0.f;
+    }
+    fluid_floor_feet_t *f = &s->feet;
+    f->gap -= dt;
+    bool seen = false;
+    float x = 0.f, y = 0.f, w = 0.f, body = 0.f;      /* the feet, and the whole body's centre x (a walk moves it all) */
+    if (creature && s->p.floor > 0.f) {
+        const int16_t thr = fq(FEET_INK, FQ_UNIT);
+        int jb = -1;                                                   /* the lowest row with ink */
+        for (int j = s->H - 1; j >= 0 && jb < 0; j--) {
+            int n = 0;
+            for (int i = 0; i < s->W && n < 2; i++) n += s->T[j * s->W + i] >= thr;
+            if (n >= 2) jb = j;
+        }
+        if (jb >= 0) {
+            int i0 = s->W, i1 = -1;
+            float sx = 0.f, sw = 0.f, bx = 0.f, bw = 0.f;
+            for (int j = 0; j <= jb; j++) for (int i = 0; i < s->W; i++) {
+                const int16_t t = s->T[j * s->W + i];
+                if (t < thr) continue;
+                bx += s->xs[i] * t; bw += t;
+                if (j <= jb - FEET_ROWS) continue;                     /* the feet: the lowest FEET_ROWS rows */
+                sx += s->xs[i] * t; sw += t;
+                if (i < i0) i0 = i;
+                if (i > i1) i1 = i;
+            }
+            seen = true; x = sx / sw; y = s->ys[jb] + 1.f / s->H; w = s->xs[i1] - s->xs[i0] + 2.f / s->W; body = bx / bw;
+        }
+    }
+    if (seen) {
+        if (!f->seen) { f->ground = y; f->dist = 0.f; f->air = 0.f; f->x = x; f->y = y; f->w = w; f->body = body; f->side = 1; f->settle = FEET_SETTLE; }
+        const float a = fminf(1.f, FEET_SMOOTH * dt), pb = f->body;
+        f->x += (x - f->x) * a; f->y += (y - f->y) * a; f->w += (w - f->w) * a; f->body += (body - f->body) * a;
+        f->settle -= dt;
+        f->ground = f->y > f->ground ? f->y : f->ground + (f->y - f->ground) * fminf(1.f, FEET_REST_UP * dt);
+        const float up = f->ground - y;                               /* how far off the ground, unsmoothed */
+        if (up > f->air) f->air = up;
+        if (up < 0.03f) {
+            const bool may = f->settle <= 0.f && f->gap <= 0.f;
+            if (f->air > FEET_HOP && may) { fluid_sim_floor_ripple(s, f->x, f->ground, 1.f); f->gap = FEET_GAP_S; }   /* it landed */
+            f->air = 0.f;
+            const float v = dt > 0.f ? fabsf(f->body - pb) / dt : 0.f;
+            f->dist = v > FEET_MOVING ? f->dist + fabsf(f->body - pb) : f->dist * (1.f - fminf(1.f, 2.f * dt));
+            if (f->dist >= FEET_STRIDE && may) {                       /* a step */
+                fluid_sim_floor_ripple(s, f->x + f->side * f->w * 0.22f, f->ground, 0.55f);
+                f->side = -f->side; f->dist = 0.f; f->gap = FEET_GAP_S;
+            }
+        }
+    }
+    f->seen = seen;
+    f->shadow = seen ? fminf(1.f, f->shadow + dt / SHADOW_FADE) : fmaxf(0.f, f->shadow - dt / SHADOW_FADE);
+}
+
+/* floor = level · breath · term · rimFade · BGM; colour → bgColor where it wins. term = 0.3 + 1.12·n²
+ * of the flat noise, or (p.floor) the plane's (floor_term), with its ripples and the shadow */
 void fluid_sim_background(fluid_sim_t *s, float t, float breath, bool refresh) {
     const fluid_params_t *p = &s->p;
     FLUID_PROF_BEGIN(c0);
+    const float fw = p->floor < 0.f ? 0.f : p->floor > 1.f ? 1.f : p->floor;
     if (refresh) {          /* the floor's noise drifts ≤ 0.12 lattice units/s: refresh it every other frame */
         const float f = p->bg_freq, tx = t * p->bg_drift, tz = t * p->bg_speed;
         for (int j = 0; j < s->H; j++) {
             const float yy = s->ys[j] * f * 1.4f;
+            const bool flat = fw < 1.f || s->ys[j] < p->horizon + FLOOR_EDGE;   /* all floor: no flat noise to blend */
             for (int i = 0; i < s->W; i++) {
                 const int k = j * s->W + i;
-                float n = s->mask[k] ? fluid_noise3(s->xs[i] * f + tx, yy, tz) : 0.f;
-                s->bgn[k] = (int16_t)((0.3f + 1.12f * n * n) * 16384.f * 0.5f);    /* ≤ 1.42 → Q13 */
+                if (!s->mask[k]) { s->bgn[k] = (int16_t)(0.3f * 8192.f); continue; }
+                float term = 0.f;
+                if (flat) { const float n = fluid_noise3(s->xs[i] * f + tx, yy, tz); term = 0.3f + 1.12f * n * n; }
+                if (fw > 0.f) term += (floor_term(s, i, j, t, term) - term) * fw;
+                s->bgn[k] = (int16_t)(fminf(term, 1.99f) * 16384.f * 0.5f);    /* ≤ 1.99 → Q13 */
             }
         }
     }
     const float lv = p->bg_level * (0.6f + 0.4f * breath) / (255.f * 255.f * 8192.f);
     const float *c = p->bg_color;
-    (void)t;
+    const fluid_floor_feet_t *ft = &s->feet;
+    const float sh = fw * ft->shadow * SHADOW_DEPTH;
+    float shx = 0.f, shz = 1.f, shr2 = 1.f;
+    if (sh > 0.f) {
+        shz = floor_depth(ft->ground, p->horizon); shx = ft->x * shz;
+        const float r = fmaxf(0.05f, ft->w * 0.6f) * shz;             /* plane units: as wide as the feet */
+        shr2 = r * r;
+    }
     for (int j = 0; j < s->H; j++) {
+        const float y = s->ys[j];
+        const bool plane = sh > 0.f && y > p->horizon + FLOOR_EDGE;
+        const float z = plane ? floor_depth(y, p->horizon) : 1.f;
         for (int i = 0; i < s->W; i++) {
             const int k = j * s->W + i;
             if (!s->mask[k]) continue;
             float bg = lv * (float)s->bgn[k] * (float)s->rim[k] * (float)s->bgm[k];
+            if (plane) {
+                const float X = s->xs[i] * z;
+                float m = 1.f;
+                const float dx = X - shx, dz = (z - shz) * 2.2f;              /* flat: a shadow lies on the ground */
+                const float d2 = (dx * dx + dz * dz) / shr2;
+                if (d2 < 4.f) m -= sh * expf(-d2 * 1.5f);
+                bg *= m;
+            }
             float tk = s->T[k] * INV_UNIT;
             if (tk < bg) {
                 float w = tk < 0.02f ? 1.f : 1.f - tk / bg;
@@ -560,8 +709,36 @@ void fluid_sim_color(fluid_sim_t *s, float dt) {
 }
 
 /* What the screen shows: ink refracted by the wave slope, plus a crest highlight. */
+/* The floor's ripples this frame, for fluid_sim_view: radius and amplitude (faded, × p.floor). */
+static int floor_ripples(const fluid_sim_t *s, fluid_floor_ripple_t *rip) {
+    const float fw = s->p.floor < 0.f ? 0.f : s->p.floor > 1.f ? 1.f : s->p.floor;
+    int nr = 0;
+    if (fw > 0.f) for (int q = 0; q < FLUID_FLOOR_RIPPLES; q++) if (s->frip[q].amp > 0.f) {
+        const float life = 1.f - s->frip[q].age / RIPPLE_LIFE;
+        rip[nr] = s->frip[q];
+        rip[nr].amp *= life * fw * RIPPLE_GAIN;
+        rip[nr].age *= RIPPLE_SPEED;                                       /* now the ring's radius */
+        nr++;
+    }
+    return nr;
+}
+
+/* The floor's surface height at plane point (X, z): one crest per ripple, a dip each side. */
+static inline float floor_height(const fluid_floor_ripple_t *rip, int nr, float X, float z) {
+    float hf = 0.f;
+    for (int q = 0; q < nr; q++) {
+        const float dx = X - rip[q].x, dz = z - rip[q].z;
+        const float u = (sqrtf(dx * dx + dz * dz) - rip[q].age) * (1.f / RIPPLE_WAVE);   /* crest widths off the ring */
+        if (u > -1.f && u < 1.f) hf += rip[q].amp * fluid_sin_turns(u * 0.5f + 0.25f) * (1.f - u * u);
+    }
+    return hf;
+}
+
 void fluid_sim_view(fluid_sim_t *s) {
     const int W = s->W, H = s->H;
+    fluid_floor_ripple_t rip[FLUID_FLOOR_RIPPLES];
+    const int nr = floor_ripples(s, rip);
+    const float hz = s->p.horizon + FLOOR_EDGE;
     const int16_t *h = s->h, *ink = s->ink;
     const float rk = s->p.refr * 6.f * 0.5f * INV_H, rkA = rk / s->A, crest = s->p.crest * 0.55f;
     const float xmax = W - 1.001f, ymax = H - 1.001f;
@@ -575,8 +752,12 @@ void fluid_sim_view(fluid_sim_t *s) {
         y = y < 0.f ? 0.f : y > ymax ? ymax : y;
         int x0 = (int)x, y0 = (int)y;
         float sm = bilerp16(ink, W, y0 * W + x0, x - x0, y - y0) * INV_UNIT;
-        float hc = h[k] * INV_H;
-        float val = sm * (1.f + 0.9f * hc) + crest * (hc > 0.f ? hc : 0.f);
+        float hc = h[k] * INV_H, hf = 0.f;
+        if (nr && s->ys[j] > hz) {                         /* the floor's own ripples, on its plane */
+            const float z = floor_depth(s->ys[j], s->p.horizon);
+            hf = floor_height(rip, nr, s->xs[i] * z, z) * (1.f - fluid_smooth(0.15f, 0.4f, sm));   /* under the creature: none */
+        }
+        float val = sm * (1.f + 0.9f * (hc + hf)) + crest * (hc > 0.f ? hc : 0.f) + RIPPLE_LIGHT * (hf > 0.f ? hf : 0.f);
         view[k] = (int16_t)((val < 0.f ? 0.f : val > 1.f ? 1.f : val) * FQ_UNIT + 0.5f);
     }
     FLUID_PROF_END(FP_VIEW, c0);

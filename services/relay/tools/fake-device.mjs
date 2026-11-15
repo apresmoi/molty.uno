@@ -54,7 +54,7 @@ function connect() {
 
   ws.addEventListener("open", () => {
     out("open");
-    send({ t: "hello", id: o.id, key, fw: "fake-0.1", caps: ["fluid", "say", "listen", "show", "mood", "creature"], link_code: linkCode });
+    send({ t: "hello", id: o.id, key, fw: "fake-0.1", caps: ["fluid", "say", "listen", "show", "mood", "creature", "working", "progress"], link_code: linkCode });
     pinger = setInterval(() => send({ t: "ping" }), 20000);
   });
 
@@ -106,6 +106,9 @@ function onCmd(f, send) {
       if (m && sample[m[1]]) setTimeout(() => send({ t: "evt", name: m[1], data: sample[m[1]] }), 10);
       return reply(true, { reader: "playing", words: String(a.text).split(/\s+/).length, wpm: a.wpm });
     }
+    case "progress":
+      state.mood = a.done ? "happy" : "working";
+      return reply(true, { ...(a.pct !== undefined ? { pct: a.pct } : {}), ...(a.done ? { done: true } : {}) });
     case "volume":
       state.volume = a.volume;
       return reply(true, { volume: a.volume });

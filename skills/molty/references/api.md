@@ -152,6 +152,23 @@ without a line: `mood {"mood": "working"}` (`hold_s` can only shorten it; call a
 dropped from a say, which still plays, and direct `mood` / `act` calls answer `firmware_too_old`
 or `unsupported`.
 
+**Progress: show how far along you are.** On a long job (an install, a build, a long search),
+send `progress` after each step you finish, so your human sees the work move without you
+talking:
+
+```sh
+POST $MOLTY_RELAY/v1/devices/<id>/cmd {"name":"progress","args":{"pct":40,"step":"downloaded the star map"}}
+POST $MOLTY_RELAY/v1/devices/<id>/cmd {"name":"progress","args":{"done":true}}
+```
+
+A thin glowing line on the rim fills clockwise from 12 o'clock to `pct` (0..100) and the
+creature works meanwhile; no `pct` (you can't tell) and a short line circles instead. `step` (a
+few words, at most 80 bytes) is never shown or spoken: your human reads it in the activity log.
+`done: true` fills the ring, flashes it and melts it, and the creature is happy. Without news
+for 120 s the ring melts by itself. It never speaks over Molty, never covers a question, and the
+listening ring wins while a listen is open. MCP: `molty_progress`. Needs the firmware cap
+`progress` (`unsupported` / `firmware_too_old` otherwise: keep talking with `[working]`).
+
 **`act {action}`** — a one-shot gesture over the current mood, when you are not speaking:
 `wiggle`, `nod`, `shake_head`, `bounce`, `peek`, `glance_left`, `glance_right` (as you look at
 Molty), `blink`, `wobble`, `stretch`, `look_up`, `yawn`, `inspect` (right up to the camera, one eye filling the screen), `paddle`
@@ -435,7 +452,7 @@ what it can draw. The format: `https://github.com/apresmoi/molty.uno/blob/main/d
 ## MCP (optional)
 
 The same features are a remote MCP server at `$MOLTY_RELAY/mcp` (streamable HTTP, bearer
-auth). Tools: `molty_pair` (no token needed), `molty_talk`, `molty_keep`, `molty_quick`, `molty_phrases`, `molty_ask`, `molty_status`, `molty_mood`, `molty_act`, `molty_gestures`,
+auth). Tools: `molty_pair` (no token needed), `molty_talk`, `molty_keep`, `molty_quick`, `molty_phrases`, `molty_ask`, `molty_status`, `molty_mood`, `molty_act`, `molty_progress`, `molty_gestures`,
 `molty_package`, `molty_scene`, `molty_show`, `molty_say`, `molty_listen`, `molty_wait`, `molty_state`,
 `molty_volume`, `molty_imu`, `molty_diag`, `molty_log`, `molty_events`,
 `molty_webhook`, `molty_updates`, `molty_update`, `molty_activity`, `molty_draft`, `molty_react`,

@@ -874,6 +874,13 @@ idle life of its own.
   while words or a question cover the creature it waits up to 3 s, then is dropped. A sleeping
   creature wakes for it. Local twin: `POST /api/creature/state {act: "nod"}`; GET reports the
   action playing as `act`.
+- **`progress {pct?, step?, done?}`** (cap `progress`): how the agent's work goes. A thin line on
+  the listening ring's circle (`fluid_target_progress`, knobs in `fluid_ring.h`) fills clockwise
+  from 12 o'clock to `pct` (0..100, eased), or, without `pct`, a short comet circles. Each one
+  sets mood `working` (not while Molty speaks or listens) and keeps the ring up for 120 s;
+  `done: true` fills it, flashes it, melts it, and a working creature turns happy. `step` (≤ 80
+  bytes) stays in the relay's activity log; the device draws no text. Under the listening ring,
+  never over a question. A device without the cap answers `unsupported` / `firmware_too_old`.
 - **A creature's own gestures.** `ACTIONS` are the shared ones every creature plays; a creature
   package may add gestures of its own by name ([CREATURES.md](CREATURES.md#1-the-package), the cat's
   `eat`). The relay takes any `act` name `[a-z][a-z0-9_]{0,23}` (`GESTURE_RE`) and forwards it; the
@@ -936,7 +943,7 @@ constants: `device/firmware/main/sense/gesture.h`.
 ## Agent surfaces
 
 - **Remote MCP** `https://<relay>/mcp` (streamable HTTP), `Authorization: Bearer <agent_token>`.
-  Tools: `molty_pair`, `molty_talk`, `molty_ask`, `molty_status`, `molty_mood`, `molty_act`, `molty_show`, `molty_say`, `molty_listen`,
+  Tools: `molty_pair`, `molty_talk`, `molty_ask`, `molty_status`, `molty_mood`, `molty_act`, `molty_progress`, `molty_show`, `molty_say`, `molty_listen`,
   `molty_wait`, `molty_state`, `molty_volume`, `molty_imu`, `molty_diag`, `molty_log`, plus the
   relay-only `molty_talk`, `molty_ask`, `molty_events`, `molty_webhook` ([Events](#events-device--agents)),
   `molty_updates` and `molty_update` ([Firmware updates](#firmware-updates)), `molty_activity`

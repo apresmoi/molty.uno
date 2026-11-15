@@ -130,6 +130,11 @@ void mole_fluid_set_status(int status);
  *  -1 = the device default, POST /api/creature/state {ring_color: "#rrggbb"|"accent"},
  *  kept in NVS, else the palette's accent; fluid_ring_rgb). Safe from any task; a no-op
  *  before init. */
+/** The agent's progress (link `progress`): a thin line on the listening ring's circle, in mint, filling
+ *  clockwise from 12 o'clock to pct (0..100; < 0 = no percent: a comet circles). Each call keeps it up
+ *  (it melts after 120 s without one); done fills it, flashes and melts it. Under the listening
+ *  ring, never over a question. Safe from any task. */
+void mole_fluid_progress(float pct, bool done);
 void mole_fluid_listen(bool on);
 void mole_fluid_listen_color(int32_t rgb);
 /** A say's text follows its voice (link_audio.c, cap say_cues): word < 0 starts following:

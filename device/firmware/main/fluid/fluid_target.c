@@ -399,6 +399,7 @@ typedef struct {
     uint16_t k;                        /* cell                                            */
     float off;                         /* radius − RING_R, stage units                    */
     float ifoot;                       /* 1 / the cell's extent across the ring (stage)   */
+    float ang;                         /* turns clockwise from 12 o'clock, 0..1           */
 } ring_cell_t;
 
 static bool ring_geom(fluid_sim_t *s) {
@@ -414,7 +415,10 @@ static bool ring_geom(fluid_sim_t *s) {
             if (rad < 1e-6f) continue;
             const float foot = (fabsf(x) * cw + fabsf(y) * ch) / rad, off = rad - RING_R;
             if (fabsf(off) >= (RING_CORE + RING_SOFT) * foot) continue;
-            if (c) { c->k = (uint16_t)k; c->off = off; c->ifoot = 1.f / foot; c++; }
+            if (c) {
+                float a = fluid_atan2(x, -y) * (1.f / 6.2831853f);
+                c->k = (uint16_t)k; c->off = off; c->ifoot = 1.f / foot; c->ang = a < 0.f ? a + 1.f : a; c++;
+            }
             else n++;
         }
         if (!pass) {
@@ -425,21 +429,66 @@ static bool ring_geom(fluid_sim_t *s) {
     return true;
 }
 
-void fluid_target_ring(fluid_sim_t *s, const fluid_ring_t *r, uint32_t rgb, float acc) {
-    if (!(r->on > 0.f) || !ring_geom(s)) return;
+/* The ring's line from turn a0 over len turns (len >= 1: all of it), ink at the head end,
+ * fading to ink·tail at the start (a comet); soft ends of RING_ASOFT turns. */
+static void ring_line(fluid_sim_t *s, float ink, float a0, float len, float tail, uint32_t rgb, float acc) {
+    if (!(ink > 0.f) || !ring_geom(s)) return;
     FLUID_PROF_BEGIN(c0);
     const ring_cell_t *c = (const ring_cell_t *)s->ring_geom;
-    const float reach = RING_CORE + RING_SOFT, isoft = 1.f / RING_SOFT, ink = r->ink;
+    const float reach = RING_CORE + RING_SOFT, isoft = 1.f / RING_SOFT, whole = len >= 1.f;
+    const float cr = (rgb >> 16 & 255) / 255.f, cg = (rgb >> 8 & 255) / 255.f, cb = (rgb & 255) / 255.f;
     for (int n = 0; n < s->ring_n; n++, c++) {
         const float d = fabsf(c->off) * c->ifoot;              /* cells from the line */
         if (d >= reach) continue;
+        float w = 1.f;
+        if (!whole) {
+            float rel = c->ang - a0;                           /* turns past the start, 0..1 */
+            rel -= floorf(rel);
+            if (rel > len) {
+                const float out = fminf(rel - len, 1.f - rel);
+                if (out >= RING_ASOFT) continue;
+                w = 1.f - fluid_smooth(0.f, RING_ASOFT, out);
+                rel = out == 1.f - rel ? 0.f : len;
+            }
+            w *= tail + (1.f - tail) * (len > 0.f ? rel / len : 1.f);
+        }
         float t = (d - RING_CORE) * isoft;                     /* 0..1 across the soft edge */
         t = t < 0.f ? 0.f : t;
-        arc_cell(s, c->k, ink * (1.f - t * t * (3.f - 2.f * t)), rgb, acc);
-        /* too faint for arc_cell's "where it dominates": the line still wears ring_color */
-        if (t < 0.5f) s->tcol[c->k] = fluid_pack_rgba8((rgb >> 16 & 255) / 255.f, (rgb >> 8 & 255) / 255.f, (rgb & 255) / 255.f, acc);
+        arc_cell(s, c->k, ink * w * (1.f - t * t * (3.f - 2.f * t)), rgb, acc);
+        /* too faint for arc_cell's "where it dominates": the line still wears its colour */
+        if (t < 0.5f && w > 0.3f) s->tcol[c->k] = fluid_pack_rgba8(cr, cg, cb, acc);
     }
     FLUID_PROF_END(FP_TARGET, c0);
+}
+
+void fluid_target_ring(fluid_sim_t *s, const fluid_ring_t *r, uint32_t rgb, float acc) {
+    if (r->on > 0.f) ring_line(s, r->ink, 0.f, 1.f, 1.f, rgb, acc);
+}
+
+/* ── the progress ring: the agent's work, filling clockwise from 12 o'clock ── */
+
+void fluid_progress_tick(fluid_progress_t *p, float dt, bool on, float pct, bool done) {
+    if (!(dt > 0.f)) dt = 0.f;
+    if (done) { p->flash = PROG_FLASH_S; p->pct = 1.f; }
+    else if (on) p->pct = pct;
+    const bool show = on || p->flash > 0.f;
+    p->on = show ? fminf(1.f, p->on + dt / RING_FADE_S) : fmaxf(0.f, p->on - dt / PROG_MELT_S);
+    if (p->pct >= 0.f) {
+        const float to = fminf(1.f, p->pct);
+        p->shown += (to - p->shown) * (1.f - expf(-(p->flash > 0.f ? 3.f : 1.f) * PROG_EASE * dt));   /* never jumps; done fills fast */
+    } else {
+        p->shown = 0.f;
+    }
+    p->spin += dt * PROG_SPIN;
+    p->spin -= floorf(p->spin);
+    p->flash = fmaxf(0.f, p->flash - dt);
+}
+
+void fluid_target_progress(fluid_sim_t *s, const fluid_progress_t *p, uint32_t rgb, float acc) {
+    if (!(p->on > 0.f)) return;
+    const float ink = p->on * RING_INK * (1.f + PROG_FLASH_INK * (p->flash > 0.f ? p->flash / PROG_FLASH_S : 0.f));
+    if (p->pct >= 0.f) ring_line(s, ink, 0.f, p->shown, PROG_TAIL_INK, rgb, acc);
+    else ring_line(s, ink, p->spin - PROG_COMET, PROG_COMET, 0.f, rgb, acc);   /* unknown: a comet circling */
 }
 
 uint32_t fluid_ring_rgb(int32_t given, int32_t dflt, int palette) {

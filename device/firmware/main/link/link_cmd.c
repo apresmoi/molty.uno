@@ -202,6 +202,29 @@ static esp_err_t cmd_mood(const cJSON *args, cJSON **out)
     return e;
 }
 
+/* progress {pct?, done?} (cap "progress"): how the agent's work goes, as a line filling the ring
+ * (mole_fluid_progress; no pct: a comet circles) while the creature works (mood working, kept up by
+ * each progress; never over Molty speaking or listening). done: the ring flashes and melts, and a
+ * creature that was working is happy. */
+static esp_err_t cmd_progress(const cJSON *args, cJSON **out)
+{
+    (void)out;
+    const cJSON *pct = cJSON_GetObjectItemCaseSensitive(args, "pct"), *done = cJSON_GetObjectItemCaseSensitive(args, "done");
+    if ((pct && (!cJSON_IsNumber(pct) || !(pct->valuedouble >= 0 && pct->valuedouble <= 100))) || (done && !cJSON_IsBool(done)))
+        return ESP_ERR_INVALID_ARG;
+    const bool fin = cJSON_IsTrue(done);
+    esp_err_t e = ESP_OK;
+    mood_lock();
+    const bool busy = !strcmp(s_mood, "speaking") || !strcmp(s_mood, "listening");
+    if (fin ? !strcmp(s_mood, "working") : !busy) {
+        e = link_cmd_mood(fin ? "happy" : "working", -1);
+        if (e == ESP_OK) atomic_fetch_add(&s_mood_gen, 1);
+    }
+    mood_unlock();
+    mole_fluid_progress(pct ? (float)pct->valuedouble : -1.f, fin);
+    return e;
+}
+
 /* act {action}: a one-shot gesture on the creature (cute_act.h's shared ones, or its package's
  * own; unknown_gesture for a name it lacks). It never takes the screen: no mood change, no
  * question cancelled, not counted as an explicit mood; while the words or a question cover the
@@ -315,7 +338,7 @@ void link_cmd_init(void)
     link_cmd_register("diag", cmd_diag); link_cmd_register("log", cmd_log);
     link_cmd_register("status", cmd_status); link_cmd_register("state", cmd_state);
     link_cmd_register("mood", cmd_mood); link_cmd_register("show", cmd_show);
-    link_cmd_register("act", cmd_act);
+    link_cmd_register("act", cmd_act); link_cmd_register("progress", cmd_progress);
     link_cmd_register("say", link_audio_say); link_cmd_register("listen", link_audio_listen);
     link_cmd_register("listen_stop", link_audio_listen_stop);
     link_cmd_register("say_cancel", link_audio_say_cancel);
