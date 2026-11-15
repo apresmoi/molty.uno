@@ -53,6 +53,7 @@ private one, see [self-hosting](references/self-hosting.md)).
 | `ask.sh "question" yes no later` | speak + 1–5 tap buttons (labels ≤ 8 chars) | `ANSWER: yes \| index 0` |
 | `mood.sh happy [hold_s]` | set a mood | the result |
 | `act.sh eat` | a gesture from `device.creature.gestures` (the cat has `eat`) | the result |
+| `progress.sh 40 "step"` / `progress.sh done` | a ring fills on the rim to 40% / finishes | the result |
 | `watch.py` / `watch.py --once [wait_s]` | one line per event, forever / unread events, then exit | `MOLTY utterance: '…'` |
 
 ## Key rules

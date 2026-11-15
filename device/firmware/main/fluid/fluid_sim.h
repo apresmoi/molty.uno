@@ -69,10 +69,30 @@ typedef struct {
     /* the dim background fluid: an ink floor in EVERY state */
     float bg_level, bg_freq, bg_drift, bg_speed, bg_rim, bg_mob;
     float bg_color[3];
+    /* the floor (fluid_sim_floor_*): the dim fluid laid on a plane seen in perspective, 0 = flat */
+    float floor, horizon;              /* weight 0..1 (eased by the caller), horizon y (−1 top) */
     float tilt_x, tilt_y;              /* gravity bias on the flow, cells/s² (IMU)        */
 } fluid_params_t;
 
 typedef struct { float amp, freq, x, y, phase; } fluid_osc_t;
+
+/* A ripple on the floor plane (fluid_sim_floor_ripple): a ring spreading on the ground, so on screen
+ * an oval, flatter and finer toward the horizon. Plane units: x across, z the depth (1 = the bottom). */
+#define FLUID_FLOOR_RIPPLES 8
+typedef struct { float x, z, age, amp; } fluid_floor_ripple_t;
+/* What walks on it (fluid_sim_floor_track): the creature's feet, followed from its target. */
+typedef struct {
+    bool seen;                         /* feet found last frame                            */
+    float x, y, w;                     /* the feet, smoothed: centre x, the bottom y, the width */
+    float body;                        /* the whole body's centre x, smoothed (a walk moves it) */
+    float ground;                      /* where its feet rest, y (the lowest of late)       */
+    float dist;                        /* walked since the last step, stage units          */
+    float air;                         /* how high it got off the ground since it left it  */
+    int side;                          /* the next step's foot, ±1                         */
+    float gap;                         /* s until another ripple may start                 */
+    float settle;                      /* s until the feet may ripple (they just appeared)  */
+    float shadow;                      /* the shadow's fade 0..1                           */
+} fluid_floor_feet_t;
 
 /* Storage: the hot per-step scalar fields are int16 fixed point (math stays float),
  * so a 52×32 sim is ~47 KB and lives in internal DRAM — PSRAM through the 32 KB
@@ -123,6 +143,8 @@ typedef struct {
     fluid_params_t p;
     float swirl_kick, rotate;
     fluid_osc_t osc, vibe, sheet;
+    fluid_floor_ripple_t frip[FLUID_FLOOR_RIPPLES];
+    fluid_floor_feet_t feet;
     float t, err, energy;
 } fluid_sim_t;
 
@@ -145,6 +167,13 @@ void  fluid_sim_push(fluid_sim_t *s, float x, float y, float du, float dv, float
 /** Raise T to the dim background floor (call after a target fill). refresh: recompute
  *  the slow floor noise (every other frame is enough; always on the first call). */
 void  fluid_sim_background(fluid_sim_t *s, float t, float breath, bool refresh);
+/** The floor (p.floor > 0): a step or a landing at screen (x, y) on the floor sends a ripple across
+ *  the plane (amp ~1 a step); ignored above the horizon. */
+void  fluid_sim_floor_ripple(fluid_sim_t *s, float x, float y, float amp);
+/** Once per frame, after the creature's target fill and before fluid_sim_background: finds its
+ *  feet in T, lays its shadow under them, and drops a ripple each stride it walks and when it lands.
+ *  Ages the ripples by dt. creature: a creature is what the target shows. */
+void  fluid_sim_floor_track(fluid_sim_t *s, float dt, bool creature);
 /** Stream function for the eddies — once per frame, before the steps. */
 void  fluid_sim_swirl_field(fluid_sim_t *s);
 void  fluid_sim_step(fluid_sim_t *s, float dt);
@@ -273,6 +302,20 @@ typedef struct {
 } fluid_ring_t;
 void fluid_ring_tick(fluid_ring_t *r, float dt, bool on);
 void fluid_target_ring(fluid_sim_t *s, const fluid_ring_t *r, uint32_t rgb, float acc);
+
+/** The agent's progress on the same line (knobs: fluid_ring.h): it fills clockwise from 12 o'clock
+ *  to pct (0..1, eased), or, with pct < 0 (no percent given), a comet circles. fluid_progress_tick
+ *  once per frame: on = work in progress; done = it finished (the full ring flashes, then melts).
+ *  fluid_target_progress writes it into the target as fluid_target_ring does. */
+typedef struct {
+    float on;                          /* fade 0..1                                       */
+    float pct;                         /* the latest percent, 0..1, < 0 = unknown          */
+    float shown;                       /* the fill drawn, eased toward pct                 */
+    float spin;                        /* the comet's head, turns                          */
+    float flash;                       /* s of the done flash left                         */
+} fluid_progress_t;
+void fluid_progress_tick(fluid_progress_t *p, float dt, bool on, float pct, bool done);
+void fluid_target_progress(fluid_sim_t *s, const fluid_progress_t *p, uint32_t rgb, float acc);
 
 /* ── renderer (render.js) ─────────────────────────────────────────────────── */
 

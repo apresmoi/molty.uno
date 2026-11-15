@@ -54,7 +54,7 @@ import {
   type ActivityOwnerRequest,
 } from "./api.js";
 import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
-import { CREATURES_CAP, DND_CAP, DEFAULT_WPM, PKG_CAP, SCENE_CAP, WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, GESTURES_CAP, RESUME_CAP, RESUME_FEATURE, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, MAX_KEEP_WORDS, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
+import { CREATURES_CAP, DND_CAP, PROGRESS_CAP, DEFAULT_WPM, PKG_CAP, SCENE_CAP, WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, GESTURES_CAP, RESUME_CAP, RESUME_FEATURE, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, MAX_KEEP_WORDS, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
 import { FIRST_WORDS_MODES, type FirstWordsMode, type LinePlay, OPENER, type OpenerMessage, clauseEnd, guardOpener, hangs, planReply, pushHistory } from "./opener.js";
 import { PcmFeed, estimateSpeechMs, speechWords, splitSpeech, synthesize } from "./speech.js";
 import { DEFAULT_PARTIAL_POLICY, DRAFT_DROPPED_EVENT, DRAFT_USED_EVENT, type DropReason, PARTIAL_EVENT, PartialChunker, PauseTracker, judgeDraft, words } from "./partials.js";
@@ -1235,6 +1235,14 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         return fail("unsupported", "this Molty has no working mood (no `working` in its caps)");
       }
     }
+    if (cmd.name === "progress") {
+      const caps = live.getMeta()?.caps;
+      if (!caps?.includes(PROGRESS_CAP)) {
+        const old = tooOld("progress", await this.facts(), await this.releases.latest("wait"));
+        if (old) return fail("firmware_too_old", `molty_progress needs Molty firmware ${old.needed} or newer; this Molty runs ${old.current}`, old);
+        return fail("unsupported", "this Molty has no progress ring (no `progress` in its caps): update it");
+      }
+    }
     if (cmd.name.startsWith("pkg.") || cmd.name.startsWith("scene.")) {
       // packages and scenes (docs/PACKAGES.md): caps are the truth, a device without them is a clean 409
       const pkg = cmd.name.startsWith("pkg.");
@@ -1282,7 +1290,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       return this.startJob(cmd.name as "say" | "listen", cmd.args, true, by);
     }
     let res: Outcome<JsonObject>;
-    if (cmd.name === "mood" || cmd.name === "scene.play") {
+    if (cmd.name === "mood" || cmd.name === "progress" || cmd.name === "scene.play") {
       // Counted only once the device took it: a refused mood (pairing prompt up, bad
       // state) must not silence the automatic thinking/idle that follows.
       this.screenInFlight++;
@@ -1294,7 +1302,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       if (res.ok) this.screenRev++;
     } else res = await this.sendCmd(cmd.name, cmd.args);
     // the agent is on it (a feeling, text, a gesture): Molty's own filler stands down
-    if (res.ok && (cmd.name === "mood" || cmd.name === "show" || cmd.name === "act" || cmd.name === "scene.play" || (cmd.name === "state" && Object.keys(cmd.args).length > 0))) this.agentSeq++;
+    if (res.ok && (cmd.name === "mood" || cmd.name === "progress" || cmd.name === "show" || cmd.name === "act" || cmd.name === "scene.play" || (cmd.name === "state" && Object.keys(cmd.args).length > 0))) this.agentSeq++;
     if (!res.ok || cmd.name !== "status") return res;
     const sock = this.liveSocket();
     const meta = sock?.getMeta();

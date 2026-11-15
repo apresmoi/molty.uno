@@ -733,8 +733,103 @@ static void test_font(void) {
     CHECK(!memcmp(gc_font5x7('\t'), full, 7), "a control char is not the solid block");
 }
 
+/* the agent's progress (fluid_target_progress): the line covers 12 o'clock clockwise to pct and no
+ * further; no pct: a comet that moves; done: a flash, then it melts */
+static double band_ink(const fluid_sim_t *s, float a0, float a1) {   /* target ink on the ring, turns a0..a1 */
+    double v = 0;
+    for (int q = 0; q < 48; q++) {
+        const float a = (q + 0.5f) / 48.f;
+        if (a < a0 || a > a1) continue;
+        v += s->T[cell_of(s, 0.875f * sinf(6.2831853f * a), -0.875f * cosf(6.2831853f * a))] / FQ_UNIT;
+    }
+    return v;
+}
+static void test_progress(void) {
+    fluid_progress_t p = { 0 };
+    for (int f = 0; f < 90; f++) fluid_progress_tick(&p, 1.f / 30, true, 0.4f, false);
+    CHECK(p.on == 1.f && fabsf(p.shown - 0.4f) < 0.01f, "progress: eased to %.3f (on %.2f)", p.shown, p.on);
+    fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
+    fluid_target_progress(s, &p, PROG_COLOR, 0.f);
+    const double filled = band_ink(s, 0.03f, 0.37f), empty = band_ink(s, 0.45f, 0.97f);
+    CHECK(filled > 1.0 && empty == 0.0, "progress 40%%: ink %.2f on 0..40%%, %.2f past it", filled, empty);
+    /* a new percent eases, never jumps */
+    fluid_progress_tick(&p, 1.f / 30, true, 0.9f, false);
+    CHECK(p.shown > 0.4f && p.shown < 0.6f, "progress: one frame toward 90%% went to %.2f", p.shown);
+    /* unknown: a comet, a fifth of the ring, and it moves */
+    fluid_progress_t u = { 0 };
+    for (int f = 0; f < 30; f++) fluid_progress_tick(&u, 1.f / 30, true, -1.f, false);
+    const float head = u.spin;
+    for (int f = 0; f < 10; f++) fluid_progress_tick(&u, 1.f / 30, true, -1.f, false);
+    CHECK(u.spin != head && u.shown == 0.f, "progress unknown: the comet moved (%.2f → %.2f)", head, u.spin);
+    memset(s->T, 0, (size_t)s->N * 2);
+    fluid_target_progress(s, &u, PROG_COLOR, 0.f);
+    double lit = 0; int cells = 0;
+    for (int k = 0; k < s->N; k++) if (s->T[k] > 0) { lit += s->T[k]; cells++; }
+    CHECK(cells > 4 && band_ink(s, 0.f, 1.f) < 0.4 * 48 * RING_INK, "progress unknown: a comet, not a ring (%d cells)", cells);
+    /* done: full, brighter, then it melts away */
+    fluid_progress_tick(&p, 1.f / 30, false, 0.f, true);
+    for (int f = 0; f < 10; f++) fluid_progress_tick(&p, 1.f / 30, false, 0.f, false);
+    CHECK(p.flash > 0.f && p.on == 1.f && p.shown > 0.9f, "done: flashing full (shown %.2f, flash %.2f)", p.shown, p.flash);
+    for (int f = 0; f < 60; f++) fluid_progress_tick(&p, 1.f / 30, false, 0.f, false);
+    CHECK(p.on == 0.f, "done: melted (%.2f)", p.on);
+    memset(s->T, 0, (size_t)s->N * 2);
+    fluid_target_progress(s, &p, PROG_COLOR, 0.f);
+    CHECK(band_ink(s, 0.f, 1.f) == 0.0, "melted: no ink left");
+    fluid_sim_destroy(s);
+}
+
+/* the floor (p.floor): flat at 0 (every golden), the plane at 1; the feet ripple on a landing, never on a sway */
+static void test_floor(void) {
+    fluid_sim_t *a = fluid_sim_create(52, 32, FLUID_STAGE_REF), *b = fluid_sim_create(52, 32, FLUID_STAGE_REF);
+    b->p.floor = 1.f;
+    fluid_sim_background(a, 1.f, 0.5f, true); fluid_sim_background(b, 1.f, 0.5f, true);
+    double wall_a = 0, wall_b = 0, near_a = 0, near_b = 0;
+    for (int j = 0; j < a->H; j++) for (int i = 0; i < a->W; i++) {
+        const int k = j * a->W + i;
+        if (!a->mask[k]) continue;
+        if (a->ys[j] < -0.4f) { wall_a += a->T[k]; wall_b += b->T[k]; }
+        if (a->ys[j] > 0.5f) { near_a += a->T[k]; near_b += b->T[k]; }
+    }
+    CHECK(wall_b < 0.6 * wall_a && near_b > 1.1 * near_a, "floor: wall %.0f→%.0f, near floor %.0f→%.0f", wall_a, wall_b, near_a, near_b);
+    /* a ring on the plane: on screen wider than tall (foreshortened) */
+    fluid_sim_floor_ripple(b, 0.f, 0.5f, 1.f);
+    fluid_sim_floor_ripple(b, 0.f, b->p.horizon - 0.1f, 1.f);            /* above the horizon: nothing */
+    int n = 0; for (int q = 0; q < FLUID_FLOOR_RIPPLES; q++) n += b->frip[q].amp > 0.f;
+    CHECK(n == 1, "floor: %d ripples (one on the floor, none on the wall)", n);
+    for (int f = 0; f < 15; f++) fluid_sim_floor_track(b, 1.f / 30, false);
+    fluid_sim_view(b);
+    fluid_sim_view(a);
+    int wide = 0, tall = 0;
+    for (int j = 0; j < b->H; j++) for (int i = 0; i < b->W; i++) {
+        const int k = j * b->W + i;
+        if (!b->mask[k] || b->view[k] - a->view[k] < 0.05f * FQ_UNIT) continue;
+        const float dx = fabsf(b->xs[i]), dy = fabsf(b->ys[j] - 0.5f);
+        if (dx > wide * 0.01f) wide = (int)(dx * 100);
+        if (dy > tall * 0.01f) tall = (int)(dy * 100);
+    }
+    CHECK(wide > 0 && wide > 1.3f * tall, "floor ripple: %.2f wide, %.2f tall", wide / 100.f, tall / 100.f);
+    /* the feet: a block of ink on the floor that sways slowly makes no ripple; one that drops from a hop does */
+    fluid_sim_t *c = fluid_sim_create(52, 32, FLUID_STAGE_REF);
+    c->p.floor = 1.f;
+    int drops = 0;
+    for (int f = 0; f < 150; f++) {
+        const float t = f / 30.f, sway = 0.04f * sinf(t * 2.f), lift = f >= 90 && f < 100 ? 0.15f : 0.f;
+        memset(c->T, 0, (size_t)c->N * 2);
+        for (int j = 0; j < c->H; j++) for (int i = 0; i < c->W; i++)
+            if (fabsf(c->xs[i] - sway) < 0.2f && c->ys[j] > -0.2f - lift && c->ys[j] < 0.6f - lift) c->T[j * c->W + i] = (int16_t)(0.8f * FQ_UNIT);
+        fluid_sim_floor_track(c, 1.f / 30, true);
+        for (int q = 0; q < FLUID_FLOOR_RIPPLES; q++) drops += c->frip[q].amp > 0.f && c->frip[q].age == 0.f;
+        if (f == 89) CHECK(drops == 0, "feet: a sway rippled (%d)", drops);
+    }
+    CHECK(drops == 1, "feet: one landing, %d ripples", drops);
+    CHECK(c->feet.shadow == 1.f && fabsf(c->feet.ground - 0.6f) < 0.06f, "feet: shadow %.2f at ground %.2f", c->feet.shadow, c->feet.ground);
+    fluid_sim_destroy(a); fluid_sim_destroy(b); fluid_sim_destroy(c);
+}
+
 int main(void) {
     printf("fluid host test\n");
+    test_progress();
+    test_floor();
     test_static_label();
     test_braille();
     test_dirty();

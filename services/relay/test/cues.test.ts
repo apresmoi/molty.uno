@@ -403,3 +403,28 @@ describe("the working mood", () => {
     expect(w.dev.cmds("act").length).toBe(0);
   });
 });
+
+describe("progress", () => {
+  it("validates pct, step and done", () => {
+    expect(validateCommand("progress", { pct: 40, step: "downloaded the star map" }).args).toEqual({ pct: 40, step: "downloaded the star map" });
+    expect(validateCommand("progress", {}).args).toEqual({});
+    expect(validateCommand("progress", { done: true }).args).toEqual({ done: true });
+    for (const bad of [{ pct: -1 }, { pct: 101 }, { pct: "40" }, { step: "" }, { step: "x".repeat(81) }, { done: 1 }, { color: "red" }]) {
+      expect(() => validateCommand("progress", bad)).toThrow();
+    }
+  });
+
+  it("goes to a device with the cap, and stands Molty's filler down like a mood", async () => {
+    const w = await setup({ caps: [...CAPS, "working", "progress"] });
+    const r = await w.room.command(w.token, "progress", { pct: 25, step: "fetching" });
+    expect(r.ok).toBe(true);
+    expect(w.dev.cmds("progress")).toEqual([{ pct: 25, step: "fetching" }]);
+  });
+
+  it("a device without the cap: unsupported, nothing sent", async () => {
+    const w = await setup();
+    const r = await w.room.command(w.token, "progress", { pct: 25 });
+    expect(r.ok).toBe(false);
+    expect(w.dev.cmds("progress")).toEqual([]);
+  });
+});

@@ -74,6 +74,8 @@ const events = { explore: { first: 2, gap: [1.5, 5.5], len: [1.6, 3.4, 7], ch: [
 // the last word on the pose
 const S = '@m.surprised', sk = '@now.surprised', Z = '@m.sleepy';
 const pose = [
+  // working (the agent is off on a job): leaning in, eyes down, arms drumming away as if typing; eased in and out
+  ch('_wk', [[1, '@work']], { lp: 2.5 }), ch('drum', [[0.9, '@_wk']]), ch('curl', [[0.25, '@_wk']]), ch('look.y', [[-0.5, '@_wk']]), ch('rot.x', [[0.07, '@_wk']]), ch('pos.y', [[0.012, '@_wk', sin(T, 0.9)]]),
   ch('talk', [[1, '@mouth', '@now.speaking']]), ch('_still', [[1], [-1.5, K]], { cl: [0, 1] }),
   // breathing: the mantle fills and empties, unevenly; now and then a breath goes out as a bubble (ambient)
   ch('_br', [[0.32, lin('@w.sleepy', 1, -0.45)], [0.1, nz(T, 0.13, 7), lin('@w.sleepy', 1, -0.45)]], { int: 1 }), ch('swell', [[0.05, sin('@_br', 1)], [0.025, nz(T, 0.2, 9), sin('@_br', 1)]]),

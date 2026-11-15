@@ -49,7 +49,7 @@ async function waitJob(client, job) {
 const anon = await mcpClient();
 check(anon.getServerVersion()?.name === "molty-relay", "serverInfo");
 const tools = (await anon.listTools()).tools.map((t) => t.name).sort();
-check(tools.length === 15 && tools.includes("molty_talk"), `15 tools, got ${tools}`);
+check(["molty_talk", "molty_mood", "molty_progress", "molty_ask"].every((t) => tools.includes(t)), `the spec tools, got ${tools}`);
 log("mcp initialize + tools/list", tools);
 
 const denied = await anon.callTool({ name: "molty_status", arguments: {} });
@@ -81,6 +81,8 @@ const call = async (name, args = {}) => {
 const st = await call("molty_status");
 check(st.fw === "fake-0.1" && st.relay.online === true && st.relay.device_id === o.device, "status merged");
 check((await call("molty_mood", { mood: "happy" })).mood === "happy", "mood");
+check((await call("molty_progress", { pct: 40, step: "e2e step" })).pct === 40, "progress");
+check((await call("molty_progress", { done: true })).done === true, "progress done");
 check((await call("molty_show", { text: "hello from the relay e2e", wpm: 400 })).wpm === 400, "show");
 check((await call("molty_state")).creature === "fluid", "state read");
 check((await call("molty_state", { state: { blink: 0.5 } })).blink === 0.5, "state patch");

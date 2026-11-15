@@ -117,6 +117,11 @@ const events = {
 const W = (m) => '@w.' + m;
 const pose = [
   ch('_qt', [[1, ...quiet]], { lp: 10, keep: 1 }),
+  // working (the agent is off on a job): busy pecking at the ground in little bursts, head down, wings tucked, a foot shuffling;
+  // eased in and out. The ponder event still lifts its head now and then
+  ch('_wk', [[1, '@work']], { lp: 2.5 }), ch('_pk', [[1, ['pos:sin', T, 2.6]], [-0.35]], { cl: [0, 1] }), ch('_pb', [[2, nz(T, 0.6, 61)], [0.4]], { cl: [0, 1] }),
+  ch('head.x', [[0.28, '@_wk'], [0.14, '@_wk', '@_pk', '@_pb']]), ch('look.y', [[-0.6, '@_wk']]), ch('duck.neck', [[-0.1, '@_wk']]), ch('duck.bill', [[0.35, '@_wk', '@_pk', '@_pb']], { op: 'max' }),
+  ch('duck.wl', [[-0.05, '@_wk']]), ch('duck.wr', [[-0.05, '@_wk']]), ch('duck.fl', [[0.02, '@_wk', ['pos:sin', T, 0.7]]]), ch('tail.y', [[0.25, '@_wk', sin(T, 1.1)]]),
   ch('pos.y', [[-0.75, W('happy')]], { op: '*' }), ch('squash', [[-0.6, W('happy')]], { op: '*' }), ch('pos.y', [[0.08, W('happy'), '@_hopfly']]), ch('squash', [[0.05, W('happy'), '@_hopfly'], [-0.1, W('happy'), '@_hopland']]),
   ch('duck.neck', [[0.3, '@mouth', W('speaking')]]), ch('head.x', [[-0.06, '@mouth', W('speaking')]]), ch('duck.bill', [[1, '@mouth']], { op: 'max' }),
   ch('_wake', [[4, W('surprised')], [2, W('happy')]], { cl: [0, 1] }), ch('duck.tuck', [[-1, '@_wake']], { op: '*' }),

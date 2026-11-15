@@ -266,6 +266,12 @@ static struct {
 static bool  s_listen = false;                  /* task copy of s_listen_in */
 static int32_t s_ring_rgb = -1, s_ring_def = -1;   /* task copies of s_ring_in / s_ring_dflt */
 static fluid_ring_t s_rg;                       /* the listening ring (fluid_ring.h)     */
+static fluid_progress_t s_pg;                   /* the agent's progress on the same line */
+static _Atomic int32_t s_prog_in = -1;          /* mole_fluid_progress: pct × 10, < 0 = no percent */
+static atomic_uint     s_prog_seq;              /* bumped by each progress                         */
+static atomic_bool     s_prog_end;              /* its done                                        */
+#define PROG_TTL_S     120.f                    /* no news this long: the ring melts (as `working`) */
+static float s_floor_w;                         /* the floor's weight, eased (p.floor)             */
 static scene_player_t s_sp;                     /* the scene on screen + its queue        */
 static float s_div = 0.f;
 static int   s_div_n = 0;
@@ -658,6 +664,18 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
      * the voice sends a round wave from it across the screen (fluid_ring.h). The circle is a
      * target of the fluid, around whatever the state shows. */
     fluid_ring_tick(&s_rg, rdt, s_listen && !asking);
+    {   /* the agent's progress: on from its first word until done, or PROG_TTL_S without news */
+        static unsigned seen; static float at = -1.f;
+        const unsigned q = atomic_load(&s_prog_seq);
+        if (q != seen) { seen = q; at = s_tnow; }
+        const bool done = atomic_exchange(&s_prog_end, false);
+        if (done) at = -1.f;
+        const int32_t pv = atomic_load(&s_prog_in);
+        fluid_progress_tick(&s_pg, rdt, at >= 0.f && s_tnow - at < PROG_TTL_S, pv < 0 ? -1.f : pv * 0.001f, done);
+    }
+    /* the floor: the dim fluid on a ground plane under a creature, flat behind anything else */
+    s_floor_w += ((s_cur == ST_CREATURE && !asking ? 1.f : 0.f) - s_floor_w) * fminf(1.f, 2.f * rdt);
+    s->p.floor = s_floor_w;
     const float acc = cfg->palette == FLUID_PAL_PASTEL ? 0.f : 1.f;   /* mono palettes: the accent */
 
     switch (asking ? ST_TEXT : s_cur) {
@@ -684,6 +702,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         break;
     default:          fluid_target_blob(s, s_tnow, swell, ox, oy); break;
     }
+    fluid_sim_floor_track(s, rdt, s_cur == ST_CREATURE && !asking && cr_loaded());   /* its feet, before the rings join T */
     if (asking) {                                          /* each button's border, in its colour */
         fluid_arc_t arcs[FLUID_ASK_MAX];
         for (int i = 0; i < s_ask.n; i++) {
@@ -693,6 +712,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         }
         fluid_target_arcs(s, FLUID_ASK_ARC_R, arcs, s_ask.n, acc);   /* one pass for all */
     } else {
+        fluid_target_progress(s, &s_pg, PROG_COLOR, acc);          /* under the listening ring: it wins */
         fluid_target_ring(s, &s_rg, fluid_ring_rgb(s_ring_rgb, s_ring_def, cfg->palette), acc);
     }
     /* the always-on dim fluid; its slow noise (and the eddies' ψ) refresh on
@@ -1314,7 +1334,7 @@ esp_err_t mole_fluid_creature_init(void) {
     s_ask.scr.phase = FLUID_ASK_NONE; s_ask.scr.seq = s_ask_want.seq;     /* a question from before is gone */
     s_dask = 0; atomic_store(&s_glass_ask, 0);
     s_follow = false; s_follow_word = 0; s_text_hidden = false;
-    s_rg = (fluid_ring_t){ 0 }; s_div = 0.f; s_ov = s_dov = (fluid_overlay_t){ 0 };   /* the fluid's own ring is in the sim */
+    s_rg = (fluid_ring_t){ 0 }; s_pg = (fluid_progress_t){ 0 }; s_div = 0.f; s_ov = s_dov = (fluid_overlay_t){ 0 };   /* the fluid's own ring is in the sim */
     s_sim->p.relax_up = RATE_UP[ST_BLOB]; s_sim->p.relax_down = RATE_DOWN[ST_BLOB];
 
     xSemaphoreTake(s_go, 0);                     /* fresh handshake: drawer idle, nothing queued */
@@ -1771,6 +1791,12 @@ void mole_fluid_goodbye(void) {
     if (!s_mutex) atomic_store(&s_bye_done, true);     /* fluid not up: nothing to show */
 }
 bool mole_fluid_goodbye_done(void) { return atomic_load(&s_bye_done); }
+
+void mole_fluid_progress(float pct, bool done) {
+    if (done) { atomic_store(&s_prog_end, true); return; }
+    atomic_store(&s_prog_in, pct < 0.f ? -1 : (int32_t)(fminf(pct, 100.f) * 10.f + 0.5f));
+    atomic_fetch_add(&s_prog_seq, 1);
+}
 bool mole_fluid_screen_on(void) { return atomic_load(&s_screen); }
 
 void mole_fluid_set_status(int status) {
