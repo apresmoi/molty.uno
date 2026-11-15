@@ -97,7 +97,7 @@ static void run_state(int W, int H, int st, double *step_ms, double *frame_ms) {
     const float dt = 1.f / 60.f;
     double tstep = 0, tframe = 0; int nstep = 0, nframe = 0;
     float hmax = 0.f, hmid = 0.f, hlate = 0.f, err_end = 1.f;
-    fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, 0.f, 0.f, tx->letters, tx->nletters, " .,:;!+=*xX#@", stub_font };
+    fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, 0.f, 0.f, tx->letters, tx->nletters, " .,:;!+=*xX#@", stub_font, NULL };
     for (int f = 0; f < 300; f++) {                         /* 10 s at 30 fps, 2 steps/frame */
         float t = f / 30.f, breath = 0.5f - 0.5f * cosf(t / 4.f * 6.2832f), swell = 1.f + 0.05f * (breath * 2.f - 1.f);
         s->p.hold = fminf(1.f, t / 1.5f);
@@ -157,7 +157,7 @@ static void test_dirty(void) {
     for (int f = 0; f < 60; f++) { fluid_target_blob(s, 1.f, 1.f, 0, 0); fluid_sim_background(s, 1.f, 0.5f, true); fluid_sim_swirl_field(s); fluid_sim_step(s, 1.f / 60); fluid_sim_color(s, 1.f / 60); }
     fluid_sim_view(s);
     fluid_sim_snapshot(s, fr, true);
-    fluid_draw_opts_t o = { FLUID_PAL_GREEN, FLUID_EDGE_CONTOURS, 0.f, 2.f, 0.f, NULL, 0, " .:-=+*#", stub_font };
+    fluid_draw_opts_t o = { FLUID_PAL_GREEN, FLUID_EDGE_CONTOURS, 0.f, 2.f, 0.f, NULL, 0, " .:-=+*#", stub_font, NULL };
     int y0, y1;
     int n1 = fluid_draw(d, fr, fb, &o, &y0, &y1);
     CHECK(n1 > 50 && y1 > y0, "first draw drew %d cells, band [%d,%d)", n1, y0, y1);
@@ -216,7 +216,7 @@ static void test_panel(int fb_w, int fb_h) {
     float lx0 = tx->letters[0].x, lx1 = tx->letters[4].x + tx->letters[4].w;
     CHECK(lx0 > 0.f && lx1 < stage && tx->letters[0].fs >= 18.f, "%dx%d: word spans [%.1f,%.1f] of %d, fs %.1f",
           fb_w, fb_h, lx0, lx1, stage, tx->letters[0].fs);
-    fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, 0.f, 0.f, NULL, 0, " .:-=+*#", stub_font };
+    fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, 0.f, 0.f, NULL, 0, " .:-=+*#", stub_font, NULL };
     long lit = 0, outside = 0, band_bad = 0;
     for (int f = 0; f < 90; f++) {
         float t = f / 30.f;
@@ -315,7 +315,7 @@ static void test_overlay(void) {
     for (int f = 0; f < 60; f++) { fluid_target_blob(s, 1.f, 1.f, 0, 0); fluid_sim_background(s, 1.f, 0.5f, true); fluid_sim_swirl_field(s); fluid_sim_step(s, 1.f / 60); fluid_sim_color(s, 1.f / 60); }
     fluid_sim_view(s);
     fluid_sim_snapshot(s, fr, false);
-    fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, 2.f, 0.f, NULL, 0, " .:-=+*#", stub_font };
+    fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, 2.f, 0.f, NULL, 0, " .:-=+*#", stub_font, NULL };
     int y0, y1, n;
     long changed, stray;
     fluid_draw(ref, fr, fb_ref, &o, &y0, &y1);                       /* the fluid alone */
@@ -385,7 +385,7 @@ static void test_send(int fb_w, int fb_h, int max_px) {
     if (!s || !tx || !ref || !d || !fr || !fb || !buf || !p.panel) return;
     fluid_text_set_sentence(tx, 4.5f);
     fluid_text_set_word(tx, s, "molty.", 6, 1);
-    fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, 0.f, 0.f, tx->letters, tx->nletters, " .,:;!+=*xX#@", stub_font };
+    fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, 0.f, 0.f, tx->letters, tx->nletters, " .,:;!+=*xX#@", stub_font, NULL };
     fluid_overlay_t ov_drawn = { 0 };
     int mark_drawn = -1, pal_drawn = -1, bad = -1, windows = 0;
     long sent = 0;
@@ -664,7 +664,7 @@ static void test_letter_color(void) {
     for (int f = 0; f < 90; f++) { fluid_text_fill(tx, s, f / 30.f); fluid_sim_background(s, 1.f, 0.5f, true); fluid_sim_swirl_field(s); fluid_sim_step(s, 1.f / 60); fluid_sim_color(s, 1.f / 60); }
     fluid_sim_view(s); fluid_sim_snapshot(s, fr, false);
     for (int pal = 0; pal < FLUID_PAL_COUNT; pal++) {
-        fluid_draw_opts_t o = { pal, FLUID_EDGE_ALL, 0.f, 1.f, 0.f, tx->letters, tx->nletters, " .:-=+*#", stub_font };
+        fluid_draw_opts_t o = { pal, FLUID_EDGE_ALL, 0.f, 1.f, 0.f, tx->letters, tx->nletters, " .:-=+*#", stub_font, NULL };
         memset(fb, 0, PX * 2); d->force = true; int y0, y1;
         fluid_draw(d, fr, fb, &o, &y0, &y1);
         long red = 0;
@@ -695,7 +695,7 @@ static void test_letter_melt(void) {
     for (int f = 0; f < 90; f++) { fluid_text_fill(tx, s, f / 30.f); fluid_sim_background(s, 1.f, 0.5f, true); fluid_sim_swirl_field(s); fluid_sim_step(s, 1.f / 60); fluid_sim_color(s, 1.f / 60); }
     fluid_sim_view(s); fluid_sim_snapshot(s, fr, false);
     fluid_letter_t L[2]; memcpy(L, tx->letters, sizeof(L));
-    fluid_draw_opts_t o = { FLUID_PAL_GREEN, FLUID_EDGE_ALL, 0.f, 1.f, 0.f, L, 2, " .:-=+*#", stub_font };
+    fluid_draw_opts_t o = { FLUID_PAL_GREEN, FLUID_EDGE_ALL, 0.f, 1.f, 0.f, L, 2, " .:-=+*#", stub_font, NULL };
     const size_t PX = (size_t)FLUID_STAGE_REF * FLUID_STAGE_REF;
     uint16_t *img[3] = { calloc(PX, 2), calloc(PX, 2), calloc(PX, 2) };
     for (int v = 0; v < 3; v++) {          /* both shown · letter 1 melted · the frame melted */

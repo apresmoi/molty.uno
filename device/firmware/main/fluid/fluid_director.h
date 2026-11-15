@@ -40,25 +40,18 @@
  *   status       Wi-Fi / relay / auth trouble as a debounced indicator code for the
  *                screen's edge: never a state or mood change.
  *   boot screen  at power on only (fd_boot; without it boot lands on the creature as above):
- *                the word "molty.uno" (mole_fluid.c) condenses out of the fluid as held text,
- *                holds, and after boot_word_s melts into the boot's creature (the firmware
- *                default's, mole_fluid.c), which paddles in place (paddle, paddle, wiggle:
- *                shared actions, every creature plays them; no idle life) while Wi-Fi and the
- *                relay come up. It ends when the link is ready (status ok, or auth refused:
- *                it will not come up for minutes), at once without Wi-Fi configured, else
- *                after boot_ttl_s, and the creature dissolves into the human's (fd_take_home:
- *                load it now) unless it is that one already, which carries on. Anything that
- *                wants the screen ends it at once (any request, autoplay, a mood, work, an
- *                act, a listen, a say, a question): the human's creature is loaded under it,
- *                and the word, if still up, gives way to it.
+ *                the word "molty.uno" condenses in the fluid's own dots (mole_fluid.c), holds,
+ *                and after boot_word_s melts into the human's creature. Anything that wants
+ *                the screen ends it at once (any request, autoplay, a mood, work, an act, a
+ *                listen, a say, a question).
  *
  *            request(st)            last word + 1.5 s
  *   boot ──▶ CREATURE ──────────▶ TEXT ─────────────────┐
  *            ▲   │ mood: blend,        (hold: stays)     │
  *            │   │ flash 20–60 s, sleepy after 5 min     │
  *            └───┴───────────────────────────────────────┘
- *   fd_boot: "molty.uno" (TEXT) ─ boot_word_s ─▶ boot creature paddling ─ link / ttl ─▶ the
- *            human's CREATURE; anything wanting the screen ends it on the spot.
+ *   fd_boot: "molty.uno" (TEXT) ─ boot_word_s ─▶ CREATURE; anything wanting the screen ends
+ *            it on the spot.
  *   fd_bye:  "bye!" (TEXT) ─ bye_word_s ─▶ the ripple pond, fading out ─ bye_pond_s ─▶ done
  *            (fd_bye_done: the power goes off). Nothing ends it: every request is ignored.
  *   "autoplay" only: the reel (blob ▸ creature ▸ effects ▸ text) until any other request.
@@ -84,9 +77,6 @@ enum { FD_ST_BLOB, FD_ST_THINKING, FD_ST_TEXT, FD_ST_FX, FD_ST_CREATURE, FD_ST_S
 enum { FD_STATUS_OK, FD_STATUS_WIFI, FD_STATUS_RELAY, FD_STATUS_AUTH, FD_STATUS_COUNT };
 extern const char *const FD_STATUS_NAMES[FD_STATUS_COUNT];   /* "ok" "wifi" "relay" "auth" */
 
-/* The boot screen's phases (fd_boot): the word, then the boot's creature paddling. */
-enum { FD_BOOT_OFF, FD_BOOT_WORD, FD_BOOT_PLAY };
-
 /* Tunables (seconds). FD_CFG_DEFAULT holds the shipped values. */
 typedef struct {
     float lively_min_s, lively_max_s; /* idle gap between two idle actions: 10..40     */
@@ -101,8 +91,6 @@ typedef struct {
     float work_ttl_s;                 /* working ends by itself after this long: 120   */
     float work_gap_min_s, work_gap_max_s; /* between two work actions: 0.5..1.6        */
     float boot_word_s;                /* boot screen: the word condenses, holds, melts: 2.8 */
-    float boot_ttl_s;                 /* ...the link has this long to come up: 20      */
-    float boot_gap_s;                 /* ...between two of the creature's strokes: 0.3 */
     float bye_word_s;                 /* power off: "bye!" condenses and holds: 1.8    */
     float bye_pond_s;                 /* ...melts into a pond that fades to black: 2.2 */
 } fd_cfg_t;
@@ -146,12 +134,8 @@ typedef struct {
     bool  scene_on;                   /* the scene player has a scene (fd_set_scene)    */
     int   status, shown;              /* reported / on screen                          */
     float status_t;                   /* s the reported status has differed from shown */
-    bool  link_ready;                 /* the last report: ok, or auth refused (no wait) */
-    int   boot;                       /* FD_BOOT_*                                     */
-    float boot_t, boot_gap;           /* s into the boot screen; until the next stroke */
-    int   boot_step;                  /* the stroke loop's position                   */
-    bool  boot_home, boot_wait;       /* fd_boot's home / wait                         */
-    bool  home_due;                   /* the boot ended: load the human's creature now */
+    bool  boot;                       /* fd_boot: the word is up                       */
+    float boot_t;                     /* s into it                                     */
     bool  bye;                        /* fd_bye: saying goodbye, the power goes off after */
     float bye_t;                      /* s into it                                     */
 } fluid_director_t;
@@ -159,10 +143,8 @@ typedef struct {
 /** Boot: autoplay off, the creature wanted (shown once fd_set_creature(true)). cfg NULL =
  *  FD_CFG_DEFAULT. */
 void  fd_init(fluid_director_t *d, const fd_cfg_t *cfg, uint32_t seed);
-/** Power on: the boot screen (the header's "boot screen") instead of landing on the creature.
- *  home: the creature loaded for it is not the human's (dissolve into theirs at the end:
- *  fd_take_home); wait: Wi-Fi is configured, so wait for the link (else it ends after the word). */
-void  fd_boot(fluid_director_t *d, bool home, bool wait);
+/** Power on: the boot screen (the header's "boot screen") instead of landing on the creature. */
+void  fd_boot(fluid_director_t *d);
 bool  fd_boot_word(const fluid_director_t *d);   /* the text state shows the boot word */
 /** Power off: the goodbye (the header's "fd_bye"). Ends the boot screen, autoplay, moods and
  *  acts; from here every request is ignored. */
@@ -170,8 +152,6 @@ void  fd_bye(fluid_director_t *d);
 bool  fd_bye_word(const fluid_director_t *d);    /* the text state shows the goodbye word */
 float fd_bye_level(const fluid_director_t *d);   /* the panel's brightness, 1 → 0 over the pond */
 bool  fd_bye_done(const fluid_director_t *d);    /* the goodbye is over: power off now */
-/** The boot screen ended and the human's creature is due: load it now (true once). */
-bool  fd_take_home(fluid_director_t *d);
 /** A creature (.molty) is (not) loaded. Loading one while the creature was wanted but the
  *  blob stood in for it moves to the creature. */
 void  fd_set_creature(fluid_director_t *d, bool loaded);
@@ -215,8 +195,7 @@ int   fd_take_act(fluid_director_t *d);
 void  fd_set_scene(fluid_director_t *d, bool playing);
 /** The state shown or on its way is the scene (a scene not wanted is dropped). */
 bool  fd_scene_wanted(const fluid_director_t *d);
-/** Report the link status (FD_STATUS_*); shown after status_after_s, hidden at once. The
- *  boot screen waits for the first report that is ok (or auth). */
+/** Report the link status (FD_STATUS_*); shown after status_after_s, hidden at once. */
 void  fd_set_status(fluid_director_t *d, int status);
 /** Advance by dt seconds. text_done: the reader is holding its last word. */
 void  fd_tick(fluid_director_t *d, float dt, bool text_done);

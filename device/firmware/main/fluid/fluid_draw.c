@@ -40,6 +40,7 @@
 #define DIM_FLOOR     0.16f   /* brightness of a 1-dot cell                               */
 #define SHIMMER_HZ    24.f    /* (used by the caller to derive `frame`)                   */
 #define DOT_W         0.26f   /* dot size as a fraction of the cell                       */
+#define WORD_INK      0.3f    /* a word's dot shows once the fluid under it is this dense   */
 #define DOT_H         0.15f
 
 #define KEY_EMPTY 0x0000u
@@ -202,7 +203,8 @@ static void draw_glyph(const fluid_rect_t *t, const uint8_t *gl, int x0, int y0,
     }
 }
 
-/* no contour ring around the condensed letters: cells next to a letter only dither */
+/* no contour ring around the condensed letters: cells next to a letter only dither (and
+ * none at all next to a word's dots) */
 static inline bool near_skip(const uint8_t *sk, int W, int H, int i, int j) {
     for (int dj = -1; dj <= 1; dj++) for (int di = -1; di <= 1; di++) {
         int x = i + di, y = j + dj;
@@ -249,7 +251,20 @@ static inline void cell_look(const fluid_draw_t *d, const fluid_frame_t *s, cons
     const bool feat = s->feat[k] != 0;
     int dots = -1;
     float smax = 0.f, cell_mean = -1.f;
-    if (feat) {
+    if (o->dots && o->dots[k]) {
+        /* a word's dots (fluid_text_set_glyphs): each one shows once the ink has reached it */
+        float sub[8], smin, smean;
+        subsample(s->view, W, k, sub, &smin, &smax, &smean);
+        int wd = 0;
+        for (int q = 0; q < 8; q++)
+            if (sub[q] > WORD_INK && (o->dots[k] >> fluid_braille_bit(q >> 2, q & 3)) & 1) wd |= 1 << fluid_braille_bit(q >> 2, q & 3);
+        if (wd) dots = wd;
+    } else if (o->dots && near_skip(o->dots, W, s->H, i, j)) {
+        *key_out = KEY_EMPTY; *col_out = 0; return;      /* clear around the word's strokes */
+    }
+    if (dots >= 0) {
+        /* the word's dots */
+    } else if (feat) {
         /* eyes / mouth: dark in the creature but must read on black — a solid block */
         if (mode != FLUID_EDGE_OFF) dots = 0xFF;
     } else if (mode != FLUID_EDGE_OFF) {

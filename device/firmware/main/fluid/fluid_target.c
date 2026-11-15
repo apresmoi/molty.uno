@@ -8,6 +8,7 @@
  */
 #include "fluid_sim.h"
 #include "fluid_ring.h"
+#include "glyph_font.h"   /* gc_font5x7 */
 
 #include <math.h>
 #include <stdlib.h>
@@ -144,10 +145,11 @@ fluid_text_t *fluid_text_create(const fluid_sim_t *s) {
     fluid_text_t *tx = FLUID_CALLOC(sizeof(fluid_text_t));
     if (!tx) return NULL;
     size_t N = (size_t)s->N;
-    tx->block = FLUID_CALLOC(6 * N * sizeof(float));
+    tx->block = FLUID_CALLOC(6 * N * sizeof(float) + N);
     if (!tx->block) { FLUID_FREE(tx); return NULL; }
     float *f = (float *)tx->block;
     tx->cov = f; tx->orp = f + N; tx->near = f + 2 * N; tx->near_s = f + 3 * N; tx->dark = f + 4 * N; tx->tmp = f + 5 * N;
+    tx->dots = (uint8_t *)(f + 6 * N);
     tx->stage = s->stage;
     tx->plain_font = 30.f;
     return tx;
@@ -208,6 +210,46 @@ void fluid_text_set_word(fluid_text_t *tx, const fluid_sim_t *s, const char *w, 
         tx->cov[k] = inL * 0.62f; tx->orp[k] = isO;
     }
     text_shape(tx, W, H, N);
+}
+
+/* 5x7 lowercase (gc_font5x7 draws lowercase as uppercase): rows top down, bit 4 the left */
+static const uint8_t LOWER[26][7] = {
+    {0,0,0x0e,1,0x0f,0x11,0x0f}, {0x10,0x10,0x16,0x19,0x11,0x11,0x1e}, {0,0,0x0e,0x10,0x10,0x11,0x0e},
+    {1,1,0x0d,0x13,0x11,0x11,0x0f}, {0,0,0x0e,0x11,0x1f,0x10,0x0e}, {6,9,8,0x1c,8,8,8},
+    {0,0x0f,0x11,0x11,0x0f,1,0x0e}, {0x10,0x10,0x16,0x19,0x11,0x11,0x11}, {4,0,0x0c,4,4,4,0x0e},
+    {2,0,6,2,2,0x12,0x0c}, {0x10,0x10,0x12,0x14,0x18,0x14,0x12}, {0x0c,4,4,4,4,4,0x0e},
+    {0,0,0x1a,0x15,0x15,0x11,0x11}, {0,0,0x16,0x19,0x11,0x11,0x11}, {0,0,0x0e,0x11,0x11,0x11,0x0e},
+    {0,0,0x1e,0x11,0x1e,0x10,0x10}, {0,0,0x0d,0x13,0x0f,1,1}, {0,0,0x16,0x19,0x10,0x10,0x10},
+    {0,0,0x0e,0x10,0x0e,1,0x1e}, {8,8,0x1c,8,8,9,6}, {0,0,0x11,0x11,0x11,0x13,0x0d},
+    {0,0,0x11,0x11,0x11,0x0a,4}, {0,0,0x11,0x11,0x15,0x15,0x0a}, {0,0,0x11,0x0a,4,0x0a,0x11},
+    {0,0,0x11,0x11,0x0f,1,0x0e}, {0,0,0x1f,2,4,8,0x1f},
+};
+
+static bool glyph_px(char c, int col, int row) {
+    if (col < 0 || col > 4 || row < 0 || row > 6) return false;
+    const uint8_t *g = c >= 'a' && c <= 'z' ? LOWER[c - 'a'] : gc_font5x7(c);
+    return (g[row] >> (4 - col)) & 1;
+}
+
+void fluid_text_set_glyphs(fluid_text_t *tx, const fluid_sim_t *s, const char *w) {
+    const int W = s->W, H = s->H, len = (int)strlen(w);
+    /* on the dot lattice (2W x 4H, fluid_draw's dot centres): one font px is 2 dots wide and
+     * 3 tall, so every stroke is whole dots; centred, clipped to the grid */
+    const int X0 = (2 * W - (len * 6 - 1) * 2) / 2, Y0 = (4 * H - 7 * 3) / 2;
+    tx->nletters = 0;
+    for (int j = 0; j < H; j++) for (int i = 0; i < W; i++) {
+        const int k = j * W + i;
+        uint8_t dots = 0;
+        for (int c = 0; c < 2; c++) for (int r = 0; r < 4; r++) {
+            const int X = 2 * i + c - X0, Y = 4 * j + r - Y0;
+            if (X < 0 || Y < 0 || X / 12 >= len) continue;
+            if (glyph_px(w[X / 12], X % 12 / 2, Y / 3)) dots |= (uint8_t)(1u << fluid_braille_bit(c, r));
+        }
+        tx->dots[k] = dots;
+        tx->cov[k] = dots ? 0.9f : 0.f; tx->orp[k] = 0.f;   /* the ink pools under the dots */
+    }
+    text_shape(tx, W, H, s->N);
+    memset(tx->near, 0, sizeof(float) * (size_t)s->N);     /* no glow between the strokes */
 }
 
 /* A question's labels: the word's rules (letter boxes, ink 0.62 under each letter, the
