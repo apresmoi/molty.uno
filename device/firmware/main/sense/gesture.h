@@ -97,6 +97,15 @@ typedef struct { bool pending; uint32_t t0; } gesture_tapper_t;
 gesture_taps_t gesture_tapper_feed(gesture_tapper_t *t, uint32_t now_ms, bool double_bound);
 gesture_taps_t gesture_tapper_poll(gesture_tapper_t *t, uint32_t now_ms);
 
+/* A switch button (the `screen` binding): a click on release, or a hold once it has been down
+ * GESTURE_SWITCH_HOLD_MS (then its release is nothing). Fed every poll with the level;
+ * gesture_switch_reset forgets a press (pairing, another binding). */
+#define GESTURE_SWITCH_HOLD_MS 1500u
+typedef enum { GESTURE_SW_NONE, GESTURE_SW_CLICK, GESTURE_SW_HOLD } gesture_sw_t;
+typedef struct { bool down, armed; uint32_t t0; } gesture_switch_t;
+gesture_sw_t gesture_switch_feed(gesture_switch_t *s, bool down, uint32_t now_ms);
+static inline void gesture_switch_reset(gesture_switch_t *s) { s->armed = false; }
+
 /* The human's bindings: what each input does (cmd gestures, /api/creature/state, NVS). */
 typedef enum { GESTURE_IN_TAP, GESTURE_IN_DOUBLE_TAP, GESTURE_IN_BUTTON_ACCEPT, GESTURE_IN_BUTTON_REJECT, GESTURE_IN_COUNT } gesture_input_t;
 /* screen (a button's): a press turns the screen off / on, a double press (GESTURE_DOUBLE_TAP_MS)

@@ -12,7 +12,8 @@
  * A tap during a recording stops it and sends (after its first second), a tap while a say
  * waits for its first audio cancels the wait; otherwise tap, double tap and the two buttons do
  * what the human bound them to (gesture.h: none, talk, event, stop, and a button's screen:
- * a press switches the screen, a double press do not disturb, or hold: held to talk; pairing
+ * a click (pressed and let go) switches the screen, a double click do not disturb, held
+ * 1.5 s it says goodbye and powers off (power_off); or hold: held to talk; pairing
  * and a pending question always come first). A talk names its input on the shake event. A shake's phantom taps are dropped (gesture_tap_guarded).
  * Nothing leaves while a pairing is pending (its tap and buttons decide the pairing) or
  * while the link is down; events are not queued for later. A shake with "shake to talk" on
@@ -92,7 +93,7 @@ static void button_do(bool accept)
     else gesture_do(accept ? GESTURE_IN_BUTTON_ACCEPT : GESTURE_IN_BUTTON_REJECT, ev);
 }
 
-/* The screen switch's presses (gesture_tapper_t: one press waits out the double window). */
+/* The screen switch's clicks (gesture_tapper_t: one click waits out the double window). */
 static void screen_do(gesture_taps_t presses)
 {
     if (presses == GESTURE_TAPS_SINGLE) mole_fluid_screen(!mole_fluid_screen_on());
@@ -118,6 +119,7 @@ static void sense_task(void *arg)
                     shake_l = { .min_ms = SHAKE_MIN_MS };
     const bool imu = molty_board_has(MOLTY_CAP_IMU);
     bool prev[2] = { molty_button_pressed(MOLTY_BTN_ACCEPT), molty_button_pressed(MOLTY_BTN_REJECT) };
+    gesture_switch_t sw[2] = { { .down = prev[0] }, { .down = prev[1] } };
     uint32_t last_imu = 0, next_status = 0;
     const TickType_t period = pdMS_TO_TICKS(SENSE_PERIOD_MS) > 0 ? pdMS_TO_TICKS(SENSE_PERIOD_MS) : 1;
     TickType_t wake = xTaskGetTickCount();
@@ -152,13 +154,13 @@ static void sense_task(void *arg)
             bool on = molty_button_pressed((molty_button_t)b);
             const bool screen = gesture_binds_get(mole_fluid_gestures(), b == MOLTY_BTN_ACCEPT ? GESTURE_IN_BUTTON_ACCEPT
                                                   : GESTURE_IN_BUTTON_REJECT) == GESTURE_DO_SCREEN && !link_ask_pending();
-            if (pairing || !screen) presser[b].pending = false;
-            if (on && !prev[b] && !pairing) {
-                if (screen) screen_do(gesture_tapper_feed(&presser[b], now, true));
-                else {
-                    mole_fluid_event(MOLE_FLUID_BUTTON);
-                    if (gesture_limit_allow(&btn_l, now)) button_do(b == MOLTY_BTN_ACCEPT);
-                }
+            const gesture_sw_t click = gesture_switch_feed(&sw[b], on, now);
+            if (pairing || !screen) { presser[b].pending = false; gesture_switch_reset(&sw[b]); }
+            else if (click == GESTURE_SW_CLICK) screen_do(gesture_tapper_feed(&presser[b], now, true));
+            else if (click == GESTURE_SW_HOLD) { presser[b].pending = false; power_off(); }
+            if (on && !prev[b] && !pairing && !screen) {
+                mole_fluid_event(MOLE_FLUID_BUTTON);
+                if (gesture_limit_allow(&btn_l, now)) button_do(b == MOLTY_BTN_ACCEPT);
             }
             screen_do(gesture_tapper_poll(&presser[b], now));
             if (!on && prev[b]) link_audio_hold(false, NULL);   /* let go: a held talk sends */

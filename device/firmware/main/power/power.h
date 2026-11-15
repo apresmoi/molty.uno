@@ -9,6 +9,9 @@
  *            the human (an utterance's turn_id), docs/AGENT-LINK.md. The binding's double
  *            press toggles it; kept in NVS ("power"/"dnd"); the link reports it after each
  *            welcome and each change ({"t":"evt","name":"dnd","data":{"on":bool}}).
+ *   off      power_off: the PWR long press (sense.c). Audio stops, the goodbye plays
+ *            (mole_fluid_goodbye), the history is saved, the board cuts its power
+ *            (molty_power_off); when it cannot (USB keeps it up) the device restarts.
  *   history  once a minute, one sample: the battery (mV, gauge %, charging, USB power)
  *            and how the minute was spent (seconds with the screen on, seconds of audio,
  *            the link up, Wi-Fi RSSI, dnd), so a drain can be pinned on what ran. An
@@ -38,6 +41,8 @@ void     power_dnd_set(bool on);
 /** Moves at every dnd change (never 0): the link resends the state when it differs from
  *  the generation the relay has (0 after each welcome). */
 unsigned power_dnd_gen(void);
+/** The goodbye, then the power off (the header's "off"). From any task; once. */
+void     power_off(void);
 
 esp_err_t power_http_register(httpd_handle_t server);
 

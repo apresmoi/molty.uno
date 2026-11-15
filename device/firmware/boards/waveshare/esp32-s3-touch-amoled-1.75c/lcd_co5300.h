@@ -18,6 +18,7 @@ esp_err_t lcd_co5300_init(void);
 uint16_t *lcd_co5300_framebuffer(void);
 /** The panel asleep (false: brightness 0, display off, sleep in) or awake; RAM is kept. */
 esp_err_t lcd_co5300_power(bool on);
+esp_err_t lcd_co5300_level(uint8_t level);   /* brightness 0..255 */
 esp_err_t lcd_co5300_flush(void);
 esp_err_t lcd_co5300_flush_rows(int y0, int y1);
 /** w×h packed px (wire order) at (x, y), x and w even; returns once px may be reused. */

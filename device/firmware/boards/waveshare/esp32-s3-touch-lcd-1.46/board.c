@@ -22,6 +22,8 @@
 #include "qmi8658.h"
 
 #include "driver/gpio.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "driver/i2c_master.h"
 #include "esp_log.h"
 
@@ -43,6 +45,14 @@ static void early_init(void)
     gpio_config(&pwr_cfg);
     gpio_set_level(BOARD_PWR_LATCH, 1);
     ESP_LOGI(TAG, "battery power latched (GPIO %d = HIGH)", BOARD_PWR_LATCH);
+}
+
+/* The latch low: on battery the power goes once PWR is let go; USB keeps it up. */
+static esp_err_t power_off(void)
+{
+    gpio_set_level(BOARD_PWR_LATCH, 0);
+    vTaskDelay(pdMS_TO_TICKS(500));
+    return ESP_ERR_INVALID_STATE;
 }
 
 static uint32_t init(void)
@@ -131,6 +141,7 @@ const molty_board_t molty_board_desc = {
     .flush_rows  = mole_lcd_flush_rows,
     .blit        = mole_lcd_blit,
     .display_power = mole_lcd_power,
+    .power_off     = power_off,
 
     .touch_poll     = mole_touch_poll,
     .imu_get        = qmi8658_get,

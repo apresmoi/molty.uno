@@ -10,9 +10,12 @@
  *   mic      ES7210 ADC, two mics     ┘
  *   buttons  BOOT = accept, PWR = reject (pairing)
  *   battery  AXP2101 PMU, I2C 0x34: VBAT ADC, fuel gauge %, charger and VBUS status
+ *   power    the PMU's shutdown bit (power_off: the PWR long press's goodbye, power.c)
  *   usb_net  native USB on the USB-C port (TinyUSB NCM)
  *
- * No power latch: the AXP2101 keeps the board on until a long PWR press. The display
+ * No power latch: the AXP2101 keeps the board on until a long PWR press. The
+ * firmware turns it off first (its goodbye after 1.5 s held); the PMU's own cutoff is
+ * moved to 10 s, the way out of a hung firmware. The display
  * has its own SPI bus; everything else shares the I2C bus, PMU first (ALDO1 feeds the
  * codecs). Pins: board.h.
  */
@@ -23,6 +26,8 @@
 #include "audio_es.h"
 #include "qmi8658.h"
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "esp_log.h"
@@ -32,6 +37,8 @@ static const char *TAG = "board-1.75c";
 /* ── AXP2101 (register map: the vendor's 01_AXP2101 demo, axp2101_registers.h) ── */
 #define AXP_STATUS1     0x00        /* bit 5: VBUS good, bit 3: battery present  */
 #define AXP_STATUS2     0x01        /* bits 7..5: 001 charging, 010 discharging  */
+#define AXP_COMMON      0x10        /* bit 0: shut down now                      */
+#define AXP_KEY_LEVEL   0x27        /* bits 3..2: PWR held to cut off, 4/6/8/10 s */
 #define AXP_GAUGE_CTRL  0x18        /* bit 3: fuel gauge on                      */
 #define AXP_IC_TYPE     0x03        /* 0x4A                                      */
 #define AXP_ADC_CTRL    0x30        /* bit 0: VBAT channel                       */
@@ -65,6 +72,8 @@ static esp_err_t pmu_init(i2c_master_bus_handle_t bus)
     if (e == ESP_OK && !(adc & 0x01)) e = pmu_wr(AXP_ADC_CTRL, adc | 0x01);
     if (e == ESP_OK) e = pmu_rd(AXP_GAUGE_CTRL, &v, 1);
     if (e == ESP_OK && !(v & 0x08)) e = pmu_wr(AXP_GAUGE_CTRL, v | 0x08);
+    if (e == ESP_OK) e = pmu_rd(AXP_KEY_LEVEL, &v, 1);
+    if (e == ESP_OK && (v & 0x0C) != 0x0C) e = pmu_wr(AXP_KEY_LEVEL, v | 0x0C);
     return e;
 }
 
@@ -79,6 +88,15 @@ static esp_err_t battery(molty_battery_t *out)
     out->charging = (st[1] >> 5) == 0x01;
     out->usb = (st[0] & 0x20) != 0;
     return ESP_OK;
+}
+
+static esp_err_t power_off(void)
+{
+    uint8_t v = 0;
+    esp_err_t e = pmu_rd(AXP_COMMON, &v, 1);
+    if (e == ESP_OK) e = pmu_wr(AXP_COMMON, v | 0x01);
+    if (e == ESP_OK) vTaskDelay(pdMS_TO_TICKS(500));    /* USB power can keep it up */
+    return e == ESP_OK ? ESP_ERR_INVALID_STATE : e;
 }
 
 static uint32_t init(void)
@@ -164,6 +182,8 @@ const molty_board_t molty_board_desc = {
     .flush_rows  = lcd_co5300_flush_rows,
     .blit        = lcd_co5300_blit,
     .display_power = lcd_co5300_power,
+    .display_level = lcd_co5300_level,
+    .power_off     = power_off,
 
     .touch_poll     = cst9217_poll,
     .imu_get        = qmi8658_get,

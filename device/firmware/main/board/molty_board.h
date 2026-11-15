@@ -17,6 +17,9 @@
  *             framebuffer (PSRAM) stays out of the frame loop.
  *             Optional display_power: the panel off (and back on) while the screen is
  *             off (mole_fluid_screen); without it the fluid only stops drawing.
+ *             Optional display_level: the panel's brightness (the goodbye fades it).
+ *   power_off optional: the board cuts its own power (the PWR long press, power.c);
+ *             without it, or while USB keeps it up, the screen only goes off.
  *   touch, imu, mic, speaker, accept / reject buttons, battery, usb_net, serial
  *             optional: leave the op NULL and drop the MOLTY_CAP_ bit. The core asks
  *             molty_board_has() and degrades — no mic/speaker: voice endpoints and
@@ -121,6 +124,8 @@ typedef struct {
     esp_err_t (*flush_rows)(int y0, int y1);      /* full-width rows [y0, y1)                    */
     esp_err_t (*blit)(int x, int y, int w, int h, const uint16_t *px);   /* optional: see molty_display_blit */
     esp_err_t (*display_power)(bool on);          /* optional: panel off / on (sleep, backlight)  */
+    esp_err_t (*display_level)(uint8_t level);    /* optional: brightness 0..255 (255 at power on) */
+    esp_err_t (*power_off)(void);                 /* optional: cut the power; returns only on failure */
 
     /* optional — NULL when absent */
     int       (*touch_poll)(uint16_t *xs, uint16_t *ys, int max);   /* panel px; returns count  */
@@ -192,6 +197,10 @@ esp_err_t molty_display_blit(int x, int y, int w, int h, const uint16_t *px);
 /** The panel off (false) or on. ESP_ERR_NOT_SUPPORTED when the board cannot; the caller
  *  stops drawing either way. */
 esp_err_t molty_display_power(bool on);
+/** The panel's brightness, 0..255. ESP_ERR_NOT_SUPPORTED when the board cannot. */
+esp_err_t molty_display_level(uint8_t level);
+/** Cut the power. Returns only when it could not (ESP_ERR_NOT_SUPPORTED without the op). */
+esp_err_t molty_power_off(void);
 
 /** Poll touch; feeds the pairing tap detector. 0 points without touch. */
 int       molty_touch_poll(uint16_t *xs, uint16_t *ys, int max);

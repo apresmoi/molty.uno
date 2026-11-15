@@ -59,6 +59,8 @@
  *            └───┴───────────────────────────────────────┘
  *   fd_boot: "molty.uno" (TEXT) ─ boot_word_s ─▶ boot creature paddling ─ link / ttl ─▶ the
  *            human's CREATURE; anything wanting the screen ends it on the spot.
+ *   fd_bye:  "bye!" (TEXT) ─ bye_word_s ─▶ the ripple pond, fading out ─ bye_pond_s ─▶ done
+ *            (fd_bye_done: the power goes off). Nothing ends it: every request is ignored.
  *   "autoplay" only: the reel (blob ▸ creature ▸ effects ▸ text) until any other request.
  */
 #pragma once
@@ -101,6 +103,8 @@ typedef struct {
     float boot_word_s;                /* boot screen: the word condenses, holds, melts: 2.8 */
     float boot_ttl_s;                 /* ...the link has this long to come up: 20      */
     float boot_gap_s;                 /* ...between two of the creature's strokes: 0.3 */
+    float bye_word_s;                 /* power off: "bye!" condenses and holds: 1.8    */
+    float bye_pond_s;                 /* ...melts into a pond that fades to black: 2.2 */
 } fd_cfg_t;
 extern const fd_cfg_t FD_CFG_DEFAULT;
 
@@ -148,6 +152,8 @@ typedef struct {
     int   boot_step;                  /* the stroke loop's position                   */
     bool  boot_home, boot_wait;       /* fd_boot's home / wait                         */
     bool  home_due;                   /* the boot ended: load the human's creature now */
+    bool  bye;                        /* fd_bye: saying goodbye, the power goes off after */
+    float bye_t;                      /* s into it                                     */
 } fluid_director_t;
 
 /** Boot: autoplay off, the creature wanted (shown once fd_set_creature(true)). cfg NULL =
@@ -158,6 +164,12 @@ void  fd_init(fluid_director_t *d, const fd_cfg_t *cfg, uint32_t seed);
  *  fd_take_home); wait: Wi-Fi is configured, so wait for the link (else it ends after the word). */
 void  fd_boot(fluid_director_t *d, bool home, bool wait);
 bool  fd_boot_word(const fluid_director_t *d);   /* the text state shows the boot word */
+/** Power off: the goodbye (the header's "fd_bye"). Ends the boot screen, autoplay, moods and
+ *  acts; from here every request is ignored. */
+void  fd_bye(fluid_director_t *d);
+bool  fd_bye_word(const fluid_director_t *d);    /* the text state shows the goodbye word */
+float fd_bye_level(const fluid_director_t *d);   /* the panel's brightness, 1 → 0 over the pond */
+bool  fd_bye_done(const fluid_director_t *d);    /* the goodbye is over: power off now */
 /** The boot screen ended and the human's creature is due: load it now (true once). */
 bool  fd_take_home(fluid_director_t *d);
 /** A creature (.molty) is (not) loaded. Loading one while the creature was wanted but the
