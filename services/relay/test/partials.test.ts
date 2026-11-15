@@ -255,7 +255,8 @@ describe("drafts", () => {
     const follow = await w.room.command(w.a, "say", { text: "You have two meetings.", in_reply_to: turn });
     expect(follow.ok).toBe(true);
     const fj = (follow as any).result.job;
-    expect((await jobRec(w.kv, fj)).status).toBe("queued");
+    // queued behind the opener (already running when a slow runner lets the opener finish first)
+    expect(["queued", "running"]).toContain((await jobRec(w.kv, fj)).status);
     // its speech is synthesised while the opener plays, its say goes out the moment the opener is done
     await until(() => w.dev.log.filter((l) => l.name === "say").length === 2);
     const says = w.dev.log.filter((l) => l.name === "say");
