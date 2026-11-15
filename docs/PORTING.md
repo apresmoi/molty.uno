@@ -43,14 +43,14 @@ molty.uno/build restates this table as "Will my board work?"
 
 | Capability | Without it |
 |---|---|
-| `display` (required) | the fluid runs but nothing is shown |
+| `display` (required) | the fluid runs but nothing is shown. Optional `display_power`: without it, screen off is one black frame and the panel stays lit |
 | `touch` | no ripples from a finger; pairing is accepted on the accept button |
 | `imu` | no tilt; `/api/imu/snapshot`, `/ws/imu` and the link's `imu` answer `unsupported` |
 | `speaker` | `/api/audio/{tone,play,play_wav,volume}` and the link's `say`/`volume` answer `unsupported`; the hello frame leaves `say` out of `caps`, so the relay refuses it before spending TTS |
 | `mic` | `/api/audio/record`, `/ws/audio/mic` and the link's `listen` answer `unsupported` (hello leaves `listen` out) |
 | `btn_accept` | pairing is accepted by touch only (with neither, pairing is refused) |
 | `btn_reject` | pairing is rejected only by its 110 s timeout |
-| `battery` | no `battery_mv` in `/api/info` |
+| `battery` | no `battery_mv` in `/api/info`, `battery: null` in `/api/power` (the history still counts screen and audio time) |
 | `usb_net` | no `http://10.13.37.1` over USB-C: the device is reached over Wi-Fi only (see below) |
 | `serial` | no Wi-Fi setup over the cable (Improv) and no serial logs; declare it when USB-C goes through a USB-UART bridge to the console UART |
 

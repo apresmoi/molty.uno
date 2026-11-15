@@ -126,6 +126,7 @@ idf_component_register(
         "sense/gesture.c"
         "sense/shake_settle.c"   # shake to talk: when the handling noise is over (host-tested)
         "sense/sense.c"
+        "power/power.c"          # screen off, do not disturb, the battery history (/api/power)
         # board: the seam to the hardware (molty_board.h) + the selected board's drivers
         "board/molty_board.c"
         ${MOLTY_BOARD_SRCS}
@@ -145,6 +146,7 @@ idf_component_register(
         "scene"
         "audio"
         "sense"
+        "power"
         "board"
         "diag"
         ${MOLTY_BOARD_INCLUDE_DIRS}

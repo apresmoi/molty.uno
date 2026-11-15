@@ -54,7 +54,7 @@ import {
   type ActivityOwnerRequest,
 } from "./api.js";
 import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
-import { CREATURES_CAP, DEFAULT_WPM, PKG_CAP, SCENE_CAP, WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, GESTURES_CAP, RESUME_CAP, RESUME_FEATURE, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, MAX_KEEP_WORDS, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
+import { CREATURES_CAP, DND_CAP, PROGRESS_CAP, DEFAULT_WPM, PKG_CAP, SCENE_CAP, WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, GESTURES_CAP, RESUME_CAP, RESUME_FEATURE, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, MAX_KEEP_WORDS, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
 import { FIRST_WORDS_MODES, type FirstWordsMode, type LinePlay, OPENER, type OpenerMessage, clauseEnd, guardOpener, hangs, planReply, pushHistory } from "./opener.js";
 import { PcmFeed, estimateSpeechMs, speechWords, splitSpeech, synthesize } from "./speech.js";
 import { DEFAULT_PARTIAL_POLICY, DRAFT_DROPPED_EVENT, DRAFT_USED_EVENT, type DropReason, PARTIAL_EVENT, PartialChunker, PauseTracker, judgeDraft, words } from "./partials.js";
@@ -79,7 +79,7 @@ import {
   type JsonObject,
 } from "./protocol.js";
 import { type Clock, type KV, sleep } from "./store.js";
-import { type AgentEvent, CREATURE_EVENT, DEFAULT_WEBHOOK_EVENTS, type DeviceCreature, INBOX_LIMITS, SAMPLE_EVENTS, UTTERANCE_EVENT, agentEventData, creatureData, eventId, webhookWants } from "./events.js";
+import { type AgentEvent, CREATURE_EVENT, DND_EVENT, DEFAULT_WEBHOOK_EVENTS, type DeviceCreature, INBOX_LIMITS, SAMPLE_EVENTS, UTTERANCE_EVENT, agentEventData, creatureData, eventId, webhookWants } from "./events.js";
 import { LISTEN_ADOPT_FEATURE, LOCAL_LISTEN_RE, type TurnClaim, type TurnRecord, claimTurn, turnTimings, utteranceData } from "./turns.js";
 import { API_VERSION, FEATURES, compareVersions } from "./version.js";
 import type { ReleaseLookup, ReleaseSource } from "./releases.js";
@@ -387,6 +387,8 @@ interface ListenBuffer {
   turnEndAt?: number;
   /** Semantic end of turn is THE end: the device's VAD was turned off for this listen (voice box + listen_stop). */
   semantic?: boolean;
+  /** A button held to talk: only its release (or the window) ends it, never an end of turn. */
+  hold?: boolean;
   /** The streaming STT failed while the listen was open. */
   boxFailed?: boolean;
   /** The device's socket closed (or was replaced) before its end frame. */
@@ -556,6 +558,8 @@ interface OpenTurn {
   drafts: Map<string, HeldDraft>;
   /** An agent reacted during this turn: the reflex yields to it for the rest of the turn. */
   agentReacted?: boolean;
+  /** What woke Molty: "shake" or the gesture bound to talk (the utterance's `input`). */
+  input: string;
 }
 
 /** The opener being spoken for a turn, and who owns it (their follow-up queues behind it). */
@@ -651,6 +655,8 @@ const K = {
   speech: "speech",
   /** The creature on its screen, as the device last reported it (events.ts creatureData). */
   creature: "creature",
+  /** Do not disturb, as the device last reported it (its `dnd` event). */
+  dnd: "dnd",
 };
 
 /** Device-facing name of a voice box pairing (the console shows it next to the code). */
@@ -1019,6 +1025,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (frame.name === "pkg") return this.onPkgEvent(data); // relay-internal: ends the pkg.install job
     if (frame.name === "shake") return this.onShake(data); // may start the shake's listen job
     if (frame.name === CREATURE_EVENT) return this.onCreature(data); // kept; agents hear of a change
+    if (frame.name === DND_EVENT) return this.onDnd(data); // kept; gates unprompted speech
     const clean = agentEventData(frame.name, data);
     if (clean) await this.appendEvent(frame.name, clean);
     if (clean) await this.activity.device(frame.name, clean);
@@ -1046,6 +1053,20 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     }
     this.pendingAsks.delete(job);
     p.resolve(answer);
+  }
+
+  /** Device `dnd` (on each welcome and each change): kept for the gate and status; a change is an event. */
+  private async onDnd(data: Record<string, unknown>) {
+    if (typeof data.on !== "boolean") return;
+    if (((await this.kv.get<boolean>(K.dnd)) ?? false) === data.on) return;
+    await this.kv.put<boolean>(K.dnd, data.on);
+    await this.appendEvent(DND_EVENT, { on: data.on }, true);
+  }
+
+  /** Do not disturb is on (a device that reports it, `dnd` in caps): unprompted speech, listens and questions are refused. */
+  private async disturbs(inReplyTo: string | undefined): Promise<ReturnType<typeof fail> | undefined> {
+    if (inReplyTo !== undefined || !this.liveSocket()?.getMeta()?.caps?.includes(DND_CAP) || !(await this.kv.get<boolean>(K.dnd))) return undefined;
+    return fail("do_not_disturb", "the human turned on do not disturb: speak, listen or ask only in reply to an utterance (in_reply_to)");
   }
 
   /** Device `creature` (on each welcome and each change): kept for utterances and status; a new one is an event. */
@@ -1189,6 +1210,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       const hush = this.humanSpeaking();
       if (hush) return hush;
     }
+    if (cmd.name === "say" || cmd.name === "quick" || cmd.name === "listen") {
+      const dnd = await this.disturbs(cmd.in_reply_to);
+      if (dnd) return dnd;
+    }
     if (cmd.name === "pkg.available") return this.available();
     const live = this.liveSocket();
     if (!live) return fail("device_offline");
@@ -1208,6 +1233,14 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         const old = tooOld("working", await this.facts(), await this.releases.latest("wait"));
         if (old) return fail("firmware_too_old", `this needs Molty firmware ${old.needed} or newer; this Molty runs ${old.current}`, old);
         return fail("unsupported", "this Molty has no working mood (no `working` in its caps)");
+      }
+    }
+    if (cmd.name === "progress") {
+      const caps = live.getMeta()?.caps;
+      if (!caps?.includes(PROGRESS_CAP)) {
+        const old = tooOld("progress", await this.facts(), await this.releases.latest("wait"));
+        if (old) return fail("firmware_too_old", `molty_progress needs Molty firmware ${old.needed} or newer; this Molty runs ${old.current}`, old);
+        return fail("unsupported", "this Molty has no progress ring (no `progress` in its caps): update it");
       }
     }
     if (cmd.name.startsWith("pkg.") || cmd.name.startsWith("scene.")) {
@@ -1257,7 +1290,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       return this.startJob(cmd.name as "say" | "listen", cmd.args, true, by);
     }
     let res: Outcome<JsonObject>;
-    if (cmd.name === "mood" || cmd.name === "scene.play") {
+    if (cmd.name === "mood" || cmd.name === "progress" || cmd.name === "scene.play") {
       // Counted only once the device took it: a refused mood (pairing prompt up, bad
       // state) must not silence the automatic thinking/idle that follows.
       this.screenInFlight++;
@@ -1269,7 +1302,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       if (res.ok) this.screenRev++;
     } else res = await this.sendCmd(cmd.name, cmd.args);
     // the agent is on it (a feeling, text, a gesture): Molty's own filler stands down
-    if (res.ok && (cmd.name === "mood" || cmd.name === "show" || cmd.name === "act" || cmd.name === "scene.play" || (cmd.name === "state" && Object.keys(cmd.args).length > 0))) this.agentSeq++;
+    if (res.ok && (cmd.name === "mood" || cmd.name === "progress" || cmd.name === "show" || cmd.name === "act" || cmd.name === "scene.play" || (cmd.name === "state" && Object.keys(cmd.args).length > 0))) this.agentSeq++;
     if (!res.ok || cmd.name !== "status") return res;
     const sock = this.liveSocket();
     const meta = sock?.getMeta();
@@ -1295,6 +1328,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
           creature: ((await this.kv.get<DeviceCreature>(K.creature)) ?? null) as JsonObject | null,
           // the skill's newest version (skills/molty/CHANGES.md); null until GitHub has answered once
           skill: this.skillVersion.peek() ?? null,
+          // do not disturb: speak, listen or ask only in reply to an utterance (null: the firmware does not say)
+          dnd: meta?.caps?.includes(DND_CAP) ? ((await this.kv.get<boolean>(K.dnd)) ?? false) : null,
           events,
           webhook: agent.webhook ? (redactWebhook(agent.webhook) as JsonObject) : null,
           firmware: firmware as unknown as JsonObject,
@@ -1453,7 +1488,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       if (e instanceof CommandError) return fail(e.code, e.message);
       throw e;
     }
-    const hush = this.humanSpeaking();
+    const hush = this.humanSpeaking() ?? (await this.disturbs(args.in_reply_to));
     if (hush) return hush;
     const live = this.liveSocket();
     if (!live) return fail("device_offline");
@@ -1506,7 +1541,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       if (e instanceof CommandError) return fail(e.code, e.message);
       throw e;
     }
-    const hush = this.humanSpeaking();
+    const hush = this.humanSpeaking() ?? (await this.disturbs(args.in_reply_to));
     if (hush) return hush;
     const live = this.liveSocket();
     if (!live) return fail("device_offline");
@@ -2631,6 +2666,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     this.cancelHang();
     this.line = undefined; // ...and the last turn's first words are not continued any more
     this.lastFill = undefined; // ...and a filler of an earlier turn no longer skips anyone's quick
+    const { hold, ...rest } = extra;
+    extra = hold === true ? { ...rest, vad: false } : rest; // held to talk: the release ends it, never a pause
     const t0 = this.clock.now();
     let pick = await this.pickVoice("stt");
     if (!pick.ok) return { ok: false, error: pick.error };
@@ -2640,14 +2677,14 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const shake = local ? this.shakes.get(local) : undefined;
     if (local) this.shakes.delete(local);
     if (shake) trace.shake = { at: shake.at - t0, ...shake.data };
-    const buf: ListenBuffer = { job: id, chunks: [], bytes: 0, ended: false, screenRev: this.screenRev, trace, order: new SeqOrder<DecodedAudio>(), roomGen: this.roomGen, pauses: new PauseTracker() };
+    const buf: ListenBuffer = { job: id, chunks: [], bytes: 0, ended: false, screenRev: this.screenRev, trace, order: new SeqOrder<DecodedAudio>(), roomGen: this.roomGen, pauses: new PauseTracker(), ...(hold === true ? { hold: true } : {}) };
     let fallback: string | undefined;
     // Semantic end of turn by default: when the voice box serves this listen and the firmware
     // can be stopped by it (listen_stop), the box's end of turn is THE end — the device's
     // silence VAD is turned off (it heard Molty's own tail and cut humans off), and the box
     // also calls no_speech. Not when the agent tuned the device VAD itself (vad /
     // end_silence_ms), nor on the cloud path or older firmware: those keep the device VAD.
-    const semantic = pick.box && extra.vad === undefined && extra.end_silence_ms === undefined && !!this.liveSocket()?.getMeta()?.caps?.includes("listen_stop");
+    const semantic = hold !== true && pick.box && extra.vad === undefined && extra.end_silence_ms === undefined && !!this.liveSocket()?.getMeta()?.caps?.includes("listen_stop");
     // Molty's reflex (core/reflex.ts): only on the box's streaming STT (its words while the human talks)
     if (pick.provider.sttStream && pick.box) buf.reflex = this.reflexFor(buf, pick.cfg);
     // Streaming STT (voice box): opened before the mic, so every chunk goes out the moment it arrives.
@@ -2896,7 +2933,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
    * (onAudio ignores an ended listen).
    */
   private onTurnEnd(buf: ListenBuffer, why?: "no_speech") {
-    if (buf.ended || this.listenBuf !== buf) return;
+    if (buf.ended || buf.hold || this.listenBuf !== buf) return;
     const now = this.clock.now();
     buf.ended = true;
     buf.relayEnded = true;
@@ -3021,7 +3058,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       // the adopted listen's turn trace starts with its shake (record() takes it by the local id)
       this.shakes.set(data.listen, { at: this.clock.now(), data: { peak_g: clean.peak_g ?? null, rev: clean.reversals ?? null, ms: clean.ms ?? null } });
       while (this.shakes.size > 4) this.shakes.delete(this.shakes.keys().next().value!);
-      const job = await this.adoptShake(data.listen);
+      const job = await this.adoptShake(data.listen, (clean.input as string | undefined) ?? "shake", clean.hold === true);
       if (job) Object.assign(clean, { listening: true, turn_id: job });
     }
     await this.appendEvent("shake", clean);
@@ -3033,16 +3070,16 @@ export class DeviceRoom implements AgentApi, OwnerApi {
    * Adopted: the human's turn is OPEN from here until its utterance (human_speaking for agents'
    * say / talk / ask / mood / show; drafts and reacts accepted), with this device's partial policy.
    */
-  private async adoptShake(local: string): Promise<string | undefined> {
+  private async adoptShake(local: string, input: string, hold: boolean): Promise<string | undefined> {
     const caps = this.liveSocket()?.getMeta()?.caps;
     const policy = { ...policyFor(await this.kv.get<SpeechStats>(K.speech)), lead_ms: this.t.partialLeadMs };
     const open = async (id: string): Promise<Outcome<JsonObject>> => {
       const now = this.clock.now();
-      this.openTurn = { id, startAt: now, chunker: new PartialChunker(policy, now), drafts: new Map() };
+      this.openTurn = { id, startAt: now, chunker: new PartialChunker(policy, now), drafts: new Map(), input };
       return { ok: true, result: {} };
     };
     const hears = (!caps || caps.includes("listen")) && !(await this.voiceIsOff());
-    const started = hears ? await this.startJob("listen", { adopt: local, trigger: "shake" }, true, undefined, open) : fail("unsupported");
+    const started = hears ? await this.startJob("listen", { adopt: local, trigger: "shake", ...(hold ? { hold: true } : {}) }, true, undefined, open) : fail("unsupported");
     if (started.ok) return started.result.job as string;
     // audio busy (a say / listen crossed the shake): the device ends its listen quietly
     void this.sendCmd("listen_stop", { job: local, reason: "no_speech" }).then((r) => {
@@ -3189,6 +3226,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         speech_ms: r.speech_ms ?? r.duration_ms,
         stt_ms: (r.timings.stt as number) ?? 0,
         trigger: "shake",
+        input: turn?.input ?? "shake",
         caps: this.liveSocket()?.getMeta()?.caps ?? [],
         ack: r.ack,
         voice: await this.voiceName(),

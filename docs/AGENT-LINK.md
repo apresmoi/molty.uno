@@ -874,6 +874,13 @@ idle life of its own.
   while words or a question cover the creature it waits up to 3 s, then is dropped. A sleeping
   creature wakes for it. Local twin: `POST /api/creature/state {act: "nod"}`; GET reports the
   action playing as `act`.
+- **`progress {pct?, step?, done?}`** (cap `progress`): how the agent's work goes. A thin line on
+  the listening ring's circle (`fluid_target_progress`, knobs in `fluid_ring.h`) fills clockwise
+  from 12 o'clock to `pct` (0..100, eased), or, without `pct`, a short comet circles. Each one
+  sets mood `working` (not while Molty speaks or listens) and keeps the ring up for 120 s;
+  `done: true` fills it, flashes it, melts it, and a working creature turns happy. `step` (≤ 80
+  bytes) stays in the relay's activity log; the device draws no text. Under the listening ring,
+  never over a question. A device without the cap answers `unsupported` / `firmware_too_old`.
 - **A creature's own gestures.** `ACTIONS` are the shared ones every creature plays; a creature
   package may add gestures of its own by name ([CREATURES.md](CREATURES.md#1-the-package), the cat's
   `eat`). The relay takes any `act` name `[a-z][a-z0-9_]{0,23}` (`GESTURE_RE`) and forwards it; the
@@ -908,12 +915,18 @@ pairing). Rate-limited on the device. `shake`, `tap` and `button` reach agents t
 | name | data | when |
 |---|---|---|
 | `say.done` | `{job}` | a `say` finished playing (its last PCM left the speaker) |
-| `shake` | `{peak_g, reversals, ms, listen?}` | the board was shaken (boards with an IMU): ≥ 3 sign reversals of > 1.2 g dynamic acceleration on one axis within 800 ms; ≤ 1 per 2 s. `peak_g` largest dynamic acceleration (g), `ms` first peak → detection; `listen` the local id of the listen it started ([Shake to talk](#shake-to-talk)) |
+| `shake` | `{peak_g, reversals, ms, listen?}` | the board was shaken (boards with an IMU): ≥ 3 sign reversals of > 1.2 g dynamic acceleration on one axis within 800 ms; ≤ 1 per 2 s. `peak_g` largest dynamic acceleration (g), `ms` first peak → detection; `listen` the local id of the listen it started ([Shake to talk](#shake-to-talk)); a gesture bound to talk sends the same event with `peak_g` 0 and `input` (`double_tap`, `button_accept`, ...), plus `hold: true` for a button held to talk (the relay then never ends that listen on an end of turn: only the release, a tap's stop, or the window) |
 | `tap` | `{x, y}` | a finger touched the screen (boards with touch); 0..1 of the panel from the top left; ≤ 4/s |
 | `double_tap` | `{x, y}` | two taps within 350 ms, when bound to `event` (out of the box a double tap talks) |
 | `button` | `{id: "accept"\|"reject"}` | a button was pressed (the board's accept / reject buttons); ≤ 4/s. For agents it means acknowledge / dismiss, never an answer (answers come only from `ask`) |
 | `answer` | `{job, index, label}` · `{job, index: null, reason: "timeout"\|"cancelled"}` | an `ask` ended: tapped (0-based `index`, `label` verbatim), timed out, or cancelled; one per job, never rate-limited |
+| `dnd` | `{on}` | after each welcome and each change (cap `dnd`): the human's do not disturb (the PWR button's double click, `POST /api/power`). Relay-internal: kept per device; while on, `say` / `quick` / `listen` / `talk` / `ask` without `in_reply_to` fail `do_not_disturb`, and agents get a `dnd` event on each change |
 | `creature` | `{id, name, about?, gestures?, moods?}` | after each welcome and whenever the creature on screen changes: a package's `cp_info` (`about` {look, gestures, moods}: its own words, [CREATURES.md](CREATURES.md) section 1; `gestures` it plays that the firmware knows; `moods` idle and its own), `{id: "", name}` for a `.molty`. Relay-internal: kept per device (below) |
+
+Screen off (the PWR button's `screen` binding, `POST /api/power {screen}`): the fluid stops
+simulating and drawing and the panel sleeps; a touch (not a tap), a shake, a button, new
+words, a question or a listen turns it back on. `GET /api/power` has the battery and the last
+12 h of per-minute samples (device/firmware/main/power/power.h).
 
 The device reacts to a shake by itself (a brief `surprised`), agent or not. While a `listen`
 records, a thin line of the fluid itself condenses just inside the screen's rim around Molty
@@ -930,7 +943,7 @@ constants: `device/firmware/main/sense/gesture.h`.
 ## Agent surfaces
 
 - **Remote MCP** `https://<relay>/mcp` (streamable HTTP), `Authorization: Bearer <agent_token>`.
-  Tools: `molty_pair`, `molty_talk`, `molty_ask`, `molty_status`, `molty_mood`, `molty_act`, `molty_show`, `molty_say`, `molty_listen`,
+  Tools: `molty_pair`, `molty_talk`, `molty_ask`, `molty_status`, `molty_mood`, `molty_act`, `molty_progress`, `molty_show`, `molty_say`, `molty_listen`,
   `molty_wait`, `molty_state`, `molty_volume`, `molty_imu`, `molty_diag`, `molty_log`, plus the
   relay-only `molty_talk`, `molty_ask`, `molty_events`, `molty_webhook` ([Events](#events-device--agents)),
   `molty_updates` and `molty_update` ([Firmware updates](#firmware-updates)), `molty_activity`

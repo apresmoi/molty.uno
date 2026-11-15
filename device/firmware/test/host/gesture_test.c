@@ -176,15 +176,37 @@ static void test_binds(void) {
     CHECK(gesture_binds_valid(p), "default valid");
     CHECK(gesture_binds_get(p, GESTURE_IN_TAP) == GESTURE_DO_EVENT, "tap: event");
     CHECK(gesture_binds_get(p, GESTURE_IN_DOUBLE_TAP) == GESTURE_DO_TALK, "double tap: talk");
-    CHECK(gesture_binds_get(p, GESTURE_IN_BUTTON_ACCEPT) == GESTURE_DO_EVENT, "accept: event");
-    CHECK(gesture_binds_get(p, GESTURE_IN_BUTTON_REJECT) == GESTURE_DO_EVENT, "reject: event");
+    CHECK(gesture_binds_get(p, GESTURE_IN_BUTTON_ACCEPT) == GESTURE_DO_HOLD, "accept: held to talk");
+    CHECK(gesture_binds_get(p, GESTURE_IN_BUTTON_REJECT) == GESTURE_DO_SCREEN, "reject: the screen switch");
     p = gesture_binds_set(p, GESTURE_IN_BUTTON_REJECT, GESTURE_DO_STOP);
     CHECK(gesture_binds_get(p, GESTURE_IN_BUTTON_REJECT) == GESTURE_DO_STOP, "set");
     CHECK(gesture_binds_get(p, GESTURE_IN_TAP) == GESTURE_DO_EVENT, "others kept");
     CHECK(!gesture_binds_valid(0x9u), "an unknown action in NVS is refused");
     CHECK(!gesture_binds_valid(0x10000u), "extra bits are refused");
     CHECK(gesture_input_lookup("double_tap") == GESTURE_IN_DOUBLE_TAP && gesture_input_lookup("nose") < 0, "input names");
-    CHECK(gesture_action_lookup("stop") == GESTURE_DO_STOP && gesture_action_lookup("dance") < 0, "action names");
+    CHECK(gesture_action_lookup("stop") == GESTURE_DO_STOP && gesture_action_lookup("screen") == GESTURE_DO_SCREEN && gesture_action_lookup("dance") < 0, "action names");
+}
+
+/* The screen switch: a click on release, a hold at 1.5 s while still down (its release is
+ * nothing), a forgotten press (pairing) never clicks, a button held through boot never does. */
+static void test_switch(void) {
+    gesture_switch_t w = { 0 };
+    CHECK(gesture_switch_feed(&w, true, 1000) == GESTURE_SW_NONE, "pressed: nothing yet");
+    CHECK(gesture_switch_feed(&w, true, 1200) == GESTURE_SW_NONE, "still down");
+    CHECK(gesture_switch_feed(&w, false, 1250) == GESTURE_SW_CLICK, "let go quickly: a click");
+    CHECK(gesture_switch_feed(&w, false, 1300) == GESTURE_SW_NONE, "up: nothing");
+    gesture_switch_feed(&w, true, 2000);
+    CHECK(gesture_switch_feed(&w, true, 2000 + GESTURE_SWITCH_HOLD_MS - 1) == GESTURE_SW_NONE, "not held long enough");
+    CHECK(gesture_switch_feed(&w, true, 2000 + GESTURE_SWITCH_HOLD_MS) == GESTURE_SW_HOLD, "held: the hold, while down");
+    CHECK(gesture_switch_feed(&w, true, 5000) == GESTURE_SW_NONE, "the hold fires once");
+    CHECK(gesture_switch_feed(&w, false, 5100) == GESTURE_SW_NONE, "its release is no click");
+    gesture_switch_feed(&w, true, 6000);
+    gesture_switch_reset(&w);
+    CHECK(gesture_switch_feed(&w, true, 9000) == GESTURE_SW_NONE && gesture_switch_feed(&w, false, 9100) == GESTURE_SW_NONE,
+          "a forgotten press: no hold, no click");
+    gesture_switch_t boot = { .down = true };
+    CHECK(gesture_switch_feed(&boot, true, 9000) == GESTURE_SW_NONE && gesture_switch_feed(&boot, false, 9100) == GESTURE_SW_NONE,
+          "down since boot (the power-on press): no click");
 }
 
 int main(void) {
@@ -197,6 +219,7 @@ int main(void) {
     test_tap_guard();
     test_tap_route();
     test_tapper();
+    test_switch();
     test_binds();
     printf("%d passed, %d failed\n", s_pass, s_fail);
     return s_fail ? 1 : 0;

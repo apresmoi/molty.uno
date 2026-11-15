@@ -275,7 +275,7 @@ cJSON *link_evt_creature_frame(const char *info)
     return j;
 }
 
-cJSON *link_evt_shake_frame(double peak_g, int reversals, unsigned ms, const char *listen)
+cJSON *link_evt_shake_frame(double peak_g, int reversals, unsigned ms, const char *listen, const char *input, bool hold)
 {
     cJSON *data, *j = evt("shake", &data);
     if (j) {
@@ -283,6 +283,8 @@ cJSON *link_evt_shake_frame(double peak_g, int reversals, unsigned ms, const cha
         cJSON_AddNumberToObject(data, "reversals", reversals);
         cJSON_AddNumberToObject(data, "ms", ms);
         if (listen) cJSON_AddStringToObject(data, "listen", listen);
+        if (input) cJSON_AddStringToObject(data, "input", input);
+        if (hold) cJSON_AddBoolToObject(data, "hold", true);
     }
     return j;
 }
@@ -324,6 +326,13 @@ cJSON *link_evt_button_frame(bool accept)
 {
     cJSON *data, *j = evt("button", &data);
     if (j) cJSON_AddStringToObject(data, "id", accept ? "accept" : "reject");
+    return j;
+}
+
+cJSON *link_evt_dnd_frame(bool on)
+{
+    cJSON *data, *j = evt("dnd", &data);
+    if (j) cJSON_AddBoolToObject(data, "on", on);
     return j;
 }
 

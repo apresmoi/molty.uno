@@ -5,6 +5,25 @@ Newest first. Each heading is a version: when `device.skill` (on an `utterance`)
 the files they name from GitHub (`https://raw.githubusercontent.com/apresmoi/molty.uno/main/skills/molty/`),
 replace your copy, and tell your human what's new in one line.
 
+## 2026.11.15
+
+- **Long jobs show progress.** `progress {pct?, step?, done?}` (MCP `molty_progress`, helper
+  `scripts/progress.sh`) fills a glowing ring around Molty's screen while the creature visibly
+  works; `done` closes it with a flash. Send it at each step of any job over ~20 s. Needs cap
+  `progress`. Read `SKILL.md`, `references/api.md`, your harness file.
+
+## 2026.11.14
+
+- **Do not disturb.** Your human can turn it on (a double press of Molty's PWR button). While it
+  is on you may speak, listen or ask only in reply to an `utterance` (`in_reply_to`); anything else
+  fails `do_not_disturb`. A `dnd` event tells you when it changes, `relay.dnd` in `status` says
+  where it is. Read `SKILL.md`, `references/events.md`.
+- **The PWR button is a screen switch** out of the box (gesture binding `screen`): a press turns
+  the screen off and on. **BOOT is held to talk** (binding `hold`): Molty listens while it is
+  held and sends on release. Read `references/api.md` (Gestures).
+- **What woke Molty:** an `utterance` has `input` (`shake`, `double_tap`, `button_accept`, ...).
+  Read `references/events.md`.
+
 ## 2026.11.05
 
 - **You are the creature on screen.** `device.creature` on each `utterance` (and `relay.creature`

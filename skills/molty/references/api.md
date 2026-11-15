@@ -80,6 +80,7 @@ Success: `200 {"ok":true,"result":{…}}`. Unknown argument keys are rejected.
 | `mood` | `{"mood": m, "hold_s"?: s}` | — | m ∈ idle, listening, thinking, speaking, happy, sleepy, surprised; happy/surprised revert by themselves, `hold_s` (0 < s ≤ 3600) sets how long any mood stays |
 | `act` | `{"action": a}` | `{action}` | a one-shot gesture over the current mood (see [Gestures](#gestures-act-and-inline-cues)); needs `act` in `relay.caps` (`409 unsupported` / `firmware_too_old` otherwise) |
 | `show` | `{"text": s, "wpm"?: 100..800}` | — | speed-reader text in the fluid, ≤ 16384 bytes, default 300 wpm; returns when it starts |
+| `progress` | `{"pct"?: 0..100, "step"?: s, "done"?: true}` | — | a thin ring fills on the rim to `pct` while the creature works (no `pct`: a short line circles); `step` (≤ 80 bytes) goes to the activity log; `done` flashes and clears it; send it at each step of a job over ~20 s; needs `progress` in `relay.caps` |
 | `say` | `{"text": s, "voice"?: id, "in_reply_to"?: turn_id}` | `{job}` immediately | relay TTS → speaker (streamed sentence by sentence), text shown in sync; ≤ 4096 bytes; job done → `{ms, text, timings}` (`text` without its [inline cues](#gestures-act-and-inline-cues) like `[happy]`); `in_reply_to`: see [events.md](events.md#shake-to-talk) |
 | `keep` | `{"words"?: m, "in_reply_to"?: turn_id}` | `{keep, said, late?, words, playing, sent, wpm}` | with an `opener`: Molty never plays past word m; your reply starts with those words ([First words](talking-fast.md#first-words-molty-starts-you-take-over)) |
 | `quick` | `{"id": phrase, "in_reply_to"?: turn_id, "force"?: bool}` | `{job, phrase, text, cached}` immediately, or `{skipped:"filled", filler}` | plays a cached [quick phrase](#quick-phrases) at once (no speech synthesis); your next say / talk queues right behind it |
@@ -152,6 +153,23 @@ without a line: `mood {"mood": "working"}` (`hold_s` can only shorten it; call a
 dropped from a say, which still plays, and direct `mood` / `act` calls answer `firmware_too_old`
 or `unsupported`.
 
+**Progress: show how far along you are.** On a long job (an install, a build, a long search),
+send `progress` after each step you finish, so your human sees the work move without you
+talking:
+
+```sh
+POST $MOLTY_RELAY/v1/devices/<id>/cmd {"name":"progress","args":{"pct":40,"step":"downloaded the star map"}}
+POST $MOLTY_RELAY/v1/devices/<id>/cmd {"name":"progress","args":{"done":true}}
+```
+
+A thin glowing line on the rim fills clockwise from 12 o'clock to `pct` (0..100) and the
+creature works meanwhile; no `pct` (you can't tell) and a short line circles instead. `step` (a
+few words, at most 80 bytes) is never shown or spoken: your human reads it in the activity log.
+`done: true` fills the ring, flashes it and melts it, and the creature is happy. Without news
+for 120 s the ring melts by itself. It never speaks over Molty, never covers a question, and the
+listening ring wins while a listen is open. MCP: `molty_progress`. Needs the firmware cap
+`progress` (`unsupported` / `firmware_too_old` otherwise: keep talking with `[working]`).
+
 **`act {action}`** — a one-shot gesture over the current mood, when you are not speaking:
 `wiggle`, `nod`, `shake_head`, `bounce`, `peek`, `glance_left`, `glance_right` (as you look at
 Molty), `blink`, `wobble`, `stretch`, `look_up`, `yawn`, `inspect` (right up to the camera, one eye filling the screen), `paddle`
@@ -180,8 +198,14 @@ curl -sS -X POST "$MOLTY_RELAY/v1/devices/$MOLTY_DEVICE/cmd" -H "authorization: 
 |---|---|---|---|---|
 | `tap` | `event` | | `none` | nothing |
 | `double_tap` | `talk` | | `talk` | Molty listens, as after a shake: you get one `utterance` |
-| `button_accept` (BOOT) | `event` | | `event` | you get the `tap` / `double_tap` / `button` event |
-| `button_reject` (PWR) | `event` | | `stop` | ends the listen and sends it, or cuts the speech (that say's job then fails) |
+| `button_accept` (BOOT) | `hold` | | `event` | you get the `tap` / `double_tap` / `button` event |
+| `button_reject` (PWR) | `screen` | | `stop` | ends the listen and sends it, or cuts the speech (that say's job then fails) |
+| | | | `screen` | a press turns the screen off and on, a double press do not disturb (a button's only; firmware with `dnd` in caps) |
+| | | | `hold` | held, Molty listens; let go, it sends (a pause never ends it; the listen window still does). On a tap it is `talk` |
+
+A turn's `utterance` says what started it in `input`: `shake`, or the input bound to talk
+(`double_tap`, `button_accept`, ...). Agents can rebind every input but the shake (that one is the
+human's console setting).
 
 Always first, whatever is bound: a pairing and an open question take their inputs; a tap during a
 recording stops and sends it (`reason: "tap"`, after its first second); a tap while speech has not
@@ -429,7 +453,7 @@ what it can draw. The format: `https://github.com/apresmoi/molty.uno/blob/main/d
 ## MCP (optional)
 
 The same features are a remote MCP server at `$MOLTY_RELAY/mcp` (streamable HTTP, bearer
-auth). Tools: `molty_pair` (no token needed), `molty_talk`, `molty_keep`, `molty_quick`, `molty_phrases`, `molty_ask`, `molty_status`, `molty_mood`, `molty_act`, `molty_gestures`,
+auth). Tools: `molty_pair` (no token needed), `molty_talk`, `molty_keep`, `molty_quick`, `molty_phrases`, `molty_ask`, `molty_status`, `molty_mood`, `molty_act`, `molty_progress`, `molty_gestures`,
 `molty_package`, `molty_scene`, `molty_show`, `molty_say`, `molty_listen`, `molty_wait`, `molty_state`,
 `molty_volume`, `molty_imu`, `molty_diag`, `molty_log`, `molty_events`,
 `molty_webhook`, `molty_updates`, `molty_update`, `molty_activity`, `molty_draft`, `molty_react`,

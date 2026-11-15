@@ -123,8 +123,17 @@ gesture_taps_t gesture_tapper_poll(gesture_tapper_t *t, uint32_t now_ms) {
     return GESTURE_TAPS_SINGLE;
 }
 
+gesture_sw_t gesture_switch_feed(gesture_switch_t *s, bool down, uint32_t now_ms) {
+    gesture_sw_t r = GESTURE_SW_NONE;
+    if (down && !s->down) { s->armed = true; s->t0 = now_ms; }
+    else if (down && s->armed && now_ms - s->t0 >= GESTURE_SWITCH_HOLD_MS) { s->armed = false; r = GESTURE_SW_HOLD; }
+    else if (!down && s->down && s->armed) { s->armed = false; r = GESTURE_SW_CLICK; }
+    s->down = down;
+    return r;
+}
+
 const char *const GESTURE_INPUT_NAMES[GESTURE_IN_COUNT] = { "tap", "double_tap", "button_accept", "button_reject" };
-const char *const GESTURE_ACTION_NAMES[GESTURE_DO_COUNT] = { "none", "talk", "event", "stop" };
+const char *const GESTURE_ACTION_NAMES[GESTURE_DO_COUNT] = { "none", "talk", "event", "stop", "screen", "hold" };
 
 gesture_action_t gesture_binds_get(uint32_t packed, gesture_input_t in) {
     return (gesture_action_t)((packed >> (4u * (unsigned)in)) & 0xFu);
@@ -139,8 +148,8 @@ uint32_t gesture_binds_default(void) {
     uint32_t p = 0;
     p = gesture_binds_set(p, GESTURE_IN_TAP, GESTURE_DO_EVENT);
     p = gesture_binds_set(p, GESTURE_IN_DOUBLE_TAP, GESTURE_DO_TALK);
-    p = gesture_binds_set(p, GESTURE_IN_BUTTON_ACCEPT, GESTURE_DO_EVENT);
-    p = gesture_binds_set(p, GESTURE_IN_BUTTON_REJECT, GESTURE_DO_EVENT);
+    p = gesture_binds_set(p, GESTURE_IN_BUTTON_ACCEPT, GESTURE_DO_HOLD);
+    p = gesture_binds_set(p, GESTURE_IN_BUTTON_REJECT, GESTURE_DO_SCREEN);
     return p;
 }
 

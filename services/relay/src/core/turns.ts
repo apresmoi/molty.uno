@@ -60,6 +60,8 @@ export interface UtteranceInput {
   stt_ms: number;
   /** shake: Molty's own listen. talk: a talk's listen whose result no agent collected. */
   trigger: "shake" | "talk";
+  /** What woke Molty for a shake turn: "shake", or the gesture bound to talk ("double_tap", "button_accept", ...). */
+  input?: string;
   caps: string[];
   /** The device's acknowledgement for this listen ("chirp" | "thinking" | "off"), absent on older firmware. */
   ack?: string;
@@ -74,6 +76,7 @@ export function utteranceData(u: UtteranceInput): JsonObject {
     reason: u.reason,
     ms: { speech: u.speech_ms, stt: u.stt_ms },
     trigger: u.trigger,
+    ...(u.input ? { input: u.input } : {}),
     // what Molty shows now: thinking (its own acknowledgement, or the relay's) unless turned off
     device: { caps: u.caps, mood: u.ack === "off" ? "idle" : "thinking", voice: u.voice },
   };

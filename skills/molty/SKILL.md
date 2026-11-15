@@ -53,7 +53,8 @@ private one, see [self-hosting](references/self-hosting.md)).
 | `ask.sh "question" yes no later` | speak + 1–5 tap buttons (labels ≤ 8 chars) | `ANSWER: yes \| index 0` |
 | `mood.sh happy [hold_s]` | set a mood | the result |
 | `act.sh eat` | a gesture from `device.creature.gestures` (the cat has `eat`) | the result |
-| `watch.py` / `watch.py --once [wait_s]` | one line per event, forever / unread events, then exit | `MOLTY utterance: '…'` |
+| `progress.sh 40 "step"` / `progress.sh done` | ring fills to 40% / finishes | the result |
+| `watch.py` / `watch.py --once [wait_s]` | events, forever / unread ones, then exit | `MOLTY utterance: '…'` |
 
 ## Key rules
 
@@ -62,16 +63,15 @@ private one, see [self-hosting](references/self-hosting.md)).
   - Can answer from what you know → one `talk`, the answer. Nothing else in the turn.
   - Needs any work (search, tools, a long think) → say what you'll do and start working:
     `talk {"say":"Searching for that. [working]"}`. Molty animates itself until you
-    speak again. Never send gestures to fill the wait. Over ~20 s of work: another one-liner saying
-    where you are, `[working]` again. Then answer.
+    speak again; no gestures to fill the wait. Over ~20 s: `progress` at each step (a ring
+    fills), `progress done` at the end. Then answer.
 - **Fastest model for that first line**, always; a slower one only for the work behind it.
 - **Follow a `202 pending` talk to its end**: their words are in it.
 - **Wake only on `utterance`** unless your human gave an input a job: other runs collide.
 - **A shake means "I want to talk".** You get one `utterance` with their words: answer with talk
   and `in_reply_to: <turn_id>`. `turn_claimed`: stay quiet.
 - **Never speak while they talk** (`utterance.partial`, `human_speaking`): only `draft` or `react`.
-- **Slow wake?** `quick {id}` is cached, instant audio; skipped if Molty already filled. Vary them;
-  register your own (`molty_phrases`).
+- **Slow wake?** `quick {id}`: cached, instant audio, skipped if Molty already filled. Vary them.
 - **`opener`: Molty is saying it now.** First call: `keep {words: m, in_reply_to}`, then start
   your reply with those m words ([talking-fast.md](references/talking-fast.md#first-words-molty-starts-you-take-over)).
 - **Short: ≤ 2 sentences, ~25 words a turn.** Split longer answers; speech time is wait time.
@@ -80,15 +80,15 @@ private one, see [self-hosting](references/self-hosting.md)).
 - **Learn them; offer what they can change** ([personalize.md](references/personalize.md)).
 - **A decision a tap can settle → ask**, not a spoken yes/no. Buttons (accept/reject) mean
   acknowledge / dismiss, never an answer.
-- **New drawings** (astrology, ...): `pkg.available` lists them to offer; install takes your human's
-  tap; then use the package's skill ([packages](references/api.md#packages-and-scenes)).
+- **New drawings** (astrology, ...): `pkg.available` lists them; install takes a tap; then use the
+  package's skill ([packages](references/api.md#packages-and-scenes)).
 - **Read `relay.caps`, not versions** (`status`, or `device.caps` on an `utterance`).
-- **This skill is version 2026.11.05.** `device.skill` (utterance) or `relay.skill` (status) newer?
+- **This skill is version 2026.11.15.** `device.skill` (utterance) or `relay.skill` (status) newer?
   Read CHANGES.md from GitHub, re-read the files it names, tell your human what's new in one line.
 - **Don't talk unprompted or repeatedly.** `no_speech` after a wake → one short line or nothing.
-- **Errors:** `audio_busy` (wait for the current audio, retry once), `turn_claimed` (stay
-  quiet), `device_offline` (tell them another way),
-  `voice_box_offline`, `listen_failed` (try once more). A failed turn's `job` id is in the
+  `do_not_disturb`: reply only (in_reply_to) until a `dnd` event.
+- **Errors:** `audio_busy` (wait, retry once), `turn_claimed` (stay quiet), `device_offline`
+  (tell them another way), `voice_box_offline`, `listen_failed` (retry once). Failed jobs: the
   [activity log](references/activity.md).
 
 ## References

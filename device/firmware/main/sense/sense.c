@@ -11,8 +11,10 @@
  * A tap while a question (link `ask`) is pending is its answer (link_ask.c), not a tap event.
  * A tap during a recording stops it and sends (after its first second), a tap while a say
  * waits for its first audio cancels the wait; otherwise tap, double tap and the two buttons do
- * what the human bound them to (gesture.h: none, talk, event, stop; pairing and a pending
- * question always come first). A shake's phantom taps are dropped (gesture_tap_guarded).
+ * what the human bound them to (gesture.h: none, talk, event, stop, and a button's screen:
+ * a click (pressed and let go) switches the screen, a double click do not disturb, held
+ * 1.5 s it says goodbye and powers off (power_off); or hold: held to talk; pairing
+ * and a pending question always come first). A talk names its input on the shake event. A shake's phantom taps are dropped (gesture_tap_guarded).
  * Nothing leaves while a pairing is pending (its tap and buttons decide the pairing) or
  * while the link is down; events are not queued for later. A shake with "shake to talk" on
  * goes to the link task (link_audio_shake): Molty starts listening at once and the shake
@@ -30,6 +32,7 @@
 #include "link_protocol.h"
 #include "link_audio.h"
 #include "mole_diag.h"
+#include "power.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -69,12 +72,16 @@ static void emit(cJSON *j)
     cJSON_Delete(j);
 }
 
-/* What the human bound this input to. `event` is the input's own frame, built by the caller. */
-static void gesture_do(gesture_action_t a, cJSON *event)
+/* What the human bound this input to. `event` is the input's own frame, built by the caller.
+ * A button's hold starts here; its release is sense_task's. */
+static void gesture_do(gesture_input_t in, cJSON *event)
 {
+    const gesture_action_t a = gesture_binds_get(mole_fluid_gestures(), in);
     if (a == GESTURE_DO_EVENT) { emit(event); return; }
     cJSON_Delete(event);
-    if (a == GESTURE_DO_TALK) link_audio_gesture_talk();
+    const bool button = in == GESTURE_IN_BUTTON_ACCEPT || in == GESTURE_IN_BUTTON_REJECT;
+    if (a == GESTURE_DO_HOLD && button) link_audio_hold(true, GESTURE_INPUT_NAMES[in]);
+    else if (a == GESTURE_DO_TALK || a == GESTURE_DO_HOLD) link_audio_gesture_talk(GESTURE_INPUT_NAMES[in]);
     else if (a == GESTURE_DO_STOP) link_audio_stop_any();
 }
 
@@ -83,16 +90,23 @@ static void button_do(bool accept)
 {
     cJSON *ev = link_evt_button_frame(accept);
     if (link_ask_pending()) emit(ev);
-    else gesture_do(gesture_binds_get(mole_fluid_gestures(), accept ? GESTURE_IN_BUTTON_ACCEPT : GESTURE_IN_BUTTON_REJECT), ev);
+    else gesture_do(accept ? GESTURE_IN_BUTTON_ACCEPT : GESTURE_IN_BUTTON_REJECT, ev);
+}
+
+/* The screen switch's clicks (gesture_tapper_t: one click waits out the double window). */
+static void screen_do(gesture_taps_t presses)
+{
+    if (presses == GESTURE_TAPS_SINGLE) mole_fluid_screen(!mole_fluid_screen_on());
+    else if (presses == GESTURE_TAPS_DOUBLE) power_dnd_set(!power_dnd());
 }
 
 static void taps_do(gesture_taps_t taps, uint32_t now, gesture_limit_t *limit)
 {
     if (taps == GESTURE_TAPS_NONE || !gesture_limit_allow(limit, now)) return;
-    const uint32_t xy = atomic_load(&s_tap_xy), binds = mole_fluid_gestures();
+    const uint32_t xy = atomic_load(&s_tap_xy);
     const double x = (xy >> 16) / 65535.0, y = (xy & 0xFFFFu) / 65535.0;
-    if (taps == GESTURE_TAPS_DOUBLE) gesture_do(gesture_binds_get(binds, GESTURE_IN_DOUBLE_TAP), link_evt_double_tap_frame(x, y));
-    else gesture_do(gesture_binds_get(binds, GESTURE_IN_TAP), link_evt_tap_frame(x, y));
+    if (taps == GESTURE_TAPS_DOUBLE) gesture_do(GESTURE_IN_DOUBLE_TAP, link_evt_double_tap_frame(x, y));
+    else gesture_do(GESTURE_IN_TAP, link_evt_tap_frame(x, y));
 }
 
 static void sense_task(void *arg)
@@ -100,11 +114,12 @@ static void sense_task(void *arg)
     (void)arg;
     gesture_t g;
     gesture_init(&g, NULL);
-    gesture_tapper_t tapper = { 0 };
+    gesture_tapper_t tapper = { 0 }, presser[2] = { 0 };
     gesture_limit_t tap_l = { .min_ms = TAP_MIN_MS }, btn_l = { .min_ms = BUTTON_MIN_MS },
                     shake_l = { .min_ms = SHAKE_MIN_MS };
     const bool imu = molty_board_has(MOLTY_CAP_IMU);
     bool prev[2] = { molty_button_pressed(MOLTY_BTN_ACCEPT), molty_button_pressed(MOLTY_BTN_REJECT) };
+    gesture_switch_t sw[2] = { { .down = prev[0] }, { .down = prev[1] } };
     uint32_t last_imu = 0, next_status = 0;
     const TickType_t period = pdMS_TO_TICKS(SENSE_PERIOD_MS) > 0 ? pdMS_TO_TICKS(SENSE_PERIOD_MS) : 1;
     TickType_t wake = xTaskGetTickCount();
@@ -131,18 +146,24 @@ static void sense_task(void *arg)
                 /* shake to talk (the console's setting, on out of the box): the link task starts
                  * listening and sends the event; otherwise the plain shake goes from here */
                 if (gesture_limit_allow(&shake_l, now) && !link_audio_shake(sh.peak_g, sh.reversals, sh.ms))
-                    emit(link_evt_shake_frame(sh.peak_g, sh.reversals, sh.ms, NULL));
+                    emit(link_evt_shake_frame(sh.peak_g, sh.reversals, sh.ms, NULL, NULL, false));
             }
         }
 
         for (int b = 0; b < 2; b++) {
             bool on = molty_button_pressed((molty_button_t)b);
-            if (on && !prev[b] && !pairing) {
+            const bool screen = gesture_binds_get(mole_fluid_gestures(), b == MOLTY_BTN_ACCEPT ? GESTURE_IN_BUTTON_ACCEPT
+                                                  : GESTURE_IN_BUTTON_REJECT) == GESTURE_DO_SCREEN && !link_ask_pending();
+            const gesture_sw_t click = gesture_switch_feed(&sw[b], on, now);
+            if (pairing || !screen) { presser[b].pending = false; gesture_switch_reset(&sw[b]); }
+            else if (click == GESTURE_SW_CLICK) screen_do(gesture_tapper_feed(&presser[b], now, true));
+            else if (click == GESTURE_SW_HOLD) { presser[b].pending = false; power_off(); }
+            if (on && !prev[b] && !pairing && !screen) {
                 mole_fluid_event(MOLE_FLUID_BUTTON);
-                if (gesture_limit_allow(&btn_l, now)) {
-                    button_do(b == MOLTY_BTN_ACCEPT);
-                }
+                if (gesture_limit_allow(&btn_l, now)) button_do(b == MOLTY_BTN_ACCEPT);
             }
+            screen_do(gesture_tapper_poll(&presser[b], now));
+            if (!on && prev[b]) link_audio_hold(false, NULL);   /* let go: a held talk sends */
             prev[b] = on;
         }
 
@@ -169,6 +190,7 @@ static void sense_task(void *arg)
 
 esp_err_t sense_start(void)
 {
+    mole_fluid_gestures();   /* the bindings out of NVS here: the task's PSRAM stack never reads flash */
     /* PSRAM stack like link_audio: it sends over TLS (link_send_json), never touches flash */
     return xTaskCreatePinnedToCoreWithCaps(sense_task, "sense", 6144, NULL, 2, NULL, 0, MALLOC_CAP_SPIRAM) == pdPASS
         ? ESP_OK : ESP_ERR_NO_MEM;

@@ -17,12 +17,16 @@ config MOLTY_BOARD_WAVESHARE_ESP32_S3_TOUCH_LCD_1_46
 config MOLTY_BOARD_WAVESHARE_ESP32_S3_TOUCH_LCD_1_28
     bool "Waveshare ESP32-S3-Touch-LCD-1.28 (240x240 round)"
 
+config MOLTY_BOARD_WAVESHARE_ESP32_S3_TOUCH_AMOLED_1_75C
+    bool "Waveshare ESP32-S3-Touch-AMOLED-1.75C (466x466 round)"
+
 endchoice
 
 config MOLTY_BOARD_DIR
     string
     default "waveshare/esp32-s3-touch-lcd-1.46" if MOLTY_BOARD_WAVESHARE_ESP32_S3_TOUCH_LCD_1_46
     default "waveshare/esp32-s3-touch-lcd-1.28" if MOLTY_BOARD_WAVESHARE_ESP32_S3_TOUCH_LCD_1_28
+    default "waveshare/esp32-s3-touch-amoled-1.75c" if MOLTY_BOARD_WAVESHARE_ESP32_S3_TOUCH_AMOLED_1_75C
 
 config MOLTY_DEFAULT_RELAY
     string "Default agent-link relay URL"

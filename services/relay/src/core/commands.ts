@@ -13,12 +13,17 @@ export const ACTIONS = ["wiggle", "nod", "shake_head", "bounce", "peek", "glance
 /** Need the firmware cap `working`: older firmware refuses them (a say's cue is dropped, not refused). */
 export const WORKING_CAP = "working";
 export const WORKING_ACTIONS: readonly string[] = ["inspect", "paddle"];
+/** `progress {pct?, step?, done?}`: needs the firmware cap `progress` (a line fills the ring while the creature works). */
+export const PROGRESS_CAP = "progress";
+export const MAX_PROGRESS_STEP = 80;
 /** A say's `[working]` cue: never a device mark. The relay plays the say to its end, then sets the mood. */
 export const WORKING_MOOD = "working";
-export const COMMANDS = ["status", "state", "mood", "show", "say", "quick", "keep", "listen", "volume", "imu", "diag", "log", "act", "gestures", "pkg.install", "pkg.remove", "pkg.list", "pkg.available", "scene.play", "scene.queue", "scene.clear", "creature.select", "creature.list"] as const;
+export const COMMANDS = ["status", "state", "mood", "show", "say", "quick", "keep", "listen", "volume", "imu", "diag", "log", "act", "progress", "gestures", "pkg.install", "pkg.remove", "pkg.list", "pkg.available", "scene.play", "scene.queue", "scene.clear", "creature.select", "creature.list"] as const;
 /** What the human's inputs can do (`gestures`; firmware: sense/gesture.h). */
 export const GESTURE_INPUTS = ["tap", "double_tap", "button_accept", "button_reject"] as const;
-export const GESTURE_ACTIONS = ["none", "talk", "event", "stop"] as const;
+export const GESTURE_ACTIONS = ["none", "talk", "event", "stop", "screen", "hold"] as const;
+/** The device reports do not disturb (its `dnd` event): the relay holds back unprompted speech. */
+export const DND_CAP = "dnd";
 export const GESTURES_CAP = "gestures";
 /** Firmware that keeps a say or listen through a short link drop (its hello names it; welcome answers). */
 export const RESUME_CAP = "resume";
@@ -396,6 +401,21 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
       if (!isRecord(params)) throw invalid("params must be an object of the layout's params");
       if (new TextEncoder().encode(JSON.stringify(params)).byteLength > MAX_SCENE_PARAMS_BYTES) throw invalid(`params exceed ${MAX_SCENE_PARAMS_BYTES} bytes: send a few params, the package holds the drawing`);
       return { name: n, args: { pkg: pkgId(args.pkg, "pkg"), layout: pkgId(args.layout, "layout"), params: params as JsonObject, ttl_s: int(args.ttl_s, "ttl_s", 1, MAX_SCENE_TTL_S, DEFAULT_SCENE_TTL_S) }, job: false };
+    }
+    case "progress": {
+      // relay-checked; step is the agent's words for the activity log (the device draws no text)
+      only(args, ["pct", "step", "done"]);
+      const out: JsonObject = {};
+      if (args.pct !== undefined) {
+        if (typeof args.pct !== "number" || !Number.isFinite(args.pct) || args.pct < 0 || args.pct > 100) throw invalid("pct must be a number 0..100 (leave it out when you can't tell how far along you are)");
+        out.pct = args.pct;
+      }
+      if (args.step !== undefined) out.step = text(args.step, "step", MAX_PROGRESS_STEP);
+      if (args.done !== undefined) {
+        if (typeof args.done !== "boolean") throw invalid("done must be a boolean");
+        out.done = args.done;
+      }
+      return { name: n, args: out, job: false };
     }
     case "act":
       only(args, ["action"]);

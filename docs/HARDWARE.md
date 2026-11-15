@@ -6,6 +6,7 @@
 |---|---|---|---|---|---|---|---|---|
 | **Waveshare ESP32-S3-Touch-LCD-1.46** (`waveshare/esp32-s3-touch-lcd-1.46`) | 412×412 round, SPD2010 QSPI | SPD2010 | QMI8658 | yes / yes | BOOT accept, PWR reject | native USB: NCM network at 10.13.37.1 | 16 MB / 8 MB octal | reference |
 | **Waveshare ESP32-S3-Touch-LCD-1.28** (`waveshare/esp32-s3-touch-lcd-1.28`) | 240×240 round, GC9A01A SPI | CST816S | QMI8658 | — / — | BOOT accept | CH343P USB-UART: serial logs + Wi-Fi setup over Improv, no USB network | 16 MB / 2 MB quad | experimental |
+| **Waveshare ESP32-S3-Touch-AMOLED-1.75C** (`waveshare/esp32-s3-touch-amoled-1.75c`) | 466×466 round AMOLED, CO5300 QSPI | CST9217 | QMI8658 | yes / yes (ES7210 / ES8311) | BOOT accept, PWR reject | native USB: NCM network at 10.13.37.1 | 32 MB / 8 MB octal | experimental, untested on hardware |
 
 The 1.46 is the V1 board (the version without cover glass works too): it adds a TCA9554
 I/O expander, an I2S speaker amp and microphone, and battery management with a

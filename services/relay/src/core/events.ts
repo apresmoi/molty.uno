@@ -16,7 +16,7 @@
 //          when it changes; see creatureData)
 // Everything else (say.done, link_code, ...) stays internal to the relay.
 
-import { MAX_ASK_LABEL, MAX_ASK_OPTIONS } from "./commands.js";
+import { GESTURE_INPUTS, MAX_ASK_LABEL, MAX_ASK_OPTIONS } from "./commands.js";
 import { DRAFT_DROPPED_EVENT, DRAFT_USED_EVENT, PARTIAL_EVENT } from "./partials.js";
 import { isRecord, type JsonObject } from "./protocol.js";
 
@@ -55,7 +55,17 @@ const int = (v: unknown, lo: number, hi: number) => Number.isInteger(v) && num(v
 
 /** Allow-list + shape check. Returns the clean data, or undefined to drop the event. */
 const SHAPES: Record<string, (d: Record<string, unknown>) => JsonObject | undefined> = {
-  shake: (d) => (num(d.peak_g, 0, 64) && int(d.reversals, 0, 1000) && int(d.ms, 0, 600000) ? { peak_g: d.peak_g as number, reversals: d.reversals as number, ms: d.ms as number } : undefined),
+  // input: what woke Molty when it was not a shake (a gesture bound to talk / hold); hold: a button held to talk
+  shake: (d) =>
+    num(d.peak_g, 0, 64) && int(d.reversals, 0, 1000) && int(d.ms, 0, 600000)
+      ? {
+          peak_g: d.peak_g as number,
+          reversals: d.reversals as number,
+          ms: d.ms as number,
+          ...((GESTURE_INPUTS as readonly unknown[]).includes(d.input) ? { input: d.input as string } : {}),
+          ...(d.hold === true ? { hold: true } : {}),
+        }
+      : undefined,
   tap: (d) => (num(d.x, 0, 1) && num(d.y, 0, 1) ? { x: d.x as number, y: d.y as number } : undefined),
   double_tap: (d) => (num(d.x, 0, 1) && num(d.y, 0, 1) ? { x: d.x as number, y: d.y as number } : undefined),
   button: (d) => (d.id === "accept" || d.id === "reject" ? { id: d.id } : undefined),
@@ -99,6 +109,14 @@ export const UTTERANCE_EVENT = "utterance";
  * the creature, as `device.creature` on an utterance. A device `creature` frame is read by room.ts.
  */
 export const CREATURE_EVENT = "creature";
+
+/**
+ * Relay-generated: the human turned do not disturb on or off (the PWR button's double press,
+ * the console). Data `{on}`. While on, agents speak, listen and ask only in reply to an
+ * utterance (in_reply_to); anything else is refused `do_not_disturb`. A device `dnd` frame is
+ * read by room.ts.
+ */
+export const DND_EVENT = "dnd";
 
 /** Who Molty is right now: the creature package on screen, its look and what it plays (docs/CREATURES.md). */
 export type DeviceCreature = {
@@ -144,7 +162,7 @@ export function creatureData(d: unknown): DeviceCreature | undefined {
 }
 
 /** Every type an agent can receive and filter on (webhook `events`): device events + the relay's own. */
-export const AGENT_EVENT_TYPES = [...Object.keys(SHAPES), UTTERANCE_EVENT, PARTIAL_EVENT, DRAFT_USED_EVENT, DRAFT_DROPPED_EVENT, CREATURE_EVENT];
+export const AGENT_EVENT_TYPES = [...Object.keys(SHAPES), UTTERANCE_EVENT, PARTIAL_EVENT, DRAFT_USED_EVENT, DRAFT_DROPPED_EVENT, CREATURE_EVENT, DND_EVENT];
 
 /** Types a webhook gets only when its `events` names them (never by default): chatty, or nothing to answer. Pull and ride-along carry them. */
 export const OPT_IN_EVENTS: readonly string[] = [PARTIAL_EVENT, CREATURE_EVENT];
@@ -186,6 +204,7 @@ export const SAMPLE_EVENTS: Record<string, AgentEvent> = {
     },
   },
   [CREATURE_EVENT]: { id: "e10", type: CREATURE_EVENT, ts: 0, data: SAMPLE_CREATURE },
+  [DND_EVENT]: { id: "e11", type: DND_EVENT, ts: 0, data: { on: true } },
   [PARTIAL_EVENT]: {
     id: "e6",
     type: PARTIAL_EVENT,
@@ -234,6 +253,10 @@ export function eventSentence(ev: AgentEvent): string {
       return `The human is still talking to Molty (context only, don't answer yet): "${String(d.text_so_far ?? "")}"`;
     case CREATURE_EVENT:
       return `Molty is now ${d.name}: speak as this creature (its look and moves are in the event)`;
+    case DND_EVENT:
+      return d.on === true
+        ? "The human turned on do not disturb: speak, listen or ask only in reply to an utterance"
+        : "The human turned off do not disturb";
     case DRAFT_USED_EVENT:
       return `Molty is speaking your opener "${String(d.opener ?? "")}": you have the turn, continue with in_reply_to`;
     case DRAFT_DROPPED_EVENT:

@@ -50,6 +50,7 @@
 #include "link_cmd.h"
 #include "self_update.h"
 #include "pkg_cmd.h"
+#include "power.h"
 
 static const char *TAG = "http";
 
@@ -1198,8 +1199,8 @@ static esp_err_t handler_info(httpd_req_t *r)
     char mismatch[192] = "";
     if (molty_board_mismatch()) snprintf(mismatch, sizeof(mismatch), "\"board_mismatch\":\"%s\",", molty_board_mismatch());
     char battery[32] = "";
-    int mv = 0;
-    if (molty_battery_mv(&mv) == ESP_OK) snprintf(battery, sizeof(battery), "\"battery_mv\":%d,", mv);
+    molty_battery_t bat;
+    if (molty_battery_read(&bat) == ESP_OK) snprintf(battery, sizeof(battery), "\"battery_mv\":%d,", bat.mv);
 
     char buf[1280];
     snprintf(buf, sizeof(buf),
@@ -1461,6 +1462,7 @@ esp_err_t http_server_start(void)
     ESP_RETURN_ON_ERROR(self_update_http_register(server), TAG, "update routes");
     ESP_RETURN_ON_ERROR(pkg_http_register(server), TAG, "package routes");
     ESP_RETURN_ON_ERROR(mole_diag_http_register(server), TAG, "diag routes");
+    ESP_RETURN_ON_ERROR(power_http_register(server), TAG, "power routes");
     httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, handler_404);
 
     ESP_LOGI(TAG, "HTTP server started");

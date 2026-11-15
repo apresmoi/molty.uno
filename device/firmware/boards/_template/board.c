@@ -106,5 +106,5 @@ const molty_board_t molty_board_desc = {
     .mic            = NULL,                    /* const molty_mic_ops_t *               */
     .mic_gain       = 0,                       /* listen gain 1..32; 0 = 8 (molty_board.h) */
     .button_pressed = button_pressed,
-    .battery_mv     = NULL,                    /* int  f(void), millivolts             */
+    .battery        = NULL,                    /* esp_err_t f(molty_battery_t *out)    */
 };

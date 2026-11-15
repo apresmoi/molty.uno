@@ -11,7 +11,10 @@
  * action gaps, the library, no immediate repeat, never over a screen owner, a fixed seed
  * repeats; the yawn before dozing off; sleep and waking; agent mood holds; agent actions
  * (wait for the creature, dropped after 3 s); the happy flash after a say; shake; status
- * changes never change the state; ending the reel (pairing / restore) never re-enables it.
+ * changes never change the state; ending the reel (pairing / restore) never re-enables it;
+ * the boot screen: the word holds then melts into the boot's creature, which paddles in place
+ * (no idle life) until the link is ready, the ttl, or at once without Wi-Fi, then dissolves into
+ * the human's creature (or carries on when it is theirs); anything wanting the screen ends it.
  *
  * Build + run: test/host/director_build.sh
  */
@@ -66,6 +69,73 @@ static void test_boot(void) {
     fd_set_creature(&D, true);            /* one arrives (upload) */
     frame(false);
     CHECK(D.cur == FD_ST_CREATURE, "creature loaded later: shown, got %d", D.cur);
+}
+
+/* power on with the boot screen (mole_fluid.c's order: fd_init, fd_boot, then the human's
+ * creature loads on frame one) */
+static void boot_screen(void) {
+    fd_init(&D, NULL, 12345);
+    s_melts = 0; s_nact = 0; s_now = 0.f;
+    fd_boot(&D);
+    fd_set_creature(&D, true);
+    frame(true);
+}
+
+/* power off: "bye!", the pond fading out, done; nothing interrupts it, even mid boot screen */
+static void test_bye(void) {
+    boot_screen();
+    run(1.f, true);
+    fd_bye(&D);
+    frame(true);
+    CHECK(D.cur == FD_ST_TEXT && fd_bye_word(&D) && !fd_boot_word(&D) && !D.boot, "the word, the boot screen over");
+    CHECK(fd_bye_level(&D) == 1.f && !fd_bye_done(&D), "full brightness while it says it");
+    fd_request_state(&D, FD_ST_BLOB, 0, false); fd_agent_mood(&D, CM_HAPPY, 2.f); fd_agent_act(&D, CA_WIGGLE, 1.f); fd_autoplay(&D);
+    fd_boot(&D);
+    run(1.7f, true);
+    CHECK(D.cur == FD_ST_TEXT && D.held == CM_IDLE && !D.autoplay && !D.boot, "requests, moods, acts, autoplay, boot: all ignored");
+    run(0.2f, true);
+    CHECK(D.cur == FD_ST_FX && D.cur_fx == 0 /* FLUID_FX_RIPPLE */ && !fd_bye_word(&D), "then the pond");
+    run(1.1f, false);
+    const float l = fd_bye_level(&D);
+    CHECK(l > 0.4f && l < 0.6f && !fd_bye_done(&D), "fading: %.2f halfway", l);
+    run(1.2f, false);
+    CHECK(fd_bye_level(&D) == 0.f && fd_bye_done(&D) && D.cur == FD_ST_FX, "black, done");
+}
+
+static void test_boot_screen(void) {
+    /* the word holds, then melts straight into the human's creature: no link wait, nothing played */
+    boot_screen();
+    CHECK(D.cur == FD_ST_TEXT && fd_boot_word(&D) && s_melts == 1, "power on: the word (state %d)", D.cur);
+    run(2.7f, true);
+    CHECK(D.cur == FD_ST_TEXT && s_melts == 1 && fd_solidity(&D, 1.f) > 0.999f, "the word condensed and holds");
+    run(0.2f, true);
+    CHECK(!D.boot && D.cur == FD_ST_CREATURE && s_melts == 2 && !s_nact, "then melts into the creature");
+    int melts = s_melts;
+    run(60.f, false);
+    CHECK(s_melts == melts && s_nact > 0, "home: idle life, no further melt");
+
+    /* the screen is wanted: the pairing code during the word, held */
+    boot_screen();
+    run(1.f, true);
+    request(FD_ST_TEXT, true);
+    CHECK(!D.boot && D.cur == FD_ST_TEXT && D.text_hold && s_melts == 2, "pairing code ends the boot screen");
+    /* a listen, a question, a mood, an act, autoplay: each ends it */
+    boot_screen(); run(1.f, true);
+    fd_set_busy(&D, true, false); frame(false);
+    CHECK(!D.boot && D.cur == FD_ST_CREATURE, "a listen ends it: the creature");
+    boot_screen(); run(1.f, true);
+    fd_set_busy(&D, true, true); frame(false);
+    CHECK(!D.boot, "a question ends it");
+    boot_screen(); run(1.f, true);
+    fd_agent_mood(&D, CM_HAPPY, -1.f); frame(false);
+    CHECK(!D.boot && D.cur == FD_ST_CREATURE, "a mood during the word: the creature");
+    boot_screen(); run(1.f, true);
+    fd_agent_act(&D, CA_NOD, cute_act_dur(CA_NOD)); frame(false);
+    CHECK(!D.boot, "an act ends it");
+    boot_screen();
+    fd_autoplay(&D); frame(true);
+    CHECK(!D.boot && D.autoplay, "autoplay ends it");
+    /* without fd_boot nothing changes: test_boot */
 }
 
 /* the guard: the shown state / a mood again changes nothing. Without it every request
@@ -560,6 +630,7 @@ static void test_replay(void) {
 int main(void) {
     printf("director host test\n");
     test_boot();
+    test_boot_screen();
     test_guard();
     test_show_returns();
     test_idle_life();
@@ -573,6 +644,7 @@ int main(void) {
     test_agent_moods();
     test_shake();
     test_status();
+    test_bye();
     test_reel();
     test_replay();
     printf("%d passed, %d failed\n", s_pass, s_fail);
