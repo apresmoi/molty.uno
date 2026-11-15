@@ -124,9 +124,11 @@ for (const t of RING_TILTS) { assets[`rings-p${t}`] = rings(t); assets[`rings-n$
 for (const s of Object.keys(SURFACE)) assets[s] = sphereMap(s);
 
 // ---- layouts. Geometry in glass units (radius 1, y up), angles in degrees, counter-clockwise from the right.
+// a hairline: about one braille dot wide on Molty
+const HAIR = 0.012;
 const wheel = () => [
-  { k: 'ring', r: 0.9, color: INK }, { k: 'ring', r: 0.75, color: GRID },
-  { k: 'ticks', r: 0.75, len: 0.15, n: 12, a0: 0, color: INK }, { k: 'ticks', r: 0.73, len: 0.02, n: 36, a0: 0, color: GRID },
+  { k: 'ring', r: 0.9, w: HAIR, color: INK }, { k: 'ring', r: 0.75, w: HAIR, color: GRID },
+  { k: 'ticks', r: 0.75, len: 0.15, n: 12, a0: 0, w: HAIR, color: INK }, { k: 'ticks', r: 0.73, len: 0.02, n: 36, a0: 0, w: HAIR, color: GRID },
   // 0 degrees Aries at 9 o'clock, longitude counter-clockwise: sign i is centred at 195 + 30 i
   ...SIGNS.map((s, i) => ({ k: 'glyph', asset: s, size: 0.09, polar: [n3((195 + 30 * i) % 360), 0.825], color: SIGN_INK[i % 3] })),
 ];
@@ -152,9 +154,9 @@ const layouts = {
     dur: 0,
     params: { inner: num, bodies: list, ...Object.fromEntries(Object.keys(ASPECT_INK).map((k) => [k, list])) },
     items: [
-      ...wheel(), { k: 'ring', r: '$inner', color: DIM },
-      ...Object.entries(ASPECT_INK).map(([k, c]) => each(`$${k}`, { k: 'line', pts: [['@x1', '@y1'], ['@x2', '@y2']], color: c })),
-      each('$bodies', { k: 'ticks', r: 0.66, len: 0.07, n: 1, a0: '@a', color: GRID }),
+      ...wheel(), { k: 'ring', r: '$inner', w: HAIR, color: DIM },
+      ...Object.entries(ASPECT_INK).map(([k, c]) => each(`$${k}`, { k: 'line', pts: [['@x1', '@y1'], ['@x2', '@y2']], w: HAIR, color: c })),
+      each('$bodies', { k: 'ticks', r: 0.66, len: 0.07, n: 1, a0: '@a', w: HAIR, color: GRID }),
       each('$bodies', { k: 'glyph', asset: '@g', size: 0.12, polar: ['@a', '@r'], color: '@c' }),
     ],
   },
@@ -187,6 +189,6 @@ const layouts = {
   'lunar-eclipse': { dur: 6, params: { path: list, umbra: num, pen: num, moon_r: num }, items: [{ k: 'ring', r: '$pen', color: DIM }, { k: 'ring', r: '$umbra', color: '#8a3a2a' }, { k: 'ball', each: '$path', x: '@x', y: '@y', on: '@on', off: '@off', r: '$moon_r', img: '@img' }] },
 };
 
-const pkg = { v: 'molty-pkg/1', id: 'astrology', name: 'Astrology', version: '1.0.0', kind: 'scenes', assets, layouts };
+const pkg = { v: 'molty-pkg/1', id: 'astrology', name: 'Astrology', version: '1.1.0', kind: 'scenes', assets, layouts };
 writeFileSync(OUT, JSON.stringify(pkg) + '\n');
 console.log(`astrology.json: ${Object.keys(assets).length} assets, ${Object.keys(layouts).length} layouts, ${Buffer.byteLength(JSON.stringify(pkg)) + 1} bytes`);

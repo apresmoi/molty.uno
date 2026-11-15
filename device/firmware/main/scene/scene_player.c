@@ -197,13 +197,28 @@ bool scene_take_start(scene_player_t *p) { bool s = p->started; p->started = fal
 
 /* ── fill ──────────────────────────────────────────────────────────────────── */
 
-typedef struct { fluid_sim_t *s; float soft; } ctx_t;
+/* The canvas the items paint: the sim's grid split into its braille dots (2 x 4 a cell), so
+ * a line or a glyph lands on the dots it covers instead of a whole cell's blur. scene_fill
+ * folds it back into the cells (the fluid's target) and their dots (scene_fill's dots). */
+typedef struct {
+    int W, H, N, stage;
+    float *xs, *ys;                    /* dot centres in -1..1                             */
+    uint8_t *mask;
+    int16_t *T;
+    uint32_t *tcol;
+} canvas_t;
+typedef struct { canvas_t *s; float soft; } ctx_t;
 
 /* Painter's order, as the reference player (packages/tools/play.mjs): an item covers what is
  * under it by `a` (its coverage, 0..1, the soft edge), leaving ink v in colour rgb. A black
  * disc leaves no ink (an eclipse, a transit); a ball covers its whole disc, dark side too. */
-static inline void paint(fluid_sim_t *s, int k, float a, float v, uint32_t rgb) {
+static inline void paint(canvas_t *s, int k, float a, float v, uint32_t rgb) {
     if (a <= 0.004f || !s->mask[k]) return;
+    if (a >= 0.996f) {                                  /* covered: most dots, no blend */
+        s->T[k] = fq(v, FQ_UNIT);
+        s->tcol[k] = (rgb >> 16 & 255) | (rgb & 0xff00) | (rgb & 255) << 16;
+        return;
+    }
     const float t = s->T[k] * (1.f / FQ_UNIT);
     s->T[k] = fq(t + (v - t) * a, FQ_UNIT);
     const uint32_t c = s->tcol[k];
@@ -213,7 +228,7 @@ static inline void paint(fluid_sim_t *s, int k, float a, float v, uint32_t rgb) 
 }
 
 /* the cells whose centres lie in a glass-space box (y up) */
-static void cells(const fluid_sim_t *s, float x0, float y0, float x1, float y1, int *i0, int *i1, int *j0, int *j1) {
+static void cells(const canvas_t *s, float x0, float y0, float x1, float y1, int *i0, int *i1, int *j0, int *j1) {
     *i0 = (int)floorf((x0 + 1.f) * 0.5f * s->W - 0.5f); *i1 = (int)ceilf((x1 + 1.f) * 0.5f * s->W - 0.5f);
     *j0 = (int)floorf((1.f - y1) * 0.5f * s->H - 0.5f); *j1 = (int)ceilf((1.f - y0) * 0.5f * s->H - 0.5f);
     if (*i0 < 0) *i0 = 0;
@@ -223,7 +238,7 @@ static void cells(const fluid_sim_t *s, float x0, float y0, float x1, float y1, 
 }
 
 static void segment(const ctx_t *c, float ax, float ay, float bx, float by, float hw, uint32_t rgb) {
-    fluid_sim_t *s = c->s;
+    canvas_t *s = c->s;
     const float reach = hw + c->soft, dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy, il2 = l2 > 1e-9f ? 1.f / l2 : 0.f;
     int i0, i1, j0, j1;
     cells(s, fminf(ax, bx) - reach, fminf(ay, by) - reach, fmaxf(ax, bx) + reach, fmaxf(ay, by) + reach, &i0, &i1, &j0, &j1);
@@ -236,29 +251,42 @@ static void segment(const ctx_t *c, float ax, float ay, float bx, float by, floa
     }
 }
 
-/* ring / arc: |r − distance| within w/2, at angles a0..a1 (a1 − a0 ≥ 360: all of it) */
+/* ring / arc: |r − distance| within w/2, at angles a0..a1 (a1 − a0 ≥ 360: all of it). Each row
+ * visits only its band, |x| between the inner and the outer circle: a wheel's ring is most of
+ * the screen's bounding box but a sliver of its dots. */
 static void ring(const ctx_t *c, const scene_item_t *it, bool arc) {
-    fluid_sim_t *s = c->s;
-    const float hw = it->w * 0.5f, reach = hw + c->soft, ro = it->r + reach;
+    canvas_t *s = c->s;
+    const float hw = it->w * 0.5f, reach = hw + c->soft, ro = it->r + reach, rin = it->r > reach ? it->r - reach : 0.f;
     float span = it->a1 - it->a0;
     const bool whole = !arc || span >= 360.f;
     span = fmodf(fmodf(span, 360.f) + 360.f, 360.f);
     int i0, i1, j0, j1;
     cells(s, -ro, -ro, ro, ro, &i0, &i1, &j0, &j1);
-    for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) {
-        const float x = s->xs[i], y = -s->ys[j], d = fabsf(sqrtf(x * x + y * y) - it->r);
-        if (d >= reach) continue;
-        if (!whole) {
-            float a = fmodf(fluid_atan2(y, x) / DEG - it->a0, 360.f);
-            if (a < 0.f) a += 360.f;
-            if (a > span) continue;
+    for (int j = j0; j <= j1; j++) {
+        const float y = -s->ys[j], oo = ro * ro - y * y, ii = rin * rin - y * y;
+        if (oo <= 0.f) continue;
+        const float xo = sqrtf(oo), xi = ii > 0.f ? sqrtf(ii) : 0.f;
+        /* left span -xo..-xi, right span xi..xo (one span -xo..xo when the row misses the hole) */
+        for (int side = xi > 0.f ? 0 : 1; side < 2; side++) {
+            const float lo = side ? (xi > 0.f ? xi : -xo) : -xo, hi = side ? xo : -xi;
+            int a0 = (int)floorf((lo + 1.f) * 0.5f * s->W - 0.5f), a1 = (int)ceilf((hi + 1.f) * 0.5f * s->W - 0.5f);
+            if (a0 < i0) a0 = i0;
+            if (a1 > i1) a1 = i1;
+            for (int i = a0; i <= a1; i++) {
+                const float x = s->xs[i], d = fabsf(sqrtf(x * x + y * y) - it->r);
+                if (d >= reach) continue;
+                if (!whole) {
+                    float a = fmodf(fluid_atan2(y, x) / DEG - it->a0, 360.f);
+                    if (a < 0.f) a += 360.f;
+                    if (a > span) continue;
+                }
+                paint(s, j * s->W + i, 1.f - fluid_smooth(hw, reach, d), SCENE_INK, it->rgb);
+            }
         }
-        paint(s, j * s->W + i, 1.f - fluid_smooth(hw, reach, d), SCENE_INK, it->rgb);
     }
 }
-
 static void disc(const ctx_t *c, float cx, float cy, float r, uint32_t rgb) {
-    fluid_sim_t *s = c->s;
+    canvas_t *s = c->s;
     const float ro = r + c->soft * 0.5f;
     int i0, i1, j0, j1;
     cells(s, cx - ro, cy - ro, cx + ro, cy + ro, &i0, &i1, &j0, &j1);
@@ -277,6 +305,11 @@ static inline int bit(const pkg_asset_t *a, int x, int y) {
     return a->data[p >> 3] >> (7 - (p & 7)) & 1;
 }
 
+/* asin to ~7e-5 rad (Abramowitz & Stegun 4.4.45): the sphere's map runs it for every dot */
+static inline float fast_asin(float x) {
+    const float a = fabsf(x), r = 1.5707963f - sqrtf(1.f - a) * (1.5707288f + a * (-0.2121144f + a * (0.0742610f - 0.0187293f * a)));
+    return x < 0.f ? -r : r;
+}
 static inline uint32_t shade(uint32_t rgb, float k) {
     return (uint32_t)((rgb >> 16 & 255) * k) << 16 | (uint32_t)((rgb >> 8 & 255) * k) << 8 | (uint32_t)((rgb & 255) * k);
 }
@@ -284,78 +317,120 @@ static inline uint32_t shade(uint32_t rgb, float k) {
 /* a sphere lit from one side (lit = the lit fraction of the face, side = which side), wearing
  * an image as an equirectangular map that turns `spin` degrees per second */
 static void ball(const ctx_t *c, const scene_item_t *it, const pkg_asset_t *img, float t) {
-    fluid_sim_t *s = c->s;
+    canvas_t *s = c->s;
     if (it->r <= 0.f) return;
     const float r = it->r, ro = r + c->soft * 0.5f, cphi = 2.f * it->lit - 1.f, sphi = sqrtf(fmaxf(0.f, 1.f - cphi * cphi));
     const float lx = it->side * sphi, lz = cphi, turn = it->spin * t * DEG;
     int i0, i1, j0, j1;
     cells(s, it->x - ro, it->y - ro, it->x + ro, it->y + ro, &i0, &i1, &j0, &j1);
+    /* light, map and colour change slowly over the face: once a cell, at its centre; only the
+     * outline is per dot */
+    int ckey = -1;
+    float ink = 0.f;
+    uint32_t rgb = 0;
     for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) {
         const float x = s->xs[i] - it->x, y = -s->ys[j] - it->y, d = sqrtf(x * x + y * y);
         if (d >= ro) continue;
-        const float edge = 1.f - fluid_smooth(r - c->soft * 0.5f, ro, d);
-        float nx = x / r, ny = y / r, rr = nx * nx + ny * ny;
-        if (rr > 0.999f) { const float k = 0.9995f / sqrtf(rr); nx *= k; ny *= k; rr = nx * nx + ny * ny; }
-        /* the dark side: a faint earthshine, opaque all the same (it hides what is behind) */
-        const float nz = sqrtf(1.f - rr), lit = fluid_smooth(-0.08f, 0.12f, nx * lx + nz * lz), lum = 0.18f + 0.82f * lit;
-        uint32_t rgb = it->rgb;
-        float ink = SCENE_INK * (0.08f + 0.92f * lit);
-        if (img) {
-            float u = (atan2f(nx, nz) + turn) * (0.5f / 3.1415927f) + 0.5f;
-            u -= floorf(u);
-            const int ix = (int)(u * img->w) % img->w, iy = (int)((0.5f - asinf(ny) / 3.1415927f) * img->h);
-            const int q = px4(img, ix, iy < 0 ? 0 : iy >= img->h ? img->h - 1 : iy);
-            if (q) rgb = img->pal[q];
-            else ink = 0.f;                                     /* a hole in the image: nothing, as play.mjs */
+        const int key = (j >> 2) * s->W + (i >> 1);
+        if (key != ckey) {
+            ckey = key;
+            const float cx = 0.5f * (s->xs[i & ~1] + s->xs[i | 1]) - it->x, cy = -0.5f * (s->ys[j & ~3] + s->ys[j | 3]) - it->y;
+            float nx = cx / r, ny = cy / r, rr = nx * nx + ny * ny;
+            if (rr > 0.999f) { const float k = 0.9995f / sqrtf(rr); nx *= k; ny *= k; rr = nx * nx + ny * ny; }
+            /* the dark side: a faint earthshine, opaque all the same (it hides what is behind) */
+            const float nz = sqrtf(1.f - rr), lit = fluid_smooth(-0.08f, 0.12f, nx * lx + nz * lz), lum = 0.18f + 0.82f * lit;
+            uint32_t base = it->rgb;
+            ink = SCENE_INK * (0.08f + 0.92f * lit);
+            if (img) {
+                float u = (fluid_atan2(nx, nz) + turn) * (0.5f / 3.1415927f) + 0.5f;
+                u -= floorf(u);
+                const int ix = (int)(u * img->w) % img->w, iy = (int)((0.5f - fast_asin(ny) / 3.1415927f) * img->h);
+                const int q = px4(img, ix, iy < 0 ? 0 : iy >= img->h ? img->h - 1 : iy);
+                if (q) base = img->pal[q];
+                else ink = 0.f;                                 /* a hole in the image: nothing, as play.mjs */
+            }
+            rgb = shade(base, lum);
         }
-        paint(s, j * s->W + i, edge, ink, shade(rgb, lum));
+        paint(s, j * s->W + i, 1.f - fluid_smooth(r - c->soft * 0.5f, ro, d), ink, rgb);
     }
 }
 
-/* an asset `size` wide, turned rot degrees: each cell's coverage from 3 × 3 samples */
+/* an asset `size` wide, turned rot degrees: each dot's coverage from 2 × 2 samples (one, when
+ * the dot is no bigger than an asset pixel) */
+/* a small upright symbol (a planet, a sign on the wheel): drawn crisp on the panel, like a
+ * letter, over ink in its box (the fluid gathers there, then the symbol shows whole) */
+static bool crisp(const ctx_t *c, const scene_item_t *it, const pkg_asset_t *a, fluid_letter_t *letters, int *nl) {
+    if (a->kind != PA_MASK || it->rot != 0.f || it->size > SCENE_CRISP_MAX || *nl >= FLUID_MAX_LETTERS) return false;
+    canvas_t *s = c->s;
+    const float w = it->size, h = it->size * a->h / a->w, k = 0.5f * s->stage;
+    const float x0 = (it->x - 0.5f * w + 1.f) * k, y0 = (1.f - it->y - 0.5f * h) * k;
+    letters[(*nl)++] = (fluid_letter_t){ '*', true, x0, y0, w * k, h * k, h * k, 0.f, FLUID_RGB | it->rgb, a->data, a->w, a->h };
+    const float cwp = (float)s->stage / s->W, chp = (float)s->stage / s->H;
+    int i0 = (int)floorf(x0 / cwp), i1 = (int)ceilf((x0 + w * k) / cwp), j0 = (int)floorf(y0 / chp), j1 = (int)ceilf((y0 + h * k) / chp);
+    i0 = i0 < 0 ? 0 : i0; j0 = j0 < 0 ? 0 : j0; i1 = i1 >= s->W ? s->W - 1 : i1; j1 = j1 >= s->H ? s->H - 1 : j1;
+    for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) paint(s, j * s->W + i, 1.f, 0.62f, it->rgb);
+    return true;
+}
+
 static void glyph(const ctx_t *c, const scene_item_t *it, const pkg_asset_t *a) {
-    fluid_sim_t *s = c->s;
+    canvas_t *s = c->s;
     const float w = it->size, h = it->size * a->h / a->w, ext = 0.5f * sqrtf(w * w + h * h);
     const float co = cosf(it->rot * DEG), si = sinf(it->rot * DEG), cw = 2.f / s->W, ch = 2.f / s->H;
+    /* a dot no wider than one of the asset's pixels: its centre says it all */
+    const int ns = cw * a->w > w || ch * a->h > h ? 4 : 1;
     int i0, i1, j0, j1;
     cells(s, it->x - ext, it->y - ext, it->x + ext, it->y + ext, &i0, &i1, &j0, &j1);
-    for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) {
-        int cov = 0; float cr = 0.f, cg = 0.f, cb = 0.f;
-        for (int q = 0; q < 9; q++) {
-            const float dx = s->xs[i] + cw * ((q % 3) - 1) / 3.f - it->x, dy = -s->ys[j] + ch * ((q / 3) - 1) / 3.f - it->y;
-            const float u = (co * dx + si * dy) / w + 0.5f, v = 0.5f - (-si * dx + co * dy) / h;
-            if (u < 0.f || u >= 1.f || v < 0.f || v >= 1.f) continue;
-            const int ax = (int)(u * a->w), ay = (int)(v * a->h);
-            if (a->kind == PA_MASK) { cov += bit(a, ax, ay); continue; }
-            const int p = px4(a, ax, ay);
-            if (!p) continue;
-            cov++;
-            cr += a->pal[p] >> 16 & 255; cg += a->pal[p] >> 8 & 255; cb += a->pal[p] & 255;
+    /* (u, v) is linear in the dot's position: stepped along each row, offset per sample */
+    const float ux = co / w, uy = si / w, vx = si / h, vy = -co / h;
+    float qu[4], qv[4];
+    for (int q = 0; q < ns; q++) {
+        const float ox = ns > 1 ? cw * ((q & 1) - 0.5f) * 0.5f : 0.f, oy = ns > 1 ? ch * ((q >> 1) - 0.5f) * 0.5f : 0.f;
+        qu[q] = ux * ox + uy * oy; qv[q] = vx * ox + vy * oy;
+    }
+    for (int j = j0; j <= j1; j++) {
+        const float dy = -s->ys[j] - it->y, dx0 = s->xs[i0] - it->x;
+        float ru = 0.5f + ux * dx0 + uy * dy, rv = 0.5f + vx * dx0 + vy * dy;
+        for (int i = i0; i <= i1; i++, ru += ux * cw, rv += vx * cw) {
+            int cov = 0; float cr = 0.f, cg = 0.f, cb = 0.f;
+            for (int q = 0; q < ns; q++) {
+                const float u = ru + qu[q], v = rv + qv[q];
+                if (u < 0.f || u >= 1.f || v < 0.f || v >= 1.f) continue;
+                const int ax = (int)(u * a->w), ay = (int)(v * a->h);
+                if (a->kind == PA_MASK) { cov += bit(a, ax, ay); continue; }
+                const int p = px4(a, ax, ay);
+                if (!p) continue;
+                cov++;
+                cr += a->pal[p] >> 16 & 255; cg += a->pal[p] >> 8 & 255; cb += a->pal[p] & 255;
+            }
+            if (!cov) continue;
+            const uint32_t rgb = a->kind == PA_MASK ? it->rgb : (uint32_t)(cr / cov) << 16 | (uint32_t)(cg / cov) << 8 | (uint32_t)(cb / cov);
+            paint(s, j * s->W + i, (float)cov / ns, SCENE_INK, rgb);
         }
-        if (!cov) continue;
-        const uint32_t rgb = a->kind == PA_MASK ? it->rgb : (uint32_t)(cr / cov) << 16 | (uint32_t)(cg / cov) << 8 | (uint32_t)(cb / cov);
-        paint(s, j * s->W + i, cov / 9.f, SCENE_INK, rgb);
     }
 }
 
 /* the reader's letter boxes (fluid_text_set_labels): ink under each letter, and the letters
  * themselves for the crisp overlay; size = the type size in glass units */
-static void text(const ctx_t *c, const scene_t *sc, const scene_item_t *it, fluid_letter_t *letters, int *nl) {
-    fluid_sim_t *s = c->s;
-    const float fs = it->size * s->stage * 0.5f, adv = fs * 0.6f, lh = fs * 1.05f;
-    const float x0 = (it->x + 1.f) * 0.5f * s->stage - it->nstr * adv * 0.5f, y0 = (1.f - it->y) * 0.5f * s->stage - lh * 0.5f;
-    const char *str = sc->chars + it->str;
-    for (int q = 0; q < it->nstr && *nl < SCENE_LETTERS; q++)
-        letters[(*nl)++] = (fluid_letter_t){ str[q], false, x0 + q * adv, y0, adv, lh, fs, 0.f, FLUID_RGB | it->rgb };
+static void text_run(const ctx_t *c, const char *str, int n, float x, float y, float size, uint32_t rgb,
+                     int hi0, int hi1, uint32_t hi_rgb, fluid_letter_t *letters, int *nl) {
+    canvas_t *s = c->s;
+    const float fs = size * s->stage * 0.5f, adv = fs * 0.6f, lh = fs * 1.05f;
+    const float x0 = (x + 1.f) * 0.5f * s->stage - n * adv * 0.5f, y0 = (1.f - y) * 0.5f * s->stage - lh * 0.5f;
+    for (int q = 0; q < n && *nl < FLUID_MAX_LETTERS; q++)
+        letters[(*nl)++] = (fluid_letter_t){ str[q], false, x0 + q * adv, y0, adv, lh, fs, 0.f,
+                                             FLUID_RGB | (q >= hi0 && q < hi1 ? hi_rgb : rgb), NULL, 0, 0 };
     const float cwp = (float)s->stage / s->W, chp = (float)s->stage / s->H;
-    int i0 = (int)floorf(x0 / cwp), i1 = (int)ceilf((x0 + it->nstr * adv) / cwp), j0 = (int)floorf(y0 / chp), j1 = (int)ceilf((y0 + lh) / chp);
+    int i0 = (int)floorf(x0 / cwp), i1 = (int)ceilf((x0 + n * adv) / cwp), j0 = (int)floorf(y0 / chp), j1 = (int)ceilf((y0 + lh) / chp);
     i0 = i0 < 0 ? 0 : i0; j0 = j0 < 0 ? 0 : j0; i1 = i1 >= s->W ? s->W - 1 : i1; j1 = j1 >= s->H ? s->H - 1 : j1;
     for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) {
         const float px = (i + 0.5f) * cwp, py = (j + 0.5f) * chp;
         if (py <= y0 || py >= y0 + lh) continue;
         const int li = (int)floorf((px - x0) / adv);
-        if (li >= 0 && li < it->nstr && str[li] != ' ') paint(s, j * s->W + i, 1.f, 0.62f, it->rgb);
+        if (li >= 0 && li < n && str[li] != ' ') paint(s, j * s->W + i, 1.f, 0.62f, rgb);
     }
+}
+static void text(const ctx_t *c, const scene_t *sc, const scene_item_t *it, fluid_letter_t *letters, int *nl) {
+    text_run(c, sc->chars + it->str, it->nstr, it->x, it->y, it->size, it->rgb, 0, 0, 0, letters, nl);
 }
 
 /* Catmull-Rom through the points, 8 segments a span */
@@ -375,36 +450,98 @@ static void curve(const ctx_t *c, const float (*p)[2], int n, float hw, uint32_t
     }
 }
 
-void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, fluid_letter_t *letters, int *nletters) {
-    FLUID_PROF_BEGIN(c0);
-    const uint32_t bg = fluid_pack_rgba8(0.6f, 0.68f, 0.92f, 0.f);
-    for (int k = 0; k < s->N; k++) { s->T[k] = 0; s->tcol[k] = bg; }
-    *nletters = 0;
-    const ctx_t c = { s, 1.5f / s->H };                       /* soft edge: ¾ of a cell row */
+/* the canvas for a W x H grid, kept between frames (PSRAM: 7 bytes a dot) */
+static canvas_t s_cv;
+static const uint8_t *s_cv_mask;                       /* the sim mask it was built from */
+static bool canvas_for(const fluid_sim_t *s) {
+    const int W = 2 * s->W, H = 4 * s->H;
+    if (s_cv.W != W || s_cv.H != H) {
+        s_cv_mask = NULL;
+        SCENE_FREE(s_cv.xs); SCENE_FREE(s_cv.ys); SCENE_FREE(s_cv.mask); SCENE_FREE(s_cv.T); SCENE_FREE(s_cv.tcol);
+        s_cv = (canvas_t){ W, H, W * H, s->stage, SCENE_CALLOC(sizeof(float) * (size_t)W), SCENE_CALLOC(sizeof(float) * (size_t)H),
+                           SCENE_CALLOC((size_t)W * H), SCENE_CALLOC(sizeof(int16_t) * (size_t)W * H), SCENE_CALLOC(sizeof(uint32_t) * (size_t)W * H) };
+        if (!s_cv.xs || !s_cv.ys || !s_cv.mask || !s_cv.T || !s_cv.tcol) {
+            SCENE_FREE(s_cv.xs); SCENE_FREE(s_cv.ys); SCENE_FREE(s_cv.mask); SCENE_FREE(s_cv.T); SCENE_FREE(s_cv.tcol);
+            s_cv = (canvas_t){ 0 };
+            return false;
+        }
+        for (int i = 0; i < W; i++) s_cv.xs[i] = ((i + 0.5f) / W) * 2.f - 1.f;
+        for (int j = 0; j < H; j++) s_cv.ys[j] = ((j + 0.5f) / H) * 2.f - 1.f;
+    }
+    s_cv.stage = s->stage;
+    if (s_cv_mask != s->mask) {                        /* a new grid: its dots inside the glass */
+        s_cv_mask = s->mask;
+        for (int j = 0; j < H; j++) for (int i = 0; i < W; i++) s_cv.mask[j * W + i] = s->mask[(j >> 2) * s->W + (i >> 1)];
+    }
+    return true;
+}
+
+/* 4 x 4 Bayer over the dot lattice: a dot shows where its ink beats the threshold, so a soft
+ * edge or a shaded sphere dithers and a solid stroke is all dots */
+static const uint8_t BAYER[4][4] = { { 0, 8, 2, 10 }, { 12, 4, 14, 6 }, { 3, 11, 1, 9 }, { 15, 7, 13, 5 } };
+
+static void paint_items(const ctx_t *c, const scene_t *sc, float t, fluid_letter_t *letters, int *nletters) {
     for (int n = 0; sc && n < sc->nitems; n++) {
         const scene_item_t *it = &sc->items[n];
         if (t < it->on || (it->off > 0.f && t >= it->off)) continue;
         const pkg_asset_t *a = it->asset >= 0 ? &sc->pkg->assets[it->asset] : NULL;
         switch (it->k) {
-        case PK_RING:  ring(&c, it, false); break;
-        case PK_ARC:   ring(&c, it, true); break;
+        case PK_RING:  ring(c, it, false); break;
+        case PK_ARC:   ring(c, it, true); break;
         case PK_TICKS:
             for (int q = 0; q < it->n; q++) {
                 const float a0 = (it->a0 + q * 360.f / it->n) * DEG, cx = cosf(a0), cy = sinf(a0);
-                segment(&c, it->r * cx, it->r * cy, (it->r + it->len) * cx, (it->r + it->len) * cy, it->w * 0.5f, it->rgb);
+                segment(c, it->r * cx, it->r * cy, (it->r + it->len) * cx, (it->r + it->len) * cy, it->w * 0.5f, it->rgb);
             }
             break;
         case PK_LINE:
             for (int q = 0; q + 1 < it->npts; q++)
-                segment(&c, sc->pts[it->pts + q][0], sc->pts[it->pts + q][1], sc->pts[it->pts + q + 1][0], sc->pts[it->pts + q + 1][1], it->w * 0.5f, it->rgb);
+                segment(c, sc->pts[it->pts + q][0], sc->pts[it->pts + q][1], sc->pts[it->pts + q + 1][0], sc->pts[it->pts + q + 1][1], it->w * 0.5f, it->rgb);
             break;
-        case PK_CURVE: curve(&c, sc->pts + it->pts, it->npts, it->w * 0.5f, it->rgb); break;
-        case PK_DISC:  disc(&c, it->x, it->y, it->r, it->rgb); break;
-        case PK_BALL:  ball(&c, it, a, t); break;
-        case PK_GLYPH: if (a) glyph(&c, it, a); break;
-        case PK_TEXT:  text(&c, sc, it, letters, nletters); break;
+        case PK_CURVE: curve(c, sc->pts + it->pts, it->npts, it->w * 0.5f, it->rgb); break;
+        case PK_DISC:  disc(c, it->x, it->y, it->r, it->rgb); break;
+        case PK_BALL:  ball(c, it, a, t); break;
+        case PK_GLYPH: if (a && !crisp(c, it, a, letters, nletters)) glyph(c, it, a); break;
+        case PK_TEXT:  text(c, sc, it, letters, nletters); break;
         default: break;
         }
+    }
+}
+
+void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_t *cap, fluid_letter_t *letters, int *nletters, uint8_t *dots) {
+    FLUID_PROF_BEGIN(c0);
+    const uint32_t bg = fluid_pack_rgba8(0.6f, 0.68f, 0.92f, 0.f);
+    for (int k = 0; k < s->N; k++) { s->T[k] = 0; s->tcol[k] = bg; }
+    if (dots) memset(dots, 0, (size_t)s->N);
+    *nletters = 0;
+    if (!canvas_for(s)) { FLUID_PROF_END(FP_TARGET, c0); return; }
+    canvas_t *cv = &s_cv;
+    for (int k = 0; k < cv->N; k++) { cv->T[k] = 0; cv->tcol[k] = bg; }
+    const ctx_t c = { cv, 1.f / cv->H };                      /* soft edge: half a dot row */
+    paint_items(&c, sc, t, letters, nletters);
+    if (cap && cap->n > 0)                                    /* the subtitle, over the drawing */
+        text_run(&c, cap->str, cap->n, 0.f, SCENE_CAPTION_Y, SCENE_CAPTION_SIZE, SCENE_CAPTION_RGB,
+                 cap->hi0, cap->hi1, SCENE_CAPTION_HI, letters, nletters);
+    /* back to the cells: each cell's target is its densest dot (a thin stroke still draws the
+     * fluid to it), its colour the ink-weighted mean of its dots, its dots those over Bayer */
+    for (int j = 0; j < s->H; j++) for (int i = 0; i < s->W; i++) {
+        int tmax = 0, bits = 0;
+        float wr = 0.f, wg = 0.f, wb = 0.f, w = 0.f;
+        for (int q = 0; q < 8; q++) {
+            const int col = q >> 2, row = q & 3, dx = 2 * i + col, dy = 4 * j + row, k = dy * cv->W + dx;
+            const int v = cv->T[k];
+            if (!v) continue;
+            if (v > tmax) tmax = v;
+            const float f = v * (1.f / FQ_UNIT);
+            const uint32_t cc = cv->tcol[k];
+            wr += f * (cc & 255); wg += f * (cc >> 8 & 255); wb += f * (cc >> 16 & 255); w += f;
+            if (f > SCENE_INK * (BAYER[dy & 3][dx & 3] + 0.5f) / 16.f) bits |= 1 << fluid_braille_bit(col, row);
+        }
+        const int k = j * s->W + i;
+        if (!tmax) continue;
+        s->T[k] = (int16_t)tmax;
+        s->tcol[k] = fluid_pack_rgba8(wr / w / 255.f, wg / w / 255.f, wb / w / 255.f, 0.f);
+        if (dots) dots[k] = (uint8_t)bits;
     }
     FLUID_PROF_END(FP_TARGET, c0);
 }

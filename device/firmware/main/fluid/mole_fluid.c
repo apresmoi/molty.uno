@@ -138,6 +138,7 @@ static int     s_text_len = 0;
 static int     s_text_ver = 0;
 static bool    s_text_appended = false;         /* last change(s) only appended     */
 static int     s_req_state = -1, s_req_fx = 0;  /* pending explicit state           */
+static bool    s_req_implied = false;          /* ...or the creature a mood alone implies */
 static bool    s_req_text_hold = false;         /* …"text" holding its last word    */
 static bool    s_req_reel  = false;             /* pending autoplay restart         */
 static bool    s_req_activity = false;          /* a state / mood / text change came */
@@ -306,6 +307,11 @@ static atomic_bool s_screen = true;             /* on the glass now (the task sw
 static atomic_bool s_bye = false, s_bye_done = false;   /* mole_fluid_goodbye; it ended   */
 static float    s_bye_lvl = 1.f;                    /* the panel's level the goodbye set */
 static bool     s_word_dots = false;                /* the boot word's dots (s_tx->dots) are drawn */
+static uint8_t *s_sdots, *s_sdots_d;                /* a scene's dots: the task's, the drawer's (PSRAM) */
+static bool     s_sub = false;                      /* a say over a scene: its words as a subtitle */
+static int      s_sub_word = -1;                    /* the word the voice is on (-1: none yet) */
+static float    s_sub_until = 0.f;                  /* the last line stays this long after the say */
+static char     s_sub_line[SCENE_CAPTION_MAX];
 static bool  s_touch_mute = false;              /* the touch that woke the screen, until it lifts */
 #define FLUID_OFF_POLL_MS  50                   /* screen off: touch and wake checks       */
 /* the drawer's window buffer (fluid_draw_send): internal DMA-capable RAM, which the panel's
@@ -361,6 +367,32 @@ static float word_delay_s(const ftok_t *t, int wpm) {
 /* the reader's letters in the say's mood colour (0: the palette's own) */
 static void tint_letters(void) {
     for (int i = 0; i < s_tx->nletters; i++) s_tx->letters[i].rgb = s_tint;
+}
+
+/* the subtitle: the line (≤ SCENE_CAPTION_MAX characters, broken between words) holding the
+ * word the voice is on, that word lit */
+static scene_caption_t sub_caption(void) {
+    scene_caption_t c = { s_sub_line, 0, 0, 0 };
+    if (!s_sub || s_sub_word < 0 || s_sub_word >= s_ntok) return c;
+    int first = 0, len = 0;
+    for (int i = 0; i < s_ntok; i++) {
+        const int l = s_toks[i].len < SCENE_CAPTION_MAX ? s_toks[i].len : SCENE_CAPTION_MAX;
+        if (i > first && len + 1 + l > SCENE_CAPTION_MAX) {   /* a new line starts at word i */
+            if (s_sub_word < i) break;
+            first = i; len = 0;
+        }
+        len += (i > first) + l;
+    }
+    for (int i = first; i < s_ntok; i++) {
+        const int l = s_toks[i].len < SCENE_CAPTION_MAX ? s_toks[i].len : SCENE_CAPTION_MAX;
+        if (i > first && c.n + 1 + l > SCENE_CAPTION_MAX) break;
+        if (i > first) s_sub_line[c.n++] = ' ';
+        if (i == s_sub_word) c.hi0 = c.n;
+        memcpy(s_sub_line + c.n, s_ttext + s_toks[i].off, (size_t)l);
+        c.n += l;
+        if (i == s_sub_word) c.hi1 = c.n;
+    }
+    return c;
 }
 
 static void show_word(int idx) {
@@ -602,6 +634,10 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     }
 
     const bool asking = s_ask.scr.phase != FLUID_ASK_NONE;
+    if (s_sub) {   /* the subtitle follows the voice; its last line stays a moment, then goes */
+        if (s_follow) { if (s_follow_word >= 0) s_sub_word = s_follow_word < s_ntok ? s_follow_word : s_ntok - 1; s_sub_until = s_tnow + 1.5f; }
+        else if (s_tnow >= s_sub_until || s_cur != ST_SCENE) { s_sub = false; s_sub_word = -1; }
+    }
     /* speed reader (paused under a question: the labels own s_tx) */
     if (!asking && s_cur == ST_TEXT && s_word < s_ntok && s_follow) {
         /* following a say: each word when the speaker reaches it (link_audio's cues),
@@ -683,7 +719,11 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     case ST_TEXT:     fluid_text_fill(s_tx, s, s_tnow); break;
     case ST_FX:       fluid_target_effect(s, s_cur_fx, s_tnow, swell, ox, oy); break;
     case ST_THINKING: fluid_target_blob(s, s_tnow * 1.4f, swell * 0.85f, ox, oy); break;
-    case ST_SCENE:    scene_fill(s, s_sp.cur, s_sp.t, s_overlay, &s_noverlay); break;
+    case ST_SCENE: {
+        const scene_caption_t cap = sub_caption();
+        scene_fill(s, s_sp.cur, s_sp.t, &cap, s_overlay, &s_noverlay, s_sdots);
+        break;
+    }
     case ST_CREATURE:
         if (cr_loaded()) {
             if (s_cpk) { cpk_set_work(s_cpk, fd_working(&s_dir)); cpk_frame(s_cpk, s, rdt, swell); }    /* engine + player + body + ambient + fill */
@@ -1075,6 +1115,7 @@ static void fluid_task(void *arg) {
         xSemaphoreTake(s_mutex, portMAX_DELAY);
         cfg = s_cfg;
         req = s_req_state; req_fx = s_req_fx; req_hold = s_req_text_hold; s_req_state = -1;
+        const bool req_implied = s_req_implied; s_req_implied = false;
         req_reel = s_req_reel; s_req_reel = false;
         nrip = s_ripn; memcpy(rip, s_ripq, sizeof(rip)); s_ripn = 0;
         uint8_t *cblob = s_cute_blob; size_t clen = s_cute_len; s_cute_blob = NULL; const bool cpkg = s_cute_pkg;
@@ -1134,6 +1175,12 @@ static void fluid_task(void *arg) {
         if (cblob) { load_creature(cblob, clen, cpkg); heap_caps_free(cblob); fd_set_creature(&s_dir, cr_loaded()); }
         /* the director: state first (it may end the reel), then the mood over it */
         if (req_reel) fd_autoplay(&s_dir);
+        /* a drawing up stays to its end: a say's words become its subtitle, and a mood alone
+         * (speaking, listening) moods the voice, never takes the screen back to the creature */
+        if (s_cur == ST_SCENE && scene_playing(&s_sp)) {
+            if (req == ST_TEXT && s_follow) { s_sub = true; s_sub_word = -1; req = -1; }
+            else if (req == ST_CREATURE && req_implied) req = -1;
+        }
         if (req >= 0) fd_request_state(&s_dir, req, req_fx, req_hold);
         for (int q = 0; q < nsops; q++) {                   /* scenes, in the order they came */
             if (sops[q].op == MOLE_SCENE_PLAY) scene_play(&s_sp, sops[q].sc);
@@ -1184,8 +1231,16 @@ static void fluid_task(void *arg) {
             .letters = s_dletters, .nletters = s_noverlay,
             .ramp = GC_RAMP_ASCII, .font = gc_font5x7,
             /* the boot word, and its dots while it melts (each goes as the ink leaves it) */
-            .dots = s_word_dots && (s_cur == ST_TEXT || s_melt_t < 0.8f) ? s_tx->dots : NULL,
+            .dots = s_cur == ST_SCENE ? s_sdots_d : s_word_dots && (s_cur == ST_TEXT || s_melt_t < 0.8f) ? s_tx->dots : NULL,
         };
+        if (s_cur == ST_SCENE) memcpy(s_sdots_d, s_sdots, (size_t)s_sim->N);   /* the drawer is idle (s_idle) */
+        {   /* a scene's symbols point into its package: the drawer keeps it until its next frame */
+            static pkg_t *held;
+            pkg_t *now = s_cur == ST_SCENE && s_sp.cur ? s_sp.cur->pkg : NULL;
+            if (now) pkg_ref(now);
+            if (held) pkg_unref(held);
+            held = now;
+        }
         memcpy(s_dletters, s_overlay, sizeof(fluid_letter_t) * (size_t)s_noverlay);
         if (s_touch_t0) { s_dtouch = s_touch_t0; s_touch_t0 = 0; }
         s_dstatus = fd_status(&s_dir);
@@ -1301,7 +1356,9 @@ esp_err_t mole_fluid_creature_init(void) {
     if (s_cpu_mhz <= 0) s_cpu_mhz = 160;
     if (!s_ttext) s_ttext = heap_caps_malloc(FLUID_TEXT_MAX + 1, MALLOC_CAP_SPIRAM);
     if (!s_toks)  s_toks  = heap_caps_malloc(FLUID_MAX_TOKENS * sizeof(ftok_t), MALLOC_CAP_SPIRAM);
-    if (!s_ttext || !s_toks) return ESP_ERR_NO_MEM;
+    if (!s_sdots)   s_sdots   = heap_caps_calloc(1, FLUID_GRID_MAX_W * FLUID_GRID_MAX_H, MALLOC_CAP_SPIRAM);
+    if (!s_sdots_d) s_sdots_d = heap_caps_calloc(1, FLUID_GRID_MAX_W * FLUID_GRID_MAX_H, MALLOC_CAP_SPIRAM);
+    if (!s_ttext || !s_toks || !s_sdots || !s_sdots_d) return ESP_ERR_NO_MEM;
     s_ttext[0] = '\0';
     s_seen_ver = -1;
 
@@ -1709,14 +1766,14 @@ esp_err_t mole_fluid_creature_state_set_json(const char *body) {
         else {
             s_req_mood = work ? CM_IDLE : m; s_req_work = work; s_req_hold_s = hold_s;
             /* a mood alone means "show me the creature in that mood" */
-            if (!state_given) { s_req_state = ST_CREATURE; s_req_fx = 0; }
+            if (!state_given) { s_req_state = ST_CREATURE; s_req_fx = 0; s_req_implied = true; }
         }
     }
     if ((j = cJSON_GetObjectItem(root, "state")) && cJSON_IsString(j)) {
         int st, fx;
         if (!strcmp(j->valuestring, "autoplay")) s_req_reel = true;     /* the demo reel, on request only */
         else if (parse_state(j->valuestring, &st, &fx)) {
-            s_req_state = st; s_req_fx = fx;
+            s_req_state = st; s_req_fx = fx; s_req_implied = false;
             s_req_text_hold = st == ST_TEXT && cJSON_IsTrue(cJSON_GetObjectItem(root, "hold"));
         }
         else ret = ESP_ERR_INVALID_ARG;
