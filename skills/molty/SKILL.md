@@ -84,7 +84,7 @@ private one, see [self-hosting](references/self-hosting.md)).
 - **New drawings** (astrology, ...): `pkg.available` lists them to offer; install takes your human's
   tap; then use the package's skill ([packages](references/api.md#packages-and-scenes)).
 - **Read `relay.caps`, not versions** (`status`, or `device.caps` on an `utterance`).
-- **This skill is version 2026.11.14.** `device.skill` (utterance) or `relay.skill` (status) newer?
+- **This skill is version 2026.11.15.** `device.skill` (utterance) or `relay.skill` (status) newer?
   Read CHANGES.md from GitHub, re-read the files it names, tell your human what's new in one line.
 - **Don't talk unprompted or repeatedly.** `no_speech` after a wake → one short line or nothing.
   `do_not_disturb`: reply only (in_reply_to) until a `dnd` event.

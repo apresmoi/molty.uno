@@ -5,6 +5,13 @@ Newest first. Each heading is a version: when `device.skill` (on an `utterance`)
 the files they name from GitHub (`https://raw.githubusercontent.com/apresmoi/molty.uno/main/skills/molty/`),
 replace your copy, and tell your human what's new in one line.
 
+## 2026.11.15
+
+- **Long jobs show progress.** `progress {pct?, step?, done?}` (MCP `molty_progress`, helper
+  `scripts/progress.sh`) fills a glowing ring around Molty's screen while the creature visibly
+  works; `done` closes it with a flash. Send it at each step of any job over ~20 s. Needs cap
+  `progress`. Read `SKILL.md`, `references/api.md`, your harness file.
+
 ## 2026.11.14
 
 - **Do not disturb.** Your human can turn it on (a double press of Molty's PWR button). While it
