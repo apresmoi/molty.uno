@@ -173,6 +173,36 @@ static void test_dirty(void) {
     free(fb); fluid_frame_destroy(fr); fluid_draw_destroy(d); fluid_sim_destroy(s);
 }
 
+/* a scene's dots and symbols ride the water: a wave slope shifts a hairline by a dot and
+ * a symbol inside its cells; flat water puts both back exactly where they were */
+static void test_dots_wobble(void) {
+    const int W = 52, H = 32, N = W * H, ic = W / 2, jc = H / 2;
+    fluid_sim_t *s = fluid_sim_create(W, H, FLUID_STAGE_REF);
+    fluid_draw_t *d = fluid_draw_create(W, H, FLUID_STAGE_REF, FLUID_STAGE_REF);
+    fluid_frame_t *fr = fluid_frame_create(W, H);
+    uint8_t *dots = calloc(N, 1);
+    memcpy(fr->mask, s->mask, N);
+    for (int k = 0; k < N; k++) fr->view[k] = fr->ink[k] = (int16_t)FQ_UNIT;
+    for (int j = jc - 2; j <= jc + 2; j++) dots[j * W + ic] = 0x47;     /* a vertical hairline: dot column 0 */
+    const float cw = (float)FLUID_STAGE_REF / W, ch = (float)FLUID_STAGE_REF / H;
+    static const uint8_t sym[2] = { 0xFF, 0xFF };
+    fluid_letter_t L = { '*', true, 12 * cw + 3.f, 8 * ch + 3.f, 2 * cw - 6.f, 2 * ch - 6.f, 2 * ch, 0.f, 0, sym, 4, 4 };
+    fluid_draw_opts_t o = { FLUID_PAL_GREEN, FLUID_EDGE_CONTOURS, 0.f, 2.f, 0.f, &L, 1, " .:-=+*#", stub_font, dots };
+    const int k = jc * W + ic;
+    fluid_draw_cells(d, fr, &o);
+    const int x0 = d->lt[0].x, y0 = d->lt[0].y;
+    CHECK(d->key[k] == 0x47 && d->key[k - 1] == 0 && d->nlt == 1, "flat: hairline 0x%x left 0x%x", d->key[k], d->key[k - 1]);
+    for (int j = 0; j < H; j++) for (int i = 0; i < W; i++) fr->h[j * W + i] = (int16_t)(78 * i);   /* slope up to the right */
+    fluid_draw_cells(d, fr, &o);
+    CHECK(d->key[k] != 0x47 && d->key[k - 1] == 0xB8, "slope: hairline 0x%x left 0x%x (want it a dot left)", d->key[k], d->key[k - 1]);
+    CHECK(d->lt[0].x < x0 && d->lt[0].x >= d->cx[12] && d->lt[0].y == y0, "slope: symbol at %d,%d (rest %d,%d)", d->lt[0].x, d->lt[0].y, x0, y0);
+    memset(fr->h, 0, N * sizeof(int16_t));
+    fluid_draw_cells(d, fr, &o);
+    CHECK(d->key[k] == 0x47 && d->key[k - 1] == 0 && d->lt[0].x == x0 && d->lt[0].y == y0,
+          "calm: hairline 0x%x left 0x%x, symbol %d,%d", d->key[k], d->key[k - 1], d->lt[0].x, d->lt[0].y);
+    free(dots); fluid_frame_destroy(fr); fluid_draw_destroy(d); fluid_sim_destroy(s);
+}
+
 /* orp < 0 = static label (the pairing code): centred, no accent letter */
 static void test_static_label(void) {
     fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
@@ -840,6 +870,7 @@ int main(void) {
     test_static_label();
     test_braille();
     test_dirty();
+    test_dots_wobble();
     test_labels();
     test_overlay();
     test_fluid_ring();

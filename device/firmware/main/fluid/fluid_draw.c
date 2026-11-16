@@ -42,6 +42,8 @@
 #define DOT_W         0.26f   /* dot size as a fraction of the cell                       */
 #define WORD_INK      0.3f    /* a word's dot shows once the fluid under it is this dense   */
 #define DOT_H         0.15f
+#define DOT_REFR      3.3f    /* a scene's dots and symbols shift this many cells per unit of
+                               * wave slope (fluid_sim_view's refr 1.1 x 3: they move with the water) */
 
 #define KEY_EMPTY 0x0000u
 #define KEY_GLYPH 0x0100u     /* | char                                                   */
@@ -264,6 +266,29 @@ static inline void subsample(const int16_t *v, int W, int k, float *sub, float *
     *smin = mn; *smax = mx; *smean = sm * 0.125f;
 }
 
+/* The braille lattice dots cell (i,j) shows through the water: those under it displaced by
+ * the wave slope, as fluid_sim_view refracts the ink, in whole sub-dots and at most a cell
+ * (so they only land in the cleared ring near_skip keeps around the strokes). A flat
+ * surface leaves every dot exactly on its lattice cell. */
+static inline int refracted_dots(const fluid_frame_t *s, const uint8_t *dots, int i, int j, int k) {
+    const int W = s->W, H = s->H;
+    if (i < 1 || j < 1 || i >= W - 1 || j >= H - 1) return dots[k];
+    const int16_t *h = s->h;
+    const float rk = DOT_REFR * (1.f / FQ_H);
+    int ox = (int)lrintf((float)(h[k + 1] - h[k - 1]) * rk * 2.f);
+    int oy = (int)lrintf((float)(h[k + W] - h[k - W]) * rk * 4.f * H / W);   /* cell aspect A = W/H */
+    if (!ox && !oy) return dots[k];
+    ox = ox < -2 ? -2 : ox > 2 ? 2 : ox;
+    oy = oy < -4 ? -4 : oy > 4 ? 4 : oy;
+    int out = 0;
+    for (int q = 0; q < 8; q++) {
+        const int c = q >> 2, r = q & 3, x = 2 * i + c + ox, y = 4 * j + r + oy;
+        if (x < 0 || y < 0 || x >= 2 * W || y >= 4 * H) continue;
+        if (dots[(y >> 2) * W + (x >> 1)] >> fluid_braille_bit(x & 1, y & 3) & 1) out |= 1 << fluid_braille_bit(c, r);
+    }
+    return out;
+}
+
 /* (key, colour) of one cell — what render.js would draw there */
 static inline void cell_look(const fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_opts_t *o,
                              int i, int j, int k, int rmax, uint32_t frame, uint16_t *key_out, uint16_t *col_out) {
@@ -273,16 +298,21 @@ static inline void cell_look(const fluid_draw_t *d, const fluid_frame_t *s, cons
     const bool feat = s->feat[k] != 0;
     int dots = -1;
     float smax = 0.f, cell_mean = -1.f;
-    if (o->dots && o->dots[k]) {
-        /* a word's dots (fluid_text_set_glyphs): each one shows once the ink has reached it */
-        float sub[8], smin, smean;
-        subsample(s->view, W, k, sub, &smin, &smax, &smean);
-        int wd = 0;
-        for (int q = 0; q < 8; q++)
-            if (sub[q] > WORD_INK && (o->dots[k] >> fluid_braille_bit(q >> 2, q & 3)) & 1) wd |= 1 << fluid_braille_bit(q >> 2, q & 3);
-        if (wd) dots = wd;
-    } else if (o->dots && near_skip(o->dots, W, s->H, i, j)) {
-        *key_out = KEY_EMPTY; *col_out = 0; return;      /* clear around the word's strokes */
+    if (o->dots) {
+        /* a word's dots (fluid_text_set_glyphs): each one shows once the ink has reached it,
+         * seen through the water (refracted_dots) */
+        const int own = o->dots[k], src = refracted_dots(s, o->dots, i, j, k);
+        if (src) {
+            float sub[8], smin, smean;
+            subsample(s->view, W, k, sub, &smin, &smax, &smean);
+            int wd = 0;
+            for (int q = 0; q < 8; q++)
+                if (sub[q] > WORD_INK && (src >> fluid_braille_bit(q >> 2, q & 3)) & 1) wd |= 1 << fluid_braille_bit(q >> 2, q & 3);
+            if (wd) dots = wd;
+        }
+        if (!own && dots < 0 && near_skip(o->dots, W, s->H, i, j)) {
+            *key_out = KEY_EMPTY; *col_out = 0; return;  /* clear around the word's strokes */
+        }
     }
     if (dots >= 0) {
         /* the word's dots */
@@ -448,12 +478,30 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
         if (yoff > margin) yoff = margin;
         if (yoff < -margin) yoff = -margin;
         int gx = ox + (int)lrintf(L->x + (L->w - gw) * 0.5f), gy = oy + (int)lrintf(L->y) + margin + yoff;
-        if (L->mask) { gw = (int)lrintf(L->w); gh = (int)lrintf(L->h); gx = ox + (int)lrintf(L->x); gy = oy + (int)lrintf(L->y); }
+        int cx0 = ox + (int)floorf(L->x), cy0 = oy + (int)floorf(L->y), cx1 = ox + (int)ceilf(L->x + L->w), cy1 = oy + (int)ceilf(L->y + L->h);
+        if (L->mask) {
+            gw = (int)lrintf(L->w); gh = (int)lrintf(L->h); gx = ox + (int)lrintf(L->x); gy = oy + (int)lrintf(L->y);
+            /* a symbol seen through the water, like the dots (DOT_REFR): it drifts by the wave
+             * slope inside its own cleared cells, so nothing outside them needs a redraw */
+            const float sx = (L->x + L->w / 2) / d->stage * 2.f - 1.f, sy = (L->y + L->h / 2) / d->stage * 2.f - 1.f;
+            const float ex = 2.f / W, ey = 2.f / H, kp = -DOT_REFR * cw;   /* the image moves against the slope */
+            int mx = (int)lrintf((fluid_frame_sample(s, s->h, 1.f / FQ_H, sx + ex, sy) - fluid_frame_sample(s, s->h, 1.f / FQ_H, sx - ex, sy)) * kp);
+            int my = (int)lrintf((fluid_frame_sample(s, s->h, 1.f / FQ_H, sx, sy + ey) - fluid_frame_sample(s, s->h, 1.f / FQ_H, sx, sy - ey)) * kp);
+            if (mx || my) {
+                const int i0 = (int)floorf(L->x / cw), i1 = (int)floorf((L->x + L->w) / cw - 0.001f);
+                const int j0 = (int)floorf(L->y / ch), j1 = (int)floorf((L->y + L->h) / ch - 0.001f);
+                cx0 = d->cx[i0 < 0 ? 0 : i0]; cx1 = d->cx[i1 > W - 1 ? W : i1 + 1];
+                cy0 = d->cy[j0 < 0 ? 0 : j0]; cy1 = d->cy[j1 > H - 1 ? H : j1 + 1];
+                mx = mx < cx0 - gx ? cx0 - gx : mx > cx1 - gx - gw ? cx1 - gx - gw : mx;
+                my = my < cy0 - gy ? cy0 - gy : my > cy1 - gy - gh ? cy1 - gy - gh : my;
+                gx += mx; gy += my;
+            }
+        }
         d->lt[d->nlt].gl = L->mask ? NULL : o->font(c2); d->lt[d->nlt].c = rgb565_be((int)r, (int)g, (int)b);
         d->lt[d->nlt].mask = L->mask; d->lt[d->nlt].mw = L->mw; d->lt[d->nlt].mh = L->mh;
         d->lt[d->nlt].x = (int16_t)gx; d->lt[d->nlt].y = (int16_t)gy; d->lt[d->nlt].w = (int16_t)gw; d->lt[d->nlt].h = (int16_t)gh;
-        d->lt[d->nlt].cx0 = (int16_t)(ox + (int)floorf(L->x)); d->lt[d->nlt].cy0 = (int16_t)(oy + (int)floorf(L->y));
-        d->lt[d->nlt].cx1 = (int16_t)(ox + (int)ceilf(L->x + L->w)); d->lt[d->nlt].cy1 = (int16_t)(oy + (int)ceilf(L->y + L->h));
+        d->lt[d->nlt].cx0 = (int16_t)cx0; d->lt[d->nlt].cy0 = (int16_t)cy0;
+        d->lt[d->nlt].cx1 = (int16_t)cx1; d->lt[d->nlt].cy1 = (int16_t)cy1;
         d->nlt++;
         drawn++;
     }
