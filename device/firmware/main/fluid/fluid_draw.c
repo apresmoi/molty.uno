@@ -57,6 +57,10 @@
 #define HD_DUST       3.f     /* a transition's dust fades the shapes this much faster      */
 #define HD_LEVELS     8       /* a cell's smooth weight, in steps (its key: a step redraws it) */
 #define HD_EDGE       0.42f   /* a mask's or a letter's edge, on its bilinear coverage      */
+#define HAZE_GAIN     0.6f    /* around it, the fluid's own dust: its dither of this much of the ink */
+#define HAZE_LEVEL    0.3f    /* ...at this brightness, well under the drawing's            */
+#define HAZE_JITTER   0.9f    /* ...its dither thresholds this noisy (a dust, not a lattice)  */
+#define RUN_GAP       3       /* a scene's changed cells this many apart are sent as two windows */
 
 #define KEY_EMPTY 0x0000u
 #define KEY_GLYPH 0x0100u     /* | char                                                   */
@@ -380,6 +384,22 @@ static inline void cell_look(const fluid_draw_t *d, const fluid_frame_t *s, cons
             if (wt == HD_LEVELS) src = o->kdots;
         }
         dots = src ? scene_dots(s, src, i, j, k, o->dust, &kc) : 0;
+        if (!dots && o->shapes && i >= 1 && j >= 1 && i < W - 1 && j < s->H - 1 && !near_skip(o->dots, W, s->H, i, j)) {
+            /* around the drawing (not next to it), the fluid's own dust: dim, thin, shimmering */
+            float sub[8], smin, smean;
+            subsample(s->view, W, k, sub, &smin, &smax, &smean);
+            for (int q = 0; q < 8; q++) sub[q] *= HAZE_GAIN;
+            const int hz = fluid_braille_dither(sub, i, j, fmaxf(o->shimmer, HAZE_JITTER), frame);
+            if (hz) {
+                const int pal = (o->palette >= 0 && o->palette < FLUID_PAL_COUNT) ? o->palette : FLUID_PAL_PASTEL;
+                const float *lo = PAL[pal][0], *hi = PAL[pal][1], f = HAZE_LEVEL * (255.f / 65535.f);
+                const fluid_rgba16_t *c = &s->col[k];
+                *col_out = pal == FLUID_PAL_PASTEL ? rgb565_be((int)(c->r * f), (int)(c->g * f), (int)(c->b * f))
+                         : rgb565_be((int)(lo[0] + (hi[0] - lo[0]) * HAZE_LEVEL), (int)(lo[1] + (hi[1] - lo[1]) * HAZE_LEVEL), (int)(lo[2] + (hi[2] - lo[2]) * HAZE_LEVEL));
+                *key_out = (uint16_t)(hd | hz);
+                return;
+            }
+        }
         if (!dots) { *key_out = hd; *col_out = 0; return; }
         v = SCENE_LEVEL; feat = false;
     } else if (o->dots) {
@@ -834,25 +854,38 @@ void fluid_draw_rect(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fl
 int fluid_draw_send(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_overlay_t *ov, int mark, bool full,
                     uint16_t *buf, int max_px, fluid_send_fn send, void *ctx) {
     int sent = 0;
+    /* a scene in high definition: each run of changed cells its own window, so its haze changing
+     * all over does not redraw the shapes between */
+    const bool runs = o->scene && o->dots && o->shapes;
     for (int j = 0; j < (full ? 1 : d->H); j++) {
-        int x0 = 0, x1 = d->fb_w, y0 = 0, y1 = d->fb_h;
-        if (!full) {
-            if (d->span[2 * j] >= d->span[2 * j + 1]) continue;
-            x0 = d->cx[d->span[2 * j]] & ~3; x1 = (d->cx[d->span[2 * j + 1]] + 3) & ~3;
-            if (x1 > d->fb_w) x1 = d->fb_w;
-            y0 = d->cy[j]; y1 = d->cy[j + 1];
-        }
-        const int w = x1 - x0, rows = max_px / w;
-        if (rows < 1) return -1;
-        for (int y = y0; y < y1; y += rows) {
-            const int h = y1 - y < rows ? y1 - y : rows;
-            const fluid_rect_t t = { buf, w, x0, y, x1, y + h };
-            fluid_draw_rect(d, o, &t, true);
-            fluid_draw_overlay(d, &t, o->palette, ov);
-            fluid_draw_mark(d, &t, o->palette, mark);
-            if (send(ctx, x0, y, w, h, buf) != 0) return -1;
-            sent += w * h;
-        }
+        int a = full ? 0 : d->span[2 * j];
+        const int end = full ? 0 : d->span[2 * j + 1];
+        if (!full && a >= end) continue;
+        do {
+            int last = end - 1;
+            if (runs) {
+                last = a;
+                for (int c = a + 1; c < end && c - last <= RUN_GAP; c++) if (d->dirty[j * d->W + c]) last = c;
+            }
+            int x0 = 0, x1 = d->fb_w, y0 = 0, y1 = d->fb_h;
+            if (!full) {
+                x0 = d->cx[a] & ~3; x1 = (d->cx[last + 1] + 3) & ~3;
+                if (x1 > d->fb_w) x1 = d->fb_w;
+                y0 = d->cy[j]; y1 = d->cy[j + 1];
+            }
+            const int w = x1 - x0, rows = max_px / w;
+            if (rows < 1) return -1;
+            for (int y = y0; y < y1; y += rows) {
+                const int h = y1 - y < rows ? y1 - y : rows;
+                const fluid_rect_t t = { buf, w, x0, y, x1, y + h };
+                fluid_draw_rect(d, o, &t, true);
+                fluid_draw_overlay(d, &t, o->palette, ov);
+                fluid_draw_mark(d, &t, o->palette, mark);
+                if (send(ctx, x0, y, w, h, buf) != 0) return -1;
+                sent += w * h;
+            }
+            for (a = last + 1; a < end && !d->dirty[j * d->W + a]; a++) {}
+        } while (!full && a < end);
     }
     return sent;
 }

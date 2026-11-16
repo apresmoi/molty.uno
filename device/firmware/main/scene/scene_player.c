@@ -264,6 +264,12 @@ static inline void paint(canvas_t *s, int k, float a, float v, uint32_t rgb) {
 
 /* the scene in high definition: one more shape (glass units to stage px, y down) */
 static inline float spx(const ctx_t *c, float v) { return v * 0.5f * c->s->stage; }
+/* a stroke's half width at the panel's pixels: a hairline (no wider than a dot) is one fine
+ * anti-aliased pixel */
+#define HD_HAIR 0.5f
+static inline float hd_hw(const ctx_t *c, float hw) {
+    return hw <= 1.f / (float)(c->s->W < c->s->H ? c->s->W : c->s->H) ? HD_HAIR : fmaxf(HD_HAIR, spx(c, hw));
+}
 static void shape(const ctx_t *c, fluid_shape_t sh) {
     scene_shapes_t *hd = c->hd;
     if (!hd || hd->n < 0) return;
@@ -272,7 +278,7 @@ static void shape(const ctx_t *c, fluid_shape_t sh) {
 }
 static void seg_shape(const ctx_t *c, float ax, float ay, float bx, float by, float hw, uint32_t rgb) {
     shape(c, (fluid_shape_t){ .k = FLUID_SHAPE_SEG, .rgb = FLUID_RGB | rgb, .x = spx(c, ax + 1.f), .y = spx(c, 1.f - ay),
-                              .x1 = spx(c, bx + 1.f), .y1 = spx(c, 1.f - by), .hw = fmaxf(0.5f, spx(c, hw)) });
+                              .x1 = spx(c, bx + 1.f), .y1 = spx(c, 1.f - by), .hw = hd_hw(c, hw) });
 }
 /* a letter or a symbol (its box, stage px): a symbol fills it, a letter 0.8 x 0.72 of it, centred */
 static void letter_shape(const ctx_t *c, const fluid_letter_t *L) {
@@ -362,7 +368,7 @@ static void ring(const ctx_t *c, const scene_item_t *it, bool arc) {
     span = whole ? 360.f : fmodf(fmodf(span, 360.f) + 360.f, 360.f);
     const float hw = it->w * 0.5f;
     shape(c, (fluid_shape_t){ .k = FLUID_SHAPE_RING, .rgb = FLUID_RGB | it->rgb, .x = spx(c, 1.f), .y = spx(c, 1.f),
-                              .r = spx(c, it->r), .hw = fmaxf(0.5f, spx(c, hw)), .a0 = it->a0, .span = span });
+                              .r = spx(c, it->r), .hw = hd_hw(c, hw), .a0 = it->a0, .span = span });
     if (hw <= hair(s)) {
         const int n = 8 + (int)(span * DEG * it->r * 0.5f * (s->W > s->H ? s->W : s->H));
         hair_t h = { .s = s, .rgb = it->rgb };

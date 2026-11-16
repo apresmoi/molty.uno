@@ -581,12 +581,15 @@ static void test_real_package(const char *dir) {
 static double now_us(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec * 1e6 + ts.tv_nsec * 1e-3; }
 
 /* ── high definition at the panel's pixels: the chart on the 1.75C's 466 px stage. Calm, its
- * rings are true circles of anti-aliased pixels (not the dot lattice), its symbols too; a touch
+ * rings are true circles of anti-aliased pixels (not the dot lattice), its symbols too, over the
+ * fluid's own dust: dim, shimmering, kept off the drawing; a touch
  * turns only the cells near the finger into dust, and calm water gives back the very same
  * pixels; so does a transition. The panel's windows (fluid_draw_send) are the same frame. ── */
 
+static int s_sends;
 static int send_fb(void *ctx, int x, int y, int w, int h, const uint16_t *px) {
     uint16_t *fb = ctx;
+    s_sends++;
     for (int r = 0; r < h; r++) memcpy(fb + (size_t)(y + r) * 466 + x, px + (size_t)r * w, (size_t)w * 2);
     return 0;
 }
@@ -628,36 +631,64 @@ static void test_hd_pixels(const char *dir) {
     CHECK(rings == 3 && segs > 12 + 36 && masks == nl && nl > 12, "its shapes: %d rings, %d strokes, %d symbols (%d letters)", rings, segs, masks, nl);
     fluid_sim_snapshot(s, fr, false);
     memset(fr->h, 0, sizeof(int16_t) * (size_t)N);
+    for (int k = 0; k < N; k++) fr->view[k] = (int16_t)(0.2f * FQ_UNIT);   /* the fluid's haze */
     fluid_draw_opts_t o = { .palette = FLUID_PAL_PASTEL, .edge_mode = FLUID_EDGE_CONTOURS, .letters = L, .nletters = nl, .font = gc_font5x7,
                             .dots = dots, .scene = true, .shapes = shp, .nshapes = hd.n, .kdots = keep };
     int y0, y1;
     fluid_draw(d, fr, fb, &o, &y0, &y1);
     memcpy(calm, fb, (size_t)S * S * 2);
 
-    /* the outer ring (r 0.9): lit at every degree, its edge soft (partly lit pixels both sides) */
+    /* the outer ring (r 0.9, a hairline): lit at every degree, a pixel or two wide, its edge soft */
     const float R = 0.9f * S / 2, c0 = S / 2.f;
-    int hit = 0, soft = 0, lattice = 0;
+    int hit = 0, soft = 0, lattice = 0, wide = 0;
     for (int a = 0; a < 360; a++) {
         const float co = cosf(a * 0.0174533f), si = sinf(a * 0.0174533f);
-        int best = 0;
-        for (float dr = -1.f; dr <= 1.f; dr += 0.5f) { const int v = lum(fb[(int)(c0 + (R + dr) * si) * S + (int)(c0 + (R + dr) * co)]); if (v > best) best = v; }
-        hit += best > 300;
-        for (float dr = 1.5f; dr <= 2.5f; dr += 1.f) {
+        int best = 0, on = 0;
+        for (float dr = -3.f; dr <= 3.f; dr += 0.5f) { const int v = lum(fb[(int)(c0 + (R + dr) * si) * S + (int)(c0 + (R + dr) * co)]); if (v > best) best = v; on += v > 200; }
+        hit += best > 200;
+        wide += on > 6;                                              /* over 3 px of it (where a tick meets it) */
+        for (float dr = -1.5f; dr <= 1.5f; dr += 0.5f) {
             const int v = lum(fb[(int)(c0 + (R + dr) * si) * S + (int)(c0 + (R + dr) * co)]);
             soft += v > 20 && v < best * 3 / 4;
         }
     }
     for (int y = 0; y < S; y++) for (int x = 0; x < S; x++)
         if (fb[y * S + x] && d->yrow[y] < 0) lattice++;                 /* lit between the dot rows */
-    CHECK(hit == 360 && soft > 60 && lattice > 2000, "calm: a true ring (%d of 360 degrees), soft edged (%d), lit off the dot rows (%d px)", hit, soft, lattice);
+    CHECK(hit == 360 && wide <= 12 && soft > 200 && lattice > 2000, "calm: a true ring (%d of 360 degrees), fine (%d degrees wider than 3 px), soft edged (%d), lit off the dot rows (%d px)",
+          hit, wide, soft, lattice);
+    int haze = 0, close = 0, bright = 0;
+    for (int j = 1; j < H - 1; j++) for (int i = 1; i < W - 1; i++) {
+        const int k = j * W + i;
+        if ((d->key[k] & 0xF000) != 0x8000 || !(d->key[k] & 0xFF) || keep[k]) continue;
+        haze++;
+        for (int q = -1; q <= 1; q++) close += dots[k + q * W - 1] || dots[k + q * W] || dots[k + q * W + 1];
+        const uint16_t c = d->col[k];
+        bright += lum(c) > 260;
+    }
+    CHECK(haze > 100 && close == 0 && bright == 0, "calm: the fluid's dust in %d cells, none next to the drawing (%d), all dim (%d bright)", haze, close, bright);
     int hdc = 0, keyd = 0;
     for (int k = 0; k < N; k++) { hdc += (d->key[k] & 0xF000) == 0x8000; keyd += d->key[k] && d->key[k] < 0x100; }
     CHECK(hdc > 100 && keyd == 0, "calm: %d cells drawn smooth, %d as dots", hdc, keyd);
     fluid_draw(d, fr, fb, &o, &y0, &y1);
     CHECK(y1 == y0, "calm: nothing redrawn the next frame ([%d, %d))", y0, y1);
+    /* the dust shimmers: a later moment changes it, the windows sent (runs of changed cells) make
+     * the same frame, and the drawing between them is not redrawn */
+    static uint16_t wbuf[466 * 14];
+    memcpy(win, calm, (size_t)S * S * 2);
+    o.time = 1.f;
+    fluid_draw_cells(d, fr, &o);
+    fluid_draw_rect(d, &o, &(fluid_rect_t){ fb, S, 0, 0, S, S }, false);
+    s_sends = 0;
+    int sentpx = fluid_draw_send(d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, wbuf, S * 14, send_fb, win);
+    int dirtypx = 0;
+    for (int k = 0; k < N; k++) if (d->dirty[k]) dirtypx += (d->cx[k % W + 1] - d->cx[k % W]) * (d->cy[k / W + 1] - d->cy[k / W]);
+    CHECK(!memcmp(win, fb, (size_t)S * S * 2) && memcmp(fb, calm, (size_t)S * S * 2) && sentpx < 2 * dirtypx,
+          "shimmer: the dust changes, the windows are the same frame (%d px sent for %d px changed)", sentpx, dirtypx);
+    printf("  shimmer (host): %d windows, %d px sent for %d px of changed cells\n", s_sends, sentpx, dirtypx);
+    o.time = 0.f;
+    fluid_draw(d, fr, fb, &o, &y0, &y1);
 
     /* the panel's windows draw the same frame */
-    static uint16_t wbuf[466 * 14];
     d->force = true;
     fluid_draw_cells(d, fr, &o);
     fluid_draw_send(d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, true, wbuf, S * 14, send_fb, win);
@@ -696,8 +727,8 @@ static void test_hd_pixels(const char *dir) {
     CHECK(ring_dim > ring_calm / 4 && ring_dim < ring_calm * 3 / 4, "dust 0.15: the ring dimmed (%ld of %ld)", ring_dim, ring_calm);
     o.dust = 1.f; fluid_draw(d, fr, fb, &o, &y0, &y1);
     int lit = 0;
-    for (int q = 0; q < S * S; q++) lit += fb[q] != 0;
-    CHECK(lit == 0, "dust 1: gone (%d px)", lit);
+    for (int q = 0; q < S * S; q++) lit += lum(fb[q]) > 260;
+    CHECK(lit == 0, "dust 1: gone, but the fluid's dim dust (%d bright px)", lit);
     o.dust = 0.f; fluid_draw(d, fr, fb, &o, &y0, &y1);
     CHECK(!memcmp(fb, calm, (size_t)S * S * 2), "dust 0: the same pixels again");
 

@@ -10,7 +10,8 @@
 //     one still every `--every` seconds of each scene
 //   --hd [--size 466] [--caption word]: the calm view in high definition instead, as the firmware draws
 //     a scene with no touch on it (fluid_draw.c's shapes): anti-aliased at the panel's own pixels, a
-//     ball or an image on the dots; --caption puts a subtitle word at the bottom
+//     ball or an image on the dots, a hairline one fine pixel (not the fluid's faint dust around it, which the
+//     device adds); --caption puts a subtitle word at the bottom
 // <pkg> is a package id (packages/<id>/<id>.json) or a path to its JSON. No dependencies.
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { deflateSync } from 'node:zlib';
@@ -194,7 +195,7 @@ const HD_EDGE = 0.42, ACCENT = [255, 140, 60], ORP = (n) => (n <= 1 ? 0 : n <= 5
 const edge = (d) => (d >= 0.5 ? 0 : d <= -0.5 ? 1 : 0.5 - d), sstep = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 /** The calm scene at S x S px (RGB floats) and the dots it keeps (a ball's, an image's): { rgb, kept }. */
 export function hd(pkg, layout, params, t, S = 466, caption = '') {
-  const rgb = new Float32Array(S * S * 3), k = S / 2, X = (x) => (x + 1) * k, Y = (y) => (1 - y) * k, hw = (w) => Math.max(0.5, (w / 2) * k);
+  const rgb = new Float32Array(S * S * 3), k = S / 2, X = (x) => (x + 1) * k, Y = (y) => (1 - y) * k, hw = (w) => (w / 2 <= HAIR ? 0.5 : Math.max(0.5, (w / 2) * k));   // a hairline: one fine pixel
   // one shape: its box, and its coverage of the pixel centred at (px, py)
   const paint = (x0, y0, x1, y1, c, cover) => {
     for (let y = Math.max(0, Math.floor(y0 - 1)); y < Math.min(S, Math.ceil(y1 + 1)); y++)
