@@ -1,7 +1,7 @@
 {
   "astrology": {
     "name": "Astrology",
-    "version": "1.3.0",
+    "version": "1.4.0",
     "kind": "scenes",
     "description": "Draws the sky on Molty, the zodiac wheel with aspects, planet globes, the signs, eclipses and transits. Play it with the molty-astro skill.",
     "layouts": [
@@ -22,8 +22,8 @@
       "molty-astro"
     ],
     "path": "packages/astrology/astrology.json",
-    "size": 74138,
-    "sha256": "16306aa8dd48897e1274ddae1ffdb23418931f726cb6c44980a8fa6e42aa2a5e"
+    "size": 74369,
+    "sha256": "4d32626049322131faba15ca11bbbb8173bded5707262ab07d63ef761defcb47"
   },
   "cat": {
     "name": "Cat",

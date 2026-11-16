@@ -97,7 +97,7 @@ static void run_state(int W, int H, int st, double *step_ms, double *frame_ms) {
     const float dt = 1.f / 60.f;
     double tstep = 0, tframe = 0; int nstep = 0, nframe = 0;
     float hmax = 0.f, hmid = 0.f, hlate = 0.f, err_end = 1.f;
-    fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, 0.f, 0.f, tx->letters, tx->nletters, " .,:;!+=*xX#@", stub_font, NULL };
+    fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, 0.f, 0.f, tx->letters, tx->nletters, " .,:;!+=*xX#@", stub_font, NULL, false, 0.f };
     for (int f = 0; f < 300; f++) {                         /* 10 s at 30 fps, 2 steps/frame */
         float t = f / 30.f, breath = 0.5f - 0.5f * cosf(t / 4.f * 6.2832f), swell = 1.f + 0.05f * (breath * 2.f - 1.f);
         s->p.hold = fminf(1.f, t / 1.5f);
@@ -157,7 +157,7 @@ static void test_dirty(void) {
     for (int f = 0; f < 60; f++) { fluid_target_blob(s, 1.f, 1.f, 0, 0); fluid_sim_background(s, 1.f, 0.5f, true); fluid_sim_swirl_field(s); fluid_sim_step(s, 1.f / 60); fluid_sim_color(s, 1.f / 60); }
     fluid_sim_view(s);
     fluid_sim_snapshot(s, fr, true);
-    fluid_draw_opts_t o = { FLUID_PAL_GREEN, FLUID_EDGE_CONTOURS, 0.f, 2.f, 0.f, NULL, 0, " .:-=+*#", stub_font, NULL };
+    fluid_draw_opts_t o = { FLUID_PAL_GREEN, FLUID_EDGE_CONTOURS, 0.f, 2.f, 0.f, NULL, 0, " .:-=+*#", stub_font, NULL, false, 0.f };
     int y0, y1;
     int n1 = fluid_draw(d, fr, fb, &o, &y0, &y1);
     CHECK(n1 > 50 && y1 > y0, "first draw drew %d cells, band [%d,%d)", n1, y0, y1);
@@ -187,7 +187,7 @@ static void test_dots_wobble(void) {
     const float cw = (float)FLUID_STAGE_REF / W, ch = (float)FLUID_STAGE_REF / H;
     static const uint8_t sym[2] = { 0xFF, 0xFF };
     fluid_letter_t L = { '*', true, 12 * cw + 3.f, 8 * ch + 3.f, 2 * cw - 6.f, 2 * ch - 6.f, 2 * ch, 0.f, 0, sym, 4, 4 };
-    fluid_draw_opts_t o = { FLUID_PAL_GREEN, FLUID_EDGE_CONTOURS, 0.f, 2.f, 0.f, &L, 1, " .:-=+*#", stub_font, dots };
+    fluid_draw_opts_t o = { FLUID_PAL_GREEN, FLUID_EDGE_CONTOURS, 0.f, 2.f, 0.f, &L, 1, " .:-=+*#", stub_font, dots, false, 0.f };
     const int k = jc * W + ic;
     fluid_draw_cells(d, fr, &o);
     const int x0 = d->lt[0].x, y0 = d->lt[0].y;
@@ -200,6 +200,92 @@ static void test_dots_wobble(void) {
     fluid_draw_cells(d, fr, &o);
     CHECK(d->key[k] == 0x47 && d->key[k - 1] == 0 && d->lt[0].x == x0 && d->lt[0].y == y0,
           "calm: hairline 0x%x left 0x%x, symbol %d,%d", d->key[k], d->key[k - 1], d->lt[0].x, d->lt[0].y);
+    free(dots); fluid_frame_destroy(fr); fluid_draw_destroy(d); fluid_sim_destroy(s);
+}
+
+/* A scene in high definition: calm water shows its dots alone, exactly on the lattice, over
+ * a fluid with haze in it; a touch's steep wave scatters the dots near it into dust (and its
+ * symbol with them, not the subtitle), then they settle back exactly; a transition thins them
+ * into dust and away, and they form again. */
+static int count_lit(const fluid_draw_t *d, int N, const uint8_t *dots, int *off) {
+    int n = 0; *off = 0;
+    for (int k = 0; k < N; k++) {
+        const uint16_t key = d->key[k];
+        if (!key || key > 0xFF) continue;
+        n += __builtin_popcount(key);
+        *off += __builtin_popcount(key & ~dots[k]);
+    }
+    return n;
+}
+static void test_scene_hd(void) {
+    const int W = 52, H = 32, N = W * H, jc = H / 2;
+    fluid_sim_t *s = fluid_sim_create(W, H, FLUID_STAGE_REF);
+    fluid_draw_t *d = fluid_draw_create(W, H, FLUID_STAGE_REF, FLUID_STAGE_REF);
+    fluid_frame_t *fr = fluid_frame_create(W, H);
+    uint8_t *dots = calloc(N, 1);
+    memcpy(fr->mask, s->mask, N);
+    for (int k = 0; k < N; k++) {                                       /* the dim fluid's haze */
+        fr->view[k] = fr->ink[k] = (int16_t)(FQ_UNIT * (0.12f + 0.1f * (k % 7) / 7.f));
+        fr->col[k] = (fluid_rgba16_t){ 40000, 50000, 60000, 0 };
+    }
+    for (int i = 8; i < W - 8; i++) { dots[jc * W + i] = 0x09; fr->view[jc * W + i] = fr->ink[jc * W + i] = (int16_t)(0.85f * FQ_UNIT); }
+    for (int j = 6; j < H - 6; j++) dots[j * W + 40] |= 0x47;           /* a hairline down, far right */
+    const float cw = (float)FLUID_STAGE_REF / W, ch = (float)FLUID_STAGE_REF / H;
+    static const uint8_t sym[2] = { 0xFF, 0xFF };
+    fluid_letter_t L[2] = {
+        { '*', false, 16 * cw, (jc - 3) * ch, 2 * cw, 2 * ch, 2 * ch, 0.f, FLUID_RGB | 0xffcc00, sym, 4, 4 },   /* a symbol near the touch */
+        { 'a', true, 26 * cw, (jc - 4) * ch, 2 * cw, 2 * ch, 2 * ch, 0.f, 0, NULL, 0, 0 },                  /* the subtitle, under it */
+    };
+    for (int j = jc - 3; j < jc - 1; j++) for (int i = 16; i < 18; i++) dots[j * W + i] = 0xFF;
+    fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_CONTOURS, 0.12f, 2.f, 0.f, L, 2, " .:-=+*#", stub_font, dots, true, 0.f };
+    int total = 0, off;
+    for (int k = 0; k < N; k++) total += __builtin_popcount(dots[k]);
+
+    o.scene = false; fluid_draw_cells(d, fr, &o);
+    int haze = 0;
+    for (int k = 0; k < N; k++) haze += d->key[k] && d->key[k] != 0xFFFF && !dots[k];
+    o.scene = true; fluid_draw_cells(d, fr, &o);
+    int stray = 0, wrong = 0;
+    for (int k = 0; k < N; k++) {
+        if (d->key[k] == 0xFFFF) continue;                              /* under a crisp letter */
+        stray += d->key[k] && !dots[k];
+        wrong += d->key[k] != dots[k];
+    }
+    const int x0 = d->lt[0].x, y0 = d->lt[0].y;
+    CHECK(haze > 50 && stray == 0 && wrong == 0 && d->nlt == 2, "calm: only the scene (%d stray cells, %d wrong; the fluid look has %d), letters %d",
+          stray, wrong, haze, d->nlt);
+
+    for (int j = 0; j < H; j++) for (int i = 0; i < W; i++) {           /* a tap at (20, jc) */
+        const float r2 = (float)((i - 20) * (i - 20) + (j - jc) * (j - jc));
+        fr->h[j * W + i] = (int16_t)(3.f * FQ_H * expf(-r2 / 18.f));
+    }
+    fluid_draw_cells(d, fr, &o);
+    int far = 0, right = 0;
+    for (int j = 0; j < H; j++) for (int i = 0; i < W; i++) {
+        const int k = j * W + i;
+        if (d->key[k] && d->key[k] != 0xFFFF && !dots[k] && !dots[k - W] && !dots[k + W] && !dots[k - 1] && !dots[k + 1]) far++;   /* beyond the wobble */
+        if (i >= 38) right += d->key[k] != dots[k];
+    }
+    int letters = 0;
+    for (int n = 0; n < d->nlt; n++) letters |= d->lt[n].mask ? 1 : 2;
+    CHECK(far > 3 && right == 0, "touch: dust near the finger (%d cells a cell off the lattice), the far side untouched (%d)", far, right);
+    CHECK(letters == 2 && d->key[(jc - 3) * W + 16] != 0xFFFF, "touch: the symbol is dust, the subtitle stays (%d)", letters);
+
+    memset(fr->h, 0, N * sizeof(int16_t));
+    fluid_draw_cells(d, fr, &o);
+    wrong = 0;
+    for (int k = 0; k < N; k++) wrong += d->key[k] != 0xFFFF && d->key[k] != dots[k];
+    CHECK(wrong == 0 && d->nlt == 2 && d->lt[0].x == x0 && d->lt[0].y == y0, "calm again: exactly the lattice (%d wrong), the symbol back at %d,%d",
+          wrong, d->lt[0].x, d->lt[0].y);
+
+    o.dust = 0.5f; fluid_draw_cells(d, fr, &o);
+    const int half = count_lit(d, N, dots, &off);
+    CHECK(half > total / 5 && half < total * 4 / 5 && off > half / 4 && d->nlt == 0, "dust 0.5: %d of %d dots, %d off the lattice, %d letters",
+          half, total, off, d->nlt);
+    o.dust = 1.f; fluid_draw_cells(d, fr, &o);
+    CHECK(count_lit(d, N, dots, &off) == 0, "dust 1: gone");
+    o.dust = 0.f; fluid_draw_cells(d, fr, &o);
+    CHECK(count_lit(d, N, dots, &off) == total - 4 * 8 && off == 0 && d->nlt == 2, "dust 0: whole again");
     free(dots); fluid_frame_destroy(fr); fluid_draw_destroy(d); fluid_sim_destroy(s);
 }
 
@@ -246,7 +332,7 @@ static void test_panel(int fb_w, int fb_h) {
     float lx0 = tx->letters[0].x, lx1 = tx->letters[4].x + tx->letters[4].w;
     CHECK(lx0 > 0.f && lx1 < stage && tx->letters[0].fs >= 18.f, "%dx%d: word spans [%.1f,%.1f] of %d, fs %.1f",
           fb_w, fb_h, lx0, lx1, stage, tx->letters[0].fs);
-    fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, 0.f, 0.f, NULL, 0, " .:-=+*#", stub_font, NULL };
+    fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, 0.f, 0.f, NULL, 0, " .:-=+*#", stub_font, NULL, false, 0.f };
     long lit = 0, outside = 0, band_bad = 0;
     for (int f = 0; f < 90; f++) {
         float t = f / 30.f;
@@ -352,7 +438,7 @@ static void test_overlay(void) {
     for (int f = 0; f < 60; f++) { fluid_target_blob(s, 1.f, 1.f, 0, 0); fluid_sim_background(s, 1.f, 0.5f, true); fluid_sim_swirl_field(s); fluid_sim_step(s, 1.f / 60); fluid_sim_color(s, 1.f / 60); }
     fluid_sim_view(s);
     fluid_sim_snapshot(s, fr, false);
-    fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, 2.f, 0.f, NULL, 0, " .:-=+*#", stub_font, NULL };
+    fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, 2.f, 0.f, NULL, 0, " .:-=+*#", stub_font, NULL, false, 0.f };
     int y0, y1, n;
     long changed, stray;
     fluid_draw(ref, fr, fb_ref, &o, &y0, &y1);                       /* the fluid alone */
@@ -422,7 +508,7 @@ static void test_send(int fb_w, int fb_h, int max_px) {
     if (!s || !tx || !ref || !d || !fr || !fb || !buf || !p.panel) return;
     fluid_text_set_sentence(tx, 4.5f);
     fluid_text_set_word(tx, s, "molty.", 6, 1);
-    fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, 0.f, 0.f, tx->letters, tx->nletters, " .,:;!+=*xX#@", stub_font, NULL };
+    fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, 0.f, 0.f, tx->letters, tx->nletters, " .,:;!+=*xX#@", stub_font, NULL, false, 0.f };
     fluid_overlay_t ov_drawn = { 0 };
     int mark_drawn = -1, pal_drawn = -1, bad = -1, windows = 0;
     long sent = 0;
@@ -701,7 +787,7 @@ static void test_letter_color(void) {
     for (int f = 0; f < 90; f++) { fluid_text_fill(tx, s, f / 30.f); fluid_sim_background(s, 1.f, 0.5f, true); fluid_sim_swirl_field(s); fluid_sim_step(s, 1.f / 60); fluid_sim_color(s, 1.f / 60); }
     fluid_sim_view(s); fluid_sim_snapshot(s, fr, false);
     for (int pal = 0; pal < FLUID_PAL_COUNT; pal++) {
-        fluid_draw_opts_t o = { pal, FLUID_EDGE_ALL, 0.f, 1.f, 0.f, tx->letters, tx->nletters, " .:-=+*#", stub_font, NULL };
+        fluid_draw_opts_t o = { pal, FLUID_EDGE_ALL, 0.f, 1.f, 0.f, tx->letters, tx->nletters, " .:-=+*#", stub_font, NULL, false, 0.f };
         memset(fb, 0, PX * 2); d->force = true; int y0, y1;
         fluid_draw(d, fr, fb, &o, &y0, &y1);
         long red = 0;
@@ -732,7 +818,7 @@ static void test_letter_melt(void) {
     for (int f = 0; f < 90; f++) { fluid_text_fill(tx, s, f / 30.f); fluid_sim_background(s, 1.f, 0.5f, true); fluid_sim_swirl_field(s); fluid_sim_step(s, 1.f / 60); fluid_sim_color(s, 1.f / 60); }
     fluid_sim_view(s); fluid_sim_snapshot(s, fr, false);
     fluid_letter_t L[2]; memcpy(L, tx->letters, sizeof(L));
-    fluid_draw_opts_t o = { FLUID_PAL_GREEN, FLUID_EDGE_ALL, 0.f, 1.f, 0.f, L, 2, " .:-=+*#", stub_font, NULL };
+    fluid_draw_opts_t o = { FLUID_PAL_GREEN, FLUID_EDGE_ALL, 0.f, 1.f, 0.f, L, 2, " .:-=+*#", stub_font, NULL, false, 0.f };
     const size_t PX = (size_t)FLUID_STAGE_REF * FLUID_STAGE_REF;
     uint16_t *img[3] = { calloc(PX, 2), calloc(PX, 2), calloc(PX, 2) };
     for (int v = 0; v < 3; v++) {          /* both shown · letter 1 melted · the frame melted */
@@ -871,6 +957,7 @@ int main(void) {
     test_braille();
     test_dirty();
     test_dots_wobble();
+    test_scene_hd();
     test_labels();
     test_overlay();
     test_fluid_ring();

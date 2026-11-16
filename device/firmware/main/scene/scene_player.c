@@ -5,6 +5,7 @@
  * Plain C: built into the firmware and by test/host/scene_test.c.
  */
 #include "scene_player.h"
+#include "glyph_font.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -615,6 +616,35 @@ static void paint_items(const ctx_t *c, const scene_t *sc, float t, fluid_letter
     }
 }
 
+void scene_hd_tick(scene_hd_t *h, unsigned gen, bool plain, float dt) {
+    if (plain) { *h = (scene_hd_t){ 0, false, 1.f }; return; }
+    if (h->gen && gen != h->gen) h->out = true;
+    if (h->out && (h->dust += dt / SCENE_DUST_S) >= 1.f) *h = (scene_hd_t){ 0, false, 1.f };
+    if (!h->out && gen) { h->gen = gen; h->dust = fmaxf(0.f, h->dust - dt / SCENE_DUST_S); }
+}
+
+/* a crisp letter or symbol's own shape on the dots under its box (as fluid_draw places it: a
+ * symbol fills the box, a letter 0.8 x 0.72 of it, centred), for when it breaks into dust */
+static void letter_dots(const fluid_sim_t *s, const fluid_letter_t *L, uint8_t *dots) {
+    const uint8_t *gl = L->mask ? NULL : gc_font5x7(L->ch);
+    if (L->mask ? !L->mw || !L->mh : !gl) return;
+    const float px = (float)s->stage / (2 * s->W), py = (float)s->stage / (4 * s->H);   /* the dot pitch */
+    const float gw = L->mask ? L->w : L->w * 0.8f, gh = L->mask ? L->h : L->h * 0.72f;
+    const float gx = L->x + (L->w - gw) * 0.5f, gy = L->y + (L->h - gh) * 0.5f;
+    const int x0 = (int)ceilf(L->x / px - 0.5f), x1 = (int)floorf((L->x + L->w) / px - 0.5f);
+    const int y0 = (int)ceilf(L->y / py - 0.5f), y1 = (int)floorf((L->y + L->h) / py - 0.5f);
+    for (int y = y0 < 0 ? 0 : y0; y <= y1 && y < 4 * s->H; y++) for (int x = x0 < 0 ? 0 : x0; x <= x1 && x < 2 * s->W; x++) {
+        const float u = ((x + 0.5f) * px - gx) / gw, v = ((y + 0.5f) * py - gy) / gh;
+        bool on = false;
+        if (u >= 0.f && u < 1.f && v >= 0.f && v < 1.f) {
+            if (L->mask) { const int p = (int)(v * L->mh) * L->mw + (int)(u * L->mw); on = L->mask[p >> 3] >> (7 - (p & 7)) & 1; }
+            else on = gl[(int)(v * 7.f)] >> (4 - (int)(u * 5.f)) & 1;
+        }
+        const int k = (y >> 2) * s->W + (x >> 1), b = 1 << fluid_braille_bit(x & 1, y & 3);
+        dots[k] = (uint8_t)(on ? dots[k] | b : dots[k] & ~b);
+    }
+}
+
 void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_t *cap, fluid_letter_t *letters, int *nletters, uint8_t *dots) {
     FLUID_PROF_BEGIN(c0);
     const uint32_t bg = fluid_pack_rgba8(0.6f, 0.68f, 0.92f, 0.f);
@@ -648,5 +678,6 @@ void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_
         s->tcol[k] = fluid_pack_rgba8(wr / w / 255.f, wg / w / 255.f, wb / w / 255.f, 0.f);
         if (dots) dots[k] = (uint8_t)bits;
     }
+    for (int n = 0; dots && n < *nletters; n++) letter_dots(s, &letters[n], dots);
     FLUID_PROF_END(FP_TARGET, c0);
 }

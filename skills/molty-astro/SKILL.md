@@ -18,7 +18,7 @@ pairing stores the device and token this skill reads), and Molty firmware with `
 
 ```sh
 node "<skill-dir>/scripts/astro.mjs" tonight          # moon, then Mercury..Saturn, then the moon's sign (7 scenes, 19 s)
-node "<skill-dir>/scripts/astro.mjs" chart            # all ten bodies on the zodiac wheel with their aspects (held 60 s)
+node "<skill-dir>/scripts/astro.mjs" chart            # all ten bodies on the zodiac wheel, the three tightest aspects in the middle (held 60 s)
 node "<skill-dir>/scripts/astro.mjs" chart --interactive  # the chart, and a tapped sign opens up close (5 min, see below)
 node "<skill-dir>/scripts/astro.mjs" signs            # the twelve signs (36 s)
 node "<skill-dir>/scripts/astro.mjs" aspects [trine]  # each aspect on the degree grid, or one (5 s each)
@@ -34,8 +34,8 @@ the rest queue behind it; Molty melts back to its creature when they end.
 
 ## Tap to read (chart)
 
-On the chart a tap on a planet or a sign shows its reading on Molty at once ("Sun in Gemini: you shine
-by talking and learning."), with no help from you. `chart --interactive` adds the **sign close-up**:
+On the chart a tap on a planet, a sign or the middle (what its red and blue lines mean) shows its
+reading on Molty at once ("Sun in Gemini: you shine by talking and learning."), with no help from you. `chart --interactive` adds the **sign close-up**:
 it keeps listening to Molty's events (the molty skill's long-poll) and, on a tap on a sign, shows that
 sign big with its planets on its degree dial and has Molty read it aloud, lighting each planet as it is
 read; then the chart comes back (or at once, on a tap on empty space). An empty sign reads its nature

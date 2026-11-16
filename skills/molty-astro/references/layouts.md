@@ -46,13 +46,15 @@ Seven scenes: `globe` for the Moon, then Mercury, Venus, Mars, Jupiter; `saturn`
 
 | param | value |
 |---|---|
-| `bodies` | ten `{"g": "g-<body>", "a": <chart angle>, "r": <radius>, "c": "<colour>"}`; radius 0.64, pulled in by 0.11 per level when a body is within 13 degrees of one already placed at that level (place in order of longitude); colours as in `aspect` |
-| `inner` | the smallest radius minus 0.07 (the ring the aspect lines end on) |
-| `sextiles`, `squares`, `trines`, `oppositions` | lists of `{"x1", "y1", "x2", "y2"}`: a line between two bodies' chart angles on the `inner` ring (conjunctions have none). Tightest orb first; leave the loosest off until the params fit in about 900 bytes |
+| `bodies` | ten `{"g": "g-<body>", "a": <chart angle>, "r": <radius>, "c": "<colour>"}`; radius 0.64, pulled in by 0.1 per level when a body is within 13 degrees of one already placed at that level (place in order of longitude); colours as in `aspect` |
+| `inner` | the smallest radius minus 0.065 (the ring the aspect lines end on) |
+| `tense`, `easy` | the three tightest aspects (smallest orb) only, each `{"x1", "y1", "x2", "y2"}`: a line between the two bodies' chart angles on the `inner` ring, a dot at each end. `tense` (square, opposition) draws red, `easy` (trine, sextile) blue |
+| `joined` | a conjunction among those three: `{"a": <chart angle midway between the two>}`, a white dot on the `inner` ring (the two sit together, no line) |
+| `read` | the middle's reading (at most 160 characters): what the colours mean, then each drawn aspect in plain words, e.g. "Red is tension, blue is flow. Mars faces Saturn: drive meets limits." |
 | `signs` | twelve `{"a": (195 + 30 i) mod 360, "say", "id": "<sign>"}` |
 
 Each body also carries `say` (its reading, at most 160 characters) and `id` (`sun` …). A tap on one shows its
-`say` and sends you a `tap` event with `"spot": "<id>"`. Readings (see `sky.mjs`): a body, "<Planet> in <Sign>:
+`say` and sends you a `tap` event with `"spot": "<id>"`; a tap inside the inner ring shows `read` (spot `aspects`). Readings (see `sky.mjs`): a body, "<Planet> in <Sign>:
 <what it does> <how the sign plays it>." plus its tightest aspect; a sign, its nature and ruler, then its planets
 or, when empty, where its ruler is.
 

@@ -482,6 +482,53 @@ static void test_caption(void) {
     pkg_unref(p);
 }
 
+/* ── high definition: a symbol's dots are its shape (its dust); each scene forms from dust,
+ * and breaks into dust before the next one or the creature ── */
+static void test_hd(void) {
+    const char *err;
+    scene_t *sc = build("dial", DIAL, 0, &err);
+    fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
+    uint8_t *dots = calloc((size_t)s->N, 1);
+    fluid_letter_t L[FLUID_MAX_LETTERS]; int nl = 0;
+    scene_fill(s, sc, 0.5f, NULL, L, &nl, dots);
+    const fluid_letter_t *p = &L[0];                         /* the "plus" at 0 degrees */
+    const float px = (float)s->stage / (2 * s->W), py = (float)s->stage / (4 * s->H);
+    int corner = 0, bar = 0;
+    for (int y = 0; y < 4 * s->H; y++) for (int x = 0; x < 2 * s->W; x++) {
+        const float u = ((x + 0.5f) * px - p->x) / p->w, v = ((y + 0.5f) * py - p->y) / p->h;
+        if (u < 0.f || u >= 1.f || v < 0.f || v >= 1.f) continue;
+        const bool on = dots[(y >> 2) * s->W + (x >> 1)] >> fluid_braille_bit(x & 1, y & 3) & 1;
+        if ((u < 0.3f || u >= 0.7f) && (v < 0.3f || v >= 0.7f)) corner += on;
+        else bar += on;
+    }
+    CHECK(p->mask && corner == 0 && bar > 6, "the symbol's dots are a plus: %d in its corners, %d on its bars", corner, bar);
+    free(dots); fluid_sim_destroy(s); scene_free(sc);
+
+    scene_player_t sp = { 0 };
+    scene_hd_t h = { 0, false, 1.f };
+    int n;
+    scene_play(&sp, titled("a", 30.f));
+    for (n = 0; n < 100 && h.dust > 0.f; n++) scene_hd_tick(&h, sp.gen, false, DT);
+    CHECK(h.gen == sp.gen && !h.out && fabsf(n * DT - SCENE_DUST_S) <= DT, "a forms from dust in %.2f s", n * DT);
+    const unsigned a = sp.gen;
+    scene_play(&sp, titled("b", 30.f));
+    scene_hd_tick(&h, sp.gen, false, DT);
+    CHECK(h.out && h.gen == a && h.dust > 0.f && h.dust < 0.2f, "b: a breaks into dust first (%.2f)", h.dust);
+    float peak = 0.f;
+    for (n = 0; n < 100 && h.out; n++) { scene_hd_tick(&h, sp.gen, false, DT); if (h.out && h.dust > peak) peak = h.dust; }
+    CHECK(peak > 0.85f && h.gen == sp.gen && h.dust > 0.85f, "a went all to dust (%.2f), b forms (%.2f)", peak, h.dust);
+    for (n = 0; n < 100 && h.dust > 0.f; n++) scene_hd_tick(&h, sp.gen, false, DT);
+    CHECK(h.gen == sp.gen && h.dust == 0.f, "b whole");
+    scene_hd_tick(&h, sp.gen, true, DT);
+    CHECK(h.gen == 0 && h.dust == 1.f, "a listen: the fluid's own look");
+    scene_hd_tick(&h, sp.gen, false, DT);
+    CHECK(h.gen == sp.gen && h.dust < 1.f && h.dust > 0.8f, "after it, b forms from dust again");
+    for (n = 0; n < 100 && h.dust > 0.f; n++) scene_hd_tick(&h, sp.gen, false, DT);
+    scene_clear(&sp);
+    for (n = 0; n < 100 && h.gen; n++) scene_hd_tick(&h, 0, false, DT);
+    CHECK(h.gen == 0 && !h.out && h.dust == 1.f && n * DT >= SCENE_DUST_S - 2 * DT, "cleared: b breaks into dust over %.2f s, then nothing", n * DT);
+}
+
 /* ── a real package: every command the molty-astro skill sends (fixtures/astrology*, copied from
  * the astrology team's packages/astrology/astrology.json and `astro.mjs <scene> --dry-run`) ── */
 
@@ -589,6 +636,7 @@ int main(int argc, char **argv) {
     test_spots();
     test_caption();
     test_hairlines();
+    test_hd();
     test_real_package(argv[1]);
     bench(argc > 2 ? argv[2] : "");
     CHECK(P->refs == 1, "every scene gave its package reference back (%d)", P->refs);

@@ -370,6 +370,11 @@ typedef struct {
     const uint8_t *(*font)(char);      /* 5×7 rows, bit (4-col); NULL → no ASCII/letters  */
     const uint8_t *dots;               /* W×H braille dots drawn wherever the fluid's ink
                                         * reaches them (fluid_text_set_glyphs), or NULL   */
+    bool  scene;                       /* the dots are a scene's, in high definition: drawn
+                                        * alone and crisp on black (no fluid), its letters
+                                        * whole; a steep wave (a touch) scatters them into
+                                        * dust, calm water puts them back on the lattice   */
+    float dust;                        /* scene: its transition, 0 = whole .. 1 = dust, gone */
 } fluid_draw_opts_t;
 
 /** W×H cells drawn into an fb_w×fb_h framebuffer; the stage is its largest centred

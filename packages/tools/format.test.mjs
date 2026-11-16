@@ -83,6 +83,10 @@ test('every layout plays with the params the molty-astro skill sends, each under
       assert.ok(dots.size > 200, `${c.args.layout} draws ${dots.size} dots`);
       assert.equal(png(dots).subarray(1, 4).toString(), 'PNG');
       seen.add(c.args.layout);
+      if (c.args.layout !== 'chart') continue;
+      const { tense, easy, joined, read } = c.args.params;
+      assert.ok(tense.length + easy.length + joined.length <= 3, 'the chart draws at most the three tightest aspects');
+      assert.ok(pkg.layouts.chart.items.some((it) => it.k === 'spot' && it.id === 'aspects' && it.say === '$read') && read.length > 0 && read.length <= 160, 'the middle has its reading');
     }
   }
   assert.deepEqual([...seen].sort(), Object.keys(pkg.layouts).sort());
