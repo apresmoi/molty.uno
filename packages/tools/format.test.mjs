@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { test } from 'node:test';
 import { ParamError, bind, checkPackage } from './format.mjs';
-import { frame, loadPackage, png } from './play.mjs';
+import { frame, hd, loadPackage, png } from './play.mjs';
 
 const ROOT = new URL('../../', import.meta.url).pathname;
 const base = () => ({
@@ -90,6 +90,22 @@ test('every layout plays with the params the molty-astro skill sends, each under
     }
   }
   assert.deepEqual([...seen].sort(), Object.keys(pkg.layouts).sort());
+});
+
+test('the calm view in high definition: a ring is round and soft edged at the panel\'s pixels, a ball stays on the dots', () => {
+  const p = base();
+  p.layouts.one.items.push({ k: 'ball', r: 0.1, lit: 1 });
+  const S = 466, { rgb, kept } = hd(p, 'one', { r: 0.8, g: 'dot', marks: [] }, 1, S), at = (x, y) => rgb[(Math.round(y) * S + Math.round(x)) * 3];
+  let round = 0, soft = 0;
+  for (let a = 0; a < 360; a++) {
+    const c = Math.cos((a * Math.PI) / 180), s = Math.sin((a * Math.PI) / 180), R = 0.8 * (S / 2);
+    round += Math.max(at(S / 2 + R * c, S / 2 + R * s), at(S / 2 + (R + 0.5) * c, S / 2 + (R + 0.5) * s)) > 200;
+    const e = at(S / 2 + (R + 4) * c, S / 2 + (R + 4) * s);                // the edge of its 7 px (w 0.03)
+    soft += e > 5 && e < 250;
+  }
+  assert.ok(round === 360 && soft > 30, `the ring at every degree (${round}), soft edged (${soft})`);
+  assert.ok(kept.size > 10, `the ball keeps its dots (${kept.size})`);
+  assert.equal(png(kept, rgb, S).subarray(1, 4).toString(), 'PNG');
 });
 
 test('a spot: a place to tap with its reading, which may run past a text item', () => {

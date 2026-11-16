@@ -126,13 +126,22 @@ void scene_hd_tick(scene_hd_t *h, unsigned gen, bool plain, float dt);
 #define SCENE_CAPTION_RGB   0x9aa0b8u   /* the ink under it                                */
 typedef struct { const char *str; int n, orp; } scene_caption_t;
 
+/* The scene in high definition (fluid_draw_opts_t.shapes, .kdots): its items as shapes at the
+ * panel's pixels (rings, strokes, discs, its symbols and letters, the subtitle's too; a ball
+ * leaves a black disc, it hides what is behind) and the dots no shape draws (a ball, an image). */
+typedef struct {
+    fluid_shape_t *shapes;              /* FLUID_MAX_SHAPES                                 */
+    int n;                              /* how many; -1 too many: draw the scene on the dots */
+    uint8_t *keep;                      /* W x H, may be NULL                               */
+} scene_shapes_t;
+
 /** Rasterise sc at t s (and cap, if any, over it) on the braille dots: T + tcol of every
  *  cell (zero outside the items; a cell's target is its densest dot), dots (W x H, may be
  *  NULL) the dots each cell shows (under a crisp letter or symbol: its shape, which shows when
  *  it breaks into dust), letters[0..*nletters) the crisp overlay of its text
- *  (stage px). */
+ *  (stage px), and hd (may be NULL) the same in high definition. */
 void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_t *cap,
-                fluid_letter_t *letters, int *nletters, uint8_t *dots);
+                fluid_letter_t *letters, int *nletters, uint8_t *dots, scene_shapes_t *hd);
 
 #ifdef __cplusplus
 }

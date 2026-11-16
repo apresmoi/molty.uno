@@ -8,6 +8,9 @@
 //   play.mjs --commands <file|-> --stills <dir> [--every 1]
 //     replays the scene.play / scene.queue commands an agent sent (JSON lines, {name, args}),
 //     one still every `--every` seconds of each scene
+//   --hd [--size 466] [--caption word]: the calm view in high definition instead, as the firmware draws
+//     a scene with no touch on it (fluid_draw.c's shapes): anti-aliased at the panel's own pixels, a
+//     ball or an image on the dots; --caption puts a subtitle word at the bottom
 // <pkg> is a package id (packages/<id>/<id>.json) or a path to its JSON. No dependencies.
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { deflateSync } from 'node:zlib';
@@ -141,11 +144,19 @@ function text(it, put) {
   });
 }
 
-/** The dots of `layout` at `t` seconds: Map(dot index -> rgb). Throws ParamError for bad params. */
-export function frame(pkg, layout, params, t) {
-  const dots = new Map(), put = (sx, sy, c) => { if (sx < 0 || sy < 0 || sx >= W || sy >= H) return; const k = sy * W + sx; if (c === null) dots.delete(k); else dots.set(k, c); };
+/** The dots of `layout` at `t` seconds: Map(dot index -> rgb). Throws ParamError for bad params.
+ *  kept (a Map): also the dots no high-definition shape draws (a ball's, an image's), as they show. */
+export function frame(pkg, layout, params, t, kept = null) {
+  let keep = false;
+  const dots = new Map(), put = (sx, sy, c) => {
+    if (sx < 0 || sy < 0 || sx >= W || sy >= H) return;
+    const k = sy * W + sx;
+    if (c === null) dots.delete(k); else dots.set(k, c);
+    if (kept && keep && c !== null) kept.set(k, c); else kept?.delete(k);
+  };
   for (const it of bind(pkg, layout, params)) {
     if (t < it.on || t >= it.off) continue;
+    keep = it.k === 'ball' || (it.k === 'glyph' && pkg.assets[it.asset].kind === 'image');
     const rgb = hex(it.color);
     if ((it.k === 'ring' || it.k === 'arc') && it.w / 2 <= HAIR) hairRing(it, it.k === 'ring' || it.a1 - it.a0 >= 360, rgb, put);
     else if (it.k === 'ring') stroke(arcPts(it.r, 0, 360), it.color, put, it.w);
@@ -165,14 +176,84 @@ export function frame(pkg, layout, params, t) {
 const CRC = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
 const crc32 = (b) => { let c = 0xffffffff; for (const x of b) c = CRC[(c ^ x) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
 const chunk = (type, data) => { const t = Buffer.from(type), len = Buffer.alloc(4), crc = Buffer.alloc(4); len.writeUInt32BE(data.length); crc.writeUInt32BE(crc32(Buffer.concat([t, data]))); return Buffer.concat([len, t, data, crc]); };
-/** The dots as the panel shows them: round dots on black, inside the round glass. */
-export function png(dots) {
-  const S = PANEL, raw = Buffer.alloc((S * 3 + 1) * S), R = 1.35;
+/** The dots as the panel shows them: round dots on black, inside the round glass; over rgb (an S x S
+ *  image of floats, hd's) when given. */
+export function png(dots, rgb = null, S = PANEL) {
+  const raw = Buffer.alloc((S * 3 + 1) * S), R = 1.35 * (S / PANEL);
   const set = (x, y, c) => { if (Math.hypot(x + 0.5 - S / 2, y + 0.5 - S / 2) > S / 2) return; const o = y * (S * 3 + 1) + 1 + x * 3; raw[o] = c[0]; raw[o + 1] = c[1]; raw[o + 2] = c[2]; };
+  if (rgb) for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) set(x, y, [0, 1, 2].map((q) => Math.round(rgb[(y * S + x) * 3 + q])));
   for (let a = 0; a < 720; a++) set(Math.round(S / 2 + (S / 2 - 1) * Math.cos((a * Math.PI) / 360)), Math.round(S / 2 + (S / 2 - 1) * Math.sin((a * Math.PI) / 360)), [40, 40, 40]);
-  for (const [k, c] of dots) { const [px, py] = dotPx(k % W, Math.floor(k / W)); for (let y = Math.floor(py - R); y <= py + R; y++) for (let x = Math.floor(px - R); x <= px + R; x++) if ((x + 0.5 - px) ** 2 + (y + 0.5 - py) ** 2 <= R * R && x >= 0 && y >= 0 && x < S && y < S) set(x, y, c.map(Math.round)); }
+  for (const [k, c] of dots) { const [px, py] = dotPx(k % W, Math.floor(k / W)).map((v) => (v * S) / PANEL); for (let y = Math.floor(py - R); y <= py + R; y++) for (let x = Math.floor(px - R); x <= px + R; x++) if ((x + 0.5 - px) ** 2 + (y + 0.5 - py) ** 2 <= R * R && x >= 0 && y >= 0 && x < S && y < S) set(x, y, c.map(Math.round)); }
   const head = Buffer.alloc(13); head.writeUInt32BE(S, 0); head.writeUInt32BE(S, 4); head[8] = 8; head[9] = 2;
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', head), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}
+
+// ---- high definition: the calm scene as the firmware's shapes draw it (scene_player.c makes them,
+// fluid_draw.c's hd_row draws them): each item over what is under it by its anti-aliased coverage
+const HD_EDGE = 0.42, ACCENT = [255, 140, 60], ORP = (n) => (n <= 1 ? 0 : n <= 5 ? 1 : n <= 9 ? 2 : n <= 13 ? 3 : 4);
+const edge = (d) => (d >= 0.5 ? 0 : d <= -0.5 ? 1 : 0.5 - d), sstep = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+/** The calm scene at S x S px (RGB floats) and the dots it keeps (a ball's, an image's): { rgb, kept }. */
+export function hd(pkg, layout, params, t, S = 466, caption = '') {
+  const rgb = new Float32Array(S * S * 3), k = S / 2, X = (x) => (x + 1) * k, Y = (y) => (1 - y) * k, hw = (w) => Math.max(0.5, (w / 2) * k);
+  // one shape: its box, and its coverage of the pixel centred at (px, py)
+  const paint = (x0, y0, x1, y1, c, cover) => {
+    for (let y = Math.max(0, Math.floor(y0 - 1)); y < Math.min(S, Math.ceil(y1 + 1)); y++)
+      for (let x = Math.max(0, Math.floor(x0 - 1)); x < Math.min(S, Math.ceil(x1 + 1)); x++) {
+        const a = cover(x + 0.5, y + 0.5);
+        if (a > 0) for (let q = 0; q < 3; q++) rgb[(y * S + x) * 3 + q] += (c[q] - rgb[(y * S + x) * 3 + q]) * a;
+      }
+  };
+  const seg = (a, b, w, c) => {
+    const [ax, ay, bx, by] = [X(a[0]), Y(a[1]), X(b[0]), Y(b[1])], h = hw(w), vx = bx - ax, vy = by - ay, l2 = vx * vx + vy * vy || 1;
+    paint(Math.min(ax, bx) - h, Math.min(ay, by) - h, Math.max(ax, bx) + h, Math.max(ay, by) + h, c, (px, py) => {
+      const u = Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / l2));
+      return edge(Math.hypot(px - ax - u * vx, py - ay - u * vy) - h);
+    });
+  };
+  const disc = (x, y, r, c) => paint(X(x) - r * k, Y(y) - r * k, X(x) + r * k, Y(y) + r * k, c, (px, py) => edge(Math.hypot(px - X(x), py - Y(y)) - r * k));
+  const ring = (it, whole) => {
+    const r = it.r * k, h = hw(it.w), span = whole ? 360 : (((it.a1 - it.a0) % 360) + 360) % 360, end = (a) => [k + r * Math.cos(a * DEG), k - r * Math.sin(a * DEG)];
+    paint(k - r - h, k - r - h, k + r + h, k + r + h, hex(it.color), (px, py) => {
+      let d = Math.abs(Math.hypot(px - k, py - k) - r) - h;
+      if (!whole && d < 0.5 && ((((Math.atan2(k - py, px - k) / DEG - it.a0) % 360) + 360) % 360) > span) d = Math.min(...[end(it.a0), end(it.a0 + span)].map(([ex, ey]) => Math.hypot(px - ex, py - ey))) - h;
+      return edge(d);
+    });
+  };
+  // a 1-bit image (bit(i, j)) in a w x h box centred on (cx, cy) px, turned rot degrees: read bilinear, a smooth edge
+  const mask = (bit, mw, mh, cx, cy, w, h, rot, c) => {
+    const co = Math.cos(rot * DEG), si = Math.sin(rot * DEG), e = Math.min(0.45, Math.max(0.02, 0.5 * Math.max(mw / w, mh / h))), ex = 0.5 * (Math.abs(co) * w + Math.abs(si) * h), ey = 0.5 * (Math.abs(si) * w + Math.abs(co) * h);
+    const b = (i, j) => (i < 0 || j < 0 || i >= mw || j >= mh ? 0 : bit(i, j));
+    paint(cx - ex, cy - ey, cx + ex, cy + ey, c, (px, py) => {
+      const dx = px - cx, dy = py - cy, u = ((co * dx - si * dy) / w + 0.5) * mw - 0.5, v = ((si * dx + co * dy) / h + 0.5) * mh - 0.5, i = Math.floor(u), j = Math.floor(v), tu = u - i, tv = v - j;
+      const top = b(i, j) + (b(i + 1, j) - b(i, j)) * tu, bot = b(i, j + 1) + (b(i + 1, j + 1) - b(i, j + 1)) * tu;
+      return sstep(HD_EDGE - e, HD_EDGE + e, top + (bot - top) * tv);
+    });
+  };
+  // the firmware's text runs: letters size * 0.6 apart, each its 5 x 7 glyph in 0.8 x 0.72 of its box
+  const run = (str, x, y, size, c, orp = -1) => {
+    const f = font(), fs = size * k, adv = fs * 0.6, lh = fs * 1.05, x0 = X(x) - (orp < 0 ? str.length / 2 : orp + 0.5) * adv;
+    [...str].forEach((ch, q) => { if (ch !== ' ') mask((i, j) => (f(ch)[j] >> (4 - i)) & 1, 5, 7, x0 + (q + 0.5) * adv, Y(y), adv * 0.8, lh * 0.72, 0, q === orp ? ACCENT : c); });
+  };
+  for (const it of bind(pkg, layout, params)) {
+    if (t < it.on || t >= it.off) continue;
+    const c = hex(it.color);
+    if (it.k === 'ring' || it.k === 'arc') ring(it, it.k === 'ring' || it.a1 - it.a0 >= 360);
+    else if (it.k === 'ticks') for (let i = 0; i < it.n; i++) { const a = (it.a0 + (360 * i) / it.n) * DEG, r1 = it.r + it.len; seg([it.r * Math.cos(a), it.r * Math.sin(a)], [r1 * Math.cos(a), r1 * Math.sin(a)], it.w, c); }
+    else if (it.k === 'line' || it.k === 'curve') { const p = it.k === 'curve' ? smooth(it.pts) : it.pts; for (let i = 0; i + 1 < p.length; i++) seg(p[i], p[i + 1], it.w, c); }
+    else if (it.k === 'disc') disc(it.x, it.y, it.r, c);
+    else if (it.k === 'ball') disc(it.x, it.y, it.r, [0, 0, 0]);                  // its dots go on top (kept)
+    else if (it.k === 'glyph' && pkg.assets[it.asset].kind === 'mask') { const a = asset(pkg, it.asset); mask(a.at, a.w, a.h, X(it.x), Y(it.y), it.size * k, ((it.size * a.h) / a.w) * k, it.rot, c); }
+    else if (it.k === 'text') run(it.str, it.x, it.y, it.size, c);
+  }
+  if (caption) {   // scene_player.c's caption(): shrunk until its farthest corner is inside the glass
+    const orp = Math.min(ORP(caption.length), caption.length - 1), reach = Math.max(orp + 0.5, caption.length - orp - 0.5);
+    let size = 0.16;
+    while (size >= 0.04 && (reach * 0.6 * size) ** 2 + (-0.66 - 0.525 * size) ** 2 > 0.95 ** 2) size *= 0.92;
+    run(caption, 0, -0.66, size, [255, 255, 255], orp);
+  }
+  const kept = new Map();
+  frame(pkg, layout, params, t, kept);
+  return { rgb, kept };
 }
 
 export const loadPackage = (p) => JSON.parse(readFileSync(existsSync(p) ? p : join(ROOT, 'packages', p, `${p}.json`), 'utf8'));
@@ -192,9 +273,11 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
         console.log(`${c.name} ${layout}: ${JSON.stringify(c.args).length} B`);
       });
     } else {
-      const [id, layout] = argv.filter((a, i) => !a.startsWith('-') && !['--params', '--t', '-o'].includes(argv[i - 1]));
-      if (!id || !layout) throw new Error('usage: play.mjs <pkg> <layout> [--params json|file] [--t s] [-o out.png]');
-      writeFileSync(opt('-o', `${layout}.png`), png(frame(loadPackage(id), layout, json(opt('--params')), +opt('--t', 1))));
+      const [id, layout] = argv.filter((a, i) => !a.startsWith('-') && !['--params', '--t', '-o', '--size', '--caption'].includes(argv[i - 1]));
+      if (!id || !layout) throw new Error('usage: play.mjs <pkg> <layout> [--params json|file] [--t s] [-o out.png] [--hd [--size px] [--caption word]]');
+      const pkg = loadPackage(id), params = json(opt('--params')), t = +opt('--t', 1), out = opt('-o', `${layout}.png`);
+      if (argv.includes('--hd')) { const S = +opt('--size', 466), v = hd(pkg, layout, params, t, S, opt('--caption', '')); writeFileSync(out, png(v.kept, v.rgb, S)); }
+      else writeFileSync(out, png(frame(pkg, layout, params, t)));
     }
   } catch (e) {
     console.error(e instanceof ParamError ? `bad_params: ${e.message}` : e.message);
