@@ -74,7 +74,8 @@ and geometry in **glass units**: the round window has radius 1, `x` right, `y` u
 (`{ "k": "spot", "each": "$bodies", "polar": ["@a", "@r"], "r": 0.09, "say": "@say", "id": "@id" }`), and a tap on it
 shows that reading at once, word by word at reading pace. The agent also gets the `tap` event with `spot: <id>`, to say
 more if it wants. A spot takes the tap whatever tap is bound to (a tap that stops a recording still does that first).
-A say over the scene replaces the reading.
+A say over the scene replaces the reading. Both show as the reader does, one word at a time with its focus letter
+in the accent colour on the centre line, but small and low on the screen, under the drawing.
 
 **Binding:** any field value may be a string `"$name"`, read from the params the agent sent (`"$title"`, `"$lit"`).
 **Repetition:** an item with `"each": "$list"` is drawn once per element of that list param; inside it, `"@field"` reads the element
@@ -151,8 +152,8 @@ Every declared param must be sent, and nothing else.
 - Items paint in order, each covering what is under it: a `disc` of `#000000` erases, a `ball` covers its whole disc
   (its dark side too, with a faint earthshine), as `packages/tools/play.mjs` draws them. A scene queue holds 8.
 - `"$name"` and `"@field"` are always bindings; a literal text cannot start with `$` or `@`.
-- A `line`, `curve`, `ring`, `arc` or `ticks` no wider than a braille dot is a hairline: exactly the dots within half a dot
-  of it, solid, with no soft edge to dither.
+- A `line`, `curve`, `ring`, `arc` or `ticks` no wider than a braille dot is a hairline: one dot per step along its main
+  direction, each dot touching the next (corners too), never two side by side, solid, with no soft edge to dither.
 - A tap lands on the visible `spot` whose disc holds it, the nearest centre if several do.
 
 ## 4. Agents

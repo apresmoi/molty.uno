@@ -12,6 +12,8 @@
  * the fill draws what is on (on / off) where it should, and lights a ball from its side.
  * Painter's order: a black disc erases, a ball's dark side hides what is behind it. The
  * astrology team's package parses and every command its skill sends builds, fills and queues.
+ * A subtitle is the reader's word at the bottom (its ORP accented on the centre line, inside the
+ * glass); a hairline is one dot a step on the dot lattice, 8-connected, at every angle and round a ring.
  * Then a frame-cost estimate: a busy layout (1 ring, 12 glyphs, 10 balls, 40 letters)
  * against the creature's own update + raster + fill on the same host.
  *
@@ -331,35 +333,151 @@ static void test_spots(void) {
     CHECK(!q, "a spot needs its reading");
     pkg_unref(q);
 
-    sc = scene_build(p, "hair", NULL, 0, &err);
+    pkg_unref(p);
+}
+
+/* ── hairlines: a dot a step on the dot lattice ───────────────────────────── */
+
+#define LW (2 * 52)
+#define LH (4 * 32)
+static uint8_t s_lit[LH][LW];
+
+/* fill the one-item layout and read its dots back onto the lattice (dot (x, y): column x, row y) */
+static int lit_dots(const char *item) {
+    char js[512]; const char *err;
+    snprintf(js, sizeof js, "{\"v\":\"molty-pkg/1\",\"id\":\"h\",\"name\":\"H\",\"version\":\"1\",\"kind\":\"scenes\","
+             "\"layouts\":{\"a\":{\"items\":[%s]}}}", item);
+    pkg_t *p = pkg_parse(js, strlen(js), &err);
+    scene_t *sc = p ? scene_build(p, "a", NULL, 0, &err) : NULL;
+    CHECK(sc, "%s builds (%s)", item, err ? err : "");
+    memset(s_lit, 0, sizeof s_lit);
+    int n = 0;
+    if (sc) {
+        fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
+        uint8_t *dots = calloc((size_t)s->N, 1);
+        fluid_letter_t L[FLUID_MAX_LETTERS]; int nl;
+        scene_fill(s, sc, 0.f, NULL, L, &nl, dots);
+        for (int y = 0; y < LH; y++) for (int x = 0; x < LW; x++)
+            n += s_lit[y][x] = (dots[(y >> 2) * s->W + (x >> 1)] >> fluid_braille_bit(x & 1, y & 3)) & 1;
+        free(dots);
+        fluid_sim_destroy(s);
+    }
+    scene_free(sc);
+    pkg_unref(p);
+    return n;
+}
+static inline float lat_x(float x) { return (x + 1.f) * 0.5f * LW - 0.5f; }   /* glass -> lattice */
+static inline float lat_y(float y) { return (1.f - y) * 0.5f * LH - 0.5f; }
+static int neighbours(int x, int y) {
+    int n = 0;
+    for (int v = -1; v <= 1; v++) for (int u = -1; u <= 1; u++)
+        n += (u || v) && x + u >= 0 && y + v >= 0 && x + u < LW && y + v < LH && s_lit[y + v][x + u];
+    return n;
+}
+
+static void test_hairlines(void) {
+    /* segments at every 5 degrees and at the shallow and steep diagonals of the lattice */
+    float angles[90]; int na = 0;
+    for (int d = 0; d < 180; d += 5) angles[na++] = (float)d;
+    const float lat[] = { 1.f / 3, 1.f / 2, 2.f / 3, 1.f, 3.f / 2, 2.f, 3.f };   /* rise over run in dots */
+    for (unsigned q = 0; q < sizeof lat / sizeof *lat; q++) {
+        const float a = atanf(lat[q] * LW / LH) / 0.017453293f;
+        angles[na++] = a; angles[na++] = 180.f - a;
+    }
+    int bad = 0;
+    for (int k = 0; k < na; k++) {
+        const float t = angles[k] * 0.017453293f, ax = 0.04f - 0.7f * cosf(t), ay = -0.03f - 0.7f * sinf(t), bx = 0.04f + 0.7f * cosf(t), by = -0.03f + 0.7f * sinf(t);
+        char item[160];
+        snprintf(item, sizeof item, "{\"k\":\"line\",\"pts\":[[%.4f,%.4f],[%.4f,%.4f]],\"w\":0.012}", ax, ay, bx, by);
+        const int total = lit_dots(item);
+        const float X0 = lat_x(ax), Y0 = lat_y(ay), X1 = lat_x(bx), Y1 = lat_y(by), DX = X1 - X0, DY = Y1 - Y0;
+        const bool xmaj = fabsf(DX) >= fabsf(DY);
+        const int m0 = (int)lroundf(xmaj ? fminf(X0, X1) : fminf(Y0, Y1)), m1 = (int)lroundf(xmaj ? fmaxf(X0, X1) : fmaxf(Y0, Y1));
+        int steps = 0, wrong = 0, jumps = 0, far = 0, prev = -1, seen = 0;
+        for (int mj = m0; mj <= m1; mj++, steps++) {
+            int cnt = 0, mi = -1;
+            for (int mn = 0; mn < (xmaj ? LH : LW); mn++) if (xmaj ? s_lit[mn][mj] : s_lit[mj][mn]) { cnt++; mi = mn; }
+            seen += cnt;
+            wrong += cnt != 1;
+            if (cnt != 1) continue;
+            jumps += prev >= 0 && abs(mi - prev) > 1;
+            prev = mi;
+            const float px = xmaj ? mj : mi, py = xmaj ? mi : mj;
+            far += fabsf((px - X0) * DY - (py - Y0) * DX) / sqrtf(DX * DX + DY * DY) > 1.f;
+        }
+        if (wrong || jumps || far || seen != total) {
+            if (!bad) printf("  hairline at %.1f deg: %d of %d steps not one dot, %d gaps, %d dots over a dot off, %d outside its ends\n",
+                             angles[k], wrong, steps, jumps, far, total - seen);
+            bad++;
+        }
+    }
+    CHECK(bad == 0, "a hairline is one dot a step, 8-connected, within a dot of the line, at every angle (%d of %d not)", bad, na);
+
+    /* rings and an arc: a simple 8-connected curve (each dot two neighbours, an arc's ends one; no
+     * three dots in any 2 x 2), within a dot of the circle */
+    const char *rings[] = { "{\"k\":\"ring\",\"r\":0.6,\"w\":0.01}", "{\"k\":\"ring\",\"r\":0.33,\"w\":0.01}",
+                            "{\"k\":\"ring\",\"r\":0.85,\"w\":0.01}", "{\"k\":\"arc\",\"r\":0.5,\"a0\":30,\"a1\":200,\"w\":0.01}" };
+    const float rr[] = { 0.6f, 0.33f, 0.85f, 0.5f };
+    for (int k = 0; k < 4; k++) {
+        const int total = lit_dots(rings[k]);
+        int ends = 0, thick = 0, clump = 0, far = 0;
+        for (int y = 0; y < LH; y++) for (int x = 0; x < LW; x++) {
+            if (y + 1 < LH && x + 1 < LW && s_lit[y][x] + s_lit[y][x + 1] + s_lit[y + 1][x] + s_lit[y + 1][x + 1] >= 3) clump++;
+            if (!s_lit[y][x]) continue;
+            const int nb = neighbours(x, y);
+            ends += nb == 1; thick += nb != 2 && nb != 1;
+            const float gx = ((x + 0.5f) / LW) * 2.f - 1.f, gy = 1.f - ((y + 0.5f) / LH) * 2.f, d = sqrtf(gx * gx + gy * gy);
+            const float ex = (gx - gx * rr[k] / d) * 0.5f * LW, ey = (gy - gy * rr[k] / d) * 0.5f * LH;
+            far += sqrtf(ex * ex + ey * ey) > 1.f;
+        }
+        CHECK(total > 50 && ends == (k == 3 ? 2 : 0) && thick == 0 && clump == 0 && far == 0,
+              "%s: %d dots, %d ends, %d without two neighbours, %d clumps, %d over a dot off", rings[k], total, ends, thick, clump, far);
+    }
+}
+
+/* ── the subtitle: the reader's word at the bottom ───────────────────────── */
+
+/* the word's letters, n of them after the scene's own, the ORP (orp) accented on x = stage / 2
+ * (orp -1: none, the word centred), every box inside the glass at the caption's height */
+static void check_caption(const scene_t *sc, const char *w, int orp) {
     fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
-    uint8_t *dots = calloc((size_t)s->N, 1);
-    fluid_letter_t L[FLUID_MAX_LETTERS]; int nl;
-    scene_fill(s, sc, 0.f, NULL, L, &nl, dots);
-    /* a hairline: one dot wide and unbroken. Each dot column it crosses shows its nearest dot,
-     * and no dot further than half a dot from it shows (a dithered soft edge scatters them) */
-    const int DW = 2 * s->W, DH = 4 * s->H;
-    const float half = 1.f / (float)(DW < DH ? DW : DH), ax = -0.8f, ay = -0.5f, bx = 0.8f, by = 0.3f;
-    int gaps = 0, cols = 0, strays = 0;
-    for (int dy = 0; dy < DH; dy++) for (int dx = 0; dx < DW; dx++) {
-        if (!(dots[(dy >> 2) * s->W + (dx >> 1)] & (1 << fluid_braille_bit(dx & 1, dy & 3)))) continue;
-        const float px = ((dx + 0.5f) / DW) * 2.f - 1.f - ax, py = 1.f - ((dy + 0.5f) / DH) * 2.f - ay;
-        const float l2 = (bx - ax) * (bx - ax) + (by - ay) * (by - ay);
-        float u = (px * (bx - ax) + py * (by - ay)) / l2;
-        u = u < 0.f ? 0.f : u > 1.f ? 1.f : u;
-        const float ex = px - u * (bx - ax), ey = py - u * (by - ay);
-        strays += sqrtf(ex * ex + ey * ey) > half * 1.01f;
+    fluid_letter_t L[FLUID_MAX_LETTERS]; int nl, base;
+    scene_fill(s, sc, 0.f, NULL, L, &base, NULL);
+    const int n = (int)strlen(w);
+    const scene_caption_t cap = { w, n, orp };
+    scene_fill(s, sc, 0.f, &cap, L, &nl, NULL);
+    const float S = FLUID_STAGE_REF, mid = S / 2, cy = (1.f - SCENE_CAPTION_Y) * 0.5f * S;
+    int same = nl == base + n, acc = 0, inside = 1, row = 1;
+    for (int q = 0; same && q < n; q++) {
+        const fluid_letter_t *c = &L[base + q];
+        same &= c->ch == w[q] && !c->mask && c->rgb == 0;
+        acc += c->acc != (q == orp);
+        for (int k = 0; k < 4; k++) {
+            const float x = c->x + (k & 1) * c->w - mid, y = c->y + (k >> 1) * c->h - mid;
+            inside &= x * x + y * y <= mid * mid;
+        }
+        row &= fabsf(c->y + c->h * 0.5f - cy) < 1.f;
     }
-    for (int dx = 0; dx < DW; dx++) {
-        const float x = ((dx + 0.5f) / DW) * 2.f - 1.f;
-        if (x < -0.78f || x > 0.78f) continue;
-        const int dy = (int)((1.f - (ay + (by - ay) * (x - ax) / (bx - ax))) * 0.5f * DH);
-        gaps += !(dots[(dy >> 2) * s->W + (dx >> 1)] & (1 << fluid_braille_bit(dx & 1, dy & 3)));
-        cols++;
-    }
-    CHECK(cols > 80 && gaps == 0 && strays == 0, "a hairline: %d gaps in %d dot columns, %d stray dots", gaps, cols, strays);
-    free(dots);
+    const fluid_letter_t *o = &L[base + (orp < 0 ? 0 : orp)];
+    const float centre = orp < 0 ? o->x + n * o->w * 0.5f : o->x + o->w * 0.5f;
+    CHECK(same && acc == 0 && fabsf(centre - mid) < 0.5f && inside && row,
+          "\"%s\" orp %d: its %d letters (%d), %d wrongly accented, centred at %.1f of %.1f, inside the glass %d, on the caption's row %d",
+          w, orp, n, nl - base, acc, centre, mid, inside, row);
     fluid_sim_destroy(s);
+}
+
+static void test_caption(void) {
+    const char *err;
+    pkg_t *p = pkg_parse(SPOTS, strlen(SPOTS), &err);
+    scene_t *sc = p ? scene_build(p, "hair", NULL, 0, &err) : NULL;
+    CHECK(sc, "the caption's scene builds");
+    if (sc) {
+        check_caption(sc, "orbiting", 2);
+        check_caption(sc, "a", 0);
+        check_caption(sc, "the", -1);
+        check_caption(sc, "incomprehensibilities", 4);
+        check_caption(sc, "incomprehensibilities", 19);
+    }
     scene_free(sc);
     pkg_unref(p);
 }
@@ -469,6 +587,8 @@ int main(int argc, char **argv) {
     test_fill();
     test_occlusion();
     test_spots();
+    test_caption();
+    test_hairlines();
     test_real_package(argv[1]);
     bench(argc > 2 ? argv[2] : "");
     CHECK(P->refs == 1, "every scene gave its package reference back (%d)", P->refs);

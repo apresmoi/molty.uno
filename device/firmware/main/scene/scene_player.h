@@ -105,14 +105,13 @@ void scene_tick(scene_player_t *p, float dt);
 bool scene_take_start(scene_player_t *p);
 static inline bool scene_playing(const scene_player_t *p) { return p->cur != NULL; }
 
-/* A subtitle over a scene: what Molty says while a drawing is up, one line at the bottom,
- * the word being spoken (str[hi0..hi1)) brighter */
-#define SCENE_CAPTION_MAX   24          /* characters on the line                          */
+/* A subtitle over a scene: what Molty says while a drawing is up, as the reader shows it
+ * (one word at a time, its ORP letter (orp; -1: none, the word centred) in the accent and on
+ * the vertical centre line) but small, at the bottom, shrunk until it fits inside the glass */
 #define SCENE_CAPTION_Y     (-0.66f)    /* glass units, y up                               */
-#define SCENE_CAPTION_SIZE  0.11f       /* type size, glass units                          */
-#define SCENE_CAPTION_RGB   0x9aa0b8u
-#define SCENE_CAPTION_HI    0xffffffu
-typedef struct { const char *str; int n, hi0, hi1; } scene_caption_t;
+#define SCENE_CAPTION_SIZE  0.16f       /* type size at most, glass units                  */
+#define SCENE_CAPTION_RGB   0x9aa0b8u   /* the ink under it                                */
+typedef struct { const char *str; int n, orp; } scene_caption_t;
 
 /** Rasterise sc at t s (and cap, if any, over it) on the braille dots: T + tcol of every
  *  cell (zero outside the items; a cell's target is its densest dot), dots (W x H, may be

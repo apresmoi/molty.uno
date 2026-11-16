@@ -276,7 +276,9 @@ void fluid_text_set_labels(fluid_text_t *tx, const fluid_sim_t *s, const fluid_l
         for (int b = 0; b < cnt && inL == 0.f; b++) {
             if (!lb[b].shown || py <= y0[b] || py >= y0[b] + lh) continue;
             int li = (int)floorf((px - x0[b]) / adv);
-            if (li >= 0 && li < lb[b].len && lb[b].text[li] != ' ') { inL = 1.f; isA = lb[b].acc ? 1.f : 0.f; }
+            /* a button with its own colour shows its accent in its letters, never the
+             * palette accent in the ink (green over the pastel orange reads brown) */
+            if (li >= 0 && li < lb[b].len && lb[b].text[li] != ' ') { inL = 1.f; isA = lb[b].acc && !(lb[b].rgb & FLUID_RGB) ? 1.f : 0.f; }
         }
         tx->cov[k] = inL * 0.62f; tx->orp[k] = isA;
     }

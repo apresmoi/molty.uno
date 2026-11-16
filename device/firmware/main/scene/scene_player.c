@@ -269,17 +269,52 @@ static void cells(const canvas_t *s, float x0, float y0, float x1, float y1, int
     if (*j1 > s->H - 1) *j1 = s->H - 1;
 }
 
-/* A stroke no wider than a dot is a hairline: the dots within half a dot of it, solid. A soft
- * edge there is all edge, and the Bayer threshold breaks it into scattered dots. */
+/* A stroke no wider than a dot is a hairline: it walks the dot lattice as drawille does, one
+ * dot a step along its major axis and 8-connected (a DDA in dot coordinates: each step's dot
+ * the nearest to the line), solid. Along a path (a curve, a ring) a dot whose neighbours touch
+ * each other is a corner and drops, so a bend is no thicker than a straight run. */
 static inline float hair(const canvas_t *s) { return 1.f / (float)(s->W < s->H ? s->W : s->H); }   /* half a dot */
-static inline float reach_of(const ctx_t *c, float hw) { return hw <= hair(c->s) ? hair(c->s) : hw + c->soft; }
-static inline float cover(const ctx_t *c, float hw, float reach, float d) {
-    return hw <= hair(c->s) ? (d < reach ? 1.f : 0.f) : 1.f - fluid_smooth(hw, reach, d);
+typedef struct { canvas_t *s; uint32_t rgb; int n, skip, ax, ay, bx, by; float px, py; } hair_t;   /* a: drawn, b: pending, p: the pen */
+static inline int rnd(float v) { return (int)floorf(v + 0.5f); }
+
+static void hair_put(hair_t *h, int x, int y) {
+    if (h->skip) { h->skip--; return; }
+    if (x >= 0 && y >= 0 && x < h->s->W && y < h->s->H) paint(h->s, y * h->s->W + x, 1.f, SCENE_INK, h->rgb);
 }
+static void hair_dot(hair_t *h, int x, int y) {
+    if (h->n && x == h->bx && y == h->by) return;
+    if (h->n == 2 && abs(x - h->ax) <= 1 && abs(y - h->ay) <= 1) {     /* b is a corner (or a spike back to a) */
+        if (x == h->ax && y == h->ay) h->n = 1;
+        h->bx = x; h->by = y;
+        return;
+    }
+    if (h->n) { hair_put(h, h->bx, h->by); h->ax = h->bx; h->ay = h->by; }
+    h->n += h->n < 2;
+    h->bx = x; h->by = y;
+}
+/* the pen to (x, y) (glass units, y up) */
+static void hair_to(hair_t *h, float x, float y) {
+    const float X = (x + 1.f) * 0.5f * h->s->W - 0.5f, Y = (1.f - y) * 0.5f * h->s->H - 0.5f;
+    if (h->n) {
+        const float dx = X - h->px, dy = Y - h->py;
+        const bool xm = fabsf(dx) >= fabsf(dy);
+        const float a = xm ? h->px : h->py, b = xm ? h->py : h->px, da = xm ? dx : dy, k = da != 0.f ? (xm ? dy : dx) / da : 0.f;
+        const int m1 = rnd(a + da), st = m1 >= rnd(a) ? 1 : -1;
+        for (int m = rnd(a); ; m += st) {
+            const int o = rnd(b + k * (m - a));
+            if (xm) hair_dot(h, m, o);
+            else hair_dot(h, o, m);
+            if (m == m1) break;
+        }
+    } else hair_dot(h, rnd(X), rnd(Y));
+    h->px = X; h->py = Y;
+}
+static void hair_end(hair_t *h) { if (h->n) hair_put(h, h->bx, h->by); h->n = 0; }
 
 static void segment(const ctx_t *c, float ax, float ay, float bx, float by, float hw, uint32_t rgb) {
     canvas_t *s = c->s;
-    const float reach = reach_of(c, hw), dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy, il2 = l2 > 1e-9f ? 1.f / l2 : 0.f;
+    if (hw <= hair(s)) { hair_t h = { .s = s, .rgb = rgb }; hair_to(&h, ax, ay); hair_to(&h, bx, by); hair_end(&h); return; }
+    const float reach = hw + c->soft, dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy, il2 = l2 > 1e-9f ? 1.f / l2 : 0.f;
     int i0, i1, j0, j1;
     cells(s, fminf(ax, bx) - reach, fminf(ay, by) - reach, fmaxf(ax, bx) + reach, fmaxf(ay, by) + reach, &i0, &i1, &j0, &j1);
     for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) {
@@ -287,19 +322,32 @@ static void segment(const ctx_t *c, float ax, float ay, float bx, float by, floa
         float u = (px * dx + py * dy) * il2;
         u = u < 0.f ? 0.f : u > 1.f ? 1.f : u;
         const float ex = px - u * dx, ey = py - u * dy, d = sqrtf(ex * ex + ey * ey);
-        if (d < reach) paint(s, j * s->W + i, cover(c, hw, reach, d), SCENE_INK, rgb);
+        if (d < reach) paint(s, j * s->W + i, 1.f - fluid_smooth(hw, reach, d), SCENE_INK, rgb);
     }
 }
 
 /* ring / arc: |r − distance| within w/2, at angles a0..a1 (a1 − a0 ≥ 360: all of it). Each row
  * visits only its band, |x| between the inner and the outer circle: a wheel's ring is most of
- * the screen's bounding box but a sliver of its dots. */
+ * the screen's bounding box but a sliver of its dots. A hairline walks it a dot a step (a
+ * whole ring from one step before its start to one after, the first dot left to the end). */
 static void ring(const ctx_t *c, const scene_item_t *it, bool arc) {
     canvas_t *s = c->s;
-    const float hw = it->w * 0.5f, reach = reach_of(c, hw), ro = it->r + reach, rin = it->r > reach ? it->r - reach : 0.f;
     float span = it->a1 - it->a0;
     const bool whole = !arc || span >= 360.f;
-    span = fmodf(fmodf(span, 360.f) + 360.f, 360.f);
+    span = whole ? 360.f : fmodf(fmodf(span, 360.f) + 360.f, 360.f);
+    const float hw = it->w * 0.5f;
+    if (hw <= hair(s)) {
+        const int n = 8 + (int)(span * DEG * it->r * 0.5f * (s->W > s->H ? s->W : s->H));
+        hair_t h = { .s = s, .rgb = it->rgb };
+        for (int q = whole ? -1 : 0; q <= (whole ? n + 1 : n); q++) {
+            const float a = (it->a0 + span * q / n) * DEG;
+            hair_to(&h, it->r * cosf(a), it->r * sinf(a));
+            if (q < 0) h.skip = 1;
+        }
+        hair_end(&h);
+        return;
+    }
+    const float reach = hw + c->soft, ro = it->r + reach, rin = it->r > reach ? it->r - reach : 0.f;
     int i0, i1, j0, j1;
     cells(s, -ro, -ro, ro, ro, &i0, &i1, &j0, &j1);
     for (int j = j0; j <= j1; j++) {
@@ -320,7 +368,7 @@ static void ring(const ctx_t *c, const scene_item_t *it, bool arc) {
                     if (a < 0.f) a += 360.f;
                     if (a > span) continue;
                 }
-                paint(s, j * s->W + i, cover(c, hw, reach, d), SCENE_INK, it->rgb);
+                paint(s, j * s->W + i, 1.f - fluid_smooth(hw, reach, d), SCENE_INK, it->rgb);
             }
         }
     }
@@ -449,16 +497,16 @@ static void glyph(const ctx_t *c, const scene_item_t *it, const pkg_asset_t *a) 
     }
 }
 
-/* the reader's letter boxes (fluid_text_set_labels): ink under each letter, and the letters
- * themselves for the crisp overlay; size = the type size in glass units */
-static void text_run(const ctx_t *c, const char *str, int n, float x, float y, float size, uint32_t rgb,
-                     int hi0, int hi1, uint32_t hi_rgb, fluid_letter_t *letters, int *nl) {
+/* the reader's letter boxes (fluid_text_set_word): ink under each letter, and the letters
+ * themselves (in lrgb) for the crisp overlay; size = the type size in glass units. (x, y) is
+ * the run's centre, or letter orp's when orp >= 0 (that letter accented). */
+static void text_run(const ctx_t *c, const char *str, int n, float x, float y, float size, uint32_t rgb, uint32_t lrgb,
+                     int orp, fluid_letter_t *letters, int *nl) {
     canvas_t *s = c->s;
     const float fs = size * s->stage * 0.5f, adv = fs * 0.6f, lh = fs * 1.05f;
-    const float x0 = (x + 1.f) * 0.5f * s->stage - n * adv * 0.5f, y0 = (1.f - y) * 0.5f * s->stage - lh * 0.5f;
+    const float x0 = (x + 1.f) * 0.5f * s->stage - (orp < 0 ? n * 0.5f : orp + 0.5f) * adv, y0 = (1.f - y) * 0.5f * s->stage - lh * 0.5f;
     for (int q = 0; q < n && *nl < FLUID_MAX_LETTERS; q++)
-        letters[(*nl)++] = (fluid_letter_t){ str[q], false, x0 + q * adv, y0, adv, lh, fs, 0.f,
-                                             FLUID_RGB | (q >= hi0 && q < hi1 ? hi_rgb : rgb), NULL, 0, 0 };
+        letters[(*nl)++] = (fluid_letter_t){ str[q], q == orp, x0 + q * adv, y0, adv, lh, fs, 0.f, lrgb, NULL, 0, 0 };
     const float cwp = (float)s->stage / s->W, chp = (float)s->stage / s->H;
     int i0 = (int)floorf(x0 / cwp), i1 = (int)ceilf((x0 + n * adv) / cwp), j0 = (int)floorf(y0 / chp), j1 = (int)ceilf((y0 + lh) / chp);
     i0 = i0 < 0 ? 0 : i0; j0 = j0 < 0 ? 0 : j0; i1 = i1 >= s->W ? s->W - 1 : i1; j1 = j1 >= s->H ? s->H - 1 : j1;
@@ -470,24 +518,45 @@ static void text_run(const ctx_t *c, const char *str, int n, float x, float y, f
     }
 }
 static void text(const ctx_t *c, const scene_t *sc, const scene_item_t *it, fluid_letter_t *letters, int *nl) {
-    text_run(c, sc->chars + it->str, it->nstr, it->x, it->y, it->size, it->rgb, 0, 0, 0, letters, nl);
+    text_run(c, sc->chars + it->str, it->nstr, it->x, it->y, it->size, it->rgb, FLUID_RGB | it->rgb, -1, letters, nl);
 }
 
-/* Catmull-Rom through the points, 8 segments a span */
-static void curve(const ctx_t *c, const float (*p)[2], int n, float hw, uint32_t rgb) {
+/* the subtitle: the reader's word (palette letters, the ORP in the accent on x = 0) at the
+ * bottom, its type shrunk until its farthest corner is inside the glass */
+static void caption(const ctx_t *c, const scene_caption_t *cap, fluid_letter_t *letters, int *nl) {
+    const int orp = cap->orp >= cap->n ? cap->n - 1 : cap->orp;
+    const float reach = orp < 0 ? cap->n * 0.5f : fmaxf(orp + 0.5f, cap->n - orp - 0.5f);   /* in advances */
+    float size = SCENE_CAPTION_SIZE;
+    for (;;) {
+        const float e = reach * 0.6f * size, yb = SCENE_CAPTION_Y - 0.525f * size;
+        if (e * e + yb * yb <= 0.95f * 0.95f || size < 0.04f) break;
+        size *= 0.92f;
+    }
+    text_run(c, cap->str, cap->n, 0.f, SCENE_CAPTION_Y, size, SCENE_CAPTION_RGB, 0, orp, letters, nl);
+}
+
+/* Catmull-Rom through the points (8 segments a span), or a polyline (u = 1 alone: the next
+ * point); a hairline is one path */
+static void path(const ctx_t *c, const float (*p)[2], int n, bool smooth, float hw, uint32_t rgb) {
+    if (n < 2) return;
+    hair_t h = { .s = c->s, .rgb = rgb };
+    const bool thin = hw <= hair(c->s);
     float px = p[0][0], py = p[0][1];
+    if (thin) hair_to(&h, px, py);
     for (int i = 0; i + 1 < n; i++) {
         const float *a = p[i > 0 ? i - 1 : 0], *b = p[i], *d = p[i + 1], *e = p[i + 2 < n ? i + 2 : n - 1];
-        for (int q = 1; q <= 8; q++) {
+        for (int q = smooth ? 1 : 8; q <= 8; q++) {
             const float u = q / 8.f, u2 = u * u, u3 = u2 * u;
             float xy[2];
             for (int k = 0; k < 2; k++)
                 xy[k] = 0.5f * (2.f * b[k] + (d[k] - a[k]) * u + (2.f * a[k] - 5.f * b[k] + 4.f * d[k] - e[k]) * u2 +
                                 (3.f * b[k] - a[k] - 3.f * d[k] + e[k]) * u3);
-            segment(c, px, py, xy[0], xy[1], hw, rgb);
+            if (thin) hair_to(&h, xy[0], xy[1]);
+            else segment(c, px, py, xy[0], xy[1], hw, rgb);
             px = xy[0]; py = xy[1];
         }
     }
+    hair_end(&h);
 }
 
 /* the canvas for a W x H grid, kept between frames (PSRAM: 7 bytes a dot) */
@@ -534,11 +603,8 @@ static void paint_items(const ctx_t *c, const scene_t *sc, float t, fluid_letter
                 segment(c, it->r * cx, it->r * cy, (it->r + it->len) * cx, (it->r + it->len) * cy, it->w * 0.5f, it->rgb);
             }
             break;
-        case PK_LINE:
-            for (int q = 0; q + 1 < it->npts; q++)
-                segment(c, sc->pts[it->pts + q][0], sc->pts[it->pts + q][1], sc->pts[it->pts + q + 1][0], sc->pts[it->pts + q + 1][1], it->w * 0.5f, it->rgb);
-            break;
-        case PK_CURVE: curve(c, sc->pts + it->pts, it->npts, it->w * 0.5f, it->rgb); break;
+        case PK_LINE:  path(c, sc->pts + it->pts, it->npts, false, it->w * 0.5f, it->rgb); break;
+        case PK_CURVE: path(c, sc->pts + it->pts, it->npts, true, it->w * 0.5f, it->rgb); break;
         case PK_DISC:  disc(c, it->x, it->y, it->r, it->rgb); break;
         case PK_BALL:  ball(c, it, a, t); break;
         case PK_GLYPH: if (a && !crisp(c, it, a, letters, nletters)) glyph(c, it, a); break;
@@ -560,9 +626,7 @@ void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_
     for (int k = 0; k < cv->N; k++) { cv->T[k] = 0; cv->tcol[k] = bg; }
     const ctx_t c = { cv, 1.f / cv->H };                      /* soft edge: half a dot row */
     paint_items(&c, sc, t, letters, nletters);
-    if (cap && cap->n > 0)                                    /* the subtitle, over the drawing */
-        text_run(&c, cap->str, cap->n, 0.f, SCENE_CAPTION_Y, SCENE_CAPTION_SIZE, SCENE_CAPTION_RGB,
-                 cap->hi0, cap->hi1, SCENE_CAPTION_HI, letters, nletters);
+    if (cap && cap->n > 0) caption(&c, cap, letters, nletters);   /* the subtitle, over the drawing */
     /* back to the cells: each cell's target is its densest dot (a thin stroke still draws the
      * fluid to it), its colour the ink-weighted mean of its dots, its dots those over Bayer */
     for (int j = 0; j < s->H; j++) for (int i = 0; i < s->W; i++) {

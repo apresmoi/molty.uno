@@ -300,6 +300,13 @@ static void test_labels(void) {
         CHECK((tx->cov[k] > 0.f) == (i != 2), "label %d cov %.2f (shown %d)", i, tx->cov[k], i != 2);
         CHECK((tx->orp[k] > 0.f) == (i == 3), "label %d accent ink %.2f", i, tx->orp[k]);
     }
+    /* a button with its own colour pools no palette accent: the picked green stays green
+     * (the pastel accent is orange, and green over orange reads brown) */
+    lb[3].rgb = FLUID_RGB | 0x4ade80;
+    fluid_text_set_labels(tx, s, lb, 5, fs);
+    const fluid_letter_t *m = &tx->letters[3 * 8 + 3];
+    int k = (int)((m->y + m->h / 2.f) / ch) * s->W + (int)((m->x + m->w / 2.f) / cw);
+    CHECK(tx->cov[k] > 0.f && tx->orp[k] == 0.f, "coloured button: accent ink %.2f", tx->orp[k]);
     fluid_text_destroy(tx); fluid_sim_destroy(s);
 }
 

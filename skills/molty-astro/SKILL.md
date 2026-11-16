@@ -19,6 +19,7 @@ pairing stores the device and token this skill reads), and Molty firmware with `
 ```sh
 node "<skill-dir>/scripts/astro.mjs" tonight          # moon, then Mercury..Saturn, then the moon's sign (7 scenes, 19 s)
 node "<skill-dir>/scripts/astro.mjs" chart            # all ten bodies on the zodiac wheel with their aspects (held 60 s)
+node "<skill-dir>/scripts/astro.mjs" chart --interactive  # the chart, and a tapped sign opens up close (5 min, see below)
 node "<skill-dir>/scripts/astro.mjs" signs            # the twelve signs (36 s)
 node "<skill-dir>/scripts/astro.mjs" aspects [trine]  # each aspect on the degree grid, or one (5 s each)
 node "<skill-dir>/scripts/astro.mjs" events [lunar-eclipse]  # next transit, occultation, close pass, solar and lunar eclipse (6 s each)
@@ -30,6 +31,17 @@ nothing). Event kinds: `transit`, `occultation`, `appulse`, `solar-eclipse`, `lu
 
 Each run prints `SAY: <one line>` and `FACTS: <json>`. The first scene replaces the screen,
 the rest queue behind it; Molty melts back to its creature when they end.
+
+## Tap to read (chart)
+
+On the chart a tap on a planet or a sign shows its reading on Molty at once ("Sun in Gemini: you shine
+by talking and learning."), with no help from you. `chart --interactive` adds the **sign close-up**:
+it keeps listening to Molty's events (the molty skill's long-poll) and, on a tap on a sign, shows that
+sign big with its planets on its degree dial and has Molty read it aloud, lighting each planet as it is
+read; then the chart comes back (or at once, on a tap on empty space). An empty sign reads its nature
+and where its ruler is. It runs until `--ttl` (default 300 s, max 600) or Ctrl-C (which clears the
+screen): start it in the background, speak its `SAY` line, and don't talk over a close-up.
+`--dry-run --tap gemini` prints what one tap would send.
 
 ## Install, once
 
@@ -91,4 +103,4 @@ A wiped store (a factory flash) is handled: the script reinstalls once and plays
 
 ## References
 
-- [layouts.md](references/layouts.md): every layout and its params, the commands in full, for agents without a shell.
+- [layouts.md](references/layouts.md): every layout and its params, the commands in full (and the close-up's event loop), for agents without a shell.
