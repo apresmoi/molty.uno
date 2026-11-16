@@ -72,12 +72,13 @@ test('binding rejects missing, unknown and mistyped params, and resolves each, p
   assert.deepEqual([items[0].color, items[0].on, items[0].off], ['#ffffff', 0, 2]);
 });
 
-test('every layout plays with the params the molty-astro skill sends, each under 1 KB (the chart\'s readings: 8 KB)', () => {
-  const pkg = loadPackage('astrology'), seen = new Set();
-  for (const scene of ['tonight', 'chart', 'signs', 'aspects', 'events']) {
-    const out = execFileSync(process.execPath, [`${ROOT}skills/molty-astro/scripts/astro.mjs`, scene, '--date', '2026-11-01', '--dry-run'], { encoding: 'utf8', env: { ...process.env, MOLTY_PKG_INDEX: `${ROOT}packages/index.json` } });
+test('every layout plays with the params the molty-astro skill sends, each under 1 KB (with spot readings: 8 KB)', () => {
+  const pkg = loadPackage('astrology'), seen = new Set(), READS = ['chart', 'sign-closeup'];
+  // a tap on a crowded sign (Leo: Moon, Mars, Jupiter) and on an empty one (Taurus), in the chart's interactive mode
+  for (const scene of [['tonight'], ['chart'], ['signs'], ['aspects'], ['events'], ['chart', '--interactive', '--tap', 'leo'], ['chart', '--interactive', '--tap', 'taurus']]) {
+    const out = execFileSync(process.execPath, [`${ROOT}skills/molty-astro/scripts/astro.mjs`, ...scene, '--date', '2026-11-01', '--dry-run'], { encoding: 'utf8', env: { ...process.env, MOLTY_PKG_INDEX: `${ROOT}packages/index.json` } });
     for (const c of out.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l)).filter((c) => c.name.startsWith('scene.'))) {
-      assert.ok(JSON.stringify(c).length < (c.args.layout === 'chart' ? 8192 : 1024), `${c.args.layout}: ${JSON.stringify(c).length} B`);
+      assert.ok(JSON.stringify(c).length < (READS.includes(c.args.layout) ? 8192 : 1024), `${c.args.layout}: ${JSON.stringify(c).length} B`);
       const t = pkg.layouts[c.args.layout].dur / 2 || 1, dots = frame(pkg, c.args.layout, c.args.params, t);
       assert.ok(dots.size > 200, `${c.args.layout} draws ${dots.size} dots`);
       assert.equal(png(dots).subarray(1, 4).toString(), 'PNG');

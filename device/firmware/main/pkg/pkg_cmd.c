@@ -107,7 +107,19 @@ static const char *io_open(void *ctx, const char *url, int64_t *len)
     *len = cl > 0 ? cl : -1;
     return NULL;
 }
-static int io_read(void *ctx, uint8_t *buf, int cap) { return esp_http_client_read(((dl_t *)ctx)->http, (char *)buf, cap); }
+/* 0 before the body is complete is a stall (a read that timed out on a weak signal, errno
+ * EAGAIN), not the end: wait and read on, a few times, then call it a failed download */
+static int io_read(void *ctx, uint8_t *buf, int cap)
+{
+    dl_t *d = ctx;
+    for (int tries = 0;; tries++) {
+        const int n = esp_http_client_read(d->http, (char *)buf, cap);
+        if (n != 0 || esp_http_client_is_complete_data_received(d->http)) return n;
+        if (tries >= 4) return -1;
+        mole_diag_event(false, "pkg.stall retry %d", tries + 1);
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+}
 static void io_close(void *ctx)
 {
     dl_t *d = ctx;

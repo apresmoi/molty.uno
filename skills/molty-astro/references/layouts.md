@@ -49,6 +49,31 @@ Seven scenes: `globe` for the Moon, then Mercury, Venus, Mars, Jupiter; `saturn`
 | `bodies` | ten `{"g": "g-<body>", "a": <chart angle>, "r": <radius>, "c": "<colour>"}`; radius 0.64, pulled in by 0.11 per level when a body is within 13 degrees of one already placed at that level (place in order of longitude); colours as in `aspect` |
 | `inner` | the smallest radius minus 0.07 (the ring the aspect lines end on) |
 | `sextiles`, `squares`, `trines`, `oppositions` | lists of `{"x1", "y1", "x2", "y2"}`: a line between two bodies' chart angles on the `inner` ring (conjunctions have none). Tightest orb first; leave the loosest off until the params fit in about 900 bytes |
+| `signs` | twelve `{"a": (195 + 30 i) mod 360, "say", "id": "<sign>"}` |
+
+Each body also carries `say` (its reading, at most 160 characters) and `id` (`sun` …). A tap on one shows its
+`say` and sends you a `tap` event with `"spot": "<id>"`. Readings (see `sky.mjs`): a body, "<Planet> in <Sign>:
+<what it does> <how the sign plays it>." plus its tightest aspect; a sign, its nature and ruler, then its planets
+or, when empty, where its ruler is.
+
+## sign-closeup (held: send the reading's length as `ttl_s`, then queue the chart)
+
+One sign big, its planets on its degree dial (0 at the lower left, over the top, 30 at the lower right), each lit
+while Molty reads it. Sent when a `tap` event names a sign (`spot`), with a `say` of the reading right after.
+
+| param | value |
+|---|---|
+| `sign` | the sign, e.g. `gemini` (its glyph asset and the centre spot's id) |
+| `c` | the glyph's colour: `#ff9a7a`, `#a8d890`, `#9fc0ff` for sign index (Aries 0) mod 3 |
+| `name`, `nx`, `ns` | the name in capitals, its centre x and type size (0.13; 0.11 past 8 letters), with the ruler's glyph after it, the row centred |
+| `say` | the sign's reading (the centre spot) |
+| `ruler` | `[{"g": "g-<ruler>", "x", "c": <its colour>}]` (modern rulers: Mars, Venus, Mercury, Moon, Sun, Mercury, Venus, Pluto, Jupiter, Saturn, Uranus, Neptune) |
+| `bodies` | each planet in the sign by degree: `{"g", "a": 210 - 8 x degree (spread at least 28 apart, within 210..-30), "c", "d": c at 60 %, "on", "off": when Molty reads it, "say", "id"}` |
+
+`on`/`off` follow the spoken reading (the sign's head, then each planet's line): about 2.6 words a second plus
+0.3 s a sentence, after 1.2 s; `ttl_s` is the end plus 3 s. The loop: `GET $MOLTY_RELAY/v1/devices/<device>/events?wait_s=25`
+(the molty skill's long-poll); a `tap` with a sign's `spot` -> `scene.play` the close-up, `scene.queue` the chart,
+`say` the reading; a `tap` with no `spot` while it shows -> `scene.play` the chart.
 
 ## signs (36 s)
 

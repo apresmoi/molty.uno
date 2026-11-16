@@ -163,6 +163,28 @@ const layouts = {
       each('$signs', { k: 'spot', polar: ['@a', 0.825], r: 0.07, say: '@say', id: '@id' }),
     ],
   },
+  // A sign up close, while Molty reads it aloud: its glyph, name and ruler; its planets on its degree dial (0 lower
+  // left, over the top, 30 lower right: the subtitle keeps the bottom), each dim but for its reading (on..off), when
+  // it is lit and larger. bodies: {g, a: dial angle, c: colour, d: dim colour, on, off, say, id}; a tap on a planet
+  // or the glyph reads it. Held (dur 0): the skill sends the reading's length as ttl_s and queues the chart behind.
+  'sign-closeup': {
+    dur: 0,
+    params: { sign: text, c: text, name: text, nx: num, ns: num, say: text, ruler: list, bodies: list },
+    items: [
+      { k: 'arc', r: 0.86, a0: -30, a1: 210, w: HAIR, color: GRID },
+      ...[210, -30].map((a0) => ({ k: 'ticks', r: 0.82, len: 0.08, n: 1, a0, w: HAIR, color: GRID })),
+      { k: 'glyph', asset: '$sign', size: 0.66, y: 0.08, color: '$c' },
+      // the name (x nx, size ns), and the ruler's glyph after it ({g, x, c}): one row, centred
+      { k: 'text', str: '$name', x: '$nx', y: -0.42, size: '$ns', color: INK },
+      each('$ruler', { k: 'glyph', asset: '@g', size: 0.13, x: '@x', y: -0.42, color: '@c' }),
+      each('$bodies', { k: 'ticks', r: 0.79, len: 0.06, n: 1, a0: '@a', w: HAIR, color: '@d' }),
+      each('$bodies', { k: 'glyph', off: '@on', asset: '@g', size: 0.13, polar: ['@a', 0.67], color: '@d' }),
+      each('$bodies', { k: 'glyph', on: '@on', off: '@off', asset: '@g', size: 0.2, polar: ['@a', 0.67], color: '@c' }),
+      each('$bodies', { k: 'glyph', on: '@off', asset: '@g', size: 0.13, polar: ['@a', 0.67], color: '@d' }),
+      each('$bodies', { k: 'spot', polar: ['@a', 0.67], r: 0.1, say: '@say', id: '@id' }),
+      { k: 'spot', y: 0.08, r: 0.32, say: '$say', id: '$sign' },
+    ],
+  },
   signs: (() => {
     // all twelve, then each in turn, then all twelve again (the lab's timing)
     const grid = (on, off) => SIGNS.map((s, i) => ({ k: 'glyph', on, off, asset: s, size: 0.34, x: n3(-0.63 + (i % 4) * 0.42), y: n3(0.46 - (i >> 2) * 0.46), color: SIGN_INK[i % 3] }));
@@ -192,6 +214,6 @@ const layouts = {
   'lunar-eclipse': { dur: 6, params: { path: list, umbra: num, pen: num, moon_r: num }, items: [{ k: 'ring', r: '$pen', color: DIM }, { k: 'ring', r: '$umbra', color: '#8a3a2a' }, { k: 'ball', each: '$path', x: '@x', y: '@y', on: '@on', off: '@off', r: '$moon_r', img: '@img' }] },
 };
 
-const pkg = { v: 'molty-pkg/1', id: 'astrology', name: 'Astrology', version: '1.2.0', kind: 'scenes', assets, layouts };
+const pkg = { v: 'molty-pkg/1', id: 'astrology', name: 'Astrology', version: '1.3.0', kind: 'scenes', assets, layouts };
 writeFileSync(OUT, JSON.stringify(pkg) + '\n');
 console.log(`astrology.json: ${Object.keys(assets).length} assets, ${Object.keys(layouts).length} layouts, ${Buffer.byteLength(JSON.stringify(pkg)) + 1} bytes`);

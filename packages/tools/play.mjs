@@ -34,14 +34,44 @@ function each([x0, x1, y0, y1], fn) {
   for (let sy = Math.max(0, b - 2); sy <= Math.min(H - 1, d + 2); sy++) for (let sx = Math.max(0, a - 2); sx <= Math.min(W - 1, c + 2); sx++) fn(sx, sy, ...glass(sx, sy));
 }
 
+// a stroke no wider than a dot is a hairline (the firmware's scene_player.c hair_*): a DDA in dot coordinates, one
+// dot a step along its major axis and 8-connected, as drawille; along a path a corner dot (its neighbours touch) drops
+const HAIR = 1 / Math.min(W, H), rnd = (v) => Math.floor(v + 0.5);
+function hair(pts, rgb, put, skip = 0) {
+  let a = null, b = null, pen = null;
+  const commit = () => { if (skip) skip--; else put(b[0], b[1], rgb); };
+  const dot = (x, y) => {
+    if (b && x === b[0] && y === b[1]) return;
+    if (a && Math.abs(x - a[0]) <= 1 && Math.abs(y - a[1]) <= 1) { if (x === a[0] && y === a[1]) a = null; b = [x, y]; return; }
+    if (b) { commit(); a = b; }
+    b = [x, y];
+  };
+  for (const [x, y] of pts) {
+    const X = ((x + 1) / 2) * W - 0.5, Y = ((1 - y) / 2) * H - 0.5;
+    if (pen) {
+      const dx = X - pen[0], dy = Y - pen[1], xm = Math.abs(dx) >= Math.abs(dy), p = xm ? pen[0] : pen[1], q = xm ? pen[1] : pen[0], d = xm ? dx : dy, k = d ? (xm ? dy : dx) / d : 0;
+      const m1 = rnd(p + d), st = m1 >= rnd(p) ? 1 : -1;
+      for (let m = rnd(p); ; m += st) { const o = rnd(q + k * (m - p)); if (xm) dot(m, o); else dot(o, m); if (m === m1) break; }
+    } else dot(rnd(X), rnd(Y));
+    pen = [X, Y];
+  }
+  if (b) commit();
+}
+// a hairline ring or arc as the firmware walks it: a whole ring from one step before its start to one after, its first dot left to the end
+function hairRing(it, whole, rgb, put) {
+  const span = whole ? 360 : (((it.a1 - it.a0) % 360) + 360) % 360, n = 8 + Math.floor(span * DEG * it.r * 0.5 * Math.max(W, H)), pts = [];
+  for (let q = whole ? -1 : 0; q <= (whole ? n + 1 : n); q++) { const a = (it.a0 + (span * q) / n) * DEG; pts.push([it.r * Math.cos(a), it.r * Math.sin(a)]); }
+  hair(pts, rgb, put, whole ? 1 : 0);
+}
+
 function stroke(pts, c, put, w = 0) {
   const rgb = hex(c), r = Math.max(0, w / 2);
+  if (r <= HAIR) return hair(pts, rgb, put);
   for (let i = 0; i + 1 < pts.length; i++) {
     const [a, b] = [pts[i], pts[i + 1]], n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 0.006));
     for (let s = 0; s <= n; s++) {
       const x = a[0] + ((b[0] - a[0]) * s) / n, y = a[1] + ((b[1] - a[1]) * s) / n;
-      if (r < PITCH[0] / 2) put(...snap(x, y), rgb);
-      else each([x - r, x + r, y - r, y + r], (sx, sy, gx, gy) => { if (Math.hypot(gx - x, gy - y) <= r) put(sx, sy, rgb); });
+      each([x - r, x + r, y - r, y + r], (sx, sy, gx, gy) => { if (Math.hypot(gx - x, gy - y) <= r) put(sx, sy, rgb); });
     }
   }
 }
@@ -117,7 +147,8 @@ export function frame(pkg, layout, params, t) {
   for (const it of bind(pkg, layout, params)) {
     if (t < it.on || t >= it.off) continue;
     const rgb = hex(it.color);
-    if (it.k === 'ring') stroke(arcPts(it.r, 0, 360), it.color, put, it.w);
+    if ((it.k === 'ring' || it.k === 'arc') && it.w / 2 <= HAIR) hairRing(it, it.k === 'ring' || it.a1 - it.a0 >= 360, rgb, put);
+    else if (it.k === 'ring') stroke(arcPts(it.r, 0, 360), it.color, put, it.w);
     else if (it.k === 'arc') stroke(arcPts(it.r, it.a0, it.a1), it.color, put, it.w);
     else if (it.k === 'ticks') for (let i = 0; i < it.n; i++) { const a = (it.a0 + (360 * i) / it.n) * DEG, r1 = it.r + it.len; stroke([[it.r * Math.cos(a), it.r * Math.sin(a)], [r1 * Math.cos(a), r1 * Math.sin(a)]], it.color, put); }
     else if (it.k === 'line') stroke(it.pts, it.color, put, it.w);

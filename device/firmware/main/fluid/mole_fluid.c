@@ -310,11 +310,10 @@ static bool     s_word_dots = false;                /* the boot word's dots (s_t
 static uint8_t *s_sdots, *s_sdots_d;                /* a scene's dots: the task's, the drawer's (PSRAM) */
 static bool     s_sub = false;                      /* a say over a scene: its words as a subtitle */
 static int      s_sub_word = -1;                    /* the word the voice is on (-1: none yet) */
-static float    s_sub_until = 0.f;                  /* the last line stays this long after the say */
-static char     s_sub_line[SCENE_CAPTION_MAX];
+static float    s_sub_until = 0.f;                  /* the last word stays this long after the say */
 /* a tapped spot's reading: its words as the subtitle, at reading pace (PSRAM) */
 #define SPOT_READ_WPM  220
-#define SPOT_READ_HOLD 2.f                          /* s the last line stays */
+#define SPOT_READ_HOLD 2.f                          /* s the last word stays */
 typedef struct { char text[PKG_SAY_MAX + 1]; ftok_t toks[PKG_SAY_MAX / 2 + 1]; int n, word; float next; } reading_t;
 static reading_t *s_rd;
 static bool       s_rd_on = false;
@@ -388,37 +387,18 @@ static void tint_letters(void) {
     for (int i = 0; i < s_tx->nletters; i++) s_tx->letters[i].rgb = s_tint;
 }
 
-/* the subtitle: the line (≤ SCENE_CAPTION_MAX characters, broken between words) of txt's
- * words holding word, that word lit */
+/* the subtitle: the word the voice (or the reading) is on, as the reader shows it */
 static scene_caption_t caption(const char *txt, const ftok_t *toks, int ntok, int word) {
-    scene_caption_t c = { s_sub_line, 0, 0, 0 };
-    if (word < 0 || word >= ntok) return c;
-    int first = 0, len = 0;
-    for (int i = 0; i < ntok; i++) {
-        const int l = toks[i].len < SCENE_CAPTION_MAX ? toks[i].len : SCENE_CAPTION_MAX;
-        if (i > first && len + 1 + l > SCENE_CAPTION_MAX) {   /* a new line starts at word i */
-            if (word < i) break;
-            first = i; len = 0;
-        }
-        len += (i > first) + l;
-    }
-    for (int i = first; i < ntok; i++) {
-        const int l = toks[i].len < SCENE_CAPTION_MAX ? toks[i].len : SCENE_CAPTION_MAX;
-        if (i > first && c.n + 1 + l > SCENE_CAPTION_MAX) break;
-        if (i > first) s_sub_line[c.n++] = ' ';
-        if (i == word) c.hi0 = c.n;
-        memcpy(s_sub_line + c.n, txt + toks[i].off, (size_t)l);
-        c.n += l;
-        if (i == word) c.hi1 = c.n;
-    }
-    return c;
+    if (word < 0 || word >= ntok) return (scene_caption_t){ txt, 0, -1 };
+    const ftok_t *t = &toks[word];
+    return (scene_caption_t){ txt + t->off, t->len < FLUID_WORD_LETTERS ? t->len : FLUID_WORD_LETTERS, t->orp };
 }
 
 /* a say over the scene, else a tapped spot's reading */
 static scene_caption_t scene_caption(void) {
     if (s_sub) return caption(s_ttext, s_toks, s_ntok, s_sub_word);
     if (s_rd_on) return caption(s_rd->text, s_rd->toks, s_rd->n, s_rd->word);
-    return (scene_caption_t){ s_sub_line, 0, 0, 0 };
+    return (scene_caption_t){ NULL, 0, -1 };
 }
 
 /* a tap landed on spot item n of sc: its reading, from its first word */
@@ -671,7 +651,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     }
 
     const bool asking = s_ask.scr.phase != FLUID_ASK_NONE;
-    if (s_sub) {   /* the subtitle follows the voice; its last line stays a moment, then goes */
+    if (s_sub) {   /* the subtitle follows the voice; its last word stays a moment, then goes */
         if (s_follow) { if (s_follow_word >= 0) s_sub_word = s_follow_word < s_ntok ? s_follow_word : s_ntok - 1; s_sub_until = s_tnow + 1.5f; }
         else if (s_tnow >= s_sub_until || s_cur != ST_SCENE) { s_sub = false; s_sub_word = -1; }
     }
