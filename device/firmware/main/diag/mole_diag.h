@@ -9,7 +9,9 @@
  *    alloc-failure hook, per-core starvation probes, gateway ping, and a
  *    1 Hz timeline (last 180 s) to correlate stalls with what ran.
  *  HTTP: GET /api/diag, GET /api/log?since=<seq>[&fmt=json], GET /api/log/prev,
- *        GET|POST /api/diag/wifi_ps?mode=none|min|max.
+ *        GET|POST /api/diag/wifi_ps?mode=none|min|max,
+ *        POST /api/diag/wifi_drop?hold=<s> (dev: drop the station, no reconnect for <s>, max 600).
+ *  Wedge watch: the default event loop or the esp_timer task idle 30 s aborts (loop_watch.h).
  */
 #pragma once
 #include <stdint.h>
