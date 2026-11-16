@@ -20,6 +20,9 @@ int32_t wifi_retry_event(wifi_retry_t *r, wifi_retry_ev_t ev, bool joining)
         r->armed = false;
         r->next_ms = 0;
         return -1;
+    case WIFI_RETRY_EV_JOIN_FAILED:
+        joining = false;                  /* the join is over: it is the caller's own report */
+        /* fall through */
     case WIFI_RETRY_EV_DISCONNECTED:
         if (!r->armed || joining) return -1;
         {

@@ -4,6 +4,7 @@
 #include "log_upload.h"
 #include "heap_guard.h"
 #include "sta_watch.h"
+#include "loop_watch.h"
 #include "net/network.h"
 #include "mole_fluid.h"
 #include "link/link_client.h"
@@ -376,6 +377,32 @@ static sta_watch_t s_sta;              /* associated: only then is there an AP t
 static portMUX_TYPE s_sta_mux = portMUX_INITIALIZER_UNLOCKED;
 static heap_guard_t s_hg;              /* the sampler's */
 static uint32_t s_int_blocks;          /* internal heap: allocated blocks (last sample) */
+/* wedge watch (loop_watch.h): the sampler sends a no-op to each shared dispatcher every second */
+ESP_EVENT_DEFINE_BASE(MOLE_DIAG_EVENT);
+static loop_watch_t s_evt_watch, s_tmr_watch;
+static esp_timer_handle_t s_beat_timer;
+
+static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
+static void evt_beat(void *a, esp_event_base_t b, int32_t id, void *d)
+{
+    (void)a; (void)b; (void)id; (void)d;
+    loop_watch_beat(&s_evt_watch, now_ms());
+}
+static void tmr_beat(void *a) { (void)a; loop_watch_beat(&s_tmr_watch, now_ms()); }
+
+/* a dispatcher stuck 30 s: abort, so the coredump shows who blocks it and on what */
+static void wedge_check(void)
+{
+    const uint32_t t = now_ms();
+    const uint32_t evt = loop_watch_stuck(&s_evt_watch, t), tmr = s_beat_timer ? loop_watch_stuck(&s_tmr_watch, t) : 0;
+    if (evt || tmr) {
+        mole_diag_event(true, "wedge %s stuck=%lums int=%lu", evt ? "sys_evt" : "esp_timer", (unsigned long)(evt ? evt : tmr),
+                        (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+        esp_system_abort(evt ? "default event loop wedged 30 s" : "esp_timer task wedged 30 s");
+    }
+    /* no data, no wait: a full queue is a missed beat, not a blocked sampler */
+    esp_event_post(MOLE_DIAG_EVENT, 0, NULL, 0, 0);
+}
 
 static void alloc_failed(size_t size, uint32_t caps, const char *fn)
 {
@@ -549,6 +576,7 @@ static void sampler_task(void *arg)
         if (++ticks % 10) continue;
 
         int64_t elapsed = now - win_start; win_start = now;
+        wedge_check();
         sample_tasks(elapsed);
         tl_t e = {0};
         e.t_s = (uint32_t)(now / 1000000);
@@ -948,6 +976,12 @@ void mole_diag_start(void)
     esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_evt, NULL);
     esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_evt, NULL);
     esp_event_handler_register(IP_EVENT, IP_EVENT_STA_LOST_IP, wifi_evt, NULL);
+    loop_watch_init(&s_evt_watch, now_ms());
+    loop_watch_init(&s_tmr_watch, now_ms());
+    esp_event_handler_register(MOLE_DIAG_EVENT, 0, evt_beat, NULL);
+    const esp_timer_create_args_t beat = {.callback = tmr_beat, .name = "diag_beat"};
+    if (esp_timer_create(&beat, &s_beat_timer) == ESP_OK) esp_timer_start_periodic(s_beat_timer, 1000000);
+    else s_beat_timer = NULL;
     /* the boot connect usually associated before these handlers existed: start from network.c's
      * state (it listens from before esp_wifi_start), or rssi reads 0 until the first reconnect */
     bool assoc = net_wifi_associated();
@@ -1153,6 +1187,18 @@ static esp_err_t http_wifi_ps(httpd_req_t *r)
     return httpd_resp_sendstr(r, body);
 }
 
+/* dev: force a Wi-Fi drop (the disconnect handlers, the back-off, RAM while down). POST only. */
+static esp_err_t http_wifi_drop(httpd_req_t *r)
+{
+    const uint32_t hold = query_u32(r, "hold", 0);
+    esp_err_t e = net_wifi_drop(hold);
+    mole_diag_event(false, "wifi.drop_forced hold=%lus -> %s", (unsigned long)hold, esp_err_to_name(e));
+    char body[64];
+    snprintf(body, sizeof(body), "{\"ok\":%s,\"hold_s\":%lu}", e == ESP_OK ? "true" : "false", (unsigned long)hold);
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, body);
+}
+
 esp_err_t mole_diag_http_register(httpd_handle_t server)
 {
     const httpd_uri_t routes[] = {
@@ -1161,6 +1207,7 @@ esp_err_t mole_diag_http_register(httpd_handle_t server)
         {.uri = "/api/log/prev", .method = HTTP_GET, .handler = http_log_prev},
         {.uri = "/api/diag/wifi_ps", .method = HTTP_GET, .handler = http_wifi_ps},
         {.uri = "/api/diag/wifi_ps", .method = HTTP_POST, .handler = http_wifi_ps},
+        {.uri = "/api/diag/wifi_drop", .method = HTTP_POST, .handler = http_wifi_drop},
     };
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
         esp_err_t e = httpd_register_uri_handler(server, &routes[i]);
