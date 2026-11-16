@@ -44,6 +44,13 @@
 #define DOT_H         0.15f
 #define DOT_REFR      3.3f    /* a scene's dots and symbols shift this many cells per unit of
                                * wave slope (fluid_sim_view's refr 1.1 x 3: they move with the water) */
+/* a scene in high definition (fluid_draw_opts_t.scene) breaks into dust: */
+#define DUST_CALM     2.f     /* the wave only shifts its dots (DOT_REFR) up to this many sub-dots;
+                               * steeper (near a touch) they scatter                        */
+#define DUST_GAIN     1.f     /* scatter radius, sub-dots, per sub-dot of shift beyond DUST_CALM */
+#define DUST_MAX      8.f     /* the most a touch scatters a dot, sub-dots                  */
+#define DUST_REACH    8.f     /* a transition's scatter at dust 1, sub-dots (and it thins them out) */
+#define SCENE_LEVEL   0.85f   /* a scene dot's brightness (scene_player's SCENE_INK)        */
 
 #define KEY_EMPTY 0x0000u
 #define KEY_GLYPH 0x0100u     /* | char                                                   */
@@ -266,6 +273,15 @@ static inline void subsample(const int16_t *v, int W, int k, float *sub, float *
     *smin = mn; *smax = mx; *smean = sm * 0.125f;
 }
 
+/* the wave's shift of the dots at interior cell k (DOT_REFR), in sub-dots */
+static inline void wave_shift(const fluid_frame_t *s, int k, float *fx, float *fy) {
+    const int W = s->W, H = s->H;
+    const int16_t *h = s->h;
+    const float rk = DOT_REFR * (1.f / FQ_H);
+    *fx = (float)(h[k + 1] - h[k - 1]) * rk * 2.f;
+    *fy = (float)(h[k + W] - h[k - W]) * rk * 4.f * H / W;   /* cell aspect A = W/H */
+}
+
 /* The braille lattice dots cell (i,j) shows through the water: those under it displaced by
  * the wave slope, as fluid_sim_view refracts the ink, in whole sub-dots and at most a cell
  * (so they only land in the cleared ring near_skip keeps around the strokes). A flat
@@ -273,10 +289,9 @@ static inline void subsample(const int16_t *v, int W, int k, float *sub, float *
 static inline int refracted_dots(const fluid_frame_t *s, const uint8_t *dots, int i, int j, int k) {
     const int W = s->W, H = s->H;
     if (i < 1 || j < 1 || i >= W - 1 || j >= H - 1) return dots[k];
-    const int16_t *h = s->h;
-    const float rk = DOT_REFR * (1.f / FQ_H);
-    int ox = (int)lrintf((float)(h[k + 1] - h[k - 1]) * rk * 2.f);
-    int oy = (int)lrintf((float)(h[k + W] - h[k - W]) * rk * 4.f * H / W);   /* cell aspect A = W/H */
+    float fx, fy;
+    wave_shift(s, k, &fx, &fy);
+    int ox = (int)lrintf(fx), oy = (int)lrintf(fy);
     if (!ox && !oy) return dots[k];
     ox = ox < -2 ? -2 : ox > 2 ? 2 : ox;
     oy = oy < -4 ? -4 : oy > 4 ? 4 : oy;
@@ -289,16 +304,58 @@ static inline int refracted_dots(const fluid_frame_t *s, const uint8_t *dots, in
     return out;
 }
 
+/* how far a scene's dots scatter at cell (i,j), sub-dots: the wave's steepness beyond
+ * DUST_CALM, plus a transition's dust; *fx, *fy the wave's shift */
+static inline float dust_radius(const fluid_frame_t *s, int i, int j, float dust, float *fx, float *fy) {
+    *fx = *fy = 0.f;
+    if (i >= 1 && j >= 1 && i < s->W - 1 && j < s->H - 1) wave_shift(s, j * s->W + i, fx, fy);
+    const float steep = DUST_GAIN * (sqrtf(*fx * *fx + *fy * *fy) - DUST_CALM);
+    return (steep < 0.f ? 0.f : steep > DUST_MAX ? DUST_MAX : steep) + DUST_REACH * dust;
+}
+
+/* A scene's dots at cell (i,j) as dust: shifted by the wave as refracted_dots, and each dot
+ * takes the one a hashed offset away inside the scatter radius (round on the panel); a
+ * transition's dust also thins them out (all gone at 1). Below half a sub-dot of scatter and no
+ * dust this is refracted_dots: calm water gives exactly the lattice. *kc: the cell the first
+ * dot came from (its colour). */
+static inline int scene_dots(const fluid_frame_t *s, const uint8_t *dots, int i, int j, int k, float dust, int *kc) {
+    const int W = s->W, H = s->H;
+    float fx, fy;
+    const float rad = dust_radius(s, i, j, dust, &fx, &fy), ay = 2.f * H / W;   /* sub-dots are cw/2 x ch/4 */
+    *kc = k;
+    if (rad < 0.5f && dust <= 0.f) return refracted_dots(s, dots, i, j, k);
+    const int ox = fx < -2.f ? -2 : fx > 2.f ? 2 : (int)lrintf(fx), oy = fy < -4.f ? -4 : fy > 4.f ? 4 : (int)lrintf(fy);
+    int out = 0;
+    for (int q = 0; q < 8; q++) {
+        const int c = q >> 2, r = q & 3, x0 = 2 * i + c, y0 = 4 * j + r;
+        if (dust > 0.f && hash_u(x0, y0, 3) < dust) continue;
+        const int x = x0 + ox + (int)lrintf((hash_u(x0, y0, 1) * 2.f - 1.f) * rad);
+        const int y = y0 + oy + (int)lrintf((hash_u(x0, y0, 2) * 2.f - 1.f) * rad * ay);
+        if (x < 0 || y < 0 || x >= 2 * W || y >= 4 * H) continue;
+        const int ks = (y >> 2) * W + (x >> 1);
+        if (dots[ks] >> fluid_braille_bit(x & 1, y & 3) & 1) {
+            if (!out) *kc = ks;
+            out |= 1 << fluid_braille_bit(c, r);
+        }
+    }
+    return out;
+}
+
 /* (key, colour) of one cell — what render.js would draw there */
 static inline void cell_look(const fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_opts_t *o,
                              int i, int j, int k, int rmax, uint32_t frame, uint16_t *key_out, uint16_t *col_out) {
     const int W = s->W;
     const int mode = o->edge_mode;
-    const float v = s->view[k] * IU;
-    const bool feat = s->feat[k] != 0;
-    int dots = -1;
+    float v = s->view[k] * IU;
+    bool feat = s->feat[k] != 0;
+    int dots = -1, kc = k;                               /* kc: the cell whose colour it takes */
     float smax = 0.f, cell_mean = -1.f;
-    if (o->dots) {
+    if (o->scene && o->dots) {
+        /* a scene in high definition: its dots alone on black, at one brightness */
+        dots = scene_dots(s, o->dots, i, j, k, o->dust, &kc);
+        if (!dots) { *key_out = KEY_EMPTY; *col_out = 0; return; }
+        v = SCENE_LEVEL; feat = false;
+    } else if (o->dots) {
         /* a word's dots (fluid_text_set_glyphs): each one shows once the ink has reached it,
          * seen through the water (refracted_dots) */
         const int own = o->dots[k], src = refracted_dots(s, o->dots, i, j, k);
@@ -347,7 +404,7 @@ static inline void cell_look(const fluid_draw_t *d, const fluid_frame_t *s, cons
              : dots >= 0 ? fmaxf(v, smax) : v;
     float br = cell_mean >= 0.f ? vb : 0.25f + 0.75f * vb;
     float r, g, b;
-    const fluid_rgba16_t *c = &s->col[k];
+    const fluid_rgba16_t *c = &s->col[kc];
     if (pal != FLUID_PAL_PASTEL) { r = lo[0] + (hi[0] - lo[0]) * br; g = lo[1] + (hi[1] - lo[1]) * br; b = lo[2] + (hi[2] - lo[2]) * br; }
     else {
         float bt = (cell_mean >= 0.f ? vb * 1.1f : 0.3f + 0.85f * vb) * (255.f / 65535.f);
@@ -410,9 +467,19 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
         const fluid_letter_t *L = &o->letters[li];
         if (L->ch == ' ') continue;
         float sx = (L->x + L->w / 2) / d->stage * 2.f - 1.f, sy = (L->y + L->h / 2) / d->stage * 2.f - 1.f;
-        float ink = fluid_frame_sample(s, s->ink, 1.f / FQ_UNIT, sx, sy);
         const float m = melt + L->melt;                  /* the frame's melt + the letter's own */
-        if (ink < 0.14f + m) continue;
+        float ink = 1.f;
+        if (o->scene) {
+            /* a scene in high definition: its letters whole, unless they are dust (their shape is
+             * on the dots under them): in a transition, or the scene's own (not its subtitle)
+             * where the wave scatters (dust_radius) */
+            float fx, fy;
+            if (o->dust > 0.f || ((L->mask || (L->rgb & FLUID_RGB)) &&
+                                  dust_radius(s, (int)((L->x + L->w / 2) / cw), (int)((L->y + L->h / 2) / ch), 0.f, &fx, &fy) >= 0.5f)) continue;
+        } else {
+            ink = fluid_frame_sample(s, s->ink, 1.f / FQ_UNIT, sx, sy);
+            if (ink < 0.14f + m) continue;
+        }
         shown[nshown].li = li; shown[nshown].ink = ink; shown[nshown].m = m;
         shown[nshown].hh = fluid_frame_sample(s, s->h, 1.f / FQ_H, sx, sy);
         shown[nshown].acc = fluid_frame_sample_acc(s, sx, sy);

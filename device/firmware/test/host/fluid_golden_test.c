@@ -96,7 +96,7 @@ static uint64_t run(const scenario_t *sc, long *lit_out) {
     fluid_sim_impulse(s, 0.2f, -0.1f, 1.6f, 0.09f);
     fluid_sim_push(s, -0.3f, 0.2f, 40.f, -20.f, 0.16f);
 
-    fluid_draw_opts_t o = { sc->palette, sc->edge, 0.12f, 0.f, 0.f, NULL, 0, " .,:;!+=*xX#@", hash_font, NULL };
+    fluid_draw_opts_t o = { sc->palette, sc->edge, 0.12f, 0.f, 0.f, NULL, 0, " .,:;!+=*xX#@", hash_font, NULL, false, 0.f };
     const float dt = 1.f / 60.f;
     for (int f = 0; f < 72; f++) {
         float t = f / 30.f, breath = 0.5f - 0.5f * cosf(t / 4.f * 6.2832f), swell = 1.f + 0.05f * (breath * 2.f - 1.f);

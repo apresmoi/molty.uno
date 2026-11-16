@@ -308,6 +308,8 @@ static atomic_bool s_bye = false, s_bye_done = false;   /* mole_fluid_goodbye; i
 static float    s_bye_lvl = 1.f;                    /* the panel's level the goodbye set */
 static bool     s_word_dots = false;                /* the boot word's dots (s_tx->dots) are drawn */
 static uint8_t *s_sdots, *s_sdots_d;                /* a scene's dots: the task's, the drawer's (PSRAM) */
+static scene_hd_t s_hd = { 0, false, 1.f };        /* a scene in high definition (scene_hd_tick) */
+static int      s_dnletters;                        /* the drawer's letters (s_dletters), how many */
 static bool     s_sub = false;                      /* a say over a scene: its words as a subtitle */
 static int      s_sub_word = -1;                    /* the word the voice is on (-1: none yet) */
 static float    s_sub_until = 0.f;                  /* the last word stays this long after the say */
@@ -558,7 +560,8 @@ static esp_err_t build_grid(int W, int H) {
     if (s_tx) s_draw = fluid_draw_create(W, H, s_fb_w, s_fb_h);
     if (s_draw) s_frame = fluid_frame_create(W, H);
     if (!s_frame) { free_grid(); return ESP_ERR_NO_MEM; }
-    s_noverlay = 0;
+    s_noverlay = s_dnletters = 0;
+    s_hd = (scene_hd_t){ 0, false, 1.f };             /* nothing held from the old grid */
     s_full_flush = true;
     s_frame_no = 0;
     return ESP_OK;
@@ -816,6 +819,9 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     s_div = div_on ? fminf(1.f, s_div + rdt / DIV_FADE_S) : fmaxf(0.f, s_div - rdt / DIV_FADE_S);
     s_ov.sectors = s_div > 0.f ? s_div_n : 0;
     s_ov.divider = roundf(s_div * 32.f) / 32.f;
+    /* a scene in high definition, but the fluid's own look while a question, a listen or the
+     * agent's progress is on the water */
+    scene_hd_tick(&s_hd, s_cur == ST_SCENE && s_sp.cur ? s_sp.gen : 0, asking || s_rg.on > 0.f || s_pg.on > 0.f, rdt);
     s_frame_no++;
 }
 
@@ -1255,20 +1261,22 @@ static void fluid_task(void *arg) {
         s_dopts = (fluid_draw_opts_t){
             .palette = cfg.palette, .edge_mode = cfg.edge_mode,
             .shimmer = s_shimmer, .time = s_tnow, .melt = s_melt,
-            .letters = s_dletters, .nletters = s_noverlay,
+            .letters = s_dletters, .nletters = s_hd.out ? s_dnletters : s_noverlay,
             .ramp = GC_RAMP_ASCII, .font = gc_font5x7,
             /* the boot word, and its dots while it melts (each goes as the ink leaves it) */
-            .dots = s_cur == ST_SCENE ? s_sdots_d : s_word_dots && (s_cur == ST_TEXT || s_melt_t < 0.8f) ? s_tx->dots : NULL,
+            .dots = s_cur == ST_SCENE || s_hd.out ? s_sdots_d : s_word_dots && (s_cur == ST_TEXT || s_melt_t < 0.8f) ? s_tx->dots : NULL,
+            .scene = s_hd.gen != 0, .dust = s_hd.dust,
         };
-        if (s_cur == ST_SCENE) memcpy(s_sdots_d, s_sdots, (size_t)s_sim->N);   /* the drawer is idle (s_idle) */
+        /* the drawer is idle (s_idle); a scene breaking into dust keeps what it showed */
+        if (s_cur == ST_SCENE && !s_hd.out) memcpy(s_sdots_d, s_sdots, (size_t)s_sim->N);
         {   /* a scene's symbols point into its package: the drawer keeps it until its next frame */
             static pkg_t *held;
-            pkg_t *now = s_cur == ST_SCENE && s_sp.cur ? s_sp.cur->pkg : NULL;
+            pkg_t *now = s_hd.out ? held : s_cur == ST_SCENE && s_sp.cur ? s_sp.cur->pkg : NULL;
             if (now) pkg_ref(now);
             if (held) pkg_unref(held);
             held = now;
         }
-        memcpy(s_dletters, s_overlay, sizeof(fluid_letter_t) * (size_t)s_noverlay);
+        if (!s_hd.out) { memcpy(s_dletters, s_overlay, sizeof(fluid_letter_t) * (size_t)s_noverlay); s_dnletters = s_noverlay; }
         if (s_touch_t0) { s_dtouch = s_touch_t0; s_touch_t0 = 0; }
         s_dstatus = fd_status(&s_dir);
         s_dov = s_ov;

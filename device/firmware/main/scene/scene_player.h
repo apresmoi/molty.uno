@@ -105,6 +105,19 @@ void scene_tick(scene_player_t *p, float dt);
 bool scene_take_start(scene_player_t *p);
 static inline bool scene_playing(const scene_player_t *p) { return p->cur != NULL; }
 
+/* A scene in high definition (fluid_draw_opts_t.scene): alone and crisp on black, it forms
+ * from dust, and when it ends or the next one comes it breaks into dust first (out: the
+ * caller holds what it showed for the drawer meanwhile), then the next forms. */
+#define SCENE_DUST_S 0.45f              /* each way: dust to the scene, the scene to dust  */
+typedef struct {
+    unsigned gen;                       /* the scene shown (scene_player_t.gen), 0 = none   */
+    bool out;                           /* it ended: what it showed goes to dust            */
+    float dust;                         /* 0 = whole and crisp .. 1 = all dust, gone        */
+} scene_hd_t;
+/** Advance by dt: gen the scene on screen now (0: none); plain: the fluid's own look instead
+ *  (nothing in high definition; the scene forms from dust again after it). */
+void scene_hd_tick(scene_hd_t *h, unsigned gen, bool plain, float dt);
+
 /* A subtitle over a scene: what Molty says while a drawing is up, as the reader shows it
  * (one word at a time, its ORP letter (orp; -1: none, the word centred) in the accent and on
  * the vertical centre line) but small, at the bottom, shrunk until it fits inside the glass */
@@ -115,7 +128,8 @@ typedef struct { const char *str; int n, orp; } scene_caption_t;
 
 /** Rasterise sc at t s (and cap, if any, over it) on the braille dots: T + tcol of every
  *  cell (zero outside the items; a cell's target is its densest dot), dots (W x H, may be
- *  NULL) the dots each cell shows, letters[0..*nletters) the crisp overlay of its text
+ *  NULL) the dots each cell shows (under a crisp letter or symbol: its shape, which shows when
+ *  it breaks into dust), letters[0..*nletters) the crisp overlay of its text
  *  (stage px). */
 void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_t *cap,
                 fluid_letter_t *letters, int *nletters, uint8_t *dots);
