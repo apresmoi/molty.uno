@@ -236,17 +236,19 @@ bool scene_take_start(scene_player_t *p) { bool s = p->started; p->started = fal
 typedef struct {
     int W, H, N, stage;
     float *xs, *ys;                    /* dot centres in -1..1                             */
-    uint8_t *mask;
+    uint8_t *mask;                     /* 1: inside the glass; | 2: its ink is a kept dot   */
     int16_t *T;
     uint32_t *tcol;
+    uint8_t keep;                      /* the item painting now keeps its dots in high definition */
 } canvas_t;
-typedef struct { canvas_t *s; float soft; } ctx_t;
+typedef struct { canvas_t *s; float soft; scene_shapes_t *hd; } ctx_t;
 
 /* Painter's order, as the reference player (packages/tools/play.mjs): an item covers what is
  * under it by `a` (its coverage, 0..1, the soft edge), leaving ink v in colour rgb. A black
  * disc leaves no ink (an eclipse, a transit); a ball covers its whole disc, dark side too. */
 static inline void paint(canvas_t *s, int k, float a, float v, uint32_t rgb) {
     if (a <= 0.004f || !s->mask[k]) return;
+    if (a >= 0.5f) s->mask[k] = (uint8_t)(1 | s->keep << 1);
     if (a >= 0.996f) {                                  /* covered: most dots, no blend */
         s->T[k] = fq(v, FQ_UNIT);
         s->tcol[k] = (rgb >> 16 & 255) | (rgb & 0xff00) | (rgb & 255) << 16;
@@ -258,6 +260,27 @@ static inline void paint(canvas_t *s, int k, float a, float v, uint32_t rgb) {
     const float r = (c & 255) / 255.f, g = (c >> 8 & 255) / 255.f, b = (c >> 16 & 255) / 255.f;
     s->tcol[k] = fluid_pack_rgba8(r + ((rgb >> 16 & 255) / 255.f - r) * a, g + ((rgb >> 8 & 255) / 255.f - g) * a,
                                   b + ((rgb & 255) / 255.f - b) * a, 0.f);
+}
+
+/* the scene in high definition: one more shape (glass units to stage px, y down) */
+static inline float spx(const ctx_t *c, float v) { return v * 0.5f * c->s->stage; }
+static void shape(const ctx_t *c, fluid_shape_t sh) {
+    scene_shapes_t *hd = c->hd;
+    if (!hd || hd->n < 0) return;
+    if (hd->n >= FLUID_MAX_SHAPES) { hd->n = -1; return; }
+    hd->shapes[hd->n++] = sh;
+}
+static void seg_shape(const ctx_t *c, float ax, float ay, float bx, float by, float hw, uint32_t rgb) {
+    shape(c, (fluid_shape_t){ .k = FLUID_SHAPE_SEG, .rgb = FLUID_RGB | rgb, .x = spx(c, ax + 1.f), .y = spx(c, 1.f - ay),
+                              .x1 = spx(c, bx + 1.f), .y1 = spx(c, 1.f - by), .hw = fmaxf(0.5f, spx(c, hw)) });
+}
+/* a letter or a symbol (its box, stage px): a symbol fills it, a letter 0.8 x 0.72 of it, centred */
+static void letter_shape(const ctx_t *c, const fluid_letter_t *L) {
+    const uint8_t *gl = L->mask ? L->mask : gc_font5x7(L->ch);
+    if (!gl || L->ch == ' ') return;
+    shape(c, (fluid_shape_t){ .k = L->mask ? FLUID_SHAPE_MASK : FLUID_SHAPE_CHAR, .acc = L->acc, .mw = L->mask ? L->mw : 5,
+                              .mh = L->mask ? L->mh : 7, .rgb = L->rgb, .x = L->x + L->w * 0.5f, .y = L->y + L->h * 0.5f,
+                              .w = L->mask ? L->w : L->w * 0.8f, .h = L->mask ? L->h : L->h * 0.72f, .co = 1.f, .mask = gl });
 }
 
 /* the cells whose centres lie in a glass-space box (y up) */
@@ -314,6 +337,7 @@ static void hair_end(hair_t *h) { if (h->n) hair_put(h, h->bx, h->by); h->n = 0;
 
 static void segment(const ctx_t *c, float ax, float ay, float bx, float by, float hw, uint32_t rgb) {
     canvas_t *s = c->s;
+    seg_shape(c, ax, ay, bx, by, hw, rgb);
     if (hw <= hair(s)) { hair_t h = { .s = s, .rgb = rgb }; hair_to(&h, ax, ay); hair_to(&h, bx, by); hair_end(&h); return; }
     const float reach = hw + c->soft, dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy, il2 = l2 > 1e-9f ? 1.f / l2 : 0.f;
     int i0, i1, j0, j1;
@@ -337,6 +361,8 @@ static void ring(const ctx_t *c, const scene_item_t *it, bool arc) {
     const bool whole = !arc || span >= 360.f;
     span = whole ? 360.f : fmodf(fmodf(span, 360.f) + 360.f, 360.f);
     const float hw = it->w * 0.5f;
+    shape(c, (fluid_shape_t){ .k = FLUID_SHAPE_RING, .rgb = FLUID_RGB | it->rgb, .x = spx(c, 1.f), .y = spx(c, 1.f),
+                              .r = spx(c, it->r), .hw = fmaxf(0.5f, spx(c, hw)), .a0 = it->a0, .span = span });
     if (hw <= hair(s)) {
         const int n = 8 + (int)(span * DEG * it->r * 0.5f * (s->W > s->H ? s->W : s->H));
         hair_t h = { .s = s, .rgb = it->rgb };
@@ -377,6 +403,7 @@ static void ring(const ctx_t *c, const scene_item_t *it, bool arc) {
 static void disc(const ctx_t *c, float cx, float cy, float r, uint32_t rgb) {
     canvas_t *s = c->s;
     const float ro = r + c->soft * 0.5f;
+    shape(c, (fluid_shape_t){ .k = FLUID_SHAPE_DISC, .rgb = FLUID_RGB | rgb, .x = spx(c, cx + 1.f), .y = spx(c, 1.f - cy), .r = spx(c, r) });
     int i0, i1, j0, j1;
     cells(s, cx - ro, cy - ro, cx + ro, cy + ro, &i0, &i1, &j0, &j1);
     for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) {
@@ -408,6 +435,8 @@ static inline uint32_t shade(uint32_t rgb, float k) {
 static void ball(const ctx_t *c, const scene_item_t *it, const pkg_asset_t *img, float t) {
     canvas_t *s = c->s;
     if (it->r <= 0.f) return;
+    /* in high definition its dots stay (s->keep), over a black disc: it hides what is behind */
+    shape(c, (fluid_shape_t){ .k = FLUID_SHAPE_DISC, .rgb = FLUID_RGB, .x = spx(c, it->x + 1.f), .y = spx(c, 1.f - it->y), .r = spx(c, it->r) });
     const float r = it->r, ro = r + c->soft * 0.5f, cphi = 2.f * it->lit - 1.f, sphi = sqrtf(fmaxf(0.f, 1.f - cphi * cphi));
     const float lx = it->side * sphi, lz = cphi, turn = it->spin * t * DEG;
     int i0, i1, j0, j1;
@@ -454,6 +483,7 @@ static bool crisp(const ctx_t *c, const scene_item_t *it, const pkg_asset_t *a, 
     const float w = it->size, h = it->size * a->h / a->w, k = 0.5f * s->stage;
     const float x0 = (it->x - 0.5f * w + 1.f) * k, y0 = (1.f - it->y - 0.5f * h) * k;
     letters[(*nl)++] = (fluid_letter_t){ '*', true, x0, y0, w * k, h * k, h * k, 0.f, FLUID_RGB | it->rgb, a->data, a->w, a->h };
+    letter_shape(c, &letters[*nl - 1]);
     const float cwp = (float)s->stage / s->W, chp = (float)s->stage / s->H;
     int i0 = (int)floorf(x0 / cwp), i1 = (int)ceilf((x0 + w * k) / cwp), j0 = (int)floorf(y0 / chp), j1 = (int)ceilf((y0 + h * k) / chp);
     i0 = i0 < 0 ? 0 : i0; j0 = j0 < 0 ? 0 : j0; i1 = i1 >= s->W ? s->W - 1 : i1; j1 = j1 >= s->H ? s->H - 1 : j1;
@@ -465,6 +495,9 @@ static void glyph(const ctx_t *c, const scene_item_t *it, const pkg_asset_t *a) 
     canvas_t *s = c->s;
     const float w = it->size, h = it->size * a->h / a->w, ext = 0.5f * sqrtf(w * w + h * h);
     const float co = cosf(it->rot * DEG), si = sinf(it->rot * DEG), cw = 2.f / s->W, ch = 2.f / s->H;
+    if (a->kind == PA_MASK)
+        shape(c, (fluid_shape_t){ .k = FLUID_SHAPE_MASK, .mw = (uint16_t)a->w, .mh = (uint16_t)a->h, .rgb = FLUID_RGB | it->rgb,
+                                  .x = spx(c, it->x + 1.f), .y = spx(c, 1.f - it->y), .w = spx(c, w), .h = spx(c, h), .co = co, .si = si, .mask = a->data });
     /* a dot no wider than one of the asset's pixels: its centre says it all */
     const int ns = cw * a->w > w || ch * a->h > h ? 4 : 1;
     int i0, i1, j0, j1;
@@ -506,8 +539,10 @@ static void text_run(const ctx_t *c, const char *str, int n, float x, float y, f
     canvas_t *s = c->s;
     const float fs = size * s->stage * 0.5f, adv = fs * 0.6f, lh = fs * 1.05f;
     const float x0 = (x + 1.f) * 0.5f * s->stage - (orp < 0 ? n * 0.5f : orp + 0.5f) * adv, y0 = (1.f - y) * 0.5f * s->stage - lh * 0.5f;
-    for (int q = 0; q < n && *nl < FLUID_MAX_LETTERS; q++)
+    for (int q = 0; q < n && *nl < FLUID_MAX_LETTERS; q++) {
         letters[(*nl)++] = (fluid_letter_t){ str[q], q == orp, x0 + q * adv, y0, adv, lh, fs, 0.f, lrgb, NULL, 0, 0 };
+        letter_shape(c, &letters[*nl - 1]);
+    }
     const float cwp = (float)s->stage / s->W, chp = (float)s->stage / s->H;
     int i0 = (int)floorf(x0 / cwp), i1 = (int)ceilf((x0 + n * adv) / cwp), j0 = (int)floorf(y0 / chp), j1 = (int)ceilf((y0 + lh) / chp);
     i0 = i0 < 0 ? 0 : i0; j0 = j0 < 0 ? 0 : j0; i1 = i1 >= s->W ? s->W - 1 : i1; j1 = j1 >= s->H ? s->H - 1 : j1;
@@ -552,7 +587,7 @@ static void path(const ctx_t *c, const float (*p)[2], int n, bool smooth, float 
             for (int k = 0; k < 2; k++)
                 xy[k] = 0.5f * (2.f * b[k] + (d[k] - a[k]) * u + (2.f * a[k] - 5.f * b[k] + 4.f * d[k] - e[k]) * u2 +
                                 (3.f * b[k] - a[k] - 3.f * d[k] + e[k]) * u3);
-            if (thin) hair_to(&h, xy[0], xy[1]);
+            if (thin) { hair_to(&h, xy[0], xy[1]); seg_shape(c, px, py, xy[0], xy[1], hw, rgb); }
             else segment(c, px, py, xy[0], xy[1], hw, rgb);
             px = xy[0]; py = xy[1];
         }
@@ -569,7 +604,7 @@ static bool canvas_for(const fluid_sim_t *s) {
         s_cv_mask = NULL;
         SCENE_FREE(s_cv.xs); SCENE_FREE(s_cv.ys); SCENE_FREE(s_cv.mask); SCENE_FREE(s_cv.T); SCENE_FREE(s_cv.tcol);
         s_cv = (canvas_t){ W, H, W * H, s->stage, SCENE_CALLOC(sizeof(float) * (size_t)W), SCENE_CALLOC(sizeof(float) * (size_t)H),
-                           SCENE_CALLOC((size_t)W * H), SCENE_CALLOC(sizeof(int16_t) * (size_t)W * H), SCENE_CALLOC(sizeof(uint32_t) * (size_t)W * H) };
+                           SCENE_CALLOC((size_t)W * H), SCENE_CALLOC(sizeof(int16_t) * (size_t)W * H), SCENE_CALLOC(sizeof(uint32_t) * (size_t)W * H), 0 };
         if (!s_cv.xs || !s_cv.ys || !s_cv.mask || !s_cv.T || !s_cv.tcol) {
             SCENE_FREE(s_cv.xs); SCENE_FREE(s_cv.ys); SCENE_FREE(s_cv.mask); SCENE_FREE(s_cv.T); SCENE_FREE(s_cv.tcol);
             s_cv = (canvas_t){ 0 };
@@ -595,6 +630,7 @@ static void paint_items(const ctx_t *c, const scene_t *sc, float t, fluid_letter
         const scene_item_t *it = &sc->items[n];
         if (t < it->on || (it->off > 0.f && t >= it->off)) continue;
         const pkg_asset_t *a = it->asset >= 0 ? &sc->pkg->assets[it->asset] : NULL;
+        c->s->keep = it->k == PK_BALL || (it->k == PK_GLYPH && a && a->kind != PA_MASK);   /* no shape draws it */
         switch (it->k) {
         case PK_RING:  ring(c, it, false); break;
         case PK_ARC:   ring(c, it, true); break;
@@ -645,22 +681,24 @@ static void letter_dots(const fluid_sim_t *s, const fluid_letter_t *L, uint8_t *
     }
 }
 
-void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_t *cap, fluid_letter_t *letters, int *nletters, uint8_t *dots) {
+void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_t *cap, fluid_letter_t *letters, int *nletters, uint8_t *dots,
+                scene_shapes_t *hd) {
     FLUID_PROF_BEGIN(c0);
     const uint32_t bg = fluid_pack_rgba8(0.6f, 0.68f, 0.92f, 0.f);
     for (int k = 0; k < s->N; k++) { s->T[k] = 0; s->tcol[k] = bg; }
     if (dots) memset(dots, 0, (size_t)s->N);
+    if (hd) { hd->n = 0; if (hd->keep) memset(hd->keep, 0, (size_t)s->N); }
     *nletters = 0;
     if (!canvas_for(s)) { FLUID_PROF_END(FP_TARGET, c0); return; }
     canvas_t *cv = &s_cv;
-    for (int k = 0; k < cv->N; k++) { cv->T[k] = 0; cv->tcol[k] = bg; }
-    const ctx_t c = { cv, 1.f / cv->H };                      /* soft edge: half a dot row */
+    for (int k = 0; k < cv->N; k++) { cv->T[k] = 0; cv->tcol[k] = bg; cv->mask[k] &= 1; }
+    const ctx_t c = { cv, 1.f / cv->H, hd };                  /* soft edge: half a dot row */
     paint_items(&c, sc, t, letters, nletters);
     if (cap && cap->n > 0) caption(&c, cap, letters, nletters);   /* the subtitle, over the drawing */
     /* back to the cells: each cell's target is its densest dot (a thin stroke still draws the
      * fluid to it), its colour the ink-weighted mean of its dots, its dots those over Bayer */
     for (int j = 0; j < s->H; j++) for (int i = 0; i < s->W; i++) {
-        int tmax = 0, bits = 0;
+        int tmax = 0, bits = 0, kept = 0;
         float wr = 0.f, wg = 0.f, wb = 0.f, w = 0.f;
         for (int q = 0; q < 8; q++) {
             const int col = q >> 2, row = q & 3, dx = 2 * i + col, dy = 4 * j + row, k = dy * cv->W + dx;
@@ -670,13 +708,17 @@ void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_
             const float f = v * (1.f / FQ_UNIT);
             const uint32_t cc = cv->tcol[k];
             wr += f * (cc & 255); wg += f * (cc >> 8 & 255); wb += f * (cc >> 16 & 255); w += f;
-            if (f > SCENE_INK * (BAYER[dy & 3][dx & 3] + 0.5f) / 16.f) bits |= 1 << fluid_braille_bit(col, row);
+            if (f > SCENE_INK * (BAYER[dy & 3][dx & 3] + 0.5f) / 16.f) {
+                bits |= 1 << fluid_braille_bit(col, row);
+                if (cv->mask[k] & 2) kept |= 1 << fluid_braille_bit(col, row);
+            }
         }
         const int k = j * s->W + i;
         if (!tmax) continue;
         s->T[k] = (int16_t)tmax;
         s->tcol[k] = fluid_pack_rgba8(wr / w / 255.f, wg / w / 255.f, wb / w / 255.f, 0.f);
         if (dots) dots[k] = (uint8_t)bits;
+        if (hd && hd->keep) hd->keep[k] = (uint8_t)kept;
     }
     for (int n = 0; dots && n < *nletters; n++) letter_dots(s, &letters[n], dots);
     FLUID_PROF_END(FP_TARGET, c0);

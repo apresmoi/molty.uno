@@ -93,6 +93,9 @@ Nothing else: no expressions, no loops beyond `each`, no code. Every bound value
   a ball's dark side hides what is behind it (with a faint earthshine) and an image's index 0 shows nothing; a `disc` in
   `#000000` clears what is under it (a body passing in front of the Sun); a mask lights a dot when it covers any part of it;
   `text` uses the device's 5x7 font, `size` being the glyph height.
+  `--hd [--size 466] [--caption word]` draws the calm view instead, as the firmware shows a scene with no touch on it: every
+  item anti-aliased at the panel's own pixels in painter's order (a ball and an image stay on the dots); a touch or a scene
+  change turns it into braille dust on the device, which this does not draw.
 - Param types: `number`, `text` (printable ASCII), `list` (flat objects, for `each`). `pts` is a literal list of points whose
   coordinates may be bindings (`[["@x1", "@y1"], ["@x2", "@y2"]]`).
 

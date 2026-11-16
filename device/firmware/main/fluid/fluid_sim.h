@@ -42,6 +42,7 @@ extern "C" {
 #define FLUID_GRID_MAX_H  40
 #define FLUID_MAX_LETTERS 64       /* a question's 5 labels × 8 letters; a chart's 22 symbols + a subtitle */
 #define FLUID_WORD_LETTERS 32      /* the speed reader's display cap per word        */
+#define FLUID_MAX_SHAPES  256      /* a scene's shapes in high definition (fluid_shape_t) */
 
 /* ── profiling: CPU cycles per phase, accumulated until the caller resets ── */
 enum { FP_TARGET, FP_BG, FP_SWIRL, FP_WAVE, FP_DEMAND, FP_FLOW, FP_ADVECT, FP_RELAX, FP_COLOR, FP_VIEW,
@@ -253,6 +254,23 @@ typedef struct {
 } fluid_letter_t;
 #define FLUID_RGB 0x1000000u           /* "a colour is set" flag over 0xRRGGBB            */
 
+/* A scene's shape in high definition (fluid_draw_opts_t.shapes): drawn anti-aliased at the
+ * panel's own pixels, in painter's order (each covers what is under it by its coverage). */
+enum { FLUID_SHAPE_SEG, FLUID_SHAPE_RING, FLUID_SHAPE_DISC, FLUID_SHAPE_MASK, FLUID_SHAPE_CHAR };
+typedef struct {
+    uint8_t k;                         /* FLUID_SHAPE_*                                   */
+    bool  acc;                         /* a letter in the accent (the subtitle's ORP)      */
+    uint16_t mw, mh;                   /* mask: its bits' size (a char: the 5 x 7 font)    */
+    uint32_t rgb;                      /* as fluid_letter_t; FLUID_RGB | 0 erases          */
+    float x, y, x1, y1;                /* stage px, y down: a segment (x, y)..(x1, y1); the
+                                        * others' centre (x, y)                           */
+    float r, hw;                       /* ring / disc radius; segment / ring half width   */
+    float a0, span;                    /* ring: from a0 over span degrees (counter-clockwise,
+                                        * 0 = right), span >= 360 the whole ring          */
+    float w, h, co, si;                /* mask / char: box size px, turned (cos, sin)      */
+    const uint8_t *mask;               /* mask: 1-bit rows MSB first; char: 5 x 7 font rows */
+} fluid_shape_t;
+
 typedef struct {
     float *cov, *orp, *near, *near_s, *dark, *tmp;
     uint8_t *dots;                     /* fluid_text_set_glyphs: each cell's braille dots  */
@@ -350,6 +368,9 @@ typedef struct {
     uint8_t  *dirty;                   /* per cell: changed this frame                    */
     int16_t  *span;                    /* per row: first, last+1 changed cell (none: 0, 0) */
     int8_t   *yrow;                    /* fb row → dot row 0..3 inside its cell, or −1    */
+    uint8_t  *hds;                     /* per cell: its scene shapes' signature (redraw on change) */
+    uint8_t  *hdw;                     /* fb_w: a pixel row's high-definition weight 0..8   */
+    int16_t  sb[FLUID_MAX_SHAPES][4];  /* this frame's shapes' boxes, fb px [x0, x1) x [y0, y1) */
     struct {                           /* this frame's condensed letters, ready to draw   */
         const uint8_t *gl, *mask; uint16_t c, mw, mh; int16_t x, y, w, h, cx0, cy0, cx1, cy1;
     } lt[FLUID_MAX_LETTERS];
@@ -375,6 +396,13 @@ typedef struct {
                                         * whole; a steep wave (a touch) scatters them into
                                         * dust, calm water puts them back on the lattice   */
     float dust;                        /* scene: its transition, 0 = whole .. 1 = dust, gone */
+    const fluid_shape_t *shapes;       /* scene: it in high definition (NULL: on the dots): calm,
+                                        * these shapes at the panel's pixels instead of its dots
+                                        * (and its letters, which are among them); a steep wave
+                                        * or a transition fades them into the dust            */
+    int nshapes;
+    const uint8_t *kdots;              /* scene in high definition: the dots it keeps calm too
+                                        * (a ball, an image: no shape draws them), or NULL   */
 } fluid_draw_opts_t;
 
 /** W×H cells drawn into an fb_w×fb_h framebuffer; the stage is its largest centred

@@ -308,6 +308,11 @@ static atomic_bool s_bye = false, s_bye_done = false;   /* mole_fluid_goodbye; i
 static float    s_bye_lvl = 1.f;                    /* the panel's level the goodbye set */
 static bool     s_word_dots = false;                /* the boot word's dots (s_tx->dots) are drawn */
 static uint8_t *s_sdots, *s_sdots_d;                /* a scene's dots: the task's, the drawer's (PSRAM) */
+/* a scene in high definition: its shapes and the dots it keeps (scene_shapes_t), the task's
+ * and the drawer's (PSRAM); n -1: too many shapes, it shows on the dots */
+static fluid_shape_t *s_shp, *s_dshp;
+static uint8_t *s_kdots, *s_kdots_d;
+static int      s_nshp, s_dnshp;
 static scene_hd_t s_hd = { 0, false, 1.f };        /* a scene in high definition (scene_hd_tick) */
 static int      s_dnletters;                        /* the drawer's letters (s_dletters), how many */
 static bool     s_sub = false;                      /* a say over a scene: its words as a subtitle */
@@ -751,7 +756,9 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     case ST_THINKING: fluid_target_blob(s, s_tnow * 1.4f, swell * 0.85f, ox, oy); break;
     case ST_SCENE: {
         const scene_caption_t cap = scene_caption();
-        scene_fill(s, s_sp.cur, s_sp.t, &cap, s_overlay, &s_noverlay, s_sdots);
+        scene_shapes_t hd = { s_shp, 0, s_kdots };
+        scene_fill(s, s_sp.cur, s_sp.t, &cap, s_overlay, &s_noverlay, s_sdots, &hd);
+        s_nshp = hd.n;
         break;
     }
     case ST_CREATURE:
@@ -1268,7 +1275,13 @@ static void fluid_task(void *arg) {
             .scene = s_hd.gen != 0, .dust = s_hd.dust,
         };
         /* the drawer is idle (s_idle); a scene breaking into dust keeps what it showed */
-        if (s_cur == ST_SCENE && !s_hd.out) memcpy(s_sdots_d, s_sdots, (size_t)s_sim->N);
+        if (s_cur == ST_SCENE && !s_hd.out) {
+            memcpy(s_sdots_d, s_sdots, (size_t)s_sim->N);
+            memcpy(s_kdots_d, s_kdots, (size_t)s_sim->N);
+            if (s_nshp > 0) memcpy(s_dshp, s_shp, sizeof(fluid_shape_t) * (size_t)s_nshp);
+            s_dnshp = s_nshp;
+        }
+        if (s_hd.gen && s_dnshp >= 0) { s_dopts.shapes = s_dshp; s_dopts.nshapes = s_dnshp; s_dopts.kdots = s_kdots_d; }
         {   /* a scene's symbols point into its package: the drawer keeps it until its next frame */
             static pkg_t *held;
             pkg_t *now = s_hd.out ? held : s_cur == ST_SCENE && s_sp.cur ? s_sp.cur->pkg : NULL;
@@ -1404,9 +1417,13 @@ esp_err_t mole_fluid_creature_init(void) {
     if (!s_toks)  s_toks  = heap_caps_malloc(FLUID_MAX_TOKENS * sizeof(ftok_t), MALLOC_CAP_SPIRAM);
     if (!s_sdots)   s_sdots   = heap_caps_calloc(1, FLUID_GRID_MAX_W * FLUID_GRID_MAX_H, MALLOC_CAP_SPIRAM);
     if (!s_sdots_d) s_sdots_d = heap_caps_calloc(1, FLUID_GRID_MAX_W * FLUID_GRID_MAX_H, MALLOC_CAP_SPIRAM);
+    if (!s_kdots)   s_kdots   = heap_caps_calloc(2, FLUID_GRID_MAX_W * FLUID_GRID_MAX_H, MALLOC_CAP_SPIRAM);
+    s_kdots_d = s_kdots ? s_kdots + FLUID_GRID_MAX_W * FLUID_GRID_MAX_H : NULL;
+    if (!s_shp)     s_shp     = heap_caps_calloc(2 * FLUID_MAX_SHAPES, sizeof(fluid_shape_t), MALLOC_CAP_SPIRAM);
+    s_dshp = s_shp ? s_shp + FLUID_MAX_SHAPES : NULL;
     if (!s_rd)      s_rd      = heap_caps_calloc(1, sizeof(reading_t), MALLOC_CAP_SPIRAM);
     if (!s_spot_sc) s_spot_sc = heap_caps_calloc(1, sizeof(scene_t), MALLOC_CAP_SPIRAM);
-    if (!s_ttext || !s_toks || !s_sdots || !s_sdots_d || !s_rd || !s_spot_sc) return ESP_ERR_NO_MEM;
+    if (!s_ttext || !s_toks || !s_sdots || !s_sdots_d || !s_kdots || !s_shp || !s_rd || !s_spot_sc) return ESP_ERR_NO_MEM;
     s_ttext[0] = '\0';
     s_seen_ver = -1;
 

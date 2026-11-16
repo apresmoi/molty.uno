@@ -24,6 +24,7 @@
 #include "fluid_director.h"
 #include "cute_spec.h"
 #include "cute_rig.h"
+#include "glyph_font.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -210,7 +211,7 @@ static void test_fill(void) {
     scene_t *sc = build("dial", DIAL, 0, &err);
     fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
     fluid_letter_t L[FLUID_MAX_LETTERS]; int nl = 0;
-    scene_fill(s, sc, 0.5f, NULL, L, &nl, NULL);
+    scene_fill(s, sc, 0.5f, NULL, L, &nl, NULL, NULL);
     CHECK(ink_at(s, 0.9f, 0.f) > 0.5f, "the ring at r 0.9 (%.2f)", ink_at(s, 0.9f, 0.f));
     CHECK(ink_at(s, -0.35f, 0.35f) == 0.f, "nothing where no item is");
     CHECK(ink_at(s, 0.6f * 0.7071f, 0.6f * 0.7071f) < 0.05f, "the arc is not on before 1 s");
@@ -222,7 +223,7 @@ static void test_fill(void) {
     CHECK(nm > 0 && L[0].mw > 0 && nl == nm + 5, "the small glyphs are crisp symbols (%d), then the title (%d letters)", nm, nl - nm);
     const fluid_letter_t *T = L + nm;
     CHECK(nl == nm + 5 && T[0].ch == 'h' && T[4].ch == 'o' && T[0].rgb == (FLUID_RGB | 0xffffff) && T[0].y > FLUID_STAGE_REF / 2, "the title's letters, below the centre");
-    scene_fill(s, sc, 3.5f, NULL, L, &nl, NULL);
+    scene_fill(s, sc, 3.5f, NULL, L, &nl, NULL, NULL);
     CHECK(ink_at(s, 0.6f * 0.7071f, 0.6f * 0.7071f) > 0.5f, "the arc is on after 1 s");
     CHECK(ink_at(s, -0.5f, -0.5f) == 0.f, "the disc is off after 3 s");
     CHECK(ink_at(s, 0.6f * 0.7071f, -0.6f * 0.7071f) == 0.f, "the arc spans 0..90 only");
@@ -247,7 +248,7 @@ static fluid_sim_t *fill_layout(pkg_t *p, const char *layout) {
     CHECK(sc, "%s builds (%s)", layout, err ? err : "");
     fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
     fluid_letter_t L[FLUID_MAX_LETTERS]; int nl;
-    scene_fill(s, sc, 0.5f, NULL, L, &nl, NULL);
+    scene_fill(s, sc, 0.5f, NULL, L, &nl, NULL, NULL);
     scene_free(sc);
     return s;
 }
@@ -314,7 +315,7 @@ static void test_spots(void) {
         CHECK(scene_spot_at(sc, 0.5f, 0.f, 0.f) == -1 && scene_spot_at(sc, 1.5f, 0.f, 0.f) == 2, "a spot is there from its on");
         fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
         fluid_letter_t L[FLUID_MAX_LETTERS]; int nl;
-        scene_fill(s, sc, 2.f, NULL, L, &nl, NULL);
+        scene_fill(s, sc, 2.f, NULL, L, &nl, NULL, NULL);
         int ink = 0;
         for (int k = 0; k < s->N; k++) ink += s->T[k] != 0;
         CHECK(ink == 0 && nl == 0, "a spot draws nothing (%d cells)", ink);
@@ -356,7 +357,7 @@ static int lit_dots(const char *item) {
         fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
         uint8_t *dots = calloc((size_t)s->N, 1);
         fluid_letter_t L[FLUID_MAX_LETTERS]; int nl;
-        scene_fill(s, sc, 0.f, NULL, L, &nl, dots);
+        scene_fill(s, sc, 0.f, NULL, L, &nl, dots, NULL);
         for (int y = 0; y < LH; y++) for (int x = 0; x < LW; x++)
             n += s_lit[y][x] = (dots[(y >> 2) * s->W + (x >> 1)] >> fluid_braille_bit(x & 1, y & 3)) & 1;
         free(dots);
@@ -442,10 +443,10 @@ static void test_hairlines(void) {
 static void check_caption(const scene_t *sc, const char *w, int orp) {
     fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
     fluid_letter_t L[FLUID_MAX_LETTERS]; int nl, base;
-    scene_fill(s, sc, 0.f, NULL, L, &base, NULL);
+    scene_fill(s, sc, 0.f, NULL, L, &base, NULL, NULL);
     const int n = (int)strlen(w);
     const scene_caption_t cap = { w, n, orp };
-    scene_fill(s, sc, 0.f, &cap, L, &nl, NULL);
+    scene_fill(s, sc, 0.f, &cap, L, &nl, NULL, NULL);
     const float S = FLUID_STAGE_REF, mid = S / 2, cy = (1.f - SCENE_CAPTION_Y) * 0.5f * S;
     int same = nl == base + n, acc = 0, inside = 1, row = 1;
     for (int q = 0; same && q < n; q++) {
@@ -490,7 +491,7 @@ static void test_hd(void) {
     fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
     uint8_t *dots = calloc((size_t)s->N, 1);
     fluid_letter_t L[FLUID_MAX_LETTERS]; int nl = 0;
-    scene_fill(s, sc, 0.5f, NULL, L, &nl, dots);
+    scene_fill(s, sc, 0.5f, NULL, L, &nl, dots, NULL);
     const fluid_letter_t *p = &L[0];                         /* the "plus" at 0 degrees */
     const float px = (float)s->stage / (2 * s->W), py = (float)s->stage / (4 * s->H);
     int corner = 0, bar = 0;
@@ -555,7 +556,7 @@ static void test_real_package(const char *dir) {
         if (!sc) { cJSON_Delete(c); continue; }
         for (int i = 0; i < p->nlayouts; i++) if (!strcmp(p->layouts[i].name, layout)) seen[i] = true;
         fluid_letter_t L[FLUID_MAX_LETTERS]; int nl, lit = 0;
-        scene_fill(s, sc, sc->dur > 0.f ? sc->dur / 2 : 1.f, NULL, L, &nl, NULL);
+        scene_fill(s, sc, sc->dur > 0.f ? sc->dur / 2 : 1.f, NULL, L, &nl, NULL, NULL);
         for (int k = 0; k < s->N; k++) lit += s->T[k] > 0.2f * FQ_UNIT;
         CHECK(lit > 10, "%s draws something (%d cells; a thin crescent is ~20)", layout, lit);
         if (!strcmp(name, "scene.play")) scene_play(&sp, sc);
@@ -579,6 +580,144 @@ static void test_real_package(const char *dir) {
 
 static double now_us(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec * 1e6 + ts.tv_nsec * 1e-3; }
 
+/* ── high definition at the panel's pixels: the chart on the 1.75C's 466 px stage. Calm, its
+ * rings are true circles of anti-aliased pixels (not the dot lattice), its symbols too; a touch
+ * turns only the cells near the finger into dust, and calm water gives back the very same
+ * pixels; so does a transition. The panel's windows (fluid_draw_send) are the same frame. ── */
+
+static int send_fb(void *ctx, int x, int y, int w, int h, const uint16_t *px) {
+    uint16_t *fb = ctx;
+    for (int r = 0; r < h; r++) memcpy(fb + (size_t)(y + r) * 466 + x, px + (size_t)r * w, (size_t)w * 2);
+    return 0;
+}
+static int lum(uint16_t be) { const uint16_t le = (uint16_t)(be >> 8 | be << 8); return (le >> 11) * 8 + ((le >> 5) & 63) * 4 + (le & 31) * 8; }
+
+static void test_hd_pixels(const char *dir) {
+    char path[512]; size_t len; const char *err;
+    snprintf(path, sizeof(path), "%s/astrology.json", dir);
+    char *buf = read_file(path, &len);
+    pkg_t *p = buf ? pkg_parse(buf, len, &err) : NULL;
+    free(buf);
+    snprintf(path, sizeof(path), "%s/astrology-commands.jsonl", dir);
+    char *cmds = p ? read_file(path, &len) : NULL;
+    scene_t *sc = NULL;
+    for (char *line = cmds ? strtok(cmds, "\n") : NULL; line && !sc; line = strtok(NULL, "\n")) {
+        cJSON *c = cJSON_Parse(line), *a = cJSON_GetObjectItem(c, "args");
+        const char *layout = cJSON_GetStringValue(cJSON_GetObjectItem(a, "layout"));
+        if (layout && !strcmp(layout, "chart")) sc = scene_build(p, layout, cJSON_GetObjectItem(a, "params"), 0.f, &err);
+        cJSON_Delete(c);
+    }
+    free(cmds);
+    CHECK(sc, "the chart builds");
+    if (!sc) { pkg_unref(p); return; }
+    const int S = 466;
+    int W, H;
+    fluid_grid_for_stage(S, &W, &H);
+    fluid_sim_t *s = fluid_sim_create(W, H, S);
+    fluid_frame_t *fr = fluid_frame_create(W, H);
+    fluid_draw_t *d = fluid_draw_create(W, H, S, S);
+    const int N = W * H;
+    uint8_t *dots = calloc((size_t)N, 1), *keep = calloc((size_t)N, 1);
+    static fluid_shape_t shp[FLUID_MAX_SHAPES];
+    uint16_t *fb = calloc((size_t)S * S, 2), *calm = calloc((size_t)S * S, 2), *win = calloc((size_t)S * S, 2);
+    fluid_letter_t L[FLUID_MAX_LETTERS]; int nl;
+    scene_shapes_t hd = { shp, 0, keep };
+    scene_fill(s, sc, 1.f, NULL, L, &nl, dots, &hd);
+    int rings = 0, segs = 0, masks = 0;
+    for (int n = 0; n < hd.n; n++) { rings += shp[n].k == FLUID_SHAPE_RING; segs += shp[n].k == FLUID_SHAPE_SEG; masks += shp[n].k == FLUID_SHAPE_MASK; }
+    CHECK(rings == 3 && segs > 12 + 36 && masks == nl && nl > 12, "its shapes: %d rings, %d strokes, %d symbols (%d letters)", rings, segs, masks, nl);
+    fluid_sim_snapshot(s, fr, false);
+    memset(fr->h, 0, sizeof(int16_t) * (size_t)N);
+    fluid_draw_opts_t o = { .palette = FLUID_PAL_PASTEL, .edge_mode = FLUID_EDGE_CONTOURS, .letters = L, .nletters = nl, .font = gc_font5x7,
+                            .dots = dots, .scene = true, .shapes = shp, .nshapes = hd.n, .kdots = keep };
+    int y0, y1;
+    fluid_draw(d, fr, fb, &o, &y0, &y1);
+    memcpy(calm, fb, (size_t)S * S * 2);
+
+    /* the outer ring (r 0.9): lit at every degree, its edge soft (partly lit pixels both sides) */
+    const float R = 0.9f * S / 2, c0 = S / 2.f;
+    int hit = 0, soft = 0, lattice = 0;
+    for (int a = 0; a < 360; a++) {
+        const float co = cosf(a * 0.0174533f), si = sinf(a * 0.0174533f);
+        int best = 0;
+        for (float dr = -1.f; dr <= 1.f; dr += 0.5f) { const int v = lum(fb[(int)(c0 + (R + dr) * si) * S + (int)(c0 + (R + dr) * co)]); if (v > best) best = v; }
+        hit += best > 300;
+        for (float dr = 1.5f; dr <= 2.5f; dr += 1.f) {
+            const int v = lum(fb[(int)(c0 + (R + dr) * si) * S + (int)(c0 + (R + dr) * co)]);
+            soft += v > 20 && v < best * 3 / 4;
+        }
+    }
+    for (int y = 0; y < S; y++) for (int x = 0; x < S; x++)
+        if (fb[y * S + x] && d->yrow[y] < 0) lattice++;                 /* lit between the dot rows */
+    CHECK(hit == 360 && soft > 60 && lattice > 2000, "calm: a true ring (%d of 360 degrees), soft edged (%d), lit off the dot rows (%d px)", hit, soft, lattice);
+    int hdc = 0, keyd = 0;
+    for (int k = 0; k < N; k++) { hdc += (d->key[k] & 0xF000) == 0x8000; keyd += d->key[k] && d->key[k] < 0x100; }
+    CHECK(hdc > 100 && keyd == 0, "calm: %d cells drawn smooth, %d as dots", hdc, keyd);
+    fluid_draw(d, fr, fb, &o, &y0, &y1);
+    CHECK(y1 == y0, "calm: nothing redrawn the next frame ([%d, %d))", y0, y1);
+
+    /* the panel's windows draw the same frame */
+    static uint16_t wbuf[466 * 14];
+    d->force = true;
+    fluid_draw_cells(d, fr, &o);
+    fluid_draw_send(d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, true, wbuf, S * 14, send_fb, win);
+    CHECK(!memcmp(win, calm, (size_t)S * S * 2), "the windows are the same frame");
+
+    /* a touch on the ring's right: dust there, the left untouched; the windows the panel is
+     * sent (only the rows that changed) make the same frame */
+    const int ti = (int)((0.9f + 1.f) * 0.5f * W), tj = H / 2;
+    for (int j = 0; j < H; j++) for (int i = 0; i < W; i++) {
+        const float r2 = (float)((i - ti) * (i - ti) + (j - tj) * (j - tj));
+        fr->h[j * W + i] = (int16_t)(3.f * FQ_H * expf(-r2 / 18.f));
+    }
+    memcpy(fb, calm, (size_t)S * S * 2);
+    fluid_draw_cells(d, fr, &o);
+    fluid_draw_rect(d, &o, &(fluid_rect_t){ fb, S, 0, 0, S, S }, false);
+    fluid_draw_send(d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, wbuf, S * 14, send_fb, win);
+    CHECK(!memcmp(win, fb, (size_t)S * S * 2) && memcmp(fb, calm, (size_t)S * S * 2), "touch: the windows sent are the same frame");
+    int dust = 0, near = 0, left = 0;
+    for (int j = 0; j < H; j++) for (int i = 0; i < W; i++) {
+        const int k = j * W + i;
+        if ((i - ti) * (i - ti) + (j - tj) * (j - tj) <= 9) { near++; dust += (d->key[k] & 0xF000) != 0x8000 || (d->key[k] >> 8 & 15) < 8; }
+    }
+    for (int y = 0; y < S; y++) for (int x = 0; x < S / 3; x++) left += fb[y * S + x] != calm[y * S + x];
+    CHECK(dust > near / 2 && left == 0, "touch: %d of %d cells by the finger in dust, %d px changed on the far side", dust, near, left);
+    memset(fr->h, 0, sizeof(int16_t) * (size_t)N);
+    fluid_draw(d, fr, fb, &o, &y0, &y1);
+    CHECK(!memcmp(fb, calm, (size_t)S * S * 2), "calm again: the very same pixels");
+
+    /* a transition: the shapes fade into the dust, all dust, then whole again */
+    o.dust = 0.15f; fluid_draw(d, fr, fb, &o, &y0, &y1);
+    long ring_calm = 0, ring_dim = 0;                                   /* along the outer ring */
+    for (int a = 0; a < 360; a++) {
+        const int q = (int)(c0 + R * sinf(a * 0.0174533f)) * S + (int)(c0 + R * cosf(a * 0.0174533f));
+        ring_calm += lum(calm[q]); ring_dim += lum(fb[q]);
+    }
+    CHECK(ring_dim > ring_calm / 4 && ring_dim < ring_calm * 3 / 4, "dust 0.15: the ring dimmed (%ld of %ld)", ring_dim, ring_calm);
+    o.dust = 1.f; fluid_draw(d, fr, fb, &o, &y0, &y1);
+    int lit = 0;
+    for (int q = 0; q < S * S; q++) lit += fb[q] != 0;
+    CHECK(lit == 0, "dust 1: gone (%d px)", lit);
+    o.dust = 0.f; fluid_draw(d, fr, fb, &o, &y0, &y1);
+    CHECK(!memcmp(fb, calm, (size_t)S * S * 2), "dust 0: the same pixels again");
+
+    /* the cost: every cell redrawn (a full window pass) against the dots alone */
+    const int R2 = 40;
+    double t0 = now_us();
+    for (int q = 0; q < R2; q++) { d->force = true; fluid_draw(d, fr, fb, &o, &y0, &y1); }
+    const double hd_us = (now_us() - t0) / R2;
+    o.shapes = NULL;
+    t0 = now_us();
+    for (int q = 0; q < R2; q++) { d->force = true; fluid_draw(d, fr, fb, &o, &y0, &y1); }
+    const double dot_us = (now_us() - t0) / R2;
+    printf("  high definition (host): a full redraw of the chart %.0f us, on the dots %.0f us (%d shapes)\n", hd_us, dot_us, hd.n);
+
+    free(dots); free(keep); free(fb); free(calm); free(win);
+    fluid_draw_destroy(d); fluid_frame_destroy(fr); fluid_sim_destroy(s);
+    scene_free(sc);
+    pkg_unref(p);
+}
+
 static void bench(const char *molty) {
     char p[4096] = "{\"caption\":\"0123456789012345678901234567890123456789\",\"glyphs\":[";
     for (int i = 0; i < 12; i++) snprintf(p + strlen(p), sizeof(p) - strlen(p), "%s{\"a\":%d}", i ? "," : "", i * 30);
@@ -593,7 +732,7 @@ static void bench(const char *molty) {
     fluid_letter_t L[FLUID_MAX_LETTERS]; int nl;
     const int N = 2000;
     double t0 = now_us();
-    for (int k = 0; k < N; k++) scene_fill(s, sc, k * DT, NULL, L, &nl, NULL);
+    for (int k = 0; k < N; k++) scene_fill(s, sc, k * DT, NULL, L, &nl, NULL, NULL);
     const double scene_us = (now_us() - t0) / N;
     CHECK(nl == 12 + 40, "12 crisp symbols and 40 letters on the overlay (%d)", nl);
 
@@ -638,6 +777,7 @@ int main(int argc, char **argv) {
     test_hairlines();
     test_hd();
     test_real_package(argv[1]);
+    test_hd_pixels(argv[1]);
     bench(argc > 2 ? argv[2] : "");
     CHECK(P->refs == 1, "every scene gave its package reference back (%d)", P->refs);
     pkg_unref(P);
