@@ -106,7 +106,8 @@ function signReading(i, bodies) {
 }
 // The middle's reading: what the drawn lines mean, each pair in plain words (a planet's part, then how they meet)
 const WORD = { Sun: 'self', Moon: 'mood', Mercury: 'mind', Venus: 'love', Mars: 'drive', Jupiter: 'luck', Saturn: 'limits', Uranus: 'change', Neptune: 'dreams', Pluto: 'power' };
-const PAIR = { conjunction: ['sits with', (a, b) => `${a} and ${b} as one`], sextile: ['helps', (a, b) => `${a} helping ${b}`], square: ['squares', (a, b) => `friction between ${a} and ${b}`], trine: ['flows with', (a, b) => `${a} and ${b} in step`], opposition: ['faces', (a, b) => `${a} versus ${b}`] };
+const PAIR = { conjunction: ['sits with', (a, b) => `${a} and ${b} as one`], sextile: ['helps', (a, b) => `${a} helping ${b}`], square: ['squares', (a, b) => `friction between ${a} and ${b}`], trine: ['flows with', (a, b) => `${a} and ${b} in step`], opposition: ['opposes', (a, b) => `${a} meets ${b}`] };
+const aspectReading = (a) => `${a.a} ${PAIR[a.name][0]} ${a.b}: ${PAIR[a.name][1](WORD[a.a], WORD[a.b])}.`;
 function middleReading(drawn) {
   const tones = new Set(drawn.map((a) => TONE[a.name])), key = [tones.has('tense') && 'red is tension', tones.has('easy') && 'blue is flow', drawn.some((a) => !a.angle) && 'a white dot joins two'].filter(Boolean).join(', ');
   const head = key && `${key[0].toUpperCase()}${key.slice(1)}.`, said = (more) => [head, ...more].filter(Boolean).join(' ');
@@ -116,7 +117,12 @@ function middleReading(drawn) {
 }
 export function chart(date) {
   const s = sky(date), placed = placeBodies(s.bodies), inner = Math.min(...placed.map((b) => b.r)) - 0.065, aspects = findAspects(s.bodies), drawn = aspects.slice(0, DRAWN);
-  const line = (a) => { const [x1, y1] = polar(chartAngle(a.lonA), inner), [x2, y2] = polar(chartAngle(a.lonB), inner); return { x1: r2(x1), y1: r2(y1), x2: r2(x2), y2: r2(y2) }; };
+  // an aspect's line on the inner ring, its bodies' centres (it reaches out to them when tapped), its reading and what it lights
+  const at = (name) => { const b = placed.find((p) => p.name === name); return polar(chartAngle(b.lon), b.r); };
+  const line = (a) => {
+    const [x1, y1] = polar(chartAngle(a.lonA), inner), [x2, y2] = polar(chartAngle(a.lonB), inner), [px1, py1] = at(a.a), [px2, py2] = at(a.b), id = `${a.a}-${a.b}`.toLowerCase();
+    return { x1: r2(x1), y1: r2(y1), x2: r2(x2), y2: r2(y2), px1: r2(px1), py1: r2(py1), px2: r2(px2), py2: r2(py2), say: aspectReading(a), id, lights: `${id} ${a.a.toLowerCase()} ${a.b.toLowerCase()}` };
+  };
   const params = { inner: r3(inner), bodies: placed.map((b) => ({ g: `g-${b.name.toLowerCase()}`, a: chartAngle(b.lon), r: r3(b.r), c: INK[b.name], say: bodyReading(b, s.bodies, aspects), id: b.name.toLowerCase() })), tense: [], easy: [], joined: [] };
   for (const a of drawn) if (a.angle) params[TONE[a.name]].push(line(a)); else params.joined.push({ a: chartAngle((a.lonA + a.lonB) / 2 + (Math.abs(a.lonA - a.lonB) > 180 ? 180 : 0)) });
   params.signs = SIGNS.map((name, i) => ({ a: (195 + 30 * i) % 360, say: signReading(i, s.bodies), id: name.toLowerCase() }));

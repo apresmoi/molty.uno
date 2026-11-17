@@ -40,6 +40,9 @@ extern "C" {
 
 #define SCENE_ITEMS_MAX   128           /* resolved items (each expands)                   */
 #define SCENE_LIST_MAX    32            /* elements of a list param                        */
+#define SCENE_FIELDS      12            /* fields of a list element                        */
+#define SCENE_GROUPS      32            /* highlight groups a scene names                  */
+#define SCENE_LIGHTS      4             /* the groups one spot lights                      */
 #define SCENE_PTS_MAX     512           /* resolved line / curve points, all items         */
 #define SCENE_LETTERS     40            /* a scene's own text, letters (the overlay holds FLUID_MAX_LETTERS) */
 #define SCENE_SAY_CHARS   4096          /* its spots' readings and ids, characters          */
@@ -56,6 +59,9 @@ typedef struct {
     uint16_t pts, npts;                 /* line / curve: its points in scene_t.pts         */
     uint16_t str, nstr;                 /* text: its letters in scene_t.chars; spot: its reading in scene_t.say */
     uint16_t sid, nsid;                 /* spot: its id in scene_t.say (nsid 0: none)       */
+    uint8_t grp;                        /* its highlight group, 1.. (scene_t.groups), 0 none */
+    bool when_lit;                      /* shows only while its group is lit               */
+    uint8_t lights[SCENE_LIGHTS];       /* spot: the groups a tap lights (0: unused)        */
     int n;                              /* ticks                                           */
     uint32_t rgb;
     float on, off;                      /* off 0 = until the end                           */
@@ -68,7 +74,9 @@ typedef struct scene {
     float dur, ttl;
     int nitems, npts, nchars, nsay;
     int focus;                          /* a tapped spot (item) whose drawing is grown, -1 none */
-    float grow;                         /* its scale, 1 = as built (scene_grow)             */
+    float grow, glow;                   /* its scale (1 = as built) and how lit, 0..1 (scene_grow) */
+    int ngroups;
+    char groups[SCENE_GROUPS][PKG_KEY_MAX + 1];
     scene_item_t items[SCENE_ITEMS_MAX];
     float pts[SCENE_PTS_MAX][2];
     char chars[SCENE_LETTERS];
@@ -81,8 +89,9 @@ scene_t *scene_build(pkg_t *p, const char *layout, const cJSON *params, float tt
 void scene_free(scene_t *sc);
 /** When the scene ends, s from its start: min(dur if > 0, ttl). */
 float scene_end(const scene_t *sc);
-/** The spot a tap at (x, y) (glass units, y up) lands on at t s: of the visible spots whose
- *  disc holds it, the one whose centre is nearest. Its item index, -1 for none. */
+/** The spot a tap at (x, y) (glass units, y up) lands on at t s: of the visible spots that
+ *  hold it (within r of the spot's centre, or of its segment pts), the smallest, then the
+ *  nearest. Its item index, -1 for none. */
 int scene_spot_at(const scene_t *sc, float t, float x, float y);
 
 typedef struct {
@@ -120,11 +129,14 @@ typedef struct {
  *  (nothing in high definition; the scene forms from dust again after it). */
 void scene_hd_tick(scene_hd_t *h, unsigned gen, bool plain, float dt);
 
-/* A tapped spot's drawing grows (the items inside its disc, about its centre) with the ripple
- * the tap starts, holds while its reading plays, then eases back to exactly as built. */
+/* A tapped spot's drawing grows with the ripple the tap starts, holds while its reading plays,
+ * then eases back to exactly as built. Its drawing: the items in the groups it lights (each
+ * about its own centre, and brighter; those `when: "lit"` fade in), else the items inside its
+ * disc (about the spot's centre). */
 #define SCENE_GROW      1.25f           /* its scale, grown                                 */
 #define SCENE_GROW_IN_S 0.5f            /* the growth, easing out as the ring spreads       */
 #define SCENE_GROW_OUT_S 0.4f           /* back, once its reading is over                   */
+#define SCENE_LIT_WHITE 0.5f            /* a lit item's colour this far towards white        */
 typedef struct {
     int spot;                           /* the tapped spot (item), -1 none                  */
     float t, out;                       /* s since the tap; 1 held .. 0 back                */

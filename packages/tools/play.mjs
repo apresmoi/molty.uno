@@ -12,6 +12,7 @@
 //     a scene with no touch on it (fluid_draw.c's shapes): anti-aliased at the panel's own pixels, a
 //     ball or an image on the dots, a hairline one fine pixel (not the fluid's faint dust around it, which the
 //     device adds); --caption puts a subtitle word at the bottom
+//   --tap <spot id>: that spot tapped and held: the groups it lights grown and brighter (format.mjs's group / lights / when)
 // <pkg> is a package id (packages/<id>/<id>.json) or a path to its JSON. No dependencies.
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { deflateSync } from 'node:zlib';
@@ -64,7 +65,7 @@ function hair(pts, rgb, put, skip = 0) {
 // a hairline ring or arc as the firmware walks it: a whole ring from one step before its start to one after, its first dot left to the end
 function hairRing(it, whole, rgb, put) {
   const span = whole ? 360 : (((it.a1 - it.a0) % 360) + 360) % 360, n = 8 + Math.floor(span * DEG * it.r * 0.5 * Math.max(W, H)), pts = [];
-  for (let q = whole ? -1 : 0; q <= (whole ? n + 1 : n); q++) { const a = (it.a0 + (span * q) / n) * DEG; pts.push([it.r * Math.cos(a), it.r * Math.sin(a)]); }
+  for (let q = whole ? -1 : 0; q <= (whole ? n + 1 : n); q++) { const a = (it.a0 + (span * q) / n) * DEG; pts.push([it.x + it.r * Math.cos(a), it.y + it.r * Math.sin(a)]); }
   hair(pts, rgb, put, whole ? 1 : 0);
 }
 
@@ -79,7 +80,7 @@ function stroke(pts, c, put, w = 0) {
     }
   }
 }
-const arcPts = (r, a0, a1) => { const n = Math.max(2, Math.ceil((Math.abs(a1 - a0) * DEG * r) / 0.02)); return Array.from({ length: n + 1 }, (_, i) => { const a = (a0 + ((a1 - a0) * i) / n) * DEG; return [r * Math.cos(a), r * Math.sin(a)]; }); };
+const arcPts = (r, a0, a1, x = 0, y = 0) => { const n = Math.max(2, Math.ceil((Math.abs(a1 - a0) * DEG * r) / 0.02)); return Array.from({ length: n + 1 }, (_, i) => { const a = (a0 + ((a1 - a0) * i) / n) * DEG; return [x + r * Math.cos(a), y + r * Math.sin(a)]; }); };
 const smooth = (p) => { if (p.length < 3) return p; const out = []; for (let i = 0; i + 1 < p.length; i++) { const a = p[Math.max(0, i - 1)], b = p[i], c = p[i + 1], d = p[Math.min(p.length - 1, i + 2)]; for (let k = 0; k < 8; k++) { const t = k / 8, f = (j) => 0.5 * (2 * b[j] + (c[j] - a[j]) * t + (2 * a[j] - 5 * b[j] + 4 * c[j] - d[j]) * t * t + (3 * b[j] - a[j] - 3 * c[j] + d[j]) * t * t * t); out.push([f(0), f(1)]); } } out.push(p.at(-1)); return out; };
 
 // assets, decoded once per package
@@ -145,9 +146,33 @@ function text(it, put) {
   });
 }
 
+/** The items with spot `tap` (its id) tapped and held, as the firmware's scene_player.c grows it: the items in the groups it
+ *  lights grown 1.25x about their own centre and brighter, those `when: "lit"` shown; with no lights, what lies inside its
+ *  disc grown about the spot's centre. No tap: the items as built, none `when: "lit"`. */
+const GROW = 1.25, LIT_WHITE = 0.5;
+export function lit(items, tap) {
+  const s = tap ? items.find((it) => it.k === 'spot' && it.id === tap) : null, on = new Set((s?.lights ?? '').split(' ').filter(Boolean));
+  if (tap && !s) throw new Error(`no spot ${tap}`);
+  const white = (c) => `#${hex(c).map((v) => Math.round(v + (255 - v) * LIT_WHITE).toString(16).padStart(2, '0')).join('')}`;
+  const inside = (it) => {
+    const d = (x, y) => Math.hypot(x - s.x, y - s.y), sr = s.r * 1.001, sd = Math.hypot(s.x, s.y);
+    if (it.k === 'ring' || it.k === 'arc') return d(it.x, it.y) + it.r <= sr;
+    if (it.k === 'ticks') return sd + Math.max(it.r, it.r + it.len) <= sr;
+    if (it.k === 'line' || it.k === 'curve') return it.pts.every(([x, y]) => d(x, y) <= sr);
+    return it.k !== 'spot' && d(it.x, it.y) <= sr;
+  };
+  return items.flatMap((it) => {
+    const isLit = on.has(it.group);
+    if (it.when === 'lit' && !isLit) return [];
+    if (isLit) return [{ ...it, r: it.r * GROW, size: it.size * GROW, w: it.w * GROW, color: it.when === 'lit' ? it.color : white(it.color) }];
+    if (s && !on.size && inside(it)) { const g = (x, y) => [s.x + (x - s.x) * GROW, s.y + (y - s.y) * GROW], [x, y] = g(it.x, it.y); return [{ ...it, x, y, r: it.r * GROW, len: it.len * GROW, size: it.size * GROW, pts: it.pts?.map(([px, py]) => g(px, py)) }]; }
+    return [it];
+  });
+}
+
 /** The dots of `layout` at `t` seconds: Map(dot index -> rgb). Throws ParamError for bad params.
- *  kept (a Map): also the dots no high-definition shape draws (a ball's, an image's), as they show. */
-export function frame(pkg, layout, params, t, kept = null) {
+ *  kept (a Map): also the dots no high-definition shape draws (a ball's, an image's), as they show. tap: lit(). */
+export function frame(pkg, layout, params, t, kept = null, tap = '') {
   let keep = false;
   const dots = new Map(), put = (sx, sy, c) => {
     if (sx < 0 || sy < 0 || sx >= W || sy >= H) return;
@@ -155,13 +180,13 @@ export function frame(pkg, layout, params, t, kept = null) {
     if (c === null) dots.delete(k); else dots.set(k, c);
     if (kept && keep && c !== null) kept.set(k, c); else kept?.delete(k);
   };
-  for (const it of bind(pkg, layout, params)) {
+  for (const it of lit(bind(pkg, layout, params), tap)) {
     if (t < it.on || t >= it.off) continue;
     keep = it.k === 'ball' || (it.k === 'glyph' && pkg.assets[it.asset].kind === 'image');
     const rgb = hex(it.color);
     if ((it.k === 'ring' || it.k === 'arc') && it.w / 2 <= HAIR) hairRing(it, it.k === 'ring' || it.a1 - it.a0 >= 360, rgb, put);
-    else if (it.k === 'ring') stroke(arcPts(it.r, 0, 360), it.color, put, it.w);
-    else if (it.k === 'arc') stroke(arcPts(it.r, it.a0, it.a1), it.color, put, it.w);
+    else if (it.k === 'ring') stroke(arcPts(it.r, 0, 360, it.x, it.y), it.color, put, it.w);
+    else if (it.k === 'arc') stroke(arcPts(it.r, it.a0, it.a1, it.x, it.y), it.color, put, it.w);
     else if (it.k === 'ticks') for (let i = 0; i < it.n; i++) { const a = (it.a0 + (360 * i) / it.n) * DEG, r1 = it.r + it.len; stroke([[it.r * Math.cos(a), it.r * Math.sin(a)], [r1 * Math.cos(a), r1 * Math.sin(a)]], it.color, put); }
     else if (it.k === 'line') stroke(it.pts, it.color, put, it.w);
     else if (it.k === 'curve') stroke(smooth(it.pts), it.color, put, it.w);
@@ -194,7 +219,7 @@ export function png(dots, rgb = null, S = PANEL) {
 const HD_EDGE = 0.42, ACCENT = [255, 140, 60], ORP = (n) => (n <= 1 ? 0 : n <= 5 ? 1 : n <= 9 ? 2 : n <= 13 ? 3 : 4);
 const edge = (d) => (d >= 0.5 ? 0 : d <= -0.5 ? 1 : 0.5 - d), sstep = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 /** The calm scene at S x S px (RGB floats) and the dots it keeps (a ball's, an image's): { rgb, kept }. */
-export function hd(pkg, layout, params, t, S = 466, caption = '') {
+export function hd(pkg, layout, params, t, S = 466, caption = '', tap = '') {
   const rgb = new Float32Array(S * S * 3), k = S / 2, X = (x) => (x + 1) * k, Y = (y) => (1 - y) * k, hw = (w) => (w / 2 <= HAIR ? 0.5 : Math.max(0.5, (w / 2) * k));   // a hairline: one fine pixel
   // one shape: its box, and its coverage of the pixel centred at (px, py)
   const paint = (x0, y0, x1, y1, c, cover) => {
@@ -213,10 +238,10 @@ export function hd(pkg, layout, params, t, S = 466, caption = '') {
   };
   const disc = (x, y, r, c) => paint(X(x) - r * k, Y(y) - r * k, X(x) + r * k, Y(y) + r * k, c, (px, py) => edge(Math.hypot(px - X(x), py - Y(y)) - r * k));
   const ring = (it, whole) => {
-    const r = it.r * k, h = hw(it.w), span = whole ? 360 : (((it.a1 - it.a0) % 360) + 360) % 360, end = (a) => [k + r * Math.cos(a * DEG), k - r * Math.sin(a * DEG)];
-    paint(k - r - h, k - r - h, k + r + h, k + r + h, hex(it.color), (px, py) => {
-      let d = Math.abs(Math.hypot(px - k, py - k) - r) - h;
-      if (!whole && d < 0.5 && ((((Math.atan2(k - py, px - k) / DEG - it.a0) % 360) + 360) % 360) > span) d = Math.min(...[end(it.a0), end(it.a0 + span)].map(([ex, ey]) => Math.hypot(px - ex, py - ey))) - h;
+    const r = it.r * k, h = hw(it.w), cx = X(it.x), cy = Y(it.y), span = whole ? 360 : (((it.a1 - it.a0) % 360) + 360) % 360, end = (a) => [cx + r * Math.cos(a * DEG), cy - r * Math.sin(a * DEG)];
+    paint(cx - r - h, cy - r - h, cx + r + h, cy + r + h, hex(it.color), (px, py) => {
+      let d = Math.abs(Math.hypot(px - cx, py - cy) - r) - h;
+      if (!whole && d < 0.5 && ((((Math.atan2(cy - py, px - cx) / DEG - it.a0) % 360) + 360) % 360) > span) d = Math.min(...[end(it.a0), end(it.a0 + span)].map(([ex, ey]) => Math.hypot(px - ex, py - ey))) - h;
       return edge(d);
     });
   };
@@ -235,7 +260,7 @@ export function hd(pkg, layout, params, t, S = 466, caption = '') {
     const f = font(), fs = size * k, adv = fs * 0.6, lh = fs * 1.05, x0 = X(x) - (orp < 0 ? str.length / 2 : orp + 0.5) * adv;
     [...str].forEach((ch, q) => { if (ch !== ' ') mask((i, j) => (f(ch)[j] >> (4 - i)) & 1, 5, 7, x0 + (q + 0.5) * adv, Y(y), adv * 0.8, lh * 0.72, 0, q === orp ? ACCENT : c); });
   };
-  for (const it of bind(pkg, layout, params)) {
+  for (const it of lit(bind(pkg, layout, params), tap)) {
     if (t < it.on || t >= it.off) continue;
     const c = hex(it.color);
     if (it.k === 'ring' || it.k === 'arc') ring(it, it.k === 'ring' || it.a1 - it.a0 >= 360);
@@ -253,7 +278,7 @@ export function hd(pkg, layout, params, t, S = 466, caption = '') {
     run(caption, 0, -0.56, size, [255, 255, 255], orp);
   }
   const kept = new Map();
-  frame(pkg, layout, params, t, kept);
+  frame(pkg, layout, params, t, kept, tap);
   return { rgb, kept };
 }
 
@@ -274,11 +299,12 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
         console.log(`${c.name} ${layout}: ${JSON.stringify(c.args).length} B`);
       });
     } else {
-      const [id, layout] = argv.filter((a, i) => !a.startsWith('-') && !['--params', '--t', '-o', '--size', '--caption'].includes(argv[i - 1]));
+      const [id, layout] = argv.filter((a, i) => !a.startsWith('-') && !['--params', '--t', '-o', '--size', '--caption', '--tap'].includes(argv[i - 1]));
       if (!id || !layout) throw new Error('usage: play.mjs <pkg> <layout> [--params json|file] [--t s] [-o out.png] [--hd [--size px] [--caption word]]');
       const pkg = loadPackage(id), params = json(opt('--params')), t = +opt('--t', 1), out = opt('-o', `${layout}.png`);
-      if (argv.includes('--hd')) { const S = +opt('--size', 466), v = hd(pkg, layout, params, t, S, opt('--caption', '')); writeFileSync(out, png(v.kept, v.rgb, S)); }
-      else writeFileSync(out, png(frame(pkg, layout, params, t)));
+      const tap = opt('--tap', '');
+      if (argv.includes('--hd')) { const S = +opt('--size', 466), v = hd(pkg, layout, params, t, S, opt('--caption', ''), tap); writeFileSync(out, png(v.kept, v.rgb, S)); }
+      else writeFileSync(out, png(frame(pkg, layout, params, t, null, tap)));
     }
   } catch (e) {
     console.error(e instanceof ParamError ? `bad_params: ${e.message}` : e.message);

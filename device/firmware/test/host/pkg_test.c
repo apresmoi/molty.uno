@@ -144,6 +144,10 @@ static void test_parse(void) {
     CHECK(IS(parse_with("{\"k\": \"ring\"", "{\"k\": \"ring\", \"eval\": 1"), "item: unknown key"), "an unknown item key");
     CHECK(IS(parse_with("{\"k\": \"ring\"", "{\"k\": \"ring\", \"rot\": 1"), "item: unknown key"), "a key of another kind");
     CHECK(IS(parse_with("\"kind\": \"mask\"", "\"kind\": \"svg\""), "asset: unknown kind"), "an unknown asset kind");
+    /* a highlight: group / when on a drawing, lights and a segment on a spot */
+    CHECK(!parse_with("{\"k\": \"ring\"", "{\"k\": \"ring\", \"group\": \"a\", \"when\": \"lit\", \"x\": 0.1"), "a ring in a group, shown when lit, off the centre");
+    CHECK(IS(parse_with("{\"k\": \"ring\"", "{\"k\": \"ring\", \"when\": \"later\""), "item: when is \"lit\""), "when is lit or nothing");
+    CHECK(IS(parse_with("{\"k\": \"line\"", "{\"k\": \"line\", \"lights\": \"a\""), "item: unknown key"), "only a spot lights");
     CHECK(parse_with("\"dur\": 6", "\"dur\": 6, \"script\": \"x\""), "an unknown layout key");
     /* assets */
     CHECK(IS(parse_with("\"img\": \"halves\"", "\"img\": \"nothing\""), "item: unresolved asset"), "an unresolved asset");

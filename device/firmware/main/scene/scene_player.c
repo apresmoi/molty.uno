@@ -61,7 +61,7 @@ static bool check_params(bind_t *b, const cJSON *params) {
             for (const cJSON *e = v->child; e; e = e->next) {
                 int n = 0;
                 if (!cJSON_IsObject(e)) return false;
-                for (const cJSON *f = e->child; f; f = f->next, n++) if (n >= 8 || !name_ok(f->string) || !scalar_ok(f)) return false;
+                for (const cJSON *f = e->child; f; f = f->next, n++) if (n >= SCENE_FIELDS || !name_ok(f->string) || !scalar_ok(f)) return false;
             }
         }
     }
@@ -103,6 +103,20 @@ static bool say_add(scene_t *sc, const char *s, size_t max, uint16_t *off, uint1
     return true;
 }
 
+/* name's highlight group in sc (1..), added if new; 0: not a name, or too many */
+static int group_of(scene_t *sc, const char *name, size_t len) {
+    if (!len || len > PKG_KEY_MAX) return 0;
+    for (size_t i = 0; i < len; i++) {
+        const char c = name[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-')) return 0;
+    }
+    for (int g = 0; g < sc->ngroups; g++) if (strlen(sc->groups[g]) == len && !memcmp(sc->groups[g], name, len)) return g + 1;
+    if (sc->ngroups >= SCENE_GROUPS) return 0;
+    memcpy(sc->groups[sc->ngroups], name, len);
+    sc->groups[sc->ngroups][len] = '\0';
+    return ++sc->ngroups;
+}
+
 static bool resolve(scene_t *sc, const bind_t *b, const pkg_item_t *it, const cJSON *el) {
     if (sc->nitems >= SCENE_ITEMS_MAX) return false;
     scene_item_t *o = &sc->items[sc->nitems];
@@ -136,6 +150,16 @@ static bool resolve(scene_t *sc, const bind_t *b, const pkg_item_t *it, const cJ
         if (!say_add(sc, str_of(b, &f[PF_SAY], el), PKG_SAY_MAX, &o->str, &o->nstr)) return false;
         const char *id = str_of(b, &f[PF_ID], el);
         if (id && !say_add(sc, id, PKG_STR_MAX, &o->sid, &o->nsid)) return false;
+    }
+    const char *grp = str_of(b, &f[PF_GROUP], el), *lights = str_of(b, &f[PF_LIGHTS], el);
+    if (grp && !(o->grp = (uint8_t)group_of(sc, grp, strlen(grp)))) return false;
+    o->when_lit = f[PF_WHEN].src != PV_NONE;
+    for (int n = 0; lights && *lights; n++) {           /* group names, spaces between */
+        while (*lights == ' ') lights++;
+        const size_t len = strcspn(lights, " ");
+        if (!len) break;
+        if (n >= SCENE_LIGHTS || !(o->lights[n] = (uint8_t)group_of(sc, lights, len))) return false;
+        lights += len;
     }
     if (it->k == PK_TEXT) {
         const char *s = str_of(b, &f[PF_STR], el);
@@ -194,8 +218,15 @@ int scene_spot_at(const scene_t *sc, float t, float x, float y) {
     for (int n = 0; sc && n < sc->nitems; n++) {
         const scene_item_t *it = &sc->items[n];
         if (it->k != PK_SPOT || t < it->on || (it->off > 0.f && t >= it->off)) continue;
-        const float dx = x - it->x, dy = y - it->y, d = dx * dx + dy * dy;
-        if (d <= it->r * it->r && (best < 0 || d < bd)) { best = n; bd = d; }
+        float dx = x - it->x, dy = y - it->y;
+        if (it->npts == 2) {                            /* along a segment */
+            const float *a = sc->pts[it->pts], *e = sc->pts[it->pts + 1], vx = e[0] - a[0], vy = e[1] - a[1], l2 = vx * vx + vy * vy;
+            float u = l2 > 1e-9f ? ((x - a[0]) * vx + (y - a[1]) * vy) / l2 : 0.f;
+            u = u < 0.f ? 0.f : u > 1.f ? 1.f : u;
+            dx = x - a[0] - u * vx; dy = y - a[1] - u * vy;
+        }
+        const float d = dx * dx + dy * dy;
+        if (d <= it->r * it->r && (best < 0 || it->r < sc->items[best].r || (it->r == sc->items[best].r && d < bd))) { best = n; bd = d; }
     }
     return best;
 }
@@ -368,14 +399,15 @@ static void ring(const ctx_t *c, const scene_item_t *it, bool arc) {
     const bool whole = !arc || span >= 360.f;
     span = whole ? 360.f : fmodf(fmodf(span, 360.f) + 360.f, 360.f);
     const float hw = it->w * 0.5f;
-    shape(c, (fluid_shape_t){ .k = FLUID_SHAPE_RING, .rgb = FLUID_RGB | it->rgb, .x = spx(c, 1.f), .y = spx(c, 1.f),
+    const float cx = it->x, cy = it->y;                 /* its centre (the glass's, unless set) */
+    shape(c, (fluid_shape_t){ .k = FLUID_SHAPE_RING, .rgb = FLUID_RGB | it->rgb, .x = spx(c, cx + 1.f), .y = spx(c, 1.f - cy),
                               .r = spx(c, it->r), .hw = hd_hw(c, hw), .a0 = it->a0, .span = span });
     if (hw <= hair(s)) {
         const int n = 8 + (int)(span * DEG * it->r * 0.5f * (s->W > s->H ? s->W : s->H));
         hair_t h = { .s = s, .rgb = it->rgb };
         for (int q = whole ? -1 : 0; q <= (whole ? n + 1 : n); q++) {
             const float a = (it->a0 + span * q / n) * DEG;
-            hair_to(&h, it->r * cosf(a), it->r * sinf(a));
+            hair_to(&h, cx + it->r * cosf(a), cy + it->r * sinf(a));
             if (q < 0) h.skip = 1;
         }
         hair_end(&h);
@@ -383,19 +415,19 @@ static void ring(const ctx_t *c, const scene_item_t *it, bool arc) {
     }
     const float reach = hw + c->soft, ro = it->r + reach, rin = it->r > reach ? it->r - reach : 0.f;
     int i0, i1, j0, j1;
-    cells(s, -ro, -ro, ro, ro, &i0, &i1, &j0, &j1);
+    cells(s, cx - ro, cy - ro, cx + ro, cy + ro, &i0, &i1, &j0, &j1);
     for (int j = j0; j <= j1; j++) {
-        const float y = -s->ys[j], oo = ro * ro - y * y, ii = rin * rin - y * y;
+        const float y = -s->ys[j] - cy, oo = ro * ro - y * y, ii = rin * rin - y * y;
         if (oo <= 0.f) continue;
         const float xo = sqrtf(oo), xi = ii > 0.f ? sqrtf(ii) : 0.f;
         /* left span -xo..-xi, right span xi..xo (one span -xo..xo when the row misses the hole) */
         for (int side = xi > 0.f ? 0 : 1; side < 2; side++) {
             const float lo = side ? (xi > 0.f ? xi : -xo) : -xo, hi = side ? xo : -xi;
-            int a0 = (int)floorf((lo + 1.f) * 0.5f * s->W - 0.5f), a1 = (int)ceilf((hi + 1.f) * 0.5f * s->W - 0.5f);
+            int a0 = (int)floorf((cx + lo + 1.f) * 0.5f * s->W - 0.5f), a1 = (int)ceilf((cx + hi + 1.f) * 0.5f * s->W - 0.5f);
             if (a0 < i0) a0 = i0;
             if (a1 > i1) a1 = i1;
             for (int i = a0; i <= a1; i++) {
-                const float x = s->xs[i], d = fabsf(sqrtf(x * x + y * y) - it->r);
+                const float x = s->xs[i] - cx, d = fabsf(sqrtf(x * x + y * y) - it->r);
                 if (d >= reach) continue;
                 if (!whole) {
                     float a = fmodf(fluid_atan2(y, x) / DEG - it->a0, 360.f);
@@ -432,6 +464,11 @@ static inline int bit(const pkg_asset_t *a, int x, int y) {
 static inline float fast_asin(float x) {
     const float a = fabsf(x), r = 1.5707963f - sqrtf(1.f - a) * (1.5707288f + a * (-0.2121144f + a * (0.0742610f - 0.0187293f * a)));
     return x < 0.f ? -r : r;
+}
+static inline uint32_t toward_white(uint32_t rgb, float k) {
+    uint32_t o = 0;
+    for (int q = 16; q >= 0; q -= 8) o |= (uint32_t)((rgb >> q & 255) + (255 - (rgb >> q & 255)) * k) << q;
+    return o;
 }
 static inline uint32_t shade(uint32_t rgb, float k) {
     return (uint32_t)((rgb >> 16 & 255) * k) << 16 | (uint32_t)((rgb >> 8 & 255) * k) << 8 | (uint32_t)((rgb & 255) * k);
@@ -658,7 +695,17 @@ static void paint_items(const ctx_t *c, const scene_t *sc, float t, fluid_letter
         scene_item_t g;
         float gp[GROW_PTS][2];
         const float (*pts)[2] = sc->pts + it->pts;
-        if (fs && covered(sc, fs, it) && it->npts <= GROW_PTS) {
+        bool lit = false;
+        for (int q = 0; fs && it->grp && q < SCENE_LIGHTS; q++) lit |= fs->lights[q] == it->grp;
+        if (it->when_lit && !(lit && sc->glow > 0.f)) continue;   /* only while its group is lit */
+        if (lit) {
+            /* a lit group's item: grown about its own centre, brighter (or fading in) */
+            const float k = sc->grow, a = sc->glow;
+            g = *it;
+            g.r *= k; g.size *= k; g.w *= k;
+            g.rgb = it->when_lit ? shade(it->rgb, a) : toward_white(it->rgb, a * SCENE_LIT_WHITE);
+            it = &g;
+        } else if (fs && !fs->lights[0] && covered(sc, fs, it) && it->npts <= GROW_PTS) {
             /* the tapped spot's drawing, grown about the spot's centre */
             const float k = sc->grow;
             g = *it;
@@ -700,7 +747,8 @@ void scene_grow_apply(const scene_grow_t *g, scene_t *sc) {
     if (!sc) return;
     const float u = fminf(1.f, g->t / SCENE_GROW_IN_S), in = 1.f - (1.f - u) * (1.f - u) * (1.f - u);
     sc->focus = g->spot;
-    sc->grow = g->spot < 0 ? 1.f : 1.f + (SCENE_GROW - 1.f) * in * fluid_smooth(0.f, 1.f, g->out);
+    sc->glow = g->spot < 0 ? 0.f : in * fluid_smooth(0.f, 1.f, g->out);
+    sc->grow = 1.f + (SCENE_GROW - 1.f) * sc->glow;
 }
 
 void scene_hd_tick(scene_hd_t *h, unsigned gen, bool plain, float dt) {
