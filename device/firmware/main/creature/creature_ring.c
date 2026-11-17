@@ -53,7 +53,8 @@
 #define CR_DONE_S   1.0f     /* released: gone after this                                                      */
 #define CR_TW       36       /* each dot row's twinkle every this many frames (rows scattered, a few a frame)   */
 
-typedef struct { uint16_t k; uint8_t bit, bin; uint16_t r; uint8_t h1, h2, h3, row; } cr_dot_t;   /* r: radius x 65535 */
+typedef struct { uint16_t k; uint8_t bit, bin; uint16_t r; uint8_t h1, h2, h3, row, cw; } cr_dot_t;   /* r: radius x 65535; cw: the
+                                                                                                    * forming crest's weight there x 255 */
 enum { OFF, IN, ON, OUT };
 
 struct cr {
@@ -67,7 +68,6 @@ struct cr {
     int16_t lq;                                   /* ... and its ink (as the target's, Q14), given not written      */
     bool lisring;                                 /* the ring showing (or letting go) is the listen's               */
     int mode; float T, red, sum, c2, calm;          /* calm: s the water is settled after the ring's wave          */                /* c2: the water's own wave speed, while the ring's is quicker   */
-    uint8_t *rb, *rbin;                           /* per cell, this frame: the brightest ring dot (x 32), its bin   */
     uint8_t *cbits, *cb;                          /* per cell: the crest's dots and brightness, kept a frame (each
                                                    * half of the cell rows takes the crest every other frame)       */
     uint8_t ilace;
@@ -77,6 +77,11 @@ struct cr {
     uint8_t *rl, *rll, *rlb;                      /* per cell: the ring's dots, brightness (x 32), bin              */
     uint32_t *rowph, *rowver; uint32_t ver;       /* per row: the twinkle turn and the version it was made at       */
     float lmin, lmax;                             /* when the first and the last part landed                        */
+    bool all;                                     /* ... every part has: the ring lands row by row from lmax        */
+    uint16_t *cells; int ncell, nbcell;           /* the cells with ring dots in them: the band's [0, nbcell), all  */
+    uint32_t lutc; uint16_t lut[64][3];           /* the cells' colours by brightness (eighths), for colour lutc    */
+    uint8_t hin[128], hout[128];                  /* the crest's lift by the water's height (h, Q10, from 0) x 255  */
+    uint16_t *cdot; int *crow;                    /* the band's dots the forming crest can colour, by cell row     */
     bool crest;                                   /* crest dots are held (cleared once the crest is done)            */
     float dens[16][64];                           /* the band's density by how thin (16) and radius (64): no powf a dot */
 };
@@ -97,12 +102,12 @@ cr_t *cr_create(const fluid_sim_t *s) {
         r->ka[b] = (int16_t)(nearest(s->ys, H, CR_ARC_R * sy) * W + nearest(s->xs, W, CR_ARC_R * sx));
         r->kp[b] = (int16_t)(nearest(s->ys, H, CR_PROBE_R * sy) * W + nearest(s->xs, W, CR_PROBE_R * sx));
     }
-    r->cr2 = CR_CALLOC(sizeof(float) * (size_t)W * H); r->rb = CR_CALLOC((size_t)W * H); r->rbin = CR_CALLOC((size_t)W * H);
+    r->cr2 = CR_CALLOC(sizeof(float) * (size_t)W * H);
     r->cbits = CR_CALLOC((size_t)W * H); r->cb = CR_CALLOC((size_t)W * H);
     r->rl = CR_CALLOC((size_t)W * H); r->rll = CR_CALLOC((size_t)W * H); r->rlb = CR_CALLOC((size_t)W * H);
     r->rowph = CR_CALLOC(sizeof(uint32_t) * (size_t)H); r->rowver = CR_CALLOC(sizeof(uint32_t) * (size_t)H);
     r->brow = CR_CALLOC(sizeof(int) * (size_t)(H + 1)); r->irow = CR_CALLOC(sizeof(int) * (size_t)(H + 1));
-    if (!r->cr2 || !r->rb || !r->rbin || !r->cbits || !r->cb || !r->rl || !r->rll || !r->rlb || !r->rowph || !r->rowver || !r->brow || !r->irow) { cr_destroy(r); return NULL; }
+    if (!r->cr2 || !r->cbits || !r->cb || !r->rl || !r->rll || !r->rlb || !r->rowph || !r->rowver || !r->brow || !r->irow) { cr_destroy(r); return NULL; }
     for (int t = 0; t < 16; t++) for (int q = 0; q < 64; q++) {
         const float thin = t / 15.f, rad = CR_DUST_IN - 0.16f + (CR_LINE_IN - CR_DUST_IN + 0.16f) * q / 63.f;
         const float din = CR_DUST_IN - 0.16f * (1.f - thin), u = (rad - din) / (CR_LINE_IN - din);
@@ -148,14 +153,40 @@ cr_t *cr_create(const fluid_sim_t *s) {
     }
     for (int j = 0, n = 0; j <= H; j++) { while (n < r->n && r->dot[n].row < j) n++; r->brow[j] = n; }   /* dots are in row order */
     for (int j = 0, n = r->n; j <= H; j++) { while (n < r->n + r->nin && r->dot[n].row < j) n++; r->irow[j] = n; }
-    r->ver = 1;
+    {   /* the cells the ring's dots are in: the band's first, then the inner ones (the release's crest) */
+        uint8_t *seen = CR_CALLOC((size_t)W * H);
+        if (!seen || !(r->cells = CR_CALLOC(sizeof(uint16_t) * (size_t)W * H))) { CR_FREE(seen); cr_destroy(r); return NULL; }
+        for (int pass = 0; pass < 2; pass++) {
+            for (int n = pass ? r->n : 0; n < (pass ? r->n + r->nin : r->n); n++)
+                if (!seen[r->dot[n].k]) { seen[r->dot[n].k] = 1; r->cells[r->ncell++] = r->dot[n].k; }
+            if (!pass) r->nbcell = r->ncell;
+        }
+        CR_FREE(seen);
+    }
+    for (int n = 0; n < r->n + r->nin; n++) r->dot[n].cw = (uint8_t)(255.f * smooth(CR_CREST_R, CR_PROBE_R, r->dot[n].r * (1.f / 65535.f)) + 0.5f);
+    for (int q = 0; q < 128; q++) {
+        r->hin[q] = (uint8_t)(255.f * smooth(0.015f, 0.07f, q * (1.f / FQ_H)) + 0.5f);
+        r->hout[q] = (uint8_t)(255.f * smooth(0.02f, 0.08f, q * (1.f / FQ_H)) + 0.5f);
+    }
+    {   /* the forming crest only colours the band's dots from CR_CREST_R out: those, row by row */
+        int nc = 0;
+        for (int n = 0; n < r->n; n++) nc += r->dot[n].cw > 0;
+        if (!(r->cdot = CR_CALLOC(sizeof(uint16_t) * (size_t)(nc + 1))) || !(r->crow = CR_CALLOC(sizeof(int) * (size_t)(H + 1)))) { cr_destroy(r); return NULL; }
+        nc = 0;
+        for (int j = 0; j < H; j++) {
+            r->crow[j] = nc;
+            for (int n = r->brow[j]; n < r->brow[j + 1]; n++) if (r->dot[n].cw > 0) r->cdot[nc++] = (uint16_t)n;
+        }
+        r->crow[H] = nc;
+    }
+    r->ver = 1; r->lutc = 0xFFFFFFFFu;
     return r;
 }
 
 void cr_destroy(cr_t *r) {
     if (!r) return;
-    CR_FREE(r->dot); CR_FREE(r->cr2); CR_FREE(r->rb); CR_FREE(r->rbin); CR_FREE(r->cbits); CR_FREE(r->cb);
-    CR_FREE(r->rl); CR_FREE(r->rll); CR_FREE(r->rlb); CR_FREE(r->rowph); CR_FREE(r->rowver); CR_FREE(r->brow); CR_FREE(r->irow); CR_FREE(r);
+    CR_FREE(r->dot); CR_FREE(r->cr2); CR_FREE(r->cbits); CR_FREE(r->cb);
+    CR_FREE(r->rl); CR_FREE(r->rll); CR_FREE(r->rlb); CR_FREE(r->rowph); CR_FREE(r->rowver); CR_FREE(r->brow); CR_FREE(r->irow); CR_FREE(r->cells); CR_FREE(r->cdot); CR_FREE(r->crow); CR_FREE(r);
 }
 
 /* a ring-shaped push of the water at radius R (the release): the same bump as a touch, laid round a circle */
@@ -198,7 +229,7 @@ bool cr_paint(cr_t *r, fluid_sim_t *s, float dt, uint32_t frame, const uint8_t *
     if (want && (r->mode == OFF || r->mode == OUT)) {          /* a touch at the centre */
         if (r->mode == OFF) r->c2 = s->p.c2;
         r->lisring = r->lq > 0;
-        r->mode = IN; r->T = 0.f; r->ver++; r->lmin = 1e9f; r->lmax = -1.f; for (int b = 0; b < CR_NB; b++) r->land[b] = -1.f;
+        r->mode = IN; r->T = 0.f; r->ver++; r->lmin = 1e9f; r->lmax = -1.f; r->all = false; for (int b = 0; b < CR_NB; b++) r->land[b] = -1.f;
         s->p.c2 = CR_C2;
         fluid_sim_impulse(s, 0.f, 0.f, CR_TAP_S, CR_TAP_R);
     } else if (!want && (r->mode == IN || r->mode == ON)) {    /* the ring lets go into the water */
@@ -224,6 +255,7 @@ bool cr_paint(cr_t *r, fluid_sim_t *s, float dt, uint32_t frame, const uint8_t *
             }
             if (r->land[b] < 0.f || r->T < r->land[b] + CR_LAND_S) all = false;
         }
+        if (!r->all) { r->all = true; for (int b = 0; b < CR_NB; b++) if (r->land[b] < 0.f) r->all = false; }   /* every part has landed */
         if (all && r->T > r->lmax + CR_LAND_S + CR_SOFT_S * 1.5f + 2.f * dt) { r->mode = ON; s->p.c2 = r->c2; r->ver++; r->calm = CR_CALM_S; }
     } else if (r->mode == OUT) {
         r->red = expf(-r->T / 0.25f);
@@ -238,16 +270,20 @@ bool cr_paint(cr_t *r, fluid_sim_t *s, float dt, uint32_t frame, const uint8_t *
         /* the band's thinning: this row's two steps, staggered over CR_SOFT_S after the last part landed */
         const float st0 = r->lmax + CR_LAND_S + rowd * (CR_SOFT_S / CR_LAND_S) * 0.5f, st1 = st0 + CR_SOFT_S * 0.5f;
         const float thin = r->mode == OUT ? 1.f : r->lmax < 0.f || r->T < st0 ? 0.5f : r->T < st1 ? 0.75f : 1.f;
-        const bool moving = r->mode == OUT ? fabsf(r->T - rowd) <= 2.f * dt
-                          : r->mode == IN && r->lmax >= 0.f && ((r->T >= r->lmin + rowd - 2.f * dt && r->T <= r->lmax + rowd + 2.f * dt)
-                                                               || fabsf(r->T - st0) <= 2.f * dt || fabsf(r->T - st1) <= 2.f * dt);
+        /* a row changes at three moments only (it lands once every part has, then thins twice; letting go, it leaves):
+         * made again the frame each is crossed */
+        const float tp = r->T - dt;
+        #define CROSS(t) (tp < (t) && r->T >= (t))
+        const bool moving = r->mode == OUT ? CROSS(rowd)
+                          : r->mode == IN && r->all && (CROSS(r->lmax + rowd) || CROSS(st0) || CROSS(st1));
+        #undef CROSS
         if (!moving && r->rowph[j] == ph && r->rowver[j] == r->ver) continue;
         r->rowph[j] = ph; r->rowver[j] = r->ver;
         memset(r->rl + j * W, 0, (size_t)W); memset(r->rll + j * W, 0, (size_t)W);
         for (int n = r->brow[j]; n < r->brow[j + 1]; n++) {
             const cr_dot_t *d = &r->dot[n];
             const float rad = d->r * (1.f / 65535.f);
-            const bool shown = r->mode == OUT ? r->T < rowd : r->mode != OFF && r->land[d->bin] >= 0.f && r->T >= r->land[d->bin] + rowd;
+            const bool shown = r->mode == OUT ? r->T < rowd : r->mode != OFF && r->all && r->T >= r->lmax + rowd;
             if (!shown || rad < CR_DUST_IN - 0.16f || rad > CR_RIM || r->lr[d->bin] <= 0.f) continue;   /* past the round rim: none */
             const uint32_t hh = hash2((uint32_t)n, ph);
             const float tw = (float)(hh & 255) * (2.f / 255.f) - 1.f, tw2 = (float)(hh >> 8 & 255) * (2.f / 255.f) - 1.f;
@@ -275,41 +311,50 @@ bool cr_paint(cr_t *r, fluid_sim_t *s, float dt, uint32_t frame, const uint8_t *
         for (int j = r->ilace; j < H; j += 2) {   /* the rows the drawer sends the water's changes in this frame */
             memset(r->cbits + j * W, 0, (size_t)W); memset(r->cb + j * W, 0, (size_t)W);
             for (int pass = 0; pass < (r->mode == OUT ? 2 : 1); pass++) {
-                const int n0 = pass ? r->irow[j] : r->brow[j], n1 = pass ? r->irow[j + 1] : r->brow[j + 1];
-                for (int n = n0; n < n1; n++) {
-                    const cr_dot_t *d = &r->dot[n];
+                /* forming: the dots the crest can colour (a list); letting go: the band's and the inner ones */
+                const bool list = r->mode == IN;
+                const int n0 = list ? r->crow[j] : pass ? r->irow[j] : r->brow[j], n1 = list ? r->crow[j + 1] : pass ? r->irow[j + 1] : r->brow[j + 1];
+                const uint16_t rmin = (uint16_t)((r->mode == OUT ? CR_CREST_IN : CR_CREST_R) * 65535.f);
+                const int16_t hmin = (int16_t)((r->mode == OUT ? 0.02f : 0.015f) * FQ_H);
+                const int red = (int)(r->red * 255.f), fade = r->mode == OUT ? (int)((0.3f + 0.7f * r->red) * 256.f) : 256;
+                for (int m = n0; m < n1; m++) {
+                    const cr_dot_t *d = &r->dot[list ? r->cdot[m] : m];
+                    if (d->r < rmin) continue;                                     /* not where the crest carries colour */
                     const int16_t hq = s->h[d->k];
-                    if (hq < (int16_t)(0.015f * FQ_H) || creature[d->k]) continue;   /* the water not up there: no crest */
-                    const float hv = hq * (1.f / FQ_H), rad = d->r * (1.f / 65535.f);
-                    const float lift = r->mode == OUT ? (rad >= CR_CREST_IN ? r->red * smooth(0.02f, 0.08f, hv) : 0.f)
-                                                      : smooth(CR_CREST_R, CR_PROBE_R, rad) * smooth(0.015f, 0.07f, hv);
-                    if (lift * 0.5f * 255.f <= d->h3) continue;
-                    const int q = (int)((0.45f + 0.8f * lift) * (r->mode == OUT ? 0.3f + 0.7f * r->red : 1.f) * 32.f + 0.5f);
+                    if (hq <= hmin || creature[d->k]) continue;                     /* the water not up there: no crest */
+                    const int hi = hq > 127 ? 127 : hq;                            /* its lift, x 255, from the tables */
+                    const int lift = r->mode == OUT ? red * r->hout[hi] / 255 : d->cw * r->hin[hi] / 255;
+                    if ((lift >> 1) <= d->h3) continue;
+                    const int q = ((14 * 255 + 26 * lift) / 255) * fade >> 8;      /* (0.45 + 0.8 lift) x 32, faded */
                     r->cbits[d->k] |= d->bit; if (q > r->cb[d->k]) r->cb[d->k] = (uint8_t)(q > 255 ? 255 : q);
                 }
             }
         }
     } else if (r->crest) { memset(r->cbits, 0, (size_t)s->N); memset(r->cb, 0, (size_t)s->N); r->crest = false; }
-    for (int k = 0; k < s->N; k++) {              /* the ring's dots and the crest's over the cells */
-        uint8_t bits = r->rl[k], lvl = r->rll[k];
-        r->rbin[k] = r->rlb[k];
-        if (r->cbits[k] && !creature[k]) { bits |= r->cbits[k]; if (r->cb[k] > lvl) { lvl = r->cb[k]; r->rbin[k] = 0; } }
-        r->rb[k] = bits ? (lvl ? lvl : 1) : 0;
-        dots[k] |= bits;
-    }
     uint32_t c0 = 0;                              /* the ring's colour where a bin has none of its own (the crest) */
     for (int b = 0; b < CR_NB && !c0; b++) c0 = r->col[b];
-    for (int k = 0; k < s->N; k++) {              /* a cell with ring dots: their colour, the brightest's, in eighths */
-        if (!r->rb[k]) continue;
-        const int bn = r->rbin[k];
-        /* the listen ring's colour while it shows or lets go (its ink is not in the target); the progress ring's and a
-         * question's arcs' their own (their ink is) */
-        const bool lis = r->listen >= 0 && r->lisring;
+    /* the listen ring's colour while it shows or lets go (its ink is not in the target); the progress ring's and a
+     * question's arcs' their own (their ink is) */
+    const bool lis = r->listen >= 0 && r->lisring;
+    const int nc = r->mode == OUT || r->crest ? r->ncell : r->nbcell;
+    for (int q = 0; q < nc; q++) {                /* each ring cell: its dots and the crest's, the brightest's colour */
+        const int k = r->cells[q];
+        uint8_t bits = r->rl[k], lvl = r->rll[k], bn = r->rlb[k];
+        if (r->cbits[k] && !creature[k]) { bits |= r->cbits[k]; if (r->cb[k] > lvl) { lvl = r->cb[k]; bn = 0; } }
+        if (!bits) continue;
+        dots[k] |= bits;
         const uint32_t c = lis ? (uint32_t)r->listen : r->col[bn] ? r->col[bn] : c0;
-        const float bq = (float)((r->rb[k] + 2) / 4) * (1.f / 8.f), kk = fminf(bq, 1.f), hot = fmaxf(0.f, bq - 1.f) * 0.55f;
-        const float R = (c & 255) * kk, G = (c >> 8 & 255) * kk, B = (c >> 16 & 255) * kk;
-        col[k].r = (uint16_t)((R + (255.f - R) * hot) * 257.f); col[k].g = (uint16_t)((G + (255.f - G) * hot) * 257.f);
-        col[k].b = (uint16_t)((B + (255.f - B) * hot) * 257.f); col[k].a = 0;
+        if (c != r->lutc) {                       /* the brightness table for this colour (eighths, a hot white past 1) */
+            r->lutc = c;
+            for (int e = 0; e < 64; e++) {
+                const float bq = e * (1.f / 8.f), kk = fminf(bq, 1.f), hot = fmaxf(0.f, bq - 1.f) * 0.55f;
+                const float R = (c & 255) * kk, G = (c >> 8 & 255) * kk, B = (c >> 16 & 255) * kk;
+                r->lut[e][0] = (uint16_t)((R + (255.f - R) * hot) * 257.f); r->lut[e][1] = (uint16_t)((G + (255.f - G) * hot) * 257.f);
+                r->lut[e][2] = (uint16_t)((B + (255.f - B) * hot) * 257.f);
+            }
+        }
+        int e = ((lvl ? lvl : 1) + 2) / 4; if (e > 63) e = 63;
+        col[k].r = r->lut[e][0]; col[k].g = r->lut[e][1]; col[k].b = r->lut[e][2]; col[k].a = 0;
     }
     return true;
 }
