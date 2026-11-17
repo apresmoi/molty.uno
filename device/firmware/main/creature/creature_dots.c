@@ -2,8 +2,12 @@
  * SPDX-License-Identifier: MIT
  *
  * creature_dots.c: a rigged creature on the braille lattice (creature_dots.h). Port of device/creatures/js/clip-dots.js;
- * the steps are numbered as there. The heavy per-dot work (the field, the depths, the regions) runs only over the
- * creature's box; the world (floor, dust, vignette) is a hash per dot.
+ * the steps are numbered as there.
+ *
+ * The cost is memory, not arithmetic: the dots live in PSRAM behind a 32 KB cache, so every pass over the creature's
+ * box pays for the bytes it touches. A dot is therefore one 8-byte record (field, depth, owner, priority, colour index,
+ * flags), cleared with one memset a row, and the passes are few. The row-parallel ones run as two bands of rows, the
+ * second on the other core (ESP), joined before the next; features run alone between them.
  */
 #include "creature_dots.h"
 
@@ -13,10 +17,15 @@
 
 #ifdef ESP_PLATFORM
 #include "esp_cpu.h"
-static inline uint32_t cycles(void) { return (uint32_t)esp_cpu_get_cycle_count(); }
 #include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
+static inline uint32_t cycles(void) { return (uint32_t)esp_cpu_get_cycle_count(); }
 #define CD_CALLOC(n) heap_caps_calloc(1, (n), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
 #define CD_FREE(p)   heap_caps_free(p)
+#define CD_BAND_CORE 0           /* the second band's core: the fluid task (the first band) runs on core 1          */
+#define CD_BAND_PRIO 3           /* above the drawer (2) on that core: the band is waited on, the drawer has slack  */
 #else
 static inline uint32_t cycles(void) { return 0; }
 #define CD_CALLOC(n) calloc(1, (n))
@@ -24,45 +33,61 @@ static inline uint32_t cycles(void) { return 0; }
 #endif
 
 #define THRESH 0.6f
-#define CD_STAGES 8   /* box, body, parts, lines, features, halo, world, cells (creature_dots.h cd_prof) */
-#define ZNONE  (-1e9f)
+#define FS     2048.f                       /* the field in fixed point                                              */
+#define TQ     ((uint16_t)(THRESH * FS + 0.5f))
+#define ZS     4096.f                       /* a depth in fixed point, biased by 32768; 0 is none                    */
+#define Z01    41                           /* 0.01, 0.02, 0.05 in depth units                                       */
+#define Z02    82
+#define Z05    205
+#define NLINE  128                          /* the outline's shades by depth (palette 0..NLINE-1)                    */
+enum { FR = 1, FE = 2, FH = 4, FA = 8, FB = 16 };   /* flags: region, eye, halo, and the halo's two scratch rows */
+enum { C_IRIS = NLINE, C_PUPIL, C_SHINE, C_NOSE, C_EAR, C_BELLY, C_WHISKER, C_BOWL, C_N, C_LINE = 255 };
+enum { ST_PROJ, ST_SOLID, ST_LINES, ST_FEAT, ST_HALO, ST_CELLS, ST_WAIT };
+#define FON    0x1000000u                   /* the floor layer: a dot's colour, this bit when it is on               */
 
 typedef struct { float d[3], r[3], u[3], c[3]; } cam_t;
 typedef struct { float u, v, d, i00, i01, i11, eu, ev, h, A[3][3]; } ell_t;
 typedef struct { float a[3], b[3], r0, r1, facing, invL; } capz_t;
+typedef struct { uint16_t f, z; uint8_t g, pri, col, fl; } dot_t;   /* g: owner group + 1 (0: none); pri 0: off */
 
 struct cd {
     int W, H, DW, DH, N;
     float dsx, dsy, floor_row;
-    float *field, *z;
-    int8_t *own;
-    uint8_t *region, *eye, *on, *pri, *halo;
-    uint32_t *rgb;
+    dot_t *dot;
     uint8_t *cdots; uint32_t *ccol;
-    int bx0, by0, bx1, by1;
+    int bx0, by0, bx1, by1;                 /* this frame's box (dots) [x0, x1) x [y0, y1)                          */
+    int ux0, uy0, ux1, uy1;                 /* ... and its union with last frame's: what is cleared                 */
+    int split, csplit;                      /* the bands' split: a dot row for the box passes, a cell row for cells */
     cam_t cam;
-    uint32_t col_body, col_iris, col_shine, col_nose, col_ear, col_belly, col_whisker, col_bowl;
-    int thigh[2];
+    uint32_t pal[C_N]; float body[3];
+    int thigh[2]; float hip[2];
+    int zlo[2], zhi[2], zlo_all; float lscale;
     /* the world, what does not change (made once): each dot's vignette (0: outside, never drawn), each floor row's depth
-     * and nearness, and the dust's motes (a few percent of the dots: index, seed, how much they lean to the horizon) */
+     * and nearness, and the dust's motes (a few percent of the dots: index, how much they lean to the horizon) */
     float *vig, *row_zz, *row_near; float horizon;
-    int nmote; uint32_t *mote_i; float *mote_seed, *mote_band;
-    int ry0, ry1, rx0, rx1;             /* the last feature region's box (dots, inclusive)              */
+    int nmote; uint32_t *mote_i; float *mote_band, *mote_s97; int32_t *mote_ph; uint32_t *mote_rgb; int *mote_row;
+    int ry0, ry1, rx0, rx1;                 /* the last feature region's box (dots, inclusive)                       */
     ell_t pe[CC_SHAPES_MAX]; capz_t pc[CC_SHAPES_MAX]; uint8_t pok[CC_SHAPES_MAX];   /* this frame's projections */
     float sf[CC_SHAPES_MAX], kk[CC_SHAPES_MAX];  /* a blob's surface fraction of its field radius, and its square */
-    /* the floor layer, kept while the camera does not move along it: a colour (0: none) and on, per dot */
-    uint32_t *frgb; uint8_t *fon; float fscroll; bool fvalid;
-    uint8_t *fcell; uint32_t *fccol;    /* the floor layer as cells (bits, colour), made with it               */
-    uint8_t *touch;                     /* per cell: the creature or its halo reaches it this frame           */
-    float *mote_s97;                    /* a mote's seed x 97: its twinkle's phase                          */
-    int32_t *mote_ph; uint32_t *mote_rgb;   /* each mote's current twinkle (its phase, its colour; 0: not shown) */
+    int *wrow;                              /* per dot row: the body's work there (the split's balance)               */
+    /* the floor layer, kept while the camera does not move along it: a colour (0: none) | FON, per dot */
+    uint32_t *frgb; float fscroll; bool fvalid, floor_new;
+    uint8_t *fcell; uint32_t *fccol;        /* the floor layer as cells (bits, colour), made with it                 */
+    uint8_t *touch, *cat; int8_t *bp; uint16_t *bl;   /* per cell: reached by the creature or its halo; its dots; scratch */
+    const float *world; const cc_shape_t *sh; int ns; uint32_t frame;
     uint32_t prof[CD_STAGES];
+#ifdef ESP_PLATFORM
+    TaskHandle_t task; SemaphoreHandle_t go, done; void (*job)(cd_t *, int); volatile bool quit;
+#endif
 };
 
 static inline float minf(float a, float b) { return a < b ? a : b; }
 static inline float maxf(float a, float b) { return a > b ? a : b; }
 static inline float clampf(float x, float a, float b) { return x < a ? a : x > b ? b : x; }
 static float sstep(float a, float b, float x) { const float t = clampf((x - a) / (b - a), 0.f, 1.f); return t * t * (3.f - 2.f * t); }
+static inline int ffloor(float x) { const int i = (int)x; return i - (x < (float)i); }   /* floorf is a call on the S3 */
+static inline uint16_t zq(float z) { const int v = (int)(z * ZS + 32768.5f); return (uint16_t)(v < 1 ? 1 : v > 65535 ? 65535 : v); }
+static inline float zf(uint16_t q) { return (float)((int)q - 32768) * (1.f / ZS); }
 
 static uint32_t hash3u(int i, int j, int k) {
     uint32_t h = (uint32_t)i * 374761393u + (uint32_t)j * 668265263u + (uint32_t)k * 2147483647u;
@@ -71,11 +96,7 @@ static uint32_t hash3u(int i, int j, int k) {
 }
 static inline float hash3f(int i, int j, int k) { return (float)hash3u(i, j, k) * 2.3283064e-10f; }   /* 0..1, no double */
 static inline uint32_t prob_u(float p) { return p >= 1.f ? 0xffffffffu : p <= 0.f ? 0u : (uint32_t)(p * 4294967296.f); }
-static double hash3(int i, int j, int k) {
-    uint32_t h = (uint32_t)i * 374761393u + (uint32_t)j * 668265263u + (uint32_t)k * 2147483647u;
-    h = (h ^ (h >> 13)) * 1274126177u;
-    return (double)(h ^ (h >> 16)) / 4294967296.0;
-}
+static inline unsigned lum(uint32_t v) { return (v >> 16 & 255) + (v >> 8 & 255) + (v & 255); }
 
 static uint32_t pack(const float *c) {
     /* no lroundf (a library call on the S3): values are 0..1, so + 0.5 and truncate rounds */
@@ -84,65 +105,116 @@ static uint32_t pack(const float *c) {
 }
 static void unpack(uint32_t v, float *c) { c[0] = (v >> 16 & 255) / 255.f; c[1] = (v >> 8 & 255) / 255.f; c[2] = (v & 255) / 255.f; }
 
+/* ── the bands: part 0 here, part 1 on the other core, joined ─────────────────── */
+
+typedef void (*band_fn)(cd_t *d, int part);
+static void band(int y0, int y1, int split, int part, int *a, int *b) {
+    split = split < y0 ? y0 : split > y1 ? y1 : split;
+    *a = part ? split : y0; *b = part ? y1 : split;
+}
+#ifdef ESP_PLATFORM
+static void band_task(void *arg) {
+    cd_t *d = arg;
+    for (;;) {
+        xSemaphoreTake(d->go, portMAX_DELAY);
+        if (d->quit) break;
+        d->job(d, 1);
+        xSemaphoreGive(d->done);
+    }
+    xSemaphoreGive(d->done);
+    vTaskDelete(NULL);
+}
+static void split_run(cd_t *d, band_fn fn) {
+    if (!d->task) { fn(d, 0); fn(d, 1); return; }
+    d->job = fn;
+    xSemaphoreGive(d->go);
+    fn(d, 0);
+    const uint32_t t = cycles();
+    xSemaphoreTake(d->done, portMAX_DELAY);
+    d->prof[ST_WAIT] += cycles() - t;
+}
+#else
+static void split_run(cd_t *d, band_fn fn) { fn(d, 0); fn(d, 1); }   /* the same work, one band after the other */
+#endif
+
 cd_t *cd_create(const cc_t *c, int W, int H) {
     cd_t *d = CD_CALLOC(sizeof(cd_t));
     if (!d) return NULL;
     d->W = W; d->H = H; d->DW = 2 * W; d->DH = 4 * H; d->N = d->DW * d->DH;
     d->dsx = CD_VIEW_SIZE / d->DW; d->dsy = CD_VIEW_SIZE / d->DH; d->floor_row = CD_FLOOR_AT * d->DH;
-    const size_t N = (size_t)d->N;
-    d->field = CD_CALLOC(sizeof(float) * N); d->z = CD_CALLOC(sizeof(float) * N); d->own = CD_CALLOC(N);
-    d->region = CD_CALLOC(N); d->eye = CD_CALLOC(N); d->on = CD_CALLOC(N); d->pri = CD_CALLOC(N); d->halo = CD_CALLOC(N);
-    d->rgb = CD_CALLOC(sizeof(uint32_t) * N);
-    d->cdots = CD_CALLOC((size_t)W * H); d->ccol = CD_CALLOC(sizeof(uint32_t) * (size_t)W * H);
-    if (!d->field || !d->z || !d->own || !d->region || !d->eye || !d->on || !d->pri || !d->halo || !d->rgb || !d->cdots || !d->ccol) { cd_destroy(d); return NULL; }
-    for (size_t i = 0; i < N; i++) { d->z[i] = ZNONE; d->own[i] = -1; }
-    d->col_body = cc_color(c, "body"); d->col_iris = cc_color(c, "iris"); d->col_shine = cc_color(c, "shine");
-    d->col_nose = cc_color(c, "nose"); d->col_ear = cc_color(c, "ear"); d->col_belly = cc_color(c, "belly");
-    d->col_whisker = cc_color(c, "whisker"); d->col_bowl = cc_color(c, "bowl");
+    const size_t N = (size_t)d->N, NC = (size_t)W * H;
+    const int DW = d->DW, DH = d->DH;
+    d->dot = CD_CALLOC(sizeof(dot_t) * N);
+    d->cdots = CD_CALLOC(NC); d->ccol = CD_CALLOC(sizeof(uint32_t) * NC);
+    d->frgb = CD_CALLOC(sizeof(uint32_t) * N);
+    d->fcell = CD_CALLOC(NC); d->fccol = CD_CALLOC(sizeof(uint32_t) * NC);
+    d->touch = CD_CALLOC(NC); d->cat = CD_CALLOC(NC); d->bp = CD_CALLOC(NC); d->bl = CD_CALLOC(sizeof(uint16_t) * NC);
+    d->vig = CD_CALLOC(sizeof(float) * N); d->row_zz = CD_CALLOC(sizeof(float) * (size_t)DH); d->row_near = CD_CALLOC(sizeof(float) * (size_t)DH);
+    d->wrow = CD_CALLOC(sizeof(int) * (size_t)DH); d->mote_row = CD_CALLOC(sizeof(int) * ((size_t)H + 1));
+    if (!d->dot || !d->cdots || !d->ccol || !d->frgb || !d->fcell || !d->fccol || !d->touch || !d->cat || !d->bp || !d->bl ||
+        !d->vig || !d->row_zz || !d->row_near || !d->wrow || !d->mote_row) { cd_destroy(d); return NULL; }
+    {   /* the fixed colours; the outline's shades are made each frame (their depth range) */
+        float iris[3], wh[3];
+        unpack(cc_color(c, "iris"), iris); unpack(cc_color(c, "whisker"), wh); unpack(cc_color(c, "body"), d->body);
+        const float pup[3] = { iris[0] * 0.75f + 0.25f, iris[1] * 0.75f + 0.25f, iris[2] * 0.75f + 0.25f };
+        for (int q = 0; q < 3; q++) wh[q] = minf(1.f, wh[q] * 1.3f);
+        d->pal[C_IRIS] = cc_color(c, "iris"); d->pal[C_PUPIL] = pack(pup); d->pal[C_SHINE] = cc_color(c, "shine");
+        d->pal[C_NOSE] = cc_color(c, "nose"); d->pal[C_EAR] = cc_color(c, "ear"); d->pal[C_BELLY] = cc_color(c, "belly");
+        d->pal[C_WHISKER] = pack(wh); d->pal[C_BOWL] = cc_color(c, "bowl");
+    }
     d->thigh[0] = cc_node_find(c, "thigh.L"); d->thigh[1] = cc_node_find(c, "thigh.R");
     {
         const cc_shape_t *sh; const int ns = cc_shapes(c, &sh);
         for (int q = 0; q < ns; q++) { d->sf[q] = sh[q].kind == CC_BLOB ? sqrtf(1.f - cbrtf(THRESH / sh[q].st)) : 1.f; d->kk[q] = d->sf[q] * d->sf[q]; }
     }
-    d->frgb = CD_CALLOC(sizeof(uint32_t) * N); d->fon = CD_CALLOC(N);
-    d->fcell = CD_CALLOC((size_t)W * H); d->fccol = CD_CALLOC(sizeof(uint32_t) * (size_t)W * H); d->touch = CD_CALLOC((size_t)W * H);
-    if (!d->frgb || !d->fon || !d->fcell || !d->fccol || !d->touch) { cd_destroy(d); return NULL; }
-    d->bx0 = d->by0 = 0; d->bx1 = d->by1 = 0;
     /* the world's constants */
-    const int DW = d->DW, DH = d->DH;
-    d->vig = CD_CALLOC(sizeof(float) * N); d->row_zz = CD_CALLOC(sizeof(float) * (size_t)DH); d->row_near = CD_CALLOC(sizeof(float) * (size_t)DH);
-    if (!d->vig || !d->row_zz || !d->row_near) { cd_destroy(d); return NULL; }
     d->horizon = d->floor_row - 16.f * DH / 128.f;
     const float R = DW / 2.f;
     int nm = 0;
-    for (int Y = 0; Y < DH; Y++) {
-        if (Y > d->horizon) { d->row_zz[Y] = (d->floor_row - d->horizon) / (Y + 0.5f - d->horizon); d->row_near[Y] = sstep(d->horizon, d->horizon + 14.f * DH / 128.f, (float)Y); }
-        for (int X = 0; X < DW; X++) {
-            const float ex = (X + 0.5f - DW / 2.f) / R, ey = (Y + 0.5f - DH / 2.f) / (DH / 2.f), rr = sqrtf(ex * ex + ey * ey);
-            const float v = (1.f - sstep(0.62f, 0.97f, rr)) * (1.f - sstep(0.87f, 1.f, (float)Y / DH));
-            d->vig[Y * DW + X] = v > 0.01f ? v : 0.f;
+    for (int pass = 0; pass < 2; pass++) {      /* count the motes, then keep them (in dot order: by row) */
+        if (pass) {
+            d->mote_i = CD_CALLOC(sizeof(uint32_t) * (size_t)(nm + 1)); d->mote_band = CD_CALLOC(sizeof(float) * (size_t)(nm + 1));
+            d->mote_s97 = CD_CALLOC(sizeof(float) * (size_t)(nm + 1));
+            d->mote_ph = CD_CALLOC(sizeof(int32_t) * (size_t)(nm + 1)); d->mote_rgb = CD_CALLOC(sizeof(uint32_t) * (size_t)(nm + 1));
+            if (!d->mote_i || !d->mote_band || !d->mote_s97 || !d->mote_ph || !d->mote_rgb) { cd_destroy(d); return NULL; }
+        }
+        for (int Y = 0; Y < DH; Y++) {
+            if (!pass && Y > d->horizon) { d->row_zz[Y] = (d->floor_row - d->horizon) / (Y + 0.5f - d->horizon); d->row_near[Y] = sstep(d->horizon, d->horizon + 14.f * DH / 128.f, (float)Y); }
+            if (pass && !(Y & 3)) d->mote_row[Y >> 2] = d->nmote;
             const float band = expf(-fabsf(Y - d->horizon) / 14.f);
-            if (v > 0.01f && hash3(X, Y, 11) < 0.02 + 0.09 * band) nm++;
+            for (int X = 0; X < DW; X++) {
+                const int i = Y * DW + X;
+                if (!pass) {
+                    const float ex = (X + 0.5f - DW / 2.f) / R, ey = (Y + 0.5f - DH / 2.f) / (DH / 2.f), rr = sqrtf(ex * ex + ey * ey);
+                    const float v = (1.f - sstep(0.62f, 0.97f, rr)) * (1.f - sstep(0.87f, 1.f, (float)Y / DH));
+                    d->vig[i] = v > 0.01f ? v : 0.f;
+                }
+                const double seed = (double)hash3u(X, Y, 11) / 4294967296.0;
+                if (d->vig[i] <= 0.f || seed >= 0.02 + 0.09 * band) continue;
+                if (!pass) { nm++; continue; }
+                d->mote_i[d->nmote] = (uint32_t)i; d->mote_s97[d->nmote] = (float)(seed * 97.0); d->mote_band[d->nmote] = band; d->mote_ph[d->nmote++] = -1;
+            }
         }
     }
-    d->mote_i = CD_CALLOC(sizeof(uint32_t) * (size_t)(nm + 1)); d->mote_seed = CD_CALLOC(sizeof(float) * (size_t)(nm + 1)); d->mote_band = CD_CALLOC(sizeof(float) * (size_t)(nm + 1));
-    d->mote_s97 = CD_CALLOC(sizeof(float) * (size_t)(nm + 1));
-    d->mote_ph = CD_CALLOC(sizeof(int32_t) * (size_t)(nm + 1)); d->mote_rgb = CD_CALLOC(sizeof(uint32_t) * (size_t)(nm + 1));
-    if (!d->mote_i || !d->mote_seed || !d->mote_band || !d->mote_s97 || !d->mote_ph || !d->mote_rgb) { cd_destroy(d); return NULL; }
-    for (int m = 0; m < nm; m++) d->mote_ph[m] = -1;
-    for (int Y = 0; Y < DH; Y++) for (int X = 0; X < DW; X++) {
-        const int i = Y * DW + X; const float band = expf(-fabsf(Y - d->horizon) / 14.f); const double seed = hash3(X, Y, 11);
-        if (d->vig[i] > 0.f && seed < 0.02 + 0.09 * band) { d->mote_i[d->nmote] = (uint32_t)i; d->mote_seed[d->nmote] = (float)seed; d->mote_s97[d->nmote] = (float)(seed * 97.0); d->mote_band[d->nmote++] = band; }
-    }
+    d->mote_row[H] = d->nmote;
+#ifdef ESP_PLATFORM
+    d->go = xSemaphoreCreateBinary(); d->done = xSemaphoreCreateBinary();
+    if (d->go && d->done && xTaskCreatePinnedToCore(band_task, "cd_band", 4096, d, CD_BAND_PRIO, &d->task, CD_BAND_CORE) != pdPASS) d->task = NULL;
+#endif
     return d;
 }
 
 void cd_destroy(cd_t *d) {
     if (!d) return;
-    CD_FREE(d->field); CD_FREE(d->z); CD_FREE(d->own); CD_FREE(d->region); CD_FREE(d->eye); CD_FREE(d->on); CD_FREE(d->pri);
-    CD_FREE(d->halo); CD_FREE(d->rgb); CD_FREE(d->cdots); CD_FREE(d->ccol);
-    CD_FREE(d->vig); CD_FREE(d->row_zz); CD_FREE(d->row_near); CD_FREE(d->mote_i); CD_FREE(d->mote_seed); CD_FREE(d->mote_band);
-    CD_FREE(d->mote_s97); CD_FREE(d->mote_ph); CD_FREE(d->mote_rgb); CD_FREE(d->frgb); CD_FREE(d->fon); CD_FREE(d->fcell); CD_FREE(d->fccol); CD_FREE(d->touch);
+#ifdef ESP_PLATFORM
+    if (d->task) { d->quit = true; xSemaphoreGive(d->go); xSemaphoreTake(d->done, portMAX_DELAY); }
+    if (d->go) vSemaphoreDelete(d->go);
+    if (d->done) vSemaphoreDelete(d->done);
+#endif
+    CD_FREE(d->dot); CD_FREE(d->cdots); CD_FREE(d->ccol); CD_FREE(d->frgb); CD_FREE(d->fcell); CD_FREE(d->fccol);
+    CD_FREE(d->touch); CD_FREE(d->cat); CD_FREE(d->bp); CD_FREE(d->bl);
+    CD_FREE(d->vig); CD_FREE(d->row_zz); CD_FREE(d->row_near); CD_FREE(d->wrow); CD_FREE(d->mote_row);
+    CD_FREE(d->mote_i); CD_FREE(d->mote_band); CD_FREE(d->mote_s97); CD_FREE(d->mote_ph); CD_FREE(d->mote_rgb);
     CD_FREE(d);
 }
 
@@ -183,7 +255,8 @@ static bool ellipse(const cd_t *d, const float *world, const cc_shape_t *s, ell_
     const float det = s00 * s11 - s01 * s01;
     if (det < 1e-12f) return false;
     e->u = cp[0]; e->v = cp[1]; e->d = cp[2];
-    e->i00 = s11 / det; e->i01 = -s01 / det; e->i11 = s00 / det;
+    const float idet = 1.f / det;
+    e->i00 = s11 * idet; e->i01 = -s01 * idet; e->i11 = s00 * idet;
     e->eu = sqrtf(s00); e->ev = sqrtf(s11); e->h = sqrtf(hh);
     return true;
 }
@@ -241,39 +314,151 @@ static box_t cap_box(const cd_t *d, const capz_t *c) {
     const float m = maxf(c->r0, c->r1);
     return sbox(d, (c->a[0] + c->b[0]) / 2, (c->a[1] + c->b[1]) / 2, fabsf(c->b[0] - c->a[0]) / 2 + m, fabsf(c->b[1] - c->a[1]) / 2 + m);
 }
+static box_t blob_box(const cd_t *d, int q) { const ell_t *e = &d->pe[q]; return sbox(d, e->u, e->v, e->eu / d->sf[q], e->ev / d->sf[q]); }
 
-static void set_dot(cd_t *d, int i, uint32_t col, int p) {
-    if (p < d->pri[i]) return;
-    d->on[i] = 1; d->pri[i] = (uint8_t)p; d->rgb[i] = col;
+static inline void set_dot(dot_t *p, int col, int pri) {
+    if (pri < p->pri) return;
+    p->pri = (uint8_t)pri; p->col = (uint8_t)col;
 }
-
-/* ── the frame ─────────────────────────────────────────────────────────── */
-
 static void grow(box_t *acc, box_t b) {
     if (b.x0 < acc->x0) acc->x0 = b.x0;
     if (b.y0 < acc->y0) acc->y0 = b.y0;
     if (b.x1 > acc->x1) acc->x1 = b.x1;
     if (b.y1 > acc->y1) acc->y1 = b.y1;
 }
+/* a cell row (times 4) where the running sum of w over [y0, y1) reaches half */
+static int balance(const int *w, int y0, int y1) {
+    long tot = 0, run = 0;
+    for (int Y = y0; Y < y1; Y++) tot += w[Y];
+    for (int Y = y0; Y < y1; Y++) if ((run += w[Y]) * 2 >= tot) return (Y + 2) & ~3;
+    return (y0 + y1) / 2 & ~3;
+}
 
-static void region_edge(cd_t *d, uint32_t col, int p, bool keep_lines) {
+/* ── 1, 2: the body's field and the solid parts (band) ─────────────────────── */
+
+static void ph_solid(cd_t *d, int part) {
+    const int DW = d->DW;
+    int a, b; band(d->uy0, d->uy1, d->split, part, &a, &b);
+    if (d->ux1 > d->ux0) for (int Y = a; Y < b; Y++) memset(d->dot + Y * DW + d->ux0, 0, sizeof(dot_t) * (size_t)(d->ux1 - d->ux0));
+    if (a < d->by0) a = d->by0;
+    if (b > d->by1) b = d->by1;
+    if (a >= b) return;
+    const cc_shape_t *sh = d->sh;
+    /* 1. the merged body: a metaball field, the nearest element surface per dot */
+    for (int q = 0; q < d->ns; q++) {
+        const cc_shape_t *s = &sh[q];
+        if (s->kind != CC_BLOB || !d->pok[q]) continue;
+        const ell_t e = d->pe[q];
+        const box_t bx = blob_box(d, q);
+        const int ya = bx.y0 > a ? bx.y0 : a, yb = bx.y1 < b - 1 ? bx.y1 : b - 1;
+        const float kk = d->kk[q], stq = s->st * FS;
+        const uint16_t topq = zq(e.d + e.h); const uint8_t g = (uint8_t)(s->group + 1);
+        const float sx = d->dsx, a2 = e.i00 * sx * sx;          /* q along a row is a quadratic in X: stepped by adds */
+        const float ikk = 1.f / kk, h2 = 0.5f / e.i00, isx = 1.f / sx;   /* the row's run: one divide a blob, not a row */
+        for (int Y = ya; Y <= yb; Y++) {
+            const float dv = dot_v(d, Y) - e.v, cdv = e.i11 * dv * dv, lin = 2.f * e.i01 * dv;
+            dot_t *row = d->dot + Y * DW;
+            /* only the run of the row inside the field: i00 du^2 + lin du + cdv < 1/kk, solved for du */
+            const float disc = lin * lin - 4.f * e.i00 * (cdv - ikk);
+            if (disc <= 0.f) continue;
+            const float sq = sqrtf(disc), u0 = (-lin - sq) * h2 + e.u, u1 = (-lin + sq) * h2 + e.u;
+            int xa = ffloor(u0 * isx + DW / 2 - 0.5f), xb = -ffloor(-(u1 * isx + DW / 2 - 0.5f));
+            if (xa < bx.x0) xa = bx.x0;
+            if (xb > bx.x1) xb = bx.x1;
+            float du = dot_u(d, xa) - e.u;
+            float qv = (e.i00 * du + lin) * du + cdv, dq = (2.f * e.i00 * du + lin) * sx + a2;
+            for (int X = xa; X <= xb; X++, qv += dq, dq += 2.f * a2) {
+                const float qf = qv * kk;
+                if (qf >= 1.f) continue;
+                dot_t *p = row + X;
+                if (p->f < TQ) { const float o = 1.f - qf; p->f = (uint16_t)(p->f + (int)(stq * o * o * o)); }   /* past the threshold it is in */
+                if (topq <= p->z) continue;                 /* cannot be nearer than what is there */
+                const uint16_t z = zq(e.d + (qv < 1.f ? e.h * sqrtf(1.f - qv) : 0.f));
+                if (z > p->z) { p->z = z; p->g = g; }
+            }
+        }
+    }
+    for (int Y = a; Y < b; Y++) {
+        dot_t *p = d->dot + Y * DW;
+        for (int X = d->bx0; X < d->bx1; X++) if (p[X].f < TQ) { p[X].z = 0; p[X].g = 0; }
+    }
+    /* 2. the solid parts, nearest wins */
+    for (int q = 0; q < d->ns; q++) {
+        const cc_shape_t *s = &sh[q];
+        if (s->kind == CC_BLOB || s->kind == CC_PATCH || s->group >= CG_NSTRUCT || !d->pok[q]) continue;
+        const uint8_t g = (uint8_t)(s->group + 1);
+        if (s->kind == CC_ELL) {
+            const ell_t e = d->pe[q];
+            const box_t bx = sbox(d, e.u, e.v, e.eu, e.ev);
+            for (int Y = bx.y0 > a ? bx.y0 : a; Y <= bx.y1 && Y < b; Y++) for (int X = bx.x0; X <= bx.x1; X++) {
+                const float qv = eq(&e, dot_u(d, X), dot_v(d, Y));
+                if (qv >= 1.f) continue;
+                dot_t *p = d->dot + Y * DW + X; const uint16_t z = zq(e.d + e.h * sqrtf(1.f - qv));
+                if (z > p->z) { p->z = z; p->g = g; }
+            }
+        } else {
+            const capz_t cp = d->pc[q];
+            const box_t bx = cap_box(d, &cp);
+            for (int Y = bx.y0 > a ? bx.y0 : a; Y <= bx.y1 && Y < b; Y++) for (int X = bx.x0; X <= bx.x1; X++) {
+                float zz;
+                if (!in_capsule(&cp, dot_u(d, X), dot_v(d, Y), &zz)) continue;
+                dot_t *p = d->dot + Y * DW + X; const uint16_t z = zq(zz);
+                if (z > p->z) { p->z = z; p->g = g; }
+            }
+        }
+    }
+}
+
+/* ── 3. lines (band): an outline, and an inner line where a nearer part crosses ─ */
+
+static void ph_lines(cd_t *d, int part) {
+    const int DW = d->DW, DH = d->DH;
+    int a, b; band(d->by0, d->by1, d->split, part, &a, &b);
+    int zlo = 65536, zhi = -1;
+    for (int Y = a; Y < b; Y++) for (int X = d->bx0; X < d->bx1; X++) {
+        dot_t *p = d->dot + Y * DW + X;
+        const int g = p->g;
+        if (!g) continue;
+        if (g <= CG_BOWL) { if (p->z < zlo) zlo = p->z; if (p->z > zhi) zhi = p->z; }
+        bool line = false;
+        static const int DX[4] = { 1, -1, 0, 0 }, DY[4] = { 0, 0, 1, -1 };
+        for (int n = 0; n < 4; n++) {
+            const int x = X + DX[n], y = Y + DY[n];
+            if (x < 0 || y < 0 || x >= DW || y >= DH) { line = true; break; }
+            const dot_t *o = d->dot + y * DW + x; const int h = o->g;
+            if (!h) { line = true; break; }
+            if (h == g || g == CG_TORSO + 1) continue;
+            if (p->z <= o->z + Z01) continue;
+            if ((g == CG_HINDL + 1 || g == CG_HINDR + 1) && h == CG_TORSO + 1 && dot_v(d, Y) > d->hip[g == CG_HINDL + 1 ? 0 : 1]) continue;
+            line = true; break;
+        }
+        if (line) set_dot(p, g == CG_BOWL + 1 || g == CG_YARN + 1 ? C_BOWL : C_LINE, 2);
+    }
+    d->zlo[part] = zlo; d->zhi[part] = zhi;
+}
+
+/* ── 4. features (one core): regions on the body's surface ─────────────────── */
+
+static void region_edge(cd_t *d, int col, int p, bool keep_lines) {
+    const int DW = d->DW;
     for (int Y = d->ry0; Y <= d->ry1; Y++) for (int X = d->rx0; X <= d->rx1; X++) {
-        const int i = Y * d->DW + X;
-        if (!d->region[i]) continue;
-        bool edge = X == 0 || Y == 0 || X == d->DW - 1 || Y == d->DH - 1 || !d->region[i - 1] || !d->region[i + 1] || !d->region[i - d->DW] || !d->region[i + d->DW];
-        if (edge && !(keep_lines && d->pri[i] >= 2)) set_dot(d, i, col, p);
+        const int i = Y * DW + X;
+        dot_t *q = d->dot + i;
+        if (!(q->fl & FR)) continue;
+        const bool edge = X == 0 || Y == 0 || X == DW - 1 || Y == d->DH - 1 || !(q[-1].fl & FR) || !(q[1].fl & FR) || !(q[-DW].fl & FR) || !(q[DW].fl & FR);
+        if (edge && !(keep_lines && q->pri >= 2)) set_dot(q, col, p);
     }
 }
 /* clear the last region (its box), and make b the next one's */
 static void clear_region(cd_t *d) {
-    for (int Y = d->ry0; Y <= d->ry1 && d->rx1 >= d->rx0; Y++) memset(d->region + Y * d->DW + d->rx0, 0, (size_t)(d->rx1 - d->rx0 + 1));
+    for (int Y = d->ry0; Y <= d->ry1; Y++) for (int X = d->rx0; X <= d->rx1; X++) d->dot[Y * d->DW + X].fl &= (uint8_t)~FR;
     d->rx0 = d->ry0 = 0; d->rx1 = d->ry1 = -1;
 }
 static void region_box(cd_t *d, int x0, int y0, int x1, int y1) { d->rx0 = x0; d->ry0 = y0; d->rx1 = x1; d->ry1 = y1; }
-static void disc_region(cd_t *d, const float *world, const cc_shape_t *s, bool facing) {
+static void disc_region(cd_t *d, const cc_shape_t *s, bool facing) {
     clear_region(d);
     ell_t e;
-    if (!ellipse(d, world, s, &e)) return;
+    if (!ellipse(d, d->world, s, &e)) return;
     if (facing) {
         float l = sqrtf(dotv(e.A[2], e.A[2])); if (l <= 0.f) l = 1.f;
         if (dotv(e.A[2], d->cam.d) / l < 0.15f) return;
@@ -281,11 +466,10 @@ static void disc_region(cd_t *d, const float *world, const cc_shape_t *s, bool f
     const box_t b = sbox(d, e.u, e.v, e.eu, e.ev);
     region_box(d, b.x0, b.y0, b.x1, b.y1);
     for (int Y = b.y0; Y <= b.y1; Y++) for (int X = b.x0; X <= b.x1; X++) {
-        const int i = Y * d->DW + X; const float q = eq(&e, dot_u(d, X), dot_v(d, Y));
-        if (q < 1.f && e.d + e.h * sqrtf(1.f - q) >= d->z[i] - 0.02f) d->region[i] = 1;
+        dot_t *p = d->dot + Y * d->DW + X; const float q = eq(&e, dot_u(d, X), dot_v(d, Y));
+        if (q < 1.f && zq(e.d + e.h * sqrtf(1.f - q)) + Z02 >= p->z) p->fl |= FR;
     }
 }
-
 static void inv3(float A[3][3], float *o, bool *ok) {
     const float m[9] = { A[0][0], A[1][0], A[2][0], A[0][1], A[1][1], A[2][1], A[0][2], A[1][2], A[2][2] };
     const float dt = m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6]) + m[2] * (m[3] * m[7] - m[4] * m[6]);
@@ -296,11 +480,223 @@ static void inv3(float A[3][3], float *o, bool *ok) {
     o[6] = (m[3] * m[7] - m[4] * m[6]) / dt; o[7] = (m[1] * m[6] - m[0] * m[7]) / dt; o[8] = (m[0] * m[4] - m[1] * m[3]) / dt;
 }
 
+static void features(cd_t *d) {
+    const int DW = d->DW, ns = d->ns;
+    const cc_shape_t *sh = d->sh; const float *world = d->world; const cam_t *k = &d->cam;
+    for (int q = 0; q < ns; q++) {
+        const cc_shape_t *s = &sh[q];
+        if (s->group != CG_EYE || s->eye != CC_IRIS) continue;
+        disc_region(d, s, true);
+        const int ex0 = d->rx0, ey0 = d->ry0, ex1 = d->rx1, ey1 = d->ry1;
+        for (int Y = ey0; Y <= ey1; Y++) for (int X = ex0; X <= ex1; X++) { dot_t *p = d->dot + Y * DW + X; if (p->fl & FR) p->fl |= FE; }
+        region_edge(d, C_IRIS, 4, false);
+        for (int r = 0; r < ns; r++) {
+            const cc_shape_t *t = &sh[r];
+            if (t->group != CG_EYE || t->node != s->node || t->eye == CC_IRIS) continue;
+            disc_region(d, t, true);
+            const int col = t->eye == CC_SHINE ? C_SHINE : C_PUPIL, pri = t->eye == CC_SHINE ? 6 : 5;
+            for (int Y = d->ry0; Y <= d->ry1; Y++) for (int X = d->rx0; X <= d->rx1; X++) {
+                dot_t *p = d->dot + Y * DW + X;
+                if ((p->fl & (FR | FE)) == (FR | FE)) set_dot(p, col, pri);
+            }
+        }
+        for (int Y = ey0; Y <= ey1; Y++) for (int X = ex0; X <= ex1; X++) d->dot[Y * DW + X].fl &= (uint8_t)~FE;
+    }
+    for (int q = 0; q < ns; q++) {
+        const cc_shape_t *s = &sh[q];
+        if (s->group == CG_NOSE || s->group == CG_TONGUE) {
+            disc_region(d, s, false);
+            for (int Y = d->ry0; Y <= d->ry1; Y++) for (int X = d->rx0; X <= d->rx1; X++) { dot_t *p = d->dot + Y * DW + X; if (p->fl & FR) set_dot(p, C_NOSE, 5); }
+        } else if (s->group == CG_MAW) { disc_region(d, s, false); region_edge(d, C_NOSE, 4, false); }
+        else if (s->group == CG_MILK) { disc_region(d, s, false); region_edge(d, C_BELLY, 3, false); }
+        else if (s->group == CG_EARIN) {
+            clear_region(d);
+            capz_t cp; cone_capsule(d, world, s, &cp);
+            if (cp.facing < 0.1f) continue;
+            const box_t b = cap_box(d, &cp);
+            region_box(d, b.x0, b.y0, b.x1, b.y1);
+            for (int Y = b.y0; Y <= b.y1; Y++) for (int X = b.x0; X <= b.x1; X++) {
+                dot_t *p = d->dot + Y * DW + X; float zz;
+                if (in_capsule(&cp, dot_u(d, X), dot_v(d, Y), &zz) && zq(zz) + Z02 >= p->z) p->fl |= FR;
+            }
+            region_edge(d, C_EAR, 4, false);
+        } else if (s->kind == CC_PATCH) {          /* the white chest: a region of the body's own surface */
+            clear_region(d);
+            float C[3], A[3][3], inv[9]; bool ok;
+            xf(world, s->node, s->p, C);
+            for (int kq = 0; kq < 3; kq++) { const float v[3] = { s->rq[kq] * s->r[kq], s->rq[3 + kq] * s->r[kq], s->rq[6 + kq] * s->r[kq] }; xv(world, s->node, v, A[kq]); }
+            inv3(A, inv, &ok);
+            if (!ok) continue;
+            /* the region is where the torso's surface point is inside the patch's ellipsoid: only the patch's
+             * screen box (its ellipsoid's projected bounds) can hold one */
+            if (!d->pok[q]) continue;
+            box_t b = sbox(d, d->pe[q].u, d->pe[q].v, d->pe[q].eu, d->pe[q].ev);
+            if (b.x0 < d->bx0) b.x0 = d->bx0;
+            if (b.y0 < d->by0) b.y0 = d->by0;
+            if (b.x1 > d->bx1 - 1) b.x1 = d->bx1 - 1;
+            if (b.y1 > d->by1 - 1) b.y1 = d->by1 - 1;
+            region_box(d, b.x0, b.y0, b.x1, b.y1);
+            for (int Y = b.y0; Y <= b.y1; Y++) for (int X = b.x0; X <= b.x1; X++) {
+                dot_t *p = d->dot + Y * DW + X;
+                if (p->g != CG_TORSO + 1) continue;
+                const float uu = dot_u(d, X), vv = dot_v(d, Y), zz = zf(p->z);
+                const float P[3] = { k->c[0] + uu * k->r[0] + vv * k->u[0] + zz * k->d[0], uu * k->r[1] + vv * k->u[1] + zz * k->d[1], k->c[2] + uu * k->r[2] + vv * k->u[2] + zz * k->d[2] };
+                const float qv[3] = { P[0] - C[0], P[1] - C[1], P[2] - C[2] };
+                float l2 = 0; for (int r = 0; r < 3; r++) { const float l = inv[r * 3] * qv[0] + inv[r * 3 + 1] * qv[1] + inv[r * 3 + 2] * qv[2]; l2 += l * l; }
+                if (l2 < 1.f) p->fl |= FR;
+            }
+            region_edge(d, C_BELLY, 3, true);
+        }
+    }
+    for (int q = 0; q < ns; q++) {                 /* whiskers last: fine lines where nothing else is drawn */
+        const cc_shape_t *s = &sh[q];
+        if (s->group != CG_WHISKER) continue;
+        capz_t cp; capsule(d, world, s, 0, 0, &cp); cp.r0 = cp.r1 = 0.55f * d->dsx;
+        const box_t b = cap_box(d, &cp);
+        for (int Y = b.y0; Y <= b.y1; Y++) for (int X = b.x0; X <= b.x1; X++) {
+            dot_t *p = d->dot + Y * DW + X; float zz;
+            if (p->pri) continue;
+            if (in_capsule(&cp, dot_u(d, X), dot_v(d, Y), &zz) && (!p->g || zq(zz) + Z05 >= p->z)) set_dot(p, C_WHISKER, 1);
+        }
+    }
+}
+
+/* ── 5. the halo (band): the world kept off the creature by a disc of radius sqrt 5 (two dots across within a row of
+ *    it, one dot across two rows away), as two separable passes; the box's 4-dot margin keeps them inside it ───── */
+
+static void ph_halo_rows(cd_t *d, int part) {
+    int a, b; band(d->by0, d->by1, d->split, part, &a, &b);
+    const int x0 = d->bx0, x1 = d->bx1;
+    for (int Y = a; Y < b; Y++) {
+        dot_t *p = d->dot + Y * d->DW;
+        if (x1 - x0 < 5) continue;
+        int m0 = (p[x0].g | p[x0].pri) != 0, m1 = (p[x0 + 1].g | p[x0 + 1].pri) != 0, m2 = (p[x0 + 2].g | p[x0 + 2].pri) != 0, m3 = (p[x0 + 3].g | p[x0 + 3].pri) != 0;
+        for (int X = x0 + 2; X < x1 - 2; X++) {
+            const int m4 = (p[X + 2].g | p[X + 2].pri) != 0, c = m1 | m2 | m3;
+            if (c | m0 | m4) p[X].fl |= (uint8_t)((c ? FB : 0) | FA);
+            m0 = m1; m1 = m2; m2 = m3; m3 = m4;
+        }
+    }
+}
+
+/* ── 6, 7: the halo's columns, the world, the cells (band of cell rows) ──────── */
+
+static inline uint32_t dot_rgb(const cd_t *d, const dot_t *p) {
+    if (p->col != C_LINE) return d->pal[p->col];
+    int l = NLINE - 1;
+    if (d->lscale > 0.f) { l = (int)((float)((int)p->z - d->zlo_all) * d->lscale + 0.5f); l = l < 0 ? 0 : l >= NLINE ? NLINE - 1 : l; }
+    return d->pal[l];
+}
+
+static const uint8_t BIT[8] = { 0, 1, 2, 6, 3, 4, 5, 7 };   /* dot (col << 2 | row) -> braille bit */
+
+static void ph_cells(cd_t *d, int part) {
+    const int DW = d->DW, DH = d->DH, W = d->W;
+    int ja, jb; band(0, d->H, d->csplit, part, &ja, &jb);
+    const int ya = ja * 4, yb = jb * 4;
+    {   /* the halo's columns over this band's rows of the box */
+        const int y0 = d->by0 + 2 > ya ? d->by0 + 2 : ya, y1 = d->by1 - 2 < yb ? d->by1 - 2 : yb;
+        for (int Y = y0; Y < y1; Y++) {
+            dot_t *p = d->dot + Y * DW; uint8_t *tc = d->touch + (Y >> 2) * W;
+            for (int X = d->bx0 + 2; X < d->bx1 - 2; X++) {
+                const uint8_t v = (uint8_t)((p[X - DW].fl | p[X].fl | p[X + DW].fl) & FA) | ((p[X - 2 * DW].fl | p[X + 2 * DW].fl) & FB);
+                if (v) { p[X].fl |= FH; tc[X >> 1] = 1; }
+            }
+        }
+    }
+    static const float FLR[3] = { 0x8f / 255.f, 0x87 / 255.f, 0xc4 / 255.f }, TEX[3] = { 0x6c / 255.f, 0x65 / 255.f, 0x98 / 255.f },
+                       DIM[3] = { 0x5c / 255.f, 0x56 / 255.f, 0x88 / 255.f }, MOTE[3] = { 0xb4 / 255.f, 0xac / 255.f, 0xec / 255.f };
+    const float horizon = d->horizon;
+    if (d->floor_new) {     /* the floor layer and its own cells: redrawn only when the camera moved along it (walking) */
+        const float scroll = d->fscroll;
+        memset(d->fcell + ja * W, 0, (size_t)((jb - ja) * W)); memset(d->fccol + ja * W, 0, sizeof(uint32_t) * (size_t)((jb - ja) * W));
+        for (int Y = (int)horizon + 1 > ya ? (int)horizon + 1 : ya; Y < yb; Y++) {
+            if (Y <= horizon) continue;
+            const float zz = d->row_zz[Y], near = d->row_near[Y], lim = 13.f - 0.55f * zz;
+            const uint32_t thr = prob_u(0.16f + 0.1f * (1.f - near));
+            const int kk = (int)floorf(14.f / zz + 0.5f);
+            const float x0 = (0.5f - DW / 2.f) * zz + scroll;
+            uint32_t *fr = d->frgb + Y * DW; const float *vg = d->vig + Y * DW;
+            uint8_t *fc = d->fcell + (Y >> 2) * W; uint32_t *fcc = d->fccol + (Y >> 2) * W; const int r = Y & 3;
+            for (int X = 0; X < DW; X++) {
+                fr[X] = 0;
+                const float vig = vg[X];
+                if (vig <= 0.f) continue;
+                const float uw = x0 + X * zz;
+                const float lane = fabsf(uw - 26.f * (float)ffloor(uw * (1.f / 26.f)) - 13.f);
+                float al = 0.f; const float *col = NULL;
+                if (lane > lim) { al = 0.85f * near; col = FLR; }
+                else if (hash3u(ffloor(uw * 0.625f), kk, 7) < thr) { al = (0.5f + 0.25f * near) * (0.6f + 0.4f * hash3f(ffloor(uw), Y, 3)); col = TEX; }
+                if (al <= 0.f) continue;
+                const float kv = minf(1.f, al * vig), cc3[3] = { col[0] * kv, col[1] * kv, col[2] * kv };
+                const uint32_t v = pack(cc3);
+                fr[X] = v | (kv > 0.12f ? FON : 0);
+                if (kv <= 0.12f) continue;
+                fc[X >> 1] |= (uint8_t)(1 << BIT[(X & 1) << 2 | r]);
+                if (lum(v) > lum(fcc[X >> 1])) fcc[X >> 1] = v;
+            }
+        }
+    }
+    /* cells: the floor's cells as they are, then the cells under the creature's box made again (its dots own their cell;
+     * the floor there only outside the halo); a cell's colour is its highest priority dot's, the brightest among those */
+    memcpy(d->cdots + ja * W, d->fcell + ja * W, (size_t)((jb - ja) * W)); memcpy(d->ccol + ja * W, d->fccol + ja * W, sizeof(uint32_t) * (size_t)((jb - ja) * W));
+    const int cx0 = d->bx0 >> 1, cx1 = (d->bx1 + 1) >> 1 < W ? (d->bx1 + 1) >> 1 : W;
+    const int cy0 = d->by0 >> 2 > ja ? d->by0 >> 2 : ja, cy1 = (d->by1 + 3) >> 2 < jb ? (d->by1 + 3) >> 2 : jb;
+    for (int j = cy0; j < cy1; j++) for (int i = cx0; i < cx1; i++) { const int k = j * W + i; if (d->touch[k]) { d->cdots[k] = 0; d->ccol[k] = 0; d->bp[k] = -1; } }
+    for (int Y = cy0 * 4; Y < cy1 * 4 && Y < DH; Y++) {
+        const int j = Y >> 2, r = Y & 3;
+        const dot_t *p = d->dot + Y * DW; const uint32_t *fr = d->frgb + Y * DW; const uint8_t *tc = d->touch + j * W;
+        for (int X = cx0 * 2; X < cx1 * 2; X++) {
+            if (!tc[X >> 1]) { X |= 1; continue; }               /* nothing of the creature in this cell: the floor's cell as made */
+            int pr; uint32_t v;
+            if (p[X].pri) { pr = p[X].pri; v = dot_rgb(d, p + X); }
+            else if (!(p[X].fl & FH) && (fr[X] & FON)) { pr = 0; v = fr[X] & 0xffffff; }
+            else continue;
+            const int k = j * W + (X >> 1), bit = 1 << BIT[(X & 1) << 2 | r];
+            d->cdots[k] |= (uint8_t)bit;
+            if (pr >= 1) d->cat[k] |= (uint8_t)bit;
+            const uint16_t l = (uint16_t)lum(v);
+            if (pr > d->bp[k] || (pr == d->bp[k] && l > d->bl[k])) { d->bp[k] = (int8_t)pr; d->bl[k] = l; d->ccol[k] = v; }
+        }
+    }
+    /* the dust: only its motes (made once), where neither the creature's halo nor the floor is; a cell with the creature
+     * in it keeps only the creature's dots */
+    const float f3 = (float)(d->frame % 3000000u) * (1.f / 3.f);
+    for (int m = d->mote_row[ja]; m < d->mote_row[jb]; m++) {
+        const int i = (int)d->mote_i[m];
+        const dot_t *p = d->dot + i;
+        if ((p->fl & FH) || d->frgb[i] || p->pri) continue;
+        const int X = i % DW, Y = i / DW, k = (Y >> 2) * W + (X >> 1);
+        if (d->cat[k]) continue;
+        const int ph = ffloor(f3 + d->mote_s97[m]);
+        if (ph != d->mote_ph[m]) {                                /* its twinkle moved on: every third frame or so */
+            d->mote_ph[m] = ph;
+            const float tw = hash3f(X, Y, ph);
+            const float al = (0.3f + 0.55f * tw) * (0.55f + 0.45f * d->mote_band[m]), kv = minf(1.f, al * d->vig[i]);
+            const float *col = tw > 0.8f ? MOTE : DIM, cc3[3] = { col[0] * kv, col[1] * kv, col[2] * kv };
+            d->mote_rgb[m] = kv > 0.12f ? pack(cc3) : 0;
+        }
+        const uint32_t v = d->mote_rgb[m], w = d->ccol[k];
+        if (!v) continue;
+        d->cdots[k] |= (uint8_t)(1 << BIT[(X & 1) << 2 | (Y & 3)]);
+        if (!w || lum(v) > lum(w)) d->ccol[k] = v;
+    }
+    for (int j = cy0; j < cy1; j++) for (int i = cx0; i < cx1; i++) {
+        const int k = j * W + i;
+        if (d->cat[k]) d->cdots[k] = d->cat[k];                   /* a cell with the creature in it shows only its dots */
+        if (!d->cdots[k]) d->ccol[k] = 0;
+        d->cat[k] = 0; d->bp[k] = 0; d->bl[k] = 0; d->touch[k] = 0;   /* the scratch back to clear */
+    }
+}
+
+/* ── the frame ─────────────────────────────────────────────────────────── */
+
 void cd_draw(cd_t *d, const cc_t *c, uint32_t frame) {
     uint32_t _pc = cycles();
 #define PROF_STAGE(n) do { const uint32_t _t = cycles(); d->prof[n] += _t - _pc; _pc = _t; } while (0)
-    const float *world = cc_world(c);
-    const cc_shape_t *sh; const int ns = cc_shapes(c, &sh);
+    const float *world = d->world = cc_world(c);
+    const cc_shape_t *sh; const int ns = d->ns = cc_shapes(c, &sh);
+    d->sh = sh; d->frame = frame;
     const int DW = d->DW, DH = d->DH;
     /* the camera */
     float cx, cz, yawd; cc_cam(c, &cx, &cz, &yawd);
@@ -317,24 +713,26 @@ void cd_draw(cd_t *d, const cc_t *c, uint32_t frame) {
         k->c[0] -= fu * d->dsx * k->r[0]; k->c[2] -= fu * d->dsx * k->r[2];
     }
 
-    /* the creature's box this frame (every primitive's bounds, plus room for lines and the halo); clear it and last frame's */
-    box_t bb = { DW, DW, DH, DH }; bb.x0 = DW; bb.x1 = -1; bb.y0 = DH; bb.y1 = -1;
+    /* the creature's box this frame (every primitive's bounds, plus room for lines and the halo), and each row's work */
+    box_t bb = { DW, -1, DH, -1 };
+    memset(d->wrow, 0, sizeof(int) * (size_t)DH);
     for (int q = 0; q < ns; q++) {
         const cc_shape_t *s = &sh[q];
         d->pok[q] = 0;
+        box_t b;
         if (s->kind == CC_BLOB || s->kind == CC_ELL || s->kind == CC_PATCH) {
-            ell_t *e = &d->pe[q]; if (!ellipse(d, world, s, e)) continue;
-            d->pok[q] = 1;
-            const float sf = d->sf[q];
-            grow(&bb, sbox(d, e->u, e->v, e->eu / sf, e->ev / sf));
+            if (!ellipse(d, world, s, &d->pe[q])) continue;
+            b = s->kind == CC_BLOB ? blob_box(d, q) : sbox(d, d->pe[q].u, d->pe[q].v, d->pe[q].eu, d->pe[q].ev);
         } else {
             capz_t *cp = &d->pc[q];
             if (s->kind == CC_CONE) cone_capsule(d, world, s, cp); else capsule(d, world, s, s->r[0], s->r[1], cp);
-            d->pok[q] = 1;
             capz_t w = *cp;
             if (s->group == CG_WHISKER) w.r0 = w.r1 = 0.55f * d->dsx;
-            grow(&bb, cap_box(d, &w));
+            b = cap_box(d, &w);
         }
+        d->pok[q] = 1;
+        grow(&bb, b);
+        if (s->kind != CC_PATCH && s->group < CG_NSTRUCT) for (int Y = b.y0; Y <= b.y1; Y++) d->wrow[Y] += b.x1 - b.x0 + 1;
     }
     const int M = 4;
     box_t nb = { bb.x0 - M, bb.x1 + 1 + M, bb.y0 - M, bb.y1 + 1 + M };
@@ -343,318 +741,48 @@ void cd_draw(cd_t *d, const cc_t *c, uint32_t frame) {
     if (nb.x1 > DW) nb.x1 = DW;
     if (nb.y1 > DH) nb.y1 = DH;
     if (bb.x1 < 0) nb = (box_t){ 0, 0, 0, 0 };
-    {   /* clear the union of last frame's box and this one's */
-        const int x0 = nb.x0 < d->bx0 || d->bx1 <= d->bx0 ? nb.x0 : d->bx0, x1 = nb.x1 > d->bx1 ? nb.x1 : d->bx1;
-        const int y0 = nb.y0 < d->by0 || d->by1 <= d->by0 ? nb.y0 : d->by0, y1 = nb.y1 > d->by1 ? nb.y1 : d->by1;
-        const size_t w = (size_t)(x1 > x0 ? x1 - x0 : 0);
-        for (int Y = y0; Y < y1 && w; Y++) {
-            const int i = Y * DW + x0;
-            memset(d->field + i, 0, sizeof(float) * w); memset(d->own + i, -1, w); memset(d->region + i, 0, w); memset(d->eye + i, 0, w);
-            memset(d->on + i, 0, w); memset(d->pri + i, 0, w); memset(d->halo + i, 0, w); memset(d->rgb + i, 0, sizeof(uint32_t) * w);
-            for (size_t q = 0; q < w; q++) d->z[i + q] = ZNONE;
-        }
+    {   /* what to clear: the union of last frame's box and this one's */
+        const bool last = d->bx1 > d->bx0 && d->by1 > d->by0;
+        d->ux0 = last && d->bx0 < nb.x0 ? d->bx0 : nb.x0; d->ux1 = last && d->bx1 > nb.x1 ? d->bx1 : nb.x1;
+        d->uy0 = last && d->by0 < nb.y0 ? d->by0 : nb.y0; d->uy1 = last && d->by1 > nb.y1 ? d->by1 : nb.y1;
     }
     d->bx0 = nb.x0; d->bx1 = nb.x1; d->by0 = nb.y0; d->by1 = nb.y1;
     d->rx0 = d->ry0 = 0; d->rx1 = d->ry1 = -1;
-
-    PROF_STAGE(0);
-    /* 1. the merged body: a metaball field, the nearest element surface per dot */
-    for (int q = 0; q < ns; q++) {
-        const cc_shape_t *s = &sh[q];
-        if (s->kind != CC_BLOB || !d->pok[q]) continue;
-        const ell_t e = d->pe[q];
-        const float sf = d->sf[q], kk = d->kk[q];
-        const box_t b = sbox(d, e.u, e.v, e.eu / sf, e.ev / sf);
-        const float top = e.d + e.h;
-        const float sx = d->dsx, a2 = e.i00 * sx * sx;          /* q along a row is a quadratic in X: stepped by adds */
-        const float ikk = 1.f / kk, h2 = 0.5f / e.i00, isx = 1.f / sx;   /* the row's run: one divide a blob, not a row */
-        for (int Y = b.y0; Y <= b.y1; Y++) {
-            const float dv = dot_v(d, Y) - e.v, cdv = e.i11 * dv * dv, lin = 2.f * e.i01 * dv;
-            float *fr = d->field + Y * DW, *zr = d->z + Y * DW; int8_t *orow = d->own + Y * DW;
-            /* only the run of the row inside the field: i00 du^2 + lin du + cdv < 1/kk, solved for du */
-            const float disc = lin * lin - 4.f * e.i00 * (cdv - ikk);
-            if (disc <= 0.f) continue;
-            const float sq = sqrtf(disc), u0 = (-lin - sq) * h2 + e.u, u1 = (-lin + sq) * h2 + e.u;
-            int xa = (int)floorf(u0 * isx + DW / 2 - 0.5f), xb = (int)ceilf(u1 * isx + DW / 2 - 0.5f);
-            if (xa < b.x0) xa = b.x0;
-            if (xb > b.x1) xb = b.x1;
-            float du = dot_u(d, xa) - e.u;
-            float qv = (e.i00 * du + lin) * du + cdv, dq = (2.f * e.i00 * du + lin) * sx + a2;
-            for (int X = xa; X <= xb; X++, qv += dq, dq += 2.f * a2) {
-                const float qf = qv * kk;
-                if (qf >= 1.f) continue;
-                const float o = 1.f - qf;
-                fr[X] += s->st * o * o * o;
-                if (top <= zr[X]) continue;                 /* cannot be nearer than what is there */
-                const float zz = e.d + (qv < 1.f ? e.h * sqrtf(1.f - qv) : 0.f);
-                if (zz > zr[X]) { zr[X] = zz; orow[X] = (int8_t)s->group; }
-            }
-        }
-    }
-    for (int Y = d->by0; Y < d->by1; Y++) for (int X = d->bx0; X < d->bx1; X++) {
-        const int i = Y * DW + X;
-        if (d->field[i] < THRESH) { d->z[i] = ZNONE; d->own[i] = -1; }
-    }
-    PROF_STAGE(1);
-    /* 2. the solid parts, nearest wins */
-    for (int q = 0; q < ns; q++) {
-        const cc_shape_t *s = &sh[q];
-        if (s->kind == CC_BLOB || s->kind == CC_PATCH || s->group >= CG_NSTRUCT) continue;
-        if (!d->pok[q]) continue;
-        if (s->kind == CC_ELL) {
-            const ell_t e = d->pe[q];
-            const box_t b = sbox(d, e.u, e.v, e.eu, e.ev);
-            for (int Y = b.y0; Y <= b.y1; Y++) for (int X = b.x0; X <= b.x1; X++) {
-                const int i = Y * DW + X; const float qv = eq(&e, dot_u(d, X), dot_v(d, Y));
-                if (qv < 1.f) { const float zz = e.d + e.h * sqrtf(1.f - qv); if (zz > d->z[i]) { d->z[i] = zz; d->own[i] = (int8_t)s->group; } }
-            }
-        } else {
-            const capz_t cp = d->pc[q];
-            const box_t b = cap_box(d, &cp);
-            for (int Y = b.y0; Y <= b.y1; Y++) for (int X = b.x0; X <= b.x1; X++) {
-                const int i = Y * DW + X; float zz;
-                if (in_capsule(&cp, dot_u(d, X), dot_v(d, Y), &zz) && zz > d->z[i]) { d->z[i] = zz; d->own[i] = (int8_t)s->group; }
-            }
-        }
-    }
-    PROF_STAGE(2);
-    /* 3. lines */
-    float zlo = 1e30f, zhi = -1e30f;
-    for (int Y = d->by0; Y < d->by1; Y++) for (int X = d->bx0; X < d->bx1; X++) {
-        const int i = Y * DW + X;
-        if (d->own[i] >= 0 && d->own[i] < CG_BOWL) { zlo = minf(zlo, d->z[i]); zhi = maxf(zhi, d->z[i]); }
-    }
-    float hip[2] = { 0, 0 };
-    for (int s = 0; s < 2; s++) if (d->thigh[s] >= 0) {
+    d->split = balance(d->wrow, d->by0, d->by1);
+    for (int s = 0; s < 2; s++) {
+        d->hip[s] = 0.f;
+        if (d->thigh[s] < 0) continue;
         const float o[3] = { world[d->thigh[s] * 12 + 3], world[d->thigh[s] * 12 + 7], world[d->thigh[s] * 12 + 11] }; float p[3];
-        proj(d, o, p); hip[s] = p[1];
+        proj(d, o, p); d->hip[s] = p[1];
     }
-    float body[3]; unpack(d->col_body, body);
-    const float izr = zhi > zlo ? 1.f / (zhi - zlo) : 0.f;
-    for (int Y = d->by0; Y < d->by1; Y++) for (int X = d->bx0; X < d->bx1; X++) {
-        const int i = Y * DW + X, g = d->own[i];
-        if (g < 0) continue;
-        bool line = false;
-        static const int DX[4] = { 1, -1, 0, 0 }, DY[4] = { 0, 0, 1, -1 };
-        for (int n = 0; n < 4 && !line; n++) {
-            const int x = X + DX[n], y = Y + DY[n];
-            if (x < 0 || y < 0 || x >= DW || y >= DH) { line = true; break; }
-            const int j = y * DW + x, h = d->own[j];
-            if (h < 0) { line = true; break; }
-            if (h == g || g == CG_TORSO) continue;
-            if (d->z[i] <= d->z[j] + 0.01f) continue;
-            if ((g == CG_HINDL || g == CG_HINDR) && h == CG_TORSO && dot_v(d, Y) > hip[g == CG_HINDL ? 0 : 1]) continue;
-            line = true;
-        }
-        if (!line) continue;
-        if (g == CG_BOWL || g == CG_YARN) { set_dot(d, i, d->col_bowl, 2); continue; }
-        const float t = zhi > zlo ? clampf((d->z[i] - zlo) * izr, 0.f, 1.f) : 1.f;
-        float col[3];
-        for (int q = 0; q < 3; q++) col[q] = minf(1.f, body[q] * (0.5f + 0.5f * t) + (1.f - body[q]) * 0.45f * t * t);
-        set_dot(d, i, pack(col), 2);
-    }
-    PROF_STAGE(3);
-    /* 4. features */
-    float iris[3]; unpack(d->col_iris, iris);
-    const float pup[3] = { iris[0] * 0.75f + 0.25f, iris[1] * 0.75f + 0.25f, iris[2] * 0.75f + 0.25f };
-    const uint32_t col_pupil = pack(pup);
-    for (int q = 0; q < ns; q++) {
-        const cc_shape_t *s = &sh[q];
-        if (s->group != CG_EYE || s->eye != CC_IRIS) continue;
-        disc_region(d, world, s, true);
-        const int ex0 = d->rx0, ey0 = d->ry0, ex1 = d->rx1, ey1 = d->ry1;
-        for (int Y = ey0; Y <= ey1; Y++) memcpy(d->eye + Y * DW + ex0, d->region + Y * DW + ex0, (size_t)(ex1 - ex0 + 1));
-        region_edge(d, d->col_iris, 4, false);
-        for (int p = 0; p < ns; p++) {
-            const cc_shape_t *t = &sh[p];
-            if (t->group != CG_EYE || t->node != s->node || t->eye == CC_IRIS) continue;
-            disc_region(d, world, t, true);
-            for (int Y = d->ry0; Y <= d->ry1; Y++) for (int X = d->rx0; X <= d->rx1; X++) {
-                const int i = Y * DW + X;
-                if (d->region[i] && d->eye[i]) set_dot(d, i, t->eye == CC_SHINE ? d->col_shine : col_pupil, t->eye == CC_SHINE ? 6 : 5);
-            }
-        }
-        for (int Y = ey0; Y <= ey1; Y++) memset(d->eye + Y * DW + ex0, 0, (size_t)(ex1 - ex0 + 1));
-    }
-    for (int q = 0; q < ns; q++) {
-        const cc_shape_t *s = &sh[q];
-        if (s->group == CG_NOSE || s->group == CG_TONGUE) {
-            disc_region(d, world, s, false);
-            for (int Y = d->ry0; Y <= d->ry1; Y++) for (int X = d->rx0; X <= d->rx1; X++) { const int i = Y * DW + X; if (d->region[i]) set_dot(d, i, d->col_nose, 5); }
-        } else if (s->group == CG_MAW) { disc_region(d, world, s, false); region_edge(d, d->col_nose, 4, false); }
-        else if (s->group == CG_MILK) { disc_region(d, world, s, false); region_edge(d, d->col_belly, 3, false); }
-        else if (s->group == CG_EARIN) {
-            clear_region(d);
-            capz_t cp; cone_capsule(d, world, s, &cp);
-            if (cp.facing < 0.1f) continue;
-            const box_t b = cap_box(d, &cp);
-            region_box(d, b.x0, b.y0, b.x1, b.y1);
-            for (int Y = b.y0; Y <= b.y1; Y++) for (int X = b.x0; X <= b.x1; X++) {
-                const int i = Y * DW + X; float zz;
-                if (in_capsule(&cp, dot_u(d, X), dot_v(d, Y), &zz) && zz >= d->z[i] - 0.02f) d->region[i] = 1;
-            }
-            region_edge(d, d->col_ear, 4, false);
-        } else if (s->kind == CC_PATCH) {          /* the white chest: a region of the body's own surface */
-            clear_region(d);
-            float C[3], A[3][3], inv[9]; bool ok;
-            xf(world, s->node, s->p, C);
-            for (int kq = 0; kq < 3; kq++) { const float v[3] = { s->rq[kq] * s->r[kq], s->rq[3 + kq] * s->r[kq], s->rq[6 + kq] * s->r[kq] }; xv(world, s->node, v, A[kq]); }
-            inv3(A, inv, &ok);
-            if (!ok) continue;
-            region_box(d, d->bx0, d->by0, d->bx1 - 1, d->by1 - 1);
-            for (int Y = d->by0; Y < d->by1; Y++) for (int X = d->bx0; X < d->bx1; X++) {
-                const int i = Y * DW + X;
-                if (d->own[i] != CG_TORSO) continue;
-                const float uu = dot_u(d, X), vv = dot_v(d, Y), zz = d->z[i];
-                const float P[3] = { k->c[0] + uu * k->r[0] + vv * k->u[0] + zz * k->d[0], uu * k->r[1] + vv * k->u[1] + zz * k->d[1], k->c[2] + uu * k->r[2] + vv * k->u[2] + zz * k->d[2] };
-                const float qv[3] = { P[0] - C[0], P[1] - C[1], P[2] - C[2] };
-                float l2 = 0; for (int r = 0; r < 3; r++) { const float l = inv[r * 3] * qv[0] + inv[r * 3 + 1] * qv[1] + inv[r * 3 + 2] * qv[2]; l2 += l * l; }
-                if (l2 < 1.f) d->region[i] = 1;
-            }
-            region_edge(d, d->col_belly, 3, true);
+    PROF_STAGE(ST_PROJ);
+    split_run(d, ph_solid);
+    PROF_STAGE(ST_SOLID);
+    split_run(d, ph_lines);
+    {   /* the outline's shades over the body's depth range */
+        const int zlo = d->zlo[0] < d->zlo[1] ? d->zlo[0] : d->zlo[1], zhi = d->zhi[0] > d->zhi[1] ? d->zhi[0] : d->zhi[1];
+        d->zlo_all = zlo; d->lscale = zhi > zlo ? (float)(NLINE - 1) / (float)(zhi - zlo) : 0.f;
+        for (int l = 0; l < NLINE; l++) {
+            const float t = (float)l / (NLINE - 1); float col[3];
+            for (int q = 0; q < 3; q++) col[q] = minf(1.f, d->body[q] * (0.5f + 0.5f * t) + (1.f - d->body[q]) * 0.45f * t * t);
+            d->pal[l] = pack(col);
         }
     }
-    float wh[3]; unpack(d->col_whisker, wh);
-    for (int q = 0; q < 3; q++) wh[q] = minf(1.f, wh[q] * 1.3f);
-    const uint32_t col_wh = pack(wh);
-    for (int q = 0; q < ns; q++) {                 /* whiskers last: fine lines where nothing else is drawn */
-        const cc_shape_t *s = &sh[q];
-        if (s->group != CG_WHISKER) continue;
-        capz_t cp; capsule(d, world, s, 0, 0, &cp); cp.r0 = cp.r1 = 0.55f * d->dsx;
-        const box_t b = cap_box(d, &cp);
-        for (int Y = b.y0; Y <= b.y1; Y++) for (int X = b.x0; X <= b.x1; X++) {
-            const int i = Y * DW + X; float zz;
-            if (d->on[i]) continue;
-            if (in_capsule(&cp, dot_u(d, X), dot_v(d, Y), &zz) && (d->own[i] < 0 || zz >= d->z[i] - 0.05f)) set_dot(d, i, col_wh, 1);
-        }
+    PROF_STAGE(ST_LINES);
+    features(d);
+    PROF_STAGE(ST_FEAT);
+    split_run(d, ph_halo_rows);
+    PROF_STAGE(ST_HALO);
+    {   /* the world: the floor moves when the camera did; the cells' split balances the box's rows and the floor's */
+        const float scroll = (k->c[0] * k->r[0] + k->c[2] * k->r[2]) / d->dsx;
+        d->floor_new = !d->fvalid || fabsf(scroll - d->fscroll) > 1e-4f;
+        if (d->floor_new) { d->fvalid = true; d->fscroll = scroll; }
+        for (int Y = 0; Y < DH; Y++) d->wrow[Y] = (Y >= d->by0 && Y < d->by1 ? 2 * (d->bx1 - d->bx0) : 0) + (d->floor_new && Y > d->horizon ? DW : 0) + 8;
+        d->csplit = balance(d->wrow, 0, DH) >> 2;
     }
-    PROF_STAGE(4);
-    /* 5. the world: kept off the creature by a halo (a disc of radius sqrt 5: two dots across within a row of it,
-     * one dot across two rows away), as two separable passes over the box */
-    {
-        /* the box keeps 4 dots of margin round the creature (cleared), so the passes read inside it without bounds checks */
-        const int x0 = d->bx0, x1 = d->bx1, y0 = d->by0, y1 = d->by1;
-        uint8_t *A = d->eye, *B = d->region;                /* scratch: free again by now (cleared with the box) */
-        for (int Y = y0; Y < y1; Y++) {
-            const int8_t *o = d->own + Y * DW; const uint8_t *n = d->on + Y * DW; uint8_t *m = d->halo + Y * DW;
-            for (int X = x0; X < x1; X++) m[X] = (uint8_t)((o[X] >= 0) | n[X]);
-        }
-        for (int Y = y0; Y < y1; Y++) {
-            const uint8_t *m = d->halo + Y * DW; uint8_t *a2 = A + Y * DW, *a1 = B + Y * DW;
-            for (int X = x0 + 2; X < x1 - 2; X++) { const uint8_t c = m[X - 1] | m[X] | m[X + 1]; a1[X] = c; a2[X] = c | m[X - 2] | m[X + 2]; }
-        }
-        for (int Y = y0 + 2; Y < y1 - 2; Y++) {
-            uint8_t *h = d->halo + Y * DW; const uint8_t *a = A + Y * DW, *b2 = B + Y * DW;
-            uint8_t *tc = d->touch + (Y >> 2) * d->W;
-            for (int X = x0 + 2; X < x1 - 2; X++) { const uint8_t v = a[X - DW] | a[X] | a[X + DW] | b2[X - 2 * DW] | b2[X + 2 * DW]; h[X] = v; tc[X >> 1] |= v; }
-        }
-        for (int Y = y0; Y < y1; Y++) { memset(A + Y * DW + x0, 0, (size_t)(x1 - x0)); memset(B + Y * DW + x0, 0, (size_t)(x1 - x0)); }
-    }
-    PROF_STAGE(5);
-    const float scroll = (k->c[0] * k->r[0] + k->c[2] * k->r[2]) / d->dsx, horizon = d->horizon;
-    static const float FLR[3] = { 0x8f / 255.f, 0x87 / 255.f, 0xc4 / 255.f }, TEX[3] = { 0x6c / 255.f, 0x65 / 255.f, 0x98 / 255.f },
-                       DIM[3] = { 0x5c / 255.f, 0x56 / 255.f, 0x88 / 255.f }, MOTE[3] = { 0xb4 / 255.f, 0xac / 255.f, 0xec / 255.f };
-    /* the floor layer: redrawn only when the camera moved along it (walking), else kept */
-    const bool floor_new = !d->fvalid || fabsf(scroll - d->fscroll) > 1e-4f;
-    if (floor_new) {
-        d->fvalid = true; d->fscroll = scroll;
-        for (int Y = (int)horizon + 1; Y < DH; Y++) {
-            if (Y <= horizon) continue;
-            const float zz = d->row_zz[Y], near = d->row_near[Y], lim = 13.f - 0.55f * zz;
-            const uint32_t thr = prob_u(0.16f + 0.1f * (1.f - near));
-            const int kk = (int)floorf(14.f / zz + 0.5f);
-            const float x0 = (0.5f - DW / 2.f) * zz + scroll;
-            uint32_t *fr = d->frgb + Y * DW; uint8_t *fo = d->fon + Y * DW; const float *vg = d->vig + Y * DW;
-            for (int X = 0; X < DW; X++) {
-                fr[X] = 0; fo[X] = 0;
-                const float vig = vg[X];
-                if (vig <= 0.f) continue;
-                const float uw = x0 + X * zz;
-                const float lane = fabsf(uw - 26.f * floorf(uw * (1.f / 26.f)) - 13.f);
-                float a = 0.f; const float *col = NULL;
-                if (lane > lim) { a = 0.85f * near; col = FLR; }
-                else if (hash3u((int)floorf(uw * 0.625f), kk, 7) < thr) { a = (0.5f + 0.25f * near) * (0.6f + 0.4f * hash3f((int)floorf(uw), Y, 3)); col = TEX; }
-                if (a > 0.f) {
-                    const float kv = minf(1.f, a * vig), cc3[3] = { col[0] * kv, col[1] * kv, col[2] * kv };
-                    fr[X] = pack(cc3); fo[X] = kv > 0.12f;
-                }
-            }
-        }
-    }
-    static const uint8_t BIT[8] = { 0, 1, 2, 6, 3, 4, 5, 7 };   /* dot (col << 2 | row) -> braille bit */
-    const int NC = d->W * d->H;
-    if (floor_new) {                                              /* the floor layer's own cells, made with it */
-        memset(d->fcell, 0, (size_t)NC); memset(d->fccol, 0, sizeof(uint32_t) * (size_t)NC);
-        for (int Y = (int)horizon + 1; Y < DH; Y++) {
-            const int j = Y >> 2, r = Y & 3; const uint8_t *fo = d->fon + Y * DW; const uint32_t *fr = d->frgb + Y * DW;
-            for (int X = 0; X < DW; X++) {
-                if (!fo[X]) continue;
-                const int k = j * d->W + (X >> 1);
-                d->fcell[k] |= (uint8_t)(1 << BIT[(X & 1) << 2 | r]);
-                const uint32_t v = fr[X], w = d->fccol[k];
-                if ((v >> 16 & 255) + (v >> 8 & 255) + (v & 255) > (w >> 16 & 255) + (w >> 8 & 255) + (w & 255)) d->fccol[k] = v;
-            }
-        }
-    }
-    PROF_STAGE(6);
-    /* cells: the floor's cells as they are, then the cells under the creature's box made again (its dots own their cell;
-     * the floor there only outside the halo); a cell's colour is its highest priority dot's, the brightest among those */
-    uint8_t *cat = d->eye;                                        /* scratch: W*H bytes (free by now) */
-    int8_t *bp = (int8_t *)d->region; uint16_t *bl = (uint16_t *)d->field;   /* scratch: best priority, its brightness */
-    memcpy(d->cdots, d->fcell, (size_t)NC); memcpy(d->ccol, d->fccol, sizeof(uint32_t) * (size_t)NC);
-    const int cx0 = d->bx0 >> 1, cx1 = (d->bx1 + 1) >> 1, cy0 = d->by0 >> 2, cy1 = (d->by1 + 3) >> 2;
-    for (int j = cy0; j < cy1; j++) for (int i = cx0; i < cx1 && i < d->W; i++) { const int k = j * d->W + i; d->cdots[k] = 0; d->ccol[k] = 0; bp[k] = -1; }
-    for (int Y = cy0 * 4; Y < cy1 * 4 && Y < DH; Y++) {
-        const int j = Y >> 2, r = Y & 3;
-        const uint8_t *on = d->on + Y * DW, *pr = d->pri + Y * DW, *ha = d->halo + Y * DW, *fo = d->fon + Y * DW, *tc = d->touch + j * d->W;
-        const uint32_t *rgb = d->rgb + Y * DW, *fr = d->frgb + Y * DW;
-        for (int X = cx0 * 2; X < cx1 * 2 && X < DW; X++) {
-            if (!tc[X >> 1]) {                                    /* nothing of the creature in this cell: the floor's cell as made */
-                if (!(X & 1)) { const int k = j * d->W + (X >> 1); d->cdots[k] = d->fcell[k]; d->ccol[k] = d->fccol[k]; }
-                X++; continue;
-            }
-            int p; uint32_t v;
-            if (on[X]) { p = pr[X]; v = rgb[X]; }
-            else if (!ha[X] && fo[X]) { p = 0; v = fr[X]; }
-            else continue;
-            const int k = j * d->W + (X >> 1), bit = 1 << BIT[(X & 1) << 2 | r];
-            d->cdots[k] |= (uint8_t)bit;
-            if (p >= 1) cat[k] |= (uint8_t)bit;
-            const uint16_t l = (uint16_t)((v >> 16 & 255) + (v >> 8 & 255) + (v & 255));
-            if (p > bp[k] || (p == bp[k] && l > bl[k])) { bp[k] = (int8_t)p; bl[k] = l; d->ccol[k] = v; }
-        }
-    }
-    /* the dust: only its motes (made once), where neither the creature's halo nor the floor is; a cell with the creature
-     * in it keeps only the creature's dots */
-    const float f3 = (float)(frame % 3000000u) * (1.f / 3.f);
-    for (int m = 0; m < d->nmote; m++) {
-        const int i = (int)d->mote_i[m];
-        if (d->halo[i] || d->frgb[i] || d->on[i]) continue;
-        const int X = i % DW, Y = i / DW, k = (Y >> 2) * d->W + (X >> 1);
-        if (cat[k]) continue;
-        const int ph = (int)floorf(f3 + d->mote_s97[m]);
-        if (ph != d->mote_ph[m]) {                                /* its twinkle moved on: every third frame or so */
-            d->mote_ph[m] = ph;
-            const float tw = hash3f(X, Y, ph);
-            const float a = (0.3f + 0.55f * tw) * (0.55f + 0.45f * d->mote_band[m]), kv = minf(1.f, a * d->vig[i]);
-            const float *col = tw > 0.8f ? MOTE : DIM, cc3[3] = { col[0] * kv, col[1] * kv, col[2] * kv };
-            d->mote_rgb[m] = kv > 0.12f ? pack(cc3) : 0;
-        }
-        if (!d->mote_rgb[m]) continue;
-        const uint32_t v = d->mote_rgb[m], w = d->ccol[k];
-        d->cdots[k] |= (uint8_t)(1 << BIT[(X & 1) << 2 | (Y & 3)]);
-        if (!w || (v >> 16 & 255) + (v >> 8 & 255) + (v & 255) > (w >> 16 & 255) + (w >> 8 & 255) + (w & 255)) d->ccol[k] = v;
-    }
-    for (int j = cy0; j < cy1; j++) for (int i = cx0; i < cx1 && i < d->W; i++) {
-        const int k = j * d->W + i;
-        if (cat[k]) d->cdots[k] = cat[k];                         /* a cell with the creature in it shows only its dots */
-        if (!d->cdots[k]) d->ccol[k] = 0;
-        cat[k] = 0; bp[k] = 0; bl[k] = 0; d->touch[k] = 0;       /* the scratch back to clear */
-    }
-    PROF_STAGE(7);
+    split_run(d, ph_cells);
+    PROF_STAGE(ST_CELLS);
 }
 
 void cd_cells(const cd_t *d, const uint8_t **dots, const uint32_t **rgb) { *dots = d->cdots; *rgb = d->ccol; }
-void cd_dots(const cd_t *d, const uint8_t **on, const uint32_t **rgb, const uint8_t **pri) { *on = d->on; *rgb = d->rgb; *pri = d->pri; }
 void cd_prof(cd_t *d, uint32_t *out) { for (int i = 0; i < CD_STAGES; i++) { out[i] += d->prof[i]; d->prof[i] = 0; } }
-void cd_box(const cd_t *d, int *x0, int *y0, int *x1, int *y1) { *x0 = d->bx0; *y0 = d->by0; *x1 = d->bx1; *y1 = d->by1; }
