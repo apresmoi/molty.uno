@@ -45,8 +45,10 @@ void   cpk_set_share(cpk_t *k, int pct);
 void   cpk_listen(cpk_t *k, int32_t rgb, float ink);
 /** Per cell of the last frame: 1 where the creature's own dots are (cd_creature). */
 const uint8_t *cpk_cells_creature(const cpk_t *k);
-/** The number of the frame its cells are (cpk_paint's): the drawer's interlace parity (fluid_draw_opts_t.frame). */
-uint32_t cpk_frame_no(const cpk_t *k);
+/** The drawer's fluid_draw_opts_t.frame for its cells (cpk_paint's frame and the rings' interlace: FLUID_FRAME). */
+uint32_t cpk_draw_frame(const cpk_t *k);
+/** A listen's voice, 0..1 (the mic's level): ripples from the listen ring's rim (cr_voice). */
+void   cpk_voice(cpk_t *k, float level);
 const struct cc *cpk_clip(const cpk_t *k);
 /** Its last frame's cells: a braille byte (the rings over them, after cpk_paint) and a colour (0xRRGGBB) each; NULL before
  *  the first frame or for a channel creature. */

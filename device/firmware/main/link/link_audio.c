@@ -431,6 +431,7 @@ static void react_live(float level, uint32_t t)
     const int hint = atomic_exchange(&s_hint, 0);
     if (hint) react_play(react_hint(&s_react, hint, t, blocked));
     react_play(react_level(&s_react, level, t, blocked));
+    mole_fluid_listen_level(level);                    /* the ring ripples with the voice */
 }
 
 void link_audio_external_react(uint32_t hold_ms)

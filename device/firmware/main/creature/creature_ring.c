@@ -1,15 +1,16 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * creature_ring.c: the rings over a rigged creature's crisp cells (creature_ring.h), as ring-options.html's chosen one
- * (one touch; a sharp line with a soft band behind it). Start: a touch at the centre of the real water (a finger's), the
- * water quickened while the ring forms so its crest reaches the rim in ~0.6 s, not a touch's ~1.5 s; it wobbles the
- * creature as it passes, near the rim its crest carries the ring's colour, and where it arrives the ring lands row by
- * row: a bright line at the edge, a soft band of dust feathering inward behind it. Stop: a ring-shaped wave let go at
- * the line carries the colour inward, fading, the ring leaving row by row. Each part of the ring follows its line's ink
- * (a listen: all of it; a question: its arcs; the progress comet: where it is).
+ * creature_ring.c: the rings over a rigged creature's crisp cells (creature_ring.h), as ring-options.html's disc 1 (one
+ * touch; a sharp line). Start: a touch at the centre of the real water (a finger's), the water quickened while the ring
+ * forms so its crest reaches the rim in ~0.6 s, not a touch's ~1.5 s; it wobbles the creature as it passes, near the rim
+ * its crest carries the ring's colour, and where it arrives the ring lands row by row: a thin bright line at the edge.
+ * While a listen's ring shows, the voice (cr_voice) sends small ripples from the rim inward through the same water, so
+ * the line trembles with it. Stop: a ring-shaped wave let go at the line carries the colour inward, fading, the ring
+ * leaving row by row. Each part of the ring follows its line's ink (a listen: all of it; a question: its arcs; the
+ * progress comet: where it is).
  *
- * Made once per grid: the dots from CR_CREST_IN out (the band and where the crest may carry colour) and the cells inside
+ * Made once per grid: the dots from CR_CREST_IN out (the line and where the crest may carry colour) and the cells inside
  * (the release's crest), each with its cell, bit, angle bin, radius and three hashes.
  */
 #include "creature_ring.h"
@@ -32,7 +33,6 @@
 #define CR_ARC_R    0.92f    /* a question's arcs' line (fluid_ask.h FLUID_ASK_ARC_R): where its ink is read   */
 #define CR_LINE_IN  0.962f   /* the line: from here to the rim                                                 */
 #define CR_RIM      0.988f
-#define CR_DUST_IN  0.74f    /* the band's dust from here out                                                  */
 #define CR_CREST_IN 0.55f    /* the forming crest carries colour from here out                                */
 #define CR_PROBE_R  0.88f    /* each bin reads the wave here (inside the rim's sponge)                         */
 #define CR_TAP_S    1.6f     /* the start: a touch at the centre (a finger's: 1.6, 0.09) ...                    */
@@ -43,8 +43,6 @@
 #define CR_LET_S    0.12f    /* the release: a ring-shaped wave let go at the line (as ring-options.html)        */
 #define CR_LET_W    0.05f
 #define CR_LAND_H   0.012f   /* the crest has arrived where the water is up this much (h units)                */
-#define CR_SOFT_S   0.8f     /* landed, the band starts softer and wider and thins to the line's feather over this,
-                              * a row at a time in two steps (ring-options.html discs 1 + 3: its S over 0.8 s)     */
 #define CR_LAND_S   0.35f    /* a part lands row by row over this once its crest arrives (rows scattered: a few a
                               * frame for the panel, which takes ~0.6 ms a changed row whatever is in it)       */
 #define CR_CREST_R  0.8f      /* the forming crest carries the colour from here out                             */
@@ -52,6 +50,17 @@
                               * a moving surface makes every cell under it change, the panel's cost)            */
 #define CR_DONE_S   1.0f     /* released: gone after this                                                      */
 #define CR_TW       36       /* each dot row's twinkle every this many frames (rows scattered, a few a frame)   */
+/* the voice on a listen's ring: small touches of the water just inside the line, at random angles, more and stronger
+ * the louder (cr_voice's level, 0..1, as an envelope: up in ~50 ms, down in ~200 ms); none below CR_V_MIN */
+#define CR_V_R      0.9f     /* where they touch (inside the rim's sponge, so they run inward)                  */
+#define CR_V_W      0.045f   /* their size (a touch's 0.09)                                                    */
+#define CR_V_S      0.35f    /* their strength at full voice (a touch's 1.6)                                   */
+#define CR_V_RATE   18.f     /* touches a second at full voice                                                 */
+#define CR_V_MIN    0.08f
+#define CR_V_UP     0.05f
+#define CR_V_DOWN   0.2f
+#define CR_ILACE_IN 3        /* forming or letting go, the water's rows (and the crest's) each every this many frames
+                              * (else every other, fluid_draw_opts_t.frame): the wave changes nearly every cell then */
 
 typedef struct { uint16_t k; uint8_t bit, bin; uint16_t r; uint8_t h1, h2, h3, row, cw; } cr_dot_t;   /* r: radius x 65535; cw: the
                                                                                                     * forming crest's weight there x 255 */
@@ -70,7 +79,8 @@ struct cr {
     int mode; float T, red, sum, c2, calm;          /* calm: s the water is settled after the ring's wave          */                /* c2: the water's own wave speed, while the ring's is quicker   */
     uint8_t *cbits, *cb;                          /* per cell: the crest's dots and brightness, kept a frame (each
                                                    * half of the cell rows takes the crest every other frame)       */
-    uint8_t ilace;
+    uint8_t ilace, im;                            /* this frame's phase and how many (2, or CR_ILACE_IN forming)     */
+    float venv, vin, vacc; uint32_t vn;           /* the voice: its envelope, the level given, touches due, count   */
     /* the ring's own dots are kept per cell row and made again only when that row changes (its twinkle's turn, its
      * landing or leaving, the line's ink): a steady ring costs a row or so a frame */
     int *brow, *irow;                             /* per cell row: its band dots [brow[j], brow[j + 1]), inner ones   */
@@ -83,7 +93,6 @@ struct cr {
     uint8_t hin[128], hout[128];                  /* the crest's lift by the water's height (h, Q10, from 0) x 255  */
     uint16_t *cdot; int *crow;                    /* the band's dots the forming crest can colour, by cell row     */
     bool crest;                                   /* crest dots are held (cleared once the crest is done)            */
-    float dens[16][64];                           /* the band's density by how thin (16) and radius (64): no powf a dot */
 };
 
 static inline float clampf(float x, float a, float b) { return x < a ? a : x > b ? b : x; }
@@ -108,11 +117,6 @@ cr_t *cr_create(const fluid_sim_t *s) {
     r->rowph = CR_CALLOC(sizeof(uint32_t) * (size_t)H); r->rowver = CR_CALLOC(sizeof(uint32_t) * (size_t)H);
     r->brow = CR_CALLOC(sizeof(int) * (size_t)(H + 1)); r->irow = CR_CALLOC(sizeof(int) * (size_t)(H + 1));
     if (!r->cr2 || !r->cbits || !r->cb || !r->rl || !r->rll || !r->rlb || !r->rowph || !r->rowver || !r->brow || !r->irow) { cr_destroy(r); return NULL; }
-    for (int t = 0; t < 16; t++) for (int q = 0; q < 64; q++) {
-        const float thin = t / 15.f, rad = CR_DUST_IN - 0.16f + (CR_LINE_IN - CR_DUST_IN + 0.16f) * q / 63.f;
-        const float din = CR_DUST_IN - 0.16f * (1.f - thin), u = (rad - din) / (CR_LINE_IN - din);
-        r->dens[t][q] = u <= 0.f ? 0.f : powf(u, 0.7f + 1.9f * thin);
-    }
     for (int j = 0; j < H; j++) for (int i = 0; i < W; i++) r->cr2[j * W + i] = sqrtf(s->xs[i] * s->xs[i] + s->ys[j] * s->ys[j]);
     for (int pass = 0; pass < 3; pass++) {        /* count; the band's dots; the inner ones */
         int n = pass == 2 ? r->n : 0;
@@ -198,15 +202,15 @@ static void kick(const cr_t *r, fluid_sim_t *s, float R, float a) {
     }
 }
 
-/* the settled ring at a dot (rad, its hashes; tw, tw2: its twinkle, -1..1): a bright line at the rim, a band of dust
- * thinning inward (thin: 0 the landing's wide band .. 1 the bare line) */
-static float final_b(const cr_t *r, float rad, const cr_dot_t *d, float thin, float tw, float tw2) {
-    if (rad >= CR_LINE_IN) return 0.9f + 0.1f * tw2;
-    const int qi = (int)((rad - (CR_DUST_IN - 0.16f)) * (63.f / (CR_LINE_IN - CR_DUST_IN + 0.16f)) + 0.5f);
-    const float dens = qi < 0 ? 0.f : r->dens[(int)(thin * 15.f + 0.5f)][qi > 63 ? 63 : qi];
-    if (dens <= 0.f) return 0.f;
-    if (d->h1 * (1.f / 255.f) > dens * (0.6f + 0.3f * (1.f - thin)) * (0.82f + 0.18f * tw)) return 0.f;
-    return (0.28f + 0.52f * dens) * (0.62f + 0.38f * tw2);
+/* the voice's touches on the water just inside the line (a listen's ring, shown) */
+static void voice(cr_t *r, fluid_sim_t *s, float dt) {
+    const float k = r->vin > r->venv ? dt / CR_V_UP : dt / CR_V_DOWN;
+    r->venv += (r->vin - r->venv) * (k > 1.f ? 1.f : k);
+    if (r->venv < CR_V_MIN) { r->vacc = 0.f; return; }
+    for (r->vacc += CR_V_RATE * r->venv * dt; r->vacc >= 1.f; r->vacc -= 1.f) {
+        const float a = (float)(hash2(r->vn++, 0x5eedu) >> 8) * (6.2831853f / 16777216.f);
+        fluid_sim_impulse(s, CR_V_R * sinf(a), -CR_V_R * cosf(a), CR_V_S * r->venv, CR_V_W);
+    }
 }
 
 bool cr_paint(cr_t *r, fluid_sim_t *s, float dt, uint32_t frame, const uint8_t *creature, uint8_t *dots, fluid_rgba16_t *col) {
@@ -242,8 +246,10 @@ bool cr_paint(cr_t *r, fluid_sim_t *s, float dt, uint32_t frame, const uint8_t *
         r->calm -= dt;
         for (int k = 0; k < s->N; k++) { s->h[k] = (int16_t)(s->h[k] * 7 / 8); s->hp[k] = (int16_t)(s->hp[k] * 7 / 8); }
     }
-    if (r->mode == OFF) return false;
+    if (r->mode == OFF) { r->venv = 0.f; r->im = 2; return false; }
     r->T += dt;
+    if (r->mode == ON && r->lisring) voice(r, s, dt);
+    else r->venv = 0.f;
 
     if (r->mode == IN) {                          /* a part lands once the crest reaches it (or the driven front has) */
         bool all = true;
@@ -256,10 +262,10 @@ bool cr_paint(cr_t *r, fluid_sim_t *s, float dt, uint32_t frame, const uint8_t *
             if (r->land[b] < 0.f || r->T < r->land[b] + CR_LAND_S) all = false;
         }
         if (!r->all) { r->all = true; for (int b = 0; b < CR_NB; b++) if (r->land[b] < 0.f) r->all = false; }   /* every part has landed */
-        if (all && r->T > r->lmax + CR_LAND_S + CR_SOFT_S * 1.5f + 2.f * dt) { r->mode = ON; s->p.c2 = r->c2; r->ver++; r->calm = CR_CALM_S; }
+        if (all && r->T > r->lmax + CR_LAND_S + 2.f * dt) { r->mode = ON; s->p.c2 = r->c2; r->ver++; r->calm = CR_CALM_S; }
     } else if (r->mode == OUT) {
         r->red = expf(-r->T / 0.25f);
-        if (r->T > CR_DONE_S) { r->mode = OFF; s->p.c2 = r->c2; r->ver++; r->calm = CR_CALM_S; return false; }
+        if (r->T > CR_DONE_S) { r->mode = OFF; s->p.c2 = r->c2; r->ver++; r->calm = CR_CALM_S; r->im = 2; return false; }
     }
 
     /* the dots: the ring where its part has landed, row by row (going, row by row too), and the crest's colour */
@@ -267,15 +273,11 @@ bool cr_paint(cr_t *r, fluid_sim_t *s, float dt, uint32_t frame, const uint8_t *
     for (int j = 0; j < H; j++) {                 /* the ring's own: a row made again only when it changes */
         const float rowd = (float)(j * 11 % H) * (CR_LAND_S / H);                    /* its row's turn */
         const uint32_t ph = (frame + (uint32_t)((j * 11 % H) * CR_TW / H)) / CR_TW;   /* its twinkle's */
-        /* the band's thinning: this row's two steps, staggered over CR_SOFT_S after the last part landed */
-        const float st0 = r->lmax + CR_LAND_S + rowd * (CR_SOFT_S / CR_LAND_S) * 0.5f, st1 = st0 + CR_SOFT_S * 0.5f;
-        const float thin = r->mode == OUT ? 1.f : r->lmax < 0.f || r->T < st0 ? 0.5f : r->T < st1 ? 0.75f : 1.f;
-        /* a row changes at three moments only (it lands once every part has, then thins twice; letting go, it leaves):
-         * made again the frame each is crossed */
+        /* a row changes at one moment only (it lands once every part has; letting go, it leaves): made again the frame
+         * that is crossed */
         const float tp = r->T - dt;
         #define CROSS(t) (tp < (t) && r->T >= (t))
-        const bool moving = r->mode == OUT ? CROSS(rowd)
-                          : r->mode == IN && r->all && (CROSS(r->lmax + rowd) || CROSS(st0) || CROSS(st1));
+        const bool moving = r->mode == OUT ? CROSS(rowd) : r->mode == IN && r->all && CROSS(r->lmax + rowd);
         #undef CROSS
         if (!moving && r->rowph[j] == ph && r->rowver[j] == r->ver) continue;
         r->rowph[j] = ph; r->rowver[j] = r->ver;
@@ -284,31 +286,22 @@ bool cr_paint(cr_t *r, fluid_sim_t *s, float dt, uint32_t frame, const uint8_t *
             const cr_dot_t *d = &r->dot[n];
             const float rad = d->r * (1.f / 65535.f);
             const bool shown = r->mode == OUT ? r->T < rowd : r->mode != OFF && r->all && r->T >= r->lmax + rowd;
-            if (!shown || rad < CR_DUST_IN - 0.16f || rad > CR_RIM || r->lr[d->bin] <= 0.f) continue;   /* past the round rim: none */
+            if (!shown || rad < CR_LINE_IN || rad > CR_RIM || r->lr[d->bin] <= 0.f) continue;   /* the line alone, to the round rim */
             const uint32_t hh = hash2((uint32_t)n, ph);
-            const float tw = (float)(hh & 255) * (2.f / 255.f) - 1.f, tw2 = (float)(hh >> 8 & 255) * (2.f / 255.f) - 1.f;
-            const float b = final_b(r, rad, d, thin, tw, tw2) * r->lr[d->bin];
+            const float tw = (float)(hh >> 8 & 255) * (2.f / 255.f) - 1.f;   /* its twinkle, -1..1 */
+            const float b = (0.9f + 0.1f * tw) * r->lr[d->bin];
             if (b <= 0.02f) continue;
             const int q = (int)(b * 32.f + 0.5f);
-            if (rad >= CR_LINE_IN) {               /* the line's own: its cell shows the line alone (one colour a cell:
-                                                    * the dust beside it would take the line's brightness) */
-                if (!(r->rll[d->k] & 0x80)) { r->rl[d->k] = 0; r->rll[d->k] = 0x80; }   /* the first line dot here: the dust out */
-                r->rl[d->k] |= d->bit; r->rlb[d->k] = d->bin;
-                const uint8_t lq = (uint8_t)(0x80 | (q > 127 ? 127 : q));
-                if (lq > r->rll[d->k]) r->rll[d->k] = lq;
-                continue;
-            }
-            if (r->rll[d->k] & 0x80) continue;    /* a line cell: no dust in it */
             r->rl[d->k] |= d->bit;
             if (q > r->rll[d->k]) { r->rll[d->k] = (uint8_t)(q > 127 ? 127 : q); r->rlb[d->k] = d->bin; }
         }
-        for (int i = 0; i < W; i++) r->rll[j * W + i] &= 0x7f;   /* the line mark off: a brightness again (x 32) */
     }
-    r->ilace = (uint8_t)(frame & 1);              /* the drawer's parity too (fluid_draw_opts_t.frame) */
+    r->im = r->mode == IN || r->mode == OUT ? CR_ILACE_IN : 2;   /* the drawer's too (cr_ilace, fluid_draw_opts_t.frame) */
+    r->ilace = (uint8_t)((frame & 0x0FFFFFFFu) % r->im);   /* as fluid_ilace_row */
     if (r->mode == IN || r->mode == OUT) {        /* the crest: this frame's half of the cell rows (the panel's cost is
                                                    * by row), the other half's kept from the last */
         r->crest = true;
-        for (int j = r->ilace; j < H; j += 2) {   /* the rows the drawer sends the water's changes in this frame */
+        for (int j = r->ilace; j < H; j += r->im) {   /* the rows the drawer sends the water's changes in this frame */
             memset(r->cbits + j * W, 0, (size_t)W); memset(r->cb + j * W, 0, (size_t)W);
             for (int pass = 0; pass < (r->mode == OUT ? 2 : 1); pass++) {
                 /* forming: the dots the crest can colour (a list); letting go: the band's and the inner ones */
@@ -358,6 +351,9 @@ bool cr_paint(cr_t *r, fluid_sim_t *s, float dt, uint32_t frame, const uint8_t *
     }
     return true;
 }
+
+void cr_voice(cr_t *r, float level) { if (r) r->vin = level < 0.f ? 0.f : level > 1.f ? 1.f : level; }
+int  cr_ilace(const cr_t *r) { return r && r->im ? r->im : 2; }
 
 void cr_listen(cr_t *r, int32_t rgb, float ink) {
     if (!r) return;

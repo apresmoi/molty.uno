@@ -568,7 +568,7 @@ typedef struct { fluid_draw_t *d; fluid_frame_t *fr; uint16_t *buf, *buf2; crisp
 static double ring_send(ring_panel_t *rp, const cpk_t *k, fluid_sim_t *s, int f) {   /* this frame to the panel, ~ms (80 MHz) */
     fluid_sim_snapshot(s, rp->fr, false);
     fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, f / 30.f, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL, 0 };
-    const uint32_t *cc; cpk_cells(k, &o.dots, &cc); o.scene = true; o.frame = cpk_frame_no(k) | 0x80000000u;   /* as mole_fluid.c */
+    const uint32_t *cc; cpk_cells(k, &o.dots, &cc); o.scene = true; o.frame = cpk_draw_frame(k);   /* as mole_fluid.c */
     const fluid_overlay_t ov = { 0 };
     if (f == 0) rp->d->force = true;
     fluid_draw_cells(rp->d, rp->fr, &o);
@@ -584,6 +584,14 @@ static void ring_frame(cpk_t *k, fluid_sim_t *s, fluid_ring_t *ring, bool on) {
     fluid_sim_step(s, 1.f / 60); fluid_sim_step(s, 1.f / 60);
     fluid_sim_color(s, 1.f / 30);
     cpk_paint(k, s);
+}
+static double rim_water(const fluid_sim_t *s) {   /* how much the water moves near the rim (|h| summed, h units) */
+    double e = 0.0;
+    for (int j = 0; j < s->H; j++) for (int i = 0; i < s->W; i++) {
+        const float r = sqrtf(s->xs[i] * s->xs[i] + s->ys[j] * s->ys[j]);
+        if (r > 0.7f && r < 0.95f && s->mask[j * s->W + i]) e += fabs((double)s->h[j * s->W + i]) / FQ_H;
+    }
+    return e;
 }
 static void test_crisp_ring(const char *pkgdir) {
     char path[512]; size_t len;
@@ -611,23 +619,28 @@ static void test_crisp_ring(const char *pkgdir) {
     ring = (fluid_ring_t){ 0 };
     enum { N = 150, ON0 = 10, OFF0 = 90 };
     int line[N] = { 0 }, all[N] = { 0 }, crest = -1, nline = 1;
-    double heavy = 0.0;
+    double heavy = 0.0, quiet = 0.0, loud = 0.0, before = 0.0;
     for (int f = 0; f < N; f++) {                  /* 10 frames none, 80 a listen, 60 after it */
+        /* a voice: before the ring (nothing to ripple), then quiet once it settled, then speaking */
+        cpk_voice(k, f < ON0 ? 0.8f : f >= 75 && f < OFF0 ? 0.8f : 0.f);
         ring_frame(k, s, &ring, f >= ON0 && f < OFF0);
+        if (f == ON0 - 1) before = rim_water(s);
+        if (f >= 60 && f < 75) quiet += rim_water(s) / 15;
+        if (f >= 75 && f < OFF0) loud += rim_water(s) / 15;
         line[f] = ring_dots(k, s, 0.962f, 1.f, &nline);
         all[f] = ring_dots(k, s, 0.08f, 1.f, NULL);
         if (crest < 0 && f >= ON0 && ring_dots(k, s, 0.8f, 0.962f, NULL) > 0 && line[f] == 0) crest = f;   /* red near the rim, the line not yet */
         const double ms = ring_send(&rp, k, s, 70 + f);
         if ((f >= ON0 && f < ON0 + 45) || (f >= OFF0 && f < OFF0 + 45)) if (ms > heavy) heavy = ms;
-        if (f == OFF0 - 1) {                       /* settled: the line, thinning inward behind it */
+        if (f == OFF0 - 1) {                       /* settled: the sharp line alone */
             int n0, n1, n2, n3, n4;
             const int a0 = ring_dots(k, s, 0.962f, 0.988f, &n0), a1 = ring_dots(k, s, 0.9f, 0.962f, &n1), a2 = ring_dots(k, s, 0.82f, 0.9f, &n2),
                       a3 = ring_dots(k, s, 0.74f, 0.82f, &n3), a4 = ring_dots(k, s, 0.08f, 0.64f, &n4);
             const double f0 = (double)a0 / n0, f1 = (double)a1 / n1, f2 = (double)a2 / n2, f3 = (double)a3 / n3;
             printf("  crisp ring, settled: lit %.2f on the line, %.2f, %.2f, %.2f inward, %d dots inside\n", f0, f1, f2, f3, a4);
             CHECK(f0 > 0.6, "crisp ring: the line %.2f lit", f0);
-            CHECK(f1 < f0 && f2 < f1 && f3 <= f2 && f1 < 0.6, "crisp ring: not thinning inward (%.2f %.2f %.2f %.2f)", f0, f1, f2, f3);
-            CHECK(a4 == 0, "crisp ring: %d dots inside the band", a4);
+            CHECK(f1 < 0.1 && f2 < 0.02 && f3 < 0.02, "crisp ring: dots inside the line (%.2f %.2f %.2f)", f1, f2, f3);
+            CHECK(a4 == 0, "crisp ring: %d dots inside the ring", a4);
         }
     }
     const int full = line[OFF0 - 1];
@@ -638,6 +651,9 @@ static void test_crisp_ring(const char *pkgdir) {
     printf("  crisp ring: the crest near the rim at %.2f s, the line formed at %.2f s, gone %.2f s after; largest step %d of %d line dots\n",
            crest < 0 ? -1.0 : (crest - ON0) / 30.0, formed < 0 ? -1.0 : (formed - ON0) / 30.0, gone < 0 ? -1.0 : (gone - OFF0) / 30.0, jump, full);
     printf("  crisp ring: heaviest forming / releasing frame ~%.1f ms on the panel, a touch's %.1f ms\n", heavy, touch);
+    printf("  crisp ring, voice: the water near the rim %.2f before the ring, %.2f quiet, %.2f speaking\n", before, quiet, loud);
+    CHECK(before < 0.01, "crisp ring: a voice ripples the water with no ring (%.2f)", before);
+    CHECK(loud > 4.0 * quiet + 0.5, "crisp ring: the voice does not ripple the rim (%.2f quiet, %.2f speaking)", quiet, loud);
     CHECK(line[ON0 - 1] == 0 && all[ON0 - 1] == 0, "crisp ring: dots before a listen");
     CHECK(crest >= 0 && crest < formed, "crisp ring: no crest reaching the rim before the line");
     CHECK(formed >= 0 && formed - ON0 <= 33, "crisp ring: formed only %.2f s after the start", (formed - ON0) / 30.0);
