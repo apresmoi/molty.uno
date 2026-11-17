@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cat Animations</title>
+<style>
+:root{--bg:#f3f1f8;--fg:#1c1730;--mute:#6a6484;--card:#fff;--line:#dcd7e7;--accent:#7566c4;--ok:#2f8a4e;--bad:#c2344a}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0e0c14;--fg:#ece8f8;--mute:#9a93b5;--card:#17141f;--line:#2a2538;--accent:#a99be8;--ok:#7fd49a;--bad:#ff8fa0}}
+:root[data-theme="dark"]{--bg:#0e0c14;--fg:#ece8f8;--mute:#9a93b5;--card:#17141f;--line:#2a2538;--accent:#a99be8;--ok:#7fd49a;--bad:#ff8fa0}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,sans-serif}
+main{max-width:1120px;margin:0 auto;padding:24px 16px 48px}
+h1{font-size:22px;margin:0 0 2px}
+p{margin:0;color:var(--mute)}
+.tabs{display:flex;gap:6px;margin:16px 0 4px}
+.tabs button,.clips button{border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:999px;padding:5px 12px;font:inherit;font-size:14px;cursor:pointer}
+.tabs button[aria-pressed="true"],.clips button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff}
+.clips{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0 14px}
+.views button{font-size:13px;padding:3px 10px}
+.views:empty{display:none}
+.stage{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px}
+.panel h2{font-size:13px;font-weight:600;color:var(--mute);margin:0 0 8px;letter-spacing:.02em}
+canvas{width:100%;aspect-ratio:1;display:block;border-radius:8px}
+.controls{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-top:14px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.controls button{font:inherit;border:1px solid var(--line);background:transparent;color:var(--fg);border-radius:8px;padding:5px 12px;cursor:pointer;min-width:74px}
+.controls input[type=range]{flex:1;min-width:160px;accent-color:var(--accent)}
+.controls label{display:flex;align-items:center;gap:6px;color:var(--mute);font-size:14px}
+.meta{font-variant-numeric:tabular-nums;color:var(--mute);font-size:14px;min-width:110px}
+.check{margin-top:10px;font-size:14px;color:var(--mute)}
+.check b.ok{color:var(--ok)} .check b.bad{color:var(--bad)}
+table.matrix{border-collapse:collapse;margin:12px 0 14px;font-size:13px;width:100%}
+.matrix th,.matrix td{border:1px solid var(--line);padding:4px 6px;text-align:center}
+.matrix th{color:var(--mute);font-weight:600}
+.matrix td button{font:inherit;font-size:12px;border:0;background:transparent;color:var(--fg);cursor:pointer;padding:2px 4px;border-radius:6px;width:100%}
+.matrix td button[aria-pressed="true"]{background:var(--accent);color:#fff}
+.matrix td.self{color:var(--mute)}
+@media (max-width:700px){.stage{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+<h1>Cat animations</h1>
+<p>Left: the Blender model in flat palette colours. Right: what Molty draws, live from the package (packages/cat/cat.json) through the device's reference player and dots (52 x 32 cells of 2 x 4 dots, one colour a cell).</p>
+<div class="tabs" role="group" aria-label="Mode"><button id="tabClips" aria-pressed="true">Clips</button><button id="tabRoutes" aria-pressed="false">Transitions</button></div>
+<div id="clipsView">
+  <div class="clips" id="clips" role="group" aria-label="Clips"></div>
+  <div class="clips views" id="views" role="group" aria-label="Camera"></div>
+</div>
+<div id="routesView" hidden>
+  <p>Every pose family to every other, each an authored clip; click a cell to start in the row's resting loop and ask for the column's: the player routes and crossfades as the device does.</p>
+  <table class="matrix" id="matrix"></table>
+</div>
+<div class="stage">
+  <div class="panel"><h2>MODEL</h2><canvas id="clean" width="640" height="640"></canvas></div>
+  <div class="panel"><h2>MOLTY, BRAILLE</h2><canvas id="dots" width="824" height="824"></canvas></div>
+</div>
+<div class="controls">
+  <button id="play">Pause</button>
+  <input id="scrub" type="range" min="0" max="0" value="0" aria-label="Frame">
+  <span class="meta" id="meta">frame 0 / 0</span>
+  <label><input id="onion" type="checkbox"> Onion skin</label>
+  <label><input id="world" type="checkbox" checked> Floor and dust</label>
+  <label><input id="slow" type="checkbox"> Half speed</label>
+</div>
+<div class="check" id="check"></div>
+</main>
+<script src="anim/index.js"></script>
+<script src="anim/cat-rig.js"></script>
+<script src="anim/clip-runtime.js"></script>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id), W = 52, H = 32, DW = 104, DH = 128;
+  const clean = $('clean').getContext('2d'), dots = $('dots').getContext('2d');
+  const RIG = window.CAT_RIG, RT = window.ClipRuntime, list = window.CLIP_LIST || [];
+  const state = { mode: 'clips', clip: null, name: null, view: null, frame: 0, playing: true, last: 0, acc: 0, images: {}, hist: [] };
+  const pref = (k, v) => { try { if (v === undefined) return localStorage.getItem('cat-anim-' + k); localStorage.setItem('cat-anim-' + k, v); } catch (e) { return null; } };
+  const rend = RT.clipDots(RIG, W, H);
+  let player = RT.clipPlayer(RIG);
+
+  function load(name) {
+    return new Promise((resolve) => {
+      if (window.CLIPS && window.CLIPS[name]) return resolve(window.CLIPS[name]);
+      const s = document.createElement('script'); s.src = 'anim/' + name + '.js';
+      s.onload = () => resolve(window.CLIPS[name]); s.onerror = () => resolve(null);
+      document.head.appendChild(s);
+    });
+  }
+  function images(c, view) {
+    const key = c.name + '/' + view; if (state.images[key]) return state.images[key];
+    const imgs = [], dir = 'anim/' + c.name + '/' + (view === c.view ? '' : view + '/');
+    for (let i = 0; i < c.n; i++) { const im = new Image(); im.src = dir + String(i).padStart(4, '0') + '.webp'; imgs.push(im); }
+    return (state.images[key] = imgs);
+  }
+  // the device's frame: the player at this moment, its cells (one colour a cell, as the panel draws them)
+  function deviceCells(frame) {
+    const r = rend.draw(player.world, player.cam, frame); const cells = rend.cells();
+    if (!$('world').checked) for (let k = 0; k < W * H; k++) { let keep = 0; for (let q = 0; q < 8; q++) { const x = 2 * (k % W) + (q >> 2), y = 4 * ((k / W) | 0) + (q & 3), i = y * DW + x; if (r.on[i] && r.pri[i] >= 1) keep = 1; } if (!keep) cells.dots[k] = 0; }
+    return { dots: cells.dots, col: cells.col };
+  }
+  const BIT = (q) => (q < 4 ? ((q & 3) < 3 ? (q & 3) : 6) : ((q & 3) < 3 ? 3 + (q & 3) : 7));
+  function drawCells(c, alpha) {
+    const D = 824, px = D / DW, py = D / DH;
+    dots.globalAlpha = alpha;
+    for (let k = 0; k < W * H; k++) {
+      const b = c.dots[k]; if (!b) continue;
+      const v = c.col[k]; dots.fillStyle = '#' + v.toString(16).padStart(6, '0');
+      for (let q = 0; q < 8; q++) if (b >> BIT(q) & 1) {
+        const x = 2 * (k % W) + (q >> 2), y = 4 * ((k / W) | 0) + (q & 3);
+        dots.beginPath(); dots.arc((x + 0.5) * px, (y + 0.5) * py, 3.1, 0, 6.2832); dots.fill();
+      }
+    }
+    dots.globalAlpha = 1;
+  }
+  function drawPanel(cur) {
+    const D = 824, px = D / DW, py = D / DH;
+    dots.fillStyle = '#121019'; dots.fillRect(0, 0, D, D);
+    dots.save(); dots.beginPath(); dots.arc(D / 2, D / 2, D / 2 - 2, 0, 6.2832); dots.clip();
+    dots.fillStyle = '#000'; dots.fillRect(0, 0, D, D);
+    dots.fillStyle = '#1b1828';
+    for (let y = 0; y < DH; y += 4) for (let x = 0; x < DW; x += 2) { dots.beginPath(); dots.arc((x + 0.5) * px, (y + 0.5) * py, 1.1, 0, 6.2832); dots.fill(); }
+    if ($('onion').checked) state.hist.slice(-4, -1).forEach((h, i, a) => drawCells(h, 0.12 + 0.1 * (i + 3 - a.length)));
+    drawCells(cur, 1);
+    dots.restore();
+  }
+  function drawModel() {
+    clean.fillStyle = '#efedf3'; clean.fillRect(0, 0, 640, 640);
+    const name = player.clip, c = window.CLIPS && window.CLIPS[name];
+    if (!c) { clean.fillStyle = '#8a84a6'; clean.font = '16px system-ui'; clean.fillText(name + ': not rendered in Blender yet', 20, 30); return; }
+    const view = (c.views || [c.view]).includes(state.view) ? state.view : c.view, f = Math.min(c.n - 1, Math.round(player.t * c.fps));
+    const im = images(c, view)[f];
+    if (im && im.complete) clean.drawImage(im, 0, 0, 640, 640); else if (im) im.onload = () => drawModel();
+  }
+  // a clip from its start to frame f (the player is replayed, so scrubbing is exact)
+  function seekClip(name, f) {
+    player = RT.clipPlayer(RIG); player.play(name);
+    for (let i = 0; i < f; i++) player.update(1 / 24);
+  }
+  function show() {
+    const cells = deviceCells(state.frame);
+    state.hist.push(cells); if (state.hist.length > 4) state.hist.shift();
+    drawPanel(cells); drawModel();
+    $('meta').textContent = state.mode === 'clips' ? 'frame ' + (state.frame + 1) + ' / ' + state.n + '  ' + (state.frame / 24).toFixed(2) + ' s' : player.clip + '  ' + player.t.toFixed(2) + ' s';
+    $('scrub').value = state.frame;
+  }
+  async function pick(name) {
+    state.name = name; state.frame = 0; state.hist = [];
+    const c = await load(name), rc = RIG.clips[name];
+    state.n = Math.round(rc.dur * 24) + (rc.loop ? 0 : 1);
+    $('scrub').max = state.n - 1;
+    for (const b of $('clips').children) b.setAttribute('aria-pressed', b.dataset.name === name);
+    const views = c ? (c.views || [c.view]) : [];
+    if (!views.includes(state.view)) state.view = views[0];
+    $('views').innerHTML = '';
+    if (views.length > 1) for (const v of views) {
+      const b = document.createElement('button'); b.textContent = v.replace('_', ' '); b.setAttribute('aria-pressed', v === state.view);
+      b.onclick = () => { state.view = v; for (const x of $('views').children) x.setAttribute('aria-pressed', x === b); show(); };
+      $('views').appendChild(b);
+    }
+    $('check').innerHTML = (rc.loop ? 'Loops. ' : 'Plays once. ') + 'From ' + rc.from + ' to ' + rc.to + '.' +
+      (c ? ' Foot slip while planted (Blender): <b class="' + (c.slip_ok ? 'ok' : 'bad') + '">' + c.slip_dots.toFixed(2) + ' dot</b> (limit 0.5).' : '');
+    pref('clip', name);
+    seekClip(name, 0); show();
+  }
+  // the transitions matrix
+  function buildMatrix() {
+    const g = RIG.graph, fams = g.families, t = $('matrix');
+    t.innerHTML = '<tr><th>from \\ to</th>' + fams.map((f) => '<th>' + f + '</th>').join('') + '</tr>';
+    for (const a of fams) {
+      const tr = document.createElement('tr'); tr.innerHTML = '<th>' + a + '</th>';
+      for (const b of fams) {
+        const td = document.createElement('td');
+        if (a === b) { td.className = 'self'; td.textContent = g.rest[a]; }
+        else {
+          const r = RT.route(g, a, b), btn = document.createElement('button'); btn.textContent = r.join(' + ');
+          btn.onclick = () => { for (const x of t.querySelectorAll('button')) x.setAttribute('aria-pressed', x === btn); playRoute(a, b); };
+          td.appendChild(btn);
+        }
+        tr.appendChild(td);
+      }
+      t.appendChild(tr);
+    }
+  }
+  function playRoute(a, b) {
+    player = RT.clipPlayer(RIG); player.play(RIG.graph.rest[a]); state.hist = [];
+    state.route = { b, at: 1.2, asked: false, t: 0 };
+    $('check').textContent = 'Resting in ' + a + ', then asking for ' + b + ': ' + RT.route(RIG.graph, a, b).join(' + ') + ', then ' + RIG.graph.rest[b] + '.';
+    state.playing = true; $('play').textContent = 'Pause';
+  }
+  function setMode(m) {
+    state.mode = m; $('tabClips').setAttribute('aria-pressed', m === 'clips'); $('tabRoutes').setAttribute('aria-pressed', m === 'routes');
+    $('clipsView').hidden = m !== 'clips'; $('routesView').hidden = m !== 'routes'; $('scrub').disabled = m !== 'clips';
+    if (m === 'clips') pick(state.name || list[0]);
+  }
+  for (const n of list) { const b = document.createElement('button'); b.textContent = n.replace(/_/g, ' '); b.dataset.name = n; b.onclick = () => pick(n); $('clips').appendChild(b); }
+  $('tabClips').onclick = () => setMode('clips'); $('tabRoutes').onclick = () => { setMode('routes'); };
+  $('play').onclick = () => { state.playing = !state.playing; $('play').textContent = state.playing ? 'Pause' : 'Play'; };
+  $('scrub').oninput = (e) => { state.frame = +e.target.value; state.playing = false; $('play').textContent = 'Play'; seekClip(state.name, state.frame); show(); };
+  $('onion').onchange = show; $('world').onchange = show;
+  function tick(ts) {
+    if (state.playing) {
+      state.acc += Math.min(100, ts - (state.last || ts)) / 1000 * 24 * ($('slow').checked ? 0.5 : 1);
+      let stepped = false;
+      while (state.acc >= 1) {
+        state.acc -= 1; stepped = true;
+        if (state.mode === 'clips') {
+          const rc = RIG.clips[state.name];
+          if (state.frame < state.n - 1) { state.frame++; player.update(1 / 24); }
+          else { state.frame = 0; seekClip(state.name, 0); }
+          if (!rc) break;
+        } else {
+          player.update(1 / 24); state.frame++;
+          const r = state.route; if (r) { r.t += 1 / 24; if (!r.asked && r.t >= r.at) { r.asked = true; player.goto(RIG.graph.rest[r.b]); } }
+        }
+      }
+      if (stepped) show();
+    }
+    state.last = ts;
+    requestAnimationFrame(tick);
+  }
+  buildMatrix();
+  const saved = pref('clip');
+  pick(list.includes(saved) ? saved : list[0]);
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>

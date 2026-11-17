@@ -189,6 +189,9 @@ so a new device has them without a download. `POST /api/creature/select?id=` (co
 - The file carries `creature` instead of `assets` and `layouts`: `{ about, body, walk, groups, events, base, gestures, moods, post, tints, ambient }`
   (`about`: how it looks and a line per gesture and mood, for the agent; [CREATURES.md](CREATURES.md) section 1).
   At most **40 KB** (tighter than the 256 KB of a scenes package), so a device holds the three defaults and a few more in RAM at once.
+  A **rigged** creature (`creature.rig`: a skeleton, its body as rounded primitives, baked clips in glTF's animation layout and
+  the routes between its poses; [CREATURES.md](CREATURES.md) section 12) may be up to **256 KB** (the package limit): its clips are the bulk. The
+  cat is one. Its `gestures` and `moods` keep declaring what it plays, with empty channel lists.
 - Built by `packages/<id>/build.mjs` with the shared helpers in `tools/creatures/kit.mjs`; `make packages` rebuilds them all and their
   `packages/index.json` entries.
 - The reference player is `device/creatures/js/creature-player.js` (the C port follows it, hash included). `make creatures-test` checks

@@ -99,6 +99,8 @@ idf_component_register(
         "creature/creature_player.c"   # a creature package's channels, layers, tints, ambient (creature-player.js)
         "creature/creature_body.c"     # its bones + v2 parts, rasterised the lab's way into the fluid
         "creature/creature_pkg.c"      # engine + player + body: one frame
+        "creature/creature_clip.c"     # a rigged creature's baked clips and routes (clip-player.js)
+        "creature/creature_dots.c"     # ... drawn straight on the braille dots (clip-dots.js)
         # link: agent link to the relay (WSS, pairing, audio)
         "link/link_protocol.c"
         "link/link_identity.c"
@@ -229,6 +231,8 @@ set_source_files_properties(
     "fluid/mole_fluid.c"
     "creature/cute_rig.c"
     "creature/creature_body.c"
+    "creature/creature_clip.c"
+    "creature/creature_dots.c"
     "scene/scene_player.c"
     ${MOLTY_BOARD_FAST_SRCS}
     PROPERTIES COMPILE_OPTIONS "-O2;-fno-math-errno"

@@ -248,3 +248,99 @@ Compared over the full reels (every scene, mood and gesture) against the approve
   moments run on as the weight fades (the code froze them at their settled values). In the reel it stays pale a beat
   longer after a fright.
 - **2D sprites**: not carried (section 9).
+
+## 12. Rigged creatures (clips, routes, dots)
+
+A creature package may carry a **rig** instead of channel layers: a skeleton, its body as rounded primitives per bone, baked
+clips, and the route map between its poses. The cat is the first (modelled, rigged and animated in Blender:
+`packages/cat/blender/`). Its channel layers stay empty; `gestures` and `moods` only declare what it plays (and their
+lengths for the mood engine), so agents, the console and old firmware see the same names. Reference player:
+`device/creatures/js/clip-player.js` and `clip-dots.js`; C port: `main/creature/creature_clip.c` and `creature_dots.c`.
+
+```jsonc
+"rig": {
+  "fps": 24,
+  "scale": { "t": 4096, "r": 32767, "s": 4096 },         // int16 quantisation of the clip outputs
+  "nodes": [ { "id": "root", "parent": -1, "t": [x, y, z], "r": [x, y, z, w], "s": [x, y, z] }, ... ],   // rest pose, parent first
+  "shapes": [ Shape, ... ],                                // the body, on the nodes, in their rest frames
+  "contacts": [ [node, [x, y, z]], ... ],                  // the paws' contact points (the light paw lock)
+  "palette": { "body": "#a99be8", ... },
+  "clips": { "<name>": Clip, ... },
+  "graph": Graph }
+```
+
+**Coordinates.** y up, the creature faces +z, its left is +x; one unit is the body's (the cat stands about 0.6 high).
+A node's `t r s` are relative to its parent (glTF's node transform).
+
+**Clip** (glTF 2.0's animation layout, per clip):
+`{ dur, loop, from, to, view, follow, frames, ch: [ [node, path, interp, bytes, in, out], ... ] }`: each channel a glTF channel
+and its sampler in a compact array: `path` "t" | "r" | "s", `interp` "S" | "L" | "C" (STEP, LINEAR, CUBICSPLINE), `bytes` 1 or 2
+per output component.
+- `in`: base64, the key frames (at `fps`): u8 in a clip under 256 frames, else little-endian u16. `out`: base64 int16 (2 bytes, divided by `scale[path]`) or int8
+  (1 byte, rotations only, normalised: divided by 127), glTF's KHR_mesh_quantization. LINEAR: a value a key
+  (rotations take the shorter way and are normalised); CUBICSPLINE: in-tangent, value, out-tangent a key (glTF's order),
+  the tangents per frame; STEP: one value. A channel that is the rest pose all through is left out.
+- A loop's last key interpolates to frame `frames` (its first key again), so it closes smoothly.
+- `from`, `to`: the pose families it starts and ends in. `view`: the camera's yaw for it in degrees (0 in front, -90 from the
+  creature's right). Root motion is the root node's translation: it carries on from clip to clip.
+- Keys come from the posed Blender rig (IK solved, so plain FK), reduced greedily while the curve stays within 0.003
+  (translation), 0.0045 (the quaternions of the chains from the root to the paws: a planted paw sums their errors),
+  0.008 (other quaternions), 0.02 (the int8 tail, ears and face), 0.02 (scale; 0.05 for eyelids and mouth) of every
+  sample; each channel takes LINEAR or CUBICSPLINE, whichever is smaller.
+
+**Shape** `{ k, b, g, c, p, ... }`: `k` the kind, `b` the node, `g` the outline group, `c` a palette name, `p` its centre:
+- `blob` (`q`, `r` radii, `st` stiffness): one element of the merged body: a metaball field st (1 - q)^3, threshold 0.6
+  (Blender's), so the back, rump and legs are one smooth shape in every pose;
+- `ell` (`q`, `r`): an ellipsoid (head, paws, eyes as flat discs, nose, mouth, tongue, props);
+- `cap` (`p1`, `r` [r0, r1]): a tapered capsule (front legs, tail, whiskers); `cyl` the same with flat ends (a bowl);
+- `cone` (`p1`, `r` [radius, flatness], `fa` the flat axis): an ear;
+- `patch` (`q`, `r`): a region of the body's surface (the white chest): colour only, never a shape.
+Groups: `torso hindL hindR head legF.L legF.R tail bowl yarn` outline; `eye earIn nose maw tongue whisker chest milk`
+are features.
+
+**Graph**:
+`{ families: [...], rest: { family: loop }, edges: { "a>b": clip }, moods: { mood: clip }, gestures: { name: clip },
+hold: { gesture: seconds }, enter: { clip: { family: clip } }, sync: { loop: stride seconds }, blend, center: [node, node] }`.
+
+### Playing
+
+- The player keeps a **target**: the mood's loop, or a gesture's clip once (a `hold` gesture, the walk, stays in its loop
+  that long). To reach it from the family the current clip ends in, it plays the **route**: the authored edge clips, found
+  breadth first (`edges` in file order), then the target. `enter` gives a target its own way in from a family (the cat's
+  startle from sitting or standing). Between two clips it crossfades for `blend` seconds (eased; quaternions nlerp), and a
+  **light paw lock** holds the paws that were on the floor where they were, fading out with the blend.
+- Every ordered pair of resting families has its own authored clip, and so do sitting and standing into and out of the walk
+  (the cat: sit, stand, loaf, crouch, walk; 16 clips); from the loaf or the crouch the walk is two authored hops (it stands up
+  first). A crossfade only ever joins clips of the same family (a mood to a mood while sitting, a transition into its loop).
+- A loop in `sync` (the walk) is joined at the phase that best matches the pose on screen and left only on a stride
+  boundary, so a stepping paw is never cut.
+- A gesture or mood name the package lacks is refused (`unknown_gesture`), as for channel creatures.
+
+### Drawing (the device's look)
+
+`clip-dots.js` / `creature_dots.c` draw straight onto the braille lattice (2W x 4H dots), no meshes: each primitive is
+projected orthographically (the camera eases round to the clip's `view` at 2/s and follows the body at 3/s), the merged body
+as a 2D metaball field with the nearest surface's depth per dot, the parts as solid ellipses and capsules. Then: one
+outline, inner lines where a nearer group crosses another (a hind leg only along its lower front edge against the body),
+brighter where nearer; the features; whiskers where nothing else is drawn; and the world: a static perspective floor (a dotted
+texture fixed in the world and receding lines every 26 dots, so the creature walks over it), shimmering dust that thickens
+toward the horizon, a vignette, and a two-dot halo kept clear round the creature. A cell takes one colour: the creature's
+dots win a cell, then the brightest. On the device the cells go to the fluid's drawer as a scene's dots (crisp on black),
+with the fluid held still under them.
+
+### Limits and cost
+
+| | limit | the cat |
+|---|---|---|
+| file (rigged) | 256 KB | see `packages/index.json` |
+| nodes, shapes, clips | 80, 128, 64 | 43 (2 of them props), 90, 45 |
+| families, edges, gestures | 8, 64, 32 | 5, 16, 18 |
+| channels (all clips) | | 1827 (1413 LINEAR, 413 STEP, 1 CUBICSPLINE) |
+
+Per frame on the device: sampling (a binary search and a Hermite per channel, ~100 channels) and FK of ~50 nodes are a few
+µs; the dots are the cost: the field and parts over the creature's box, then a hash per dot for the world.
+`test/host/clip_build.sh` prints the host time. Measured on the host (Apple silicon) and scaled by the creature test's own
+calibration (the .molty duck: about 54 µs on the host, 11 ms measured on the 1.46): the cat's play + dots cost about 8 to 10 ms
+sitting or lying, 12 to 13 ms standing, crouched or eating, 17 to 18 ms walking (side on, the widest box), on the 1.46's
+52 x 32 grid. The fluid under it is held still (no background, swirl or view), so a frame is that plus the sim steps, the
+drawer and the flush. To be confirmed on the device (`GET /api/creature/state`, `prof_ms.c_update`).

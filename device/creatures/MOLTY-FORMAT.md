@@ -1,5 +1,9 @@
 # .molty — swappable creatures for the device
 
+> Creature **packages** (`packages/<id>/<id>.json`, docs/PACKAGES.md section 5) are the other way to ship a creature; a
+> rigged one (the cat: baked Blender clips, drawn straight on the braille dots) is described in docs/CREATURES.md section 12.
+> This file is the older binary `.molty` form of the cute-kit creatures.
+
 A `.molty` file is one cute-kit creature (`js/cute/kit.js` `defineCreature` spec) in a
 compact binary form. The firmware holds the generic kit **runtime**; it does not hold any
 creature. A creature is data, uploaded at runtime, so creatures can be swapped without a

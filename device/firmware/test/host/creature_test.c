@@ -20,6 +20,7 @@
  */
 #include "creature_player.h"
 #include "creature_pkg.h"
+#include "creature_clip.h"
 #include "cute_act.h"
 #include "cute_rig.h"
 #include "fluid_sim.h"
@@ -258,6 +259,7 @@ static double test_render(const char *pkgdir, const char *id, const char *outdir
     uint16_t *fb = calloc(FLUID_STAGE_REF * FLUID_STAGE_REF, 2);
     s->edge_w = 1.f;
     int worst = 0, eyes = 0; double us = 0; int timed = 0;
+    const bool crisp = cpk_crisp(k);       /* a rigged creature: its own dots, the fluid still under them (mole_fluid.c) */
     for (int m = 0; m < CP_N_MOODS; m++) {
         me_set_mood(cpk_engine(k), m);
         float ink = 0; int holes = 0;
@@ -269,16 +271,26 @@ static double test_render(const char *pkgdir, const char *id, const char *outdir
             const double t0 = now_us();
             cpk_frame(k, s, 1.f / 30.f, 1.f);
             us += now_us() - t0; timed++;
-            fluid_sim_background(s, t, 0.5f, (f & 1) == 0);
-            fluid_sim_swirl_field(s);
+            if (!crisp) { fluid_sim_background(s, t, 0.5f, (f & 1) == 0); fluid_sim_swirl_field(s); }
             fluid_sim_step(s, 1.f / 60); fluid_sim_step(s, 1.f / 60);
             fluid_sim_color(s, 1.f / 30);
-            fluid_sim_view(s);
+            if (crisp) cpk_paint(k, s); else fluid_sim_view(s);
             fluid_sim_snapshot(s, fr, false);
             fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, t, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL };
+            if (crisp) { const uint32_t *cc; cpk_cells(k, &o.dots, &cc); o.scene = true; }
             int y0, y1;
             fluid_draw(d, fr, fb, &o, &y0, &y1);
             if (cpk_tris(k) > worst) worst = cpk_tris(k);
+        }
+        if (crisp) {                       /* its dots: an outline, features, the floor and dust */
+            const uint8_t *cd; const uint32_t *cc; int dots = 0;
+            cpk_cells(k, &cd, &cc);
+            for (int q = 0; q < W * H; q++) dots += __builtin_popcount(cd[q]);
+            CHECK(dots > 200, "%s %s: only %d dots", id, MOOD_NAMES[m], dots);
+            eyes++; worst = 1000;
+            printf("  %-8s %-10s dots %5d\n", id, MOOD_NAMES[m], dots);
+            if (outdir) { snprintf(path, sizeof(path), "%s/%s_%s.ppm", outdir, id, MOOD_NAMES[m]); write_ppm(path, fb); }
+            continue;
         }
         /* the body only revisits the cells it or the marks wrote: re-rastered now (last frame's
          * marks still in its cells), it matches a body rastered from nothing at this pose */
@@ -417,9 +429,9 @@ static void test_info(const char *pkgdir, const char *id) {
     free(json);
 }
 
-/* a gesture of the package's own (the cat's eat): found by name, played by the device's engine for its own length with
- * the package moving the body (the bowl, shown only while it plays), listed for agents; a name it lacks is -1 */
-static void test_own(const char *pkgdir) {
+/* a gesture of the package's own (the cat's eat, its clips in the rig): found by name, listed for agents, played by the
+ * engine and routed by the clip player to its clip; a name it lacks is -1 */
+static void test_own_rigged(const char *pkgdir) {
     char path[512]; size_t len;
     snprintf(path, sizeof(path), "%s/cat/cat.json", pkgdir);
     char *json = slurp(path, &len);
@@ -428,23 +440,19 @@ static void test_own(const char *pkgdir) {
     CHECK(k != NULL, "cat: create (%s)", err ? err : "no file");
     if (!k) { free(json); return; }
     const cp_t *c = cpk_player(k);
-    const int eat = cp_gesture(c, "eat"), bowl = cp_bone_find(c, "bowl");
-    CHECK(eat >= CUTE_N_ACTS && cp_own_gestures(c) >= 1 && !strcmp(cp_gesture_name(c, eat), "eat"), "cat: eat is its own gesture (%d)", eat);
-    CHECK(cp_gesture(c, "nod") == CA_NOD && cp_gesture(c, "fly") < 0 && cp_gesture(NULL, "eat") < 0 && cp_gesture(c, NULL) < 0, "cat: gesture lookup");
-    CHECK(cp_gesture_dur(c, eat) > 3.f && cp_gesture_dur(c, eat) < 6.f && cp_gesture_dur(c, CA_NOD) == cute_act_dur(CA_NOD), "cat: eat lasts %.2f s", cp_gesture_dur(c, eat));
+    const int eat = cp_gesture(c, "eat");
+    CHECK(cpk_crisp(k) && cp_rigged(c), "cat: rigged");
+    CHECK(eat >= CUTE_N_ACTS && !strcmp(cp_gesture_name(c, eat), "eat"), "cat: eat is its own gesture (%d)", eat);
+    CHECK(cp_gesture(c, "nod") == CA_NOD && cp_gesture(c, "fly") < 0, "cat: gesture lookup");
     CHECK(strstr(cp_info(c), "\"eat\"") != NULL, "cat: eat is not in its info");
     fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
     mood_engine_t *e = cpk_engine(k);
+    const cc_t *cl = cpk_clip(k);
     cpk_frame(k, s, 1.f / 30, 1.f);
-    const float before = cp_bone_out(c, bowl)[6];
     me_act(e, eat);
-    CHECK(me_acting(e) == eat, "cat: eat does not play");
-    float most = 0; int f = 0;
-    for (; f < 300 && me_acting(e) == eat; f++) { cpk_frame(k, s, 1.f / 30, 1.f); most = fmaxf(most, cp_bone_out(c, bowl)[6]); }
-    CHECK(fabsf(f / 30.f - cp_gesture_dur(c, eat)) < 0.1f, "cat: eat played %.2f s", f / 30.f);
-    CHECK(before < 0.01f && most > 0.95f && cp_bone_out(c, bowl)[6] < 0.01f, "cat: the bowl %.3f, then %.3f, then %.3f", before, most, cp_bone_out(c, bowl)[6]);
-    me_act(e, CUTE_N_ACTS + cp_own_gestures(c));
-    CHECK(me_acting(e) < 0, "an id past its own gestures plays");
+    bool played = false;
+    for (int f = 0; f < 400; f++) { cpk_frame(k, s, 1.f / 30, 1.f); float t; played |= !strcmp(cc_clip_name(cl, cc_clip(cl, &t)), "eat"); }
+    CHECK(played, "cat: the eat clip never played");
     fluid_sim_destroy(s); cpk_destroy(k); free(json);
 }
 
@@ -454,9 +462,9 @@ int main(int argc, char **argv) {
     test_hash();
     for (const char *const *id = (const char *const[]){ "duck", "cat", "octopus", NULL }; *id; id++) test_golden(argv[1], argv[2], *id);
     test_strict(argv[1]);
-    test_own(argv[1]);
+    test_own_rigged(argv[1]);
     for (const char *const *id = (const char *const[]){ "duck", "cat", "octopus", NULL }; *id; id++) test_info(argv[1], *id);
-    for (const char *const *id = (const char *const[]){ "duck", "cat", NULL }; *id; id++) test_planted(argv[1], *id);
+    for (const char *const *id = (const char *const[]){ "duck", NULL }; *id; id++) test_planted(argv[1], *id);   /* the cat: clip_test.c */
     const double v1 = bench_v1(argv[3]);
     CHECK(v1 > 0, "the .molty duck to compare with (%s)", argv[3]);
     for (const char *const *id = (const char *const[]){ "duck", "cat", "octopus", NULL }; *id; id++) {

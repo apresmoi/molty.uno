@@ -44,7 +44,8 @@ export function limits(cr) {
 
 for (const { id, file, pkg } of creatures) test(`creature package ${id}`, () => {
   assert.equal(pkg.v, 'molty-pkg/1'); assert.equal(pkg.id, id);
-  assert.ok(statSync(file).size <= 40 * 1024, `${id} is ${statSync(file).size} bytes, over 40 KB`);
+  const max = pkg.creature.rig ? 256 * 1024 : 40 * 1024;   // a rigged creature carries its baked clips (docs/CREATURES.md section 12)
+  assert.ok(statSync(file).size <= max, `${id} is ${statSync(file).size} bytes, over ${max / 1024} KB`);
   for (const [v, max, what] of limits(pkg.creature)) assert.ok(v <= max, `${id}: ${v} ${what}, limit ${max}`);
   const idx = JSON.parse(readFileSync(new URL('index.json', ROOT)))[id], bytes = readFileSync(file);
   assert.equal(idx.kind, 'creature'); assert.deepEqual(idx, indexEntry(pkg, bytes));
@@ -63,7 +64,8 @@ function waiting(pkg, mood, work, keep = true) {
   finally { Math.random = rnd; }
   return out;
 }
-for (const { id, pkg } of creatures) test(`${id} keeps alive while it waits on the agent, with small expressions of its own`, () => {
+// (a rigged creature's waiting life is in its own thinking clip: tools/creatures/clip.test.mjs)
+for (const { id, pkg } of creatures.filter((c) => !c.pkg.creature.rig)) test(`${id} keeps alive while it waits on the agent, with small expressions of its own`, () => {
   assert.ok(pkg.creature.events.ponder?.pick, `${id}: no ponder event`);
   for (const [mood, work] of [['thinking', false], ['idle', true]]) {
     const on = waiting(pkg, mood, work), off = waiting(pkg, mood, work, false);
