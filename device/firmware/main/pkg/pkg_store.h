@@ -79,6 +79,11 @@ const char *pkg_fetch(const pkg_req_t *r, const pkg_io_t *io, uint8_t *buf);
 /* Parse and store fetched bytes (r->size of buf) into root. NULL: installed, *out its index
  * entry. Else "bad_package" | "no_space". One writer at a time (pkg_cmd.c's lock). */
 const char *pkg_store_put(const char *root, const pkg_req_t *r, const uint8_t *buf, pkg_entry_t *out);
+/* The bytes id's installed file holds (0: none): an update replaces them. */
+uint32_t pkg_store_installed_size(const char *root, const char *id);
+/* Remove every file under root the index does not name (a download or an index write cut short, a package whose entry
+ * went): the store holds only what it lists. Returns how many went. */
+int pkg_store_sweep(const char *root);
 /* "no_space" when size more bytes (replacing id's) would pass the quota; else NULL. */
 const char *pkg_store_room(const char *root, const char *id, uint32_t size);
 /* Installed packages (their files present), up to max. */

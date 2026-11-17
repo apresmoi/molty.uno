@@ -36,6 +36,7 @@
 #include "power.h"
 #include "network.h"
 #include "console_store.h"
+#include "pkg_store.h"
 #include "http.h"
 #include "improv_serial.h"
 #include "self_update.h"
@@ -85,6 +86,7 @@ void app_main(void)
 
     // SPIFFS + console page. Must run before USB/Wi-Fi/httpd (see console_store.c).
     console_store_init();
+    pkg_store_sweep(PKG_ROOT);      /* the package store holds only what it lists (a download cut short leaves nothing) */
 
     // Networking: USB-C NCM (10.13.37.1, DHCP server), mDNS, Wi-Fi STA. NCM needs the
     // chip's native USB on the USB-C port; boards with a USB-UART bridge there skip it.
