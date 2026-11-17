@@ -34,10 +34,10 @@ void  cd_destroy(cd_t *d);
 void  cd_draw(cd_t *d, const cc_t *c, uint32_t frame);
 /** The cells of the last draw: a braille byte (fluid_braille_bit order) and a colour 0xRRGGBB a cell. */
 void  cd_cells(const cd_t *d, const uint8_t **dots, const uint32_t **rgb);
-#define CD_STAGES 7
+#define CD_STAGES 8
 /** Cycles spent per stage since the last call, added into out[CD_STAGES]: projection, the body and the solid parts, lines,
  *  features, the halo's rows, the halo's columns with the world and the cells; then, within those, the waits for the
- *  second band (the other core, ESP). */
+ *  second band; and the second band's own time on the other core (ESP). */
 void  cd_prof(cd_t *d, uint32_t *out);
 
 #ifdef __cplusplus

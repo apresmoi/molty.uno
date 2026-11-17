@@ -48,7 +48,7 @@ extern "C" {
 enum { FP_TARGET, FP_BG, FP_SWIRL, FP_WAVE, FP_DEMAND, FP_FLOW, FP_ADVECT, FP_RELAX, FP_COLOR, FP_VIEW,
        FP_C_UPDATE, FP_C_RASTER, FP_C_CLEAR, FP_C_VERT, FP_C_SAMPLES, FP_C_AGG, FP_C_FILL,
        /* a rigged creature's frame (creature_dots.c), inside c_update */
-       FP_K_PLAY, FP_K_PROJ, FP_K_SOLID, FP_K_LINES, FP_K_FEAT, FP_K_HALO, FP_K_CELLS, FP_K_WAIT,
+       FP_K_PLAY, FP_K_PROJ, FP_K_SOLID, FP_K_LINES, FP_K_FEAT, FP_K_HALO, FP_K_CELLS, FP_K_WAIT, FP_K_BAND,
        FP_DSAMPLE, FP_DRASTER, FP_N };
 extern const char *const FLUID_PROF_NAMES[FP_N];
 extern uint32_t fluid_prof[FP_N];
