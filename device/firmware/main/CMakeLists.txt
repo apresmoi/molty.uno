@@ -189,6 +189,11 @@ idf_component_register(
         ${CREATURE_FILES}       # the built-in creature packages (packages/<id>/<id>.json)
 )
 
+# A debug build's ring without a listen (POST /api/diag/ring?ms=): MOLTY_DIAG_RING=1 in the build's environment
+if(DEFINED ENV{MOLTY_DIAG_RING})
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE MOLTY_DIAG_RING=1)
+endif()
+
 # ── Console SPIFFS image ─────────────────────────────────────────────────────
 # Ships device/console/dist/index.html in the "spiffs" partition (partitions.csv), so a
 # cable flash always lands the current console. net/console_store.c loads

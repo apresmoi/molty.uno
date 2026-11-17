@@ -1199,6 +1199,19 @@ static esp_err_t http_wifi_drop(httpd_req_t *r)
     return httpd_resp_sendstr(r, body);
 }
 
+#ifdef MOLTY_DIAG_RING
+/* debug builds only: POST /api/diag/ring?ms=<ms> shows the listening ring for ms (default 3000) without a listen */
+static esp_err_t http_ring(httpd_req_t *r)
+{
+    const uint32_t ms = query_u32(r, "ms", 3000);
+    mole_fluid_diag_ring(ms);
+    char body[48];
+    snprintf(body, sizeof(body), "{\"ok\":true,\"ms\":%lu}", (unsigned long)ms);
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, body);
+}
+#endif
+
 esp_err_t mole_diag_http_register(httpd_handle_t server)
 {
     const httpd_uri_t routes[] = {
@@ -1208,6 +1221,9 @@ esp_err_t mole_diag_http_register(httpd_handle_t server)
         {.uri = "/api/diag/wifi_ps", .method = HTTP_GET, .handler = http_wifi_ps},
         {.uri = "/api/diag/wifi_ps", .method = HTTP_POST, .handler = http_wifi_ps},
         {.uri = "/api/diag/wifi_drop", .method = HTTP_POST, .handler = http_wifi_drop},
+#ifdef MOLTY_DIAG_RING
+        {.uri = "/api/diag/ring", .method = HTTP_POST, .handler = http_ring},
+#endif
     };
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
         esp_err_t e = httpd_register_uri_handler(server, &routes[i]);

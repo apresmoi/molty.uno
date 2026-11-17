@@ -278,9 +278,13 @@ export function clipPlayer(rig) {
     nodes: rig.nodes, clips, world: out, clipWorld: world, pose: cur, get clip() { return clips[s.clip].name; }, get t() { return s.t; }, get cam() { return s.cam; }, get facing() { return s.hd - (s.cam.yaw - clips[s.clip].view) * Math.PI / 180; },
     get queue() { return s.queue.map((i) => clips[i].name); }, get offset() { return [s.ox, s.oz]; },
     mood(m) { if (!MOODS.includes(m) || m === s.mood) return; s.mood = m; s.pending = true; },
-    /** Called (a tap, a shake): it walks to the front of the frame facing the viewer and sits up attending (ATTEND), or,
+    /** Called (a tap, a shake): first its own reaction if given (a shake: 'shaken'), then it walks to the front of the frame facing the viewer and sits up attending (ATTEND), or,
      *  facing front near the middle already, just perks up; then back to its mood. act and play end a call. */
-    come() {
+    come(first) {
+      if (first) {                                     // its own reaction first (a shake's)
+        const clip = g.gestures?.[first] ?? (byName[first] != null ? first : null);
+        if (clip != null) { s.gesture = { name: first, clip, hold: g.hold?.[first] ?? 0, started: false }; s.gestureT = 0; s.pending = true; interrupt(); s.come = 4; return true; }
+      }
       const cc = clips[s.clip], Y = s.cam.yaw * Math.PI / 180, TAU = 2 * Math.PI;
       let fc = s.hd - (s.cam.yaw - cc.view) * Math.PI / 180; fc -= TAU * Math.floor(fc / TAU + 0.5);
       const ox = s.px - s.cam.x, oz = s.pz - s.cam.z;
@@ -309,7 +313,8 @@ export function clipPlayer(rig) {
       s.t += dt; s.blendT += dt;
       if (s.gesture?.started) s.gestureT += dt;
       // a held gesture (the walk) ends after its time; a clip gesture ends with its clip
-      if (s.come >= 2 && !s.gesture) s.come = 0;                        // attended: back to its mood
+      if (s.come === 4 && !s.gesture) { s.come = 0; api.come(); }       // its reaction done: now it comes
+      else if (s.come >= 2 && s.come <= 3 && !s.gesture) s.come = 0;     // attended: back to its mood
       if (s.come !== 1 && s.gesture?.started && s.gesture.hold && s.gestureT >= s.gesture.hold && clips[s.clip].loop) { s.gesture = null; s.pending = true; }
       if (c.loop) {
         const sync = g.sync?.[c.name];

@@ -272,6 +272,10 @@ static struct {
 static bool  s_listen = false;                  /* task copy of s_listen_in */
 static int32_t s_ring_rgb = -1, s_ring_def = -1;   /* task copies of s_ring_in / s_ring_dflt */
 static fluid_ring_t s_rg;                       /* the listening ring (fluid_ring.h)     */
+#ifdef MOLTY_DIAG_RING
+static volatile int64_t s_diag_ring_until;      /* a debug build's ring without a listen (mole_fluid_diag_ring) */
+void mole_fluid_diag_ring(uint32_t ms) { s_diag_ring_until = esp_timer_get_time() + (int64_t)ms * 1000; }
+#endif
 static fluid_progress_t s_pg;                   /* the agent's progress on the same line */
 static _Atomic int32_t s_prog_in = -1;          /* mole_fluid_progress: pct × 10, < 0 = no percent */
 static atomic_uint     s_prog_seq;              /* bumped by each progress                         */
@@ -593,7 +597,7 @@ static void poll_touch(int n, const uint16_t *xs, const uint16_t *ys, int64_t t)
         s_touch_down = true; s_tpx = x; s_tpy = y; s_last_tx = xs[0]; s_last_ty = ys[0];
         ripple(x, y, 1.6f, 0.09f);
         fd_user(&s_dir);                                    /* wakes a sleepy creature */
-        if (s_cur == ST_CREATURE && s_cpk) cpk_come(s_cpk);  /* a rigged one comes to the front, attending */
+        if (s_cur == ST_CREATURE && s_cpk) cpk_come(s_cpk, NULL);   /* a rigged one comes to the front, attending */
         if (!s_touch_t0) s_touch_t0 = t;
         return;
     }
@@ -749,7 +753,11 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     /* a listen on the water, never over a question: a fixed circle at the rim, and each rise of
      * the voice sends a round wave from it across the screen (fluid_ring.h). The circle is a
      * target of the fluid, around whatever the state shows. */
+#ifdef MOLTY_DIAG_RING
+    fluid_ring_tick(&s_rg, rdt, (s_listen || esp_timer_get_time() < s_diag_ring_until) && !asking);
+#else
     fluid_ring_tick(&s_rg, rdt, s_listen && !asking);
+#endif
     {   /* the agent's progress: on from its first word until done, or PROG_TTL_S without news */
         static unsigned seen; static float at = -1.f;
         const unsigned q = atomic_load(&s_prog_seq);
@@ -1268,7 +1276,7 @@ static void fluid_task(void *arg) {
         else if (req_mood >= 0) fd_agent_mood(&s_dir, req_mood, req_hold_s);
         else if (activity) fd_activity(&s_dir);
         if (user) fd_user(&s_dir);
-        if (shake) { fd_shake(&s_dir); if (s_cur == ST_CREATURE && s_cpk) cpk_come(s_cpk); }
+        if (shake) { fd_shake(&s_dir); if (s_cur == ST_CREATURE && s_cpk) cpk_come(s_cpk, "shaken"); }   /* its shaken, then it comes */
         fd_set_idle_life(&s_dir, idle_life);
         if (req_act >= 0) fd_agent_act(&s_dir, req_act, cr_act_dur(req_act));
         if (spoke) fd_turn_spoken(&s_dir);

@@ -27,9 +27,11 @@
 #define CR_NB      256       /* angle bins                                                                     */
 #define CR_IN      0.68f     /* the band: dots from this radius (of the disc's) out                           */
 #define CR_ARC_R   0.92f     /* a question's arcs' line (fluid_ask.h FLUID_ASK_ARC_R)                          */
-#define CR_EASE_S  0.5f      /* forming / dissolving                                                           */
-#define CR_SCAT    7.f       /* dots of scatter, unformed                                                      */
-#define CR_RIP     2.5f      /* dots of ripple, unformed                                                       */
+#define CR_EASE_S  0.08f     /* a bin's forming / dissolving ...                                                */
+#define CR_SWEEP_S 0.6f      /* ... begun round the ring clockwise from 12 over this (dissolving: back): only a  
+                              * part of the rim changes in a frame, so the panel is sent a part              */
+#define CR_SCAT    4.f       /* dots of scatter, unformed                                                      */
+#define CR_RIP     1.5f      /* dots of ripple, unformed                                                       */
 #define CR_TW      36        /* each dot row's twinkle every this many frames (rows scattered, a few a frame)   */
 #define CR_LUT0    (-4.f)    /* the profile's table: dots from the line (+: inward), quarter dots              */
 #define CR_LUTN    96
@@ -42,10 +44,13 @@ struct cr {
     int16_t kr[CR_NB], ka[CR_NB];                 /* each bin's cell on the ring's line and on the arcs' line    */
     float er[CR_NB], ea[CR_NB];                   /* each bin's amount, easing                                   */
     uint32_t cr[CR_NB], ca[CR_NB];                /* ... and its colour (tcol), kept while it dissolves          */
+    float lr[CR_NB], la[CR_NB];                   /* ... and its last amounts, held until the sweep back takes it */
     float rip[CR_NB];                             /* the ripple's phase per bin (its angle x 6)                  */
+    float ripv[CR_NB];                            /* ... this frame's ripple there, in dots (one sinf a bin)     */
+    float ub[CR_NB], gr[CR_NB], ga[CR_NB];        /* ... how unformed it is there, and each line's eased amount  */
     uint8_t lut[CR_LUTN];                         /* the line's profile                                          */
     uint8_t *rd, *rden; uint16_t *rsrc;           /* per cell, this frame: ring dots, their strongest, its bin   */
-    float t;
+    float t, sweep, sum;                           /* the sweep round: 0 none .. 1 all of it; last frame's ink     */
     bool any;
 };
 
@@ -119,9 +124,19 @@ bool cr_paint(cr_t *r, const fluid_sim_t *s, float dt, uint32_t frame, uint8_t *
     /* each bin's amount: the target's ink at its line (the stronger line wins the bin), eased in and out */
     const float step = dt / CR_EASE_S, norm = 1.f / (FQ_UNIT * RING_INK);
     bool any = false;
+    float sum = 0.f;                               /* the lines' ink: rising or holding, a ring is wanted; falling (its
+                                                    * own fade out), it is let go, the sweep taking it back */
+    for (int b = 0; b < CR_NB; b++) sum += (float)(s->T[r->kr[b]] > s->T[r->ka[b]] ? s->T[r->kr[b]] : s->T[r->ka[b]]);
+    const bool want = sum > 0.f && sum >= 0.97f * r->sum;
+    r->sum = sum;
+    r->sweep = clampf(r->sweep + (want ? dt : -dt) / CR_SWEEP_S, 0.f, 1.f);
+    const int reach = (int)(r->sweep * CR_NB + 0.5f);                /* bins the sweep has reached */
     for (int b = 0; b < CR_NB; b++) {
         const int tr = s->T[r->kr[b]], ta = s->T[r->ka[b]];
-        const float ar = tr >= ta ? clampf(tr * norm, 0.f, 1.f) : 0.f, aa = ta > tr ? clampf(ta * norm, 0.f, 1.f) : 0.f;
+        /* a third of the line's ink shows it whole: its own fade in does not redraw the rim each frame (the sweep forms
+         * it); a progress comet's tail still thins */
+        if (want) { r->lr[b] = tr >= ta ? clampf(tr * norm * 3.f, 0.f, 1.f) : 0.f; r->la[b] = ta > tr ? clampf(ta * norm * 3.f, 0.f, 1.f) : 0.f; }
+        const float ar = b < reach ? r->lr[b] : 0.f, aa = b < reach ? r->la[b] : 0.f;
         if (ar > 0.f) r->cr[b] = s->tcol[r->kr[b]];
         if (aa > 0.f) r->ca[b] = s->tcol[r->ka[b]];
         r->er[b] += clampf(ar - r->er[b], -step, step);
@@ -134,15 +149,19 @@ bool cr_paint(cr_t *r, const fluid_sim_t *s, float dt, uint32_t frame, uint8_t *
     const int H = r->H;
     for (int n = 0; n < r->n; n++) { const int k = r->dot[n].k; r->rd[k] = 0; r->rden[k] = 0; }
     const float rt = r->t * 3.f;
+    for (int b = 0; b < CR_NB; b++) {
+        r->gr[b] = ease(r->er[b]); r->ga[b] = ease(r->ea[b]);
+        const float u = r->ub[b] = 1.f - (r->gr[b] > r->ga[b] ? r->gr[b] : r->ga[b]);
+        r->ripv[b] = u > 0.f && u < 1.f ? u * CR_RIP * sinf(r->rip[b] + rt) : 0.f;
+    }
     for (int n = 0; n < r->n; n++) {
         const cr_dot_t *d = &r->dot[n];
-        const float er = r->er[d->bin], ea = r->ea[d->bin];
-        if (er <= 0.f && ea <= 0.f) continue;
+        const float gr = r->gr[d->bin], ga = r->ga[d->bin];
+        if (gr <= 0.f && ga <= 0.f) continue;
         /* unformed, it is scattered dust with a ripple running round; formed, the line; the dust thins as it goes */
-        const float u = 1.f - ease(er > ea ? er : ea);
-        const float off = u * (CR_SCAT * (d->seed - 127.5f) * (1.f / 127.5f) + CR_RIP * sinf(r->rip[d->bin] + rt));
-        const int pr = er > 0.f ? (int)(prof_at(r, d->dr * 0.25f + off) * ease(er)) : 0;
-        const int pa = ea > 0.f ? (int)(prof_at(r, d->da * 0.25f + off) * ease(ea)) : 0;
+        const float off = r->ub[d->bin] * CR_SCAT * (d->seed - 127.5f) * (1.f / 127.5f) + r->ripv[d->bin];
+        const int pr = gr > 0.f ? (int)(prof_at(r, d->dr * 0.25f + off) * gr) : 0;
+        const int pa = ga > 0.f ? (int)(prof_at(r, d->da * 0.25f + off) * ga) : 0;
         const int den = pr > pa ? pr : pa;
         if (den <= 0) continue;
         const uint32_t ph = (frame + (uint32_t)(((d->row >> 2) * 11 % H) * CR_TW / H)) / CR_TW;   /* its row's twinkle */
