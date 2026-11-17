@@ -25,11 +25,13 @@ static inline uint32_t cycles(void) { return (uint32_t)esp_cpu_get_cycle_count()
 #define CD_CALLOC(n) heap_caps_calloc(1, (n), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
 #define CD_FREE(p)   heap_caps_free(p)
 #define CD_BAND_CORE 0           /* the second band's core: the fluid task (the first band) runs on core 1          */
+#define CD_SHARE     65          /* percent of the rows' work in the first band: core 0 also draws the panel  */
 #define CD_BAND_PRIO 3           /* above the drawer (2) on that core: the band is waited on, the drawer has slack  */
 #else
 static inline uint32_t cycles(void) { return 0; }
 #define CD_CALLOC(n) calloc(1, (n))
 #define CD_FREE(p)   free(p)
+#define CD_SHARE     50
 #endif
 
 #define THRESH 0.6f
@@ -39,6 +41,8 @@ static inline uint32_t cycles(void) { return 0; }
 #define Z01    41                           /* 0.01, 0.02, 0.05 in depth units                                       */
 #define Z02    82
 #define Z05    205
+#define TWINKLE 12                          /* the dust: each cell row's motes twinkle every this many frames, rows
+                                             * scattered (clip-dots.js TWINKLE): a few rows a frame for the panel to resend */
 #define NLINE  128                          /* the outline's shades by depth (palette 0..NLINE-1)                    */
 enum { FR = 1, FE = 2, FH = 4, FA = 8, FB = 16 };   /* flags: region, eye, halo, and the halo's two scratch rows */
 enum { C_IRIS = NLINE, C_PUPIL, C_SHINE, C_NOSE, C_EAR, C_BELLY, C_WHISKER, C_BOWL, C_N, C_LINE = 255 };
@@ -65,7 +69,7 @@ struct cd {
     /* the world, what does not change (made once): each dot's vignette (0: outside, never drawn), each floor row's depth
      * and nearness, and the dust's motes (a few percent of the dots: index, how much they lean to the horizon) */
     float *vig, *row_zz, *row_near; float horizon;
-    int nmote; uint32_t *mote_i; float *mote_band, *mote_s97; int32_t *mote_ph; uint32_t *mote_rgb; int *mote_row;
+    int nmote; uint32_t *mote_i; float *mote_band; int32_t *mote_ph; uint32_t *mote_rgb; int *mote_row;
     int ry0, ry1, rx0, rx1;                 /* the last feature region's box (dots, inclusive)                       */
     ell_t pe[CC_SHAPES_MAX]; capz_t pc[CC_SHAPES_MAX]; uint8_t pok[CC_SHAPES_MAX];   /* this frame's projections */
     float sf[CC_SHAPES_MAX], kk[CC_SHAPES_MAX];  /* a blob's surface fraction of its field radius, and its square */
@@ -174,9 +178,8 @@ cd_t *cd_create(const cc_t *c, int W, int H) {
     for (int pass = 0; pass < 2; pass++) {      /* count the motes, then keep them (in dot order: by row) */
         if (pass) {
             d->mote_i = CD_CALLOC(sizeof(uint32_t) * (size_t)(nm + 1)); d->mote_band = CD_CALLOC(sizeof(float) * (size_t)(nm + 1));
-            d->mote_s97 = CD_CALLOC(sizeof(float) * (size_t)(nm + 1));
             d->mote_ph = CD_CALLOC(sizeof(int32_t) * (size_t)(nm + 1)); d->mote_rgb = CD_CALLOC(sizeof(uint32_t) * (size_t)(nm + 1));
-            if (!d->mote_i || !d->mote_band || !d->mote_s97 || !d->mote_ph || !d->mote_rgb) { cd_destroy(d); return NULL; }
+            if (!d->mote_i || !d->mote_band || !d->mote_ph || !d->mote_rgb) { cd_destroy(d); return NULL; }
         }
         for (int Y = 0; Y < DH; Y++) {
             if (!pass && Y > d->horizon) { d->row_zz[Y] = (d->floor_row - d->horizon) / (Y + 0.5f - d->horizon); d->row_near[Y] = sstep(d->horizon, d->horizon + 14.f * DH / 128.f, (float)Y); }
@@ -192,7 +195,7 @@ cd_t *cd_create(const cc_t *c, int W, int H) {
                 const double seed = (double)hash3u(X, Y, 11) / 4294967296.0;
                 if (d->vig[i] <= 0.f || seed >= 0.02 + 0.09 * band) continue;
                 if (!pass) { nm++; continue; }
-                d->mote_i[d->nmote] = (uint32_t)i; d->mote_s97[d->nmote] = (float)(seed * 97.0); d->mote_band[d->nmote] = band; d->mote_ph[d->nmote++] = -1;
+                d->mote_i[d->nmote] = (uint32_t)i; d->mote_band[d->nmote] = band; d->mote_ph[d->nmote++] = -1;
             }
         }
     }
@@ -214,7 +217,7 @@ void cd_destroy(cd_t *d) {
     CD_FREE(d->dot); CD_FREE(d->cdots); CD_FREE(d->ccol); CD_FREE(d->frgb); CD_FREE(d->fcell); CD_FREE(d->fccol);
     CD_FREE(d->touch); CD_FREE(d->cat); CD_FREE(d->bp); CD_FREE(d->bl);
     CD_FREE(d->vig); CD_FREE(d->row_zz); CD_FREE(d->row_near); CD_FREE(d->wrow); CD_FREE(d->mote_row);
-    CD_FREE(d->mote_i); CD_FREE(d->mote_band); CD_FREE(d->mote_s97); CD_FREE(d->mote_ph); CD_FREE(d->mote_rgb);
+    CD_FREE(d->mote_i); CD_FREE(d->mote_band); CD_FREE(d->mote_ph); CD_FREE(d->mote_rgb);
     CD_FREE(d);
 }
 
@@ -326,11 +329,11 @@ static void grow(box_t *acc, box_t b) {
     if (b.x1 > acc->x1) acc->x1 = b.x1;
     if (b.y1 > acc->y1) acc->y1 = b.y1;
 }
-/* a cell row (times 4) where the running sum of w over [y0, y1) reaches half */
+/* a cell row (times 4) where the running sum of w over [y0, y1) reaches the first band's share */
 static int balance(const int *w, int y0, int y1) {
     long tot = 0, run = 0;
     for (int Y = y0; Y < y1; Y++) tot += w[Y];
-    for (int Y = y0; Y < y1; Y++) if ((run += w[Y]) * 2 >= tot) return (Y + 2) & ~3;
+    for (int Y = y0; Y < y1; Y++) if ((run += w[Y]) * 100 >= tot * CD_SHARE) return (Y + 2) & ~3;
     return (y0 + y1) / 2 & ~3;
 }
 
@@ -661,14 +664,13 @@ static void ph_cells(cd_t *d, int part) {
     }
     /* the dust: only its motes (made once), where neither the creature's halo nor the floor is; a cell with the creature
      * in it keeps only the creature's dots */
-    const float f3 = (float)(d->frame % 3000000u) * (1.f / 3.f);
     for (int m = d->mote_row[ja]; m < d->mote_row[jb]; m++) {
         const int i = (int)d->mote_i[m];
         const dot_t *p = d->dot + i;
         if ((p->fl & FH) || d->frgb[i] || p->pri) continue;
         const int X = i % DW, Y = i / DW, k = (Y >> 2) * W + (X >> 1);
         if (d->cat[k]) continue;
-        const int ph = ffloor(f3 + d->mote_s97[m]);
+        const int ph = (int)((d->frame + (uint32_t)((((Y >> 2) * 11) % d->H) * TWINKLE / d->H)) / TWINKLE);
         if (ph != d->mote_ph[m]) {                                /* its twinkle moved on: every third frame or so */
             d->mote_ph[m] = ph;
             const float tw = hash3f(X, Y, ph);

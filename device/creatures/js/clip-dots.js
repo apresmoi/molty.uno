@@ -27,6 +27,10 @@ export const hash3 = (i, j, k) => {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 };
 const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+// the dust twinkles a few cell rows a frame (each row every TWINKLE frames, rows in a scattered order): a twinkle all
+// over the screen each frame would make every row a window for the panel to resend
+export const TWINKLE = 12;
+const twinkleOffset = (j, H) => Math.floor(((j * 11) % H) * TWINKLE / H);
 const hex = (h) => [parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255];
 
 function quatMat(q) {
@@ -226,7 +230,7 @@ export function clipDots(rig, W, H) {
         }
         if (!a) {
           const band = Math.exp(-Math.abs(Y - horizon) / 14), seed = hash3(X, Y, 11);
-          if (seed < 0.02 + 0.09 * band) { const tw = hash3(X, Y, Math.floor(frame / 3 + seed * 97)); a = (0.3 + 0.55 * tw) * (0.55 + 0.45 * band); col = tw > 0.8 ? mote : dim; }
+          if (seed < 0.02 + 0.09 * band) { const tw = hash3(X, Y, Math.floor((frame + twinkleOffset(Y >> 2, DH / 4)) / TWINKLE)); a = (0.3 + 0.55 * tw) * (0.55 + 0.45 * band); col = tw > 0.8 ? mote : dim; }
         }
         if (a) { const k = Math.min(1, a * vig); set(i, col.map((c) => c * k), 0); on[i] = k > 0.12 ? 1 : 0; }
       }
