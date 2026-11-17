@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { test } from 'node:test';
 import { ParamError, bind, checkPackage } from './format.mjs';
-import { frame, hd, loadPackage, png } from './play.mjs';
+import { frame, hd, lit, loadPackage, png } from './play.mjs';
 
 const ROOT = new URL('../../', import.meta.url).pathname;
 const base = () => ({
@@ -37,6 +37,11 @@ test('the static check catches every kind of broken reference', () => {
     'at most 8 params': (p) => Object.assign(p.layouts.one.params, Object.fromEntries('abcdef'.split('').map((k) => [k, 'number']))),
     'name must be [A-Za-z0-9_-]{1,24}': (p) => (p.assets['a.b'] = p.assets.dot),
     'id must be demo': (p) => (p.id = 'other'),
+    'when must be "lit"': (p) => (p.layouts.one.items[0].when = 'later'),
+    'group must be a name': (p) => (p.layouts.one.items[0].group = 'a b'),
+    'unknown field group for spot': (p) => p.layouts.one.items.push({ k: 'spot', r: 0.1, say: 'x', group: 'a' }),
+    'lights must be 1..4 names': (p) => p.layouts.one.items.push({ k: 'spot', r: 0.1, say: 'x', lights: 'a b c d e' }),
+    'pts must be 2..2': (p) => p.layouts.one.items.push({ k: 'spot', r: 0.1, say: 'x', pts: [[0, 0], [1, 0], [1, 1]] }),
   };
   for (const [want, mut] of Object.entries(cases)) assert.ok(problems(mut).some((m) => m.includes(want)), `${want}: ${problems(mut)}`);
 });
@@ -106,6 +111,19 @@ test('the calm view in high definition: a ring is round and soft edged at the pa
   assert.ok(round === 360 && soft > 30, `the ring at every degree (${round}), soft edged (${soft})`);
   assert.ok(kept.size > 10, `the ball keeps its dots (${kept.size})`);
   assert.equal(png(kept, rgb, S).subarray(1, 4).toString(), 'PNG');
+});
+
+test('a spot lights groups: their items grow and brighten, those shown when lit appear, then all as built', () => {
+  const p = base();
+  p.layouts.one.items.push({ k: 'disc', x: 0.5, y: 0, r: 0.1, color: '#808080', group: 'p' }, { k: 'ring', x: 0.5, y: 0, r: 0.15, w: 0.01, group: 'p', when: 'lit' },
+    { k: 'disc', x: -0.5, y: 0, r: 0.1, group: 'q' }, { k: 'spot', pts: [[0, 0], [0.5, 0]], r: 0.05, say: 'the p', id: 'tap-p', lights: 'p' });
+  assert.deepEqual(checkPackage(p, 'demo'), []);
+  const items = bind(p, 'one', { r: 0.5, g: 'dot', marks: [] }), held = lit(items, 'tap-p'), calm = lit(items, '');
+  assert.ok(!calm.some((it) => it.when === 'lit'), 'calm: the lit-only ring hidden');
+  const disc = held.find((it) => it.group === 'p' && it.k === 'disc'), other = held.find((it) => it.group === 'q');
+  assert.ok(Math.abs(disc.r - 0.125) < 1e-9 && disc.color === '#c0c0c0' && other.r === 0.1, `tapped: ${JSON.stringify(disc)}`);
+  assert.ok(held.some((it) => it.k === 'ring' && it.when === 'lit' && Math.abs(it.r - 0.1875) < 1e-9), 'tapped: its ring shows, grown');
+  assert.equal(png(hd(p, 'one', { r: 0.5, g: 'dot', marks: [] }, 1, 200, '', 'tap-p').kept, null).subarray(1, 4).toString(), 'PNG');
 });
 
 test('a spot: a place to tap with its reading, which may run past a text item', () => {

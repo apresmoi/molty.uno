@@ -789,6 +789,50 @@ static void test_hd_pixels(const char *dir) {
     CHECK(g.spot < 0 && nt * DT <= SCENE_GROW_OUT_S + 2 * DT && sc->focus < 0 && !memcmp(fb, calm, (size_t)S * S * 2),
           "its reading over: back in %.2f s, exactly the pixels it had", nt * DT);
 
+    /* a tap on an aspect's line (it wins over the middle's spot under it): the line brightens, its
+     * two bodies grow, it reaches out to them with a ring round each; all of it goes back exactly */
+    {
+        int asp = -1;
+        for (int n = 0; n < sc->nitems && asp < 0; n++) if (sc->items[n].k == PK_SPOT && sc->items[n].lights[0]) asp = n;
+        CHECK(asp >= 0 && sc->items[asp].npts == 2, "an aspect's spot, along its line");
+        if (asp >= 0) {
+            const scene_item_t *sp = &sc->items[asp];
+            const float *e0 = sc->pts[sp->pts], *e1 = sc->pts[sp->pts + 1];
+            const float mx = 0.5f * (e0[0] + e1[0]), my = 0.5f * (e0[1] + e1[1]);
+            CHECK(scene_spot_at(sc, 1.f, mx + 0.03f * (e1[1] - e0[1]), my - 0.03f * (e1[0] - e0[0])) == asp && scene_spot_at(sc, 1.f, 0.f, 0.f) >= 0,
+                  "a tap by the line lands on the aspect, not the middle");
+            /* its two bodies: the glyphs in the groups it lights */
+            int body[2] = { -1, -1 }, nb = 0;
+            for (int n = 0; n < sc->nitems && nb < 2; n++)
+                for (int q = 1; q < SCENE_LIGHTS && sc->items[n].k == PK_GLYPH && sc->items[n].grp; q++) if (sc->items[n].grp == sp->lights[q]) body[nb++] = n;
+            int rings0 = 0, segs0 = 0;
+            for (int n = 0; n < hd.n; n++) { rings0 += shp[n].k == FLUID_SHAPE_RING; segs0 += shp[n].k == FLUID_SHAPE_SEG; }
+            float bw0[2] = { 0.f, 0.f };
+            for (int q = 0; q < 2; q++) for (int n = 0; body[q] >= 0 && n < hd.n; n++)
+                if (shp[n].k == FLUID_SHAPE_MASK && fabsf(shp[n].x - (sc->items[body[q]].x + 1.f) * S / 2.f) < 1.f && fabsf(shp[n].y - (1.f - sc->items[body[q]].y) * S / 2.f) < 1.f) bw0[q] = shp[n].w;
+            scene_grow_t ga;
+            scene_grow_tap(&ga, asp);
+            for (int q = 0; q < 30; q++) { scene_grow_tick(&ga, true, DT); scene_grow_apply(&ga, sc); scene_fill(s, sc, 1.f, NULL, L, &nl, dots, &hd); fluid_draw(d, fr, fb, &o, &y0, &y1); }
+            int rings = 0, segs = 0, ringed = 0;
+            float bw[2] = { 0.f, 0.f };
+            for (int n = 0; n < hd.n; n++) {
+                rings += shp[n].k == FLUID_SHAPE_RING; segs += shp[n].k == FLUID_SHAPE_SEG;
+                for (int q = 0; q < 2; q++) {
+                    if (body[q] < 0) continue;
+                    const float bx = (sc->items[body[q]].x + 1.f) * S / 2.f, by = (1.f - sc->items[body[q]].y) * S / 2.f;
+                    if (shp[n].k == FLUID_SHAPE_MASK && fabsf(shp[n].x - bx) < 1.f && fabsf(shp[n].y - by) < 1.f) bw[q] = shp[n].w;
+                    ringed += shp[n].k == FLUID_SHAPE_RING && fabsf(shp[n].x - bx) < 1.5f && fabsf(shp[n].y - by) < 1.5f;
+                }
+            }
+            CHECK(nb == 2 && bw0[0] > 0.f && fabsf(bw[0] - bw0[0] * SCENE_GROW) < 0.5f && fabsf(bw[1] - bw0[1] * SCENE_GROW) < 0.5f,
+                  "aspect: both its bodies grow (%.1f -> %.1f, %.1f -> %.1f px)", bw0[0], bw[0], bw0[1], bw[1]);
+            CHECK(rings == rings0 + 2 && ringed == 2 && segs == segs0 + 2 && memcmp(fb, calm, (size_t)S * S * 2),
+                  "aspect: a ring round each (%d more, %d on them), the line reaching out (%d more strokes)", rings - rings0, ringed, segs - segs0);
+            for (int q = 0; q < 60 && ga.spot >= 0; q++) { scene_grow_tick(&ga, false, DT); scene_grow_apply(&ga, sc); scene_fill(s, sc, 1.f, NULL, L, &nl, dots, &hd); fluid_draw(d, fr, fb, &o, &y0, &y1); }
+            CHECK(ga.spot < 0 && !memcmp(fb, calm, (size_t)S * S * 2), "aspect: its reading over, exactly the pixels it had");
+        }
+    }
+
     /* each subtitle word's ripple: a wobble right around the word, never dust */
     {
         const scene_caption_t cap = { "Gemini", 6, 2 };

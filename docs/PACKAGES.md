@@ -59,8 +59,8 @@ and geometry in **glass units**: the round window has radius 1, `x` right, `y` u
 
 | k | fields | draws |
 |---|---|---|
-| `ring` | `r`, `w` | a circle outline |
-| `arc` | `r`, `w`, `a0`, `a1` | part of a circle |
+| `ring` | `x`, `y`, `r`, `w` | a circle outline |
+| `arc` | `x`, `y`, `r`, `w`, `a0`, `a1` | part of a circle |
 | `ticks` | `r`, `len`, `n`, `a0` | n evenly spaced radial marks |
 | `line` | `pts: [[x,y],...]` | a polyline |
 | `curve` | `pts` | a smooth curve through the points |
@@ -68,14 +68,21 @@ and geometry in **glass units**: the round window has radius 1, `x` right, `y` u
 | `ball` | `x`, `y`, `r`, `img`, `lit` (0..1 lit fraction), `side` (-1/1 which side is lit), `spin` | a shaded sphere wearing an image asset |
 | `glyph` | `x`, `y`, `size`, `asset`, `rot` | a mask or image asset |
 | `text` | `x`, `y`, `size`, `str` | words, in the device font |
-| `spot` | `x`, `y`, `r`, `say`, `id` | nothing: a place to tap. Molty shows `say` as the subtitle; the `tap` event names `id` |
+| `spot` | `x`, `y`, `r`, `say`, `id`, `pts`, `lights` | nothing: a place to tap. Molty shows `say` as the subtitle; the `tap` event names `id` |
 
 **Spots** make a scene interactive with no round trip: the agent sends each spot's reading with the scene
 (`{ "k": "spot", "each": "$bodies", "polar": ["@a", "@r"], "r": 0.09, "say": "@say", "id": "@id" }`), and a tap on it
 shows that reading at once, word by word at reading pace. The agent also gets the `tap` event with `spot: <id>`, to say
 more if it wants. A spot takes the tap whatever tap is bound to (a tap that stops a recording still does that first).
-What is drawn inside the spot's disc (a symbol's centre in it; a ring, a line or ticks wholly in it) grows 1.25x about the
-spot's centre with the tap's ripple, stays so while the reading (or the agent's say over the scene) plays, then eases back.
+A spot is a disc (`x`, `y`, `r`), or the band within `r` of a segment when it has `pts` (two points: a line to tap along).
+What a tap highlights grows 1.25x with the tap's ripple, stays so while the reading (or the agent's say over the scene)
+plays, then eases back:
+- with `lights` (group names, spaces between, at most 4): every item whose `group` is one of them, each about its own
+  centre and brighter; an item with `"when": "lit"` shows only then, fading in and out with it. Any drawn item may take
+  `group` (a name, bindable: `"group": "@id"`) and `when`. The chart's aspects: a spot along each line lights the
+  line's group and its two bodies'; the lit-only items reach the line out to them with a ring round each.
+- without: what is drawn inside its disc (a symbol's centre in it; a ring, a line or ticks wholly in it), about the
+  spot's centre.
 A say over the scene replaces the reading. Both show as the reader does, one word at a time with its focus letter
 in the accent colour on the centre line, but small and low on the screen, under the drawing.
 
@@ -98,7 +105,7 @@ Nothing else: no expressions, no loops beyond `each`, no code. Every bound value
   `--hd [--size 466] [--caption word]` draws the calm view instead, as the firmware shows a scene with no touch on it: every
   item anti-aliased at the panel's own pixels in painter's order (a hairline one fine pixel; a ball and an image stay on the
   dots). The device also keeps the fluid's faint dust around it, and a touch or a scene change turns it into braille dust;
-  this draws neither.
+  this draws neither. `--tap <spot id>` (with or without `--hd`) draws that spot tapped and held: what it highlights grown.
 - Param types: `number`, `text` (printable ASCII), `list` (flat objects, for `each`). `pts` is a literal list of points whose
   coordinates may be bindings (`[["@x1", "@y1"], ["@x2", "@y2"]]`).
 
@@ -145,11 +152,12 @@ Over the existing command path (`link_cmd_register`), gated by device caps `pkg`
 Limits: 64 assets of at most 128 × 128 px, 16 palette colours; 32 layouts of at most 64 items and 8 params; 16 points a
 line or curve; names `[A-Za-z0-9_-]{1,24}`; texts printable ASCII, at most 40 characters (a spot's `say`: 160). A scene
 expands to at most 128 items and 40 letters in all, its spots' readings and ids to 4096 characters; a list param has at
-most 32 elements, each a flat object of up to 8 numbers or texts (up to 160 characters each).
+most 32 elements, each a flat object of up to 12 numbers or texts (up to 160 characters each). A scene names at most 32
+highlight groups.
 Every declared param must be sent, and nothing else.
 
 - `mask` bits and `image` nibbles are one continuous stream, rows top to bottom, no padding per row (high nibble first).
-- `ring`, `arc` and `ticks` are centred on the glass centre. `ticks` run from `r` to `r + len` (negative `len`: inward),
+- `ring` and `arc` are centred on `x`, `y` (default the glass centre), `ticks` on the glass centre. `ticks` run from `r` to `r + len` (negative `len`: inward),
   the first at `a0`. `w` (line width, default 0.03) is also allowed on `ticks`, `line` and `curve`.
 - `glyph` `size` is the asset's width (height keeps its aspect); `text` `size` is the type size; both in glass units.
 - `ball`: `lit` 0..1, `side` -1 or 1, `spin` in degrees per second; `img` (optional) wraps the sphere as an
@@ -160,7 +168,8 @@ Every declared param must be sent, and nothing else.
 - `"$name"` and `"@field"` are always bindings; a literal text cannot start with `$` or `@`.
 - A `line`, `curve`, `ring`, `arc` or `ticks` no wider than a braille dot is a hairline: one dot per step along its main
   direction, each dot touching the next (corners too), never two side by side, solid, with no soft edge to dither.
-- A tap lands on the visible `spot` whose disc holds it, the nearest centre if several do.
+- A tap lands on the visible `spot` that holds it; if several do, the smallest (`r`), then the nearest (its centre, or
+  its segment).
 
 ## 4. Agents
 

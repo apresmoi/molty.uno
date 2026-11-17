@@ -12,15 +12,15 @@ export const NAME_RE = /^[A-Za-z0-9_-]{1,24}$/;
 export const COLOR_RE = /^#[0-9a-f]{6}$/;
 export const PARAM_TYPES = ['number', 'text', 'list'];
 /** The firmware's limits (docs/PACKAGES.md "What the firmware accepts"). */
-export const LIMITS = { assets: 64, assetSide: 128, layouts: 32, items: 64, params: 8, points: 16, text: 40, say: 160, sayChars: 4096, scene: 128, letters: 40, list: 32, fields: 8 };
+export const LIMITS = { assets: 64, assetSide: 128, layouts: 32, items: 64, params: 8, points: 16, text: 40, say: 160, sayChars: 4096, scene: 128, letters: 40, list: 32, fields: 12, groups: 32, lights: 4 };
 
 // Field value types: num, text, say (a spot's reading, longer text), color, asset (any asset), image (an image asset);
-// pts holds [x, y] numbers.
-const COMMON = { k: 'kind', on: 'num', off: 'num', color: 'color', each: 'list', polar: 'polar' };
+// group (a highlight group's name), lights (group names, spaces between), when ("lit"); pts holds [x, y] numbers.
+const COMMON = { k: 'kind', on: 'num', off: 'num', color: 'color', each: 'list', polar: 'polar', group: 'group', when: 'when' };
 const POS = { x: 'num', y: 'num' };
 export const ITEMS = {
-  ring: { r: 'num', w: 'num' },
-  arc: { r: 'num', w: 'num', a0: 'num', a1: 'num' },
+  ring: { ...POS, r: 'num', w: 'num' },
+  arc: { ...POS, r: 'num', w: 'num', a0: 'num', a1: 'num' },
   ticks: { r: 'num', len: 'num', n: 'num', a0: 'num', w: 'num' },
   line: { pts: 'points', w: 'num' },
   curve: { pts: 'points', w: 'num' },
@@ -28,14 +28,15 @@ export const ITEMS = {
   ball: { ...POS, r: 'num', img: 'image', lit: 'num', side: 'num', spin: 'num' },
   glyph: { ...POS, size: 'num', asset: 'asset', rot: 'num' },
   text: { ...POS, size: 'num', str: 'text' },
-  // a place to tap, drawn by nothing: Molty shows `say` as the subtitle, the tap event names `id`
-  spot: { ...POS, r: 'num', say: 'say', id: 'text' },
+  // a place to tap, drawn by nothing: Molty shows `say` as the subtitle, the tap event names `id`; a disc, or
+  // within r of a segment (pts, two points); a tap lights its `lights` groups
+  spot: { ...POS, r: 'num', say: 'say', id: 'text', pts: 'points', lights: 'lights' },
 };
 const REQUIRED = { ring: ['r'], arc: ['r'], ticks: ['r'], line: ['pts'], curve: ['pts'], disc: ['r'], ball: ['r'], glyph: ['asset'], text: ['str'], spot: ['r', 'say'] };
 /** Defaults a missing field takes (the firmware's, docs/PACKAGES.md). A ball without img is shaded in its colour. */
 export const DEFAULTS = { color: '#ffffff', x: 0, y: 0, on: 0, a0: 0, a1: 360, n: 12, len: 0.1, size: 0.12, w: 0.03, lit: 1, side: 1, spin: 0, rot: 0 };
 // which param type a field of each value type may bind to
-const BINDS = { num: 'number', text: 'text', say: 'text', color: 'text', asset: 'text', image: 'text', list: 'list' };
+const BINDS = { num: 'number', text: 'text', say: 'text', color: 'text', asset: 'text', image: 'text', list: 'list', group: 'text', lights: 'text' };
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 /** The range each numeric field must lie in, literal or bound (the firmware's pkg_num_ok); angles otherwise. */
@@ -53,6 +54,9 @@ function literal(type, v, assets, f) {
     case 'color': return typeof v === 'string' && COLOR_RE.test(v) ? '' : 'must be #rrggbb';
     case 'asset': return assets[v] ? '' : `names no asset (${JSON.stringify(v)})`;
     case 'image': return assets[v]?.kind === 'image' ? '' : `names no image asset (${JSON.stringify(v)})`;
+    case 'group': return typeof v === 'string' && NAME_RE.test(v) ? '' : 'must be a name [A-Za-z0-9_-]{1,24}';
+    case 'lights': { const g = typeof v === 'string' ? v.split(' ').filter(Boolean) : []; return g.length && g.length <= LIMITS.lights && g.every((n) => NAME_RE.test(n)) ? '' : `must be 1..${LIMITS.lights} names, spaces between`; }
+    case 'when': return v === 'lit' ? '' : 'must be "lit"';
     default: return 'cannot be a literal';
   }
 }
@@ -132,6 +136,7 @@ export function checkPackage(pkg, id) {
     if (!Array.isArray(l.items) || !l.items.length || l.items.length > LIMITS.items) { bad.push(`${at}: items must be 1..${LIMITS.items}`); continue; }
     l.items.forEach((it, i) => {
       const where = `${at} item ${i}`, fields = { ...COMMON, ...ITEMS[it.k] };
+      if (it.k === 'spot') { delete fields.group; delete fields.when; }   // a spot lights groups, it is in none
       if (!ITEMS[it.k]) return bad.push(`${where}: unknown k ${JSON.stringify(it.k)}`);
       const value = (f, type, v, rf = f) => {
         const r = ref(v);
@@ -147,7 +152,8 @@ export function checkPackage(pkg, id) {
         if (!type) { bad.push(`${where}: unknown field ${f} for ${it.k}`); continue; }
         if (f === 'k') continue;
         if (f === 'each') { if (!ref(v)?.startsWith('$')) bad.push(`${where}: each must be "$<list param>"`); else value(f, 'list', v); continue; }
-        if (f === 'pts') { if (!Array.isArray(v) || v.length < 2 || v.length > LIMITS.points || !v.every((p) => Array.isArray(p) && p.length === 2)) bad.push(`${where}: pts must be 2..${LIMITS.points} [x, y] points`); else v.flat().forEach((e, i) => value(f, 'num', e, i & 1 ? 'y' : 'x')); continue; }
+        if (f === 'when') { if (v !== 'lit') bad.push(`${where}: when must be "lit"`); continue; }
+        if (f === 'pts') { if (!Array.isArray(v) || v.length < 2 || v.length > (it.k === 'spot' ? 2 : LIMITS.points) || !v.every((p) => Array.isArray(p) && p.length === 2)) bad.push(`${where}: pts must be 2..${it.k === 'spot' ? 2 : LIMITS.points} [x, y] points`); else v.flat().forEach((e, i) => value(f, 'num', e, i & 1 ? 'y' : 'x')); continue; }
         if (f === 'polar') { if (!Array.isArray(v) || v.length !== 2) bad.push(`${where}: polar must be [angle, radius]`); else v.forEach((e, i) => value(f, 'num', e, i ? 'r' : 'a0')); continue; }
         value(f, type, v);
       }
@@ -210,5 +216,7 @@ export function bind(pkg, layoutName, params = {}) {
   if (letters > LIMITS.letters) throw new ParamError(`the scene has ${letters} letters of text (at most ${LIMITS.letters})`);
   const said = out.filter((it) => it.k === 'spot').reduce((n, it) => n + it.say.length + (it.id?.length ?? 0), 0);
   if (said > LIMITS.sayChars) throw new ParamError(`the scene's spots hold ${said} characters (at most ${LIMITS.sayChars})`);
+  const groups = new Set(out.flatMap((it) => [it.group, ...(it.lights ?? '').split(' ')]).filter(Boolean));
+  if (groups.size > LIMITS.groups) throw new ParamError(`the scene names ${groups.size} groups (at most ${LIMITS.groups})`);
   return out;
 }

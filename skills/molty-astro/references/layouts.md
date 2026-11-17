@@ -48,9 +48,9 @@ Seven scenes: `globe` for the Moon, then Mercury, Venus, Mars, Jupiter; `saturn`
 |---|---|
 | `bodies` | ten `{"g": "g-<body>", "a": <chart angle>, "r": <radius>, "c": "<colour>"}`; radius 0.64, pulled in by 0.1 per level when a body is within 13 degrees of one already placed at that level (place in order of longitude); colours as in `aspect` |
 | `inner` | the smallest radius minus 0.065 (the ring the aspect lines end on) |
-| `tense`, `easy` | the three tightest aspects (smallest orb) only, each `{"x1", "y1", "x2", "y2"}`: a line between the two bodies' chart angles on the `inner` ring, a dot at each end. `tense` (square, opposition) draws red, `easy` (trine, sextile) blue |
+| `tense`, `easy` | the three tightest aspects (smallest orb) only, each `{"x1", "y1", "x2", "y2", "px1", "py1", "px2", "py2", "say", "id", "lights"}`: a line between the two bodies' chart angles on the `inner` ring, a dot at each end. `tense` (square, opposition) draws red, `easy` (trine, sextile) blue. `px`/`py` are the two bodies' centres; `say` the pair in plain words ("Mars opposes Saturn: drive meets limits."); `id` `<body>-<body>`; `lights` `"<id> <body> <body>"`. A tap on the line reads it: it brightens, its two bodies grow, and it reaches out to them with a ring round each |
 | `joined` | a conjunction among those three: `{"a": <chart angle midway between the two>}`, a white dot on the `inner` ring (the two sit together, no line) |
-| `read` | the middle's reading (at most 160 characters): what the colours mean, then each drawn aspect in plain words, e.g. "Red is tension, blue is flow. Mars faces Saturn: drive meets limits." |
+| `read` | the middle's reading (at most 160 characters): what the colours mean, then each drawn aspect in plain words, e.g. "Red is tension, blue is flow. Mars opposes Saturn: drive meets limits." |
 | `signs` | twelve `{"a": (195 + 30 i) mod 360, "say", "id": "<sign>"}` |
 
 Each body also carries `say` (its reading, at most 160 characters) and `id` (`sun` …). A tap on one shows its

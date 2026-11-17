@@ -190,7 +190,7 @@ static const char *parse_asset(arena_t *a, const cJSON *j, pkg_asset_t *as) {
 
 enum { T_NUM, T_COLOR, T_ASSET, T_IMAGE, T_STR, T_SAY };
 #define KB(k) (1u << (k))
-#define XY (KB(PK_DISC) | KB(PK_BALL) | KB(PK_GLYPH) | KB(PK_TEXT) | KB(PK_SPOT))
+#define XY (KB(PK_RING) | KB(PK_ARC) | KB(PK_DISC) | KB(PK_BALL) | KB(PK_GLYPH) | KB(PK_TEXT) | KB(PK_SPOT))
 #define ALL 0x3FFu
 static const struct { const char *key; uint8_t pf, type; uint16_t kinds; } FIELDS[] = {
     { "x", PF_X, T_NUM, XY }, { "y", PF_Y, T_NUM, XY },
@@ -206,6 +206,10 @@ static const struct { const char *key; uint8_t pf, type; uint16_t kinds; } FIELD
     { "img", PF_ASSET, T_IMAGE, KB(PK_BALL) }, { "asset", PF_ASSET, T_ASSET, KB(PK_GLYPH) },
     { "str", PF_STR, T_STR, KB(PK_TEXT) },
     { "say", PF_SAY, T_SAY, KB(PK_SPOT) }, { "id", PF_ID, T_STR, KB(PK_SPOT) },
+    /* a highlight: a spot lights groups (names, spaces between), their items grow and brighten,
+     * an item `when: "lit"` shows only then */
+    { "group", PF_GROUP, T_STR, ALL & ~KB(PK_SPOT) }, { "when", PF_WHEN, T_STR, ALL & ~KB(PK_SPOT) },
+    { "lights", PF_LIGHTS, T_STR, KB(PK_SPOT) },
 };
 #define NFIELDS ((int)(sizeof(FIELDS) / sizeof(FIELDS[0])))
 /* what each kind cannot do without */
@@ -295,9 +299,9 @@ static const char *parse_item(ictx_t *c, const cJSON *j, pkg_item_t *it) {
             continue;
         }
         if (!strcmp(f->string, "pts")) {
-            if (kind != PK_LINE && kind != PK_CURVE) return "item: unknown key";
+            if (kind != PK_LINE && kind != PK_CURVE && kind != PK_SPOT) return "item: unknown key";
             int n = cJSON_IsArray(f) ? cJSON_GetArraySize(f) : 0;
-            if (n < 2 || n > PKG_PTS_MAX) return "item: pts";
+            if (n < 2 || n > (kind == PK_SPOT ? 2 : PKG_PTS_MAX)) return "item: pts";
             it->pts = aalloc(c->a, sizeof(pkg_val_t[2]) * (size_t)n);
             if (!it->pts) return "oom";
             int i = 0;
@@ -320,6 +324,7 @@ static const char *parse_item(ictx_t *c, const cJSON *j, pkg_item_t *it) {
     if ((have & REQUIRED[kind]) != REQUIRED[kind]) return "item: a required field is missing";
     if ((kind == PK_LINE || kind == PK_CURVE) && !it->pts) return "item: pts";
     if (it->polar && (have & (KB(PF_X) | KB(PF_Y)))) return "item: polar or x / y, not both";
+    if (it->f[PF_WHEN].src != PV_NONE && (it->f[PF_WHEN].src != PV_STR || strcmp(it->f[PF_WHEN].s, "lit"))) return "item: when is \"lit\"";
     return NULL;
 }
 
