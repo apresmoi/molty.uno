@@ -17,6 +17,8 @@
 
 #ifdef ESP_PLATFORM
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
+#include "mole_diag.h"
 #define K_CALLOC(n) heap_caps_calloc(1, (n), MALLOC_CAP_SPIRAM)
 #define K_FREE(p)   heap_caps_free(p)
 #else
@@ -97,7 +99,17 @@ static void clip_frame(cpk_t *k, fluid_sim_t *s, float dt) {
     if (!k->dots) k->dots = cd_create(k->clip, s->W, s->H);
     if (!k->dots) { FLUID_PROF_END(FP_K_PLAY, c0); return; }
     FLUID_PROF_END(FP_K_PLAY, c0);
+#ifdef ESP_PLATFORM
+    const int64_t td = esp_timer_get_time();
+#endif
     cd_draw(k->dots, k->clip, k->frame++);
+#ifdef ESP_PLATFORM
+    {   /* a draw that took over 200 ms: where (the band's wait on the other core, or the work itself) */
+        const int64_t ms = (esp_timer_get_time() - td) / 1000;
+        const uint32_t wm = cd_wait_max(k->dots);
+        if (ms > 200) mole_diag_event(false, "stall.at cd_draw %d ms, band wait %u ms", (int)ms, (unsigned)(wm / 240000u));
+    }
+#endif
     {   /* the dots' stages into the fluid's profile (GET /api/creature/state prof_ms.k_*) */
         uint32_t st[CD_STAGES] = { 0 };
         cd_prof(k->dots, st);
