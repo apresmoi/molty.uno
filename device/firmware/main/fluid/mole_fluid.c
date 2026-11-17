@@ -274,6 +274,11 @@ static struct {
 static bool  s_listen = false;                  /* task copy of s_listen_in */
 #define FLUID_CRISP_LISTEN_RGB 0xFF2C3E           /* a rigged creature's listen ring (ring-options.html)       */
 static int32_t s_ring_rgb = -1, s_ring_def = -1;   /* task copies of s_ring_in / s_ring_dflt */
+/* a wait or step that took over STALL_AT_MS: logged with where (the panel and the sim stall together when one of them
+ * blocks the other; /api/log stall.at shows which) */
+#define STALL_AT_MS 200
+#define STALL_AT(tag, t0) do { const int64_t _d = esp_timer_get_time() - (t0); if (_d > STALL_AT_MS * 1000) mole_diag_event(false, "stall.at %s %d ms", tag, (int)(_d / 1000)); } while (0)
+
 static fluid_ring_t s_rg;                       /* the listening ring (fluid_ring.h)     */
 #ifdef MOLTY_DIAG_RING
 static volatile int64_t s_diag_ring_until;      /* a debug build's ring without a listen (mole_fluid_diag_ring) */
@@ -799,7 +804,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     }
     case ST_CREATURE:
         if (cr_loaded()) {
-            if (s_cpk) { cpk_set_work(s_cpk, fd_working(&s_dir)); cpk_frame(s_cpk, s, rdt, swell); }    /* engine + player + body + ambient + fill */
+            if (s_cpk) { cpk_set_work(s_cpk, fd_working(&s_dir)); const int64_t _ts = esp_timer_get_time(); cpk_frame(s_cpk, s, rdt, swell); STALL_AT("sim.cpk_frame", _ts); }    /* engine + player + body + ambient + fill */
             else cute_rt_update(s_cute, rdt);              /* mood engine + kit + behaviours */
             {   /* paddle's strokes splash the real water, either side of the creature */
                 static float act_t0;
@@ -864,7 +869,9 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         /* the listen ring red (ring-options.html), unless the agent or the settings gave it one */
         cpk_listen(s_cpk, s_ring_rgb >= 0 ? s_ring_rgb : s_ring_def >= 0 ? s_ring_def : FLUID_CRISP_LISTEN_RGB, s_rg.ink);
         FLUID_PROF_BEGIN(cpaint);
+        const int64_t _tp = esp_timer_get_time();
         cpk_paint(s_cpk, s);
+        STALL_AT("sim.cpk_paint", _tp);
         FLUID_PROF_END(FP_C_FILL, cpaint);                 /* prof_ms.c_fill: a rigged creature's paint and rings */
     }
     if (!still) fluid_sim_view(s);
@@ -1067,11 +1074,6 @@ esp_err_t mole_fluid_framebuffer_sync(void) {
     s_fb_want = true;
     return xSemaphoreTake(s_fb_done, pdMS_TO_TICKS(500)) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
 }
-
-/* a wait or step that took over STALL_AT_MS: logged with where (the panel and the sim stall together when one of them
- * blocks the other; /api/log stall.at shows which) */
-#define STALL_AT_MS 200
-#define STALL_AT(tag, t0) do { const int64_t _d = esp_timer_get_time() - (t0); if (_d > STALL_AT_MS * 1000) mole_diag_event(false, "stall.at %s %d ms", tag, (int)(_d / 1000)); } while (0)
 
 static void draw_task(void *arg) {
     (void)arg;
