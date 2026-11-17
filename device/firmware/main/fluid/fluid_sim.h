@@ -287,6 +287,11 @@ void fluid_shape_box(const fluid_shape_t *sh, int ox, int oy, int16_t b[4]);
  *  is under it by its coverage times wt[x] / 8 (wt NULL: whole); caption letters only where they formed (unformed 0..1). */
 void fluid_shapes_row(const fluid_shape_t *sh, int n, const int16_t (*box)[4], int ox, int oy, int palette, const uint8_t *wt,
                       float unformed, uint16_t *row, int bx, int y, int xa, int xb);
+/** The same with the caption's backdrop over the drawing: dim = { x0, x1, y0, y1 (its box, stage px), strength }: shapes
+ *  but the caption's own at (1 - strength) inside it, back to whole FLUID_DIM_REACH px out. */
+#define FLUID_DIM_REACH 28.f
+void fluid_shapes_row_dim(const fluid_shape_t *sh, int n, const int16_t (*box)[4], int ox, int oy, int palette, const uint8_t *wt,
+                          float unformed, const float *dim, uint16_t *row, int bx, int y, int xa, int xb);
 
 typedef struct {
     float *cov, *orp, *near, *near_s, *dark, *tmp;

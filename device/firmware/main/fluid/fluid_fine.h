@@ -47,12 +47,13 @@ extern "C" {
 #define FINE_WATER_B     160
 /* the light on the water (chart-engine.js light()) */
 #define FINE_LIGHT_FLOOR 0.5f
-#define FINE_LIGHT_GRID  4              /* px: sampled on this grid, bilinear                    */
+#define FINE_LIGHT_GRID  8              /* px: sampled on this grid, bilinear (the page: 4; its ridges are ~20 px wide) */
 #define FINE_LIGHT_SPEED 0.55f
 /* the caption (chart-engine.js PATCH .. GRAIN) */
-#define FINE_PATCH0      4.f            /* px from the word's box: dark ..                       */
-#define FINE_PATCH1      40.f           /* .. to all the dust                                    */
-#define FINE_PATCH_RAG   26.f           /* px: the edge as ragged as the grains                  */
+#define FINE_PATCH0      10.f           /* px from the word's box: dark .. (the page: 4; Juan: darker, wider) */
+#define FINE_PATCH1      72.f           /* .. to all the dust (the page: 40)                     */
+#define FINE_PATCH_RAG   30.f           /* px: the edge as ragged as the grains (the page: 26)   */
+#define FINE_DIM         0.65f          /* the drawing under the word: this much darker          */
 #define FINE_REVEAL_S    0.09f          /* a word forms over this                                */
 #define FINE_SWAP_S      0.22f          /* the word before breaks up over this ..                */
 #define FINE_SWAP_SPREAD 7.f            /* .. its specks scattering this far, px                 */
@@ -67,7 +68,9 @@ typedef struct {
     uint32_t *pos;                      /* x | y << 9 | q << 18 | near << 25: its pixel, its threshold over its
                                          * density (0..127) and how much the light matters there (0..127)      */
     uint16_t *col;                      /* its colour at its brightness, rgb565 (little-endian)  */
-    uint32_t *start;                    /* N + 1: each cell's specks, cell order                 */
+    uint32_t *start;                    /* N + 1: each cell's specks, cell order: those the light never hides first */
+    uint16_t *nstat;                    /* N: how many of them (shown whatever the light)        */
+    uint32_t *ssig;                     /* N: their signature, calm (no shift, no caption near)  */
 } fine_set_t;
 
 typedef struct fluid_fine {
@@ -86,13 +89,24 @@ typedef struct fluid_fine {
     uint16_t *dist, *src;               /* S x S: distance to the drawing (1/100 px), the nearest drawn pixel's
                                          * colour (rgb444) | 0x8000 a symbol's                   */
     uint16_t *rowbuf;                   /* S: a raster row                                       */
-    uint32_t *bpos; uint16_t *bcol; uint8_t *bcell; int bcap;   /* one cell row's specks, before they are sorted */
+    uint32_t *bpos; uint16_t *bcol; uint16_t *bcell; int bcap;   /* bcell: column x 2 + (the light can hide it) */   /* one cell row's specks, before they are sorted */
     /* the drawer's frame */
     const fine_set_t *drawn;            /* the set the levels below are for                      */
     uint8_t *lv;                        /* per speck: its level this frame (0 hidden .. 255)     */
     int lvcap;
     int8_t *sx, *sy;                    /* N: each cell's shift this frame, stage px             */
     uint8_t ilace;                      /* which cell rows' shifts follow the water this frame   */
+    uint8_t *slow;                      /* N: how the cell's specks were last worked out: 0 calm, 1 one by one, 2 calm by the caption */
+    uint32_t *dsig;                     /* N: a calm cell's light-dependent specks' signature, last worked out */
+    uint32_t *bsig;                     /* N: by the caption, its others' (dimmed by the dark), worked out once a box */
+    uint32_t box_key;                   /* the box and dark bsig is for                          */
+    float dim[5];                       /* the drawing under the caption's backdrop: its box, how dark (fluid_shapes_row_dim) */
+    uint8_t *ride;                      /* N: the dust rides the water there (near a tapped drawing or the caption) */
+    uint32_t ride_key;                  /* what ride was worked out for                          */
+    int mx, my;                         /* the largest shift this frame, px (the windows' reach) */
+    uint8_t lrow;                       /* which half of the light's grid rows moves this frame  */
+    bool lall;                          /* all of it next frame (a new set)                      */
+    uint32_t prof_frame, prof_rect, prof_n;   /* us spent (fluid_fine_frame, fluid_fine_rect) over prof_n frames */
     uint32_t *sig, *sig0;               /* N: what each cell's dust is this frame, and as last drawn */
     uint8_t *lgrid;                     /* the light, its grid                                   */
     int lg;

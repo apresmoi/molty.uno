@@ -1020,8 +1020,15 @@ static inline void blend565(uint16_t *px, uint16_t c, int a) {
  * that formed (their hash under 1 - unformed: a dithered order). */
 void fluid_shapes_row(const fluid_shape_t *shapes, int nshapes, const int16_t (*box)[4], int ox, int oy, int palette, const uint8_t *wt,
                       float unformed, uint16_t *row, int bx, int y, int xa, int xb) {
+    fluid_shapes_row_dim(shapes, nshapes, box, ox, oy, palette, wt, unformed, NULL, row, bx, y, xa, xb);
+}
+void fluid_shapes_row_dim(const fluid_shape_t *shapes, int nshapes, const int16_t (*box)[4], int ox, int oy, int palette, const uint8_t *wt,
+                          float unformed, const float *dim, uint16_t *row, int bx, int y, int xa, int xb) {
     const int pal = (palette >= 0 && palette < FLUID_PAL_COUNT) ? palette : FLUID_PAL_PASTEL;
     const float Y = (float)(y - oy) + 0.5f;
+    /* the caption's backdrop over the drawing on this row: how far it reaches (none: dim NULL or off the row) */
+    const float dey = !dim ? 1e9f : Y < dim[2] ? dim[2] - Y : Y > dim[3] ? Y - dim[3] : 0.f;
+    const bool dimrow = dim && dim[4] > 0.f && dey < FLUID_DIM_REACH;
     for (int n = 0; n < nshapes && n < FLUID_MAX_SHAPES; n++) {
         const int16_t *b = box[n];
         if (y < b[2] || y >= b[3] || b[1] <= xa || b[0] >= xb) continue;
@@ -1062,10 +1069,16 @@ void fluid_shapes_row(const fluid_shape_t *shapes, int nshapes, const int16_t (*
             if (r > b[1]) r = b[1];
             const float dx0 = (float)(l - ox) + 0.5f - sh->x;
             float u = ((sh->co * dx0 - sh->si * dy) / sh->w + 0.5f) * sh->mw - 0.5f, v = ((sh->si * dx0 + sh->co * dy) / sh->h + 0.5f) * sh->mh - 0.5f;
+            const bool dimmed = dimrow && sh->tag != FLUID_TAG_CAPTION;
             for (int x = l; x < r; x++, u += du, v += dv) {
                 const int w = wt ? wt[x] : HD_LEVELS;
                 if (!w || (forming && hash_u(x - ox, y - oy, 3) >= 1.f - unformed)) continue;
-                const float a = mask ? mask_cover(sh, u, v, e) : shape_cover(sh, (float)(x - ox) + 0.5f - sh->x, dy, il2);
+                float a = mask ? mask_cover(sh, u, v, e) : shape_cover(sh, (float)(x - ox) + 0.5f - sh->x, dy, il2);
+                if (a > 0.f && dimmed) {
+                    const float X = (float)(x - ox) + 0.5f, dex = X < dim[0] ? dim[0] - X : X > dim[1] ? X - dim[1] : 0.f;
+                    const float dd = sqrtf(dex * dex + dey * dey);
+                    if (dd < FLUID_DIM_REACH) { const float t = dd / FLUID_DIM_REACH; a *= 1.f - dim[4] * (1.f - t * t * (3.f - 2.f * t)); }
+                }
                 if (a > 0.f) blend565(&row[x - bx], le, (int)(a * w * (256.f / HD_LEVELS) + 0.5f));
             }
         }
@@ -1104,7 +1117,8 @@ void fluid_draw_rect(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fl
                 const int x0 = d->cx[i] > t->x0 ? d->cx[i] : t->x0, x1 = d->cx[i + 1] < t->x1 ? d->cx[i + 1] : t->x1;
                 for (int x = x0; x < x1; x++) row[x - bx] = 0;
             }
-            if (ha < hb) fluid_shapes_row(o->shapes, o->nshapes, (const int16_t (*)[4])d->sb, d->ox, d->oy, o->palette, d->hdw, o->cap_unformed, row, bx, y, ha, hb);
+            if (ha < hb) fluid_shapes_row_dim(o->shapes, o->nshapes, (const int16_t (*)[4])d->sb, d->ox, d->oy, o->palette, d->hdw, o->cap_unformed,
+                                              o->fine ? o->fine->dim : NULL, row, bx, y, ha, hb);
             for (int i = i0; i < i1; i++) {
                 const int k = j * W + i;
                 if (!all && !d->dirty[k]) continue;

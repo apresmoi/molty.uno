@@ -1030,6 +1030,8 @@ static void test_fine(const char *dir) {
     const double build_us = now_us() - t0;
     fluid_fine_swap(fine);
     const int nsp = fluid_fine_specks(fine);
+    { long ns = 0; const fine_set_t *st = &fine->set[fine->live]; for (int k = 0; k < N; k++) ns += st->nstat[k];
+      printf("  fine dust: %d specks, %ld (%.0f%%) never hidden by the light\n", nsp, ns, 100.0 * ns / nsp); }
     CHECK(built && nsp > 10000 && nsp < 80000, "the calm chart's dust: %d specks, built in %.0f us (host)", nsp, build_us);
     /* every speck off the drawing, denser and brighter toward a line, fainter round a symbol */
     static int16_t fbox[FLUID_MAX_SHAPES][4];
@@ -1101,14 +1103,18 @@ static void test_fine(const char *dir) {
     }
     {   /* the light, as the page's (chart-engine.js light()) */
         float err_l = 0.f;
-        const float T = o.time * FINE_LIGHT_SPEED;
-        for (int gy = 0; gy < fine->lg; gy += 7) for (int gx = 0; gx < fine->lg; gx += 5) {
-            const double u = gx * 4.0 / S, v = gy * 4.0 / S;
+        for (int gy = 0; gy < fine->lg; gy += 3) for (int gx = 0; gx < fine->lg; gx += 5) {
+            const double u = gx * (double)FINE_LIGHT_GRID / S, v = gy * (double)FINE_LIGHT_GRID / S;
+            float best = 1.f;
+            for (int back = 0; back < 2; back++) {               /* half its rows move each frame: now or a frame ago */
+            const double T = (o.time - back / 30.0) * FINE_LIGHT_SPEED;
             const double a = sin(6.2832 * (1.4 * u + 0.5 * v) + 0.31 * T + 1.6 * sin(6.2832 * (0.8 * v - 0.55 * u) + 0.21 * T));
             const double bb = sin(6.2832 * (-0.7 * u + 1.25 * v) - 0.27 * T + 1.6 * sin(6.2832 * (0.95 * u + 0.35 * v) - 0.17 * T));
             double r = pow(1 - fabs(a), 3) + pow(1 - fabs(bb), 3);
             r = r > 1 ? 1 : r;
-            err_l = fmaxf(err_l, fabsf((float)r - fine->lgrid[gy * fine->lg + gx] / 255.f));
+            best = fminf(best, fabsf((float)r - fine->lgrid[gy * fine->lg + gx] / 255.f));
+            }
+            err_l = fmaxf(err_l, best);
         }
         CHECK(err_l < 0.03f, "the light on the water is the page's (off by %.3f at most)", err_l);
     }
