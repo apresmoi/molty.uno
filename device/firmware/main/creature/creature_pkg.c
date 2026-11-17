@@ -9,6 +9,7 @@
 #include "creature_clip.h"
 #include "creature_dots.h"
 #include "cJSON.h"
+#include "fluid_ring.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -30,6 +31,7 @@ struct cpk {
     cb_t *body;                 /* the channel creatures' body (NULL for a rigged one)                 */
     cc_t *clip;                 /* a rigged creature (docs/CREATURES.md section 12): its clips ...        */
     cd_t *dots;                 /* ... drawn straight on the braille dots (made at the first frame)      */
+    uint8_t *cells;             /* ... and the rings over them (cpk_paint): the cells the drawer shows   */
     unsigned act_n; uint32_t frame;
     mood_engine_t eng;
     bool work;
@@ -58,7 +60,7 @@ cpk_t *cpk_create(const char *json, size_t len, uint32_t seed, const char **err)
 void cpk_destroy(cpk_t *k) {
     if (!k) return;
     cb_destroy(k->body);
-    cd_destroy(k->dots);
+    cd_destroy(k->dots); K_FREE(k->cells);
     cc_destroy(k->clip);
     cp_destroy(k->cp);
     K_FREE(k);
@@ -101,16 +103,32 @@ static void clip_frame(cpk_t *k, fluid_sim_t *s, float dt) {
 void cpk_cells(const cpk_t *k, const uint8_t **dots, const uint32_t **rgb) {
     if (!k || !k->dots) { *dots = NULL; *rgb = NULL; return; }
     cd_cells(k->dots, dots, rgb);
+    if (k->cells) *dots = k->cells;
 }
 
-void cpk_paint(const cpk_t *k, fluid_sim_t *s) {
+void cpk_paint(cpk_t *k, fluid_sim_t *s) {
+    if (!k || !k->dots) return;
     const uint8_t *dots; const uint32_t *rgb;
-    cpk_cells(k, &dots, &rgb);
-    if (!rgb) return;
-    for (int i = 0; i < s->N; i++) {               /* each cell shows its dots' colour at once, no flow */
+    cd_cells(k->dots, &dots, &rgb);
+    if (!k->cells && !(k->cells = K_CALLOC((size_t)s->N))) return;
+    for (int j = 0, i = 0; j < s->H; j++) for (int x = 0; x < s->W; x++, i++) {
+        /* the rings (a listen's, a question's, the agent's progress) are the target's ink at the rim (fluid_target_ring,
+         * _arcs, _progress, after the creature's frame cleared it): there they show over the dots, at the core whole,
+         * in their colour; elsewhere each cell shows its dots' colour at once, no flow */
+        if (s->T[i] > 0) {
+            const float v = (float)s->T[i] * (1.f / FQ_UNIT) * (1.f / RING_INK);
+            const float sub[8] = { v, v, v, v, v, v, v, v };
+            const uint8_t d = v >= 0.5f ? fluid_braille_dither(sub, x, j, 0.f, 0) : 0;   /* the faint edge: the dots under it */
+            if (d) {
+                const uint32_t c = s->tcol[i];
+                s->col[i].r = (uint16_t)((c & 255) * 257); s->col[i].g = (uint16_t)((c >> 8 & 255) * 257); s->col[i].b = (uint16_t)((c >> 16 & 255) * 257);
+                s->col[i].a = 0; k->cells[i] = d;
+                continue;
+            }
+        }
         const uint32_t c = rgb[i];
         s->col[i].r = (uint16_t)((c >> 16 & 255) * 257); s->col[i].g = (uint16_t)((c >> 8 & 255) * 257); s->col[i].b = (uint16_t)((c & 255) * 257);
-        s->col[i].a = 0;
+        s->col[i].a = 0; k->cells[i] = dots[i];
     }
 }
 

@@ -510,6 +510,56 @@ static void test_crisp_panel(const char *pkgdir) {
     cpk_destroy(k); free(json);
 }
 
+/* a listen's ring (and the agent's progress ring) over a rigged creature: the target's rim ink shows on the crisp cells,
+ * in its colour, at the rim (mole_fluid.c's frame order: the creature, the rings into the target, colour, paint) */
+static void test_crisp_ring(const char *pkgdir) {
+    char path[512]; size_t len;
+    snprintf(path, sizeof(path), "%s/cat/cat.json", pkgdir);
+    char *json = slurp(path, &len);
+    const char *err = NULL;
+    cpk_t *k = json ? cpk_create(json, len, 3, &err) : NULL;
+    CHECK(k != NULL, "crisp ring: cat (%s)", err ? err : "no file");
+    if (!k) { free(json); return; }
+    const int P = 466; int W, H; fluid_grid_for_stage(P, &W, &H);
+    fluid_sim_t *s = fluid_sim_create(W, H, P);
+    fluid_draw_t *d = fluid_draw_create(W, H, P, P);
+    fluid_frame_t *fr = fluid_frame_create(W, H);
+    uint16_t *fb = calloc((size_t)P * P, 2);
+    fluid_ring_t ring = { 0 }; fluid_progress_t prog = { 0 }; prog.pct = -1.f;
+    const uint32_t RED = 0xff2a2a, BLUE = 0x2a6aff;
+    for (int phase = 0; phase < 3; phase++) {      /* none, a listen, the agent's progress */
+        int lit = 0, rim = 0;
+        for (int f = 0; f < 30; f++) {
+            cpk_frame(k, s, 1.f / 30.f, 1.f);
+            fluid_ring_tick(&ring, 1.f / 30.f, phase == 1);
+            fluid_progress_tick(&prog, 1.f / 30.f, phase == 2, -1.f, false);
+            fluid_target_progress(s, &prog, BLUE, 0.f);
+            fluid_target_ring(s, &ring, RED, 0.f);
+            s->p.still = true;
+            fluid_sim_step(s, 1.f / 60); fluid_sim_step(s, 1.f / 60);
+            fluid_sim_color(s, 1.f / 30);
+            cpk_paint(k, s);
+            fluid_sim_snapshot(s, fr, false);
+            fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, f / 30.f, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL };
+            const uint32_t *cc; cpk_cells(k, &o.dots, &cc); o.scene = true;
+            int y0, y1; fluid_draw(d, fr, fb, &o, &y0, &y1);
+        }
+        for (int y = 0; y < P; y++) for (int x = 0; x < P; x++) {
+            const float dx = x + 0.5f - P / 2.f, dy = y + 0.5f - P / 2.f, r = sqrtf(dx * dx + dy * dy) / (P / 2.f);
+            if (r < 0.8f || r > 0.95f) continue;
+            const uint16_t le = (uint16_t)((fb[y * P + x] >> 8) | (fb[y * P + x] << 8));
+            const int R = (le >> 11) << 3, G = ((le >> 5) & 63) << 2, B = (le & 31) << 3;
+            rim++;
+            if (phase == 1 ? R > 120 && R > 2 * G && R > 2 * B : phase == 2 ? B > 120 && B > R + 40 : 0) lit++;
+        }
+        const char *what = phase == 0 ? "no ring" : phase == 1 ? "a listen" : "progress";
+        printf("  crisp ring, %s: %d of %d rim pixels in the ring's colour\n", what, lit, rim);
+        if (phase) CHECK(lit > rim / (phase == 1 ? 20 : 100), "crisp ring, %s: only %d of %d rim pixels lit", what, lit, rim);   /* progress: a comet */
+        if (phase == 1 && getenv("RING_PPM")) { FILE *o = fopen(getenv("RING_PPM"), "wb"); fprintf(o, "P6\n%d %d\n255\n", P, P); for (int q = 0; q < P * P; q++) { const uint16_t le = (uint16_t)((fb[q] >> 8) | (fb[q] << 8)); fputc((le >> 11) << 3, o); fputc(((le >> 5) & 63) << 2, o); fputc((le & 31) << 3, o); } fclose(o); }
+    }
+    free(fb); fluid_frame_destroy(fr); fluid_draw_destroy(d); fluid_sim_destroy(s); cpk_destroy(k); free(json);
+}
+
 static void test_own_rigged(const char *pkgdir) {
     char path[512]; size_t len;
     snprintf(path, sizeof(path), "%s/cat/cat.json", pkgdir);
@@ -543,6 +593,7 @@ int main(int argc, char **argv) {
     test_strict(argv[1]);
     test_own_rigged(argv[1]);
     test_crisp_panel(argv[1]);
+    test_crisp_ring(argv[1]);
     for (const char *const *id = (const char *const[]){ "duck", "cat", "octopus", NULL }; *id; id++) test_info(argv[1], *id);
     for (const char *const *id = (const char *const[]){ "duck", NULL }; *id; id++) test_planted(argv[1], *id);   /* the cat: clip_test.c */
     const double v1 = bench_v1(argv[3]);

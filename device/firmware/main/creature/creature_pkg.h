@@ -38,10 +38,12 @@ bool   cpk_crisp(const cpk_t *k);
 /** A tap or a shake: a rigged creature comes to the front of the frame facing the viewer, attending (cc_come). */
 void   cpk_come(cpk_t *k);
 const struct cc *cpk_clip(const cpk_t *k);
-/** Its last frame's cells: a braille byte and a colour (0xRRGGBB) each; NULL before the first frame or for a channel creature. */
+/** Its last frame's cells: a braille byte (the rings over them, after cpk_paint) and a colour (0xRRGGBB) each; NULL before
+ *  the first frame or for a channel creature. */
 void   cpk_cells(const cpk_t *k, const uint8_t **dots, const uint32_t **rgb);
-/** Write those colours into the sim's carried colour (after its colour step), so each cell shows its own at once. */
-void   cpk_paint(const cpk_t *k, fluid_sim_t *s);
+/** Write those colours into the sim's carried colour (after its colour step), so each cell shows its own at once; and the
+ *  rings the target holds this frame (listen, question, progress: fluid_target_ring and the rest) over them. */
+void   cpk_paint(cpk_t *k, fluid_sim_t *s);
 
 #ifdef __cplusplus
 }

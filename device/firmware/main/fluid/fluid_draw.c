@@ -1070,11 +1070,11 @@ void fluid_draw_rect(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fl
 }
 
 /* Crisp dots' changed cells to the panel, in few windows: a window costs about as much as CRISP_WIN_PX pixels (its
- * commands and its wait, ~0.25 ms on the CO5300's quad SPI against ~0.1 us a pixel), so each row sends its whole span
+ * commands and its wait against a pixel's ~0.1-0.2 us on the CO5300's quad SPI, measured), so each row sends its whole span
  * of changed cells, and the next rows join it while one box over them costs less than separate windows (and fits the
  * buffer). Windows start and end on even rows: a panel that takes whole row pairs only (the CO5300) otherwise resends
  * a full-width pair at each odd edge. */
-#define CRISP_WIN_PX 2500
+#define CRISP_WIN_PX 1500
 static int crisp_box(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_overlay_t *ov, int mark, int x0, int x1,
                      int y0, int y1, uint16_t *buf, int max_px, fluid_send_fn send, void *ctx) {
     const int w = x1 - x0, rows = (max_px / w) & ~1;
@@ -1099,43 +1099,49 @@ static int crisp_send(const fluid_draw_t *d, const fluid_draw_opts_t *o, const f
 #define XB(i) (((d->cx[i] + 3) & ~3) < d->fb_w ? ((d->cx[i] + 3) & ~3) : d->fb_w)
 #define YA(j) (d->cy[j] & ~1)
 #define YB(j) (((d->cy[(j) + 1] + 1) & ~1) < d->fb_h ? ((d->cy[(j) + 1] + 1) & ~1) : d->fb_h)
-    /* a row's changed cells far apart (a gap costing more than a window) go as separate windows */
-#define GAPPY(j, gap) ((gap) * (d->cx[1] - d->cx[0]) * (YB(j) - YA(j)) > CRISP_WIN_PX)
-    for (int j = 0; j < H; ) {
-        int a = d->span[2 * j], b = d->span[2 * j + 1];
-        if (a >= b) { j++; continue; }
-        int split = 0;
-        for (int c = a, last = a; c < b; c++) {
-            if (!d->dirty[j * W + c]) continue;
-            if (GAPPY(j, c - last - 1)) split = 1;
-            last = c;
-        }
-        if (split) {                                    /* this row alone, run by run */
-            int r0 = -1, last = -1;
-            for (int c = a; c <= b; c++) {
-                if (c < b && !d->dirty[j * W + c]) continue;
-                if (r0 >= 0 && (c == b || GAPPY(j, c - last - 1))) {
-                    const int n = crisp_box(d, o, ov, mark, XA(r0), XB(last + 1), YA(j), YB(j), buf, max_px, send, ctx);
-                    if (n < 0) return -1;
-                    sent += n; r0 = -1;
+    /* open boxes (cells [a, b) x rows [j0, j1)): a row's runs of changed cells (split where the gap costs more than a
+     * window) join the box above them when one box costs less than two, else start their own; a box no run joined
+     * is sent */
+    enum { NB = 64 };
+    struct { int16_t a, b, j0, j1; } box[NB], nxt[NB];
+    int nb = 0;
+    for (int j = 0; j <= H; j++) {
+        int nn = 0;
+        if (j < H && d->span[2 * j] < d->span[2 * j + 1]) {
+            const int ch = YB(j) - YA(j);
+            for (int c = d->span[2 * j], r0 = -1, last = -1; c <= d->span[2 * j + 1]; c++) {
+                const bool dt = c < d->span[2 * j + 1] && d->dirty[j * W + c];
+                if (!dt && c < d->span[2 * j + 1]) continue;
+                if (r0 >= 0 && (!dt || (XA(c) - XB(last + 1)) * ch > CRISP_WIN_PX)) {
+                    /* the run [r0, last]: into the open box it costs least to join, if any is cheaper than its own */
+                    int best = -1, gain = 0;
+                    for (int q = 0; q < nb; q++) {
+                        if (box[q].j1 != j) continue;
+                        const int na = box[q].a < r0 ? box[q].a : r0, nbb = box[q].b > last + 1 ? box[q].b : last + 1;
+                        const int joined = (XB(nbb) - XA(na)) * (YB(j) - YA(box[q].j0));
+                        const int apart = (XB(box[q].b) - XA(box[q].a)) * (YB(j - 1) - YA(box[q].j0)) + (XB(last + 1) - XA(r0)) * (YB(j) - YB(j - 1)) + CRISP_WIN_PX;
+                        if (joined <= max_px && apart - joined > gain) { gain = apart - joined; best = q; }
+                    }
+                    if (best >= 0) {
+                        if (r0 < box[best].a) box[best].a = (int16_t)r0;
+                        if (last + 1 > box[best].b) box[best].b = (int16_t)(last + 1);
+                        box[best].j1 = (int16_t)(j + 1);
+                    } else if (nn < NB) { nxt[nn].a = (int16_t)r0; nxt[nn].b = (int16_t)(last + 1); nxt[nn].j0 = (int16_t)j; nxt[nn].j1 = (int16_t)(j + 1); nn++; }
+                    r0 = -1;
                 }
-                if (c < b) { if (r0 < 0) r0 = c; last = c; }
+                if (dt) { if (r0 < 0) r0 = c; last = c; }
             }
-            j++; continue;
         }
-        int j1 = j + 1;                                 /* rows below join while one box costs less */
-        for (; j1 < H && d->span[2 * j1] < d->span[2 * j1 + 1]; j1++) {
-            const int na = d->span[2 * j1] < a ? d->span[2 * j1] : a, nb = d->span[2 * j1 + 1] > b ? d->span[2 * j1 + 1] : b;
-            const int box = (XB(nb) - XA(na)) * (YB(j1) - YA(j));
-            const int apart = (XB(b) - XA(a)) * (YB(j1 - 1) - YA(j)) + (XB(d->span[2 * j1 + 1]) - XA(d->span[2 * j1])) * (YB(j1) - YB(j1 - 1)) + CRISP_WIN_PX;
-            if (box > max_px || box > apart) break;
-            a = na; b = nb;
+        int keep = 0;
+        for (int q = 0; q < nb; q++) {                  /* a box no run of this row joined goes out */
+            if (box[q].j1 == j + 1 && j < H) { box[keep++] = box[q]; continue; }
+            const int n = crisp_box(d, o, ov, mark, XA(box[q].a), XB(box[q].b), YA(box[q].j0), YB(box[q].j1 - 1), buf, max_px, send, ctx);
+            if (n < 0) return -1;
+            sent += n;
         }
-        const int n = crisp_box(d, o, ov, mark, XA(a), XB(b), YA(j), YB(j1 - 1), buf, max_px, send, ctx);
-        if (n < 0) return -1;
-        sent += n; j = j1;
+        nb = keep;
+        for (int q = 0; q < nn && nb < NB; q++) box[nb++] = nxt[q];
     }
-#undef GAPPY
 #undef XA
 #undef XB
 #undef YA

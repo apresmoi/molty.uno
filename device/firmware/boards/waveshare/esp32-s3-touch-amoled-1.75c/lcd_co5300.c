@@ -35,7 +35,7 @@ static const char *TAG = "lcd_co5300";
 #define LCD_SPI_HOST     SPI2_HOST
 /* The vendor demos' 40 MHz (BSP and Arduino_ESP32QSPI). The 1.46's SPD2010 runs at 80:
  * worth trying here once the panel is known good. */
-#define LCD_QSPI_HZ      (40 * 1000 * 1000)
+#define LCD_QSPI_HZ      (80 * 1000 * 1000)
 /* Largest single SPI transfer; a PSRAM source is bounced through internal DMA memory
  * per transfer, so keep it small and the queue shallow (the 1.46's lesson). */
 #define LCD_MAX_XFER     4096
