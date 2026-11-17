@@ -23,6 +23,8 @@
 #include "freertos/task.h"
 static inline uint32_t cycles(void) { return (uint32_t)esp_cpu_get_cycle_count(); }
 #define CD_CALLOC(n) heap_caps_calloc(1, (n), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+/* small and hot (the body's strips): internal RAM if there is room for it and the rest, else PSRAM */
+static void *cd_fast(size_t n) { void *p = heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >= n + 32 * 1024 ? heap_caps_calloc(1, n, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) : NULL; return p ? p : CD_CALLOC(n); }
 #define CD_FREE(p)   heap_caps_free(p)
 #define CD_BAND_CORE 0           /* the second band's core: the fluid task (the first band) runs on core 1          */
 #define CD_SHARE     55          /* percent of the rows' work in the first band: core 0 also draws the panel  */
@@ -31,11 +33,13 @@ static inline uint32_t cycles(void) { return (uint32_t)esp_cpu_get_cycle_count()
 #else
 static inline uint32_t cycles(void) { return 0; }
 #define CD_CALLOC(n) calloc(1, (n))
+#define cd_fast(n)   calloc(1, (n))
 #define CD_FREE(p)   free(p)
 #define CD_SHARE     50
 #endif
 
 #define THRESH 0.6f
+#define CD_STRIP 4    /* rows of the body's pass at a time, in internal RAM (solid_rows) */
 #define FS     2048.f                       /* the field in fixed point                                              */
 #define TQ     ((uint16_t)(THRESH * FS + 0.5f))
 #define ZS     4096.f                       /* a depth in fixed point, biased by 32768; 0 is none                    */
@@ -59,6 +63,7 @@ struct cd {
     int W, H, DW, DH, N;
     float dsx, dsy, floor_row;
     dot_t *dot;
+    dot_t *strip[2];                        /* each band's strip of CD_STRIP rows, internal RAM (solid_rows)          */
     uint8_t *cdots; uint32_t *ccol;
     int bx0, by0, bx1, by1;                 /* this frame's box (dots) [x0, x1) x [y0, y1)                          */
     int ux0, uy0, ux1, uy1;                 /* ... and its union with last frame's: what is cleared                 */
@@ -73,7 +78,8 @@ struct cd {
     float *vig, *row_zz, *row_near; float horizon;
     int nmote; uint32_t *mote_i; float *mote_band; int32_t *mote_ph; uint32_t *mote_rgb; int *mote_row;
     int ry0, ry1, rx0, rx1;                 /* the last feature region's box (dots, inclusive)                       */
-    ell_t pe[CC_SHAPES_MAX]; capz_t pc[CC_SHAPES_MAX]; uint8_t pok[CC_SHAPES_MAX];   /* this frame's projections */
+    ell_t pe[CC_SHAPES_MAX]; capz_t pc[CC_SHAPES_MAX]; uint8_t pok[CC_SHAPES_MAX];
+    struct { int16_t x0, x1, y0, y1; } sbx[CC_SHAPES_MAX];   /* this frame's screen boxes (dots, inclusive)     */   /* this frame's projections */
     float sf[CC_SHAPES_MAX], kk[CC_SHAPES_MAX];  /* a blob's surface fraction of its field radius, and its square */
     int *wrow;                              /* per dot row: the body's work there (the split's balance)               */
     int16_t ord[CC_SHAPES_MAX]; int nord;   /* this frame's blobs, nearest first (its depth test rejects the rest early) */
@@ -155,13 +161,14 @@ cd_t *cd_create(const cc_t *c, int W, int H) {
     const size_t N = (size_t)d->N, NC = (size_t)W * H;
     const int DW = d->DW, DH = d->DH;
     d->dot = CD_CALLOC(sizeof(dot_t) * N);
+    d->strip[0] = cd_fast(sizeof(dot_t) * CD_STRIP * (size_t)DW); d->strip[1] = cd_fast(sizeof(dot_t) * CD_STRIP * (size_t)DW);
     d->cdots = CD_CALLOC(NC); d->ccol = CD_CALLOC(sizeof(uint32_t) * NC);
     d->frgb = CD_CALLOC(sizeof(uint32_t) * N);
     d->fcell = CD_CALLOC(NC); d->fccol = CD_CALLOC(sizeof(uint32_t) * NC);
     d->touch = CD_CALLOC(NC); d->cat = CD_CALLOC(NC); d->catm = CD_CALLOC(NC); d->bp = CD_CALLOC(NC); d->bl = CD_CALLOC(sizeof(uint16_t) * NC);
     d->vig = CD_CALLOC(sizeof(float) * N); d->row_zz = CD_CALLOC(sizeof(float) * (size_t)DH); d->row_near = CD_CALLOC(sizeof(float) * (size_t)DH);
     d->wrow = CD_CALLOC(sizeof(int) * (size_t)DH); d->mote_row = CD_CALLOC(sizeof(int) * ((size_t)H + 1));
-    if (!d->dot || !d->cdots || !d->ccol || !d->frgb || !d->fcell || !d->fccol || !d->touch || !d->cat || !d->catm || !d->bp || !d->bl ||
+    if (!d->dot || !d->strip[0] || !d->strip[1] || !d->cdots || !d->ccol || !d->frgb || !d->fcell || !d->fccol || !d->touch || !d->cat || !d->catm || !d->bp || !d->bl ||
         !d->vig || !d->row_zz || !d->row_near || !d->wrow || !d->mote_row) { cd_destroy(d); return NULL; }
     {   /* the fixed colours; the outline's shades are made each frame (their depth range) */
         float iris[3], wh[3];
@@ -220,7 +227,7 @@ void cd_destroy(cd_t *d) {
     if (d->go) vSemaphoreDelete(d->go);
     if (d->done) vSemaphoreDelete(d->done);
 #endif
-    CD_FREE(d->dot); CD_FREE(d->cdots); CD_FREE(d->ccol); CD_FREE(d->frgb); CD_FREE(d->fcell); CD_FREE(d->fccol);
+    CD_FREE(d->dot); CD_FREE(d->strip[0]); CD_FREE(d->strip[1]); CD_FREE(d->cdots); CD_FREE(d->ccol); CD_FREE(d->frgb); CD_FREE(d->fcell); CD_FREE(d->fccol);
     CD_FREE(d->touch); CD_FREE(d->cat); CD_FREE(d->catm); CD_FREE(d->bp); CD_FREE(d->bl);
     CD_FREE(d->vig); CD_FREE(d->row_zz); CD_FREE(d->row_near); CD_FREE(d->wrow); CD_FREE(d->mote_row);
     CD_FREE(d->mote_i); CD_FREE(d->mote_band); CD_FREE(d->mote_ph); CD_FREE(d->mote_rgb);
@@ -347,25 +354,32 @@ static int balance(const int *w, int y0, int y1, int share) {
 
 /* rows [a, b) of the band: cleared, the field and depths, the threshold, the parts. Done a strip of CD_STRIP rows at a
  * time, so a strip's records stay in the cache through all four (each dot read from PSRAM once, not once a pass) */
-#define CD_STRIP 8
-static void solid_rows(cd_t *d, int a, int b);
+static void solid_rows(cd_t *d, dot_t *sb, int a, int b);
+static void solid_strip(cd_t *d, dot_t *sb, int a0, int b0);
 static void ph_solid(cd_t *d, int part) {
     int a, b; band(d->uy0, d->uy1, d->split, part, &a, &b);
-    for (int y = a; y < b; y += CD_STRIP) solid_rows(d, y, y + CD_STRIP < b ? y + CD_STRIP : b);
+    for (int y = a; y < b; y += CD_STRIP) solid_rows(d, d->strip[part], y, y + CD_STRIP < b ? y + CD_STRIP : b);
 }
-static void solid_rows(cd_t *d, int a, int b) {
+/* rows [a0, b0): made in sb, a strip in internal RAM (the field's and depths' many read-modify-writes stay off PSRAM),
+ * then copied into place once, over the cleared box */
+static void solid_rows(cd_t *d, dot_t *sb, int a0, int b0) {
     const int DW = d->DW;
-    if (d->ux1 > d->ux0) for (int Y = a; Y < b; Y++) memset(d->dot + Y * DW + d->ux0, 0, sizeof(dot_t) * (size_t)(d->ux1 - d->ux0));
-    if (a < d->by0) a = d->by0;
-    if (b > d->by1) b = d->by1;
+    memset(sb, 0, sizeof(dot_t) * (size_t)((b0 - a0) * DW));
+    solid_strip(d, sb, a0, b0);
+    if (d->ux1 > d->ux0) for (int Y = a0; Y < b0; Y++) memcpy(d->dot + Y * DW + d->ux0, sb + (Y - a0) * DW + d->ux0, sizeof(dot_t) * (size_t)(d->ux1 - d->ux0));
+}
+static void solid_strip(cd_t *d, dot_t *sb, int a0, int b0) {
+    const int DW = d->DW;
+    int a = a0 < d->by0 ? d->by0 : a0, b = b0 > d->by1 ? d->by1 : b0;
     if (a >= b) return;
     const cc_shape_t *sh = d->sh;
     /* 1. the merged body: a metaball field, the nearest element surface per dot */
     for (int oq = 0; oq < d->nord; oq++) {
         const int q = d->ord[oq];
         const cc_shape_t *s = &sh[q];
+        const box_t bx = { d->sbx[q].x0, d->sbx[q].x1, d->sbx[q].y0, d->sbx[q].y1 };
+        if (bx.y1 < a || bx.y0 >= b) continue;          /* not in this strip */
         const ell_t e = d->pe[q];
-        const box_t bx = blob_box(d, q);
         const int ya = bx.y0 > a ? bx.y0 : a, yb = bx.y1 < b - 1 ? bx.y1 : b - 1;
         const float kk = d->kk[q], stq = s->st * FS;
         const uint16_t topq = zq(e.d + e.h); const uint8_t g = (uint8_t)(s->group + 1);
@@ -373,7 +387,7 @@ static void solid_rows(cd_t *d, int a, int b) {
         const float ikk = 1.f / kk, h2 = 0.5f / e.i00, isx = 1.f / sx;   /* the row's run: one divide a blob, not a row */
         for (int Y = ya; Y <= yb; Y++) {
             const float dv = dot_v(d, Y) - e.v, cdv = e.i11 * dv * dv, lin = 2.f * e.i01 * dv;
-            dot_t *row = d->dot + Y * DW;
+            dot_t *row = sb + (Y - a0) * DW;
             /* only the run of the row inside the field: i00 du^2 + lin du + cdv < 1/kk, solved for du */
             const float disc = lin * lin - 4.f * e.i00 * (cdv - ikk);
             if (disc <= 0.f) continue;
@@ -387,7 +401,10 @@ static void solid_rows(cd_t *d, int a, int b) {
                 const float qf = qv * kk;
                 if (qf >= 1.f) continue;
                 dot_t *p = row + X;
-                if (p->f < TQ) { const float o = 1.f - qf; p->f = (uint16_t)(p->f + (int)(stq * o * o * o)); }   /* past the threshold it is in */
+                if (p->f < TQ) {                            /* past the threshold it is in */
+                    if (qv < 1.f) p->f = TQ;                /* inside the blob's own surface: its field alone is enough */
+                    else { const float o = 1.f - qf; p->f = (uint16_t)(p->f + (int)(stq * o * o * o)); }
+                }
                 if (topq <= p->z) continue;                 /* cannot be nearer than what is there */
                 const uint16_t z = zq(e.d + (qv < 1.f ? e.h * sqrtf(1.f - qv) : 0.f));
                 if (z > p->z) { p->z = z; p->g = g; }
@@ -395,7 +412,7 @@ static void solid_rows(cd_t *d, int a, int b) {
         }
     }
     for (int Y = a; Y < b; Y++) {
-        dot_t *p = d->dot + Y * DW;
+        dot_t *p = sb + (Y - a0) * DW;
         for (int X = d->bx0; X < d->bx1; X++) if (p[X].f < TQ) { p[X].z = 0; p[X].g = 0; }
     }
     /* 2. the solid parts, nearest wins */
@@ -405,20 +422,20 @@ static void solid_rows(cd_t *d, int a, int b) {
         const uint8_t g = (uint8_t)(s->group + 1);
         if (s->kind == CC_ELL) {
             const ell_t e = d->pe[q];
-            const box_t bx = sbox(d, e.u, e.v, e.eu, e.ev);
+            const box_t bx = { d->sbx[q].x0, d->sbx[q].x1, d->sbx[q].y0, d->sbx[q].y1 };
             for (int Y = bx.y0 > a ? bx.y0 : a; Y <= bx.y1 && Y < b; Y++) for (int X = bx.x0; X <= bx.x1; X++) {
                 const float qv = eq(&e, dot_u(d, X), dot_v(d, Y));
                 if (qv >= 1.f) continue;
-                dot_t *p = d->dot + Y * DW + X; const uint16_t z = zq(e.d + e.h * sqrtf(1.f - qv));
+                dot_t *p = sb + (Y - a0) * DW + X; const uint16_t z = zq(e.d + e.h * sqrtf(1.f - qv));
                 if (z > p->z) { p->z = z; p->g = g; }
             }
         } else {
             const capz_t cp = d->pc[q];
-            const box_t bx = cap_box(d, &cp);
+            const box_t bx = { d->sbx[q].x0, d->sbx[q].x1, d->sbx[q].y0, d->sbx[q].y1 };
             for (int Y = bx.y0 > a ? bx.y0 : a; Y <= bx.y1 && Y < b; Y++) for (int X = bx.x0; X <= bx.x1; X++) {
                 float zz;
                 if (!in_capsule(&cp, dot_u(d, X), dot_v(d, Y), &zz)) continue;
-                dot_t *p = d->dot + Y * DW + X; const uint16_t z = zq(zz);
+                dot_t *p = sb + (Y - a0) * DW + X; const uint16_t z = zq(zz);
                 if (z > p->z) { p->z = z; p->g = g; }
             }
         }
@@ -747,6 +764,7 @@ void cd_draw(cd_t *d, const cc_t *c, uint32_t frame) {
             b = cap_box(d, &w);
         }
         d->pok[q] = 1;
+        d->sbx[q].x0 = (int16_t)b.x0; d->sbx[q].x1 = (int16_t)b.x1; d->sbx[q].y0 = (int16_t)b.y0; d->sbx[q].y1 = (int16_t)b.y1;
         grow(&bb, b);
         if (s->kind != CC_PATCH && s->group < CG_NSTRUCT) for (int Y = b.y0; Y <= b.y1; Y++) d->wrow[Y] += b.x1 - b.x0 + 1;
     }
