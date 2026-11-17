@@ -438,6 +438,74 @@ static void test_info(const char *pkgdir, const char *id) {
 
 /* a gesture of the package's own (the cat's eat, its clips in the rig): found by name, listed for agents, played by the
  * engine and routed by the clip player to its clip; a name it lacks is -1 */
+/* a rigged creature on a 466 px panel (the 1.75C) fed only the windows fluid_draw_send makes, as mole_fluid.c drives
+ * it: every frame it shows exactly what a drawer redrawing every cell shows (the skipped cells are the unchanged ones),
+ * sitting, through a tap's ripple and walking; and the windows stay on even rows (that panel's) and well under a full
+ * frame each */
+typedef struct { uint16_t *px; int w, h, odd; } crisp_panel_t;
+static int crisp_send(void *ctx, int x, int y, int w, int h, const uint16_t *px) {
+    crisp_panel_t *p = ctx;
+    if (x < 0 || y < 0 || x + w > p->w || y + h > p->h) return 1;
+    p->odd += (y & 1) || (h & 1);
+    for (int r = 0; r < h; r++) memcpy(p->px + (size_t)(y + r) * p->w + x, px + (size_t)r * w, (size_t)w * 2);
+    return 0;
+}
+static void test_crisp_panel(const char *pkgdir) {
+    char path[512]; size_t len;
+    snprintf(path, sizeof(path), "%s/cat/cat.json", pkgdir);
+    char *json = slurp(path, &len);
+    const char *err = NULL;
+    cpk_t *k = json ? cpk_create(json, len, 7, &err) : NULL;
+    CHECK(k != NULL, "crisp panel: cat (%s)", err ? err : "no file");
+    if (!k) { free(json); return; }
+    const int P = 466, MAXPX = P * 14;
+    int W, H; fluid_grid_for_stage(P, &W, &H);
+    fluid_sim_t *s = fluid_sim_create(W, H, P);
+    fluid_draw_t *d = fluid_draw_create(W, H, P, P), *ref = fluid_draw_create(W, H, P, P);
+    fluid_frame_t *fr = fluid_frame_create(W, H);
+    uint16_t *truth = calloc((size_t)P * P, 2), *buf = malloc((size_t)MAXPX * 2);
+    crisp_panel_t pn = { calloc((size_t)P * P, 2), P, P, 0 };
+    int walk = -1;
+    for (int g = 0; g < CUTE_N_ACTS + cp_own_gestures(cpk_player(k)); g++) if (!strcmp(cp_gesture_name(cpk_player(k), g), "walk")) walk = g;
+    CHECK(walk >= 0, "crisp panel: the cat walks");
+    const scene_hd_t hd = { 0, false, 1.f };
+    const fluid_overlay_t ov = { 0 };
+    int bad = -1; long sent[2] = { 0, 0 }, drawn[2] = { 0, 0 }; int nf[2] = { 0, 0 };
+    for (int f = 0; f < 240 && bad < 0; f++) {
+        if (f == 100) me_act(cpk_engine(k), walk);
+        if (f == 40) fluid_sim_impulse(s, 0.3f, 0.2f, 1.6f, 0.09f);      /* a tap */
+        cpk_frame(k, s, 1.f / 30.f, 1.f);
+        s->p.still = true;
+        fluid_sim_step(s, 1.f / 60); fluid_sim_step(s, 1.f / 60);
+        fluid_sim_color(s, 1.f / 30);
+        cpk_paint(k, s);
+        fluid_sim_snapshot(s, fr, false);
+        fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, f / 30.f, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL };
+        const uint32_t *cc; cpk_cells(k, &o.dots, &cc); o.scene = true; o.dust = scene_hd_dust(&hd);
+        const bool full = f == 0;
+        if (full) d->force = true;
+        const int n = fluid_draw_cells(d, fr, &o);
+        const int px = fluid_draw_send(d, &o, &ov, FLUID_MARK_NONE, full, buf, MAXPX, crisp_send, &pn);
+        CHECK(px >= 0, "crisp panel: send failed at frame %d", f);
+        ref->force = true; fluid_draw_cells(ref, fr, &o);
+        const fluid_rect_t all = { truth, P, 0, 0, P, P };
+        fluid_draw_rect(ref, &o, &all, true);
+        if (memcmp(truth, pn.px, (size_t)P * P * 2)) bad = f;
+        const int ph = f >= 130 ? 1 : f >= 70 && f < 100 ? 0 : -1;    /* settled: sitting, then walking */
+        if (ph >= 0) { sent[ph] += px; drawn[ph] += n; nf[ph]++; }
+    }
+    CHECK(bad < 0, "crisp panel: the panel differs from a full redraw at frame %d", bad);
+    CHECK(pn.odd == 0, "crisp panel: %d windows on odd rows", pn.odd);
+    for (int q = 0; q < 2; q++) {
+        const double avg = nf[q] ? (double)sent[q] / nf[q] : 0;
+        printf("  crisp panel %s: %.0f px sent a frame (%.0f%% of the panel), %.0f cells drawn\n", q ? "walking" : "sitting", avg,
+               100.0 * avg / (P * P), nf[q] ? (double)drawn[q] / nf[q] : 0);
+        CHECK(avg < 0.25 * P * P, "crisp panel %s: %.0f px a frame", q ? "walking" : "sitting", avg);
+    }
+    free(truth); free(buf); free(pn.px); fluid_frame_destroy(fr); fluid_draw_destroy(d); fluid_draw_destroy(ref); fluid_sim_destroy(s);
+    cpk_destroy(k); free(json);
+}
+
 static void test_own_rigged(const char *pkgdir) {
     char path[512]; size_t len;
     snprintf(path, sizeof(path), "%s/cat/cat.json", pkgdir);
@@ -470,6 +538,7 @@ int main(int argc, char **argv) {
     for (const char *const *id = (const char *const[]){ "duck", "cat", "octopus", NULL }; *id; id++) test_golden(argv[1], argv[2], *id);
     test_strict(argv[1]);
     test_own_rigged(argv[1]);
+    test_crisp_panel(argv[1]);
     for (const char *const *id = (const char *const[]){ "duck", "cat", "octopus", NULL }; *id; id++) test_info(argv[1], *id);
     for (const char *const *id = (const char *const[]){ "duck", NULL }; *id; id++) test_planted(argv[1], *id);   /* the cat: clip_test.c */
     const double v1 = bench_v1(argv[3]);
