@@ -497,8 +497,24 @@ bool link_color_arg(const cJSON *args, const char *key, int32_t *rgb)
     return true;
 }
 
+int link_ask_label_max(int n) { return n <= 2 ? 14 : n == 3 ? 10 : 8; }
+
+/* 1..max printable ASCII chars, not all spaces */
+static bool printable(const char *v, size_t max)
+{
+    size_t len = strlen(v);
+    if (len < 1 || len > max) return false;
+    bool ink = false;
+    for (size_t k = 0; k < len; k++) {
+        unsigned char c = (unsigned char)v[k];
+        if (c < 0x20 || c > 0x7E) return false;
+        if (c != ' ') ink = true;
+    }
+    return ink;
+}
+
 bool link_ask_args(const cJSON *args, char job[LINK_STREAM_MAX], char labels[LINK_ASK_MAX][LINK_ASK_LABEL_MAX + 1],
-                   int32_t colors[LINK_ASK_MAX], int *n, unsigned *timeout_ms)
+                   int32_t colors[LINK_ASK_MAX], int *n, unsigned *timeout_ms, char title[LINK_ASK_TITLE_MAX + 1])
 {
     const cJSON *j = cJSON_GetObjectItemCaseSensitive(args, "job");
     const cJSON *opts = cJSON_GetObjectItemCaseSensitive(args, "options");
@@ -513,14 +529,7 @@ bool link_ask_args(const cJSON *args, char job[LINK_STREAM_MAX], char labels[LIN
         if (!cJSON_IsString(o)) return false;
         const char *v = o->valuestring;
         size_t len = strlen(v);
-        if (len < 1 || len > LINK_ASK_LABEL_MAX) return false;
-        bool ink = false;
-        for (size_t k = 0; k < len; k++) {
-            unsigned char c = (unsigned char)v[k];
-            if (c < 0x20 || c > 0x7E) return false;
-            if (c != ' ') ink = true;
-        }
-        if (!ink) return false;
+        if (!printable(v, (size_t)link_ask_label_max(count))) return false;
         for (int p = 0; p < i; p++) {                 /* unique, ignoring case */
             const char *a = labels[p];
             size_t q = 0;
@@ -540,6 +549,9 @@ bool link_ask_args(const cJSON *args, char job[LINK_STREAM_MAX], char labels[LIN
             colors[i] = (int32_t)v;
         }
     }
+    const cJSON *t = cJSON_GetObjectItemCaseSensitive(args, "title");
+    if (t && (!cJSON_IsString(t) || !printable(t->valuestring, LINK_ASK_TITLE_MAX))) return false;
+    strcpy(title, t ? t->valuestring : "");
     strcpy(job, j->valuestring);
     *n = count; *timeout_ms = (unsigned)to->valuedouble;
     return true;

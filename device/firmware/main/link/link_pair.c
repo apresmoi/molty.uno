@@ -5,6 +5,8 @@
 #include "link_audio.h"
 #include "link_ask.h"
 #include "mole_creature.h"
+#include "mole_fluid.h"
+#include "fluid_ask.h"
 #include "molty_board.h"
 #include "esp_timer.h"
 #include <stdio.h>
@@ -15,10 +17,12 @@
 /* The device decides just before the relay's 120 s pairing window closes. */
 #define PAIR_TIMEOUT_US 110000000LL
 
-static char s_req[96], s_previous[32], s_name[128], s_code[5];
-static char *s_state;
+static char s_req[96], s_name[128], s_code[5];
 static bool s_boot_released, s_power_released;
-static atomic_bool s_active, s_down, s_tap;
+static atomic_bool s_active;
+static atomic_int s_tap = -1;              /* the answer a tap picked (link_pair_tap): 0 accept, 1 reject, -1 none */
+static fluid_ask_hit_t s_hit;              /* where the question's answers are (set before its seq) */
+static atomic_uint s_pair_seq;                  /* ... its number there (mole_fluid_ask_show) */
 static int64_t s_deadline;
 /* Most recent decision, RAM only, for GET /api/link (seq 0 = none since boot).
  * Written by result() and read by link_pair_status(), both under the link
@@ -50,36 +54,51 @@ void link_pair_status(cJSON *j)
     } else cJSON_AddNullToObject(j, "last_pair");
 }
 
-/* Called by the one touch poller (molty_touch_poll); never runs I2C a second time. */
-void link_pair_touch(int count)
+/* Touch path, on a touch-down edge at (dx, dy) px from the screen's centre, while a pairing waits: a tap on the
+ * accept or the reject arc of the question the panel shows (mole_fluid_ask_shown) is that answer; any other tap
+ * answers nothing. */
+void link_pair_tap(float dx, float dy)
 {
-    bool down = count > 0;
-    bool old = atomic_exchange(&s_down, down);
-    if (down && !old) atomic_store(&s_tap, true);
+    if (!atomic_load(&s_active)) return;
+    const unsigned seq = atomic_load(&s_pair_seq);
+    if (!seq || mole_fluid_ask_shown() != seq) return;
+    const int w = molty_display_width(), h = molty_display_height();
+    const float r = (w < h ? w : h) * 0.5f;
+    const int pick = r > 0.f ? fluid_ask_pick(&s_hit, dx / r, dy / r) : -1;
+    int none = -1;
+    if (pick >= 0) atomic_compare_exchange_strong(&s_tap, &none, pick);
 }
 
-/* Accept = a touch tap or the board's accept button; reject = its reject button (if
+/* Accept = a tap on the accept arc or the board's accept button; reject = a tap on the reject arc or its reject button (if
  * any) or the timeout. The buttons are the board's (molty_board_init configures them). */
 esp_err_t link_pair_init(void)
 {
     return ESP_OK;
 }
 
-/* Static prompt: the 4-digit code alone, condensed in the fluid. A lone token is
- * centred with no ORP accent, and "hold" keeps it (no return to the creature) until
- * the decision. The agent name is shown by the console and returned in GET /api/link. */
+/* The question: "PAIR WITH <AGENT>?", a reminder to check the code, the code, and accept / reject as rim arcs
+ * (fluid_ask.h). It stays up until the decision, over whatever shows. */
 esp_err_t link_ui_show_pair(const char *agent_name, const char *code)
 {
-    (void)agent_name;
     esp_err_t e = mole_creature_select("fluid");
     if (e != ESP_OK) return e;
-    cJSON *j = cJSON_CreateObject();
-    if (!j) return ESP_ERR_NO_MEM;
-    cJSON_AddStringToObject(j, "state", "text"); cJSON_AddStringToObject(j, "text", code);
-    cJSON_AddBoolToObject(j, "hold", true);
-    char *body = cJSON_PrintUnformatted(j); cJSON_Delete(j);
-    if (!body) return ESP_ERR_NO_MEM;
-    e = mole_creature_state_set(body); free(body);
+    fluid_ask_q_t q;
+    memset(&q, 0, sizeof(q));
+    const char *who = agent_name && agent_name[0] ? agent_name : "an agent";
+    int len = (int)strlen(who);
+    if (len > FLUID_ASK_TITLE_MAX - 11) len = FLUID_ASK_TITLE_MAX - 11;   /* "pair with " + it + "?" */
+    char title[64];
+    snprintf(title, sizeof(title), "pair with %.*s?", len, who);
+    strcpy(q.title, title);
+    strcpy(q.detail, "check the code matches");
+    snprintf(q.code, sizeof(q.code), "%.4s", code);
+    q.n = 2;
+    strcpy(q.label[0], "accept"); strcpy(q.label[1], "reject");
+    q.rgb[0] = fluid_ask_color(-1, 0); q.rgb[1] = fluid_ask_color(-1, 1);
+    s_hit = fluid_ask_hit(&q);
+    unsigned seq = 0;
+    e = mole_fluid_ask_show(&q, &seq);
+    atomic_store(&s_pair_seq, e == ESP_OK ? seq : 0u);
     return e;
 }
 
@@ -101,18 +120,16 @@ static void result(const char *req, bool ok, const char *reason, const char *age
     cJSON_Delete(j);
 }
 
-void link_pair_cancel(void)
+/* the pairing ends: its question leaves the screen (answered: from that answer; else the rim lets go) */
+static void end_pair(int answer)
 {
     if (!atomic_exchange(&s_active, false)) return;
-    /* back to what was shown — the creature when that was text or the demo reel: the
-     * reel never comes back on its own (link_restore_body) */
-    if (s_previous[0] && mole_creature_select(s_previous) == ESP_OK && s_state) {
-        char *body = link_restore_body(s_state);
-        if (body) mole_creature_state_set(body);
-        free(body);
-    }
-    free(s_state); s_state = NULL;
+    if (answer >= 0) mole_fluid_ask_pick(answer);
+    mole_fluid_ask_end();
+    atomic_store(&s_pair_seq, 0u);
 }
+
+void link_pair_cancel(void) { end_pair(-1); }
 
 void link_pair_request(const cJSON *args)
 {
@@ -127,9 +144,6 @@ void link_pair_request(const cJSON *args)
         !cJSON_IsString(code) || strlen(code->valuestring) != 4 || strspn(code->valuestring, "0123456789") != 4) {
         result(req->valuestring, false, "rejected", who); return;
     }
-    const char *cur = mole_creature_current();
-    snprintf(s_previous, sizeof(s_previous), "%s", cur ? cur : "");
-    if (cur && mole_creature_state_get(&s_state) != ESP_OK) { result(req->valuestring, false, "rejected", who); return; }
     link_ask_cancel();   /* the code takes the screen; its event leaves before pairing mutes events */
     strcpy(s_req, req->valuestring);
     strcpy(s_name, name->valuestring); strcpy(s_code, code->valuestring);
@@ -138,7 +152,7 @@ void link_pair_request(const cJSON *args)
     if (link_ui_show_pair(name->valuestring, code->valuestring) != ESP_OK) {
         result(s_req, false, "rejected", s_name); link_pair_cancel(); return;
     }
-    atomic_store(&s_tap, false);
+    atomic_store(&s_tap, -1);
     s_boot_released = !molty_button_pressed(MOLTY_BTN_ACCEPT);
     s_power_released = !molty_button_pressed(MOLTY_BTN_REJECT);
 }
@@ -148,13 +162,14 @@ void link_pair_tick(void)
     if (!link_pair_active()) return;
     bool boot = molty_button_pressed(MOLTY_BTN_ACCEPT);
     if (!boot) s_boot_released = true;
-    bool accept = atomic_exchange(&s_tap, false) || (boot && s_boot_released);
+    const int tap = atomic_exchange(&s_tap, -1);
+    bool accept = tap == 0 || (boot && s_boot_released);
     bool power = molty_button_pressed(MOLTY_BTN_REJECT);
     if (!power) s_power_released = true;
-    bool reject = power && s_power_released;
+    bool reject = (power && s_power_released) || tap == 1;
     bool expired = esp_timer_get_time() >= s_deadline;
     if (accept || expired || reject) {
         result(s_req, accept && !expired && !reject, expired ? "timeout" : "rejected", s_name);
-        link_pair_cancel();
+        end_pair(tap >= 0 ? tap : accept && !expired && !reject ? 0 : -1);   /* a tap or the button: from that answer */
     }
 }

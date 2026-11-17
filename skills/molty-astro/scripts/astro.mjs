@@ -78,11 +78,12 @@ async function ensure() {
 }
 
 /**
- * Molty asks its human with one tap, answers at once, and reports the outcome later (a `pkg` event the
- * relay turns into this job's end): wait for it, at most ~2 min (the relay's deadline, pkg_timeout).
+ * Molty asks its human with one tap (its question stays up 1 min), answers at once, and reports the outcome later (a
+ * `pkg` event the relay turns into this job's end): wait for it, at most ~2 min (the tap, then the download; the
+ * relay's deadline, pkg_timeout).
  */
 async function install({ version, ...args }) {
-  console.error(`Molty is asking your human to install ${args.name}: waiting for their tap (up to 2 min)`);
+  console.error(`Molty is asking your human to install ${args.name}: waiting for their tap (the question stays up 1 min)`);
   const r = await send('pkg.install', args, true);
   if (r.status === 'pending') throw Object.assign(new Error('pkg.install: still waiting for the tap on Molty; run astro.mjs status later to see whether it landed'), { code: 'pending' });
   console.error(`installed ${r.installed ?? PKG} ${r.version ?? version}`);

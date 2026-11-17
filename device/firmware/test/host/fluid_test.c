@@ -9,7 +9,6 @@
  * Build + run: test/host/fluid_build.sh
  */
 #include "fluid_sim.h"
-#include "fluid_ask.h"
 #include "fluid_ring.h"
 #include "glyph_font.h"
 
@@ -18,6 +17,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+/* five label spots and a type size, as the old sector layout placed 8-letter labels (fluid_text_set_labels, the
+ * dividers and fluid_target_arcs are library code no question uses now) */
+static float spots(int stage, float *cx, float *cy) {
+    static const float a[5] = { 0.628f, 5.655f, 4.398f, 1.885f, 3.142f };   /* reading order of 5 sectors */
+    for (int i = 0; i < 5; i++) { cx[i] = stage * 0.5f + sinf(a[i]) * 0.56f * stage * 0.5f; cy[i] = stage * 0.5f - cosf(a[i]) * 0.56f * stage * 0.5f; }
+    return 26.f * stage / 412.f;
+}
+#define ARC_R  0.92f
+#define ARC_HW 0.022f
+static void arc3(int i, float *a0, float *a1) { const float g = 9.f / (ARC_R * 206.f); *a0 = i * 2.0943951f + g; *a1 = (i + 1) * 2.0943951f - g; }
 
 static int s_fail = 0, s_pass = 0;
 #define CHECK(cond, ...) do { if (cond) s_pass++; else { s_fail++; printf("FAIL %s:%d: ", __FILE__, __LINE__); printf(__VA_ARGS__); printf("\n"); } } while (0)
@@ -186,7 +196,7 @@ static void test_dots_wobble(void) {
     for (int j = jc - 2; j <= jc + 2; j++) dots[j * W + ic] = 0x47;     /* a vertical hairline: dot column 0 */
     const float cw = (float)FLUID_STAGE_REF / W, ch = (float)FLUID_STAGE_REF / H;
     static const uint8_t sym[2] = { 0xFF, 0xFF };
-    fluid_letter_t L = { '*', true, 12 * cw + 3.f, 8 * ch + 3.f, 2 * cw - 6.f, 2 * ch - 6.f, 2 * ch, 0.f, 0, sym, 4, 4 };
+    fluid_letter_t L = { '*', true, false, 12 * cw + 3.f, 8 * ch + 3.f, 2 * cw - 6.f, 2 * ch - 6.f, 2 * ch, 0.f, 0, sym, 4, 4 };
     fluid_draw_opts_t o = { FLUID_PAL_GREEN, FLUID_EDGE_CONTOURS, 0.f, 2.f, 0.f, &L, 1, " .:-=+*#", stub_font, dots, false, 0.f, NULL, 0, NULL, 0 };
     const int k = jc * W + ic;
     fluid_draw_cells(d, fr, &o);
@@ -233,8 +243,8 @@ static void test_scene_hd(void) {
     const float cw = (float)FLUID_STAGE_REF / W, ch = (float)FLUID_STAGE_REF / H;
     static const uint8_t sym[2] = { 0xFF, 0xFF };
     fluid_letter_t L[2] = {
-        { '*', false, 16 * cw, (jc - 3) * ch, 2 * cw, 2 * ch, 2 * ch, 0.f, FLUID_RGB | 0xffcc00, sym, 4, 4 },   /* a symbol near the touch */
-        { 'a', true, 26 * cw, (jc - 4) * ch, 2 * cw, 2 * ch, 2 * ch, 0.f, 0, NULL, 0, 0 },                  /* the subtitle, under it */
+        { '*', false, false, 16 * cw, (jc - 3) * ch, 2 * cw, 2 * ch, 2 * ch, 0.f, FLUID_RGB | 0xffcc00, sym, 4, 4 },   /* a symbol near the touch */
+        { 'a', true, false, 26 * cw, (jc - 4) * ch, 2 * cw, 2 * ch, 2 * ch, 0.f, 0, NULL, 0, 0 },                  /* the subtitle, under it */
     };
     for (int j = jc - 3; j < jc - 1; j++) for (int i = 16; i < 18; i++) dots[j * W + i] = 0xFF;
     fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_CONTOURS, 0.12f, 2.f, 0.f, L, 2, " .:-=+*#", stub_font, dots, true, 0.f, NULL, 0, NULL, 0 };
@@ -398,8 +408,7 @@ static void test_labels(void) {
     fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
     fluid_text_t *tx = fluid_text_create(s);
     const char *txt[5] = { "ABCDEFGH", "IJKLMNOP", "QRSTUVWX", "YZ012345", "6789 #@!" };
-    int lens[5] = { 8, 8, 8, 8, 8 };
-    float cx[5], cy[5], fs = fluid_ask_layout(5, lens, FLUID_STAGE_REF, cx, cy);
+    float cx[5], cy[5], fs = spots(FLUID_STAGE_REF, cx, cy);
     fluid_label_t lb[5];
     for (int i = 0; i < 5; i++) lb[i] = (fluid_label_t){ txt[i], 8, cx[i], cy[i], i != 2, i == 3, 0 };
     fluid_text_set_labels(tx, s, lb, 5, fs);
@@ -451,7 +460,7 @@ static void test_overlay(void) {
     fluid_draw_overlay_dirty(d, &divs);
     fluid_draw(d, fr, fb, &o, &y0, &y1);
     n = fluid_draw_overlay(d, &(fluid_rect_t){ fb, P, 0, 0, P, P }, o.palette, &divs);
-    int lens[5] = { 8, 8, 8, 8, 8 }; float cx[5], cy[5], fs = fluid_ask_layout(5, lens, P, cx, cy);
+    float cx[5], cy[5], fs = spots(P, cx, cy);
     changed = stray = 0; long in_label = 0;
     for (int y = 0; y < P; y++) for (int x = 0; x < P; x++) {
         if (fb[y * P + x] == fb_ref[y * P + x]) continue;
@@ -735,15 +744,14 @@ static const uint32_t ARC_RGB[3] = { 0x3ccf96, 0xff6b6b, 0x4dabf7 };
 static void arcs3(fluid_sim_t *s, float t) {
     (void)t;
     fluid_arc_t a[3];
-    for (int i = 0; i < 3; i++) { fluid_ask_arc(3, i, FLUID_STAGE_REF, &a[i].a0, &a[i].a1); a[i].hw = FLUID_ASK_ARC_HW; a[i].amt = 1.f; a[i].rgb = ARC_RGB[i]; }
-    fluid_target_arcs(s, FLUID_ASK_ARC_R, a, 3, 0.f);
+    for (int i = 0; i < 3; i++) { arc3(i, &a[i].a0, &a[i].a1); a[i].hw = ARC_HW; a[i].amt = 1.f; a[i].rgb = ARC_RGB[i]; }
+    fluid_target_arcs(s, ARC_R, a, 3, 0.f);
 }
 static void test_fluid_arcs(void) {
     fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
     run_arcs(s, 45, arcs3);
-    int sector[FLUID_ASK_MAX]; fluid_ask_order(3, sector);
     for (int i = 0; i < 3; i++) {
-        float a = ((float)sector[i] + 0.5f) * 6.2831853f / 3, R = FLUID_ASK_ARC_R;
+        float a = ((float)i + 0.5f) * 6.2831853f / 3, R = ARC_R;
         int k = cell_of(s, R * sinf(a), -R * cosf(a));
         float r, g, b; rgb_of(ARC_RGB[i], &r, &g, &b);
         const fluid_rgba16_t *c = &s->col[k];
@@ -756,7 +764,7 @@ static void test_fluid_arcs(void) {
     memset(e->T, 0, (size_t)e->N * 2);
     arcs3(e, 0.f);
     for (int q = 0; q < 3; q++) {
-        float a = q * 6.2831853f / 3, R = FLUID_ASK_ARC_R;
+        float a = q * 6.2831853f / 3, R = ARC_R;
         float mid = e->T[cell_of(e, R * sinf(a + 1.047f), -R * cosf(a + 1.047f))] / FQ_UNIT;
         float gap = e->T[cell_of(e, R * sinf(a), -R * cosf(a))] / FQ_UNIT;
         CHECK(mid > 0.5f && gap < 0.5f * mid, "divider %d: gap %.2f vs arc %.2f", q, gap, mid);
@@ -766,7 +774,7 @@ static void test_fluid_arcs(void) {
     fluid_sim_destroy(e); e = fluid_sim_create(52, 32, FLUID_STAGE_REF);   /* fresh T and tcol on both */
     memset(e->T, 0, (size_t)e->N * 2); memset(o->T, 0, (size_t)o->N * 2);
     arcs3(e, 0.f);
-    for (int i = 0; i < 3; i++) { float a0, a1; fluid_ask_arc(3, i, FLUID_STAGE_REF, &a0, &a1); fluid_target_arc(o, FLUID_ASK_ARC_R, FLUID_ASK_ARC_HW, a0, a1, 1.f, ARC_RGB[i], 0.f); }
+    for (int i = 0; i < 3; i++) { float a0, a1; arc3(i, &a0, &a1); fluid_target_arc(o, ARC_R, ARC_HW, a0, a1, 1.f, ARC_RGB[i], 0.f); }
     CHECK(!memcmp(e->T, o->T, (size_t)e->N * 2) && !memcmp(e->tcol, o->tcol, (size_t)e->N * 4), "one pass differs from the arcs one by one");
     fluid_sim_destroy(o);
     fluid_sim_destroy(e); fluid_sim_destroy(s);

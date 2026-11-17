@@ -58,7 +58,9 @@ static atomic_uint     s_spot;               /* a tap on a scene's spot (mole_fl
 void sense_touch(int n, const uint16_t *xs, const uint16_t *ys)
 {
     static bool down;
-    if (n > 0 && !down && !link_pair_active()) {
+    if (n > 0 && !down && link_pair_active()) {   /* a pairing waits: the tap may be its answer, never a `tap` event */
+        link_pair_tap((float)xs[0] + 0.5f - molty_display_width() * 0.5f, (float)ys[0] + 0.5f - molty_display_height() * 0.5f);
+    } else if (n > 0 && !down) {
         int w = molty_display_width(), h = molty_display_height();
         /* a pending question takes the tap as its answer: no `tap` event for it */
         if (link_ask_tap((float)xs[0] + 0.5f - w * 0.5f, (float)ys[0] + 0.5f - h * 0.5f)) { down = true; return; }

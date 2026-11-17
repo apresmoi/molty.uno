@@ -188,19 +188,23 @@ bool link_color_parse(const char *s, uint32_t *rgb);
 /* An optional colour field (listen's "ring_color"): absent → *rgb = -1 and true; a
  * "#rrggbb" string → its value; any other value (wrong type, bad hex, null) → false. */
 bool link_color_arg(const cJSON *args, const char *key, int32_t *rgb);
-/* ask cmd args {job, options, colors?, timeout_ms}: job a stream-sized id (1..128 chars);
- * options 1..LINK_ASK_MAX strings, each 1..LINK_ASK_LABEL_MAX chars of printable ASCII
+/* ask cmd args {job, options, colors?, title?, timeout_ms}: job a stream-sized id (1..128 chars);
+ * options 1..LINK_ASK_MAX strings, each 1..link_ask_label_max(n) chars of printable ASCII
  * (0x20..0x7E), not all spaces, no two equal ignoring case; timeout_ms an integer
  * 1000..120000. All required. Labels are copied verbatim (the answer echoes them).
  * colors (optional; the relay resolves names): one "#rrggbb" per option, in order →
  * colors[i] = 0xRRGGBB; absent → every colors[i] = -1 (the screen's default by index);
- * present but not an array of exactly n valid hex strings → false. */
+ * present but not an array of exactly n valid hex strings → false. title (optional): the
+ * question shown over the answers, 1..LINK_ASK_TITLE_MAX printable ASCII chars; absent → "". */
 #define LINK_ASK_MAX        5
-#define LINK_ASK_LABEL_MAX  8
+#define LINK_ASK_LABEL_MAX  14           /* 1..2 answers; 10 for 3, 8 for 4..5 (link_ask_label_max) */
+#define LINK_ASK_TITLE_MAX  40
 #define LINK_ASK_TIMEOUT_MIN 1000
 #define LINK_ASK_TIMEOUT_MAX 120000
+/* The longest label n answers may have (the screen fits them: fluid_ask_label_max agrees; the relay checks the same). */
+int  link_ask_label_max(int n);
 bool link_ask_args(const cJSON *args, char job[LINK_STREAM_MAX], char labels[LINK_ASK_MAX][LINK_ASK_LABEL_MAX + 1],
-                   int32_t colors[LINK_ASK_MAX], int *n, unsigned *timeout_ms);
+                   int32_t colors[LINK_ASK_MAX], int *n, unsigned *timeout_ms, char title[LINK_ASK_TITLE_MAX + 1]);
 /* {"t":"evt","name":"answer","data":{...}}: index ≥ 0 → {job, index, label} (a tap);
  * index < 0 → {job, index:null, reason} ("timeout" | "cancelled"). */
 cJSON *link_evt_answer_frame(const char *job, int index, const char *label, const char *reason);

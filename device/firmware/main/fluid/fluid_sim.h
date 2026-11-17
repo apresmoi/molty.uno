@@ -250,6 +250,8 @@ void fluid_effect_exit(fluid_sim_t *s, int fx);
 typedef struct {
     char  ch;
     bool  acc;                         /* ORP letter                                      */
+    bool  whole;                       /* over a scene: whole whatever the wave (a question's words
+                                        * break into dust by themselves, fluid_askview.h)  */
     float x, y, w, h, fs;              /* stage px                                        */
     float melt;                        /* this letter's own melt, added to the frame's    */
     uint32_t rgb;                      /* FLUID_RGB | 0xRRGGBB: its own colour (pastel);
@@ -389,6 +391,7 @@ typedef struct {
                                         * dots (0 on it, HALO_REACH + 1 and beyond: far); and
                                         * the next one, measured when the drawing changes  */
     uint32_t halo_sig;                 /* the drawing it was measured from (a hash)        */
+    uint32_t lt_sig;                   /* the letters last drawn (a hash): their cells are sent again only when it changes */
     uint8_t  *hde;                     /* per cell: the dust's reseed it shows (still cells) */
     uint8_t  *hch;                     /* per cell: its halo or the subtitle's dark changed */
     uint8_t  *cdist;                   /* per cell: cells to the nearest with a drawing's dots */

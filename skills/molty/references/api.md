@@ -22,9 +22,9 @@ curl -sS -X POST "$MOLTY_RELAY/v1/pair" \
 
 - `agent_name`: 1–64 printable chars; it is shown on the device. Use your real name.
 - The device now shows a 4-digit code. **Tell your human** something like:
-  "Molty shows code 1234 — tap the screen (or press BOOT) to accept me." The code is
+  "Molty shows code 1234 — tap accept on its screen (or press BOOT) to accept me." The code is
   in every pair response as `code`, so the human can check it matches.
-- The pairing request lives **120 s**. The human taps to accept; PWR rejects; no
+- The pairing request lives **120 s**. The human taps accept on Molty's screen (reject declines); PWR rejects; no
   answer times out.
 - `wait_s` (0–120, default 120) is how long the call blocks. If your HTTP/tool calls
   have a short timeout, use a small `wait_s` (e.g. 25) and resume:
@@ -321,18 +321,20 @@ curl -sS -X POST "$MOLTY_RELAY/v1/devices/$MOLTY_DEVICE/ask" \
 #     "ms":{"tts_first_audio":…,"speech":…,"answer":…,"total":…},"timings":{…}}}
 ```
 
-Body: `{"say"?: s, "options": [1..5 labels], "timeout_s"?: 1..120 (default 30), "voice"?, "client_timing"?}` (`client_timing` as in Talk).
-Speaks `say` (put the question there), then shows the options on the round screen and returns
+Body: `{"say"?: s, "title"?: s, "options": [1..5 labels], "timeout_s"?: 1..120 (default 30), "voice"?, "client_timing"?}` (`client_timing` as in Talk).
+Speaks `say` (put the question there), then shows `title` (the question on screen, up to 40 characters; older
+firmware leaves it out) over the options on the round screen and returns
 the one the human tapped: `answer` (its label) and `index`. Blocks and finishes like talk
 (24 s, then `202` pending — a long `timeout_s` is fine, finish it with the jobs URL).
 
-- **Labels are tap targets on a small round screen: 1–8 characters each**, printable ASCII,
-  unique ignoring case. Good: `"yes"`, `"no"`, `"later"`, `"idk"`, `"ok"`, `"A"`, `"tea"`. Bad:
-  `"Yes, please"` (too long), `"maybe later"` (11 chars), `"👍"` (not ASCII), `["no","No"]` (duplicates).
-  Too long is `400 invalid_args` with the reason.
-- 1 option = one centred button (`"ok"`, `"done"`); 2 = two halves; 3–5 = pie slices.
+- **Labels are tap targets on a small round screen**: up to 14 characters each for 1–2 options, 10 for 3,
+  8 for 4–5; printable ASCII, unique ignoring case. Good: `"yes"`, `"no"`, `"later"`, `"send it now"`.
+  Bad: `"Yes, please do it now"` (too long), `"👍"` (not ASCII), `["no","No"]` (duplicates). Too long is
+  `400 invalid_args` with the reason; a label over 8 characters to firmware older than the title screen is
+  `409 firmware_too_old`.
+- 1–3 options are arcs of the rim under the question (option 0 on the left); 4–5 are rows.
 - **Colours (optional).** An option may be `{"label": "yes", "color": "green"}` instead of a plain label;
-  `color` is one of green, red, amber, blue, violet, pink, cyan, white or `"#rrggbb"`. Each button's label and rim arc take its
+  `color` is one of green, red, amber, blue, violet, pink, cyan, white or `"#rrggbb"`. Each answer's label and line take its
   colour. Without one, buttons get green, red, amber, blue, violet by position — fine for most questions. Use colour
   to mean something (green yes, red no), e.g. `"options":[{"label":"yes","color":"green"},{"label":"no","color":"red"},"later"]`.
 - `answer` is `null` (and `index` `null`) when nobody tapped: `reason` is `timeout` (no tap within

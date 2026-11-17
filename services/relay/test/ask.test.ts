@@ -4,7 +4,7 @@
 // event's strict checks, and `answer` in the inbox / webhooks.
 import { describe, expect, it } from "vitest";
 import type { RelayBackend } from "../src/core/api.js";
-import { COLORS, DEFAULT_ASK_COLORS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, validateAsk } from "../src/core/commands.js";
+import { ASK_TITLE_CAP, COLORS, DEFAULT_ASK_COLORS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, askLabelMax, validateAsk } from "../src/core/commands.js";
 import { AGENT_EVENT_TYPES, SAMPLE_EVENTS, agentEventData } from "../src/core/events.js";
 import { decodeAudioFrame } from "../src/core/protocol.js";
 import type { DeviceRoom } from "../src/core/room.js";
@@ -92,7 +92,7 @@ const rest = async (b: RelayBackend, token: string, body: unknown) => {
 
 describe("validateAsk", () => {
   const bad = (args: unknown) => expect(() => validateAsk(args), JSON.stringify(args)).toThrow();
-  it("accepts 1..5 trimmed labels of 1..8 printable ASCII chars, unique ignoring case", () => {
+  it("accepts 1..5 trimmed labels of printable ASCII chars (14 for 1-2 answers, 10 for 3, 8 for 4-5), unique ignoring case", () => {
     expect(validateAsk({ options: ["ok"] })).toEqual({ options: ["ok"], colors: ["#3ccf96"], timeout_s: 30 });
     expect(validateAsk({ options: [" yes ", "no", "later", "idk", "A b ~!"], timeout_s: 120, say: "Q?", voice: "luna" })).toEqual({
       options: ["yes", "no", "later", "idk", "A b ~!"],
@@ -101,8 +101,14 @@ describe("validateAsk", () => {
       say: "Q?",
       voice: "luna",
     });
-    expect(validateAsk({ options: ["x".repeat(MAX_ASK_LABEL)], timeout_s: 1 }).options[0]).toHaveLength(8);
-    expect(validateAsk({ options: ["  12345678  "] }).options).toEqual(["12345678"]); // trimmed before the length check
+    expect(validateAsk({ options: ["x".repeat(MAX_ASK_LABEL)], timeout_s: 1 }).options[0]).toHaveLength(14);
+    expect(validateAsk({ options: ["  12345678901234  "] }).options).toEqual(["12345678901234"]); // trimmed before the length check
+    expect([1, 2, 3, 4, 5].map(askLabelMax)).toEqual([14, 14, 10, 8, 8]);
+    expect(validateAsk({ options: ["install astro.", "not now"] }).options).toEqual(["install astro.", "not now"]);
+    expect(validateAsk({ options: ["abcdefghij", "b", "c"] }).options[0]).toHaveLength(10);
+    expect(validateAsk({ options: ["abcdefgh", "b", "c", "d"] }).options[0]).toHaveLength(8);
+    expect(validateAsk({ options: ["yes", "no"], title: "  Send the summary to Ana?  " }).title).toBe("Send the summary to Ana?");
+    expect(validateAsk({ options: ["ok"], title: "x".repeat(40) }).title).toHaveLength(40);
   });
   it("rejects each rule at its boundary, with a message an agent can act on", () => {
     bad({});
@@ -111,6 +117,12 @@ describe("validateAsk", () => {
     bad({ options: ["a", "b", "c", "d", "e", "f"] }); // 6 > MAX_ASK_OPTIONS
     expect(MAX_ASK_OPTIONS).toBe(5);
     bad({ options: ["x".repeat(MAX_ASK_LABEL + 1)] });
+    bad({ options: ["abcdefghijk", "b", "c"] }); // 11 > 10 for 3 answers
+    bad({ options: ["abcdefghi", "b", "c", "d"] }); // 9 > 8 for 4
+    bad({ options: ["ok"], title: "" });
+    bad({ options: ["ok"], title: "x".repeat(41) });
+    bad({ options: ["ok"], title: "café?" });
+    bad({ options: ["ok"], title: 3 });
     bad({ options: ["   "] }); // empty after trim
     bad({ options: [""] });
     bad({ options: ["yes", 3] });
@@ -126,7 +138,8 @@ describe("validateAsk", () => {
     bad({ options: ["ok"], say: "" });
     bad({ options: ["ok"], voice: "bad voice!" });
     bad({ options: ["ok"], bogus: 1 });
-    expect(() => validateAsk({ options: ["maybe later"] })).toThrow(/1\.\.8 characters.*shorten it/);
+    expect(() => validateAsk({ options: ["maybe later, ok?"] })).toThrow(/1\.\.14 characters.*shorten it/);
+    expect(() => validateAsk({ options: ["a", "b", "c", "d", "maybe later"] })).toThrow(/1\.\.8 characters after trimming with 5 answers/);
     expect(() => validateAsk({ options: ["no", "NO"] })).toThrow(/unique/);
     expect(() => validateAsk({ options: ["ok"], timeout_s: 0 })).toThrow(/timeout_s must be an integer 1\.\.120/);
   });
@@ -423,14 +436,31 @@ describe("molty_ask", () => {
     await until(() => w.dev.asks().length === 1);
     await w.dev.answer({ job: w.dev.asks()[0].args.job, index: 0, label: "yes" });
     expect(await call).toMatchObject({ status: 200, body: { ok: true, result: { status: "done", answer: "yes", index: 0 } } });
-    const tooLong = await rest(w.backend, w.token, { options: ["absolutely"] });
-    expect(tooLong).toMatchObject({ status: 400, body: { ok: false, error: "invalid_args", message: expect.stringMatching(/1\.\.8 characters/) } });
+    const tooLong = await rest(w.backend, w.token, { options: ["absolutely, yes!"] });
+    expect(tooLong).toMatchObject({ status: 400, body: { ok: false, error: "invalid_args", message: expect.stringMatching(/1\.\.14 characters/) } });
     expect(await rest(w.backend, "nope", { options: ["ok"] })).toMatchObject({ status: 401 });
     const slow = await setup({ timings: { talkBudgetMs: 30 } });
     const p = await rest(slow.backend, slow.token, { options: ["ok"], timeout_s: 60 });
     expect(p).toMatchObject({ status: 202, body: { ok: true, result: { status: "pending", job: expect.any(String) } } });
     slow.sock.close(1006, "bye");
     expect(await slow.room.ask(slow.token, { options: ["ok"] })).toMatchObject({ ok: false, error: "device_offline" });
+  });
+
+  it("a title and labels over 8 characters go to firmware that shows them (ask_title); older firmware: refused or left out", async () => {
+    const w = await setup({ caps: [...CAPS, ASK_TITLE_CAP] });
+    const call = w.room.ask(w.token, { title: "Install Astrology?", options: ["install astro.", "not now"] });
+    await until(() => w.dev.asks().length === 1);
+    expect(w.dev.asks()[0].args).toMatchObject({ title: "Install Astrology?", options: ["install astro.", "not now"] });
+    await w.dev.answer({ job: w.dev.asks()[0].args.job, index: 0, label: "install astro." });
+    expect(await call).toMatchObject({ ok: true, result: { answer: "install astro.", index: 0 } });
+    const old = await setup();
+    expect(await old.room.ask(old.token, { options: ["install astro.", "no"] })).toMatchObject({ ok: false, error: "firmware_too_old", message: expect.stringMatching(/8 characters/) });
+    expect(old.dev.cmds).toEqual([]);
+    const plain = old.room.ask(old.token, { title: "Build now?", options: ["yes", "no"] });
+    await until(() => old.dev.asks().length === 1);
+    expect(old.dev.asks()[0].args).not.toHaveProperty("title");
+    await old.dev.answer({ job: old.dev.asks()[0].args.job, index: 1, label: "no" });
+    expect(await plain).toMatchObject({ ok: true, result: { answer: "no" } });
   });
 
   it("boards without touch (no `ask` cap) are unsupported before anything reaches the device; say needs a speaker", async () => {

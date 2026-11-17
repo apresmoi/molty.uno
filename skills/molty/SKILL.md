@@ -50,7 +50,7 @@ private one, see [self-hosting](references/self-hosting.md)).
 | `talk.sh "text" --no-listen` | speak only | — |
 | `talk.sh "text" --reply <turn_id>` | answer an `utterance` (claims the turn) | `HEARD: …` |
 | `quick.sh <id> [--reply <turn_id>]` | play a cached quick phrase now | the job |
-| `ask.sh "question" yes no later` | speak + 1–5 tap buttons (labels ≤ 8 chars) | `ANSWER: yes \| index 0` |
+| `ask.sh "question" yes no later` | speak + show the question, 1–5 tap answers (labels ≤ 14 chars for 1–2, 10 for 3, 8 for 4–5) | `ANSWER: yes \| index 0` |
 | `mood.sh happy [hold_s]` | set a mood | the result |
 | `act.sh eat` | a gesture from `device.creature.gestures` (the cat has `eat`) | the result |
 | `progress.sh 40 "step"` / `progress.sh done` | ring fills to 40% / finishes | the result |

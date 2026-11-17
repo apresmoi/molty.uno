@@ -55,7 +55,7 @@ import {
 } from "./api.js";
 import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
 import { hasVoice, junkTranscript } from "./voiced.js";
-import { CREATURES_CAP, DND_CAP, PROGRESS_CAP, DEFAULT_WPM, PKG_CAP, SCENE_CAP, WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, GESTURES_CAP, RESUME_CAP, RESUME_FEATURE, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, MAX_KEEP_WORDS, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
+import { ASK_TITLE_CAP, LEGACY_ASK_LABEL, CREATURES_CAP, DND_CAP, PROGRESS_CAP, DEFAULT_WPM, PKG_CAP, SCENE_CAP, WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, GESTURES_CAP, RESUME_CAP, RESUME_FEATURE, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, MAX_KEEP_WORDS, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
 import { FIRST_WORDS_MODES, type FirstWordsMode, type LinePlay, OPENER, type OpenerMessage, clauseEnd, guardOpener, hangs, planReply, pushHistory } from "./opener.js";
 import { PcmFeed, estimateSpeechMs, speechWords, splitSpeech, synthesize } from "./speech.js";
 import { DEFAULT_PARTIAL_POLICY, DRAFT_DROPPED_EVENT, DRAFT_USED_EVENT, type DropReason, PARTIAL_EVENT, PartialChunker, PauseTracker, judgeDraft, words } from "./partials.js";
@@ -1573,6 +1573,13 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       if (caps) return fail("unsupported", "this device has no touch screen for answers: use molty_talk instead");
     }
     if (caps && args.say !== undefined && !caps.includes("say")) return fail("unsupported", "this device has no speaker: ask without say, or show the question first");
+    // Firmware before the question screen with a title (no ASK_TITLE_CAP) shows 8 characters a label and no title: a
+    // longer label would be refused there, so say so here; a title is left out (the spoken question carries it).
+    if (!caps?.includes(ASK_TITLE_CAP)) {
+      const long = args.options.find((o) => o.length > LEGACY_ASK_LABEL);
+      if (long !== undefined) return fail("firmware_too_old", `"${long}" is longer than this Molty's firmware shows (${LEGACY_ASK_LABEL} characters a label): shorten it, or ask your human to update Molty`);
+      delete args.title;
+    }
     // in_reply_to naming the open turn: traced (a `reply` entry), never claimed — an ask never takes the floor
     const turn = args.in_reply_to !== undefined ? await this.kv.get<TurnRecord>(K.turn) : undefined;
     const answers: JsonObject = turn && turn.id === args.in_reply_to ? { turn: { id: turn.id, at: turn.at }, called: t0 } : {};
@@ -2242,7 +2249,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       let res: Outcome<JsonObject>;
       try {
         // colors rides along always: firmware without button colours ignores the field.
-        res = await this.sendCmd("ask", { job: id, options: args.options, colors: args.colors, timeout_ms: args.timeout_s * 1000 });
+        res = await this.sendCmd("ask", { job: id, options: args.options, colors: args.colors, ...(args.title !== undefined ? { title: args.title } : {}), timeout_ms: args.timeout_s * 1000 });
       } finally {
         this.screenInFlight--;
       }

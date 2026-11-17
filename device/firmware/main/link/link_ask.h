@@ -17,26 +17,30 @@
 #include <stdint.h>
 #include "cJSON.h"
 #include "esp_err.h"
+#include "fluid_ask.h"
 
-/* args {job, options, colors?, timeout_ms} (link_ask_args) → result {job} at once. "unsupported"
+/* args {job, options, colors?, title?, timeout_ms} (link_ask_args) → result {job} at once. "unsupported"
  * without touch; a pending question is cancelled first. */
 esp_err_t link_ask_cmd(const cJSON *args, cJSON **result);
-/* A question the firmware itself asks (self_update.c's "update" / "later"): the same
- * screen, tap, timeout and cancellation as `ask`, but its end goes to done(index, reason)
- * on the link task — index ≥ 0 the option tapped, else reason "timeout" | "cancelled"
- * (also when the link goes down) — instead of an `answer` event. A pending question is
- * cancelled first (its owner hears "cancelled"). Link task; labels as link_ask_args
- * accepts them (the caller's own constants); colors[i] 0xRRGGBB (NULL, or -1 for one
- * option: the screen's default by index). */
+/* A question the firmware itself asks (self_update.c's "update" / "later", pkg_cmd.c's install): the same
+ * screen, tap, timeout and cancellation as `ask`, with a title and a detail line over the answers (either may be
+ * NULL), but its end goes to done(index, reason) on the link task — index ≥ 0 the option tapped, else reason
+ * "timeout" | "cancelled" (also when the link goes down) — instead of an `answer` event. A pending question is
+ * cancelled first (its owner hears "cancelled"). Link task; labels 1..link_ask_label_max(n) chars (the caller's own
+ * constants), title up to FLUID_ASK_TITLE_MAX, detail up to FLUID_ASK_DETAIL_MAX; colors[i] 0xRRGGBB (NULL, or -1
+ * for one option: the screen's default by index). */
 typedef void (*link_ask_done_t)(int index, const char *reason);
-esp_err_t link_ask_open(const char *job, const char *const *labels, const int32_t *colors, int n, unsigned timeout_ms, link_ask_done_t done);
+esp_err_t link_ask_open(const char *job, const char *title, const char *detail, const char *const *labels, const int32_t *colors, int n,
+                        unsigned timeout_ms, link_ask_done_t done);
+/* The option a tap at (dx, dy) px from the screen's centre picks among hit's answers (fluid_ask_pick), -1 for none. */
+int link_ask_pick(const fluid_ask_hit_t *hit, float dx, float dy);
 /* Something else takes the screen: a pending question ends "cancelled" (link task). */
 void link_ask_cancel(void);
 /* Link task, every loop: a tap that answers, else the timeout. */
 void link_ask_tick(void);
 /* Touch path, on a touch-down edge at (dx, dy) px from the screen's centre: true when a
  * question is pending — the tap is not a `tap` event. It answers that question (the first
- * such tap wins) only when the panel shows it (mole_fluid_ask_shown): a tap on a frame
+ * such tap on an answer wins; one beside them is only a ripple) only when the panel shows it (mole_fluid_ask_shown): a tap on a frame
  * still showing a replaced question, or its letters morphing into the new one, answers
  * nothing. Its capture time decides against the deadline: at or before it, it wins over
  * the timeout. */

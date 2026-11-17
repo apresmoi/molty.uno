@@ -773,7 +773,7 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
              * on the dots under them): in a transition, or the scene's own (not its subtitle)
              * where the wave scatters (dust_radius) */
             float fx, fy;
-            if (o->dust > 0.f || ((L->mask || (L->rgb & FLUID_RGB)) &&
+            if (o->dust > 0.f || (!L->whole && (L->mask || (L->rgb & FLUID_RGB)) &&
                                   dust_radius(s, (int)((L->x + L->w / 2) / cw), (int)((L->y + L->h / 2) / ch), 0.f, &fx, &fy) >= 0.5f)) continue;
         } else {
             ink = fluid_frame_sample(s, s->ink, 1.f / FQ_UNIT, sx, sy);
@@ -824,13 +824,15 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
             d->hde[k] = hd && o->dust <= 0.f && key_hd(key) && hd_still(s, o, i, j, k) ? seed : 255;
             /* what the shapes draw in a cell changes with the dots around it */
             const uint8_t sig = key_hd(key) ? hd_sig(o->dots, W, H, i, j) : 0;
+            /* a letter's cleared cell that was one last frame: sent again only if the letters changed (2: decided below) */
+            const bool lt_cell = key == KEY_SKIP && d->key[k] == KEY_SKIP && !d->force;
             bool dirty = key == KEY_SKIP || d->force || key != d->key[k] || col != d->col[k] || sig != d->hds[k] || (hd && o->fine && !dust_same);
             /* on fine dust, what only the water and the light change goes in every other cell row a frame, alternating
              * (the panel's cost is by the row); the drawing's own changes go at once */
             if (dirty && hd && o->fine && !d->force && d->key[k] != KEY_STALE && key_hd(d->key[k]) && sig == d->hds[k] && !d->hch[k] &&
                 ((j + d->ilace) & 1)) { d->dirty[k] = 0; continue; }
             if (dirty && hd && o->fine) o->fine->sig0[k] = o->fine->sig[k];   /* the dust as drawn */
-            d->dirty[k] = dirty;
+            d->dirty[k] = (uint8_t)(lt_cell ? 2 : dirty);
             if (dirty) {
                 if (i < i0) i0 = i;
                 i1 = i + 1;
@@ -899,6 +901,28 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
         d->lt[d->nlt].cx1 = (int16_t)cx1; d->lt[d->nlt].cy1 = (int16_t)cy1;
         d->nlt++;
         drawn++;
+    }
+    {   /* the letters as they were (glyphs, colours, places, masks): the cells they cover need not go again */
+        uint32_t h = 2166136261u ^ (uint32_t)d->nlt;
+        #define LT_MIX(v) (h = (h ^ (uint32_t)(v)) * 16777619u)
+        for (int n = 0; n < d->nlt; n++) {
+            LT_MIX((uintptr_t)d->lt[n].gl); LT_MIX((uintptr_t)d->lt[n].mask); LT_MIX(d->lt[n].c); LT_MIX(d->lt[n].mw << 16 | d->lt[n].mh);
+            LT_MIX((uint16_t)d->lt[n].x << 16 | (uint16_t)d->lt[n].y); LT_MIX((uint16_t)d->lt[n].w << 16 | (uint16_t)d->lt[n].h);
+            LT_MIX((uint16_t)d->lt[n].cx0 << 16 | (uint16_t)d->lt[n].cy0); LT_MIX((uint16_t)d->lt[n].cx1 << 16 | (uint16_t)d->lt[n].cy1);
+            for (int b = 0; d->lt[n].mask && b < (d->lt[n].mw * d->lt[n].mh + 7) / 8; b++) LT_MIX(d->lt[n].mask[b]);
+        }
+        #undef LT_MIX
+        const bool same = h == d->lt_sig;
+        d->lt_sig = h;
+        for (int j = 0; j < H; j++) {
+            int i0 = W, i1 = 0;
+            for (int i = d->span[2 * j]; i < d->span[2 * j + 1]; i++) {
+                uint8_t *dt = &d->dirty[j * W + i];
+                if (*dt == 2) *dt = !same;
+                if (*dt) { if (i < i0) i0 = i; i1 = i + 1; }
+            }
+            d->span[2 * j] = (int16_t)(i0 < i1 ? i0 : 0); d->span[2 * j + 1] = (int16_t)(i0 < i1 ? i1 : 0);
+        }
     }
     return drawn;
 }

@@ -3,11 +3,9 @@
  *
  * Port of device/creatures/js/fluid/main.js (wiring) on top of fluid_sim/target/draw.c; what
  * is shown when (states, moods, idle life, the demo reel) is fluid_director.c. Over it:
- * a question (the link's ask: labels as text targets in their sectors, fluid_ask.h, the
- * director's transitions waiting underneath), rings of the fluid itself (the listening
- * ring while a listen records, fluid_target_ring / fluid_ring.h; a question's coloured
- * button borders, fluid_target_arcs) and
- * one pixel overlay (fluid_draw_overlay: a question's faint dividers). Threading:
+ * a question (the link's ask, fluid_ask.h: drawn over whatever shows, which dims and keeps moving under it,
+ * fluid_askview.h; the director's transitions wait while it stands) and rings of the fluid itself (the listening
+ * ring while a listen records, fluid_target_ring / fluid_ring.h). Threading:
  *   - fluid_task (core 1, prio 2) OWNS the sim, targets, renderer, the director and the
  *     display while active: touch poll, IMU read, director, fixed 60 Hz steps, draw, flush.
  *   - the board (molty_board.h) sizes everything: the stage is the display's largest
@@ -31,6 +29,7 @@
 #include "fluid_sim.h"
 #include "fluid_director.h"
 #include "fluid_ask.h"
+#include "fluid_askview.h"
 #include "scene_player.h"
 #include "fluid_fine.h"
 #include "cute_rig.h"
@@ -82,7 +81,6 @@ static const char *TAG = "mole_fluid";
 #define FLUID_IMU_SX       (1.f)      /* device-frame → screen: dashboard maps  */
 #define FLUID_IMU_SY       (-1.f)     /* dot_dx = +ax, dot_dy = -ay             */
 #define FLUID_RIPPLE_Q     4
-#define DIV_FADE_S         0.4f       /* a question's dividers fade in / out       */
 
 static const char *DEFAULT_TEXT =
     "hello, i am molty. i breathe in ascii and i speak in ascii. touch the water.";
@@ -153,9 +151,8 @@ static int     s_status_in = FD_STATUS_OK;      /* link status (mole_fluid_set_s
 /* the question the link wants on screen (mole_fluid_ask_*): seq = which one; pick = the
  * answer once it came (the task holds it, then leaves by itself) */
 typedef struct {
-    unsigned seq; bool active; int n, pick;
-    char label[FLUID_ASK_MAX][FLUID_ASK_LABEL_MAX + 1];
-    uint32_t rgb[FLUID_ASK_MAX];                /* each option's colour, 0xRRGGBB */
+    unsigned seq; bool active; int pick;
+    fluid_ask_q_t q;                            /* what is asked (fluid_ask.h) */
 } ask_want_t;
 static ask_want_t s_ask_want;
 static bool    s_listen_in = false;             /* link_audio: a listen is recording   */
@@ -261,19 +258,14 @@ static char   *s_ttext  = NULL;                 /* task copy of the text (PSRAM)
 static ftok_t *s_toks   = NULL;                 /* PSRAM, FLUID_MAX_TOKENS           */
 static int     s_ntok   = 0, s_seen_ver = -1;
 
-/* the question on screen: labels as text targets over whatever the director shows (its
- * transitions wait until the question leaves) */
+/* the question on screen, over whatever the director shows (its transitions wait while the question stands) */
 static struct {
-    fluid_ask_screen_t scr;                     /* phase, pick, seq (the ask_want_t it
-                                                 * follows), t, pick_t (fluid_ask.h)      */
-    int n;
-    float fs;                                   /* type size                             */
-    char label[FLUID_ASK_MAX][FLUID_ASK_LABEL_MAX + 1];
-    int len[FLUID_ASK_MAX];
-    float cx[FLUID_ASK_MAX], cy[FLUID_ASK_MAX]; /* label centres, stage px              */
-    uint32_t rgb[FLUID_ASK_MAX];                /* colours (labels + rim arcs)           */
+    fluid_ask_screen_t scr;                     /* phase, pick, seq (the ask_want_t it follows), t, out_t (fluid_ask.h) */
+    fluid_ask_hit_t hit;                        /* where its answers are, for a tap                                    */
+    fluid_askview_t *v;                         /* how it looks (PSRAM, made for it)                                    */
+    fluid_askview_t *old;                       /* one the drawer may still read: freed with the drawer idle            */
 } s_ask;
-/* the listening ring (fluid_target_arc) and a question's dividers (fluid_draw_overlay) */
+/* the listening ring (fluid_target_arc) */
 static bool  s_listen = false;                  /* task copy of s_listen_in */
 static float s_voice = 0.f;                     /* task copy of s_voice_in */
 #define FLUID_CRISP_LISTEN_RGB 0xFF2C3E           /* a rigged creature's listen ring (ring-options.html)       */
@@ -295,10 +287,7 @@ static atomic_bool     s_prog_end;              /* its done                     
 #define PROG_TTL_S     120.f                    /* no news this long: the ring melts (as `working`) */
 static float s_floor_w;                         /* the floor's weight, eased (p.floor)             */
 static scene_player_t s_sp;                     /* the scene on screen + its queue        */
-static float s_div = 0.f;
-static int   s_div_n = 0;
-static fluid_overlay_t s_ov;                    /* this frame's, from sim_frame          */
-static fluid_overlay_t s_dov;                   /* riding with the snapshot              */
+static fluid_overlay_t s_dov;                   /* the drawer's overlay (none drawn now)  */
 static unsigned s_dask;                         /* ...the question a tap on it may answer */
 /* the question a tap may answer on the frame last flushed to the panel (0 none): written
  * by the drawer after each flush, read by the touch path (mole_fluid_ask_shown) */
@@ -522,63 +511,53 @@ static void enter_state(int st, int fx, const fluid_cfg_t *cfg) {
  * inside the creature: its mood engine fades between them and ignores the same mood) */
 static void direct(const fluid_cfg_t *cfg) {
     int st, fx;
-    /* a question owns the screen: the director's transitions wait under it */
-    if (s_ask.scr.phase == FLUID_ASK_NONE && fd_take(&s_dir, &st, &fx)) enter_state(st, fx, cfg);
+    /* a standing question owns the screen: the director's transitions wait under it */
+    if (s_ask.scr.phase != FLUID_ASK_SHOW && fd_take(&s_dir, &st, &fx)) enter_state(st, fx, cfg);
     cr_set_mood(fd_mood(&s_dir));
 }
 
-/* ── A question (the link's ask): labels condense in their sectors ─────────── */
+/* ── A question (the link's ask): drawn over the screen (fluid_askview.h) ─────── */
 
-/* the labels as the text target: all while asking; after the pick only the chosen one
- * pools ink (accented), so the others melt back into the fluid */
-static void ask_apply(void) {
-    fluid_label_t lb[FLUID_ASK_MAX];
-    for (int i = 0; i < s_ask.n; i++)
-        lb[i] = (fluid_label_t){ s_ask.label[i], s_ask.len[i], s_ask.cx[i], s_ask.cy[i],
-                                 s_ask.scr.phase == FLUID_ASK_SHOW || i == s_ask.scr.pick, s_ask.scr.phase == FLUID_ASK_PICK && i == s_ask.scr.pick,
-                                 FLUID_RGB | s_ask.rgb[i] };
-    fluid_text_set_labels(s_tx, s_sim, lb, s_ask.n, s_ask.fs);
-    s_sim->edge_w = 0.f;
-    s_sim->p.relax_up = RATE_UP[ST_TEXT]; s_sim->p.relax_down = RATE_DOWN[ST_TEXT];
-}
-
-/* a new question's labels (fluid_ask_follow already made it the one shown); `was` = the
- * phase before it */
-static void ask_show(const ask_want_t *w, int was) {
-    if (was == FLUID_ASK_NONE && s_cur == ST_FX) fluid_effect_exit(s_sim, s_cur_fx);   /* re-entered on leave */
-    s_ask.n = w->n < 1 ? 1 : w->n > FLUID_ASK_MAX ? FLUID_ASK_MAX : w->n;
-    for (int i = 0; i < s_ask.n; i++) {
-        memcpy(s_ask.label[i], w->label[i], sizeof(s_ask.label[i]));
-        s_ask.len[i] = (int)strlen(s_ask.label[i]);
-        s_ask.rgb[i] = w->rgb[i];
+/* follow what the link wants (once per frame, before the director's transitions) */
+static void ask_follow(const ask_want_t *w) {
+    const int did = fluid_ask_follow(&s_ask.scr, w->active, w->seq, w->pick, w->q.n);
+    if (did & FLUID_ASK_DID_SHOW) {                        /* a new one: its look made, the touch at the centre */
+        if (s_ask.v) { fluid_askview_destroy(s_ask.old); s_ask.old = s_ask.v; s_ask.v = NULL; }
+        s_ask.v = fluid_askview_create(s_sim, &w->q);
+        if (!s_ask.v) mole_diag_event(true, "fluid.ask no memory for the question's look");
+        else { s_ask.hit = fluid_askview_layout(s_ask.v)->hit; fluid_askview_start(s_ask.v, s_sim); }
     }
-    s_ask.fs = fluid_ask_layout(s_ask.n, s_ask.len, s_stage, s_ask.cx, s_ask.cy);
-    ask_apply();
-    /* the transition, as into the reader: the old shape breaks up, a ring from the centre */
-    if (s_sim->swirl_kick < 3.f) s_sim->swirl_kick = 3.f;
-    ripple(0.f, 0.f, 0.5f, 0.25f);
-    s_melt_t = 1e9f;                                       /* the overlay is the labels now */
-    s_div_n = s_ask.n;
+    if (s_ask.v && (did & (FLUID_ASK_DID_PICK | FLUID_ASK_DID_LEAVE))) fluid_askview_answer(s_ask.v, s_sim, did & FLUID_ASK_DID_PICK ? s_ask.scr.pick : -1);
+    if ((did & FLUID_ASK_DID_GONE) && s_ask.v) { fluid_askview_destroy(s_ask.old); s_ask.old = s_ask.v; s_ask.v = NULL; }
 }
 
-/* back to what the director shows: the creature, unless a request in this frame (the
- * command that ended the question) chose something; a state that is already the
- * director's forms again (its clock restarts) */
-static void ask_leave(const fluid_cfg_t *cfg, bool requested) {
-    s_melt_t = 0.f;                                        /* the labels' letters melt away */
-    if (!requested) fd_request_state(&s_dir, ST_CREATURE, 0, false);
-    if (!s_dir.pending) { fd_replay(&s_dir); enter_state(s_cur, s_cur_fx, cfg); }
-}
-
-/* follow what the link wants (once per frame, before the director's transitions);
- * `requested`: a state / mood request in this frame */
-static void ask_follow(const ask_want_t *w, bool requested, const fluid_cfg_t *cfg) {
-    int was = s_ask.scr.phase;
-    bool keep;
-    int did = fluid_ask_follow(&s_ask.scr, w->active, w->seq, w->pick, w->n, requested, &keep);
-    if (did & FLUID_ASK_DID_SHOW) ask_show(w, was);
-    if (did & FLUID_ASK_DID_PICK) ask_apply();             /* only the chosen one pools ink */
-    if (did & FLUID_ASK_DID_LEAVE) ask_leave(cfg, keep);
+/* with the drawer idle: the question over this frame's scene (its dots as crisp dots, dimmed under it), its letters */
+static void ask_compose(void) {
+    fluid_askview_t *v = s_ask.v;
+    fluid_askview_destroy(s_ask.old); s_ask.old = NULL;   /* nothing the drawer reads points into it now */
+    if (!v || s_ask.scr.phase == FLUID_ASK_NONE) return;
+    const int N = s_sim->N;
+    const uint8_t *own = NULL;
+    if (s_crisp && s_cpk) own = cpk_cells_creature(s_cpk);   /* a rigged creature: its cells copied already */
+    else if (s_cur == ST_SCENE && s_sp.cur) {                  /* a scene: its dots (copied already) in its own colours */
+        for (int k = 0; k < N; k++) {
+            const uint32_t c = s_sim->tcol[k];
+            s_frame->col[k] = (fluid_rgba16_t){ (uint16_t)((c & 255) * 257), (uint16_t)((c >> 8 & 255) * 257), (uint16_t)((c >> 16 & 255) * 257), 0 };
+        }
+    } else {                                                   /* the fluid: its ink dithered onto the dots */
+        for (int j = 0; j < s_sim->H; j++) for (int i = 0; i < s_sim->W; i++) {
+            const int k = j * s_sim->W + i;
+            float sub[8];
+            for (int q = 0; q < 8; q++) sub[q] = s_frame->view[k] * (1.f / FQ_UNIT);
+            s_sdots_d[k] = s_sim->mask[k] ? fluid_braille_dither(sub, i, j, 0.f, 0) : 0;
+        }
+    }
+    fluid_askview_compose(v, s_sdots_d, own, s_frame->col);
+    s_dopts.dots = s_sdots_d; s_dopts.scene = true; s_dopts.dust = 0.f;
+    s_dopts.shapes = NULL; s_dopts.nshapes = 0; s_dopts.kdots = NULL; s_dopts.fine = NULL; s_dopts.still = NULL;
+    s_dopts.frame = fluid_askview_draw_frame(v);           /* its rows and the water's take turns alike */
+    s_dnletters = fluid_askview_letters(v, s_dletters, FLUID_MAX_LETTERS);
+    s_dopts.letters = s_dletters; s_dopts.nletters = s_dnletters;
 }
 
 /* ── (Re)build for a grid ───────────────────────────────────────────────────── */
@@ -624,8 +603,10 @@ static void poll_touch(int n, const uint16_t *xs, const uint16_t *ys, int64_t t)
         s_touch_down = true; s_tpx = x; s_tpy = y; s_last_tx = xs[0]; s_last_ty = ys[0];
         /* on a scene's spot the wave leaves the outline of what it grows (that stays still); else the finger's ripple */
         const int spot = s_cur == ST_SCENE && s_sp.cur ? scene_spot_at(s_sp.cur, s_sp.t, x, -y) : -1;
+        /* a tap on a question's answer: its own wave goes from there (fluid_askview_answer), not a finger's */
+        const bool answer = s_ask.scr.phase == FLUID_ASK_SHOW && s_ask.scr.t >= FLUID_ASK_READY && s_ask.v && fluid_ask_pick(&s_ask.hit, x, y) >= 0;
         if (spot >= 0) scene_outline(s_sp.cur, spot, outline_bump, NULL);
-        else ripple(x, y, 1.6f, 0.09f);
+        else if (!answer) ripple(x, y, 1.6f, 0.09f);
         fd_user(&s_dir);                                    /* wakes a sleepy creature */
         if (s_cur == ST_CREATURE && s_cpk) cpk_come(s_cpk, NULL);   /* a rigged one comes to the front, attending */
         if (!s_touch_t0) s_touch_t0 = t;
@@ -683,7 +664,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     /* director: the reel, the reader's return, mood holds + flashes, idle life, sleep,
      * status. A question, a listen or a say owns the screen (no idle life); a question's
      * labels cover the creature (no action plays under them). */
-    const bool covered = s_ask.scr.phase != FLUID_ASK_NONE;
+    const bool covered = s_ask.scr.phase == FLUID_ASK_SHOW;
     scene_tick(&s_sp, rdt);
     /* a scene after a scene (play over one, or the queue's next): it flows in; from another
      * state, entering the scene state did that this frame (its clock is still 0) */
@@ -699,7 +680,11 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         if (a >= 0) cr_act(a);
     }
 
-    const bool asking = s_ask.scr.phase != FLUID_ASK_NONE;
+    const bool asking = s_ask.scr.phase == FLUID_ASK_SHOW;
+    if (s_ask.scr.phase != FLUID_ASK_NONE) {               /* the question's clocks */
+        s_ask.scr.t += rdt;
+        if (s_ask.scr.phase != FLUID_ASK_SHOW) s_ask.scr.out_t += rdt;
+    }
     if (s_sub) {   /* the subtitle follows the voice; its last word stays a moment, then goes */
         if (s_follow) { if (s_follow_word >= 0) s_sub_word = s_follow_word < s_ntok ? s_follow_word : s_ntok - 1; s_sub_until = s_tnow + 1.5f; }
         else if (s_tnow >= s_sub_until || s_cur != ST_SCENE) { s_sub = false; s_sub_word = -1; }
@@ -750,18 +735,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         }
     }
     s_melt = 0.f;
-    if (asking) {
-        s_ask.scr.t += rdt;
-        if (s_ask.scr.phase == FLUID_ASK_PICK) s_ask.scr.pick_t += rdt;
-        s_noverlay = s_tx->nletters;
-        memcpy(s_overlay, s_tx->letters, sizeof(fluid_letter_t) * (size_t)s_noverlay);
-        if (s_ask.scr.phase == FLUID_ASK_PICK) {                     /* the others' letters melt away */
-            float m = fminf(0.8f, s_ask.scr.pick_t * 1.6f);
-            for (int b = 0, off = 0; b < s_ask.n; off += s_ask.len[b++])
-                if (b != s_ask.scr.pick)
-                    for (int i = off; i < off + s_ask.len[b] && i < s_noverlay; i++) s_overlay[i].melt = m;
-        }
-    } else if (s_cur == ST_TEXT) {
+    if (s_cur == ST_TEXT) {
         s_noverlay = s_tx->nletters;
         memcpy(s_overlay, s_tx->letters, sizeof(fluid_letter_t) * (size_t)s_noverlay);
     } else if (s_cur != ST_SCENE) {                        /* a scene's letters: scene_fill below */
@@ -770,10 +744,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     }
 
     /* hold: crystallise the shape once the flow had time to arrive */
-    if (asking) {                                          /* condenses like the reader's text */
-        float q = fluid_clamp01((s_ask.scr.t * cfg->speed - 0.2f) / 0.4f);
-        s->p.hold = q * q * (3.f - 2.f * q);
-    } else s->p.hold = fd_solidity(&s_dir, cfg->speed);
+    s->p.hold = fd_solidity(&s_dir, cfg->speed);
     s->p.tint_rate = 3.f + 9.f * s->p.hold;
 
     /* input before the targets so the lean follows the hand of the moment */
@@ -798,11 +769,11 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         fluid_progress_tick(&s_pg, rdt, at >= 0.f && s_tnow - at < PROG_TTL_S, pv < 0 ? -1.f : pv * 0.001f, done);
     }
     /* the floor: the dim fluid on a ground plane under a creature, flat behind anything else */
-    s_floor_w += ((s_cur == ST_CREATURE && !asking ? 1.f : 0.f) - s_floor_w) * fminf(1.f, 2.f * rdt);
+    s_floor_w += ((s_cur == ST_CREATURE ? 1.f : 0.f) - s_floor_w) * fminf(1.f, 2.f * rdt);
     s->p.floor = s_floor_w;
     const float acc = cfg->palette == FLUID_PAL_PASTEL ? 0.f : 1.f;   /* mono palettes: the accent */
 
-    switch (asking ? ST_TEXT : s_cur) {
+    switch (s_cur) {   /* under a question too: it keeps moving */
     case ST_TEXT:     fluid_text_fill(s_tx, s, s_tnow); break;
     case ST_FX:       fluid_target_effect(s, s_cur_fx, s_tnow, swell, ox, oy); break;
     case ST_THINKING: fluid_target_blob(s, s_tnow * 1.4f, swell * 0.85f, ox, oy); break;
@@ -860,20 +831,10 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         break;
     default:          fluid_target_blob(s, s_tnow, swell, ox, oy); break;
     }
-    fluid_sim_floor_track(s, rdt, s_cur == ST_CREATURE && !asking && cr_loaded());   /* its feet, before the rings join T */
-    if (asking) {                                          /* each button's border, in its colour */
-        fluid_arc_t arcs[FLUID_ASK_MAX];
-        for (int i = 0; i < s_ask.n; i++) {
-            fluid_ask_arc_look(&s_ask.scr, i, cfg->speed, &arcs[i].amt, &arcs[i].hw);
-            fluid_ask_arc(s_ask.n, i, s_stage, &arcs[i].a0, &arcs[i].a1);
-            arcs[i].rgb = s_ask.rgb[i];
-        }
-        fluid_target_arcs(s, FLUID_ASK_ARC_R, arcs, s_ask.n, acc);   /* one pass for all */
-    } else {
-        fluid_target_progress(s, &s_pg, PROG_COLOR, acc);          /* under the listening ring: it wins */
-        if (!s_crisp) fluid_target_ring(s, &s_rg, fluid_ring_rgb(s_ring_rgb, s_ring_def, cfg->palette), acc);   /* a rigged
-                                                                     * creature's is given to it whole (cpk_listen) */
-    }
+    fluid_sim_floor_track(s, rdt, s_cur == ST_CREATURE && cr_loaded());   /* its feet, before the rings join T */
+    fluid_target_progress(s, &s_pg, PROG_COLOR, acc);          /* under the listening ring: it wins */
+    if (!s_crisp) fluid_target_ring(s, &s_rg, fluid_ring_rgb(s_ring_rgb, s_ring_def, cfg->palette), acc);   /* a rigged
+                                                                 * creature's is given to it whole (cpk_listen) */
     /* the always-on dim fluid; its slow noise (and the eddies' ψ) refresh on
      * alternating frames — both drift ≤ 0.012 lattice units per frame */
     /* a scene in high definition shows the surface (its dust) and the colours, never the ink: the
@@ -919,14 +880,11 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     if (!still) fluid_sim_view(s);
     s_shimmer = 0.12f + (thinking ? 0.35f : 0.f) + cfg->mic * 0.4f;
 
-    /* a question's faint dividers: in while it waits, out once it was answered */
-    bool div_on = s_ask.scr.phase == FLUID_ASK_SHOW && s_ask.n >= 2;
-    s_div = div_on ? fminf(1.f, s_div + rdt / DIV_FADE_S) : fmaxf(0.f, s_div - rdt / DIV_FADE_S);
-    s_ov.sectors = s_div > 0.f ? s_div_n : 0;
-    s_ov.divider = roundf(s_div * 32.f) / 32.f;
-    /* a scene in high definition, but the fluid's own look while a question, a listen or the
-     * agent's progress is on the water */
-    scene_hd_tick(&s_hd, s_cur == ST_SCENE && s_sp.cur ? s_sp.gen : 0, asking || s_rg.on > 0.f || s_pg.on > 0.f, rdt);
+    /* the question over it all, from the water as it is now */
+    if (s_ask.v) fluid_askview_frame(s_ask.v, s, &s_ask.scr, s_tnow);
+    /* a scene in high definition, but on the dots while a question (dimmed under it), a listen or the agent's progress
+     * is on the water */
+    scene_hd_tick(&s_hd, s_cur == ST_SCENE && s_sp.cur ? s_sp.gen : 0, s_ask.scr.phase != FLUID_ASK_NONE || s_rg.on > 0.f || s_pg.on > 0.f, rdt);
     s_frame_no++;
 }
 
@@ -1316,7 +1274,11 @@ static void fluid_task(void *arg) {
                 mole_diag_event(was_n > 0, "fluid.%s hot fields internal %d -> %d, int_free=%u", was_n > 0 ? "shed" : "internal",
                                 was_n, s_sim ? s_sim->n_internal : -1, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
             enter_state(s_cur, s_cur_fx, &cfg);         /* re-enter on the new grid */
-            if (s_ask.scr.phase != FLUID_ASK_NONE) ask_apply();   /* ...and the question over it */
+            if (s_ask.v) {                              /* ...and the question over it, on the new grid (the drawer is idle) */
+                fluid_askview_destroy(s_ask.v); fluid_askview_destroy(s_ask.old); s_ask.v = s_ask.old = NULL;
+                if (s_ask.scr.phase == FLUID_ASK_SHOW && want.seq == s_ask.scr.seq) s_ask.v = fluid_askview_create(s_sim, &want.q);
+                if (!s_ask.v) s_ask.scr.phase = FLUID_ASK_NONE;   /* one leaving goes at once */
+            }
         }
         if (text_changed) {
             tokenize();
@@ -1355,7 +1317,7 @@ static void fluid_task(void *arg) {
             if (s_cur == ST_TEXT && s_ask.scr.phase == FLUID_ASK_NONE) tint_letters();
         }
         fd_set_status(&s_dir, status);
-        ask_follow(&want, req >= 0 || req_mood >= 0 || req_reel || nsops > 0, &cfg);
+        ask_follow(&want);
         direct(&cfg);
         for (int q = 0; q < nrip; q++) ripple(rip[q][0], rip[q][1], rip[q][2], 0.09f);
         if (tp.seq != tp_seen) {
@@ -1421,7 +1383,7 @@ static void fluid_task(void *arg) {
         if (!s_hd.out) { memcpy(s_dletters, s_overlay, sizeof(fluid_letter_t) * (size_t)s_noverlay); s_dnletters = s_noverlay; }
         if (s_touch_t0) { s_dtouch = s_touch_t0; s_touch_t0 = 0; }
         s_dstatus = fd_status(&s_dir);
-        s_dov = s_ov;
+        ask_compose();
         s_dask = fluid_ask_tappable(&s_ask.scr, cfg.speed);
         xSemaphoreGive(s_go);
         int64_t t3 = esp_timer_get_time();
@@ -1610,9 +1572,10 @@ esp_err_t mole_fluid_creature_init(void) {
     s_tnow = s_acc = 0.f; s_melt_t = 1e9f;
     s_gx = s_gy = 0.f; s_touch_down = false;
     s_ask.scr.phase = FLUID_ASK_NONE; s_ask.scr.seq = s_ask_want.seq;     /* a question from before is gone */
+    fluid_askview_destroy(s_ask.v); fluid_askview_destroy(s_ask.old); s_ask.v = s_ask.old = NULL;
     s_dask = 0; atomic_store(&s_glass_ask, 0);
     s_follow = false; s_follow_word = 0; s_text_hidden = false;
-    s_rg = (fluid_ring_t){ 0 }; s_pg = (fluid_progress_t){ 0 }; s_div = 0.f; s_ov = s_dov = (fluid_overlay_t){ 0 };   /* the fluid's own ring is in the sim */
+    s_rg = (fluid_ring_t){ 0 }; s_pg = (fluid_progress_t){ 0 }; s_dov = (fluid_overlay_t){ 0 };   /* the fluid's own ring is in the sim */
     s_sim->p.relax_up = RATE_UP[ST_BLOB]; s_sim->p.relax_down = RATE_DOWN[ST_BLOB];
 
     xSemaphoreTake(s_go, 0);                     /* fresh handshake: drawer idle, nothing queued */
@@ -2382,17 +2345,13 @@ int mole_fluid_ack_mode(void) {
     return m;
 }
 
-esp_err_t mole_fluid_ask_show(int n, const char *const *labels, const int32_t *colors, unsigned *seq) {
-    if (n < 1 || n > FLUID_ASK_MAX || !labels || !seq) return ESP_ERR_INVALID_ARG;
+esp_err_t mole_fluid_ask_show(const fluid_ask_q_t *q, unsigned *seq) {
+    if (!q || q->n < 1 || q->n > FLUID_ASK_MAX || !seq) return ESP_ERR_INVALID_ARG;
     esp_err_t e = alloc_bufs();
     if (e != ESP_OK) return e;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     if (++s_ask_want.seq == 0) s_ask_want.seq = 1;     /* 0 = no question (mole_fluid_ask_shown) */
-    s_ask_want.active = true; s_ask_want.n = n; s_ask_want.pick = -1;
-    for (int i = 0; i < n; i++) {
-        snprintf(s_ask_want.label[i], sizeof(s_ask_want.label[i]), "%s", labels[i] ? labels[i] : "");
-        s_ask_want.rgb[i] = fluid_ask_color(colors ? colors[i] : -1, i);
-    }
+    s_ask_want.active = true; s_ask_want.pick = -1; s_ask_want.q = *q;
     s_req_activity = true;                             /* an agent is here: no dozing off */
     *seq = s_ask_want.seq;
     xSemaphoreGive(s_mutex);
@@ -2404,7 +2363,7 @@ unsigned mole_fluid_ask_shown(void) { return atomic_load(&s_glass_ask); }
 void mole_fluid_ask_pick(int index) {
     if (!s_mutex) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    if (s_ask_want.active && index >= 0 && index < s_ask_want.n) s_ask_want.pick = index;
+    if (s_ask_want.active && index >= 0 && index < s_ask_want.q.n) s_ask_want.pick = index;
     xSemaphoreGive(s_mutex);
 }
 
