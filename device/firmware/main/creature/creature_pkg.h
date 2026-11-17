@@ -40,10 +40,13 @@ bool   cpk_crisp(const cpk_t *k);
 void   cpk_come(cpk_t *k, const char *first);
 /** A rigged creature's dots: the share of their rows' work on the calling core (cd_set_share), the rest on the other. */
 void   cpk_set_share(cpk_t *k, int pct);
-/** The listen ring's colour over a rigged creature (0xRRGGBB), or -1: the fluid ring's own (creature_ring.h). */
-void   cpk_listen_rgb(cpk_t *k, int32_t rgb);
+/** The listen ring over a rigged creature, given directly (creature_ring.h cr_listen): its colour (0xRRGGBB, -1: the
+ *  fluid ring's own) and its ink (fluid_ring_t.ink). */
+void   cpk_listen(cpk_t *k, int32_t rgb, float ink);
 /** Per cell of the last frame: 1 where the creature's own dots are (cd_creature). */
 const uint8_t *cpk_cells_creature(const cpk_t *k);
+/** The number of the frame its cells are (cpk_paint's): the drawer's interlace parity (fluid_draw_opts_t.frame). */
+uint32_t cpk_frame_no(const cpk_t *k);
 const struct cc *cpk_clip(const cpk_t *k);
 /** Its last frame's cells: a braille byte (the rings over them, after cpk_paint) and a colour (0xRRGGBB) each; NULL before
  *  the first frame or for a channel creature. */

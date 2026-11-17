@@ -24,8 +24,9 @@ typedef struct cr cr_t;
 /** For the sim's grid (its cell centres and mask). NULL on OOM. */
 cr_t *cr_create(const fluid_sim_t *s);
 void  cr_destroy(cr_t *r);
-/** The listen ring's colour (0xRRGGBB) for its line instead of the ink's, or -1: the ink's (the fluid's ring colour). */
-void  cr_listen_rgb(cr_t *r, int32_t rgb);
+/** The listen ring given directly (the fluid then need not write it into the target): its colour (0xRRGGBB) for its
+ *  line instead of the ink's (-1: the ink's) and its ink (fluid_ring_t.ink; 0: none). */
+void  cr_listen(cr_t *r, int32_t rgb, float ink);
 /** This frame (dt s, frame its count): from the target's ink at the ring lines, the ring's wave into the sim's water
  *  (s->h) and its dots and colours over the given cells: dots (in: the creature's, out: with the ring) and col (the sim's
  *  carried colour, set where the ring shows); creature: per cell, the creature is there (its colour never shows on it).

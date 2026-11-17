@@ -277,7 +277,7 @@ static double test_render(const char *pkgdir, const char *id, const char *outdir
             fluid_sim_color(s, 1.f / 30);
             if (crisp) cpk_paint(k, s); else fluid_sim_view(s);
             fluid_sim_snapshot(s, fr, false);
-            fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, t, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL };
+            fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, t, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL, 0 };
             /* the drawer's options as mole_fluid.c sets them for a rigged creature: its cells as a scene's dots, with no
              * scene held (scene_hd_t at rest) */
             const scene_hd_t hd = { 0, false, 1.f };
@@ -490,7 +490,7 @@ static void test_crisp_panel(const char *pkgdir) {
         fluid_sim_color(s, 1.f / 30);
         cpk_paint(k, s);
         fluid_sim_snapshot(s, fr, false);
-        fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, f / 30.f, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL };
+        fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, f / 30.f, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL, 0 };
         const uint32_t *cc; cpk_cells(k, &o.dots, &cc); o.scene = true; o.dust = scene_hd_dust(&hd);
         const bool full = f == 0;
         if (full) d->force = true;
@@ -527,7 +527,25 @@ static void test_crisp_panel(const char *pkgdir) {
  * rings into the target, the water's steps, colour, paint): its wave runs out from the centre and its crest reaches the
  * rim, the ring lands there within 1.4 s (a line, a band thinning inward behind it), never popping; let go, it is gone
  * within about a second; and a forming or releasing frame costs the panel no more than a touch's ripple */
+/* the ring's radii are the round rim's (creature_ring.c: the least, over angles, of the outermost drawn dot is 0.988) */
+static float ring_shift(const fluid_sim_t *s) {
+    float edge[128] = { 0 }, vis = 1.f;
+    for (int j = 0; j < s->H; j++) for (int i = 0; i < s->W; i++) {
+        if (!s->mask[j * s->W + i]) continue;
+        for (int b = 0; b < 8; b++) {
+            const float x = s->xs[i] + ((b >> 2) ? 0.5f : -0.5f) / s->W, y = s->ys[j] + (((b & 3) + 0.5f) / 4.f - 0.5f) * 2.f / s->H, r = sqrtf(x * x + y * y);
+            if (r < 0.55f || r > 0.988f) continue;
+            float a = atan2f(x, -y); if (a < 0.f) a += 6.2831853f;
+            const int q = (int)(a * (128 / 6.2831853f)) % 128;
+            if (r > edge[q]) edge[q] = r;
+        }
+    }
+    for (int q = 0; q < 128; q++) if (edge[q] > 0.5f && edge[q] < vis) vis = edge[q];
+    return 0.988f - vis;
+}
 static int ring_dots(const cpk_t *k, const fluid_sim_t *s, float r0, float r1, int *all) {
+    static float sh = -1.f;
+    if (sh < 0.f) sh = ring_shift(s);
     const uint8_t *cells; const uint32_t *cc; cpk_cells(k, &cells, &cc);
     int lit = 0, n = 0;
     for (int j = 0; j < s->H; j++) for (int i = 0; i < s->W; i++) {
@@ -537,7 +555,7 @@ static int ring_dots(const cpk_t *k, const fluid_sim_t *s, float r0, float r1, i
         const bool red = q->r > 2 * q->g && q->r > 2 * q->b && q->r > 40 * 257;
         for (int b = 0; b < 8; b++) {
             const int col = b >> 2, row = b & 3;
-            const float x = s->xs[i] + (col ? 0.5f : -0.5f) / s->W, y = s->ys[j] + ((row + 0.5f) / 4.f - 0.5f) * 2.f / s->H, r = sqrtf(x * x + y * y);
+            const float x = s->xs[i] + (col ? 0.5f : -0.5f) / s->W, y = s->ys[j] + ((row + 0.5f) / 4.f - 0.5f) * 2.f / s->H, r = sqrtf(x * x + y * y) + sh;
             if (r < r0 || r >= r1) continue;
             n++;
             if (red && (cells[c] >> fluid_braille_bit(col, row) & 1)) lit++;
@@ -549,8 +567,8 @@ static int ring_dots(const cpk_t *k, const fluid_sim_t *s, float r0, float r1, i
 typedef struct { fluid_draw_t *d; fluid_frame_t *fr; uint16_t *buf, *buf2; crisp_panel_t pn; } ring_panel_t;
 static double ring_send(ring_panel_t *rp, const cpk_t *k, fluid_sim_t *s, int f) {   /* this frame to the panel, ~ms (80 MHz) */
     fluid_sim_snapshot(s, rp->fr, false);
-    fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, f / 30.f, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL };
-    const uint32_t *cc; cpk_cells(k, &o.dots, &cc); o.scene = true;
+    fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, f / 30.f, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL, 0 };
+    const uint32_t *cc; cpk_cells(k, &o.dots, &cc); o.scene = true; o.frame = cpk_frame_no(k) | 0x80000000u;   /* as mole_fluid.c */
     const fluid_overlay_t ov = { 0 };
     if (f == 0) rp->d->force = true;
     fluid_draw_cells(rp->d, rp->fr, &o);
@@ -561,7 +579,7 @@ static double ring_send(ring_panel_t *rp, const cpk_t *k, fluid_sim_t *s, int f)
 static void ring_frame(cpk_t *k, fluid_sim_t *s, fluid_ring_t *ring, bool on) {
     cpk_frame(k, s, 1.f / 30.f, 1.f);
     fluid_ring_tick(ring, 1.f / 30.f, on);
-    fluid_target_ring(s, ring, 0xff2a2a, 0.f);
+    cpk_listen(k, 0xff2a2a, ring->ink);           /* as mole_fluid.c gives it a rigged creature */
     s->p.still = true;
     fluid_sim_step(s, 1.f / 60); fluid_sim_step(s, 1.f / 60);
     fluid_sim_color(s, 1.f / 30);
