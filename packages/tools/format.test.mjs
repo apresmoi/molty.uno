@@ -89,9 +89,14 @@ test('every layout plays with the params the molty-astro skill sends, each under
       assert.equal(png(dots).subarray(1, 4).toString(), 'PNG');
       seen.add(c.args.layout);
       if (c.args.layout !== 'chart') continue;
-      const { tense, easy, joined, read } = c.args.params;
-      assert.ok(tense.length + easy.length + joined.length <= 3, 'the chart draws at most the three tightest aspects');
-      assert.ok(pkg.layouts.chart.items.some((it) => it.k === 'spot' && it.id === 'aspects' && it.say === '$read') && read.length > 0 && read.length <= 160, 'the middle has its reading');
+      const { aspects } = c.args.params, items = bind(pkg, 'chart', c.args.params);
+      assert.ok(aspects.length >= 1 && aspects.length <= 3, 'the chart draws at most the three tightest aspects');
+      // each a line between its two bodies' symbols: from LINE_GAP (0.085) outside one centre to the same outside the other
+      for (const a of aspects) for (const [x, y, px, py] of [[a.x1, a.y1, a.px1, a.py1], [a.x2, a.y2, a.px2, a.py2]]) assert.ok(Math.abs(Math.hypot(x - px, y - py) - 0.085) < 0.002, `${a.id}: its end 0.085 from its body`);
+      // the middle is empty (no ring, no spot there): the reading's words show there
+      assert.ok(!items.some((it) => (it.k === 'ring' && !it.group && it.r < 0.7) || (it.k === 'spot' && Math.hypot(it.x, it.y) < 0.3 && !it.pts)), 'nothing in the middle');
+      assert.equal(pkg.layouts.chart.caption_y, 0);
+      assert.ok(items.filter((it) => it.k === 'spot' && it.grow === 1.5).length === 12, 'a tapped sign grows 1.5x');
     }
   }
   assert.deepEqual([...seen].sort(), Object.keys(pkg.layouts).sort());
@@ -124,6 +129,25 @@ test('a spot lights groups: their items grow and brighten, those shown when lit 
   assert.ok(Math.abs(disc.r - 0.125) < 1e-9 && disc.color === '#c0c0c0' && other.r === 0.1, `tapped: ${JSON.stringify(disc)}`);
   assert.ok(held.some((it) => it.k === 'ring' && it.when === 'lit' && Math.abs(it.r - 0.1875) < 1e-9), 'tapped: its ring shows, grown');
   assert.equal(png(hd(p, 'one', { r: 0.5, g: 'dot', marks: [] }, 1, 200, '', 'tap-p').kept, null).subarray(1, 4).toString(), 'PNG');
+});
+
+test('a spot may say how much it grows when tapped; a layout where its caption goes', () => {
+  const p = base();
+  p.layouts.one.items.push({ k: 'disc', x: 0.5, y: 0, r: 0.1 }, { k: 'spot', x: 0.5, y: 0, r: 0.12, say: 'big', id: 'b', grow: 1.5 });
+  p.layouts.one.caption_y = 0;
+  assert.deepEqual(checkPackage(p, 'demo'), []);
+  const items = bind(p, 'one', { r: 0.5, g: 'dot', marks: [] });
+  assert.ok(Math.abs(lit(items, 'b').find((it) => it.k === 'disc').r - 0.15) < 1e-9, 'grown 1.5x');
+  // the caption at the layout's caption_y (the middle) instead of the bottom, the same size
+  const draw = (cap) => hd(p, 'one', { r: 0.5, g: 'dot', marks: [] }, 1, 200, cap).rgb, none = draw('');
+  const word = (rgb, y) => { let n = 0; for (let x = 0; x < 200; x++) n += rgb[(y * 200 + x) * 3] !== none[(y * 200 + x) * 3]; return n; };
+  const mid = draw('word');
+  delete p.layouts.one.caption_y;
+  const low = draw('word');
+  assert.ok(word(mid, 100) > 0 && word(mid, 156) === 0 && word(low, 156) > 0 && word(low, 100) === 0, 'the word in the middle, else at the bottom');
+  for (const [k, v] of [['grow', 0.5], ['grow', 4]]) { const q = base(); q.layouts.one.items.push({ k: 'spot', r: 0.1, say: 'x', [k]: v }); assert.ok(checkPackage(q, 'demo').some((e) => e.includes('grow')), `grow ${v} refused`); }
+  const q = base(); q.layouts.one.caption_y = 2;
+  assert.ok(checkPackage(q, 'demo').some((e) => e.includes('caption_y')));
 });
 
 test('a spot: a place to tap with its reading, which may run past a text item', () => {

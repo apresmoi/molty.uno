@@ -32,6 +32,7 @@
 #include "fluid_director.h"
 #include "fluid_ask.h"
 #include "scene_player.h"
+#include "fluid_fine.h"
 #include "cute_rig.h"
 #include "cute_act.h"
 #include "creature_pkg.h"
@@ -332,6 +333,14 @@ static uint8_t *s_sdots, *s_sdots_d;                /* a scene's dots: the task'
  * and the drawer's (PSRAM); n -1: too many shapes, it shows on the dots */
 static fluid_shape_t *s_shp, *s_dshp;
 static uint8_t *s_kdots, *s_kdots_d;
+/* its fine dust (fluid_fine.h): built on this task a few ms a frame, drawn by the drawer; the cells a tapped spot's
+ * drawing covers (the task's, the drawer's: the water never breaks them); the drawing at full growth it gathers round */
+static fluid_fine_t  *s_fine;
+static uint8_t       *s_still, *s_still_d;
+static fluid_shape_t *s_fshp;
+#define FINE_BUILD_US 6000                          /* the dust's build, at most this a frame (the sim's core) */
+static unsigned s_cap_word, s_dcap_word;            /* the caption's word: a new number each word, 0 none */
+static float    s_cap_t0;                           /* when it came                                       */
 static int      s_nshp, s_dnshp;
 static scene_hd_t s_hd = { 0, false, 1.f };        /* a scene in high definition (scene_hd_tick) */
 static int      s_dnletters;                        /* the drawer's letters (s_dletters), how many */
@@ -575,6 +584,7 @@ static void ask_follow(const ask_want_t *w, bool requested, const fluid_cfg_t *c
 /* ── (Re)build for a grid ───────────────────────────────────────────────────── */
 
 static void free_grid(void) {
+    fluid_fine_destroy(s_fine); s_fine = NULL;
     fluid_frame_destroy(s_frame); s_frame = NULL;
     fluid_draw_destroy(s_draw); s_draw = NULL;
     fluid_text_destroy(s_tx);   s_tx = NULL;
@@ -589,6 +599,7 @@ static esp_err_t build_grid(int W, int H) {
     if (s_tx) s_draw = fluid_draw_create(W, H, s_fb_w, s_fb_h);
     if (s_draw) s_frame = fluid_frame_create(W, H);
     if (!s_frame) { free_grid(); return ESP_ERR_NO_MEM; }
+    s_fine = fluid_fine_create(W, H, s_fb_w, s_fb_h);    /* NULL: scenes keep the braille haze */
     s_noverlay = s_dnletters = 0;
     s_hd = (scene_hd_t){ 0, false, 1.f };             /* nothing held from the old grid */
     s_full_flush = true;
@@ -599,6 +610,8 @@ static esp_err_t build_grid(int W, int H) {
 /* ── Input ──────────────────────────────────────────────────────────────────── */
 
 static int64_t s_touch_t0;            /* sim: tap seen, not yet handed to the drawer */
+/* one bump of a tapped spot's wave, at (x, y) glass units, y up (scene_outline) */
+static void outline_bump(void *ctx, float x, float y) { (void)ctx; ripple(x, -y, SCENE_OUTLINE_WAVE, SCENE_OUTLINE_R); }
 static volatile int64_t s_dtouch;     /* drawer: tap time riding with the current frame */
 /* the touch panel's last read (the drawer polls it, off the sim's core: ~1 ms of I2C and
  * waits a poll); s_mutex */
@@ -609,7 +622,10 @@ static void poll_touch(int n, const uint16_t *xs, const uint16_t *ys, int64_t t)
     float x = (float)(xs[0] - s_ox) / (float)s_stage * 2.f - 1.f, y = (float)(ys[0] - s_oy) / (float)s_stage * 2.f - 1.f;
     if (!s_touch_down) {                                    /* tap = ripple */
         s_touch_down = true; s_tpx = x; s_tpy = y; s_last_tx = xs[0]; s_last_ty = ys[0];
-        ripple(x, y, 1.6f, 0.09f);
+        /* on a scene's spot the wave leaves the outline of what it grows (that stays still); else the finger's ripple */
+        const int spot = s_cur == ST_SCENE && s_sp.cur ? scene_spot_at(s_sp.cur, s_sp.t, x, -y) : -1;
+        if (spot >= 0) scene_outline(s_sp.cur, spot, outline_bump, NULL);
+        else ripple(x, y, 1.6f, 0.09f);
         fd_user(&s_dir);                                    /* wakes a sleepy creature */
         if (s_cur == ST_CREATURE && s_cpk) cpk_come(s_cpk, NULL);   /* a rigged one comes to the front, attending */
         if (!s_touch_t0) s_touch_t0 = t;
@@ -792,17 +808,35 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     case ST_THINKING: fluid_target_blob(s, s_tnow * 1.4f, swell * 0.85f, ox, oy); break;
     case ST_SCENE: {
         const scene_caption_t cap = scene_caption();
-        scene_shapes_t hd = { s_shp, 0, s_kdots };
+        scene_shapes_t hd = { s_shp, 0, s_kdots, s_still };
         scene_fill(s, s_sp.cur, s_sp.t, &cap, s_overlay, &s_noverlay, s_sdots, &hd);
         s_nshp = hd.n;
-        static const char *cap_was;                    /* a new word: a tiny ripple under its letters */
-        if (cap.n > 0 && cap.str != cap_was)
-            for (int q = 0; q < s_noverlay; q++) {
-                const fluid_letter_t *L = &s_overlay[q];
-                if (L->mask || L->rgb || L->ch == ' ') continue;   /* the subtitle's letters: the palette's */
-                ripple((L->x + L->w * 0.5f) / s->stage * 2.f - 1.f, (L->y + L->h * 0.5f) / s->stage * 2.f - 1.f,
-                       SCENE_CAPTION_RIPPLE, SCENE_CAPTION_RIPPLE_R);
+        /* its fine dust: for the drawing at full growth (the calm one kept), built a few ms a frame */
+        if (s_fine && s_hd.gen && hd.n >= 0) {
+            uint32_t key;
+            const int nf = scene_full_shapes(s, s_sp.cur, s_sp.t, s_fshp, &key);
+            if (nf >= 0) fluid_fine_want(s_fine, key, !(s_sp.cur->focus >= 0 && s_sp.cur->glow > 0.f), s_fshp, nf, cfg->palette);
+            fluid_fine_work(s_fine, FINE_BUILD_US);
+        }
+        /* a new word: a gentle wave under its letters; the reading's end: under the last one's, as it breaks up */
+        static const char *cap_was;
+        static float cap_pts[FLUID_MAX_LETTERS][2];
+        static int ncap_pts;
+        if ((cap.n > 0 && cap.str != cap_was) || (cap.n <= 0 && cap_was)) {
+            if (cap.n > 0) {
+                ncap_pts = 0;
+                for (int q = 0; q < s_noverlay && ncap_pts < FLUID_MAX_LETTERS; q++) {
+                    const fluid_letter_t *L = &s_overlay[q];
+                    if (L->mask || L->rgb || L->ch == ' ') continue;   /* the subtitle's letters: the palette's */
+                    cap_pts[ncap_pts][0] = (L->x + L->w * 0.5f) / s->stage * 2.f - 1.f;
+                    cap_pts[ncap_pts++][1] = (L->y + L->h * 0.5f) / s->stage * 2.f - 1.f;
+                }
             }
+            for (int q = 0; q < ncap_pts; q++) ripple(cap_pts[q][0], cap_pts[q][1], SCENE_CAPTION_RIPPLE, SCENE_CAPTION_RIPPLE_R);
+            if (cap.n <= 0) ncap_pts = 0;
+            s_cap_word = cap.n > 0 ? s_cap_word % 0xFFFFu + 1u : 0;
+            s_cap_t0 = s_tnow;
+        }
         cap_was = cap.n > 0 ? cap.str : NULL;
         break;
     }
@@ -1368,6 +1402,14 @@ static void fluid_task(void *arg) {
             s_dnshp = s_nshp;
         }
         if (s_hd.gen && s_dnshp >= 0) { s_dopts.shapes = s_dshp; s_dopts.nshapes = s_dnshp; s_dopts.kdots = s_kdots_d; }
+        if (s_fine) {   /* the fine dust: a set built since swaps in (the drawer is idle); none once no scene shows */
+            if (s_hd.gen && s_dnshp >= 0) {
+                fluid_fine_swap(s_fine);
+                if (s_cur == ST_SCENE && !s_hd.out) { memcpy(s_still_d, s_still, (size_t)s_sim->N); s_dcap_word = s_cap_word; }
+                s_dopts.fine = s_fine; s_dopts.still = s_still_d; s_dopts.cap_word = s_dcap_word;
+                s_dopts.cap_unformed = s_dcap_word ? fmaxf(0.f, 1.f - (s_tnow - s_cap_t0) / FINE_REVEAL_S) : 0.f;
+            } else if (!s_hd.gen && !s_hd.out) fluid_fine_clear(s_fine);
+        }
         {   /* a scene's symbols point into its package: the drawer keeps it until its next frame */
             static pkg_t *held;
             pkg_t *now = s_hd.out ? held : s_cur == ST_SCENE && s_sp.cur ? s_sp.cur->pkg : NULL;
@@ -1522,11 +1564,14 @@ esp_err_t mole_fluid_creature_init(void) {
     if (!s_sdots_d) s_sdots_d = heap_caps_calloc(1, FLUID_GRID_MAX_W * FLUID_GRID_MAX_H, MALLOC_CAP_SPIRAM);
     if (!s_kdots)   s_kdots   = heap_caps_calloc(2, FLUID_GRID_MAX_W * FLUID_GRID_MAX_H, MALLOC_CAP_SPIRAM);
     s_kdots_d = s_kdots ? s_kdots + FLUID_GRID_MAX_W * FLUID_GRID_MAX_H : NULL;
+    if (!s_still)   s_still   = heap_caps_calloc(2, FLUID_GRID_MAX_W * FLUID_GRID_MAX_H, MALLOC_CAP_SPIRAM);
+    s_still_d = s_still ? s_still + FLUID_GRID_MAX_W * FLUID_GRID_MAX_H : NULL;
+    if (!s_fshp)    s_fshp    = heap_caps_calloc(FLUID_MAX_SHAPES, sizeof(fluid_shape_t), MALLOC_CAP_SPIRAM);
     if (!s_shp)     s_shp     = heap_caps_calloc(2 * FLUID_MAX_SHAPES, sizeof(fluid_shape_t), MALLOC_CAP_SPIRAM);
     s_dshp = s_shp ? s_shp + FLUID_MAX_SHAPES : NULL;
     if (!s_rd)      s_rd      = heap_caps_calloc(1, sizeof(reading_t), MALLOC_CAP_SPIRAM);
     if (!s_spot_sc) s_spot_sc = heap_caps_calloc(1, sizeof(scene_t), MALLOC_CAP_SPIRAM);
-    if (!s_ttext || !s_toks || !s_sdots || !s_sdots_d || !s_kdots || !s_shp || !s_rd || !s_spot_sc) return ESP_ERR_NO_MEM;
+    if (!s_ttext || !s_toks || !s_sdots || !s_sdots_d || !s_kdots || !s_shp || !s_rd || !s_spot_sc || !s_still || !s_fshp) return ESP_ERR_NO_MEM;
     s_ttext[0] = '\0';
     s_seen_ver = -1;
 

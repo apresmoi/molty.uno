@@ -63,8 +63,13 @@ export function tonight(date) {
   const pct = Math.round(s.moon.fraction * 100);
   return { scenes, say: `Tonight's moon is ${pct} percent lit, ${s.moon.waxing ? 'waxing' : 'waning'}, in ${s.moon.sign}. Then Mercury, Venus, Mars, Jupiter and Saturn.`, facts: { moon: { lit: pct, waxing: s.moon.waxing, sign: s.moon.sign }, planets: Object.fromEntries(PLANETS.map((p) => { const lon = eclipticLon(p, date); return [p, `${Math.floor(mod360(lon) % 30)} ${signOf(lon)}`]; })) } };
 }
-// The chart's middle: the tightest few aspects, tense red and easy blue (packages/astrology/build.mjs chart)
-const DRAWN = 3, TONE = { square: 'tense', opposition: 'tense', trine: 'easy', sextile: 'easy' };
+// The chart's aspects: the tightest few, each a hairline between its two bodies' symbols (packages/astrology/build.mjs chart):
+// tense red, easy blue, a conjunction white; LINE_GAP outside each symbol's centre, none for a pair too close for a line
+const DRAWN = 3, TONE = { square: 'tense', opposition: 'tense', trine: 'easy', sextile: 'easy', conjunction: 'joined' };
+const TONE_INK = { tense: '#ff5a4a', easy: '#6fa8ff', joined: '#c8cce0' }, LINE_GAP = 0.085;
+// every aspect instead (chart(date, { all: true })): the tightest brightest (ORB_FADE of the colour lost by MAX_ORB), as many as
+// the device's 128 items hold (the chart's other items are 58, an aspect's 6)
+const ORB_FADE = 0.7, MOST = Math.floor((128 - 58) / 6);
 // What a tap reads (a spot) and what the close-up says: a planet's part of you, played out in its sign's way.
 const DOES = { Sun: 'you shine', Moon: 'you feel at home', Mercury: 'your mind works best', Venus: 'you love', Mars: 'you go after things', Jupiter: 'luck finds you', Saturn: 'you learn hard lessons', Uranus: 'you break old rules', Neptune: 'you dream', Pluto: 'you change deep down' };
 const PART = { Sun: 'your core self', Moon: 'your feelings', Mercury: 'your mind', Venus: 'your loves', Mars: 'your drive', Jupiter: 'your luck', Saturn: 'your discipline', Uranus: 'your rebel side', Neptune: 'your dreams', Pluto: 'your power' };
@@ -104,30 +109,30 @@ function signReading(i, bodies) {
   const names = and(here.map((b) => b.name)), parts = and(here.map((b) => PART[b.name]));
   return fit(`${head} ${names} here: ${NATURE[i][2]}, you live out ${parts}.`, `${head} ${names} here, all ${NATURE[i][2]}.`, `${head} ${here.length} planets here.`);
 }
-// The middle's reading: what the drawn lines mean, each pair in plain words (a planet's part, then how they meet)
+const aspectReading = (a) => `${a.a} ${PAIR[a.name][0]} ${a.b}: ${PAIR[a.name][1](WORD[a.a], WORD[a.b])}.`;
 const WORD = { Sun: 'self', Moon: 'mood', Mercury: 'mind', Venus: 'love', Mars: 'drive', Jupiter: 'luck', Saturn: 'limits', Uranus: 'change', Neptune: 'dreams', Pluto: 'power' };
 const PAIR = { conjunction: ['sits with', (a, b) => `${a} and ${b} as one`], sextile: ['helps', (a, b) => `${a} helping ${b}`], square: ['squares', (a, b) => `friction between ${a} and ${b}`], trine: ['flows with', (a, b) => `${a} and ${b} in step`], opposition: ['opposes', (a, b) => `${a} meets ${b}`] };
-const aspectReading = (a) => `${a.a} ${PAIR[a.name][0]} ${a.b}: ${PAIR[a.name][1](WORD[a.a], WORD[a.b])}.`;
-function middleReading(drawn) {
-  const tones = new Set(drawn.map((a) => TONE[a.name])), key = [tones.has('tense') && 'red is tension', tones.has('easy') && 'blue is flow', drawn.some((a) => !a.angle) && 'a white dot joins two'].filter(Boolean).join(', ');
-  const head = key && `${key[0].toUpperCase()}${key.slice(1)}.`, said = (more) => [head, ...more].filter(Boolean).join(' ');
-  const long = (a) => `${a.a} ${PAIR[a.name][0]} ${a.b}: ${PAIR[a.name][1](WORD[a.a], WORD[a.b])}.`, short = (a) => `${a.a} ${PAIR[a.name][0]} ${a.b}.`;
-  // every drawn pair named; the loosest lose their plain words first until it fits
-  return fit(...drawn.map((_, k) => said(drawn.map((a, i) => (i < drawn.length - k ? long : short)(a)))), said(drawn.map(short)));
-}
-export function chart(date) {
-  const s = sky(date), placed = placeBodies(s.bodies), inner = Math.min(...placed.map((b) => b.r)) - 0.065, aspects = findAspects(s.bodies), drawn = aspects.slice(0, DRAWN);
-  // an aspect's line on the inner ring, its bodies' centres (it reaches out to them when tapped), its reading and what it lights
-  const at = (name) => { const b = placed.find((p) => p.name === name); return polar(chartAngle(b.lon), b.r); };
+const scaleInk = (c, f) => '#' + [1, 3, 5].map((k) => Math.round(parseInt(c.slice(k, k + 2), 16) * f).toString(16).padStart(2, '0')).join('');
+/** The chart: every body on the zodiac, and between them the tightest aspects as lines (all: every one that fits). */
+export function chart(date, { all = false } = {}) {
+  const s = sky(date), placed = placeBodies(s.bodies), aspects = findAspects(s.bodies), DEG = Math.PI / 180;
+  const at = (name) => { const b = placed.find((p) => p.name === name), a = chartAngle(b.lon) * DEG; return [b.r * Math.cos(a), b.r * Math.sin(a)]; };
+  // a line from LINE_GAP outside one symbol's centre to LINE_GAP outside the other's, or null for a pair too close for one
   const line = (a) => {
-    const [x1, y1] = polar(chartAngle(a.lonA), inner), [x2, y2] = polar(chartAngle(a.lonB), inner), [px1, py1] = at(a.a), [px2, py2] = at(a.b), id = `${a.a}-${a.b}`.toLowerCase();
-    return { x1: r2(x1), y1: r2(y1), x2: r2(x2), y2: r2(y2), px1: r2(px1), py1: r2(py1), px2: r2(px2), py2: r2(py2), say: aspectReading(a), id, lights: `${id} ${a.a.toLowerCase()} ${a.b.toLowerCase()}` };
+    const P = at(a.a), Q = at(a.b), dx = Q[0] - P[0], dy = Q[1] - P[1], l = Math.hypot(dx, dy), ux = dx / l, uy = dy / l, id = `${a.a}-${a.b}`.toLowerCase();
+    if (l < 2 * LINE_GAP + 0.03) return null;
+    const c0 = TONE_INK[TONE[a.name]], c = all ? scaleInk(c0, 1 - ORB_FADE * Math.min(1, a.orb / MAX_ORB)) : c0;
+    return { x1: r3(P[0] + ux * LINE_GAP), y1: r3(P[1] + uy * LINE_GAP), x2: r3(Q[0] - ux * LINE_GAP), y2: r3(Q[1] - uy * LINE_GAP), px1: r3(P[0]), py1: r3(P[1]), px2: r3(Q[0]), py2: r3(Q[1]), c, say: aspectReading(a), id, lights: `${id} ${a.a.toLowerCase()} ${a.b.toLowerCase()}` };
   };
-  const params = { inner: r3(inner), bodies: placed.map((b) => ({ g: `g-${b.name.toLowerCase()}`, a: chartAngle(b.lon), r: r3(b.r), c: INK[b.name], say: bodyReading(b, s.bodies, aspects), id: b.name.toLowerCase() })), tense: [], easy: [], joined: [] };
-  for (const a of drawn) if (a.angle) params[TONE[a.name]].push(line(a)); else params.joined.push({ a: chartAngle((a.lonA + a.lonB) / 2 + (Math.abs(a.lonA - a.lonB) > 180 ? 180 : 0)) });
+  const lines = [], drawn = [];
+  for (const a of aspects) {
+    if (lines.length >= (all ? MOST : DRAWN)) break;
+    const l = line(a);
+    if (l) { lines.push(l); drawn.push(a); }
+  }
+  const params = { bodies: placed.map((b) => ({ g: `g-${b.name.toLowerCase()}`, a: chartAngle(b.lon), r: r3(b.r), c: INK[b.name], say: bodyReading(b, s.bodies, aspects), id: b.name.toLowerCase() })), aspects: lines };
   params.signs = SIGNS.map((name, i) => ({ a: (195 + 30 * i) % 360, say: signReading(i, s.bodies), id: name.toLowerCase() }));
-  params.read = middleReading(drawn);
-  return { scenes: [['chart', params]], say: `The whole sky: ten bodies on the zodiac, and in the middle the ${drawn.length} tightest of their ${aspects.length} aspects. Tap a planet, a sign or the middle to read it.`, facts: { bodies: Object.fromEntries(s.bodies.map((b) => [b.name, `${Math.floor(mod360(b.lon) % 30)} ${signOf(b.lon)}`])), aspects: aspects.map((a) => `${a.a} ${a.name} ${a.b} (orb ${a.orb.toFixed(1)})`), drawn: drawn.map((a) => `${a.a} ${a.name} ${a.b}`), middle: params.read, tap: 'a tap on a body, a sign or the middle (spot aspects) shows its reading; the tap event names it (spot); chart --interactive opens a sign up close' } };
+  return { scenes: [['chart', params]], say: `The whole sky: ten bodies on the zodiac, joined by the ${drawn.length} tightest of their ${aspects.length} aspects. Tap a planet, a sign or a line to read it.`, facts: { bodies: Object.fromEntries(s.bodies.map((b) => [b.name, `${Math.floor(mod360(b.lon) % 30)} ${signOf(b.lon)}`])), aspects: aspects.map((a) => `${a.a} ${a.name} ${a.b} (orb ${a.orb.toFixed(1)})`), drawn: drawn.map((a) => `${a.a} ${a.name} ${a.b}`), tap: 'a tap on a body, a sign or an aspect line shows its reading; the tap event names it (spot); chart --interactive opens a sign up close' } };
 }
 // The close-up reads aloud (a say over the scene) while each planet lights in turn. Molty's voice cues are not
 // visible to a layout, so the lighting follows an estimate of the voice: about 2.6 words a second, a beat at each

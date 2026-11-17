@@ -275,7 +275,16 @@ typedef struct {
                                         * 0 = right), span >= 360 the whole ring          */
     float w, h, co, si;                /* mask / char: box size px, turned (cos, sin)      */
     const uint8_t *mask;               /* mask: 1-bit rows MSB first; char: 5 x 7 font rows */
+    uint8_t tag;                       /* FLUID_TAG_*: what it is to the fine dust          */
 } fluid_shape_t;
+enum { FLUID_TAG_DRAWING, FLUID_TAG_CAPTION };   /* a caption letter forms from the dust (fluid_draw_opts_t.cap_reveal) */
+
+/** Each shape's box in fb px [x0, x1) x [y0, y1), its soft edge included (stage at ox, oy). */
+void fluid_shape_box(const fluid_shape_t *sh, int ox, int oy, int16_t b[4]);
+/** shapes[0..n) (boxes: fluid_shape_box) over fb pixel row y of row (row[0] is fb x bx), inside [xa, xb), each over what
+ *  is under it by its coverage times wt[x] / 8 (wt NULL: whole); caption letters only where they formed (unformed 0..1). */
+void fluid_shapes_row(const fluid_shape_t *sh, int n, const int16_t (*box)[4], int ox, int oy, int palette, const uint8_t *wt,
+                      float unformed, uint16_t *row, int bx, int y, int xa, int xb);
 
 typedef struct {
     float *cov, *orp, *near, *near_s, *dark, *tmp;
@@ -396,6 +405,7 @@ typedef struct {
     int16_t  sb[FLUID_MAX_SHAPES][4];  /* this frame's shapes' boxes, fb px [x0, x1) x [y0, y1) */
     int16_t  sb0[FLUID_MAX_SHAPES][4]; /* ...the last frame's, and each one's hash: a shape that  */
     uint32_t sh0[FLUID_MAX_SHAPES];    /* changes redraws the cells it covered and covers  */
+    fluid_shape_t *shp0;               /* ...and the shapes themselves (a stroke redraws its own cells only) */
     int      nsh0;
     struct {                           /* this frame's condensed letters, ready to draw   */
         const uint8_t *gl, *mask; uint16_t c, mw, mh; int16_t x, y, w, h, cx0, cy0, cx1, cy1;
@@ -431,6 +441,11 @@ typedef struct {
                                         * (a ball, an image: no shape draws them), or NULL   */
     uint32_t frame;                    /* crisp dots: FLUID_FRAME(number, m), which picks the cell rows the water's
                                         * own changes go in (the dots' maker interlaces by the same; 0: the drawer's own) */
+    /* a scene in high definition on fine dust (fluid_fine.h) instead of the braille haze: */
+    struct fluid_fine *fine;           /* its dust, or NULL (the drawer's per-frame part is written by fluid_draw_cells) */
+    const uint8_t *still;              /* W x H: cells the water never breaks (a tapped spot's drawing), or NULL */
+    unsigned cap_word;                 /* the caption's word: a new number each word, 0 none (it dissolves)   */
+    float cap_unformed;                /* how much of it has not formed from the dust yet, 0 (whole) .. 1    */
 } fluid_draw_opts_t;
 
 /* crisp dots' interlace: frame n of the dots' maker, its water's rows taking turns over m frames (2..9) */

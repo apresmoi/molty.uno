@@ -12,8 +12,6 @@ const n3 = (v) => +v.toFixed(3) + 0;
 const TAU = Math.PI * 2;
 const DIM = '#3a3e4e', GRID = '#565b72', INK = '#c8cce0', SIGN_INK = ['#ff9a7a', '#a8d890', '#9fc0ff'];
 export const SIGNS = ['aries', 'taurus', 'gemini', 'cancer', 'leo', 'virgo', 'libra', 'scorpio', 'sagittarius', 'capricorn', 'aquarius', 'pisces'];
-// the chart's aspect lines: tense (square, opposition) red, easy (trine, sextile) blue
-const ASPECT_INK = { tense: '#ff5a4a', easy: '#6fa8ff' };
 export const BODIES = { sun: '#ffd678', moon: '#e6e6e0', mercury: '#c8bcb0', venus: '#fff0c4', mars: '#ff7a55', jupiter: '#ffc266', saturn: '#e8d890', uranus: '#9fe3e0', neptune: '#8fb4ff', pluto: '#c0a0d0' };
 
 // ---- strokes, in a -1..1 box, y up
@@ -128,11 +126,13 @@ for (const s of Object.keys(SURFACE)) assets[s] = sphereMap(s);
 // a hairline: about one braille dot wide on Molty
 const HAIR = 0.012;
 const LIT_RING = 0.075;   // a lit aspect's ring round each of its bodies (before it grows)
-const wheel = () => [
+// the signs on the wheel: the chart's 1.18x the aspect view's (sign glyph size), and a tapped sign grows 1.5x (its spot's grow)
+const SIGN_SIZE = 0.09, CHART_SIGN = n3(SIGN_SIZE * 1.18), SIGN_GROW = 1.5;
+const wheel = (signSize = SIGN_SIZE) => [
   { k: 'ring', r: 0.9, w: HAIR, color: INK }, { k: 'ring', r: 0.75, w: HAIR, color: GRID },
   { k: 'ticks', r: 0.75, len: 0.15, n: 12, a0: 0, w: HAIR, color: INK }, { k: 'ticks', r: 0.73, len: 0.02, n: 36, a0: 0, w: HAIR, color: GRID },
   // 0 degrees Aries at 9 o'clock, longitude counter-clockwise: sign i is centred at 195 + 30 i
-  ...SIGNS.map((s, i) => ({ k: 'glyph', asset: s, size: 0.09, polar: [n3((195 + 30 * i) % 360), 0.825], color: SIGN_INK[i % 3] })),
+  ...SIGNS.map((s, i) => ({ k: 'glyph', asset: s, size: signSize, polar: [n3((195 + 30 * i) % 360), 0.825], color: SIGN_INK[i % 3] })),
 ];
 const num = 'number', text = 'text', list = 'list';
 // The lab's tonight is a run of shots; here each is its own small layout, and the skill queues them:
@@ -152,33 +152,26 @@ const layouts = {
   },
   sign: { dur: 4, params: { sign: text }, items: [{ k: 'glyph', size: 1.2, asset: '$sign', color: '#ffe9b0' }] },
   // bodies: {g: glyph asset, a: chart angle, r: radius, c: colour, say, id}; signs: {a: chart angle, say, id}. A tap on a
-  // body or a sign shows its say (a spot). The middle: the tightest aspects, each a line {x1, y1, x2, y2} between the two
-  // bodies' angles on the inner ring with a small dot at each end, tense red and easy blue; joined: {a}, a conjunction's mark
-  // (the two sit together); a tap on the middle reads what the lines mean (read). A tap on an aspect's line reads it (say,
-  // id) and lights it (lights: its id and its two bodies'): it brightens, its bodies grow, and it reaches out to them
-  // (px1, py1, px2, py2: their centres), a ring round each in its colour
+  // body or a sign shows its say (a spot); a tapped sign grows 1.5x, the rest 1.25x. aspects: the tightest few, each a hairline
+  // between its two bodies' symbols {x1, y1, x2, y2} in its colour c (tense red, easy blue, a conjunction white); a tap on it
+  // reads it (say, id) and lights it (lights: its id and its two bodies'): it brightens, its bodies grow, a ring round each
+  // (px1, py1, px2, py2: their centres) in its colour. The middle is empty: the reading's words show there (caption_y 0).
   chart: {
     dur: 0,
-    params: { inner: num, bodies: list, signs: list, tense: list, easy: list, joined: list, read: text },
+    caption_y: 0,
+    params: { bodies: list, signs: list, aspects: list },
     items: [
-      ...wheel(), { k: 'ring', r: '$inner', w: HAIR, color: DIM },
-      ...Object.entries(ASPECT_INK).flatMap(([k, c]) => [
-        ...[1, 2].flatMap((e) => [
-          each(`$${k}`, { k: 'line', pts: [[`@x${e}`, `@y${e}`], [`@px${e}`, `@py${e}`]], w: HAIR, color: c, group: '@id', when: 'lit' }),
-          each(`$${k}`, { k: 'disc', x: `@px${e}`, y: `@py${e}`, r: LIT_RING, color: '#000000', group: '@id', when: 'lit' }),
-          each(`$${k}`, { k: 'ring', x: `@px${e}`, y: `@py${e}`, r: LIT_RING, w: HAIR, color: c, group: '@id', when: 'lit' }),
-        ]),
-        each(`$${k}`, { k: 'line', pts: [['@x1', '@y1'], ['@x2', '@y2']], w: HAIR, color: c, group: '@id' }),
-        each(`$${k}`, { k: 'disc', x: '@x1', y: '@y1', r: 0.014, color: c, group: '@id' }),
-        each(`$${k}`, { k: 'disc', x: '@x2', y: '@y2', r: 0.014, color: c, group: '@id' }),
+      ...wheel(CHART_SIGN),
+      ...[1, 2].flatMap((e) => [
+        each('$aspects', { k: 'disc', x: `@px${e}`, y: `@py${e}`, r: LIT_RING, color: '#000000', group: '@id', when: 'lit' }),
+        each('$aspects', { k: 'ring', x: `@px${e}`, y: `@py${e}`, r: LIT_RING, w: HAIR, color: '@c', group: '@id', when: 'lit' }),
       ]),
-      each('$joined', { k: 'disc', polar: ['@a', '$inner'], r: 0.022, color: INK }),
+      each('$aspects', { k: 'line', pts: [['@x1', '@y1'], ['@x2', '@y2']], w: HAIR, color: '@c', group: '@id' }),
       each('$bodies', { k: 'ticks', r: 0.66, len: 0.07, n: 1, a0: '@a', w: HAIR, color: GRID }),
       each('$bodies', { k: 'glyph', asset: '@g', size: 0.12, polar: ['@a', '@r'], color: '@c', group: '@id' }),
       each('$bodies', { k: 'spot', polar: ['@a', '@r'], r: 0.08, say: '@say', id: '@id' }),
-      each('$signs', { k: 'spot', polar: ['@a', 0.825], r: 0.07, say: '@say', id: '@id' }),
-      { k: 'spot', r: '$inner', say: '$read', id: 'aspects' },
-      ...Object.keys(ASPECT_INK).map((k) => each(`$${k}`, { k: 'spot', pts: [['@x1', '@y1'], ['@x2', '@y2']], r: 0.05, say: '@say', id: '@id', lights: '@lights' })),
+      each('$signs', { k: 'spot', polar: ['@a', 0.825], r: 0.07, say: '@say', id: '@id', grow: SIGN_GROW }),
+      each('$aspects', { k: 'spot', pts: [['@x1', '@y1'], ['@x2', '@y2']], r: 0.05, say: '@say', id: '@id', lights: '@lights' }),
     ],
   },
   // A sign up close, while Molty reads it aloud: its glyph, name and ruler; its planets on its degree dial (0 lower
@@ -232,6 +225,6 @@ const layouts = {
   'lunar-eclipse': { dur: 6, params: { path: list, umbra: num, pen: num, moon_r: num }, items: [{ k: 'ring', r: '$pen', color: DIM }, { k: 'ring', r: '$umbra', color: '#8a3a2a' }, { k: 'ball', each: '$path', x: '@x', y: '@y', on: '@on', off: '@off', r: '$moon_r', img: '@img' }] },
 };
 
-const pkg = { v: 'molty-pkg/1', id: 'astrology', name: 'Astrology', version: '1.4.2', kind: 'scenes', assets, layouts };
+const pkg = { v: 'molty-pkg/1', id: 'astrology', name: 'Astrology', version: '1.5.0', kind: 'scenes', assets, layouts };
 writeFileSync(OUT, JSON.stringify(pkg) + '\n');
 console.log(`astrology.json: ${Object.keys(assets).length} assets, ${Object.keys(layouts).length} layouts, ${Buffer.byteLength(JSON.stringify(pkg)) + 1} bytes`);

@@ -117,6 +117,7 @@ bool pkg_num_ok(int pf, float v) {
     case PF_SIDE:             return v == -1.f || v == 1.f;
     case PF_SPIN:             return v >= -720.f && v <= 720.f;
     case PF_ON: case PF_OFF:  return v >= 0.f && v <= PKG_DUR_MAX;
+    case PF_GROW:             return v >= 1.f && v <= 3.f;
     default:                  return v >= -720.f && v <= 720.f;   /* angles: a0 a1 rot polar */
     }
 }
@@ -210,6 +211,7 @@ static const struct { const char *key; uint8_t pf, type; uint16_t kinds; } FIELD
      * an item `when: "lit"` shows only then */
     { "group", PF_GROUP, T_STR, ALL & ~KB(PK_SPOT) }, { "when", PF_WHEN, T_STR, ALL & ~KB(PK_SPOT) },
     { "lights", PF_LIGHTS, T_STR, KB(PK_SPOT) },
+    { "grow", PF_GROW, T_NUM, KB(PK_SPOT) },          /* what a tap on it lights grows this much */
 };
 #define NFIELDS ((int)(sizeof(FIELDS) / sizeof(FIELDS[0])))
 /* what each kind cannot do without */
@@ -331,11 +333,13 @@ static const char *parse_item(ictx_t *c, const cJSON *j, pkg_item_t *it) {
 /* ── layouts ───────────────────────────────────────────────────────────────── */
 
 static const char *parse_layout(arena_t *a, const pkg_t *p, const cJSON *j, pkg_layout_t *l) {
-    static const char *const KEYS[] = { "dur", "params", "items", NULL };
+    static const char *const KEYS[] = { "dur", "params", "items", "caption_y", NULL };
     if (!cJSON_IsObject(j) || !only(j, KEYS)) return "layout: unknown key";
-    const cJSON *dur = cJSON_GetObjectItemCaseSensitive(j, "dur");
+    const cJSON *dur = cJSON_GetObjectItemCaseSensitive(j, "dur"), *cy = cJSON_GetObjectItemCaseSensitive(j, "caption_y");
     if (dur && (!cJSON_IsNumber(dur) || !(dur->valuedouble >= 0 && dur->valuedouble <= PKG_DUR_MAX))) return "layout: dur";
+    if (cy && (!cJSON_IsNumber(cy) || !(cy->valuedouble >= -1 && cy->valuedouble <= 1))) return "layout: caption_y";
     l->dur = dur ? (float)dur->valuedouble : 0.f;
+    l->caption_y = cy ? (float)cy->valuedouble : PKG_CAPTION_Y;
     const cJSON *params = cJSON_GetObjectItemCaseSensitive(j, "params");
     if (params) {
         if (!cJSON_IsObject(params) || count(params) > PKG_PARAMS_MAX) return "layout: params";

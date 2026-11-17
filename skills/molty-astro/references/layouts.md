@@ -47,14 +47,12 @@ Seven scenes: `globe` for the Moon, then Mercury, Venus, Mars, Jupiter; `saturn`
 | param | value |
 |---|---|
 | `bodies` | ten `{"g": "g-<body>", "a": <chart angle>, "r": <radius>, "c": "<colour>"}`; radius 0.64, pulled in by 0.1 per level when a body is within 13 degrees of one already placed at that level (place in order of longitude); colours as in `aspect` |
-| `inner` | the smallest radius minus 0.065 (the ring the aspect lines end on) |
-| `tense`, `easy` | the three tightest aspects (smallest orb) only, each `{"x1", "y1", "x2", "y2", "px1", "py1", "px2", "py2", "say", "id", "lights"}`: a line between the two bodies' chart angles on the `inner` ring, a dot at each end. `tense` (square, opposition) draws red, `easy` (trine, sextile) blue. `px`/`py` are the two bodies' centres; `say` the pair in plain words ("Mars opposes Saturn: drive meets limits."); `id` `<body>-<body>`; `lights` `"<id> <body> <body>"`. A tap on the line reads it: it brightens, its two bodies grow, and it reaches out to them with a ring round each |
-| `joined` | a conjunction among those three: `{"a": <chart angle midway between the two>}`, a white dot on the `inner` ring (the two sit together, no line) |
-| `read` | the middle's reading (at most 160 characters): what the colours mean, then each drawn aspect in plain words, e.g. "Red is tension, blue is flow. Mars opposes Saturn: drive meets limits." |
-| `signs` | twelve `{"a": (195 + 30 i) mod 360, "say", "id": "<sign>"}` |
+| `aspects` | the three tightest aspects (smallest orb) a line can show, each `{"x1", "y1", "x2", "y2", "px1", "py1", "px2", "py2", "c", "say", "id", "lights"}`: a hairline between the two bodies' symbols, from 0.085 outside one centre (`px`/`py`) to 0.085 outside the other's, along the line between them; none for a pair closer than 0.2 (a tight conjunction). `c`: tense (square, opposition) `#ff5a4a`, easy (trine, sextile) `#6fa8ff`, a conjunction `#c8cce0`; `say` the pair in plain words ("Mars opposes Saturn: drive meets limits."); `id` `<body>-<body>`; `lights` `"<id> <body> <body>"`. A tap on the line reads it: it brightens, its two bodies grow, a ring round each. `chart --all`: every aspect that fits (at most 11), `c` dimmed by up to 70 % as the orb grows to 6 |
+| `signs` | twelve `{"a": (195 + 30 i) mod 360, "say", "id": "<sign>"}`; a tapped sign grows 1.5x |
 
+The middle is empty: a reading's words show there (`caption_y` 0).
 Each body also carries `say` (its reading, at most 160 characters) and `id` (`sun` …). A tap on one shows its
-`say` and sends you a `tap` event with `"spot": "<id>"`; a tap inside the inner ring shows `read` (spot `aspects`). Readings (see `sky.mjs`): a body, "<Planet> in <Sign>:
+`say` and sends you a `tap` event with `"spot": "<id>"`. Readings (see `sky.mjs`): a body, "<Planet> in <Sign>:
 <what it does> <how the sign plays it>." plus its tightest aspect; a sign, its nature and ruler, then its planets
 or, when empty, where its ruler is.
 

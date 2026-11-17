@@ -50,6 +50,7 @@ A layout is a timeline of items, the same model as the lab's scenes (`molty-crea
 
 ```jsonc
 { "dur": 6,                                   // seconds; 0 = until replaced or its ttl ends
+  "caption_y": 0,                              // optional: where the reading's words show (glass y, -1..1; default -0.56, the bottom)
   "params": { "bodies": "list", "title": "text", "lit": "number" },   // what the agent may send, with types
   "items": [ Item, ... ] }
 ```
@@ -68,15 +69,16 @@ and geometry in **glass units**: the round window has radius 1, `x` right, `y` u
 | `ball` | `x`, `y`, `r`, `img`, `lit` (0..1 lit fraction), `side` (-1/1 which side is lit), `spin` | a shaded sphere wearing an image asset |
 | `glyph` | `x`, `y`, `size`, `asset`, `rot` | a mask or image asset |
 | `text` | `x`, `y`, `size`, `str` | words, in the device font |
-| `spot` | `x`, `y`, `r`, `say`, `id`, `pts`, `lights` | nothing: a place to tap. Molty shows `say` as the subtitle; the `tap` event names `id` |
+| `spot` | `x`, `y`, `r`, `say`, `id`, `pts`, `lights`, `grow` | nothing: a place to tap. Molty shows `say` as the subtitle; the `tap` event names `id` |
 
 **Spots** make a scene interactive with no round trip: the agent sends each spot's reading with the scene
 (`{ "k": "spot", "each": "$bodies", "polar": ["@a", "@r"], "r": 0.09, "say": "@say", "id": "@id" }`), and a tap on it
 shows that reading at once, word by word at reading pace. The agent also gets the `tap` event with `spot: <id>`, to say
 more if it wants. A spot takes the tap whatever tap is bound to (a tap that stops a recording still does that first).
 A spot is a disc (`x`, `y`, `r`), or the band within `r` of a segment when it has `pts` (two points: a line to tap along).
-What a tap highlights grows 1.25x with the tap's ripple, stays so while the reading (or the agent's say over the scene)
-plays, then eases back:
+What a tap highlights grows with the tap's wave (the spot's `grow`, 1..3, default 1.25: the chart's signs 1.5), stays so
+while the reading (or the agent's say over the scene) plays, then eases back. On the device it stays perfectly still and
+crisp meanwhile (the water breaks nothing it covers), and the wave leaves its outline rather than the finger:
 - with `lights` (group names, spaces between, at most 4): every item whose `group` is one of them, each about its own
   centre and brighter; an item with `"when": "lit"` shows only then, fading in and out with it. Any drawn item may take
   `group` (a name, bindable: `"group": "@id"`) and `when`. The chart's aspects: a spot along each line lights the
@@ -84,7 +86,9 @@ plays, then eases back:
 - without: what is drawn inside its disc (a symbol's centre in it; a ring, a line or ticks wholly in it), about the
   spot's centre.
 A say over the scene replaces the reading. Both show as the reader does, one word at a time with its focus letter
-in the accent colour on the centre line, but small and low on the screen, under the drawing.
+in the accent colour on the centre line, but small: low on the screen, under the drawing, or at the layout's `caption_y`
+(sized as at the bottom). In high definition the words sit on a dark backdrop in the fine dust: each forms from the dust,
+the one before breaks into specks that ride the water, and the last one dissolves slower.
 
 **Binding:** any field value may be a string `"$name"`, read from the params the agent sent (`"$title"`, `"$lit"`).
 **Repetition:** an item with `"each": "$list"` is drawn once per element of that list param; inside it, `"@field"` reads the element
@@ -162,7 +166,12 @@ Every declared param must be sent, and nothing else.
 - `glyph` `size` is the asset's width (height keeps its aspect); `text` `size` is the type size; both in glass units.
 - `ball`: `lit` 0..1, `side` -1 or 1, `spin` in degrees per second; `img` (optional) wraps the sphere as an
   equirectangular map.
-- Defaults: `color` #ffffff, `x` / `y` 0, `on` 0, `off` none, `a0` 0, `a1` 360, `n` 12, `len` 0.1, `size` 0.12, `lit` 1, `side` 1.
+- Defaults: `color` #ffffff, `x` / `y` 0, `on` 0, `off` none, `a0` 0, `a1` 360, `n` 12, `len` 0.1, `size` 0.12, `lit` 1, `side` 1,
+  `grow` 1.25; a layout's `caption_y` -0.56.
+- A scene in high definition stands on fine dust (`device/firmware/main/fluid/fluid_fine.h`, the reference
+  `device/creatures/chart-options.html`): single-pixel specks, denser and brighter toward each stroke (fainter round a
+  symbol), never on the drawing, with slow bands of light flowing through them; the water carries them near a tap or
+  the caption.
 - Items paint in order, each covering what is under it: a `disc` of `#000000` erases, a `ball` covers its whole disc
   (its dark side too, with a faint earthshine), as `packages/tools/play.mjs` draws them. A scene queue holds 8.
 - `"$name"` and `"@field"` are always bindings; a literal text cannot start with `$` or `@`.

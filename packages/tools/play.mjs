@@ -147,12 +147,13 @@ function text(it, put) {
 }
 
 /** The items with spot `tap` (its id) tapped and held, as the firmware's scene_player.c grows it: the items in the groups it
- *  lights grown 1.25x about their own centre and brighter, those `when: "lit"` shown; with no lights, what lies inside its
+ *  lights grown by the spot's `grow` (1.25x unless it says) about their own centre and brighter, those `when: "lit"` shown; with no lights, what lies inside its
  *  disc grown about the spot's centre. No tap: the items as built, none `when: "lit"`. */
 const GROW = 1.25, LIT_WHITE = 0.5;
 export function lit(items, tap) {
   const s = tap ? items.find((it) => it.k === 'spot' && it.id === tap) : null, on = new Set((s?.lights ?? '').split(' ').filter(Boolean));
   if (tap && !s) throw new Error(`no spot ${tap}`);
+  const k = s?.grow ?? GROW;
   const white = (c) => `#${hex(c).map((v) => Math.round(v + (255 - v) * LIT_WHITE).toString(16).padStart(2, '0')).join('')}`;
   const inside = (it) => {
     const d = (x, y) => Math.hypot(x - s.x, y - s.y), sr = s.r * 1.001, sd = Math.hypot(s.x, s.y);
@@ -164,8 +165,8 @@ export function lit(items, tap) {
   return items.flatMap((it) => {
     const isLit = on.has(it.group);
     if (it.when === 'lit' && !isLit) return [];
-    if (isLit) return [{ ...it, r: it.r * GROW, size: it.size * GROW, w: it.w * GROW, color: it.when === 'lit' ? it.color : white(it.color) }];
-    if (s && !on.size && inside(it)) { const g = (x, y) => [s.x + (x - s.x) * GROW, s.y + (y - s.y) * GROW], [x, y] = g(it.x, it.y); return [{ ...it, x, y, r: it.r * GROW, len: it.len * GROW, size: it.size * GROW, pts: it.pts?.map(([px, py]) => g(px, py)) }]; }
+    if (isLit) return [{ ...it, r: it.r * k, size: it.size * k, w: it.w * k, color: it.when === 'lit' ? it.color : white(it.color) }];
+    if (s && !on.size && inside(it)) { const g = (x, y) => [s.x + (x - s.x) * k, s.y + (y - s.y) * k], [x, y] = g(it.x, it.y); return [{ ...it, x, y, r: it.r * k, len: it.len * k, size: it.size * k, pts: it.pts?.map(([px, py]) => g(px, py)) }]; }
     return [it];
   });
 }
@@ -216,7 +217,7 @@ export function png(dots, rgb = null, S = PANEL) {
 
 // ---- high definition: the calm scene as the firmware's shapes draw it (scene_player.c makes them,
 // fluid_draw.c's hd_row draws them): each item over what is under it by its anti-aliased coverage
-const HD_EDGE = 0.42, ACCENT = [255, 140, 60], ORP = (n) => (n <= 1 ? 0 : n <= 5 ? 1 : n <= 9 ? 2 : n <= 13 ? 3 : 4);
+const HD_EDGE = 0.42, CAPTION_Y = -0.56, ACCENT = [255, 140, 60], ORP = (n) => (n <= 1 ? 0 : n <= 5 ? 1 : n <= 9 ? 2 : n <= 13 ? 3 : 4);
 const edge = (d) => (d >= 0.5 ? 0 : d <= -0.5 ? 1 : 0.5 - d), sstep = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 /** The calm scene at S x S px (RGB floats) and the dots it keeps (a ball's, an image's): { rgb, kept }. */
 export function hd(pkg, layout, params, t, S = 466, caption = '', tap = '') {
@@ -271,11 +272,11 @@ export function hd(pkg, layout, params, t, S = 466, caption = '', tap = '') {
     else if (it.k === 'glyph' && pkg.assets[it.asset].kind === 'mask') { const a = asset(pkg, it.asset); mask(a.at, a.w, a.h, X(it.x), Y(it.y), it.size * k, ((it.size * a.h) / a.w) * k, it.rot, c); }
     else if (it.k === 'text') run(it.str, it.x, it.y, it.size, c);
   }
-  if (caption) {   // scene_player.c's caption(): shrunk until its farthest corner is inside the glass
+  if (caption) {   // scene_player.c's caption(): shrunk until its farthest corner would be inside the glass at the bottom, at the layout's caption_y
     const orp = Math.min(ORP(caption.length), caption.length - 1), reach = Math.max(orp + 0.5, caption.length - orp - 0.5);
     let size = 0.16;
-    while (size >= 0.04 && (reach * 0.6 * size) ** 2 + (-0.56 - 0.525 * size) ** 2 > 0.95 ** 2) size *= 0.92;
-    run(caption, 0, -0.56, size, [255, 255, 255], orp);
+    while (size >= 0.04 && (reach * 0.6 * size) ** 2 + (CAPTION_Y - 0.525 * size) ** 2 > 0.95 ** 2) size *= 0.92;
+    run(caption, 0, pkg.layouts[layout]?.caption_y ?? CAPTION_Y, size, [255, 255, 255], orp);
   }
   const kept = new Map();
   frame(pkg, layout, params, t, kept, tap);
