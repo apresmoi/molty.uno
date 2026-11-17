@@ -80,6 +80,7 @@ struct cd {
     uint32_t *frgb; float fscroll; bool fvalid, floor_new;
     uint8_t *fcell; uint32_t *fccol;        /* the floor layer as cells (bits, colour), made with it                 */
     uint8_t *touch, *cat; int8_t *bp; uint16_t *bl;   /* per cell: reached by the creature or its halo; its dots; scratch */
+    uint8_t *catm;                          /* per cell: the creature is in it (cd_creature), kept for the frame       */
     const float *world; const cc_shape_t *sh; int ns; uint32_t frame;
     uint32_t prof[CD_STAGES];
 #ifdef ESP_PLATFORM
@@ -156,10 +157,10 @@ cd_t *cd_create(const cc_t *c, int W, int H) {
     d->cdots = CD_CALLOC(NC); d->ccol = CD_CALLOC(sizeof(uint32_t) * NC);
     d->frgb = CD_CALLOC(sizeof(uint32_t) * N);
     d->fcell = CD_CALLOC(NC); d->fccol = CD_CALLOC(sizeof(uint32_t) * NC);
-    d->touch = CD_CALLOC(NC); d->cat = CD_CALLOC(NC); d->bp = CD_CALLOC(NC); d->bl = CD_CALLOC(sizeof(uint16_t) * NC);
+    d->touch = CD_CALLOC(NC); d->cat = CD_CALLOC(NC); d->catm = CD_CALLOC(NC); d->bp = CD_CALLOC(NC); d->bl = CD_CALLOC(sizeof(uint16_t) * NC);
     d->vig = CD_CALLOC(sizeof(float) * N); d->row_zz = CD_CALLOC(sizeof(float) * (size_t)DH); d->row_near = CD_CALLOC(sizeof(float) * (size_t)DH);
     d->wrow = CD_CALLOC(sizeof(int) * (size_t)DH); d->mote_row = CD_CALLOC(sizeof(int) * ((size_t)H + 1));
-    if (!d->dot || !d->cdots || !d->ccol || !d->frgb || !d->fcell || !d->fccol || !d->touch || !d->cat || !d->bp || !d->bl ||
+    if (!d->dot || !d->cdots || !d->ccol || !d->frgb || !d->fcell || !d->fccol || !d->touch || !d->cat || !d->catm || !d->bp || !d->bl ||
         !d->vig || !d->row_zz || !d->row_near || !d->wrow || !d->mote_row) { cd_destroy(d); return NULL; }
     {   /* the fixed colours; the outline's shades are made each frame (their depth range) */
         float iris[3], wh[3];
@@ -176,7 +177,7 @@ cd_t *cd_create(const cc_t *c, int W, int H) {
         for (int q = 0; q < ns; q++) { d->sf[q] = sh[q].kind == CC_BLOB ? sqrtf(1.f - cbrtf(THRESH / sh[q].st)) : 1.f; d->kk[q] = d->sf[q] * d->sf[q]; }
     }
     /* the world's constants */
-    d->horizon = d->floor_row - 16.f * DH / 128.f;
+    d->horizon = CD_HORIZON_AT * DH;
     const float R = DW / 2.f;
     int nm = 0;
     for (int pass = 0; pass < 2; pass++) {      /* count the motes, then keep them (in dot order: by row) */
@@ -219,7 +220,7 @@ void cd_destroy(cd_t *d) {
     if (d->done) vSemaphoreDelete(d->done);
 #endif
     CD_FREE(d->dot); CD_FREE(d->cdots); CD_FREE(d->ccol); CD_FREE(d->frgb); CD_FREE(d->fcell); CD_FREE(d->fccol);
-    CD_FREE(d->touch); CD_FREE(d->cat); CD_FREE(d->bp); CD_FREE(d->bl);
+    CD_FREE(d->touch); CD_FREE(d->cat); CD_FREE(d->catm); CD_FREE(d->bp); CD_FREE(d->bl);
     CD_FREE(d->vig); CD_FREE(d->row_zz); CD_FREE(d->row_near); CD_FREE(d->wrow); CD_FREE(d->mote_row);
     CD_FREE(d->mote_i); CD_FREE(d->mote_band); CD_FREE(d->mote_ph); CD_FREE(d->mote_rgb);
     CD_FREE(d);
@@ -654,7 +655,7 @@ static void ph_cells(cd_t *d, int part) {
     }
     /* cells: the floor's cells as they are, then the cells under the creature's box made again (its dots own their cell;
      * the floor there only outside the halo); a cell's colour is its highest priority dot's, the brightest among those */
-    memcpy(d->cdots + ja * W, d->fcell + ja * W, (size_t)((jb - ja) * W)); memcpy(d->ccol + ja * W, d->fccol + ja * W, sizeof(uint32_t) * (size_t)((jb - ja) * W));
+    memcpy(d->cdots + ja * W, d->fcell + ja * W, (size_t)((jb - ja) * W)); memset(d->catm + ja * W, 0, (size_t)((jb - ja) * W)); memcpy(d->ccol + ja * W, d->fccol + ja * W, sizeof(uint32_t) * (size_t)((jb - ja) * W));
     const int cx0 = d->bx0 >> 1, cx1 = (d->bx1 + 1) >> 1 < W ? (d->bx1 + 1) >> 1 : W;
     const int cy0 = d->by0 >> 2 > ja ? d->by0 >> 2 : ja, cy1 = (d->by1 + 3) >> 2 < jb ? (d->by1 + 3) >> 2 : jb;
     for (int j = cy0; j < cy1; j++) for (int i = cx0; i < cx1; i++) { const int k = j * W + i; if (d->touch[k]) { d->cdots[k] = 0; d->ccol[k] = 0; d->bp[k] = -1; } }
@@ -697,7 +698,7 @@ static void ph_cells(cd_t *d, int part) {
     }
     for (int j = cy0; j < cy1; j++) for (int i = cx0; i < cx1; i++) {
         const int k = j * W + i;
-        if (d->cat[k]) d->cdots[k] = d->cat[k];                   /* a cell with the creature in it shows only its dots */
+        if (d->cat[k]) { d->cdots[k] = d->cat[k]; d->catm[k] = 1; }   /* a cell with the creature in it shows only its dots */
         if (!d->cdots[k]) d->ccol[k] = 0;
         d->cat[k] = 0; d->bp[k] = 0; d->bl[k] = 0; d->touch[k] = 0;   /* the scratch back to clear */
     }
@@ -809,4 +810,5 @@ void cd_draw(cd_t *d, const cc_t *c, uint32_t frame) {
 }
 
 void cd_cells(const cd_t *d, const uint8_t **dots, const uint32_t **rgb) { *dots = d->cdots; *rgb = d->ccol; }
+const uint8_t *cd_creature(const cd_t *d) { return d->catm; }
 void cd_prof(cd_t *d, uint32_t *out) { for (int i = 0; i < CD_STAGES; i++) { out[i] += d->prof[i]; d->prof[i] = 0; } }

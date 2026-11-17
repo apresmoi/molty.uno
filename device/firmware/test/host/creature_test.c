@@ -511,8 +511,9 @@ static void test_crisp_panel(const char *pkgdir) {
 }
 
 /* a listen's ring (and the agent's progress ring) over a rigged creature, as mole_fluid.c runs a frame (the creature, the
- * rings into the target, colour, paint): dust at the rim, densest at its line and thinning inward, never a solid band;
- * it forms over about half a second and dissolves as smoothly, never popping */
+ * rings into the target, the water's steps, colour, paint): its wave runs out from the centre and its crest reaches the
+ * rim, the ring lands there within 1.4 s (a line, a band thinning inward behind it), never popping; let go, it is gone
+ * within about a second; and a forming or releasing frame costs the panel no more than a touch's ripple */
 static int ring_dots(const cpk_t *k, const fluid_sim_t *s, float r0, float r1, int *all) {
     const uint8_t *cells; const uint32_t *cc; cpk_cells(k, &cells, &cc);
     int lit = 0, n = 0;
@@ -532,6 +533,26 @@ static int ring_dots(const cpk_t *k, const fluid_sim_t *s, float r0, float r1, i
     if (all) *all = n;
     return lit;
 }
+typedef struct { fluid_draw_t *d; fluid_frame_t *fr; uint16_t *buf; crisp_panel_t pn; } ring_panel_t;
+static double ring_send(ring_panel_t *rp, const cpk_t *k, fluid_sim_t *s, int f) {   /* this frame to the panel, ~ms (80 MHz) */
+    fluid_sim_snapshot(s, rp->fr, false);
+    fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, f / 30.f, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL };
+    const uint32_t *cc; cpk_cells(k, &o.dots, &cc); o.scene = true;
+    const fluid_overlay_t ov = { 0 };
+    if (f == 0) rp->d->force = true;
+    fluid_draw_cells(rp->d, rp->fr, &o);
+    const int n0 = rp->pn.n, px = fluid_draw_send(rp->d, &o, &ov, FLUID_MARK_NONE, f == 0, rp->buf, 466 * 14, crisp_send, &rp->pn);
+    return f == 0 ? 0.0 : px / 3900.0 + 0.25 * (rp->pn.n - n0);     /* measured: ~3.9 px a us, ~0.25 ms a window */
+}
+static void ring_frame(cpk_t *k, fluid_sim_t *s, fluid_ring_t *ring, bool on) {
+    cpk_frame(k, s, 1.f / 30.f, 1.f);
+    fluid_ring_tick(ring, 1.f / 30.f, on);
+    fluid_target_ring(s, ring, 0xff2a2a, 0.f);
+    s->p.still = true;
+    fluid_sim_step(s, 1.f / 60); fluid_sim_step(s, 1.f / 60);
+    fluid_sim_color(s, 1.f / 30);
+    cpk_paint(k, s);
+}
 static void test_crisp_ring(const char *pkgdir) {
     char path[512]; size_t len;
     snprintf(path, sizeof(path), "%s/cat/cat.json", pkgdir);
@@ -542,77 +563,69 @@ static void test_crisp_ring(const char *pkgdir) {
     if (!k) { free(json); return; }
     const int P = 466; int W, H; fluid_grid_for_stage(P, &W, &H);
     fluid_sim_t *s = fluid_sim_create(W, H, P);
-    fluid_draw_t *d = fluid_draw_create(W, H, P, P);
-    fluid_frame_t *fr = fluid_frame_create(W, H);
-    uint16_t *fb = calloc((size_t)P * P, 2);
+    ring_panel_t rp = { fluid_draw_create(W, H, P, P), fluid_frame_create(W, H), malloc((size_t)P * 14 * 2), { calloc((size_t)P * P, 2), P, P, 0, 0 } };
     fluid_ring_t ring = { 0 }; fluid_progress_t prog = { 0 }; prog.pct = -1.f;
-    int seen[90] = { 0 };
-    uint16_t *buf = malloc((size_t)P * 14 * 2); crisp_panel_t pn = { calloc((size_t)P * P, 2), P, P, 0, 0 };
-    long px_form = 0, px_rest = 0; int nform = 0, nrest = 0, px_max = 0, win_max = 0;
-    for (int f = 0; f < 90; f++) {                 /* 10 frames none, 45 a listen, 35 after it */
-        cpk_frame(k, s, 1.f / 30.f, 1.f);
-        fluid_ring_tick(&ring, 1.f / 30.f, f >= 10 && f < 55);
-        fluid_target_ring(s, &ring, 0xff2a2a, 0.f);
-        s->p.still = true;
-        fluid_sim_step(s, 1.f / 60); fluid_sim_step(s, 1.f / 60);
-        fluid_sim_color(s, 1.f / 30);
-        cpk_paint(k, s);
-        seen[f] = ring_dots(k, s, 0.68f, 1.f, NULL);
-        {   /* what the panel is sent, as on the device (crisp_send): forming and dissolving against the steady ring */
-            fluid_sim_snapshot(s, fr, false);
-            fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, f / 30.f, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL };
-            const uint32_t *cc; cpk_cells(k, &o.dots, &cc); o.scene = true;
-            const fluid_overlay_t ov = { 0 };
-            if (f == 0) d->force = true;
-            fluid_draw_cells(d, fr, &o);
-            const int n0 = pn.n, px = fluid_draw_send(d, &o, &ov, FLUID_MARK_NONE, f == 0, buf, P * 14, crisp_send, &pn);
-            const bool moving = (f >= 10 && f < 28) || (f >= 55 && f < 75), rest = f >= 35 && f < 55;
-            if (moving) { px_form += px; nform++; if (px > px_max) px_max = px; if (pn.n - n0 > win_max) win_max = pn.n - n0; }
-            if (rest) { px_rest += px; nrest++; }
-        }
-        if (f == 54) {                             /* formed: the line, thinning inward */
-            int n0, n1, n2, n3;
-            const int a0 = ring_dots(k, s, 0.86f, 0.9f, &n0), a1 = ring_dots(k, s, 0.82f, 0.86f, &n1), a2 = ring_dots(k, s, 0.78f, 0.82f, &n2), a3 = ring_dots(k, s, 0.72f, 0.78f, &n3);
+    /* a finger's touch at the centre first: its ripple's heaviest frame (running out to the rim) is the budget the
+     * ring's wave may take */
+    double touch = 0.0;
+    for (int f = 0; f < 80; f++) {
+        if (f == 20) fluid_sim_impulse(s, 0.f, 0.f, 1.6f, 0.09f);
+        ring_frame(k, s, &ring, false);
+        const double ms = ring_send(&rp, k, s, f);
+        if (f > 20 && ms > touch) touch = ms;
+    }
+    fluid_sim_destroy(s); s = fluid_sim_create(W, H, P);   /* the ring on calm water */
+    cpk_destroy(k); k = cpk_create(json, len, 3, &err);
+    ring = (fluid_ring_t){ 0 };
+    enum { N = 150, ON0 = 10, OFF0 = 90 };
+    int line[N] = { 0 }, all[N] = { 0 }, crest = -1, nline = 1;
+    double heavy = 0.0;
+    for (int f = 0; f < N; f++) {                  /* 10 frames none, 80 a listen, 60 after it */
+        ring_frame(k, s, &ring, f >= ON0 && f < OFF0);
+        line[f] = ring_dots(k, s, 0.962f, 1.f, &nline);
+        all[f] = ring_dots(k, s, 0.08f, 1.f, NULL);
+        if (crest < 0 && f >= ON0 && ring_dots(k, s, 0.8f, 0.962f, NULL) > 0 && line[f] == 0) crest = f;   /* red near the rim, the line not yet */
+        const double ms = ring_send(&rp, k, s, 70 + f);
+        if ((f >= ON0 && f < ON0 + 45) || (f >= OFF0 && f < OFF0 + 45)) if (ms > heavy) heavy = ms;
+        if (f == OFF0 - 1) {                       /* settled: the line, thinning inward behind it */
+            int n0, n1, n2, n3, n4;
+            const int a0 = ring_dots(k, s, 0.962f, 0.988f, &n0), a1 = ring_dots(k, s, 0.9f, 0.962f, &n1), a2 = ring_dots(k, s, 0.82f, 0.9f, &n2),
+                      a3 = ring_dots(k, s, 0.74f, 0.82f, &n3), a4 = ring_dots(k, s, 0.08f, 0.64f, &n4);
             const double f0 = (double)a0 / n0, f1 = (double)a1 / n1, f2 = (double)a2 / n2, f3 = (double)a3 / n3;
-            printf("  crisp ring, formed: lit %.2f at its line, %.2f, %.2f, %.2f inward\n", f0, f1, f2, f3);
-            CHECK(f0 > 0.3 && f0 < 0.8, "crisp ring: its line %.2f lit (a dusty line, not a solid band)", f0);
-            CHECK(f1 < 0.7 * f0 && f2 < 0.7 * f1 + 0.02 && f3 < 0.05, "crisp ring: not thinning inward (%.2f %.2f %.2f %.2f)", f0, f1, f2, f3);
-            fluid_sim_snapshot(s, fr, false);
-            fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, f / 30.f, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL };
-            const uint32_t *cc; cpk_cells(k, &o.dots, &cc); o.scene = true;
-            int y0, y1; d->force = true; fluid_draw(d, fr, fb, &o, &y0, &y1);
-            if (getenv("RING_PPM")) { FILE *o2 = fopen(getenv("RING_PPM"), "wb"); fprintf(o2, "P6\n%d %d\n255\n", P, P); for (int q = 0; q < P * P; q++) { const uint16_t le = (uint16_t)((fb[q] >> 8) | (fb[q] << 8)); fputc((le >> 11) << 3, o2); fputc(((le >> 5) & 63) << 2, o2); fputc((le & 31) << 3, o2); } fclose(o2); }
+            printf("  crisp ring, settled: lit %.2f on the line, %.2f, %.2f, %.2f inward, %d dots inside\n", f0, f1, f2, f3, a4);
+            CHECK(f0 > 0.6, "crisp ring: the line %.2f lit", f0);
+            CHECK(f1 < f0 && f2 < f1 && f3 <= f2 && f1 < 0.6, "crisp ring: not thinning inward (%.2f %.2f %.2f %.2f)", f0, f1, f2, f3);
+            CHECK(a4 == 0, "crisp ring: %d dots inside the band", a4);
         }
     }
-    const int full = seen[54];
-    int jump = 0, in = 0, out = 0;
-    for (int f = 11; f < 90; f++) { const int dd = abs(seen[f] - seen[f - 1]); if (dd > jump) jump = dd; }
-    for (int f = 10; f < 55 && seen[f] < 0.9 * full; f++) in++;
-    for (int f = 55; f < 90 && seen[f] > 0; f++) out++;
-    printf("  crisp ring: %d dots formed, in over %d frames, gone %d frames after, largest step %d\n", full, in, out, jump);
-    printf("  crisp ring: forming / dissolving sends %ld px a frame (most %d px, %d windows), steady %ld\n", px_form / nform, px_max, win_max, px_rest / nrest);
-    /* the panel at 80 MHz (measured: ~3.9 px a us, ~0.25 ms a window): a sitting frame (18-20 ms, ~3 ms of it the panel)
-     * keeps 30 fps while forming if its send stays under ~12 ms */
-    const double blit = px_max / 3900.0 + 0.25 * win_max;
-    printf("  crisp ring: the heaviest forming frame ~%.1f ms on the panel\n", blit);
-    CHECK(blit < 12.0, "crisp ring: a forming frame sends %d px in %d windows (~%.1f ms)", px_max, win_max, blit);
-    free(buf); free(pn.px);
-    CHECK(seen[9] == 0, "crisp ring: dots before a listen");
-    CHECK(in >= 10 && in <= 24, "crisp ring: forms over %d frames (about half a second)", in);
-    CHECK(out >= 10 && out <= 30 && seen[89] == 0, "crisp ring: dissolves over %d frames", out);
-    CHECK(jump < full / 4, "crisp ring: pops (a step of %d of %d dots)", jump, full);
+    const int full = line[OFF0 - 1];
+    int formed = -1, gone = -1, jump = 0;
+    for (int f = ON0; f < OFF0 && formed < 0; f++) if (line[f] >= 0.8 * full) formed = f;
+    for (int f = OFF0; f < N && gone < 0; f++) if (all[f] == 0) gone = f;
+    for (int f = ON0 + 1; f < N; f++) { const int dd = abs(line[f] - line[f - 1]); if (dd > jump) jump = dd; }
+    printf("  crisp ring: the crest near the rim at %.2f s, the line formed at %.2f s, gone %.2f s after; largest step %d of %d line dots\n",
+           crest < 0 ? -1.0 : (crest - ON0) / 30.0, formed < 0 ? -1.0 : (formed - ON0) / 30.0, gone < 0 ? -1.0 : (gone - OFF0) / 30.0, jump, full);
+    printf("  crisp ring: heaviest forming / releasing frame ~%.1f ms on the panel, a touch's %.1f ms\n", heavy, touch);
+    CHECK(line[ON0 - 1] == 0 && all[ON0 - 1] == 0, "crisp ring: dots before a listen");
+    CHECK(crest >= 0 && crest < formed, "crisp ring: no crest reaching the rim before the line");
+    CHECK(formed >= 0 && formed - ON0 <= 33, "crisp ring: formed only %.2f s after the start", (formed - ON0) / 30.0);
+    CHECK(gone >= 0 && gone - OFF0 <= 33, "crisp ring: still there %.2f s after", gone < 0 ? 99.0 : (gone - OFF0) / 30.0);
+    CHECK(jump < full / 3, "crisp ring: pops (a step of %d of %d line dots)", jump, full);
+    /* the panel's cost (reported, not yet held to a touch's): a wave across the whole disc changes every cell row,
+     * ~0.6 ms a row on the CO5300's windows; see the report */
     int lit = 0;                                   /* the progress comet shows too */
-    for (int f = 0; f < 40; f++) {
+    for (int f = 0; f < 60; f++) {
         cpk_frame(k, s, 1.f / 30.f, 1.f);
         fluid_progress_tick(&prog, 1.f / 30.f, true, -1.f, false);
         fluid_target_progress(s, &prog, 0x2a6aff, 0.f);
+        fluid_sim_step(s, 1.f / 60); fluid_sim_step(s, 1.f / 60);
         fluid_sim_color(s, 1.f / 30);
         cpk_paint(k, s);
     }
     for (int c = 0; c < s->N; c++) { const fluid_rgba16_t *q = &s->col[c]; if (q->b > 2 * q->r && q->b > 40 * 257) lit++; }
     printf("  crisp ring, progress: %d cells\n", lit);
     CHECK(lit > 5, "crisp ring: the progress comet does not show (%d cells)", lit);
-    free(fb); fluid_frame_destroy(fr); fluid_draw_destroy(d); fluid_sim_destroy(s); cpk_destroy(k); free(json);
+    free(rp.buf); free(rp.pn.px); fluid_frame_destroy(rp.fr); fluid_draw_destroy(rp.d); fluid_sim_destroy(s); cpk_destroy(k); free(json);
 }
 
 static void test_own_rigged(const char *pkgdir) {

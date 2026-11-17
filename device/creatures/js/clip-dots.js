@@ -18,7 +18,7 @@
 //   const r = clipDots(rig, W, H);   r.draw(world, cam, frame) -> { on: Uint8Array(2W*4H), rgb: Float32Array(*3), pri: Uint8Array }
 //   r.cells() -> { dots: Uint8Array(W*H) braille bytes, rgb: Uint32Array(W*H) 0xRRGGBB }   (one colour a cell, as the panel draws)
 
-export const VIEW_SIZE = 1.9, FLOOR_AT = 0.62, THRESH = 0.6;
+export const VIEW_SIZE = 1.75, FLOOR_AT = 0.72, HORIZON_AT = 0.495, THRESH = 0.6;   // the creature on the near floor, larger
 const STRUCT = ['torso', 'hindL', 'hindR', 'head', 'legF.L', 'legF.R', 'tail', 'bowl', 'yarn'];
 const FEAT = ['eye', 'earIn', 'nose', 'maw', 'tongue', 'whisker', 'chest', 'milk', 'yarnline'];
 export const hash3 = (i, j, k) => {
@@ -216,7 +216,7 @@ export function clipDots(rig, W, H) {
       const halo = new Uint8Array(N);
       for (let i = 0; i < N; i++) if (own[i] >= 0 || on[i]) { const X = i % DW, Y = (i / DW) | 0;
         for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) { const x = X + dx, y = Y + dy; if (x >= 0 && y >= 0 && x < DW && y < DH && dx * dx + dy * dy <= 5) halo[y * DW + x] = 1; } }
-      const scroll = (cam.c[0] * cam.r[0] + cam.c[2] * cam.r[2]) / dsx, horizon = floorRow - 16 * DH / 128, R = DW / 2, flr = hex('#8f87c4'), tex = hex('#6c6598'), dim = hex('#5c5688'), mote = hex('#b4acec');
+      const scroll = (cam.c[0] * cam.r[0] + cam.c[2] * cam.r[2]) / dsx, horizon = HORIZON_AT * DH, R = DW / 2, flr = hex('#8f87c4'), tex = hex('#6c6598'), dim = hex('#5c5688'), mote = hex('#b4acec');
       for (let Y = 0; Y < DH; Y++) for (let X = 0; X < DW; X++) {
         const i = Y * DW + X; if (halo[i]) continue;
         const ex = (X + 0.5 - DW / 2) / R, ey = (Y + 0.5 - DH / 2) / (DH / 2), rr = Math.sqrt(ex * ex + ey * ey);

@@ -22,8 +22,9 @@
 extern "C" {
 #endif
 
-#define CD_VIEW_SIZE 1.9f        /* world units across the panel                                      */
-#define CD_FLOOR_AT  0.62f       /* the floor under the creature, as a fraction of the panel's height  */
+#define CD_VIEW_SIZE 1.75f       /* world units across the panel                                      */
+#define CD_FLOOR_AT  0.72f       /* where the creature stands: the near floor, below the middle       */
+#define CD_HORIZON_AT 0.495f     /* the floor's horizon, as a fraction of the panel's height          */
 
 typedef struct cd cd_t;
 
@@ -34,6 +35,8 @@ void  cd_destroy(cd_t *d);
 void  cd_draw(cd_t *d, const cc_t *c, uint32_t frame);
 /** The cells of the last draw: a braille byte (fluid_braille_bit order) and a colour 0xRRGGBB a cell. */
 void  cd_cells(const cd_t *d, const uint8_t **dots, const uint32_t **rgb);
+/** Per cell of the last draw: 1 where the creature's own dots are (not the world's). */
+const uint8_t *cd_creature(const cd_t *d);
 #define CD_STAGES 8
 /** Cycles spent per stage since the last call, added into out[CD_STAGES]: projection, the body and the solid parts, lines,
  *  features, the halo's rows, the halo's columns with the world and the cells; then, within those, the waits for the

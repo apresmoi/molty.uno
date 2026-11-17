@@ -122,7 +122,7 @@ void cpk_paint(cpk_t *k, fluid_sim_t *s) {
     /* the rings (a listen's, a question's, the agent's progress: the target's ink at the rim, after the creature's frame
      * cleared it) over them, as dust */
     if (!k->ring) k->ring = cr_create(s);
-    if (k->ring) cr_paint(k->ring, s, k->dt, k->frame, k->cells, s->col);
+    if (k->ring) cr_paint(k->ring, s, k->dt, k->frame, cd_creature(k->dots), k->cells, s->col);
 }
 
 static void impulse(void *ctx, float x, float y, float s, float r) { fluid_sim_impulse(ctx, x, y, s, r); }
