@@ -274,11 +274,6 @@ static struct {
 static bool  s_listen = false;                  /* task copy of s_listen_in */
 #define FLUID_CRISP_LISTEN_RGB 0xFF2C3E           /* a rigged creature's listen ring (ring-options.html)       */
 static int32_t s_ring_rgb = -1, s_ring_def = -1;   /* task copies of s_ring_in / s_ring_dflt */
-/* a wait or step that took over STALL_AT_MS: logged with where (the panel and the sim stall together when one of them
- * blocks the other; /api/log stall.at shows which) */
-#define STALL_AT_MS 200
-#define STALL_AT(tag, t0) do { const int64_t _d = esp_timer_get_time() - (t0); if (_d > STALL_AT_MS * 1000) mole_diag_event(false, "stall.at %s %d ms", tag, (int)(_d / 1000)); } while (0)
-
 static fluid_ring_t s_rg;                       /* the listening ring (fluid_ring.h)     */
 #ifdef MOLTY_DIAG_RING
 static volatile int64_t s_diag_ring_until;      /* a debug build's ring without a listen (mole_fluid_diag_ring) */
@@ -804,7 +799,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     }
     case ST_CREATURE:
         if (cr_loaded()) {
-            if (s_cpk) { cpk_set_work(s_cpk, fd_working(&s_dir)); const int64_t _ts = esp_timer_get_time(); cpk_frame(s_cpk, s, rdt, swell); STALL_AT("sim.cpk_frame", _ts); }    /* engine + player + body + ambient + fill */
+            if (s_cpk) { cpk_set_work(s_cpk, fd_working(&s_dir)); cpk_frame(s_cpk, s, rdt, swell); }    /* engine + player + body + ambient + fill */
             else cute_rt_update(s_cute, rdt);              /* mood engine + kit + behaviours */
             {   /* paddle's strokes splash the real water, either side of the creature */
                 static float act_t0;
@@ -869,9 +864,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         /* the listen ring red (ring-options.html), unless the agent or the settings gave it one */
         cpk_listen(s_cpk, s_ring_rgb >= 0 ? s_ring_rgb : s_ring_def >= 0 ? s_ring_def : FLUID_CRISP_LISTEN_RGB, s_rg.ink);
         FLUID_PROF_BEGIN(cpaint);
-        const int64_t _tp = esp_timer_get_time();
         cpk_paint(s_cpk, s);
-        STALL_AT("sim.cpk_paint", _tp);
         FLUID_PROF_END(FP_C_FILL, cpaint);                 /* prof_ms.c_fill: a rigged creature's paint and rings */
     }
     if (!still) fluid_sim_view(s);
@@ -1087,30 +1080,14 @@ static void draw_task(void *arg) {
     fluid_overlay_t ov_drawn = { 0 };                   /* the overlay on screen */
     while (s_run) {
         esp_task_wdt_reset();
-        if (xSemaphoreTake(s_go, pdMS_TO_TICKS(200)) != pdTRUE) {
-            if (s_task && atomic_load(&s_screen)) {   /* no frame for 200 ms with the screen on: who has the sim's core */
-                TaskHandle_t ws = xTaskGetHandle("websocket_task");
-                const eTaskState st = eTaskGetState(s_task);
-                char run1[16] = "?";
-#if configNUMBER_OF_CORES > 1
-                TaskHandle_t c1 = xTaskGetCurrentTaskHandleForCore(1);
-                if (c1) snprintf(run1, sizeof(run1), "%s", pcTaskGetName(c1));
-#endif
-                mole_diag_event(false, "stall.probe sim=%s core1=%s ws_prio=%d",
-                                st == eRunning ? "running" : st == eReady ? "ready" : st == eBlocked ? "blocked" : "other",
-                                run1, ws ? (int)uxTaskPriorityGet(ws) : -1);
-            }
-            continue;
-        }
+        if (xSemaphoreTake(s_go, pdMS_TO_TICKS(200)) != pdTRUE) continue;
         if (!s_run) { xSemaphoreGive(s_idle); break; }
         int64_t t0 = esp_timer_get_time();
         int64_t touch_t = s_dtouch; s_dtouch = 0;
         if (t0 - last_touch >= FLUID_TOUCH_US) {        /* for the sim's next frame */
             uint16_t xs[MOLTY_TOUCH_MAX_POINTS] = { 0 }, ys[MOLTY_TOUCH_MAX_POINTS] = { 0 };
-            const int64_t _ts1089 = esp_timer_get_time();
             const int n = molty_touch_poll(xs, ys, MOLTY_TOUCH_MAX_POINTS);
-            STALL_AT("draw.touch", _ts1089);
-            { const int64_t _ts = esp_timer_get_time(); xSemaphoreTake(s_mutex, portMAX_DELAY); STALL_AT("draw.mutex", _ts); }
+            xSemaphoreTake(s_mutex, portMAX_DELAY);
             s_tp = (touch_read_t){ n, xs[0], ys[0], t0, s_tp.seq + 1 };
             xSemaphoreGive(s_mutex);
             last_touch = t0;
@@ -1134,13 +1111,9 @@ static void draw_task(void *arg) {
             /* overlays blend over the pixel under them: redraw the cells under the last
              * one (restores what it covered) and the next one, then draw it on top */
             else { fluid_draw_overlay_dirty(s_draw, &ov_drawn); fluid_draw_overlay_dirty(s_draw, &ov); }
-            const int64_t _ts1114 = esp_timer_get_time();
             nc = fluid_draw_cells(s_draw, s_frame, &s_dopts);
-            STALL_AT("draw.cells", _ts1114);
             t1 = esp_timer_get_time();
-            const int64_t _ts1116 = esp_timer_get_time();
             bool sent = fluid_draw_send2(s_draw, &s_dopts, &ov, mark, full, s_win, s_win2, s_win_px, send_win, NULL) >= 0;
-            STALL_AT("draw.send", _ts1116);
             if (s_win2) { const int64_t tw = esp_timer_get_time(); sent &= molty_display_blit_wait() == ESP_OK; s_blit_us += esp_timer_get_time() - tw; }
             s_full_flush = !sent;                       /* a window that failed: repaint all */
             mark_drawn = mark; pal_drawn = s_dopts.palette; ov_drawn = ov;
@@ -1162,7 +1135,7 @@ static void draw_task(void *arg) {
         pema[0] = pema[0] * 0.9f + (float)fluid_prof[FP_DSAMPLE] / (float)s_cpu_mhz / 1000.f * 0.1f;
         pema[1] = pema[1] * 0.9f + (float)fluid_prof[FP_DRASTER] / (float)s_cpu_mhz / 1000.f * 0.1f;
         fluid_prof[FP_DSAMPLE] = fluid_prof[FP_DRASTER] = 0;
-        { const int64_t _ts = esp_timer_get_time(); xSemaphoreTake(s_mutex, portMAX_DELAY); STALL_AT("draw.mutex2", _ts); }
+        xSemaphoreTake(s_mutex, portMAX_DELAY);
         s_stats.draw_ms = dms; s_stats.flush_ms = lms; s_stats.cells_drawn = nc;
         s_stats.send_n = s_stats.send_n * 0.9f + s_send_n * 0.1f; s_stats.send_kpx = s_stats.send_kpx * 0.9f + s_send_px / 1000.f * 0.1f;
         s_stats.blit_ms = s_stats.blit_ms * 0.9f + s_blit_us / 1000.f * 0.1f;
@@ -1244,7 +1217,7 @@ static void fluid_task(void *arg) {
         int req = -1, req_fx = 0; bool req_reel = false, req_hold = false;
         float rip[FLUID_RIPPLE_Q][3]; int nrip = 0;
         bool text_changed = false, text_append = false;
-        { const int64_t _ts = esp_timer_get_time(); xSemaphoreTake(s_mutex, portMAX_DELAY); STALL_AT("sim.mutex", _ts); }
+        xSemaphoreTake(s_mutex, portMAX_DELAY);
         cfg = s_cfg;
         req = s_req_state; req_fx = s_req_fx; req_hold = s_req_text_hold; s_req_state = -1;
         const bool req_implied = s_req_implied; s_req_implied = false;
@@ -1343,10 +1316,10 @@ static void fluid_task(void *arg) {
         }
 
         int64_t t0 = esp_timer_get_time();
-        { const int64_t _ts = esp_timer_get_time(); sim_frame(rdt, &cfg); STALL_AT("sim.frame", _ts); }
+        sim_frame(rdt, &cfg);
         int64_t t1 = esp_timer_get_time();
         /* hand the frame to the drawer: wait until it finished the previous one */
-        { const int64_t _ts = esp_timer_get_time(); xSemaphoreTake(s_idle, portMAX_DELAY); STALL_AT("sim.idle", _ts); }
+        xSemaphoreTake(s_idle, portMAX_DELAY);
         if (s_dir.bye) {   /* the goodbye's fade: the panel's level, with the drawer idle */
             const float l = fd_bye_level(&s_dir);
             if (s_bye_lvl - l >= 0.02f || (l <= 0.f && s_bye_lvl > 0.f)) {
@@ -1408,7 +1381,7 @@ static void fluid_task(void *arg) {
             prof_ema[q] = prof_ema[q] * 0.9f + (float)fluid_prof[q] / (float)s_cpu_mhz / 1000.f * 0.1f;
             fluid_prof[q] = 0;
         }
-        { const int64_t _ts = esp_timer_get_time(); xSemaphoreTake(s_mutex, portMAX_DELAY); STALL_AT("sim.mutex2", _ts); }
+        xSemaphoreTake(s_mutex, portMAX_DELAY);
         memcpy(s_stats.prof_ms, prof_ema, sizeof(float) * FP_DSAMPLE);
         s_stats.fps = fps; s_stats.frame_ms = fms; s_stats.pre_ms = pms; s_stats.sim_ms = sms; s_stats.wait_ms = wms;
         s_stats.energy = s_sim->energy; s_stats.err = s_sim->err;
