@@ -863,7 +863,9 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     if (s_crisp) {                                         /* a rigged creature: each cell its dots' colour, and the rings */
         /* the listen ring red (ring-options.html), unless the agent or the settings gave it one */
         cpk_listen(s_cpk, s_ring_rgb >= 0 ? s_ring_rgb : s_ring_def >= 0 ? s_ring_def : FLUID_CRISP_LISTEN_RGB, s_rg.ink);
+        FLUID_PROF_BEGIN(cpaint);
         cpk_paint(s_cpk, s);
+        FLUID_PROF_END(FP_C_FILL, cpaint);                 /* prof_ms.c_fill: a rigged creature's paint and rings */
     }
     if (!still) fluid_sim_view(s);
     s_shimmer = 0.12f + (thinking ? 0.35f : 0.f) + cfg->mic * 0.4f;
