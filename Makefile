@@ -14,6 +14,8 @@ help:
 	@echo "  make firmware       idf.py build: the 1.46 in device/firmware/build (needs 'make console' first; never flashes)"
 	@echo "  make firmware BOARD=waveshare/esp32-s3-touch-lcd-1.28"
 	@echo "                      one board, in device/firmware/build/<name>/ (tools/scripts/firmware-build.sh)"
+	@echo "  make firmware BOARD=... DIAG_RING=1"
+	@echo "                      a debug build: POST /api/diag/ring?ms= shows the listening ring, no audio"
 	@echo "  make firmware-all   every board under device/firmware/boards/ (each in device/firmware/build/<name>/)"
 	@echo "  make cli            apps/cli/bin/molty"
 	@echo "  make creatures      re-export device/creatures/molty/*.molty from the cute-kit specs"
@@ -57,7 +59,7 @@ firmware:
 ifeq ($(BOARD),)
 	. "$(IDF_PATH)/export.sh" >/dev/null && cd device/firmware && idf.py build
 else
-	. "$(IDF_PATH)/export.sh" >/dev/null && tools/scripts/firmware-build.sh "$(BOARD)"
+	. "$(IDF_PATH)/export.sh" >/dev/null && MOLTY_DIAG_RING="$(DIAG_RING)" tools/scripts/firmware-build.sh "$(BOARD)"
 endif
 
 firmware-all:

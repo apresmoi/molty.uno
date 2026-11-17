@@ -26,7 +26,7 @@ const ATTEND = 'listening', ATTEND_S = 3;   // called, it sits up attending in t
 const FRONT = 0.15;   // facing front this near the middle (across the frame) it only perks up
 const COME_R = 0.08, COME_K = 3, COME_S = 8;   // at the front this near the middle across, facing front; steering; or after walking this long
 const PACE = 0.6;   // the most the body moves a second (world units): above a walk's 0.36 (creature_clip.c CC_PACE)
-const EDGE = 0.35;  // walking past this far from the frame's centre (world units, across) turns it round (creature_clip.c CC_EDGE)
+const EDGE = 0.25;  // walking past this far from the frame's centre (world units, across) turns it round (creature_clip.c CC_EDGE)
 const EPS = 1e-5;   // a clip's end, against float clocks (the C player's time is float steps)
 
 /** Decode a clip's channels: per channel the node, path, keys (frames) and float outputs. */

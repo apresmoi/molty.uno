@@ -189,8 +189,9 @@ idf_component_register(
         ${CREATURE_FILES}       # the built-in creature packages (packages/<id>/<id>.json)
 )
 
-# A debug build's ring without a listen (POST /api/diag/ring?ms=): MOLTY_DIAG_RING=1 in the build's environment
-if(DEFINED ENV{MOLTY_DIAG_RING})
+# A debug build's ring without a listen (POST /api/diag/ring?ms=): make firmware BOARD=... DIAG_RING=1
+# (tools/scripts/firmware-build.sh passes -DMOLTY_DIAG_RING=ON, or OFF for a plain build)
+if(MOLTY_DIAG_RING)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE MOLTY_DIAG_RING=1)
 endif()
 

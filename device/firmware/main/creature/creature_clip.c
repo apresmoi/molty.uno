@@ -423,7 +423,7 @@ int cc_route(const cc_t *c, int a, int b, int *out, int max) {
 #define CC_FRONT 0.15f                  /* facing front this near the middle (across the frame) it only perks up       */
 static void attend(cc_t *c);
 #define CC_PACE 0.6f                    /* the most it moves a second (world units): above a walk's 0.36           */
-#define CC_EDGE 0.35f                   /* walking past this far from the frame's centre (world units, across) turns it */
+#define CC_EDGE 0.25f                   /* walking past this far from the frame's centre (world units, across) turns it */
 static void turn(cc_t *c, float dt) {
     const clip_t *cc = &c->clip[c->cur_clip];
     const float *W = c->world;

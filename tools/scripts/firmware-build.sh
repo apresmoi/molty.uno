@@ -11,6 +11,7 @@
 #   tools/scripts/firmware-build.sh <board>     a folder (waveshare/esp32-s3-touch-lcd-1.28)
 #                                         or a board.json name
 #   tools/scripts/firmware-build.sh --all       every board under device/firmware/boards/
+#   MOLTY_DIAG_RING=1 ...                        a debug build: POST /api/diag/ring?ms= (the ring without a listen)
 #
 # Prints the build dir(s); the images are <build-dir>/molty.bin etc.
 set -euo pipefail
@@ -24,7 +25,9 @@ build_one() {
   name="$(python3 "$BOARDS" name "$1")"
   out="$ROOT/device/firmware/build/$name"
   echo "firmware-build: $dir -> $out"
-  idf.py -C "$ROOT/device/firmware" -B "$out" -DSDKCONFIG="$out/sdkconfig" -DMOLTY_BOARD="$dir" build
+  # MOLTY_DIAG_RING=1: a debug build (POST /api/diag/ring); always passed, so a later plain build turns it off again
+  local diag=OFF; [ -n "${MOLTY_DIAG_RING:-}" ] && [ "${MOLTY_DIAG_RING}" != 0 ] && diag=ON
+  idf.py -C "$ROOT/device/firmware" -B "$out" -DSDKCONFIG="$out/sdkconfig" -DMOLTY_BOARD="$dir" -DMOLTY_DIAG_RING="$diag" build
   python3 "$BOARDS" check-image "$out/molty.bin" "$dir"
 }
 
