@@ -49,6 +49,8 @@ extern "C" {
 #define FINE_LIGHT_FLOOR 0.5f
 #define FINE_LIGHT_GRID  8              /* px: sampled on this grid, bilinear (the page: 4; its ridges are ~20 px wide) */
 #define FINE_LIGHT_SPEED 0.55f
+#define FINE_PHASES      4              /* the light's changes go in every 4th cell row a frame (the panel's time; the
+                                         * light moves ~0.5 px a frame, so a row a cell high changes about as often) */
 /* the caption (chart-engine.js PATCH .. GRAIN) */
 #define FINE_PATCH0      10.f           /* px from the word's box: dark .. (the page: 4; Juan: darker, wider) */
 #define FINE_PATCH1      72.f           /* .. to all the dust (the page: 40)                     */
@@ -104,7 +106,8 @@ typedef struct fluid_fine {
     uint8_t *ride;                      /* N: the dust rides the water there (near a tapped drawing or the caption) */
     uint32_t ride_key;                  /* what ride was worked out for                          */
     int mx, my;                         /* the largest shift this frame, px (the windows' reach) */
-    uint8_t lrow;                       /* which half of the light's grid rows moves this frame  */
+    uint8_t lrow;                       /* which quarter of the light's grid rows, and of the cell rows' light-dependent
+                                         * specks, is worked out this frame (FINE_PHASES)        */
     bool lall;                          /* all of it next frame (a new set)                      */
     uint32_t prof_frame, prof_rect, prof_n;   /* us spent (fluid_fine_frame, fluid_fine_rect) over prof_n frames */
     uint32_t *sig, *sig0;               /* N: what each cell's dust is this frame, and as last drawn */

@@ -802,7 +802,9 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
             /* a scene in high definition, calm: a cell whose drawing, halo, dust seed and wave are as
              * they were is not looked at again */
             const bool dust_same = hd && (o->fine ? o->fine->sig[k] == o->fine->sig0[k] : d->hde[k] == seed);
-            if (hd && !d->force && o->dust <= 0.f && !d->hch[k] && dust_same && s->mask[k] && !d->skip[k] && key_hd(d->key[k]) &&
+            /* a calm cell's light goes only with its quarter of the rows: the others are not looked at (fluid_fine_frame) */
+            const bool light_later = hd && o->fine && !dust_same && !o->fine->slow[k] && j % FINE_PHASES != o->fine->lrow;
+            if (hd && !d->force && o->dust <= 0.f && !d->hch[k] && (dust_same || light_later) && s->mask[k] && !d->skip[k] && key_hd(d->key[k]) &&
                 hd_still(s, o, i, j, k) && hd_sig(o->dots, W, H, i, j) == d->hds[k]) { d->dirty[k] = 0; continue; }
             if (crisp && s->mask[k] && !d->skip[k]) {
                 /* crisp dots (a rigged creature): a cell the wave leaves in place shows its own dots in its own
@@ -829,8 +831,11 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
             bool dirty = key == KEY_SKIP || d->force || key != d->key[k] || col != d->col[k] || sig != d->hds[k] || (hd && o->fine && !dust_same);
             /* on fine dust, what only the water and the light change goes in every other cell row a frame, alternating
              * (the panel's cost is by the row); the drawing's own changes go at once */
-            if (dirty && hd && o->fine && !d->force && d->key[k] != KEY_STALE && key_hd(d->key[k]) && sig == d->hds[k] && !d->hch[k] &&
-                ((j + d->ilace) & 1)) { d->dirty[k] = 0; continue; }
+            if (dirty && hd && o->fine && !d->force && d->key[k] != KEY_STALE && key_hd(d->key[k]) && sig == d->hds[k] && !d->hch[k]) {
+                /* the light's alone (a calm cell, nothing else changed) goes with its quarter of the rows (fluid_fine_frame) */
+                const bool light_only = key == d->key[k] && col == d->col[k] && !o->fine->slow[k] && !(o->still && o->still[k] == 2);
+                if (light_only ? j % FINE_PHASES != o->fine->lrow : ((j + d->ilace) & 1)) { d->dirty[k] = 0; continue; }
+            }
             if (dirty && hd && o->fine) o->fine->sig0[k] = o->fine->sig[k];   /* the dust as drawn */
             d->dirty[k] = (uint8_t)(lt_cell ? 2 : dirty);
             if (dirty) {
@@ -1271,9 +1276,6 @@ int fluid_draw_send2(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fl
     const bool runs = o->scene && o->dots && o->shapes;
     /* crisp dots alone (a rigged creature): few, larger windows on whole row pairs (crisp_send) */
     if (o->scene && o->dots && !o->shapes && !full) return crisp_send(d, o, ov, mark, &sd);
-    /* a scene on fine dust: its changes are spread thin over the disc (the light's fronts, the dust riding a wave), so
-     * the same few larger boxes cost the panel less than a window a run */
-    if (o->scene && o->dots && o->shapes && o->fine && !full) return crisp_send(d, o, ov, mark, &sd);
     for (int j = 0; j < (full ? 1 : d->H); j++) {
         int a = full ? 0 : d->span[2 * j];
         const int end = full ? 0 : d->span[2 * j + 1];
