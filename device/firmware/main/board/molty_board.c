@@ -180,6 +180,8 @@ esp_err_t molty_display_blit_wait(void)
     return (s_caps & MOLTY_CAP_DISPLAY) && B.blit_wait ? B.blit_wait() : ESP_OK;
 }
 
+void molty_display_blit_prof(uint32_t *out) { if ((s_caps & MOLTY_CAP_DISPLAY) && B.blit_prof) B.blit_prof(out); }
+
 bool molty_display_blit_can_overlap(void) { return (s_caps & MOLTY_CAP_DISPLAY) && B.blit_async && B.blit_wait; }
 
 esp_err_t molty_display_power(bool on)

@@ -391,6 +391,7 @@ typedef struct {
                                         * wave left them in place, and its colour's bytes, as last looked at */
     uint32_t *csig;
     bool     crisp0;                   /* the last frame was crisp dots: those are what the cells show */
+    uint8_t  ilace;                    /* which half of the water-only cells updates this frame (0/1)   */
     int16_t  cap[4], cap0[4];          /* the subtitle's box in dots [x0, x1] x [y0, y1], last frame's */
     int16_t  sb[FLUID_MAX_SHAPES][4];  /* this frame's shapes' boxes, fb px [x0, x1) x [y0, y1) */
     int16_t  sb0[FLUID_MAX_SHAPES][4]; /* ...the last frame's, and each one's hash: a shape that  */

@@ -62,6 +62,7 @@ struct cd {
     uint8_t *cdots; uint32_t *ccol;
     int bx0, by0, bx1, by1;                 /* this frame's box (dots) [x0, x1) x [y0, y1)                          */
     int ux0, uy0, ux1, uy1;                 /* ... and its union with last frame's: what is cleared                 */
+    int share;                              /* percent of the rows' work in the first band (cd_set_share)             */
     int split, csplit;                      /* the bands' split: a dot row for the box passes, a cell row for cells */
     cam_t cam;
     uint32_t pal[C_N]; float body[3];
@@ -149,7 +150,7 @@ static void split_run(cd_t *d, band_fn fn) { fn(d, 0); fn(d, 1); }   /* the same
 cd_t *cd_create(const cc_t *c, int W, int H) {
     cd_t *d = CD_CALLOC(sizeof(cd_t));
     if (!d) return NULL;
-    d->W = W; d->H = H; d->DW = 2 * W; d->DH = 4 * H; d->N = d->DW * d->DH;
+    d->W = W; d->H = H; d->DW = 2 * W; d->DH = 4 * H; d->N = d->DW * d->DH; d->share = CD_SHARE;
     d->dsx = CD_VIEW_SIZE / d->DW; d->dsy = CD_VIEW_SIZE / d->DH; d->floor_row = CD_FLOOR_AT * d->DH;
     const size_t N = (size_t)d->N, NC = (size_t)W * H;
     const int DW = d->DW, DH = d->DH;
@@ -335,10 +336,10 @@ static void grow(box_t *acc, box_t b) {
     if (b.y1 > acc->y1) acc->y1 = b.y1;
 }
 /* a cell row (times 4) where the running sum of w over [y0, y1) reaches the first band's share */
-static int balance(const int *w, int y0, int y1) {
+static int balance(const int *w, int y0, int y1, int share) {
     long tot = 0, run = 0;
     for (int Y = y0; Y < y1; Y++) tot += w[Y];
-    for (int Y = y0; Y < y1; Y++) if ((run += w[Y]) * 100 >= tot * CD_SHARE) return (Y + 2) & ~3;
+    for (int Y = y0; Y < y1; Y++) if ((run += w[Y]) * 100 >= tot * share) return (Y + 2) & ~3;
     return (y0 + y1) / 2 & ~3;
 }
 
@@ -763,7 +764,7 @@ void cd_draw(cd_t *d, const cc_t *c, uint32_t frame) {
     }
     d->bx0 = nb.x0; d->bx1 = nb.x1; d->by0 = nb.y0; d->by1 = nb.y1;
     d->rx0 = d->ry0 = 0; d->rx1 = d->ry1 = -1;
-    d->split = balance(d->wrow, d->by0, d->by1);
+    d->split = balance(d->wrow, d->by0, d->by1, d->share);
     {   /* the blobs nearest first (by their nearest point): a dot already as near is passed over at once. The field is
          * a sum of whole steps (any order), so only equal depths could tell the orders apart */
         d->nord = 0;
@@ -803,7 +804,7 @@ void cd_draw(cd_t *d, const cc_t *c, uint32_t frame) {
         d->floor_new = !d->fvalid || fabsf(scroll - d->fscroll) > 1e-4f;
         if (d->floor_new) { d->fvalid = true; d->fscroll = scroll; }
         for (int Y = 0; Y < DH; Y++) d->wrow[Y] = (Y >= d->by0 && Y < d->by1 ? 2 * (d->bx1 - d->bx0) : 0) + (d->floor_new && Y > d->horizon ? DW : 0) + 8;
-        d->csplit = balance(d->wrow, 0, DH) >> 2;
+        d->csplit = balance(d->wrow, 0, DH, d->share) >> 2;
     }
     split_run(d, ph_cells);
     PROF_STAGE(ST_CELLS);
@@ -811,4 +812,5 @@ void cd_draw(cd_t *d, const cc_t *c, uint32_t frame) {
 
 void cd_cells(const cd_t *d, const uint8_t **dots, const uint32_t **rgb) { *dots = d->cdots; *rgb = d->ccol; }
 const uint8_t *cd_creature(const cd_t *d) { return d->catm; }
+void cd_set_share(cd_t *d, int pct) { d->share = pct < 20 ? 20 : pct > 90 ? 90 : pct; }
 void cd_prof(cd_t *d, uint32_t *out) { for (int i = 0; i < CD_STAGES; i++) { out[i] += d->prof[i]; d->prof[i] = 0; } }

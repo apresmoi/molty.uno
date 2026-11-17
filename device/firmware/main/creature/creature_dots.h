@@ -37,6 +37,8 @@ void  cd_draw(cd_t *d, const cc_t *c, uint32_t frame);
 void  cd_cells(const cd_t *d, const uint8_t **dots, const uint32_t **rgb);
 /** Per cell of the last draw: 1 where the creature's own dots are (not the world's). */
 const uint8_t *cd_creature(const cd_t *d);
+/** The first band's share of the rows' work, percent (20..90; CD_SHARE at first): the caller balances the two cores. */
+void  cd_set_share(cd_t *d, int pct);
 #define CD_STAGES 8
 /** Cycles spent per stage since the last call, added into out[CD_STAGES]: projection, the body and the solid parts, lines,
  *  features, the halo's rows, the halo's columns with the world and the cells; then, within those, the waits for the
