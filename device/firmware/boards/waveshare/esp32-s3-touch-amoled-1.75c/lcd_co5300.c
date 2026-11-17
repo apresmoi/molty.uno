@@ -89,7 +89,8 @@ static esp_err_t send(int x, int y, int w, int h, const uint16_t *px)
 }
 
 static bool s_pending = false;             /* an async blit's pixels are still going out (lcd_co5300_blit_async) */
-static uint32_t s_prof[3];                 /* us since the last lcd_co5300_blit_prof: mirror copy, waiting, commands+queue */
+static uint32_t s_prof[3];
+static bool s_mirror = true;               /* async blits keep the framebuffer mirror (lcd_co5300_mirror)          */                 /* us since the last lcd_co5300_blit_prof: mirror copy, waiting, commands+queue */
 
 /* wait for the async blit's transfer, if one is out (its give is the next on s_sent) */
 static esp_err_t wait_pending(void)
@@ -236,8 +237,8 @@ esp_err_t lcd_co5300_blit_async(int x, int y, int w, int h, const uint16_t *px)
 {
     if (!s_io || !s_fb) return ESP_ERR_INVALID_STATE;
     const int64_t t0 = esp_timer_get_time();
-    for (int r = 0; r < h; r++)                         /* the mirror, while the last window still goes out */
-        memcpy(s_fb + (size_t)(y + r) * LCD_WIDTH + x, px + (size_t)r * w, (size_t)w * sizeof(uint16_t));
+    if (s_mirror || (y & 1) || (h & 1))                 /* the mirror, while the last window still goes out */
+        for (int r = 0; r < h; r++) memcpy(s_fb + (size_t)(y + r) * LCD_WIDTH + x, px + (size_t)r * w, (size_t)w * sizeof(uint16_t));
     const int ya = (y + 1) & ~1, yb = (y + h) & ~1;
     const int64_t t1 = esp_timer_get_time();
     esp_err_t e = wait_pending();                       /* the last window out: its buffer and the bus are free */
@@ -258,5 +259,7 @@ esp_err_t lcd_co5300_blit_wait(void)
     s_prof[1] += (uint32_t)(esp_timer_get_time() - t);
     return e;
 }
+
+void lcd_co5300_mirror(bool on) { s_mirror = on; }
 
 void lcd_co5300_blit_prof(uint32_t *out) { for (int i = 0; i < 3; i++) { out[i] += s_prof[i]; s_prof[i] = 0; } }

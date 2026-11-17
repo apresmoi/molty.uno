@@ -126,6 +126,7 @@ typedef struct {
     esp_err_t (*blit_async)(int x, int y, int w, int h, const uint16_t *px);   /* optional: see molty_display_blit_async */
     esp_err_t (*blit_wait)(void);                 /* optional, with blit_async                                    */
     void      (*blit_prof)(uint32_t *out);        /* optional: us in the async blits, see molty_display_blit_prof */
+    void      (*blit_mirror)(bool on);            /* optional: see molty_display_blit_mirror                        */
     esp_err_t (*display_power)(bool on);          /* optional: panel off / on (sleep, backlight)  */
     esp_err_t (*display_level)(uint8_t level);    /* optional: brightness 0..255 (255 at power on) */
     esp_err_t (*power_off)(void);                 /* optional: cut the power; returns only on failure */
@@ -205,6 +206,9 @@ esp_err_t molty_display_blit_wait(void);
 bool      molty_display_blit_can_overlap(void);
 /** us spent in the async blits since the last call, added into out[3] (the mirror copy, waiting, commands); 0s without. */
 void      molty_display_blit_prof(uint32_t *out);
+/** Off: blits on whole row pairs may leave the framebuffer as it was (a board keeping a mirror of the panel for odd
+ *  edges skips copying into it); the caller repaints in full before it sends windows with odd edges again. */
+void      molty_display_blit_mirror(bool on);
 /** The panel off (false) or on. ESP_ERR_NOT_SUPPORTED when the board cannot; the caller
  *  stops drawing either way. */
 esp_err_t molty_display_power(bool on);
