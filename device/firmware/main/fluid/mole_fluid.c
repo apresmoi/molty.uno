@@ -116,6 +116,7 @@ typedef struct {
     bool  internal, autoplay, asleep;
     int   n_internal, n_blk;
     int   state, fx, reel, word_idx, nwords, inside, grid_w, grid_h, cells_drawn;
+    int   crisp_dots;                          /* a rigged creature: its dots handed to the drawer */
     char  word[40];
 } fluid_stats_t;
 
@@ -224,6 +225,7 @@ static int gesture_of(const char *name) {
 static const char *gesture_name(int a) { return a >= CUTE_N_ACTS && a < CUTE_N_ACTS + s_nown ? s_own[a - CUTE_N_ACTS].name : a >= 0 ? cute_act_name(a) : ""; }
 static cute_rt_t *s_cute = NULL;                    /* task-owned                        */
 static cpk_t    *s_cpk = NULL;                      /* task-owned                        */
+static int       s_crisp_dots = -1;                  /* its dots last handed to the drawer (-1: not crisp) */
 static bool      s_crisp = false;                    /* a rigged creature shows: its own dots, crisp (creature_dots.h) */
 static int      s_cute_tris = 0;
 
@@ -1297,13 +1299,16 @@ static void fluid_task(void *arg) {
             .ramp = GC_RAMP_ASCII, .font = gc_font5x7,
             /* the boot word, and its dots while it melts (each goes as the ink leaves it) */
             .dots = s_cur == ST_SCENE || s_hd.out || s_crisp ? s_sdots_d : s_word_dots && (s_cur == ST_TEXT || s_melt_t < 0.8f) ? s_tx->dots : NULL,
-            .scene = s_hd.gen != 0 || s_crisp, .dust = s_hd.dust,
+            .scene = s_hd.gen != 0 || s_crisp, .dust = scene_hd_dust(&s_hd),
         };
         /* the drawer is idle (s_idle); a scene breaking into dust keeps what it showed */
         if (s_crisp) {   /* a rigged creature's cells, as a scene's dots */
             const uint8_t *cd; const uint32_t *cc;
             cpk_cells(s_cpk, &cd, &cc);
             if (cd) memcpy(s_sdots_d, cd, (size_t)s_sim->N); else memset(s_sdots_d, 0, (size_t)s_sim->N);
+            int n = 0;
+            for (int q = 0; q < s_sim->N; q++) n += __builtin_popcount(s_sdots_d[q]);
+            s_crisp_dots = n;
         } else if (s_cur == ST_SCENE && !s_hd.out) {
             memcpy(s_sdots_d, s_sdots, (size_t)s_sim->N);
             memcpy(s_kdots_d, s_kdots, (size_t)s_sim->N);
@@ -1362,6 +1367,7 @@ static void fluid_task(void *arg) {
         snprintf(s_stats.scene_pkg, sizeof(s_stats.scene_pkg), "%s", s_sp.cur ? s_sp.cur->pkg_id : "");
         snprintf(s_stats.scene_layout, sizeof(s_stats.scene_layout), "%s", s_sp.cur ? s_sp.cur->layout : "");
         s_stats.scene_left = s_sp.cur ? scene_end(s_sp.cur) - s_sp.t : 0.f;
+        s_stats.crisp_dots = s_crisp ? s_crisp_dots : -1;
         s_stats.inside = s_sim->inside; s_stats.grid_w = s_sim->W; s_stats.grid_h = s_sim->H;
         s_stats.internal = s_sim->internal;
         s_stats.n_internal = s_sim->n_internal; s_stats.n_blk = s_sim->n_blk;
@@ -1654,6 +1660,7 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     cJSON_AddNumberToObject(root, "flush_ms",    roundf(st.flush_ms * 100.f) / 100.f);
     cJSON_AddNumberToObject(root, "cells_drawn", st.cells_drawn);
     cJSON_AddNumberToObject(root, "cells_inside", st.inside);
+    cJSON_AddNumberToObject(root, "crisp_dots", st.crisp_dots);
     cJSON *prof = cJSON_AddObjectToObject(root, "prof_ms");
     for (int q = 0; prof && q < FP_N; q++)
         cJSON_AddNumberToObject(prof, FLUID_PROF_NAMES[q], roundf(st.prof_ms[q] * 100.f) / 100.f);
