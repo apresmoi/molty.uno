@@ -553,11 +553,8 @@ static void ask_compose(void) {
         }
     }
     fluid_askview_compose(v, s_sdots_d, own, s_frame->col);
-    s_dopts.dots = s_sdots_d; s_dopts.scene = true; s_dopts.dust = 0.f;
-    s_dopts.shapes = NULL; s_dopts.nshapes = 0; s_dopts.kdots = NULL; s_dopts.fine = NULL; s_dopts.still = NULL;
-    s_dopts.frame = fluid_askview_draw_frame(v);           /* its rows and the water's take turns alike */
     s_dnletters = fluid_askview_letters(v, s_dletters, FLUID_MAX_LETTERS);
-    s_dopts.letters = s_dletters; s_dopts.nletters = s_dnletters;
+    fluid_askview_opts(v, &s_dopts, s_sdots_d, s_dletters, s_dnletters);   /* never the state's melt: its words stay */
 }
 
 /* ── (Re)build for a grid ───────────────────────────────────────────────────── */

@@ -20,10 +20,9 @@
 static int s_fail = 0, s_pass = 0;
 #define CHECK(cond, ...) do { if (cond) s_pass++; else { s_fail++; printf("FAIL %s:%d: ", __FILE__, __LINE__); printf(__VA_ARGS__); printf("\n"); } } while (0)
 
-#define P 412
-#define W 52
-#define H 32
+static int P = 412, W = 52, H = 32;   /* the stage and its grid: the 1.46 (412) or the 1.75 (466) */
 #define N (W * H)
+#define NMAX (64 * 40)
 #define DT (1.f / 30.f)
 static const uint32_t CAT = 0xFF8C3C, WORLD = 0x8090A0;
 
@@ -38,7 +37,7 @@ static int send_cost(void *ctx, int x, int y, int w, int h, const uint16_t *px) 
 typedef struct {
     fluid_sim_t *s; fluid_draw_t *d; fluid_frame_t *fr; fluid_askview_t *v;
     fluid_ask_screen_t scr; fluid_ask_layout_t L;
-    uint8_t bg[N], own[N], dots[N]; uint32_t bgc[N];
+    uint8_t bg[NMAX], own[NMAX], dots[NMAX]; uint32_t bgc[NMAX];
     fluid_letter_t lt[FLUID_MAX_LETTERS]; int nl;
     uint16_t *fb, *wbuf;
     float t, cat_x;
@@ -72,9 +71,11 @@ static void frame(world_t *w, cost_t *c) {
     for (int k = 0; k < N; k++) w->fr->col[k] = (fluid_rgba16_t){ (uint16_t)((w->bgc[k] >> 16 & 255) * 257), (uint16_t)((w->bgc[k] >> 8 & 255) * 257), (uint16_t)((w->bgc[k] & 255) * 257), 0 };
     fluid_askview_compose(w->v, w->dots, w->own, w->fr->col);
     w->nl = fluid_askview_letters(w->v, w->lt, FLUID_MAX_LETTERS);
-    const fluid_draw_opts_t o = { .palette = FLUID_PAL_PASTEL, .edge_mode = FLUID_EDGE_CONTOURS, .time = w->t, .letters = w->lt, .nletters = w->nl,
-                                  .font = gc_font5x7, .dots = w->dots, .scene = true,
-                                  .frame = fluid_askview_draw_frame(w->v) };
+    /* the options as mole_fluid.c has them for a rigged creature (its crisp dots; the frame's melt long past a text
+     * state's: seconds), then the question's */
+    fluid_draw_opts_t o = { .palette = FLUID_PAL_PASTEL, .edge_mode = FLUID_EDGE_CONTOURS, .time = w->t, .melt = 5.f + w->t,
+                            .font = gc_font5x7, .dots = w->bg, .scene = true, .ramp = " .,:;!+=*xX#@" };
+    fluid_askview_opts(w->v, &o, w->dots, w->lt, w->nl);
     cost_t cc = { 0, 0 };
     fluid_draw_cells(w->d, w->fr, &o);
     fluid_draw_send(w->d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, w->wbuf, 4096, send_cost, &cc);
@@ -101,6 +102,7 @@ static void dump(const world_t *w, const char *name) {
 
 static void world_open(world_t *w, const fluid_ask_q_t *q) {
     memset(w, 0, sizeof(*w));
+    fluid_grid_for_stage(P, &W, &H);
     w->s = fluid_sim_create(W, H, P); w->d = fluid_draw_create(W, H, P, P); w->fr = fluid_frame_create(W, H);
     w->fb = calloc((size_t)P * P, 2); w->wbuf = calloc(4096, 2);
     w->moving = true;
@@ -199,8 +201,8 @@ static void test_accept(void) {
         CHECK(in > glyph_bits("INSTALL ASTROLOGY?") * 4, "the title drawn on the panel (%ld px)", in);
     }
     /* the scene keeps moving under it: cells change from frame to frame outside the question */
-    uint8_t before[N]; memcpy(before, w.dots, N);
-    uint8_t standing[N]; memcpy(standing, fluid_askview_dots(w.v), N);
+    uint8_t before[NMAX]; memcpy(before, w.dots, N);
+    uint8_t standing[NMAX]; memcpy(standing, fluid_askview_dots(w.v), N);
     run(&w, 0.3f, NULL, NULL);
     int moved = 0;
     for (int k = 0; k < N; k++) moved += !fluid_askview_dots(w.v)[k] && before[k] != w.dots[k];
@@ -360,6 +362,7 @@ static void test_rows(void) {
 int main(void) {
     printf("askview host test\n");
     test_accept();
+    P = 466; printf("  the 1.75 (466 px):\n"); test_accept(); P = 412;
     test_decline();
     test_cost();
     test_rows();

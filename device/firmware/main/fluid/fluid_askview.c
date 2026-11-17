@@ -344,6 +344,13 @@ uint32_t fluid_askview_draw_frame(const fluid_askview_t *v) { return FLUID_FRAME
 const uint8_t *fluid_askview_dots(const fluid_askview_t *v) { return v->qd; }
 const fluid_ask_layout_t *fluid_askview_layout(const fluid_askview_t *v) { return &v->L; }
 
+void fluid_askview_opts(const fluid_askview_t *v, fluid_draw_opts_t *o, const uint8_t *dots, const fluid_letter_t *letters, int nletters) {
+    o->dots = dots; o->scene = true; o->dust = 0.f; o->melt = 0.f;
+    o->shapes = NULL; o->nshapes = 0; o->kdots = NULL; o->fine = NULL; o->still = NULL;
+    o->frame = fluid_askview_draw_frame(v);
+    o->letters = letters; o->nletters = nletters;
+}
+
 void fluid_askview_compose(const fluid_askview_t *v, uint8_t *dots, const uint8_t *primary, fluid_rgba16_t *col) {
     int keep[DIM_STEPS + 1], dim[DIM_STEPS + 1], pdim[DIM_STEPS + 1];
     for (int l = 0; l <= DIM_STEPS; l++) {
