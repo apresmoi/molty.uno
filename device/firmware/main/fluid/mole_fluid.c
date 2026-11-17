@@ -820,7 +820,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
      * alternating frames — both drift ≤ 0.012 lattice units per frame */
     /* a scene in high definition shows the surface (its dust) and the colours, never the ink: the
      * ink holds still under it (no background, eddies, flow or view) and moves on after */
-    s_crisp = s_cur == ST_CREATURE && !asking && s_cpk && cpk_crisp(s_cpk);
+    s_crisp = s_cur == ST_CREATURE && s_cpk && cpk_crisp(s_cpk);   /* a question's arcs and letters show over it too */
     const bool still = (s_hd.gen != 0 && s_cur == ST_SCENE && !asking) || s_crisp;
     s->p.still = still;
     if (!still) fluid_sim_background(s, s_tnow, breath, (s_frame_no & 1) == 0 || s_frame_no < 2);
