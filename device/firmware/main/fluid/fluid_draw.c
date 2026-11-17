@@ -1014,6 +1014,8 @@ void fluid_draw_rect(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fl
     if (all) for (int y = t->y0; y < t->y1; y++) memset(rect_px(t, bx, y), 0, (size_t)(t->x1 - bx) * sizeof(uint16_t));
     for (int j = 0; j < H; j++) {
         const int ya = d->cy[j], yb = d->cy[j + 1];
+        if (yb <= t->y0) continue;                                  /* the cell rows inside t only */
+        if (ya >= t->y1) break;
         const int y0 = ya > t->y0 ? ya : t->y0, y1 = yb < t->y1 ? yb : t->y1;
         int i0 = all ? 0 : d->span[2 * j], i1 = all ? W : d->span[2 * j + 1];
         while (i0 < i1 && d->cx[i0 + 1] <= t->x0) i0++;             /* the cells inside t */
