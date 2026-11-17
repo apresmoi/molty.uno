@@ -129,6 +129,10 @@ typedef struct {
 /** Advance by dt: gen the scene on screen now (0: none); plain: the fluid's own look instead
  *  (nothing in high definition; the scene forms from dust again after it). */
 void scene_hd_tick(scene_hd_t *h, unsigned gen, bool plain, float dt);
+/** The dust for the drawer (fluid_draw_opts_t.dust): the scene's while one forms, shows or breaks up, else 0.
+ *  At rest (no scene) h->dust stays 1 (all dust, ready to form), which would thin any other crisp dots (a rigged
+ *  creature's) away to nothing. */
+static inline float scene_hd_dust(const scene_hd_t *h) { return h->gen || h->out ? h->dust : 0.f; }
 
 /* A tapped spot's drawing grows with the ripple the tap starts, holds while its reading plays,
  * then eases back to exactly as built. Its drawing: the items in the groups it lights (each

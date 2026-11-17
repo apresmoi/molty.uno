@@ -24,6 +24,7 @@
 #include "cute_act.h"
 #include "cute_rig.h"
 #include "fluid_sim.h"
+#include "scene_player.h"
 #include "cJSON.h"
 
 #include <time.h>
@@ -277,7 +278,10 @@ static double test_render(const char *pkgdir, const char *id, const char *outdir
             if (crisp) cpk_paint(k, s); else fluid_sim_view(s);
             fluid_sim_snapshot(s, fr, false);
             fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, t, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL };
-            if (crisp) { const uint32_t *cc; cpk_cells(k, &o.dots, &cc); o.scene = true; }
+            /* the drawer's options as mole_fluid.c sets them for a rigged creature: its cells as a scene's dots, with no
+             * scene held (scene_hd_t at rest) */
+            const scene_hd_t hd = { 0, false, 1.f };
+            if (crisp) { const uint32_t *cc; cpk_cells(k, &o.dots, &cc); o.scene = hd.gen != 0 || crisp; o.dust = scene_hd_dust(&hd); }
             int y0, y1;
             fluid_draw(d, fr, fb, &o, &y0, &y1);
             if (cpk_tris(k) > worst) worst = cpk_tris(k);
@@ -287,6 +291,9 @@ static double test_render(const char *pkgdir, const char *id, const char *outdir
             cpk_cells(k, &cd, &cc);
             for (int q = 0; q < W * H; q++) dots += __builtin_popcount(cd[q]);
             CHECK(dots > 200, "%s %s: only %d dots", id, MOOD_NAMES[m], dots);
+            int lit = 0;                   /* ...and they reach the panel: the drawn frame is not black */
+            for (int q = 0; q < FLUID_STAGE_REF * FLUID_STAGE_REF; q++) lit += fb[q] != 0;
+            CHECK(lit > 1000, "%s %s: the drawn frame has only %d lit pixels", id, MOOD_NAMES[m], lit);
             eyes++; worst = 1000;
             printf("  %-8s %-10s dots %5d\n", id, MOOD_NAMES[m], dots);
             if (outdir) { snprintf(path, sizeof(path), "%s/%s_%s.ppm", outdir, id, MOOD_NAMES[m]); write_ppm(path, fb); }
