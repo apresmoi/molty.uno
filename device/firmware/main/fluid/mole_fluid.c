@@ -1409,10 +1409,12 @@ static void fluid_task(void *arg) {
         if (s_crisp && s_cpk) {    /* the creature's rows between the cores: more here while the drawer (core 0) is the slower */
             static float share = 55.f;
             /* the drawer (core 0) slower: more here; this core waiting on the other's band (k_wait): more here too;
-             * this core slower and not waiting: less */
+             * this core slower and not waiting: less. k_wait has a floor of ~0.5 ms with no real wait (the band's
+             * wake-ups across the cores), so its thresholds sit above that: at 0.5 / 1 ms its noise pushed the share
+             * up 3 a frame and kept it from coming down, pinned at 80 while the band's core sat idle (walking 29 ms). */
             const float d = s_stats.draw_ms + s_stats.flush_ms - sms, kw = prof_ema[FP_K_WAIT];
             const float step = fminf(3.f, fabsf(d) * 0.5f);   /* faster the further apart (the ring's wave comes and goes in a second) */
-            share += d > 1.f || kw > 1.f ? step : d < -1.f && kw < 0.5f ? -step : 0.f;
+            share += d > 1.f ? step : kw > 1.5f ? 1.f : d < -1.f && kw < 1.f ? -step : 0.f;
             share = share < 30.f ? 30.f : share > 80.f ? 80.f : share;
             cpk_set_share(s_cpk, (int)share); s_stats.share = (int)share;
         }
