@@ -19,10 +19,12 @@
 #include "freertos/task.h"
 #include "esp_heap_caps.h"
 #include "esp_transport.h"
+#include "mole_diag.h"
 
 #define CONNECT_TASK  "link_connect"
 #define CONNECT_PRIO  1      /* below the fluid (2), as the websocket task itself */
 #define CONNECT_STACK 6144   /* as the websocket task's; PSRAM: no flash ops run on it */
+#define CONNECT_DNS_MS 20000 /* lwIP's DNS retries, outside timeout_ms */
 
 int __real_esp_transport_connect(esp_transport_handle_t t, const char *host, int port, int timeout_ms);
 
@@ -53,7 +55,14 @@ int __wrap_esp_transport_connect(esp_transport_handle_t t, const char *host, int
         if (j.done) vSemaphoreDelete(j.done);
         return __real_esp_transport_connect(t, host, port, timeout_ms);   /* no memory: connect in place */
     }
-    xSemaphoreTake(j.done, portMAX_DELAY);   /* the transport bounds the connect with timeout_ms */
+    /* No early return: the connect task still uses the transport and this frame's job until it ends. It ends on its
+     * own: esp-tls gives the TCP connect + handshake timeout_ms in all, and each upgrade read/write timeout_ms; only
+     * DNS is outside that, on lwIP's own retries. A connect past that bound is logged, not abandoned. */
+    const int bound = timeout_ms > 0 ? 3 * timeout_ms + CONNECT_DNS_MS : 0;   /* timeout_ms <= 0: none given */
+    if (!bound || xSemaphoreTake(j.done, pdMS_TO_TICKS(bound)) != pdTRUE) {
+        if (bound) mole_diag_event(true, "link.connect_slow %s:%d over %d ms", host, port, bound);
+        xSemaphoreTake(j.done, portMAX_DELAY);
+    }
     vTaskDeleteWithCaps(task);
     vSemaphoreDelete(j.done);
     errno = j.err;   /* callers log errno after a failed connect */

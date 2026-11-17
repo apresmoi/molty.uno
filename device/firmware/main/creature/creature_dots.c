@@ -92,7 +92,6 @@ struct cd {
     uint32_t prof[CD_STAGES];
 #ifdef ESP_PLATFORM
     TaskHandle_t task; SemaphoreHandle_t go, done; void (*job)(cd_t *, int); volatile bool quit;
-    uint32_t wmax;                          /* the longest wait for the second band since cd_wait_max (cycles)        */
 #endif
 };
 
@@ -148,9 +147,7 @@ static void split_run(cd_t *d, band_fn fn) {
     fn(d, 0);
     const uint32_t t = cycles();
     xSemaphoreTake(d->done, portMAX_DELAY);
-    const uint32_t w = cycles() - t;
-    d->prof[ST_WAIT] += w;
-    if (w > d->wmax) d->wmax = w;
+    d->prof[ST_WAIT] += cycles() - t;
 }
 #else
 static void split_run(cd_t *d, band_fn fn) { fn(d, 0); fn(d, 1); }   /* the same work, one band after the other */
@@ -834,11 +831,4 @@ void cd_draw(cd_t *d, const cc_t *c, uint32_t frame) {
 void cd_cells(const cd_t *d, const uint8_t **dots, const uint32_t **rgb) { *dots = d->cdots; *rgb = d->ccol; }
 const uint8_t *cd_creature(const cd_t *d) { return d->catm; }
 void cd_set_share(cd_t *d, int pct) { d->share = pct < 20 ? 20 : pct > 90 ? 90 : pct; }
-uint32_t cd_wait_max(cd_t *d) {
-#ifdef ESP_PLATFORM
-    const uint32_t w = d->wmax; d->wmax = 0; return w;
-#else
-    (void)d; return 0;
-#endif
-}
 void cd_prof(cd_t *d, uint32_t *out) { for (int i = 0; i < CD_STAGES; i++) { out[i] += d->prof[i]; d->prof[i] = 0; } }

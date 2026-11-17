@@ -44,8 +44,6 @@ void  cd_set_share(cd_t *d, int pct);
  *  features, the halo's rows, the halo's columns with the world and the cells; then, within those, the waits for the
  *  second band; and the second band's own time on the other core (ESP). */
 void  cd_prof(cd_t *d, uint32_t *out);
-/** The longest wait for the second band (cycles) since the last call (0 without one). */
-uint32_t cd_wait_max(cd_t *d);
 
 #ifdef __cplusplus
 }
