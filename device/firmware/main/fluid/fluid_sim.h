@@ -414,6 +414,8 @@ typedef struct {
     int16_t  sb0[FLUID_MAX_SHAPES][4]; /* ...the last frame's, and each one's hash: a shape that  */
     uint32_t sh0[FLUID_MAX_SHAPES];    /* changes redraws the cells it covered and covers  */
     fluid_shape_t *shp0;               /* ...and the shapes themselves (a stroke redraws its own cells only) */
+    uint16_t *hdc;                     /* a scene on fine dust: its drawing (but the caption) drawn once, fb_w x fb_h (PSRAM) .. */
+    uint8_t  *hdcv;                    /* .. each cell's part of it valid (a changed shape's cells drawn again when shown) */
     int      nsh0;
     struct {                           /* this frame's condensed letters, ready to draw   */
         const uint8_t *gl, *mask; uint16_t c, mw, mh; int16_t x, y, w, h, cx0, cy0, cx1, cy1;

@@ -1119,6 +1119,20 @@ static void test_fine(const char *dir) {
         }
         CHECK(err_l < 0.03f, "the light on the water is the page's (off by %.3f at most)", err_l);
     }
+    {   /* the drawing's cache gives the very pixels a live draw does */
+        uint16_t *a = calloc((size_t)S * S, 2), *b = calloc((size_t)S * S, 2);
+        fluid_draw_rect(d, &o, &(fluid_rect_t){ a, S, 0, 0, S, S }, true);
+        uint16_t *keep_c = d->hdc; uint8_t *keep_v = d->hdcv;
+        d->hdc = NULL; d->hdcv = NULL;
+        fluid_draw_opts_t o2 = o; o2.fine = NULL;               /* no cache made without the dust: a live draw ... */
+        fluid_draw_rect(d, &o2, &(fluid_rect_t){ b, S, 0, 0, S, S }, true);
+        fluid_fine_rect(fine, d->dirty, &(fluid_rect_t){ b, S, 0, 0, S, S }, true);   /* ... with the same dust over it */
+        d->hdc = keep_c; d->hdcv = keep_v;
+        int diff = 0;
+        for (int q = 0; q < S * S; q++) diff += a[q] != b[q];
+        CHECK(d->hdc && diff == 0, "the cached drawing is the live one (%d px differ)", diff);
+        free(a); free(b);
+    }
     printf("  fine dust, calm (panel model): %.1f ms a frame, worst %.1f; %.0f kpx and %.1f windows a frame; the dust's frame (cells) %.0f us on the host\n",
            sum / 60, worst, calm_px / 60e3, calm_w / 60.0, cells_us / 60);
     if (getenv("FINE_DUMP")) {   /* the calm frame as a PPM, to look at against the page */
