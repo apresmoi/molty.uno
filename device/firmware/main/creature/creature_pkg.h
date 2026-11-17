@@ -40,6 +40,8 @@ bool   cpk_crisp(const cpk_t *k);
 void   cpk_come(cpk_t *k, const char *first);
 /** A rigged creature's dots: the share of their rows' work on the calling core (cd_set_share), the rest on the other. */
 void   cpk_set_share(cpk_t *k, int pct);
+/** The listen ring's colour over a rigged creature (0xRRGGBB), or -1: the fluid ring's own (creature_ring.h). */
+void   cpk_listen_rgb(cpk_t *k, int32_t rgb);
 /** Per cell of the last frame: 1 where the creature's own dots are (cd_creature). */
 const uint8_t *cpk_cells_creature(const cpk_t *k);
 const struct cc *cpk_clip(const cpk_t *k);
