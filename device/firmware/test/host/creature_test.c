@@ -547,6 +547,8 @@ static void test_crisp_ring(const char *pkgdir) {
     uint16_t *fb = calloc((size_t)P * P, 2);
     fluid_ring_t ring = { 0 }; fluid_progress_t prog = { 0 }; prog.pct = -1.f;
     int seen[90] = { 0 };
+    uint16_t *buf = malloc((size_t)P * 14 * 2); crisp_panel_t pn = { calloc((size_t)P * P, 2), P, P, 0, 0 };
+    long px_form = 0, px_rest = 0; int nform = 0, nrest = 0, px_max = 0, win_max = 0;
     for (int f = 0; f < 90; f++) {                 /* 10 frames none, 45 a listen, 35 after it */
         cpk_frame(k, s, 1.f / 30.f, 1.f);
         fluid_ring_tick(&ring, 1.f / 30.f, f >= 10 && f < 55);
@@ -556,6 +558,18 @@ static void test_crisp_ring(const char *pkgdir) {
         fluid_sim_color(s, 1.f / 30);
         cpk_paint(k, s);
         seen[f] = ring_dots(k, s, 0.68f, 1.f, NULL);
+        {   /* what the panel is sent, as on the device (crisp_send): forming and dissolving against the steady ring */
+            fluid_sim_snapshot(s, fr, false);
+            fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, f / 30.f, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL };
+            const uint32_t *cc; cpk_cells(k, &o.dots, &cc); o.scene = true;
+            const fluid_overlay_t ov = { 0 };
+            if (f == 0) d->force = true;
+            fluid_draw_cells(d, fr, &o);
+            const int n0 = pn.n, px = fluid_draw_send(d, &o, &ov, FLUID_MARK_NONE, f == 0, buf, P * 14, crisp_send, &pn);
+            const bool moving = (f >= 10 && f < 28) || (f >= 55 && f < 75), rest = f >= 35 && f < 55;
+            if (moving) { px_form += px; nform++; if (px > px_max) px_max = px; if (pn.n - n0 > win_max) win_max = pn.n - n0; }
+            if (rest) { px_rest += px; nrest++; }
+        }
         if (f == 54) {                             /* formed: the line, thinning inward */
             int n0, n1, n2, n3;
             const int a0 = ring_dots(k, s, 0.86f, 0.9f, &n0), a1 = ring_dots(k, s, 0.82f, 0.86f, &n1), a2 = ring_dots(k, s, 0.78f, 0.82f, &n2), a3 = ring_dots(k, s, 0.72f, 0.78f, &n3);
@@ -576,6 +590,13 @@ static void test_crisp_ring(const char *pkgdir) {
     for (int f = 10; f < 55 && seen[f] < 0.9 * full; f++) in++;
     for (int f = 55; f < 90 && seen[f] > 0; f++) out++;
     printf("  crisp ring: %d dots formed, in over %d frames, gone %d frames after, largest step %d\n", full, in, out, jump);
+    printf("  crisp ring: forming / dissolving sends %ld px a frame (most %d px, %d windows), steady %ld\n", px_form / nform, px_max, win_max, px_rest / nrest);
+    /* the panel at 80 MHz (measured: ~3.9 px a us, ~0.25 ms a window): a sitting frame (18-20 ms, ~3 ms of it the panel)
+     * keeps 30 fps while forming if its send stays under ~12 ms */
+    const double blit = px_max / 3900.0 + 0.25 * win_max;
+    printf("  crisp ring: the heaviest forming frame ~%.1f ms on the panel\n", blit);
+    CHECK(blit < 12.0, "crisp ring: a forming frame sends %d px in %d windows (~%.1f ms)", px_max, win_max, blit);
+    free(buf); free(pn.px);
     CHECK(seen[9] == 0, "crisp ring: dots before a listen");
     CHECK(in >= 10 && in <= 24, "crisp ring: forms over %d frames (about half a second)", in);
     CHECK(out >= 10 && out <= 30 && seen[89] == 0, "crisp ring: dissolves over %d frames", out);

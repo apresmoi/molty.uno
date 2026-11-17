@@ -73,7 +73,7 @@ const cp_t *cpk_player(const cpk_t *k) { return k->cp; }
 const cb_t *cpk_body(const cpk_t *k) { return k->body; }
 int cpk_tris(const cpk_t *k) { return k && k->body ? cb_tris(k->body) : 0; }
 bool cpk_crisp(const cpk_t *k) { return k && k->clip; }
-void cpk_come(cpk_t *k) { if (k && k->clip) cc_come(k->clip); }
+void cpk_come(cpk_t *k, const char *first) { if (k && k->clip) cc_come(k->clip, first); }
 const cc_t *cpk_clip(const cpk_t *k) { return k ? k->clip : NULL; }
 
 static const char *const MOOD_NAMES[7] = { "idle", "listening", "thinking", "speaking", "happy", "sleepy", "surprised" };

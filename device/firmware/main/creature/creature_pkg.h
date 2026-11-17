@@ -35,8 +35,9 @@ void   cpk_frame(cpk_t *k, fluid_sim_t *s, float dt, float swell);
 int    cpk_tris(const cpk_t *k);
 /** A rigged creature (docs/CREATURES.md section 12): drawn straight on the braille dots, not through the fluid's ink. */
 bool   cpk_crisp(const cpk_t *k);
-/** A tap or a shake: a rigged creature comes to the front of the frame facing the viewer, attending (cc_come). */
-void   cpk_come(cpk_t *k);
+/** A tap or a shake: a rigged creature plays first (a shake: "shaken"), then comes to the front of the frame facing the
+ *  viewer, attending (cc_come). */
+void   cpk_come(cpk_t *k, const char *first);
 const struct cc *cpk_clip(const cpk_t *k);
 /** Its last frame's cells: a braille byte (the rings over them, after cpk_paint) and a colour (0xRRGGBB) each; NULL before
  *  the first frame or for a channel creature. */

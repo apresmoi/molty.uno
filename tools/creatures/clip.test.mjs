@@ -76,6 +76,25 @@ for (const { id, pkg } of rigged) {
     assert.ok(away > 0, 'some states face away (walking back)');
   });
 
+  test(`${id}: shaken from any state, it plays its shaken reaction first, then comes to the front attending`, () => {
+    const front = (p) => { const f = p.facing, w = f - 2 * Math.PI * Math.round(f / (2 * Math.PI)); return Math.abs(w) < 0.15; };
+    for (const m of MOODS) for (const walkS of [0, 4]) {
+      const p = clipPlayer(rig);
+      p.mood(m); for (let f = 0; f < 30; f++) p.update(1 / 30);
+      if (walkS) { p.act('walk'); for (let f = 0; f < 30 * walkS; f++) p.update(1 / 30); }
+      assert.ok(p.come('shaken'), 'shaken');
+      let shook = -1, attended = -1;
+      for (let f = 0; f < 30 * 20 && attended < 0; f++) {
+        p.update(1 / 30);
+        if (shook < 0 && p.clip === g.gestures.shaken) shook = f;
+        if (shook >= 0 && p.clip === 'listening' && front(p) && Math.abs(p.place[0]) < 0.3) attended = f;
+      }
+      const at = `${m}${walkS ? ` after ${walkS} s walking` : ''}`;
+      assert.ok(shook >= 0 && shook < 30 * 4, `${at}: the shaken reaction never played (or ${(shook / 30).toFixed(1)} s late)`);
+      assert.ok(attended > shook, `${at}: not attending at the front after shaking (${p.clip}, facing ${p.facing.toFixed(2)})`);
+    }
+  });
+
   test(`${id}: the paws never slide on the floor (clips, routes and crossfades, a long schedule)`, () => {
     const p = clipPlayer(rig), DT = 1 / 30, gest = Object.keys(g.gestures), worst = { slip: 0, at: '' };
     const runs = rig.contacts.map(() => null);

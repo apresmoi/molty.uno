@@ -54,6 +54,10 @@ esp_err_t mole_fluid_creature_render(void);
  *  windows, from internal RAM): call before reading it. Waits for the next frame, up to
  *  500 ms; ESP_ERR_INVALID_STATE when the fluid is not running. */
 esp_err_t mole_fluid_framebuffer_sync(void);
+#ifdef MOLTY_DIAG_RING
+/** Debug builds only (MOLTY_DIAG_RING=1 at build time): the listening ring as if a listen ran for ms, no audio. */
+void mole_fluid_diag_ring(uint32_t ms);
+#endif
 esp_err_t mole_fluid_creature_state_get_json(char **out);
 esp_err_t mole_fluid_creature_state_set_json(const char *body);
 

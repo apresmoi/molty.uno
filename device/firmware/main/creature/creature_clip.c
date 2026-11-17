@@ -57,7 +57,8 @@ struct cc {
     float hd, hbase, px, pz, tx, tz, cx0, cz0, sense;   /* the body turned to its clip's side (hd, rad) and where it is
                                          * (px, pz; going to tx, tz), under a fixed camera; hbase: its way (turned round at
                                          * the frame's edges, sense: which way round) */
-    int come; float comeT;              /* called (cc_come): 1 walking to the front, 2 attending, 3 facing the viewer */
+    int come; float comeT;              /* called (cc_come): 1 walking to the front, 2 attending, 3 facing the viewer,
+                                         * 4 its first reaction playing                                               */
     float *cur, *from, *tmp, *pose, *world, *fromWorld, *out;
 };
 
@@ -614,7 +615,8 @@ static void attend(cc_t *c) {
     if (c->gest[c->gesture].clip == c->cur_clip) { c->gstarted = true; c->pending = false; }   /* attending already: it holds */
 }
 
-bool cc_come(cc_t *c) {
+bool cc_come(cc_t *c, const char *first) {
+    if (first && act(c, first)) { interrupt(c); c->come = 4; return true; }   /* its own reaction first (a shake's) */
     const clip_t *cc = &c->clip[c->cur_clip];
     const float D2R = 3.14159265358979f / 180.f, Y = c->camyaw * D2R, TAU = 6.28318530718f;
     float f = c->hd - (c->camyaw - cc->view) * D2R; f -= TAU * floorf(f / TAU + 0.5f);
@@ -656,7 +658,8 @@ void cc_update(cc_t *c, float dt) {
     const clip_t *k = &c->clip[ci];
     c->t += dt; c->blendT += dt;
     if (c->gesture >= 0 && c->gstarted) c->gestureT += dt;
-    if (c->come >= 2 && c->gesture < 0) c->come = 0;                   /* attended: back to its mood */
+    if (c->come == 4 && c->gesture < 0) { c->come = 0; cc_come(c, NULL); }   /* its reaction done: now it comes */
+    else if (c->come >= 2 && c->come <= 3 && c->gesture < 0) c->come = 0;   /* attended: back to its mood */
     if (c->come != 1 && c->gesture >= 0 && c->gstarted && c->gest[c->gesture].hold > 0.f && c->gestureT >= c->gest[c->gesture].hold && c->clip[c->cur_clip].loop) {
         c->gesture = -1; c->pending = true;
     }
