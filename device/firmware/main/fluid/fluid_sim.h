@@ -67,6 +67,9 @@ typedef struct {
     float swirl, swirl_freq;           /* ambient eddies                                 */
     float refr, crest;                 /* ripple refraction + crest highlight            */
     float speed_mul, hold;
+    bool  still;                       /* only the surface moves (fluid_sim_step: the wave
+                                        * alone; fluid_sim_color: each cell its target's colour):
+                                        * the ink holds while nothing shows it              */
     /* the dim background fluid: an ink floor in EVERY state */
     float bg_level, bg_freq, bg_drift, bg_speed, bg_rim, bg_mob;
     float bg_color[3];
@@ -370,9 +373,18 @@ typedef struct {
     int8_t   *yrow;                    /* fb row → dot row 0..3 inside its cell, or −1    */
     uint8_t  *hds;                     /* per cell: its scene shapes' signature (redraw on change) */
     uint8_t  *hdw;                     /* fb_w: a pixel row's high-definition weight 0..8   */
-    uint8_t  *halo;                    /* 2W x 4H: each dot's distance to a scene's drawing, in
-                                        * dots (0 on it, HALO_REACH + 1 and beyond: far)   */
+    uint8_t  *halo, *halo1;            /* 2W x 4H: each dot's distance to a scene's drawing, in
+                                        * dots (0 on it, HALO_REACH + 1 and beyond: far); and
+                                        * the next one, measured when the drawing changes  */
     uint32_t halo_sig;                 /* the drawing it was measured from (a hash)        */
+    uint8_t  *hde;                     /* per cell: the dust's reseed it shows (still cells) */
+    uint8_t  *hch;                     /* per cell: its halo or the subtitle's dark changed */
+    uint8_t  *cdist;                   /* per cell: cells to the nearest with a drawing's dots */
+    int8_t   *scat;                    /* 2W x 4H x 3: each dot's fixed scatter as dust (x, y in
+                                        * -127..127 of the radius) and when it thins (0..255) */
+    uint8_t  *pdots;                   /* a transition's dust: the dots each cell shows ...   */
+    int16_t  *psrc;                    /* ... and the cell the first came from (its colour)   */
+    int16_t  cap[4], cap0[4];          /* the subtitle's box in dots [x0, x1] x [y0, y1], last frame's */
     int16_t  sb[FLUID_MAX_SHAPES][4];  /* this frame's shapes' boxes, fb px [x0, x1) x [y0, y1) */
     int16_t  sb0[FLUID_MAX_SHAPES][4]; /* ...the last frame's, and each one's hash: a shape that  */
     uint32_t sh0[FLUID_MAX_SHAPES];    /* changes redraws the cells it covered and covers  */

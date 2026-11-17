@@ -73,6 +73,7 @@ typedef struct scene {
     char pkg_id[PKG_ID_MAX + 1], layout[PKG_KEY_MAX + 1];
     float dur, ttl;
     int nitems, npts, nchars, nsay;
+    unsigned serial;                    /* which build it is (scene_fill keeps its drawing)   */
     int focus;                          /* a tapped spot (item) whose drawing is grown, -1 none */
     float grow, glow;                   /* its scale (1 = as built) and how lit, 0..1 (scene_grow) */
     int ngroups;
@@ -168,7 +169,9 @@ typedef struct {
     uint8_t *keep;                      /* W x H, may be NULL                               */
 } scene_shapes_t;
 
-/** Rasterise sc at t s (and cap, if any, over it) on the braille dots: T + tcol of every
+/** Rasterise sc at t s (and cap, if any, over it) on the braille dots (the items' dots only when
+ *  what is visible changes: the subtitle is laid over them, a grown item's dots follow it at
+ *  half and full growth; its shapes each frame): T + tcol of every
  *  cell (zero outside the items; a cell's target is its densest dot), dots (W x H, may be
  *  NULL) the dots each cell shows (under a crisp letter or symbol: its shape, which shows when
  *  it breaks into dust), letters[0..*nletters) the crisp overlay of its text

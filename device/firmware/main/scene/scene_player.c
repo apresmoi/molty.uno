@@ -196,6 +196,8 @@ scene_t *scene_build(pkg_t *p, const char *layout, const cJSON *params, float tt
     pkg_ref(p);
     sc->pkg = p;
     sc->focus = -1; sc->grow = 1.f;
+    static unsigned serial;
+    sc->serial = ++serial ? serial : ++serial;
     snprintf(sc->pkg_id, sizeof(sc->pkg_id), "%s", p->id);
     snprintf(sc->layout, sizeof(sc->layout), "%s", l->name);
     sc->dur = l->dur;
@@ -273,7 +275,7 @@ typedef struct {
     uint32_t *tcol;
     uint8_t keep;                      /* the item painting now keeps its dots in high definition */
 } canvas_t;
-typedef struct { canvas_t *s; float soft; scene_shapes_t *hd; } ctx_t;
+typedef struct { canvas_t *s; float soft; scene_shapes_t *hd; bool paint; } ctx_t;   /* paint: the canvas too, not just shapes */
 
 /* Painter's order, as the reference player (packages/tools/play.mjs): an item covers what is
  * under it by `a` (its coverage, 0..1, the soft edge), leaving ink v in colour rgb. A black
@@ -376,6 +378,7 @@ static void hair_end(hair_t *h) { if (h->n) hair_put(h, h->bx, h->by); h->n = 0;
 static void segment(const ctx_t *c, float ax, float ay, float bx, float by, float hw, uint32_t rgb) {
     canvas_t *s = c->s;
     seg_shape(c, ax, ay, bx, by, hw, rgb);
+    if (!c->paint) return;
     if (hw <= hair(s)) { hair_t h = { .s = s, .rgb = rgb }; hair_to(&h, ax, ay); hair_to(&h, bx, by); hair_end(&h); return; }
     const float reach = hw + c->soft, dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy, il2 = l2 > 1e-9f ? 1.f / l2 : 0.f;
     int i0, i1, j0, j1;
@@ -402,6 +405,7 @@ static void ring(const ctx_t *c, const scene_item_t *it, bool arc) {
     const float cx = it->x, cy = it->y;                 /* its centre (the glass's, unless set) */
     shape(c, (fluid_shape_t){ .k = FLUID_SHAPE_RING, .rgb = FLUID_RGB | it->rgb, .x = spx(c, cx + 1.f), .y = spx(c, 1.f - cy),
                               .r = spx(c, it->r), .hw = hd_hw(c, hw), .a0 = it->a0, .span = span });
+    if (!c->paint) return;
     if (hw <= hair(s)) {
         const int n = 8 + (int)(span * DEG * it->r * 0.5f * (s->W > s->H ? s->W : s->H));
         hair_t h = { .s = s, .rgb = it->rgb };
@@ -443,6 +447,7 @@ static void disc(const ctx_t *c, float cx, float cy, float r, uint32_t rgb) {
     canvas_t *s = c->s;
     const float ro = r + c->soft * 0.5f;
     shape(c, (fluid_shape_t){ .k = FLUID_SHAPE_DISC, .rgb = FLUID_RGB | rgb, .x = spx(c, cx + 1.f), .y = spx(c, 1.f - cy), .r = spx(c, r) });
+    if (!c->paint) return;
     int i0, i1, j0, j1;
     cells(s, cx - ro, cy - ro, cx + ro, cy + ro, &i0, &i1, &j0, &j1);
     for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) {
@@ -481,6 +486,7 @@ static void ball(const ctx_t *c, const scene_item_t *it, const pkg_asset_t *img,
     if (it->r <= 0.f) return;
     /* in high definition its dots stay (s->keep), over a black disc: it hides what is behind */
     shape(c, (fluid_shape_t){ .k = FLUID_SHAPE_DISC, .rgb = FLUID_RGB, .x = spx(c, it->x + 1.f), .y = spx(c, 1.f - it->y), .r = spx(c, it->r) });
+    if (!c->paint) return;
     const float r = it->r, ro = r + c->soft * 0.5f, cphi = 2.f * it->lit - 1.f, sphi = sqrtf(fmaxf(0.f, 1.f - cphi * cphi));
     const float lx = it->side * sphi, lz = cphi, turn = it->spin * t * DEG;
     int i0, i1, j0, j1;
@@ -528,6 +534,7 @@ static bool crisp(const ctx_t *c, const scene_item_t *it, const pkg_asset_t *a, 
     const float x0 = (it->x - 0.5f * w + 1.f) * k, y0 = (1.f - it->y - 0.5f * h) * k;
     letters[(*nl)++] = (fluid_letter_t){ '*', true, x0, y0, w * k, h * k, h * k, 0.f, FLUID_RGB | it->rgb, a->data, a->w, a->h };
     letter_shape(c, &letters[*nl - 1]);
+    if (!c->paint) return true;
     const float cwp = (float)s->stage / s->W, chp = (float)s->stage / s->H;
     int i0 = (int)floorf(x0 / cwp), i1 = (int)ceilf((x0 + w * k) / cwp), j0 = (int)floorf(y0 / chp), j1 = (int)ceilf((y0 + h * k) / chp);
     i0 = i0 < 0 ? 0 : i0; j0 = j0 < 0 ? 0 : j0; i1 = i1 >= s->W ? s->W - 1 : i1; j1 = j1 >= s->H ? s->H - 1 : j1;
@@ -542,6 +549,7 @@ static void glyph(const ctx_t *c, const scene_item_t *it, const pkg_asset_t *a) 
     if (a->kind == PA_MASK)
         shape(c, (fluid_shape_t){ .k = FLUID_SHAPE_MASK, .mw = (uint16_t)a->w, .mh = (uint16_t)a->h, .rgb = FLUID_RGB | it->rgb,
                                   .x = spx(c, it->x + 1.f), .y = spx(c, 1.f - it->y), .w = spx(c, w), .h = spx(c, h), .co = co, .si = si, .mask = a->data });
+    if (!c->paint) return;
     /* a dot no wider than one of the asset's pixels: its centre says it all */
     const int ns = cw * a->w > w || ch * a->h > h ? 4 : 1;
     int i0, i1, j0, j1;
@@ -587,6 +595,7 @@ static void text_run(const ctx_t *c, const char *str, int n, float x, float y, f
         letters[(*nl)++] = (fluid_letter_t){ str[q], q == orp, x0 + q * adv, y0, adv, lh, fs, 0.f, lrgb, NULL, 0, 0 };
         letter_shape(c, &letters[*nl - 1]);
     }
+    if (!c->paint) return;
     const float cwp = (float)s->stage / s->W, chp = (float)s->stage / s->H;
     int i0 = (int)floorf(x0 / cwp), i1 = (int)ceilf((x0 + n * adv) / cwp), j0 = (int)floorf(y0 / chp), j1 = (int)ceilf((y0 + lh) / chp);
     i0 = i0 < 0 ? 0 : i0; j0 = j0 < 0 ? 0 : j0; i1 = i1 >= s->W ? s->W - 1 : i1; j1 = j1 >= s->H ? s->H - 1 : j1;
@@ -622,7 +631,7 @@ static void path(const ctx_t *c, const float (*p)[2], int n, bool smooth, float 
     hair_t h = { .s = c->s, .rgb = rgb };
     const bool thin = hw <= hair(c->s);
     float px = p[0][0], py = p[0][1];
-    if (thin) hair_to(&h, px, py);
+    if (thin && c->paint) hair_to(&h, px, py);
     for (int i = 0; i + 1 < n; i++) {
         const float *a = p[i > 0 ? i - 1 : 0], *b = p[i], *d = p[i + 1], *e = p[i + 2 < n ? i + 2 : n - 1];
         for (int q = smooth ? 1 : 8; q <= 8; q++) {
@@ -631,7 +640,7 @@ static void path(const ctx_t *c, const float (*p)[2], int n, bool smooth, float 
             for (int k = 0; k < 2; k++)
                 xy[k] = 0.5f * (2.f * b[k] + (d[k] - a[k]) * u + (2.f * a[k] - 5.f * b[k] + 4.f * d[k] - e[k]) * u2 +
                                 (3.f * b[k] - a[k] - 3.f * d[k] + e[k]) * u3);
-            if (thin) { hair_to(&h, xy[0], xy[1]); seg_shape(c, px, py, xy[0], xy[1], hw, rgb); }
+            if (thin) { if (c->paint) hair_to(&h, xy[0], xy[1]); seg_shape(c, px, py, xy[0], xy[1], hw, rgb); }
             else segment(c, px, py, xy[0], xy[1], hw, rgb);
             px = xy[0]; py = xy[1];
         }
@@ -687,8 +696,8 @@ static bool covered(const scene_t *sc, const scene_item_t *s, const scene_item_t
 }
 
 #define GROW_PTS 64                                    /* a grown line's points, at most */
-static void paint_items(const ctx_t *c, const scene_t *sc, float t, fluid_letter_t *letters, int *nletters) {
-    const scene_item_t *fs = sc && sc->focus >= 0 && sc->focus < sc->nitems && sc->grow != 1.f ? &sc->items[sc->focus] : NULL;
+static void paint_items(const ctx_t *c, const scene_t *sc, float t, float grow, float glow, fluid_letter_t *letters, int *nletters) {
+    const scene_item_t *fs = sc && sc->focus >= 0 && sc->focus < sc->nitems && grow != 1.f ? &sc->items[sc->focus] : NULL;
     for (int n = 0; sc && n < sc->nitems; n++) {
         const scene_item_t *it = &sc->items[n];
         if (t < it->on || (it->off > 0.f && t >= it->off)) continue;
@@ -697,17 +706,17 @@ static void paint_items(const ctx_t *c, const scene_t *sc, float t, fluid_letter
         const float (*pts)[2] = sc->pts + it->pts;
         bool lit = false;
         for (int q = 0; fs && it->grp && q < SCENE_LIGHTS; q++) lit |= fs->lights[q] == it->grp;
-        if (it->when_lit && !(lit && sc->glow > 0.f)) continue;   /* only while its group is lit */
+        if (it->when_lit && !(lit && glow > 0.f)) continue;   /* only while its group is lit */
         if (lit) {
             /* a lit group's item: grown about its own centre, brighter (or fading in) */
-            const float k = sc->grow, a = sc->glow;
+            const float k = grow, a = glow;
             g = *it;
             g.r *= k; g.size *= k; g.w *= k;
             g.rgb = it->when_lit ? shade(it->rgb, a) : toward_white(it->rgb, a * SCENE_LIT_WHITE);
             it = &g;
         } else if (fs && !fs->lights[0] && covered(sc, fs, it) && it->npts <= GROW_PTS) {
             /* the tapped spot's drawing, grown about the spot's centre */
-            const float k = sc->grow;
+            const float k = grow;
             g = *it;
             g.x = fs->x + (it->x - fs->x) * k; g.y = fs->y + (it->y - fs->y) * k;
             g.r *= k; g.len *= k; g.size *= k;
@@ -780,23 +789,12 @@ static void letter_dots(const fluid_sim_t *s, const fluid_letter_t *L, uint8_t *
     }
 }
 
-void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_t *cap, fluid_letter_t *letters, int *nletters, uint8_t *dots,
-                scene_shapes_t *hd) {
-    FLUID_PROF_BEGIN(c0);
+/* Cells j0..j1 (all columns) from the canvas: each cell's target is its densest dot (a thin stroke
+ * still draws the fluid to it), its colour the ink-weighted mean of its dots, its dots those over
+ * Bayer (kept: those a ball or an image left); dots, keep may be NULL */
+static void fold(const canvas_t *cv, int W, int j0, int j1, int16_t *T, uint32_t *tcol, uint8_t *dots, uint8_t *keep) {
     const uint32_t bg = fluid_pack_rgba8(0.6f, 0.68f, 0.92f, 0.f);
-    for (int k = 0; k < s->N; k++) { s->T[k] = 0; s->tcol[k] = bg; }
-    if (dots) memset(dots, 0, (size_t)s->N);
-    if (hd) { hd->n = 0; if (hd->keep) memset(hd->keep, 0, (size_t)s->N); }
-    *nletters = 0;
-    if (!canvas_for(s)) { FLUID_PROF_END(FP_TARGET, c0); return; }
-    canvas_t *cv = &s_cv;
-    for (int k = 0; k < cv->N; k++) { cv->T[k] = 0; cv->tcol[k] = bg; cv->mask[k] &= 1; }
-    const ctx_t c = { cv, 1.f / cv->H, hd };                  /* soft edge: half a dot row */
-    paint_items(&c, sc, t, letters, nletters);
-    if (cap && cap->n > 0) caption(&c, cap, letters, nletters);   /* the subtitle, over the drawing */
-    /* back to the cells: each cell's target is its densest dot (a thin stroke still draws the
-     * fluid to it), its colour the ink-weighted mean of its dots, its dots those over Bayer */
-    for (int j = 0; j < s->H; j++) for (int i = 0; i < s->W; i++) {
+    for (int j = j0; j <= j1; j++) for (int i = 0; i < W; i++) {
         int tmax = 0, bits = 0, kept = 0;
         float wr = 0.f, wg = 0.f, wb = 0.f, w = 0.f;
         for (int q = 0; q < 8; q++) {
@@ -812,13 +810,110 @@ void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_
                 if (cv->mask[k] & 2) kept |= 1 << fluid_braille_bit(col, row);
             }
         }
-        const int k = j * s->W + i;
-        if (!tmax) continue;
-        s->T[k] = (int16_t)tmax;
-        s->tcol[k] = fluid_pack_rgba8(wr / w / 255.f, wg / w / 255.f, wb / w / 255.f, 0.f);
+        const int k = j * W + i;
+        T[k] = (int16_t)tmax;
+        tcol[k] = tmax ? fluid_pack_rgba8(wr / w / 255.f, wg / w / 255.f, wb / w / 255.f, 0.f) : bg;
         if (dots) dots[k] = (uint8_t)bits;
-        if (hd && hd->keep) hd->keep[k] = (uint8_t)kept;
+        if (keep) keep[k] = (uint8_t)kept;
     }
-    for (int n = 0; dots && n < *nletters; n++) letter_dots(s, &letters[n], dots);
+}
+
+/* the items' fill, kept while nothing visible changes (PSRAM): the cells', and the items' letters
+ * (their dots) */
+typedef struct {
+    uint32_t key;
+    int N, nl;
+    int16_t *T; uint32_t *tcol; uint8_t *dots, *keep;
+    fluid_letter_t *letters;
+    int16_t *bT; uint32_t *btcol; uint8_t *bmask; int brows;   /* the subtitle's band of the canvas, saved */
+} fill_cache_t;
+static fill_cache_t s_fc;
+
+static bool fill_cache_for(int N, int brows, int cw) {
+    if (s_fc.N != N || s_fc.brows < brows) {
+        SCENE_FREE(s_fc.T); SCENE_FREE(s_fc.tcol); SCENE_FREE(s_fc.dots); SCENE_FREE(s_fc.letters);
+        SCENE_FREE(s_fc.bT); SCENE_FREE(s_fc.btcol); SCENE_FREE(s_fc.bmask);
+        const size_t nb = (size_t)brows * cw;
+        s_fc = (fill_cache_t){ 0, N, 0, SCENE_CALLOC(sizeof(int16_t) * (size_t)N), SCENE_CALLOC(sizeof(uint32_t) * (size_t)N), SCENE_CALLOC(2 * (size_t)N), NULL,
+                               SCENE_CALLOC(sizeof(fluid_letter_t) * FLUID_MAX_LETTERS),
+                               SCENE_CALLOC(sizeof(int16_t) * nb), SCENE_CALLOC(sizeof(uint32_t) * nb), SCENE_CALLOC(nb), brows };
+        s_fc.keep = s_fc.dots ? s_fc.dots + N : NULL;
+        if (!s_fc.T || !s_fc.tcol || !s_fc.dots || !s_fc.letters || !s_fc.bT || !s_fc.btcol || !s_fc.bmask) { s_fc.N = 0; return false; }
+    }
+    return true;
+}
+
+/* what the items' fill depends on: the build, the grid, the items visible at t, the grown spot
+ * and its growth (halfway, whole); 0 when it moves on its own (a turning ball) */
+static uint32_t fill_key(const fluid_sim_t *s, const scene_t *sc, float t, float gq) {
+    uint32_t h = (2166136261u ^ (sc ? sc->serial : 0)) * 16777619u;
+    h = (h ^ (uint32_t)(uintptr_t)s ^ (uint32_t)(uintptr_t)s->mask) * 16777619u;
+    h = (h ^ (uint32_t)s->stage ^ (uint32_t)(sc ? sc->focus : -1) << 16 ^ (uint32_t)(gq * 4.f) << 28) * 16777619u;
+    for (int n = 0; sc && n < sc->nitems; n++) {
+        const scene_item_t *it = &sc->items[n];
+        const bool on = t >= it->on && !(it->off > 0.f && t >= it->off);
+        if (on && it->k == PK_BALL && it->spin != 0.f) return 0;
+        h = (h ^ (uint32_t)on) * 16777619u;
+    }
+    return h ? h : 1;
+}
+
+void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_t *cap, fluid_letter_t *letters, int *nletters, uint8_t *dots,
+                scene_shapes_t *hd) {
+    FLUID_PROF_BEGIN(c0);
+    *nletters = 0;
+    if (hd) hd->n = 0;
+    /* the subtitle's band of canvas rows: its letters at their largest, and a dot */
+    const int cvh = 4 * s->H, cvw = 2 * s->W;
+    const float ch = (float)cvh / 2.f, lh = SCENE_CAPTION_SIZE * 1.05f * 0.5f, yc = 1.f - SCENE_CAPTION_Y;
+    int bj0 = ((int)floorf((yc - lh) * ch) - 1) / 4, bj1 = ((int)ceilf((yc + lh) * ch) + 1) / 4;
+    bj0 = bj0 < 0 ? 0 : bj0; bj1 = bj1 >= s->H ? s->H - 1 : bj1;
+    if (!canvas_for(s) || !fill_cache_for(s->N, 4 * (bj1 - bj0 + 1), cvw)) {
+        const uint32_t bg = fluid_pack_rgba8(0.6f, 0.68f, 0.92f, 0.f);
+        for (int k = 0; k < s->N; k++) { s->T[k] = 0; s->tcol[k] = bg; }
+        if (dots) memset(dots, 0, (size_t)s->N);
+        if (hd && hd->keep) memset(hd->keep, 0, (size_t)s->N);
+        FLUID_PROF_END(FP_TARGET, c0);
+        return;
+    }
+    canvas_t *cv = &s_cv;
+    const float soft = 1.f / cv->H;                           /* soft edge: half a dot row */
+    const float glow = sc ? sc->glow : 0.f, gq = glow >= 0.75f ? 1.f : glow >= 0.25f ? 0.5f : 0.f;
+    const uint32_t key = fill_key(s, sc, t, gq);
+    if (!key || key != s_fc.key) {
+        /* the items on the canvas, their dots following a growth halfway or whole */
+        const uint32_t bg = fluid_pack_rgba8(0.6f, 0.68f, 0.92f, 0.f);
+        for (int k = 0; k < cv->N; k++) { cv->T[k] = 0; cv->tcol[k] = bg; cv->mask[k] &= 1; }
+        const ctx_t c = { cv, soft, NULL, true };
+        s_fc.nl = 0;
+        paint_items(&c, sc, t, 1.f + (SCENE_GROW - 1.f) * gq, gq, s_fc.letters, &s_fc.nl);
+        fold(cv, s->W, 0, s->H - 1, s_fc.T, s_fc.tcol, s_fc.dots, s_fc.keep);
+        for (int n = 0; n < s_fc.nl; n++) letter_dots(s, &s_fc.letters[n], s_fc.dots);
+        s_fc.key = key;
+    }
+    memcpy(s->T, s_fc.T, sizeof(int16_t) * (size_t)s->N);
+    memcpy(s->tcol, s_fc.tcol, sizeof(uint32_t) * (size_t)s->N);
+    if (dots) memcpy(dots, s_fc.dots, (size_t)s->N);
+    if (hd && hd->keep) memcpy(hd->keep, s_fc.keep, (size_t)s->N);
+    /* the shapes and letters, as they are now */
+    const ctx_t c = { cv, soft, hd, false };
+    paint_items(&c, sc, t, sc ? sc->grow : 1.f, glow, letters, nletters);
+    if (cap && cap->n > 0) {
+        /* the subtitle, over the drawing: painted on the canvas's band (then put back), its cells
+         * folded again */
+        const int r0 = 4 * bj0, nb = 4 * (bj1 - bj0 + 1) * cv->W, o = r0 * cv->W;
+        memcpy(s_fc.bT, cv->T + o, sizeof(int16_t) * (size_t)nb);
+        memcpy(s_fc.btcol, cv->tcol + o, sizeof(uint32_t) * (size_t)nb);
+        memcpy(s_fc.bmask, cv->mask + o, (size_t)nb);
+        const int n0 = *nletters;
+        const ctx_t cc = { cv, soft, hd, true };
+        caption(&cc, cap, letters, nletters);
+        fold(cv, s->W, bj0, bj1, s->T, s->tcol, dots, hd ? hd->keep : NULL);
+        for (int n = 0; dots && n < s_fc.nl; n++) letter_dots(s, &s_fc.letters[n], dots);
+        for (int n = n0; dots && n < *nletters; n++) letter_dots(s, &letters[n], dots);
+        memcpy(cv->T + o, s_fc.bT, sizeof(int16_t) * (size_t)nb);
+        memcpy(cv->tcol + o, s_fc.btcol, sizeof(uint32_t) * (size_t)nb);
+        memcpy(cv->mask + o, s_fc.bmask, (size_t)nb);
+    }
     FLUID_PROF_END(FP_TARGET, c0);
 }
