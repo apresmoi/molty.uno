@@ -272,6 +272,7 @@ static struct {
 } s_ask;
 /* the listening ring (fluid_target_arc) and a question's dividers (fluid_draw_overlay) */
 static bool  s_listen = false;                  /* task copy of s_listen_in */
+#define FLUID_CRISP_LISTEN_RGB 0xFF2C3E           /* a rigged creature's listen ring (ring-options.html)       */
 static int32_t s_ring_rgb = -1, s_ring_def = -1;   /* task copies of s_ring_in / s_ring_dflt */
 static fluid_ring_t s_rg;                       /* the listening ring (fluid_ring.h)     */
 #ifdef MOLTY_DIAG_RING
@@ -858,7 +859,11 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     while (s_acc >= FLUID_STEP && n < 4) { fluid_sim_step(s, FLUID_STEP); s_acc -= FLUID_STEP; n++; }
     if (n == 4) s_acc = 0.f;
     fluid_sim_color(s, n * FLUID_STEP);                    /* colour rides the same flow, once per frame */
-    if (s_crisp) cpk_paint(s_cpk, s);                      /* a rigged creature: each cell its dots' colour */
+    if (s_crisp) {                                         /* a rigged creature: each cell its dots' colour, and the rings */
+        /* the listen ring red (ring-options.html), unless the agent or the settings gave it one */
+        cpk_listen_rgb(s_cpk, s_rg.on > 0.f ? (s_ring_rgb >= 0 ? s_ring_rgb : s_ring_def >= 0 ? s_ring_def : FLUID_CRISP_LISTEN_RGB) : -1);
+        cpk_paint(s_cpk, s);
+    }
     if (!still) fluid_sim_view(s);
     s_shimmer = 0.12f + (thinking ? 0.35f : 0.f) + cfg->mic * 0.4f;
 
