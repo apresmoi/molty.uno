@@ -70,6 +70,7 @@ const cp_t *cpk_player(const cpk_t *k) { return k->cp; }
 const cb_t *cpk_body(const cpk_t *k) { return k->body; }
 int cpk_tris(const cpk_t *k) { return k && k->body ? cb_tris(k->body) : 0; }
 bool cpk_crisp(const cpk_t *k) { return k && k->clip; }
+void cpk_come(cpk_t *k) { if (k && k->clip) cc_come(k->clip); }
 const cc_t *cpk_clip(const cpk_t *k) { return k ? k->clip : NULL; }
 
 static const char *const MOOD_NAMES[7] = { "idle", "listening", "thinking", "speaking", "happy", "sleepy", "surprised" };
@@ -82,7 +83,7 @@ static void clip_frame(cpk_t *k, fluid_sim_t *s, float dt) {
     me_update(&k->eng, dt, &e);
     const mood_engine_t *g = &k->eng;
     if (g->mood >= 0 && g->mood < 7) cc_mood(k->clip, MOOD_NAMES[g->mood]);
-    if (g->act >= 0 && g->act_n != k->act_n) { cc_act(k->clip, cp_gesture_name(k->cp, g->act)); }
+    if (g->act >= 0 && g->act_n != k->act_n && !cc_coming(k->clip)) { cc_act(k->clip, cp_gesture_name(k->cp, g->act)); }   /* a call first */
     k->act_n = g->act_n;
     cc_update(k->clip, dt);
     if (!k->dots) k->dots = cd_create(k->clip, s->W, s->H);

@@ -1075,18 +1075,55 @@ void fluid_draw_rect(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fl
  * buffer). Windows start and end on even rows: a panel that takes whole row pairs only (the CO5300) otherwise resends
  * a full-width pair at each odd edge. */
 #define CRISP_WIN_PX 2500
+static int crisp_box(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_overlay_t *ov, int mark, int x0, int x1,
+                     int y0, int y1, uint16_t *buf, int max_px, fluid_send_fn send, void *ctx) {
+    const int w = x1 - x0, rows = (max_px / w) & ~1;
+    int sent = 0;
+    if (rows < 2) return -1;
+    for (int y = y0; y < y1; y += rows) {
+        const int h = y1 - y < rows ? y1 - y : rows;
+        const fluid_rect_t t = { buf, w, x0, y, x1, y + h };
+        fluid_draw_rect(d, o, &t, true);
+        fluid_draw_overlay(d, &t, o->palette, ov);
+        fluid_draw_mark(d, &t, o->palette, mark);
+        if (send(ctx, x0, y, w, h, buf) != 0) return -1;
+        sent += w * h;
+    }
+    return sent;
+}
 static int crisp_send(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_overlay_t *ov, int mark,
                       uint16_t *buf, int max_px, fluid_send_fn send, void *ctx) {
-    const int H = d->H;
+    const int W = d->W, H = d->H;
     int sent = 0;
 #define XA(i) (d->cx[i] & ~3)
 #define XB(i) (((d->cx[i] + 3) & ~3) < d->fb_w ? ((d->cx[i] + 3) & ~3) : d->fb_w)
 #define YA(j) (d->cy[j] & ~1)
 #define YB(j) (((d->cy[(j) + 1] + 1) & ~1) < d->fb_h ? ((d->cy[(j) + 1] + 1) & ~1) : d->fb_h)
+    /* a row's changed cells far apart (a gap costing more than a window) go as separate windows */
+#define GAPPY(j, gap) ((gap) * (d->cx[1] - d->cx[0]) * (YB(j) - YA(j)) > CRISP_WIN_PX)
     for (int j = 0; j < H; ) {
         int a = d->span[2 * j], b = d->span[2 * j + 1];
         if (a >= b) { j++; continue; }
-        int j1 = j + 1;
+        int split = 0;
+        for (int c = a, last = a; c < b; c++) {
+            if (!d->dirty[j * W + c]) continue;
+            if (GAPPY(j, c - last - 1)) split = 1;
+            last = c;
+        }
+        if (split) {                                    /* this row alone, run by run */
+            int r0 = -1, last = -1;
+            for (int c = a; c <= b; c++) {
+                if (c < b && !d->dirty[j * W + c]) continue;
+                if (r0 >= 0 && (c == b || GAPPY(j, c - last - 1))) {
+                    const int n = crisp_box(d, o, ov, mark, XA(r0), XB(last + 1), YA(j), YB(j), buf, max_px, send, ctx);
+                    if (n < 0) return -1;
+                    sent += n; r0 = -1;
+                }
+                if (c < b) { if (r0 < 0) r0 = c; last = c; }
+            }
+            j++; continue;
+        }
+        int j1 = j + 1;                                 /* rows below join while one box costs less */
         for (; j1 < H && d->span[2 * j1] < d->span[2 * j1 + 1]; j1++) {
             const int na = d->span[2 * j1] < a ? d->span[2 * j1] : a, nb = d->span[2 * j1 + 1] > b ? d->span[2 * j1 + 1] : b;
             const int box = (XB(nb) - XA(na)) * (YB(j1) - YA(j));
@@ -1094,19 +1131,11 @@ static int crisp_send(const fluid_draw_t *d, const fluid_draw_opts_t *o, const f
             if (box > max_px || box > apart) break;
             a = na; b = nb;
         }
-        const int x0 = XA(a), x1 = XB(b), y0 = YA(j), y1 = YB(j1 - 1), w = x1 - x0, rows = (max_px / w) & ~1;
-        if (rows < 2) return -1;
-        for (int y = y0; y < y1; y += rows) {
-            const int h = y1 - y < rows ? y1 - y : rows;
-            const fluid_rect_t t = { buf, w, x0, y, x1, y + h };
-            fluid_draw_rect(d, o, &t, true);
-            fluid_draw_overlay(d, &t, o->palette, ov);
-            fluid_draw_mark(d, &t, o->palette, mark);
-            if (send(ctx, x0, y, w, h, buf) != 0) return -1;
-            sent += w * h;
-        }
-        j = j1;
+        const int n = crisp_box(d, o, ov, mark, XA(a), XB(b), YA(j), YB(j1 - 1), buf, max_px, send, ctx);
+        if (n < 0) return -1;
+        sent += n; j = j1;
     }
+#undef GAPPY
 #undef XA
 #undef XB
 #undef YA

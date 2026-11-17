@@ -22,6 +22,9 @@ const i8 = (s) => { const u = b64(s); return new Int8Array(u.buffer.slice(u.byte
 const u16 = (s) => { const u = b64(s); return new Uint16Array(u.buffer.slice(u.byteOffset, u.byteOffset + u.length)); };
 const ease = (x) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x));
 const WIDTH = { t: 3, r: 4, s: 3 };
+const ATTEND = 'listening', ATTEND_S = 3;   // called, it sits up attending in this clip (ears up, eyes on the viewer), this long
+const FRONT = 0.15;   // facing front this near the middle (across the frame) it only perks up
+const COME_R = 0.08, COME_K = 3, COME_S = 8;   // at the front this near the middle across, facing front; steering; or after walking this long
 const PACE = 0.6;   // the most the body moves a second (world units): above a walk's 0.36 (creature_clip.c CC_PACE)
 const EDGE = 0.35;  // walking past this far from the frame's centre (world units, across) turns it round (creature_clip.c CC_EDGE)
 const EPS = 1e-5;   // a clip's end, against float clocks (the C player's time is float steps)
@@ -154,7 +157,7 @@ export function clipPlayer(rig) {
   const world = new Float32Array(N * 12), fromWorld = new Float32Array(N * 12), out = new Float32Array(N * 12), rootNode = 0;
   const contacts = rig.contacts || [];
   const s = { clip: byName[g.rest.sit] ?? 0, t: 0, ox: 0, oz: 0, queue: [], blendT: 1, blendD: g.blend, lockX: 0, lockZ: 0,
-    mood: 'idle', gesture: null, gestureT: 0, pending: false, cam: { x: 0, z: 0, yaw: clips[0].view, snap: true }, hd: 0, hbase: 0, sense: 0, px: 0, pz: 0, tx: 0, tz: 0, cx0: 0, cz0: 0 };
+    mood: 'idle', gesture: null, gestureT: 0, pending: false, cam: { x: 0, z: 0, yaw: clips[0].view, snap: true }, hd: 0, hbase: 0, sense: 0, come: 0, comeT: 0, px: 0, pz: 0, tx: 0, tz: 0, cx0: 0, cz0: 0 };
   const clipOf = (name) => byName[name];
   const loopOfMood = (m) => byName[g.moods?.[m] ?? m] ?? byName[g.rest.sit];
   const rootAt = (ci, t) => { samplePose(rig, rest, clips[ci], t, tmp); return [tmp[rootNode * POSE], tmp[rootNode * POSE + 2]]; };
@@ -220,7 +223,21 @@ export function clipPlayer(rig) {
       const lat = (s.px - s.cam.x) * rx + (s.pz - s.cam.z) * rz, vlat = wx * rx + wz * rz;
       let want = s.hbase + (s.cam.yaw - cc.view) * D2R, gap = want - s.hd;
       gap -= TAU * Math.round(gap / TAU);
-      if (Math.abs(lat) > EDGE && lat * vlat > 0.05 * dt * Math.abs(lat) && Math.abs(gap) < 0.3) {
+      const walking = cc.to === 'walk';
+      if (s.come === 1 && walking) {
+        // called: it walks toward the viewer, steering to the middle across the frame, and stops there facing front (its
+        // stop carries it on toward the viewer, which does not show)
+        const fx = Math.sin(s.cam.yaw * D2R), fz = Math.cos(s.cam.yaw * D2R), vx = fx - COME_K * lat * rx, vz = fz - COME_K * lat * rz;   // toward the viewer
+        s.comeT = f(s.comeT + dt);
+        if ((Math.abs(lat) < COME_R && Math.sin(s.hd) * fx + Math.cos(s.hd) * fz > 0.9) || s.comeT > COME_S) {
+          attend();                                    // its stop still walks on toward the viewer
+        } else { s.hbase = f(Math.atan2(vx, vz) - (s.cam.yaw - cc.view) * D2R); s.sense = 0; }   // the walk's travel (+z) along v
+      }
+      if (s.come === 2 && cc.to !== 'walk' && cc.from !== 'walk') {    // out of the walk: it turns to face the viewer
+        s.hbase = f(TAU * Math.floor((s.hd - (s.cam.yaw - cc.view) * D2R) / TAU + 0.5)); s.sense = 0;
+        s.come = 3;
+      }
+      if (walking && !s.come && Math.abs(lat) > EDGE && lat * vlat > 0.05 * dt * Math.abs(lat) && Math.abs(gap) < 0.3) {
         // turn round, the way whose arc bends it back toward the frame's middle in depth (turning the same way every time
         // would carry it off into the distance)
         const dep = -(s.px - s.cam.x) * rz + (s.pz - s.cam.z) * rx, bend = wz * -rz - wx * rx;
@@ -242,17 +259,49 @@ export function clipPlayer(rig) {
     }
   }
 
+  // a call does not wait: a gesture or a rest loop playing ends now (crossfading into the way to the call), and so does a clip
+  // with more than 1.2 s to go; a shorter transition finishes and then routes to it; a walk leaves at its stride's end
+  function interrupt() {
+    const c = clips[s.clip];
+    if (c.loop && c.to === 'walk') return;                           // a walk leaves where a stride ends
+    s.queue = [];
+    if (c.loop || c.from === c.to || c.dur - s.t > 1.2) { s.pending = false; advance(); }
+  }
+  function attend() {
+    if (byName[ATTEND] == null) { s.come = 0; return; }
+    s.gesture = { name: ATTEND, clip: ATTEND, hold: ATTEND_S, started: false }; s.gestureT = 0; s.pending = true; s.come = 2;
+    if (byName[ATTEND] === s.clip) { s.gesture.started = true; s.pending = false; }   // attending already: it holds
+    interrupt();
+  }
+
   const api = {
-    nodes: rig.nodes, clips, world: out, clipWorld: world, pose: cur, get clip() { return clips[s.clip].name; }, get t() { return s.t; }, get cam() { return s.cam; },
+    nodes: rig.nodes, clips, world: out, clipWorld: world, pose: cur, get clip() { return clips[s.clip].name; }, get t() { return s.t; }, get cam() { return s.cam; }, get facing() { return s.hd - (s.cam.yaw - clips[s.clip].view) * Math.PI / 180; },
     get queue() { return s.queue.map((i) => clips[i].name); }, get offset() { return [s.ox, s.oz]; },
     mood(m) { if (!MOODS.includes(m) || m === s.mood) return; s.mood = m; s.pending = true; },
+    /** Called (a tap, a shake): it walks to the front of the frame facing the viewer and sits up attending (ATTEND), or,
+     *  facing front near the middle already, just perks up; then back to its mood. act and play end a call. */
+    come() {
+      const cc = clips[s.clip], Y = s.cam.yaw * Math.PI / 180, TAU = 2 * Math.PI;
+      let fc = s.hd - (s.cam.yaw - cc.view) * Math.PI / 180; fc -= TAU * Math.floor(fc / TAU + 0.5);
+      const ox = s.px - s.cam.x, oz = s.pz - s.cam.z;
+      if (Math.abs(fc) < 0.4 && Math.abs(ox * Math.cos(Y) - oz * Math.sin(Y)) < FRONT && cc.to !== 'walk' && cc.from !== 'walk') { attend(); return s.come !== 0; }
+      const clip = g.gestures?.walk; if (clip == null) return false;
+      s.gesture = { name: 'walk', clip, hold: g.hold?.walk ?? 0, started: false }; s.gestureT = 0; s.pending = true;
+      interrupt();
+      s.come = 1; s.comeT = 0;
+      return true;
+    },
+    get coming() { return s.come !== 0; },
+    /** Where it is in the frame: [across (screen x, world units), depth (away from the viewer)]. */
+    get place() { const Y = s.cam.yaw * Math.PI / 180, ox = s.px - s.cam.x, oz = s.pz - s.cam.z; return [ox * Math.cos(Y) - oz * Math.sin(Y), -(ox * Math.sin(Y) + oz * Math.cos(Y))]; },
     act(name) {
+      s.come = 0;
       const clip = g.gestures?.[name] ?? (byName[name] != null ? name : null);
       if (clip == null) return false;
       s.gesture = { name, clip, hold: g.hold?.[name] ?? 0, started: false }; s.gestureT = 0; s.pending = true; return true;
     },
     /** Jump straight to a clip (the preview's route player). */
-    play(name) { s.gesture = null; s.queue = []; start(byName[name], 0); },
+    play(name) { s.come = 0; s.gesture = null; s.queue = []; start(byName[name], 0); },
     /** Queue a route from the current family to clip `name` (the preview's matrix). */
     goto(name) { s.gesture = { name, clip: name, hold: 0, started: false }; s.queue = []; s.pending = true; },
     update(dt) {
@@ -260,7 +309,8 @@ export function clipPlayer(rig) {
       s.t += dt; s.blendT += dt;
       if (s.gesture?.started) s.gestureT += dt;
       // a held gesture (the walk) ends after its time; a clip gesture ends with its clip
-      if (s.gesture?.started && s.gesture.hold && s.gestureT >= s.gesture.hold && clips[s.clip].loop) { s.gesture = null; s.pending = true; }
+      if (s.come >= 2 && !s.gesture) s.come = 0;                        // attended: back to its mood
+      if (s.come !== 1 && s.gesture?.started && s.gesture.hold && s.gestureT >= s.gesture.hold && clips[s.clip].loop) { s.gesture = null; s.pending = true; }
       if (c.loop) {
         const sync = g.sync?.[c.name];
         if (s.pending) {

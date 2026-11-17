@@ -67,6 +67,10 @@ int  cc_clip_find(const cc_t *c, const char *name);
 /** The agent's mood (idle listening thinking speaking happy sleepy surprised); a gesture by name (false: it lacks it). */
 void cc_mood(cc_t *c, const char *mood);
 bool cc_act(cc_t *c, const char *gesture);
+/** Called (a tap, a shake): it walks to the front of the frame facing the viewer and sits up attending (CC_ATTEND), or,
+ *  facing front near the middle already, just perks up; then back to its mood. cc_act and cc_play end a call. */
+bool cc_come(cc_t *c);
+bool cc_coming(const cc_t *c);
 /** Play a clip at once (no route; the preview's player and the tests). */
 void cc_play(cc_t *c, const char *clip);
 

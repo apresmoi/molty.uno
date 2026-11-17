@@ -54,8 +54,10 @@ struct cc {
     int queue[16], nq;
     int mood; int gesture; float gestureT; bool gstarted, pending;
     float camx, camz, camyaw; bool snap;
-    float hd, hbase, px, pz, tx, tz, cx0, cz0, sense;  /* the body turned to its clip's side (hd, rad) and where it is (px, pz), under a
-                                         * fixed camera; hbase: the way it walks (turned round at the frame's edges) */
+    float hd, hbase, px, pz, tx, tz, cx0, cz0, sense;   /* the body turned to its clip's side (hd, rad) and where it is
+                                         * (px, pz; going to tx, tz), under a fixed camera; hbase: its way (turned round at
+                                         * the frame's edges, sense: which way round) */
+    int come; float comeT;              /* called (cc_come): 1 walking to the front, 2 attending, 3 facing the viewer */
     float *cur, *from, *tmp, *pose, *world, *fromWorld, *out;
 };
 
@@ -412,6 +414,13 @@ int cc_route(const cc_t *c, int a, int b, int *out, int max) {
  * round), to each clip's side, and walks on the floor in the way it faces; near the frame's side edges, walking
  * outward, it turns round (an arc, as it walks). c->world is the clip's pose (root motion included); c->out the same
  * turned and placed (clip-player.js turn()). */
+#define CC_ATTEND "listening"           /* called, it sits up attending in this clip (ears up, eyes on the viewer)    */
+#define CC_ATTEND_S 3.f                 /* for this long, then back to its mood                                       */
+#define CC_COME_R 0.08f                 /* it is at the front this near the middle across (world units), facing front */
+#define CC_COME_K 3.f                   /* how hard it steers to the middle while it comes                           */
+#define CC_COME_S 8.f                   /* ...or after walking this long                                              */
+#define CC_FRONT 0.15f                  /* facing front this near the middle (across the frame) it only perks up       */
+static void attend(cc_t *c);
 #define CC_PACE 0.6f                    /* the most it moves a second (world units): above a walk's 0.36           */
 #define CC_EDGE 0.35f                   /* walking past this far from the frame's centre (world units, across) turns it */
 static void turn(cc_t *c, float dt) {
@@ -434,7 +443,25 @@ static void turn(cc_t *c, float dt) {
         const float lat = (c->px - c->camx) * rx + (c->pz - c->camz) * rz, vlat = wx * rx + wz * rz;
         float want = c->hbase + (c->camyaw - cc->view) * D2R, gap = want - c->hd;
         gap -= 6.28318530718f * roundf(gap / 6.28318530718f);
-        if (fabsf(lat) > CC_EDGE && lat * vlat > 0.05f * dt * fabsf(lat) && fabsf(gap) < 0.3f) {
+        const int wf = fam_of(c, "walk");
+        const bool walking = wf >= 0 && cc->to == wf;
+        if (c->come == 1 && walking) {
+            /* called: it walks toward the viewer, steering to the middle across the frame, and stops there facing front
+             * (its stop carries it on toward the viewer, which does not show) */
+            const float fx = sinf(c->camyaw * D2R), fz = cosf(c->camyaw * D2R);         /* toward the viewer, on the floor */
+            const float vx = fx - CC_COME_K * lat * rx, vz = fz - CC_COME_K * lat * rz;
+            c->comeT += dt;
+            if ((fabsf(lat) < CC_COME_R && sinf(c->hd) * fx + cosf(c->hd) * fz > 0.9f) || c->comeT > CC_COME_S) {
+                attend(c);                             /* its stop still walks on toward the viewer */
+            } else {                                   /* its way: the walk's travel (+z of the clip) along v */
+                c->hbase = atan2f(vx, vz) - (c->camyaw - cc->view) * D2R; c->sense = 0.f;
+            }
+        }
+        if (c->come == 2 && cc->to != wf && cc->from != wf) {   /* out of the walk: it turns to face the viewer */
+            c->hbase = 6.28318530718f * floorf((c->hd - (c->camyaw - cc->view) * D2R) / 6.28318530718f + 0.5f); c->sense = 0.f;
+            c->come = 3;
+        }
+        if (walking && !c->come && fabsf(lat) > CC_EDGE && lat * vlat > 0.05f * dt * fabsf(lat) && fabsf(gap) < 0.3f) {
             /* turn round, the way whose arc bends it back toward the frame's middle in depth (turning the same way
              * every time would carry it off into the distance) */
             const float dep = -(c->px - c->camx) * rz + (c->pz - c->camz) * rx, bend = wz * -rz - wx * rx;   /* depth; its change per +turn */
@@ -571,7 +598,37 @@ void cc_mood(cc_t *c, const char *mood) {
         if (!strcmp(MOODS[m], mood)) { if (m != c->mood) { c->mood = m; c->pending = true; } return; }
 }
 
-bool cc_act(cc_t *c, const char *name) {
+static bool act(cc_t *c, const char *name);
+/* a call does not wait: a gesture or a rest loop playing ends now (crossfading into the way to the call), and so does a
+ * clip with more than 1.2 s to go; a shorter transition finishes and then routes to it; a walk leaves at its stride's end */
+static void interrupt(cc_t *c) {
+    const clip_t *k = &c->clip[c->cur_clip];
+    if (k->loop && k->to == fam_of(c, "walk")) return;              /* a walk leaves where a stride ends */
+    c->nq = 0;
+    if (k->loop || k->from == k->to || k->dur - c->t > 1.2) { c->pending = false; advance(c); }
+}
+static void attend(cc_t *c) {
+    if (!act(c, CC_ATTEND)) { c->come = 0; return; }
+    c->gest[c->gesture].hold = CC_ATTEND_S; c->come = 2;
+    interrupt(c);
+    if (c->gest[c->gesture].clip == c->cur_clip) { c->gstarted = true; c->pending = false; }   /* attending already: it holds */
+}
+
+bool cc_come(cc_t *c) {
+    const clip_t *cc = &c->clip[c->cur_clip];
+    const float D2R = 3.14159265358979f / 180.f, Y = c->camyaw * D2R, TAU = 6.28318530718f;
+    float f = c->hd - (c->camyaw - cc->view) * D2R; f -= TAU * floorf(f / TAU + 0.5f);
+    const float ox = c->px - c->camx, oz = c->pz - c->camz;
+    const int wf = fam_of(c, "walk");
+    if (fabsf(f) < 0.4f && fabsf(ox * cosf(Y) - oz * sinf(Y)) < CC_FRONT && cc->to != wf && cc->from != wf) { attend(c); return c->come != 0; }   /* it perks up */
+    if (!act(c, "walk")) return false;
+    interrupt(c);
+    c->come = 1; c->comeT = 0.f;
+    return true;
+}
+bool cc_coming(const cc_t *c) { return c->come != 0; }
+
+static bool act(cc_t *c, const char *name) {
     int g = -1;
     for (int i = 0; i < c->ngest; i++) if (!strcmp(c->gest[i].name, name)) g = i;
     if (g < 0) {                                   /* a clip by its own name, as the JS player allows */
@@ -584,9 +641,12 @@ bool cc_act(cc_t *c, const char *name) {
     return true;
 }
 
+bool cc_act(cc_t *c, const char *name) { c->come = 0; return act(c, name); }   /* the agent's: it ends a call */
+
 void cc_play(cc_t *c, const char *clip) {
     const int k = cc_clip_find(c, clip);
     if (k < 0) return;
+    c->come = 0;
     c->gesture = -1; c->nq = 0;
     start(c, k, 0.f);
 }
@@ -596,7 +656,8 @@ void cc_update(cc_t *c, float dt) {
     const clip_t *k = &c->clip[ci];
     c->t += dt; c->blendT += dt;
     if (c->gesture >= 0 && c->gstarted) c->gestureT += dt;
-    if (c->gesture >= 0 && c->gstarted && c->gest[c->gesture].hold > 0.f && c->gestureT >= c->gest[c->gesture].hold && c->clip[c->cur_clip].loop) {
+    if (c->come >= 2 && c->gesture < 0) c->come = 0;                   /* attended: back to its mood */
+    if (c->come != 1 && c->gesture >= 0 && c->gstarted && c->gest[c->gesture].hold > 0.f && c->gestureT >= c->gest[c->gesture].hold && c->clip[c->cur_clip].loop) {
         c->gesture = -1; c->pending = true;
     }
     if (k->loop) {
