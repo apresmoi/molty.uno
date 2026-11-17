@@ -1068,6 +1068,11 @@ esp_err_t mole_fluid_framebuffer_sync(void) {
     return xSemaphoreTake(s_fb_done, pdMS_TO_TICKS(500)) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
 }
 
+/* a wait or step that took over STALL_AT_MS: logged with where (the panel and the sim stall together when one of them
+ * blocks the other; /api/log stall.at shows which) */
+#define STALL_AT_MS 200
+#define STALL_AT(tag, t0) do { const int64_t _d = esp_timer_get_time() - (t0); if (_d > STALL_AT_MS * 1000) mole_diag_event(false, "stall.at %s %d ms", tag, (int)(_d / 1000)); } while (0)
+
 static void draw_task(void *arg) {
     (void)arg;
     esp_err_t wdt_err = esp_task_wdt_add(NULL);
@@ -1086,8 +1091,10 @@ static void draw_task(void *arg) {
         int64_t touch_t = s_dtouch; s_dtouch = 0;
         if (t0 - last_touch >= FLUID_TOUCH_US) {        /* for the sim's next frame */
             uint16_t xs[MOLTY_TOUCH_MAX_POINTS] = { 0 }, ys[MOLTY_TOUCH_MAX_POINTS] = { 0 };
+            const int64_t _ts1089 = esp_timer_get_time();
             const int n = molty_touch_poll(xs, ys, MOLTY_TOUCH_MAX_POINTS);
-            xSemaphoreTake(s_mutex, portMAX_DELAY);
+            STALL_AT("draw.touch", _ts1089);
+            { const int64_t _ts = esp_timer_get_time(); xSemaphoreTake(s_mutex, portMAX_DELAY); STALL_AT("draw.mutex", _ts); }
             s_tp = (touch_read_t){ n, xs[0], ys[0], t0, s_tp.seq + 1 };
             xSemaphoreGive(s_mutex);
             last_touch = t0;
@@ -1111,9 +1118,13 @@ static void draw_task(void *arg) {
             /* overlays blend over the pixel under them: redraw the cells under the last
              * one (restores what it covered) and the next one, then draw it on top */
             else { fluid_draw_overlay_dirty(s_draw, &ov_drawn); fluid_draw_overlay_dirty(s_draw, &ov); }
+            const int64_t _ts1114 = esp_timer_get_time();
             nc = fluid_draw_cells(s_draw, s_frame, &s_dopts);
+            STALL_AT("draw.cells", _ts1114);
             t1 = esp_timer_get_time();
+            const int64_t _ts1116 = esp_timer_get_time();
             bool sent = fluid_draw_send2(s_draw, &s_dopts, &ov, mark, full, s_win, s_win2, s_win_px, send_win, NULL) >= 0;
+            STALL_AT("draw.send", _ts1116);
             if (s_win2) { const int64_t tw = esp_timer_get_time(); sent &= molty_display_blit_wait() == ESP_OK; s_blit_us += esp_timer_get_time() - tw; }
             s_full_flush = !sent;                       /* a window that failed: repaint all */
             mark_drawn = mark; pal_drawn = s_dopts.palette; ov_drawn = ov;
@@ -1135,7 +1146,7 @@ static void draw_task(void *arg) {
         pema[0] = pema[0] * 0.9f + (float)fluid_prof[FP_DSAMPLE] / (float)s_cpu_mhz / 1000.f * 0.1f;
         pema[1] = pema[1] * 0.9f + (float)fluid_prof[FP_DRASTER] / (float)s_cpu_mhz / 1000.f * 0.1f;
         fluid_prof[FP_DSAMPLE] = fluid_prof[FP_DRASTER] = 0;
-        xSemaphoreTake(s_mutex, portMAX_DELAY);
+        { const int64_t _ts = esp_timer_get_time(); xSemaphoreTake(s_mutex, portMAX_DELAY); STALL_AT("draw.mutex2", _ts); }
         s_stats.draw_ms = dms; s_stats.flush_ms = lms; s_stats.cells_drawn = nc;
         s_stats.send_n = s_stats.send_n * 0.9f + s_send_n * 0.1f; s_stats.send_kpx = s_stats.send_kpx * 0.9f + s_send_px / 1000.f * 0.1f;
         s_stats.blit_ms = s_stats.blit_ms * 0.9f + s_blit_us / 1000.f * 0.1f;
@@ -1217,7 +1228,7 @@ static void fluid_task(void *arg) {
         int req = -1, req_fx = 0; bool req_reel = false, req_hold = false;
         float rip[FLUID_RIPPLE_Q][3]; int nrip = 0;
         bool text_changed = false, text_append = false;
-        xSemaphoreTake(s_mutex, portMAX_DELAY);
+        { const int64_t _ts = esp_timer_get_time(); xSemaphoreTake(s_mutex, portMAX_DELAY); STALL_AT("sim.mutex", _ts); }
         cfg = s_cfg;
         req = s_req_state; req_fx = s_req_fx; req_hold = s_req_text_hold; s_req_state = -1;
         const bool req_implied = s_req_implied; s_req_implied = false;
@@ -1316,10 +1327,10 @@ static void fluid_task(void *arg) {
         }
 
         int64_t t0 = esp_timer_get_time();
-        sim_frame(rdt, &cfg);
+        { const int64_t _ts = esp_timer_get_time(); sim_frame(rdt, &cfg); STALL_AT("sim.frame", _ts); }
         int64_t t1 = esp_timer_get_time();
         /* hand the frame to the drawer: wait until it finished the previous one */
-        xSemaphoreTake(s_idle, portMAX_DELAY);
+        { const int64_t _ts = esp_timer_get_time(); xSemaphoreTake(s_idle, portMAX_DELAY); STALL_AT("sim.idle", _ts); }
         if (s_dir.bye) {   /* the goodbye's fade: the panel's level, with the drawer idle */
             const float l = fd_bye_level(&s_dir);
             if (s_bye_lvl - l >= 0.02f || (l <= 0.f && s_bye_lvl > 0.f)) {
@@ -1381,7 +1392,7 @@ static void fluid_task(void *arg) {
             prof_ema[q] = prof_ema[q] * 0.9f + (float)fluid_prof[q] / (float)s_cpu_mhz / 1000.f * 0.1f;
             fluid_prof[q] = 0;
         }
-        xSemaphoreTake(s_mutex, portMAX_DELAY);
+        { const int64_t _ts = esp_timer_get_time(); xSemaphoreTake(s_mutex, portMAX_DELAY); STALL_AT("sim.mutex2", _ts); }
         memcpy(s_stats.prof_ms, prof_ema, sizeof(float) * FP_DSAMPLE);
         s_stats.fps = fps; s_stats.frame_ms = fms; s_stats.pre_ms = pms; s_stats.sim_ms = sms; s_stats.wait_ms = wms;
         s_stats.energy = s_sim->energy; s_stats.err = s_sim->err;
@@ -1411,8 +1422,9 @@ static void fluid_task(void *arg) {
             /* the drawer (core 0) slower: more here; this core waiting on the other's band (k_wait): more here too;
              * this core slower and not waiting: less */
             const float d = s_stats.draw_ms + s_stats.flush_ms - sms, kw = prof_ema[FP_K_WAIT];
-            share += d > 1.f || kw > 1.f ? 1.f : d < -1.f && kw < 0.5f ? -1.f : 0.f;
-            share = share < 25.f ? 25.f : share > 85.f ? 85.f : share;
+            const float step = fminf(3.f, fabsf(d) * 0.5f);   /* faster the further apart (the ring's wave comes and goes in a second) */
+            share += d > 1.f || kw > 1.f ? step : d < -1.f && kw < 0.5f ? -step : 0.f;
+            share = share < 30.f ? 30.f : share > 80.f ? 80.f : share;
             cpk_set_share(s_cpk, (int)share); s_stats.share = (int)share;
         }
         s_stats.inside = s_sim->inside; s_stats.grid_w = s_sim->W; s_stats.grid_h = s_sim->H;
