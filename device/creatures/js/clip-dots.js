@@ -106,6 +106,10 @@ export function clipDots(rig, W, H) {
       const r = [d[2], 0, -d[0]], rl = Math.hypot(r[0], r[2]); r[0] /= rl; r[2] /= rl;
       const u = [d[1] * r[2] - d[2] * r[1], d[2] * r[0] - d[0] * r[2], d[0] * r[1] - d[1] * r[0]];
       cam = { d, r, u, c: [camIn.x, 0, camIn.z] };
+      {   // the camera in whole dots across the screen: the creature and the floor move together a dot at a time
+        const uu = (cam.c[0] * r[0] + cam.c[2] * r[2]) / dsx, fu = uu - Math.floor(uu + 0.5);
+        cam.c[0] -= fu * dsx * r[0]; cam.c[2] -= fu * dsx * r[2];
+      }
       field.fill(0); z.fill(-1e9); own.fill(-1); feat.fill(0); on.fill(0); pri.fill(0); rgb.fill(0);
       // 1. the merged body: a metaball field, and the nearest element surface per dot
       for (const s of shapes) {

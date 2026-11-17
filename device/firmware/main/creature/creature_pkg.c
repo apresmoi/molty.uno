@@ -77,6 +77,7 @@ static const char *const MOOD_NAMES[7] = { "idle", "listening", "thinking", "spe
 /* a rigged creature's frame: the engine's mood and each new gesture play go to the clip player, which
  * routes and plays; then the dots (cells: braille bytes and one colour each) */
 static void clip_frame(cpk_t *k, fluid_sim_t *s, float dt) {
+    FLUID_PROF_BEGIN(c0);
     me_pose_t e;
     me_update(&k->eng, dt, &e);
     const mood_engine_t *g = &k->eng;
@@ -85,8 +86,14 @@ static void clip_frame(cpk_t *k, fluid_sim_t *s, float dt) {
     k->act_n = g->act_n;
     cc_update(k->clip, dt);
     if (!k->dots) k->dots = cd_create(k->clip, s->W, s->H);
-    if (!k->dots) return;
+    if (!k->dots) { FLUID_PROF_END(FP_K_PLAY, c0); return; }
+    FLUID_PROF_END(FP_K_PLAY, c0);
     cd_draw(k->dots, k->clip, k->frame++);
+    {   /* the dots' stages into the fluid's profile (GET /api/creature/state prof_ms.k_*) */
+        uint32_t st[8] = { 0 };
+        cd_prof(k->dots, st);
+        for (int i = 0; i < 8; i++) fluid_prof[FP_K_BOX + i] += st[i];
+    }
     for (int i = 0; i < s->N; i++) s->T[i] = 0;    /* no ink: the dots are the creature */
 }
 
