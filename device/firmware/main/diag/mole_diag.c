@@ -717,6 +717,9 @@ static uint32_t wanted_since(uint32_t from)
     return n;
 }
 
+static bool (*s_quiet)(void);
+void mole_diag_set_quiet(bool (*quiet)(void)) { s_quiet = quiet; }
+
 static void persist_task(void *arg)
 {
     (void)arg;
@@ -727,6 +730,9 @@ static void persist_task(void *arg)
         /* never in the first 90 s, at least 5 min apart: sleep it out, the request stays pending */
         int64_t wait = log_persist_delay_us(esp_timer_get_time(), s_last_persist);
         if (wait > 0) vTaskDelay(pdMS_TO_TICKS(wait / 1000 + 10));
+        /* not mid-animation: until the screen is quiet, bounded (log_persist_go) */
+        for (const int64_t t0 = esp_timer_get_time(); !log_persist_go(!s_quiet || s_quiet(), esp_timer_get_time() - t0);)
+            vTaskDelay(pdMS_TO_TICKS(500));
         atomic_store(&s_persist_req, false);
         s_last_persist = esp_timer_get_time();
         persist_now();

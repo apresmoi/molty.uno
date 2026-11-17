@@ -315,6 +315,7 @@ static int   s_last_tx = 0, s_last_ty = 0;
 static volatile bool s_full_flush = true;
 static atomic_bool s_screen_want = true;        /* mole_fluid_screen                    */
 static atomic_bool s_screen = true;             /* on the glass now (the task switches it) */
+static bool fluid_quiet(void);
 static atomic_bool s_bye = false, s_bye_done = false;   /* mole_fluid_goodbye; it ended   */
 static float    s_bye_lvl = 1.f;                    /* the panel's level the goodbye set */
 static bool     s_word_dots = false;                /* the boot word's dots (s_tx->dots) are drawn */
@@ -1573,6 +1574,7 @@ esp_err_t mole_fluid_creature_init(void) {
         free_grid();
         return ESP_ERR_NO_MEM;
     }
+    mole_diag_set_quiet(fluid_quiet);
     if (xTaskCreatePinnedToCore(fluid_task, "fluid_task", 6144, NULL, 2, &s_task, 1) != pdPASS) {
         s_run = false; s_task = NULL;
         xSemaphoreGive(s_go);                    /* wake the drawer so it sees s_run=false */
@@ -2032,6 +2034,16 @@ void mole_fluid_progress(float pct, bool done) {
     atomic_fetch_add(&s_prog_seq, 1);
 }
 bool mole_fluid_screen_on(void) { return atomic_load(&s_screen); }
+/* the screen quiet for the log's flash writes (mole_diag_set_quiet): off, or the panel getting little (a creature at
+ * rest: ~10 k px a frame; walking ~50 k, a ring forming 100 k+) */
+#define FLUID_QUIET_KPX 20.f
+static bool fluid_quiet(void) {
+    if (!atomic_load(&s_screen)) return true;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    const bool q = s_stats.send_kpx < FLUID_QUIET_KPX;
+    xSemaphoreGive(s_mutex);
+    return q;
+}
 
 void mole_fluid_set_status(int status) {
     if (!s_mutex || status == s_status_in) return;    /* unlocked peek: only this caller writes it */
