@@ -248,9 +248,9 @@ link_ack_t link_ack_decide(link_ack_t mode, const char *reason, bool speech_know
                            bool screen_taken, bool has_speaker)
 {
     if (mode <= LINK_ACK_OFF || mode > LINK_ACK_CHIRP || screen_taken || !reason) return LINK_ACK_OFF;
-    bool heard = !strcmp(reason, "turn_end") || !strcmp(reason, "tap") ||
+    bool heard = !strcmp(reason, "turn_end") ||
                  (!strcmp(reason, "silence") && (!speech_known || speech_ms > 0)) ||
-                 (!strcmp(reason, "max") && speech_known && speech_ms >= LINK_ACK_MIN_SPEECH_MS);
+                 ((!strcmp(reason, "max") || !strcmp(reason, "tap")) && speech_known && speech_ms >= LINK_ACK_MIN_SPEECH_MS);
     if (!heard) return LINK_ACK_OFF;
     return mode == LINK_ACK_CHIRP && !has_speaker ? LINK_ACK_THINKING : mode;
 }

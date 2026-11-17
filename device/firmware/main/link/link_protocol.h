@@ -141,9 +141,10 @@ bool link_ack_parse(const char *name, link_ack_t *mode);
 bool link_ack_arg(const cJSON *args, link_ack_t setting, link_ack_t *mode);
 /* What a listen that ended acknowledges: the listen's mode when it heard speech — reason
  * "turn_end" (the relay's end of turn), "silence" (the device VAD's end of speech, with
- * speech measured > 0 if measured), or "max" (window full) with ≥ LINK_ACK_MIN_SPEECH_MS of
- * measured speech — and nothing else owns the screen (an explicit mood, an ask, an update
- * screen or a pairing arrived during the listen: screen_taken). no_speech / error / a
+ * speech measured > 0 if measured), or "max" (window full) / "tap" (a tap, a held button's
+ * release) with ≥ LINK_ACK_MIN_SPEECH_MS of measured speech (a press that heard nobody gets
+ * no chirp) — and nothing else owns the screen (an explicit mood, an ask, an update screen or
+ * a pairing arrived during the listen: screen_taken). no_speech / error / a
  * cancelled listen ("error" too) never ack. A chirp without a speaker is thinking only. */
 #define LINK_ACK_MIN_SPEECH_MS 160u
 link_ack_t link_ack_decide(link_ack_t mode, const char *reason, bool speech_known, uint32_t speech_ms,

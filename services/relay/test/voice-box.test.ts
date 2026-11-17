@@ -145,8 +145,8 @@ async function openBox(room: DeviceRoom, host: FakeHost, token: string, o: BoxOp
   return { sock, ...b };
 }
 
-async function setup(o: { box?: BoxOpts | false; keepClosing?: boolean; caps?: string[]; chunks?: number; timings?: Record<string, number>; ack?: string } = {}) {
-  const ctx = makeRoom({ timings: { ...FAST, ...o.timings } });
+async function setup(o: { box?: BoxOpts | false; keepClosing?: boolean; caps?: string[]; chunks?: number; timings?: Record<string, number>; ack?: string; realVoiceCheck?: boolean } = {}) {
+  const ctx = makeRoom({ timings: { ...FAST, ...o.timings }, ...(o.realVoiceCheck ? { voiced: undefined } : {}) });
   ctx.host.keepClosing = !!o.keepClosing;
   const sock = await connect(ctx.room, ctx.host, undefined, LINK, o.caps ? { caps: o.caps } : {});
   const dev = device(ctx.room, sock, { chunks: o.chunks, ack: o.ack });
@@ -585,6 +585,17 @@ describe("semantic end of turn (box stt.turn_end)", () => {
     expect((out as any).result.timings.listen.turn_end).toBeLessThan(250);
     // speech_ms is not invented: the device never measured this end
     expect((out as any).result).not.toHaveProperty("speech_ms");
+  });
+
+  it("a turn end on audio with no voice in it (flat tones here) is no_speech: the device stops without a chirp, nothing transcribed", async () => {
+    const w = await setup({ caps: NEW_FW, chunks: 12, box: { turnEndAfter: 3 }, realVoiceCheck: true });
+    const out = await w.room.talk(w.token, { listen_ms: 8000 });
+    expect(out).toMatchObject({ ok: true, result: { heard: "", reason: "no_speech" } });
+    const stops = w.dev.log.filter((l) => l.name === "listen_stop");
+    expect(stops.map((l) => l.args.reason)).toEqual(["no_speech"]);
+    // the stream was dropped, never finalized: no stt.end, and no thinking for it
+    expect(w.box!.control.map((f) => f.t)).not.toContain("stt.end");
+    expect(w.dev.log.filter((l) => l.name === "mood").map((l) => l.args.mood)).not.toContain("thinking");
   });
 
   it("old firmware (no listen_stop cap): no stop command, the job still ends early; late frames are dropped", async () => {

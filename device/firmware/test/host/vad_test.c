@@ -208,9 +208,12 @@ static void test_max_and_off(void)
     seg_t room[] = {{NOISE, QUIET, 60000}};
     r = run(&c, room, N(room));
     CHECK(r.v == VAD_END_MAX && r.end_ms == 8000, "vad off, silence: verdict %d at %u ms", r.v, r.end_ms);
+    /* ...but it still measures: a held press of silence spoke 0 ms (no chirp), an utterance its length */
+    CHECK(r.speech_ms == 0, "vad off, silence: speech %u ms", r.speech_ms);
     seg_t u[] = {{NOISE, QUIET, 500}, {SPEECH, -25.f, 1500}, {NOISE, QUIET, 60000}};
     r = run(&c, u, N(u));
     CHECK(r.v == VAD_END_MAX && r.end_ms == 8000, "vad off, utterance: verdict %d at %u ms", r.v, r.end_ms);
+    CHECK(r.speech_ms >= 1400 && r.speech_ms <= 1600, "vad off, utterance: speech %u ms", r.speech_ms);
 
     /* window shorter than no_speech_ms: max wins */
     c = cfg_max(2000);
@@ -268,8 +271,10 @@ static void test_speech_known(void)
     CHECK(vad_speech_known(&v), "unknown after calibration");
     c.enabled = false;
     vad_init(&v, &c);
-    vad_feed(&v, quiet, N(quiet));               /* a full second with VAD off */
-    CHECK(!vad_speech_known(&v), "known with VAD off");
+    vad_feed(&v, quiet, 1600);
+    CHECK(!vad_speech_known(&v), "known inside calibration, VAD off");
+    vad_feed(&v, quiet, N(quiet) - 1600);        /* a full second with VAD off: measured all the same */
+    CHECK(vad_speech_known(&v), "unknown with VAD off");
 }
 
 /* the mic level for the screen's ring (vad_level): ~0 for the room, ~1 for close speech,
