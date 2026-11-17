@@ -782,9 +782,13 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         s_nshp = hd.n;
         /* its fine dust: for the drawing at full growth (the calm one kept), built a few ms a frame */
         if (s_fine && s_hd.gen && hd.n >= 0) {
-            uint32_t key;
-            const int nf = scene_full_shapes(s, s_sp.cur, s_sp.t, s_fshp, &key);
-            if (nf >= 0) fluid_fine_want(s_fine, key, !(s_sp.cur->focus >= 0 && s_sp.cur->glow > 0.f), s_fshp, nf, cfg->palette);
+            static uint32_t wanted;                        /* the shapes are painted again only when they change */
+            const uint32_t k0 = scene_full_key(s, s_sp.cur, s_sp.t);
+            if (k0 != wanted || (s_fine->live < 0 && s_fine->ready < 0 && s_fine->build < 0)) {
+                uint32_t key;
+                const int nf = scene_full_shapes(s, s_sp.cur, s_sp.t, s_fshp, &key);
+                if (nf >= 0) { fluid_fine_want(s_fine, key, !(s_sp.cur->focus >= 0 && s_sp.cur->glow > 0.f), s_fshp, nf, cfg->palette); wanted = key; }
+            }
             fluid_fine_work(s_fine, FINE_BUILD_US);
         }
         /* a new word: a gentle wave under its letters; the reading's end: under the last one's, as it breaks up */
@@ -1135,6 +1139,19 @@ static void draw_task(void *arg) {
         }
         int64_t t2 = esp_timer_get_time();
         mole_diag_panel_frame((uint32_t)(t1 - t0), (uint32_t)(t2 - t1));
+        {   /* the fine dust's own cost on this core, every ~10 s while a scene shows it (/api/log) */
+            static uint32_t cells_us, send_us;
+            fluid_fine_t *ff = s_dopts.fine;
+            if (ff) {
+                cells_us += (uint32_t)(t1 - t0); send_us += (uint32_t)(t2 - t1);
+                if (ff->prof_n >= 300) {
+                    mole_diag_event(false, "fine frame=%.1fms rect=%.1fms cells=%.1fms send=%.1fms specks=%d n=%u",
+                                    ff->prof_frame / 1000.f / ff->prof_n, ff->prof_rect / 1000.f / ff->prof_n, cells_us / 1000.f / ff->prof_n,
+                                    send_us / 1000.f / ff->prof_n, fluid_fine_specks(ff), (unsigned)ff->prof_n);
+                    ff->prof_frame = ff->prof_rect = ff->prof_n = 0; cells_us = send_us = 0;
+                }
+            }
+        }
         if (touch_t) mole_diag_touch_latency((uint32_t)(t2 - touch_t));
         dms = dms * 0.9f + (t1 - t0) / 1000.f * 0.1f;
         lms = lms * 0.9f + (t2 - t1) / 1000.f * 0.1f;

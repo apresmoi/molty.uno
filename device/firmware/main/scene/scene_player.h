@@ -190,6 +190,8 @@ typedef struct {
 /** The scene's shapes at t with its tapped spot (sc->focus) at full growth and lit, no caption: what its fine dust
  *  gathers round (fluid_fine_want). n of them (-1: too many); key: what they depend on (the same key, the same shapes). */
 int scene_full_shapes(fluid_sim_t *s, const scene_t *sc, float t, fluid_shape_t *out, uint32_t *key);
+/** Just the key scene_full_shapes would give (cheap: no shapes). */
+uint32_t scene_full_key(const fluid_sim_t *s, const scene_t *sc, float t);
 
 /** Rasterise sc at t s (and cap, if any, over it) on the braille dots (the items' dots only when
  *  what is visible changes: the subtitle is laid over them, a grown item's dots follow it at

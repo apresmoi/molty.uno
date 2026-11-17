@@ -998,15 +998,21 @@ int scene_full_shapes(fluid_sim_t *s, const scene_t *sc, float t, fluid_shape_t 
     const ctx_t c = { &s_cv, 1.f / s_cv.H, &h, false };
     const bool tapped = sc->focus >= 0 && sc->glow > 0.f;
     paint_items(&c, sc, t, tapped ? scene_spot_grow(sc, sc->focus) : 1.f, tapped ? 1.f : 0.f, tl, &tn);
+    *key = scene_full_key(s, sc, t);
+    return h.n;
+}
+
+uint32_t scene_full_key(const fluid_sim_t *s, const scene_t *sc, float t) {
+    if (!sc) return 0;
     /* what they depend on: the build, the grid, the tapped spot, the items visible */
+    const bool tapped = sc->focus >= 0 && sc->glow > 0.f;
     uint32_t k = (2166136261u ^ sc->serial) * 16777619u;
     k = (k ^ (uint32_t)s->stage ^ (uint32_t)(tapped ? sc->focus + 1 : 0) << 20) * 16777619u;
     for (int n = 0; n < sc->nitems; n++) {
         const scene_item_t *it = &sc->items[n];
         k = (k ^ (uint32_t)(t >= it->on && !(it->off > 0.f && t >= it->off))) * 16777619u;
     }
-    *key = k ? k : 1;
-    return h.n;
+    return k ? k : 1;
 }
 
 int scene_outline(const scene_t *sc, int n, void (*fn)(void *ctx, float x, float y), void *ctx) {
