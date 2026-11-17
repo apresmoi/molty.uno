@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <dirent.h>
 
 #ifdef ESP_PLATFORM
 #include "esp_heap_caps.h"
@@ -184,6 +185,36 @@ const char *pkg_store_room(const char *root, const char *id, uint32_t size) {
     const bool full = find(e, n, id) < 0 && n >= PKG_INSTALLED_MAX;
     STORE_FREE(e);
     return full || used + size > PKG_QUOTA ? "no_space" : NULL;
+}
+
+uint32_t pkg_store_installed_size(const char *root, const char *id) {
+    pkg_entry_t e;
+    char p[96]; struct stat st;
+    if (!pkg_store_find(root, id, &e)) return 0;
+    path(p, sizeof(p), root, e.file);
+    return stat(p, &st) == 0 ? (uint32_t)st.st_size : 0;
+}
+
+int pkg_store_sweep(const char *root) {
+    pkg_entry_t *e = entries();
+    if (!e) return 0;
+    const int n = load(root, e, PKG_INSTALLED_MAX);
+    const bool have_index = exists(root, "index.json");
+    DIR *d = opendir(root);
+    int gone = 0;
+    for (struct dirent *de = d ? readdir(d) : NULL; de; de = readdir(d)) {
+        const char *name = de->d_name;
+        if (name[0] == '.' || !strcmp(name, "index.json") || (!have_index && !strcmp(name, "index.tmp"))) continue;
+        bool named = false;
+        for (int i = 0; i < n && !named; i++) named = !strcmp(e[i].file, name);
+        if (named) continue;
+        char p[96];
+        path(p, sizeof(p), root, name);
+        if (remove(p) == 0) gone++;
+    }
+    if (d) closedir(d);
+    STORE_FREE(e);
+    return gone;
 }
 
 /* at most r->size bytes into buf, hashed as they come */

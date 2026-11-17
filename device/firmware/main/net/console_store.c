@@ -29,6 +29,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <dirent.h>
 #include <unistd.h>
 
 #include "freertos/FreeRTOS.h"
@@ -594,6 +595,16 @@ void console_store_init(void)
         return;
     }
     s_spiffs_state = formatted_this_boot ? "formatted_this_boot" : "ok";
+    /* what a write cut short leaves (each writer writes a .tmp then renames it), and a filesystem whose count is off */
+    static const char *const STALE[] = { SPIFFS_HTML_TMP_PATH, "/spiffs/creature.molty.tmp", "/spiffs/diag.tmp", "/spiffs/power.tmp" };
+    for (size_t q = 0; q < sizeof(STALE) / sizeof(STALE[0]); q++) remove(STALE[q]);
+    {
+        size_t total = 0, used = 0;
+        if (esp_spiffs_info(SPIFFS_PARTITION_LABEL, &total, &used) == ESP_OK && used > total) {
+            ESP_LOGW(TAG, "SPIFFS counts %u of %u used: checking it", (unsigned)used, (unsigned)total);
+            esp_spiffs_check(SPIFFS_PARTITION_LABEL);
+        }
+    }
     size_t html_len = 0;
     char *html_buf = spiffs_load_html(&html_len);
     if (html_buf) {
@@ -602,6 +613,45 @@ void console_store_init(void)
         s_html_override_len = html_len;
         xSemaphoreGive(s_html_mutex);
         ESP_LOGI(TAG, "console restored from SPIFFS: %u bytes", (unsigned)html_len);
+    }
+}
+
+void console_store_fs_json(cJSON *into, int max)
+{
+    size_t total = 0, used = 0;
+    if (esp_spiffs_info(SPIFFS_PARTITION_LABEL, &total, &used) != ESP_OK) { cJSON_AddStringToObject(into, "state", s_spiffs_state); return; }
+    cJSON_AddNumberToObject(into, "total", (double)total);
+    cJSON_AddNumberToObject(into, "used", (double)used);
+    enum { TOP = 16 };
+    struct { char name[48]; long size; } top[TOP];
+    int ntop = 0, nfiles = 0;
+    long bytes = 0;
+    if (max > TOP) max = TOP;
+    DIR *d = opendir("/spiffs");
+    for (struct dirent *de = d ? readdir(d) : NULL; de; de = readdir(d)) {
+        char p[300];
+        struct stat st;
+        snprintf(p, sizeof(p), "/spiffs/%s", de->d_name);
+        if (stat(p, &st) != 0) continue;
+        nfiles++; bytes += st.st_size;
+        int at = ntop;                                   /* sorted, largest first */
+        while (at > 0 && top[at - 1].size < st.st_size) at--;
+        if (at >= max) continue;
+        if (ntop < max) ntop++;
+        memmove(&top[at + 1], &top[at], sizeof(top[0]) * (size_t)(ntop - 1 - at));
+        strncpy(top[at].name, de->d_name, sizeof(top[at].name) - 1);
+        top[at].name[sizeof(top[at].name) - 1] = 0;
+        top[at].size = st.st_size;
+    }
+    if (d) closedir(d);
+    cJSON_AddNumberToObject(into, "files", nfiles);
+    cJSON_AddNumberToObject(into, "file_bytes", (double)bytes);   /* used beyond it: SPIFFS's own pages, deleted ones */
+    cJSON *arr = cJSON_AddArrayToObject(into, "largest");
+    for (int q = 0; q < ntop; q++) {
+        cJSON *e = cJSON_CreateObject();
+        cJSON_AddStringToObject(e, "name", top[q].name);
+        cJSON_AddNumberToObject(e, "size", (double)top[q].size);
+        cJSON_AddItemToArray(arr, e);
     }
 }
 

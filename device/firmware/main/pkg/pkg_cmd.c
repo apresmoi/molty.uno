@@ -162,11 +162,23 @@ static void on_answer(int index, const char *reason)
     atomic_store(&s_installing, false);
 }
 
-/* SPIFFS itself must hold it too (the console page, the creature and the log share it) */
+/* SPIFFS itself must hold it too (the console page, the creature and the log share it). An update replaces the
+ * installed file, so its bytes count as free; when the bytes are there but only as deleted pages, SPIFFS collects
+ * them first. */
 static const char *room(const pkg_req_t *r)
 {
     size_t total = 0, used = 0;
-    if (esp_spiffs_info("spiffs", &total, &used) != ESP_OK || used + r->size + SPARE > total) return "no_space";
+    pkg_store_sweep(PKG_ROOT);                         /* nothing the store does not list */
+    const size_t freed = pkg_store_installed_size(PKG_ROOT, r->id);
+    if (esp_spiffs_info("spiffs", &total, &used) != ESP_OK) return "no_space";
+    if (used + r->size + SPARE > total + freed) {
+        esp_spiffs_gc("spiffs", r->size + SPARE);
+        if (esp_spiffs_info("spiffs", &total, &used) != ESP_OK || used + r->size + SPARE > total + freed) {
+            mole_diag_event(true, "pkg.no_space spiffs %u of %u used, need %u (frees %u)", (unsigned)used, (unsigned)total,
+                            (unsigned)(r->size + SPARE), (unsigned)freed);
+            return "no_space";
+        }
+    }
     return pkg_store_room(PKG_ROOT, r->id, r->size);
 }
 

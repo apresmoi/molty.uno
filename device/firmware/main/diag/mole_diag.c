@@ -6,6 +6,7 @@
 #include "sta_watch.h"
 #include "loop_watch.h"
 #include "net/network.h"
+#include "net/console_store.h"
 #include "mole_fluid.h"
 #include "link/link_client.h"
 #include "link/link_audio.h"
@@ -1084,6 +1085,7 @@ cJSON *mole_diag_json(int timeline_secs)
     cJSON_AddNumberToObject(lg, "persist_fail", s_persist_fail);
     cJSON_AddNumberToObject(lg, "persist_last_ms", s_persist_ms);
     if (s_core_summary[0]) cJSON_AddStringToObject(j, "coredump", s_core_summary);
+    console_store_fs_json(cJSON_AddObjectToObject(j, "fs"), 12);   /* SPIFFS: what fills it */
     if (timeline_secs > 0 && s_tl) {
         if (timeline_secs > TL_N) timeline_secs = TL_N;
         uint32_t n_avail = s_tl_n < TL_N ? s_tl_n : TL_N;

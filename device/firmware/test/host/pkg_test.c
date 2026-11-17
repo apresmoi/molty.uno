@@ -282,6 +282,20 @@ static void test_store(void) {
     CHECK(!pkg_store_room(ROOT, "big", PKG_QUOTA - (uint32_t)s_fix_len), "up to the quota");
     CHECK(!pkg_store_room(ROOT, "shapes", PKG_QUOTA), "a reinstall replaces its own bytes");
 
+    /* an update's room counts its own file as free; stray files (a download or an index write cut short, a package
+     * whose entry went) are swept, what the index lists stays */
+    CHECK(pkg_store_installed_size(ROOT, "shapes") == s_fix_len && pkg_store_installed_size(ROOT, "nope") == 0, "the installed size an update frees");
+    {
+        char sp[256];
+        const char *const strays[] = { "deadbeef.json", "download.part", "index.tmp" };
+        for (int q = 0; q < 3; q++) { snprintf(sp, sizeof(sp), "%s/%s", ROOT, strays[q]); FILE *fs = fopen(sp, "wb"); if (fs) { fputs("x", fs); fclose(fs); } }
+        const int gone = pkg_store_sweep(ROOT);
+        int left = 0;
+        for (int q = 0; q < 3; q++) { snprintf(sp, sizeof(sp), "%s/%s", ROOT, strays[q]); left += access(sp, F_OK) == 0; }
+        CHECK(gone == 3 && left == 0 && access(p, F_OK) == 0 && pkg_store_find(ROOT, "shapes", NULL), "swept %d strays (%d left), the package kept", gone, left);
+        CHECK(pkg_store_sweep(ROOT) == 0, "nothing more to sweep");
+    }
+
     /* a new version replaces the old one and its file */
     char *v2 = strdup(s_fix); char *at = strstr(v2, "\"1.0.0\""); memcpy(at, "\"1.0.1\"", 7);
     char v2sha[65]; sha_hex((const uint8_t *)v2, s_fix_len, v2sha);
