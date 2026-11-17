@@ -348,7 +348,9 @@ static bool  s_touch_mute = false;              /* the touch that woke the scree
  * DMA reads as is. The frame never goes through the PSRAM framebuffer: drawing and
  * copying it there every frame took PSRAM bandwidth the sim on core 1 waits for. */
 #define FLUID_WIN_ROWS 14                       /* a 412 px panel's cell row in one window */
-static uint16_t *s_win = NULL;
+static uint16_t *s_win = NULL, *s_win2 = NULL;   /* s_win2: a second window, the panel taking one while the other is
+                                                 * drawn (molty_display_blit_async); FLUID_WIN2_PX each, internal DMA */
+#define FLUID_WIN2_PX 4096                      /* 8 KB each: a full 466 px row band in two halves of 8 rows */
 static int       s_win_px = 0;
 static volatile bool s_fb_want = false;         /* /api/framebuffer: draw the frame there too */
 static SemaphoreHandle_t s_fb_done = NULL;
@@ -1044,7 +1046,7 @@ static int s_send_n, s_send_px; static int64_t s_blit_us;   /* this frame's wind
 static int send_win(void *ctx, int x, int y, int w, int h, const uint16_t *px) {
     (void)ctx;
     const int64_t t = esp_timer_get_time();
-    const int e = molty_display_blit(x, y, w, h, px) == ESP_OK ? 0 : 1;
+    const int e = (s_win2 ? molty_display_blit_async(x, y, w, h, px) : molty_display_blit(x, y, w, h, px)) == ESP_OK ? 0 : 1;
     s_blit_us += esp_timer_get_time() - t; s_send_n++; s_send_px += w * h;
     return e;
 }
@@ -1095,7 +1097,8 @@ static void draw_task(void *arg) {
             else { fluid_draw_overlay_dirty(s_draw, &ov_drawn); fluid_draw_overlay_dirty(s_draw, &ov); }
             nc = fluid_draw_cells(s_draw, s_frame, &s_dopts);
             t1 = esp_timer_get_time();
-            bool sent = fluid_draw_send(s_draw, &s_dopts, &ov, mark, full, s_win, s_win_px, send_win, NULL) >= 0;
+            bool sent = fluid_draw_send2(s_draw, &s_dopts, &ov, mark, full, s_win, s_win2, s_win_px, send_win, NULL) >= 0;
+            if (s_win2) { const int64_t tw = esp_timer_get_time(); sent &= molty_display_blit_wait() == ESP_OK; s_blit_us += esp_timer_get_time() - tw; }
             s_full_flush = !sent;                       /* a window that failed: repaint all */
             mark_drawn = mark; pal_drawn = s_dopts.palette; ov_drawn = ov;
             if (s_fb_want) {                            /* the same frame into the framebuffer */
@@ -1486,6 +1489,12 @@ esp_err_t mole_fluid_creature_init(void) {
         ESP_LOGE(TAG, "sim alloc failed (%dx%d), PSRAM free %u", W, H,
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
         return ESP_ERR_NO_MEM;
+    }
+    if (!s_win && molty_display_blit_can_overlap()) {   /* two smaller windows: the panel sends one while the next is drawn */
+        s_win_px = FLUID_WIN2_PX;
+        s_win = heap_caps_malloc((size_t)s_win_px * sizeof(uint16_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        s_win2 = s_win ? heap_caps_malloc((size_t)s_win_px * sizeof(uint16_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL) : NULL;
+        if (!s_win2) { heap_caps_free(s_win); s_win = NULL; }   /* not both: one big one, as before */
     }
     if (!s_win) {                                /* after the grid: its hot fields come first */
         s_win_px = s_fb_w * FLUID_WIN_ROWS;

@@ -486,6 +486,11 @@ int  fluid_draw_overlay(const fluid_draw_t *d, const fluid_rect_t *t, int palett
 typedef int (*fluid_send_fn)(void *ctx, int x, int y, int w, int h, const uint16_t *px);
 int  fluid_draw_send(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_overlay_t *ov, int mark, bool full,
                      uint16_t *buf, int max_px, fluid_send_fn send, void *ctx);
+/** The same with two buffers (buf2 non-NULL, each max_px): send may return while the panel still reads the buffer it
+ *  was given (an asynchronous transfer) as long as it waits for that one before taking the other; each window is drawn
+ *  into the buffer the panel is not reading. The caller waits for the last send after. */
+int  fluid_draw_send2(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_overlay_t *ov, int mark, bool full,
+                      uint16_t *buf, uint16_t *buf2, int max_px, fluid_send_fn send, void *ctx);
 
 #ifdef __cplusplus
 }

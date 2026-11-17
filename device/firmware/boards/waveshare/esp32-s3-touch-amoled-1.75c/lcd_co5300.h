@@ -23,3 +23,7 @@ esp_err_t lcd_co5300_flush(void);
 esp_err_t lcd_co5300_flush_rows(int y0, int y1);
 /** w×h packed px (wire order) at (x, y), x and w even; returns once px may be reused. */
 esp_err_t lcd_co5300_blit(int x, int y, int w, int h, const uint16_t *px);
+/** As lcd_co5300_blit, but it returns once the pixels are queued (px read by DMA until the next blit or
+ *  lcd_co5300_blit_wait, which wait for it): the caller draws the next window meanwhile. */
+esp_err_t lcd_co5300_blit_async(int x, int y, int w, int h, const uint16_t *px);
+esp_err_t lcd_co5300_blit_wait(void);

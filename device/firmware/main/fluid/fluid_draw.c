@@ -1075,24 +1075,34 @@ void fluid_draw_rect(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fl
  * buffer). Windows start and end on even rows: a panel that takes whole row pairs only (the CO5300) otherwise resends
  * a full-width pair at each odd edge. */
 #define CRISP_WIN_PX 1500
+/* the windows' buffers: with two, each window is drawn into the one the panel is not reading (the send may return
+ * while the panel still reads the other: fluid_draw_send2) */
+typedef struct { uint16_t *buf[2]; int max_px, cur; fluid_send_fn send; void *ctx; } sender_t;
+static int window(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_overlay_t *ov, int mark, sender_t *sd,
+                  int x0, int y, int x1, int h) {
+    uint16_t *buf = sd->buf[sd->cur];
+    const int w = x1 - x0;
+    const fluid_rect_t t = { buf, w, x0, y, x1, y + h };
+    fluid_draw_rect(d, o, &t, true);
+    fluid_draw_overlay(d, &t, o->palette, ov);
+    fluid_draw_mark(d, &t, o->palette, mark);
+    if (sd->send(sd->ctx, x0, y, w, h, buf) != 0) return -1;
+    if (sd->buf[1]) sd->cur ^= 1;
+    return w * h;
+}
 static int crisp_box(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_overlay_t *ov, int mark, int x0, int x1,
-                     int y0, int y1, uint16_t *buf, int max_px, fluid_send_fn send, void *ctx) {
-    const int w = x1 - x0, rows = (max_px / w) & ~1;
+                     int y0, int y1, sender_t *sd) {
+    const int w = x1 - x0, rows = (sd->max_px / w) & ~1;
     int sent = 0;
     if (rows < 2) return -1;
     for (int y = y0; y < y1; y += rows) {
-        const int h = y1 - y < rows ? y1 - y : rows;
-        const fluid_rect_t t = { buf, w, x0, y, x1, y + h };
-        fluid_draw_rect(d, o, &t, true);
-        fluid_draw_overlay(d, &t, o->palette, ov);
-        fluid_draw_mark(d, &t, o->palette, mark);
-        if (send(ctx, x0, y, w, h, buf) != 0) return -1;
-        sent += w * h;
+        const int n = window(d, o, ov, mark, sd, x0, y, x1, y1 - y < rows ? y1 - y : rows);
+        if (n < 0) return -1;
+        sent += n;
     }
     return sent;
 }
-static int crisp_send(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_overlay_t *ov, int mark,
-                      uint16_t *buf, int max_px, fluid_send_fn send, void *ctx) {
+static int crisp_send(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_overlay_t *ov, int mark, sender_t *sd) {
     const int W = d->W, H = d->H;
     int sent = 0;
 #define XA(i) (d->cx[i] & ~3)
@@ -1118,15 +1128,23 @@ static int crisp_send(const fluid_draw_t *d, const fluid_draw_opts_t *o, const f
                     for (int q = 0; q < nb; q++) {
                         if (box[q].j1 != j) continue;
                         const int na = box[q].a < r0 ? box[q].a : r0, nbb = box[q].b > last + 1 ? box[q].b : last + 1;
-                        const int joined = (XB(nbb) - XA(na)) * (YB(j) - YA(box[q].j0));
-                        const int apart = (XB(box[q].b) - XA(box[q].a)) * (YB(j - 1) - YA(box[q].j0)) + (XB(last + 1) - XA(r0)) * (YB(j) - YB(j - 1)) + CRISP_WIN_PX;
-                        if (joined <= max_px && apart - joined > gain) { gain = apart - joined; best = q; }
+                        const int jw = XB(nbb) - XA(na), jh = YB(j) - YA(box[q].j0), ow = XB(box[q].b) - XA(box[q].a), oh = YB(j - 1) - YA(box[q].j0);
+                        const int jr = (sd->max_px / jw) & ~1, orr = (sd->max_px / ow) & ~1;   /* a box goes in chunks of a buffer */
+                        if (jr < 2 || orr < 2) continue;
+                        const int joined = jw * jh + CRISP_WIN_PX * ((jh + jr - 1) / jr - 1);
+                        const int apart = ow * oh + CRISP_WIN_PX * ((oh + orr - 1) / orr - 1) + (XB(last + 1) - XA(r0)) * (YB(j) - YB(j - 1)) + CRISP_WIN_PX;
+                        if (apart - joined > gain) { gain = apart - joined; best = q; }
                     }
                     if (best >= 0) {
                         if (r0 < box[best].a) box[best].a = (int16_t)r0;
                         if (last + 1 > box[best].b) box[best].b = (int16_t)(last + 1);
                         box[best].j1 = (int16_t)(j + 1);
                     } else if (nn < NB) { nxt[nn].a = (int16_t)r0; nxt[nn].b = (int16_t)(last + 1); nxt[nn].j0 = (int16_t)j; nxt[nn].j1 = (int16_t)(j + 1); nn++; }
+                    else {                              /* no room to hold it open: it goes now */
+                        const int n = crisp_box(d, o, ov, mark, XA(r0), XB(last + 1), YA(j), YB(j), sd);
+                        if (n < 0) return -1;
+                        sent += n;
+                    }
                     r0 = -1;
                 }
                 if (dt) { if (r0 < 0) r0 = c; last = c; }
@@ -1135,12 +1153,17 @@ static int crisp_send(const fluid_draw_t *d, const fluid_draw_opts_t *o, const f
         int keep = 0;
         for (int q = 0; q < nb; q++) {                  /* a box no run of this row joined goes out */
             if (box[q].j1 == j + 1 && j < H) { box[keep++] = box[q]; continue; }
-            const int n = crisp_box(d, o, ov, mark, XA(box[q].a), XB(box[q].b), YA(box[q].j0), YB(box[q].j1 - 1), buf, max_px, send, ctx);
+            const int n = crisp_box(d, o, ov, mark, XA(box[q].a), XB(box[q].b), YA(box[q].j0), YB(box[q].j1 - 1), sd);
             if (n < 0) return -1;
             sent += n;
         }
         nb = keep;
-        for (int q = 0; q < nn && nb < NB; q++) box[nb++] = nxt[q];
+        for (int q = 0; q < nn; q++) {
+            if (nb < NB) { box[nb++] = nxt[q]; continue; }
+            const int n = crisp_box(d, o, ov, mark, XA(nxt[q].a), XB(nxt[q].b), YA(nxt[q].j0), YB(nxt[q].j1 - 1), sd);
+            if (n < 0) return -1;
+            sent += n;
+        }
     }
 #undef XA
 #undef XB
@@ -1151,12 +1174,18 @@ static int crisp_send(const fluid_draw_t *d, const fluid_draw_opts_t *o, const f
 
 int fluid_draw_send(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_overlay_t *ov, int mark, bool full,
                     uint16_t *buf, int max_px, fluid_send_fn send, void *ctx) {
+    return fluid_draw_send2(d, o, ov, mark, full, buf, NULL, max_px, send, ctx);
+}
+
+int fluid_draw_send2(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_overlay_t *ov, int mark, bool full,
+                     uint16_t *buf, uint16_t *buf2, int max_px, fluid_send_fn send, void *ctx) {
+    sender_t sd = { { buf, buf2 }, max_px, 0, send, ctx };
     int sent = 0;
     /* a scene in high definition: each run of changed cells its own window, so its haze changing
      * all over does not redraw the shapes between */
     const bool runs = o->scene && o->dots && o->shapes;
     /* crisp dots alone (a rigged creature): few, larger windows on whole row pairs (crisp_send) */
-    if (o->scene && o->dots && !o->shapes && !full) return crisp_send(d, o, ov, mark, buf, max_px, send, ctx);
+    if (o->scene && o->dots && !o->shapes && !full) return crisp_send(d, o, ov, mark, &sd);
     for (int j = 0; j < (full ? 1 : d->H); j++) {
         int a = full ? 0 : d->span[2 * j];
         const int end = full ? 0 : d->span[2 * j + 1];
@@ -1180,13 +1209,9 @@ int fluid_draw_send(const fluid_draw_t *d, const fluid_draw_opts_t *o, const flu
             const int w = x1 - x0, rows = max_px / w;
             if (rows < 1) return -1;
             for (int y = y0; y < y1; y += rows) {
-                const int h = y1 - y < rows ? y1 - y : rows;
-                const fluid_rect_t t = { buf, w, x0, y, x1, y + h };
-                fluid_draw_rect(d, o, &t, true);
-                fluid_draw_overlay(d, &t, o->palette, ov);
-                fluid_draw_mark(d, &t, o->palette, mark);
-                if (send(ctx, x0, y, w, h, buf) != 0) return -1;
-                sent += w * h;
+                const int n = window(d, o, ov, mark, &sd, x0, y, x1, y1 - y < rows ? y1 - y : rows);
+                if (n < 0) return -1;
+                sent += n;
             }
             for (a = last + 1; a < end && !d->dirty[j * d->W + a]; a++) {}
         } while (!full && a < end);
