@@ -7,8 +7,9 @@
  * the features (eyes, nose, inner ears, the chest patch's edge, whiskers, the props), then the world under it: a
  * static perspective floor, shimmering dust and a vignette, kept off the cat by a two-dot halo.
  *
- * Budget: the per-dot work runs only over the creature's box (its primitives' projected bounds); the floor and dust
- * are a hash per dot of the disc, written straight into the cells. Buffers in PSRAM, about 10 bytes a dot.
+ * Budget: the per-dot work runs only over the creature's box (its primitives' projected bounds), 8 bytes a dot in PSRAM;
+ * the floor is a layer redrawn only when the camera moves along it, the dust a fixed set of motes. On ESP the
+ * row-parallel passes split into two bands, the second on core 0 (a task made with cd_create).
  *
  * Plain C, no ESP-IDF (host-testable).
  */
@@ -33,12 +34,11 @@ void  cd_destroy(cd_t *d);
 void  cd_draw(cd_t *d, const cc_t *c, uint32_t frame);
 /** The cells of the last draw: a braille byte (fluid_braille_bit order) and a colour 0xRRGGBB a cell. */
 void  cd_cells(const cd_t *d, const uint8_t **dots, const uint32_t **rgb);
-/** The creature's own dots of the last draw (not the world): on (0/1), colour 0xRRGGBB, priority (1 whisker, 2 line, 3+ features). */
-void  cd_dots(const cd_t *d, const uint8_t **on, const uint32_t **rgb, const uint8_t **pri);
-/** Cycles spent per stage since the last call (box, body, parts, lines, features, halo, world, cells), added into out[8]. */
+#define CD_STAGES 7
+/** Cycles spent per stage since the last call, added into out[CD_STAGES]: projection, the body and the solid parts, lines,
+ *  features, the halo's rows, the halo's columns with the world and the cells; then, within those, the waits for the
+ *  second band (the other core, ESP). */
 void  cd_prof(cd_t *d, uint32_t *out);
-/** The creature's box in dots last frame [x0, x1) x [y0, y1). */
-void  cd_box(const cd_t *d, int *x0, int *y0, int *x1, int *y1);
 
 #ifdef __cplusplus
 }

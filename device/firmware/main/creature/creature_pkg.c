@@ -90,9 +90,9 @@ static void clip_frame(cpk_t *k, fluid_sim_t *s, float dt) {
     FLUID_PROF_END(FP_K_PLAY, c0);
     cd_draw(k->dots, k->clip, k->frame++);
     {   /* the dots' stages into the fluid's profile (GET /api/creature/state prof_ms.k_*) */
-        uint32_t st[8] = { 0 };
+        uint32_t st[CD_STAGES] = { 0 };
         cd_prof(k->dots, st);
-        for (int i = 0; i < 8; i++) fluid_prof[FP_K_BOX + i] += st[i];
+        for (int i = 0; i < CD_STAGES; i++) fluid_prof[FP_K_PROJ + i] += st[i];
     }
     for (int i = 0; i < s->N; i++) s->T[i] = 0;    /* no ink: the dots are the creature */
 }

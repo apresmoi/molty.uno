@@ -59,7 +59,7 @@ uint32_t fluid_prof[FP_N];
 const char *const FLUID_PROF_NAMES[FP_N] = {
     "target", "bg", "swirl", "wave", "demand", "flow", "advect", "relax", "color", "view",
     "c_update", "c_raster", "c_clear", "c_vert", "c_samples", "c_agg", "c_fill",
-    "k_play", "k_box", "k_body", "k_parts", "k_lines", "k_feat", "k_halo", "k_world", "k_cells", "d_sample", "d_raster",
+    "k_play", "k_proj", "k_solid", "k_lines", "k_feat", "k_halo", "k_cells", "k_wait", "d_sample", "d_raster",
 };
 
 static inline int ffloor(float x) { int i = (int)x; return i - (x < (float)i); }
