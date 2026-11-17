@@ -638,17 +638,27 @@ static void test_hd_pixels(const char *dir) {
     fluid_draw(d, fr, fb, &o, &y0, &y1);
     memcpy(calm, fb, (size_t)S * S * 2);
 
+    /* the shapes alone: the frame with every dot taken off */
+    uint16_t *only = calloc((size_t)S * S, 2);
+    {
+        uint16_t *keys = malloc(sizeof(uint16_t) * (size_t)N);
+        memcpy(keys, d->key, sizeof(uint16_t) * (size_t)N);
+        for (int k = 0; k < N; k++) if ((d->key[k] & 0xF000) == 0x8000) d->key[k] &= 0xFF00;
+        fluid_draw_rect(d, &o, &(fluid_rect_t){ only, S, 0, 0, S, S }, true);
+        memcpy(d->key, keys, sizeof(uint16_t) * (size_t)N);
+        free(keys);
+    }
     /* the outer ring (r 0.9, a hairline): lit at every degree, a pixel or two wide, its edge soft */
     const float R = 0.9f * S / 2, c0 = S / 2.f;
     int hit = 0, soft = 0, lattice = 0, wide = 0;
     for (int a = 0; a < 360; a++) {
         const float co = cosf(a * 0.0174533f), si = sinf(a * 0.0174533f);
         int best = 0, on = 0;
-        for (float dr = -3.f; dr <= 3.f; dr += 0.5f) { const int v = lum(fb[(int)(c0 + (R + dr) * si) * S + (int)(c0 + (R + dr) * co)]); if (v > best) best = v; on += v > 200; }
+        for (float dr = -3.f; dr <= 3.f; dr += 0.5f) { const int v = lum(only[(int)(c0 + (R + dr) * si) * S + (int)(c0 + (R + dr) * co)]); if (v > best) best = v; on += v > 200; }
         hit += best > 200;
         wide += on > 6;                                              /* over 3 px of it (where a tick meets it) */
         for (float dr = -1.5f; dr <= 1.5f; dr += 0.5f) {
-            const int v = lum(fb[(int)(c0 + (R + dr) * si) * S + (int)(c0 + (R + dr) * co)]);
+            const int v = lum(only[(int)(c0 + (R + dr) * si) * S + (int)(c0 + (R + dr) * co)]);
             soft += v > 20 && v < best * 3 / 4;
         }
     }
@@ -656,16 +666,26 @@ static void test_hd_pixels(const char *dir) {
         if (fb[y * S + x] && d->yrow[y] < 0) lattice++;                 /* lit between the dot rows */
     CHECK(hit == 360 && wide <= 12 && soft > 200 && lattice > 2000, "calm: a true ring (%d of 360 degrees), fine (%d degrees wider than 3 px), soft edged (%d), lit off the dot rows (%d px)",
           hit, wide, soft, lattice);
-    int haze = 0, close = 0, bright = 0;
+    /* the dust takes the drawing's shape: denser the nearer it (in dots), none on it, dimmer than it */
+    int tot[5] = { 0 }, on[5] = { 0 }, bright = 0;
     for (int j = 1; j < H - 1; j++) for (int i = 1; i < W - 1; i++) {
         const int k = j * W + i;
-        if ((d->key[k] & 0xF000) != 0x8000 || !(d->key[k] & 0xFF) || keep[k]) continue;
-        haze++;
-        for (int q = -1; q <= 1; q++) close += dots[k + q * W - 1] || dots[k + q * W] || dots[k + q * W + 1];
-        const uint16_t c = d->col[k];
-        bright += lum(c) > 260;
+        if ((d->key[k] & 0xF000) != 0x8000 || keep[k]) continue;
+        for (int q = 0; q < 8; q++) {
+            const int dd = d->halo[(4 * j + (q & 3)) * 2 * W + 2 * i + (q >> 2)], b = dd > 4 ? 4 : dd;
+            tot[b]++;
+            on[b] += d->key[k] >> fluid_braille_bit(q >> 2, q & 3) & 1;
+        }
+        bright += (d->key[k] & 0xFF) && lum(d->col[k]) > 430;
     }
-    CHECK(haze > 100 && close == 0 && bright == 0, "calm: the fluid's dust in %d cells, none next to the drawing (%d), all dim (%d bright)", haze, close, bright);
+    float fr_[5];
+    for (int q = 0; q < 5; q++) fr_[q] = tot[q] ? (float)on[q] / tot[q] : 0.f;
+    CHECK(on[0] == 0 && fr_[1] > fr_[2] && fr_[2] > fr_[3] && fr_[3] > fr_[4] && fr_[4] > 0.02f && bright == 0,
+          "calm: the dust by distance to the drawing %.2f %.2f %.2f %.2f, far %.2f; %d on it, %d cells bright", fr_[0], fr_[1], fr_[2], fr_[3], fr_[4], on[0], bright);
+    int under = 0, line = 0;                                            /* the dust never on them */
+    for (int q = 0; q < S * S; q++) if (only[q]) { line++; under += fb[q] != only[q]; }
+    CHECK(line > 5000 && under == 0, "calm: no dust on the drawing's %d px (%d covered)", line, under);
+    free(only);
     int hdc = 0, keyd = 0;
     for (int k = 0; k < N; k++) { hdc += (d->key[k] & 0xF000) == 0x8000; keyd += d->key[k] && d->key[k] < 0x100; }
     CHECK(hdc > 100 && keyd == 0, "calm: %d cells drawn smooth, %d as dots", hdc, keyd);
@@ -731,6 +751,73 @@ static void test_hd_pixels(const char *dir) {
     CHECK(lit == 0, "dust 1: gone, but the fluid's dim dust (%d bright px)", lit);
     o.dust = 0.f; fluid_draw(d, fr, fb, &o, &y0, &y1);
     CHECK(!memcmp(fb, calm, (size_t)S * S * 2), "dust 0: the same pixels again");
+
+    /* a tap on the Moon's spot: its symbol grows with the ripple, holds while its reading plays,
+     * then eases back to exactly the pixels it had; the dust's shape follows it */
+    int moon = -1;
+    for (int n = 0; n < sc->nitems; n++)
+        if (sc->items[n].k == PK_SPOT && sc->items[n].nsid == 4 && !memcmp(sc->say + sc->items[n].sid, "moon", 4)) moon = n;
+    float w0 = 0.f;
+    for (int n = 0; n < hd.n; n++) {
+        const float gx = shp[n].x / (S / 2.f) - 1.f, gy = 1.f - shp[n].y / (S / 2.f), dx = gx - sc->items[moon].x, dy = gy - sc->items[moon].y;
+        if (moon >= 0 && shp[n].k == FLUID_SHAPE_MASK && dx * dx + dy * dy < 1e-4f) w0 = shp[n].w;
+    }
+    CHECK(moon >= 0 && w0 > 0.f, "the Moon's spot and symbol (%.1f px)", w0);
+    scene_grow_t g;
+    scene_grow_tap(&g, moon);
+    const uint32_t sig0 = d->halo_sig;
+    float wmid = 0.f, whold = 0.f;
+    int nt = 0;
+    for (; nt < 60; nt++) {
+        scene_grow_tick(&g, true, DT);
+        scene_grow_apply(&g, sc);
+        scene_fill(s, sc, 1.f, NULL, L, &nl, dots, &hd);
+        fluid_draw(d, fr, fb, &o, &y0, &y1);
+        float w = 0.f;
+        for (int n = 0; n < hd.n; n++) if (shp[n].k == FLUID_SHAPE_MASK && fabsf(shp[n].x - (sc->items[moon].x + 1.f) * S / 2.f) < 3.f) w = fmaxf(w, shp[n].w);
+        if (nt == 4) wmid = w;
+        whold = w;
+    }
+    CHECK(wmid > w0 * 1.05f && wmid < w0 * 1.24f && fabsf(whold - w0 * SCENE_GROW) < 0.5f && d->halo_sig != sig0 && memcmp(fb, calm, (size_t)S * S * 2),
+          "tap: the symbol grows (%.1f, %.1f, then %.1f px held), the dust follows", w0, wmid, whold);
+    for (nt = 0; nt < 60 && g.spot >= 0; nt++) {
+        scene_grow_tick(&g, false, DT);
+        scene_grow_apply(&g, sc);
+        scene_fill(s, sc, 1.f, NULL, L, &nl, dots, &hd);
+        fluid_draw(d, fr, fb, &o, &y0, &y1);
+    }
+    CHECK(g.spot < 0 && nt * DT <= SCENE_GROW_OUT_S + 2 * DT && sc->focus < 0 && !memcmp(fb, calm, (size_t)S * S * 2),
+          "its reading over: back in %.2f s, exactly the pixels it had", nt * DT);
+
+    /* each subtitle word's ripple: a wobble right around the word, never dust */
+    {
+        const scene_caption_t cap = { "Gemini", 6, 2 };
+        scene_fill(s, sc, 1.f, &cap, L, &nl, dots, &hd);
+        o.nshapes = hd.n;
+        float wx0 = S, wx1 = 0, wy0 = S, wy1 = 0;
+        for (int q = 0; q < nl; q++) {
+            if (L[q].mask || L[q].rgb) continue;
+            fluid_sim_impulse(s, (L[q].x + L[q].w * 0.5f) / S * 2.f - 1.f, (L[q].y + L[q].h * 0.5f) / S * 2.f - 1.f, SCENE_CAPTION_RIPPLE, SCENE_CAPTION_RIPPLE_R);
+            wx0 = fminf(wx0, L[q].x); wx1 = fmaxf(wx1, L[q].x + L[q].w); wy0 = fminf(wy0, L[q].y); wy1 = fmaxf(wy1, L[q].y + L[q].h);
+        }
+        int dusty = 0, wob = 0, far = 0;
+        for (int f = 0; f < 45; f++) {
+            fluid_sim_snapshot(s, fr, false);
+            for (int k = 0; k < N; k++) fr->view[k] = (int16_t)(0.2f * FQ_UNIT);
+            fluid_draw_cells(d, fr, &o);
+            for (int j = 1; j < H - 1; j++) for (int i = 1; i < W - 1; i++) {
+                const int k = j * W + i;
+                const float fx = (fr->h[k + 1] - fr->h[k - 1]) * 3.3f / FQ_H * 2.f, fy = (fr->h[k + W] - fr->h[k - W]) * 3.3f / FQ_H * 4.f * H / W;
+                const bool moved = fx * fx + fy * fy >= 0.25f;                  /* half a dot */
+                const float cx = (i + 0.5f) * S / W, cy = (j + 0.5f) * S / H;
+                wob += moved;
+                far += moved && (cx < wx0 - 24.f || cx > wx1 + 24.f || cy < wy0 - 24.f || cy > wy1 + 24.f);
+                dusty += (d->key[k] & 0xF000) == 0x8000 && (d->key[k] >> 8 & 15) < 8;
+            }
+            fluid_sim_step(s, DT);
+        }
+        CHECK(wob > 0 && far == 0 && dusty == 0, "a word's ripple: a wobble (%d cell frames) only around it (%d farther), never dust (%d)", wob, far, dusty);
+    }
 
     /* the cost: every cell redrawn (a full window pass) against the dots alone */
     const int R2 = 40;

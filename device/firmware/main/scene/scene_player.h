@@ -67,6 +67,8 @@ typedef struct scene {
     char pkg_id[PKG_ID_MAX + 1], layout[PKG_KEY_MAX + 1];
     float dur, ttl;
     int nitems, npts, nchars, nsay;
+    int focus;                          /* a tapped spot (item) whose drawing is grown, -1 none */
+    float grow;                         /* its scale, 1 = as built (scene_grow)             */
     scene_item_t items[SCENE_ITEMS_MAX];
     float pts[SCENE_PTS_MAX][2];
     char chars[SCENE_LETTERS];
@@ -118,12 +120,31 @@ typedef struct {
  *  (nothing in high definition; the scene forms from dust again after it). */
 void scene_hd_tick(scene_hd_t *h, unsigned gen, bool plain, float dt);
 
+/* A tapped spot's drawing grows (the items inside its disc, about its centre) with the ripple
+ * the tap starts, holds while its reading plays, then eases back to exactly as built. */
+#define SCENE_GROW      1.25f           /* its scale, grown                                 */
+#define SCENE_GROW_IN_S 0.5f            /* the growth, easing out as the ring spreads       */
+#define SCENE_GROW_OUT_S 0.4f           /* back, once its reading is over                   */
+typedef struct {
+    int spot;                           /* the tapped spot (item), -1 none                  */
+    float t, out;                       /* s since the tap; 1 held .. 0 back                */
+} scene_grow_t;
+static inline void scene_grow_tap(scene_grow_t *g, int spot) { *g = (scene_grow_t){ spot, 0.f, 1.f }; }
+/** Advance by dt: reading, its reading (or a say over the scene) still plays. */
+void scene_grow_tick(scene_grow_t *g, bool reading, float dt);
+/** sc's focus and grow from g (none: as built). */
+void scene_grow_apply(const scene_grow_t *g, scene_t *sc);
+
 /* A subtitle over a scene: what Molty says while a drawing is up, as the reader shows it
  * (one word at a time, its ORP letter (orp; -1: none, the word centred) in the accent and on
  * the vertical centre line) but small, at the bottom, shrunk until it fits inside the glass */
-#define SCENE_CAPTION_Y     (-0.66f)    /* glass units, y up                               */
+#define SCENE_CAPTION_Y     (-0.56f)    /* glass units, y up                               */
 #define SCENE_CAPTION_SIZE  0.16f       /* type size at most, glass units                  */
 #define SCENE_CAPTION_RGB   0x9aa0b8u   /* the ink under it                                */
+/* each new word starts a tiny ripple under each of its letters: it reaches a dot or so past the
+ * word and fades fast, a wobble that never breaks the drawing into dust (fluid_sim_impulse) */
+#define SCENE_CAPTION_RIPPLE   0.1f     /* its strength                                    */
+#define SCENE_CAPTION_RIPPLE_R 0.035f   /* its radius, glass units                         */
 typedef struct { const char *str; int n, orp; } scene_caption_t;
 
 /* The scene in high definition (fluid_draw_opts_t.shapes, .kdots): its items as shapes at the

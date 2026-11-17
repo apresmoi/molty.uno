@@ -171,6 +171,7 @@ scene_t *scene_build(pkg_t *p, const char *layout, const cJSON *params, float tt
     }
     pkg_ref(p);
     sc->pkg = p;
+    sc->focus = -1; sc->grow = 1.f;
     snprintf(sc->pkg_id, sizeof(sc->pkg_id), "%s", p->id);
     snprintf(sc->layout, sizeof(sc->layout), "%s", l->name);
     sc->dur = l->dur;
@@ -631,10 +632,41 @@ static bool canvas_for(const fluid_sim_t *s) {
  * edge or a shaded sphere dithers and a solid stroke is all dots */
 static const uint8_t BAYER[4][4] = { { 0, 8, 2, 10 }, { 12, 4, 14, 6 }, { 3, 11, 1, 9 }, { 15, 7, 13, 5 } };
 
+/* Is item it inside spot s's disc (all of it: a ring, a line, ticks; else its centre)? */
+static bool covered(const scene_t *sc, const scene_item_t *s, const scene_item_t *it) {
+    const float sr = s->r * 1.001f, sd = sqrtf(s->x * s->x + s->y * s->y);
+    switch (it->k) {
+    case PK_SPOT:  return false;
+    case PK_RING: case PK_ARC: return sd + it->r <= sr;
+    case PK_TICKS: return sd + fmaxf(it->r, it->r + it->len) <= sr;
+    case PK_LINE: case PK_CURVE:
+        for (int q = 0; q < it->npts; q++) {
+            const float *p = sc->pts[it->pts + q];
+            if ((p[0] - s->x) * (p[0] - s->x) + (p[1] - s->y) * (p[1] - s->y) > sr * sr) return false;
+        }
+        return it->npts > 0;
+    default: return (it->x - s->x) * (it->x - s->x) + (it->y - s->y) * (it->y - s->y) <= sr * sr;
+    }
+}
+
+#define GROW_PTS 64                                    /* a grown line's points, at most */
 static void paint_items(const ctx_t *c, const scene_t *sc, float t, fluid_letter_t *letters, int *nletters) {
+    const scene_item_t *fs = sc && sc->focus >= 0 && sc->focus < sc->nitems && sc->grow != 1.f ? &sc->items[sc->focus] : NULL;
     for (int n = 0; sc && n < sc->nitems; n++) {
         const scene_item_t *it = &sc->items[n];
         if (t < it->on || (it->off > 0.f && t >= it->off)) continue;
+        scene_item_t g;
+        float gp[GROW_PTS][2];
+        const float (*pts)[2] = sc->pts + it->pts;
+        if (fs && covered(sc, fs, it) && it->npts <= GROW_PTS) {
+            /* the tapped spot's drawing, grown about the spot's centre */
+            const float k = sc->grow;
+            g = *it;
+            g.x = fs->x + (it->x - fs->x) * k; g.y = fs->y + (it->y - fs->y) * k;
+            g.r *= k; g.len *= k; g.size *= k;
+            for (int q = 0; q < it->npts; q++) { gp[q][0] = fs->x + (pts[q][0] - fs->x) * k; gp[q][1] = fs->y + (pts[q][1] - fs->y) * k; }
+            it = &g; pts = (const float (*)[2])gp;
+        }
         const pkg_asset_t *a = it->asset >= 0 ? &sc->pkg->assets[it->asset] : NULL;
         c->s->keep = it->k == PK_BALL || (it->k == PK_GLYPH && a && a->kind != PA_MASK);   /* no shape draws it */
         switch (it->k) {
@@ -646,8 +678,8 @@ static void paint_items(const ctx_t *c, const scene_t *sc, float t, fluid_letter
                 segment(c, it->r * cx, it->r * cy, (it->r + it->len) * cx, (it->r + it->len) * cy, it->w * 0.5f, it->rgb);
             }
             break;
-        case PK_LINE:  path(c, sc->pts + it->pts, it->npts, false, it->w * 0.5f, it->rgb); break;
-        case PK_CURVE: path(c, sc->pts + it->pts, it->npts, true, it->w * 0.5f, it->rgb); break;
+        case PK_LINE:  path(c, pts, it->npts, false, it->w * 0.5f, it->rgb); break;
+        case PK_CURVE: path(c, pts, it->npts, true, it->w * 0.5f, it->rgb); break;
         case PK_DISC:  disc(c, it->x, it->y, it->r, it->rgb); break;
         case PK_BALL:  ball(c, it, a, t); break;
         case PK_GLYPH: if (a && !crisp(c, it, a, letters, nletters)) glyph(c, it, a); break;
@@ -656,6 +688,19 @@ static void paint_items(const ctx_t *c, const scene_t *sc, float t, fluid_letter
         default: break;
         }
     }
+}
+
+void scene_grow_tick(scene_grow_t *g, bool reading, float dt) {
+    if (g->spot < 0) return;
+    g->t += dt;
+    if (!reading && g->t >= SCENE_GROW_IN_S && (g->out -= dt / SCENE_GROW_OUT_S) <= 0.f) *g = (scene_grow_t){ -1, 0.f, 0.f };
+}
+
+void scene_grow_apply(const scene_grow_t *g, scene_t *sc) {
+    if (!sc) return;
+    const float u = fminf(1.f, g->t / SCENE_GROW_IN_S), in = 1.f - (1.f - u) * (1.f - u) * (1.f - u);
+    sc->focus = g->spot;
+    sc->grow = g->spot < 0 ? 1.f : 1.f + (SCENE_GROW - 1.f) * in * fluid_smooth(0.f, 1.f, g->out);
 }
 
 void scene_hd_tick(scene_hd_t *h, unsigned gen, bool plain, float dt) {

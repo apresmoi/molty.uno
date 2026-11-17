@@ -370,7 +370,13 @@ typedef struct {
     int8_t   *yrow;                    /* fb row → dot row 0..3 inside its cell, or −1    */
     uint8_t  *hds;                     /* per cell: its scene shapes' signature (redraw on change) */
     uint8_t  *hdw;                     /* fb_w: a pixel row's high-definition weight 0..8   */
+    uint8_t  *halo;                    /* 2W x 4H: each dot's distance to a scene's drawing, in
+                                        * dots (0 on it, HALO_REACH + 1 and beyond: far)   */
+    uint32_t halo_sig;                 /* the drawing it was measured from (a hash)        */
     int16_t  sb[FLUID_MAX_SHAPES][4];  /* this frame's shapes' boxes, fb px [x0, x1) x [y0, y1) */
+    int16_t  sb0[FLUID_MAX_SHAPES][4]; /* ...the last frame's, and each one's hash: a shape that  */
+    uint32_t sh0[FLUID_MAX_SHAPES];    /* changes redraws the cells it covered and covers  */
+    int      nsh0;
     struct {                           /* this frame's condensed letters, ready to draw   */
         const uint8_t *gl, *mask; uint16_t c, mw, mh; int16_t x, y, w, h, cx0, cy0, cx1, cy1;
     } lt[FLUID_MAX_LETTERS];

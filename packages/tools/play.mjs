@@ -249,8 +249,8 @@ export function hd(pkg, layout, params, t, S = 466, caption = '') {
   if (caption) {   // scene_player.c's caption(): shrunk until its farthest corner is inside the glass
     const orp = Math.min(ORP(caption.length), caption.length - 1), reach = Math.max(orp + 0.5, caption.length - orp - 0.5);
     let size = 0.16;
-    while (size >= 0.04 && (reach * 0.6 * size) ** 2 + (-0.66 - 0.525 * size) ** 2 > 0.95 ** 2) size *= 0.92;
-    run(caption, 0, -0.66, size, [255, 255, 255], orp);
+    while (size >= 0.04 && (reach * 0.6 * size) ** 2 + (-0.56 - 0.525 * size) ** 2 > 0.95 ** 2) size *= 0.92;
+    run(caption, 0, -0.56, size, [255, 255, 255], orp);
   }
   const kept = new Map();
   frame(pkg, layout, params, t, kept);

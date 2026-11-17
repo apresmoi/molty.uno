@@ -59,7 +59,11 @@
 #define HD_EDGE       0.42f   /* a mask's or a letter's edge, on its bilinear coverage      */
 #define HAZE_GAIN     0.6f    /* around it, the fluid's own dust: its dither of this much of the ink */
 #define HAZE_LEVEL    0.3f    /* ...at this brightness, well under the drawing's            */
-#define HAZE_JITTER   0.9f    /* ...its dither thresholds this noisy (a dust, not a lattice)  */
+#define HAZE_JITTER   0.5f    /* ...its dither thresholds this noisy (a dust, not a lattice)  */
+#define HALO_REACH    3       /* ...and denser and brighter this many dots from the drawing: the
+                               * dust taking its shape                                    */
+static const float HALO_INK[HALO_REACH + 1]   = { 0.f, 0.34f, 0.16f, 0.07f };  /* a dot's ink, by distance */
+static const float HALO_LEVEL[HALO_REACH + 1] = { 0.55f, 0.55f, 0.45f, 0.36f }; /* a cell's brightness, by its nearest */
 #define RUN_GAP       3       /* a scene's changed cells this many apart are sent as two windows */
 
 #define KEY_EMPTY 0x0000u
@@ -161,7 +165,7 @@ fluid_draw_t *fluid_draw_create(int W, int H, int fb_w, int fb_h) {
     fluid_draw_t *d = FLUID_CALLOC(sizeof(fluid_draw_t));
     if (!d) return NULL;
     size_t N = (size_t)W * H;
-    size_t bytes = (size_t)(W + 1 + H + 1 + 2 * W + 6 * H) * sizeof(int16_t) + 2 * N * sizeof(uint16_t) + 3 * N + (size_t)fb_h + (size_t)fb_w;
+    size_t bytes = (size_t)(W + 1 + H + 1 + 2 * W + 6 * H) * sizeof(int16_t) + 2 * N * sizeof(uint16_t) + 11 * N + (size_t)fb_h + (size_t)fb_w;
     d->block = FLUID_CALLOC(bytes);
     if (!d->block) { FLUID_FREE(d); return NULL; }
     int16_t *p16 = (int16_t *)d->block;
@@ -169,7 +173,7 @@ fluid_draw_t *fluid_draw_create(int W, int H, int fb_w, int fb_h) {
     d->key = (uint16_t *)(d->span + 2 * H); d->col = d->key + N;
     d->skip = (uint8_t *)(d->col + N); d->dirty = d->skip + N;
     d->yrow = (int8_t *)(d->dirty + N);
-    d->hds = (uint8_t *)d->yrow + fb_h; d->hdw = d->hds + N;
+    d->hds = (uint8_t *)d->yrow + fb_h; d->hdw = d->hds + N; d->halo = d->hdw + fb_w;
     d->W = W; d->H = H;
     d->fb_w = fb_w; d->fb_h = fb_h;
     d->stage = fb_w < fb_h ? fb_w : fb_h;
@@ -384,18 +388,31 @@ static inline void cell_look(const fluid_draw_t *d, const fluid_frame_t *s, cons
             if (wt == HD_LEVELS) src = o->kdots;
         }
         dots = src ? scene_dots(s, src, i, j, k, o->dust, &kc) : 0;
-        if (!dots && o->shapes && i >= 1 && j >= 1 && i < W - 1 && j < s->H - 1 && !near_skip(o->dots, W, s->H, i, j)) {
-            /* around the drawing (not next to it), the fluid's own dust: dim, thin, shimmering */
+        if (!dots && o->shapes && i >= 1 && j >= 1 && i < W - 1 && j < s->H - 1) {
+            /* around the drawing, the fluid's own dust: dim, thin, shimmering, and denser and
+             * brighter close to it (d->halo), never on it */
             float sub[8], smin, smean;
             subsample(s->view, W, k, sub, &smin, &smax, &smean);
-            for (int q = 0; q < 8; q++) sub[q] *= HAZE_GAIN;
-            const int hz = fluid_braille_dither(sub, i, j, fmaxf(o->shimmer, HAZE_JITTER), frame);
+            int near = HALO_REACH + 1, on = 0;
+            for (int q = 0; q < 8; q++) {
+                const int dd = d->halo[(4 * j + (q & 3)) * 2 * W + 2 * i + (q >> 2)];
+                sub[q] = sub[q] * HAZE_GAIN + (dd <= HALO_REACH ? HALO_INK[dd] : 0.f);
+                if (dd) on |= 1 << fluid_braille_bit(q >> 2, q & 3);
+                if (dd < near) near = dd;
+            }
+            const int hz = fluid_braille_dither(sub, i, j, fmaxf(o->shimmer, HAZE_JITTER), frame) & on;
             if (hz) {
                 const int pal = (o->palette >= 0 && o->palette < FLUID_PAL_COUNT) ? o->palette : FLUID_PAL_PASTEL;
-                const float *lo = PAL[pal][0], *hi = PAL[pal][1], f = HAZE_LEVEL * (255.f / 65535.f);
-                const fluid_rgba16_t *c = &s->col[k];
+                const float lv = near <= HALO_REACH ? HALO_LEVEL[near] : HAZE_LEVEL;
+                const float *lo = PAL[pal][0], *hi = PAL[pal][1], f = lv * (255.f / 65535.f);
+                int kc2 = k, most = 0;                       /* near it: the drawing's colour */
+                for (int q = 0; near <= HALO_REACH && q < 9; q++) {
+                    const int kn = k + (q / 3 - 1) * W + q % 3 - 1, n = __builtin_popcount(o->dots[kn]);
+                    if (n > most) { most = n; kc2 = kn; }
+                }
+                const fluid_rgba16_t *c = &s->col[kc2];
                 *col_out = pal == FLUID_PAL_PASTEL ? rgb565_be((int)(c->r * f), (int)(c->g * f), (int)(c->b * f))
-                         : rgb565_be((int)(lo[0] + (hi[0] - lo[0]) * HAZE_LEVEL), (int)(lo[1] + (hi[1] - lo[1]) * HAZE_LEVEL), (int)(lo[2] + (hi[2] - lo[2]) * HAZE_LEVEL));
+                         : rgb565_be((int)(lo[0] + (hi[0] - lo[0]) * lv), (int)(lo[1] + (hi[1] - lo[1]) * lv), (int)(lo[2] + (hi[2] - lo[2]) * lv));
                 *key_out = (uint16_t)(hd | hz);
                 return;
             }
@@ -500,6 +517,45 @@ static inline uint8_t hd_sig(const uint8_t *dots, int W, int H, int i, int j) {
                      7 * (j > 0 ? dots[k - W] : 0) + 11 * (j < H - 1 ? dots[k + W] : 0));
 }
 
+/* each dot's distance to the drawing's dots (chessboard, in dots, capped past HALO_REACH):
+ * measured again only when the drawing changes */
+static void halo_field(fluid_draw_t *d, const uint8_t *dots) {
+    const int W = d->W, H = d->H, DW = 2 * W, DH = 4 * H, FAR = HALO_REACH + 1;
+    uint32_t sig = 2166136261u;
+    for (int k = 0; k < W * H; k++) sig = (sig ^ dots[k]) * 16777619u;
+    if (sig == d->halo_sig) return;
+    d->halo_sig = sig;
+    uint8_t *f = d->halo;
+    for (int y = 0; y < DH; y++) for (int x = 0; x < DW; x++)
+        f[y * DW + x] = dots[(y >> 2) * W + (x >> 1)] >> fluid_braille_bit(x & 1, y & 3) & 1 ? 0 : FAR;
+    for (int y = 0; y < DH; y++) for (int x = 0; x < DW; x++) {          /* down, then up */
+        uint8_t *p = &f[y * DW + x];
+        if (x > 0 && p[-1] + 1 < *p) *p = (uint8_t)(p[-1] + 1);
+        if (y > 0) for (int dx = -1; dx <= 1; dx++) if (x + dx >= 0 && x + dx < DW && p[dx - DW] + 1 < *p) *p = (uint8_t)(p[dx - DW] + 1);
+    }
+    for (int y = DH - 1; y >= 0; y--) for (int x = DW - 1; x >= 0; x--) {
+        uint8_t *p = &f[y * DW + x];
+        if (x < DW - 1 && p[1] + 1 < *p) *p = (uint8_t)(p[1] + 1);
+        if (y < DH - 1) for (int dx = -1; dx <= 1; dx++) if (x + dx >= 0 && x + dx < DW && p[dx + DW] + 1 < *p) *p = (uint8_t)(p[dx + DW] + 1);
+    }
+}
+
+/* the cells under fb box b, redrawn next (KEY_STALE) */
+static void stale_box(fluid_draw_t *d, const int16_t *b) {
+    const float kx = (float)d->W / d->stage, ky = (float)d->H / d->stage;
+    int i0 = (int)floorf((b[0] - d->ox) * kx), i1 = (int)ceilf((b[1] - d->ox) * kx), j0 = (int)floorf((b[2] - d->oy) * ky), j1 = (int)ceilf((b[3] - d->oy) * ky);
+    i0 = i0 < 0 ? 0 : i0; j0 = j0 < 0 ? 0 : j0; i1 = i1 > d->W ? d->W : i1; j1 = j1 > d->H ? d->H : j1;
+    for (int j = j0; j < j1; j++) for (int i = i0; i < i1; i++) d->key[j * d->W + i] = KEY_STALE;
+}
+static uint32_t shape_hash(const fluid_shape_t *sh) {
+    const float f[12] = { sh->x, sh->y, sh->x1, sh->y1, sh->r, sh->hw, sh->a0, sh->span, sh->w, sh->h, sh->co, sh->si };
+    uint32_t h = (2166136261u ^ sh->k ^ (uint32_t)sh->acc << 8) * 16777619u;
+    h = (h ^ sh->rgb) * 16777619u;
+    h = (h ^ (uint32_t)(uintptr_t)sh->mask) * 16777619u;
+    for (int q = 0; q < 12; q++) { uint32_t v; memcpy(&v, &f[q], 4); h = (h ^ v) * 16777619u; }
+    return h;
+}
+
 /* each shape's box in fb px, [x0, x1) x [y0, y1), its soft edge included */
 static void shape_boxes(fluid_draw_t *d, const fluid_draw_opts_t *o) {
     for (int n = 0; n < o->nshapes && n < FLUID_MAX_SHAPES; n++) {
@@ -535,7 +591,19 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
 
     /* a scene in high definition: its letters are among its shapes */
     const bool hd = o->scene && o->dots && o->shapes;
-    if (hd) shape_boxes(d, o);
+    if (hd) {
+        shape_boxes(d, o);
+        halo_field(d, o->dots);
+        /* a shape that changed (a tapped spot's drawing growing): the cells it covered and covers */
+        const int n1 = o->nshapes < FLUID_MAX_SHAPES ? o->nshapes : FLUID_MAX_SHAPES;
+        for (int n = 0; n < (n1 > d->nsh0 ? n1 : d->nsh0); n++) {
+            const uint32_t h = n < n1 ? shape_hash(&o->shapes[n]) : 0;
+            if (n < d->nsh0 && n < n1 && h == d->sh0[n]) continue;
+            if (n < d->nsh0) stale_box(d, d->sb0[n]);
+            if (n < n1) { stale_box(d, d->sb[n]); d->sh0[n] = h; memcpy(d->sb0[n], d->sb[n], sizeof(d->sb[n])); }
+        }
+        d->nsh0 = n1;
+    } else d->nsh0 = 0;
 
     /* condensed letters: which have enough ink, and which cells they cover (the box) */
     struct { int li; float ink, hh, acc, m; } shown[FLUID_MAX_LETTERS];
@@ -825,14 +893,15 @@ void fluid_draw_rect(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fl
                 const int x0 = cx0 > t->x0 ? cx0 : t->x0, x1 = cx1 < t->x1 ? cx1 : t->x1;
                 const uint16_t key = d->key[k], col = d->col[k];
                 if (key == KEY_EMPTY || key == KEY_SKIP) continue;
-                if (key < KEY_GLYPH || key_hd(key)) {        /* dots (over a scene's shapes) */
+                if (key < KEY_GLYPH || key_hd(key)) {        /* dots (beside a scene's shapes, never on them) */
                     if (r < 0) continue;
+                    const bool beside = key_hd(key);
                     for (int c = 0; c < 2; c++) {
                         if (!(key & (1u << fluid_braille_bit(c, r)))) continue;
                         int a = d->dx[i * 2 + c], b = a + d->dot_w;
                         if (a < t->x0) a = t->x0;
                         if (b > t->x1) b = t->x1;
-                        for (int x = a; x < b; x++) row[x - bx] = col;
+                        for (int x = a; x < b; x++) if (!beside || !row[x - bx]) row[x - bx] = col;
                     }
                 } else {
                     raster_glyph_row(row, bx, x0, x1, y, cx0, cx1, ya, yb, key, col, o);
