@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cat Model Sheet</title>
+<style>
+:root{--bg:#f4f2f8;--fg:#1d1830;--mute:#6b6585;--card:#fff;--line:#dcd8e6}
+@media (prefers-color-scheme:dark){:root{--bg:#0e0c14;--fg:#ece8f8;--mute:#9a93b5;--card:#17141f;--line:#2a2538}}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif}
+main{max-width:1180px;margin:0 auto;padding:28px 16px 60px}
+h1{font-size:24px;margin:0 0 4px} h2{font-size:18px;margin:34px 0 4px} p{margin:0 0 6px;color:var(--mute);max-width:70ch}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(520px,1fr));gap:18px;margin-top:22px}
+figure{margin:0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
+figcaption{font-weight:600;margin:0 0 8px} figcaption span{color:var(--mute);font-weight:400;margin-left:6px}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:10px} .pair img{width:100%;border-radius:8px;display:block}
+@media (max-width:600px){.grid{grid-template-columns:1fr}}
+</style></head><body><main>
+<h1>Cat model sheet</h1>
+<p>Phase 1 of the cat rebuild: the model and rig only, for sign-off before any animation or device code.</p>
+<p>Each pose twice: left, the Blender model in flat palette colours; right, the same pose as Molty would draw it
+(52 x 32 cells of 2 x 4 dots, one outline, brighter on the near side).</p>
+<p>The body and hind legs are one merged shape: a long, level body; the thigh forms the rear end with the tail root on top; a narrow shin, a high hock over a near-vertical metatarsus. The white chest is surface colour only. Sitting, the back rounds and the whole hind foot lies flat.</p>
+<p>Walk keys come from a gait model: a lateral sequence walk (left hind, left fore, right hind, right fore, a quarter cycle apart), as in Muybridge's cat plates. Keys are timed on the near hind paw.</p>
+<p>Rig: root on the floor; pelvis, spine, chest, neck, head; two ears; 12 tail bones; front legs scapula, upper arm, forearm, paw; hind legs thigh, shin, hock (metatarsus), paw. IK targets on all four paws, the hock rides the hind paw target, elbow and knee poles.</p>
+<div class="grid">
+<figure><figcaption>Sitting <span>side</span></figcaption>
+<div class="pair"><img src="renders/sitting_side_clean.png" alt="Sitting side, render"><img src="renders/sitting_side_braille.png" alt="Sitting side, braille"></div></figure>
+<figure><figcaption>Sitting <span>front</span></figcaption>
+<div class="pair"><img src="renders/sitting_front_clean.png" alt="Sitting front, render"><img src="renders/sitting_front_braille.png" alt="Sitting front, braille"></div></figure>
+<figure><figcaption>Sitting <span>three-quarter</span></figcaption>
+<div class="pair"><img src="renders/sitting_three_quarter_clean.png" alt="Sitting three-quarter, render"><img src="renders/sitting_three_quarter_braille.png" alt="Sitting three-quarter, braille"></div></figure>
+<figure><figcaption>Standing <span>side</span></figcaption>
+<div class="pair"><img src="renders/standing_side_clean.png" alt="Standing side, render"><img src="renders/standing_side_braille.png" alt="Standing side, braille"></div></figure>
+<figure><figcaption>Walk 1: contact <span>side</span></figcaption>
+<div class="pair"><img src="renders/walk_contact_side_clean.png" alt="Walk 1: contact side, render"><img src="renders/walk_contact_side_braille.png" alt="Walk 1: contact side, braille"></div></figure>
+<figure><figcaption>Walk 2: down <span>side</span></figcaption>
+<div class="pair"><img src="renders/walk_down_side_clean.png" alt="Walk 2: down side, render"><img src="renders/walk_down_side_braille.png" alt="Walk 2: down side, braille"></div></figure>
+<figure><figcaption>Walk 3: passing <span>side</span></figcaption>
+<div class="pair"><img src="renders/walk_passing_side_clean.png" alt="Walk 3: passing side, render"><img src="renders/walk_passing_side_braille.png" alt="Walk 3: passing side, braille"></div></figure>
+<figure><figcaption>Walk 4: up <span>side</span></figcaption>
+<div class="pair"><img src="renders/walk_up_side_clean.png" alt="Walk 4: up side, render"><img src="renders/walk_up_side_braille.png" alt="Walk 4: up side, braille"></div></figure>
+</div>
+<h2>Reference check: the hindquarters</h2>
+<p>Orange: a real cat walking (Eadweard Muybridge, Animal Locomotion, Plate 716, 1887, public domain), scaled to the height of our tail root and pinned there. Purple: ours. From the tail root, down the back of the thigh to the hock is one convex curve on both: the thigh is the rear end. The body now follows a real cat (long, level, the legs leaving a third of the height under the belly), so the whole trunk lines up; only the big cartoon head stays. Made by overlay_ref.py.</p>
+<div class="grid"><figure><figcaption>Standing <span>vs reference</span></figcaption><img src="renders/overlay_standing.png" alt="Standing silhouette over a real cat" style="width:100%;border-radius:8px"></figure><figure><figcaption>Walk 3: passing <span>vs reference</span></figcaption><img src="renders/overlay_walk_passing.png" alt="Walk 3: passing silhouette over a real cat" style="width:100%;border-radius:8px"></figure></div>
+</main></body></html>
