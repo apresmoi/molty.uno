@@ -100,6 +100,17 @@ static inline float maxf(float a, float b) { return a > b ? a : b; }
 static inline float clampf(float x, float a, float b) { return x < a ? a : x > b ? b : x; }
 static float sstep(float a, float b, float x) { const float t = clampf((x - a) / (b - a), 0.f, 1.f); return t * t * (3.f - 2.f * t); }
 static inline int ffloor(float x) { const int i = (int)x; return i - (x < (float)i); }   /* floorf is a call on the S3 */
+/* sqrt(x), x >= 0, to ~1e-6 relative: sqrtf is two windowed calls on the S3 (and spills the float registers around them),
+ * ~100+ cycles in the per-dot loops; this is a few multiplies (an inverse square root's guess, two Newton steps) */
+static inline float fsqrt(float x) {
+    union { float f; uint32_t i; } u = { x };
+    u.i = 0x5f375a86u - (u.i >> 1);
+    float y = u.f;
+    const float hx = 0.5f * x;
+    y = y * (1.5f - hx * y * y);
+    y = y * (1.5f - hx * y * y);
+    return x * y;
+}
 static inline uint16_t zq(float z) { const int v = (int)(z * ZS + 32768.5f); return (uint16_t)(v < 1 ? 1 : v > 65535 ? 65535 : v); }
 static inline float zf(uint16_t q) { return (float)((int)q - 32768) * (1.f / ZS); }
 
@@ -288,13 +299,13 @@ static void capsule(const cd_t *d, const float *world, const cc_shape_t *s, floa
     const float ex = c->b[0] - c->a[0], ey = c->b[1] - c->a[1], L = ex * ex + ey * ey;
     c->invL = L > 1e-12f ? 1.f / L : 0.f;
 }
-static bool in_capsule(const capz_t *c, float u, float v, float *zz) {
+static inline bool in_capsule(const capz_t *c, float u, float v, float *zz) {
     const float ex = c->b[0] - c->a[0], ey = c->b[1] - c->a[1];
     float t = ((u - c->a[0]) * ex + (v - c->a[1]) * ey) * c->invL;
     t = t < 0.f ? 0.f : t > 1.f ? 1.f : t;
     const float r = c->r0 + (c->r1 - c->r0) * t, dx = u - c->a[0] - ex * t, dy = v - c->a[1] - ey * t, d2 = dx * dx + dy * dy;
     if (d2 >= r * r) return false;
-    *zz = c->a[2] + (c->b[2] - c->a[2]) * t + sqrtf(r * r - d2);
+    *zz = c->a[2] + (c->b[2] - c->a[2]) * t + fsqrt(r * r - d2);
     return true;
 }
 static void cone_capsule(const cd_t *d, const float *world, const cc_shape_t *s, capz_t *c) {
@@ -391,7 +402,7 @@ static void solid_strip(cd_t *d, dot_t *sb, int a0, int b0) {
             /* only the run of the row inside the field: i00 du^2 + lin du + cdv < 1/kk, solved for du */
             const float disc = lin * lin - 4.f * e.i00 * (cdv - ikk);
             if (disc <= 0.f) continue;
-            const float sq = sqrtf(disc), u0 = (-lin - sq) * h2 + e.u, u1 = (-lin + sq) * h2 + e.u;
+            const float sq = fsqrt(disc), u0 = (-lin - sq) * h2 + e.u, u1 = (-lin + sq) * h2 + e.u;
             int xa = ffloor(u0 * isx + DW / 2 - 0.5f), xb = -ffloor(-(u1 * isx + DW / 2 - 0.5f));
             if (xa < bx.x0) xa = bx.x0;
             if (xb > bx.x1) xb = bx.x1;
@@ -406,7 +417,7 @@ static void solid_strip(cd_t *d, dot_t *sb, int a0, int b0) {
                     else { const float o = 1.f - qf; p->f = (uint16_t)(p->f + (int)(stq * o * o * o)); }
                 }
                 if (topq <= p->z) continue;                 /* cannot be nearer than what is there */
-                const uint16_t z = zq(e.d + (qv < 1.f ? e.h * sqrtf(1.f - qv) : 0.f));
+                const uint16_t z = zq(e.d + (qv < 1.f ? e.h * fsqrt(1.f - qv) : 0.f));
                 if (z > p->z) { p->z = z; p->g = g; }
             }
         }
@@ -426,7 +437,7 @@ static void solid_strip(cd_t *d, dot_t *sb, int a0, int b0) {
             for (int Y = bx.y0 > a ? bx.y0 : a; Y <= bx.y1 && Y < b; Y++) for (int X = bx.x0; X <= bx.x1; X++) {
                 const float qv = eq(&e, dot_u(d, X), dot_v(d, Y));
                 if (qv >= 1.f) continue;
-                dot_t *p = sb + (Y - a0) * DW + X; const uint16_t z = zq(e.d + e.h * sqrtf(1.f - qv));
+                dot_t *p = sb + (Y - a0) * DW + X; const uint16_t z = zq(e.d + e.h * fsqrt(1.f - qv));
                 if (z > p->z) { p->z = z; p->g = g; }
             }
         } else {
@@ -500,7 +511,7 @@ static void disc_region(cd_t *d, const cc_shape_t *s, bool facing) {
     region_box(d, b.x0, b.y0, b.x1, b.y1);
     for (int Y = b.y0; Y <= b.y1; Y++) for (int X = b.x0; X <= b.x1; X++) {
         dot_t *p = d->dot + Y * d->DW + X; const float q = eq(&e, dot_u(d, X), dot_v(d, Y));
-        if (q < 1.f && zq(e.d + e.h * sqrtf(1.f - q)) + Z02 >= p->z) p->fl |= FR;
+        if (q < 1.f && zq(e.d + e.h * fsqrt(1.f - q)) + Z02 >= p->z) p->fl |= FR;
     }
 }
 static void inv3(float A[3][3], float *o, bool *ok) {
