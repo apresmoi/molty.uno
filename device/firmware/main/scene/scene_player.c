@@ -892,6 +892,16 @@ static uint32_t fill_key(const fluid_sim_t *s, const scene_t *sc, float t, float
     return h ? h : 1;
 }
 
+/* scratch for a second paint of the items (the still cells, the full-growth shapes): PSRAM, once (internal RAM is
+ * the network's) */
+static fluid_shape_t *s_scr_shp;
+static fluid_letter_t *s_scr_let;
+static bool scratch(void) {
+    if (!s_scr_shp) s_scr_shp = SCENE_CALLOC(sizeof(fluid_shape_t) * FLUID_MAX_SHAPES);
+    if (!s_scr_let) s_scr_let = SCENE_CALLOC(sizeof(fluid_letter_t) * FLUID_MAX_LETTERS);
+    return s_scr_shp && s_scr_let;
+}
+
 void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_t *cap, fluid_letter_t *letters, int *nletters, uint8_t *dots,
                 scene_shapes_t *hd) {
     FLUID_PROF_BEGIN(c0);
@@ -936,9 +946,9 @@ void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_
         const uint32_t sk = sc && sc->focus >= 0 && glow > 0.f ? (sc->serial * 2654435761u) ^ (uint32_t)(sc->focus + 1) ^ (uint32_t)(uintptr_t)s->mask : 0;
         if (sk != still_key || !sk) {
             memset(hd->still, 0, (size_t)s->N);
-            if (sk) {
-                static fluid_shape_t tmp[FLUID_MAX_SHAPES];
-                static fluid_letter_t tl[FLUID_MAX_LETTERS];
+            if (sk && scratch()) {
+                fluid_shape_t *tmp = s_scr_shp;
+                fluid_letter_t *tl = s_scr_let;
                 int tn = 0;
                 scene_shapes_t th = { tmp, 0, NULL, NULL };
                 const ctx_t cs = { cv, soft, &th, false };
@@ -981,8 +991,8 @@ void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_
 
 int scene_full_shapes(fluid_sim_t *s, const scene_t *sc, float t, fluid_shape_t *out, uint32_t *key) {
     *key = 0;
-    if (!sc || !canvas_for(s)) return -1;
-    static fluid_letter_t tl[FLUID_MAX_LETTERS];
+    if (!sc || !canvas_for(s) || !scratch()) return -1;
+    fluid_letter_t *tl = s_scr_let;
     int tn = 0;
     scene_shapes_t h = { out, 0, NULL, NULL };
     const ctx_t c = { &s_cv, 1.f / s_cv.H, &h, false };

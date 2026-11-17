@@ -30,7 +30,8 @@ static inline int64_t now_us(void) { struct timespec ts; clock_gettime(CLOCK_MON
 
 enum { PH_IDLE, PH_RASTER, PH_FWD, PH_BWD, PH_EXTRACT };
 
-static float s_near[LUT_N], s_tint[LUT_N], s_sin[1025];
+/* tables in PSRAM, made once (internal RAM is the network's) */
+static float *s_near, *s_tint, *s_sin;
 static bool s_lut;
 
 static inline float hash_u(int a, int b, uint32_t c) {     /* fluid_draw.c's, chart-engine.js hashU */
@@ -95,6 +96,9 @@ static bool set_room(fine_set_t *st, int n) {
 fluid_fine_t *fluid_fine_create(int W, int H, int fb_w, int fb_h) {
     if (W <= 2 || H <= 2 || W > 255 || H > 255 || fb_w < 32 || fb_h < 32 || fb_w > 1024 || fb_h > 1024) return NULL;
     if (!s_lut) {
+        if (!s_near) s_near = FINE_CALLOC(sizeof(float) * (2 * LUT_N + 1025));
+        if (!s_near) return NULL;
+        s_tint = s_near + LUT_N; s_sin = s_tint + LUT_N;
         for (int i = 0; i < LUT_N; i++) { s_near[i] = expf(-i * 0.1f / FINE_FALL); s_tint[i] = expf(-i * 0.1f / FINE_TINT_FALL); }
         for (int i = 0; i <= 1024; i++) s_sin[i] = sinf(6.2831853f * i / 1024.f);
         s_lut = true;
@@ -322,8 +326,9 @@ void fluid_fine_swap(fluid_fine_t *f) {
  * (sin(x + y) = sx cy + cx sy), and sin / cos of 1.6 s from a table: a few multiplies a grid point. */
 #define LG_MAX 136
 static void light_grid(fluid_fine_t *f, float T) {
-    static float cu[8][LG_MAX], k16[2][258];                  /* per column: sin, cos of each wave's two u parts */
+    static float (*cu)[LG_MAX], (*k16)[258];                 /* per column: sin, cos of each wave's two u parts (PSRAM) */
     static int ready_lg;
+    if (!cu) { cu = FINE_CALLOC(sizeof(float) * (8 * LG_MAX + 2 * 258)); if (!cu) { memset(f->lgrid, 255, (size_t)f->lg * f->lg); return; } k16 = (float (*)[258])(cu + 8); }
     const int LG = f->lg > LG_MAX ? LG_MAX : f->lg;
     const float tau = 6.2831853f, g = (float)FINE_LIGHT_GRID / f->S;
     if (ready_lg != LG) {
