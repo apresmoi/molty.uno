@@ -362,7 +362,7 @@ static bool  s_touch_mute = false;              /* the touch that woke the scree
 #define FLUID_WIN_ROWS 14                       /* a 412 px panel's cell row in one window */
 static uint16_t *s_win = NULL, *s_win2 = NULL;   /* s_win2: a second window, the panel taking one while the other is
                                                  * drawn (molty_display_blit_async); FLUID_WIN2_PX each, internal DMA */
-#define FLUID_WIN2_PX 4096                      /* 8 KB each: a full 466 px row band in two halves of 8 rows */
+#define FLUID_WIN2_PX 5120                      /* 10 KB each: fewer windows on a heavy frame (a ring's wave) */
 static int       s_win_px = 0;
 static volatile bool s_fb_want = false;         /* /api/framebuffer: draw the frame there too */
 static SemaphoreHandle_t s_fb_done = NULL;
@@ -1445,7 +1445,7 @@ static void fluid_task(void *arg) {
             const float d = df, kw = prof_ema[FP_K_WAIT];
             const float step = fminf(5.f, fabsf(d) * 0.5f);   /* faster the further apart (the ring's wave comes and goes in a second) */
             share += d > 1.f ? step : kw > 1.5f ? 1.f : d < -1.f && kw < 1.f ? -step : 0.f;
-            share = share < 30.f ? 30.f : share > 80.f ? 80.f : share;
+            share = share < 30.f ? 30.f : share > 90.f ? 90.f : share;
             cpk_set_share(s_cpk, (int)share); s_stats.share = (int)share;
         }
         s_stats.inside = s_sim->inside; s_stats.grid_w = s_sim->W; s_stats.grid_h = s_sim->H;
