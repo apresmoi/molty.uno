@@ -23,7 +23,7 @@ cc -std=c11 -Wno-deprecated-declarations -I"$IDF_JSON" -c "$IDF_JSON/cJSON.c" -o
 cc -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Werror -O2 -ffp-contract=off \
   -I"$MAIN/creature" -I"$MAIN/pkg" -I"$MAIN/fluid" -I"$MAIN/scene" -I"$IDF_JSON" \
   "$HERE/creature_test.c" "${CP_SRC:-$MAIN/creature/creature_player.c}" "$MAIN/pkg/pkg_parse.c" \
-  "$MAIN/creature/creature_body.c" "$MAIN/creature/creature_pkg.c" "$MAIN/creature/creature_clip.c" "$MAIN/creature/creature_dots.c" "$MAIN/creature/mood_engine.c" "$MAIN/creature/rig_geo.c" \
+  "$MAIN/creature/creature_body.c" "$MAIN/creature/creature_pkg.c" "$MAIN/creature/creature_clip.c" "$MAIN/creature/creature_dots.c" "$MAIN/creature/creature_ring.c" "$MAIN/creature/mood_engine.c" "$MAIN/creature/rig_geo.c" \
   "$MAIN/creature/cute_spec.c" "$MAIN/creature/cute_rig.c" \
   "$MAIN/fluid/fluid_sim.c" "$MAIN/fluid/fluid_target.c" "$MAIN/fluid/glyph_font.c" "$MAIN/fluid/fluid_draw.c" \
   "$OUT/cJSON.o" -lm -o "$OUT/creature_test"

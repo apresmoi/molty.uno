@@ -510,8 +510,28 @@ static void test_crisp_panel(const char *pkgdir) {
     cpk_destroy(k); free(json);
 }
 
-/* a listen's ring (and the agent's progress ring) over a rigged creature: the target's rim ink shows on the crisp cells,
- * in its colour, at the rim (mole_fluid.c's frame order: the creature, the rings into the target, colour, paint) */
+/* a listen's ring (and the agent's progress ring) over a rigged creature, as mole_fluid.c runs a frame (the creature, the
+ * rings into the target, colour, paint): dust at the rim, densest at its line and thinning inward, never a solid band;
+ * it forms over about half a second and dissolves as smoothly, never popping */
+static int ring_dots(const cpk_t *k, const fluid_sim_t *s, float r0, float r1, int *all) {
+    const uint8_t *cells; const uint32_t *cc; cpk_cells(k, &cells, &cc);
+    int lit = 0, n = 0;
+    for (int j = 0; j < s->H; j++) for (int i = 0; i < s->W; i++) {
+        const int c = j * s->W + i;
+        if (!s->mask[c]) continue;
+        const fluid_rgba16_t *q = &s->col[c];
+        const bool red = q->r > 2 * q->g && q->r > 2 * q->b && q->r > 40 * 257;
+        for (int b = 0; b < 8; b++) {
+            const int col = b >> 2, row = b & 3;
+            const float x = s->xs[i] + (col ? 0.5f : -0.5f) / s->W, y = s->ys[j] + ((row + 0.5f) / 4.f - 0.5f) * 2.f / s->H, r = sqrtf(x * x + y * y);
+            if (r < r0 || r >= r1) continue;
+            n++;
+            if (red && (cells[c] >> fluid_braille_bit(col, row) & 1)) lit++;
+        }
+    }
+    if (all) *all = n;
+    return lit;
+}
 static void test_crisp_ring(const char *pkgdir) {
     char path[512]; size_t len;
     snprintf(path, sizeof(path), "%s/cat/cat.json", pkgdir);
@@ -526,37 +546,51 @@ static void test_crisp_ring(const char *pkgdir) {
     fluid_frame_t *fr = fluid_frame_create(W, H);
     uint16_t *fb = calloc((size_t)P * P, 2);
     fluid_ring_t ring = { 0 }; fluid_progress_t prog = { 0 }; prog.pct = -1.f;
-    const uint32_t RED = 0xff2a2a, BLUE = 0x2a6aff;
-    for (int phase = 0; phase < 3; phase++) {      /* none, a listen, the agent's progress */
-        int lit = 0, rim = 0;
-        for (int f = 0; f < 30; f++) {
-            cpk_frame(k, s, 1.f / 30.f, 1.f);
-            fluid_ring_tick(&ring, 1.f / 30.f, phase == 1);
-            fluid_progress_tick(&prog, 1.f / 30.f, phase == 2, -1.f, false);
-            fluid_target_progress(s, &prog, BLUE, 0.f);
-            fluid_target_ring(s, &ring, RED, 0.f);
-            s->p.still = true;
-            fluid_sim_step(s, 1.f / 60); fluid_sim_step(s, 1.f / 60);
-            fluid_sim_color(s, 1.f / 30);
-            cpk_paint(k, s);
+    int seen[90] = { 0 };
+    for (int f = 0; f < 90; f++) {                 /* 10 frames none, 45 a listen, 35 after it */
+        cpk_frame(k, s, 1.f / 30.f, 1.f);
+        fluid_ring_tick(&ring, 1.f / 30.f, f >= 10 && f < 55);
+        fluid_target_ring(s, &ring, 0xff2a2a, 0.f);
+        s->p.still = true;
+        fluid_sim_step(s, 1.f / 60); fluid_sim_step(s, 1.f / 60);
+        fluid_sim_color(s, 1.f / 30);
+        cpk_paint(k, s);
+        seen[f] = ring_dots(k, s, 0.68f, 1.f, NULL);
+        if (f == 54) {                             /* formed: the line, thinning inward */
+            int n0, n1, n2, n3;
+            const int a0 = ring_dots(k, s, 0.86f, 0.9f, &n0), a1 = ring_dots(k, s, 0.82f, 0.86f, &n1), a2 = ring_dots(k, s, 0.78f, 0.82f, &n2), a3 = ring_dots(k, s, 0.72f, 0.78f, &n3);
+            const double f0 = (double)a0 / n0, f1 = (double)a1 / n1, f2 = (double)a2 / n2, f3 = (double)a3 / n3;
+            printf("  crisp ring, formed: lit %.2f at its line, %.2f, %.2f, %.2f inward\n", f0, f1, f2, f3);
+            CHECK(f0 > 0.3 && f0 < 0.8, "crisp ring: its line %.2f lit (a dusty line, not a solid band)", f0);
+            CHECK(f1 < 0.7 * f0 && f2 < 0.7 * f1 + 0.02 && f3 < 0.05, "crisp ring: not thinning inward (%.2f %.2f %.2f %.2f)", f0, f1, f2, f3);
             fluid_sim_snapshot(s, fr, false);
             fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, f / 30.f, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL };
             const uint32_t *cc; cpk_cells(k, &o.dots, &cc); o.scene = true;
-            int y0, y1; fluid_draw(d, fr, fb, &o, &y0, &y1);
+            int y0, y1; d->force = true; fluid_draw(d, fr, fb, &o, &y0, &y1);
+            if (getenv("RING_PPM")) { FILE *o2 = fopen(getenv("RING_PPM"), "wb"); fprintf(o2, "P6\n%d %d\n255\n", P, P); for (int q = 0; q < P * P; q++) { const uint16_t le = (uint16_t)((fb[q] >> 8) | (fb[q] << 8)); fputc((le >> 11) << 3, o2); fputc(((le >> 5) & 63) << 2, o2); fputc((le & 31) << 3, o2); } fclose(o2); }
         }
-        for (int y = 0; y < P; y++) for (int x = 0; x < P; x++) {
-            const float dx = x + 0.5f - P / 2.f, dy = y + 0.5f - P / 2.f, r = sqrtf(dx * dx + dy * dy) / (P / 2.f);
-            if (r < 0.8f || r > 0.95f) continue;
-            const uint16_t le = (uint16_t)((fb[y * P + x] >> 8) | (fb[y * P + x] << 8));
-            const int R = (le >> 11) << 3, G = ((le >> 5) & 63) << 2, B = (le & 31) << 3;
-            rim++;
-            if (phase == 1 ? R > 120 && R > 2 * G && R > 2 * B : phase == 2 ? B > 120 && B > R + 40 : 0) lit++;
-        }
-        const char *what = phase == 0 ? "no ring" : phase == 1 ? "a listen" : "progress";
-        printf("  crisp ring, %s: %d of %d rim pixels in the ring's colour\n", what, lit, rim);
-        if (phase) CHECK(lit > rim / (phase == 1 ? 20 : 100), "crisp ring, %s: only %d of %d rim pixels lit", what, lit, rim);   /* progress: a comet */
-        if (phase == 1 && getenv("RING_PPM")) { FILE *o = fopen(getenv("RING_PPM"), "wb"); fprintf(o, "P6\n%d %d\n255\n", P, P); for (int q = 0; q < P * P; q++) { const uint16_t le = (uint16_t)((fb[q] >> 8) | (fb[q] << 8)); fputc((le >> 11) << 3, o); fputc(((le >> 5) & 63) << 2, o); fputc((le & 31) << 3, o); } fclose(o); }
     }
+    const int full = seen[54];
+    int jump = 0, in = 0, out = 0;
+    for (int f = 11; f < 90; f++) { const int dd = abs(seen[f] - seen[f - 1]); if (dd > jump) jump = dd; }
+    for (int f = 10; f < 55 && seen[f] < 0.9 * full; f++) in++;
+    for (int f = 55; f < 90 && seen[f] > 0; f++) out++;
+    printf("  crisp ring: %d dots formed, in over %d frames, gone %d frames after, largest step %d\n", full, in, out, jump);
+    CHECK(seen[9] == 0, "crisp ring: dots before a listen");
+    CHECK(in >= 10 && in <= 24, "crisp ring: forms over %d frames (about half a second)", in);
+    CHECK(out >= 10 && out <= 30 && seen[89] == 0, "crisp ring: dissolves over %d frames", out);
+    CHECK(jump < full / 4, "crisp ring: pops (a step of %d of %d dots)", jump, full);
+    int lit = 0;                                   /* the progress comet shows too */
+    for (int f = 0; f < 40; f++) {
+        cpk_frame(k, s, 1.f / 30.f, 1.f);
+        fluid_progress_tick(&prog, 1.f / 30.f, true, -1.f, false);
+        fluid_target_progress(s, &prog, 0x2a6aff, 0.f);
+        fluid_sim_color(s, 1.f / 30);
+        cpk_paint(k, s);
+    }
+    for (int c = 0; c < s->N; c++) { const fluid_rgba16_t *q = &s->col[c]; if (q->b > 2 * q->r && q->b > 40 * 257) lit++; }
+    printf("  crisp ring, progress: %d cells\n", lit);
+    CHECK(lit > 5, "crisp ring: the progress comet does not show (%d cells)", lit);
     free(fb); fluid_frame_destroy(fr); fluid_draw_destroy(d); fluid_sim_destroy(s); cpk_destroy(k); free(json);
 }
 
