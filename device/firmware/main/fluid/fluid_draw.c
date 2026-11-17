@@ -216,7 +216,7 @@ fluid_draw_t *fluid_draw_create(int W, int H, int fb_w, int fb_h) {
 
 void fluid_draw_destroy(fluid_draw_t *d) {
     if (!d) return;
-    FLUID_FREE(d->block); FLUID_FREE(d->cd0); FLUID_FREE(d->csig); FLUID_FREE(d->shp0);
+    FLUID_FREE(d->block); FLUID_FREE(d->cd0); FLUID_FREE(d->csig); FLUID_FREE(d->shp0); FLUID_FREE(d->hdc); FLUID_FREE(d->hdcv);
     FLUID_FREE(d);
 }
 
@@ -673,7 +673,7 @@ static void stale_box(fluid_draw_t *d, const int16_t *b) {
     const float kx = (float)d->W / d->stage, ky = (float)d->H / d->stage;
     int i0 = (int)floorf((b[0] - d->ox) * kx), i1 = (int)ceilf((b[1] - d->ox) * kx), j0 = (int)floorf((b[2] - d->oy) * ky), j1 = (int)ceilf((b[3] - d->oy) * ky);
     i0 = i0 < 0 ? 0 : i0; j0 = j0 < 0 ? 0 : j0; i1 = i1 > d->W ? d->W : i1; j1 = j1 > d->H ? d->H : j1;
-    for (int j = j0; j < j1; j++) for (int i = i0; i < i1; i++) d->key[j * d->W + i] = KEY_STALE;
+    for (int j = j0; j < j1; j++) for (int i = i0; i < i1; i++) { d->key[j * d->W + i] = KEY_STALE; if (d->hdcv) d->hdcv[j * d->W + i] = 0; }
 }
 /* the cells a shape covers redrawn next: a stroke's own cells only (a long diagonal's box is most of the panel), the
  * others' box */
@@ -688,7 +688,7 @@ static void stale_shape(fluid_draw_t *d, const fluid_shape_t *sh, const int16_t 
         float u = l2 > 1e-6f ? ((px - sh->x) * vx + (py - sh->y) * vy) / l2 : 0.f;
         u = u < 0.f ? 0.f : u > 1.f ? 1.f : u;
         const float ex = px - sh->x - u * vx, ey = py - sh->y - u * vy;
-        if (ex * ex + ey * ey <= reach * reach) d->key[j * d->W + i] = KEY_STALE;
+        if (ex * ex + ey * ey <= reach * reach) { d->key[j * d->W + i] = KEY_STALE; if (d->hdcv) d->hdcv[j * d->W + i] = 0; }
     }
 }
 static uint32_t shape_hash(const fluid_shape_t *sh) {
@@ -743,6 +743,7 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
         halo_field(d, o->dots);
         caption_box(d, o);
         if (o->fine) fluid_fine_frame(o->fine, s, o);           /* its fine dust instead of the haze */
+        if (d->force && d->hdcv) memset(d->hdcv, 0, (size_t)W * H);   /* the drawing's cache, drawn again */
         /* a shape that changed (a tapped spot's drawing growing): the cells it covered and covers */
         const int n1 = o->nshapes < FLUID_MAX_SHAPES ? o->nshapes : FLUID_MAX_SHAPES;
         for (int n = 0; n < (n1 > d->nsh0 ? n1 : d->nsh0); n++) {
@@ -1090,10 +1091,54 @@ void fluid_shapes_row_dim(const fluid_shape_t *shapes, int nshapes, const int16_
     }
 }
 
+/* A scene on fine dust redraws only the dust most frames, over a drawing that stays: the drawing (every shape but the
+ * caption's, whole) is drawn once into d->hdc, a cell at a time when a window first needs it (or a shape there changed),
+ * and copied from there; the caption's letters are drawn over it live. */
+static void hdc_cell(fluid_draw_t *d, const fluid_draw_opts_t *o, int k, int ncache) {
+    const int i = k % d->W, j = k / d->W, x0 = d->cx[i], x1 = d->cx[i + 1];
+    for (int y = d->cy[j]; y < d->cy[j + 1]; y++) {
+        uint16_t *row = d->hdc + (size_t)y * d->fb_w;
+        memset(row + x0, 0, sizeof(uint16_t) * (size_t)(x1 - x0));
+        fluid_shapes_row(o->shapes, ncache, (const int16_t (*)[4])d->sb, d->ox, d->oy, o->palette, NULL, 0.f, row, 0, y, x0, x1);
+    }
+    d->hdcv[k] = 1;
+}
+/* the cached drawing's pixels [xa, xb) of fb row y into row (row[0] = fb x bx), darker under the caption's backdrop */
+static void hdc_copy(const fluid_draw_t *d, const fluid_draw_opts_t *o, uint16_t *row, int bx, int y, int xa, int xb) {
+    const uint16_t *src = d->hdc + (size_t)y * d->fb_w;
+    memcpy(row + (xa - bx), src + xa, sizeof(uint16_t) * (size_t)(xb - xa));
+    const float *dim = o->fine->dim;
+    if (dim[4] <= 0.f) return;
+    const float Y = (float)(y - d->oy) + 0.5f, dey = Y < dim[2] ? dim[2] - Y : Y > dim[3] ? Y - dim[3] : 0.f;
+    if (dey >= FLUID_DIM_REACH) return;
+    const int la = (int)floorf(dim[0] - FLUID_DIM_REACH) + d->ox, lb = (int)ceilf(dim[1] + FLUID_DIM_REACH) + d->ox;
+    for (int x = xa > la ? xa : la; x < xb && x < lb; x++) {
+        uint16_t *p = &row[x - bx];
+        if (!*p) continue;
+        const float X = (float)(x - d->ox) + 0.5f, dex = X < dim[0] ? dim[0] - X : X > dim[1] ? X - dim[1] : 0.f, dd = sqrtf(dex * dex + dey * dey);
+        if (dd >= FLUID_DIM_REACH) continue;
+        const float tt = dd / FLUID_DIM_REACH, k = 1.f - dim[4] * (1.f - tt * tt * (3.f - 2.f * tt));
+        const int a = (int)(k * 256.f);
+        const uint16_t le = (uint16_t)(*p >> 8 | *p << 8);
+        const uint16_t o16 = (uint16_t)(((le >> 11) * a >> 8) << 11 | ((le >> 5 & 63) * a >> 8) << 5 | ((le & 31) * a >> 8));
+        *p = (uint16_t)(o16 >> 8 | o16 << 8);
+    }
+}
+
 void fluid_draw_rect(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_rect_t *t, bool all) {
     const int W = d->W, H = d->H, bx = t->x0;
     const bool hd = o->scene && o->dots && o->shapes;
     uint32_t c1 = fluid_cycles();
+    /* a scene on fine dust: its drawing from the cache (the caption's shapes, at the end, live) */
+    fluid_draw_t *dm = (fluid_draw_t *)d;
+    if (hd && o->fine && !d->hdc) {
+        dm->hdc = FLUID_CALLOC(sizeof(uint16_t) * (size_t)d->fb_w * d->fb_h);
+        dm->hdcv = FLUID_CALLOC((size_t)d->W * d->H);
+        if (!dm->hdc || !dm->hdcv) { FLUID_FREE(dm->hdc); FLUID_FREE(dm->hdcv); dm->hdc = NULL; dm->hdcv = NULL; }
+    }
+    const bool cached = hd && o->fine && d->hdc;
+    int ncache = o->nshapes < FLUID_MAX_SHAPES ? o->nshapes : FLUID_MAX_SHAPES;
+    while (cached && ncache > 0 && o->shapes[ncache - 1].tag == FLUID_TAG_CAPTION) ncache--;
     if (all) for (int y = t->y0; y < t->y1; y++) memset(rect_px(t, bx, y), 0, (size_t)(t->x1 - bx) * sizeof(uint16_t));
     for (int j = 0; j < H; j++) {
         const int ya = d->cy[j], yb = d->cy[j + 1];
@@ -1122,7 +1167,17 @@ void fluid_draw_rect(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fl
                 const int x0 = d->cx[i] > t->x0 ? d->cx[i] : t->x0, x1 = d->cx[i + 1] < t->x1 ? d->cx[i + 1] : t->x1;
                 for (int x = x0; x < x1; x++) row[x - bx] = 0;
             }
-            if (ha < hb) fluid_shapes_row_dim(o->shapes, o->nshapes, (const int16_t (*)[4])d->sb, d->ox, d->oy, o->palette, d->hdw, o->cap_unformed,
+            if (ha < hb && cached) {
+                for (int i = i0; i < i1; i++) {
+                    const int k = j * W + i, x0 = d->cx[i] > t->x0 ? d->cx[i] : t->x0, x1 = d->cx[i + 1] < t->x1 ? d->cx[i + 1] : t->x1;
+                    if (x1 <= x0 || !d->hdw[x0]) continue;
+                    if (!d->hdcv[k]) hdc_cell(dm, o, k, ncache);
+                    hdc_copy(d, o, row, bx, y, x0, x1);
+                }
+                if (ncache < o->nshapes)
+                    fluid_shapes_row_dim(o->shapes + ncache, o->nshapes - ncache, (const int16_t (*)[4])(d->sb + ncache), d->ox, d->oy, o->palette, d->hdw,
+                                         o->cap_unformed, NULL, row, bx, y, ha, hb);
+            } else if (ha < hb) fluid_shapes_row_dim(o->shapes, o->nshapes, (const int16_t (*)[4])d->sb, d->ox, d->oy, o->palette, d->hdw, o->cap_unformed,
                                               o->fine ? o->fine->dim : NULL, row, bx, y, ha, hb);
             for (int i = i0; i < i1; i++) {
                 const int k = j * W + i;
