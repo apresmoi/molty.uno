@@ -123,6 +123,8 @@ typedef struct {
     esp_err_t (*flush)(void);
     esp_err_t (*flush_rows)(int y0, int y1);      /* full-width rows [y0, y1)                    */
     esp_err_t (*blit)(int x, int y, int w, int h, const uint16_t *px);   /* optional: see molty_display_blit */
+    esp_err_t (*blit_async)(int x, int y, int w, int h, const uint16_t *px);   /* optional: see molty_display_blit_async */
+    esp_err_t (*blit_wait)(void);                 /* optional, with blit_async                                    */
     esp_err_t (*display_power)(bool on);          /* optional: panel off / on (sleep, backlight)  */
     esp_err_t (*display_level)(uint8_t level);    /* optional: brightness 0..255 (255 at power on) */
     esp_err_t (*power_off)(void);                 /* optional: cut the power; returns only on failure */
@@ -194,6 +196,12 @@ esp_err_t molty_display_flush_rows(int y0, int y1);
  *  the framebuffer as it was (whoever draws keeps it for /api/framebuffer); without one,
  *  px is copied into the framebuffer and its rows flushed. */
 esp_err_t molty_display_blit(int x, int y, int w, int h, const uint16_t *px);
+/** As molty_display_blit, but it may return while the panel still reads px: px stays untouched until the next
+ *  molty_display_blit_async or molty_display_blit_wait returns (each waits for the transfer before). Boards without
+ *  one blit synchronously. molty_display_blit_can_overlap: whether it truly returns early. */
+esp_err_t molty_display_blit_async(int x, int y, int w, int h, const uint16_t *px);
+esp_err_t molty_display_blit_wait(void);
+bool      molty_display_blit_can_overlap(void);
 /** The panel off (false) or on. ESP_ERR_NOT_SUPPORTED when the board cannot; the caller
  *  stops drawing either way. */
 esp_err_t molty_display_power(bool on);

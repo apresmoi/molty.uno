@@ -167,6 +167,21 @@ esp_err_t molty_display_blit(int x, int y, int w, int h, const uint16_t *px)
     return B.flush_rows(y, y + h);
 }
 
+esp_err_t molty_display_blit_async(int x, int y, int w, int h, const uint16_t *px)
+{
+    if (!(s_caps & MOLTY_CAP_DISPLAY)) return ESP_ERR_INVALID_STATE;
+    if (!B.blit_async) return molty_display_blit(x, y, w, h, px);
+    if (x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > B.width || y + h > B.height) return ESP_ERR_INVALID_ARG;
+    return B.blit_async(x, y, w, h, px);
+}
+
+esp_err_t molty_display_blit_wait(void)
+{
+    return (s_caps & MOLTY_CAP_DISPLAY) && B.blit_wait ? B.blit_wait() : ESP_OK;
+}
+
+bool molty_display_blit_can_overlap(void) { return (s_caps & MOLTY_CAP_DISPLAY) && B.blit_async && B.blit_wait; }
+
 esp_err_t molty_display_power(bool on)
 {
     if (!(s_caps & MOLTY_CAP_DISPLAY)) return ESP_ERR_INVALID_STATE;

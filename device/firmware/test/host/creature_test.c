@@ -442,13 +442,21 @@ static void test_info(const char *pkgdir, const char *id) {
  * it: every frame it shows exactly what a drawer redrawing every cell shows (the skipped cells are the unchanged ones),
  * sitting, through a tap's ripple and walking (the floor stays put); and the windows stay on even rows (that panel's)
  * and cost well under a full frame */
-typedef struct { uint16_t *px; int w, h, odd, n; } crisp_panel_t;
+typedef struct { uint16_t *px; int w, h, odd, n; struct { int x, y, w, h; const uint16_t *px; } q; } crisp_panel_t;
+/* the panel as the CO5300's asynchronous blit: a window's pixels are read when the next window is sent (or at the
+ * wait), so a drawer that drew into the buffer still being read shows it here */
+static void crisp_land(crisp_panel_t *p) {
+    if (!p->q.px) return;
+    for (int r = 0; r < p->q.h; r++) memcpy(p->px + (size_t)(p->q.y + r) * p->w + p->q.x, p->q.px + (size_t)r * p->q.w, (size_t)p->q.w * 2);
+    p->q.px = NULL;
+}
 static int crisp_send(void *ctx, int x, int y, int w, int h, const uint16_t *px) {
     crisp_panel_t *p = ctx;
     if (x < 0 || y < 0 || x + w > p->w || y + h > p->h) return 1;
     p->odd += (y & 1) || (h & 1);
     p->n++;
-    for (int r = 0; r < h; r++) memcpy(p->px + (size_t)(y + r) * p->w + x, px + (size_t)r * w, (size_t)w * 2);
+    crisp_land(p);
+    p->q.x = x; p->q.y = y; p->q.w = w; p->q.h = h; p->q.px = px;
     return 0;
 }
 static void test_crisp_panel(const char *pkgdir) {
@@ -459,13 +467,13 @@ static void test_crisp_panel(const char *pkgdir) {
     cpk_t *k = json ? cpk_create(json, len, 7, &err) : NULL;
     CHECK(k != NULL, "crisp panel: cat (%s)", err ? err : "no file");
     if (!k) { free(json); return; }
-    const int P = 466, MAXPX = P * 14;
+    const int P = 466, MAXPX = 4096;                 /* mole_fluid.c's two windows (FLUID_WIN2_PX) */
     int W, H; fluid_grid_for_stage(P, &W, &H);
     fluid_sim_t *s = fluid_sim_create(W, H, P);
     fluid_draw_t *d = fluid_draw_create(W, H, P, P), *ref = fluid_draw_create(W, H, P, P);
     fluid_frame_t *fr = fluid_frame_create(W, H);
-    uint16_t *truth = calloc((size_t)P * P, 2), *buf = malloc((size_t)MAXPX * 2);
-    crisp_panel_t pn = { calloc((size_t)P * P, 2), P, P, 0, 0 };
+    uint16_t *truth = calloc((size_t)P * P, 2), *buf = malloc((size_t)MAXPX * 2), *buf2 = malloc((size_t)MAXPX * 2);
+    crisp_panel_t pn = { calloc((size_t)P * P, 2), P, P, 0, 0, { 0 } };
     int walk = -1;
     for (int g = 0; g < CUTE_N_ACTS + cp_own_gestures(cpk_player(k)); g++) if (!strcmp(cp_gesture_name(cpk_player(k), g), "walk")) walk = g;
     CHECK(walk >= 0, "crisp panel: the cat walks");
@@ -487,7 +495,8 @@ static void test_crisp_panel(const char *pkgdir) {
         if (full) d->force = true;
         const int n = fluid_draw_cells(d, fr, &o);
         const int n0 = pn.n;
-        const int px = fluid_draw_send(d, &o, &ov, FLUID_MARK_NONE, full, buf, MAXPX, crisp_send, &pn);
+        const int px = fluid_draw_send2(d, &o, &ov, FLUID_MARK_NONE, full, buf, buf2, MAXPX, crisp_send, &pn);
+        crisp_land(&pn);                           /* the wait */
         CHECK(px >= 0, "crisp panel: send failed at frame %d", f);
         ref->force = true; fluid_draw_cells(ref, fr, &o);
         const fluid_rect_t all = { truth, P, 0, 0, P, P };
@@ -506,7 +515,7 @@ static void test_crisp_panel(const char *pkgdir) {
         const double wn = nf[q] ? (double)wins[q] / nf[q] : 0;
         CHECK(avg + 2500 * wn < 0.5 * P * P, "crisp panel %s: %.0f px in %.0f windows a frame", q ? "walking" : "sitting", avg, wn);
     }
-    free(truth); free(buf); free(pn.px); fluid_frame_destroy(fr); fluid_draw_destroy(d); fluid_draw_destroy(ref); fluid_sim_destroy(s);
+    free(truth); free(buf); free(buf2); free(pn.px); fluid_frame_destroy(fr); fluid_draw_destroy(d); fluid_draw_destroy(ref); fluid_sim_destroy(s);
     cpk_destroy(k); free(json);
 }
 
@@ -533,7 +542,7 @@ static int ring_dots(const cpk_t *k, const fluid_sim_t *s, float r0, float r1, i
     if (all) *all = n;
     return lit;
 }
-typedef struct { fluid_draw_t *d; fluid_frame_t *fr; uint16_t *buf; crisp_panel_t pn; } ring_panel_t;
+typedef struct { fluid_draw_t *d; fluid_frame_t *fr; uint16_t *buf, *buf2; crisp_panel_t pn; } ring_panel_t;
 static double ring_send(ring_panel_t *rp, const cpk_t *k, fluid_sim_t *s, int f) {   /* this frame to the panel, ~ms (80 MHz) */
     fluid_sim_snapshot(s, rp->fr, false);
     fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, f / 30.f, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL };
@@ -541,7 +550,8 @@ static double ring_send(ring_panel_t *rp, const cpk_t *k, fluid_sim_t *s, int f)
     const fluid_overlay_t ov = { 0 };
     if (f == 0) rp->d->force = true;
     fluid_draw_cells(rp->d, rp->fr, &o);
-    const int n0 = rp->pn.n, px = fluid_draw_send(rp->d, &o, &ov, FLUID_MARK_NONE, f == 0, rp->buf, 466 * 14, crisp_send, &rp->pn);
+    const int n0 = rp->pn.n, px = fluid_draw_send2(rp->d, &o, &ov, FLUID_MARK_NONE, f == 0, rp->buf, rp->buf2, 4096, crisp_send, &rp->pn);
+    crisp_land(&rp->pn);
     return f == 0 ? 0.0 : px / 3900.0 + 0.25 * (rp->pn.n - n0);     /* measured: ~3.9 px a us, ~0.25 ms a window */
 }
 static void ring_frame(cpk_t *k, fluid_sim_t *s, fluid_ring_t *ring, bool on) {
@@ -563,7 +573,7 @@ static void test_crisp_ring(const char *pkgdir) {
     if (!k) { free(json); return; }
     const int P = 466; int W, H; fluid_grid_for_stage(P, &W, &H);
     fluid_sim_t *s = fluid_sim_create(W, H, P);
-    ring_panel_t rp = { fluid_draw_create(W, H, P, P), fluid_frame_create(W, H), malloc((size_t)P * 14 * 2), { calloc((size_t)P * P, 2), P, P, 0, 0 } };
+    ring_panel_t rp = { fluid_draw_create(W, H, P, P), fluid_frame_create(W, H), malloc(4096 * 2), malloc(4096 * 2), { calloc((size_t)P * P, 2), P, P, 0, 0, { 0 } } };
     fluid_ring_t ring = { 0 }; fluid_progress_t prog = { 0 }; prog.pct = -1.f;
     /* a finger's touch at the centre first: its ripple's heaviest frame (running out to the rim) is the budget the
      * ring's wave may take */
@@ -625,7 +635,7 @@ static void test_crisp_ring(const char *pkgdir) {
     for (int c = 0; c < s->N; c++) { const fluid_rgba16_t *q = &s->col[c]; if (q->b > 2 * q->r && q->b > 40 * 257) lit++; }
     printf("  crisp ring, progress: %d cells\n", lit);
     CHECK(lit > 5, "crisp ring: the progress comet does not show (%d cells)", lit);
-    free(rp.buf); free(rp.pn.px); fluid_frame_destroy(rp.fr); fluid_draw_destroy(rp.d); fluid_sim_destroy(s); cpk_destroy(k); free(json);
+    free(rp.buf); free(rp.buf2); free(rp.pn.px); fluid_frame_destroy(rp.fr); fluid_draw_destroy(rp.d); fluid_sim_destroy(s); cpk_destroy(k); free(json);
 }
 
 static void test_own_rigged(const char *pkgdir) {

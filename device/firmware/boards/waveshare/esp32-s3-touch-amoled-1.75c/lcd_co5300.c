@@ -87,6 +87,16 @@ static esp_err_t send(int x, int y, int w, int h, const uint16_t *px)
     return esp_lcd_panel_io_tx_color(s_io, QSPI(OP_PIXELS, CMD_RAMWR), px, (size_t)w * h * sizeof(uint16_t));
 }
 
+static bool s_pending = false;             /* an async blit's pixels are still going out (lcd_co5300_blit_async) */
+
+/* wait for the async blit's transfer, if one is out (its give is the next on s_sent) */
+static esp_err_t wait_pending(void)
+{
+    if (!s_pending) return ESP_OK;
+    s_pending = false;
+    return xSemaphoreTake(s_sent, pdMS_TO_TICKS(100)) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+
 static esp_err_t send_wait(int x, int y, int w, int h, const uint16_t *px)
 {
     esp_err_t e = send(x, y, w, h, px);
@@ -191,12 +201,14 @@ esp_err_t lcd_co5300_level(uint8_t level)
 esp_err_t lcd_co5300_flush(void)
 {
     if (!s_io || !s_fb) return ESP_ERR_INVALID_STATE;
+    wait_pending();
     return send_rows(0, LCD_HEIGHT);
 }
 
 esp_err_t lcd_co5300_flush_rows(int y0, int y1)
 {
     if (!s_io || !s_fb) return ESP_ERR_INVALID_STATE;
+    wait_pending();
     y0 = y0 < 0 ? 0 : y0 & ~1;
     y1 = y1 > LCD_HEIGHT ? LCD_HEIGHT : (y1 + 1) & ~1;
     if (y1 <= y0) return ESP_OK;
@@ -209,6 +221,7 @@ esp_err_t lcd_co5300_blit(int x, int y, int w, int h, const uint16_t *px)
     for (int r = 0; r < h; r++)
         memcpy(s_fb + (size_t)(y + r) * LCD_WIDTH + x, px + (size_t)r * w, (size_t)w * sizeof(uint16_t));
     const int ya = (y + 1) & ~1, yb = (y + h) & ~1;     /* the even row pairs px holds whole */
+    wait_pending();
     xSemaphoreTake(s_sent, 0);                          /* a flush's leftover give */
     esp_err_t e = ESP_OK;
     if (y & 1) e = send_wait(0, y - 1, LCD_WIDTH, 2, s_fb + (size_t)(y - 1) * LCD_WIDTH);
@@ -216,3 +229,19 @@ esp_err_t lcd_co5300_blit(int x, int y, int w, int h, const uint16_t *px)
     if (e == ESP_OK && ((y + h) & 1)) e = send_wait(0, yb, LCD_WIDTH, 2, s_fb + (size_t)yb * LCD_WIDTH);
     return e;
 }
+
+esp_err_t lcd_co5300_blit_async(int x, int y, int w, int h, const uint16_t *px)
+{
+    if (!s_io || !s_fb) return ESP_ERR_INVALID_STATE;
+    for (int r = 0; r < h; r++)                         /* the mirror, while the last window still goes out */
+        memcpy(s_fb + (size_t)(y + r) * LCD_WIDTH + x, px + (size_t)r * w, (size_t)w * sizeof(uint16_t));
+    const int ya = (y + 1) & ~1, yb = (y + h) & ~1;
+    esp_err_t e = wait_pending();                       /* the last window out: its buffer and the bus are free */
+    xSemaphoreTake(s_sent, 0);                          /* a flush's leftover give */
+    if (e == ESP_OK && (y & 1)) e = send_wait(0, y - 1, LCD_WIDTH, 2, s_fb + (size_t)(y - 1) * LCD_WIDTH);
+    if (e == ESP_OK && yb > ya) { e = send(x, ya, w, yb - ya, px + (size_t)(ya - y) * w); s_pending = e == ESP_OK; }
+    if (e == ESP_OK && ((y + h) & 1)) { e = wait_pending(); if (e == ESP_OK) e = send_wait(0, yb, LCD_WIDTH, 2, s_fb + (size_t)yb * LCD_WIDTH); }
+    return e;
+}
+
+esp_err_t lcd_co5300_blit_wait(void) { return wait_pending(); }
