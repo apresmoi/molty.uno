@@ -106,6 +106,7 @@ idf_component_register(
         "link/link_protocol.c"
         "link/link_identity.c"
         "link/link_client.c"
+        "link/link_connect.c"    # TLS handshakes on a task that holds no mutex (wraps esp_transport_connect)
         "link/link_cmd.c"
         "link/link_audio.c"
         "link/link_uplink.c"     # the listen's uplink ring: resend in order (plain C, host-tested)
@@ -188,6 +189,10 @@ idf_component_register(
         "creature/default.molty"
         ${CREATURE_FILES}       # the built-in creature packages (packages/<id>/<id>.json)
 )
+
+# link/link_connect.c: every esp_transport_connect runs on a task that holds no mutex, so a
+# priority inherited during the TLS handshake cannot freeze the fluid for the whole handshake.
+target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=esp_transport_connect" "-u __wrap_esp_transport_connect")
 
 # A debug build's ring without a listen (POST /api/diag/ring?ms=): make firmware BOARD=... DIAG_RING=1
 # (tools/scripts/firmware-build.sh passes -DMOLTY_DIAG_RING=ON, or OFF for a plain build)
