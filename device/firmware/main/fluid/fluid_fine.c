@@ -356,7 +356,7 @@ static void light_grid(fluid_fine_t *f, float T, int parity) {   /* parity < 0: 
         ready_lg = LG;
     }
     static const float kv[4] = { 0.5f, 0.8f, 1.25f, 0.35f }, kt[4] = { 0.31f, 0.21f, -0.27f, -0.17f };
-    for (int y = parity > 0 ? 1 : 0; y < LG; y += parity < 0 ? 1 : 2) {
+    for (int y = parity > 0 ? parity : 0; y < LG; y += parity < 0 ? 1 : FINE_PHASES) {
         float sv[4], cv[4];
         for (int q = 0; q < 4; q++) { const float ph = tau * kv[q] * y * g + kt[q] * T; sv[q] = sinf(ph); cv[q] = cosf(ph); }
         uint8_t *out = f->lgrid + y * f->lg;
@@ -533,8 +533,9 @@ void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_
     if (f->drawn) {
         const int LG = f->lg;
         const float T = now * FINE_LIGHT_SPEED, show = 1.f - (o->dust < 0.f ? 0.f : o->dust > 1.f ? 1.f : o->dust);
-        light_grid(f, T, f->lall ? -1 : f->lrow);              /* half its rows a frame, alternating */
-        f->lrow ^= 1; f->lall = false;
+        f->lrow = (uint8_t)((f->lrow + 1) % FINE_PHASES);
+        light_grid(f, T, f->lall ? -1 : f->lrow);              /* a quarter of its rows a frame, in turn */
+        f->lall = false;
         const float reach = FINE_PATCH1 + FINE_PATCH_RAG * 0.5f;
         const uint32_t bk = box ? mix((uint32_t)lrintf(box[0]) | (uint32_t)lrintf(box[1]) << 16, (uint32_t)lrintf(box[2]) | (uint32_t)lrintf(box[3]) << 16 | (uint32_t)lrintf(dark * 16.f) << 28) : 0;
         const bool box_new = bk != f->box_key;
@@ -562,7 +563,7 @@ void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_
                 if (!boxed && !known) memset(f->lv + a, 255, m - a);
                 if (known) f->sig[k] += boxed ? f->bsig[k] : st->ssig[k];
                 else if (!boxed) f->sig[k] += st->ssig[k];
-                if (known && (j & 1) != f->ilace) { f->sig[k] += f->dsig[k]; continue; }
+                if (known && j % FINE_PHASES != f->lrow) { f->sig[k] += f->dsig[k]; continue; }
                 n0 = boxed && !known ? a : m;
                 bstart = f->sig[k];
             }

@@ -1088,7 +1088,7 @@ static void test_fine(const char *dir) {
     int under = 0, line = 0;
     for (int q = 0; q < S * S; q++) if (only[q] && lum(only[q]) > 200) { line++; under += lum(fb[q]) < lum(only[q]) - 30; }
     CHECK(line > 3000 && under == 0, "the lines show through the dust (%d px, %d dimmed)", line, under);
-    double worst = 0., sum = 0., cells_us = 0.;
+    double worst = 0., sum = 0., cells_us = 0., calm_px = 0., calm_w = 0.;
     int changed = 0;
     for (int f = 1; f <= 60; f++) {
         o.time = 1.f + f / 30.f;
@@ -1099,6 +1099,7 @@ static void test_fine(const char *dir) {
         fluid_draw_send(d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, wbuf, 4096, send_cost, &c);
         fluid_draw_rect(d, &o, &(fluid_rect_t){ fb, S, 0, 0, S, S }, false);
         const double ms = c.wins * 0.25 + c.px * 0.25e-3;
+        calm_px += c.px; calm_w += c.wins;
         sum += ms; worst = ms > worst ? ms : worst; changed += c.px > 0;
     }
     {   /* the light, as the page's (chart-engine.js light()) */
@@ -1106,7 +1107,7 @@ static void test_fine(const char *dir) {
         for (int gy = 0; gy < fine->lg; gy += 3) for (int gx = 0; gx < fine->lg; gx += 5) {
             const double u = gx * (double)FINE_LIGHT_GRID / S, v = gy * (double)FINE_LIGHT_GRID / S;
             float best = 1.f;
-            for (int back = 0; back < 2; back++) {               /* half its rows move each frame: now or a frame ago */
+            for (int back = 0; back < FINE_PHASES; back++) {     /* a quarter of its rows move each frame: now or up to 3 frames ago */
             const double T = (o.time - back / 30.0) * FINE_LIGHT_SPEED;
             const double a = sin(6.2832 * (1.4 * u + 0.5 * v) + 0.31 * T + 1.6 * sin(6.2832 * (0.8 * v - 0.55 * u) + 0.21 * T));
             const double bb = sin(6.2832 * (-0.7 * u + 1.25 * v) - 0.27 * T + 1.6 * sin(6.2832 * (0.95 * u + 0.35 * v) - 0.17 * T));
@@ -1118,7 +1119,8 @@ static void test_fine(const char *dir) {
         }
         CHECK(err_l < 0.03f, "the light on the water is the page's (off by %.3f at most)", err_l);
     }
-    printf("  fine dust, calm (panel model): %.1f ms a frame, worst %.1f; the dust's frame (cells) %.0f us on the host\n", sum / 60, worst, cells_us / 60);
+    printf("  fine dust, calm (panel model): %.1f ms a frame, worst %.1f; %.0f kpx and %.1f windows a frame; the dust's frame (cells) %.0f us on the host\n",
+           sum / 60, worst, calm_px / 60e3, calm_w / 60.0, cells_us / 60);
     if (getenv("FINE_DUMP")) {   /* the calm frame as a PPM, to look at against the page */
         FILE *pf = fopen(getenv("FINE_DUMP"), "wb");
         if (pf) {
