@@ -577,7 +577,10 @@ static void sampler_task(void *arg)
 
         int64_t elapsed = now - win_start; win_start = now;
         wedge_check();
+        static uint32_t smp_max[2];                   /* TEMP diag: this work's cost (us): the tasks, the heap walk */
+        const int64_t ts0 = esp_timer_get_time();
         sample_tasks(elapsed);
+        const int64_t ts1 = esp_timer_get_time();
         tl_t e = {0};
         e.t_s = (uint32_t)(now / 1000000);
         e.int_min = int_min; int_min = UINT32_MAX;
@@ -587,6 +590,9 @@ static void sampler_task(void *arg)
         heap_caps_get_info(&in, MALLOC_CAP_INTERNAL);
         e.int_largest = (uint32_t)in.largest_free_block;
         s_int_blocks = (uint32_t)in.allocated_blocks;
+        {   const uint32_t a = (uint32_t)(ts1 - ts0), b = (uint32_t)(esp_timer_get_time() - ts1);
+            if (a > smp_max[0]) smp_max[0] = a;
+            if (b > smp_max[1]) smp_max[1] = b; }
         e.psram_free = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
         e.sim_n = s_sim.win_n; e.sim_max = s_sim.win_max; s_sim.win_n = 0; s_sim.win_max = 0;
         e.panel_n = s_panel.win_n; e.panel_max = s_panel.win_max; s_panel.win_n = 0; s_panel.win_max = 0;
@@ -627,10 +633,11 @@ static void sampler_task(void *arg)
                    (sent && lost == sent);
         if (bad || ticks % 100 == 0) {           /* every 10 s, or immediately on trouble */
             char top[96]; top_tasks_str(top, sizeof(top), 3);
-            mole_diag_event(false, "%s int=%lu/%lu blk=%lu sim=%u/%ums pan=%u/%ums pr=%u/%ums late=%u gw=%d(%u/%u) rssi=%d l=%u %s",
+            mole_diag_event(false, "%s int=%lu/%lu blk=%lu sim=%u/%ums pan=%u/%ums pr=%u/%ums late=%u gw=%d(%u/%u) rssi=%d l=%u smp=%lu/%luus %s",
                             bad ? "TL!" : "TL", (unsigned long)e.int_min, (unsigned long)e.int_largest, (unsigned long)s_int_blocks,
                             e.sim_n, e.sim_max, e.panel_n, e.panel_max, e.probe0, e.probe1, e.late,
-                            e.gw_rtt, (unsigned)lost, (unsigned)sent, e.rssi, e.flags, top);
+                            e.gw_rtt, (unsigned)lost, (unsigned)sent, e.rssi, e.flags, (unsigned long)smp_max[0], (unsigned long)smp_max[1], top);
+            smp_max[0] = smp_max[1] = 0;
         }
     }
 }
