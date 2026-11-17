@@ -48,6 +48,8 @@
 #define CR_LAND_S   0.35f    /* a part lands row by row over this once its crest arrives (rows scattered: a few a
                               * frame for the panel, which takes ~0.6 ms a changed row whatever is in it)       */
 #define CR_CREST_R  0.8f      /* the forming crest carries the colour from here out                             */
+#define CR_CALM_S   1.0f     /* landed or let go, the ring's wave settles over this (the water's height eased to 0:
+                              * a moving surface makes every cell under it change, the panel's cost)            */
 #define CR_DONE_S   1.0f     /* released: gone after this                                                      */
 #define CR_TW       36       /* each dot row's twinkle every this many frames (rows scattered, a few a frame)   */
 
@@ -64,7 +66,7 @@ struct cr {
     int32_t listen;                               /* the listen ring's colour over its line's (cr_listen), -1       */
     int16_t lq;                                   /* ... and its ink (as the target's, Q14), given not written      */
     bool lisring;                                 /* the ring showing (or letting go) is the listen's               */
-    int mode; float T, red, sum, c2;                /* c2: the water's own wave speed, while the ring's is quicker   */
+    int mode; float T, red, sum, c2, calm;          /* calm: s the water is settled after the ring's wave          */                /* c2: the water's own wave speed, while the ring's is quicker   */
     uint8_t *rb, *rbin;                           /* per cell, this frame: the brightest ring dot (x 32), its bin   */
     uint8_t *cbits, *cb;                          /* per cell: the crest's dots and brightness, kept a frame (each
                                                    * half of the cell rows takes the crest every other frame)       */
@@ -205,6 +207,10 @@ bool cr_paint(cr_t *r, fluid_sim_t *s, float dt, uint32_t frame, const uint8_t *
         s->p.c2 = CR_C2;
         kick(r, s, RING_R, CR_LET_S);
     }
+    if (r->calm > 0.f) {                          /* the ring's wave done: the water settles */
+        r->calm -= dt;
+        for (int k = 0; k < s->N; k++) { s->h[k] = (int16_t)(s->h[k] * 7 / 8); s->hp[k] = (int16_t)(s->hp[k] * 7 / 8); }
+    }
     if (r->mode == OFF) return false;
     r->T += dt;
 
@@ -218,10 +224,10 @@ bool cr_paint(cr_t *r, fluid_sim_t *s, float dt, uint32_t frame, const uint8_t *
             }
             if (r->land[b] < 0.f || r->T < r->land[b] + CR_LAND_S) all = false;
         }
-        if (all && r->T > r->lmax + CR_LAND_S + CR_SOFT_S * 1.5f + 2.f * dt) { r->mode = ON; s->p.c2 = r->c2; r->ver++; }
+        if (all && r->T > r->lmax + CR_LAND_S + CR_SOFT_S * 1.5f + 2.f * dt) { r->mode = ON; s->p.c2 = r->c2; r->ver++; r->calm = CR_CALM_S; }
     } else if (r->mode == OUT) {
         r->red = expf(-r->T / 0.25f);
-        if (r->T > CR_DONE_S) { r->mode = OFF; s->p.c2 = r->c2; r->ver++; return false; }
+        if (r->T > CR_DONE_S) { r->mode = OFF; s->p.c2 = r->c2; r->ver++; r->calm = CR_CALM_S; return false; }
     }
 
     /* the dots: the ring where its part has landed, row by row (going, row by row too), and the crest's colour */
