@@ -151,8 +151,13 @@ static void download_task(void *arg)
         e = pkg_store_put(PKG_ROOT, &s_req, buf, &ent);
         unlock();
     }
-    heap_caps_free(buf);
     drop_cache(s_req.id);
+    if (!e) {   /* parsed here (this task runs under the screen's), so the first scene of it starts at once */
+        const char *pe;
+        pkg_t *p = pkg_parse((const char *)buf, s_req.size, &pe);
+        if (p) { lock(); pkg_unref(s_cache); s_cache = p; unlock(); }
+    }
+    heap_caps_free(buf);
     if (e) mole_fluid_progress_stop();                 /* it lets go where it got to */
     else mole_fluid_progress(100.f, true);             /* full, then into the water */
     if (e) send_evt("failed", "error", e);
@@ -268,12 +273,17 @@ static const char *load(const char *id, pkg_t **out)
 {
     lock();
     if (!(s_cache && !strcmp(s_cache->id, id) && pkg_store_find(PKG_ROOT, id, NULL))) {
+        /* reading and parsing a package takes ~0.4 s: under the screen's tasks (priority 2), so it takes their spare
+         * time instead of stalling their frames (the caller waits a little longer) */
+        const UBaseType_t prio = uxTaskPriorityGet(NULL);
+        if (prio > 1) vTaskPrioritySet(NULL, 1);
         size_t len = 0;
         char *buf = pkg_store_read(PKG_ROOT, id, &len);
         const bool stored = buf != NULL;
         const char *err;
         pkg_t *p = stored ? pkg_parse(buf, len, &err) : NULL;
         pkg_store_free(buf);
+        if (prio > 1) vTaskPrioritySet(NULL, prio);
         if (!p) { unlock(); return stored ? "bad_package" : "not_installed"; }
         pkg_unref(s_cache);
         s_cache = p;
