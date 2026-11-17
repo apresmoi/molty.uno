@@ -284,6 +284,7 @@ static fluid_progress_t s_pg;                   /* the agent's progress on the s
 static _Atomic int32_t s_prog_in = -1;          /* mole_fluid_progress: pct × 10, < 0 = no percent */
 static atomic_uint     s_prog_seq;              /* bumped by each progress                         */
 static atomic_bool     s_prog_end;              /* its done                                        */
+static atomic_bool     s_prog_stop;             /* ... or it stopped short (a failed download)     */
 #define PROG_TTL_S     120.f                    /* no news this long: the ring melts (as `working`) */
 static float s_floor_w;                         /* the floor's weight, eased (p.floor)             */
 static scene_player_t s_sp;                     /* the scene on screen + its queue        */
@@ -761,7 +762,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         const unsigned q = atomic_load(&s_prog_seq);
         if (q != seen) { seen = q; at = s_tnow; }
         const bool done = atomic_exchange(&s_prog_end, false);
-        if (done) at = -1.f;
+        if (done || atomic_exchange(&s_prog_stop, false)) at = -1.f;   /* done flashes first; a stop just lets go */
         const int32_t pv = atomic_load(&s_prog_in);
         fluid_progress_tick(&s_pg, rdt, at >= 0.f && s_tnow - at < PROG_TTL_S, pv < 0 ? -1.f : pv * 0.001f, done);
     }
@@ -829,7 +830,8 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     default:          fluid_target_blob(s, s_tnow, swell, ox, oy); break;
     }
     fluid_sim_floor_track(s, rdt, s_cur == ST_CREATURE && cr_loaded());   /* its feet, before the rings join T */
-    fluid_target_progress(s, &s_pg, PROG_COLOR, acc);          /* under the listening ring: it wins */
+    /* under the listening ring (it wins); over a rigged creature the recording ring's own colour (ring-options.html) */
+    fluid_target_progress(s, &s_pg, s_crisp ? (uint32_t)(s_ring_rgb >= 0 ? s_ring_rgb : s_ring_def >= 0 ? s_ring_def : FLUID_CRISP_LISTEN_RGB) : PROG_COLOR, acc);
     if (!s_crisp) fluid_target_ring(s, &s_rg, fluid_ring_rgb(s_ring_rgb, s_ring_def, cfg->palette), acc);   /* a rigged
                                                                  * creature's is given to it whole (cpk_listen) */
     /* the always-on dim fluid; its slow noise (and the eddies' ψ) refresh on
@@ -2044,6 +2046,7 @@ void mole_fluid_progress(float pct, bool done) {
     atomic_store(&s_prog_in, pct < 0.f ? -1 : (int32_t)(fminf(pct, 100.f) * 10.f + 0.5f));
     atomic_fetch_add(&s_prog_seq, 1);
 }
+void mole_fluid_progress_stop(void) { atomic_store(&s_prog_stop, true); }
 bool mole_fluid_screen_on(void) { return atomic_load(&s_screen); }
 /* the screen quiet for the log's flash writes (mole_diag_set_quiet): off, or the panel getting little (a creature at
  * rest: ~10 k px a frame; walking ~50 k, a ring forming 100 k+) */

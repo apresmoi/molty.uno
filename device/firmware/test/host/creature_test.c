@@ -676,6 +676,72 @@ static void test_crisp_ring(const char *pkgdir) {
     free(rp.buf); free(rp.buf2); free(rp.pn.px); fluid_frame_destroy(rp.fr); fluid_draw_destroy(rp.d); fluid_sim_destroy(s); cpk_destroy(k); free(json);
 }
 
+/* a package's download over a rigged creature, as mole_fluid.c and pkg_cmd.c run it: the progress in the recording
+ * ring's colour, which the creature's ring draws (creature_ring.h): formed from the centre's wave into the thin line at
+ * the rim, only from 12 o'clock clockwise as far as the download got; done, it fills, then lets go into the water;
+ * failed, it lets go where it got to */
+static void prog_frame(cpk_t *k, fluid_sim_t *s, fluid_progress_t *p, bool on, float pct, bool done) {
+    cpk_frame(k, s, 1.f / 30.f, 1.f);
+    fluid_progress_tick(p, 1.f / 30.f, on, pct, done);
+    fluid_target_progress(s, p, 0xFF2C3E, 0.f);       /* mole_fluid.c: FLUID_CRISP_LISTEN_RGB over a rigged creature */
+    cpk_listen(k, 0xFF2C3E, 0.f);
+    s->p.still = true;
+    fluid_sim_step(s, 1.f / 60); fluid_sim_step(s, 1.f / 60);
+    fluid_sim_color(s, 1.f / 30);
+    cpk_paint(k, s);
+}
+/* the red line's dots at the rim in the clockwise half from 12 (right) and the other (left) */
+static void halves(const cpk_t *k, const fluid_sim_t *s, int *right, int *left) {
+    const uint8_t *cells; const uint32_t *cc; cpk_cells(k, &cells, &cc);
+    *right = *left = 0;
+    for (int j = 0; j < s->H; j++) for (int i = 0; i < s->W; i++) {
+        const int c = j * s->W + i;
+        const fluid_rgba16_t *q = &s->col[c];
+        if (!s->mask[c] || !cells[c] || !(q->r > 2 * q->g && q->r > 2 * q->b && q->r > 40 * 257)) continue;
+        const float r = sqrtf(s->xs[i] * s->xs[i] + s->ys[j] * s->ys[j]);
+        if (r < 0.88f) continue;
+        if (s->xs[i] > 0.05f) (*right)++; else if (s->xs[i] < -0.05f) (*left)++;
+    }
+}
+static void test_crisp_progress(const char *pkgdir) {
+    char path[512]; size_t len;
+    snprintf(path, sizeof(path), "%s/cat/cat.json", pkgdir);
+    char *json = slurp(path, &len);
+    const char *err = NULL;
+    for (int fail = 0; fail < 2; fail++) {
+        cpk_t *k = json ? cpk_create(json, len, 3, &err) : NULL;
+        CHECK(k != NULL, "crisp progress: cat (%s)", err ? err : "no file");
+        if (!k) break;
+        const int P = 466; int W, H; fluid_grid_for_stage(P, &W, &H);
+        fluid_sim_t *s = fluid_sim_create(W, H, P);
+        fluid_progress_t p = { 0 }; p.pct = -1.f;
+        for (int f = 0; f < 10; f++) prog_frame(k, s, &p, false, -1.f, false);
+        int r0, l0; halves(k, s, &r0, &l0);
+        CHECK(r0 == 0 && l0 == 0, "crisp progress: no ring before the download");
+        /* half downloaded (pkg_cmd.c: 90 % for the bytes): the right half at the rim, not the left */
+        for (int f = 0; f < 60; f++) prog_frame(k, s, &p, true, 0.45f * f / 59.f, false);
+        int r1, l1; halves(k, s, &r1, &l1);
+        printf("  crisp progress at 45 %%: %d line cells right of 12, %d left\n", r1, l1);
+        CHECK(r1 > 8 && l1 <= 1, "crisp progress: the line from 12 clockwise only (%d right, %d left)", r1, l1);
+        for (int f = 0; f < 30; f++) prog_frame(k, s, &p, true, fail ? 0.45f : 0.9f, false);
+        int r2, l2; halves(k, s, &r2, &l2);
+        if (!fail) CHECK(l2 > 6, "crisp progress: at 90 %% it goes round (%d left)", l2);
+        /* done: full, then into the water; failed: let go as it is */
+        int full = 0, gone = -1;
+        for (int f = 0; f < 90 && gone < 0; f++) {
+            prog_frame(k, s, &p, false, -1.f, !fail && f == 0);
+            int r, l; halves(k, s, &r, &l);
+            if (!fail && f < 15 && l > full) full = l;
+            if (r + l == 0) gone = f;
+        }
+        if (!fail) CHECK(full > l2, "crisp progress: done fills the circle (%d left, %d before)", full, l2);
+        printf("  crisp progress %s: gone %.2f s after\n", fail ? "failed" : "done", gone / 30.0);
+        CHECK(gone >= 0 && gone <= 75, "crisp progress %s: still there %.2f s after", fail ? "failed" : "done", gone < 0 ? 9.9 : gone / 30.0);
+        fluid_sim_destroy(s); cpk_destroy(k);
+    }
+    free(json);
+}
+
 static void test_own_rigged(const char *pkgdir) {
     char path[512]; size_t len;
     snprintf(path, sizeof(path), "%s/cat/cat.json", pkgdir);
@@ -710,6 +776,7 @@ int main(int argc, char **argv) {
     test_own_rigged(argv[1]);
     test_crisp_panel(argv[1]);
     test_crisp_ring(argv[1]);
+    test_crisp_progress(argv[1]);
     for (const char *const *id = (const char *const[]){ "duck", "cat", "octopus", NULL }; *id; id++) test_info(argv[1], *id);
     for (const char *const *id = (const char *const[]){ "duck", NULL }; *id; id++) test_planted(argv[1], *id);   /* the cat: clip_test.c */
     const double v1 = bench_v1(argv[3]);

@@ -17,6 +17,7 @@
 #include "molty_board.h"
 #include "http.h"
 
+#include <math.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
@@ -80,7 +81,9 @@ static void send_evt(const char *state, const char *key, const char *val)
 
 /* ── the download: esp_http_client over verified TLS, mbedtls SHA-256 ──────── */
 
-typedef struct { esp_http_client_handle_t http; mbedtls_sha256_context sha; char err[16]; } dl_t;
+typedef struct { esp_http_client_handle_t http; mbedtls_sha256_context sha; char err[16]; uint32_t got; } dl_t;
+/* the download fills the ring to this much; saving it, the rest (pkg_store_put) */
+#define DL_RING_PCT 90.f
 
 static const char *io_open(void *ctx, const char *url, int64_t *len)
 {
@@ -114,6 +117,7 @@ static int io_read(void *ctx, uint8_t *buf, int cap)
     dl_t *d = ctx;
     for (int tries = 0;; tries++) {
         const int n = esp_http_client_read(d->http, (char *)buf, cap);
+        if (n > 0 && s_req.size) { d->got += (uint32_t)n; mole_fluid_progress(DL_RING_PCT * fminf(1.f, (float)d->got / (float)s_req.size), false); }
         if (n != 0 || esp_http_client_is_complete_data_received(d->http)) return n;
         if (tries >= 4) return -1;
         mole_diag_event(false, "pkg.stall retry %d", tries + 1);
@@ -139,6 +143,8 @@ static void download_task(void *arg)
     const pkg_io_t io = { &d, io_open, io_read, io_close, io_sha_start, io_sha_update, io_sha_finish };
     uint8_t *buf = heap_caps_malloc(s_req.size + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     pkg_entry_t ent;
+    d.got = 0;
+    mole_fluid_progress(0.f, false);                   /* the ring forms as the question blows away */
     const char *e = buf ? pkg_fetch(&s_req, &io, buf) : "oom";
     if (!e) {
         lock();
@@ -147,6 +153,8 @@ static void download_task(void *arg)
     }
     heap_caps_free(buf);
     drop_cache(s_req.id);
+    if (e) mole_fluid_progress_stop();                 /* it lets go where it got to */
+    else mole_fluid_progress(100.f, true);             /* full, then into the water */
     if (e) send_evt("failed", "error", e);
     else send_evt("installed", "version", ent.version);
     atomic_store(&s_installing, false);

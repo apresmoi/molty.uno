@@ -137,11 +137,13 @@ void mole_fluid_set_status(int status);
  *  -1 = the device default, POST /api/creature/state {ring_color: "#rrggbb"|"accent"},
  *  kept in NVS, else the palette's accent; fluid_ring_rgb). Safe from any task; a no-op
  *  before init. */
-/** The agent's progress (link `progress`): a thin line on the listening ring's circle, in mint, filling
- *  clockwise from 12 o'clock to pct (0..100; < 0 = no percent: a comet circles). Each call keeps it up
- *  (it melts after 120 s without one); done fills it, flashes and melts it. Under the listening
- *  ring, never over a question. Safe from any task. */
+/** Progress (the agent's, link `progress`; a package's download, pkg_cmd.c): a thin line on the listening ring's
+ *  circle, filling clockwise from 12 o'clock to pct (0..100; < 0 = no percent: a comet circles). Over a rigged creature
+ *  it is the recording ring itself (creature_ring.h: formed from a wave at the centre, its colour), in mint over the
+ *  fluid. Each call keeps it up (it melts after 120 s without one); done fills it, flashes and lets it go into the
+ *  water; stop lets it go as it is (a failure). Under the listening ring. Safe from any task. */
 void mole_fluid_progress(float pct, bool done);
+void mole_fluid_progress_stop(void);
 void mole_fluid_listen(bool on);
 /** The listen's mic level (0..1, the VAD's, each mic chunk): a rigged creature's listen ring ripples with it. */
 void mole_fluid_listen_level(float level);
