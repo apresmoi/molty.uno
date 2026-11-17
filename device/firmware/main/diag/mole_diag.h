@@ -31,6 +31,8 @@ void mole_diag_start(void);
 /* Structured event: one line "EVT <text>". `important` lines (errors) trigger
  * a rate-limited SPIFFS persist. Callable from any task (not ISR). */
 void mole_diag_event(bool important, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+/** What tells the log's flash writes when the screen is quiet (a write freezes the other core ~110 ms): none set, always. */
+void mole_diag_set_quiet(bool (*quiet)(void));
 
 /* Frame hooks (fluid creature). */
 void mole_diag_sim_frame(uint32_t interval_us, uint32_t work_us);
