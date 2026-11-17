@@ -1143,10 +1143,6 @@ static void draw_task(void *arg) {
         }
         int64_t t2 = esp_timer_get_time();
         mole_diag_panel_frame((uint32_t)(t1 - t0), (uint32_t)(t2 - t1));
-        if (t2 - t0 > 30000 && s_dopts.scene && s_dopts.dots)   /* TEMP diag: a slow panel frame of the creature */
-            mole_diag_event(false, "slow.panel cells=%d send=%d (sample %.1f raster %.1f blit %.1f) n=%d win=%d px=%d",
-                            (int)((t1 - t0) / 1000), (int)((t2 - t1) / 1000), fluid_prof[FP_DSAMPLE] / (s_cpu_mhz * 1000.f),
-                            fluid_prof[FP_DRASTER] / (s_cpu_mhz * 1000.f), s_blit_us / 1000.f, nc, (int)s_send_n, (int)s_send_px);
         if (touch_t) mole_diag_touch_latency((uint32_t)(t2 - touch_t));
         dms = dms * 0.9f + (t1 - t0) / 1000.f * 0.1f;
         lms = lms * 0.9f + (t2 - t1) / 1000.f * 0.1f;
@@ -1395,14 +1391,6 @@ static void fluid_task(void *arg) {
         wms = wms * 0.9f + (t2 - t1) / 1000.f * 0.1f;
         fms = fms * 0.9f + (t3 - t0) / 1000.f * 0.1f;
         static float prof_ema[FP_N];
-        if (t3 - now > 34000 && s_crisp) {   /* TEMP diag: a slow frame of the creature, where its time went */
-            const float mhz = (float)s_cpu_mhz * 1000.f;
-            mole_diag_event(false, "slow.frame dt=%d pre=%d sim=%d wait=%d snap=%d | upd=%.1f solid=%.1f lines=%.1f feat=%.1f halo=%.1f cells=%.1f kwait=%.1f band=%.1f fill=%.1f wave=%.1f",
-                            (int)(raw_dt_us / 1000), (int)((t0 - now) / 1000), (int)((t1 - t0) / 1000), (int)((t2 - t1) / 1000), (int)((t3 - t2) / 1000),
-                            fluid_prof[FP_C_UPDATE] / mhz, fluid_prof[FP_K_SOLID] / mhz, fluid_prof[FP_K_LINES] / mhz, fluid_prof[FP_K_FEAT] / mhz,
-                            fluid_prof[FP_K_HALO] / mhz, fluid_prof[FP_K_CELLS] / mhz, fluid_prof[FP_K_WAIT] / mhz, fluid_prof[FP_K_BAND] / mhz,
-                            fluid_prof[FP_C_FILL] / mhz, fluid_prof[FP_WAVE] / mhz);
-        }
         for (int q = 0; q < FP_DSAMPLE; q++) {
             prof_ema[q] = prof_ema[q] * 0.9f + (float)fluid_prof[q] / (float)s_cpu_mhz / 1000.f * 0.1f;
             fluid_prof[q] = 0;
