@@ -1089,6 +1089,12 @@ static void draw_task(void *arg) {
         int ds = s_dstatus, mark = ds > 0 && ds < FD_STATUS_COUNT ? MARK[ds] : FLUID_MARK_NONE;
         /* the mark appears, goes or changes colour: one full repaint (cells under it are not dirty) */
         bool full = s_full_flush || mark != mark_drawn || s_dopts.palette != pal_drawn;
+        {   /* crisp dots go on whole row pairs: the panel's mirror need not follow them (its copy is a third of the send);
+             * back to windows with odd edges, one full repaint first makes it whole again */
+            static bool mirror_off;
+            const bool crisp = s_dopts.scene && s_dopts.dots && !s_dopts.shapes;
+            if (crisp != mirror_off) { molty_display_blit_mirror(!crisp); mirror_off = crisp; if (!crisp) full = true; }
+        }
         const fluid_overlay_t ov = s_dov;
         const unsigned ask_seq = s_dask;
         int64_t t1 = t0;
@@ -1394,8 +1400,10 @@ static void fluid_task(void *arg) {
         s_stats.crisp_dots = s_crisp ? s_crisp_dots : -1;
         if (s_crisp && s_cpk) {    /* the creature's rows between the cores: more here while the drawer (core 0) is the slower */
             static float share = 55.f;
-            const float d = s_stats.draw_ms + s_stats.flush_ms - sms;
-            share += d > 1.f ? 1.f : d < -1.f ? -1.f : 0.f;
+            /* the drawer (core 0) slower: more here; this core waiting on the other's band (k_wait): more here too;
+             * this core slower and not waiting: less */
+            const float d = s_stats.draw_ms + s_stats.flush_ms - sms, kw = prof_ema[FP_K_WAIT];
+            share += d > 1.f || kw > 1.f ? 1.f : d < -1.f && kw < 0.5f ? -1.f : 0.f;
             share = share < 25.f ? 25.f : share > 85.f ? 85.f : share;
             cpk_set_share(s_cpk, (int)share); s_stats.share = (int)share;
         }

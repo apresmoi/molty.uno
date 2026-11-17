@@ -29,3 +29,6 @@ esp_err_t lcd_co5300_blit_async(int x, int y, int w, int h, const uint16_t *px);
 esp_err_t lcd_co5300_blit_wait(void);
 /** us in the async blits since the last call, added into out[3]: the mirror's copy, waiting for the panel, the commands and queueing. */
 void lcd_co5300_blit_prof(uint32_t *out);
+/** Off: an async blit on whole row pairs skips the framebuffer mirror (only an odd edge row's pair is sent from it, and
+ *  /api/framebuffer draws the frame afresh): the caller repaints in full before it sends odd edges again. */
+void lcd_co5300_mirror(bool on);
