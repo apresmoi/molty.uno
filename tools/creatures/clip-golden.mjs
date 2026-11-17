@@ -3,7 +3,7 @@
 // package through the reference (device/creatures/js/clip-player.js, clip-dots.js) on a schedule of moods, gestures and the
 // walk, and writes each frame for test/host/clip_test.c to replay and compare.
 //   node tools/creatures/clip-golden.mjs <out dir> [seconds]      writes <out dir>/<id>.clip.golden
-// Lines:  m <mood> | a <gesture>                       what the agent asked, before the frame
+// Lines:  m <mood> | a <gesture> | c                   what the agent asked (c: a tap's call), before the frame
 //         f <clip> <t> <cam x z yaw> <world 12 a node>   after the frame
 //         d <cells: W*H braille bytes, hex>              every 10th frame, after the frame's draw
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync } from 'node:fs';
@@ -21,6 +21,7 @@ for (const id of readdirSync(ROOT).filter((d) => existsSync(new URL(`${d}/${d}.j
   for (let f = 0; f < SEC * 30; f++) {
     if (f % 240 === 0) { const m = MOODS[(f / 240) % MOODS.length]; L.push(`m ${m}`); p.mood(m); }
     if (f % 240 === 120) { const g = gest[(f / 240 | 0) % gest.length]; L.push(`a ${g}`); p.act(g); }
+    if (f % 480 === 200) { L.push('c'); p.come(); }
     p.update(DT);
     const c = p.cam;
     L.push(['f', p.clip, n(p.t), n(c.x), n(c.z), n(c.yaw), ...Array.from(p.world, n)].join(' '));

@@ -42,7 +42,7 @@ static inline uint32_t cycles(void) { return 0; }
 #define Z01    41                           /* 0.01, 0.02, 0.05 in depth units                                       */
 #define Z02    82
 #define Z05    205
-#define TWINKLE 12                          /* the dust: each cell row's motes twinkle every this many frames, rows
+#define TWINKLE 24                          /* the dust: each cell row's motes twinkle every this many frames, rows
                                              * scattered (clip-dots.js TWINKLE): a few rows a frame for the panel to resend */
 #define NLINE  128                          /* the outline's shades by depth (palette 0..NLINE-1)                    */
 enum { FR = 1, FE = 2, FH = 4, FA = 8, FB = 16 };   /* flags: region, eye, halo, and the halo's two scratch rows */
@@ -75,6 +75,7 @@ struct cd {
     ell_t pe[CC_SHAPES_MAX]; capz_t pc[CC_SHAPES_MAX]; uint8_t pok[CC_SHAPES_MAX];   /* this frame's projections */
     float sf[CC_SHAPES_MAX], kk[CC_SHAPES_MAX];  /* a blob's surface fraction of its field radius, and its square */
     int *wrow;                              /* per dot row: the body's work there (the split's balance)               */
+    int16_t ord[CC_SHAPES_MAX]; int nord;   /* this frame's blobs, nearest first (its depth test rejects the rest early) */
     /* the floor layer, kept while the camera does not move along it: a colour (0: none) | FON, per dot */
     uint32_t *frgb; float fscroll; bool fvalid, floor_new;
     uint8_t *fcell; uint32_t *fccol;        /* the floor layer as cells (bits, colour), made with it                 */
@@ -342,18 +343,25 @@ static int balance(const int *w, int y0, int y1) {
 
 /* ── 1, 2: the body's field and the solid parts (band) ─────────────────────── */
 
+/* rows [a, b) of the band: cleared, the field and depths, the threshold, the parts. Done a strip of CD_STRIP rows at a
+ * time, so a strip's records stay in the cache through all four (each dot read from PSRAM once, not once a pass) */
+#define CD_STRIP 8
+static void solid_rows(cd_t *d, int a, int b);
 static void ph_solid(cd_t *d, int part) {
-    const int DW = d->DW;
     int a, b; band(d->uy0, d->uy1, d->split, part, &a, &b);
+    for (int y = a; y < b; y += CD_STRIP) solid_rows(d, y, y + CD_STRIP < b ? y + CD_STRIP : b);
+}
+static void solid_rows(cd_t *d, int a, int b) {
+    const int DW = d->DW;
     if (d->ux1 > d->ux0) for (int Y = a; Y < b; Y++) memset(d->dot + Y * DW + d->ux0, 0, sizeof(dot_t) * (size_t)(d->ux1 - d->ux0));
     if (a < d->by0) a = d->by0;
     if (b > d->by1) b = d->by1;
     if (a >= b) return;
     const cc_shape_t *sh = d->sh;
     /* 1. the merged body: a metaball field, the nearest element surface per dot */
-    for (int q = 0; q < d->ns; q++) {
+    for (int oq = 0; oq < d->nord; oq++) {
+        const int q = d->ord[oq];
         const cc_shape_t *s = &sh[q];
-        if (s->kind != CC_BLOB || !d->pok[q]) continue;
         const ell_t e = d->pe[q];
         const box_t bx = blob_box(d, q);
         const int ya = bx.y0 > a ? bx.y0 : a, yb = bx.y1 < b - 1 ? bx.y1 : b - 1;
@@ -755,6 +763,16 @@ void cd_draw(cd_t *d, const cc_t *c, uint32_t frame) {
     d->bx0 = nb.x0; d->bx1 = nb.x1; d->by0 = nb.y0; d->by1 = nb.y1;
     d->rx0 = d->ry0 = 0; d->rx1 = d->ry1 = -1;
     d->split = balance(d->wrow, d->by0, d->by1);
+    {   /* the blobs nearest first (by their nearest point): a dot already as near is passed over at once. The field is
+         * a sum of whole steps (any order), so only equal depths could tell the orders apart */
+        d->nord = 0;
+        for (int q = 0; q < ns; q++) {
+            if (sh[q].kind != CC_BLOB || !d->pok[q]) continue;
+            const float top = d->pe[q].d + d->pe[q].h; int at = d->nord++;
+            while (at > 0 && d->pe[d->ord[at - 1]].d + d->pe[d->ord[at - 1]].h < top) { d->ord[at] = d->ord[at - 1]; at--; }
+            d->ord[at] = (int16_t)q;
+        }
+    }
     for (int s = 0; s < 2; s++) {
         d->hip[s] = 0.f;
         if (d->thigh[s] < 0) continue;

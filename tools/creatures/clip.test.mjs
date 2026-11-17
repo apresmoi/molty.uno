@@ -51,6 +51,31 @@ for (const { id, pkg } of rigged) {
     for (const [n, c] of Object.entries(rig.clips)) assert.ok(g.families.includes(c.from) && g.families.includes(c.to), `${n}: families`);
   });
 
+  test(`${id}: called (a tap, a shake) from any state and heading, it comes to the front facing the viewer, attending`, () => {
+    const front = (p) => { const f = p.facing, w = f - 2 * Math.PI * Math.round(f / (2 * Math.PI)); return Math.abs(w) < 0.15; };
+    const near = (p) => Math.abs(p.place[0]) < 0.3;     // across the frame (depth does not show; the frame is 1.9 wide)
+    const states = [];
+    for (const m of MOODS) for (const walkS of [0, 2, 5, 9]) states.push({ m, walkS });
+    for (const gname of Object.keys(g.gestures)) states.push({ m: 'idle', gest: gname });
+    let away = 0;
+    for (const st of states) {
+      const p = clipPlayer(rig);
+      p.mood(st.m); for (let f = 0; f < 30; f++) p.update(1 / 30);
+      if (st.walkS) { p.act('walk'); for (let f = 0; f < 30 * st.walkS; f++) p.update(1 / 30); }
+      if (st.gest) { p.act(st.gest); for (let f = 0; f < 20; f++) p.update(1 / 30); }
+      if (!front(p)) away++;
+      assert.ok(p.come(), 'called');
+      let f = 0, ok = false;
+      for (; f < 30 * 14 && !ok; f++) { p.update(1 / 30); ok = p.clip === 'listening' && front(p) && near(p); }
+      const at = `${st.m}${st.walkS ? ` after ${st.walkS} s walking` : ''}${st.gest ? ` in ${st.gest}` : ''}`;
+      assert.ok(ok, `${at}: not attending at the front (${p.clip}, facing ${p.facing.toFixed(2)} rad off, at ${p.place.map((v) => v.toFixed(2))})`);
+      assert.ok(f < 30 * 12, `${at}: ${(f / 30).toFixed(1)} s to come`);
+      for (let k = 0; k < 30 * 6 && p.coming; k++) p.update(1 / 30);
+      assert.ok(!p.coming, `${at}: the call never ends`);
+    }
+    assert.ok(away > 0, 'some states face away (walking back)');
+  });
+
   test(`${id}: the paws never slide on the floor (clips, routes and crossfades, a long schedule)`, () => {
     const p = clipPlayer(rig), DT = 1 / 30, gest = Object.keys(g.gestures), worst = { slip: 0, at: '' };
     const runs = rig.contacts.map(() => null);

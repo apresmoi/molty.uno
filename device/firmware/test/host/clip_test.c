@@ -81,6 +81,7 @@ static void test_golden(const char *pkgdir, const char *gdir, const char *id) {
     for (char *line = strtok_r(g, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
         if (line[0] == 'm') cc_mood(c, line + 2);
         else if (line[0] == 'a') cc_act(c, line + 2);
+        else if (line[0] == 'c' && !line[1]) cc_come(c);
         else if (line[0] == 'f') {
             double t0 = now_us();
             cc_update(c, 1.f / 30.f);

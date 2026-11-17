@@ -29,7 +29,7 @@ export const hash3 = (i, j, k) => {
 const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 // the dust twinkles a few cell rows a frame (each row every TWINKLE frames, rows in a scattered order): a twinkle all
 // over the screen each frame would make every row a window for the panel to resend
-export const TWINKLE = 12;
+export const TWINKLE = 24;
 const twinkleOffset = (j, H) => Math.floor(((j * 11) % H) * TWINKLE / H);
 const hex = (h) => [parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255];
 
