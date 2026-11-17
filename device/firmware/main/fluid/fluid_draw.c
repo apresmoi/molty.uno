@@ -440,7 +440,10 @@ static inline void cell_look(const fluid_draw_t *d, const fluid_frame_t *s, cons
         const uint8_t *src = o->dots;
         if (o->shapes) {
             /* smooth or dust, no fade: a cell changes once; a tapped spot's drawing (o->still) never breaks */
-            const int wt = (o->still && o->still[k] && o->dust <= 0.f) || hd_dust(s, i, j, o->dust) < 0.5f ? HD_LEVELS : 0;
+            /* on fine dust a transition turns each cell at its own moment (a hashed threshold): the drawing forms and goes
+             * over the frames of it, never the whole panel in one */
+            const float turn = o->fine && o->dust > 0.f ? 0.1f + 0.85f * hash_u(i, j, 11) : 0.5f;
+            const int wt = (o->still && o->still[k] && o->dust <= 0.f) || hd_dust(s, i, j, o->dust) < turn ? HD_LEVELS : 0;
             if (wt) hd = (uint16_t)(KEY_HD | wt << 8);
             if (wt == HD_LEVELS) src = o->kdots;
         }
@@ -967,13 +970,27 @@ static inline int shape_bit(const fluid_shape_t *sh, int x, int y) {
 
 /* how much of a mask or a char covers the pixel at (u, v) in its bits: read bilinear, a smooth
  * edge at HD_EDGE (e: half its width, on that reading) */
+/* sqrt for the shapes' per-pixel coverage: no libm call (it is one on the device), two Newton steps (~1e-5) */
+static inline float fsqrt(float x) {
+    if (x <= 0.f) return 0.f;
+    union { float f; uint32_t i; } c = { x };
+    c.i = 0x5f3759dfu - (c.i >> 1);
+    float y = c.f;
+    y *= 1.5f - 0.5f * x * y * y;
+    y *= 1.5f - 0.5f * x * y * y;
+    return x * y;
+}
+/* floor of a coordinate that is never far below 0 (no libm call) */
+static inline int ifloor(float v) { return (int)(v + 1024.f) - 1024; }
 static inline float mask_cover(const fluid_shape_t *sh, float u, float v, float e) {
-    const float fu = floorf(u), fv = floorf(v), tu = u - fu, tv = v - fv;
-    const int iu = (int)fu, iv = (int)fv;
+    const int iu = ifloor(u), iv = ifloor(v);
+    const float tu = u - (float)iu, tv = v - (float)iv;
     const int b00 = shape_bit(sh, iu, iv), b10 = shape_bit(sh, iu + 1, iv), b01 = shape_bit(sh, iu, iv + 1), b11 = shape_bit(sh, iu + 1, iv + 1);
     if (!(b00 | b10 | b01 | b11)) return 0.f;
     const float top = b00 + (b10 - b00) * tu, bot = b01 + (b11 - b01) * tu;
-    return fluid_smooth(HD_EDGE - e, HD_EDGE + e, top + (bot - top) * tv);
+    float t = (top + (bot - top) * tv - (HD_EDGE - e)) * (0.5f / e);   /* fluid_smooth(HD_EDGE - e, HD_EDGE + e, ...) */
+    t = t < 0.f ? 0.f : t > 1.f ? 1.f : t;
+    return t * t * (3.f - 2.f * t);
 }
 
 /* how much of the pixel at (dx, dy) from the shape's centre (stage px) a stroke, a ring or a
@@ -986,11 +1003,14 @@ static inline float shape_cover(const fluid_shape_t *sh, float dx, float dy, flo
         float u = (dx * vx + dy * vy) * il2;
         u = u < 0.f ? 0.f : u > 1.f ? 1.f : u;
         const float ex = dx - u * vx, ey = dy - u * vy;
-        dist = sqrtf(ex * ex + ey * ey) - sh->hw;
+        const float d2 = ex * ex + ey * ey, lo = sh->hw - 0.5f, hi = sh->hw + 0.5f;
+        if (d2 >= hi * hi) return 0.f;                          /* the squared distance first: most pixels need no root */
+        if (lo > 0.f && d2 <= lo * lo) return 1.f;
+        dist = fsqrt(d2) - sh->hw;
         break;
     }
     case FLUID_SHAPE_RING: {
-        dist = fabsf(sqrtf(dx * dx + dy * dy) - sh->r) - sh->hw;
+        dist = fabsf(fsqrt(dx * dx + dy * dy) - sh->r) - sh->hw;
         if (sh->span < 360.f && dist < 0.5f) {
             float a = fmodf(fluid_atan2(-dy, dx) * (180.f / 3.1415927f) - sh->a0, 360.f);
             if (a < 0.f) a += 360.f;
@@ -1002,9 +1022,13 @@ static inline float shape_cover(const fluid_shape_t *sh, float dx, float dy, flo
         }
         break;
     }
-    default:
-        dist = sqrtf(dx * dx + dy * dy) - sh->r;
+    default: {
+        const float d2 = dx * dx + dy * dy, lo = sh->r - 0.5f, hi = sh->r + 0.5f;
+        if (d2 >= hi * hi) return 0.f;
+        if (lo > 0.f && d2 <= lo * lo) return 1.f;
+        dist = fsqrt(d2) - sh->r;
         break;
+    }
     }
     return dist >= 0.5f ? 0.f : dist <= -0.5f ? 1.f : 0.5f - dist;
 }
@@ -1082,7 +1106,7 @@ void fluid_shapes_row_dim(const fluid_shape_t *shapes, int nshapes, const int16_
                 float a = mask ? mask_cover(sh, u, v, e) : shape_cover(sh, (float)(x - ox) + 0.5f - sh->x, dy, il2);
                 if (a > 0.f && dimmed) {
                     const float X = (float)(x - ox) + 0.5f, dex = X < dim[0] ? dim[0] - X : X > dim[1] ? X - dim[1] : 0.f;
-                    const float dd = sqrtf(dex * dex + dey * dey);
+                    const float dd = fsqrt(dex * dex + dey * dey);
                     if (dd < FLUID_DIM_REACH) { const float t = dd / FLUID_DIM_REACH; a *= 1.f - dim[4] * (1.f - t * t * (3.f - 2.f * t)); }
                 }
                 if (a > 0.f) blend565(&row[x - bx], le, (int)(a * w * (256.f / HD_LEVELS) + 0.5f));
@@ -1115,7 +1139,7 @@ static void hdc_copy(const fluid_draw_t *d, const fluid_draw_opts_t *o, uint16_t
     for (int x = xa > la ? xa : la; x < xb && x < lb; x++) {
         uint16_t *p = &row[x - bx];
         if (!*p) continue;
-        const float X = (float)(x - d->ox) + 0.5f, dex = X < dim[0] ? dim[0] - X : X > dim[1] ? X - dim[1] : 0.f, dd = sqrtf(dex * dex + dey * dey);
+        const float X = (float)(x - d->ox) + 0.5f, dex = X < dim[0] ? dim[0] - X : X > dim[1] ? X - dim[1] : 0.f, dd = fsqrt(dex * dex + dey * dey);
         if (dd >= FLUID_DIM_REACH) continue;
         const float tt = dd / FLUID_DIM_REACH, k = 1.f - dim[4] * (1.f - tt * tt * (3.f - 2.f * tt));
         const int a = (int)(k * 256.f);
