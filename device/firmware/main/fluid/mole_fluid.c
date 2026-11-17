@@ -117,6 +117,7 @@ typedef struct {
     int   n_internal, n_blk;
     int   state, fx, reel, word_idx, nwords, inside, grid_w, grid_h, cells_drawn;
     int   crisp_dots;                          /* a rigged creature: its dots handed to the drawer */
+    float send_n, send_kpx, blit_ms;           /* the panel's windows a frame, their kpx, ms in the blits (EMA) */
     char  word[40];
 } fluid_stats_t;
 
@@ -1030,9 +1031,13 @@ esp_err_t mole_fluid_creature_file_get(uint8_t **out, size_t *len, bool *is_defa
 
 /* ── Drawer task (core 0): what changed in the latest snapshot, to the panel ──── */
 
+static int s_send_n, s_send_px; static int64_t s_blit_us;   /* this frame's windows to the panel (the drawer) */
 static int send_win(void *ctx, int x, int y, int w, int h, const uint16_t *px) {
     (void)ctx;
-    return molty_display_blit(x, y, w, h, px) == ESP_OK ? 0 : 1;
+    const int64_t t = esp_timer_get_time();
+    const int e = molty_display_blit(x, y, w, h, px) == ESP_OK ? 0 : 1;
+    s_blit_us += esp_timer_get_time() - t; s_send_n++; s_send_px += w * h;
+    return e;
 }
 
 esp_err_t mole_fluid_framebuffer_sync(void) {
@@ -1104,6 +1109,9 @@ static void draw_task(void *arg) {
         fluid_prof[FP_DSAMPLE] = fluid_prof[FP_DRASTER] = 0;
         xSemaphoreTake(s_mutex, portMAX_DELAY);
         s_stats.draw_ms = dms; s_stats.flush_ms = lms; s_stats.cells_drawn = nc;
+        s_stats.send_n = s_stats.send_n * 0.9f + s_send_n * 0.1f; s_stats.send_kpx = s_stats.send_kpx * 0.9f + s_send_px / 1000.f * 0.1f;
+        s_stats.blit_ms = s_stats.blit_ms * 0.9f + s_blit_us / 1000.f * 0.1f;
+        s_send_n = s_send_px = 0; s_blit_us = 0;
         s_stats.prof_ms[FP_DSAMPLE] = pema[0]; s_stats.prof_ms[FP_DRASTER] = pema[1];
         xSemaphoreGive(s_mutex);
         xSemaphoreGive(s_idle);
@@ -1661,6 +1669,9 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     cJSON_AddNumberToObject(root, "cells_drawn", st.cells_drawn);
     cJSON_AddNumberToObject(root, "cells_inside", st.inside);
     cJSON_AddNumberToObject(root, "crisp_dots", st.crisp_dots);
+    cJSON_AddNumberToObject(root, "send_windows", roundf(st.send_n * 10.f) / 10.f);
+    cJSON_AddNumberToObject(root, "send_kpx", roundf(st.send_kpx * 10.f) / 10.f);
+    cJSON_AddNumberToObject(root, "blit_ms", roundf(st.blit_ms * 100.f) / 100.f);
     cJSON *prof = cJSON_AddObjectToObject(root, "prof_ms");
     for (int q = 0; prof && q < FP_N; q++)
         cJSON_AddNumberToObject(prof, FLUID_PROF_NAMES[q], roundf(st.prof_ms[q] * 100.f) / 100.f);

@@ -26,7 +26,8 @@ static inline uint32_t cycles(void) { return (uint32_t)esp_cpu_get_cycle_count()
 #define CD_FREE(p)   heap_caps_free(p)
 #define CD_BAND_CORE 0           /* the second band's core: the fluid task (the first band) runs on core 1          */
 #define CD_SHARE     55          /* percent of the rows' work in the first band: core 0 also draws the panel  */
-#define CD_BAND_PRIO 3           /* above the drawer (2) on that core: the band is waited on, the drawer has slack  */
+#define CD_BAND_PRIO 1           /* below the drawer (2) on that core: the drawer's panel sends wait on DMA, and the
+                                  * band fills those waits; above it, every DMA wake waited for the band            */
 #else
 static inline uint32_t cycles(void) { return 0; }
 #define CD_CALLOC(n) calloc(1, (n))
@@ -46,7 +47,7 @@ static inline uint32_t cycles(void) { return 0; }
 #define NLINE  128                          /* the outline's shades by depth (palette 0..NLINE-1)                    */
 enum { FR = 1, FE = 2, FH = 4, FA = 8, FB = 16 };   /* flags: region, eye, halo, and the halo's two scratch rows */
 enum { C_IRIS = NLINE, C_PUPIL, C_SHINE, C_NOSE, C_EAR, C_BELLY, C_WHISKER, C_BOWL, C_N, C_LINE = 255 };
-enum { ST_PROJ, ST_SOLID, ST_LINES, ST_FEAT, ST_HALO, ST_CELLS, ST_WAIT };
+enum { ST_PROJ, ST_SOLID, ST_LINES, ST_FEAT, ST_HALO, ST_CELLS, ST_WAIT, ST_BAND };
 #define FON    0x1000000u                   /* the floor layer: a dot's colour, this bit when it is on               */
 
 typedef struct { float d[3], r[3], u[3], c[3]; } cam_t;
@@ -122,7 +123,9 @@ static void band_task(void *arg) {
     for (;;) {
         xSemaphoreTake(d->go, portMAX_DELAY);
         if (d->quit) break;
+        const uint32_t t = cycles();
         d->job(d, 1);
+        d->prof[ST_BAND] += cycles() - t;
         xSemaphoreGive(d->done);
     }
     xSemaphoreGive(d->done);
