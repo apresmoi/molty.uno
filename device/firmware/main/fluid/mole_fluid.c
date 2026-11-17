@@ -324,6 +324,8 @@ static float    s_sub_until = 0.f;                  /* the last word stays this 
 typedef struct { char text[PKG_SAY_MAX + 1]; ftok_t toks[PKG_SAY_MAX / 2 + 1]; int n, word; float next; } reading_t;
 static reading_t *s_rd;
 static bool       s_rd_on = false;
+static scene_grow_t s_grow = { -1, 0.f, 0.f };     /* the tapped spot's drawing, grown (scene_grow_t) */
+static unsigned     s_grow_gen;                     /* the scene it was tapped on */
 /* the scene's spots for sense.c's taps (mole_fluid_spot_*): a copy of the scene on screen,
  * made when it starts if it has any, under s_mutex (PSRAM) */
 static scene_t   *s_spot_sc;
@@ -665,13 +667,20 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     }
     {   /* a tapped spot: its reading, word by word, until the voice or another state takes over */
         const unsigned spot = atomic_exchange(&s_spot_req, 0);
-        if (spot && s_cur == ST_SCENE && s_sp.cur && spot >> 8 == SPOT_GEN(s_sp.gen) && (int)(spot & 255) <= s_sp.cur->nitems)
+        if (spot && s_cur == ST_SCENE && s_sp.cur && spot >> 8 == SPOT_GEN(s_sp.gen) && (int)(spot & 255) <= s_sp.cur->nitems) {
             read_spot(s_sp.cur, (int)(spot & 255) - 1);
+            scene_grow_tap(&s_grow, (int)(spot & 255) - 1);   /* its drawing grows with the tap's ripple */
+            s_grow_gen = s_sp.gen;
+        }
         if (s_rd_on && (s_sub || s_cur != ST_SCENE)) s_rd_on = false;
         else if (s_rd_on && s_tnow >= s_rd->next) {
             if (s_rd->word + 1 < s_rd->n) s_rd->next = s_tnow + word_delay_s(s_rd->text, &s_rd->toks[++s_rd->word], SPOT_READ_WPM);
             else if (s_tnow >= s_rd->next + SPOT_READ_HOLD) s_rd_on = false;
         }
+        /* held grown while its reading (or the agent's say over the scene) plays */
+        if (s_grow.spot >= 0 && (s_cur != ST_SCENE || !s_sp.cur || s_sp.gen != s_grow_gen)) s_grow = (scene_grow_t){ -1, 0.f, 0.f };
+        scene_grow_tick(&s_grow, s_rd_on || s_sub, rdt);
+        if (s_sp.cur) scene_grow_apply(&s_grow, s_sp.cur);
     }
     /* speed reader (paused under a question: the labels own s_tx) */
     if (!asking && s_cur == ST_TEXT && s_word < s_ntok && s_follow) {
@@ -759,6 +768,15 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         scene_shapes_t hd = { s_shp, 0, s_kdots };
         scene_fill(s, s_sp.cur, s_sp.t, &cap, s_overlay, &s_noverlay, s_sdots, &hd);
         s_nshp = hd.n;
+        static const char *cap_was;                    /* a new word: a tiny ripple under its letters */
+        if (cap.n > 0 && cap.str != cap_was)
+            for (int q = 0; q < s_noverlay; q++) {
+                const fluid_letter_t *L = &s_overlay[q];
+                if (L->mask || L->rgb || L->ch == ' ') continue;   /* the subtitle's letters: the palette's */
+                ripple((L->x + L->w * 0.5f) / s->stage * 2.f - 1.f, (L->y + L->h * 0.5f) / s->stage * 2.f - 1.f,
+                       SCENE_CAPTION_RIPPLE, SCENE_CAPTION_RIPPLE_R);
+            }
+        cap_was = cap.n > 0 ? cap.str : NULL;
         break;
     }
     case ST_CREATURE:

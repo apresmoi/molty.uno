@@ -74,6 +74,8 @@ and geometry in **glass units**: the round window has radius 1, `x` right, `y` u
 (`{ "k": "spot", "each": "$bodies", "polar": ["@a", "@r"], "r": 0.09, "say": "@say", "id": "@id" }`), and a tap on it
 shows that reading at once, word by word at reading pace. The agent also gets the `tap` event with `spot: <id>`, to say
 more if it wants. A spot takes the tap whatever tap is bound to (a tap that stops a recording still does that first).
+What is drawn inside the spot's disc (a symbol's centre in it; a ring, a line or ticks wholly in it) grows 1.25x about the
+spot's centre with the tap's ripple, stays so while the reading (or the agent's say over the scene) plays, then eases back.
 A say over the scene replaces the reading. Both show as the reader does, one word at a time with its focus letter
 in the accent colour on the centre line, but small and low on the screen, under the drawing.
 
