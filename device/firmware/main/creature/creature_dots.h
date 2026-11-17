@@ -33,8 +33,10 @@ void  cd_destroy(cd_t *d);
 void  cd_draw(cd_t *d, const cc_t *c, uint32_t frame);
 /** The cells of the last draw: a braille byte (fluid_braille_bit order) and a colour 0xRRGGBB a cell. */
 void  cd_cells(const cd_t *d, const uint8_t **dots, const uint32_t **rgb);
-/** Each dot of the last draw: on (0/1), its colour 0xRRGGBB and its priority (0 world, 1 whisker, 2 line, 3+ features). */
+/** The creature's own dots of the last draw (not the world): on (0/1), colour 0xRRGGBB, priority (1 whisker, 2 line, 3+ features). */
 void  cd_dots(const cd_t *d, const uint8_t **on, const uint32_t **rgb, const uint8_t **pri);
+/** Cycles spent per stage since the last call (box, body, parts, lines, features, halo, world, cells), added into out[8]. */
+void  cd_prof(cd_t *d, uint32_t *out);
 /** The creature's box in dots last frame [x0, x1) x [y0, y1). */
 void  cd_box(const cd_t *d, int *x0, int *y0, int *x1, int *y1);
 
