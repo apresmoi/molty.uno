@@ -183,6 +183,7 @@ const molty_board_t molty_board_desc = {
     .blit        = lcd_co5300_blit,
     .blit_async  = lcd_co5300_blit_async,
     .blit_wait   = lcd_co5300_blit_wait,
+    .blit_prof   = lcd_co5300_blit_prof,
     .display_power = lcd_co5300_power,
     .display_level = lcd_co5300_level,
     .power_off     = power_off,

@@ -62,6 +62,16 @@ struct cr {
     uint32_t col[CR_NB];                          /* ... and its colour                                             */
     int mode; float T, red, sum, c2;                /* c2: the water's own wave speed, while the ring's is quicker   */
     uint8_t *rb, *rbin;                           /* per cell, this frame: the brightest ring dot (x 32), its bin   */
+    uint8_t *cbits, *cb;                          /* per cell: the crest's dots and brightness, kept a frame (each
+                                                   * half of the cell rows takes the crest every other frame)       */
+    uint8_t ilace;
+    /* the ring's own dots are kept per cell row and made again only when that row changes (its twinkle's turn, its
+     * landing or leaving, the line's ink): a steady ring costs a row or so a frame */
+    int *brow, *irow;                             /* per cell row: its band dots [brow[j], brow[j + 1]), inner ones   */
+    uint8_t *rl, *rll, *rlb;                      /* per cell: the ring's dots, brightness (x 32), bin              */
+    uint32_t *rowph, *rowver; uint32_t ver;       /* per row: the twinkle turn and the version it was made at       */
+    float lmin, lmax;                             /* when the first and the last part landed                        */
+    bool crest;                                   /* crest dots are held (cleared once the crest is done)            */
     float dens[16][64];                           /* the band's density by how thin (16) and radius (64): no powf a dot */
 };
 
@@ -82,7 +92,11 @@ cr_t *cr_create(const fluid_sim_t *s) {
         r->kp[b] = (int16_t)(nearest(s->ys, H, CR_PROBE_R * sy) * W + nearest(s->xs, W, CR_PROBE_R * sx));
     }
     r->cr2 = CR_CALLOC(sizeof(float) * (size_t)W * H); r->rb = CR_CALLOC((size_t)W * H); r->rbin = CR_CALLOC((size_t)W * H);
-    if (!r->cr2 || !r->rb || !r->rbin) { cr_destroy(r); return NULL; }
+    r->cbits = CR_CALLOC((size_t)W * H); r->cb = CR_CALLOC((size_t)W * H);
+    r->rl = CR_CALLOC((size_t)W * H); r->rll = CR_CALLOC((size_t)W * H); r->rlb = CR_CALLOC((size_t)W * H);
+    r->rowph = CR_CALLOC(sizeof(uint32_t) * (size_t)H); r->rowver = CR_CALLOC(sizeof(uint32_t) * (size_t)H);
+    r->brow = CR_CALLOC(sizeof(int) * (size_t)(H + 1)); r->irow = CR_CALLOC(sizeof(int) * (size_t)(H + 1));
+    if (!r->cr2 || !r->rb || !r->rbin || !r->cbits || !r->cb || !r->rl || !r->rll || !r->rlb || !r->rowph || !r->rowver || !r->brow || !r->irow) { cr_destroy(r); return NULL; }
     for (int t = 0; t < 16; t++) for (int q = 0; q < 64; q++) {
         const float thin = t / 15.f, rad = CR_DUST_IN - 0.16f + (CR_LINE_IN - CR_DUST_IN + 0.16f) * q / 63.f;
         const float din = CR_DUST_IN - 0.16f * (1.f - thin), u = (rad - din) / (CR_LINE_IN - din);
@@ -113,12 +127,16 @@ cr_t *cr_create(const fluid_sim_t *s) {
         }
         if (pass == 0 && !(r->dot = CR_CALLOC(sizeof(cr_dot_t) * (size_t)(r->n + r->nin + 1)))) { cr_destroy(r); return NULL; }
     }
+    for (int j = 0, n = 0; j <= H; j++) { while (n < r->n && r->dot[n].row < j) n++; r->brow[j] = n; }   /* dots are in row order */
+    for (int j = 0, n = r->n; j <= H; j++) { while (n < r->n + r->nin && r->dot[n].row < j) n++; r->irow[j] = n; }
+    r->ver = 1;
     return r;
 }
 
 void cr_destroy(cr_t *r) {
     if (!r) return;
-    CR_FREE(r->dot); CR_FREE(r->cr2); CR_FREE(r->rb); CR_FREE(r->rbin); CR_FREE(r);
+    CR_FREE(r->dot); CR_FREE(r->cr2); CR_FREE(r->rb); CR_FREE(r->rbin); CR_FREE(r->cbits); CR_FREE(r->cb);
+    CR_FREE(r->rl); CR_FREE(r->rll); CR_FREE(r->rlb); CR_FREE(r->rowph); CR_FREE(r->rowver); CR_FREE(r->brow); CR_FREE(r->irow); CR_FREE(r);
 }
 
 /* a ring-shaped push of the water at radius R (the release): the same bump as a touch, laid round a circle */
@@ -153,15 +171,19 @@ bool cr_paint(cr_t *r, fluid_sim_t *s, float dt, uint32_t frame, const uint8_t *
     }
     const bool want = sum > 0.f && sum >= 0.97f * r->sum;
     r->sum = sum;
-    if (want) for (int b = 0; b < CR_NB; b++) { const int t = s->T[r->kr[b]] > s->T[r->ka[b]] ? s->T[r->kr[b]] : s->T[r->ka[b]]; r->lr[b] = clampf(t * norm, 0.f, 1.f); }
+    if (want) for (int b = 0; b < CR_NB; b++) {
+        const int t = s->T[r->kr[b]] > s->T[r->ka[b]] ? s->T[r->kr[b]] : s->T[r->ka[b]];
+        const float l = clampf(t * norm, 0.f, 1.f);
+        if (fabsf(l - r->lr[b]) > 1.f / 64.f || (l == 0.f) != (r->lr[b] == 0.f)) { r->lr[b] = l; r->ver++; }   /* the ring's rows again */
+    }
     if (want && (r->mode == OFF || r->mode == OUT)) {          /* a touch at the centre */
         if (r->mode == OFF) r->c2 = s->p.c2;
-        r->mode = IN; r->T = 0.f; for (int b = 0; b < CR_NB; b++) r->land[b] = -1.f;
+        r->mode = IN; r->T = 0.f; r->ver++; r->lmin = 1e9f; r->lmax = -1.f; for (int b = 0; b < CR_NB; b++) r->land[b] = -1.f;
         s->p.c2 = CR_C2;
         fluid_sim_impulse(s, 0.f, 0.f, CR_TAP_S, CR_TAP_R);
     } else if (!want && (r->mode == IN || r->mode == ON)) {    /* the ring lets go into the water */
         if (r->mode == ON) r->c2 = s->p.c2;
-        r->mode = OUT; r->T = 0.f; r->red = 1.f;
+        r->mode = OUT; r->T = 0.f; r->red = 1.f; r->ver++;
         s->p.c2 = CR_C2;
         kick(r, s, RING_R, CR_LET_S);
     }
@@ -171,40 +193,71 @@ bool cr_paint(cr_t *r, fluid_sim_t *s, float dt, uint32_t frame, const uint8_t *
     if (r->mode == IN) {                          /* a part lands once the crest reaches it (or the driven front has) */
         bool all = true;
         for (int b = 0; b < CR_NB; b++) {
-            if (r->land[b] < 0.f && (s->h[r->kp[b]] > (int16_t)(CR_LAND_H * FQ_H) || r->T >= CR_FORM_S)) r->land[b] = r->T;
+            if (r->land[b] < 0.f && (s->h[r->kp[b]] > (int16_t)(CR_LAND_H * FQ_H) || r->T >= CR_FORM_S)) {
+                r->land[b] = r->T;
+                if (r->T < r->lmin) r->lmin = r->T;
+                if (r->T > r->lmax) r->lmax = r->T;
+            }
             if (r->land[b] < 0.f || r->T < r->land[b] + CR_LAND_S) all = false;
         }
         if (all) { r->mode = ON; s->p.c2 = r->c2; }
     } else if (r->mode == OUT) {
         r->red = expf(-r->T / 0.25f);
-        if (r->T > CR_DONE_S) { r->mode = OFF; s->p.c2 = r->c2; return false; }
+        if (r->T > CR_DONE_S) { r->mode = OFF; s->p.c2 = r->c2; r->ver++; return false; }
     }
 
     /* the dots: the ring where its part has landed, row by row (going, row by row too), and the crest's colour */
-    const int H = r->H;
-    memset(r->rb, 0, (size_t)s->N);
-    const int nall = r->mode == OUT ? r->n + r->nin : r->n;
-    for (int n = 0; n < nall; n++) {
-        const cr_dot_t *d = &r->dot[n];
-        const float rad = d->r * (1.f / 65535.f), rowd = (float)(d->row * 11 % H) * (CR_LAND_S / H);   /* its row's turn */
-        float b = 0.f;
-        const bool shown = r->mode == OUT ? r->T < rowd : r->land[d->bin] >= 0.f && r->T >= r->land[d->bin] + rowd;
-        if (n < r->n && shown && rad >= CR_DUST_IN - 0.16f && r->lr[d->bin] > 0.f) {
-            const uint32_t ph = (frame + (uint32_t)((d->row * 11 % H) * CR_TW / H)) / CR_TW;   /* its row's twinkle */
+    const int H = r->H, W = r->W;
+    for (int j = 0; j < H; j++) {                 /* the ring's own: a row made again only when it changes */
+        const float rowd = (float)(j * 11 % H) * (CR_LAND_S / H);                    /* its row's turn */
+        const uint32_t ph = (frame + (uint32_t)((j * 11 % H) * CR_TW / H)) / CR_TW;   /* its twinkle's */
+        const bool moving = r->mode == OUT ? fabsf(r->T - rowd) <= 2.f * dt
+                          : r->mode == IN && r->lmax >= 0.f && r->T >= r->lmin + rowd - 2.f * dt && r->T <= r->lmax + rowd + 2.f * dt;
+        if (!moving && r->rowph[j] == ph && r->rowver[j] == r->ver) continue;
+        r->rowph[j] = ph; r->rowver[j] = r->ver;
+        memset(r->rl + j * W, 0, (size_t)W); memset(r->rll + j * W, 0, (size_t)W);
+        for (int n = r->brow[j]; n < r->brow[j + 1]; n++) {
+            const cr_dot_t *d = &r->dot[n];
+            const float rad = d->r * (1.f / 65535.f);
+            const bool shown = r->mode == OUT ? r->T < rowd : r->mode != OFF && r->land[d->bin] >= 0.f && r->T >= r->land[d->bin] + rowd;
+            if (!shown || rad < CR_DUST_IN - 0.16f || r->lr[d->bin] <= 0.f) continue;
             const uint32_t hh = hash2((uint32_t)n, ph);
             const float tw = (float)(hh & 255) * (2.f / 255.f) - 1.f, tw2 = (float)(hh >> 8 & 255) * (2.f / 255.f) - 1.f;
-            b = final_b(r, rad, d, CR_THIN, tw, tw2) * r->lr[d->bin];
+            const float b = final_b(r, rad, d, CR_THIN, tw, tw2) * r->lr[d->bin];
+            if (b <= 0.02f) continue;
+            const int q = (int)(b * 32.f + 0.5f);
+            r->rl[d->k] |= d->bit;
+            if (q > r->rll[d->k]) { r->rll[d->k] = (uint8_t)(q > 255 ? 255 : q); r->rlb[d->k] = d->bin; }
         }
-        if (!creature[d->k]) {                    /* the crest's colour, off the creature */
-            const float hv = s->h[d->k] * (1.f / FQ_H);
-            const float lift = r->mode == OUT ? (rad >= CR_CREST_IN ? r->red * smooth(0.02f, 0.08f, hv) : 0.f)
-                             : r->mode == IN ? smooth(CR_CREST_R, CR_PROBE_R, rad) * smooth(0.015f, 0.07f, hv) : 0.f;
-            if (lift * 0.5f * 255.f > d->h3) { const float cb = (0.45f + 0.8f * lift) * (r->mode == OUT ? 0.3f + 0.7f * r->red : 1.f); if (cb > b) b = cb; }
+    }
+    r->ilace ^= 1;
+    if (r->mode == IN || r->mode == OUT) {        /* the crest: this frame's half of the cell rows (the panel's cost is
+                                                   * by row), the other half's kept from the last */
+        r->crest = true;
+        for (int j = r->ilace; j < H; j += 2) {
+            memset(r->cbits + j * W, 0, (size_t)W); memset(r->cb + j * W, 0, (size_t)W);
+            for (int pass = 0; pass < (r->mode == OUT ? 2 : 1); pass++) {
+                const int n0 = pass ? r->irow[j] : r->brow[j], n1 = pass ? r->irow[j + 1] : r->brow[j + 1];
+                for (int n = n0; n < n1; n++) {
+                    const cr_dot_t *d = &r->dot[n];
+                    const int16_t hq = s->h[d->k];
+                    if (hq < (int16_t)(0.015f * FQ_H) || creature[d->k]) continue;   /* the water not up there: no crest */
+                    const float hv = hq * (1.f / FQ_H), rad = d->r * (1.f / 65535.f);
+                    const float lift = r->mode == OUT ? (rad >= CR_CREST_IN ? r->red * smooth(0.02f, 0.08f, hv) : 0.f)
+                                                      : smooth(CR_CREST_R, CR_PROBE_R, rad) * smooth(0.015f, 0.07f, hv);
+                    if (lift * 0.5f * 255.f <= d->h3) continue;
+                    const int q = (int)((0.45f + 0.8f * lift) * (r->mode == OUT ? 0.3f + 0.7f * r->red : 1.f) * 32.f + 0.5f);
+                    r->cbits[d->k] |= d->bit; if (q > r->cb[d->k]) r->cb[d->k] = (uint8_t)(q > 255 ? 255 : q);
+                }
+            }
         }
-        if (b <= 0.02f) continue;
-        dots[d->k] |= d->bit;
-        const int q = (int)(b * 32.f + 0.5f);
-        if (q > r->rb[d->k]) { r->rb[d->k] = (uint8_t)(q > 255 ? 255 : q); r->rbin[d->k] = d->bin; }
+    } else if (r->crest) { memset(r->cbits, 0, (size_t)s->N); memset(r->cb, 0, (size_t)s->N); r->crest = false; }
+    for (int k = 0; k < s->N; k++) {              /* the ring's dots and the crest's over the cells */
+        uint8_t bits = r->rl[k], lvl = r->rll[k];
+        r->rbin[k] = r->rlb[k];
+        if (r->cbits[k] && !creature[k]) { bits |= r->cbits[k]; if (r->cb[k] > lvl) { lvl = r->cb[k]; r->rbin[k] = 0; } }
+        r->rb[k] = bits ? (lvl ? lvl : 1) : 0;
+        dots[k] |= bits;
     }
     uint32_t c0 = 0;                              /* the ring's colour where a bin has none of its own (the crest) */
     for (int b = 0; b < CR_NB && !c0; b++) c0 = r->col[b];

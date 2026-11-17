@@ -787,9 +787,12 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
                 const fluid_rgba16_t *c = &s->col[k];
                 const uint32_t sig = (uint32_t)(c->r >> 8) << 24 | (uint32_t)(c->g >> 8) << 16 | (uint32_t)(c->b >> 8) << 8 | (uint32_t)(c->a >> 8);
                 const uint16_t c0 = (uint16_t)(o->dots[k] | (crisp_flat(s, i, j, k) ? 0x100 : 0));
-                if (d->crisp0 && !d->force && (c0 & 0x100) && c0 == d->cd0[k] && sig == d->csig[k] && d->key[k] != KEY_SKIP && d->key[k] != KEY_STALE) {
-                    d->dirty[k] = 0; continue;
-                }
+                const bool same = d->crisp0 && !d->force && sig == d->csig[k] && d->key[k] != KEY_SKIP && d->key[k] != KEY_STALE;
+                if (same && (c0 & 0x100) && c0 == d->cd0[k]) { d->dirty[k] = 0; continue; }
+                /* its own dots and colour as they were, only the water moving them (a ripple, the ring's wave): such
+                 * cells in every other cell row a frame, alternating, as video interlaces (the panel's cost is by the
+                 * row); the creature's own changes go every frame */
+                if (same && !(c0 & 0x100) && (c0 & 0xff) == (d->cd0[k] & 0xff) && ((j + d->ilace) & 1)) { d->dirty[k] = 0; continue; }
                 d->cd0[k] = c0; d->csig[k] = sig;
             }
             uint16_t key = KEY_EMPTY, col = 0;
@@ -811,7 +814,7 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
         FLUID_PROF_END(FP_DSAMPLE, c0);
     }
     d->force = false;
-    d->crisp0 = crisp;
+    d->crisp0 = crisp; d->ilace ^= 1;
 
     /* condensed letters ride the surface (y follows the wave height) and decode from
      * ramp glyphs into the real letter as ink arrives */

@@ -117,7 +117,9 @@ typedef struct {
     int   n_internal, n_blk;
     int   state, fx, reel, word_idx, nwords, inside, grid_w, grid_h, cells_drawn;
     int   crisp_dots;                          /* a rigged creature: its dots handed to the drawer */
+    int   share;                               /* ... and the share of its rows' work on core 1, percent */
     float send_n, send_kpx, blit_ms;           /* the panel's windows a frame, their kpx, ms in the blits (EMA) */
+    float blit_part[3];                        /* ... of which: the board's mirror copy, waiting for the panel, commands (EMA) */
     char  word[40];
 } fluid_stats_t;
 
@@ -1124,6 +1126,8 @@ static void draw_task(void *arg) {
         s_stats.send_n = s_stats.send_n * 0.9f + s_send_n * 0.1f; s_stats.send_kpx = s_stats.send_kpx * 0.9f + s_send_px / 1000.f * 0.1f;
         s_stats.blit_ms = s_stats.blit_ms * 0.9f + s_blit_us / 1000.f * 0.1f;
         s_send_n = s_send_px = 0; s_blit_us = 0;
+        {   uint32_t bp[3] = { 0, 0, 0 }; molty_display_blit_prof(bp);
+            for (int q = 0; q < 3; q++) s_stats.blit_part[q] = s_stats.blit_part[q] * 0.9f + bp[q] / 1000.f * 0.1f; }
         s_stats.prof_ms[FP_DSAMPLE] = pema[0]; s_stats.prof_ms[FP_DRASTER] = pema[1];
         xSemaphoreGive(s_mutex);
         xSemaphoreGive(s_idle);
@@ -1388,6 +1392,13 @@ static void fluid_task(void *arg) {
         snprintf(s_stats.scene_layout, sizeof(s_stats.scene_layout), "%s", s_sp.cur ? s_sp.cur->layout : "");
         s_stats.scene_left = s_sp.cur ? scene_end(s_sp.cur) - s_sp.t : 0.f;
         s_stats.crisp_dots = s_crisp ? s_crisp_dots : -1;
+        if (s_crisp && s_cpk) {    /* the creature's rows between the cores: more here while the drawer (core 0) is the slower */
+            static float share = 55.f;
+            const float d = s_stats.draw_ms + s_stats.flush_ms - sms;
+            share += d > 1.f ? 1.f : d < -1.f ? -1.f : 0.f;
+            share = share < 25.f ? 25.f : share > 85.f ? 85.f : share;
+            cpk_set_share(s_cpk, (int)share); s_stats.share = (int)share;
+        }
         s_stats.inside = s_sim->inside; s_stats.grid_w = s_sim->W; s_stats.grid_h = s_sim->H;
         s_stats.internal = s_sim->internal;
         s_stats.n_internal = s_sim->n_internal; s_stats.n_blk = s_sim->n_blk;
@@ -1687,9 +1698,13 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     cJSON_AddNumberToObject(root, "cells_drawn", st.cells_drawn);
     cJSON_AddNumberToObject(root, "cells_inside", st.inside);
     cJSON_AddNumberToObject(root, "crisp_dots", st.crisp_dots);
+    cJSON_AddNumberToObject(root, "band_share", st.share);
     cJSON_AddNumberToObject(root, "send_windows", roundf(st.send_n * 10.f) / 10.f);
     cJSON_AddNumberToObject(root, "send_kpx", roundf(st.send_kpx * 10.f) / 10.f);
     cJSON_AddNumberToObject(root, "blit_ms", roundf(st.blit_ms * 100.f) / 100.f);
+    cJSON_AddNumberToObject(root, "blit_copy_ms", roundf(st.blit_part[0] * 100.f) / 100.f);
+    cJSON_AddNumberToObject(root, "blit_wait_ms", roundf(st.blit_part[1] * 100.f) / 100.f);
+    cJSON_AddNumberToObject(root, "blit_cmd_ms", roundf(st.blit_part[2] * 100.f) / 100.f);
     cJSON *prof = cJSON_AddObjectToObject(root, "prof_ms");
     for (int q = 0; prof && q < FP_N; q++)
         cJSON_AddNumberToObject(prof, FLUID_PROF_NAMES[q], roundf(st.prof_ms[q] * 100.f) / 100.f);

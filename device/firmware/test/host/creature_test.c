@@ -439,7 +439,8 @@ static void test_info(const char *pkgdir, const char *id) {
 /* a gesture of the package's own (the cat's eat, its clips in the rig): found by name, listed for agents, played by the
  * engine and routed by the clip player to its clip; a name it lacks is -1 */
 /* a rigged creature on a 466 px panel (the 1.75C) fed only the windows fluid_draw_send makes, as mole_fluid.c drives
- * it: every frame it shows exactly what a drawer redrawing every cell shows (the skipped cells are the unchanged ones),
+ * it: every frame it shows what a drawer redrawing every cell shows, or showed a frame before (the skipped cells are
+ * the unchanged ones; the water's own changes go every other frame),
  * sitting, through a tap's ripple and walking (the floor stays put); and the windows stay on even rows (that panel's)
  * and cost well under a full frame */
 typedef struct { uint16_t *px; int w, h, odd, n; struct { int x, y, w, h; const uint16_t *px; } q; } crisp_panel_t;
@@ -472,7 +473,7 @@ static void test_crisp_panel(const char *pkgdir) {
     fluid_sim_t *s = fluid_sim_create(W, H, P);
     fluid_draw_t *d = fluid_draw_create(W, H, P, P), *ref = fluid_draw_create(W, H, P, P);
     fluid_frame_t *fr = fluid_frame_create(W, H);
-    uint16_t *truth = calloc((size_t)P * P, 2), *buf = malloc((size_t)MAXPX * 2), *buf2 = malloc((size_t)MAXPX * 2);
+    uint16_t *truth = calloc((size_t)P * P, 2), *prev = calloc((size_t)P * P, 2), *buf = malloc((size_t)MAXPX * 2), *buf2 = malloc((size_t)MAXPX * 2);
     crisp_panel_t pn = { calloc((size_t)P * P, 2), P, P, 0, 0, { 0 } };
     int walk = -1;
     for (int g = 0; g < CUTE_N_ACTS + cp_own_gestures(cpk_player(k)); g++) if (!strcmp(cp_gesture_name(cpk_player(k), g), "walk")) walk = g;
@@ -501,7 +502,10 @@ static void test_crisp_panel(const char *pkgdir) {
         ref->force = true; fluid_draw_cells(ref, fr, &o);
         const fluid_rect_t all = { truth, P, 0, 0, P, P };
         fluid_draw_rect(ref, &o, &all, true);
-        if (memcmp(truth, pn.px, (size_t)P * P * 2)) bad = f;
+        /* each pixel as a full redraw shows it now, or did the frame before: the water's own changes go every other frame
+         * (interlaced), the creature's at once */
+        for (size_t q = 0; q < (size_t)P * P && bad < 0; q++) if (pn.px[q] != truth[q] && (f == 0 || pn.px[q] != prev[q])) bad = f;
+        memcpy(prev, truth, (size_t)P * P * 2);
         const int ph = f >= 130 ? 1 : f >= 70 && f < 100 ? 0 : -1;    /* settled: sitting, then walking */
         if (ph >= 0) { sent[ph] += px; drawn[ph] += n; wins[ph] += pn.n - n0; nf[ph]++; }
     }
@@ -515,7 +519,7 @@ static void test_crisp_panel(const char *pkgdir) {
         const double wn = nf[q] ? (double)wins[q] / nf[q] : 0;
         CHECK(avg + 2500 * wn < 0.5 * P * P, "crisp panel %s: %.0f px in %.0f windows a frame", q ? "walking" : "sitting", avg, wn);
     }
-    free(truth); free(buf); free(buf2); free(pn.px); fluid_frame_destroy(fr); fluid_draw_destroy(d); fluid_draw_destroy(ref); fluid_sim_destroy(s);
+    free(truth); free(prev); free(buf); free(buf2); free(pn.px); fluid_frame_destroy(fr); fluid_draw_destroy(d); fluid_draw_destroy(ref); fluid_sim_destroy(s);
     cpk_destroy(k); free(json);
 }
 

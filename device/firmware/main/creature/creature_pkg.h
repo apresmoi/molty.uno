@@ -38,6 +38,10 @@ bool   cpk_crisp(const cpk_t *k);
 /** A tap or a shake: a rigged creature plays first (a shake: "shaken"), then comes to the front of the frame facing the
  *  viewer, attending (cc_come). */
 void   cpk_come(cpk_t *k, const char *first);
+/** A rigged creature's dots: the share of their rows' work on the calling core (cd_set_share), the rest on the other. */
+void   cpk_set_share(cpk_t *k, int pct);
+/** Per cell of the last frame: 1 where the creature's own dots are (cd_creature). */
+const uint8_t *cpk_cells_creature(const cpk_t *k);
 const struct cc *cpk_clip(const cpk_t *k);
 /** Its last frame's cells: a braille byte (the rings over them, after cpk_paint) and a colour (0xRRGGBB) each; NULL before
  *  the first frame or for a channel creature. */
