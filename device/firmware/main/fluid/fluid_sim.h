@@ -429,6 +429,8 @@ typedef struct {
     int nshapes;
     const uint8_t *kdots;              /* scene in high definition: the dots it keeps calm too
                                         * (a ball, an image: no shape draws them), or NULL   */
+    uint32_t frame;                    /* crisp dots: the frame's number, whose parity picks the cell rows the water's
+                                        * own changes go in (the dots' maker interlaces by the same; 0: the drawer's own) */
 } fluid_draw_opts_t;
 
 /** W×H cells drawn into an fb_w×fb_h framebuffer; the stage is its largest centred

@@ -827,7 +827,8 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         fluid_target_arcs(s, FLUID_ASK_ARC_R, arcs, s_ask.n, acc);   /* one pass for all */
     } else {
         fluid_target_progress(s, &s_pg, PROG_COLOR, acc);          /* under the listening ring: it wins */
-        fluid_target_ring(s, &s_rg, fluid_ring_rgb(s_ring_rgb, s_ring_def, cfg->palette), acc);
+        if (!s_crisp) fluid_target_ring(s, &s_rg, fluid_ring_rgb(s_ring_rgb, s_ring_def, cfg->palette), acc);   /* a rigged
+                                                                     * creature's is given to it whole (cpk_listen) */
     }
     /* the always-on dim fluid; its slow noise (and the eddies' ψ) refresh on
      * alternating frames — both drift ≤ 0.012 lattice units per frame */
@@ -861,7 +862,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     fluid_sim_color(s, n * FLUID_STEP);                    /* colour rides the same flow, once per frame */
     if (s_crisp) {                                         /* a rigged creature: each cell its dots' colour, and the rings */
         /* the listen ring red (ring-options.html), unless the agent or the settings gave it one */
-        cpk_listen_rgb(s_cpk, s_rg.on > 0.f ? (s_ring_rgb >= 0 ? s_ring_rgb : s_ring_def >= 0 ? s_ring_def : FLUID_CRISP_LISTEN_RGB) : -1);
+        cpk_listen(s_cpk, s_ring_rgb >= 0 ? s_ring_rgb : s_ring_def >= 0 ? s_ring_def : FLUID_CRISP_LISTEN_RGB, s_rg.ink);
         cpk_paint(s_cpk, s);
     }
     if (!still) fluid_sim_view(s);
@@ -1334,7 +1335,7 @@ static void fluid_task(void *arg) {
             .ramp = GC_RAMP_ASCII, .font = gc_font5x7,
             /* the boot word, and its dots while it melts (each goes as the ink leaves it) */
             .dots = s_cur == ST_SCENE || s_hd.out || s_crisp ? s_sdots_d : s_word_dots && (s_cur == ST_TEXT || s_melt_t < 0.8f) ? s_tx->dots : NULL,
-            .scene = s_hd.gen != 0 || s_crisp, .dust = scene_hd_dust(&s_hd),
+            .scene = s_hd.gen != 0 || s_crisp, .dust = scene_hd_dust(&s_hd), .frame = s_crisp && s_cpk ? cpk_frame_no(s_cpk) | 0x80000000u : 0,
         };
         /* the drawer is idle (s_idle); a scene breaking into dust keeps what it showed */
         if (s_crisp) {   /* a rigged creature's cells, as a scene's dots */

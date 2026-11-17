@@ -61,7 +61,9 @@ struct cr {
     float *cr2;                                   /* each cell's radius (the driven wave)                          */
     float land[CR_NB], lr[CR_NB];                 /* each bin: when its crest arrived (-1: not yet), its line's ink */
     uint32_t col[CR_NB];                          /* ... and its colour                                             */
-    int32_t listen;                               /* the listen ring's colour over its line's (cr_listen_rgb), -1   */
+    int32_t listen;                               /* the listen ring's colour over its line's (cr_listen), -1       */
+    int16_t lq;                                   /* ... and its ink (as the target's, Q14), given not written      */
+    bool lisring;                                 /* the ring showing (or letting go) is the listen's               */
     int mode; float T, red, sum, c2;                /* c2: the water's own wave speed, while the ring's is quicker   */
     uint8_t *rb, *rbin;                           /* per cell, this frame: the brightest ring dot (x 32), its bin   */
     uint8_t *cbits, *cb;                          /* per cell: the crest's dots and brightness, kept a frame (each
@@ -129,14 +131,16 @@ cr_t *cr_create(const fluid_sim_t *s) {
         }
         if (pass == 0 && !(r->dot = CR_CALLOC(sizeof(cr_dot_t) * (size_t)(r->n + r->nin + 1)))) { cr_destroy(r); return NULL; }
     }
-    {   /* the ring at the disc's visible edge: each angle's outermost drawn dot (the panel shows whole cells inside the
-         * disc) is the rim, CR_RIM, and every dot's radius is taken from there */
-        float edge[CR_NB];
+    {   /* the ring at the disc's visible edge, kept round: the panel shows whole cells inside the disc, so its edge is a
+         * stepped octagon; the largest circle every angle still shows (the least of each angle's outermost drawn dot)
+         * is the rim, CR_RIM, and every dot's radius is taken from there */
+        float edge[CR_NB], vis = 1.f;
         for (int q = 0; q < CR_NB; q++) edge[q] = 0.f;
         for (int n = 0; n < r->n; n++) { const float rad = r->dot[n].r * (1.f / 65535.f); if (rad > edge[r->dot[n].bin]) edge[r->dot[n].bin] = rad; }
+        for (int q = 0; q < CR_NB; q++) if (edge[q] > 0.5f && edge[q] < vis) vis = edge[q];
         for (int n = 0; n < r->n; n++) {
             cr_dot_t *d = &r->dot[n];
-            const float e = edge[d->bin] > 0.5f ? edge[d->bin] : CR_RIM, rad = d->r * (1.f / 65535.f) + (CR_RIM - e);
+            const float rad = d->r * (1.f / 65535.f) + (CR_RIM - vis);
             d->r = (uint16_t)(rad < 0.f ? 0.f : rad > 1.f ? 65535.f : rad * 65535.f);
         }
     }
@@ -178,19 +182,20 @@ bool cr_paint(cr_t *r, fluid_sim_t *s, float dt, uint32_t frame, const uint8_t *
     const float norm = 3.f / (FQ_UNIT * RING_INK);
     float sum = 0.f;
     for (int b = 0; b < CR_NB; b++) {
-        const int tr = s->T[r->kr[b]], ta = s->T[r->ka[b]], t = tr > ta ? tr : ta;
+        const int tr0 = s->T[r->kr[b]], tr = tr0 > r->lq ? tr0 : r->lq, ta = s->T[r->ka[b]], t = tr > ta ? tr : ta;
         sum += (float)t;
-        if (t > 0) r->col[b] = s->tcol[tr >= ta ? r->kr[b] : r->ka[b]];
+        if (t > 0 && (tr0 > 0 || ta > 0)) r->col[b] = s->tcol[tr0 >= ta ? r->kr[b] : r->ka[b]];
     }
     const bool want = sum > 0.f && sum >= 0.97f * r->sum;
     r->sum = sum;
     if (want) for (int b = 0; b < CR_NB; b++) {
-        const int t = s->T[r->kr[b]] > s->T[r->ka[b]] ? s->T[r->kr[b]] : s->T[r->ka[b]];
+        const int tr = s->T[r->kr[b]] > r->lq ? s->T[r->kr[b]] : r->lq, t = tr > s->T[r->ka[b]] ? tr : s->T[r->ka[b]];
         const float l = clampf(t * norm, 0.f, 1.f);
         if (fabsf(l - r->lr[b]) > 1.f / 64.f || (l == 0.f) != (r->lr[b] == 0.f)) { r->lr[b] = l; r->ver++; }   /* the ring's rows again */
     }
     if (want && (r->mode == OFF || r->mode == OUT)) {          /* a touch at the centre */
         if (r->mode == OFF) r->c2 = s->p.c2;
+        r->lisring = r->lq > 0;
         r->mode = IN; r->T = 0.f; r->ver++; r->lmin = 1e9f; r->lmax = -1.f; for (int b = 0; b < CR_NB; b++) r->land[b] = -1.f;
         s->p.c2 = CR_C2;
         fluid_sim_impulse(s, 0.f, 0.f, CR_TAP_S, CR_TAP_R);
@@ -237,7 +242,7 @@ bool cr_paint(cr_t *r, fluid_sim_t *s, float dt, uint32_t frame, const uint8_t *
             const cr_dot_t *d = &r->dot[n];
             const float rad = d->r * (1.f / 65535.f);
             const bool shown = r->mode == OUT ? r->T < rowd : r->mode != OFF && r->land[d->bin] >= 0.f && r->T >= r->land[d->bin] + rowd;
-            if (!shown || rad < CR_DUST_IN - 0.16f || r->lr[d->bin] <= 0.f) continue;
+            if (!shown || rad < CR_DUST_IN - 0.16f || rad > CR_RIM || r->lr[d->bin] <= 0.f) continue;   /* past the round rim: none */
             const uint32_t hh = hash2((uint32_t)n, ph);
             const float tw = (float)(hh & 255) * (2.f / 255.f) - 1.f, tw2 = (float)(hh >> 8 & 255) * (2.f / 255.f) - 1.f;
             const float b = final_b(r, rad, d, thin, tw, tw2) * r->lr[d->bin];
@@ -257,11 +262,11 @@ bool cr_paint(cr_t *r, fluid_sim_t *s, float dt, uint32_t frame, const uint8_t *
         }
         for (int i = 0; i < W; i++) r->rll[j * W + i] &= 0x7f;   /* the line mark off: a brightness again (x 32) */
     }
-    r->ilace ^= 1;
+    r->ilace = (uint8_t)(frame & 1);              /* the drawer's parity too (fluid_draw_opts_t.frame) */
     if (r->mode == IN || r->mode == OUT) {        /* the crest: this frame's half of the cell rows (the panel's cost is
                                                    * by row), the other half's kept from the last */
         r->crest = true;
-        for (int j = r->ilace; j < H; j += 2) {
+        for (int j = r->ilace; j < H; j += 2) {   /* the rows the drawer sends the water's changes in this frame */
             memset(r->cbits + j * W, 0, (size_t)W); memset(r->cb + j * W, 0, (size_t)W);
             for (int pass = 0; pass < (r->mode == OUT ? 2 : 1); pass++) {
                 const int n0 = pass ? r->irow[j] : r->brow[j], n1 = pass ? r->irow[j + 1] : r->brow[j + 1];
@@ -291,7 +296,10 @@ bool cr_paint(cr_t *r, fluid_sim_t *s, float dt, uint32_t frame, const uint8_t *
     for (int k = 0; k < s->N; k++) {              /* a cell with ring dots: their colour, the brightest's, in eighths */
         if (!r->rb[k]) continue;
         const int bn = r->rbin[k];
-        const uint32_t c = r->listen >= 0 && r->lr[bn] > 0.f && s->T[r->kr[bn]] >= s->T[r->ka[bn]] ? (uint32_t)r->listen : r->col[bn] ? r->col[bn] : c0;
+        /* the listen ring's colour while it shows or lets go (its ink is not in the target); the progress ring's and a
+         * question's arcs' their own (their ink is) */
+        const bool lis = r->listen >= 0 && r->lisring;
+        const uint32_t c = lis ? (uint32_t)r->listen : r->col[bn] ? r->col[bn] : c0;
         const float bq = (float)((r->rb[k] + 2) / 4) * (1.f / 8.f), kk = fminf(bq, 1.f), hot = fmaxf(0.f, bq - 1.f) * 0.55f;
         const float R = (c & 255) * kk, G = (c >> 8 & 255) * kk, B = (c >> 16 & 255) * kk;
         col[k].r = (uint16_t)((R + (255.f - R) * hot) * 257.f); col[k].g = (uint16_t)((G + (255.f - G) * hot) * 257.f);
@@ -300,4 +308,8 @@ bool cr_paint(cr_t *r, fluid_sim_t *s, float dt, uint32_t frame, const uint8_t *
     return true;
 }
 
-void cr_listen_rgb(cr_t *r, int32_t rgb) { if (r) r->listen = rgb < 0 ? -1 : (int32_t)((rgb >> 16 & 255) | (rgb & 0xff00) | (rgb & 255) << 16); }
+void cr_listen(cr_t *r, int32_t rgb, float ink) {
+    if (!r) return;
+    r->listen = rgb < 0 ? -1 : (int32_t)((rgb >> 16 & 255) | (rgb & 0xff00) | (rgb & 255) << 16);
+    r->lq = (int16_t)(ink <= 0.f ? 0 : ink >= 1.f ? 16384 : (int)(ink * 16384.f));
+}
