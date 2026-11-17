@@ -902,23 +902,32 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
         d->nlt++;
         drawn++;
     }
-    {   /* the letters as they were (glyphs, colours, places, masks): the cells they cover need not go again */
-        uint32_t h = 2166136261u ^ (uint32_t)d->nlt;
-        #define LT_MIX(v) (h = (h ^ (uint32_t)(v)) * 16777619u)
-        for (int n = 0; n < d->nlt; n++) {
-            LT_MIX((uintptr_t)d->lt[n].gl); LT_MIX((uintptr_t)d->lt[n].mask); LT_MIX(d->lt[n].c); LT_MIX(d->lt[n].mw << 16 | d->lt[n].mh);
-            LT_MIX((uint16_t)d->lt[n].x << 16 | (uint16_t)d->lt[n].y); LT_MIX((uint16_t)d->lt[n].w << 16 | (uint16_t)d->lt[n].h);
-            LT_MIX((uint16_t)d->lt[n].cx0 << 16 | (uint16_t)d->lt[n].cy0); LT_MIX((uint16_t)d->lt[n].cx1 << 16 | (uint16_t)d->lt[n].cy1);
-            for (int b = 0; d->lt[n].mask && b < (d->lt[n].mw * d->lt[n].mh + 7) / 8; b++) LT_MIX(d->lt[n].mask[b]);
+    {   /* each letter as it was (glyph, colour, place, mask): the cells it covers need not go again; a changed one's do */
+        bool gone = false;                               /* a letter went: what it covered is not known here, all go */
+        for (int n = 0; n < FLUID_MAX_LETTERS; n++) {
+            uint32_t h = 2166136261u;
+            #define LT_MIX(v) (h = (h ^ (uint32_t)(v)) * 16777619u)
+            if (n < d->nlt) {
+                LT_MIX((uintptr_t)d->lt[n].gl); LT_MIX((uintptr_t)d->lt[n].mask); LT_MIX(d->lt[n].c); LT_MIX(d->lt[n].mw << 16 | d->lt[n].mh);
+                LT_MIX((uint16_t)d->lt[n].x << 16 | (uint16_t)d->lt[n].y); LT_MIX((uint16_t)d->lt[n].w << 16 | (uint16_t)d->lt[n].h);
+                LT_MIX((uint16_t)d->lt[n].cx0 << 16 | (uint16_t)d->lt[n].cy0); LT_MIX((uint16_t)d->lt[n].cx1 << 16 | (uint16_t)d->lt[n].cy1);
+                for (int b = 0; d->lt[n].mask && b < (d->lt[n].mw * d->lt[n].mh + 7) / 8; b++) LT_MIX(d->lt[n].mask[b]);
+            }
+            #undef LT_MIX
+            if (h == d->lt_sig[n]) continue;
+            d->lt_sig[n] = h;
+            if (n >= d->nlt) { gone = true; continue; }
+            /* its cells (the skip box, fb px back to cells, a cell wider for rounding) go again */
+            const int i0 = (int)floorf((d->lt[n].cx0 - ox) / cw) - 1, i1 = (int)floorf((d->lt[n].cx1 - ox) / cw) + 1;
+            const int j0 = (int)floorf((d->lt[n].cy0 - oy) / ch) - 1, j1 = (int)floorf((d->lt[n].cy1 - oy) / ch) + 1;
+            for (int j = j0 < 0 ? 0 : j0; j <= j1 && j < H; j++) for (int i = i0 < 0 ? 0 : i0; i <= i1 && i < W; i++)
+                if (d->dirty[j * W + i] == 2) d->dirty[j * W + i] = 1;
         }
-        #undef LT_MIX
-        const bool same = h == d->lt_sig;
-        d->lt_sig = h;
         for (int j = 0; j < H; j++) {
             int i0 = W, i1 = 0;
             for (int i = d->span[2 * j]; i < d->span[2 * j + 1]; i++) {
                 uint8_t *dt = &d->dirty[j * W + i];
-                if (*dt == 2) *dt = !same;
+                if (*dt == 2) *dt = gone;
                 if (*dt) { if (i < i0) i0 = i; i1 = i + 1; }
             }
             d->span[2 * j] = (int16_t)(i0 < i1 ? i0 : 0); d->span[2 * j + 1] = (int16_t)(i0 < i1 ? i1 : 0);

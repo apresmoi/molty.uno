@@ -53,6 +53,10 @@ void  fluid_askview_compose(const fluid_askview_t *v, uint8_t *dots, const uint8
 /** The letters for the drawer (at most max): one 1-bit mask a line of text, copied to the drawer's own copy (call with
  *  the drawer idle: the masks stay as they are until the next call). Returns how many. */
 int   fluid_askview_letters(fluid_askview_t *v, fluid_letter_t *out, int max);
+/** The drawer's options with the question over the scene: o's dots, colours (compose) and letters (letters) as given,
+ *  drawn as crisp dots alone (no shapes, dust or fine dust), the question's interlace, its letters never melting (the
+ *  frame's melt is a text state's). */
+void  fluid_askview_opts(const fluid_askview_t *v, fluid_draw_opts_t *o, const uint8_t *dots, const fluid_letter_t *letters, int nletters);
 /** The question's own dots this frame (cell k's braille bits), for tests. */
 const uint8_t *fluid_askview_dots(const fluid_askview_t *v);
 
