@@ -820,9 +820,10 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         }
         /* a new word: a gentle wave under its letters; the reading's end: under the last one's, as it breaks up */
         static const char *cap_was;
-        static float cap_pts[FLUID_MAX_LETTERS][2];
+        static float (*cap_pts)[2];                    /* the word's letters' centres (PSRAM) */
         static int ncap_pts;
-        if ((cap.n > 0 && cap.str != cap_was) || (cap.n <= 0 && cap_was)) {
+        if (!cap_pts) cap_pts = heap_caps_calloc(FLUID_MAX_LETTERS, sizeof(float) * 2, MALLOC_CAP_SPIRAM);
+        if (cap_pts && ((cap.n > 0 && cap.str != cap_was) || (cap.n <= 0 && cap_was))) {
             if (cap.n > 0) {
                 ncap_pts = 0;
                 for (int q = 0; q < s_noverlay && ncap_pts < FLUID_MAX_LETTERS; q++) {
