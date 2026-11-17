@@ -108,6 +108,7 @@ typedef struct {
 
 typedef struct {
     float fps, frame_ms, pre_ms, sim_ms, wait_ms, draw_ms, flush_ms, energy, err;
+    float panel_last;                          /* the drawer's last frame, ms (not averaged)                  */
     float prof_ms[FP_N];                       /* per-phase EMA, ms per frame */
     int   mood, ctris, status, act;
     char  scene_pkg[PKG_ID_MAX + 1], scene_layout[PKG_KEY_MAX + 1];   /* "" = none */
@@ -1153,7 +1154,7 @@ static void draw_task(void *arg) {
         pema[1] = pema[1] * 0.9f + (float)fluid_prof[FP_DRASTER] / (float)s_cpu_mhz / 1000.f * 0.1f;
         fluid_prof[FP_DSAMPLE] = fluid_prof[FP_DRASTER] = 0;
         xSemaphoreTake(s_mutex, portMAX_DELAY);
-        s_stats.draw_ms = dms; s_stats.flush_ms = lms; s_stats.cells_drawn = nc;
+        s_stats.draw_ms = dms; s_stats.flush_ms = lms; s_stats.cells_drawn = nc; s_stats.panel_last = (t2 - t0) / 1000.f;
         s_stats.send_n = s_stats.send_n * 0.9f + s_send_n * 0.1f; s_stats.send_kpx = s_stats.send_kpx * 0.9f + s_send_px / 1000.f * 0.1f;
         s_stats.blit_ms = s_stats.blit_ms * 0.9f + s_blit_us / 1000.f * 0.1f;
         s_send_n = s_send_px = 0; s_blit_us = 0;
@@ -1437,8 +1438,12 @@ static void fluid_task(void *arg) {
              * this core slower and not waiting: less. k_wait has a floor of ~0.5 ms with no real wait (the band's
              * wake-ups across the cores), so its thresholds sit above that: at 0.5 / 1 ms its noise pushed the share
              * up 3 a frame and kept it from coming down, pinned at 80 while the band's core sat idle (walking 29 ms). */
-            const float d = s_stats.draw_ms + s_stats.flush_ms - sms, kw = prof_ema[FP_K_WAIT];
-            const float step = fminf(3.f, fabsf(d) * 0.5f);   /* faster the further apart (the ring's wave comes and goes in a second) */
+            /* d from the last frames, not the stats' slow averages: a ring's wave loads the drawer within a frame or two and
+             * is gone in a second (averaged, the share arrived after it) */
+            static float df;
+            df = df * 0.5f + (s_stats.panel_last - (t1 - t0) / 1000.f) * 0.5f;
+            const float d = df, kw = prof_ema[FP_K_WAIT];
+            const float step = fminf(5.f, fabsf(d) * 0.5f);   /* faster the further apart (the ring's wave comes and goes in a second) */
             share += d > 1.f ? step : kw > 1.5f ? 1.f : d < -1.f && kw < 1.f ? -step : 0.f;
             share = share < 30.f ? 30.f : share > 80.f ? 80.f : share;
             cpk_set_share(s_cpk, (int)share); s_stats.share = (int)share;
