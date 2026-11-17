@@ -357,6 +357,7 @@ typedef struct {
     uint8_t flags;                   /* bit0 link connected, bit1 audio busy */
     char top[2][12]; uint8_t top_pct[2];
 } tl_t;
+static bool (*s_quiet)(void);       /* the screen quiet (mole_diag_set_quiet): when the costly looks may run */
 static tl_t *s_tl;                   /* PSRAM [TL_N] */
 static uint32_t s_tl_n;
 
@@ -577,10 +578,6 @@ static void sampler_task(void *arg)
 
         int64_t elapsed = now - win_start; win_start = now;
         wedge_check();
-        static uint32_t smp_max[2];                   /* TEMP diag: this work's cost (us): the tasks, the heap walk */
-        const int64_t ts0 = esp_timer_get_time();
-        sample_tasks(elapsed);
-        const int64_t ts1 = esp_timer_get_time();
         tl_t e = {0};
         e.t_s = (uint32_t)(now / 1000000);
         e.int_min = int_min; int_min = UINT32_MAX;
@@ -590,9 +587,6 @@ static void sampler_task(void *arg)
         heap_caps_get_info(&in, MALLOC_CAP_INTERNAL);
         e.int_largest = (uint32_t)in.largest_free_block;
         s_int_blocks = (uint32_t)in.allocated_blocks;
-        {   const uint32_t a = (uint32_t)(ts1 - ts0), b = (uint32_t)(esp_timer_get_time() - ts1);
-            if (a > smp_max[0]) smp_max[0] = a;
-            if (b > smp_max[1]) smp_max[1] = b; }
         e.psram_free = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
         e.sim_n = s_sim.win_n; e.sim_max = s_sim.win_max; s_sim.win_n = 0; s_sim.win_max = 0;
         e.panel_n = s_panel.win_n; e.panel_max = s_panel.win_max; s_panel.win_n = 0; s_panel.win_max = 0;
@@ -606,14 +600,6 @@ static void sampler_task(void *arg)
         e.gw_rtt = sent > lost ? (int16_t)(rtt > 32767 ? 32767 : rtt) : -1;
         e.rssi = rssi_now();
         e.flags = (link_client_connected() ? 1 : 0) | (link_audio_busy() ? 2 : 0);
-        portENTER_CRITICAL(&s_task_mux);
-        for (int i = 0, k = 0; i < s_ntasks && k < 2; i++) {
-            if (!strncmp(s_tasks[i].name, "IDLE", 4)) continue;
-            strlcpy(e.top[k], s_tasks[i].name, sizeof(e.top[k])); e.top_pct[k] = s_tasks[i].pct; k++;
-        }
-        portEXIT_CRITICAL(&s_task_mux);
-        if (s_tl) s_tl[s_tl_n % TL_N] = e;
-        s_tl_n++;
 
         /* internal RAM self-protection: warn once per episode, give the fluid's share back */
         const int hg = heap_guard_step(&s_hg, f);
@@ -631,13 +617,27 @@ static void sampler_task(void *arg)
         }
         bool bad = e.sim_max > 250 || e.panel_max > 250 || e.probe0 > 250 || e.probe1 > 250 || e.late > 250 ||
                    (sent && lost == sent);
+        /* the tasks' shares (since the last look): on trouble, else with a TL line while the screen is quiet (or a minute
+         * on), never each second: the snapshot holds the kernel lock while it measures every task's free stack (~2.6 ms
+         * measured, both cores' scheduling held: a frame's hitch each second); the timeline's other seconds carry none */
+        static int64_t sampled;
+        if (bad || (ticks % 100 == 0 && (!s_quiet || s_quiet() || now - sampled > 60000000))) {
+            sample_tasks(sampled ? now - sampled : elapsed); sampled = now;
+            portENTER_CRITICAL(&s_task_mux);
+            for (int i = 0, k = 0; i < s_ntasks && k < 2; i++) {
+                if (!strncmp(s_tasks[i].name, "IDLE", 4)) continue;
+                strlcpy(e.top[k], s_tasks[i].name, sizeof(e.top[k])); e.top_pct[k] = s_tasks[i].pct; k++;
+            }
+            portEXIT_CRITICAL(&s_task_mux);
+        }
+        if (s_tl) s_tl[s_tl_n % TL_N] = e;
+        s_tl_n++;
         if (bad || ticks % 100 == 0) {           /* every 10 s, or immediately on trouble */
             char top[96]; top_tasks_str(top, sizeof(top), 3);
-            mole_diag_event(false, "%s int=%lu/%lu blk=%lu sim=%u/%ums pan=%u/%ums pr=%u/%ums late=%u gw=%d(%u/%u) rssi=%d l=%u smp=%lu/%luus %s",
+            mole_diag_event(false, "%s int=%lu/%lu blk=%lu sim=%u/%ums pan=%u/%ums pr=%u/%ums late=%u gw=%d(%u/%u) rssi=%d l=%u %s",
                             bad ? "TL!" : "TL", (unsigned long)e.int_min, (unsigned long)e.int_largest, (unsigned long)s_int_blocks,
                             e.sim_n, e.sim_max, e.panel_n, e.panel_max, e.probe0, e.probe1, e.late,
-                            e.gw_rtt, (unsigned)lost, (unsigned)sent, e.rssi, e.flags, (unsigned long)smp_max[0], (unsigned long)smp_max[1], top);
-            smp_max[0] = smp_max[1] = 0;
+                            e.gw_rtt, (unsigned)lost, (unsigned)sent, e.rssi, e.flags, top);
         }
     }
 }
@@ -724,7 +724,6 @@ static uint32_t wanted_since(uint32_t from)
     return n;
 }
 
-static bool (*s_quiet)(void);
 void mole_diag_set_quiet(bool (*quiet)(void)) { s_quiet = quiet; }
 
 static void persist_task(void *arg)
