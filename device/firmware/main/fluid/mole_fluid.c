@@ -1087,7 +1087,21 @@ static void draw_task(void *arg) {
     fluid_overlay_t ov_drawn = { 0 };                   /* the overlay on screen */
     while (s_run) {
         esp_task_wdt_reset();
-        if (xSemaphoreTake(s_go, pdMS_TO_TICKS(200)) != pdTRUE) continue;
+        if (xSemaphoreTake(s_go, pdMS_TO_TICKS(200)) != pdTRUE) {
+            if (s_task && atomic_load(&s_screen)) {   /* no frame for 200 ms with the screen on: who has the sim's core */
+                TaskHandle_t ws = xTaskGetHandle("websocket_task");
+                const eTaskState st = eTaskGetState(s_task);
+                char run1[16] = "?";
+#if configNUMBER_OF_CORES > 1
+                TaskHandle_t c1 = xTaskGetCurrentTaskHandleForCore(1);
+                if (c1) snprintf(run1, sizeof(run1), "%s", pcTaskGetName(c1));
+#endif
+                mole_diag_event(false, "stall.probe sim=%s core1=%s ws_prio=%d",
+                                st == eRunning ? "running" : st == eReady ? "ready" : st == eBlocked ? "blocked" : "other",
+                                run1, ws ? (int)uxTaskPriorityGet(ws) : -1);
+            }
+            continue;
+        }
         if (!s_run) { xSemaphoreGive(s_idle); break; }
         int64_t t0 = esp_timer_get_time();
         int64_t touch_t = s_dtouch; s_dtouch = 0;
