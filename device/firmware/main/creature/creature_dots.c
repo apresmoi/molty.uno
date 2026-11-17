@@ -25,7 +25,7 @@ static inline uint32_t cycles(void) { return (uint32_t)esp_cpu_get_cycle_count()
 #define CD_CALLOC(n) heap_caps_calloc(1, (n), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
 #define CD_FREE(p)   heap_caps_free(p)
 #define CD_BAND_CORE 0           /* the second band's core: the fluid task (the first band) runs on core 1          */
-#define CD_SHARE     65          /* percent of the rows' work in the first band: core 0 also draws the panel  */
+#define CD_SHARE     55          /* percent of the rows' work in the first band: core 0 also draws the panel  */
 #define CD_BAND_PRIO 3           /* above the drawer (2) on that core: the band is waited on, the drawer has slack  */
 #else
 static inline uint32_t cycles(void) { return 0; }

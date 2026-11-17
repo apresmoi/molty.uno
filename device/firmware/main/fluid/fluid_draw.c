@@ -174,6 +174,8 @@ fluid_draw_t *fluid_draw_create(int W, int H, int fb_w, int fb_h) {
     size_t bytes = (size_t)(W + 1 + H + 1 + 2 * W + 6 * H) * sizeof(int16_t) + 2 * N * sizeof(uint16_t) + 49 * N + 1 + (size_t)fb_h + (size_t)fb_w;
     d->block = FLUID_CALLOC(bytes);
     if (!d->block) { FLUID_FREE(d); return NULL; }
+    d->cd0 = FLUID_CALLOC(N * sizeof(uint16_t)); d->csig = FLUID_CALLOC(N * sizeof(uint32_t));
+    if (!d->cd0 || !d->csig) { fluid_draw_destroy(d); return NULL; }
     int16_t *p16 = (int16_t *)d->block;
     d->cx = p16; d->cy = d->cx + W + 1; d->dx = d->cy + H + 1; d->dy = d->dx + 2 * W; d->span = d->dy + 4 * H;
     d->key = (uint16_t *)(d->span + 2 * H); d->col = d->key + N;
@@ -213,7 +215,7 @@ fluid_draw_t *fluid_draw_create(int W, int H, int fb_w, int fb_h) {
 
 void fluid_draw_destroy(fluid_draw_t *d) {
     if (!d) return;
-    FLUID_FREE(d->block);
+    FLUID_FREE(d->block); FLUID_FREE(d->cd0); FLUID_FREE(d->csig);
     FLUID_FREE(d);
 }
 
@@ -642,6 +644,15 @@ static void caption_box(fluid_draw_t *d, const fluid_draw_opts_t *o) {
     memcpy(d->cap0, d->cap, sizeof(b));
 }
 
+/* crisp dots alone (a scene's dots, no shapes, no dust: a rigged creature): the wave leaves cell (i, j) showing its own
+ * dots (refracted_dots: no whole sub-dot of shift, so no scatter either) */
+static inline bool crisp_flat(const fluid_frame_t *s, int i, int j, int k) {
+    if (i < 1 || j < 1 || i >= s->W - 1 || j >= s->H - 1) return true;
+    float fx, fy;
+    wave_shift(s, k, &fx, &fy);
+    return !lrintf(fx) && !lrintf(fy);
+}
+
 /* a calm cell of a scene in high definition that can show what it showed: the wave keeps it
  * smooth and moves no dot it keeps (none near, or the shift under half a dot) */
 static inline bool hd_still(const fluid_frame_t *s, const fluid_draw_opts_t *o, int i, int j, int k) {
@@ -707,6 +718,7 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
 
     /* a scene in high definition: its letters are among its shapes */
     const bool hd = o->scene && o->dots && o->shapes;
+    const bool crisp = o->scene && o->dots && !o->shapes && o->dust <= 0.f;   /* crisp dots alone (crisp_flat) */
     if (hd) {
         memset(d->hch, 0, (size_t)W * H);
         if (o->dust > 0.f) dust_push(d, s, o);
@@ -769,6 +781,17 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
              * they were is not looked at again */
             if (hd && !d->force && o->dust <= 0.f && !d->hch[k] && d->hde[k] == seed && s->mask[k] && !d->skip[k] && key_hd(d->key[k]) &&
                 hd_still(s, o, i, j, k) && hd_sig(o->dots, W, H, i, j) == d->hds[k]) { d->dirty[k] = 0; continue; }
+            if (crisp && s->mask[k] && !d->skip[k]) {
+                /* crisp dots (a rigged creature): a cell the wave leaves in place shows its own dots in its own
+                 * colour, so one whose dots and colour are as they were (and were shown so) is not looked at again */
+                const fluid_rgba16_t *c = &s->col[k];
+                const uint32_t sig = (uint32_t)(c->r >> 8) << 24 | (uint32_t)(c->g >> 8) << 16 | (uint32_t)(c->b >> 8) << 8 | (uint32_t)(c->a >> 8);
+                const uint16_t c0 = (uint16_t)(o->dots[k] | (crisp_flat(s, i, j, k) ? 0x100 : 0));
+                if (d->crisp0 && !d->force && (c0 & 0x100) && c0 == d->cd0[k] && sig == d->csig[k] && d->key[k] != KEY_SKIP && d->key[k] != KEY_STALE) {
+                    d->dirty[k] = 0; continue;
+                }
+                d->cd0[k] = c0; d->csig[k] = sig;
+            }
             uint16_t key = KEY_EMPTY, col = 0;
             if (d->skip[k]) key = KEY_SKIP;
             else if (s->mask[k]) cell_look(d, s, &oo, i, j, k, rmax, frame, &key, &col);
@@ -788,6 +811,7 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
         FLUID_PROF_END(FP_DSAMPLE, c0);
     }
     d->force = false;
+    d->crisp0 = crisp;
 
     /* condensed letters ride the surface (y follows the wave height) and decode from
      * ramp glyphs into the real letter as ink arrives */
@@ -1051,6 +1075,10 @@ int fluid_draw_send(const fluid_draw_t *d, const fluid_draw_opts_t *o, const flu
     /* a scene in high definition: each run of changed cells its own window, so its haze changing
      * all over does not redraw the shapes between */
     const bool runs = o->scene && o->dots && o->shapes;
+    /* crisp dots alone (a rigged creature): each run of changed cells its own window too (its floor moving changes
+     * cells all along a row, not every one), on whole row pairs: a panel that takes even rows only (the CO5300)
+     * otherwise resends a full-width pair at each odd edge */
+    const bool crisp = o->scene && o->dots && !o->shapes;
     for (int j = 0; j < (full ? 1 : d->H); j++) {
         int a = full ? 0 : d->span[2 * j];
         const int end = full ? 0 : d->span[2 * j + 1];
@@ -1064,14 +1092,21 @@ int fluid_draw_send(const fluid_draw_t *d, const fluid_draw_opts_t *o, const flu
                     if (d->dirty[j * d->W + c]) { last = c; gs = 0; }
                     else if (key_hd(kk) && (kk >> 8 & 15) && ++gs >= RUN_GAP) break;
                 }
+            } else if (crisp) {                         /* split where RUN_GAP unchanged cells sit between */
+                last = a;
+                for (int c = a + 1, gs = 0; c < end; c++) {
+                    if (d->dirty[j * d->W + c]) { last = c; gs = 0; }
+                    else if (++gs >= RUN_GAP) break;
+                }
             }
             int x0 = 0, x1 = d->fb_w, y0 = 0, y1 = d->fb_h;
             if (!full) {
                 x0 = d->cx[a] & ~3; x1 = (d->cx[last + 1] + 3) & ~3;
                 if (x1 > d->fb_w) x1 = d->fb_w;
                 y0 = d->cy[j]; y1 = d->cy[j + 1];
+                if (crisp) { y0 &= ~1; y1 = (y1 + 1) & ~1; if (y1 > d->fb_h) y1 = d->fb_h; }
             }
-            const int w = x1 - x0, rows = max_px / w;
+            const int w = x1 - x0, rows = crisp ? max_px / w & ~1 : max_px / w;
             if (rows < 1) return -1;
             for (int y = y0; y < y1; y += rows) {
                 const int h = y1 - y < rows ? y1 - y : rows;

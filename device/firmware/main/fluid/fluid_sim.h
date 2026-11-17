@@ -387,6 +387,10 @@ typedef struct {
                                         * -127..127 of the radius) and when it thins (0..255) */
     uint8_t  *pdots;                   /* a transition's dust: the dots each cell shows ...   */
     int16_t  *psrc;                    /* ... and the cell the first came from (its colour)   */
+    uint16_t *cd0;                     /* crisp dots (o->scene, no shapes): per cell its dots | 0x100 when the
+                                        * wave left them in place, and its colour's bytes, as last looked at */
+    uint32_t *csig;
+    bool     crisp0;                   /* the last frame was crisp dots: those are what the cells show */
     int16_t  cap[4], cap0[4];          /* the subtitle's box in dots [x0, x1] x [y0, y1], last frame's */
     int16_t  sb[FLUID_MAX_SHAPES][4];  /* this frame's shapes' boxes, fb px [x0, x1) x [y0, y1) */
     int16_t  sb0[FLUID_MAX_SHAPES][4]; /* ...the last frame's, and each one's hash: a shape that  */
