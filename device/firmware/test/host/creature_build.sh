@@ -25,7 +25,7 @@ cc -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Werror -O2 -ffp-contract=of
   "$HERE/creature_test.c" "${CP_SRC:-$MAIN/creature/creature_player.c}" "$MAIN/pkg/pkg_parse.c" \
   "$MAIN/creature/creature_body.c" "$MAIN/creature/creature_pkg.c" "$MAIN/creature/creature_clip.c" "$MAIN/creature/creature_dots.c" "$MAIN/creature/creature_ring.c" "$MAIN/creature/mood_engine.c" "$MAIN/creature/rig_geo.c" \
   "$MAIN/creature/cute_spec.c" "$MAIN/creature/cute_rig.c" \
-  "$MAIN/fluid/fluid_sim.c" "$MAIN/fluid/fluid_target.c" "$MAIN/fluid/glyph_font.c" "$MAIN/fluid/fluid_draw.c" \
+  "$MAIN/fluid/fluid_sim.c" "$MAIN/fluid/fluid_target.c" "$MAIN/fluid/glyph_font.c" "$MAIN/fluid/fluid_draw.c" "$MAIN/fluid/fluid_fine.c" \
   "$OUT/cJSON.o" -lm -o "$OUT/creature_test"
 if [ $# -ge 1 ]; then mkdir -p "$1"; fi
 "$OUT/creature_test" "$REPO/packages" "$OUT/golden" "$REPO/device/creatures/molty/duck.molty" "$@"

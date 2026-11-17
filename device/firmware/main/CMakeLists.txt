@@ -88,6 +88,7 @@ idf_component_register(
         "fluid/fluid_sim.c"
         "fluid/fluid_target.c"
         "fluid/fluid_draw.c"
+        "fluid/fluid_fine.c"      # a scene's fine dust in high definition
         "fluid/glyph_rsvp.c"
         "fluid/glyph_font.c"
         # creature: registry + the .molty cute-kit runtime
@@ -240,6 +241,7 @@ set_source_files_properties(
     "fluid/fluid_sim.c"
     "fluid/fluid_target.c"
     "fluid/fluid_draw.c"
+    "fluid/fluid_fine.c"
     "fluid/mole_fluid.c"
     "creature/cute_rig.c"
     "creature/creature_body.c"

@@ -17,6 +17,7 @@
  * the letters are drawn on top.
  */
 #include "fluid_sim.h"
+#include "fluid_fine.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -215,7 +216,7 @@ fluid_draw_t *fluid_draw_create(int W, int H, int fb_w, int fb_h) {
 
 void fluid_draw_destroy(fluid_draw_t *d) {
     if (!d) return;
-    FLUID_FREE(d->block); FLUID_FREE(d->cd0); FLUID_FREE(d->csig);
+    FLUID_FREE(d->block); FLUID_FREE(d->cd0); FLUID_FREE(d->csig); FLUID_FREE(d->shp0);
     FLUID_FREE(d);
 }
 
@@ -438,14 +439,14 @@ static inline void cell_look(const fluid_draw_t *d, const fluid_frame_t *s, cons
          * shapes, those while calm (and only the dots no shape draws), fading into the dust */
         const uint8_t *src = o->dots;
         if (o->shapes) {
-            const int wt = hd_dust(s, i, j, o->dust) < 0.5f ? HD_LEVELS : 0;   /* smooth or dust, no fade:
-                                                                                  * a cell changes once */
+            /* smooth or dust, no fade: a cell changes once; a tapped spot's drawing (o->still) never breaks */
+            const int wt = (o->still && o->still[k] && o->dust <= 0.f) || hd_dust(s, i, j, o->dust) < 0.5f ? HD_LEVELS : 0;
             if (wt) hd = (uint16_t)(KEY_HD | wt << 8);
             if (wt == HD_LEVELS) src = o->kdots;
         }
         if (o->shapes && src == o->dots && o->dust > 0.f) { dots = d->pdots[k]; kc = dots ? d->psrc[k] : k; }   /* dust_push */
         else dots = src ? scene_dots(d, s, src, i, j, k, o->dust, &kc) : 0;
-        if (!dots && o->shapes && o->dust <= 0.f && i >= 1 && j >= 1 && i < W - 1 && j < s->H - 1) {
+        if (!dots && o->shapes && !o->fine && o->dust <= 0.f && i >= 1 && j >= 1 && i < W - 1 && j < s->H - 1) {
             /* around the drawing (not while it breaks into dust or forms: the effect stays light), a faint dust, denser and brighter close to it (d->halo), never on
              * it, thinning to dark round the subtitle (d->cap), reseeded slowly (haze_seed) */
             float sub[8];
@@ -674,6 +675,22 @@ static void stale_box(fluid_draw_t *d, const int16_t *b) {
     i0 = i0 < 0 ? 0 : i0; j0 = j0 < 0 ? 0 : j0; i1 = i1 > d->W ? d->W : i1; j1 = j1 > d->H ? d->H : j1;
     for (int j = j0; j < j1; j++) for (int i = i0; i < i1; i++) d->key[j * d->W + i] = KEY_STALE;
 }
+/* the cells a shape covers redrawn next: a stroke's own cells only (a long diagonal's box is most of the panel), the
+ * others' box */
+static void stale_shape(fluid_draw_t *d, const fluid_shape_t *sh, const int16_t *b) {
+    if (sh->k != FLUID_SHAPE_SEG) { stale_box(d, b); return; }
+    const float kx = (float)d->W / d->stage, ky = (float)d->H / d->stage, cw = 1.f / kx, ch = 1.f / ky;
+    const float reach = sh->hw + 2.f + 0.5f * sqrtf(cw * cw + ch * ch), vx = sh->x1 - sh->x, vy = sh->y1 - sh->y, l2 = vx * vx + vy * vy;
+    int i0 = (int)floorf((b[0] - d->ox) * kx), i1 = (int)ceilf((b[1] - d->ox) * kx), j0 = (int)floorf((b[2] - d->oy) * ky), j1 = (int)ceilf((b[3] - d->oy) * ky);
+    i0 = i0 < 0 ? 0 : i0; j0 = j0 < 0 ? 0 : j0; i1 = i1 > d->W ? d->W : i1; j1 = j1 > d->H ? d->H : j1;
+    for (int j = j0; j < j1; j++) for (int i = i0; i < i1; i++) {
+        const float px = (i + 0.5f) * cw, py = (j + 0.5f) * ch;
+        float u = l2 > 1e-6f ? ((px - sh->x) * vx + (py - sh->y) * vy) / l2 : 0.f;
+        u = u < 0.f ? 0.f : u > 1.f ? 1.f : u;
+        const float ex = px - sh->x - u * vx, ey = py - sh->y - u * vy;
+        if (ex * ex + ey * ey <= reach * reach) d->key[j * d->W + i] = KEY_STALE;
+    }
+}
 static uint32_t shape_hash(const fluid_shape_t *sh) {
     const float f[12] = { sh->x, sh->y, sh->x1, sh->y1, sh->r, sh->hw, sh->a0, sh->span, sh->w, sh->h, sh->co, sh->si };
     uint32_t h = (2166136261u ^ sh->k ^ (uint32_t)sh->acc << 8) * 16777619u;
@@ -683,23 +700,23 @@ static uint32_t shape_hash(const fluid_shape_t *sh) {
     return h;
 }
 
+void fluid_shape_box(const fluid_shape_t *sh, int ox, int oy, int16_t b[4]) {
+    float ex, ey, cx = sh->x, cy = sh->y;
+    switch (sh->k) {
+    case FLUID_SHAPE_SEG:  ex = fabsf(sh->x1 - sh->x) * 0.5f + sh->hw; ey = fabsf(sh->y1 - sh->y) * 0.5f + sh->hw;
+                           cx = (sh->x + sh->x1) * 0.5f; cy = (sh->y + sh->y1) * 0.5f; break;
+    case FLUID_SHAPE_RING: ex = ey = sh->r + sh->hw; break;
+    case FLUID_SHAPE_DISC: ex = ey = sh->r; break;
+    default:               ex = 0.5f * (fabsf(sh->co) * sh->w + fabsf(sh->si) * sh->h);
+                           ey = 0.5f * (fabsf(sh->si) * sh->w + fabsf(sh->co) * sh->h); break;
+    }
+    b[0] = (int16_t)fmaxf(-1.f, floorf(ox + cx - ex - 1.f)); b[1] = (int16_t)fminf(4096.f, ceilf(ox + cx + ex + 1.f));
+    b[2] = (int16_t)fmaxf(-1.f, floorf(oy + cy - ey - 1.f)); b[3] = (int16_t)fminf(4096.f, ceilf(oy + cy + ey + 1.f));
+}
+
 /* each shape's box in fb px, [x0, x1) x [y0, y1), its soft edge included */
 static void shape_boxes(fluid_draw_t *d, const fluid_draw_opts_t *o) {
-    for (int n = 0; n < o->nshapes && n < FLUID_MAX_SHAPES; n++) {
-        const fluid_shape_t *sh = &o->shapes[n];
-        float ex, ey, cx = sh->x, cy = sh->y;
-        switch (sh->k) {
-        case FLUID_SHAPE_SEG:  ex = fabsf(sh->x1 - sh->x) * 0.5f + sh->hw; ey = fabsf(sh->y1 - sh->y) * 0.5f + sh->hw;
-                               cx = (sh->x + sh->x1) * 0.5f; cy = (sh->y + sh->y1) * 0.5f; break;
-        case FLUID_SHAPE_RING: ex = ey = sh->r + sh->hw; break;
-        case FLUID_SHAPE_DISC: ex = ey = sh->r; break;
-        default:               ex = 0.5f * (fabsf(sh->co) * sh->w + fabsf(sh->si) * sh->h);
-                               ey = 0.5f * (fabsf(sh->si) * sh->w + fabsf(sh->co) * sh->h); break;
-        }
-        int16_t *b = d->sb[n];
-        b[0] = (int16_t)fmaxf(-1.f, floorf(d->ox + cx - ex - 1.f)); b[1] = (int16_t)fminf(4096.f, ceilf(d->ox + cx + ex + 1.f));
-        b[2] = (int16_t)fmaxf(-1.f, floorf(d->oy + cy - ey - 1.f)); b[3] = (int16_t)fminf(4096.f, ceilf(d->oy + cy + ey + 1.f));
-    }
+    for (int n = 0; n < o->nshapes && n < FLUID_MAX_SHAPES; n++) fluid_shape_box(&o->shapes[n], d->ox, d->oy, d->sb[n]);
 }
 
 int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_opts_t *o) {
@@ -725,13 +742,18 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
         shape_boxes(d, o);
         halo_field(d, o->dots);
         caption_box(d, o);
+        if (o->fine) fluid_fine_frame(o->fine, s, o);           /* its fine dust instead of the haze */
         /* a shape that changed (a tapped spot's drawing growing): the cells it covered and covers */
         const int n1 = o->nshapes < FLUID_MAX_SHAPES ? o->nshapes : FLUID_MAX_SHAPES;
         for (int n = 0; n < (n1 > d->nsh0 ? n1 : d->nsh0); n++) {
             const uint32_t h = n < n1 ? shape_hash(&o->shapes[n]) : 0;
             if (n < d->nsh0 && n < n1 && h == d->sh0[n]) continue;
-            if (n < d->nsh0) stale_box(d, d->sb0[n]);
-            if (n < n1) { stale_box(d, d->sb[n]); d->sh0[n] = h; memcpy(d->sb0[n], d->sb[n], sizeof(d->sb[n])); }
+            if (n < d->nsh0) { if (d->shp0) stale_shape(d, &d->shp0[n], d->sb0[n]); else stale_box(d, d->sb0[n]); }
+            if (n < n1) {
+                stale_shape(d, &o->shapes[n], d->sb[n]); d->sh0[n] = h; memcpy(d->sb0[n], d->sb[n], sizeof(d->sb[n]));
+                if (!d->shp0) d->shp0 = FLUID_CALLOC(sizeof(fluid_shape_t) * FLUID_MAX_SHAPES);
+                if (d->shp0) d->shp0[n] = o->shapes[n];
+            }
         }
         d->nsh0 = n1;
     } else d->nsh0 = 0;
@@ -779,7 +801,8 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
             const int k = j * W + i;
             /* a scene in high definition, calm: a cell whose drawing, halo, dust seed and wave are as
              * they were is not looked at again */
-            if (hd && !d->force && o->dust <= 0.f && !d->hch[k] && d->hde[k] == seed && s->mask[k] && !d->skip[k] && key_hd(d->key[k]) &&
+            const bool dust_same = hd && (o->fine ? o->fine->sig[k] == o->fine->sig0[k] : d->hde[k] == seed);
+            if (hd && !d->force && o->dust <= 0.f && !d->hch[k] && dust_same && s->mask[k] && !d->skip[k] && key_hd(d->key[k]) &&
                 hd_still(s, o, i, j, k) && hd_sig(o->dots, W, H, i, j) == d->hds[k]) { d->dirty[k] = 0; continue; }
             if (crisp && s->mask[k] && !d->skip[k]) {
                 /* crisp dots (a rigged creature): a cell the wave leaves in place shows its own dots in its own
@@ -801,7 +824,12 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
             d->hde[k] = hd && o->dust <= 0.f && key_hd(key) && hd_still(s, o, i, j, k) ? seed : 255;
             /* what the shapes draw in a cell changes with the dots around it */
             const uint8_t sig = key_hd(key) ? hd_sig(o->dots, W, H, i, j) : 0;
-            bool dirty = key == KEY_SKIP || d->force || key != d->key[k] || col != d->col[k] || sig != d->hds[k];
+            bool dirty = key == KEY_SKIP || d->force || key != d->key[k] || col != d->col[k] || sig != d->hds[k] || (hd && o->fine && !dust_same);
+            /* on fine dust, what only the water and the light change goes in every other cell row a frame, alternating
+             * (the panel's cost is by the row); the drawing's own changes go at once */
+            if (dirty && hd && o->fine && !d->force && d->key[k] != KEY_STALE && key_hd(d->key[k]) && sig == d->hds[k] && !d->hch[k] &&
+                ((j + d->ilace) & 1)) { d->dirty[k] = 0; continue; }
+            if (dirty && hd && o->fine) o->fine->sig0[k] = o->fine->sig[k];   /* the dust as drawn */
             d->dirty[k] = dirty;
             if (dirty) {
                 if (i < i0) i0 = i;
@@ -954,16 +982,20 @@ static inline void blend565(uint16_t *px, uint16_t c, int a) {
 }
 
 /* The shapes over pixel row y of the window (row[0] is fb x = bx), inside [xa, xb): each pixel
- * at its cell's weight (d->hdw, 0..HD_LEVELS), each shape over what is under it. A ring, a
- * disc or a stroke visits only the pixels of the row it can reach. */
-static void hd_row(const fluid_draw_t *d, const fluid_draw_opts_t *o, uint16_t *row, int bx, int y, int xa, int xb) {
-    const int pal = (o->palette >= 0 && o->palette < FLUID_PAL_COUNT) ? o->palette : FLUID_PAL_PASTEL;
-    const float Y = (float)(y - d->oy) + 0.5f;
-    for (int n = 0; n < o->nshapes && n < FLUID_MAX_SHAPES; n++) {
-        const int16_t *b = d->sb[n];
+ * at its weight (wt, 0..HD_LEVELS: its cell's; NULL whole), each shape over what is under it. A ring, a
+ * disc or a stroke visits only the pixels of the row it can reach. A caption letter shows only the pixels
+ * that formed (their hash under 1 - unformed: a dithered order). */
+void fluid_shapes_row(const fluid_shape_t *shapes, int nshapes, const int16_t (*box)[4], int ox, int oy, int palette, const uint8_t *wt,
+                      float unformed, uint16_t *row, int bx, int y, int xa, int xb) {
+    const int pal = (palette >= 0 && palette < FLUID_PAL_COUNT) ? palette : FLUID_PAL_PASTEL;
+    const float Y = (float)(y - oy) + 0.5f;
+    for (int n = 0; n < nshapes && n < FLUID_MAX_SHAPES; n++) {
+        const int16_t *b = box[n];
         if (y < b[2] || y >= b[3] || b[1] <= xa || b[0] >= xb) continue;
-        const fluid_shape_t *sh = &o->shapes[n];
-        const float cx = d->ox + sh->x, dy = Y - sh->y;
+        const fluid_shape_t *sh = &shapes[n];
+        const bool forming = sh->tag == FLUID_TAG_CAPTION && unformed > 0.f;
+        if (forming && unformed >= 1.f) continue;
+        const float cx = ox + sh->x, dy = Y - sh->y;
         float span[2][2] = { { (float)b[0], (float)b[1] }, { 0.f, 0.f } };   /* fb x, at most two */
         float il2 = 0.f, e = 0.f, du = 0.f, dv = 0.f;
         if (sh->k == FLUID_SHAPE_DISC || sh->k == FLUID_SHAPE_RING) {
@@ -978,8 +1010,8 @@ static void hd_row(const fluid_draw_t *d, const fluid_draw_opts_t *o, uint16_t *
             if (fabsf(vy) > 1e-3f) {                    /* not level: where the band crosses the row */
                 const float l = sqrtf(l2), nx = -vy / l, ny = vx / l, reach = sh->hw + 1.f, c = ny * (Y - sh->y);
                 const float p = (-reach - c) / nx, q = (reach - c) / nx;
-                span[0][0] = fmaxf(span[0][0], d->ox + sh->x + fminf(p, q) - 1.f);
-                span[0][1] = fminf(span[0][1], d->ox + sh->x + fmaxf(p, q) + 2.f);
+                span[0][0] = fmaxf(span[0][0], ox + sh->x + fminf(p, q) - 1.f);
+                span[0][1] = fminf(span[0][1], ox + sh->x + fmaxf(p, q) + 2.f);
             }
         } else {                                        /* a mask: (u, v) in its bits, a step a pixel */
             e = fminf(0.45f, fmaxf(0.02f, 0.5f * fmaxf(sh->mw / sh->w, sh->mh / sh->h)));
@@ -995,13 +1027,13 @@ static void hd_row(const fluid_draw_t *d, const fluid_draw_opts_t *o, uint16_t *
             if (l < b[0]) l = b[0];
             if (r > xb) r = xb;
             if (r > b[1]) r = b[1];
-            const float dx0 = (float)(l - d->ox) + 0.5f - sh->x;
+            const float dx0 = (float)(l - ox) + 0.5f - sh->x;
             float u = ((sh->co * dx0 - sh->si * dy) / sh->w + 0.5f) * sh->mw - 0.5f, v = ((sh->si * dx0 + sh->co * dy) / sh->h + 0.5f) * sh->mh - 0.5f;
             for (int x = l; x < r; x++, u += du, v += dv) {
-                const int wt = d->hdw[x];
-                if (!wt) continue;
-                const float a = mask ? mask_cover(sh, u, v, e) : shape_cover(sh, (float)(x - d->ox) + 0.5f - sh->x, dy, il2);
-                if (a > 0.f) blend565(&row[x - bx], le, (int)(a * wt * (256.f / HD_LEVELS) + 0.5f));
+                const int w = wt ? wt[x] : HD_LEVELS;
+                if (!w || (forming && hash_u(x - ox, y - oy, 3) >= 1.f - unformed)) continue;
+                const float a = mask ? mask_cover(sh, u, v, e) : shape_cover(sh, (float)(x - ox) + 0.5f - sh->x, dy, il2);
+                if (a > 0.f) blend565(&row[x - bx], le, (int)(a * w * (256.f / HD_LEVELS) + 0.5f));
             }
         }
     }
@@ -1039,7 +1071,7 @@ void fluid_draw_rect(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fl
                 const int x0 = d->cx[i] > t->x0 ? d->cx[i] : t->x0, x1 = d->cx[i + 1] < t->x1 ? d->cx[i + 1] : t->x1;
                 for (int x = x0; x < x1; x++) row[x - bx] = 0;
             }
-            if (ha < hb) hd_row(d, o, row, bx, y, ha, hb);
+            if (ha < hb) fluid_shapes_row(o->shapes, o->nshapes, (const int16_t (*)[4])d->sb, d->ox, d->oy, o->palette, d->hdw, o->cap_unformed, row, bx, y, ha, hb);
             for (int i = i0; i < i1; i++) {
                 const int k = j * W + i;
                 if (!all && !d->dirty[k]) continue;
@@ -1063,6 +1095,7 @@ void fluid_draw_rect(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fl
             }
         }
     }
+    if (hd && o->fine) fluid_fine_rect(o->fine, d->dirty, t, all);   /* the fine dust over it all, never on the drawing */
     for (int n = 0; n < d->nlt; n++) {
         if (d->lt[n].mask)
             draw_mask(t, d->lt[n].mask, d->lt[n].mw, d->lt[n].mh, d->lt[n].x, d->lt[n].y, d->lt[n].w, d->lt[n].h, d->lt[n].c,
@@ -1191,6 +1224,9 @@ int fluid_draw_send2(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fl
     const bool runs = o->scene && o->dots && o->shapes;
     /* crisp dots alone (a rigged creature): few, larger windows on whole row pairs (crisp_send) */
     if (o->scene && o->dots && !o->shapes && !full) return crisp_send(d, o, ov, mark, &sd);
+    /* a scene on fine dust: its changes are spread thin over the disc (the light's fronts, the dust riding a wave), so
+     * the same few larger boxes cost the panel less than a window a run */
+    if (o->scene && o->dots && o->shapes && o->fine && !full) return crisp_send(d, o, ov, mark, &sd);
     for (int j = 0; j < (full ? 1 : d->H); j++) {
         int a = full ? 0 : d->span[2 * j];
         const int end = full ? 0 : d->span[2 * j + 1];

@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MIT
 // astro.mjs: show the real sky on Molty with the astrology package.
 //   astro.mjs tonight | chart | signs | aspects [kind] | events [kind] [--date YYYY-MM-DD|ISO] [--ttl s] [--dry-run]
-//   astro.mjs chart --interactive [--ttl s] [--dry-run --tap <sign>]: the chart, then a tap on a sign opens it up close
+//   astro.mjs chart [--all]: every aspect that fits instead of the 3 tightest (the tightest brightest)
+//   astro.mjs chart --interactive [--all] [--ttl s] [--dry-run --tap <sign>]: the chart, then a tap on a sign opens it up close
 //   astro.mjs install | uninstall | status
 // Reads the pairing the molty skill stored (~/.config/molty/env + token; MOLTY_CONFIG_DIR,
 // MOLTY_RELAY, MOLTY_DEVICE override). Installs the package first when Molty lacks it (Molty asks
@@ -119,7 +120,7 @@ async function show(shows) {
  */
 async function interactive() {
   const t0 = Date.now(), end = t0 + 1000 * Math.min(600, +opt('--ttl', 300)), left = () => (end - Date.now()) / 1000;
-  const sky = chart(date), [[, board]] = sky.scenes, signs = new Set(SIGNS.map((n) => n.toLowerCase()));
+  const sky = chart(date, { all: flag('--all') }), [[, board]] = sky.scenes, signs = new Set(SIGNS.map((n) => n.toLowerCase()));
   await show([{ ...sky, scenes: [['chart', board, left()]] }]);
   let open = null, until = 0; // the sign up close, and when its close-up gives way to the chart
   const tap = async (spot) => {
@@ -157,7 +158,7 @@ async function interactive() {
 try {
   switch (what) {
     case 'tonight': await show([tonight(date)]); break;
-    case 'chart': await (flag('--interactive') ? interactive() : show([chart(date)])); break;
+    case 'chart': await (flag('--interactive') ? interactive() : show([chart(date, { all: flag('--all') })])); break;
     case 'signs': await show([{ scenes: [['signs', {}]], say: 'The twelve signs.' }]); break;
     case 'aspects': await show((sub ? [sub] : ASPECT_KINDS).map((k) => aspect(k, date))); break;
     case 'events': {

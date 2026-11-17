@@ -129,7 +129,7 @@ static bool resolve(scene_t *sc, const bind_t *b, const pkg_item_t *it, const cJ
               num(b, &f[PF_LEN], el, PF_LEN, 0.1f, &o->len) && num(b, &f[PF_N], el, PF_N, 12.f, &n) &&
               num(b, &f[PF_SIZE], el, PF_SIZE, 0.12f, &o->size) && num(b, &f[PF_LIT], el, PF_LIT, 1.f, &o->lit) &&
               num(b, &f[PF_SIDE], el, PF_SIDE, 1.f, &o->side) && num(b, &f[PF_SPIN], el, PF_SPIN, 0.f, &o->spin) &&
-              num(b, &f[PF_ROT], el, PF_ROT, 0.f, &o->rot);
+              num(b, &f[PF_ROT], el, PF_ROT, 0.f, &o->rot) && num(b, &f[PF_GROW], el, PF_GROW, PKG_GROW, &o->grow);
     if (!ok) return false;
     o->n = (int)n;
     if (it->polar) {
@@ -201,6 +201,7 @@ scene_t *scene_build(pkg_t *p, const char *layout, const cJSON *params, float tt
     snprintf(sc->pkg_id, sizeof(sc->pkg_id), "%s", p->id);
     snprintf(sc->layout, sizeof(sc->layout), "%s", l->name);
     sc->dur = l->dur;
+    sc->caption_y = l->caption_y;
     sc->ttl = ttl_s > 0.f ? fminf(ttl_s, SCENE_TTL_MAX) : SCENE_TTL_DEFAULT;
     *err = NULL;
     return sc;
@@ -304,7 +305,36 @@ static inline float spx(const ctx_t *c, float v) { return v * 0.5f * c->s->stage
 static inline float hd_hw(const ctx_t *c, float hw) {
     return hw <= 1.f / (float)(c->s->W < c->s->H ? c->s->W : c->s->H) ? HD_HAIR : fmaxf(HD_HAIR, spx(c, hw));
 }
+/* the cells a tapped spot's drawing covers (scene_shapes_t.still): marked while its items are painted */
+static uint8_t *s_mark;                                /* W x H: 2 under it, then 1 round it */
+static bool s_mark_on;                                 /* the item painting now is the tapped spot's */
+static void mark_shape(const canvas_t *cv, const fluid_shape_t *sh) {
+    const int W = cv->W / 2, H = cv->H / 4;
+    const float cw = (float)cv->stage / W, ch = (float)cv->stage / H, reach = 0.5f * sqrtf(cw * cw + ch * ch);
+    int16_t b[4];
+    fluid_shape_box(sh, 0, 0, b);
+    int i0 = (int)floorf((b[0] - reach) / cw), i1 = (int)floorf((b[1] + reach) / cw), j0 = (int)floorf((b[2] - reach) / ch), j1 = (int)floorf((b[3] + reach) / ch);
+    i0 = i0 < 0 ? 0 : i0; j0 = j0 < 0 ? 0 : j0; i1 = i1 > W - 1 ? W - 1 : i1; j1 = j1 > H - 1 ? H - 1 : j1;
+    for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) {
+        const float px = (i + 0.5f) * cw, py = (j + 0.5f) * ch;
+        float d;
+        switch (sh->k) {
+        case FLUID_SHAPE_SEG: {
+            const float vx = sh->x1 - sh->x, vy = sh->y1 - sh->y, l2 = vx * vx + vy * vy;
+            float u = l2 > 1e-6f ? ((px - sh->x) * vx + (py - sh->y) * vy) / l2 : 0.f;
+            u = u < 0.f ? 0.f : u > 1.f ? 1.f : u;
+            d = hypotf(px - sh->x - u * vx, py - sh->y - u * vy) - sh->hw;
+            break;
+        }
+        case FLUID_SHAPE_RING: d = fabsf(hypotf(px - sh->x, py - sh->y) - sh->r) - sh->hw; break;
+        case FLUID_SHAPE_DISC: d = hypotf(px - sh->x, py - sh->y) - sh->r; break;
+        default: d = fmaxf(fabsf(px - sh->x) - 0.5f * sh->w, fabsf(py - sh->y) - 0.5f * sh->h); break;
+        }
+        if (d <= reach) s_mark[j * W + i] = 2;
+    }
+}
 static void shape(const ctx_t *c, fluid_shape_t sh) {
+    if (s_mark && s_mark_on && !(sh.k == FLUID_SHAPE_DISC && !(sh.rgb & 0xffffffu))) mark_shape(c->s, &sh);
     scene_shapes_t *hd = c->hd;
     if (!hd || hd->n < 0) return;
     if (hd->n >= FLUID_MAX_SHAPES) { hd->n = -1; return; }
@@ -612,7 +642,7 @@ static void text(const ctx_t *c, const scene_t *sc, const scene_item_t *it, flui
 
 /* the subtitle: the reader's word (palette letters, the ORP in the accent on x = 0) at the
  * bottom, its type shrunk until its farthest corner is inside the glass */
-static void caption(const ctx_t *c, const scene_caption_t *cap, fluid_letter_t *letters, int *nl) {
+static void caption(const ctx_t *c, const scene_caption_t *cap, float y, fluid_letter_t *letters, int *nl) {
     const int orp = cap->orp >= cap->n ? cap->n - 1 : cap->orp;
     const float reach = orp < 0 ? cap->n * 0.5f : fmaxf(orp + 0.5f, cap->n - orp - 0.5f);   /* in advances */
     float size = SCENE_CAPTION_SIZE;
@@ -621,7 +651,9 @@ static void caption(const ctx_t *c, const scene_caption_t *cap, fluid_letter_t *
         if (e * e + yb * yb <= 0.95f * 0.95f || size < 0.04f) break;
         size *= 0.92f;
     }
-    text_run(c, cap->str, cap->n, 0.f, SCENE_CAPTION_Y, size, SCENE_CAPTION_RGB, 0, orp, letters, nl);
+    const int n0 = c->hd && c->hd->n >= 0 ? c->hd->n : 0;
+    text_run(c, cap->str, cap->n, 0.f, y, size, SCENE_CAPTION_RGB, 0, orp, letters, nl);
+    for (int q = n0; c->hd && q < c->hd->n; q++) c->hd->shapes[q].tag = FLUID_TAG_CAPTION;   /* it forms from the fine dust */
 }
 
 /* Catmull-Rom through the points (8 segments a span), or a polyline (u = 1 alone: the next
@@ -707,6 +739,7 @@ static void paint_items(const ctx_t *c, const scene_t *sc, float t, float grow, 
         bool lit = false;
         for (int q = 0; fs && it->grp && q < SCENE_LIGHTS; q++) lit |= fs->lights[q] == it->grp;
         if (it->when_lit && !(lit && glow > 0.f)) continue;   /* only while its group is lit */
+        s_mark_on = lit || (fs && !fs->lights[0] && covered(sc, fs, it) && it->npts <= GROW_PTS);
         if (lit) {
             /* a lit group's item: grown about its own centre, brighter (or fading in) */
             const float k = grow, a = glow;
@@ -744,6 +777,7 @@ static void paint_items(const ctx_t *c, const scene_t *sc, float t, float grow, 
         default: break;
         }
     }
+    s_mark_on = false;
 }
 
 void scene_grow_tick(scene_grow_t *g, bool reading, float dt) {
@@ -757,7 +791,7 @@ void scene_grow_apply(const scene_grow_t *g, scene_t *sc) {
     const float u = fminf(1.f, g->t / SCENE_GROW_IN_S), in = 1.f - (1.f - u) * (1.f - u) * (1.f - u);
     sc->focus = g->spot;
     sc->glow = g->spot < 0 ? 0.f : in * fluid_smooth(0.f, 1.f, g->out);
-    sc->grow = 1.f + (SCENE_GROW - 1.f) * sc->glow;
+    sc->grow = 1.f + (scene_spot_grow(sc, g->spot) - 1.f) * sc->glow;
 }
 
 void scene_hd_tick(scene_hd_t *h, unsigned gen, bool plain, float dt) {
@@ -865,7 +899,7 @@ void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_
     if (hd) hd->n = 0;
     /* the subtitle's band of canvas rows: its letters at their largest, and a dot */
     const int cvh = 4 * s->H, cvw = 2 * s->W;
-    const float ch = (float)cvh / 2.f, lh = SCENE_CAPTION_SIZE * 1.05f * 0.5f, yc = 1.f - SCENE_CAPTION_Y;
+    const float ch = (float)cvh / 2.f, lh = SCENE_CAPTION_SIZE * 1.05f * 0.5f, yc = 1.f - (sc ? sc->caption_y : SCENE_CAPTION_Y);
     int bj0 = ((int)floorf((yc - lh) * ch) - 1) / 4, bj1 = ((int)ceilf((yc + lh) * ch) + 1) / 4;
     bj0 = bj0 < 0 ? 0 : bj0; bj1 = bj1 >= s->H ? s->H - 1 : bj1;
     if (!canvas_for(s) || !fill_cache_for(s->N, 4 * (bj1 - bj0 + 1), cvw)) {
@@ -873,6 +907,7 @@ void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_
         for (int k = 0; k < s->N; k++) { s->T[k] = 0; s->tcol[k] = bg; }
         if (dots) memset(dots, 0, (size_t)s->N);
         if (hd && hd->keep) memset(hd->keep, 0, (size_t)s->N);
+        if (hd && hd->still) memset(hd->still, 0, (size_t)s->N);
         FLUID_PROF_END(FP_TARGET, c0);
         return;
     }
@@ -886,7 +921,7 @@ void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_
         for (int k = 0; k < cv->N; k++) { cv->T[k] = 0; cv->tcol[k] = bg; cv->mask[k] &= 1; }
         const ctx_t c = { cv, soft, NULL, true };
         s_fc.nl = 0;
-        paint_items(&c, sc, t, 1.f + (SCENE_GROW - 1.f) * gq, gq, s_fc.letters, &s_fc.nl);
+        paint_items(&c, sc, t, 1.f + (scene_spot_grow(sc, sc ? sc->focus : -1) - 1.f) * gq, gq, s_fc.letters, &s_fc.nl);
         fold(cv, s->W, 0, s->H - 1, s_fc.T, s_fc.tcol, s_fc.dots, s_fc.keep);
         for (int n = 0; n < s_fc.nl; n++) letter_dots(s, &s_fc.letters[n], s_fc.dots);
         s_fc.key = key;
@@ -895,7 +930,33 @@ void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_
     memcpy(s->tcol, s_fc.tcol, sizeof(uint32_t) * (size_t)s->N);
     if (dots) memcpy(dots, s_fc.dots, (size_t)s->N);
     if (hd && hd->keep) memcpy(hd->keep, s_fc.keep, (size_t)s->N);
-    /* the shapes and letters, as they are now */
+    /* the shapes and letters, as they are now; the cells a tapped spot's drawing covers at full growth (once a tap) */
+    if (hd && hd->still) {
+        static uint32_t still_key;
+        const uint32_t sk = sc && sc->focus >= 0 && glow > 0.f ? (sc->serial * 2654435761u) ^ (uint32_t)(sc->focus + 1) ^ (uint32_t)(uintptr_t)s->mask : 0;
+        if (sk != still_key || !sk) {
+            memset(hd->still, 0, (size_t)s->N);
+            if (sk) {
+                static fluid_shape_t tmp[FLUID_MAX_SHAPES];
+                static fluid_letter_t tl[FLUID_MAX_LETTERS];
+                int tn = 0;
+                scene_shapes_t th = { tmp, 0, NULL, NULL };
+                const ctx_t cs = { cv, soft, &th, false };
+                s_mark = hd->still;
+                paint_items(&cs, sc, t, scene_spot_grow(sc, sc->focus), 1.f, tl, &tn);
+                s_mark = NULL;
+                for (int k = 0; k < s->N; k++) {               /* and one cell round */
+                    if (hd->still[k] != 2) continue;
+                    const int i = k % s->W, j = k / s->W;
+                    for (int q = 0; q < 9; q++) {
+                        const int ii = i + q % 3 - 1, jj = j + q / 3 - 1;
+                        if (ii >= 0 && jj >= 0 && ii < s->W && jj < s->H && !hd->still[jj * s->W + ii]) hd->still[jj * s->W + ii] = 1;
+                    }
+                }
+            }
+            still_key = sk;
+        }
+    }
     const ctx_t c = { cv, soft, hd, false };
     paint_items(&c, sc, t, sc ? sc->grow : 1.f, glow, letters, nletters);
     if (cap && cap->n > 0) {
@@ -907,7 +968,7 @@ void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_
         memcpy(s_fc.bmask, cv->mask + o, (size_t)nb);
         const int n0 = *nletters;
         const ctx_t cc = { cv, soft, hd, true };
-        caption(&cc, cap, letters, nletters);
+        caption(&cc, cap, sc ? sc->caption_y : SCENE_CAPTION_Y, letters, nletters);
         fold(cv, s->W, bj0, bj1, s->T, s->tcol, dots, hd ? hd->keep : NULL);
         for (int n = 0; dots && n < s_fc.nl; n++) letter_dots(s, &s_fc.letters[n], dots);
         for (int n = n0; dots && n < *nletters; n++) letter_dots(s, &letters[n], dots);
@@ -916,4 +977,70 @@ void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_
         memcpy(cv->mask + o, s_fc.bmask, (size_t)nb);
     }
     FLUID_PROF_END(FP_TARGET, c0);
+}
+
+int scene_full_shapes(fluid_sim_t *s, const scene_t *sc, float t, fluid_shape_t *out, uint32_t *key) {
+    *key = 0;
+    if (!sc || !canvas_for(s)) return -1;
+    static fluid_letter_t tl[FLUID_MAX_LETTERS];
+    int tn = 0;
+    scene_shapes_t h = { out, 0, NULL, NULL };
+    const ctx_t c = { &s_cv, 1.f / s_cv.H, &h, false };
+    const bool tapped = sc->focus >= 0 && sc->glow > 0.f;
+    paint_items(&c, sc, t, tapped ? scene_spot_grow(sc, sc->focus) : 1.f, tapped ? 1.f : 0.f, tl, &tn);
+    /* what they depend on: the build, the grid, the tapped spot, the items visible */
+    uint32_t k = (2166136261u ^ sc->serial) * 16777619u;
+    k = (k ^ (uint32_t)s->stage ^ (uint32_t)(tapped ? sc->focus + 1 : 0) << 20) * 16777619u;
+    for (int n = 0; n < sc->nitems; n++) {
+        const scene_item_t *it = &sc->items[n];
+        k = (k ^ (uint32_t)(t >= it->on && !(it->off > 0.f && t >= it->off))) * 16777619u;
+    }
+    *key = k ? k : 1;
+    return h.n;
+}
+
+int scene_outline(const scene_t *sc, int n, void (*fn)(void *ctx, float x, float y), void *ctx) {
+    if (!sc || n < 0 || n >= sc->nitems || sc->items[n].k != PK_SPOT) return 0;
+    const scene_item_t *fs = &sc->items[n];
+    const float k = scene_spot_grow(sc, n), gap = SCENE_OUTLINE_GAP, step = SCENE_OUTLINE_STEP;
+    int cnt = 0;
+#define ROUND(cx, cy, rr) do { const float r_ = (rr); const int m_ = r_ * 6.2831853f / step > 6.f ? (int)ceilf(r_ * 6.2831853f / step) : 6; \
+        for (int q_ = 0; q_ < m_; q_++, cnt++) fn(ctx, (cx) + r_ * cosf(6.2831853f * q_ / m_), (cy) + r_ * sinf(6.2831853f * q_ / m_)); } while (0)
+    for (int i = 0; i < sc->nitems; i++) {
+        const scene_item_t *it = &sc->items[i];
+        if (it->k == PK_SPOT) continue;
+        bool lit = false;
+        for (int q = 0; it->grp && q < SCENE_LIGHTS; q++) lit |= fs->lights[q] == it->grp;
+        const bool inside = !fs->lights[0] && covered(sc, fs, it);
+        if (!lit && !inside) continue;
+        /* the item grown: a lit one about its own centre, one inside the spot about the spot's centre */
+        const float x = lit ? it->x : fs->x + (it->x - fs->x) * k, y = lit ? it->y : fs->y + (it->y - fs->y) * k;
+        switch (it->k) {
+        case PK_LINE: case PK_CURVE:
+            for (int q = 0; q + 1 < it->npts; q++) {
+                float a[2], b[2];
+                for (int e = 0; e < 2; e++) {
+                    const float *p = sc->pts[it->pts + q + e];
+                    float *o = e ? b : a;
+                    o[0] = lit ? p[0] : fs->x + (p[0] - fs->x) * k; o[1] = lit ? p[1] : fs->y + (p[1] - fs->y) * k;
+                }
+                const float l = hypotf(b[0] - a[0], b[1] - a[1]);
+                if (l < 1e-6f) continue;
+                const float nx = -(b[1] - a[1]) / l * gap, ny = (b[0] - a[0]) / l * gap;
+                const int m = (int)ceilf(l / step) > 1 ? (int)ceilf(l / step) : 1;
+                for (int sg = -1; sg <= 1; sg += 2)
+                    for (int e = 0; e <= m; e++, cnt++) fn(ctx, a[0] + sg * nx + (b[0] - a[0]) * e / m, a[1] + sg * ny + (b[1] - a[1]) * e / m);
+            }
+            break;
+        case PK_RING: case PK_ARC:
+            ROUND(x, y, it->r * k + gap);
+            if (it->r * k > 2.f * gap) ROUND(x, y, it->r * k - gap);
+            break;
+        case PK_DISC: if (it->rgb) ROUND(x, y, it->r * k + gap); break;
+        case PK_GLYPH: case PK_TEXT: ROUND(x, y, it->size * k * 0.55f + gap); break;
+        default: break;
+        }
+    }
+#undef ROUND
+    return cnt;
 }

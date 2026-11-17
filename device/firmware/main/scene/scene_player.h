@@ -66,12 +66,14 @@ typedef struct {
     uint32_t rgb;
     float on, off;                      /* off 0 = until the end                           */
     float x, y, r, w, a0, a1, len, size, lit, side, spin, rot;
+    float grow;                         /* spot: how much what a tap on it lights grows (PKG_GROW) */
 } scene_item_t;
 
 typedef struct scene {
     pkg_t *pkg;                         /* one reference, dropped by scene_free            */
     char pkg_id[PKG_ID_MAX + 1], layout[PKG_KEY_MAX + 1];
     float dur, ttl;
+    float caption_y;                    /* where the reading's words go (the layout's caption_y) */
     int nitems, npts, nchars, nsay;
     unsigned serial;                    /* which build it is (scene_fill keeps its drawing)   */
     int focus;                          /* a tapped spot (item) whose drawing is grown, -1 none */
@@ -138,7 +140,7 @@ static inline float scene_hd_dust(const scene_hd_t *h) { return h->gen || h->out
  * then eases back to exactly as built. Its drawing: the items in the groups it lights (each
  * about its own centre, and brighter; those `when: "lit"` fade in), else the items inside its
  * disc (about the spot's centre). */
-#define SCENE_GROW      1.25f           /* its scale, grown                                 */
+#define SCENE_GROW      PKG_GROW        /* its scale, grown, unless its spot says (grow)      */
 #define SCENE_GROW_IN_S 0.5f            /* the growth, easing out as the ring spreads       */
 #define SCENE_GROW_OUT_S 0.4f           /* back, once its reading is over                   */
 #define SCENE_LIT_WHITE 0.5f            /* a lit item's colour this far towards white        */
@@ -151,17 +153,28 @@ static inline void scene_grow_tap(scene_grow_t *g, int spot) { *g = (scene_grow_
 void scene_grow_tick(scene_grow_t *g, bool reading, float dt);
 /** sc's focus and grow from g (none: as built). */
 void scene_grow_apply(const scene_grow_t *g, scene_t *sc);
+/** The scale a tap on spot item n grows its drawing to (its grow; SCENE_GROW for none). */
+static inline float scene_spot_grow(const scene_t *sc, int n) { return sc && n >= 0 && n < sc->nitems && sc->items[n].grow >= 1.f ? sc->items[n].grow : SCENE_GROW; }
+/** Points just outside the outline of what a tap on spot item n grows, at full growth (glass units, y up), about
+ *  SCENE_OUTLINE_STEP apart, SCENE_OUTLINE_GAP out: both sides of a line, outside (and inside, if wide) a ring, round a
+ *  symbol. The wave a tap on a spot starts from there (SCENE_OUTLINE_WAVE each), not from the finger. Returns how many
+ *  went to fn. */
+#define SCENE_OUTLINE_STEP 0.05f
+#define SCENE_OUTLINE_GAP  0.05f
+#define SCENE_OUTLINE_WAVE 0.07f        /* each bump's strength ..                         */
+#define SCENE_OUTLINE_R    0.04f        /* .. and radius, glass units                       */
+int scene_outline(const scene_t *sc, int n, void (*fn)(void *ctx, float x, float y), void *ctx);
 
 /* A subtitle over a scene: what Molty says while a drawing is up, as the reader shows it
  * (one word at a time, its ORP letter (orp; -1: none, the word centred) in the accent and on
  * the vertical centre line) but small, at the bottom, shrunk until it fits inside the glass */
-#define SCENE_CAPTION_Y     (-0.56f)    /* glass units, y up                               */
+#define SCENE_CAPTION_Y     PKG_CAPTION_Y   /* glass units, y up: sized for here, shown at the layout's caption_y */
 #define SCENE_CAPTION_SIZE  0.16f       /* type size at most, glass units                  */
 #define SCENE_CAPTION_RGB   0x9aa0b8u   /* the ink under it                                */
 /* each new word starts a tiny ripple under each of its letters: it reaches a dot or so past the
  * word and fades fast, a wobble that never breaks the drawing into dust (fluid_sim_impulse) */
-#define SCENE_CAPTION_RIPPLE   0.1f     /* its strength                                    */
-#define SCENE_CAPTION_RIPPLE_R 0.035f   /* its radius, glass units                         */
+#define SCENE_CAPTION_RIPPLE   0.12f    /* its strength (PORT-SPEC 0.16, gentler for the panel's time) */
+#define SCENE_CAPTION_RIPPLE_R 0.06f    /* its radius, glass units                         */
 typedef struct { const char *str; int n, orp; } scene_caption_t;
 
 /* The scene in high definition (fluid_draw_opts_t.shapes, .kdots): its items as shapes at the
@@ -171,7 +184,12 @@ typedef struct {
     fluid_shape_t *shapes;              /* FLUID_MAX_SHAPES                                 */
     int n;                              /* how many; -1 too many: draw the scene on the dots */
     uint8_t *keep;                      /* W x H, may be NULL                               */
+    uint8_t *still;                     /* W x H, may be NULL: the cells a tapped spot's drawing covers at full
+                                         * growth and one round (the water never breaks them), all 0 untapped */
 } scene_shapes_t;
+/** The scene's shapes at t with its tapped spot (sc->focus) at full growth and lit, no caption: what its fine dust
+ *  gathers round (fluid_fine_want). n of them (-1: too many); key: what they depend on (the same key, the same shapes). */
+int scene_full_shapes(fluid_sim_t *s, const scene_t *sc, float t, fluid_shape_t *out, uint32_t *key);
 
 /** Rasterise sc at t s (and cap, if any, over it) on the braille dots (the items' dots only when
  *  what is visible changes: the subtitle is laid over them, a grown item's dots follow it at

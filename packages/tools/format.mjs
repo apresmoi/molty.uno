@@ -29,18 +29,18 @@ export const ITEMS = {
   glyph: { ...POS, size: 'num', asset: 'asset', rot: 'num' },
   text: { ...POS, size: 'num', str: 'text' },
   // a place to tap, drawn by nothing: Molty shows `say` as the subtitle, the tap event names `id`; a disc, or
-  // within r of a segment (pts, two points); a tap lights its `lights` groups
-  spot: { ...POS, r: 'num', say: 'say', id: 'text', pts: 'points', lights: 'lights' },
+  // within r of a segment (pts, two points); a tap lights its `lights` groups, grown `grow` times (default 1.25)
+  spot: { ...POS, r: 'num', say: 'say', id: 'text', pts: 'points', lights: 'lights', grow: 'num' },
 };
 const REQUIRED = { ring: ['r'], arc: ['r'], ticks: ['r'], line: ['pts'], curve: ['pts'], disc: ['r'], ball: ['r'], glyph: ['asset'], text: ['str'], spot: ['r', 'say'] };
 /** Defaults a missing field takes (the firmware's, docs/PACKAGES.md). A ball without img is shaded in its colour. */
-export const DEFAULTS = { color: '#ffffff', x: 0, y: 0, on: 0, a0: 0, a1: 360, n: 12, len: 0.1, size: 0.12, w: 0.03, lit: 1, side: 1, spin: 0, rot: 0 };
+export const DEFAULTS = { color: '#ffffff', x: 0, y: 0, on: 0, a0: 0, a1: 360, n: 12, len: 0.1, size: 0.12, w: 0.03, lit: 1, side: 1, spin: 0, rot: 0, grow: 1.25 };
 // which param type a field of each value type may bind to
 const BINDS = { num: 'number', text: 'text', say: 'text', color: 'text', asset: 'text', image: 'text', list: 'list', group: 'text', lights: 'text' };
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 /** The range each numeric field must lie in, literal or bound (the firmware's pkg_num_ok); angles otherwise. */
-const RANGE = { x: [-2, 2], y: [-2, 2], r: [0, 2], w: [0, 0.5], len: [-1, 1], n: [1, 120], size: [0, 2], lit: [0, 1], spin: [-720, 720], on: [0, 600], off: [0, 600] };
+const RANGE = { x: [-2, 2], y: [-2, 2], r: [0, 2], w: [0, 0.5], len: [-1, 1], n: [1, 120], size: [0, 2], lit: [0, 1], spin: [-720, 720], on: [0, 600], off: [0, 600], grow: [1, 3] };
 const inRange = (f, v) => { if (f === 'side') return v === -1 || v === 1; if (f === 'n' && !Number.isInteger(v)) return false; if (f === 'size' && v <= 0) return false; const [lo, hi] = RANGE[f] ?? [-720, 720]; return v >= lo && v <= hi; };
 const ref = (v) => (typeof v === 'string' && /^[$@][A-Za-z0-9_-]{1,24}$/.test(v) ? v : null);
 const isText = (v, max = LIMITS.text) => typeof v === 'string' && /^[\x20-\x7e]*$/.test(v) && v.length <= max && !/^[$@]/.test(v);
@@ -125,8 +125,9 @@ export function checkPackage(pkg, id) {
   for (const [name, l] of Object.entries(pkg.layouts ?? {})) {
     const at = `layout ${name}`;
     if (!NAME_RE.test(name)) bad.push(`${at}: name must be [A-Za-z0-9_-]{1,24}`);
-    for (const k of Object.keys(l)) if (!['dur', 'params', 'items'].includes(k)) bad.push(`${at}: unknown field ${k}`);
+    for (const k of Object.keys(l)) if (!['dur', 'params', 'items', 'caption_y'].includes(k)) bad.push(`${at}: unknown field ${k}`);
     if (!isNum(l.dur) || l.dur < 0) bad.push(`${at}: dur must be a number >= 0`);
+    if (l.caption_y !== undefined && !(isNum(l.caption_y) && l.caption_y >= -1 && l.caption_y <= 1)) bad.push(`${at}: caption_y must be a number in -1..1`);
     const params = l.params ?? {}, used = new Set();
     if (Object.keys(params).length > LIMITS.params) bad.push(`${at}: at most ${LIMITS.params} params`);
     for (const [p, t] of Object.entries(params)) {

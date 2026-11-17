@@ -21,7 +21,7 @@ cc -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -O2 \
   "$MAIN/fluid/fluid_sim.c" \
   "$MAIN/fluid/fluid_target.c" \
   "$MAIN/fluid/glyph_font.c" \
-  "$MAIN/fluid/fluid_draw.c" \
+  "$MAIN/fluid/fluid_draw.c" "$MAIN/fluid/fluid_fine.c" \
   -lm \
   -o "$OUT"
 
