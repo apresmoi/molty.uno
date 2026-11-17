@@ -1210,7 +1210,10 @@ static esp_err_t http_wifi_drop(httpd_req_t *r)
 static esp_err_t http_ring(httpd_req_t *r)
 {
     const uint32_t ms = query_u32(r, "ms", 3000);
-    mole_fluid_diag_ring(ms);
+    char q[64] = "", lv[16] = "";
+    const bool voice = httpd_req_get_url_query_str(r, q, sizeof(q)) == ESP_OK &&
+                       httpd_query_key_value(q, "level", lv, sizeof(lv)) == ESP_OK && !strcmp(lv, "sine");
+    mole_fluid_diag_ring(ms, voice);
     char body[48];
     snprintf(body, sizeof(body), "{\"ok\":true,\"ms\":%lu}", (unsigned long)ms);
     httpd_resp_set_type(r, "application/json");

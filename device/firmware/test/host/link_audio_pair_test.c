@@ -87,6 +87,7 @@ void link_identity_rotate(void) { rotations++; }
 /* the screen's listening ring (mole_fluid.c) and the pending question (link_ask.c) */
 static bool ring_on; static unsigned ring_ons;
 void mole_fluid_listen(bool on) { if (on) { assert(!ring_on); ring_ons++; } ring_on=on; }
+void mole_fluid_listen_level(float level) { (void)level; }
 static int32_t ring_color = -9; static unsigned ring_colors;
 void mole_fluid_listen_color(int32_t rgb) { assert(!ring_on); ring_colors++; ring_color=rgb; }
 static uint32_t listen_setting = 30000;   /* the console's setting (mole_fluid.c, NVS) */

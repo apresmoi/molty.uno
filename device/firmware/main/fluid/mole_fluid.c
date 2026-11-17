@@ -157,6 +157,7 @@ typedef struct {
 } ask_want_t;
 static ask_want_t s_ask_want;
 static bool    s_listen_in = false;             /* link_audio: a listen is recording   */
+static float   s_voice_in = 0.f;                /* ... and the mic's level (0..1)       */
 static bool    s_follow_in = false;             /* link_audio: the reader follows a say's voice */
 static int     s_follow_word_in = 0;            /* ...the last word the speaker reached  */
 static int32_t s_ring_in = -1;                  /* ...its ring colour (-1 = the default) */
@@ -272,12 +273,18 @@ static struct {
 } s_ask;
 /* the listening ring (fluid_target_arc) and a question's dividers (fluid_draw_overlay) */
 static bool  s_listen = false;                  /* task copy of s_listen_in */
+static float s_voice = 0.f;                     /* task copy of s_voice_in */
 #define FLUID_CRISP_LISTEN_RGB 0xFF2C3E           /* a rigged creature's listen ring (ring-options.html)       */
 static int32_t s_ring_rgb = -1, s_ring_def = -1;   /* task copies of s_ring_in / s_ring_dflt */
 static fluid_ring_t s_rg;                       /* the listening ring (fluid_ring.h)     */
 #ifdef MOLTY_DIAG_RING
 static volatile int64_t s_diag_ring_until;      /* a debug build's ring without a listen (mole_fluid_diag_ring) */
-void mole_fluid_diag_ring(uint32_t ms) { s_diag_ring_until = esp_timer_get_time() + (int64_t)ms * 1000; }
+static volatile bool s_diag_voice;               /* ... with a voice made up (syllables ~4 Hz in phrases, pauses) */
+void mole_fluid_diag_ring(uint32_t ms, bool voice) { s_diag_voice = voice; s_diag_ring_until = esp_timer_get_time() + (int64_t)ms * 1000; }
+static float diag_voice(float t) {
+    const float syl = 0.5f + 0.5f * sinf(t * 6.2831853f * 4.f), phrase = sinf(t * 6.2831853f * 0.35f);
+    return phrase > 0.f ? fminf(1.f, (0.35f + 0.65f * syl) * (0.6f + 0.4f * phrase)) : 0.f;
+}
 #endif
 static fluid_progress_t s_pg;                   /* the agent's progress on the same line */
 static _Atomic int32_t s_prog_in = -1;          /* mole_fluid_progress: pct × 10, < 0 = no percent */
@@ -864,6 +871,11 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     if (s_crisp) {                                         /* a rigged creature: each cell its dots' colour, and the rings */
         /* the listen ring red (ring-options.html), unless the agent or the settings gave it one */
         cpk_listen(s_cpk, s_ring_rgb >= 0 ? s_ring_rgb : s_ring_def >= 0 ? s_ring_def : FLUID_CRISP_LISTEN_RGB, s_rg.ink);
+#ifdef MOLTY_DIAG_RING
+        cpk_voice(s_cpk, s_diag_voice && esp_timer_get_time() < s_diag_ring_until ? diag_voice(s_tnow) : s_voice);
+#else
+        cpk_voice(s_cpk, s_voice);
+#endif
         FLUID_PROF_BEGIN(cpaint);
         cpk_paint(s_cpk, s);
         FLUID_PROF_END(FP_C_FILL, cpaint);                 /* prof_ms.c_fill: a rigged creature's paint and rings */
@@ -1246,7 +1258,7 @@ static void fluid_task(void *arg) {
         s_req_activity = s_req_shake = s_req_user = false;
         int status = s_status_in;
         ask_want_t want = s_ask_want;
-        s_listen = s_listen_in; s_ring_rgb = s_ring_in; s_ring_def = s_ring_dflt;
+        s_listen = s_listen_in; s_voice = s_listen_in ? s_voice_in : 0.f; s_ring_rgb = s_ring_in; s_ring_def = s_ring_dflt;
         s_follow = s_follow_in; s_follow_word = s_follow_word_in;
         if (s_text_ver != s_seen_ver) {
             memcpy(s_ttext, s_text, (size_t)s_text_len + 1);
@@ -1342,7 +1354,7 @@ static void fluid_task(void *arg) {
             .ramp = GC_RAMP_ASCII, .font = gc_font5x7,
             /* the boot word, and its dots while it melts (each goes as the ink leaves it) */
             .dots = s_cur == ST_SCENE || s_hd.out || s_crisp ? s_sdots_d : s_word_dots && (s_cur == ST_TEXT || s_melt_t < 0.8f) ? s_tx->dots : NULL,
-            .scene = s_hd.gen != 0 || s_crisp, .dust = scene_hd_dust(&s_hd), .frame = s_crisp && s_cpk ? cpk_frame_no(s_cpk) | 0x80000000u : 0,
+            .scene = s_hd.gen != 0 || s_crisp, .dust = scene_hd_dust(&s_hd), .frame = s_crisp && s_cpk ? cpk_draw_frame(s_cpk) : 0,
         };
         /* the drawer is idle (s_idle); a scene breaking into dust keeps what it showed */
         if (s_crisp) {   /* a rigged creature's cells, as a scene's dots */
@@ -2056,6 +2068,14 @@ void mole_fluid_listen(bool on) {
     if (!s_mutex) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     s_listen_in = on;
+    if (!on) s_voice_in = 0.f;
+    xSemaphoreGive(s_mutex);
+}
+
+void mole_fluid_listen_level(float level) {
+    if (!s_mutex) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_voice_in = level < 0.f ? 0.f : level > 1.f ? 1.f : level;
     xSemaphoreGive(s_mutex);
 }
 

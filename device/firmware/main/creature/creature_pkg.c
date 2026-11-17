@@ -73,7 +73,8 @@ const cp_t *cpk_player(const cpk_t *k) { return k->cp; }
 const cb_t *cpk_body(const cpk_t *k) { return k->body; }
 int cpk_tris(const cpk_t *k) { return k && k->body ? cb_tris(k->body) : 0; }
 bool cpk_crisp(const cpk_t *k) { return k && k->clip; }
-uint32_t cpk_frame_no(const cpk_t *k) { return k ? k->frame : 0; }
+uint32_t cpk_draw_frame(const cpk_t *k) { return k ? FLUID_FRAME(k->frame, cr_ilace(k->ring)) : 0; }
+void cpk_voice(cpk_t *k, float level) { if (k) cr_voice(k->ring, level); }
 const uint8_t *cpk_cells_creature(const cpk_t *k) { return k && k->dots ? cd_creature(k->dots) : NULL; }
 void cpk_listen(cpk_t *k, int32_t rgb, float ink) { if (k && k->ring) cr_listen(k->ring, rgb, ink); }
 void cpk_set_share(cpk_t *k, int pct) { if (k && k->dots) cd_set_share(k->dots, pct); }

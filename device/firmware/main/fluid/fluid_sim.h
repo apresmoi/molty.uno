@@ -429,9 +429,17 @@ typedef struct {
     int nshapes;
     const uint8_t *kdots;              /* scene in high definition: the dots it keeps calm too
                                         * (a ball, an image: no shape draws them), or NULL   */
-    uint32_t frame;                    /* crisp dots: the frame's number, whose parity picks the cell rows the water's
+    uint32_t frame;                    /* crisp dots: FLUID_FRAME(number, m), which picks the cell rows the water's
                                         * own changes go in (the dots' maker interlaces by the same; 0: the drawer's own) */
 } fluid_draw_opts_t;
+
+/* crisp dots' interlace: frame n of the dots' maker, its water's rows taking turns over m frames (2..9) */
+#define FLUID_FRAME(n, m) (0x80000000u | (uint32_t)((m) - 2) << 28 | ((uint32_t)(n) & 0x0FFFFFFFu))
+/* whether cell row j takes the water's changes in that frame */
+static inline bool fluid_ilace_row(uint32_t frame, int j) {
+    const uint32_t m = (frame >> 28 & 7u) + 2u;
+    return (uint32_t)j % m == (frame & 0x0FFFFFFFu) % m;
+}
 
 /** W×H cells drawn into an fb_w×fb_h framebuffer; the stage is its largest centred
  *  square (the whole framebuffer on a square panel). */

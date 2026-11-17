@@ -41,6 +41,7 @@
 
 #include "esp_err.h"
 #include "cJSON.h"
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -55,8 +56,9 @@ esp_err_t mole_fluid_creature_render(void);
  *  500 ms; ESP_ERR_INVALID_STATE when the fluid is not running. */
 esp_err_t mole_fluid_framebuffer_sync(void);
 #ifdef MOLTY_DIAG_RING
-/** Debug builds only (MOLTY_DIAG_RING=1 at build time): the listening ring as if a listen ran for ms, no audio. */
-void mole_fluid_diag_ring(uint32_t ms);
+/** Debug builds only (MOLTY_DIAG_RING=1 at build time): the listening ring as if a listen ran for ms, no audio; voice:
+ *  with a made-up voice on it (cpk_voice). */
+void mole_fluid_diag_ring(uint32_t ms, bool voice);
 #endif
 esp_err_t mole_fluid_creature_state_get_json(char **out);
 esp_err_t mole_fluid_creature_state_set_json(const char *body);
@@ -140,6 +142,8 @@ void mole_fluid_set_status(int status);
  *  ring, never over a question. Safe from any task. */
 void mole_fluid_progress(float pct, bool done);
 void mole_fluid_listen(bool on);
+/** The listen's mic level (0..1, the VAD's, each mic chunk): a rigged creature's listen ring ripples with it. */
+void mole_fluid_listen_level(float level);
 void mole_fluid_listen_color(int32_t rgb);
 /** A say's text follows its voice (link_audio.c, cap say_cues): word < 0 starts following:
  *  the text shows no word until word 0 is reached (its own clock stops); word ≥ 0 shows up to that word (the
