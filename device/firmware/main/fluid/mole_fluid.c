@@ -362,7 +362,7 @@ static bool  s_touch_mute = false;              /* the touch that woke the scree
 #define FLUID_WIN_ROWS 14                       /* a 412 px panel's cell row in one window */
 static uint16_t *s_win = NULL, *s_win2 = NULL;   /* s_win2: a second window, the panel taking one while the other is
                                                  * drawn (molty_display_blit_async); FLUID_WIN2_PX each, internal DMA */
-#define FLUID_WIN2_PX 5120                      /* 10 KB each: fewer windows on a heavy frame (a ring's wave) */
+#define FLUID_WIN2_PX 4096                      /* 8 KB each: a full 466 px row band in two halves of 8 rows */
 static int       s_win_px = 0;
 static volatile bool s_fb_want = false;         /* /api/framebuffer: draw the frame there too */
 static SemaphoreHandle_t s_fb_done = NULL;
