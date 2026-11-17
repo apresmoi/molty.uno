@@ -192,15 +192,18 @@ esp_err_t pkg_cmd_install(const cJSON *args, cJSON **out)
     if (!e && !atomic_compare_exchange_strong(&s_installing, &idle, true)) e = "busy";
     if (e) { mole_diag_event(true, "pkg.refused %s", e); return refuse(e); }
     s_req = r;
-    /* the question names what is installed, in the ask's 8 letters */
-    char label[9];
-    snprintf(label, sizeof(label), "%.8s", r.name);
-    for (int n = (int)strlen(label); n > 0 && label[n - 1] == ' '; n--) label[n - 1] = 0;
-    if (!label[0]) snprintf(label, sizeof(label), "%.8s", r.id);
-    const char *labels[2] = { label, "no" };
+    /* the question names what is installed, in full: "INSTALL ASTROLOGY?" */
+    const char *name = r.name;
+    int len = (int)strlen(name);
+    while (len > 0 && name[len - 1] == ' ') len--;
+    if (!len) { name = r.id; len = (int)strlen(name); }
+    if (len > FLUID_ASK_TITLE_MAX - 9) len = FLUID_ASK_TITLE_MAX - 9;   /* "install " + it + "?" */
+    char title[64];
+    snprintf(title, sizeof(title), "install %.*s?", len, name);
+    const char *labels[2] = { "install", "not now" };
     const int32_t colors[2] = { COLOR_YES, COLOR_NO };
     cJSON *j = cJSON_CreateObject();
-    esp_err_t err = j ? link_ask_open(r.job[0] ? r.job : r.id, labels, colors, 2, r.timeout_ms, on_answer) : ESP_ERR_NO_MEM;
+    esp_err_t err = j ? link_ask_open(r.job[0] ? r.job : r.id, title, "a new package for molty", labels, colors, 2, r.timeout_ms, on_answer) : ESP_ERR_NO_MEM;
     if (err != ESP_OK) { atomic_store(&s_installing, false); cJSON_Delete(j); return err; }
     if (r.job[0]) cJSON_AddStringToObject(j, "job", r.job);
     cJSON_AddStringToObject(j, "id", r.id);

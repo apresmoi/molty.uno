@@ -562,7 +562,7 @@ static bool crisp(const ctx_t *c, const scene_item_t *it, const pkg_asset_t *a, 
     canvas_t *s = c->s;
     const float w = it->size, h = it->size * a->h / a->w, k = 0.5f * s->stage;
     const float x0 = (it->x - 0.5f * w + 1.f) * k, y0 = (1.f - it->y - 0.5f * h) * k;
-    letters[(*nl)++] = (fluid_letter_t){ '*', true, x0, y0, w * k, h * k, h * k, 0.f, FLUID_RGB | it->rgb, a->data, a->w, a->h };
+    letters[(*nl)++] = (fluid_letter_t){ '*', true, false, x0, y0, w * k, h * k, h * k, 0.f, FLUID_RGB | it->rgb, a->data, a->w, a->h };
     letter_shape(c, &letters[*nl - 1]);
     if (!c->paint) return true;
     const float cwp = (float)s->stage / s->W, chp = (float)s->stage / s->H;
@@ -622,7 +622,7 @@ static void text_run(const ctx_t *c, const char *str, int n, float x, float y, f
     const float fs = size * s->stage * 0.5f, adv = fs * 0.6f, lh = fs * 1.05f;
     const float x0 = (x + 1.f) * 0.5f * s->stage - (orp < 0 ? n * 0.5f : orp + 0.5f) * adv, y0 = (1.f - y) * 0.5f * s->stage - lh * 0.5f;
     for (int q = 0; q < n && *nl < FLUID_MAX_LETTERS; q++) {
-        letters[(*nl)++] = (fluid_letter_t){ str[q], q == orp, x0 + q * adv, y0, adv, lh, fs, 0.f, lrgb, NULL, 0, 0 };
+        letters[(*nl)++] = (fluid_letter_t){ str[q], q == orp, false, x0 + q * adv, y0, adv, lh, fs, 0.f, lrgb, NULL, 0, 0 };
         letter_shape(c, &letters[*nl - 1]);
     }
     if (!c->paint) return;

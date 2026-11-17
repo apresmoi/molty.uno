@@ -37,7 +37,7 @@
 #define UPD_TIMEOUT_MIN   1000           /* confirm question, ms (as ask)             */
 #define UPD_TIMEOUT_MAX   120000
 #define UPD_TIMEOUT_DEF   60000          /* the relay always sends one; the default is for completeness */
-#define UPD_LABEL_MAX     8              /* = LINK_ASK_LABEL_MAX / FLUID_ASK_LABEL_MAX */
+#define UPD_LABEL_MAX     8              /* fits any count of answers (link_ask_label_max) */
 #define UPD_LABEL_LATER   "later"        /* option 1 (right half); option 0 (left half) is
                                             the version itself, upd_confirm_label        */
 #define UPD_COLOR_UPDATE  0x3ccf96       /* its colour: green (relay COLORS.green)    */

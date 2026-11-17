@@ -2,11 +2,21 @@
 #include "link_protocol.h"
 #include "../../main/link/link_audio.c"
 #include "cute_act.h"
+int molty_display_width(void);
+int molty_display_height(void);
 #include "../../main/link/link_pair.c"
 #include <assert.h>
 #include <stdio.h>
 #include <math.h>
 
+/* the pairing's question on screen (mole_fluid.c): what was shown, how it left; glass = what a tap may answer */
+static fluid_ask_q_t pair_q; static unsigned pair_seq, pair_glass, pair_ends; static int pair_pick = -9;
+int molty_display_width(void) { return 412; }
+int molty_display_height(void) { return 412; }
+esp_err_t mole_fluid_ask_show(const fluid_ask_q_t *q, unsigned *seq) { pair_q = *q; *seq = ++pair_seq; pair_pick = -9; pair_glass = 0; return ESP_OK; }
+void mole_fluid_ask_pick(int index) { pair_pick = index; }
+void mole_fluid_ask_end(void) { pair_ends++; }
+unsigned mole_fluid_ask_shown(void) { return pair_glass; }
 static unsigned rotations, sent;
 static esp_err_t send_error;
 static const char *field(const char *key) { cJSON *j=cJSON_GetObjectItem(sdk_sent,key); assert(cJSON_IsString(j)); return j->valuestring; }
@@ -380,9 +390,11 @@ static cJSON *status(void) { cJSON *j=cJSON_CreateObject(); link_pair_status(j);
 static void test_pair(void) {
     cJSON *st=status();   /* boot: nothing pending, no decision yet */
     assert(cJSON_IsNull(cJSON_GetObjectItem(st,"pair")) && cJSON_IsNull(cJSON_GetObjectItem(st,"last_pair"))); cJSON_Delete(st);
+    sdk_state[0]='\0';
     request();
-    /* Static prompt: the code alone, as one held token (no return to the creature). */
-    assert(!strcmp(sdk_state,"{\"state\":\"text\",\"text\":\"1234\",\"hold\":true}"));
+    /* The question over whatever shows: who asks, a reminder, the code, accept / reject (the state is left alone) */
+    assert(!strcmp(pair_q.title,"pair with test agent?") && !strcmp(pair_q.detail,"check the code matches") && !strcmp(pair_q.code,"1234"));
+    assert(pair_q.n==2 && !strcmp(pair_q.label[0],"accept") && !strcmp(pair_q.label[1],"reject") && pair_q.rgb[0]==0x3ccf96 && pair_q.rgb[1]==0xff6b6b && !sdk_state[0]);
     st=status(); cJSON *p=cJSON_GetObjectItem(st,"pair");
     assert(!strcmp(cJSON_GetObjectItem(p,"agent_name")->valuestring,"test agent") && !strcmp(cJSON_GetObjectItem(p,"code")->valuestring,"1234"));
     assert(cJSON_GetObjectItem(p,"expires_in_s")->valueint==110 && cJSON_IsNull(cJSON_GetObjectItem(st,"last_pair"))); cJSON_Delete(st);
@@ -391,33 +403,39 @@ static void test_pair(void) {
     sdk_now+=79999999; link_pair_tick(); assert(link_pair_active());
     sdk_now+=1; link_pair_tick();
     assert(!link_pair_active() && !strcmp(field("reason"),"timeout") && !rotations);
-    assert(!strcmp(sdk_state,"{\"state\":\"blob\"}"));          /* back to what was shown */
+    assert(pair_pick==-9 && pair_ends==1 && !sdk_state[0]);          /* the rim lets go; nothing else changed */
     st=status(); p=cJSON_GetObjectItem(st,"last_pair");
     assert(cJSON_IsNull(cJSON_GetObjectItem(st,"pair")) && cJSON_GetObjectItem(p,"seq")->valueint==1);
     assert(cJSON_IsFalse(cJSON_GetObjectItem(p,"ok")) && !strcmp(cJSON_GetObjectItem(p,"reason")->valuestring,"timeout"));
     assert(!strcmp(cJSON_GetObjectItem(p,"agent_name")->valuestring,"test agent")); cJSON_Delete(st);
-    /* The demo reel was running: the restore lands on the creature, never re-enables it. */
-    sdk_saved_state="{\"state\":\"effect:wave\",\"autoplay\":true,\"reel_step\":11}";
+    /* the reject button: rejected, the rim lets go */
     request(); sdk_gpio[6]=0; link_pair_tick(); sdk_gpio[6]=1;
-    assert(!link_pair_active() && !strcmp(field("reason"),"rejected") && !rotations);
-    assert(!strcmp(sdk_state,"{\"state\":\"creature\"}") && !strstr(sdk_state,"autoplay"));
-    sdk_saved_state="{\"state\":\"blob\"}";
-    request(); link_pair_touch(1); link_pair_tick(); link_pair_touch(0);
-    assert(!link_pair_active() && cJSON_IsTrue(cJSON_GetObjectItem(sdk_sent,"ok")) && rotations==1);
+    assert(!link_pair_active() && !strcmp(field("reason"),"rejected") && !rotations && pair_pick==-9);
+    /* a tap: only on the panel's question, only on an answer. Before it shows, or beside the answers, nothing */
+    request();
+    link_pair_tap(-100.f, 100.f); link_pair_tick(); assert(link_pair_active());          /* not on the panel yet */
+    pair_glass=pair_seq;
+    link_pair_tap(0.f, -150.f); link_pair_tick(); assert(link_pair_active());           /* on the question */
+    link_pair_tap(0.f, 0.f); link_pair_tick(); assert(link_pair_active());              /* the centre */
+    link_pair_tap(-100.f, 100.f); link_pair_tick();                                       /* accept, lower left */
+    assert(!link_pair_active() && cJSON_IsTrue(cJSON_GetObjectItem(sdk_sent,"ok")) && rotations==1 && pair_pick==0);
     assert(!strcmp(field("link_code"),"ABCDEFGH"));
     st=status(); p=cJSON_GetObjectItem(st,"last_pair");
     assert(cJSON_GetObjectItem(p,"seq")->valueint==3 && cJSON_IsTrue(cJSON_GetObjectItem(p,"ok")) && cJSON_IsNull(cJSON_GetObjectItem(p,"reason")));
     cJSON_Delete(st);
     request(); sdk_gpio[0]=0; link_pair_tick(); sdk_gpio[0]=1;
     assert(!link_pair_active() && rotations==2);
-    request(); send_error=ESP_FAIL; link_pair_touch(1); link_pair_tick(); link_pair_touch(0);
+    request(); pair_glass=pair_seq; send_error=ESP_FAIL; link_pair_tap(-100.f, 100.f); link_pair_tick();
     assert(!link_pair_active() && rotations==3); send_error=ESP_OK;
+    /* a tap on reject (lower right): rejected, from that answer */
+    request(); pair_glass=pair_seq; link_pair_tap(100.f, 100.f); link_pair_tick();
+    assert(!link_pair_active() && !strcmp(field("reason"),"rejected") && rotations==3 && pair_pick==1);
     /* A board with no reject button (the 1.28): GPIO 6 means nothing, only the timeout
      * rejects; accept still works on the button with no touch at all. */
     sdk_caps &= ~(MOLTY_CAP_BTN_REJECT | MOLTY_CAP_TOUCH);
     request(); sdk_gpio[6]=0; link_pair_tick(); sdk_gpio[6]=1; assert(link_pair_active());
     sdk_gpio[0]=0; link_pair_tick(); sdk_gpio[0]=1;
-    assert(!link_pair_active() && rotations==4);
+    assert(!link_pair_active() && rotations==4 && pair_pick==0);
     /* Neither touch nor an accept button: refused at once, nothing shown. */
     sdk_caps &= ~MOLTY_CAP_BTN_ACCEPT; sdk_state[0]='\0';
     cJSON *nope=cJSON_Parse("{\"req\":\"noway\",\"agent_name\":\"test\",\"code\":\"1234\"}");

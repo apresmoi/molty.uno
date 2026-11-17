@@ -84,7 +84,8 @@ idf_component_register(
         # fluid: the fluid-of-characters creature (+ speed reader, 5x7 font)
         "fluid/mole_fluid.c"
         "fluid/fluid_director.c"  # what is shown when: states, moods, idle life, status
-        "fluid/fluid_ask.c"       # a question's sectors + label layout (link ask)
+        "fluid/fluid_ask.c"       # a question: its layout, its answer for a tap, its phases (link ask)
+        "fluid/fluid_askview.c"   # ... drawn over the screen (ask-options.html)
         "fluid/fluid_sim.c"
         "fluid/fluid_target.c"
         "fluid/fluid_draw.c"
@@ -242,6 +243,7 @@ set_source_files_properties(
     "fluid/fluid_target.c"
     "fluid/fluid_draw.c"
     "fluid/fluid_fine.c"
+    "fluid/fluid_askview.c"
     "fluid/mole_fluid.c"
     "creature/cute_rig.c"
     "creature/creature_body.c"

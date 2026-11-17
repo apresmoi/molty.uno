@@ -23,7 +23,7 @@ Molty (home Wi-Fi) ──outbound WSS──▶ molty-relay (Cloudflare Worker + 
 | Voice provider | `src/voice/*.ts` → `interface VoiceProvider { tts(text, opts) → PCM16@16k; stt(PCM16@16k) → text; ttsStream?; sttStream? }` | workers-ai · openai · none (env) · box (the owner's [voice box](#voice-box), per device) |
 | Device link client | `device/firmware/main/link/` | transport only; commands come from the dispatcher |
 | Device command dispatcher | `main/link/link_cmd.c` | ONE registry used by both the WSS link and (later) local HTTP |
-| Pairing UI | static: the 4-digit code alone, held as one centred token in the fluid text target (no ORP accent), until accept/reject/timeout (`link_ui_show_pair`); agent name is shown by the console via `GET /api/link` | a dedicated `pair` creature state is the planned upgrade |
+| Pairing UI | the question screen (`link_ui_show_pair`, `fluid_ask.h`): "PAIR WITH <AGENT>?", "CHECK THE CODE MATCHES", the 4-digit code, and accept / reject as rim arcs, over whatever shows, until accept/reject/timeout; the console shows the same via `GET /api/link` | |
 
 ## Identities and secrets
 
@@ -65,7 +65,7 @@ Molty (home Wi-Fi) ──outbound WSS──▶ molty-relay (Cloudflare Worker + 
    tool, which is the only tool usable without a token). The request long-polls ≤ 120 s.
 3. Relay → device: `pair.request {req, agent_name, code}` where `code` is 4 digits.
 4. Device shows the 4-digit `code` statically (one held token in the fluid) until decided
-   (touch tap or BOOT button = accept; PWR = reject; 110 s = `timeout`, so the device
+   (a tap on the accept arc or BOOT button = accept; a tap on the reject arc or PWR = reject; 110 s = `timeout`, so the device
    decides just before the relay's 120 s window closes). The console polls `GET /api/link`
    (~1 Hz) and advances on `pair` / `last_pair`.
 5. Device → relay: `pair.result {req, ok}`; failures include `reason:"timeout"` or
@@ -210,22 +210,25 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   `run()` stays pending until Workers AI answers, and its output is then released unread.
   Likewise a non-streamed (whole-body) TTS reply is read to the end once it has started.
   Whether Workers AI keeps computing (and billing) an abandoned request is not verified.
-- `ask`: relay sends `cmd ask {job, options, colors, timeout_ms}` (`options` 1–5 strings, each 1–8
-  chars of printable ASCII 0x20–0x7E, not all spaces, unique ignoring case; `colors` one
+- `ask`: relay sends `cmd ask {job, options, colors, title?, timeout_ms}` (`options` 1–5 strings, each
+  1–14 chars for 1–2 options, 1–10 for 3, 1–8 for 4–5 (firmware with the `ask_title` cap; older: 1–8),
+  of printable ASCII 0x20–0x7E, not all spaces, unique ignoring case; `title` (only to `ask_title`
+  firmware) the question shown over the answers, 1–40 printable ASCII chars; `colors` one
   `"#rrggbb"` per option, in order — the relay always sends them, resolved from the agent's
   names / hex or the defaults by index; `timeout_ms` integer 1000..120000); the device
   validates the same (`invalid_args`; `colors` is optional to the device: absent → its own
   defaults by index, present → exactly one valid hex per option), answers `unsupported`
   without touch, and acknowledges `{job}` at once. Firmware from before colours ignores the
-  extra field (unknown args are not checked), so the relay needs no cap for it. The options
-  condense out of the fluid in sectors (`device/firmware/main/fluid/fluid_ask.h`: 1 = whole screen,
-  2 = left / right, 3–5 = pie sectors from 12 o'clock clockwise, options in reading order of
-  the sectors), each label in its colour (pastel palette; mono palettes stay one hue), with a
-  rim arc of the fluid in that colour spanning its sector minus a small gap at each faint
-  divider (1 option: a full ring). On a tap the chosen arc flares and settles while the
-  others fade with their labels. The device then sends exactly one `answer` event for the job:
-  `{"t":"evt","name":"answer","data":{"job":"…","index":1,"label":"no"}}` (a tap: the sector
-  it landed in; `label` = `options[index]` verbatim, no `reason`),
+  extra field (unknown args are not checked), so the relay needs no cap for it. The question
+  (`device/firmware/main/fluid/fluid_ask.h`, `fluid_askview.h`; the design is
+  `device/creatures/ask-options.html`) forms over whatever shows where a touch's crest passes from the
+  centre, the scene behind dimming but moving on: the title (two lines when long) near the top, then for
+  1–3 options arcs of the rim splitting its lower half (option 0 lower left), each label inside its arc
+  in its colour, for 4–5 rows each underlined in its colour under a faint ring. A tap on an answer: a
+  gentle wave from it, everything breaks into dust the water carries off; a tap on the question or the
+  centre answers nothing. The device then sends exactly one `answer` event for the job:
+  `{"t":"evt","name":"answer","data":{"job":"…","index":1,"label":"no"}}` (a tap: the answer
+  it landed on; `label` = `options[index]` verbatim, no `reason`),
   `{"t":"evt","name":"answer","data":{"job":"…","index":null,"reason":"timeout"}}` (no tap
   within `timeout_ms`), or `{…,"index":null,"reason":"cancelled"}` (an accepted `say`,
   `show`, `mood`, `state` with args, `listen` or a new `ask`, or a pairing, took the screen
@@ -812,7 +815,7 @@ What the screen does between commands (`device/firmware/main/fluid/fluid_directo
 | `talk` (relay) | `{say?, listen?=true, listen_ms? 0..30000 (as listen's ms), voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?}` | blocks ≤ 24 s | say then listen in one job: `{job, status:"done", heard, said?, reason, speech_ms?, filler_in_ms?, ms:{tts_first_audio, speech, listen, stt, total}, timings}` (`filler_in_ms`: [auto filler](#quick-phrases-and-the-auto-filler)); over 24 s `{job, status:"pending"}` |
 | `updates` (relay) | — | `{api_version, firmware, actions}` | "check Molty for updates": [Firmware updates](#firmware-updates) |
 | `update` (relay → device) | — (agent) · `{job, version, url, sha256, size, timeout_ms}` (device) | job | install the latest release after an on-screen confirm; `unsupported` without the `update` cap |
-| `ask` (relay) | `{say?, options: 1..5 items — a label of 1..8 printable ASCII (unique, case-insensitive) or {label, color?}, timeout_s? 1..120 =30, voice?}` | blocks ≤ 24 s | say, then device `ask`, then the tap: `{job, status:"done", answer: label\|null, index: int\|null, reason?: "timeout"\|"cancelled"\|"offline", said?, ms:{tts_first_audio?, speech?, answer, total}, timings:{queue, say?, ask:{cmd, wait}, total}}`; over 24 s `{job, status:"pending"}` (finish with `molty_wait`). Holds the audio lock only while speaking. `unsupported` without `ask` in caps (no touch) or, with `say`, without a speaker |
+| `ask` (relay) | `{say?, title? (1..40 printable ASCII, shown over the answers), options: 1..5 items — a label of printable ASCII (1..14 chars for 1-2 items, 1..10 for 3, 1..8 for 4-5; unique, case-insensitive) or {label, color?}, timeout_s? 1..120 =30, voice?}` | blocks ≤ 24 s | say, then device `ask`, then the tap: `{job, status:"done", answer: label\|null, index: int\|null, reason?: "timeout"\|"cancelled"\|"offline", said?, ms:{tts_first_audio?, speech?, answer, total}, timings:{queue, say?, ask:{cmd, wait}, total}}`; over 24 s `{job, status:"pending"}` (finish with `molty_wait`). Holds the audio lock only while speaking. `unsupported` without `ask` in caps (no touch) or, with `say`, without a speaker |
 | `volume` | `{volume 0..21}` | — | `unsupported` without a speaker |
 | `imu` | — | snapshot | `unsupported` without an IMU |
 | `diag` | `{timeline? 0..180}` | `/api/diag` JSON | frame histograms, task CPU %, heap, stalls, net; `timeline` = seconds of 1 Hz rows |
@@ -977,7 +980,7 @@ bearer is `agent_token` = `<device_id>.<base64url(32 bytes)>`; the prefix only r
 | `POST /v1/devices/<id>/cmd {name, args}` | `200 {ok:true, result:{...}}`; `say`/`listen` → `{ok:true, result:{job}}` | `{ok:false, error:"code"}`: 401 bad/missing bearer, 400 `invalid_args`/`unknown_command`, 409 `device_offline`/`human_speaking` (`say`/`listen`/`mood`/`show`/`state` patch during an open turn)/`turn_claimed` (`say`)/`audio_busy`/`unsupported`, 504 `device_timeout`, 502 device-reported codes |
 | same with `wait:true` (say/listen) | `200 {ok:true, result:{job, status:"done", ...job result}}`; still running after 24 s: `202 {ok:true, result:{job, status:"pending", state}}` | as above; a failed job → its error, still carrying the `events` / `firmware_update` the call already consumed |
 | `POST /v1/devices/<id>/talk {say?, listen?, listen_ms?, voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?, ack?, in_reply_to?}` | `200 {ok:true, result:{job, status:"done", heard, said?, reason, speech_ms?, ms, timings}}` (`timings.turn` when it answered a turn); `202` pending as above | 400 `invalid_args`, 401, 409 `human_speaking` (the human is still talking)/`turn_claimed` (another agent answers this human turn, [Shake to talk](#shake-to-talk))/`audio_busy`/`unsupported`/`device_offline`, 504 `playback_timeout` (no `say.done`), job errors |
-| `POST /v1/devices/<id>/ask {say?, options, timeout_s?, voice?}` | `200 {ok:true, result:{job, status:"done", answer, index, reason?, said?, ms, timings}}` (a timeout / cancelled / offline ask is `200` with `answer:null`); `202` pending as above | 400 `invalid_args` (with the reason, e.g. a label over 8 chars), 401, 409 `audio_busy` (with `say`)/`unsupported`/`device_offline`, 504 `playback_timeout`, device-reported codes |
+| `POST /v1/devices/<id>/ask {say?, title?, options, timeout_s?, voice?}` | `200 {ok:true, result:{job, status:"done", answer, index, reason?, said?, ms, timings}}` (a timeout / cancelled / offline ask is `200` with `answer:null`); `202` pending as above | 400 `invalid_args` (with the reason, e.g. a label over its count's limit), 409 `firmware_too_old` (a label over 8 chars to firmware without `ask_title`), 401, 409 `audio_busy` (with `say`)/`unsupported`/`device_offline`, 504 `playback_timeout`, device-reported codes |
 | `GET\|POST\|DELETE /v1/devices/<id>/phrases` (`POST {phrases:[{id, text}]}` upserts; `DELETE ?id=a,b` or `?id=*`) | `200 {ok:true, result:{phrases:[{id, text, ready}], builtins:[{id, text, ready, shadowed?}], limits:{per_agent, text_max}, voice}}` ([Quick phrases](#quick-phrases-and-the-auto-filler)) | 400 `invalid_args` (over 20 phrases, text over 60 characters, bad id), 401 |
 | `GET /v1/jobs/<job>[?wait_s=0..8]` | `200 {job, kind:"say"\|"listen"\|"talk"\|"ask"\|"update"\|"quick", status:"queued"\|"running"\|"done"\|"failed", phase?, result?, error?, detail?}`; say done `{ms, text, timings}`, listen done `{text, duration_ms, peak, rms, reason, speech_ms?, timings}`, talk / ask done as `/talk` / `/ask`, update as below | 401, 404 `not_found` |
 | `GET /v1/devices/<id>/updates` | `200 {ok:true, result:{api_version, firmware, actions}}` ([Firmware updates](#firmware-updates)) | 401 |

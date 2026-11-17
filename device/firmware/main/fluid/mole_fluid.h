@@ -41,6 +41,7 @@
 
 #include "esp_err.h"
 #include "cJSON.h"
+#include "fluid_ask.h"
 #include <stdbool.h>
 
 #ifdef __cplusplus
@@ -215,20 +216,17 @@ uint32_t mole_fluid_gestures(void);
 cJSON *mole_fluid_gestures_json(void);
 esp_err_t mole_fluid_gestures_apply(const cJSON *bindings);
 
-/** A question (link_ask.c, the link task) — the screen follows what the link wants:
- *  show   n (1..FLUID_ASK_MAX) labels condense out of the fluid in their sectors
- *         (fluid_ask.h), each in its colour (colors[i] 0xRRGGBB, -1 or colors NULL =
- *         FLUID_ASK_COLORS[i]) with a rim arc of the fluid in that colour, and faint
- *         dividers; replaces any question on screen.
- *  pick   the question was answered with option i: the others (labels and arcs) melt,
- *         the chosen one stays ~0.8 s (its arc flares), then the creature comes back.
- *  end    the question ended unanswered (timeout, cancelled): the labels melt and the
- *         fluid returns to the creature — or to the state a command asked for meanwhile.
- *  While a question is up, other state changes wait under it (the director keeps them),
- *  except that an explicit state / mood request ends a pick's hold early.
- *  show sets *seq (≠ 0) to the question's number on screen: what mole_fluid_ask_shown
- *  reports once the panel shows it readable. */
-esp_err_t mole_fluid_ask_show(int n, const char *const *labels, const int32_t *colors, unsigned *seq);
+/** A question (link_ask.c and link_pair.c, the link task) — the screen follows what the link wants (fluid_ask.h,
+ *  fluid_askview.h; device/creatures/ask-options.html):
+ *  show   q (title, detail, code, 1..FLUID_ASK_MAX answers in their colours, fluid_ask_color) forms over whatever shows,
+ *         from a touch at the centre of the water; the scene dims under it and keeps moving; replaces any question.
+ *  pick   it was answered with option i: a gentle wave from that answer, everything breaks into dust the water
+ *         carries off (~1 s).
+ *  end    it ended unanswered (timeout, cancelled): the rim lets go, then the same dust.
+ *  While it stands, the director's state changes wait under it; its dust goes over whatever comes next.
+ *  show sets *seq (!= 0) to the question's number on screen: what mole_fluid_ask_shown reports once the panel shows it
+ *  formed enough to answer. */
+esp_err_t mole_fluid_ask_show(const fluid_ask_q_t *q, unsigned *seq);
 void mole_fluid_ask_pick(int index);
 void mole_fluid_ask_end(void);
 /** The question (its show seq) a tap may answer right now: the one on the frame last flushed

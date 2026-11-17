@@ -132,8 +132,9 @@ Over the existing command path (`link_cmd_register`), gated by device caps `pkg`
 - A scene lives in RAM. Reboot = the creature.
 - **Why install answers at once (firmware):** commands run on the link task, which also has to see the owner's tap,
   so it cannot wait for the question and the download. Same shape as `update`: refusals in the `res`, the outcome as an event.
-- **The question:** the ask screen's labels are 8 letters with no header, so it shows the package name (its first 8
-  letters, green) and `no` (white). The size is not shown; it is checked against 256 KB and the quota instead.
+- **The question:** "INSTALL <NAME>?" in full (up to 31 letters of the name) with a detail line, and two rim arcs:
+  `install` (green) and `not now` (white). It waits 60 s for a tap (the relay's `timeout_ms`). The size is not shown;
+  it is checked against 256 KB and the quota instead.
   The name shown is the one the agent sent; the stored name and version are the file's own.
 - **Download:** straight from the allowlisted URL over verified TLS; redirects are not followed. The URL may use only
   `[A-Za-z0-9._/-]` after the prefix, no `..` or `//`, and must end in `.json`.
