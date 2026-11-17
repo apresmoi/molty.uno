@@ -813,7 +813,11 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     }
     /* the always-on dim fluid; its slow noise (and the eddies' ψ) refresh on
      * alternating frames — both drift ≤ 0.012 lattice units per frame */
-    fluid_sim_background(s, s_tnow, breath, (s_frame_no & 1) == 0 || s_frame_no < 2);
+    /* a scene in high definition shows the surface (its dust) and the colours, never the ink: the
+     * ink holds still under it (no background, eddies, flow or view) and moves on after */
+    const bool still = s_hd.gen != 0 && s_cur == ST_SCENE && !asking;
+    s->p.still = still;
+    if (!still) fluid_sim_background(s, s_tnow, breath, (s_frame_no & 1) == 0 || s_frame_no < 2);
     if (s_cur == ST_FX && !asking) fluid_effect_tick(s, s_cur_fx, rdt, &s_fx_state);
 
     /* surface drivers (main.js): thinking = the motor's fine standing shimmer; the creature's
@@ -830,13 +834,13 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         ripple(frand() * 1.6f - 0.8f, frand() * 1.6f - 0.8f, 0.4f + cfg->mic, 0.06f);
 
     /* fixed-step physics */
-    if ((s_frame_no & 1) == 1 || s_frame_no < 2) fluid_sim_swirl_field(s);
+    if (!still && ((s_frame_no & 1) == 1 || s_frame_no < 2)) fluid_sim_swirl_field(s);
     s_acc += rdt;
     int n = 0;
     while (s_acc >= FLUID_STEP && n < 4) { fluid_sim_step(s, FLUID_STEP); s_acc -= FLUID_STEP; n++; }
     if (n == 4) s_acc = 0.f;
     fluid_sim_color(s, n * FLUID_STEP);                    /* colour rides the same flow, once per frame */
-    fluid_sim_view(s);
+    if (!still) fluid_sim_view(s);
     s_shimmer = 0.12f + (thinking ? 0.35f : 0.f) + cfg->mic * 0.4f;
 
     /* a question's faint dividers: in while it waits, out once it was answered */

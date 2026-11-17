@@ -949,8 +949,36 @@ static void test_floor(void) {
     fluid_sim_destroy(a); fluid_sim_destroy(b); fluid_sim_destroy(c);
 }
 
+/* still (a scene in high definition): only the surface moves, the ink holds, each cell takes its
+ * target's colour; a frame costs a fraction of the full one */
+static void test_still(void) {
+    fluid_sim_t *s = fluid_sim_create(59, 36, 466);
+    for (int f = 0; f < 60; f++) { fluid_target_blob(s, f / 60.f, 1.f, 0, 0); fluid_sim_background(s, f / 60.f, 0.5f, true); fluid_sim_swirl_field(s); fluid_sim_step(s, 1.f / 60); fluid_sim_color(s, 1.f / 60); fluid_sim_view(s); }
+    int16_t *ink = malloc(sizeof(int16_t) * (size_t)s->N);
+    memcpy(ink, s->ink, sizeof(int16_t) * (size_t)s->N);
+    for (int k = 0; k < s->N; k++) s->tcol[k] = fluid_pack_rgba8(1.f, 0.5f, 0.f, 0.f);
+    fluid_sim_impulse(s, 0.f, 0.f, 1.f, 0.1f);
+    s->p.still = true;
+    const int R = 200;
+    double t0 = now_ms();
+    for (int f = 0; f < R; f++) { fluid_sim_step(s, 1.f / 60); fluid_sim_step(s, 1.f / 60); fluid_sim_color(s, 1.f / 30); }
+    const double still_ms = (now_ms() - t0) / R;
+    int moved = 0, wave = 0, tinted = 0;
+    for (int k = 0; k < s->N; k++) { moved += s->ink[k] != ink[k]; wave += s->h[k] != 0; tinted += s->mask[k] && s->col[k].r == 65535 && s->col[k].g == 128 * 257; }
+    CHECK(moved == 0 && wave > 50 && tinted == s->inside, "still: the ink holds (%d moved), the wave runs (%d), the colours are the targets' (%d of %d)", moved, wave, tinted, s->inside);
+    s->p.still = false;
+    t0 = now_ms();
+    for (int f = 0; f < R; f++) { fluid_target_blob(s, f / 60.f, 1.f, 0, 0); fluid_sim_background(s, f / 60.f, 0.5f, (f & 1) == 0); if (f & 1) fluid_sim_swirl_field(s);
+                                  fluid_sim_step(s, 1.f / 60); fluid_sim_step(s, 1.f / 60); fluid_sim_color(s, 1.f / 30); fluid_sim_view(s); }
+    const double full_ms = (now_ms() - t0) / R;
+    printf("  still frame (host): %.3f ms against %.3f ms full (%.0f%%)\n", still_ms, full_ms, 100.0 * still_ms / full_ms);
+    CHECK(still_ms * 3.0 < full_ms, "still: a frame under a third of the full one (%.3f vs %.3f ms)", still_ms, full_ms);
+    free(ink); fluid_sim_destroy(s);
+}
+
 int main(void) {
     printf("fluid host test\n");
+    test_still();
     test_progress();
     test_floor();
     test_static_label();

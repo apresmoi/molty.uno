@@ -691,20 +691,40 @@ static void test_hd_pixels(const char *dir) {
     CHECK(hdc > 100 && keyd == 0, "calm: %d cells drawn smooth, %d as dots", hdc, keyd);
     fluid_draw(d, fr, fb, &o, &y0, &y1);
     CHECK(y1 == y0, "calm: nothing redrawn the next frame ([%d, %d))", y0, y1);
-    /* the dust shimmers: a later moment changes it, the windows sent (runs of changed cells) make
-     * the same frame, and the drawing between them is not redrawn */
+    /* the dust shimmers slowly: a second of calm frames reseeds every row once, each frame a row or
+     * so, sent as windows of the cells that changed (the same frame as the framebuffer's), never
+     * the drawing between: a calm frame sends a few percent of the panel */
     static uint16_t wbuf[466 * 14];
     memcpy(win, calm, (size_t)S * S * 2);
-    o.time = 1.f;
-    fluid_draw_cells(d, fr, &o);
-    fluid_draw_rect(d, &o, &(fluid_rect_t){ fb, S, 0, 0, S, S }, false);
-    s_sends = 0;
-    int sentpx = fluid_draw_send(d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, wbuf, S * 14, send_fb, win);
-    int dirtypx = 0;
-    for (int k = 0; k < N; k++) if (d->dirty[k]) dirtypx += (d->cx[k % W + 1] - d->cx[k % W]) * (d->cy[k / W + 1] - d->cy[k / W]);
-    CHECK(!memcmp(win, fb, (size_t)S * S * 2) && memcmp(fb, calm, (size_t)S * S * 2) && sentpx < 2 * dirtypx,
-          "shimmer: the dust changes, the windows are the same frame (%d px sent for %d px changed)", sentpx, dirtypx);
-    printf("  shimmer (host): %d windows, %d px sent for %d px of changed cells\n", s_sends, sentpx, dirtypx);
+    long sentsum = 0, dirtysum = 0;
+    int sentmax = 0, sends = 0, same = 1;
+    double calm_us = 0.;
+    for (int f = 1; f <= 30; f++) {
+        o.time = f / 30.f;
+        const double tc = now_us();
+        fluid_draw_cells(d, fr, &o);
+        calm_us += now_us() - tc;
+        fluid_draw_rect(d, &o, &(fluid_rect_t){ fb, S, 0, 0, S, S }, false);
+        s_sends = 0;
+        const double ts = now_us();
+        const int px = fluid_draw_send(d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, wbuf, S * 14, send_fb, win);
+        calm_us += now_us() - ts;
+        for (int k = 0; k < N; k++) if (d->dirty[k]) dirtysum += (d->cx[k % W + 1] - d->cx[k % W]) * (d->cy[k / W + 1] - d->cy[k / W]);
+        sentsum += px; sends += s_sends;
+        if (px > sentmax) sentmax = px;
+        same &= !memcmp(win, fb, (size_t)S * S * 2);
+    }
+    CHECK(same && memcmp(fb, calm, (size_t)S * S * 2) && sentsum / 30 < S * S / 20 && sentmax < S * S / 8 && sentsum < 2 * dirtysum,
+          "calm: the dust shimmers, %ld px a frame sent (most %d, of %d), %.1f windows, the same frame", sentsum / 30, sentmax, S * S, sends / 30.f);
+    double full_us = now_us();
+    for (int f = 0; f < 10; f++) {
+        d->force = true;
+        fluid_draw_cells(d, fr, &o);
+        fluid_draw_send(d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, wbuf, S * 14, send_fb, win);
+    }
+    full_us = (now_us() - full_us) / 10;
+    printf("  calm frame (host): %ld px sent on average (most %d), %.1f windows; drawn in %.0f us against %.0f us redrawing all\n",
+           sentsum / 30, sentmax, sends / 30.f, calm_us / 30, full_us);
     o.time = 0.f;
     fluid_draw(d, fr, fb, &o, &y0, &y1);
 
@@ -738,13 +758,13 @@ static void test_hd_pixels(const char *dir) {
     CHECK(!memcmp(fb, calm, (size_t)S * S * 2), "calm again: the very same pixels");
 
     /* a transition: the shapes fade into the dust, all dust, then whole again */
-    o.dust = 0.15f; fluid_draw(d, fr, fb, &o, &y0, &y1);
+    o.dust = 0.2f; fluid_draw(d, fr, fb, &o, &y0, &y1);
     long ring_calm = 0, ring_dim = 0;                                   /* along the outer ring */
     for (int a = 0; a < 360; a++) {
         const int q = (int)(c0 + R * sinf(a * 0.0174533f)) * S + (int)(c0 + R * cosf(a * 0.0174533f));
         ring_calm += lum(calm[q]); ring_dim += lum(fb[q]);
     }
-    CHECK(ring_dim > ring_calm / 4 && ring_dim < ring_calm * 3 / 4, "dust 0.15: the ring dimmed (%ld of %ld)", ring_dim, ring_calm);
+    CHECK(ring_dim < ring_calm / 2, "dust 0.2: the shapes give way to the dust at once (%ld of %ld)", ring_dim, ring_calm);
     o.dust = 1.f; fluid_draw(d, fr, fb, &o, &y0, &y1);
     int lit = 0;
     for (int q = 0; q < S * S; q++) lit += lum(fb[q]) > 260;
@@ -861,6 +881,71 @@ static void test_hd_pixels(const char *dir) {
             fluid_sim_step(s, DT);
         }
         CHECK(wob > 0 && far == 0 && dusty == 0, "a word's ripple: a wobble (%d cell frames) only around it (%d farther), never dust (%d)", wob, far, dusty);
+    }
+
+    /* the drawer's cost while a finger moves on the water and in a transition (frames that change) */
+    {
+        double touch_us = 0., trans_us = 0.;
+        int touch_px = 0, trans_px = 0;
+        for (int f = 0; f < 20; f++) {
+            for (int j = 0; j < H; j++) for (int i = 0; i < W; i++) {
+                const float di = (float)(i - ti - (f & 3)), r2 = di * di + (float)((j - tj) * (j - tj));
+                fr->h[j * W + i] = (int16_t)(3.f * FQ_H * expf(-r2 / 18.f));
+            }
+            const double t0 = now_us();
+            fluid_draw_cells(d, fr, &o);
+            touch_px += fluid_draw_send(d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, wbuf, S * 14, send_fb, win);
+            touch_us += now_us() - t0;
+        }
+        memset(fr->h, 0, sizeof(int16_t) * (size_t)N);
+        double trans_cells = 0.;
+        for (int f = 0; f < 20; f++) {
+            o.dust = 0.3f + 0.02f * f;
+            const double t0 = now_us();
+            fluid_draw_cells(d, fr, &o);
+            trans_cells += now_us() - t0;
+            if (!f) s_sends = 0;
+            trans_px += fluid_draw_send(d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, wbuf, S * 14, send_fb, win);
+            trans_us += now_us() - t0;
+        }
+        o.dust = 0.f;
+        /* the fluid's own look of the same grid, every frame changing (its shimmer): the drawer's
+         * work the device keeps up with at 33 fps */
+        double look_us = 0.;
+        int look_px = 0;
+        fluid_draw_opts_t lo = { .palette = FLUID_PAL_PASTEL, .edge_mode = FLUID_EDGE_CONTOURS, .shimmer = 0.12f, .ramp = " .:-=+*#", .font = gc_font5x7 };
+        for (int k = 0; k < N; k++) fr->view[k] = (int16_t)(FQ_UNIT * (0.15f + 0.6f * (float)((k * 7919) % 97) / 97.f));
+        for (int f = 0; f < 20; f++) {
+            lo.time = f / 30.f;
+            for (int k = 0; k < N; k++) fr->view[k] = (int16_t)(FQ_UNIT * (0.15f + 0.6f * (float)((k * 7919 + f * 13) % 97) / 97.f));
+            const double t0 = now_us();
+            fluid_draw_cells(d, fr, &lo);
+            look_px += fluid_draw_send(d, &lo, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, wbuf, S * 14, send_fb, win);
+            look_us += now_us() - t0;
+        }
+        for (int k = 0; k < N; k++) fr->view[k] = (int16_t)(0.2f * FQ_UNIT);
+        d->force = true;
+        fluid_draw(d, fr, fb, &o, &y0, &y1);
+        printf("  fluid look frame (host): %.0f us, %d px\n", look_us / 20, look_px / 20);
+        printf("  touch frame (host): %.0f us, %d px sent; transition frame: %.0f us (cells %.0f), %d px, %d windows\n", touch_us / 20, touch_px / 20, trans_us / 20, trans_cells / 20, trans_px / 20, s_sends / 20);
+    }
+
+    /* the fill's cost: the chart's items rasterised (a change), against a frame that keeps them and
+     * lays a subtitle word over them */
+    {
+        const scene_caption_t cap = { "Gemini", 6, 2 };
+        const int R3 = 60;
+        double t0 = now_us();
+        for (int q = 0; q < R3; q++) { sc->focus = q & 1 ? moon : -1; scene_fill(s, sc, 1.f, &cap, L, &nl, dots, &hd); }
+        const double full_us = (now_us() - t0) / R3;
+        sc->focus = -1;
+        scene_fill(s, sc, 1.f, &cap, L, &nl, dots, &hd);
+        t0 = now_us();
+        for (int q = 0; q < R3; q++) scene_fill(s, sc, 1.f, &cap, L, &nl, dots, &hd);
+        const double kept_us = (now_us() - t0) / R3;
+        printf("  chart fill (host): %.0f us when its items change, %.0f us a frame otherwise (%.0fx); on the device (23 ms measured): %.1f ms\n",
+               full_us, kept_us, full_us / kept_us, 23.0 * kept_us / full_us);
+        CHECK(kept_us * 5.0 < full_us, "a calm frame's fill keeps the items' raster (%.0f vs %.0f us)", kept_us, full_us);
     }
 
     /* the cost: every cell redrawn (a full window pass) against the dots alone */
