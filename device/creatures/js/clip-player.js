@@ -22,6 +22,8 @@ const i8 = (s) => { const u = b64(s); return new Int8Array(u.buffer.slice(u.byte
 const u16 = (s) => { const u = b64(s); return new Uint16Array(u.buffer.slice(u.byteOffset, u.byteOffset + u.length)); };
 const ease = (x) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x));
 const WIDTH = { t: 3, r: 4, s: 3 };
+const PACE = 0.6;   // the most the body moves a second (world units): above a walk's 0.36 (creature_clip.c CC_PACE)
+const EDGE = 0.35;  // walking past this far from the frame's centre (world units, across) turns it round (creature_clip.c CC_EDGE)
 const EPS = 1e-5;   // a clip's end, against float clocks (the C player's time is float steps)
 
 /** Decode a clip's channels: per channel the node, path, keys (frames) and float outputs. */
@@ -78,6 +80,13 @@ export function samplePose(rig, rest, c, t, pose) {
   const period = c.frames, f = c.loop ? ((t * rig.fps) % period + period) % period : Math.min(t * rig.fps, period - 1), tmp = [0, 0, 0, 0];
   for (const h of c.ch) {
     sampleChannel(h, f, period, c.loop, tmp);
+    const n = h.keys.length;
+    if (c.loop && h.node === 0 && h.path === 't' && n >= 2 && f >= h.keys[n - 1]) {
+      // a loop's root travels: past its last key it carries on at the last step's pace (it does not swing back to the
+      // first key's place), so a loop's end is its start plus one cycle's travel (the wrap in update)
+      const st = h.cubic ? 3 * h.w : h.w, vo = h.cubic ? h.w : 0, a = (n - 2) * st + vo, b = (n - 1) * st + vo, u = (f - h.keys[n - 1]) / (h.keys[n - 1] - h.keys[n - 2]);
+      for (let q = 0; q < 3; q++) tmp[q] = h.out[b + q] + (h.out[b + q] - h.out[a + q]) * u;
+    }
     const o = h.node * POSE + (h.path === 't' ? 0 : h.path === 'r' ? 3 : 7);
     for (let k = 0; k < h.w; k++) pose[o + k] = tmp[k];
   }
@@ -142,10 +151,10 @@ export function clipPlayer(rig) {
   const names = Object.keys(rig.clips), clips = names.map((n) => ({ name: n, ...decodeClip(rig.clips[n], rig.scale) }));
   const byName = Object.fromEntries(clips.map((c, i) => [c.name, i])), N = rig.nodes.length, g = rig.graph;
   const rest = restPose(rig), cur = new Float32Array(N * POSE), from = new Float32Array(N * POSE), tmp = new Float32Array(N * POSE), pose = new Float32Array(N * POSE);
-  const world = new Float32Array(N * 12), fromWorld = new Float32Array(N * 12), rootNode = 0;
+  const world = new Float32Array(N * 12), fromWorld = new Float32Array(N * 12), out = new Float32Array(N * 12), rootNode = 0;
   const contacts = rig.contacts || [];
   const s = { clip: byName[g.rest.sit] ?? 0, t: 0, ox: 0, oz: 0, queue: [], blendT: 1, blendD: g.blend, lockX: 0, lockZ: 0,
-    mood: 'idle', gesture: null, gestureT: 0, pending: false, cam: { x: 0, z: 0, yaw: clips[0].view, snap: true } };
+    mood: 'idle', gesture: null, gestureT: 0, pending: false, cam: { x: 0, z: 0, yaw: clips[0].view, snap: true }, hd: 0, hbase: 0, sense: 0, px: 0, pz: 0, tx: 0, tz: 0, cx0: 0, cz0: 0 };
   const clipOf = (name) => byName[name];
   const loopOfMood = (m) => byName[g.moods?.[m] ?? m] ?? byName[g.rest.sit];
   const rootAt = (ci, t) => { samplePose(rig, rest, clips[ci], t, tmp); return [tmp[rootNode * POSE], tmp[rootNode * POSE + 2]]; };
@@ -191,8 +200,50 @@ export function clipPlayer(rig) {
     start(next);
   }
 
+  // The camera stays where it started, looking from the first clip's side: the floor never moves, so a walking frame
+  // changes only the body's cells. The body turns instead (about its centre: the same picture of it as the camera going
+  // round), to each clip's side, and walks on the floor in the way it faces; near the frame's side edges, walking outward,
+  // it turns round (an arc, as it walks). world: the clip's pose (root motion included); out: the same turned and placed.
+  function turn(dt) {
+    const cc = clips[s.clip], cx = (world[g.center[0] * 12 + 3] + world[g.center[1] * 12 + 3]) / 2, cz = (world[g.center[0] * 12 + 11] + world[g.center[1] * 12 + 11]) / 2;
+    const D2R = Math.PI / 180, TAU = 2 * Math.PI, f = Math.fround;
+    if (s.cam.snap) { s.cam.x = s.px = s.tx = cx; s.cam.z = s.pz = s.tz = cz; s.cam.yaw = cc.view; s.hd = s.hbase = s.sense = 0; s.cam.snap = false; }
+    else {
+      const dx = cx - s.cx0, dz = cz - s.cz0, sn = Math.sin(s.hd), k = Math.cos(s.hd);
+      const wx = k * dx + sn * dz, wz = -sn * dx + k * dz;
+      // where it should be (tx, tz); it goes there at most PACE a second: a walk's own pace, and a crossfade's jump of
+      // the centre eased out (as the following camera did)
+      s.tx = f(s.tx + wx); s.tz = f(s.tz + wz);
+      const ex = s.tx - s.px, ez = s.tz - s.pz, el = Math.hypot(ex, ez), mv = PACE * dt, q = el > mv ? mv / el : 1;
+      s.px = f(s.px + ex * q); s.pz = f(s.pz + ez * q);
+      const rx = Math.cos(s.cam.yaw * D2R), rz = -Math.sin(s.cam.yaw * D2R);
+      const lat = (s.px - s.cam.x) * rx + (s.pz - s.cam.z) * rz, vlat = wx * rx + wz * rz;
+      let want = s.hbase + (s.cam.yaw - cc.view) * D2R, gap = want - s.hd;
+      gap -= TAU * Math.round(gap / TAU);
+      if (Math.abs(lat) > EDGE && lat * vlat > 0.05 * dt * Math.abs(lat) && Math.abs(gap) < 0.3) {
+        // turn round, the way whose arc bends it back toward the frame's middle in depth (turning the same way every time
+        // would carry it off into the distance)
+        const dep = -(s.px - s.cam.x) * rz + (s.pz - s.cam.z) * rx, bend = wz * -rz - wx * rx;
+        s.hbase = f(s.hbase + Math.PI); s.sense = dep * bend > 0 ? -1 : 1;
+      }
+      want = s.hbase + (s.cam.yaw - cc.view) * D2R; gap = want - s.hd;
+      gap -= TAU * Math.round(gap / TAU);
+      if (s.sense !== 0 && Math.abs(gap) < 1) s.sense = 0;
+      else if (s.sense * gap < 0) gap += s.sense * TAU;
+      s.hd = f(s.hd + gap * (1 - Math.exp(-2 * dt)));
+    }
+    s.cx0 = cx; s.cz0 = cz;
+    const sn = Math.sin(s.hd), k = Math.cos(s.hd);
+    for (let i = 0; i < N; i++) {
+      const m = i * 12;
+      for (let r = 0; r < 4; r++) { const a = world[m + r], b = world[m + 4 + r], e = world[m + 8 + r]; out[m + r] = k * a + sn * e; out[m + 4 + r] = b; out[m + 8 + r] = -sn * a + k * e; }
+      const tx = world[m + 3] - cx, tz = world[m + 11] - cz;
+      out[m + 3] = k * tx + sn * tz + s.px; out[m + 11] = -sn * tx + k * tz + s.pz;
+    }
+  }
+
   const api = {
-    nodes: rig.nodes, clips, world, pose: cur, get clip() { return clips[s.clip].name; }, get t() { return s.t; }, get cam() { return s.cam; },
+    nodes: rig.nodes, clips, world: out, clipWorld: world, pose: cur, get clip() { return clips[s.clip].name; }, get t() { return s.t; }, get cam() { return s.cam; },
     get queue() { return s.queue.map((i) => clips[i].name); }, get offset() { return [s.ox, s.oz]; },
     mood(m) { if (!MOODS.includes(m) || m === s.mood) return; s.mood = m; s.pending = true; },
     act(name) {
@@ -240,16 +291,11 @@ export function clipPlayer(rig) {
         }
         if (n) { const k = (1 - w) / n; s.lockX = dx * k; s.lockZ = dz * k; forward(rig, cur, s.ox + s.lockX, s.oz + s.lockZ, world); }
       } else { s.lockX = 0; s.lockZ = 0; }
-      // the camera: eases round to the clip's side and follows the body
-      const cc = clips[s.clip], cx = (world[g.center[0] * 12 + 3] + world[g.center[1] * 12 + 3]) / 2, cz = (world[g.center[0] * 12 + 11] + world[g.center[1] * 12 + 11]) / 2;
-      if (s.cam.snap) { s.cam.x = cx; s.cam.z = cz; s.cam.yaw = cc.view; s.cam.snap = false; }
-      const k = 1 - Math.exp(-3 * dt), ky = 1 - Math.exp(-2 * dt);
-      s.cam.x += (cx - s.cam.x) * k; s.cam.z += (cz - s.cam.z) * k;
-      let dy = cc.view - s.cam.yaw; dy -= 360 * Math.round(dy / 360); s.cam.yaw += dy * ky;
+      turn(dt);
       return api;
     },
   };
   samplePose(rig, rest, clips[s.clip], 0, cur); s.blendT = s.blendD = 1;
-  forward(rig, cur, 0, 0, world);
+  forward(rig, cur, 0, 0, world); out.set(world);
   return api;
 }

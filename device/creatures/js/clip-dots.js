@@ -12,13 +12,13 @@
 //             patch's edge (a region of the body's surface, not a shape), the mouth and tongue when open, whiskers as
 //             fine lines where nothing else is drawn, the bowl and the yarn.
 //   world     a static perspective floor (a dotted texture fixed in the world and a few receding lines; the cat walks
-//             over it), faint dust above that thickens toward the horizon and shimmers frame by frame, a vignette to
-//             the rim and the bottom, and a two-dot halo kept clear round the cat.
+//             over it, the camera fixed), faint dust above that thickens toward the horizon and twinkles a few rows a
+//             frame, filling the disc to a narrow fade at its rim, and a two-dot halo kept clear round the cat.
 //
 //   const r = clipDots(rig, W, H);   r.draw(world, cam, frame) -> { on: Uint8Array(2W*4H), rgb: Float32Array(*3), pri: Uint8Array }
 //   r.cells() -> { dots: Uint8Array(W*H) braille bytes, rgb: Uint32Array(W*H) 0xRRGGBB }   (one colour a cell, as the panel draws)
 
-export const VIEW_SIZE = 1.9, FLOOR_AT = 0.8, THRESH = 0.6;
+export const VIEW_SIZE = 1.9, FLOOR_AT = 0.62, THRESH = 0.6;
 const STRUCT = ['torso', 'hindL', 'hindR', 'head', 'legF.L', 'legF.R', 'tail', 'bowl', 'yarn'];
 const FEAT = ['eye', 'earIn', 'nose', 'maw', 'tongue', 'whisker', 'chest', 'milk', 'yarnline'];
 export const hash3 = (i, j, k) => {
@@ -220,11 +220,12 @@ export function clipDots(rig, W, H) {
       for (let Y = 0; Y < DH; Y++) for (let X = 0; X < DW; X++) {
         const i = Y * DW + X; if (halo[i]) continue;
         const ex = (X + 0.5 - DW / 2) / R, ey = (Y + 0.5 - DH / 2) / (DH / 2), rr = Math.sqrt(ex * ex + ey * ey);
-        const vig = (1 - sstep(0.62, 0.97, rr)) * (1 - sstep(0.87, 1.0, Y / DH)); if (vig <= 0.01) continue;
+        const vig = 1 - sstep(0.9, 0.99, rr);   // the world fills the disc, fading only at its rim if (vig <= 0.01) continue;
         let a = 0, col = null;
         if (Y > horizon) {
           const zz = (floorRow - horizon) / (Y + 0.5 - horizon), uw = (X + 0.5 - DW / 2) * zz + scroll;
-          const lane = Math.abs(((uw % 26) + 26) % 26 - 13), near = sstep(horizon, horizon + 14 * DH / 128, Y);
+          const lane = Math.abs((((uw + 13) % 26) + 26) % 26 - 13),   // the lines either side of the middle, none under the cat
+            near = sstep(horizon, horizon + 14 * DH / 128, Y);
           if (lane > 13 - 0.55 * zz) { a = 0.85 * near; col = flr; }
           else if (hash3(Math.floor(uw / 1.6), Math.round(14 / zz), 7) < 0.16 + 0.1 * (1 - near)) { a = (0.5 + 0.25 * near) * (0.6 + 0.4 * hash3(Math.floor(uw), Y, 3)); col = tex; }
         }

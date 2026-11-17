@@ -59,7 +59,7 @@ for (const { id, pkg } of rigged) {
       if (f % 300 === 150) p.act(gest[(f / 300 | 0) % gest.length]);
       p.update(DT);
       for (const [i, [node, at]] of rig.contacts.entries()) {
-        const w = pointOn(p.world, node, at);
+        const w = pointOn(p.clipWorld, node, at);    // the clips' own floor: the body's turn to a clip's side is not a slide
         assert.ok(w.every(Number.isFinite), 'finite');
         const down = w[1] < 0.012;                    // on the floor (the paw's contact point within 0.7 dot of it)
         if (!down) { runs[i] = null; continue; }
