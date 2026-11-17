@@ -191,12 +191,13 @@ static void test_say(void) {
     complete(record(&job));
     assert(bin_bytes==160000 && bin_ends==1 && bin_frames==17 && sdk_rx_chunks==50);
     assert(!strcmp(bin_reason,"max") && !strcmp(s_end_reason,"max"));
-    /* VAD off measured nothing: no speech_ms (a 0 made the relay skip STT). This exact
-     * header is the fixture in services/relay/test/talk.test.ts ("vad:false end frame"). */
-    assert(bin_speech_ms==-1);
+    /* VAD off still measures (a held press that heard nobody gets no chirp): 0 ms of speech
+     * in digital silence. The relay never skips STT on speech_ms alone (older firmware's
+     * header without it: services/relay/test/talk.test.ts "vad:false end frame"). */
+    assert(bin_speech_ms==0);
     /* ...plus the turn trace (cap "trace", docs/AGENT-LINK.md "Turn trace"): ct, lv (two
      * 100 ms chunks of digital silence), wq, and the end frame's tr */
-    assert(!strcmp(bin_end_header,"{\"s\":\"listen1\",\"seq\":16,\"kind\":\"pcm16\",\"rate\":16000,\"end\":true,\"reason\":\"max\","
+    assert(!strcmp(bin_end_header,"{\"s\":\"listen1\",\"seq\":16,\"kind\":\"pcm16\",\"rate\":16000,\"end\":true,\"reason\":\"max\",\"speech_ms\":0,"
                    "\"ct\":4800,\"lv\":\"0000\",\"wq\":0,\"tr\":{\"wall\":0,\"cap\":5000,\"sent\":17,\"fail\":0,\"drop\":0,\"dropms\":0,"
                    "\"r0\":-40,\"r1\":-40,\"gain\":8,\"pk\":0}}"));
     /* End of speech (default on): nobody speaks → the listen ends at no_speech_ms 4 s
@@ -314,9 +315,10 @@ static void test_ack(void) {
     k=ack_listen("",NULL,stop_no_speech); assert(!strcmp(bin_reason,"no_speech") && NO_ACK());
     /* the window ran out while they were talking (measured speech) */
     k=ack_listen_ms(1500,"",speech_fill,NULL); assert(!strcmp(bin_reason,"max") && bin_speech_ms>=160 && CHIRPED_FULL());
+    k=ack_listen_ms(1500,",\"vad\":false",speech_fill,NULL); assert(!strcmp(bin_reason,"max") && bin_speech_ms>=160 && CHIRPED_FULL());   /* VAD off measures too */
     /* nothing heard / nothing known / failed / cancelled: no acknowledgement, idle as before */
     k=ack_listen("",NULL,NULL); assert(!strcmp(bin_reason,"no_speech") && NO_ACK());
-    k=ack_listen_ms(1500,",\"vad\":false",speech_fill,NULL); assert(!strcmp(bin_reason,"max") && bin_speech_ms==-1 && NO_ACK());
+    k=ack_listen_ms(1500,",\"vad\":false",NULL,NULL); assert(!strcmp(bin_reason,"max") && bin_speech_ms==0 && NO_ACK());
     k=ack_listen("",speech_fill,mic_fails); sdk_rx_error=ESP_OK; assert(!strcmp(bin_reason,"error") && NO_ACK());
     k=ack_listen("",speech_fill,cancel_it); assert(!strcmp(s_end_reason,"error") && NO_ACK());
     /* the agent opts out per listen: false → nothing; "silent" → thinking without the chirp */
@@ -731,6 +733,7 @@ static void shake_run(audio_job_t *job,int adopt,const char *args) {
 }
 /* a tap: the rec stops with what it has, reason tap, acknowledged; a bound `talk`; a say's first-audio watchdog */
 static void stop_tap_at_chunk_10(int16_t *buf, size_t n, unsigned i) { (void)buf; (void)n; if (i==10) { link_audio_request(link_audio_job_gen(), LINK_AUDIO_REQ_STOP); apply_request(); } }
+static void speech_tap_at_chunk_10(int16_t *buf, size_t n, unsigned i) { speech_fill(buf,n,i); stop_tap_at_chunk_10(buf,n,i); }
 /* a link drop: a held job survives it, the hello names it, the welcome picks it up or drops it */
 static cJSON *welcome_with(const char *job, bool ok, int next) {
     cJSON *w=cJSON_CreateObject(), *f=cJSON_AddArrayToObject(w,"features");
@@ -813,8 +816,12 @@ static void test_tap_and_watchdog(void) {
     listen_job(8000,&job); assert(link_audio_listening(&age)); sdk_rx_chunks=0; sdk_rx_fill=stop_tap_at_chunk_10;
     complete(record(&job)); sdk_rx_fill=NULL;
     assert(bin_ends==1 && !strcmp(bin_reason,"tap") && !strcmp(s_end_reason,"tap") && bin_bytes>0);
-    assert(!link_audio_busy() && !strcmp(sdk_mood,"thinking"));        /* acknowledged: a normal end of turn */
+    assert(!link_audio_busy() && !strcmp(sdk_mood,"idle"));            /* nobody spoke: a press by accident, no acknowledgement */
     assert(!link_audio_listening(NULL));
+    listen_job(8000,&job); sdk_rx_chunks=0; sdk_rx_fill=speech_tap_at_chunk_10;
+    complete(record(&job)); sdk_rx_fill=NULL;
+    assert(!strcmp(bin_reason,"tap") && bin_speech_ms>=160);
+    assert(!link_audio_busy() && !strcmp(sdk_mood,"thinking"));        /* they spoke: acknowledged, a normal end of turn */
     /* no audio yet: waiting, gives up after 8 s; the first frame ends the wait */
     begin_say(); assert(link_audio_say_waiting());
     sdk_now+=7000000; link_audio_tick(); assert(!atomic_load(&s_cancel));

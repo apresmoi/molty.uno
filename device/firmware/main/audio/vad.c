@@ -77,10 +77,11 @@ static vad_verdict_t frame(vad_t *v, float db)
     v->last_db = db;
     if (db > v->peak_db) v->peak_db = db;
     bool calibrated = v->t_ms >= c->calib_ms;
-    if (calibrated && c->enabled) {
+    /* classified VAD on or off: off only never ends the listen early (speech_ms is still measured) */
+    if (calibrated) {
         v->floor_db = floor_capped(v);
         classify(v, db);
-    } else if (c->enabled && v->calib_n < VAD_CALIB_MAX) {
+    } else if (v->calib_n < VAD_CALIB_MAX) {
         v->calib_db[v->calib_n++] = db;
     }
     floor_push(v, db);
@@ -89,7 +90,7 @@ static vad_verdict_t frame(vad_t *v, float db)
         v->floor_db = floor_now(v);
         /* calibration just ended: the floor exists now, so classify the frames that
          * measured it. A "yes" said inside the first calib_ms is speech, not floor. */
-        if (c->enabled && v->t_ms >= c->calib_ms) {
+        if (v->t_ms >= c->calib_ms) {
             v->floor_db = floor_capped(v);
             for (uint32_t i = 0; i < v->calib_n; i++) classify(v, v->calib_db[i]);
             v->calib_n = 0;
@@ -132,7 +133,7 @@ float vad_level(vad_t *v)
     return l < 0.f ? 0.f : l > 1.f ? 1.f : l;
 }
 
-bool vad_speech_known(const vad_t *v) { return v->cfg.enabled && v->t_ms >= v->cfg.calib_ms; }
+bool vad_speech_known(const vad_t *v) { return v->t_ms >= v->cfg.calib_ms; }
 
 const char *vad_reason(vad_verdict_t verdict)
 {
