@@ -54,7 +54,9 @@ struct cc {
     int queue[16], nq;
     int mood; int gesture; float gestureT; bool gstarted, pending;
     float camx, camz, camyaw; bool snap;
-    float *cur, *from, *tmp, *pose, *world, *fromWorld;
+    float hd, hbase, px, pz, tx, tz, cx0, cz0, sense;  /* the body turned to its clip's side (hd, rad) and where it is (px, pz), under a
+                                         * fixed camera; hbase: the way it walks (turned round at the frame's edges) */
+    float *cur, *from, *tmp, *pose, *world, *fromWorld, *out;
 };
 
 /* ── parse ──────────────────────────────────────────────────────────────── */
@@ -170,11 +172,11 @@ static const char *parse(cc_t *c, const cJSON *rig) {
     /* the nodes */
     c->nn = cJSON_GetArraySize(nodes);
     if (c->nn < 1 || c->nn > CC_NODES_MAX) return "rig: nodes";
-    c->rest = CC_MALLOC(sizeof(float) * CC_POSE * (size_t)c->nn * 6 + sizeof(float) * 12 * (size_t)c->nn * 2);
+    c->rest = CC_MALLOC(sizeof(float) * CC_POSE * (size_t)c->nn * 6 + sizeof(float) * 12 * (size_t)c->nn * 3);
     if (!c->rest) return "oom";
     c->cur = c->rest + CC_POSE * c->nn; c->from = c->cur + CC_POSE * c->nn; c->tmp = c->from + CC_POSE * c->nn;
     c->pose = c->tmp + CC_POSE * c->nn;
-    c->world = c->pose + CC_POSE * c->nn + CC_POSE * c->nn; c->fromWorld = c->world + 12 * c->nn;
+    c->world = c->pose + CC_POSE * c->nn + CC_POSE * c->nn; c->fromWorld = c->world + 12 * c->nn; c->out = c->fromWorld + 12 * c->nn;
     int i = 0;
     for (const cJSON *n = nodes->child; n; n = n->next, i++) {
         const cJSON *id = cJSON_GetObjectItemCaseSensitive(n, "id"), *pa = cJSON_GetObjectItemCaseSensitive(n, "parent");
@@ -332,6 +334,13 @@ static void sample_pose(const cc_t *c, int ci, double t, float *pose) {
     for (int i = 0; i < k->nch; i++) {
         const chan_t *h = &k->ch[i];
         sample_channel(h, f, period, k->loop, tmp);
+        if (k->loop && h->node == 0 && h->path == 0 && h->nk >= 2 && f >= h->keys[h->nk - 1]) {
+            /* a loop's root travels: past its last key it carries on at the last step's pace (it does not swing back to
+             * the first key's place), so a loop's end is its start plus one cycle's travel (the wrap in cc_update) */
+            const int st = h->cubic ? 3 * h->w : h->w, vo = h->cubic ? h->w : 0, a = (h->nk - 2) * st + vo, b = (h->nk - 1) * st + vo;
+            const float u = (f - h->keys[h->nk - 1]) / (h->keys[h->nk - 1] - h->keys[h->nk - 2]);
+            for (int q = 0; q < 3; q++) tmp[q] = h->out[b + q] + (h->out[b + q] - h->out[a + q]) * u;
+        }
         const int o = h->node * CC_POSE + (h->path == 0 ? 0 : h->path == 1 ? 3 : 7);
         for (int q = 0; q < h->w; q++) pose[o + q] = tmp[q];
     }
@@ -396,6 +405,58 @@ int cc_route(const cc_t *c, int a, int b, int *out, int max) {
         }
     }
     return -1;
+}
+
+/* The camera stays where it started, looking from the first clip's side: the floor never moves, so a walking frame
+ * changes only the body's cells. The body turns instead (about its centre: the same picture of it as the camera going
+ * round), to each clip's side, and walks on the floor in the way it faces; near the frame's side edges, walking
+ * outward, it turns round (an arc, as it walks). c->world is the clip's pose (root motion included); c->out the same
+ * turned and placed (clip-player.js turn()). */
+#define CC_PACE 0.6f                    /* the most it moves a second (world units): above a walk's 0.36           */
+#define CC_EDGE 0.35f                   /* walking past this far from the frame's centre (world units, across) turns it */
+static void turn(cc_t *c, float dt) {
+    const clip_t *cc = &c->clip[c->cur_clip];
+    const float *W = c->world;
+    const float cx = (W[c->center[0] * 12 + 3] + W[c->center[1] * 12 + 3]) / 2, cz = (W[c->center[0] * 12 + 11] + W[c->center[1] * 12 + 11]) / 2;
+    const float D2R = 3.14159265358979f / 180.f;
+    if (c->snap) {
+        c->camx = c->px = c->tx = cx; c->camz = c->pz = c->tz = cz; c->camyaw = cc->view; c->hd = c->hbase = c->sense = 0.f; c->snap = false;
+    } else {
+        const float dx = cx - c->cx0, dz = cz - c->cz0, s = sinf(c->hd), k = cosf(c->hd);
+        const float wx = k * dx + s * dz, wz = -s * dx + k * dz;        /* this frame's travel, turned as the body is */
+        /* where it should be (tx, tz); it goes there at most CC_PACE a second: a walk's own pace, and a crossfade's jump
+         * of the centre eased out (as the following camera did) */
+        c->tx += wx; c->tz += wz;
+        const float ex = c->tx - c->px, ez = c->tz - c->pz, el = sqrtf(ex * ex + ez * ez), mv = CC_PACE * dt;
+        const float q = el > mv ? mv / el : 1.f;
+        c->px += ex * q; c->pz += ez * q;
+        const float rx = cosf(c->camyaw * D2R), rz = -sinf(c->camyaw * D2R);   /* across the frame */
+        const float lat = (c->px - c->camx) * rx + (c->pz - c->camz) * rz, vlat = wx * rx + wz * rz;
+        float want = c->hbase + (c->camyaw - cc->view) * D2R, gap = want - c->hd;
+        gap -= 6.28318530718f * roundf(gap / 6.28318530718f);
+        if (fabsf(lat) > CC_EDGE && lat * vlat > 0.05f * dt * fabsf(lat) && fabsf(gap) < 0.3f) {
+            /* turn round, the way whose arc bends it back toward the frame's middle in depth (turning the same way
+             * every time would carry it off into the distance) */
+            const float dep = -(c->px - c->camx) * rz + (c->pz - c->camz) * rx, bend = wz * -rz - wx * rx;   /* depth; its change per +turn */
+            c->hbase += 3.14159265358979f; c->sense = dep * bend > 0.f ? -1.f : 1.f;
+        }
+        want = c->hbase + (c->camyaw - cc->view) * D2R; gap = want - c->hd;
+        gap -= 6.28318530718f * roundf(gap / 6.28318530718f);
+        if (c->sense != 0.f && fabsf(gap) < 1.f) c->sense = 0.f;
+        else if (c->sense * gap < 0.f) gap += c->sense * 6.28318530718f;
+        c->hd += gap * (1.f - expf(-2.f * dt));
+    }
+    c->cx0 = cx; c->cz0 = cz;
+    const float s = sinf(c->hd), k = cosf(c->hd);
+    for (int i = 0; i < c->nn; i++) {                                  /* out = T(p) R(hd) T(-centre) world */
+        const float *m = W + i * 12; float *o = c->out + i * 12;
+        for (int r = 0; r < 4; r++) {
+            const float a = m[r], b = m[4 + r], e = m[8 + r];
+            o[r] = k * a + s * e; o[4 + r] = b; o[8 + r] = -s * a + k * e;
+        }
+        const float tx = m[3] - cx, tz = m[11] - cz;
+        o[3] = k * tx + s * tz + c->px; o[11] = -s * tx + k * tz + c->pz;
+    }
 }
 
 static float ease(float x) { return x <= 0.f ? 0.f : x >= 1.f ? 1.f : x * x * (3.f - 2.f * x); }
@@ -472,6 +533,7 @@ cc_t *cc_create(const void *crv, const char **err) {
     sample_pose(c, c->cur_clip, 0, c->cur);
     c->blendT = c->blendD = 1.f;
     forward(c, c->cur, 0, 0, c->world);
+    memcpy(c->out, c->world, sizeof(float) * 12 * (size_t)c->nn);
     c->camyaw = c->clip[c->cur_clip].view; c->snap = true;
     *err = NULL;
     return c;
@@ -494,7 +556,7 @@ uint32_t cc_color(const cc_t *c, const char *name) { const int i = pal_of(c, nam
 uint32_t cc_color_at(const cc_t *c, int i) { return i >= 0 && i < c->npal ? c->palv[i] : 0; }
 int cc_clips(const cc_t *c) { return c->nclip; }
 const char *cc_clip_name(const cc_t *c, int i) { return c->clip[i].name; }
-const float *cc_world(const cc_t *c) { return c->world; }
+const float *cc_world(const cc_t *c) { return c->out; }
 void cc_cam(const cc_t *c, float *x, float *z, float *yaw) { *x = c->camx; *z = c->camz; *yaw = c->camyaw; }
 int cc_clip(const cc_t *c, float *t) { if (t) *t = (float)c->t; return c->cur_clip; }
 int cc_queue(const cc_t *c, int *out, int max) { int n = c->nq < max ? c->nq : max; memcpy(out, c->queue, sizeof(int) * (size_t)n); return c->nq; }
@@ -565,11 +627,5 @@ void cc_update(cc_t *c, float dt) {
         }
         if (n) { const float q = (1.f - w) / n; c->lockX = dx * q; c->lockZ = dz * q; forward(c, c->cur, c->ox + c->lockX, c->oz + c->lockZ, c->world); }
     } else { c->lockX = c->lockZ = 0.f; }
-    const clip_t *cc = &c->clip[c->cur_clip];
-    const float *W = c->world;
-    const float cx = (W[c->center[0] * 12 + 3] + W[c->center[1] * 12 + 3]) / 2, cz = (W[c->center[0] * 12 + 11] + W[c->center[1] * 12 + 11]) / 2;
-    if (c->snap) { c->camx = cx; c->camz = cz; c->camyaw = cc->view; c->snap = false; }
-    const float kk = 1.f - expf(-3.f * dt), ky = 1.f - expf(-2.f * dt);
-    c->camx += (cx - c->camx) * kk; c->camz += (cz - c->camz) * kk;
-    float dy = cc->view - c->camyaw; dy -= 360.f * roundf(dy / 360.f); c->camyaw += dy * ky;
+    turn(c, dt);
 }

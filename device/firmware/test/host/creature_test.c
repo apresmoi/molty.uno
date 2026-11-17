@@ -440,8 +440,8 @@ static void test_info(const char *pkgdir, const char *id) {
  * engine and routed by the clip player to its clip; a name it lacks is -1 */
 /* a rigged creature on a 466 px panel (the 1.75C) fed only the windows fluid_draw_send makes, as mole_fluid.c drives
  * it: every frame it shows exactly what a drawer redrawing every cell shows (the skipped cells are the unchanged ones),
- * sitting, through a tap's ripple and walking; and the windows stay on even rows (that panel's) and well under a full
- * frame each */
+ * sitting, through a tap's ripple and walking (the floor stays put); and the windows stay on even rows (that panel's)
+ * and cost well under a full frame */
 typedef struct { uint16_t *px; int w, h, odd, n; } crisp_panel_t;
 static int crisp_send(void *ctx, int x, int y, int w, int h, const uint16_t *px) {
     crisp_panel_t *p = ctx;
@@ -502,7 +502,9 @@ static void test_crisp_panel(const char *pkgdir) {
         const double avg = nf[q] ? (double)sent[q] / nf[q] : 0;
         printf("  crisp panel %s: %.0f px sent a frame (%.0f%% of the panel) in %.0f windows, %.0f cells drawn\n", q ? "walking" : "sitting",
                avg, 100.0 * avg / (P * P), nf[q] ? (double)wins[q] / nf[q] : 0, nf[q] ? (double)drawn[q] / nf[q] : 0);
-        CHECK(avg < 0.25 * P * P, "crisp panel %s: %.0f px a frame", q ? "walking" : "sitting", avg);
+        /* a window costs about 2500 px (crisp_send): the whole send, in those, well under a full frame's */
+        const double wn = nf[q] ? (double)wins[q] / nf[q] : 0;
+        CHECK(avg + 2500 * wn < 0.5 * P * P, "crisp panel %s: %.0f px in %.0f windows a frame", q ? "walking" : "sitting", avg, wn);
     }
     free(truth); free(buf); free(pn.px); fluid_frame_destroy(fr); fluid_draw_destroy(d); fluid_draw_destroy(ref); fluid_sim_destroy(s);
     cpk_destroy(k); free(json);

@@ -26,8 +26,8 @@ static inline uint32_t cycles(void) { return (uint32_t)esp_cpu_get_cycle_count()
 #define CD_FREE(p)   heap_caps_free(p)
 #define CD_BAND_CORE 0           /* the second band's core: the fluid task (the first band) runs on core 1          */
 #define CD_SHARE     55          /* percent of the rows' work in the first band: core 0 also draws the panel  */
-#define CD_BAND_PRIO 1           /* below the drawer (2) on that core: the drawer's panel sends wait on DMA, and the
-                                  * band fills those waits; above it, every DMA wake waited for the band            */
+#define CD_BAND_PRIO 3           /* above the drawer (2) on that core: the band is waited on (below it, the band
+                                  * starved and core 1 waited ~20 ms walking); the drawer, light now, has the slack */
 #else
 static inline uint32_t cycles(void) { return 0; }
 #define CD_CALLOC(n) calloc(1, (n))
@@ -192,7 +192,7 @@ cd_t *cd_create(const cc_t *c, int W, int H) {
                 const int i = Y * DW + X;
                 if (!pass) {
                     const float ex = (X + 0.5f - DW / 2.f) / R, ey = (Y + 0.5f - DH / 2.f) / (DH / 2.f), rr = sqrtf(ex * ex + ey * ey);
-                    const float v = (1.f - sstep(0.62f, 0.97f, rr)) * (1.f - sstep(0.87f, 1.f, (float)Y / DH));
+                    const float v = 1.f - sstep(0.9f, 0.99f, rr);   /* the world fills the disc, fading only at its rim */
                     d->vig[i] = v > 0.01f ? v : 0.f;
                 }
                 const double seed = (double)hash3u(X, Y, 11) / 4294967296.0;
@@ -629,7 +629,8 @@ static void ph_cells(cd_t *d, int part) {
                 const float vig = vg[X];
                 if (vig <= 0.f) continue;
                 const float uw = x0 + X * zz;
-                const float lane = fabsf(uw - 26.f * (float)ffloor(uw * (1.f / 26.f)) - 13.f);
+                const float ul = uw + 13.f;              /* the lines either side of the middle, none under the cat */
+                const float lane = fabsf(ul - 26.f * (float)ffloor(ul * (1.f / 26.f)) - 13.f);
                 float al = 0.f; const float *col = NULL;
                 if (lane > lim) { al = 0.85f * near; col = FLR; }
                 else if (hash3u(ffloor(uw * 0.625f), kk, 7) < thr) { al = (0.5f + 0.25f * near) * (0.6f + 0.4f * hash3f(ffloor(uw), Y, 3)); col = TEX; }

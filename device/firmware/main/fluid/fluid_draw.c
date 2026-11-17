@@ -1069,16 +1069,59 @@ void fluid_draw_rect(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fl
     FLUID_PROF_END(FP_DRASTER, c1);
 }
 
+/* Crisp dots' changed cells to the panel, in few windows: a window costs about as much as CRISP_WIN_PX pixels (its
+ * commands and its wait, ~0.25 ms on the CO5300's quad SPI against ~0.1 us a pixel), so each row sends its whole span
+ * of changed cells, and the next rows join it while one box over them costs less than separate windows (and fits the
+ * buffer). Windows start and end on even rows: a panel that takes whole row pairs only (the CO5300) otherwise resends
+ * a full-width pair at each odd edge. */
+#define CRISP_WIN_PX 2500
+static int crisp_send(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_overlay_t *ov, int mark,
+                      uint16_t *buf, int max_px, fluid_send_fn send, void *ctx) {
+    const int H = d->H;
+    int sent = 0;
+#define XA(i) (d->cx[i] & ~3)
+#define XB(i) (((d->cx[i] + 3) & ~3) < d->fb_w ? ((d->cx[i] + 3) & ~3) : d->fb_w)
+#define YA(j) (d->cy[j] & ~1)
+#define YB(j) (((d->cy[(j) + 1] + 1) & ~1) < d->fb_h ? ((d->cy[(j) + 1] + 1) & ~1) : d->fb_h)
+    for (int j = 0; j < H; ) {
+        int a = d->span[2 * j], b = d->span[2 * j + 1];
+        if (a >= b) { j++; continue; }
+        int j1 = j + 1;
+        for (; j1 < H && d->span[2 * j1] < d->span[2 * j1 + 1]; j1++) {
+            const int na = d->span[2 * j1] < a ? d->span[2 * j1] : a, nb = d->span[2 * j1 + 1] > b ? d->span[2 * j1 + 1] : b;
+            const int box = (XB(nb) - XA(na)) * (YB(j1) - YA(j));
+            const int apart = (XB(b) - XA(a)) * (YB(j1 - 1) - YA(j)) + (XB(d->span[2 * j1 + 1]) - XA(d->span[2 * j1])) * (YB(j1) - YB(j1 - 1)) + CRISP_WIN_PX;
+            if (box > max_px || box > apart) break;
+            a = na; b = nb;
+        }
+        const int x0 = XA(a), x1 = XB(b), y0 = YA(j), y1 = YB(j1 - 1), w = x1 - x0, rows = (max_px / w) & ~1;
+        if (rows < 2) return -1;
+        for (int y = y0; y < y1; y += rows) {
+            const int h = y1 - y < rows ? y1 - y : rows;
+            const fluid_rect_t t = { buf, w, x0, y, x1, y + h };
+            fluid_draw_rect(d, o, &t, true);
+            fluid_draw_overlay(d, &t, o->palette, ov);
+            fluid_draw_mark(d, &t, o->palette, mark);
+            if (send(ctx, x0, y, w, h, buf) != 0) return -1;
+            sent += w * h;
+        }
+        j = j1;
+    }
+#undef XA
+#undef XB
+#undef YA
+#undef YB
+    return sent;
+}
+
 int fluid_draw_send(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_overlay_t *ov, int mark, bool full,
                     uint16_t *buf, int max_px, fluid_send_fn send, void *ctx) {
     int sent = 0;
     /* a scene in high definition: each run of changed cells its own window, so its haze changing
      * all over does not redraw the shapes between */
     const bool runs = o->scene && o->dots && o->shapes;
-    /* crisp dots alone (a rigged creature): each run of changed cells its own window too (its floor moving changes
-     * cells all along a row, not every one), on whole row pairs: a panel that takes even rows only (the CO5300)
-     * otherwise resends a full-width pair at each odd edge */
-    const bool crisp = o->scene && o->dots && !o->shapes;
+    /* crisp dots alone (a rigged creature): few, larger windows on whole row pairs (crisp_send) */
+    if (o->scene && o->dots && !o->shapes && !full) return crisp_send(d, o, ov, mark, buf, max_px, send, ctx);
     for (int j = 0; j < (full ? 1 : d->H); j++) {
         int a = full ? 0 : d->span[2 * j];
         const int end = full ? 0 : d->span[2 * j + 1];
@@ -1092,21 +1135,14 @@ int fluid_draw_send(const fluid_draw_t *d, const fluid_draw_opts_t *o, const flu
                     if (d->dirty[j * d->W + c]) { last = c; gs = 0; }
                     else if (key_hd(kk) && (kk >> 8 & 15) && ++gs >= RUN_GAP) break;
                 }
-            } else if (crisp) {                         /* split where RUN_GAP unchanged cells sit between */
-                last = a;
-                for (int c = a + 1, gs = 0; c < end; c++) {
-                    if (d->dirty[j * d->W + c]) { last = c; gs = 0; }
-                    else if (++gs >= RUN_GAP) break;
-                }
             }
             int x0 = 0, x1 = d->fb_w, y0 = 0, y1 = d->fb_h;
             if (!full) {
                 x0 = d->cx[a] & ~3; x1 = (d->cx[last + 1] + 3) & ~3;
                 if (x1 > d->fb_w) x1 = d->fb_w;
                 y0 = d->cy[j]; y1 = d->cy[j + 1];
-                if (crisp) { y0 &= ~1; y1 = (y1 + 1) & ~1; if (y1 > d->fb_h) y1 = d->fb_h; }
             }
-            const int w = x1 - x0, rows = crisp ? max_px / w & ~1 : max_px / w;
+            const int w = x1 - x0, rows = max_px / w;
             if (rows < 1) return -1;
             for (int y = y0; y < y1; y += rows) {
                 const int h = y1 - y < rows ? y1 - y : rows;

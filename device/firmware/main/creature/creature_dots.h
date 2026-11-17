@@ -23,7 +23,7 @@ extern "C" {
 #endif
 
 #define CD_VIEW_SIZE 1.9f        /* world units across the panel                                      */
-#define CD_FLOOR_AT  0.8f        /* the floor under the creature, as a fraction of the panel's height  */
+#define CD_FLOOR_AT  0.62f       /* the floor under the creature, as a fraction of the panel's height  */
 
 typedef struct cd cd_t;
 
