@@ -47,9 +47,9 @@ const GLARE_VARS = ["--glare-x", "--glare-y", "--glare-squeeze", "--glare-angle"
  *  The first time it is well in view it turns into place (`reveal`): only for those ~1.2 s is the
  *  board's wall a polycss scene (the face layer turns with the same orthographic rotation, the
  *  glass's reflections slide against the turn), then the scene is unmounted and the device is
- *  flat again. It never takes the pointer. The
- *  screen under it cannot turn with the board, so it is covered (off) through the turn:
- *  `onScreen` says when it goes off and when it lights. */
+ *  flat again. It never takes the pointer. The screen under it cannot turn with the board, so
+ *  until the device stands at rest its screen is off (a dark disc on the face): `onScreen(true)`
+ *  says when it stands (at once with reduced motion), `onScreen(false)` when it is away. */
 export function Device({ reveal, onScreen }: { reveal: RevealKind; onScreen?: (on: boolean) => void }) {
   const root = useRef<HTMLSpanElement>(null);
   const face = useRef<HTMLSpanElement>(null);
@@ -95,11 +95,12 @@ export function Device({ reveal, onScreen }: { reveal: RevealKind; onScreen?: (o
       fc.style.setProperty("--glare-fade", g.fade.toFixed(3));
     }
     lid.current!.style.transform = f.lid ? `perspective(${(unit.current * 8).toFixed(0)}px) rotateX(${f.lid}deg)` : "";
-    cover.current!.style.opacity = f.cover ? String(f.cover) : "";
-    const off = f.cover > 0.5;
-    if (el.hasAttribute("data-screen-off") !== off) {
-      el.toggleAttribute("data-screen-off", off);
-      onScreen?.(!off);
+    // it stands: the screen may show. Away or turning: the face carries a dark disc instead
+    const stands = rest && f.lift === 0 && f.opacity === 1;
+    cover.current!.style.opacity = stands ? "" : "1";
+    if (el.hasAttribute("data-screen-off") === stands) {
+      el.toggleAttribute("data-screen-off", !stands);
+      onScreen?.(stands);
     }
   };
 
@@ -160,6 +161,7 @@ export function Device({ reveal, onScreen }: { reveal: RevealKind; onScreen?: (o
     setArmed(false); // from here the pose is ours (inline), or at rest
     if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
       seen.current = true;
+      onScreen?.(true);
       return;
     }
     apply(revealFrame(reveal, 0));

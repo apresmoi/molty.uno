@@ -21,6 +21,7 @@
     "og-options": "node scripts/og/generate-options.mjs",
     "screens": "node e2e/screens.mjs",
     "first-load": "node e2e/first-load.mjs",
+    "in-place": "node e2e/in-place.mjs",
     "molty": "node e2e/molty.mjs",
     "molty-still": "node scripts/molty-still.mjs",
     "theme-label": "node e2e/theme-label.mjs",

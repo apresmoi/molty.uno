@@ -65,6 +65,9 @@
 .row .answer {
   color: var(--m-accent);
 }
+.row[data-off] {
+  visibility: hidden;
+}
 .row button:hover,
 .own:hover,
 .form button:hover {

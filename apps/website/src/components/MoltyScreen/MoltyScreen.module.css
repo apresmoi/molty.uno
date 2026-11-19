@@ -1,12 +1,14 @@
 /* A Molty device: it fills the square its parent gives it. The canvas is the round screen (the
-   firmware's renderer draws into it, 466 px a side, sized by CSS); the still stands in until it
-   draws; the Device over them is the bezel and the glass. A screen is a dark panel in both
-   themes. */
+   firmware's renderer draws into it, 466 px a side, sized by CSS); the still stands in for it;
+   the Device over them is the bezel and the glass. A screen is a dark panel in both themes.
+   One thing: nothing of the screen shows until the device stands in place (data-screen, set by
+   MoltyScreen: "off" while it is away, then "dark", then "live", or "still"). */
 .root {
   position: absolute;
   inset: 0;
   display: block;
 }
+.panel,
 .still,
 .canvas {
   position: absolute;
@@ -15,26 +17,36 @@
   height: 100%;
   border-radius: 50%;
 }
+/* the screen's own dark, there from the moment the device stands (the device's cover, on its
+   turning face, was the same dark until then): what comes on fades in over it, never over the page */
+.panel {
+  background: var(--m-device-off);
+  opacity: 0;
+}
+.root[data-screen]:not([data-screen="off"]) .panel {
+  opacity: 1;
+}
 .still {
   object-fit: cover;
-  transition: opacity 0.4s;
+  transition: opacity 0.35s;
 }
 .canvas {
   opacity: 0;
+  transition: opacity 0.35s;
   /* a tap is a tap and a sideways drag stirs the water; an up or down swipe scrolls the page */
   touch-action: pan-y;
   cursor: pointer;
 }
-.root[data-live] .canvas {
+.root[data-screen="live"] .canvas {
   opacity: 1;
 }
-.root[data-live] .still {
+.root:is([data-screen="off"], [data-screen="dark"], [data-screen="live"]) .still {
   opacity: 0;
 }
-/* the intro's start state (Head, before the first paint): the screen is about to power on, so
-   its still is not shown first (no JS, no renderer, or reduced motion: it shows) */
+/* before its script: the still is unseen exactly while its device is (armed for its turn, the
+   page's intro running; no JS, reduced motion or a script that never takes over: both show) */
 @media (prefers-reduced-motion: no-preference) {
-  :global(html[data-fluid-moltys="pending"]) .still {
+  :global(html[data-fluid]:not([data-fluid="static"])) .root:not([data-screen]):has([data-armed]) .still {
     opacity: 0;
   }
 }
