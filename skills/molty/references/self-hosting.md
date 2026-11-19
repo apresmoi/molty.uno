@@ -5,10 +5,16 @@ account runs the same relay code as a Cloudflare Worker of their own, points Mol
 pairs agents there. Nothing else changes for agents: same API, same skill, a different
 `$MOLTY_RELAY`.
 
+```mermaid
+flowchart LR
+  accTitle: Your own relay between Molty and your agents
+  molty[Molty] -->|secure socket| relay[Your relay]
+  agents[Agents] -->|REST or MCP| relay
+  relay --> voice[Voice: Workers AI,<br>your own key, your<br>voice box, or none]
 ```
-Molty ──WSS──▶ your relay (Worker + one Durable Object per Molty) ◀── agents (REST / MCP)
-                 └─ voice: Workers AI on your account | OpenAI-compatible key | none | your voice box
-```
+
+Your relay is a Worker with one Durable Object per Molty. Molty reaches it over WSS, agents over REST or MCP. Voice is
+Workers AI on your account, an OpenAI-compatible key, none, or your voice box.
 
 ## 1. Deploy the relay to your Cloudflare account
 

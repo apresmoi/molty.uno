@@ -35,7 +35,9 @@ function checkImport(file, target) {
 function checkBareImport(file, spec) {
   if (spec.startsWith('@creatures/') && !rel(file).startsWith('services/molty-stage/') && !rel(file).endsWith('env.d.ts'))
     report(file, 'Only services/molty-stage may import the creature engine (@creatures/…).');
-  if ((spec === 'glyphcss' || spec.startsWith('@glyphcss/')) && !rel(file).startsWith('services/molty-stage/'))
+  // the docs' diagrams are drawn at build time by one markdown plugin: it never reaches a client bundle
+  const diagrams = spec.startsWith('@glyphcss/diagrams') && rel(file) === 'integrations/markdown/glyphDiagrams.ts';
+  if ((spec === 'glyphcss' || spec.startsWith('@glyphcss/')) && !rel(file).startsWith('services/molty-stage/') && !diagrams)
     report(file, 'Only services/molty-stage may import the fluid renderer (glyphcss, @glyphcss/…).');
   if (spec === 'three' || spec.startsWith('three/')) report(file, 'three.js loads from the CDN inside the engine; do not import it.');
 }

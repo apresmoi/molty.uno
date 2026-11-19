@@ -6,7 +6,8 @@ import sitemap from '@astrojs/sitemap';
 import react from '@astrojs/react';
 import { existsSync } from 'node:fs';
 import { analyticsHead } from './src/config/analytics.mjs';
-import { SYNCED_DOCS } from './src/config/docs.mjs';
+import { SYNCED_DOCS, DOC_REDIRECTS } from './src/config/docs.mjs';
+import { remarkGlyphDiagrams } from './src/integrations/markdown/glyphDiagrams.ts';
 import { SITE_URL, SITE_NAME, SITE_DESCRIPTION, REPO_URL, REPO_BRANCH, THREE_CDN } from './src/config/site.mjs';
 
 /** @param {string} path */
@@ -28,6 +29,9 @@ const threeFromCdn = () => ({
 
 export default defineConfig({
   site: SITE_URL,
+  redirects: DOC_REDIRECTS,
+  // ```mermaid blocks in the docs are drawn at build time by @glyphcss/diagrams (no script ships for them)
+  markdown: { remarkPlugins: [remarkGlyphDiagrams] },
   devToolbar: { enabled: false },
   vite: {
     plugins: [threeFromCdn()],
@@ -85,11 +89,8 @@ export default defineConfig({
         {
           label: 'Moltys',
           items: [
-            { label: 'Moltys and the viewers', slug: 'moltys/overview' },
-            { label: 'Make your own', slug: 'moltys/making-your-own' },
-            { label: 'The .molty format', slug: 'moltys/format' },
-            { label: 'Creature packages', slug: 'moltys/creature-packages' },
             { label: 'Packages and scenes', slug: 'moltys/packages' },
+            { label: 'Creature packages', slug: 'moltys/creature-packages' },
           ],
         },
         {

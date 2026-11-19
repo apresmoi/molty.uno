@@ -1,17 +1,29 @@
-# Agent link — v0 spec
+# Agent link
 
-**Status:** v0. Goal: any agent, anywhere, drives Molty with **no laptop in the loop**.
+Any agent, anywhere, drives Molty with **no laptop in the loop**.
 Built to be swapped module by module. Background and design rationale:
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
+```mermaid
+flowchart LR
+  accTitle: Molty and every client meet at the relay
+  molty[Molty] -->|dials out| relay[Relay]
+  mcp[MCP clients] -->|MCP| relay
+  cli[CLI, scripts] -->|REST| relay
+  box[Voice box] -->|dials out| relay
+  relay --> speech[Speech<br>provider]
 ```
-Molty (home Wi-Fi) ──outbound WSS──▶ molty-relay (Cloudflare Worker + Durable Object)
-                                       ├─ /mcp   remote MCP (HTTPS)   ◀── any MCP client (Claude, Grok, …)
-                                       ├─ /v1/*  REST                 ◀── molty CLI --relay, scripts
-                                       ├─ voice  TTS/STT provider     (Workers AI first; swappable)
-                                       ├─ /v1/voice  voice box (WSS)  ◀── the owner's own STT/TTS box (molty-voice)
-                                       └─ (later) OpenClaw node adapter
-```
+
+The relay (`molty-relay`) is a Cloudflare Worker with a Durable Object. Its doors:
+
+| Door | Who comes in |
+|---|---|
+| `/v1/device` | Molty, on home Wi-Fi, over outbound WSS |
+| `/mcp` | remote MCP over HTTPS: any MCP client (Claude, Grok, OpenClaw, …) |
+| `/v1/*` | REST: `molty` CLI `--relay`, scripts |
+| `/v1/voice` | the owner's own STT/TTS box (`molty-voice`), over WSS |
+
+Speech comes from a TTS/STT provider (Workers AI first; swappable).
 
 ## Modules and seams (each swappable)
 
@@ -19,10 +31,10 @@ Molty (home Wi-Fi) ──outbound WSS──▶ molty-relay (Cloudflare Worker + 
 |---|---|---|
 | Relay core (rooms, auth, pairing, routing, jobs) | `services/relay/src/core/` | pure TS, no Cloudflare imports |
 | Relay host | `services/relay/src/worker.ts` (+ DO) | another host (Node server) wraps the same core |
-| Agent surfaces | `src/surfaces/mcp.ts`, `src/surfaces/rest.ts` | add OpenClaw node adapter beside them |
+| Agent surfaces | `src/surfaces/mcp.ts`, `src/surfaces/rest.ts` | another surface sits beside them |
 | Voice provider | `src/voice/*.ts` → `interface VoiceProvider { tts(text, opts) → PCM16@16k; stt(PCM16@16k) → text; ttsStream?; sttStream? }` | workers-ai · openai · none (env) · box (the owner's [voice box](#voice-box), per device) |
 | Device link client | `device/firmware/main/link/` | transport only; commands come from the dispatcher |
-| Device command dispatcher | `main/link/link_cmd.c` | ONE registry used by both the WSS link and (later) local HTTP |
+| Device command dispatcher | `main/link/link_cmd.c` | ONE registry used by the WSS link |
 | Pairing UI | the question screen (`link_ui_show_pair`, `fluid_ask.h`): `PAIR WITH <AGENT>?`, "CHECK THE CODE MATCHES", the 4-digit code, and accept / reject as rim arcs, over whatever shows, until accept/reject/timeout; the console shows the same via `GET /api/link` | |
 
 ## Identities and secrets
@@ -360,11 +372,18 @@ so firmware with the cap `ack` acknowledges the turn **itself, locally, at once*
 A slow agent (a cold start, a big model) leaves seconds of silence after the human finishes;
 the chirp is not words. Two relay features fill it (`services/relay/src/core/phrases.ts`):
 
+```mermaid
+flowchart TD
+  accTitle: What fills the silence after the human stops
+  stop[Human stops] --> chirp[Molty chirps and thinks]
+  chirp -->|quick phrase| cached[Cached audio, at once]
+  cached --> queued[The agent's talk queues behind]
+  queued --> answer[Answer, no speech gap]
+  chirp -->|agent too slow| filler[Relay plays a built-in filler]
+  filler --> behind[The agent's answer queues behind]
 ```
-human stops ─▶ chirp + thinking (device)
-   agent: quick {id} ─▶ cached audio at once ─▶ talk queued behind it ─▶ answer, no TTS gap
-   no agent action within filler_ms ─▶ relay: a built-in filler ─▶ agent's answer queues behind it
-```
+
+The quick phrase is the agent's `quick {id}`. "Too slow" is no agent action within the owner's `filler_ms`.
 
 - **Quick phrases.** Each agent registers its own short phrases (`phr:<token hash>`; ≤ 20, each
   ≤ 60 characters, ids `[a-z0-9][a-z0-9_-]{0,23}`, inline cues allowed; `filler: true` = Molty may
@@ -477,14 +496,27 @@ replaces the auto filler.
 The human shakes Molty and just speaks: no agent round trip before the mic opens (with an agent
 woken by a webhook that was ~11–16 s of "Yeah?" first).
 
+```mermaid
+sequenceDiagram
+  accTitle: Shake to talk
+  participant H as Human
+  participant M as Molty
+  participant R as Relay
+  participant A as Agents
+  H->>M: shake
+  M->>M: listens at once, keeps the audio
+  M->>R: shake event, names its listen
+  R->>M: adopt that listen as a job
+  M->>R: audio, from the shake's first sample
+  R->>R: the usual listen job
+  R->>A: heard words: one utterance each
+  A->>R: first say or talk claims the turn
 ```
-shake ─▶ device: listening at once (ring + mood), audio kept locally
-           └─ evt shake {…, listen:"shake-3"} ─▶ relay: cmd listen {job, adopt:"shake-3", vad:false?}
-                                                    └─ device: frames under `job`, from the shake's first sample
-            relay: the usual listen job (box streaming STT + semantic end of turn, else cloud / device VAD)
-              └─ heard words ─▶ ONE `utterance` event ─▶ every agent (inbox + webhook)
-                                  └─ first say / talk claims the turn
-```
+
+On the wire: Molty shows the ring and the mood, then sends `evt shake {…, listen:"shake-3"}`; the relay answers
+`cmd listen {job, adopt:"shake-3", vad:false?}`; the frames go up under `job`. The usual listen job is the box's
+streaming STT with its semantic end of turn, else the cloud or the device's VAD. The one `utterance` event reaches
+every agent's inbox and webhook.
 
 - **Device** (cap `shake_talk`, boards with a mic and an IMU; console setting "shake to talk",
   `POST /api/creature/state {shake_talk: bool}`, GET reports it, NVS like `ring_color`, on out of
@@ -519,7 +551,7 @@ shake ─▶ device: listening at once (ring + mood), audio kept locally
   device already went back to idle without a chirp. A broken listen (`listen_failed`,
   `device_offline`): no utterance either. The device's turn acknowledgement (chirp + thinking)
   applies as for any listen.
-- **Who answers.** All paired agents get the event (routing a gesture to one agent comes later).
+- **Who answers.** All paired agents get the event.
   The first `say` or `talk` after it — from any agent, with `in_reply_to: turn_id` or without —
   **claims the turn**; for **60 s** after the utterance (`TURN_HOLD_MS`) every other agent's `say`
   / `talk` is refused `409 turn_claimed {turn_id}` (before, and instead of, `audio_busy`). Only a
@@ -551,16 +583,41 @@ From the adoption of a shake's listen until its utterance (or its end without on
 turn is **open**. Code: `services/relay/src/core/partials.ts` (chunking, judging),
 `core/calibration.ts` (the human's habits), `core/room.ts` "While the human speaks".
 
+```mermaid
+sequenceDiagram
+  accTitle: While the human speaks
+  participant B as Box
+  participant R as Relay
+  participant A as Agent
+  participant M as Molty
+  B->>R: each word heard
+  R->>A: partial, to every agent
+  A->>R: draft an opener
+  R-->>A: held, audio made now
+  A->>R: react
+  R->>M: mood or gesture
+  A->>R: say, ask or any other
+  R-->>A: refused, human speaking
+  Note over R: turn ends, drafts judged
+  alt a draft holds
+    R->>M: opener plays at once
+    R-->>A: draft used, turn claimed
+  else none holds
+    R-->>A: draft dropped
+  end
+  R->>A: one utterance, to every agent
 ```
-box stt.partial (each word) ─▶ chunker ─▶ utterance.partial {turn_id, seq, text_so_far, new_text, elapsed_ms} ─▶ every agent
-                                  (a sentence end · N new words · T s — whichever first; none before 3 s)
-agent: draft {turn_id, based_on, opener, max_new_words?} ─▶ held, its audio synthesised now (cached)
-agent: react {turn_id, mood|action}                        ─▶ mood {react:true} (back to listening) | act {action}
-agent: say / talk / ask / mood / act / show / listen / state ─▶ 409 human_speaking {turn_id}
-turn end ─▶ judge drafts ─┬─ holds: opener plays at once (after the chirp), claims the turn ─▶ draft.used (to it)
-                          └─ else ─▶ draft.dropped {reason} (to it) — today's path
-          ─▶ ONE utterance (claimed: true when an opener plays)
-```
+
+| In the drawing | On the wire |
+|---|---|
+| each word heard | the box's `stt.partial`, into the relay's chunker |
+| partial | `utterance.partial {turn_id, seq, text_so_far, new_text, elapsed_ms}`: at a sentence end, N new words or T s, whichever first; none before 3 s |
+| draft an opener | `draft {turn_id, based_on, opener, max_new_words?}`: held, its audio synthesised now (cached) |
+| react | `react {turn_id, mood\|action}`: `mood {react:true}` (back to listening) or `act {action}` |
+| say, ask or any other | `say` / `talk` / `ask` / `mood` / `act` / `show` / `listen` / `state`: `409 human_speaking {turn_id}` |
+| draft used | the opener plays at once (after the chirp) and claims the turn: `draft.used`, to that agent |
+| draft dropped | `draft.dropped {reason}`, to that agent: today's path |
+| one utterance | `claimed: true` when an opener plays |
 
 - **Partials** (`utterance.partial`, relay-generated, every agent's inbox): only with the voice
   box (its streaming STT sends the text so far on every word; the cloud path has none). Chunked
@@ -627,14 +684,27 @@ never reads partials. An owner setting (`reflex` in the [voice owner API](#owner
 the console's Voice card; default `off`). Code: `services/relay/src/core/reflex.ts`, room.ts
 "Molty's reflex", `services/molty-voice/molty_voice/reflex.py`.
 
+```mermaid
+flowchart TD
+  accTitle: Molty's reflex, from heard words to a reaction
+  words[Words from the voice box] --> chunk[Reflex chunk]
+  chunk --> engine[Engine]
+  engine --> pick[Pick and category]
+  engine -.->|error or too slow| kw[Keywords' pick]
+  kw --> live
+  pick --> live[Liveliness gate]
+  live --> fire[Fire gates]
+  fire --> out[Mood or gesture]
 ```
-box stt.partial ─▶ reflex chunk n ─▶ engine ─▶ pick + category ─▶ liveliness gate ─▶ fire gates ─▶ mood {react:true} | act
-                   (3 words, then     local:    the box's classifier, stt.reflex {n,…}       full / soft / none
-                    every few words,  jev:      TypeSafe System One (TYPESAFE_API_KEY)
-                    a sentence end    openai:   OpenAI Decisions, gpt-6-luna (OPENAI_API_KEY)
-                    or ~1.2–2.5 s;    keywords: relay heuristic, no key
-                    ≤ 40)             error / no answer in 600 ms ─▶ keywords' pick instead (never blocks the listen)
-```
+
+| Step | Detail |
+|---|---|
+| Words | the box's `stt.partial` |
+| Reflex chunk | at 3 words, then every few words, at a sentence end or after about 1.2 to 2.5 s; at most 40 |
+| Engine | `local`: the box's classifier, `stt.reflex {n,…}`; `jev`: TypeSafe System One (`TYPESAFE_API_KEY`); `openai`: OpenAI Decisions, gpt-6-luna (`OPENAI_API_KEY`); `keywords`: relay heuristic, no key |
+| Error or too slow | an error or no answer in 600 ms: the keywords' pick instead (never blocks the listen) |
+| Liveliness gate | full, soft or none |
+| Mood or gesture | `mood {react:true}` or `act` |
 
 - **When**: on every listen the voice box streams (shake turns and agents' listens). The first
   chunk is the text so far at 3 words (mid-sentence: a short turn gets its reaction while it is
@@ -776,7 +846,7 @@ Optional `listen` args (validated by the relay and again by the device; forwarde
 Out-of-range or mistyped values → `invalid_args`.
 
 Moods (`mood` cmd, and the implicit `listening`/`speaking` around audio jobs) are moods
-of the fluid creature's loaded `.molty` creature: the device applies
+of the creature on screen: the device applies
 `{"state":"creature","mood":"<mood>"[,"hold_s":N]}` (blob when no creature is loaded).
 During `say` the text state wins over the creature view.
 
@@ -798,7 +868,7 @@ What the screen does between commands (`device/firmware/main/fluid/fluid_directo
   key (an accent dot) shows as a small mark at the bottom edge after 10 s; it never
   changes the state. Only the pairing code takes over the screen.
 
-## Commands (v0)
+## Commands
 
 | name | args | result | notes |
 |---|---|---|---|
@@ -828,7 +898,6 @@ What the screen does between commands (`device/firmware/main/fluid/fluid_directo
 | `imu` | — | snapshot | `unsupported` without an IMU |
 | `diag` | `{timeline? 0..180}` | `/api/diag` JSON | frame histograms, task CPU %, heap, stalls, net; `timeline` = seconds of 1 Hz rows |
 | `log` | `{since?, max? 1024..32768}` | `{next, text}` | device log ring tail (ESP_LOG + `EVT` lines); pass `next` back as `since` |
-| `creature.file` | (later) | — | upload `.molty` via relay |
 
 **Colours** (`ask` options, `ring_color`): one of `green #3ccf96`, `red #ff6b6b`, `amber #ffa94d`,
 `blue #4dabf7`, `violet #b197fc`, `pink #f783ac`, `cyan #3bc9db`, `white #f1f3f5` (`COLORS` in
@@ -917,7 +986,7 @@ turn acknowledgement's `thinking` or any agent mood. While Molty waits on the ag
 or `working`) a creature package lives on in its own small way: its `ponder` event picks a
 glance, a tilt, a blink, an ear flick now and then (a yawn once it has thought a while), as data
 in the package, gated on the `thinking` mood and the `work` input; working then hands such a
-creature none of the firmware's work actions (inspect, paddle, ...). A `.molty` creature keeps them. After 5 min without touch or agent activity
+creature none of the firmware's work actions (inspect, paddle, ...). After 5 min without touch or agent activity
 it **yawns**, then dozes off (`sleepy`; off: no yawn). A say that played to its end, the
 creature back and idle within 8 s: one `happy` flash (at most one a minute). The console's
 setting: Settings › Molty "idle life" (`POST /api/creature/state {idle_life:
@@ -925,7 +994,7 @@ setting: Settings › Molty "idle life" (`POST /api/creature/state {idle_life:
 **Frame cost:** the action layer is a handful of `sinf` per frame on the creature's pose
 (host: within ±0.03 µs, i.e. noise, of a ~54 µs creature update + raster + fill — scaled to
 the device's ~11 ms creature work, a few µs of a 33 ms frame), the scheduler a few
-comparisons: no measurable change to the ~30 fps. Not yet measured on hardware.
+comparisons: no measurable change to the ~30 fps.
 
 ## Device events
 
@@ -937,13 +1006,13 @@ pairing). Rate-limited on the device. `shake`, `tap` and `button` reach agents t
 |---|---|---|
 | `say.done` | `{job}` | a `say` finished playing (its last PCM left the speaker) |
 | `shake` | `{peak_g, reversals, ms, listen?}` | the board was shaken (boards with an IMU): ≥ 3 sign reversals of > 1.2 g dynamic acceleration on one axis within 800 ms; ≤ 1 per 2 s. `peak_g` largest dynamic acceleration (g), `ms` first peak → detection; `listen` the local id of the listen it started ([Shake to talk](#shake-to-talk)); a gesture bound to talk sends the same event with `peak_g` 0 and `input` (`double_tap`, `button_accept`, ...), plus `hold: true` for a button held to talk (the relay then never ends that listen on an end of turn: only the release, a tap's stop, or the window) |
-| `tap` | `{x, y, spot?, opened?, closed?}` | a finger touched the screen (boards with touch); 0..1 of the panel from the top left; ≤ 4/s. On a scene's tap spot it also names the spot (`spot: "<id>"`), whatever tap is bound to, and Molty already shows that spot's reading, or opened the layout the spot names (`opened: "<layout>"`); `closed: true`: the tap landed beside the spots of a layout so opened, and Molty went back to the scene under it ([PACKAGES.md](PACKAGES.md#layouts)) |
+| `tap` | `{x, y, spot?, opened?, closed?}` | a finger touched the screen (boards with touch); 0..1 of the panel from the top left; ≤ 4/s. On a scene's tap spot it also names the spot (`spot: "<id>"`), whatever tap is bound to, and Molty already shows that spot's reading, or opened the layout the spot names (`opened: "<layout>"`) and reads the spot over it once it is up; `closed: true`: the tap landed beside the spots of a layout so opened, and Molty went back to the scene under it ([PACKAGES.md](PACKAGES.md#layouts)) |
 | `scene` | `{why, pkg?, layout?, spot?}` | the scene on screen changed on the device itself, no command having asked: `why` `open` (a tap on `spot` opened `layout`), `back` (a tap beside it: the scene under it is up again) or `end` (a scene ran out: `layout` is the one under it or the next queued; neither `pkg` nor `layout`: nothing is up, the creature is back) |
 | `double_tap` | `{x, y}` | two taps within 350 ms, when bound to `event` (out of the box a double tap talks) |
 | `button` | `{id: "accept"\|"reject"}` | a button was pressed (the board's accept / reject buttons); ≤ 4/s. For agents it means acknowledge / dismiss, never an answer (answers come only from `ask`) |
 | `answer` | `{job, index, label}` · `{job, index: null, reason: "timeout"\|"cancelled"}` | an `ask` ended: tapped (0-based `index`, `label` verbatim), timed out, or cancelled; one per job, never rate-limited |
 | `dnd` | `{on}` | after each welcome and each change (cap `dnd`): the human's do not disturb (the PWR button's double click, `POST /api/power`). Relay-internal: kept per device; while on, `say` / `quick` / `listen` / `talk` / `ask` without `in_reply_to` fail `do_not_disturb`, and agents get a `dnd` event on each change |
-| `creature` | `{id, name, about?, gestures?, moods?}` | after each welcome and whenever the creature on screen changes: a package's `cp_info` (`about` {look, gestures, moods}: its own words, [CREATURES.md](CREATURES.md) section 1; `gestures` it plays that the firmware knows; `moods` idle and its own), `{id: "", name}` for a `.molty`. Relay-internal: kept per device (below) |
+| `creature` | `{id, name, about?, gestures?, moods?}` | after each welcome and whenever the creature on screen changes: a package's `cp_info` (`about` {look, gestures, moods}: its own words, [CREATURES.md](CREATURES.md) section 1; `gestures` it plays that the firmware knows; `moods` idle and its own), `{id: "", name}` for a creature that is not a package. Relay-internal: kept per device (below) |
 
 Screen off (the PWR button's `screen` binding, `POST /api/power {screen}`): the fluid stops
 simulating and drawing and the panel sleeps; a touch (not a tap), a shake, a button, new
@@ -956,7 +1025,7 @@ the cat to the front of the frame ([CREATURES.md](CREATURES.md#playing)).
 **The recording ring.** While a `listen` records, a ring shows at the rim. It is never shown over a
 pending `ask`. How it looks depends on the creature on screen:
 
-| | over the cat (a rigged creature) | over the duck, the octopus or a `.molty` |
+| | over the cat (a rigged creature) | over the duck or the octopus |
 |---|---|---|
 | forms | a wave runs out from the centre through the water; its crest takes the colour near the rim and lands as a thin sharp line (about 1 s) | a thin line of the fluid condenses just inside the rim (0.3 s) |
 | voice | small ripples run inward from the rim, more and stronger the louder (the mic level) | none: the circle stays as it is |
@@ -1057,19 +1126,33 @@ Molty is not only driven; it reports what its human does to it. Agent-visible ev
 travel device → relay → each paired agent's own inbox → the agent, by whichever receive
 mode suits that agent.
 
+```mermaid
+flowchart TD
+  accTitle: How a device event reaches an agent
+  dev[Device event] -->|socket| room[Relay room]
+  own[Relay's own events] --> check
+  room --> check[Allow list, shape check]
+  check --> cap[Cap: 30 a minute]
+  cap --> ring[Event ring: 200, 24 h]
+  ring --> cursor[A read cursor per agent]
+  cursor --> ride[Ride-along]
+  cursor --> pull[Pull, long-poll]
+  cursor --> hook[Webhook queue]
+  pull --> cli[CLI stream]
+  hook -->|alarm| req[Agent's HTTPS request]
 ```
-device evt ──WSS──▶ DeviceRoom.onEvt
-                     ├─ allow-list + shape check (shake, tap, button, answer; rest stays internal)
-                     │    (+ relay-generated: utterance, utterance.partial, draft.used / draft.dropped to one agent)
-                     ├─ cap 30/min/device (excess dropped, counted)
-                     └─ ev:<seq> ring (200 / 24 h, DO storage)
-                          │  one read cursor per agent token (cur:<token hash>)
-                          ├─▶ ride-along: unread `events` on every authenticated response
-                          │      (+ one-time `firmware_update`, see "Firmware updates")
-                          ├─▶ pull: GET /v1/devices/<id>/events · molty_events (long-poll)
-                          │      └─▶ `molty events [--exec cmd]` (CLI, JSON lines)
-                          └─▶ webhook: whq:<token hash>:<seq> ─DO alarm─▶ agent-defined HTTPS request
-```
+
+| Step | Detail |
+|---|---|
+| Relay room | `DeviceRoom.onEvt`, over the device's WSS |
+| Allow list | `shake`, `tap`, `button`, `answer`; the rest stays internal |
+| Relay's own events | `utterance`, `utterance.partial`; `draft.used` / `draft.dropped` to one agent |
+| Cap | 30 a minute per device; the excess is dropped and counted |
+| Event ring | `ev:<seq>`, 200 events / 24 h, in Durable Object storage |
+| Read cursor | one per agent token (`cur:<token hash>`) |
+| Ride-along | unread `events` on every authenticated response (plus the one-time `firmware_update`, see "Firmware updates") |
+| Pull | `GET /v1/devices/<id>/events` · `molty_events` (long-poll); the CLI's `molty events [--exec cmd]` prints JSON lines |
+| Webhook | `whq:<token hash>:<seq>`, sent on a Durable Object alarm as an agent-defined HTTPS request |
 
 ### Firmware contract
 
@@ -1335,14 +1418,29 @@ The relay is just a relay: it does not serve, version or announce the agent skil
 (`services/relay/src/core/{releases,updates,version}.ts`) except the device wire, which the
 firmware implements.
 
+```mermaid
+sequenceDiagram
+  accTitle: A firmware update, from a release to the new version
+  participant A as Agent
+  participant R as Relay
+  participant M as Molty
+  participant G as GitHub
+  R->>G: latest release, cached 1 h
+  A->>R: check, status or any call
+  R-->>A: a newer version is out
+  A->>R: update
+  R->>M: update command
+  M->>M: asks: update?
+  M->>G: download, check the hash
+  M->>M: flash, reboot
+  M->>R: hello, new version
+  R-->>A: job done
 ```
-GitHub Releases (RELEASES_REPO) ─▶ releases singleton DO (1 h cache, stale on error)
-                                        │
-           molty_updates / molty_status / ride-along notice / molty_update
-                                        │
-           molty_update ─▶ cmd update ─▶ device: "update?" on screen ─▶ download + sha256
-                                        ─▶ flash ─▶ reboot ─▶ hello fw=new ─▶ job done
-```
+
+The releases come from GitHub Releases (`RELEASES_REPO`) through one releases Durable Object (1 h cache, stale on
+error). `molty_updates`, `molty_status`, the ride-along notice and `molty_update` all read it. `molty_update` sends
+`cmd update`; the device asks "update?" on screen, downloads and checks the SHA-256, flashes and reboots; its next
+hello carries the new `fw`, which ends the job.
 
 **Latest release.** `https://api.github.com/repos/<RELEASES_REPO>/releases/latest` (wrangler
 var, default `apresmoi/molty.uno`; optional secret `GITHUB_TOKEN` for the higher rate limit).
@@ -1461,12 +1559,27 @@ cloud provider. Reference implementation: `services/molty-voice/` (`molty-voice`
 moshi-server). The device does not change: it talks to the relay as always. The box is one
 more relay client that **dials out** to the relay over WSS (no inbound ports, no tunnel).
 
+```mermaid
+sequenceDiagram
+  accTitle: The voice box beside Molty at the relay
+  participant M as Molty
+  participant R as Relay
+  participant B as Box
+  participant L as Models
+  M->>R: dials out, device socket
+  B->>R: dials out, voice socket
+  M->>R: mic chunks
+  R->>B: forwarded as they arrive
+  B->>L: speech to text
+  L-->>B: text to speech
+  B->>R: speech audio
+  R->>M: streamed as it arrives
+  Note over R: no box: a cloud provider
 ```
-Molty ──WSS /v1/device──▶ relay (DO per device) ◀──WSS /v1/voice── voice box ──▶ local STT/TTS
-                            │  record(): mic chunks forwarded to the box AS THEY ARRIVE
-                            │  speak():  box PCM streamed to Molty as it arrives
-                            └─ cloud provider (env) when the box is absent (mode auto)
-```
+
+Molty connects on `/v1/device` and the box on `/v1/voice`, both over WSS, to the device's Durable Object. `record()`
+forwards the mic chunks to the box AS THEY ARRIVE; `speak()` streams the box's PCM to Molty as it arrives. The models
+are the box's local STT and TTS. With no box (mode `auto`) the cloud provider from the environment serves instead.
 
 ### Pairing and tokens
 
@@ -1785,8 +1898,3 @@ places to point a build at your own relay (see `services/relay/README.md` to dep
 The website's waitlist form posts to the same hosted relay (`WAITLIST_URL` in
 `apps/website/src/config/site.mjs`, `POST /waitlist`, services/relay/README.md "Waitlist"); it is not part
 of the agent link.
-
-## Explicitly out of v0 (later)
-
-Auth on the device's local HTTP API · OpenClaw node adapter · streaming STT/TTS on the cloud providers (the [voice box](#voice-box) streams both) ·
-end-to-end encryption past the relay · multi-device accounts · rate limits beyond basics.

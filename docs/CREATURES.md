@@ -1,15 +1,25 @@
 # Creatures
 
-A creature package (`kind: "creature"`, [PACKAGES.md](PACKAGES.md) section 5) is one Molty: its body and everything it does,
-as data. The device plays it. The firmware has no duck, cat or octopus code; it has a player that knows channels, terms and
-a fixed list of factor ops, and nothing about what they draw.
+A creature package is one Molty: its body and everything it does, as data. The device plays it. This page is the
+format of that data, for people who build creatures or work on the players. For what packages are and how they get on
+a Molty, start with [Packages and scenes](PACKAGES.md).
 
-```
-packages/<id>/build.mjs ──node──▶ packages/<id>/<id>.json (≤ 40 KB) ──▶ player (JS reference: device/creatures/js/creature-player.js;
-        uses tools/creatures/kit.mjs                    C port: main/creature/creature_player.c) ──▶ bone transforms, colours, marks
+The firmware has no duck, cat or octopus code. It has a player that knows channels, terms and a fixed list of factor
+ops, and nothing about what they draw.
+
+```mermaid
+flowchart LR
+  accTitle: From a creature's source to its moves on Molty
+  src[Creature<br>source] -->|build| pkg[Package]
+  pkg -->|install| player[Player<br>on Molty]
+  player --> out[Moves, colours,<br>marks]
 ```
 
-What ships (`packages/index.json`), all three built into the firmware:
+Each creature has a build script that writes its package with a shared kit. The package is one JSON file, at most
+40 KB (a rigged creature: 256 KB). Two players read it: the reference one in JavaScript and its C port on the device.
+They give bone transforms, colours and marks.
+
+What ships, all three built into the firmware:
 
 | creature | version | how it is made | how the device draws it | its own gestures |
 |---|---|---|---|---|
@@ -17,9 +27,9 @@ What ships (`packages/index.json`), all three built into the firmware:
 | octopus | 1.0.0 | channel layers | a body the fluid flows toward | none |
 | cat | 2.0.0 | a Blender rig with baked clips (section 12) | crisp dots, straight on the panel's lattice | `eat`, `yarn`, `walk`, `shaken` |
 
-The motion model of the channel creatures is the one the lab's animals were written in (`molty-creature-lab/animals/kinds`): a shared pose from the
-mood engine and the gestures (`js/mood.js`, `js/actions.js`, `cute_act.h`), then the creature's own layers on top. Every line
-of that code became a channel; nothing was dropped on purpose (losses are listed at the end).
+The motion model of the channel creatures is the one the creature lab's animals were written in: a shared pose from the
+mood engine and the gestures, then the creature's own layers on top. Every line of that code became a channel; nothing
+was dropped on purpose (losses are listed in section 11).
 
 ## 1. The package
 
@@ -42,10 +52,10 @@ of that code became a channel; nothing was dropped on purpose (losses are listed
 **About** is for the agent that speaks as this Molty, never for the player: `look`, 2 or 3 plain sentences on what a
 person sees on the round screen (at most 240 characters), and one line for every gesture and every mood it plays,
 `idle` included, on what that looks like on this animal (at most 100 characters each; printable ASCII).
-`packages/tools/format.mjs` checks it is complete. The device sends it to the relay with the gestures and moods it plays
-(`cp_info`; [AGENT-LINK.md](AGENT-LINK.md#device-events)), and agents get it as `device.creature`.
+The package check makes sure it is complete. The device sends it to the relay with the gestures and moods it plays
+([the `creature` event](AGENT-LINK.md#device-events)), and agents get it as `device.creature`.
 
-**Gestures** are named `[a-z][a-z0-9_]{0,23}`. A shared one (`js/actions.js`, `cute_act.h`: nod, wiggle, ...) plays over the
+**Gestures** are named `[a-z][a-z0-9_]{0,23}`. A shared one (nod, wiggle, ...) plays over the
 shared pose and keeps its length (no `dur`); any other name is the creature's **own** gesture and gives its length, `dur` 0.2..10 s
 (the cat's `eat`). Every creature plays the shared ones; an agent's `act` plays one of its own too, and the device answers
 `unknown_gesture` for a name the creature lacks. Its parts may exist only for it: the cat's bowl is a bone scaled from 0 to 1
@@ -145,7 +155,7 @@ weight scales what it writes to the pose and own channels; scratch, locals and s
 
 ### Waiting on the agent
 
-Each package carries a `ponder` event (`kit.mjs` `ponder`): gated on `is.thinking` and `work`, it picks one small expression
+Each package carries a `ponder` event (from the kit): gated on `is.thinking` and `work`, it picks one small expression
 every 2 to 5 s: a glance aside, a head tilt, a double blink, a look up, a little yawn once it has thought 14 s, and the
 animal's own (the cat's ear flick and tail swish, the duck's ruffle and nibble, the octopus's passing cloud and curl). The
 firmware chooses nothing: while a package creature is on screen, `working` hands it no work actions (`fd_set_own_work`).
@@ -194,7 +204,7 @@ For a channel creature (the rigged cat's limits are in section 12):
 ## 8. Cost on the device
 
 Per frame the player evaluates the base, walk, post, the running events, at most two gestures and the moods in weight.
-Measured with the reference player over two minutes of every mood and gesture (`tools/creatures/player.test.mjs`):
+Measured with the reference player over two minutes of every mood and gesture:
 worst frame 390 / 1170 factor evaluations, mean 306 / 1085 (duck / octopus).
 
 In C on the ESP32-S3 (240 MHz, single-precision FPU), a factor is a switch dispatch, a few loads and its maths: about 20
@@ -206,7 +216,7 @@ were 100 cycles a factor). The compiled program (24 bytes a factor, 8 a term, 16
 The C port must match the JS player's semantics, including the hash: murmur3 fmix32 of floor(16 n), so the same package
 draws the same numbers on both.
 
-**As built** (`main/creature/creature_player.c`): channel values are float; the clocks (time, mood clocks, a block's clock,
+**As built** (the C player): channel values are float; the clocks (time, mood clocks, a block's clock,
 integrated phases) and the hash's argument are double, and the periodic ops (`sin nz frac cyc bumpr step pulse dz steps chance
 flap`) form their argument in double, so a creature moves the same after a day on as after a minute. It is built without fused
 multiply-adds (`-ffp-contract=off`): a hash's argument must round as JS rounds it. Against the JS player's goldens it agrees to
@@ -217,10 +227,9 @@ facets are under a sample while the camera is not zoomed) is most of the creatur
 ## 9. 2D sprites
 
 They stay a **lab-only render** and are not part of the format. The device draws the rig (bones and parts) into the fluid,
-so the rig is the one thing a package has to carry. The lab's sprites (`animals/flat.mjs`) are a second, hand-drawn
+so the rig is the one thing a package has to carry. The lab's sprites are a second, hand-drawn
 renderer per animal (its own drawing code for wings, ears and arms), so carrying them would mean a second body format and a
-second set of channel bindings for each creature, for a view the device does not show. If a flat look is wanted on the
-device later, it should come from the same rig (an orthographic side render), not a second drawing.
+second set of channel bindings for each creature, for a view the device does not show.
 
 ## 10. Building and checking
 
@@ -229,13 +238,10 @@ node packages/duck/build.mjs        # writes packages/duck/duck.json and its pac
 node --test tools/creatures/*.test.mjs   # the player's rules, and every creature package plays clean within its limits
 ```
 
-`tools/creatures/kit.mjs` holds the body helpers (the lab's) and the generators for the layers every Molty shares: the
+The kit holds the body helpers (the lab's) and the generators for the layers every Molty shares: the
 fidgets (`alive`), the living layer (`living`: pose onto root, torso and head, wings, ears, tails with follow-through,
 legs, arm ripples, feet, eyes, mouth) and the blink and breath motions. A package calls them at build time, so the result
 is plain data in its own file; another creature can tune or drop any of it.
-
-The lab renders a package through its real renderer beside the code version:
-`node pkg/render-pkg.mjs --repo <this checkout> --out <dir> --only duck` in `molty-creature-lab`.
 
 ## 11. Fidelity: what the data version loses
 
@@ -263,10 +269,9 @@ Compared over the full reels (every scene, mood and gesture) against the approve
 ## 12. Rigged creatures (clips, routes, dots)
 
 A creature package may carry a **rig** instead of channel layers: a skeleton, its body as rounded primitives per bone, baked
-clips, and the route map between its poses. The cat (2.0.0) is the first: modelled, rigged and animated in Blender
-(`packages/cat/blender/`), every clip baked, with an authored transition between every pair of resting poses. Its channel layers stay empty; `gestures` and `moods` only declare what it plays (and their
-lengths for the mood engine), so agents, the console and old firmware see the same names. Reference player:
-`device/creatures/js/clip-player.js` and `clip-dots.js`; C port: `main/creature/creature_clip.c` and `creature_dots.c`.
+clips, and the route map between its poses. The cat (2.0.0) is the first: modelled, rigged and animated in Blender, every clip baked, with an authored transition between every pair of resting poses. Its channel layers stay empty; `gestures` and `moods` only declare what it plays (and their
+lengths for the mood engine), so agents and the console see the same names as for any creature. It has its own reference player in JavaScript and a
+C port on the device.
 
 ```jsonc
 "rig": {
@@ -342,7 +347,7 @@ The cat's clips, by what they are for:
 
 ### Drawing (the device's look)
 
-`clip-dots.js` / `creature_dots.c` draw straight onto the braille lattice (2W x 4H dots), no meshes: each primitive is
+Both players draw straight onto the braille lattice (2W x 4H dots), no meshes: each primitive is
 projected orthographically (the camera eases round to the clip's `view` at 2/s and follows the body at 3/s), the merged body
 as a 2D metaball field with the nearest surface's depth per dot, the parts as solid ellipses and capsules. Then: one
 outline, inner lines where a nearer group crosses another (a hind leg only along its lower front edge against the body),
@@ -352,7 +357,7 @@ toward the horizon, a vignette, and a two-dot halo kept clear round the creature
 dots win a cell, then the brightest. On the device the cells go to the fluid's drawer as a scene's dots (crisp on black),
 with the fluid held still under them.
 
-**Rings over it** (`creature_ring.c`, the design is `device/creatures/ring-options.html`). The recording ring, a
+**Rings over it.** The recording ring, a
 question's arcs and the progress ring show over the crisp cells in one language: a wave runs out from the centre
 through the real water (the creature wobbles as it passes), its crest takes the ring's colour near the rim and lands
 there as a thin sharp line, in about 1 s. While a listen records, the voice sends small ripples from the rim inward,
@@ -363,15 +368,27 @@ more and stronger the louder. Letting go, a wave runs in from the rim and fades.
 
 | | limit | the cat |
 |---|---|---|
-| file (rigged) | 256 KB | see `packages/index.json` |
+| file (rigged) | 256 KB | 242 KB |
 | nodes, shapes, clips | 80, 128, 64 | 43 (2 of them props), 90, 45 |
 | families, edges, gestures | 8, 64, 32 | 5, 16, 18 |
 | channels (all clips) | | 1827 (1380 LINEAR, 447 STEP, no CUBICSPLINE) |
 
 Per frame on the device: sampling (a binary search and a Hermite per channel, ~100 channels) and FK of ~50 nodes are a few
 µs; the dots are the cost: the field and parts over the creature's box, then a hash per dot for the world.
-`test/host/clip_build.sh` prints the host time. Measured on the host (Apple silicon) and scaled by the creature test's own
-calibration (the .molty duck: about 54 µs on the host, 11 ms measured on the 1.46): the cat's play + dots cost about 8 to 10 ms
+Measured on the host (Apple silicon) and scaled by the creature test's own
+calibration (about 54 µs on the host for 11 ms measured on the 1.46): the cat's play + dots cost about 8 to 10 ms
 sitting or lying, 12 to 13 ms standing, crouched or eating, 17 to 18 ms walking (side on, the widest box), on the 1.46's
 52 x 32 grid. The fluid under it is held still (no background, swirl or view), so a frame is that plus the sim steps, the
 drawer and the flush. To be confirmed on the device (`GET /api/creature/state`, `prof_ms.c_update`).
+
+## Where this lives
+
+| What | Where in the repository |
+|---|---|
+| The creature packages and their build scripts | `packages/duck/`, `packages/cat/`, `packages/octopus/` |
+| The cat's Blender sources | `packages/cat/blender/` |
+| The shared kit and the player tests | `tools/creatures/` |
+| Reference players (JavaScript) | `device/creatures/js/creature-player.js`, `clip-player.js`, `clip-dots.js` |
+| Players on the device (C) | `device/firmware/main/creature/` |
+| Host tests and goldens | `device/firmware/test/host/` |
+| The package check | `packages/tools/format.mjs` |
