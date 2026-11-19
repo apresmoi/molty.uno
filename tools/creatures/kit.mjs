@@ -175,6 +175,8 @@ export const breathe = (bone, prop, amp, hz) => () => [ch(`${bone}:${prop}`, [[a
 
 // ---- writing: rounded, compact, with its size and hash for packages/index.json
 const round = (x) => (typeof x === 'number' ? +x.toFixed(4) : Array.isArray(x) ? x.map(round) : x && typeof x === 'object' ? Object.fromEntries(Object.entries(x).map(([k, v]) => [k, round(v)])) : x);
+/** A package as the bytes of its file: rounded, compact, one line. */
+export const packageText = (pkg) => `${JSON.stringify(round(pkg))}\n`;
 export function writePackage(file, pkg) {
   const text = JSON.stringify(round(pkg)); mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, text + '\n');
   const size = Buffer.byteLength(text + '\n'), sha256 = createHash('sha256').update(text + '\n').digest('hex');

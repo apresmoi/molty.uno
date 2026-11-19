@@ -1,0 +1,50 @@
+{
+  "molty": "molty/2",
+  "id": "pip",
+  "name": "Pip",
+  "version": "1.0.0",
+  "about": "A round little Molty written by hand: it breathes, tilts its head and hops.",
+  "look": "A round green body with a smaller head on top, two big round eyes and a short tail.",
+  "colors": { "body": "#8fd4a0", "eye": "#10140f", "iris": "#f4f0d0", "shine": "#ffffff" },
+  "moods": {
+    "idle": "breathes slowly and tilts its head from side to side"
+  },
+  "gestures": {
+    "hop": "squats, hops up and lands with a little squash"
+  },
+  "body": {
+    "bones": [
+      { "name": "root" },
+      { "name": "body", "parent": "root", "at": [0, 0.2, 0] },
+      { "name": "head", "parent": "body", "at": [0, 0.2, 0.02] },
+      { "name": "tail", "parent": "body", "at": [0, -0.06, -0.17] }
+    ],
+    "shapes": [
+      { "shape": "blob", "on": "body", "radii": [0.2, 0.2, 0.2], "color": "body", "outline": "torso" },
+      { "shape": "ellipsoid", "on": "head", "at": [0, 0.08, 0], "radii": [0.15, 0.13, 0.13], "color": "body", "outline": "head" },
+      { "shape": "ellipsoid", "on": "head", "at": [0.06, 0.1, 0.12], "radii": [0.04, 0.04, 0.006], "color": "iris", "outline": "eye" },
+      { "shape": "ellipsoid", "on": "head", "at": [0.06, 0.1, 0.125], "radii": [0.02, 0.02, 0.004], "color": "eye", "outline": "eye" },
+      { "shape": "ellipsoid", "on": "head", "at": [-0.06, 0.1, 0.12], "radii": [0.04, 0.04, 0.006], "color": "iris", "outline": "eye" },
+      { "shape": "ellipsoid", "on": "head", "at": [-0.06, 0.1, 0.125], "radii": [0.02, 0.02, 0.004], "color": "eye", "outline": "eye" },
+      { "shape": "capsule", "on": "tail", "to": [0, 0.12, -0.08], "radius": [0.045, 0.02], "color": "body", "outline": "tail" }
+    ],
+    "actions": {
+      "idle": {
+        "keys": [
+          { "time": 0, "body": { "scale": [1, 1, 1] }, "head": { "turn": [0, 0, -7] }, "tail": { "turn": [0, -15, 0] } },
+          { "time": 1.5, "body": { "scale": [1.04, 0.97, 1.04] }, "head": { "turn": [0, 0, 7] }, "tail": { "turn": [0, 15, 0] } },
+          { "time": 3, "body": { "scale": [1, 1, 1] }, "head": { "turn": [0, 0, -7] }, "tail": { "turn": [0, -15, 0] } }
+        ]
+      },
+      "hop": {
+        "keys": [
+          { "time": 0, "body": { "at": [0, 0.2, 0], "scale": [1, 1, 1] }, "head": { "turn": [0, 0, -7] } },
+          { "time": 0.25, "body": { "at": [0, 0.15, 0], "scale": [1.12, 0.8, 1.12] }, "head": { "turn": [10, 0, 0] } },
+          { "time": 0.55, "body": { "at": [0, 0.5, 0], "scale": [0.92, 1.1, 0.92] }, "head": { "turn": [-12, 0, 0] } },
+          { "time": 0.85, "body": { "at": [0, 0.16, 0], "scale": [1.1, 0.84, 1.1] }, "head": { "turn": [8, 0, 0] } },
+          { "time": 1.1, "body": { "at": [0, 0.2, 0], "scale": [1, 1, 1] }, "head": { "turn": [0, 0, -7] } }
+        ]
+      }
+    }
+  }
+}
