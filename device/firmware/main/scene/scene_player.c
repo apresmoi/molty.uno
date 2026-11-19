@@ -850,9 +850,8 @@ static void paint_items(const ctx_t *c, const scene_t *sc, float t, float grow, 
         if (it->when_lit && !(lit && glow > 0.f)) continue;   /* only while its group is lit */
         s_mark_on = lit || (fs && !fs->lights[0] && covered(sc, fs, it) && it->npts <= GROW_PTS);
         if (lit) {
-            /* a lit group's item: grown about its own centre, brighter (or fading in) */
-            /* (its colour in SCENE_LIT_STEPS steps: a lit line that only changes colour is drawn again at each, not each frame) */
-            const float k = grow, a = ceilf(glow * SCENE_LIT_STEPS - 0.001f) * (1.f / SCENE_LIT_STEPS);
+            /* a lit group's item: grown about its own centre, brighter (or fading in), every frame of it */
+            const float k = grow, a = glow;
             g = *it;
             g.r *= k; g.size *= k; g.w *= k;
             g.rgb = it->when_lit ? shade(it->rgb, a) : toward_white(it->rgb, a * SCENE_LIT_WHITE);

@@ -173,7 +173,6 @@ static inline float scene_hd_dust(const scene_hd_t *h) { return h->gen || h->out
 #define SCENE_GROW      PKG_GROW        /* its scale, grown, unless its spot says (grow)      */
 #define SCENE_GROW_IN_S 0.5f            /* the growth, easing out as the ring spreads       */
 #define SCENE_GROW_OUT_S 0.4f           /* back, once its reading is over                   */
-#define SCENE_LIT_STEPS 4               /* a lit item's colour goes there in this many steps (its size every frame) */
 #define SCENE_LIT_WHITE 0.5f            /* a lit item's colour this far towards white        */
 typedef struct {
     int spot;                           /* the tapped spot (item), -1 none                  */
