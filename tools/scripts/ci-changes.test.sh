@@ -33,8 +33,8 @@ expect "docs only"         "website"                  docs/HARDWARE.md docs/asse
 expect "agent-link doc"    "website relay"            docs/AGENT-LINK.md
 expect "skills only"       "relay"                    skills/molty/SKILL.md skills/molty/references/updates.md
 expect "plugin manifests"  ""                         .claude-plugin/plugin.json .codex-plugin/plugin.json
-expect "firmware only"     "$FW firmware_test"        device/firmware/main/app_main.c
-expect "firmware md"       "$FW firmware_test"        device/firmware/main/README.md
+expect "firmware only"     "$FW firmware_test website" device/firmware/main/app_main.c
+expect "firmware md"       "$FW firmware_test website" device/firmware/main/README.md
 expect "firmware boards"   "$FW firmware_test website" device/firmware/boards/waveshare/esp32-s3-touch-lcd-1.46/board.json
 expect "firmware scripts"  "$FW"                      tools/scripts/firmware-boards.py
 expect "host tests only"   "firmware_test"            device/firmware/test/host/cute_test.c
