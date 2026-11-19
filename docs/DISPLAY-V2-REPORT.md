@@ -391,3 +391,84 @@ They are not in the tree now, as asked.
 - The preview pages were loaded headless and looked at (the cat, Ember mid-stretch, Pip mid-hop); their buttons were
   not clicked in a real browser.
 - CI was not run.
+
+# Phase 3: up to the product as it is today
+
+`trial/hd-dust` (at `1c2b515`) merged into `feat/pkg-v2` as a merge commit (`e42e72d`), not a rebase. Nothing
+pushed, deployed, flashed or published.
+
+## Result
+
+| check | result |
+|---|---|
+| astrology built from `skills/molty-astro` | **same bytes as trial's file**: 1.7.0, sha256 `66e94aed50a4a3d9684f947c09b33a01d860390e42a311bda93eecdc89d49a66`, 74427 bytes |
+| the cat built from `moltys/cat` | **same bytes as trial's file**: sha256 `96189940b42cc4fb53297b2205f8a924f97796823f6c8235eb88d0227473170e` |
+| `packages/index.json`, `duck.json`, `octopus.json` | byte-identical to trial's |
+| molty-astro dry runs (13 command lines) | identical to what trial prints (`diff -r` clean) |
+| round trip: today's astrology through `convert` and `build` | same bytes |
+| display tests | 18 pass, 0 fail (2 new) |
+| Molty tests | 14 pass, 0 fail |
+| package format tests (theirs) | 11 pass, 0 fail |
+| creature tests | 23 pass, 0 fail |
+| `make firmware-test` | every host suite passed, exit 0 (among them pkg_test 98, scene_test 333, creature 535, clip 48) |
+| relay `pnpm test`, `pnpm typecheck` | 662 passed in 36 files; typecheck clean |
+| `check-packages.mjs` | ok |
+| `check-skill.mjs`, `hygiene.sh` | 5 failures, all of them also on trial (which has 7: its two under `packages/cat/blender/` are gone here). One is `skills/molty-astro/SKILL.md` at 7154 chars against a 7000 limit; it is 7195 on trial |
+| what this branch changes outside its own files, against trial | `device/`: two `export` words in `clip-dots.js`. `services/`, `apps/`, `.github/`: nothing |
+
+## The two new things, as an author writes them
+
+The chart's sign zone (`skills/molty-astro/screens/chart.yaml`):
+
+```yaml
+- tap_zone:
+    at: { angle: "{{ sign.angle }}", distance: 0.825 }
+    radius: 0.07
+    reads: "{{ sign.reading }}"
+    id: "{{ sign.id }}"
+    grow: 1.5
+    sector: { width: 30, inner: 0.75, outer: 0.9 }
+    opens: { screen: sign-closeup, seconds: "{{ sign.seconds }}" }
+```
+
+- `sector` has two forms. `{ from, to, inner, outer }` says a wedge outright (from one angle to another, between two
+  distances); the zone then needs no `at` and no `radius`. `{ width, inner, outer }` is a wedge so many degrees wide
+  around where the zone is, which is what a zone placed by an input needs (the chart's signs): a binding is a whole
+  value, so the compiler cannot work out two angles from one.
+- `opens` is a screen's name, or `{ screen, seconds }`.
+- `check` knows the device's rule for an opened screen (its inputs come by name from the tapped element, else from
+  this screen) and holds a skill to it: every input the opened screen takes must be sent here under the same name
+  and kind, and a list passed on must have the fields the opened screen reads. Errors say which field to add where.
+  What only the opened screen reads counts as used.
+- `convert`, the preview (it now uses the player's own `spotAt` and the format's `opens`, and follows a tap into the
+  opened screen and back) and `docs/DISPLAY.md` (Taps: two table rows, one example) know both.
+
+## Conflicts, and the judgment in each
+
+| file | their side | here | resolved |
+|---|---|---|---|
+| `packages/astrology/build.mjs` | the generator, changed to make 1.7.0 | a 13-line shim | the shim. Their change (sign wedges, signs opening `sign-closeup`, the `ruler` list, `da` in the close-up) is written into `screens/chart.yaml` and `screens/sign-closeup.yaml`; the build gives their file byte for byte, so nothing of the generator's output is lost |
+| `skills/molty-astro/references/layouts.md` | edited (new fields, install wording, the `opened` tap loop) | deleted in phase 1 | deleted. Every new field's meaning is an `about` in the screens (so in `build/display.md`); the install wording and the tap loop are in `references/commands.md` |
+| `docs/CREATURES.md` | a fuller sentence on the cat, pointing at `packages/cat/blender/` | a pointer to `moltys/cat/` | their sentence, with this branch's folder and guide |
+
+Merged without conflict but worth knowing: `skills/molty-astro/SKILL.md` (their new "Tap to read" text and install
+wording kept whole; this branch's Screens list made shorter to give them room), `astro.mjs` and `sky.mjs` (their
+code, this branch's comment-only edits), `play.mjs` (their `spotAt`, this branch's two exports), `docs/PACKAGES.md`
+(their text and mermaid blocks, this branch's one pointer line).
+
+One bug found by looking: the preview sent a screen's inputs in the address, and today's chart example (6.5 KB of
+inputs) no longer fit. The page now posts them. A test covers it.
+
+## Guides reread
+
+`docs/DISPLAY.md` (253 lines) and `docs/CREATURE.md` (152 lines) name no older format, no "v1", no "legacy", no
+conversion, no curl and no token; the only matches for those words are "folder" and display `tokens` (named colors).
+
+## Not verified
+
+- Nothing ran on a device; the firmware was not built for the board, only its host tests ran.
+- The preview's click handler was not driven by a real click: the server side of a tap that opens a screen is
+  tested, and the page was loaded headless and looked at.
+- CI was not run.
+- `MOLTY_EXPORT_ALL=1` (the whole `cat.glb` again from `cat.blend`) was not rerun after the merge; the four-action
+  exporter test ran and passes, and nothing under `moltys/` or `tools/blender/` changed in the merge.

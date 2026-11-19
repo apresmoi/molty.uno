@@ -28,7 +28,7 @@ const PAGE = `<!doctype html><meta charset="utf-8"><title>molty-display preview<
 </aside>
 <script>
 const $ = (id) => document.getElementById(id), q = new URLSearchParams(location.search);
-let skill, tap = '', timer, back = null;
+let skill, tap = '', timer, back = null, shown = 0;
 async function load() {
   skill = await (await fetch('/skill')).json();
   $('screen').innerHTML = skill.screens.map((s) => '<option>' + s.name + '</option>').join('');
@@ -44,15 +44,15 @@ function pick() {
   tap = ''; back = null; draw();
 }
 async function draw() {
-  const args = 'screen=' + encodeURIComponent($('screen').value) + '&params=' + encodeURIComponent($('params').value) + '&t=' + $('t').value;
-  const scene = await (await fetch('/scene?' + args)).json();
+  // the inputs go up in the request's body (a chart's are too long for an address); the picture is then asked for
+  const scene = await (await fetch('/scene', { method: 'POST', body: JSON.stringify({ screen: $('screen').value, params: $('params').value }) })).json();
   $('tv').textContent = (+$('t').value).toFixed(2) + ' s';
   $('problems').textContent = [...skill.problems, scene.error ?? ''].filter(Boolean).join('\\n');
-  if (!scene.error) $('glass').src = '/frame.png?' + args + '&tap=' + encodeURIComponent(tap) + ($('hd').checked ? '&hd=1' : '');
+  if (!scene.error) $('glass').src = '/frame.png?t=' + $('t').value + '&tap=' + encodeURIComponent(tap) + ($('hd').checked ? '&hd=1' : '') + '&n=' + ++shown;
 }
 $('glass').onclick = async (e) => {
   const b = $('glass').getBoundingClientRect(), x = ((e.clientX - b.left) / b.width) * 2 - 1, y = 1 - ((e.clientY - b.top) / b.height) * 2;
-  const hit = await (await fetch('/tap?screen=' + encodeURIComponent($('screen').value) + '&params=' + encodeURIComponent($('params').value) + '&t=' + $('t').value + '&x=' + x + '&y=' + y)).json();
+  const hit = await (await fetch('/tap?t=' + $('t').value + '&x=' + x + '&y=' + y)).json();
   if (!hit.say && back) { $('screen').value = back.screen; $('params').value = back.params; $('about').textContent = back.about; back = null; }   // a tap beside an opened screen goes back
   tap = hit.id ?? ''; $('reading').textContent = hit.say ? hit.say + (hit.id ? '  (tap event: ' + hit.id + ')' : '') : '';
   if (hit.opens) {   // the zone opens another screen, as Molty does: with what this one was sent
@@ -69,25 +69,29 @@ load();
 
 /** Serves the preview of the skill at `dir` on 127.0.0.1:port; returns the server. */
 export function preview(dir, port) {
-  let built;
+  let built, screen = '', params = {};   // the screen on show and what it was sent (the page posts them to /scene)
   const skill = () => {
     built = check(dir);
     return { problems: built.errors.map((e) => `${e.at}  ${e.message}`), screens: built.pkg ? Object.entries(built.skill.screens).map(([name, { def }]) => ({ name, about: def.about, duration: built.pkg.layouts[name].dur, params: exampleParams(def) })) : [] };
   };
-  const server = createServer((req, res) => {
+  const server = createServer(async (req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1'), arg = (k) => url.searchParams.get(k) ?? '', json = (v) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(v));
     try {
       if (url.pathname === '/') return void res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(PAGE);
       if (url.pathname === '/skill') return void json(skill());
-      const pkg = (built ?? (skill(), built)).pkg, params = JSON.parse(arg('params') || '{}'), t = +arg('t');
-      if (url.pathname === '/scene') return void json({ zones: bind(pkg, arg('screen'), params).filter((it) => it.k === 'spot').length });
+      const pkg = (built ?? (skill(), built)).pkg, t = +arg('t');
+      if (url.pathname === '/scene') {
+        const sent = JSON.parse(Buffer.concat(await req.toArray()).toString() || '{}');
+        [screen, params] = [sent.screen, JSON.parse(sent.params || '{}')];
+        return void json({ zones: bind(pkg, screen, params).filter((it) => it.k === 'spot').length });
+      }
       if (url.pathname === '/tap') {   // the zone a tap lands on, by the device's own rule, and what it opens
-        const hit = spotAt(bind(pkg, arg('screen'), params), +arg('x'), +arg('y'), t);
-        return void json(hit ? { id: hit.id, say: hit.say, opens: hit.id === undefined ? null : opens(pkg, arg('screen'), params, hit.id) } : {});
+        const hit = spotAt(bind(pkg, screen, params), +arg('x'), +arg('y'), t);
+        return void json(hit ? { id: hit.id, say: hit.say, opens: hit.id === undefined ? null : opens(pkg, screen, params, hit.id) } : {});
       }
       if (url.pathname !== '/frame.png') return void res.writeHead(404).end();
-      const view = arg('hd') ? hd(pkg, arg('screen'), params, t, 466, '', arg('tap')) : null;
-      res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-store' }).end(view ? png(view.kept, view.rgb, 466) : png(frame(pkg, arg('screen'), params, t, null, arg('tap'))));
+      const view = arg('hd') ? hd(pkg, screen, params, t, 466, '', arg('tap')) : null;
+      res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-store' }).end(view ? png(view.kept, view.rgb, 466) : png(frame(pkg, screen, params, t, null, arg('tap'))));
     } catch (e) {
       json({ error: e instanceof ParamError ? `the device would refuse these inputs: ${e.message}` : e.message });
     }
