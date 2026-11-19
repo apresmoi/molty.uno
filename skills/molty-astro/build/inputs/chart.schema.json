@@ -1,0 +1,207 @@
+{
+  "title": "astrology chart: the params of scene.play",
+  "type": "object",
+  "required": [
+    "bodies",
+    "signs",
+    "aspects"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "bodies": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "required": [
+          "g",
+          "a",
+          "r",
+          "c",
+          "say",
+          "id"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "g": {
+            "enum": [
+              "g-sun",
+              "g-moon",
+              "g-mercury",
+              "g-venus",
+              "g-mars",
+              "g-jupiter",
+              "g-saturn",
+              "g-uranus",
+              "g-neptune",
+              "g-pluto"
+            ],
+            "description": "The body's symbol: g-sun, g-moon, g-mercury ..."
+          },
+          "a": {
+            "type": "number",
+            "minimum": -720,
+            "maximum": 720,
+            "description": "Its chart angle: (180 + its ecliptic longitude) mod 360, so 0 Aries sits at 9 o'clock."
+          },
+          "r": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2,
+            "description": "0.64, pulled in by 0.1 for each level, when it is within 13 degrees of a body already placed on that level."
+          },
+          "c": {
+            "type": "string",
+            "pattern": "^#[0-9a-f]{6}$",
+            "description": "Its color: sun #ffd678, moon #e6e6e0, mercury #c8bcb0, venus #fff0c4, mars #ff7a55, jupiter #ffc266, saturn #e8d890, uranus #9fe3e0, neptune #8fb4ff, pluto #c0a0d0."
+          },
+          "say": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^(?![$@])[\\x20-\\x7e]*$",
+            "description": "What a tap on it shows: Sun in Gemini, you shine by talking and learning. Then its tightest aspect, if it fits."
+          },
+          "id": {
+            "type": "string",
+            "maxLength": 40,
+            "pattern": "^(?![$@])[\\x20-\\x7e]*$",
+            "description": "Its name, lower case (sun, moon ...): names it in the tap event, and is the group an aspect lights."
+          }
+        }
+      },
+      "description": "The Sun, the Moon and the eight planets, in order of longitude."
+    },
+    "signs": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "required": [
+          "a",
+          "say",
+          "id"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "a": {
+            "type": "number",
+            "minimum": -720,
+            "maximum": 720,
+            "description": "The sign's middle on the wheel: (195 + 30 i) mod 360 for sign i, Aries 0."
+          },
+          "say": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^(?![$@])[\\x20-\\x7e]*$",
+            "description": "What a tap on it shows: its nature and ruler, then its planets or, when it is empty, where its ruler is."
+          },
+          "id": {
+            "type": "string",
+            "maxLength": 40,
+            "pattern": "^(?![$@])[\\x20-\\x7e]*$",
+            "description": "The sign's name, lower case: names it in the tap event."
+          }
+        }
+      },
+      "description": "A reading for each of the twelve signs. The wheel draws the signs itself; these are the places to tap."
+    },
+    "aspects": {
+      "type": "array",
+      "maxItems": 11,
+      "items": {
+        "type": "object",
+        "required": [
+          "x1",
+          "y1",
+          "x2",
+          "y2",
+          "px1",
+          "py1",
+          "px2",
+          "py2",
+          "c",
+          "say",
+          "id",
+          "lights"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "x1": {
+            "type": "number",
+            "minimum": -1,
+            "maximum": 1,
+            "description": "The line's start: 0.085 from the first body's centre, toward the second."
+          },
+          "y1": {
+            "type": "number",
+            "minimum": -1,
+            "maximum": 1,
+            "description": "The line's start, y."
+          },
+          "x2": {
+            "type": "number",
+            "minimum": -1,
+            "maximum": 1,
+            "description": "The line's end: 0.085 short of the second body's centre."
+          },
+          "y2": {
+            "type": "number",
+            "minimum": -1,
+            "maximum": 1,
+            "description": "The line's end, y."
+          },
+          "px1": {
+            "type": "number",
+            "minimum": -1,
+            "maximum": 1,
+            "description": "The first body's centre, where its ring shows while the aspect is lit."
+          },
+          "py1": {
+            "type": "number",
+            "minimum": -1,
+            "maximum": 1,
+            "description": "The first body's centre, y."
+          },
+          "px2": {
+            "type": "number",
+            "minimum": -1,
+            "maximum": 1,
+            "description": "The second body's centre."
+          },
+          "py2": {
+            "type": "number",
+            "minimum": -1,
+            "maximum": 1,
+            "description": "The second body's centre, y."
+          },
+          "c": {
+            "type": "string",
+            "pattern": "^#[0-9a-f]{6}$",
+            "description": "Tense (square, opposition) #ff5a4a, easy (trine, sextile) #6fa8ff, a conjunction #c8cce0. With --all, dimmed by up to 70 percent as the orb grows to 6."
+          },
+          "say": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^(?![$@])[\\x20-\\x7e]*$",
+            "description": "What a tap on the line shows: Mars opposes Saturn, drive meets limits."
+          },
+          "id": {
+            "type": "string",
+            "maxLength": 40,
+            "pattern": "^(?![$@])[\\x20-\\x7e]*$",
+            "description": "The pair, lower case: sun-moon. Names the line in the tap event, and is its group."
+          },
+          "lights": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,24}( [A-Za-z0-9_-]{1,24}){0,3}$",
+            "description": "What a tap on the line lights: the aspect and its two bodies, as in: sun-moon sun moon."
+          }
+        }
+      },
+      "description": "The three tightest aspects a line can show (none for a pair closer than 0.2). With --all, every one that fits, at most 11."
+    }
+  }
+}

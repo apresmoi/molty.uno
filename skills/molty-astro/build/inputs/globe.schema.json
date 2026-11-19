@@ -1,0 +1,49 @@
+{
+  "title": "astrology globe: the params of scene.play",
+  "type": "object",
+  "required": [
+    "img",
+    "lit",
+    "side",
+    "r",
+    "spin"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "img": {
+      "enum": [
+        "moon",
+        "moon-red",
+        "sun",
+        "mercury",
+        "venus",
+        "mars",
+        "jupiter",
+        "saturn"
+      ],
+      "description": "Which body: moon, mercury, venus, mars or jupiter."
+    },
+    "lit": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "The fraction of its disc that is lit."
+    },
+    "side": {
+      "type": "number",
+      "minimum": -1,
+      "maximum": 1,
+      "description": "1 when its right side is lit, -1 when its left. The Moon: 1 waxing, -1 waning. A planet: 1 when it is east of the Sun ((its longitude - the Sun's) mod 360 is under 180), else -1."
+    },
+    "r": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 2,
+      "description": "0.62 for the Moon, 0.58 for a planet."
+    },
+    "spin": {
+      "type": "number",
+      "description": "Degrees per second it turns, for show: 0 for the Moon, 2 mercury, 3 venus, 7 mars, 29 jupiter."
+    }
+  }
+}

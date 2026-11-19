@@ -1,0 +1,91 @@
+# yaml-language-server: $schema=../../../schema/display-2-screen.json
+about: All ten bodies on the zodiac wheel, joined by their tightest aspects. A tap on a planet, a sign or a line reads it.
+duration: hold
+subtitles: middle   # the wheel's middle is empty: readings show there
+inputs:
+  bodies:
+    type: list
+    max: 10
+    about: The Sun, the Moon and the eight planets, in order of longitude.
+    of:
+      symbol: { type: asset, of: assets/planets, sent_as: g, about: "The body's symbol: g-sun, g-moon, g-mercury ..." }
+      angle: { type: angle, sent_as: a, about: "Its chart angle: (180 + its ecliptic longitude) mod 360, so 0 Aries sits at 9 o'clock." }
+      distance: { type: distance, sent_as: r, about: "0.64, pulled in by 0.1 for each level, when it is within 13 degrees of a body already placed on that level." }
+      color: { type: color, sent_as: c, about: "Its color: sun #ffd678, moon #e6e6e0, mercury #c8bcb0, venus #fff0c4, mars #ff7a55, jupiter #ffc266, saturn #e8d890, uranus #9fe3e0, neptune #8fb4ff, pluto #c0a0d0." }
+      reading: { type: reading, sent_as: say, about: "What a tap on it shows: Sun in Gemini, you shine by talking and learning. Then its tightest aspect, if it fits." }
+      id: { type: text, about: "Its name, lower case (sun, moon ...): names it in the tap event, and is the group an aspect lights." }
+    example:
+      - { symbol: g-neptune, angle: 182.07, distance: 0.64, color: "#8fb4ff", reading: "Neptune in Aries: you dream by being bold and going first. Pluto lends a hand.", id: neptune }
+      - { symbol: g-saturn, angle: 189.23, distance: 0.54, color: "#e8d890", reading: "Saturn in Aries: you learn hard lessons with courage and a fast start. Moon makes it flow easily.", id: saturn }
+      - { symbol: g-uranus, angle: 244.64, distance: 0.64, color: "#9fe3e0", reading: "Uranus in Gemini: you break old rules by talking and learning. Pluto makes it flow easily.", id: uranus }
+      - { symbol: g-moon, angle: 309.74, distance: 0.64, color: "#e6e6e0", reading: "Moon in Leo: you feel at home with warmth and a big heart. Sun adds friction that pushes you.", id: moon }
+      - { symbol: g-mars, angle: 319.06, distance: 0.54, color: "#ff7a55", reading: "Mars in Leo: you go after things by being seen and playing. Mercury adds friction that pushes you.", id: mars }
+      - { symbol: g-jupiter, angle: 324.43, distance: 0.64, color: "#ffc266", reading: "Jupiter in Leo: luck finds you with warmth and a big heart. Venus lends a hand.", id: jupiter }
+      - { symbol: g-venus, angle: 25.82, distance: 0.64, color: "#fff0c4", reading: "Venus in Libra: you love through fairness and beauty. Jupiter lends a hand.", id: venus }
+      - { symbol: g-sun, angle: 39.45, distance: 0.64, color: "#ffd678", reading: "Sun in Scorpio: you shine with deep, all or nothing focus. Moon adds friction that pushes you.", id: sun }
+      - { symbol: g-mercury, angle: 45.65, distance: 0.54, color: "#c8bcb0", reading: "Mercury in Scorpio: your mind works best through trust and hidden things. Mars adds friction that pushes you.", id: mercury }
+      - { symbol: g-pluto, angle: 123.13, distance: 0.64, color: "#c0a0d0", reading: "Pluto in Aquarius: you change deep down by doing it your own way. Neptune lends a hand.", id: pluto }
+  signs:
+    type: list
+    max: 12
+    about: A reading for each of the twelve signs. The wheel draws the signs itself; these are the places to tap.
+    of:
+      angle: { type: angle, sent_as: a, about: "The sign's middle on the wheel: (195 + 30 i) mod 360 for sign i, Aries 0." }
+      reading: { type: reading, sent_as: say, about: "What a tap on it shows: its nature and ruler, then its planets or, when it is empty, where its ruler is." }
+      id: { type: text, about: "The sign's name, lower case: names it in the tap event." }
+    example:
+      - { angle: 195, reading: "Aries: bold, quick fire, ruled by Mars. Neptune and Saturn here: by being bold and going first, you live out your dreams and your discipline.", id: aries }
+      - { angle: 225, reading: "Taurus: steady, sensual earth, ruled by Venus. Empty now, so its ruler, Venus in Libra, shows how it plays out for you.", id: taurus }
+      - { angle: 255, reading: "Gemini: curious, chatty air, ruled by Mercury. Uranus here: by talking and learning, you live out your rebel side.", id: gemini }
+      - { angle: 285, reading: "Cancer: caring, tender water, ruled by the Moon. Empty now, so its ruler, the Moon in Leo, shows how it plays out for you.", id: cancer }
+      - { angle: 315, reading: "Leo: warm, proud fire, ruled by the Sun. Moon, Mars and Jupiter here: with warmth and a big heart, you live out your feelings, your drive and your luck.", id: leo }
+      - { angle: 345, reading: "Virgo: careful, helpful earth, ruled by Mercury. Empty now, so its ruler, Mercury in Scorpio, shows how it plays out for you.", id: virgo }
+      - { angle: 15, reading: "Libra: fair, graceful air, ruled by Venus. Venus here: through fairness and beauty, you live out your loves.", id: libra }
+      - { angle: 45, reading: "Scorpio: deep, intense water, ruled by Pluto. Sun and Mercury here: with deep, all or nothing focus, you live out your core self and your mind.", id: scorpio }
+      - { angle: 75, reading: "Sagittarius: free, far-roaming fire, ruled by Jupiter. Empty now, so its ruler, Jupiter in Leo, shows how it plays out for you.", id: sagittarius }
+      - { angle: 105, reading: "Capricorn: patient, ambitious earth, ruled by Saturn. Empty now, so its ruler, Saturn in Aries, shows how it plays out for you.", id: capricorn }
+      - { angle: 135, reading: "Aquarius: original, free-thinking air, ruled by Uranus. Pluto here: by doing it your own way, you live out your power.", id: aquarius }
+      - { angle: 165, reading: "Pisces: dreamy, gentle water, ruled by Neptune. Empty now, so its ruler, Neptune in Aries, shows how it plays out for you.", id: pisces }
+  aspects:
+    type: list
+    max: 11
+    about: "The three tightest aspects a line can show (none for a pair closer than 0.2). With --all, every one that fits, at most 11."
+    of:
+      from_x: { type: number, min: -1, max: 1, sent_as: x1, about: "The line's start: 0.085 from the first body's centre, toward the second." }
+      from_y: { type: number, min: -1, max: 1, sent_as: y1, about: "The line's start, y." }
+      to_x: { type: number, min: -1, max: 1, sent_as: x2, about: "The line's end: 0.085 short of the second body's centre." }
+      to_y: { type: number, min: -1, max: 1, sent_as: y2, about: "The line's end, y." }
+      ring1_x: { type: number, min: -1, max: 1, sent_as: px1, about: "The first body's centre, where its ring shows while the aspect is lit." }
+      ring1_y: { type: number, min: -1, max: 1, sent_as: py1, about: "The first body's centre, y." }
+      ring2_x: { type: number, min: -1, max: 1, sent_as: px2, about: The second body's centre. }
+      ring2_y: { type: number, min: -1, max: 1, sent_as: py2, about: "The second body's centre, y." }
+      color: { type: color, sent_as: c, about: "Tense (square, opposition) #ff5a4a, easy (trine, sextile) #6fa8ff, a conjunction #c8cce0. With --all, dimmed by up to 70 percent as the orb grows to 6." }
+      reading: { type: reading, sent_as: say, about: "What a tap on the line shows: Mars opposes Saturn, drive meets limits." }
+      id: { type: text, about: "The pair, lower case: sun-moon. Names the line in the tap event, and is its group." }
+      lights: { type: groups, about: "What a tap on the line lights: the aspect and its two bodies, as in: sun-moon sun moon." }
+    example:
+      - { from_x: 0.486, from_y: 0.322, to_x: 0.417, to_y: -0.408, ring1_x: 0.494, ring1_y: 0.407, ring2_x: 0.409, ring2_y: -0.492, color: "#ff5a4a", reading: "Sun squares Moon: friction between self and mood.", id: sun-moon, lights: sun-moon sun moon }
+      - { from_x: 0.331, from_y: -0.459, to_x: -0.455, to_y: -0.12, ring1_x: 0.409, ring1_y: -0.492, ring2_x: -0.533, ring2_y: -0.087, color: "#6fa8ff", reading: "Moon flows with Saturn: mood and limits in step.", id: moon-saturn, lights: moon-saturn moon saturn }
+      - { from_x: -0.6, from_y: 0.052, to_x: -0.389, to_y: 0.46, ring1_x: -0.64, ring1_y: -0.023, ring2_x: -0.35, ring2_y: 0.536, color: "#6fa8ff", reading: "Neptune helps Pluto: dreams helping power.", id: neptune-pluto, lights: neptune-pluto neptune pluto }
+draw:
+  - use: wheel
+    with: { sign_size: 0.106 }
+  - for: aspect in aspects
+    draw:
+      # shown only while the aspect is lit: a ring round each of its bodies, on a cleared disc
+      - dot: { at: { x: "{{ aspect.ring1_x }}", y: "{{ aspect.ring1_y }}" }, radius: lit_ring, color: erase, group: "{{ aspect.id }}", only_when: highlighted }
+      - circle: { at: { x: "{{ aspect.ring1_x }}", y: "{{ aspect.ring1_y }}" }, radius: lit_ring, width: hairline, color: "{{ aspect.color }}", group: "{{ aspect.id }}", only_when: highlighted }
+      - dot: { at: { x: "{{ aspect.ring2_x }}", y: "{{ aspect.ring2_y }}" }, radius: lit_ring, color: erase, group: "{{ aspect.id }}", only_when: highlighted }
+      - circle: { at: { x: "{{ aspect.ring2_x }}", y: "{{ aspect.ring2_y }}" }, radius: lit_ring, width: hairline, color: "{{ aspect.color }}", group: "{{ aspect.id }}", only_when: highlighted }
+      - line: { from: { x: "{{ aspect.from_x }}", y: "{{ aspect.from_y }}" }, to: { x: "{{ aspect.to_x }}", y: "{{ aspect.to_y }}" }, width: hairline, color: "{{ aspect.color }}", group: "{{ aspect.id }}" }
+  - for: body in bodies
+    draw:
+      - spoke: { radius: 0.66, length: 0.07, angle: "{{ body.angle }}", width: hairline, color: grid }
+      - symbol: { asset: "{{ body.symbol }}", size: 0.12, at: { angle: "{{ body.angle }}", distance: "{{ body.distance }}" }, color: "{{ body.color }}", group: "{{ body.id }}" }
+      - tap_zone: { at: { angle: "{{ body.angle }}", distance: "{{ body.distance }}" }, radius: 0.08, reads: "{{ body.reading }}", id: "{{ body.id }}" }
+  - for: sign in signs
+    draw:
+      - tap_zone: { at: { angle: "{{ sign.angle }}", distance: 0.825 }, radius: 0.07, reads: "{{ sign.reading }}", id: "{{ sign.id }}", grow: 1.5 }
+  - for: aspect in aspects
+    draw:
+      - tap_zone: { along: { from: { x: "{{ aspect.from_x }}", y: "{{ aspect.from_y }}" }, to: { x: "{{ aspect.to_x }}", y: "{{ aspect.to_y }}" } }, radius: 0.05, reads: "{{ aspect.reading }}", id: "{{ aspect.id }}", highlights: "{{ aspect.lights }}" }

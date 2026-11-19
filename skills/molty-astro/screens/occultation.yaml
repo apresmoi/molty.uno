@@ -1,0 +1,39 @@
+# yaml-language-server: $schema=../../../schema/display-2-screen.json
+about: The Moon passing in front of a planet.
+duration: 6
+inputs:
+  path:
+    type: list
+    max: 14
+    about: "The Moon against the planet in 14 steps, 2.2 hours either side of the closest moment. Scale: 0.45 over the Moon's angular radius."
+    of:
+      x: { type: number, min: -2, max: 2, about: "Offset on the sky from the still body, east to the left." }
+      y: { type: number, min: -2, max: 2, about: "Offset on the sky from the still body, north up." }
+      from: { type: seconds, sent_as: "on", about: "When this step shows: 0.3 + 5.4 i / 14 for step i." }
+      until: { type: seconds, sent_as: "off", about: "When the next step takes over (the last one: 6)." }
+    example:
+      - { x: 2, y: 0, from: 0.3, until: 0.69 }
+      - { x: 1.78, y: -0.02, from: 0.69, until: 1.07 }
+      - { x: 1.46, y: -0.03, from: 1.07, until: 1.46 }
+      - { x: 1.13, y: -0.05, from: 1.46, until: 1.84 }
+      - { x: 0.81, y: -0.06, from: 1.84, until: 2.23 }
+      - { x: 0.49, y: -0.08, from: 2.23, until: 2.61 }
+      - { x: 0.17, y: -0.09, from: 2.61, until: 3 }
+      - { x: -0.15, y: -0.11, from: 3, until: 3.39 }
+      - { x: -0.47, y: -0.12, from: 3.39, until: 3.77 }
+      - { x: -0.79, y: -0.13, from: 3.77, until: 4.16 }
+      - { x: -1.11, y: -0.14, from: 4.16, until: 4.54 }
+      - { x: -1.43, y: -0.15, from: 4.54, until: 4.93 }
+      - { x: -1.75, y: -0.16, from: 4.93, until: 5.31 }
+      - { x: -2, y: -0.17, from: 5.31, until: 6 }
+  planet:
+    type: asset
+    of: assets/maps
+    about: "The planet it covers: venus, mars, jupiter or saturn."
+    example: mars
+draw:
+  - globe: { radius: 0.09, map: "{{ planet }}", spin: 10 }
+  # draw before for: keeps this item as the package always had it (docs/DISPLAY.md, "Moving from v1")
+  - draw:
+      - globe: { at: { x: "{{ step.x }}", y: "{{ step.y }}" }, show: { from: "{{ step.from }}", until: "{{ step.until }}" }, radius: 0.45, map: moon, lit: 0.99 }
+    for: step in path

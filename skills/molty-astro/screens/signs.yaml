@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=../../../schema/display-2-screen.json
+about: The twelve signs together, then each in turn, then all twelve again.
+duration: 36
+inputs: {}
+draw:
+  - use: sign_grid
+    with: { from: 0.2, until: 4.2 }
+  - for: sign in zodiac
+    draw:
+      - symbol: { show: { from: "{{ sign.from }}", until: "{{ sign.until }}" }, asset: "{{ sign.name }}", size: 1.1, at: { x: 0, y: 0 }, color: "{{ sign.color }}" }
+  - use: sign_grid
+    with: { from: 31.8, until: 35.8 }
