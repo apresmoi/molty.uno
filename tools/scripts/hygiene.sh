@@ -6,7 +6,8 @@
 #   3. the licence files every release ships are present
 #   4. the product version copies agree (tools/scripts/version.mjs check)
 #   5. the agent skill + plugin packaging (tools/scripts/check-skill.mjs)
-#   6. packages: index, size, hash, schema (tools/scripts/check-packages.mjs) and the format's tests
+#   6. packages: index, size, hash, schema (tools/scripts/check-packages.mjs), the format's tests and
+#      display v2's (a skill folder builds its package byte for byte)
 # Exits non-zero listing every hit. Run from anywhere inside the repo.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
@@ -53,6 +54,7 @@ node tools/scripts/check-skill.mjs || fail=1
 # 6. Packages (docs/PACKAGES.md).
 node tools/scripts/check-packages.mjs || fail=1
 node --test packages/tools/format.test.mjs >/dev/null || { bad "packages/tools/format.test.mjs failed"; }
+node --test packages/tools/display/display.test.mjs >/dev/null || { bad "packages/tools/display/display.test.mjs failed"; }
 
 if [[ $fail -ne 0 ]]; then echo "hygiene: FAILED"; exit 1; fi
 echo "hygiene: ok"

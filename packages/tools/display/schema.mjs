@@ -17,12 +17,13 @@ function nearest(key, known) {
 }
 
 /**
- * Every way `value` breaks `schema`: [{ path: [keys], message }], empty when it holds.
+ * Every way `value` breaks `schema`: [{ path: [keys], message, key? }], empty when it holds (key: the entry of
+ * path's value the message is about, when it names one).
  * A node's errorMessage replaces what its own value-level keywords say (not a missing or unknown key).
  */
 export function validate(schema, value, root = schema, path = []) {
   const deref = (s) => { while (s.$ref) s = s.$ref.slice(2).split('/').reduce((n, k) => n[k], root); return s; };
-  const s = deref(schema), out = [], own = (kw, message) => out.push({ path, kw, message });
+  const s = deref(schema), out = [], own = (kw, message, key) => out.push({ path, kw, message, ...(key === undefined ? {} : { key }) });
   const sub = (child, v = value, p = path) => validate(child, v, root, p);
   const t = typeOf(value), obj = t === 'object';
   if (s.type && ![s.type].flat().some((x) => isType(value, x))) own('type', `must be ${[s.type].flat().map(A).join(' or ')}`);
@@ -43,7 +44,7 @@ export function validate(schema, value, root = schema, path = []) {
     for (const k of s.required ?? []) if (!(k in value)) own('required', `needs ${k}`);
     for (const k of keys) {
       if (s.properties?.[k]) out.push(...sub(s.properties[k], value[k], [...path, k]));
-      else if (s.additionalProperties === false) { const near = nearest(k, known); own('additionalProperties', `has no "${k}"${near ? ` (did you mean ${near}?)` : `: it takes ${known.filter((x) => x !== '$schema').join(', ')}`}`); }
+      else if (s.additionalProperties === false) { const near = nearest(k, known); own('additionalProperties', `has no "${k}"${near ? ` (did you mean ${near}?)` : `: it takes ${known.filter((x) => x !== '$schema').join(', ')}`}`, k); }
       else if (s.additionalProperties) out.push(...sub(s.additionalProperties, value[k], [...path, k]));
       if (s.propertyNames) for (const e of sub(s.propertyNames, k, [...path, k])) out.push({ ...e, message: `the name ${e.message}` });
     }

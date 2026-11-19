@@ -5,7 +5,7 @@ IDF_PATH ?= $(HOME)/esp/esp-idf
 export IDF_PATH
 
 .PHONY: help all test console console-test console-e2e firmware firmware-all firmware-test \
-        firmware-size relay relay-test cli cli-test creatures creatures-test packages hygiene version \
+        firmware-size relay relay-test cli cli-test creatures creatures-test packages display-test hygiene version \
         waitlist-export waitlist-delete sim sim-test sim-env voice-test
 
 help:
@@ -23,6 +23,7 @@ help:
 	@echo "test:"
 	@echo "  make firmware-test  firmware host tests (fluid, director, gestures, cute runtime, agent link)"
 	@echo "  make relay-test     relay unit tests + typecheck"
+	@echo "  make display-test   display v2 (docs/DISPLAY.md): the astrology skill builds its package byte for byte, checks, limits"
 	@echo "  make creatures-test creature package player rules + every creature package plays within its limits"
 	@echo "  make sim-test       simulated-Molty harness unit tests (tools/sim)"
 	@echo "  make voice-test     voice-box bridge unit tests (services/molty-voice; no GPU, no network)"
@@ -42,7 +43,7 @@ help:
 
 all: console firmware cli
 
-test: firmware-test relay-test cli-test console-test creatures-test
+test: firmware-test relay-test cli-test console-test creatures-test display-test
 
 console:
 	cd device/console && pnpm install --frozen-lockfile && pnpm run build
@@ -107,6 +108,9 @@ packages:
 
 creatures-test:
 	node --test tools/creatures/*.test.mjs
+
+display-test:
+	node --test packages/tools/display/*.test.mjs
 
 hygiene:
 	tools/scripts/hygiene.sh
