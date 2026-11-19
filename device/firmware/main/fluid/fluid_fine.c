@@ -473,6 +473,8 @@ void fluid_fine_swap(fluid_fine_t *f, bool rise) {
     if (rise && kept * 2 < f->N) f->reveal = 0.f;               /* a new drawing's dust on a scene that is up: it rises */
 }
 
+void fluid_fine_rim(fluid_fine_t *f, bool on) { if (f) f->rim = on; }
+
 void fluid_fine_caption_box(fluid_fine_t *f, const float box[4]) {
     if (!f) return;
     if (box) memcpy(f->want_box, box, sizeof(f->want_box));
@@ -654,9 +656,14 @@ void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_
     {   /* where it rides: worked out again only when the tapped drawing or the caption's box changes */
         uint32_t rkey = capbox ? mix((uint32_t)lrintf(cb[0]) | (uint32_t)lrintf(cb[1]) << 16, (uint32_t)lrintf(cb[2]) | (uint32_t)lrintf(cb[3]) << 16) : 7u;
         for (int k = 0; o->still && k < N; k++) if (o->still[k] == 2) rkey = rkey * 31u + (uint32_t)k;
+        rkey = rkey * 31u + (uint32_t)f->rim;
         if (rkey != f->ride_key) {
             f->ride_key = rkey;
             memset(f->ride, 0, (size_t)N);
+            for (int j = 0; f->rim && j < H; j++) for (int i = 0; i < W; i++) {
+                const float ex = (i + 0.5f) * cwf - S * 0.5f, ey = (j + 0.5f) * chf - S * 0.5f, lim = FINE_RIM * S * 0.5f;
+                if (ex * ex + ey * ey >= lim * lim) f->ride[j * W + i] = 1;
+            }
             const int ri = (int)ceilf(FINE_RIDE / cwf), rj = (int)ceilf(FINE_RIDE / chf);
             for (int k = 0; o->still && k < N; k++) {
                 if (o->still[k] != 2) continue;

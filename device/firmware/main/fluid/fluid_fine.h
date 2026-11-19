@@ -73,6 +73,7 @@ extern "C" {
 #define FINE_END_SPREAD  26.f           /* .. and farther                                        */
 #define FINE_GRAIN       0.7f           /* of a word's pixels, this many become specks           */
 #define FINE_RIDE        64.f           /* px: the dust rides the water this near a tapped drawing or the caption only */
+#define FINE_RIM         0.78f          /* ... and, under a ring on the rim, from this far out (of the radius) */
 #define FINE_CATCHUP     1500           /* specks of cells never worked out, off their row's turn a frame, at most */
 #define FINE_REVEAL_SET_S 0.5f          /* a first set forms cell by cell over this              */
 #define FINE_DARK_STEPS  4              /* the backdrop fades out in this many steps (each works the cells by it out again) */
@@ -128,6 +129,7 @@ typedef struct fluid_fine {
     uint8_t *imm;                       /* N: its change goes to the panel at once (the caption's), not on its row's turn */
     uint8_t *ride;                      /* N: the dust rides the water there (near a tapped drawing or the caption) */
     uint32_t ride_key;                  /* what ride was worked out for                          */
+    bool rim;                           /* ... the rim too (fluid_fine_rim)                      */
     uint8_t lrow;                       /* which quarter of the light's grid rows, and of the cell rows' light-dependent
                                          * specks, is worked out this frame (FINE_PHASES)        */
     bool lgrid_ok;                      /* the light's grid was worked out whole once             */
@@ -175,6 +177,9 @@ void fluid_fine_swap(fluid_fine_t *f, bool rise);
 /** With the drawer idle: the caption's backdrop for the whole reading (stage px [x0, x1, y0, y1], the union of its
  *  words' boxes), so the dark does not move with each word; NULL: each word's own box. */
 void fluid_fine_caption_box(fluid_fine_t *f, const float box[4]);
+/** With the drawer idle: a ring is on the rim (a listen's: the voice touches the water there), so the dust rides the
+ *  water near the rim too, and the drawing never breaks into dots under it (fluid_draw.c). */
+void fluid_fine_rim(fluid_fine_t *f, bool on);
 /** How long the build wanted last took, us (0 while it runs or none), and in how many fluid_fine_work calls. */
 int fluid_fine_built(const fluid_fine_t *f, int *calls);
 /** No scene: every set and the build's buffers freed (the next want builds again). The drawer must be idle. */

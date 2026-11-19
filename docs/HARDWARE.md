@@ -13,7 +13,7 @@ I/O expander, an I2S speaker amp and microphone, and battery management with a
 soft-power latch. The 1.28 has no audio, so `say`/`listen` and the audio endpoints
 answer `unsupported`; it is reached over Wi-Fi only, set up over the USB cable from
 **molty.uno/setup** (Improv Wi-Fi Serial; [PORTING.md](PORTING.md#flash-it)). The 1.75C has the
-largest and sharpest screen (a 466×466 AMOLED, true black): the high-definition scenes, the cat
+largest screen (a 466×466 AMOLED, true black): the high-definition scenes, the cat
 and the recording ring were tuned on it. The same code draws them on the 1.46. Its port is
 still marked experimental (`board.json`). Each board's pins, with their sources, are in its
 `board.h`. Another board: [PORTING.md](PORTING.md).

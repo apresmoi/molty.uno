@@ -183,10 +183,20 @@ void mole_fluid_shed_internal(void);
 void mole_fluid_allow_internal(void);
 
 /** A tap at panel pixel (px, py): on a spot of the scene on screen (scene_player.h), Molty
- *  shows its reading as the subtitle. Non-zero (which spot) if it landed on one. Any task. */
+ *  shows its reading as the subtitle, or opens the layout the spot names (its `open`). Non-zero
+ *  (which spot) if it landed on one; MOLE_SPOT_BACK if it landed beside every spot of a layout
+ *  a tap had opened: Molty goes back to the scene under it. Any task. */
+#define MOLE_SPOT_BACK 0xFFFFFFFFu
 unsigned mole_fluid_spot_tap(int px, int py);
-/** That spot's id into id (size bytes; "" if it has none or its scene has gone). Any task. */
-void mole_fluid_spot_id(unsigned spot, char *id, size_t size);
+/** That spot's id into id (size bytes; "" if it has none or another spot was tapped since), and the
+ *  layout it opens into open (may be NULL; "" if it opens none). Any task. */
+void mole_fluid_spot_id(unsigned spot, char *id, size_t size, char *open, size_t open_size);
+/** The scene on screen changed on the device itself since the last call (a tap opened a layout, it went back,
+ *  the scenes ended): what is up now, for the relay (link_evt_scene_frame). why: "open" | "back" (a tap beside
+ *  it) | "end" (it ran out); pkg and layout "" when nothing is up; spot: the one that opened it. False: no change.
+ *  Any one task. */
+typedef struct { char pkg[33], layout[25], spot[41], why[6]; } mole_scene_evt_t;
+bool mole_fluid_scene_event(mole_scene_evt_t *out);
 /* how many of the sim's hot fields sit in internal RAM (the last frame's count) */
 int mole_fluid_internal_fields(void);
 void mole_fluid_spoke(void);

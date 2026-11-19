@@ -461,8 +461,10 @@ static inline void cell_look(const fluid_draw_t *d, const fluid_frame_t *s, cons
                 if (dust > 0.f && dust >= fluid_fine_turn(i, j, s->H)) { *key_out = KEY_EMPTY; *col_out = 0; return; }
                 dust = 0.f;
             }
-            /* smooth or dust, no fade: a cell changes once; a tapped spot's drawing (o->still) never breaks */
-            const int wt = (o->still && o->still[k] && dust <= 0.f) || hd_dust(s, i, j, dust) < 0.5f ? HD_LEVELS : 0;
+            /* smooth or dust, no fade: a cell changes once; a tapped spot's drawing (o->still) never breaks, and
+             * under a ring on the rim (a listen: the voice touches the water) none of it does */
+            const bool held = (o->still && o->still[k]) || (o->fine && o->fine->rim);
+            const int wt = (held && dust <= 0.f) || hd_dust(s, i, j, dust) < 0.5f ? HD_LEVELS : 0;
             if (wt) hd = (uint16_t)(KEY_HD | wt << 8);
             if (wt == HD_LEVELS) src = o->kdots;
         }
@@ -702,6 +704,17 @@ static void stale_box(fluid_draw_t *d, const int16_t *b) {
 /* the cells a shape covers redrawn next: a stroke's own cells only (a long diagonal's box is most of the panel), the
  * others' box */
 static void stale_shape(fluid_draw_t *d, const fluid_shape_t *sh, const int16_t *b) {
+    if (sh->k == FLUID_SHAPE_RING) {                    /* its line's cells, in its (arc's) box */
+        const float kx = (float)d->W / d->stage, ky = (float)d->H / d->stage, cw = 1.f / kx, ch = 1.f / ky;
+        const float reach = sh->hw + 2.f + 0.5f * sqrtf(cw * cw + ch * ch);
+        int i0 = (int)floorf((b[0] - d->ox) * kx), i1 = (int)ceilf((b[1] - d->ox) * kx), j0 = (int)floorf((b[2] - d->oy) * ky), j1 = (int)ceilf((b[3] - d->oy) * ky);
+        i0 = i0 < 0 ? 0 : i0; j0 = j0 < 0 ? 0 : j0; i1 = i1 > d->W ? d->W : i1; j1 = j1 > d->H ? d->H : j1;
+        for (int j = j0; j < j1; j++) for (int i = i0; i < i1; i++) {
+            const float ex = (i + 0.5f) * cw - sh->x, ey = (j + 0.5f) * ch - sh->y, dc = sqrtf(ex * ex + ey * ey) - sh->r;
+            if (fabsf(dc) <= reach) { d->key[j * d->W + i] = KEY_STALE; if (d->hdcv) d->hdcv[j * d->W + i] = 0; }
+        }
+        return;
+    }
     if (sh->k != FLUID_SHAPE_SEG) { stale_box(d, b); return; }
     const float kx = (float)d->W / d->stage, ky = (float)d->H / d->stage, cw = 1.f / kx, ch = 1.f / ky;
     const float reach = sh->hw + 2.f + 0.5f * sqrtf(cw * cw + ch * ch), vx = sh->x1 - sh->x, vy = sh->y1 - sh->y, l2 = vx * vx + vy * vy;
@@ -729,7 +742,22 @@ void fluid_shape_box(const fluid_shape_t *sh, int ox, int oy, int16_t b[4]) {
     switch (sh->k) {
     case FLUID_SHAPE_SEG:  ex = fabsf(sh->x1 - sh->x) * 0.5f + sh->hw; ey = fabsf(sh->y1 - sh->y) * 0.5f + sh->hw;
                            cx = (sh->x + sh->x1) * 0.5f; cy = (sh->y + sh->y1) * 0.5f; break;
-    case FLUID_SHAPE_RING: ex = ey = sh->r + sh->hw; break;
+    case FLUID_SHAPE_RING:
+        ex = ey = sh->r + sh->hw;
+        if (sh->span < 360.f) {                         /* a part of it: the box of its arc (y down), its ends and the
+                                                         * axes it crosses */
+            const float D2R = 3.1415927f / 180.f, a0 = sh->a0, a1 = sh->a0 + sh->span;
+            float lx = cosf(a0 * D2R), hx = lx, ly = -sinf(a0 * D2R), hy = ly;
+            const float x1 = cosf(a1 * D2R), y1 = -sinf(a1 * D2R);
+            lx = x1 < lx ? x1 : lx; hx = x1 > hx ? x1 : hx; ly = y1 < ly ? y1 : ly; hy = y1 > hy ? y1 : hy;
+            for (int q = (int)ceilf(a0 / 90.f); q * 90.f <= a1; q++) {
+                const int m = ((q % 4) + 4) % 4;        /* 0 right, 1 up, 2 left, 3 down */
+                if (m == 0) hx = 1.f; else if (m == 1) ly = -1.f; else if (m == 2) lx = -1.f; else hy = 1.f;
+            }
+            cx = sh->x + 0.5f * (lx + hx) * sh->r; cy = sh->y + 0.5f * (ly + hy) * sh->r;
+            ex = 0.5f * (hx - lx) * sh->r + sh->hw; ey = 0.5f * (hy - ly) * sh->r + sh->hw;
+        }
+        break;
     case FLUID_SHAPE_DISC: ex = ey = sh->r; break;
     default:               ex = 0.5f * (fabsf(sh->co) * sh->w + fabsf(sh->si) * sh->h);
                            ey = 0.5f * (fabsf(sh->si) * sh->w + fabsf(sh->co) * sh->h); break;

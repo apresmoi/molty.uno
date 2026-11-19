@@ -899,8 +899,8 @@ idle life of its own.
   `done: true` fills it, flashes it, melts it, and a working creature turns happy. `step` (≤ 80
   bytes) stays in the relay's activity log; the device draws no text. Under the listening ring,
   never over a question. A device without the cap answers `unsupported` / `firmware_too_old`.
-  Over the duck or the octopus the line is mint (`PROG_COLOR`). Over the cat (a rigged creature) it is the recording
-  ring's own line: it forms from a wave at the centre and takes that ring's colour. A package download shows its bytes
+  Over the duck or the octopus the line is mint (`PROG_COLOR`). Over the cat (a rigged creature) it is the same thin
+  line as the recording ring, formed from a wave at the centre, in green (`FLUID_CRISP_PROG_RGB`). A package download shows its bytes
   on the same ring ([PACKAGES.md](PACKAGES.md#2-commands-agent---relay---device)).
 - **A creature's own gestures.** `ACTIONS` are the shared ones every creature plays; a creature
   package may add gestures of its own by name ([CREATURES.md](CREATURES.md#1-the-package), the cat's
@@ -937,7 +937,8 @@ pairing). Rate-limited on the device. `shake`, `tap` and `button` reach agents t
 |---|---|---|
 | `say.done` | `{job}` | a `say` finished playing (its last PCM left the speaker) |
 | `shake` | `{peak_g, reversals, ms, listen?}` | the board was shaken (boards with an IMU): ≥ 3 sign reversals of > 1.2 g dynamic acceleration on one axis within 800 ms; ≤ 1 per 2 s. `peak_g` largest dynamic acceleration (g), `ms` first peak → detection; `listen` the local id of the listen it started ([Shake to talk](#shake-to-talk)); a gesture bound to talk sends the same event with `peak_g` 0 and `input` (`double_tap`, `button_accept`, ...), plus `hold: true` for a button held to talk (the relay then never ends that listen on an end of turn: only the release, a tap's stop, or the window) |
-| `tap` | `{x, y, spot?}` | a finger touched the screen (boards with touch); 0..1 of the panel from the top left; ≤ 4/s. On a scene's tap spot it also names the spot (`spot: "<id>"`), whatever tap is bound to, and Molty already shows that spot's reading ([PACKAGES.md](PACKAGES.md#layouts)) |
+| `tap` | `{x, y, spot?, opened?, closed?}` | a finger touched the screen (boards with touch); 0..1 of the panel from the top left; ≤ 4/s. On a scene's tap spot it also names the spot (`spot: "<id>"`), whatever tap is bound to, and Molty already shows that spot's reading, or opened the layout the spot names (`opened: "<layout>"`); `closed: true`: the tap landed beside the spots of a layout so opened, and Molty went back to the scene under it ([PACKAGES.md](PACKAGES.md#layouts)) |
+| `scene` | `{why, pkg?, layout?, spot?}` | the scene on screen changed on the device itself, no command having asked: `why` `open` (a tap on `spot` opened `layout`), `back` (a tap beside it: the scene under it is up again) or `end` (a scene ran out: `layout` is the one under it or the next queued; neither `pkg` nor `layout`: nothing is up, the creature is back) |
 | `double_tap` | `{x, y}` | two taps within 350 ms, when bound to `event` (out of the box a double tap talks) |
 | `button` | `{id: "accept"\|"reject"}` | a button was pressed (the board's accept / reject buttons); ≤ 4/s. For agents it means acknowledge / dismiss, never an answer (answers come only from `ask`) |
 | `answer` | `{job, index, label}` · `{job, index: null, reason: "timeout"\|"cancelled"}` | an `ask` ended: tapped (0-based `index`, `label` verbatim), timed out, or cancelled; one per job, never rate-limited |

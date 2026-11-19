@@ -130,9 +130,14 @@ export function chart(date, { all = false } = {}) {
     const l = line(a);
     if (l) { lines.push(l); drawn.push(a); }
   }
-  const params = { bodies: placed.map((b) => ({ g: `g-${b.name.toLowerCase()}`, a: chartAngle(b.lon), r: r3(b.r), c: INK[b.name], say: bodyReading(b, s.bodies, aspects), id: b.name.toLowerCase() })), aspects: lines };
-  params.signs = SIGNS.map((name, i) => ({ a: (195 + 30 * i) % 360, say: signReading(i, s.bodies), id: name.toLowerCase() }));
-  return { scenes: [['chart', params]], say: `The whole sky: ten bodies on the zodiac, joined by the ${drawn.length} tightest of their ${aspects.length} aspects. Tap a planet, a sign or a line to read it.`, facts: { bodies: Object.fromEntries(s.bodies.map((b) => [b.name, `${Math.floor(mod360(b.lon) % 30)} ${signOf(b.lon)}`])), aspects: aspects.map((a) => `${a.a} ${a.name} ${a.b} (orb ${a.orb.toFixed(1)})`), drawn: drawn.map((a) => `${a.a} ${a.name} ${a.b}`), tap: 'a tap on a body, a sign or an aspect line shows its reading; the tap event names it (spot); chart --interactive opens a sign up close' } };
+  // a tap on a sign opens it up close on Molty itself (the layout's spots: open): the chart carries what that needs. Each
+  // sign: its close-up's own fields and how long it plays; `ruler`: each sign's ruler glyph (of: the sign); each body: the
+  // sign it is in (of) and its place and moment on that sign's dial (da, d, on, off)
+  const ups = SIGNS.map((_, i) => closeupOf(s, aspects, i)), dial = Object.fromEntries(ups.flatMap((c) => c.params.bodies.map((b) => [b.id, { of: c.params.sign, da: b.da, d: b.d, on: b.on, off: b.off }])));
+  const params = { bodies: placed.map((b) => ({ g: `g-${b.name.toLowerCase()}`, a: chartAngle(b.lon), r: r3(b.r), c: INK[b.name], say: bodyReading(b, s.bodies, aspects), id: b.name.toLowerCase(), ...dial[b.name.toLowerCase()] })), aspects: lines };
+  params.signs = SIGNS.map((name, i) => { const { sign, c, name: label, nx, ns, say } = ups[i].params; return { a: (195 + 30 * i) % 360, say, id: sign, sign, c, name: label, nx, ns, ttl: ups[i].ttl }; });
+  params.ruler = ups.map((c) => ({ of: c.params.sign, ...c.params.ruler[0] }));
+  return { scenes: [['chart', params]], say: `The whole sky: ten bodies on the zodiac, joined by the ${drawn.length} tightest of their ${aspects.length} aspects. Tap a planet, a sign or a line to read it.`, facts: { bodies: Object.fromEntries(s.bodies.map((b) => [b.name, `${Math.floor(mod360(b.lon) % 30)} ${signOf(b.lon)}`])), aspects: aspects.map((a) => `${a.a} ${a.name} ${a.b} (orb ${a.orb.toFixed(1)})`), drawn: drawn.map((a) => `${a.a} ${a.name} ${a.b}`), tap: 'a tap on a body or an aspect line shows its reading; a tap on a sign opens it up close on Molty itself (the tap event says so: opened), and a tap beside it there comes back; the tap event names the spot; chart --interactive reads the sign aloud' } };
 }
 // The close-up reads aloud (a say over the scene) while each planet lights in turn. Molty's voice cues are not
 // visible to a layout, so the lighting follows an estimate of the voice: about 2.6 words a second, a beat at each
@@ -151,18 +156,24 @@ function spread(degs) {
 }
 /** The device font's width of a text item (5 x 7 letters, 1 apart), in glass units at `size`. */
 const textWidth = (str, size) => ((str.length * 6 - 1) * size) / 7;
+/** Sign i up close for this sky: the close-up's params (its planets on its degree dial, `da`, lit one by one as Molty reads
+ *  them), how long it plays and what is read aloud. */
+function closeupOf(s, aspects, i) {
+  const id = SIGNS[i].toLowerCase(), here = inSign(s.bodies, i), angles = spread(here.map((b) => deg(b.lon)));
+  const intro = here.length ? signHead(i) : signReading(i, s.bodies), reads = here.map((b) => bodyReading(b, s.bodies, aspects));
+  let t = SPEECH.lead + speak(intro);
+  const bodies = here.map((b, k) => { const on = r2(t); t += speak(reads[k]); return { g: `g-${b.name.toLowerCase()}`, da: angles[k], c: INK[b.name], d: dim(INK[b.name]), on, off: r2(t), say: reads[k], id: b.name.toLowerCase() }; });
+  // the name and the ruler's glyph after it, centred as one row (a long name in smaller type)
+  const name = SIGNS[i].toUpperCase(), ruler = NATURE[i][1], ns = name.length > 8 ? 0.11 : 0.13, w = textWidth(name, ns), half = (w + RULER_GAP + RULER) / 2;
+  const params = { sign: id, c: SIGN_INK[i % 3], name, nx: r3(w / 2 - half), ns, say: signReading(i, s.bodies), ruler: [{ g: `g-${ruler.toLowerCase()}`, x: r3(half - RULER / 2), c: INK[ruler] }], bodies };
+  return { params, ttl: Math.ceil(t + SPEECH.hold), read: [intro, ...reads.map((r) => r.replace(` in ${SIGNS[i]}:`, ':'))].join(' ') };
+}
 /** A sign up close: its glyph, its planets on its degree dial lit one by one as Molty reads them, its ruler. */
 export function closeup(date, id) {
   const i = SIGNS.findIndex((n) => n.toLowerCase() === id);
   if (i < 0) throw new Error(`sign must be one of ${SIGNS.join(', ').toLowerCase()}`);
-  const s = sky(date), aspects = findAspects(s.bodies), here = inSign(s.bodies, i), angles = spread(here.map((b) => deg(b.lon)));
-  const intro = here.length ? signHead(i) : signReading(i, s.bodies), reads = here.map((b) => bodyReading(b, s.bodies, aspects));
-  let t = SPEECH.lead + speak(intro);
-  const bodies = here.map((b, k) => { const on = r2(t); t += speak(reads[k]); return { g: `g-${b.name.toLowerCase()}`, a: angles[k], c: INK[b.name], d: dim(INK[b.name]), on, off: r2(t), say: reads[k], id: b.name.toLowerCase() }; });
-  // the name and the ruler's glyph after it, centred as one row (a long name in smaller type)
-  const name = SIGNS[i].toUpperCase(), ruler = NATURE[i][1], ns = name.length > 8 ? 0.11 : 0.13, w = textWidth(name, ns), half = (w + RULER_GAP + RULER) / 2;
-  const params = { sign: id, c: SIGN_INK[i % 3], name, nx: r3(w / 2 - half), ns, say: signReading(i, s.bodies), ruler: [{ g: `g-${ruler.toLowerCase()}`, x: r3(half - RULER / 2), c: INK[ruler] }], bodies };
-  return { scenes: [['sign-closeup', params, Math.ceil(t + SPEECH.hold)]], read: [intro, ...reads.map((r) => r.replace(` in ${SIGNS[i]}:`, ':'))].join(' ') };
+  const s = sky(date), c = closeupOf(s, findAspects(s.bodies), i);
+  return { scenes: [['sign-closeup', c.params, c.ttl]], read: c.read };
 }
 const FIG = { sextile: 6, square: 4, trine: 3, opposition: 2, conjunction: 1 };
 const GRID = '#565b72';

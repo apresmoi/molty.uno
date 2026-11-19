@@ -6,6 +6,7 @@
  */
 #include "scene_player.h"
 #include "glyph_font.h"
+#include "fluid_ring.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -1165,4 +1166,28 @@ int scene_outline(const scene_t *sc, int n, void (*fn)(void *ctx, float x, float
     }
 #undef ROUND
     return cnt;
+}
+
+int scene_rings(fluid_shape_t *shp, int n, int stage, const fluid_ring_t *ring, const fluid_progress_t *prog, bool thinking,
+                uint32_t listen_rgb, uint32_t prog_rgb) {
+    uint32_t seg[SCENE_RING_SEGS] = { 0 };
+    const bool pon = prog->on > 0.3f, comet = pon ? prog->pct < 0.f : thinking;
+    for (int q = 0; (pon || thinking) && q < SCENE_RING_SEGS; q++) {
+        const float t = (q + 0.5f) / SCENE_RING_SEGS;           /* turns clockwise from 12 o'clock */
+        float rel = t - (prog->spin - PROG_COMET);
+        rel -= floorf(rel);
+        if (comet ? rel < PROG_COMET : t <= prog->shown || prog->flash > 0.f) seg[q] = FLUID_RGB | prog_rgb;
+    }
+    const int reach = (int)ceilf(ring->on * (SCENE_RING_SEGS / 2) - 0.001f);   /* the listen's: this many parts each way */
+    for (int q = 0; q < reach && q < SCENE_RING_SEGS / 2; q++) seg[q] = seg[SCENE_RING_SEGS - 1 - q] = FLUID_RGB | listen_rgb;
+    int on = 0, c0 = n;
+    for (int q = 0; q < SCENE_RING_SEGS; q++) on += seg[q] != 0;
+    if (!on || n < 0 || n + on > FLUID_MAX_SHAPES) return n;
+    while (c0 > 0 && shp[c0 - 1].tag == FLUID_TAG_CAPTION) c0--;
+    memmove(shp + c0 + on, shp + c0, sizeof(fluid_shape_t) * (size_t)(n - c0));
+    const float step = 360.f / SCENE_RING_SEGS;
+    for (int q = 0, w = c0; q < SCENE_RING_SEGS; q++)
+        if (seg[q]) shp[w++] = (fluid_shape_t){ .k = FLUID_SHAPE_RING, .rgb = seg[q], .x = stage * 0.5f, .y = stage * 0.5f, .r = SCENE_RING_R * stage * 0.5f,
+                                                .hw = SCENE_RING_HW, .a0 = 90.f - (q + 1) * step, .span = step };
+    return n + on;
 }

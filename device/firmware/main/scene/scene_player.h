@@ -211,6 +211,18 @@ typedef struct {
     uint8_t *still;                     /* W x H, may be NULL: the cells a tapped spot's drawing covers at full
                                          * growth and one round (the water never breaks them), all 0 untapped */
 } scene_shapes_t;
+/** Over a scene in high definition the rings are shapes of it (the scene stays as it is under them): a thin line just
+ *  inside the rim, in SCENE_RING_SEGS parts. A listen's (ring) draws itself round from 12 o'clock both ways and lets go
+ *  the same way back; the agent's progress (prog) fills clockwise from 12 o'clock, or a comet circles (no percent, or
+ *  thinking: the wait between a listen and its answer). The listen's wins where both are. Only the parts that are on
+ *  are shapes, so a part coming or going draws its own few cells again. Into shp[n..) before the caption's letters
+ *  (they stay last); returns the new count (n: too many, or n < 0). */
+#define SCENE_RING_SEGS 48
+#define SCENE_RING_R    0.936f          /* its line, of the radius: the largest circle whole inside the water's cells
+                                         * (their first and last rows and columns are the glass's edge) */
+#define SCENE_RING_HW   1.5f            /* half its width, px                              */
+int scene_rings(fluid_shape_t *shp, int n, int stage, const fluid_ring_t *ring, const fluid_progress_t *prog, bool thinking,
+                uint32_t listen_rgb, uint32_t prog_rgb);
 /** The scene's shapes at t with its tapped spot (sc->focus) at full growth and lit, no caption: what its fine dust
  *  gathers round (fluid_fine_want). n of them (-1: too many); key: a hash of them (the same drawing, the same key). */
 int scene_full_shapes(fluid_sim_t *s, const scene_t *sc, float t, fluid_shape_t *out, uint32_t *key);

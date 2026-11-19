@@ -34,12 +34,13 @@ the rest queue behind it; Molty melts back to its creature when they end.
 
 ## Tap to read (chart)
 
-On the chart a tap on a planet, a sign or an aspect line shows its
-reading on Molty at once ("Sun in Gemini: you shine by talking and learning."), with no help from you. `chart --interactive` adds the **sign close-up**:
-it keeps listening to Molty's events (the molty skill's long-poll) and, on a tap on a sign, shows that
-sign big with its planets on its degree dial and has Molty read it aloud, lighting each planet as it is
-read; then the chart comes back (or at once, on a tap on empty space). An empty sign reads its nature
-and where its ruler is. It runs until `--ttl` (default 300 s, max 600) or Ctrl-C (which clears the
+On the chart a tap on a planet or an aspect line shows its
+reading on Molty at once ("Sun in Gemini: you shine by talking and learning."), with no help from you. A tap on a
+sign (anywhere in its block of the zodiac ring) opens the **sign close-up** on Molty itself: that sign big with its
+planets on its degree dial, each lit in turn; the chart comes back when its time is up, or at once on a tap beside
+it. The tap event you get names the sign (`spot`) and says Molty opened it (`opened: "sign-closeup"`).
+`chart --interactive` adds the voice: it keeps listening to Molty's events (the molty skill's long-poll) and reads
+the tapped sign aloud while its close-up shows. An empty sign reads its nature and where its ruler is. It runs until `--ttl` (default 300 s, max 600) or Ctrl-C (which clears the
 screen): start it in the background, speak its `SAY` line, and don't talk over a close-up.
 `--dry-run --tap gemini` prints what one tap would send.
 
