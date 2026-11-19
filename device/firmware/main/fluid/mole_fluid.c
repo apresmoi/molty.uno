@@ -359,7 +359,12 @@ static scene_t   *s_spot_sc;
 static bool       s_spot_on = false;
 static unsigned   s_spot_gen = 0;                   /* the player's gen it was copied at (0: none) */
 static float      s_spot_t = 0.f;                   /* the scene's clock, for spots' on / off */
-static atomic_uint s_spot_req;                      /* a tap on a spot: gen << 8 | item + 1, 0 none */
+static atomic_uint s_spot_req;                      /* a tap on a spot: gen << 8 | item + 1, 0 none; MOLE_SPOT_BACK */
+static bool       s_spot_back;                      /* the scene on screen was opened by a tap: a tap beside its spots goes back */
+static unsigned   s_tapped;                         /* the last spot tapped, its id and the layout it opens: kept apart from */
+static char       s_tapped_id[PKG_STR_MAX + 1], s_tapped_open[PKG_KEY_MAX + 1];   /* its scene, which the tap may replace */
+static mole_scene_evt_t s_scene_evt;                /* the screen changed on the device itself (mole_fluid_scene_event), s_mutex */
+static bool       s_scene_evt_on;
 #define SPOT_GEN(g) ((g) & 0xffffffu)
 static bool  s_touch_mute = false;              /* the touch that woke the screen, until it lifts */
 #define FLUID_OFF_POLL_MS  50                   /* screen off: touch and wake checks       */
@@ -439,6 +444,26 @@ static scene_caption_t scene_caption(void) {
     return (scene_caption_t){ NULL, 0, -1 };
 }
 
+/* the scene on screen changed on the device itself: what is up now, for the relay (mole_fluid_scene_event) */
+static void scene_event(const char *why, const char *spot) {
+    mole_scene_evt_t e = { 0 };
+    snprintf(e.pkg, sizeof(e.pkg), "%s", s_sp.cur ? s_sp.cur->pkg_id : "");
+    snprintf(e.layout, sizeof(e.layout), "%s", s_sp.cur ? s_sp.cur->layout : "");
+    snprintf(e.spot, sizeof(e.spot), "%s", spot ? spot : "");
+    snprintf(e.why, sizeof(e.why), "%s", why);
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_scene_evt = e; s_scene_evt_on = true;
+    xSemaphoreGive(s_mutex);
+    mole_diag_event(false, "scene.%s %s%s%s", why, e.layout[0] ? e.layout : "-", spot ? " by " : "", e.spot);
+}
+
+/* a listen's voice touches the water just inside it (a rigged creature's ring: 0.35 at 18 a second): gentler here, so
+ * the dust by the rim stirs and the drawing does not break */
+#define HD_VOICE_S    0.12f
+#define HD_VOICE_R    0.05f
+#define HD_VOICE_RATE 12.f
+#define SCENE_TURN_S  20.f                          /* a scene's clock waits this long after a listen for its answer */
+#define SCENE_THINK_S 120.f                         /* ... and this long, at most, while the agent thinks or works    */
 /* a tap landed on spot item n of sc: its reading, from its first word */
 static void read_spot(const scene_t *sc, int n) {
     const scene_item_t *it = &sc->items[n];
@@ -672,7 +697,21 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
      * status. A question, a listen or a say owns the screen (no idle life); a question's
      * labels cover the creature (no action plays under them). */
     const bool covered = s_ask.scr.phase == FLUID_ASK_SHOW;
-    scene_tick(&s_sp, rdt);
+    {   /* a scene that runs out: the one under it (a tap had opened it), the next in the queue, or none: said to the relay */
+        const unsigned gen0 = s_sp.gen;
+        /* its clock waits through a turn: a listen, a say over it, and between them the wait for the answer
+         * (SCENE_TURN_S after the listen) and the agent thinking or at work, SCENE_THINK_S at most (a mood left on
+         * never keeps a scene up) */
+        static float turn_until, thought;
+        if (s_listen) turn_until = s_tnow + SCENE_TURN_S;
+        else if (s_follow || s_sub) turn_until = 0.f;
+        const bool voice = s_listen || s_follow || s_sub;
+        const bool think = s_pg.on > 0.f || fd_working(&s_dir) || fd_mood(&s_dir) == CM_THINKING || s_tnow < turn_until;
+        thought = !think ? 0.f : voice ? thought : thought + rdt;
+        const bool turn = voice || (think && thought < SCENE_THINK_S);
+        scene_tick(&s_sp, turn && s_cur == ST_SCENE ? 0.f : rdt);
+        if (s_sp.gen != gen0) scene_event("end", NULL);
+    }
     /* a scene after a scene (play over one, or the queue's next): it flows in; from another
      * state, entering the scene state did that this frame (its clock is still 0) */
     if (scene_take_start(&s_sp) && s_cur == ST_SCENE && s_dir.state_t > 0.f) { fd_replay(&s_dir); ripple(0.f, 0.f, 0.6f, 0.2f); }
@@ -698,10 +737,24 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     }
     {   /* a tapped spot: its reading, word by word, until the voice or another state takes over */
         const unsigned spot = atomic_exchange(&s_spot_req, 0);
-        if (spot && s_cur == ST_SCENE && s_sp.cur && spot >> 8 == SPOT_GEN(s_sp.gen) && (int)(spot & 255) <= s_sp.cur->nitems) {
-            read_spot(s_sp.cur, (int)(spot & 255) - 1);
-            scene_grow_tap(&s_grow, (int)(spot & 255) - 1);   /* its drawing grows with the tap's ripple */
-            s_grow_gen = s_sp.gen;
+        if (spot == MOLE_SPOT_BACK) {                      /* a tap beside an opened layout's spots: back under it */
+            if (s_cur == ST_SCENE && scene_back(&s_sp)) scene_event("back", NULL);
+        } else if (spot && s_cur == ST_SCENE && s_sp.cur && spot >> 8 == SPOT_GEN(s_sp.gen) && (int)(spot & 255) <= s_sp.cur->nitems) {
+            const int n = (int)(spot & 255) - 1;
+            const char *err = NULL;
+            scene_t *up = scene_open_build(s_sp.cur, n, &err);   /* the spot opens a layout: that plays, over this one */
+            if (up) {
+                char id[PKG_STR_MAX + 1];
+                snprintf(id, sizeof(id), "%.*s", (int)s_sp.cur->items[n].nsid, s_sp.cur->say + s_sp.cur->items[n].sid);
+                scene_open(&s_sp, up);
+                s_rd_on = false;
+                scene_event("open", id);
+            } else {
+                if (err) mole_diag_event(false, "scene.open %s", err);
+                read_spot(s_sp.cur, n);
+                scene_grow_tap(&s_grow, n);                /* its drawing grows with the tap's ripple */
+                s_grow_gen = s_sp.gen;
+            }
         }
         if (s_rd_on && (s_sub || s_cur != ST_SCENE)) s_rd_on = false;
         else if (s_rd_on && s_tnow >= s_rd->next) {
@@ -789,6 +842,24 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         scene_shapes_t hd = { s_shp, 0, s_kdots, s_still };
         const int64_t fill_t0 = esp_timer_get_time();
         scene_fill(s, s_sp.cur, s_sp.t, &cap, s_overlay, &s_noverlay, s_sdots, &hd);
+        {   /* the rings over it: a listen's (red, or the colour given), the agent's progress (green), a comet while it thinks */
+            const bool thinking = !s_listen && (fd_working(&s_dir) || fd_mood(&s_dir) == CM_THINKING);
+            hd.n = scene_rings(s_shp, hd.n, s->stage, &s_rg, &s_pg, thinking,
+                               (uint32_t)(s_ring_rgb >= 0 ? s_ring_rgb : s_ring_def >= 0 ? s_ring_def : FLUID_CRISP_LISTEN_RGB), FLUID_CRISP_PROG_RGB);
+            /* the voice on a listen's ring: small touches of the water just inside it, more the louder */
+            static float due;
+#ifdef MOLTY_DIAG_RING
+            const float voice = s_diag_voice && esp_timer_get_time() < s_diag_ring_until ? diag_voice(s_tnow) : s_voice;
+#else
+            const float voice = s_voice;
+#endif
+            if (s_rg.on >= 1.f && voice > 0.08f) {
+                for (due += voice * HD_VOICE_RATE * rdt; due >= 1.f; due -= 1.f) {
+                    const float a = frand() * 6.2831853f;
+                    ripple((SCENE_RING_R - 0.05f) * cosf(a), (SCENE_RING_R - 0.05f) * sinf(a), HD_VOICE_S * (0.5f + 0.5f * voice), HD_VOICE_R);
+                }
+            } else due = 0.f;
+        }
         s_nshp = hd.n;
         {   /* the caption's backdrop: one box for the whole reading (or say), so the dark does not move with each word */
             static const char *box_txt; static int box_n; static unsigned box_ser;
@@ -875,21 +946,23 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     }
     fluid_sim_floor_track(s, rdt, s_cur == ST_CREATURE && cr_loaded());   /* its feet, before the rings join T */
     /* under the listening ring (it wins); over a rigged creature the same thin line, in green */
-    fluid_target_progress(s, &s_pg, s_crisp ? FLUID_CRISP_PROG_RGB : PROG_COLOR, acc);
-    if (!s_crisp) fluid_target_ring(s, &s_rg, fluid_ring_rgb(s_ring_rgb, s_ring_def, cfg->palette), acc);   /* a rigged
+    const bool over_hd = s_cur == ST_SCENE && s_hd.gen != 0 && s_nshp >= 0;   /* (there they are shapes of the scene: scene_rings) */
+    if (!over_hd) fluid_target_progress(s, &s_pg, s_crisp ? FLUID_CRISP_PROG_RGB : PROG_COLOR, acc);
+    if (!s_crisp && !over_hd) fluid_target_ring(s, &s_rg, fluid_ring_rgb(s_ring_rgb, s_ring_def, cfg->palette), acc);   /* a rigged
                                                                  * creature's is given to it whole (cpk_listen) */
     /* the always-on dim fluid; its slow noise (and the eddies' ψ) refresh on
      * alternating frames — both drift ≤ 0.012 lattice units per frame */
     /* a scene in high definition shows the surface (its dust) and the colours, never the ink: the
      * ink holds still under it (no background, eddies, flow or view) and moves on after */
     s_crisp = s_cur == ST_CREATURE && s_cpk && cpk_crisp(s_cpk);   /* a question's arcs and letters show over it too */
-    /* a scene in high definition, but on the dots while a question (dimmed under it), a listen or the agent's progress
-     * is on the water (before `still`: a scene's first frame is one already, with no step of the whole fluid) */
+    /* a scene in high definition (a listen's ring and the agent's progress are shapes over it: ring_shapes), but on the
+     * dots while a question is on the water, dimmed under it (before `still`: a scene's first frame is one already,
+     * with no step of the whole fluid) */
     {   /* a scene holds its rise for its fine dust (they come together), FINE_HOLD_S at most */
         const bool scene = s_cur == ST_SCENE && s_sp.cur;
         const bool hold = scene && s_fine && s_fine_wait < FINE_HOLD_S && fluid_fine_coming(s_fine);
         s_fine_wait = scene && s_hd.dust >= 1.f && !s_hd.out ? s_fine_wait + rdt : s_hd.out || !scene ? 0.f : s_fine_wait;
-        scene_hd_tick(&s_hd, scene ? s_sp.gen : 0, s_ask.scr.phase != FLUID_ASK_NONE || s_rg.on > 0.f || s_pg.on > 0.f, hold, rdt);
+        scene_hd_tick(&s_hd, scene ? s_sp.gen : 0, s_ask.scr.phase != FLUID_ASK_NONE, hold, rdt);
     }
     const bool still = (s_hd.gen != 0 && s_cur == ST_SCENE && !asking) || s_crisp;
     s->p.still = still;
@@ -1441,6 +1514,7 @@ static void fluid_task(void *arg) {
                 if (s_cur == ST_SCENE && !s_hd.out) {      /* (a scene breaking up keeps the dust it showed) */
                     fluid_fine_swap(s_fine, s_hd.dust <= 0.f);
                     fluid_fine_caption_box(s_fine, s_cap_box_on ? s_cap_box : NULL);
+                    fluid_fine_rim(s_fine, s_rg.on > 0.f);
                     memcpy(s_still_d, s_still, (size_t)s_sim->N); s_dcap_word = s_cap_word;
                 }
                 s_dopts.fine = s_fine; s_dopts.still = s_still_d; s_dopts.cap_word = s_dcap_word;
@@ -1494,6 +1568,7 @@ static void fluid_task(void *arg) {
                 if (s_spot_on) memcpy(s_spot_sc, sc, sizeof(scene_t));
             }
             s_spot_t = s_sp.t;
+            s_spot_back = sc && s_sp.back;
         }
         snprintf(s_stats.scene_pkg, sizeof(s_stats.scene_pkg), "%s", s_sp.cur ? s_sp.cur->pkg_id : "");
         snprintf(s_stats.scene_layout, sizeof(s_stats.scene_layout), "%s", s_sp.cur ? s_sp.cur->layout : "");
@@ -2229,25 +2304,38 @@ unsigned mole_fluid_spot_tap(int px, int py) {
     const float x = (float)(px - s_ox) / (float)s_stage * 2.f - 1.f, y = 1.f - (float)(py - s_oy) / (float)s_stage * 2.f;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     const int n = s_spot_on ? scene_spot_at(s_spot_sc, s_spot_t, x, y) : -1;
-    const unsigned spot = n < 0 || n > 254 ? 0 : s_spot_gen << 8 | (unsigned)(n + 1);
+    const unsigned spot = n >= 0 && n <= 254 ? s_spot_gen << 8 | (unsigned)(n + 1) : s_spot_back && s_spot_gen ? MOLE_SPOT_BACK : 0;
+    if (spot && spot != MOLE_SPOT_BACK) {
+        const scene_item_t *it = &s_spot_sc->items[n];
+        s_tapped = spot;
+        snprintf(s_tapped_id, sizeof(s_tapped_id), "%.*s", (int)it->nsid, s_spot_sc->say + it->sid);
+        snprintf(s_tapped_open, sizeof(s_tapped_open), "%.*s", (int)it->nopen, s_spot_sc->say + it->open);
+    }
     xSemaphoreGive(s_mutex);
     if (spot) atomic_store(&s_spot_req, spot);
     return spot;
 }
 
-void mole_fluid_spot_id(unsigned spot, char *id, size_t size) {
+void mole_fluid_spot_id(unsigned spot, char *id, size_t size, char *open, size_t open_size) {
     if (!size) return;
     id[0] = '\0';
-    if (!s_mutex || !s_spot_sc || !spot) return;
+    if (open && open_size) open[0] = '\0';
+    if (!s_mutex || !s_spot_sc || !spot || spot == MOLE_SPOT_BACK) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    const int n = (int)(spot & 255) - 1;
-    if (s_spot_on && spot >> 8 == s_spot_gen && n < s_spot_sc->nitems) {
-        const scene_item_t *it = &s_spot_sc->items[n];
-        const size_t l = it->nsid < size ? it->nsid : size - 1;
-        memcpy(id, s_spot_sc->say + it->sid, l);
-        id[l] = '\0';
+    if (spot == s_tapped) {
+        snprintf(id, size, "%s", s_tapped_id);
+        if (open && open_size) snprintf(open, open_size, "%s", s_tapped_open);
     }
     xSemaphoreGive(s_mutex);
+}
+
+bool mole_fluid_scene_event(mole_scene_evt_t *out) {
+    if (!s_mutex) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    const bool on = s_scene_evt_on;
+    if (on) { *out = s_scene_evt; s_scene_evt_on = false; }
+    xSemaphoreGive(s_mutex);
+    return on;
 }
 
 void mole_fluid_allow_internal(void) {

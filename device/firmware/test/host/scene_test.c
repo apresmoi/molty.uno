@@ -356,6 +356,22 @@ static void test_spots(void) {
     }
     scene_free(ws);
     pkg_unref(w);
+    static const char *OPENS = "{\"v\":\"molty-pkg/1\",\"id\":\"x\",\"name\":\"X\",\"version\":\"1\",\"kind\":\"scenes\",\"layouts\":{"
+        "\"a\":{\"items\":[{\"k\":\"spot\",\"r\":0.2,\"say\":\"s\",\"open\":\"%s\"%s}]},\"b\":{\"dur\":3,\"items\":[{\"k\":\"disc\",\"r\":0.1}]}}}";
+    char ob[512];
+    snprintf(ob, sizeof ob, OPENS, "b", ",\"ttl\":5");
+    pkg_t *po = pkg_parse(ob, strlen(ob), &err);
+    scene_t *oa = po ? scene_build(po, "a", NULL, 0, &err) : NULL, *obb = oa ? scene_open_build(oa, 0, &err) : NULL;
+    CHECK(po && oa && obb && !strcmp(obb->layout, "b") && fabsf(scene_end(obb) - 3.f) < 1e-6f, "a spot opens another layout of its package, for that one's own length");
+    scene_free(obb); scene_free(oa); pkg_unref(po);
+    snprintf(ob, sizeof ob, OPENS, "nowhere", "");
+    po = pkg_parse(ob, strlen(ob), &err);
+    CHECK(!po && !strcmp(err, "item: open names no layout"), "it must name one (%s)", err ? err : "");
+    pkg_unref(po);
+    static const char *TTL_ONLY = "{\"v\":\"molty-pkg/1\",\"id\":\"x\",\"name\":\"X\",\"version\":\"1\",\"kind\":\"scenes\",\"layouts\":{\"a\":{\"items\":[{\"k\":\"spot\",\"r\":0.2,\"say\":\"s\",\"ttl\":5}]}}}";
+    po = pkg_parse(TTL_ONLY, strlen(TTL_ONLY), &err);
+    CHECK(!po, "ttl is for a spot that opens");
+    pkg_unref(po);
     static const char *HALF = "{\"v\":\"molty-pkg/1\",\"id\":\"x\",\"name\":\"X\",\"version\":\"1\",\"kind\":\"scenes\",\"layouts\":{\"a\":{\"items\":[{\"k\":\"spot\",\"r\":0.2,\"say\":\"s\",\"arc\":30}]}}}";
     pkg_t *h = pkg_parse(HALF, strlen(HALF), &err);
     CHECK(!h, "a sector needs its outer radius");
@@ -1037,6 +1053,80 @@ static void test_hd_pixels(const char *dir) {
     pkg_unref(p);
 }
 
+/* ── a tap opens a layout on the device itself (a spot's `open`): the chart's sign wedges open that sign up close, from
+ * the chart's own params; it plays over the chart, which comes back when it ends or at a tap beside it, its clock
+ * having run on ── */
+static void test_open(const char *dir) {
+    char path[512]; size_t len; const char *err;
+    snprintf(path, sizeof(path), "%s/astrology.json", dir);
+    char *buf = read_file(path, &len);
+    pkg_t *p = buf ? pkg_parse(buf, len, &err) : NULL;
+    free(buf);
+    snprintf(path, sizeof(path), "%s/astrology-commands.jsonl", dir);
+    char *cmds = p ? read_file(path, &len) : NULL;
+    scene_t *chart = NULL;
+    cJSON *args = NULL;
+    for (char *line = cmds ? strtok(cmds, "\n") : NULL; line && !chart; line = strtok(NULL, "\n")) {
+        cJSON *c = cJSON_Parse(line), *a = cJSON_GetObjectItem(c, "args");
+        const char *layout = cJSON_GetStringValue(cJSON_GetObjectItem(a, "layout"));
+        if (layout && !strcmp(layout, "chart")) { chart = scene_build(p, layout, cJSON_GetObjectItem(a, "params"), 100.f, &err); args = cJSON_Duplicate(cJSON_GetObjectItem(a, "params"), true); }
+        cJSON_Delete(c);
+    }
+    free(cmds);
+    CHECK(chart && chart->params, "the chart builds and keeps its params (a spot of it opens a layout)");
+    if (!chart) { pkg_unref(p); return; }
+    const float D = 0.017453293f;
+    const int leo = spot_named(chart, "leo"), moon = spot_named(chart, "moon");
+    /* Leo: sign 4, centred at 195 + 30 x 4 = 315 degrees; a corner of its wedge */
+    CHECK(leo >= 0 && scene_spot_at(chart, 1.f, 0.76f * cosf(302.f * D), 0.76f * sinf(302.f * D)) == leo && chart->items[leo].nopen, "a tap in Leo's wedge lands on Leo, which opens a layout");
+    /* how many bodies the sky has in Leo, and how long its reading plays */
+    int inleo = 0; float ttl = 0.f;
+    for (const cJSON *b = cJSON_GetObjectItem(args, "bodies")->child; b; b = b->next) inleo += !strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(b, "of")), "leo");
+    for (const cJSON *g = cJSON_GetObjectItem(args, "signs")->child; g; g = g->next)
+        if (!strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(g, "id")), "leo")) ttl = (float)cJSON_GetNumberValue(cJSON_GetObjectItem(g, "ttl"));
+    scene_player_t sp = { 0 };
+    scene_play(&sp, chart);
+    scene_take_start(&sp);
+    for (int n = 0; n < 60; n++) scene_tick(&sp, DT);                       /* 2 s of chart */
+    const unsigned gen0 = sp.gen;
+    scene_t *up = scene_open_build(sp.cur, leo, &err);
+    CHECK(up && !strcmp(up->layout, "sign-closeup") && fabsf(up->ttl - ttl) < 1e-3f && ttl >= 5.f, "it builds Leo up close from the chart's params, for its reading (%.0f s) (%s)", ttl, err ? err : "");
+    if (up) {
+        int glyph = 0, spots = 0, ruler = 0;
+        for (int n = 0; n < up->nitems; n++) {
+            const scene_item_t *it = &up->items[n];
+            glyph += it->k == PK_GLYPH && it->size > 0.6f && it->asset >= 0 && !strcmp(p->assets[it->asset].name, "leo");
+            spots += it->k == PK_SPOT;
+            ruler += it->k == PK_GLYPH && fabsf(it->y + 0.42f) < 1e-3f;
+        }
+        CHECK(glyph == 1 && ruler == 1 && inleo == 3 && spots == inleo + 1, "Leo's glyph, its one ruler, its %d bodies of the sky's ten (%d spots)", inleo, spots);
+        scene_open(&sp, up);
+        CHECK(sp.cur == up && sp.back == chart && sp.gen != gen0 && scene_take_start(&sp) && sp.t == 0.f, "it plays at once, the chart waiting under it (a new scene: the water dissolves one into the other)");
+        int n = 0;
+        for (; n < 3000 && sp.cur == up; n++) scene_tick(&sp, DT);
+        CHECK(sp.cur == chart && !sp.back && fabsf(n * DT - ttl) < 2 * DT && scene_take_start(&sp), "it ends after %.1f s: the chart is back", n * DT);
+        CHECK(fabsf(sp.t - (2.f + ttl)) < 0.1f && fabsf(scene_end(chart) - sp.t - (100.f - 2.f - ttl)) < 0.1f, "... its clock ran on: %.1f s of its 100 left", scene_end(chart) - sp.t);
+        /* again, and a tap beside its spots goes back at once */
+        scene_open(&sp, scene_open_build(sp.cur, leo, &err));
+        for (n = 0; n < 30; n++) scene_tick(&sp, DT);
+        CHECK(sp.back == chart && scene_spot_at(sp.cur, sp.t, 0.f, -0.8f) < 0, "open again; the bottom of the glass is beside its spots");
+        const float t0 = sp.back_t;
+        CHECK(scene_back(&sp) && sp.cur == chart && !sp.back && fabsf(sp.t - t0) < 1e-3f && !scene_back(&sp), "a tap there: back at the chart, once");
+        /* the chart's ttl ends both */
+        scene_open(&sp, scene_open_build(sp.cur, leo, &err));
+        sp.back_t = 100.f - 1.f;
+        for (n = 0; n < 60 && sp.cur; n++) scene_tick(&sp, DT);
+        CHECK(!sp.cur && !sp.back && n * DT < 1.2f, "the chart's ttl runs out under it: both end");
+    } else scene_clear(&sp);
+    /* a planet opens nothing: it reads */
+    scene_t *again = scene_build(p, "chart", args, 100.f, &err);
+    CHECK(again && moon >= 0 && !scene_open_build(again, moon, &err) && !err, "a planet's spot opens nothing");
+    scene_free(again);
+    cJSON_Delete(args);
+    CHECK(p->refs == 1, "the scenes gave their references back (%d)", p->refs);
+    pkg_unref(p);
+}
+
 /* ── fine dust: the chart as the page draws it (packages/astrology/PORT-SPEC.md) ── */
 typedef struct { int wins; long px; int odd; } cost_t;
 static int send_cost(void *ctx, int x, int y, int w, int h, const uint16_t *px) {
@@ -1350,6 +1440,111 @@ static void test_fine(const char *dir) {
     CHECK(gen_first > 1 && gens == 0, "reading: the dark backdrop holds still from word to word (%d frames of another box)", gens);
     CHECK(rd_worst + CELLS_MS < 33.0, "reading: under a frame on the panel (%.1f ms mean, worst %.1f, and %.0f for the cells)", rd_sum / frames, rd_worst, CELLS_MS);
 
+    /* a listen's ring over the scene: a thin line that draws itself round the rim, a few cells a frame; the chart stays
+     * in high definition under it, as it was; held, it costs nothing more; the agent's comet turns a part or so a frame */
+    {
+        scene_fill(s, sc, 1.f, NULL, L, &nl, dots, &hd);
+        fluid_sim_destroy(s); s = fluid_sim_create(W, H, S); s->p.still = true;
+        fluid_sim_snapshot(s, fr, false);
+        o.nshapes = hd.n; o.letters = L; o.nletters = nl; o.cap_word = 0;
+        for (int f = 0; f < 12; f++) { o.time = 20.f + f / 30.f; fluid_draw_cells(d, fr, &o); fluid_draw_rect(d, &o, &(fluid_rect_t){ fb, S, 0, 0, S, S }, false); }
+        uint16_t *before = calloc((size_t)S * S, 2);
+        fluid_draw_rect(d, &o, &(fluid_rect_t){ before, S, 0, 0, S, S }, true);
+        static fluid_shape_t rs[FLUID_MAX_SHAPES];
+        fluid_ring_t rg = { 0 };
+        fluid_progress_t pg = { 0 };
+        double rworst = 0.;
+        int nmax = 0, undone = 0;
+        for (int f = 0; f < 20; f++) {
+            fluid_ring_tick(&rg, DT, true);
+            memcpy(rs, shp, sizeof(fluid_shape_t) * (size_t)hd.n);
+            const int n = scene_rings(rs, hd.n, S, &rg, &pg, false, 0xFF2C3Eu, 0x35E07Cu);
+            o.shapes = rs; o.nshapes = n; o.time = 21.f + f / 30.f;
+            cost_t c = { 0, 0, 0 };
+            fluid_draw_cells(d, fr, &o);
+            fluid_draw_send(d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, wbuf, 4096, send_cost, &c);
+            fluid_draw_rect(d, &o, &(fluid_rect_t){ fb, S, 0, 0, S, S }, false);
+            rworst = fmax(rworst, panel_ms(&c));
+            nmax = n - hd.n;
+            for (int k = 0; k < N; k++) undone += d->key[k] && (d->key[k] & 0xF000) != 0x8000;
+        }
+        /* the line: red at every degree of the rim; the chart inside it as before */
+        uint16_t *with = calloc((size_t)S * S, 2);
+        fluid_draw_rect(d, &o, &(fluid_rect_t){ with, S, 0, 0, S, S }, true);
+        dump_ppm(getenv("FINE_DUMP_RING"), with, S);
+        int red = 0, changed = 0;
+        const float R = SCENE_RING_R * S / 2;
+        for (int a = 0; a < 360; a++) {
+            const uint16_t px = with[(int)(S / 2.f - R * sinf(a * 0.0174533f)) * S + (int)(S / 2.f + R * cosf(a * 0.0174533f))];
+            const uint16_t le = (uint16_t)(px >> 8 | px << 8);
+            red += (le >> 11) > 20 && (le >> 5 & 63) < 24;
+        }
+        /* (the dust's light flows meanwhile: compare the drawing itself, the lit pixels of the chart) */
+        for (int y = 0; y < S; y++) for (int x = 0; x < S; x++) {
+            if (hypotf(x + 0.5f - S / 2.f, y + 0.5f - S / 2.f) > (SCENE_RING_R - 0.02f) * S / 2) continue;
+            changed += lum(before[y * S + x]) > 700 && before[y * S + x] != with[y * S + x];   /* (a bright speck: about 540) */
+        }
+        printf("  a listen's ring over the chart (panel model): forming, worst %.1f ms a frame\n", rworst);
+        CHECK(nmax == SCENE_RING_SEGS && red >= 356 && changed == 0 && undone == 0 && rworst + CELLS_MS < 33.0,
+              "the ring draws itself round the rim (%d parts, red at %d of 360 degrees), worst %.1f ms a frame; the chart under it as it was (%d px changed, %d cells out of high definition)",
+              nmax, red, rworst, changed, undone);
+        /* held: the ring itself sends nothing more (only the dust's light, as calm) */
+        double held = 0.;
+        for (int f = 0; f < 20; f++) {
+            o.time = 22.f + f / 30.f;
+            cost_t c = { 0, 0, 0 };
+            fluid_draw_cells(d, fr, &o);
+            fluid_draw_send(d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, wbuf, 4096, send_cost, &c);
+            held = fmax(held, panel_ms(&c));
+        }
+        CHECK(held + CELLS_MS < 33.0, "held, it costs as the calm chart (worst %.1f ms a frame)", held);
+        /* the voice at its loudest: touches of the water just inside the line; the dust by the rim rides them, the
+         * drawing holds, the frame stays inside its budget */
+        {
+            fluid_fine_rim(fine, true);
+            double vworst = 0.;
+            int vbroke = 0;
+            long vpx = 0;
+            for (int f = 0; f < 60; f++) {
+                if (f % 3 != 2) { const float a = f * 2.399f; fluid_sim_impulse(s, (SCENE_RING_R - 0.05f) * cosf(a), (SCENE_RING_R - 0.05f) * sinf(a), 0.12f, 0.05f); }
+                fluid_sim_step(s, DT);
+                fluid_sim_snapshot(s, fr, false);
+                o.time = 22.7f + f / 30.f;
+                cost_t c = { 0, 0, 0 };
+                fluid_draw_cells(d, fr, &o);
+                fluid_draw_send(d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, wbuf, 4096, send_cost, &c);
+                const double ms = panel_ms(&c);
+                fluid_draw_pace(d, (int)((ms + CELLS_MS) * 1000));
+                if (getenv("FINE_TRACE")) printf("    voice f%d: %.1f ms (%d windows, %ld px)\n", f, ms, c.wins, c.px);
+                vworst = fmax(vworst, ms); vpx += c.px;
+                for (int k = 0; k < N; k++) vbroke += d->key[k] && (d->key[k] & 0xF000) != 0x8000;
+            }
+            CHECK(vworst + CELLS_MS < 33.0 && vbroke == 0 && vpx > 60 * 2000, "the voice on the ring: the dust by the rim stirs (%ld px a frame), worst %.1f ms a frame, the drawing whole", vpx / 60, vworst);
+            fluid_fine_rim(fine, false);
+            fluid_sim_destroy(s); s = fluid_sim_create(W, H, S); s->p.still = true;
+            fluid_sim_snapshot(s, fr, false);
+        }
+        /* the agent's comet (thinking): about a fifth of the line, turning */
+        fluid_ring_t off = { 0 };
+        int n0 = 0, moved = 0;
+        double cworst = 0.;
+        for (int f = 0; f < 30; f++) {
+            fluid_progress_tick(&pg, DT, false, -1.f, false);
+            memcpy(rs, shp, sizeof(fluid_shape_t) * (size_t)hd.n);
+            const int n = scene_rings(rs, hd.n, S, &off, &pg, true, 0xFF2C3Eu, 0x35E07Cu);
+            o.shapes = rs; o.nshapes = n; o.time = 23.f + f / 30.f;
+            cost_t c = { 0, 0, 0 };
+            fluid_draw_cells(d, fr, &o);
+            fluid_draw_send(d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, wbuf, 4096, send_cost, &c);
+            if (f > 2) cworst = fmax(cworst, panel_ms(&c));
+            if (f == 3) n0 = n - hd.n;
+            moved += f > 3 && rs[hd.n].a0 != 0.f && n - hd.n > 0;
+        }
+        CHECK(n0 >= 9 && n0 <= 12 && moved > 20 && cworst + CELLS_MS < 33.0, "thinking: a comet of %d parts circles, worst %.1f ms a frame", n0, cworst);
+        o.shapes = shp; o.nshapes = hd.n;
+        free(before); free(with);
+    }
+
     /* sets are found again by their drawing, the scene's calm set is never given up, another scene's dust goes */
     {
         uint32_t kt, kc, k2 = 0x1234567u;
@@ -1487,6 +1682,7 @@ int main(int argc, char **argv) {
     test_real_package(argv[1]);
     test_hd_pixels(argv[1]);
     test_fine(argv[1]);
+    test_open(argv[1]);
     bench(argc > 2 ? argv[2] : "");
     CHECK(P->refs == 1, "every scene gave its package reference back (%d)", P->refs);
     pkg_unref(P);

@@ -49,7 +49,9 @@ Seven scenes: `globe` for the Moon, then Mercury, Venus, Mars, Jupiter; `saturn`
 |---|---|
 | `bodies` | ten `{"g": "g-<body>", "a": <chart angle>, "r": <radius>, "c": "<colour>"}`; radius 0.64, pulled in by 0.1 per level when a body is within 13 degrees of one already placed at that level (place in order of longitude); colours as in `aspect` |
 | `aspects` | the three tightest aspects (smallest orb) a line can show, each `{"x1", "y1", "x2", "y2", "px1", "py1", "px2", "py2", "c", "say", "id", "lights"}`: a hairline between the two bodies' symbols, from 0.085 outside one centre (`px`/`py`) to 0.085 outside the other's, along the line between them; none for a pair closer than 0.2 (a tight conjunction). `c`: tense (square, opposition) `#ff5a4a`, easy (trine, sextile) `#6fa8ff`, a conjunction `#c8cce0`; `say` the pair in plain words ("Mars opposes Saturn: drive meets limits."); `id` `<body>-<body>`; `lights` `"<id> <body> <body>"`. A tap on the line reads it: it brightens, its two bodies grow, a ring round each. `chart --all`: every aspect that fits (at most 11), `c` dimmed by up to 70 % as the orb grows to 6 |
-| `signs` | twelve `{"a": (195 + 30 i) mod 360, "say", "id": "<sign>"}`; a tapped sign grows 1.5x |
+| `bodies` (more) | each body also carries where it sits in its sign's close-up: `"of": "<sign>"`, `"da"` (its dial angle there), `"d"` (its dim colour), `"on"`, `"off"` (when it is lit), as in `sign-closeup` |
+| `signs` | twelve `{"a": (195 + 30 i) mod 360, "say", "id": "<sign>", "sign": "<sign>", "c", "name", "nx", "ns", "ttl"}`: the close-up's own fields for that sign and how long it plays. A tap on a sign opens `sign-closeup` on Molty itself with these, the sign's `ruler` and the bodies `of` it |
+| `ruler` | twelve `{"of": "<sign>", "g", "x", "c"}`: each sign's ruler glyph, as in `sign-closeup` |
 
 The middle is empty: a reading's words show there (`caption_y` 0).
 Each body also carries `say` (its reading, at most 160 characters) and `id` (`sun` …). A tap on one shows its
@@ -58,10 +60,12 @@ stays sharp while its words show in the middle of the wheel, one at a time. A si
 <what it does> <how the sign plays it>." plus its tightest aspect; a sign, its nature and ruler, then its planets
 or, when empty, where its ruler is.
 
-## sign-closeup (held: send the reading's length as `ttl_s`, then queue the chart)
+## sign-closeup (held: the reading's length)
 
 One sign big, its planets on its degree dial (0 at the lower left, over the top, 30 at the lower right), each lit
-while Molty reads it. Sent when a `tap` event names a sign (`spot`), with a `say` of the reading right after.
+while Molty reads it. Molty opens it itself when a sign is tapped on the chart (from the chart's params, for the
+sign's `ttl`), and goes back to the chart after it or at a tap beside it; you only `say` the reading. To a Molty that
+did not (the `tap` event has no `opened`), send it yourself with the reading's length as `ttl_s` and queue the chart.
 
 | param | value |
 |---|---|
@@ -70,12 +74,14 @@ while Molty reads it. Sent when a `tap` event names a sign (`spot`), with a `say
 | `name`, `nx`, `ns` | the name in capitals, its centre x and type size (0.13; 0.11 past 8 letters), with the ruler's glyph after it, the row centred |
 | `say` | the sign's reading (the centre spot) |
 | `ruler` | `[{"g": "g-<ruler>", "x", "c": <its colour>}]` (modern rulers: Mars, Venus, Mercury, Moon, Sun, Mercury, Venus, Pluto, Jupiter, Saturn, Uranus, Neptune) |
-| `bodies` | each planet in the sign by degree: `{"g", "a": 210 - 8 x degree (spread at least 28 apart, within 210..-30), "c", "d": c at 60 %, "on", "off": when Molty reads it, "say", "id"}` |
+| `bodies` | each planet in the sign by degree: `{"g", "da": 210 - 8 x degree (spread at least 28 apart, within 210..-30), "c", "d": c at 60 %, "on", "off": when Molty reads it, "say", "id"}` |
 
 `on`/`off` follow the spoken reading (the sign's head, then each planet's line): about 2.6 words a second plus
 0.3 s a sentence, after 1.2 s; `ttl_s` is the end plus 3 s. The loop: `GET $MOLTY_RELAY/v1/devices/<device>/events?wait_s=25`
-(the molty skill's long-poll); a `tap` with a sign's `spot` -> `scene.play` the close-up, `scene.queue` the chart,
-`say` the reading; a `tap` with no `spot` while it shows -> `scene.play` the chart.
+(the molty skill's long-poll); a `tap` with a sign's `spot` and `opened` -> `say` the reading (Molty shows the
+close-up and comes back by itself; `closed: true` on a tap, or a `scene` event, says it is back). Without `opened`:
+`scene.play` the close-up, `scene.queue` the chart, `say` the reading; a `tap` with no `spot` while it shows ->
+`scene.play` the chart.
 
 ## signs (36 s)
 

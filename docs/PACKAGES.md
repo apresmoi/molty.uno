@@ -32,7 +32,7 @@ What ships today (`packages/index.json` is the source of truth):
 
 | id | kind | version | size | on a new device |
 |---|---|---|---|---|
-| `astrology` | scenes | 1.5.0 | 73 KB | installed on request (the `molty-astro` skill) |
+| `astrology` | scenes | 1.7.0 | 73 KB | installed on request (the `molty-astro` skill) |
 | `cat` | creature | 2.0.0 | 242 KB | built in |
 | `duck` | creature | 1.0.0 | 31 KB | built in |
 | `octopus` | creature | 1.0.0 | 33 KB | built in |
@@ -44,7 +44,7 @@ One example, the whole path from an agent (REST, the molty skill's pairing):
 curl -sS -X POST "$MOLTY_RELAY/v1/devices/$MOLTY_DEVICE/cmd" -H "authorization: Bearer $TOKEN" \
   -H 'content-type: application/json' -d '{"name":"pkg.available"}'
 # 2. install: pass the entry's "install" object as it is (the owner taps install on the screen)
-#    -d '{"name":"pkg.install","args":{"id":"astrology","url":"...","sha256":"...","size":74344,"name":"Astrology"},"wait":true}'
+#    -d '{"name":"pkg.install","args":{"id":"astrology","url":"...","sha256":"...","size":74372,"name":"Astrology"},"wait":true}'
 # 3. play a layout
 #    -d '{"name":"scene.play","args":{"pkg":"astrology","layout":"sign","params":{"sign":"leo"},"ttl_s":9}}'
 ```
@@ -103,7 +103,7 @@ and geometry in **glass units**: the round window has radius 1, `x` right, `y` u
 | `ball` | `x`, `y`, `r`, `img`, `lit` (0..1 lit fraction), `side` (-1/1 which side is lit), `spin` | a shaded sphere wearing an image asset |
 | `glyph` | `x`, `y`, `size`, `asset`, `rot` | a mask or image asset |
 | `text` | `x`, `y`, `size`, `str` | words, in the device font |
-| `spot` | `x`, `y`, `r`, `say`, `id`, `pts`, `lights`, `grow`, `arc`, `r0`, `r1` | nothing: a place to tap. Molty shows `say` as the subtitle; the `tap` event names `id` |
+| `spot` | `x`, `y`, `r`, `say`, `id`, `pts`, `lights`, `grow`, `arc`, `r0`, `r1`, `open`, `ttl` | nothing: a place to tap. Molty shows `say` as the subtitle; the `tap` event names `id` |
 
 **Spots** make a scene interactive with no round trip: the agent sends each spot's reading with the scene
 (`{ "k": "spot", "each": "$bodies", "polar": ["@a", "@r"], "r": 0.09, "say": "@say", "id": "@id" }`), and a tap on it
@@ -122,6 +122,16 @@ crisp meanwhile (the water breaks nothing it covers), and the wave leaves its ou
   line's group and its two bodies'; the lit-only items reach the line out to them with a ring round each.
 - without: what is drawn inside its disc (a symbol's centre in it; a ring, a line or ticks wholly in it), about the
   spot's centre.
+A spot may **open another layout** of its package instead of reading: `"open": "<layout>"` (v2: a tap zone's
+`opens`). Molty plays that layout at once, over this one, with the same dissolve as any scene change, and comes back
+to this one when it ends or at a tap beside its spots; this one's clock runs on meanwhile (its `ttl_s` still ends
+everything). No agent takes part, so the opened layout's params come from what the scene already holds, by name: each
+from the tapped spot's list element if it has a field of that name, else from this layout's own param of that name; a
+list keeps only the elements whose `of` field (if they have one) is the spot's `id`. It lasts its own `dur`; a held
+one (dur 0) lasts the spot's `ttl` seconds (1..600, bindable: `"ttl": "@ttl"`), or until this layout's end. The tap
+event still names the spot, with `opened: "<layout>"`. The chart's signs open `sign-closeup` this way. A param of this
+layout that only the opened one reads counts as read.
+
 A say over the scene replaces the reading. Both show as the reader does, one word at a time with its focus letter
 in the accent colour on the centre line, but small: low on the screen, under the drawing, or at the layout's `caption_y`
 (sized as at the bottom). In high definition the words sit on a dark backdrop in the fine dust: each forms from the dust,
@@ -176,8 +186,7 @@ Over the existing command path (`link_cmd_register`), gated by device caps `pkg`
 - **Progress on screen:** after the tap the question blows away and a ring forms on the rim. It grows clockwise from
   12 o'clock as the bytes arrive (to 90 % when the download is complete), then fills, flashes and melts when the package
   is stored. On a failure it lets go where it got to. It is the same ring as an agent's `progress`
-  ([AGENT-LINK.md](AGENT-LINK.md#inline-cues-and-actions)): over the cat it forms from a wave at the centre in the
-  recording ring's colour, over the duck or the octopus it is a mint line.
+  ([AGENT-LINK.md](AGENT-LINK.md#inline-cues-and-actions)): over the cat it forms from a wave at the centre as a thin green line, over the duck or the octopus it is a mint line.
 - **Download:** straight from the allowlisted URL over verified TLS; redirects are not followed. The URL may use only
   `[A-Za-z0-9._/-]` after the prefix, no `..` or `//`, and must end in `.json`.
 - Another screen owner (a say's words, a mood that shows the creature) drops the scene; a question covers it and it

@@ -110,16 +110,20 @@ static void screen_do(gesture_taps_t presses)
     else if (presses == GESTURE_TAPS_DOUBLE) power_dnd_set(!power_dnd());
 }
 
-/* A tap on a spot: Molty shows its reading; the agent hears which spot (whatever tap is bound to). */
+/* A tap on a spot: Molty shows its reading, or opens the layout the spot names; the agent hears which spot (whatever
+ * tap is bound to), and `opened` (that layout) when Molty opened it itself. A tap beside the spots of a layout so
+ * opened takes Molty back under it: the agent hears `closed`. */
 static void spot_do(unsigned spot, uint32_t now, gesture_limit_t *limit)
 {
     if (!gesture_limit_allow(limit, now)) return;
     const uint32_t xy = atomic_load(&s_tap_xy);
-    char id[PKG_STR_MAX + 1];
-    mole_fluid_spot_id(spot, id, sizeof id);
-    cJSON *ev = link_evt_tap_frame((xy >> 16) / 65535.0, (xy & 0xFFFFu) / 65535.0);
-    if (ev && id[0]) cJSON_AddStringToObject(cJSON_GetObjectItemCaseSensitive(ev, "data"), "spot", id);
-    mole_diag_event(false, "sense.tap spot %s", id);
+    char id[PKG_STR_MAX + 1], open[PKG_KEY_MAX + 1];
+    mole_fluid_spot_id(spot, id, sizeof id, open, sizeof open);
+    cJSON *ev = link_evt_tap_frame((xy >> 16) / 65535.0, (xy & 0xFFFFu) / 65535.0), *data = cJSON_GetObjectItemCaseSensitive(ev, "data");
+    if (data && id[0]) cJSON_AddStringToObject(data, "spot", id);
+    if (data && open[0]) cJSON_AddStringToObject(data, "opened", open);
+    if (data && spot == MOLE_SPOT_BACK) cJSON_AddBoolToObject(data, "closed", true);
+    mole_diag_event(false, spot == MOLE_SPOT_BACK ? "sense.tap back" : "sense.tap spot %s", id);
     emit(ev);
 }
 
@@ -209,6 +213,8 @@ static void sense_task(void *arg)
         taps_do(gesture_tapper_poll(&tapper, now), now, &tap_l);
         const unsigned spot = atomic_exchange(&s_spot, 0);
         if (spot && !pairing) spot_do(spot, now, &tap_l);
+        mole_scene_evt_t sv;                            /* the screen changed on the device itself: the relay hears what is up */
+        if (mole_fluid_scene_event(&sv)) emit(link_evt_scene_frame(sv.pkg, sv.layout, sv.why, sv.spot));
         xTaskDelayUntil(&wake, period);
     }
 }

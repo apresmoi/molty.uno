@@ -174,6 +174,9 @@ cJSON *link_evt_tap_frame(double x, double y);
 /* {"t":"evt","name":"creature","data":<info>}: the creature on screen as the agent is told
  * (mole_fluid_creature_info's JSON object), on each welcome and each change. NULL: not an object. */
 cJSON *link_evt_creature_frame(const char *info);
+/* evt `scene`: the scene on screen changed on the device itself. data {why: "open" | "back" | "end", pkg?, layout?
+ * (what is up now; neither: nothing), spot? (the tapped spot that opened it)} */
+cJSON *link_evt_scene_frame(const char *pkg, const char *layout, const char *why, const char *spot);
 cJSON *link_evt_button_frame(bool accept);
 /* {"t":"evt","name":"dnd","data":{"on":bool}}: do not disturb (power.h), after each welcome and each change. */
 cJSON *link_evt_dnd_frame(bool on);

@@ -619,7 +619,7 @@ static void test_crisp_ring(const char *pkgdir) {
     ring = (fluid_ring_t){ 0 };
     enum { N = 150, ON0 = 10, OFF0 = 90 };
     int line[N] = { 0 }, all[N] = { 0 }, crest = -1, nline = 1;
-    double heavy = 0.0, quiet = 0.0, loud = 0.0, before = 0.0;
+    double heavy = 0.0, quiet = 0.0, loud = 0.0, before = 0.0, let = 0.0;
     for (int f = 0; f < N; f++) {                  /* 10 frames none, 80 a listen, 60 after it */
         /* a voice: before the ring (nothing to ripple), then quiet once it settled, then speaking */
         cpk_voice(k, f < ON0 ? 0.8f : f >= 75 && f < OFF0 ? 0.8f : 0.f);
@@ -631,7 +631,9 @@ static void test_crisp_ring(const char *pkgdir) {
         all[f] = ring_dots(k, s, 0.08f, 1.f, NULL);
         if (crest < 0 && f >= ON0 && ring_dots(k, s, 0.8f, 0.962f, NULL) > 0 && line[f] == 0) crest = f;   /* red near the rim, the line not yet */
         const double ms = ring_send(&rp, k, s, 70 + f);
-        if ((f >= ON0 && f < ON0 + 45) || (f >= OFF0 && f < OFF0 + 45)) if (ms > heavy) heavy = ms;
+        if (f >= ON0 && f < ON0 + 45 && ms > heavy) heavy = ms;
+        if (f >= OFF0 && f < OFF0 + 45 && ms > let) let = ms;
+        if (getenv("RING_TRACE") && f >= ON0) printf("    %s f%+d: %.1f ms\n", f < OFF0 ? "form" : "let", f - (f < OFF0 ? ON0 : OFF0), ms);
         if (f == OFF0 - 1) {                       /* settled: the sharp line alone */
             int n0, n1, n2, n3, n4;
             const int a0 = ring_dots(k, s, 0.962f, 0.988f, &n0), a1 = ring_dots(k, s, 0.9f, 0.962f, &n1), a2 = ring_dots(k, s, 0.82f, 0.9f, &n2),
@@ -650,7 +652,10 @@ static void test_crisp_ring(const char *pkgdir) {
     for (int f = ON0 + 1; f < N; f++) { const int dd = abs(line[f] - line[f - 1]); if (dd > jump) jump = dd; }
     printf("  crisp ring: the crest near the rim at %.2f s, the line formed at %.2f s, gone %.2f s after; largest step %d of %d line dots\n",
            crest < 0 ? -1.0 : (crest - ON0) / 30.0, formed < 0 ? -1.0 : (formed - ON0) / 30.0, gone < 0 ? -1.0 : (gone - OFF0) / 30.0, jump, full);
-    printf("  crisp ring: heaviest forming / releasing frame ~%.1f ms on the panel, a touch's %.1f ms\n", heavy, touch);
+    printf("  crisp ring: heaviest forming frame ~%.1f ms on the panel, letting go ~%.1f ms, a touch's %.1f ms\n", heavy, let, touch);
+    /* the release is the lighter of the two, with room: on the device it ran ~0.85 of this model (35.5 ms at the 42.2
+     * it had), and a frame has 33 ms */
+    CHECK(let < 28.0 && let < 0.85 * heavy, "crisp ring: letting go takes ~%.1f ms a frame at its heaviest (forming %.1f)", let, heavy);
     printf("  crisp ring, voice: the water near the rim %.2f before the ring, %.2f quiet, %.2f speaking\n", before, quiet, loud);
     CHECK(before < 0.01, "crisp ring: a voice ripples the water with no ring (%.2f)", before);
     CHECK(loud > 4.0 * quiet + 0.5, "crisp ring: the voice does not ripple the rim (%.2f quiet, %.2f speaking)", quiet, loud);
