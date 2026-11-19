@@ -1208,7 +1208,8 @@ static bool hdc_cell(fluid_draw_t *d, const fluid_draw_opts_t *o, int k, int nca
     const int i = k % d->W, j = k / d->W, x0 = d->cx[i], x1 = d->cx[i + 1], y0 = d->cy[j], y1 = d->cy[j + 1];
     /* the few shapes that reach the cell, in their order (each row then looks at those alone); the scratch for them in
      * PSRAM (the drawer's stack is small) */
-    enum { NEAR = 24 };
+    enum { NEAR = 96 };                                 /* (past it every shape is tried on each row: at the chart's middle, where
+                                                         * its lines meet, that drew a cell in ~10 ms on the device) */
     if (!d->near) d->near = FLUID_CALLOC((sizeof(fluid_shape_t) + sizeof(int16_t[4])) * NEAR);
     fluid_shape_t *sh = d->near;
     int16_t (*box)[4] = (int16_t (*)[4])(sh + NEAR);
@@ -1329,8 +1330,7 @@ static float wave_arc(float e, float r, float R) {
 /* What the panel takes to send a frame's annulus t px thick along an arc of L px: its boxes (one a WAVE_ARC px of arc,
  * as wave_boxes makes them, 230 us each), the band's pixels (FLUID_WAVE_BAND of t, drawn, composed and sent ~0.65 us
  * each) and the others the boxes hold (the rest of t and about WAVE_WASTE px more along the arc: rows rounded to pairs,
- * x to 4, a box over a slope; ~0.40 us each, showing the old picture or the new alone). Fitted to the panel model's
- * windows and pixels (scene_test.c). */
+ * x to 4, a box over a slope; ~0.40 us each). The 2113895 model; the device measured otherwise (handover note). */
 #define WAVE_ARC   36.f
 #define WAVE_WASTE 14.f
 /* The front's steps from the centre: each frame's annulus (its step and the band it leaves) as thick as FLUID_WAVE_SEND_US
@@ -1495,8 +1495,7 @@ static void morph_dirty(fluid_draw_t *d) {
 }
 
 /* The boxes that cover this frame's annulus (the band it left last frame to its front now) on the glass. A window
- * costs about WAVE_WIN_PX pixels' time (its commands, against a pixel drawn, composed and sent: 0.23 ms and ~0.55 us, as
- * measured); a box larger than the window buffer goes in chunks of whole row pairs, each a window. On each row pair
+ * costs about WAVE_WIN_PX pixels' time (its commands, against a pixel drawn, composed and sent); a box larger than the window buffer goes in chunks of whole row pairs, each a window. On each row pair
  * the annulus is two spans (one across its top and bottom): the rows are cut into runs, each covered by one box over
  * both spans or two (its left and right), whichever costs least, and the runs chosen for the least cost in all (a
  * shortest path over the row pairs, runs of WAVE_RUN at most). */
@@ -1574,6 +1573,26 @@ static int wave_boxes(fluid_draw_t *d, int max_px) {
     }
     m->nbox = nb;
     return nb;
+}
+
+/* the columns [a0, a1) of fb rows [y0, y1) inside [x0, x1) that this frame's annulus (the band it left last frame to its
+ * front now) crosses, rounded out a pixel */
+static void wave_extent(const fluid_draw_t *d, int x0, int x1, int y0, int y1, int *a0, int *a1) {
+    const fluid_morph_t *m = &d->m;
+    const float ro = m->rb + 1.f, ri = m->ra - m->ba - 1.f, ro2 = ro * ro, ri2 = ri > 0.f ? ri * ri : 0.f;
+    float lo = 1e9f, hi = -1e9f;
+    for (int y = y0; y < y1; y++) {
+        const float dy = y + 0.5f - m->cy, dy2 = dy * dy;
+        if (dy2 >= ro2) continue;
+        const float xo = fsqrt(ro2 - dy2), xi = dy2 < ri2 ? fsqrt(ri2 - dy2) : 0.f;
+        const float s[2][2] = { { m->cx - xo, m->cx - xi }, { m->cx + xi, m->cx + xo } };
+        for (int q = 0; q < 2; q++) {
+            const float a = s[q][0] > x0 ? s[q][0] : x0, b = s[q][1] < x1 ? s[q][1] : x1;
+            if (b > a) { lo = a < lo ? a : lo; hi = b > hi ? b : hi; }
+        }
+    }
+    *a0 = hi > lo ? (ifloor(lo) - 1 < x0 ? x0 : ifloor(lo) - 1) : 0;
+    *a1 = hi > lo ? (iceil(hi) + 1 > x1 ? x1 : iceil(hi) + 1) : 0;
 }
 
 /* The window t as the change shows it, over the new look just drawn there: ahead of the front the old picture; in the
@@ -1709,7 +1728,7 @@ void fluid_draw_rect(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fl
 #define CRISP_WIN_PX 1500
 /* the windows' buffers: with two, each window is drawn into the one the panel is not reading (the send may return
  * while the panel still reads the other: fluid_draw_send2) */
-typedef struct { uint16_t *buf[2]; int max_px, cur; fluid_send_fn send; void *ctx; } sender_t;
+typedef struct { uint16_t *buf[2]; int max_px, cur; fluid_send_fn send; void *ctx; bool wave; } sender_t;
 static int s_wins;                                      /* windows sent (the front's own counted for the log) */
 static int window(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_overlay_t *ov, int mark, sender_t *sd,
                   int x0, int y, int x1, int h) {
@@ -1725,8 +1744,30 @@ static int window(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid
     } else {                                            /* the picture changing: the new look (not where the window is all
                                                          * ahead of the front), then as the change shows it */
         const float nx = m->cx < x0 ? x0 - m->cx : m->cx > x1 ? m->cx - x1 : 0.f, ny = m->cy < y ? y - m->cy : m->cy > y + h ? m->cy - (y + h) : 0.f;
-        if (nx * nx + ny * ny <= m->rb * m->rb) fluid_draw_rect(d, o, &t, true);
-        morph_rect((fluid_draw_t *)d, &t);
+        fluid_morph_t *mm = (fluid_morph_t *)m;
+        if (sd->wave && (m->look & FLUID_LOOK_KEEP) && m->snap && m->base == OLD_SNAP && !m->nreg) {
+            /* a box of the front over a kept glass: what it does not change straight from the glass (off the round
+             * glass, black), the new look drawn and composed only across the annulus */
+            const float R = d->stage * 0.5f, gx = d->ox + R, gy = d->oy + R;
+            for (int yy = y; yy < y + h; yy++) {
+                uint16_t *row = buf + (size_t)(yy - y) * w;
+                memcpy(row, m->snap + (size_t)yy * d->fb_w + x0, sizeof(uint16_t) * (size_t)w);
+                const float gdy = yy + 0.5f - gy, g2 = R * R - gdy * gdy, g = g2 > 0.f ? fsqrt(g2) : -1.f;
+                for (int x = x0; x < x1; x++) { const float gxx = x + 0.5f - gx; if (gxx < -g || gxx > g) row[x - x0] = 0; }
+            }
+            int a0, a1;
+            wave_extent(d, x0, x1, y, y + h, &a0, &a1);
+            if (a1 > a0) {
+                const fluid_rect_t s = { buf + (a0 - x0), w, a0, y, a1, y + h };
+                fluid_draw_rect(d, o, &s, true);
+                morph_rect((fluid_draw_t *)d, &s);
+                mm->comp += (a1 - a0) * h;
+            }
+        } else {
+            if (nx * nx + ny * ny <= m->rb * m->rb) fluid_draw_rect(d, o, &t, true);
+            morph_rect((fluid_draw_t *)d, &t);
+            mm->comp += w * h;
+        }
     }
     fluid_draw_overlay(d, &t, o->palette, ov);
     fluid_draw_mark(d, &t, o->palette, mark);
@@ -1826,7 +1867,7 @@ int fluid_draw_send(const fluid_draw_t *d, const fluid_draw_opts_t *o, const flu
 
 int fluid_draw_send2(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_overlay_t *ov, int mark, bool full,
                      uint16_t *buf, uint16_t *buf2, int max_px, fluid_send_fn send, void *ctx) {
-    sender_t sd = { { buf, buf2 }, max_px, 0, send, ctx };
+    sender_t sd = { { buf, buf2 }, max_px, 0, send, ctx, false };
     int sent = 0;
     /* a scene in high definition on the dots: each run of changed cells its own window, so its haze changing all over
      * does not redraw the shapes between */
@@ -1834,13 +1875,14 @@ int fluid_draw_send2(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fl
     if (d->m.on && !full) {                             /* the picture changing: the front's annulus, in arc boxes */
         fluid_morph_t *m = (fluid_morph_t *)&d->m;
         const int nb = wave_boxes((fluid_draw_t *)d, max_px), n0 = s_wins;
-        m->band = 0; m->cmp_us = m->push_us = 0;
+        m->band = m->comp = 0; m->cmp_us = m->push_us = 0;
+        sd.wave = true;
         for (int q = 0; q < nb; q++) {
             const int n = crisp_box(d, o, ov, mark, m->box[q][0], m->box[q][2], m->box[q][1], m->box[q][3], &sd);
             if (n < 0) return -1;
             sent += n;
         }
-        m->px = sent; m->wins = s_wins - n0;
+        m->px = sent; m->wins = s_wins - n0; sd.wave = false;
     }
     /* crisp dots alone (a rigged creature), and a scene on fine dust: few, larger windows on whole row pairs (crisp_send:
      * a panel that takes whole pairs only, the CO5300, otherwise resends a full-width pair at each odd edge) */
