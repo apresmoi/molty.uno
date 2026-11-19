@@ -72,6 +72,11 @@ void cpk_set_work(cpk_t *k, bool on) { if (k) k->work = on; }
 const cp_t *cpk_player(const cpk_t *k) { return k->cp; }
 const cb_t *cpk_body(const cpk_t *k) { return k->body; }
 int cpk_tris(const cpk_t *k) { return k && k->body ? cb_tris(k->body) : 0; }
+void cpk_prepare(cpk_t *k, const fluid_sim_t *grid) {
+    if (!k || !k->clip) return;
+    if (!k->dots) k->dots = cd_create(k->clip, grid->W, grid->H);
+    if (!k->ring) k->ring = cr_create(grid);
+}
 bool cpk_crisp(const cpk_t *k) { return k && k->clip; }
 uint32_t cpk_draw_frame(const cpk_t *k) { return k ? FLUID_FRAME(k->frame, cr_ilace(k->ring)) : 0; }
 void cpk_voice(cpk_t *k, float level) { if (k) cr_voice(k->ring, level); }
