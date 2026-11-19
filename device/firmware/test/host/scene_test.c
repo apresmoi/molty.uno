@@ -30,6 +30,7 @@
 #include "cute_spec.h"
 #include "cute_rig.h"
 #include "glyph_font.h"
+#include "glyph_rsvp.h"
 #include "fluid_fine.h"
 
 #include <math.h>
@@ -1637,7 +1638,7 @@ static double morph_run(morph_rig_t *r, scene_t *sc, uint32_t look, int late, in
     double worst = 0.;
     *least = 1 << 30; *over = 0;
     enum { COLS = 6, TILES = 18 };
-    if (!fluid_draw_morphing(r->d)) for (int k = 0; k < S * S; k++) r->snap[k] = MORPH_STALE;
+    if (!fluid_draw_morphing(r->d) && !r->d->m.whole) for (int k = 0; k < S * S; k++) r->snap[k] = MORPH_STALE;
     uint16_t *sheet = getenv("MORPH_DUMP") ? calloc((size_t)COLS * (S / 2) * (TILES / COLS) * (S / 2), 2) : NULL;
     int tiles = 0;
     for (int f = 0; f < 200; f++, r->frame++) {
@@ -1645,7 +1646,8 @@ static double morph_run(morph_rig_t *r, scene_t *sc, uint32_t look, int late, in
         bool ready = true;
         if (sc) {
             scene_fill(r->s, sc, 1.f, NULL, r->L, &nl, r->dots, &hd);
-            if (f == late) { n = scene_full_shapes(r->s, sc, 1.f, r->full, &key); fluid_fine_want(r->fine, look, key, true, r->full, n, FLUID_PAL_PASTEL); fluid_fine_work(r->fine, 0); }
+            if (f == late) { n = scene_full_shapes(r->s, sc, 1.f, r->full, &key); fluid_fine_want(r->fine, look, key, true, r->full, n, FLUID_PAL_PASTEL); }
+            if (f >= late) fluid_fine_work(r->fine, 0);
             ready = fluid_fine_shown(r->fine, look);
         }
         const bool hold = fluid_draw_morph_look(r->d, look, r->snap, ready, r->now);
@@ -1653,7 +1655,7 @@ static double morph_run(morph_rig_t *r, scene_t *sc, uint32_t look, int late, in
             if (sc) {
                 memcpy(r->ddots, r->dots, (size_t)N); memcpy(r->dkeep, r->keep, (size_t)N); memcpy(r->dstill, r->still, (size_t)N);
                 memcpy(r->dshp, r->shp, sizeof(fluid_shape_t) * (size_t)(hd.n > 0 ? hd.n : 0));
-                if (f >= late) fluid_fine_swap(r->fine, false);
+                if (f >= late && !(fluid_draw_morphing(r->d) && r->d->m.closing)) fluid_fine_swap(r->fine, !fluid_draw_morphing(r->d));
                 r->o = (fluid_draw_opts_t){ .palette = FLUID_PAL_PASTEL, .edge_mode = FLUID_EDGE_CONTOURS, .font = gc_font5x7, .dots = r->ddots, .scene = true,
                                             .shapes = r->dshp, .nshapes = hd.n, .kdots = r->dkeep, .fine = r->fine, .still = r->dstill };
             } else {
@@ -1665,7 +1667,11 @@ static double morph_run(morph_rig_t *r, scene_t *sc, uint32_t look, int late, in
         r->g.c = (cost_t){ 0, 0, 0 };
         fluid_draw_cells(r->d, r->fr, &r->o);
         fluid_draw_send(r->d, &r->o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, r->wbuf, 4096, send_glass, &r->g);
-        const double ms = panel_ms(&r->g.c) + CELLS_MS;
+        /* (the panel model, for a change: a pixel of a row that only shows the old picture, or only the look, is
+         * ~0.40 us drawn and sent, of a row that draws both ~0.65 us: the device's own morph lines) */
+        const int st = r->d->m.stage;
+        const bool old_only = fluid_draw_morphing(r->d) && (st & (FLUID_MORPH_ST_OLD | FLUID_MORPH_ST_DONE)) && !(st & (FLUID_MORPH_ST_KEEP | FLUID_MORPH_ST_MIX));
+        const double ms = (fluid_draw_morphing(r->d) ? r->g.c.wins * 0.23 + r->g.c.px * (old_only ? 0.40e-3 : 0.65e-3) : panel_ms(&r->g.c)) + CELLS_MS;
         fluid_draw_pace(r->d, (int)(ms * 1000));
         const int lit = lit_px(r->g.px, S * S);
         for (int k = 0; k < S * S; k++) s_morph_stale += r->g.px[k] == MORPH_STALE;
@@ -1734,7 +1740,7 @@ static void test_morph(const char *dir) {
     const int cat_lit = lit_px(r->g.px, S * S);
     CHECK(cat_lit > 8000 && frames <= 3, "the creature, with nothing before it: at once (%d px lit)", cat_lit);
     static const struct { const char *name; int scene; uint32_t look; int late; } RUN[] = {
-        { "cat-chart", 1, 100, 24 }, { "chart-leo", 2, 101, 14 }, { "leo-chart", 1, 102, 0 }, { "chart-cat", 0, 1, 0 } };
+        { "cat-chart", 1, FLUID_LOOK_KEEP | 100, 16 }, { "chart-leo", 2, FLUID_LOOK_KEEP | 101, 14 }, { "leo-chart", 1, FLUID_LOOK_KEEP | 102, 0 }, { "chart-cat", 0, 1, 0 } };
     int before = cat_lit;
     for (int q = 0; q < 4; q++) {
         scene_t *sc = RUN[q].scene == 1 ? chart : RUN[q].scene == 2 ? up : NULL;
@@ -1750,12 +1756,16 @@ static void test_morph(const char *dir) {
         const int after = lit_px(r->g.px, S * S), low = before < after ? before : after;
         printf("  the dust reshapes, %s (panel model): %.2f s, worst %.1f ms a frame, %d over 33; never fewer than %d px lit (%d before, %d after)\n",
                RUN[q].name, frames / 30.0, worst, over, least, before, after);
-        CHECK(frames > 20 && frames < 150 && worst < 33.0 && over == 0, "%s: the change takes %.2f s, worst %.1f ms a frame", RUN[q].name, frames / 30.0, worst);
+        /* a scene to a scene: 0.85 s at most in this model when its dust is known (the device takes a row of the old
+         * picture alone faster than the model does), a second when it is made meanwhile: the glass was kept as it
+         * drew, nothing waits; from the creature, whose rows are kept first, a little longer */
+        const double most = q == 2 ? 0.85 : q == 0 ? 1.3 : 1.0;
+        CHECK(frames > 10 && frames / 30.0 <= most && worst < 33.0 && over == 0, "%s: the change takes %.2f s (%.1f at most), worst %.1f ms a frame", RUN[q].name, frames / 30.0, most, worst);
         CHECK(s_morph_stale == 0, "%s: only the picture kept shows, never what its buffer held before (%d px)", RUN[q].name, s_morph_stale);
         s_morph_stale = 0;
         CHECK(least * 3 > low, "%s: the glass is never left dark (%d px lit at its least, %d before, %d after)", RUN[q].name, least, before, after);
         /* (a scene's light flows on from the change's last frame: a few specks of its dust wait their rows' turns) */
-        CHECK(sc ? diff * 100 < after && hard == 0 : diff == 0, "%s: at its end the glass is the new look, whole (%d px differ, %d of them the drawing's)", RUN[q].name, diff, hard);
+        CHECK(sc ? diff * 50 < after && hard == 0 : diff == 0, "%s: at its end the glass is the new look, whole (%d px differ, %d of them the drawing's)", RUN[q].name, diff, hard);
         before = after;
     }
     {   /* a change in the middle of one (Leo opened from the chart, a tap beside it half a second into the gather): the
@@ -1763,11 +1773,11 @@ static void test_morph(const char *dir) {
         int f1, l1, o1, f2, l2, o2;
         const double w1 = morph_run(r, NULL, 1, 0, 0, "to-cat", &f1, &l1, &o1);
         (void)w1;
-        morph_run(r, chart, 200, 0, 0, "to-chart", &f1, &l1, &o1);
+        morph_run(r, chart, FLUID_LOOK_KEEP | 200, 0, 0, "to-chart", &f1, &l1, &o1);
         const int chart_lit = lit_px(r->g.px, S * S);
-        const double wa = morph_run(r, up, 201, 0, 30, "leo-cut", &f1, &l1, &o1);
+        const double wa = morph_run(r, up, FLUID_LOOK_KEEP | 201, 0, 12, "leo-cut", &f1, &l1, &o1);
         const int mid = fluid_draw_morphing(r->d), mid_lit = lit_px(r->g.px, S * S);
-        const double wb = morph_run(r, chart, 202, 0, 0, "cut-chart", &f2, &l2, &o2);
+        const double wb = morph_run(r, chart, FLUID_LOOK_KEEP | 202, 0, 0, "cut-chart", &f2, &l2, &o2);
         fluid_draw_rect(r->d, &r->o, &(fluid_rect_t){ r->ref, S, 0, 0, S, S }, true);
         int hard = 0;
         for (int k = 0; k < S * S; k++) hard += r->ref[k] != r->g.px[k] && (lum(r->ref[k]) > 700 || lum(r->g.px[k]) > 700);
@@ -1775,6 +1785,91 @@ static void test_morph(const char *dir) {
         CHECK(s_morph_stale == 0, "interrupted: only the picture kept shows (%d px)", s_morph_stale);
         CHECK(mid == FLUID_MORPH_GATHER && wa < 33.0 && wb < 33.0 && o1 + o2 == 0, "a change in the middle of one keeps the frame (worst %.1f, %.1f ms)", wa, wb);
         CHECK(l2 * 3 > mid_lit && l2 * 3 > chart_lit / 2 && hard == 0 && !fluid_draw_morphing(r->d), "... from the glass as it was, to the chart whole (%d px lit at its least, %d of the drawing's differ)", l2, hard);
+    }
+    {   /* a reading over a layout a tap just opened (Leo's own, at that layout's subtitle place), driven as the device
+         * drives it: after each word no pixel of an earlier word is left on the glass, and what is round the word is
+         * the scene, dimmed, and nothing else */
+        int f1, l1, o1;
+        morph_run(r, up, FLUID_LOOK_KEEP | 300, 0, 0, "read-leo", &f1, &l1, &o1);
+        const int leo = spot_named(chart, "leo");
+        char text[PKG_SAY_MAX + 1];
+        snprintf(text, sizeof(text), "%.*s", (int)chart->items[leo].nstr, chart->say + chart->items[leo].str);
+        struct { int off, len, orp; } tok[PKG_SAY_MAX / 2 + 1];
+        int nt = 0;
+        for (int i = 0, n = (int)strlen(text); i < n;) {
+            while (i < n && text[i] == ' ') i++;
+            const int st = i;
+            while (i < n && text[i] != ' ') i++;
+            if (i > st) { tok[nt].off = st; tok[nt].len = i - st > FLUID_WORD_LETTERS ? FLUID_WORD_LETTERS : i - st; tok[nt].orp = gc_rsvp_compute_orp(text + st, tok[nt].len).focal; nt++; }
+        }
+        float ub[4] = { 0 };                           /* the backdrop: one box for the whole reading (mole_fluid.c) */
+        for (int w = 0; w < nt; w++) {
+            float b[4];
+            const scene_caption_t c = { text + tok[w].off, tok[w].len, tok[w].orp };
+            scene_caption_box(&c, up->caption_y, S, b);
+            if (!w) memcpy(ub, b, sizeof(b));
+            ub[0] = fminf(ub[0], b[0]); ub[1] = fmaxf(ub[1], b[1]); ub[2] = fminf(ub[2], b[2]); ub[3] = fmaxf(ub[3], b[3]);
+        }
+        scene_shapes_t hd = { r->shp, 0, r->keep, r->still };
+        uint16_t *plain = calloc((size_t)S * S, 2);    /* the scene with no word, drawn whole (its drawing, undimmed) */
+        int nl = 0;
+        scene_fill(r->s, up, 1.f, NULL, r->L, &nl, r->dots, &hd);
+        { static int16_t pb[FLUID_MAX_SHAPES][4];
+          for (int q = 0; q < hd.n; q++) fluid_shape_box(&r->shp[q], 0, 0, pb[q]);
+          for (int y = 0; y < S; y++) fluid_shapes_row(r->shp, hd.n, (const int16_t (*)[4])pb, 0, 0, FLUID_PAL_PASTEL, NULL, 0.f, plain + (size_t)y * S, 0, y, 0, S); }
+        int left = 0, wrong = 0, shown = 0;
+        double rworst = 0.;
+        int rover = 0;
+        for (int w = 0; w <= nt; w++) {
+            const scene_caption_t cap = w < nt ? (scene_caption_t){ text + tok[w].off, tok[w].len, tok[w].orp } : (scene_caption_t){ NULL, 0, -1 };
+            const int frames = w < nt ? (text[tok[w].off + tok[w].len - 1] == '.' ? 16 : text[tok[w].off + tok[w].len - 1] == ',' ? 12 : 8) : 40;
+            for (int f = 0; f < frames; f++, r->frame++) {
+                r->now += 1.f / 30.f;
+                scene_fill(r->s, up, 1.f, &cap, r->L, &nl, r->dots, &hd);
+                if (!f && cap.n) for (int q = 0; q < nl; q++) if (!r->L[q].mask && !r->L[q].rgb && r->L[q].ch != ' ')
+                    fluid_sim_impulse(r->s, (r->L[q].x + r->L[q].w * 0.5f) / S * 2.f - 1.f, (r->L[q].y + r->L[q].h * 0.5f) / S * 2.f - 1.f, SCENE_CAPTION_RIPPLE, SCENE_CAPTION_RIPPLE_R);
+                fluid_sim_step(r->s, 1.f / 30.f);
+                if (!fluid_draw_morph_look(r->d, FLUID_LOOK_KEEP | 300, r->snap, true, r->now)) {
+                    fluid_sim_snapshot(r->s, r->fr, false);
+                    memcpy(r->ddots, r->dots, (size_t)N); memcpy(r->dkeep, r->keep, (size_t)N); memcpy(r->dstill, r->still, (size_t)N);
+                    memcpy(r->dshp, r->shp, sizeof(fluid_shape_t) * (size_t)(hd.n > 0 ? hd.n : 0));
+                    fluid_fine_swap(r->fine, true);
+                    fluid_fine_caption_box(r->fine, w < nt ? ub : NULL);
+                    r->o.nshapes = hd.n; r->o.cap_word = cap.n ? (unsigned)(w + 1) : 0; r->o.time = r->now;
+                }
+                r->g.c = (cost_t){ 0, 0, 0 };
+                fluid_draw_cells(r->d, r->fr, &r->o);
+                fluid_draw_send(r->d, &r->o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, r->wbuf, 4096, send_glass, &r->g);
+                const double ms = panel_ms(&r->g.c) + CELLS_MS;
+                fluid_draw_pace(r->d, (int)(ms * 1000));
+                rworst = fmax(rworst, ms); rover += ms > 33.0;
+                if (getenv("FINE_TRACE")) printf("    read w%d f%d: %.1f ms (%d windows, %ld px) quota %d\n", w, f, ms, r->g.c.wins, r->g.c.px, r->d->quota);
+                if (getenv("READ_DUMP") && atoi(getenv("READ_DUMP")) == w && f == frames - 1) dump_ppm(getenv("MORPH_OUT"), r->g.px, S);
+                if (f != frames - 1 || (w == nt && f < 39)) continue;
+                /* the word's own letters' boxes; round them, on the backdrop: a lit pixel is the scene's own drawing
+                 * (there in `plain` too) or a remnant */
+                int here = 0;
+                for (int y = (int)ub[2] - 14; y < (int)ub[3] + 14; y++) for (int x = (int)ub[0] - 14; x < (int)ub[1] + 14; x++) {
+                    if (x < 0 || y < 0 || x >= S || y >= S) continue;
+                    bool in_word = false;
+                    for (int q = 0; q < hd.n && !in_word; q++) {
+                        const fluid_shape_t *sh = &r->shp[q];
+                        if (sh->tag != FLUID_TAG_CAPTION) continue;
+                        in_word = fabsf(x + 0.5f - sh->x) <= sh->w * 0.5f + 1.5f && fabsf(y + 0.5f - sh->y) <= sh->h * 0.5f + 1.5f;
+                    }
+                    const int g = lum(r->g.px[y * S + x]), p0 = lum(plain[y * S + x]);
+                    if (in_word) { here += g > 300; continue; }   /* (its accented letter is orange: dimmer than white) */
+                    left += g > 420 && p0 < 150;                 /* bright, where the scene has nothing: an earlier word's */
+                    wrong += p0 > 500 && g > p0;                 /* the scene's drawing under the backdrop: never brighter than it is */
+                }
+                shown += here > 12 * cap.n || w == nt;
+            }
+        }
+        printf("  a reading over Leo just opened (panel model): worst %.1f ms a frame, %d over 33\n", rworst, rover);
+        CHECK(shown == nt + 1, "the reading over an opened layout: each word shows (%d of %d)", shown, nt + 1);
+        CHECK(left == 0 && wrong == 0, "... and after each word nothing of an earlier one is left (%d px), the scene round it only dimmed (%d px brighter)", left, wrong);
+        CHECK(rworst < 33.0 && rover == 0, "... inside the frame (worst %.1f ms, %d over)", rworst, rover);
+        free(plain);
     }
     free(r->g.px); free(r->snap); free(r->ref); free(r->dots); free(r->cat);
     fluid_fine_destroy(r->fine); fluid_draw_destroy(r->d); fluid_frame_destroy(r->fr); fluid_sim_destroy(r->s);

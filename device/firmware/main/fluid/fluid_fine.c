@@ -56,11 +56,6 @@ static inline uint16_t pack565(float r, float g, float b) {
               B = b >= 255.f ? 255 : b <= 0.f ? 0 : (int)(b + 0.5f);
     return (uint16_t)((R & 0xF8) << 8 | (G & 0xFC) << 3 | B >> 3);
 }
-/* a big-endian rgb565 pixel's channels, 0..255 */
-static inline void rgb_of(uint16_t be, int *r, int *g, int *b) {
-    const uint16_t le = (uint16_t)(be >> 8 | be << 8);
-    *r = (le >> 11) * 255 / 31; *g = (le >> 5 & 63) * 255 / 63; *b = (le & 31) * 255 / 31;
-}
 /* the stable identity of what a speck shows where: the same speck at the same place and level hashes the same in
  * any set (a new set changes only the cells whose dust changed) */
 static inline uint32_t mix(uint32_t a, uint32_t b) {
@@ -544,29 +539,33 @@ static bool caption_box(const fluid_shape_t *sh, int n, float b[4]) {
 
 /* the word before as specks: its pixels covered 0.3 or more (GRAIN of them), each to scatter from its centre */
 static void break_up(fluid_fine_t *f, int pal) {
+    /* Straight from each letter's 5 x 7 bits (no letter is drawn again for it: on the device that raster and a root,
+     * an angle and three divisions a pixel were ~15 ms a word, a frame late at every word): the pixels of its lit
+     * bits, FINE_GRAIN of the inner ones (a drawn letter's edge is soft: about half of a bit's square is lit enough
+     * to have counted), each in the letter's colour, leaving along the way out from the word's middle. */
     const int S = f->S;
-    int16_t bx[FLUID_MAX_LETTERS][4];
-    for (int q = 0; q < f->ncap; q++) fluid_shape_box(&f->cap[q], 0, 0, bx[q]);
     const float cx = (f->pbox[0] + f->pbox[1]) * 0.5f, cy = (f->pbox[2] + f->pbox[3]) * 0.5f;
-    int x0 = (int)floorf(f->pbox[0]) - 1, x1 = (int)ceilf(f->pbox[1]) + 1, y0 = (int)floorf(f->pbox[2]) - 1, y1 = (int)ceilf(f->pbox[3]) + 1;
-    x0 = x0 < 0 ? 0 : x0; y0 = y0 < 0 ? 0 : y0; x1 = x1 > S ? S : x1; y1 = y1 > S ? S : y1;
     f->np = 0;
-    for (int y = y0; y < y1; y++) {
-        memset(f->rowbuf + x0, 0, sizeof(uint16_t) * (size_t)(x1 - x0));
-        fluid_shapes_row(f->cap, f->ncap, (const int16_t (*)[4])bx, 0, 0, pal, NULL, 0.f, f->rowbuf, 0, y, x0, x1);
-        for (int x = x0; x < x1 && f->np < FINE_PARTICLES; x++) {
-            if (!f->rowbuf[x]) continue;
-            int r, g, b;
-            rgb_of(f->rowbuf[x], &r, &g, &b);
-            const int m = r > g ? (r > b ? r : b) : (g > b ? g : b);
-            const float a = m / 255.f, h = hash_u(x, y, 5);
-            if (a < 0.3f || h >= FINE_GRAIN) continue;
-            const float ang = fluid_atan2(y - cy, x - cx) + (hash_u(x, y, 6) - 0.5f) * 2.2f;
-            const int p = f->np++;
-            f->px0[p] = (int16_t)x; f->py0[p] = (int16_t)y;
-            f->pc[p] = pack565(r * 255.f / m, g * 255.f / m, b * 255.f / m);
-            f->pa[p] = (uint8_t)(a * 255.f + 0.5f); f->pg[p] = (uint8_t)(h * 255.f);
-            f->pang[p] = (uint8_t)((int)floorf(ang * (256.f / 6.2831853f) + 0.5f) & 255);
+    for (int q = 0; q < f->ncap; q++) {
+        const fluid_shape_t *sh = &f->cap[q];
+        if (sh->k != FLUID_SHAPE_CHAR || !sh->mask || sh->mw < 1 || sh->mh < 1) continue;
+        const uint16_t col = fluid_shape_565(sh, pal);
+        if (!col) continue;
+        const float bw = sh->w / sh->mw, bh = sh->h / sh->mh, x0 = sh->x - sh->w * 0.5f, y0 = sh->y - sh->h * 0.5f;
+        for (int r = 0; r < sh->mh; r++) for (int c = 0; c < sh->mw; c++) {
+            if (!(sh->mask[r] >> (sh->mw - 1 - c) & 1)) continue;
+            const int xa = (int)(x0 + c * bw + 0.5f), xb = (int)(x0 + (c + 1) * bw + 0.5f), ya = (int)(y0 + r * bh + 0.5f), yb = (int)(y0 + (r + 1) * bh + 0.5f);
+            const int base = (int)((fluid_atan2((ya + yb) * 0.5f - cy, (xa + xb) * 0.5f - cx) + 6.2831853f) * (256.f / 6.2831853f));
+            for (int y = ya; y < yb; y++) for (int x = xa; x < xb && f->np < FINE_PARTICLES; x++) {
+                if (x < 1 || y < 1 || x >= S - 1 || y >= S - 1) continue;
+                uint32_t h = (uint32_t)x * 0x27d4eb2du ^ (uint32_t)y * 0x165667b1u ^ 5u * 0x9e3779b1u;
+                h ^= h >> 15; h *= 0x85ebca6bu; h ^= h >> 13;
+                if ((h & 0xFFFFu) >= (uint32_t)(FINE_GRAIN * 0.5f * 65536.f)) continue;
+                const int p = f->np++;
+                f->px0[p] = (int16_t)x; f->py0[p] = (int16_t)y;
+                f->pc[p] = col; f->pa[p] = 255; f->pg[p] = (uint8_t)(h >> 16);
+                f->pang[p] = (uint8_t)(base + (((int)(h >> 24) - 128) * 90 >> 8));   /* +- 2.2 / 2 rad round the way out */
+            }
         }
     }
 }

@@ -332,8 +332,9 @@ static fluid_fine_t  *s_fine;
 static uint8_t       *s_still, *s_still_d;
 static fluid_shape_t *s_fshp;
 #define FINE_BUILD_US 6000                          /* the dust's build, at most this a frame (the sim's core) ...  */
-#define FINE_AHEAD_US 20000                         /* ... and while its scene is not on the glass yet (the drawer has
-                                                     * nothing to draw: the memory the build moves is not missed)  */
+#define FINE_AHEAD_US 12000                         /* ... and while its scene is still coming (a change of picture).
+                                                     * (It was 20000: a step of the build runs past its budget by
+                                                     * up to ~9 ms, and the sim's frame then ran past 33.) */
 static unsigned s_cap_word, s_dcap_word;            /* the caption's word: a new number each word, 0 none */
 static float    s_cap_box[4];                       /* its backdrop for the whole reading: the union of its words' boxes */
 static bool     s_cap_box_on;
@@ -361,6 +362,8 @@ static unsigned   s_spot_gen = 0;                   /* the player's gen it was c
 static float      s_spot_t = 0.f;                   /* the scene's clock, for spots' on / off */
 static atomic_uint s_spot_req;                      /* a tap on a spot: gen << 8 | item + 1, 0 none; MOLE_SPOT_BACK */
 static bool       s_spot_back;                      /* the scene on screen was opened by a tap: a tap beside its spots goes back */
+static _Atomic uint32_t s_tap_at;                   /* ... where the finger was, panel px: x << 16 | y (the change of picture it asks for shows there first) */
+static bool       s_focus;                          /* ... and that tap asked for one (scene_open, scene_back): told to the drawer at the handoff */
 static unsigned   s_tapped;                         /* the last spot tapped, its id and the layout it opens: kept apart from */
 static char       s_tapped_id[PKG_STR_MAX + 1], s_tapped_open[PKG_KEY_MAX + 1];   /* its scene, which the tap may replace */
 static mole_scene_evt_t s_scene_evt;                /* the screen changed on the device itself (mole_fluid_scene_event), s_mutex */
@@ -766,7 +769,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     {   /* a tapped spot: its reading, word by word, until the voice or another state takes over */
         const unsigned spot = atomic_exchange(&s_spot_req, 0);
         if (spot == MOLE_SPOT_BACK) {                      /* a tap beside an opened layout's spots: back under it */
-            if (s_cur == ST_SCENE && scene_back(&s_sp)) { s_rd_on = false; scene_event("back", NULL); }
+            if (s_cur == ST_SCENE && scene_back(&s_sp)) { s_rd_on = false; s_focus = true; scene_event("back", NULL); }
         } else if (spot && s_cur == ST_SCENE && s_sp.cur && spot >> 8 == SPOT_GEN(s_sp.gen) && (int)(spot & 255) <= s_sp.cur->nitems) {
             const int n = (int)(spot & 255) - 1;
             const char *err = NULL;
@@ -775,6 +778,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
                 char id[PKG_STR_MAX + 1];
                 snprintf(id, sizeof(id), "%.*s", (int)s_sp.cur->items[n].nsid, s_sp.cur->say + s_sp.cur->items[n].sid);
                 scene_open(&s_sp, up, n);
+                s_focus = true;
                 s_rd_on = false;
                 scene_event("open", id);
             } else {
@@ -921,7 +925,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
             }
             /* ... in what the frame's fill left of its budget (a frame that repainted its items builds nothing) */
             const int mph = fluid_draw_morphing(s_draw);   /* (the scene is not on the glass yet: the drawer has room) */
-            const bool ahead = s_hd.out || s_hd.dust >= 1.f || mph == FLUID_MORPH_LOOSEN || mph == FLUID_MORPH_LOOSE;
+            const bool ahead = s_hd.out || s_hd.dust >= 1.f || (mph && !s_draw->m.closing);
             const int left = (ahead ? FINE_AHEAD_US : FINE_BUILD_US) - (int)(esp_timer_get_time() - fill_t0);
             const bool was = s_fine->levels_ok, built = s_fine->build >= 0;
             if (left > 500) fluid_fine_work(s_fine, left);
@@ -1352,20 +1356,22 @@ static void draw_task(void *arg) {
              * cells + send (its two parts), which frame that was (@), in which phase (ph: 1 loosening, 2 loose, 3
              * gathering) doing what (st: FLUID_MORPH_ST_* bits, in hex; fill: its part of the new drawing's cache, ms);
              * its frames over 33 ms; each phase's own worst frame (p1, p2, p3); the pixels a frame it was fitted to */
-            static uint32_t n, worst, worst_c, worst_s, worst_n, worst_ph, worst_st, worst_fill, slow, px_lo, px_hi, pw[4], pc[4];
-            static int64_t began;
+            static uint32_t n, worst, worst_c, worst_s, worst_n, worst_ph, worst_st, worst_fill, slow, px_lo, px_hi, pw[4], pc[4], gap;
+            static int64_t began, last_t0;
             const int ph = s_draw ? fluid_draw_morphing(s_draw) : 0;
             if (ph) {
                 const uint32_t c = (uint32_t)(t1 - t0), sn = (uint32_t)(t2 - t1), px = (uint32_t)s_draw->m.px;
-                if (!n++) { began = t0; worst = slow = 0; px_lo = px_hi = px; memset(pw, 0, sizeof(pw)); memset(pc, 0, sizeof(pc)); }
+                if (!n++) { began = t0; worst = slow = gap = 0; px_lo = px_hi = px; memset(pw, 0, sizeof(pw)); memset(pc, 0, sizeof(pc)); }
+                else if ((uint32_t)(t0 - last_t0) > gap) gap = (uint32_t)(t0 - last_t0);   /* (frame to frame: the sim's part shows here) */
+                last_t0 = t0;
                 if (c + sn > worst) { worst = c + sn; worst_c = c; worst_s = sn; worst_n = n; worst_ph = (uint32_t)ph; worst_st = s_draw->m.stage; worst_fill = (uint32_t)s_draw->m.fill_us; }
                 if (c + sn > pw[ph & 3]) { pw[ph & 3] = c + sn; pc[ph & 3] = c; }
                 slow += c + sn > 33000;
                 px_lo = px < px_lo ? px : px_lo; px_hi = px > px_hi ? px : px_hi;
             } else if (n) {
-                mole_diag_event(false, "morph %dms n=%u worst=%.1f(%.1f+%.1f)@%u ph=%u st=%02x fill=%.1f over=%u p1=%.1f(%.1f) p2=%.1f(%.1f) p3=%.1f(%.1f) px=%u..%u",
+                mole_diag_event(false, "morph %dms n=%u worst=%.1f(%.1f+%.1f)@%u ph=%u st=%02x fill=%.1f over=%u gap=%.1f p1=%.1f(%.1f) p2=%.1f(%.1f) p3=%.1f(%.1f) px=%u..%u",
                                 (int)((t0 - began) / 1000), (unsigned)n, worst / 1000.f, worst_c / 1000.f, worst_s / 1000.f, (unsigned)worst_n, (unsigned)worst_ph,
-                                (unsigned)worst_st, worst_fill / 1000.f, (unsigned)slow, pw[1] / 1000.f, pc[1] / 1000.f, pw[2] / 1000.f, pc[2] / 1000.f,
+                                (unsigned)worst_st, worst_fill / 1000.f, (unsigned)slow, gap / 1000.f, pw[1] / 1000.f, pc[1] / 1000.f, pw[2] / 1000.f, pc[2] / 1000.f,
                                 pw[3] / 1000.f, pc[3] / 1000.f, (unsigned)px_lo, (unsigned)px_hi);
                 n = 0;
             }
@@ -1373,21 +1379,23 @@ static void draw_task(void *arg) {
         {   /* the fine dust's own cost on this core, every ~3 s while a scene shows it (/api/log): the means, the worst
              * frame's cells + send (and its two parts), frames over 33 ms, the windows and pixels a frame, the specks
              * worked out a frame, the least quota (fluid_draw_pace) */
-            static uint32_t cells_us, send_us, worst_us, worst_c, worst_s, wins, kpx, slow, quota_min = 99999;
+            static uint32_t cells_us, send_us, worst_us, worst_c, worst_s, worst_f, worst_px, wins, kpx, slow, quota_min = 99999, pf0;
             fluid_fine_t *ff = s_dopts.fine;
             if (ff) {
-                const uint32_t c = (uint32_t)(t1 - t0), sn = (uint32_t)(t2 - t1);
+                const uint32_t c = (uint32_t)(t1 - t0), sn = (uint32_t)(t2 - t1), fr = ff->prof_frame - pf0;   /* (fr: the dust's own part of the cells) */
+                pf0 = ff->prof_frame;
                 cells_us += c; send_us += sn; wins += (uint32_t)s_send_n; kpx += (uint32_t)s_send_px;
-                if (c + sn > worst_us) { worst_us = c + sn; worst_c = c; worst_s = sn; }
+                if (c + sn > worst_us) { worst_us = c + sn; worst_c = c; worst_s = sn; worst_f = fr; worst_px = (uint32_t)s_send_px; }
                 slow += c + sn > 33000;
                 if (s_draw && (uint32_t)s_draw->quota < quota_min) quota_min = (uint32_t)s_draw->quota;
                 if (ff->prof_n >= 100) {
                     const float n = (float)ff->prof_n;
-                    mole_diag_event(false, "fine f=%.1f r=%.1f c=%.1f s=%.1f worst=%.1f(%.1f+%.1f) over=%u win=%.0f kpx=%.1f ev=%.0f quota=%u sp=%d n=%u",
+                    /* (wf, wkpx: the worst frame's dust part of its cells, ms, and the pixels it sent) */
+                    mole_diag_event(false, "fine f=%.1f r=%.1f c=%.1f s=%.1f worst=%.1f(%.1f+%.1f) wf=%.1f wkpx=%.1f over=%u win=%.0f kpx=%.1f ev=%.0f quota=%u sp=%d n=%u",
                                     ff->prof_frame / 1000.f / n, ff->prof_rect / 1000.f / n, cells_us / 1000.f / n, send_us / 1000.f / n,
-                                    worst_us / 1000.f, worst_c / 1000.f, worst_s / 1000.f, (unsigned)slow, wins / n, kpx / 1000.f / n,
+                                    worst_us / 1000.f, worst_c / 1000.f, worst_s / 1000.f, worst_f / 1000.f, worst_px / 1000.f, (unsigned)slow, wins / n, kpx / 1000.f / n,
                                     ff->prof_eval / n, (unsigned)quota_min, fluid_fine_specks(ff), (unsigned)ff->prof_n);
-                    ff->prof_frame = ff->prof_rect = ff->prof_n = ff->prof_eval = 0;
+                    ff->prof_frame = ff->prof_rect = ff->prof_n = ff->prof_eval = 0; pf0 = 0;
                     cells_us = send_us = worst_us = worst_c = worst_s = wins = kpx = slow = 0; quota_min = 99999;
                 }
             }
@@ -1612,12 +1620,18 @@ static void fluid_task(void *arg) {
             if (fd_bye_done(&s_dir)) atomic_store(&s_bye_done, true);
         }
         int64_t t2 = esp_timer_get_time();
-        /* The whole picture changing (a scene to a scene, the creature to a scene and back): the dust reshapes. The
-         * drawer keeps the old picture first, so its inputs stay as they are for those frames (the look made this frame
-         * waits); then it has the new look's, shown once that is whole (a scene's dust made). The panel's mirror holds
-         * the old picture: unused while the windows go on whole row pairs, as they do for both looks. */
+        /* The whole picture changing (a scene to a scene, the creature to a scene and back): the dust reshapes. A
+         * scene's glass is kept by the drawer as it draws (FLUID_LOOK_KEEP), so a change from one begins this frame;
+         * from the creature the drawer keeps the old picture first, and its inputs stay as they are for those frames
+         * (the look made this frame waits). The panel's mirror holds the picture: unused while the windows go on whole
+         * row pairs, as they do for both looks. */
         const bool fine_look = s_cur == ST_SCENE && s_sp.cur && s_fine && s_nshp >= 0 && s_hd.gen != 0;
-        const uint32_t look = fine_look ? 0x80000000u | s_sp.cur->serial : s_crisp ? 1u : 0u;
+        const uint32_t look = fine_look ? FLUID_LOOK_KEEP | s_sp.cur->serial : s_crisp ? 1u : 0u;
+        if (s_focus) {                                     /* a tap asked for it: it shows where the finger was first */
+            const uint32_t at = atomic_load(&s_tap_at);
+            fluid_draw_morph_focus(s_draw, (float)(at >> 16), (float)(at & 0xFFFFu));
+            s_focus = false;
+        }
         const bool hold = fluid_draw_morph_look(s_draw, look, molty_display_framebuffer(), !fine_look || fluid_fine_shown(s_fine, s_sp.cur->serial), s_tnow);
         if (!hold) {
             fluid_sim_snapshot(s_sim, s_frame, cfg.edge_mode == FLUID_EDGE_OFF);
@@ -1648,7 +1662,10 @@ static void fluid_task(void *arg) {
             if (s_fine) {   /* the fine dust: a set built since swaps in (the drawer is idle); none once no scene shows */
                 if (s_hd.gen && s_dnshp >= 0) {
                     if (s_cur == ST_SCENE && !s_hd.out) {      /* (a scene breaking up keeps the dust it showed) */
-                        fluid_fine_swap(s_fine, !fluid_draw_morphing(s_draw));   /* (a scene coming by a change of picture: no rise of its own) */
+                        /* a set built since swaps in: with the scene, in a change of picture (no rise of its own; one that
+                         * comes as the change's rows are being done waits for its end, and rises then) */
+                        const int mph = fluid_draw_morphing(s_draw);
+                        if (!(mph && s_draw->m.closing)) fluid_fine_swap(s_fine, !mph);
                         fluid_fine_caption_box(s_fine, s_cap_box_on ? s_cap_box : NULL);
                         fluid_fine_rim(s_fine, s_rg.on > 0.f);
                         memcpy(s_still_d, s_still, (size_t)s_sim->N); s_dcap_word = s_cap_word;
@@ -2450,7 +2467,7 @@ unsigned mole_fluid_spot_tap(int px, int py) {
         snprintf(s_tapped_open, sizeof(s_tapped_open), "%.*s", (int)it->nopen, s_spot_sc->say + it->open);
     }
     xSemaphoreGive(s_mutex);
-    if (spot) atomic_store(&s_spot_req, spot);
+    if (spot) { atomic_store(&s_tap_at, (uint32_t)px << 16 | ((uint32_t)py & 0xFFFFu)); atomic_store(&s_spot_req, spot); }
     return spot;
 }
 
