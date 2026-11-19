@@ -1,6 +1,7 @@
 // Screenshot + smoke check against a running preview (`pnpm build && pnpm preview`).
 // Writes apps/website/e2e-out/*.png and fails on: page errors, horizontal overflow at 390px,
-// or a hero screen that does not render / does not move.
+// a page fluid that does not render or move, a Molty screen that does not draw or move, a stage
+// whose buttons do not reach the cat, or a talk screen that does not ask and take an answer.
 //   node e2e/screens.mjs [baseUrl=http://localhost:4330]
 import { chromium } from 'playwright';
 import sharp from 'sharp';
@@ -50,6 +51,32 @@ const sampleFluid = (page, selector) =>
 
 const FIELD = '[data-fluid-field] pre';
 
+/** A Molty screen's canvas (the firmware's renderer draws into it): its lit pixels and a hash
+ *  of them, so two samples can be compared. */
+const sampleScreen = (page, selector) =>
+  page.evaluate((sel) => {
+    const c = document.querySelector(sel);
+    if (!c) return null;
+    const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    let lit = 0;
+    let hash = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      const v = d[i] + d[i + 1] + d[i + 2];
+      if (v > 120) lit++;
+      hash = (hash * 31 + v) | 0;
+    }
+    return { lit, hash };
+  }, selector);
+/** `selector`'s screen draws (`min` lit pixels) and moves within `ms`. */
+async function screenLives(page, selector, what, min = 1500, ms = 1500) {
+  const a = await sampleScreen(page, selector);
+  await page.waitForTimeout(ms);
+  const b = await sampleScreen(page, selector);
+  if (!a || a.lit < min) fail(`${what} not drawing (lit=${a?.lit})`);
+  else if (a.hash === b.hash) fail(`${what} did not move in ${ms} ms`);
+  else console.log(`ok   ${what} draws (${a.lit} px lit) and moves`);
+}
+
 /** Pixels the fluid actually paints: screenshot `selector`'s box with everything else on the
  *  page hidden, and count pixels that differ from the background (text alone can change while
  *  nothing shows: a hidden <pre>, an atlas that never loaded). */
@@ -80,7 +107,7 @@ const scrollToSection = (page, id) =>
 {
   const page = await open(1440, 900, '/');
   await page.waitForSelector('html[data-fluid="live"]', { timeout: 20000 });
-  await page.waitForTimeout(5000); // the wordmark has condensed, the first Molty has emerged
+  await page.waitForTimeout(6000); // the wordmark has condensed, the hero's screen has booted to the cat
   await page.screenshot({ path: OUT + 'landing-1440-hero-a.png' });
   const a = await sampleFluid(page, FIELD);
   await page.waitForTimeout(1000);
@@ -91,58 +118,37 @@ const scrollToSection = (page, id) =>
   const painted = await paintedPixels(page, '[data-fluid-field]');
   if (painted < 5000) fail(`page fluid paints nothing visible (${painted} px)`);
   else console.log(`ok   page fluid paints ${painted} px`);
-  if (!(await page.locator('html[data-fluid-moltys="live"]').count())) fail('Moltys never became ready (three.js rig / mesh target)');
+  if (!(await page.locator('html[data-fluid-moltys="live"]').count())) fail("the Moltys never came up (the firmware's renderer: molty.wasm, the cat's package)");
+  await screenLives(page, '[data-molty-screen]:has([data-device="arrive"]) canvas', "the hero's screen");
   await scrollToSection(page, 'moltys');
-  await page.getByRole('button', { name: 'frog' }).click();
-  const slot = await page.locator('[data-fluid-slot="gallery"]').getAttribute('data-fluid-molty');
-  if (slot !== 'cute-frog') fail(`gallery slot did not switch (data-fluid-molty=${slot})`);
-  else console.log('ok   gallery picker drives the fluid slot');
-  await page.waitForTimeout(4000);
+  await page.waitForTimeout(3000); // the device has turned in, its screen is on
+  await screenLives(page, '[data-stage="gallery"] canvas', "the stage's screen");
+  const eat = page.locator('#moltys ~ * button, section:has(#moltys) button').filter({ hasText: /^eat$/ }).first();
+  await eat.click();
+  await page.waitForTimeout(2500);
+  if ((await eat.getAttribute('aria-pressed')) !== 'true') fail('the stage did not take "eat" (the button is not pressed)');
+  else console.log('ok   the stage plays what is asked (eat)');
   await page.screenshot({ path: OUT + 'landing-1440-gallery.png' });
   {
-    await page.locator('[data-speed-reader]').scrollIntoViewIfNeeded();
-    await page.waitForTimeout(2500);
-    const r1 = await sampleFluid(page, '[data-speed-reader] pre');
-    await page.waitForTimeout(700);
-    const r2 = await sampleFluid(page, '[data-speed-reader] pre');
-    if (!r1 || r1.lit < 200) fail(`speed reader not rendering (lit=${r1?.lit})`);
-    else if (r1.hash === r2.hash) fail('speed reader did not move');
-    else console.log(`ok   speed reader renders (lit ${r1.lit}) and moves`);
-    const rp = await paintedPixels(page, '[data-speed-reader] pre');
-    if (rp < 300) fail(`speed reader paints nothing visible (${rp} px)`);
-    else console.log(`ok   speed reader paints ${rp} px`);
+    const reader = page.locator('[data-speed-reader]');
+    await reader.locator('canvas').scrollIntoViewIfNeeded();
+    await page.waitForTimeout(3500);
+    await screenLives(page, '[data-speed-reader] canvas', "the talk screen", 300, 900);
     await page.getByRole('button', { name: '600' }).click();
     await page.getByRole('button', { name: '[ type your own ]' }).click();
-    await page.getByLabel('Text for Molty to read').fill('hello from the test');
+    await page.getByLabel('Text for Molty to read').fill('hello from the test. ok?');
     await page.getByRole('button', { name: '[ read ]' }).click();
-    if (!(await page.getByText('“hello from the test”').count())) fail('speed reader did not take typed text');
-    else console.log('ok   speed reader takes wpm + typed text');
-    // the words themselves: the reader's real letters (its plain look) must spell the typed text
-    const seen = new Set();
-    for (let i = 0; i < 30; i++) {
-      const word = await page.evaluate(() =>
-        [...document.querySelectorAll('[data-speed-reader] [aria-hidden] span')]
-          // drawn letters only: a leaf, effectively visible, and not a clipped 1 px
-          // screen-reader text (the reader announces its word in one)
-          .filter((s) => {
-            const r = s.getBoundingClientRect();
-            return (
-              s.children.length === 0 &&
-              r.width > 2 &&
-              r.height > 2 &&
-              s.checkVisibility({ opacityProperty: true, visibilityProperty: true }) &&
-              Number(getComputedStyle(s).opacity) > 0.5
-            );
-          })
-          .map((s) => s.textContent)
-          .join(''),
-      );
-      if (word) seen.add(word);
-      await page.waitForTimeout(100);
-    }
-    const typed = ['hello', 'from', 'the', 'test'].filter((w) => [...seen].some((s) => s.includes(w)));
-    if (typed.length < 2) fail(`speed reader letters do not read the typed text (saw ${[...seen].join(' ') || 'nothing'})`);
-    else console.log(`ok   speed reader letters read the typed text (${typed.join(' ')})`);
+    if (!(await page.getByText('“hello from the test. ok?”').count())) fail('the talk screen did not take typed text');
+    else console.log('ok   the talk screen takes wpm + typed text');
+    // the device reads it, then asks on the rim; an answer comes back through the renderer
+    await reader.and(page.locator('[data-phase="listen"]')).waitFor({ timeout: 15000 }).catch(() => fail('the talk screen never asked'));
+    await page.waitForTimeout(2000); // the question has formed
+    await page.screenshot({ path: OUT + 'landing-1440-ask.png' });
+    await page.getByRole('group', { name: 'Answer Molty' }).getByRole('button', { name: 'yes' }).click();
+    await page.getByText('you tapped yes').waitFor({ timeout: 5000 }).then(
+      () => console.log('ok   the talk screen asks and takes an answer'),
+      () => fail('the answer did not come back from the screen'),
+    );
   }
   for (const id of ['talk', 'bridge', 'boards']) {
     await scrollToSection(page, id);
@@ -160,6 +166,27 @@ const scrollToSection = (page, id) =>
   await page.waitForTimeout(5000);
   await page.screenshot({ path: OUT + 'landing-390-hero.png' });
   await overflow(page, 'landing @390');
+  await page.close();
+}
+
+// Showcase
+{
+  const page = await open(1440, 900, '/showcase/');
+  await page.waitForSelector('html[data-fluid-moltys="live"]', { timeout: 20000 });
+  await page.waitForTimeout(3000);
+  await screenLives(page, '[data-stage="showcase"] canvas', "the showcase's screen");
+  await page.getByRole('button', { name: 'chart' }).click();
+  await page.waitForTimeout(5000);
+  await page.screenshot({ path: OUT + 'showcase-1440-chart.png' });
+  await overflow(page, 'showcase @1440');
+  await page.close();
+}
+{
+  const page = await open(390, 844, '/showcase/');
+  await page.waitForSelector('html[data-fluid-moltys="live"]', { timeout: 20000 });
+  await page.waitForTimeout(3000);
+  await page.screenshot({ path: OUT + 'showcase-390.png' });
+  await overflow(page, 'showcase @390');
   await page.close();
 }
 
