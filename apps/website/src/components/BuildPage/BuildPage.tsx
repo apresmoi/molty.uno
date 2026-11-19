@@ -3,7 +3,6 @@ import { AMAZON_DISCLOSURE, shopLink } from "../../config/affiliate.mjs";
 import { REPO_URL } from "../../config/site.mjs";
 import type { CommunityBoard } from "../../features/build/boards";
 import {
-  BUILD_INK,
   PORTING_HREF,
   SUBMIT_HREF,
   intro,
@@ -13,6 +12,7 @@ import {
   waitlistCopy,
   type PartLink,
 } from "../../features/build/content";
+import { WordHeading } from "../WordHeading";
 import styles from "./BuildPage.module.css";
 
 function Out({ link }: { link: PartLink }) {
@@ -29,28 +29,26 @@ function Out({ link }: { link: PartLink }) {
 
 /** /build/: will my board work, the reference build's parts, community builds (from every
  *  board.json), and the waitlist (the `waitlist` island). Static apart from the waitlist;
- *  the heading is drawn by the page fluid behind it. */
+ *  the heading is a word the device's renderer draws. */
 export function BuildPage({
   fluid,
+  word,
   waitlist,
   boards,
 }: {
   fluid: ReactNode;
+  word: ReactNode;
   waitlist: ReactNode;
   boards: CommunityBoard[];
 }) {
   return (
-    <div className={styles.root}>
+    <div className={styles.root} data-water="">
       {fluid}
 
       <section className={styles.hero} aria-labelledby="build">
-        <h1 id="build" className={styles.word} data-fluid-word="" data-fluid-color={BUILD_INK} data-fluid-delay="0.3">
-          build
-        </h1>
-        <p className={styles.lede} data-fluid-quiet="">
-          {intro}
-        </p>
-        <nav className={styles.links} aria-label="On this page" data-fluid-quiet="">
+        <WordHeading as="h1" id="build" text="build" word={word} className={styles.word} />
+        <p className={styles.lede}>{intro}</p>
+        <nav className={styles.links} aria-label="On this page">
           <a href="#fit">[ will my board work? ]</a>
           <a href="#parts">[ parts ]</a>
           <a href="#community">[ community builds ]</a>
@@ -58,7 +56,7 @@ export function BuildPage({
         </nav>
       </section>
 
-      <section className={styles.section} aria-labelledby="fit" data-fluid-quiet="">
+      <section className={styles.section} aria-labelledby="fit">
         <div className={styles.box}>
           <h2 id="fit" className={styles.title}>
             will my board work?
@@ -92,7 +90,7 @@ export function BuildPage({
         </div>
       </section>
 
-      <section className={styles.section} aria-labelledby="parts" data-fluid-quiet="">
+      <section className={styles.section} aria-labelledby="parts">
         <h2 id="parts" className={styles.title}>
           reference build
         </h2>
@@ -145,7 +143,7 @@ export function BuildPage({
         <p className={styles.disclosure}>{AMAZON_DISCLOSURE}</p>
       </section>
 
-      <section className={styles.section} aria-labelledby="community" data-fluid-quiet="">
+      <section className={styles.section} aria-labelledby="community">
         <h2 id="community" className={styles.title}>
           community builds
         </h2>
@@ -196,7 +194,7 @@ export function BuildPage({
         </ul>
       </section>
 
-      <section className={styles.section} aria-labelledby="waitlist" data-fluid-quiet="">
+      <section className={styles.section} aria-labelledby="waitlist">
         <div className={styles.box}>
           <h2 id="waitlist" className={styles.title}>
             {waitlistCopy.title}

@@ -50,3 +50,26 @@
     opacity: 0;
   }
 }
+/* the entrance: the water beside the screen, where the cat walks in from. The same renderer's
+   picture through a window to the left (MoltyScreen shifts it), only while the screen is live,
+   soft at its edge so it lies on the page's dust; gone once the cat sits */
+.outside {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  opacity: 0;
+  transition: opacity 0.5s;
+  pointer-events: none;
+  mask-image: radial-gradient(circle closest-side, var(--m-bg) 45%, transparent 92%);
+}
+.root[data-screen="live"] .outside {
+  opacity: 1;
+}
+.root .outside[data-gone] {
+  opacity: 0;
+}
+:global(:root[data-theme="light"]) .outside {
+  filter: invert(1) hue-rotate(180deg);
+}

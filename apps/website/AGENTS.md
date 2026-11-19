@@ -38,13 +38,20 @@ Never deploy or publish from here; nothing in this package does.
 - `src/components/Name/Name.tsx` is the component; `index.ts` has explicit named exports.
   Import another component through its barrel. Components are React; `.astro` lives only in
   pages, layouts and `src/integrations/{astro,starlight}/` adapters.
-- `src/services/molty-stage/` is the only owner of the page fluid. `pageFluid.ts` glues one
-  `@glyphcss/fluid` fluid (`glue: "document"`, one `<pre>`, the sim in a Vite-bundled Worker from
-  `@glyphcss/fluid/worker?worker`) to the page and reads its targets from the DOM:
-  `data-fluid-word` (a heading that condenses while on screen; `data-fluid-color`,
-  `data-fluid-delay`), `data-fluid-quiet` / `data-fluid-pool` (zones). `FluidField` mounts it;
-  nothing else imports `glyphcss` or `@glyphcss/*`. 30 fps, ≤ 176 columns;
-  `prefers-reduced-motion` draws settled stills. No Molty lives in it.
+- The page's water is two things. Its calm dust is a background tile (`--m-dust`,
+  `src/assets/dust/{dark,light}.png`, `pnpm dust-tile`): there at first paint, no script.
+  `src/services/page-water/` draws the wave a tap sends through it (one canvas fixed to the
+  viewport, drawn only while a wave is out; `PageWater` mounts it on the page's `[data-water]`).
+  This is the one page-side piece of the look: the firmware's renderer draws a round panel, at
+  most 511 px across in high definition, so it cannot be the page's field. Its numbers are the
+  firmware's (`src/config/water.mjs`: the dust's density, level and colour from `fluid_fine.h`,
+  its threshold `fluid_fine.c`'s noise, the wave's speed and decay from `fluid_sim.c`) and
+  `scripts/tests/water.test.ts` fails when they differ. A tap inside a screen starts the page's
+  wave at the same point at that screen's own speed: one ring, across the rim.
+- Headings are words the firmware draws: `src/config/words.mjs` holds the letters as lines and
+  arcs, `pnpm words` writes them as a scenes package (`src/assets/molty/words.json`), `MoltyWord`
+  plays a word's layout on a 504 px round window (thin lines, the dust along them), `WordHeading`
+  sizes the heading to it. A word runs while near the viewport and is put away when far.
 - `src/services/molty-screen/` is the only owner of the firmware's renderer. `core.ts` is the
   module's loader and calls (no DOM: the fidelity check drives it under Node), `screen.ts` runs
   one instance on a canvas (the display's frames, at most 60 a second, only in view and with the
@@ -53,30 +60,32 @@ Never deploy or publish from here; nothing in this package does.
   `state` is `POST /api/creature/state`'s body, `ask` the link's question, `scene` scene.play.
   `MoltyScreen` (canvas + still + `Device`) mounts it; `features/molty/` holds the cat, the lists
   read from its package and the side screens' programs; `hooks/useMoltyStage` plays actions on
-  one. Each screen is its own instance (~6 MB).
-- The page must read without the engine: headings keep their DOM text (transparent only
-  under `html[data-fluid="live"]`), a Molty screen shows its still until it draws
-  (`[data-molty-screen][data-live]`).
-- The first paint is the intro's start state: a fluid page (`fluid` on its layout) gets
+  one. Each screen is its own instance (~6 MB). The hero's cat walks in (`enter`): the same
+  renderer twice for those seconds, the second looking to the side (the water beside the glass).
+- The page must read without the engine: a heading keeps its DOM text (it steps aside only once
+  its word draws, `[data-word="live"]`), a Molty screen shows its still.
+- A device is one thing: nothing of its screen shows until its frame stands in place
+  (`[data-molty-screen][data-screen]`: `off` while the device is away or turning, then `dark`,
+  then `live`; `still` without the renderer or with reduced motion). `pnpm in-place` samples
+  every frame for it.
+- The first paint is the intro's start state: a page with the water (`fluid` on its layout) gets
   `data-fluid` / `data-fluid-moltys="pending"` from an inline script in `Head.astro` before
   paint, and CSS keeps the headings' text, the stills and arriving devices unseen until
-  FluidField (`data-fluid`: `loading` → `live`, or `off`) and the first screen
-  (`data-fluid-moltys`: `live`, or `off` when the module cannot load) move them on. A device
-  turns in first, then its screen powers on (the hero: the device's boot screen, then the cat).
-  Never show something settled that the intro then hides. No JS: never set, all shows at rest;
-  no script taking over: `static` after 8 s. Reduced motion: shown at once.
+  `PageWater` (`data-fluid`: `live`) and the first screen (`data-fluid-moltys`: `live`, or `off`
+  when the module cannot load) move them on. Never show something settled that the intro then
+  hides. No JS: never set, all shows at rest; no script taking over: `static` after 8 s.
+  Reduced motion: shown at once, stills only, no waves, no entrance.
 - `src/features/<feature>/` holds copy and data (`home/content.ts`, `molty/actions.ts`).
   `src/hooks/` holds reusable React hooks. Features, services, hooks and config never import
   components.
 
 ## Styling
 
-- `src/styles/tokens.css` is the only place for colours, fonts, sizes: black glass, dim braille,
+- `src/styles/tokens.css` is the only place for colours, fonts, sizes: black glass, fine dust,
   monospace. The only UI colour is the wordmark green; every other colour comes from a Molty's
-  palette. Dark and light: light inverts the fluid layer (`--m-fluid-filter`,
-  a plain `invert(1)`) into ink on paper, handing the page's own fluid colours over
-  pre-inverted (`molty-stage/paper.ts`: hue kept, ≥ 3:1); a device's screen is its own canvas,
-  a dark panel in both themes, so a Molty looks the same in both. Light text tokens hold AA (`scripts/tests/light-theme`).
+  palette. Dark and light: on paper the dust is ink (its own tile) and the words'
+  windows are inverted with their hue kept; a device's screen is its own canvas, a dark panel in
+  both themes, so a Molty looks the same in both. Light text tokens hold AA (`scripts/tests/light-theme`).
   `ThemeToggle` shares Starlight's `starlight-theme` key.
 - Components own CSS Modules. `global.css` imports tokens, base and layout only. Starlight's
   chrome is mapped in `src/integrations/starlight/starlight.css`.
@@ -86,19 +95,24 @@ Never deploy or publish from here; nothing in this package does.
 ## Verification
 
 - `pnpm check` — architecture rules (`scripts/checks/architecture.mjs`: owners, barrels,
-  layers, the fluid / renderer / packages import boundaries, single repo URL, colour/font
+  layers, the renderer / packages import boundaries, single repo URL, colour/font
   tokens, cycles) + prettier (`pnpm format` fixes). No baselines or exemptions.
 - `pnpm test` includes `molty.test.ts`: the committed module is the one its manifest
   describes, its sources have not changed since, it still draws the frames `make web-molty`
   checked against the native build, the still is one of its frames.
 - `pnpm build && pnpm preview`, then `pnpm screens` (`e2e/screens.mjs`): screenshots to
-  `e2e-out/` (gitignored), fails on page errors, 390px overflow, a page fluid (its `<pre>`)
-  that does not render or move, a Molty screen that does not draw or move, a stage whose buttons
+  `e2e-out/` (gitignored), fails on page errors, 390px overflow, a page with no dust, a title
+  the renderer does not draw, a tap that sends no wave, a Molty screen that does not draw or move, a stage whose buttons
   do not reach the cat, or a talk screen that does not ask and take an answer. Look at the
   screenshots.
 - `pnpm molty` (`e2e/molty.mjs`, preview running): the hero and the moltys section at 1280 and
-  390 px, dark and light; a walk and a tap frame by frame; the frames a screen draws a second
-  (fails under 30), none out of view, one still with reduced motion.
+  390 px, dark and light; the cat's entrance and a tap's ring crossing the rim, frame by frame;
+  the frames a screen draws a second at 1280 and 390 px, as is and with the CPU slowed 4x (fails
+  under 30); nothing drawn out of view; stills only with reduced motion.
+- `pnpm in-place` (`e2e/in-place.mjs`, preview running): on a cold cache, slow and fast, at 1280
+  and 390 px, every frame of the load, a scroll through every section and a theme switch: a
+  screen shows only inside its device at rest, never moves, never goes away.
+- `pnpm fullpage` (`e2e/fullpage.mjs`): the whole landing, 1280 and 390 px, dark and light.
 - `pnpm first-load` (`e2e/first-load.mjs`, preview running): samples every frame of the landing's
   first load on a slow network + CPU and fails if the hero is shown and then hidden, the device
   is not monotonic, CLS > 0.01, the renderer or the cat load before the first paint, or reduced

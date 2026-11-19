@@ -1,12 +1,14 @@
-/* The showcase is one stage over the live fluid (FluidField, fixed behind): the heading is
-   drawn BY the fluid (transparent text once it is live), the cat lives on the big screen. */
+/* The showcase is one stage over the page's water (its dust a background tile, a tap's wave on
+   PageWater, fixed behind): the heading is a word the device's renderer draws (MoltyWord; its
+   text steps aside once the word draws), the cat lives on the big screen. */
 .root {
   position: relative;
+  background: var(--m-bg) var(--m-dust) repeat 0 0;
   font: var(--m-text-md) / 1.6 var(--m-font-mono);
   user-select: none;
   -webkit-user-select: none;
   /* a device's bezel reaches a little past its screen (and turns in wider): never a sideways
-     scroll for it (clip, not hidden: no scroll container, the fixed fluid is not clipped) */
+     scroll for it (clip, not hidden: no scroll container, the fixed water layer is not clipped) */
   overflow-x: clip;
 }
 .root > section,
@@ -38,31 +40,9 @@
 }
 
 .word {
+  --word-canvas: min(560px, 100vw - 2 * var(--m-gutter));
   grid-area: head;
-  width: fit-content;
-  max-width: 100%;
   margin: 0 0 var(--m-space-4);
-  color: var(--m-ink);
-  font-family: var(--m-font-mono);
-  font-size: var(--m-text-page);
-  font-weight: 700;
-  line-height: 1;
-  letter-spacing: -0.03em;
-  white-space: nowrap;
-}
-:global(html[data-fluid="live"]) .word {
-  color: transparent;
-}
-/* the intro's start state (Head sets it before the first paint, FluidField moves it on): a
-   heading the fluid is about to draw is not shown first, so it never shows and then vanishes.
-   No JS, an engine that cannot run, or reduced motion: the DOM text shows */
-@media (prefers-reduced-motion: no-preference) {
-  :global(html:is([data-fluid="pending"], [data-fluid="loading"])) .word {
-    color: transparent;
-  }
-}
-.word::selection {
-  color: var(--m-ink);
 }
 .text {
   grid-area: text;

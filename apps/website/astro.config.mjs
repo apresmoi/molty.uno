@@ -31,8 +31,6 @@ export default defineConfig({
       ],
     },
     server: { fs: { allow: ['../..'] } },
-    // the fluid worker lazy-loads glyphcss's atlas payloads: workers must be ES modules
-    worker: { format: 'es' },
     // The module, the packages and the still ship as real files (cacheable), not data URIs.
     build: { assetsInlineLimit: 0 },
   },

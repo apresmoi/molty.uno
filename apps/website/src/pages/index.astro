@@ -1,7 +1,8 @@
 ---
 import ContentLayout from "../layouts/ContentLayout.astro";
 import { HomePage } from "../components/HomePage";
-import { FluidField } from "../components/FluidField";
+import { PageWater } from "../components/PageWater";
+import { MoltyWord } from "../components/MoltyWord";
 import { MoltyActs } from "../components/MoltyActs";
 import { CopyMessage } from "../components/CopyMessage";
 import { SpeedReader } from "../components/SpeedReader";
@@ -18,11 +19,16 @@ const rest = (cat as unknown as CreaturePackage).creature.about.moods.idle ?? ""
 <ContentLayout title={title} description={description} path="/" fluid>
   <script slot="head" type="application/ld+json" set:html={JSON.stringify(ldJson)} />
   <HomePage>
-    <FluidField slot="fluid" client:load />
+    <PageWater slot="fluid" client:load />
+    <MoltyWord slot="title" client:load word="molty-uno" />
+    <MoltyWord slot="wordTalk" client:idle word="talk" />
+    <MoltyWord slot="wordMoltys" client:idle word="moltys" />
+    <MoltyWord slot="wordBridge" client:idle word="bridge" />
+    <MoltyWord slot="wordBoards" client:idle word="bake" />
     <SpeedReader slot="reader" client:idle text={readerText} answers={readerAnswers} />
     <MoltyActs slot="picker" client:idle groups={groups} rest={rest} />
     <CopyMessage slot="message" client:visible text={pairingMessage} />
-    <MoltyScreen slot="heroDevice" client:load reveal="arrive" boot />
+    <MoltyScreen slot="heroDevice" client:load reveal="arrive" enter />
     <MoltyScreen slot="bridgeDevice" client:idle reveal="rise" play="pair" />
     <MoltyScreen slot="bakeDevice" client:idle reveal="coin" play="chart" />
   </HomePage>

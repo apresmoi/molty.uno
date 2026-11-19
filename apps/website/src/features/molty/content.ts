@@ -4,12 +4,18 @@
 import catUrl from "@packages/cat/cat.json?url";
 import scenesUrl from "@packages/astrology/astrology.json?url";
 import catStill from "../../assets/molty/cat.webp?url";
+import wordsUrl from "../../assets/molty/words.json?url";
 import type { Program } from "../../services/molty-screen";
 
 /** The creature every screen shows. */
 export const CAT = { id: "cat", url: catUrl };
 /** The scenes package (astrology): the chart, the globes. */
 export const SCENES_URL = scenesUrl;
+/** The page's words as a scenes package (config/words.mjs, scripts/words-package.mjs). */
+export const WORDS_URL = wordsUrl;
+/** A word's round window, px a side: the widest the renderer draws in high definition (its
+ *  fine dust keeps a speck's place in 9 bits: under 512). */
+export const WORD_PX = 504;
 /** One frame of the cat as the firmware's renderer draws it (scripts/molty-still.mjs): shown
  *  without JavaScript, before the screen is live, and when the module cannot load. */
 export const CAT_STILL = catStill;

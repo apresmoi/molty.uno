@@ -1,6 +1,7 @@
 // Screenshot + smoke check against a running preview (`pnpm build && pnpm preview`).
 // Writes apps/website/e2e-out/*.png and fails on: page errors, horizontal overflow at 390px,
-// a page fluid that does not render or move, a Molty screen that does not draw or move, a stage
+// a page with no dust, a title the renderer does not draw, a tap that sends no wave, a Molty
+// screen that does not draw or move, a stage
 // whose buttons do not reach the cat, or a talk screen that does not ask and take an answer.
 //   node e2e/screens.mjs [baseUrl=http://localhost:4330]
 import { chromium } from 'playwright';
@@ -33,24 +34,6 @@ async function overflow(page, label) {
   else console.log(`ok   ${label}: no horizontal overflow (${sw} ≤ ${cw})`);
 }
 
-/** Lit cells of a fluid (@glyphcss/fluid draws one <pre> of glyphs; U+2800 and spaces are
- *  blank), plus a hash of its text, so two samples can be compared. */
-const sampleFluid = (page, selector) =>
-  page.evaluate((sel) => {
-    const pre = document.querySelector(sel);
-    if (!pre) return null;
-    let lit = 0;
-    let hash = 0;
-    for (const ch of pre.textContent ?? '') {
-      const c = ch.codePointAt(0);
-      if (c !== 0x20 && c !== 0x2800 && c !== 0x0a) lit++;
-      hash = (hash * 31 + c) | 0;
-    }
-    return { lit, hash };
-  }, selector);
-
-const FIELD = '[data-fluid-field] pre';
-
 /** A Molty screen's canvas (the firmware's renderer draws into it): its lit pixels and a hash
  *  of them, so two samples can be compared. */
 const sampleScreen = (page, selector) =>
@@ -77,26 +60,6 @@ async function screenLives(page, selector, what, min = 1500, ms = 1500) {
   else console.log(`ok   ${what} draws (${a.lit} px lit) and moves`);
 }
 
-/** Pixels the fluid actually paints: screenshot `selector`'s box with everything else on the
- *  page hidden, and count pixels that differ from the background (text alone can change while
- *  nothing shows: a hidden <pre>, an atlas that never loaded). */
-async function paintedPixels(page, selector) {
-  // fade out everything that neither contains nor is inside the fluid; the fluid's own styles
-  // stay untouched, so a fluid hidden by the page still fails
-  await page.locator(selector).first().evaluate((el) => el.setAttribute('data-e2e-shot', ''));
-  const style = await page.addStyleTag({
-    content: `body *:not(:has([data-e2e-shot])):not([data-e2e-shot]):not([data-e2e-shot] *) { opacity: 0 !important; }`,
-  });
-  const shot = await page.locator('[data-e2e-shot]').screenshot();
-  await style.evaluate((el) => el.remove());
-  await page.locator('[data-e2e-shot]').evaluate((el) => el.removeAttribute('data-e2e-shot'));
-  const { data, info } = await sharp(shot).removeAlpha().raw().toBuffer({ resolveWithObject: true });
-  const bg = [data[0], data[1], data[2]];
-  let n = 0;
-  for (let i = 0; i < data.length; i += info.channels)
-    if (Math.abs(data[i] - bg[0]) + Math.abs(data[i + 1] - bg[1]) + Math.abs(data[i + 2] - bg[2]) > 60) n++;
-  return n;
-}
 const scrollToSection = (page, id) =>
   page.evaluate((id) => {
     const el = document.getElementById(id);
@@ -107,19 +70,30 @@ const scrollToSection = (page, id) =>
 {
   const page = await open(1440, 900, '/');
   await page.waitForSelector('html[data-fluid="live"]', { timeout: 20000 });
-  await page.waitForTimeout(6000); // the wordmark has condensed, the hero's screen has booted to the cat
+  await page.waitForTimeout(8000); // the wordmark is drawn, the cat has walked in and sat
   await page.screenshot({ path: OUT + 'landing-1440-hero-a.png' });
-  const a = await sampleFluid(page, FIELD);
-  await page.waitForTimeout(1000);
-  const b = await sampleFluid(page, FIELD);
-  if (!a || a.lit < 500) fail(`page fluid not rendering (lit=${a?.lit})`);
-  else if (a.hash === b.hash) fail('page fluid did not change in 1 s');
-  else console.log(`ok   page fluid renders (lit ${a.lit} → ${b.lit} cells) and moves (hash ${a.hash} ≠ ${b.hash})`);
-  const painted = await paintedPixels(page, '[data-fluid-field]');
-  if (painted < 5000) fail(`page fluid paints nothing visible (${painted} px)`);
-  else console.log(`ok   page fluid paints ${painted} px`);
+  // the page's water: its dust is the page's own background, the title a word the renderer draws,
+  // and a tap sends a wave through the page
+  const dust = await page.evaluate(() => getComputedStyle(document.querySelector('[data-water]')).backgroundImage);
+  if (!/dust|\.png/.test(dust)) fail(`the page has no dust (background-image: ${dust})`);
+  else console.log('ok   the page wears its dust');
+  await screenLives(page, 'section[aria-label="molty.UNO"] h1 canvas', "the title's word", 1200, 1500);
+  const lit = () =>
+    page.evaluate(() => {
+      const c = document.querySelector('[data-page-water]');
+      const d = c.width && c.height ? c.getContext('2d').getImageData(0, 0, c.width, c.height).data : [];
+      let n = 0;
+      for (let i = 3; i < d.length; i += 4) if (d[i]) n++;
+      return n;
+    });
+  const calm = await lit();
+  await page.mouse.click(300, 620);
+  await page.waitForTimeout(700);
+  const wave = await lit();
+  if (calm !== 0 || wave < 300) fail(`a tap sends no wave through the page (${calm} px lit before, ${wave} after)`);
+  else console.log(`ok   a tap sends a wave through the page (${wave} px lit)`);
   if (!(await page.locator('html[data-fluid-moltys="live"]').count())) fail("the Moltys never came up (the firmware's renderer: molty.wasm, the cat's package)");
-  await screenLives(page, '[data-molty-screen]:has([data-device="arrive"]) canvas', "the hero's screen");
+  await screenLives(page, '[data-molty-screen]:has([data-device="arrive"]) canvas:not([data-outside])', "the hero's screen");
   await scrollToSection(page, 'moltys');
   await page.waitForTimeout(3000); // the device has turned in, its screen is on
   await screenLives(page, '[data-stage="gallery"] canvas', "the stage's screen");

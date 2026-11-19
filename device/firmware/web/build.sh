@@ -21,13 +21,13 @@ OUT="${2:?out dir}"
 mkdir -p "$OUT"
 
 SRCS=(
-  "$HERE/web_molty.c" "$HERE/web_sdk.c"
+  "$HERE/web_molty.c" "$HERE/web_sdk.c"   # web_cat.c below is main/creature/creature_clip.c
   "$MAIN/fluid/fluid_director.c" "$MAIN/fluid/fluid_ask.c" "$MAIN/fluid/fluid_askview.c" "$MAIN/fluid/fluid_sim.c"
   "$MAIN/fluid/fluid_target.c" "$MAIN/fluid/fluid_draw.c" "$MAIN/fluid/fluid_fine.c" "$MAIN/fluid/glyph_rsvp.c"
   "$MAIN/fluid/glyph_font.c"
   "$MAIN/creature/cute_spec.c" "$MAIN/creature/cute_rig.c" "$MAIN/creature/mood_engine.c" "$MAIN/creature/rig_geo.c"
   "$MAIN/creature/creature_player.c" "$MAIN/creature/creature_body.c" "$MAIN/creature/creature_pkg.c"
-  "$MAIN/creature/creature_clip.c" "$MAIN/creature/creature_dots.c" "$MAIN/creature/creature_ring.c"
+  "$HERE/web_cat.c" "$MAIN/creature/creature_dots.c" "$MAIN/creature/creature_ring.c"
   "$MAIN/pkg/pkg_parse.c" "$MAIN/scene/scene_player.c" "$MAIN/link/link_protocol.c" "$MAIN/sense/gesture.c"
   "$IDF_JSON/cJSON.c"
 )

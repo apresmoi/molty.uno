@@ -13,8 +13,7 @@ import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { listing } from "../../../../tools/web-molty/fidelity.mjs";
 import { STILL, renderStill } from "../molty-still.mjs";
-import { CAT_INK } from "../../src/features/home/content.ts";
-import { SHOWCASE_INK } from "../../src/features/showcase/content.ts";
+import { WORDS } from "../../src/config/words.mjs";
 import { landingActions, sampleScene, showcaseActions, showcaseScenes, type CreaturePackage } from "../../src/features/molty/actions.ts";
 
 const ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
@@ -54,8 +53,7 @@ test("the still is a frame of the module (node scripts/molty-still.mjs)", async 
 });
 
 test("the cat's headings take its own body colour", () => {
-  assert.equal(CAT_INK, cat.creature.rig.palette.body);
-  assert.equal(SHOWCASE_INK, cat.creature.rig.palette.body);
+  for (const name of ["moltys", "showcase"]) assert.equal(WORDS.find((w) => w[0] === name)![2], cat.creature.rig.palette.body);
 });
 
 test("the stage's lists are the package's own: every mood, every gesture, its words for each", () => {
