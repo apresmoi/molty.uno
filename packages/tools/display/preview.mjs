@@ -85,6 +85,6 @@ export function preview(dir, port) {
     }
   });
   server.on('error', (e) => { console.error(`molty-display: ${e.code === 'EADDRINUSE' ? `port ${port} is taken: pass another with --port` : e.message}`); process.exit(1); });
-  server.listen(port, '127.0.0.1', () => console.log(`molty-display preview: http://127.0.0.1:${port}/  (Ctrl-C to stop)`));
+  server.listen(port, '127.0.0.1', () => console.log(`molty-display preview: http://127.0.0.1:${server.address().port}/  (Ctrl-C to stop)`));
   return server;
 }

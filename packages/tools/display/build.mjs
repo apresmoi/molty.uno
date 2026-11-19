@@ -53,7 +53,7 @@ export function check(dir) {
   const shape = (schema, node) => {
     for (const e of validate(schema, node, SCHEMA)) {
       const v = e.path.reduce((n, k) => n?.[k], node), label = e.path.reduce((s, k) => (typeof k === 'number' ? `${s}[${k}]` : s ? `${s}.${k}` : k), '');
-      bad(whereAt(node, e.path), v && typeof v === 'object' && '[object Object]' in v ? `${label} is a binding without quotes: write "{{ name }}"` : `${label || 'the file'} ${e.message}`);
+      bad(whereAt(node, 'key' in e ? [...e.path, e.key] : e.path), v && typeof v === 'object' && '[object Object]' in v ? `${label} is a binding without quotes: write "{{ name }}"` : `${label || 'the file'} ${e.message}`);
     }
   };
   shape(SCHEMA, doc);
@@ -72,7 +72,8 @@ export function check(dir) {
     const m = /^layout (\S+?)(?: item (\d+))?: (.*)$/.exec(p);
     bad(m ? (m[2] ? screens[m[1]].sources[+m[2]] : where(skill.screens[m[1]].def)) || `${skill.screens[m[1]].file}:1` : `${skill.file}:1`, `${m ? m[3] : p} (the device's own check of the built package)`);
   }
-  for (const [name, { def, file }] of Object.entries(skill.screens)) {
+  // the examples and the abouts, once the screens themselves hold
+  for (const [name, { def, file }] of errors.length ? [] : Object.entries(skill.screens)) {
     const inputs = def.inputs ?? {}, schema = inputSchema(pkg.id, name, def, files);
     for (const [n, d] of Object.entries(inputs)) {
       for (const [what, f] of [[`input ${n}`, d], ...Object.entries(fieldsOf(d)).map(([fn, fd]) => [`field ${fn} of ${n}`, fd])]) if (f.type === 'asset' && !sends(f, files).enum.length) bad(where(inputs, n), `${what}: no asset is in ${f.of ?? 'assets/'}`);
@@ -80,7 +81,7 @@ export function check(dir) {
     }
     const params = exampleParams(def);
     if (!params) warn(where(def, 'inputs') || `${file}:1`, `screen ${name}: give every input an example, and build/display.md shows a call that works`);
-    else if (!errors.length) try { bind(pkg, name, params); } catch (e) { if (!(e instanceof ParamError)) throw e; bad(where(def, 'inputs') || `${file}:1`, `screen ${name}: the device would refuse its examples: ${e.message}`); }
+    else try { bind(pkg, name, params); } catch (e) { if (!(e instanceof ParamError)) throw e; bad(where(def, 'inputs') || `${file}:1`, `screen ${name}: the device would refuse its examples: ${e.message}`); }
     for (const [node, key] of [[def, 'about'], ...Object.values(inputs).flatMap((d) => [[d, 'about'], ...Object.values(fieldsOf(d)).map((f) => [f, 'about'])])]) if (node[key] === 'TODO') warn(where(node, key), 'about is still TODO: say what it is in one sentence');
   }
   if (doc.package.about === 'TODO') warn(where(doc.package, 'about'), 'about is still TODO: say what the package adds in one line');
