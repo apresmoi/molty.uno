@@ -408,12 +408,18 @@ typedef struct {
                                         * wave left them in place, and its colour's bytes, as last looked at */
     uint32_t *csig;
     bool     crisp0;                   /* the last frame was crisp dots: those are what the cells show */
-    uint8_t  ilace;                    /* which half of the water-only cells updates this frame (0/1)   */
+    uint8_t  ilace;                    /* the frame's count: which rows' water-only cells update this frame (crisp
+                                        * dots: every other row; a scene on fine dust: every wm-th)        */
+    float    dust0;                    /* a scene on fine dust: the last frame's transition (opts.dust)      */
+    int      quota;                    /* a scene on fine dust: what a frame may spend drawing and sending what only the
+                                        * water and the light change, in FLUID_*_US units (fluid_draw_pace)  */
     int16_t  cap[4], cap0[4];          /* the subtitle's box in dots [x0, x1] x [y0, y1], last frame's */
     int16_t  sb[FLUID_MAX_SHAPES][4];  /* this frame's shapes' boxes, fb px [x0, x1) x [y0, y1) */
     int16_t  sb0[FLUID_MAX_SHAPES][4]; /* ...the last frame's, and each one's hash: a shape that  */
     uint32_t sh0[FLUID_MAX_SHAPES];    /* changes redraws the cells it covered and covers  */
     fluid_shape_t *shp0;               /* ...and the shapes themselves (a stroke redraws its own cells only) */
+    uint32_t *sh1;                     /* this frame's hashes (compared with sh0 as lists: some may come or go) */
+    fluid_shape_t *near;               /* scratch: the shapes that reach one cell of the drawing's cache      */
     uint16_t *hdc;                     /* a scene on fine dust: its drawing (but the caption) drawn once, fb_w x fb_h (PSRAM) .. */
     uint8_t  *hdcv;                    /* .. each cell's part of it valid (a changed shape's cells drawn again when shown) */
     int      nsh0;
@@ -511,6 +517,20 @@ static inline bool fluid_overlay_on(const fluid_overlay_t *ov) {
 }
 /** Mark the cells under ov for redraw by the next fluid_draw. */
 void fluid_draw_overlay_dirty(fluid_draw_t *d, const fluid_overlay_t *ov);
+/** A scene on fine dust keeps the frame. What a frame must send goes at once: the drawing's own changes (a tapped
+ *  spot growing, the caption). What only the water and the light change (the dust riding a wave, cells it breaks, the
+ *  light's front) goes on its row's turn, and only while the frame's estimated cost (FLUID_CELL_US a cell, FLUID_WIN_US
+ *  a window it opens) is under d->quota: the rest waits for a later frame, rows taking turns to go first. So a wave
+ *  under a growing drawing updates less often rather than the frame coming late. fluid_draw_pace, after each frame,
+ *  with how long the drawer was busy with it (cells and send, us; 0: not such a scene), fits the quota to the device. */
+#define FLUID_CELL_US       60          /* a cell drawn and sent                                              */
+#define FLUID_WIN_US        230         /* a window's commands                                                */
+#define FLUID_QUOTA_US      12000       /* the quota at first, and at most FLUID_QUOTA_MAX_US, at least _MIN_US */
+#define FLUID_QUOTA_MAX_US  16000
+#define FLUID_QUOTA_MIN_US  3000
+#define FLUID_PACE_OVER_US  28000       /* a frame busier than this: less quota                               */
+#define FLUID_PACE_UNDER_US 22000       /* ... than this: more                                                */
+void fluid_draw_pace(fluid_draw_t *d, int busy_us);
 /** Draw ov over the window t. Returns the pixels touched. */
 int  fluid_draw_overlay(const fluid_draw_t *d, const fluid_rect_t *t, int palette, const fluid_overlay_t *ov);
 

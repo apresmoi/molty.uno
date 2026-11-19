@@ -170,7 +170,8 @@ const layouts = {
       each('$bodies', { k: 'ticks', r: 0.66, len: 0.07, n: 1, a0: '@a', w: HAIR, color: GRID }),
       each('$bodies', { k: 'glyph', asset: '@g', size: 0.12, polar: ['@a', '@r'], color: '@c', group: '@id' }),
       each('$bodies', { k: 'spot', polar: ['@a', '@r'], r: 0.08, say: '@say', id: '@id' }),
-      each('$signs', { k: 'spot', polar: ['@a', 0.825], r: 0.07, say: '@say', id: '@id', grow: SIGN_GROW }),
+      // a sign is tappable over its whole 30 degree block of the zodiac ring (its glyph still what grows)
+      each('$signs', { k: 'spot', polar: ['@a', 0.825], r: 0.07, say: '@say', id: '@id', grow: SIGN_GROW, arc: 30, r0: 0.75, r1: 0.9 }),
       each('$aspects', { k: 'spot', pts: [['@x1', '@y1'], ['@x2', '@y2']], r: 0.05, say: '@say', id: '@id', lights: '@lights' }),
     ],
   },
@@ -225,6 +226,6 @@ const layouts = {
   'lunar-eclipse': { dur: 6, params: { path: list, umbra: num, pen: num, moon_r: num }, items: [{ k: 'ring', r: '$pen', color: DIM }, { k: 'ring', r: '$umbra', color: '#8a3a2a' }, { k: 'ball', each: '$path', x: '@x', y: '@y', on: '@on', off: '@off', r: '$moon_r', img: '@img' }] },
 };
 
-const pkg = { v: 'molty-pkg/1', id: 'astrology', name: 'Astrology', version: '1.5.0', kind: 'scenes', assets, layouts };
+const pkg = { v: 'molty-pkg/1', id: 'astrology', name: 'Astrology', version: '1.6.0', kind: 'scenes', assets, layouts };
 writeFileSync(OUT, JSON.stringify(pkg) + '\n');
 console.log(`astrology.json: ${Object.keys(assets).length} assets, ${Object.keys(layouts).length} layouts, ${Buffer.byteLength(JSON.stringify(pkg)) + 1} bytes`);

@@ -171,6 +171,27 @@ export function lit(items, tap) {
   });
 }
 
+/** The spot a tap at (x, y) (glass units, y up) lands on at t s, as the firmware's scene_spot_at: of the visible spots that
+ *  hold it (within r of the centre, or of the segment pts), the smallest, then the nearest; if none does, of those whose
+ *  sector holds it (arc degrees round the spot's own direction from the glass centre, radii r0..r1), the same. Or null. */
+export function spotAt(items, x, y, t = 0) {
+  let best = null, bd = 0, direct = false;
+  for (const s of items) {
+    if (s.k !== 'spot' || t < s.on || t >= s.off) continue;
+    let dx = x - s.x, dy = y - s.y;
+    if (s.pts?.length === 2) {
+      const [[ax, ay], [ex, ey]] = s.pts, vx = ex - ax, vy = ey - ay, l2 = vx * vx + vy * vy, u = l2 > 1e-9 ? Math.max(0, Math.min(1, ((x - ax) * vx + (y - ay) * vy) / l2)) : 0;
+      dx = x - ax - u * vx; dy = y - ay - u * vy;
+    }
+    const d = dx * dx + dy * dy, on = d <= s.r * s.r, r = Math.hypot(x, y);
+    const off = ((((Math.atan2(y, x) - Math.atan2(s.y, s.x)) / DEG + 540) % 360) + 360) % 360 - 180;
+    const sector = s.arc > 0 && r >= (s.r0 ?? 0) && r <= s.r1 && (s.arc >= 360 || Math.abs(off) <= s.arc / 2);
+    if (!on && (direct || !sector)) continue;
+    if (!best || (on && !direct) || s.r < best.r || (s.r === best.r && d < bd)) { best = s; bd = d; direct = on; }
+  }
+  return best;
+}
+
 /** The dots of `layout` at `t` seconds: Map(dot index -> rgb). Throws ParamError for bad params.
  *  kept (a Map): also the dots no high-definition shape draws (a ball's, an image's), as they show. tap: lit(). */
 export function frame(pkg, layout, params, t, kept = null, tap = '') {

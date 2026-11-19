@@ -29,8 +29,9 @@ export const ITEMS = {
   glyph: { ...POS, size: 'num', asset: 'asset', rot: 'num' },
   text: { ...POS, size: 'num', str: 'text' },
   // a place to tap, drawn by nothing: Molty shows `say` as the subtitle, the tap event names `id`; a disc, or
-  // within r of a segment (pts, two points); a tap lights its `lights` groups, grown `grow` times (default 1.25)
-  spot: { ...POS, r: 'num', say: 'say', id: 'text', pts: 'points', lights: 'lights', grow: 'num' },
+  // within r of a segment (pts, two points); a tap lights its `lights` groups, grown `grow` times (default 1.25); also
+  // tappable in a ring sector about the glass centre: `arc` degrees wide round the spot's own direction, radii r0 (0)..r1
+  spot: { ...POS, r: 'num', say: 'say', id: 'text', pts: 'points', lights: 'lights', grow: 'num', arc: 'num', r0: 'num', r1: 'num' },
 };
 const REQUIRED = { ring: ['r'], arc: ['r'], ticks: ['r'], line: ['pts'], curve: ['pts'], disc: ['r'], ball: ['r'], glyph: ['asset'], text: ['str'], spot: ['r', 'say'] };
 /** Defaults a missing field takes (the firmware's, docs/PACKAGES.md). A ball without img is shaded in its colour. */
@@ -40,8 +41,8 @@ const BINDS = { num: 'number', text: 'text', say: 'text', color: 'text', asset: 
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 /** The range each numeric field must lie in, literal or bound (the firmware's pkg_num_ok); angles otherwise. */
-const RANGE = { x: [-2, 2], y: [-2, 2], r: [0, 2], w: [0, 0.5], len: [-1, 1], n: [1, 120], size: [0, 2], lit: [0, 1], spin: [-720, 720], on: [0, 600], off: [0, 600], grow: [1, 3] };
-const inRange = (f, v) => { if (f === 'side') return v === -1 || v === 1; if (f === 'n' && !Number.isInteger(v)) return false; if (f === 'size' && v <= 0) return false; const [lo, hi] = RANGE[f] ?? [-720, 720]; return v >= lo && v <= hi; };
+const RANGE = { x: [-2, 2], y: [-2, 2], r: [0, 2], w: [0, 0.5], len: [-1, 1], n: [1, 120], size: [0, 2], lit: [0, 1], spin: [-720, 720], on: [0, 600], off: [0, 600], grow: [1, 3], arc: [0, 360], r0: [0, 2], r1: [0, 2] };
+const inRange = (f, v) => { if (f === 'side') return v === -1 || v === 1; if (f === 'n' && !Number.isInteger(v)) return false; if ((f === 'size' || f === 'arc') && v <= 0) return false; const [lo, hi] = RANGE[f] ?? [-720, 720]; return v >= lo && v <= hi; };
 const ref = (v) => (typeof v === 'string' && /^[$@][A-Za-z0-9_-]{1,24}$/.test(v) ? v : null);
 const isText = (v, max = LIMITS.text) => typeof v === 'string' && /^[\x20-\x7e]*$/.test(v) && v.length <= max && !/^[$@]/.test(v);
 
@@ -160,6 +161,7 @@ export function checkPackage(pkg, id) {
       }
       if ('polar' in it && ('x' in it || 'y' in it)) bad.push(`${where}: polar replaces x, y: give one or the other`);
       for (const f of REQUIRED[it.k]) if (!(f in it)) bad.push(`${where}: ${it.k} needs ${f}`);
+      if (('arc' in it) !== ('r1' in it) || ('r0' in it && !('arc' in it))) bad.push(`${where}: a sector is arc and r1 (and r0)`);
     });
     for (const p of Object.keys(params)) if (!used.has(p)) bad.push(`${at}: param ${p} is never read`);
   }

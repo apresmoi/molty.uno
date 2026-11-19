@@ -10,14 +10,22 @@
  *            symbol), colour the water's mixed toward the nearest drawn pixel's by e^(-d/3). Built once per drawing (per
  *            tapped spot) from its shapes at full growth, on the sim task a few ms a frame (fluid_fine_work), and kept: the
  *            calm drawing's set stays while a tap shows its own.
- *   light    each frame a light on the water (thin bright ridges where two slowly warping wave fronts cross) scales each
- *            speck's density, never its brightness: only the thin front of specks the bands' edges cross flips.
- *   water    a speck rides the wave in whole sub-dots (its cell's shift, as the dots refract): it moves only when the
- *            rounded shift does (the panel's cost), and never onto the drawing (a lit pixel keeps its own).
- *   caption  the reading's word sits on a dark backdrop (the specks thin to none round its box, a ragged edge that follows
- *            the grains); a new word forms in a dithered order (fluid_draw_opts_t.cap_unformed), the one before breaks into
- *            specks that scatter, ride the water and fade into it; the reading's last one slower and farther, the dark
- *            filling back in with it.
+ *   light    a light on the water (thin bright ridges where two slowly warping wave fronts cross) scales each speck's
+ *            density, never its brightness: only the thin front of specks the bands' edges cross flips. About two
+ *            thirds of the specks the light can never hide: a cell counts those once. The others are looked at a
+ *            quarter of the cell rows a frame (FINE_PHASES), in turn.
+ *   water    near a tapped spot's drawing or the caption (FINE_RIDE) a cell's dust rides the wave: all of it by the
+ *            cell's shift in whole sub-dots, inside the cell (what leaves one side comes in at the other), so a shift
+ *            costs no speck any work; never onto the drawing (a lit pixel keeps its own).
+ *   caption  the reading's words sit on a dark backdrop (the specks thin to none round its box, a ragged edge that
+ *            follows the grains; the drawing under it darker too). The box is the whole reading's (fluid_fine_caption_box),
+ *            so the dark holds still from word to word. A new word forms in a dithered order
+ *            (fluid_draw_opts_t.cap_unformed), the one before breaks into specks that scatter, ride the water and fade
+ *            into it; the reading's last one slower and farther, the dark going in a few steps with it.
+ *   budget   what a frame draws again is what changed (each cell a signature). The caption's own goes at once; the
+ *            light's and the water's on their rows' turns, within the frame's quota (fluid_draw_pace). A first set, and
+ *            a scene in a transition, come and go row by row behind a wavy line (fluid_fine_turn): no frame sends the
+ *            whole panel.
  * The drawer's part (fluid_fine_frame, fluid_fine_rect) is called by fluid_draw_cells / fluid_draw_rect when
  * fluid_draw_opts_t.fine is set; the sim task owns the build (fluid_fine_want, _work) and swaps a finished set in while
  * the drawer is idle (fluid_fine_swap). Plain C: built into the firmware and by the host tests.
@@ -62,7 +70,10 @@ extern "C" {
 #define FINE_END_S       0.7f           /* the reading's last word: slower ..                    */
 #define FINE_END_SPREAD  26.f           /* .. and farther                                        */
 #define FINE_GRAIN       0.7f           /* of a word's pixels, this many become specks           */
-#define FINE_RIDE        100.f          /* px: the dust rides the water this near a tapped drawing or the caption only */
+#define FINE_RIDE        64.f           /* px: the dust rides the water this near a tapped drawing or the caption only */
+#define FINE_CATCHUP     8000           /* specks worked out off their row's turn a frame, at most (a set swapped in) */
+#define FINE_REVEAL_SET_S 0.5f          /* a first set forms cell by cell over this              */
+#define FINE_DARK_STEPS  4              /* the backdrop fades out in this many steps (each works the cells by it out again) */
 
 typedef struct {
     uint32_t key;                       /* the drawing it was built from, 0 = empty              */
@@ -86,6 +97,7 @@ typedef struct fluid_fine {
     /* the build (sim task) */
     fluid_shape_t *shp;                 /* FLUID_MAX_SHAPES: the drawing at full growth          */
     int16_t (*box)[4];
+    int64_t build_t0; int build_us, build_calls;   /* the build's time, for the log */
     int nshp, nsym, pal, phase, row;   /* nsym: its symbols, copied after it (a symbol's surround is fainter) */
     uint32_t bkey;                      /* the drawing being built                               */
     uint16_t *dist, *src;               /* S x S: distance to the drawing (1/100 px), the nearest drawn pixel's
@@ -93,35 +105,39 @@ typedef struct fluid_fine {
     uint16_t *rowbuf;                   /* S: a raster row                                       */
     uint32_t *bpos; uint16_t *bcol; uint16_t *bcell; int bcap;   /* bcell: column x 2 + (the light can hide it) */   /* one cell row's specks, before they are sorted */
     /* the drawer's frame */
-    const fine_set_t *drawn;            /* the set the levels below are for                      */
-    uint8_t *lv;                        /* per speck: its level this frame (0 hidden .. 255)     */
-    int lvcap;
-    int8_t *sx, *sy;                    /* N: each cell's shift this frame, stage px             */
-    uint8_t ilace;                      /* which cell rows' shifts follow the water this frame   */
-    uint8_t *slow;                      /* N: how the cell's specks were last worked out: 0 calm, 1 one by one, 2 calm by the caption */
-    uint32_t *dsig;                     /* N: a calm cell's light-dependent specks' signature, last worked out */
-    uint32_t *bsig;                     /* N: by the caption, its others' (dimmed by the dark), worked out once a box */
-    uint32_t box_key;                   /* the box and dark bsig is for                          */
-    float dim[5];                       /* the drawing under the caption's backdrop: its box, how dark (fluid_shapes_row_dim) */
+    const fine_set_t *drawn;            /* the set drawn (its levels below), NULL none           */
+    uint8_t *lv, *lv2;                  /* per speck: its level (0 hidden .. 255); a spare for the next set */
+    int lvcap, lv2cap;
+    int8_t *sx, *sy;                    /* N: each cell's shift, stage px (its dust rides the water inside the cell) */
+    uint32_t *tot;                      /* N: the cell's own specks' signature, as last worked out */
+    uint32_t *stat;                     /* N: ... the part of those the light never hides         */
+    uint32_t *eff;                      /* N: what that part was worked out for (1 plain, else the backdrop's gen; 0 not yet) */
+    uint8_t *vis;                       /* N: the cell's dust shows this frame                    */
+    uint8_t *imm;                       /* N: its change goes to the panel at once (the caption's), not on its row's turn */
     uint8_t *ride;                      /* N: the dust rides the water there (near a tapped drawing or the caption) */
     uint32_t ride_key;                  /* what ride was worked out for                          */
-    int mx, my;                         /* the largest shift this frame, px (the windows' reach) */
     uint8_t lrow;                       /* which quarter of the light's grid rows, and of the cell rows' light-dependent
                                          * specks, is worked out this frame (FINE_PHASES)        */
-    bool lall;                          /* all of it next frame (a new set)                      */
-    uint32_t prof_frame, prof_rect, prof_n;   /* us spent (fluid_fine_frame, fluid_fine_rect) over prof_n frames */
+    bool lgrid_ok;                      /* the light's grid was worked out whole once             */
+    float reveal, last_t;               /* a first set forms cell by cell: 0..1; the last frame's time */
+    uint32_t gen;                       /* the caption's backdrop as the cells by it are worked out for (box, dark) */
+    float dim[5];                       /* the drawing under the caption's backdrop: its box, how dark (fluid_shapes_row_dim) */
+    uint32_t step_key;                  /* the forming word's step, last frame                    */
+    uint32_t prof_frame, prof_rect, prof_n, prof_eval;   /* us spent (fluid_fine_frame, fluid_fine_rect) and specks worked out over prof_n frames */
     uint32_t *sig, *sig0;               /* N: what each cell's dust is this frame, and as last drawn */
     uint8_t *lgrid;                     /* the light, its grid                                   */
     int lg;
     /* the caption: the word shown, the one breaking up */
     unsigned word;
     float word_t, prev_t, cbox[4], pbox[4];  /* the word's box, the one before's: [x0, x1, y0, y1] stage px */
+    float want_box[4], bbox[4];         /* the backdrop's box: as given (fluid_fine_caption_box; x1 < x0: each word's own), in use */
     bool end;                           /* the last word broke up (no word after it)             */
     fluid_shape_t cap[FLUID_MAX_LETTERS];
     int ncap;
     int np, npd;                        /* its specks; those drawn this frame (indices below)     */
     int16_t *px0, *py0; uint16_t *pc; uint8_t *pa, *pg, *pang;   /* home px, colour, alpha, hash, angle   */
     int16_t *ppx, *ppy; uint16_t *ppc;  /* this frame's (ppx < 0: none)                          */
+    int16_t pbb[4];                     /* ... and their box: x0, x1, y0, y1 (x1 < x0 none)       */
 } fluid_fine_t;
 
 /** The dust for a W x H grid on an fb_w x fb_h panel (its largest centred square: the stage). NULL: no memory. */
@@ -135,17 +151,28 @@ void fluid_fine_destroy(fluid_fine_t *f);
 void fluid_fine_want(fluid_fine_t *f, uint32_t key, bool keep, const fluid_shape_t *sh, int n, int palette);
 /** Advance the build for about budget_us (<= 0: to its end). True: a set waits for fluid_fine_swap. */
 bool fluid_fine_work(fluid_fine_t *f, int budget_us);
-/** With the drawer idle: the set waiting becomes the one drawn. */
+/** With the drawer idle: the set waiting becomes the one drawn. Cells whose specks are the same in both keep their
+ *  levels (nothing of theirs is drawn again); a first set forms cell by cell. */
 void fluid_fine_swap(fluid_fine_t *f);
+/** With the drawer idle: the caption's backdrop for the whole reading (stage px [x0, x1, y0, y1], the union of its
+ *  words' boxes), so the dark does not move with each word; NULL: each word's own box. */
+void fluid_fine_caption_box(fluid_fine_t *f, const float box[4]);
+/** How long the build wanted last took, us (0 while it runs or none), and in how many fluid_fine_work calls. */
+int fluid_fine_built(const fluid_fine_t *f, int *calls);
 /** No scene: every set and the build's buffers freed (the next want builds again). The drawer must be idle. */
 void fluid_fine_clear(fluid_fine_t *f);
 /** The specks of the set drawn (0 none). */
 static inline int fluid_fine_specks(const fluid_fine_t *f) { return f && f->live >= 0 ? f->set[f->live].n : 0; }
 
 /* ── the drawer (fluid_draw.c) ── */
-/** This frame's dust at o->time: each speck's level, each cell's shift and signature (f->sig: a cell whose
- *  signature changed is drawn again), the caption's backdrop and specks. */
-void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_opts_t *o);
+/** This frame's dust at o->time: each cell's signature (f->sig: a cell whose signature differs from f->sig0, as drawn,
+ *  is drawn again: at once where f->imm says, else on its row's turn), its specks' levels and its shift, the caption's
+ *  backdrop and specks. Cell rows j with (j + phase) % m == 0 follow the water this frame. */
+void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_opts_t *o, int phase, int m);
+/** When cell (i, j) of a scene on fine dust (H cell rows) is there in a transition: once its dust (1 gone .. 0 whole)
+ *  is under this. No scatter: the scene rises from the bottom behind a wavy water line, and drains from the top (the
+ *  cells that turn in a frame are a few runs along a few rows: few windows; turning all over, each would be one). */
+float fluid_fine_turn(int i, int j, int H);
 /** The dust over the window t (fb px), after the shapes and dots: on black (or a dim pixel), never on a lit one;
  *  all: every cell of t (a window), else only the dirty cells (a framebuffer kept). */
 void fluid_fine_rect(const fluid_fine_t *f, const uint8_t *dirty, const fluid_rect_t *t, bool all);

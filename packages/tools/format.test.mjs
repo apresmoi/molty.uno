@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { test } from 'node:test';
 import { ParamError, bind, checkPackage } from './format.mjs';
-import { frame, hd, lit, loadPackage, png } from './play.mjs';
+import { frame, hd, lit, loadPackage, png, spotAt } from './play.mjs';
 
 const ROOT = new URL('../../', import.meta.url).pathname;
 const base = () => ({
@@ -148,6 +148,22 @@ test('a spot may say how much it grows when tapped; a layout where its caption g
   for (const [k, v] of [['grow', 0.5], ['grow', 4]]) { const q = base(); q.layouts.one.items.push({ k: 'spot', r: 0.1, say: 'x', [k]: v }); assert.ok(checkPackage(q, 'demo').some((e) => e.includes('grow')), `grow ${v} refused`); }
   const q = base(); q.layouts.one.caption_y = 2;
   assert.ok(checkPackage(q, 'demo').some((e) => e.includes('caption_y')));
+});
+
+test('a spot may also be tapped over a ring sector; its own disc or segment still wins', () => {
+  const p = base();
+  p.layouts.one.items.push({ k: 'spot', polar: [90, 0.8], r: 0.05, say: 'north', id: 'n', arc: 30, r0: 0.7, r1: 0.9 },
+    { k: 'spot', polar: [120, 0.8], r: 0.05, say: 'next', id: 'x', arc: 30, r0: 0.7, r1: 0.9 }, { k: 'spot', polar: [100, 0.75], r: 0.06, say: 'inside', id: 'p' });
+  assert.deepEqual(checkPackage(p, 'demo'), []);
+  const items = bind(p, 'one', { r: 0.5, g: 'dot', marks: [] }), at = (deg, r) => spotAt(items, r * Math.cos((deg * Math.PI) / 180), r * Math.sin((deg * Math.PI) / 180))?.id;
+  assert.deepEqual([at(90, 0.8), at(76, 0.71), at(104, 0.89), at(76, 0.89), at(104.5, 0.71)], ['n', 'n', 'n', 'n', 'n'], 'its centre and corners');
+  assert.deepEqual([at(90, 0.69), at(90, 0.91), at(74, 0.8)], [undefined, undefined, undefined], 'just outside it');
+  assert.deepEqual([at(106, 0.8), at(100, 0.75), at(98, 0.72)], ['x', 'p', 'p'], 'the next wedge; a disc inside a wedge keeps the tap');
+  for (const bad of [{ arc: 30 }, { r1: 0.9 }, { r0: 0.1 }, { arc: 0, r1: 0.9 }, { arc: 30, r1: 3 }]) { const q = base(); q.layouts.one.items.push({ k: 'spot', r: 0.1, say: 'x', ...bad }); assert.ok(checkPackage(q, 'demo').length > 0, `${JSON.stringify(bad)} refused`); }
+  // the chart: every sign's whole 30 degree block of the zodiac ring
+  const chart = bind(loadPackage('astrology'), 'chart', JSON.parse(execFileSync(process.execPath, [`${ROOT}skills/molty-astro/scripts/astro.mjs`, 'chart', '--date', '2026-11-01', '--dry-run'], { encoding: 'utf8', env: { ...process.env, MOLTY_PKG_INDEX: `${ROOT}packages/index.json` } }).split('\n').find((l) => l.includes('"layout":"chart"'))).args.params);
+  const sign = (deg, r) => spotAt(chart, r * Math.cos((deg * Math.PI) / 180), r * Math.sin((deg * Math.PI) / 180))?.id;
+  assert.deepEqual([sign(345, 0.825), sign(331, 0.76), sign(359, 0.89), sign(1, 0.8), sign(345, 0.95)], ['virgo', 'virgo', 'virgo', 'libra', undefined]);
 });
 
 test('a spot: a place to tap with its reading, which may run past a text item', () => {

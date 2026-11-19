@@ -12,7 +12,8 @@ All go to `POST $MOLTY_RELAY/v1/devices/<device>/cmd` with `Authorization: Beare
    → `{"astrology": {name, version, kind, path, size, sha256}}`.
 2. **Installed?** `{"name":"pkg.list"}` → `{packages:[{id, version, …}]}`. Skip 3 when `astrology`
    is there at the index's version.
-3. **Install** (Molty asks its human with one tap; tell them first):
+3. **Install** (Molty asks its human "INSTALL ASTROLOGY?" with `install` and `not now` on the rim; tell them
+   first. After the tap a ring grows round the screen while Molty downloads the file, and flashes when it is in):
    `{"name":"pkg.install","args":{"id":"astrology","url":"https://raw.githubusercontent.com/apresmoi/molty.uno/main/<path>","sha256":"<sha256>","size":<size>,"name":"Astrology"},"wait":true}`
    → `{installed, version}`, or `202 {job, status:"pending"}`: poll `GET $MOLTY_RELAY/v1/jobs/<job>?wait_s=8`
    (about 2 min at most; errors `declined`, `pkg_timeout`, `hash_mismatch`, …).
@@ -52,7 +53,8 @@ Seven scenes: `globe` for the Moon, then Mercury, Venus, Mars, Jupiter; `saturn`
 
 The middle is empty: a reading's words show there (`caption_y` 0).
 Each body also carries `say` (its reading, at most 160 characters) and `id` (`sun` …). A tap on one shows its
-`say` and sends you a `tap` event with `"spot": "<id>"`. Readings (see `sky.mjs`): a body, "<Planet> in <Sign>:
+`say` and sends you a `tap` event with `"spot": "<id>"` (`sun`, `gemini`, `sun-moon`). What was tapped grows and
+stays sharp while its words show in the middle of the wheel, one at a time. A sign takes a tap anywhere in its 30 degree block of the zodiac ring. Readings (see `sky.mjs`): a body, "<Planet> in <Sign>:
 <what it does> <how the sign plays it>." plus its tightest aspect; a sign, its nature and ruler, then its planets
 or, when empty, where its ruler is.
 

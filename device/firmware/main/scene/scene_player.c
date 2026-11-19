@@ -129,7 +129,8 @@ static bool resolve(scene_t *sc, const bind_t *b, const pkg_item_t *it, const cJ
               num(b, &f[PF_LEN], el, PF_LEN, 0.1f, &o->len) && num(b, &f[PF_N], el, PF_N, 12.f, &n) &&
               num(b, &f[PF_SIZE], el, PF_SIZE, 0.12f, &o->size) && num(b, &f[PF_LIT], el, PF_LIT, 1.f, &o->lit) &&
               num(b, &f[PF_SIDE], el, PF_SIDE, 1.f, &o->side) && num(b, &f[PF_SPIN], el, PF_SPIN, 0.f, &o->spin) &&
-              num(b, &f[PF_ROT], el, PF_ROT, 0.f, &o->rot) && num(b, &f[PF_GROW], el, PF_GROW, PKG_GROW, &o->grow);
+              num(b, &f[PF_ROT], el, PF_ROT, 0.f, &o->rot) && num(b, &f[PF_GROW], el, PF_GROW, PKG_GROW, &o->grow) &&
+              num(b, &f[PF_ARC], el, PF_ARC, 0.f, &o->arc) && num(b, &f[PF_R0], el, PF_R0, 0.f, &o->r0) && num(b, &f[PF_R1], el, PF_R1, 0.f, &o->r1);
     if (!ok) return false;
     o->n = (int)n;
     if (it->polar) {
@@ -215,8 +216,19 @@ void scene_free(scene_t *sc) {
 
 float scene_end(const scene_t *sc) { return sc->dur > 0.f && sc->dur < sc->ttl ? sc->dur : sc->ttl; }
 
+/* is (x, y) in spot it's sector: within arc / 2 degrees of the spot's direction from the glass centre, r0..r1 out */
+static bool in_sector(const scene_item_t *it, float x, float y) {
+    const float d2 = x * x + y * y;
+    if (it->arc <= 0.f || d2 < it->r0 * it->r0 || d2 > it->r1 * it->r1) return false;
+    if (it->arc >= 360.f) return true;
+    float a = (fluid_atan2(y, x) - fluid_atan2(it->y, it->x)) / DEG;
+    a = fmodf(a + 540.f, 360.f) - 180.f;                /* -180..180 from its direction */
+    return fabsf(a) <= it->arc * 0.5f;
+}
+
 int scene_spot_at(const scene_t *sc, float t, float x, float y) {
     int best = -1;
+    bool direct = false;                                /* best holds it on its own disc or segment */
     float bd = 0.f;
     for (int n = 0; sc && n < sc->nitems; n++) {
         const scene_item_t *it = &sc->items[n];
@@ -229,7 +241,9 @@ int scene_spot_at(const scene_t *sc, float t, float x, float y) {
             dx = x - a[0] - u * vx; dy = y - a[1] - u * vy;
         }
         const float d = dx * dx + dy * dy;
-        if (d <= it->r * it->r && (best < 0 || it->r < sc->items[best].r || (it->r == sc->items[best].r && d < bd))) { best = n; bd = d; }
+        const bool on = d <= it->r * it->r;
+        if (!on && (direct || !in_sector(it, x, y))) continue;
+        if (best < 0 || (on && !direct) || it->r < sc->items[best].r || (it->r == sc->items[best].r && d < bd)) { best = n; bd = d; direct = on; }
     }
     return best;
 }
@@ -642,7 +656,7 @@ static void text(const ctx_t *c, const scene_t *sc, const scene_item_t *it, flui
 
 /* the subtitle: the reader's word (palette letters, the ORP in the accent on x = 0) at the
  * bottom, its type shrunk until its farthest corner is inside the glass */
-static void caption(const ctx_t *c, const scene_caption_t *cap, float y, fluid_letter_t *letters, int *nl) {
+static float caption_size(const scene_caption_t *cap, int *orp_out) {
     const int orp = cap->orp >= cap->n ? cap->n - 1 : cap->orp;
     const float reach = orp < 0 ? cap->n * 0.5f : fmaxf(orp + 0.5f, cap->n - orp - 0.5f);   /* in advances */
     float size = SCENE_CAPTION_SIZE;
@@ -651,6 +665,18 @@ static void caption(const ctx_t *c, const scene_caption_t *cap, float y, fluid_l
         if (e * e + yb * yb <= 0.95f * 0.95f || size < 0.04f) break;
         size *= 0.92f;
     }
+    *orp_out = orp;
+    return size;
+}
+void scene_caption_box(const scene_caption_t *cap, float y, int stage, float box[4]) {
+    int orp;
+    const float fs = caption_size(cap, &orp) * stage * 0.5f, adv = fs * 0.6f, lh = fs * 1.05f;   /* text_run's letter boxes */
+    box[0] = stage * 0.5f - (orp < 0 ? cap->n * 0.5f : orp + 0.5f) * adv; box[1] = box[0] + cap->n * adv;
+    box[2] = (1.f - y) * 0.5f * stage - lh * 0.5f; box[3] = box[2] + lh;
+}
+static void caption(const ctx_t *c, const scene_caption_t *cap, float y, fluid_letter_t *letters, int *nl) {
+    int orp;
+    const float size = caption_size(cap, &orp);
     const int n0 = c->hd && c->hd->n >= 0 ? c->hd->n : 0;
     text_run(c, cap->str, cap->n, 0.f, y, size, SCENE_CAPTION_RGB, 0, orp, letters, nl);
     for (int q = n0; c->hd && q < c->hd->n; q++) c->hd->shapes[q].tag = FLUID_TAG_CAPTION;   /* it forms from the fine dust */
@@ -788,9 +814,11 @@ void scene_grow_tick(scene_grow_t *g, bool reading, float dt) {
 
 void scene_grow_apply(const scene_grow_t *g, scene_t *sc) {
     if (!sc) return;
-    const float u = fminf(1.f, g->t / SCENE_GROW_IN_S), in = 1.f - (1.f - u) * (1.f - u) * (1.f - u);
+    /* in steps, SCENE_GROW_HZ a second (its drawing is drawn again at each) */
+    const float u = fminf(1.f, ceilf(g->t * SCENE_GROW_HZ - 0.01f) / (SCENE_GROW_HZ * SCENE_GROW_IN_S)), in = 1.f - (1.f - u) * (1.f - u) * (1.f - u);
+    const float out = ceilf(g->out * (SCENE_GROW_HZ * SCENE_GROW_OUT_S) - 0.01f) / (SCENE_GROW_HZ * SCENE_GROW_OUT_S);
     sc->focus = g->spot;
-    sc->glow = g->spot < 0 ? 0.f : in * fluid_smooth(0.f, 1.f, g->out);
+    sc->glow = g->spot < 0 ? 0.f : in * fluid_smooth(0.f, 1.f, fminf(1.f, out));
     sc->grow = 1.f + (scene_spot_grow(sc, g->spot) - 1.f) * sc->glow;
 }
 
@@ -882,7 +910,7 @@ static bool fill_cache_for(int N, int brows, int cw) {
 static uint32_t fill_key(const fluid_sim_t *s, const scene_t *sc, float t, float gq) {
     uint32_t h = (2166136261u ^ (sc ? sc->serial : 0)) * 16777619u;
     h = (h ^ (uint32_t)(uintptr_t)s ^ (uint32_t)(uintptr_t)s->mask) * 16777619u;
-    h = (h ^ (uint32_t)s->stage ^ (uint32_t)(sc ? sc->focus : -1) << 16 ^ (uint32_t)(gq * 4.f) << 28) * 16777619u;
+    h = (h ^ (uint32_t)s->stage ^ (uint32_t)(sc && gq > 0.f ? sc->focus : -1) << 16 ^ (uint32_t)(gq * 4.f) << 28) * 16777619u;
     for (int n = 0; sc && n < sc->nitems; n++) {
         const scene_item_t *it = &sc->items[n];
         const bool on = t >= it->on && !(it->off > 0.f && t >= it->off);
@@ -923,23 +951,7 @@ void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_
     }
     canvas_t *cv = &s_cv;
     const float soft = 1.f / cv->H;                           /* soft edge: half a dot row */
-    const float glow = sc ? sc->glow : 0.f, gq = glow >= 0.75f ? 1.f : glow >= 0.25f ? 0.5f : 0.f;
-    const uint32_t key = fill_key(s, sc, t, gq);
-    if (!key || key != s_fc.key) {
-        /* the items on the canvas, their dots following a growth halfway or whole */
-        const uint32_t bg = fluid_pack_rgba8(0.6f, 0.68f, 0.92f, 0.f);
-        for (int k = 0; k < cv->N; k++) { cv->T[k] = 0; cv->tcol[k] = bg; cv->mask[k] &= 1; }
-        const ctx_t c = { cv, soft, NULL, true };
-        s_fc.nl = 0;
-        paint_items(&c, sc, t, 1.f + (scene_spot_grow(sc, sc ? sc->focus : -1) - 1.f) * gq, gq, s_fc.letters, &s_fc.nl);
-        fold(cv, s->W, 0, s->H - 1, s_fc.T, s_fc.tcol, s_fc.dots, s_fc.keep);
-        for (int n = 0; n < s_fc.nl; n++) letter_dots(s, &s_fc.letters[n], s_fc.dots);
-        s_fc.key = key;
-    }
-    memcpy(s->T, s_fc.T, sizeof(int16_t) * (size_t)s->N);
-    memcpy(s->tcol, s_fc.tcol, sizeof(uint32_t) * (size_t)s->N);
-    if (dots) memcpy(dots, s_fc.dots, (size_t)s->N);
-    if (hd && hd->keep) memcpy(hd->keep, s_fc.keep, (size_t)s->N);
+    const float glow = sc ? sc->glow : 0.f;
     /* the shapes and letters, as they are now; the cells a tapped spot's drawing covers at full growth (once a tap) */
     if (hd && hd->still) {
         static uint32_t still_key;
@@ -969,6 +981,25 @@ void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_
     }
     const ctx_t c = { cv, soft, hd, false };
     paint_items(&c, sc, t, sc ? sc->grow : 1.f, glow, letters, nletters);
+    /* the items' dots follow a growth halfway and whole; not in high definition with its still cells, where the grown
+     * drawing never shows on the dots (the water never breaks it): a tap then repaints nothing here */
+    const float gq = hd && hd->still && hd->n >= 0 ? 0.f : glow >= 0.75f ? 1.f : glow >= 0.25f ? 0.5f : 0.f;
+    const uint32_t key = fill_key(s, sc, t, gq);
+    if (!key || key != s_fc.key) {
+        /* the items on the canvas, their dots following a growth halfway or whole */
+        const uint32_t bg = fluid_pack_rgba8(0.6f, 0.68f, 0.92f, 0.f);
+        for (int k = 0; k < cv->N; k++) { cv->T[k] = 0; cv->tcol[k] = bg; cv->mask[k] &= 1; }
+        const ctx_t c = { cv, soft, NULL, true };
+        s_fc.nl = 0;
+        paint_items(&c, sc, t, 1.f + (scene_spot_grow(sc, sc ? sc->focus : -1) - 1.f) * gq, gq, s_fc.letters, &s_fc.nl);
+        fold(cv, s->W, 0, s->H - 1, s_fc.T, s_fc.tcol, s_fc.dots, s_fc.keep);
+        for (int n = 0; n < s_fc.nl; n++) letter_dots(s, &s_fc.letters[n], s_fc.dots);
+        s_fc.key = key;
+    }
+    memcpy(s->T, s_fc.T, sizeof(int16_t) * (size_t)s->N);
+    memcpy(s->tcol, s_fc.tcol, sizeof(uint32_t) * (size_t)s->N);
+    if (dots) memcpy(dots, s_fc.dots, (size_t)s->N);
+    if (hd && hd->keep) memcpy(hd->keep, s_fc.keep, (size_t)s->N);
     if (cap && cap->n > 0) {
         /* the subtitle, over the drawing: painted on the canvas's band (then put back), its cells
          * folded again */
