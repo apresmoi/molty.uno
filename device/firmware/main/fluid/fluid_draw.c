@@ -1459,8 +1459,9 @@ static bool hdc_room(fluid_draw_t *d) {
     return d->hdc != NULL;
 }
 
-#define FLUID_MORPH_CELLS_US 13000      /* the new drawing made ahead of the front, nearest first: until a frame's cells
-                                         * have taken this in all (the front's annulus then takes ~16 ms to send) */
+#define FLUID_MORPH_CELLS_US 9000       /* the new drawing made ahead of the front, nearest first: until a frame's cells
+                                         * have taken this in all (none once they have: a change's first frame looks at
+                                         * every cell of the new look); a cell the front needs first is drawn then */
 
 /* The new drawing into its cache ahead of the front, the cells nearest the centre first (a cell the front reaches
  * before is drawn when its window needs it) */
@@ -1470,7 +1471,7 @@ static void morph_fill(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw
     const int64_t until = m->frame_us + FLUID_MORPH_CELLS_US;
     int ncache = o->nshapes < FLUID_MAX_SHAPES ? o->nshapes : FLUID_MAX_SHAPES;
     while (ncache > 0 && o->shapes[ncache - 1].tag == FLUID_TAG_CAPTION) ncache--;
-    for (int n = 0; m->fill < N && (n < 4 || (n & 3) || now_us() < until); m->fill++) {
+    for (int n = 0; m->fill < N && ((n & 3) || now_us() < until); m->fill++) {
         const int k = m->order[m->fill];
         if (!d->hdcv[k] && s->mask[k]) n += hdc_cell(d, o, k, ncache) ? 2 : 1;
     }
@@ -1715,6 +1716,7 @@ static int window(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid
     uint16_t *buf = sd->buf[sd->cur];
     const int w = x1 - x0;
     const fluid_rect_t t = { buf, w, x0, y, x1, y + h };
+    const int64_t t0 = now_us();
     const fluid_morph_t *m = &d->m;
     if (!m->on) {
         fluid_draw_rect(d, o, &t, true);
@@ -1728,7 +1730,9 @@ static int window(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid
     }
     fluid_draw_overlay(d, &t, o->palette, ov);
     fluid_draw_mark(d, &t, o->palette, mark);
+    const int64_t t1 = now_us();
     if (sd->send(sd->ctx, x0, y, w, h, buf) != 0) return -1;
+    if (d->m.on) { fluid_morph_t *mm = (fluid_morph_t *)&d->m; mm->cmp_us += (int)(t1 - t0); mm->push_us += (int)(now_us() - t1); }
     s_wins++;
     if (sd->buf[1]) sd->cur ^= 1;
     return w * h;
@@ -1830,7 +1834,7 @@ int fluid_draw_send2(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fl
     if (d->m.on && !full) {                             /* the picture changing: the front's annulus, in arc boxes */
         fluid_morph_t *m = (fluid_morph_t *)&d->m;
         const int nb = wave_boxes((fluid_draw_t *)d, max_px), n0 = s_wins;
-        m->band = 0;
+        m->band = 0; m->cmp_us = m->push_us = 0;
         for (int q = 0; q < nb; q++) {
             const int n = crisp_box(d, o, ov, mark, m->box[q][0], m->box[q][2], m->box[q][1], m->box[q][3], &sd);
             if (n < 0) return -1;
