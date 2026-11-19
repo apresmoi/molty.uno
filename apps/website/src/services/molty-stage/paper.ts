@@ -1,10 +1,9 @@
 // The light theme's paper. The page fluid is drawn as in the dark (light glyphs on black) and the
 // page inverts it (`--m-fluid-filter: invert(1)`), so a cell lit at strength k in colour c reads
-// as 1 - k·c on white: ink on paper. Plain invert(1) is its own exact inverse (no clipping), so a
-// device screen undoes it with the same filter (`--m-screen-filter`) and its Molty shows exactly
-// as in the dark theme. Invert also turns hues to their complement, so the colours the page
-// itself hands the fluid (the dim field, the headings) are handed over pre-inverted: what lands
-// on paper is the intended hue, darkened only as far as a 3:1 contrast on white needs.
+// as 1 - k·c on white: ink on paper. Invert also turns hues to their complement, so the colours
+// the page itself hands the fluid (the dim field, the headings) are handed over pre-inverted:
+// what lands on paper is the intended hue, darkened only as far as a 3:1 contrast on white needs.
+// (A device's screen is not in this fluid: it is its own canvas, dark in both themes.)
 
 type RGB = [number, number, number];
 

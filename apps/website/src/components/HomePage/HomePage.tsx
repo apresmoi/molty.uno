@@ -2,37 +2,31 @@ import type { ReactNode } from "react";
 import {
   WORDMARK,
   FLUID_INK,
-  HERO_MOLTYS,
-  BRIDGE_MOLTY,
-  BAKE_MOLTY,
+  CAT_INK,
+  BRIDGE_INK,
+  BAKE_INK,
   bridgeFlow,
   boards,
   PORTING_HREF,
 } from "../../features/home/content";
-import { MOLTYS } from "../../features/moltys/catalog";
 import { REPO_URL } from "../../config/site.mjs";
 import { MoltyMark } from "../MoltyMark";
 import styles from "./HomePage.module.css";
 
-const still = (id: string) => MOLTYS.find((m) => m.id === id)?.thumb;
-
 /** A heading the fluid draws: its text condenses out of the fluid while on screen. The DOM
  *  text stays (selectable, read aloud) and turns transparent once the fluid is live. */
-function Word({ id, children, color, tint }: { id?: string; children: string; color: string; tint?: string }) {
+function Word({ id, children, color }: { id?: string; children: string; color: string }) {
   return (
-    <h2 id={id} className={styles.word} data-fluid-word="" data-fluid-color={color} data-fluid-tint={tint}>
+    <h2 id={id} className={styles.word} data-fluid-word="" data-fluid-color={color}>
       {children}
     </h2>
   );
 }
 
-/** A square where one Molty emerges from the page fluid (still portrait until it can), inside
- *  its device (the island the page passes in). */
-function Slot({ molty, device, className }: { molty: string; device: ReactNode; className?: string }) {
-  const src = still(molty.split(",")[0]!);
+/** A square for a Molty device (the island the page passes in): decoration, to tap. */
+function Slot({ device }: { device: ReactNode }) {
   return (
-    <div className={`${styles.slot} ${className ?? ""}`} data-fluid-molty={molty} aria-hidden="true">
-      {src && <img className={styles.still} src={src} alt="" width={150} height={150} />}
+    <div className={styles.slot} aria-hidden="true">
       {device}
     </div>
   );
@@ -55,7 +49,7 @@ export function HomePage({
   reader: ReactNode;
   picker: ReactNode;
   message: ReactNode;
-  /** The devices around the three page slots (Device islands: they turn in on first sight). */
+  /** The three Molty devices (MoltyScreen islands: they turn in on first sight, then power on). */
   heroDevice: ReactNode;
   bridgeDevice: ReactNode;
   bakeDevice: ReactNode;
@@ -85,15 +79,7 @@ export function HomePage({
               </a>
             </Links>
           </div>
-          <div
-            className={styles.heroSlot}
-            data-fluid-molty={HERO_MOLTYS.join(",")}
-            data-fluid-every="12"
-            data-fluid-delay="0.5"
-            data-fluid-run-in={HERO_MOLTYS[0]}
-            aria-hidden="true"
-          >
-            <img className={styles.still} src={still(HERO_MOLTYS[0]!)} alt="" width={150} height={150} />
+          <div className={styles.heroSlot} aria-hidden="true">
             {heroDevice}
           </div>
         </div>
@@ -120,25 +106,22 @@ export function HomePage({
       </section>
 
       <section className={`${styles.section} ${styles.gallery}`} aria-labelledby="moltys">
-        <Word id="moltys" color={WORDMARK} tint="gallery">
+        <Word id="moltys" color={CAT_INK}>
           moltys
         </Word>
         <p className={styles.text} data-fluid-quiet="">
           <span className={styles.wide}>
-            A Molty is a ~1 KB <code>.molty</code> file the fluid grows a creature from. Same file, same creature, any
-            screen.
+            The first Molty is a cat. This is the device's own drawing code, running here. Tap the glass and it comes to
+            you. More creatures are coming.
           </span>
           <span className={styles.phone}>
-            A ~1 KB <code>.molty</code> file grows a creature. Same file, any screen.
+            The first Molty is a cat, drawn by the device's own code. Tap the glass. More creatures are coming.
           </span>
         </p>
         {picker}
         <Links>
-          <a href="/showcase/">[ all moltys &amp; actions → ]</a>
-          <a href="/moltys/making-your-own/">[ make your own → ]</a>
-          <a className={styles.wide} href="/moltys/format/">
-            [ the .molty format → ]
-          </a>
+          <a href="/showcase/">[ everything it does → ]</a>
+          <a href="/moltys/creature-packages/">[ creature packages → ]</a>
           <a className={styles.wide} href="/moltys/packages/">
             [ packages &amp; scenes → ]
           </a>
@@ -147,7 +130,7 @@ export function HomePage({
 
       <section className={`${styles.section} ${styles.split} ${styles.flip}`} aria-labelledby="bridge">
         <div className={styles.copy}>
-          <Word id="bridge" color={BRIDGE_MOLTY.color}>
+          <Word id="bridge" color={BRIDGE_INK}>
             bridge
           </Word>
           <p className={styles.text} data-fluid-quiet="">
@@ -175,12 +158,12 @@ export function HomePage({
             </a>
           </Links>
         </div>
-        <Slot molty={BRIDGE_MOLTY.id} device={bridgeDevice} />
+        <Slot device={bridgeDevice} />
       </section>
 
       <section className={`${styles.section} ${styles.split}`} aria-labelledby="boards">
         <div className={styles.copy}>
-          <Word id="boards" color={BAKE_MOLTY.color}>
+          <Word id="boards" color={BAKE_INK}>
             bake
           </Word>
           <p className={styles.text} data-fluid-quiet="">
@@ -215,7 +198,7 @@ export function HomePage({
             </a>
           </Links>
         </div>
-        <Slot molty={BAKE_MOLTY.id} device={bakeDevice} />
+        <Slot device={bakeDevice} />
       </section>
 
       <footer className={styles.footer}>

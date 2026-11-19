@@ -171,7 +171,7 @@
 .gallery :global(astro-island) {
   display: contents;
 }
-.gallery [data-fluid-slot="gallery"] {
+.gallery [data-stage="gallery"] {
   grid-column: 2;
   grid-row: 1 / span 4;
 }
@@ -186,27 +186,6 @@
   max-width: min(540px, 80svh);
   justify-self: center;
 }
-.still {
-  position: absolute;
-  inset: 12%;
-  width: 76%;
-  height: 76%;
-  object-fit: contain;
-  /* under the device's screen, which inverts its backdrop in the light theme */
-  filter: var(--m-still-filter);
-  transition: opacity 0.4s;
-}
-:global(html[data-fluid-moltys="live"]) .still {
-  opacity: 0;
-}
-/* the intro's start state (Head, before the first paint): the Molty is about to emerge here, so
-   its still is not shown first (no JS, no rig, or reduced motion: it shows) */
-@media (prefers-reduced-motion: no-preference) {
-  :global(html[data-fluid-moltys="pending"]) .still {
-    opacity: 0;
-  }
-}
-
 /* 01: a patch where the fluid runs denser, to touch */
 
 /* 03 */
@@ -293,7 +272,7 @@
     grid-column: 1;
     grid-row: auto;
   }
-  .gallery [data-fluid-slot="gallery"] {
+  .gallery [data-stage="gallery"] {
     grid-column: 1;
     grid-row: auto;
   }
@@ -416,7 +395,7 @@
      screen, so it stops short of the gutters */
   .section .slot,
   .reading [data-reader-glass],
-  .gallery [data-fluid-slot="gallery"] {
+  .gallery [data-stage="gallery"] {
     flex: 1 1 0;
     align-self: center;
     width: auto;
