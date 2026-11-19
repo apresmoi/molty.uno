@@ -18,7 +18,7 @@ export function parse(text, file) {
       const n = open.pop();
       n.value = st.result;
       open.at(-1)?.kids.push(n);
-      if (st.result === null || typeof st.result !== 'object') return;
+      if (st.result === null || typeof st.result !== 'object' || ORIGIN.has(st.result)) return;   // a node closes once more as its wrapper
       const at = {};
       if (st.kind === 'mapping') for (let i = 0; i + 1 < n.kids.length; i += 2) at[n.kids[i].value] = n.kids[i].line;
       else n.kids.forEach((k, i) => { at[i] = k.line; });

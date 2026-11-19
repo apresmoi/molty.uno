@@ -86,17 +86,19 @@ export function check(dir) {
 
   const loops = new Set([...Object.values(rest), ...Object.values(moods)]), baked = new Map();
   for (const a of body.actions) baked.set(a.name, bakeAction(nodes, a, fps, loops.has(a.name)));
-  // which pose an action starts and ends in: the one whose resting action starts nearest (the root's place left out)
+  // which pose an action starts and ends in: what it says, what its name says (<a>_to_<b>), else the pose whose resting
+  // action starts nearest to how it looks (the root's place left out)
   const far = (p, q) => { let d = 0; for (let n = 0; n < nodes.length; n++) { const o = n * 10; if (n) for (let c = 0; c < 3; c++) d += (p[o + c] - q[o + c]) ** 2; let dot = 0; for (let c = 3; c < 7; c++) dot += p[o + c] * q[o + c]; d += 1 - dot * dot; } return d; };
   const nearest = (pose) => poses.reduce((best, p) => (far(pose, baked.get(rest[p]).first) < far(pose, baked.get(rest[best]).first) ? p : best));
   const ends = new Map(body.actions.map((a) => {
     const b = baked.get(a.name), given = [a.from, a.to].filter(Boolean).find((p) => !poses.includes(p));
     if (given) bad(here, `${file}: action ${a.name} says pose ${given}, which poses does not list (poses: ${list(poses)})`);
-    return [a.name, [a.from ?? nearest(b.first), a.to ?? (loops.has(a.name) ? a.from ?? nearest(b.first) : nearest(b.last))]];
+    const [, na, nb] = /^(.+)_to_(.+)$/.exec(a.name) ?? [], named = poses.includes(na) && poses.includes(nb) ? [na, nb] : [], from = a.from ?? named[0] ?? nearest(b.first);
+    return [a.name, [from, a.to ?? named[1] ?? (loops.has(a.name) ? from : nearest(b.last))]];
   }));
   // a mood's own way in from a pose: <pose>_<mood>
   const enter = {};
-  for (const [m, a] of Object.entries(moods)) for (const p of poses) if (actions.has(`${p}_${m}`)) (enter[a] ??= {})[p] = `${p}_${m}`;
+  for (const [m, a] of Object.entries(moods)) for (const p of poses) if (actions.has(`${p}_${m}`) && rest[p] !== `${p}_${m}`) (enter[a] ??= {})[p] = `${p}_${m}`;
   // the way from one pose to another: <a>_to_<b>, or the one action that goes that way and that nothing else plays
   const taken = new Set([...Object.values(rest), ...Object.values(moods), ...Object.values(gestures), ...Object.values(enter).flatMap((e) => Object.values(e))]), edges = {};
   for (const a of poses) for (const b of poses) {

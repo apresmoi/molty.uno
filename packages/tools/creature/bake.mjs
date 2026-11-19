@@ -2,8 +2,8 @@
 // A Molty's actions into the clips the device plays (docs/CREATURES.md section 12): each action is read
 // once a frame, then every bone's move, turn and scale keeps only the keys it needs to stay within a
 // tolerance of every frame, and the keys are packed as small integers.
-// This is the cat's first exporter step for step (it ran inside Blender, in Python with numpy), so the
-// same frames give the same bytes: the sums are done in the same order and halves round to even.
+// This is the cat's first exporter step for step (it was Python with numpy), so the same frames give
+// the same bytes: the sums are done in the same order and halves round to even.
 
 export const SCALE = { t: 4096, r: 32767, s: 4096 };   // int16: a move and a scale at 1/4096, a turn normalised
 const TOL = { t: 0.003, r: 0.008, s: 0.02 };           // about 0.15 dot at the body's size (a dot is 0.018)
