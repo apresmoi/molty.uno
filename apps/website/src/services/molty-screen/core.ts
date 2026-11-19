@@ -21,6 +21,7 @@ interface Exports {
   wm_enter(across: number, back: number): number;
   wm_entering(): number;
   wm_pan(across: number): void;
+  wm_wave(cx: number, cy: number, r: number, sigma: number, height: number, dt: number): void;
   wm_state(json: number): number;
   wm_state_json(): number;
   wm_listen(on: number): void;
@@ -153,6 +154,12 @@ export class MoltyCore {
   /** It is still on its way in. */
   entering(): boolean {
     return this.x.wm_entering() !== 0;
+  }
+  /** One water with the page: a wave out there (a ring `r` px about (cx, cy), panel pixels, its
+   *  crest `sigma` wide and `height` high) lifts the screen's water where it crosses the rim, for
+   *  this frame's `dt` seconds; the firmware's fluid carries it on inside. */
+  wave(cx: number, cy: number, r: number, sigma: number, height: number, dt: number) {
+    this.x.wm_wave(cx, cy, r, sigma, height, dt);
   }
   /** The picture's camera looks `across` (world units) to the side: a window beside the screen. */
   pan(across: number) {

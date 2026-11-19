@@ -1,2 +1,2 @@
-export { mountPageWater } from "./water";
-export type { PageWaterHandle } from "./water";
+export { mountPageWater, pageWaves } from "./water";
+export type { PageWaterHandle, PassingWave } from "./water";

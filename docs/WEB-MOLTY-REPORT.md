@@ -16,18 +16,50 @@ The website's screens now run the firmware's own drawing code. No JavaScript dra
   creature package.
 - **All checks pass.** See "How to run it".
 
+### Second pass: the page's look
+
+After Juan saw the first build: the screen must come up as one thing, the whole page must wear
+the device's look, one water for page and screens, and the cat walks in.
+
+- **The bug.** A screen's still image showed, bare, as soon as the hero's renderer was up, long
+  before its own device turned in. A screen could also come on while its device was still
+  turning. Fix: the device's face carries a dark disc until it stands at rest; only then does the
+  screen come on inside it. `pnpm in-place` samples every frame for this and failed on the old
+  build.
+- **What the firmware's renderer draws on the page.** Every screen, and now every heading: each
+  word is a small scenes package (lines and arcs) played by the firmware's scene player in high
+  definition, so the letters are thin sharp lines with the dust along them.
+- **What is page-side, exactly.** The renderer draws one round panel, at most 511 px across in
+  high definition, from a fixed camera. It cannot be the page's field. So:
+  1. The page's dust is four PNG tiles made by a script from the firmware's own numbers
+     (`fluid_fine.h` density, level, colour; `fluid_fine.c` hash and ordered noise). Loose dust
+     everywhere, one layer of it drifting by CSS. Ordered, denser dust fades in round each
+     device and each heading.
+  2. The wave a tap sends through the page is drawn by `services/page-water` (about 150 lines):
+     a ring at the firmware's wave speed, gathering the ordered specks along its crest.
+  A test pins those numbers to the firmware's source and fails when they differ.
+- **One water.** A tap anywhere starts one ring at the pointer. Inside a screen it is the
+  firmware's own ripple, and the page's ring starts at the same point and speed, so it crosses
+  the rim. A ring from outside pushes the screen's water where it crosses the rim
+  (`wm_wave`), and the firmware's fluid carries it across.
+- **The entrance.** The cat starts outside the glass on the right, walks in with its own clips
+  and sits where it always sits. The part outside the glass is the same renderer a second time,
+  for those seconds only, its camera looking to the side (`web_cat.c`). No page-side cat.
+
 ### What was built
 
 | Piece | Where | What it is |
 |---|---|---|
 | The web board | `device/firmware/web/web_molty.c` | Includes `mole_fluid.c` whole. Adds a panel in memory, a finger, no IMU, and the calls (`wm_*`). Draws nothing itself. |
+| The creature's place | `device/firmware/web/web_cat.c` | Includes `creature_clip.c` whole. Puts the creature outside the frame and pans the picture's camera, for the entrance. |
 | The chip's SDK on one thread | `device/firmware/web/web_sdk.c`, `sdk/` | A clock, a seeded random source, semaphores as counts, tasks as functions. As the host tests stub the SDK. |
 | Native player | `device/firmware/web/web_main.c` | Plays a script and prints a hash of every frame. |
 | Build script | `device/firmware/web/build.sh` | `host`, `wasm`, `deps`. Emscripten pinned to 7.0.0. |
 | The module | `device/firmware/web/built/molty.wasm` + `molty.json` | Committed. The manifest records the toolchain, the hash of every source, and the fidelity result. |
 | Build and check tool | `tools/web-molty/` | `make web-molty`, `make web-molty-test`. |
 | Loader and screen | `apps/website/src/services/molty-screen/` | `core.ts` (no DOM), `screen.ts` (canvas, frames, pointer), `program.ts`. |
-| Components | `MoltyScreen`, `MoltyActs`, `MoltyShowcase`, `SpeedReader` | Every round screen on the site is a `MoltyScreen`. |
+| The page's wave | `apps/website/src/services/page-water/` | Page-side. See above. |
+| Components | `MoltyScreen`, `MoltyWord`, `WordHeading`, `PageWater`, `MoltyActs`, `MoltyShowcase`, `SpeedReader` | Every round screen is a `MoltyScreen`, every display word a `MoltyWord`. |
 
 ### The rule for the built module
 
@@ -59,33 +91,39 @@ So a change to how a Molty looks is: change the firmware, run `make web-molty`, 
 
 | What | Raw | gzip | When it loads |
 |---|---|---|---|
-| `molty.wasm` | 342,585 B | 161,737 B (brotli 142,246) | When the first screen mounts, after first paint |
-| Loader (`services/molty-screen`, minified) | 5,719 B | 2,319 B | With the device island, which was already there |
+| `molty.wasm` | 343,499 B | 162,180 B | When the first screen mounts, after first paint |
+| Loader (`services/molty-screen`, minified) | 7,904 B | 3,252 B | With the device island |
+| Page wave (`services/page-water`, minified) | 3,083 B | 1,575 B | With the page |
 | Cat package | 247,792 B | 108,707 B | With the module |
+| Words package (7 words) | 7,601 B | 1,224 B | With the first heading |
 | Astrology package | 74,372 B | 26,579 B | Only for screens that play scenes |
-| Chart sample (own chunk) | 12,706 B | 3,207 B | Only for the bake screen |
+| Dust tiles (4 PNG) | 25,761 B in all | | With the page (two per theme) |
 | Still image of the cat | 3,600 B | | With the page |
 
 - The module and the cat are fetched, never part of the page's own requests. The first-load
-  check now fails if either starts before the first paint. Measured on its slow network and CPU:
-  first paint 444 ms, module requested at 1838 ms.
-- No longer loaded: three.js from the CDN (about 600 KB), the creature rig, 29 beat files, 29
-  thumbnails.
-- Memory: 16 MB reserved per screen, about 6 MB touched. Five screens on the landing.
+  check fails if either starts before the first paint.
+- No longer loaded: `@glyphcss/fluid` and its worker, three.js from the CDN (about 600 KB), the
+  creature rig, 29 beat files, 29 thumbnails.
+- Memory: 16 MB reserved per instance, about 6 MB touched. A word's instance is put away when
+  it is far from the viewport.
 
 ### Frame rate
 
-Measured in headless Chromium (Playwright 1.61.1) by `pnpm molty`, which counts every
-`putImageData` on a screen's canvas for 10 seconds:
+Measured in headless Chromium (Playwright 1.61.1) by `pnpm molty`: it counts every `putImageData`
+on the hero screen's canvas for 10 seconds, while the page is tapped every 2 seconds so a wave
+is always out (the worst case: a calm page draws no water at all).
 
-| Case | Frames a second | Longest gap | Main thread a frame |
-|---|---|---|---|
-| Hero in view, 1280 px | **60.0** (600 drawn) | 18.5 ms | 1.56 ms, page fluid included |
-| Same, CPU slowed 4 times | **60.0** (600 drawn) | 27.2 ms | 4.29 ms |
+| Width | CPU | Frames a second | Longest gap | Main thread a frame |
+|---|---|---|---|---|
+| 1280 px | as is | **60.0** | 17.8 ms | 10.6 ms |
+| 1280 px | 4x slower | **37.0** | 42.1 ms | 26.9 ms |
+| 390 px | as is | **60.0** | 17.8 ms | 5.5 ms |
+| 390 px | 4x slower | **56.5** | 38.1 ms | 17.4 ms |
 
-- One firmware frame costs about 0.43 ms under Node.
-- Out of view, or tab hidden: no frames. Checked.
-- Reduced motion: one settled still per change, no loop. Checked.
+- Most of that time is the page's wave (a full-viewport canvas while a wave is out), not the
+  firmware's renderer: one firmware frame costs about 0.43 ms under Node.
+- Out of view, or tab hidden: nothing draws. Checked for every canvas.
+- Reduced motion: stills only, no waves, no entrance. Checked.
 - The check fails under 30.
 
 ## Visible page changes
@@ -94,12 +132,18 @@ Each one is yours to accept or reject.
 
 ### Landing
 
-1. **Hero.** The device now powers on like the real one: the boot screen ("molty.uno" in dots,
-   about 3 s), then the cat. Before: duck, octopus and bunny took turns, and ran in from the right.
+1. **Hero.** The device turns in dark, then its screen comes on and the cat walks in from the
+   right, from outside the glass, and sits. About 4.5 s. Before: duck, octopus and bunny took
+   turns. (The first build booted with "molty.uno" on the screen; that is gone.)
 2. **Hero, taps.** A tap ripples the water and the cat comes to the front. After 5 minutes
    untouched it dozes off, as on the device.
-3. **No Molty in the page's braille fluid any more.** The fluid still draws the background and
-   the headings.
+3. **The page background.** Fine dust over black, edge to edge, on the landing, the showcase and
+   /build/. Loose and slowly drifting far from anything, denser and ordered toward each device
+   and each heading. Before: the dotted braille field. Light theme: the same dust as ink on paper.
+3a. **The title and the headings.** "molty.UNO", "talk", "moltys", "bridge", "bake", "showcase"
+   and "build" are thin lines of dust drawn by the device's renderer. The title is smaller than
+   the old braille one (about 650 px wide at most). Without the renderer the plain text shows.
+3b. **Taps.** Any tap sends one ring through the page, through a device and on.
 4. **Talk.** The screen is the device's reader, then the cat comes back and the question stands on
    the rim as arcs (yes, no, idk). Before: three pie sectors. While it listens, `[ yes ] [ no ]
    [ idk ]` also show as buttons under the status line, for the keyboard.
@@ -110,8 +154,7 @@ Each one is yours to accept or reject.
    walk, shake), on the glass (listen, ask), and one line of the cat's own words for what plays.
 7. **Moltys, the links.** Now "everything it does", "creature packages", "packages & scenes".
    Gone: "all moltys & actions", "make your own", "the .molty format", and the `.molty` download.
-8. **Moltys, the heading colour.** The cat's lavender (`#a99be8`). Before: green, tinted by the
-   picked Molty.
+8. **Moltys, the heading colour.** The cat's lavender (`#a99be8`).
 9. **Bridge.** The device shows the pairing question as the device asks it: "pair with claude?",
    "check the code matches", `4821`, accept or reject. Accept makes the cat happy. Before: the
    octopus.
@@ -136,15 +179,17 @@ Each one is yours to accept or reject.
 16. `device/creatures/README.md`: two lines, now true.
 17. `THIRD_PARTY_NOTICES.md`: a section for the module (cJSON, Emscripten's libc).
 
-Not changed: navigation, page layout, hero copy, bridge and bake copy, the boards list, the footer,
-`public/og.png`, the README hero image.
+Not changed: navigation, page layout, bridge and bake copy, the boards list, the footer,
+`public/og.png`, the README hero image. The tagline still says "Liquid ASCII creatures" and the
+site description "a braille fluid": your words, your call.
 
 ### Removed from the site
 
 - `src/features/moltys/catalog.ts` (the 29-creature catalog).
 - `src/components/MoltyPicker/` (replaced by `MoltyActs`).
-- `src/services/molty-stage/`: `moltyMesh.ts`, `shiftTarget.ts`, `actions.ts`, `speedReader.ts`,
-  and `beats/` (33 files). It keeps only the page fluid's headings.
+- `src/services/molty-stage/` whole (the page fluid, the creature rig, 33 beat files) and
+  `src/components/FluidField/`.
+- The `@glyphcss/fluid` and `glyphcss` dependencies.
 - `scripts/thumbs.mjs`.
 - Config: the `@creatures`, `@molty-files`, `@molty-catalog` aliases, the three.js CDN plugin and
   pin, their type declarations.
@@ -172,8 +217,10 @@ pnpm preview            # leave it running; default port 4330
 
 # 3. in another terminal, from apps/website: look and measure
 pnpm first-load
+pnpm in-place
 pnpm screens
 pnpm molty
+pnpm fullpage
 
 # 4. only after changing the firmware's drawing code: rebuild the module
 brew install emscripten # 7.0.0, pinned in device/firmware/web/build.sh
@@ -183,17 +230,21 @@ cd apps/website && pnpm molty-still   # only if the cat's resting look changed
 
 What I ran, all green: `make web-molty`, `make web-molty-test`, `make firmware-test`,
 `make firmware BOARD=waveshare/esp32-s3-touch-amoled-1.75c` (compile only, 2,023,520 B image),
-`pnpm check`, `pnpm test` (36 tests), `pnpm build`, `pnpm first-load`, `pnpm screens`, `pnpm molty`.
+`pnpm check`, `pnpm test` (40 tests), `pnpm build`, `pnpm first-load`, `pnpm in-place`,
+`pnpm screens`, `pnpm molty`.
 
 Pictures, in `apps/website/e2e-out/` (not committed):
 
-- `molty-hero-1280-dark.png`, `molty-hero-1280-light.png`, `molty-hero-390-dark.png`,
-  `molty-hero-390-light.png`
-- `molty-moltys-<width>-<theme>.png` (the same four for the moltys section)
-- `molty-tap-sheet.png`, `molty-tap.webp`, `molty-tap-00.png` to `-31.png`: the cat walks off,
-  a tap calls it back
+- `before-full-<1280|390>-<dark|light>.png` and `after-full-...png`: the whole landing, before
+  and after the second pass
+- `in-place-before-<1280|390>.png`, `in-place-after-<1280|390>.png`, `in-place-after-1280-fast.png`:
+  the load, a frame every 100 ms, before and after the fix
+- `molty-entrance-sheet.png`: the cat walks in from the right and sits
+- `molty-ripple-sheet.png`: a tap inside the screen, its ring crossing the rim
+- `molty-through-sheet.png`, `molty-through.webp`: a tap on the page, its ring going through
+  the device
+- `molty-hero-<width>-<theme>.png`, `molty-moltys-<width>-<theme>.png`
 - `landing-1440-ask.png`, `showcase-1440-chart.png`, `showcase-390.png`, `first-load-*.png`
-- `og-candidate.png`: what `pnpm og` would make now
 
 ## Next steps
 
@@ -205,12 +256,20 @@ Pictures, in `apps/website/e2e-out/` (not committed):
   `brew unlink python@3.14 && brew link --overwrite python@3.14`. Emscripten keeps its own 3.15.
   The firmware build passed after that. Anyone installing Emscripten will hit the same thing.
 - **60 frames a second is faster than the device.** The device paces itself at 33. Almost
-  everything in the firmware runs on time, not on frames, so it looks the same and smoother. One
-  thing I saw that runs per frame: the water settling after a listen ends. To match the device
-  exactly, set `FPS` to 33 in `services/molty-screen/screen.ts`.
+  everything in the firmware runs on time, not on frames. To match the device exactly, set `FPS`
+  to 33 in `services/molty-screen/screen.ts`.
 - **The web repaints the whole panel every frame.** The device sends only changed cells. Same
-  drawing code, its own full-repaint path. The one place they can differ: a scene on fine dust
-  under load, where the device puts some cells off to a later frame.
+  drawing code, its own full-repaint path.
+- **Page-side choices that are mine, not the firmware's.** How far the denser dust reaches round
+  a device (2.6 device widths) and a heading; that a page wave fades slower than a screen's
+  (so it can cross a screen from outside); how hard it pushes the screen's water at the rim.
+  All three are one constant each.
+- **The entrance runs the cat's clock 1.8 times faster** until it sits, to keep it near 4 s.
+  Same clips, brisker. One constant.
+- **Where the dust meets the bezel.** Outside it is 1 px specks, inside the cat's screen the
+  firmware draws its floor dust as dots on its own grid. The bezel ring sits between them. They
+  are the same colour family but not the same grain. Making them one grain needs a pan and zoom
+  in the firmware's creature drawing, which I did not touch.
 - **A firmware quirk, not mine.** A question asked within about a second of a listen ending forms
   late (about 3 s instead of 1.6 s), because the water is still being calmed. Seen in both builds.
 
@@ -230,6 +289,8 @@ Pictures, in `apps/website/e2e-out/` (not committed):
 
 - **`public/og.png` and the README hero still show the old creatures.** `pnpm og` works with the
   new page (see `og-candidate.png`). I did not replace the public image without your say.
+- **A page wave does not pass through a heading's word.** It passes under it. Only screens
+  let it in.
 - **`pnpm readme` and `pnpm og-options` no longer run.** They drive the old slots. Port them or
   drop them.
 - **`device/creatures/catalog/`** has no reader now. Delete it if you agree.

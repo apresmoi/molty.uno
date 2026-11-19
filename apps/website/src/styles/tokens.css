@@ -39,8 +39,10 @@
   --m-accent-soft: rgba(60, 207, 150, 0.16);
   --m-overlay: rgba(0, 0, 0, 0.82);
   --m-veil: rgba(0, 0, 0, 0.6);
-  /* the page's calm water: dust, as a tile (scripts/dust-tile.mjs) */
-  --m-dust: url("../assets/dust/dark.png");
+  /* the page's water, as tiles (scripts/dust-tile.mjs): loose dust everywhere, and the dust in
+     focus round a screen or a word */
+  --m-dust: url("../assets/dust/far-dark.png");
+  --m-dust-near: url("../assets/dust/near-dark.png");
   /* a device's domed glass (GlassDome), over the dark screen in both themes: sheen, crisp
      highlight, opposite rim, fresnel edge */
   --m-glass-sheen: rgba(255, 255, 255, 0.1);
@@ -113,7 +115,8 @@
   --m-overlay: rgba(255, 255, 255, 0.86);
   --m-veil: rgba(255, 255, 255, 0.62);
   /* black glass → white paper: the same dust as ink */
-  --m-dust: url("../assets/dust/light.png");
+  --m-dust: url("../assets/dust/far-light.png");
+  --m-dust-near: url("../assets/dust/near-light.png");
   --m-bezel: #dce0de;
   --m-bezel-in: #aab3ae;
   --m-bezel-out: #8f9994;

@@ -207,6 +207,25 @@ WM_API int wm_entering(void) {
 /** The picture's camera looks `across` (world units) to the side: the same world through a window beside the screen. */
 WM_API void wm_pan(float across) { web_cat_pan(across); }
 
+/** One water with the page: a wave out there (a ring `r` px about (cx, cy), panel pixels, its crest `sigma` px wide and
+ *  `height` high, 0..1) meets the screen. Where its crest crosses the band inside the rim it lifts the screen's own
+ *  water, for the `dt` seconds of this frame; the fluid carries that on across the screen as it carries a finger's
+ *  ripple. Called every frame while such a wave passes. Nothing is drawn here: the water is pushed, as a tap pushes it. */
+WM_API void wm_wave(float cx, float cy, float r, float sigma, float height, float dt) {
+    if (!s_up || !s_sim || sigma <= 0.f) return;
+    fluid_sim_t *s = s_sim;
+    const float push = height * 3.5f * dt * FQ_H, half = s_px * 0.5f;   /* a gentle swell: a finger's tap is ~4x this */
+    for (int j = 1; j < s->H - 1; j++) for (int i = 1; i < s->W - 1; i++) {
+        const int k = j * s->W + i;
+        const float X = s->xs[i], Y = s->ys[j], rho2 = X * X + Y * Y;
+        if (!s->mask[k] || rho2 < 0.62f * 0.62f || rho2 > 0.9f * 0.9f) continue;      /* inside the rim's sponge */
+        const float e = (hypotf((X + 1.f) * half - cx, (Y + 1.f) * half - cy) - r) / sigma;
+        if (e * e > 6.f) continue;
+        const float h = (float)s->h[k] + push * expf(-e * e);
+        s->h[k] = (int16_t)(h > 32767.f ? 32767.f : h < -32768.f ? -32768.f : h);
+    }
+}
+
 /** The device was shaken (sense.c): the creature reacts. */
 WM_API void wm_shake(void) { if (s_up) mole_fluid_event(MOLE_FLUID_SHAKE); }
 

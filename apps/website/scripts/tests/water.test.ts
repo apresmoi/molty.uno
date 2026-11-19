@@ -8,9 +8,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
-import { FINE, TILE, WAVE, ign } from "../../src/config/water.mjs";
+import { FINE, TILE, WAVE, hashU, ign } from "../../src/config/water.mjs";
 import { WORDS, wordsPackage } from "../../src/config/words.mjs";
-import { renderTile, tilePath } from "../dust-tile.mjs";
+import { TILES, renderTile, tilePath } from "../dust-tile.mjs";
 import { MoltyCore } from "../../src/services/molty-screen/core.ts";
 
 const repo = (path: string) => readFileSync(fileURLToPath(new URL(`../../../../${path}`, import.meta.url)));
@@ -43,11 +43,17 @@ test("the page's wave has the firmware's speed and decay (fluid_sim.c)", () => {
   assert.equal(WAVE.STAGE, define(repo("device/firmware/main/fluid/fluid_sim.h").toString(), "FLUID_STAGE_REF"));
 });
 
+test("... and its loose noise is the firmware's hash (fluid_fine.c hash_u)", () => {
+  const c = repo("device/firmware/main/fluid/fluid_fine.c").toString();
+  assert.match(c, /\(uint32_t\)a \* 0x27d4eb2du \^ \(uint32_t\)b \* 0x165667b1u \^ c \* 0x9e3779b1u;\s*h \^= h >> 15; h \*= 0x85ebca6bu; h \^= h >> 13;/);
+  assert.ok(hashU(3, 7, 1) >= 0 && hashU(3, 7, 1) < 1 && hashU(3, 7, 1) !== hashU(7, 3, 1));
+});
+
 test("the dust tiles are what the rule draws (node scripts/dust-tile.mjs)", async () => {
-  for (const theme of ["dark", "light"]) {
-    const png = await sharp(tilePath(theme)).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  for (const tile of TILES) {
+    const png = await sharp(tilePath(tile)).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
     assert.equal(png.info.width, TILE);
-    assert.ok(png.data.equals(renderTile(theme)), `src/assets/dust/${theme}.png is stale`);
+    assert.ok(png.data.equals(renderTile(tile)), `src/assets/dust/${tile.kind}-${tile.theme}.png is stale`);
   }
 });
 

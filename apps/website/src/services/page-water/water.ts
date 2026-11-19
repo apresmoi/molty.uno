@@ -10,7 +10,7 @@
 // definition): the wave's shape here is a travelling ring, with the firmware's speed and decay
 // (fluid_sim.c) and the firmware's dust rule under it (fluid_fine.c: where the water is lit,
 // more of the ordered specks show, and brighter). Reduced motion: no waves.
-import { CALM, FINE, TILE, WAVE_KEEP, WAVE_SPEED, ign, speck } from "../../config/water.mjs";
+import { DUST, FINE, TILE, WAVE_KEEP, WAVE_SPEED, ign, speck } from "../../config/water.mjs";
 
 /** A screen's width a tap on the bare page stands for (the hero's device), px. */
 const NOMINAL = 420;
@@ -19,8 +19,14 @@ const NOMINAL = 420;
 const CREST = 0.045;
 /** How much of a drawing's dust the crest gathers (FINE.PEAK is a drawing's own edge). */
 const GATHER = 0.45;
+/** The page is wider than a screen: its waves keep their height this much longer (a screen's
+ *  water, fluid_sim.c, loses 60 % of a wave's height a second), so one crosses a screen from
+ *  outside and goes on. */
+const PAGE_DEPTH = 0.45;
 /** A wave is over once it is this faint. */
-const FAINT = 0.05;
+const FAINT = 0.03;
+/** A wave's height `t` seconds after its tap. */
+const heightAt = (t: number) => WAVE_KEEP ** (t * PAGE_DEPTH);
 
 interface Wave {
   /** Where it started, from the page's own top left corner. */
@@ -31,19 +37,45 @@ interface Wave {
   t0: number;
 }
 
+/** The page's origin and the waves out now (none without a mounted water). */
+let origin: HTMLElement | null = null;
+const waves: Wave[] = [];
+
+/** A wave as a screen meets it: its centre in the viewport, its radius, its crest's width and
+ *  height now. */
+export interface PassingWave {
+  x: number;
+  y: number;
+  r: number;
+  sigma: number;
+  height: number;
+}
+/** The waves travelling through the page at `now` (performance.now()): one water, so a screen
+ *  lets them in at its rim (services/molty-screen). */
+export function pageWaves(now: number): PassingWave[] {
+  if (!origin || !waves.length) return [];
+  const o = origin.getBoundingClientRect();
+  return waves.map((w) => {
+    const t = (now - w.t0) / 1000;
+    return { x: w.x + o.left, y: w.y + o.top, r: w.speed * t, sigma: w.sigma, height: heightAt(t) };
+  });
+}
+
 export interface PageWaterHandle {
   destroy(): void;
 }
 
-/** Mount the wave layer on `canvas` (fixed to the viewport; CSS sizes it). `origin` is the element
- *  the dust tile is the background of: the specks a wave lights are that tile's. */
+/** Mount the wave layer on `canvas` (fixed to the viewport; CSS sizes it). `page` is the element
+ *  the dust is the background of: a wave gathers the ordered specks there, in the page's own
+ *  places (they scroll with it). */
 export function mountPageWater(
   canvas: HTMLCanvasElement,
-  origin: HTMLElement,
+  page: HTMLElement,
   options: { paper: boolean },
 ): PageWaterHandle {
   const ctx = canvas.getContext("2d")!;
-  const waves: Wave[] = [];
+  origin = page;
+  waves.length = 0;
   let raf = 0;
   let image: ImageData | null = null;
   // the threshold of every pixel of the tile, once
@@ -71,13 +103,12 @@ export function mountPageWater(
     }
     const px = new Uint32Array(image.data.buffer);
     px.fill(0);
-    const o = origin.getBoundingClientRect();
+    const o = page.getBoundingClientRect();
     for (let k = waves.length - 1; k >= 0; k--) {
       const wave = waves[k]!;
       const t = (now - wave.t0) / 1000;
       const r = wave.speed * t;
-      // it fades as the firmware's water does
-      const height = WAVE_KEEP ** t;
+      const height = heightAt(t);
       if (height < FAINT) {
         waves.splice(k, 1);
         continue;
@@ -104,7 +135,8 @@ export function mountPageWater(
             const e = (Math.sqrt(dx * dx + dy * dy) - r) / wave.sigma;
             const lit = height * Math.exp(-e * e);
             if (lit < 0.02) continue;
-            const density = CALM + (FINE.AMBIENT - CALM) * Math.min(1, 2 * lit) + FINE.PEAK * GATHER * lit;
+            const density =
+              DUST.far.density + (FINE.AMBIENT - DUST.far.density) * Math.min(1, 2 * lit) + FINE.PEAK * GATHER * lit;
             const tx = (((x - Math.round(o.left)) % TILE) + TILE) % TILE;
             if (threshold[ty + tx]! < density) px[y * w + x] = colour[Math.min(255, Math.round(lit * 255))]!;
           }
@@ -118,16 +150,17 @@ export function mountPageWater(
   const tap = (e: PointerEvent) => {
     if (e.button !== 0 && e.pointerType === "mouse") return;
     // on a screen or a word: its own water's speed, so the two rings are one
-    // (a word's canvas takes no pointer: it is found by where the tap landed)
-    const inside = (el: Element) => {
-      const r = el.getBoundingClientRect();
-      return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+    // (a word's round window takes no pointer and is mostly unseen: it counts where the tap
+    // landed on its heading)
+    const on = (el: Element | null | undefined) => {
+      const r = el?.getBoundingClientRect();
+      return !!r && e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
     };
     const screen =
       (e.target as Element | null)?.closest?.("[data-molty-screen]") ??
-      [...document.querySelectorAll("[data-molty-word]")].find(inside);
+      [...document.querySelectorAll("[data-molty-word]")].find((word) => on(word.parentElement));
     const width = screen ? screen.getBoundingClientRect().width : NOMINAL;
-    const o = origin.getBoundingClientRect();
+    const o = page.getBoundingClientRect();
     waves.push({
       x: e.clientX - o.left,
       y: e.clientY - o.top,
@@ -149,6 +182,8 @@ export function mountPageWater(
       window.removeEventListener("pointerdown", tap, true);
       document.removeEventListener("visibilitychange", resume);
       cancelAnimationFrame(raf);
+      waves.length = 0;
+      if (origin === page) origin = null;
     },
   };
 }
