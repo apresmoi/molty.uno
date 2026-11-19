@@ -1,4 +1,4 @@
-# Make a Molty
+# The Molty format
 
 A Molty is one folder:
 
@@ -47,8 +47,8 @@ Check it and build it (one command; it names the file and the fix when something
 node packages/tools/molty-creature.mjs build blip
 ```
 
-Watch it move on your computer: `node packages/tools/molty-creature.mjs preview blip`, then open the address it prints.
-The build writes one small file, the Molty a device installs. That is the whole loop.
+Watch it move: `node packages/tools/molty-creature.mjs preview blip`, then open the address it prints. The build
+writes one small file: the Molty a device installs.
 
 ## Space and units
 
@@ -59,8 +59,8 @@ The build writes one small file, the Molty a device installs. That is the whole 
 
 ## Bones and shapes
 
-A bone has a `name`, the `parent` it hangs from and where it starts (`at`, from its parent's start). List a bone
-after its parent. A shape sits `on` a bone and moves with it.
+A bone has a `name`, the `parent` it hangs from and where it starts (`at`, from its parent's start); list it after
+its parent. A shape sits `on` a bone and moves with it.
 
 | shape | takes | is |
 |---|---|---|
@@ -72,14 +72,9 @@ after its parent. A shape sits `on` a bone and moves with it.
 | `patch` | `at`, `radii`, `turn` | a region of color on the body: a white chest |
 
 Every shape names a `color` (one of `colors`) and an `outline`: the part it belongs to. Shapes of one part are
-drawn as one outlined form. These are the parts a Molty has:
-
-| outlined parts | features |
-|---|---|
-| `torso` `head` `tail` `legF.L` `legF.R` `hindL` `hindR` `bowl` `yarn` | `eye` `nose` `maw` `tongue` `earIn` `whisker` `chest` `milk` `yarnline` |
-
-Molty paints outlined parts from the color `body`, and eyes from `iris` and `shine`. `check` tells you which colors
-your parts need.
+drawn as one outlined form. A Molty has these parts, outlined: `torso` `head` `tail` `legF.L` `legF.R` `hindL`
+`hindR` `bowl` `yarn`; and these features: `eye` `nose` `maw` `tongue` `earIn` `whisker` `chest` `milk` `yarnline`.
+Outlined parts are painted from the color `body`, eyes from `iris` and `shine`; `check` says which colors you need.
 
 ## Actions
 
@@ -94,8 +89,8 @@ An action is a list of keys: at a `time`, where some bones are (`at`), how they 
 ] }
 ```
 
-An action may also say `"view"` (`front`, `side` or `three_quarter`: where it is seen from), `"follow": true` (the
-view goes along, for a walk) and `"stride"` (a walk's seconds a step).
+An action may also say `"view"` (`front`, `side` or `three_quarter`), `"follow": true` (the view goes along, for a
+walk) and `"stride"` (a walk's seconds a step).
 
 ## Names do the wiring
 
@@ -110,9 +105,9 @@ You do not connect actions to anything. Name them, and they are found.
 | `<pose>_<mood>` | its own way into a mood from a pose: `sit_surprised` |
 
 In `molty.json`, `moods` and `gestures` give each one a line of words: what it looks like, for the agent that speaks
-through the Molty. To play an action under another name, say so: `"inspect": { "about": "peers low", "plays": "peek" }`.
+through the Molty. To play an action under another name: `"inspect": { "about": "peers low", "plays": "peek" }`.
 A looping action ends on the pose it starts with. Which pose an action starts and ends in is worked out from how
-it looks, so the ways between poses are found even without the `_to_` name.
+it looks, so the way between two poses is found even without the `_to_` name.
 
 ## A body from a 3D tool
 
@@ -121,26 +116,20 @@ A bigger Molty keeps its body in a file: `"body": "cat.glb"`. Any tool that save
 | in the file | becomes |
 |---|---|
 | nodes | the bones, by name |
-| a node whose `extras` say `"shape"` (with `color`, `outline`, and `to`, `radius`, `stiffness` where the shape has them) | a shape on its parent bone: its position, rotation and scale are the shape's `at`, turn and `radii` |
+| a node whose `extras` say `"shape"`, `"color"`, `"outline"` (and `to`, `radius`, `stiffness` where the shape has them) | a shape on its parent bone, placed, turned and sized as the node is |
 | animations, by name, one key a frame | the actions; `extras` may say `view`, `follow`, `stride` |
 | `extras.foot` on a node: a point | where that bone touches the floor |
 
-Then list in `molty.json` the bones that stand on the floor (`"feet"`), and two bones the view stays between
-(`"center"`).
+Then list in `molty.json` the bones that stand on the floor (`"feet"`) and two bones the view stays between (`"center"`).
 
 ## Commands and limits
 
-| command | does |
-|---|---|
-| `molty-creature check <folder>` | finds what is wrong and says how to fix it |
-| `molty-creature build <folder>` | check, then the file a device installs |
-| `molty-creature preview <folder>` | a page on your computer: every mood, gesture and action, moving |
+`molty-creature check <folder>` finds what is wrong and says how to fix it; `build` checks, then writes the file a
+device installs; `preview` shows every mood, gesture and action moving, on your computer.
 
 | what | limit |
 |---|---|
-| bones, shapes, actions | 80, 128, 64 |
-| poses, gestures | 8, 32 |
-| names | 24 letters |
+| bones, shapes, actions, poses, gestures; letters in a name | 80, 128, 64, 8, 32; 24 |
 | the built Molty | 256 KB (the cat, with 45 actions, is 242 KB) |
 | words in `about`, `look`, a mood's or a gesture's line | plain ASCII; 160, 240, 100 letters |
 | action keys in a body file | straight-line or held keys; curve keys are refused: save one key a frame |
@@ -148,19 +137,16 @@ Then list in `molty.json` the bones that stand on the floor (`"feet"`), and two 
 # How we make ours: from Blender
 
 The cat is a Blender file, `moltys/cat/cat.blend`, and one script turns it into the cat's body file. The script is
-ours, an example of one way to make a body file; the Molty tools above never need Blender.
+ours, one way among others to make a body file; the tools above never need Blender.
 
-1. Open `cat.blend` (or a copy, for a new Molty). It needs Blender 5.3.
+1. Open `cat.blend` (or a copy, for a new Molty) in Blender 5.3.
 2. Reshape. Each shape Molty draws is an Empty named `shape...`, the child of its bone. Move it and scale it; its
    custom properties say what it is (`shape`, `color`, `outline`, and `to`, `radius` for the ones with two ends).
 3. Animate, and name your actions as above. Give an action a manual frame range (its length), tick Cyclic
    Animation for a loop, and add the custom properties `view`, `follow` or `stride` when it needs them.
-4. Save, then write the body file and build:
+4. Save, then write the body file (about a minute for the cat) and build (needs only the folder):
 
 ```sh
 blender -b moltys/cat/cat.blend -P tools/blender/molty_export.py -- --out moltys/cat/cat.glb
 node packages/tools/molty-creature.mjs build moltys/cat
 ```
-
-The first command poses the rig on every frame of every action and saves what it sees. The second needs only the
-folder.
