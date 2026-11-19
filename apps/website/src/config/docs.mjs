@@ -49,6 +49,18 @@ export const SYNCED_DOCS = [
     description: 'The ~1 KB binary file that carries one creature to the device.',
   },
   {
+    source: 'docs/PACKAGES.md',
+    slug: 'moltys/packages',
+    title: 'Packages and scenes',
+    description: 'Data-only packages that teach a Molty new scenes and creatures: the format, the commands, the limits.',
+  },
+  {
+    source: 'docs/CREATURES.md',
+    slug: 'moltys/creature-packages',
+    title: 'Creature packages',
+    description: 'The duck, the cat and the octopus as data: channel creatures, the rigged cat with baked clips, limits.',
+  },
+  {
     source: 'docs/ARCHITECTURE.md',
     slug: 'architecture',
     title: 'Architecture',

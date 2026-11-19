@@ -46,9 +46,9 @@ screen): start it in the background, speak its `SAY` line, and don't talk over a
 ## Install, once
 
 The first scene installs the package if Molty lacks it (or has an older one): **Molty asks your
-human on its screen** (two buttons: "Astrolog" and "no") and waits up to a minute for one tap; the
+human on its screen** ("INSTALL ASTROLOGY?": `install` or `not now`) and waits up to a minute for one tap; the
 script waits for the outcome (about 2 min at most). So the first time, say
-so before you run it: `talk {"say":"Molty will ask to install the astrology pack: tap yes.","listen":false}`.
+so before you run it: `talk {"say":"Molty will ask to install the astrology pack: tap install.","listen":false}`.
 Or install up front: `astro.mjs install`. `astro.mjs status` lists what Molty has;
 `astro.mjs uninstall` removes it (Molty frees the space; ask your human first).
 

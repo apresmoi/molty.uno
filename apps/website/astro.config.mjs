@@ -64,7 +64,7 @@ export default defineConfig({
         SiteTitle: './src/integrations/starlight/SiteTitle.astro',
       },
       social: [{ icon: 'github', label: 'GitHub', href: REPO_URL }],
-      editLink: { baseUrl: `${REPO_URL}/edit/${REPO_BRANCH}/website/` },
+      editLink: { baseUrl: `${REPO_URL}/edit/${REPO_BRANCH}/apps/website/` },
       customCss: ['./src/integrations/starlight/starlight.css'],
       // Same order as the landing: fluid · moltys · bridge · boards.
       sidebar: [
@@ -74,6 +74,7 @@ export default defineConfig({
             { label: 'Introduction', slug: 'getting-started/introduction' },
             { label: 'Flash a release', slug: 'getting-started/flash-a-release' },
             { label: 'Set up your Molty', slug: 'getting-started/setup' },
+            { label: 'What Molty shows', slug: 'getting-started/on-screen' },
             { label: 'Porting to your board', slug: 'getting-started/porting' },
           ],
         },
@@ -87,6 +88,8 @@ export default defineConfig({
             { label: 'Moltys and the viewers', slug: 'moltys/overview' },
             { label: 'Make your own', slug: 'moltys/making-your-own' },
             { label: 'The .molty format', slug: 'moltys/format' },
+            { label: 'Creature packages', slug: 'moltys/creature-packages' },
+            { label: 'Packages and scenes', slug: 'moltys/packages' },
           ],
         },
         {

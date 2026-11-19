@@ -114,6 +114,7 @@ export function HomePage({
         </p>
         {reader}
         <Links>
+          <a href="/getting-started/on-screen/">[ what molty shows → ]</a>
           <a href="/architecture/">[ how it renders → ]</a>
         </Links>
       </section>
@@ -137,6 +138,9 @@ export function HomePage({
           <a href="/moltys/making-your-own/">[ make your own → ]</a>
           <a className={styles.wide} href="/moltys/format/">
             [ the .molty format → ]
+          </a>
+          <a className={styles.wide} href="/moltys/packages/">
+            [ packages &amp; scenes → ]
           </a>
         </Links>
       </section>
