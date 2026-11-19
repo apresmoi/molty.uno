@@ -21,6 +21,8 @@ interface Exports {
   wm_enter(across: number, back: number): number;
   wm_entering(): number;
   wm_pan(across: number): void;
+  wm_across(): number;
+  wm_cat_pixels(): number;
   wm_wave(cx: number, cy: number, r: number, sigma: number, height: number, dt: number): void;
   wm_state(json: number): number;
   wm_state_json(): number;
@@ -154,6 +156,16 @@ export class MoltyCore {
   /** It is still on its way in. */
   entering(): boolean {
     return this.x.wm_entering() !== 0;
+  }
+  /** Where the creature stands, across the frame from its middle (world units). */
+  across(): number {
+    return this.x.wm_across();
+  }
+  /** The creature alone, as the panel shows it (everything else clear): px * px RGBA, a view of
+   *  the module's memory, or null without one. */
+  catPixels(): Uint8ClampedArray | null {
+    const p = this.x.wm_cat_pixels();
+    return p ? new Uint8ClampedArray(this.x.memory.buffer, p, this.px * this.px * 4) : null;
   }
   /** One water with the page: a wave out there (a ring `r` px about (cx, cy), panel pixels, its
    *  crest `sigma` wide and `height` high) lifts the screen's water where it crosses the rim, for

@@ -34,6 +34,9 @@ void  wm_touch(int down, int x, int y);
 void  wm_shake(void);
 int   wm_enter(float across, float back);
 int   wm_entering(void);
+float wm_across(void);
+float wm_back(void);
+const uint8_t *wm_cat_pixels(void);
 void  wm_pan(float across);
 int   wm_state(const char *json);
 void  wm_listen(int on);
@@ -76,7 +79,8 @@ int main(int argc, char **argv) {
             for (int i = 0; !rc && i < k; i++, frame++) {
                 wm_frame(dt);
                 wm_entering();
-                const uint8_t *p = wm_pixels();
+                const uint8_t *p = getenv("WM_CAT") && wm_cat_pixels() ? wm_cat_pixels() : wm_pixels();
+                if (getenv("WM_TRACE")) fprintf(stderr, "%d %.3f %.3f %d\n", frame, wm_across(), wm_back(), wm_entering());
                 uint64_t h = 0xcbf29ce484222325ull;
                 for (size_t q = 0; q < (size_t)px * (size_t)px * 4; q++) { h ^= p[q]; h *= 0x100000001b3ull; }
                 printf("%d %016llx\n", frame, (unsigned long long)h);

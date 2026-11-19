@@ -2,7 +2,7 @@
 // (`pnpm build && pnpm preview`). On a cold cache, a slow network and a slow CPU, at 1280 and
 // 390 px wide, every frame of the load, of a scroll through every section and of a theme switch
 // is sampled (requestAnimationFrame, from document start); once more at 1280 with nothing slowed. For every Molty screen on the page:
-//   - its canvas and its still show only while its device stands at rest, fully there (opacity
+//   - its canvas, its still and the canvas that carries the cat in show only while its device stands at rest, fully there (opacity
 //     1, no transform, not turning): the frame first, then the screen inside it
 //   - once it shows, it never moves or changes size, and never goes away again (no flash)
 // Also saves the load as a strip, a frame every 100 ms: e2e-out/in-place-<label>-<width>.png
@@ -33,6 +33,7 @@ function sampler() {
       const still = root.querySelector('img');
       const device = root.querySelector('[data-device]');
       const face = device?.children[device.children.length - 1];
+      const cat = root.querySelector('canvas[data-outside]');
       if (!canvas || !still || !device) return;
       const r = canvas.getBoundingClientRect();
       frames.push({
@@ -40,6 +41,7 @@ function sampler() {
         i,
         canvas: opacity(canvas),
         still: opacity(still),
+        cat: cat ? opacity(cat) : 0,
         device: opacity(device),
         rest: !device.style.transform && !device.hasAttribute('data-turning') && !(face && face.style.transform),
         box: [Math.round(r.left + scrollX), Math.round(r.top + scrollY), Math.round(r.width), Math.round(r.height)].join(','),
@@ -94,7 +96,7 @@ for (const [width, height, slow] of [
   let bad = 0;
   for (const i of screens) {
     const own = frames.filter((f) => f.i === i);
-    const early = own.filter((f) => Math.max(f.canvas, f.still) > 0.02 && !(f.device > 0.99 && f.rest));
+    const early = own.filter((f) => Math.max(f.canvas, f.still, f.cat) > 0.02 && !(f.device > 0.99 && f.rest));
     if (early.length) {
       bad++;
       const f = early[0];

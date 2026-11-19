@@ -1,4 +1,4 @@
-export { ENTER_SHIFT, mountMoltyScreen, warmMoltyScreen } from "./screen";
+export { ENTER_STARTS, mountMoltyScreen, warmMoltyScreen } from "./screen";
 export { runProgram } from "./program";
 export { PANEL } from "./core";
 export type { MoltyScreenHandle, MoltyScreenOptions } from "./screen";

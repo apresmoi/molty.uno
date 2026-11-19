@@ -45,20 +45,30 @@ function pageState(state: "live" | "off") {
   if (state === "live" || root.dataset.fluidMoltys !== "live") root.dataset.fluidMoltys = state;
 }
 
-/** The entrance (the hero): the cat starts outside the frame, to the right, and walks in. In
- *  world units, measured on the firmware's own frames: the frame's middle to its rim is 0.87. */
+/** The entrance (the hero): the cat starts beyond the right edge of the window, walks across the
+ *  page and into its screen, and sits where it always sits. All in the firmware's world units,
+ *  measured on its own frames (device/firmware/web/web_main.c, WM_TRACE). */
 const ENTER = {
-  across: 1.1,
-  back: 0.3,
-  /** Played unseen first: it gets up and takes its first steps. */
+  /** Panel pixels a world unit across the frame, at any depth (the picture has no perspective
+   *  across): the page carries the cat's own picture this far for each unit it stands aside. */
+  px: 268.4,
+  /** The cat's nose is this far ahead of where it stands: it starts that much beyond the edge. */
+  nose: 0.85,
+  /** Played unseen first: it gets up. */
   lead: 1.0,
-  /** Its clock runs this much faster until it sits: under 4 s on the page. */
-  rate: 1.8,
-  /** The window beside the screen looks this far to the side... */
-  pan: 0.9,
+  /** Its clock runs this much faster until it sits. */
+  rate: 2.2,
 };
-/** ... which is this much of the panel's width to the right (0.9 world units: 240 of 466 px). */
-export const ENTER_SHIFT = 240 / 466;
+/** Walking in, the cat also drifts toward the viewer: starting [across, back] it ends at its own
+ *  place. Measured for each start; a start in between takes the next one further out. */
+// prettier-ignore
+export const ENTER_STARTS: Array<[number, number]> = [
+  [1.0, 0.885], [1.25, 1.044], [1.5, 0.853], [1.75, 1.006], [2.0, 1.144], [2.25, 0.937], [2.5, 1.066], [2.75, 1.205], [3.0, 0.99],
+  [3.25, 1.111], [3.5, 1.233], [3.75, 1.364], [4.0, 1.141], [4.5, 1.375], [5.0, 1.275], [5.5, 1.502], [6.0, 1.395],
+];
+/** The start that puts the cat wholly beyond a point `aside` world units to the right. */
+const enterFrom = (aside: number) =>
+  ENTER_STARTS.find(([across]) => across >= aside + ENTER.nose) ?? ENTER_STARTS.at(-1)!;
 
 export interface MoltyScreenOptions {
   /** The creature package: its id and its file's URL (packages/<id>/<id>.json). None: a
@@ -75,8 +85,9 @@ export interface MoltyScreenOptions {
   /** The finger is every tap on the page that lands on the canvas (a canvas that takes no
    *  pointer itself: a word under the page's text), not the canvas's own pointer. */
   pageTaps?: boolean;
-  /** The creature walks in from outside the frame. `outside`: a canvas beside the screen (same
-   *  size, ENTER_SHIFT of it to the right) that shows the water there while it does. */
+  /** The creature walks in from beyond the window's right edge. `outside`: a canvas the size and
+   *  place of the screen's own, clear but for the cat: this moves it along with the cat while
+   *  the cat is outside the glass (the same renderer's picture of the cat alone). */
   entrance?: { outside: HTMLCanvasElement | null };
   reducedMotion: boolean;
   /** A tap (or `pick`) answered the question on screen with this option. */
@@ -196,18 +207,32 @@ class Screen implements MoltyScreenHandle {
     this.sceneAt = this.seconds;
   }
 
-  /** The entrance: the creature is on screen after a few frames; then it is put outside and
-   *  called, its first steps played unseen. */
+  /** The entrance: the creature is on screen after a few frames; then it is put beyond the
+   *  window's right edge and called, its getting up played unseen. */
   private enter() {
     const cores = this.twin ? [this.core, this.twin] : [this.core];
-    this.twin?.pan(ENTER.pan);
-    this.outside = this.options.entrance!.outside?.getContext("2d", { alpha: false }) ?? null;
+    this.outside = this.options.entrance!.outside?.getContext("2d") ?? null;
+    const box = this.canvas.getBoundingClientRect();
+    const aside = ((innerWidth - (box.left + box.width / 2)) * (this.px / box.width)) / ENTER.px;
+    const [across, back] = enterFrom(aside);
     for (const c of cores) {
       for (let i = 0; i < 3; i++) c.frame(SETTLE_STEP_MS * 1000);
-      this.entering = c.enter(ENTER.across, ENTER.back);
-      for (let t = 0; t < ENTER.lead * 1000; t += SETTLE_STEP_MS) c.frame(SETTLE_STEP_MS * 1000);
+      this.entering = c.enter(across, back);
     }
+    for (let t = 0; t < ENTER.lead * 1000; t += SETTLE_STEP_MS) this.advance(SETTLE_STEP_MS * 1000);
     this.draw();
+  }
+
+  /** One frame of the firmware's clock. The window outside the glass looks where the cat is, so
+   *  its picture of the cat alone can be carried there (`aside`). */
+  private aside = 0;
+  private advance(us: number) {
+    if (this.twin) {
+      this.aside = this.core.across();
+      this.twin.pan(this.aside);
+      this.twin.frame(us);
+    }
+    this.core.frame(us);
   }
 
   /** Where the finger's events come from. */
@@ -263,9 +288,7 @@ class Screen implements MoltyScreenHandle {
 
   private step(ms: number) {
     if (!this.options.reducedMotion) this.letWavesIn(ms);
-    const us = Math.round(ms * 1000 * (this.entering ? ENTER.rate : 1));
-    this.core.frame(us);
-    this.twin?.frame(us);
+    this.advance(Math.round(ms * 1000 * (this.entering ? ENTER.rate : 1)));
     this.seconds += ms / 1000;
     if (this.entering && !this.core.entering()) {
       // it sits: the window beside the screen is done with
@@ -281,12 +304,12 @@ class Screen implements MoltyScreenHandle {
 
   private draw() {
     this.ctx.putImageData(new ImageData(this.core.pixels() as Uint8ClampedArray<ArrayBuffer>, this.px, this.px), 0, 0);
-    if (this.twin && this.outside)
-      this.outside.putImageData(
-        new ImageData(this.twin.pixels() as Uint8ClampedArray<ArrayBuffer>, this.px, this.px),
-        0,
-        0,
-      );
+    const cat = this.outside && this.twin?.catPixels();
+    if (cat) {
+      // the cat alone, carried to where it stands: beside the screen, then under it
+      this.outside!.canvas.style.translate = `${((this.aside * ENTER.px) / this.px) * this.canvas.clientWidth}px 0`;
+      this.outside!.putImageData(new ImageData(cat as Uint8ClampedArray<ArrayBuffer>, this.px, this.px), 0, 0);
+    }
   }
 
   /** Play `seconds` unseen, then show where it got to (reduced motion: one still per change). */

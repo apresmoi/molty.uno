@@ -8,6 +8,7 @@
  *
  *   web_cat_place   the creature, as it stands, put `across` to the side of the frame's middle and `back` away from
  *                   the viewer (world units). A call (cc_come: what a tap does) then walks it in with its own clips.
+ *   web_cat_across  where it is now, across the frame and back from the viewer (web_cat_back)
  *   web_cat_coming  it is still on its way (or attending); web_cat_attend: once it has arrived, it attends for this
  *                   long only (the player's own 3 s is for a tap; an entrance ends when it sits).
  *   web_cat_pan     the picture's camera looks `across` to the side (world units) of where the player's camera does:
@@ -30,7 +31,21 @@ void web_cat_place(cc_t *c, float across, float back) {
     c->pz = c->tz = c->camz + across * rz - back * fz;
 }
 
-bool web_cat_coming(const cc_t *c) { return c->come != 0; }
+/* how far to the side of the frame's middle it stands, and how far back from the viewer (world units) */
+float web_cat_across(const cc_t *c) {
+    const float D2R = 3.14159265358979f / 180.f;
+    return (c->px - c->camx) * cosf(c->camyaw * D2R) - (c->pz - c->camz) * sinf(c->camyaw * D2R);
+}
+float web_cat_back(const cc_t *c) {
+    const float D2R = 3.14159265358979f / 180.f;
+    return -((c->px - c->camx) * sinf(c->camyaw * D2R) + (c->pz - c->camz) * cosf(c->camyaw * D2R));
+}
+/* still on its way (or attending). A call gives up after CC_COME_S of walking: from far outside the frame it has
+ * further to go than a tap ever asks, so while it is still outside its walk does not count */
+bool web_cat_coming(cc_t *c) {
+    if (c->come == 1 && fabsf(web_cat_across(c)) > 0.9f) c->comeT = 0.f;
+    return c->come != 0;
+}
 void web_cat_attend(cc_t *c, float seconds) {
     if (c->come >= 2 && c->come <= 3 && c->gesture >= 0 && c->gest[c->gesture].hold > seconds) c->gest[c->gesture].hold = seconds;
 }
