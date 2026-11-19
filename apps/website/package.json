@@ -28,6 +28,7 @@
     "@astrojs/react": "^5.0.2",
     "@astrojs/sitemap": "^3.7.1",
     "@astrojs/starlight": "^0.38.2",
+    "@glyphcss/diagrams": "0.3.2",
     "@glyphcss/fluid": "0.3.2",
     "@layoutit/polycss-core": "0.2.11",
     "@layoutit/polycss-react": "0.2.11",

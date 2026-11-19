@@ -31,24 +31,6 @@ export const SYNCED_DOCS = [
     description: 'The molty CLI and stdio MCP server, direct over USB/Wi-Fi or through the relay.',
   },
   {
-    source: 'device/creatures/README.md',
-    slug: 'moltys/overview',
-    title: 'Moltys and the viewers',
-    description: 'Where the creatures live, the browser viewers and the .molty exporter.',
-  },
-  {
-    source: 'device/creatures/js/cute/README.md',
-    slug: 'moltys/making-your-own',
-    title: 'Make your own Molty',
-    description: 'The cute kit: a creature is a small data spec plus optional hooks.',
-  },
-  {
-    source: 'device/creatures/MOLTY-FORMAT.md',
-    slug: 'moltys/format',
-    title: 'The .molty format',
-    description: 'The ~1 KB binary file that carries one creature to the device.',
-  },
-  {
     source: 'docs/PACKAGES.md',
     slug: 'moltys/packages',
     title: 'Packages and scenes',
@@ -73,3 +55,10 @@ export const SYNCED_DOCS = [
     description: 'Tests to run, conventions, and how to send a pull request.',
   },
 ];
+
+/** Addresses that used to serve other pages: they land on the Moltys group's first page. */
+export const DOC_REDIRECTS = {
+  '/moltys/overview/': '/moltys/packages/',
+  '/moltys/making-your-own/': '/moltys/packages/',
+  '/moltys/format/': '/moltys/packages/',
+};

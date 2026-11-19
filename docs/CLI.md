@@ -67,9 +67,7 @@ physical effects without requiring this document.
 ## Mood mapping
 
 Direct HTTP mode only (see the known gap above). `MoodMapper.Map` returns a
-`MoodPlan` (optional creature name plus state patch). `MappedMoods` is the default;
-a future mapper can leave the creature empty and return `{"mood":"happy"}`.
-Callers and both adapters stay unchanged.
+`MoodPlan` (optional creature name plus state patch). `MappedMoods` is the default.
 
 | Mood | Creature | State patch specific to this mood |
 |---|---|---|

@@ -37,22 +37,19 @@ add the relay as a remote MCP server (`https://<relay>/mcp`).
 
 ## How it works
 
+```mermaid
+flowchart TD
+  accTitle: Molty, the relay and your agent
+  console[Console] ---|USB-C or Wi-Fi| molty[Molty, on your desk]
+  molty -->|audio, events| relay[Relay, in the cloud]
+  relay -->|commands| molty
+  agent[Your agent, anywhere] -->|MCP or REST| relay
+  relay -->|results| agent
 ```
-   your desk                     the cloud                      anywhere
- +----------------+           +-------------------+           +-------------------+
- |     molty      |  outbound |    molty relay    |  MCP or   |    your agent     |
- |                |---------->|                   |<----------|                   |
- | screen   mic   |    WSS    |  one room per     |   REST    |  Claude, Codex,   |
- | speaker  imu   |<----------|  device: pairing, |---------->|  Grok, OpenClaw,  |
- | touch          |  commands |  tokens, speech   |  results  |  ...              |
- |                |  audio,   |  <-> text         |           |                   |
- +-------+--------+  events   +-------------------+           +-------------------+
-         |
-         | USB-C or Wi-Fi
- +-------+--------+
- |  the console   |   setup + settings, served by Molty itself
- +----------------+   http://10.13.37.1 (USB)   or   http://molty.local (Wi-Fi)
-```
+
+Molty has a screen, a mic, a speaker, a motion sensor and touch. It dials out to the relay over WSS. Your agent is
+Claude, Codex, Grok, OpenClaw or any other. The console is setup and settings, served by Molty itself at
+`http://10.13.37.1` (USB) or `http://molty.local` (Wi-Fi).
 
 The relay keeps one room per device: it checks the device key, runs pairing, hands your
 agent a token, forwards commands, and turns speech into text and back. It is a Cloudflare
