@@ -3,6 +3,7 @@
 A package teaches a Molty to draw something new: a creature, or a family of scenes such as an astrology wheel.
 It is **data only**, never code. The firmware knows how to play packages, not what any of them are about:
 it has no idea what a planet, a zodiac sign or a cat is.
+To write a scenes package, start at [DISPLAY.md](DISPLAY.md): a skill folder with a readable `display.yaml` that builds the file described here.
 
 ```
 repo packages/<id>/      built package files live here (source of truth for now)

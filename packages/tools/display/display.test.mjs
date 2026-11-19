@@ -337,6 +337,14 @@ test('the dial example: one file, checks clean, builds what is committed, plays 
   assert.match(readFileSync(join(dir, 'build/display.md'), 'utf8'), /"layout":"dial","params":\{"value":135,"reading":"Humidity 64 percent, a bit damp\."\}/);
 });
 
+test('docs/DISPLAY.md: its first screen builds as written, and the call it shows is the one the build writes', () => {
+  const md = readFileSync(join(ROOT, 'docs/DISPLAY.md'), 'utf8'), dir = folder({ 'display.yaml': /```yaml\n([\s\S]*?)```/.exec(md)[1] }), r = build(dir);
+  assert.deepEqual(r.errors, []);
+  assert.ok(frame(r.pkg, 'hello', { angle: 90 }, 1).size > 150);
+  const call = /```json\n(.*)\n```/.exec(md)[1];
+  assert.ok(readFileSync(join(dir, 'build/display.md'), 'utf8').includes(call), call);
+});
+
 test('preview: a local page that draws a screen with the reference player, a tapped zone lit', async () => {
   const server = preview(ASTRO, 0);
   await new Promise((ok) => server.once('listening', ok));
