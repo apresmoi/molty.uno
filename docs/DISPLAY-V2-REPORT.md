@@ -231,8 +231,8 @@ What was in `cat.blend` and what the scripts added, before this work:
 What was done about it: the scripts were run once more inside Blender and what posed the rig on every frame was
 keyed into `cat.blend` as 45 actions (with their length, loop flag, view, follow and stride), the 90 drawn shapes
 were added as Empties on their bones, and the feet were marked. `cat.blend` now holds everything; the scripts are not
-needed. The exporter reading those actions gives the same samples as the scripts did, bit for bit (checked track by
-track for all 5378 tracks), in under a minute.
+needed. The exporter reading those actions gives the same samples as the scripts did, bit for bit (compared key
+for key on four actions, and through the built package's bytes for all 45), in under a minute.
 
 ## What a Molty is now
 
@@ -251,7 +251,7 @@ moltys/cat/cat.blend                  the Blender file (4.9 MB)
 tools/blender/molty_export.py         Blender to .glb, for any Molty made our way (280 lines). Needs Blender 5.3
 ```
 
-Before, the cat was 15 files and about 3,450 lines of its own code: `packages/cat/build.mjs` (89 lines) and
+Before, the cat was 14 files and about 3,400 lines of its own code: `packages/cat/build.mjs` (89 lines) and
 `packages/cat/blender/` with `cat_model.py`, `cat_poses.py`, `cat_clips.py`, `export_molty.py`, `anim_render.py`,
 `render_sheet.py`, `overlay_ref.py`, `preview_data.mjs`, `animations.html`, `model-sheet.html`, `cat-export.json`,
 `cat.blend`, `.gitignore`. All of `packages/cat/blender/` is removed. `packages/cat/build.mjs` is 13 lines that run the
@@ -294,7 +294,7 @@ What the device package needs that neither form can change: see deviations 1 and
   the cat's, it draws in its own colors. The test makes it each run; it was previewed and looked at (a ginger cat
   mid-stretch). It is not committed: it would copy the 5 MB body.
 - **A Molty written by hand, no 3D tool**: `docs/examples/molty-pip/molty.json`, 4 bones, 7 shapes, 2 actions
-  (`idle`, `hop`), 55 lines. Builds to 2.2 KB, plays in the device's reference player, previewed and looked at.
+  (`idle`, `hop`), 50 lines. Builds to 2.2 KB, plays in the device's reference player, previewed and looked at.
 
 ## Run each check from a clean checkout
 
@@ -378,8 +378,8 @@ They are not in the tree now, as asked.
 
 ## Not verified
 
-- Nothing ran on a device, and the firmware was not rebuilt (its only diff is none; `device/` changed in one JS
-  reference file, by two `export` words).
+- Nothing ran on a device, and the firmware was not rebuilt (it has no diff; under `device/` only one JS reference
+  file changed, by two `export` words).
 - The exporter on any other Blender version, machine or OS. It refuses a version other than 5.3 by a check at its
   top; that refusal was read and is pinned by a test of the source, not run on another Blender. Whether another
   machine's Blender 5.3 solves the IK to the same bits is unknown; the committed `cat.glb` makes the build
