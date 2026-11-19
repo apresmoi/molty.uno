@@ -90,7 +90,8 @@
 .lid {
   transform-origin: 50% 0;
 }
-/* the screen, off: a dark disc while the board turns (the screen under it cannot turn with it) */
+/* the screen, off: a dark disc on the face until the board stands (the screen under it cannot
+   turn with it; MoltyScreen brings it on then) */
 .cover {
   background: var(--m-device-off);
   opacity: 0;

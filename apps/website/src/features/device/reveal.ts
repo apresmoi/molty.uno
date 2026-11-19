@@ -21,9 +21,6 @@ export interface RevealFrame {
   lift: number;
   /** The whole device's opacity (it arrives). */
   opacity: number;
-  /** 0…1: the screen is off (a dark disc over it): it cannot turn with the board, so it lights
-   *  as the turn ends. */
-  cover: number;
   /** The glass shell's swing about its top edge (deg, negative = open). */
   lid: number;
 }
@@ -33,7 +30,6 @@ export const REST: RevealFrame = {
   pitch: 0,
   lift: 0,
   opacity: 1,
-  cover: 0,
   lid: 0,
 };
 
@@ -81,7 +77,7 @@ export function revealFrame(kind: RevealKind, u: number): RevealFrame {
   const arrive = smooth(t / 0.16);
   switch (kind) {
     // the hero, on load: it comes up out of the depth below, turned and tipped away, swings to
-    // face you and the screen lights: the device arrives first, what it shows second
+    // face you: the device arrives first, its screen comes on once it stands
     case "arrive": {
       const yaw = land(wound(t, -38, -4, 0.13, 8.6, ZETA), u);
       return {
@@ -90,20 +86,18 @@ export function revealFrame(kind: RevealKind, u: number): RevealFrame {
         pitch: land(wound(t, -22, -3, 0.13, 9.2, ZETA), u),
         lift: land(wound(t, 0.12, 0.015, 0.13, 9.5, 0.7), u),
         opacity: arrive,
-        cover: 1 - smooth((t - 0.55) / 0.3),
       };
     }
-    // turned away, it winds a touch further, swings to face you and overshoots once; the
-    // screen lights as the swing ends
+    // turned away, it winds a touch further, swings to face you and overshoots once
     case "turn": {
       const yaw = land(wound(t, 46, 5, 0.13, 8.6, ZETA), u);
-      return { ...REST, yaw, opacity: arrive, cover: 1 - smooth((t - 0.5) / 0.32) };
+      return { ...REST, yaw, opacity: arrive };
     }
     // the reader: it swings in with its glass held open, then the glass falls shut under
-    // gravity, bounces once on the bezel and the screen lights under it
+    // gravity and bounces once on the bezel
     case "lid": {
       const yaw = land(wound(t, 42, 4, 0.11, 10.5, ZETA), u);
-      return { ...REST, yaw, opacity: arrive, lid: lidFall(t - 0.36), cover: 1 - smooth((t - 0.74) / 0.22) };
+      return { ...REST, yaw, opacity: arrive, lid: lidFall(t - 0.36) };
     }
     // it rises from below with its face tipped down (crouching a little first), and tips back
     case "rise": {
@@ -113,7 +107,6 @@ export function revealFrame(kind: RevealKind, u: number): RevealFrame {
         pitch,
         lift: land(wound(t, 0.15, 0.02, 0.13, 9.5, 0.7), u),
         opacity: arrive,
-        cover: 1 - smooth((t - 0.5) / 0.32),
       };
     }
     // a coin arriving already spinning on its edge: the spring catches its momentum, it slows,
@@ -125,7 +118,6 @@ export function revealFrame(kind: RevealKind, u: number): RevealFrame {
         yaw,
         lift: land(spring(t, -0.08, 0, 9, 0.6), u),
         opacity: arrive,
-        cover: 1 - smooth((t - 0.55) / 0.3),
       };
     }
   }

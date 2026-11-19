@@ -65,7 +65,7 @@ for (const kind of KINDS)
     assert.ok(Math.abs(a.yaw) + Math.abs(a.pitch) + Math.abs(a.lid) > 10, "it starts turned away");
     assert.deepEqual(revealFrame(kind, 1), REST);
     const end = revealFrame(kind, 0.995);
-    assert.ok(Math.abs(end.yaw) < 0.3 && Math.abs(end.pitch) < 0.3 && Math.abs(end.lid) < 0.3 && end.cover < 0.01);
+    assert.ok(Math.abs(end.yaw) < 0.3 && Math.abs(end.pitch) < 0.3 && Math.abs(end.lid) < 0.3);
     const step = 1 / (120 * REVEAL_SECONDS[kind]); // one 120 Hz frame
     let prev = a;
     const start = Math.sign(main(kind, 0));

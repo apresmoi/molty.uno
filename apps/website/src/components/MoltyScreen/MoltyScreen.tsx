@@ -17,8 +17,11 @@ import styles from "./MoltyScreen.module.css";
  *  it. The pointer is the finger on the glass: a tap ripples the water and the cat comes to the
  *  front, a tap on a question's answer or a scene's spot does what it does on the device.
  *
- *  It mounts when it nears the viewport and powers on once its device has turned in; until it
- *  draws (and without JavaScript, or if the renderer cannot load) a still of the cat stands in.
+ *  The device is one thing: nothing of its screen shows until its frame stands in place. Then
+ *  the screen comes on inside it: dark first, the renderer's picture as soon as it draws (it
+ *  mounts when the device nears the viewport, and its clock starts when the device stands).
+ *  Without JavaScript, with reduced motion, or if the renderer cannot load, a still of the cat
+ *  stands in. `data-screen` says which: "off" (the device is away), "dark", "live", "still".
  *  `boot`: the device's boot screen first. `play`: what it does by itself (features/molty).
  *  `scenes`: it may be asked for scenes. `onReady` hands the running screen over (null when it
  *  goes); `onAnswer` and `onFrame` are the screen's own. */
@@ -40,22 +43,29 @@ export function MoltyScreen({
   onFrame?: (seconds: number) => void;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
-  const lit = useRef(true); // the device's screen: off through its turn
   const power = useRef<() => void>(() => {});
   const callbacks = useRef({ onReady, onAnswer, onFrame });
   callbacks.current = { onReady, onAnswer, onFrame };
-  const [live, setLive] = useState(false);
+  const state = useRef({ stands: false, live: false, failed: false });
+  const [screen, setScreen] = useState<"off" | "dark" | "live" | "still">();
+  const show = () => {
+    const s = state.current;
+    // waiting for the renderer the screen is dark (the still would be shown, then hidden by the
+    // boot); with reduced motion nothing boots, so the still holds until the picture replaces it
+    const waiting = matchMedia("(prefers-reduced-motion: reduce)").matches ? "still" : "dark";
+    setScreen(!s.stands ? "off" : s.live ? "live" : s.failed ? "still" : waiting);
+  };
 
   useEffect(() => {
     const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
     const needs = { creature: CAT, scenes: scenes || play === "chart" ? SCENES_URL : undefined };
-    let screen: MoltyScreenHandle | null = null;
+    let handle: MoltyScreenHandle | null = null;
     let program: ProgramRun | null = null;
     let alive = true;
     let near = false;
     let started = false;
     power.current = () => {
-      if (started || !near || !lit.current) return;
+      if (started || !near || !state.current.stands) return;
       started = true;
       const mount = mountMoltyScreen(canvas.current!, {
         ...needs,
@@ -73,13 +83,18 @@ export function MoltyScreen({
       Promise.all([mount, play ? PROGRAMS[play]() : null]).then(
         ([s, p]) => {
           if (!alive) return s.destroy();
-          screen = s;
-          setLive(true);
+          handle = s;
+          state.current.live = true;
+          show();
           callbacks.current.onReady?.(s);
           if (p) program = runProgram(p, s);
           if (reducedMotion) program?.frame(Infinity); // no clock: its one thing, as a still
         },
-        () => {}, // the still stays (the service marked the page)
+        () => {
+          // the still stands in (the service marked the page)
+          state.current.failed = true;
+          show();
+        },
       );
     };
     const watch = new IntersectionObserver(
@@ -96,19 +111,21 @@ export function MoltyScreen({
       alive = false;
       watch.disconnect();
       power.current = () => {};
-      if (screen) callbacks.current.onReady?.(null);
-      screen?.destroy();
+      if (handle) callbacks.current.onReady?.(null);
+      handle?.destroy();
     };
   }, []);
 
   return (
-    <span className={styles.root} data-molty-screen="" data-live={live || undefined}>
+    <span className={styles.root} data-molty-screen="" data-screen={screen}>
+      <span className={styles.panel} />
       <img className={styles.still} src={CAT_STILL} alt="" width={PANEL} height={PANEL} />
       <canvas ref={canvas} className={styles.canvas} width={PANEL} height={PANEL} />
       <Device
         reveal={reveal}
         onScreen={(on) => {
-          lit.current = on;
+          state.current.stands = on;
+          show();
           if (on) power.current();
         }}
       />

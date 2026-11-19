@@ -164,20 +164,19 @@ export function SpeedReader({ text, answers: own }: { text: string; answers: Rec
         <p className={styles.status} aria-live="polite">
           {status}
         </p>
-        {listening && (
-          <p className={styles.row} role="group" aria-label="Answer Molty">
-            {CHOICES.map((c, i) => (
-              <button
-                key={c}
-                type="button"
-                className={styles.answer}
-                onClick={() => (screen.current ? screen.current.pick(i) : answered(i))}
-              >
-                {c}
-              </button>
-            ))}
-          </p>
-        )}
+        {/* always laid out, so the page holds still when it starts to listen */}
+        <p className={styles.row} role="group" aria-label="Answer Molty" data-off={!listening || undefined}>
+          {CHOICES.map((c, i) => (
+            <button
+              key={c}
+              type="button"
+              className={styles.answer}
+              onClick={() => (screen.current ? screen.current.pick(i) : answered(i))}
+            >
+              {c}
+            </button>
+          ))}
+        </p>
         <p className={styles.row} role="group" aria-label="Words per minute">
           <span>wpm</span>
           {SPEEDS.map((v) => (
