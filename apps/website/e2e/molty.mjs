@@ -2,9 +2,11 @@
 //   screenshots   the hero and the moltys section at 1280 and 390 px wide, dark and light, once
 //                 the cat has walked in and sat: e2e-out/molty-<section>-<width>-<theme>.png
 //   the entrance  the hero from the load on, a frame every 200 ms: the device turns in, the cat
-//                 walks in from outside the glass and sits: e2e-out/molty-entrance-sheet.png
-//   one water     a tap inside the hero's screen, a frame every 150 ms: the ring crosses the rim
-//                 and goes on through the page: e2e-out/molty-ripple-sheet.png (+ molty-ripple.webp)
+//                 walks in from the right, outside the glass, and sits: e2e-out/molty-entrance-sheet.png
+//   one water     a tap inside the hero's screen, a frame every 200 ms: the ring crosses the rim
+//                 and goes on through the page (e2e-out/molty-ripple-sheet.png); then a tap on
+//                 the page beside it: the ring goes through the device and on
+//                 (molty-through-sheet.png, molty-through.webp)
 //   frame rate    frames the hero's screen draws a second (each putImageData on its canvas is
 //                 one) while the page is tapped every 2 s, the longest gap between two, and the
 //                 main thread's time a frame: at 1280 and 390 px, as is and with the CPU slowed
@@ -89,8 +91,8 @@ for (const theme of ['dark', 'light'])
   const { ctx, page } = await open(1280, 800, 'dark', { wait: 0 });
   await page.waitForSelector(HERO);
   const box = await page.locator(HERO).boundingBox();
-  const clip = { x: box.x - box.width * 0.75, y: box.y - box.height * 0.1, width: box.width * 1.85, height: box.height * 1.2 };
-  const s = await strip(page, clip, 36, 200, 320);
+  const clip = { x: box.x - box.width * 0.3, y: box.y - box.height * 0.1, width: 1280 - (box.x - box.width * 0.3), height: box.height * 1.2 };
+  const s = await strip(page, clip, 30, 200, 320);
   await sheet(s, 6, `${OUT}molty-entrance-sheet.png`);
   const draws = await page.evaluate(() => window.__draws);
   const outside = draws.filter((d) => d.what === 'outside');
@@ -102,35 +104,50 @@ for (const theme of ['dark', 'light'])
   await ctx.close();
 }
 
-// one water: a tap inside the screen goes on through the page
+// one water: a tap inside the screen goes on through the page, a tap on the page goes through the screen
 {
   const { ctx, page } = await open(1280, 800, 'dark');
   const box = await page.locator(HERO).boundingBox();
-  const clip = { x: box.x - box.width * 0.55, y: box.y - box.height * 0.45, width: box.width * 1.75, height: box.height * 1.6 };
-  // outside the device: the ring of dust on the page, more than 1.1 device radii from the tap
-  const ringOutside = () =>
+  const cx = box.x + box.width / 2,
+    cy = box.y + box.height / 2,
+    r = box.width / 2;
+  /** The page's ring: its lit pixels outside the device, and how many of them lie right of the device's middle. */
+  const ring = () =>
     page.evaluate(
       ([cx, cy, r]) => {
         const c = document.querySelector('[data-page-water]');
         const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
-        let n = 0;
+        let out = 0,
+          past = 0;
         for (let y = 0; y < c.height; y++)
-          for (let x = 0; x < c.width; x++) if (d[(y * c.width + x) * 4 + 3] && Math.hypot(x - cx, y - cy) > 1.1 * r) n++;
-        return n;
+          for (let x = 0; x < c.width; x++)
+            if (d[(y * c.width + x) * 4 + 3] && Math.hypot(x - cx, y - cy) > 1.1 * r) {
+              out++;
+              if (x > cx) past++;
+            }
+        return { out, past };
       },
-      [box.x + box.width * 0.5, box.y + box.height * 0.55, box.width / 2],
+      [cx, cy, r],
     );
-  await page.evaluate(() => (window.__draws.length = 0));
-  await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.55);
-  const s = await strip(page, clip, 10, 150, 320);
-  const ring = await ringOutside();
-  const rest = await strip(page, clip, 10, 150, 320);
-  s.tiles.push(...rest.tiles);
-  await sheet(s, 5, `${OUT}molty-ripple-sheet.png`);
-  await sharp(s.tiles, { join: { animated: true } }).webp({ delay: 150, loop: 0 }).toFile(`${OUT}molty-ripple.webp`);
-  const water = (await page.evaluate(() => window.__draws)).filter((d) => d.what === 'water').length;
-  if (ring < 300 || !water) failures.push(`a tap inside the screen did not go on through the page (${ring} px of the ring outside the device, ${water} frames of the water layer)`);
-  else console.log(`ok   one water: a tap inside the screen crosses the rim (${ring} px of its ring lit outside the device, about 2 s later)`);
+  const wide = { x: box.x - box.width * 0.95, y: box.y - box.height * 0.45, width: 1280 - (box.x - box.width * 0.95), height: box.height * 1.6 };
+  // inside the glass: the ring crosses the rim outward
+  await page.mouse.click(cx, cy + r * 0.1);
+  const inside = await strip(page, wide, 12, 200, 320);
+  const a = await ring();
+  await sheet(inside, 6, `${OUT}molty-ripple-sheet.png`);
+  await page.waitForTimeout(7000);
+  // on the page, left of the device: the ring reaches the device, goes through it and on
+  await page.mouse.click(box.x - box.width * 0.6, cy);
+  await page.waitForTimeout(3600); // its ring is past the device's middle, above and below it
+  const b = await ring();
+  await page.waitForTimeout(8000);
+  await page.mouse.click(box.x - box.width * 0.6, cy);
+  const through = await strip(page, wide, 24, 200, 320);
+  await sheet(through, 6, `${OUT}molty-through-sheet.png`);
+  await sharp(through.tiles, { join: { animated: true } }).webp({ delay: 200, loop: 0 }).toFile(`${OUT}molty-through.webp`);
+  if (a.out < 300) failures.push(`a tap inside the screen did not go on through the page (${a.out} px of its ring outside the device)`);
+  else if (b.past < 100) failures.push(`a tap on the page did not get past the device (${b.past} px of its ring beyond the device's middle)`);
+  else console.log(`ok   one water: a tap inside the screen crosses the rim (${a.out} px of its ring outside), a tap on the page passes the device (${b.past} px beyond its middle)`);
   await ctx.close();
 }
 

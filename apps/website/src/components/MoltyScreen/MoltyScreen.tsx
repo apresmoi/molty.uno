@@ -23,7 +23,7 @@ import styles from "./MoltyScreen.module.css";
  *  mounts when the device nears the viewport, and its clock starts when the device stands).
  *  Without JavaScript, with reduced motion, or if the renderer cannot load, a still of the cat
  *  stands in. `data-screen` says which: "off" (the device is away), "dark", "live", "still".
- *  `enter`: the cat is not there at first: it walks in from outside the glass, from the left,
+ *  `enter`: the cat is not there at first: it walks in from outside the glass, from the right,
  *  and sits (once; the water it crosses out there shows in a window beside the screen meanwhile).
  *  `boot`: the device's boot screen first. `play`: what it does by itself (features/molty).
  *  `scenes`: it may be asked for scenes. `onReady` hands the running screen over (null when it
@@ -135,7 +135,7 @@ export function MoltyScreen({
           data-gone={entered || undefined}
           width={PANEL}
           height={PANEL}
-          style={{ translate: `${-ENTER_SHIFT * 100}% 0` }}
+          style={{ translate: `${ENTER_SHIFT * 100}% 0` }}
         />
       )}
       <span className={styles.panel} />

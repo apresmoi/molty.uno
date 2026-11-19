@@ -8,6 +8,7 @@
 //   <html data-fluid-moltys>   "live" once a screen draws, "off" when the module cannot load
 //              (the page then keeps its still images)
 import wasmUrl from "@molty-wasm/molty.wasm?url";
+import { pageWaves } from "../page-water";
 import { MoltyCore, PANEL, type MoltyQuestion, type MoltyState } from "./core";
 
 /** The page's frame rate. The device paces its own frames at 33 a second (mole_fluid.c). */
@@ -44,19 +45,19 @@ function pageState(state: "live" | "off") {
   if (state === "live" || root.dataset.fluidMoltys !== "live") root.dataset.fluidMoltys = state;
 }
 
-/** The entrance (the hero): the cat starts outside the frame, to the left, and walks in. In
+/** The entrance (the hero): the cat starts outside the frame, to the right, and walks in. In
  *  world units, measured on the firmware's own frames: the frame's middle to its rim is 0.87. */
 const ENTER = {
-  across: -1.1,
+  across: 1.1,
   back: 0.3,
   /** Played unseen first: it gets up and takes its first steps. */
   lead: 1.0,
   /** Its clock runs this much faster until it sits: under 4 s on the page. */
   rate: 1.8,
   /** The window beside the screen looks this far to the side... */
-  pan: -0.9,
+  pan: 0.9,
 };
-/** ... which is this much of the panel's width (0.9 world units: 240 of 466 px). */
+/** ... which is this much of the panel's width to the right (0.9 world units: 240 of 466 px). */
 export const ENTER_SHIFT = 240 / 466;
 
 export interface MoltyScreenOptions {
@@ -75,7 +76,7 @@ export interface MoltyScreenOptions {
    *  pointer itself: a word under the page's text), not the canvas's own pointer. */
   pageTaps?: boolean;
   /** The creature walks in from outside the frame. `outside`: a canvas beside the screen (same
-   *  size, ENTER_SHIFT of it to the left) that shows the water there while it does. */
+   *  size, ENTER_SHIFT of it to the right) that shows the water there while it does. */
   entrance?: { outside: HTMLCanvasElement | null };
   reducedMotion: boolean;
   /** A tap (or `pick`) answered the question on screen with this option. */
@@ -245,7 +246,23 @@ class Screen implements MoltyScreenHandle {
     this.options.onFrame?.(this.seconds);
   };
 
+  /** One water: a wave crossing the page comes in at the rim (not one that started on this
+   *  screen: the finger's own ripple is that wave here). */
+  private letWavesIn(ms: number) {
+    const waves = pageWaves(performance.now());
+    if (!waves.length) return;
+    const box = this.canvas.getBoundingClientRect();
+    const k = this.px / box.width;
+    for (const w of waves) {
+      const x = (w.x - box.left) * k,
+        y = (w.y - box.top) * k;
+      if (x >= 0 && x <= this.px && y >= 0 && y <= this.px) continue;
+      this.core.wave(x, y, w.r * k, w.sigma * k, w.height, ms / 1000);
+    }
+  }
+
   private step(ms: number) {
+    if (!this.options.reducedMotion) this.letWavesIn(ms);
     const us = Math.round(ms * 1000 * (this.entering ? ENTER.rate : 1));
     this.core.frame(us);
     this.twin?.frame(us);

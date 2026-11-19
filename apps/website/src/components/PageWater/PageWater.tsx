@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { mountPageWater } from "../../services/page-water";
 import styles from "./PageWater.module.css";
 
-/** The page's water: the calm dust is the page's own background (a tile, there without any
- *  script); this is the layer a tap's wave travels on, fixed to the viewport, drawn only while a
+/** The page's water: the dust is the page's own background (tiles, there without any script),
+ *  and some of it drifts (a second layer of the same loose dust, moved by CSS alone); this is
+ *  the layer a tap's wave travels on, fixed to the viewport, drawn only while a
  *  wave is out. It finds the page (the element the dust is the background of) by `data-water`.
  *  On mount it also ends the intro's wait (<html data-fluid>: Head's "pending" becomes "live"),
  *  so Head's watchdog knows a script took over. Reduced motion: no waves. The specks' colours
@@ -20,7 +21,12 @@ export function PageWater() {
     const water = mountPageWater(canvas.current!, page, { paper: theme === "light" });
     return () => water.destroy();
   }, [theme]);
-  return <canvas ref={canvas} className={styles.water} data-page-water="" aria-hidden="true" />;
+  return (
+    <>
+      <span className={styles.drift} aria-hidden="true" />
+      <canvas ref={canvas} className={styles.water} data-page-water="" aria-hidden="true" />
+    </>
+  );
 }
 
 /** <html data-theme> (Starlight's picker and ThemeToggle set it), followed live; null before mount. */

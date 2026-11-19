@@ -32,8 +32,28 @@ export function ign(x, y) {
   return Math.fround(v - Math.floor(v));
 }
 
+/** fluid_fine.c hash_u(): an even hash of two integers and a salt, 0..1. */
+export function hashU(a, b, c) {
+  let h = (Math.imul(a, 0x27d4eb2d) ^ Math.imul(b, 0x165667b1) ^ Math.imul(c, 0x9e3779b1)) >>> 0;
+  h ^= h >>> 15;
+  h = Math.imul(h, 0x85ebca6b) >>> 0;
+  h ^= h >>> 13;
+  return (h & 0xffff) / 65536;
+}
+
 /** Calm water: the specks no light hides. */
 export const CALM = FINE.AMBIENT * FINE.LIGHT_FLOOR;
+
+/** The page's two kinds of dust (page-side: the firmware has one, round a drawing).
+ *  far    everywhere: loose noise. The calm density, placed by the hash (no order), at the
+ *         far level. Nothing gathers it.
+ *  near   round a screen or a word, where the dust comes into focus: the ordered specks (the
+ *         firmware's own placement), as dense and as bright as a quarter of the way to a
+ *         drawing's edge. The page fades it in toward what focuses it. */
+export const DUST = {
+  far: { density: CALM, level: FINE.LEVEL_FAR, ordered: false },
+  near: { density: FINE.AMBIENT + FINE.PEAK * 0.25, level: FINE.LEVEL_FAR + (1 - FINE.LEVEL_FAR) * 0.25, ordered: true },
+};
 
 /** A speck's colour at brightness `level` (0..1): on the dark page, or its ink on paper (the
  *  light theme: the water's hue, darker the brighter it would be on the dark page). */
