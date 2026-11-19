@@ -22,6 +22,10 @@ typedef struct cpk cpk_t;
 
 /** Parse the package and build its body. NULL with *err (static). */
 cpk_t *cpk_create(const char *json, size_t len, uint32_t seed, const char **err);
+/** What a rigged creature's first frame would make (its dots and its rings: tables that take a few hundred ms on the
+ *  device), made ahead, on whichever task made it. grid: W, H, xs, ys and mask as the sim's it will play on (only those
+ *  are read: a copy will do). */
+void   cpk_prepare(cpk_t *k, const fluid_sim_t *grid);
 void   cpk_destroy(cpk_t *k);
 /** Moods and actions go to its engine (me_set_mood, me_act, ...; its own gestures are already given to it). */
 mood_engine_t *cpk_engine(cpk_t *k);

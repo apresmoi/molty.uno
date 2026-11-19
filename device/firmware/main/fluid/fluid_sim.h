@@ -394,9 +394,13 @@ uint8_t fluid_braille_contour(const float *sub);
 #define FLUID_MORPH_ARC       0.42f    /* the travelling specks' arc, rad                        */
 #define FLUID_MORPH_SPECKS    2400
 #define FLUID_MORPH_PX        20000    /* the pixels a frame redraws at first, then fitted within: */
+#define FLUID_MORPH_PX_START  26000    /* ... a change begins with no more than this            */
 #define FLUID_MORPH_PX_MIN    9000
 #define FLUID_MORPH_PX_MAX    60000
 enum { FLUID_MORPH_NONE, FLUID_MORPH_LOOSEN, FLUID_MORPH_LOOSE, FLUID_MORPH_GATHER };
+/* a frame's part of it: the new look's first frame (every cell looked at), the new drawing's cache, the specks aimed,
+ * rows kept, drawn loose, mixed, done */
+enum { FLUID_MORPH_ST_NEW = 1, FLUID_MORPH_ST_FILL = 2, FLUID_MORPH_ST_AIM = 4, FLUID_MORPH_ST_KEEP = 8, FLUID_MORPH_ST_OLD = 16, FLUID_MORPH_ST_MIX = 32, FLUID_MORPH_ST_DONE = 64 };
 typedef struct {
     uint8_t  phase;                    /* FLUID_MORPH_*: LOOSEN while the old look is still the drawer's (its rows kept
                                         * in turn), LOOSE once all are (the new look's inputs come), GATHER */
@@ -411,7 +415,9 @@ typedef struct {
                                         * left it, 3 done (live again); H more: its turn this frame (0 none, 1 keep,
                                         * 2 old, 3 mix, 4 done); then W x 2 int16: its cells [a, b) inside the glass */
     int      kept, done, cursor, stride, fill, px;
-    int      ntr, seen; bool aimed;          /* the travelling specks: where each leaves from and lands (fb px; land x < 0:
+    uint8_t  stage;                    /* what this frame's part of it was (FLUID_MORPH_ST_*), for the log */
+    int      fill_us;                  /* ... and how long its part of the new drawing's cache took, us */
+    int      ntr, seen, aim; bool aimed;   /* (aim: how many of the specks know where they land) */          /* the travelling specks: where each leaves from and lands (fb px; land x < 0:
                                         * nowhere, it fades), their colours (panel order); this frame's places */
     int16_t  *tr; uint16_t *trc;
     int32_t  *trow;                    /* H + 1: this frame's specks by cell row (indices into trn) */

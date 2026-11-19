@@ -50,6 +50,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "freertos/idf_additions.h"
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -1050,19 +1051,77 @@ static esp_err_t alloc_bufs(void);
 extern const uint8_t _binary_default_molty_start[];
 extern const uint8_t _binary_default_molty_end[];
 
-static void load_creature(const uint8_t *buf, size_t len, bool pkg) {
-    const char *err = "oom", *name = "";
-    cute_spec_t *spec = NULL;
-    cute_rt_t *rt = NULL;
-    cpk_t *k = NULL;
-    if (pkg) {
-        k = cpk_create((const char *)buf, len, esp_random(), &err);
-        if (k) name = cp_name(cpk_player(k));
-    } else if ((spec = heap_caps_malloc(sizeof(cute_spec_t), MALLOC_CAP_SPIRAM)) && cute_spec_parse(buf, len, spec, &err) == 0) {
-        rt = cute_rt_create(spec, esp_random());
-        if (!rt) err = "oom";
-        else name = spec->name;
+/* A creature is made (its package parsed, its clips or rig built: about a second for the cat) on a task of its own
+ * under the screen's, so no frame waits for it, and handed to the sim whole: the sim swaps it in (adopt_creature). */
+typedef struct {
+    uint8_t *blob; size_t len; bool pkg;            /* what to make it from (kept until it is on screen) */
+    fluid_sim_t grid; void *grid_mem;               /* the sim's grid as it was then: its size, cell centres and mask (copies) */
+    cute_spec_t *spec; cute_rt_t *rt; cpk_t *k;     /* made: a .molty's, or a package's         */
+    const char *err; const char *name;
+    int ms;
+    atomic_bool done;
+} cr_job_t;
+#define CR_LOAD_PRIO  1                             /* below the fluid's tasks (2)              */
+#define CR_LOAD_STACK 8192                          /* PSRAM: no flash ops run on it            */
+static cr_job_t s_cr_job;
+static TaskHandle_t s_cr_task;
+
+static void make_creature(cr_job_t *j) {
+    const int64_t t0 = esp_timer_get_time();
+    j->err = "oom"; j->name = ""; j->spec = NULL; j->rt = NULL; j->k = NULL;
+    if (j->pkg) {
+        j->k = cpk_create((const char *)j->blob, j->len, esp_random(), &j->err);
+        if (j->k) j->name = cp_name(cpk_player(j->k));
+        if (j->k && j->grid_mem) cpk_prepare(j->k, &j->grid);   /* its dots and rings too: its first frame makes nothing */
+    } else if ((j->spec = heap_caps_malloc(sizeof(cute_spec_t), MALLOC_CAP_SPIRAM)) && cute_spec_parse(j->blob, j->len, j->spec, &j->err) == 0) {
+        j->rt = cute_rt_create(j->spec, esp_random());
+        if (!j->rt) j->err = "oom";
+        else j->name = j->spec->name;
     }
+    j->ms = (int)((esp_timer_get_time() - t0) / 1000);
+}
+static void cr_load_task(void *arg) {
+    cr_job_t *j = arg;
+    make_creature(j);
+    atomic_store(&j->done, true);
+    vTaskSuspend(NULL);                             /* the sim task deletes this one */
+}
+
+/* a job for blob (taken), with the sim's grid as it is now (the sim task) */
+static void cr_job_begin(cr_job_t *j, uint8_t *blob, size_t len, bool pkg) {
+    memset(j, 0, sizeof(*j));
+    j->blob = blob; j->len = len; j->pkg = pkg;
+    const int W = s_sim->W, H = s_sim->H, N = W * H;
+    /* (only with no creature on screen yet, a boot: with one, its dots' strips hold the internal RAM the new one's would
+     * want, and those would land in PSRAM for good: then its first frame makes them, once the old one is gone) */
+    float *g = cr_loaded() ? NULL : heap_caps_malloc(sizeof(float) * (size_t)(W + H) + (size_t)N, MALLOC_CAP_SPIRAM);
+    if (!g) return;                                 /* (no room: its first frame makes its dots and rings, as before) */
+    j->grid_mem = g;
+    j->grid.W = W; j->grid.H = H; j->grid.N = N; j->grid.stage = s_sim->stage;
+    j->grid.xs = g; j->grid.ys = g + W; j->grid.mask = (uint8_t *)(g + W + H);
+    memcpy(j->grid.xs, s_sim->xs, sizeof(float) * (size_t)W); memcpy(j->grid.ys, s_sim->ys, sizeof(float) * (size_t)H);
+    memcpy(j->grid.mask, s_sim->mask, (size_t)N);
+}
+
+/* the creature made by make_creature becomes the one on screen (the sim task) */
+static void adopt_creature(cr_job_t *j) {
+    if (j->k && j->grid_mem && (j->grid.W != s_sim->W || j->grid.H != s_sim->H)) {   /* the grid changed meanwhile: made again for it */
+        cpk_destroy(j->k);
+        heap_caps_free(j->grid_mem);
+        xSemaphoreTake(s_mutex, portMAX_DELAY);
+        if (!s_cute_blob) { s_cute_blob = j->blob; s_cute_len = j->len; s_cute_pkg = j->pkg; j->blob = NULL; }
+        xSemaphoreGive(s_mutex);
+        heap_caps_free(j->blob);
+        return;
+    }
+    heap_caps_free(j->blob); heap_caps_free(j->grid_mem); j->blob = NULL; j->grid_mem = NULL;
+    const char *err = j->err, *name = j->name;
+    cute_spec_t *spec = j->spec;
+    cute_rt_t *rt = j->rt;
+    cpk_t *k = j->k;
+    const size_t len = j->len;
+    const bool pkg = j->pkg;
+    mole_diag_event(false, "creature.made %dms %s", j->ms, rt || k ? name : err);
     if (rt || k) {
         const int mood = cr_loaded() ? cr_mood() : CM_IDLE;
         cute_rt_destroy(s_cute); cpk_destroy(s_cpk);
@@ -1289,19 +1348,25 @@ static void draw_task(void *arg) {
         int64_t t2 = esp_timer_get_time();
         mole_diag_panel_frame((uint32_t)(t1 - t0), (uint32_t)(t2 - t1));
         if (s_draw) fluid_draw_pace(s_draw, s_dopts.fine || fluid_draw_morphing(s_draw) ? (int)(t2 - t0) : 0);   /* a scene on fine dust, and a change of picture, keep the frame */
-        {   /* a change of picture (the dust reshaping), once it is over (/api/log): how long it took, its worst frame's
-             * cells + send (and its two parts), its frames over 33 ms, the pixels a frame it was fitted to */
-            static uint32_t n, worst, worst_c, worst_s, slow, px_lo, px_hi;
+        {   /* a change of picture (the dust reshaping), once it is over (/api/log): how long it took; its worst frame's
+             * cells + send (its two parts), which frame that was (@), in which phase (ph: 1 loosening, 2 loose, 3
+             * gathering) doing what (st: FLUID_MORPH_ST_* bits, in hex; fill: its part of the new drawing's cache, ms);
+             * its frames over 33 ms; each phase's own worst frame (p1, p2, p3); the pixels a frame it was fitted to */
+            static uint32_t n, worst, worst_c, worst_s, worst_n, worst_ph, worst_st, worst_fill, slow, px_lo, px_hi, pw[4], pc[4];
             static int64_t began;
-            if (s_draw && fluid_draw_morphing(s_draw)) {
+            const int ph = s_draw ? fluid_draw_morphing(s_draw) : 0;
+            if (ph) {
                 const uint32_t c = (uint32_t)(t1 - t0), sn = (uint32_t)(t2 - t1), px = (uint32_t)s_draw->m.px;
-                if (!n++) { began = t0; worst = slow = 0; px_lo = px_hi = px; }
-                if (c + sn > worst) { worst = c + sn; worst_c = c; worst_s = sn; }
+                if (!n++) { began = t0; worst = slow = 0; px_lo = px_hi = px; memset(pw, 0, sizeof(pw)); memset(pc, 0, sizeof(pc)); }
+                if (c + sn > worst) { worst = c + sn; worst_c = c; worst_s = sn; worst_n = n; worst_ph = (uint32_t)ph; worst_st = s_draw->m.stage; worst_fill = (uint32_t)s_draw->m.fill_us; }
+                if (c + sn > pw[ph & 3]) { pw[ph & 3] = c + sn; pc[ph & 3] = c; }
                 slow += c + sn > 33000;
                 px_lo = px < px_lo ? px : px_lo; px_hi = px > px_hi ? px : px_hi;
             } else if (n) {
-                mole_diag_event(false, "morph %dms n=%u worst=%.1f(%.1f+%.1f) over=%u px=%u..%u", (int)((t0 - began) / 1000), (unsigned)n, worst / 1000.f,
-                                worst_c / 1000.f, worst_s / 1000.f, (unsigned)slow, (unsigned)px_lo, (unsigned)px_hi);
+                mole_diag_event(false, "morph %dms n=%u worst=%.1f(%.1f+%.1f)@%u ph=%u st=%02x fill=%.1f over=%u p1=%.1f(%.1f) p2=%.1f(%.1f) p3=%.1f(%.1f) px=%u..%u",
+                                (int)((t0 - began) / 1000), (unsigned)n, worst / 1000.f, worst_c / 1000.f, worst_s / 1000.f, (unsigned)worst_n, (unsigned)worst_ph,
+                                (unsigned)worst_st, worst_fill / 1000.f, (unsigned)slow, pw[1] / 1000.f, pc[1] / 1000.f, pw[2] / 1000.f, pc[2] / 1000.f,
+                                pw[3] / 1000.f, pc[3] / 1000.f, (unsigned)px_lo, (unsigned)px_hi);
                 n = 0;
             }
         }
@@ -1421,7 +1486,9 @@ static void fluid_task(void *arg) {
         const bool req_implied = s_req_implied; s_req_implied = false;
         req_reel = s_req_reel; s_req_reel = false;
         nrip = s_ripn; memcpy(rip, s_ripq, sizeof(rip)); s_ripn = 0;
-        uint8_t *cblob = s_cute_blob; size_t clen = s_cute_len; s_cute_blob = NULL; const bool cpkg = s_cute_pkg;
+        /* (a creature being made: the next one waits its turn) */
+        uint8_t *cblob = s_cr_task ? NULL : s_cute_blob; size_t clen = s_cute_len; const bool cpkg = s_cute_pkg;
+        if (cblob) s_cute_blob = NULL;
         int req_mood = s_req_mood; s_req_mood = -1;
         bool req_work = s_req_work; s_req_work = false;
         float req_hold_s = s_req_hold_s;
@@ -1479,7 +1546,21 @@ static void fluid_task(void *arg) {
                     s_word_until = s_tnow;                              /* while holding the last */
             }
         }
-        if (cblob) { load_creature(cblob, clen, cpkg); heap_caps_free(cblob); fd_set_creature(&s_dir, cr_loaded()); }
+        if (s_cr_task && atomic_load(&s_cr_job.done)) {    /* a creature was made: it is the one on screen now */
+            vTaskDeleteWithCaps(s_cr_task); s_cr_task = NULL;
+            adopt_creature(&s_cr_job);
+            fd_set_creature(&s_dir, cr_loaded());
+        }
+        if (cblob) {                                       /* a creature to make: on its own task, under this one */
+            cr_job_begin(&s_cr_job, cblob, clen, cpkg);
+            if (xTaskCreatePinnedToCoreWithCaps(cr_load_task, "cr_load", CR_LOAD_STACK, &s_cr_job, CR_LOAD_PRIO, &s_cr_task, tskNO_AFFINITY,
+                                                MALLOC_CAP_SPIRAM) != pdPASS) {
+                s_cr_task = NULL;                          /* no memory for the task: made here, as before */
+                make_creature(&s_cr_job);
+                adopt_creature(&s_cr_job);
+                fd_set_creature(&s_dir, cr_loaded());
+            }
+        }
         /* the director: state first (it may end the reel), then the mood over it */
         if (req_reel) fd_autoplay(&s_dir);
         /* a drawing up stays to its end: a say's words become its subtitle, and a mood alone

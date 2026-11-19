@@ -593,6 +593,37 @@ static double rim_water(const fluid_sim_t *s) {   /* how much the water moves ne
     }
     return e;
 }
+/* a creature prepared ahead (its dots and rings made off the sim's task, from a copy of the grid alone) is the creature
+ * its first frame would have made */
+static void test_prepare(const char *pkgdir) {
+    char path[512]; size_t len;
+    snprintf(path, sizeof(path), "%s/cat/cat.json", pkgdir);
+    char *json = slurp(path, &len);
+    const char *err = NULL;
+    cpk_t *a = json ? cpk_create(json, len, 3, &err) : NULL, *b = json ? cpk_create(json, len, 3, &err) : NULL;
+    CHECK(a && b, "prepare: cat (%s)", err ? err : "no file");
+    if (!a || !b) { cpk_destroy(a); cpk_destroy(b); free(json); return; }
+    const int P = 466; int W, H; fluid_grid_for_stage(P, &W, &H);
+    fluid_sim_t *sa = fluid_sim_create(W, H, P), *sb = fluid_sim_create(W, H, P);
+    fluid_sim_t grid;                              /* the grid alone: its size, cell centres and mask */
+    memset(&grid, 0, sizeof(grid));
+    grid.W = W; grid.H = H; grid.N = W * H; grid.stage = P;
+    grid.xs = malloc(sizeof(float) * (size_t)W); grid.ys = malloc(sizeof(float) * (size_t)H); grid.mask = malloc((size_t)W * H);
+    memcpy(grid.xs, sb->xs, sizeof(float) * (size_t)W); memcpy(grid.ys, sb->ys, sizeof(float) * (size_t)H); memcpy(grid.mask, sb->mask, (size_t)W * H);
+    cpk_prepare(b, &grid);
+    free(grid.xs); free(grid.ys); free(grid.mask);
+    int differ = 0;
+    fluid_ring_t ra = { 0 }, rb = { 0 };
+    for (int f = 0; f < 60; f++) {                 /* idle, then a listen's ring */
+        ring_frame(a, sa, &ra, f >= 20); ring_frame(b, sb, &rb, f >= 20);
+        const uint8_t *da, *db; const uint32_t *ca, *cb;
+        cpk_cells(a, &da, &ca); cpk_cells(b, &db, &cb);
+        differ += memcmp(da, db, (size_t)W * H) != 0 || memcmp(sa->col, sb->col, sizeof(fluid_rgba16_t) * (size_t)W * H) != 0;
+    }
+    CHECK(differ == 0, "prepare: the creature made ahead is the same creature (%d of 60 frames differ)", differ);
+    cpk_destroy(a); cpk_destroy(b); fluid_sim_destroy(sa); fluid_sim_destroy(sb); free(json);
+}
+
 static void test_crisp_ring(const char *pkgdir) {
     char path[512]; size_t len;
     snprintf(path, sizeof(path), "%s/cat/cat.json", pkgdir);
@@ -781,6 +812,7 @@ int main(int argc, char **argv) {
     test_own_rigged(argv[1]);
     test_crisp_panel(argv[1]);
     test_crisp_ring(argv[1]);
+    test_prepare(argv[1]);
     test_crisp_progress(argv[1]);
     for (const char *const *id = (const char *const[]){ "duck", "cat", "octopus", NULL }; *id; id++) test_info(argv[1], *id);
     for (const char *const *id = (const char *const[]){ "duck", NULL }; *id; id++) test_planted(argv[1], *id);   /* the cat: clip_test.c */
