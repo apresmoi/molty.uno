@@ -426,7 +426,8 @@ typedef struct {
     int64_t  frame_us;                 /* when this frame's cells began (the cache takes what they leave)        */
     int16_t  (*box)[4];                /* this frame's boxes (fluid_draw_send2), fb px x0, y0, x1, y1             */
     int      nbox;
-    int      px, wins, band;           /* this frame's pixels and windows of the front, its pixels in the band    */
+    int      px, wins, band, comp;     /* this frame's pixels and windows of the front, its pixels in the band, and
+                                        * those drawn and composed (the others copied from the kept glass)        */
     int      cmp_us, push_us;          /* ... the time its windows took to draw and compose, and to hand to the panel
                                         * (each hand-over waits for the transfer before it)                      */
 } fluid_morph_t;
