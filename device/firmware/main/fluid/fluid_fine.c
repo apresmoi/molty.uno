@@ -32,6 +32,13 @@ enum { PH_IDLE, PH_RASTER, PH_FWD, PH_BWD, PH_EXTRACT, PH_LEVELS };
 
 /* tables in PSRAM, made once (internal RAM is the network's) */
 static float *s_near, *s_tint, *s_sin;
+/* EXPERIMENT scene dust (fluid_fine.h; delete once Juan picks) */
+static volatile int s_dust_kind = FINE_DUST_SPECKS;
+static volatile float s_ride = FINE_RIDE;
+void  fluid_fine_dust_kind(int kind) { s_dust_kind = kind >= FINE_DUST_SPECKS && kind <= FINE_DUST_DOTS_ILACE ? kind : FINE_DUST_SPECKS; }
+int   fluid_fine_dust_kind_get(void) { return s_dust_kind; }
+void  fluid_fine_ride_px(float px) { s_ride = px < 0.f ? 0.f : px > 4096.f ? 4096.f : px; }
+float fluid_fine_ride_px_get(void) { return s_ride; }
 static bool s_lut;
 
 static inline float hash_u(int a, int b, uint32_t c) {     /* fluid_draw.c's, chart-engine.js hashU */
@@ -661,28 +668,29 @@ void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_
     {   /* where it rides: worked out again only when the tapped drawing or the caption's box changes */
         uint32_t rkey = capbox ? mix((uint32_t)lrintf(cb[0]) | (uint32_t)lrintf(cb[1]) << 16, (uint32_t)lrintf(cb[2]) | (uint32_t)lrintf(cb[3]) << 16) : 7u;
         for (int k = 0; o->still && k < N; k++) if (o->still[k] == 2) rkey = rkey * 31u + (uint32_t)k;
-        rkey = rkey * 31u + (uint32_t)f->rim;
+        const float ride = s_ride;                      /* (EXPERIMENT: FINE_RIDE unless set; the whole glass past its size) */
+        rkey = (rkey * 31u + (uint32_t)f->rim) * 31u + (uint32_t)lrintf(ride * 4.f);
         if (rkey != f->ride_key) {
             f->ride_key = rkey;
-            memset(f->ride, 0, (size_t)N);
+            memset(f->ride, ride >= S, (size_t)N);
             for (int j = 0; f->rim && j < H; j++) for (int i = 0; i < W; i++) {
                 const float ex = (i + 0.5f) * cwf - S * 0.5f, ey = (j + 0.5f) * chf - S * 0.5f, lim = FINE_RIM * S * 0.5f;
                 if (ex * ex + ey * ey >= lim * lim) f->ride[j * W + i] = 1;
             }
-            const int ri = (int)ceilf(FINE_RIDE / cwf), rj = (int)ceilf(FINE_RIDE / chf);
-            for (int k = 0; o->still && k < N; k++) {
+            const int ri = (int)ceilf(ride / cwf), rj = (int)ceilf(ride / chf);
+            for (int k = 0; o->still && ride < S && k < N; k++) {
                 if (o->still[k] != 2) continue;
                 const int ci = k % W, cj = k / W;
                 for (int j = cj - rj; j <= cj + rj; j++) for (int i = ci - ri; i <= ci + ri; i++) {
                     if (i < 0 || j < 0 || i >= W || j >= H) continue;
                     const float ex = (i - ci) * cwf, ey = (j - cj) * chf;
-                    if (ex * ex + ey * ey <= FINE_RIDE * FINE_RIDE) f->ride[j * W + i] = 1;
+                    if (ex * ex + ey * ey <= ride * ride) f->ride[j * W + i] = 1;
                 }
             }
             for (int j = 0; capbox && j < H; j++) for (int i = 0; i < W; i++) {
                 const float px = (i + 0.5f) * cwf, py = (j + 0.5f) * chf;
                 const float ex = px < cb[0] ? cb[0] - px : px > cb[1] ? px - cb[1] : 0.f, ey = py < cb[2] ? cb[2] - py : py > cb[3] ? py - cb[3] : 0.f;
-                if (ex * ex + ey * ey <= FINE_RIDE * FINE_RIDE) f->ride[j * W + i] = 1;
+                if (ex * ex + ey * ey <= ride * ride) f->ride[j * W + i] = 1;
             }
         }
     }
@@ -702,7 +710,7 @@ void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_
     /* the specks. A cell's own are worked out on its row's turn (a quarter of the rows a frame): those the light never
      * hides only when the backdrop by them changed, the others against the light. Until then the cell shows what it
      * showed. A cell never worked out for this set (a set just swapped in) is, off its turn too, while FINE_CATCHUP lasts. */
-    const fine_set_t *st = f->drawn;
+    const fine_set_t *st = s_dust_kind == FINE_DUST_SPECKS ? f->drawn : NULL;   /* (EXPERIMENT: dots instead, the drawer's) */
     if (st) {
         const int LG = f->lg;
         const float T = now * FINE_LIGHT_SPEED;
