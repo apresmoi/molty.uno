@@ -25,11 +25,15 @@
 
 #ifdef ESP_PLATFORM
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 #define FLUID_CALLOC(n) heap_caps_calloc(1, (n), MALLOC_CAP_SPIRAM)
 #define FLUID_FREE(p)   heap_caps_free(p)
+static inline int64_t now_us(void) { return esp_timer_get_time(); }
 #else
+#include <time.h>
 #define FLUID_CALLOC(n) calloc(1, (n))
 #define FLUID_FREE(p)   free(p)
+static inline int64_t now_us(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000; }
 #endif
 
 /* ---- tunables (render.js R) ---- */
@@ -232,6 +236,7 @@ fluid_draw_t *fluid_draw_create(int W, int H, int fb_w, int fb_h) {
 void fluid_draw_destroy(fluid_draw_t *d) {
     if (!d) return;
     FLUID_FREE(d->block); FLUID_FREE(d->cd0); FLUID_FREE(d->csig); FLUID_FREE(d->shp0); FLUID_FREE(d->sh1); FLUID_FREE(d->near); FLUID_FREE(d->hdc); FLUID_FREE(d->hdcv);
+    FLUID_FREE(d->m.row);
     FLUID_FREE(d);
 }
 
@@ -455,15 +460,10 @@ static inline void cell_look(const fluid_draw_t *d, const fluid_frame_t *s, cons
         const uint8_t *src = o->dots;
         float dust = o->dust;                           /* a transition's scatter */
         if (o->shapes) {
-            if (o->fine) {
-                /* on fine dust a transition has no scatter (its dots all over the panel cost it frames): each cell is
-                 * there or not, at its own moment (fluid_fine_turn), and the drawing forms and goes over the frames of it */
-                if (dust > 0.f && dust >= fluid_fine_turn(i, j, s->H)) { *key_out = KEY_EMPTY; *col_out = 0; return; }
-                dust = 0.f;
-            }
+            if (o->fine) dust = 0.f;                    /* (on fine dust a change of scene is the drawer's: fluid_morph_t) */
             /* smooth or dust, no fade: a cell changes once; a tapped spot's drawing (o->still) never breaks, and
-             * under a ring on the rim (a listen: the voice touches the water) none of it does */
-            const bool held = (o->still && o->still[k]) || (o->fine && o->fine->rim);
+             * under a ring on the rim (a listen: the voice touches the water) or while the picture changes none does */
+            const bool held = (o->still && o->still[k]) || (o->fine && o->fine->rim) || d->m.phase;
             const int wt = (held && dust <= 0.f) || hd_dust(s, i, j, dust) < 0.5f ? HD_LEVELS : 0;
             if (wt) hd = (uint16_t)(KEY_HD | wt << 8);
             if (wt == HD_LEVELS) src = o->kdots;
@@ -781,6 +781,8 @@ static void shape_boxes(fluid_draw_t *d, const fluid_draw_opts_t *o) {
     }
 }
 
+static void morph_plan(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_opts_t *o);
+static void morph_dirty(fluid_draw_t *d);
 int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_opts_t *o) {
     const int W = s->W, H = s->H;
     const int pal = (o->palette >= 0 && o->palette < FLUID_PAL_COUNT) ? o->palette : FLUID_PAL_PASTEL;
@@ -795,6 +797,7 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
     const uint32_t frame = (uint32_t)(o->time * SHIMMER_HZ);
     int drawn = 0;
 
+    if (d->m.phase) morph_plan(d, s, o);                /* the picture changing: this frame's part of it */
     /* a scene in high definition: its letters are among its shapes */
     const bool hd = o->scene && o->dots && o->shapes;
     const bool crisp = o->scene && o->dots && !o->shapes && o->dust <= 0.f;   /* crisp dots alone (crisp_flat) */
@@ -803,6 +806,7 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
         if (o->dust > 0.f && !o->fine) dust_push(d, s, o);
         shape_boxes(d, o);
         halo_field(d, o->dots, o->fine != NULL);
+        if (o->fine) o->fine->pause = d->m.phase != 0;  /* (the light holds still while the picture changes) */
         if (o->fine) fluid_fine_frame(o->fine, s, o, d->ilace, 2);   /* its fine dust instead of the haze */
         else caption_box(d, o);
         if (d->force && d->hdcv) memset(d->hdcv, 0, (size_t)W * H);   /* the drawing's cache, drawn again */
@@ -878,14 +882,8 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
     for (int j = 0; hd && o->fine && j < H; j++) for (int i = 0, last = -99; i < W; i++)
         if (d->key[j * W + i] == KEY_STALE) { est += FLUID_CELL_US + (i - last > RUN_GAP ? FLUID_WIN_US : 0); last = i; }
     /* ... and when those alone are over it (a large drawing growing), they go in every other cell row a frame */
-    const bool halve = est > d->quota && !d->force;
+    const bool halve = est > d->quota && !d->force && !d->m.phase;
     if (halve) est /= 2;
-    if (hd && o->fine && (o->dust > 0.f || d->dust0 > 0.f))     /* ... and the cells that come or go in a transition */
-        for (int j = 0; j < H; j++) for (int i = 0; i < W; i++) {
-            const float turn = fluid_fine_turn(i, j, H);
-            if ((d->dust0 > 0.f && d->dust0 >= turn) != (o->dust > 0.f && o->dust >= turn)) est += FLUID_CELL_US + FLUID_WIN_US / 8;
-        }
-    d->dust0 = hd && o->fine ? o->dust : 0.f;
     const int jfirst = hd && o->fine ? (d->ilace * 5) % H : 0;
 
     /* what each cell looks like; which changed */
@@ -954,6 +952,7 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
     }
     d->force = false;
     d->crisp0 = crisp; d->ilace++;
+    if (d->m.phase) morph_dirty(d);                     /* the picture changing: its rows in turn, whole */
 
     /* condensed letters ride the surface (y follows the wave height) and decode from
      * ramp glyphs into the real letter as ink arrives */
@@ -1210,7 +1209,7 @@ void fluid_shapes_row_dim(const fluid_shape_t *shapes, int nshapes, const int16_
 /* A scene on fine dust redraws only the dust most frames, over a drawing that stays: the drawing (every shape but the
  * caption's, whole) is drawn once into d->hdc, a cell at a time when a window first needs it (or a shape there changed),
  * and copied from there; the caption's letters are drawn over it live. */
-static void hdc_cell(fluid_draw_t *d, const fluid_draw_opts_t *o, int k, int ncache) {
+static bool hdc_cell(fluid_draw_t *d, const fluid_draw_opts_t *o, int k, int ncache) {
     const int i = k % d->W, j = k / d->W, x0 = d->cx[i], x1 = d->cx[i + 1], y0 = d->cy[j], y1 = d->cy[j + 1];
     /* the few shapes that reach the cell, in their order (each row then looks at those alone); the scratch for them in
      * PSRAM (the drawer's stack is small) */
@@ -1249,6 +1248,7 @@ static void hdc_cell(fluid_draw_t *d, const fluid_draw_opts_t *o, int k, int nca
         else if (n) fluid_shapes_row(sh, n, (const int16_t (*)[4])box, d->ox, d->oy, o->palette, NULL, 0.f, row, 0, y, x0, x1);
     }
     d->hdcv[k] = 1;
+    return n > 0;
 }
 /* the cached drawing's pixels [xa, xb) of fb row y into row (row[0] = fb x bx), darker under the caption's backdrop */
 static void hdc_copy(const fluid_draw_t *d, const fluid_draw_opts_t *o, uint16_t *row, int bx, int y, int xa, int xb) {
@@ -1272,17 +1272,354 @@ static void hdc_copy(const fluid_draw_t *d, const fluid_draw_opts_t *o, uint16_t
     }
 }
 
+/* ── the whole picture changing: the dust reshapes (fluid_morph_t) ─────────── */
+
+enum { MR_LIVE, MR_KEPT, MR_PREV, MR_DONE };            /* a cell row */
+enum { MT_NONE, MT_KEEP, MT_OLD, MT_MIX, MT_DONE };     /* its turn this frame */
+
+/* each pixel's own numbers: its threshold (low byte) and where its grain drifts (the next two) */
+static inline uint32_t morph_hash(int x, int y) {
+    uint32_t h = (uint32_t)x * 0x9E3779B1u ^ (uint32_t)y * 0x85EBCA77u;
+    h ^= h >> 15; h *= 0x2C1B3C6Du; h ^= h >> 12;
+    return h;
+}
+static inline float morph_smooth(float a, float b, float x) {
+    const float u = x <= a ? 0.f : x >= b ? 1.f : (x - a) / (b - a);
+    return u * u * (3.f - 2.f * u);
+}
+/* how the old picture shows t s into a change, tl s after all of it was kept, tg s into the gather (< 0: not yet): how
+ * much of it is gone (0..256), how far its grains are off their place (px, Q8, across; half of it up and down), how
+ * far it is carried round the middle (rad); and how much of the new one is there (0..256) */
+typedef struct { int gone, jit, come; float turn; } morph_lv_t;
+static morph_lv_t morph_levels(float t, float tl, float tg) {
+    const float x = morph_smooth(0.f, FLUID_MORPH_LOOSE_S, t), wait = tl > 0.f ? fminf(tl, FLUID_MORPH_WAIT_S) / FLUID_MORPH_WAIT_S : 0.f;
+    float gone = FLUID_MORPH_THIN * x + 0.12f * wait, jit = FLUID_MORPH_JIT * (x + 0.6f * wait), turn = FLUID_MORPH_TURN * (x + wait), come = 0.f;
+    if (tg >= 0.f) {
+        const float u = tg / FLUID_MORPH_GATHER_S;
+        gone += (1.f - gone) * morph_smooth(0.f, 0.8f, u);
+        jit += FLUID_MORPH_JIT_OUT * fminf(1.f, u); turn += FLUID_MORPH_TURN_OUT * fminf(1.f, u);
+        come = morph_smooth(0.15f, 1.f, u);
+    }
+    return (morph_lv_t){ (int)(gone * 256.f + 0.5f), (int)(jit * 256.f), (int)(come * 256.f + 0.5f), turn };
+}
+
+static bool morph_mem(fluid_draw_t *d) {
+    fluid_morph_t *m = &d->m;
+    if (m->row) return true;
+    const size_t tr = sizeof(int16_t) * 4 * FLUID_MORPH_SPECKS + sizeof(uint16_t) * 2 * FLUID_MORPH_SPECKS + sizeof(int32_t) * (size_t)(d->H + 1) +
+                      sizeof(uint16_t) * 6 * FLUID_MORPH_SPECKS;
+    m->row = FLUID_CALLOC((size_t)d->H * 2 + sizeof(int16_t) * 2 * (size_t)d->H + tr);
+    if (!m->row) return false;
+    m->tr = (int16_t *)(((uintptr_t)(m->row + (size_t)d->H * 2 + sizeof(int16_t) * 2 * (size_t)d->H) + 3) & ~(uintptr_t)3);
+    m->trow = (int32_t *)(m->tr + 4 * FLUID_MORPH_SPECKS);
+    m->trc = (uint16_t *)(m->trow + d->H + 1);
+    m->trn = m->trc + 2 * FLUID_MORPH_SPECKS;
+    int st = (int)(d->H * 0.381966f + 0.5f);            /* the rows' turns: far apart, every row once a round */
+    for (;; st++) { int a = st, b = d->H; while (b) { const int r = a % b; a = b; b = r; } if (a == 1) break; }
+    m->stride = st;
+    m->px = FLUID_MORPH_PX;
+    return true;
+}
+static inline uint8_t *morph_turn(const fluid_morph_t *m, int H) { return m->row + H; }
+static inline int16_t *morph_span(const fluid_morph_t *m, int H) { return (int16_t *)(m->row + 2 * H); }
+
+static void morph_end(fluid_draw_t *d, bool cut) {
+    fluid_morph_t *m = &d->m;
+    if (m->row) memset(m->row, 0, (size_t)d->H * 2);
+    m->phase = m->prev = FLUID_MORPH_NONE; m->go = false; m->ntr = 0;
+    if (cut) d->force = true;                           /* the glass is not the look's: all of it again */
+}
+
+bool fluid_draw_morph_look(fluid_draw_t *d, uint32_t look, uint16_t *snap, bool ready, float now) {
+    if (!d) return false;
+    fluid_morph_t *m = &d->m;
+    float dt = now - m->now;
+    m->now = now;
+    dt = dt < 0.f ? 0.f : dt > 0.1f ? 0.1f : dt;
+    if (m->phase) { m->t += dt; if (m->phase >= FLUID_MORPH_LOOSE) m->tl += dt; if (m->phase == FLUID_MORPH_GATHER) m->tg += dt; }
+    if (!look || !m->look || !snap || !morph_mem(d)) {   /* not the dust's to reshape (or no room to keep a picture): at once */
+        if (m->phase) morph_end(d, true);
+        m->look = m->want = look;
+        return false;
+    }
+    if (look != m->want) {
+        m->want = look;
+        if (m->phase != FLUID_MORPH_LOOSEN) {           /* (still on the picture before: this one comes after it instead) */
+            /* a change in the middle of one: its rows as they show now are the old picture, each kept again in turn */
+            m->prev = m->phase; m->pt = m->t; m->ptl = m->tl; m->ptg = m->tg;
+            for (int j = 0; j < d->H; j++) m->row[j] = m->phase && m->row[j] == MR_KEPT ? MR_PREV : MR_LIVE;
+            memset(morph_turn(m, d->H), 0, (size_t)d->H);
+            if (!m->prev) memset(snap, 0, sizeof(uint16_t) * (size_t)d->fb_w * d->fb_h);
+            m->phase = FLUID_MORPH_LOOSEN; m->snap = snap;
+            m->t = m->tl = 0.f; m->tg = -1.f; m->kept = m->done = 0; m->go = false; m->planned = false; m->ntr = m->seen = 0; m->aimed = false;
+        }
+    }
+    if (m->phase == FLUID_MORPH_LOOSEN) {
+        if (m->kept < d->H || !m->planned) return true; /* the old look draws on until every row is kept */
+        m->phase = FLUID_MORPH_LOOSE; m->look = m->want; m->tl = 0.f; m->fill = 0; m->filled = false;
+    }
+    m->look = m->want;
+    if (m->phase == FLUID_MORPH_LOOSE && ready) m->go = true;
+    return false;
+}
+
+static bool hdc_room(fluid_draw_t *d) {
+    if (d->hdc) return true;
+    d->hdc = FLUID_CALLOC(sizeof(uint16_t) * (size_t)d->fb_w * d->fb_h);
+    d->hdcv = FLUID_CALLOC((size_t)d->W * d->H);
+    if (!d->hdc || !d->hdcv) { FLUID_FREE(d->hdc); FLUID_FREE(d->hdcv); d->hdc = NULL; d->hdcv = NULL; }
+    return d->hdc != NULL;
+}
+
+#define FLUID_MORPH_FILL_US      12000  /* the new drawing made ahead: this long a frame, at FLUID_MORPH_PX */
+#define FLUID_MORPH_PICK_LINE    10     /* a drawn pixel of the old picture travels: one in this many; a speck of its dust: */
+#define FLUID_MORPH_PICK_DUST    40
+
+/* The old picture's pixels that will travel, picked as their row is kept (row: its pixels from fb x x0, panel order):
+ * its drawing's more than its dust's; once there are FLUID_MORPH_SPECKS, each new one takes the place of an earlier
+ * one, so they come from all over the glass. */
+static void morph_pick(fluid_draw_t *d, const uint16_t *row, int x0, int w, int y) {
+    fluid_morph_t *m = &d->m;
+    for (int q = 0; q < w; q++) {
+        if (!row[q]) continue;
+        const uint16_t le = (uint16_t)(row[q] >> 8 | row[q] << 8);
+        const bool line = (le >> 11) > 16 || (le >> 5 & 63) > 32 || (le & 31) > 16;
+        const uint32_t h = morph_hash(x0 + q + 7919, y + 104729);
+        if (h % (line ? FLUID_MORPH_PICK_LINE : FLUID_MORPH_PICK_DUST)) continue;
+        int at = m->ntr;
+        if (at >= FLUID_MORPH_SPECKS) { at = (int)((h >> 8) % (uint32_t)(m->seen + 1)); if (at >= FLUID_MORPH_SPECKS) { m->seen++; continue; } }
+        else m->ntr++;
+        m->seen++;
+        m->tr[4 * at] = (int16_t)(x0 + q); m->tr[4 * at + 1] = (int16_t)y; m->trc[2 * at] = row[q];
+    }
+}
+
+/* Where each lands: carried FLUID_MORPH_ARC round the middle, on a speck of the new look's dust in the cell it comes
+ * to, or (a creature) on one of that cell's dots; where there is neither it fades on the way. Kept as its start and
+ * its landing turned back (so the way between is the arc and a small step). */
+static void morph_aim(fluid_draw_t *d, const fluid_draw_opts_t *o) {
+    fluid_morph_t *m = &d->m;
+    const int W = d->W, H = d->H;
+    const float cx = d->ox + d->stage * 0.5f, cy = d->oy + d->stage * 0.5f, co = cosf(FLUID_MORPH_ARC), si = sinf(FLUID_MORPH_ARC);
+    const fine_set_t *st = o->scene && o->dots && o->shapes && o->fine ? o->fine->drawn : NULL;
+    const bool crisp = o->scene && o->dots && !o->shapes;
+    for (int q = 0; q < m->ntr; q++) {
+        const float px = m->tr[4 * q] + 0.5f - cx, py = m->tr[4 * q + 1] + 0.5f - cy;
+        const float rx = px * co - py * si, ry = px * si + py * co;           /* (y down: clockwise on the glass) */
+        const int i = (int)((rx + cx - d->ox) * W / d->stage), j = (int)((ry + cy - d->oy) * H / d->stage);
+        const uint32_t h = morph_hash(q + 31, 17);
+        float lx = 0.f, ly = 0.f;
+        bool land = false;
+        if (i >= 0 && j >= 0 && i < W && j < H) {
+            const int k = j * W + i;
+            if (st && st->start[k + 1] > st->start[k]) {
+                const uint32_t n = st->start[k] + h % (st->start[k + 1] - st->start[k]), p = st->pos[n];
+                const uint16_t c = st->col[n];
+                lx = (float)(p & 511) + 0.5f + d->ox - cx; ly = (float)(p >> 9 & 511) + 0.5f + d->oy - cy;
+                m->trc[2 * q + 1] = (uint16_t)(c >> 8 | c << 8);
+                land = o->fine->lv[n] != 0;
+            } else if (crisp && o->dots[k]) {
+                int b = (int)(h & 7);
+                while (!(o->dots[k] & (1u << fluid_braille_bit(b >> 2, b & 3)))) b = (b + 1) & 7;
+                lx = (float)d->dx[i * 2 + (b >> 2)] + d->dot_w * 0.5f - cx; ly = (float)d->dy[j * 4 + (b & 3)] + d->dot_h * 0.5f - cy;
+                m->trc[2 * q + 1] = d->col[k];
+                land = true;
+            }
+        }
+        if (!land) { lx = rx; ly = ry; m->trc[2 * q + 1] = 0; }
+        m->tr[4 * q + 2] = (int16_t)lrintf(lx * co + ly * si - px);          /* its landing turned back, from its start */
+        m->tr[4 * q + 3] = (int16_t)lrintf(-lx * si + ly * co - py);
+    }
+    m->aimed = true;
+}
+
+/* ... and where each is this frame, by cell row (morph_rect draws those in the rows it is given) */
+static void morph_fly(fluid_draw_t *d) {
+    fluid_morph_t *m = &d->m;
+    const int H = d->H;
+    memset(m->trow, 0, sizeof(int32_t) * (size_t)(H + 1));
+    if (!m->aimed || m->tg >= FLUID_MORPH_GATHER_S) return;
+    const float u = m->tg / FLUID_MORPH_GATHER_S, g = morph_smooth(0.f, 1.f, u), a = FLUID_MORPH_ARC * g, co = cosf(a), si = sinf(a);
+    const float cx = d->ox + d->stage * 0.5f, cy = d->oy + d->stage * 0.5f;
+    const int fade = (int)((1.f - u) * 256.f);
+    uint16_t *at = m->trn + 3 * FLUID_MORPH_SPECKS;                          /* as they come, then by row */
+    int n = 0;
+    for (int q = 0; q < m->ntr; q++) {
+        const float px = m->tr[4 * q] + 0.5f - cx + m->tr[4 * q + 2] * g, py = m->tr[4 * q + 1] + 0.5f - cy + m->tr[4 * q + 3] * g;
+        const int x = (int)(px * co - py * si + cx), y = (int)(px * si + py * co + cy);
+        if (x < 0 || y < d->cy[0] || x >= d->fb_w || y >= d->cy[H]) continue;
+        uint16_t c = m->trc[2 * q];
+        if (m->trc[2 * q + 1]) { if (u > 0.6f) c = m->trc[2 * q + 1]; }
+        else {                                                               /* nowhere to land: it fades */
+            const uint16_t le = (uint16_t)(c >> 8 | c << 8);
+            const uint16_t f2 = (uint16_t)((((le >> 11) * fade) >> 8) << 11 | (((le >> 5 & 63) * fade) >> 8) << 5 | (((le & 31) * fade) >> 8));
+            c = (uint16_t)(f2 >> 8 | f2 << 8);
+        }
+        if (!c) continue;
+        at[3 * n] = (uint16_t)x; at[3 * n + 1] = (uint16_t)y; at[3 * n + 2] = c; n++;
+    }
+    for (int q = 0; q < n; q++) m->trow[(at[3 * q + 1] - d->cy[0]) * H / (d->cy[H] - d->cy[0]) + 1]++;
+    for (int j = 0; j < H; j++) m->trow[j + 1] += m->trow[j];
+    for (int q = n - 1; q >= 0; q--) {                                       /* (each row's end comes down to its start) */
+        const int j = (at[3 * q + 1] - d->cy[0]) * H / (d->cy[H] - d->cy[0]);
+        memcpy(m->trn + 3 * --m->trow[j + 1], at + 3 * q, sizeof(uint16_t) * 3);
+    }
+    for (int j = 0; j < H; j++) m->trow[j] = m->trow[j + 1];
+    m->trow[H] = n;
+}
+
+/* This frame's part of it (fluid_draw_cells, before the cells are looked at): the rows whose turn came last frame are
+ * what they became; the new look's drawing is made ahead, a few cells a frame; the rows that take this frame. */
+static void morph_plan(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_opts_t *o) {
+    fluid_morph_t *m = &d->m;
+    const int W = d->W, H = d->H;
+    uint8_t *turn = morph_turn(m, H);
+    int16_t *span = morph_span(m, H);
+    bool heavy = false;
+    if (!m->planned) {                                  /* each row's cells on the round glass */
+        const float R = d->stage * 0.5f, cx = d->ox + R, cy = d->oy + R;
+        for (int j = 0; j < H; j++) {
+            const float ey = cy < d->cy[j] ? d->cy[j] - cy : cy > d->cy[j + 1] ? cy - d->cy[j + 1] : 0.f, half = ey < R ? sqrtf(R * R - ey * ey) : 0.f;
+            int a = W, b = 0;
+            for (int i = 0; i < W; i++) if (d->cx[i + 1] > cx - half && d->cx[i] < cx + half) { if (i < a) a = i; b = i + 1; }
+            span[2 * j] = (int16_t)(a < b ? a : 0); span[2 * j + 1] = (int16_t)(a < b ? b : 0);
+            if (a >= b) { m->row[j] = MR_KEPT; m->kept++; }
+        }
+        m->planned = true;
+    }
+    for (int j = 0; j < H; j++) {
+        if (turn[j] == MT_KEEP) { m->row[j] = MR_KEPT; m->kept++; }
+        else if (turn[j] == MT_DONE) { m->row[j] = MR_DONE; m->done++; }
+        turn[j] = MT_NONE;
+    }
+    if (m->phase == FLUID_MORPH_LOOSE) {
+        const bool hd = o->scene && o->dots && o->shapes && o->fine;
+        if (m->tl <= 0.f) heavy = true;                 /* (the new look's first frame: every cell of it is looked at) */
+        else if (!m->filled && hd && hdc_room(d)) {     /* the new drawing into its cache, ahead of the gather: most of
+                                                         * these frames' time (the loose picture takes few rows meanwhile);
+                                                         * fluid_draw_pace fits it as it fits the pixels */
+            const int64_t until = now_us() + (int64_t)FLUID_MORPH_FILL_US * m->px / FLUID_MORPH_PX;
+            int ncache = o->nshapes < FLUID_MAX_SHAPES ? o->nshapes : FLUID_MAX_SHAPES;
+            while (ncache > 0 && o->shapes[ncache - 1].tag == FLUID_TAG_CAPTION) ncache--;
+            for (int n = 0; m->fill < W * H && (n & 7 || now_us() < until); m->fill++)
+                if (!d->hdcv[m->fill] && s->mask[m->fill]) n += hdc_cell(d, o, m->fill, ncache) ? 4 : 1;
+            m->filled = m->fill >= W * H;
+            heavy = true;
+        } else m->filled = true;
+        /* (a frame of the new look first: its cells are looked at, so the specks know where to land) */
+        if (m->tl > 0.f && ((m->go && m->filled) || m->tl >= FLUID_MORPH_WAIT_S)) {
+            m->phase = FLUID_MORPH_GATHER; m->tg = 0.f;
+            morph_aim(d, o);
+            heavy = true;                               /* (the specks were aimed this frame) */
+        }
+    } else if (m->phase == FLUID_MORPH_GATHER && m->done >= H) { morph_end(d, false); return; }
+    if (m->phase == FLUID_MORPH_GATHER) morph_fly(d);
+    /* this frame's rows, in turn, while the pixels last (half of them in a frame with other work) */
+    int px = 0;
+    /* (a creature gathering: its rows that are done already move again, the frame's too) */
+    const bool crisp = o->scene && o->dots && !o->shapes;
+    const int room = heavy ? m->px / 3 : m->phase == FLUID_MORPH_GATHER && crisp ? m->px - m->px * m->done / (2 * H) : m->px;
+    for (int n = 0; n < H && px < room; n++) {
+        const int j = (int)(((long)m->cursor * m->stride) % H);
+        m->cursor = (m->cursor + 1) % H;
+        if (span[2 * j] >= span[2 * j + 1]) { if (m->phase == FLUID_MORPH_GATHER && m->row[j] != MR_DONE) turn[j] = MT_DONE; continue; }
+        if (m->row[j] == MR_DONE) continue;
+        turn[j] = m->phase == FLUID_MORPH_LOOSEN ? (m->row[j] == MR_KEPT ? MT_OLD : MT_KEEP)
+                : m->phase == FLUID_MORPH_LOOSE ? MT_OLD : m->tg >= FLUID_MORPH_GATHER_S ? MT_DONE : MT_MIX;
+        px += (d->cx[span[2 * j + 1]] - d->cx[span[2 * j]]) * (d->cy[j + 1] - d->cy[j] + 1);
+    }
+}
+
+/* ... and after: the rows in turn go whole, the rest of the changing picture waits its turn */
+static void morph_dirty(fluid_draw_t *d) {
+    const fluid_morph_t *m = &d->m;
+    const int W = d->W, H = d->H;
+    const uint8_t *turn = morph_turn(m, H);
+    const int16_t *span = morph_span(m, H);
+    for (int j = 0; j < H; j++) {
+        if (turn[j]) {
+            memset(d->dirty + j * W, 0, (size_t)W);
+            memset(d->dirty + j * W + span[2 * j], 1, (size_t)(span[2 * j + 1] - span[2 * j]));
+            d->span[2 * j] = span[2 * j]; d->span[2 * j + 1] = span[2 * j + 1];
+        } else if (m->row[j] != MR_DONE) {              /* (a row not kept yet shows the old look as it was: it is kept as it is now) */
+            memset(d->dirty + j * W, 0, (size_t)W);
+            d->span[2 * j] = d->span[2 * j + 1] = 0;
+        }
+    }
+}
+
+/* whether the window's rows [y0, y1) need the look drawn (some of them show it, whole or through the old picture) */
+static bool morph_live(const fluid_draw_t *d, int y0, int y1) {
+    const fluid_morph_t *m = &d->m;
+    for (int j = 0; j < d->H; j++) {
+        if (d->cy[j + 1] <= y0 || d->cy[j] >= y1) continue;
+        const int r = m->row[j];
+        if (r == MR_LIVE || r == MR_DONE || (r == MR_PREV && m->prev == FLUID_MORPH_GATHER) || (r == MR_KEPT && m->phase == FLUID_MORPH_GATHER)) return true;
+    }
+    return false;
+}
+
+/* The window t as the change shows it now: over the look just drawn there (the new one; black where none was), each
+ * cell row by its state: kept rows from the old picture, loosened; gathering, the new look's pixels through their
+ * thresholds over what is left of the old; a row whose turn is to be kept is stored first. */
+static void morph_rect(fluid_draw_t *d, const fluid_rect_t *t) {
+    fluid_morph_t *m = &d->m;
+    const int H = d->H, fw = d->fb_w, fh = d->fb_h;
+    const uint8_t *turn = morph_turn(m, H);
+    const morph_lv_t cur = morph_levels(m->t, m->phase >= FLUID_MORPH_LOOSE ? m->tl : 0.f, m->phase == FLUID_MORPH_GATHER ? m->tg : -1.f);
+    const morph_lv_t was = morph_levels(m->pt, m->prev >= FLUID_MORPH_LOOSE ? m->ptl : 0.f, m->prev == FLUID_MORPH_GATHER ? m->ptg : -1.f);
+    const float cyc = d->oy + d->stage * 0.5f;
+    int j = 0;
+    for (int y = t->y0; y < t->y1; y++) {
+        while (j < H - 1 && d->cy[j + 1] <= y) j++;
+        if (y < d->cy[0] || y >= d->cy[H]) continue;
+        const int r = m->row[j];
+        if (r == MR_DONE || turn[j] == MT_DONE) continue;                 /* the look itself */
+        uint16_t *row = rect_px(t, t->x0, y);
+        const int w = t->x1 - t->x0;
+        if (r == MR_LIVE) {
+            if (turn[j] != MT_KEEP) continue;
+            memcpy(m->snap + (size_t)y * fw + t->x0, row, sizeof(uint16_t) * (size_t)w);
+            if (d->cy[j] <= y && y < d->cy[j + 1]) morph_pick(d, row, t->x0, w, y);
+        }
+        const morph_lv_t *lv = r == MR_PREV ? &was : &cur;
+        const bool mix = r == MR_PREV ? m->prev == FLUID_MORPH_GATHER : r == MR_KEPT && m->phase == FLUID_MORPH_GATHER;
+        const int gone = lv->gone, come = mix ? lv->come : 0, jx = lv->jit, jy = lv->jit / 2;
+        const int sh = (int)lrintf(((float)y + 0.5f - cyc) * lv->turn);   /* carried round the middle: sideways, by its height */
+        for (int q = 0; q < w; q++) {
+            const int x = t->x0 + q;
+            const uint32_t h = morph_hash(x, y);
+            const int n = (int)(h & 255);
+            if (mix && row[q] && n < come) continue;                     /* a grain of the new picture, in its place */
+            uint16_t px = 0;
+            if (n >= gone) {                                              /* a grain of the old one, off its place */
+                const int sx = x + sh + ((((int)(h >> 8 & 255) - 128) * jx) >> 15), sy = y + ((((int)(h >> 16 & 255) - 128) * jy) >> 15);
+                if (sx >= 0 && sy >= 0 && sx < fw && sy < fh) px = m->snap[(size_t)sy * fw + sx];
+            }
+            row[q] = px;
+        }
+        if (r == MR_PREV && turn[j] == MT_KEEP) memcpy(m->snap + (size_t)y * fw + t->x0, row, sizeof(uint16_t) * (size_t)w);
+    }
+    /* the travelling specks in these rows */
+    if (m->phase == FLUID_MORPH_GATHER && m->ntr && m->aimed) {
+        for (int jr = 0; jr < H; jr++) {
+            if (d->cy[jr + 1] <= t->y0 || d->cy[jr] >= t->y1 || m->row[jr] == MR_DONE || turn[jr] == MT_DONE) continue;
+            for (int32_t q = m->trow[jr]; q < m->trow[jr + 1]; q++) {
+                const int x = (int16_t)m->trn[3 * q], y = (int16_t)m->trn[3 * q + 1];
+                if (x < t->x0 || x >= t->x1 || y < t->y0 || y >= t->y1) continue;
+                *rect_px(t, x, y) = m->trn[3 * q + 2];
+            }
+        }
+    }
+}
+
 void fluid_draw_rect(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_rect_t *t, bool all) {
     const int W = d->W, H = d->H, bx = t->x0;
     const bool hd = o->scene && o->dots && o->shapes;
     uint32_t c1 = fluid_cycles();
     /* a scene on fine dust: its drawing from the cache (the caption's shapes, at the end, live) */
     fluid_draw_t *dm = (fluid_draw_t *)d;
-    if (hd && o->fine && !d->hdc) {
-        dm->hdc = FLUID_CALLOC(sizeof(uint16_t) * (size_t)d->fb_w * d->fb_h);
-        dm->hdcv = FLUID_CALLOC((size_t)d->W * d->H);
-        if (!dm->hdc || !dm->hdcv) { FLUID_FREE(dm->hdc); FLUID_FREE(dm->hdcv); dm->hdc = NULL; dm->hdcv = NULL; }
-    }
+    if (hd && o->fine) hdc_room(dm);
     const bool cached = hd && o->fine && d->hdc;
     int ncache = o->nshapes < FLUID_MAX_SHAPES ? o->nshapes : FLUID_MAX_SHAPES;
     while (cached && ncache > 0 && o->shapes[ncache - 1].tag == FLUID_TAG_CAPTION) ncache--;
@@ -1375,7 +1712,12 @@ static int window(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid
     uint16_t *buf = sd->buf[sd->cur];
     const int w = x1 - x0;
     const fluid_rect_t t = { buf, w, x0, y, x1, y + h };
-    fluid_draw_rect(d, o, &t, true);
+    if (!d->m.phase) fluid_draw_rect(d, o, &t, true);
+    else {                                              /* the picture changing: the look where it shows, then as the change shows it */
+        if (morph_live(d, y, y + h)) fluid_draw_rect(d, o, &t, true);
+        else memset(buf, 0, sizeof(uint16_t) * (size_t)w * h);
+        morph_rect((fluid_draw_t *)d, &t);
+    }
     fluid_draw_overlay(d, &t, o->palette, ov);
     fluid_draw_mark(d, &t, o->palette, mark);
     if (sd->send(sd->ctx, x0, y, w, h, buf) != 0) return -1;
@@ -1465,6 +1807,13 @@ static int crisp_send(const fluid_draw_t *d, const fluid_draw_opts_t *o, const f
 }
 
 void fluid_draw_pace(fluid_draw_t *d, int busy_us) {
+    if (d->m.phase) {                                   /* the picture changing: the pixels a frame takes of it */
+        fluid_morph_t *m = &d->m;
+        if (busy_us > FLUID_PACE_OVER_US) m->px -= m->px / 6;
+        else if (busy_us < FLUID_PACE_UNDER_US) m->px += m->px / 12 + 200;
+        m->px = m->px < FLUID_MORPH_PX_MIN ? FLUID_MORPH_PX_MIN : m->px > FLUID_MORPH_PX_MAX ? FLUID_MORPH_PX_MAX : m->px;
+        return;
+    }
     if (busy_us > FLUID_PACE_OVER_US) d->quota -= d->quota / 6;
     else if (busy_us < FLUID_PACE_UNDER_US) d->quota += d->quota / 12 + 100;
     d->quota = d->quota < FLUID_QUOTA_MIN_US ? FLUID_QUOTA_MIN_US : d->quota > FLUID_QUOTA_MAX_US ? FLUID_QUOTA_MAX_US : d->quota;

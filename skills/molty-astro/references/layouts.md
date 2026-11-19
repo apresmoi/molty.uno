@@ -64,7 +64,8 @@ or, when empty, where its ruler is.
 
 One sign big, its planets on its degree dial (0 at the lower left, over the top, 30 at the lower right), each lit
 while Molty reads it. Molty opens it itself when a sign is tapped on the chart (from the chart's params, for the
-sign's `ttl`), and goes back to the chart after it or at a tap beside it; you only `say` the reading. To a Molty that
+sign's `ttl`), shows the sign's reading (its `say`) as the subtitle, and goes back to the chart after it or at a tap
+beside it; you only `say` the reading (your say's words then take the subtitle). To a Molty that
 did not (the `tap` event has no `opened`), send it yourself with the reading's length as `ttl_s` and queue the chart.
 
 | param | value |

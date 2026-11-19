@@ -376,6 +376,48 @@ uint8_t fluid_braille_dither(const float *sub, int si, int sj, float shimmer, ui
 /** Contour: dots on the dense side of the cell's own mid-level. */
 uint8_t fluid_braille_contour(const float *sub);
 
+/* A change of the whole picture (a scene to a scene, a creature to a scene and back): the dust reshapes. The picture
+ * on the glass is kept as pixels (snap) while the old look still draws; its grains then loosen (each pixel thins by
+ * its own threshold and drifts off its place, a little farther each time it is drawn), wait so, loose, until the new
+ * look is whole, and go while the new look's own pixels come the same way, grain by grain, in place. Some of the old
+ * grains travel: FLUID_MORPH_SPECKS of them fly on an arc round the middle to a speck or a dot of the new picture.
+ * The look is a function of the pixel and the time alone; the panel takes a few cell rows of it a frame (the rows in
+ * turn, spread over the glass: m.px pixels, fitted by fluid_draw_pace), a renderer with room may take more. */
+#define FLUID_MORPH_LOOSE_S   0.35f    /* the old picture loosens over this                      */
+#define FLUID_MORPH_GATHER_S  0.8f     /* ... and goes, the new one gathering, over this         */
+#define FLUID_MORPH_WAIT_S    2.5f     /* loose, it waits this long at most for the new look     */
+#define FLUID_MORPH_THIN      0.4f     /* loose: this much of the old picture's pixels are gone  */
+#define FLUID_MORPH_JIT       3.5f     /* ... its grains this far off their place, px (half of it up and down) */
+#define FLUID_MORPH_TURN      0.03f    /* ... and carried this far round the middle, rad (sideways: a shear) */
+#define FLUID_MORPH_JIT_OUT   6.f      /* going, they spread this much more, px ...               */
+#define FLUID_MORPH_TURN_OUT  0.07f    /* ... and are carried this much farther                  */
+#define FLUID_MORPH_ARC       0.42f    /* the travelling specks' arc, rad                        */
+#define FLUID_MORPH_SPECKS    2400
+#define FLUID_MORPH_PX        20000    /* the pixels a frame redraws at first, then fitted within: */
+#define FLUID_MORPH_PX_MIN    9000
+#define FLUID_MORPH_PX_MAX    60000
+enum { FLUID_MORPH_NONE, FLUID_MORPH_LOOSEN, FLUID_MORPH_LOOSE, FLUID_MORPH_GATHER };
+typedef struct {
+    uint8_t  phase;                    /* FLUID_MORPH_*: LOOSEN while the old look is still the drawer's (its rows kept
+                                        * in turn), LOOSE once all are (the new look's inputs come), GATHER */
+    uint8_t  prev;                     /* a change that came in the middle of one: that one's phase, as its rows show
+                                        * it until each is kept again (as it looks then) */
+    bool     go, filled, planned;
+    uint32_t look, want;               /* the picture the drawer's inputs show; the one wanted   */
+    uint16_t *snap;                    /* fb_w x fb_h: the old picture                           */
+    float    now, t, tl, tg;           /* the clock; s since it began, since all was kept, since the gather began */
+    float    pt, ptl, ptg;             /* ... of the change it interrupted                       */
+    uint8_t  *row;                     /* H: each cell row: 0 live, 1 kept (from snap), 2 as the interrupted change
+                                        * left it, 3 done (live again); H more: its turn this frame (0 none, 1 keep,
+                                        * 2 old, 3 mix, 4 done); then W x 2 int16: its cells [a, b) inside the glass */
+    int      kept, done, cursor, stride, fill, px;
+    int      ntr, seen; bool aimed;          /* the travelling specks: where each leaves from and lands (fb px; land x < 0:
+                                        * nowhere, it fades), their colours (panel order); this frame's places */
+    int16_t  *tr; uint16_t *trc;
+    int32_t  *trow;                    /* H + 1: this frame's specks by cell row (indices into trn) */
+    uint16_t *trn;                     /* (x, y, colour) each, by row; and as worked out, after */
+} fluid_morph_t;
+
 typedef struct {
     int W, H;
     int fb_w, fb_h;                    /* framebuffer geometry (row stride = fb_w)        */
@@ -410,7 +452,6 @@ typedef struct {
     bool     crisp0;                   /* the last frame was crisp dots: those are what the cells show */
     uint8_t  ilace;                    /* the frame's count: which rows' water-only cells update this frame (crisp
                                         * dots: every other row; a scene on fine dust: every wm-th)        */
-    float    dust0;                    /* a scene on fine dust: the last frame's transition (opts.dust)      */
     int      quota;                    /* a scene on fine dust: what a frame may spend drawing and sending what only the
                                         * water and the light change, in FLUID_*_US units (fluid_draw_pace)  */
     int16_t  cap[4], cap0[4];          /* the subtitle's box in dots [x0, x1] x [y0, y1], last frame's */
@@ -429,6 +470,7 @@ typedef struct {
     int nlt;
     void *block;
     bool force;                        /* redraw every cell next frame                    */
+    fluid_morph_t m;                   /* the whole picture changing: the dust reshapes (fluid_draw_morph_look) */
 } fluid_draw_t;
 
 /** A window of pixels to draw: px is pixel (x0, y0), rows `stride` px apart. A whole
@@ -531,6 +573,14 @@ void fluid_draw_overlay_dirty(fluid_draw_t *d, const fluid_overlay_t *ov);
 #define FLUID_PACE_OVER_US  28000       /* a frame busier than this: less quota                               */
 #define FLUID_PACE_UNDER_US 22000       /* ... than this: more                                                */
 void fluid_draw_pace(fluid_draw_t *d, int busy_us);
+/** The picture changing whole (fluid_morph_t). With the drawer idle, once a frame, before its inputs are written:
+ *  look, the picture those inputs would show now (a number of its own: a scene's serial, a creature; 0: not the dust's
+ *  to reshape, it comes at once as before), snap, fb_w x fb_h px the drawer may keep the old picture in (the panel's
+ *  mirror, unused while windows go on whole row pairs; NULL: no room, it comes at once), ready: that look is whole
+ *  (a scene's dust is made), now (s). True: leave the drawer's inputs as they are this frame (it is still keeping the
+ *  old picture: about a quarter of a second). The drawer's busy time goes to fluid_draw_pace while fluid_draw_morphing. */
+bool fluid_draw_morph_look(fluid_draw_t *d, uint32_t look, uint16_t *snap, bool ready, float now);
+static inline int fluid_draw_morphing(const fluid_draw_t *d) { return d ? d->m.phase : 0; }
 /** Draw ov over the window t. Returns the pixels touched. */
 int  fluid_draw_overlay(const fluid_draw_t *d, const fluid_rect_t *t, int palette, const fluid_overlay_t *ov);
 

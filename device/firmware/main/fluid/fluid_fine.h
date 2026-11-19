@@ -23,9 +23,10 @@
  *            (fluid_draw_opts_t.cap_unformed), the one before breaks into specks that scatter, ride the water and fade
  *            into it; the reading's last one slower and farther, the dark going in a few steps with it.
  *   budget   what a frame draws again is what changed (each cell a signature). The caption's own goes at once; the
- *            light's and the water's on their rows' turns, within the frame's quota (fluid_draw_pace). A first set, and
- *            a scene in a transition, come and go row by row behind a wavy line (fluid_fine_turn): no frame sends the
- *            whole panel.
+ *            light's and the water's on their rows' turns, within the frame's quota (fluid_draw_pace). A new set on a
+ *            scene that is up (a tapped spot's) comes row by row behind a wavy line (fluid_fine_turn): no frame sends
+ *            the whole panel. A scene itself comes and goes by the drawer's change of picture (fluid_morph_t): the
+ *            light holds still meanwhile (pause).
  * The drawer's part (fluid_fine_frame, fluid_fine_rect) is called by fluid_draw_cells / fluid_draw_rect when
  * fluid_draw_opts_t.fine is set; the sim task owns the build (fluid_fine_want, _work) and swaps a finished set in while
  * the drawer is idle (fluid_fine_swap). Plain C: built into the firmware and by the host tests.
@@ -130,6 +131,7 @@ typedef struct fluid_fine {
     uint8_t *ride;                      /* N: the dust rides the water there (near a tapped drawing or the caption) */
     uint32_t ride_key;                  /* what ride was worked out for                          */
     bool rim;                           /* ... the rim too (fluid_fine_rim)                      */
+    bool pause;                         /* the light holds still this frame (the picture is changing whole: the drawer's) */
     uint8_t lrow;                       /* which quarter of the light's grid rows, and of the cell rows' light-dependent
                                          * specks, is worked out this frame (FINE_PHASES)        */
     bool lgrid_ok;                      /* the light's grid was worked out whole once             */
@@ -167,12 +169,12 @@ void fluid_fine_destroy(fluid_fine_t *f);
 bool fluid_fine_want(fluid_fine_t *f, uint32_t scene, uint32_t key, bool keep, const fluid_shape_t *sh, int n, int palette);
 /** Advance the build for about budget_us (<= 0: to its end). True: a set waits for fluid_fine_swap. */
 bool fluid_fine_work(fluid_fine_t *f, int budget_us);
-/** The scene's calm set is being made (or waits to swap in) and is not on the glass yet: a scene holds its rise for it. */
-bool fluid_fine_coming(const fluid_fine_t *f);
+/** The dust drawn is scene `scene`'s own (fluid_fine_want's number), swapped in. */
+static inline bool fluid_fine_shown(const fluid_fine_t *f, uint32_t scene) { return f && f->drawn && f->drawn->base == scene; }
 /** With the drawer idle: the set waiting becomes the one drawn. Cells whose specks are the same in both keep their
  *  levels (nothing of theirs is drawn again). A set drawn for another scene's drawing is dropped at once (the dust on
  *  the glass is the scene's own). rise: the scene is up whole (a new drawing's dust then rises row by row; else it comes
- *  with the scene's own rise). */
+ *  with the scene, by the drawer's change of picture). */
 void fluid_fine_swap(fluid_fine_t *f, bool rise);
 /** With the drawer idle: the caption's backdrop for the whole reading (stage px [x0, x1, y0, y1], the union of its
  *  words' boxes), so the dark does not move with each word; NULL: each word's own box. */
@@ -192,9 +194,9 @@ static inline int fluid_fine_specks(const fluid_fine_t *f) { return f && f->live
  *  is drawn again: at once where f->imm says, else on its row's turn), its specks' levels and its shift, the caption's
  *  backdrop and specks. Cell rows j with (j + phase) % m == 0 follow the water this frame. */
 void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_opts_t *o, int phase, int m);
-/** When cell (i, j) of a scene on fine dust (H cell rows) is there in a transition: once its dust (1 gone .. 0 whole)
- *  is under this. No scatter: the scene rises from the bottom behind a wavy water line, and drains from the top (the
- *  cells that turn in a frame are a few runs along a few rows: few windows; turning all over, each would be one). */
+/** When cell (i, j) (of H cell rows) takes a new set's dust as it rises (fluid_fine_swap's rise): once 1 - reveal is
+ *  under this. From the bottom, behind a wavy water line (the cells that turn in a frame are a few runs along a few
+ *  rows: few windows; turning all over, each would be one). */
 float fluid_fine_turn(int i, int j, int H);
 /** The dust over the window t (fb px), after the shapes and dots: on black (or a dim pixel), never on a lit one;
  *  all: every cell of t (a window), else only the dirty cells (a framebuffer kept). */

@@ -257,7 +257,7 @@ int scene_spot_at(const scene_t *sc, float t, float x, float y) {
 
 /* ── the player ────────────────────────────────────────────────────────────── */
 
-static void start(scene_player_t *p, scene_t *sc) { p->cur = sc; p->t = 0.f; p->started = sc != NULL; p->gen++; }
+static void start(scene_player_t *p, scene_t *sc) { p->cur = sc; p->t = 0.f; p->started = sc != NULL; p->gen++; p->say[0] = '\0'; }
 
 void scene_clear(scene_player_t *p) {
     scene_free(p->cur); p->cur = NULL;
@@ -312,11 +312,21 @@ scene_t *scene_open_build(const scene_t *sc, int n, const char **err) {
     return child;
 }
 
-void scene_open(scene_player_t *p, scene_t *sc) {
+void scene_open(scene_player_t *p, scene_t *sc, int spot) {
+    char say[PKG_SAY_MAX + 1] = "";
+    if (p->cur && spot >= 0 && spot < p->cur->nitems && p->cur->items[spot].k == PK_SPOT)
+        snprintf(say, sizeof(say), "%.*s", (int)p->cur->items[spot].nstr, p->cur->say + p->cur->items[spot].str);
     if (!p->cur) { start(p, sc); return; }
     if (p->back) scene_free(p->cur);                    /* one deep: it takes the opened one's place */
     else { p->back = p->cur; p->back_t = p->t; }
     start(p, sc);
+    memcpy(p->say, say, sizeof(say));
+}
+int scene_open_say(scene_player_t *p, char *out, size_t size) {
+    if (!p->back || !p->say[0] || !size) return 0;
+    const int n = snprintf(out, size, "%s", p->say);
+    p->say[0] = '\0';
+    return n < (int)size ? n : (int)size - 1;
 }
 
 bool scene_back(scene_player_t *p) {
@@ -328,6 +338,12 @@ bool scene_back(scene_player_t *p) {
     start(p, sc);
     p->t = t;
     return true;
+}
+
+float scene_room(const scene_player_t *p) {
+    if (!p->cur) return 1e9f;
+    const float own = scene_end(p->cur) - p->t, under = p->back ? scene_end(p->back) - p->back_t : own;
+    return own < under ? own : under;
 }
 
 void scene_tick(scene_player_t *p, float dt) {
@@ -888,11 +904,11 @@ void scene_grow_apply(const scene_grow_t *g, scene_t *sc) {
     sc->grow = 1.f + (scene_spot_grow(sc, g->spot) - 1.f) * sc->glow;
 }
 
-void scene_hd_tick(scene_hd_t *h, unsigned gen, bool plain, bool hold, float dt) {
+void scene_hd_tick(scene_hd_t *h, unsigned gen, bool plain, float dt) {
     if (plain) { *h = (scene_hd_t){ 0, false, 1.f }; return; }
     if (h->gen && gen != h->gen) h->out = true;
     if (h->out && (h->dust += dt / SCENE_DUST_S) >= 1.f) *h = (scene_hd_t){ 0, false, 1.f };
-    if (!h->out && gen) { h->gen = gen; if (!(hold && h->dust >= 1.f)) h->dust = fmaxf(0.f, h->dust - dt / SCENE_DUST_S); }
+    if (!h->out && gen) { h->gen = gen; h->dust = fmaxf(0.f, h->dust - dt / SCENE_DUST_S); }
 }
 
 /* a crisp letter or symbol's own shape on the dots under its box (as fluid_draw places it: a

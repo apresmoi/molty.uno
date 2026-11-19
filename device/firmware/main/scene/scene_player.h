@@ -111,6 +111,7 @@ typedef struct {
     float t;                            /* s since cur started                             */
     scene_t *back;                      /* the scene a tap opened cur over: it comes back when cur ends ... */
     float back_t;                       /* ... its clock, which kept running (its ttl ends both) */
+    char say[PKG_SAY_MAX + 1];          /* ... and the tapped spot's reading, to play over cur once it is up (scene_open_say) */
     bool started;                       /* a scene started since the last scene_take_start  */
     unsigned gen;                       /* counts the scenes started: which one cur is      */
 } scene_player_t;
@@ -128,30 +129,38 @@ void scene_clear(scene_player_t *p);
  *  spot opens nothing, or *err ("no_layout" | "bad_params" | "oom"). */
 scene_t *scene_open_build(const scene_t *sc, int n, const char **err);
 /** Play sc over the current scene, which waits under it (one deep: a scene opened from an opened one replaces it) and
- *  comes back when sc ends or at scene_back; its clock runs on meanwhile. Takes ownership. */
-void scene_open(scene_player_t *p, scene_t *sc);
+ *  comes back when sc ends or at scene_back; its clock runs on meanwhile. Takes ownership. spot: the current scene's
+ *  spot whose tap opened it (scene_open_build's n; -1 none): its reading is kept to play over sc. */
+void scene_open(scene_player_t *p, scene_t *sc, int spot);
+/** That reading, once sc is up whole (the caller says when: after the change of picture): into out (size bytes); its
+ *  length, 0 for none. Taken once; going back, or another scene, drops it. While it plays the caller keeps sc from
+ *  ending (scene_room), so a short layout does not end under its own sentence. */
+int scene_open_say(scene_player_t *p, char *out, size_t size);
 /** Back to the scene under an opened one, now. False: none was open. */
 bool scene_back(scene_player_t *p);
 /** Advance by dt: the current scene ends at scene_end, the next one starts. */
 void scene_tick(scene_player_t *p, float dt);
+/** How long until anything ends, s (the scene, or the one under it: its ttl ends both); a large number with no
+ *  scene. A caller that must not let it end yet (a reading or a say plays over it, a turn is on) ticks it by no more
+ *  than this less a little: its clock runs on (what it lights in turn still does), its end waits. */
+float scene_room(const scene_player_t *p);
 /** A new scene started since the last call (the fluid melts into it). */
 bool scene_take_start(scene_player_t *p);
 static inline bool scene_playing(const scene_player_t *p) { return p->cur != NULL; }
 
-/* A scene in high definition (fluid_draw_opts_t.scene): alone and crisp on black, it forms
+/* A scene in high definition on the dots (fluid_draw_opts_t.scene, no fine dust): alone and crisp on black, it forms
  * from dust, and when it ends or the next one comes it breaks into dust first (out: the
- * caller holds what it showed for the drawer meanwhile), then the next forms. */
-#define SCENE_DUST_S 0.6f               /* each way: dust to the scene, the scene to dust (on fine dust it rises row by
-                                         * row: about two rows a frame is what the panel takes) */
+ * caller holds what it showed for the drawer meanwhile), then the next forms. (On fine dust a scene comes and goes by
+ * the drawer's change of picture instead: fluid_draw_morph_look.) */
+#define SCENE_DUST_S 0.6f               /* each way: dust to the scene, the scene to dust */
 typedef struct {
     unsigned gen;                       /* the scene shown (scene_player_t.gen), 0 = none   */
     bool out;                           /* it ended: what it showed goes to dust            */
     float dust;                         /* 0 = whole and crisp .. 1 = all dust, gone        */
 } scene_hd_t;
 /** Advance by dt: gen the scene on screen now (0: none); plain: the fluid's own look instead
- *  (nothing in high definition; the scene forms from dust again after it); hold: a scene that has not begun to form
- *  waits (its fine dust is not made yet: they come together). */
-void scene_hd_tick(scene_hd_t *h, unsigned gen, bool plain, bool hold, float dt);
+ *  (nothing in high definition; the scene forms from dust again after it). */
+void scene_hd_tick(scene_hd_t *h, unsigned gen, bool plain, float dt);
 /** The dust for the drawer (fluid_draw_opts_t.dust): the scene's while one forms, shows or breaks up, else 0.
  *  At rest (no scene) h->dust stays 1 (all dust, ready to form), which would thin any other crisp dots (a rigged
  *  creature's) away to nothing. */

@@ -47,6 +47,7 @@ typedef struct { float x, y; uint16_t k, bit; uint8_t h1, h2, h3, it; } av_px_t;
 
 struct fluid_askview {
     int W, H, N, stage, nd, np;
+    int by, cap;                                    /* the dots' build: the next row of them, room for this many */
     float cw, ch, sc;
     fluid_ask_layout_t L;
     av_dot_t *dot;
@@ -90,7 +91,52 @@ static bool shape(const fluid_ask_target_t *t, float X, float Y, float *d, float
     return true;
 }
 
+/* whether target t's line or its dust can reach a dot r2 (squared) from the middle: its band and a hair more, with no
+ * root (the dots in it are then measured as before: shape) */
+static inline bool in_band(const fluid_ask_target_t *t, float r2) {
+    if (t->kind == FLUID_ASK_HLINE) return true;
+    const float lo = t->a - LINE_W - DUST_D - 1e-3f, hi = t->a + LINE_W * 0.6f + 1e-3f;
+    return r2 <= hi * hi && (lo <= 0.f || r2 >= lo * lo);
+}
+
+bool fluid_askview_build(fluid_askview_t *v, const fluid_sim_t *s, int rows) {
+    const int W = v->W, DW = 2 * W, DH = 4 * v->H;
+    const fluid_ask_layout_t *L = &v->L;
+    const float half = v->stage * 0.5f;
+    for (const int end = v->by + rows < DH ? v->by + rows : DH; v->by < end; v->by++) {
+        const int sy = v->by;
+        for (int sx = 0; sx < DW && v->nd < v->cap; sx++) {
+            const float X = slot_x(v, sx) / half - 1.f, Y = slot_y(v, sy) / half - 1.f, r2 = X * X + Y * Y;
+            if (r2 > 0.988f * 0.988f) continue;
+            const int k = (sy >> 2) * W + (sx >> 1);
+            if (!s->mask[k]) continue;
+            for (int t = 0; t < L->ntargets; t++) {
+                float d, fade;
+                if (!in_band(&L->tg[t], r2) || !shape(&L->tg[t], X, Y, &d, &fade) || fade <= 0.f || d < -LINE_W * 0.6f || d > LINE_W + DUST_D) continue;
+                const uint8_t h1 = hb8((uint32_t)sx, (uint32_t)sy), h2 = hb8((uint32_t)sx + 911u, (uint32_t)sy - 377u), h3 = hb8((uint32_t)sx - 53u, (uint32_t)sy + 1201u);
+                float b0 = fade, thr = 1.f;
+                if (d > LINE_W) {                             /* dust: shows while its hash is under u^2.6 x 0.6 x fade (twinkling) */
+                    const float u = 1.f - (d - LINE_W) / DUST_D;
+                    thr = powf(u, 2.6f) * 0.6f * fade;
+                    if (u <= 0.f || h1 / 256.f > thr) continue;
+                    b0 = u;
+                }
+                v->dot[v->nd++] = (av_dot_t){ (uint16_t)(sy * DW + sx), (uint16_t)k, (int8_t)lrintf(d * 1000.f), (uint8_t)(b0 * 255.f + 0.5f),
+                                              (uint8_t)fminf(255.f, thr * 256.f), h1, h2, h3, (uint8_t)t, (uint8_t)(sy >> 2) };
+                break;                                        /* one target a dot */
+            }
+        }
+    }
+    return v->by >= DH;
+}
+
 fluid_askview_t *fluid_askview_create(const fluid_sim_t *s, const fluid_ask_q_t *q) {
+    fluid_askview_t *v = fluid_askview_begin(s, q);
+    if (v) fluid_askview_build(v, s, 4 * v->H);
+    return v;
+}
+
+fluid_askview_t *fluid_askview_begin(const fluid_sim_t *s, const fluid_ask_q_t *q) {
     fluid_askview_t *v = AV_CALLOC(sizeof(fluid_askview_t));
     if (!v) return NULL;
     const int W = s->W, H = s->H, N = W * H, DW = 2 * W, DH = 4 * H;
@@ -116,32 +162,19 @@ fluid_askview_t *fluid_askview_create(const fluid_sim_t *s, const fluid_ask_q_t 
             g->cy = g->a;
         }
     }
-    for (int pass = 0; pass < 2; pass++) {        /* the targets' dots that can ever show: count, then keep */
-        int nd = 0;
+    {   /* the targets' dots that can ever show: room for those in a target's band (few are not kept), worked out by
+         * fluid_askview_build */
+        int cap = 0;
         for (int sy = 0; sy < DH; sy++) for (int sx = 0; sx < DW; sx++) {
-            const float X = slot_x(v, sx) / half - 1.f, Y = slot_y(v, sy) / half - 1.f;
-            if (X * X + Y * Y > 0.988f * 0.988f) continue;
-            const int k = (sy >> 2) * W + (sx >> 1);
-            if (!s->mask[k]) continue;
+            const float X = slot_x(v, sx) / half - 1.f, Y = slot_y(v, sy) / half - 1.f, r2 = X * X + Y * Y;
+            if (r2 > 0.988f * 0.988f || !s->mask[(sy >> 2) * W + (sx >> 1)]) continue;
             for (int t = 0; t < L->ntargets; t++) {
-                float d, fade;
-                if (!shape(&L->tg[t], X, Y, &d, &fade) || fade <= 0.f || d < -LINE_W * 0.6f || d > LINE_W + DUST_D) continue;
-                const uint8_t h1 = hb8((uint32_t)sx, (uint32_t)sy), h2 = hb8((uint32_t)sx + 911u, (uint32_t)sy - 377u), h3 = hb8((uint32_t)sx - 53u, (uint32_t)sy + 1201u);
-                float b0 = fade, thr = 1.f;
-                if (d > LINE_W) {                             /* dust: shows while its hash is under u^2.6 x 0.6 x fade (twinkling) */
-                    const float u = 1.f - (d - LINE_W) / DUST_D;
-                    thr = powf(u, 2.6f) * 0.6f * fade;
-                    if (u <= 0.f || h1 / 256.f > thr) continue;
-                    b0 = u;
-                }
-                if (pass) v->dot[nd] = (av_dot_t){ (uint16_t)(sy * DW + sx), (uint16_t)k, (int8_t)lrintf(d * 1000.f), (uint8_t)(b0 * 255.f + 0.5f),
-                                                   (uint8_t)fminf(255.f, thr * 256.f), h1, h2, h3, (uint8_t)t, (uint8_t)(sy >> 2) };
-                nd++;
-                break;                                        /* one target a dot */
+                const fluid_ask_target_t *g = &L->tg[t];
+                if (g->kind == FLUID_ASK_HLINE ? X >= g->b && X <= g->c && Y - g->a >= -LINE_W * 0.6f && Y - g->a <= LINE_W + DUST_D : in_band(g, r2)) { cap++; break; }
             }
         }
-        if (!pass && !(v->dot = AV_CALLOC(sizeof(av_dot_t) * (size_t)(nd + 1)))) { fluid_askview_destroy(v); return NULL; }
-        v->nd = nd;
+        if (!(v->dot = AV_CALLOC(sizeof(av_dot_t) * (size_t)(cap + 1)))) { fluid_askview_destroy(v); return NULL; }
+        v->cap = cap; v->nd = 0; v->by = 0;
     }
     for (int pass = 0; pass < 2; pass++) {        /* each letter's lit pixels */
         int np = 0;
