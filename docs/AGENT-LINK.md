@@ -1079,7 +1079,8 @@ device evt ──WSS──▶ DeviceRoom.onEvt
 | type | data |
 |---|---|
 | `shake` | `{peak_g: number 0..64, reversals: int, ms: int, listen?: string}` → agents get `{peak_g, reversals, ms}` plus `listening: true, turn_id` when the relay adopted `listen` |
-| `tap` | `{x: 0..1, y: 0..1}` (screen position, unit square) |
+| `tap` | `{x: 0..1, y: 0..1}` (screen position, unit square); on a scene's spot also `spot: "<id>"`, with `opened: "<layout>"` when Molty itself opened that layout for the tap; `closed: true` when the tap beside an opened layout took Molty back to the one under it. A malformed extra is dropped, the tap is kept |
+| `scene` | `{why: "open" \| "back" \| "end", pkg?, layout?, spot?}`: Molty changed its own screen. `pkg` and `layout` are what is up now (both or neither: neither means no scene, the creature is back); `spot` is the one that opened it. Inbox only (pull and ride-along): no webhook gets it |
 | `button` | `{id: "accept" \| "reject"}` |
 | `answer` | `{job, index: int 0..4 \| null, label?: string, reason?: "timeout" \| "cancelled"}`, checked against the pending ask (see the `ask` wire bullet) |
 
@@ -1088,6 +1089,32 @@ device evt ──WSS──▶ DeviceRoom.onEvt
 most 32 names a list; anything else drops the frame) and kept per device (KV `creature`). Agents get it as
 `device.creature` on every `utterance`, as `relay.creature` in `status` (`null` until the device said), and as a
 relay-generated `creature` event when it differs from the one kept (webhooks only when their `events` name it).
+
+**What is on the screen.** The relay follows the scene that is up (`services/relay/src/core/screen.ts`, KV `screen`)
+and hands it to agents as `device.scene` on every `utterance` and as `relay.scene` in `status` (`null` when none is
+up), so an agent that hears the human knows what they are looking at and what they last touched:
+
+```json
+{"pkg": "astrology", "layout": "chart", "params": {…}, "spot": "sun", "spot_age_s": 4, "reading": "Sun in Scorpio: …"}
+```
+
+- `params`: those of the `scene.play` that put it up. `null` when the relay does not know them.
+- `spot`: the last spot the human tapped on it, `spot_age_s` seconds before they began to speak (in `status`:
+  before now). `reading`: that spot's text (the `say` of the list element with that `id`), for 60 s after the tap.
+- `under: {layout, params, spot}`: Molty opened this layout itself, from a tap on `spot` of the layout under it. The
+  relay cannot work out the opened layout's params (they come from the package, which never passes through the
+  relay), so `params` is `null` and the ones under it are given.
+- `trimmed: true`: the params were over 2048 bytes and were cut down. Lists keep the tapped spot's elements whole
+  (its `id`, or `of` it); the other elements shrink to `{id}`, then go; if that is still too much, `params` is `null`.
+  `pkg`, `layout` and `spot` are always there.
+
+What the relay learns from: an agent's `scene.play` / `scene.queue` / `scene.clear`; a `show` or a `state` that
+takes the screen; the device's `scene` and `tap` events; the device's own `status` (`scene {pkg, layout, ttl_left}`),
+each time an agent asks for status; and the clock. A scene nobody said ended runs out with its ttl plus 20 s, and its
+clock waits while Molty listens or speaks, as the device's does. Queued scenes: the device's `end` names the next
+one and the relay gives it its params. When the device does not say (older firmware, or a reconnect, which loses
+events), the relay does not guess which queued scene is up: it reports none until the device, its status or a play
+says. Nothing is asked of the device on a reconnect: a stale scene goes with its ttl or at the next `status`.
 
 The relay stores `{id:"e<seq>", type, ts:<relay unix ms>, data}`; `seq` increases per device.
 `answer` is stored once per ended ask as `{job, index, label|null, reason?}` (`reason` also
