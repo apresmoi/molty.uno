@@ -89,6 +89,8 @@ export default defineConfig({
         {
           label: 'Moltys',
           items: [
+            { label: 'The Molty format', slug: 'moltys/molty-format' },
+            { label: 'Draw on Molty', slug: 'moltys/draw' },
             { label: 'Packages and scenes', slug: 'moltys/packages' },
             { label: 'Creature packages', slug: 'moltys/creature-packages' },
           ],
