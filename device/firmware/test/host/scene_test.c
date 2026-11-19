@@ -540,24 +540,32 @@ static void test_hd(void) {
     scene_hd_t h = { 0, false, 1.f };
     int n;
     scene_play(&sp, titled("a", 30.f));
-    for (n = 0; n < 100 && h.dust > 0.f; n++) scene_hd_tick(&h, sp.gen, false, DT);
+    for (n = 0; n < 100 && h.dust > 0.f; n++) scene_hd_tick(&h, sp.gen, false, false, DT);
     CHECK(h.gen == sp.gen && !h.out && fabsf(n * DT - SCENE_DUST_S) <= DT, "a forms from dust in %.2f s", n * DT);
     const unsigned a = sp.gen;
     scene_play(&sp, titled("b", 30.f));
-    scene_hd_tick(&h, sp.gen, false, DT);
+    scene_hd_tick(&h, sp.gen, false, false, DT);
     CHECK(h.out && h.gen == a && h.dust > 0.f && h.dust < 0.2f, "b: a breaks into dust first (%.2f)", h.dust);
     float peak = 0.f;
-    for (n = 0; n < 100 && h.out; n++) { scene_hd_tick(&h, sp.gen, false, DT); if (h.out && h.dust > peak) peak = h.dust; }
+    for (n = 0; n < 100 && h.out; n++) { scene_hd_tick(&h, sp.gen, false, false, DT); if (h.out && h.dust > peak) peak = h.dust; }
     CHECK(peak > 0.85f && h.gen == sp.gen && h.dust > 0.85f, "a went all to dust (%.2f), b forms (%.2f)", peak, h.dust);
-    for (n = 0; n < 100 && h.dust > 0.f; n++) scene_hd_tick(&h, sp.gen, false, DT);
+    for (n = 0; n < 100 && h.dust > 0.f; n++) scene_hd_tick(&h, sp.gen, false, false, DT);
     CHECK(h.gen == sp.gen && h.dust == 0.f, "b whole");
-    scene_hd_tick(&h, sp.gen, true, DT);
+    {   /* a scene holds its rise while its fine dust is made (they come together) */
+        scene_hd_t w = { 0, false, 1.f };
+        for (n = 0; n < 10; n++) scene_hd_tick(&w, sp.gen, false, true, DT);
+        CHECK(w.gen == sp.gen && w.dust == 1.f && !w.out, "held: the scene is the one on the glass, not risen yet");
+        scene_hd_tick(&w, sp.gen, false, false, DT);
+        scene_hd_tick(&w, sp.gen, false, true, DT);
+        CHECK(w.dust < 1.f - 1.5f * DT / SCENE_DUST_S, "once it rises a hold no longer stops it (%.2f)", w.dust);
+    }
+    scene_hd_tick(&h, sp.gen, true, false, DT);
     CHECK(h.gen == 0 && h.dust == 1.f, "a listen: the fluid's own look");
-    scene_hd_tick(&h, sp.gen, false, DT);
+    scene_hd_tick(&h, sp.gen, false, false, DT);
     CHECK(h.gen == sp.gen && h.dust < 1.f && h.dust > 0.8f, "after it, b forms from dust again");
-    for (n = 0; n < 100 && h.dust > 0.f; n++) scene_hd_tick(&h, sp.gen, false, DT);
+    for (n = 0; n < 100 && h.dust > 0.f; n++) scene_hd_tick(&h, sp.gen, false, false, DT);
     scene_clear(&sp);
-    for (n = 0; n < 100 && h.gen; n++) scene_hd_tick(&h, 0, false, DT);
+    for (n = 0; n < 100 && h.gen; n++) scene_hd_tick(&h, 0, false, false, DT);
     CHECK(h.gen == 0 && !h.out && h.dust == 1.f && n * DT >= SCENE_DUST_S - 2 * DT, "cleared: b breaks into dust over %.2f s, then nothing", n * DT);
 }
 
@@ -1092,10 +1100,10 @@ static void test_fine(const char *dir) {
     uint32_t key;
     const int nf = scene_full_shapes(s, sc, 1.f, full, &key);
     double t0 = now_us();
-    fluid_fine_want(fine, key, true, full, nf, FLUID_PAL_PASTEL);
+    fluid_fine_want(fine, 1, key, true, full, nf, FLUID_PAL_PASTEL);
     const bool built = fluid_fine_work(fine, 0);
     const double build_us = now_us() - t0;
-    fluid_fine_swap(fine);
+    fluid_fine_swap(fine, true);
     const int nsp = fluid_fine_specks(fine);
     { long ns = 0; const fine_set_t *st = &fine->set[fine->live]; for (int k = 0; k < N; k++) ns += st->nstat[k];
       printf("  fine dust: %d specks, %ld (%.0f%%) never hidden by the light\n", nsp, ns, 100.0 * ns / nsp); }
@@ -1247,8 +1255,8 @@ static void test_fine(const char *dir) {
         scene_fill(s, sc, 1.f, NULL, L, &nl, dots, &hd);
         o.nshapes = hd.n;
         const int nn = scene_full_shapes(s, sc, 1.f, full, &key);
-        fluid_fine_want(fine, key, false, full, nn, FLUID_PAL_PASTEL);
-        if (fluid_fine_work(fine, 0)) fluid_fine_swap(fine);
+        fluid_fine_want(fine, 1, key, false, full, nn, FLUID_PAL_PASTEL);
+        if (fluid_fine_work(fine, 0)) fluid_fine_swap(fine, true);
         fluid_sim_step(s, DT);
         fluid_sim_snapshot(s, fr, false);
         o.time = 3.f + f / 30.f;
@@ -1306,7 +1314,7 @@ static void test_fine(const char *dir) {
             if (!f && cap.n) for (int q = 0; q < nl; q++) if (!L[q].mask && !L[q].rgb && L[q].ch != ' ')
                 fluid_sim_impulse(s, (L[q].x + L[q].w * 0.5f) / S * 2.f - 1.f, (L[q].y + L[q].h * 0.5f) / S * 2.f - 1.f, SCENE_CAPTION_RIPPLE, SCENE_CAPTION_RIPPLE_R);
             o.cap_word = cap.n ? (unsigned)(w + 1) : 0;
-            o.cap_unformed = fmaxf(0.f, 1.f - (f * DT) / FINE_REVEAL_S);
+            o.cap_unformed = 0.f;                               /* (FINE_REVEAL_S 0: a word is whole on its first frame) */
             fluid_sim_step(s, DT);
             fluid_sim_snapshot(s, fr, false);
             o.time = 5.f + (tw += DT);
@@ -1318,11 +1326,11 @@ static void test_fine(const char *dir) {
             fluid_draw_pace(d, (int)((ms + CELLS_MS) * 1000));
             rd_sum += ms; rd_worst = ms > rd_worst ? ms : rd_worst;
             if (getenv("FINE_TRACE")) printf("    read w%d f%d: %.1f ms (%d windows, %ld px)\n", w, f, ms, c.wins, c.px);
-            if (cap.n && f == 1 && fine->cbox[1] > fine->cbox[0]) {   /* half formed */
-                int shown = 0, all = 0;
-                for (int y = (int)fine->cbox[2]; y < (int)fine->cbox[3]; y++) for (int x = (int)fine->cbox[0]; x < (int)fine->cbox[1]; x++) all += lum(fb[y * S + x]) > 600;
-                (void)shown;
-                half_ok += all > 0;
+            if (cap.n && f == 0 && fine->cbox[1] > fine->cbox[0]) {   /* whole on its first frame, sent in that frame */
+                int lit_px = 0, sent_cells = 0;
+                for (int y = (int)fine->cbox[2]; y < (int)fine->cbox[3]; y++) for (int x = (int)fine->cbox[0]; x < (int)fine->cbox[1]; x++) lit_px += lum(fb[y * S + x]) > 600;
+                for (int k = 0; k < N; k++) sent_cells += d->dirty[k] && fine->imm[k];
+                half_ok += lit_px > 40 * cap.n && sent_cells > 0;
             }
             if (cap.n && f == 8) {                        /* whole: no dust on its backdrop */
                 const fine_set_t *st = fine->drawn;
@@ -1338,16 +1346,45 @@ static void test_fine(const char *dir) {
         }
     }
     printf("  fine dust, reading to its end (panel model): %.1f ms a frame, worst %.1f\n", rd_sum / frames, rd_worst);
-    CHECK(dark_bad == 0 && half_ok > 0 && broke > 50, "reading: each word on dark (%d specks on it), forming (%d), the last breaking into %d specks", dark_bad, half_ok, broke);
+    CHECK(dark_bad == 0 && half_ok == 6 && broke > 50, "reading: each word on dark (%d specks on it), whole on its first frame (%d of 6), the last breaking into %d specks", dark_bad, half_ok, broke);
     CHECK(gen_first > 1 && gens == 0, "reading: the dark backdrop holds still from word to word (%d frames of another box)", gens);
     CHECK(rd_worst + CELLS_MS < 33.0, "reading: under a frame on the panel (%.1f ms mean, worst %.1f, and %.0f for the cells)", rd_sum / frames, rd_worst, CELLS_MS);
+
+    /* sets are found again by their drawing, the scene's calm set is never given up, another scene's dust goes */
+    {
+        uint32_t kt, kc, k2 = 0x1234567u;
+        sc->focus = asp; sc->glow = 1.f;
+        const int nt = scene_full_shapes(s, sc, 1.f, full, &kt);
+        sc->focus = -1; sc->glow = 0.f;
+        static fluid_shape_t calm_sh[FLUID_MAX_SHAPES];
+        const int ncalm = scene_full_shapes(s, sc, 1.f, calm_sh, &kc);
+        CHECK(kt != kc && fluid_fine_want(fine, 1, kt, false, full, nt, FLUID_PAL_PASTEL) && fine->build < 0, "the tapped drawing's set is known by its shapes: no build");
+        if (fluid_fine_work(fine, 0)) fluid_fine_swap(fine, true);
+        CHECK(fine->drawn && fine->drawn->key == kt, "... and swaps in");
+        /* another scene comes (its calm drawing: a few of these shapes) */
+        CHECK(fluid_fine_want(fine, 2, k2, true, calm_sh, 5, FLUID_PAL_PASTEL) && fine->build >= 0 && fluid_fine_coming(fine), "a new scene's calm set builds; it is coming");
+        CHECK(!fluid_fine_want(fine, 2, kt ^ 1u, false, full, nt, FLUID_PAL_PASTEL) && fine->bkey == k2, "... and is not given up for a tapped spot's");
+        fluid_fine_swap(fine, false);
+        CHECK(fine->drawn == NULL && fluid_fine_specks(fine) == 0, "the old scene's dust is off the glass at once");
+        fluid_draw_cells(d, fr, &o);
+        int dusty = 0;
+        for (int k = 0; k < N; k++) dusty += fine->vis[k];
+        CHECK(dusty == 0, "... no cell shows any (%d)", dusty);
+        const bool done = fluid_fine_work(fine, 0);
+        fluid_fine_swap(fine, false);
+        CHECK(done && fine->drawn && fine->drawn->key == k2 && !fluid_fine_coming(fine), "the new scene's dust is on");
+        /* back at the chart: its calm set is still there */
+        CHECK(fluid_fine_want(fine, 3, kc, true, calm_sh, ncalm, FLUID_PAL_PASTEL) && fine->build < 0 && fluid_fine_work(fine, 0), "back at the chart: its dust is known, no build");
+        fluid_fine_swap(fine, false);
+        CHECK(fine->drawn && fine->drawn->key == kc && fine->drawn->n == nsp, "... and on the glass (%d specks)", fluid_fine_specks(fine));
+    }
 
     /* back to calm: the calm set comes back at once (kept) */
     scene_grow_tick(&g, false, 1.f);
     scene_grow_apply(&g, sc);
     const int nn = scene_full_shapes(s, sc, 1.f, full, &key);
-    fluid_fine_want(fine, key, true, full, nn, FLUID_PAL_PASTEL);
-    CHECK(fine->ready >= 0 && fine->build < 0 && fine->set[fine->ready].n == nsp, "untapped: the calm dust is back without a build");
+    fluid_fine_want(fine, 1, key, true, full, nn, FLUID_PAL_PASTEL);
+    CHECK(fine->build < 0 && fine->drawn && fine->drawn->n == nsp, "untapped: the calm dust is back without a build");
     /* a transition on fine dust has no scatter: the chart rises row by row (each frame a few rows' windows, never the
      * panel's dots all over), whole at the end; its windows are on whole row pairs */
     {
@@ -1376,7 +1413,7 @@ static void test_fine(const char *dir) {
                 for (int j = 0; j < H; j++) { int r = 0; for (int i = 0; i < W; i++) r += d->dirty[j * W + i] != 0; nd += r; rows += r > 0; }
                 printf("    turn f%d dust %.2f: %.1f ms (%d windows, %ld px) %d cells dirty in %d rows, %d on\n", f, o.dust, panel_ms(&c), c.wins, c.px, nd, rows, n);
             }
-            tworst = fmax(tworst, panel_ms(&c));
+            if (f > -TF - 1) tworst = fmax(tworst, panel_ms(&c));   /* (the first frame settles what the checks before left) */
         }
         o.dust = 0.f;
         printf("  fine dust, the chart rising (panel model): worst %.1f ms a frame\n", tworst);

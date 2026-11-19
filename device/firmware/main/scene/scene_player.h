@@ -69,6 +69,9 @@ typedef struct {
     float grow;                         /* spot: how much what a tap on it lights grows (PKG_GROW) */
     float arc, r0, r1;                  /* spot: also tappable in this ring sector about the glass centre: arc degrees
                                          * wide (0: none) round the spot's own direction, radii r0..r1 */
+    uint16_t open, nopen;               /* spot: the layout a tap on it opens, in scene_t.say (nopen 0: none) */
+    float ttl;                          /* ... for this long when that layout is a held one (0: until a tap beside it) */
+    int8_t lst; uint8_t eln;            /* the list param it was repeated over (-1 none) and which element */
 } scene_item_t;
 
 typedef struct scene {
@@ -84,6 +87,7 @@ typedef struct scene {
     char groups[SCENE_GROUPS][PKG_KEY_MAX + 1];
     scene_item_t items[SCENE_ITEMS_MAX];
     float pts[SCENE_PTS_MAX][2];
+    cJSON *params;                      /* its params, kept when a spot of it opens a layout (they feed that one) */
     char chars[SCENE_LETTERS];
     char say[SCENE_SAY_CHARS];
 } scene_t;
@@ -105,6 +109,8 @@ typedef struct {
     scene_t *q[SCENE_QUEUE_MAX];
     int nq;
     float t;                            /* s since cur started                             */
+    scene_t *back;                      /* the scene a tap opened cur over: it comes back when cur ends ... */
+    float back_t;                       /* ... its clock, which kept running (its ttl ends both) */
     bool started;                       /* a scene started since the last scene_take_start  */
     unsigned gen;                       /* counts the scenes started: which one cur is      */
 } scene_player_t;
@@ -116,6 +122,16 @@ void scene_play(scene_player_t *p, scene_t *sc);
 bool scene_queue(scene_player_t *p, scene_t *sc);
 /** Drop everything. */
 void scene_clear(scene_player_t *p);
+/** A tap on spot item n of sc opens a layout (its `open`): that layout built with its params taken by name, each from
+ *  the tapped spot's list element if it has such a field, else from sc's own params; a list keeps only the elements
+ *  whose `of` (if they have one) is the spot's id. It lasts its dur, else the spot's ttl, else until sc's end. NULL: the
+ *  spot opens nothing, or *err ("no_layout" | "bad_params" | "oom"). */
+scene_t *scene_open_build(const scene_t *sc, int n, const char **err);
+/** Play sc over the current scene, which waits under it (one deep: a scene opened from an opened one replaces it) and
+ *  comes back when sc ends or at scene_back; its clock runs on meanwhile. Takes ownership. */
+void scene_open(scene_player_t *p, scene_t *sc);
+/** Back to the scene under an opened one, now. False: none was open. */
+bool scene_back(scene_player_t *p);
 /** Advance by dt: the current scene ends at scene_end, the next one starts. */
 void scene_tick(scene_player_t *p, float dt);
 /** A new scene started since the last call (the fluid melts into it). */
@@ -133,8 +149,9 @@ typedef struct {
     float dust;                         /* 0 = whole and crisp .. 1 = all dust, gone        */
 } scene_hd_t;
 /** Advance by dt: gen the scene on screen now (0: none); plain: the fluid's own look instead
- *  (nothing in high definition; the scene forms from dust again after it). */
-void scene_hd_tick(scene_hd_t *h, unsigned gen, bool plain, float dt);
+ *  (nothing in high definition; the scene forms from dust again after it); hold: a scene that has not begun to form
+ *  waits (its fine dust is not made yet: they come together). */
+void scene_hd_tick(scene_hd_t *h, unsigned gen, bool plain, bool hold, float dt);
 /** The dust for the drawer (fluid_draw_opts_t.dust): the scene's while one forms, shows or breaks up, else 0.
  *  At rest (no scene) h->dust stays 1 (all dust, ready to form), which would thin any other crisp dots (a rigged
  *  creature's) away to nothing. */
@@ -147,7 +164,7 @@ static inline float scene_hd_dust(const scene_hd_t *h) { return h->gen || h->out
 #define SCENE_GROW      PKG_GROW        /* its scale, grown, unless its spot says (grow)      */
 #define SCENE_GROW_IN_S 0.5f            /* the growth, easing out as the ring spreads       */
 #define SCENE_GROW_OUT_S 0.4f           /* back, once its reading is over                   */
-#define SCENE_GROW_HZ   15.f            /* its steps a second: every other frame, so the water it stirs has the frames between */
+#define SCENE_LIT_STEPS 4               /* a lit item's colour goes there in this many steps (its size every frame) */
 #define SCENE_LIT_WHITE 0.5f            /* a lit item's colour this far towards white        */
 typedef struct {
     int spot;                           /* the tapped spot (item), -1 none                  */
@@ -195,7 +212,7 @@ typedef struct {
                                          * growth and one round (the water never breaks them), all 0 untapped */
 } scene_shapes_t;
 /** The scene's shapes at t with its tapped spot (sc->focus) at full growth and lit, no caption: what its fine dust
- *  gathers round (fluid_fine_want). n of them (-1: too many); key: what they depend on (the same key, the same shapes). */
+ *  gathers round (fluid_fine_want). n of them (-1: too many); key: a hash of them (the same drawing, the same key). */
 int scene_full_shapes(fluid_sim_t *s, const scene_t *sc, float t, fluid_shape_t *out, uint32_t *key);
 /** Just the key scene_full_shapes would give (cheap: no shapes). */
 uint32_t scene_full_key(const fluid_sim_t *s, const scene_t *sc, float t);

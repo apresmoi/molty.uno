@@ -121,6 +121,20 @@ static inline float hash_u(int a, int b, uint32_t c) {
     return (float)(h & 0xFFFFu) * (1.f / 65536.f);
 }
 
+/* sqrt for the shapes' per-pixel coverage: no libm call (it is one on the device), two Newton steps (~1e-5) */
+static inline float fsqrt(float x) {
+    if (x <= 0.f) return 0.f;
+    union { float f; uint32_t i; } c = { x };
+    c.i = 0x5f3759dfu - (c.i >> 1);
+    float y = c.f;
+    y *= 1.5f - 0.5f * x * y * y;
+    y *= 1.5f - 0.5f * x * y * y;
+    return x * y;
+}
+/* floor and ceiling of a coordinate on or near the panel (no libm call) */
+static inline int ifloor(float v) { return (int)(v + 8192.f) - 8192; }
+static inline int iceil(float v) { return 8192 - (int)(8192.f - v); }   /* (both for -8192 < v < 8192) */
+
 static inline uint16_t rgb565_be(int r, int g, int b) {
     if (r > 255) r = 255;
     if (g > 255) g = 255;
@@ -720,13 +734,23 @@ void fluid_shape_box(const fluid_shape_t *sh, int ox, int oy, int16_t b[4]) {
     default:               ex = 0.5f * (fabsf(sh->co) * sh->w + fabsf(sh->si) * sh->h);
                            ey = 0.5f * (fabsf(sh->si) * sh->w + fabsf(sh->co) * sh->h); break;
     }
-    b[0] = (int16_t)fmaxf(-1.f, floorf(ox + cx - ex - 1.f)); b[1] = (int16_t)fminf(4096.f, ceilf(ox + cx + ex + 1.f));
-    b[2] = (int16_t)fmaxf(-1.f, floorf(oy + cy - ey - 1.f)); b[3] = (int16_t)fminf(4096.f, ceilf(oy + cy + ey + 1.f));
+    /* (no libm: this runs for every shape that changed, and for the dust's build) */
+    const float x0 = ox + cx - ex - 1.f, x1 = ox + cx + ex + 1.f, y0 = oy + cy - ey - 1.f, y1 = oy + cy + ey + 1.f;
+    b[0] = (int16_t)(x0 < -1.f ? -1 : x0 > 4096.f ? 4096 : ifloor(x0)); b[1] = (int16_t)(x1 > 4096.f ? 4096 : x1 < -1.f ? -1 : iceil(x1));
+    b[2] = (int16_t)(y0 < -1.f ? -1 : y0 > 4096.f ? 4096 : ifloor(y0)); b[3] = (int16_t)(y1 > 4096.f ? 4096 : y1 < -1.f ? -1 : iceil(y1));
 }
 
 /* each shape's box in fb px, [x0, x1) x [y0, y1), its soft edge included */
+static uint32_t shape_hash(const fluid_shape_t *sh);
+/* ... and this frame's hashes (d->sh1); a shape that is where it was, as it was, keeps its box */
 static void shape_boxes(fluid_draw_t *d, const fluid_draw_opts_t *o) {
-    for (int n = 0; n < o->nshapes && n < FLUID_MAX_SHAPES; n++) fluid_shape_box(&o->shapes[n], d->ox, d->oy, d->sb[n]);
+    if (!d->sh1) d->sh1 = FLUID_CALLOC(sizeof(uint32_t) * FLUID_MAX_SHAPES);
+    for (int n = 0; n < o->nshapes && n < FLUID_MAX_SHAPES; n++) {
+        const uint32_t h = shape_hash(&o->shapes[n]);
+        if (d->sh1 && n < d->nsh0 && h == d->sh0[n] && h == d->sh1[n]) continue;
+        if (d->sh1) d->sh1[n] = h;
+        fluid_shape_box(&o->shapes[n], d->ox, d->oy, d->sb[n]);
+    }
 }
 
 int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_opts_t *o) {
@@ -760,11 +784,9 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
          * letters are not in the drawing's cache: its cells stay valid under them.) */
         const int n1 = o->nshapes < FLUID_MAX_SHAPES ? o->nshapes : FLUID_MAX_SHAPES;
         if (!d->shp0) d->shp0 = FLUID_CALLOC(sizeof(fluid_shape_t) * FLUID_MAX_SHAPES);
-        if (!d->sh1) d->sh1 = FLUID_CALLOC(sizeof(uint32_t) * FLUID_MAX_SHAPES);
         if (d->shp0 && d->sh1) {
             enum { AHEAD = 24 };
-            uint32_t *h1 = d->sh1;
-            for (int n = 0; n < n1; n++) h1[n] = shape_hash(&o->shapes[n]);
+            uint32_t *h1 = d->sh1;                          /* (shape_boxes) */
             uint8_t *const cache = d->hdcv;
 #define GONE(q) do { if (d->shp0[q].tag == FLUID_TAG_CAPTION) d->hdcv = NULL; stale_shape(d, &d->shp0[q], d->sb0[q]); d->hdcv = cache; } while (0)
 #define CAME(q) do { if (o->shapes[q].tag == FLUID_TAG_CAPTION) d->hdcv = NULL; stale_shape(d, &o->shapes[q], d->sb[q]); d->hdcv = cache; } while (0)
@@ -825,7 +847,11 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
      * growing, a word) are spent first; what only the water and the light change goes while the quota lasts, the rows
      * taking turns to go first */
     int est = 0;
-    for (int k = 0; hd && o->fine && k < W * H; k++) if (d->key[k] == KEY_STALE) est += FLUID_CELL_US + FLUID_WIN_US / 2;
+    for (int j = 0; hd && o->fine && j < H; j++) for (int i = 0, last = -99; i < W; i++)
+        if (d->key[j * W + i] == KEY_STALE) { est += FLUID_CELL_US + (i - last > RUN_GAP ? FLUID_WIN_US : 0); last = i; }
+    /* ... and when those alone are over it (a large drawing growing), they go in every other cell row a frame */
+    const bool halve = est > d->quota && !d->force;
+    if (halve) est /= 2;
     if (hd && o->fine && (o->dust > 0.f || d->dust0 > 0.f))     /* ... and the cells that come or go in a transition */
         for (int j = 0; j < H; j++) for (int i = 0; i < W; i++) {
             const float turn = fluid_fine_turn(i, j, H);
@@ -866,6 +892,7 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
                 if (same && !(c0 & 0x100) && (c0 & 0xff) == (d->cd0[k] & 0xff) && (o->frame ? !fluid_ilace_row(o->frame, j) : ((j + d->ilace) & 1))) { d->dirty[k] = 0; continue; }
                 d->cd0[k] = c0; d->csig[k] = sig;
             }
+            if (halve && d->key[k] == KEY_STALE && ((j + d->ilace) & 1) && !ff->imm[k]) { d->dirty[k] = 0; continue; }   /* next frame */
             uint16_t key = KEY_EMPTY, col = 0;
             if (d->skip[k]) key = KEY_SKIP;
             else if (s->mask[k]) cell_look(d, s, &oo, i, j, k, rmax, frame, &key, &col);
@@ -1015,18 +1042,6 @@ static inline int shape_bit(const fluid_shape_t *sh, int x, int y) {
 
 /* how much of a mask or a char covers the pixel at (u, v) in its bits: read bilinear, a smooth
  * edge at HD_EDGE (e: half its width, on that reading) */
-/* sqrt for the shapes' per-pixel coverage: no libm call (it is one on the device), two Newton steps (~1e-5) */
-static inline float fsqrt(float x) {
-    if (x <= 0.f) return 0.f;
-    union { float f; uint32_t i; } c = { x };
-    c.i = 0x5f3759dfu - (c.i >> 1);
-    float y = c.f;
-    y *= 1.5f - 0.5f * x * y * y;
-    y *= 1.5f - 0.5f * x * y * y;
-    return x * y;
-}
-/* floor of a coordinate that is never far below 0 (no libm call) */
-static inline int ifloor(float v) { return (int)(v + 1024.f) - 1024; }
 static inline float mask_cover(const fluid_shape_t *sh, float u, float v, float e) {
     const int iu = ifloor(u), iv = ifloor(v);
     const float tu = u - (float)iu, tv = v - (float)iv;
@@ -1116,20 +1131,23 @@ void fluid_shapes_row_dim(const fluid_shape_t *shapes, int nshapes, const int16_
         if (sh->k == FLUID_SHAPE_DISC || sh->k == FLUID_SHAPE_RING) {
             const float ro = (sh->k == FLUID_SHAPE_RING ? sh->r + sh->hw : sh->r) + 1.f, ri = sh->k == FLUID_SHAPE_RING ? sh->r - sh->hw - 1.f : 0.f;
             if (ro * ro <= dy * dy) continue;
-            const float xo = sqrtf(ro * ro - dy * dy), xi = ri > fabsf(dy) ? sqrtf(ri * ri - dy * dy) : 0.f;
+            const float xo = fsqrt(ro * ro - dy * dy), xi = ri > fabsf(dy) ? fsqrt(ri * ri - dy * dy) : 0.f;
             span[0][0] = cx - xo; span[0][1] = cx + (xi > 0.f ? -xi : xo) + 1.f;
             if (xi > 0.f) { span[1][0] = cx + xi; span[1][1] = cx + xo + 1.f; }
         } else if (sh->k == FLUID_SHAPE_SEG) {
             const float vx = sh->x1 - sh->x, vy = sh->y1 - sh->y, l2 = vx * vx + vy * vy;
             il2 = l2 > 1e-6f ? 1.f / l2 : 0.f;
             if (fabsf(vy) > 1e-3f) {                    /* not level: where the band crosses the row */
-                const float l = sqrtf(l2), nx = -vy / l, ny = vx / l, reach = sh->hw + 1.f, c = ny * (Y - sh->y);
-                const float p = (-reach - c) / nx, q = (reach - c) / nx;
-                span[0][0] = fmaxf(span[0][0], ox + sh->x + fminf(p, q) - 1.f);
-                span[0][1] = fminf(span[0][1], ox + sh->x + fmaxf(p, q) + 2.f);
+                const float il = 1.f / fsqrt(l2), nx = -vy * il, ny = vx * il, reach = sh->hw + 1.f, c = ny * (Y - sh->y), inx = 1.f / nx;
+                const float p = (-reach - c) * inx, q = (reach - c) * inx;
+                const float lo = ox + sh->x + (p < q ? p : q) - 1.f, hi = ox + sh->x + (p < q ? q : p) + 2.f;
+                if (lo > span[0][0]) span[0][0] = lo;
+                if (hi < span[0][1]) span[0][1] = hi;
             }
         } else {                                        /* a mask: (u, v) in its bits, a step a pixel */
-            e = fminf(0.45f, fmaxf(0.02f, 0.5f * fmaxf(sh->mw / sh->w, sh->mh / sh->h)));
+            const float kx = sh->mw / sh->w, ky = sh->mh / sh->h;
+            e = 0.5f * (kx > ky ? kx : ky);
+            e = e < 0.02f ? 0.02f : e > 0.45f ? 0.45f : e;
             du = sh->co / sh->w * sh->mw; dv = sh->si / sh->h * sh->mh;
         }
         const bool mask = sh->k == FLUID_SHAPE_MASK || sh->k == FLUID_SHAPE_CHAR;
@@ -1137,7 +1155,8 @@ void fluid_shapes_row_dim(const fluid_shape_t *shapes, int nshapes, const int16_
         shape_rgb(sh, pal, c);
         const uint16_t le = (uint16_t)(((int)c[0] & 0xF8) << 8 | ((int)c[1] & 0xFC) << 3 | (int)c[2] >> 3);
         for (int q = 0; q < 2; q++) {
-            int l = (int)floorf(span[q][0]), r = (int)ceilf(span[q][1]);
+            if (span[q][1] <= span[q][0]) continue;
+            int l = span[q][0] < -1000.f ? -1000 : ifloor(span[q][0]), r = span[q][1] > 5000.f ? 5000 : iceil(span[q][1]);
             if (l < xa) l = xa;
             if (l < b[0]) l = b[0];
             if (r > xb) r = xb;
@@ -1172,9 +1191,26 @@ static void hdc_cell(fluid_draw_t *d, const fluid_draw_opts_t *o, int k, int nca
     fluid_shape_t *sh = d->near;
     int16_t (*box)[4] = (int16_t (*)[4])(sh + NEAR);
     int n = d->near ? 0 : NEAR + 1;
+    const float ccx = (x0 + x1) * 0.5f - d->ox, ccy = (y0 + y1) * 0.5f - d->oy;   /* its centre (stage px) and half diagonal */
+    const float hx = (x1 - x0) * 0.5f, hy = (y1 - y0) * 0.5f, reach = fsqrt(hx * hx + hy * hy) + 1.5f;
     for (int q = 0; q < ncache && n <= NEAR; q++) {
         const int16_t *b = d->sb[q];
         if (b[3] <= y0 || b[2] >= y1 || b[1] <= x0 || b[0] >= x1) continue;
+        /* (a ring's or a long stroke's box holds far more cells than it crosses) */
+        const fluid_shape_t *sq = &o->shapes[q];
+        if (sq->k == FLUID_SHAPE_RING) {
+            const float dc = fsqrt((ccx - sq->x) * (ccx - sq->x) + (ccy - sq->y) * (ccy - sq->y)) - sq->r;
+            if ((dc < 0.f ? -dc : dc) > sq->hw + reach) continue;
+        } else if (sq->k == FLUID_SHAPE_SEG) {
+            const float vx = sq->x1 - sq->x, vy = sq->y1 - sq->y, l2 = vx * vx + vy * vy;
+            float u = l2 > 1e-6f ? ((ccx - sq->x) * vx + (ccy - sq->y) * vy) / l2 : 0.f;
+            u = u < 0.f ? 0.f : u > 1.f ? 1.f : u;
+            const float ex = ccx - sq->x - u * vx, ey = ccy - sq->y - u * vy, lim = sq->hw + reach;
+            if (ex * ex + ey * ey > lim * lim) continue;
+        } else if (sq->k == FLUID_SHAPE_DISC) {
+            const float lim = sq->r + reach;
+            if ((ccx - sq->x) * (ccx - sq->x) + (ccy - sq->y) * (ccy - sq->y) > lim * lim) continue;
+        }
         if (n < NEAR) { sh[n] = o->shapes[q]; memcpy(box[n], b, sizeof(box[n])); }
         n++;
     }
@@ -1194,7 +1230,7 @@ static void hdc_copy(const fluid_draw_t *d, const fluid_draw_opts_t *o, uint16_t
     if (dim[4] <= 0.f) return;
     const float Y = (float)(y - d->oy) + 0.5f, dey = Y < dim[2] ? dim[2] - Y : Y > dim[3] ? Y - dim[3] : 0.f;
     if (dey >= FLUID_DIM_REACH) return;
-    const int la = (int)floorf(dim[0] - FLUID_DIM_REACH) + d->ox, lb = (int)ceilf(dim[1] + FLUID_DIM_REACH) + d->ox;
+    const int la = ifloor(dim[0] - FLUID_DIM_REACH) + d->ox, lb = iceil(dim[1] + FLUID_DIM_REACH) + d->ox;
     for (int x = xa > la ? xa : la; x < xb && x < lb; x++) {
         uint16_t *p = &row[x - bx];
         if (!*p) continue;

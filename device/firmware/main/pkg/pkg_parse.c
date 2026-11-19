@@ -120,6 +120,7 @@ bool pkg_num_ok(int pf, float v) {
     case PF_GROW:             return v >= 1.f && v <= 3.f;
     case PF_ARC:              return v > 0.f && v <= 360.f;
     case PF_R0: case PF_R1:   return v >= 0.f && v <= 2.f;
+    case PF_TTL:              return v >= 1.f && v <= PKG_DUR_MAX;
     default:                  return v >= -720.f && v <= 720.f;   /* angles: a0 a1 rot polar */
     }
 }
@@ -217,6 +218,9 @@ static const struct { const char *key; uint8_t pf, type; uint16_t kinds; } FIELD
     /* a spot is also tappable in a ring sector about the glass centre: arc degrees wide, centred on the spot's own
      * direction, from radius r0 (0 unless given) to r1 */
     { "arc", PF_ARC, T_NUM, KB(PK_SPOT) }, { "r0", PF_R0, T_NUM, KB(PK_SPOT) }, { "r1", PF_R1, T_NUM, KB(PK_SPOT) },
+    /* a tap on it opens another layout of the package over this one (scene_player.h scene_open_build), for ttl
+     * seconds when that layout is a held one (dur 0) */
+    { "open", PF_OPEN, T_STR, KB(PK_SPOT) }, { "ttl", PF_TTL, T_NUM, KB(PK_SPOT) },
 };
 #define NFIELDS ((int)(sizeof(FIELDS) / sizeof(FIELDS[0])))
 /* what each kind cannot do without */
@@ -332,6 +336,7 @@ static const char *parse_item(ictx_t *c, const cJSON *j, pkg_item_t *it) {
     if ((kind == PK_LINE || kind == PK_CURVE) && !it->pts) return "item: pts";
     if (it->polar && (have & (KB(PF_X) | KB(PF_Y)))) return "item: polar or x / y, not both";
     if (!(have & KB(PF_ARC)) != !(have & KB(PF_R1)) || ((have & KB(PF_R0)) && !(have & KB(PF_ARC)))) return "item: a sector is arc and r1 (and r0)";
+    if ((have & KB(PF_TTL)) && !(have & KB(PF_OPEN))) return "item: ttl is for open";
     if (it->f[PF_WHEN].src != PV_NONE && (it->f[PF_WHEN].src != PV_STR || strcmp(it->f[PF_WHEN].s, "lit"))) return "item: when is \"lit\"";
     return NULL;
 }
@@ -421,6 +426,11 @@ static const char *parse_root(arena_t *a, pkg_t *p, const cJSON *j) {
         if (e) return e;
         if (!(l->name = astr(a, c->string))) return "oom";
         p->nlayouts++;
+    }
+    /* a spot opens a layout of this package (a bound name is checked when it is tapped) */
+    for (int i = 0; i < p->nlayouts; i++) for (int q = 0; q < p->layouts[i].nitems; q++) {
+        const pkg_val_t *v = &p->layouts[i].items[q].f[PF_OPEN];
+        if (v->src == PV_STR && !pkg_layout(p, v->s)) return "item: open names no layout";
     }
     return NULL;
 }

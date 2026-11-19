@@ -28,7 +28,7 @@ static inline int64_t now_us(void) { struct timespec ts; clock_gettime(CLOCK_MON
 #define FAR       0xFFFFu
 #define LUT_N     1024                  /* e^(-d / FALL), e^(-d / TINT_FALL), d in 0.1 px steps */
 
-enum { PH_IDLE, PH_RASTER, PH_FWD, PH_BWD, PH_EXTRACT };
+enum { PH_IDLE, PH_RASTER, PH_FWD, PH_BWD, PH_EXTRACT, PH_LEVELS };
 
 /* tables in PSRAM, made once (internal RAM is the network's) */
 static float *s_near, *s_tint, *s_sin;
@@ -38,11 +38,6 @@ static inline float hash_u(int a, int b, uint32_t c) {     /* fluid_draw.c's, ch
     uint32_t h = (uint32_t)a * 0x27d4eb2du ^ (uint32_t)b * 0x165667b1u ^ c * 0x9e3779b1u;
     h ^= h >> 15; h *= 0x85ebca6bu; h ^= h >> 13;
     return (float)(h & 0xFFFFu) * (1.f / 65536.f);
-}
-/* interleaved gradient noise: each pixel's ordered threshold (chart-engine.js IGN) */
-static inline float ign(int x, int y) {
-    const float a = 0.06711056f * (float)x + 0.00583715f * (float)y, v = 52.9829189f * (a - floorf(a));
-    return v - floorf(v);
 }
 /* sin of t turns (a table, linear) */
 static inline float sin_t(float t) {
@@ -93,6 +88,8 @@ static bool set_room(fine_set_t *st, int n) {
     return true;
 }
 
+static bool light_tables(int lg, int S);
+
 fluid_fine_t *fluid_fine_create(int W, int H, int fb_w, int fb_h) {
     if (W <= 2 || H <= 2 || W > 255 || H > 255 || fb_w < 32 || fb_h < 32 || fb_w > 1024 || fb_h > 1024) return NULL;
     if (!s_lut) {
@@ -110,6 +107,7 @@ fluid_fine_t *fluid_fine_create(int W, int H, int fb_w, int fb_h) {
     f->W = W; f->H = H; f->N = W * H; f->S = S;
     f->ox = (fb_w - S) / 2; f->oy = (fb_h - S) / 2;
     f->lg = S / FINE_LIGHT_GRID + 3;
+    f->S2 = (S + 1) / 2;
     int maxh = 0;
     f->cx = FINE_CALLOC(sizeof(int16_t) * (size_t)(W + 1)); f->cy = FINE_CALLOC(sizeof(int16_t) * (size_t)(H + 1));
     f->cellx = FINE_CALLOC((size_t)S); f->celly = FINE_CALLOC((size_t)S);
@@ -137,8 +135,12 @@ fluid_fine_t *fluid_fine_create(int W, int H, int fb_w, int fb_h) {
     f->bcell = FINE_CALLOC(sizeof(uint16_t) * (size_t)f->bcap);
     f->ride = FINE_CALLOC((size_t)f->N); f->vis = FINE_CALLOC((size_t)f->N); f->imm = FINE_CALLOC((size_t)f->N);
     f->tot = FINE_CALLOC(sizeof(uint32_t) * (size_t)f->N); f->stat = FINE_CALLOC(sizeof(uint32_t) * (size_t)f->N);
-    f->eff = FINE_CALLOC(sizeof(uint32_t) * (size_t)f->N);
-    if (!f->bpos || !f->bcol || !f->bcell || !f->ride || !f->vis || !f->imm || !f->tot || !f->stat || !f->eff) { fluid_fine_destroy(f); return NULL; }
+    f->eff = FINE_CALLOC(sizeof(uint32_t) * (size_t)f->N); f->tot2 = FINE_CALLOC(sizeof(uint32_t) * (size_t)f->N);
+    f->fresh = FINE_CALLOC((size_t)f->N); f->lgrid2 = FINE_CALLOC((size_t)f->lg * (size_t)f->lg);
+    if (!f->bpos || !f->bcol || !f->bcell || !f->ride || !f->vis || !f->imm || !f->tot || !f->stat || !f->eff || !f->tot2 || !f->fresh || !f->lgrid2) {
+        fluid_fine_destroy(f); return NULL;
+    }
+    if (!light_tables(f->lg, S)) { fluid_fine_destroy(f); return NULL; }   /* (one stage size a boot) */
     f->live = f->ready = f->build = -1;
     f->cbox[1] = f->pbox[1] = f->want_box[1] = f->bbox[1] = -1.f;   /* none */
     f->pbb[1] = -1;
@@ -153,16 +155,17 @@ void fluid_fine_destroy(fluid_fine_t *f) {
     FINE_FREE(f->rowbuf); FINE_FREE(f->sx); FINE_FREE(f->sy); FINE_FREE(f->sig); FINE_FREE(f->sig0); FINE_FREE(f->lgrid);
     FINE_FREE(f->px0); FINE_FREE(f->pc); FINE_FREE(f->pa); FINE_FREE(f->bpos); FINE_FREE(f->bcol); FINE_FREE(f->bcell);
     FINE_FREE(f->ride); FINE_FREE(f->vis); FINE_FREE(f->imm); FINE_FREE(f->tot); FINE_FREE(f->stat); FINE_FREE(f->eff);
-    FINE_FREE(f->dist); FINE_FREE(f->src); FINE_FREE(f->lv); FINE_FREE(f->lv2);
+    FINE_FREE(f->dist); FINE_FREE(f->src); FINE_FREE(f->lit); FINE_FREE(f->lv); FINE_FREE(f->lv2);
+    FINE_FREE(f->tot2); FINE_FREE(f->fresh); FINE_FREE(f->lgrid2);
     FINE_FREE(f);
 }
 
 void fluid_fine_clear(fluid_fine_t *f) {
     if (!f) return;
     for (int q = 0; q < FINE_SETS; q++) set_free(&f->set[q]);
-    FINE_FREE(f->dist); FINE_FREE(f->src); FINE_FREE(f->lv); FINE_FREE(f->lv2);
-    f->dist = NULL; f->src = NULL; f->lv = f->lv2 = NULL; f->lvcap = f->lv2cap = 0;
-    f->live = f->ready = f->build = -1;
+    FINE_FREE(f->dist); FINE_FREE(f->src); FINE_FREE(f->lit); FINE_FREE(f->lv); FINE_FREE(f->lv2);
+    f->dist = NULL; f->src = NULL; f->lit = NULL; f->lv = f->lv2 = NULL; f->lvcap = f->lv2cap = 0;
+    f->live = f->ready = f->build = -1; f->levels_ok = false; f->lv_base = NULL;
     f->phase = PH_IDLE; f->keep = 0; f->bkey = 0;
     f->drawn = NULL;
     memset(f->eff, 0, sizeof(uint32_t) * (size_t)f->N); memset(f->tot, 0, sizeof(uint32_t) * (size_t)f->N);
@@ -174,67 +177,104 @@ void fluid_fine_clear(fluid_fine_t *f) {
 
 /* ── the build (sim task) ──────────────────────────────────────────────────── */
 
-void fluid_fine_want(fluid_fine_t *f, uint32_t key, bool keep, const fluid_shape_t *sh, int n, int palette) {
-    if (!f) return;
+/* The field is kept at half the panel's resolution (2 x 2 px blocks: a quarter of the memory the build moves, which is
+ * what it costs on the device) with a bit a panel pixel for the drawing itself (no speck on it). */
+
+bool fluid_fine_want(fluid_fine_t *f, uint32_t scene, uint32_t key, bool keep, const fluid_shape_t *sh, int n, int palette) {
+    if (!f) return true;
     if (!key) key = 1;
     if (keep) f->keep = key;
-    if (f->live >= 0 && f->set[f->live].key == key) { f->ready = -1; f->build = -1; f->phase = PH_IDLE; return; }   /* drawn now */
+    f->scene = scene;
+    f->clock++;
+    if (f->live >= 0 && f->set[f->live].key == key) {            /* drawn now */
+        f->set[f->live].base = scene; f->set[f->live].used = f->clock;
+        f->ready = -1; f->build = -1; f->phase = PH_IDLE;
+        return true;
+    }
     for (int q = 0; q < FINE_SETS; q++)
-        if (q != f->live && f->set[q].key == key && q != f->build) { f->ready = q; f->build = -1; f->phase = PH_IDLE; return; }   /* built */
-    if (f->build >= 0 && f->bkey == key) return;                 /* building */
-    /* a slot: not the one drawn, nor the calm drawing's (unless that is what is wanted); an empty one first */
+        if (q != f->live && f->set[q].key == key && q != f->build) {   /* built before: its levels, then it swaps in */
+            if (f->ready != q) {
+                f->ready = q; f->levels_ok = false; f->phase = PH_LEVELS; f->row = 0;
+                f->build_t0 = now_us(); f->build_us = 0; f->build_calls = 0;
+            }
+            f->set[q].base = scene; f->set[q].used = f->clock;
+            f->build = -1;
+            return true;
+        }
+    if (f->build >= 0 && f->bkey == key) return true;            /* building */
+    /* the scene's calm set is never given up for a tapped spot's: that one waits its turn */
+    if (f->build >= 0 && f->bkey == f->keep && key != f->keep) return false;
+    /* a slot: not the one drawn nor the calm drawing's; an empty one, else the one used longest ago */
     int slot = -1;
-    for (int pass = 0; pass < 2 && slot < 0; pass++)
-        for (int q = 0; q < FINE_SETS && slot < 0; q++)
-            if (q != f->live && (f->set[q].key != f->keep || !f->keep) && (pass || !f->set[q].key)) slot = q;
-    if (slot < 0) return;
-    if (!f->dist) f->dist = FINE_CALLOC(sizeof(uint16_t) * (size_t)f->S * f->S);
-    if (!f->src) f->src = FINE_CALLOC(sizeof(uint16_t) * (size_t)f->S * f->S);
-    if (!f->dist || !f->src) return;                             /* no memory: no dust */
+    for (int q = 0; q < FINE_SETS; q++) {
+        if (q == f->live || (f->set[q].key && f->set[q].key == f->keep)) continue;
+        if (slot < 0 || !f->set[q].key || (f->set[slot].key && f->set[q].used < f->set[slot].used)) slot = q;
+        if (!f->set[q].key) break;
+    }
+    if (slot < 0) return true;
+    const int S2 = f->S2;
+    if (!f->dist) f->dist = FINE_CALLOC(sizeof(uint16_t) * (size_t)S2 * S2);
+    if (!f->src) f->src = FINE_CALLOC(sizeof(uint16_t) * (size_t)S2 * S2);
+    if (!f->lit) f->lit = FINE_CALLOC(((size_t)f->S * f->S + 7) / 8);
+    if (!f->dist || !f->src || !f->lit) return true;             /* no memory: no dust */
     fine_set_t *nset = &f->set[slot];
     if (!nset->start) nset->start = FINE_CALLOC(sizeof(uint32_t) * (size_t)(f->N + 1));
     if (!nset->nstat) nset->nstat = FINE_CALLOC(sizeof(uint16_t) * (size_t)f->N);
     if (!nset->ssig) nset->ssig = FINE_CALLOC(sizeof(uint32_t) * (size_t)f->N);
-    if (!nset->start || !nset->nstat || !nset->ssig) return;
+    if (!nset->start || !nset->nstat || !nset->ssig) return true;
     /* the drawing's shapes (not the caption), then a copy of its symbols alone */
     int m = 0, ns = 0;
     for (int q = 0; q < n && m < FLUID_MAX_SHAPES; q++) if (sh[q].tag != FLUID_TAG_CAPTION) f->shp[m++] = sh[q];
     for (int q = 0; q < m; q++) if (f->shp[q].k == FLUID_SHAPE_MASK || f->shp[q].k == FLUID_SHAPE_CHAR) f->shp[m + ns++] = f->shp[q];
     for (int q = 0; q < m + ns; q++) fluid_shape_box(&f->shp[q], 0, 0, f->box[q]);
     f->nshp = m; f->nsym = ns; f->pal = palette;
-    f->set[slot].key = 0; f->set[slot].n = 0;
+    nset->key = 0; nset->n = 0; nset->base = scene; nset->used = f->clock;
     if (f->ready == slot) f->ready = -1;
     f->build = slot; f->bkey = key; f->phase = PH_RASTER; f->row = 0;
     f->build_t0 = now_us(); f->build_us = 0; f->build_calls = 0;
+    memset(f->lit, 0, ((size_t)f->S * f->S + 7) / 8);
+    return true;
 }
 
-/* one raster row: each pixel's distance (0 drawn, FAR else) and, drawn, its colour (rgb444) and whether a symbol's */
-static void raster_row(fluid_fine_t *f, int y) {
+/* a raster row's lit pixels into its half-resolution row (dist 0 and the colour, rgb444) and the lit bits; sym: mark
+ * the lit ones as a symbol's instead */
+static void fold_row(fluid_fine_t *f, int y, bool sym) {
     const int S = f->S;
-    uint16_t *row = f->rowbuf, *dist = f->dist + (size_t)y * S, *src = f->src + (size_t)y * S;
-    memset(row, 0, sizeof(uint16_t) * (size_t)S);
-    fluid_shapes_row(f->shp, f->nshp, (const int16_t (*)[4])f->box, 0, 0, f->pal, NULL, 0.f, row, 0, y, 0, S);
+    const uint16_t *row = f->rowbuf;
+    uint16_t *dist = f->dist + (size_t)(y >> 1) * f->S2, *src = f->src + (size_t)(y >> 1) * f->S2;
+    uint8_t *lit = f->lit;
     for (int x = 0; x < S; x++) {
-        int r, g, b;
-        rgb_of(row[x], &r, &g, &b);
-        const bool lit = r > FINE_DRAWN || g > FINE_DRAWN || b > FINE_DRAWN;
-        dist[x] = lit ? 0 : FAR;
-        src[x] = lit ? (uint16_t)((r >> 4) << 8 | (g >> 4) << 4 | b >> 4) : 0;
-    }
-    if (!f->nsym) return;
-    memset(row, 0, sizeof(uint16_t) * (size_t)S);
-    fluid_shapes_row(f->shp + f->nshp, f->nsym, (const int16_t (*)[4])(f->box + f->nshp), 0, 0, f->pal, NULL, 0.f, row, 0, y, 0, S);
-    for (int x = 0; x < S; x++) {
-        if (!row[x] || dist[x]) continue;
-        int r, g, b;
-        rgb_of(row[x], &r, &g, &b);
-        if (r > FINE_DRAWN || g > FINE_DRAWN || b > FINE_DRAWN) src[x] |= 0x8000;
+        if (!row[x]) continue;
+        const uint16_t le = (uint16_t)(row[x] >> 8 | row[x] << 8);
+        const int r5 = le >> 11, g6 = le >> 5 & 63, b5 = le & 31;
+        if (r5 <= FINE_DRAWN >> 3 && g6 <= FINE_DRAWN >> 2 && b5 <= FINE_DRAWN >> 3) continue;
+        const int x2 = x >> 1;
+        if (sym) { if (!dist[x2]) src[x2] |= 0x8000; continue; }
+        const size_t bit = (size_t)y * S + x;
+        lit[bit >> 3] |= (uint8_t)(1u << (bit & 7));
+        const uint16_t c = (uint16_t)((r5 >> 1) << 8 | (g6 >> 2) << 4 | b5 >> 1);
+        if (dist[x2] || (c & 0x0F0) > (src[x2] & 0x0F0)) src[x2] = c;   /* the brighter of the block's */
+        dist[x2] = 0;
     }
 }
+/* half-resolution row y2: its two panel rows of the drawing, then of its symbols alone */
+static void raster_row(fluid_fine_t *f, int y2) {
+    const int S = f->S;
+    uint16_t *row = f->rowbuf, *dist = f->dist + (size_t)y2 * f->S2, *src = f->src + (size_t)y2 * f->S2;
+    for (int x = 0; x < f->S2; x++) { dist[x] = FAR; src[x] = 0; }
+    for (int pass = 0; pass < (f->nsym ? 2 : 1); pass++)
+        for (int y = 2 * y2; y < 2 * y2 + 2 && y < S; y++) {
+            memset(row, 0, sizeof(uint16_t) * (size_t)S);
+            if (!pass) fluid_shapes_row(f->shp, f->nshp, (const int16_t (*)[4])f->box, 0, 0, f->pal, NULL, 0.f, row, 0, y, 0, S);
+            else fluid_shapes_row(f->shp + f->nshp, f->nsym, (const int16_t (*)[4])(f->box + f->nshp), 0, 0, f->pal, NULL, 0.f, row, 0, y, 0, S);
+            fold_row(f, y, pass != 0);
+        }
+}
 
-/* the chamfer pass over row y (1 and 1.414 px, in 1/100 px): forward from the left and the row above, or back */
+/* the chamfer pass over half-resolution row y (a block 2 px, its diagonal 2.83, in 1/100 px): forward from the left
+ * and the row above, or back */
 static void chamfer_row(fluid_fine_t *f, int y, bool fwd) {
-    const int S = f->S;
+    const int S = f->S2;
     uint16_t *D = f->dist, *C = f->src;
     const int o = fwd ? -1 : 1, oy = fwd ? -S : S;
     const bool rowok = fwd ? y > 0 : y < S - 1;
@@ -243,11 +283,11 @@ static void chamfer_row(fluid_fine_t *f, int y, bool fwd) {
         int d = D[i];
         if (!d) continue;
         int s = C[i];
-        if ((fwd ? x > 0 : x < S - 1) && D[i + o] + 100 < d) { d = D[i + o] + 100; s = C[i + o]; }
+        if ((fwd ? x > 0 : x < S - 1) && D[i + o] + 200 < d) { d = D[i + o] + 200; s = C[i + o]; }
         if (rowok) {
-            if (D[i + oy] + 100 < d) { d = D[i + oy] + 100; s = C[i + oy]; }
-            if (x > 0 && D[i + oy - 1] + 141 < d) { d = D[i + oy - 1] + 141; s = C[i + oy - 1]; }
-            if (x < S - 1 && D[i + oy + 1] + 141 < d) { d = D[i + oy + 1] + 141; s = C[i + oy + 1]; }
+            if (D[i + oy] + 200 < d) { d = D[i + oy] + 200; s = C[i + oy]; }
+            if (x > 0 && D[i + oy - 1] + 283 < d) { d = D[i + oy - 1] + 283; s = C[i + oy - 1]; }
+            if (x < S - 1 && D[i + oy + 1] + 283 < d) { d = D[i + oy + 1] + 283; s = C[i + oy + 1]; }
         }
         D[i] = (uint16_t)(d > (int)FAR ? FAR : d); C[i] = (uint16_t)s;
     }
@@ -255,7 +295,7 @@ static void chamfer_row(fluid_fine_t *f, int y, bool fwd) {
 
 /* cell row j's specks, in cell order, onto the set */
 static bool extract(fluid_fine_t *f, fine_set_t *st, int j) {
-    const int S = f->S, W = f->W;
+    const int S = f->S, W = f->W, S2 = f->S2;
     const float c = S * 0.5f, R = S * 0.5f - 2.f;
     int nb = 0;
     for (int y = f->cy[j]; y < f->cy[j + 1] && y < S; y++) {
@@ -265,17 +305,25 @@ static bool extract(fluid_fine_t *f, fine_set_t *st, int j) {
         const float hw = sqrtf(h2);
         int x0 = (int)ceilf(c - hw - 0.5f), x1 = (int)floorf(c + hw - 0.5f);
         x0 = x0 < 1 ? 1 : x0; x1 = x1 > S - 2 ? S - 2 : x1;
-        const uint16_t *D = f->dist + (size_t)y * S, *C = f->src + (size_t)y * S;
+        const uint16_t *D = f->dist + (size_t)(y >> 1) * S2, *C = f->src + (size_t)(y >> 1) * S2;
+        const uint8_t *lit = f->lit;
+        const float gy = 0.00583715f * (float)y;
         for (int x = x0; x <= x1; x++) {
-            const int d = D[x];
-            if (d < 80) continue;                               /* on the line */
-            const int li = d / 10;
+            const size_t bit = (size_t)y * S + x;
+            if (lit[bit >> 3] >> (bit & 7) & 1) continue;       /* on the drawing */
+            /* its distance: a block by the drawing's is a pixel or so from it, the others from their block's centre */
+            const int db = D[x >> 1], li = db ? (db - 50) / 10 : 10;
             const float near = li < LUT_N ? s_near[li] : 0.f;
-            const bool sym = C[x] & 0x8000;
-            const float dens = FINE_AMBIENT + FINE_PEAK * near * (sym ? FINE_SYM : 1.f), g = ign(x, y);
+            const uint16_t cs = C[x >> 1];
+            const bool sym = cs & 0x8000;
+            const float dens = FINE_AMBIENT + FINE_PEAK * near * (sym ? FINE_SYM : 1.f);
+            /* interleaved gradient noise (ign()), with no call for its two floors: the pixel's ordered threshold */
+            float g = 0.06711056f * (float)x + gy;
+            g = 52.9829189f * (g - (float)(int)g);
+            g -= (float)(int)g;
             if (g >= dens) continue;
             const float lv = (FINE_LEVEL_FAR + (1.f - FINE_LEVEL_FAR) * near) * (sym ? 0.6f : 1.f), tint = sym || li >= LUT_N ? 0.f : s_tint[li];
-            const float sr = (float)((C[x] >> 8 & 15) * 17), sg = (float)((C[x] >> 4 & 15) * 17), sb = (float)((C[x] & 15) * 17);
+            const float sr = (float)((cs >> 8 & 15) * 17), sg = (float)((cs >> 4 & 15) * 17), sb = (float)((cs & 15) * 17);
             const uint16_t col = pack565((FINE_WATER_R + (sr - FINE_WATER_R) * tint) * lv, (FINE_WATER_G + (sg - FINE_WATER_G) * tint) * lv,
                                          (FINE_WATER_B + (sb - FINE_WATER_B) * tint) * lv);
             int q = (int)(g / dens * 127.f), nr = (int)(near * 0.8f * 127.f + 0.5f);
@@ -293,7 +341,7 @@ static bool extract(fluid_fine_t *f, fine_set_t *st, int j) {
     int cnt[2 * 256 + 1];
     memset(cnt, 0, sizeof(int) * (size_t)(2 * W + 1));
     for (int q = 0; q < nb; q++) cnt[f->bcell[q] + 1]++;
-    for (int c = 0; c < 2 * W; c++) cnt[c + 1] += cnt[c];
+    for (int c2 = 0; c2 < 2 * W; c2++) cnt[c2 + 1] += cnt[c2];
     for (int i = 0; i < W; i++) {
         st->start[j * W + i] = (uint32_t)(st->n + cnt[2 * i]);
         st->nstat[j * W + i] = (uint16_t)(cnt[2 * i + 1] - cnt[2 * i]);
@@ -308,30 +356,85 @@ static bool extract(fluid_fine_t *f, fine_set_t *st, int j) {
     return true;
 }
 
+static void light_grid(const fluid_fine_t *f, uint8_t *grid, float T, int parity);
+
+/* Cell k of the set that waits (f->ready): is it the cell the drawer shows now (the same specks, worked out)? Then it
+ * keeps its levels at the swap. Else its levels afresh into f->lv2 and its signature into f->tot2: those the light never
+ * hides whole, the others against the light as it is now (f->lgrid2). */
+static void levels_cell(fluid_fine_t *f, const fine_set_t *st, const fine_set_t *old, int k) {
+    const uint32_t a = st->start[k], e = st->start[k + 1], sm = a + st->nstat[k];
+    const bool same = old && f->eff[k] && old->start[k + 1] - old->start[k] == e - a && old->nstat[k] == st->nstat[k] && old->ssig[k] == st->ssig[k];
+    f->fresh[k] = !same;
+    if (same || a == e) return;
+    const int LG = f->lg;
+    memset(f->lv2 + a, 255, sm - a);
+    uint32_t acc = st->ssig[k];
+    for (uint32_t n = sm; n < e; n++) {
+        const uint32_t p = st->pos[n];
+        const int x = (int)(p & 511), y = (int)(p >> 9 & 511), q = (int)(p >> 18 & 127);
+        const float gx = (x + 0.5f) * (1.f / FINE_LIGHT_GRID), gy = (y + 0.5f) * (1.f / FINE_LIGHT_GRID);
+        const int ix = (int)gx, iy = (int)gy;
+        const float ax = gx - ix, ay = gy - iy;
+        const uint8_t *g0 = f->lgrid2 + iy * LG + ix;
+        const float l = ((g0[0] * (1.f - ax) + g0[1] * ax) * (1.f - ay) + (g0[LG] * (1.f - ax) + g0[LG + 1] * ax) * ay) * (1.f / 255.f);
+        const float nr = (float)(p >> 25) * (1.f / 127.f);
+        const uint8_t lv = (float)q < (FINE_LIGHT_FLOOR + (1.f - FINE_LIGHT_FLOOR) * (l + (1.f - l) * nr)) * 127.f ? 255 : 0;
+        f->lv2[n] = lv;
+        if (lv) acc += mix(p & 0x3FFFF, 255u << 16);
+    }
+    f->tot2[k] = acc;
+}
+
 bool fluid_fine_work(fluid_fine_t *f, int budget_us) {
     if (!f) return false;
-    if (f->build < 0 || f->phase == PH_IDLE) return f->ready >= 0;
+    if (f->build < 0 && (f->ready < 0 || f->levels_ok)) return f->ready >= 0;
     const int64_t t0 = now_us();
-    fine_set_t *st = &f->set[f->build];
-    const int S = f->S;
+    const int S2 = f->S2;
     f->build_calls++;
     for (;;) {
         if (budget_us > 0 && now_us() - t0 >= budget_us) return false;
+        fine_set_t *st = f->build >= 0 ? &f->set[f->build] : NULL;
         switch (f->phase) {
-        case PH_RASTER: raster_row(f, f->row); if (++f->row >= S) { f->phase = PH_FWD; f->row = 0; } break;
-        case PH_FWD:    chamfer_row(f, f->row, true); if (++f->row >= S) { f->phase = PH_BWD; f->row = S - 1; } break;
+        case PH_RASTER: raster_row(f, f->row); if (++f->row >= S2) { f->phase = PH_FWD; f->row = 0; } break;
+        case PH_FWD:    chamfer_row(f, f->row, true); if (++f->row >= S2) { f->phase = PH_BWD; f->row = S2 - 1; } break;
         case PH_BWD:    chamfer_row(f, f->row, false); if (--f->row < 0) { f->phase = PH_EXTRACT; f->row = 0; st->n = 0; } break;
         case PH_EXTRACT:
-            if (!extract(f, st, f->row)) { f->phase = PH_IDLE; f->build = -1; return f->ready >= 0; }   /* no memory */
+            if (!extract(f, st, f->row)) { f->phase = PH_IDLE; f->build = -1; return false; }   /* no memory */
             if (++f->row >= f->H) {
                 st->start[f->N] = (uint32_t)st->n;
                 st->key = f->bkey;
-                f->ready = f->build; f->build = -1; f->phase = PH_IDLE;
+                if (st->cap > st->n + 64) {             /* its room, down to what it holds */
+                    uint32_t *p = FINE_REALLOC(st->pos, sizeof(uint32_t) * (size_t)(st->n + 1));
+                    uint16_t *c = FINE_REALLOC(st->col, sizeof(uint16_t) * (size_t)(st->n + 1));
+                    if (p) st->pos = p;
+                    if (c) st->col = c;
+                    if (p || c) st->cap = st->n + 1;
+                }
+                f->ready = f->build; f->build = -1;
+                f->levels_ok = false; f->phase = PH_LEVELS; f->row = 0;
+            }
+            break;
+        case PH_LEVELS: {
+            const fine_set_t *nw = &f->set[f->ready];
+            if (!f->row) {                              /* room for its levels; the light as it is now */
+                if (nw->n > f->lv2cap) {
+                    FINE_FREE(f->lv2);
+                    f->lv2 = FINE_CALLOC((size_t)nw->n + 1);
+                    f->lv2cap = f->lv2 ? nw->n : 0;
+                }
+                if (nw->n > f->lv2cap) { f->ready = -1; f->phase = PH_IDLE; return false; }   /* no memory: no dust */
+                f->lv_base = f->drawn && f->drawn->base == f->scene ? f->drawn : NULL;   /* (as the swap will find it) */
+                light_grid(f, f->lgrid2, f->last_t * FINE_LIGHT_SPEED, -1);
+            }
+            for (int q = 0; q < 64 && f->row < f->N; q++, f->row++) levels_cell(f, nw, f->lv_base, f->row);
+            if (f->row >= f->N) {
+                f->levels_ok = true; f->phase = PH_IDLE;
                 f->build_us = (int)(now_us() - f->build_t0);
                 return true;
             }
             break;
-        default: return f->ready >= 0;
+        }
+        default: return f->ready >= 0 && f->levels_ok;
         }
     }
 }
@@ -341,31 +444,33 @@ int fluid_fine_built(const fluid_fine_t *f, int *calls) {
     return f ? f->build_us : 0;
 }
 
-void fluid_fine_swap(fluid_fine_t *f) {
-    if (!f || f->ready < 0) return;
+bool fluid_fine_coming(const fluid_fine_t *f) {
+    if (!f || !f->keep) return false;
+    if (f->drawn && f->drawn->key == f->keep) return false;     /* it is here */
+    return (f->build >= 0 && f->bkey == f->keep) || (f->ready >= 0 && f->set[f->ready].key == f->keep);
+}
+
+void fluid_fine_swap(fluid_fine_t *f, bool rise) {
+    if (!f) return;
+    /* the dust on the glass is the scene's own: a set made for another drawing goes at once */
+    if (f->drawn && f->drawn->base != f->scene) { f->drawn = NULL; f->live = -1; }
+    if (f->ready < 0 || !f->levels_ok) return;
+    if (f->lv_base != f->drawn) { f->levels_ok = false; f->phase = PH_LEVELS; f->row = 0; return; }   /* (worked out against another) */
     const fine_set_t *old = f->drawn, *nw = &f->set[f->ready];
-    f->live = f->ready;
-    f->ready = -1;
-    f->drawn = NULL;
-    if (nw->n > f->lv2cap) {
-        FINE_FREE(f->lv2);
-        f->lv2 = FINE_CALLOC((size_t)nw->n + 1);
-        f->lv2cap = f->lv2 ? nw->n : 0;
-    }
-    if (nw->n > f->lv2cap) return;                              /* no memory: no dust */
     /* a cell whose specks are the same in both sets keeps its levels and its signature: nothing of it is drawn again;
-     * the others are worked out afresh (fluid_fine_frame) */
+     * the others take those worked out for them (fluid_fine_work) */
     int kept = 0;
     for (int k = 0; k < f->N; k++) {
         const uint32_t a = nw->start[k], n = nw->start[k + 1] - a;
-        const bool same = old && f->eff[k] && old->start[k + 1] - old->start[k] == n && old->nstat[k] == nw->nstat[k] && old->ssig[k] == nw->ssig[k];
-        if (same) { memcpy(f->lv2 + a, f->lv + old->start[k], n); kept++; }
-        else { memset(f->lv2 + a, 0, n); f->eff[k] = 0; f->tot[k] = 0; f->stat[k] = 0; }
+        if (!f->fresh[k]) { memcpy(f->lv2 + a, f->lv + old->start[k], n); kept++; }
+        else { f->eff[k] = n ? 1u : 0u; f->tot[k] = n ? f->tot2[k] : 0u; f->stat[k] = nw->ssig[k]; }
     }
     uint8_t *t = f->lv; f->lv = f->lv2; f->lv2 = t;
     const int c = f->lvcap; f->lvcap = f->lv2cap; f->lv2cap = c;
+    f->live = f->ready; f->ready = -1; f->levels_ok = false;
     f->drawn = nw;
-    if (kept * 2 < f->N) f->reveal = 0.f;                       /* a new drawing's dust: it forms cell by cell */
+    f->set[f->live].used = ++f->clock;
+    if (rise && kept * 2 < f->N) f->reveal = 0.f;               /* a new drawing's dust on a scene that is up: it rises */
 }
 
 void fluid_fine_caption_box(fluid_fine_t *f, const float box[4]) {
@@ -388,23 +493,28 @@ float fluid_fine_turn(int i, int j, int H) {
  * Each phase is a sum of a column's part and a row's, so sin and cos of it come from per-column and per-row tables
  * (sin(x + y) = sx cy + cx sy), and sin / cos of 1.6 s from a table: a few multiplies a grid point. */
 #define LG_MAX 136
-static void light_grid(fluid_fine_t *f, float T, int parity) {   /* rows parity, parity + FINE_PHASES ..; < 0: every row */
-    static float (*cu)[LG_MAX], (*k16)[258];                 /* per column: sin, cos of each wave's two u parts (PSRAM) */
-    static int ready_lg;
-    if (!cu) { cu = FINE_CALLOC(sizeof(float) * (8 * LG_MAX + 2 * 258)); if (!cu) { memset(f->lgrid, 255, (size_t)f->lg * f->lg); return; } k16 = (float (*)[258])(cu + 8); }
+static float (*s_cu)[LG_MAX], (*s_k16)[258];           /* per column: sin, cos of each wave's two u parts (PSRAM) */
+/* its tables, once (fluid_fine_create: before the sim task and the drawer both use them) */
+static bool light_tables(int lg, int S) {
+    if (s_cu) return true;
+    s_cu = FINE_CALLOC(sizeof(float) * (8 * LG_MAX + 2 * 258));
+    if (!s_cu) return false;
+    s_k16 = (float (*)[258])(s_cu + 8);
+    const float tau = 6.2831853f, g = (float)FINE_LIGHT_GRID / S;
+    static const float ku[4] = { 1.4f, -0.55f, -0.7f, 0.95f };
+    for (int x = 0; x < (lg > LG_MAX ? LG_MAX : lg); x++) for (int q = 0; q < 4; q++) { s_cu[2 * q][x] = sinf(tau * ku[q] * x * g); s_cu[2 * q + 1][x] = cosf(tau * ku[q] * x * g); }
+    for (int i = 0; i <= 257; i++) { const float sv = -1.f + 2.f * i / 256.f; s_k16[0][i] = sinf(1.6f * sv); s_k16[1][i] = cosf(1.6f * sv); }
+    return true;
+}
+static void light_grid(const fluid_fine_t *f, uint8_t *grid, float T, int parity) {   /* rows parity, parity + FINE_PHASES ..; < 0: every row */
+    float (*const cu)[LG_MAX] = s_cu, (*const k16)[258] = s_k16;
     const int LG = f->lg > LG_MAX ? LG_MAX : f->lg;
     const float tau = 6.2831853f, g = (float)FINE_LIGHT_GRID / f->S;
-    if (ready_lg != LG) {
-        static const float ku[4] = { 1.4f, -0.55f, -0.7f, 0.95f };
-        for (int x = 0; x < LG; x++) for (int q = 0; q < 4; q++) { cu[2 * q][x] = sinf(tau * ku[q] * x * g); cu[2 * q + 1][x] = cosf(tau * ku[q] * x * g); }
-        for (int i = 0; i <= 257; i++) { const float sv = -1.f + 2.f * i / 256.f; k16[0][i] = sinf(1.6f * sv); k16[1][i] = cosf(1.6f * sv); }
-        ready_lg = LG;
-    }
     static const float kv[4] = { 0.5f, 0.8f, 1.25f, 0.35f }, kt[4] = { 0.31f, 0.21f, -0.27f, -0.17f };
     for (int y = parity > 0 ? parity : 0; y < LG; y += parity < 0 ? 1 : FINE_PHASES) {
         float sv[4], cv[4];
         for (int q = 0; q < 4; q++) { const float ph = tau * kv[q] * y * g + kt[q] * T; sv[q] = sinf(ph); cv[q] = cosf(ph); }
-        uint8_t *out = f->lgrid + y * f->lg;
+        uint8_t *out = grid + y * f->lg;
         for (int x = 0; x < LG; x++) {
             float r = 0.f;
             for (int w = 0; w < 2; w++) {
@@ -585,7 +695,7 @@ void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_
         const int LG = f->lg;
         const float T = now * FINE_LIGHT_SPEED;
         f->lrow = (uint8_t)((f->lrow + 1) % FINE_PHASES);
-        light_grid(f, T, f->lgrid_ok ? f->lrow : -1);          /* a quarter of its rows a frame, in turn */
+        light_grid(f, f->lgrid, T, f->lgrid_ok ? f->lrow : -1);   /* a quarter of its rows a frame, in turn */
         f->lgrid_ok = true;
         if (f->reveal < 1.f) f->reveal = fminf(1.f, f->reveal + dt / FINE_REVEAL_SET_S);
         const float reach = FINE_PATCH1 + FINE_PATCH_RAG * 0.5f;
