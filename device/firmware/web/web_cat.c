@@ -46,9 +46,16 @@ bool web_cat_coming(cc_t *c) {
     if (c->come == 1 && fabsf(web_cat_across(c)) > 0.9f) c->comeT = 0.f;
     return c->come != 0;
 }
+/* arrived (attending): it attends for `seconds` only, and what is left between where its walk stopped and its own
+ * place (the camera's middle: where it sits when nobody called it) is taken up a little each frame, unseen, so the
+ * entrance ends exactly where a cat that never left sits. home: there now, whatever is left. */
 void web_cat_attend(cc_t *c, float seconds) {
-    if (c->come >= 2 && c->come <= 3 && c->gesture >= 0 && c->gest[c->gesture].hold > seconds) c->gest[c->gesture].hold = seconds;
+    if (c->come < 2 || c->come > 3) return;
+    if (c->gesture >= 0 && c->gest[c->gesture].hold > seconds) c->gest[c->gesture].hold = seconds;
+    c->px += (c->camx - c->px) * 0.08f; c->pz += (c->camz - c->pz) * 0.08f;
+    c->tx = c->px; c->tz = c->pz;
 }
+void web_cat_home(cc_t *c) { c->px = c->tx = c->camx; c->pz = c->tz = c->camz; }
 
 void cc_cam(const cc_t *c, float *x, float *z, float *yaw) {
     cc_cam_own(c, x, z, yaw);
