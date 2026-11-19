@@ -1,8 +1,9 @@
 // The landing, looked at and measured, against a running preview (`pnpm build && pnpm preview`):
 //   screenshots   the hero and the moltys section at 1280 and 390 px wide, dark and light, once
 //                 the cat has walked in and sat: e2e-out/molty-<section>-<width>-<theme>.png
-//   the entrance  the hero from the load on, a frame every 200 ms: the device turns in, the cat
-//                 walks in from the right, outside the glass, and sits: e2e-out/molty-entrance-sheet.png
+//   the entrance  the whole window from the load on, a frame every 200 ms, at 1280 and 390 px:
+//                 the device turns in, the cat walks in from beyond the window's right edge,
+//                 across the page, into its screen, and sits: e2e-out/molty-entrance-<width>-sheet.png
 //   one water     a tap inside the hero's screen, a frame every 200 ms: the ring crosses the rim
 //                 and goes on through the page (e2e-out/molty-ripple-sheet.png); then a tap on
 //                 the page beside it: the ring goes through the device and on
@@ -34,7 +35,18 @@ const counter = () => {
   CanvasRenderingContext2D.prototype.putImageData = function (...args) {
     const c = this.canvas;
     const what = c.hasAttribute('data-outside') ? 'outside' : c.closest('[data-molty-screen]') ? 'screen' : c.closest('[data-molty-word]') ? 'word' : 'water';
-    draws.push({ t: performance.now(), what });
+    const draw = { t: performance.now(), what };
+    if (what === 'outside') {
+      // the cat alone: where its leftmost dot is on the page (its nose, walking left), if it has any
+      const d = args[0].data,
+        w = args[0].width;
+      let min = Infinity;
+      for (let i = 3; i < d.length; i += 4) if (d[i] && (i >> 2) % w < min) min = (i >> 2) % w;
+      const r = c.getBoundingClientRect();
+      draw.nose = min === Infinity ? null : r.left + (min * r.width) / w;
+      draw.wide = document.documentElement.scrollWidth > document.documentElement.clientWidth;
+    }
+    draws.push(draw);
     return put.apply(this, args);
   };
 };
@@ -86,21 +98,26 @@ for (const theme of ['dark', 'light'])
     await ctx.close();
   }
 
-// the entrance: from the load on
-{
-  const { ctx, page } = await open(1280, 800, 'dark', { wait: 0 });
+// the entrance: from the load on, the whole window in every frame
+for (const [width, height] of [
+  [1280, 800],
+  [390, 844],
+]) {
+  const { ctx, page } = await open(width, height, 'dark', { wait: 0 });
   await page.waitForSelector(HERO);
+  const s = await strip(page, { x: 0, y: 0, width, height }, 34, 200, width > 600 ? 320 : 160);
+  await sheet(s, width > 600 ? 6 : 12, `${OUT}molty-entrance-${width}-sheet.png`);
+  if (width > 600) await sharp(s.tiles, { join: { animated: true } }).webp({ delay: 200, loop: 0 }).toFile(`${OUT}molty-entrance.webp`);
+  await page.waitForTimeout(3000);
+  const outside = (await page.evaluate(() => window.__draws)).filter((d) => d.what === 'outside' && d.nose !== null);
+  const first = outside[0];
+  const crossing = outside.find((d) => d.nose < width);
+  const seconds = crossing ? (outside.at(-1).t - crossing.t) / 1000 : 0;
   const box = await page.locator(HERO).boundingBox();
-  const clip = { x: box.x - box.width * 0.3, y: box.y - box.height * 0.1, width: 1280 - (box.x - box.width * 0.3), height: box.height * 1.2 };
-  const s = await strip(page, clip, 30, 200, 320);
-  await sheet(s, 6, `${OUT}molty-entrance-sheet.png`);
-  const draws = await page.evaluate(() => window.__draws);
-  const outside = draws.filter((d) => d.what === 'outside');
-  const seconds = outside.length ? (outside.at(-1).t - outside[0].t) / 1000 : 0;
-  // the cat came from outside the glass (the window beside the screen drew), and then sat still in the screen
-  const moved = await differ(s.frames[12], s.frames.at(-1));
-  if (!outside.length || seconds > 6 || moved < 500) failures.push(`the entrance: ${outside.length} frames outside the glass over ${seconds.toFixed(1)} s, ${moved} px changed`);
-  else console.log(`ok   the cat walks in from outside the glass and sits (${seconds.toFixed(1)} s from its first frame to the last one outside)`);
+  // it starts wholly beyond the window's edge, its nose crosses it, it ends in the screen; the page never grows wider
+  const ok = first && first.nose >= width && crossing && outside.at(-1).nose > box.x && outside.at(-1).nose < box.x + box.width && !outside.some((d) => d.wide);
+  if (!ok) failures.push(`the entrance at ${width} px: first nose at ${first?.nose?.toFixed(0)} (window ${width}), crossing ${!!crossing}, ends at ${outside.at(-1)?.nose?.toFixed(0)}, page wider ${outside.some((d) => d.wide)}`);
+  else console.log(`ok   the entrance at ${width} px: the cat starts beyond the window's edge (nose at ${first.nose.toFixed(0)} px), walks in and sits in its screen ${seconds.toFixed(1)} s after its nose crosses the edge; no scrollbar`);
   await ctx.close();
 }
 

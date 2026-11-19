@@ -182,7 +182,9 @@ WM_API void wm_touch(int down, int x, int y) {
 
 /* web_cat.c: the creature's place and the picture's camera */
 void web_cat_place(struct cc *c, float across, float back);
-bool web_cat_coming(const struct cc *c);
+bool web_cat_coming(struct cc *c);
+float web_cat_across(const struct cc *c);
+float web_cat_back(const struct cc *c);
 void web_cat_attend(struct cc *c, float seconds);
 void web_cat_pan(float across);
 static bool s_entering;
@@ -206,6 +208,30 @@ WM_API int wm_entering(void) {
 }
 /** The picture's camera looks `across` (world units) to the side: the same world through a window beside the screen. */
 WM_API void wm_pan(float across) { web_cat_pan(across); }
+/** Where the creature stands: across the frame from its middle, and back from the viewer (world units; 0 with none). */
+WM_API float wm_across(void) { return s_up && s_cpk && cpk_crisp(s_cpk) ? web_cat_across(cpk_clip(s_cpk)) : 0.f; }
+WM_API float wm_back(void) { return s_up && s_cpk && cpk_crisp(s_cpk) ? web_cat_back(cpk_clip(s_cpk)) : 0.f; }
+
+/** The creature alone, as the panel shows it: the panel's pixels in the cells its own dots are in (creature_dots.h
+ *  cd_creature), everything else clear, and clear between its dots. Nothing is drawn here: it is the firmware's picture
+ *  with the world left out, for the page to carry the cat across its own dust. px * px RGBA; NULL without one. */
+WM_API const uint8_t *wm_cat_pixels(void) {
+    static uint32_t *alone;
+    const uint8_t *in = s_up && s_cpk && cpk_crisp(s_cpk) ? cpk_cells_creature(s_cpk) : NULL;
+    if (!in || !s_sim) return NULL;
+    if (!alone && !(alone = malloc((size_t)s_px * (size_t)s_px * sizeof(uint32_t)))) return NULL;
+    memset(alone, 0, (size_t)s_px * (size_t)s_px * sizeof(uint32_t));
+    const int W = s_sim->W, H = s_sim->H;
+    for (int j = 0; j < H; j++) for (int i = 0; i < W; i++) {
+        if (!in[j * W + i]) continue;
+        const int x0 = i * s_px / W, x1 = (i + 1) * s_px / W, y0 = j * s_px / H, y1 = (j + 1) * s_px / H;
+        for (int y = y0; y < y1; y++) for (int x = x0; x < x1; x++) {
+            const uint32_t v = s_rgba[(size_t)y * (size_t)s_px + x];
+            if (v & 0x00ffffffu) alone[(size_t)y * (size_t)s_px + x] = v;
+        }
+    }
+    return (const uint8_t *)alone;
+}
 
 /** One water with the page: a wave out there (a ring `r` px about (cx, cy), panel pixels, its crest `sigma` px wide and
  *  `height` high, 0..1) meets the screen. Where its crest crosses the band inside the rim it lifts the screen's own

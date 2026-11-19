@@ -70,19 +70,16 @@
     opacity: 0;
   }
 }
-/* the entrance: the water beside the screen, where the cat walks in from. The same renderer's
-   picture through a window to the right (MoltyScreen shifts it), only while the screen is live,
-   soft at its edge so it lies on the page's dust; gone once the cat sits */
+/* the entrance: the cat alone, on a clear canvas the screen's size that the screen service moves
+   to where the cat stands (beyond the window's edge at first: the page clips it, no scrollbar).
+   Under the screen and the bezel, so the cat goes in under the rim; only while the screen is live */
 .outside {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  border-radius: 50%;
   opacity: 0;
-  transition: opacity 0.5s;
   pointer-events: none;
-  mask-image: radial-gradient(circle closest-side, var(--m-bg) 45%, transparent 92%);
 }
 .root[data-screen="live"] .outside {
   opacity: 1;
