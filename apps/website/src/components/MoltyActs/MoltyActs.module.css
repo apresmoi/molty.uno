@@ -1,0 +1,72 @@
+/* the page lays the slot and the names out (the root is transparent to its grid) */
+.root {
+  display: contents;
+}
+.slot {
+  position: relative;
+  aspect-ratio: 1;
+  width: 100%;
+  max-width: min(540px, 80svh);
+  justify-self: center;
+}
+.side {
+  min-width: 0;
+}
+.names {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--m-space-1) var(--m-space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.names button {
+  padding: var(--m-space-1) 0;
+  border: 0;
+  background: transparent;
+  color: var(--m-dim);
+  font: var(--m-text-base) / 1.4 var(--m-font-mono);
+  cursor: pointer;
+}
+.names button::before {
+  content: "\00a0\00a0";
+}
+.names button::after {
+  content: "\00a0\00a0";
+}
+.names button:hover {
+  color: var(--m-ink);
+}
+.names button[aria-pressed="true"] {
+  color: var(--m-accent);
+}
+.names button[aria-pressed="true"]::before {
+  content: "[ ";
+}
+.names button[aria-pressed="true"]::after {
+  content: " ]";
+}
+.group h3 {
+  margin: var(--m-space-3) 0 0;
+  color: var(--m-dim);
+  font: 400 var(--m-text-sm) / 1.4 var(--m-font-mono);
+}
+.group:first-child h3 {
+  margin-top: 0;
+}
+/* the package's own words for what is playing: room for three lines, so the page holds still */
+.about {
+  min-height: 4.8em;
+  max-width: 34em;
+  margin: var(--m-space-4) 0 0;
+  color: var(--m-dim);
+  font-size: var(--m-text-sm);
+  line-height: 1.6;
+}
+/* stacked (phones, portrait tablets): see --m-stack-slot */
+@media (max-width: 46rem), (max-width: 68rem) and (orientation: portrait) {
+  .slot {
+    width: var(--m-stack-slot);
+    max-width: none;
+  }
+}

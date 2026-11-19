@@ -1,0 +1,1 @@
+export { WordHeading } from "./WordHeading";

@@ -1,15 +1,24 @@
 ---
 import ContentLayout from "../layouts/ContentLayout.astro";
 import { ShowcasePage } from "../components/ShowcasePage";
-import { FluidField } from "../components/FluidField";
+import { PageWater } from "../components/PageWater";
+import { MoltyWord } from "../components/MoltyWord";
 import { MoltyShowcase } from "../components/MoltyShowcase";
-import { title, description, SHOWCASE_FIRST } from "../features/showcase/content";
-import { MOLTYS } from "../features/moltys/catalog";
+import { title, description } from "../features/showcase/content";
+import { showcaseActions, showcaseScenes, type CreaturePackage } from "../features/molty/actions";
+import cat from "@packages/cat/cat.json";
+import commands from "../../../../device/firmware/test/host/fixtures/astrology-commands.jsonl?raw";
+
+// the cat's lists and words from its package, the scenes from the firmware's sample commands
+const pkg = cat as unknown as CreaturePackage;
+const groups = showcaseActions(pkg, showcaseScenes(commands));
+const rest = pkg.creature.about.moods.idle ?? "";
 ---
 
 <ContentLayout title={title} description={description} path="/showcase/" fluid>
   <ShowcasePage>
-    <FluidField slot="fluid" client:load />
-    <MoltyShowcase slot="stage" client:load moltys={MOLTYS} initial={SHOWCASE_FIRST} />
+    <PageWater slot="fluid" client:load />
+    <MoltyWord slot="word" client:load word="showcase" />
+    <MoltyShowcase slot="stage" client:load groups={groups} rest={rest} />
   </ShowcasePage>
 </ContentLayout>

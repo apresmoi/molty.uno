@@ -2,7 +2,7 @@
 // outward (polycss culls back faces, so a flipped one silently vanishes) and hides behind the
 // bezel face on; every reveal is ≤ 1.2 s, starts away from rest, moves without jumps, swings
 // past rest once (a small overshoot, then nothing visible) and ends exactly at rest with the
-// Molty released; the glass's glare rests up-left and slides against a turn.
+// screen lit; the glass's glare rests up-left and slides against a turn.
 // Run: pnpm test (node --test; Node 22 strips the types).
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -59,14 +59,13 @@ const main = (k: RevealKind, u: number) => {
 };
 
 for (const kind of KINDS)
-  test(`${kind}: ≤ 1.2 s, starts away, no jumps, one small overshoot, ends at rest released`, () => {
+  test(`${kind}: ≤ 1.2 s, starts away, no jumps, one small overshoot, ends at rest`, () => {
     assert.ok(REVEAL_SECONDS[kind] <= 1.2);
     const a = revealFrame(kind, 0);
     assert.ok(Math.abs(a.yaw) + Math.abs(a.pitch) + Math.abs(a.lid) > 10, "it starts turned away");
     assert.deepEqual(revealFrame(kind, 1), REST);
     const end = revealFrame(kind, 0.995);
-    assert.ok(Math.abs(end.yaw) < 0.3 && Math.abs(end.pitch) < 0.3 && Math.abs(end.lid) < 0.3 && end.cover < 0.01);
-    assert.equal(end.hold, false);
+    assert.ok(Math.abs(end.yaw) < 0.3 && Math.abs(end.pitch) < 0.3 && Math.abs(end.lid) < 0.3);
     const step = 1 / (120 * REVEAL_SECONDS[kind]); // one 120 Hz frame
     let prev = a;
     const start = Math.sign(main(kind, 0));

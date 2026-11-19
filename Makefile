@@ -6,7 +6,7 @@ export IDF_PATH
 
 .PHONY: help all test console console-test console-e2e firmware firmware-all firmware-test \
         firmware-size relay relay-test cli cli-test creatures creatures-test packages display-test molty-test hygiene version \
-        waitlist-export waitlist-delete sim sim-test sim-env voice-test
+        waitlist-export waitlist-delete sim sim-test sim-env voice-test web-molty web-molty-test
 
 help:
 	@echo "build:"
@@ -20,12 +20,16 @@ help:
 	@echo "  make cli            apps/cli/bin/molty"
 	@echo "  make creatures      re-export device/creatures/molty/*.molty from the cute-kit specs"
 	@echo "  make packages       rebuild the creature packages (packages/<id>/<id>.json + packages/index.json)"
+	@echo "  make web-molty      the firmware's renderer as WebAssembly for the website (device/firmware/web/built/;"
+	@echo "                      needs emscripten 7.0.0: brew install emscripten; checks it against a native build)"
 	@echo "test:"
 	@echo "  make firmware-test  firmware host tests (fluid, director, gestures, cute runtime, agent link)"
 	@echo "  make relay-test     relay unit tests + typecheck"
 	@echo "  make display-test   display v2 (docs/DISPLAY.md): the astrology skill builds its package byte for byte, checks, limits"
 	@echo "  make molty-test     the Molty format (docs/CREATURE.md): the cat's folder builds cat.json byte for byte, checks, limits"
 	@echo "  make creatures-test creature package player rules + every creature package plays within its limits"
+	@echo "  make web-molty-test the website's Molty draws the same pixels as a native build of the firmware sources,"
+	@echo "                      and is built from the sources as they are now (no emscripten needed)"
 	@echo "  make sim-test       simulated-Molty harness unit tests (tools/sim)"
 	@echo "  make voice-test     voice-box bridge unit tests (services/molty-voice; no GPU, no network)"
 	@echo "sim (tools/sim/README.md; needs ssh to the voice box, never touches a real device):"
@@ -44,7 +48,7 @@ help:
 
 all: console firmware cli
 
-test: firmware-test relay-test cli-test console-test creatures-test display-test molty-test
+test: firmware-test relay-test cli-test console-test creatures-test display-test molty-test web-molty-test
 
 console:
 	cd device/console && pnpm install --frozen-lockfile && pnpm run build
@@ -115,6 +119,15 @@ display-test:
 
 molty-test:
 	node --test packages/tools/creature/*.test.mjs
+
+# The website's Molty is the firmware's own renderer (device/firmware/web: main/fluid/mole_fluid.c and what it draws
+# with, on a board that is a canvas). The module is committed (device/firmware/web/built/), so the website builds
+# without a toolchain; web-molty-test fails once the sources move on without it.
+web-molty:
+	node tools/web-molty/web-molty.mjs build
+
+web-molty-test:
+	node tools/web-molty/web-molty.mjs test
 
 hygiene:
 	tools/scripts/hygiene.sh
