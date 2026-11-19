@@ -230,6 +230,9 @@ WM_API int wm_ask(const char *json) {
     s_q.open = true; s_q.seq = seq; s_q.hit = fluid_ask_hit(&q); s_q.answer = -1;
     return 0;
 }
+/** The question is answered with option i by other means than a tap on the glass (the link's own path: a key, a
+ *  button): as a tap on that answer, without the finger's ripple. */
+WM_API void wm_pick(int i) { if (s_up && s_q.open && i >= 0 && i < s_q.hit.n) { mole_fluid_ask_pick(i); s_q.open = false; s_q.answer = i; } }
 /** The question ends unanswered (a timeout, a cancel). */
 WM_API void wm_ask_end(void) { if (s_up && s_q.open) { mole_fluid_ask_end(); s_q.open = false; } }
 /** The option a tap answered the last question with, once; -1: none (yet). */

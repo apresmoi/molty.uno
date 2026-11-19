@@ -25,6 +25,7 @@ interface Exports {
   wm_ask(json: number): number;
   wm_ask_end(): void;
   wm_answer(): number;
+  wm_pick(i: number): void;
   wm_package(json: number, len: number): number;
   wm_scene(layout: number, params: number, ttl: number): number;
   wm_scene_clear(): void;
@@ -41,9 +42,15 @@ export interface MoltyQuestion {
 
 /** GET /api/creature/state on the device: the parts the page reads. */
 export interface MoltyState {
+  /** "creature" | "text" | "scene" | ... */
   state: string;
   mood: string;
+  /** The gesture playing, "" for none. */
   act: string;
+  /** The reader: the word it is on, of how many. */
+  word_idx: number;
+  nwords: number;
+  /** A rigged creature's dots on screen (-1: none shows). */
   crisp_dots: number;
   scene?: { pkg: string; layout: string };
   creature_info: { name: string; package: string; gestures?: Array<{ name: string }>; moods?: string[] };
@@ -164,7 +171,11 @@ export class MoltyCore {
   askEnd() {
     this.x.wm_ask_end();
   }
-  /** The option a tap answered the question with, once; -1: none (yet). */
+  /** Answer the question with option `i` without a tap on the glass (a key, a button). */
+  pick(i: number) {
+    this.x.wm_pick(i);
+  }
+  /** The option the question was answered with, once; -1: none (yet). */
   answer(): number {
     return this.x.wm_answer();
   }

@@ -52,7 +52,7 @@ wasm)
   have="$(emcc --version 2>/dev/null | sed -n '1s/.* \([0-9][0-9.]*\)\(-git\)\{0,1\}$/\1/p')"
   [ "$have" = "$EMSCRIPTEN" ] || { echo "web/build.sh: emscripten $EMSCRIPTEN wanted, '${have:-none}' found (brew install emscripten)" >&2; exit 2; }
   emcc -Os "${CFLAGS[@]}" "${INCS[@]}" "${SRCS[@]}" \
-    --no-entry -sSTANDALONE_WASM=1 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=33554432 -sSTACK_SIZE=262144 \
+    --no-entry -sSTANDALONE_WASM=1 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=16777216 -sSTACK_SIZE=262144 \
     -sMALLOC=emmalloc -sFILESYSTEM=0 -sERROR_ON_UNDEFINED_SYMBOLS=1 \
     -o "$OUT/molty.wasm"
   ;;
