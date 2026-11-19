@@ -3,7 +3,7 @@
 // molty-display: the tools for a display v2 skill folder (docs/DISPLAY.md).
 //   molty-display check <skill>                    schema, device rules, SKILL.md links
 //   molty-display build <skill> [--out <file>]     the package Molty installs, its cost, build/display.md, build/inputs/
-//   molty-display convert <package.json> --to <folder>   a molty-pkg/1 scenes package as a skill folder
+//   molty-display convert <package.json> --to <folder>   a built scenes package written back out as a skill folder
 //   molty-display preview <skill> [--port 4173]    a local page: pick a screen, edit inputs, scrub time, tap zones
 // <skill> is the folder that holds SKILL.md and display.yaml. Exits 1 when there are errors.
 import { build, check } from './display/build.mjs';
