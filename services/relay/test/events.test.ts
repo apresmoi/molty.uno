@@ -96,6 +96,16 @@ const shake = { peak_g: 2.4, reversals: 5, ms: 900 };
 const evs = (out: any) => (out.result.events as AgentEvent[]).map((e) => e.type);
 
 describe("inbox", () => {
+  it("a tap on a scene spot names it; a malformed spot is dropped, the tap is kept", async () => {
+    const w = await world();
+    const token = await w.pairAgent("a");
+    await w.emit("tap", { x: 0.5, y: 0.5, spot: "virgo" });
+    await w.emit("tap", { x: 0.5, y: 0.5, spot: "no spaces here" });
+    await w.emit("tap", { x: 0.5, y: 0.5, spot: 7 });
+    const out = (await w.room.events(token, { wait_ms: 0 })) as any;
+    expect(out.result.events.map((e: AgentEvent) => e.data)).toEqual([{ x: 0.5, y: 0.5, spot: "virgo" }, { x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 }]);
+  });
+
   it("allow-list: only shake/tap/button with valid shapes reach agents; internal events stay internal", async () => {
     const w = await world();
     const token = await w.pairAgent("a");
