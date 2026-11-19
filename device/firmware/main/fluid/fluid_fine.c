@@ -444,12 +444,6 @@ int fluid_fine_built(const fluid_fine_t *f, int *calls) {
     return f ? f->build_us : 0;
 }
 
-bool fluid_fine_coming(const fluid_fine_t *f) {
-    if (!f || !f->keep) return false;
-    if (f->drawn && f->drawn->key == f->keep) return false;     /* it is here */
-    return (f->build >= 0 && f->bkey == f->keep) || (f->ready >= 0 && f->set[f->ready].key == f->keep);
-}
-
 void fluid_fine_swap(fluid_fine_t *f, bool rise) {
     if (!f) return;
     /* the dust on the glass is the scene's own: a set made for another drawing goes at once */
@@ -701,9 +695,11 @@ void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_
     if (st) {
         const int LG = f->lg;
         const float T = now * FINE_LIGHT_SPEED;
-        f->lrow = (uint8_t)((f->lrow + 1) % FINE_PHASES);
-        light_grid(f, f->lgrid, T, f->lgrid_ok ? f->lrow : -1);   /* a quarter of its rows a frame, in turn */
-        f->lgrid_ok = true;
+        if (!f->pause || !f->lgrid_ok) {
+            f->lrow = (uint8_t)((f->lrow + 1) % FINE_PHASES);
+            light_grid(f, f->lgrid, T, f->lgrid_ok ? f->lrow : -1);   /* a quarter of its rows a frame, in turn */
+            f->lgrid_ok = true;
+        }
         if (f->reveal < 1.f) f->reveal = fminf(1.f, f->reveal + dt / FINE_REVEAL_SET_S);
         const float reach = FINE_PATCH1 + FINE_PATCH_RAG * 0.5f;
         int budget = FINE_CATCHUP, worked = 0;
@@ -712,7 +708,6 @@ void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_
             const uint32_t a = st->start[k], e = st->start[k + 1], sm = a + st->nstat[k];
             if (a == e) continue;
             if ((o->kdots && o->kdots[k]) ||                    /* a ball's or an image's own dots */
-                (o->dust > 0.f && o->dust >= fluid_fine_turn(i, j, H)) ||   /* a transition: the cell is not there yet */
                 (f->reveal < 1.f && 1.f - f->reveal >= fluid_fine_turn(i, j, H))) continue;   /* a first set: as it rises */
             bool near_box = false;
             if (box) {
@@ -721,7 +716,7 @@ void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_
                 near_box = ex < reach + 1.f && ey < reach + 1.f;
             }
             const uint32_t key = near_box ? gen : 1u;
-            bool turn = j % FINE_PHASES == f->lrow;
+            bool turn = !f->pause && j % FINE_PHASES == f->lrow;
             if (!turn && !f->eff[k]) {                          /* never worked out: now, while the budget lasts */
                 if (budget <= 0) continue;
                 budget -= (int)(e - a);

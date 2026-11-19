@@ -556,32 +556,24 @@ static void test_hd(void) {
     scene_hd_t h = { 0, false, 1.f };
     int n;
     scene_play(&sp, titled("a", 30.f));
-    for (n = 0; n < 100 && h.dust > 0.f; n++) scene_hd_tick(&h, sp.gen, false, false, DT);
+    for (n = 0; n < 100 && h.dust > 0.f; n++) scene_hd_tick(&h, sp.gen, false, DT);
     CHECK(h.gen == sp.gen && !h.out && fabsf(n * DT - SCENE_DUST_S) <= DT, "a forms from dust in %.2f s", n * DT);
     const unsigned a = sp.gen;
     scene_play(&sp, titled("b", 30.f));
-    scene_hd_tick(&h, sp.gen, false, false, DT);
+    scene_hd_tick(&h, sp.gen, false, DT);
     CHECK(h.out && h.gen == a && h.dust > 0.f && h.dust < 0.2f, "b: a breaks into dust first (%.2f)", h.dust);
     float peak = 0.f;
-    for (n = 0; n < 100 && h.out; n++) { scene_hd_tick(&h, sp.gen, false, false, DT); if (h.out && h.dust > peak) peak = h.dust; }
+    for (n = 0; n < 100 && h.out; n++) { scene_hd_tick(&h, sp.gen, false, DT); if (h.out && h.dust > peak) peak = h.dust; }
     CHECK(peak > 0.85f && h.gen == sp.gen && h.dust > 0.85f, "a went all to dust (%.2f), b forms (%.2f)", peak, h.dust);
-    for (n = 0; n < 100 && h.dust > 0.f; n++) scene_hd_tick(&h, sp.gen, false, false, DT);
+    for (n = 0; n < 100 && h.dust > 0.f; n++) scene_hd_tick(&h, sp.gen, false, DT);
     CHECK(h.gen == sp.gen && h.dust == 0.f, "b whole");
-    {   /* a scene holds its rise while its fine dust is made (they come together) */
-        scene_hd_t w = { 0, false, 1.f };
-        for (n = 0; n < 10; n++) scene_hd_tick(&w, sp.gen, false, true, DT);
-        CHECK(w.gen == sp.gen && w.dust == 1.f && !w.out, "held: the scene is the one on the glass, not risen yet");
-        scene_hd_tick(&w, sp.gen, false, false, DT);
-        scene_hd_tick(&w, sp.gen, false, true, DT);
-        CHECK(w.dust < 1.f - 1.5f * DT / SCENE_DUST_S, "once it rises a hold no longer stops it (%.2f)", w.dust);
-    }
-    scene_hd_tick(&h, sp.gen, true, false, DT);
+    scene_hd_tick(&h, sp.gen, true, DT);
     CHECK(h.gen == 0 && h.dust == 1.f, "a listen: the fluid's own look");
-    scene_hd_tick(&h, sp.gen, false, false, DT);
+    scene_hd_tick(&h, sp.gen, false, DT);
     CHECK(h.gen == sp.gen && h.dust < 1.f && h.dust > 0.8f, "after it, b forms from dust again");
-    for (n = 0; n < 100 && h.dust > 0.f; n++) scene_hd_tick(&h, sp.gen, false, false, DT);
+    for (n = 0; n < 100 && h.dust > 0.f; n++) scene_hd_tick(&h, sp.gen, false, DT);
     scene_clear(&sp);
-    for (n = 0; n < 100 && h.gen; n++) scene_hd_tick(&h, 0, false, false, DT);
+    for (n = 0; n < 100 && h.gen; n++) scene_hd_tick(&h, 0, false, DT);
     CHECK(h.gen == 0 && !h.out && h.dust == 1.f && n * DT >= SCENE_DUST_S - 2 * DT, "cleared: b breaks into dust over %.2f s, then nothing", n * DT);
 }
 
@@ -1100,20 +1092,33 @@ static void test_open(const char *dir) {
             ruler += it->k == PK_GLYPH && fabsf(it->y + 0.42f) < 1e-3f;
         }
         CHECK(glyph == 1 && ruler == 1 && inleo == 3 && spots == inleo + 1, "Leo's glyph, its one ruler, its %d bodies of the sky's ten (%d spots)", inleo, spots);
-        scene_open(&sp, up);
-        CHECK(sp.cur == up && sp.back == chart && sp.gen != gen0 && scene_take_start(&sp) && sp.t == 0.f, "it plays at once, the chart waiting under it (a new scene: the water dissolves one into the other)");
+        scene_open(&sp, up, leo);
+        CHECK(sp.cur == up && sp.back == chart && sp.gen != gen0 && scene_take_start(&sp) && sp.t == 0.f, "it plays at once, the chart waiting under it (a new scene: the dust reshapes into it)");
+        /* Leo's reading (the tapped spot's) plays over it once it is up whole: Molty's own, no agent; taken once. Its
+         * clock waits meanwhile (the caller ticks it with 0), so a short layout does not end under its sentence */
+        char say[PKG_SAY_MAX + 1], want[PKG_SAY_MAX + 1];
+        snprintf(want, sizeof(want), "%.*s", (int)chart->items[leo].nstr, chart->say + chart->items[leo].str);
+        for (int q = 0; q < 45; q++) scene_tick(&sp, 0.f);                  /* the change of picture: 1.5 s */
+        const int ns = scene_open_say(&sp, say, sizeof(say));
+        CHECK(ns > 10 && ns == (int)strlen(want) && !strcmp(say, want) && strstr(say, "Leo"), "then Leo's own reading plays over it (\"%s\")", say);
+        CHECK(!scene_open_say(&sp, say, sizeof(say)), "... once");
+        /* its words, a minute of them: the layout's clock runs on (its planets light in turn), its end waits */
+        for (int q = 0; q < 1800; q++) scene_tick(&sp, fminf(DT, fmaxf(0.f, scene_room(&sp) - 0.1f)));
+        CHECK(sp.cur == up && sp.back == chart && sp.t > ttl - 0.2f && sp.t < ttl && scene_room(&sp) < 0.2f, "while the reading plays its clock runs on, its end waits (%.1f of %.0f s)", sp.t, ttl);
+        sp.t = 0.f; sp.back_t = 2.f;                                       /* (the checks below: from its start) */
         int n = 0;
         for (; n < 3000 && sp.cur == up; n++) scene_tick(&sp, DT);
         CHECK(sp.cur == chart && !sp.back && fabsf(n * DT - ttl) < 2 * DT && scene_take_start(&sp), "it ends after %.1f s: the chart is back", n * DT);
         CHECK(fabsf(sp.t - (2.f + ttl)) < 0.1f && fabsf(scene_end(chart) - sp.t - (100.f - 2.f - ttl)) < 0.1f, "... its clock ran on: %.1f s of its 100 left", scene_end(chart) - sp.t);
         /* again, and a tap beside its spots goes back at once */
-        scene_open(&sp, scene_open_build(sp.cur, leo, &err));
+        scene_open(&sp, scene_open_build(sp.cur, leo, &err), leo);
         for (n = 0; n < 30; n++) scene_tick(&sp, DT);
         CHECK(sp.back == chart && scene_spot_at(sp.cur, sp.t, 0.f, -0.8f) < 0, "open again; the bottom of the glass is beside its spots");
         const float t0 = sp.back_t;
         CHECK(scene_back(&sp) && sp.cur == chart && !sp.back && fabsf(sp.t - t0) < 1e-3f && !scene_back(&sp), "a tap there: back at the chart, once");
+        CHECK(!scene_open_say(&sp, say, sizeof(say)), "... and the reading it had not played yet is cut");
         /* the chart's ttl ends both */
-        scene_open(&sp, scene_open_build(sp.cur, leo, &err));
+        scene_open(&sp, scene_open_build(sp.cur, leo, &err), leo);
         sp.back_t = 100.f - 1.f;
         for (n = 0; n < 60 && sp.cur; n++) scene_tick(&sp, DT);
         CHECK(!sp.cur && !sp.back && n * DT < 1.2f, "the chart's ttl runs out under it: both end");
@@ -1557,7 +1562,7 @@ static void test_fine(const char *dir) {
         if (fluid_fine_work(fine, 0)) fluid_fine_swap(fine, true);
         CHECK(fine->drawn && fine->drawn->key == kt, "... and swaps in");
         /* another scene comes (its calm drawing: a few of these shapes) */
-        CHECK(fluid_fine_want(fine, 2, k2, true, calm_sh, 5, FLUID_PAL_PASTEL) && fine->build >= 0 && fluid_fine_coming(fine), "a new scene's calm set builds; it is coming");
+        CHECK(fluid_fine_want(fine, 2, k2, true, calm_sh, 5, FLUID_PAL_PASTEL) && fine->build >= 0 && !fluid_fine_shown(fine, 2), "a new scene's calm set builds; it is not on the glass yet");
         CHECK(!fluid_fine_want(fine, 2, kt ^ 1u, false, full, nt, FLUID_PAL_PASTEL) && fine->bkey == k2, "... and is not given up for a tapped spot's");
         fluid_fine_swap(fine, false);
         CHECK(fine->drawn == NULL && fluid_fine_specks(fine) == 0, "the old scene's dust is off the glass at once");
@@ -1567,7 +1572,7 @@ static void test_fine(const char *dir) {
         CHECK(dusty == 0, "... no cell shows any (%d)", dusty);
         const bool done = fluid_fine_work(fine, 0);
         fluid_fine_swap(fine, false);
-        CHECK(done && fine->drawn && fine->drawn->key == k2 && !fluid_fine_coming(fine), "the new scene's dust is on");
+        CHECK(done && fine->drawn && fine->drawn->key == k2 && fluid_fine_shown(fine, 2), "the new scene's dust is on");
         /* back at the chart: its calm set is still there */
         CHECK(fluid_fine_want(fine, 3, kc, true, calm_sh, ncalm, FLUID_PAL_PASTEL) && fine->build < 0 && fluid_fine_work(fine, 0), "back at the chart: its dust is known, no build");
         fluid_fine_swap(fine, false);
@@ -1580,44 +1585,194 @@ static void test_fine(const char *dir) {
     const int nn = scene_full_shapes(s, sc, 1.f, full, &key);
     fluid_fine_want(fine, 1, key, true, full, nn, FLUID_PAL_PASTEL);
     CHECK(fine->build < 0 && fine->drawn && fine->drawn->n == nsp, "untapped: the calm dust is back without a build");
-    /* a transition on fine dust has no scatter: the chart rises row by row (each frame a few rows' windows, never the
-     * panel's dots all over), whole at the end; its windows are on whole row pairs */
-    {
-        double tworst = 0.;
-        int odd = 0, steps = 0, lastn = -1;
-        scene_fill(s, sc, 1.f, NULL, L, &nl, dots, &hd);
-        o.nshapes = hd.n; o.letters = L; o.nletters = nl; o.cap_word = 0;
-        fluid_sim_destroy(s); s = fluid_sim_create(W, H, S); s->p.still = true;   /* still water */
-        fluid_sim_snapshot(s, fr, false);
-        const int TF = (int)lrintf(SCENE_DUST_S * 30.f);
-        for (int f = -TF - 1; f <= TF + 1; f++) {          /* it drains (from the top), then rises again */
-            o.dust = fminf(1.f, fmaxf(0.f, f < 0 ? (f + TF + 1) / (float)TF : 1.f - f / (float)TF)); o.time = 30.f + (f + TF + 1) / 30.f;
-            cost_t c = { 0, 0, 0 };
-            fluid_draw_cells(d, fr, &o);
-            fluid_draw_send(d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, wbuf, 4096, send_cost, &c);
-            fluid_draw_rect(d, &o, &(fluid_rect_t){ fb, S, 0, 0, S, S }, false);
-            int n = 0, dots_only = 0;
-            for (int k = 0; k < N; k++) { n += (d->key[k] & 0xF000) == 0x8000; dots_only += d->key[k] && d->key[k] < 0x100; }
-            if (!f) CHECK(n == 0 && dots_only == 0, "dust 1: nothing there (%d cells, %d of dots)", n, dots_only);
-            else CHECK(dots_only == 0, "no scatter in the transition (%d cells of dots at %.2f)", dots_only, o.dust);
-            if (f > 0) steps += n > lastn;
-            lastn = n;
-            odd += c.odd;
-            if (getenv("FINE_TRACE")) {
-                int nd = 0, rows = 0;
-                for (int j = 0; j < H; j++) { int r = 0; for (int i = 0; i < W; i++) r += d->dirty[j * W + i] != 0; nd += r; rows += r > 0; }
-                printf("    turn f%d dust %.2f: %.1f ms (%d windows, %ld px) %d cells dirty in %d rows, %d on\n", f, o.dust, panel_ms(&c), c.wins, c.px, nd, rows, n);
-            }
-            if (f > -TF - 1) tworst = fmax(tworst, panel_ms(&c));   /* (the first frame settles what the checks before left) */
-        }
-        o.dust = 0.f;
-        printf("  fine dust, the chart rising (panel model): worst %.1f ms a frame\n", tworst);
-        CHECK(steps >= TF - 2 && odd == 0 && tworst + CELLS_MS < 33.0, "the chart rises over the transition (%d steps), on whole row pairs (%d odd windows), worst %.1f ms a frame", steps, odd, tworst);
-    }
     free(held);
     free(dots); free(keep); free(still); free(fb); free(only);
     fluid_fine_destroy(fine); fluid_draw_destroy(d); fluid_frame_destroy(fr); fluid_sim_destroy(s);
     scene_free(sc);
+    pkg_unref(p);
+}
+
+/* ── the whole picture changing: the dust reshapes (fluid_morph_t). A small driver as mole_fluid.c's: each frame the
+ * look wanted is told to the drawer, which keeps the old picture (its inputs held meanwhile), loosens it, and gathers
+ * the new one; the windows land on a glass, as the panel's ── */
+typedef struct { uint16_t *px; int S; cost_t c; } glass_t;
+static int send_glass(void *ctx, int x, int y, int w, int h, const uint16_t *px) {
+    glass_t *g = ctx;
+    for (int r = 0; r < h; r++) memcpy(g->px + (size_t)(y + r) * g->S + x, px + (size_t)r * w, sizeof(uint16_t) * (size_t)w);
+    g->c.wins++; g->c.px += (long)w * h; g->c.odd += (y & 1) || (h & 1);
+    return 0;
+}
+typedef struct {
+    int S, W, H, N;
+    fluid_sim_t *s; fluid_frame_t *fr; fluid_draw_t *d; fluid_fine_t *fine;
+    glass_t g; uint16_t *snap, *ref;
+    uint16_t wbuf[466 * 18];
+    /* the look being made (the sim's side) and the drawer's own copy of its inputs */
+    fluid_shape_t shp[FLUID_MAX_SHAPES], dshp[FLUID_MAX_SHAPES], full[FLUID_MAX_SHAPES];
+    uint8_t *dots, *keep, *still, *ddots, *dkeep, *dstill, *cat;
+    fluid_letter_t L[FLUID_MAX_LETTERS];
+    fluid_draw_opts_t o;
+    float now;
+    int frame;
+} morph_rig_t;
+static int lit_px(const uint16_t *px, int n) { int c = 0; for (int q = 0; q < n; q++) c += px[q] != 0; return c; }
+/* a montage of the glass every few frames (MORPH_DUMP: a path prefix), to look at */
+static void morph_tile(uint16_t *sheet, int cols, int n, const uint16_t *glass, int S) {
+    const int h = S / 2, x0 = (n % cols) * h, y0 = (n / cols) * h;
+    for (int y = 0; y < h; y++) for (int x = 0; x < h; x++) {     /* the brightest of each 2 x 2 (a speck stays a speck) */
+        uint16_t best = 0; int bl = -1;
+        for (int q = 0; q < 4; q++) { const uint16_t v = glass[(2 * y + (q >> 1)) * S + 2 * x + (q & 1)]; if (lum(v) > bl) { bl = lum(v); best = v; } }
+        sheet[(size_t)(y0 + y) * cols * h + x0 + x] = best;
+    }
+}
+/* the look changes to a scene (sc, its dust `scene`) or to the creature (sc NULL), the scene's dust ready `late` frames
+ * after (the device's build); runs to the change's end and a little past. Returns the worst frame (panel model, ms). */
+static double morph_run(morph_rig_t *r, scene_t *sc, uint32_t look, int late, int stop, const char *name, int *frames, int *least, int *over) {
+    const int S = r->S, N = r->N;
+    scene_shapes_t hd = { r->shp, 0, r->keep, r->still };
+    int nl = 0, n = 0, f0 = -1;
+    uint32_t key = 0;
+    double worst = 0.;
+    *least = 1 << 30; *over = 0;
+    enum { COLS = 6, TILES = 18 };
+    uint16_t *sheet = getenv("MORPH_DUMP") ? calloc((size_t)COLS * (S / 2) * (TILES / COLS) * (S / 2), 2) : NULL;
+    int tiles = 0;
+    for (int f = 0; f < 200; f++, r->frame++) {
+        r->now += 1.f / 30.f;
+        bool ready = true;
+        if (sc) {
+            scene_fill(r->s, sc, 1.f, NULL, r->L, &nl, r->dots, &hd);
+            if (f == late) { n = scene_full_shapes(r->s, sc, 1.f, r->full, &key); fluid_fine_want(r->fine, look, key, true, r->full, n, FLUID_PAL_PASTEL); fluid_fine_work(r->fine, 0); }
+            ready = fluid_fine_shown(r->fine, look);
+        }
+        const bool hold = fluid_draw_morph_look(r->d, look, r->snap, ready, r->now);
+        if (!hold) {                                            /* the drawer's inputs: this look's */
+            if (sc) {
+                memcpy(r->ddots, r->dots, (size_t)N); memcpy(r->dkeep, r->keep, (size_t)N); memcpy(r->dstill, r->still, (size_t)N);
+                memcpy(r->dshp, r->shp, sizeof(fluid_shape_t) * (size_t)(hd.n > 0 ? hd.n : 0));
+                if (f >= late) fluid_fine_swap(r->fine, false);
+                r->o = (fluid_draw_opts_t){ .palette = FLUID_PAL_PASTEL, .edge_mode = FLUID_EDGE_CONTOURS, .font = gc_font5x7, .dots = r->ddots, .scene = true,
+                                            .shapes = r->dshp, .nshapes = hd.n, .kdots = r->dkeep, .fine = r->fine, .still = r->dstill };
+            } else {
+                memcpy(r->ddots, r->cat, (size_t)N);
+                r->o = (fluid_draw_opts_t){ .palette = FLUID_PAL_PASTEL, .edge_mode = FLUID_EDGE_CONTOURS, .font = gc_font5x7, .dots = r->ddots, .scene = true };
+            }
+            r->o.time = r->now;
+        }
+        r->g.c = (cost_t){ 0, 0, 0 };
+        fluid_draw_cells(r->d, r->fr, &r->o);
+        fluid_draw_send(r->d, &r->o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, r->wbuf, 4096, send_glass, &r->g);
+        const double ms = panel_ms(&r->g.c) + CELLS_MS;
+        fluid_draw_pace(r->d, (int)(ms * 1000));
+        const int lit = lit_px(r->g.px, S * S);
+        if (fluid_draw_morphing(r->d) || f0 < 0) { worst = fmax(worst, ms); *over += ms > 33.0; if (lit < *least) *least = lit; }
+        if (getenv("FINE_TRACE")) printf("    %s f%d: phase %d, %.1f ms (%d windows, %ld px), %d lit, budget %d\n", name, f, fluid_draw_morphing(r->d), ms, r->g.c.wins, r->g.c.px, lit, r->d->m.px);
+        if (sheet && tiles < TILES && f % 3 == 0) morph_tile(sheet, COLS, tiles++, r->g.px, S);
+        if (getenv("MORPH_FRAME") && !strncmp(getenv("MORPH_FRAME"), name, strlen(name)) && atoi(getenv("MORPH_FRAME") + strlen(name) + 1) == f) dump_ppm(getenv("MORPH_OUT"), r->g.px, S);
+        if (f0 < 0 && f > 2 && !fluid_draw_morphing(r->d)) f0 = f;
+        if ((f0 >= 0 && f >= f0 + 3) || (stop && f >= stop)) break;
+    }
+    *frames = f0;
+    if (sheet) {
+        char path[600];
+        snprintf(path, sizeof(path), "%s-%s.ppm", getenv("MORPH_DUMP"), name);
+        FILE *pf = fopen(path, "wb");
+        if (pf) {
+            const int w = COLS * (S / 2), h = (TILES / COLS) * (S / 2);
+            fprintf(pf, "P6 %d %d 255\n", w, h);
+            for (int q = 0; q < w * h; q++) { const uint16_t le = (uint16_t)(sheet[q] >> 8 | sheet[q] << 8); fputc((le >> 11) * 255 / 31, pf); fputc((le >> 5 & 63) * 255 / 63, pf); fputc((le & 31) * 255 / 31, pf); }
+            fclose(pf);
+        }
+        free(sheet);
+    }
+    return worst;
+}
+static void test_morph(const char *dir) {
+    char path[512]; size_t len; const char *err;
+    snprintf(path, sizeof(path), "%s/astrology.json", dir);
+    char *buf = read_file(path, &len);
+    pkg_t *p = buf ? pkg_parse(buf, len, &err) : NULL;
+    free(buf);
+    snprintf(path, sizeof(path), "%s/astrology-commands.jsonl", dir);
+    char *cmds = p ? read_file(path, &len) : NULL;
+    scene_t *chart = NULL;
+    for (char *line = cmds ? strtok(cmds, "\n") : NULL; line && !chart; line = strtok(NULL, "\n")) {
+        cJSON *c = cJSON_Parse(line), *a = cJSON_GetObjectItem(c, "args");
+        const char *layout = cJSON_GetStringValue(cJSON_GetObjectItem(a, "layout"));
+        if (layout && !strcmp(layout, "chart")) chart = scene_build(p, layout, cJSON_GetObjectItem(a, "params"), 100.f, &err);
+        cJSON_Delete(c);
+    }
+    free(cmds);
+    scene_t *up = chart ? scene_open_build(chart, spot_named(chart, "leo"), &err) : NULL;
+    CHECK(chart && up, "the chart and Leo up close build");
+    if (!chart || !up) { scene_free(up); scene_free(chart); pkg_unref(p); return; }
+    morph_rig_t *r = calloc(1, sizeof(*r));
+    const int S = r->S = 466;
+    fluid_grid_for_stage(S, &r->W, &r->H);
+    const int W = r->W, H = r->H, N = r->N = W * H;
+    r->s = fluid_sim_create(W, H, S); r->s->p.still = true;
+    r->fr = fluid_frame_create(W, H); r->d = fluid_draw_create(W, H, S, S); r->fine = fluid_fine_create(W, H, S, S);
+    r->g = (glass_t){ calloc((size_t)S * S, 2), S, { 0, 0, 0 } };
+    r->snap = calloc((size_t)S * S, 2); r->ref = calloc((size_t)S * S, 2);
+    r->dots = calloc((size_t)N, 6); r->keep = r->dots + N; r->still = r->keep + N; r->ddots = r->still + N; r->dkeep = r->ddots + N; r->dstill = r->dkeep + N;
+    r->cat = calloc((size_t)N, 1);
+    /* a creature of crisp dots: a body, a head, two ears, in its own colour */
+    for (int j = 0; j < H; j++) for (int i = 0; i < W; i++) {
+        const float x = r->s->xs[i], y = r->s->ys[j];
+        const bool body = x * x / 0.16f + (y + 0.25f) * (y + 0.25f) / 0.12f < 1.f, head = x * x + (y - 0.22f) * (y - 0.22f) < 0.07f;
+        const bool ear = fabsf(fabsf(x) - 0.19f) + fabsf(y - 0.5f) * 0.7f < 0.09f;
+        if (body || head || ear) { r->cat[j * W + i] = 0xFF; r->s->col[j * W + i] = (fluid_rgba16_t){ 62000, 40000, 14000, 0 }; }
+    }
+    fluid_sim_snapshot(r->s, r->fr, false);
+    int frames, least, over;
+    /* the creature first (nothing to reshape from: it is there at once), then the chart, Leo, the chart, the creature */
+    morph_run(r, NULL, 1, 0, 0, "start", &frames, &least, &over);
+    const int cat_lit = lit_px(r->g.px, S * S);
+    CHECK(cat_lit > 8000 && frames <= 3, "the creature, with nothing before it: at once (%d px lit)", cat_lit);
+    static const struct { const char *name; int scene; uint32_t look; int late; } RUN[] = {
+        { "cat-chart", 1, 100, 24 }, { "chart-leo", 2, 101, 14 }, { "leo-chart", 1, 102, 0 }, { "chart-cat", 0, 1, 0 } };
+    int before = cat_lit;
+    for (int q = 0; q < 4; q++) {
+        scene_t *sc = RUN[q].scene == 1 ? chart : RUN[q].scene == 2 ? up : NULL;
+        const double worst = morph_run(r, sc, RUN[q].look, RUN[q].late, 0, RUN[q].name, &frames, &least, &over);
+        /* the glass at the end is the look itself, drawn whole */
+        fluid_draw_rect(r->d, &r->o, &(fluid_rect_t){ r->ref, S, 0, 0, S, S }, true);
+        int diff = 0, hard = 0;
+        for (int k = 0; k < S * S; k++) {
+            if (r->ref[k] != r->g.px[k] && getenv("MORPH_DIFF") && diff < 12) printf("    differs at %d,%d: look %04x glass %04x (cell %d,%d)\n", k % S, k / S, r->ref[k], r->g.px[k], (k % S) * W / S, (k / S) * H / S);
+            diff += r->ref[k] != r->g.px[k];
+            hard += r->ref[k] != r->g.px[k] && (lum(r->ref[k]) > 700 || lum(r->g.px[k]) > 700);
+        }
+        const int after = lit_px(r->g.px, S * S), low = before < after ? before : after;
+        printf("  the dust reshapes, %s (panel model): %.2f s, worst %.1f ms a frame, %d over 33; never fewer than %d px lit (%d before, %d after)\n",
+               RUN[q].name, frames / 30.0, worst, over, least, before, after);
+        CHECK(frames > 20 && frames < 150 && worst < 33.0 && over == 0, "%s: the change takes %.2f s, worst %.1f ms a frame", RUN[q].name, frames / 30.0, worst);
+        CHECK(least * 3 > low, "%s: the glass is never left dark (%d px lit at its least, %d before, %d after)", RUN[q].name, least, before, after);
+        /* (a scene's light flows on from the change's last frame: a few specks of its dust wait their rows' turns) */
+        CHECK(sc ? diff * 100 < after && hard == 0 : diff == 0, "%s: at its end the glass is the new look, whole (%d px differ, %d of them the drawing's)", RUN[q].name, diff, hard);
+        before = after;
+    }
+    {   /* a change in the middle of one (Leo opened from the chart, a tap beside it half a second into the gather): the
+         * glass as it is then reshapes into the chart again, no cut, no frame late */
+        int f1, l1, o1, f2, l2, o2;
+        const double w1 = morph_run(r, NULL, 1, 0, 0, "to-cat", &f1, &l1, &o1);
+        (void)w1;
+        morph_run(r, chart, 200, 0, 0, "to-chart", &f1, &l1, &o1);
+        const int chart_lit = lit_px(r->g.px, S * S);
+        const double wa = morph_run(r, up, 201, 0, 30, "leo-cut", &f1, &l1, &o1);
+        const int mid = fluid_draw_morphing(r->d), mid_lit = lit_px(r->g.px, S * S);
+        const double wb = morph_run(r, chart, 202, 0, 0, "cut-chart", &f2, &l2, &o2);
+        fluid_draw_rect(r->d, &r->o, &(fluid_rect_t){ r->ref, S, 0, 0, S, S }, true);
+        int hard = 0;
+        for (int k = 0; k < S * S; k++) hard += r->ref[k] != r->g.px[k] && (lum(r->ref[k]) > 700 || lum(r->g.px[k]) > 700);
+        printf("  the dust reshapes, interrupted (panel model): worst %.1f ms then %.1f ms a frame; %d px lit when cut, never fewer than %d after\n", wa, wb, mid_lit, l2);
+        CHECK(mid == FLUID_MORPH_GATHER && wa < 33.0 && wb < 33.0 && o1 + o2 == 0, "a change in the middle of one keeps the frame (worst %.1f, %.1f ms)", wa, wb);
+        CHECK(l2 * 3 > mid_lit && l2 * 3 > chart_lit / 2 && hard == 0 && !fluid_draw_morphing(r->d), "... from the glass as it was, to the chart whole (%d px lit at its least, %d of the drawing's differ)", l2, hard);
+    }
+    free(r->g.px); free(r->snap); free(r->ref); free(r->dots); free(r->cat);
+    fluid_fine_destroy(r->fine); fluid_draw_destroy(r->d); fluid_frame_destroy(r->fr); fluid_sim_destroy(r->s);
+    free(r);
+    scene_free(up); scene_free(chart);
     pkg_unref(p);
 }
 
@@ -1683,6 +1838,7 @@ int main(int argc, char **argv) {
     test_hd_pixels(argv[1]);
     test_fine(argv[1]);
     test_open(argv[1]);
+    test_morph(argv[1]);
     bench(argc > 2 ? argv[2] : "");
     CHECK(P->refs == 1, "every scene gave its package reference back (%d)", P->refs);
     pkg_unref(P);

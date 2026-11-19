@@ -32,6 +32,11 @@ typedef struct fluid_askview fluid_askview_t;
 
 /** For the sim's grid and the question (laid out here, fluid_ask_lay). NULL on OOM. */
 fluid_askview_t *fluid_askview_create(const fluid_sim_t *s, const fluid_ask_q_t *q);
+/** The same in parts, for a frame that cannot take it whole (its lines' dots are a root, an angle and a power each:
+ *  hundreds of ms on the device): begin lays it out, then build works out `rows` more rows of dots a call until it
+ *  returns true (the view is whole; only then start it, draw it or ask its layout's hits). */
+fluid_askview_t *fluid_askview_begin(const fluid_sim_t *s, const fluid_ask_q_t *q);
+bool  fluid_askview_build(fluid_askview_t *v, const fluid_sim_t *s, int rows);
 /** Its layout (where its words and answers are). */
 const fluid_ask_layout_t *fluid_askview_layout(const fluid_askview_t *v);
 void  fluid_askview_destroy(fluid_askview_t *v);
