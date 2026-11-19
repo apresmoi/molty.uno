@@ -925,7 +925,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
             }
             /* ... in what the frame's fill left of its budget (a frame that repainted its items builds nothing) */
             const int mph = fluid_draw_morphing(s_draw);   /* (the scene is not on the glass yet: the drawer has room) */
-            const bool ahead = s_hd.out || s_hd.dust >= 1.f || (mph && !s_draw->m.closing);
+            const bool ahead = s_hd.out || s_hd.dust >= 1.f || mph;
             const int left = (ahead ? FINE_AHEAD_US : FINE_BUILD_US) - (int)(esp_timer_get_time() - fill_t0);
             const bool was = s_fine->levels_ok, built = s_fine->build >= 0;
             if (left > 500) fluid_fine_work(s_fine, left);
@@ -1351,35 +1351,55 @@ static void draw_task(void *arg) {
         }
         int64_t t2 = esp_timer_get_time();
         mole_diag_panel_frame((uint32_t)(t1 - t0), (uint32_t)(t2 - t1));
-        if (s_draw) fluid_draw_pace(s_draw, s_dopts.fine || fluid_draw_morphing(s_draw) ? (int)(t2 - t0) : 0);   /* a scene on fine dust, and a change of picture, keep the frame */
-        {   /* a change of picture (the dust reshaping), once it is over (/api/log): how long it took; its worst frame's
-             * cells + send (its two parts), which frame that was (@), in which phase (ph: 1 loosening, 2 loose, 3
-             * gathering) doing what (st: FLUID_MORPH_ST_* bits, in hex; fill: its part of the new drawing's cache, ms);
-             * its frames over 33 ms; each phase's own worst frame (p1, p2, p3); the pixels a frame it was fitted to */
-            static uint32_t n, worst, worst_c, worst_s, worst_n, worst_ph, worst_st, worst_fill, slow, px_lo, px_hi, pw[4], pc[4], gap;
-            static int64_t began, last_t0;
-            const int ph = s_draw ? fluid_draw_morphing(s_draw) : 0;
-            if (ph) {
-                const uint32_t c = (uint32_t)(t1 - t0), sn = (uint32_t)(t2 - t1), px = (uint32_t)s_draw->m.px;
-                if (!n++) { began = t0; worst = slow = gap = 0; px_lo = px_hi = px; memset(pw, 0, sizeof(pw)); memset(pc, 0, sizeof(pc)); }
-                else if ((uint32_t)(t0 - last_t0) > gap) gap = (uint32_t)(t0 - last_t0);   /* (frame to frame: the sim's part shows here) */
-                last_t0 = t0;
-                if (c + sn > worst) { worst = c + sn; worst_c = c; worst_s = sn; worst_n = n; worst_ph = (uint32_t)ph; worst_st = s_draw->m.stage; worst_fill = (uint32_t)s_draw->m.fill_us; }
-                if (c + sn > pw[ph & 3]) { pw[ph & 3] = c + sn; pc[ph & 3] = c; }
-                slow += c + sn > 33000;
-                px_lo = px < px_lo ? px : px_lo; px_hi = px > px_hi ? px : px_hi;
-            } else if (n) {
-                mole_diag_event(false, "morph %dms n=%u worst=%.1f(%.1f+%.1f)@%u ph=%u st=%02x fill=%.1f over=%u gap=%.1f p1=%.1f(%.1f) p2=%.1f(%.1f) p3=%.1f(%.1f) px=%u..%u",
-                                (int)((t0 - began) / 1000), (unsigned)n, worst / 1000.f, worst_c / 1000.f, worst_s / 1000.f, (unsigned)worst_n, (unsigned)worst_ph,
-                                (unsigned)worst_st, worst_fill / 1000.f, (unsigned)slow, gap / 1000.f, pw[1] / 1000.f, pc[1] / 1000.f, pw[2] / 1000.f, pc[2] / 1000.f,
-                                pw[3] / 1000.f, pc[3] / 1000.f, (unsigned)px_lo, (unsigned)px_hi);
-                n = 0;
+        {   /* each animation's cadence (/api/log), once it has rested 10 frames: the frames its cells changed (f) and those
+             * whose changes were all sent (s: must be f), its pixels a frame (the front's own for the wave), the windows,
+             * the frame-to-frame intervals of this core (pan) and of the sim's clock (sim), p50 / p95 / worst ms, and its
+             * worst frame's cells + send. The wave's also its length and its front's windows a frame. */
+            static const char *const NAME[FLUID_ANIM_N] = { "wave", "grow", "word", "water" };
+            enum { BINS = 64 };                         /* intervals in 1 ms bins (the last: 63 and more) */
+            static struct { uint32_t f, s, rest, px, pxmax, win, worst, worst_c; uint16_t pan[BINS], sim[BINS]; int64_t began; } A[FLUID_ANIM_N];
+            static int64_t last_t0;
+            static float last_sim;
+            const uint32_t pan_ms = last_t0 ? (uint32_t)((t0 - last_t0 + 500) / 1000) : 0, sim_ms = (uint32_t)((s_dopts.time - last_sim) * 1000.f + 0.5f);
+            last_t0 = t0; last_sim = s_dopts.time;
+            const uint8_t on = s_draw ? s_draw->anim_on : 0, late = s_draw ? s_draw->anim_late : 0;
+            for (int q = 0; q < FLUID_ANIM_N; q++) {
+                if (on >> q & 1) {
+                    if (!A[q].f++) A[q].began = t0;
+                    A[q].s += !(late >> q & 1) && !s_full_flush;
+                    A[q].rest = 0;
+                    const uint32_t px = q == FLUID_ANIM_WAVE ? (uint32_t)s_draw->m.px : (uint32_t)s_send_px;
+                    A[q].px += px; A[q].pxmax = px > A[q].pxmax ? px : A[q].pxmax;
+                    A[q].win += q == FLUID_ANIM_WAVE ? (uint32_t)s_draw->m.wins : (uint32_t)s_send_n;
+                    if (A[q].f > 1) { A[q].pan[pan_ms < BINS ? pan_ms : BINS - 1]++; A[q].sim[sim_ms < BINS ? sim_ms : BINS - 1]++; }
+                    if ((uint32_t)(t2 - t0) > A[q].worst) { A[q].worst = (uint32_t)(t2 - t0); A[q].worst_c = (uint32_t)(t1 - t0); }
+                } else if (A[q].f && ++A[q].rest >= 10) {
+                    uint32_t pc[2][3];                  /* p50, p95, worst of each core */
+                    for (int c = 0; c < 2; c++) {
+                        const uint16_t *h = c ? A[q].sim : A[q].pan;
+                        uint32_t n = 0, acc = 0;
+                        for (int b = 0; b < BINS; b++) n += h[b];
+                        pc[c][0] = pc[c][1] = pc[c][2] = 0;
+                        for (int b = 0; b < BINS; b++) {
+                            if (!h[b]) continue;
+                            acc += h[b];
+                            if (!pc[c][0] && acc * 2 >= n) pc[c][0] = (uint32_t)b;
+                            if (!pc[c][1] && acc * 20 >= n * 19) pc[c][1] = (uint32_t)b;
+                            pc[c][2] = (uint32_t)b;
+                        }
+                    }
+                    mole_diag_event(false, "anim %s %dms f=%u s=%u kpx=%.1f/%.1f win=%.1f pan=%u/%u/%u sim=%u/%u/%u worst=%.1f(%.1f+%.1f)",
+                                    NAME[q], (int)((t0 - A[q].began) / 1000), (unsigned)A[q].f, (unsigned)A[q].s, A[q].px / 1000.f / A[q].f, A[q].pxmax / 1000.f,
+                                    (float)A[q].win / A[q].f, (unsigned)pc[0][0], (unsigned)pc[0][1], (unsigned)pc[0][2], (unsigned)pc[1][0], (unsigned)pc[1][1],
+                                    (unsigned)pc[1][2], A[q].worst / 1000.f, A[q].worst_c / 1000.f, (A[q].worst - A[q].worst_c) / 1000.f);
+                    memset(&A[q], 0, sizeof(A[q]));
+                }
             }
         }
         {   /* the fine dust's own cost on this core, every ~3 s while a scene shows it (/api/log): the means, the worst
              * frame's cells + send (and its two parts), frames over 33 ms, the windows and pixels a frame, the specks
-             * worked out a frame, the least quota (fluid_draw_pace) */
-            static uint32_t cells_us, send_us, worst_us, worst_c, worst_s, worst_f, worst_px, wins, kpx, slow, quota_min = 99999, pf0;
+             * worked out a frame */
+            static uint32_t cells_us, send_us, worst_us, worst_c, worst_s, worst_f, worst_px, wins, kpx, slow, pf0;
             fluid_fine_t *ff = s_dopts.fine;
             if (ff) {
                 const uint32_t c = (uint32_t)(t1 - t0), sn = (uint32_t)(t2 - t1), fr = ff->prof_frame - pf0;   /* (fr: the dust's own part of the cells) */
@@ -1387,16 +1407,15 @@ static void draw_task(void *arg) {
                 cells_us += c; send_us += sn; wins += (uint32_t)s_send_n; kpx += (uint32_t)s_send_px;
                 if (c + sn > worst_us) { worst_us = c + sn; worst_c = c; worst_s = sn; worst_f = fr; worst_px = (uint32_t)s_send_px; }
                 slow += c + sn > 33000;
-                if (s_draw && (uint32_t)s_draw->quota < quota_min) quota_min = (uint32_t)s_draw->quota;
                 if (ff->prof_n >= 100) {
                     const float n = (float)ff->prof_n;
                     /* (wf, wkpx: the worst frame's dust part of its cells, ms, and the pixels it sent) */
-                    mole_diag_event(false, "fine f=%.1f r=%.1f c=%.1f s=%.1f worst=%.1f(%.1f+%.1f) wf=%.1f wkpx=%.1f over=%u win=%.0f kpx=%.1f ev=%.0f quota=%u sp=%d n=%u",
+                    mole_diag_event(false, "fine f=%.1f r=%.1f c=%.1f s=%.1f worst=%.1f(%.1f+%.1f) wf=%.1f wkpx=%.1f over=%u win=%.0f kpx=%.1f ev=%.0f sp=%d n=%u",
                                     ff->prof_frame / 1000.f / n, ff->prof_rect / 1000.f / n, cells_us / 1000.f / n, send_us / 1000.f / n,
                                     worst_us / 1000.f, worst_c / 1000.f, worst_s / 1000.f, worst_f / 1000.f, worst_px / 1000.f, (unsigned)slow, wins / n, kpx / 1000.f / n,
-                                    ff->prof_eval / n, (unsigned)quota_min, fluid_fine_specks(ff), (unsigned)ff->prof_n);
+                                    ff->prof_eval / n, fluid_fine_specks(ff), (unsigned)ff->prof_n);
                     ff->prof_frame = ff->prof_rect = ff->prof_n = ff->prof_eval = 0; pf0 = 0;
-                    cells_us = send_us = worst_us = worst_c = worst_s = wins = kpx = slow = 0; quota_min = 99999;
+                    cells_us = send_us = worst_us = worst_c = worst_s = wins = kpx = slow = 0;
                 }
             }
         }
@@ -1620,11 +1639,9 @@ static void fluid_task(void *arg) {
             if (fd_bye_done(&s_dir)) atomic_store(&s_bye_done, true);
         }
         int64_t t2 = esp_timer_get_time();
-        /* The whole picture changing (a scene to a scene, the creature to a scene and back): the dust reshapes. A
-         * scene's glass is kept by the drawer as it draws (FLUID_LOOK_KEEP), so a change from one begins this frame;
-         * from the creature the drawer keeps the old picture first, and its inputs stay as they are for those frames
-         * (the look made this frame waits). The panel's mirror holds the picture: unused while the windows go on whole
-         * row pairs, as they do for both looks. */
+        /* The whole picture changing (a scene to a scene, the creature to a scene and back): a wave from the finger,
+         * from this frame. A scene's glass is kept by the drawer as it draws (FLUID_LOOK_KEEP) in the panel's mirror
+         * (unused while the windows go on whole row pairs, as they do for both looks); the creature's is its cells. */
         const bool fine_look = s_cur == ST_SCENE && s_sp.cur && s_fine && s_nshp >= 0 && s_hd.gen != 0;
         const uint32_t look = fine_look ? FLUID_LOOK_KEEP | s_sp.cur->serial : s_crisp ? 1u : 0u;
         if (s_focus) {                                     /* a tap asked for it: it shows where the finger was first */
@@ -1632,8 +1649,8 @@ static void fluid_task(void *arg) {
             fluid_draw_morph_focus(s_draw, (float)(at >> 16), (float)(at & 0xFFFFu));
             s_focus = false;
         }
-        const bool hold = fluid_draw_morph_look(s_draw, look, molty_display_framebuffer(), !fine_look || fluid_fine_shown(s_fine, s_sp.cur->serial), s_tnow);
-        if (!hold) {
+        fluid_draw_morph_look(s_draw, look, molty_display_framebuffer(), s_tnow);
+        {
             fluid_sim_snapshot(s_sim, s_frame, cfg.edge_mode == FLUID_EDGE_OFF);
             s_dopts = (fluid_draw_opts_t){
                 .palette = cfg.palette, .edge_mode = cfg.edge_mode,
@@ -1662,10 +1679,10 @@ static void fluid_task(void *arg) {
             if (s_fine) {   /* the fine dust: a set built since swaps in (the drawer is idle); none once no scene shows */
                 if (s_hd.gen && s_dnshp >= 0) {
                     if (s_cur == ST_SCENE && !s_hd.out) {      /* (a scene breaking up keeps the dust it showed) */
-                        /* a set built since swaps in: with the scene, in a change of picture (no rise of its own; one that
-                         * comes as the change's rows are being done waits for its end, and rises then) */
-                        const int mph = fluid_draw_morphing(s_draw);
-                        if (!(mph && s_draw->m.closing)) fluid_fine_swap(s_fine, !mph);
+                        /* a set built since swaps in: with the scene when the change of picture begins; one that comes
+                         * later waits for its end, and comes by a wave of its own when it is the scene's whole dust */
+                        if ((!fluid_draw_morphing(s_draw) || fluid_draw_morph_fresh(s_draw)) && fluid_fine_swap(s_fine) && !fluid_draw_morph_fresh(s_draw))
+                            fluid_draw_morph_again(s_draw);
                         fluid_fine_caption_box(s_fine, s_cap_box_on ? s_cap_box : NULL);
                         fluid_fine_rim(s_fine, s_rg.on > 0.f);
                         memcpy(s_still_d, s_still, (size_t)s_sim->N); s_dcap_word = s_cap_word;
