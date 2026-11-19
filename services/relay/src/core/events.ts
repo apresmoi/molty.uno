@@ -6,8 +6,14 @@
 //   shake  {peak_g:number, reversals:int, ms:int, listen?:string}
 //          (listen: the local id of the listen the device began on this shake — shake to talk,
 //          core/turns.ts; the relay adopts it and agents see {listening:true, turn_id} instead)
-//   tap    {x:0..1, y:0..1, spot?:string}
-//          (spot: the id of the scene's tap spot the finger landed on, when it landed on one)
+//   tap    {x:0..1, y:0..1, spot?:string, opened?:string, closed?:true}
+//          (spot: the id of the scene's tap spot the finger landed on, when it landed on one; opened: the
+//          layout Molty itself opened because of that tap; closed: the tap beside an opened layout took
+//          Molty back to the one under it)
+//   scene  {why:"open"|"back"|"end", pkg?:string, layout?:string, spot?:string}
+//          (the scene on screen changed on the device itself: a tap opened a layout, it went back, a
+//          scene ran out. pkg and layout: what is up now, neither: no scene, the creature is back; spot:
+//          the one that opened it. room.ts also follows the screen with it, core/screen.ts)
 //   button {id:"accept"|"reject"}
 //   answer {job, index:int|null, label?:string, reason?:"timeout"|"cancelled"}
 //          (the human's tap on a molty_ask; also checked against the job's options in room.ts)
@@ -17,9 +23,10 @@
 //          when it changes; see creatureData)
 // Everything else (say.done, link_code, ...) stays internal to the relay.
 
-import { GESTURE_INPUTS, MAX_ASK_LABEL, MAX_ASK_OPTIONS } from "./commands.js";
+import { GESTURE_INPUTS, MAX_ASK_LABEL, MAX_ASK_OPTIONS, PKG_ID_RE } from "./commands.js";
 import { DRAFT_DROPPED_EVENT, DRAFT_USED_EVENT, PARTIAL_EVENT } from "./partials.js";
 import { isRecord, type JsonObject } from "./protocol.js";
+import { LAYOUT_RE } from "./screen.js";
 
 export interface AgentEvent {
   /** "e<seq>", monotonically increasing per device. */
@@ -69,15 +76,34 @@ const SHAPES: Record<string, (d: Record<string, unknown>) => JsonObject | undefi
       : undefined,
   tap: (d) =>
     num(d.x, 0, 1) && num(d.y, 0, 1)
-      ? { x: d.x as number, y: d.y as number, ...(typeof d.spot === "string" && SPOT_RE.test(d.spot) ? { spot: d.spot } : {}) }
+      ? {
+          x: d.x as number,
+          y: d.y as number,
+          ...(spot(d.spot) ? { spot: d.spot } : {}),
+          ...(typeof d.opened === "string" && LAYOUT_RE.test(d.opened) ? { opened: d.opened } : {}),
+          ...(d.closed === true ? { closed: true } : {}),
+        }
       : undefined,
   double_tap: (d) => (num(d.x, 0, 1) && num(d.y, 0, 1) ? { x: d.x as number, y: d.y as number } : undefined),
   button: (d) => (d.id === "accept" || d.id === "reject" ? { id: d.id } : undefined),
   answer: answerShape,
+  scene: sceneShape,
 };
 
 /** A scene spot's id, as the package names it (the firmware's PKG_STR_MAX). */
 const SPOT_RE = /^[\w.:-]{1,40}$/;
+const spot = (v: unknown): v is string => typeof v === "string" && SPOT_RE.test(v);
+
+/** The device's own screen change. */
+export const SCENE_EVENT = "scene";
+
+/** Device `scene`: what is up now is a package and a layout, or neither; anything else is dropped. A bad spot goes, the event stays. */
+function sceneShape(d: Record<string, unknown>): JsonObject | undefined {
+  if (d.why !== "open" && d.why !== "back" && d.why !== "end") return undefined;
+  if (d.pkg === undefined && d.layout === undefined) return { why: d.why };
+  if (typeof d.pkg !== "string" || !PKG_ID_RE.test(d.pkg) || typeof d.layout !== "string" || !LAYOUT_RE.test(d.layout)) return undefined;
+  return { why: d.why, pkg: d.pkg, layout: d.layout, ...(spot(d.spot) ? { spot: d.spot } : {}) };
+}
 const JOB_RE = /^molty-[a-z2-9]{10}\.j_[A-Za-z0-9_-]{8,32}$/;
 const LABEL_RE = new RegExp(`^[\\x20-\\x7e]{1,${MAX_ASK_LABEL}}$`);
 
@@ -167,8 +193,14 @@ export function creatureData(d: unknown): DeviceCreature | undefined {
   return out;
 }
 
-/** Every type an agent can receive and filter on (webhook `events`): device events + the relay's own. */
-export const AGENT_EVENT_TYPES = [...Object.keys(SHAPES), UTTERANCE_EVENT, PARTIAL_EVENT, DRAFT_USED_EVENT, DRAFT_DROPPED_EVENT, CREATURE_EVENT, DND_EVENT];
+/**
+ * Types that only ride the inbox (pull and ride-along), never a webhook: they follow the screen and
+ * ask for no answer, and an utterance says where it stands (`device.scene`).
+ */
+export const INBOX_ONLY_EVENTS: readonly string[] = [SCENE_EVENT];
+
+/** Every type an agent can receive and filter on (webhook `events`): device events + the relay's own, less the inbox-only ones. */
+export const AGENT_EVENT_TYPES = [...Object.keys(SHAPES).filter((t) => !INBOX_ONLY_EVENTS.includes(t)), UTTERANCE_EVENT, PARTIAL_EVENT, DRAFT_USED_EVENT, DRAFT_DROPPED_EVENT, CREATURE_EVENT, DND_EVENT];
 
 /** Types a webhook gets only when its `events` names them (never by default): chatty, or nothing to answer. Pull and ride-along carry them. */
 export const OPT_IN_EVENTS: readonly string[] = [PARTIAL_EVENT, CREATURE_EVENT];
@@ -177,7 +209,7 @@ export const OPT_IN_EVENTS: readonly string[] = [PARTIAL_EVENT, CREATURE_EVENT];
 export const DEFAULT_WEBHOOK_EVENTS = AGENT_EVENT_TYPES.filter((t) => !OPT_IN_EVENTS.includes(t));
 
 /** Does a webhook with this `events` list (absent = the default) want `type`? */
-export const webhookWants = (events: string[] | undefined, type: string) => (events ? events.includes(type) : !OPT_IN_EVENTS.includes(type));
+export const webhookWants = (events: string[] | undefined, type: string) => !INBOX_ONLY_EVENTS.includes(type) && (events ? events.includes(type) : !OPT_IN_EVENTS.includes(type));
 
 const SAMPLE_CREATURE: JsonObject = {
   id: "duck",
@@ -269,6 +301,10 @@ export function eventSentence(ev: AgentEvent): string {
       return `Your draft opener was dropped (${String(d.reason ?? "")}): answer the utterance as usual`;
     case "tap":
       return "Molty's screen was tapped";
+    case SCENE_EVENT:
+      if (!d.layout) return "Molty's scene ended: the creature is back";
+      if (d.why === "open") return `Molty opened ${d.layout} of ${d.pkg}${d.spot ? ` (the human tapped ${d.spot})` : ""}`;
+      return d.why === "back" ? `Molty went back to ${d.layout} of ${d.pkg}` : `Molty's scene ended: ${d.layout} of ${d.pkg} is up now`;
     case "double_tap":
       return "Molty's screen was double-tapped";
     case "button":
