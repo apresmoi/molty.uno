@@ -7,6 +7,36 @@
 /** The panel's side in pixels: the Waveshare AMOLED 1.75C's 466 px round screen. */
 export const PANEL = 466;
 
+/** What the module needs of a system: a clock and somewhere to lose its log. */
+export async function instantiate<X extends { memory: WebAssembly.Memory; _initialize(): void }>(
+  module: WebAssembly.Module,
+): Promise<X> {
+  let x: X;
+  const view = () => new DataView(x.memory.buffer);
+  const instance = await WebAssembly.instantiate(module, {
+    env: { emscripten_notify_memory_growth: () => {} },
+    wasi_snapshot_preview1: {
+      clock_time_get: (_id: number, _precision: bigint, out: number) => {
+        view().setBigUint64(out, BigInt(Math.round(performance.now() * 1e6)), true);
+        return 0;
+      },
+      fd_write: (_fd: number, iov: number, n: number, written: number) => {
+        const v = view();
+        let total = 0;
+        for (let i = 0; i < n; i++) total += v.getUint32(iov + i * 8 + 4, true);
+        v.setUint32(written, total, true);
+        return 0;
+      },
+      fd_read: () => 8,
+      fd_close: () => 0,
+      fd_seek: () => 70,
+    },
+  });
+  x = instance.exports as unknown as X;
+  x._initialize();
+  return x;
+}
+
 interface Exports {
   memory: WebAssembly.Memory;
   _initialize(): void;
@@ -20,10 +50,19 @@ interface Exports {
   wm_shake(): void;
   wm_enter(across: number, back: number): number;
   wm_entering(): number;
-  wm_pan(across: number): void;
+  wm_pan(across: number): number;
   wm_across(): number;
   wm_cat_pixels(): number;
-  wm_wave(cx: number, cy: number, r: number, sigma: number, height: number, dt: number): void;
+  wm_world_pixels(): number;
+  wm_haze(): void;
+  wm_couple(r0: number, r1: number): number;
+  wm_couple_xy(): number;
+  wm_couple_in(): number;
+  wm_couple_set(have: number, gain: number): void;
+  wm_water(c2: number, leak: number, damp: number): void;
+  wm_grid_w(): number;
+  wm_grid_h(): number;
+  wm_h(): number;
   wm_state(json: number): number;
   wm_state_json(): number;
   wm_listen(on: number): void;
@@ -74,32 +113,8 @@ export class MoltyCore {
     this.x = x;
   }
 
-  /** The module needs a clock and somewhere to lose its log; nothing else of a system. */
   static async create(module: WebAssembly.Module): Promise<MoltyCore> {
-    let x: Exports;
-    const view = () => new DataView(x.memory.buffer);
-    const instance = await WebAssembly.instantiate(module, {
-      env: { emscripten_notify_memory_growth: () => {} },
-      wasi_snapshot_preview1: {
-        clock_time_get: (_id: number, _precision: bigint, out: number) => {
-          view().setBigUint64(out, BigInt(Math.round(performance.now() * 1e6)), true);
-          return 0;
-        },
-        fd_write: (_fd: number, iov: number, n: number, written: number) => {
-          const v = view();
-          let total = 0;
-          for (let i = 0; i < n; i++) total += v.getUint32(iov + i * 8 + 4, true);
-          v.setUint32(written, total, true);
-          return 0;
-        },
-        fd_read: () => 8,
-        fd_close: () => 0,
-        fd_seek: () => 70,
-      },
-    });
-    x = instance.exports as unknown as Exports;
-    x._initialize();
-    return new MoltyCore(x);
+    return new MoltyCore(await instantiate<Exports>(module));
   }
 
   /** `bytes` (and a closing zero) in the module's memory for the length of `call`. */
@@ -167,15 +182,54 @@ export class MoltyCore {
     const p = this.x.wm_cat_pixels();
     return p ? new Uint8ClampedArray(this.x.memory.buffer, p, this.px * this.px * 4) : null;
   }
-  /** One water with the page: a wave out there (a ring `r` px about (cx, cy), panel pixels, its
-   *  crest `sigma` wide and `height` high) lifts the screen's water where it crosses the rim, for
-   *  this frame's `dt` seconds; the firmware's fluid carries it on inside. */
-  wave(cx: number, cy: number, r: number, sigma: number, height: number, dt: number) {
-    this.x.wm_wave(cx, cy, r, sigma, height, dt);
+  /** Scenes on the braille haze from now on (what a board without the fine dust's memory shows):
+   *  their dust is the lattice's own dots, a steep wave loosens their lines into it and calm
+   *  water sharpens them back. A heading on the page is one. Before the first frame. */
+  haze() {
+    this.x.wm_haze();
   }
-  /** The picture's camera looks `across` (world units) to the side: a window beside the screen. */
-  pan(across: number) {
-    this.x.wm_pan(across);
+  /** The grid's width in cells (a 466 px panel: 59). */
+  get gridW(): number {
+    return this.x.wm_grid_w();
+  }
+  get gridH(): number {
+    return this.x.wm_grid_h();
+  }
+  /** The water's height, a view of the module's memory: gridW x gridH cells, 1024 a unit. */
+  height(): Int16Array {
+    return new Int16Array(this.x.memory.buffer, this.x.wm_h(), this.gridW * this.gridH);
+  }
+  /** The water's own numbers (fluid_sim.h fluid_params_t): c2, its speed squared in cells a
+   *  step; what a step keeps of a wave's height (leak) and of its motion (damp). */
+  water(c2: number, leak: number, damp: number) {
+    this.x.wm_water(c2, leak, damp);
+  }
+  /** One water with the page: from `r0` of the glass's radius out, the screen's water goes to the
+   *  page's own there, wholly from `r1` out (0, 0: every cell: a heading's window). */
+  couple(r0: number, r1: number) {
+    this.coupledCells = this.x.wm_couple(r0, r1);
+  }
+  private coupledCells = 0;
+  /** Where those cells are, (x, y) panel pixels each: a view of the module's memory. */
+  cells(): Float32Array {
+    return new Float32Array(this.x.memory.buffer, this.x.wm_couple_xy(), this.coupledCells * 2);
+  }
+  /** Before a frame: the page's water under those cells (its height now and a step ago each),
+   *  or null where the page's water is flat; taken `gain` times over. */
+  coupled(water: Float32Array | null, gain = 1) {
+    if (water) new Float32Array(this.x.memory.buffer, this.x.wm_couple_in(), water.length).set(water);
+    this.x.wm_couple_set(water ? 1 : 0, gain);
+  }
+  /** The panel without the creature (its cells clear to black): with `catPixels` of a window that
+   *  follows the creature laid over it, the creature is one picture on both sides of the rim. */
+  worldPixels(): Uint8ClampedArray {
+    return new Uint8ClampedArray(this.x.memory.buffer, this.x.wm_world_pixels(), this.px * this.px * 4);
+  }
+  /** The picture's camera looks to the side, by the whole cells nearest `across` (world units): a
+   *  window beside the screen. Returns how far that is in panel pixels: the window's picture
+   *  carried that far falls on the screen's own lattice. */
+  pan(across: number): number {
+    return this.x.wm_pan(across);
   }
 
   /** POST /api/creature/state's body, as on the device: { mood }, { act }, { state, text }, ... */

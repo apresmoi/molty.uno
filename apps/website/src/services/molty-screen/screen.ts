@@ -2,31 +2,29 @@
 // renderer (core.ts) drawing into a canvas, the pointer as the finger on the glass. The module
 // and the packages are fetched once, when the first screen mounts, never with the page itself.
 //
-//   frames     the display's, at most 60 a second, only while the screen is in view and the tab
-//              is shown; the clock the firmware sees stops with them
+//   frames     the page's (clock.ts), only while the screen is in view and the tab is shown; the
+//              clock the firmware sees stops with them
+//   water      one with the page's (water.ts): before each frame the screen takes the page's
+//              water at its rim, so a wave from outside comes in and its own goes out
 //   reduced    prefers-reduced-motion: no frames; one settled still per change
 //   <html data-fluid-moltys>   "live" once a screen draws, "off" when the module cannot load
 //              (the page then keeps its still images)
-import wasmUrl from "@molty-wasm/molty.wasm?url";
-import { pageWaves } from "../page-water";
+import { onFrame } from "./clock";
 import { MoltyCore, PANEL, type MoltyQuestion, type MoltyState } from "./core";
+import { WATER } from "./field";
+import { loadModule } from "./module";
+import { pageWater, type PageWater } from "./water";
+import { HEADING_GAIN } from "../../config/water.mjs";
 
-/** The page's frame rate. The device paces its own frames at 33 a second (mole_fluid.c). */
-const FPS = 60;
-const FRAME_MS = 1000 / FPS;
-/** The longest step the firmware takes for one frame (mole_fluid.c clamps the same). */
-const MAX_STEP_MS = 100;
 /** Reduced motion and a screen that starts on its creature: this much is played unseen first. */
 const SETTLE_S = 1.6;
 const SETTLE_STEP_MS = 1000 / 30;
-
-let moduleLoad: Promise<WebAssembly.Module> | null = null;
-function loadModule(): Promise<WebAssembly.Module> {
-  return (moduleLoad ??= WebAssembly.compileStreaming(fetch(wasmUrl)).catch(async () =>
-    // a server that does not say application/wasm
-    WebAssembly.compile(await (await fetch(wasmUrl)).arrayBuffer()),
-  ));
-}
+/** One water with the page: a screen's water goes to the page's own from this far out of the
+ *  glass's radius, wholly from that far (its outer band, where the device's water has its
+ *  sponge: fluid_sim.c). */
+const RIM = [0.74, 0.86] as const;
+/** The fastest the firmware's water goes (its c2: cells a step, squared) and stays itself. */
+const C2_MAX = 0.6;
 const files = new Map<string, Promise<Uint8Array>>();
 function loadFile(url: string): Promise<Uint8Array> {
   let file = files.get(url);
@@ -49,9 +47,9 @@ function pageState(state: "live" | "off") {
  *  page and into its screen, and sits where it always sits. All in the firmware's world units,
  *  measured on its own frames (device/firmware/web/web_main.c, WM_TRACE). */
 const ENTER = {
-  /** Panel pixels a world unit across the frame, at any depth (the picture has no perspective
-   *  across): the page carries the cat's own picture this far for each unit it stands aside. */
-  px: 268.4,
+  /** World units a panel is wide (creature_dots.h CD_VIEW_SIZE; the picture has no perspective
+   *  across): how far beyond the window's edge the cat starts. */
+  view: 1.75,
   /** The cat's nose is this far ahead of where it stands: it starts that much beyond the edge. */
   nose: 0.85,
   /** Played unseen first: it gets up. */
@@ -86,9 +84,9 @@ export interface MoltyScreenOptions {
   boot: boolean;
   /** A scene it plays from the start and keeps up (a word). */
   scene?: { layout: string; params?: Record<string, unknown> };
-  /** The finger is every tap on the page that lands on the canvas (a canvas that takes no
-   *  pointer itself: a word under the page's text), not the canvas's own pointer. */
-  pageTaps?: boolean;
+  /** A heading's window: its scene is on the braille haze (the page's own grain), all of its
+   *  water is the page's, and it takes no finger (a tap there is the page's). */
+  heading?: boolean;
   /** The creature walks in from beyond the window's right edge. `outside`: a canvas the size and
    *  place of the screen's own, clear but for the cat: this moves it along with the cat while
    *  the cat is outside the glass (the same renderer's picture of the cat alone). */
@@ -147,6 +145,7 @@ export async function mountMoltyScreen(
       if (creature && !core.creature(options.creature!.id, creature)) throw new Error("not a creature package");
       if (scenes && !core.pack(scenes)) throw new Error("not a scenes package");
       if (!core.start(seed, options.boot && !options.reducedMotion, options.px ?? PANEL)) throw new Error("no memory");
+      if (options.heading) core.haze();
       return core;
     };
     const core = await make();
@@ -167,14 +166,16 @@ export async function mountMoltyScreen(
 const SCENE_TTL = 600;
 const SCENE_AGAIN = 540;
 
-const FINGER = ["pointerdown", "pointermove", "pointerup", "pointercancel", "pointerleave"];
+const FINGER = ["pointerdown", "pointermove", "pointerup", "pointercancel", "pointerleave"] as const;
 
 class Screen implements MoltyScreenHandle {
   private ctx: CanvasRenderingContext2D;
   private px: number;
-  private raf = 0;
-  private last = 0;
+  private stop: (() => void) | null = null;
   private seconds = 0;
+  /** The page's water this screen's water was last given the numbers of, and those. */
+  private water: PageWater | null = null;
+  private waterAs = "";
   private inView = false;
   private alive = true;
   private watch: IntersectionObserver;
@@ -201,7 +202,7 @@ class Screen implements MoltyScreenHandle {
     });
     this.watch.observe(canvas);
     document.addEventListener("visibilitychange", this.sync);
-    for (const type of FINGER) this.pointer.addEventListener(type, this.finger as EventListener);
+    if (!options.heading) for (const type of FINGER) canvas.addEventListener(type, this.finger);
   }
 
   /** The scene it holds up, (again) from now. */
@@ -217,7 +218,7 @@ class Screen implements MoltyScreenHandle {
     const cores = this.twin ? [this.core, this.twin] : [this.core];
     this.outside = this.options.entrance!.outside?.getContext("2d") ?? null;
     const box = this.canvas.getBoundingClientRect();
-    const aside = ((innerWidth - (box.left + box.width / 2)) * (this.px / box.width)) / ENTER.px;
+    const aside = ((innerWidth - (box.left + box.width / 2)) / box.width) * ENTER.view;
     const [across, back] = enterFrom(aside);
     for (const c of cores) {
       for (let i = 0; i < 3; i++) c.frame(SETTLE_STEP_MS * 1000);
@@ -227,8 +228,9 @@ class Screen implements MoltyScreenHandle {
     this.draw();
   }
 
-  /** One frame of the firmware's clock. The window outside the glass looks where the cat is, so
-   *  its picture of the cat alone can be carried there (`aside`). */
+  /** One frame of the firmware's clock. While the cat walks in, a second window looks where the
+   *  cat is (whole cells to the side, `aside` panel pixels): its picture of the cat alone is the
+   *  one cat the page shows, outside the glass and inside it. */
   private aside = 0;
   private advance(us: number) {
     // a sped-up clock goes in steps no longer than a device frame: the creature's player takes
@@ -236,17 +238,11 @@ class Screen implements MoltyScreenHandle {
     const steps = Math.ceil(us / 30000);
     for (let i = 0; i < steps; i++) {
       if (this.twin) {
-        this.aside = this.core.across();
-        this.twin.pan(this.aside);
+        this.aside = this.twin.pan(this.core.across());
         this.twin.frame(us / steps);
       }
       this.core.frame(us / steps);
     }
-  }
-
-  /** Where the finger's events come from. */
-  private get pointer(): EventTarget {
-    return this.options.pageTaps ? window : this.canvas;
   }
 
   destroy() {
@@ -254,56 +250,68 @@ class Screen implements MoltyScreenHandle {
     this.sync();
     this.watch.disconnect();
     document.removeEventListener("visibilitychange", this.sync);
-    for (const type of FINGER) this.pointer.removeEventListener(type, this.finger as EventListener);
+    for (const type of FINGER) this.canvas.removeEventListener(type, this.finger);
   }
 
   // ---------------------------------------------------------------- frames
 
   private sync = () => {
     const run = this.alive && this.inView && !document.hidden && !this.options.reducedMotion;
-    if (run && !this.raf) {
-      this.last = 0;
-      this.raf = requestAnimationFrame(this.tick);
-    } else if (!run && this.raf) {
-      cancelAnimationFrame(this.raf);
-      this.raf = 0;
+    if (run && !this.stop) this.stop = onFrame(this.tick);
+    else if (!run && this.stop) {
+      this.stop();
+      this.stop = null;
     }
   };
 
-  private tick = (now: number) => {
-    this.raf = requestAnimationFrame(this.tick);
-    const dt = this.last ? now - this.last : FRAME_MS;
-    if (dt < FRAME_MS - 2) return; // a faster display: every other frame of it
-    this.last = now;
-    this.step(Math.min(dt, MAX_STEP_MS));
+  /** A heading takes every other of the page's frames while the page's water moves (about the
+   *  device's own pace: its window is four panels' worth of pixels), and one in six while it is
+   *  flat (nothing of it moves then but its dust's slow shimmer). Headings take turns. */
+  private static headings = 0;
+  private turn = Screen.headings++;
+  private owed = 0;
+
+  private tick = (ms: number) => {
+    if (this.options.heading) {
+      this.owed += ms;
+      if (++this.turn % (pageWater()?.moving ? 2 : 6)) return;
+      ms = this.owed;
+      this.owed = 0;
+    }
+    this.meetPage();
+    this.step(ms);
     this.draw();
     this.options.onFrame?.(this.seconds);
   };
 
-  /** One water: a wave crossing the page comes in at the rim (not one that started on this
-   *  screen: the finger's own ripple is that wave here). */
-  private letWavesIn(ms: number) {
-    const waves = pageWaves(performance.now());
-    if (!waves.length) return;
+  /** One water: the screen's water has the page's numbers (its waves the page's speed on screen,
+   *  whatever size the screen is shown at), and takes the page's water where the two meet: at
+   *  its rim, or all over (a heading's window). */
+  private meetPage() {
+    const water = pageWater();
+    if (!water && !this.water) return;
     const box = this.canvas.getBoundingClientRect();
-    const k = this.px / box.width;
-    for (const w of waves) {
-      const x = (w.x - box.left) * k,
-        y = (w.y - box.top) * k;
-      if (x >= 0 && x <= this.px && y >= 0 && y <= this.px) continue;
-      this.core.wave(x, y, w.r * k, w.sigma * k, w.height, ms / 1000);
+    const as = water ? `${box.width} ${water.leak} ${water.damp}` : "";
+    if (water !== this.water || as !== this.waterAs) {
+      if (water && !this.water) this.core.couple(this.options.heading ? 0 : RIM[0], this.options.heading ? 0 : RIM[1]);
+      this.water = water;
+      this.waterAs = as;
+      const cells = (water?.speed ?? 0) / (box.width / this.core.gridW);
+      if (water) this.core.water(Math.min(C2_MAX, cells * cells), water.leak, water.damp);
+      else this.core.water(WATER.c2, WATER.leak, WATER.damp);
     }
+    if (water) this.core.coupled(water.under(this.core.cells(), box, this.px), this.options.heading ? HEADING_GAIN : 1);
   }
 
   private step(ms: number) {
-    if (!this.options.reducedMotion) this.letWavesIn(ms);
     const rate = !this.entering ? 1 : Math.abs(this.core.across()) < ENTER.near ? ENTER.settle : ENTER.rate;
     this.advance(Math.round(ms * 1000 * rate));
     this.seconds += ms / 1000;
     if (this.entering && !this.core.entering()) {
-      // it sits: the window beside the screen is done with
+      // it sits: the window beside the screen is done with, the screen's own cat takes over
       this.entering = false;
       this.twin = null;
+      this.outside?.clearRect(0, 0, this.px, this.px);
       this.outside = null;
       this.options.onEntered?.();
     }
@@ -313,13 +321,18 @@ class Screen implements MoltyScreenHandle {
   }
 
   private draw() {
-    this.ctx.putImageData(new ImageData(this.core.pixels() as Uint8ClampedArray<ArrayBuffer>, this.px, this.px), 0, 0);
+    const picture = (px: Uint8ClampedArray) => new ImageData(px as Uint8ClampedArray<ArrayBuffer>, this.px, this.px);
     const cat = this.outside && this.twin?.catPixels();
-    if (cat) {
-      // the cat alone, carried to where it stands: beside the screen, then under it
-      this.outside!.canvas.style.translate = `${((this.aside * ENTER.px) / this.px) * this.canvas.clientWidth}px 0`;
-      this.outside!.putImageData(new ImageData(cat as Uint8ClampedArray<ArrayBuffer>, this.px, this.px), 0, 0);
-    }
+    if (!cat) return this.ctx.putImageData(picture(this.core.pixels()), 0, 0);
+    // The cat walking in is one picture, the second window's, from one frame and with one shift:
+    // on the clear canvas carried to where the cat stands (what of it is outside the glass shows
+    // there, under the bezel), and drawn from that same canvas onto the screen's own picture of
+    // the world without its cat (what of it is inside the glass).
+    const outside = this.outside!;
+    outside.canvas.style.translate = `${(this.aside / this.px) * this.canvas.getBoundingClientRect().width}px 0`;
+    outside.putImageData(picture(cat), 0, 0);
+    this.ctx.putImageData(picture(this.core.worldPixels()), 0, 0);
+    this.ctx.drawImage(outside.canvas, this.aside, 0);
   }
 
   /** Play `seconds` unseen, then show where it got to (reduced motion: one still per change). */

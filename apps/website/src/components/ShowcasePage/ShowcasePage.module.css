@@ -3,7 +3,7 @@
    text steps aside once the word draws), the cat lives on the big screen. */
 .root {
   position: relative;
-  background: var(--m-bg) var(--m-dust) repeat 0 0;
+  background: var(--m-bg) var(--m-dust) repeat 0 0 / var(--m-dust-size);
   font: var(--m-text-md) / 1.6 var(--m-font-mono);
   user-select: none;
   -webkit-user-select: none;

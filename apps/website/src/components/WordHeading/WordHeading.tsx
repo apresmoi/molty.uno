@@ -24,6 +24,7 @@ export function WordHeading({
     <Tag
       id={id}
       className={`${styles.heading} ${className ?? ""}`}
+      data-dust-focus="word"
       style={{ "--fill": measure(text).half, "--chars": text.length } as CSSProperties}
     >
       {text}

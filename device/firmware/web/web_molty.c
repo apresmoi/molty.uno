@@ -18,7 +18,9 @@
  * second is read through a pointer to its end: the name below makes mole_fluid.c's own declaration and its one use
  * (end - start) both mean that. */
 #define _binary_default_molty_end *web_default_molty_end
+#include "web_grid.h"                  /* a heading's window is wider than a panel: the grid's cap, before it is used */
 #include "../main/fluid/mole_fluid.c"
+#include "creature_dots.h"             /* CD_VIEW_SIZE: the world a panel is wide (wm_pan) */
 #include "web_default_molty.h"
 const uint8_t *web_default_molty_end[] = { _binary_default_molty_start + sizeof(_binary_default_molty_start) };
 
@@ -40,16 +42,23 @@ int           molty_display_width(void)  { return s_px; }
 int           molty_display_height(void) { return s_px; }
 uint16_t     *molty_display_framebuffer(void) { return s_fb; }
 esp_err_t     molty_display_flush(void) { return ESP_OK; }
-/* a window of the panel: big-endian rgb565, as the panels take it */
+/* a window of the panel: big-endian rgb565, as the panels take it. (A table of every colour: the whole panel comes
+ * through here every frame, and a heading's window is four panels' worth of pixels.) */
+static uint32_t *s_rgba_of;            /* a panel's colour (as sent: big-endian rgb565) as a canvas takes it */
 esp_err_t molty_display_blit(int x, int y, int w, int h, const uint16_t *px) {
     if (x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > s_px || y + h > s_px) return ESP_ERR_INVALID_ARG;
+    if (!s_rgba_of) {
+        if (!(s_rgba_of = malloc(65536 * sizeof(uint32_t)))) return ESP_ERR_NO_MEM;
+        for (uint32_t be = 0; be < 65536; be++) {
+            const uint16_t v = (uint16_t)(be >> 8 | be << 8);
+            const uint32_t r5 = v >> 11, g6 = v >> 5 & 63, b5 = v & 31;
+            s_rgba_of[be] = 0xff000000u | (b5 << 3 | b5 >> 2) << 16 | (g6 << 2 | g6 >> 4) << 8 | (r5 << 3 | r5 >> 2);
+        }
+    }
     for (int r = 0; r < h; r++) {
         uint32_t *o = s_rgba + (size_t)(y + r) * (size_t)s_px + x;
-        for (int c = 0; c < w; c++) {
-            const uint16_t be = px[(size_t)r * (size_t)w + c], v = (uint16_t)(be >> 8 | be << 8);
-            const uint32_t r5 = v >> 11, g6 = v >> 5 & 63, b5 = v & 31;
-            o[c] = 0xff000000u | (b5 << 3 | b5 >> 2) << 16 | (g6 << 2 | g6 >> 4) << 8 | (r5 << 3 | r5 >> 2);
-        }
+        const uint16_t *in = px + (size_t)r * (size_t)w;
+        for (int c = 0; c < w; c++) o[c] = s_rgba_of[in[c]];
     }
     return ESP_OK;
 }
@@ -141,9 +150,20 @@ WM_API int wm_start(int px, uint32_t seed, int boot) {
     web_sdk_on_wait = task_waits;
     s_booted = !boot;
     if (mole_fluid_creature_init() != ESP_OK) return -1;
+    /* The memory of a change of picture, made now. The drawer makes it at the first change between two pictures the
+     * dust reshapes (a creature and a scene), and fluid_draw_morph_again (a scene's dust arriving after its change)
+     * takes it as made: a scene that comes first over words (not a picture of the dust's: it comes at once) has none
+     * then, and the wave starts on a null buffer. One change asked and taken back makes it; the drawer is left as
+     * it was (no picture, every cell to draw). The firmware's own fix is a line: docs/WEB-MOLTY-REPORT.md. */
+    fluid_draw_morph_look(s_draw, 1u, s_fb, 0.f); fluid_draw_morph_look(s_draw, 2u, s_fb, 0.f); fluid_draw_morph_look(s_draw, 0u, s_fb, 0.f);
     s_up = true;
     return 0;
 }
+
+/** Scenes on the braille haze from now on (mole_fluid.c: what a board without the fine dust's memory shows): their
+ *  dust is the lattice's own dots, a steep wave loosens their lines into it and calm water sharpens them back. A
+ *  heading on the page is one: its dust is the page's grain, and the page's water moves it. Before the first frame. */
+WM_API void wm_haze(void) { if (s_up) { fluid_fine_destroy(s_fine); s_fine = NULL; } }
 
 /** One frame, dt_us after the last: the sim task's pass, then the drawer's. The panel is then wm_pixels. */
 WM_API void wm_frame(uint32_t dt_us) {
@@ -208,8 +228,15 @@ WM_API int wm_entering(void) {
     if (!s_entering) web_cat_home(c);
     return s_entering;
 }
-/** The picture's camera looks `across` (world units) to the side: the same world through a window beside the screen. */
-WM_API void wm_pan(float across) { web_cat_pan(across); }
+/** The picture's camera looks to the side: by the whole cells nearest `across` (world units; a panel is CD_VIEW_SIZE of
+ *  them wide), the same world through a window beside the screen. Returns how far that is in panel px: this window's
+ *  picture carried that far falls on the screen's own lattice, dot on dot. */
+WM_API int wm_pan(float across) {
+    if (!s_up || !s_sim) return 0;
+    const float cell = CD_VIEW_SIZE / (float)s_sim->W, cells = roundf(across / cell);
+    web_cat_pan(cells * cell);
+    return (int)lrintf(cells * (float)s_px / (float)s_sim->W);
+}
 /** Where the creature stands: across the frame from its middle, and back from the viewer (world units; 0 with none). */
 WM_API float wm_across(void) { return s_up && s_cpk && cpk_crisp(s_cpk) ? web_cat_across(cpk_clip(s_cpk)) : 0.f; }
 WM_API float wm_back(void) { return s_up && s_cpk && cpk_crisp(s_cpk) ? web_cat_back(cpk_clip(s_cpk)) : 0.f; }
@@ -235,24 +262,78 @@ WM_API const uint8_t *wm_cat_pixels(void) {
     return (const uint8_t *)alone;
 }
 
-/** One water with the page: a wave out there (a ring `r` px about (cx, cy), panel pixels, its crest `sigma` px wide and
- *  `height` high, 0..1) meets the screen. Where its crest crosses the band inside the rim it lifts the screen's own
- *  water, for the `dt` seconds of this frame; the fluid carries that on across the screen as it carries a finger's
- *  ripple. Called every frame while such a wave passes. Nothing is drawn here: the water is pushed, as a tap pushes it. */
-WM_API void wm_wave(float cx, float cy, float r, float sigma, float height, float dt) {
-    if (!s_up || !s_sim || sigma <= 0.f) return;
+/* one water with the page: the cells that take the page's water, how much of it each, where each is */
+static struct { int n, W, H; int *k; float *w, *xy, *in; } s_cp;
+
+/** The panel without the creature: the panel's pixels but in the cells its own dots are in (those clear, to black). With
+ *  wm_cat_pixels of a window that follows the creature (wm_pan) laid over it, the two are the panel again, and the
+ *  creature is one picture on both sides of the rim. px * px RGBA; the panel itself without a rigged creature. */
+WM_API const uint8_t *wm_world_pixels(void) {
+    static uint32_t *world;
+    const uint8_t *in = s_up && s_cpk && cpk_crisp(s_cpk) ? cpk_cells_creature(s_cpk) : NULL;
+    if (!in || !s_sim) return (const uint8_t *)s_rgba;
+    if (!world && !(world = malloc((size_t)s_px * (size_t)s_px * sizeof(uint32_t)))) return (const uint8_t *)s_rgba;
+    memcpy(world, s_rgba, (size_t)s_px * (size_t)s_px * sizeof(uint32_t));
+    const int W = s_sim->W, H = s_sim->H;
+    for (int j = 0; j < H; j++) for (int i = 0; i < W; i++) {
+        if (!in[j * W + i]) continue;
+        const int x0 = i * s_px / W, x1 = (i + 1) * s_px / W, y0 = j * s_px / H, y1 = (j + 1) * s_px / H;
+        for (int y = y0; y < y1; y++) for (int x = x0; x < x1; x++) world[(size_t)y * (size_t)s_px + x] = 0xff000000u;
+    }
+    return (const uint8_t *)world;
+}
+
+/** One water with the page (web_field.c): from r0 of the glass's radius out, a cell's water goes to the page's own
+ *  there, wholly from r1 out (r0 = r1 = 0: every cell, a heading's window: its water is the page's). A wave out there
+ *  comes in through that band with one front, one made in here leaves through it instead of coming back off the rim.
+ *  Returns how many cells; wm_couple_xy is where each is (x, y panel px), wm_couple_in where the caller writes the
+ *  page's water for each (its height now and a step ago), then wm_couple_set, once a frame before wm_frame. */
+WM_API int wm_couple(float r0, float r1) {
+    if (!s_up || !s_sim) return 0;
+    const fluid_sim_t *s = s_sim;
+    free(s_cp.k); free(s_cp.w); free(s_cp.xy); free(s_cp.in);
+    memset(&s_cp, 0, sizeof(s_cp));
+    s_cp.k = malloc(sizeof(int) * (size_t)s->N); s_cp.w = malloc(sizeof(float) * (size_t)s->N);
+    s_cp.xy = malloc(sizeof(float) * 2 * (size_t)s->N); s_cp.in = calloc(2 * (size_t)s->N, sizeof(float));
+    if (!s_cp.k || !s_cp.w || !s_cp.xy || !s_cp.in) return 0;
+    const float half = s_px * 0.5f;
+    for (int k = 0; k < s->N; k++) {
+        const float X = s->xs[k % s->W], Y = s->ys[k / s->W], r = sqrtf(X * X + Y * Y);
+        if (!s->mask[k] || r < r0) continue;
+        s_cp.k[s_cp.n] = k; s_cp.w[s_cp.n] = r1 > r0 ? fluid_smooth(r0, r1, r) : 1.f;
+        s_cp.xy[2 * s_cp.n] = (X + 1.f) * half; s_cp.xy[2 * s_cp.n + 1] = (Y + 1.f) * half;
+        s_cp.n++;
+    }
+    s_cp.W = s->W; s_cp.H = s->H;
+    return s_cp.n;
+}
+WM_API const float *wm_couple_xy(void) { return s_cp.xy; }
+WM_API float *wm_couple_in(void) { return s_cp.in; }
+/** have: wm_couple_in holds the page's water; 0: the page's water is flat. gain: the page's water is taken that many
+ *  times over (1: as it is; a heading's window takes more: the page says why, config/water.mjs). */
+WM_API void wm_couple_set(int have, float gain) {
     fluid_sim_t *s = s_sim;
-    const float push = height * 3.5f * dt * FQ_H, half = s_px * 0.5f;   /* a gentle swell: a finger's tap is ~4x this */
-    for (int j = 1; j < s->H - 1; j++) for (int i = 1; i < s->W - 1; i++) {
-        const int k = j * s->W + i;
-        const float X = s->xs[i], Y = s->ys[j], rho2 = X * X + Y * Y;
-        if (!s->mask[k] || rho2 < 0.62f * 0.62f || rho2 > 0.9f * 0.9f) continue;      /* inside the rim's sponge */
-        const float e = (hypotf((X + 1.f) * half - cx, (Y + 1.f) * half - cy) - r) / sigma;
-        if (e * e > 6.f) continue;
-        const float h = (float)s->h[k] + push * expf(-e * e);
-        s->h[k] = (int16_t)(h > 32767.f ? 32767.f : h < -32768.f ? -32768.f : h);
+    if (!s_up || !s || s->W != s_cp.W || s->H != s_cp.H) return;
+    for (int q = 0; q < s_cp.n; q++) {
+        const int k = s_cp.k[q];
+        const float w = s_cp.w[q], h = have ? s_cp.in[2 * q] * FQ_H * gain : 0.f, hp = have ? s_cp.in[2 * q + 1] * FQ_H * gain : 0.f;
+        s->h[k] = fq(((float)s->h[k] + (h - (float)s->h[k]) * w), 1.f);
+        s->hp[k] = fq(((float)s->hp[k] + (hp - (float)s->hp[k]) * w), 1.f);
     }
 }
+
+/** The water's own numbers (fluid_params_t): c2, its speed squared in cells a step (a screen shown smaller or larger
+ *  than the page's reference screen takes the c2 that gives its waves the page's speed in on-screen px), and what a
+ *  step keeps of a wave's height and of its motion. The device's: 0.11, 0.985, 0.975 (fluid_params_default). */
+WM_API void wm_water(float c2, float leak, float damp) {
+    if (!s_up || !s_sim) return;
+    s_sim->p.c2 = c2; s_sim->p.leak = leak; s_sim->p.damp = damp;
+}
+
+/** The grid and the water's height (W x H cells, Q10), for the tests that measure a wave. */
+WM_API int wm_grid_w(void) { return s_sim ? s_sim->W : 0; }
+WM_API int wm_grid_h(void) { return s_sim ? s_sim->H : 0; }
+WM_API const int16_t *wm_h(void) { return s_sim ? s_sim->h : NULL; }
 
 /** The device was shaken (sense.c): the creature reacts. */
 WM_API void wm_shake(void) { if (s_up) mole_fluid_event(MOLE_FLUID_SHAKE); }

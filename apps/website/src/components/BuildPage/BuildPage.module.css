@@ -3,7 +3,7 @@
    sections. Same grammar as the landing: bracket links, dotted rules, ink and dim. */
 .root {
   position: relative;
-  background: var(--m-bg) var(--m-dust) repeat 0 0;
+  background: var(--m-bg) var(--m-dust) repeat 0 0 / var(--m-dust-size);
   font: var(--m-text-md) / 1.6 var(--m-font-mono);
   overflow-x: clip;
 }

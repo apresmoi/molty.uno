@@ -16,22 +16,6 @@
   line-height: 1.25;
   white-space: nowrap;
 }
-/* the page's dust comes into focus round the word too (under the page's text) */
-.heading::before {
-  content: "";
-  position: absolute;
-  z-index: -1;
-  inset: -90% -14%;
-  border-radius: 50%;
-  background: var(--m-dust-near) repeat;
-  mask-image: radial-gradient(
-    ellipse closest-side,
-    color-mix(in srgb, var(--m-bg) 70%, transparent) 0%,
-    color-mix(in srgb, var(--m-bg) 30%, transparent) 55%,
-    transparent 100%
-  );
-  pointer-events: none;
-}
 /* its word draws: the text steps aside */
 .heading:has([data-word="live"]) {
   color: transparent;

@@ -126,7 +126,7 @@ export function MoltyScreen({
   }, []);
 
   return (
-    <span className={styles.root} data-molty-screen="" data-screen={screen}>
+    <span className={styles.root} data-molty-screen="" data-dust-focus="device" data-screen={screen}>
       {enter && (
         <canvas
           ref={outside}

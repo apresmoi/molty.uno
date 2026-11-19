@@ -47,24 +47,37 @@ Never deploy or publish from here; nothing in this package does.
 - `src/components/Name/Name.tsx` is the component; `index.ts` has explicit named exports.
   Import another component through its barrel. Components are React; `.astro` lives only in
   pages, layouts and `src/integrations/{astro,starlight}/` adapters.
-- The page's water is two things. Its calm dust is a background tile (`--m-dust`,
-  `src/assets/dust/{dark,light}.png`, `pnpm dust-tile`): there at first paint, no script.
-  `src/services/page-water/` draws the wave a tap sends through it (one canvas fixed to the
-  viewport, drawn only while a wave is out; `PageWater` mounts it on the page's `[data-water]`).
-  This is the one page-side piece of the look: the firmware's renderer draws a round panel, at
-  most 511 px across in high definition, so it cannot be the page's field. Its numbers are the
-  firmware's (`src/config/water.mjs`: the dust's density, level and colour from `fluid_fine.h`,
-  its threshold `fluid_fine.c`'s noise, the wave's speed and decay from `fluid_sim.c`) and
-  `scripts/tests/water.test.ts` fails when they differ. A tap inside a screen starts the page's
-  wave at the same point at that screen's own speed: one ring, across the rim.
+- One grain, one water. The page's dust is the motes a creature's world has on the device
+  (`creature_dots.c`), on the device's own dot lattice at the size the page's reference screen
+  shows a panel's pixel (`--m-screen`, `--m-dust-size` in `tokens.css`): loose everywhere (a
+  background tile, there at first paint, no script), denser in focus round each
+  `[data-dust-focus]` (a device, a heading: a second tile on the same lattice, masked by
+  `PageWater` once it knows where they stand; `src/config/water.mjs` `FOCUS`). The tiles are
+  pictures of the water's field at rest (`pnpm dust-tile`).
+- The page's water is the firmware's: `device/firmware/web/web_field.c` runs `fluid_sim.c`
+  (the wave alone) and `fluid_draw.c` (crisp dots) on a grid as wide as the window, from one
+  more instance of the module (`services/molty-screen/field.ts`). `src/services/page-water/`
+  is its page side: one canvas fixed to the viewport, drawn only while the water moves and only
+  in the cells it moves (a cell at rest is clear: the tile shows), stood again as the page
+  scrolls; every tap is a bump in the field. A screen takes the field's water in its rim
+  (`screen.ts` `meetPage`, `web_molty.c` `wm_couple`) and gives its own water the page's speed
+  in on-screen pixels; a heading's window takes all of its water from the field. One clock
+  (`services/molty-screen/clock.ts`): screens first, the field last. Page-side, and only this:
+  where the dust is and that a crest brings the denser motes (`web_field.c`), the canvas, the
+  taps, `CARRY` (the page's water keeps its waves while a front is out; else it is the
+  device's) and `HEADING_GAIN` (`config/water.mjs`). `scripts/tests/water.test.ts` pins the
+  numbers to the firmware's sources, wants a front to cross a rim within a few pixels, and
+  every heading to loosen under a wave and sharpen back.
 - Headings are words the firmware draws: `src/config/words.mjs` holds the letters as lines and
   arcs, `pnpm words` writes them as a scenes package (`src/assets/molty/words.json`), `MoltyWord`
-  plays a word's layout on a 504 px round window (thin lines, the dust along them), `WordHeading`
+  plays a word's layout on a round window with as many pixels as the page's dust has across it
+  (a scene on the braille haze: thin lines in the page's own grain, which a wave loosens and calm
+  water sharpens back), `WordHeading`
   sizes the heading to it. A word runs while near the viewport and is put away when far.
 - `src/services/molty-screen/` is the only owner of the firmware's renderer. `core.ts` is the
   module's loader and calls (no DOM: the fidelity check drives it under Node), `screen.ts` runs
-  one instance on a canvas (the display's frames, at most 60 a second, only in view and with the
-  tab shown; the pointer is the finger; reduced motion: one settled still per change),
+  one instance on a canvas (the page's frames, at most 60 a second, only in view and with the
+  tab shown; a heading's window every other one; the pointer is the finger; reduced motion: one settled still per change),
   `program.ts` is what a screen does by itself. Its calls are the device's own:
   `state` is `POST /api/creature/state`'s body, `ask` the link's question, `scene` scene.play.
   `MoltyScreen` (canvas + still + `Device`) mounts it; `features/molty/` holds the cat, the lists
@@ -116,12 +129,19 @@ Never deploy or publish from here; nothing in this package does.
   do not reach the cat, or a talk screen that does not ask and take an answer. Look at the
   screenshots.
 - `pnpm molty` (`e2e/molty.mjs`, preview running): the hero and the moltys section at 1280 and
-  390 px, dark and light; the cat's entrance and a tap's ring crossing the rim, frame by frame;
-  the frames a screen draws a second at 1280 and 390 px, as is and with the CPU slowed 4x (fails
-  under 30); nothing drawn out of view; stills only with reduced motion.
+  390 px, dark and light; the cat's entrance; the frames a screen draws a second at 1280 and
+  390 px with a wave out on the page, as is and with the CPU slowed 4x (fails under 30); nothing
+  drawn out of view; stills only with reduced motion.
+- `pnpm water` (`e2e/water.mjs`, preview running; the display's frames run by hand): a tap on
+  the page moves its dust and the water in the hero's glass answers when the front gets to its
+  rim; every heading of the landing, the showcase and the build page loosens as a front arrives
+  and sharpens back; the title answers taps from six places; on the showcase a change of picture
+  is a wave through the dust, from the middle and from the finger. Strips to
+  `e2e-out/water-*.png`.
 - `pnpm in-place` (`e2e/in-place.mjs`, preview running): on a cold cache, slow and fast, at 1280
   and 390 px, every frame of the load, a scroll through every section and a theme switch: a
-  screen shows only inside its device at rest, never moves, never goes away.
+  screen shows only inside its device at rest, never moves, never goes away. And the cat walking
+  in is one picture on both sides of the rim in every frame (no step, no second pose).
 - `pnpm fullpage` (`e2e/fullpage.mjs`): the whole landing, 1280 and 390 px, dark and light.
 - `pnpm first-load` (`e2e/first-load.mjs`, preview running): samples every frame of the landing's
   first load on a slow network + CPU and fails if the hero is shown and then hidden, the device

@@ -13,9 +13,10 @@ export const CAT = { id: "cat", url: catUrl };
 export const SCENES_URL = scenesUrl;
 /** The page's words as a scenes package (config/words.mjs, scripts/words-package.mjs). */
 export const WORDS_URL = wordsUrl;
-/** A word's round window, px a side: the widest the renderer draws in high definition (its
- *  fine dust keeps a speck's place in 9 bits: under 512). */
+/** A word's round window, px a side, before the page says its grain (MoltyWord then gives it as
+ *  many as the page's dust has across it), and the most the renderer takes. */
 export const WORD_PX = 504;
+export const WORD_PX_MAX = 1024;
 /** One frame of the cat as the firmware's renderer draws it (scripts/molty-still.mjs): shown
  *  without JavaScript, before the screen is live, and when the module cannot load. */
 export const CAT_STILL = catStill;
