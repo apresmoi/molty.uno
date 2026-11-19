@@ -10,7 +10,7 @@ import { check } from './build.mjs';
 const JS = new URL('../../../device/creatures/js/', import.meta.url), SERVED = ['clip-player.js', 'clip-dots.js'];
 const PAGE = `<!doctype html><meta charset="utf-8"><title>molty-creature preview</title>
 <style>
-  body { margin: 0; padding: 16px; background: #101114; color: #c8cce0; font: 14px/1.4 system-ui, sans-serif; display: flex; gap: 20px; flex-wrap: wrap; }
+  body { margin: 0; padding: 16px; background: #101114; color: #c8cce0; font: 14px/1.4 system-ui, sans-serif; display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; }
   canvas { width: 466px; max-width: 100%; aspect-ratio: 1; border-radius: 50%; background: #000; }
   aside { flex: 1; min-width: 300px; max-width: 620px; }
   h1 { font-size: 18px; margin: 0 0 4px; } h2 { font-size: 13px; color: #7c8198; margin: 14px 0 6px; font-weight: 600; }

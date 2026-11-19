@@ -35,16 +35,18 @@ export function readGltf(file) {
   const all = doc.nodes ?? [], up = new Map(), kept = [], index = new Map(), shapes = [];
   all.forEach((n, i) => (n.children ?? []).forEach((c) => up.set(c, i)));
   const isBone = (n) => !n.extras?.shape && !((n.mesh !== undefined || n.camera !== undefined) && !(n.children ?? []).length);
-  for (let left = all.map((_, i) => i).filter((i) => isBone(all[i])); left.length;) {   // parent first, otherwise as the file has them
-    const ready = left.filter((i) => !up.has(i) || index.has(up.get(i)) || !isBone(all[up.get(i)]));
-    if (!ready.length) fail('the nodes form a loop');
-    for (const i of ready) { index.set(i, kept.length); kept.push(i); }
+  for (let left = all.map((_, i) => i).filter((i) => isBone(all[i])); left.length;) {   // as the file has them, a bone moved after its parent
+    const before = kept.length;
+    for (const i of left) if (!up.has(i) || index.has(up.get(i)) || !isBone(all[up.get(i)])) { index.set(i, kept.length); kept.push(i); }
+    if (kept.length === before) fail('the nodes form a loop');
     left = left.filter((i) => !index.has(i));
   }
   const nodes = kept.map((i) => {
     const n = all[i];
     if (n.matrix) fail(`node ${n.name}: its place is a matrix; export translation, rotation and scale`);
-    return { name: n.name ?? `node${i}`, parent: index.get(up.get(i)) ?? -1, t: n.translation ?? [0, 0, 0], r: n.rotation ?? [0, 0, 0, 1], s: n.scale ?? [1, 1, 1], ...(n.extras?.foot ? { foot: n.extras.foot } : {}) };
+    // a glTF number is single precision, whatever digits its text has: the same value its keys hold
+    const f32 = (v) => v.map(Math.fround);
+    return { name: n.name ?? `node${i}`, parent: index.get(up.get(i)) ?? -1, t: f32(n.translation ?? [0, 0, 0]), r: f32(n.rotation ?? [0, 0, 0, 1]), s: f32(n.scale ?? [1, 1, 1]), ...(n.extras?.foot ? { foot: n.extras.foot } : {}) };
   });
   all.forEach((n, i) => {
     if (!n.extras?.shape) return;
