@@ -31,6 +31,18 @@ export const SYNCED_DOCS = [
     description: 'The molty CLI and stdio MCP server, direct over USB/Wi-Fi or through the relay.',
   },
   {
+    source: 'docs/CREATURE.md',
+    slug: 'moltys/molty-format',
+    title: 'The Molty format',
+    description: 'A Molty is one folder: a small molty.json and a body file. How to make one, and how we make the cat.',
+  },
+  {
+    source: 'docs/DISPLAY.md',
+    slug: 'moltys/draw',
+    title: 'Draw on Molty',
+    description: 'A skill that draws: SKILL.md, a display.yaml of screens made of shapes, and plain image assets.',
+  },
+  {
     source: 'docs/PACKAGES.md',
     slug: 'moltys/packages',
     title: 'Packages and scenes',
