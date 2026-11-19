@@ -1615,6 +1615,8 @@ typedef struct {
     float now;
     int frame;
 } morph_rig_t;
+#define MORPH_STALE 0x1FF8u   /* what the old picture's buffer holds before a change (it is not cleared): never on the glass */
+static int s_morph_stale;
 static int lit_px(const uint16_t *px, int n) { int c = 0; for (int q = 0; q < n; q++) c += px[q] != 0; return c; }
 /* a montage of the glass every few frames (MORPH_DUMP: a path prefix), to look at */
 static void morph_tile(uint16_t *sheet, int cols, int n, const uint16_t *glass, int S) {
@@ -1635,6 +1637,7 @@ static double morph_run(morph_rig_t *r, scene_t *sc, uint32_t look, int late, in
     double worst = 0.;
     *least = 1 << 30; *over = 0;
     enum { COLS = 6, TILES = 18 };
+    if (!fluid_draw_morphing(r->d)) for (int k = 0; k < S * S; k++) r->snap[k] = MORPH_STALE;
     uint16_t *sheet = getenv("MORPH_DUMP") ? calloc((size_t)COLS * (S / 2) * (TILES / COLS) * (S / 2), 2) : NULL;
     int tiles = 0;
     for (int f = 0; f < 200; f++, r->frame++) {
@@ -1665,6 +1668,7 @@ static double morph_run(morph_rig_t *r, scene_t *sc, uint32_t look, int late, in
         const double ms = panel_ms(&r->g.c) + CELLS_MS;
         fluid_draw_pace(r->d, (int)(ms * 1000));
         const int lit = lit_px(r->g.px, S * S);
+        for (int k = 0; k < S * S; k++) s_morph_stale += r->g.px[k] == MORPH_STALE;
         if (fluid_draw_morphing(r->d) || f0 < 0) { worst = fmax(worst, ms); *over += ms > 33.0; if (lit < *least) *least = lit; }
         if (getenv("FINE_TRACE")) printf("    %s f%d: phase %d, %.1f ms (%d windows, %ld px), %d lit, budget %d\n", name, f, fluid_draw_morphing(r->d), ms, r->g.c.wins, r->g.c.px, lit, r->d->m.px);
         if (sheet && tiles < TILES && f % 3 == 0) morph_tile(sheet, COLS, tiles++, r->g.px, S);
@@ -1747,6 +1751,8 @@ static void test_morph(const char *dir) {
         printf("  the dust reshapes, %s (panel model): %.2f s, worst %.1f ms a frame, %d over 33; never fewer than %d px lit (%d before, %d after)\n",
                RUN[q].name, frames / 30.0, worst, over, least, before, after);
         CHECK(frames > 20 && frames < 150 && worst < 33.0 && over == 0, "%s: the change takes %.2f s, worst %.1f ms a frame", RUN[q].name, frames / 30.0, worst);
+        CHECK(s_morph_stale == 0, "%s: only the picture kept shows, never what its buffer held before (%d px)", RUN[q].name, s_morph_stale);
+        s_morph_stale = 0;
         CHECK(least * 3 > low, "%s: the glass is never left dark (%d px lit at its least, %d before, %d after)", RUN[q].name, least, before, after);
         /* (a scene's light flows on from the change's last frame: a few specks of its dust wait their rows' turns) */
         CHECK(sc ? diff * 100 < after && hard == 0 : diff == 0, "%s: at its end the glass is the new look, whole (%d px differ, %d of them the drawing's)", RUN[q].name, diff, hard);
@@ -1766,6 +1772,7 @@ static void test_morph(const char *dir) {
         int hard = 0;
         for (int k = 0; k < S * S; k++) hard += r->ref[k] != r->g.px[k] && (lum(r->ref[k]) > 700 || lum(r->g.px[k]) > 700);
         printf("  the dust reshapes, interrupted (panel model): worst %.1f ms then %.1f ms a frame; %d px lit when cut, never fewer than %d after\n", wa, wb, mid_lit, l2);
+        CHECK(s_morph_stale == 0, "interrupted: only the picture kept shows (%d px)", s_morph_stale);
         CHECK(mid == FLUID_MORPH_GATHER && wa < 33.0 && wb < 33.0 && o1 + o2 == 0, "a change in the middle of one keeps the frame (worst %.1f, %.1f ms)", wa, wb);
         CHECK(l2 * 3 > mid_lit && l2 * 3 > chart_lit / 2 && hard == 0 && !fluid_draw_morphing(r->d), "... from the glass as it was, to the chart whole (%d px lit at its least, %d of the drawing's differ)", l2, hard);
     }

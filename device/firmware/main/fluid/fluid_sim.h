@@ -396,7 +396,9 @@ uint8_t fluid_braille_contour(const float *sub);
 #define FLUID_MORPH_PX        20000    /* the pixels a frame redraws at first, then fitted within: */
 #define FLUID_MORPH_PX_START  26000    /* ... a change begins with no more than this            */
 #define FLUID_MORPH_PX_MIN    9000
-#define FLUID_MORPH_PX_MAX    60000
+#define FLUID_MORPH_PX_MAX    36000
+#define FLUID_MORPH_OVER_US   25000    /* a frame of it busier than this: fewer pixels (the aim is a worst frame of 28 ms) */
+#define FLUID_MORPH_UNDER_US  19000    /* ... than this: more                                    */
 enum { FLUID_MORPH_NONE, FLUID_MORPH_LOOSEN, FLUID_MORPH_LOOSE, FLUID_MORPH_GATHER };
 /* a frame's part of it: the new look's first frame (every cell looked at), the new drawing's cache, the specks aimed,
  * rows kept, drawn loose, mixed, done */
@@ -417,6 +419,7 @@ typedef struct {
     int      kept, done, cursor, stride, fill, px;
     uint8_t  stage;                    /* what this frame's part of it was (FLUID_MORPH_ST_*), for the log */
     int      fill_us;                  /* ... and how long its part of the new drawing's cache took, us */
+    int64_t  frame_us;                 /* when this frame's cells began (the cache takes what they leave of the frame) */
     int      ntr, seen, aim; bool aimed;   /* (aim: how many of the specks know where they land) */          /* the travelling specks: where each leaves from and lands (fb px; land x < 0:
                                         * nowhere, it fades), their colours (panel order); this frame's places */
     int16_t  *tr; uint16_t *trc;
