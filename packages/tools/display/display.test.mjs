@@ -13,8 +13,8 @@ import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { deflateSync } from 'node:zlib';
-import { LIMITS, MAX_PKG_BYTES, checkPackage } from '../format.mjs';
-import { chunk, frame } from '../play.mjs';
+import { LIMITS, MAX_PKG_BYTES, bind, checkPackage, opens } from '../format.mjs';
+import { chunk, frame, spotAt } from '../play.mjs';
 import { assetPng, buildAssets, readPng } from './assets.mjs';
 import { SCHEMA, build, check, exampleParams, inputSchema } from './build.mjs';
 import { COMMON, SHAPED, SHAPES } from './compile.mjs';
@@ -23,7 +23,7 @@ import { preview } from './preview.mjs';
 import { ANNOTATIONS, KEYWORDS, validate } from './schema.mjs';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url)), ASTRO = join(ROOT, 'skills/molty-astro'), DIAL = join(ROOT, 'docs/examples/molty-dial');
-const GOLDEN = join(ROOT, 'packages/astrology/astrology.json'), GOLDEN_SHA = 'fe85da27201fd7cc5cb72c4aa35804a57d4a055cd5ce46f9d2e6639ab386b3f7';
+const GOLDEN = join(ROOT, 'packages/astrology/astrology.json'), GOLDEN_SHA = '66e94aed50a4a3d9684f947c09b33a01d860390e42a311bda93eecdc89d49a66';
 const TMP = mkdtempSync(join(tmpdir(), 'molty-display-'));
 after(() => rmSync(TMP, { recursive: true, force: true }));
 let made = 0;
@@ -82,7 +82,7 @@ test('golden: the astrology skill folder builds today\'s package, byte for byte,
   const bytes = readFileSync(out);
   assert.equal(createHash('sha256').update(bytes).digest('hex'), GOLDEN_SHA);
   assert.ok(bytes.equals(readFileSync(GOLDEN)), 'the built package is packages/astrology/astrology.json');
-  assert.equal(bytes.length, 74344);
+  assert.equal(bytes.length, 74427);
   assert.deepEqual(tree(join(dir, 'build')), tree(join(ASTRO, 'build')));
   for (const f of tree(join(dir, 'build'))) assert.equal(readFileSync(join(dir, 'build', f), 'utf8'), readFileSync(join(ASTRO, 'build', f), 'utf8'), `skills/molty-astro/build/${f} is stale: run molty-display build`);
   assert.equal(r.skill.doc.package.about, readFileSync(join(ROOT, 'packages/astrology/description.txt'), 'utf8').trim(), 'the catalog line is package.about');
@@ -244,6 +244,62 @@ test('check: what needs firmware is refused, with the way round it', () => {
   assert.deepEqual(ok.pkg.layouts.one.items.slice(-2), [{ k: 'line', pts: [[0, 0], [0, 0.5]] }, { k: 'ball', r: 0.1, side: -1 }]);
 });
 
+test('a tap zone as a wedge of a ring, and a tap that opens another screen', () => {
+  // two screens: a wheel of slices, and the close-up a slice opens with what the wheel was sent
+  const wheel = (d, f) => {
+    one(d).inputs.slices = { type: 'list', max: 4, about: 'The slices.', of: { angle: { type: 'angle', about: 'Its middle.' }, id: { type: 'text', about: 'Its name.' }, title: { type: 'text', about: 'The close-up\'s word.' }, secs: { type: 'seconds', min: 1, about: 'How long the close-up stays.' } }, example: [{ angle: 45, id: 'ne', title: 'NE', secs: 5 }, { angle: 135, id: 'nw', title: 'NW', secs: 7 }] };
+    one(d).inputs.dots = { type: 'list', max: 8, about: 'Marks for the close-up.', of: { slice: { type: 'text', sent_as: 'of', about: 'The slice it belongs to.' }, x: { type: 'number', about: 'Where.' } }, example: [{ slice: 'ne', x: 0.1 }, { slice: 'nw', x: 0.2 }, { slice: 'ne', x: 0.3 }] };
+    one(d).draw.push({ for: 's in slices', draw: [{ tap_zone: { at: { angle: '{{ s.angle }}', distance: 0.7 }, radius: 0.05, reads: 'A slice.', id: '{{ s.id }}', sector: { width: 90, inner: 0.5, outer: 0.9 }, opens: { screen: 'close', seconds: '{{ s.secs }}' } } }] });
+    one(d).draw.push({ tap_zone: { reads: 'South.', id: 'south', sector: { from: 225, to: 315, inner: 0.5, outer: 0.9 }, opens: 'plain' } });
+    d.screens.close = { about: 'One slice up close.', inputs: { title: { type: 'text', about: 'Its word.', example: 'NE' }, size: { type: 'distance', about: 'The ring.', example: 0.5 }, dots: { type: 'list', max: 8, about: 'Its marks.', of: { x: { type: 'number', about: 'Where.' } }, example: [{ x: 0.1 }] } },
+      draw: [{ label: { text: '{{ title }}' } }, { circle: { radius: '{{ size }}' } }, { for: 'm in dots', draw: [{ dot: { radius: 0.03, at: { x: '{{ m.x }}' } } }] }] };
+    d.screens.plain = { about: 'A dot.', draw: [{ dot: { radius: 0.1 } }] };
+    f['SKILL.md'] += '[close](display.json#close) [plain](display.json#plain)\n';
+  };
+  const r = checked(wheel), items = r.pkg.layouts.one.items;
+  assert.deepEqual([r.errors, r.warnings], [[], []], 'what only the opened screen reads counts as read');
+  assert.deepEqual(items.at(-2), { k: 'spot', polar: ['@angle', 0.7], r: 0.05, say: 'A slice.', id: '@id', arc: 90, r0: 0.5, r1: 0.9, open: 'close', ttl: '@secs', each: '$slices' });
+  assert.deepEqual(items.at(-1), { k: 'spot', say: 'South.', id: 'south', polar: [270, 0.7], r: 0.2, arc: 90, r0: 0.5, r1: 0.9, open: 'plain' }, 'from one angle to another: the zone is the wedge');
+  // the device's rules, on the built package: a tap in a wedge lands on its zone; what it opens is found by name
+  const params = { size: 0.5, marks: [{ angle: 90, name: 'a' }], note: 'Hello.', slices: [{ angle: 45, id: 'ne', title: 'NE', secs: 5 }, { angle: 135, id: 'nw', title: 'NW', secs: 7 }], dots: [{ of: 'ne', x: 0.1 }, { of: 'nw', x: 0.2 }, { of: 'ne', x: 0.3 }] };
+  const at = (deg, dist) => spotAt(bind(r.pkg, 'one', params), dist * Math.cos((deg * Math.PI) / 180), dist * Math.sin((deg * Math.PI) / 180), 1)?.id;
+  assert.deepEqual([at(10, 0.8), at(170, 0.6), at(270, 0.55), at(45, 0.95), at(0, 0)], ['ne', 'nw', 'south', undefined, 'middle']);
+  assert.deepEqual(opens(r.pkg, 'one', params, 'ne'), { layout: 'close', params: { title: 'NE', size: 0.5, dots: [{ of: 'ne', x: 0.1 }, { of: 'ne', x: 0.3 }] }, ttl: 5 });
+  assert.equal(bind(r.pkg, 'close', opens(r.pkg, 'one', params, 'nw').params).filter((it) => it.k === 'disc').length, 1, 'the opened screen plays with them');
+  const broken = (mut) => checked((d, f) => { wheel(d, f); mut(d); }).errors.map((e) => e.message);
+  const cases = {
+    'tap_zone.opens: no screen named "closer" (screens: one, close, plain)': (d) => { one(d).draw.at(-2).draw[0].tap_zone.opens.screen = 'closer'; },
+    'tap_zone.opens: close needs title, and neither an element of slices nor this screen sends one. Add the field title to slices': (d) => { delete one(d).inputs.slices.of.title; },
+    'tap_zone.opens: close needs dots, and neither an element of slices nor this screen sends one. Add the input dots here': (d) => { delete one(d).inputs.dots; },
+    'tap_zone.opens: close reads x from each element of dots, and dots here has no such field (fields: of)': (d) => { delete one(d).inputs.dots.of.x; },
+    'tap_zone.opens: close takes title as a text, and here it is a seconds': (d) => { one(d).inputs.slices.of.title = { type: 'seconds', about: 'Wrong.' }; },
+    'tap_zone.sector: a sector with from and to places the zone itself, so drop at': (d) => { one(d).draw.at(-1).tap_zone.at = { x: 0.1 }; },
+    'tap_zone.sector: it runs from a smaller angle to a larger one': (d) => { one(d).draw.at(-1).tap_zone.sector.to = 200; },
+    'a sector is { from, to, inner, outer } (two angles and two distances) or { width, inner, outer }': (d) => { delete one(d).draw.at(-1).tap_zone.sector.outer; },
+    'tap_zone.opens needs screen': (d) => { one(d).draw.at(-1).tap_zone.opens = { seconds: 3 }; },
+    'opens is a screen\'s name, or { screen, seconds }': (d) => { one(d).draw.at(-1).tap_zone.opens = 5; },
+    'tap_zone needs radius (how far from at a tap still counts), or a sector with from and to': (d) => { delete one(d).draw.at(-2).draw[0].tap_zone.radius; },
+    'ttl is out of range (0)': (d) => { one(d).draw.at(-2).draw[0].tap_zone.opens.seconds = 0; },
+    'arc is out of range (400)': (d) => { one(d).draw.at(-2).draw[0].tap_zone.sector.width = 400; },
+  };
+  for (const [want, mut] of Object.entries(cases)) assert.ok(broken(mut).some((m) => m.includes(want)), `${want}: got ${JSON.stringify(broken(mut))}`);
+  // back out of the package: the same two forms
+  const dir = fresh(), out = join(TMP, 'wheel.json');
+  convert(folder({ 'demo.json': r.bytes }) + '/demo.json', dir);
+  assert.deepEqual(build(dir, out).errors, []);
+  assert.deepEqual(JSON.parse(readFileSync(out, 'utf8')), r.pkg);
+});
+
+test('the astrology chart: a tap on a sign opens its close-up with what the skill itself would send', () => {
+  const run = (...args) => execFileSync(process.execPath, [join(ASTRO, 'scripts/astro.mjs'), ...args, '--date', '2026-11-01', '--dry-run'], { encoding: 'utf8', env: { ...process.env, MOLTY_PKG_INDEX: join(ROOT, 'packages/index.json') } }).split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
+  const pkg = JSON.parse(readFileSync(GOLDEN, 'utf8')), chart = run('chart').find((c) => c.args.layout === 'chart').args.params;
+  const leo = chart.signs.find((s) => s.id === 'leo'), rad = (leo.a * Math.PI) / 180, items = bind(pkg, 'chart', chart);
+  assert.equal(spotAt(items, 0.88 * Math.cos(rad + 0.2), 0.88 * Math.sin(rad + 0.2), 1).id, 'leo', 'anywhere in the sign\'s block of the ring');
+  const up = opens(pkg, 'chart', chart, 'leo'), sent = run('chart', '--interactive', '--tap', 'leo').find((c) => c.args.layout === 'sign-closeup').args;
+  assert.deepEqual([up.layout, up.ttl], ['sign-closeup', sent.ttl_s]);
+  assert.deepEqual(JSON.parse(JSON.stringify(up.params, (k, v) => (k === 'of' || ['a', 'r'].includes(k) ? undefined : v))), JSON.parse(JSON.stringify(sent.params, (k, v) => (['a', 'r'].includes(k) ? undefined : v))));
+});
+
 test('check, layer 3 (the links): SKILL.md names real screens, and every screen', () => {
   catches({ 'links to screen two, which display.json does not have (screens: one)': (d, f) => { f['SKILL.md'] += 'And [two](display.json#two).\n'; } });
   catches({
@@ -354,8 +410,10 @@ test('preview: a local page that draws a screen with the reference player, a tap
     assert.match(await (await get('/')).text(), /molty-display preview/);
     const skill = await (await get('/skill')).json(), chart = skill.screens.find((s) => s.name === 'chart'), args = `screen=chart&t=1&params=${encodeURIComponent(JSON.stringify(chart.params))}`;
     assert.deepEqual([skill.problems, skill.screens.length], [[], 12]);
-    const { spots } = await (await get(`/scene?${args}`)).json();
-    assert.equal(spots.length, 10 + 12 + 3, 'a zone for each body, sign and aspect of the example');
+    assert.equal((await (await get(`/scene?${args}`)).json()).zones, 10 + 12 + 3, 'a zone for each body, sign and aspect of the example');
+    const leo = chart.params.signs.find((s) => s.id === 'leo'), rad = (leo.a * Math.PI) / 180, hit = await (await get(`/tap?${args}&x=${0.88 * Math.cos(rad + 0.2)}&y=${0.88 * Math.sin(rad + 0.2)}`)).json();
+    assert.deepEqual([hit.id, hit.opens.layout, hit.opens.params.sign, hit.opens.params.bodies.every((b) => b.of === 'leo')], ['leo', 'sign-closeup', 'leo', true], 'a tap in a sign\'s block opens its close-up');
+    assert.deepEqual(await (await get(`/tap?${args}&x=0&y=0`)).json(), {}, 'the middle is empty');
     const calm = Buffer.from(await (await get(`/frame.png?${args}`)).arrayBuffer()), lit = Buffer.from(await (await get(`/frame.png?${args}&tap=sun-moon`)).arrayBuffer());
     assert.equal(calm.subarray(1, 4).toString(), 'PNG');
     assert.ok(!calm.equals(lit), 'the tapped aspect draws differently');

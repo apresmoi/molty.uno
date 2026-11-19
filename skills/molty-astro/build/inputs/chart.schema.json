@@ -4,7 +4,8 @@
   "required": [
     "bodies",
     "signs",
-    "aspects"
+    "aspects",
+    "ruler"
   ],
   "additionalProperties": false,
   "properties": {
@@ -19,7 +20,12 @@
           "r",
           "c",
           "say",
-          "id"
+          "id",
+          "of",
+          "da",
+          "d",
+          "on",
+          "off"
         ],
         "additionalProperties": false,
         "properties": {
@@ -67,6 +73,35 @@
             "maxLength": 40,
             "pattern": "^(?![$@])[\\x20-\\x7e]*$",
             "description": "Its name, lower case (sun, moon ...): names it in the tap event, and is the group an aspect lights."
+          },
+          "of": {
+            "type": "string",
+            "maxLength": 40,
+            "pattern": "^(?![$@])[\\x20-\\x7e]*$",
+            "description": "The sign it is in, lower case: that sign's close-up shows the bodies of it."
+          },
+          "da": {
+            "type": "number",
+            "minimum": -720,
+            "maximum": 720,
+            "description": "Its place on that sign's degree dial, as in sign-closeup."
+          },
+          "d": {
+            "type": "string",
+            "pattern": "^#[0-9a-f]{6}$",
+            "description": "Its color at 60 percent, for when it is not being read there."
+          },
+          "on": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 600,
+            "description": "When its reading starts in the close-up."
+          },
+          "off": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 600,
+            "description": "When its reading ends in the close-up."
           }
         }
       },
@@ -80,7 +115,13 @@
         "required": [
           "a",
           "say",
-          "id"
+          "id",
+          "sign",
+          "c",
+          "name",
+          "nx",
+          "ns",
+          "ttl"
         ],
         "additionalProperties": false,
         "properties": {
@@ -95,17 +136,63 @@
             "minLength": 1,
             "maxLength": 160,
             "pattern": "^(?![$@])[\\x20-\\x7e]*$",
-            "description": "What a tap on it shows: its nature and ruler, then its planets or, when it is empty, where its ruler is."
+            "description": "Its reading, the close-up's subtitle: its nature and ruler, then its planets or, when it is empty, where its ruler is."
           },
           "id": {
             "type": "string",
             "maxLength": 40,
             "pattern": "^(?![$@])[\\x20-\\x7e]*$",
             "description": "The sign's name, lower case: names it in the tap event."
+          },
+          "sign": {
+            "enum": [
+              "aries",
+              "taurus",
+              "gemini",
+              "cancer",
+              "leo",
+              "virgo",
+              "libra",
+              "scorpio",
+              "sagittarius",
+              "capricorn",
+              "aquarius",
+              "pisces"
+            ],
+            "description": "The sign again, lower case: the close-up's symbol."
+          },
+          "c": {
+            "type": "string",
+            "pattern": "^#[0-9a-f]{6}$",
+            "description": "The sign's color, as in sign-closeup."
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 11,
+            "pattern": "^(?![$@])[\\x20-\\x7e]*$",
+            "description": "The sign's name in capitals."
+          },
+          "nx": {
+            "type": "number",
+            "minimum": -1,
+            "maximum": 1,
+            "description": "The name's centre in the close-up, as in sign-closeup."
+          },
+          "ns": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2,
+            "description": "The name's type size there: 0.13, or 0.11 past 8 letters."
+          },
+          "ttl": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 600,
+            "description": "How long the close-up plays: its reading's length plus 3 s."
           }
         }
       },
-      "description": "A reading for each of the twelve signs. The wheel draws the signs itself; these are the places to tap."
+      "description": "Each of the twelve signs: its reading, and what its close-up needs. The wheel draws the signs itself; a tap anywhere in a sign's 30 degree block opens sign-closeup on Molty, with these fields, the sign's ruler and the bodies of it."
     },
     "aspects": {
       "type": "array",
@@ -202,6 +289,55 @@
         }
       },
       "description": "The three tightest aspects a line can show (none for a pair closer than 0.2). With --all, every one that fits, at most 11."
+    },
+    "ruler": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "required": [
+          "of",
+          "g",
+          "x",
+          "c"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "of": {
+            "type": "string",
+            "maxLength": 40,
+            "pattern": "^(?![$@])[\\x20-\\x7e]*$",
+            "description": "The sign it rules, lower case."
+          },
+          "g": {
+            "enum": [
+              "g-sun",
+              "g-moon",
+              "g-mercury",
+              "g-venus",
+              "g-mars",
+              "g-jupiter",
+              "g-saturn",
+              "g-uranus",
+              "g-neptune",
+              "g-pluto"
+            ],
+            "description": "The ruler's symbol: g-mars ..."
+          },
+          "x": {
+            "type": "number",
+            "minimum": -1,
+            "maximum": 1,
+            "description": "Its centre in the close-up, as in sign-closeup."
+          },
+          "c": {
+            "type": "string",
+            "pattern": "^#[0-9a-f]{6}$",
+            "description": "The ruler's color."
+          }
+        }
+      },
+      "description": "Each sign's ruler, for its close-up: twelve, one a sign."
     }
   }
 }

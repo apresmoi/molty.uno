@@ -5,8 +5,9 @@ Molty talks back. When your human touches it, the relay records an event:
 | type | data |
 |---|---|
 | `shake` | `{"peak_g": 2.4, "reversals": 5, "ms": 900}`; with shake to talk also `"listening": true, "turn_id": "…"` — Molty is already listening: do nothing, its `utterance` follows |
-| `utterance` | `{"turn_id": "molty-…j_…", "text": "what's on my calendar?", "reason": "turn_end", "ms": {"speech": 1800, "stt": 120}, "trigger": "shake", "device": {"caps": […], "mood": "thinking", "voice": "box", "creature": {…}}, "filler_in_ms": 2300}`: the human's words, once per turn (see Shake to talk); `input`: what started the turn (`shake`, or the gesture bound to talk: `double_tap`, `button_accept` held, ...); `device.creature`: who you are on screen now ([creature.md](creature.md)); `device.skill`: the skill's newest version ([CHANGES.md](../CHANGES.md)); `opener`: the words Molty is saying now, `opener_wpm` their pace: keep and take over ([First words](talking-fast.md#first-words-molty-starts-you-take-over)); `filler_in_ms`: Molty says its own filler that much later unless you act first ([api.md](api.md#quick-phrases)) |
-| `tap` | `{"x": 0..1, "y": 0..1}` (screen position). Only when `tap` is bound to `event` (the default); a tap during a recording stops it instead, and a shake's phantom taps are dropped. On a scene's spot: `"spot": "<id>"` too, whatever tap is bound to; Molty is already showing that spot's reading ([PACKAGES.md](https://github.com/apresmoi/molty.uno/blob/main/docs/PACKAGES.md)) |
+| `utterance` | `{"turn_id": "molty-…j_…", "text": "what's on my calendar?", "reason": "turn_end", "ms": {"speech": 1800, "stt": 120}, "trigger": "shake", "device": {"caps": […], "mood": "thinking", "voice": "box", "creature": {…}}, "filler_in_ms": 2300}`: the human's words, once per turn (see Shake to talk); `input`: what started the turn (`shake`, or the gesture bound to talk: `double_tap`, `button_accept` held, ...); `device.creature`: who you are on screen now ([creature.md](creature.md)); `device.scene`: the scene they are looking at and the spot they last touched, when one is up (see What is on the screen); `device.skill`: the skill's newest version ([CHANGES.md](../CHANGES.md)); `opener`: the words Molty is saying now, `opener_wpm` their pace: keep and take over ([First words](talking-fast.md#first-words-molty-starts-you-take-over)); `filler_in_ms`: Molty says its own filler that much later unless you act first ([api.md](api.md#quick-phrases)) |
+| `tap` | `{"x": 0..1, "y": 0..1}` (screen position). Only when `tap` is bound to `event` (the default); a tap during a recording stops it instead, and a shake's phantom taps are dropped. On a scene's spot: `"spot": "<id>"` too, whatever tap is bound to; Molty is already showing that spot's reading ([PACKAGES.md](https://github.com/apresmoi/molty.uno/blob/main/docs/PACKAGES.md)), or opened the layout the spot names: then `"opened": "<layout>"` too. `"closed": true`: the tap beside an opened layout took Molty back to the one under it |
+| `scene` | `{"why": "open", "pkg": "astrology", "layout": "sign-closeup", "spot": "aries"}`: Molty changed its own screen. `why`: `open` (a tap on `spot` opened `layout`), `back` (a tap beside it: the layout under it is up again) or `end` (a scene ran out: `pkg` and `layout` are what is up now; neither: the creature is back). Nothing to answer. Pull and ride-along only: webhooks do not get it |
 | `double_tap` | `{"x": 0..1, "y": 0..1}`. Only when `double_tap` is bound to `event` (out of the box a double tap talks) |
 | `button` | `{"id": "accept"}` or `{"id": "reject"}` — the board's physical buttons. Not an answer to a question: they mean acknowledge / dismiss whatever you showed (see [etiquette.md](etiquette.md)). Answers to a question come only as `answer` |
 | `answer` | `{"job": "…", "index": 0, "label": "yes"}`, or `{"job", "index": null, "label": null, "reason": "timeout"}` — how an ask ended |
@@ -19,6 +20,26 @@ Molty talks back. When your human touches it, the relay records an event:
 Ignore event types you don't know: more will come. Whatever comes, never speak while the human talks.
 
 Each event is `{"id":"e42","type":"shake","ts":<unix ms>,"data":{…}}`.
+
+## What is on the screen
+
+When your human speaks while a scene is up, the `utterance` says what they are looking at:
+
+```json
+"device": {"scene": {"pkg": "astrology", "layout": "chart", "params": {…}, "spot": "sun", "spot_age_s": 4, "reading": "Sun in Scorpio: …"}}
+```
+
+- `pkg`, `layout`, `params`: the scene and the params it was played with. Any agent's play counts, not only yours.
+- `spot`: the last thing they tapped on it, `spot_age_s` seconds before they began to speak. `reading`: the text
+  Molty showed for that spot, for 60 s after the tap. "What does that mean?" is about this.
+- `under`: Molty opened this layout itself from a tap (a sign's close-up from the chart). `params` is then `null`:
+  use `under.params` (the layout under it) and `under.spot` (the spot that opened this one).
+- `trimmed: true`: big params were cut down to about 2 KB. The tapped spot's elements are whole, the others are
+  `{id}` only or gone.
+- No `device.scene`: no scene is up, as far as the relay can tell. After a queue on older firmware, or a
+  reconnect, it may not know: `status` asks Molty itself.
+
+`status` carries the same object as `relay.scene` (`null` when none is up), so you can ask at any time.
 
 ## Shake to talk
 

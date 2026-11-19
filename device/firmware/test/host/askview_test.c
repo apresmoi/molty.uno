@@ -100,13 +100,16 @@ static void dump(const world_t *w, const char *name) {
     fclose(f);
 }
 
+static int s_parts;      /* world_open makes the view in parts of this many rows of dots (0: whole) and counts the calls here */
+static int s_part_calls;
 static void world_open(world_t *w, const fluid_ask_q_t *q) {
     memset(w, 0, sizeof(*w));
     fluid_grid_for_stage(P, &W, &H);
     w->s = fluid_sim_create(W, H, P); w->d = fluid_draw_create(W, H, P, P); w->fr = fluid_frame_create(W, H);
     w->fb = calloc((size_t)P * P, 2); w->wbuf = calloc(4096, 2);
     w->moving = true;
-    w->v = fluid_askview_create(w->s, q);
+    if (!s_parts) w->v = fluid_askview_create(w->s, q);
+    else { w->v = fluid_askview_begin(w->s, q); for (s_part_calls = 1; !fluid_askview_build(w->v, w->s, s_parts); s_part_calls++) {} }
     w->L = *fluid_askview_layout(w->v);
     scene(w);
     for (int f = 0; f < 4; f++) frame(w, NULL);           /* the scene alone first */
@@ -359,6 +362,21 @@ static void test_rows(void) {
     world_close(&w);
 }
 
+/* a view made in parts (a few rows of its dots a frame: the device cannot take them in one) is the same view */
+static void test_parts(void) {
+    const int p0 = P;
+    P = 466;
+    fluid_ask_q_t q = install_q();
+    world_t a, b;
+    world_open(&a, &q);
+    s_parts = 24; world_open(&b, &q); s_parts = 0;
+    int differ = 0;
+    for (int f = 0; f < 75; f++) { frame(&a, NULL); frame(&b, NULL); differ += memcmp(a.fb, b.fb, (size_t)P * P * 2) != 0; }
+    CHECK(s_part_calls >= 2 && s_part_calls <= 7 && differ == 0, "made %d rows of dots a frame (%d frames), the question is the same (%d of 75 frames differ)", 24, s_part_calls, differ);
+    world_close(&a); world_close(&b);
+    P = p0;
+}
+
 int main(void) {
     printf("askview host test\n");
     test_accept();
@@ -366,6 +384,7 @@ int main(void) {
     test_decline();
     test_cost();
     test_rows();
+    test_parts();
     printf("%d passed, %d failed\n", s_pass, s_fail);
     return s_fail ? 1 : 0;
 }

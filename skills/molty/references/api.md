@@ -445,8 +445,9 @@ The commands need `pkg` / `scene` in `relay.caps` (`409 unsupported` otherwise);
 only for an update, and switch with `creature.select`.
 
 **Installing.** Pass the entry's `install` object as is to `pkg.install` (`wait: true`). Tell your human
-first: Molty shows the package's name and they tap it to accept (`declined` = they said no or didn't tap
-in a minute; don't retry unasked). Installs are kept; never reinstall what is `installed` and current.
+first: Molty asks `INSTALL <NAME>?` and they tap `install` (`declined` = they tapped `not now` or didn't tap
+in a minute; don't retry unasked). A ring then grows round the screen while Molty downloads the file and
+flashes when it is in. Installs are kept; never reinstall what is `installed` and current.
 
 **Playing.** Don't send `scene.*` by hand: the entry's `skills` know the package, e.g. **molty-astro**
 for the sky (`https://github.com/apresmoi/molty.uno/tree/main/skills/molty-astro`); its `layouts` are

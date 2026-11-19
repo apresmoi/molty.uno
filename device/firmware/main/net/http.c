@@ -1259,8 +1259,9 @@ static esp_err_t handler_info(httpd_req_t *r)
 // byte-swapped for the SPI panel's wire
 // order; we swap back and expand 5/6/5 bits to 8 bits per channel. The fluid
 // keeps no framebuffer (it sends the panel only what changed): it draws the frame
-// on the panel into it on request first. We memcpy the whole 339 KB buffer
-// (sub-millisecond) and convert from the copy.
+// on the panel into it on request first, and nothing else writes it until the next
+// request, so the rows are converted straight from it (no copy of the whole buffer:
+// with a scene up the PSRAM had no room for one, and the request answered "oom").
 // ═════════════════════════════════════════════════════════════════════════════
 static inline void rgb565_be_to_rgb888(uint16_t stored, uint8_t *out /* r,g,b */)
 {
@@ -1273,7 +1274,7 @@ static inline void rgb565_be_to_rgb888(uint16_t stored, uint8_t *out /* r,g,b */
     out[2] = (uint8_t)((b5 << 3) | (b5 >> 2));   // 5→8 bits
 }
 
-#define FB_PARITY_ROWS_PER_CHUNK 32   // 32*412*3 = 39,552 B/chunk on the 1.46 — modest scratch, ~13 chunks/frame
+#define FB_PARITY_ROWS_PER_CHUNK 8    // 8*466*3 = 11,184 B/chunk on the 1.75C: a small scratch
 
 static esp_err_t handler_framebuffer(httpd_req_t *r)
 {
@@ -1281,18 +1282,11 @@ static esp_err_t handler_framebuffer(httpd_req_t *r)
     uint16_t *live_fb = molty_display_framebuffer();
     if (!live_fb) return http_send_json(r, "{\"ok\":false,\"error\":\"no_framebuffer\"}");
 
-    size_t fb_bytes = (size_t)W * H * sizeof(uint16_t);
-    uint16_t *snap = (uint16_t *)heap_caps_malloc(fb_bytes, MALLOC_CAP_SPIRAM);
-    if (!snap) return http_send_json(r, "{\"ok\":false,\"error\":\"oom\"}");
-    mole_fluid_framebuffer_sync();     // the fluid sends the panel windows, not this buffer
-    memcpy(snap, live_fb, fb_bytes);   // the "snapshot" — see consistency note above
-
     size_t rgb_chunk_bytes = (size_t)FB_PARITY_ROWS_PER_CHUNK * W * 3;
     uint8_t *rgb_scratch = (uint8_t *)heap_caps_malloc(rgb_chunk_bytes, MALLOC_CAP_SPIRAM);
-    if (!rgb_scratch) {
-        heap_caps_free(snap);
-        return http_send_json(r, "{\"ok\":false,\"error\":\"oom\"}");
-    }
+    if (!rgb_scratch) return http_send_json(r, "{\"ok\":false,\"error\":\"oom\"}");
+    mole_fluid_framebuffer_sync();     // the fluid sends the panel windows, not this buffer
+    const uint16_t *snap = live_fb;
 
     httpd_resp_set_type(r, "image/x-portable-pixmap");
     httpd_resp_set_hdr(r, "Access-Control-Allow-Origin", "*");
@@ -1318,7 +1312,6 @@ static esp_err_t handler_framebuffer(httpd_req_t *r)
     httpd_resp_send_chunk(r, NULL, 0);   // EOF
 
     heap_caps_free(rgb_scratch);
-    heap_caps_free(snap);
     return ESP_OK;
 }
 

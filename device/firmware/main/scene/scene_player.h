@@ -67,6 +67,11 @@ typedef struct {
     float on, off;                      /* off 0 = until the end                           */
     float x, y, r, w, a0, a1, len, size, lit, side, spin, rot;
     float grow;                         /* spot: how much what a tap on it lights grows (PKG_GROW) */
+    float arc, r0, r1;                  /* spot: also tappable in this ring sector about the glass centre: arc degrees
+                                         * wide (0: none) round the spot's own direction, radii r0..r1 */
+    uint16_t open, nopen;               /* spot: the layout a tap on it opens, in scene_t.say (nopen 0: none) */
+    float ttl;                          /* ... for this long when that layout is a held one (0: until a tap beside it) */
+    int8_t lst; uint8_t eln;            /* the list param it was repeated over (-1 none) and which element */
 } scene_item_t;
 
 typedef struct scene {
@@ -82,6 +87,7 @@ typedef struct scene {
     char groups[SCENE_GROUPS][PKG_KEY_MAX + 1];
     scene_item_t items[SCENE_ITEMS_MAX];
     float pts[SCENE_PTS_MAX][2];
+    cJSON *params;                      /* its params, kept when a spot of it opens a layout (they feed that one) */
     char chars[SCENE_LETTERS];
     char say[SCENE_SAY_CHARS];
 } scene_t;
@@ -94,7 +100,8 @@ void scene_free(scene_t *sc);
 float scene_end(const scene_t *sc);
 /** The spot a tap at (x, y) (glass units, y up) lands on at t s: of the visible spots that
  *  hold it (within r of the spot's centre, or of its segment pts), the smallest, then the
- *  nearest. Its item index, -1 for none. */
+ *  nearest; if none holds it so, of those whose sector does (arc, r0, r1), the same. Its item
+ *  index, -1 for none. */
 int scene_spot_at(const scene_t *sc, float t, float x, float y);
 
 typedef struct {
@@ -102,6 +109,9 @@ typedef struct {
     scene_t *q[SCENE_QUEUE_MAX];
     int nq;
     float t;                            /* s since cur started                             */
+    scene_t *back;                      /* the scene a tap opened cur over: it comes back when cur ends ... */
+    float back_t;                       /* ... its clock, which kept running (its ttl ends both) */
+    char say[PKG_SAY_MAX + 1];          /* ... and the tapped spot's reading, to play over cur once it is up (scene_open_say) */
     bool started;                       /* a scene started since the last scene_take_start  */
     unsigned gen;                       /* counts the scenes started: which one cur is      */
 } scene_player_t;
@@ -113,16 +123,36 @@ void scene_play(scene_player_t *p, scene_t *sc);
 bool scene_queue(scene_player_t *p, scene_t *sc);
 /** Drop everything. */
 void scene_clear(scene_player_t *p);
+/** A tap on spot item n of sc opens a layout (its `open`): that layout built with its params taken by name, each from
+ *  the tapped spot's list element if it has such a field, else from sc's own params; a list keeps only the elements
+ *  whose `of` (if they have one) is the spot's id. It lasts its dur, else the spot's ttl, else until sc's end. NULL: the
+ *  spot opens nothing, or *err ("no_layout" | "bad_params" | "oom"). */
+scene_t *scene_open_build(const scene_t *sc, int n, const char **err);
+/** Play sc over the current scene, which waits under it (one deep: a scene opened from an opened one replaces it) and
+ *  comes back when sc ends or at scene_back; its clock runs on meanwhile. Takes ownership. spot: the current scene's
+ *  spot whose tap opened it (scene_open_build's n; -1 none): its reading is kept to play over sc. */
+void scene_open(scene_player_t *p, scene_t *sc, int spot);
+/** That reading, once sc is up whole (the caller says when: after the change of picture): into out (size bytes); its
+ *  length, 0 for none. Taken once; going back, or another scene, drops it. While it plays the caller keeps sc from
+ *  ending (scene_room), so a short layout does not end under its own sentence. */
+int scene_open_say(scene_player_t *p, char *out, size_t size);
+/** Back to the scene under an opened one, now. False: none was open. */
+bool scene_back(scene_player_t *p);
 /** Advance by dt: the current scene ends at scene_end, the next one starts. */
 void scene_tick(scene_player_t *p, float dt);
+/** How long until anything ends, s (the scene, or the one under it: its ttl ends both); a large number with no
+ *  scene. A caller that must not let it end yet (a reading or a say plays over it, a turn is on) ticks it by no more
+ *  than this less a little: its clock runs on (what it lights in turn still does), its end waits. */
+float scene_room(const scene_player_t *p);
 /** A new scene started since the last call (the fluid melts into it). */
 bool scene_take_start(scene_player_t *p);
 static inline bool scene_playing(const scene_player_t *p) { return p->cur != NULL; }
 
-/* A scene in high definition (fluid_draw_opts_t.scene): alone and crisp on black, it forms
+/* A scene in high definition on the dots (fluid_draw_opts_t.scene, no fine dust): alone and crisp on black, it forms
  * from dust, and when it ends or the next one comes it breaks into dust first (out: the
- * caller holds what it showed for the drawer meanwhile), then the next forms. */
-#define SCENE_DUST_S 0.45f              /* each way: dust to the scene, the scene to dust  */
+ * caller holds what it showed for the drawer meanwhile), then the next forms. (On fine dust a scene comes and goes by
+ * the drawer's change of picture instead: fluid_draw_morph_look.) */
+#define SCENE_DUST_S 0.6f               /* each way: dust to the scene, the scene to dust */
 typedef struct {
     unsigned gen;                       /* the scene shown (scene_player_t.gen), 0 = none   */
     bool out;                           /* it ended: what it showed goes to dust            */
@@ -143,6 +173,7 @@ static inline float scene_hd_dust(const scene_hd_t *h) { return h->gen || h->out
 #define SCENE_GROW      PKG_GROW        /* its scale, grown, unless its spot says (grow)      */
 #define SCENE_GROW_IN_S 0.5f            /* the growth, easing out as the ring spreads       */
 #define SCENE_GROW_OUT_S 0.4f           /* back, once its reading is over                   */
+#define SCENE_LIT_STEPS 4               /* a lit item's colour goes there in this many steps (its size every frame) */
 #define SCENE_LIT_WHITE 0.5f            /* a lit item's colour this far towards white        */
 typedef struct {
     int spot;                           /* the tapped spot (item), -1 none                  */
@@ -176,6 +207,8 @@ int scene_outline(const scene_t *sc, int n, void (*fn)(void *ctx, float x, float
 #define SCENE_CAPTION_RIPPLE   0.12f    /* its strength (PORT-SPEC 0.16, gentler for the panel's time) */
 #define SCENE_CAPTION_RIPPLE_R 0.06f    /* its radius, glass units                         */
 typedef struct { const char *str; int n, orp; } scene_caption_t;
+/** The box a caption word's letters take at glass height y on a stage px wide: [x0, x1, y0, y1], stage px (y down). */
+void scene_caption_box(const scene_caption_t *cap, float y, int stage, float box[4]);
 
 /* The scene in high definition (fluid_draw_opts_t.shapes, .kdots): its items as shapes at the
  * panel's pixels (rings, strokes, discs, its symbols and letters, the subtitle's too; a ball
@@ -187,8 +220,20 @@ typedef struct {
     uint8_t *still;                     /* W x H, may be NULL: the cells a tapped spot's drawing covers at full
                                          * growth and one round (the water never breaks them), all 0 untapped */
 } scene_shapes_t;
+/** Over a scene in high definition the rings are shapes of it (the scene stays as it is under them): a thin line just
+ *  inside the rim, in SCENE_RING_SEGS parts. A listen's (ring) draws itself round from 12 o'clock both ways and lets go
+ *  the same way back; the agent's progress (prog) fills clockwise from 12 o'clock, or a comet circles (no percent, or
+ *  thinking: the wait between a listen and its answer). The listen's wins where both are. Only the parts that are on
+ *  are shapes, so a part coming or going draws its own few cells again. Into shp[n..) before the caption's letters
+ *  (they stay last); returns the new count (n: too many, or n < 0). */
+#define SCENE_RING_SEGS 48
+#define SCENE_RING_R    0.936f          /* its line, of the radius: the largest circle whole inside the water's cells
+                                         * (their first and last rows and columns are the glass's edge) */
+#define SCENE_RING_HW   1.5f            /* half its width, px                              */
+int scene_rings(fluid_shape_t *shp, int n, int stage, const fluid_ring_t *ring, const fluid_progress_t *prog, bool thinking,
+                uint32_t listen_rgb, uint32_t prog_rgb);
 /** The scene's shapes at t with its tapped spot (sc->focus) at full growth and lit, no caption: what its fine dust
- *  gathers round (fluid_fine_want). n of them (-1: too many); key: what they depend on (the same key, the same shapes). */
+ *  gathers round (fluid_fine_want). n of them (-1: too many); key: a hash of them (the same drawing, the same key). */
 int scene_full_shapes(fluid_sim_t *s, const scene_t *sc, float t, fluid_shape_t *out, uint32_t *key);
 /** Just the key scene_full_shapes would give (cheap: no shapes). */
 uint32_t scene_full_key(const fluid_sim_t *s, const scene_t *sc, float t);

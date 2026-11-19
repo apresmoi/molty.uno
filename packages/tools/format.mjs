@@ -29,25 +29,28 @@ export const ITEMS = {
   glyph: { ...POS, size: 'num', asset: 'asset', rot: 'num' },
   text: { ...POS, size: 'num', str: 'text' },
   // a place to tap, drawn by nothing: Molty shows `say` as the subtitle, the tap event names `id`; a disc, or
-  // within r of a segment (pts, two points); a tap lights its `lights` groups, grown `grow` times (default 1.25)
-  spot: { ...POS, r: 'num', say: 'say', id: 'text', pts: 'points', lights: 'lights', grow: 'num' },
+  // within r of a segment (pts, two points); a tap lights its `lights` groups, grown `grow` times (default 1.25); also
+  // tappable in a ring sector about the glass centre: `arc` degrees wide round the spot's own direction, radii r0 (0)..r1
+  // `open`: a tap opens that layout of the package over this one (opens(), below), for `ttl` seconds when it is a held one
+  spot: { ...POS, r: 'num', say: 'say', id: 'text', pts: 'points', lights: 'lights', grow: 'num', arc: 'num', r0: 'num', r1: 'num', open: 'layout', ttl: 'num' },
 };
 const REQUIRED = { ring: ['r'], arc: ['r'], ticks: ['r'], line: ['pts'], curve: ['pts'], disc: ['r'], ball: ['r'], glyph: ['asset'], text: ['str'], spot: ['r', 'say'] };
 /** Defaults a missing field takes (the firmware's, docs/PACKAGES.md). A ball without img is shaded in its colour. */
 export const DEFAULTS = { color: '#ffffff', x: 0, y: 0, on: 0, a0: 0, a1: 360, n: 12, len: 0.1, size: 0.12, w: 0.03, lit: 1, side: 1, spin: 0, rot: 0, grow: 1.25 };
 // which param type a field of each value type may bind to
-const BINDS = { num: 'number', text: 'text', say: 'text', color: 'text', asset: 'text', image: 'text', list: 'list', group: 'text', lights: 'text' };
+const BINDS = { num: 'number', text: 'text', say: 'text', color: 'text', asset: 'text', image: 'text', list: 'list', group: 'text', lights: 'text', layout: 'text' };
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 /** The range each numeric field must lie in, literal or bound (the firmware's pkg_num_ok); angles otherwise. */
-const RANGE = { x: [-2, 2], y: [-2, 2], r: [0, 2], w: [0, 0.5], len: [-1, 1], n: [1, 120], size: [0, 2], lit: [0, 1], spin: [-720, 720], on: [0, 600], off: [0, 600], grow: [1, 3] };
-const inRange = (f, v) => { if (f === 'side') return v === -1 || v === 1; if (f === 'n' && !Number.isInteger(v)) return false; if (f === 'size' && v <= 0) return false; const [lo, hi] = RANGE[f] ?? [-720, 720]; return v >= lo && v <= hi; };
+const RANGE = { x: [-2, 2], y: [-2, 2], r: [0, 2], w: [0, 0.5], len: [-1, 1], n: [1, 120], size: [0, 2], lit: [0, 1], spin: [-720, 720], on: [0, 600], off: [0, 600], grow: [1, 3], arc: [0, 360], r0: [0, 2], r1: [0, 2], ttl: [1, 600] };
+const inRange = (f, v) => { if (f === 'side') return v === -1 || v === 1; if (f === 'n' && !Number.isInteger(v)) return false; if ((f === 'size' || f === 'arc') && v <= 0) return false; const [lo, hi] = RANGE[f] ?? [-720, 720]; return v >= lo && v <= hi; };
 const ref = (v) => (typeof v === 'string' && /^[$@][A-Za-z0-9_-]{1,24}$/.test(v) ? v : null);
 const isText = (v, max = LIMITS.text) => typeof v === 'string' && /^[\x20-\x7e]*$/.test(v) && v.length <= max && !/^[$@]/.test(v);
 
 /** A literal's check against a field type; returns an error string or ''. */
-function literal(type, v, assets, f) {
+function literal(type, v, assets, f, layouts) {
   switch (type) {
+    case 'layout': return typeof v === 'string' && (!layouts || layouts[v]) ? '' : `names no layout (${JSON.stringify(v)})`;
     case 'num': return !isNum(v) ? 'must be a number' : f && !inRange(f, v) ? `is out of range (${v})` : '';
     case 'text': return isText(v) ? '' : `must be printable ASCII of at most ${LIMITS.text} characters, not starting with $ or @`;
     case 'say': return isText(v, LIMITS.say) && v ? '' : `must be printable ASCII of 1..${LIMITS.say} characters, not starting with $ or @`;
@@ -141,7 +144,7 @@ export function checkPackage(pkg, id) {
       if (!ITEMS[it.k]) return bad.push(`${where}: unknown k ${JSON.stringify(it.k)}`);
       const value = (f, type, v, rf = f) => {
         const r = ref(v);
-        if (!r) { const e = literal(type, v, assets, rf); if (e) bad.push(`${where}: ${f} ${e}`); return; }
+        if (!r) { const e = literal(type, v, assets, rf, pkg.layouts); if (e) bad.push(`${where}: ${f} ${e}`); return; }
         if (r[0] === '$') {
           const p = r.slice(1); used.add(p);
           if (!params[p]) bad.push(`${where}: ${f} reads $${p}, which is not a param`);
@@ -160,6 +163,10 @@ export function checkPackage(pkg, id) {
       }
       if ('polar' in it && ('x' in it || 'y' in it)) bad.push(`${where}: polar replaces x, y: give one or the other`);
       for (const f of REQUIRED[it.k]) if (!(f in it)) bad.push(`${where}: ${it.k} needs ${f}`);
+      if (('arc' in it) !== ('r1' in it) || ('r0' in it && !('arc' in it))) bad.push(`${where}: a sector is arc and r1 (and r0)`);
+      if ('ttl' in it && !('open' in it)) bad.push(`${where}: ttl is for open`);
+      // a layout a spot opens takes its params from this one's by name: those count as read
+      if (pkg.layouts?.[it.open]) for (const p of Object.keys(pkg.layouts[it.open].params ?? {})) used.add(p);
     });
     for (const p of Object.keys(params)) if (!used.has(p)) bad.push(`${at}: param ${p} is never read`);
   }
@@ -198,7 +205,7 @@ export function bind(pkg, layoutName, params = {}) {
         if (!r) return v;
         const got = r[0] === '$' ? params[r.slice(1)] : row[r.slice(1)];
         if (got === undefined) throw new ParamError(`${f}: ${r} is missing`);
-        const e = literal(type, got, pkg.assets, rf);
+        const e = literal(type, got, pkg.assets, rf, pkg.layouts);
         if (e) throw new ParamError(`${f} (${r}) ${e}`);
         return got;
       };
@@ -220,4 +227,29 @@ export function bind(pkg, layoutName, params = {}) {
   const groups = new Set(out.flatMap((it) => [it.group, ...(it.lights ?? '').split(' ')]).filter(Boolean));
   if (groups.size > LIMITS.groups) throw new ParamError(`the scene names ${groups.size} groups (at most ${LIMITS.groups})`);
   return out;
+}
+
+/**
+ * What a tap on spot `id` of `layout` (played with `params`) opens, as the firmware's scene_open_build: null, or
+ * { layout, params, ttl } to play over it. The opened layout's params come by name: each from the tapped spot's list
+ * element if it has such a field, else from this layout's own params; a list keeps only the elements whose `of` (if they
+ * have one) is the spot's id. ttl: the spot's (a held layout stays that long; undefined: until a tap beside it).
+ */
+export function opens(pkg, layoutName, params, id) {
+  for (const it of pkg.layouts?.[layoutName]?.items ?? []) {
+    if (it.k !== 'spot' || it.open === undefined) continue;
+    for (const row of it.each ? params[it.each.slice(1)] : [null]) {
+      const val = (v) => { const r = ref(v); return !r ? v : r[0] === '$' ? params[r.slice(1)] : row?.[r.slice(1)]; };
+      if (val(it.id) !== id) continue;
+      const name = val(it.open), child = pkg.layouts[name], out = {};
+      if (!child) throw new ParamError(`no_layout ${name}`);
+      for (const p of Object.keys(child.params ?? {})) {
+        const v = row && row[p] !== undefined && typeof row[p] !== 'object' ? row[p] : params[p];
+        if (v === undefined) throw new ParamError(`missing param ${p}`);
+        out[p] = Array.isArray(v) ? v.filter((e) => typeof e?.of !== 'string' || e.of === id) : v;
+      }
+      return { layout: name, params: out, ttl: val(it.ttl) };
+    }
+  }
+  return null;
 }

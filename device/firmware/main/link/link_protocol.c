@@ -297,6 +297,18 @@ bool link_welcome_has(const cJSON *welcome, const char *name)
     return false;
 }
 
+cJSON *link_evt_scene_frame(const char *pkg, const char *layout, const char *why, const char *spot)
+{
+    cJSON *data, *j = evt("scene", &data);
+    if (j) {
+        cJSON_AddStringToObject(data, "why", why);
+        if (pkg && pkg[0]) cJSON_AddStringToObject(data, "pkg", pkg);
+        if (layout && layout[0]) cJSON_AddStringToObject(data, "layout", layout);
+        if (spot && spot[0]) cJSON_AddStringToObject(data, "spot", spot);
+    }
+    return j;
+}
+
 cJSON *link_evt_tap_frame(double x, double y)
 {
     cJSON *data, *j = evt("tap", &data);

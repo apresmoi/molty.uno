@@ -114,9 +114,10 @@ async function show(shows) {
 }
 
 /**
- * The chart, held for --ttl (default 300 s), then Molty's taps: a sign's spot opens that sign up close while Molty
- * reads it aloud, and the chart comes back after it (queued) or at a tap on empty space. A planet's spot needs
- * nothing: Molty reads it by itself. Ends at --ttl or Ctrl-C (which clears the screen).
+ * The chart, held for --ttl (default 300 s), then Molty's taps: a tap on a sign opens that sign up close on Molty
+ * itself (and Molty goes back to the chart when its reading's time is up, or at a tap beside it); this reads it aloud
+ * meanwhile. A Molty that did not open it (no `opened` on the tap) is sent the close-up, the chart queued behind it.
+ * A planet's spot needs nothing: Molty reads it by itself. Ends at --ttl or Ctrl-C (which clears the screen).
  * --dry-run --tap <sign> prints the commands for one simulated tap.
  */
 async function interactive() {
@@ -124,12 +125,15 @@ async function interactive() {
   const sky = chart(date, { all: flag('--all') }), [[, board]] = sky.scenes, signs = new Set(SIGNS.map((n) => n.toLowerCase()));
   await show([{ ...sky, scenes: [['chart', board, left()]] }]);
   let open = null, until = 0; // the sign up close, and when its close-up gives way to the chart
-  const tap = async (spot) => {
+  const tap = async (spot, data = {}) => {
     if (Date.now() >= until) open = null;
+    if (data.closed) { open = null; return; }   // Molty went back to the chart itself (a tap beside the close-up)
     if (spot && signs.has(spot) && spot !== open) {
       const c = closeup(date, spot), [[, , len]] = c.scenes;
-      await play(left() > len + 1 ? [...c.scenes, ['chart', board, left() - len]] : c.scenes);
-      try { await send('say', { text: c.read }); } catch (e) { if (e.code !== 'audio_busy') throw e; console.error('molty-astro: Molty is still speaking; the close-up shows without its reading'); }
+      // Molty opens the sign itself (the tap says `opened`: astrology 1.7's chart) and goes back by itself; a Molty that
+      // did not is sent the close-up, the chart queued behind it
+      if (!data.opened) await play(left() > len + 1 ? [...c.scenes, ['chart', board, left() - len]] : c.scenes);
+      try { await send('say', { text: c.read }); } catch (e) { console.error(`molty-astro: the close-up shows without its reading (${e.code ?? e.message})`); } // busy, do not disturb, offline voice: the screen still follows the taps
       [open, until] = [spot, Date.now() + 1000 * len];
       console.error(`molty-astro: ${spot} up close`);
     } else if (!spot && open) {
@@ -151,7 +155,10 @@ async function interactive() {
       throw e;
     }
     // taps since we started, in order (the inbox may hold older ones)
-    for (const e of inbox.splice(0)) if (e.type === 'tap' && e.ts >= t0 - 2000) await tap(e.data?.spot);
+    for (const e of inbox.splice(0)) {
+      if (e.type === 'tap' && e.ts >= t0 - 2000) await tap(e.data?.spot, e.data ?? {});
+      else if (e.type === 'scene' && e.data?.why !== 'open') open = null;   // Molty's own screen moved on (back, or it ran out)
+    }
   }
   if (stop.signal.aborted) await send('scene.clear', {});
 }

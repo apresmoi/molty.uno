@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=../../../schema/display-2-screen.json
-about: One sign up close while Molty reads it aloud, its planets on its degree dial, each lit while it is read.
-duration: hold   # send the reading's length plus 3 s as ttl_s, and queue the chart behind it
+about: One sign up close, its planets on its degree dial, each lit in turn while its reading shows. Molty opens it itself when a sign is tapped on the chart.
+duration: hold   # the chart opens it for its reading's length; sent by hand, give that as ttl_s and queue the chart
 inputs:
   sign:
     type: asset
@@ -50,7 +50,7 @@ inputs:
     about: Each planet in the sign, by degree.
     of:
       symbol: { type: asset, of: assets/planets, sent_as: g, about: "The planet's symbol: g-moon ..." }
-      angle: { type: angle, sent_as: a, about: "Its place on the dial: 210 - 8 x its degree in the sign (0 lower left, over the top, 30 lower right), kept at least 28 apart and within 210 to -30." }
+      angle: { type: angle, sent_as: da, about: "Its place on the dial: 210 - 8 x its degree in the sign (0 lower left, over the top, 30 lower right), kept at least 28 apart and within 210 to -30." }
       color: { type: color, sent_as: c, about: "Its color, as on the chart." }
       dim_color: { type: color, sent_as: d, about: "Its color at 60 percent, for when it is not being read." }
       from: { type: seconds, sent_as: "on", about: "When Molty starts reading it: about 2.6 words a second and 0.3 s a sentence, after 1.2 s and the sign's own line." }

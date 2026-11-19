@@ -13,7 +13,8 @@ All go to `POST $MOLTY_RELAY/v1/devices/<device>/cmd` with `Authorization: Beare
    → `{"astrology": {name, version, kind, path, size, sha256}}`.
 2. **Installed?** `{"name":"pkg.list"}` → `{packages:[{id, version, …}]}`. Skip 3 when `astrology`
    is there at the index's version.
-3. **Install** (Molty asks its human with one tap; tell them first):
+3. **Install** (Molty asks its human "INSTALL ASTROLOGY?" with `install` and `not now` on the rim; tell them
+   first. After the tap a ring grows round the screen while Molty downloads the file, and flashes when it is in):
    `{"name":"pkg.install","args":{"id":"astrology","url":"https://raw.githubusercontent.com/apresmoi/molty.uno/main/<path>","sha256":"<sha256>","size":<size>,"name":"Astrology"},"wait":true}`
    → `{installed, version}`, or `202 {job, status:"pending"}`: poll `GET $MOLTY_RELAY/v1/jobs/<job>?wait_s=8`
    (about 2 min at most; errors `declined`, `pkg_timeout`, `hash_mismatch`, …).
@@ -43,12 +44,20 @@ All go to `POST $MOLTY_RELAY/v1/devices/<device>/cmd` with `Authorization: Beare
 | an aspect | `aspect` (5 s each, one per kind): the tightest pair in that aspect within a 6 degree orb, or the next date it comes within 1 degree |
 | an event | `transit`, `occultation`, `appulse`, `solar-eclipse` or `lunar-eclipse` (6 s each): the next real one from the date |
 
-## The sign close-up
+## Taps on the chart
 
-A tap on the chart sends you a `tap` event with `"spot": "<id>"` (a body, a sign or an aspect line); Molty shows
-that zone's reading by itself. To open a sign up close, poll
-`GET $MOLTY_RELAY/v1/devices/<device>/events?wait_s=25` (the molty skill's long-poll):
+A tap sends you a `tap` event with `"spot": "<id>"` (`sun`, `gemini`, `sun-moon`). What was tapped grows and stays
+sharp while its reading shows in the middle of the wheel, one word at a time; Molty does that by itself.
 
-- a `tap` whose `spot` is a sign → `scene.play` `sign-closeup` with the reading's length plus 3 s as `ttl_s`,
-  `scene.queue` the chart behind it, then `say` the reading (the sign's line, then each planet's).
-- a `tap` with no `spot` while the close-up shows → `scene.play` the chart.
+A sign takes a tap anywhere in its 30 degree block of the zodiac ring, and Molty then opens `sign-closeup` itself,
+from what the chart was sent (the sign's own fields, its `ruler`, the bodies `of` it), for the sign's `ttl`. It shows
+the sign's reading as the subtitle and goes back to the chart after it, or at a tap beside it. The tap event says so:
+`opened: "sign-closeup"`.
+
+To read a sign aloud, poll `GET $MOLTY_RELAY/v1/devices/<device>/events?wait_s=25` (the molty skill's long-poll):
+
+- a `tap` with a sign's `spot` and `opened` → `say` the reading (the sign's line, then each planet's; your words then
+  take the subtitle). Molty comes back by itself: `closed: true` on a tap, or a `scene` event, says it is back.
+- a `tap` with a sign's `spot` and no `opened` (a Molty that did not open it) → `scene.play` `sign-closeup` with the
+  reading's length plus 3 s as `ttl_s`, `scene.queue` the chart behind it, then `say` the reading.
+- a `tap` with no `spot` while a close-up you sent shows → `scene.play` the chart.

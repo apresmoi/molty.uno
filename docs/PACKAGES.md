@@ -16,6 +16,40 @@ device    asks the owner with one tap, downloads the file straight from the repo
 screen    the device draws the layout from the package's own shapes and images
 ```
 
+## At a glance
+
+This page documents format **`molty-pkg/1`**, the only format the firmware reads.
+
+| What | Rule |
+|---|---|
+| File | one JSON file, data only, at most 256 KB |
+| Kinds | `scenes` (drawings an agent plays) and `creature` (a Molty) |
+| On the device | at most 32 packages and 1 MB in all, under `/spiffs/pkg/` |
+| Install | the agent sends `pkg.install`, the owner taps `install` on the screen, Molty downloads the file and checks its SHA-256 |
+| Play | `scene.play` with a few params; a scene stays 60 s unless `ttl_s` says more (600 at most) |
+| Device caps | `pkg` (needs touch), `scene`, `creatures` |
+
+What ships today (`packages/index.json` is the source of truth):
+
+| id | kind | version | size | on a new device |
+|---|---|---|---|---|
+| `astrology` | scenes | 1.7.0 | 73 KB | installed on request (the `molty-astro` skill) |
+| `cat` | creature | 2.0.0 | 242 KB | built in |
+| `duck` | creature | 1.0.0 | 31 KB | built in |
+| `octopus` | creature | 1.0.0 | 33 KB | built in |
+
+One example, the whole path from an agent (REST, the molty skill's pairing):
+
+```sh
+# 1. what exists, with the exact install args
+curl -sS -X POST "$MOLTY_RELAY/v1/devices/$MOLTY_DEVICE/cmd" -H "authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' -d '{"name":"pkg.available"}'
+# 2. install: pass the entry's "install" object as it is (the owner taps install on the screen)
+#    -d '{"name":"pkg.install","args":{"id":"astrology","url":"...","sha256":"...","size":74372,"name":"Astrology"},"wait":true}'
+# 3. play a layout
+#    -d '{"name":"scene.play","args":{"pkg":"astrology","layout":"sign","params":{"sign":"leo"},"ttl_s":9}}'
+```
+
 ## 1. The package file
 
 One JSON file, `packages/<id>/<id>.json`, at most **256 KB**. Built from sources by `packages/<id>/build.mjs`.
@@ -29,7 +63,7 @@ package lists its `layouts` and the `skills` that play it (those whose `molty.js
   "v": "molty-pkg/1",
   "id": "astrology",              // [a-z0-9-]{1,32}; the file name and the install id
   "name": "Astrology",            // shown in the install prompt and the console
-  "version": "1.0.0",
+  "version": "1.5.0",             // [0-9A-Za-z.-], at most 15 characters
   "kind": "scenes",               // "scenes" or "creature"
   "assets": { "<name>": Asset },  // images and glyphs, drawn once, used by name
   "layouts": { "<name>": Layout },// scenes (kind "scenes")
@@ -70,13 +104,16 @@ and geometry in **glass units**: the round window has radius 1, `x` right, `y` u
 | `ball` | `x`, `y`, `r`, `img`, `lit` (0..1 lit fraction), `side` (-1/1 which side is lit), `spin` | a shaded sphere wearing an image asset |
 | `glyph` | `x`, `y`, `size`, `asset`, `rot` | a mask or image asset |
 | `text` | `x`, `y`, `size`, `str` | words, in the device font |
-| `spot` | `x`, `y`, `r`, `say`, `id`, `pts`, `lights`, `grow` | nothing: a place to tap. Molty shows `say` as the subtitle; the `tap` event names `id` |
+| `spot` | `x`, `y`, `r`, `say`, `id`, `pts`, `lights`, `grow`, `arc`, `r0`, `r1`, `open`, `ttl` | nothing: a place to tap. Molty shows `say` as the subtitle; the `tap` event names `id` |
 
 **Spots** make a scene interactive with no round trip: the agent sends each spot's reading with the scene
 (`{ "k": "spot", "each": "$bodies", "polar": ["@a", "@r"], "r": 0.09, "say": "@say", "id": "@id" }`), and a tap on it
 shows that reading at once, word by word at reading pace. The agent also gets the `tap` event with `spot: <id>`, to say
 more if it wants. A spot takes the tap whatever tap is bound to (a tap that stops a recording still does that first).
 A spot is a disc (`x`, `y`, `r`), or the band within `r` of a segment when it has `pts` (two points: a line to tap along).
+It may also be tapped over a **ring sector** about the glass centre: `arc` degrees wide, centred on the spot's own
+direction (the angle of `x`, `y`), from radius `r0` (0 unless given) to `r1`: a block of a dial (the chart's signs:
+`"arc": 30, "r0": 0.75, "r1": 0.9`). The sector only widens where a tap lands; what the tap highlights is still the disc's.
 What a tap highlights grows with the tap's wave (the spot's `grow`, 1..3, default 1.25: the chart's signs 1.5), stays so
 while the reading (or the agent's say over the scene) plays, then eases back. On the device it stays perfectly still and
 crisp meanwhile (the water breaks nothing it covers), and the wave leaves its outline rather than the finger:
@@ -86,6 +123,16 @@ crisp meanwhile (the water breaks nothing it covers), and the wave leaves its ou
   line's group and its two bodies'; the lit-only items reach the line out to them with a ring round each.
 - without: what is drawn inside its disc (a symbol's centre in it; a ring, a line or ticks wholly in it), about the
   spot's centre.
+A spot may **open another layout** of its package instead of reading: `"open": "<layout>"` (v2: a tap zone's
+`opens`). Molty plays that layout at once, over this one, with the same dissolve as any scene change, and comes back
+to this one when it ends or at a tap beside its spots; this one's clock runs on meanwhile (its `ttl_s` still ends
+everything). No agent takes part, so the opened layout's params come from what the scene already holds, by name: each
+from the tapped spot's list element if it has a field of that name, else from this layout's own param of that name; a
+list keeps only the elements whose `of` field (if they have one) is the spot's `id`. It lasts its own `dur`; a held
+one (dur 0) lasts the spot's `ttl` seconds (1..600, bindable: `"ttl": "@ttl"`), or until this layout's end. The tap
+event still names the spot, with `opened: "<layout>"`. The chart's signs open `sign-closeup` this way. A param of this
+layout that only the opened one reads counts as read.
+
 A say over the scene replaces the reading. Both show as the reader does, one word at a time with its focus letter
 in the accent colour on the centre line, but small: low on the screen, under the drawing, or at the layout's `caption_y`
 (sized as at the bottom). In high definition the words sit on a dark backdrop in the fine dust: each forms from the dust,
@@ -133,10 +180,14 @@ Over the existing command path (`link_cmd_register`), gated by device caps `pkg`
 - A scene lives in RAM. Reboot = the creature.
 - **Why install answers at once (firmware):** commands run on the link task, which also has to see the owner's tap,
   so it cannot wait for the question and the download. Same shape as `update`: refusals in the `res`, the outcome as an event.
-- **The question:** "INSTALL <NAME>?" in full (up to 31 letters of the name) with a detail line, and two rim arcs:
+- **The question:** `INSTALL <NAME>?` in full (up to 31 letters of the name) with a detail line, and two rim arcs:
   `install` (green) and `not now` (white). It waits 60 s for a tap (the relay's `timeout_ms`). The size is not shown;
   it is checked against 256 KB and the quota instead.
   The name shown is the one the agent sent; the stored name and version are the file's own.
+- **Progress on screen:** after the tap the question blows away and a ring forms on the rim. It grows clockwise from
+  12 o'clock as the bytes arrive (to 90 % when the download is complete), then fills, flashes and melts when the package
+  is stored. On a failure it lets go where it got to. It is the same ring as an agent's `progress`
+  ([AGENT-LINK.md](AGENT-LINK.md#inline-cues-and-actions)): over the cat it forms from a wave at the centre as a thin green line, over the duck or the octopus it is a mint line.
 - **Download:** straight from the allowlisted URL over verified TLS; redirects are not followed. The URL may use only
   `[A-Za-z0-9._/-]` after the prefix, no `..` or `//`, and must end in `.json`.
 - Another screen owner (a say's words, a mood that shows the creature) drops the scene; a question covers it and it
@@ -150,6 +201,11 @@ Over the existing command path (`link_cmd_register`), gated by device caps `pkg`
   `pkg_parse` (strict, bounded JSON parse into PSRAM structs; rejects anything unknown).
 - `main/scene/`: `scene_player` (a fill target beside blob, text and creature: `FD_ST_SCENE` in the director; rasterises the items into the fluid's target field each frame; handles on/off, ttl and the queue).
 - SPIFFS can vanish (a factory flash overwrites it): a missing file is reported as not installed, and the agent reinstalls.
+- **Room:** before it asks, the device removes any file the index does not list, counts an update's old file as free
+  (an update replaces it in place) and lets SPIFFS collect deleted pages when the bytes are there only as such. It keeps
+  16 KB of SPIFFS free beside the package. Still no room: `no_space`.
+- **Ready at once:** a freshly installed package is parsed right after it is stored and kept in a one-package cache, so
+  its first scene starts without the 0.4 s read and parse. A scene from another package loads that one instead.
 - Local API on molty.local for the console: `GET /api/pkg`, `DELETE /api/pkg?id=`, `POST /api/scene` (same args as `scene.play`), `POST /api/creature/select?id=`.
   Answers `{ ok: true, ... }` or `{ ok: false, error }`. `GET /api/creature/state` adds `scene: { pkg, layout, ttl_left }` while one plays.
 
@@ -179,8 +235,9 @@ Every declared param must be sent, and nothing else.
 - `"$name"` and `"@field"` are always bindings; a literal text cannot start with `$` or `@`.
 - A `line`, `curve`, `ring`, `arc` or `ticks` no wider than a braille dot is a hairline: one dot per step along its main
   direction, each dot touching the next (corners too), never two side by side, solid, with no soft edge to dither.
-- A tap lands on the visible `spot` that holds it; if several do, the smallest (`r`), then the nearest (its centre, or
-  its segment).
+- A tap lands on the visible `spot` that holds it on its disc or segment; if several do, the smallest (`r`), then the
+  nearest (its centre, or its segment). If none does, on the spot whose sector holds it (the same order).
+  `packages/tools/play.mjs` exports the same test (`spotAt`).
 
 ## 4. Agents
 
@@ -189,7 +246,17 @@ A skill that uses a package (first: `skills/molty-astro`) keeps all domain knowl
 
 `skills/molty-astro/scripts/astro.mjs` reads `pkg.list` and installs only when the package is missing or older than the
 index; it waits for the install job (the owner's tap, at most about 2 min) and reinstalls once when a scene answers
-`not_installed`. Its scenes stay under 1 KB of command each (a run of small layouts queued: at most 8 wait on the device).
+`not_installed`. Most of its scenes are under 1 KB of command each (a run of small layouts queued: at most 8 wait on
+the device); the chart carries every spot's reading and is about 4 to 6 KB (the limit is 8192 bytes of params).
+
+| `astro.mjs` | layouts | on screen |
+|---|---|---|
+| `tonight` | `globe` x 5, `saturn`, `sign` | the Moon, Mercury to Saturn, then the Moon's sign (19 s) |
+| `chart` | `chart` | ten bodies on the zodiac wheel, lines for the tightest aspects; planets, signs and lines are tap spots |
+| `chart --interactive` | `chart`, `sign-closeup` | the same, and the skill answers a tapped sign with its close-up and a spoken reading |
+| `signs` | `signs` | the twelve signs (36 s) |
+| `aspects [kind]` | `aspect` | each aspect on the degree grid (5 s each) |
+| `events [kind]` | `transit`, `occultation`, `appulse`, `solar-eclipse`, `lunar-eclipse` | the next real one of each (6 s each) |
 
 ## 5. Creature packages
 

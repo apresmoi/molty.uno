@@ -407,7 +407,7 @@
     },
     "tap_zone": {
       "type": "object",
-      "required": ["radius", "reads"],
+      "required": ["reads"],
       "additionalProperties": false,
       "properties": {
         "at": { "$ref": "#/$defs/place", "description": "The centre of a round zone." },
@@ -422,9 +422,27 @@
         "reads": { "type": "string", "maxLength": 160, "description": "What Molty shows at once when tapped, word by word, with no round trip: up to 160 plain ASCII characters, or a binding to a reading input." },
         "id": { "type": "string", "maxLength": 40, "description": "Names the zone in the tap event the agent gets." },
         "highlights": { "type": "string", "description": "Group names to light, spaces between, at most 4; or a binding. Left out: whatever is drawn inside the zone." },
-        "grow": { "$ref": "#/$defs/num", "description": "How much what it lights grows, 1 to 3. Default 1.25." }
+        "grow": { "$ref": "#/$defs/num", "description": "How much what it lights grows, 1 to 3. Default 1.25." },
+        "sector": {
+          "anyOf": [
+            { "type": "object", "required": ["width", "outer"], "additionalProperties": false, "properties": { "width": { "$ref": "#/$defs/num", "description": "Degrees wide, half to each side of where the zone is (at)." }, "inner": { "$ref": "#/$defs/size", "description": "Where the wedge starts, from the centre of the glass. Default 0." }, "outer": { "$ref": "#/$defs/size", "description": "Where the wedge ends." } } },
+            { "type": "object", "required": ["from", "to", "outer"], "additionalProperties": false, "properties": { "from": { "type": "number", "description": "The angle the wedge starts at." }, "to": { "type": "number", "description": "The angle it ends at, counter-clockwise from from." }, "inner": { "type": "number", "minimum": 0, "maximum": 2 }, "outer": { "type": "number", "minimum": 0, "maximum": 2 } } }
+          ],
+          "description": "The zone is also a wedge of a ring round the centre of the glass: a whole slice to tap. Either { from, to, inner, outer }: from one angle to another, between two distances (then at and radius may be left out); or { width, inner, outer }: so many degrees wide around where the zone is, for a zone placed by an input. A tap right on a zone's own circle or line beats a tap that only falls in a wedge.",
+          "examples": [{ "from": 180, "to": 210, "inner": 0.75, "outer": 0.9 }, { "width": 30, "inner": 0.75, "outer": 0.9 }],
+          "errorMessage": "a sector is { from, to, inner, outer } (two angles and two distances) or { width, inner, outer } (degrees wide around the zone's own place)"
+        },
+        "opens": {
+          "anyOf": [
+            { "type": "string" },
+            { "type": "object", "required": ["screen"], "additionalProperties": false, "properties": { "screen": { "type": "string", "description": "The screen to open: its name, or a binding to a text input." }, "seconds": { "$ref": "#/$defs/num", "description": "How long it stays, 1 to 600, when it is a held screen. Left out: until a tap beside it." } } }
+          ],
+          "description": "A tap opens another screen of this package over this one, on Molty itself, and comes back when it ends or at a tap beside it. Write the screen's name, or { screen, seconds }. The opened screen's inputs are found by name: in the tapped element first, else among this screen's inputs; a list passes on only the elements whose `of` is this zone's id.",
+          "examples": ["sign-closeup", { "screen": "sign-closeup", "seconds": 12 }],
+          "errorMessage": "opens is a screen's name, or { screen, seconds }"
+        }
       },
-      "description": "Nothing visible: a place to tap. Round (at and radius) or along a segment (along and radius). Overlapping zones: the smallest wins, then the nearest."
+      "description": "Nothing visible: a place to tap. Round (at and radius), along a segment (along and radius), or a wedge of a ring (sector). Overlapping zones: the smallest wins, then the nearest."
     }
   }
 }
