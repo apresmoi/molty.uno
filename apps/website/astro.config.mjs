@@ -7,7 +7,7 @@ import react from '@astrojs/react';
 import { existsSync } from 'node:fs';
 import { analyticsHead } from './src/config/analytics.mjs';
 import { SYNCED_DOCS } from './src/config/docs.mjs';
-import { SITE_URL, SITE_NAME, SITE_DESCRIPTION, REPO_URL, REPO_BRANCH, THREE_CDN } from './src/config/site.mjs';
+import { SITE_URL, SITE_NAME, SITE_DESCRIPTION, REPO_URL, REPO_BRANCH } from './src/config/site.mjs';
 
 /** @param {string} path */
 const repoPath = (path) => fileURLToPath(new URL(path, import.meta.url));
@@ -17,33 +17,23 @@ const repoPath = (path) => fileURLToPath(new URL(path, import.meta.url));
 /** @param {{ source: string }} doc */
 const syncedExists = (doc) => existsSync(repoPath(`../../${doc.source}`));
 
-/** The creature engine imports bare `three`; like device/console/vite.config.ts, it comes from the
- *  CDN at runtime instead of being bundled (~600 KB). */
-const threeFromCdn = () => ({
-  name: 'molty-three-cdn',
-  enforce: /** @type {const} */ ('pre'),
-  /** @param {string} id */
-  resolveId: (id) => (id === 'three' ? { id: THREE_CDN, external: true } : null),
-});
-
 export default defineConfig({
   site: SITE_URL,
   devToolbar: { enabled: false },
   vite: {
-    plugins: [threeFromCdn()],
     resolve: {
       dedupe: ['react', 'react-dom'],
-      // The REAL engine and assets from the repo, imported, never copied (as device/console/ does).
+      // The firmware's renderer (built by `make web-molty`) and the packages it plays, from the
+      // repo: imported, never copied.
       alias: [
-        { find: '@creatures', replacement: repoPath('../../device/creatures/js') },
-        { find: '@molty-files', replacement: repoPath('../../device/creatures/molty') },
-        { find: '@molty-catalog', replacement: repoPath('../../device/creatures/catalog') },
+        { find: '@molty-wasm', replacement: repoPath('../../device/firmware/web/built') },
+        { find: '@packages', replacement: repoPath('../../packages') },
       ],
     },
     server: { fs: { allow: ['../..'] } },
     // the fluid worker lazy-loads glyphcss's atlas payloads: workers must be ES modules
     worker: { format: 'es' },
-    // Thumbnails and .molty files ship as real files (downloadable, cacheable), not data URIs.
+    // The module, the packages and the still ship as real files (cacheable), not data URIs.
     build: { assetsInlineLimit: 0 },
   },
   integrations: [

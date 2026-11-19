@@ -1,5 +1,5 @@
 /* The showcase is one stage over the live fluid (FluidField, fixed behind): the heading is
-   drawn BY the fluid (transparent text once it is live), the Molty lives in the big slot. */
+   drawn BY the fluid (transparent text once it is live), the cat lives on the big screen. */
 .root {
   position: relative;
   font: var(--m-text-md) / 1.6 var(--m-font-mono);
@@ -20,8 +20,8 @@
   padding-inline: var(--m-gutter);
 }
 
-/* one column (phones, tablets): heading, text, the stage, its actions, the names. The stage
-   island's children take these areas (MoltyShowcase: stage, panel, names). */
+/* one column (phones, tablets): heading, text, the stage, its actions. The stage island's
+   children take these areas (MoltyShowcase: stage, panel). */
 .show {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -29,8 +29,7 @@
     "head"
     "text"
     "stage"
-    "panel"
-    "names";
+    "panel";
   align-items: start;
   padding-block: calc(var(--m-header-height) + var(--m-space-6)) var(--m-space-12);
 }
@@ -93,12 +92,11 @@
 @media (min-width: 60rem) {
   .show {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    grid-template-rows: auto auto auto minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
     grid-template-areas:
       "stage head"
       "stage text"
-      "stage panel"
-      "stage names";
+      "stage panel";
     column-gap: var(--m-space-12);
     min-height: 100svh;
     box-sizing: border-box;

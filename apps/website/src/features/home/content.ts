@@ -19,11 +19,10 @@ export const ldJson = {
 export const WORDMARK = "#3ccf96";
 export const FLUID_INK = "#9cb8ac";
 
-/** The hero's Moltys take turns emerging: the duck first, then the octopus, then the bunny. */
-export const HERO_MOLTYS = ["cute-duck", "cute-octopus", "cute-bunny"];
-export const GALLERY_FIRST = "cute-axolotl";
-export const BRIDGE_MOLTY = { id: "cute-octopus", color: "#c6a8f2" };
-export const BAKE_MOLTY = { id: "cute-duck", color: "#ffdf5a" };
+/** moltys: the cat's own body colour (packages/cat, palette.body). */
+export const CAT_INK = "#a99be8";
+export const BRIDGE_INK = "#c6a8f2";
+export const BAKE_INK = "#ffdf5a";
 
 /** What an agent might say through Molty, read one word at a time out of the fluid; its
  *  question is answered by a tap on the screen (yes / no / idk), and the agent says one of these back. */

@@ -1,40 +1,27 @@
-// The Moltys showcase (/showcase/): every Molty and everything it can do, on one big stage.
+// The showcase (/showcase/): the cat and everything it can do, on one big stage.
 export const title = "moltys showcase — molty.UNO";
 export const description =
-  "All 26 Moltys and their actions: moods, their own beats and the glass beats, played live in the fluid.";
+  "The cat, the first Molty, drawn live by the device's own code: its moods, its gestures, the recording ring, a question and scenes.";
 
-export const SHOWCASE_FIRST = "cute-axolotl";
-/** The heading's colour until the stage's Molty tints it. */
-export const SHOWCASE_INK = "#3ccf96";
+/** The heading's colour: the cat's own body colour (packages/cat, palette.body). */
+export const SHOWCASE_INK = "#a99be8";
 
-/** Autoplay: seconds between actions, and how many actions before the next Molty. */
+/** Autoplay: seconds between actions. */
 export const AUTOPLAY_GAP = 1.2;
-export const AUTOPLAY_PER_MOLTY = 4;
 
-export interface ShowcaseState {
-  molty: string | null;
-  action: string | null;
+const NAME = /^[a-z][\w-]{0,31}$/i;
+
+/** ?a=<action name>: anything malformed is ignored (null). */
+export function readShowcaseUrl(search: string): string | null {
+  const a = new URLSearchParams(search).get("a");
+  return a && NAME.test(a) ? a : null;
 }
 
-const ID = /^[a-z][\w-]{0,47}$/i;
-
-/** ?m=<catalog id>&a=<action name>: anything malformed is ignored (null). */
-export function readShowcaseUrl(search: string): ShowcaseState {
+/** The same search string with a set (or removed); every other parameter is kept. */
+export function writeShowcaseUrl(search: string, action: string | null): string {
   const q = new URLSearchParams(search);
-  const m = q.get("m"),
-    a = q.get("a");
-  return { molty: m && ID.test(m) ? m : null, action: a && ID.test(a) ? a : null };
-}
-
-/** The same search string with m / a set (or a removed); every other parameter is kept. */
-export function writeShowcaseUrl(search: string, state: ShowcaseState): string {
-  const q = new URLSearchParams(search);
-  for (const [key, value] of [
-    ["m", state.molty],
-    ["a", state.action],
-  ] as const)
-    if (value) q.set(key, value);
-    else q.delete(key);
+  if (action) q.set("a", action);
+  else q.delete("a");
   const s = q.toString();
   return s ? `?${s}` : "";
 }

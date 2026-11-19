@@ -12,7 +12,7 @@
 // screen-left: polycss camera rotY), `pitch` about the horizontal (- = its face tipped down,
 // top edge toward the viewer: polycss camera rotX - 90).
 
-export type RevealKind = "arrive" | "turn" | "lid" | "rise" | "coin" | "quick";
+export type RevealKind = "arrive" | "turn" | "lid" | "rise" | "coin";
 
 export interface RevealFrame {
   yaw: number;
@@ -21,14 +21,11 @@ export interface RevealFrame {
   lift: number;
   /** The whole device's opacity (it arrives). */
   opacity: number;
-  /** 0…1: the screen is off (a dark disc over it), so the fluid behind cannot show unturned. */
+  /** 0…1: the screen is off (a dark disc over it): it cannot turn with the board, so it lights
+   *  as the turn ends. */
   cover: number;
   /** The glass shell's swing about its top edge (deg, negative = open). */
   lid: number;
-  /** Keep the slot's Molty melted (the fluid cannot turn with the board, so it waits). */
-  hold: boolean;
-  /** Turn the Molty with the board (deg; the slot's rig yaw), or null to leave it be. */
-  moltyYaw: number | null;
 }
 
 export const REST: RevealFrame = {
@@ -38,8 +35,6 @@ export const REST: RevealFrame = {
   opacity: 1,
   cover: 0,
   lid: 0,
-  hold: false,
-  moltyYaw: null,
 };
 
 /** Seconds each kind takes (every one ≤ 1.2 s). */
@@ -49,7 +44,6 @@ export const REVEAL_SECONDS: Record<RevealKind, number> = {
   lid: 1.05,
   rise: 1.15,
   coin: 1.2,
-  quick: 0.7,
 };
 
 const clamp01 = (x: number) => (x <= 0 ? 0 : x >= 1 ? 1 : x);
@@ -87,8 +81,7 @@ export function revealFrame(kind: RevealKind, u: number): RevealFrame {
   const arrive = smooth(t / 0.16);
   switch (kind) {
     // the hero, on load: it comes up out of the depth below, turned and tipped away, swings to
-    // face you and the screen lights; only then does the Molty run in (the hold), so the
-    // device arrives first and the creature second
+    // face you and the screen lights: the device arrives first, what it shows second
     case "arrive": {
       const yaw = land(wound(t, -38, -4, 0.13, 8.6, ZETA), u);
       return {
@@ -98,14 +91,13 @@ export function revealFrame(kind: RevealKind, u: number): RevealFrame {
         lift: land(wound(t, 0.12, 0.015, 0.13, 9.5, 0.7), u),
         opacity: arrive,
         cover: 1 - smooth((t - 0.55) / 0.3),
-        hold: t < 0.72,
       };
     }
     // turned away, it winds a touch further, swings to face you and overshoots once; the
     // screen lights as the swing ends
     case "turn": {
       const yaw = land(wound(t, 46, 5, 0.13, 8.6, ZETA), u);
-      return { ...REST, yaw, opacity: arrive, cover: 1 - smooth((t - 0.5) / 0.32), hold: t < 0.36, moltyYaw: yaw };
+      return { ...REST, yaw, opacity: arrive, cover: 1 - smooth((t - 0.5) / 0.32) };
     }
     // the reader: it swings in with its glass held open, then the glass falls shut under
     // gravity, bounces once on the bezel and the screen lights under it
@@ -122,7 +114,6 @@ export function revealFrame(kind: RevealKind, u: number): RevealFrame {
         lift: land(wound(t, 0.15, 0.02, 0.13, 9.5, 0.7), u),
         opacity: arrive,
         cover: 1 - smooth((t - 0.5) / 0.32),
-        hold: t < 0.36,
       };
     }
     // a coin arriving already spinning on its edge: the spring catches its momentum, it slows,
@@ -135,14 +126,7 @@ export function revealFrame(kind: RevealKind, u: number): RevealFrame {
         lift: land(spring(t, -0.08, 0, 9, 0.6), u),
         opacity: arrive,
         cover: 1 - smooth((t - 0.55) / 0.3),
-        hold: t < 0.48,
-        moltyYaw: Math.abs(yaw) < 80 ? yaw : null,
       };
-    }
-    // a pick on the showcase: a quick swing, the Molty turning with it, the screen dimmed a beat
-    case "quick": {
-      const yaw = land(wound(t, 26, 3, 0.08, 12, ZETA), u);
-      return { ...REST, yaw, cover: 0.85 * (1 - smooth(t / 0.32)), moltyYaw: yaw };
     }
   }
 }

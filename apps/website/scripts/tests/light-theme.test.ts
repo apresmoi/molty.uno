@@ -1,7 +1,7 @@
 // The light theme (src/styles/tokens.css, services/molty-stage/paper.ts): every text colour token
-// holds WCAG AA on the light surfaces; the fluid filter is plain invert(1), which the device
-// screens undo with the same filter (exact only for a pure invert: anything else clips the
-// Moltys' colours); the page's own fluid colours land on paper in their own hue at ≥ 3:1.
+// holds WCAG AA on the light surfaces; the fluid filter is plain invert(1) (its own exact
+// inverse, so a pre-inverted colour lands exactly); the page's own fluid colours land on paper
+// in their own hue at ≥ 3:1.
 // Run: pnpm test (node --test; Node 22 strips the types).
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -32,10 +32,8 @@ test("light text tokens hold AA (4.5:1) on bg, panel and glass", () => {
     }
 });
 
-test("the light fluid filter is a plain invert, undone by the screens with the same filter", () => {
+test("the light fluid filter is a plain invert, its own exact inverse", () => {
   assert.equal(read(light, "fluid-filter"), "invert(1)");
-  assert.equal(read(light, "screen-filter"), read(light, "fluid-filter"));
-  assert.equal(read(light, "still-filter"), read(light, "fluid-filter"));
   for (const c of ["#ffdf5a", "#3ccf96", "#c6a8f2", "#000000", "#ffffff"]) assert.equal(inverted(inverted(c)), c);
 });
 

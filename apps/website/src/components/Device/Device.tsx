@@ -42,15 +42,15 @@ const toggle = (el: HTMLElement, name: string, on: boolean) => {
 };
 const GLARE_VARS = ["--glare-x", "--glare-y", "--glare-squeeze", "--glare-angle", "--glare-fade"];
 
-/** A round screen's device: the bezel (a rounded, lit lip and a gasket), the screen and its
- *  domed glass, a contact shadow. At rest it is flat CSS (face on, nothing 3D, no layers of its
- *  own). The first time it is well in view it turns into place (`reveal`): only for those
- *  ~1.2 s is the board's wall a polycss scene (the face layer turns with the same orthographic
- *  rotation, the glass's reflections slide against the turn), then the scene is unmounted and
- *  the device is flat again. `replay` changing turns it in again (quickly). It never takes the
- *  pointer. In a page-fluid Molty slot the Molty waits for the turn (data-fluid-hold) and
- *  turns with it (data-fluid-yaw). */
-export function Device({ reveal, replay }: { reveal: RevealKind; replay?: string }) {
+/** A round screen's device: the bezel (a rounded, lit lip and a gasket), the screen's domed
+ *  glass, a contact shadow. At rest it is flat CSS (face on, nothing 3D, no layers of its own).
+ *  The first time it is well in view it turns into place (`reveal`): only for those ~1.2 s is the
+ *  board's wall a polycss scene (the face layer turns with the same orthographic rotation, the
+ *  glass's reflections slide against the turn), then the scene is unmounted and the device is
+ *  flat again. It never takes the pointer. The
+ *  screen under it cannot turn with the board, so it is covered (off) through the turn:
+ *  `onScreen` says when it goes off and when it lights. */
+export function Device({ reveal, onScreen }: { reveal: RevealKind; onScreen?: (on: boolean) => void }) {
   const root = useRef<HTMLSpanElement>(null);
   const face = useRef<HTMLSpanElement>(null);
   const lid = useRef<HTMLSpanElement>(null);
@@ -96,14 +96,10 @@ export function Device({ reveal, replay }: { reveal: RevealKind; replay?: string
     }
     lid.current!.style.transform = f.lid ? `perspective(${(unit.current * 8).toFixed(0)}px) rotateX(${f.lid}deg)` : "";
     cover.current!.style.opacity = f.cover ? String(f.cover) : "";
-    // attributes only on a change: each write is a mutation (pageFluid observes data-fluid-hold)
-    toggle(el, "data-screen-off", f.cover > 0.5);
-    const slot = el.closest<HTMLElement>("[data-fluid-molty]");
-    if (slot) {
-      toggle(slot, "data-fluid-hold", f.hold);
-      // the rig's yaw turns the face toward screen-right; the board's toward screen-left
-      if (f.moltyYaw) slot.dataset.fluidYaw = ((-f.moltyYaw * Math.PI) / 180).toFixed(3);
-      else delete slot.dataset.fluidYaw;
+    const off = f.cover > 0.5;
+    if (el.hasAttribute("data-screen-off") !== off) {
+      el.toggleAttribute("data-screen-off", off);
+      onScreen?.(!off);
     }
   };
 
@@ -178,23 +174,11 @@ export function Device({ reveal, replay }: { reveal: RevealKind; replay?: string
       { threshold: [0, 0.45] },
     );
     io.observe(el);
-    const slot = el.closest<HTMLElement>("[data-fluid-molty]");
     return () => {
       io.disconnect();
       cancelAnimationFrame(raf.current);
-      // never leave the slot's Molty held
-      delete slot?.dataset.fluidHold;
-      delete slot?.dataset.fluidYaw;
     };
   }, []);
-
-  // a new pick (the showcase): turn in again, quickly
-  const first = useRef(true);
-  useEffect(() => {
-    if (first.current) return void (first.current = false);
-    if (!seen.current || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    play("quick");
-  }, [replay]);
 
   // the wall's polygons, in the theme's colours of the moment it turns (the back plate only
   // for a board that spins past edge-on: a coin)
@@ -222,7 +206,6 @@ export function Device({ reveal, replay }: { reveal: RevealKind; replay?: string
         </span>
       )}
       <span ref={face} className={styles.face}>
-        <span className={styles.screen} />
         <span className={styles.bezel}>
           <span className={styles.lip} />
         </span>

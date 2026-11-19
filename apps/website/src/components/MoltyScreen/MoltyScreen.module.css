@@ -1,0 +1,40 @@
+/* A Molty device: it fills the square its parent gives it. The canvas is the round screen (the
+   firmware's renderer draws into it, 466 px a side, sized by CSS); the still stands in until it
+   draws; the Device over them is the bezel and the glass. A screen is a dark panel in both
+   themes. */
+.root {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+.still,
+.canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+}
+.still {
+  object-fit: cover;
+  transition: opacity 0.4s;
+}
+.canvas {
+  opacity: 0;
+  /* a tap is a tap and a sideways drag stirs the water; an up or down swipe scrolls the page */
+  touch-action: pan-y;
+  cursor: pointer;
+}
+.root[data-live] .canvas {
+  opacity: 1;
+}
+.root[data-live] .still {
+  opacity: 0;
+}
+/* the intro's start state (Head, before the first paint): the screen is about to power on, so
+   its still is not shown first (no JS, no renderer, or reduced motion: it shows) */
+@media (prefers-reduced-motion: no-preference) {
+  :global(html[data-fluid-moltys="pending"]) .still {
+    opacity: 0;
+  }
+}
