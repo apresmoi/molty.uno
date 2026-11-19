@@ -118,6 +118,8 @@ bool pkg_num_ok(int pf, float v) {
     case PF_SPIN:             return v >= -720.f && v <= 720.f;
     case PF_ON: case PF_OFF:  return v >= 0.f && v <= PKG_DUR_MAX;
     case PF_GROW:             return v >= 1.f && v <= 3.f;
+    case PF_ARC:              return v > 0.f && v <= 360.f;
+    case PF_R0: case PF_R1:   return v >= 0.f && v <= 2.f;
     default:                  return v >= -720.f && v <= 720.f;   /* angles: a0 a1 rot polar */
     }
 }
@@ -212,6 +214,9 @@ static const struct { const char *key; uint8_t pf, type; uint16_t kinds; } FIELD
     { "group", PF_GROUP, T_STR, ALL & ~KB(PK_SPOT) }, { "when", PF_WHEN, T_STR, ALL & ~KB(PK_SPOT) },
     { "lights", PF_LIGHTS, T_STR, KB(PK_SPOT) },
     { "grow", PF_GROW, T_NUM, KB(PK_SPOT) },          /* what a tap on it lights grows this much */
+    /* a spot is also tappable in a ring sector about the glass centre: arc degrees wide, centred on the spot's own
+     * direction, from radius r0 (0 unless given) to r1 */
+    { "arc", PF_ARC, T_NUM, KB(PK_SPOT) }, { "r0", PF_R0, T_NUM, KB(PK_SPOT) }, { "r1", PF_R1, T_NUM, KB(PK_SPOT) },
 };
 #define NFIELDS ((int)(sizeof(FIELDS) / sizeof(FIELDS[0])))
 /* what each kind cannot do without */
@@ -326,6 +331,7 @@ static const char *parse_item(ictx_t *c, const cJSON *j, pkg_item_t *it) {
     if ((have & REQUIRED[kind]) != REQUIRED[kind]) return "item: a required field is missing";
     if ((kind == PK_LINE || kind == PK_CURVE) && !it->pts) return "item: pts";
     if (it->polar && (have & (KB(PF_X) | KB(PF_Y)))) return "item: polar or x / y, not both";
+    if (!(have & KB(PF_ARC)) != !(have & KB(PF_R1)) || ((have & KB(PF_R0)) && !(have & KB(PF_ARC)))) return "item: a sector is arc and r1 (and r0)";
     if (it->f[PF_WHEN].src != PV_NONE && (it->f[PF_WHEN].src != PV_STR || strcmp(it->f[PF_WHEN].s, "lit"))) return "item: when is \"lit\"";
     return NULL;
 }

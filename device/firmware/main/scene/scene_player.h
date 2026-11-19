@@ -67,6 +67,8 @@ typedef struct {
     float on, off;                      /* off 0 = until the end                           */
     float x, y, r, w, a0, a1, len, size, lit, side, spin, rot;
     float grow;                         /* spot: how much what a tap on it lights grows (PKG_GROW) */
+    float arc, r0, r1;                  /* spot: also tappable in this ring sector about the glass centre: arc degrees
+                                         * wide (0: none) round the spot's own direction, radii r0..r1 */
 } scene_item_t;
 
 typedef struct scene {
@@ -94,7 +96,8 @@ void scene_free(scene_t *sc);
 float scene_end(const scene_t *sc);
 /** The spot a tap at (x, y) (glass units, y up) lands on at t s: of the visible spots that
  *  hold it (within r of the spot's centre, or of its segment pts), the smallest, then the
- *  nearest. Its item index, -1 for none. */
+ *  nearest; if none holds it so, of those whose sector does (arc, r0, r1), the same. Its item
+ *  index, -1 for none. */
 int scene_spot_at(const scene_t *sc, float t, float x, float y);
 
 typedef struct {
@@ -122,7 +125,8 @@ static inline bool scene_playing(const scene_player_t *p) { return p->cur != NUL
 /* A scene in high definition (fluid_draw_opts_t.scene): alone and crisp on black, it forms
  * from dust, and when it ends or the next one comes it breaks into dust first (out: the
  * caller holds what it showed for the drawer meanwhile), then the next forms. */
-#define SCENE_DUST_S 0.45f              /* each way: dust to the scene, the scene to dust  */
+#define SCENE_DUST_S 0.6f               /* each way: dust to the scene, the scene to dust (on fine dust it rises row by
+                                         * row: about two rows a frame is what the panel takes) */
 typedef struct {
     unsigned gen;                       /* the scene shown (scene_player_t.gen), 0 = none   */
     bool out;                           /* it ended: what it showed goes to dust            */
@@ -143,6 +147,7 @@ static inline float scene_hd_dust(const scene_hd_t *h) { return h->gen || h->out
 #define SCENE_GROW      PKG_GROW        /* its scale, grown, unless its spot says (grow)      */
 #define SCENE_GROW_IN_S 0.5f            /* the growth, easing out as the ring spreads       */
 #define SCENE_GROW_OUT_S 0.4f           /* back, once its reading is over                   */
+#define SCENE_GROW_HZ   15.f            /* its steps a second: every other frame, so the water it stirs has the frames between */
 #define SCENE_LIT_WHITE 0.5f            /* a lit item's colour this far towards white        */
 typedef struct {
     int spot;                           /* the tapped spot (item), -1 none                  */
@@ -176,6 +181,8 @@ int scene_outline(const scene_t *sc, int n, void (*fn)(void *ctx, float x, float
 #define SCENE_CAPTION_RIPPLE   0.12f    /* its strength (PORT-SPEC 0.16, gentler for the panel's time) */
 #define SCENE_CAPTION_RIPPLE_R 0.06f    /* its radius, glass units                         */
 typedef struct { const char *str; int n, orp; } scene_caption_t;
+/** The box a caption word's letters take at glass height y on a stage px wide: [x0, x1, y0, y1], stage px (y down). */
+void scene_caption_box(const scene_caption_t *cap, float y, int stage, float box[4]);
 
 /* The scene in high definition (fluid_draw_opts_t.shapes, .kdots): its items as shapes at the
  * panel's pixels (rings, strokes, discs, its symbols and letters, the subtitle's too; a ball
