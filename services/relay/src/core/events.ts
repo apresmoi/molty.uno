@@ -6,7 +6,8 @@
 //   shake  {peak_g:number, reversals:int, ms:int, listen?:string}
 //          (listen: the local id of the listen the device began on this shake — shake to talk,
 //          core/turns.ts; the relay adopts it and agents see {listening:true, turn_id} instead)
-//   tap    {x:0..1, y:0..1}
+//   tap    {x:0..1, y:0..1, spot?:string}
+//          (spot: the id of the scene's tap spot the finger landed on, when it landed on one)
 //   button {id:"accept"|"reject"}
 //   answer {job, index:int|null, label?:string, reason?:"timeout"|"cancelled"}
 //          (the human's tap on a molty_ask; also checked against the job's options in room.ts)
@@ -66,12 +67,17 @@ const SHAPES: Record<string, (d: Record<string, unknown>) => JsonObject | undefi
           ...(d.hold === true ? { hold: true } : {}),
         }
       : undefined,
-  tap: (d) => (num(d.x, 0, 1) && num(d.y, 0, 1) ? { x: d.x as number, y: d.y as number } : undefined),
+  tap: (d) =>
+    num(d.x, 0, 1) && num(d.y, 0, 1)
+      ? { x: d.x as number, y: d.y as number, ...(typeof d.spot === "string" && SPOT_RE.test(d.spot) ? { spot: d.spot } : {}) }
+      : undefined,
   double_tap: (d) => (num(d.x, 0, 1) && num(d.y, 0, 1) ? { x: d.x as number, y: d.y as number } : undefined),
   button: (d) => (d.id === "accept" || d.id === "reject" ? { id: d.id } : undefined),
   answer: answerShape,
 };
 
+/** A scene spot's id, as the package names it (the firmware's PKG_STR_MAX). */
+const SPOT_RE = /^[\w.:-]{1,40}$/;
 const JOB_RE = /^molty-[a-z2-9]{10}\.j_[A-Za-z0-9_-]{8,32}$/;
 const LABEL_RE = new RegExp(`^[\\x20-\\x7e]{1,${MAX_ASK_LABEL}}$`);
 
