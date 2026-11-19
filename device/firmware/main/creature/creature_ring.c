@@ -40,8 +40,12 @@
 #define CR_C2       0.28f    /* ... its water quicker while the ring forms or lets go (fluid_params_t c2: 0.11; a
                               * touch's ripple reaches the rim in ~1.5 s, this one in ~0.8 s; stable below ~0.4)  */
 #define CR_FORM_S   0.9f     /* ... and lands there by now, the water's crest or not                           */
-#define CR_LET_S    0.12f    /* the release: a ring-shaped wave let go at the line (as ring-options.html)        */
+#define CR_LET_S    0.04f    /* the release: a ring-shaped wave let go at the line (as ring-options.html), a third
+                              * as high as the page's 0.12: the water under it (and the creature) moves a third as
+                              * far, so far fewer cells change in its heaviest frames (the panel's cost) ...      */
 #define CR_LET_W    0.05f
+#define CR_LET_H0   0.007f   /* ... its crest wears the line's colour from this height of the water up, full at   */
+#define CR_LET_H1   0.027f   /* this (a third of the 0.02..0.08 the higher wave had: the same part of it is lit)  */
 #define CR_LAND_H   0.012f   /* the crest has arrived where the water is up this much (h units)                */
 #define CR_LAND_S   0.35f    /* a part lands row by row over this once its crest arrives (rows scattered: a few a
                               * frame for the panel, which takes ~0.6 ms a changed row whatever is in it)       */
@@ -170,7 +174,7 @@ cr_t *cr_create(const fluid_sim_t *s) {
     for (int n = 0; n < r->n + r->nin; n++) r->dot[n].cw = (uint8_t)(255.f * smooth(CR_CREST_R, CR_PROBE_R, r->dot[n].r * (1.f / 65535.f)) + 0.5f);
     for (int q = 0; q < 128; q++) {
         r->hin[q] = (uint8_t)(255.f * smooth(0.015f, 0.07f, q * (1.f / FQ_H)) + 0.5f);
-        r->hout[q] = (uint8_t)(255.f * smooth(0.02f, 0.08f, q * (1.f / FQ_H)) + 0.5f);
+        r->hout[q] = (uint8_t)(255.f * smooth(CR_LET_H0, CR_LET_H1, q * (1.f / FQ_H)) + 0.5f);
     }
     {   /* the forming crest only colours the band's dots from CR_CREST_R out: those, row by row */
         int nc = 0;
@@ -308,7 +312,7 @@ bool cr_paint(cr_t *r, fluid_sim_t *s, float dt, uint32_t frame, const uint8_t *
                 const bool list = r->mode == IN;
                 const int n0 = list ? r->crow[j] : pass ? r->irow[j] : r->brow[j], n1 = list ? r->crow[j + 1] : pass ? r->irow[j + 1] : r->brow[j + 1];
                 const uint16_t rmin = (uint16_t)((r->mode == OUT ? CR_CREST_IN : CR_CREST_R) * 65535.f);
-                const int16_t hmin = (int16_t)((r->mode == OUT ? 0.02f : 0.015f) * FQ_H);
+                const int16_t hmin = (int16_t)((r->mode == OUT ? CR_LET_H0 : 0.015f) * FQ_H);
                 const int red = (int)(r->red * 255.f), fade = r->mode == OUT ? (int)((0.3f + 0.7f * r->red) * 256.f) : 256;
                 for (int m = n0; m < n1; m++) {
                     const cr_dot_t *d = &r->dot[list ? r->cdot[m] : m];

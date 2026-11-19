@@ -40,7 +40,13 @@ static bool listening;
 bool link_audio_listening(uint32_t *age) { (void)age; return listening; }
 static unsigned spot_hit;       /* the spot a tap lands on (mole_fluid.c), 0 none */
 unsigned mole_fluid_spot_tap(int px, int py) { (void)px; (void)py; return spot_hit; }
-void mole_fluid_spot_id(unsigned spot, char *id, size_t size) { snprintf(id, size, "%s", spot ? "mars" : ""); }
+static const char *spot_opens = "";   /* the layout that spot opens */
+void mole_fluid_spot_id(unsigned spot, char *id, size_t size, char *open, size_t open_size) {
+    const bool on = spot && spot != MOLE_SPOT_BACK;
+    snprintf(id, size, "%s", on ? "mars" : "");
+    snprintf(open, open_size, "%s", on ? spot_opens : "");
+}
+bool mole_fluid_scene_event(mole_scene_evt_t *out) { (void)out; return false; }
 bool link_audio_say_waiting(void) { return false; }
 uint32_t link_audio_job_gen(void) { return 0; }
 void link_audio_request(uint32_t gen, link_audio_req_t what) { (void)gen; (void)what; }
@@ -192,7 +198,19 @@ static void test_spot(void) {
     /* the agent hears which spot, whatever tap is bound to */
     const unsigned n0 = nframes;
     spot_do(0x105, sdk_now / 1000, &(gesture_limit_t){ .min_ms = 250 });
-    assert(nframes == n0 + 1 && strstr(last(), "\"name\":\"tap\"") && strstr(last(), "\"spot\":\"mars\""));
+    assert(nframes == n0 + 1 && strstr(last(), "\"name\":\"tap\"") && strstr(last(), "\"spot\":\"mars\"") && !strstr(last(), "opened") && !strstr(last(), "closed"));
+    /* a spot that opens a layout on Molty itself: the agent hears that it did */
+    spot_opens = "sign-closeup";
+    spot_do(0x105, sdk_now / 1000, &(gesture_limit_t){ .min_ms = 250 });
+    assert(nframes == n0 + 2 && strstr(last(), "\"spot\":\"mars\"") && strstr(last(), "\"opened\":\"sign-closeup\""));
+    spot_opens = "";
+    /* a tap beside the spots of a layout so opened is Molty's too (it goes back): no plain tap, the agent hears `closed` */
+    spot_hit = MOLE_SPOT_BACK;
+    touch(100, 100);
+    assert(atomic_load(&s_spot) == MOLE_SPOT_BACK && !atomic_load(&s_tap));
+    atomic_store(&s_spot, 0); spot_hit = 0;
+    spot_do(MOLE_SPOT_BACK, sdk_now / 1000, &(gesture_limit_t){ .min_ms = 250 });
+    assert(nframes == n0 + 3 && strstr(last(), "\"name\":\"tap\"") && strstr(last(), "\"closed\":true") && !strstr(last(), "spot"));
 }
 
 int main(void) {

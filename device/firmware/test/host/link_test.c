@@ -264,6 +264,12 @@ static void test_event_frames(void)
         "{\"t\":\"evt\",\"name\":\"tap\",\"data\":{\"x\":0.25,\"y\":0.5}}");
     expect_json(link_evt_tap_frame(-0.1, 1.7),
         "{\"t\":\"evt\",\"name\":\"tap\",\"data\":{\"x\":0,\"y\":1}}");
+    /* the scene on screen changed on the device itself: what is up now, and why */
+    expect_json(link_evt_scene_frame("astrology", "sign-closeup", "open", "leo"),
+        "{\"t\":\"evt\",\"name\":\"scene\",\"data\":{\"why\":\"open\",\"pkg\":\"astrology\",\"layout\":\"sign-closeup\",\"spot\":\"leo\"}}");
+    expect_json(link_evt_scene_frame("astrology", "chart", "back", ""),
+        "{\"t\":\"evt\",\"name\":\"scene\",\"data\":{\"why\":\"back\",\"pkg\":\"astrology\",\"layout\":\"chart\"}}");
+    expect_json(link_evt_scene_frame("", "", "end", NULL), "{\"t\":\"evt\",\"name\":\"scene\",\"data\":{\"why\":\"end\"}}");
     expect_json(link_evt_button_frame(true), "{\"t\":\"evt\",\"name\":\"button\",\"data\":{\"id\":\"accept\"}}");
     expect_json(link_evt_button_frame(false), "{\"t\":\"evt\",\"name\":\"button\",\"data\":{\"id\":\"reject\"}}");
 }

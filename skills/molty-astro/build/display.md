@@ -2,7 +2,7 @@
 
 Generated from display.yaml by `molty-display build`. Do not edit: change display.yaml and build again.
 
-Draws the sky on Molty, the zodiac wheel with aspects, planet globes, the signs, eclipses and transits. Play it with the molty-astro skill. Package `astrology`, version 1.5.0. On a Molty without screens: say it in words instead.
+Draws the sky on Molty, the zodiac wheel with aspects, planet globes, the signs, eclipses and transits. Play it with the molty-astro skill. Package `astrology`, version 1.7.0. On a Molty without screens: say it in words instead.
 
 Show a screen with `scene.play { pkg, layout, params, ttl_s }` (`scene.queue` plays it after the one showing). `layout` is the screen's name.
 Send every input and nothing else. `inputs/<screen>.schema.json` (next to this file) checks params before you send them.
@@ -12,8 +12,8 @@ Send every input and nothing else. `inputs/<screen>.schema.json` (next to this f
 | [globe](#globe) | One body as a lit globe, the Moon at tonight's phase or a planet. | 2.5 s |
 | [saturn](#saturn) | Saturn as a lit globe inside its rings, tilted as they are seen tonight. | 2.5 s |
 | [sign](#sign) | One zodiac sign, large. | 4 s |
-| [chart](#chart) | All ten bodies on the zodiac wheel, joined by their tightest aspects. A tap on a planet, a sign or a line reads it. | held |
-| [sign-closeup](#sign-closeup) | One sign up close while Molty reads it aloud, its planets on its degree dial, each lit while it is read. | held |
+| [chart](#chart) | All ten bodies on the zodiac wheel, joined by their tightest aspects. A tap on a planet or a line reads it; a tap on a sign opens it up close. | held |
+| [sign-closeup](#sign-closeup) | One sign up close, its planets on its degree dial, each lit in turn while its reading shows. Molty opens it itself when a sign is tapped on the chart. | held |
 | [signs](#signs) | The twelve signs together, then each in turn, then all twelve again. | 36 s |
 | [aspect](#aspect) | One aspect on the degree grid, its two bodies, the angle between them and the figure it belongs to. | 5 s |
 | [transit](#transit) | Mercury or Venus crossing the face of the Sun. | 6 s |
@@ -72,13 +72,14 @@ A call that works:
 
 ## chart
 
-All ten bodies on the zodiac wheel, joined by their tightest aspects. A tap on a planet, a sign or a line reads it. Held until another screen replaces it or its `ttl_s` ends. Readings show in the middle.
+All ten bodies on the zodiac wheel, joined by their tightest aspects. A tap on a planet or a line reads it; a tap on a sign opens it up close. Held until another screen replaces it or its `ttl_s` ends. Readings show in the middle.
 
 | send | type | about |
 |---|---|---|
 | `bodies` | list, up to 10 | The Sun, the Moon and the eight planets, in order of longitude. |
-| `signs` | list, up to 12 | A reading for each of the twelve signs. The wheel draws the signs itself; these are the places to tap. |
+| `signs` | list, up to 12 | Each of the twelve signs: its reading, and what its close-up needs. The wheel draws the signs itself; a tap anywhere in a sign's 30 degree block opens sign-closeup on Molty, with these fields, the sign's ruler and the bodies of it. |
 | `aspects` | list, up to 11 | The three tightest aspects a line can show (none for a pair closer than 0.2). With --all, every one that fits, at most 11. |
+| `ruler` | list, up to 12 | Each sign's ruler, for its close-up: twelve, one a sign. |
 
 Each element of `bodies`:
 
@@ -90,14 +91,25 @@ Each element of `bodies`:
 | `c` | color, #rrggbb | Its color: sun #ffd678, moon #e6e6e0, mercury #c8bcb0, venus #fff0c4, mars #ff7a55, jupiter #ffc266, saturn #e8d890, uranus #9fe3e0, neptune #8fb4ff, pluto #c0a0d0. |
 | `say` | text a tap shows, up to 160 characters | What a tap on it shows: Sun in Gemini, you shine by talking and learning. Then its tightest aspect, if it fits. |
 | `id` | text, up to 40 letters | Its name, lower case (sun, moon ...): names it in the tap event, and is the group an aspect lights. |
+| `of` | text, up to 40 letters | The sign it is in, lower case: that sign's close-up shows the bodies of it. |
+| `da` | angle in degrees | Its place on that sign's degree dial, as in sign-closeup. |
+| `d` | color, #rrggbb | Its color at 60 percent, for when it is not being read there. |
+| `on` | seconds, 0 to 600 | When its reading starts in the close-up. |
+| `off` | seconds, 0 to 600 | When its reading ends in the close-up. |
 
 Each element of `signs`:
 
 | field | type | about |
 |---|---|---|
 | `a` | angle in degrees | The sign's middle on the wheel: (195 + 30 i) mod 360 for sign i, Aries 0. |
-| `say` | text a tap shows, up to 160 characters | What a tap on it shows: its nature and ruler, then its planets or, when it is empty, where its ruler is. |
+| `say` | text a tap shows, up to 160 characters | Its reading, the close-up's subtitle: its nature and ruler, then its planets or, when it is empty, where its ruler is. |
 | `id` | text, up to 40 letters | The sign's name, lower case: names it in the tap event. |
+| `sign` | one of: `aries` `taurus` `gemini` `cancer` `leo` `virgo` `libra` `scorpio` `sagittarius` `capricorn` `aquarius` `pisces` | The sign again, lower case: the close-up's symbol. |
+| `c` | color, #rrggbb | The sign's color, as in sign-closeup. |
+| `name` | text, up to 11 letters | The sign's name in capitals. |
+| `nx` | number, -1 to 1 | The name's centre in the close-up, as in sign-closeup. |
+| `ns` | distance, 0 to 2 (1 is the rim) | The name's type size there: 0.13, or 0.11 past 8 letters. |
+| `ttl` | seconds, 1 to 600 | How long the close-up plays: its reading's length plus 3 s. |
 
 Each element of `aspects`:
 
@@ -116,15 +128,24 @@ Each element of `aspects`:
 | `id` | text, up to 40 letters | The pair, lower case: sun-moon. Names the line in the tap event, and is its group. |
 | `lights` | group names, spaces between, up to 4 | What a tap on the line lights: the aspect and its two bodies, as in: sun-moon sun moon. |
 
+Each element of `ruler`:
+
+| field | type | about |
+|---|---|---|
+| `of` | text, up to 40 letters | The sign it rules, lower case. |
+| `g` | one of: `g-sun` `g-moon` `g-mercury` `g-venus` `g-mars` `g-jupiter` `g-saturn` `g-uranus` `g-neptune` `g-pluto` | The ruler's symbol: g-mars ... |
+| `x` | number, -1 to 1 | Its centre in the close-up, as in sign-closeup. |
+| `c` | color, #rrggbb | The ruler's color. |
+
 A call that works (lists cut to two elements here):
 
 ```json
-{"name":"scene.play","args":{"pkg":"astrology","layout":"chart","params":{"bodies":[{"g":"g-neptune","a":182.07,"r":0.64,"c":"#8fb4ff","say":"Neptune in Aries: you dream by being bold and going first. Pluto lends a hand.","id":"neptune"},{"g":"g-saturn","a":189.23,"r":0.54,"c":"#e8d890","say":"Saturn in Aries: you learn hard lessons with courage and a fast start. Moon makes it flow easily.","id":"saturn"}],"signs":[{"a":195,"say":"Aries: bold, quick fire, ruled by Mars. Neptune and Saturn here: by being bold and going first, you live out your dreams and your discipline.","id":"aries"},{"a":225,"say":"Taurus: steady, sensual earth, ruled by Venus. Empty now, so its ruler, Venus in Libra, shows how it plays out for you.","id":"taurus"}],"aspects":[{"x1":0.486,"y1":0.322,"x2":0.417,"y2":-0.408,"px1":0.494,"py1":0.407,"px2":0.409,"py2":-0.492,"c":"#ff5a4a","say":"Sun squares Moon: friction between self and mood.","id":"sun-moon","lights":"sun-moon sun moon"},{"x1":0.331,"y1":-0.459,"x2":-0.455,"y2":-0.12,"px1":0.409,"py1":-0.492,"px2":-0.533,"py2":-0.087,"c":"#6fa8ff","say":"Moon flows with Saturn: mood and limits in step.","id":"moon-saturn","lights":"moon-saturn moon saturn"}]},"ttl_s":60}}
+{"name":"scene.play","args":{"pkg":"astrology","layout":"chart","params":{"bodies":[{"g":"g-neptune","a":182.07,"r":0.64,"c":"#8fb4ff","say":"Neptune in Aries: you dream by being bold and going first. Pluto lends a hand.","id":"neptune","of":"aries","da":193.45,"d":"#566c99","on":4.19,"off":10.56},{"g":"g-saturn","a":189.23,"r":0.54,"c":"#e8d890","say":"Saturn in Aries: you learn hard lessons with courage and a fast start. Moon makes it flow easily.","id":"saturn","of":"aries","da":136.17,"d":"#8b8256","on":10.56,"off":18.08}],"signs":[{"a":195,"say":"Aries: bold, quick fire, ruled by Mars. Neptune and Saturn here: by being bold and going first, you live out your dreams and your discipline.","id":"aries","sign":"aries","c":"#ff9a7a","name":"ARIES","nx":-0.095,"ns":0.13,"ttl":22},{"a":225,"say":"Taurus: steady, sensual earth, ruled by Venus. Empty now, so its ruler, Venus in Libra, shows how it plays out for you.","id":"taurus","sign":"taurus","c":"#a8d890","name":"TAURUS","nx":-0.095,"ns":0.13,"ttl":14}],"aspects":[{"x1":0.486,"y1":0.322,"x2":0.417,"y2":-0.408,"px1":0.494,"py1":0.407,"px2":0.409,"py2":-0.492,"c":"#ff5a4a","say":"Sun squares Moon: friction between self and mood.","id":"sun-moon","lights":"sun-moon sun moon"},{"x1":0.331,"y1":-0.459,"x2":-0.455,"y2":-0.12,"px1":0.409,"py1":-0.492,"px2":-0.533,"py2":-0.087,"c":"#6fa8ff","say":"Moon flows with Saturn: mood and limits in step.","id":"moon-saturn","lights":"moon-saturn moon saturn"}],"ruler":[{"of":"aries","g":"g-mars","x":0.299,"c":"#ff7a55"},{"of":"taurus","g":"g-venus","x":0.355,"c":"#fff0c4"}]},"ttl_s":60}}
 ```
 
 ## sign-closeup
 
-One sign up close while Molty reads it aloud, its planets on its degree dial, each lit while it is read. Held until another screen replaces it or its `ttl_s` ends.
+One sign up close, its planets on its degree dial, each lit in turn while its reading shows. Molty opens it itself when a sign is tapped on the chart. Held until another screen replaces it or its `ttl_s` ends.
 
 | send | type | about |
 |---|---|---|
@@ -150,7 +171,7 @@ Each element of `bodies`:
 | field | type | about |
 |---|---|---|
 | `g` | one of: `g-sun` `g-moon` `g-mercury` `g-venus` `g-mars` `g-jupiter` `g-saturn` `g-uranus` `g-neptune` `g-pluto` | The planet's symbol: g-moon ... |
-| `a` | angle in degrees | Its place on the dial: 210 - 8 x its degree in the sign (0 lower left, over the top, 30 lower right), kept at least 28 apart and within 210 to -30. |
+| `da` | angle in degrees | Its place on the dial: 210 - 8 x its degree in the sign (0 lower left, over the top, 30 lower right), kept at least 28 apart and within 210 to -30. |
 | `c` | color, #rrggbb | Its color, as on the chart. |
 | `d` | color, #rrggbb | Its color at 60 percent, for when it is not being read. |
 | `on` | seconds, 0 to 600 | When Molty starts reading it: about 2.6 words a second and 0.3 s a sentence, after 1.2 s and the sign's own line. |
@@ -161,7 +182,7 @@ Each element of `bodies`:
 A call that works (lists cut to two elements here):
 
 ```json
-{"name":"scene.play","args":{"pkg":"astrology","layout":"sign-closeup","params":{"sign":"leo","c":"#a8d890","name":"LEO","nx":-0.095,"ns":0.13,"say":"Leo: warm, proud fire, ruled by the Sun. Moon, Mars and Jupiter here: with warmth and a big heart, you live out your feelings, your drive and your luck.","ruler":[{"g":"g-sun","x":0.188,"c":"#ffd678"}],"bodies":[{"g":"g-moon","a":132.12,"c":"#e6e6e0","d":"#8a8a86","on":4.58,"off":12.48,"say":"Moon in Leo: you feel at home with warmth and a big heart. Sun adds friction that pushes you.","id":"moon"},{"g":"g-mars","a":57.51,"c":"#ff7a55","d":"#994933","on":12.48,"off":20.01,"say":"Mars in Leo: you go after things by being seen and playing. Mercury adds friction that pushes you.","id":"mars"}]},"ttl_s":60}}
+{"name":"scene.play","args":{"pkg":"astrology","layout":"sign-closeup","params":{"sign":"leo","c":"#a8d890","name":"LEO","nx":-0.095,"ns":0.13,"say":"Leo: warm, proud fire, ruled by the Sun. Moon, Mars and Jupiter here: with warmth and a big heart, you live out your feelings, your drive and your luck.","ruler":[{"g":"g-sun","x":0.188,"c":"#ffd678"}],"bodies":[{"g":"g-moon","da":132.12,"c":"#e6e6e0","d":"#8a8a86","on":4.58,"off":12.48,"say":"Moon in Leo: you feel at home with warmth and a big heart. Sun adds friction that pushes you.","id":"moon"},{"g":"g-mars","da":57.51,"c":"#ff7a55","d":"#994933","on":12.48,"off":20.01,"say":"Mars in Leo: you go after things by being seen and playing. Mercury adds friction that pushes you.","id":"mars"}]},"ttl_s":60}}
 ```
 
 ## signs

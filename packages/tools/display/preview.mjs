@@ -3,8 +3,8 @@
 // Molty would draw them (play.mjs, the reference player, on the built package). Pick a screen, edit
 // what the agent sends, scrub time, click a tap zone. Local only: it listens on 127.0.0.1.
 import { createServer } from 'node:http';
-import { ParamError, bind } from '../format.mjs';
-import { frame, hd, png } from '../play.mjs';
+import { ParamError, bind, opens } from '../format.mjs';
+import { frame, hd, png, spotAt } from '../play.mjs';
 import { check, exampleParams } from './build.mjs';
 
 const PAGE = `<!doctype html><meta charset="utf-8"><title>molty-display preview</title>
@@ -28,7 +28,7 @@ const PAGE = `<!doctype html><meta charset="utf-8"><title>molty-display preview<
 </aside>
 <script>
 const $ = (id) => document.getElementById(id), q = new URLSearchParams(location.search);
-let skill, spots = [], tap = '', timer;
+let skill, tap = '', timer, back = null;
 async function load() {
   skill = await (await fetch('/skill')).json();
   $('screen').innerHTML = skill.screens.map((s) => '<option>' + s.name + '</option>').join('');
@@ -41,22 +41,26 @@ function pick() {
   $('about').textContent = s.about + (s.duration ? ' Lasts ' + s.duration + ' s.' : ' Held.');
   $('params').value = JSON.stringify(s.params ?? {}, null, 1);
   $('t').max = s.duration || 10; $('t').value = q.get('t') ?? Math.min(1, $('t').max / 2); $('hd').checked = q.has('hd');
-  tap = ''; draw();
+  tap = ''; back = null; draw();
 }
 async function draw() {
   const args = 'screen=' + encodeURIComponent($('screen').value) + '&params=' + encodeURIComponent($('params').value) + '&t=' + $('t').value;
   const scene = await (await fetch('/scene?' + args)).json();
   $('tv').textContent = (+$('t').value).toFixed(2) + ' s';
   $('problems').textContent = [...skill.problems, scene.error ?? ''].filter(Boolean).join('\\n');
-  spots = scene.spots ?? [];
   if (!scene.error) $('glass').src = '/frame.png?' + args + '&tap=' + encodeURIComponent(tap) + ($('hd').checked ? '&hd=1' : '');
 }
-$('glass').onclick = (e) => {
-  const b = $('glass').getBoundingClientRect(), x = ((e.clientX - b.left) / b.width) * 2 - 1, y = 1 - ((e.clientY - b.top) / b.height) * 2, t = +$('t').value;
-  const far = (s) => { if (!s.pts) return Math.hypot(x - s.x, y - s.y); const [[ax, ay], [bx, by]] = s.pts, dx = bx - ax, dy = by - ay, u = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy || 1))); return Math.hypot(x - ax - u * dx, y - ay - u * dy); };
-  // the device's rule: the zone that holds the tap; of several the smallest, then the nearest
-  const hit = spots.filter((s) => t >= s.on && t < s.off && far(s) <= s.r).sort((a, b) => a.r - b.r || far(a) - far(b))[0];
-  tap = hit?.id ?? ''; $('reading').textContent = hit ? hit.say + (hit.id ? '  (tap event: ' + hit.id + ')' : '') : ''; draw();
+$('glass').onclick = async (e) => {
+  const b = $('glass').getBoundingClientRect(), x = ((e.clientX - b.left) / b.width) * 2 - 1, y = 1 - ((e.clientY - b.top) / b.height) * 2;
+  const hit = await (await fetch('/tap?screen=' + encodeURIComponent($('screen').value) + '&params=' + encodeURIComponent($('params').value) + '&t=' + $('t').value + '&x=' + x + '&y=' + y)).json();
+  if (!hit.say && back) { $('screen').value = back.screen; $('params').value = back.params; $('about').textContent = back.about; back = null; }   // a tap beside an opened screen goes back
+  tap = hit.id ?? ''; $('reading').textContent = hit.say ? hit.say + (hit.id ? '  (tap event: ' + hit.id + ')' : '') : '';
+  if (hit.opens) {   // the zone opens another screen, as Molty does: with what this one was sent
+    back = { screen: $('screen').value, params: $('params').value, about: $('about').textContent };
+    $('screen').value = hit.opens.layout; $('params').value = JSON.stringify(hit.opens.params, null, 1); tap = '';
+    $('about').textContent = 'Opened by the tap on ' + hit.id + (hit.opens.ttl ? ', for ' + hit.opens.ttl + ' s' : '') + '. Click beside it to go back.';
+  }
+  draw();
 };
 $('screen').onchange = pick; $('reload').onclick = load; $('params').oninput = $('t').oninput = $('hd').onchange = draw;
 $('run').onclick = () => { clearInterval(timer); $('t').value = 0; timer = setInterval(() => { $('t').value = +$('t').value + 0.1; draw(); if (+$('t').value >= +$('t').max) clearInterval(timer); }, 100); };
@@ -76,7 +80,11 @@ export function preview(dir, port) {
       if (url.pathname === '/') return void res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(PAGE);
       if (url.pathname === '/skill') return void json(skill());
       const pkg = (built ?? (skill(), built)).pkg, params = JSON.parse(arg('params') || '{}'), t = +arg('t');
-      if (url.pathname === '/scene') return void json({ spots: bind(pkg, arg('screen'), params).filter((it) => it.k === 'spot').map(({ x, y, r, pts, say, id, on, off }) => ({ x, y, r, pts, say, id, on, off: Number.isFinite(off) ? off : 1e9 })) });
+      if (url.pathname === '/scene') return void json({ zones: bind(pkg, arg('screen'), params).filter((it) => it.k === 'spot').length });
+      if (url.pathname === '/tap') {   // the zone a tap lands on, by the device's own rule, and what it opens
+        const hit = spotAt(bind(pkg, arg('screen'), params), +arg('x'), +arg('y'), t);
+        return void json(hit ? { id: hit.id, say: hit.say, opens: hit.id === undefined ? null : opens(pkg, arg('screen'), params, hit.id) } : {});
+      }
       if (url.pathname !== '/frame.png') return void res.writeHead(404).end();
       const view = arg('hd') ? hd(pkg, arg('screen'), params, t, 466, '', arg('tap')) : null;
       res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-store' }).end(view ? png(view.kept, view.rgb, 466) : png(frame(pkg, arg('screen'), params, t, null, arg('tap'))));

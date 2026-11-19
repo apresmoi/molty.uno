@@ -593,6 +593,37 @@ static double rim_water(const fluid_sim_t *s) {   /* how much the water moves ne
     }
     return e;
 }
+/* a creature prepared ahead (its dots and rings made off the sim's task, from a copy of the grid alone) is the creature
+ * its first frame would have made */
+static void test_prepare(const char *pkgdir) {
+    char path[512]; size_t len;
+    snprintf(path, sizeof(path), "%s/cat/cat.json", pkgdir);
+    char *json = slurp(path, &len);
+    const char *err = NULL;
+    cpk_t *a = json ? cpk_create(json, len, 3, &err) : NULL, *b = json ? cpk_create(json, len, 3, &err) : NULL;
+    CHECK(a && b, "prepare: cat (%s)", err ? err : "no file");
+    if (!a || !b) { cpk_destroy(a); cpk_destroy(b); free(json); return; }
+    const int P = 466; int W, H; fluid_grid_for_stage(P, &W, &H);
+    fluid_sim_t *sa = fluid_sim_create(W, H, P), *sb = fluid_sim_create(W, H, P);
+    fluid_sim_t grid;                              /* the grid alone: its size, cell centres and mask */
+    memset(&grid, 0, sizeof(grid));
+    grid.W = W; grid.H = H; grid.N = W * H; grid.stage = P;
+    grid.xs = malloc(sizeof(float) * (size_t)W); grid.ys = malloc(sizeof(float) * (size_t)H); grid.mask = malloc((size_t)W * H);
+    memcpy(grid.xs, sb->xs, sizeof(float) * (size_t)W); memcpy(grid.ys, sb->ys, sizeof(float) * (size_t)H); memcpy(grid.mask, sb->mask, (size_t)W * H);
+    cpk_prepare(b, &grid);
+    free(grid.xs); free(grid.ys); free(grid.mask);
+    int differ = 0;
+    fluid_ring_t ra = { 0 }, rb = { 0 };
+    for (int f = 0; f < 60; f++) {                 /* idle, then a listen's ring */
+        ring_frame(a, sa, &ra, f >= 20); ring_frame(b, sb, &rb, f >= 20);
+        const uint8_t *da, *db; const uint32_t *ca, *cb;
+        cpk_cells(a, &da, &ca); cpk_cells(b, &db, &cb);
+        differ += memcmp(da, db, (size_t)W * H) != 0 || memcmp(sa->col, sb->col, sizeof(fluid_rgba16_t) * (size_t)W * H) != 0;
+    }
+    CHECK(differ == 0, "prepare: the creature made ahead is the same creature (%d of 60 frames differ)", differ);
+    cpk_destroy(a); cpk_destroy(b); fluid_sim_destroy(sa); fluid_sim_destroy(sb); free(json);
+}
+
 static void test_crisp_ring(const char *pkgdir) {
     char path[512]; size_t len;
     snprintf(path, sizeof(path), "%s/cat/cat.json", pkgdir);
@@ -619,7 +650,7 @@ static void test_crisp_ring(const char *pkgdir) {
     ring = (fluid_ring_t){ 0 };
     enum { N = 150, ON0 = 10, OFF0 = 90 };
     int line[N] = { 0 }, all[N] = { 0 }, crest = -1, nline = 1;
-    double heavy = 0.0, quiet = 0.0, loud = 0.0, before = 0.0;
+    double heavy = 0.0, quiet = 0.0, loud = 0.0, before = 0.0, let = 0.0;
     for (int f = 0; f < N; f++) {                  /* 10 frames none, 80 a listen, 60 after it */
         /* a voice: before the ring (nothing to ripple), then quiet once it settled, then speaking */
         cpk_voice(k, f < ON0 ? 0.8f : f >= 75 && f < OFF0 ? 0.8f : 0.f);
@@ -631,7 +662,9 @@ static void test_crisp_ring(const char *pkgdir) {
         all[f] = ring_dots(k, s, 0.08f, 1.f, NULL);
         if (crest < 0 && f >= ON0 && ring_dots(k, s, 0.8f, 0.962f, NULL) > 0 && line[f] == 0) crest = f;   /* red near the rim, the line not yet */
         const double ms = ring_send(&rp, k, s, 70 + f);
-        if ((f >= ON0 && f < ON0 + 45) || (f >= OFF0 && f < OFF0 + 45)) if (ms > heavy) heavy = ms;
+        if (f >= ON0 && f < ON0 + 45 && ms > heavy) heavy = ms;
+        if (f >= OFF0 && f < OFF0 + 45 && ms > let) let = ms;
+        if (getenv("RING_TRACE") && f >= ON0) printf("    %s f%+d: %.1f ms\n", f < OFF0 ? "form" : "let", f - (f < OFF0 ? ON0 : OFF0), ms);
         if (f == OFF0 - 1) {                       /* settled: the sharp line alone */
             int n0, n1, n2, n3, n4;
             const int a0 = ring_dots(k, s, 0.962f, 0.988f, &n0), a1 = ring_dots(k, s, 0.9f, 0.962f, &n1), a2 = ring_dots(k, s, 0.82f, 0.9f, &n2),
@@ -650,7 +683,10 @@ static void test_crisp_ring(const char *pkgdir) {
     for (int f = ON0 + 1; f < N; f++) { const int dd = abs(line[f] - line[f - 1]); if (dd > jump) jump = dd; }
     printf("  crisp ring: the crest near the rim at %.2f s, the line formed at %.2f s, gone %.2f s after; largest step %d of %d line dots\n",
            crest < 0 ? -1.0 : (crest - ON0) / 30.0, formed < 0 ? -1.0 : (formed - ON0) / 30.0, gone < 0 ? -1.0 : (gone - OFF0) / 30.0, jump, full);
-    printf("  crisp ring: heaviest forming / releasing frame ~%.1f ms on the panel, a touch's %.1f ms\n", heavy, touch);
+    printf("  crisp ring: heaviest forming frame ~%.1f ms on the panel, letting go ~%.1f ms, a touch's %.1f ms\n", heavy, let, touch);
+    /* the release is the lighter of the two, with room: on the device it ran ~0.85 of this model (35.5 ms at the 42.2
+     * it had), and a frame has 33 ms */
+    CHECK(let < 28.0 && let < 0.85 * heavy, "crisp ring: letting go takes ~%.1f ms a frame at its heaviest (forming %.1f)", let, heavy);
     printf("  crisp ring, voice: the water near the rim %.2f before the ring, %.2f quiet, %.2f speaking\n", before, quiet, loud);
     CHECK(before < 0.01, "crisp ring: a voice ripples the water with no ring (%.2f)", before);
     CHECK(loud > 4.0 * quiet + 0.5, "crisp ring: the voice does not ripple the rim (%.2f quiet, %.2f speaking)", quiet, loud);
@@ -776,6 +812,7 @@ int main(int argc, char **argv) {
     test_own_rigged(argv[1]);
     test_crisp_panel(argv[1]);
     test_crisp_ring(argv[1]);
+    test_prepare(argv[1]);
     test_crisp_progress(argv[1]);
     for (const char *const *id = (const char *const[]){ "duck", "cat", "octopus", NULL }; *id; id++) test_info(argv[1], *id);
     for (const char *const *id = (const char *const[]){ "duck", NULL }; *id; id++) test_planted(argv[1], *id);   /* the cat: clip_test.c */

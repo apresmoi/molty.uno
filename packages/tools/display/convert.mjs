@@ -30,7 +30,7 @@ function namer() {
 }
 
 /** One layout as a v2 screen: { about, duration, subtitles?, inputs?, draw } with every key in the order it is written. */
-function screenOf(l) {
+function screenOf(l, pkg, opening = []) {
   const name = namer(), inputs = {}, fields = {}, uses = {};   // uses: "$p" or "$list @f" -> the kinds of property that read it
   for (const p of Object.keys(l.params ?? {})) inputs[p] = name(p);
   const field = (lst, f) => ((fields[lst] ??= { name: namer(), of: {} }).of[f] ??= fields[lst].name(f));
@@ -54,6 +54,9 @@ function screenOf(l) {
       else if (f === 'pts' && v.length === 2) [props.from, props.to] = v.map(at);
       else if (f === 'pts') props.points = v.map(at);
       else if (f === 'n' && spoke) continue;   // the spoke's angle carries it
+      else if (f === 'arc' || f === 'r0' || f === 'r1') (props.sector ??= {})[{ arc: 'width', r0: 'inner', r1: 'outer' }[f]] = val(v, f === 'arc' ? 'angle' : 'distance', it);
+      else if (f === 'open') (props.opens ??= {}).screen = val(v, 'screen', it);
+      else if (f === 'ttl') (props.opens ??= {}).seconds = val(v, 'time', it);
       else if (f === 'side' && typeof v === 'number') props.lit_side = v < 0 ? 'left' : 'right';
       else if (f === 'color' && typeof v === 'string' && v[0] === '#') props.color = token('colors', v);
       else if (f === 'w' && typeof v === 'number') props.width = token('lines', v);
@@ -73,9 +76,20 @@ function screenOf(l) {
     draw.push(last(it) ? block : { draw: block.draw, for: block.for });
     i = j;
   }
+  // a screen a zone opens takes its inputs by name from the tapped element, else from this screen: what it reads that
+  // nothing here draws with is declared all the same, typed as the opened screen has it
+  const passed = {};
+  for (const it of l.items) {
+    const to = it.k === 'spot' && pkg.layouts[it.open] && !opening.includes(it.open) ? screenOf(pkg.layouts[it.open], pkg, [...opening, it.open]).inputs ?? {} : {};
+    for (const [n, d] of Object.entries(to)) {
+      const p = d.sent_as ?? n;
+      if (d.type === 'list' && l.params?.[p] === 'list') for (const [fn, fd] of Object.entries(d.of)) { field(`$${p}`, fd.sent_as ?? fn); passed[`$${p} @${fd.sent_as ?? fn}`] ??= fd.type; }
+      else if (d.type !== 'list' && !(p in (l.params ?? {})) && it.each) { field(it.each, p); passed[`${it.each} @${p}`] ??= d.type; }
+    }
+  }
   // a text param's type: the one a property that reads it asks for first, if every other one takes it too
   const typed = (v1, key) => (v1 === 'number' ? 'number' : (uses[key] ?? []).map((h) => READS[h][0]).find((t) => uses[key].every((h) => READS[h].includes(t))) ?? 'text');
-  const decl = (v1, key, as, to) => ({ type: typed(v1, key), about: 'TODO', ...(as !== to ? { sent_as: to } : {}) });
+  const decl = (v1, key, as, to) => ({ type: uses[key] ? typed(v1, key) : passed[key] ?? typed(v1, key), about: 'TODO', ...(as !== to ? { sent_as: to } : {}) });
   // a list's most elements: the device's 32, or fewer when the screen would not fit at its fullest
   const per = (lst) => l.items.filter((it) => it.each === lst).length, lists = Object.keys(l.params ?? {}).filter((p) => l.params[p] === 'list').map((p) => `$${p}`);
   const still = l.items.filter((it) => it.each === undefined).length, grouped = (lst) => new Set(l.items.filter((it) => it.each === lst && typeof it.group === 'string' && it.group[0] === '@').map((it) => it.group)).size;
@@ -132,7 +146,7 @@ export function convert(file, to) {
     put(`assets/${n}.png`, assetPng(a));
     if (groups.at(-1)?.as === as(n, a)) groups.at(-1).names.push(n); else groups.push({ as: as(n, a), names: [n] });
   }
-  const screens = Object.fromEntries(Object.entries(pkg.layouts).map(([n, l]) => [n, screenOf(l)])), split = Object.keys(screens).length >= SPLIT_AT;
+  const screens = Object.fromEntries(Object.entries(pkg.layouts).map(([n, l]) => [n, screenOf(l, pkg)])), split = Object.keys(screens).length >= SPLIT_AT;
   // editors read the schema from this line; a folder outside the repo has no steady path to it
   const schema = (from, name) => (resolve(to).startsWith(REPO) ? [`# yaml-language-server: $schema=${relative(join(to, from), join(REPO, 'schema', name))}`] : []);
   const out = [...schema('.', 'display-2.json'), 'molty: display/2', 'package:', `  id: ${scalar(pkg.id)}`, `  name: ${scalar(pkg.name)}`, `  version: ${pkg.version}`, '  about: TODO'];

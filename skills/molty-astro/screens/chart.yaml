@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=../../../schema/display-2-screen.json
-about: All ten bodies on the zodiac wheel, joined by their tightest aspects. A tap on a planet, a sign or a line reads it.
+about: All ten bodies on the zodiac wheel, joined by their tightest aspects. A tap on a planet or a line reads it; a tap on a sign opens it up close.
 duration: hold
 subtitles: middle   # the wheel's middle is empty: readings show there
 inputs:
@@ -14,38 +14,51 @@ inputs:
       color: { type: color, sent_as: c, about: "Its color: sun #ffd678, moon #e6e6e0, mercury #c8bcb0, venus #fff0c4, mars #ff7a55, jupiter #ffc266, saturn #e8d890, uranus #9fe3e0, neptune #8fb4ff, pluto #c0a0d0." }
       reading: { type: reading, sent_as: say, about: "What a tap on it shows: Sun in Gemini, you shine by talking and learning. Then its tightest aspect, if it fits." }
       id: { type: text, about: "Its name, lower case (sun, moon ...): names it in the tap event, and is the group an aspect lights." }
+      # where it sits in its sign's close-up, which a tap on that sign opens (sign-closeup reads these)
+      sign: { type: text, sent_as: of, about: "The sign it is in, lower case: that sign's close-up shows the bodies of it." }
+      dial_angle: { type: angle, sent_as: da, about: "Its place on that sign's degree dial, as in sign-closeup." }
+      dim_color: { type: color, sent_as: d, about: "Its color at 60 percent, for when it is not being read there." }
+      from: { type: seconds, sent_as: "on", about: "When its reading starts in the close-up." }
+      until: { type: seconds, sent_as: "off", about: "When its reading ends in the close-up." }
     example:
-      - { symbol: g-neptune, angle: 182.07, distance: 0.64, color: "#8fb4ff", reading: "Neptune in Aries: you dream by being bold and going first. Pluto lends a hand.", id: neptune }
-      - { symbol: g-saturn, angle: 189.23, distance: 0.54, color: "#e8d890", reading: "Saturn in Aries: you learn hard lessons with courage and a fast start. Moon makes it flow easily.", id: saturn }
-      - { symbol: g-uranus, angle: 244.64, distance: 0.64, color: "#9fe3e0", reading: "Uranus in Gemini: you break old rules by talking and learning. Pluto makes it flow easily.", id: uranus }
-      - { symbol: g-moon, angle: 309.74, distance: 0.64, color: "#e6e6e0", reading: "Moon in Leo: you feel at home with warmth and a big heart. Sun adds friction that pushes you.", id: moon }
-      - { symbol: g-mars, angle: 319.06, distance: 0.54, color: "#ff7a55", reading: "Mars in Leo: you go after things by being seen and playing. Mercury adds friction that pushes you.", id: mars }
-      - { symbol: g-jupiter, angle: 324.43, distance: 0.64, color: "#ffc266", reading: "Jupiter in Leo: luck finds you with warmth and a big heart. Venus lends a hand.", id: jupiter }
-      - { symbol: g-venus, angle: 25.82, distance: 0.64, color: "#fff0c4", reading: "Venus in Libra: you love through fairness and beauty. Jupiter lends a hand.", id: venus }
-      - { symbol: g-sun, angle: 39.45, distance: 0.64, color: "#ffd678", reading: "Sun in Scorpio: you shine with deep, all or nothing focus. Moon adds friction that pushes you.", id: sun }
-      - { symbol: g-mercury, angle: 45.65, distance: 0.54, color: "#c8bcb0", reading: "Mercury in Scorpio: your mind works best through trust and hidden things. Mars adds friction that pushes you.", id: mercury }
-      - { symbol: g-pluto, angle: 123.13, distance: 0.64, color: "#c0a0d0", reading: "Pluto in Aquarius: you change deep down by doing it your own way. Neptune lends a hand.", id: pluto }
+      - { symbol: g-neptune, angle: 182.07, distance: 0.64, color: "#8fb4ff", reading: "Neptune in Aries: you dream by being bold and going first. Pluto lends a hand.", id: neptune, sign: aries, dial_angle: 193.45, dim_color: "#566c99", from: 4.19, until: 10.56 }
+      - { symbol: g-saturn, angle: 189.23, distance: 0.54, color: "#e8d890", reading: "Saturn in Aries: you learn hard lessons with courage and a fast start. Moon makes it flow easily.", id: saturn, sign: aries, dial_angle: 136.17, dim_color: "#8b8256", from: 10.56, until: 18.08 }
+      - { symbol: g-uranus, angle: 244.64, distance: 0.64, color: "#9fe3e0", reading: "Uranus in Gemini: you break old rules by talking and learning. Pluto makes it flow easily.", id: uranus, sign: gemini, dial_angle: 172.85, dim_color: "#5f8886", from: 4.19, until: 10.95 }
+      - { symbol: g-moon, angle: 309.74, distance: 0.64, color: "#e6e6e0", reading: "Moon in Leo: you feel at home with warmth and a big heart. Sun adds friction that pushes you.", id: moon, sign: leo, dial_angle: 132.12, dim_color: "#8a8a86", from: 4.58, until: 12.48 }
+      - { symbol: g-mars, angle: 319.06, distance: 0.54, color: "#ff7a55", reading: "Mars in Leo: you go after things by being seen and playing. Mercury adds friction that pushes you.", id: mars, sign: leo, dial_angle: 57.51, dim_color: "#994933", from: 12.48, until: 20.01 }
+      - { symbol: g-jupiter, angle: 324.43, distance: 0.64, color: "#ffc266", reading: "Jupiter in Leo: luck finds you with warmth and a big heart. Venus lends a hand.", id: jupiter, sign: leo, dial_angle: 14.58, dim_color: "#99743d", from: 20.01, until: 26.76 }
+      - { symbol: g-venus, angle: 25.82, distance: 0.64, color: "#fff0c4", reading: "Venus in Libra: you love through fairness and beauty. Jupiter lends a hand.", id: venus, sign: libra, dial_angle: 3.44, dim_color: "#999076", from: 4.19, until: 9.79 }
+      - { symbol: g-sun, angle: 39.45, distance: 0.64, color: "#ffd678", reading: "Sun in Scorpio: you shine with deep, all or nothing focus. Moon adds friction that pushes you.", id: sun, sign: scorpio, dial_angle: 134.39, dim_color: "#998048", from: 4.19, until: 11.33 }
+      - { symbol: g-mercury, angle: 45.65, distance: 0.54, color: "#c8bcb0", reading: "Mercury in Scorpio: your mind works best through trust and hidden things. Mars adds friction that pushes you.", id: mercury, sign: scorpio, dial_angle: 84.76, dim_color: "#78716a", from: 11.33, until: 18.85 }
+      - { symbol: g-pluto, angle: 123.13, distance: 0.64, color: "#c0a0d0", reading: "Pluto in Aquarius: you change deep down by doing it your own way. Neptune lends a hand.", id: pluto, sign: aquarius, dial_angle: 184.92, dim_color: "#73607d", from: 4.19, until: 11.33 }
   signs:
     type: list
     max: 12
-    about: A reading for each of the twelve signs. The wheel draws the signs itself; these are the places to tap.
+    about: "Each of the twelve signs: its reading, and what its close-up needs. The wheel draws the signs itself; a tap anywhere in a sign's 30 degree block opens sign-closeup on Molty, with these fields, the sign's ruler and the bodies of it."
     of:
       angle: { type: angle, sent_as: a, about: "The sign's middle on the wheel: (195 + 30 i) mod 360 for sign i, Aries 0." }
-      reading: { type: reading, sent_as: say, about: "What a tap on it shows: its nature and ruler, then its planets or, when it is empty, where its ruler is." }
+      reading: { type: reading, sent_as: say, about: "Its reading, the close-up's subtitle: its nature and ruler, then its planets or, when it is empty, where its ruler is." }
       id: { type: text, about: "The sign's name, lower case: names it in the tap event." }
+      # the close-up's own inputs for this sign (sign-closeup takes them by name)
+      sign: { type: asset, of: assets/signs, about: "The sign again, lower case: the close-up's symbol." }
+      color: { type: color, sent_as: c, about: "The sign's color, as in sign-closeup." }
+      name: { type: text, max: 11, about: The sign's name in capitals. }
+      name_x: { type: number, min: -1, max: 1, sent_as: nx, about: "The name's centre in the close-up, as in sign-closeup." }
+      name_size: { type: distance, sent_as: ns, about: "The name's type size there: 0.13, or 0.11 past 8 letters." }
+      seconds: { type: seconds, min: 1, sent_as: ttl, about: "How long the close-up plays: its reading's length plus 3 s." }
     example:
-      - { angle: 195, reading: "Aries: bold, quick fire, ruled by Mars. Neptune and Saturn here: by being bold and going first, you live out your dreams and your discipline.", id: aries }
-      - { angle: 225, reading: "Taurus: steady, sensual earth, ruled by Venus. Empty now, so its ruler, Venus in Libra, shows how it plays out for you.", id: taurus }
-      - { angle: 255, reading: "Gemini: curious, chatty air, ruled by Mercury. Uranus here: by talking and learning, you live out your rebel side.", id: gemini }
-      - { angle: 285, reading: "Cancer: caring, tender water, ruled by the Moon. Empty now, so its ruler, the Moon in Leo, shows how it plays out for you.", id: cancer }
-      - { angle: 315, reading: "Leo: warm, proud fire, ruled by the Sun. Moon, Mars and Jupiter here: with warmth and a big heart, you live out your feelings, your drive and your luck.", id: leo }
-      - { angle: 345, reading: "Virgo: careful, helpful earth, ruled by Mercury. Empty now, so its ruler, Mercury in Scorpio, shows how it plays out for you.", id: virgo }
-      - { angle: 15, reading: "Libra: fair, graceful air, ruled by Venus. Venus here: through fairness and beauty, you live out your loves.", id: libra }
-      - { angle: 45, reading: "Scorpio: deep, intense water, ruled by Pluto. Sun and Mercury here: with deep, all or nothing focus, you live out your core self and your mind.", id: scorpio }
-      - { angle: 75, reading: "Sagittarius: free, far-roaming fire, ruled by Jupiter. Empty now, so its ruler, Jupiter in Leo, shows how it plays out for you.", id: sagittarius }
-      - { angle: 105, reading: "Capricorn: patient, ambitious earth, ruled by Saturn. Empty now, so its ruler, Saturn in Aries, shows how it plays out for you.", id: capricorn }
-      - { angle: 135, reading: "Aquarius: original, free-thinking air, ruled by Uranus. Pluto here: by doing it your own way, you live out your power.", id: aquarius }
-      - { angle: 165, reading: "Pisces: dreamy, gentle water, ruled by Neptune. Empty now, so its ruler, Neptune in Aries, shows how it plays out for you.", id: pisces }
+      - { angle: 195, reading: "Aries: bold, quick fire, ruled by Mars. Neptune and Saturn here: by being bold and going first, you live out your dreams and your discipline.", id: aries, sign: aries, color: "#ff9a7a", name: ARIES, name_x: -0.095, name_size: 0.13, seconds: 22 }
+      - { angle: 225, reading: "Taurus: steady, sensual earth, ruled by Venus. Empty now, so its ruler, Venus in Libra, shows how it plays out for you.", id: taurus, sign: taurus, color: "#a8d890", name: TAURUS, name_x: -0.095, name_size: 0.13, seconds: 14 }
+      - { angle: 255, reading: "Gemini: curious, chatty air, ruled by Mercury. Uranus here: by talking and learning, you live out your rebel side.", id: gemini, sign: gemini, color: "#9fc0ff", name: GEMINI, name_x: -0.095, name_size: 0.13, seconds: 14 }
+      - { angle: 285, reading: "Cancer: caring, tender water, ruled by the Moon. Empty now, so its ruler, the Moon in Leo, shows how it plays out for you.", id: cancer, sign: cancer, color: "#ff9a7a", name: CANCER, name_x: -0.095, name_size: 0.13, seconds: 15 }
+      - { angle: 315, reading: "Leo: warm, proud fire, ruled by the Sun. Moon, Mars and Jupiter here: with warmth and a big heart, you live out your feelings, your drive and your luck.", id: leo, sign: leo, color: "#a8d890", name: LEO, name_x: -0.095, name_size: 0.13, seconds: 30 }
+      - { angle: 345, reading: "Virgo: careful, helpful earth, ruled by Mercury. Empty now, so its ruler, Mercury in Scorpio, shows how it plays out for you.", id: virgo, sign: virgo, color: "#9fc0ff", name: VIRGO, name_x: -0.095, name_size: 0.13, seconds: 14 }
+      - { angle: 15, reading: "Libra: fair, graceful air, ruled by Venus. Venus here: through fairness and beauty, you live out your loves.", id: libra, sign: libra, color: "#ff9a7a", name: LIBRA, name_x: -0.095, name_size: 0.13, seconds: 13 }
+      - { angle: 45, reading: "Scorpio: deep, intense water, ruled by Pluto. Sun and Mercury here: with deep, all or nothing focus, you live out your core self and your mind.", id: scorpio, sign: scorpio, color: "#a8d890", name: SCORPIO, name_x: -0.095, name_size: 0.13, seconds: 22 }
+      - { angle: 75, reading: "Sagittarius: free, far-roaming fire, ruled by Jupiter. Empty now, so its ruler, Jupiter in Leo, shows how it plays out for you.", id: sagittarius, sign: sagittarius, color: "#9fc0ff", name: SAGITTARIUS, name_x: -0.095, name_size: 0.11, seconds: 14 }
+      - { angle: 105, reading: "Capricorn: patient, ambitious earth, ruled by Saturn. Empty now, so its ruler, Saturn in Aries, shows how it plays out for you.", id: capricorn, sign: capricorn, color: "#ff9a7a", name: CAPRICORN, name_x: -0.095, name_size: 0.11, seconds: 14 }
+      - { angle: 135, reading: "Aquarius: original, free-thinking air, ruled by Uranus. Pluto here: by doing it your own way, you live out your power.", id: aquarius, sign: aquarius, color: "#a8d890", name: AQUARIUS, name_x: -0.095, name_size: 0.13, seconds: 15 }
+      - { angle: 165, reading: "Pisces: dreamy, gentle water, ruled by Neptune. Empty now, so its ruler, Neptune in Aries, shows how it plays out for you.", id: pisces, sign: pisces, color: "#9fc0ff", name: PISCES, name_x: -0.095, name_size: 0.13, seconds: 14 }
   aspects:
     type: list
     max: 11
@@ -67,6 +80,28 @@ inputs:
       - { from_x: 0.486, from_y: 0.322, to_x: 0.417, to_y: -0.408, ring1_x: 0.494, ring1_y: 0.407, ring2_x: 0.409, ring2_y: -0.492, color: "#ff5a4a", reading: "Sun squares Moon: friction between self and mood.", id: sun-moon, lights: sun-moon sun moon }
       - { from_x: 0.331, from_y: -0.459, to_x: -0.455, to_y: -0.12, ring1_x: 0.409, ring1_y: -0.492, ring2_x: -0.533, ring2_y: -0.087, color: "#6fa8ff", reading: "Moon flows with Saturn: mood and limits in step.", id: moon-saturn, lights: moon-saturn moon saturn }
       - { from_x: -0.6, from_y: 0.052, to_x: -0.389, to_y: 0.46, ring1_x: -0.64, ring1_y: -0.023, ring2_x: -0.35, ring2_y: 0.536, color: "#6fa8ff", reading: "Neptune helps Pluto: dreams helping power.", id: neptune-pluto, lights: neptune-pluto neptune pluto }
+  ruler:
+    type: list
+    max: 12
+    about: "Each sign's ruler, for its close-up: twelve, one a sign."
+    of:
+      sign: { type: text, sent_as: of, about: "The sign it rules, lower case." }
+      symbol: { type: asset, of: assets/planets, sent_as: g, about: "The ruler's symbol: g-mars ..." }
+      x: { type: number, min: -1, max: 1, about: "Its centre in the close-up, as in sign-closeup." }
+      color: { type: color, sent_as: c, about: "The ruler's color." }
+    example:
+      - { sign: aries, symbol: g-mars, x: 0.299, color: "#ff7a55" }
+      - { sign: taurus, symbol: g-venus, x: 0.355, color: "#fff0c4" }
+      - { sign: gemini, symbol: g-mercury, x: 0.355, color: "#c8bcb0" }
+      - { sign: cancer, symbol: g-moon, x: 0.355, color: "#e6e6e0" }
+      - { sign: leo, symbol: g-sun, x: 0.188, color: "#ffd678" }
+      - { sign: virgo, symbol: g-mercury, x: 0.299, color: "#c8bcb0" }
+      - { sign: libra, symbol: g-venus, x: 0.299, color: "#fff0c4" }
+      - { sign: scorpio, symbol: g-pluto, x: 0.411, color: "#c0a0d0" }
+      - { sign: sagittarius, symbol: g-jupiter, x: 0.541, color: "#ffc266" }
+      - { sign: capricorn, symbol: g-saturn, x: 0.446, color: "#e8d890" }
+      - { sign: aquarius, symbol: g-uranus, x: 0.466, color: "#9fe3e0" }
+      - { sign: pisces, symbol: g-neptune, x: 0.355, color: "#8fb4ff" }
 draw:
   - use: wheel
     with: { sign_size: 0.106 }
@@ -85,7 +120,16 @@ draw:
       - tap_zone: { at: { angle: "{{ body.angle }}", distance: "{{ body.distance }}" }, radius: 0.08, reads: "{{ body.reading }}", id: "{{ body.id }}" }
   - for: sign in signs
     draw:
-      - tap_zone: { at: { angle: "{{ sign.angle }}", distance: 0.825 }, radius: 0.07, reads: "{{ sign.reading }}", id: "{{ sign.id }}", grow: 1.5 }
+      # a sign takes a tap anywhere in its 30 degree block of the zodiac ring (its symbol is still what grows), and
+      # the tap opens it up close on Molty for as long as its reading
+      - tap_zone:
+          at: { angle: "{{ sign.angle }}", distance: 0.825 }
+          radius: 0.07
+          reads: "{{ sign.reading }}"
+          id: "{{ sign.id }}"
+          grow: 1.5
+          sector: { width: 30, inner: 0.75, outer: 0.9 }
+          opens: { screen: sign-closeup, seconds: "{{ sign.seconds }}" }
   - for: aspect in aspects
     draw:
       - tap_zone: { along: { from: { x: "{{ aspect.from_x }}", y: "{{ aspect.from_y }}" }, to: { x: "{{ aspect.to_x }}", y: "{{ aspect.to_y }}" } }, radius: 0.05, reads: "{{ aspect.reading }}", id: "{{ aspect.id }}", highlights: "{{ aspect.lights }}" }

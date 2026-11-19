@@ -9,7 +9,15 @@ packages/<id>/build.mjs ──node──▶ packages/<id>/<id>.json (≤ 40 KB) 
         uses tools/creatures/kit.mjs                    C port: main/creature/creature_player.c) ──▶ bone transforms, colours, marks
 ```
 
-The motion model is the one the lab's animals were written in (`molty-creature-lab/animals/kinds`): a shared pose from the
+What ships (`packages/index.json`), all three built into the firmware:
+
+| creature | version | how it is made | how the device draws it | its own gestures |
+|---|---|---|---|---|
+| duck | 1.0.0 | channel layers (sections 1 to 8) | a body the fluid flows toward | none |
+| octopus | 1.0.0 | channel layers | a body the fluid flows toward | none |
+| cat | 2.0.0 | a Blender rig with baked clips (section 12) | crisp dots, straight on the panel's lattice | `eat`, `yarn`, `walk`, `shaken` |
+
+The motion model of the channel creatures is the one the lab's animals were written in (`molty-creature-lab/animals/kinds`): a shared pose from the
 mood engine and the gestures (`js/mood.js`, `js/actions.js`, `cute_act.h`), then the creature's own layers on top. Every line
 of that code became a channel; nothing was dropped on purpose (losses are listed at the end).
 
@@ -41,7 +49,8 @@ person sees on the round screen (at most 240 characters), and one line for every
 shared pose and keeps its length (no `dur`); any other name is the creature's **own** gesture and gives its length, `dur` 0.2..10 s
 (the cat's `eat`). Every creature plays the shared ones; an agent's `act` plays one of its own too, and the device answers
 `unknown_gesture` for a name the creature lacks. Its parts may exist only for it: the cat's bowl is a bone scaled from 0 to 1
-by a channel (`bowl:s`, `op: "="`), like its tongue.
+by a channel (`bowl:s`, `op: "="`), like its tongue. That was the channel cat (1.x): the cat that ships is rigged
+(section 12), with `eat`, `yarn`, `walk` and `shaken` as clips.
 
 Bones may carry `sit` and `fold` (a leg's seated position and folded length, read by the kit's generators at build time),
 `wave` (an arm joint's axis, joint and arm index, the same) and `d` (depth down its chain, for colour that ripples).
@@ -168,15 +177,17 @@ At most 64 live particles.
 
 ## 7. Limits
 
-| | limit | duck / cat / octopus |
+For a channel creature (the rigged cat's limits are in section 12):
+
+| | limit | duck / octopus |
 |---|---|---|
-| file | 40 KB | 30.1 / 31.4 / 32.8 KB |
-| bones, parts | 96, 96 | 13, 18 / 22, 41 / 37, 45 |
-| channels (all blocks) | 512 | 334 / 398 / 254 |
-| terms, factors | 1024, 2048 | 482, 824 / 598, 826 / 341, 500 |
+| file | 40 KB | 30.5 / 33.0 KB |
+| bones, parts | 96, 96 | 13, 18 / 37, 45 |
+| channels (all blocks) | 512 | 345 / 260 |
+| terms, factors | 1024, 2048 | 496, 842 / 347, 507 |
 | factors in one term | 8 | |
-| group instances, attributes | 64, 32 | octopus 32 × 24 |
-| events | 16 | 8 / 7 / 5 |
+| group instances, attributes | 64, 32 | octopus 32 × 25 |
+| events | 16 | 8 / 5 |
 | history | 1 s per channel | |
 | live particles | 64 | |
 
@@ -184,13 +195,13 @@ At most 64 live particles.
 
 Per frame the player evaluates the base, walk, post, the running events, at most two gestures and the moods in weight.
 Measured with the reference player over two minutes of every mood and gesture (`tools/creatures/player.test.mjs`):
-worst frame 370 / 533 / 1157 factor evaluations, mean 283 / 464 / 1074 (duck / cat / octopus).
+worst frame 390 / 1170 factor evaluations, mean 306 / 1085 (duck / octopus).
 
 In C on the ESP32-S3 (240 MHz, single-precision FPU), a factor is a switch dispatch, a few loads and its maths: about 20
 cycles for sin from a table, 40 for noise (two integer hashes and a smoothstep), 60 for `exp`; 40 on average with the term
 and channel loop around it. The octopus's worst frame is then about 46 k cycles, **0.2 ms of a 33 ms frame** (0.5 ms if it
 were 100 cycles a factor). The compiled program (24 bytes a factor, 8 a term, 16 a channel, 4 an attribute) is about
-28 / 26 / 22 KB: internal RAM or PSRAM, either is fine. Bones, colour and particles cost what the renderer already spends.
+29 / 22 KB (duck / octopus): internal RAM or PSRAM, either is fine. Bones, colour and particles cost what the renderer already spends.
 
 The C port must match the JS player's semantics, including the hash: murmur3 fmix32 of floor(16 n), so the same package
 draws the same numbers on both.
@@ -252,7 +263,8 @@ Compared over the full reels (every scene, mood and gesture) against the approve
 ## 12. Rigged creatures (clips, routes, dots)
 
 A creature package may carry a **rig** instead of channel layers: a skeleton, its body as rounded primitives per bone, baked
-clips, and the route map between its poses. The cat is the first: its folder is `moltys/cat/`, and
+clips, and the route map between its poses. The cat (2.0.0) is the first: modelled, rigged and animated in Blender,
+every clip baked, with an authored transition between every pair of resting poses. Its folder is `moltys/cat/`, and
 [CREATURE.md](CREATURE.md) is how one is made. Its channel layers stay empty; `gestures` and `moods` only declare what it plays (and their
 lengths for the mood engine), so agents, the console and old firmware see the same names. Reference player:
 `device/creatures/js/clip-player.js` and `clip-dots.js`; C port: `main/creature/creature_clip.c` and `creature_dots.c`.
@@ -315,6 +327,19 @@ hold: { gesture: seconds }, enter: { clip: { family: clip } }, sync: { loop: str
 - A loop in `sync` (the walk) is joined at the phase that best matches the pose on screen and left only on a stride
   boundary, so a stepping paw is never cut.
 - A gesture or mood name the package lacks is refused (`unknown_gesture`), as for channel creatures.
+- **Called to the front.** A tap on the screen or a shake calls a rigged creature (`cc_come`): it walks to the front
+  of the frame facing the viewer and sits up attending (its `listening` clip, 3 s), then goes back to its mood. Already
+  facing front near the middle, it only perks up. A shake plays its `shaken` clip first. A gesture ends the call.
+
+The cat's clips, by what they are for:
+
+| for | clips |
+|---|---|
+| moods | `idle`, `listening`, `thinking`, `speaking`, `happy` (sitting), `sleepy` (the loaf), `surprised` (standing, arched) |
+| shared gestures | `wiggle`, `nod`, `shake_head`, `bounce`, `peek` (also `inspect`), `glance_left`, `glance_right`, `blink`, `wobble`, `stretch`, `look_up`, `yawn`, `paddle` |
+| its own gestures | `eat` (a bowl of milk, 6 s), `yarn` (a ball of yarn, 5.2 s), `walk` (held 6 s), `shaken` (3.4 s) |
+| resting loops | `idle` (sit), `stand_idle`, `loaf_idle`, `crouch_idle`, `walk` |
+| transitions | 16 edges: every ordered pair of sit, stand, loaf and crouch, plus sit and stand into and out of the walk |
 
 ### Drawing (the device's look)
 
@@ -328,6 +353,13 @@ toward the horizon, a vignette, and a two-dot halo kept clear round the creature
 dots win a cell, then the brightest. On the device the cells go to the fluid's drawer as a scene's dots (crisp on black),
 with the fluid held still under them.
 
+**Rings over it** (`creature_ring.c`, the design is `device/creatures/ring-options.html`). The recording ring, a
+question's arcs and the progress ring show over the crisp cells in one language: a wave runs out from the centre
+through the real water (the creature wobbles as it passes), its crest takes the ring's colour near the rim and lands
+there as a thin sharp line, in about 1 s. While a listen records, the voice sends small ripples from the rim inward,
+more and stronger the louder. Letting go, a wave runs in from the rim and fades. The recording ring is red
+(`#ff2c3e`) unless the agent (`ring_color`) or the owner's setting gave it a colour.
+
 ### Limits and cost
 
 | | limit | the cat |
@@ -335,7 +367,7 @@ with the fluid held still under them.
 | file (rigged) | 256 KB | see `packages/index.json` |
 | nodes, shapes, clips | 80, 128, 64 | 43 (2 of them props), 90, 45 |
 | families, edges, gestures | 8, 64, 32 | 5, 16, 18 |
-| channels (all clips) | | 1827 (1413 LINEAR, 413 STEP, 1 CUBICSPLINE) |
+| channels (all clips) | | 1827 (1380 LINEAR, 447 STEP, no CUBICSPLINE) |
 
 Per frame on the device: sampling (a binary search and a Hermite per channel, ~100 channels) and FK of ~50 nodes are a few
 µs; the dots are the cost: the field and parts over the creature's box, then a hash per dot for the world.

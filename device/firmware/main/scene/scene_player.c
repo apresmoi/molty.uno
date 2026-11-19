@@ -6,6 +6,7 @@
  */
 #include "scene_player.h"
 #include "glyph_font.h"
+#include "fluid_ring.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -117,10 +118,10 @@ static int group_of(scene_t *sc, const char *name, size_t len) {
     return ++sc->ngroups;
 }
 
-static bool resolve(scene_t *sc, const bind_t *b, const pkg_item_t *it, const cJSON *el) {
+static bool resolve(scene_t *sc, const bind_t *b, const pkg_item_t *it, const cJSON *el, int eln) {
     if (sc->nitems >= SCENE_ITEMS_MAX) return false;
     scene_item_t *o = &sc->items[sc->nitems];
-    *o = (scene_item_t){ .k = it->k, .asset = -1, .rgb = 0xffffff };
+    *o = (scene_item_t){ .k = it->k, .asset = -1, .rgb = 0xffffff, .lst = (int8_t)(el ? it->each : -1), .eln = (uint8_t)eln };
     const pkg_val_t *f = it->f;
     float n;
     bool ok = num(b, &f[PF_ON], el, PF_ON, 0.f, &o->on) && num(b, &f[PF_OFF], el, PF_OFF, 0.f, &o->off) &&
@@ -129,7 +130,8 @@ static bool resolve(scene_t *sc, const bind_t *b, const pkg_item_t *it, const cJ
               num(b, &f[PF_LEN], el, PF_LEN, 0.1f, &o->len) && num(b, &f[PF_N], el, PF_N, 12.f, &n) &&
               num(b, &f[PF_SIZE], el, PF_SIZE, 0.12f, &o->size) && num(b, &f[PF_LIT], el, PF_LIT, 1.f, &o->lit) &&
               num(b, &f[PF_SIDE], el, PF_SIDE, 1.f, &o->side) && num(b, &f[PF_SPIN], el, PF_SPIN, 0.f, &o->spin) &&
-              num(b, &f[PF_ROT], el, PF_ROT, 0.f, &o->rot) && num(b, &f[PF_GROW], el, PF_GROW, PKG_GROW, &o->grow);
+              num(b, &f[PF_ROT], el, PF_ROT, 0.f, &o->rot) && num(b, &f[PF_GROW], el, PF_GROW, PKG_GROW, &o->grow) &&
+              num(b, &f[PF_ARC], el, PF_ARC, 0.f, &o->arc) && num(b, &f[PF_R0], el, PF_R0, 0.f, &o->r0) && num(b, &f[PF_R1], el, PF_R1, 0.f, &o->r1);
     if (!ok) return false;
     o->n = (int)n;
     if (it->polar) {
@@ -150,6 +152,9 @@ static bool resolve(scene_t *sc, const bind_t *b, const pkg_item_t *it, const cJ
         if (!say_add(sc, str_of(b, &f[PF_SAY], el), PKG_SAY_MAX, &o->str, &o->nstr)) return false;
         const char *id = str_of(b, &f[PF_ID], el);
         if (id && !say_add(sc, id, PKG_STR_MAX, &o->sid, &o->nsid)) return false;
+        const char *open = str_of(b, &f[PF_OPEN], el);
+        if (f[PF_OPEN].src != PV_NONE && (!open || !pkg_layout(b->p, open) || !say_add(sc, open, PKG_KEY_MAX, &o->open, &o->nopen))) return false;
+        if (!num(b, &f[PF_TTL], el, PF_TTL, 0.f, &o->ttl)) return false;
     }
     const char *grp = str_of(b, &f[PF_GROUP], el), *lights = str_of(b, &f[PF_LIGHTS], el);
     if (grp && !(o->grp = (uint8_t)group_of(sc, grp, strlen(grp)))) return false;
@@ -189,10 +194,12 @@ scene_t *scene_build(pkg_t *p, const char *layout, const cJSON *params, float tt
     for (int i = 0; i < l->nitems; i++) {
         const pkg_item_t *it = &l->items[i];
         bool ok = true;
-        if (it->each < 0) ok = resolve(sc, &b, it, NULL);
-        else for (const cJSON *el = b.pv[it->each]->child; el && ok; el = el->next) ok = resolve(sc, &b, it, el);
+        if (it->each < 0) ok = resolve(sc, &b, it, NULL, 0);
+        else { int n = 0; for (const cJSON *el = b.pv[it->each]->child; el && ok; el = el->next, n++) ok = resolve(sc, &b, it, el, n); }
         if (!ok) { SCENE_FREE(sc); *err = "bad_params"; return NULL; }
     }
+    for (int n = 0; n < sc->nitems && !sc->params; n++)       /* a spot opens a layout: its params feed that one */
+        if (sc->items[n].nopen && params && !(sc->params = cJSON_Duplicate(params, true))) { SCENE_FREE(sc); *err = "oom"; return NULL; }
     pkg_ref(p);
     sc->pkg = p;
     sc->focus = -1; sc->grow = 1.f;
@@ -209,14 +216,26 @@ scene_t *scene_build(pkg_t *p, const char *layout, const cJSON *params, float tt
 
 void scene_free(scene_t *sc) {
     if (!sc) return;
+    cJSON_Delete(sc->params);
     pkg_unref(sc->pkg);
     SCENE_FREE(sc);
 }
 
 float scene_end(const scene_t *sc) { return sc->dur > 0.f && sc->dur < sc->ttl ? sc->dur : sc->ttl; }
 
+/* is (x, y) in spot it's sector: within arc / 2 degrees of the spot's direction from the glass centre, r0..r1 out */
+static bool in_sector(const scene_item_t *it, float x, float y) {
+    const float d2 = x * x + y * y;
+    if (it->arc <= 0.f || d2 < it->r0 * it->r0 || d2 > it->r1 * it->r1) return false;
+    if (it->arc >= 360.f) return true;
+    float a = (fluid_atan2(y, x) - fluid_atan2(it->y, it->x)) / DEG;
+    a = fmodf(a + 540.f, 360.f) - 180.f;                /* -180..180 from its direction */
+    return fabsf(a) <= it->arc * 0.5f;
+}
+
 int scene_spot_at(const scene_t *sc, float t, float x, float y) {
     int best = -1;
+    bool direct = false;                                /* best holds it on its own disc or segment */
     float bd = 0.f;
     for (int n = 0; sc && n < sc->nitems; n++) {
         const scene_item_t *it = &sc->items[n];
@@ -229,17 +248,20 @@ int scene_spot_at(const scene_t *sc, float t, float x, float y) {
             dx = x - a[0] - u * vx; dy = y - a[1] - u * vy;
         }
         const float d = dx * dx + dy * dy;
-        if (d <= it->r * it->r && (best < 0 || it->r < sc->items[best].r || (it->r == sc->items[best].r && d < bd))) { best = n; bd = d; }
+        const bool on = d <= it->r * it->r;
+        if (!on && (direct || !in_sector(it, x, y))) continue;
+        if (best < 0 || (on && !direct) || it->r < sc->items[best].r || (it->r == sc->items[best].r && d < bd)) { best = n; bd = d; direct = on; }
     }
     return best;
 }
 
 /* ── the player ────────────────────────────────────────────────────────────── */
 
-static void start(scene_player_t *p, scene_t *sc) { p->cur = sc; p->t = 0.f; p->started = sc != NULL; p->gen++; }
+static void start(scene_player_t *p, scene_t *sc) { p->cur = sc; p->t = 0.f; p->started = sc != NULL; p->gen++; p->say[0] = '\0'; }
 
 void scene_clear(scene_player_t *p) {
     scene_free(p->cur); p->cur = NULL;
+    scene_free(p->back); p->back = NULL;
     for (int i = 0; i < p->nq; i++) scene_free(p->q[i]);
     p->nq = 0;
 }
@@ -253,8 +275,83 @@ bool scene_queue(scene_player_t *p, scene_t *sc) {
     return true;
 }
 
+scene_t *scene_open_build(const scene_t *sc, int n, const char **err) {
+    *err = NULL;
+    if (!sc || n < 0 || n >= sc->nitems || sc->items[n].k != PK_SPOT || !sc->items[n].nopen) return NULL;
+    const scene_item_t *sp = &sc->items[n];
+    char name[PKG_KEY_MAX + 1], id[PKG_STR_MAX + 1];
+    snprintf(name, sizeof(name), "%.*s", (int)sp->nopen, sc->say + sp->open);
+    snprintf(id, sizeof(id), "%.*s", (int)sp->nsid, sc->say + sp->sid);
+    const pkg_layout_t *l = pkg_layout(sc->pkg, name), *own = pkg_layout(sc->pkg, sc->layout);
+    if (!l || !own) { *err = "no_layout"; return NULL; }
+    /* the tapped spot's list element */
+    const cJSON *el = NULL;
+    if (sp->lst >= 0 && sp->lst < own->nparams && sc->params) {
+        el = cJSON_GetObjectItemCaseSensitive(sc->params, own->params[sp->lst].name);
+        el = cJSON_IsArray(el) ? cJSON_GetArrayItem(el, sp->eln) : NULL;
+    }
+    /* its params: by name, as references into sc's (nothing is copied) */
+    cJSON *args = cJSON_CreateObject();
+    bool ok = args != NULL;
+    for (int q = 0; ok && q < l->nparams; q++) {
+        const char *pn = l->params[q].name;
+        const cJSON *v = el ? cJSON_GetObjectItemCaseSensitive(el, pn) : NULL;
+        if (!v || cJSON_IsArray(v) || cJSON_IsObject(v)) v = sc->params ? cJSON_GetObjectItemCaseSensitive(sc->params, pn) : NULL;
+        if (!v) { ok = false; break; }
+        if (!cJSON_IsArray(v)) { ok = cJSON_AddItemReferenceToObject(args, pn, (cJSON *)v); continue; }
+        cJSON *list = cJSON_AddArrayToObject(args, pn);       /* a list: the elements of this spot, or of none */
+        for (const cJSON *e = v->child; (ok = list != NULL) && e; e = e->next) {
+            const cJSON *of = cJSON_GetObjectItemCaseSensitive(e, "of");
+            if (cJSON_IsString(of) && strcmp(of->valuestring, id)) continue;
+            if (!cJSON_AddItemReferenceToArray(list, (cJSON *)e)) { ok = false; break; }
+        }
+    }
+    scene_t *child = ok ? scene_build(sc->pkg, name, args, sp->ttl > 0.f ? sp->ttl : SCENE_TTL_MAX, err) : NULL;
+    if (!ok) *err = args ? "bad_params" : "oom";
+    cJSON_Delete(args);
+    return child;
+}
+
+void scene_open(scene_player_t *p, scene_t *sc, int spot) {
+    char say[PKG_SAY_MAX + 1] = "";
+    if (p->cur && spot >= 0 && spot < p->cur->nitems && p->cur->items[spot].k == PK_SPOT)
+        snprintf(say, sizeof(say), "%.*s", (int)p->cur->items[spot].nstr, p->cur->say + p->cur->items[spot].str);
+    if (!p->cur) { start(p, sc); return; }
+    if (p->back) scene_free(p->cur);                    /* one deep: it takes the opened one's place */
+    else { p->back = p->cur; p->back_t = p->t; }
+    start(p, sc);
+    memcpy(p->say, say, sizeof(say));
+}
+int scene_open_say(scene_player_t *p, char *out, size_t size) {
+    if (!p->back || !p->say[0] || !size) return 0;
+    const int n = snprintf(out, size, "%s", p->say);
+    p->say[0] = '\0';
+    return n < (int)size ? n : (int)size - 1;
+}
+
+bool scene_back(scene_player_t *p) {
+    if (!p->back) return false;
+    scene_free(p->cur);
+    const float t = p->back_t;
+    scene_t *sc = p->back;
+    p->back = NULL;
+    start(p, sc);
+    p->t = t;
+    return true;
+}
+
+float scene_room(const scene_player_t *p) {
+    if (!p->cur) return 1e9f;
+    const float own = scene_end(p->cur) - p->t, under = p->back ? scene_end(p->back) - p->back_t : own;
+    return own < under ? own : under;
+}
+
 void scene_tick(scene_player_t *p, float dt) {
-    if (!p->cur || (p->t += dt) < scene_end(p->cur)) return;
+    if (!p->cur) return;
+    p->t += dt;
+    if (p->back && (p->back_t += dt) >= scene_end(p->back)) { scene_free(p->back); p->back = NULL; p->t = scene_end(p->cur); }   /* its ttl ends both */
+    else if (p->back && p->t >= scene_end(p->cur)) { scene_back(p); return; }   /* the opened one ended: back under it */
+    if (p->t < scene_end(p->cur)) return;
     scene_free(p->cur);
     scene_t *next = NULL;
     if (p->nq) { next = p->q[0]; memmove(p->q, p->q + 1, sizeof(p->q[0]) * (size_t)--p->nq); }
@@ -642,7 +739,7 @@ static void text(const ctx_t *c, const scene_t *sc, const scene_item_t *it, flui
 
 /* the subtitle: the reader's word (palette letters, the ORP in the accent on x = 0) at the
  * bottom, its type shrunk until its farthest corner is inside the glass */
-static void caption(const ctx_t *c, const scene_caption_t *cap, float y, fluid_letter_t *letters, int *nl) {
+static float caption_size(const scene_caption_t *cap, int *orp_out) {
     const int orp = cap->orp >= cap->n ? cap->n - 1 : cap->orp;
     const float reach = orp < 0 ? cap->n * 0.5f : fmaxf(orp + 0.5f, cap->n - orp - 0.5f);   /* in advances */
     float size = SCENE_CAPTION_SIZE;
@@ -651,6 +748,18 @@ static void caption(const ctx_t *c, const scene_caption_t *cap, float y, fluid_l
         if (e * e + yb * yb <= 0.95f * 0.95f || size < 0.04f) break;
         size *= 0.92f;
     }
+    *orp_out = orp;
+    return size;
+}
+void scene_caption_box(const scene_caption_t *cap, float y, int stage, float box[4]) {
+    int orp;
+    const float fs = caption_size(cap, &orp) * stage * 0.5f, adv = fs * 0.6f, lh = fs * 1.05f;   /* text_run's letter boxes */
+    box[0] = stage * 0.5f - (orp < 0 ? cap->n * 0.5f : orp + 0.5f) * adv; box[1] = box[0] + cap->n * adv;
+    box[2] = (1.f - y) * 0.5f * stage - lh * 0.5f; box[3] = box[2] + lh;
+}
+static void caption(const ctx_t *c, const scene_caption_t *cap, float y, fluid_letter_t *letters, int *nl) {
+    int orp;
+    const float size = caption_size(cap, &orp);
     const int n0 = c->hd && c->hd->n >= 0 ? c->hd->n : 0;
     text_run(c, cap->str, cap->n, 0.f, y, size, SCENE_CAPTION_RGB, 0, orp, letters, nl);
     for (int q = n0; c->hd && q < c->hd->n; q++) c->hd->shapes[q].tag = FLUID_TAG_CAPTION;   /* it forms from the fine dust */
@@ -742,7 +851,8 @@ static void paint_items(const ctx_t *c, const scene_t *sc, float t, float grow, 
         s_mark_on = lit || (fs && !fs->lights[0] && covered(sc, fs, it) && it->npts <= GROW_PTS);
         if (lit) {
             /* a lit group's item: grown about its own centre, brighter (or fading in) */
-            const float k = grow, a = glow;
+            /* (its colour in SCENE_LIT_STEPS steps: a lit line that only changes colour is drawn again at each, not each frame) */
+            const float k = grow, a = ceilf(glow * SCENE_LIT_STEPS - 0.001f) * (1.f / SCENE_LIT_STEPS);
             g = *it;
             g.r *= k; g.size *= k; g.w *= k;
             g.rgb = it->when_lit ? shade(it->rgb, a) : toward_white(it->rgb, a * SCENE_LIT_WHITE);
@@ -882,7 +992,7 @@ static bool fill_cache_for(int N, int brows, int cw) {
 static uint32_t fill_key(const fluid_sim_t *s, const scene_t *sc, float t, float gq) {
     uint32_t h = (2166136261u ^ (sc ? sc->serial : 0)) * 16777619u;
     h = (h ^ (uint32_t)(uintptr_t)s ^ (uint32_t)(uintptr_t)s->mask) * 16777619u;
-    h = (h ^ (uint32_t)s->stage ^ (uint32_t)(sc ? sc->focus : -1) << 16 ^ (uint32_t)(gq * 4.f) << 28) * 16777619u;
+    h = (h ^ (uint32_t)s->stage ^ (uint32_t)(sc && gq > 0.f ? sc->focus : -1) << 16 ^ (uint32_t)(gq * 4.f) << 28) * 16777619u;
     for (int n = 0; sc && n < sc->nitems; n++) {
         const scene_item_t *it = &sc->items[n];
         const bool on = t >= it->on && !(it->off > 0.f && t >= it->off);
@@ -923,23 +1033,7 @@ void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_
     }
     canvas_t *cv = &s_cv;
     const float soft = 1.f / cv->H;                           /* soft edge: half a dot row */
-    const float glow = sc ? sc->glow : 0.f, gq = glow >= 0.75f ? 1.f : glow >= 0.25f ? 0.5f : 0.f;
-    const uint32_t key = fill_key(s, sc, t, gq);
-    if (!key || key != s_fc.key) {
-        /* the items on the canvas, their dots following a growth halfway or whole */
-        const uint32_t bg = fluid_pack_rgba8(0.6f, 0.68f, 0.92f, 0.f);
-        for (int k = 0; k < cv->N; k++) { cv->T[k] = 0; cv->tcol[k] = bg; cv->mask[k] &= 1; }
-        const ctx_t c = { cv, soft, NULL, true };
-        s_fc.nl = 0;
-        paint_items(&c, sc, t, 1.f + (scene_spot_grow(sc, sc ? sc->focus : -1) - 1.f) * gq, gq, s_fc.letters, &s_fc.nl);
-        fold(cv, s->W, 0, s->H - 1, s_fc.T, s_fc.tcol, s_fc.dots, s_fc.keep);
-        for (int n = 0; n < s_fc.nl; n++) letter_dots(s, &s_fc.letters[n], s_fc.dots);
-        s_fc.key = key;
-    }
-    memcpy(s->T, s_fc.T, sizeof(int16_t) * (size_t)s->N);
-    memcpy(s->tcol, s_fc.tcol, sizeof(uint32_t) * (size_t)s->N);
-    if (dots) memcpy(dots, s_fc.dots, (size_t)s->N);
-    if (hd && hd->keep) memcpy(hd->keep, s_fc.keep, (size_t)s->N);
+    const float glow = sc ? sc->glow : 0.f;
     /* the shapes and letters, as they are now; the cells a tapped spot's drawing covers at full growth (once a tap) */
     if (hd && hd->still) {
         static uint32_t still_key;
@@ -969,6 +1063,25 @@ void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_
     }
     const ctx_t c = { cv, soft, hd, false };
     paint_items(&c, sc, t, sc ? sc->grow : 1.f, glow, letters, nletters);
+    /* the items' dots follow a growth halfway and whole; not in high definition with its still cells, where the grown
+     * drawing never shows on the dots (the water never breaks it): a tap then repaints nothing here */
+    const float gq = hd && hd->still && hd->n >= 0 ? 0.f : glow >= 0.75f ? 1.f : glow >= 0.25f ? 0.5f : 0.f;
+    const uint32_t key = fill_key(s, sc, t, gq);
+    if (!key || key != s_fc.key) {
+        /* the items on the canvas, their dots following a growth halfway or whole */
+        const uint32_t bg = fluid_pack_rgba8(0.6f, 0.68f, 0.92f, 0.f);
+        for (int k = 0; k < cv->N; k++) { cv->T[k] = 0; cv->tcol[k] = bg; cv->mask[k] &= 1; }
+        const ctx_t c = { cv, soft, NULL, true };
+        s_fc.nl = 0;
+        paint_items(&c, sc, t, 1.f + (scene_spot_grow(sc, sc ? sc->focus : -1) - 1.f) * gq, gq, s_fc.letters, &s_fc.nl);
+        fold(cv, s->W, 0, s->H - 1, s_fc.T, s_fc.tcol, s_fc.dots, s_fc.keep);
+        for (int n = 0; n < s_fc.nl; n++) letter_dots(s, &s_fc.letters[n], s_fc.dots);
+        s_fc.key = key;
+    }
+    memcpy(s->T, s_fc.T, sizeof(int16_t) * (size_t)s->N);
+    memcpy(s->tcol, s_fc.tcol, sizeof(uint32_t) * (size_t)s->N);
+    if (dots) memcpy(dots, s_fc.dots, (size_t)s->N);
+    if (hd && hd->keep) memcpy(hd->keep, s_fc.keep, (size_t)s->N);
     if (cap && cap->n > 0) {
         /* the subtitle, over the drawing: painted on the canvas's band (then put back), its cells
          * folded again */
@@ -998,7 +1111,17 @@ int scene_full_shapes(fluid_sim_t *s, const scene_t *sc, float t, fluid_shape_t 
     const ctx_t c = { &s_cv, 1.f / s_cv.H, &h, false };
     const bool tapped = sc->focus >= 0 && sc->glow > 0.f;
     paint_items(&c, sc, t, tapped ? scene_spot_grow(sc, sc->focus) : 1.f, tapped ? 1.f : 0.f, tl, &tn);
-    *key = scene_full_key(s, sc, t);
+    /* the drawing itself: the same shapes, the same key, whichever scene they are of (back at a chart, its dust is known) */
+    uint32_t k = 2166136261u ^ (uint32_t)s->stage;
+    for (int n = 0; n < h.n; n++) {
+        const fluid_shape_t *sh = &out[n];
+        const float f[12] = { sh->x, sh->y, sh->x1, sh->y1, sh->r, sh->hw, sh->a0, sh->span, sh->w, sh->h, sh->co, sh->si };
+        k = (k ^ sh->k ^ (uint32_t)sh->mw << 8 ^ (uint32_t)sh->mh << 20) * 16777619u;
+        k = (k ^ sh->rgb) * 16777619u;
+        k = (k ^ (uint32_t)(uintptr_t)sh->mask) * 16777619u;
+        for (int q = 0; q < 12; q++) { uint32_t v; memcpy(&v, &f[q], 4); k = (k ^ v) * 16777619u; }
+    }
+    *key = k ? k : 1;
     return h.n;
 }
 
@@ -1059,4 +1182,28 @@ int scene_outline(const scene_t *sc, int n, void (*fn)(void *ctx, float x, float
     }
 #undef ROUND
     return cnt;
+}
+
+int scene_rings(fluid_shape_t *shp, int n, int stage, const fluid_ring_t *ring, const fluid_progress_t *prog, bool thinking,
+                uint32_t listen_rgb, uint32_t prog_rgb) {
+    uint32_t seg[SCENE_RING_SEGS] = { 0 };
+    const bool pon = prog->on > 0.3f, comet = pon ? prog->pct < 0.f : thinking;
+    for (int q = 0; (pon || thinking) && q < SCENE_RING_SEGS; q++) {
+        const float t = (q + 0.5f) / SCENE_RING_SEGS;           /* turns clockwise from 12 o'clock */
+        float rel = t - (prog->spin - PROG_COMET);
+        rel -= floorf(rel);
+        if (comet ? rel < PROG_COMET : t <= prog->shown || prog->flash > 0.f) seg[q] = FLUID_RGB | prog_rgb;
+    }
+    const int reach = (int)ceilf(ring->on * (SCENE_RING_SEGS / 2) - 0.001f);   /* the listen's: this many parts each way */
+    for (int q = 0; q < reach && q < SCENE_RING_SEGS / 2; q++) seg[q] = seg[SCENE_RING_SEGS - 1 - q] = FLUID_RGB | listen_rgb;
+    int on = 0, c0 = n;
+    for (int q = 0; q < SCENE_RING_SEGS; q++) on += seg[q] != 0;
+    if (!on || n < 0 || n + on > FLUID_MAX_SHAPES) return n;
+    while (c0 > 0 && shp[c0 - 1].tag == FLUID_TAG_CAPTION) c0--;
+    memmove(shp + c0 + on, shp + c0, sizeof(fluid_shape_t) * (size_t)(n - c0));
+    const float step = 360.f / SCENE_RING_SEGS;
+    for (int q = 0, w = c0; q < SCENE_RING_SEGS; q++)
+        if (seg[q]) shp[w++] = (fluid_shape_t){ .k = FLUID_SHAPE_RING, .rgb = seg[q], .x = stage * 0.5f, .y = stage * 0.5f, .r = SCENE_RING_R * stage * 0.5f,
+                                                .hw = SCENE_RING_HW, .a0 = 90.f - (q + 1) * step, .span = step };
+    return n + on;
 }

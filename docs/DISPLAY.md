@@ -45,8 +45,6 @@ your skill ships). The build writes the call for every screen, in `build/display
 {"name":"scene.play","args":{"pkg":"hello","layout":"hello","params":{"angle":90},"ttl_s":60}}
 ```
 
-The rest of this page is one idea at a time.
-
 ## Places and units
 
 Units never change, so learn them once.
@@ -122,8 +120,7 @@ draw:
   - spoke: { angle: "{{ value }}", length: 0.8 }
 ```
 
-A binding fills a whole value. No sums and no text with a gap in it: the skill works those out and
-sends the result.
+A binding fills a whole value. No sums, no text with a gap in it: the skill works those out and sends the result.
 
 ## Repeat and reuse
 
@@ -165,11 +162,26 @@ A `tap_zone` draws nothing. Tap it and Molty shows its `reads` at once, word by 
 |---|---|
 | `at` + `radius` | a round zone |
 | `along: { from, to }` + `radius` | a band along a line, for tapping a line |
+| `sector: { from, to, inner, outer }` | a wedge of a ring: from one angle to another, between two distances |
+| `opens` | a tap opens another screen on Molty; it comes back when that ends, or at a tap beside it |
 | `highlights` | group names to light. Left out: whatever is drawn inside the zone |
 | `grow` | how much the lit shapes grow, 1 to 3 (1.25 if you say nothing) |
 
-Any shape can join a group with `group: "{{ body.id }}"`. A lit shape grows and brightens while the
-reading plays. A shape with `only_when: highlighted` shows only then.
+```yaml
+- tap_zone:
+    sector: { from: 180, to: 210, inner: 0.75, outer: 0.9 }   # this wedge
+    reads: Aries, bold and quick.
+    id: aries
+    opens: { screen: sign-closeup, seconds: 12 }              # opens that screen, for 12 s
+```
+
+The opened screen finds its inputs by name: in the tapped element of the list, else among this screen's inputs. A
+list passes on only the elements whose `of` is the zone's `id`. For a wedge around a zone an input places, say
+`sector: { width: 30, inner: 0.75, outer: 0.9 }`: so many degrees wide, around `at`. A tap right on a zone's own
+circle or line beats one that only falls in a wedge.
+
+Any shape can join a group with `group: "{{ body.id }}"`. A lit shape grows and brightens while the reading
+plays. A shape with `only_when: highlighted` shows only then.
 
 ## Assets
 
@@ -199,15 +211,14 @@ draw:
   - dot: { radius: 0.1, show: { from: 0.4, until: 2 } }
 ```
 
-`show` says when a shape is on screen. Leave `from` out and it is there from the start; leave `until`
-out and it stays to the end. Both take bindings, so a list can carry each step's times.
+`show` says when a shape is on screen: without `from` it is there from the start, without `until` it stays to
+the end. Both take bindings, so a list can carry each step's times.
 
 ## SKILL.md and the docs you get
 
-In `SKILL.md`, link each screen where you say when to use it: `[hello](display.yaml#hello)`.
-The build writes `build/display.md`: every screen, its inputs and a call that works. Link that too,
-and never write an inputs table by hand again. `build/inputs/<screen>.schema.json` lets a skill check
-what it is about to send.
+In `SKILL.md`, link each screen where you say when to use it: `[hello](display.yaml#hello)`. The build writes
+`build/display.md` (every screen, its inputs and a call that works: link that too) and
+`build/inputs/<screen>.schema.json`, which lets a skill check what it is about to send.
 
 | command | does |
 |---|---|
@@ -215,11 +226,10 @@ what it is about to send.
 | `molty-display build <folder>` | check, then the package, its cost, and `build/` |
 | `molty-display preview <folder>` | a page on your computer: pick a screen, edit inputs, scrub time, click tap zones |
 
-`molty-display` is `node packages/tools/molty-display.mjs`. A skill in `skills/` builds into
-`packages/<id>/`, where Molty fetches it once merged: commit the folder and the built package, then run
-`node tools/scripts/check-packages.mjs --write-index`. Any other folder builds into its own `build/`.
-Editors complete `display.yaml` from `schema/display-2.json`: start the file with
-`# yaml-language-server: $schema=<path to>/schema/display-2.json`.
+`molty-display` is `node packages/tools/molty-display.mjs`. A skill in `skills/` builds into `packages/<id>/`,
+where Molty fetches it once merged: commit the folder and the built package, then run
+`node tools/scripts/check-packages.mjs --write-index`. Any other folder builds into its own `build/`. Editors
+complete `display.yaml` when it starts with `# yaml-language-server: $schema=<path to>/schema/display-2.json`.
 
 ## Limits and edge cases
 
