@@ -1,6 +1,6 @@
 ---
 title: Set up your Molty
-description: Wi-Fi, choose a Molty, connect an agent — the three steps of the setup console.
+description: Wi-Fi, choose a Molty, connect an agent, pick a voice. The four steps of the setup console.
 ---
 
 Molty serves its own setup console. The first time, you reach it over the USB-C cable.
@@ -31,13 +31,28 @@ networks.
 
 ## 2. Who should I be?
 
-Pick one of the 29 Moltys. The console sends the creature's `.molty` file to the device
-and it appears on the screen right away — no reflash. You can change it later in the
-console's Molty page.
+Pick one of the creatures your Molty holds: the duck, the cat or the octopus out of the box,
+plus any creature package you installed. It appears on the screen right away, with no reflash.
+You can change it later in the console's Molty page.
 
 ## 3. Who will be my brain?
 
 The console shows one message with your device ID and a link code. Copy it and send it
 to your agent. Continue with [Connect an agent](/agents/connect/).
 
+Molty shows a 4-digit code with `accept` and `reject` on the rim. Tap `accept` if the agent shows
+the same code.
+
 You can skip this step and connect an agent any time later from the console's Agent page.
+
+## 4. Should I talk?
+
+Up to three short questions, each changeable later in the console's Voice page:
+
+| Question | What you choose |
+|---|---|
+| Should I talk? | where Molty's voice comes from, or text only |
+| Agents can be slow. What should I do meanwhile? | what fills the gap until your agent speaks |
+| Should I react while you talk? | who picks Molty's small reactions |
+
+Next: [What Molty shows](/getting-started/on-screen/).

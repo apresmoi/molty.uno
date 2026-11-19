@@ -5,14 +5,17 @@
 | Board (`device/firmware/boards/…`) | Display | Touch | IMU | Mic / speaker | Buttons | USB-C | Flash / PSRAM | Status |
 |---|---|---|---|---|---|---|---|---|
 | **Waveshare ESP32-S3-Touch-LCD-1.46** (`waveshare/esp32-s3-touch-lcd-1.46`) | 412×412 round, SPD2010 QSPI | SPD2010 | QMI8658 | yes / yes | BOOT accept, PWR reject | native USB: NCM network at 10.13.37.1 | 16 MB / 8 MB octal | reference |
-| **Waveshare ESP32-S3-Touch-LCD-1.28** (`waveshare/esp32-s3-touch-lcd-1.28`) | 240×240 round, GC9A01A SPI | CST816S | QMI8658 | — / — | BOOT accept | CH343P USB-UART: serial logs + Wi-Fi setup over Improv, no USB network | 16 MB / 2 MB quad | experimental |
-| **Waveshare ESP32-S3-Touch-AMOLED-1.75C** (`waveshare/esp32-s3-touch-amoled-1.75c`) | 466×466 round AMOLED, CO5300 QSPI | CST9217 | QMI8658 | yes / yes (ES7210 / ES8311) | BOOT accept, PWR reject | native USB: NCM network at 10.13.37.1 | 32 MB / 8 MB octal | experimental, untested on hardware |
+| **Waveshare ESP32-S3-Touch-LCD-1.28** (`waveshare/esp32-s3-touch-lcd-1.28`) | 240×240 round, GC9A01A SPI | CST816S | QMI8658 | no / no | BOOT accept | CH343P USB-UART: serial logs + Wi-Fi setup over Improv, no USB network | 16 MB / 2 MB quad | experimental |
+| **Waveshare ESP32-S3-Touch-AMOLED-1.75C** (`waveshare/esp32-s3-touch-amoled-1.75c`) | 466×466 round AMOLED, CO5300 QSPI | CST9217 | QMI8658 | yes / yes (ES7210 / ES8311) | BOOT accept, PWR reject | native USB: NCM network at 10.13.37.1 | 32 MB / 8 MB octal | experimental |
 
 The 1.46 is the V1 board (the version without cover glass works too): it adds a TCA9554
 I/O expander, an I2S speaker amp and microphone, and battery management with a
 soft-power latch. The 1.28 has no audio, so `say`/`listen` and the audio endpoints
 answer `unsupported`; it is reached over Wi-Fi only, set up over the USB cable from
-**molty.uno/setup** (Improv Wi-Fi Serial; [PORTING.md](PORTING.md#flash-it)). Each board's pins, with their sources, are in its
+**molty.uno/setup** (Improv Wi-Fi Serial; [PORTING.md](PORTING.md#flash-it)). The 1.75C has the
+largest and sharpest screen (a 466×466 AMOLED, true black): the high-definition scenes, the cat
+and the recording ring were tuned on it. The same code draws them on the 1.46. Its port is
+still marked experimental (`board.json`). Each board's pins, with their sources, are in its
 `board.h`. Another board: [PORTING.md](PORTING.md).
 
 ## Prerequisites
@@ -33,6 +36,7 @@ From the repo root (`make help` lists everything):
 make console     # device/console/dist/index.html (typecheck + unit tests + build)
 make firmware    # idf.py build: the 1.46 in device/firmware/build; needs the console first (it is baked into SPIFFS)
 make firmware BOARD=waveshare/esp32-s3-touch-lcd-1.28   # another board, in device/firmware/build/<vendor>-<model>/
+make firmware BOARD=waveshare/esp32-s3-touch-amoled-1.75c
 make firmware-all                                       # every board under device/firmware/boards/
 ```
 
@@ -65,15 +69,15 @@ Connect to Wi-Fi), which can also do the install above without ESP-IDF; it ident
 board itself and offers only that board's firmware. Details and a
 local test: [PORTING.md](PORTING.md#flash-it).
 
-**Waveshare 1.46.** Native USB on this board has no reliable auto-reset, so the first
+**Waveshare 1.46 and 1.75C** (native USB). Native USB has no reliable auto-reset, so the first
 flash is manual:
 
-1. `make console firmware`
+1. `make console firmware` (the 1.75C: add `BOARD=waveshare/esp32-s3-touch-amoled-1.75c`)
 2. **Hold BOOT, plug the USB-C cable in while holding, then release.** (Holding BOOT and
    tapping RESET is not reliable on this board.)
 3. Flash (replace the port; on macOS it is a `/dev/cu.usbmodem*` that appears on replug):
    ```sh
-   cd device/firmware/build
+   cd device/firmware/build      # the 1.75C: device/firmware/build/waveshare-esp32-s3-touch-amoled-1.75c
    python -m esptool --chip esp32s3 -p PORT -b 460800 \
      --before default_reset --after hard_reset write_flash "@flash_args"
    ```
@@ -104,9 +108,9 @@ Gotchas:
 
 ## Talking to the device
 
-- `http://10.13.37.1` — over USB-C. The board appears as a USB Ethernet adapter (NCM) and
+- `http://10.13.37.1`: over USB-C. The board appears as a USB Ethernet adapter (NCM) and
   hands your computer an address by DHCP; it does not advertise a default route.
-- `http://molty.local` — over Wi-Fi via mDNS, once Wi-Fi is set up in the console.
+- `http://molty.local`: over Wi-Fi via mDNS, once Wi-Fi is set up in the console.
 - The scripts take `MOLTY_URL` (device) and `PORT` (serial port).
 
 Console development against a real device: `cd device/console && pnpm dev`, then open

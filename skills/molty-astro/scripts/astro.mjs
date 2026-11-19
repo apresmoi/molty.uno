@@ -129,7 +129,7 @@ async function interactive() {
     if (spot && signs.has(spot) && spot !== open) {
       const c = closeup(date, spot), [[, , len]] = c.scenes;
       await play(left() > len + 1 ? [...c.scenes, ['chart', board, left() - len]] : c.scenes);
-      try { await send('say', { text: c.read }); } catch (e) { if (e.code !== 'audio_busy') throw e; console.error('molty-astro: Molty is still speaking; the close-up shows without its reading'); }
+      try { await send('say', { text: c.read }); } catch (e) { console.error(`molty-astro: the close-up shows without its reading (${e.code ?? e.message})`); } // busy, do not disturb, offline voice: the screen still follows the taps
       [open, until] = [spot, Date.now() + 1000 * len];
       console.error(`molty-astro: ${spot} up close`);
     } else if (!spot && open) {

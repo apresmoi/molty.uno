@@ -23,7 +23,7 @@ Molty (home Wi-Fi) ──outbound WSS──▶ molty-relay (Cloudflare Worker + 
 | Voice provider | `src/voice/*.ts` → `interface VoiceProvider { tts(text, opts) → PCM16@16k; stt(PCM16@16k) → text; ttsStream?; sttStream? }` | workers-ai · openai · none (env) · box (the owner's [voice box](#voice-box), per device) |
 | Device link client | `device/firmware/main/link/` | transport only; commands come from the dispatcher |
 | Device command dispatcher | `main/link/link_cmd.c` | ONE registry used by both the WSS link and (later) local HTTP |
-| Pairing UI | the question screen (`link_ui_show_pair`, `fluid_ask.h`): "PAIR WITH <AGENT>?", "CHECK THE CODE MATCHES", the 4-digit code, and accept / reject as rim arcs, over whatever shows, until accept/reject/timeout; the console shows the same via `GET /api/link` | |
+| Pairing UI | the question screen (`link_ui_show_pair`, `fluid_ask.h`): `PAIR WITH <AGENT>?`, "CHECK THE CODE MATCHES", the 4-digit code, and accept / reject as rim arcs, over whatever shows, until accept/reject/timeout; the console shows the same via `GET /api/link` | |
 
 ## Identities and secrets
 
@@ -64,9 +64,10 @@ Molty (home Wi-Fi) ──outbound WSS──▶ molty-relay (Cloudflare Worker + 
 2. The agent calls `POST /v1/pair {device_id, link_code, agent_name}` (or the `molty_pair` MCP
    tool, which is the only tool usable without a token). The request long-polls ≤ 120 s.
 3. Relay → device: `pair.request {req, agent_name, code}` where `code` is 4 digits.
-4. Device shows the 4-digit `code` statically (one held token in the fluid) until decided
-   (a tap on the accept arc or BOOT button = accept; a tap on the reject arc or PWR = reject; 110 s = `timeout`, so the device
-   decides just before the relay's 120 s window closes). The console polls `GET /api/link`
+4. Device shows the pairing question until decided: `PAIR WITH <AGENT>?`, the line "check the code matches", the
+   4-digit `code`, and two rim arcs, `accept` and `reject` (the same screen as an `ask`, below).
+   A tap on the accept arc or the BOOT button = accept; a tap on the reject arc or PWR = reject; 110 s = `timeout`, so the device
+   decides just before the relay's 120 s window closes. The console polls `GET /api/link`
    (~1 Hz) and advances on `pair` / `last_pair`.
 5. Device → relay: `pair.result {req, ok}`; failures include `reason:"timeout"` or
    `reason:"rejected"`. On ok the relay mints `agent_token` and returns it to the waiting
@@ -76,7 +77,7 @@ Molty (home Wi-Fi) ──outbound WSS──▶ molty-relay (Cloudflare Worker + 
 
 ## Device ↔ relay wire (WS/WSS `/v1/device?id=<device_id>`)
 
-First frame from device: `{"t":"hello","id":"molty-k7m2w9c4ya","key":"<b64 device_key>","fw":"...","caps":["fluid","say","say_cues","say_marks","listen","listen_stop","listen_window","ack","shake_talk","show","mood","act","creature","react","ask","log_upload"],"board":"waveshare-esp32-s3-touch-lcd-1.46","link_code":"..."}`
+First frame from device: `{"t":"hello","id":"molty-k7m2w9c4ya","key":"<b64 device_key>","fw":"...","caps":["fluid","say","say_cues","say_marks","listen","listen_stop","listen_window","ack","shake_talk","trace","hints","resume","say_cancel","gestures","dnd","show","mood","act","creature","working","progress","react","ask","ask_title","update","pkg","scene","creatures","log_upload"],"board":"waveshare-esp32-s3-touch-lcd-1.46","link_code":"..."}`
 → relay answers `{"t":"welcome","features":["listen_adopt"],"now":<relay unix ms>,"log":{"max_lines":48}}` or closes with 4401.
 `features` lists what the relay does for the device (`listen_adopt`: it adopts a listen the device
 began by itself — [Shake to talk](#shake-to-talk)); `now` is the device's time sync and `log` says the
@@ -816,7 +817,14 @@ What the screen does between commands (`device/firmware/main/fluid/fluid_directo
 | `updates` (relay) | — | `{api_version, firmware, actions}` | "check Molty for updates": [Firmware updates](#firmware-updates) |
 | `update` (relay → device) | — (agent) · `{job, version, url, sha256, size, timeout_ms}` (device) | job | install the latest release after an on-screen confirm; `unsupported` without the `update` cap |
 | `ask` (relay) | `{say?, title? (1..40 printable ASCII, shown over the answers), options: 1..5 items — a label of printable ASCII (1..14 chars for 1-2 items, 1..10 for 3, 1..8 for 4-5; unique, case-insensitive) or {label, color?}, timeout_s? 1..120 =30, voice?}` | blocks ≤ 24 s | say, then device `ask`, then the tap: `{job, status:"done", answer: label\|null, index: int\|null, reason?: "timeout"\|"cancelled"\|"offline", said?, ms:{tts_first_audio?, speech?, answer, total}, timings:{queue, say?, ask:{cmd, wait}, total}}`; over 24 s `{job, status:"pending"}` (finish with `molty_wait`). Holds the audio lock only while speaking. `unsupported` without `ask` in caps (no touch) or, with `say`, without a speaker |
-| `volume` | `{volume 0..21}` | — | `unsupported` without a speaker |
+| `progress` | `{pct? 0..100, step? (at most 80 bytes), done?}` | none | cap `progress`: a ring on the rim fills clockwise to `pct` while the creature works ([Inline cues and actions](#inline-cues-and-actions)) |
+| `gestures` | `{bindings?}` | `{bindings}` | cap `gestures`: what tap, double tap and the two buttons do (`none`, `talk`, `event`, `stop`, `screen`, `hold`); no args reads them |
+| `pkg.available` (relay) | none | `{ref, device, packages}` | the package catalog with ready install args ([PACKAGES.md](PACKAGES.md#6-relay)) |
+| `pkg.install` | `{id, url, sha256, size, name}` | a job; done `{installed, version}` | cap `pkg`: the owner taps `install` on the screen, a ring shows the download ([PACKAGES.md](PACKAGES.md#2-commands-agent---relay---device)) |
+| `pkg.remove`, `pkg.list` | `{id}`, none | `{removed}`, `{packages}` | cap `pkg` |
+| `scene.play`, `scene.queue` | `{pkg, layout, params?, ttl_s? 1..600 =60}` | `{pkg, layout, ttl_s}` | cap `scene`: a package's layout on screen; `scene.clear` melts back to the creature |
+| `creature.select`, `creature.list` | `{id}`, none | `{id, name}`, `{current, creatures}` | cap `creatures`: which built-in or installed creature Molty is |
+| `volume` | `{volume 0..21}` | none | `unsupported` without a speaker |
 | `imu` | — | snapshot | `unsupported` without an IMU |
 | `diag` | `{timeline? 0..180}` | `/api/diag` JSON | frame histograms, task CPU %, heap, stalls, net; `timeline` = seconds of 1 Hz rows |
 | `log` | `{since?, max? 1024..32768}` | `{next, text}` | device log ring tail (ESP_LOG + `EVT` lines); pass `next` back as `since` |
@@ -891,6 +899,9 @@ idle life of its own.
   `done: true` fills it, flashes it, melts it, and a working creature turns happy. `step` (≤ 80
   bytes) stays in the relay's activity log; the device draws no text. Under the listening ring,
   never over a question. A device without the cap answers `unsupported` / `firmware_too_old`.
+  Over the duck or the octopus the line is mint (`PROG_COLOR`). Over the cat (a rigged creature) it is the recording
+  ring's own line: it forms from a wave at the centre and takes that ring's colour. A package download shows its bytes
+  on the same ring ([PACKAGES.md](PACKAGES.md#2-commands-agent---relay---device)).
 - **A creature's own gestures.** `ACTIONS` are the shared ones every creature plays; a creature
   package may add gestures of its own by name ([CREATURES.md](CREATURES.md#1-the-package), the cat's
   `eat`). The relay takes any `act` name `[a-z][a-z0-9_]{0,23}` (`GESTURE_RE`) and forwards it; the
@@ -926,7 +937,7 @@ pairing). Rate-limited on the device. `shake`, `tap` and `button` reach agents t
 |---|---|---|
 | `say.done` | `{job}` | a `say` finished playing (its last PCM left the speaker) |
 | `shake` | `{peak_g, reversals, ms, listen?}` | the board was shaken (boards with an IMU): ≥ 3 sign reversals of > 1.2 g dynamic acceleration on one axis within 800 ms; ≤ 1 per 2 s. `peak_g` largest dynamic acceleration (g), `ms` first peak → detection; `listen` the local id of the listen it started ([Shake to talk](#shake-to-talk)); a gesture bound to talk sends the same event with `peak_g` 0 and `input` (`double_tap`, `button_accept`, ...), plus `hold: true` for a button held to talk (the relay then never ends that listen on an end of turn: only the release, a tap's stop, or the window) |
-| `tap` | `{x, y}` | a finger touched the screen (boards with touch); 0..1 of the panel from the top left; ≤ 4/s |
+| `tap` | `{x, y, spot?}` | a finger touched the screen (boards with touch); 0..1 of the panel from the top left; ≤ 4/s. On a scene's tap spot it also names the spot (`spot: "<id>"`), whatever tap is bound to, and Molty already shows that spot's reading ([PACKAGES.md](PACKAGES.md#layouts)) |
 | `double_tap` | `{x, y}` | two taps within 350 ms, when bound to `event` (out of the box a double tap talks) |
 | `button` | `{id: "accept"\|"reject"}` | a button was pressed (the board's accept / reject buttons); ≤ 4/s. For agents it means acknowledge / dismiss, never an answer (answers come only from `ask`) |
 | `answer` | `{job, index, label}` · `{job, index: null, reason: "timeout"\|"cancelled"}` | an `ask` ended: tapped (0-based `index`, `label` verbatim), timed out, or cancelled; one per job, never rate-limited |
@@ -938,24 +949,33 @@ simulating and drawing and the panel sleeps; a touch (not a tap), a shake, a but
 words, a question or a listen turns it back on. `GET /api/power` has the battery and the last
 12 h of per-minute samples (device/firmware/main/power/power.h).
 
-The device reacts to a shake by itself (a brief `surprised`), agent or not. While a `listen`
-records, a thin line of the fluid itself condenses just inside the screen's rim around Molty
-(in its `listening` mood, in the middle) and breathes: the whole circle expands and
-contracts, calm while the room is quiet, quicker and deeper as the human speaks (the mic level,
-~10 Hz, smoothed), and circular ripples run inward across the fluid from the whole rim; silence
-settles it back to a calm breath, nothing ever travels around it
-(`mole_fluid_listen`, `fluid_target_ring`; every tuning knob in
-`device/firmware/main/fluid/fluid_ring.h`). It is never shown over a pending `ask`. Its colour:
-the listen's `ring_color`, else the device default (console setting, NVS), else the palette's
-accent (mono palettes always show their accent). Detector
-constants: `device/firmware/main/sense/gesture.h`.
+The device reacts to a shake by itself (a brief `surprised`), agent or not. A tap or a shake also calls
+the cat to the front of the frame ([CREATURES.md](CREATURES.md#playing)).
+
+**The recording ring.** While a `listen` records, a ring shows at the rim. It is never shown over a
+pending `ask`. How it looks depends on the creature on screen:
+
+| | over the cat (a rigged creature) | over the duck, the octopus or a `.molty` |
+|---|---|---|
+| forms | a wave runs out from the centre through the water; its crest takes the colour near the rim and lands as a thin sharp line (about 1 s) | a thin line of the fluid condenses just inside the rim (0.3 s) |
+| voice | small ripples run inward from the rim, more and stronger the louder (the mic level) | none: the circle stays as it is |
+| ends | a wave runs in from the rim and fades | the line melts back |
+| colour | the listen's `ring_color`, else the owner's setting, else red `#ff2c3e` | the listen's `ring_color`, else the owner's setting, else the palette's accent |
+| code | `creature/creature_ring.c` (design: `device/creatures/ring-options.html`) | `fluid_target_ring`, knobs in `fluid/fluid_ring.h` |
+
+The owner's setting is the console's `ring_color` (NVS). Shake detector constants: `device/firmware/main/sense/gesture.h`.
+
+**Silence never reaches the agent.** A press with nothing said ends as `no_speech`: the device's VAD, or the
+relay's own check of the audio (`services/relay/src/core/voiced.ts`: a pitched voice for 100 ms over the clip's
+noise floor), or a transcript with no word. No STT result, opener, filler or `utterance` follows (see `listen` above).
 
 ## Agent surfaces
 
 - **Remote MCP** `https://<relay>/mcp` (streamable HTTP), `Authorization: Bearer <agent_token>`.
-  Tools: `molty_pair`, `molty_talk`, `molty_ask`, `molty_status`, `molty_mood`, `molty_act`, `molty_progress`, `molty_show`, `molty_say`, `molty_listen`,
-  `molty_wait`, `molty_state`, `molty_volume`, `molty_imu`, `molty_diag`, `molty_log`, plus the
-  relay-only `molty_talk`, `molty_ask`, `molty_events`, `molty_webhook` ([Events](#events-device--agents)),
+  Tools: `molty_pair`, `molty_status`, `molty_mood`, `molty_act`, `molty_progress`, `molty_gestures`, `molty_show`, `molty_say`, `molty_listen`,
+  `molty_wait`, `molty_state`, `molty_volume`, `molty_imu`, `molty_diag`, `molty_log`, `molty_package` and `molty_scene`
+  ([PACKAGES.md](PACKAGES.md#6-relay)), plus the
+  relay-only `molty_talk`, `molty_ask`, `molty_quick`, `molty_keep`, `molty_phrases`, `molty_events`, `molty_webhook` ([Events](#events-device--agents)),
   `molty_updates` and `molty_update` ([Firmware updates](#firmware-updates)), `molty_activity`
   ([Activity log](#activity-log)), `molty_draft`, `molty_react` ([While the human speaks](#while-the-human-speaks)),
   `molty_notes` ([Notes](#notes)). Shared names

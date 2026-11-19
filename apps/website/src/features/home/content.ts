@@ -52,10 +52,16 @@ export const boards = [
     status: "reference",
   },
   {
+    tag: "1.75C",
+    board: "Waveshare ESP32-S3-Touch-AMOLED-1.75C",
+    screen: "466×466 AMOLED · mic · speaker",
+    status: "experimental",
+  },
+  {
     tag: "1.28",
     board: "Waveshare ESP32-S3-Touch-LCD-1.28",
     screen: "240×240 round · no audio",
-    status: "supported",
+    status: "experimental",
   },
 ] as const;
 
