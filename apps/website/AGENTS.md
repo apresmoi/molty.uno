@@ -88,7 +88,7 @@ Never deploy or publish from here; nothing in this package does.
 - `pnpm check` — architecture rules (`scripts/checks/architecture.mjs`: owners, barrels,
   layers, the fluid / renderer / packages import boundaries, single repo URL, colour/font
   tokens, cycles) + prettier (`pnpm format` fixes). No baselines or exemptions.
-- `pnpm test` — includes `molty.test.ts`: the committed module is the one its manifest
+- `pnpm test` includes `molty.test.ts`: the committed module is the one its manifest
   describes, its sources have not changed since, it still draws the frames `make web-molty`
   checked against the native build, the still is one of its frames.
 - `pnpm build && pnpm preview`, then `pnpm screens` (`e2e/screens.mjs`): screenshots to
