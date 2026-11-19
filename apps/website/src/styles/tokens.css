@@ -1,8 +1,7 @@
-/* The source of UI colours, type, spacing and layout sizes. The page is the fluid: black
-   glass, dim braille, monospace. The only colour is the wordmark's green (#3ccf96, the
-   README wordmark) and whatever the Moltys bring. Light theme = the same fluid as ink on
-   paper (the fluid's layer is inverted; the page's own fluid colours are handed over
-   pre-inverted, hues kept), so every token has a light twin below. A device's screen is its own
+/* The source of UI colours, type, spacing and layout sizes. The page is the device's water: black
+   glass, fine dust, monospace. The only colour is the wordmark's green (#3ccf96, the
+   README wordmark) and whatever the Moltys bring. Light theme = the same water as ink on
+   paper, so every token has a light twin below. A device's screen is its own
    canvas, a dark panel in both themes. */
 :root,
 :root[data-theme="dark"] {
@@ -32,7 +31,6 @@
   --m-ink: #d8e2dc;
   --m-dim: #7d8a83;
   --m-faint: #3a443f;
-  --m-fluid: #6f8f82;
   --m-accent: #3ccf96;
   --m-accent-dim: #2f9a72;
   --m-accent-ink: #001a0e;
@@ -41,8 +39,8 @@
   --m-accent-soft: rgba(60, 207, 150, 0.16);
   --m-overlay: rgba(0, 0, 0, 0.82);
   --m-veil: rgba(0, 0, 0, 0.6);
-  /* the page fluid's layer */
-  --m-fluid-filter: none;
+  /* the page's calm water: dust, as a tile (scripts/dust-tile.mjs) */
+  --m-dust: url("../assets/dust/dark.png");
   /* a device's domed glass (GlassDome), over the dark screen in both themes: sheen, crisp
      highlight, opposite rim, fresnel edge */
   --m-glass-sheen: rgba(255, 255, 255, 0.1);
@@ -63,8 +61,6 @@
   --m-text-lg: 19px;
   --m-text-xl: 28px;
   --m-text-hero: clamp(30px, 5.2vw, 52px);
-  --m-text-word: clamp(min(64px, 17.5vw), 13.4vw, 196px);
-  --m-text-section: clamp(84px, 10vw, 150px);
   --m-text-page: clamp(60px, 6.6vw, 100px);
 
   --m-space-1: 4px;
@@ -89,7 +85,6 @@
   --m-stack-slot: min(100%, 520px, 44svh);
   --m-stack-glass: min(84vw, 420px, 40svh);
   /* a section's word on a phone held upright, where each section is one screen */
-  --m-text-section-stack: min(84px, 17vw, 8.5svh);
 }
 @media (max-width: 46rem) {
   /* [data-theme] matches the dark block's specificity */
@@ -108,7 +103,6 @@
   --m-ink: #18201c;
   --m-dim: #48544e;
   --m-faint: #9aa59f;
-  --m-fluid: #6f8f82;
   /* text colours hold WCAG AA (4.5:1) on bg, panel and glass; faint is never text */
   --m-accent: #107f57;
   --m-accent-dim: #2f9a72;
@@ -118,9 +112,8 @@
   --m-accent-soft: rgba(16, 127, 87, 0.14);
   --m-overlay: rgba(255, 255, 255, 0.86);
   --m-veil: rgba(255, 255, 255, 0.62);
-  /* black glass → white paper: the page's own fluid colours (field, headings) are handed over
-     pre-inverted (services/molty-stage/paper.ts) */
-  --m-fluid-filter: invert(1);
+  /* black glass → white paper: the same dust as ink */
+  --m-dust: url("../assets/dust/light.png");
   --m-bezel: #dce0de;
   --m-bezel-in: #aab3ae;
   --m-bezel-out: #8f9994;

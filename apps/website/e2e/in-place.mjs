@@ -29,7 +29,7 @@ function sampler() {
   const tick = () => {
     const t = Math.round(performance.now());
     document.querySelectorAll('[data-molty-screen]').forEach((root, i) => {
-      const canvas = root.querySelector('canvas');
+      const canvas = root.querySelector('canvas:not([data-outside])');
       const still = root.querySelector('img');
       const device = root.querySelector('[data-device]');
       const face = device?.children[device.children.length - 1];

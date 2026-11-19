@@ -31,11 +31,9 @@ function checkImport(file, target) {
   if (service && !rel(file).startsWith(`services/${service}/`) && path.basename(target) !== 'index.ts') report(file, `Import services/${service} through its index.ts.`);
 }
 
-/** One owner each: the page fluid (glyphcss) is services/molty-stage's, the firmware's renderer
- *  (the module and its packages) is services/molty-screen's and features/molty's. */
+/** One owner each: the firmware's renderer (the module and its packages) is
+ *  services/molty-screen's and features/molty's. */
 function checkBareImport(file, spec) {
-  if ((spec === 'glyphcss' || spec.startsWith('@glyphcss/')) && !rel(file).startsWith('services/molty-stage/'))
-    report(file, 'Only services/molty-stage may import the fluid renderer (glyphcss, @glyphcss/…).');
   if (spec.startsWith('@molty-wasm/') && !rel(file).startsWith('services/molty-screen/'))
     report(file, "Only services/molty-screen may import the firmware's renderer (@molty-wasm/…).");
   if (spec.startsWith('@packages/') && !/^(features\/molty|pages)\//.test(rel(file)) && !rel(file).endsWith('env.d.ts'))

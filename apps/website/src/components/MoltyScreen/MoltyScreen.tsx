@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  ENTER_SHIFT,
   PANEL,
   mountMoltyScreen,
   runProgram,
@@ -22,12 +23,15 @@ import styles from "./MoltyScreen.module.css";
  *  mounts when the device nears the viewport, and its clock starts when the device stands).
  *  Without JavaScript, with reduced motion, or if the renderer cannot load, a still of the cat
  *  stands in. `data-screen` says which: "off" (the device is away), "dark", "live", "still".
+ *  `enter`: the cat is not there at first: it walks in from outside the glass, from the left,
+ *  and sits (once; the water it crosses out there shows in a window beside the screen meanwhile).
  *  `boot`: the device's boot screen first. `play`: what it does by itself (features/molty).
  *  `scenes`: it may be asked for scenes. `onReady` hands the running screen over (null when it
  *  goes); `onAnswer` and `onFrame` are the screen's own. */
 export function MoltyScreen({
   reveal,
   boot = false,
+  enter = false,
   scenes = false,
   play,
   onReady,
@@ -36,6 +40,7 @@ export function MoltyScreen({
 }: {
   reveal: RevealKind;
   boot?: boolean;
+  enter?: boolean;
   scenes?: boolean;
   play?: ProgramName;
   onReady?: (screen: MoltyScreenHandle | null) => void;
@@ -43,6 +48,8 @@ export function MoltyScreen({
   onFrame?: (seconds: number) => void;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
+  const outside = useRef<HTMLCanvasElement>(null);
+  const [entered, setEntered] = useState(false);
   const power = useRef<() => void>(() => {});
   const callbacks = useRef({ onReady, onAnswer, onFrame });
   callbacks.current = { onReady, onAnswer, onFrame };
@@ -70,7 +77,9 @@ export function MoltyScreen({
       const mount = mountMoltyScreen(canvas.current!, {
         ...needs,
         boot,
+        entrance: enter ? { outside: outside.current } : undefined,
         reducedMotion,
+        onEntered: () => alive && setEntered(true),
         onAnswer: (i) => {
           program?.answer(i);
           callbacks.current.onAnswer?.(i);
@@ -118,6 +127,17 @@ export function MoltyScreen({
 
   return (
     <span className={styles.root} data-molty-screen="" data-screen={screen}>
+      {enter && (
+        <canvas
+          ref={outside}
+          className={styles.outside}
+          data-outside=""
+          data-gone={entered || undefined}
+          width={PANEL}
+          height={PANEL}
+          style={{ translate: `${-ENTER_SHIFT * 100}% 0` }}
+        />
+      )}
       <span className={styles.panel} />
       <img className={styles.still} src={CAT_STILL} alt="" width={PANEL} height={PANEL} />
       <canvas ref={canvas} className={styles.canvas} width={PANEL} height={PANEL} />

@@ -1,13 +1,16 @@
-/* The landing is text over the live fluid (FluidField, fixed behind). Headings are drawn BY
-   the fluid: their DOM text turns transparent once it is live, and stays readable without it. */
+/* The landing is text over the page's water: calm dust (a background tile: the device's own dust
+   rule, scripts/dust-tile.mjs) that a tap sends a wave through (PageWater, fixed behind).
+   Headings are words the device's renderer draws (MoltyWord): their DOM text steps aside once the
+   word draws, and stays readable without it. */
 .root {
   position: relative;
+  background: var(--m-bg) var(--m-dust) repeat 0 0;
   font: var(--m-text-md) / 1.6 var(--m-font-mono);
   /* the landing is a stage, not a document: only the pairing message selects (it is meant to be copied) */
   user-select: none;
   -webkit-user-select: none;
   /* a device's bezel reaches a little past its screen (and turns in wider): never a sideways
-     scroll for it (clip, not hidden: no scroll container, the fixed fluid is not clipped) */
+     scroll for it (clip, not hidden: no scroll container, the fixed water layer is not clipped) */
   overflow-x: clip;
 }
 .root > section,
@@ -21,42 +24,12 @@
   padding-inline: var(--m-gutter);
 }
 
-/* ---- the words the fluid draws ---- */
-.mark,
-.word {
-  width: fit-content;
-  max-width: 100%;
-  margin: 0;
-  color: var(--m-ink);
-  font-family: var(--m-font-mono);
-  font-weight: 700;
-  line-height: 1;
-  letter-spacing: -0.03em;
-  white-space: nowrap;
-}
+/* ---- the words the device's renderer draws (WordHeading) ---- */
 .mark {
-  font-size: var(--m-text-word);
+  --word-canvas: min(720px, 100vw - 2 * var(--m-gutter));
 }
 .word {
   margin-bottom: var(--m-space-6);
-  font-size: var(--m-text-section);
-}
-:global(html[data-fluid="live"]) .mark,
-:global(html[data-fluid="live"]) .word {
-  color: transparent;
-}
-/* the intro's start state (Head sets it before the first paint, FluidField moves it on): a
-   heading the fluid is about to draw is not shown first, so it never shows and then vanishes.
-   No JS, an engine that cannot run, or reduced motion: the DOM text shows */
-@media (prefers-reduced-motion: no-preference) {
-  :global(html:is([data-fluid="pending"], [data-fluid="loading"])) .mark,
-  :global(html:is([data-fluid="pending"], [data-fluid="loading"])) .word {
-    color: transparent;
-  }
-}
-.mark::selection,
-.word::selection {
-  color: var(--m-ink);
 }
 
 /* ---- hero ---- */
@@ -186,7 +159,6 @@
   max-width: min(540px, 80svh);
   justify-self: center;
 }
-/* 01: a patch where the fluid runs denser, to touch */
 
 /* 03 */
 .flow {
@@ -342,7 +314,7 @@
     padding-block: calc(var(--m-header-height) + var(--m-space-4)) var(--m-space-6);
   }
   .mark {
-    font-size: min(var(--m-text-word), 22svh);
+    --word-canvas: min(720px, 100vw - 2 * var(--m-gutter), 110svh);
   }
   .section {
     padding-block: 14svh 4svh;
@@ -355,7 +327,7 @@
 }
 /* Phones held upright: each section is one screen under the header (svh: the URL bar shown),
    snapped to gently. The copy takes what it needs; the device fills the rest, round and centred
-   (it scrolls with the fluid's document glue like any scroll: a snap is just a scroll). */
+   (a snap is just a scroll). */
 @media (max-width: 46rem) and (orientation: portrait) {
   .wide {
     display: none;
@@ -381,8 +353,8 @@
     scroll-snap-align: start;
   }
   .word {
+    --word-canvas: min(380px, 100vw - 2 * var(--m-gutter), 46svh);
     margin-bottom: var(--m-space-2);
-    font-size: var(--m-text-section-stack);
   }
   .text {
     margin-bottom: var(--m-space-2);

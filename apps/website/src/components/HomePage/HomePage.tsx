@@ -1,27 +1,9 @@
 import type { ReactNode } from "react";
-import {
-  WORDMARK,
-  FLUID_INK,
-  CAT_INK,
-  BRIDGE_INK,
-  BAKE_INK,
-  bridgeFlow,
-  boards,
-  PORTING_HREF,
-} from "../../features/home/content";
+import { bridgeFlow, boards, PORTING_HREF } from "../../features/home/content";
 import { REPO_URL } from "../../config/site.mjs";
 import { MoltyMark } from "../MoltyMark";
+import { WordHeading } from "../WordHeading";
 import styles from "./HomePage.module.css";
-
-/** A heading the fluid draws: its text condenses out of the fluid while on screen. The DOM
- *  text stays (selectable, read aloud) and turns transparent once the fluid is live. */
-function Word({ id, children, color }: { id?: string; children: string; color: string }) {
-  return (
-    <h2 id={id} className={styles.word} data-fluid-word="" data-fluid-color={color}>
-      {children}
-    </h2>
-  );
-}
 
 /** A square for a Molty device (the island the page passes in): decoration, to tap. */
 function Slot({ device }: { device: ReactNode }) {
@@ -38,6 +20,11 @@ function Links({ children }: { children: ReactNode }) {
 
 export function HomePage({
   fluid,
+  title,
+  wordTalk,
+  wordMoltys,
+  wordBridge,
+  wordBoards,
   reader,
   picker,
   message,
@@ -45,7 +32,13 @@ export function HomePage({
   bridgeDevice,
   bakeDevice,
 }: {
+  /** The page's water (PageWater) and its headings' words (MoltyWord islands). */
   fluid: ReactNode;
+  title: ReactNode;
+  wordTalk: ReactNode;
+  wordMoltys: ReactNode;
+  wordBridge: ReactNode;
+  wordBoards: ReactNode;
   reader: ReactNode;
   picker: ReactNode;
   message: ReactNode;
@@ -55,16 +48,14 @@ export function HomePage({
   bakeDevice: ReactNode;
 }) {
   return (
-    <div className={styles.root}>
+    <div className={styles.root} data-water="">
       {fluid}
 
       <section className={styles.hero} aria-label="molty.UNO">
-        <h1 className={styles.mark} data-fluid-word="" data-fluid-color={WORDMARK} data-fluid-delay="0.5">
-          molty.UNO
-        </h1>
+        <WordHeading as="h1" text="molty.UNO" word={title} className={styles.mark} />
         <div className={styles.heroBody}>
           <div className={styles.heroCopy}>
-            <p className={styles.lede} data-fluid-quiet="">
+            <p className={styles.lede}>
               Liquid ASCII creatures.
               <br />
               Any agent is the brain.
@@ -86,16 +77,14 @@ export function HomePage({
       </section>
 
       <section className={`${styles.section} ${styles.reading}`} aria-labelledby="talk">
-        <Word id="talk" color={FLUID_INK}>
-          talk
-        </Word>
-        <p className={styles.text} data-fluid-quiet="">
+        <WordHeading id="talk" text="talk" word={wordTalk} className={styles.word} />
+        <p className={styles.text}>
           <span className={styles.wide}>
-            Your agent's words, one at a time, condensing out of the fluid. It asks, Molty listens, and yes, no or idk
-            is one tap on the glass.
+            Your agent's words, one at a time, on the glass. It asks, Molty listens, and yes, no or idk is one tap on
+            the glass.
           </span>
           <span className={styles.phone}>
-            Your agent's words condense out of the fluid. Molty asks; yes, no or idk is one tap on the glass.
+            Your agent's words, one at a time. Molty asks; yes, no or idk is one tap on the glass.
           </span>
         </p>
         {reader}
@@ -106,10 +95,8 @@ export function HomePage({
       </section>
 
       <section className={`${styles.section} ${styles.gallery}`} aria-labelledby="moltys">
-        <Word id="moltys" color={CAT_INK}>
-          moltys
-        </Word>
-        <p className={styles.text} data-fluid-quiet="">
+        <WordHeading id="moltys" text="moltys" word={wordMoltys} className={styles.word} />
+        <p className={styles.text}>
           <span className={styles.wide}>
             The first Molty is a cat. This is the device's own drawing code, running here. Tap the glass and it comes to
             you. More creatures are coming.
@@ -130,23 +117,18 @@ export function HomePage({
 
       <section className={`${styles.section} ${styles.split} ${styles.flip}`} aria-labelledby="bridge">
         <div className={styles.copy}>
-          <Word id="bridge" color={BRIDGE_INK}>
-            bridge
-          </Word>
-          <p className={styles.text} data-fluid-quiet="">
+          <WordHeading id="bridge" text="bridge" word={wordBridge} className={styles.word} />
+          <p className={styles.text}>
             Moltys have no brain of their own. Any agent becomes one: Claude, Grok, OpenClaw, anything that speaks MCP
             or HTTP.
           </p>
           <pre
             className={`${styles.flow} ${styles.wide}`}
-            data-fluid-quiet=""
             aria-label="Your agent talks MCP or REST to the relay; Molty dials out to the relay over WSS."
           >
             {bridgeFlow}
           </pre>
-          <p className={`${styles.text} ${styles.wide}`} data-fluid-quiet="">
-            One message. One tap on the glass.
-          </p>
+          <p className={`${styles.text} ${styles.wide}`}>One message. One tap on the glass.</p>
           {message}
           <Links>
             <a href="/agents/connect/">[ connect an agent → ]</a>
@@ -163,13 +145,9 @@ export function HomePage({
 
       <section className={`${styles.section} ${styles.split}`} aria-labelledby="boards">
         <div className={styles.copy}>
-          <Word id="boards" color={BAKE_INK}>
-            bake
-          </Word>
-          <p className={styles.text} data-fluid-quiet="">
-            Flash it onto a round screen. Or port it to yours.
-          </p>
-          <ul className={styles.boards} data-fluid-quiet="">
+          <WordHeading id="boards" text="bake" word={wordBoards} className={styles.word} />
+          <p className={styles.text}>Flash it onto a round screen. Or port it to yours.</p>
+          <ul className={styles.boards}>
             {boards.map((b) => (
               <li key={b.tag}>
                 <b>{b.tag}</b>

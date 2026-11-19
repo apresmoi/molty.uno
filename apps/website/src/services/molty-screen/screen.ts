@@ -44,18 +44,46 @@ function pageState(state: "live" | "off") {
   if (state === "live" || root.dataset.fluidMoltys !== "live") root.dataset.fluidMoltys = state;
 }
 
+/** The entrance (the hero): the cat starts outside the frame, to the left, and walks in. In
+ *  world units, measured on the firmware's own frames: the frame's middle to its rim is 0.87. */
+const ENTER = {
+  across: -1.1,
+  back: 0.3,
+  /** Played unseen first: it gets up and takes its first steps. */
+  lead: 1.0,
+  /** Its clock runs this much faster until it sits: under 4 s on the page. */
+  rate: 1.8,
+  /** The window beside the screen looks this far to the side... */
+  pan: -0.9,
+};
+/** ... which is this much of the panel's width (0.9 world units: 240 of 466 px). */
+export const ENTER_SHIFT = 240 / 466;
+
 export interface MoltyScreenOptions {
-  /** The creature package: its id and its file's URL (packages/<id>/<id>.json). */
-  creature: { id: string; url: string };
+  /** The creature package: its id and its file's URL (packages/<id>/<id>.json). None: a
+   *  screen that only plays scenes (a word). */
+  creature?: { id: string; url: string };
   /** A scenes package's file, for `scene`. */
   scenes?: string;
+  /** The panel's side in pixels (the canvas must be that size). */
+  px?: number;
   /** Start with the device's boot screen ("molty.uno"), else on the creature. */
   boot: boolean;
+  /** A scene it plays from the start and keeps up (a word). */
+  scene?: { layout: string; params?: Record<string, unknown> };
+  /** The finger is every tap on the page that lands on the canvas (a canvas that takes no
+   *  pointer itself: a word under the page's text), not the canvas's own pointer. */
+  pageTaps?: boolean;
+  /** The creature walks in from outside the frame. `outside`: a canvas beside the screen (same
+   *  size, ENTER_SHIFT of it to the left) that shows the water there while it does. */
+  entrance?: { outside: HTMLCanvasElement | null };
   reducedMotion: boolean;
   /** A tap (or `pick`) answered the question on screen with this option. */
   onAnswer?: (index: number) => void;
   /** Every frame drawn, with the seconds this screen has run (they stop while it is unseen). */
   onFrame?: (seconds: number) => void;
+  /** The entrance is over: the creature sits. */
+  onEntered?: () => void;
 }
 
 export interface MoltyScreenHandle {
@@ -77,11 +105,15 @@ export interface MoltyScreenHandle {
 
 /** Start fetching what a screen will need (a screen waiting for its device to turn in). */
 export function warmMoltyScreen(options: Pick<MoltyScreenOptions, "creature" | "scenes">) {
-  for (const load of [loadModule(), loadFile(options.creature.url), options.scenes ? loadFile(options.scenes) : null])
+  for (const load of [
+    loadModule(),
+    options.creature ? loadFile(options.creature.url) : null,
+    options.scenes ? loadFile(options.scenes) : null,
+  ])
     load?.catch(() => {}); // the mount reports it
 }
 
-/** Mount a Molty on `canvas` (PANEL x PANEL pixels; CSS sizes it). Rejects when the module or a
+/** Mount a Molty on `canvas` (px x px pixels; CSS sizes it). Rejects when the module or a
  *  package cannot load: the caller keeps its still image. */
 export async function mountMoltyScreen(
   canvas: HTMLCanvasElement,
@@ -90,15 +122,23 @@ export async function mountMoltyScreen(
   try {
     const [module, creature, scenes] = await Promise.all([
       loadModule(),
-      loadFile(options.creature.url),
+      options.creature ? loadFile(options.creature.url) : null,
       options.scenes ? loadFile(options.scenes) : null,
     ]);
-    const core = await MoltyCore.create(module);
-    if (!core.creature(options.creature.id, creature)) throw new Error("not a creature package");
-    if (scenes && !core.pack(scenes)) throw new Error("not a scenes package");
-    if (!core.start((Math.random() * 0x100000000) >>> 0, options.boot && !options.reducedMotion))
-      throw new Error("no memory");
-    const screen = new Screen(canvas, core, options);
+    const seed = (Math.random() * 0x100000000) >>> 0;
+    const make = async () => {
+      const core = await MoltyCore.create(module);
+      if (creature && !core.creature(options.creature!.id, creature)) throw new Error("not a creature package");
+      if (scenes && !core.pack(scenes)) throw new Error("not a scenes package");
+      if (!core.start(seed, options.boot && !options.reducedMotion, options.px ?? PANEL)) throw new Error("no memory");
+      return core;
+    };
+    const core = await make();
+    // the window beside the screen: the same Molty (same seed, same calls, same frames), its
+    // camera looking to the side
+    const entering = options.entrance && !options.reducedMotion;
+    const twin = entering && options.entrance!.outside ? await make() : null;
+    const screen = new Screen(canvas, core, twin, options);
     pageState("live");
     return screen;
   } catch (e) {
@@ -107,23 +147,37 @@ export async function mountMoltyScreen(
   }
 }
 
+/** A scene held up is asked for again this long before the device would let it go (its ttl). */
+const SCENE_TTL = 600;
+const SCENE_AGAIN = 540;
+
+const FINGER = ["pointerdown", "pointermove", "pointerup", "pointercancel", "pointerleave"];
+
 class Screen implements MoltyScreenHandle {
   private ctx: CanvasRenderingContext2D;
+  private px: number;
   private raf = 0;
   private last = 0;
   private seconds = 0;
   private inView = false;
   private alive = true;
   private watch: IntersectionObserver;
+  private entering = false;
+  private outside: CanvasRenderingContext2D | null = null;
+  private sceneAt = 0;
 
   constructor(
     private canvas: HTMLCanvasElement,
     private core: MoltyCore,
+    private twin: MoltyCore | null,
     private options: MoltyScreenOptions,
   ) {
     this.ctx = canvas.getContext("2d", { alpha: false })!;
-    // straight to the creature: it has formed by the first frame shown
-    if (!options.boot || options.reducedMotion) this.settle();
+    this.px = options.px ?? PANEL;
+    if (options.scene) this.hold();
+    if (options.entrance && !options.reducedMotion) this.enter();
+    // straight to the creature (or the scene): it has formed by the first frame shown
+    else if (!options.boot || options.reducedMotion) this.settle(options.scene ? 3.2 : SETTLE_S);
     else this.draw();
     this.watch = new IntersectionObserver((entries) => {
       this.inView = entries[entries.length - 1]!.isIntersecting;
@@ -131,11 +185,33 @@ class Screen implements MoltyScreenHandle {
     });
     this.watch.observe(canvas);
     document.addEventListener("visibilitychange", this.sync);
-    canvas.addEventListener("pointerdown", this.finger);
-    canvas.addEventListener("pointermove", this.finger);
-    canvas.addEventListener("pointerup", this.finger);
-    canvas.addEventListener("pointercancel", this.finger);
-    canvas.addEventListener("pointerleave", this.finger);
+    for (const type of FINGER) this.pointer.addEventListener(type, this.finger as EventListener);
+  }
+
+  /** The scene it holds up, (again) from now. */
+  private hold() {
+    const scene = this.options.scene!;
+    this.core.scene(scene.layout, scene.params, SCENE_TTL);
+    this.sceneAt = this.seconds;
+  }
+
+  /** The entrance: the creature is on screen after a few frames; then it is put outside and
+   *  called, its first steps played unseen. */
+  private enter() {
+    const cores = this.twin ? [this.core, this.twin] : [this.core];
+    this.twin?.pan(ENTER.pan);
+    this.outside = this.options.entrance!.outside?.getContext("2d", { alpha: false }) ?? null;
+    for (const c of cores) {
+      for (let i = 0; i < 3; i++) c.frame(SETTLE_STEP_MS * 1000);
+      this.entering = c.enter(ENTER.across, ENTER.back);
+      for (let t = 0; t < ENTER.lead * 1000; t += SETTLE_STEP_MS) c.frame(SETTLE_STEP_MS * 1000);
+    }
+    this.draw();
+  }
+
+  /** Where the finger's events come from. */
+  private get pointer(): EventTarget {
+    return this.options.pageTaps ? window : this.canvas;
   }
 
   destroy() {
@@ -143,8 +219,7 @@ class Screen implements MoltyScreenHandle {
     this.sync();
     this.watch.disconnect();
     document.removeEventListener("visibilitychange", this.sync);
-    for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel", "pointerleave"])
-      this.canvas.removeEventListener(type, this.finger as EventListener);
+    for (const type of FINGER) this.pointer.removeEventListener(type, this.finger as EventListener);
   }
 
   // ---------------------------------------------------------------- frames
@@ -171,14 +246,30 @@ class Screen implements MoltyScreenHandle {
   };
 
   private step(ms: number) {
-    this.core.frame(Math.round(ms * 1000));
+    const us = Math.round(ms * 1000 * (this.entering ? ENTER.rate : 1));
+    this.core.frame(us);
+    this.twin?.frame(us);
     this.seconds += ms / 1000;
+    if (this.entering && !this.core.entering()) {
+      // it sits: the window beside the screen is done with
+      this.entering = false;
+      this.twin = null;
+      this.outside = null;
+      this.options.onEntered?.();
+    }
+    if (this.options.scene && this.seconds - this.sceneAt > SCENE_AGAIN) this.hold();
     const answer = this.core.answer();
     if (answer >= 0) this.options.onAnswer?.(answer);
   }
 
   private draw() {
-    this.ctx.putImageData(new ImageData(this.core.pixels() as Uint8ClampedArray<ArrayBuffer>, PANEL, PANEL), 0, 0);
+    this.ctx.putImageData(new ImageData(this.core.pixels() as Uint8ClampedArray<ArrayBuffer>, this.px, this.px), 0, 0);
+    if (this.twin && this.outside)
+      this.outside.putImageData(
+        new ImageData(this.twin.pixels() as Uint8ClampedArray<ArrayBuffer>, this.px, this.px),
+        0,
+        0,
+      );
   }
 
   /** Play `seconds` unseen, then show where it got to (reduced motion: one still per change). */
@@ -195,11 +286,15 @@ class Screen implements MoltyScreenHandle {
   // ---------------------------------------------------------------- the finger
 
   private finger = (e: PointerEvent) => {
-    const down = e.type === "pointerdown" || (e.type === "pointermove" && e.buttons > 0 && e.pressure > 0);
-    if (e.type === "pointermove" && !down) return;
     const r = this.canvas.getBoundingClientRect();
-    this.core.touch(down, ((e.clientX - r.left) / r.width) * PANEL, ((e.clientY - r.top) / r.height) * PANEL);
-    if (e.type === "pointerdown") this.changed(null);
+    const on = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+    const down = on && (e.type === "pointerdown" || (e.type === "pointermove" && e.buttons > 0 && e.pressure > 0));
+    if (e.type === "pointermove" && !down) return;
+    const x = ((e.clientX - r.left) / r.width) * this.px;
+    const y = ((e.clientY - r.top) / r.height) * this.px;
+    this.core.touch(down, x, y);
+    this.twin?.touch(down, x, y); // the same Molty: the same finger
+    if (down && e.type === "pointerdown") this.changed(null);
   };
 
   // ---------------------------------------------------------------- the calls

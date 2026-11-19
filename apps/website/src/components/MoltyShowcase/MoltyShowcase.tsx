@@ -65,7 +65,7 @@ export function MoltyShowcase({ groups, rest }: { groups: ActionGroup[]; rest: s
         <MoltyScreen reveal="turn" scenes {...stage.bind} />
       </div>
 
-      <div className={styles.panel} data-fluid-quiet="">
+      <div className={styles.panel}>
         <p className={styles.now} aria-live="polite">
           <b>cat</b>
           <span>· {playing ? label(playing) : "idle"}</span>

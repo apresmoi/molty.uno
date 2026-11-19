@@ -15,7 +15,7 @@ export function MoltyActs({ groups, rest }: { groups: ActionGroup[]; rest: strin
       <div className={styles.slot} data-stage="gallery" role="img" aria-label="The cat on Molty's round screen">
         <MoltyScreen reveal="coin" {...stage.bind} />
       </div>
-      <div className={styles.side} data-fluid-quiet="">
+      <div className={styles.side}>
         {groups.map((g) => (
           <div key={g.label} className={styles.group}>
             <h3>{g.label}</h3>

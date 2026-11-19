@@ -180,6 +180,33 @@ WM_API void wm_touch(int down, int x, int y) {
     if (down) { s_finger.x = x; s_finger.y = y; }
 }
 
+/* web_cat.c: the creature's place and the picture's camera */
+void web_cat_place(struct cc *c, float across, float back);
+bool web_cat_coming(const struct cc *c);
+void web_cat_attend(struct cc *c, float seconds);
+void web_cat_pan(float across);
+static bool s_entering;
+
+/** The website's entrance: the creature on screen is put outside the frame (`across` to the side of its middle, `back`
+ *  away from the viewer, world units) and called, as a tap calls it: it walks in with its own clips, stands a moment
+ *  and sits. 0, or -1 while no rigged creature shows (before its first frame). wm_entering: it is still on its way. */
+WM_API int wm_enter(float across, float back) {
+    if (!s_up || s_cur != ST_CREATURE || !s_cpk || !cpk_crisp(s_cpk)) return -1;
+    web_cat_place((struct cc *)cpk_clip(s_cpk), across, back);
+    cpk_come(s_cpk, NULL);
+    s_entering = true;
+    return 0;
+}
+WM_API int wm_entering(void) {
+    if (!s_entering || !s_cpk) return 0;
+    struct cc *c = (struct cc *)cpk_clip(s_cpk);
+    web_cat_attend(c, 0.5f);
+    s_entering = web_cat_coming(c);
+    return s_entering;
+}
+/** The picture's camera looks `across` (world units) to the side: the same world through a window beside the screen. */
+WM_API void wm_pan(float across) { web_cat_pan(across); }
+
 /** The device was shaken (sense.c): the creature reacts. */
 WM_API void wm_shake(void) { if (s_up) mole_fluid_event(MOLE_FLUID_SHAKE); }
 

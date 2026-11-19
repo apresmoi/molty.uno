@@ -3,9 +3,6 @@ export const title = "moltys showcase — molty.UNO";
 export const description =
   "The cat, the first Molty, drawn live by the device's own code: its moods, its gestures, the recording ring, a question and scenes.";
 
-/** The heading's colour: the cat's own body colour (packages/cat, palette.body). */
-export const SHOWCASE_INK = "#a99be8";
-
 /** Autoplay: seconds between actions. */
 export const AUTOPLAY_GAP = 1.2;
 

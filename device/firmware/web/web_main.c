@@ -13,6 +13,7 @@
  *   frames <n> <dt us>              n frames; each prints its number and the FNV-1a hash of the panel's pixels
  *   touch <down 0|1> <x> <y>
  *   shake
+ *   enter <across> <back>           the website's entrance (wm_enter)       pan <across>
  *   state <json>                    POST /api/creature/state's body
  *   listen <0|1>      level <0..1>
  *   ask <json>        ask_end
@@ -31,6 +32,9 @@ void  wm_frame(uint32_t dt_us);
 const uint8_t *wm_pixels(void);
 void  wm_touch(int down, int x, int y);
 void  wm_shake(void);
+int   wm_enter(float across, float back);
+int   wm_entering(void);
+void  wm_pan(float across);
 int   wm_state(const char *json);
 void  wm_listen(int on);
 void  wm_listen_level(float level);
@@ -71,6 +75,7 @@ int main(int argc, char **argv) {
             if (sscanf(rest, "%d %u", &k, &dt) != 2) rc = -1;
             for (int i = 0; !rc && i < k; i++, frame++) {
                 wm_frame(dt);
+                wm_entering();
                 const uint8_t *p = wm_pixels();
                 uint64_t h = 0xcbf29ce484222325ull;
                 for (size_t q = 0; q < (size_t)px * (size_t)px * 4; q++) { h ^= p[q]; h *= 0x100000001b3ull; }
@@ -88,6 +93,8 @@ int main(int argc, char **argv) {
         }
         else if (!strcmp(op, "touch")) { int d, x, y; if (sscanf(rest, "%d %d %d", &d, &x, &y) != 3) rc = -1; else wm_touch(d, x, y); }
         else if (!strcmp(op, "shake")) wm_shake();
+        else if (!strcmp(op, "enter")) { float x, b; if (sscanf(rest, "%f %f", &x, &b) != 2) rc = -1; else rc = wm_enter(x, b); }
+        else if (!strcmp(op, "pan")) wm_pan((float)atof(rest));
         else if (!strcmp(op, "state")) rc = wm_state(rest);
         else if (!strcmp(op, "listen")) wm_listen(atoi(rest));
         else if (!strcmp(op, "level")) wm_listen_level((float)atof(rest));

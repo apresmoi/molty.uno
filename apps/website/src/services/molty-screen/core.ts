@@ -18,6 +18,9 @@ interface Exports {
   wm_pixels(): number;
   wm_touch(down: number, x: number, y: number): void;
   wm_shake(): void;
+  wm_enter(across: number, back: number): number;
+  wm_entering(): number;
+  wm_pan(across: number): void;
   wm_state(json: number): number;
   wm_state_json(): number;
   wm_listen(on: number): void;
@@ -140,6 +143,20 @@ export class MoltyCore {
 
   shake() {
     this.x.wm_shake();
+  }
+
+  /** The website's entrance: the creature is put outside the frame (world units across and back)
+   *  and called, as a tap calls it; it walks in with its own clips and sits. */
+  enter(across: number, back: number): boolean {
+    return this.x.wm_enter(across, back) === 0;
+  }
+  /** It is still on its way in. */
+  entering(): boolean {
+    return this.x.wm_entering() !== 0;
+  }
+  /** The picture's camera looks `across` (world units) to the side: a window beside the screen. */
+  pan(across: number) {
+    this.x.wm_pan(across);
   }
 
   /** POST /api/creature/state's body, as on the device: { mood }, { act }, { state, text }, ... */

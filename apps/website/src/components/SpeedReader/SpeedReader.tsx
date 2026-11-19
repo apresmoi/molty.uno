@@ -157,7 +157,7 @@ export function SpeedReader({ text, answers: own }: { text: string; answers: Rec
           onAnswer={answered}
         />
       </div>
-      <div className={styles.side} data-fluid-quiet="">
+      <div className={styles.side}>
         <p className={styles.said} aria-live="polite">
           “{shown}”
         </p>

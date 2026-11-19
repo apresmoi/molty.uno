@@ -1,7 +1,8 @@
 ---
 import ContentLayout from "../layouts/ContentLayout.astro";
 import { ShowcasePage } from "../components/ShowcasePage";
-import { FluidField } from "../components/FluidField";
+import { PageWater } from "../components/PageWater";
+import { MoltyWord } from "../components/MoltyWord";
 import { MoltyShowcase } from "../components/MoltyShowcase";
 import { title, description } from "../features/showcase/content";
 import { showcaseActions, showcaseScenes, type CreaturePackage } from "../features/molty/actions";
@@ -16,7 +17,8 @@ const rest = pkg.creature.about.moods.idle ?? "";
 
 <ContentLayout title={title} description={description} path="/showcase/" fluid>
   <ShowcasePage>
-    <FluidField slot="fluid" client:load />
+    <PageWater slot="fluid" client:load />
+    <MoltyWord slot="word" client:load word="showcase" />
     <MoltyShowcase slot="stage" client:load groups={groups} rest={rest} />
   </ShowcasePage>
 </ContentLayout>

@@ -14,7 +14,7 @@ export function CopyMessage({ text }: { text: string }) {
     }
   };
   return (
-    <div className={styles.message} data-fluid-quiet>
+    <div className={styles.message}>
       <pre>{text}</pre>
       <button type="button" className={copied ? styles.done : undefined} onClick={copy}>
         {copied ? "[ copied ✓ ]" : "[ copy message ]"}
