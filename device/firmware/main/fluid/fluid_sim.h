@@ -489,6 +489,13 @@ typedef struct {
     void *block;
     bool force;                        /* redraw every cell next frame                    */
     fluid_morph_t m;                   /* the whole picture changing: a wave from the finger (fluid_draw_morph_look) */
+    /* EXPERIMENT scene dust (fluid_fine_dust_kind 1; delete with it): a scene on fine dust shows the creature's kind of
+     * dust instead, braille dots on the cells riding the water (fluid_draw.c: sd_field) */
+    uint16_t *sd_dist;                 /* 2W x 4H: each dot's distance to the drawing, 1/4 px                    */
+    uint8_t  *sd_dots;                 /* N: the dust's dots of each cell, calm                                   */
+    uint16_t *sd_col;                  /* N: their colour                                                         */
+    uint32_t  sd_sig;                  /* the drawing they were made from (a hash)                                */
+    int8_t    sd_kind;                 /* the kind the last frame showed (a change redraws the glass)             */
 } fluid_draw_t;
 
 /** A window of pixels to draw: px is pixel (x0, y0), rows `stride` px apart. A whole

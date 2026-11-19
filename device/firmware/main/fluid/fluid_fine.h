@@ -159,6 +159,23 @@ typedef struct fluid_fine {
     int16_t pbb[4];                     /* ... and their box: x0, x1, y0, y1 (x1 < x0 none)       */
 } fluid_fine_t;
 
+/* EXPERIMENT (scene dust A/B, for Juan to compare in the simulator; delete once he picks). Process-wide, any time:
+ *   kind  FINE_DUST_SPECKS (0, the default): the fine specks as above.
+ *         FINE_DUST_DOTS (1): the creature screen's dust instead: braille dots on the water's cells, denser and more
+ *         ordered near the drawing, loose far away, every one riding the wave over the whole glass (fluid_draw.c),
+ *         each change sent the frame it happens.
+ *         FINE_DUST_DOTS_ILACE (2): the same, the water's own changes sent in every other cell row a frame, rows
+ *         alternating, as the creature screen sends its own (the drawing's and the caption's changes at once).
+ *   ride  px: how far from a tapped drawing or the caption the fine specks ride the water (FINE_RIDE by default);
+ *         at or past the stage's size, the whole glass (any tap's wave). */
+#define FINE_DUST_SPECKS 0
+#define FINE_DUST_DOTS   1
+#define FINE_DUST_DOTS_ILACE 2
+void  fluid_fine_dust_kind(int kind);
+int   fluid_fine_dust_kind_get(void);
+void  fluid_fine_ride_px(float px);
+float fluid_fine_ride_px_get(void);
+
 /** The dust for a W x H grid on an fb_w x fb_h panel (its largest centred square: the stage). NULL: no memory. */
 fluid_fine_t *fluid_fine_create(int W, int H, int fb_w, int fb_h);
 void fluid_fine_destroy(fluid_fine_t *f);
