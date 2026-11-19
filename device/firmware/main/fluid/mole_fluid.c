@@ -269,6 +269,7 @@ static struct {
 static bool  s_listen = false;                  /* task copy of s_listen_in */
 static float s_voice = 0.f;                     /* task copy of s_voice_in */
 #define FLUID_CRISP_LISTEN_RGB 0xFF2C3E           /* a rigged creature's listen ring (ring-options.html)       */
+#define FLUID_CRISP_PROG_RGB   0x35E07C           /* ... and its progress line: green, apart from the listen  */
 static int32_t s_ring_rgb = -1, s_ring_def = -1;   /* task copies of s_ring_in / s_ring_dflt */
 static fluid_ring_t s_rg;                       /* the listening ring (fluid_ring.h)     */
 #ifdef MOLTY_DIAG_RING
@@ -867,8 +868,8 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     default:          fluid_target_blob(s, s_tnow, swell, ox, oy); break;
     }
     fluid_sim_floor_track(s, rdt, s_cur == ST_CREATURE && cr_loaded());   /* its feet, before the rings join T */
-    /* under the listening ring (it wins); over a rigged creature the recording ring's own colour (ring-options.html) */
-    fluid_target_progress(s, &s_pg, s_crisp ? (uint32_t)(s_ring_rgb >= 0 ? s_ring_rgb : s_ring_def >= 0 ? s_ring_def : FLUID_CRISP_LISTEN_RGB) : PROG_COLOR, acc);
+    /* under the listening ring (it wins); over a rigged creature the same thin line, in green */
+    fluid_target_progress(s, &s_pg, s_crisp ? FLUID_CRISP_PROG_RGB : PROG_COLOR, acc);
     if (!s_crisp) fluid_target_ring(s, &s_rg, fluid_ring_rgb(s_ring_rgb, s_ring_def, cfg->palette), acc);   /* a rigged
                                                                  * creature's is given to it whole (cpk_listen) */
     /* the always-on dim fluid; its slow noise (and the eddies' ψ) refresh on
