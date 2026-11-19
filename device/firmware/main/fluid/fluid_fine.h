@@ -40,7 +40,8 @@
 extern "C" {
 #endif
 
-#define FINE_SETS        3              /* the calm drawing's, a tapped spot's, and one building */
+#define FINE_SETS        4              /* the calm drawing's, a tapped spot's, one building, and one kept from before
+                                         * (a set is found again by its drawing: back at a chart, its dust is there) */
 #define FINE_PARTICLES   6000           /* a word breaking up: its pixels, at most              */
 /* the dust (chart-engine.js AMBIENT .. DRAWN) */
 #define FINE_AMBIENT     0.03f
@@ -64,19 +65,22 @@ extern "C" {
 #define FINE_PATCH1      72.f           /* .. to all the dust (the page: 40)                     */
 #define FINE_PATCH_RAG   30.f           /* px: the edge as ragged as the grains (the page: 26)   */
 #define FINE_DIM         0.65f          /* the drawing under the word: this much darker          */
-#define FINE_REVEAL_S    0.09f          /* a word forms over this                                */
-#define FINE_SWAP_S      0.22f          /* the word before breaks up over this ..                */
+#define FINE_REVEAL_S    0.f            /* a word forms over this (0: whole on its first frame, on its beat; the page: 0.09) */
+#define FINE_SWAP_S      0.13f          /* the word before breaks up over this (the page: 0.22: at reading pace most of
+                                         * each word's time had the one before still scattering round it) .. */
 #define FINE_SWAP_SPREAD 7.f            /* .. its specks scattering this far, px                 */
 #define FINE_END_S       0.7f           /* the reading's last word: slower ..                    */
 #define FINE_END_SPREAD  26.f           /* .. and farther                                        */
 #define FINE_GRAIN       0.7f           /* of a word's pixels, this many become specks           */
 #define FINE_RIDE        64.f           /* px: the dust rides the water this near a tapped drawing or the caption only */
-#define FINE_CATCHUP     8000           /* specks worked out off their row's turn a frame, at most (a set swapped in) */
+#define FINE_CATCHUP     1500           /* specks of cells never worked out, off their row's turn a frame, at most */
 #define FINE_REVEAL_SET_S 0.5f          /* a first set forms cell by cell over this              */
 #define FINE_DARK_STEPS  4              /* the backdrop fades out in this many steps (each works the cells by it out again) */
 
 typedef struct {
-    uint32_t key;                       /* the drawing it was built from, 0 = empty              */
+    uint32_t key;                       /* the drawing it was built from (a hash of its shapes), 0 = empty */
+    uint32_t base;                      /* the scene it was last wanted for                      */
+    uint32_t used;                      /* when it was last wanted (the oldest goes first)       */
     int n, cap;
     uint32_t *pos;                      /* x | y << 9 | q << 18 | near << 25: its pixel, its threshold over its
                                          * density (0..127) and how much the light matters there (0..127)      */
@@ -87,21 +91,29 @@ typedef struct {
 } fine_set_t;
 
 typedef struct fluid_fine {
-    int W, H, N, S, ox, oy;             /* the grid, the stage (px) and where it sits in the fb  */
+    int W, H, N, S, S2, ox, oy;         /* the grid, the stage (px; S2: half of it, the build's field) and where it sits in the fb */
     int16_t *cx, *cy;                   /* W + 1, H + 1 cell edges, stage px                     */
     uint8_t *cellx, *celly;             /* S: the cell column / row of a stage px                */
     /* the sets: the sim task builds, the drawer draws `live` (swapped with the drawer idle) */
     fine_set_t set[FINE_SETS];
     int live, ready, build;             /* slots, -1 none                                        */
     uint32_t keep;                      /* the calm drawing's key: its set stays                 */
+    uint32_t scene;                     /* the scene the dust is for now (fluid_fine_want)       */
+    uint32_t clock;                     /* counts the wants (fine_set_t.used)                    */
+    bool levels_ok;                     /* the set that waits has its levels (it may swap in)    */
+    const fine_set_t *lv_base;          /* ... worked out against this drawn set                 */
+    uint8_t *fresh;                     /* N: the cell takes those levels at the swap (else it keeps its own) */
+    uint32_t *tot2;                     /* N: ... and this signature                             */
+    uint8_t *lgrid2;                    /* the light they were worked out against                */
+    uint8_t *lit;                       /* S x S bits: the drawing's own pixels (no speck there) */
     /* the build (sim task) */
     fluid_shape_t *shp;                 /* FLUID_MAX_SHAPES: the drawing at full growth          */
     int16_t (*box)[4];
     int64_t build_t0; int build_us, build_calls;   /* the build's time, for the log */
     int nshp, nsym, pal, phase, row;   /* nsym: its symbols, copied after it (a symbol's surround is fainter) */
     uint32_t bkey;                      /* the drawing being built                               */
-    uint16_t *dist, *src;               /* S x S: distance to the drawing (1/100 px), the nearest drawn pixel's
-                                         * colour (rgb444) | 0x8000 a symbol's                   */
+    uint16_t *dist, *src;               /* S2 x S2 (2 x 2 px blocks): distance to the drawing (1/100 px), the nearest
+                                         * drawn block's colour (rgb444) | 0x8000 a symbol's     */
     uint16_t *rowbuf;                   /* S: a raster row                                       */
     uint32_t *bpos; uint16_t *bcol; uint16_t *bcell; int bcap;   /* bcell: column x 2 + (the light can hide it) */   /* one cell row's specks, before they are sorted */
     /* the drawer's frame */
@@ -145,15 +157,21 @@ fluid_fine_t *fluid_fine_create(int W, int H, int fb_w, int fb_h);
 void fluid_fine_destroy(fluid_fine_t *f);
 
 /* ── the sim task ── */
-/** The dust wanted now: for the drawing `key` (non-zero; the same key, the same drawing), its shapes at full growth
- *  (stage px; caption letters are left out). keep: the scene's calm drawing, whose set is kept to come back to. A set
- *  built already is swapped in at once; else a build starts (any other build is dropped). */
-void fluid_fine_want(fluid_fine_t *f, uint32_t key, bool keep, const fluid_shape_t *sh, int n, int palette);
+/** The dust wanted now, for scene `scene` (any number that is the scene's own: a set made for another scene never
+ *  shows on this one, fluid_fine_swap): for the drawing `key` (non-zero; the same key, the same drawing: a hash of its shapes), its
+ *  shapes at full growth (stage px; caption letters are left out). keep: the scene's calm drawing. A set built before
+ *  (FINE_SETS are kept) swaps in after a pass for its levels; else a build starts. False: not now (the scene's calm set
+ *  is being built and is not given up for a tapped spot's): ask again. */
+bool fluid_fine_want(fluid_fine_t *f, uint32_t scene, uint32_t key, bool keep, const fluid_shape_t *sh, int n, int palette);
 /** Advance the build for about budget_us (<= 0: to its end). True: a set waits for fluid_fine_swap. */
 bool fluid_fine_work(fluid_fine_t *f, int budget_us);
+/** The scene's calm set is being made (or waits to swap in) and is not on the glass yet: a scene holds its rise for it. */
+bool fluid_fine_coming(const fluid_fine_t *f);
 /** With the drawer idle: the set waiting becomes the one drawn. Cells whose specks are the same in both keep their
- *  levels (nothing of theirs is drawn again); a first set forms cell by cell. */
-void fluid_fine_swap(fluid_fine_t *f);
+ *  levels (nothing of theirs is drawn again). A set drawn for another scene's drawing is dropped at once (the dust on
+ *  the glass is the scene's own). rise: the scene is up whole (a new drawing's dust then rises row by row; else it comes
+ *  with the scene's own rise). */
+void fluid_fine_swap(fluid_fine_t *f, bool rise);
 /** With the drawer idle: the caption's backdrop for the whole reading (stage px [x0, x1, y0, y1], the union of its
  *  words' boxes), so the dark does not move with each word; NULL: each word's own box. */
 void fluid_fine_caption_box(fluid_fine_t *f, const float box[4]);

@@ -52,8 +52,8 @@ extern const char *const PKG_KIND_NAMES[PK_KINDS];
 
 /* an item's fields; the numeric ones first (PF_NUMS) */
 enum { PF_X, PF_Y, PF_R, PF_W, PF_A0, PF_A1, PF_LEN, PF_N, PF_SIZE, PF_LIT, PF_SIDE, PF_SPIN,
-       PF_ROT, PF_ON, PF_OFF, PF_PA, PF_PR, PF_GROW, PF_ARC, PF_R0, PF_R1, PF_NUMS = PF_R1 + 1,
-       PF_COLOR = PF_NUMS, PF_ASSET, PF_STR, PF_SAY, PF_ID, PF_GROUP, PF_LIGHTS, PF_WHEN, PF_COUNT };
+       PF_ROT, PF_ON, PF_OFF, PF_PA, PF_PR, PF_GROW, PF_ARC, PF_R0, PF_R1, PF_TTL, PF_NUMS = PF_TTL + 1,
+       PF_COLOR = PF_NUMS, PF_ASSET, PF_STR, PF_SAY, PF_ID, PF_GROUP, PF_LIGHTS, PF_WHEN, PF_OPEN, PF_COUNT };
 
 enum { PV_NONE, PV_NUM, PV_COLOR, PV_ASSET, PV_STR, PV_PARAM, PV_ELEM };
 typedef struct {

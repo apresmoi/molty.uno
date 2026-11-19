@@ -329,7 +329,11 @@ static uint8_t *s_kdots, *s_kdots_d;
 static fluid_fine_t  *s_fine;
 static uint8_t       *s_still, *s_still_d;
 static fluid_shape_t *s_fshp;
-#define FINE_BUILD_US 6000                          /* the dust's build, at most this a frame (the sim's core) */
+#define FINE_BUILD_US 6000                          /* the dust's build, at most this a frame (the sim's core) ...  */
+#define FINE_AHEAD_US 20000                         /* ... and while its scene is not on the glass yet (the drawer has
+                                                     * nothing to draw: the memory the build moves is not missed)  */
+#define FINE_HOLD_S   1.5f                          /* a scene waits this long at most for its dust before it rises */
+static float s_fine_wait;                           /* how long the scene on the glass has waited for it */
 static unsigned s_cap_word, s_dcap_word;            /* the caption's word: a new number each word, 0 none */
 static float    s_cap_box[4];                       /* its backdrop for the whole reading: the union of its words' boxes */
 static bool     s_cap_box_on;
@@ -343,7 +347,7 @@ static int      s_sub_word = -1;                    /* the word the voice is on 
 static float    s_sub_until = 0.f;                  /* the last word stays this long after the say */
 /* a tapped spot's reading: its words as the subtitle, at reading pace (PSRAM) */
 #define SPOT_READ_WPM  220
-#define SPOT_READ_HOLD 2.f                          /* s the last word stays */
+#define SPOT_READ_HOLD 1.f                          /* s the last word stays */
 typedef struct { char text[PKG_SAY_MAX + 1]; ftok_t toks[PKG_SAY_MAX / 2 + 1]; int n, word; float next; } reading_t;
 static reading_t *s_rd;
 static bool       s_rd_on = false;
@@ -807,22 +811,24 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
             if (!s_cap_box_on) box_txt = NULL;
         }
         /* its fine dust: for the drawing at full growth (the calm one kept), built a few ms a frame */
-        if (s_fine && s_hd.gen && hd.n >= 0) {
+        if (s_fine && hd.n >= 0) {
             static uint32_t wanted;                        /* the shapes are painted again only when they change */
             const uint32_t k0 = scene_full_key(s, s_sp.cur, s_sp.t);
             if (k0 != wanted || (s_fine->live < 0 && s_fine->ready < 0 && s_fine->build < 0)) {
                 uint32_t key;
                 const int nf = scene_full_shapes(s, s_sp.cur, s_sp.t, s_fshp, &key);
-                if (nf >= 0) { fluid_fine_want(s_fine, key, !(s_sp.cur->focus >= 0 && s_sp.cur->glow > 0.f), s_fshp, nf, cfg->palette); wanted = key; }
+                /* (not now: the scene's calm set is still being made; asked again next frame) */
+                if (nf >= 0 && fluid_fine_want(s_fine, s_sp.cur->serial, key, !(s_sp.cur->focus >= 0 && s_sp.cur->glow > 0.f), s_fshp, nf, cfg->palette)) wanted = k0;
             }
-            /* ... in what the frame's fill left of FINE_BUILD_US (a frame that repainted its items builds nothing) */
-            const int left = FINE_BUILD_US - (int)(esp_timer_get_time() - fill_t0);
-            const bool was = s_fine->build >= 0;
+            /* ... in what the frame's fill left of its budget (a frame that repainted its items builds nothing) */
+            const bool ahead = s_hd.out || s_hd.dust >= 1.f;
+            const int left = (ahead ? FINE_AHEAD_US : FINE_BUILD_US) - (int)(esp_timer_get_time() - fill_t0);
+            const bool was = s_fine->levels_ok, built = s_fine->build >= 0;
             if (left > 500) fluid_fine_work(s_fine, left);
-            if (was && s_fine->build < 0) {                /* built: how long it took, for the log */
+            if (!was && s_fine->levels_ok) {               /* ready to swap in: how long it took, for the log */
                 int calls;
                 const int us = fluid_fine_built(s_fine, &calls);
-                mole_diag_event(false, "fine.build %dms in %d frames", us / 1000, calls);
+                mole_diag_event(false, "fine.%s %dms in %d frames%s", built ? "build" : "known", us / 1000, calls, ahead ? " (ahead)" : "");
             }
         }
         /* a new word: a gentle wave under its letters; the reading's end: under the last one's, as it breaks up */
@@ -879,7 +885,12 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     s_crisp = s_cur == ST_CREATURE && s_cpk && cpk_crisp(s_cpk);   /* a question's arcs and letters show over it too */
     /* a scene in high definition, but on the dots while a question (dimmed under it), a listen or the agent's progress
      * is on the water (before `still`: a scene's first frame is one already, with no step of the whole fluid) */
-    scene_hd_tick(&s_hd, s_cur == ST_SCENE && s_sp.cur ? s_sp.gen : 0, s_ask.scr.phase != FLUID_ASK_NONE || s_rg.on > 0.f || s_pg.on > 0.f, rdt);
+    {   /* a scene holds its rise for its fine dust (they come together), FINE_HOLD_S at most */
+        const bool scene = s_cur == ST_SCENE && s_sp.cur;
+        const bool hold = scene && s_fine && s_fine_wait < FINE_HOLD_S && fluid_fine_coming(s_fine);
+        s_fine_wait = scene && s_hd.dust >= 1.f && !s_hd.out ? s_fine_wait + rdt : s_hd.out || !scene ? 0.f : s_fine_wait;
+        scene_hd_tick(&s_hd, scene ? s_sp.gen : 0, s_ask.scr.phase != FLUID_ASK_NONE || s_rg.on > 0.f || s_pg.on > 0.f, hold, rdt);
+    }
     const bool still = (s_hd.gen != 0 && s_cur == ST_SCENE && !asking) || s_crisp;
     s->p.still = still;
     if (!still) fluid_sim_background(s, s_tnow, breath, (s_frame_no & 1) == 0 || s_frame_no < 2);
@@ -1428,12 +1439,12 @@ static void fluid_task(void *arg) {
         if (s_fine) {   /* the fine dust: a set built since swaps in (the drawer is idle); none once no scene shows */
             if (s_hd.gen && s_dnshp >= 0) {
                 if (s_cur == ST_SCENE && !s_hd.out) {      /* (a scene breaking up keeps the dust it showed) */
-                    fluid_fine_swap(s_fine);
+                    fluid_fine_swap(s_fine, s_hd.dust <= 0.f);
                     fluid_fine_caption_box(s_fine, s_cap_box_on ? s_cap_box : NULL);
                     memcpy(s_still_d, s_still, (size_t)s_sim->N); s_dcap_word = s_cap_word;
                 }
                 s_dopts.fine = s_fine; s_dopts.still = s_still_d; s_dopts.cap_word = s_dcap_word;
-                s_dopts.cap_unformed = s_dcap_word ? fmaxf(0.f, 1.f - (s_tnow - s_cap_t0) / FINE_REVEAL_S) : 0.f;
+                s_dopts.cap_unformed = s_dcap_word && FINE_REVEAL_S > 0.f ? fmaxf(0.f, 1.f - (s_tnow - s_cap_t0) / (FINE_REVEAL_S + 1e-6f)) : 0.f;
             } else if (!s_hd.gen && !s_hd.out) fluid_fine_clear(s_fine);
         }
         {   /* a scene's symbols point into its package: the drawer keeps it until its next frame */
