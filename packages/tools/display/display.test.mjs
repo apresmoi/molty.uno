@@ -408,15 +408,17 @@ test('preview: a local page that draws a screen with the reference player, a tap
   try {
     assert.equal(server.address().address, '127.0.0.1');
     assert.match(await (await get('/')).text(), /molty-display preview/);
-    const skill = await (await get('/skill')).json(), chart = skill.screens.find((s) => s.name === 'chart'), args = `screen=chart&t=1&params=${encodeURIComponent(JSON.stringify(chart.params))}`;
+    const skill = await (await get('/skill')).json(), chart = skill.screens.find((s) => s.name === 'chart');
+    const show = async (screen, params) => (await fetch(`${at}/scene`, { method: 'POST', body: JSON.stringify({ screen, params: JSON.stringify(params, null, 1) }) })).json();
     assert.deepEqual([skill.problems, skill.screens.length], [[], 12]);
-    assert.equal((await (await get(`/scene?${args}`)).json()).zones, 10 + 12 + 3, 'a zone for each body, sign and aspect of the example');
-    const leo = chart.params.signs.find((s) => s.id === 'leo'), rad = (leo.a * Math.PI) / 180, hit = await (await get(`/tap?${args}&x=${0.88 * Math.cos(rad + 0.2)}&y=${0.88 * Math.sin(rad + 0.2)}`)).json();
-    assert.deepEqual([hit.id, hit.opens.layout, hit.opens.params.sign, hit.opens.params.bodies.every((b) => b.of === 'leo')], ['leo', 'sign-closeup', 'leo', true], 'a tap in a sign\'s block opens its close-up');
-    assert.deepEqual(await (await get(`/tap?${args}&x=0&y=0`)).json(), {}, 'the middle is empty');
-    const calm = Buffer.from(await (await get(`/frame.png?${args}`)).arrayBuffer()), lit = Buffer.from(await (await get(`/frame.png?${args}&tap=sun-moon`)).arrayBuffer());
+    assert.equal((await show('chart', chart.params)).zones, 10 + 12 + 3, 'a zone for each body, sign and aspect of the example');
+    const calm = Buffer.from(await (await get('/frame.png?t=1')).arrayBuffer()), lit = Buffer.from(await (await get('/frame.png?t=1&tap=sun-moon')).arrayBuffer());
     assert.equal(calm.subarray(1, 4).toString(), 'PNG');
     assert.ok(!calm.equals(lit), 'the tapped aspect draws differently');
-    assert.match((await (await get('/scene?screen=chart&params=%7B%7D')).json()).error, /the device would refuse these inputs: missing param/);
+    const leo = chart.params.signs.find((s) => s.id === 'leo'), rad = (leo.a * Math.PI) / 180, hit = await (await get(`/tap?t=1&x=${0.88 * Math.cos(rad + 0.2)}&y=${0.88 * Math.sin(rad + 0.2)}`)).json();
+    assert.deepEqual([hit.id, hit.opens.layout, hit.opens.params.sign, hit.opens.params.bodies.every((b) => b.of === 'leo')], ['leo', 'sign-closeup', 'leo', true], 'a tap in a sign\'s block opens its close-up');
+    assert.deepEqual(await (await get('/tap?t=1&x=0&y=0')).json(), {}, 'the middle is empty');
+    assert.equal((await show('sign-closeup', hit.opens.params)).zones, hit.opens.params.bodies.length + 1, 'the opened screen shows with what the chart was sent');
+    assert.match((await show('chart', {})).error, /the device would refuse these inputs: missing param/);
   } finally { server.close(); }
 });
