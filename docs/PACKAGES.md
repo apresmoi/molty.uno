@@ -56,6 +56,8 @@ astro.mjs chart        # the zodiac chart; tap a planet, a sign or a line to rea
 
 Under it, a scene is one small command: the package, the drawing and a few values. Molty does the drawing.
 
+To write your own scenes, start at [Draw on Molty](DISPLAY.md). To make a creature, start at [The Molty format](CREATURE.md).
+
 ```
 scene.play {"pkg": "astrology", "layout": "sign", "params": {"sign": "leo"}}
 ```

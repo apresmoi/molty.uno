@@ -20,7 +20,7 @@ const RAW = 'https://raw.githubusercontent.com/apresmoi/molty.uno/main/';
 const INDEX = process.env.MOLTY_PKG_INDEX ?? `${RAW}packages/index.json`;
 const DEFAULT_RELAY = 'https://molty-relay.alicenet.workers.dev'; // the molty skill's default relay (MOLTY_RELAY overrides)
 const ASPECT_KINDS = ['conjunction', 'sextile', 'square', 'trine', 'opposition'];
-// The layouts' own lengths (packages/astrology/build.mjs); a scene's ttl covers it, a held one (chart) gets --ttl.
+// The screens' own lengths (../screens/*.yaml, duration); a scene's ttl covers it, a held one (chart) gets --ttl.
 const DUR = { globe: 2.5, saturn: 2.5, sign: 4, signs: 36, aspect: 5, chart: 0, transit: 6, occultation: 6, appulse: 6, 'solar-eclipse': 6, 'lunar-eclipse': 6 };
 
 const argv = process.argv.slice(2), flag = (k) => argv.includes(k), opt = (k, d) => { const i = argv.indexOf(k); return i < 0 ? d : argv[i + 1]; };

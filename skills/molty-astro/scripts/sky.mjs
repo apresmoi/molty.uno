@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The sky for a date, as the params of the astrology package's layouts (packages/astrology).
+// The sky for a date, as the inputs of this skill's screens (../display.yaml, ../screens/).
 // All astronomy comes from astronomy-engine (MIT, vendored); nothing here draws. Ported from the
 // lab prototype (molty-creature-lab/astronomy/sky.mjs): same instants, aspects, orbs and events.
 import { createRequire } from 'node:module';
@@ -8,9 +8,9 @@ const A = createRequire(import.meta.url)('./vendor/astronomy.min.js');
 const TAU = Math.PI * 2, DAY = 86400000, RAD = Math.PI / 180, mod360 = (d) => ((d % 360) + 360) % 360;
 const r2 = (v) => +v.toFixed(2) + 0, r3 = (v) => +v.toFixed(3) + 0;
 export const BODIES = ['Sun', 'Moon', 'Mercury', 'Venus', 'Mars', 'Jupiter', 'Saturn', 'Uranus', 'Neptune', 'Pluto'];
-// the package's glyph colours (packages/astrology/build.mjs BODIES)
+// the bodies' colours (a body's color input, ../screens/chart.yaml)
 const INK = { Sun: '#ffd678', Moon: '#e6e6e0', Mercury: '#c8bcb0', Venus: '#fff0c4', Mars: '#ff7a55', Jupiter: '#ffc266', Saturn: '#e8d890', Uranus: '#9fe3e0', Neptune: '#8fb4ff', Pluto: '#c0a0d0' };
-// the sign glyphs' colours and the close-up's ruler glyph size (packages/astrology/build.mjs SIGN_INK, sign-closeup)
+// the sign glyphs' colours (../display.yaml coral, sage, sky) and the close-up's ruler glyph size (../screens/sign-closeup.yaml)
 const SIGN_INK = ['#ff9a7a', '#a8d890', '#9fc0ff'], RULER = 0.13, RULER_GAP = 0.06;
 export const ASPECTS = [{ angle: 0, name: 'conjunction', c: '#ffd678' }, { angle: 60, name: 'sextile', c: '#6fe0a0' }, { angle: 90, name: 'square', c: '#ff6a55' }, { angle: 120, name: 'trine', c: '#7fb0ff' }, { angle: 180, name: 'opposition', c: '#ff5fa0' }];
 export const MAX_ORB = 6;
@@ -63,7 +63,7 @@ export function tonight(date) {
   const pct = Math.round(s.moon.fraction * 100);
   return { scenes, say: `Tonight's moon is ${pct} percent lit, ${s.moon.waxing ? 'waxing' : 'waning'}, in ${s.moon.sign}. Then Mercury, Venus, Mars, Jupiter and Saturn.`, facts: { moon: { lit: pct, waxing: s.moon.waxing, sign: s.moon.sign }, planets: Object.fromEntries(PLANETS.map((p) => { const lon = eclipticLon(p, date); return [p, `${Math.floor(mod360(lon) % 30)} ${signOf(lon)}`]; })) } };
 }
-// The chart's aspects: the tightest few, each a hairline between its two bodies' symbols (packages/astrology/build.mjs chart):
+// The chart's aspects: the tightest few, each a hairline between its two bodies' symbols (../screens/chart.yaml):
 // tense red, easy blue, a conjunction white; LINE_GAP outside each symbol's centre, none for a pair too close for a line
 const DRAWN = 3, TONE = { square: 'tense', opposition: 'tense', trine: 'easy', sextile: 'easy', conjunction: 'joined' };
 const TONE_INK = { tense: '#ff5a4a', easy: '#6fa8ff', joined: '#c8cce0' }, LINE_GAP = 0.085;

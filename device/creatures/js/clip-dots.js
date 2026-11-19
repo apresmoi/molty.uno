@@ -19,8 +19,8 @@
 //   r.cells() -> { dots: Uint8Array(W*H) braille bytes, rgb: Uint32Array(W*H) 0xRRGGBB }   (one colour a cell, as the panel draws)
 
 export const VIEW_SIZE = 1.75, FLOOR_AT = 0.72, HORIZON_AT = 0.495, THRESH = 0.6;   // the creature on the near floor, larger
-const STRUCT = ['torso', 'hindL', 'hindR', 'head', 'legF.L', 'legF.R', 'tail', 'bowl', 'yarn'];
-const FEAT = ['eye', 'earIn', 'nose', 'maw', 'tongue', 'whisker', 'chest', 'milk', 'yarnline'];
+export const STRUCT = ['torso', 'hindL', 'hindR', 'head', 'legF.L', 'legF.R', 'tail', 'bowl', 'yarn'];
+export const FEAT = ['eye', 'earIn', 'nose', 'maw', 'tongue', 'whisker', 'chest', 'milk', 'yarnline'];
 export const hash3 = (i, j, k) => {
   let h = (Math.imul(i, 374761393) + Math.imul(j, 668265263) + Math.imul(k, 2147483647)) | 0;
   h = Math.imul(h ^ (h >>> 13), 1274126177);

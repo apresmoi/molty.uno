@@ -81,7 +81,7 @@ function stroke(pts, c, put, w = 0) {
   }
 }
 const arcPts = (r, a0, a1, x = 0, y = 0) => { const n = Math.max(2, Math.ceil((Math.abs(a1 - a0) * DEG * r) / 0.02)); return Array.from({ length: n + 1 }, (_, i) => { const a = (a0 + ((a1 - a0) * i) / n) * DEG; return [x + r * Math.cos(a), y + r * Math.sin(a)]; }); };
-const smooth = (p) => { if (p.length < 3) return p; const out = []; for (let i = 0; i + 1 < p.length; i++) { const a = p[Math.max(0, i - 1)], b = p[i], c = p[i + 1], d = p[Math.min(p.length - 1, i + 2)]; for (let k = 0; k < 8; k++) { const t = k / 8, f = (j) => 0.5 * (2 * b[j] + (c[j] - a[j]) * t + (2 * a[j] - 5 * b[j] + 4 * c[j] - d[j]) * t * t + (3 * b[j] - a[j] - 3 * c[j] + d[j]) * t * t * t); out.push([f(0), f(1)]); } } out.push(p.at(-1)); return out; };
+export const smooth = (p) => { if (p.length < 3) return p; const out = []; for (let i = 0; i + 1 < p.length; i++) { const a = p[Math.max(0, i - 1)], b = p[i], c = p[i + 1], d = p[Math.min(p.length - 1, i + 2)]; for (let k = 0; k < 8; k++) { const t = k / 8, f = (j) => 0.5 * (2 * b[j] + (c[j] - a[j]) * t + (2 * a[j] - 5 * b[j] + 4 * c[j] - d[j]) * t * t + (3 * b[j] - a[j] - 3 * c[j] + d[j]) * t * t * t); out.push([f(0), f(1)]); } } out.push(p.at(-1)); return out; };
 
 // assets, decoded once per package
 const decoded = new WeakMap();
@@ -223,7 +223,7 @@ export function frame(pkg, layout, params, t, kept = null, tap = '') {
 // ---- PNG
 const CRC = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
 const crc32 = (b) => { let c = 0xffffffff; for (const x of b) c = CRC[(c ^ x) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
-const chunk = (type, data) => { const t = Buffer.from(type), len = Buffer.alloc(4), crc = Buffer.alloc(4); len.writeUInt32BE(data.length); crc.writeUInt32BE(crc32(Buffer.concat([t, data]))); return Buffer.concat([len, t, data, crc]); };
+export const chunk = (type, data) => { const t = Buffer.from(type), len = Buffer.alloc(4), crc = Buffer.alloc(4); len.writeUInt32BE(data.length); crc.writeUInt32BE(crc32(Buffer.concat([t, data]))); return Buffer.concat([len, t, data, crc]); };
 /** The dots as the panel shows them: round dots on black, inside the round glass; over rgb (an S x S
  *  image of floats, hd's) when given. */
 export function png(dots, rgb = null, S = PANEL) {
