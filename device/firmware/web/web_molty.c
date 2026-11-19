@@ -186,6 +186,7 @@ bool web_cat_coming(struct cc *c);
 float web_cat_across(const struct cc *c);
 float web_cat_back(const struct cc *c);
 void web_cat_attend(struct cc *c, float seconds);
+void web_cat_home(struct cc *c);
 void web_cat_pan(float across);
 static bool s_entering;
 
@@ -204,6 +205,7 @@ WM_API int wm_entering(void) {
     struct cc *c = (struct cc *)cpk_clip(s_cpk);
     web_cat_attend(c, 0.5f);
     s_entering = web_cat_coming(c);
+    if (!s_entering) web_cat_home(c);
     return s_entering;
 }
 /** The picture's camera looks `across` (world units) to the side: the same world through a window beside the screen. */

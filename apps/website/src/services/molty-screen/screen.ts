@@ -56,8 +56,12 @@ const ENTER = {
   nose: 0.85,
   /** Played unseen first: it gets up. */
   lead: 1.0,
-  /** Its clock runs this much faster until it sits. */
+  /** Its clock runs this much faster while it walks in ... */
   rate: 2.2,
+  /** ... and this much once it is at its place (it stops, turns to you and sits). */
+  settle: 4.5,
+  /** At its place: this near the frame's middle. */
+  near: 0.12,
 };
 /** Walking in, the cat also drifts toward the viewer: starting [across, back] it ends at its own
  *  place. Measured for each start; a start in between takes the next one further out. */
@@ -227,12 +231,17 @@ class Screen implements MoltyScreenHandle {
    *  its picture of the cat alone can be carried there (`aside`). */
   private aside = 0;
   private advance(us: number) {
-    if (this.twin) {
-      this.aside = this.core.across();
-      this.twin.pan(this.aside);
-      this.twin.frame(us);
+    // a sped-up clock goes in steps no longer than a device frame: the creature's player takes
+    // no more than that of one frame's time
+    const steps = Math.ceil(us / 30000);
+    for (let i = 0; i < steps; i++) {
+      if (this.twin) {
+        this.aside = this.core.across();
+        this.twin.pan(this.aside);
+        this.twin.frame(us / steps);
+      }
+      this.core.frame(us / steps);
     }
-    this.core.frame(us);
   }
 
   /** Where the finger's events come from. */
@@ -288,7 +297,8 @@ class Screen implements MoltyScreenHandle {
 
   private step(ms: number) {
     if (!this.options.reducedMotion) this.letWavesIn(ms);
-    this.advance(Math.round(ms * 1000 * (this.entering ? ENTER.rate : 1)));
+    const rate = !this.entering ? 1 : Math.abs(this.core.across()) < ENTER.near ? ENTER.settle : ENTER.rate;
+    this.advance(Math.round(ms * 1000 * rate));
     this.seconds += ms / 1000;
     if (this.entering && !this.core.entering()) {
       // it sits: the window beside the screen is done with

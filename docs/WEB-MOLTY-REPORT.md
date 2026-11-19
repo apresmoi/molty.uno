@@ -269,8 +269,12 @@ Pictures, in `apps/website/e2e-out/` (not committed):
   a device (2.6 device widths) and a heading; that a page wave fades slower than a screen's
   (so it can cross a screen from outside); how hard it pushes the screen's water at the rim.
   All three are one constant each.
-- **The entrance runs the cat's clock 2.2 times faster** until it sits. Same clips, brisker.
-  One constant (`ENTER.rate`).
+- **The entrance runs the cat's clock faster.** 2.2 times while it walks in, 4.5 times while it
+  stops, turns and sits: 3.5 s at 1280 px and 3.4 s at 390 px from its nose crossing the
+  window's edge to sitting (measured with no screenshots being taken). Same clips, brisker. Two constants (`ENTER.rate`, `ENTER.settle`). It
+  ends at its own place exactly: after the walk stops, what is left to its place is taken up
+  unseen (`web_cat.c`); a cat that simply sat and one that walked in have their eyes within
+  a pixel of each other, not bit for bit (the idle clip is at another moment).
 - **Where the dust meets the bezel.** Outside it is 1 px specks, inside the cat's screen the
   firmware draws its floor dust as dots on its own grid. The bezel ring sits between them. They
   are the same colour family but not the same grain. Making them one grain needs a pan and zoom
