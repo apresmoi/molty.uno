@@ -1,0 +1,86 @@
+# yaml-language-server: $schema=../../../schema/display-2-screen.json
+about: One aspect on the degree grid, its two bodies, the angle between them and the figure it belongs to.
+duration: 5
+inputs:
+  from_angle:
+    type: angle
+    sent_as: a
+    about: The chart angle of body A.
+    example: 182.07
+  to_angle:
+    type: angle
+    sent_as: b
+    about: "from_angle + d, where d is B's chart angle minus A's, wrapped to -180..180: the arc runs from one to the other."
+    example: 123.13
+  color:
+    type: color
+    sent_as: c
+    about: "The aspect's color: conjunction #ffd678, sextile #6fe0a0, square #ff6a55, trine #7fb0ff, opposition #ff5fa0."
+    example: "#6fe0a0"
+  bodies:
+    type: list
+    max: 2
+    about: The two bodies, A then B.
+    of:
+      symbol: { type: asset, of: assets/planets, sent_as: g, about: "The body's symbol: g-mars ..." }
+      angle: { type: angle, sent_as: a, about: Its chart angle. }
+      distance: { type: distance, sent_as: r, about: "0.6; B at 0.47 when the two are under 14 degrees apart." }
+      color: { type: color, sent_as: c, about: "Its color, as on the chart." }
+    example:
+      - { symbol: g-neptune, angle: 182.07, distance: 0.6, color: "#8fb4ff" }
+      - { symbol: g-pluto, angle: 123.13, distance: 0.6, color: "#c0a0d0" }
+  lines:
+    type: list
+    max: 7
+    about: "The aspect's figure on radius 0.6 from A's angle (sextile 6 sides, square 4, trine 3), then the chord from A to B. None for a conjunction."
+    of:
+      from_x: { type: number, min: -1, max: 1, sent_as: x1, about: The segment's start. }
+      from_y: { type: number, min: -1, max: 1, sent_as: y1, about: "The segment's start, y." }
+      to_x: { type: number, min: -1, max: 1, sent_as: x2, about: The segment's end. }
+      to_y: { type: number, min: -1, max: 1, sent_as: y2, about: "The segment's end, y." }
+      color: { type: color, sent_as: c, about: "A side of the figure #565b72; the chord in the aspect's color." }
+      appears: { type: seconds, sent_as: "on", about: "When it appears: 0 for the figure, 1.2 for the chord." }
+    example:
+      - { from_x: -0.6, from_y: -0.022, to_x: -0.281, to_y: -0.53, color: "#565b72", appears: 0 }
+      - { from_x: -0.281, from_y: -0.53, to_x: 0.319, to_y: -0.508, color: "#565b72", appears: 0 }
+      - { from_x: 0.319, from_y: -0.508, to_x: 0.6, to_y: 0.022, color: "#565b72", appears: 0 }
+      - { from_x: 0.6, from_y: 0.022, to_x: 0.281, to_y: 0.53, color: "#565b72", appears: 0 }
+      - { from_x: 0.281, from_y: 0.53, to_x: -0.319, to_y: 0.508, color: "#565b72", appears: 0 }
+      - { from_x: -0.319, from_y: 0.508, to_x: -0.6, to_y: -0.022, color: "#565b72", appears: 0 }
+      - { from_x: -0.6, from_y: -0.022, to_x: -0.328, to_y: 0.502, color: "#6fe0a0", appears: 1.2 }
+  degrees:
+    type: text
+    max: 3
+    sent_as: deg
+    about: The separation in whole degrees, as text (the device font has no degree sign).
+    example: "59"
+  label_x:
+    type: number
+    min: -1
+    max: 1
+    sent_as: tx
+    about: "Where the number sits: at angle from_angle + d/2, radius 0.14. 0 for a conjunction."
+    example: -0.124
+  label_y:
+    type: number
+    min: -1
+    max: 1
+    sent_as: ty
+    about: Where the number sits, y. 0 for a conjunction.
+    example: 0.064
+draw:
+  - use: wheel
+  - ticks: { radius: 0.1, length: 0.62, count: 12, first_angle: 0, color: dim }
+  - circle: { radius: 0.2, color: dim }
+  - circle: { radius: 0.4, color: dim }
+  - circle: { radius: 0.6, color: grid }
+  - for: side in lines
+    draw:
+      - line: { show: { from: "{{ side.appears }}" }, from: { x: "{{ side.from_x }}", y: "{{ side.from_y }}" }, to: { x: "{{ side.to_x }}", y: "{{ side.to_y }}" }, color: "{{ side.color }}" }
+  - arc: { show: { from: 0.4 }, radius: 0.28, start: "{{ from_angle }}", end: "{{ to_angle }}", color: "{{ color }}" }
+  - spoke: { radius: 0, length: 0.6, angle: "{{ from_angle }}", color: "{{ color }}" }
+  - spoke: { show: { from: 0.4 }, radius: 0, length: 0.6, angle: "{{ to_angle }}", color: "{{ color }}" }
+  - label: { show: { from: 0.4 }, at: { x: "{{ label_x }}", y: "{{ label_y }}" }, size: 0.2, text: "{{ degrees }}", color: white }
+  - for: body in bodies
+    draw:
+      - symbol: { asset: "{{ body.symbol }}", size: 0.13, at: { angle: "{{ body.angle }}", distance: "{{ body.distance }}" }, color: "{{ body.color }}" }

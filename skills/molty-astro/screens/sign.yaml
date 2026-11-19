@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=../../../schema/display-2-screen.json
+about: One zodiac sign, large.
+duration: 4
+inputs:
+  sign:
+    type: asset
+    of: assets/signs
+    about: "The sign, lower case: for tonight, the one the Moon is in."
+    example: leo
+draw:
+  - symbol: { size: 1.2, asset: "{{ sign }}", color: sign_gold }

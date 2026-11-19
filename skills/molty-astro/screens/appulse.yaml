@@ -1,0 +1,46 @@
+# yaml-language-server: $schema=../../../schema/display-2-screen.json
+about: Two planets passing close to each other.
+duration: 6
+inputs:
+  path:
+    type: list
+    max: 14
+    about: "The moving planet against the still one in 14 steps, 4 days either side of the closest moment. Scale: 0.32 over the larger of their separation and 0.08 degrees."
+    of:
+      x: { type: number, min: -2, max: 2, about: "Offset on the sky from the still body, east to the left." }
+      y: { type: number, min: -2, max: 2, about: "Offset on the sky from the still body, north up." }
+      from: { type: seconds, sent_as: "on", about: "When this step shows: 0.3 + 5.4 i / 14 for step i." }
+      until: { type: seconds, sent_as: "off", about: "When the next step takes over (the last one: 6)." }
+    example:
+      - { x: -1.65, y: 0.05, from: 0.3, until: 0.69 }
+      - { x: -1.43, y: 0.08, from: 0.69, until: 1.07 }
+      - { x: -1.22, y: 0.11, from: 1.07, until: 1.46 }
+      - { x: -1, y: 0.13, from: 1.46, until: 1.84 }
+      - { x: -0.78, y: 0.16, from: 1.84, until: 2.23 }
+      - { x: -0.57, y: 0.18, from: 2.23, until: 2.61 }
+      - { x: -0.35, y: 0.2, from: 2.61, until: 3 }
+      - { x: -0.14, y: 0.21, from: 3, until: 3.39 }
+      - { x: 0.08, y: 0.23, from: 3.39, until: 3.77 }
+      - { x: 0.3, y: 0.24, from: 3.77, until: 4.16 }
+      - { x: 0.51, y: 0.25, from: 4.16, until: 4.54 }
+      - { x: 0.73, y: 0.26, from: 4.54, until: 4.93 }
+      - { x: 0.94, y: 0.27, from: 4.93, until: 5.31 }
+      - { x: 1.16, y: 0.27, from: 5.31, until: 6 }
+  still:
+    type: asset
+    of: assets/maps
+    sent_as: a
+    about: "The planet in the middle: one of mercury to saturn, at least 12 degrees from the Sun."
+    example: venus
+  moving:
+    type: asset
+    of: assets/maps
+    sent_as: b
+    about: The planet that passes within 0.5 degrees of it.
+    example: mars
+draw:
+  - globe: { radius: 0.2, map: "{{ still }}", spin: 10 }
+  # draw before for: keeps this item as the package always had it (docs/DISPLAY.md, "Moving from v1")
+  - draw:
+      - globe: { at: { x: "{{ step.x }}", y: "{{ step.y }}" }, show: { from: "{{ step.from }}", until: "{{ step.until }}" }, radius: 0.13, map: "{{ moving }}", spin: 10 }
+    for: step in path

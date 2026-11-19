@@ -1,0 +1,74 @@
+# yaml-language-server: $schema=../../schema/display-2.json
+# What Molty draws for this skill (docs/DISPLAY.md). scripts/sky.mjs works out the sky and
+# sends each screen's inputs; build with `node packages/tools/molty-display.mjs build skills/molty-astro`.
+molty: display/2
+package:
+  id: astrology
+  name: Astrology
+  version: 1.5.0
+  about: Draws the sky on Molty, the zodiac wheel with aspects, planet globes, the signs, eclipses and transits. Play it with the molty-astro skill.
+  fallback: speech
+tokens:
+  colors:
+    coral: "#ff9a7a"      # the signs take these three in turn
+    sage: "#a8d890"
+    sky: "#9fc0ff"
+    ring_gold: "#ead9a0"  # Saturn's rings
+    sign_gold: "#ffe9b0"  # the Moon's sign, alone on the screen
+    umbra_red: "#8a3a2a"  # the Earth's shadow
+  sizes:
+    lit_ring: 0.075       # the ring round each body of a lit aspect, before it grows
+assets:
+  - { files: "assets/signs/{aries,taurus,gemini,cancer,leo,virgo,libra,scorpio,sagittarius,capricorn,aquarius,pisces}.svg", as: symbol, pixels: 64, smooth: true }
+  - { files: "assets/planets/g-{sun,moon,mercury,venus,mars,jupiter,saturn,uranus,neptune,pluto}.svg", as: symbol, pixels: 32, smooth: true }
+  # Saturn's rings, the near half, at five tilts each way (p: tilted toward us from above, n: from below)
+  - { files: "assets/rings/rings-{p3,n3,p9,n9,p15,n15,p21,n21,p27,n27}.png", as: symbol }
+  - { files: "assets/maps/{moon,moon-red,sun,mercury,venus,mars,jupiter,saturn}.png", as: map, pixels: [128, 64] }
+data:
+  # The twelve signs. angle: where it sits on the wheel (0 Aries at 9 o'clock, sign i centred at 195 + 30 i).
+  # grid_x, grid_y: its place in the 4 x 3 grid of the signs screen; from, until: its turn alone there.
+  zodiac:
+    - { name: aries,       angle: 195, color: coral, grid_x: -0.63, grid_y: 0.46,  from: 4.2,  until: 6.5 }
+    - { name: taurus,      angle: 225, color: sage,  grid_x: -0.21, grid_y: 0.46,  from: 6.5,  until: 8.8 }
+    - { name: gemini,      angle: 255, color: sky,   grid_x: 0.21,  grid_y: 0.46,  from: 8.8,  until: 11.1 }
+    - { name: cancer,      angle: 285, color: coral, grid_x: 0.63,  grid_y: 0.46,  from: 11.1, until: 13.4 }
+    - { name: leo,         angle: 315, color: sage,  grid_x: -0.63, grid_y: 0,     from: 13.4, until: 15.7 }
+    - { name: virgo,       angle: 345, color: sky,   grid_x: -0.21, grid_y: 0,     from: 15.7, until: 18 }
+    - { name: libra,       angle: 15,  color: coral, grid_x: 0.21,  grid_y: 0,     from: 18,   until: 20.3 }
+    - { name: scorpio,     angle: 45,  color: sage,  grid_x: 0.63,  grid_y: 0,     from: 20.3, until: 22.6 }
+    - { name: sagittarius, angle: 75,  color: sky,   grid_x: -0.63, grid_y: -0.46, from: 22.6, until: 24.9 }
+    - { name: capricorn,   angle: 105, color: coral, grid_x: -0.21, grid_y: -0.46, from: 24.9, until: 27.2 }
+    - { name: aquarius,    angle: 135, color: sage,  grid_x: 0.21,  grid_y: -0.46, from: 27.2, until: 29.5 }
+    - { name: pisces,      angle: 165, color: sky,   grid_x: 0.63,  grid_y: -0.46, from: 29.5, until: 31.8 }
+parts:
+  # The zodiac wheel: two rings, the sign borders, a mark every 10 degrees, the twelve signs.
+  wheel:
+    with: { sign_size: 0.09 }
+    draw:
+      - circle: { radius: 0.9, width: hairline, color: ink }
+      - circle: { radius: 0.75, width: hairline, color: grid }
+      - ticks: { radius: 0.75, length: 0.15, count: 12, first_angle: 0, width: hairline, color: ink }
+      - ticks: { radius: 0.73, length: 0.02, count: 36, first_angle: 0, width: hairline, color: grid }
+      - for: sign in zodiac
+        draw:
+          - symbol: { asset: "{{ sign.name }}", size: "{{ sign_size }}", at: { angle: "{{ sign.angle }}", distance: 0.825 }, color: "{{ sign.color }}" }
+  # All twelve signs in a 4 x 3 grid, between two moments.
+  sign_grid:
+    with: { from: 0, until: 0 }
+    draw:
+      - for: sign in zodiac
+        draw:
+          - symbol: { show: { from: "{{ from }}", until: "{{ until }}" }, asset: "{{ sign.name }}", size: 0.34, at: { x: "{{ sign.grid_x }}", y: "{{ sign.grid_y }}" }, color: "{{ sign.color }}" }
+screens:
+  globe: screens/globe.yaml
+  saturn: screens/saturn.yaml
+  sign: screens/sign.yaml
+  chart: screens/chart.yaml
+  sign-closeup: screens/sign-closeup.yaml
+  signs: screens/signs.yaml
+  aspect: screens/aspect.yaml
+  transit: screens/transit.yaml
+  solar-eclipse: screens/solar-eclipse.yaml
+  occultation: screens/occultation.yaml
+  appulse: screens/appulse.yaml
+  lunar-eclipse: screens/lunar-eclipse.yaml

@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=../../../schema/display-2-screen.json
+about: One body as a lit globe, the Moon at tonight's phase or a planet.
+duration: 2.5
+inputs:
+  map:
+    type: asset
+    of: assets/maps
+    sent_as: img
+    about: "Which body: moon, mercury, venus, mars or jupiter."
+    example: moon
+  lit:
+    type: amount
+    about: The fraction of its disc that is lit.
+    example: 0.499
+  lit_side:
+    type: number
+    sent_as: side
+    min: -1
+    max: 1
+    about: "1 when its right side is lit, -1 when its left. The Moon: 1 waxing, -1 waning. A planet: 1 when it is east of the Sun ((its longitude - the Sun's) mod 360 is under 180), else -1."
+    example: -1
+  radius:
+    type: distance
+    sent_as: r
+    about: 0.62 for the Moon, 0.58 for a planet.
+    example: 0.62
+  spin:
+    type: number
+    about: "Degrees per second it turns, for show: 0 for the Moon, 2 mercury, 3 venus, 7 mars, 29 jupiter."
+    example: 0
+draw:
+  - globe: { radius: "{{ radius }}", map: "{{ map }}", lit: "{{ lit }}", lit_side: "{{ lit_side }}", spin: "{{ spin }}" }
