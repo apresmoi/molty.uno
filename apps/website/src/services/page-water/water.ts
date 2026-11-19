@@ -1,189 +1,244 @@
-// The page's water: one wave from every tap, anywhere on the page. The calm dust itself is a
-// background tile (no script: features/water/dust.mjs, scripts/dust-tile.mjs); this draws only
-// the wave over it, on one canvas fixed to the viewport, and only while a wave is travelling.
+// The page's water: one with the screens'. Its calm dust is the page's own background (tiles,
+// there without any script: scripts/dust-tile.mjs): loose everywhere, and denser in focus round
+// each device and each heading (a second tile, laid here by where those stand). A tap anywhere
+// is a bump in the water's field: the firmware's own water and its own drawer of dots, on a
+// grid as wide as the window (services/molty-screen field.ts). The field draws on one canvas
+// fixed to the viewport, only while the water moves, and only the cells the water moves; every
+// screen takes the field's water at its rim, a heading's window all over.
 //
-// One water with the screens: a tap inside a Molty screen (or a word) starts the page's wave at
-// the same point, at the speed that screen's own water has, so the ring the firmware draws
-// inside the glass and the ring drawn here are one ring: it crosses the rim and goes on.
-//
-// PAGE-SIDE, not the firmware's renderer (it draws a round panel, at most 511 px across in high
-// definition): the wave's shape here is a travelling ring, with the firmware's speed and decay
-// (fluid_sim.c) and the firmware's dust rule under it (fluid_fine.c: where the water is lit,
-// more of the ordered specks show, and brighter). Reduced motion: no waves.
-import { DUST, FINE, TILE, WAVE_KEEP, WAVE_SPEED, ign, speck } from "../../config/water.mjs";
+// PAGE-SIDE, not the firmware's: where the dust is (config/water.mjs FOCUS, and web_field.c),
+// and what is in this file: the canvas, where it stands as the page scrolls, and the taps.
+// Reduced motion: the dust is laid, nothing moves.
+import {
+  CELL,
+  MoltyField,
+  TILE,
+  WATER,
+  instantiate,
+  loadModule,
+  onFrame,
+  setPageWater,
+  type FieldExports,
+  type Focus,
+} from "../molty-screen";
+import { CARRY, FOCUS } from "../../config/water.mjs";
 
-/** A screen's width a tap on the bare page stands for (the hero's device), px. */
-const NOMINAL = 420;
-/** The crest's width (its gaussian sigma) as a share of that width: the tap's own size on a
- *  screen (mole_fluid.c ripples a finger's tap over 0.09 of the glass's radius). */
-const CREST = 0.045;
-/** How much of a drawing's dust the crest gathers (FINE.PEAK is a drawing's own edge). */
-const GATHER = 0.45;
-/** The page is wider than a screen: its waves keep their height this much longer (a screen's
- *  water, fluid_sim.c, loses 60 % of a wave's height a second), so one crosses a screen from
- *  outside and goes on. */
-const PAGE_DEPTH = 0.45;
-/** A wave is over once it is this faint. */
-const FAINT = 0.03;
-/** A wave's height `t` seconds after its tap. */
-const heightAt = (t: number) => WAVE_KEEP ** (t * PAGE_DEPTH);
+/** The canvas reaches this many cells beyond the viewport: the page scrolls that far before the
+ *  field has to be stood again (every cell drawn afresh). */
+const MARGIN = { cols: 2, rows: 8 };
 
-interface Wave {
-  /** Where it started, from the page's own top left corner. */
-  x: number;
-  y: number;
-  speed: number;
-  sigma: number;
-  t0: number;
-}
-
-/** The page's origin and the waves out now (none without a mounted water). */
-let origin: HTMLElement | null = null;
-const waves: Wave[] = [];
-
-/** A wave as a screen meets it: its centre in the viewport, its radius, its crest's width and
- *  height now. */
-export interface PassingWave {
-  x: number;
-  y: number;
-  r: number;
-  sigma: number;
-  height: number;
-}
-/** The waves travelling through the page at `now` (performance.now()): one water, so a screen
- *  lets them in at its rim (services/molty-screen). */
-export function pageWaves(now: number): PassingWave[] {
-  if (!origin || !waves.length) return [];
-  const o = origin.getBoundingClientRect();
-  return waves.map((w) => {
-    const t = (now - w.t0) / 1000;
-    return { x: w.x + o.left, y: w.y + o.top, r: w.speed * t, sigma: w.sigma, height: heightAt(t) };
-  });
+/** The field's pixels a CSS px on this page: the page shows a tile (TILE px a side) at its
+ *  dust's size, which is a screen's pixel as the page's reference screen shows it
+ *  (styles/tokens.css --m-dust-size). */
+export function grain(page: Element | null): number {
+  const size = page ? parseFloat(getComputedStyle(page).backgroundSize) : NaN;
+  return size > 0 ? TILE / size : WATER.panel / 420;
 }
 
 export interface PageWaterHandle {
   destroy(): void;
 }
 
-/** Mount the wave layer on `canvas` (fixed to the viewport; CSS sizes it). `page` is the element
- *  the dust is the background of: a wave gathers the ordered specks there, in the page's own
- *  places (they scroll with it). */
+/** Mount the page's water. `page` is the element the dust is the background of; `near` covers
+ *  it and holds the denser dust (this lays it round what focuses it: `[data-dust-focus]`);
+ *  `canvas` is fixed to the viewport's corner (this sizes and moves it). `still`: the dust is
+ *  laid and that is all (reduced motion). */
 export function mountPageWater(
   canvas: HTMLCanvasElement,
+  near: HTMLElement,
   page: HTMLElement,
-  options: { paper: boolean },
+  options: { paper: boolean; still: boolean },
 ): PageWaterHandle {
   const ctx = canvas.getContext("2d")!;
-  origin = page;
-  waves.length = 0;
-  let raf = 0;
-  let image: ImageData | null = null;
-  // the threshold of every pixel of the tile, once
-  const threshold = new Float32Array(TILE * TILE);
-  for (let y = 0; y < TILE; y++) for (let x = 0; x < TILE; x++) threshold[y * TILE + x] = ign(x, y);
-  // a speck's colour by how lit it is, 0..255 (little-endian RGBA)
-  const colour = new Uint32Array(256);
-  for (let i = 0; i < 256; i++) {
-    const [r, g, b] = speck(FINE.LEVEL_FAR + (1 - FINE.LEVEL_FAR) * (i / 255), options.paper) as [
-      number,
-      number,
-      number,
-    ];
-    colour[i] = (255 << 24) | (b << 16) | (g << 8) | r;
-  }
+  let k = grain(page);
+  let field: MoltyField | null = null;
+  let making: Promise<void> | null = null;
+  let alive = true;
+  let stop: (() => void) | null = null;
+  /** A front is out: the water keeps its waves (CARRY); else it is the device's own. */
+  let front = false;
+  /** The page's cell under the canvas's first one. */
+  let col = 0,
+    row = 0;
+  let laid = "";
+  const taps: Array<{ x: number; y: number; radius: number }> = [];
 
-  const frame = (now: number) => {
-    raf = 0;
-    const w = canvas.clientWidth,
-      h = canvas.clientHeight;
-    if (canvas.width !== w || canvas.height !== h || !image) {
-      canvas.width = w;
-      canvas.height = h;
-      image = ctx.createImageData(w, h);
-    }
-    const px = new Uint32Array(image.data.buffer);
-    px.fill(0);
+  /** What focuses the dust, in CSS px from the page's corner. */
+  const foci = (): Focus[] => {
     const o = page.getBoundingClientRect();
-    for (let k = waves.length - 1; k >= 0; k--) {
-      const wave = waves[k]!;
-      const t = (now - wave.t0) / 1000;
-      const r = wave.speed * t;
-      const height = heightAt(t);
-      if (height < FAINT) {
-        waves.splice(k, 1);
-        continue;
-      }
-      const cx = wave.x + o.left,
-        cy = wave.y + o.top;
-      const reach = 2.5 * wave.sigma,
-        outer = r + reach,
-        inner = Math.max(0, r - reach);
-      for (let y = Math.max(0, Math.floor(cy - outer)); y <= Math.min(h - 1, Math.ceil(cy + outer)); y++) {
-        const dy = y - cy;
-        const far = Math.sqrt(Math.max(0, outer * outer - dy * dy));
-        const near = Math.abs(dy) < inner ? Math.sqrt(inner * inner - dy * dy) : 0;
-        const ty = ((((y - Math.round(o.top)) % TILE) + TILE) % TILE) * TILE;
-        // the ring crosses this row in two runs (one where it is still a disc)
-        for (const [from, to] of near > 0
-          ? [
-              [cx - far, cx - near],
-              [cx + near, cx + far],
-            ]
-          : [[cx - far, cx + far]]) {
-          for (let x = Math.max(0, Math.floor(from!)); x <= Math.min(w - 1, Math.ceil(to!)); x++) {
-            const dx = x - cx;
-            const e = (Math.sqrt(dx * dx + dy * dy) - r) / wave.sigma;
-            const lit = height * Math.exp(-e * e);
-            if (lit < 0.02) continue;
-            const density =
-              DUST.far.density + (FINE.AMBIENT - DUST.far.density) * Math.min(1, 2 * lit) + FINE.PEAK * GATHER * lit;
-            const tx = (((x - Math.round(o.left)) % TILE) + TILE) % TILE;
-            if (threshold[ty + tx]! < density) px[y * w + x] = colour[Math.min(255, Math.round(lit * 255))]!;
-          }
-        }
-      }
+    return [...page.querySelectorAll<HTMLElement>("[data-dust-focus]")].map((el) => {
+      const r = el.getBoundingClientRect();
+      const f = FOCUS[el.dataset.dustFocus as keyof typeof FOCUS];
+      return {
+        x: r.left - o.left + r.width / 2,
+        y: r.top - o.top + r.height / 2,
+        rx: f.rx * r.width,
+        ry: f.ry * r.height,
+        stops: f.stops,
+      };
+    });
+  };
+  /** The denser dust shows by the same foci the field lays its own by: a mask on the second tile. */
+  const lay = () => {
+    const all = foci().filter((f) => f.rx > 0 && f.ry > 0);
+    const key = JSON.stringify(all);
+    if (key === laid) return;
+    laid = key;
+    const mask = all
+      .map(
+        (f) =>
+          `radial-gradient(ellipse ${f.rx}px ${f.ry}px at ${f.x}px ${f.y}px, ${f.stops.map(([t, a]) => `rgb(0 0 0 / ${a}) ${t * 100}%`).join(", ")}, transparent 100%)`,
+      )
+      .join(", ");
+    near.style.setProperty("-webkit-mask-image", mask || "none");
+    near.style.maskImage = mask || "none";
+    near.dataset.laid = "";
+    field?.focus(all.map((f) => ({ ...f, x: f.x * k, y: f.y * k, rx: f.rx * k, ry: f.ry * k })));
+  };
+  lay();
+  /** The page changed size: the dust is laid again (and, with water, a field that no longer
+   *  fits the window is dropped). */
+  let resized = lay;
+  const watch = new ResizeObserver(() => resized());
+  watch.observe(page);
+  if (options.still) return { destroy: () => watch.disconnect() };
+
+  /** The field as wide as the window (and a margin), at the page's grain: made when first
+   *  needed, and again when the window no longer is what it was made for. */
+  const stale = () =>
+    !!field &&
+    (grain(page) !== k ||
+      field.width !== (Math.ceil((innerWidth * k) / CELL.w) + 2 * MARGIN.cols) * CELL.w ||
+      field.height !== (Math.ceil((innerHeight * k) / CELL.h) + 2 * MARGIN.rows) * CELL.h);
+  const make = () =>
+    (making ??= loadModule()
+      .then((module) => instantiate<FieldExports>(module))
+      .then((x) => {
+        if (!alive) return;
+        k = grain(page);
+        const [r, g, b] = (getComputedStyle(page).backgroundColor.match(/[\d.]+/g) ?? []).map(Number);
+        field = MoltyField.open(x, {
+          cols: Math.ceil((innerWidth * k) / CELL.w) + 2 * MARGIN.cols,
+          rows: Math.ceil((innerHeight * k) / CELL.h) + 2 * MARGIN.rows,
+          background: ((r ?? 0) << 16) | ((g ?? 0) << 8) | (b ?? 0),
+          paper: options.paper,
+          // the page's speed in the field's own cells
+          c2: (speed() / (CELL.w / k)) ** 2,
+          ...CARRY,
+        });
+        if (!field) return;
+        canvas.width = field.width;
+        canvas.height = field.height;
+        canvas.style.width = `${field.width / k}px`;
+        canvas.style.height = `${field.height / k}px`;
+        laid = "";
+        lay();
+      })
+      .catch(() => {})); // without the module the page keeps its calm dust
+  const drop = () => {
+    sleep();
+    field?.destroy();
+    field = null;
+    making = null;
+    k = grain(page);
+  };
+  resized = () => {
+    if (stale()) drop();
+    lay();
+  };
+  /** A wave's speed: the device's own on the page's reference screen, CSS px a step. */
+  const speed = () => (Math.sqrt(WATER.c2) * (WATER.panel / k)) / WATER.cells;
+
+  /** The canvas stands over the viewport, on the page's own lattice: stood again (the water
+   *  carried along) when the page has scrolled past its margin. */
+  const stand = () => {
+    if (!field) return;
+    const o = page.getBoundingClientRect();
+    const at = () => [o.left + (col * CELL.w) / k, o.top + (row * CELL.h) / k] as const;
+    let [x, y] = at();
+    if (x > 0 || y > 0 || x + field.width / k < innerWidth || y + field.height / k < innerHeight) {
+      col = Math.floor((-o.left * k) / CELL.w) - MARGIN.cols;
+      row = Math.floor((-o.top * k) / CELL.h) - MARGIN.rows;
+      field.place(col, row);
+      [x, y] = at();
     }
-    ctx.putImageData(image, 0, 0);
-    if (waves.length && !document.hidden) raf = requestAnimationFrame(frame);
+    canvas.style.translate = `${x}px ${y}px`;
+  };
+
+  const frame = (ms: number) => {
+    if (!field) return;
+    stand();
+    const state = field.step(ms / 1000);
+    front = state === "front";
+    const boxes = field.draw();
+    if (boxes.length) {
+      const image = new ImageData(field.pixels() as Uint8ClampedArray<ArrayBuffer>, field.width, field.height);
+      for (let i = 0; i < boxes.length; i += 4)
+        ctx.putImageData(image, 0, 0, boxes[i]!, boxes[i + 1]!, boxes[i + 2]!, boxes[i + 3]!);
+    }
+    if (state === "flat") sleep();
+  };
+  /** The water is flat: the canvas is clear, the page's own tiles show. */
+  const sleep = () => {
+    stop?.();
+    stop = null;
+    front = false;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
   };
 
   const tap = (e: PointerEvent) => {
     if (e.button !== 0 && e.pointerType === "mouse") return;
-    // on a screen or a word: its own water's speed, so the two rings are one
-    // (a word's round window takes no pointer and is mostly unseen: it counts where the tap
-    // landed on its heading)
-    const on = (el: Element | null | undefined) => {
-      const r = el?.getBoundingClientRect();
-      return !!r && e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
-    };
-    const screen =
-      (e.target as Element | null)?.closest?.("[data-molty-screen]") ??
-      [...document.querySelectorAll("[data-molty-word]")].find((word) => on(word.parentElement));
-    const width = screen ? screen.getBoundingClientRect().width : NOMINAL;
+    // on a screen: the bump its own finger makes there (mole_fluid.c: by the glass's radius);
+    // on the page: the same, of the page's reference screen
+    const screen = (e.target as Element | null)?.closest?.("[data-molty-screen]");
     const o = page.getBoundingClientRect();
-    waves.push({
+    taps.push({
       x: e.clientX - o.left,
       y: e.clientY - o.top,
-      speed: WAVE_SPEED * width,
-      sigma: CREST * width,
-      t0: performance.now(),
+      radius: (WATER.tapRadius * (screen ? screen.getBoundingClientRect().width : WATER.panel / k)) / 2,
     });
-    if (waves.length > 8) waves.shift();
-    if (!raf) raf = requestAnimationFrame(frame);
+    if (stale()) drop();
+    void make().then(() => {
+      if (!field || !alive) return;
+      lay();
+      stand();
+      for (const t of taps.splice(0)) field.tap(t.x * k, t.y * k, WATER.tap, t.radius * k);
+      front = true;
+      stop ??= onFrame(frame, true);
+    });
   };
-  const resume = () => {
-    if (waves.length && !raf && !document.hidden) raf = requestAnimationFrame(frame);
-  };
+  const warm = () => void make();
   window.addEventListener("pointerdown", tap, true);
-  document.addEventListener("visibilitychange", resume);
+  window.addEventListener("pointermove", warm, { once: true, passive: true });
+
+  setPageWater({
+    get speed() {
+      return speed();
+    },
+    get leak() {
+      return front ? CARRY.leak : WATER.leak;
+    },
+    get damp() {
+      return front ? CARRY.damp : WATER.damp;
+    },
+    get moving() {
+      return !!stop;
+    },
+    under(xy, box, px) {
+      if (!field || !stop) return null;
+      const o = page.getBoundingClientRect();
+      return field.sample(xy, (box.left - o.left) * k, (box.top - o.top) * k, (box.width / px) * k);
+    },
+  });
 
   return {
     destroy() {
+      alive = false;
       window.removeEventListener("pointerdown", tap, true);
-      document.removeEventListener("visibilitychange", resume);
-      cancelAnimationFrame(raf);
-      waves.length = 0;
-      if (origin === page) origin = null;
+      window.removeEventListener("pointermove", warm);
+      watch.disconnect();
+      setPageWater(null);
+      drop();
     },
   };
 }

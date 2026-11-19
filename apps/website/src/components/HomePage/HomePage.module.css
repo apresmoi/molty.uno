@@ -4,7 +4,7 @@
    word draws, and stays readable without it. */
 .root {
   position: relative;
-  background: var(--m-bg) var(--m-dust) repeat 0 0;
+  background: var(--m-bg) var(--m-dust) repeat 0 0 / var(--m-dust-size);
   font: var(--m-text-md) / 1.6 var(--m-font-mono);
   /* the landing is a stage, not a document: only the pairing message selects (it is meant to be copied) */
   user-select: none;
@@ -45,7 +45,7 @@
 .heroBody {
   /* the Molty's dome; it sits a little below the wordmark and reaches past its row below
      only (the copy sets the row), so the hero still fits a 800px screen */
-  --hero-slot: min(420px, 38vw, 44svh);
+  --hero-slot: var(--m-screen);
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, var(--hero-slot));
   align-items: center;

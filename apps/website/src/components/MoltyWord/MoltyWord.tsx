@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { mountMoltyScreen, type MoltyScreenHandle } from "../../services/molty-screen";
-import { WORDS_URL, WORD_PX } from "../../features/molty/content";
+import { grain } from "../../services/page-water";
+import { WORDS_URL, WORD_PX, WORD_PX_MAX } from "../../features/molty/content";
 import styles from "./MoltyWord.module.css";
 
 /** A heading's word as the device draws a scene: thin sharp lines the dust gathers along, on a
  *  round window of the firmware's renderer playing the word's layout (config/words.mjs). It sits
  *  centred on its heading (the parent positions it; `--word-canvas` is its size) and takes no
- *  pointer: a tap on the page that lands on it is its finger. It runs while it is near the
- *  viewport and is put away when far. `data-word`: "live" once it draws (the heading's own text
+ *  pointer. Its dust is the page's grain (the window has as many pixels as the page's dust has
+ *  across it) and its water is the page's: a wave loosens its lines where the crest passes and
+ *  they sharpen back, a tap on it most. It runs while it is near the viewport and is put away
+ *  when far. `data-word`: "live" once it draws (the heading's own text
  *  then steps aside), "off" if the renderer cannot load (the text stays). */
 export function MoltyWord({ word }: { word: string }) {
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -21,12 +24,17 @@ export function MoltyWord({ word }: { word: string }) {
     const up = () => {
       if (handle || busy) return;
       busy = true;
-      mountMoltyScreen(canvas.current!, {
+      // a pixel of the window is a pixel of the page's dust
+      const el = canvas.current!;
+      const px =
+        Math.min(WORD_PX_MAX, Math.round((el.clientWidth * grain(el.closest("[data-water]"))) / 2) * 2) || WORD_PX;
+      el.width = el.height = px;
+      mountMoltyScreen(el, {
         scenes: WORDS_URL,
-        px: WORD_PX,
+        px,
         boot: false,
         scene: { layout: word },
-        pageTaps: true,
+        heading: true,
         reducedMotion,
       }).then(
         (h) => {

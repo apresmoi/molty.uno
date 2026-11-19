@@ -4,14 +4,12 @@
 //   the entrance  the whole window from the load on, a frame every 200 ms, at 1280 and 390 px:
 //                 the device turns in, the cat walks in from beyond the window's right edge,
 //                 across the page, into its screen, and sits: e2e-out/molty-entrance-<width>-sheet.png
-//   one water     a tap inside the hero's screen, a frame every 200 ms: the ring crosses the rim
-//                 and goes on through the page (e2e-out/molty-ripple-sheet.png); then a tap on
-//                 the page beside it: the ring goes through the device and on
-//                 (molty-through-sheet.png, molty-through.webp)
 //   frame rate    frames the hero's screen draws a second (each putImageData on its canvas is
-//                 one) while the page is tapped every 2 s, the longest gap between two, and the
-//                 main thread's time a frame: at 1280 and 390 px, as is and with the CPU slowed
-//                 4x. Fails under 30 a second.
+//                 one) while the page is tapped every 2 s (a wave is always out: the page's
+//                 field, the title and the screen all draw), the longest gap between two, and
+//                 the main thread's time a frame: at 1280 and 390 px, as is and with the CPU
+//                 slowed 4x. Fails under 30 a second.
+//   (the page's water itself, its headings and a change of picture: e2e/water.mjs)
 //   also          nothing draws out of view; reduced motion draws stills only.
 //   node e2e/molty.mjs [baseUrl=http://localhost:4330]
 import { chromium } from 'playwright';
@@ -73,12 +71,6 @@ async function sheet({ tiles, w, h }, cols, path) {
     .png()
     .toFile(path);
 }
-const differ = async (a, b) => {
-  const [x, y] = await Promise.all([a, b].map((f) => sharp(f).raw().toBuffer()));
-  let n = 0;
-  for (let i = 0; i < x.length; i += 4) if (Math.abs(x[i] - y[i]) + Math.abs(x[i + 1] - y[i + 1]) + Math.abs(x[i + 2] - y[i + 2]) > 50) n++;
-  return n;
-};
 
 // screenshots
 for (const theme of ['dark', 'light'])
@@ -118,53 +110,6 @@ for (const [width, height] of [
   const ok = first && first.nose >= width && crossing && outside.at(-1).nose > box.x && outside.at(-1).nose < box.x + box.width && !outside.some((d) => d.wide);
   if (!ok) failures.push(`the entrance at ${width} px: first nose at ${first?.nose?.toFixed(0)} (window ${width}), crossing ${!!crossing}, ends at ${outside.at(-1)?.nose?.toFixed(0)}, page wider ${outside.some((d) => d.wide)}`);
   else console.log(`ok   the entrance at ${width} px: the cat starts beyond the window's edge (nose at ${first.nose.toFixed(0)} px), walks in and sits in its screen ${seconds.toFixed(1)} s after its nose crosses the edge; no scrollbar`);
-  await ctx.close();
-}
-
-// one water: a tap inside the screen goes on through the page, a tap on the page goes through the screen
-{
-  const { ctx, page } = await open(1280, 800, 'dark');
-  const box = await page.locator(HERO).boundingBox();
-  const cx = box.x + box.width / 2,
-    cy = box.y + box.height / 2,
-    r = box.width / 2;
-  /** The page's ring: its lit pixels outside the device, and how many of them lie right of the device's middle. */
-  const ring = () =>
-    page.evaluate(
-      ([cx, cy, r]) => {
-        const c = document.querySelector('[data-page-water]');
-        const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
-        let out = 0,
-          past = 0;
-        for (let y = 0; y < c.height; y++)
-          for (let x = 0; x < c.width; x++)
-            if (d[(y * c.width + x) * 4 + 3] && Math.hypot(x - cx, y - cy) > 1.1 * r) {
-              out++;
-              if (x > cx) past++;
-            }
-        return { out, past };
-      },
-      [cx, cy, r],
-    );
-  const wide = { x: box.x - box.width * 0.95, y: box.y - box.height * 0.45, width: 1280 - (box.x - box.width * 0.95), height: box.height * 1.6 };
-  // inside the glass: the ring crosses the rim outward
-  await page.mouse.click(cx, cy + r * 0.1);
-  const inside = await strip(page, wide, 12, 200, 320);
-  const a = await ring();
-  await sheet(inside, 6, `${OUT}molty-ripple-sheet.png`);
-  await page.waitForTimeout(7000);
-  // on the page, left of the device: the ring reaches the device, goes through it and on
-  await page.mouse.click(box.x - box.width * 0.6, cy);
-  await page.waitForTimeout(3600); // its ring is past the device's middle, above and below it
-  const b = await ring();
-  await page.waitForTimeout(8000);
-  await page.mouse.click(box.x - box.width * 0.6, cy);
-  const through = await strip(page, wide, 24, 200, 320);
-  await sheet(through, 6, `${OUT}molty-through-sheet.png`);
-  await sharp(through.tiles, { join: { animated: true } }).webp({ delay: 200, loop: 0 }).toFile(`${OUT}molty-through.webp`);
-  if (a.out < 300) failures.push(`a tap inside the screen did not go on through the page (${a.out} px of its ring outside the device)`);
-  else if (b.past < 100) failures.push(`a tap on the page did not get past the device (${b.past} px of its ring beyond the device's middle)`);
-  else console.log(`ok   one water: a tap inside the screen crosses the rim (${a.out} px of its ring outside), a tap on the page passes the device (${b.past} px beyond its middle)`);
   await ctx.close();
 }
 

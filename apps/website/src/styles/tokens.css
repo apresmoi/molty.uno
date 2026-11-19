@@ -40,9 +40,14 @@
   --m-overlay: rgba(0, 0, 0, 0.82);
   --m-veil: rgba(0, 0, 0, 0.6);
   /* the page's water, as tiles (scripts/dust-tile.mjs): loose dust everywhere, and the dust in
-     focus round a screen or a word */
+     focus round a screen or a word. A tile is 1040 of a screen's 466 pixels a side, shown at the
+     size the page's reference screen (the landing's hero) shows them: one grain inside the
+     glass and outside it. Whole 4 px where the browser can round: the tiles then repeat on whole
+     device pixels, and the water's canvas stays on their lattice down the page. */
   --m-dust: url("../assets/dust/far-dark.png");
   --m-dust-near: url("../assets/dust/near-dark.png");
+  --m-screen: min(420px, 38vw, 44svh);
+  --m-dust-size: calc(var(--m-screen) * 1040 / 466);
   /* a device's domed glass (GlassDome), over the dark screen in both themes: sheen, crisp
      highlight, opposite rim, fresnel edge */
   --m-glass-sheen: rgba(255, 255, 255, 0.1);
@@ -88,12 +93,26 @@
   --m-stack-glass: min(84vw, 420px, 40svh);
   /* a section's word on a phone held upright, where each section is one screen */
 }
+/* the landing stacked: its hero is the stack's slot */
+@media (max-width: 46rem), (max-width: 68rem) and (orientation: portrait) {
+  :root,
+  :root[data-theme] {
+    --m-screen: min(100vw - 2 * var(--m-gutter), 520px, 44svh);
+  }
+}
 @media (max-width: 46rem) {
   /* [data-theme] matches the dark block's specificity */
   :root,
   :root[data-theme] {
     --m-stack-slot: min(100%, 400px, 40svh);
     --m-stack-glass: min(84vw, 340px, 40svh);
+    --m-screen: min(100vw - 2 * var(--m-gutter), 400px, 40svh);
+  }
+}
+@supports (width: round(1px, 4px)) {
+  :root,
+  :root[data-theme] {
+    --m-dust-size: round(calc(var(--m-screen) * 1040 / 466), 4px);
   }
 }
 :root[data-theme="light"] {

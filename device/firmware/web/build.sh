@@ -6,7 +6,8 @@
 #   build.sh emscripten       the pinned toolchain's version
 # cJSON comes from ESP-IDF, as for the host tests: set IDF_PATH (default ~/esp/esp-idf).
 # Both builds: no fused multiply-adds, no errno from the maths (as main/CMakeLists.txt builds the fluid), so the
-# floats round the same way in both. The native one is -O2 as the device, the module -Os (smaller, as fast).
+# floats round the same way in both. Both are -O2, as the device (the module was -Os: a sixth smaller, and a sixth
+# slower where it counts: a slow phone with a wave out on the page, a heading's wide window and the page's field drawing).
 # Do not run this by hand for the website: `make web-molty` builds, checks the two against each other and installs.
 set -euo pipefail
 
@@ -21,8 +22,8 @@ OUT="${2:?out dir}"
 mkdir -p "$OUT"
 
 SRCS=(
-  "$HERE/web_molty.c" "$HERE/web_sdk.c"   # web_cat.c below is main/creature/creature_clip.c
-  "$MAIN/fluid/fluid_director.c" "$MAIN/fluid/fluid_ask.c" "$MAIN/fluid/fluid_askview.c" "$MAIN/fluid/fluid_sim.c"
+  "$HERE/web_molty.c" "$HERE/web_sdk.c" "$HERE/web_field.c"   # web_cat.c below is main/creature/creature_clip.c,
+  "$MAIN/fluid/fluid_director.c" "$MAIN/fluid/fluid_ask.c" "$MAIN/fluid/fluid_askview.c" "$HERE/web_sim.c"   # web_sim.c main/fluid/fluid_sim.c
   "$MAIN/fluid/fluid_target.c" "$MAIN/fluid/fluid_draw.c" "$MAIN/fluid/fluid_fine.c" "$MAIN/fluid/glyph_rsvp.c"
   "$MAIN/fluid/glyph_font.c"
   "$MAIN/creature/cute_spec.c" "$MAIN/creature/cute_rig.c" "$MAIN/creature/mood_engine.c" "$MAIN/creature/rig_geo.c"
@@ -51,7 +52,7 @@ host)
 wasm)
   have="$(emcc --version 2>/dev/null | sed -n '1s/.* \([0-9][0-9.]*\)\(-git\)\{0,1\}$/\1/p')"
   [ "$have" = "$EMSCRIPTEN" ] || { echo "web/build.sh: emscripten $EMSCRIPTEN wanted, '${have:-none}' found (brew install emscripten)" >&2; exit 2; }
-  emcc -Os "${CFLAGS[@]}" "${INCS[@]}" "${SRCS[@]}" \
+  emcc -O2 "${CFLAGS[@]}" "${INCS[@]}" "${SRCS[@]}" \
     --no-entry -sSTANDALONE_WASM=1 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=16777216 -sSTACK_SIZE=262144 \
     -sMALLOC=emmalloc -sFILESYSTEM=0 -sERROR_ON_UNDEFINED_SYMBOLS=1 \
     -o "$OUT/molty.wasm"

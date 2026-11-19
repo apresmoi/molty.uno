@@ -1,6 +1,12 @@
 export { ENTER_STARTS, mountMoltyScreen, warmMoltyScreen } from "./screen";
 export { runProgram } from "./program";
-export { PANEL } from "./core";
+export { PANEL, instantiate } from "./core";
+export { CELL, MoltyField, TILE, WATER } from "./field";
+export { loadModule } from "./module";
+export { onFrame } from "./clock";
+export { setPageWater } from "./water";
 export type { MoltyScreenHandle, MoltyScreenOptions } from "./screen";
 export type { Program, ProgramRun } from "./program";
 export type { MoltyQuestion, MoltyState } from "./core";
+export type { FieldExports, Focus } from "./field";
+export type { PageWater } from "./water";

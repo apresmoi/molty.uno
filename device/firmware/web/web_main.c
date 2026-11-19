@@ -37,7 +37,7 @@ int   wm_entering(void);
 float wm_across(void);
 float wm_back(void);
 const uint8_t *wm_cat_pixels(void);
-void  wm_pan(float across);
+int   wm_pan(float across);
 int   wm_state(const char *json);
 void  wm_listen(int on);
 void  wm_listen_level(float level);

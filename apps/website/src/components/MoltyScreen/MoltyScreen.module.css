@@ -8,24 +8,6 @@
   inset: 0;
   display: block;
 }
-/* the page's dust comes into focus round the device: the ordered dust, fading in from far off
-   to the bezel (under the page's text; there at first paint, with the page's own dust) */
-.root::before {
-  content: "";
-  position: absolute;
-  z-index: -1;
-  inset: -80%;
-  border-radius: 50%;
-  background: var(--m-dust-near) repeat;
-  mask-image: radial-gradient(
-    circle closest-side,
-    var(--m-bg) 38%,
-    color-mix(in srgb, var(--m-bg) 45%, transparent) 55%,
-    color-mix(in srgb, var(--m-bg) 12%, transparent) 78%,
-    transparent 100%
-  );
-  pointer-events: none;
-}
 .panel,
 .still,
 .canvas {
