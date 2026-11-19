@@ -138,10 +138,10 @@ function displayMd(doc, skill, files) {
   return out.join('\n') + '\n';
 }
 
-/** Where a skill's package goes: packages/<id>/<id>.json for a skill under the repo's skills/, else its own build/. */
+/** Where a folder's package goes: packages/<id>/<id>.json for one under the repo's skills/ or moltys/, else its own build/. */
 export function packagePath(dir, id) {
   const up = resolve(dir, '..');
-  return basename(up) === 'skills' && existsSync(join(up, '..', 'packages')) ? join(up, '..', 'packages', id, `${id}.json`) : join(resolve(dir), 'build', `${id}.json`);
+  return ['skills', 'moltys'].includes(basename(up)) && existsSync(join(up, '..', 'packages')) ? join(up, '..', 'packages', id, `${id}.json`) : join(resolve(dir), 'build', `${id}.json`);
 }
 
 /**
