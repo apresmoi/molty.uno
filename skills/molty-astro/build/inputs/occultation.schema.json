@@ -1,0 +1,65 @@
+{
+  "title": "astrology occultation: the params of scene.play",
+  "type": "object",
+  "required": [
+    "path",
+    "planet"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "type": "array",
+      "maxItems": 14,
+      "items": {
+        "type": "object",
+        "required": [
+          "x",
+          "y",
+          "on",
+          "off"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "x": {
+            "type": "number",
+            "minimum": -2,
+            "maximum": 2,
+            "description": "Offset on the sky from the still body, east to the left."
+          },
+          "y": {
+            "type": "number",
+            "minimum": -2,
+            "maximum": 2,
+            "description": "Offset on the sky from the still body, north up."
+          },
+          "on": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 600,
+            "description": "When this step shows: 0.3 + 5.4 i / 14 for step i."
+          },
+          "off": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 600,
+            "description": "When the next step takes over (the last one: 6)."
+          }
+        }
+      },
+      "description": "The Moon against the planet in 14 steps, 2.2 hours either side of the closest moment. Scale: 0.45 over the Moon's angular radius."
+    },
+    "planet": {
+      "enum": [
+        "moon",
+        "moon-red",
+        "sun",
+        "mercury",
+        "venus",
+        "mars",
+        "jupiter",
+        "saturn"
+      ],
+      "description": "The planet it covers: venus, mars, jupiter or saturn."
+    }
+  }
+}

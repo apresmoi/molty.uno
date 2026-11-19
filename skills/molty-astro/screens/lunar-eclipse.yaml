@@ -1,0 +1,50 @@
+# yaml-language-server: $schema=../../../schema/display-2-screen.json
+about: The Moon crossing the Earth's shadow, turning red inside it.
+duration: 6
+inputs:
+  path:
+    type: list
+    max: 14
+    about: "The Moon against the centre of the Earth's shadow in 14 steps, 3.2 hours either side of the peak. Scale: 0.8 over the penumbra's radius."
+    of:
+      x: { type: number, min: -2, max: 2, about: "Offset on the sky from the still body, east to the left." }
+      y: { type: number, min: -2, max: 2, about: "Offset on the sky from the still body, north up." }
+      from: { type: seconds, sent_as: "on", about: "When this step shows: 0.3 + 5.4 i / 14 for step i." }
+      until: { type: seconds, sent_as: "off", about: "When the next step takes over (the last one: 6)." }
+      map: { type: asset, of: assets/maps, sent_as: img, about: "moon-red while this step is inside the umbra, else moon." }
+    example:
+      - { x: 1.02, y: 0.38, from: 0.3, until: 0.69, map: moon }
+      - { x: 0.86, y: 0.35, from: 0.69, until: 1.07, map: moon }
+      - { x: 0.7, y: 0.32, from: 1.07, until: 1.46, map: moon }
+      - { x: 0.53, y: 0.29, from: 1.46, until: 1.84, map: moon }
+      - { x: 0.37, y: 0.27, from: 1.84, until: 2.23, map: moon }
+      - { x: 0.21, y: 0.24, from: 2.23, until: 2.61, map: moon-red }
+      - { x: 0.05, y: 0.21, from: 2.61, until: 3, map: moon-red }
+      - { x: -0.12, y: 0.18, from: 3, until: 3.39, map: moon-red }
+      - { x: -0.28, y: 0.15, from: 3.39, until: 3.77, map: moon-red }
+      - { x: -0.44, y: 0.12, from: 3.77, until: 4.16, map: moon }
+      - { x: -0.6, y: 0.09, from: 4.16, until: 4.54, map: moon }
+      - { x: -0.76, y: 0.06, from: 4.54, until: 4.93, map: moon }
+      - { x: -0.93, y: 0.03, from: 4.93, until: 5.31, map: moon }
+      - { x: -1.09, y: 0, from: 5.31, until: 6, map: moon }
+  umbra:
+    type: distance
+    about: The radius of the Earth's full shadow.
+    example: 0.451
+  penumbra:
+    type: distance
+    sent_as: pen
+    about: The radius of the Earth's partial shadow (0.8 at this scale).
+    example: 0.8
+  moon_size:
+    type: distance
+    sent_as: moon_r
+    about: The Moon's radius at the same scale.
+    example: 0.167
+draw:
+  - circle: { radius: "{{ penumbra }}", color: dim }
+  - circle: { radius: "{{ umbra }}", color: umbra_red }
+  # draw before for: the built package keeps the order written here, and this is the order it has always had
+  - draw:
+      - globe: { at: { x: "{{ step.x }}", y: "{{ step.y }}" }, show: { from: "{{ step.from }}", until: "{{ step.until }}" }, radius: "{{ moon_size }}", map: "{{ step.map }}" }
+    for: step in path

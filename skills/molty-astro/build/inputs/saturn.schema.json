@@ -1,0 +1,39 @@
+{
+  "title": "astrology saturn: the params of scene.play",
+  "type": "object",
+  "required": [
+    "lit",
+    "side",
+    "rings"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "lit": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "The fraction of its disc that is lit."
+    },
+    "side": {
+      "type": "number",
+      "minimum": -1,
+      "maximum": 1,
+      "description": "1 when Saturn is east of the Sun (lit on the right), else -1."
+    },
+    "rings": {
+      "enum": [
+        "rings-p3",
+        "rings-n3",
+        "rings-p9",
+        "rings-n9",
+        "rings-p15",
+        "rings-n15",
+        "rings-p21",
+        "rings-n21",
+        "rings-p27",
+        "rings-n27"
+      ],
+      "description": "The ring tilt seen from Earth: rings-p<t> for a tilt of 0 or more, rings-n<t> below 0, t the nearest of 3, 9, 15, 21, 27 degrees."
+    }
+  }
+}

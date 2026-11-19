@@ -1,0 +1,81 @@
+# yaml-language-server: $schema=../../../schema/display-2-screen.json
+about: One sign up close, its planets on its degree dial, each lit in turn while its reading shows. Molty opens it itself when a sign is tapped on the chart.
+duration: hold   # the chart opens it for its reading's length; sent by hand, give that as ttl_s and queue the chart
+inputs:
+  sign:
+    type: asset
+    of: assets/signs
+    about: "The sign, lower case. Also names the centre's tap zone in the tap event."
+    example: leo
+  color:
+    type: color
+    sent_as: c
+    about: "The sign's color: #ff9a7a, #a8d890, #9fc0ff for sign index (Aries 0) mod 3."
+    example: "#a8d890"
+  name:
+    type: text
+    max: 11
+    about: The sign's name in capitals.
+    example: LEO
+  name_x:
+    type: number
+    min: -1
+    max: 1
+    sent_as: nx
+    about: "The name's centre: the name and the ruler's symbol after it (0.13 wide, 0.06 apart) make one row, centred. A letter is 6/7 of the type size wide, the last 5/7."
+    example: -0.095
+  name_size:
+    type: distance
+    sent_as: ns
+    about: The name's type size, 0.13, or 0.11 past 8 letters.
+    example: 0.13
+  reading:
+    type: reading
+    sent_as: say
+    about: What a tap on the sign shows, the same reading as on the chart.
+    example: "Leo: warm, proud fire, ruled by the Sun. Moon, Mars and Jupiter here: with warmth and a big heart, you live out your feelings, your drive and your luck."
+  ruler:
+    type: list
+    max: 1
+    about: "The sign's ruler, drawn after its name. Modern rulers from Aries on: Mars, Venus, Mercury, Moon, Sun, Mercury, Venus, Pluto, Jupiter, Saturn, Uranus, Neptune."
+    of:
+      symbol: { type: asset, of: assets/planets, sent_as: g, about: "The ruler's symbol: g-mars ..." }
+      x: { type: number, min: -1, max: 1, about: "Its centre: the row's right end less half its width (0.065)." }
+      color: { type: color, sent_as: c, about: "The ruler's color, as on the chart." }
+    example:
+      - { symbol: g-sun, x: 0.188, color: "#ffd678" }
+  bodies:
+    type: list
+    max: 10
+    about: Each planet in the sign, by degree.
+    of:
+      symbol: { type: asset, of: assets/planets, sent_as: g, about: "The planet's symbol: g-moon ..." }
+      angle: { type: angle, sent_as: da, about: "Its place on the dial: 210 - 8 x its degree in the sign (0 lower left, over the top, 30 lower right), kept at least 28 apart and within 210 to -30." }
+      color: { type: color, sent_as: c, about: "Its color, as on the chart." }
+      dim_color: { type: color, sent_as: d, about: "Its color at 60 percent, for when it is not being read." }
+      from: { type: seconds, sent_as: "on", about: "When Molty starts reading it: about 2.6 words a second and 0.3 s a sentence, after 1.2 s and the sign's own line." }
+      until: { type: seconds, sent_as: "off", about: When Molty has read it. }
+      reading: { type: reading, sent_as: say, about: What a tap on it shows. }
+      id: { type: text, about: "Its name, lower case: names it in the tap event." }
+    example:
+      - { symbol: g-moon, angle: 132.12, color: "#e6e6e0", dim_color: "#8a8a86", from: 4.58, until: 12.48, reading: "Moon in Leo: you feel at home with warmth and a big heart. Sun adds friction that pushes you.", id: moon }
+      - { symbol: g-mars, angle: 57.51, color: "#ff7a55", dim_color: "#994933", from: 12.48, until: 20.01, reading: "Mars in Leo: you go after things by being seen and playing. Mercury adds friction that pushes you.", id: mars }
+      - { symbol: g-jupiter, angle: 14.58, color: "#ffc266", dim_color: "#99743d", from: 20.01, until: 26.76, reading: "Jupiter in Leo: luck finds you with warmth and a big heart. Venus lends a hand.", id: jupiter }
+draw:
+  - arc: { radius: 0.86, start: -30, end: 210, width: hairline, color: grid }
+  - spoke: { radius: 0.82, length: 0.08, angle: 210, width: hairline, color: grid }
+  - spoke: { radius: 0.82, length: 0.08, angle: -30, width: hairline, color: grid }
+  - symbol: { asset: "{{ sign }}", size: 0.66, at: { y: 0.08 }, color: "{{ color }}" }
+  - label: { text: "{{ name }}", at: { x: "{{ name_x }}", y: -0.42 }, size: "{{ name_size }}", color: ink }
+  - for: planet in ruler
+    draw:
+      - symbol: { asset: "{{ planet.symbol }}", size: 0.13, at: { x: "{{ planet.x }}", y: -0.42 }, color: "{{ planet.color }}" }
+  - for: body in bodies
+    draw:
+      - spoke: { radius: 0.79, length: 0.06, angle: "{{ body.angle }}", width: hairline, color: "{{ body.dim_color }}" }
+      # dim and small before and after its reading, lit and larger during it
+      - symbol: { show: { until: "{{ body.from }}" }, asset: "{{ body.symbol }}", size: 0.13, at: { angle: "{{ body.angle }}", distance: 0.67 }, color: "{{ body.dim_color }}" }
+      - symbol: { show: { from: "{{ body.from }}", until: "{{ body.until }}" }, asset: "{{ body.symbol }}", size: 0.2, at: { angle: "{{ body.angle }}", distance: 0.67 }, color: "{{ body.color }}" }
+      - symbol: { show: { from: "{{ body.until }}" }, asset: "{{ body.symbol }}", size: 0.13, at: { angle: "{{ body.angle }}", distance: 0.67 }, color: "{{ body.dim_color }}" }
+      - tap_zone: { at: { angle: "{{ body.angle }}", distance: 0.67 }, radius: 0.1, reads: "{{ body.reading }}", id: "{{ body.id }}" }
+  - tap_zone: { at: { y: 0.08 }, radius: 0.32, reads: "{{ reading }}", id: "{{ sign }}" }

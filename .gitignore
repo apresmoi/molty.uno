@@ -2,6 +2,9 @@
 build/
 # ...but /build/'s source (the website feature for molty.uno/build) is code
 !apps/website/src/features/build/
+# ...and a display v2 skill's build/ holds the docs its SKILL.md links to (docs/DISPLAY.md)
+!skills/*/build/
+!docs/examples/*/build/
 dist/
 bin/
 *.o

@@ -269,7 +269,7 @@ Compared over the full reels (every scene, mood and gesture) against the approve
 ## 12. Rigged creatures (clips, routes, dots)
 
 A creature package may carry a **rig** instead of channel layers: a skeleton, its body as rounded primitives per bone, baked
-clips, and the route map between its poses. The cat (2.0.0) is the first: modelled, rigged and animated in Blender, every clip baked, with an authored transition between every pair of resting poses. Its channel layers stay empty; `gestures` and `moods` only declare what it plays (and their
+clips, and the route map between its poses. The cat (2.0.0) is the first: modelled, rigged and animated in Blender, every clip baked, with an authored transition between every pair of resting poses. Its source is the folder `moltys/cat/`, and [The Molty format](CREATURE.md) is how one is made. Its channel layers stay empty; `gestures` and `moods` only declare what it plays (and their
 lengths for the mood engine), so agents and the console see the same names as for any creature. It has its own reference player in JavaScript and a
 C port on the device.
 

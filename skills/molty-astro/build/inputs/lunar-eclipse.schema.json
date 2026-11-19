@@ -1,0 +1,86 @@
+{
+  "title": "astrology lunar-eclipse: the params of scene.play",
+  "type": "object",
+  "required": [
+    "path",
+    "umbra",
+    "pen",
+    "moon_r"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "type": "array",
+      "maxItems": 14,
+      "items": {
+        "type": "object",
+        "required": [
+          "x",
+          "y",
+          "on",
+          "off",
+          "img"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "x": {
+            "type": "number",
+            "minimum": -2,
+            "maximum": 2,
+            "description": "Offset on the sky from the still body, east to the left."
+          },
+          "y": {
+            "type": "number",
+            "minimum": -2,
+            "maximum": 2,
+            "description": "Offset on the sky from the still body, north up."
+          },
+          "on": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 600,
+            "description": "When this step shows: 0.3 + 5.4 i / 14 for step i."
+          },
+          "off": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 600,
+            "description": "When the next step takes over (the last one: 6)."
+          },
+          "img": {
+            "enum": [
+              "moon",
+              "moon-red",
+              "sun",
+              "mercury",
+              "venus",
+              "mars",
+              "jupiter",
+              "saturn"
+            ],
+            "description": "moon-red while this step is inside the umbra, else moon."
+          }
+        }
+      },
+      "description": "The Moon against the centre of the Earth's shadow in 14 steps, 3.2 hours either side of the peak. Scale: 0.8 over the penumbra's radius."
+    },
+    "umbra": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 2,
+      "description": "The radius of the Earth's full shadow."
+    },
+    "pen": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 2,
+      "description": "The radius of the Earth's partial shadow (0.8 at this scale)."
+    },
+    "moon_r": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 2,
+      "description": "The Moon's radius at the same scale."
+    }
+  }
+}

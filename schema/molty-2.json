@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/apresmoi/molty.uno/main/schema/molty-2.json",
+  "title": "A Molty",
+  "description": "molty.json: who a Molty is. Its body and its actions are in a file beside it (a .glb or .gltf from any 3D tool) or written out here by hand. Guide: docs/CREATURE.md. An action is picked up by its name: a mood plays the action of the same name, and so does a gesture.",
+  "type": "object",
+  "required": ["molty", "id", "name", "version", "about", "look", "body", "colors", "moods"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string", "description": "Where this schema lives, for editors." },
+    "molty": { "const": "molty/2", "description": "Always molty/2.", "errorMessage": "must be molty/2" },
+    "id": { "type": "string", "pattern": "^[a-z0-9-]{1,32}$", "description": "Its install id and file name.", "errorMessage": "must be 1 to 32 of a-z, 0-9 and -" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 32, "description": "Its name, as people see it." },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$", "description": "X.Y.Z. Raise it when the built Molty changes.", "errorMessage": "must be X.Y.Z" },
+    "about": { "type": "string", "pattern": "^[\\x20-\\x7e]{1,160}$", "description": "One line for the catalog: what an agent says to offer it.", "errorMessage": "must be one line of 1 to 160 plain ASCII characters" },
+    "look": { "type": "string", "pattern": "^[\\x20-\\x7e]{1,240}$", "description": "How it looks, in a sentence or two, for the agent that speaks through it.", "errorMessage": "must be 1 to 240 plain ASCII characters" },
+    "body": {
+      "anyOf": [{ "type": "string", "pattern": "\\.(glb|gltf)$" }, { "$ref": "#/$defs/body" }],
+      "description": "The body and its actions: the name of a .glb or .gltf file in this folder, or the body itself written here (bones, shapes, actions).",
+      "errorMessage": "must be the name of a .glb or .gltf file in this folder, or the body written out: { bones, shapes, actions }"
+    },
+    "colors": { "type": "object", "minProperties": 1, "propertyNames": { "$ref": "#/$defs/name" }, "additionalProperties": { "type": "string", "pattern": "^#[0-9a-f]{6}$", "errorMessage": "must be #rrggbb in lower case" }, "description": "Its colors by name. A shape says which one it wears." },
+    "poses": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "$ref": "#/$defs/name" }, "description": "The ways it can hold itself, the one it starts in first: sit, stand, walk. Each rests in the action named <pose>_idle, or <pose>; the first one in idle. Left out: one pose, resting in idle. An action named <a>_to_<b> is the way from one to another; when there is one action that goes that way and nothing else plays it, it is found without the name." },
+    "moods": { "type": "object", "required": ["idle"], "propertyNames": { "$ref": "#/$defs/name" }, "additionalProperties": { "$ref": "#/$defs/plays" }, "description": "What it does in each mood, in words: idle, listening, thinking, speaking, happy, sleepy, surprised. A mood plays the action of the same name, in a loop. An action named <pose>_<mood> is its own way into that mood from that pose." },
+    "gestures": { "type": "object", "maxProperties": 32, "propertyNames": { "$ref": "#/$defs/name" }, "additionalProperties": { "$ref": "#/$defs/plays" }, "description": "What it can do once when asked, in words. A gesture plays the action of the same name." },
+    "feet": { "type": "array", "items": { "type": "string" }, "description": "The bones that touch the floor, so a planted foot stays put between two actions. The point is the bone's start, or the one the body gives it (foot)." },
+    "center": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "string" }, "description": "Two bones the view stays between. Left out: the whole body's first bone." },
+    "blend": { "type": "number", "minimum": 0, "maximum": 2, "description": "Seconds one action melts into the next. Default 0.3." },
+    "fps": { "type": "integer", "minimum": 1, "maximum": 60, "description": "Frames a second the actions are read at. Default 24." }
+  },
+  "$defs": {
+    "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,23}$", "errorMessage": "must be a snake_case name: a lower-case letter, then up to 23 of a-z, 0-9 and _" },
+    "line": { "type": "string", "pattern": "^[\\x20-\\x7e]{1,100}$", "description": "One line, for the agent: what it does.", "errorMessage": "must be one line of 1 to 100 plain ASCII characters" },
+    "plays": {
+      "anyOf": [
+        { "$ref": "#/$defs/line" },
+        { "type": "object", "required": ["about"], "additionalProperties": false, "properties": {
+          "about": { "$ref": "#/$defs/line" },
+          "plays": { "$ref": "#/$defs/name", "description": "The action it plays, when it is not the one with its own name." },
+          "hold": { "type": "number", "minimum": 0, "maximum": 60, "description": "For a gesture that plays a resting action (a walk): seconds it keeps it up before settling." },
+          "lasts": { "type": "number", "minimum": 0.2, "maximum": 10, "description": "Seconds the whole gesture takes, when it is not its action's own length." }
+        } }
+      ],
+      "errorMessage": "is one line about what it does, or { about, plays, hold, lasts }"
+    },
+    "vec3": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number" }, "errorMessage": "must be three numbers: [x, y, z]" },
+    "body": {
+      "type": "object",
+      "required": ["bones", "shapes", "actions"],
+      "additionalProperties": false,
+      "properties": {
+        "bones": { "type": "array", "minItems": 1, "maxItems": 80, "items": { "$ref": "#/$defs/bone" }, "description": "The skeleton, each bone after its parent. Units are the body's own (a cat stands about 0.6 high); y is up, it faces +z, its left is +x." },
+        "shapes": { "type": "array", "minItems": 1, "maxItems": 128, "items": { "$ref": "#/$defs/shape" }, "description": "What is drawn: rounded shapes, each on a bone." },
+        "actions": { "type": "object", "minProperties": 1, "maxProperties": 64, "propertyNames": { "$ref": "#/$defs/name" }, "additionalProperties": { "$ref": "#/$defs/action" }, "description": "What it can do, by name." }
+      },
+      "description": "A body written by hand."
+    },
+    "bone": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,24}$", "errorMessage": "must be 1 to 24 of letters, digits, _ . and -" },
+        "parent": { "type": "string", "description": "The bone it hangs from. Left out: it stands on the floor by itself." },
+        "at": { "$ref": "#/$defs/vec3", "description": "Where it starts, from its parent's start." },
+        "turn": { "$ref": "#/$defs/vec3", "description": "Degrees about x, y and z." },
+        "scale": { "$ref": "#/$defs/vec3" },
+        "foot": { "$ref": "#/$defs/vec3", "description": "The point on it that touches the floor." }
+      }
+    },
+    "shape": {
+      "type": "object",
+      "required": ["shape", "on", "color", "outline"],
+      "additionalProperties": false,
+      "properties": {
+        "shape": { "enum": ["blob", "ellipsoid", "capsule", "cone", "cylinder", "patch"], "description": "blob: a soft ball that melts into the blobs next to it (the body). ellipsoid: a ball with three radii. capsule: a rounded stick from at to to. cylinder: the same with flat ends. cone: from at to its tip, flattened (an ear). patch: a region of color on the body, not a shape." },
+        "on": { "type": "string", "description": "The bone it is on." },
+        "at": { "$ref": "#/$defs/vec3", "description": "Its centre (its first end, for a capsule, a cylinder or a cone), from the bone's start." },
+        "to": { "$ref": "#/$defs/vec3", "description": "Its other end, or a cone's tip." },
+        "turn": { "$ref": "#/$defs/vec3", "description": "Degrees about x, y and z (a blob, an ellipsoid, a patch)." },
+        "radii": { "$ref": "#/$defs/vec3", "description": "A blob's, an ellipsoid's or a patch's three radii." },
+        "radius": { "anyOf": [{ "type": "number" }, { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "number" } }], "description": "A capsule's or a cylinder's radius at each end, or a cone's at its base.", "errorMessage": "must be a number, or [at the first end, at the other]" },
+        "flat": { "type": "number", "description": "A cone: how flat, 1 round." },
+        "flat_axis": { "$ref": "#/$defs/vec3", "description": "A cone: the direction it is flattened along." },
+        "stiffness": { "type": "number", "description": "A blob: how firmly it keeps its own shape. Default 2." },
+        "color": { "$ref": "#/$defs/name", "description": "One of colors." },
+        "outline": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,24}$", "description": "Shapes with the same outline name are drawn as one outlined part.", "errorMessage": "must be 1 to 24 of letters, digits, _ . and -" }
+      }
+    },
+    "action": {
+      "type": "object",
+      "required": ["keys"],
+      "additionalProperties": false,
+      "properties": {
+        "view": { "anyOf": [{ "enum": ["front", "side", "three_quarter"] }, { "type": "number", "minimum": -180, "maximum": 180 }], "description": "Where it is seen from: front (the default), side, three_quarter, or degrees.", "errorMessage": "must be front, side, three_quarter or degrees" },
+        "follow": { "type": "boolean", "description": "true: the view goes along with it (a walk)." },
+        "stride": { "type": "number", "exclusiveMinimum": 0, "description": "A walk: seconds a step takes, so it is joined and left on a step." },
+        "from": { "$ref": "#/$defs/name", "description": "The pose it starts in. Left out: worked out from how it starts." },
+        "to": { "$ref": "#/$defs/name", "description": "The pose it ends in. Left out: worked out from how it ends." },
+        "keys": { "type": "array", "minItems": 2, "items": { "type": "object", "required": ["time"], "properties": { "time": { "type": "number", "minimum": 0, "maximum": 60 } }, "additionalProperties": { "type": "object", "minProperties": 1, "additionalProperties": false, "properties": { "at": { "$ref": "#/$defs/vec3" }, "turn": { "$ref": "#/$defs/vec3" }, "scale": { "$ref": "#/$defs/vec3" } } } }, "description": "Poses at moments: { time (seconds), <bone>: { at, turn, scale } }. Between two keys a bone moves in a straight line. A looping action ends on the pose it starts with." }
+      }
+    }
+  }
+}

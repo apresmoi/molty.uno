@@ -1,0 +1,448 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/apresmoi/molty.uno/main/schema/display-2.json",
+  "title": "Molty display v2",
+  "description": "What a skill draws on Molty's round screen: display.yaml (or display.json) next to SKILL.md. Guide: docs/DISPLAY.md. Units never change: a distance is a fraction of the screen's radius (1 reaches the rim), an angle is degrees counter-clockwise from 3 o'clock, a time is seconds from the screen's start.",
+  "type": "object",
+  "required": ["molty", "package", "screens"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string", "description": "Where this schema lives, for editors that read JSON." },
+    "molty": { "const": "display/2", "description": "Always display/2. Tells tools which schema applies.", "errorMessage": "must be display/2" },
+    "package": { "$ref": "#/$defs/package" },
+    "tokens": { "$ref": "#/$defs/tokens" },
+    "assets": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/asset_group" },
+      "description": "Which files in assets/ the package carries, in this order. An asset is named by its file name without the extension; two files with the same name are an error. The device holds at most 64."
+    },
+    "data": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/row" } },
+      "description": "Fixed tables the compiler repeats over with for (the twelve signs and their angles). Built into the package; the agent never sends them."
+    },
+    "parts": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": { "$ref": "#/$defs/part" },
+      "description": "Reusable groups of shapes, placed in a screen with use. The compiler writes them out in full: a part costs the same items as writing it by hand."
+    },
+    "screens": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 32,
+      "propertyNames": { "$ref": "#/$defs/screen_name" },
+      "additionalProperties": {
+        "anyOf": [
+          { "$ref": "#/$defs/screen" },
+          { "type": "string", "pattern": "^screens/[A-Za-z0-9._-]+\\.(ya?ml|json)$" }
+        ],
+        "errorMessage": "a screen is written here (about, draw, ...) or is a path like screens/chart.yaml"
+      },
+      "description": "Every screen by name, at most 32. The name is what the agent sends as layout in scene.play. A value is the screen itself, or the path of a file in screens/ that holds it."
+    }
+  },
+  "$defs": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,23}$",
+      "description": "snake_case, up to 24 characters.",
+      "errorMessage": "must be a snake_case name: a lower-case letter, then up to 23 of a-z, 0-9 and _"
+    },
+    "screen_name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{0,23}$",
+      "errorMessage": "must be a lower-case name: a letter, then up to 23 of a-z, 0-9, _ and -"
+    },
+    "binding": {
+      "type": "string",
+      "pattern": "^\\{\\{ ?[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)? ?\\}\\}$",
+      "description": "A whole value read from an input (\"{{ value }}\") or, inside a for, from the element (\"{{ body.angle }}\"). Quote it. Never part of a longer text, never a formula.",
+      "examples": ["{{ value }}", "{{ body.angle }}"]
+    },
+    "num": {
+      "anyOf": [{ "type": "number" }, { "$ref": "#/$defs/binding" }],
+      "errorMessage": "must be a number or a quoted binding like \"{{ value }}\""
+    },
+    "size": {
+      "anyOf": [{ "type": "number" }, { "$ref": "#/$defs/name" }, { "$ref": "#/$defs/binding" }],
+      "description": "A fraction of the screen's radius, a name from tokens.sizes, or a binding.",
+      "errorMessage": "must be a number (a fraction of the screen's radius), a size token or a quoted binding like \"{{ value }}\""
+    },
+    "width": {
+      "anyOf": [{ "type": "number" }, { "$ref": "#/$defs/name" }, { "$ref": "#/$defs/binding" }],
+      "description": "Line width: hairline (0.012, one braille dot: crisp), thin (0.03, the default), bold (0.06), a name from tokens.lines, a number or a binding.",
+      "errorMessage": "must be hairline, thin, bold, a line token, a number or a quoted binding like \"{{ value }}\""
+    },
+    "color": {
+      "anyOf": [{ "type": "string", "pattern": "^#[0-9a-f]{6}$" }, { "$ref": "#/$defs/name" }, { "$ref": "#/$defs/binding" }],
+      "description": "A token (ink, grid, dim, white, erase, or one from tokens.colors), #rrggbb in lower case, or a binding. erase clears what is under it. Default white.",
+      "examples": ["ink", "grid", "dim", "white", "erase", "#ff9a7a"],
+      "errorMessage": "must be a color token (ink, grid, dim, white, erase or one of your own), #rrggbb in lower case, or a quoted binding like \"{{ value }}\""
+    },
+    "place": {
+      "anyOf": [
+        { "const": "center" },
+        { "type": "object", "minProperties": 1, "additionalProperties": false, "properties": { "x": { "$ref": "#/$defs/num" }, "y": { "$ref": "#/$defs/num" } } },
+        { "type": "object", "required": ["angle", "distance"], "additionalProperties": false, "properties": { "angle": { "$ref": "#/$defs/num" }, "distance": { "$ref": "#/$defs/size" } } }
+      ],
+      "description": "center (the middle of the glass, the default), { x, y } (right and up are positive; one left out is 0), or { angle, distance } around the centre.",
+      "examples": ["center", { "x": 0.2, "y": -0.4 }, { "angle": 195, "distance": 0.825 }],
+      "errorMessage": "a place is center, { x, y } or { angle, distance }"
+    },
+    "show": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "from": { "$ref": "#/$defs/num", "description": "Seconds into the screen when it appears. Left out: from the start." },
+        "until": { "$ref": "#/$defs/num", "description": "Seconds into the screen when it goes. Left out: until the end." }
+      },
+      "description": "When the shape is on screen, in seconds from the screen's start."
+    },
+    "group": {
+      "anyOf": [{ "type": "string", "pattern": "^[A-Za-z0-9_-]{1,24}$" }, { "$ref": "#/$defs/binding" }],
+      "description": "A name a tap zone can light with highlights. A binding works: \"{{ aspect.id }}\".",
+      "errorMessage": "must be a name (1 to 24 of letters, digits, _ and -) or a quoted binding like \"{{ body.id }}\""
+    },
+    "only_when": { "const": "highlighted", "description": "Hidden until its group is lit by a tap, then fades in.", "errorMessage": "must be highlighted" },
+    "move": {
+      "type": "object",
+      "required": ["along"],
+      "additionalProperties": false,
+      "properties": { "along": { "$ref": "#/$defs/binding" }, "ease": { "enum": ["linear", "smooth"] } },
+      "description": "Slide along keyframes. Needs firmware that is not out yet: the compiler refuses it. Until then repeat the shape with for and show."
+    },
+    "package": {
+      "type": "object",
+      "required": ["id", "name", "version", "about"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9-]{1,32}$", "description": "The install id and the file name: packages/<id>/<id>.json.", "errorMessage": "must be 1 to 32 of a-z, 0-9 and -" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 32, "description": "Shown in Molty's install question." },
+        "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$", "description": "X.Y.Z. Raise it whenever the built package changes, so Moltys that have it update.", "errorMessage": "must be X.Y.Z" },
+        "about": { "type": "string", "pattern": "^[\\x20-\\x7e]{1,160}$", "description": "One line for the catalog: what the package adds, for an agent to pitch it to its human.", "errorMessage": "must be one line of 1 to 160 plain ASCII characters" },
+        "fallback": { "enum": ["speech", "none"], "description": "What the agent does on a Molty without screens: speech (say it instead) or none." }
+      },
+      "description": "What gets installed on Molty."
+    },
+    "tokens": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "colors": { "type": "object", "propertyNames": { "$ref": "#/$defs/name" }, "additionalProperties": { "type": "string", "pattern": "^#[0-9a-f]{6}$", "errorMessage": "must be #rrggbb in lower case" }, "description": "Named colors, used wherever a color goes." },
+        "lines": { "type": "object", "propertyNames": { "$ref": "#/$defs/name" }, "additionalProperties": { "type": "number", "minimum": 0, "maximum": 0.5 }, "description": "Named line widths, used as width." },
+        "sizes": { "type": "object", "propertyNames": { "$ref": "#/$defs/name" }, "additionalProperties": { "type": "number" }, "description": "Named distances, used as radius, size, length or distance." }
+      },
+      "description": "The skill's own named colors, line widths and sizes, added to Molty's built-in ones (ink, grid, dim, white, erase; hairline, thin, bold). A token may not reuse a built-in name."
+    },
+    "asset_group": {
+      "type": "object",
+      "required": ["as"],
+      "additionalProperties": false,
+      "properties": {
+        "file": { "type": "string", "description": "One file: assets/logo.png." },
+        "files": { "type": "string", "description": "Several files: * matches inside a file name (sorted), {a,b,c} lists alternatives in that order. assets/signs/*.svg, assets/maps/{sun,moon}.png." },
+        "as": { "enum": ["symbol", "picture", "map"], "description": "symbol: one color, takes the color of the shape that draws it (SVG lines, or a PNG's opaque pixels). picture: keeps its own colors, up to 15 and see-through (PNG). map: a picture wrapped round a globe, twice as wide as tall (PNG)." },
+        "pixels": {
+          "anyOf": [{ "type": "integer", "minimum": 1, "maximum": 128 }, { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "integer", "minimum": 1, "maximum": 128 } }],
+          "description": "Size on the device: a width (the height keeps the aspect) or [width, height], at most 128. Needed for an SVG. A PNG is used at its own size: leave it out, or state the size to have it checked.",
+          "errorMessage": "must be a width from 1 to 128, or [width, height]"
+        },
+        "stroke": { "type": "number", "exclusiveMinimum": 0, "maximum": 1, "description": "SVG lines drawn this thick, as a fraction of half the drawing's width (the same way a distance is a fraction of the screen's radius). Left out: the SVG's own stroke-width." },
+        "smooth": { "type": "boolean", "description": "true: each SVG polyline is drawn as a smooth curve through its points, like a line shape with smooth. Default false." }
+      },
+      "anyOf": [{ "required": ["file"] }, { "required": ["files"] }],
+      "errorMessage": "names its file (file: assets/logo.png) or files (files: assets/signs/*.svg)",
+      "description": "One or several files in assets/ and what they become."
+    },
+    "row": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": { "type": ["number", "string"] },
+      "description": "One element of a data table: a flat object of numbers and texts."
+    },
+    "part": {
+      "type": "object",
+      "required": ["draw"],
+      "additionalProperties": false,
+      "properties": {
+        "with": { "type": "object", "propertyNames": { "$ref": "#/$defs/name" }, "additionalProperties": { "type": ["number", "string"] }, "description": "The values the part takes, with their defaults. Inside the part \"{{ name }}\" reads one." },
+        "draw": { "$ref": "#/$defs/draw" }
+      },
+      "description": "A reusable group of shapes."
+    },
+    "screen": {
+      "type": "object",
+      "required": ["about", "draw"],
+      "additionalProperties": false,
+      "properties": {
+        "about": { "type": "string", "minLength": 1, "description": "One sentence: what the screen shows. Goes into build/display.md for the agent." },
+        "duration": { "anyOf": [{ "type": "number", "minimum": 0, "maximum": 600 }, { "const": "hold" }], "description": "Seconds, or hold (until replaced or the command's ttl_s runs out). Default hold.", "errorMessage": "must be seconds (0 to 600) or hold" },
+        "subtitles": { "anyOf": [{ "enum": ["bottom", "middle"] }, { "type": "number", "minimum": -1, "maximum": 1 }], "description": "Where a tap's reading and the agent's words show: bottom (the default), middle, or a y from -1 to 1.", "errorMessage": "must be bottom, middle or a y from -1 to 1" },
+        "inputs": { "type": "object", "maxProperties": 8, "propertyNames": { "$ref": "#/$defs/name" }, "additionalProperties": { "$ref": "#/$defs/input" }, "description": "What the agent sends with scene.play, at most 8. Every input must be sent and must be used." },
+        "draw": { "$ref": "#/$defs/draw" }
+      },
+      "description": "One screen: what the agent sends and what Molty draws."
+    },
+    "input": {
+      "type": "object",
+      "required": ["type", "about"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "enum": ["number", "angle", "distance", "amount", "seconds", "text", "reading", "color", "asset", "groups", "list", "path"], "description": "number; angle (degrees, -720 to 720); distance (fraction of the radius, 0 to 2); amount (0 to 1); seconds (0 to 600); text (words for a label, up to 40); reading (what a tap shows, up to 160); color (#rrggbb); asset (an asset's name); groups (group names, spaces between, up to 4); list (up to 32 flat objects, see of). path needs firmware that is not out yet." },
+        "about": { "type": "string", "minLength": 1, "description": "One sentence for the agent: what to send and how to work it out." },
+        "sent_as": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,24}$", "description": "The name the agent sends, when it differs from the name used here: symbol in the drawing, g in what is sent.", "errorMessage": "must be 1 to 24 of letters, digits, _ and -" },
+        "example": { "description": "A value that works. Fills the sample call in build/display.md and the preview." },
+        "min": { "type": "number", "description": "A number's smallest value." },
+        "max": { "type": "number", "description": "A number's largest value; a text's most letters; a list's most elements (default 32). The compiler budgets the screen with it." },
+        "of": { "anyOf": [{ "type": "string", "pattern": "^assets/[A-Za-z0-9._/-]+$" }, { "type": "object", "minProperties": 1, "maxProperties": 12, "propertyNames": { "$ref": "#/$defs/name" }, "additionalProperties": { "$ref": "#/$defs/field" } }], "description": "For a list: the fields of each element, at most 12. For an asset: the folder its files are in (assets/planets).", "errorMessage": "must be the fields of each element ({ angle: { type: angle, about: ... } }) or, for an asset, a folder like assets/planets" },
+        "default": { "description": "Needs firmware that is not out yet: the compiler refuses it. The agent sends every input; put the usual value in example." }
+      },
+      "description": "One thing the agent sends."
+    },
+    "field": {
+      "type": "object",
+      "required": ["type", "about"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "enum": ["number", "angle", "distance", "amount", "seconds", "text", "reading", "color", "asset", "groups"] },
+        "about": { "type": "string", "minLength": 1, "description": "One sentence for the agent: what to send and how to work it out." },
+        "sent_as": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,24}$", "description": "The name the agent sends, when it differs from the name used here.", "errorMessage": "must be 1 to 24 of letters, digits, _ and -" },
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "of": { "type": "string", "pattern": "^assets/[A-Za-z0-9._/-]+$", "description": "For an asset: the folder its files are in." }
+      },
+      "description": "One field of a list's elements."
+    },
+    "draw": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/entry" },
+      "description": "Shapes, painted in order, later ones on top."
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "circle": { "$ref": "#/$defs/circle" },
+        "arc": { "$ref": "#/$defs/arc" },
+        "ticks": { "$ref": "#/$defs/ticks" },
+        "spoke": { "$ref": "#/$defs/spoke" },
+        "line": { "$ref": "#/$defs/line" },
+        "dot": { "$ref": "#/$defs/dot" },
+        "globe": { "$ref": "#/$defs/globe" },
+        "symbol": { "$ref": "#/$defs/symbol" },
+        "label": { "$ref": "#/$defs/label" },
+        "tap_zone": { "$ref": "#/$defs/tap_zone" },
+        "for": { "type": "string", "pattern": "^[a-z][a-z0-9_]* in [a-z][a-z0-9_]*$", "description": "Repeat the shapes in draw for each element: \"body in bodies\". bodies is a list input (repeated on the device) or a data table (repeated by the compiler). Inside, \"{{ body.angle }}\" reads a field.", "errorMessage": "must read like \"body in bodies\"" },
+        "draw": { "$ref": "#/$defs/draw" },
+        "use": { "$ref": "#/$defs/name", "description": "Place a part by name." },
+        "with": { "type": "object", "propertyNames": { "$ref": "#/$defs/name" }, "additionalProperties": { "type": ["number", "string"] }, "description": "Values for the part. A binding passes an input through." }
+      },
+      "oneOf": [
+        { "required": ["for", "draw"], "maxProperties": 2 },
+        { "required": ["use"], "propertyNames": { "enum": ["use", "with"] } },
+        { "minProperties": 1, "maxProperties": 1, "propertyNames": { "enum": ["circle", "arc", "ticks", "spoke", "line", "dot", "globe", "symbol", "label", "tap_zone"] } }
+      ],
+      "errorMessage": "an entry draws one thing: one shape (circle, arc, ticks, spoke, line, dot, globe, symbol, label, tap_zone), or for with draw, or use (with with)",
+      "description": "One shape (its name is the key), a for block, or a part placed with use."
+    },
+    "circle": {
+      "type": "object",
+      "required": ["radius"],
+      "additionalProperties": false,
+      "properties": {
+        "radius": { "$ref": "#/$defs/size" },
+        "at": { "$ref": "#/$defs/place" },
+        "width": { "$ref": "#/$defs/width" },
+        "color": { "$ref": "#/$defs/color" },
+        "show": { "$ref": "#/$defs/show" },
+        "group": { "$ref": "#/$defs/group" },
+        "only_when": { "$ref": "#/$defs/only_when" },
+        "move": { "$ref": "#/$defs/move" }
+      },
+      "description": "A circle outline."
+    },
+    "arc": {
+      "type": "object",
+      "required": ["radius"],
+      "additionalProperties": false,
+      "properties": {
+        "radius": { "$ref": "#/$defs/size" },
+        "start": { "$ref": "#/$defs/num", "description": "The angle it starts at. Default 0." },
+        "end": { "$ref": "#/$defs/num", "description": "The angle it ends at, counter-clockwise from start. Default 360." },
+        "at": { "$ref": "#/$defs/place" },
+        "width": { "$ref": "#/$defs/width" },
+        "color": { "$ref": "#/$defs/color" },
+        "show": { "$ref": "#/$defs/show" },
+        "group": { "$ref": "#/$defs/group" },
+        "only_when": { "$ref": "#/$defs/only_when" },
+        "move": { "$ref": "#/$defs/move" }
+      },
+      "description": "Part of a circle, from start to end."
+    },
+    "ticks": {
+      "type": "object",
+      "required": ["radius"],
+      "additionalProperties": false,
+      "properties": {
+        "count": { "anyOf": [{ "type": "integer", "minimum": 1, "maximum": 120 }, { "$ref": "#/$defs/binding" }], "description": "How many, 1 to 120. Default 12.", "errorMessage": "must be a whole number from 1 to 120 or a quoted binding" },
+        "radius": { "$ref": "#/$defs/size", "description": "Where each mark starts, from the centre." },
+        "length": { "$ref": "#/$defs/size", "description": "How long each mark is, outward; negative runs inward. Default 0.1." },
+        "first_angle": { "$ref": "#/$defs/num", "description": "The angle of the first mark. Default 0." },
+        "width": { "$ref": "#/$defs/width" },
+        "color": { "$ref": "#/$defs/color" },
+        "show": { "$ref": "#/$defs/show" },
+        "group": { "$ref": "#/$defs/group" },
+        "only_when": { "$ref": "#/$defs/only_when" },
+        "move": { "$ref": "#/$defs/move" }
+      },
+      "description": "Evenly spaced marks round the centre of the glass."
+    },
+    "spoke": {
+      "type": "object",
+      "required": ["angle"],
+      "additionalProperties": false,
+      "properties": {
+        "angle": { "$ref": "#/$defs/num", "description": "The angle it points at." },
+        "radius": { "$ref": "#/$defs/size", "description": "Where it starts, from the centre. Default 0." },
+        "length": { "$ref": "#/$defs/size", "description": "How long it is, outward; negative runs inward. Default 0.1." },
+        "width": { "$ref": "#/$defs/width" },
+        "color": { "$ref": "#/$defs/color" },
+        "show": { "$ref": "#/$defs/show" },
+        "group": { "$ref": "#/$defs/group" },
+        "only_when": { "$ref": "#/$defs/only_when" },
+        "move": { "$ref": "#/$defs/move" }
+      },
+      "description": "One mark at an angle from the centre of the glass: a pointer, a planet's tick."
+    },
+    "line": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "from": { "$ref": "#/$defs/place", "description": "Where it starts. With to." },
+        "to": { "$ref": "#/$defs/place", "description": "Where it ends. With from." },
+        "points": { "type": "array", "minItems": 2, "maxItems": 16, "items": { "$ref": "#/$defs/place" }, "description": "2 to 16 places joined in order, instead of from and to." },
+        "smooth": { "type": "boolean", "description": "true: a smooth curve through the points. Default false: straight segments." },
+        "width": { "$ref": "#/$defs/width" },
+        "color": { "$ref": "#/$defs/color" },
+        "show": { "$ref": "#/$defs/show" },
+        "group": { "$ref": "#/$defs/group" },
+        "only_when": { "$ref": "#/$defs/only_when" },
+        "move": { "$ref": "#/$defs/move" }
+      },
+      "oneOf": [{ "required": ["from", "to"] }, { "required": ["points"] }],
+      "errorMessage": "a line has from and to, or points (not both)",
+      "description": "Straight segments, or a smooth curve through the points. A point read from inputs must be { x, y }."
+    },
+    "dot": {
+      "type": "object",
+      "required": ["radius"],
+      "additionalProperties": false,
+      "properties": {
+        "radius": { "$ref": "#/$defs/size" },
+        "at": { "$ref": "#/$defs/place" },
+        "color": { "$ref": "#/$defs/color" },
+        "show": { "$ref": "#/$defs/show" },
+        "group": { "$ref": "#/$defs/group" },
+        "only_when": { "$ref": "#/$defs/only_when" },
+        "move": { "$ref": "#/$defs/move" }
+      },
+      "description": "A filled circle. color: erase cuts a hole in what is under it."
+    },
+    "globe": {
+      "type": "object",
+      "required": ["radius"],
+      "additionalProperties": false,
+      "properties": {
+        "radius": { "$ref": "#/$defs/size" },
+        "at": { "$ref": "#/$defs/place" },
+        "map": { "type": "string", "description": "The map asset it wears (an asset with as: map), or a binding. Left out: a plain ball in its color." },
+        "lit": { "$ref": "#/$defs/num", "description": "How much of it is lit, 0 to 1. Default 1." },
+        "lit_side": { "anyOf": [{ "enum": ["right", "left"] }, { "$ref": "#/$defs/binding" }], "description": "Which side is lit. Default right. From an input: a number, 1 for right or -1 for left.", "errorMessage": "must be right, left or a quoted binding to a number (1 right, -1 left)" },
+        "spin": { "$ref": "#/$defs/num", "description": "Degrees per second it turns. Default 0." },
+        "color": { "$ref": "#/$defs/color" },
+        "show": { "$ref": "#/$defs/show" },
+        "group": { "$ref": "#/$defs/group" },
+        "only_when": { "$ref": "#/$defs/only_when" },
+        "move": { "$ref": "#/$defs/move" }
+      },
+      "description": "A shaded sphere wearing a map: Moon phases, planets. Its dark side hides what is behind it."
+    },
+    "symbol": {
+      "type": "object",
+      "required": ["asset"],
+      "additionalProperties": false,
+      "properties": {
+        "asset": { "type": "string", "description": "An asset's name (its file name without the extension), or a binding." },
+        "size": { "$ref": "#/$defs/size", "description": "Its width; the height keeps the aspect. Default 0.12." },
+        "at": { "$ref": "#/$defs/place" },
+        "rotate": { "$ref": "#/$defs/num", "description": "Degrees it is turned. Default 0." },
+        "color": { "$ref": "#/$defs/color" },
+        "show": { "$ref": "#/$defs/show" },
+        "group": { "$ref": "#/$defs/group" },
+        "only_when": { "$ref": "#/$defs/only_when" },
+        "move": { "$ref": "#/$defs/move" }
+      },
+      "description": "An asset: a symbol takes the color given here, a picture keeps its own."
+    },
+    "label": {
+      "type": "object",
+      "required": ["text"],
+      "additionalProperties": false,
+      "properties": {
+        "text": { "type": "string", "maxLength": 40, "description": "Up to 40 plain ASCII letters, or a binding to a text input. A screen shows at most 40 letters in all. Words and an input cannot be mixed: send the finished text." },
+        "size": { "$ref": "#/$defs/size", "description": "Letter height. Default 0.12." },
+        "at": { "$ref": "#/$defs/place" },
+        "color": { "$ref": "#/$defs/color" },
+        "show": { "$ref": "#/$defs/show" },
+        "group": { "$ref": "#/$defs/group" },
+        "only_when": { "$ref": "#/$defs/only_when" },
+        "move": { "$ref": "#/$defs/move" }
+      },
+      "description": "Words in the device font, centred on at."
+    },
+    "tap_zone": {
+      "type": "object",
+      "required": ["reads"],
+      "additionalProperties": false,
+      "properties": {
+        "at": { "$ref": "#/$defs/place", "description": "The centre of a round zone." },
+        "along": {
+          "type": "object",
+          "required": ["from", "to"],
+          "additionalProperties": false,
+          "properties": { "from": { "$ref": "#/$defs/place" }, "to": { "$ref": "#/$defs/place" } },
+          "description": "Instead of at: the zone is the band within radius of the segment from to to. A line to tap along."
+        },
+        "radius": { "$ref": "#/$defs/size", "description": "How far from at, or from the segment, a tap still counts." },
+        "reads": { "type": "string", "maxLength": 160, "description": "What Molty shows at once when tapped, word by word, with no round trip: up to 160 plain ASCII characters, or a binding to a reading input." },
+        "id": { "type": "string", "maxLength": 40, "description": "Names the zone in the tap event the agent gets." },
+        "highlights": { "type": "string", "description": "Group names to light, spaces between, at most 4; or a binding. Left out: whatever is drawn inside the zone." },
+        "grow": { "$ref": "#/$defs/num", "description": "How much what it lights grows, 1 to 3. Default 1.25." },
+        "sector": {
+          "anyOf": [
+            { "type": "object", "required": ["width", "outer"], "additionalProperties": false, "properties": { "width": { "$ref": "#/$defs/num", "description": "Degrees wide, half to each side of where the zone is (at)." }, "inner": { "$ref": "#/$defs/size", "description": "Where the wedge starts, from the centre of the glass. Default 0." }, "outer": { "$ref": "#/$defs/size", "description": "Where the wedge ends." } } },
+            { "type": "object", "required": ["from", "to", "outer"], "additionalProperties": false, "properties": { "from": { "type": "number", "description": "The angle the wedge starts at." }, "to": { "type": "number", "description": "The angle it ends at, counter-clockwise from from." }, "inner": { "type": "number", "minimum": 0, "maximum": 2 }, "outer": { "type": "number", "minimum": 0, "maximum": 2 } } }
+          ],
+          "description": "The zone is also a wedge of a ring round the centre of the glass: a whole slice to tap. Either { from, to, inner, outer }: from one angle to another, between two distances (then at and radius may be left out); or { width, inner, outer }: so many degrees wide around where the zone is, for a zone placed by an input. A tap right on a zone's own circle or line beats a tap that only falls in a wedge.",
+          "examples": [{ "from": 180, "to": 210, "inner": 0.75, "outer": 0.9 }, { "width": 30, "inner": 0.75, "outer": 0.9 }],
+          "errorMessage": "a sector is { from, to, inner, outer } (two angles and two distances) or { width, inner, outer } (degrees wide around the zone's own place)"
+        },
+        "opens": {
+          "anyOf": [
+            { "type": "string" },
+            { "type": "object", "required": ["screen"], "additionalProperties": false, "properties": { "screen": { "type": "string", "description": "The screen to open: its name, or a binding to a text input." }, "seconds": { "$ref": "#/$defs/num", "description": "How long it stays, 1 to 600, when it is a held screen. Left out: until a tap beside it." } } }
+          ],
+          "description": "A tap opens another screen of this package over this one, on Molty itself, and comes back when it ends or at a tap beside it. Write the screen's name, or { screen, seconds }. The opened screen's inputs are found by name: in the tapped element first, else among this screen's inputs; a list passes on only the elements whose `of` is this zone's id.",
+          "examples": ["sign-closeup", { "screen": "sign-closeup", "seconds": 12 }],
+          "errorMessage": "opens is a screen's name, or { screen, seconds }"
+        }
+      },
+      "description": "Nothing visible: a place to tap. Round (at and radius), along a segment (along and radius), or a wedge of a ring (sector). Overlapping zones: the smallest wins, then the nearest."
+    }
+  }
+}

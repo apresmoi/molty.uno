@@ -32,6 +32,11 @@ nothing). Event kinds: `transit`, `occultation`, `appulse`, `solar-eclipse`, `lu
 Each run prints `SAY: <one line>` and `FACTS: <json>`. The first scene replaces the screen,
 the rest queue behind it; Molty melts back to its creature when they end.
 
+## Screens
+
+Inputs and a call for each: [build/display.md](build/display.md).
+[globe](display.yaml#globe), [saturn](display.yaml#saturn), [sign](display.yaml#sign), [chart](display.yaml#chart), [sign-closeup](display.yaml#sign-closeup), [signs](display.yaml#signs), [aspect](display.yaml#aspect), [transit](display.yaml#transit), [occultation](display.yaml#occultation), [appulse](display.yaml#appulse), [solar-eclipse](display.yaml#solar-eclipse), [lunar-eclipse](display.yaml#lunar-eclipse).
+
 ## Tap to read (chart)
 
 On the chart a tap on a planet or an aspect line shows its
@@ -52,9 +57,6 @@ script waits for the outcome (about 2 min at most). So the first time, say
 so before you run it: `talk {"say":"Molty will ask to install the astrology pack: tap install.","listen":false}`.
 Or install up front: `astro.mjs install`. `astro.mjs status` lists what Molty has;
 `astro.mjs uninstall` removes it (Molty frees the space; ask your human first).
-
-Molty downloads the file itself, from this repo (`packages/index.json` names it, with its size
-and sha256): the relay never carries it, and Molty refuses a file whose hash differs.
 
 ## Speak with it (the molty skill's voice rules hold)
 
@@ -97,11 +99,5 @@ A wiped store (a factory flash) is handled: the script reinstalls once and plays
 - **Claude Code, Codex**: the molty plugin ships this skill next to `molty`; needs `node` 18+.
 - **OpenClaw and other long-lived agents**: install `skills/molty-astro` beside `skills/molty`
   from `https://github.com/apresmoi/molty.uno/tree/main/skills`; same scripts.
-- **Grok and other hosted bots without a shell**: send the commands over REST yourself
-  ([layouts.md](references/layouts.md)): `pkg.install` from `packages/index.json`, then
-  `scene.play` with params you compute with your own code tool (any ephemeris, e.g.
-  astronomy-engine for Python or JS). [layouts.md](references/layouts.md) defines every param.
-
-## References
-
-- [layouts.md](references/layouts.md): every layout and its params, the commands in full (and the close-up's event loop), for agents without a shell.
+- **Grok and other hosted bots without a shell**: send the commands yourself
+  ([commands.md](references/commands.md)), computing the inputs with your own code tool.

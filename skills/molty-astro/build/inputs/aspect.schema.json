@@ -1,0 +1,155 @@
+{
+  "title": "astrology aspect: the params of scene.play",
+  "type": "object",
+  "required": [
+    "a",
+    "b",
+    "c",
+    "bodies",
+    "lines",
+    "deg",
+    "tx",
+    "ty"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "a": {
+      "type": "number",
+      "minimum": -720,
+      "maximum": 720,
+      "description": "The chart angle of body A."
+    },
+    "b": {
+      "type": "number",
+      "minimum": -720,
+      "maximum": 720,
+      "description": "from_angle + d, where d is B's chart angle minus A's, wrapped to -180..180: the arc runs from one to the other."
+    },
+    "c": {
+      "type": "string",
+      "pattern": "^#[0-9a-f]{6}$",
+      "description": "The aspect's color: conjunction #ffd678, sextile #6fe0a0, square #ff6a55, trine #7fb0ff, opposition #ff5fa0."
+    },
+    "bodies": {
+      "type": "array",
+      "maxItems": 2,
+      "items": {
+        "type": "object",
+        "required": [
+          "g",
+          "a",
+          "r",
+          "c"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "g": {
+            "enum": [
+              "g-sun",
+              "g-moon",
+              "g-mercury",
+              "g-venus",
+              "g-mars",
+              "g-jupiter",
+              "g-saturn",
+              "g-uranus",
+              "g-neptune",
+              "g-pluto"
+            ],
+            "description": "The body's symbol: g-mars ..."
+          },
+          "a": {
+            "type": "number",
+            "minimum": -720,
+            "maximum": 720,
+            "description": "Its chart angle."
+          },
+          "r": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2,
+            "description": "0.6; B at 0.47 when the two are under 14 degrees apart."
+          },
+          "c": {
+            "type": "string",
+            "pattern": "^#[0-9a-f]{6}$",
+            "description": "Its color, as on the chart."
+          }
+        }
+      },
+      "description": "The two bodies, A then B."
+    },
+    "lines": {
+      "type": "array",
+      "maxItems": 7,
+      "items": {
+        "type": "object",
+        "required": [
+          "x1",
+          "y1",
+          "x2",
+          "y2",
+          "c",
+          "on"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "x1": {
+            "type": "number",
+            "minimum": -1,
+            "maximum": 1,
+            "description": "The segment's start."
+          },
+          "y1": {
+            "type": "number",
+            "minimum": -1,
+            "maximum": 1,
+            "description": "The segment's start, y."
+          },
+          "x2": {
+            "type": "number",
+            "minimum": -1,
+            "maximum": 1,
+            "description": "The segment's end."
+          },
+          "y2": {
+            "type": "number",
+            "minimum": -1,
+            "maximum": 1,
+            "description": "The segment's end, y."
+          },
+          "c": {
+            "type": "string",
+            "pattern": "^#[0-9a-f]{6}$",
+            "description": "A side of the figure #565b72; the chord in the aspect's color."
+          },
+          "on": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 600,
+            "description": "When it appears: 0 for the figure, 1.2 for the chord."
+          }
+        }
+      },
+      "description": "The aspect's figure on radius 0.6 from A's angle (sextile 6 sides, square 4, trine 3), then the chord from A to B. None for a conjunction."
+    },
+    "deg": {
+      "type": "string",
+      "maxLength": 3,
+      "pattern": "^(?![$@])[\\x20-\\x7e]*$",
+      "description": "The separation in whole degrees, as text (the device font has no degree sign)."
+    },
+    "tx": {
+      "type": "number",
+      "minimum": -1,
+      "maximum": 1,
+      "description": "Where the number sits: at angle from_angle + d/2, radius 0.14. 0 for a conjunction."
+    },
+    "ty": {
+      "type": "number",
+      "minimum": -1,
+      "maximum": 1,
+      "description": "Where the number sits, y. 0 for a conjunction."
+    }
+  }
+}

@@ -84,6 +84,7 @@ function checkSkill(name) {
         const host = m[1];
         if (host.includes('<') || host.startsWith('…') || host.startsWith('$')) continue; // placeholder
         if (/^(github\.com|raw\.githubusercontent\.com|molty\.uno|example\.org)$/.test(host)) continue;
+        if (file.endsWith('.svg') && host === 'www.w3.org') continue; // an SVG asset's namespace, not a place anything calls
         if (DEFAULT_RELAY.test(m[0]) && /MOLTY_RELAY|DEFAULT_RELAY|default relay/i.test(line)) continue;
         bad(`${at}: hard-coded host ${host} (write $MOLTY_RELAY, or a <placeholder>)`);
       }
@@ -179,7 +180,7 @@ for (const f of tracked) {
   if (!existsSync(p) && !lstatSync(p, { throwIfNoEntry: false })) continue;
   const st = lstatSync(p);
   if (st.isSymbolicLink()) bad(`${f}: symlink in the plugin root (the plugin loaders refuse them)`);
-  else if (!/\.(png|jpe?g|gif|webp|woff2?|bin|ico)$/i.test(f) && st.size >= MAX_PLUGIN_FILE) bad(`${f}: ${st.size} bytes; plugin loaders read scripts/documents only below 256 KiB`);
+  else if (!/\.(png|jpe?g|gif|webp|woff2?|bin|ico|glb|blend)$/i.test(f) && st.size >= MAX_PLUGIN_FILE) bad(`${f}: ${st.size} bytes; plugin loaders read scripts/documents only below 256 KiB`);
 }
 
 // 7. one home for the skill
