@@ -119,6 +119,10 @@ Apache-2.0 text: https://www.apache.org/licenses/LICENSE-2.0.txt
 - astronomy-engine 2.1.19 (scripts/vendor/astronomy.min.js): Copyright (c) 2019-2023 Don Cross, MIT License (its
   full text heads the file).
 
+## Display tools (packages/tools, vendored)
+- js-yaml 4.1.1 (vendor/js-yaml.mjs, its dist/js-yaml.mjs unchanged): Copyright (C) 2011-2015 by Vitaly Puzrin, MIT
+  License (its header names it). Reads display.yaml on the computer that builds a package; not in the firmware.
+
 ## Hosted services (no code licence; terms of use apply)
 The optional cloud relay calls Cloudflare Workers AI models @cf/deepgram/aura-2-en
 (TTS) and @cf/openai/whisper-large-v3-turbo (STT), governed by Cloudflare's and the
