@@ -69,8 +69,9 @@ Never deploy or publish from here; nothing in this package does.
   `state` is `POST /api/creature/state`'s body, `ask` the link's question, `scene` scene.play.
   `MoltyScreen` (canvas + still + `Device`) mounts it; `features/molty/` holds the cat, the lists
   read from its package and the side screens' programs; `hooks/useMoltyStage` plays actions on
-  one. Each screen is its own instance (~6 MB). The hero's cat walks in (`enter`): the same
-  renderer twice for those seconds, the second looking to the side (the water beside the glass).
+  one. Each screen is its own instance (~6 MB). The hero's cat walks in from beyond the window's
+  edge (`enter`): the same renderer twice for those seconds, the second with its camera on the
+  cat, its picture of the cat alone carried across the page on a clear canvas.
 - The page must read without the engine: a heading keeps its DOM text (it steps aside only once
   its word draws, `[data-word="live"]`), a Molty screen shows its still.
 - A device is one thing: nothing of its screen shows until its frame stands in place

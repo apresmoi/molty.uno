@@ -42,9 +42,14 @@ the device's look, one water for page and screens, and the cat walks in.
   firmware's own ripple, and the page's ring starts at the same point and speed, so it crosses
   the rim. A ring from outside pushes the screen's water where it crosses the rim
   (`wm_wave`), and the firmware's fluid carries it across.
-- **The entrance.** The cat starts outside the glass on the right, walks in with its own clips
-  and sits where it always sits. The part outside the glass is the same renderer a second time,
-  for those seconds only, its camera looking to the side (`web_cat.c`). No page-side cat.
+- **The entrance.** The cat starts beyond the right edge of the browser window, walks across the
+  page, goes in under the bezel and sits at its own place. Outside the glass only the cat is
+  drawn, on a clear canvas: the firmware's own picture with everything but the creature's cells
+  left out (`wm_cat_pixels`), from the same renderer running a second time for those seconds
+  with its camera on the cat (`web_cat.c`). No page-side cat, no floor patch. The picture has
+  no perspective across the frame (268.4 panel px a world unit at any depth, measured), so the
+  two pictures of the cat meet exactly at the rim. Walking in, it drifts toward the viewer; the
+  start depth is taken from a measured table so it ends where it always sits.
 
 ### What was built
 
@@ -132,9 +137,9 @@ Each one is yours to accept or reject.
 
 ### Landing
 
-1. **Hero.** The device turns in dark, then its screen comes on and the cat walks in from the
-   right, from outside the glass, and sits. About 4.5 s. Before: duck, octopus and bunny took
-   turns. (The first build booted with "molty.uno" on the screen; that is gone.)
+1. **Hero.** The device turns in dark, then its screen comes on and the cat walks in from beyond
+   the window's right edge, across the page, into the screen, and sits. Before: duck, octopus
+   and bunny took turns.
 2. **Hero, taps.** A tap ripples the water and the cat comes to the front. After 5 minutes
    untouched it dozes off, as on the device.
 3. **The page background.** Fine dust over black, edge to edge, on the landing, the showcase and
@@ -264,8 +269,8 @@ Pictures, in `apps/website/e2e-out/` (not committed):
   a device (2.6 device widths) and a heading; that a page wave fades slower than a screen's
   (so it can cross a screen from outside); how hard it pushes the screen's water at the rim.
   All three are one constant each.
-- **The entrance runs the cat's clock 1.8 times faster** until it sits, to keep it near 4 s.
-  Same clips, brisker. One constant.
+- **The entrance runs the cat's clock 2.2 times faster** until it sits. Same clips, brisker.
+  One constant (`ENTER.rate`).
 - **Where the dust meets the bezel.** Outside it is 1 px specks, inside the cat's screen the
   firmware draws its floor dust as dots on its own grid. The bezel ring sits between them. They
   are the same colour family but not the same grain. Making them one grain needs a pan and zoom

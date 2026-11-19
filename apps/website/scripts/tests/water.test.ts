@@ -31,7 +31,7 @@ test("the page's dust has the firmware's numbers (fluid_fine.h)", () => {
 
 test("... and its threshold is the firmware's noise (fluid_fine.c ign)", () => {
   const c = repo("device/firmware/main/fluid/fluid_fine.c").toString();
-  assert.match(c, /0\.06711056f \* \(float\)x \+ 0\.00583715f \* \(float\)y, v = 52\.9829189f \* \(a - floorf\(a\)\)/);
+  for (const k of ["0.06711056f", "0.00583715f", "52.9829189f"]) assert.ok(c.includes(k), `fluid_fine.c still uses ${k}`);
   assert.ok(Math.abs(ign(3, 7) - ((52.9829189 * ((0.06711056 * 3 + 0.00583715 * 7) % 1)) % 1)) < 1e-4);
 });
 

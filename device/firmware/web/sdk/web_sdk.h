@@ -13,6 +13,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 #ifdef __cplusplus
@@ -34,11 +35,12 @@ typedef int esp_err_t;
 const char *esp_err_to_name(esp_err_t e);
 #define ESP_ERROR_CHECK(x) do { if ((x) != ESP_OK) abort(); } while (0)
 
-/* ── esp_log.h: the log goes nowhere ─────────────────────────────────────── */
-#define ESP_LOGE(tag, ...) ((void)(tag))
-#define ESP_LOGW(tag, ...) ((void)(tag))
-#define ESP_LOGI(tag, ...) ((void)(tag))
-#define ESP_LOGD(tag, ...) ((void)(tag))
+/* ── esp_log.h: the log goes nowhere (its arguments are still checked, and count as used) ── */
+#define WEB_LOG(tag, ...) do { (void)(tag); if (0) (void)printf(__VA_ARGS__); } while (0)
+#define ESP_LOGE(tag, ...) WEB_LOG(tag, __VA_ARGS__)
+#define ESP_LOGW(tag, ...) WEB_LOG(tag, __VA_ARGS__)
+#define ESP_LOGI(tag, ...) WEB_LOG(tag, __VA_ARGS__)
+#define ESP_LOGD(tag, ...) WEB_LOG(tag, __VA_ARGS__)
 
 /* ── esp_timer.h: the clock is the caller's (web_sdk_clock) ───────────────── */
 int64_t esp_timer_get_time(void);
@@ -99,6 +101,17 @@ BaseType_t xSemaphoreGive(SemaphoreHandle_t s);
 void       vSemaphoreDelete(SemaphoreHandle_t s);
 BaseType_t xTaskCreatePinnedToCore(void (*fn)(void *), const char *name, uint32_t stack, void *arg, int prio, TaskHandle_t *out, int core);
 static inline void vTaskDelete(TaskHandle_t t) { (void)t; }
+/* a task with its stack in chosen memory (freertos/idf_additions.h): the firmware makes a creature on one, under the
+ * screen's tasks, and makes it in place when there is no memory for the task. There is one thread here, so there
+ * never is: the creature is made where it is asked for, the firmware's own way. */
+#define tskNO_AFFINITY 0x7fffffff
+static inline BaseType_t xTaskCreatePinnedToCoreWithCaps(void (*fn)(void *), const char *name, uint32_t stack, void *arg, int prio,
+                                                         TaskHandle_t *out, int core, uint32_t caps) {
+    (void)fn; (void)name; (void)stack; (void)arg; (void)prio; (void)out; (void)core; (void)caps;
+    return pdFALSE;
+}
+static inline void vTaskDeleteWithCaps(TaskHandle_t t) { (void)t; }
+static inline void vTaskSuspend(TaskHandle_t t) { (void)t; }
 void vTaskDelay(TickType_t t);
 static inline TaskHandle_t xTaskGetCurrentTaskHandle(void) { return NULL; }
 static inline BaseType_t xTaskNotifyGive(TaskHandle_t t) { (void)t; return pdPASS; }
