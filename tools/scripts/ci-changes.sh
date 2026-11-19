@@ -44,8 +44,8 @@ else
     esac
 
     case "$p" in
-      # the creature exporter + its committed .molty output; the website renders the
-      # creatures (@creatures, @molty-files, @molty-catalog) and syncs their READMEs as docs
+      # the creature exporter + its committed .molty output; the website syncs their READMEs
+      # as docs
       device/creatures/*) hit creatures website ;;
     esac
     case "$p" in
@@ -62,6 +62,10 @@ else
     case "$p" in
       # /build and /setup read every board.json (repoBoards.ts, setup-match.test.ts)
       device/firmware/boards/*) hit website ;;
+      # the website's Molty is the firmware's renderer (device/firmware/web/built, from main/):
+      # its test fails when the sources, the packages it plays or its sample commands move on
+      # without `make web-molty` (molty.test.ts)
+      device/firmware/main/*|device/firmware/web/*|device/firmware/test/host/fixtures/*|packages/*|tools/web-molty/*) hit website ;;
     esac
 
     case "$p" in

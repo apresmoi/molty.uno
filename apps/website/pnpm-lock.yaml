@@ -20,9 +20,6 @@ importers:
       '@glyphcss/diagrams':
         specifier: 0.3.2
         version: 0.3.2
-      '@glyphcss/fluid':
-        specifier: 0.3.2
-        version: 0.3.2
       '@layoutit/polycss-core':
         specifier: 0.2.11
         version: 0.2.11
@@ -38,9 +35,6 @@ importers:
       esptool-js:
         specifier: 0.6.1
         version: 0.6.1
-      glyphcss:
-        specifier: 0.3.2
-        version: 0.3.2
       improv-wifi-serial-sdk:
         specifier: 2.8.0
         version: 2.8.0
@@ -579,8 +573,8 @@ packages:
   '@expressive-code/plugin-text-markers@0.42.0':
     resolution: {integrity: sha512-l59lUx8fq1v5g6SpmbDjiU0+7IdfbiWnAyRmtTVSpfhyq+nZMN4UcmYyu2b9Mynhzt7Gr+O+cXyEPDNb2AVWVQ==}
 
-  '@glyphcss/core@0.3.2':
-    resolution: {integrity: sha512-Kq/9HcNiAaykq0ZjYd1o06BRQPYbbLK/qyvE6fgpP6+oMfvykMOdfVGrmr2kpN7Te6qiLgvhKdpuPY1j6NPHRw==}
+  '@glyphcss/core@0.3.4':
+    resolution: {integrity: sha512-v9sV4538DQGHupH9Y1l+67Kwsb/2tfimmvgSYo/4sV+OcRr6qhSnoHkkUEtycrM3d9g4+2A0Mun2r2BaHq23EA==}
 
   '@glyphcss/diagrams@0.3.2':
     resolution: {integrity: sha512-h96W94dBVJPJdwQq7e+0Z8bN5CqdLJyPAkTSO56qpQSpFBFxgSaBCoBXODm3Oko1FZsUtuU/nfSKHXF5l/0UwQ==}
@@ -589,9 +583,6 @@ packages:
     peerDependenciesMeta:
       elkjs:
         optional: true
-
-  '@glyphcss/fluid@0.3.2':
-    resolution: {integrity: sha512-aCRFu3MV9CJHgl4U7ChZ7ZMheVaUPX7fAdRqekcAKrrxyteLM8W9DKeUdBKv/5pZ1U804uU+5D0jai0fyjhwyw==}
 
   '@img/colour@1.1.0':
     resolution: {integrity: sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ==}
@@ -1519,6 +1510,7 @@ packages:
 
   improv-wifi-serial-sdk@2.8.0:
     resolution: {integrity: sha512-3MCm9NAD6c4OXyXl+jPqu0kNasIZi80JVeDkPaOQEI4JpItCaOAyQGdL/yg5mOqlKJ0nn2K/xb8H7enbNPc/5g==}
+    deprecated: Moved to @improv-wifi/serial-sdk
 
   inline-style-parser@0.2.7:
     resolution: {integrity: sha512-Nb2ctOyNR8DqQoR0OwRG95uNWIC0C1lCgf5Naz5H6Ji72KZ8OcFZLz2P5sNgwlyoJ8Yif11oMuYs5pBQa86csA==}
@@ -2885,7 +2877,7 @@ snapshots:
     dependencies:
       '@expressive-code/core': 0.42.0
 
-  '@glyphcss/core@0.3.2':
+  '@glyphcss/core@0.3.4':
     dependencies:
       buffer: 6.0.3
       jpeg-js: 0.4.4
@@ -2894,12 +2886,7 @@ snapshots:
   '@glyphcss/diagrams@0.3.2':
     dependencies:
       '@dagrejs/dagre': 3.1.3
-      '@glyphcss/core': 0.3.2
-      glyphcss: 0.3.2
-
-  '@glyphcss/fluid@0.3.2':
-    dependencies:
-      '@glyphcss/core': 0.3.2
+      '@glyphcss/core': 0.3.4
       glyphcss: 0.3.2
 
   '@img/colour@1.1.0': {}
@@ -3759,7 +3746,7 @@ snapshots:
 
   glyphcss@0.3.2:
     dependencies:
-      '@glyphcss/core': 0.3.2
+      '@glyphcss/core': 0.3.4
 
   h3@1.15.11:
     dependencies:

@@ -7,9 +7,6 @@ export const title = "build your own — molty.UNO";
 export const description =
   "Will your board run molty.UNO? The reference build's parts list (one €33 board, optional battery and vibration), community boards, and a waitlist if you'd rather get one built.";
 
-/** The heading's colour in the fluid (the wordmark's green). */
-export const BUILD_INK = "#3ccf96";
-
 export const PORTING_HREF = "/getting-started/porting/";
 export const SUBMIT_HREF = "/getting-started/porting/#submit-your-board";
 

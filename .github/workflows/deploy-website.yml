@@ -23,6 +23,8 @@ on:
       - "README.md"
       - "CONTRIBUTING.md"
       - "device/firmware/boards/**/board.json"
+      - "device/firmware/web/built/**"
+      - "packages/**"
       - ".github/workflows/deploy-website.yml"
   workflow_dispatch:
   workflow_call:

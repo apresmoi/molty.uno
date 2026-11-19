@@ -180,7 +180,7 @@ for (const f of tracked) {
   if (!existsSync(p) && !lstatSync(p, { throwIfNoEntry: false })) continue;
   const st = lstatSync(p);
   if (st.isSymbolicLink()) bad(`${f}: symlink in the plugin root (the plugin loaders refuse them)`);
-  else if (!/\.(png|jpe?g|gif|webp|woff2?|bin|ico|glb|blend)$/i.test(f) && st.size >= MAX_PLUGIN_FILE) bad(`${f}: ${st.size} bytes; plugin loaders read scripts/documents only below 256 KiB`);
+  else if (!/\.(png|jpe?g|gif|webp|woff2?|bin|wasm|ico|glb|blend)$/i.test(f) && st.size >= MAX_PLUGIN_FILE) bad(`${f}: ${st.size} bytes; plugin loaders read scripts/documents only below 256 KiB`);
 }
 
 // 7. one home for the skill

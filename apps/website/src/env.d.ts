@@ -1,83 +1,11 @@
 /// <reference types="astro/client" />
 
-/* The REAL creature engine from device/creatures/js (aliased in astro.config.mjs). Plain JS, typed
-   here for the parts services/molty-stage uses: the cute kit and its mood engine are the
-   Moltys' rig; @glyphcss/fluid draws them. */
-
-declare module "@creatures/cute/kit.js" {
-  /** The slice of a three.js Object3D the rig's scene graph is read through. */
-  export interface RigObject {
-    isMesh?: boolean;
-    matrixWorld: { elements: ArrayLike<number> };
-    geometry?: {
-      getAttribute(name: "position"): {
-        count: number;
-        getX(i: number): number;
-        getY(i: number): number;
-        getZ(i: number): number;
-      };
-      getIndex(): { count: number; getX(i: number): number } | null;
-    };
-    material?: { color: { getHexString(): string } };
-    /** The local transform (three.js Vector3 / Euler: x, y, z and set()), for a beat's `post`. */
-    position: RigVec;
-    rotation: RigVec;
-    scale: RigVec;
-    visible: boolean;
-  }
-  export interface RigVec {
-    x: number;
-    y: number;
-    z: number;
-    set(x: number, y: number, z: number): unknown;
-  }
-  export class CuteCreature {
-    constructor(entry: unknown);
-    root: RigObject & { updateMatrixWorld(force?: boolean): void; traverseVisible(fn: (o: RigObject) => void): void };
-    envelope: { min: { x: number; y: number; z: number }; max: { x: number; y: number; z: number }; rise?: number };
-    /** The head group (origin = head centre) and the face layout, for the glass beat's anchor. */
-    headG: RigObject;
-    eyeSpec: { x: number; y: number };
-    /** The eyes (each a group around a unit disc scaled to the eye) and the blush cheeks. */
-    eyes: ReadonlyArray<{ side: number; g: RigObject; inner: RigObject }>;
-    cheeks: ReadonlyArray<RigObject>;
-    /** The scene graph a beat may move (beats/): root → norm → lean → bodyG | headPivot → headG. */
-    norm: RigObject;
-    lean: RigObject;
-    bodyG: RigObject;
-    headPivot: RigObject;
-    /** Spec parts by name (every mesh of that name, mirrored copies included). */
-    parts: Record<string, RigObject[] | undefined>;
-    /** Sockets by name (ear, side, tail, foot, top, …), one record per instance. */
-    sock: Record<string, ReadonlyArray<{ g: RigObject; side: number }> | undefined>;
-    mouthSpec: { y: number };
-    /** A point on the face ellipsoid (head-local) at normalised (u, v), lifted along the normal. */
-    _surfPoint(u: number, v: number, lift: number): { x: number; y: number; z: number };
-    update(dt: number, pose: unknown): void;
-    dispose(): void;
-  }
-}
-
-declare module "@creatures/mood.js" {
-  /** idle listening thinking speaking happy sleepy surprised */
-  export const MOODS: readonly string[];
-  export class MoodEngine {
-    set(mood: string): void;
-    update(dt: number): unknown;
-  }
-}
-
-declare module "@creatures/cute/index.js" {
-  export const CUTE_CATALOG: ReadonlyArray<{
-    id: string;
-    name: string;
-    spec: { palette: Record<string, string> };
-  }>;
-}
-
-declare module "@molty-catalog/catalog.json" {
-  const catalog: { version: number; creatures: Array<{ id: string; name: string; file: string }> };
-  export default catalog;
+/* The repo's own files, aliased in astro.config.mjs: the firmware's renderer built for the web
+   (@molty-wasm, device/firmware/web/built) and the packages it plays (@packages). Fetched by
+   URL at run time (the ?url imports); a page's frontmatter may also read a package at build. */
+declare module "@packages/*.json" {
+  const value: unknown;
+  export default value;
 }
 
 /** ESP Web Tools' installer dialog (the pinned 10.4.0 browser bundle's chunk): registers

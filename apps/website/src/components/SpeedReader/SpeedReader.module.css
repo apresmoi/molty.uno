@@ -2,154 +2,12 @@
 .root {
   display: contents;
 }
-/* the device's own round screen, sitting in the page fluid: an LCD, dark in both themes
-   (data-screen takes the dark tokens, so its fluid is not inverted) */
+/* the device's own round screen (MoltyScreen fills it) */
 .glass {
   position: relative;
   aspect-ratio: 1;
   width: min(100%, 420px, 80svh);
   justify-self: center;
-  border-radius: 50%;
-  background: var(--m-bg);
-  /* the choices are sized off the screen */
-  container-type: inline-size;
-}
-/* the device (Device) sits around the screen and reaches past it, so the screen's own layers
-   clip themselves to the round (the sectors' clip is their hit area too) */
-.host,
-.sectors {
-  border-radius: 50%;
-  overflow: hidden;
-}
-/* while the board turns in, the screen is off: nothing of it shows unturned */
-.glass:has([data-screen-off]) {
-  background: transparent;
-}
-.glass:has([data-screen-off]) > :not([data-device]) {
-  visibility: hidden;
-}
-.host {
-  position: absolute;
-  inset: 0;
-}
-/* @glyphcss/fluid's layer fills the host (on the screen the fluid filter is none) */
-.host > * {
-  filter: var(--m-fluid-filter);
-}
-.still {
-  position: absolute;
-  inset: 18%;
-  display: grid;
-  place-items: center;
-  margin: 0;
-  color: var(--m-ink);
-  font: var(--m-text-md) / 1.5 var(--m-font-mono);
-  text-align: center;
-}
-/* three equal 120° sectors are the answer buttons (dividers at 12, 4 and 8 o'clock): yes
-   upper left, no upper right, idk at the bottom. Each button covers the screen, clipped to
-   its sector (the clip is its hit area too); its word sits on the sector's bisector. */
-.sectors {
-  position: absolute;
-  inset: 0;
-}
-[data-listening] .sectors {
-  /* faint dividers, hair-thin at the centre */
-  background: repeating-conic-gradient(from -0.35deg, var(--m-faint) 0 0.7deg, transparent 0.7deg 120deg);
-}
-.sector {
-  position: absolute;
-  z-index: 1;
-  inset: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--m-dim);
-  font: inherit;
-  cursor: pointer;
-}
-.sector[data-choice="yes"] {
-  clip-path: polygon(50% 50%, 50% -60%, -60% -60%, -60% 113.5%);
-}
-.sector[data-choice="no"] {
-  clip-path: polygon(50% 50%, 50% -60%, 160% -60%, 160% 113.5%);
-}
-.sector[data-choice="idk"] {
-  clip-path: polygon(50% 50%, 160% 113.5%, 160% 160%, -60% 160%, -60% 113.5%);
-}
-.sector:disabled {
-  /* not asking: the pointer stirs the fluid underneath */
-  pointer-events: none;
-}
-.sector:not(:disabled):hover {
-  background: var(--m-accent-glow);
-}
-.sector:focus-visible {
-  outline: 0;
-  background: var(--m-accent-soft);
-}
-/* the word's spot: centred on the sector's bisector, 40 % of the radius out */
-.spot {
-  position: absolute;
-  display: grid;
-  justify-items: center;
-  gap: 1.5cqi;
-  translate: -50% -30%;
-}
-[data-choice="yes"] .spot {
-  left: 32.7%;
-  top: 40%;
-}
-[data-choice="no"] .spot {
-  left: 67.3%;
-  top: 40%;
-}
-[data-choice="idk"] .spot {
-  left: 50%;
-  top: 70%;
-}
-.choice {
-  /* not asking: the words stay laid out (the fluid measures them) but unseen */
-  color: transparent;
-  font: 700 14cqi / 1 var(--m-font-mono);
-  letter-spacing: -0.04em;
-}
-[data-listening] .choice {
-  color: var(--choice);
-}
-[data-choice="yes"] {
-  --choice: var(--m-yes);
-}
-[data-choice="no"] {
-  --choice: var(--m-no);
-}
-[data-choice="idk"] {
-  --choice: var(--m-idk);
-}
-/* live: the fluid condenses the words first, then the real letters settle in over the ink
-   (the reader's plain look: the fluid alone is too coarse to read at this size) */
-.glass[data-live] .choice {
-  color: transparent;
-  transition: color 0.25s;
-}
-.glass[data-live][data-listening] .choice {
-  color: var(--choice);
-  transition: color 0.5s 0.45s;
-}
-/* a tap keeps the chosen word a beat while the others melt */
-.glass[data-held="yes"] [data-choice="yes"] .choice,
-.glass[data-held="no"] [data-choice="no"] .choice,
-.glass[data-held="idk"] [data-choice="idk"] .choice {
-  color: var(--choice);
-  transition: none;
-}
-.hint {
-  color: var(--m-dim);
-  font: var(--m-text-xs) / 1 var(--m-font-mono);
-  visibility: hidden;
-}
-[data-listening] .hint {
-  visibility: visible;
 }
 .side {
   /* hug the text: the quiet zone under it is this box */
@@ -197,11 +55,18 @@
 .row button[aria-pressed="true"] {
   color: var(--m-accent);
 }
-.row button[aria-pressed="true"]::before {
+/* the answers, also as buttons (the keyboard's way; the glass takes a tap too) */
+.row .answer::before {
   content: "[ ";
 }
-.row button[aria-pressed="true"]::after {
+.row .answer::after {
   content: " ]";
+}
+.row .answer {
+  color: var(--m-accent);
+}
+.row[data-off] {
+  visibility: hidden;
 }
 .row button:hover,
 .own:hover,

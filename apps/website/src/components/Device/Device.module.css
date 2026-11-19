@@ -2,7 +2,7 @@
    ring with a rounded lip and a gasket at the screen), the screen-off disc and the domed glass.
    While it turns, the face layer carries all of that on the board's front plane and the wall
    is a polycss scene behind it. All decoration: it fills the slot and never takes the pointer,
-   so taps reach the screen and ripple the fluid. */
+   so taps reach the screen under it. */
 .device {
   position: absolute;
   z-index: 2;
@@ -87,19 +87,11 @@
   );
 }
 
-/* the screen is the page fluid behind it, seen through: in the light theme its backdrop undoes
-   the page's inversion, so the Molty shows on a dark LCD exactly as drawn (none in the dark) */
-.screen {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  backdrop-filter: var(--m-screen-filter);
-}
-
 .lid {
   transform-origin: 50% 0;
 }
-/* the screen, off: a dark disc while the board turns (the fluid behind cannot turn with it) */
+/* the screen, off: a dark disc on the face until the board stands (the screen under it cannot
+   turn with it; MoltyScreen brings it on then) */
 .cover {
   background: var(--m-device-off);
   opacity: 0;
