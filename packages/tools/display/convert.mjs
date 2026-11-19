@@ -12,7 +12,6 @@ import { COMMON, READS, SHAPES, TOKENS } from './compile.mjs';
 
 const REPO = fileURLToPath(new URL('../../../', import.meta.url));
 const KIND = { ring: 'circle', arc: 'arc', ticks: 'ticks', line: 'line', curve: 'line', disc: 'dot', ball: 'globe', glyph: 'symbol', text: 'label', spot: 'tap_zone' };
-const HOLDS = { x: 'coord', y: 'coord', on: 'time', off: 'time' };   // v1 field -> what it holds, where a shape's table does not say
 const SPLIT_AT = 5;   // screens: from here on, one file each
 
 // ---- YAML, as much as these files need
@@ -123,7 +122,7 @@ function screenYaml(s, pad = '') {
 export function convert(file, to) {
   const pkg = JSON.parse(readFileSync(file, 'utf8')), problems = checkPackage(pkg);
   if (pkg.kind !== 'scenes') throw new Error(`${file} is a ${pkg.kind} package: only scenes packages are written as display.yaml (a creature stays a package of its own)`);
-  if (problems.length) throw new Error(`${file} is not a valid molty-pkg/1 package: ${problems[0]}`);
+  if (problems.length) throw new Error(`${file} is not a valid scenes package: ${problems[0]}`);
   if (existsSync(join(to, 'display.yaml'))) throw new Error(`${to} already has a display.yaml: convert into an empty folder`);
   const put = (rel, body) => { mkdirSync(dirname(join(to, rel)), { recursive: true }); writeFileSync(join(to, rel), body); };
   // assets: a mask is a symbol; an image is a map when a globe wears it or it is twice as wide as tall, else a picture

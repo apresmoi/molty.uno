@@ -194,7 +194,7 @@
       "properties": {
         "type": { "enum": ["number", "angle", "distance", "amount", "seconds", "text", "reading", "color", "asset", "groups", "list", "path"], "description": "number; angle (degrees, -720 to 720); distance (fraction of the radius, 0 to 2); amount (0 to 1); seconds (0 to 600); text (words for a label, up to 40); reading (what a tap shows, up to 160); color (#rrggbb); asset (an asset's name); groups (group names, spaces between, up to 4); list (up to 32 flat objects, see of). path needs firmware that is not out yet." },
         "about": { "type": "string", "minLength": 1, "description": "One sentence for the agent: what to send and how to work it out." },
-        "sent_as": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,24}$", "description": "The name the agent sends, when it differs from the name used here (a package that keeps its v1 names: symbol here, g on the wire).", "errorMessage": "must be 1 to 24 of letters, digits, _ and -" },
+        "sent_as": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,24}$", "description": "The name the agent sends, when it differs from the name used here: symbol in the drawing, g in what is sent.", "errorMessage": "must be 1 to 24 of letters, digits, _ and -" },
         "example": { "description": "A value that works. Fills the sample call in build/display.md and the preview." },
         "min": { "type": "number", "description": "A number's smallest value." },
         "max": { "type": "number", "description": "A number's largest value; a text's most letters; a list's most elements (default 32). The compiler budgets the screen with it." },

@@ -33,7 +33,7 @@ inputs:
     example: mars
 draw:
   - globe: { radius: 0.09, map: "{{ planet }}", spin: 10 }
-  # draw before for: keeps this item as the package always had it (docs/DISPLAY.md, "Moving from v1")
+  # draw before for: the built package keeps the order written here, and this is the order it has always had
   - draw:
       - globe: { at: { x: "{{ step.x }}", y: "{{ step.y }}" }, show: { from: "{{ step.from }}", until: "{{ step.until }}" }, radius: 0.45, map: moon, lit: 0.99 }
     for: step in path

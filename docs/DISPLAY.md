@@ -38,7 +38,8 @@ node packages/tools/molty-display.mjs build my-skill
 
 See it on your computer: `node packages/tools/molty-display.mjs preview my-skill`, then open the address it prints.
 
-Show it on Molty. The agent sends this (the build writes it for every screen, in `build/display.md`):
+Show it on Molty. The agent sends this through the molty skill (its `molty_scene` tool, or the script
+your skill ships). The build writes the call for every screen, in `build/display.md`:
 
 ```json
 {"name":"scene.play","args":{"pkg":"hello","layout":"hello","params":{"angle":90},"ttl_s":60}}
@@ -213,21 +214,12 @@ what it is about to send.
 | `molty-display check <folder>` | finds mistakes: spelling and types, then what Molty cannot take, then links in `SKILL.md` |
 | `molty-display build <folder>` | check, then the package, its cost, and `build/` |
 | `molty-display preview <folder>` | a page on your computer: pick a screen, edit inputs, scrub time, click tap zones |
-| `molty-display convert <package.json> --to <folder>` | turns an old package into a folder like this one |
 
 `molty-display` is `node packages/tools/molty-display.mjs`. A skill in `skills/` builds into
 `packages/<id>/`, where Molty fetches it once merged: commit the folder and the built package, then run
 `node tools/scripts/check-packages.mjs --write-index`. Any other folder builds into its own `build/`.
 Editors complete `display.yaml` from `schema/display-2.json`: start the file with
 `# yaml-language-server: $schema=<path to>/schema/display-2.json`.
-
-## Moving an old package over
-
-`convert` writes the folder: every asset as a PNG, every screen with its shapes. It cannot know what an
-input means, so each `about` says `TODO` until you write it; `check` lists them. Building the folder
-gives back the same package, byte for byte. Two things keep that true while you tidy:
-- A new name for an input or a field needs `sent_as: <old name>`, so the agent keeps sending what it sent.
-- The package keeps the order you write things in. If a `for` block came out with `draw` above `for`, leave it so.
 
 ## Limits and edge cases
 
@@ -245,8 +237,7 @@ gives back the same package, byte for byte. Two things keep that true while you 
 | text | plain ASCII; cannot start with `$` or `@` |
 | names | screens, inputs and fields: lower case, digits and `_` (a screen may use `-`), 24 at most |
 | every input | must be sent, and must be used by some shape |
+| `sent_as` on an input or a field | the name the agent sends, when you want a clearer one in the drawing |
 | read from inputs | a point of a `line` or `along` must be `{ x, y }`; `lit_side` is a number, 1 right, -1 left |
 | `move`, `default`, `type: path` | need new firmware: `check` refuses them and says what to write instead |
 | SVG | `line`, `polyline` and `polygon` only; anything else goes in as a PNG |
-
-The compiled form, for the curious: [PACKAGES.md](PACKAGES.md).

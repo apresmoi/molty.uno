@@ -44,7 +44,7 @@ inputs:
 draw:
   - circle: { radius: "{{ penumbra }}", color: dim }
   - circle: { radius: "{{ umbra }}", color: umbra_red }
-  # draw before for: keeps this item as the package always had it (docs/DISPLAY.md, "Moving from v1")
+  # draw before for: the built package keeps the order written here, and this is the order it has always had
   - draw:
       - globe: { at: { x: "{{ step.x }}", y: "{{ step.y }}" }, show: { from: "{{ step.from }}", until: "{{ step.until }}" }, radius: "{{ moon_size }}", map: "{{ step.map }}" }
     for: step in path
