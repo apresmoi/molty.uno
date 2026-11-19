@@ -115,10 +115,10 @@ is always out (the worst case: a calm page draws no water at all).
 
 | Width | CPU | Frames a second | Longest gap | Main thread a frame |
 |---|---|---|---|---|
-| 1280 px | as is | **60.0** | 17.8 ms | 10.6 ms |
-| 1280 px | 4x slower | **37.0** | 42.1 ms | 26.9 ms |
-| 390 px | as is | **60.0** | 17.8 ms | 5.5 ms |
-| 390 px | 4x slower | **56.5** | 38.1 ms | 17.4 ms |
+| 1280 px | as is | **60.0** | 18.5 ms | 9.3 ms |
+| 1280 px | 4x slower | **40.5** (37 to 41 over four runs) | 38.0 ms | 24.5 ms |
+| 390 px | as is | **60.0** | 25.3 ms | 5.4 ms |
+| 390 px | 4x slower | **55.8** | 26.6 ms | 17.4 ms |
 
 - Most of that time is the page's wave (a full-viewport canvas while a wave is out), not the
   firmware's renderer: one firmware frame costs about 0.43 ms under Node.
