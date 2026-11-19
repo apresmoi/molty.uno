@@ -427,6 +427,8 @@ typedef struct {
     int16_t  (*box)[4];                /* this frame's boxes (fluid_draw_send2), fb px x0, y0, x1, y1             */
     int      nbox;
     int      px, wins, band;           /* this frame's pixels and windows of the front, its pixels in the band    */
+    int      cmp_us, push_us;          /* ... the time its windows took to draw and compose, and to hand to the panel
+                                        * (each hand-over waits for the transfer before it)                      */
 } fluid_morph_t;
 
 /* animations the drawer tells apart (fluid_draw_t.anim_*): each frame, which had cells change, and which of those

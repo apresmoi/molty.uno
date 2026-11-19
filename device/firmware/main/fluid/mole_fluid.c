@@ -332,7 +332,7 @@ static fluid_fine_t  *s_fine;
 static uint8_t       *s_still, *s_still_d;
 static fluid_shape_t *s_fshp;
 #define FINE_BUILD_US 6000                          /* the dust's build, at most this a frame (the sim's core) ...  */
-#define FINE_AHEAD_US 12000                         /* ... and while its scene is still coming (a change of picture).
+#define FINE_AHEAD_US 20000                         /* ... and while its scene is still coming (a change of picture).
                                                      * (It was 20000: a step of the build runs past its budget by
                                                      * up to ~9 ms, and the sim's frame then ran past 33.) */
 static unsigned s_cap_word, s_dcap_word;            /* the caption's word: a new number each word, 0 none */
@@ -1290,6 +1290,8 @@ esp_err_t mole_fluid_framebuffer_sync(void) {
     return xSemaphoreTake(s_fb_done, pdMS_TO_TICKS(500)) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
 }
 
+static uint32_t s_last_wait_us;                     /* the drawer's wait for its last window's transfer, this frame */
+static volatile uint32_t s_sim_work_us;             /* the sim's last frame's own work (sim_frame, the dust's build in it) */
 static void draw_task(void *arg) {
     (void)arg;
     esp_err_t wdt_err = esp_task_wdt_add(NULL);
@@ -1336,7 +1338,7 @@ static void draw_task(void *arg) {
             nc = fluid_draw_cells(s_draw, s_frame, &s_dopts);
             t1 = esp_timer_get_time();
             bool sent = fluid_draw_send2(s_draw, &s_dopts, &ov, mark, full, s_win, s_win2, s_win_px, send_win, NULL) >= 0;
-            if (s_win2) { const int64_t tw = esp_timer_get_time(); sent &= molty_display_blit_wait() == ESP_OK; s_blit_us += esp_timer_get_time() - tw; }
+            if (s_win2) { const int64_t tw = esp_timer_get_time(); sent &= molty_display_blit_wait() == ESP_OK; s_last_wait_us = (uint32_t)(esp_timer_get_time() - tw); s_blit_us += s_last_wait_us; }
             s_full_flush = !sent;                       /* a window that failed: repaint all */
             mark_drawn = mark; pal_drawn = s_dopts.palette; ov_drawn = ov;
             if (s_fb_want && !fluid_draw_morphing(s_draw)) {   /* the same frame into the framebuffer (a change of picture keeps the old one there: after it) */
@@ -1358,6 +1360,10 @@ static void draw_task(void *arg) {
             static const char *const NAME[FLUID_ANIM_N] = { "wave", "grow", "word", "water" };
             enum { BINS = 64 };                         /* intervals in 1 ms bins (the last: 63 and more) */
             static struct { uint32_t f, s, rest, px, pxmax, win, worst, worst_c; uint16_t pan[BINS], sim[BINS]; int64_t began; } A[FLUID_ANIM_N];
+            /* the wave's frame in parts (sums and worst, us): drawing + composing its windows, handing them to the panel
+             * (each waits for the transfer before), the last transfer's wait, the cells, the sim's own work; its band px */
+            enum { P_CMP, P_PUSH, P_WAIT, P_CELLS, P_SIM, P_N };
+            static uint32_t wp[P_N], wpm[P_N], wband;
             static int64_t last_t0;
             static float last_sim;
             const uint32_t pan_ms = last_t0 ? (uint32_t)((t0 - last_t0 + 500) / 1000) : 0, sim_ms = (uint32_t)((s_dopts.time - last_sim) * 1000.f + 0.5f);
@@ -1373,6 +1379,11 @@ static void draw_task(void *arg) {
                     A[q].win += q == FLUID_ANIM_WAVE ? (uint32_t)s_draw->m.wins : (uint32_t)s_send_n;
                     if (A[q].f > 1) { A[q].pan[pan_ms < BINS ? pan_ms : BINS - 1]++; A[q].sim[sim_ms < BINS ? sim_ms : BINS - 1]++; }
                     if ((uint32_t)(t2 - t0) > A[q].worst) { A[q].worst = (uint32_t)(t2 - t0); A[q].worst_c = (uint32_t)(t1 - t0); }
+                    if (q == FLUID_ANIM_WAVE) {
+                        const uint32_t v[P_N] = { (uint32_t)s_draw->m.cmp_us, (uint32_t)s_draw->m.push_us, s_last_wait_us, (uint32_t)(t1 - t0), s_sim_work_us };
+                        for (int p = 0; p < P_N; p++) { wp[p] += v[p]; wpm[p] = v[p] > wpm[p] ? v[p] : wpm[p]; }
+                        wband += (uint32_t)s_draw->m.band;
+                    }
                 } else if (A[q].f && ++A[q].rest >= 10) {
                     uint32_t pc[2][3];                  /* p50, p95, worst of each core */
                     for (int c = 0; c < 2; c++) {
@@ -1392,6 +1403,13 @@ static void draw_task(void *arg) {
                                     NAME[q], (int)((t0 - A[q].began) / 1000), (unsigned)A[q].f, (unsigned)A[q].s, A[q].px / 1000.f / A[q].f, A[q].pxmax / 1000.f,
                                     (float)A[q].win / A[q].f, (unsigned)pc[0][0], (unsigned)pc[0][1], (unsigned)pc[0][2], (unsigned)pc[1][0], (unsigned)pc[1][1],
                                     (unsigned)pc[1][2], A[q].worst / 1000.f, A[q].worst_c / 1000.f, (A[q].worst - A[q].worst_c) / 1000.f);
+                    if (q == FLUID_ANIM_WAVE) {
+                        const float n = (float)A[q].f;
+                        mole_diag_event(false, "anim wave.parts cmp=%.1f/%.1f push=%.1f/%.1f wait=%.1f/%.1f cells=%.1f/%.1f simw=%.1f/%.1f band=%.1f",
+                                        wp[P_CMP] / 1000.f / n, wpm[P_CMP] / 1000.f, wp[P_PUSH] / 1000.f / n, wpm[P_PUSH] / 1000.f, wp[P_WAIT] / 1000.f / n,
+                                        wpm[P_WAIT] / 1000.f, wp[P_CELLS] / 1000.f / n, wpm[P_CELLS] / 1000.f, wp[P_SIM] / 1000.f / n, wpm[P_SIM] / 1000.f, wband / 1000.f / n);
+                        memset(wp, 0, sizeof(wp)); memset(wpm, 0, sizeof(wpm)); wband = 0;
+                    }
                     memset(&A[q], 0, sizeof(A[q]));
                 }
             }
@@ -1628,6 +1646,7 @@ static void fluid_task(void *arg) {
         int64_t t0 = esp_timer_get_time();
         sim_frame(rdt, &cfg);
         int64_t t1 = esp_timer_get_time();
+        s_sim_work_us = (uint32_t)(t1 - t0);
         /* hand the frame to the drawer: wait until it finished the previous one */
         xSemaphoreTake(s_idle, portMAX_DELAY);
         if (s_dir.bye) {   /* the goodbye's fade: the panel's level, with the drawer idle */
