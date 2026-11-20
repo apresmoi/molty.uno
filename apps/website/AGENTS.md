@@ -85,7 +85,7 @@ Never deploy or publish from here; nothing in this package does.
   one. Each screen is its own instance (~6 MB). The hero's cat walks in from beyond the window's
   edge (`enter`): the same renderer twice for those seconds, the second with its camera on the
   cat, its picture of the cat alone carried across the page on a clear canvas.
-- **The simulator, `/sim/`** (not linked, not in the sitemap, `noindex`): the whole device for
+- **The demo (device simulator), `/demo/`** (not linked, not in the sitemap, `noindex`): the whole device for
   judging a change before it is flashed. `components/SimPage` (controls grouped as the device is
   used, the event log, "copy this state as text"), `services/molty-screen/sim.ts` (`MoltySim`: one
   instance, the pointer as the finger, two speeds; `DeviceCalls`: the module's simulator calls),
@@ -97,7 +97,7 @@ Never deploy or publish from here; nothing in this package does.
   time-budgeted work spreads as on the device), the senses (sense.c's loop on gesture.c, every
   agent event from link_protocol.c's frames) and the lab (`LAB`: one line a firmware experiment
   switch; `features/sim/controls.ts` `LAB_LABELS`: one line for its words). Its code loads only on
-  `/sim/`. `pnpm sim` drives it through Juan's script in both speeds (`e2e-out/sim/`).
+  `/demo/`. `pnpm sim` drives it through Juan's script in both speeds (`e2e-out/sim/`).
 - The page must read without the engine: a heading keeps its DOM text (it steps aside only once
   its word draws, `[data-word="live"]`), a Molty screen shows its still.
 - A device is one thing: nothing of its screen shows until its frame stands in place
@@ -155,7 +155,7 @@ Never deploy or publish from here; nothing in this package does.
   and 390 px, every frame of the load, a scroll through every section and a theme switch: a
   screen shows only inside its device at rest, never moves, never goes away. And the cat walking
   in is one picture on both sides of the rim in every frame (no step, no second pose).
-- `pnpm sim` (`e2e/sim.mjs`, preview running): `/sim/` in both speeds: boot, a tap, a mood, a
+- `pnpm sim` (`e2e/sim.mjs`, preview running): `/demo/` in both speeds: boot, a tap, a mood, a
   gesture, a listen, a say, questions, the install, the chart and its taps (a planet, a sign
   opening, back), an aspect, back to the cat; each step's event must come, the glass must change,
   and in device speed the panel must be what the firmware shows (`wm_glass_off`). Pictures to

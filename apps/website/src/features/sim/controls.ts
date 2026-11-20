@@ -1,4 +1,4 @@
-// The simulator's controls (/sim/): data only. What each control calls is the module's own entry
+// The demo's controls (/demo/): data only. What each control calls is the module's own entry
 // (services/molty-screen sim.ts, core.ts); the words and numbers below are copied from where the
 // device or its agents take them, each with its source.
 import type { DeviceQuestion } from "../../services/molty-screen";

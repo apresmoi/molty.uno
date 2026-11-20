@@ -62,8 +62,8 @@ export default defineConfig({
   },
   integrations: [
     react(),
-    // the simulator (/sim/) is a tool for the owner: not listed
-    sitemap({ filter: (page) => !page.includes('/sim/') }),
+    // the demo (/demo/), the device simulator: not listed yet
+    sitemap({ filter: (page) => !page.includes('/demo/') }),
     starlight({
       title: SITE_NAME,
       description: SITE_DESCRIPTION,

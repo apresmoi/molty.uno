@@ -1,4 +1,4 @@
-// The simulator's device (/sim/): one instance of the firmware's renderer on a canvas, driven as
+// The demo's device (/demo/): one instance of the firmware's renderer on a canvas, driven as
 // the device is. The pointer is the finger, the device's own input handling is on (web_device.c:
 // taps, double taps, the buttons, a shake, as sense.c does them), and what an agent would hear
 // comes back as events. Two speeds:

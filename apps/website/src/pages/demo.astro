@@ -1,5 +1,5 @@
 ---
-// /sim/: the device simulator, a tool for the owner (not linked, not in the sitemap, noindex).
+// /demo/: the device simulator, a tool for the owner (not linked, not in the sitemap, noindex).
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import SiteLayout from "../layouts/SiteLayout.astro";
@@ -24,7 +24,11 @@ const module = (built as { wasm: { sha256: string } }).wasm.sha256.slice(0, 12);
 const firmware = `${commit}${local} (module ${module})`;
 ---
 
-<SiteLayout title="molty sim" description="The device's own code in the browser, driven as the device is." path="/sim/">
+<SiteLayout
+  title="molty demo"
+  description="The device's own code in the browser, driven as the device is."
+  path="/demo/"
+>
   <meta slot="head" name="robots" content="noindex, nofollow" />
   <SimPage
     client:only="react"

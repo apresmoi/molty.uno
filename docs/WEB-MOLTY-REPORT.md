@@ -16,12 +16,12 @@ The website's screens now run the firmware's own drawing code. No JavaScript dra
   creature package.
 - **All checks pass.** See "How to run it".
 
-### Third pass: the simulator (`/sim/`)
+### Third pass: the simulator (`/demo/`)
 
 Juan: "give me an html with the full ui we have in molty, with buttons so I can open the astrology
 chart and I need to see everything in the web and interact in the same way as the device".
 
-- **Where.** `http://127.0.0.1:4337/sim/` on the local preview (`/sim/` of any build). Not in the
+- **Where.** `http://127.0.0.1:4337/demo/` on the local preview (`/demo/` of any build). Not in the
   navigation, the sitemap or llms.txt; `noindex`. Its code loads only there.
 - **The glass.** The panel at 466 x 466 CSS px, crisp pixels, 2x zoom, a thin rim. The mouse is the
   finger: a click is a tap, two quick ones a double tap, a press held stirs the water. Every pixel
@@ -58,7 +58,7 @@ chart and I need to see everything in the web and interact in the same way as th
   second after a change of picture. The panel model is the 1.75C driver's: whole row pairs, an odd
   edge row sent full width from its framebuffer.
 - **Lab.** The firmware's experiment switches, one glue line each (`LAB` in web_device.c) and one
-  line of words (`features/sim/controls.ts`): "Dust in scenes" (fine specks, the cat's dots, the
+  line of words (`features/demo/controls.ts`): "Dust in scenes" (fine specks, the cat's dots, the
   cat's dots with lighter sending) and "How far fine specks ride a tap's wave" (12 px, 64 px,
   whole screen). Hidden when the module has none.
 
@@ -315,7 +315,7 @@ pnpm in-place
 pnpm screens
 pnpm molty
 pnpm fullpage
-pnpm sim                # the simulator, http://localhost:4330/sim/ (pictures in e2e-out/sim/)
+pnpm sim                # the simulator, http://localhost:4330/demo/ (pictures in e2e-out/demo/)
 
 # 4. only after changing the firmware's drawing code: rebuild the module
 brew install emscripten # 7.0.0, pinned in device/firmware/web/build.sh
@@ -389,9 +389,9 @@ Pictures, in `apps/website/e2e-out/` (not committed):
 ### Checks on this build (the simulator pass)
 
 - `make web-molty`: 2405 frames identical to the native build. `make web-molty-test`: pass.
-- `pnpm check`, `pnpm test` (60 of 60), `pnpm build` (21 pages, `/sim/` not in the sitemap).
+- `pnpm check`, `pnpm test` (60 of 60), `pnpm build` (21 pages, `/demo/` not in the sitemap).
 - `pnpm sim`: all passed, both speeds (32 checks, one note above); pictures in
-  `apps/website/e2e-out/sim/`.
+  `apps/website/e2e-out/demo/`.
 - `pnpm first-load`: all passed. `pnpm in-place`: all passed (the cat crosses the rim one picture
   in every frame, 0.00 px step).
 - `pnpm water`: 16 of 17, the same one as before: "a tapped sign's close-up ... beginning 29 % of
