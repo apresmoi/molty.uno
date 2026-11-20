@@ -473,7 +473,7 @@ static void guard_eval(void)
         esp_ota_mark_app_valid_cancel_rollback();
     }
     unlock();
-    if (g == UPD_GUARD_MARK_VALID) mole_diag_event(false, "update.valid (%s)", welcomed ? "relay welcome" : "http up");
+    if (g == UPD_GUARD_MARK_VALID) mole_diag_event(false, "update.valid (%s)", welcomed ? "relay welcome" : "ran its settle time");
 }
 
 static void guard_timer(void *arg) { (void)arg; guard_eval(); }
@@ -492,12 +492,14 @@ void self_update_boot(void)
     bool armed = arm_take(running);
     upd_boot_t rule = upd_boot_rule(pending, armed);
     lock(); s_rule = rule; unlock();
-    if (rule == UPD_BOOT_AWAIT_WELCOME) {
-        ESP_LOGI(TAG, "new image: kept once the relay welcomes it (else rolled back in %us)", (unsigned)(UPD_WELCOME_WINDOW_US / 1000000));
+    if (rule != UPD_BOOT_NOTHING) {
+        const int64_t window = rule == UPD_BOOT_AWAIT_WELCOME ? UPD_WELCOME_WINDOW_US : UPD_SETTLE_US;
+        if (rule == UPD_BOOT_AWAIT_WELCOME) ESP_LOGI(TAG, "new image: kept once the relay welcomes it (else rolled back in %us)", (unsigned)(window / 1000000));
+        else ESP_LOGI(TAG, "new image: kept once it has run %us (a reset before that rolls it back)", (unsigned)(window / 1000000));
         const esp_timer_create_args_t a = { .callback = guard_timer, .name = "upd_guard" };
-        int64_t left = UPD_WELCOME_WINDOW_US - esp_timer_get_time();
+        int64_t left = window - esp_timer_get_time();
         if (esp_timer_create(&a, &s_guard_timer) == ESP_OK)
             esp_timer_start_once(s_guard_timer, left > 0 ? (uint64_t)left : 1);
     }
-    guard_eval();   /* not armed: valid now (HTTP is up); armed + already welcomed: valid now */
+    guard_eval();   /* armed + already welcomed: valid now; else the timer (or the welcome) decides */
 }

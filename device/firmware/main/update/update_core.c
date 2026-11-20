@@ -274,14 +274,14 @@ const char *upd_download(const upd_target_t *t, const upd_io_t *io, uint8_t *buf
 upd_boot_t upd_boot_rule(bool pending_verify, bool armed)
 {
     if (!pending_verify) return UPD_BOOT_NOTHING;
-    return armed ? UPD_BOOT_AWAIT_WELCOME : UPD_BOOT_VALID_NOW;
+    return armed ? UPD_BOOT_AWAIT_WELCOME : UPD_BOOT_AWAIT_SETTLE;
 }
 
 upd_guard_t upd_guard_step(upd_boot_t *r, bool welcomed, int64_t since_boot_us)
 {
     upd_guard_t g;
     switch (*r) {
-    case UPD_BOOT_VALID_NOW: g = UPD_GUARD_MARK_VALID; break;
+    case UPD_BOOT_AWAIT_SETTLE: g = since_boot_us >= UPD_SETTLE_US ? UPD_GUARD_MARK_VALID : UPD_GUARD_WAIT; break;
     case UPD_BOOT_AWAIT_WELCOME:
         if (welcomed) g = UPD_GUARD_MARK_VALID;
         else g = since_boot_us >= UPD_WELCOME_WINDOW_US ? UPD_GUARD_ROLLBACK : UPD_GUARD_WAIT;

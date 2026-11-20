@@ -1606,6 +1606,7 @@ struct fluid_morph_mem {
                                         * (1/4 px from its spot, x then y), where it is now (px from its spot) ..       */
     uint8_t  *blv;                     /* .. and its level now (0..3)                                                 */
     float    shx[256], shy[256];       /* this frame's shimmer by phase                                               */
+    uint16_t v[256]; uint8_t dm[256];  /* a cell's pixels while a picture is read: here, not on the draw task's stack    */
     bool     planned, last;            /* the pairs chosen; this frame ends it                                        */
     uint8_t  *nlc, *stale, *bd;        /* N: (reading) where lines may be; drawn whole at the end; their dust's dots read */
     uint8_t  *tgt;                     /* N: the cells with pixels composed this frame ..                             */
@@ -1798,14 +1799,14 @@ static bool morph_read_old(fluid_draw_t *d) {
     if (!mm) return false;
     const int W = d->W, H = d->H, fw = d->fb_w;
     const float tp = m->t;
-    uint16_t v[256];
-    uint8_t dm[256];
+    uint16_t *const v = mm->v;
+    uint8_t *const dm = mm->dm;
     long px = 0;
     for (int j = 0; j < H; j++) for (int i = 0; i < W; i++) {
         const int k = j * W + i, x0 = d->cx[i], y0 = d->cy[j], w = d->cx[i + 1] - x0, h = d->cy[j + 1] - y0;
         const uint16_t key = d->key[k];
         mm->A.at[k] = (uint32_t)mm->A.n; mm->L0.at[k] = (uint32_t)mm->L0.n;
-        memset(dm, 0, sizeof(dm));
+        memset(dm, 0, sizeof(mm->dm));
         px += w * h;
         for (int y = y0; y < y0 + h; y++) {
             const uint16_t *row = m->snap + (size_t)y * fw;
@@ -1888,8 +1889,8 @@ static bool morph_read_new(fluid_draw_t *d, const fluid_draw_opts_t *o) {
         }
     }
     float used = 0.f;
-    uint16_t v[256];
-    uint8_t dm[256];
+    uint16_t *const v = mm->v;
+    uint8_t *const dm = mm->dm;
     for (; mm->bj < H && used < FLUID_MORPH_READ_US && now_us() - t_in < FLUID_MORPH_READ_US; mm->bj++) {
         const int j = mm->bj, y0 = d->cy[j], h = d->cy[j + 1] - y0;
         uint16_t *lb = mm->lbuf, *gb = mm->gbuf;
@@ -1943,7 +1944,7 @@ static bool morph_read_new(fluid_draw_t *d, const fluid_draw_opts_t *o) {
         /* each cell: its line pixels, its grains (no room: the cell comes whole at the end) */
         for (int i = 0; i < W; i++) {
             const int k = j * W + i, x0 = d->cx[i], w = d->cx[i + 1] - x0, n0 = mm->B.n + mm->L1.n;
-            memset(dm, 0, sizeof(dm));
+            memset(dm, 0, sizeof(mm->dm));
             mm->L1.at[k] = (uint32_t)mm->L1.n;
             for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
                 const uint16_t g = gb[y * sw + x0 + x], l = lb[y * sw + x0 + x];
