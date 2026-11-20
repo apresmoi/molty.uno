@@ -134,6 +134,7 @@ typedef struct fluid_fine {
     uint32_t ride_key;                  /* what ride was worked out for                          */
     bool rim;                           /* ... the rim too (fluid_fine_rim)                      */
     bool pause;                         /* the light holds still this frame (the picture is changing whole: the drawer's) */
+    const uint8_t *ride_with;           /* EXPERIMENT kind 3 (the drawer's, each frame): N, the specks ride the water there too */
     uint8_t lrow;                       /* which quarter of the light's grid rows, and of the cell rows' light-dependent
                                          * specks, is worked out this frame (FINE_PHASES)        */
     bool lgrid_ok;                      /* the light's grid was worked out whole once             */
@@ -168,13 +169,27 @@ typedef struct fluid_fine {
  *         each change sent the frame it happens.
  *         FINE_DUST_DOTS_ILACE (2): the same, the water's own changes sent in every other cell row a frame, rows
  *         alternating, as the creature screen sends its own (the drawing's and the caption's changes at once).
+ *         FINE_DUST_FINE_DOTS (3): the fine specks exactly as kind 0 (they hold still at rest), and over them a sparse
+ *         layer of the creature screen's dots on the same lattice and the same water: they twinkle at rest and ride a
+ *         tap's wave over the whole glass, each change sent the frame it happens; drawn on black pixels only (never on
+ *         the drawing, a speck or the caption's backdrop). The specks of a cell a hard dot lives in ride the wave with
+ *         it (that cell is sent anyway).
+ *   hard  percent: kind 3's density, the share of the lattice's dots away from the drawing that carry a hard dot
+ *         (FINE_HARD_PCT by default, 0..25).
  *   ride  px: how far from a tapped drawing or the caption the fine specks ride the water (FINE_RIDE by default);
  *         at or past the stage's size, the whole glass (any tap's wave). */
 #define FINE_DUST_SPECKS 0
 #define FINE_DUST_DOTS   1
 #define FINE_DUST_DOTS_ILACE 2
+#define FINE_DUST_FINE_DOTS  3
+#define FINE_HARD_PCT    1
+#define FINE_HARD_MAX    25
 void  fluid_fine_dust_kind(int kind);
 int   fluid_fine_dust_kind_get(void);
+void  fluid_fine_hard_density(int percent);
+int   fluid_fine_hard_density_get(void);
+/** kinds whose dust is the fine specks (0 and 3) */
+static inline bool fluid_fine_specks_kind(int kind) { return kind == FINE_DUST_SPECKS || kind == FINE_DUST_FINE_DOTS; }
 void  fluid_fine_ride_px(float px);
 float fluid_fine_ride_px_get(void);
 

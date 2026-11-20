@@ -374,7 +374,8 @@ WM_API int wm_scene_op(const char *layout, const char *params, float ttl_s, int 
 /* ── lab: the firmware's experiment switches, a line each: its name, its setter and getter, its default, low, high ── */
 static int lab_ride_get(void) { return (int)lrintf(fluid_fine_ride_px_get()); }
 static const struct { const char *name; void (*set)(int); int (*get)(void); int def, lo, hi; } LAB[] = {
-    { "scene_dust", mole_fluid_scene_dust, fluid_fine_dust_kind_get, 0, 0, 2 },
+    { "scene_dust", mole_fluid_scene_dust, fluid_fine_dust_kind_get, 0, 0, 3 },
+    { "scene_hard_pct", mole_fluid_scene_hard, fluid_fine_hard_density_get, 1, 0, 25 },
     { "fine_ride_px", mole_fluid_fine_ride, lab_ride_get, 12, 0, 466 },
 };
 #define LAB_N ((int)(sizeof LAB / sizeof LAB[0]))

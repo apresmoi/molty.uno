@@ -84,6 +84,17 @@ export const LAB_LABELS: Record<string, { label: string; values: Array<[number, 
       [0, "Fine specks (today)"],
       [1, "Cat's dots"],
       [2, "Cat's dots, lighter sending"],
+      [3, "Fine specks + hard dots on the water"],
+    ],
+  },
+  scene_hard_pct: {
+    label: "How many hard dots (with the mix)",
+    values: [
+      [1, "sparse (1%)"],
+      [2, "2%"],
+      [3, "3%"],
+      [5, "5%"],
+      [8, "dense (8%)"],
     ],
   },
   fine_ride_px: {

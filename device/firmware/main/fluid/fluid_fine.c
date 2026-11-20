@@ -33,10 +33,13 @@ enum { PH_IDLE, PH_RASTER, PH_FWD, PH_BWD, PH_EXTRACT, PH_LEVELS };
 /* tables in PSRAM, made once (internal RAM is the network's) */
 static float *s_near, *s_tint, *s_sin;
 /* EXPERIMENT scene dust (fluid_fine.h; delete once Juan picks) */
-static volatile int s_dust_kind = FINE_DUST_DOTS_ILACE;   /* (the creature screen's dust and sending, by default) */
+static volatile int s_dust_kind = FINE_DUST_SPECKS;   /* (the fine specks by default: Juan rejected the dots alone) */
+static volatile int s_hard_pct = FINE_HARD_PCT;
 static volatile float s_ride = FINE_RIDE;
-void  fluid_fine_dust_kind(int kind) { s_dust_kind = kind >= FINE_DUST_SPECKS && kind <= FINE_DUST_DOTS_ILACE ? kind : FINE_DUST_DOTS_ILACE; }
+void  fluid_fine_dust_kind(int kind) { s_dust_kind = kind >= FINE_DUST_SPECKS && kind <= FINE_DUST_FINE_DOTS ? kind : FINE_DUST_SPECKS; }
 int   fluid_fine_dust_kind_get(void) { return s_dust_kind; }
+void  fluid_fine_hard_density(int percent) { s_hard_pct = percent < 0 ? 0 : percent > FINE_HARD_MAX ? FINE_HARD_MAX : percent; }
+int   fluid_fine_hard_density_get(void) { return s_hard_pct; }
 void  fluid_fine_ride_px(float px) { s_ride = px < 0.f ? 0.f : px > 4096.f ? 4096.f : px; }
 float fluid_fine_ride_px_get(void) { return s_ride; }
 static bool s_lut;
@@ -700,7 +703,7 @@ void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_
         const int k = j * W + i;
         const int8_t sx0 = f->sx[k], sy0 = f->sy[k];
         f->sx[k] = f->sy[k] = 0;
-        if (f->ride[k]) {
+        if (f->ride[k] || (f->ride_with && f->ride_with[k])) {   /* (EXPERIMENT kind 3: by a hard dot too) */
             const float fx = (float)(s->h[k + 1] - s->h[k - 1]) * rk * 2.f, fy = (float)(s->h[k + W] - s->h[k - W]) * rk * 4.f * H / W;
             int ox = (int)lrintf(fx), oy = (int)lrintf(fy);
             ox = ox < -1 ? -1 : ox > 1 ? 1 : ox; oy = oy < -2 ? -2 : oy > 2 ? 2 : oy;
@@ -718,7 +721,7 @@ void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_
         light_grid(f, f->lgrid, f->light_t * FINE_LIGHT_SPEED, f->lgrid_ok ? f->lrow : -1);   /* a quarter of its rows a frame, in turn */
         f->lgrid_ok = true;
     }
-    const fine_set_t *st = s_dust_kind == FINE_DUST_SPECKS ? f->drawn : NULL;   /* (EXPERIMENT: dots instead, the drawer's) */
+    const fine_set_t *st = fluid_fine_specks_kind(s_dust_kind) ? f->drawn : NULL;   /* (EXPERIMENT: dots instead, the drawer's) */
     if (st) {
         const int LG = f->lg;
         const float reach = FINE_PATCH1 + FINE_PATCH_RAG * 0.5f;
