@@ -1180,6 +1180,7 @@ static int glass_off(const fluid_draw_t *d, const fluid_draw_opts_t *o, const ui
 static void outline_bump(void *ctx, float x, float y) { fluid_sim_impulse(ctx, x, -y, SCENE_OUTLINE_WAVE, SCENE_OUTLINE_R); }
 
 static void test_fine(const char *dir) {
+    fluid_fine_dust_kind(FINE_DUST_SPECKS);              /* (the fine specks: the Lab's other dust) */
     char path[512]; size_t len; const char *err;
     snprintf(path, sizeof(path), "%s/astrology.json", dir);
     char *buf = read_file(path, &len);
@@ -1603,6 +1604,7 @@ static void test_fine(const char *dir) {
     fluid_fine_destroy(fine); fluid_draw_destroy(d); fluid_frame_destroy(fr); fluid_sim_destroy(s);
     scene_free(sc);
     pkg_unref(p);
+    fluid_fine_dust_kind(FINE_DUST_DOTS_ILACE);                /* (the default back) */
 }
 
 /* ── EXPERIMENT scene dust (fluid_fine_dust_kind, fluid_fine_ride_px; delete with them once Juan picks): a scene's dust
@@ -1686,11 +1688,16 @@ static void sd_run(scene_t *sc, int kind, float ride, int spot, float x, float y
         gl.c = c;
         fluid_draw_send(d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, f == -8, wbuf, 4096, send_glass, &gl);
         if (f > -8) sd_add(f < 0 ? &r->calm : &r->tap, &gl.c);
+        if (getenv("SD_TRACE") && (measured_ms(&gl.c) > 20.0 || getenv("SD_ALL"))) {
+            int nd = 0, nw = 0, nh = 0, nhw = 0;
+            for (int k = 0; k < N; k++) if (d->dirty[k]) { nd++; nw += (d->why[k] >> FLUID_ANIM_WATER) & 1; nh += d->hch[k]; nhw += d->hch[k] && ((d->why[k] >> FLUID_ANIM_WATER) & 1); }
+            printf("    kind %d f%d: %.1f ms, %d windows %ld px; %d cells dirty, %d water, %d hch (%d both), m %d; w %d o %d c %d a %.2f\n", kind, f, measured_ms(&gl.c), gl.c.wins, gl.c.px, nd, nw, nh, nhw, d->sd_m, d->sd_w, d->sd_o, d->sd_c, d->sd_a);
+        }
         r->off += glass_off(d, &o, gl.px, S) != 0;
         if (f == -1) memcpy(r->calm_fb, gl.px, (size_t)S * S * 2);
         if (dump && f == 10) dump_ppm(dump, gl.px, S);
         if (kind != FINE_DUST_DOTS || f < 0) continue;
-        memcpy(cdots, d->sd_dots, (size_t)N);           /* the creature screen, the same dots on the same water */
+        memcpy(cdots, d->sd_live, (size_t)N);           /* the creature screen, the same dots on the same water */
         dc->force = true;
         fluid_draw_cells(dc, fr, &oc);
         int far = 0;
@@ -1698,7 +1705,7 @@ static void sd_run(scene_t *sc, int kind, float ride, int spot, float x, float y
             if (!fr->mask[k] || keep[k]) continue;
             r->mismatch += (d->key[k] & 0xFF) != (dc->key[k] & 0xFF);
             if ((d->key[k] & 0xFF) != (dc->key[k] & 0xFF) && getenv("SD_TRACE") && r->mismatch < 8) printf("    f%d cell %d,%d scene %04x cat %04x lattice %02x dots %02x dirty %d fx %.2f fy %.2f catlat %02x\n", f, k % W, k / W, d->key[k], dc->key[k], d->sd_dots[k], dots[k], d->dirty[k], (fr->h[k + 1] - fr->h[k - 1]) * 3.3f / 1024 * 2, (fr->h[k + W] - fr->h[k - W]) * 3.3f / 1024 * 4 * H / W, cdots[k]);
-            if ((d->key[k] & 0xFF) == d->sd_dots[k]) continue;   /* moved by the wave: how far from the finger */
+            if ((d->key[k] & 0xFF) == d->sd_live[k]) continue;   /* moved by the wave: how far from the finger */
             const int i = k % W, j = k / W;
             const int dd = (int)hypotf((d->cx[i] + d->cx[i + 1]) * 0.5f - tx, (d->cy[j] + d->cy[j + 1]) * 0.5f - ty);
             if (dd > far) far = dd;
@@ -1708,7 +1715,7 @@ static void sd_run(scene_t *sc, int kind, float ride, int spot, float x, float y
         if (far > r->fmax) { r->fmax = far; r->fmax_at = f; }
         r->frames_front += far > 0;
     }
-    fluid_fine_dust_kind(FINE_DUST_SPECKS); fluid_fine_ride_px(FINE_RIDE);
+    fluid_fine_dust_kind(FINE_DUST_DOTS_ILACE); fluid_fine_ride_px(FINE_RIDE);   /* (the defaults back) */
     free(gl.px); free(dots); free(keep); free(still); free(cdots);
     fluid_fine_destroy(fine); fluid_draw_destroy(d); fluid_draw_destroy(dc); fluid_frame_destroy(fr); fluid_sim_destroy(s);
 }
@@ -1722,7 +1729,6 @@ static void test_scene_dust(const char *dir) {
     scene_t *chart = p ? sd_scene(p, dir, "chart") : NULL, *close = p ? sd_scene(p, dir, "sign-closeup") : NULL;
     CHECK(chart && close, "scene dust: the chart and a sign's close-up build");
     if (!chart || !close) { scene_free(chart); scene_free(close); pkg_unref(p); return; }
-    CHECK(fluid_fine_dust_kind_get() == FINE_DUST_SPECKS && fabsf(fluid_fine_ride_px_get() - FINE_RIDE) < 1e-6f, "scene dust: fine specks, riding %.0f px, by default", FINE_RIDE);
     const int S = 466;
     const float D = 3.14159265f / 180.f;
     const int moon = spot_named(chart, "moon"), leo = spot_named(chart, "leo");
@@ -1742,6 +1748,12 @@ static void test_scene_dust(const char *dir) {
         printf("   %s:\n", TAP[q].name);
         sd_print("dots, calm", &r1.calm); sd_print("dots, the tap's wave (60 frames)", &r1.tap);
         sd_print("dots interlaced 2:1, the tap's wave", &r2.tap);
+        sd_print("dots interlaced 2:1, calm", &r2.calm);
+        /* the default: alive at rest (some dust changes every calm frame: its twinkle and the light on the water), and
+         * every frame of a tap's wave within 33 ms on the measured panel (the water's rows taking turns as the creature's) */
+        CHECK(r2.calm.px > 0 && r2.calm.worst + SD_CELLS_MS <= 33.0 && r2.tap.worst + SD_CELLS_MS <= 33.0 && r2.off == 0,
+              "scene dust by default (%s): alive at rest (%.1f kpx a calm frame), a tap's wave within a frame (worst %.1f ms with the cells; calm %.1f)",
+              TAP[q].name, r2.calm.px / 1e3 / r2.calm.n, r2.tap.worst + SD_CELLS_MS, r2.calm.worst + SD_CELLS_MS);
         sd_print("specks today, calm", &r0.calm); sd_print("specks today, the tap (12 px ride)", &r0.tap);
         sd_print("specks riding the whole glass, tap", &rw.tap);
         CHECK(r1.mismatch == 0, "scene dust (%s): every cell's dust is the creature screen's dots on the same water (%d cell frames differ)", TAP[q].name, r1.mismatch);
@@ -1774,8 +1786,10 @@ static void test_scene_dust(const char *dir) {
                 fluid_draw_opts_t o = { .palette = FLUID_PAL_PASTEL, .edge_mode = FLUID_EDGE_CONTOURS, .letters = L, .nletters = nl, .font = gc_font5x7,
                                         .dots = dots, .scene = true, .shapes = shp, .nshapes = hd.n, .kdots = keep, .fine = fine, .still = still, .time = 1.f };
                 uint16_t *alone = calloc((size_t)S * S, 2);
+                fluid_fine_dust_kind(FINE_DUST_SPECKS);
                 fluid_draw_cells(dd, fr, &o);
                 fluid_draw_rect(dd, &o, &(fluid_rect_t){ alone, S, 0, 0, S, S }, true);
+                fluid_fine_dust_kind(FINE_DUST_DOTS_ILACE);
                 for (int y = 0; y < S; y++) for (int x = 0; x < S; x++) {
                     const int qq = y * S + x;
                     if (alone[qq] == r1.calm_fb[qq]) continue;
@@ -1787,7 +1801,7 @@ static void test_scene_dust(const char *dir) {
                 fluid_fine_destroy(fine); fluid_frame_destroy(fr); fluid_sim_destroy(s);
             }
             fluid_draw_destroy(dd);
-            CHECK(changed_line == 0 && stray == 0 && dust_px > 5000, "scene dust (%s): the lines are today's pixel for pixel, the dust beside them on black only (%d drawn px changed, %d dust px, %d off the dots)",
+            CHECK(changed_line == 0 && stray == 0 && dust_px > 2000, "scene dust (%s): the lines are today's pixel for pixel, the dust beside them on black only (%d drawn px changed, %d dust px, %d off the dots)",
                   TAP[q].name, changed_line, dust_px, stray);
             dump_ppm(q ? getenv("SD_DUMP_CLOSE") : getenv("SD_DUMP_CALM"), r1.calm_fb, S);
         }
@@ -1808,7 +1822,7 @@ static void test_scene_dust(const char *dir) {
         fluid_sim_snapshot(s, fr, false);
         fluid_draw_opts_t o = { .palette = FLUID_PAL_PASTEL, .edge_mode = FLUID_EDGE_CONTOURS, .letters = L, .nletters = nl, .font = gc_font5x7,
                                 .dots = dots, .scene = true, .shapes = shp, .nshapes = hd.n, .kdots = keep, .fine = fine, .still = still, .time = 1.f };
-        fluid_fine_dust_kind(FINE_DUST_DOTS);
+        fluid_fine_dust_kind(FINE_DUST_DOTS_ILACE);
         fluid_draw_cells(d, fr, &o);
         int on[3] = { 0 }, all[3] = { 0 }, lv_near = 0, lv_far = 0, n_near = 0, n_far = 0;
         for (int y = 0; y < 4 * H; y++) for (int x = 0; x < 2 * W; x++) {
@@ -1852,11 +1866,12 @@ static void test_scene_dust(const char *dir) {
                 o.cap_word = cap.n ? (unsigned)(w + 1) : 0; o.cap_unformed = 0.f;
                 fluid_sim_step(s, DT / 2); fluid_sim_step(s, DT / 2);
                 fluid_sim_snapshot(s, fr, false);
-                o.time = 2.f + frames / 30.f;
+                o.time = 1.f + (frames + 1) / 30.f;
                 fluid_draw_cells(d, fr, &o);
                 gl.c = (cost_t){ 0, 0, 0 };
                 fluid_draw_send(d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, wbuf, 4096, send_glass, &gl);
                 sd_add(&rd, &gl.c);
+                if (getenv("SD_TRACE")) { int nd = 0; for (int k = 0; k < N; k++) nd += d->dirty[k] != 0; printf("    read w%d f%d: %d windows %ld px; %d dirty, m %d w %d o %d (%.1f ms)\n", w, f, gl.c.wins, gl.c.px, nd, d->sd_m, d->sd_w, d->sd_o, measured_ms(&gl.c)); }
                 off += glass_off(d, &o, gl.px, S) != 0; late |= d->anim_late;
                 if (cap.n && w == 2 && f == 11) {
                     dump_ppm(getenv("SD_DUMP_READ"), gl.px, S);
@@ -1871,9 +1886,10 @@ static void test_scene_dust(const char *dir) {
                 }
             }
         }
-        sd_print("dots, a reading (3 words, its end)", &rd);
+        sd_print("dots 2:1, a reading (3 words, its end)", &rd);
+        CHECK(rd.worst + SD_CELLS_MS <= 33.0, "scene dust by default: a reading within a frame (worst %.1f ms with the cells)", rd.worst + SD_CELLS_MS);
         CHECK(on_box == 0 && off == 0 && late == 0, "scene dust: a reading's words on their dark backdrop (%d dots on it), sent every frame they change (%d frames behind, late %x)", on_box, off, late);
-        fluid_fine_dust_kind(FINE_DUST_SPECKS);
+        fluid_fine_dust_kind(FINE_DUST_DOTS_ILACE);
         free(gl.px); free(dots); free(keep); free(still);
         fluid_fine_destroy(fine); fluid_draw_destroy(d); fluid_frame_destroy(fr); fluid_sim_destroy(s);
     }
@@ -1980,6 +1996,7 @@ static double morph_run(morph_rig_t *r, scene_t *sc, uint32_t look, int late, in
             r->idle += !(r->d->anim_on & (1 << FLUID_ANIM_WAVE)) || m->px <= 0;
             if (getenv("WAVE_TRACE")) printf("    %s f%d: r %.0f b %.1f, %d windows %d px %d band (%.1f ms), outside %d behind %d, %d lit\n", name, f, m->rb, m->bb, m->wins, m->px, m->band, ms, out, beh, lit);
         }
+        if (getenv("WAVE_TRACE") && ms > 40.0) printf("    %s f%d: %.1f ms, %d windows %ld px, on %d\n", name, f, ms, r->g.c.wins, r->g.c.px, on);
         if (on || f0 < 0) { worst = fmax(worst, ms); *over += ms > 33.0; if (lit < *least) *least = lit; }
         if (sheet && tiles < TILES && f % 2 == 0) morph_tile(sheet, COLS, tiles++, r->g.px, S);
         if (getenv("MORPH_FRAME") && !strncmp(getenv("MORPH_FRAME"), name, strlen(name)) && atoi(getenv("MORPH_FRAME") + strlen(name) + 1) == f) dump_ppm(getenv("MORPH_OUT"), r->g.px, S);
@@ -2277,6 +2294,8 @@ int main(int argc, char **argv) {
     char *fix = read_file(path, &len);
     if (!fix || !(P = pkg_parse(fix, len, &err))) { printf("usage: scene_test fixtures-dir creature.molty\n"); return 2; }
     free(fix);
+    CHECK(fluid_fine_dust_kind_get() == FINE_DUST_DOTS_ILACE && fabsf(fluid_fine_ride_px_get() - FINE_RIDE) < 1e-6f,
+          "scenes' dust: the creature screen's dots and sending by default (the Lab's switch: fine specks riding %.0f px)", FINE_RIDE);
     test_build();
     test_player();
     test_fill();

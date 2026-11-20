@@ -33,9 +33,9 @@ enum { PH_IDLE, PH_RASTER, PH_FWD, PH_BWD, PH_EXTRACT, PH_LEVELS };
 /* tables in PSRAM, made once (internal RAM is the network's) */
 static float *s_near, *s_tint, *s_sin;
 /* EXPERIMENT scene dust (fluid_fine.h; delete once Juan picks) */
-static volatile int s_dust_kind = FINE_DUST_SPECKS;
+static volatile int s_dust_kind = FINE_DUST_DOTS_ILACE;   /* (the creature screen's dust and sending, by default) */
 static volatile float s_ride = FINE_RIDE;
-void  fluid_fine_dust_kind(int kind) { s_dust_kind = kind >= FINE_DUST_SPECKS && kind <= FINE_DUST_DOTS_ILACE ? kind : FINE_DUST_SPECKS; }
+void  fluid_fine_dust_kind(int kind) { s_dust_kind = kind >= FINE_DUST_SPECKS && kind <= FINE_DUST_DOTS_ILACE ? kind : FINE_DUST_DOTS_ILACE; }
 int   fluid_fine_dust_kind_get(void) { return s_dust_kind; }
 void  fluid_fine_ride_px(float px) { s_ride = px < 0.f ? 0.f : px > 4096.f ? 4096.f : px; }
 float fluid_fine_ride_px_get(void) { return s_ride; }
@@ -588,6 +588,8 @@ void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_
     memset(f->vis, 0, (size_t)N);
     memset(f->why, 0, (size_t)N);
     const float now = o->time;
+    if (!f->lgrid_ok) f->light_t = now;
+    else if (!f->pause) { const float dt = now - f->last_t; f->light_t += dt < 0.f ? 0.f : dt > 0.1f ? 0.1f : dt; }
     f->last_t = now;
 
     /* the caption: a new word (or none) breaks the one before into specks */
@@ -710,15 +712,15 @@ void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_
     /* the specks. A cell's own are worked out on its row's turn (a quarter of the rows a frame): those the light never
      * hides only when the backdrop by them changed, the others against the light. Until then the cell shows what it
      * showed. A cell never worked out for this set (a set just swapped in) is, off its turn too, while FINE_CATCHUP lasts. */
+    /* the light: for the specks, or for the creature's kind of dots (the drawer reads it: fluid_fine_light) */
+    if ((s_dust_kind != FINE_DUST_SPECKS || f->drawn) && (!f->pause || !f->lgrid_ok)) {
+        f->lrow = (uint8_t)((f->lrow + 1) % FINE_PHASES);
+        light_grid(f, f->lgrid, f->light_t * FINE_LIGHT_SPEED, f->lgrid_ok ? f->lrow : -1);   /* a quarter of its rows a frame, in turn */
+        f->lgrid_ok = true;
+    }
     const fine_set_t *st = s_dust_kind == FINE_DUST_SPECKS ? f->drawn : NULL;   /* (EXPERIMENT: dots instead, the drawer's) */
     if (st) {
         const int LG = f->lg;
-        const float T = now * FINE_LIGHT_SPEED;
-        if (!f->pause || !f->lgrid_ok) {
-            f->lrow = (uint8_t)((f->lrow + 1) % FINE_PHASES);
-            light_grid(f, f->lgrid, T, f->lgrid_ok ? f->lrow : -1);   /* a quarter of its rows a frame, in turn */
-            f->lgrid_ok = true;
-        }
         const float reach = FINE_PATCH1 + FINE_PATCH_RAG * 0.5f;
         int budget = FINE_CATCHUP, worked = 0;
         for (int j = 0; j < H; j++) for (int i = 0; i < W; i++) {

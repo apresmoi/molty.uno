@@ -138,6 +138,8 @@ typedef struct fluid_fine {
                                          * specks, is worked out this frame (FINE_PHASES)        */
     bool lgrid_ok;                      /* the light's grid was worked out whole once             */
     float last_t;                       /* the last frame's time                                 */
+    float light_t;                      /* the light's own clock: it stands while the light holds (pause), so it goes on
+                                         * from there after, never all at once                    */
     uint32_t gen;                       /* the caption's backdrop as the cells by it are worked out for (box, dark) */
     float dim[7];                       /* the drawing under the caption's backdrop: its box, how dark, from and to how far (fluid_shapes_row_dim) */
     bool dark_on; float dark_t0;        /* the backdrop is up, since                             */
@@ -213,6 +215,15 @@ static inline int fluid_fine_specks(const fluid_fine_t *f) { return f && f->live
 /** This frame's dust at o->time: each cell's signature (f->sig: a cell whose signature differs from f->sig0, as drawn,
  *  is drawn again), its specks' levels and its shift, the caption's backdrop and specks, and what moved it (f->why). */
 void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_opts_t *o);
+/** The light on the water at stage px (x, y), 0..1 (bilinear on its grid; as last worked out by fluid_fine_frame). */
+static inline float fluid_fine_light(const fluid_fine_t *f, float x, float y) {
+    const float gx = x * (1.f / FINE_LIGHT_GRID), gy = y * (1.f / FINE_LIGHT_GRID);
+    int ix = (int)gx, iy = (int)gy;
+    ix = ix < 0 ? 0 : ix > f->lg - 2 ? f->lg - 2 : ix; iy = iy < 0 ? 0 : iy > f->lg - 2 ? f->lg - 2 : iy;
+    const float ax = gx - ix, ay = gy - iy;
+    const uint8_t *g0 = f->lgrid + iy * f->lg + ix;
+    return ((g0[0] * (1.f - ax) + g0[1] * ax) * (1.f - ay) + (g0[f->lg] * (1.f - ax) + g0[f->lg + 1] * ax) * ay) * (1.f / 255.f);
+}
 /** The dust over the window t (fb px), after the shapes and dots: on black (or a dim pixel), never on a lit one;
  *  all: every cell of t (a window), else only the dirty cells (a framebuffer kept). */
 void fluid_fine_rect(const fluid_fine_t *f, const uint8_t *dirty, const fluid_rect_t *t, bool all);

@@ -494,6 +494,16 @@ typedef struct {
     uint16_t *sd_dist;                 /* 2W x 4H: each dot's distance to the drawing, 1/4 px                    */
     uint8_t  *sd_dots;                 /* N: the dust's dots of each cell, calm                                   */
     uint16_t *sd_col;                  /* N: their colour                                                         */
+    uint8_t  *sd_near;                 /* N: how near the drawing the cell's nearest dust dot is (0..255)          */
+    uint8_t  *sd_live;                 /* N: the dots the light on the water shows this frame (sd_alive) ..       */
+    uint8_t  *sd_ch;                   /* N: only that changed this frame (it waits for its row's turn)           */
+    uint8_t  *sd_pm;                   /* N: a word's specks or its forming in the cell, this frame (1), the last (2) */
+    uint16_t *sd_lcol;                 /* N: .. and their colour, twinkling                                       */
+    uint8_t   sd_m;                    /* the water's rows take turns over this many frames (2..SD_ILACE_MAX) ..   */
+    int       sd_w, sd_o, sd_c;        /* .. after this frame's cells only the water changed and were sent, the others sent, and
+                                        * the cells in their rows' turn the water moved or left                   */
+    float     sd_a;                    /* of those, how many changed (the last frame's)                           */
+    float     sd_t, sd_t0;             /* the dust's clock (it stands while the picture changes), the frame's time */
     uint32_t  sd_sig;                  /* the drawing they were made from (a hash)                                */
     int8_t    sd_kind;                 /* the kind the last frame showed (a change redraws the glass)             */
 } fluid_draw_t;
