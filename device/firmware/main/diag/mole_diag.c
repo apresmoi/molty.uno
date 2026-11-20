@@ -8,6 +8,9 @@
 #include "net/network.h"
 #include "net/console_store.h"
 #include "mole_fluid.h"
+#include "pkg/pkg_cmd.h"
+#include "pkg/pkg_store.h"
+#include "bench_chart.h"
 #include "link/link_client.h"
 #include "link/link_audio.h"
 
@@ -16,6 +19,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <stdatomic.h>
+#include <math.h>
 #include <sys/stat.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -1229,6 +1233,171 @@ static esp_err_t http_ring(httpd_req_t *r)
 }
 #endif
 
+/* ── the on-device benchmark: POST /api/diag/bench?runs=3 ──────────────────────
+ * Untouched, `runs` times (1..5): the boot word to the cat, the cat to the astrology chart (a fixed sky: bench_chart.h),
+ * a tap on Leo (the chart to its close-up), a tap beside it (back), the chart to the cat; then on the chart again a tap
+ * in its open middle and a tap on the Moon (its reading). Each case's animations as the drawer records them
+ * (mole_anim_rec_t, the `anim` log lines) and one `bench` log line a case; the answer is the whole table. It holds this
+ * server meanwhile (about 50 s a run). */
+#define BENCH_RECS 160
+enum { BC_BOOT, BC_CHART, BC_SIGN, BC_BACK, BC_CAT, BC_MIDDLE, BC_PLANET, BC_N };
+static const char *const BENCH_CASE[BC_N] = { "boot-cat", "cat-chart", "chart-sign", "sign-chart", "chart-cat", "tap-middle", "tap-planet" };
+static const char *const BENCH_ANIM[4] = { "wave", "grow", "word", "water" };
+static mole_anim_rec_t *s_brec;                       /* [BENCH_RECS] (PSRAM, while it runs) */
+
+static int bench_n(void) { return mole_fluid_bench_capture(s_brec, BENCH_RECS); }
+/* nothing in mask (bits of the animations, 1: a change) for calm ms; ms at most. True: it was */
+static bool bench_calm(unsigned mask, uint32_t calm, uint32_t ms)
+{
+    const int64_t t0 = esp_timer_get_time();
+    int64_t since = 0;
+    for (int64_t now = t0; now - t0 < (int64_t)ms * 1000; now = esp_timer_get_time()) {
+        if (!mole_fluid_bench_quiet(mask)) since = 0;
+        else if (!since) since = now;
+        else if (now - since >= (int64_t)calm * 1000) return true;
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    return false;
+}
+/* a record of anim taken since `from`; ms at most */
+static bool bench_rec(int from, int anim, uint32_t ms)
+{
+    const int64_t t0 = esp_timer_get_time();
+    for (;;) {
+        for (int q = from, n = bench_n(); q < n; q++) if (s_brec[q].anim == anim) return true;
+        if (esp_timer_get_time() - t0 >= (int64_t)ms * 1000) return false;
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
+/* the chart (its fixed sky), or none: the cat */
+static const char *bench_scene(bool chart)
+{
+    cJSON *args = cJSON_CreateObject(), *out = NULL;
+    if (!args) return "oom";
+    esp_err_t e;
+    if (chart) {
+        cJSON_AddStringToObject(args, "pkg", "astrology"); cJSON_AddStringToObject(args, "layout", "chart");
+        cJSON_AddItemToObject(args, "params", cJSON_Parse(BENCH_CHART)); cJSON_AddNumberToObject(args, "ttl_s", 120);
+        e = pkg_cmd_scene_play(args, &out);
+    } else e = pkg_cmd_scene_clear(args, &out);
+    cJSON_Delete(args); cJSON_Delete(out);
+    return e == ESP_OK ? NULL : esp_err_to_name(e);
+}
+static double r1(float v) { return (double)lroundf(v * 10.f) / 10.0; }
+static cJSON *bench_rec_json(const mole_anim_rec_t *b)
+{
+    cJSON *o = cJSON_CreateObject(), *a;
+    cJSON_AddStringToObject(o, "anim", BENCH_ANIM[b->anim & 3]);
+    cJSON_AddNumberToObject(o, "ms", b->ms); cJSON_AddNumberToObject(o, "frames", b->f); cJSON_AddNumberToObject(o, "sent", b->s);
+    a = cJSON_AddArrayToObject(o, "kpx"); cJSON_AddItemToArray(a, cJSON_CreateNumber(r1(b->kpx))); cJSON_AddItemToArray(a, cJSON_CreateNumber(r1(b->kpx_max)));
+    cJSON_AddNumberToObject(o, "win", r1(b->win));
+    a = cJSON_AddArrayToObject(o, "pan"); for (int c = 0; c < 3; c++) cJSON_AddItemToArray(a, cJSON_CreateNumber(b->pan[c]));
+    a = cJSON_AddArrayToObject(o, "sim"); for (int c = 0; c < 3; c++) cJSON_AddItemToArray(a, cJSON_CreateNumber(b->sim[c]));
+    a = cJSON_AddArrayToObject(o, "worst"); cJSON_AddItemToArray(a, cJSON_CreateNumber(r1(b->worst))); cJSON_AddItemToArray(a, cJSON_CreateNumber(r1(b->worst_cells)));
+    cJSON *p = cJSON_AddObjectToObject(o, "parts");    /* (mean, max ms a frame; the parts it had) */
+    for (int q = 0; q < MOLE_ANIM_PARTS; q++) {
+        if (b->max[q] < 0.05f) continue;
+        a = cJSON_AddArrayToObject(p, MOLE_ANIM_PART_NAMES[q]);
+        cJSON_AddItemToArray(a, cJSON_CreateNumber(r1(b->mean[q]))); cJSON_AddItemToArray(a, cJSON_CreateNumber(r1(b->max[q])));
+    }
+    if (b->anim == 0) {
+        cJSON *c = cJSON_AddObjectToObject(o, "change");
+        cJSON_AddNumberToObject(c, "comp_kpx", r1(b->comp)); cJSON_AddBoolToObject(c, "forced", b->forced); cJSON_AddBoolToObject(c, "dust_after", b->keep);
+        cJSON_AddNumberToObject(c, "ready_at", b->ready_at); cJSON_AddNumberToObject(c, "held", b->held);
+        cJSON_AddNumberToObject(c, "grains_old", b->na); cJSON_AddNumberToObject(c, "grains_new", b->nb); cJSON_AddNumberToObject(c, "pairs", b->pairs);
+    }
+    return o;
+}
+/* one case: what it starts from, then it, till its animations are over */
+static cJSON *bench_case(int c, int run)
+{
+    mole_fluid_screen(true);
+    switch (c) {                                       /* (from: the cat; the chart, its dust in; the last change over) */
+    case BC_BOOT:   bench_scene(false); bench_calm(1, 1500, 15000); break;
+    case BC_MIDDLE: bench_scene(true); bench_calm(1, 1500, 15000);
+                    for (int q = 0; q < 200 && !mole_fluid_bench_dust(); q++) vTaskDelay(pdMS_TO_TICKS(50));
+                    bench_calm(0xF, 1000, 8000); break;
+    case BC_PLANET: bench_calm(0xF, 1000, 8000); break;
+    default:        bench_calm(1, 1000, 10000); break;
+    }
+    const int from = bench_n();
+    const int64_t t0 = esp_timer_get_time();
+    const char *err = NULL;
+    float x = 0.f, y = 0.f;
+    switch (c) {
+    case BC_BOOT:   mole_fluid_bench_boot(); break;
+    case BC_CHART:  err = bench_scene(true); break;
+    case BC_SIGN:
+        if (!mole_fluid_bench_spot("leo", &x, &y)) { x = 0.76f * cosf(302.f * 0.017453293f); y = 0.76f * sinf(302.f * 0.017453293f); }
+        if (!mole_fluid_bench_tap(x, y)) err = "no spot at leo";
+        break;
+    case BC_BACK:   if (mole_fluid_bench_tap(0.f, -0.8f) != MOLE_SPOT_BACK) err = "not a way back"; break;
+    case BC_CAT:    err = bench_scene(false); break;
+    case BC_MIDDLE: mole_fluid_bench_tap(0.15f, 0.3f); break;
+    case BC_PLANET: if (!mole_fluid_bench_spot("moon", &x, &y)) err = "no moon"; else mole_fluid_bench_tap(x, y); break;
+    }
+    /* its end: a change recorded and none for 1.5 s (a scene's dust may come after as a change of its own); a tap's water
+     * (and the Moon's reading) recorded and every tap animation over */
+    const int want = c == BC_MIDDLE ? 3 : c == BC_PLANET ? 2 : 0;
+    if (!err && !bench_rec(from, want, c == BC_PLANET ? 40000 : 25000)) err = "timeout";
+    const uint32_t ms = (uint32_t)((esp_timer_get_time() - t0) / 1000);
+    if (!err) bench_calm(want ? 0xE : 1, want ? 500 : 1500, 10000);
+    cJSON *o = cJSON_CreateObject(), *a = cJSON_AddArrayToObject(o, "anims");
+    cJSON_AddStringToObject(o, "case", BENCH_CASE[c]); cJSON_AddNumberToObject(o, "run", run);
+    cJSON_AddNumberToObject(o, "ms", ms);
+    if (err) cJSON_AddStringToObject(o, "error", err);
+    const int n = bench_n();
+    for (int q = from; q < n; q++) cJSON_AddItemToArray(a, bench_rec_json(&s_brec[q]));
+    mole_diag_event(false, "bench %s run=%d ms=%u anims=%d%s%s", BENCH_CASE[c], run, (unsigned)ms, n - from, err ? " error=" : "", err ? err : "");
+    return o;
+}
+static esp_err_t http_bench(httpd_req_t *r)
+{
+    static atomic_bool busy;
+    if (atomic_exchange(&busy, true)) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "a bench runs already");
+    uint32_t runs = query_u32(r, "runs", 3);
+    runs = runs < 1 ? 1 : runs > 5 ? 5 : runs;
+    s_brec = heap_caps_calloc(BENCH_RECS, sizeof(mole_anim_rec_t), MALLOC_CAP_SPIRAM);
+    cJSON *j = cJSON_CreateObject();
+    if (!s_brec || !j) { heap_caps_free(s_brec); s_brec = NULL; cJSON_Delete(j); atomic_store(&busy, false); return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "oom"); }
+    const bool astro = pkg_store_find(PKG_ROOT, "astrology", NULL);
+    cJSON_AddStringToObject(j, "astrology", astro ? "installed" : "not installed: only boot-cat runs");
+    mole_fluid_screen(true);
+    bench_n();
+    cJSON *cases = cJSON_AddArrayToObject(j, "cases");
+    for (int run = 1; run <= (int)runs; run++)
+        for (int c = 0; c < (astro ? BC_N : 1); c++) cJSON_AddItemToArray(cases, bench_case(c, run));
+    mole_fluid_bench_capture(NULL, 0);
+    heap_caps_free(s_brec); s_brec = NULL;
+    if (astro) bench_scene(false);
+    cJSON *h = cJSON_AddObjectToObject(j, "heap");
+    cJSON_AddNumberToObject(h, "int_free", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    cJSON_AddNumberToObject(h, "int_largest", heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    cJSON_AddNumberToObject(h, "psram_free", heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    cJSON_AddNumberToObject(h, "psram_largest", heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+    cJSON *st = cJSON_AddObjectToObject(j, "stack_free");    /* (high-water marks, bytes, as the sampler last saw them) */
+    portENTER_CRITICAL(&s_task_mux);
+    int sd = -1, ss = -1;
+    for (int i = 0; i < s_ntasks; i++) {
+        if (!strcmp(s_tasks[i].name, "fluid_draw")) sd = (int)s_tasks[i].stack_free;
+        if (!strcmp(s_tasks[i].name, "fluid_task")) ss = (int)s_tasks[i].stack_free;
+    }
+    portEXIT_CRITICAL(&s_task_mux);
+    cJSON_AddNumberToObject(st, "fluid_draw", sd); cJSON_AddNumberToObject(st, "fluid_task", ss);
+    char *body = cJSON_PrintUnformatted(j);
+    cJSON_Delete(j);
+    atomic_store(&busy, false);
+    if (!body) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "oom");
+    httpd_resp_set_type(r, "application/json");
+    httpd_resp_set_hdr(r, "Cache-Control", "no-store");
+    esp_err_t e = ESP_OK;
+    const size_t len = strlen(body);
+    for (size_t o = 0; o < len && e == ESP_OK; o += 4096) e = httpd_resp_send_chunk(r, body + o, (ssize_t)(len - o < 4096 ? len - o : 4096));
+    if (e == ESP_OK) e = httpd_resp_send_chunk(r, NULL, 0);
+    free(body);
+    return e;
+}
+
 esp_err_t mole_diag_http_register(httpd_handle_t server)
 {
     const httpd_uri_t routes[] = {
@@ -1238,6 +1407,7 @@ esp_err_t mole_diag_http_register(httpd_handle_t server)
         {.uri = "/api/diag/wifi_ps", .method = HTTP_GET, .handler = http_wifi_ps},
         {.uri = "/api/diag/wifi_ps", .method = HTTP_POST, .handler = http_wifi_ps},
         {.uri = "/api/diag/wifi_drop", .method = HTTP_POST, .handler = http_wifi_drop},
+        {.uri = "/api/diag/bench", .method = HTTP_POST, .handler = http_bench},
 #ifdef MOLTY_DIAG_RING
         {.uri = "/api/diag/ring", .method = HTTP_POST, .handler = http_ring},
 #endif
