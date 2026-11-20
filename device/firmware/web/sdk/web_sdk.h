@@ -121,6 +121,7 @@ uint32_t ulTaskNotifyTake(BaseType_t clear, TickType_t wait);
 void web_sdk_seed(uint32_t seed);                  /* esp_random from here on */
 void web_sdk_clock(int64_t us);                    /* esp_timer_get_time from here on */
 void web_sdk_clock_once(int64_t us);               /* ... but its next answer is this */
+void web_sdk_cpu(double x);                        /* 0: it stands still in a task; x: it runs at x times the wall clock */
 /** Run the task `name` (as given to xTaskCreatePinnedToCore) from its top until it returns. */
 void web_sdk_task(const char *name);
 /** Called when a task would wait (a delay, a notification, a semaphore with a time out). */

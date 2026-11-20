@@ -7,16 +7,28 @@
 #include "web_sdk.h"
 
 #include <string.h>
+#include <time.h>
 
 /* ── the clock ───────────────────────────────────────────────────────────── */
 static int64_t s_now, s_once;
 static bool    s_once_set;
+/* The device's CPU (web_sdk_cpu): 0, the clock stands still while a task runs (the same pixels on every machine, the
+ * fidelity check); x > 0, it runs on from the caller's time at x times the wall clock, so work the firmware budgets by
+ * the clock (the dust's build, a change's cache fill) stops after as much of it as the device's cores do. */
+static double  s_cpu_x, s_wall0;
+#define CPU_RUN_US 25000.                          /* under the firmware's frame (30 ms), over its longest budget (20 ms) */
+static double wall_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e6 + t.tv_nsec / 1e3; }
 
-void web_sdk_clock(int64_t us) { s_now = us; }
+void web_sdk_clock(int64_t us) { s_now = us; if (s_cpu_x > 0.) s_wall0 = wall_us(); }
 void web_sdk_clock_once(int64_t us) { s_once = us; s_once_set = true; }
+void web_sdk_cpu(double x) { s_cpu_x = x > 0. ? x : 0.; s_wall0 = wall_us(); }
 int64_t esp_timer_get_time(void) {
     if (s_once_set) { s_once_set = false; return s_once; }
-    return s_now;
+    if (s_cpu_x <= 0.) return s_now;
+    /* (at most CPU_RUN_US past the caller's time: the sim task's pace must still find time left in its frame, else
+     * it would run a second pass in this call, and nobody would have drawn the first) */
+    const double ran = (wall_us() - s_wall0) * s_cpu_x;
+    return s_now + (int64_t)(ran < CPU_RUN_US ? ran : CPU_RUN_US);
 }
 
 struct web_timer { int unused; };

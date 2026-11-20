@@ -37,7 +37,7 @@ export async function instantiate<X extends { memory: WebAssembly.Memory; _initi
   return x;
 }
 
-interface Exports {
+export interface Exports {
   memory: WebAssembly.Memory;
   _initialize(): void;
   wm_alloc(n: number): number;
@@ -74,6 +74,50 @@ interface Exports {
   wm_package(json: number, len: number): number;
   wm_scene(layout: number, params: number, ttl: number): number;
   wm_scene_clear(): void;
+}
+
+/** The last frame (web_device.c wm_frame_info): what went to the panel and what the device would
+ *  have taken for it, on the panel's measured constants (ms). */
+export interface FrameInfo {
+  windows: number;
+  pixels: number;
+  /** A change of picture's composed pixels. */
+  composed: number;
+  wave: boolean;
+  cellsMs: number;
+  sendMs: number;
+  drawMs: number;
+  simMs: number;
+  /** From this frame to the next on the device. */
+  frameMs: number;
+}
+
+/** One of the firmware's experiment switches (web_device.c LAB). */
+export interface LabSwitch {
+  index: number;
+  name: string;
+  value: number;
+  def: number;
+  lo: number;
+  hi: number;
+}
+
+/** A frame the device sends its agent ({"t":"evt","name":...,"data":{...}}), or the relay's own. */
+export interface DeviceEvent {
+  t: string;
+  name?: string;
+  data?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+/** A question with what its answer does: an agent's (an `answer` event), a pairing, an install. */
+export interface DeviceQuestion extends MoltyQuestion {
+  kind: "ask" | "pair" | "install";
+  job: string;
+  /** An install: the package, its version and how long its download takes (ms). */
+  id?: string;
+  version?: string;
+  ms?: number;
 }
 
 /** A question on the glass: the link's `ask`, with the pairing question's detail and code. */
@@ -281,5 +325,14 @@ export class MoltyCore {
   }
   sceneClear() {
     this.x.wm_scene_clear();
+  }
+
+  /** The module itself, for the simulator's own calls (sim.ts): its exports and memory. */
+  get raw(): Exports {
+    return this.x;
+  }
+  /** `s` (and a closing zero) in the module's memory for the length of `call`. */
+  withText<T>(s: string, call: (p: number) => T): T {
+    return this.lendText(s, call);
   }
 }

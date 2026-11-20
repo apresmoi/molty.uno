@@ -19,7 +19,22 @@
  * (end - start) both mean that. */
 #define _binary_default_molty_end *web_default_molty_end
 #include "web_grid.h"                  /* a heading's window is wider than a panel: the grid's cap, before it is used */
+/* The drawer task's three calls go through web_device.c (the simulator's device mode): the task starts from the top
+ * each frame here, so its locals (what it last drew: palette, mark, overlay) are new each frame and it repaints the
+ * whole panel. In device mode those calls get back what the locals keep on the device, and only the windows the
+ * device would send are sent. Off, they are the drawer's own calls unchanged. Declared first, renamed only in the
+ * drawer task's text. */
+static int  web_draw_cells(fluid_draw_t *d, const fluid_frame_t *f, const fluid_draw_opts_t *o);
+static int  web_draw_send2(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_overlay_t *ov, int mark, bool full,
+                           uint16_t *buf, uint16_t *buf2, int max_px, fluid_send_fn send, void *ctx);
+static void web_overlay_dirty(fluid_draw_t *d, const fluid_overlay_t *ov);
+#define fluid_draw_cells web_draw_cells
+#define fluid_draw_send2 web_draw_send2
+#define fluid_draw_overlay_dirty web_overlay_dirty
 #include "../main/fluid/mole_fluid.c"
+#undef fluid_draw_cells
+#undef fluid_draw_send2
+#undef fluid_draw_overlay_dirty
 #include "creature_dots.h"             /* CD_VIEW_SIZE: the world a panel is wide (wm_pan) */
 #include "web_default_molty.h"
 const uint8_t *web_default_molty_end[] = { _binary_default_molty_start + sizeof(_binary_default_molty_start) };
@@ -45,10 +60,32 @@ esp_err_t     molty_display_flush(void) { return ESP_OK; }
 /* a window of the panel: big-endian rgb565, as the panels take it. (A table of every colour: the whole panel comes
  * through here every frame, and a heading's window is four panels' worth of pixels.) */
 static uint32_t *s_rgba_of;            /* a panel's colour (as sent: big-endian rgb565) as a canvas takes it */
+static struct { int wins; long px; } s_sent;   /* this frame's windows and their pixels (web_device.c) */
+static bool s_dev_panel;               /* device mode: the 1.75C's driver (web_device.c) */
+static bool s_mirror = true;           /* its framebuffer mirrors the panel (molty_display_blit_mirror) */
+static void panel_rows(int x, int y, int w, int h, const uint16_t *px, int stride);
 esp_err_t molty_display_blit(int x, int y, int w, int h, const uint16_t *px) {
     if (x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > s_px || y + h > s_px) return ESP_ERR_INVALID_ARG;
+    s_sent.wins++; s_sent.px += (long)w * h;
+    if (s_dev_panel) {
+        /* lcd_co5300.c lcd_co5300_blit_async: the window into the framebuffer while it mirrors the panel or the window
+         * has an odd edge; the panel takes whole row pairs: an odd edge row goes with its pair, full width, from the
+         * framebuffer (whatever it holds there) */
+        if (s_mirror || (y & 1) || (h & 1))
+            for (int r = 0; r < h; r++) memcpy(s_fb + (size_t)(y + r) * (size_t)s_px + x, px + (size_t)r * (size_t)w, sizeof(uint16_t) * (size_t)w);
+        const int ya = (y + 1) & ~1, yb = (y + h) & ~1;
+        if (y & 1) panel_rows(0, y - 1, s_px, 2, s_fb + (size_t)(y - 1) * (size_t)s_px, s_px);
+        if (yb > ya) panel_rows(x, ya, w, yb - ya, px + (size_t)(ya - y) * (size_t)w, w);
+        if ((y + h) & 1) panel_rows(0, yb, s_px, 2, s_fb + (size_t)yb * (size_t)s_px, s_px);
+        return ESP_OK;
+    }
+    panel_rows(x, y, w, h, px, w);
+    return ESP_OK;
+}
+/* rows of the panel, as a canvas takes them */
+static void panel_rows(int x, int y, int w, int h, const uint16_t *px, int stride) {
     if (!s_rgba_of) {
-        if (!(s_rgba_of = malloc(65536 * sizeof(uint32_t)))) return ESP_ERR_NO_MEM;
+        if (!(s_rgba_of = malloc(65536 * sizeof(uint32_t)))) return;
         for (uint32_t be = 0; be < 65536; be++) {
             const uint16_t v = (uint16_t)(be >> 8 | be << 8);
             const uint32_t r5 = v >> 11, g6 = v >> 5 & 63, b5 = v & 31;
@@ -57,17 +94,17 @@ esp_err_t molty_display_blit(int x, int y, int w, int h, const uint16_t *px) {
     }
     for (int r = 0; r < h; r++) {
         uint32_t *o = s_rgba + (size_t)(y + r) * (size_t)s_px + x;
-        const uint16_t *in = px + (size_t)r * (size_t)w;
+        const uint16_t *in = px + (size_t)r * (size_t)stride;
         for (int c = 0; c < w; c++) o[c] = s_rgba_of[in[c]];
     }
-    return ESP_OK;
 }
 /* the 1.75C takes one window while the next is drawn (two buffers); here a window is on the panel at once */
 esp_err_t molty_display_blit_async(int x, int y, int w, int h, const uint16_t *px) { return molty_display_blit(x, y, w, h, px); }
 esp_err_t molty_display_blit_wait(void) { return ESP_OK; }
 bool      molty_display_blit_can_overlap(void) { return true; }
 void      molty_display_blit_prof(uint32_t *out) { out[0] = out[1] = out[2] = 0; }
-void      molty_display_blit_mirror(bool on) { (void)on; }
+static bool s_mirror_back;             /* the drawer turned the panel's mirror back on: it repaints all (web_device.c) */
+void      molty_display_blit_mirror(bool on) { if (on) s_mirror_back = true; s_mirror = on; }
 esp_err_t molty_display_power(bool on) { (void)on; return ESP_ERR_NOT_SUPPORTED; }
 esp_err_t molty_display_level(uint8_t level) { (void)level; return ESP_ERR_NOT_SUPPORTED; }
 bool      molty_imu_get(molty_imu_sample_t *out) { (void)out; return false; }
@@ -113,6 +150,11 @@ static bool    s_up;
 static void task_waits(void) { s_run = false; }
 static void run_task(const char *name) { s_run = true; web_sdk_task(name); s_run = true; }
 
+/* web_device.c: the simulator's device mode and the device's own input handling (at the end: it reads the fluid's state) */
+static void web_drawer_before(void);
+static void web_frame_after(void);
+static bool web_sense_touch(int x, int y);
+
 /* ── the calls ────────────────────────────────────────────────────────────── */
 
 /** Memory for what the caller hands over (a package file, a JSON string). */
@@ -150,12 +192,6 @@ WM_API int wm_start(int px, uint32_t seed, int boot) {
     web_sdk_on_wait = task_waits;
     s_booted = !boot;
     if (mole_fluid_creature_init() != ESP_OK) return -1;
-    /* The memory of a change of picture, made now. The drawer makes it at the first change between two pictures the
-     * dust reshapes (a creature and a scene), and fluid_draw_morph_again (a scene's dust arriving after its change)
-     * takes it as made: a scene that comes first over words (not a picture of the dust's: it comes at once) has none
-     * then, and the wave starts on a null buffer. One change asked and taken back makes it; the drawer is left as
-     * it was (no picture, every cell to draw). The firmware's own fix is a line: docs/WEB-MOLTY-REPORT.md. */
-    fluid_draw_morph_look(s_draw, 1u, s_fb, 0.f); fluid_draw_morph_look(s_draw, 2u, s_fb, 0.f); fluid_draw_morph_look(s_draw, 0u, s_fb, 0.f);
     s_up = true;
     return 0;
 }
@@ -172,7 +208,10 @@ WM_API void wm_frame(uint32_t dt_us) {
     s_clock += dt_us;
     web_sdk_clock(s_clock);
     run_task("fluid_task");
+    web_drawer_before();
+    web_sdk_clock(s_clock);            /* the drawer's core starts at the handover (a clock that runs: web_sdk_cpu) */
     run_task("fluid_draw");
+    web_frame_after();
 }
 
 /** What the panel shows: px * px pixels, 4 bytes each (R, G, B, 255), rows top to bottom. */
@@ -190,7 +229,8 @@ WM_API void wm_touch(int down, int x, int y) {
     x = x < 0 ? 0 : x >= s_px ? s_px - 1 : x; y = y < 0 ? 0 : y >= s_px ? s_px - 1 : y;
     if (down && !s_finger.down) {
         s_finger.tapped = true;
-        if (s_q.open) {
+        if (web_sense_touch(x, y)) {}  /* the simulator: sense.c's own routing (web_device.c) */
+        else if (s_q.open) {
             const float r = s_px * 0.5f;
             const int i = mole_fluid_ask_shown() == s_q.seq ? fluid_ask_pick(&s_q.hit, ((float)x + 0.5f - r) / r, ((float)y + 0.5f - r) / r) : -1;
             if (i >= 0) { mole_fluid_ask_pick(i); s_q.open = false; s_q.answer = i; }
@@ -421,3 +461,5 @@ WM_API int wm_scene(const char *layout, const char *params, float ttl_s) {
 }
 /** scene.clear: the creature comes back. */
 WM_API void wm_scene_clear(void) { if (s_up) mole_fluid_scene(MOLE_SCENE_CLEAR, NULL); }
+
+#include "web_device.c"          /* the simulator's calls (apps/website /sim/) */
