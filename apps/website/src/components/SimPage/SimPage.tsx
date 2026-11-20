@@ -92,13 +92,13 @@ function Hold({ onDown, onUp, children }: { onDown: () => void; onUp: () => void
 
 const ms = (v: number) => v.toFixed(1);
 
-/** /sim/: the whole device, its controls grouped as it is used, what an agent hears. */
+/** /demo/: the whole device, its controls grouped as it is used, what an agent hears. */
 export function SimPage({ moods, gestures, firmware }: SimPageProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const sim = useRef<MoltySim | null>(null);
   const [error, setError] = useState("");
   const [zoom, setZoom] = useState(false);
-  const [speed, setSpeed] = useState<SimSpeed>("browser");
+  const [speed, setSpeed] = useState<SimSpeed>("device");
   const [stats, setStats] = useState<SimStats | null>(null);
   const [state, setState] = useState<MoltyState | null>(null);
   const [log, setLog] = useState<SimEvent[]>([]);
@@ -132,6 +132,7 @@ export function SimPage({ moods, gestures, firmware }: SimPageProps) {
       .then((s) => {
         if (gone) return s.destroy();
         sim.current = s;
+        s.setSpeed("device"); // as on Molty by default
         setLab(s.dev.lab());
         (window as unknown as { __sim: MoltySim }).__sim = s;
       })

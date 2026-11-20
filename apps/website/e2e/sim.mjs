@@ -1,4 +1,4 @@
-// The simulator (/sim/) driven as Juan drives the device, in both speeds, a picture of the glass
+// The demo (/demo/) driven as Juan drives the device, in both speeds, a picture of the glass
 // after each step (e2e-out/sim/<speed>-NN-<step>.png). Fails on page errors, a step whose event
 // the device would send does not come (a tap, an answer, the install's, a spot's reading, a sign
 // opened and closed, a scene), a glass that does not change, a state that is not reached, or (device
@@ -37,7 +37,7 @@ async function run(speed) {
   const page = await browser.newPage({ viewport: { width: 1400, height: 1100 }, deviceScaleFactor: 1 });
   page.on('pageerror', (e) => fail(`${speed}: pageerror ${e.message}`));
   page.on('console', (m) => m.type() === 'error' && fail(`${speed}: console ${m.text()}`));
-  await page.goto(`${BASE}/sim/`, { waitUntil: 'networkidle' });
+  await page.goto(`${BASE}/demo/`, { waitUntil: 'networkidle' });
   const glass = page.locator('[data-sim-glass]');
   await glass.waitFor();
   let n = 0;
