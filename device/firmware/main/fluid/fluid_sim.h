@@ -506,7 +506,17 @@ typedef struct {
     float     sd_t, sd_t0;             /* the dust's clock (it stands while the picture changes), the frame's time */
     uint32_t  sd_sig;                  /* the drawing they were made from (a hash)                                */
     int8_t    sd_kind;                 /* the kind the last frame showed (a change redraws the glass)             */
+    uint8_t  *sd_hard;                 /* N (kind 3): the hard dots among the cell's dots as drawn, on black only ..  */
+    uint16_t *sd_hcol;                 /* N: .. and their colour                                                  */
+    int16_t   hold[4];                 /* cells [i0, i1] x [j0, j1] the water never breaks: the caption and its backdrop */
 } fluid_draw_t;
+
+/** A scene on fine dust: where the water shifts the dots (wave slope x 3.3, in sub-dots: half a dot across, a quarter
+ *  down) by this much or more, its drawing breaks into its dots and they ride the water ("lines wobble with water");
+ *  below it the drawing is whole. A band about the crest of a tap's ring, thinner than where the water moves dots at
+ *  all: its cells are sent every frame, so its width is the cost (1.5: the open chart's middle tap over a frame with
+ *  the specks; 1.75 fits, ~160 px of reach). */
+#define FINE_BREAK 1.75f
 
 /** A window of pixels to draw: px is pixel (x0, y0), rows `stride` px apart. A whole
  *  framebuffer is { fb, fb_w, 0, 0, fb_w, fb_h }. */

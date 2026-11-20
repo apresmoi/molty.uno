@@ -1702,7 +1702,7 @@ static void fluid_task(void *arg) {
                         /* a set built since swaps in: with the scene when the change of picture begins; one that comes
                          * later waits for its end, and comes by a wave of its own when it is the scene's whole dust */
                         if ((!fluid_draw_morphing(s_draw) || fluid_draw_morph_fresh(s_draw)) && fluid_fine_swap(s_fine) && !fluid_draw_morph_fresh(s_draw)
-                            && fluid_fine_dust_kind_get() == FINE_DUST_SPECKS)   /* (EXPERIMENT: the dots need no set) */
+                            && fluid_fine_specks_kind(fluid_fine_dust_kind_get()))   /* (EXPERIMENT: the dots alone need no set) */
                             fluid_draw_morph_again(s_draw);
                         fluid_fine_caption_box(s_fine, s_cap_box_on ? s_cap_box : NULL);
                         fluid_fine_rim(s_fine, s_rg.on > 0.f);
@@ -2065,6 +2065,7 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     cJSON_AddItemToObject(root, "gestures", gestures_json(gestures));
     cJSON_AddStringToObject(root, "idle_life", FD_IDLE_NAMES[idle_life]);
     cJSON_AddNumberToObject(root, "scene_dust", fluid_fine_dust_kind_get());       /* EXPERIMENT (mole_fluid_scene_dust) */
+    cJSON_AddNumberToObject(root, "scene_hard_pct", fluid_fine_hard_density_get()); /* EXPERIMENT (mole_fluid_scene_hard) */
     cJSON_AddNumberToObject(root, "fine_ride_px", roundf(fluid_fine_ride_px_get()));
     cJSON_AddStringToObject(root, "edge_mode",   FLUID_EDGE_NAMES[c.edge_mode]);
     cJSON_AddStringToObject(root, "grid",        grid);
@@ -2196,9 +2197,14 @@ esp_err_t mole_fluid_creature_state_set_json(const char *body) {
         }
         if (ne != ESP_OK) { ESP_LOGW(TAG, "idle_life not saved (%s)", esp_err_to_name(ne)); ret = ne; }
     }
-    /* EXPERIMENT scene_dust: 0 | 1 | 2, fine_ride_px: 0..4096 (mole_fluid_scene_dust, _fine_ride; not kept) */
+    /* EXPERIMENT scene_dust: 0 | 1 | 2 | 3, scene_hard_pct: 0..25, fine_ride_px: 0..4096 (mole_fluid_scene_dust, _scene_hard,
+     * _fine_ride; not kept) */
     if ((j = cJSON_GetObjectItem(root, "scene_dust"))) {
-        if (cJSON_IsNumber(j) && j->valueint >= 0 && j->valueint <= 2) mole_fluid_scene_dust(j->valueint);
+        if (cJSON_IsNumber(j) && j->valueint >= 0 && j->valueint <= 3) mole_fluid_scene_dust(j->valueint);
+        else ret = ESP_ERR_INVALID_ARG;
+    }
+    if ((j = cJSON_GetObjectItem(root, "scene_hard_pct"))) {
+        if (cJSON_IsNumber(j) && j->valueint >= 0 && j->valueint <= FINE_HARD_MAX) mole_fluid_scene_hard(j->valueint);
         else ret = ESP_ERR_INVALID_ARG;
     }
     if ((j = cJSON_GetObjectItem(root, "fine_ride_px"))) {
@@ -2504,6 +2510,7 @@ void mole_fluid_shed_internal(void) {
 
 /* EXPERIMENT scene dust (mole_fluid.h; delete once Juan picks): the drawer reads them each frame */
 void mole_fluid_scene_dust(int kind) { fluid_fine_dust_kind(kind); }
+void mole_fluid_scene_hard(int percent) { fluid_fine_hard_density(percent); }
 void mole_fluid_fine_ride(int px) { fluid_fine_ride_px((float)px); }
 
 unsigned mole_fluid_spot_tap(int px, int py) {

@@ -189,9 +189,13 @@ void mole_fluid_allow_internal(void);
 #define MOLE_SPOT_BACK 0xFFFFFFFFu
 /** EXPERIMENT (delete once Juan picks): the dust of scenes on fine dust. kind 0 (default): single-pixel specks;
  *  1: the creature screen's braille dots riding the water over the whole glass; 2: the same with the creature
- *  screen's 2:1 row interlace of the water's changes (fluid_fine_dust_kind). Also the
+ *  screen's 2:1 row interlace of the water's changes; 3: the specks of 0 with a sparse layer of 1's dots over them,
+ *  riding the water (fluid_fine_dust_kind). Also the
  *  state's "scene_dust". Any task, not kept. */
 void mole_fluid_scene_dust(int kind);
+/** EXPERIMENT: kind 3's density, the share (percent, 0..25, FINE_HARD_PCT by default) of the lattice's dots away from
+ *  the drawing that carry a hard dot (fluid_fine_hard_density). Also the state's "scene_hard_pct". Any task. */
+void mole_fluid_scene_hard(int percent);
 /** EXPERIMENT: how far (px) the fine specks ride a tap's wave from a tapped drawing or the caption: 12 by default,
  *  the stage's size (466) or more the whole glass (fluid_fine_ride_px). Also the state's "fine_ride_px". Any task. */
 void mole_fluid_fine_ride(int px);

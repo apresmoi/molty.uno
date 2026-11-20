@@ -411,6 +411,15 @@ static inline float hd_dust(const fluid_frame_t *s, int i, int j, float dust) {
     return m < 0.f ? 0.f : m > 1.f ? 1.f : m;
 }
 
+/* on fine dust, the water breaks the drawing at cell (i,j) into its dots: where it shifts them FINE_BREAK sub-dots or
+ * more (fluid_sim.h) */
+static inline bool fine_breaks(const fluid_frame_t *s, int i, int j) {
+    if (i < 1 || j < 1 || i >= s->W - 1 || j >= s->H - 1) return false;
+    float fx, fy;
+    wave_shift(s, j * s->W + i, &fx, &fy);
+    return fx * fx + fy * fy >= FINE_BREAK * FINE_BREAK;
+}
+
 /* A transition's dust, pushed: each dot of the drawing (o->dots) to where it scatters, as
  * scene_dots would pull it (the wave's shift, a fixed offset inside the scatter radius, thinned
  * by the dust), into d->pdots / d->psrc: the work follows the drawing's dots, not the lattice */
@@ -452,6 +461,8 @@ static void dust_push(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_
 #define SD_ON         1.5f    /* none closer than this to a drawn dot, px                                 */
 #define SD_LEVEL_FAR  0.42f   /* brightness far .. 1 near                                                 */
 #define SD_REACH      240     /* the distance's cap, 1/4 px (60 px: ambient beyond)                       */
+#define SD3_CLEAR     4.f     /* kind 3: no hard dot closer than this to a drawn dot, px                   */
+#define SD3_LEVEL     0.9f    /* kind 3: the hard dots' brightness (far dust: SD_LEVEL_FAR; the creature's motes are bright) */
 
 /* the dust's colour at nearness `near` (0..1) to the drawing, brightness times k */
 static uint16_t sd_rgb(int pal, float near, float k) {
@@ -465,15 +476,18 @@ static uint16_t sd_rgb(int pal, float near, float k) {
 
 /* each dot's distance to the drawing's dots and the dust's dots and colour by it: again only when the drawing
  * changes; the cells whose dust changed are marked (d->hch). False: no memory. */
-static bool sd_field(fluid_draw_t *d, const uint8_t *dots, int palette) {
+static bool sd_field(fluid_draw_t *d, const uint8_t *dots, int palette, int kind) {
     const int W = d->W, H = d->H, DW = 2 * W, DH = 4 * H, N = W * H;
     if (!d->sd_dist) {
-        d->sd_dist = FLUID_CALLOC(sizeof(uint16_t) * 10 * (size_t)N + 5 * (size_t)N);
+        d->sd_dist = FLUID_CALLOC(sizeof(uint16_t) * 11 * (size_t)N + 6 * (size_t)N);
         if (!d->sd_dist) return false;
-        d->sd_col = d->sd_dist + 8 * N; d->sd_lcol = d->sd_col + N; d->sd_dots = (uint8_t *)(d->sd_lcol + N);
-        d->sd_live = d->sd_dots + N; d->sd_near = d->sd_live + N; d->sd_ch = d->sd_near + N; d->sd_pm = d->sd_ch + N;
+        d->sd_col = d->sd_dist + 8 * N; d->sd_lcol = d->sd_col + N; d->sd_hcol = d->sd_lcol + N; d->sd_dots = (uint8_t *)(d->sd_hcol + N);
+        d->sd_live = d->sd_dots + N; d->sd_near = d->sd_live + N; d->sd_ch = d->sd_near + N; d->sd_pm = d->sd_ch + N; d->sd_hard = d->sd_pm + N;
     }
-    uint32_t sig = 2166136261u ^ (uint32_t)palette;
+    /* (kind 3: a sparse even layer, its density the setter's, none within SD3_CLEAR px of the drawing) */
+    const bool hard = kind == FINE_DUST_FINE_DOTS;
+    const float pct = hard ? fluid_fine_hard_density_get() * 0.01f : 0.f;
+    uint32_t sig = (2166136261u ^ (uint32_t)palette) * 16777619u ^ (uint32_t)(hard ? 1000 + fluid_fine_hard_density_get() : 0);
     for (int k = 0; k < N; k++) sig = (sig ^ dots[k]) * 16777619u;
     if (sig == d->sd_sig) return true;
     d->sd_sig = sig;
@@ -501,15 +515,21 @@ static bool sd_field(fluid_draw_t *d, const uint8_t *dots, int palette) {
         int on = 0; float most = -1.f;
         for (int q = 0; q < 8; q++) {
             const int x = 2 * i + (q >> 2), y = 4 * j + (q & 3), dq = f[y * DW + x];
-            if (dq < (int)(SD_ON * 4.f)) continue;
+            if (dq < (int)((hard ? SD3_CLEAR : SD_ON) * 4.f)) continue;
             const float near = near_lut[dq > SD_REACH ? SD_REACH : dq];
+            if (hard) {                                 /* the creature screen's motes: picked once per dot by a hash */
+                if (hash_u(x, y, 0x3D) >= pct) continue;
+                on |= 1 << fluid_braille_bit(q >> 2, q & 3);
+                if (near > most) most = near;
+                continue;
+            }
             /* ordered near the drawing (the lattice's Bayer), loose far from it (a hash) */
             const float thr = near * BAYER4[(y & 3) * 4 + (x & 3)] + (1.f - near) * hash_u(x, y, 0x5D);
             if (thr >= SD_AMBIENT + SD_PEAK * near) continue;
             on |= 1 << fluid_braille_bit(q >> 2, q & 3);
             if (near > most) most = near;
         }
-        const uint16_t col = on ? sd_rgb(pal, most, 1.f) : 0;
+        const uint16_t col = on ? sd_rgb(pal, most, hard ? SD3_LEVEL / SD_LEVEL_FAR : 1.f) : 0;
         if (on != d->sd_dots[k] || col != d->sd_col[k]) { d->sd_dots[k] = (uint8_t)on; d->sd_col[k] = col; d->hch[k] = 1; }
         d->sd_near[k] = (uint8_t)(most > 0.f ? most * 255.f + 0.5f : 0.f);
     }
@@ -553,7 +573,7 @@ static void sd_alive(fluid_draw_t *d, const fluid_draw_opts_t *o) {
                     if (!(on & bit)) continue;
                     const int x = 2 * i + c, y = 4 * j + r, dq = d->sd_dist[y * 2 * W + x];
                     const float near = dq >= SD_REACH ? 0.f : expf(-dq * 0.25f / SD_FALL);
-                    const float l = f->lgrid_ok ? fluid_fine_light(f, d->dx[x] + d->dot_w * 0.5f - d->ox, d->dy[y] + d->dot_h * 0.5f - d->oy) : 1.f;
+                    const float l = f->lgrid_ok && d->sd_kind != FINE_DUST_FINE_DOTS ? fluid_fine_light(f, d->dx[x] + d->dot_w * 0.5f - d->ox, d->dy[y] + d->dot_h * 0.5f - d->oy) : 1.f;
                     if (hash_u(x, y, 0x71) < FINE_LIGHT_FLOOR + (1.f - FINE_LIGHT_FLOOR) * (l + (1.f - l) * near)) live |= bit;
                 }
                 const float near = d->sd_near[k] * (1.f / 255.f), tw = hash_u(i, j, ph);
@@ -591,7 +611,7 @@ static inline uint32_t haze_seed(const fluid_draw_opts_t *o, int j) {
 
 /* (key, colour) of one cell — what render.js would draw there */
 static inline void cell_look(const fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_opts_t *o,
-                             int i, int j, int k, int rmax, uint32_t frame, uint16_t *key_out, uint16_t *col_out) {
+                             int i, int j, int k, int rmax, uint32_t frame, uint16_t *key_out, uint16_t *col_out, uint8_t *hard_out, uint16_t *hcol_out) {
     const int W = s->W;
     const int mode = o->edge_mode;
     float v = s->view[k] * IU;
@@ -606,18 +626,29 @@ static inline void cell_look(const fluid_draw_t *d, const fluid_frame_t *s, cons
         float dust = o->dust;                           /* a transition's scatter */
         if (o->shapes) {
             if (o->fine) dust = 0.f;                    /* (on fine dust a change of scene is the drawer's: fluid_morph_t) */
-            /* smooth or dust, no fade: a cell changes once. On fine dust the drawing never breaks into its dots: the
-             * water moves the dust, not the lines (a word's ripple, a tap's wave left the dots of what they broke on
-             * the glass until their rows' turns came: remnants of the word before). On the dots, a tapped spot's
-             * drawing (o->still) does not break either. */
-            const bool held = o->fine || (o->still && o->still[k]);
-            const int wt = (held && dust <= 0.f) || hd_dust(s, i, j, dust) < 0.5f ? HD_LEVELS : 0;
+            /* smooth or dust, no fade: a cell changes once. Where the water moves, the drawing breaks into its dots and
+             * they ride it ("lines wobble with water"), whole again on the first calm frame (a broken cell is looked at
+             * every frame: never skipped while not smooth). Never: a tapped spot's drawing (o->still), the caption and
+             * its backdrop (d->hold), under a ring on the rim (a listen) and while the picture changes. */
+            const bool held = (o->still && o->still[k]) || (o->fine && o->fine->rim) || d->m.on ||
+                              (i >= d->hold[0] && i <= d->hold[1] && j >= d->hold[2] && j <= d->hold[3]);
+            const int wt = (held && dust <= 0.f) || (o->fine ? !fine_breaks(s, i, j) : hd_dust(s, i, j, dust) < 0.5f) ? HD_LEVELS : 0;
             if (wt) hd = (uint16_t)(KEY_HD | wt << 8);
             if (wt == HD_LEVELS) src = o->kdots;
         }
         if (o->shapes && src == o->dots && dust > 0.f) { dots = d->pdots[k]; kc = dots ? d->psrc[k] : k; }   /* dust_push */
         else dots = src ? scene_dots(d, s, src, i, j, k, dust, &kc, true) : 0;
-        if (o->fine && o->shapes && d->sd_kind) {   /* EXPERIMENT: the creature's kind of dust (sd_cell) */
+        if (o->fine && o->shapes && !hd && !dots && !o->dots[k]) {   /* (broken, but nothing of the drawing is in it or rides
+                                                                      * into it: as it was, not sent) */
+            hd = (uint16_t)(KEY_HD | HD_LEVELS << 8);
+            dots = o->kdots ? scene_dots(d, s, o->kdots, i, j, k, 0.f, &kc, true) : 0;
+        }
+        if (o->fine && o->shapes && d->sd_kind == FINE_DUST_FINE_DOTS) {   /* EXPERIMENT kind 3: the hard dots apart, drawn on
+                                                                             * black after the specks (the caller adds them to the key) */
+            int kd = k;
+            const int sd = sd_cell(d, s, o, i, j, k, &kd) & ~(dots > 0 ? dots : 0);
+            if (sd) { *hard_out = (uint8_t)sd; *hcol_out = d->sd_lcol[d->sd_lcol[k] ? k : kd]; }
+        } else if (o->fine && o->shapes && d->sd_kind) {   /* EXPERIMENT: the creature's kind of dust (sd_cell) */
             int kd = k;
             const int sd = sd_cell(d, s, o, i, j, k, &kd);
             if (sd && !dots) { *key_out = (uint16_t)(hd | sd); *col_out = d->sd_lcol[d->sd_lcol[k] ? k : kd]; return; }   /* (its own colour: a dot riding in takes it) */
@@ -824,6 +855,25 @@ static void caption_box(fluid_draw_t *d, const fluid_draw_opts_t *o) {
     memcpy(d->cap0, d->cap, sizeof(b));
 }
 
+/* the cells the water never breaks (cell_look's held): the caption's letters and, while it is up, its backdrop and the
+ * drawing it dims (fluid_shapes_row_dim: FLUID_DIM_REACH px round its box), a cell more each way */
+static void hold_box(fluid_draw_t *d, const fluid_draw_opts_t *o) {
+    float b[4] = { 1e9f, -1e9f, 1e9f, -1e9f };              /* fb px */
+    for (int n = 0; n < o->nshapes && n < FLUID_MAX_SHAPES; n++) {
+        if (o->shapes[n].tag != FLUID_TAG_CAPTION) continue;
+        b[0] = fminf(b[0], d->sb[n][0]); b[1] = fmaxf(b[1], d->sb[n][1]); b[2] = fminf(b[2], d->sb[n][2]); b[3] = fmaxf(b[3], d->sb[n][3]);
+    }
+    const float *dm = o->fine ? o->fine->dim : NULL;
+    if (dm && dm[4] > 0.f) {
+        const float R = FLUID_DIM_REACH;
+        b[0] = fminf(b[0], dm[0] - R + d->ox); b[1] = fmaxf(b[1], dm[1] + R + d->ox); b[2] = fminf(b[2], dm[2] - R + d->oy); b[3] = fmaxf(b[3], dm[3] + R + d->oy);
+    }
+    if (b[0] > b[1]) { d->hold[0] = d->hold[2] = 1; d->hold[1] = d->hold[3] = 0; return; }
+    const float kx = (float)d->W / d->stage, ky = (float)d->H / d->stage;
+    d->hold[0] = (int16_t)(floorf((b[0] - d->ox) * kx) - 1); d->hold[1] = (int16_t)(floorf((b[1] - d->ox) * kx) + 1);
+    d->hold[2] = (int16_t)(floorf((b[2] - d->oy) * ky) - 1); d->hold[3] = (int16_t)(floorf((b[3] - d->oy) * ky) + 1);
+}
+
 /* crisp dots alone (a scene's dots, no shapes, no dust: a rigged creature): the wave leaves cell (i, j) showing its own
  * dots (refracted_dots: no whole sub-dot of shift, so no scatter either) */
 static inline bool crisp_flat(const fluid_frame_t *s, int i, int j, int k) {
@@ -964,14 +1014,16 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
         halo_field(d, o->dots, o->fine != NULL);
         /* EXPERIMENT scene dust: the kind shown; a change of it redraws the glass */
         int sdk = o->fine ? fluid_fine_dust_kind_get() : FINE_DUST_SPECKS;
-        if (sdk != FINE_DUST_SPECKS && !sd_field(d, o->dots, o->palette)) sdk = FINE_DUST_SPECKS;
+        if (sdk != FINE_DUST_SPECKS && !sd_field(d, o->dots, o->palette, sdk)) sdk = FINE_DUST_SPECKS;
         if (sdk != d->sd_kind) { d->sd_kind = (int8_t)sdk; d->force = true; }
+        if (o->fine) o->fine->ride_with = sdk == FINE_DUST_FINE_DOTS ? d->sd_dots : NULL;   /* (kind 3: specks by a hard dot ride too) */
         /* (the light holds still while the picture changes, and on the dots while a wave moves more than they send in
          * two frames: the eye is on the wave; it goes on from there after, never all at once) */
         if (o->fine) o->fine->pause = d->m.on || (d->sd_kind && d->sd_m > 2);
         if (o->fine) fluid_fine_frame(o->fine, s, o);   /* its fine dust instead of the haze */
         if (d->sd_kind) sd_alive(d, o);
         else caption_box(d, o);
+        hold_box(d, o);
         if (d->force && d->hdcv) memset(d->hdcv, 0, (size_t)W * H);   /* the drawing's cache, drawn again */
         /* a shape that changed (a tapped spot's drawing growing), came or went: the cells it covered and covers. The two
          * lists are walked together, so a shape that comes or goes in the middle (an aspect's rings, lit by a tap) leaves
@@ -1067,7 +1119,8 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
             const bool dust_same = hd && (ff ? ff->sig[k] == ff->sig0[k] : d->hde[k] == seed);
             if (hd && !d->force && o->dust <= 0.f && !d->hch[k] && dust_same && s->mask[k] && !d->skip[k] && key_hd(d->key[k]) &&
                 hd_still(s, o, i, j, k) && hd_sig(o->dots, W, H, i, j) == d->hds[k] &&
-                (!d->sd_kind || ((d->key[k] & 0xFFu) == d->sd_live[k] && d->col[k] == d->sd_lcol[k] && crisp_flat(s, i, j, k)))) { d->dirty[k] = 0; continue; }   /* (EXPERIMENT: its dust on the lattice, the water leaving it there) */
+                (!d->sd_kind || (d->sd_kind == FINE_DUST_FINE_DOTS ? crisp_flat(s, i, j, k) && d->sd_hard[k] == (d->sd_live[k] & ~((d->key[k] & 0xFFu) & ~d->sd_hard[k]))
+                                 : (d->key[k] & 0xFFu) == d->sd_live[k] && d->col[k] == d->sd_lcol[k] && crisp_flat(s, i, j, k)))) { d->dirty[k] = 0; continue; }   /* (EXPERIMENT: its dust on the lattice, the water leaving it there) */
             /* (EXPERIMENT FINE_DUST_DOTS_ILACE: what only the water, the light or the twinkle changes, in every other cell row a
              * frame, as crisp dots) */
             const bool sd_turn = d->sd_kind == FINE_DUST_DOTS_ILACE && !d->force && (!d->hch[k] || d->sd_ch[k]) && dust_same && s->mask[k] &&
@@ -1087,17 +1140,21 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
                 if (same && !(c0 & 0x100) && (c0 & 0xff) == (d->cd0[k] & 0xff) && (o->frame ? !fluid_ilace_row(o->frame, j) : ((j + d->ilace) & 1))) { d->dirty[k] = 0; continue; }
                 d->cd0[k] = c0; d->csig[k] = sig;
             }
-            uint16_t key = KEY_EMPTY, col = 0;
+            uint16_t key = KEY_EMPTY, col = 0, hcol = 0;
+            uint8_t hard = 0;
             if (d->skip[k]) key = KEY_SKIP;
-            else if (s->mask[k]) cell_look(d, s, &oo, i, j, k, rmax, frame, &key, &col);
+            else if (s->mask[k]) cell_look(d, s, &oo, i, j, k, rmax, frame, &key, &col, &hard, &hcol);
+            key |= hard;                                    /* (EXPERIMENT kind 3: the hard dots, in the key, drawn apart) */
             d->hde[k] = hd && o->dust <= 0.f && key_hd(key) && hd_still(s, o, i, j, k) ? seed : 255;
             /* what the shapes draw in a cell changes with the dots around it */
             const uint8_t sig = key_hd(key) ? hd_sig(o->dots, W, H, i, j) : 0;
             /* a letter's cleared cell that was one last frame: sent again only if the letters changed (2: decided below) */
             const bool lt_cell = key == KEY_SKIP && d->key[k] == KEY_SKIP && !d->force;
             /* everything that changed goes this frame (the light's changes come on its cells' turns: fluid_fine_frame) */
+            const bool sdk3 = d->sd_kind == FINE_DUST_FINE_DOTS;
             const bool dirty = key == KEY_SKIP || d->force || key != d->key[k] || col != d->col[k] || sig != d->hds[k] ||
-                               (hd && o->fine && !dust_same && (!d->sd_kind || d->cdist[k] <= 1 || d->sd_pm[k]));
+                               (sdk3 && (hard != d->sd_hard[k] || hcol != d->sd_hcol[k])) ||
+                               (hd && o->fine && !dust_same && (!d->sd_kind || sdk3 || d->cdist[k] <= 1 || d->sd_pm[k]));
             if (dirty && ff) { if (!dust_same) d->why[k] |= ff->why[k]; ff->sig0[k] = ff->sig[k]; }   /* the dust as drawn */
             if (dirty && ff && d->sd_kind && !d->force && !crisp_flat(s, i, j, k)) d->why[k] |= 1u << FLUID_ANIM_WATER;   /* (EXPERIMENT) */
             d->sd_w += dirty && sd_turn; d->sd_o += dirty && !sd_turn && !d->force;
@@ -1107,6 +1164,7 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
                 if (i < i0) i0 = i;
                 i1 = i + 1;
                 d->key[k] = key; d->col[k] = col; d->hds[k] = sig;
+                if (sdk3) { d->sd_hard[k] = hard; d->sd_hcol[k] = hcol; }
                 if (key != KEY_EMPTY && key != KEY_SKIP) drawn++;
             }
         }
@@ -1820,6 +1878,32 @@ static void morph_rect(fluid_draw_t *d, const fluid_rect_t *t) {
     }
 }
 
+/* EXPERIMENT kind 3: the hard dots of window t's cells (all, else the dirty ones), each 2 x 2 px dot on the pixels still
+ * black once the drawing and the specks are drawn: never over a line, a speck or a letter */
+static void sd_hard_rect(const fluid_draw_t *d, const fluid_rect_t *t, int bx, bool all) {
+    const int W = d->W, H = d->H;
+    for (int j = 0; j < H; j++) {
+        const int ya = d->cy[j], yb = d->cy[j + 1];
+        if (yb <= t->y0) continue;
+        if (ya >= t->y1) break;
+        for (int i = 0; i < W; i++) {
+            const int k = j * W + i, hb = d->sd_hard[k];
+            if (!hb || (!all && !d->dirty[k]) || d->cx[i + 1] <= t->x0 || d->cx[i] >= t->x1) continue;
+            const uint16_t col = d->sd_hcol[k];
+            for (int q = 0; q < 8; q++) {
+                const int c = q >> 2, r = q & 3;
+                if (!(hb >> fluid_braille_bit(c, r) & 1)) continue;
+                const int x0 = d->dx[2 * i + c] > t->x0 ? d->dx[2 * i + c] : t->x0, x1 = d->dx[2 * i + c] + d->dot_w < t->x1 ? d->dx[2 * i + c] + d->dot_w : t->x1;
+                const int y0 = d->dy[4 * j + r] > t->y0 ? d->dy[4 * j + r] : t->y0, y1 = d->dy[4 * j + r] + d->dot_h < t->y1 ? d->dy[4 * j + r] + d->dot_h : t->y1;
+                for (int y = y0; y < y1; y++) {
+                    uint16_t *row = rect_px(t, bx, y);
+                    for (int x = x0; x < x1; x++) if (!row[x - bx]) row[x - bx] = col;
+                }
+            }
+        }
+    }
+}
+
 void fluid_draw_rect(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_rect_t *t, bool all) {
     const int W = d->W, H = d->H, bx = t->x0;
     const bool hd = o->scene && o->dots && o->shapes;
@@ -1828,6 +1912,7 @@ void fluid_draw_rect(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fl
     fluid_draw_t *dm = (fluid_draw_t *)d;
     if (hd && o->fine) hdc_room(dm);
     const bool cached = hd && o->fine && d->hdc;
+    const bool sd3 = hd && o->fine && d->sd_kind == FINE_DUST_FINE_DOTS && d->sd_hard;
     int ncache = o->nshapes < FLUID_MAX_SHAPES ? o->nshapes : FLUID_MAX_SHAPES;
     while (cached && ncache > 0 && o->shapes[ncache - 1].tag == FLUID_TAG_CAPTION) ncache--;
     if (all) for (int y = t->y0; y < t->y1; y++) memset(rect_px(t, bx, y), 0, (size_t)(t->x1 - bx) * sizeof(uint16_t));
@@ -1880,8 +1965,9 @@ void fluid_draw_rect(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fl
                 if (key < KEY_GLYPH || key_hd(key)) {        /* dots (beside a scene's shapes, never on them) */
                     if (r < 0) continue;
                     const bool beside = key_hd(key);
+                    const unsigned own = key & ~(unsigned)(sd3 ? d->sd_hard[k] : 0);   /* (EXPERIMENT kind 3: the hard dots after the specks) */
                     for (int c = 0; c < 2; c++) {
-                        if (!(key & (1u << fluid_braille_bit(c, r)))) continue;
+                        if (!(own & (1u << fluid_braille_bit(c, r)))) continue;
                         int a = d->dx[i * 2 + c], b = a + d->dot_w;
                         if (a < t->x0) a = t->x0;
                         if (b > t->x1) b = t->x1;
@@ -1894,6 +1980,7 @@ void fluid_draw_rect(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fl
         }
     }
     if (hd && o->fine) fluid_fine_rect(o->fine, d->dirty, t, all);   /* the fine dust over it all, never on the drawing */
+    if (sd3) sd_hard_rect(d, t, bx, all);               /* (EXPERIMENT kind 3) the hard dots over that, on black only */
     for (int n = 0; n < d->nlt; n++) {
         if (d->lt[n].mask)
             draw_mask(t, d->lt[n].mask, d->lt[n].mw, d->lt[n].mh, d->lt[n].x, d->lt[n].y, d->lt[n].w, d->lt[n].h, d->lt[n].c,
