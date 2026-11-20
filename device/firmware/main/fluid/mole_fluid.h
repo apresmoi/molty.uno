@@ -196,9 +196,6 @@ void mole_fluid_scene_dust(int kind);
 /** EXPERIMENT: kind 3's density, the share (percent, 0..25, FINE_HARD_PCT by default) of the lattice's dots away from
  *  the drawing that carry a hard dot (fluid_fine_hard_density). Also the state's "scene_hard_pct". Any task. */
 void mole_fluid_scene_hard(int percent);
-/** EXPERIMENT: how far (px) the fine specks ride a tap's wave from a tapped drawing or the caption: 12 by default,
- *  the stage's size (466) or more the whole glass (fluid_fine_ride_px). Also the state's "fine_ride_px". Any task. */
-void mole_fluid_fine_ride(int px);
 unsigned mole_fluid_spot_tap(int px, int py);
 /** That spot's id into id (size bytes; "" if it has none or another spot was tapped since), and the
  *  layout it opens into open (may be NULL; "" if it opens none). Any task. */

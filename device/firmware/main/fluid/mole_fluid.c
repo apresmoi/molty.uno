@@ -653,13 +653,13 @@ static void poll_touch(int n, const uint16_t *xs, const uint16_t *ys, int64_t t)
     float x = (float)(xs[0] - s_ox) / (float)s_stage * 2.f - 1.f, y = (float)(ys[0] - s_oy) / (float)s_stage * 2.f - 1.f;
     if (!s_touch_down) {                                    /* tap = ripple */
         s_touch_down = true; s_tpx = x; s_tpy = y; s_last_tx = xs[0]; s_last_ty = ys[0];
-        /* on a scene's spot the wave leaves the outline of what it grows (that stays still); else the finger's ripple */
+        /* on a scene's spot a wave leaves the outline of what it grows (that stays still); the finger's ripple too (on fine
+         * dust it carries the dust over the whole glass), unless the spot opens a layout (the picture changes on still water) */
         const int spot = s_cur == ST_SCENE && s_sp.cur ? scene_spot_at(s_sp.cur, s_sp.t, x, -y) : -1;
         /* a tap on a question's answer: its own wave goes from there (fluid_askview_answer), not a finger's */
         const bool answer = s_ask.scr.phase == FLUID_ASK_SHOW && s_ask.scr.t >= FLUID_ASK_READY && s_ask.v && fluid_ask_pick(&s_ask.hit, x, y) >= 0;
-        /* (EXPERIMENT scene dust as the creature's: the finger's own ripple on a spot too, the creature screen's wave) */
         if (spot >= 0 && fluid_fine_dust_kind_get() == FINE_DUST_SPECKS) scene_outline(s_sp.cur, spot, outline_bump, NULL);
-        else if (!answer) ripple(x, y, 1.6f, 0.09f);
+        if (!answer && (spot < 0 || !s_sp.cur->items[spot].nopen)) ripple(x, y, 1.6f, 0.09f);
         fd_user(&s_dir);                                    /* wakes a sleepy creature */
         if (s_cur == ST_CREATURE && s_cpk) cpk_come(s_cpk, NULL);   /* a rigged one comes to the front, attending */
         if (!s_touch_t0) s_touch_t0 = t;
@@ -2066,7 +2066,6 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     cJSON_AddStringToObject(root, "idle_life", FD_IDLE_NAMES[idle_life]);
     cJSON_AddNumberToObject(root, "scene_dust", fluid_fine_dust_kind_get());       /* EXPERIMENT (mole_fluid_scene_dust) */
     cJSON_AddNumberToObject(root, "scene_hard_pct", fluid_fine_hard_density_get()); /* EXPERIMENT (mole_fluid_scene_hard) */
-    cJSON_AddNumberToObject(root, "fine_ride_px", roundf(fluid_fine_ride_px_get()));
     cJSON_AddStringToObject(root, "edge_mode",   FLUID_EDGE_NAMES[c.edge_mode]);
     cJSON_AddStringToObject(root, "grid",        grid);
     cJSON_AddNumberToObject(root, "speed",       c.speed);
@@ -2197,18 +2196,13 @@ esp_err_t mole_fluid_creature_state_set_json(const char *body) {
         }
         if (ne != ESP_OK) { ESP_LOGW(TAG, "idle_life not saved (%s)", esp_err_to_name(ne)); ret = ne; }
     }
-    /* EXPERIMENT scene_dust: 0 | 1 | 2 | 3, scene_hard_pct: 0..25, fine_ride_px: 0..4096 (mole_fluid_scene_dust, _scene_hard,
-     * _fine_ride; not kept) */
+    /* EXPERIMENT scene_dust: 0 | 1 | 2 | 3, scene_hard_pct: 0..25 (mole_fluid_scene_dust, _scene_hard; not kept) */
     if ((j = cJSON_GetObjectItem(root, "scene_dust"))) {
         if (cJSON_IsNumber(j) && j->valueint >= 0 && j->valueint <= 3) mole_fluid_scene_dust(j->valueint);
         else ret = ESP_ERR_INVALID_ARG;
     }
     if ((j = cJSON_GetObjectItem(root, "scene_hard_pct"))) {
         if (cJSON_IsNumber(j) && j->valueint >= 0 && j->valueint <= FINE_HARD_MAX) mole_fluid_scene_hard(j->valueint);
-        else ret = ESP_ERR_INVALID_ARG;
-    }
-    if ((j = cJSON_GetObjectItem(root, "fine_ride_px"))) {
-        if (cJSON_IsNumber(j) && j->valuedouble >= 0 && j->valuedouble <= 4096) mole_fluid_fine_ride((int)j->valuedouble);
         else ret = ESP_ERR_INVALID_ARG;
     }
     /* act: a one-shot action (cute_act.h) on the creature, as the link's `act` */
@@ -2511,7 +2505,6 @@ void mole_fluid_shed_internal(void) {
 /* EXPERIMENT scene dust (mole_fluid.h; delete once Juan picks): the drawer reads them each frame */
 void mole_fluid_scene_dust(int kind) { fluid_fine_dust_kind(kind); }
 void mole_fluid_scene_hard(int percent) { fluid_fine_hard_density(percent); }
-void mole_fluid_fine_ride(int px) { fluid_fine_ride_px((float)px); }
 
 unsigned mole_fluid_spot_tap(int px, int py) {
     if (!s_mutex || !s_spot_sc || s_stage <= 0) return 0;
