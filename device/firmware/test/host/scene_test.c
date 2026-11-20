@@ -2354,7 +2354,6 @@ static void morph_inputs(morph_rig_t *r, int kind, scene_shapes_t *hd) {
     if (kind == MK_SCENE) {
         memcpy(r->ddots, r->dots, (size_t)N); memcpy(r->dkeep, r->keep, (size_t)N); memcpy(r->dstill, r->still, (size_t)N);
         memcpy(r->dshp, r->shp, sizeof(fluid_shape_t) * (size_t)(hd->n > 0 ? hd->n : 0));
-        if (!fluid_draw_morphing(r->d) || fluid_draw_morph_open(r->d)) fluid_fine_swap(r->fine);
         r->o = (fluid_draw_opts_t){ .palette = FLUID_PAL_PASTEL, .edge_mode = FLUID_EDGE_CONTOURS, .font = gc_font5x7, .dots = r->ddots, .scene = true,
                                     .shapes = r->dshp, .nshapes = hd->n, .kdots = r->dkeep, .fine = r->fine, .still = r->dstill };
     } else if (kind == MK_ASK) {                       /* (as mole_fluid.c's ask_compose over a scene) */
@@ -2377,7 +2376,8 @@ static void morph_inputs(morph_rig_t *r, int kind, scene_shapes_t *hd) {
     fluid_draw_morph_lines(r->d, kind == MK_CAT ? r->catline : NULL);   /* (the creature's own cells are its lines) */
     r->o.time = r->now;
 }
-/* The look changes to kind's (the scene's dust built `late` frames after, as the device builds it); runs to the
+/* The look changes to kind's (the scene's dust asked for at once and built `late` frames after, as the device builds it;
+ * its set swaps in before the look is told, which carries FLUID_LOOK_DUST once it shows, as mole_fluid.c); runs to the
  * change's end and a little past (or `stop` frames). Every frame of it: the glass is the change as composed whole
  * (fluid_draw_morph_rect: every grain that moved was sent), its time on the panel model, its grains and lines against
  * the prototype's phases, how much of the glass is empty; at the end, the glass against the look drawn whole. A strip
@@ -2398,10 +2398,12 @@ static void morph_run(morph_rig_t *r, int kind, scene_t *sc, uint32_t look, int 
         r->now += 1.f / 30.f;
         if (sc) {
             scene_fill(r->s, sc, 1.f, NULL, r->L, &nl, r->dots, &hd);
-            if (kind == MK_SCENE && f == late) { const int n = scene_full_shapes(r->s, sc, 1.f, r->full, &key); fluid_fine_want(r->fine, look, key, true, r->full, n, FLUID_PAL_PASTEL); }
+            if (kind == MK_SCENE && f == 0) { const int n = scene_full_shapes(r->s, sc, 1.f, r->full, &key); fluid_fine_want(r->fine, look, key, true, r->full, n, FLUID_PAL_PASTEL); }
             if (kind == MK_SCENE && f >= late) fluid_fine_work(r->fine, 0);
         }
-        fluid_draw_morph_look(r->d, look, r->snap, kind != MK_SCENE || fluid_fine_shown(r->fine, look));
+        if (kind == MK_SCENE && (!fluid_draw_morphing(r->d) || fluid_draw_morph_open(r->d))) fluid_fine_swap(r->fine);
+        const bool dust = kind != MK_SCENE || fluid_fine_shown(r->fine, look);
+        fluid_draw_morph_look(r->d, kind == MK_SCENE && dust ? look | FLUID_LOOK_DUST : look, r->snap, dust);
         morph_inputs(r, kind, &hd);
         const bool in = fluid_draw_morphing(r->d);    /* (a frame of the change: its last one draws the look whole) */
         memcpy(r->prev, r->g.px, (size_t)S * S * 2);
@@ -2606,6 +2608,21 @@ static void test_morph(const char *dir, const char *catp) {
         CHECK(s_morph_stale == 0, "interrupted: only the picture kept shows (%d px)", s_morph_stale);
         CHECK(mid && a.worst <= 33.0 && b.worst <= 33.0 && a.over + b.over == 0 && a.unsent + b.unsent == 0, "a change in the middle of one keeps the frame (worst %.1f, %.1f ms)", a.worst, b.worst);
         CHECK(b.diff == 0 && b.frames <= 70 && !fluid_draw_morphing(r->d), "... from the glass as it was, to the chart whole (%d px differ)", b.diff);
+    }
+    {   /* the new picture's dust not in by the cloud (its build starved on the device): the clock waits for it briefly
+         * (FLUID_MORPH_DUST_*, FLUID_MORPH_HOLD_*) and the change ends on time without it; the dust comes after it as a
+         * change of its own (FLUID_LOOK_DUST), the lines staying, its grains coming up near their spots */
+        morph_res_t a, b;
+        const int most = (int)((1.2132f + 0.3f) * 30.f + 0.5f) + FLUID_MORPH_HOLD_N + 3;
+        morph_run(r, MK_SCENE, up, FLUID_LOOK_KEEP | 400, 1000, 0, "no-dust", &a);
+        printf("    its dust late: the change %.0f ms (at most %.0f), worst %.1f ms\n", a.frames * 1000.0 / 30.0, most * 1000.0 / 30.0, a.worst);
+        CHECK(a.frames >= 36 && a.frames <= most && a.unsent == 0 && a.diff == 0 && a.over == 0,
+              "its dust never in: the change still ends on time, to the look without it (%d frames of at most %d, %d px differ)", a.frames, most, a.diff);
+        morph_run(r, MK_SCENE, up, FLUID_LOOK_KEEP | 400, 0, 0, "dust-after", &b);
+        printf("    the dust after it: %.0f ms, worst %.1f ms, %d grains coming\n", b.frames * 1000.0 / 30.0, b.worst, b.born);
+        CHECK(b.frames >= 10 && b.frames <= 36 && b.born > 1000 && b.fly == 0 && b.unsent == 0 && b.diff == 0 && b.over == 0 && s_morph_stale == 0,
+              "... then it comes as a change of its own: its grains come up near their spots, the rest stays (%d frames, %d grains, %d px differ)", b.frames, b.born, b.diff);
+        s_morph_stale = 0;
     }
     {   /* a reading over a layout a tap just opened (Leo's own, at that layout's subtitle place), driven as the device
          * drives it: after each word no pixel of an earlier word is left on the glass, and what is round the word is

@@ -331,6 +331,7 @@ static uint8_t *s_kdots, *s_kdots_d;
 static fluid_fine_t  *s_fine;
 static uint8_t       *s_still, *s_still_d;
 static fluid_shape_t *s_fshp;
+static volatile uint32_t s_sim_fill_us, s_sim_build_us;   /* the sim's last frame: a scene's shapes and rings, the dust's build */
 #define FINE_BUILD_US 6000                          /* the dust's build, at most this a frame (the sim's core) ...  */
 #define FINE_AHEAD_US 20000                         /* ... and while its scene is still coming (a change of picture).
                                                      * (It was 20000: a step of the build runs past its budget by
@@ -926,7 +927,10 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
             const bool ahead = s_hd.out || s_hd.dust >= 1.f || mph;
             const int left = (ahead ? FINE_AHEAD_US : FINE_BUILD_US) - (int)(esp_timer_get_time() - fill_t0);
             const bool was = s_fine->levels_ok, built = s_fine->build >= 0;
+            const int64_t bt0 = esp_timer_get_time();
+            s_sim_fill_us = (uint32_t)(bt0 - fill_t0);
             if (left > 500) fluid_fine_work(s_fine, left);
+            s_sim_build_us = (uint32_t)(esp_timer_get_time() - bt0);
             if (!was && s_fine->levels_ok) {               /* ready to swap in: how long it took, for the log */
                 int calls;
                 const int us = fluid_fine_built(s_fine, &calls);
@@ -1289,6 +1293,16 @@ esp_err_t mole_fluid_framebuffer_sync(void) {
 }
 
 static uint32_t s_last_wait_us;                     /* the drawer's wait for its last window's transfer, this frame */
+/* the bench (mole_fluid_bench_*): records taken, a finger's tap to inject at the next touch poll (1 << 31 | x << 16 | y,
+ * panel px), the animations open (bits FLUID_ANIM_*, the wave's while a change runs) */
+static mole_anim_rec_t *volatile s_bench;
+static volatile int s_bench_n, s_bench_cap;
+static atomic_uint s_bench_touch, s_anim_busy;
+static atomic_bool s_bench_boot, s_dust_in;
+const char *const MOLE_ANIM_PART_NAMES[MOLE_ANIM_PARTS] = {
+    "cells", "send", "cmp", "push", "wait", "sim", "fill", "build", "fine", "rect",
+    "look", "old", "new", "pair", "fly", "spare", "born", "lines", "compose", "end", "marks" };
+_Static_assert(10 + FLUID_MP_N == MOLE_ANIM_PARTS, "the bench's parts: the frame's ten and the change's own");
 static volatile uint32_t s_sim_work_us;             /* the sim's last frame's own work (sim_frame, the dust's build in it) */
 static void draw_task(void *arg) {
     (void)arg;
@@ -1308,7 +1322,8 @@ static void draw_task(void *arg) {
         int64_t touch_t = s_dtouch; s_dtouch = 0;
         if (t0 - last_touch >= FLUID_TOUCH_US) {        /* for the sim's next frame */
             uint16_t xs[MOLTY_TOUCH_MAX_POINTS] = { 0 }, ys[MOLTY_TOUCH_MAX_POINTS] = { 0 };
-            const int n = molty_touch_poll(xs, ys, MOLTY_TOUCH_MAX_POINTS);
+            const uint32_t bt = atomic_exchange(&s_bench_touch, 0);   /* (the bench's finger: down for one poll) */
+            const int n = bt ? (xs[0] = (uint16_t)(bt >> 16 & 0x7FFF), ys[0] = (uint16_t)(bt & 0xFFFF), 1) : molty_touch_poll(xs, ys, MOLTY_TOUCH_MAX_POINTS);
             xSemaphoreTake(s_mutex, portMAX_DELAY);
             s_tp = (touch_read_t){ n, xs[0], ys[0], t0, s_tp.seq + 1 };
             xSemaphoreGive(s_mutex);
@@ -1351,42 +1366,54 @@ static void draw_task(void *arg) {
         }
         int64_t t2 = esp_timer_get_time();
         mole_diag_panel_frame((uint32_t)(t1 - t0), (uint32_t)(t2 - t1));
-        {   /* each animation's cadence (/api/log), once it has rested 10 frames: the frames its cells changed (f) and those
-             * whose changes were all sent (s: must be f), its pixels a frame (the change's own for the wave), the windows,
-             * the frame-to-frame intervals of this core (pan) and of the sim's clock (sim), p50 / p95 / worst ms, and its
-             * worst frame's cells + send. The wave's also its length and its windows a frame. */
+        /* the dust's own times this frame (fluid_fine_t.prof_*: summed over its log's frames) */
+        static uint32_t pf0, pr0;
+        fluid_fine_t *ff = s_dopts.fine;
+        const uint32_t fine_f = ff ? ff->prof_frame - pf0 : 0, fine_r = ff ? ff->prof_rect - pr0 : 0;
+        {   /* each animation's cadence (/api/log, and the bench's table: mole_fluid_bench_capture), once it has rested 10
+             * frames: the frames its cells changed (f) and those whose changes were all sent (s: must be f), its pixels a
+             * frame (the change's own for the wave), the windows, the frame-to-frame intervals of this core (pan) and of
+             * the sim's clock (sim), p50 / p95 / worst ms, its worst frame's cells + send; each part of its frames (mean /
+             * max ms: MOLE_ANIM_PARTS) */
             static const char *const NAME[FLUID_ANIM_N] = { "wave", "grow", "word", "water" };
             enum { BINS = 64 };                         /* intervals in 1 ms bins (the last: 63 and more) */
-            static struct { uint32_t f, s, rest, px, pxmax, win, worst, worst_c; uint16_t pan[BINS], sim[BINS]; int64_t began; } A[FLUID_ANIM_N];
-            /* the wave's frame in parts (sums and worst, us): drawing + composing its windows, handing them to the panel
-             * (each waits for the transfer before), the last transfer's wait, the cells, the sim's own work; the pixels of the
-             * cells it composed (kpx) */
-            enum { P_CMP, P_PUSH, P_WAIT, P_CELLS, P_SIM, P_N };
-            static uint32_t wp[P_N], wpm[P_N], wband;
+            typedef struct { uint32_t f, s, rest, px, pxmax, win, worst, worst_c, comp; uint16_t pan[BINS], sim[BINS]; int64_t began;
+                             uint32_t sum[MOLE_ANIM_PARTS], max[MOLE_ANIM_PARTS]; int forced, keep, ready_at, held, na, nb, pairs; } anim_t;
+            static struct { anim_t a[FLUID_ANIM_N]; uint32_t v[MOLE_ANIM_PARTS]; } *R;   /* (PSRAM) */
             static int64_t last_t0;
             static float last_sim;
+            if (!R) R = heap_caps_calloc(1, sizeof(*R), MALLOC_CAP_SPIRAM);
             const uint32_t pan_ms = last_t0 ? (uint32_t)((t0 - last_t0 + 500) / 1000) : 0, sim_ms = (uint32_t)((s_dopts.time - last_sim) * 1000.f + 0.5f);
             last_t0 = t0; last_sim = s_dopts.time;
             const uint8_t on = s_draw ? s_draw->anim_on : 0, late = s_draw ? s_draw->anim_late : 0;
-            for (int q = 0; q < FLUID_ANIM_N; q++) {
+            uint8_t busy = 0;
+            for (int q = 0; R && q < FLUID_ANIM_N; q++) {
+                anim_t *A = &R->a[q];
                 if (on >> q & 1) {
-                    if (!A[q].f++) A[q].began = t0;
-                    A[q].s += !(late >> q & 1) && !s_full_flush;
-                    A[q].rest = 0;
-                    const uint32_t px = q == FLUID_ANIM_WAVE ? (uint32_t)s_draw->m.px : (uint32_t)s_send_px;
-                    A[q].px += px; A[q].pxmax = px > A[q].pxmax ? px : A[q].pxmax;
-                    A[q].win += q == FLUID_ANIM_WAVE ? (uint32_t)s_draw->m.wins : (uint32_t)s_send_n;
-                    if (A[q].f > 1) { A[q].pan[pan_ms < BINS ? pan_ms : BINS - 1]++; A[q].sim[sim_ms < BINS ? sim_ms : BINS - 1]++; }
-                    if ((uint32_t)(t2 - t0) > A[q].worst) { A[q].worst = (uint32_t)(t2 - t0); A[q].worst_c = (uint32_t)(t1 - t0); }
-                    if (q == FLUID_ANIM_WAVE) {
-                        const uint32_t v[P_N] = { (uint32_t)s_draw->m.cmp_us, (uint32_t)s_draw->m.push_us, s_last_wait_us, (uint32_t)(t1 - t0), s_sim_work_us };
-                        for (int p = 0; p < P_N; p++) { wp[p] += v[p]; wpm[p] = v[p] > wpm[p] ? v[p] : wpm[p]; }
-                        wband += (uint32_t)s_draw->m.comp;
+                    if (!A->f++) A->began = t0;
+                    A->s += !(late >> q & 1) && !s_full_flush;
+                    A->rest = 0;
+                    const fluid_morph_t *m = &s_draw->m;
+                    const uint32_t px = q == FLUID_ANIM_WAVE ? (uint32_t)m->px : (uint32_t)s_send_px;
+                    A->px += px; A->pxmax = px > A->pxmax ? px : A->pxmax;
+                    A->win += q == FLUID_ANIM_WAVE ? (uint32_t)m->wins : (uint32_t)s_send_n;
+                    if (A->f > 1) { A->pan[pan_ms < BINS ? pan_ms : BINS - 1]++; A->sim[sim_ms < BINS ? sim_ms : BINS - 1]++; }
+                    if ((uint32_t)(t2 - t0) > A->worst) { A->worst = (uint32_t)(t2 - t0); A->worst_c = (uint32_t)(t1 - t0); }
+                    uint32_t *v = R->v;
+                    const bool w = q == FLUID_ANIM_WAVE;
+                    v[0] = (uint32_t)(t1 - t0); v[1] = (uint32_t)(t2 - t1); v[2] = w ? (uint32_t)m->cmp_us : 0; v[3] = w ? (uint32_t)m->push_us : 0;
+                    v[4] = s_last_wait_us; v[5] = s_sim_work_us; v[6] = s_sim_fill_us; v[7] = s_sim_build_us; v[8] = fine_f; v[9] = fine_r;
+                    for (int p = 0; p < FLUID_MP_N; p++) v[10 + p] = w ? (uint32_t)m->prof[p] : 0;
+                    for (int p = 0; p < MOLE_ANIM_PARTS; p++) { A->sum[p] += v[p]; A->max[p] = v[p] > A->max[p] ? v[p] : A->max[p]; }
+                    if (w) {
+                        A->comp += (uint32_t)m->comp;
+                        A->forced |= m->forced; A->keep |= m->keep;
+                        if (m->on) { A->ready_at = m->ready_at; A->held = m->nheld; A->na = m->na; A->nb = m->nb; A->pairs = m->nfly; }
                     }
-                } else if (A[q].f && ++A[q].rest >= 10) {
+                } else if (A->f && ++A->rest >= 10) {
                     uint32_t pc[2][3];                  /* p50, p95, worst of each core */
                     for (int c = 0; c < 2; c++) {
-                        const uint16_t *h = c ? A[q].sim : A[q].pan;
+                        const uint16_t *h = c ? A->sim : A->pan;
                         uint32_t n = 0, acc = 0;
                         for (int b = 0; b < BINS; b++) n += h[b];
                         pc[c][0] = pc[c][1] = pc[c][2] = 0;
@@ -1398,29 +1425,43 @@ static void draw_task(void *arg) {
                             pc[c][2] = (uint32_t)b;
                         }
                     }
+                    const float n = (float)A->f;
                     mole_diag_event(false, "anim %s %dms f=%u s=%u kpx=%.1f/%.1f win=%.1f pan=%u/%u/%u sim=%u/%u/%u worst=%.1f(%.1f+%.1f)",
-                                    NAME[q], (int)((t0 - A[q].began) / 1000), (unsigned)A[q].f, (unsigned)A[q].s, A[q].px / 1000.f / A[q].f, A[q].pxmax / 1000.f,
-                                    (float)A[q].win / A[q].f, (unsigned)pc[0][0], (unsigned)pc[0][1], (unsigned)pc[0][2], (unsigned)pc[1][0], (unsigned)pc[1][1],
-                                    (unsigned)pc[1][2], A[q].worst / 1000.f, A[q].worst_c / 1000.f, (A[q].worst - A[q].worst_c) / 1000.f);
-                    if (q == FLUID_ANIM_WAVE) {
-                        const float n = (float)A[q].f;
-                        mole_diag_event(false, "anim wave.parts cmp=%.1f/%.1f push=%.1f/%.1f wait=%.1f/%.1f cells=%.1f/%.1f simw=%.1f/%.1f comp=%.1f",
-                                        wp[P_CMP] / 1000.f / n, wpm[P_CMP] / 1000.f, wp[P_PUSH] / 1000.f / n, wpm[P_PUSH] / 1000.f, wp[P_WAIT] / 1000.f / n,
-                                        wpm[P_WAIT] / 1000.f, wp[P_CELLS] / 1000.f / n, wpm[P_CELLS] / 1000.f, wp[P_SIM] / 1000.f / n, wpm[P_SIM] / 1000.f, wband / 1000.f / n);
-                        memset(wp, 0, sizeof(wp)); memset(wpm, 0, sizeof(wpm)); wband = 0;
+                                    NAME[q], (int)((t0 - A->began) / 1000), (unsigned)A->f, (unsigned)A->s, A->px / 1000.f / n, A->pxmax / 1000.f,
+                                    (float)A->win / n, (unsigned)pc[0][0], (unsigned)pc[0][1], (unsigned)pc[0][2], (unsigned)pc[1][0], (unsigned)pc[1][1],
+                                    (unsigned)pc[1][2], A->worst / 1000.f, A->worst_c / 1000.f, (A->worst - A->worst_c) / 1000.f);
+                    /* (its parts: mean/max ms; a change's own work too, and how its dust came) */
+                    #define AM(p) A->sum[p] / 1000.f / n, A->max[p] / 1000.f
+                    mole_diag_event(false, "anim %s.parts cells=%.1f/%.1f send=%.1f/%.1f cmp=%.1f/%.1f push=%.1f/%.1f wait=%.1f/%.1f sim=%.1f/%.1f fill=%.1f/%.1f build=%.1f/%.1f fine=%.1f/%.1f rect=%.1f/%.1f",
+                                    NAME[q], AM(0), AM(1), AM(2), AM(3), AM(4), AM(5), AM(6), AM(7), AM(8), AM(9));
+                    if (q == FLUID_ANIM_WAVE)
+                        mole_diag_event(false, "anim wave.work look=%.1f/%.1f old=%.1f/%.1f new=%.1f/%.1f pair=%.1f/%.1f fly=%.1f/%.1f spare=%.1f/%.1f born=%.1f/%.1f lines=%.1f/%.1f comp=%.1f/%.1f end=%.1f/%.1f marks=%.1f/%.1f kpx=%.1f forced=%d keep=%d ready@%d held=%d grains=%d/%d pairs=%d",
+                                        AM(10), AM(11), AM(12), AM(13), AM(14), AM(15), AM(16), AM(17), AM(18), AM(19), AM(20), A->comp / 1000.f / n,
+                                        A->forced, A->keep, A->ready_at, A->held, A->na, A->nb, A->pairs);
+                    #undef AM
+                    if (s_bench && s_bench_n < s_bench_cap) {
+                        mole_anim_rec_t *b = &s_bench[s_bench_n];   /* (field by field: no copy of it on this stack) */
+                        b->anim = q; b->ms = (uint32_t)((t0 - A->began) / 1000); b->f = A->f; b->s = A->s;
+                        b->kpx = A->px / 1000.f / n; b->kpx_max = A->pxmax / 1000.f; b->win = A->win / n; b->comp = A->comp / 1000.f / n;
+                        for (int c = 0; c < 3; c++) { b->pan[c] = (uint16_t)pc[0][c]; b->sim[c] = (uint16_t)pc[1][c]; }
+                        b->worst = A->worst / 1000.f; b->worst_cells = A->worst_c / 1000.f;
+                        for (int p = 0; p < MOLE_ANIM_PARTS; p++) { b->mean[p] = A->sum[p] / 1000.f / n; b->max[p] = A->max[p] / 1000.f; }
+                        b->forced = A->forced; b->keep = A->keep; b->ready_at = A->ready_at; b->held = A->held; b->na = A->na; b->nb = A->nb; b->pairs = A->pairs;
+                        s_bench_n++;
                     }
-                    memset(&A[q], 0, sizeof(A[q]));
+                    memset(A, 0, sizeof(*A));
                 }
+                busy |= (uint8_t)((A->f != 0) << q);
             }
+            atomic_store(&s_anim_busy, busy | (fluid_draw_morphing(s_draw) ? 1u : 0u));
         }
         {   /* the fine dust's own cost on this core, every ~3 s while a scene shows it (/api/log): the means, the worst
              * frame's cells + send (and its two parts), frames over 33 ms, the windows and pixels a frame, the specks
              * worked out a frame */
-            static uint32_t cells_us, send_us, worst_us, worst_c, worst_s, worst_f, worst_px, wins, kpx, slow, pf0;
-            fluid_fine_t *ff = s_dopts.fine;
+            static uint32_t cells_us, send_us, worst_us, worst_c, worst_s, worst_f, worst_px, wins, kpx, slow;
             if (ff) {
-                const uint32_t c = (uint32_t)(t1 - t0), sn = (uint32_t)(t2 - t1), fr = ff->prof_frame - pf0;   /* (fr: the dust's own part of the cells) */
-                pf0 = ff->prof_frame;
+                const uint32_t c = (uint32_t)(t1 - t0), sn = (uint32_t)(t2 - t1), fr = fine_f;   /* (fr: the dust's own part of the cells) */
+                pf0 = ff->prof_frame; pr0 = ff->prof_rect;
                 cells_us += c; send_us += sn; wins += (uint32_t)s_send_n; kpx += (uint32_t)s_send_px;
                 if (c + sn > worst_us) { worst_us = c + sn; worst_c = c; worst_s = sn; worst_f = fr; worst_px = (uint32_t)s_send_px; }
                 slow += c + sn > 33000;
@@ -1431,7 +1472,7 @@ static void draw_task(void *arg) {
                                     ff->prof_frame / 1000.f / n, ff->prof_rect / 1000.f / n, cells_us / 1000.f / n, send_us / 1000.f / n,
                                     worst_us / 1000.f, worst_c / 1000.f, worst_s / 1000.f, worst_f / 1000.f, worst_px / 1000.f, (unsigned)slow, wins / n, kpx / 1000.f / n,
                                     ff->prof_eval / n, fluid_fine_specks(ff), (unsigned)ff->prof_n);
-                    ff->prof_frame = ff->prof_rect = ff->prof_n = ff->prof_eval = 0; pf0 = 0;
+                    ff->prof_frame = ff->prof_rect = ff->prof_n = ff->prof_eval = 0; pf0 = pr0 = 0;
                     cells_us = send_us = worst_us = worst_c = worst_s = wins = kpx = slow = 0;
                 }
             }
@@ -1634,6 +1675,7 @@ static void fluid_task(void *arg) {
         }
         fd_set_status(&s_dir, status);
         ask_follow(&want);
+        if (atomic_exchange(&s_bench_boot, false)) fd_boot(&s_dir);   /* (the bench: the boot word again) */
         direct(&cfg);
         for (int q = 0; q < nrip; q++) ripple(rip[q][0], rip[q][1], rip[q][2], 0.09f);
         if (tp.seq != tp_seen) {
@@ -1643,6 +1685,7 @@ static void fluid_task(void *arg) {
         }
 
         int64_t t0 = esp_timer_get_time();
+        s_sim_fill_us = s_sim_build_us = 0;
         sim_frame(rdt, &cfg);
         int64_t t1 = esp_timer_get_time();
         s_sim_work_us = (uint32_t)(t1 - t0);
@@ -1662,13 +1705,21 @@ static void fluid_task(void *arg) {
          * creature's and a question's are kept by the drawer as it sends them (FLUID_LOOK_KEEP) in the panel's mirror
          * (unused while their windows go on whole row pairs); the fluid's own looks (words, the blob) by the mirror
          * itself (FLUID_LOOK_GLASS): a change goes from them, never into them. A scene's dust built since comes in while
-         * nothing of the change's new picture is read yet; till it has, the cloud waits (`ready`). */
+         * nothing of the change's new picture is read yet; till it has, the cloud waits (`ready`, briefly), else it comes
+         * after the change as a change of its own (FLUID_LOOK_DUST). It swaps in before the look is told, so the change
+         * reads the glass as it was. */
         const bool fine_look = s_cur == ST_SCENE && s_sp.cur && s_fine && s_nshp >= 0 && s_hd.gen != 0;
+        /* a set built since swaps in: any time but while a change of picture draws its new one (a scene breaking up keeps
+         * the dust it showed) */
+        if (s_fine && s_hd.gen && s_nshp >= 0 && s_cur == ST_SCENE && !s_hd.out && (!fluid_draw_morphing(s_draw) || fluid_draw_morph_open(s_draw)))
+            fluid_fine_swap(s_fine);
         const bool asking = s_ask.v && s_ask.scr.phase != FLUID_ASK_NONE;   /* (ask_compose draws it over the frame) */
-        const uint32_t look = asking ? FLUID_LOOK_KEEP | 0x20000000u | (s_ask.scr.seq & 0x1FFFFFFFu)
-                            : fine_look ? FLUID_LOOK_KEEP | (s_sp.cur->serial & 0x1FFFFFFFu) : s_crisp ? FLUID_LOOK_KEEP | 1u : FLUID_LOOK_GLASS;
         const bool ready = !fine_look || asking || !fluid_fine_specks_kind(fluid_fine_dust_kind_get()) || fluid_fine_shown(s_fine, s_sp.cur->serial);
+        const uint32_t look = asking ? FLUID_LOOK_KEEP | 0x20000000u | (s_ask.scr.seq & 0x0FFFFFFFu)
+                            : fine_look ? FLUID_LOOK_KEEP | (s_sp.cur->serial & 0x0FFFFFFFu) | (ready ? FLUID_LOOK_DUST : 0u)
+                            : s_crisp ? FLUID_LOOK_KEEP | 1u : FLUID_LOOK_GLASS;
         fluid_draw_morph_look(s_draw, look, molty_display_framebuffer(), ready);
+        atomic_store(&s_dust_in, ready);
         {
             fluid_sim_snapshot(s_sim, s_frame, cfg.edge_mode == FLUID_EDGE_OFF);
             s_dopts = (fluid_draw_opts_t){
@@ -1697,9 +1748,7 @@ static void fluid_task(void *arg) {
             if (s_hd.gen && s_dnshp >= 0) { s_dopts.shapes = s_dshp; s_dopts.nshapes = s_dnshp; s_dopts.kdots = s_kdots_d; }
             if (s_fine) {   /* the fine dust: a set built since swaps in (the drawer is idle); none once no scene shows */
                 if (s_hd.gen && s_dnshp >= 0) {
-                    if (s_cur == ST_SCENE && !s_hd.out) {      /* (a scene breaking up keeps the dust it showed) */
-                        /* a set built since swaps in: any time but while a change of picture draws its new one */
-                        if (!fluid_draw_morphing(s_draw) || fluid_draw_morph_open(s_draw)) fluid_fine_swap(s_fine);
+                    if (s_cur == ST_SCENE && !s_hd.out) {      /* (its set swapped in above) */
                         fluid_fine_caption_box(s_fine, s_cap_box_on ? s_cap_box : NULL);
                         fluid_fine_rim(s_fine, s_rg.on > 0.f);
                         memcpy(s_still_d, s_still, (size_t)s_sim->N); s_dcap_word = s_cap_word;
@@ -2509,9 +2558,11 @@ unsigned mole_fluid_spot_tap(int px, int py) {
     if (!s_mutex || !s_spot_sc || s_stage <= 0) return 0;
     const float x = (float)(px - s_ox) / (float)s_stage * 2.f - 1.f, y = 1.f - (float)(py - s_oy) / (float)s_stage * 2.f;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    /* (while the picture changes into the scene its spots are not on the glass yet: none is hit) */
-    const int n = s_spot_on && !fluid_draw_morphing(s_draw) ? scene_spot_at(s_spot_sc, s_spot_t, x, y) : -1;
-    const unsigned spot = n >= 0 && n <= 254 ? s_spot_gen << 8 | (unsigned)(n + 1) : s_spot_back && s_spot_gen ? MOLE_SPOT_BACK : 0;
+    /* (while the picture changes its spots are not on the glass: none is hit, nor is a tap beside them a way back, so a
+     * tap never starts the change over) */
+    const bool changing = fluid_draw_morphing(s_draw);
+    const int n = s_spot_on && !changing ? scene_spot_at(s_spot_sc, s_spot_t, x, y) : -1;
+    const unsigned spot = n >= 0 && n <= 254 ? s_spot_gen << 8 | (unsigned)(n + 1) : s_spot_back && s_spot_gen && !changing ? MOLE_SPOT_BACK : 0;
     if (spot && spot != MOLE_SPOT_BACK) {
         const scene_item_t *it = &s_spot_sc->items[n];
         s_tapped = spot;
@@ -2743,3 +2794,41 @@ void mole_fluid_ask_end(void) {
     s_ask_want.active = false;
     xSemaphoreGive(s_mutex);
 }
+
+/* ── the on-device benchmark (mole_diag.c: POST /api/diag/bench) ── */
+
+int mole_fluid_bench_capture(mole_anim_rec_t *buf, int cap) {
+    if (buf && buf == s_bench) return s_bench_n;
+    s_bench = NULL;                                     /* (the drawer sees no buffer while it changes) */
+    s_bench_n = 0; s_bench_cap = cap;
+    s_bench = buf;
+    return 0;
+}
+
+bool mole_fluid_bench_quiet(unsigned mask) { return !(atomic_load(&s_anim_busy) & mask); }
+
+void mole_fluid_bench_boot(void) { atomic_store(&s_bench_boot, true); atomic_store(&s_screen_want, true); }
+
+unsigned mole_fluid_bench_tap(float x, float y) {
+    if (!s_mutex || s_stage <= 0) return 0;
+    const int px = s_ox + (int)((x + 1.f) * 0.5f * s_stage), py = s_oy + (int)((1.f - y) * 0.5f * s_stage);
+    if (px < 0 || py < 0 || px > 0x7FFF || py > 0xFFFF) return 0;
+    atomic_store(&s_bench_touch, 1u << 31 | (uint32_t)px << 16 | (uint32_t)py);
+    return mole_fluid_spot_tap(px, py);
+}
+
+bool mole_fluid_bench_spot(const char *id, float *x, float *y) {
+    if (!s_mutex || !s_spot_sc || !id) return false;
+    bool found = false;
+    const size_t len = strlen(id);
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    for (int n = 0; s_spot_on && n < s_spot_sc->nitems && !found; n++) {
+        const scene_item_t *it = &s_spot_sc->items[n];
+        if (it->k != PK_SPOT || it->nsid != len || memcmp(s_spot_sc->say + it->sid, id, len)) continue;
+        *x = it->x; *y = it->y; found = true;
+    }
+    xSemaphoreGive(s_mutex);
+    return found;
+}
+
+bool mole_fluid_bench_dust(void) { return atomic_load(&s_dust_in); }

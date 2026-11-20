@@ -1412,7 +1412,7 @@ esp_err_t http_server_start(void)
     cfg.max_open_sockets = 7;      // headroom for WS + concurrent tabs
     cfg.lru_purge_enable = true;
     cfg.server_port      = 80;
-    cfg.max_uri_handlers = 48;     // ~36 routes today; headroom so new routes always fit
+    cfg.max_uri_handlers = 56;     // 48 routes today (49 with DIAG_RING); headroom so new routes always fit
 
     httpd_handle_t server = NULL;
     ESP_RETURN_ON_ERROR(httpd_start(&server, &cfg), TAG, "httpd_start failed");

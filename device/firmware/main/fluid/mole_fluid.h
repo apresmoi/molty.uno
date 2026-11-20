@@ -208,6 +208,39 @@ typedef struct { char pkg[33], layout[25], spot[41], why[6]; } mole_scene_evt_t;
 bool mole_fluid_scene_event(mole_scene_evt_t *out);
 /* how many of the sim's hot fields sit in internal RAM (the last frame's count) */
 int mole_fluid_internal_fields(void);
+
+/* ── the on-device benchmark (POST /api/diag/bench, mole_diag.c) ──
+ * Each animation's record as the `anim` log lines carry it: a change of picture (wave), a drawing growing at a tap
+ * (grow), a reading's words (word), the water's ride (water). Parts are each frame's ms (mean and max over its frames):
+ * on the drawer cells (touch poll + fluid_draw_cells, with the change's own work), send (fluid_draw_send2: its windows
+ * drawn or copied, cmp, and handed to the panel, push), wait (the last transfer); on the sim sim (its whole frame),
+ * fill (a scene's shapes and rings), build (the dust's build); the dust's fine (fluid_fine_frame) and rect
+ * (fluid_fine_rect); then a change's own parts (fluid_sim.h FLUID_MP_*). */
+#define MOLE_ANIM_PARTS 21
+extern const char *const MOLE_ANIM_PART_NAMES[MOLE_ANIM_PARTS];
+typedef struct {
+    int      anim;                     /* 0 wave, 1 grow, 2 word, 3 water                                              */
+    uint32_t ms, f, s;                 /* its length; frames its cells changed; those whose changes were all sent       */
+    float    kpx, kpx_max, win, comp;  /* px sent a frame (k: mean, max), windows a frame, px a change composed (k)   */
+    uint16_t pan[3], sim[3];           /* frame-to-frame intervals of the drawer's core and of the sim's clock: p50, p95, worst ms */
+    float    worst, worst_cells;       /* the worst frame on the drawer, its cells part, ms                             */
+    float    mean[MOLE_ANIM_PARTS], max[MOLE_ANIM_PARTS];
+    int      forced, keep, ready_at, held, na, nb, pairs;   /* a change: read before its dust was in; its dust alone; the
+                                        * frame its inputs were whole; frames held at the cloud; grains old, new; pairs */
+} mole_anim_rec_t;
+/** From now on each animation's record also goes into buf (cap of them; NULL: no more). Returns how many it holds. */
+int  mole_fluid_bench_capture(mole_anim_rec_t *buf, int cap);
+/** None of the animations in mask (bits 1 << FLUID_ANIM_*: 1 << 0 the change of picture) runs: none changed a cell for
+ *  10 frames, and no change of picture runs. */
+bool mole_fluid_bench_quiet(unsigned mask);
+/** The boot screen's word again (then it melts into the creature), as at power on. */
+void mole_fluid_bench_boot(void);
+/** A tap at (x, y), glass units (-1..1, y up), as a finger's: its ripple, and the spot it hits. Returns the spot. */
+unsigned mole_fluid_bench_tap(float x, float y);
+/** The spot `id` of the scene shown, its place (glass units, y up). False: none. */
+bool mole_fluid_bench_spot(const char *id, float *x, float *y);
+/** The scene shown has its dust in (or none to wait for). */
+bool mole_fluid_bench_dust(void);
 void mole_fluid_spoke(void);
 /** The listen window an agent gets when it gives none (link_audio.c, cmd listen without ms):
  *  0 = unlimited or 5000..30000 ms (link_protocol.h LINK_LISTEN_*), 30000 out of the box.

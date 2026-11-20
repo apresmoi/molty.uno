@@ -388,7 +388,9 @@ uint8_t fluid_braille_contour(const float *sub);
  * new picture's dust; the old grains with no pair fade where they are, the new ones with none come up near their spot
  * and glide in; the new lines fade in last, in 4 steps. Times in seconds of the change (fluid_draw.c MP_*); its clock
  * stands while the old picture is read (the first frame) and, at the cloud, till the new picture is read and paired (its
- * dust in: `ready`, at most FLUID_MORPH_WAIT frames), the cloud swirling on. Every grain that moves is drawn and sent the frame
+ * dust in: `ready`), the cloud swirling on, but never longer than FLUID_MORPH_HOLD_US (or _N frames): then the new picture
+ * is read as it is (its dust, if not in yet, comes after the change as a change of its own: FLUID_LOOK_DUST, its grains
+ * coming up near their spots and gliding in, the lines staying). Every grain that moves is drawn and sent the frame
  * it moves: the glass is kept (snap), each frame the pixels it changes are composed there, and the cell rows they are
  * in are sent straight from there in windows of whole rows (fluid_draw.c morph_send). Its last frame draws the new look
  * whole where it changed since it was read. A look marked
@@ -396,15 +398,26 @@ uint8_t fluid_braille_contour(const float *sub);
  * change goes from such a look, never into one: those come at once). */
 #define FLUID_LOOK_KEEP       0x80000000u  /* a look's number with this: the drawer keeps the glass as it sends it      */
 #define FLUID_LOOK_GLASS      0x40000000u  /* ... with this: the panel's mirror keeps it (windows on any rows)          */
+#define FLUID_LOOK_DUST       0x10000000u  /* ... with this: its dust is in. Gained by a look that showed without it: the
+                                            * dust comes as a change of its own (the lines stay); lost: nothing      */
 #define FLUID_MORPH_FLY       1500     /* pairs that fly at most (the rest of each picture fades in place) ..          */
 #define FLUID_MORPH_FLY_PX    4800     /* .. and px of their grains (a pair of 2 x 2 px grains: 4): both fitted to the panel
                                         * model, every change's worst frame under 33 ms (scene_test.c test_morph)        */
 #define FLUID_MORPH_GRAINS    16384    /* grains of a picture read at most (beyond: the new look's cells come whole at the end) */
 #define FLUID_MORPH_LINES     16384    /* old lines' pixels read at most (beyond: dust)                                 */
-#define FLUID_MORPH_WAIT      45       /* frames the change waits for the new look's inputs at most (`ready`)          */
+#define FLUID_MORPH_DUST_US   150000   /* at the cloud, the new look's inputs (`ready`) awaited this long at most ..   */
+#define FLUID_MORPH_DUST_N    5        /* .. or this many frames (whichever first) ..                                  */
+#define FLUID_MORPH_HOLD_US   300000   /* .. and the clock stands there this long at most: the picture's rest read at once */
+#define FLUID_MORPH_HOLD_N    9
 #define FLUID_MORPH_READ_US   2500     /* the new picture read a frame, at most (the panel model's us, and the device's)  */
 #define FLUID_MORPH_BORN_FAST 6000     /* new grains with no pair: more, and they come up over 0.3 s more (the prototype's
                                         * extra, as its fit to the panel chose it: to the chart, not to Leo)            */
+/* the parts of a change's own work in a frame (fluid_morph_t.prof, the logs' `anim wave.work`): the look's own changes
+ * looked at, the old picture read, the new one read, the pairs planned and matched, the pairs moved (their motion,
+ * turbulence, colour), the old grains with no pair, the new ones with none, the line pixels' steps, composing the
+ * marked pixels into the kept glass, the look drawn whole at the end, the marks cleared and the rows to send found */
+enum { FLUID_MP_LOOK, FLUID_MP_OLD, FLUID_MP_NEW, FLUID_MP_PAIR, FLUID_MP_FLY, FLUID_MP_SPARE, FLUID_MP_BORN, FLUID_MP_LINES,
+       FLUID_MP_COMPOSE, FLUID_MP_END, FLUID_MP_MARKS, FLUID_MP_N };
 typedef struct fluid_morph_mem fluid_morph_mem_t;  /* (fluid_draw.c: the two pictures' grains and lines, the pairs) */
 typedef struct {
     bool     on;
@@ -422,6 +435,12 @@ typedef struct {
     int      px, wins, comp;           /* this frame: the pixels and windows sent, the pixels composed                */
     int      work;                     /* .. the change's own work (the panel model's us: reading, pairing, moving grains) */
     int      cmp_us, push_us;          /* .. the time its windows took to copy, and to hand to the panel              */
+    int      prof[FLUID_MP_N];         /* .. the time of each part of its own work, us (FLUID_MP_*)                     */
+    int64_t  held;                     /* when its clock first stood at the cloud (0: not yet), us                      */
+    int      nheld;                    /* .. frames since                                                             */
+    int      ready_at;                 /* the frame its inputs were whole (-1: not yet)                                 */
+    bool     forced;                   /* the new picture read before its inputs were whole: its dust comes after      */
+    bool     keep;                     /* its dust only comes (FLUID_LOOK_DUST): the lines stay as they are             */
 } fluid_morph_t;
 /** What a change shows now (tests, logs): the pairs waiting, flying, landed; the grains with no pair shown (old, new);
  *  the old lines' and the new lines' pixels lit. */
@@ -603,7 +622,8 @@ void fluid_draw_overlay_dirty(fluid_draw_t *d, const fluid_overlay_t *ov);
  *  the picture those inputs show from now (a number of its own: a scene's serial, a creature, a question; with
  *  FLUID_LOOK_KEEP the drawer keeps the glass as it sends it, with FLUID_LOOK_GLASS the panel's mirror does; 0: not
  *  known, it comes at once), snap, fb_w x fb_h px the glass is kept in (the panel's mirror; NULL: it comes at once),
- *  ready, the inputs are whole (a scene's dust is in: until then, at most FLUID_MORPH_WAIT frames, the cloud waits).
+ *  ready, the inputs are whole (a scene's dust is in: until then, at most FLUID_MORPH_DUST_US, the cloud waits).
+ *  A look that differs only by FLUID_LOOK_DUST changes nothing while a change runs; gained afterwards, its dust comes.
  *  A new look starts a change; the inputs are the new look's from the same frame. */
 void fluid_draw_morph_look(fluid_draw_t *d, uint32_t look, uint16_t *snap, bool ready);
 /** With the drawer idle, once a frame with the inputs: the cells (N) whose dots are the look's lines, not its dust (a
