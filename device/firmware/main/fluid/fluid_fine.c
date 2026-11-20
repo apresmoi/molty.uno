@@ -56,12 +56,24 @@ static inline float hash_u(int a, int b, uint32_t c) {     /* fluid_draw.c's, ch
     h ^= h >> 15; h *= 0x85ebca6bu; h ^= h >> 13;
     return (float)(h & 0xFFFFu) * (1.f / 65536.f);
 }
-/* sin of t turns (a table, linear) */
+/* sin of t turns (a table, linear; |t| < 2^20). The drawer's frame makes no libm call (each is one on the device: a
+ * root, a sine or a floor a cell, or a speck, was milliseconds a frame) */
 static inline float sin_t(float t) {
-    t -= floorf(t);
+    const int n = (int)t;
+    t -= (float)(n - (t < (float)n));
     const float q = t * 1024.f;
     const int i = (int)q;
     return s_sin[i] + (s_sin[i + 1] - s_sin[i]) * (q - (float)i);
+}
+/* sqrt without a libm call (fluid_draw.c's fsqrt: two Newton steps, ~1e-5) */
+static inline float fsqrt(float x) {
+    if (x <= 0.f) return 0.f;
+    union { float f; uint32_t i; } c = { x };
+    c.i = 0x5f3759dfu - (c.i >> 1);
+    float y = c.f;
+    y *= 1.5f - 0.5f * x * y * y;
+    y *= 1.5f - 0.5f * x * y * y;
+    return x * y;
 }
 /* v in whole px, the step held (*q) kept until v is SHIFT_HOLD past it */
 static inline int held(int8_t *q, float v) {
@@ -69,10 +81,17 @@ static inline int held(int8_t *q, float v) {
     while (v < *q - SHIFT_HOLD) (*q)--;
     return *q;
 }
-static inline float sstep(float a, float b, float x) {
-    float t = (x - a) / (b - a);
+/* the backdrop's level for the speck at stage px (x, y): it thins to none round the box, a ragged edge, between dlo
+ * and dhi px of it (the fronts that bring it and lift it); 255 untouched */
+static inline uint8_t backdrop_lv(const float *box, float dlo, float dhi, int x, int y) {
+    const float px = x + 0.5f, py = y + 0.5f;
+    const float ex = px < box[0] ? box[0] - px : px > box[1] ? px - box[1] : 0.f, ey = py < box[2] ? box[2] - py : py > box[3] ? py - box[3] : 0.f;
+    const float dd = fsqrt(ex * ex + ey * ey);
+    if (dd < dlo || dd >= dhi) return 255;
+    float t = (dd + (hash_u(x, y, 5) - 0.5f) * FINE_PATCH_RAG - FINE_PATCH0) * (1.f / (FINE_PATCH1 - FINE_PATCH0));
     t = t < 0.f ? 0.f : t > 1.f ? 1.f : t;
-    return t * t * (3.f - 2.f * t);
+    const float keep = t * t * (3.f - 2.f * t);
+    return keep <= 0.02f ? 0 : (uint8_t)(keep * 255.f + 0.5f);
 }
 static inline uint16_t pack565(float r, float g, float b) {
     const int R = r >= 255.f ? 255 : r <= 0.f ? 0 : (int)(r + 0.5f), G = g >= 255.f ? 255 : g <= 0.f ? 0 : (int)(g + 0.5f),
@@ -527,7 +546,7 @@ static void light_grid(const fluid_fine_t *f, uint8_t *grid, float T, int parity
     static const float kv[4] = { 0.5f, 0.8f, 1.25f, 0.35f }, kt[4] = { 0.31f, 0.21f, -0.27f, -0.17f };
     for (int y = parity > 0 ? parity : 0; y < LG; y += parity < 0 ? 1 : FINE_PHASES) {
         float sv[4], cv[4];
-        for (int q = 0; q < 4; q++) { const float ph = tau * kv[q] * y * g + kt[q] * T; sv[q] = sinf(ph); cv[q] = cosf(ph); }
+        for (int q = 0; q < 4; q++) { const float ph = kv[q] * y * g + kt[q] * T * (1.f / tau); sv[q] = sin_t(ph); cv[q] = sin_t(ph + 0.25f); }   /* (turns) */
         uint8_t *out = grid + y * f->lg;
         for (int x = 0; x < LG; x++) {
             float r = 0.f;
@@ -547,13 +566,16 @@ static void light_grid(const fluid_fine_t *f, uint8_t *grid, float T, int parity
     }
 }
 
-/* how near cell (i, j) comes to box (stage px [x0, x1, y0, y1]) and how far its farthest corner is */
-static void cell_box_dist(const fluid_fine_t *f, int i, int j, const float *box, float *lo, float *hi) {
+/* how near cell (i, j) comes to box (stage px [x0, x1, y0, y1]) and how far its farthest corner is, squared */
+static void cell_box_dist(const fluid_fine_t *f, int i, int j, const float *box, float *lo2, float *hi2) {
     const float x0 = f->cx[i], x1 = f->cx[i + 1], y0 = f->cy[j], y1 = f->cy[j + 1];
     const float ex = x1 < box[0] ? box[0] - x1 : x0 > box[1] ? x0 - box[1] : 0.f, ey = y1 < box[2] ? box[2] - y1 : y0 > box[3] ? y0 - box[3] : 0.f;
-    const float fx = fmaxf(fmaxf(box[0] - x0, x1 - box[1]), 0.f), fy = fmaxf(fmaxf(box[2] - y0, y1 - box[3]), 0.f);
-    *lo = sqrtf(ex * ex + ey * ey); *hi = sqrtf(fx * fx + fy * fy);
+    const float ax = box[0] - x0 > x1 - box[1] ? box[0] - x0 : x1 - box[1], ay = box[2] - y0 > y1 - box[3] ? box[2] - y0 : y1 - box[3];
+    const float fx = ax > 0.f ? ax : 0.f, fy = ay > 0.f ? ay : 0.f;
+    *lo2 = ex * ex + ey * ey; *hi2 = fx * fx + fy * fy;
 }
+/* a distance (given squared) under v px */
+static inline bool under(float d2, float v) { return v > 0.f && d2 < v * v; }
 
 /* the caption's word: its box (stage px, the letters' whole boxes) from its letters' shapes; false: none */
 static bool caption_box(const fluid_shape_t *sh, int n, float b[4]) {
@@ -664,10 +686,10 @@ void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_
             const int i0 = f->cellx[(int)fmaxf(0.f, fminf(S - 1.f, box[0] - R))], i1 = f->cellx[(int)fmaxf(0.f, fminf(S - 1.f, box[1] + R))];
             const int j0 = f->celly[(int)fmaxf(0.f, fminf(S - 1.f, box[2] - R))], j1 = f->celly[(int)fmaxf(0.f, fminf(S - 1.f, box[3] + R))];
             for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) {
-                float lo, hi;
-                cell_box_dist(f, i, j, box, &lo, &hi);
-                if (hi < dlo || lo >= dhi) continue;            /* none of it dark */
-                f->sig[j * W + i] += mix(0xD1Bu, lo >= dlo && hi < dhi ? gen : mgen);
+                float lo2, hi2;
+                cell_box_dist(f, i, j, box, &lo2, &hi2);
+                if (under(hi2, dlo) || !under(lo2, dhi)) continue;   /* none of it dark */
+                f->sig[j * W + i] += mix(0xD1Bu, !under(lo2, dlo) && under(hi2, dhi) ? gen : mgen);
                 f->why[j * W + i] |= 1u << FLUID_ANIM_WORD;
             }
         }
@@ -681,25 +703,26 @@ void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_
         f->step_key = step;
     } else f->step_key = 0;
 
-    /* each cell's shift, stage px: the water's (its slope as the dots take it, DOT_REFR) in whole px, at most a sub-dot
+    /* each cell's shift, stage px: the water's (its slope as the dots take it, DOT_REFR, times FINE_RIDE) in whole px, at most a sub-dot
      * across and two down, everywhere, plus the calm drift's pixel either way. Its dust rides inside the cell (what leaves
      * one side comes in at the other: fluid_fine_rect), so a shift costs no speck any work and changes only its own cell.
      * Calm water adds nothing: the dust is where the drift alone puts it. While the picture changes it holds still (as
      * the light: the change is the drawer's, the water under it is not its business), then takes the water again. */
     const float subx = (float)S / (2 * W), suby = (float)S / (4 * H);
-    const float kx = DOT_REFR / FQ_H * 2.f * subx, ky = DOT_REFR / FQ_H * 4.f * H / W * suby, mx = (int)(subx + 0.5f), my = (int)(2.f * suby + 0.5f);
+    const float kx = FINE_RIDE * DOT_REFR / FQ_H * 2.f * subx, ky = FINE_RIDE * DOT_REFR / FQ_H * 4.f * H / W * suby, mx = (int)(subx + 0.5f), my = (int)(2.f * suby + 0.5f);
     const float ph = f->light_t * (1.f / FINE_DRIFT_S), A = FINE_DRIFT_PX * 0.5f;
     for (int j = 1; !(f->pause && f->drawn) && j < H - 1; j++) {
-        const float v = (f->cy[j] + f->cy[j + 1]) * 0.5f / S, ra = 6.2831853f * (DRIFT_AV * v - ph), rb = 6.2831853f * (DRIFT_BV * v + DRIFT_B_T * ph);
-        const float sa = sinf(ra), ca = cosf(ra), sb = sinf(rb), cb = cosf(rb);
+        const float v = (f->cy[j] + f->cy[j + 1]) * 0.5f / S, ra = DRIFT_AV * v - ph, rb = DRIFT_BV * v + DRIFT_B_T * ph;   /* (turns) */
+        const float sa = sin_t(ra), ca = sin_t(ra + 0.25f), sb = sin_t(rb), cb = sin_t(rb + 0.25f);
         for (int i = 1; i < W - 1; i++) {
             const int k = j * W + i;
             const float *c = f->dcol + 4 * i;
             const float dx = A * (c[0] * ca + c[1] * sa + c[2] * cb + c[3] * sb), dy = A * (c[1] * ca - c[0] * sa - c[3] * cb + c[2] * sb);
             float wx = (float)(s->h[k - 1] - s->h[k + 1]) * kx, wy = (float)(s->h[k - W] - s->h[k + W]) * ky;
             wx = wx < -mx ? -mx : wx > mx ? mx : wx; wy = wy < -my ? -my : wy > my ? my : wy;
+            const int8_t qx = f->wq[k], qy = f->wq[N + k];
             const int8_t sx = (int8_t)(held(f->dq + k, dx) + held(f->wq + k, wx)), sy = (int8_t)(held(f->dq + N + k, dy) + held(f->wq + N + k, wy));
-            if (sx != f->sx[k] || sy != f->sy[k]) f->why[k] |= 1u << FLUID_ANIM_WATER;
+            if (qx != f->wq[k] || qy != f->wq[N + k]) f->why[k] |= 1u << FLUID_ANIM_WATER;   /* (the water's: the drift is no animation) */
             f->sx[k] = sx; f->sy[k] = sy;
         }
     }
@@ -727,10 +750,10 @@ void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_
             bool near_box = false;
             uint32_t key = 1u;
             if (box) {
-                float lo, hi;
-                cell_box_dist(f, i, j, box, &lo, &hi);
-                near_box = lo < reach + 1.f && !(hi < dlo || lo >= dhi);
-                if (near_box) key = lo >= dlo && hi < dhi ? gen : mgen;
+                float lo2, hi2;
+                cell_box_dist(f, i, j, box, &lo2, &hi2);
+                near_box = under(lo2, reach + 1.f) && !under(hi2, dlo) && under(lo2, dhi);
+                if (near_box) key = !under(lo2, dlo) && under(hi2, dhi) ? gen : mgen;
             }
             /* the light's changes on the cell's turn (a quarter of the rows a frame: it drifts ~0.3 px a frame, a turn
              * is never a pixel late); the backdrop's at once */
@@ -747,11 +770,7 @@ void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_
                     if (!near_box) { memset(f->lv + a, 255, sm - a); acc = st->ssig[k]; }
                     else for (uint32_t n = a; n < sm; n++) {
                         const uint32_t p = st->pos[n];
-                        const int x = (int)(p & 511), y = (int)(p >> 9 & 511);
-                        const float px = x + 0.5f, py = y + 0.5f;
-                        const float ex = px < box[0] ? box[0] - px : px > box[1] ? px - box[1] : 0.f, ey = py < box[2] ? box[2] - py : py > box[3] ? py - box[3] : 0.f;
-                        const float dd = sqrtf(ex * ex + ey * ey), keep = dd < dlo || dd >= dhi ? 1.f : sstep(FINE_PATCH0, FINE_PATCH1, dd + (hash_u(x, y, 5) - 0.5f) * FINE_PATCH_RAG);
-                        const uint8_t lv = keep <= 0.02f ? 0 : (uint8_t)(keep * 255.f + 0.5f);
+                        const uint8_t lv = backdrop_lv(box, dlo, dhi, (int)(p & 511), (int)(p >> 9 & 511));
                         f->lv[n] = lv;
                         if (lv) acc += mix(p & 0x3FFFF, (uint32_t)lv << 16 | st->col[n]);
                     }
@@ -770,12 +789,7 @@ void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_
                     const float l = ((g0[0] * (1.f - ax) + g0[1] * ax) * (1.f - ay) + (g0[LG] * (1.f - ax) + g0[LG + 1] * ax) * ay) * (1.f / 255.f);
                     const float nr = (float)(p >> 25) * (1.f / 127.f);
                     uint8_t lv = (float)q < (FINE_LIGHT_FLOOR + (1.f - FINE_LIGHT_FLOOR) * (l + (1.f - l) * nr)) * 127.f ? 255 : 0;
-                    if (lv && near_box) {
-                        const float px = x + 0.5f, py = y + 0.5f;
-                        const float ex = px < box[0] ? box[0] - px : px > box[1] ? px - box[1] : 0.f, ey = py < box[2] ? box[2] - py : py > box[3] ? py - box[3] : 0.f;
-                        const float dd = sqrtf(ex * ex + ey * ey), keep = dd < dlo || dd >= dhi ? 1.f : sstep(FINE_PATCH0, FINE_PATCH1, dd + (hash_u(x, y, 5) - 0.5f) * FINE_PATCH_RAG);
-                        lv = keep <= 0.02f ? 0 : (uint8_t)(keep * 255.f + 0.5f);
-                    }
+                    if (lv && near_box) lv = backdrop_lv(box, dlo, dhi, x, y);
                     f->lv[n] = lv;
                     if (lv) acc += mix(p & 0x3FFFF, (uint32_t)lv << 16 | st->col[n]);
                 }

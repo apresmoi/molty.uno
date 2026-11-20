@@ -16,7 +16,7 @@
  *            quarter of the cell rows a frame (FINE_PHASES), in turn: the light drifts ~0.3 px a frame, so a row's
  *            turn is never a pixel late (the one thing that goes on turns: nothing the eye follows).
  *   water    all the dust rides the water, every frame, over the whole glass: a cell's shift is the water's slope there
- *            as the creature screen's dots take it (DOT_REFR), in whole px, at most a sub-dot across and two down, plus
+ *            as the creature screen's dots take it (DOT_REFR), FINE_RIDE of it, in whole px, at most a sub-dot across and two down, plus
  *            a calm drift (FINE_DRIFT_*: a slow sway of a pixel either way, so the dust is never frozen at rest). All of
  *            the cell's dust moves by it inside the cell (what leaves one side comes in at the other), so a shift costs no
  *            speck any work and changes only that cell; never onto the drawing (a lit pixel keeps its own). While the
@@ -81,6 +81,8 @@ extern "C" {
 /* the calm drift: two slow plane waves across the glass sway each cell's dust (fluid_fine_frame) */
 #define FINE_DRIFT_PX    1.4f           /* px at most (rounded: a pixel either way, never more)    */
 #define FINE_DRIFT_S     8.f            /* s a sway: a cell moves a pixel about once a second      */
+#define FINE_RIDE        0.5f           /* the water moves the dust this much of what it moves the dots (a cell steps half as
+                                         * often in a tap's wave: the panel's frame holds it)      */
 #define FINE_CATCHUP     1500           /* specks of cells never worked out, off their row's turn a frame, at most */
 
 typedef struct {

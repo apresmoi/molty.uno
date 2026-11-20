@@ -1401,7 +1401,7 @@ static void draw_task(void *arg) {
                     if ((uint32_t)(t2 - t0) > A->worst) { A->worst = (uint32_t)(t2 - t0); A->worst_c = (uint32_t)(t1 - t0); }
                     uint32_t *v = R->v;
                     const bool w = q == FLUID_ANIM_WAVE;
-                    v[0] = (uint32_t)(t1 - t0); v[1] = (uint32_t)(t2 - t1); v[2] = w ? (uint32_t)m->cmp_us : 0; v[3] = w ? (uint32_t)m->push_us : 0;
+                    v[0] = (uint32_t)(t1 - t0); v[1] = (uint32_t)(t2 - t1); v[2] = (uint32_t)m->cmp_us; v[3] = (uint32_t)m->push_us;   /* (every frame's: making its windows, handing them over) */
                     v[4] = s_last_wait_us; v[5] = s_sim_work_us; v[6] = s_sim_fill_us; v[7] = s_sim_build_us; v[8] = fine_f; v[9] = fine_r;
                     for (int p = 0; p < FLUID_MP_N; p++) v[10 + p] = w ? (uint32_t)m->prof[p] : 0;
                     for (int p = 0; p < MOLE_ANIM_PARTS; p++) { A->sum[p] += v[p]; A->max[p] = v[p] > A->max[p] ? v[p] : A->max[p]; }
@@ -1718,7 +1718,14 @@ static void fluid_task(void *arg) {
         const uint32_t look = asking ? FLUID_LOOK_KEEP | 0x20000000u | (s_ask.scr.seq & 0x0FFFFFFFu)
                             : fine_look ? FLUID_LOOK_KEEP | (s_sp.cur->serial & 0x0FFFFFFFu) | (ready ? FLUID_LOOK_DUST : 0u)
                             : s_crisp ? FLUID_LOOK_KEEP | 1u : FLUID_LOOK_GLASS;
-        fluid_draw_morph_look(s_draw, look, molty_display_framebuffer(), ready);
+        {   /* a new look that came at once, not as a change of picture (/api/log: why) */
+            static uint32_t look_was;
+            const bool whole = s_draw && s_draw->m.whole, on = fluid_draw_morphing(s_draw);
+            fluid_draw_morph_look(s_draw, look, molty_display_framebuffer(), ready);
+            if (((look ^ look_was) & ~FLUID_LOOK_DUST) && !fluid_draw_morphing(s_draw) && (look & FLUID_LOOK_KEEP))
+                mole_diag_event(false, "change at once look=%08x from=%08x kept=%d running=%d", (unsigned)look, (unsigned)look_was, whole, on);
+            look_was = look;
+        }
         atomic_store(&s_dust_in, ready);
         {
             fluid_sim_snapshot(s_sim, s_frame, cfg.edge_mode == FLUID_EDGE_OFF);

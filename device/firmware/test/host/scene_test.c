@@ -1160,6 +1160,8 @@ static void dump_ppm(const char *path, const uint16_t *fb, int S) {
 /* the panel's time for a frame's windows, as measured on the 1.75C (calm chart: 22 windows and 6.3 kpx took 9 ms with the
  * drawing cached): a window's commands 0.23 ms, a pixel drawn and sent 0.55 us. The cells pass before it takes ~11 ms. */
 #define CELLS_MS 11.0
+#define MORPH_PASS_MS 12.0   /* the drawer's one cells pass for a change's new look (bench1: ~10 ms outside the change's work) */
+#define MORPH_FIT_MS  28.0   /* a frame's work that keeps the panel's ~31.5 ms step (bench1: past it, the frame takes two) */
 static double panel_ms(const cost_t *c) { return c->wins * 0.23 + c->px * 0.55e-3; }
 /* the panel's glass: the windows land there */
 typedef struct { uint16_t *px; int S; cost_t c; const fluid_draw_t *d; uint16_t *mirror; } glass_t;   /* mirror: kept as the panel's */
@@ -1187,7 +1189,14 @@ static long composed(const fluid_draw_t *d, int S, int x, int y, int w, int h, c
 }
 /* the panel on the device's measured constants: a window handed over 0.15 ms, a pixel copied (the drawing's cache) 0.05 us,
  * a pixel composed (a speck, a dot, a letter over it) 0.9 us */
-static double model_ms(const cost_t *c) { return c->wins * 0.15 + (c->px - c->comp) * 0.05e-3 + c->comp * 0.9e-3; }
+static bool s_glass_model;                               /* (the ride's rigs: comp is the px of changed cells drawn into the kept glass) */
+static double model_ms(const cost_t *c) {
+    /* over a kept glass (a scene on fine dust, the device's way: fluid_draw_send2): a window 0.17 ms, a pixel sent 0.06 us
+     * (copied from the glass, or straight from it), a pixel of a changed cell drawn into it 0.2 us (an estimate until the
+     * bench's cmp and push confirm it) */
+    if (s_glass_model) return c->wins * 0.17 + c->px * 0.06e-3 + c->comp * 0.2e-3;
+    return c->wins * 0.15 + (c->px - c->comp) * 0.05e-3 + c->comp * 0.9e-3;
+}
 /* how many pixels of a kept glass fb differ from the look drawn whole now: none when every change was sent */
 static int glass_off(const fluid_draw_t *d, const fluid_draw_opts_t *o, const uint16_t *fb, int S) {
     static uint16_t *ref;
@@ -2076,7 +2085,7 @@ static void ride_print(const char *what, const sd_stat_t *t) {
     printf("    %-30s %5.1f / %5.1f / %2d of %d over 33 (ms with the cells: mean / worst); %4.1f kpx mean, %4.1f max; %4.1f windows mean, %d max\n", what,
            t->msum / t->n + SD_CELLS_MS, t->mworst + SD_CELLS_MS, t->mover, t->n, t->px / 1e3 / t->n, t->pxmax / 1e3, (double)t->wins / t->n, t->winmax);
 }
-typedef struct { fluid_sim_t *s; fluid_frame_t *fr; fluid_draw_t *d; fluid_fine_t *fine; uint8_t *dots, *keep, *still; fluid_shape_t *shp; glass_t gl; fluid_letter_t L[FLUID_MAX_LETTERS]; fluid_draw_opts_t o; } ride_rig_t;
+typedef struct { fluid_sim_t *s; fluid_frame_t *fr; fluid_draw_t *d; fluid_fine_t *fine; uint8_t *dots, *keep, *still; fluid_shape_t *shp; glass_t gl; fluid_letter_t L[FLUID_MAX_LETTERS]; fluid_draw_opts_t o; uint16_t *snap; } ride_rig_t;
 static void rig_open(ride_rig_t *g, int S) {
     int W, H; fluid_grid_for_stage(S, &W, &H);
     const int N = W * H;
@@ -2085,12 +2094,16 @@ static void rig_open(ride_rig_t *g, int S) {
     g->fr = fluid_frame_create(W, H); g->d = fluid_draw_create(W, H, S, S); g->fine = fluid_fine_create(W, H, S, S);
     g->dots = calloc((size_t)N, 1); g->keep = calloc((size_t)N, 1); g->still = calloc((size_t)N, 1);
     g->shp = calloc(FLUID_MAX_SHAPES, sizeof(fluid_shape_t));
-    g->gl = (glass_t){ calloc((size_t)S * S, 2), S, { 0, 0, 0, 0 }, g->d, NULL };
+    g->gl = (glass_t){ calloc((size_t)S * S, 2), S, { 0, 0, 0, 0 }, NULL, NULL };
     g->o = (fluid_draw_opts_t){ .palette = FLUID_PAL_PASTEL, .edge_mode = FLUID_EDGE_CONTOURS, .letters = g->L, .font = gc_font5x7,
                                 .dots = g->dots, .scene = true, .kdots = g->keep, .fine = g->fine, .still = g->still };
+    /* the scene's glass kept, as the device keeps it (the panel's framebuffer): its changed cells are drawn into it and
+     * every window copied from it (fluid_draw_send2); glass_off checks the panel against the look each frame */
+    g->snap = calloc((size_t)S * S, 2);
+    fluid_draw_morph_look(g->d, FLUID_LOOK_KEEP | 1u, g->snap, true);
 }
 static void rig_close(ride_rig_t *g) {
-    free(g->gl.px); free(g->dots); free(g->keep); free(g->still); free(g->shp);
+    free(g->gl.px); free(g->snap); free(g->dots); free(g->keep); free(g->still); free(g->shp);
     fluid_fine_destroy(g->fine); fluid_draw_destroy(g->d); fluid_frame_destroy(g->fr); fluid_sim_destroy(g->s);
 }
 /* one frame of a rig at time t: the scene's shapes and dust, two water steps, the cells, the send onto its glass */
@@ -2111,6 +2124,8 @@ static void rig_frame(ride_rig_t *g, scene_t *sc, float t, bool full, bool keep_
     g->o.time = t;
     fluid_draw_cells(g->d, g->fr, &g->o);
     g->gl.c = (cost_t){ 0, 0, 0, 0 };
+    for (int k = 0; !full && k < g->d->W * g->d->H; k++)
+        if (g->d->dirty[k]) g->gl.c.comp += (g->d->cx[k % g->d->W + 1] - g->d->cx[k % g->d->W]) * (g->d->cy[k / g->d->W + 1] - g->d->cy[k / g->d->W]);
     fluid_draw_send(g->d, &g->o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, full, wbuf, 4096, send_glass, &g->gl);
 }
 static void ride_run(pkg_t *p, const char *dir, const char *layout, int spot, float x, float y, ride_t *r, const char *dump_calm, const char *dump_wave) {
@@ -2122,6 +2137,7 @@ static void ride_run(pkg_t *p, const char *dir, const char *layout, int spot, fl
     fluid_fine_dust_kind(FINE_DUST_SPECKS);
     ride_rig_t A, B;
     rig_open(&A, S); rig_open(&B, S);
+    s_glass_model = true;
     scene_grow_t g;
     if (spot >= 0) scene_grow_tap(&g, spot);
     const float tx = (x + 1.f) * S / 2, ty = (1.f - y) * S / 2;
@@ -2187,6 +2203,7 @@ static void ride_run(pkg_t *p, const char *dir, const char *layout, int spot, fl
     }
     free(px0); free(ever); free(last);
     rig_close(&A); rig_close(&B);
+    s_glass_model = false;
     scene_free(sc); scene_free(twin);
 }
 static void test_ride(const char *dir) {
@@ -2206,7 +2223,7 @@ static void test_ride(const char *dir) {
         { "a tap on a sign (Leo)", "chart", leo, 0.76f * cosf(302.f * D), 0.76f * sinf(302.f * D), NULL },
         { "a sign close-up, a tap", "sign-closeup", -1, -0.4f, -0.35f, NULL },
     };
-    printf("  the fine dust riding the water (kind 0; panel model 0.15 ms a window, 0.05 us a copied px, 0.9 us a composed px; cells %.0f ms):\n", SD_CELLS_MS);
+    printf("  the fine dust riding the water (kind 0, over its kept glass; panel model 0.17 ms a window, 0.06 us a px sent, 0.2 us a px drawn into the glass; cells %.0f ms):\n", SD_CELLS_MS);
     for (int q = 0; q < 4; q++) {
         ride_t r;
         ride_run(p, dir, TAP[q].layout, TAP[q].spot, TAP[q].x, TAP[q].y, &r, q == 0 ? getenv("RIDE_DUMP_CALM") : NULL, TAP[q].dump ? getenv(TAP[q].dump) : NULL);
@@ -2415,12 +2432,14 @@ static void morph_run(morph_rig_t *r, int kind, scene_t *sc, uint32_t look, int 
         const bool on = fluid_draw_morphing(r->d);
         long changed = 0;
         for (int k = 0; k < S * S; k++) changed += r->g.px[k] != r->prev[k];
-        /* the panel model, the device's measured constants (as the prototype's): a window 0.15 ms, a pixel sent 0.05 us,
-         * one that changed 0.9 us; and the change's own work (fluid_morph_t.work); the cells ~11 ms */
-        const double ms = CELLS_MS + (in ? m->work * 1e-3 + r->g.c.wins * 0.15 + r->g.c.px * 0.05e-3 + changed * 0.85e-3 : model_ms(&r->g.c));
+        /* the panel model, the device's (bench1): a window 0.15 ms, a pixel sent from the kept glass 0.055 us, the change's
+         * own work (fluid_morph_t.work: its per-item costs fitted to the device); the drawer's cells only in the change's one
+         * pass for its new look (MORPH_PASS_MS), else ~1 ms (the touch poll). A frame fits the panel's 31.5 ms step with
+         * its handoff when it is under MORPH_FIT_MS. */
+        const double ms = in ? (m->pass ? MORPH_PASS_MS : 1.0) + m->work * 1e-3 + r->g.c.wins * 0.15 + r->g.c.px * 0.055e-3 : CELLS_MS + model_ms(&r->g.c);
         for (int k = 0; k < S * S; k++) s_morph_stale += r->g.px[k] == MORPH_STALE;
         if (in) {
-            sum += ms; nfr++; res->worst = fmax(res->worst, ms); res->over += ms > 33.0;
+            sum += ms; nfr++; res->worst = fmax(res->worst, ms); res->over += ms > MORPH_FIT_MS;
             if (getenv("MORPH_TRACE")) printf("    %s f%d t %.3f: %.1f ms (%d windows, %ld px, %ld changed, work %.1f), %d/%d grains, %d pairs\n", name, f, m->t,
                                               ms, r->g.c.wins, r->g.c.px, changed, m->work * 1e-3, m->na, m->nb, m->nfly);
         }
@@ -2586,8 +2605,8 @@ static void test_morph(const char *dir, const char *catp) {
          * the end) */
         CHECK(res.phase == 0 && (res.new_seen > 0 || RUN[q].kind == MK_ASK), "%s: the prototype's phases (old lines gone by 0.324 s, the new in the last 0.132 s, every grain down by 1.081 s + the extra; %d frames off)",
               RUN[q].name, res.phase);
-        CHECK(res.frames >= 36 && res.frames <= 36 + 9 + 2 + 20 && res.worst <= 33.0 && res.over == 0,
-              "%s: one change of 1.21 s (+ the extra, + the wait for its dust), never a frame over 33 ms (%d frames, worst %.1f ms)", RUN[q].name, res.frames, res.worst);
+        CHECK(res.frames >= 36 && res.frames <= 36 + 9 + 2 + 20 && res.over == 0,
+              "%s: one change of 1.21 s (+ the extra, + the wait for its dust), every frame inside the panel's (%d frames, worst %.1f ms of %.0f)", RUN[q].name, res.frames, res.worst, MORPH_FIT_MS);
         CHECK(res.unsent == 0, "%s: every frame of it all sent, each grain the frame it moves (%d frames not)", RUN[q].name, res.unsent);
         {   /* (the prototype's own sparse cloud: its emptiest frame, dissolve-proto's render on the same blocks) */
             const int calm = res.empty0 > res.empty1 ? res.empty0 : res.empty1, most = (calm > RUN[q].empty ? calm : RUN[q].empty) + 30;
@@ -2606,7 +2625,7 @@ static void test_morph(const char *dir, const char *catp) {
         morph_run(r, MK_SCENE, chart, FLUID_LOOK_KEEP | 202, 0, 0, "cut-chart", &b);
         printf("    interrupted: worst %.1f ms then %.1f ms a frame; %.0f ms after; empty %.1f %%, not composed %d\n", a.worst, b.worst, b.frames * 1000.0 / 30.0, b.empty_max / 10.0, a.unsent + b.unsent);
         CHECK(s_morph_stale == 0, "interrupted: only the picture kept shows (%d px)", s_morph_stale);
-        CHECK(mid && a.worst <= 33.0 && b.worst <= 33.0 && a.over + b.over == 0 && a.unsent + b.unsent == 0, "a change in the middle of one keeps the frame (worst %.1f, %.1f ms)", a.worst, b.worst);
+        CHECK(mid && a.over + b.over == 0 && a.unsent + b.unsent == 0, "a change in the middle of one keeps the frame (worst %.1f, %.1f ms)", a.worst, b.worst);
         CHECK(b.diff == 0 && b.frames <= 70 && !fluid_draw_morphing(r->d), "... from the glass as it was, to the chart whole (%d px differ)", b.diff);
     }
     {   /* the new picture's dust not in by the cloud (its build starved on the device): the clock waits for it briefly
