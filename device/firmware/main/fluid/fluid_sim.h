@@ -379,57 +379,87 @@ uint8_t fluid_braille_dither(const float *sub, int si, int sj, float shimmer, ui
 /** Contour: dots on the dense side of the cell's own mid-level. */
 uint8_t fluid_braille_contour(const float *sub);
 
-/* A change of the whole picture (a scene to a scene, a creature to a scene and back): one round wave from where the
- * finger was (fluid_draw_morph_focus; the middle of the glass when none). Ahead of its front the old picture stands as it
- * is; at the front it dissolves (each pixel by its own threshold: its grains carried ahead by the crest and thinning,
- * the new picture's grains coming in place); behind it the new picture is whole. The old picture is the glass kept as
- * it was sent (snap: a look marked FLUID_LOOK_KEEP is copied there as it is sent), or for a look that is not kept (the
- * creature's crisp dots) its cells as last drawn. Each frame only the annulus the front swept and its band change, sent
- * once, in arc-shaped boxes. The front's sweep is what the panel sends in FLUID_WAVE_SEND_US: its speed and band shrink
- * where its circle on the glass is long (a tap in the middle, near the rim) and grow where it is short, eased. The look
- * is a function of the pixel and the change's clock (30 steps a second, a frame never more than one step). */
-#define FLUID_LOOK_KEEP       0x80000000u  /* a look's number with this: the glass is kept as it draws (a scene) */
-#define FLUID_WAVE_SEND_US    21000    /* a frame's front sent in this (the panel's measured costs, fluid_draw.c: wave_profile) */
-#define FLUID_WAVE_T_MAX      40.f     /* the annulus a frame sweeps (its step and the band it leaves), px at most */
-#define FLUID_WAVE_V0         14.f     /* the front's first step from the finger, px; then at most this much more */
-#define FLUID_WAVE_EASE       1.25f    /* ... a step than the one before                                        */
-#define FLUID_WAVE_V_MIN      2.f
-#define FLUID_WAVE_BAND       0.4f     /* of the annulus, the band dissolving (the rest the front's step) ..     */
-#define FLUID_WAVE_BAND_MIN   2.f      /* .. this wide at least, px                                              */
-#define FLUID_WAVE_BAND_MAX   16.f
-#define FLUID_WAVE_PUSH       6.f      /* the old grains carried ahead by the crest, px at most                  */
-#define FLUID_WAVE_HZ         30.f     /* the steps of the front                                                 */
-#define FLUID_WAVE_STEPS      64       /* ... at most                                                            */
-#define FLUID_WAVE_REGIONS    3        /* changes in the middle of changes remembered (the old picture's sources)  */
-#define FLUID_WAVE_BOXES      128
+/* A change of the whole picture (the boot word to the creature, the creature to a scene and back, a scene to a scene, a
+ * question coming and going): dust on one wave from where the finger was (fluid_draw_morph_focus; the middle of the
+ * glass when none). Its crest dissolves the old picture as it passes: the drawing there thins out and its grains are
+ * thrown up with the water into a loose cloud that drifts and swirls. The new picture is drawn into the kept glass
+ * behind the crest, cell by cell (once its inputs are whole: `ready`); the cloud's grains fly onto its pixels and land,
+ * and a second front from the same centre brings the picture up out of them: its dust, then its lines. Between the two
+ * fronts, a ring of cloud. Each front sweeps at most FLUID_MORPH_SWEEP px of glass a frame and the cloud between them
+ * holds at most FLUID_MORPH_BAND (the crest waits for the gathering, never the frame): every cell whose pixels change is
+ * sent that frame, in boxes of whole row pairs (crisp_send), inside the panel's budget. The old picture is the glass as
+ * kept (snap): a look marked FLUID_LOOK_KEEP is copied there as the drawer sends it; under FLUID_LOOK_GLASS the panel's
+ * own mirror keeps it (a change goes from such a look, never into one: those come at once). Times are in frames of the
+ * change (one step a frame drawn, never two). */
+#define FLUID_LOOK_KEEP       0x80000000u  /* a look's number with this: the drawer keeps the glass as it sends it      */
+#define FLUID_LOOK_GLASS      0x40000000u  /* ... with this: the panel's mirror keeps it (windows on any rows)          */
+#define FLUID_MORPH_SWEEP     12000    /* px of glass a front passes over a frame at most                             */
+#define FLUID_MORPH_BAND      85000    /* px of glass between the fronts at most (the cloud) ..                        */
+#define FLUID_MORPH_LOAD_US   17000    /* .. and the crest waits while the change's last frame took the panel more (its
+                                        * model, fluid_draw.c: morph_frame; the cells take ~11 ms more)               */
+#define FLUID_MORPH_LIT       3000     /* lit px of its picture a front passes over a frame at most                    */
+#define FLUID_MORPH_CREST     2        /* frames a cell's drawing thins out under the crest (2/3, 1/3)                */
+#define FLUID_MORPH_CLOUD     4        /* frames a cell is cloud at least before its picture comes up                  */
+#define FLUID_MORPH_GATHER    5        /* frames a grain flies from the cloud to its pixel                            */
+#define FLUID_MORPH_FADE      3        /* frames a cell's picture comes up: its dust at half, its lines at half, whole */
+#define FLUID_MORPH_WAIT      45       /* frames the cloud waits for the new look's inputs at most (`ready`)            */
+#define FLUID_MORPH_LIFT      9        /* frames the crest takes to throw a grain up                                  */
+#define FLUID_MORPH_PUSH      20.f     /* px the crest throws a grain out from the centre (and up to half as much more) */
+#define FLUID_MORPH_SCATTER   16.f     /* px it scatters round that, turning                                          */
+#define FLUID_MORPH_SPECKS    2000     /* grains in the cloud at most                                                */
+#define FLUID_MORPH_TAKE      1800     /* .. of the old picture's lit pixels, about this many become grains           */
+#define FLUID_MORPH_CALLS     4096     /* pixels of the new picture waiting for a grain, at most                      */
+#define FLUID_MORPH_PAINT_US  4000     /* the new picture drawn into the kept glass, a frame (the panel model's us)   */
+#define FLUID_MORPH_SECTORS   16
+typedef struct {
+    int16_t ax, ay, t0;                /* where the crest threw it from (fb px), the frame it did                       */
+    int16_t tx, ty, g0, g1;            /* where it lands (tx < 0: nowhere yet), the frames it flies from and lands at  */
+    int16_t x, y;                      /* this frame (x < 0: not shown)                                               */
+    uint16_t c0, c1, c;                /* its colour in the old picture, the new, this frame (rgb565 BE)               */
+    uint8_t  h, sec;                   /* its own number; its sector round the centre                                 */
+    int16_t  next;                     /* the next grain of its sector with no pixel yet (-1: none)                   */
+} fluid_speck_t;
 typedef struct {
     bool     on;
-    bool     whole;                    /* snap holds the glass (a kept look, every pixel sent since kept)          */
-    uint32_t look;                     /* the picture the drawer's inputs show                                   */
-    uint16_t *snap;                    /* fb_w x fb_h: the glass as a kept look sent it                          */
-    float    fx, fy;                   /* where the finger was (fb px; fx < 0: nowhere)                         */
-    float    cx, cy, D;                /* this change's centre (fb px) and how far the glass reaches from it      */
-    float    now, t;                   /* the clock; this change's, s (its first frame: one step)                */
-    float    r[FLUID_WAVE_STEPS + 1], b[FLUID_WAVE_STEPS + 1];   /* the front and its band at each step           */
-    int      nstep, frames;            /* (frames: drawn so far)                                                  */
-    float    ra, ba, rb, bb;           /* the front and band of the last frame drawn, of this frame               */
-    /* where the old picture comes from: snap or the cells as last drawn (okey, ocol), and inside the regions of the
-     * changes this one came in the middle of, what each left behind its band */
-    uint8_t  base, nreg;
-    struct { float x, y, r2; uint8_t src; } reg[FLUID_WAVE_REGIONS];
-    uint16_t *okey, *ocol;             /* N: the cells of the old picture when it is no kept look                 */
-    uint8_t  *colx, *rowy;             /* fb_w, fb_h: a pixel's cell column, row (255 off the grid)              */
-    int8_t   *dcol;                    /* fb_w: its dot column in the cell (-1 between)                          */
-    uint16_t *order, *cdist;           /* N: the cells nearest the centre first (the new drawing's cache made in that
-                                        * order); N x 2: each cell's least and most distance from it, px          */
-    int      fill;
-    int64_t  frame_us;                 /* when this frame's cells began (the cache takes what they leave)        */
-    int16_t  (*box)[4];                /* this frame's boxes (fluid_draw_send2), fb px x0, y0, x1, y1             */
-    int      nbox;
-    int      px, wins, band, comp;     /* this frame's pixels and windows of the front, its pixels in the band, and
-                                        * those drawn and composed (the others copied from the kept glass)        */
-    int      cmp_us, push_us;          /* ... the time its windows took to draw and compose, and to hand to the panel
-                                        * (each hand-over waits for the transfer before it)                      */
+    bool     whole;                    /* snap holds the glass (kept since the last full send)                        */
+    bool     ready;                    /* the new look's inputs are whole: it may be drawn into the glass             */
+    bool     painted;                  /* some of it is (its inputs may no longer change wholesale: fluid_draw_morph_open) */
+    bool     lines;                    /* the new look's drawing is cached (its lines come up after its dust)          */
+    uint32_t look;                     /* the picture the drawer's inputs show                                         */
+    uint16_t *snap;                    /* fb_w x fb_h: the glass kept; in a change, ahead of the crest the old picture,
+                                        * behind it the new one where drawn                                            */
+    float    fx, fy;                   /* where the finger was (fb px; fx < 0: nowhere)                               */
+    float    cx, cy, D;                /* this change's centre (fb px) and how far the glass reaches from it            */
+    int      frames;                   /* the change's clock                                                          */
+    float    rc, rg;                   /* the crest's and the gathering front's distance from the centre, px ..        */
+    int      ci, gi;                   /* .. and the first cell along `order` each has not reached                     */
+    float    hist[32];                 /* the crest's, the last frames (the gathering keeps FLUID_MORPH_CREST +
+                                        * FLUID_MORPH_CLOUD frames behind it)                                         */
+    uint32_t *cum;                     /* N: the glass's px in the cells to `order`'s n-th, nearest first             */
+    void     *mem;
+    uint8_t  *cst;                     /* N: each cell's stage (fluid_draw.c MS_*) | MS_VALID: the new look drawn there  */
+    int16_t  *td, *tr;                 /* N: the frame the crest reached it; the frame its picture comes up from (-1: its
+                                        * pixels not called yet; before it comes up, the frame its grains land)         */
+    uint16_t *cd;                      /* N: its distance from the centre, px                                          */
+    uint8_t  *olit, *nlit;             /* N: the old picture's lit pixels in it, the new one's (at most 255)            */
+    uint8_t  *spn, *spn0;              /* N: grains shown in it this frame, the last                                   */
+    uint16_t *order;                   /* N: the cells nearest the centre first (the new drawing's cache made so)      */
+    uint8_t  *colx, *rowy;             /* fb_w, fb_h: a pixel's cell column, row (255: none)                           */
+    fluid_speck_t *sp;                 /* FLUID_MORPH_SPECKS: the cloud                                               */
+    uint16_t *bidx, *bstart;           /* the grains shown by cell row (bstart: H + 1)                                 */
+    int      nsp;
+    int16_t  head[FLUID_MORPH_SECTORS];
+    int16_t  (*call)[3];               /* FLUID_MORPH_CALLS: pixels of the new picture no grain was free for (x, y, colour):
+                                        * the next grains the crest throws fly to them, first called first             */
+    int      ncall, call0;
+    float    take;                     /* of the lit pixels, the share that become grains                             */
+    int      fill;                     /* the drawing's cache made this far along `order`                             */
+    int64_t  frame_us;                 /* when this frame's cells began (the cache takes what they leave)              */
+    int      px, wins, comp;           /* this frame: the pixels and windows sent, the pixels worked out one by one (a
+                                        * crest's or a fade's lit pixel, a grain) ..                                   */
+    int      paint_px, paint_comp;     /* .. the pixels of the new picture drawn into the glass, those of them drawn one
+                                        * by one (not black, not the drawing's cache) ..                               */
+    int      cmp_us, push_us;          /* .. the time its windows took to compose, and to hand to the panel            */
 } fluid_morph_t;
 
 /* animations the drawer tells apart (fluid_draw_t.anim_*): each frame, which had cells change, and which of those
@@ -488,7 +518,7 @@ typedef struct {
     int nlt;
     void *block;
     bool force;                        /* redraw every cell next frame                    */
-    fluid_morph_t m;                   /* the whole picture changing: a wave from the finger (fluid_draw_morph_look) */
+    fluid_morph_t m;                   /* the whole picture changing: dust on a wave from the finger (fluid_draw_morph_look) */
     /* EXPERIMENT scene dust (fluid_fine_dust_kind 1; delete with it): a scene on fine dust shows the creature's kind of
      * dust instead, braille dots on the cells riding the water (fluid_draw.c: sd_field) */
     uint16_t *sd_dist;                 /* 2W x 4H: each dot's distance to the drawing, 1/4 px                    */
@@ -605,18 +635,20 @@ static inline bool fluid_overlay_on(const fluid_overlay_t *ov) {
 /** Mark the cells under ov for redraw by the next fluid_draw. */
 void fluid_draw_overlay_dirty(fluid_draw_t *d, const fluid_overlay_t *ov);
 /** The picture changing whole (fluid_morph_t). With the drawer idle, once a frame, before its inputs are written: look,
- *  the picture those inputs show from now (a number of its own: a scene's serial, a creature; with FLUID_LOOK_KEEP the
- *  drawer keeps the glass as it draws it; 0: not the dust's to reshape, it comes at once), snap, fb_w x fb_h px the
- *  drawer may keep the glass in (the panel's mirror, unused while windows go on whole row pairs; NULL: it comes at once),
- *  now (s). A new look starts a wave from the focus; the inputs are the new look's from the same frame. */
-void fluid_draw_morph_look(fluid_draw_t *d, uint32_t look, uint16_t *snap, float now);
+ *  the picture those inputs show from now (a number of its own: a scene's serial, a creature, a question; with
+ *  FLUID_LOOK_KEEP the drawer keeps the glass as it sends it, with FLUID_LOOK_GLASS the panel's mirror does; 0: not
+ *  known, it comes at once), snap, fb_w x fb_h px the glass is kept in (the panel's mirror; NULL: it comes at once),
+ *  ready, the inputs are whole (a scene's dust is in: until then, at most FLUID_MORPH_WAIT frames, the cloud drifts).
+ *  A new look starts a change from the focus; the inputs are the new look's from the same frame. */
+void fluid_draw_morph_look(fluid_draw_t *d, uint32_t look, uint16_t *snap, bool ready);
 /** Before the fluid_draw_morph_look that asks for a new look: where the finger that asked was (fb px). */
 void fluid_draw_morph_focus(fluid_draw_t *d, float x, float y);
-/** The same look again by a wave from the last change's centre (its dust came after the change: it arrives so). */
-void fluid_draw_morph_again(fluid_draw_t *d);
 static inline int fluid_draw_morphing(const fluid_draw_t *d) { return d && d->m.on; }
-/** A change began this frame and has shown nothing yet (its look's dust may come with it). */
-static inline bool fluid_draw_morph_fresh(const fluid_draw_t *d) { return d && d->m.on && !d->m.frames; }
+/** A change runs and nothing of its new look is drawn yet: its inputs may still change whole (a scene's dust swapping in). */
+static inline bool fluid_draw_morph_open(const fluid_draw_t *d) { return d && d->m.on && !d->m.painted; }
+/** The window t as the change shows it this frame (fluid_draw_send2 sends it so; tests draw the whole glass by it).
+ *  Returns the pixels it worked out one by one. */
+int  fluid_draw_morph_rect(const fluid_draw_t *d, const fluid_rect_t *t);
 /** Draw ov over the window t. Returns the pixels touched. */
 int  fluid_draw_overlay(const fluid_draw_t *d, const fluid_rect_t *t, int palette, const fluid_overlay_t *ov);
 
