@@ -29,9 +29,8 @@
  *            into it; the reading's last one slower and farther, the dark lifting meanwhile as a front from its box
  *            outward (a frame changes only the cells it crosses).
  *   budget   what a frame draws again is what changed (each cell a signature), all of it that frame. A tapped spot's set
- *            changes only the cells by its drawing; a scene's whole set comes with the drawer's change of picture
- *            (fluid_morph_t), or after it by a wave of its own (fluid_fine_swap says): the light holds still meanwhile
- *            (pause).
+ *            changes only the cells by its drawing; a scene's whole set comes in before the drawer's change of picture
+ *            draws its new one (fluid_morph_t: its cloud waits for it): the light holds still meanwhile (pause).
  * The drawer's part (fluid_fine_frame, fluid_fine_rect) is called by fluid_draw_cells / fluid_draw_rect when
  * fluid_draw_opts_t.fine is set; the sim task owns the build (fluid_fine_want, _work) and swaps a finished set in while
  * the drawer is idle (fluid_fine_swap). Plain C: built into the firmware and by the host tests.
@@ -210,8 +209,8 @@ bool fluid_fine_work(fluid_fine_t *f, int budget_us);
 static inline bool fluid_fine_shown(const fluid_fine_t *f, uint32_t scene) { return f && f->drawn && f->drawn->base == scene; }
 /** With the drawer idle: the set waiting becomes the one drawn. Cells whose specks are the same in both keep their
  *  levels (nothing of theirs is drawn again). A set drawn for another scene's drawing is dropped at once (the dust on
- *  the glass is the scene's own). True: most of the glass's dust changed (a scene's own set: it comes with a change of
- *  picture, or after one by a wave of its own, fluid_draw_morph_again). */
+ *  the glass is the scene's own). True: most of the glass's dust changed (a scene's own set: it comes in while a change of
+ *  picture has drawn nothing of its new one yet, fluid_draw_morph_open). */
 bool fluid_fine_swap(fluid_fine_t *f);
 /** With the drawer idle: the caption's backdrop for the whole reading (stage px [x0, x1, y0, y1], the union of its
  *  words' boxes), so the dark does not move with each word; NULL: each word's own box. */

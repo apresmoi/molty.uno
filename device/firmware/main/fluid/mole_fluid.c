@@ -1355,14 +1355,15 @@ static void draw_task(void *arg) {
         int64_t t2 = esp_timer_get_time();
         mole_diag_panel_frame((uint32_t)(t1 - t0), (uint32_t)(t2 - t1));
         {   /* each animation's cadence (/api/log), once it has rested 10 frames: the frames its cells changed (f) and those
-             * whose changes were all sent (s: must be f), its pixels a frame (the front's own for the wave), the windows,
+             * whose changes were all sent (s: must be f), its pixels a frame (the change's own for the wave), the windows,
              * the frame-to-frame intervals of this core (pan) and of the sim's clock (sim), p50 / p95 / worst ms, and its
-             * worst frame's cells + send. The wave's also its length and its front's windows a frame. */
+             * worst frame's cells + send. The wave's also its length and its windows a frame. */
             static const char *const NAME[FLUID_ANIM_N] = { "wave", "grow", "word", "water" };
             enum { BINS = 64 };                         /* intervals in 1 ms bins (the last: 63 and more) */
             static struct { uint32_t f, s, rest, px, pxmax, win, worst, worst_c; uint16_t pan[BINS], sim[BINS]; int64_t began; } A[FLUID_ANIM_N];
             /* the wave's frame in parts (sums and worst, us): drawing + composing its windows, handing them to the panel
-             * (each waits for the transfer before), the last transfer's wait, the cells, the sim's own work; its band px */
+             * (each waits for the transfer before), the last transfer's wait, the cells, the sim's own work; its pixels worked
+             * out one by one (kpx: composed and drawn into the kept glass) */
             enum { P_CMP, P_PUSH, P_WAIT, P_CELLS, P_SIM, P_N };
             static uint32_t wp[P_N], wpm[P_N], wband;
             static int64_t last_t0;
@@ -1383,7 +1384,7 @@ static void draw_task(void *arg) {
                     if (q == FLUID_ANIM_WAVE) {
                         const uint32_t v[P_N] = { (uint32_t)s_draw->m.cmp_us, (uint32_t)s_draw->m.push_us, s_last_wait_us, (uint32_t)(t1 - t0), s_sim_work_us };
                         for (int p = 0; p < P_N; p++) { wp[p] += v[p]; wpm[p] = v[p] > wpm[p] ? v[p] : wpm[p]; }
-                        wband += (uint32_t)s_draw->m.band;
+                        wband += (uint32_t)(s_draw->m.comp + s_draw->m.paint_comp);
                     }
                 } else if (A[q].f && ++A[q].rest >= 10) {
                     uint32_t pc[2][3];                  /* p50, p95, worst of each core */
@@ -1406,7 +1407,7 @@ static void draw_task(void *arg) {
                                     (unsigned)pc[1][2], A[q].worst / 1000.f, A[q].worst_c / 1000.f, (A[q].worst - A[q].worst_c) / 1000.f);
                     if (q == FLUID_ANIM_WAVE) {
                         const float n = (float)A[q].f;
-                        mole_diag_event(false, "anim wave.parts cmp=%.1f/%.1f push=%.1f/%.1f wait=%.1f/%.1f cells=%.1f/%.1f simw=%.1f/%.1f band=%.1f",
+                        mole_diag_event(false, "anim wave.parts cmp=%.1f/%.1f push=%.1f/%.1f wait=%.1f/%.1f cells=%.1f/%.1f simw=%.1f/%.1f comp=%.1f",
                                         wp[P_CMP] / 1000.f / n, wpm[P_CMP] / 1000.f, wp[P_PUSH] / 1000.f / n, wpm[P_PUSH] / 1000.f, wp[P_WAIT] / 1000.f / n,
                                         wpm[P_WAIT] / 1000.f, wp[P_CELLS] / 1000.f / n, wpm[P_CELLS] / 1000.f, wp[P_SIM] / 1000.f / n, wpm[P_SIM] / 1000.f, wband / 1000.f / n);
                         memset(wp, 0, sizeof(wp)); memset(wpm, 0, sizeof(wpm)); wband = 0;
@@ -1659,17 +1660,23 @@ static void fluid_task(void *arg) {
             if (fd_bye_done(&s_dir)) atomic_store(&s_bye_done, true);
         }
         int64_t t2 = esp_timer_get_time();
-        /* The whole picture changing (a scene to a scene, the creature to a scene and back): a wave from the finger,
-         * from this frame. A scene's glass is kept by the drawer as it draws (FLUID_LOOK_KEEP) in the panel's mirror
-         * (unused while the windows go on whole row pairs, as they do for both looks); the creature's is its cells. */
+        /* The whole picture changing (the boot word to the creature, the creature to a scene and back, a scene to a
+         * scene, a question coming and going): dust on a wave from the finger, from this frame. A scene's glass, the
+         * creature's and a question's are kept by the drawer as it sends them (FLUID_LOOK_KEEP) in the panel's mirror
+         * (unused while their windows go on whole row pairs); the fluid's own looks (words, the blob) by the mirror
+         * itself (FLUID_LOOK_GLASS): a change goes from them, never into them. A scene's dust built since comes in while
+         * nothing of the change's new picture is drawn yet; till it has, the cloud waits (`ready`). */
         const bool fine_look = s_cur == ST_SCENE && s_sp.cur && s_fine && s_nshp >= 0 && s_hd.gen != 0;
-        const uint32_t look = fine_look ? FLUID_LOOK_KEEP | s_sp.cur->serial : s_crisp ? 1u : 0u;
-        if (s_focus) {                                     /* a tap asked for it: it shows where the finger was first */
+        const bool asking = s_ask.v && s_ask.scr.phase != FLUID_ASK_NONE;   /* (ask_compose draws it over the frame) */
+        const uint32_t look = asking ? FLUID_LOOK_KEEP | 0x20000000u | (s_ask.scr.seq & 0x1FFFFFFFu)
+                            : fine_look ? FLUID_LOOK_KEEP | (s_sp.cur->serial & 0x1FFFFFFFu) : s_crisp ? FLUID_LOOK_KEEP | 1u : FLUID_LOOK_GLASS;
+        const bool ready = !fine_look || asking || !fluid_fine_specks_kind(fluid_fine_dust_kind_get()) || fluid_fine_shown(s_fine, s_sp.cur->serial);
+        if (s_focus) {                                     /* a tap asked for it: it starts where the finger was */
             const uint32_t at = atomic_load(&s_tap_at);
             fluid_draw_morph_focus(s_draw, (float)(at >> 16), (float)(at & 0xFFFFu));
             s_focus = false;
         }
-        fluid_draw_morph_look(s_draw, look, molty_display_framebuffer(), s_tnow);
+        fluid_draw_morph_look(s_draw, look, molty_display_framebuffer(), ready);
         {
             fluid_sim_snapshot(s_sim, s_frame, cfg.edge_mode == FLUID_EDGE_OFF);
             s_dopts = (fluid_draw_opts_t){
@@ -1699,11 +1706,8 @@ static void fluid_task(void *arg) {
             if (s_fine) {   /* the fine dust: a set built since swaps in (the drawer is idle); none once no scene shows */
                 if (s_hd.gen && s_dnshp >= 0) {
                     if (s_cur == ST_SCENE && !s_hd.out) {      /* (a scene breaking up keeps the dust it showed) */
-                        /* a set built since swaps in: with the scene when the change of picture begins; one that comes
-                         * later waits for its end, and comes by a wave of its own when it is the scene's whole dust */
-                        if ((!fluid_draw_morphing(s_draw) || fluid_draw_morph_fresh(s_draw)) && fluid_fine_swap(s_fine) && !fluid_draw_morph_fresh(s_draw)
-                            && fluid_fine_specks_kind(fluid_fine_dust_kind_get()))   /* (EXPERIMENT: the dots alone need no set) */
-                            fluid_draw_morph_again(s_draw);
+                        /* a set built since swaps in: any time but while a change of picture draws its new one */
+                        if (!fluid_draw_morphing(s_draw) || fluid_draw_morph_open(s_draw)) fluid_fine_swap(s_fine);
                         fluid_fine_caption_box(s_fine, s_cap_box_on ? s_cap_box : NULL);
                         fluid_fine_rim(s_fine, s_rg.on > 0.f);
                         memcpy(s_still_d, s_still, (size_t)s_sim->N); s_dcap_word = s_cap_word;
