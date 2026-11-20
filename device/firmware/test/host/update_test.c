@@ -316,7 +316,7 @@ static void test_download(void) {
 
 static void test_boot(void) {
     assert(upd_boot_rule(false, false) == UPD_BOOT_NOTHING && upd_boot_rule(false, true) == UPD_BOOT_NOTHING);
-    assert(upd_boot_rule(true, false) == UPD_BOOT_VALID_NOW);       /* /api/ota, no relay link at install */
+    assert(upd_boot_rule(true, false) == UPD_BOOT_AWAIT_SETTLE);       /* /api/ota, no relay link at install */
     assert(upd_boot_rule(true, true) == UPD_BOOT_AWAIT_WELCOME);   /* a self-update while linked */
     /* await: valid on welcome, rollback only after the window, wait in between */
     upd_boot_t r = UPD_BOOT_AWAIT_WELCOME;
@@ -336,10 +336,13 @@ static void test_boot(void) {
     assert(upd_guard_step(&r, true, UPD_WELCOME_WINDOW_US - 1) == UPD_GUARD_MARK_VALID);
     assert(upd_guard_step(&r, true, UPD_WELCOME_WINDOW_US) == UPD_GUARD_DONE);
     assert(upd_guard_step(&r, false, UPD_WELCOME_WINDOW_US * 2) == UPD_GUARD_DONE);
-    /* not armed: valid at once (once), welcome or not, never a rollback */
-    r = UPD_BOOT_VALID_NOW;
-    assert(upd_guard_step(&r, false, UPD_WELCOME_WINDOW_US * 10) == UPD_GUARD_MARK_VALID);
-    assert(upd_guard_step(&r, true, 0) == UPD_GUARD_DONE);
+    /* not armed: valid once it has run UPD_SETTLE_US (once), welcome or not, never a rollback of its own: a
+     * crash before that is a reset while pending, which the bootloader rolls back */
+    r = UPD_BOOT_AWAIT_SETTLE;
+    assert(upd_guard_step(&r, false, 0) == UPD_GUARD_WAIT && r == UPD_BOOT_AWAIT_SETTLE);
+    assert(upd_guard_step(&r, true, UPD_SETTLE_US - 1) == UPD_GUARD_WAIT && r == UPD_BOOT_AWAIT_SETTLE);
+    assert(upd_guard_step(&r, false, UPD_SETTLE_US) == UPD_GUARD_MARK_VALID);
+    assert(upd_guard_step(&r, true, UPD_SETTLE_US * 10) == UPD_GUARD_DONE);
     r = UPD_BOOT_NOTHING;
     assert(upd_guard_step(&r, false, UPD_WELCOME_WINDOW_US * 10) == UPD_GUARD_DONE);
     assert(upd_guard_step(&r, true, 0) == UPD_GUARD_DONE);

@@ -133,8 +133,8 @@ void app_main(void)
     // OTA rollback validation (update/update_core.h "the mark-valid rule"): a fresh
     // image (PENDING_VERIFY) installed by a self-update while the link was up is kept
     // once the relay welcomes it, and rolled back if that does not happen within 3 min;
-    // any other fresh image (POST /api/ota, no relay link at install time) is kept now
-    // that the HTTP server is up. A crash before either rolls back on reset.
+    // any other fresh image (POST /api/ota, no relay link at install time) is kept once
+    // it has run 30 s. A crash before either rolls back on reset.
     self_update_boot();
 
     http_imu_ws_start();

@@ -148,11 +148,14 @@ const char *upd_download(const upd_target_t *t, const upd_io_t *io, uint8_t *buf
  *             within UPD_WELCOME_WINDOW_US of boot → restart → the bootloader rolls back.
  *             PENDING_VERIFY, not armed (POST /api/ota, an update while the device had
  *             no relay link — no relay configured, no Wi-Fi, auth failing): valid once
- *             the HTTP server is up, as before, so such devices are never rolled back
- *             forever for lack of a relay. Not pending: nothing to do.
+ *             it has run UPD_SETTLE_US without a reset (it booted, made its creature and
+ *             drew), so an image that crashes on its first frames is rolled back by the
+ *             bootloader instead of looping; never rolled back for lack of a relay.
+ *             Not pending: nothing to do.
  */
 #define UPD_WELCOME_WINDOW_US (180LL * 1000000)   /* 3 min: Wi-Fi + TLS + backoff, inside the relay's 5 min */
-typedef enum { UPD_BOOT_NOTHING, UPD_BOOT_VALID_NOW, UPD_BOOT_AWAIT_WELCOME } upd_boot_t;
+#define UPD_SETTLE_US         (30LL * 1000000)    /* a flashed image is kept after 30 s up: past boot and its first screens */
+typedef enum { UPD_BOOT_NOTHING, UPD_BOOT_AWAIT_SETTLE, UPD_BOOT_AWAIT_WELCOME } upd_boot_t;
 upd_boot_t upd_boot_rule(bool pending_verify, bool armed);
 typedef enum { UPD_GUARD_WAIT, UPD_GUARD_MARK_VALID, UPD_GUARD_ROLLBACK, UPD_GUARD_DONE } upd_guard_t;
 /*

@@ -1921,8 +1921,9 @@ esp_err_t mole_fluid_creature_init(void) {
     xSemaphoreTake(s_idle, 0);
     xSemaphoreGive(s_idle);
     s_run = true;
-    /* drawer on core 0 (Wi-Fi's core, mostly idle), below lwip/httpd priority */
-    if (xTaskCreatePinnedToCore(draw_task, "fluid_draw", 4096, NULL, 2, &s_dtask, 0) != pdPASS) {
+    /* drawer on core 0 (Wi-Fi's core, mostly idle), below lwip/httpd priority. 8 KB of stack: with 4 KB the device
+     * measured 48 bytes left, and a change of picture then overflowed it on the first frame after boot */
+    if (xTaskCreatePinnedToCore(draw_task, "fluid_draw", 8192, NULL, 2, &s_dtask, 0) != pdPASS) {
         s_run = false; s_dtask = NULL;
         free_grid();
         return ESP_ERR_NO_MEM;
