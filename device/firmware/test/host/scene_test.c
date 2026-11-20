@@ -33,6 +33,7 @@
 #include "glyph_rsvp.h"
 #include "fluid_fine.h"
 #include "fluid_askview.h"
+#include "creature_pkg.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -2304,43 +2305,34 @@ static void test_fine_hard(const char *dir) {
     pkg_unref(p);
 }
 
-/* ── the whole picture changing: dust on a wave (fluid_morph_t). A small driver as mole_fluid.c's: each frame the look
- * wanted is told to the drawer, its inputs written, the windows landing on a glass, as the panel's ── */
+/* ── the whole picture changing, as dust ("A for Molty", fluid_morph_t). A small driver as mole_fluid.c's: each frame
+ * the look wanted is told to the drawer, its inputs written, the windows landing on a glass, as the panel's ── */
 typedef struct {
     int S, W, H, N;
     fluid_sim_t *s; fluid_frame_t *fr; fluid_draw_t *d; fluid_fine_t *fine;
-    glass_t g; uint16_t *snap, *ref;
+    glass_t g; uint16_t *snap, *ref, *prev;
     uint16_t wbuf[466 * 18];
     /* the look being made (the sim's side) and the drawer's own copy of its inputs */
     fluid_shape_t shp[FLUID_MAX_SHAPES], dshp[FLUID_MAX_SHAPES], full[FLUID_MAX_SHAPES];
-    uint8_t *dots, *keep, *still, *ddots, *dkeep, *dstill, *cat, *word;
-    fluid_rgba16_t *ccol;              /* the creature's and the word's colours */
+    uint8_t *dots, *keep, *still, *ddots, *dkeep, *dstill, *cat, *catline, *word;
+    fluid_rgba16_t *ccol, *wcol;       /* the creature's and the word's colours */
     fluid_letter_t L[FLUID_MAX_LETTERS], qL[FLUID_MAX_LETTERS];
     fluid_askview_t *v; fluid_ask_screen_t scr;   /* a question over the chart */
     fluid_draw_opts_t o;
     float now;
     int frame;
-    float fx, fy;                      /* the next change's focus (fb px; < 0: none) */
 } morph_rig_t;
-/* what a change did (morph_run): its frames, the panel model's ms a frame (mean, worst, over 33), and what it showed */
+/* what a change did (morph_run): its frames, the panel model's ms a frame (mean, worst, over 33), what it showed */
 typedef struct {
-    int frames, over, unsent, empty_max, empty0, empty1, strays, order_bad, diff, hard;
+    int frames, over, unsent, empty_max, empty0, empty1, diff, hard, phase, new_seen;
+    int na, nb, fly, spare, born;      /* its grains: old, new; the pairs flying; the old with no pair, the new with none */
+    float extra;
     double mean, worst;
 } morph_res_t;
 enum { MK_CAT, MK_SCENE, MK_WORD, MK_ASK };
 #define MORPH_STALE 0x1FF8u   /* what the old picture's buffer holds before a change (it is not cleared): never on the glass */
 static int s_morph_stale;
-static uint32_t th(int a, int b) { uint32_t h = (uint32_t)a * 374761393u + (uint32_t)b * 668265263u; h = (h ^ (h >> 13)) * 1274126177u; return h ^ (h >> 16); }
 static int lit_px(const uint16_t *px, int n) { int c = 0; for (int q = 0; q < n; q++) c += px[q] != 0; return c; }
-/* a montage of the glass every other frame (MORPH_DUMP: a path prefix), to look at */
-static void morph_tile(uint16_t *sheet, int cols, int n, const uint16_t *glass, int S) {
-    const int h = S / 2, x0 = (n % cols) * h, y0 = (n / cols) * h;
-    for (int y = 0; y < h; y++) for (int x = 0; x < h; x++) {     /* the brightest of each 2 x 2 (a speck stays a speck) */
-        uint16_t best = 0; int bl = -1;
-        for (int q = 0; q < 4; q++) { const uint16_t v = glass[(2 * y + (q >> 1)) * S + 2 * x + (q & 1)]; if (lum(v) > bl) { bl = lum(v); best = v; } }
-        sheet[(size_t)(y0 + y) * cols * h + x0 + x] = best;
-    }
-}
 /* the 32 x 32 px blocks wholly on the glass with no lit pixel, of 1000 */
 static int empty_blocks(const uint16_t *g, int S) {
     int n = 0, e = 0;
@@ -2379,29 +2371,29 @@ static void morph_inputs(morph_rig_t *r, int kind, scene_shapes_t *hd) {
         fluid_askview_opts(r->v, &r->o, r->ddots, r->qL, nq);
     } else {
         memcpy(r->ddots, kind == MK_CAT ? r->cat : r->word, (size_t)N);
-        memcpy(r->fr->col, r->ccol, sizeof(fluid_rgba16_t) * (size_t)N);
+        memcpy(r->fr->col, kind == MK_CAT ? r->ccol : r->wcol, sizeof(fluid_rgba16_t) * (size_t)N);
         r->o = (fluid_draw_opts_t){ .palette = FLUID_PAL_PASTEL, .edge_mode = FLUID_EDGE_CONTOURS, .font = gc_font5x7, .dots = r->ddots, .scene = true };
     }
+    fluid_draw_morph_lines(r->d, kind == MK_CAT ? r->catline : NULL);   /* (the creature's own cells are its lines) */
     r->o.time = r->now;
 }
 /* The look changes to kind's (the scene's dust built `late` frames after, as the device builds it); runs to the
- * change's end and a little past (or `stop` frames). The glass's every frame is checked: what the change shows there
- * (fluid_draw_morph_rect) was sent; afterwards, against the calm pictures before and after: how much of the glass was
- * left empty, how many lit pixels were neither picture (the cloud), and whether the new lines came up before their dust */
+ * change's end and a little past (or `stop` frames). Every frame of it: the glass is the change as composed whole
+ * (fluid_draw_morph_rect: every grain that moved was sent), its time on the panel model, its grains and lines against
+ * the prototype's phases, how much of the glass is empty; at the end, the glass against the look drawn whole. A strip
+ * of 8 frames evenly through it to MORPH_DUMP-<name>.ppm (4 x 2, as the prototype's window.strip). */
 static void morph_run(morph_rig_t *r, int kind, scene_t *sc, uint32_t look, int late, int stop, const char *name, morph_res_t *res) {
     const int S = r->S;
     scene_shapes_t hd = { r->shp, 0, r->keep, r->still };
     int nl = 0, f0 = -1, nfr = 0, tiles = 0;
     uint32_t key = 0;
     double sum = 0.;
-    enum { COLS = 6, TILES = 18, KEPT = 90 };
-    static uint16_t *before, *ended, *kept[KEPT];
-    if (!before) { before = calloc((size_t)S * S, 2); ended = calloc((size_t)S * S, 2); for (int q = 0; q < KEPT; q++) kept[q] = calloc((size_t)S * S, 2); }
-    memcpy(before, r->g.px, (size_t)S * S * 2);
     *res = (morph_res_t){ 0 };
-    res->empty0 = empty_blocks(before, S);
+    res->na = res->nb = -1;
+    res->empty0 = empty_blocks(r->g.px, S);
     if (!fluid_draw_morphing(r->d) && !r->d->m.whole) for (int k = 0; k < S * S; k++) r->snap[k] = MORPH_STALE;
-    uint16_t *sheet = getenv("MORPH_DUMP") ? calloc((size_t)COLS * (S / 2) * (TILES / COLS) * (S / 2), 2) : NULL;
+    enum { COLS = 4, TILES = 8 };
+    uint16_t *sheet = getenv("MORPH_DUMP") ? calloc((size_t)COLS * S * (TILES / COLS) * S, 2) : NULL;
     for (int f = 0; f < 200; f++, r->frame++) {
         r->now += 1.f / 30.f;
         if (sc) {
@@ -2409,41 +2401,66 @@ static void morph_run(morph_rig_t *r, int kind, scene_t *sc, uint32_t look, int 
             if (kind == MK_SCENE && f == late) { const int n = scene_full_shapes(r->s, sc, 1.f, r->full, &key); fluid_fine_want(r->fine, look, key, true, r->full, n, FLUID_PAL_PASTEL); }
             if (kind == MK_SCENE && f >= late) fluid_fine_work(r->fine, 0);
         }
-        if (!f && r->fx >= 0.f) { fluid_draw_morph_focus(r->d, r->fx, r->fy); r->fx = -1.f; }
         fluid_draw_morph_look(r->d, look, r->snap, kind != MK_SCENE || fluid_fine_shown(r->fine, look));
         morph_inputs(r, kind, &hd);
+        const bool in = fluid_draw_morphing(r->d);    /* (a frame of the change: its last one draws the look whole) */
+        memcpy(r->prev, r->g.px, (size_t)S * S * 2);
         r->g.c = (cost_t){ 0, 0, 0, 0 };
         r->g.mirror = (look & FLUID_LOOK_GLASS) ? r->snap : NULL;   /* (the panel's mirror keeps such a look's glass) */
         fluid_draw_cells(r->d, r->fr, &r->o);
         fluid_draw_send(r->d, &r->o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, r->wbuf, 4096, send_glass, &r->g);
         const fluid_morph_t *m = &r->d->m;
         const bool on = fluid_draw_morphing(r->d);
-        static uint8_t s_cst0[4096];
-        /* the panel model, the device's measured constants: a window 0.15 ms, a pixel sent 0.05 us, one worked out by
-         * itself (a crest's or a fade's lit pixel, a grain, one of the new picture drawn into the kept glass) 0.9 us */
-        const double ms = CELLS_MS + (on ? r->g.c.wins * 0.15 + r->g.c.px * 0.05e-3 + (m->comp + m->paint_comp) * 0.9e-3 + m->paint_px * 0.05e-3
-                                         : model_ms(&r->g.c));
+        long changed = 0;
+        for (int k = 0; k < S * S; k++) changed += r->g.px[k] != r->prev[k];
+        /* the panel model, the device's measured constants (as the prototype's): a window 0.15 ms, a pixel sent 0.05 us,
+         * one that changed 0.9 us; and the change's own work (fluid_morph_t.work); the cells ~11 ms */
+        const double ms = CELLS_MS + (in ? m->work * 1e-3 + r->g.c.wins * 0.15 + r->g.c.px * 0.05e-3 + changed * 0.85e-3 : model_ms(&r->g.c));
         for (int k = 0; k < S * S; k++) s_morph_stale += r->g.px[k] == MORPH_STALE;
+        if (in) {
+            sum += ms; nfr++; res->worst = fmax(res->worst, ms); res->over += ms > 33.0;
+            if (getenv("MORPH_TRACE")) printf("    %s f%d t %.3f: %.1f ms (%d windows, %ld px, %ld changed, work %.1f), %d/%d grains, %d pairs\n", name, f, m->t,
+                                              ms, r->g.c.wins, r->g.c.px, changed, m->work * 1e-3, m->na, m->nb, m->nfly);
+        }
         if (on) {
             fluid_draw_morph_rect(r->d, &(fluid_rect_t){ r->ref, S, 0, 0, S, S });
             int un = 0;
             for (int k = 0; k < S * S; k++) {
-                if (r->ref[k] != r->g.px[k] && getenv("UNSENT") && !un) { const int x = k % S, y = k / S, c = r->d->m.rowy[y] * r->W + r->d->m.colx[x];
-                    printf("    unsent at %d,%d: glass %04x now %04x, cell %d stage %d (was %d) dirty %d spn %d/%d td %d tr %d olit %d f %d\n", x, y, r->g.px[k], r->ref[k], c, r->d->m.cst[c], s_cst0[c], r->d->dirty[c], r->d->m.spn[c], r->d->m.spn0[c], r->d->m.td[c], r->d->m.tr[c], r->d->m.olit[c], r->d->m.frames); }
+                if (r->ref[k] != r->g.px[k] && getenv("UNSENT") && un < 6) { const int x = k % S, y = k / S, c = r->d->m.rowy[y] * r->W + r->d->m.colx[x];
+                    printf("    %s f%d at %d,%d: glass %04x composed %04x, cell %d key %04x\n", name, f, x, y, r->g.px[k], r->ref[k], c, r->d->key[c]); }
                 un += r->ref[k] != r->g.px[k];
             }
             res->unsent += un != 0;
-            if (un && getenv("WAVE_TRACE")) printf("    %s f%d: %d px not sent\n", name, f, un);
+            if (un && getenv("MORPH_TRACE")) printf("    %s f%d: %d px not as composed\n", name, f, un);
             const int e = empty_blocks(r->g.px, S);
             res->empty_max = e > res->empty_max ? e : res->empty_max;
-            if (nfr < KEPT) memcpy(kept[nfr++], r->g.px, (size_t)S * S * 2);
-            sum += ms; res->worst = fmax(res->worst, ms); res->over += ms > 33.0;
+            /* the prototype's phases: old lines gone by 0.324 s, new lines only in the last 0.132 s, every pair down by
+             * 1.081 s and every new grain with no pair by 1.081 s + the extra */
+            fluid_morph_census_t c;
+            fluid_draw_morph_census(r->d, &c);
+            const float t = m->t, eps = 1e-3f, E = m->dur - 1.2132f;
+            if (m->nb >= 0) { res->na = m->na; res->nb = m->nb; res->fly = m->nfly; res->spare = m->na - m->nfly; res->born = m->nb - m->nfly; res->extra = E; }
+            const bool bad = (t >= 0.324f + eps && c.old_lines) || (t < m->dur - 0.132f - eps && c.new_lines) ||
+                             (t >= 1.0812f + eps && (c.fly || c.wait)) || (m->nb >= 0 && t >= 1.0812f + E + eps && c.born_landed != c.born) ||
+                             (t <= eps && (c.fly || c.landed || c.born));
+            if (bad && getenv("MORPH_TRACE")) printf("    %s f%d t %.3f: off the phases (lines %d %d, pairs %d %d %d, born %d/%d)\n", name, f, t, c.old_lines, c.new_lines,
+                                                     c.wait, c.fly, c.landed, c.born_landed, c.born);
+            res->phase += bad;
+            res->new_seen += c.new_lines > 0;
         }
-        if (m->cst) memcpy(s_cst0, m->cst, (size_t)r->N);
-        if (getenv("WAVE_TRACE")) printf("    %s f%d: %.1f ms, %d windows %ld px, comp %d paint %d/%d, %d grains, fronts %.0f %.0f, on %d\n", name, f, ms, r->g.c.wins, r->g.c.px,
-                                         m->comp, m->paint_comp, m->paint_px, m->nsp, m->rc, m->rg, on);
-        if (sheet && tiles < TILES && f % 2 == 0 && (on || f0 < 0)) morph_tile(sheet, COLS, tiles++, r->g.px, S);
-        if (f0 < 0 && f > 0 && !on) { f0 = f; memcpy(ended, r->g.px, (size_t)S * S * 2); }
+        if (sheet && tiles < TILES && (on || f0 < 0) && m->t + 1e-4f >= tiles / (TILES - 1.f) * m->dur) {
+            const int x0 = (tiles % COLS) * S, y0 = (tiles / COLS) * S;
+            for (int y = 0; y < S; y++) memcpy(sheet + (size_t)(y0 + y) * COLS * S + x0, r->g.px + (size_t)y * S, (size_t)S * 2);
+            tiles++;
+        }
+        if (f0 < 0 && f > 0 && !on) {
+            f0 = f;
+            if (sheet && tiles < TILES) {                 /* (its last: the look whole) */
+                const int x0 = (tiles % COLS) * S, y0 = (tiles / COLS) * S;
+                for (int y = 0; y < S; y++) memcpy(sheet + (size_t)(y0 + y) * COLS * S + x0, r->g.px + (size_t)y * S, (size_t)S * 2);
+                tiles++;
+            }
+        }
         if ((f0 >= 0 && f >= f0 + 3) || (stop && f >= stop)) break;
     }
     res->frames = f0;
@@ -2457,32 +2474,12 @@ static void morph_run(morph_rig_t *r, int kind, scene_t *sc, uint32_t look, int 
         res->hard += r->ref[k] != r->g.px[k] && (lum(r->ref[k]) > 700 || lum(r->g.px[k]) > 700);
     }
     res->empty1 = empty_blocks(r->g.px, S);
-    /* the cloud: lit pixels lit in neither calm picture; the order: in a cell whose new lines are mostly whole, the new
-     * dust has mostly taken shape (lit) (the drawing's own pixels are its cache's; only pixels the old picture did not have) */
-    const uint16_t *fin = ended, *hc = kind == MK_SCENE && r->d->hdc ? r->d->hdc : NULL;   /* (the light holds still till then) */
-    for (int q = 0; q < nfr; q++) {
-        int st = 0;
-        for (int k = 0; k < S * S; k++) st += kept[q][k] && !before[k] && !fin[k];
-        res->strays = st > res->strays ? st : res->strays;
-        for (int c = 0; hc && c < r->N; c++) {         /* (each cell: where it is, the change comes up whole) */
-            const int bx = r->d->cx[c % r->W], by = r->d->cy[c / r->W], ex = r->d->cx[c % r->W + 1], ey = r->d->cy[c / r->W + 1];
-            int nl0 = 0, nlf = 0, nd = 0, ndf = 0;
-            for (int y = by; y < ey; y++) for (int x = bx; x < ex; x++) {
-                const int k = y * S + x;
-                if (!fin[k] || fin[k] == before[k]) continue;    /* (what the old picture had there already) */
-                if (hc[k] == fin[k]) { nl0++; nlf += kept[q][k] == fin[k]; } else { nd++; ndf += kept[q][k] != 0; }
-            }
-            const bool bad = nl0 >= 3 && nlf * 2 > nl0 && nd >= 2 && ndf * 10 < nd * 7;
-            if (bad && getenv("ORDER_TRACE") && res->order_bad < 5) printf("    order %s frame %d/%d cell %d: lines %d/%d dust %d/%d\n", name, q, nfr, c, nlf, nl0, ndf, nd);
-            res->order_bad += bad;
-        }
-    }
     if (sheet) {
         char path[600];
         snprintf(path, sizeof(path), "%s-%s.ppm", getenv("MORPH_DUMP"), name);
         FILE *pf = fopen(path, "wb");
         if (pf) {
-            const int w = COLS * (S / 2), h = (TILES / COLS) * (S / 2);
+            const int w = COLS * S, h = (TILES / COLS) * S;
             fprintf(pf, "P6 %d %d 255\n", w, h);
             for (int q = 0; q < w * h; q++) { const uint16_t le = (uint16_t)(sheet[q] >> 8 | sheet[q] << 8); fputc((le >> 11) * 255 / 31, pf); fputc((le >> 5 & 63) * 255 / 63, pf); fputc((le & 31) * 255 / 31, pf); }
             fclose(pf);
@@ -2491,7 +2488,7 @@ static void morph_run(morph_rig_t *r, int kind, scene_t *sc, uint32_t look, int 
     }
 }
 
-static void test_morph(const char *dir) {
+static void test_morph(const char *dir, const char *catp) {
     char path[512]; size_t len; const char *err;
     snprintf(path, sizeof(path), "%s/astrology.json", dir);
     char *buf = read_file(path, &len);
@@ -2508,32 +2505,42 @@ static void test_morph(const char *dir) {
     }
     free(cmds);
     scene_t *up = chart ? scene_open_build(chart, spot_named(chart, "leo"), &err) : NULL;
-    CHECK(chart && up, "the chart and Leo up close build");
-    if (!chart || !up) { scene_free(up); scene_free(chart); pkg_unref(p); return; }
+    char *cj = catp ? read_file(catp, &len) : NULL;
+    cpk_t *cat = cj ? cpk_create(cj, len, 3, &err) : NULL;
+    free(cj);
+    CHECK(chart && up && cat, "the chart, Leo up close and the cat (%s) build", catp ? catp : "no cat.json");
+    if (!chart || !up || !cat) { cpk_destroy(cat); scene_free(up); scene_free(chart); pkg_unref(p); return; }
     morph_rig_t *r = calloc(1, sizeof(*r));
     const int S = r->S = 466;
     fluid_grid_for_stage(S, &r->W, &r->H);
     const int W = r->W, H = r->H, N = r->N = W * H;
     r->s = fluid_sim_create(W, H, S); r->s->p.still = true;
     r->fr = fluid_frame_create(W, H); r->d = fluid_draw_create(W, H, S, S); r->fine = fluid_fine_create(W, H, S, S);
-    r->g = (glass_t){ calloc((size_t)S * S, 2), S, { 0, 0, 0, 0 }, NULL, NULL };
-    r->fx = -1.f;
-    r->snap = calloc((size_t)S * S, 2); r->ref = calloc((size_t)S * S, 2);
+    r->g = (glass_t){ calloc((size_t)S * S, 2), S, { 0, 0, 0, 0 }, r->d, NULL };
+    r->snap = calloc((size_t)S * S, 2); r->ref = calloc((size_t)S * S, 2); r->prev = calloc((size_t)S * S, 2);
     r->dots = calloc((size_t)N, 6); r->keep = r->dots + N; r->still = r->keep + N; r->ddots = r->still + N; r->dkeep = r->ddots + N; r->dstill = r->dkeep + N;
-    r->cat = calloc((size_t)N, 2); r->word = r->cat + N; r->ccol = calloc((size_t)N, sizeof(fluid_rgba16_t));
-    /* the boot word, in the fluid's dots (pale), and a creature of crisp dots: a body, a head, two ears, in its own colour */
+    r->cat = calloc((size_t)N, 3); r->catline = r->cat + N; r->word = r->catline + N;
+    r->ccol = calloc((size_t)N, sizeof(fluid_rgba16_t)); r->wcol = calloc((size_t)N, sizeof(fluid_rgba16_t));
+    /* the boot word, in the fluid's dots (pale), and the cat (packages/cat: its own sim, a few seconds of life, then its
+     * cells as the device shows them: its own cells its lines, the floor and the motes its dust) */
     fluid_text_t *tx = fluid_text_create(r->s);
     fluid_text_set_glyphs(tx, r->s, "molty.uno");
     memcpy(r->word, tx->dots, (size_t)N);
     fluid_text_destroy(tx);
-    for (int j = 0; j < H; j++) for (int i = 0; i < W; i++) {
-        const float x = r->s->xs[i], y = r->s->ys[j];
-        const bool body = x * x / 0.16f + (y + 0.25f) * (y + 0.25f) / 0.12f < 1.f, head = x * x + (y - 0.22f) * (y - 0.22f) < 0.07f;
-        const bool ear = fabsf(fabsf(x) - 0.19f) + fabsf(y - 0.5f) * 0.7f < 0.09f;
-        const int k = j * W + i;
-        if (body || head || ear) { r->cat[k] = 0xFF; r->ccol[k] = (fluid_rgba16_t){ 62000, 40000, 14000, 0 }; }
-        else if (r->s->mask[k] && (th(i, j) & 31) == 0) { r->cat[k] = (uint8_t)(1u << (th(j, i) & 7)); r->ccol[k] = (fluid_rgba16_t){ 46000, 44000, 60000, 0 }; }
-        if (r->word[k]) r->ccol[k] = (fluid_rgba16_t){ 52000, 50000, 62000, 0 };
+    for (int k = 0; k < N; k++) if (r->word[k]) r->wcol[k] = (fluid_rgba16_t){ 52000, 50000, 62000, 0 };
+    {
+        fluid_sim_t *cs = fluid_sim_create(W, H, S);
+        cpk_prepare(cat, cs);
+        for (int f = 0; f < 90; f++) { cpk_frame(cat, cs, 1 / 30.f, 1); cs->p.still = true; fluid_sim_step(cs, 1 / 30.f); fluid_sim_color(cs, 1 / 30.f); cpk_paint(cat, cs); }
+        const uint8_t *cd; const uint32_t *cc;
+        cpk_cells(cat, &cd, &cc);
+        const uint8_t *own = cpk_cells_creature(cat);
+        for (int k = 0; k < N; k++) {
+            r->cat[k] = cd ? cd[k] : 0; r->catline[k] = own && own[k];
+            const uint32_t c = cc ? cc[k] : 0;
+            r->ccol[k] = (fluid_rgba16_t){ (uint16_t)((c >> 16 & 255) * 257), (uint16_t)((c >> 8 & 255) * 257), (uint16_t)((c & 255) * 257), 0 };
+        }
+        fluid_sim_destroy(cs);
     }
     {   /* a question over the chart: install a package? */
         fluid_ask_q_t q;
@@ -2546,58 +2553,59 @@ static void test_morph(const char *dir) {
         fluid_askview_start(r->v, r->s);
     }
     morph_res_t res;
-    /* the boot word first (nothing to change from: it is there at once, kept by the panel's mirror), then the creature,
-     * the chart, Leo, the chart, a question over it and gone, the creature */
+    /* the boot word first (nothing to change from: it is there at once, kept by the panel's mirror), then the prototype's
+     * five changes, a question over the chart and gone */
     morph_run(r, MK_WORD, NULL, FLUID_LOOK_GLASS, 0, 0, "start", &res);
     const int word_lit = lit_px(r->g.px, S * S);
     CHECK(word_lit > 1500 && res.frames <= 3, "the boot word, with nothing before it: at once (%d px lit)", word_lit);
-    static const struct { const char *name; int kind, scene; uint32_t look; int late; } RUN[] = {
-        { "boot-cat", MK_CAT, 0, FLUID_LOOK_KEEP | 1, 0 }, { "cat-chart", MK_SCENE, 1, FLUID_LOOK_KEEP | 100, 16 },
-        { "chart-leo", MK_SCENE, 2, FLUID_LOOK_KEEP | 101, 14 }, { "leo-chart", MK_SCENE, 1, FLUID_LOOK_KEEP | 102, 0 },
-        { "chart-ask", MK_ASK, 1, FLUID_LOOK_KEEP | 0x20000001u, 0 }, { "ask-chart", MK_SCENE, 1, FLUID_LOOK_KEEP | 102, 0 },
-        { "chart-cat", MK_CAT, 0, FLUID_LOOK_KEEP | 1, 0 } };
-    printf("  a change of picture, dust on a wave (panel model, cells %.0f ms; ms a frame: mean / worst / over 33):\n", CELLS_MS);
+    /* the prototype's grains (dissolve-proto/screens.js: its layer generator joins touching specks into one grain, the
+     * device keeps each speck: the glass stays exact) and its pairs flying (fitted to its panel model) */
+    static const struct { const char *name; int kind, scene; uint32_t look; int late; int na, nb, fly, empty; } RUN[] = {
+        { "boot-cat", MK_CAT, 0, FLUID_LOOK_KEEP | 1, 0, 588, 1382, 588, 703 }, { "cat-chart", MK_SCENE, 1, FLUID_LOOK_KEEP | 100, 16, 1382, 11843, 1382, 125 },
+        { "chart-leo", MK_SCENE, 2, FLUID_LOOK_KEEP | 101, 14, 11843, 6253, 2246, 22 }, { "leo-chart", MK_SCENE, 1, FLUID_LOOK_KEEP | 102, 0, 6253, 11843, 2441, 22 },
+        { "chart-ask", MK_ASK, 1, FLUID_LOOK_KEEP | 0x20000001u, 0, 0, 0, 0, 0 }, { "ask-chart", MK_SCENE, 1, FLUID_LOOK_KEEP | 102, 0, 0, 0, 0, 0 },
+        { "chart-cat", MK_CAT, 0, FLUID_LOOK_KEEP | 1, 0, 11843, 1382, 1382, 214 } };
+    printf("  a change of picture, as dust (panel model, cells %.0f ms; ms a frame: mean / worst / over 33):\n", CELLS_MS);
     for (int q = 0; q < (int)(sizeof(RUN) / sizeof(RUN[0])); q++) {
         morph_run(r, RUN[q].kind, RUN[q].scene == 1 ? chart : RUN[q].scene == 2 ? up : NULL, RUN[q].look, RUN[q].late, 0, RUN[q].name, &res);
-        printf("    %-10s %4.0f ms  %5.1f / %5.1f / %d   empty %4.1f %% (calm %4.1f, %4.1f), cloud %5d px, order %d, unsent %d\n", RUN[q].name,
-               res.frames * 1000.0 / 30.0, res.mean, res.worst, res.over, res.empty_max / 10.0, res.empty0 / 10.0, res.empty1 / 10.0, res.strays, res.order_bad, res.unsent);
-        const int most = RUN[q].late ? 46 : 36;
-        CHECK(res.frames >= 20 && res.frames <= most && res.worst < 33.0 && res.over == 0,
-              "%s: one change of 0.67 to %.2f s, never a frame over 33 ms (%d frames, worst %.1f ms)", RUN[q].name, most / 30.0, res.frames, res.worst);
-        CHECK(res.unsent == 0, "%s: every frame of it all sent, the cloud moving each frame (%d frames not)", RUN[q].name, res.unsent);
-        CHECK(res.empty_max <= (res.empty0 > res.empty1 ? res.empty0 : res.empty1) + 80,
-              "%s: never a large empty area: at most %.1f %% of the glass's blocks empty (calm %.1f and %.1f)", RUN[q].name, res.empty_max / 10.0, res.empty0 / 10.0, res.empty1 / 10.0);
-        CHECK(res.strays >= 800, "%s: the old picture goes into a cloud of dust (%d lit px lit in neither picture at most)", RUN[q].name, res.strays);
-        CHECK(res.order_bad == 0, "%s: the new lines come up after their dust is in place (%d blocks not)", RUN[q].name, res.order_bad);
+        printf("    %-9s %4.0f ms  %5.1f / %5.1f / %d   grains %5d -> %5d (prototype %5d -> %5d), flying %4d (prototype %4d), fading %5d, coming %5d, extra %.1f s;"
+               " empty %4.1f %% (calm %4.1f, %4.1f), phases off %d, not composed %d\n", RUN[q].name, res.frames * 1000.0 / 30.0, res.mean, res.worst, res.over,
+               res.na, res.nb, RUN[q].na, RUN[q].nb, res.fly, RUN[q].fly, res.spare, res.born, res.extra, res.empty_max / 10.0, res.empty0 / 10.0, res.empty1 / 10.0, res.phase, res.unsent);
+        /* (the prototype's rule, its fit to the panel model: as many pairs as the smaller picture has, at most
+         * FLUID_MORPH_FLY and FLUID_MORPH_FLY_PX px of grains, 2 x 2 px grains 4 px) */
+        const int K = res.na < res.nb ? res.na : res.nb, most = K < FLUID_MORPH_FLY ? K : FLUID_MORPH_FLY, least = most < FLUID_MORPH_FLY_PX / 4 ? most : FLUID_MORPH_FLY_PX / 4;
+        CHECK(res.nb >= 0 && res.fly <= most && res.fly >= least && res.spare == res.na - res.fly && res.born == res.nb - res.fly,
+              "%s: the pairs fly as many as the smaller picture has, at most %d and %d px (%d of %d -> %d); the rest fade (%d) or come up (%d)", RUN[q].name,
+              FLUID_MORPH_FLY, FLUID_MORPH_FLY_PX, res.fly, res.na, res.nb, res.spare, res.born);
+        if (RUN[q].na)
+            CHECK(abs(res.na - RUN[q].na) * 100 <= RUN[q].na * 10 && abs(res.nb - RUN[q].nb) * 100 <= RUN[q].nb * 10,
+                  "%s: the pictures' grains as the prototype's, within 10 %% (%d, %d against %d, %d)", RUN[q].name, res.na, res.nb, RUN[q].na, RUN[q].nb);
+        /* (a question's letters form in the fluid after its first frames: its picture as read has no lines, they come whole at
+         * the end) */
+        CHECK(res.phase == 0 && (res.new_seen > 0 || RUN[q].kind == MK_ASK), "%s: the prototype's phases (old lines gone by 0.324 s, the new in the last 0.132 s, every grain down by 1.081 s + the extra; %d frames off)",
+              RUN[q].name, res.phase);
+        CHECK(res.frames >= 36 && res.frames <= 36 + 9 + 2 + 20 && res.worst <= 33.0 && res.over == 0,
+              "%s: one change of 1.21 s (+ the extra, + the wait for its dust), never a frame over 33 ms (%d frames, worst %.1f ms)", RUN[q].name, res.frames, res.worst);
+        CHECK(res.unsent == 0, "%s: every frame of it all sent, each grain the frame it moves (%d frames not)", RUN[q].name, res.unsent);
+        {   /* (the prototype's own sparse cloud: its emptiest frame, dissolve-proto's render on the same blocks) */
+            const int calm = res.empty0 > res.empty1 ? res.empty0 : res.empty1, most = (calm > RUN[q].empty ? calm : RUN[q].empty) + 30;
+            CHECK(res.empty_max <= most, "%s: never a large empty area: at most %.1f %% of the glass's blocks empty (calm %.1f and %.1f, the prototype %.1f)",
+                  RUN[q].name, res.empty_max / 10.0, res.empty0 / 10.0, res.empty1 / 10.0, RUN[q].empty / 10.0);
+        }
         CHECK(s_morph_stale == 0, "%s: only the picture kept shows, never what its buffer held before (%d px)", RUN[q].name, s_morph_stale);
         s_morph_stale = 0;
-        CHECK(res.diff == 0, "%s: at its end the glass is the new look, whole (%d px differ, %d of them bright)", RUN[q].name, res.diff, res.hard);
+        CHECK(res.diff == 0, "%s: at its end the glass is the new look to the pixel (%d px differ, %d of them bright)", RUN[q].name, res.diff, res.hard);
     }
     {   /* a change in the middle of one (Leo opened from the chart, the chart again 12 frames in): from the glass as it is
          * then, no cut, every frame sent, the chart whole at the end */
         morph_res_t a, b;
-        morph_run(r, MK_SCENE, chart, FLUID_LOOK_KEEP | 200, 0, 0, "to-chart", &a);
         morph_run(r, MK_SCENE, up, FLUID_LOOK_KEEP | 201, 0, 12, "leo-cut", &a);
         const int mid = fluid_draw_morphing(r->d);
         morph_run(r, MK_SCENE, chart, FLUID_LOOK_KEEP | 202, 0, 0, "cut-chart", &b);
-        printf("    interrupted: worst %.1f ms then %.1f ms a frame; %.0f ms after; empty %.1f %%, unsent %d\n", a.worst, b.worst, b.frames * 1000.0 / 30.0, b.empty_max / 10.0, a.unsent + b.unsent);
+        printf("    interrupted: worst %.1f ms then %.1f ms a frame; %.0f ms after; empty %.1f %%, not composed %d\n", a.worst, b.worst, b.frames * 1000.0 / 30.0, b.empty_max / 10.0, a.unsent + b.unsent);
         CHECK(s_morph_stale == 0, "interrupted: only the picture kept shows (%d px)", s_morph_stale);
-        CHECK(mid && a.worst < 33.0 && b.worst < 33.0 && a.over + b.over == 0 && a.unsent + b.unsent == 0, "a change in the middle of one keeps the frame (worst %.1f, %.1f ms)", a.worst, b.worst);
-        CHECK(b.hard == 0 && b.frames <= 40 && !fluid_draw_morphing(r->d), "... from the glass as it was, to the chart whole (%d bright px differ)", b.hard);
-    }
-    {   /* a tap anywhere: the change starts at the finger and every frame of it fits the panel */
-        static const float AT[][2] = { { 0.f, 0.f }, { 120.f, -60.f }, { 226.f, 0.f }, { -150.f, 160.f }, { 0.f, -228.f } };
-        int bad = 0, nat = (int)(sizeof(AT) / sizeof(AT[0]));
-        double wmax = 0.;
-        for (int q = 0; q < nat * 2; q++) {
-            r->fx = S / 2.f + AT[q / 2][0]; r->fy = S / 2.f + AT[q / 2][1];
-            morph_run(r, MK_SCENE, q & 1 ? chart : up, FLUID_LOOK_KEEP | (uint32_t)(q & 1 ? 102 : 101), 0, 0, q & 1 ? "tap-chart" : "tap-leo", &res);
-            const fluid_morph_t *m = &r->d->m;
-            printf("    from (%+4.0f, %+4.0f) to %-9s %4.0f ms  %5.1f / %5.1f / %d\n", AT[q / 2][0], AT[q / 2][1], q & 1 ? "the chart" : "Leo", res.frames * 1000.0 / 30.0, res.mean, res.worst, res.over);
-            bad += res.over || res.unsent || res.frames < 20 || res.frames > 36 || res.diff || fabsf(m->cx - S / 2.f - AT[q / 2][0]) > 0.6f;
-            wmax = fmax(wmax, res.worst);
-        }
-        CHECK(bad == 0 && wmax < 33.0, "a tap anywhere: the change from the finger, 0.67 to 1.2 s, every frame under 33 ms (%d runs not, worst %.1f ms)", bad, wmax);
+        CHECK(mid && a.worst <= 33.0 && b.worst <= 33.0 && a.over + b.over == 0 && a.unsent + b.unsent == 0, "a change in the middle of one keeps the frame (worst %.1f, %.1f ms)", a.worst, b.worst);
+        CHECK(b.diff == 0 && b.frames <= 70 && !fluid_draw_morphing(r->d), "... from the glass as it was, to the chart whole (%d px differ)", b.diff);
     }
     {   /* a reading over a layout a tap just opened (Leo's own, at that layout's subtitle place), driven as the device
          * drives it: after each word no pixel of an earlier word is left on the glass, and what is round the word is
@@ -2685,10 +2693,11 @@ static void test_morph(const char *dir) {
         free(plain);
         fluid_fine_dust_kind(FINE_DUST_SPECKS);
     }
-    free(r->g.px); free(r->snap); free(r->ref); free(r->dots); free(r->cat); free(r->ccol);
+    free(r->g.px); free(r->snap); free(r->ref); free(r->prev); free(r->dots); free(r->cat); free(r->ccol); free(r->wcol);
     fluid_askview_destroy(r->v);
     fluid_fine_destroy(r->fine); fluid_draw_destroy(r->d); fluid_frame_destroy(r->fr); fluid_sim_destroy(r->s);
     free(r);
+    cpk_destroy(cat);
     scene_free(up); scene_free(chart);
     pkg_unref(p);
 }
@@ -2760,7 +2769,7 @@ int main(int argc, char **argv) {
     test_ride(argv[1]);
     test_fine_hard(argv[1]);
     test_open(argv[1]);
-    test_morph(argv[1]);
+    test_morph(argv[1], argc > 3 ? argv[3] : NULL);
     bench(argc > 2 ? argv[2] : "");
     CHECK(P->refs == 1, "every scene gave its package reference back (%d)", P->refs);
     pkg_unref(P);
