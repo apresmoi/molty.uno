@@ -1,0 +1,142 @@
+/* /sim/: a tool, in the site's plain monospace look. The screen is the panel at its own size:
+   466 CSS px, crisp pixels, a thin rim; 2x doubles it. */
+.root {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: calc(var(--m-header-height) + var(--m-space-4)) var(--m-gutter) var(--m-space-12);
+  font-family: var(--m-font-mono);
+  font-size: var(--m-text-sm);
+  color: var(--m-ink);
+}
+.head h1 {
+  margin: 0;
+  font-size: var(--m-text-xl);
+}
+.head p {
+  margin: var(--m-space-1) 0 var(--m-space-4);
+  color: var(--m-dim);
+}
+.main {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--m-space-6);
+  align-items: flex-start;
+}
+.side {
+  flex: 0 0 auto;
+  max-width: 100%;
+}
+.controls {
+  flex: 1 1 420px;
+  min-width: 0;
+}
+.screen {
+  width: 466px;
+  height: 466px;
+  max-width: 100%;
+  border-radius: 50%;
+  outline: 1px solid var(--m-line);
+  outline-offset: 3px;
+  overflow: hidden;
+  background: var(--m-glass);
+  touch-action: none;
+}
+.screen[data-zoom="2"] {
+  width: 932px;
+  height: 932px;
+}
+.glass {
+  display: block;
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+  cursor: pointer;
+}
+.group {
+  margin: 0 0 var(--m-space-3);
+  padding: var(--m-space-2) var(--m-space-3);
+  border: 1px solid var(--m-line);
+  border-radius: var(--m-radius);
+}
+.group legend {
+  padding: 0 var(--m-space-1);
+  color: var(--m-dim);
+}
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--m-space-1) var(--m-space-2);
+  margin: var(--m-space-1) 0;
+}
+.label {
+  color: var(--m-dim);
+}
+.row button,
+.row select,
+.row input[type="number"],
+.row input[type="datetime-local"] {
+  font: inherit;
+  color: var(--m-ink);
+  background: var(--m-panel);
+  border: 1px solid var(--m-line);
+  border-radius: var(--m-radius);
+  padding: 2px var(--m-space-2);
+}
+.row button {
+  cursor: pointer;
+}
+.row button:hover {
+  border-color: var(--m-dim);
+}
+.row button.on {
+  border-color: var(--m-accent);
+  color: var(--m-accent);
+}
+.row input[type="number"] {
+  width: 6em;
+}
+.row textarea {
+  flex: 1 1 100%;
+  font: inherit;
+  color: var(--m-ink);
+  background: var(--m-panel);
+  border: 1px solid var(--m-line);
+  border-radius: var(--m-radius);
+  padding: var(--m-space-1);
+}
+.small {
+  margin: var(--m-space-1) 0;
+  color: var(--m-dim);
+  max-width: 466px;
+}
+.readout {
+  margin: var(--m-space-1) 0;
+  max-width: 466px;
+}
+.error {
+  color: var(--m-warn);
+}
+.log {
+  margin-top: var(--m-space-6);
+}
+.events {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 22em;
+  overflow: auto;
+  border-top: 1px solid var(--m-line);
+}
+.events li {
+  padding: 2px 0;
+  border-bottom: 1px solid var(--m-line);
+  overflow-wrap: anywhere;
+}
+.at {
+  color: var(--m-dim);
+}
+.note {
+  white-space: pre-wrap;
+  color: var(--m-dim);
+}

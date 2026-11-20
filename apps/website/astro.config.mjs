@@ -18,6 +18,26 @@ const repoPath = (path) => fileURLToPath(new URL(path, import.meta.url));
 /** @param {{ source: string }} doc */
 const syncedExists = (doc) => existsSync(repoPath(`../../${doc.source}`));
 
+/** The molty-astro skill's sky (skills/molty-astro/scripts/sky.mjs) in the browser, for the
+ *  simulator's scenes: it reads its vendored astronomy-engine (CommonJS) through node:module's
+ *  createRequire. For that one importer only, node:module is a module that hands it the same file,
+ *  run once with an exports object. Nothing of the skill is copied. */
+const SKY = repoPath('../../skills/molty-astro/scripts/sky.mjs');
+const SKY_REQUIRE = '\0molty-sky-require';
+/** @type {{ name: string, enforce: 'pre', resolveId: (id: string, importer?: string) => string | null, load: (id: string) => string | null }} */
+const skyInBrowser = {
+  name: 'molty-sky-in-browser',
+  enforce: 'pre',
+  resolveId: (id, importer) => (id === 'node:module' && importer?.split('?')[0] === SKY ? SKY_REQUIRE : null),
+  load: (id) =>
+    id === SKY_REQUIRE
+      ? `import src from ${JSON.stringify(repoPath('../../skills/molty-astro/scripts/vendor/astronomy.min.js') + '?raw')};
+const exports = {};
+new Function('exports', 'module', src)(exports, { exports });
+export const createRequire = () => () => exports;`
+      : null,
+};
+
 export default defineConfig({
   site: SITE_URL,
   redirects: DOC_REDIRECTS,
@@ -32,15 +52,18 @@ export default defineConfig({
       alias: [
         { find: '@molty-wasm', replacement: repoPath('../../device/firmware/web/built') },
         { find: '@packages', replacement: repoPath('../../packages') },
+        { find: '@skills', replacement: repoPath('../../skills') },
       ],
     },
+    plugins: [skyInBrowser],
     server: { fs: { allow: ['../..'] } },
     // The module, the packages and the still ship as real files (cacheable), not data URIs.
     build: { assetsInlineLimit: 0 },
   },
   integrations: [
     react(),
-    sitemap(),
+    // the simulator (/sim/) is a tool for the owner: not listed
+    sitemap({ filter: (page) => !page.includes('/sim/') }),
     starlight({
       title: SITE_NAME,
       description: SITE_DESCRIPTION,

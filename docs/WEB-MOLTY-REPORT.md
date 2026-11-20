@@ -1,7 +1,7 @@
 # Web Molty report
 
-Branch `feat/web-molty`, cut from `trial/hd-dust` at `e600d2a`. Nothing was deployed, pushed,
-flashed or sent.
+First built on `feat/web-molty` (cut from `trial/hd-dust` at `e600d2a`); the later passes are on
+`trial/hd-dust` itself. Nothing was deployed, pushed, flashed or sent.
 
 ## Status
 
@@ -16,6 +16,91 @@ The website's screens now run the firmware's own drawing code. No JavaScript dra
   creature package.
 - **All checks pass.** See "How to run it".
 
+### Third pass: the simulator (`/sim/`)
+
+Juan: "give me an html with the full ui we have in molty, with buttons so I can open the astrology
+chart and I need to see everything in the web and interact in the same way as the device".
+
+- **Where.** `http://127.0.0.1:4337/sim/` on the local preview (`/sim/` of any build). Not in the
+  navigation, the sitemap or llms.txt; `noindex`. Its code loads only there.
+- **The glass.** The panel at 466 x 466 CSS px, crisp pixels, 2x zoom, a thin rim. The mouse is the
+  finger: a click is a tap, two quick ones a double tap, a press held stirs the water. Every pixel
+  is the module's.
+- **The controls,** each one a firmware entry through a small glue call
+  (`device/firmware/web/web_device.c`, `services/molty-screen/sim.ts`):
+  creature (the cat's 7 moods and `working`, all 18 gestures of `packages/cat/cat.json`, shake:
+  an IMU trace into gesture.c's own detector, which also starts a listen as shake to talk does);
+  talk (the agent's listen with its ring, a voice slider and "speak", its end of turn and the
+  firmware's `thinking` acknowledgement (link_ack_decide), a say with its words a minute);
+  questions (yes or no, three, five, the pairing question as link_pair.c asks it, the install
+  question as pkg_cmd.c asks it, cancel); progress (grow, no percent, done, stop; the install
+  flow: tap install, the ring follows a 3 s download, full, `pkg installed`);
+  scenes (the chart for any UTC moment, default 1991-06-06 14:45, tonight, the signs, the five
+  aspects, the five events, any sign's close-up, queue, clear; every param from the skill's own
+  `sky.mjs`, run in the browser by a 15-line Vite plugin); device (screen sleep and wake, do not
+  disturb, the accept and reject buttons held as the device's, restart: a new instance from its
+  boot screen).
+- **What an agent hears.** Every event the device would send, newest first: `tap` (with `spot`,
+  `opened`, `closed`), `double_tap`, `scene`, `answer`, `shake`, `button`, `dnd`, `pkg`,
+  `pair.result`. Built by link_protocol.c's own frames. Taps, double taps, the buttons and the
+  shake go through sense.c's rules on gesture.c (tap or double tap in 350 ms, a tap during a
+  recording stops it, the bindings out of the box, the rate limits).
+- **The state line.** Creature, state, mood, gesture, scene and its seconds left
+  (`GET /api/creature/state`). "copy this state as text" copies the firmware commit and module
+  hash, the speed, the switches and the last 20 events.
+- **Two speeds.** Browser: 60 frames a second, the whole panel each frame. Device (modelled): the
+  drawer's own windows only (the task's locals kept across frames; the panel keeps what it was
+  sent), each frame costed with the panel's measured constants and shown that long, the
+  firmware's clock moved by as much. The readout: frames a second, frame p50 / p95 / worst over
+  4 s, windows and kpx sent, the device's work for the frame. The panel in device speed is
+  checked against the firmware's own whole draw (`wm_glass_off`): under Node, 0 pixels off through
+  a tour of every screen, but for 1 pixel in 2 frames of a reading and 4 to 20 pixels for half a
+  second after a change of picture. The panel model is the 1.75C driver's: whole row pairs, an odd
+  edge row sent full width from its framebuffer.
+- **Lab.** The firmware's experiment switches, one glue line each (`LAB` in web_device.c) and one
+  line of words (`features/sim/controls.ts`): "Dust in scenes" (fine specks, the cat's dots, the
+  cat's dots with lighter sending) and "How far fine specks ride a tap's wave" (12 px, 64 px,
+  whole screen). Hidden when the module has none.
+
+**Device speed against the device's own logs** (current firmware, an agent's change from the
+centre, cat to chart; the device's line: `anim wave 2399ms f=54 s=54 kpx=24.6/30.6 win=26.0
+pan=41/48/49`, parts `cmp=19.6 push=3.9 wait=0.1 cells=9.8 simw=6.2`):
+
+| | device | sim, device speed | off by |
+|---|---|---|---|
+| frames of the wave | 54 | 54 | 0 |
+| length | 2399 ms | 2071 ms | -14 % |
+| kpx a frame, mean / most | 24.6 / 30.6 | 24.4 / 30.6 | -1 % / 0 |
+| windows a frame | 26.0 | 26.5 | +2 % |
+| frame interval p50 / p95 / worst | 41 / 48 / 49 ms | 40 / 42 / 42 ms | -2 / -12 / -14 % |
+| drawer work, mean (cells + send) | 33.4 ms | 36.6 ms | +10 % |
+| calm chart | about 33 fps, worst near 20 ms of work | 33.3 fps, worst 21.0 ms | |
+
+- The windows and pixels are the firmware's own send path, so they match by construction of the
+  code, not of the model. The times are the model: `DEV_*` at the top of web_device.c, each with
+  its source (scene_test.c's panel model and the wave constants measured at 2113895).
+- The 54 frames are two waves: the change, and the scene's dust arriving by its own wave once it
+  is built. The dust's build is budgeted by the firmware's clock, so the clock runs at
+  `DEV_CPU_X` (100) times the wall clock in device speed (a set builds in 5.6 ms here, 0.45 to
+  0.8 s on the device). Without it the dust was ready at once and the sim showed one wave of 27
+  frames. That factor depends on the computer: a slower one builds slower.
+- The older logs (`taps-1c2b515.log`, `taps-b0aa07f.log`) are from the row-by-row change and the
+  quota pacing, both since deleted: not comparable.
+- A tap on the chart, modelled (work mean / worst ms, cells included): specks with a 12 px ride
+  18.5 / 20.9 on empty glass and 22.4 / 32.0 on Mars; riding the whole glass 32.5 / 48.6; the
+  cat's dots 25.2 / 34.4 and 26.8 / 35.3; the cat's dots lighter 20.3 / 26.6 and 22.7 / 28.9. The
+  firmware agent's own model reads 10 to 30 % higher (it says it leans pessimistic); the order is
+  the same.
+- **Found:** chart back to the cat (scene.clear) is modelled at 60 to 97 ms a frame for about 20
+  frames (up to 85 kpx composed a frame). That is the firmware's own wave to the cat. Worth a look
+  on the device.
+- **Found, open:** after the aspect is cleared back to the cat, in the browser (not under Node,
+  not with a slower modelled CPU), 22 to 58 dust pixels near the lower rim stay unlike the
+  firmware's whole draw for good (2 x 2 dots at about (44, 273), (124, 389), (136, 415)). Either
+  the firmware's wave to the cat leaves cells it marks sent unsent, or the simulator's model of
+  the drawer differs in some browser-only timing; not found. `pnpm sim` notes it (up to 256
+  pixels) and fails above that.
+
 ### Second pass: the page's look
 
 After Juan saw the first build: the screen must come up as one thing, the whole page must wear
@@ -29,19 +114,19 @@ the device's look, one water for page and screens, and the cat walks in.
 - **What the firmware's renderer draws on the page.** Every screen, and now every heading: each
   word is a small scenes package (lines and arcs) played by the firmware's scene player in high
   definition, so the letters are thin sharp lines with the dust along them.
-- **What is page-side, exactly.** The renderer draws one round panel, at most 511 px across in
-  high definition, from a fixed camera. It cannot be the page's field. So:
-  1. The page's dust is four PNG tiles made by a script from the firmware's own numbers
-     (`fluid_fine.h` density, level, colour; `fluid_fine.c` hash and ordered noise). Loose dust
-     everywhere, one layer of it drifting by CSS. Ordered, denser dust fades in round each
-     device and each heading.
-  2. The wave a tap sends through the page is drawn by `services/page-water` (about 150 lines):
-     a ring at the firmware's wave speed, gathering the ordered specks along its crest.
-  A test pins those numbers to the firmware's source and fails when they differ.
-- **One water.** A tap anywhere starts one ring at the pointer. Inside a screen it is the
-  firmware's own ripple, and the page's ring starts at the same point and speed, so it crosses
-  the rim. A ring from outside pushes the screen's water where it crosses the rim
-  (`wm_wave`), and the firmware's fluid carries it across.
+- **One grain (since then).** The page's dust is the device's own motes (`creature_dots.c`) on the
+  device's dot lattice, 8 x 13 px cells, at the hero screen's scale: two tiles made from the
+  water's field at rest (`pnpm dust-tile`), loose everywhere, denser round each device and
+  heading (one page layer masked from `[data-dust-focus]`, after hydration).
+- **One water (since then).** The page's water is the firmware's `fluid_sim.c` (the wave) and
+  `fluid_draw.c` (crisp dots) on a grid as wide as the window (`device/firmware/web/web_field.c`,
+  one more instance of the module); no page-side stepper. A screen takes the field's water in a
+  band at 0.74 to 0.86 of its radius (`wm_couple`), taps inside a screen go into the field too,
+  one clock drives all (`clock.ts`). Measured: a front inside the hero screen is 1.7 px from the
+  page's on average, 4 px at most.
+- **Headings (since then).** Each heading plays on the braille haze (`wm_haze`) in a window with
+  as many pixels as the page's dust, and takes all its water from the field times
+  `HEADING_GAIN` 2.5, so it loosens as a front arrives and sharpens back.
 - **The entrance.** The cat starts beyond the right edge of the browser window, walks across the
   page, goes in under the bezel and sits at its own place. Outside the glass only the cat is
   drawn, on a clear canvas: the firmware's own picture with everything but the creature's cells
@@ -63,7 +148,8 @@ the device's look, one water for page and screens, and the cat walks in.
 | The module | `device/firmware/web/built/molty.wasm` + `molty.json` | Committed. The manifest records the toolchain, the hash of every source, and the fidelity result. |
 | Build and check tool | `tools/web-molty/` | `make web-molty`, `make web-molty-test`. |
 | Loader and screen | `apps/website/src/services/molty-screen/` | `core.ts` (no DOM), `screen.ts` (canvas, frames, pointer), `program.ts`. |
-| The page's wave | `apps/website/src/services/page-water/` | Page-side. See above. |
+| The page's water | `device/firmware/web/web_field.c`, `apps/website/src/services/page-water/` | The firmware's sim and crisp dots on a window-wide grid; the page side is the canvas, the mask and the taps. |
+| The simulator | `device/firmware/web/web_device.c`, `services/molty-screen/sim.ts`, `components/SimPage`, `features/sim`, `pages/sim.astro` | Device speed, the senses, the lab, the page. |
 | Components | `MoltyScreen`, `MoltyWord`, `WordHeading`, `PageWater`, `MoltyActs`, `MoltyShowcase`, `SpeedReader` | Every round screen is a `MoltyScreen`, every display word a `MoltyWord`. |
 
 ### The rule for the built module
@@ -86,17 +172,20 @@ So a change to how a Molty looks is: change the firmware, run `make web-molty`, 
 `make web-molty` and `make web-molty-test` both do this:
 
 - Play `device/firmware/web/fidelity.script` on the native build and on the module.
-- Fixed seed, fixed inputs, fixed frame times. **2051 frames, all identical, every pixel.**
+- Fixed seed, fixed inputs, fixed frame times. **2405 frames, all identical, every pixel.**
 - The script: boot screen, the cat 2.0.0, a tap, three moods, eat, yarn, walk, a shake, a listen
-  with a voice, a question answered by a tap, a say, the astrology chart with a tapped sign.
-- The native build is `-O2` (as the device), the module `-Os`. Different optimisers, same pixels.
+  with a voice, a question answered by a tap, a say, the astrology chart with a tapped sign, then
+  changes of picture: cat to chart, a tapped sign's close-up, back, chart to Saturn, back to the cat.
+- Both builds are `-O2`, as the device (the module was `-Os`: a sixth smaller, a sixth slower).
+- The simulator's device speed is not in the check: its clock runs with the computer's
+  (`web_sdk_cpu`), so it is not the same from run to run. With it off the module is unchanged.
 - The site's `pnpm test` then proves the committed module still draws those frames.
 
 ### Sizes
 
 | What | Raw | gzip | When it loads |
 |---|---|---|---|
-| `molty.wasm` | 343,499 B | 162,180 B | When the first screen mounts, after first paint |
+| `molty.wasm` | 451,093 B | 203,970 B | When the first screen mounts, after first paint |
 | Loader (`services/molty-screen`, minified) | 7,904 B | 3,252 B | With the device island |
 | Page wave (`services/page-water`, minified) | 3,083 B | 1,575 B | With the page |
 | Cat package | 247,792 B | 108,707 B | With the module |
@@ -226,6 +315,7 @@ pnpm in-place
 pnpm screens
 pnpm molty
 pnpm fullpage
+pnpm sim                # the simulator, http://localhost:4330/sim/ (pictures in e2e-out/sim/)
 
 # 4. only after changing the firmware's drawing code: rebuild the module
 brew install emscripten # 7.0.0, pinned in device/firmware/web/build.sh
@@ -263,12 +353,17 @@ Pictures, in `apps/website/e2e-out/` (not committed):
 - **60 frames a second is faster than the device.** The device paces itself at 33. Almost
   everything in the firmware runs on time, not on frames. To match the device exactly, set `FPS`
   to 33 in `services/molty-screen/screen.ts`.
-- **The web repaints the whole panel every frame.** The device sends only changed cells. Same
-  drawing code, its own full-repaint path.
-- **Page-side choices that are mine, not the firmware's.** How far the denser dust reaches round
-  a device (2.6 device widths) and a heading; that a page wave fades slower than a screen's
-  (so it can cross a screen from outside); how hard it pushes the screen's water at the rim.
-  All three are one constant each.
+- **The site's screens repaint the whole panel every frame.** The device sends only changed
+  cells. The simulator's device speed sends what the device sends.
+- **Look choices nobody has signed off** (the previous pass, page side, one constant each):
+  1. heading lines are crisp and solid, no longer fuzzy dust lines;
+  2. `CARRY = { leak: 1, damp: 0.998 }` while a front is out on the page (the screens on the site
+     too), the device's 0.985 / 0.975 once the water stands;
+  3. a crest brings the denser motes on the page (without it a ring in loose dust cannot be seen);
+     inside a screen there is no such rule, so the ring looks fuller outside than inside;
+  4. the ring on the bare page is faint in a still picture (look at it moving);
+  5. devices other than the hero (420, 540, 611 px) show a larger grain than the page;
+  6. how far the denser dust reaches round a device and a heading (`config/water.mjs` `FOCUS`).
 - **The entrance runs the cat's clock faster.** 2.2 times while it walks in, 4.5 times while it
   stops, turns and sits: 3.5 s at 1280 px and 3.4 s at 390 px from its nose crossing the
   window's edge to sitting (measured with no screenshots being taken). Same clips, brisker. Two constants (`ENTER.rate`, `ENTER.settle`). It
@@ -281,6 +376,28 @@ Pictures, in `apps/website/e2e-out/` (not committed):
   in the firmware's creature drawing, which I did not touch.
 - **A firmware quirk, not mine.** A question asked within about a second of a listen ending forms
   late (about 3 s instead of 1.6 s), because the water is still being calmed. Seen in both builds.
+- **The null buffers of a change over words are fixed in the firmware** (`fluid_draw_morph_again`
+  makes them now); the glue's workaround in `wm_start` is gone.
+- **The simulator stands in for what sits behind the network**, each named in web_device.c: the
+  link's listen (the ring, the shake event, the acknowledgement), a question's job and answer,
+  the install's download (its bytes arrive over 3 s), do not disturb. sense.c's task loop cannot
+  run in the web build (an endless loop on the link's calls); `sense_tick` follows its loop body
+  on gesture.c. A firmware seam would make it the same code: split the body of `sense_task`'s
+  `for (;;)` into `void sense_tick(sense_t *st, uint32_t now)` with its locals (`g`, `tapper`,
+  `presser`, the limits, `sw`, `prev`) in a `sense_t`, and the link calls behind a small table.
+
+### Checks on this build (the simulator pass)
+
+- `make web-molty`: 2405 frames identical to the native build. `make web-molty-test`: pass.
+- `pnpm check`, `pnpm test` (60 of 60), `pnpm build` (21 pages, `/sim/` not in the sitemap).
+- `pnpm sim`: all passed, both speeds (32 checks, one note above); pictures in
+  `apps/website/e2e-out/sim/`.
+- `pnpm first-load`: all passed. `pnpm in-place`: all passed (the cat crosses the rim one picture
+  in every frame, 0.00 px step).
+- `pnpm water`: 16 of 17, the same one as before: "a tapped sign's close-up ... beginning 29 % of
+  the glass from the finger" (limit 20 %). Not looked into further: the measure (the centroid of
+  the first changed pixels, which the tapped sign's own growing drawing also moves) or the wave.
+- Not rerun: `pnpm screens`, `pnpm molty`, `pnpm fullpage`.
 
 ### Not verified
 

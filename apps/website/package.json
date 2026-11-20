@@ -25,6 +25,7 @@
     "fullpage": "node e2e/fullpage.mjs",
     "molty": "node e2e/molty.mjs",
     "water": "node e2e/water.mjs",
+    "sim": "node e2e/sim.mjs",
     "molty-still": "node scripts/molty-still.mjs",
     "dust-tile": "node scripts/dust-tile.mjs",
     "words": "node scripts/words-package.mjs",
