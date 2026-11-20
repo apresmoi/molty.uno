@@ -407,9 +407,13 @@ uint8_t fluid_braille_contour(const float *sub);
 #define FLUID_MORPH_LINES     16384    /* old lines' pixels read at most (beyond: dust)                                 */
 #define FLUID_MORPH_DUST_US   150000   /* at the cloud, the new look's inputs (`ready`) awaited this long at most ..   */
 #define FLUID_MORPH_DUST_N    5        /* .. or this many frames (whichever first) ..                                  */
-#define FLUID_MORPH_HOLD_US   300000   /* .. and the clock stands there this long at most: the picture's rest read at once */
-#define FLUID_MORPH_HOLD_N    9
-#define FLUID_MORPH_READ_US   2500     /* the new picture read a frame, at most (the panel model's us, and the device's)  */
+#define FLUID_MORPH_HOLD_US   600000   /* .. and the clock stands there this long at most (else the look comes at once) */
+#define FLUID_MORPH_HOLD_N    18
+#define FLUID_MORPH_FRAME_US  13000    /* the change's own work a frame (us): the panel's frame is ~31.5 ms, its send ~12;
+                                        * reading and sorting take what the grains moving leave of it                 */
+#define FLUID_MORPH_OLD_US    22000    /* the old picture read a frame, while nothing moves and nothing is sent         */
+#define FLUID_MORPH_PASS_US   12000    /* (the drawer's one pass for the new look, as the panel model counts it)        */
+#define FLUID_MORPH_FINE_US   5000     /* (the dust's frame, fluid_fine_frame, as the panel model counts it)            */
 #define FLUID_MORPH_BORN_FAST 6000     /* new grains with no pair: more, and they come up over 0.3 s more (the prototype's
                                         * extra, as its fit to the panel chose it: to the chart, not to Leo)            */
 /* the parts of a change's own work in a frame (fluid_morph_t.prof, the logs' `anim wave.work`): the look's own changes
@@ -441,6 +445,7 @@ typedef struct {
     int      ready_at;                 /* the frame its inputs were whole (-1: not yet)                                 */
     bool     forced;                   /* the new picture read before its inputs were whole: its dust comes after      */
     bool     keep;                     /* its dust only comes (FLUID_LOOK_DUST): the lines stay as they are             */
+    bool     pass;                     /* this frame the drawer made its new look (its one cells pass)                  */
 } fluid_morph_t;
 /** What a change shows now (tests, logs): the pairs waiting, flying, landed; the grains with no pair shown (old, new);
  *  the old lines' and the new lines' pixels lit. */
