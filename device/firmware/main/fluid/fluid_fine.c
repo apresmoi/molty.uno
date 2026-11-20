@@ -27,6 +27,16 @@ static inline int64_t now_us(void) { struct timespec ts; clock_gettime(CLOCK_MON
 #define DOT_REFR  3.3f                  /* fluid_draw.c: the dots' shift, sub-dots per unit of wave slope */
 #define FAR       0xFFFFu
 #define LUT_N     1024                  /* e^(-d / FALL), e^(-d / TINT_FALL), d in 0.1 px steps */
+/* the calm drift's two waves: cycles across the stage (u, v) and their periods (of FINE_DRIFT_S): a (1.1, 0.6) going one
+ * way, b (-0.7, 1.2) the other, a third slower. Each sways a cell's dust on a small loop (x by its sine, y by its
+ * cosine), as water carries what floats on it; the two together never repeat a pattern the eye can follow. */
+#define DRIFT_AU   1.1f
+#define DRIFT_AV   0.6f
+#define DRIFT_BU  -0.7f
+#define DRIFT_BV   1.2f
+#define DRIFT_B_T  0.73f
+#define SHIFT_HOLD 0.8f                 /* a cell's shift steps a pixel once the water or the drift is this far past it (0.5 would
+                                         * round: a slope hovering there would flip it back and forth) */
 
 enum { PH_IDLE, PH_RASTER, PH_FWD, PH_BWD, PH_EXTRACT, PH_LEVELS };
 
@@ -35,13 +45,10 @@ static float *s_near, *s_tint, *s_sin;
 /* EXPERIMENT scene dust (fluid_fine.h; delete once Juan picks) */
 static volatile int s_dust_kind = FINE_DUST_SPECKS;   /* (the fine specks by default: Juan rejected the dots alone) */
 static volatile int s_hard_pct = FINE_HARD_PCT;
-static volatile float s_ride = FINE_RIDE;
 void  fluid_fine_dust_kind(int kind) { s_dust_kind = kind >= FINE_DUST_SPECKS && kind <= FINE_DUST_FINE_DOTS ? kind : FINE_DUST_SPECKS; }
 int   fluid_fine_dust_kind_get(void) { return s_dust_kind; }
 void  fluid_fine_hard_density(int percent) { s_hard_pct = percent < 0 ? 0 : percent > FINE_HARD_MAX ? FINE_HARD_MAX : percent; }
 int   fluid_fine_hard_density_get(void) { return s_hard_pct; }
-void  fluid_fine_ride_px(float px) { s_ride = px < 0.f ? 0.f : px > 4096.f ? 4096.f : px; }
-float fluid_fine_ride_px_get(void) { return s_ride; }
 static bool s_lut;
 
 static inline float hash_u(int a, int b, uint32_t c) {     /* fluid_draw.c's, chart-engine.js hashU */
@@ -55,6 +62,12 @@ static inline float sin_t(float t) {
     const float q = t * 1024.f;
     const int i = (int)q;
     return s_sin[i] + (s_sin[i + 1] - s_sin[i]) * (q - (float)i);
+}
+/* v in whole px, the step held (*q) kept until v is SHIFT_HOLD past it */
+static inline int held(int8_t *q, float v) {
+    while (v > *q + SHIFT_HOLD) (*q)++;
+    while (v < *q - SHIFT_HOLD) (*q)--;
+    return *q;
 }
 static inline float sstep(float a, float b, float x) {
     float t = (x - a) / (b - a);
@@ -138,14 +151,19 @@ fluid_fine_t *fluid_fine_create(int W, int H, int fb_w, int fb_h) {
     f->bcap = maxh * S;
     f->bpos = FINE_CALLOC(sizeof(uint32_t) * (size_t)f->bcap); f->bcol = FINE_CALLOC(sizeof(uint16_t) * (size_t)f->bcap);
     f->bcell = FINE_CALLOC(sizeof(uint16_t) * (size_t)f->bcap);
-    f->ride = FINE_CALLOC((size_t)f->N); f->vis = FINE_CALLOC((size_t)f->N); f->imm = FINE_CALLOC((size_t)f->N); f->why = FINE_CALLOC((size_t)f->N);
+    f->dq = FINE_CALLOC(4 * (size_t)f->N); f->wq = f->dq + 2 * f->N; f->dcol = FINE_CALLOC(sizeof(float) * 4 * (size_t)W); f->vis = FINE_CALLOC((size_t)f->N); f->imm = FINE_CALLOC((size_t)f->N); f->why = FINE_CALLOC((size_t)f->N);
     f->tot = FINE_CALLOC(sizeof(uint32_t) * (size_t)f->N); f->stat = FINE_CALLOC(sizeof(uint32_t) * (size_t)f->N);
     f->eff = FINE_CALLOC(sizeof(uint32_t) * (size_t)f->N); f->tot2 = FINE_CALLOC(sizeof(uint32_t) * (size_t)f->N);
     f->fresh = FINE_CALLOC((size_t)f->N); f->lgrid2 = FINE_CALLOC((size_t)f->lg * (size_t)f->lg);
-    if (!f->bpos || !f->bcol || !f->bcell || !f->ride || !f->vis || !f->imm || !f->why || !f->tot || !f->stat || !f->eff || !f->tot2 || !f->fresh || !f->lgrid2) {
+    if (!f->bpos || !f->bcol || !f->bcell || !f->dq || !f->dcol || !f->vis || !f->imm || !f->why || !f->tot || !f->stat || !f->eff || !f->tot2 || !f->fresh || !f->lgrid2) {
         fluid_fine_destroy(f); return NULL;
     }
     if (!light_tables(f->lg, S)) { fluid_fine_destroy(f); return NULL; }   /* (one stage size a boot) */
+    for (int i = 0; i < W; i++) {                               /* the drift waves' column parts (fluid_fine_frame) */
+        const float u = (f->cx[i] + f->cx[i + 1]) * 0.5f / S;
+        f->dcol[4 * i] = sinf(6.2831853f * DRIFT_AU * u); f->dcol[4 * i + 1] = cosf(6.2831853f * DRIFT_AU * u);
+        f->dcol[4 * i + 2] = sinf(6.2831853f * DRIFT_BU * u); f->dcol[4 * i + 3] = cosf(6.2831853f * DRIFT_BU * u);
+    }
     f->live = f->ready = f->build = -1;
     f->cbox[1] = f->pbox[1] = f->want_box[1] = f->bbox[1] = -1.f;   /* none */
     f->pbb[1] = -1;
@@ -159,7 +177,7 @@ void fluid_fine_destroy(fluid_fine_t *f) {
     FINE_FREE(f->cx); FINE_FREE(f->cy); FINE_FREE(f->cellx); FINE_FREE(f->celly); FINE_FREE(f->shp); FINE_FREE(f->box);
     FINE_FREE(f->rowbuf); FINE_FREE(f->sx); FINE_FREE(f->sy); FINE_FREE(f->sig); FINE_FREE(f->sig0); FINE_FREE(f->lgrid);
     FINE_FREE(f->px0); FINE_FREE(f->pc); FINE_FREE(f->pa); FINE_FREE(f->bpos); FINE_FREE(f->bcol); FINE_FREE(f->bcell);
-    FINE_FREE(f->ride); FINE_FREE(f->vis); FINE_FREE(f->imm); FINE_FREE(f->why); FINE_FREE(f->tot); FINE_FREE(f->stat); FINE_FREE(f->eff);
+    FINE_FREE(f->dq); FINE_FREE(f->dcol); FINE_FREE(f->vis); FINE_FREE(f->imm); FINE_FREE(f->why); FINE_FREE(f->tot); FINE_FREE(f->stat); FINE_FREE(f->eff);
     FINE_FREE(f->dist); FINE_FREE(f->src); FINE_FREE(f->lit); FINE_FREE(f->lv); FINE_FREE(f->lv2);
     FINE_FREE(f->tot2); FINE_FREE(f->fresh); FINE_FREE(f->lgrid2);
     FINE_FREE(f);
@@ -663,53 +681,27 @@ void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_
         f->step_key = step;
     } else f->step_key = 0;
 
-    /* each cell's shift: the wave's, in whole sub-dots (as refracted dots) but at most one across and two down, in
-     * stage px: its dust rides inside the cell (what leaves one side comes in at the other: fluid_fine_rect), so a
-     * shift costs no speck any work. Only within FINE_RIDE px of a tapped spot's drawing or the caption (where the eye
-     * is), every frame. */
-    const float subx = (float)S / (2 * W), suby = (float)S / (4 * H), rk = DOT_REFR / FQ_H, cwf = (float)S / W, chf = (float)S / H;
-    const bool capbox = box != NULL || (f->np && f->pbox[1] >= f->pbox[0] && now - f->prev_t < FINE_SWAP_S);
-    const float *cb = box ? box : f->pbox;
-    {   /* where it rides: worked out again only when the tapped drawing or the caption's box changes */
-        uint32_t rkey = capbox ? mix((uint32_t)lrintf(cb[0]) | (uint32_t)lrintf(cb[1]) << 16, (uint32_t)lrintf(cb[2]) | (uint32_t)lrintf(cb[3]) << 16) : 7u;
-        for (int k = 0; o->still && k < N; k++) if (o->still[k] == 2) rkey = rkey * 31u + (uint32_t)k;
-        const float ride = s_ride;                      /* (EXPERIMENT: FINE_RIDE unless set; the whole glass past its size) */
-        rkey = (rkey * 31u + (uint32_t)f->rim) * 31u + (uint32_t)lrintf(ride * 4.f);
-        if (rkey != f->ride_key) {
-            f->ride_key = rkey;
-            memset(f->ride, ride >= S, (size_t)N);
-            for (int j = 0; f->rim && j < H; j++) for (int i = 0; i < W; i++) {
-                const float ex = (i + 0.5f) * cwf - S * 0.5f, ey = (j + 0.5f) * chf - S * 0.5f, lim = FINE_RIM * S * 0.5f;
-                if (ex * ex + ey * ey >= lim * lim) f->ride[j * W + i] = 1;
-            }
-            const int ri = (int)ceilf(ride / cwf), rj = (int)ceilf(ride / chf);
-            for (int k = 0; o->still && ride < S && k < N; k++) {
-                if (o->still[k] != 2) continue;
-                const int ci = k % W, cj = k / W;
-                for (int j = cj - rj; j <= cj + rj; j++) for (int i = ci - ri; i <= ci + ri; i++) {
-                    if (i < 0 || j < 0 || i >= W || j >= H) continue;
-                    const float ex = (i - ci) * cwf, ey = (j - cj) * chf;
-                    if (ex * ex + ey * ey <= ride * ride) f->ride[j * W + i] = 1;
-                }
-            }
-            for (int j = 0; capbox && j < H; j++) for (int i = 0; i < W; i++) {
-                const float px = (i + 0.5f) * cwf, py = (j + 0.5f) * chf;
-                const float ex = px < cb[0] ? cb[0] - px : px > cb[1] ? px - cb[1] : 0.f, ey = py < cb[2] ? cb[2] - py : py > cb[3] ? py - cb[3] : 0.f;
-                if (ex * ex + ey * ey <= ride * ride) f->ride[j * W + i] = 1;
-            }
+    /* each cell's shift, stage px: the water's (its slope as the dots take it, DOT_REFR) in whole px, at most a sub-dot
+     * across and two down, everywhere, plus the calm drift's pixel either way. Its dust rides inside the cell (what leaves
+     * one side comes in at the other: fluid_fine_rect), so a shift costs no speck any work and changes only its own cell.
+     * Calm water adds nothing: the dust is where the drift alone puts it. While the picture changes it holds still (as
+     * the light: the change is the drawer's, the water under it is not its business), then takes the water again. */
+    const float subx = (float)S / (2 * W), suby = (float)S / (4 * H);
+    const float kx = DOT_REFR / FQ_H * 2.f * subx, ky = DOT_REFR / FQ_H * 4.f * H / W * suby, mx = (int)(subx + 0.5f), my = (int)(2.f * suby + 0.5f);
+    const float ph = f->light_t * (1.f / FINE_DRIFT_S), A = FINE_DRIFT_PX * 0.5f;
+    for (int j = 1; !(f->pause && f->drawn) && j < H - 1; j++) {
+        const float v = (f->cy[j] + f->cy[j + 1]) * 0.5f / S, ra = 6.2831853f * (DRIFT_AV * v - ph), rb = 6.2831853f * (DRIFT_BV * v + DRIFT_B_T * ph);
+        const float sa = sinf(ra), ca = cosf(ra), sb = sinf(rb), cb = cosf(rb);
+        for (int i = 1; i < W - 1; i++) {
+            const int k = j * W + i;
+            const float *c = f->dcol + 4 * i;
+            const float dx = A * (c[0] * ca + c[1] * sa + c[2] * cb + c[3] * sb), dy = A * (c[1] * ca - c[0] * sa - c[3] * cb + c[2] * sb);
+            float wx = (float)(s->h[k - 1] - s->h[k + 1]) * kx, wy = (float)(s->h[k - W] - s->h[k + W]) * ky;
+            wx = wx < -mx ? -mx : wx > mx ? mx : wx; wy = wy < -my ? -my : wy > my ? my : wy;
+            const int8_t sx = (int8_t)(held(f->dq + k, dx) + held(f->wq + k, wx)), sy = (int8_t)(held(f->dq + N + k, dy) + held(f->wq + N + k, wy));
+            if (sx != f->sx[k] || sy != f->sy[k]) f->why[k] |= 1u << FLUID_ANIM_WATER;
+            f->sx[k] = sx; f->sy[k] = sy;
         }
-    }
-    for (int j = 1; j < H - 1; j++) for (int i = 1; i < W - 1; i++) {
-        const int k = j * W + i;
-        const int8_t sx0 = f->sx[k], sy0 = f->sy[k];
-        f->sx[k] = f->sy[k] = 0;
-        if (f->ride[k] || (f->ride_with && f->ride_with[k])) {   /* (EXPERIMENT kind 3: by a hard dot too) */
-            const float fx = (float)(s->h[k + 1] - s->h[k - 1]) * rk * 2.f, fy = (float)(s->h[k + W] - s->h[k - W]) * rk * 4.f * H / W;
-            int ox = (int)lrintf(fx), oy = (int)lrintf(fy);
-            ox = ox < -1 ? -1 : ox > 1 ? 1 : ox; oy = oy < -2 ? -2 : oy > 2 ? 2 : oy;
-            f->sx[k] = (int8_t)-lrintf(ox * subx); f->sy[k] = (int8_t)-lrintf(oy * suby);
-        }
-        if (f->sx[k] != sx0 || f->sy[k] != sy0) f->why[k] |= 1u << FLUID_ANIM_WATER;
     }
 
     /* the specks. A cell's own are worked out on its row's turn (a quarter of the rows a frame): those the light never

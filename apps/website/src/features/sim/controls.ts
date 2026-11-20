@@ -97,12 +97,4 @@ export const LAB_LABELS: Record<string, { label: string; values: Array<[number, 
       [8, "dense (8%)"],
     ],
   },
-  fine_ride_px: {
-    label: "How far fine specks ride a tap's wave",
-    values: [
-      [12, "12 px (today)"],
-      [64, "64 px"],
-      [466, "whole screen"],
-    ],
-  },
 };

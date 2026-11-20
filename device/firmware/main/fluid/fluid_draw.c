@@ -1016,7 +1016,6 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
         int sdk = o->fine ? fluid_fine_dust_kind_get() : FINE_DUST_SPECKS;
         if (sdk != FINE_DUST_SPECKS && !sd_field(d, o->dots, o->palette, sdk)) sdk = FINE_DUST_SPECKS;
         if (sdk != d->sd_kind) { d->sd_kind = (int8_t)sdk; d->force = true; }
-        if (o->fine) o->fine->ride_with = sdk == FINE_DUST_FINE_DOTS ? d->sd_dots : NULL;   /* (kind 3: specks by a hard dot ride too) */
         /* (the light holds still while the picture changes, and on the dots while a wave moves more than they send in
          * two frames: the eye is on the wave; it goes on from there after, never all at once) */
         if (o->fine) o->fine->pause = d->m.on || (d->sd_kind && d->sd_m > 2);
@@ -1117,10 +1116,19 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
              * they were is not looked at again */
             const fluid_fine_t *ff = hd ? o->fine : NULL;
             const bool dust_same = hd && (ff ? ff->sig[k] == ff->sig0[k] : d->hde[k] == seed);
-            if (hd && !d->force && o->dust <= 0.f && !d->hch[k] && dust_same && s->mask[k] && !d->skip[k] && key_hd(d->key[k]) &&
-                hd_still(s, o, i, j, k) && hd_sig(o->dots, W, H, i, j) == d->hds[k] &&
+            const bool look_same = hd && !d->force && o->dust <= 0.f && !d->hch[k] && s->mask[k] && !d->skip[k] && key_hd(d->key[k]) &&
+                                   hd_still(s, o, i, j, k) && hd_sig(o->dots, W, H, i, j) == d->hds[k];
+            if (look_same && dust_same &&
                 (!d->sd_kind || (d->sd_kind == FINE_DUST_FINE_DOTS ? crisp_flat(s, i, j, k) && d->sd_hard[k] == (d->sd_live[k] & ~((d->key[k] & 0xFFu) & ~d->sd_hard[k]))
                                  : (d->key[k] & 0xFFu) == d->sd_live[k] && d->col[k] == d->sd_lcol[k] && crisp_flat(s, i, j, k)))) { d->dirty[k] = 0; continue; }   /* (EXPERIMENT: its dust on the lattice, the water leaving it there) */
+            if (look_same && ff && !d->sd_kind) {           /* only its fine dust changed (the water or the drift moved it, the
+                                                             * light, a word's backdrop): its drawing as it was, the cell sent again */
+                d->why[k] |= ff->why[k]; ff->sig0[k] = ff->sig[k]; d->dirty[k] = 1;
+                if (i < i0) i0 = i;
+                i1 = i + 1;
+                drawn += d->key[k] != KEY_EMPTY;
+                continue;
+            }
             /* (EXPERIMENT FINE_DUST_DOTS_ILACE: what only the water, the light or the twinkle changes, in every other cell row a
              * frame, as crisp dots) */
             const bool sd_turn = d->sd_kind == FINE_DUST_DOTS_ILACE && !d->force && (!d->hch[k] || d->sd_ch[k]) && dust_same && s->mask[k] &&

@@ -1134,11 +1134,14 @@ static void test_open(const char *dir) {
 }
 
 /* ── fine dust: the chart as the page draws it (packages/astrology/PORT-SPEC.md) ── */
-typedef struct { int wins; long px; int odd; } cost_t;
+typedef struct { int wins; long px; int odd; long comp; } cost_t;
+static long composed(const fluid_draw_t *d, int S, int x, int y, int w, int h, const uint16_t *px);
+static const fluid_draw_t *s_cost_d;                    /* (set: send_cost counts the composed pixels against its cache) */
 static int send_cost(void *ctx, int x, int y, int w, int h, const uint16_t *px) {
-    cost_t *c = ctx; (void)x; (void)px;
+    cost_t *c = ctx;
     c->wins++; c->px += (long)w * h;
     c->odd += (y & 1) || (h & 1);
+    if (s_cost_d) c->comp += composed(s_cost_d, s_cost_d->fb_w, x, y, w, h, px);
     return 0;
 }
 /* a frame as a PPM at path (NULL: none), to look at */
@@ -1157,13 +1160,31 @@ static void dump_ppm(const char *path, const uint16_t *fb, int S) {
 #define CELLS_MS 11.0
 static double panel_ms(const cost_t *c) { return c->wins * 0.23 + c->px * 0.55e-3; }
 /* the panel's glass: the windows land there */
-typedef struct { uint16_t *px; int S; cost_t c; } glass_t;
+typedef struct { uint16_t *px; int S; cost_t c; const fluid_draw_t *d; } glass_t;
 static int send_glass(void *ctx, int x, int y, int w, int h, const uint16_t *px) {
     glass_t *g = ctx;
     for (int r = 0; r < h; r++) memcpy(g->px + (size_t)(y + r) * g->S + x, px + (size_t)r * w, sizeof(uint16_t) * (size_t)w);
     g->c.wins++; g->c.px += (long)w * h; g->c.odd += (y & 1) || (h & 1);
+    if (g->d) g->c.comp += composed(g->d, g->S, x, y, w, h, px);
     return 0;
 }
+/* a window's pixels composed: those that are not the drawing's cache copied as it is (a speck, a dot, a letter) */
+static long composed(const fluid_draw_t *d, int S, int x, int y, int w, int h, const uint16_t *px) {
+    long n = 0;
+    for (int r = 0; r < h; r++) for (int q = 0; q < w; q++) {
+        const int X = x + q, Y = y + r;
+        int i = X * d->W / S, j = Y * d->H / S;
+        while (i < d->W - 1 && d->cx[i + 1] <= X) i++;
+        while (i > 0 && d->cx[i] > X) i--;
+        while (j < d->H - 1 && d->cy[j + 1] <= Y) j++;
+        while (j > 0 && d->cy[j] > Y) j--;
+        n += !d->hdc || !d->hdcv[j * d->W + i] || px[r * w + q] != d->hdc[(size_t)Y * d->fb_w + X];
+    }
+    return n;
+}
+/* the panel on the device's measured constants: a window handed over 0.15 ms, a pixel copied (the drawing's cache) 0.05 us,
+ * a pixel composed (a speck, a dot, a letter over it) 0.9 us */
+static double model_ms(const cost_t *c) { return c->wins * 0.15 + (c->px - c->comp) * 0.05e-3 + c->comp * 0.9e-3; }
 /* how many pixels of a kept glass fb differ from the look drawn whole now: none when every change was sent */
 static int glass_off(const fluid_draw_t *d, const fluid_draw_opts_t *o, const uint16_t *fb, int S) {
     static uint16_t *ref;
@@ -1206,6 +1227,7 @@ static void test_fine(const char *dir) {
     fluid_frame_t *fr = fluid_frame_create(W, H);
     fluid_draw_t *d = fluid_draw_create(W, H, S, S);
     fluid_fine_t *fine = fluid_fine_create(W, H, S, S);
+    s_cost_d = d;                                       /* (the panel's time on the measured constants: model_ms) */
     const int N = W * H;
     uint8_t *dots = calloc((size_t)N, 1), *keep = calloc((size_t)N, 1), *still = calloc((size_t)N, 1);
     static fluid_shape_t shp[FLUID_MAX_SHAPES], full[FLUID_MAX_SHAPES];
@@ -1256,7 +1278,7 @@ static void test_fine(const char *dir) {
             if (b == 0) { lum_near += l; n_near++; } else if (b == 2) { lum_far += l; n_far++; }
         }
         const float d0 = (float)band[0] / area[0], d1 = (float)band[1] / area[1], d2 = (float)band[2] / area[2];
-        CHECK(on == 0 && d0 > 0.35f && d0 > d1 && d1 > d2 && d2 > 0.02f && d2 < 0.1f && lum_near / n_near > lum_far / n_far,
+        CHECK(on == 0 && d0 > 0.25f && d0 > d1 && d1 > d2 && d2 > 0.02f && d2 < 0.1f && lum_near / n_near > lum_far / n_far,
               "the dust gathers into the ring: density %.2f, %.2f, %.2f by its distance, brighter near; %d on the drawing", d0, d1, d2, on);
         /* round a symbol (the Moon's glyph, its box 2..6 px out) much sparser than round a line */
         int moon = spot_named(sc, "moon"), ns = 0, as = 0;
@@ -1267,6 +1289,17 @@ static void test_fine(const char *dir) {
         }
         for (int y = 0; y < S; y++) for (int x = 0; x < S; x++) as += fabsf(x - mx) < h + 3.f && fabsf(y - my) < h + 3.f && !(fabsf(x - mx) < h - 1.f && fabsf(y - my) < h - 1.f);
         CHECK((float)ns / as < 0.6f * d0, "round a symbol the dust is fainter (%.2f, a line's %.2f)", (float)ns / as, d0);
+        /* half the dust along the lines it had (Juan): within 6 px of the drawing, against the count at FINE_PEAK 0.85
+         * (NEAR_085 on this chart); the far dust (past 25 px) as it was (FAR_085) */
+        enum { NEAR_085 = 21712, FAR_085 = 1123 };
+        int nnear = 0, nfar = 0;
+        for (int n = 0; n < st->n; n++) {
+            const int x = st->pos[n] & 511, y = st->pos[n] >> 9 & 511, dl = fine->dist[(y >> 1) * fine->S2 + (x >> 1)];
+            nnear += dl < 600; nfar += dl > 2500;
+        }
+        printf("  the dust along the lines: %d specks within 6 px (%d at 0.85: %.0f%%), %d past 25 px (%d)\n", nnear, NEAR_085, 100.0 * nnear / NEAR_085, nfar, FAR_085);
+        CHECK(nnear > 0.4 * NEAR_085 && nnear < 0.6 * NEAR_085 && abs(nfar - FAR_085) < FAR_085 / 50,
+              "half the dust along the lines (%d specks within 6 px of the drawing, %d before), the far dust as before (%d, %d)", nnear, NEAR_085, nfar, FAR_085);
     }
 
     /* calm frames: the light flows (each frame a thin front of specks changes), cheap on the panel */
@@ -1285,13 +1318,13 @@ static void test_fine(const char *dir) {
     int changed = 0;
     for (int f = 1; f <= 60; f++) {
         o.time = 1.f + f / 30.f;
-        cost_t c = { 0, 0, 0 };
+        cost_t c = { 0, 0, 0, 0 };
         const double tc = now_us();
         fluid_draw_cells(d, fr, &o);
         cells_us += now_us() - tc;
         fluid_draw_send(d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, wbuf, 4096, send_cost, &c);
         fluid_draw_rect(d, &o, &(fluid_rect_t){ fb, S, 0, 0, S, S }, false);
-        const double ms = panel_ms(&c);
+        const double ms = model_ms(&c);
         calm_px += c.px; calm_w += c.wins;
         sum += ms; worst = ms > worst ? ms : worst; changed += c.px > 0;
     }
@@ -1348,7 +1381,7 @@ static void test_fine(const char *dir) {
     scene_grow_tap(&g, asp);
     double tap_sum = 0., tap_worst = 0.;
     int tap_off = 0, tap_late = 0, tap_on = 0;
-    glass_t gl = { calloc((size_t)S * S, 2), S, { 0, 0, 0 } };
+    glass_t gl = { calloc((size_t)S * S, 2), S, { 0, 0, 0, 0 }, d };
     fluid_draw_rect(d, &o, &(fluid_rect_t){ gl.px, S, 0, 0, S, S }, true);
     uint16_t *held = calloc((size_t)S * S, 2);
     int moved_items = 0, still_cells = 0, broke_still = 0;
@@ -1363,13 +1396,13 @@ static void test_fine(const char *dir) {
         fluid_sim_step(s, DT);
         fluid_sim_snapshot(s, fr, false);
         o.time = 3.f + f / 30.f;
-        cost_t c = { 0, 0, 0 };
+        cost_t c = { 0, 0, 0, 0 };
         fluid_draw_cells(d, fr, &o);
         fluid_draw_rect(d, &o, &(fluid_rect_t){ fb, S, 0, 0, S, S }, false);
         gl.c = c;
         fluid_draw_send(d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, wbuf, 4096, send_glass, &gl);
         c = gl.c;
-        const double ms = panel_ms(&c);
+        const double ms = model_ms(&c);
         tap_off += glass_off(d, &o, gl.px, S) != 0; tap_late |= d->anim_late; tap_on |= d->anim_on;
         tap_sum += ms; tap_worst = ms > tap_worst ? ms : tap_worst;
         if (getenv("FINE_TRACE")) printf("    tap f%d: %.1f ms (%d windows, %ld px)\n", f, ms, c.wins, c.px);
@@ -1425,13 +1458,13 @@ static void test_fine(const char *dir) {
             fluid_sim_step(s, DT);
             fluid_sim_snapshot(s, fr, false);
             o.time = 5.f + (tw += DT);
-            cost_t c = { 0, 0, 0 };
+            cost_t c = { 0, 0, 0, 0 };
             fluid_draw_cells(d, fr, &o);
             fluid_draw_rect(d, &o, &(fluid_rect_t){ fb, S, 0, 0, S, S }, false);
             gl.c = c;
             fluid_draw_send(d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, wbuf, 4096, send_glass, &gl);
             c = gl.c;
-            const double ms = panel_ms(&c);
+            const double ms = model_ms(&c);
             rd_off += glass_off(d, &o, gl.px, S) != 0; rd_late |= d->anim_late; rd_on |= d->anim_on;
             rd_sum += ms; rd_worst = ms > rd_worst ? ms : rd_worst;
             if (getenv("FINE_TRACE")) printf("    read w%d f%d: %.1f ms (%d windows, %ld px)\n", w, f, ms, c.wins, c.px);
@@ -1480,11 +1513,11 @@ static void test_fine(const char *dir) {
             memcpy(rs, shp, sizeof(fluid_shape_t) * (size_t)hd.n);
             const int n = scene_rings(rs, hd.n, S, &rg, &pg, false, 0xFF2C3Eu, 0x35E07Cu);
             o.shapes = rs; o.nshapes = n; o.time = 21.f + f / 30.f;
-            cost_t c = { 0, 0, 0 };
+            cost_t c = { 0, 0, 0, 0 };
             fluid_draw_cells(d, fr, &o);
             fluid_draw_send(d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, wbuf, 4096, send_cost, &c);
             fluid_draw_rect(d, &o, &(fluid_rect_t){ fb, S, 0, 0, S, S }, false);
-            rworst = fmax(rworst, panel_ms(&c));
+            rworst = fmax(rworst, model_ms(&c));
             nmax = n - hd.n;
             for (int k = 0; k < N; k++) undone += d->key[k] && (d->key[k] & 0xF000) != 0x8000;
         }
@@ -1512,10 +1545,10 @@ static void test_fine(const char *dir) {
         double held = 0.;
         for (int f = 0; f < 20; f++) {
             o.time = 22.f + f / 30.f;
-            cost_t c = { 0, 0, 0 };
+            cost_t c = { 0, 0, 0, 0 };
             fluid_draw_cells(d, fr, &o);
             fluid_draw_send(d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, wbuf, 4096, send_cost, &c);
-            held = fmax(held, panel_ms(&c));
+            held = fmax(held, model_ms(&c));
         }
         CHECK(held + CELLS_MS < 33.0, "held, it costs as the calm chart (worst %.1f ms a frame)", held);
         /* the voice at its loudest: touches of the water just inside the line; the dust by the rim rides them, the
@@ -1530,10 +1563,10 @@ static void test_fine(const char *dir) {
                 fluid_sim_step(s, DT);
                 fluid_sim_snapshot(s, fr, false);
                 o.time = 22.7f + f / 30.f;
-                cost_t c = { 0, 0, 0 };
+                cost_t c = { 0, 0, 0, 0 };
                 fluid_draw_cells(d, fr, &o);
                 fluid_draw_send(d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, wbuf, 4096, send_cost, &c);
-                const double ms = panel_ms(&c);
+                const double ms = model_ms(&c);
                 if (getenv("FINE_TRACE")) printf("    voice f%d: %.1f ms (%d windows, %ld px)\n", f, ms, c.wins, c.px);
                 vworst = fmax(vworst, ms); vpx += c.px;
                 for (int k = 0; k < N; k++) vbroke += d->key[k] && (d->key[k] & 0xF000) != 0x8000;
@@ -1552,10 +1585,10 @@ static void test_fine(const char *dir) {
             memcpy(rs, shp, sizeof(fluid_shape_t) * (size_t)hd.n);
             const int n = scene_rings(rs, hd.n, S, &off, &pg, true, 0xFF2C3Eu, 0x35E07Cu);
             o.shapes = rs; o.nshapes = n; o.time = 23.f + f / 30.f;
-            cost_t c = { 0, 0, 0 };
+            cost_t c = { 0, 0, 0, 0 };
             fluid_draw_cells(d, fr, &o);
             fluid_draw_send(d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, wbuf, 4096, send_cost, &c);
-            if (f > 2) cworst = fmax(cworst, panel_ms(&c));
+            if (f > 2) cworst = fmax(cworst, model_ms(&c));
             if (f == 3) n0 = n - hd.n;
             moved += f > 3 && rs[hd.n].a0 != 0.f && n - hd.n > 0;
         }
@@ -1605,16 +1638,18 @@ static void test_fine(const char *dir) {
     scene_free(sc);
     pkg_unref(p);
     fluid_fine_dust_kind(FINE_DUST_SPECKS);                    /* (the default back) */
+    s_cost_d = NULL;
 }
 
-/* ── EXPERIMENT scene dust (fluid_fine_dust_kind, fluid_fine_ride_px; delete with them once Juan picks): a scene's dust
+/* ── EXPERIMENT scene dust (fluid_fine_dust_kind; delete with it once Juan picks): a scene's dust
  * as the creature screen's (braille dots riding the water) against today's fine specks, on the panel model with the
  * device's measured constants (2113895: a window handed over ~0.15 ms, a pixel drawn and sent ~0.9 us; the cells ~10 ms) ── */
 #define SD_CELLS_MS 10.0
 static double measured_ms(const cost_t *c) { return c->wins * 0.15 + c->px * 0.9e-3; }
-typedef struct { double sum, worst; int n, over; long px, pxmax; int wins, winmax; } sd_stat_t;
+typedef struct { double sum, worst; int n, over; long px, pxmax; int wins, winmax; double msum, mworst; int mover; } sd_stat_t;
 static void sd_add(sd_stat_t *t, const cost_t *c) {
-    const double ms = measured_ms(c);
+    const double ms = measured_ms(c), mm = model_ms(c);
+    t->msum += mm; t->mworst = mm > t->mworst ? mm : t->mworst; t->mover += mm + SD_CELLS_MS > 33.0;
     t->over += ms + SD_CELLS_MS > 33.0;
     t->sum += ms; t->worst = ms > t->worst ? ms : t->worst; t->n++; t->px += c->px; t->wins += c->wins;
     if (c->px > t->pxmax) t->pxmax = c->px;
@@ -1643,11 +1678,11 @@ static scene_t *sd_scene(pkg_t *p, const char *dir, const char *want) {
  * highlight. With kind 1 the creature screen's drawer is run on the same water with the same dots (crisp, every cell
  * looked at): the dust must be the very dots it shows. */
 typedef struct { int mismatch, off, front0, front1, fmax, fmax_at, frames_front; sd_stat_t calm, tap; uint16_t *calm_fb; } sd_run_t;
-static void sd_run(scene_t *sc, int kind, float ride, int spot, float x, float y, sd_run_t *r, const char *dump, const char *dump3) {
+static void sd_run(scene_t *sc, int kind, int spot, float x, float y, sd_run_t *r, const char *dump, const char *dump3) {
     const int S = 466; int W, H;
     fluid_grid_for_stage(S, &W, &H);
     const int N = W * H;
-    fluid_fine_dust_kind(kind); fluid_fine_ride_px(ride);
+    fluid_fine_dust_kind(kind);
     fluid_sim_t *s = fluid_sim_create(W, H, S); s->p.still = true;
     fluid_frame_t *fr = fluid_frame_create(W, H);
     fluid_draw_t *d = fluid_draw_create(W, H, S, S), *dc = fluid_draw_create(W, H, S, S);
@@ -1657,7 +1692,7 @@ static void sd_run(scene_t *sc, int kind, float ride, int spot, float x, float y
     static uint16_t wbuf[466 * 18];
     fluid_letter_t L[FLUID_MAX_LETTERS]; int nl;
     scene_shapes_t hd = { shp, 0, keep, still };
-    glass_t gl = { calloc((size_t)S * S, 2), S, { 0, 0, 0 } };
+    glass_t gl = { calloc((size_t)S * S, 2), S, { 0, 0, 0, 0 }, NULL };
     memset(r, 0, sizeof(*r));
     r->calm_fb = calloc((size_t)S * S, 2);
     fluid_draw_opts_t o = { .palette = FLUID_PAL_PASTEL, .edge_mode = FLUID_EDGE_CONTOURS, .letters = L, .font = gc_font5x7,
@@ -1684,7 +1719,7 @@ static void sd_run(scene_t *sc, int kind, float ride, int spot, float x, float y
         fluid_sim_snapshot(s, fr, false);
         o.time = 1.f + (f + 8) / 30.f;
         fluid_draw_cells(d, fr, &o);
-        cost_t c = { 0, 0, 0 };
+        cost_t c = { 0, 0, 0, 0 };
         gl.c = c;
         fluid_draw_send(d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, f == -8, wbuf, 4096, send_glass, &gl);
         if (f > -8) sd_add(f < 0 ? &r->calm : &r->tap, &gl.c);
@@ -1727,7 +1762,7 @@ static void sd_run(scene_t *sc, int kind, float ride, int spot, float x, float y
         if (far > r->fmax) { r->fmax = far; r->fmax_at = f; }
         r->frames_front += far > 0;
     }
-    fluid_fine_dust_kind(FINE_DUST_SPECKS); fluid_fine_ride_px(FINE_RIDE);   /* (the defaults back) */
+    fluid_fine_dust_kind(FINE_DUST_SPECKS);   /* (the default back) */
     free(gl.px); free(dots); free(keep); free(still); free(cdots);
     fluid_fine_destroy(fine); fluid_draw_destroy(d); fluid_draw_destroy(dc); fluid_frame_destroy(fr); fluid_sim_destroy(s);
 }
@@ -1751,7 +1786,7 @@ static void test_wobble(const char *dir, scene_t *sc, const char *name, float x,
     static uint16_t wbuf[466 * 18];
     fluid_letter_t L[FLUID_MAX_LETTERS]; int nl;
     scene_shapes_t hd = { shp, 0, keep, still };
-    glass_t gl = { calloc((size_t)S * S, 2), S, { 0, 0, 0 } };
+    glass_t gl = { calloc((size_t)S * S, 2), S, { 0, 0, 0, 0 }, NULL };
     uint16_t *calm = calloc((size_t)S * S, 2);
     fluid_draw_opts_t o = { .palette = FLUID_PAL_PASTEL, .edge_mode = FLUID_EDGE_CONTOURS, .letters = L, .font = gc_font5x7,
                             .dots = dots, .scene = true, .shapes = shp, .kdots = keep, .fine = fine, .still = still };
@@ -1767,7 +1802,7 @@ static void test_wobble(const char *dir, scene_t *sc, const char *name, float x,
         fluid_sim_snapshot(s, fr, false);
         o.time = 1.f + (f + 4) / 30.f;
         fluid_draw_cells(d, fr, &o);
-        gl.c = (cost_t){ 0, 0, 0 };
+        gl.c = (cost_t){ 0, 0, 0, 0 };
         fluid_draw_send(d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, f == -4, wbuf, 4096, send_glass, &gl);
         if (f >= 0) sd_add(&st, &gl.c);
         off += glass_off(d, &o, gl.px, S) != 0;
@@ -1846,7 +1881,7 @@ static void sd_read(scene_t *chart, int kind, sd_read_t *r, const char *dump) {
         ub[0] = fminf(ub[0], b[0]); ub[1] = fmaxf(ub[1], b[1]); ub[2] = fminf(ub[2], b[2]); ub[3] = fmaxf(ub[3], b[3]);
     }
     fluid_fine_caption_box(fine, ub);
-    glass_t gl = { calloc((size_t)S * S, 2), S, { 0, 0, 0 } };
+    glass_t gl = { calloc((size_t)S * S, 2), S, { 0, 0, 0, 0 }, d };
     fluid_draw_send(d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, true, wbuf, 4096, send_glass, &gl);
     int frames = 0;
     for (int w = 0; w <= 3; w++) {
@@ -1861,7 +1896,7 @@ static void sd_read(scene_t *chart, int kind, sd_read_t *r, const char *dump) {
             fluid_sim_snapshot(s, fr, false);
             o.time = 1.f + (frames + 1) / 30.f;
             fluid_draw_cells(d, fr, &o);
-            gl.c = (cost_t){ 0, 0, 0 };
+            gl.c = (cost_t){ 0, 0, 0, 0 };
             fluid_draw_send(d, &o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, wbuf, 4096, send_glass, &gl);
             sd_add(&r->st, &gl.c);
             if (getenv("SD_TRACE")) { int nd = 0; for (int k = 0; k < N; k++) nd += d->dirty[k] != 0; printf("    read k%d w%d f%d: %d windows %ld px; %d dirty (%.1f ms)\n", kind, w, f, gl.c.wins, gl.c.px, nd, measured_ms(&gl.c)); }
@@ -1915,12 +1950,11 @@ static void test_scene_dust(const char *dir) {
     };
     for (int q = 0; q < 4; q++) test_wobble(dir, TAP[q].sc, TAP[q].name, TAP[q].x, TAP[q].y);
     printf("  scene dust A/B, panel model with the measured constants (0.15 ms a window, 0.9 us a pixel; cells %.0f ms):\n", SD_CELLS_MS);
-    sd_run_t r0, r1, r2, rw;
+    sd_run_t r0, r1, r2;
     for (int q = 0; q < 4; q++) {
-        sd_run(TAP[q].sc, FINE_DUST_DOTS, FINE_RIDE, TAP[q].spot, TAP[q].x, TAP[q].y, &r1, q == 2 ? getenv("SD_DUMP_TAP") : NULL, NULL);
-        sd_run(TAP[q].sc, FINE_DUST_DOTS_ILACE, FINE_RIDE, TAP[q].spot, TAP[q].x, TAP[q].y, &r2, NULL, NULL);
-        sd_run(TAP[q].sc, FINE_DUST_SPECKS, FINE_RIDE, TAP[q].spot, TAP[q].x, TAP[q].y, &r0, NULL, NULL);
-        sd_run(TAP[q].sc, FINE_DUST_SPECKS, (float)S, TAP[q].spot, TAP[q].x, TAP[q].y, &rw, NULL, NULL);
+        sd_run(TAP[q].sc, FINE_DUST_DOTS, TAP[q].spot, TAP[q].x, TAP[q].y, &r1, q == 2 ? getenv("SD_DUMP_TAP") : NULL, NULL);
+        sd_run(TAP[q].sc, FINE_DUST_DOTS_ILACE, TAP[q].spot, TAP[q].x, TAP[q].y, &r2, NULL, NULL);
+        sd_run(TAP[q].sc, FINE_DUST_SPECKS, TAP[q].spot, TAP[q].x, TAP[q].y, &r0, NULL, NULL);
         printf("   %s:\n", TAP[q].name);
         sd_print("dots, calm", &r1.calm); sd_print("dots, the tap's wave (60 frames)", &r1.tap);
         sd_print("dots interlaced 2:1, the tap's wave", &r2.tap);
@@ -1930,19 +1964,18 @@ static void test_scene_dust(const char *dir) {
         CHECK(r2.calm.px > 0 && r2.calm.worst + SD_CELLS_MS <= 33.0 && r2.tap.worst + SD_CELLS_MS <= 33.0 && r2.off == 0,
               "scene dust by default (%s): alive at rest (%.1f kpx a calm frame), a tap's wave within a frame (worst %.1f ms with the cells; calm %.1f)",
               TAP[q].name, r2.calm.px / 1e3 / r2.calm.n, r2.tap.worst + SD_CELLS_MS, r2.calm.worst + SD_CELLS_MS);
-        sd_print("specks today, calm", &r0.calm); sd_print("specks today, the tap (12 px ride)", &r0.tap);
-        sd_print("specks riding the whole glass, tap", &rw.tap);
+        sd_print("specks, calm", &r0.calm); sd_print("specks, the tap", &r0.tap);
         CHECK(r1.mismatch == 0, "scene dust (%s): every cell's dust is the creature screen's dots on the same water (%d cell frames differ)", TAP[q].name, r1.mismatch);
         printf("    the dots' wave: front %d px from the finger at frame 3, %d at frame 30, %d at most (frame %d); %d frames moving\n", r1.front0, r1.front1, r1.fmax, r1.fmax_at, r1.frames_front);
         CHECK(r1.front0 > 0 && r1.fmax > r1.front0 + 50 && r1.frames_front >= 40,
               "scene dust (%s): the tap's wave carries the dust outward as on the creature's screen (front %d px at frame 3, %d at frame 30, %d at most at frame %d; %d frames moving)",
               TAP[q].name, r1.front0, r1.front1, r1.fmax, r1.fmax_at, r1.frames_front);
-        CHECK(r1.off == 0 && r0.off == 0 && rw.off == 0, "scene dust (%s): the glass is the look every frame, both kinds (%d, %d, %d frames behind)", TAP[q].name, r1.off, r0.off, rw.off);
+        CHECK(r1.off == 0 && r0.off == 0, "scene dust (%s): the glass is the look every frame, both kinds (%d, %d frames behind)", TAP[q].name, r1.off, r0.off);
         if (q == 0 || q == 3) {
             /* the lines as today's: with the dots, every pixel that differs from the drawing alone (no dust) was black and
              * is a dust dot's; none of the drawing's pixels changed */
             sd_run_t rn;
-            sd_run(TAP[q].sc, FINE_DUST_SPECKS, FINE_RIDE, -2, 0.f, 0.f, &rn, NULL, NULL);   /* (no spot, no set: the drawing alone) */
+            sd_run(TAP[q].sc, FINE_DUST_SPECKS, -2, 0.f, 0.f, &rn, NULL, NULL);   /* (no spot, no set: the drawing alone) */
             free(rn.calm_fb);
             int W, H; fluid_grid_for_stage(S, &W, &H);
             fluid_draw_t *dd = fluid_draw_create(W, H, S, S);
@@ -1981,7 +2014,7 @@ static void test_scene_dust(const char *dir) {
                   TAP[q].name, changed_line, dust_px, stray);
             dump_ppm(q ? getenv("SD_DUMP_CLOSE") : getenv("SD_DUMP_CALM"), r1.calm_fb, S);
         }
-        free(r0.calm_fb); free(r1.calm_fb); free(r2.calm_fb); free(rw.calm_fb);
+        free(r0.calm_fb); free(r1.calm_fb); free(r2.calm_fb);
     }
     {   /* the accretion: denser and on the lattice near the drawing, sparse far from it, brighter near */
         int W, H; fluid_grid_for_stage(S, &W, &H);
@@ -2031,6 +2064,174 @@ static void test_scene_dust(const char *dir) {
     pkg_unref(p);
 }
 
+/* ── the fine dust rides the water everywhere (kind 0): a tap anywhere sends its wave through all the dust, at the water's
+ * speed, every moved speck sent the frame it moves, all of it back in place once the water is calm; at rest it drifts
+ * slowly; near the lines it is half as dense as it was. Each run beside an untapped twin (the same clock): what the tap
+ * moved is where the two differ. Costs on the device's measured constants (model_ms), cells SD_CELLS_MS. ── */
+typedef struct { sd_stat_t calm, tap; int far_moved, far_sent, ahead, off, late, behind_twin, frames_twin, far3, far15, far30, calm_cells, calm_moved, jitter, calm_px; } ride_t;
+static void ride_print(const char *what, const sd_stat_t *t) {
+    printf("    %-30s %5.1f / %5.1f / %2d of %d over 33 (ms with the cells: mean / worst); %4.1f kpx mean, %4.1f max; %4.1f windows mean, %d max\n", what,
+           t->msum / t->n + SD_CELLS_MS, t->mworst + SD_CELLS_MS, t->mover, t->n, t->px / 1e3 / t->n, t->pxmax / 1e3, (double)t->wins / t->n, t->winmax);
+}
+typedef struct { fluid_sim_t *s; fluid_frame_t *fr; fluid_draw_t *d; fluid_fine_t *fine; uint8_t *dots, *keep, *still; fluid_shape_t *shp; glass_t gl; fluid_letter_t L[FLUID_MAX_LETTERS]; fluid_draw_opts_t o; } ride_rig_t;
+static void rig_open(ride_rig_t *g, int S) {
+    int W, H; fluid_grid_for_stage(S, &W, &H);
+    const int N = W * H;
+    memset(g, 0, sizeof(*g));
+    g->s = fluid_sim_create(W, H, S); g->s->p.still = true;
+    g->fr = fluid_frame_create(W, H); g->d = fluid_draw_create(W, H, S, S); g->fine = fluid_fine_create(W, H, S, S);
+    g->dots = calloc((size_t)N, 1); g->keep = calloc((size_t)N, 1); g->still = calloc((size_t)N, 1);
+    g->shp = calloc(FLUID_MAX_SHAPES, sizeof(fluid_shape_t));
+    g->gl = (glass_t){ calloc((size_t)S * S, 2), S, { 0, 0, 0, 0 }, g->d };
+    g->o = (fluid_draw_opts_t){ .palette = FLUID_PAL_PASTEL, .edge_mode = FLUID_EDGE_CONTOURS, .letters = g->L, .font = gc_font5x7,
+                                .dots = g->dots, .scene = true, .kdots = g->keep, .fine = g->fine, .still = g->still };
+}
+static void rig_close(ride_rig_t *g) {
+    free(g->gl.px); free(g->dots); free(g->keep); free(g->still); free(g->shp);
+    fluid_fine_destroy(g->fine); fluid_draw_destroy(g->d); fluid_frame_destroy(g->fr); fluid_sim_destroy(g->s);
+}
+/* one frame of a rig at time t: the scene's shapes and dust, two water steps, the cells, the send onto its glass */
+static void rig_frame(ride_rig_t *g, scene_t *sc, float t, bool full, bool keep_set) {
+    static fluid_shape_t full_sh[FLUID_MAX_SHAPES];
+    static uint16_t wbuf[466 * 18];
+    fluid_shape_t *sh = g->shp;
+    int nl;
+    scene_shapes_t hd = { sh, 0, g->keep, g->still };
+    scene_fill(g->s, sc, 1.f, NULL, g->L, &nl, g->dots, &hd);
+    g->o.shapes = sh; g->o.nshapes = hd.n; g->o.nletters = nl;
+    uint32_t key;
+    const int nn = scene_full_shapes(g->s, sc, 1.f, full_sh, &key);
+    fluid_fine_want(g->fine, 1, key, keep_set, full_sh, nn, FLUID_PAL_PASTEL);
+    if (fluid_fine_work(g->fine, 0)) fluid_fine_swap(g->fine);
+    for (int n = 0; !full && n < 2; n++) fluid_sim_step(g->s, DT / 2);   /* (as the device: two 1/60 s steps a frame at 30 fps) */
+    fluid_sim_snapshot(g->s, g->fr, false);
+    g->o.time = t;
+    fluid_draw_cells(g->d, g->fr, &g->o);
+    g->gl.c = (cost_t){ 0, 0, 0, 0 };
+    fluid_draw_send(g->d, &g->o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, full, wbuf, 4096, send_glass, &g->gl);
+}
+static void ride_run(pkg_t *p, const char *dir, const char *layout, int spot, float x, float y, ride_t *r, const char *dump_calm, const char *dump_wave) {
+    const int S = 466; int W, H;
+    fluid_grid_for_stage(S, &W, &H);
+    const int N = W * H;
+    scene_t *sc = sd_scene(p, dir, layout), *twin = sd_scene(p, dir, layout);
+    memset(r, 0, sizeof(*r));
+    fluid_fine_dust_kind(FINE_DUST_SPECKS);
+    ride_rig_t A, B;
+    rig_open(&A, S); rig_open(&B, S);
+    scene_grow_t g;
+    if (spot >= 0) scene_grow_tap(&g, spot);
+    const float tx = (x + 1.f) * S / 2, ty = (1.f - y) * S / 2;
+    int8_t *px0 = calloc((size_t)N, 2), *ever = calloc((size_t)N, 1);
+    uint8_t *last = calloc((size_t)N, 2);
+    for (int f = -48; f < 180; f++) {
+        if (f >= 0 && spot >= 0) { scene_grow_tick(&g, true, DT); scene_grow_apply(&g, sc); }
+        if (f == 0) {                                   /* the device's tap: a spot's outline, and the finger's ripple */
+            if (spot >= 0) scene_outline(sc, spot, outline_bump, A.s);
+            fluid_sim_impulse(A.s, x, -y, 1.6f, 0.09f);
+        }
+        const float t = 1.f + (f + 48) / 30.f;
+        rig_frame(&A, sc, t, f == -48, f < 0);
+        rig_frame(&B, twin, t, f == -48, true);
+        if (f >= -40 && f < 0) sd_add(&r->calm, &A.gl.c);
+        if (f >= 0 && f < 90) sd_add(&r->tap, &A.gl.c);
+        if (getenv("RIDE_TRACE") && f >= -2 && f < 100) { int nd = 0; for (int k = 0; k < N; k++) nd += A.d->dirty[k] != 0; printf("    ride f%d: %.1f ms, %d windows, %ld px (%ld composed), %d cells\n", f, model_ms(&A.gl.c), A.gl.c.wins, A.gl.c.px, A.gl.c.comp, nd); }
+        if (f > -48) { const int go = glass_off(A.d, &A.o, A.gl.px, S); r->off += go != 0; if (go && getenv("RIDE_TRACE")) printf("    behind f%d: %d px\n", f, go); }
+        if (f == -1 && dump_calm) dump_ppm(dump_calm, A.gl.px, S);
+        if (f == 10 && dump_wave) dump_ppm(dump_wave, A.gl.px, S);
+        const fluid_fine_t *fa = A.fine, *fb = B.fine;
+        int far = 0;
+        for (int j = 1; j < H - 1; j++) for (int i = 1; i < W - 1; i++) {
+            const int k = j * W + i;
+            if (!A.fr->mask[k] || !fa->drawn || fa->drawn->start[k] == fa->drawn->start[k + 1]) continue;
+            /* every speck that moves is sent the frame it moves: a cell whose shift changed is drawn again */
+            const bool stepped = fa->sx[k] != px0[2 * k] || fa->sy[k] != px0[2 * k + 1];
+            if (f > -40 && stepped && fa->tot[k] && !A.d->dirty[k]) r->late++;   /* (tot: a speck shows) */
+            if (f >= -40 && f < 0) {                    /* at rest: the dust drifts, slowly (no cell steps again on an axis within 8 frames), a pixel at a time */
+                r->calm_cells += f == -1;
+                const int dx = fa->sx[k] - px0[2 * k], dy = fa->sy[k] - px0[2 * k + 1];
+                if (f > -40 && (dx || dy)) {
+                    if (!ever[k]) r->calm_moved++;
+                    ever[k] = 1;
+                    for (int a = 0; a < 2; a++) {
+                        if (!(a ? dy : dx)) continue;
+                        if (last[2 * k + a] && f - ((int)last[2 * k + a] - 64) < 8) r->jitter++;
+                        last[2 * k + a] = (uint8_t)(f + 64);
+                    }
+                    if (abs(dx) > 1 || abs(dy) > 1) r->jitter++;
+                }
+            }
+            px0[2 * k] = fa->sx[k]; px0[2 * k + 1] = fa->sy[k];
+            if (f < 0) continue;
+            const bool moved = fa->sx[k] != fb->sx[k] || fa->sy[k] != fb->sy[k];   /* moved by the tap's wave */
+            if (!moved) continue;
+            const float cx = (A.d->cx[i] + A.d->cx[i + 1]) * 0.5f, cy = (A.d->cy[j] + A.d->cy[j + 1]) * 0.5f;
+            const int dd = (int)hypotf(cx - tx, cy - ty);
+            if (dd > far) far = dd;
+            /* only where the water moves */
+            const int16_t *h = A.fr->h;
+            if (!(h[k + 1] - h[k - 1]) && !(h[k + W] - h[k - W])) r->ahead++;
+            const int sx2 = (int)cx >> 1, sy2 = (int)cy >> 1;
+            const int dl = fa->dist ? fa->dist[sy2 * fa->S2 + sx2] : 0;   /* (1/100 px to the drawing) */
+            if (dl > 3000 && dd > 150) { r->far_moved++; r->far_sent += stepped && A.d->dirty[k]; }
+            if (f >= 150) r->behind_twin++;
+        }
+        if (f == 3) r->far3 = far;
+        if (f == 15) r->far15 = far;
+        if (f == 30) r->far30 = far;
+        if (f >= 150 && spot < 0) { int dif = 0; for (int q = 0; q < S * S; q++) dif += A.gl.px[q] != B.gl.px[q]; r->frames_twin += dif != 0; }
+        if (f == -1) { long px = 0; for (int q = 0; q < S * S; q++) px += A.gl.px[q] != 0; r->calm_px = (int)px; }
+    }
+    free(px0); free(ever); free(last);
+    rig_close(&A); rig_close(&B);
+    scene_free(sc); scene_free(twin);
+}
+static void test_ride(const char *dir) {
+    char path[512]; size_t len; const char *err;
+    snprintf(path, sizeof(path), "%s/astrology.json", dir);
+    char *buf = read_file(path, &len);
+    pkg_t *p = buf ? pkg_parse(buf, len, &err) : NULL;
+    free(buf);
+    scene_t *chart = p ? sd_scene(p, dir, "chart") : NULL;
+    CHECK(chart != NULL, "ride: the chart builds");
+    if (!chart) { pkg_unref(p); return; }
+    const float D = 3.14159265f / 180.f;
+    const int moon = spot_named(chart, "moon"), leo = spot_named(chart, "leo");
+    struct { const char *name, *layout; int spot; float x, y; const char *dump; } TAP[] = {
+        { "a tap in the open middle", "chart", -1, 0.15f, 0.3f, "RIDE_DUMP_MIDDLE" },
+        { "a tap on a planet (the Moon)", "chart", moon, moon >= 0 ? chart->items[moon].x : 0.f, moon >= 0 ? chart->items[moon].y : 0.f, "RIDE_DUMP_PLANET" },
+        { "a tap on a sign (Leo)", "chart", leo, 0.76f * cosf(302.f * D), 0.76f * sinf(302.f * D), NULL },
+        { "a sign close-up, a tap", "sign-closeup", -1, -0.4f, -0.35f, NULL },
+    };
+    printf("  the fine dust riding the water (kind 0; panel model 0.15 ms a window, 0.05 us a copied px, 0.9 us a composed px; cells %.0f ms):\n", SD_CELLS_MS);
+    for (int q = 0; q < 4; q++) {
+        ride_t r;
+        ride_run(p, dir, TAP[q].layout, TAP[q].spot, TAP[q].x, TAP[q].y, &r, q == 0 ? getenv("RIDE_DUMP_CALM") : NULL, TAP[q].dump ? getenv(TAP[q].dump) : NULL);
+        printf("   %s:\n", TAP[q].name);
+        if (q == 0 || q == 3) ride_print("calm", &r.calm);
+        ride_print("the tap's wave (90 frames)", &r.tap);
+        printf("    the wave's front: %d px from the tap at frame 3, %d at 15, %d at 30; %d cell frames moved far from both the tap and the drawing\n", r.far3, r.far15, r.far30, r.far_moved);
+        CHECK(r.far_moved > 200 && r.far3 < r.far15 && r.far15 < r.far30 && r.far30 >= 100 && r.ahead == 0,
+              "ride (%s): the tap's wave moves the dust over the whole glass, far from any drawing too (%d cell frames), along the water's front (%d, %d, %d px at frames 3, 15, 30; %d moved where the water is still)",
+              TAP[q].name, r.far_moved, r.far3, r.far15, r.far30, r.ahead);
+        CHECK(r.off == 0 && r.late == 0 && r.far_sent > 100, "ride (%s): every speck that moves is sent the frame it moves, far ones too (%d cell frames; %d frames behind, %d cell frames late)",
+              TAP[q].name, r.far_sent, r.off, r.late);
+        CHECK(r.behind_twin == 0 && r.frames_twin == 0, "ride (%s): once the water is calm every speck is exactly in its rest place (%d cells off, %d frames of the glass off)", TAP[q].name, r.behind_twin, r.frames_twin);
+        if (q == 0) CHECK(r.calm_moved * 2 > r.calm_cells && r.jitter == 0,
+                          "ride: at rest the dust drifts, slowly and softly (%d of %d cells moved in 40 frames; %d moves faster than every 8 frames or by more than a pixel)", r.calm_moved, r.calm_cells, r.jitter);
+        CHECK(r.tap.mworst + SD_CELLS_MS <= 33.0 && (q != 0 || r.calm.mworst + SD_CELLS_MS <= 33.0),
+              "ride (%s): within a frame on the measured panel (worst %.1f ms with the cells; calm %.1f)", TAP[q].name, r.tap.mworst + SD_CELLS_MS, r.calm.mworst + SD_CELLS_MS);
+    }
+    {
+        sd_read_t rr;
+        sd_read(chart, FINE_DUST_SPECKS, &rr, getenv("RIDE_DUMP_READ"));
+        ride_print("a reading (3 words, its end)", &rr.st);
+        CHECK(rr.st.mworst + SD_CELLS_MS <= 33.0, "ride: a reading within a frame on the measured panel (worst %.1f ms with the cells)", rr.st.mworst + SD_CELLS_MS);
+    }
+    scene_free(chart);
+    pkg_unref(p);
+}
+
 /* EXPERIMENT kind 3 (fluid_fine_dust_kind FINE_DUST_FINE_DOTS; delete with it): the fine specks of kind 0 with a
  * sparse layer of the creature screen's dots on the water. At rest the glass is kind 0's plus hard dots on black pixels
  * only; a tap anywhere sends the creature screen's wave through them over the whole glass, every moved dot sent the
@@ -2070,9 +2271,9 @@ static void test_fine_hard(const char *dir) {
             const char *pre = getenv("SD3_DUMP");
             if (pre) snprintf(dp, sizeof(dp), "%s-%dpct-%d", pre, PCT[n], q);
             scene_t *c3 = sd_scene(p, dir, "chart"), *c0 = sd_scene(p, dir, "chart");   /* (each run from the untapped chart) */
-            sd_run(c3, FINE_DUST_FINE_DOTS, FINE_RIDE, TAP[q].spot, TAP[q].x, TAP[q].y, &r3, NULL, pre ? dp : NULL);
-            sd_run(c0, FINE_DUST_SPECKS, FINE_RIDE, TAP[q].spot, TAP[q].x, TAP[q].y, &r0, NULL, NULL);
-            sd_run(chart, FINE_DUST_DOTS, FINE_RIDE, -1, TAP[q].x, TAP[q].y, &r1, NULL, NULL);   /* (the creature screen's front from the same point) */
+            sd_run(c3, FINE_DUST_FINE_DOTS, TAP[q].spot, TAP[q].x, TAP[q].y, &r3, NULL, pre ? dp : NULL);
+            sd_run(c0, FINE_DUST_SPECKS, TAP[q].spot, TAP[q].x, TAP[q].y, &r0, NULL, NULL);
+            sd_run(chart, FINE_DUST_DOTS, -1, TAP[q].x, TAP[q].y, &r1, NULL, NULL);   /* (the creature screen's front from the same point) */
             scene_free(c3); scene_free(c0);
             fluid_fine_hard_density(PCT[n]);
             int lost = 0, added = 0;
@@ -2171,7 +2372,7 @@ static double morph_run(morph_rig_t *r, scene_t *sc, uint32_t look, int late, in
         }
         r->o.time = r->now;
         memcpy(prev, r->g.px, (size_t)S * S * 2);
-        r->g.c = (cost_t){ 0, 0, 0 };
+        r->g.c = (cost_t){ 0, 0, 0, 0 };
         fluid_draw_cells(r->d, r->fr, &r->o);
         fluid_draw_send(r->d, &r->o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, r->wbuf, 4096, send_glass, &r->g);
         const bool on = fluid_draw_morphing(r->d);
@@ -2269,7 +2470,7 @@ static void test_morph(const char *dir) {
     const int W = r->W, H = r->H, N = r->N = W * H;
     r->s = fluid_sim_create(W, H, S); r->s->p.still = true;
     r->fr = fluid_frame_create(W, H); r->d = fluid_draw_create(W, H, S, S); r->fine = fluid_fine_create(W, H, S, S);
-    r->g = (glass_t){ calloc((size_t)S * S, 2), S, { 0, 0, 0 } };
+    r->g = (glass_t){ calloc((size_t)S * S, 2), S, { 0, 0, 0, 0 }, NULL };
     r->fx = -1.f;
     r->snap = calloc((size_t)S * S, 2); r->ref = calloc((size_t)S * S, 2);
     r->dots = calloc((size_t)N, 6); r->keep = r->dots + N; r->still = r->keep + N; r->ddots = r->still + N; r->dkeep = r->ddots + N; r->dstill = r->dkeep + N;
@@ -2412,7 +2613,7 @@ static void test_morph(const char *dir) {
                     fluid_fine_caption_box(r->fine, w < nt ? ub : NULL);
                     r->o.nshapes = hd.n; r->o.cap_word = cap.n ? (unsigned)(w + 1) : 0; r->o.time = r->now;
                 }
-                r->g.c = (cost_t){ 0, 0, 0 };
+                r->g.c = (cost_t){ 0, 0, 0, 0 };
                 fluid_draw_cells(r->d, r->fr, &r->o);
                 fluid_draw_send(r->d, &r->o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, r->wbuf, 4096, send_glass, &r->g);
                 const double ms = panel_ms(&r->g.c) + CELLS_MS;
@@ -2503,8 +2704,8 @@ int main(int argc, char **argv) {
     char *fix = read_file(path, &len);
     if (!fix || !(P = pkg_parse(fix, len, &err))) { printf("usage: scene_test fixtures-dir creature.molty\n"); return 2; }
     free(fix);
-    CHECK(fluid_fine_dust_kind_get() == FINE_DUST_SPECKS && fluid_fine_hard_density_get() == FINE_HARD_PCT && fabsf(fluid_fine_ride_px_get() - FINE_RIDE) < 1e-6f,
-          "scenes' dust: the fine specks by default (the Lab's switch: riding %.0f px; kind 3's hard dots at %d %%)", FINE_RIDE, FINE_HARD_PCT);
+    CHECK(fluid_fine_dust_kind_get() == FINE_DUST_SPECKS && fluid_fine_hard_density_get() == FINE_HARD_PCT,
+          "scenes' dust: the fine specks by default (the Lab's switch; kind 3's hard dots at %d %%)", FINE_HARD_PCT);
     test_build();
     test_player();
     test_fill();
@@ -2517,6 +2718,7 @@ int main(int argc, char **argv) {
     test_hd_pixels(argv[1]);
     test_fine(argv[1]);
     test_scene_dust(argv[1]);
+    test_ride(argv[1]);
     test_fine_hard(argv[1]);
     test_open(argv[1]);
     test_morph_again_first();

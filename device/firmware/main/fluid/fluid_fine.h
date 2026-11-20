@@ -5,7 +5,7 @@
  * reference is device/creatures/js/chart-engine.js). It replaces the braille haze of fluid_draw.c for such a scene.
  *
  *   specks   fixed single pixels. A pixel holds one when its density beats its ordered threshold (interleaved gradient
- *            noise: even, not clumpy). Density at d px from the drawing: 0.03 + 0.85 e^(-d/5), only 0.22 of the near term
+ *            noise: even, not clumpy). Density at d px from the drawing: 0.03 + 0.40 e^(-d/5), only 0.22 of the near term
  *            round a symbol; none on the drawing (d < 0.8). Brightness 0.32 .. 1 on the same falloff (0.6 x round a
  *            symbol), colour the water's mixed toward the nearest drawn pixel's by e^(-d/3). Built once per drawing (per
  *            tapped spot) from its shapes at full growth, on the sim task a few ms a frame (fluid_fine_work), and kept: the
@@ -15,9 +15,12 @@
  *            thirds of the specks the light can never hide: a cell counts those once. The others are looked at a
  *            quarter of the cell rows a frame (FINE_PHASES), in turn: the light drifts ~0.3 px a frame, so a row's
  *            turn is never a pixel late (the one thing that goes on turns: nothing the eye follows).
- *   water    near a tapped spot's drawing or the caption (FINE_RIDE) a cell's dust rides the wave, every frame: all of
- *            it by the cell's shift in whole sub-dots, inside the cell (what leaves one side comes in at the other), so
- *            a shift costs no speck any work; never onto the drawing (a lit pixel keeps its own).
+ *   water    all the dust rides the water, every frame, over the whole glass: a cell's shift is the water's slope there
+ *            as the creature screen's dots take it (DOT_REFR), in whole px, at most a sub-dot across and two down, plus
+ *            a calm drift (FINE_DRIFT_*: a slow sway of a pixel either way, so the dust is never frozen at rest). All of
+ *            the cell's dust moves by it inside the cell (what leaves one side comes in at the other), so a shift costs no
+ *            speck any work and changes only that cell; never onto the drawing (a lit pixel keeps its own). While the
+ *            picture changes whole the shifts hold (pause), then take the water again.
  *   caption  the reading's words sit on a dark backdrop (the specks thin to none round its box, a ragged edge that
  *            follows the grains; the drawing under it darker too), coming from the box outward as the reading begins.
  *            The box is the whole reading's (fluid_fine_caption_box),
@@ -48,7 +51,7 @@ extern "C" {
 #define FINE_PARTICLES   6000           /* a word breaking up: its pixels, at most              */
 /* the dust (chart-engine.js AMBIENT .. DRAWN) */
 #define FINE_AMBIENT     0.03f
-#define FINE_PEAK        0.85f
+#define FINE_PEAK        0.40f          /* (the page: 0.85; Juan: half the dust along the lines)  */
 #define FINE_FALL        5.f            /* px                                                   */
 #define FINE_SYM         0.22f          /* the near term round a symbol                          */
 #define FINE_LEVEL_FAR   0.32f
@@ -76,8 +79,9 @@ extern "C" {
 #define FINE_END_S       0.7f           /* the reading's last word: slower ..                    */
 #define FINE_END_SPREAD  26.f           /* .. and farther                                        */
 #define FINE_GRAIN       0.7f           /* of a word's pixels, this many become specks           */
-#define FINE_RIDE        12.f           /* px: the dust rides the water this near a tapped drawing or the caption only */
-#define FINE_RIM         0.78f          /* ... and, under a ring on the rim, from this far out (of the radius) */
+/* the calm drift: two slow plane waves across the glass sway each cell's dust (fluid_fine_frame) */
+#define FINE_DRIFT_PX    1.4f           /* px at most (rounded: a pixel either way, never more)    */
+#define FINE_DRIFT_S     8.f            /* s a sway: a cell moves a pixel about once a second      */
 #define FINE_CATCHUP     1500           /* specks of cells never worked out, off their row's turn a frame, at most */
 
 typedef struct {
@@ -123,18 +127,19 @@ typedef struct fluid_fine {
     const fine_set_t *drawn;            /* the set drawn (its levels below), NULL none           */
     uint8_t *lv, *lv2;                  /* per speck: its level (0 hidden .. 255); a spare for the next set */
     int lvcap, lv2cap;
-    int8_t *sx, *sy;                    /* N: each cell's shift, stage px (its dust rides the water inside the cell) */
+    int8_t *sx, *sy;                    /* N: each cell's shift, stage px (its dust rides the water and the drift inside the cell) */
+    int8_t *dq, *wq;                    /* 2N each: the drift's part of it and the water's (in its steps), x then y, each
+                                         * step held until the sway or the slope is well past it (never back and forth) */
+    float *dcol;                        /* 4W: sin, cos of each drift wave's column part          */
     uint32_t *tot;                      /* N: the cell's own specks' signature, as last worked out */
     uint32_t *stat;                     /* N: ... the part of those the light never hides         */
     uint32_t *eff;                      /* N: what that part was worked out for (1 plain, else the backdrop's gen; 0 not yet) */
     uint8_t *vis;                       /* N: the cell's dust shows this frame                    */
     uint8_t *imm;                       /* N: the word's own cells this frame (a word forming)    */
     uint8_t *why;                       /* N: what moves its dust this frame (1 << FLUID_ANIM_WORD, _WATER) */
-    uint8_t *ride;                      /* N: the dust rides the water there (near a tapped drawing or the caption) */
-    uint32_t ride_key;                  /* what ride was worked out for                          */
-    bool rim;                           /* ... the rim too (fluid_fine_rim)                      */
-    bool pause;                         /* the light holds still this frame (the picture is changing whole: the drawer's) */
-    const uint8_t *ride_with;           /* EXPERIMENT kind 3 (the drawer's, each frame): N, the specks ride the water there too */
+    bool rim;                           /* a ring on the rim (fluid_fine_rim)                    */
+    bool pause;                         /* the light and the specks' shifts hold still this frame (the picture is changing
+                                         * whole: the drawer's) */
     uint8_t lrow;                       /* which quarter of the light's grid rows, and of the cell rows' light-dependent
                                          * specks, is worked out this frame (FINE_PHASES)        */
     bool lgrid_ok;                      /* the light's grid was worked out whole once             */
@@ -169,15 +174,12 @@ typedef struct fluid_fine {
  *         each change sent the frame it happens.
  *         FINE_DUST_DOTS_ILACE (2): the same, the water's own changes sent in every other cell row a frame, rows
  *         alternating, as the creature screen sends its own (the drawing's and the caption's changes at once).
- *         FINE_DUST_FINE_DOTS (3): the fine specks exactly as kind 0 (they hold still at rest), and over them a sparse
+ *         FINE_DUST_FINE_DOTS (3): the fine specks exactly as kind 0, and over them a sparse
  *         layer of the creature screen's dots on the same lattice and the same water: they twinkle at rest and ride a
  *         tap's wave over the whole glass, each change sent the frame it happens; drawn on black pixels only (never on
- *         the drawing, a speck or the caption's backdrop). The specks of a cell a hard dot lives in ride the wave with
- *         it (that cell is sent anyway).
+ *         the drawing, a speck or the caption's backdrop).
  *   hard  percent: kind 3's density, the share of the lattice's dots away from the drawing that carry a hard dot
- *         (FINE_HARD_PCT by default, 0..25).
- *   ride  px: how far from a tapped drawing or the caption the fine specks ride the water (FINE_RIDE by default);
- *         at or past the stage's size, the whole glass (any tap's wave). */
+ *         (FINE_HARD_PCT by default, 0..25). */
 #define FINE_DUST_SPECKS 0
 #define FINE_DUST_DOTS   1
 #define FINE_DUST_DOTS_ILACE 2
@@ -190,8 +192,6 @@ void  fluid_fine_hard_density(int percent);
 int   fluid_fine_hard_density_get(void);
 /** kinds whose dust is the fine specks (0 and 3) */
 static inline bool fluid_fine_specks_kind(int kind) { return kind == FINE_DUST_SPECKS || kind == FINE_DUST_FINE_DOTS; }
-void  fluid_fine_ride_px(float px);
-float fluid_fine_ride_px_get(void);
 
 /** The dust for a W x H grid on an fb_w x fb_h panel (its largest centred square: the stage). NULL: no memory. */
 fluid_fine_t *fluid_fine_create(int W, int H, int fb_w, int fb_h);
@@ -216,8 +216,8 @@ bool fluid_fine_swap(fluid_fine_t *f);
 /** With the drawer idle: the caption's backdrop for the whole reading (stage px [x0, x1, y0, y1], the union of its
  *  words' boxes), so the dark does not move with each word; NULL: each word's own box. */
 void fluid_fine_caption_box(fluid_fine_t *f, const float box[4]);
-/** With the drawer idle: a ring is on the rim (a listen's: the voice touches the water there), so the dust rides the
- *  water near the rim too, and the drawing never breaks into dots under it (fluid_draw.c). */
+/** With the drawer idle: a ring is on the rim (a listen's: the voice touches the water there), so the drawing never
+ *  breaks into dots under it (fluid_draw.c). */
 void fluid_fine_rim(fluid_fine_t *f, bool on);
 /** How long the build wanted last took, us (0 while it runs or none), and in how many fluid_fine_work calls. */
 int fluid_fine_built(const fluid_fine_t *f, int *calls);
