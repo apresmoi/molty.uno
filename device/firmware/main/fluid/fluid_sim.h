@@ -497,6 +497,7 @@ typedef struct {
     int      spent, budget;            /* the drawer's frame before the change's work (us), and so the change's this frame */
     int      room;                     /* (told each frame) its cells' time till the send's pulse, us; 0: none (FRAME_US) */
     int      sendp;                    /* the send a frame of it is likely to take (us: the last, its peaks held a while) */
+    int      jover;                    /* (tests) the most the job's slices went past their budget, in the model's work  */
     int64_t  c0;                       /* (this frame's cells began, us)                                              */
     int      top[3][4];                /* its three slowest frames (the log): frame, cells us (with the poll), send us, its
                                         * biggest part (FLUID_MP_*)                                                   */

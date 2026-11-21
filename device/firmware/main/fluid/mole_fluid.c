@@ -1805,6 +1805,8 @@ static void fluid_task(void *arg) {
     bool overran = false;
     int job_room = 0, idle_us = 0;                       /* (the change's job's last room; the last handoff's wait, us) */
     bool chg = false;                                    /* (a change ran at the last handoff) */
+    int c1[4] = { 0 };                                   /* (this frame on this core: sim, dust ahead, build, reading, us) */
+    int lost[5] = { 0 };                                 /* (the change's latest lost refresh: its frame and those parts) */
     uint32_t te_n = 0;                                   /* the tearing pulse of the last handoff (molty_display_te) */
     int te_per = 16770;                                  /* their period, us (the panel's, measured)                 */
     int64_t te_at = 0, ho_at = 0;                        /* that pulse's time (0: paced by the timer); the last frame's */
@@ -1970,7 +1972,9 @@ static void fluid_task(void *arg) {
             s_fine->pause = false;
             fluid_fine_frame_ahead(s_fine, &fv, &fo);
         }
-        fine_build((int)(next - esp_timer_get_time()));   /* (the dust's build in what is left) */
+        const int64_t tb0 = esp_timer_get_time();
+        fine_build((int)(next - tb0));                    /* (the dust's build in what is left) */
+        const int64_t tj0 = esp_timer_get_time();
         /* a change of picture's new picture read here while the drawer draws (fluid_draw_morph_work: the change given to
          * this task at a handoff, with that handoff's inputs), in what is left before the next wake (JOB_EDGE_US) */
         if (s_draw && s_frame) {
@@ -1978,6 +1982,7 @@ static void fluid_task(void *arg) {
             job_room = left;
             fluid_draw_morph_work(s_draw, s_frame, &s_dopts, left > JOB_MIN_US ? left : JOB_MIN_US);
         }
+        c1[0] = (int)(t1 - t0); c1[1] = (int)(tb0 - t1); c1[2] = (int)(tj0 - tb0); c1[3] = (int)(esp_timer_get_time() - tj0);
         /* pace: the handoff at the same point after each wake: the frame simulated since the last one goes to the drawer
          * now, then the next is simulated (the sim's work never moves the drawer's start). The wake is te_ph.off after every
          * second tearing pulse of the panel: each frame on the glass for two refreshes. te_ph.off keeps the frames' first
@@ -2002,7 +2007,10 @@ static void fluid_task(void *arg) {
                     int64_t due = te.last_us + off;
                     const int64_t late = esp_timer_get_time() - due;
                     if (late > FLUID_TE_SLACK_US && (overran || late >= FLUID_TE_GRACE_US) && molty_display_te_wait(te.total, 3 * te_per / 1000 + 5)) {
-                        if (chg) { int *p = s_draw->m.pace; p[0]++; p[1] = (int)late; p[2] = job_room; p[3] = idle_us; }
+                        if (chg) {
+                            int *p = s_draw->m.pace; p[0]++; p[1] = (int)late; p[2] = job_room; p[3] = idle_us;
+                            lost[0] = s_draw->m.frames; memcpy(lost + 1, c1, sizeof(c1));
+                        }
                         molty_display_te(&te, false);                    /* (too late: the next pulse, a refresh lost) */
                         due = te.last_us + off;
                         overran = false;
@@ -2105,8 +2113,10 @@ static void fluid_task(void *arg) {
                                 t[2][0], t[2][1] / 1000.f, t[2][2] / 1000.f, MOLE_ANIM_PART_NAMES[10 + t[2][3]]);
                 /* (refreshes lost at the pace: the sim late there, its job's room, the drawer late before; the drawer's most) */
                 int *p = s_draw->m.pace;
-                mole_diag_event(false, "change pace lost=%d late=%.1f room=%.1f drawer=%.1f most=%.1f ms", p[0], p[1] / 1000.f, p[2] / 1000.f,
-                                p[3] / 1000.f, p[4] / 1000.f);
+                mole_diag_event(false, "change pace lost=%d late=%.1f room=%.1f drawer=%.1f most=%.1f ms; last lost f%d: sim %.1f ahead %.1f build %.1f read %.1f",
+                                p[0], p[1] / 1000.f, p[2] / 1000.f, p[3] / 1000.f, p[4] / 1000.f,
+                                lost[0], lost[1] / 1000.f, lost[2] / 1000.f, lost[3] / 1000.f, lost[4] / 1000.f);
+                memset(lost, 0, sizeof(lost));
                 memset(p, 0, sizeof(s_draw->m.pace));
             }
             look_was = look;
