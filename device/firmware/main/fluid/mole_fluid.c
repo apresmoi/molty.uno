@@ -320,7 +320,9 @@ static int   s_last_tx = 0, s_last_ty = 0;
 static volatile bool s_full_flush = true;
 static atomic_bool s_screen_want = true;        /* mole_fluid_screen                    */
 static atomic_bool s_screen = true;             /* on the glass now (the task switches it) */
-static bool fluid_quiet(void);
+static atomic_uint s_moved_ms;                  /* the last frame something moved on the glass (uptime ms): fluid_calm_ms */
+#define FLUID_QUIET_PX 20000                    /* ... or sent this many px to the panel (a creature at rest: ~10 k) */
+static uint32_t fluid_calm_ms(void);
 static atomic_bool s_bye = false, s_bye_done = false;   /* mole_fluid_goodbye; it ended   */
 static float    s_bye_lvl = 1.f;                    /* the panel's level the goodbye set */
 static bool     s_word_dots = false;                /* the boot word's dots (s_tx->dots) are drawn */
@@ -1345,7 +1347,7 @@ static void tx_task(void *arg) {
 /* the sender late (a wait's bound ran out: fluid_tx.h): logged once an episode (a panel transfer's own failure is the
  * driver's line) */
 static void tx_late(const char *what) {
-    mole_diag_event(true, "fluid: the sender's %s took over %d ms: nothing goes to the panel till it answers", what, TX_WAIT_MS);
+    mole_diag_event(false, "fluid: the sender's %s took over %d ms: nothing goes to the panel till it answers", what, TX_WAIT_MS);
 }
 static bool s_inline_out;                           /* (the drawer's) its own last window still going out (send_win) */
 /* A change of picture's frame (the whole glass, top to bottom) goes out on the tearing pulse after its handoff's:
@@ -1412,7 +1414,7 @@ static bool tx_drain(void) {
     const bool was = s_txs.late;
     const bool idle = fluid_tx_drain(&s_txs, &(fluid_tx_io_t){ tx_end, tx_done, &ok }, TX_WAIT_MS, &late);
     if (late) tx_late("frame");
-    if (was && idle) mole_diag_event(true, "fluid: the sender answered again: the frame repaints");
+    if (was && idle) mole_diag_event(false, "fluid: the sender answered again: the frame repaints");
     return idle && ok;
 }
 /* the sender, once a boot (it lives on, idle on its queue, across the fluid's restarts); none: the drawer sends in line */
@@ -1658,6 +1660,7 @@ static void draw_task(void *arg) {
                 busy |= (uint8_t)((A->f != 0) << q);
             }
             atomic_store(&s_anim_busy, busy | (fluid_draw_morphing(s_draw) ? 1u : 0u));
+            if (atomic_load(&s_anim_busy) || s_send_px > FLUID_QUIET_PX) atomic_store(&s_moved_ms, (uint32_t)(t2 / 1000));
         }
         {   /* the fine dust's own cost on this core, every ~3 s while a scene shows it (/api/log): the means, the worst
              * frame's cells + send (and its two parts), frames over 33 ms, the windows and pixels a frame, the specks
@@ -1717,6 +1720,7 @@ static bool screen_switch(bool on) {
         if (fb) { memset(fb, 0, (size_t)s_fb_w * s_fb_h * sizeof(uint16_t)); molty_display_flush(); }
     }
     s_full_flush = true;
+    if (on) atomic_store(&s_moved_ms, (uint32_t)(esp_timer_get_time() / 1000));   /* (waking is a move: its first frames come) */
     atomic_store(&s_screen, on);
     xSemaphoreGive(s_idle);
     mole_diag_event(false, "fluid.screen %s (%s)", on ? "on" : "off", e == ESP_OK ? "panel" : esp_err_to_name(e));
@@ -2402,7 +2406,7 @@ esp_err_t mole_fluid_creature_init(void) {
         free_grid();
         return ESP_ERR_NO_MEM;
     }
-    mole_diag_set_quiet(fluid_quiet);
+    mole_diag_set_calm(fluid_calm_ms);
     if (xTaskCreatePinnedToCore(fluid_task, "fluid_task", 6144, NULL, 2, &s_task, 1) != pdPASS) {
         s_run = false; s_task = NULL;
         xSemaphoreGive(s_go);                    /* wake the drawer so it sees s_run=false */
@@ -2878,15 +2882,13 @@ void mole_fluid_progress(float pct, bool done) {
 }
 void mole_fluid_progress_stop(void) { atomic_store(&s_prog_stop, true); }
 bool mole_fluid_screen_on(void) { return atomic_load(&s_screen); }
-/* the screen quiet for the log's flash writes (mole_diag_set_quiet): off, or the panel getting little (a creature at
- * rest: ~10 k px a frame; walking ~50 k, a ring forming 100 k+) */
-#define FLUID_QUIET_KPX 20.f
-static bool fluid_quiet(void) {
-    if (!atomic_load(&s_screen)) return true;
-    xSemaphoreTake(s_mutex, portMAX_DELAY);
-    const bool q = s_stats.send_kpx < FLUID_QUIET_KPX;
-    xSemaphoreGive(s_mutex);
-    return q;
+/* how long the screen has been calm, ms, for the flash's writes that can wait (mole_diag_set_calm, flash_gate.h): 0 while
+ * something moves on it (the drawer's last 100 ms had an animation open, a change of picture, or the panel getting much: a
+ * creature at rest ~10 k px a frame, walking ~50 k, a ring forming 100 k+), UINT32_MAX while it is off */
+static uint32_t fluid_calm_ms(void) {
+    if (!atomic_load(&s_screen)) return UINT32_MAX;
+    const uint32_t d = (uint32_t)(esp_timer_get_time() / 1000) - atomic_load(&s_moved_ms);
+    return d < 100 ? 0 : d;
 }
 
 void mole_fluid_set_status(int status) {

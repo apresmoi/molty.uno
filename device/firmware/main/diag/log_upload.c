@@ -177,11 +177,6 @@ bool log_persist_due(bool requested, uint32_t wanted_since_last)
     return requested || wanted_since_last > 0;
 }
 
-bool log_persist_go(bool quiet, int64_t held_us)
-{
-    return quiet || held_us >= LOG_PERSIST_HOLD_MAX_US;
-}
-
 #define HEADER_TAG "#molty-log 2 "
 
 int log_persist_header(char *out, size_t cap, uint32_t boot, uint32_t sync_up_ms, int64_t sync_wall_ms)

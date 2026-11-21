@@ -5,8 +5,10 @@
  *
  * One small task at 1 Hz (internal stack: it writes SPIFFS and NVS) counts the minute's
  * screen-on and audio seconds, then reads the battery and keeps a sample. A dnd change
- * (from any task, sense.c's PSRAM stack too) wakes it to store the switch and say so on
- * screen ("shh" / "hi" in the fluid). The ring and dnd are shared with httpd under s_mux.
+ * (from any task, sense.c's PSRAM stack too) wakes it to say so on screen ("shh" / "hi"
+ * in the fluid) and to store the switch. Its flash writes (the switch, the history every
+ * 10 min) wait for a calm screen (mole_flash_may, flash_gate.h); a restart or power off
+ * writes them at once. The ring and dnd are shared with httpd under s_mux.
  */
 #include "power.h"
 #include "molty_board.h"
@@ -54,7 +56,10 @@ static int       s_n, s_head;               /* samples kept; the next slot      
 static bool      s_dnd;
 static unsigned  s_dnd_gen = 1;
 static TaskHandle_t s_task;
-static volatile bool s_dnd_dirty;           /* a change the task has not stored yet  */
+static volatile bool s_dnd_dirty;           /* a change the task has not shown yet   */
+static bool      s_dnd_unsaved;             /* (the task's) the switch not on the flash yet           */
+static bool      s_hist_due, s_hist_new;    /* ... the history's write due; samples since the last */
+static fg_hold_t s_dnd_hold, s_hist_hold;
 static volatile bool s_off;                 /* power_off: the goodbye, then off      */
 
 /* ── do not disturb ───────────────────────────────────────────────────────── */
@@ -82,15 +87,20 @@ void power_off(void)
     xTaskNotifyGive(s_task);
 }
 
-/* On the task: keep the switch, and show it. */
-static void dnd_store(void)
+/* On the task: show the switch now; it is kept when the screen is calm (dnd_store). */
+static void dnd_show(void)
 {
     s_dnd_dirty = false;
-    const bool on = s_dnd;
-    nvs_handle_t h;
-    if (nvs_open("power", NVS_READWRITE, &h) == ESP_OK) { nvs_set_u8(h, "dnd", on); nvs_commit(h); nvs_close(h); }
+    s_dnd_unsaved = true;
     mole_fluid_screen(true);
-    mole_creature_state_set(on ? "{\"state\":\"text\",\"text\":\"shh\"}" : "{\"state\":\"text\",\"text\":\"hi\"}");
+    mole_creature_state_set(s_dnd ? "{\"state\":\"text\",\"text\":\"shh\"}" : "{\"state\":\"text\",\"text\":\"hi\"}");
+}
+
+static void dnd_store(void)
+{
+    s_dnd_unsaved = false;
+    nvs_handle_t h;
+    if (nvs_open("power", NVS_READWRITE, &h) == ESP_OK) { nvs_set_u8(h, "dnd", s_dnd); nvs_commit(h); nvs_close(h); }
 }
 
 /* ── history ──────────────────────────────────────────────────────────────── */
@@ -107,21 +117,29 @@ static void load(void)
     fclose(f);
 }
 
+/* The file: the magic, the count (u16), the samples oldest first (load) */
 static void save(void)
 {
-    const uint16_t n = (uint16_t)s_n;
-    sample_t *copy = heap_caps_malloc(sizeof(sample_t) * (n ? n : 1), MALLOC_CAP_SPIRAM);
-    if (!copy) return;
+    s_hist_due = s_hist_new = false;
     xSemaphoreTake(s_mux, portMAX_DELAY);
-    for (int i = 0; i < n; i++) copy[i] = *at(i);
+    const uint16_t n = (uint16_t)s_n;
+    const size_t len = 6 + sizeof(sample_t) * n;
+    uint8_t *buf = heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
+    if (buf) {
+        memcpy(buf, &(uint32_t){ HIST_MAGIC }, 4); memcpy(buf + 4, &n, 2);
+        for (int i = 0; i < n; i++) memcpy(buf + 6 + sizeof(sample_t) * i, at(i), sizeof(sample_t));
+    }
     xSemaphoreGive(s_mux);
-    FILE *f = fopen(HIST_TMP, "wb");
-    bool ok = f && fwrite(&(uint32_t){ HIST_MAGIC }, 4, 1, f) == 1 && fwrite(&n, 2, 1, f) == 1 &&
-              fwrite(copy, sizeof(sample_t), n, f) == n;
-    if (f) fclose(f);
-    heap_caps_free(copy);
-    if (ok) { remove(HIST_PATH); ok = rename(HIST_TMP, HIST_PATH) == 0; }
+    const bool ok = buf && mole_flash_file(HIST_PATH, HIST_TMP, buf, len);
+    heap_caps_free(buf);
     if (!ok) mole_diag_event(false, "power.save failed");
+}
+
+/* On the task: what the flash still owes, when it may go (or at once: a restart or power off is next) */
+static void flush_due(void)
+{
+    if (s_dnd_unsaved && mole_flash_may(&s_dnd_hold)) dnd_store();
+    if ((s_hist_due || (s_hist_new && mole_flash_forced())) && mole_flash_may(&s_hist_hold)) save();
 }
 
 static int8_t rssi_now(void)
@@ -137,8 +155,11 @@ static void off_now(void)
     link_audio_stop_any();
     mole_fluid_goodbye();
     for (int i = 0; i < 80 && !mole_fluid_goodbye_done(); i++) vTaskDelay(pdMS_TO_TICKS(100));
+    mole_flash_force();
+    if (s_dnd_unsaved) dnd_store();
     save();
     mole_diag_event(false, "power.off now");
+    mole_diag_flush(3000);                             /* the log ring does not survive a power off */
     const esp_err_t e = molty_power_off();
     mole_diag_event(false, "power.off failed (%s): restarting", esp_err_to_name(e));
     vTaskDelay(pdMS_TO_TICKS(100));
@@ -154,7 +175,10 @@ static void power_task(void *arg)
         const TickType_t now = xTaskGetTickCount();
         if ((int32_t)(next - now) > 0) ulTaskNotifyTake(pdTRUE, next - now);
         if (s_off) off_now();
-        if (s_dnd_dirty) dnd_store();
+        if (s_dnd_dirty) dnd_show();
+        const bool forced = mole_flash_forced();
+        flush_due();
+        if (forced) mole_flash_flushed();               /* (a restart waits for this: flash_shutdown) */
         if ((int32_t)(xTaskGetTickCount() - next) < 0) continue;
         next += pdMS_TO_TICKS(1000);
         screen_s += mole_fluid_screen_on();
@@ -175,11 +199,12 @@ static void power_task(void *arg)
         s_hist[s_head] = s;
         s_head = (s_head + 1) % HIST_N;
         if (s_n < HIST_N) s_n++;
+        s_hist_new = true;
         xSemaphoreGive(s_mux);
         mole_diag_event(false, "pwr mv=%u pct=%d chg=%d usb=%d scr=%us aud=%us link=%d rssi=%d dnd=%d",
                         s.mv, s.pct, !!(s.flags & F_CHARGING), !!(s.flags & F_USB), s.screen_s, s.audio_s,
                         !!(s.flags & F_LINK), s.rssi, !!(s.flags & F_DND));
-        if (++since_save >= SAVE_EVERY) { since_save = 0; save(); }
+        if (++since_save >= SAVE_EVERY) { since_save = 0; s_hist_due = true; flush_due(); }
     }
 }
 
@@ -192,7 +217,9 @@ esp_err_t power_start(void)
     uint8_t v = 0;
     if (nvs_open("power", NVS_READONLY, &h) == ESP_OK) { if (nvs_get_u8(h, "dnd", &v) == ESP_OK) s_dnd = v; nvs_close(h); }
     load();
-    return xTaskCreate(power_task, "power", 4096, NULL, 1, &s_task) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
+    if (xTaskCreate(power_task, "power", 4096, NULL, 1, &s_task) != pdPASS) return ESP_ERR_NO_MEM;
+    mole_flash_flusher(s_task);                       /* a restart keeps the history (and the switch) first */
+    return ESP_OK;
 }
 
 /* ── HTTP ─────────────────────────────────────────────────────────────────── */

@@ -204,11 +204,6 @@ static void test_persist(void)
     assert(log_persist_due(true, 0));
     assert(!log_persist_due(false, 0));
     assert(log_persist_due(false, 3));
-    /* a due write waits for a quiet screen, never past the hold bound */
-    assert(log_persist_go(true, 0));
-    assert(!log_persist_go(false, 0));
-    assert(!log_persist_go(false, LOG_PERSIST_HOLD_MAX_US - 1));
-    assert(log_persist_go(false, LOG_PERSIST_HOLD_MAX_US));
     assert(LOG_PERSIST_PERIOD_MS == 30 * 60 * 1000 && LOG_PERSIST_BYTES == 12 * 1024);
 
     char buf[256];

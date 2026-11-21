@@ -97,9 +97,7 @@ uint32_t log_upload_backlog(const uint32_t *wanted_seqs, size_t n, uint32_t curs
 #define LOG_PERSIST_MIN_GAP_US    (300LL * 1000000)
 #define LOG_PERSIST_PERIOD_MS     (30 * 60 * 1000)
 #define LOG_PERSIST_NOT_BEFORE_US (90LL * 1000000)
-/* A write freezes the other core ~110 ms (SPIFFS: the flash cache off), a visible hitch mid-animation: a due write waits
- * for the screen to be quiet (off, or nothing much moving on it), but no longer than this, so lines still reach the flash */
-#define LOG_PERSIST_HOLD_MAX_US   (600LL * 1000000)
+/* ... and each of its steps only while the screen is calm (flash_gate.h: a write freezes both cores) */
 
 /* How long to wait before a write may happen (0 = now): never before NOT_BEFORE after
  * boot, never within MIN_GAP of the last write (last_us 0 = none yet). */
@@ -107,8 +105,6 @@ int64_t log_persist_delay_us(int64_t now_us, int64_t last_us);
 /* Whether a wake-up writes: an explicit request (error / important event) always; the
  * periodic tick only when wanted lines arrived since the last write. */
 bool log_persist_due(bool requested, uint32_t wanted_since_last);
-/* Whether a due write goes now: the screen quiet, or held HOLD_MAX already. */
-bool log_persist_go(bool quiet, int64_t held_us);
 
 int log_persist_header(char *out, size_t cap, uint32_t boot, uint32_t sync_up_ms, int64_t sync_wall_ms);
 /* false: not a header of this format */
