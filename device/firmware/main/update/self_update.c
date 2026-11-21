@@ -476,7 +476,15 @@ static void guard_eval(void)
     if (g == UPD_GUARD_MARK_VALID) mole_diag_event(false, "update.valid (%s)", welcomed ? "relay welcome" : "ran its settle time");
 }
 
-static void guard_timer(void *arg) { (void)arg; guard_eval(); }
+/* The window's end: its mark (an otadata sector erase, ~33 ms of both cores frozen) waits for the screen to be still
+ * 500 ms, 5 s at most. Harmless a little late: a reset meanwhile rolls back, as one before the window's end does. */
+static void guard_timer(void *arg)
+{
+    (void)arg;
+    static int waits;
+    if (mole_flash_calm_ms() < 500 && waits++ < 25 && esp_timer_start_once(s_guard_timer, 200000) == ESP_OK) return;
+    guard_eval();
+}
 
 void self_update_welcomed(void)
 {
