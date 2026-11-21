@@ -400,6 +400,12 @@ uint8_t fluid_braille_contour(const float *sub);
 #define FLUID_LOOK_GLASS      0x40000000u  /* ... with this: the panel's mirror keeps it (windows on any rows)          */
 #define FLUID_LOOK_DUST       0x10000000u  /* ... with this: its dust is in. Gained by a look that showed without it: the
                                             * dust comes as a change of its own (the lines stay); lost: nothing      */
+/* a kept look's number: what it is (its kind, in its own bits: a scene numbered 1 is not the creature) and which one */
+enum { FLUID_LOOK_CREATURE, FLUID_LOOK_SCENE, FLUID_LOOK_ASK };
+static inline uint32_t fluid_look_of(int kind, uint32_t id, bool dust) {
+    const uint32_t tag = kind == FLUID_LOOK_SCENE ? 0x08000000u : kind == FLUID_LOOK_ASK ? 0x20000000u : 0x04000000u;
+    return FLUID_LOOK_KEEP | tag | (id & 0x03FFFFFFu) | (dust ? FLUID_LOOK_DUST : 0u);
+}
 #define FLUID_MORPH_FLY       800      /* pairs that fly at most (the rest of each picture fades in place) ..          */
 #define FLUID_MORPH_FLY_PX    2000     /* .. and px of their grains (a pair of 2 x 2 px grains: 4): both fitted to the panel
                                         * model, every change's worst frame under 33 ms (scene_test.c test_morph)        */

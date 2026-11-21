@@ -2598,9 +2598,11 @@ static void test_morph(const char *dir, const char *catp) {
         CHECK(res.nb >= 0 && res.fly <= most && res.fly >= least && res.spare == res.na - res.fly && res.born == res.nb - res.fly,
               "%s: the pairs fly as many as the smaller picture has, at most %d and %d px (%d of %d -> %d); the rest fade (%d) or come up (%d)", RUN[q].name,
               FLUID_MORPH_FLY, FLUID_MORPH_FLY_PX, res.fly, res.na, res.nb, res.spare, res.born);
+        /* (a scene's dust is read before its lines now: its specks on dim line pixels are grains too till the lines come,
+         * ~1000 on the chart: within 20 %) */
         if (RUN[q].na)
-            CHECK(abs(res.na - RUN[q].na) * 100 <= RUN[q].na * 10 && abs(res.nb - RUN[q].nb) * 100 <= RUN[q].nb * 10,
-                  "%s: the pictures' grains as the prototype's, within 10 %% (%d, %d against %d, %d)", RUN[q].name, res.na, res.nb, RUN[q].na, RUN[q].nb);
+            CHECK(abs(res.na - RUN[q].na) * 100 <= RUN[q].na * 10 && abs(res.nb - RUN[q].nb) * 100 <= RUN[q].nb * 20,
+                  "%s: the pictures' grains as the prototype's, within 10 and 20 %% (%d, %d against %d, %d)", RUN[q].name, res.na, res.nb, RUN[q].na, RUN[q].nb);
         /* (a question's letters form in the fluid after its first frames: its picture as read has no lines, they come whole at
          * the end) */
         CHECK(res.phase == 0 && (res.new_seen > 0 || RUN[q].kind == MK_ASK), "%s: the prototype's phases (old lines gone by 0.324 s, the new in the last 0.132 s, every grain down by 1.081 s + the extra; %d frames off)",
@@ -2628,6 +2630,17 @@ static void test_morph(const char *dir, const char *catp) {
         CHECK(s_morph_stale == 0, "interrupted: only the picture kept shows (%d px)", s_morph_stale);
         CHECK(mid && a.over + b.over == 0 && a.unsent + b.unsent == 0, "a change in the middle of one keeps the frame (worst %.1f, %.1f ms)", a.worst, b.worst);
         CHECK(b.diff == 0 && b.frames <= 70 && !fluid_draw_morphing(r->d), "... from the glass as it was, to the chart whole (%d px differ)", b.diff);
+    }
+    {   /* the creature, then the first scene after a boot (numbered 1, as the creature's own number), then the creature
+         * again: each a change of picture (mole_fluid.c's looks: fluid_look_of; a scene's number once equal to the
+         * creature's look read as "the same picture", no change at all) */
+        morph_res_t a, b;
+        const uint32_t cat = fluid_look_of(FLUID_LOOK_CREATURE, 1u, true), first = fluid_look_of(FLUID_LOOK_SCENE, 1u, false);
+        morph_run(r, MK_CAT, NULL, cat, 0, 0, "to-cat", &a);
+        morph_run(r, MK_SCENE, chart, first, 0, 0, "cat-first", &a);
+        morph_run(r, MK_CAT, NULL, cat, 0, 0, "first-cat", &b);
+        CHECK(((cat ^ first) & ~FLUID_LOOK_DUST) && a.frames >= 36 && b.frames >= 36 && a.diff == 0 && b.diff == 0,
+              "the creature, the first scene (numbered 1), the creature again: each a change of picture (%d, %d frames)", a.frames, b.frames);
     }
     {   /* the new picture's dust not in by the cloud (its build starved on the device): the clock waits for it briefly
          * (FLUID_MORPH_DUST_*, FLUID_MORPH_HOLD_*) and the change ends on time without it; the dust comes after it as a

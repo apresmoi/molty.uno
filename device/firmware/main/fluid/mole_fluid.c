@@ -1411,7 +1411,7 @@ static void draw_task(void *arg) {
                     A->comp += (uint32_t)(w ? m->comp : s_draw->ndrawn);   /* (else: the px of changed cells drawn into the kept glass) */
                     if (w) {
                         A->forced |= m->forced; A->keep |= m->keep;
-                        if (m->on) { A->ready_at = m->ready_at; A->held = m->nheld; A->na = m->na; A->nb = m->nb; A->pairs = m->nfly; }
+                        if (m->on) { A->ready_at = m->ready_at; A->held = m->nheld > A->held ? m->nheld : A->held; A->na = m->na; A->nb = m->nb; A->pairs = m->nfly; }
                     }
                 } else if (A->f && ++A->rest >= 10) {
                     uint32_t pc[2][3];                  /* p50, p95, worst of each core */
@@ -1724,9 +1724,9 @@ static void fluid_task(void *arg) {
             fluid_fine_swap(s_fine);
         const bool asking = s_ask.v && s_ask.scr.phase != FLUID_ASK_NONE;   /* (ask_compose draws it over the frame) */
         const bool ready = !fine_look || asking || !fluid_fine_specks_kind(fluid_fine_dust_kind_get()) || fluid_fine_shown(s_fine, s_sp.cur->serial);
-        const uint32_t look = asking ? FLUID_LOOK_KEEP | 0x20000000u | (s_ask.scr.seq & 0x0FFFFFFFu)
-                            : fine_look ? FLUID_LOOK_KEEP | (s_sp.cur->serial & 0x0FFFFFFFu) | (ready ? FLUID_LOOK_DUST : 0u)
-                            : s_crisp ? FLUID_LOOK_KEEP | 1u : FLUID_LOOK_GLASS;
+        const uint32_t look = asking ? fluid_look_of(FLUID_LOOK_ASK, s_ask.scr.seq, true)
+                            : fine_look ? fluid_look_of(FLUID_LOOK_SCENE, s_sp.cur->serial, ready)
+                            : s_crisp ? fluid_look_of(FLUID_LOOK_CREATURE, 1u, true) : FLUID_LOOK_GLASS;
         {   /* each new look (/api/log): as a change of picture, or at once (and why); a change cut at the cloud's limit */
             static uint32_t look_was;
             static int cuts;
