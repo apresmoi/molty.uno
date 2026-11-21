@@ -1714,22 +1714,36 @@ static void fine_build(int room) {
     }
 }
 
-/* The handoff's place after its tearing pulse (fluid_task's pace): the last frame's first window (s_pres_t) at pulse
- * time + ph; the handoff moves so ph sits mid-refresh (per / 2), slowly (EMA of its error; a move only past per / 6, so a
- * frame whose dust took long once moves nothing), wrapping across a pulse with the pulse count it counts from (*n). */
-#define TE_CALM_FRAMES 30   /* steady frames (no change of picture) before the handoff's place follows them */
-static void te_phase(int *off, float *err, uint32_t *n, int per, int64_t pulse) {
-    const uint32_t pt = atomic_load(&s_pres_t);
-    const uint32_t ph = pt - (uint32_t)pulse;
-    if (!pulse || !pt || ph >= (uint32_t)(2 * per)) return;
-    float e = (float)(ph % (uint32_t)per) - per * 0.5f;
-    *err = *err * 0.9f + e * 0.1f;
-    if (fabsf(*err) < per / 6.f) return;
-    int o = *off - (int)*err;
-    *err = 0.f;
+/* The handoff's place after its tearing pulse (fluid_task's pace). What must stay off a pulse is any frame's first
+ * window crossing it (that frame then shows a refresh late, the next a refresh short), not where one kind of frame puts
+ * it: so the spread of the first windows' times after the handoff's pulse (lo..hi: the extremes, forgetting TE_FORGET_US
+ * a frame) is kept inside one refresh with TE_MARGIN_US to spare. Every frame but a change of picture's counts; the
+ * handoff moves only when nothing animates (no tap's wave, reading or change: s_anim_busy) and the spread has not fitted
+ * for TE_BAD_FRAMES such frames in a row (seconds), and then once, to centre it. A spread wider than a refresh moves
+ * nothing (no place holds it). The pulse count it counts from (*n) wraps with it. */
+#define TE_MARGIN_US  1500
+#define TE_FORGET_US  20
+#define TE_BAD_FRAMES 60
+typedef struct { int off, lo, hi, bad; bool seen; } te_phase_t;
+static void te_phase(te_phase_t *p, uint32_t *n, int per, int64_t pulse, bool sample, bool quiet) {
+    const uint32_t pt = atomic_load(&s_pres_t), ph = pt - (uint32_t)pulse;
+    if (sample && pulse && pt && ph < (uint32_t)(2 * per)) {
+        const int v = (int)ph;
+        if (!p->seen) { p->lo = p->hi = v; p->seen = true; }
+        p->lo = v < p->lo + TE_FORGET_US ? v : p->lo + TE_FORGET_US;
+        p->hi = v > p->hi - TE_FORGET_US ? v : p->hi - TE_FORGET_US;
+        if (p->lo > p->hi) p->lo = p->hi = v;
+    }
+    if (!p->seen || !quiet) { p->bad = 0; return; }
+    const int k = (p->lo - TE_MARGIN_US) / per;
+    const bool fits = p->lo - TE_MARGIN_US >= 0 && p->hi + TE_MARGIN_US < (k + 1) * per;
+    if (fits || p->hi - p->lo + 2 * TE_MARGIN_US > per) { p->bad = 0; return; }
+    if (++p->bad < TE_BAD_FRAMES) return;
+    const int d = per / 2 - ((p->lo + p->hi) / 2) % per;
+    int o = p->off + d;
     if (o < 0) { o += per; (*n)--; } else if (o >= per) { o -= per; (*n)++; }
-    *off = o;
-    mole_diag_event(false, "fluid: frames handed off %d us after their pulse (first windows were %u us after it)", o, (unsigned)ph);
+    mole_diag_event(false, "fluid: frames handed off %d us after their pulse (their first windows spread %d..%d us)", o, p->lo, p->hi);
+    p->off = o; p->lo += d; p->hi += d; p->bad = 0;
 }
 
 static void fluid_task(void *arg) {
@@ -1751,8 +1765,7 @@ static void fluid_task(void *arg) {
     uint32_t te_n = 0;                                   /* the tearing pulse of the last handoff (molty_display_te) */
     int te_per = 16770;                                  /* their period, us (the panel's, measured)                 */
     int64_t te_at = 0, ho_at = 0;                        /* that pulse's time (0: paced by the timer); the last frame's */
-    int te_off = 0;                                      /* the handoff after its pulse, us (te_phase)               */
-    float te_err = 0.f;                                  /* where the first windows land against mid-refresh (EMA)   */
+    te_phase_t te_ph = { 0 };                              /* the handoff's place after its pulse (te_phase)          */
 
     while (s_run) {
         esp_task_wdt_reset();
@@ -1922,10 +1935,10 @@ static void fluid_task(void *arg) {
             fluid_draw_morph_work(s_draw, s_frame, &s_dopts, left > JOB_MIN_US ? left : JOB_MIN_US);
         }
         /* pace: the handoff at the same point after each wake: the frame simulated since the last one goes to the drawer
-         * now, then the next is simulated (the sim's work never moves the drawer's start). The wake is te_off after every
-         * second tearing pulse of the panel: each frame on the glass for two refreshes. te_off follows where the frames'
-         * first windows land (pres_mark): it keeps them in the middle of a refresh, so a few ms of jitter in the drawer
-         * never moves one across a pulse (a frame for 3 refreshes, the next for 1). One that comes late hands off at once
+         * now, then the next is simulated (the sim's work never moves the drawer's start). The wake is te_ph.off after every
+         * second tearing pulse of the panel: each frame on the glass for two refreshes. te_ph.off keeps the frames' first
+         * windows (pres_mark) inside one refresh (te_phase), so jitter in the drawer never moves one across a pulse (a
+         * frame for 3 refreshes, the next for 1). One that comes late hands off at once
          * within FLUID_TE_GRACE_US of its time, else at the next pulse: the frame before stays a refresh longer, the rest
          * keep two from there (no short one to catch up). No pulses (no TE line, asleep, or none for 3 periods): the 30 ms
          * timer. Either way a late one goes at once never twice in a row: lower-priority core-1 work gets its time. */
@@ -1941,11 +1954,11 @@ static void fluid_task(void *arg) {
                 else locked = true;
                 if (locked) {
                     molty_display_te(&te, false);
-                    int64_t due = te.last_us + te_off;
+                    int64_t due = te.last_us + te_ph.off;
                     const int64_t late = esp_timer_get_time() - due;
                     if (late > FLUID_TE_SLACK_US && (overran || late >= FLUID_TE_GRACE_US) && molty_display_te_wait(te.total, 3 * te_per / 1000 + 5)) {
                         molty_display_te(&te, false);                    /* (too late: the next pulse, a refresh lost) */
-                        due = te.last_us + te_off;
+                        due = te.last_us + te_ph.off;
                         overran = false;
                     } else overran = late > FLUID_TE_SLACK_US;
                     const int64_t wait = due - esp_timer_get_time();
@@ -1970,13 +1983,9 @@ static void fluid_task(void *arg) {
         const int64_t tw = esp_timer_get_time();
         /* hand the frame to the drawer: wait until it finished the previous one */
         xSemaphoreTake(s_idle, portMAX_DELAY);
-        {   /* (the last frame's first window, now the drawer is idle) only from steady frames: none in a change of
-             * picture or the second after one (its frames put their first window elsewhere: following them would move
-             * the pace at the very moments the eye watches); a move then holds */
-            static int calm;
-            calm = fluid_draw_morphing(s_draw) ? 0 : calm < TE_CALM_FRAMES ? calm + 1 : calm;
-            if (calm >= TE_CALM_FRAMES) te_phase(&te_off, &te_err, &te_n, te_per, ho_at);
-            else te_err = 0.f;
+        {   /* (the last frame's first window, now the drawer is idle) */
+            const bool morph = fluid_draw_morphing(s_draw);
+            te_phase(&te_ph, &te_n, te_per, ho_at, !morph, !morph && !atomic_load(&s_anim_busy));
         }
         ho_at = te_at;
         if (s_dir.bye) {   /* the goodbye's fade: the panel's level, with the drawer idle */
@@ -2038,6 +2047,11 @@ static void fluid_task(void *arg) {
                                 g[FLUID_MD_LCELLS], s_sim->N, g[FLUID_MD_DUS] / 1000, g[FLUID_MD_LUS] / 1000, g[FLUID_MD_LEFT] / 1000, g[FLUID_MD_SORTF],
                                 g[FLUID_MD_WAITC], g[FLUID_MD_WAITL], g[FLUID_MD_JOBN], g[FLUID_MD_JOBUS] / 1000, g[FLUID_MD_JOBMAX] / 1000.f,
                                 g[FLUID_MD_BORN], g[FLUID_MD_WPX]);
+                const int (*t)[4] = s_draw->m.top;          /* (its three slowest frames: frame index, cells + send ms, biggest part) */
+                mole_diag_event(false, "change slow %d:%.1f+%.1f %s %d:%.1f+%.1f %s %d:%.1f+%.1f %s",
+                                t[0][0], t[0][1] / 1000.f, t[0][2] / 1000.f, MOLE_ANIM_PART_NAMES[10 + t[0][3]],
+                                t[1][0], t[1][1] / 1000.f, t[1][2] / 1000.f, MOLE_ANIM_PART_NAMES[10 + t[1][3]],
+                                t[2][0], t[2][1] / 1000.f, t[2][2] / 1000.f, MOLE_ANIM_PART_NAMES[10 + t[2][3]]);
             }
             look_was = look;
         }

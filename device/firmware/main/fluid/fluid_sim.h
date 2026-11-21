@@ -493,6 +493,9 @@ typedef struct {
     bool     full;                     /* a change cut: the next send is whole (its glass may hold what was not sent)   */
     int      spent, budget;            /* the drawer's frame before the change's work (us), and so the change's this frame */
     int      sendp;                    /* the send a frame of it is likely to take (us: the last, its peaks held a while) */
+    int64_t  c0;                       /* (this frame's cells began, us)                                              */
+    int      top[3][4];                /* its three slowest frames (the log): frame, cells us (with the poll), send us, its
+                                        * biggest part (FLUID_MP_*)                                                   */
     fluid_morph_mem_t *jmm;            /* the change that task reads for (set and cleared at the handoff only)          */
     fluid_morph_mem_t *jfree;          /* changes ended in the drawer's frame while that task had them: freed at the handoff */
 } fluid_morph_t;

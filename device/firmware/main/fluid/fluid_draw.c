@@ -1724,8 +1724,9 @@ struct fluid_morph_mem {
     uint32_t *bl; int ngl;             /* the new grains that glide in (n | k << 14, in order), their state             */
     mglide_t *gst;
     int      cost_draw;                /* (the movers' drawing last frame, us: the still layers leave it room)          */
-    mlist_t  os, ol, nb, nl;           /* the old grains with no pair going out, the old lines going, the new grains coming
-                                        * up on their spot, the new lines coming                                     */
+    mlist_t  os, ol, nb, nl, nw;       /* the old grains with no pair going out, the old lines going, the new grains coming
+                                        * up on their spot, the new lines coming, the cells drawn whole with them      */
+    int      olk, olp;                 /* (the old lists made to this cell, in this pass: a share of a frame at a time)  */
 };
 enum { MGOT_DUST = 1, MGOT_LINES = 2, MGOT_DONE = 4, MGOT_FAIL = 8 };   /* (the new dust read, in order, the pairs' new
                                         * grains chosen, its lists made; its lines read and listed; the reader done
@@ -1797,7 +1798,7 @@ static void mm_free(fluid_morph_mem_t *mm) {
     FLUID_FREE(mm->akey); FLUID_FREE(mm->sa.tmp); FLUID_FREE(mm->sb.tmp);
     FLUID_FREE(mm->L0.o); FLUID_FREE(mm->L0.at); FLUID_FREE(mm->L1.o); FLUID_FREE(mm->L1.at);
     FLUID_FREE(mm->fly); FLUID_FREE(mm->bkey); FLUID_FREE(mm->nlc); FLUID_FREE(mm->lbuf); FLUID_FREE(mm->gl); FLUID_FREE(mm->bl); FLUID_FREE(mm->gst);
-    FLUID_FREE(mm->tg); FLUID_FREE(mm->os.e); FLUID_FREE(mm->ol.e); FLUID_FREE(mm->nb.e); FLUID_FREE(mm->nl.e);
+    FLUID_FREE(mm->tg); FLUID_FREE(mm->os.e); FLUID_FREE(mm->ol.e); FLUID_FREE(mm->nb.e); FLUID_FREE(mm->nl.e); FLUID_FREE(mm->nw.e);
     FLUID_FREE(mm);
 }
 static fluid_morph_mem_t *mm_new(const fluid_draw_t *d) {
@@ -1891,7 +1892,7 @@ void fluid_draw_morph_look(fluid_draw_t *d, uint32_t look, uint16_t *snap, bool 
     m->look = look; m->ready = ready; m->ready_at = ready ? 0 : -1; m->frames = 0; m->na = -1;
     if (!m->on) m->mm = NULL;
     m->on = true; m->keep = m->forced = m->jhurry = false; m->held = 0; m->nheld = 0;
-    memset(m->dg, 0, sizeof(m->dg));
+    memset(m->dg, 0, sizeof(m->dg)); memset(m->top, 0, sizeof(m->top));
 }
 
 /* ── the pictures read ── */
@@ -2336,11 +2337,16 @@ static void mlist_done(mlist_t *L) {                    /* (after the second: at
 static inline bool mlist_over(const mlist_t *L) { return !L->e || L->at[L->q] >= (uint32_t)L->n; }
 /* the old picture's (the drawer's, once the pairs are chosen): its grains with no pair going out where they are, each at
  * its own moment, and its lines going a cell at a time (its dust alone coming: its lines stay) */
-static bool old_lists(fluid_draw_t *d, fluid_morph_mem_t *mm) {
+/* (in shares of `budget` us, a cell row at least: 1 made, 0 not yet, -1 no room) */
+static int old_lists(fluid_draw_t *d, fluid_morph_mem_t *mm, int budget) {
     const int W = d->W, N = W * d->H;
-    for (int pass = 0; pass < 2; pass++) {
-        if (pass && (!mlist_room(&mm->os, false) || (!mm->keep && !mlist_room(&mm->ol, false)))) return false;
-        for (int k = 0; k < N; k++) {
+    const int64_t t_in = now_us();
+    for (; mm->olp < 2; mm->olp++, mm->olk = 0) {
+        const int pass = mm->olp;
+        if (pass && !mm->olk && (!mlist_room(&mm->os, false) || (!mm->keep && !mlist_room(&mm->ol, false)))) return -1;
+        for (; mm->olk < N; mm->olk++) {
+            const int k = mm->olk;
+            if (k % W == 0 && k && now_us() - t_in > budget) return 0;
             const int x0 = d->cx[k % W], y0 = d->cy[k / W];
             for (uint32_t n = mm->A.at[k]; n < mm->A.at[k + 1]; n++)
                 if (mm->A.ref[n] == MG_NONE)
@@ -2353,7 +2359,7 @@ static bool old_lists(fluid_draw_t *d, fluid_morph_mem_t *mm) {
     }
     mlist_done(&mm->os); mlist_done(&mm->ol);
     d->m.work += (int)((mm->A.n + mm->L0.n) * 2 * MW_LOOK);
-    return true;
+    return 1;
 }
 /* The reader's, once the new picture is read and in order (the pairs chosen: nf): each pair its new grain, rank to rank
  * along the curves, spaced evenly (as many as the new picture has, and FLUID_MORPH_LAND_PX px of its grains; the other
@@ -2400,23 +2406,22 @@ static bool new_grains(const fluid_draw_t *d, fluid_morph_mem_t *mm) {
     return true;
 }
 /* a cell the reader could not take apart (no room, or its look changed since it was read): drawn whole at its lines'
- * moment */
-#define MCELL (1u << 30)
+ * moment (the list nw, its entries the cells) */
 static inline bool cell_whole(const fluid_draw_t *d, const fluid_morph_mem_t *mm, int k) { return mm->stale[k] || (lines_now(d, k) && !mm->nlc[k]); }
 /* the new lines' list (the reader's, once its lines and its dust are read: a scene's specks on its lines are in them), a
- * cell at a time (its dust alone coming: at the end); a cell drawn whole there an entry of its own (MCELL | k) */
+ * cell at a time (its dust alone coming: at the end); the cells drawn whole at their lines' moment in a list of their own */
 static bool new_lines(const fluid_draw_t *d, fluid_morph_mem_t *mm) {
     const int W = d->W, N = W * d->H;
     for (int pass = 0; pass < 2; pass++) {
-        if (pass && !mlist_room(&mm->nl, true)) return false;
+        if (pass && (!mlist_room(&mm->nl, true) || !mlist_room(&mm->nw, false))) return false;
         for (int k = 0; k < N; k++) {
             const int x0 = d->cx[k % W], y0 = d->cy[k / W], q = mm->keep ? mq(MP_LEN) - 1 : cell_q(k, MP_NEW_LINES0, MP_NEW_LINES1);
             for (uint32_t r = mm->L1.at[k]; r < mm->L1.at[k + 1]; r++)
                 mlist_put(&mm->nl, pass, q, mpix(x0 + (mm->L1.o[r] & 15), y0 + (mm->L1.o[r] >> 4), false), mm->L1.col[r]);
-            if (cell_whole(d, mm, k)) mlist_put(&mm->nl, pass, q, MCELL | (uint32_t)k, 0);
+            if (cell_whole(d, mm, k)) mlist_put(&mm->nw, pass, q, (uint32_t)k, 0);
         }
     }
-    mlist_done(&mm->nl);
+    mlist_done(&mm->nl); mlist_done(&mm->nw);
     mm->rw += (int)(mm->L1.n * 2 * MW_LOOK);
     return true;
 }
@@ -2762,9 +2767,10 @@ static void morph_frame(fluid_draw_t *d, const fluid_frame_t *s, const fluid_dra
         /* the pairs chosen, then the lists made, each in what the frame leaves (else the next), before the drawer's pass:
          * that frame has its cells */
         if (!mm->chosen && MP_LEFT() > (int)((mm->A.n < FLUID_MORPH_FLY ? mm->A.n : FLUID_MORPH_FLY) * MW_FLY)) morph_plan(d);
-        if (mm->chosen && MP_LEFT() > (int)((mm->A.n + mm->L0.n) * 3 * MW_LOOK)) {
-            if (!old_lists(d, mm)) { morph_end(d, true); return; }
-            mm->planned = true;
+        if (mm->chosen && MP_LEFT() > 1000) {
+            const int r = old_lists(d, mm, MP_LEFT() - 500);
+            if (r < 0) { morph_end(d, true); return; }
+            mm->planned = r > 0;
         }
         MP_LAP(FLUID_MP_PAIR);
         morph_inline(d, s, o);                          /* (its new picture read meanwhile, as the job would) */
@@ -2848,25 +2854,25 @@ static void morph_frame(fluid_draw_t *d, const fluid_frame_t *s, const fluid_dra
     /* the still layers: each list's moments up to now turned (the old ones first: the new never pass them), a moment at
      * a time while the frame has room, one at least when one lags: late everywhere at once, never by rows. The movers
      * drawn after keep their room (last frame's) */
-    mlist_t *const L[4] = { &mm->os, &mm->ol, &mm->nb, &mm->nl };
+    mlist_t *const L[5] = { &mm->os, &mm->ol, &mm->nb, &mm->nl, &mm->nw };
     {
         const int qn = m->n, room = mm->cost_draw;
-        static const uint8_t lap[4] = { FLUID_MP_SPARE, FLUID_MP_SPARE, FLUID_MP_LINES, FLUID_MP_LINES };
+        static const uint8_t lap[5] = { FLUID_MP_SPARE, FLUID_MP_SPARE, FLUID_MP_LINES, FLUID_MP_LINES, FLUID_MP_END };
         int qold = MP_NQ;                               /* (the old ones' next moment) */
-        for (int l = 0; l < 4; l++) {
+        for (int l = 0; l < 5; l++) {
             mlist_t *const li = L[l];
             if (!li->e || (l >= 2 && !(mm->got & (l == 2 ? MGOT_DUST : MGOT_LINES)))) continue;
             const int qto = l >= 2 && qold < qn ? qold - 1 : qn;
             int done = 0, forced = 0;
             while (li->q <= qto && li->q < MP_NQ && li->at[li->q] < (uint32_t)li->n) {
                 const int cnt = (int)(li->at[li->q + 1] - li->at[li->q]);
-                const bool fits = MP_LEFT() - room >= (int)(cnt * (MW_ITEM + 2.f * MW_PX));
+                const bool fits = MP_LEFT() - room >= (int)(cnt * (l == 4 ? 128.f * MW_SHAPE : MW_ITEM + 2.f * MW_PX));
                 if (!fits && (forced || li->q > qn - 3 * MP_RATE)) break;   /* (no room: it waits; 3 frames late, a moment a frame still) */
                 forced += !fits;
                 w0 = mm->wpx;
                 int whole = 0;
                 for (uint32_t i = li->at[li->q]; i < li->at[li->q + 1]; i++) {
-                    if (l == 3 && (li->e[i] & MCELL) && !(li->e[i] >> 31)) whole += cell_draw(d, o, (int)(li->e[i] & ~MCELL));
+                    if (l == 4) whole += cell_draw(d, o, (int)li->e[i]);
                     else gput(d, li->e[i], li->col ? li->col[i] : 0, l == 2);
                 }
                 li->q++; done += cnt;
@@ -2876,7 +2882,7 @@ static void morph_frame(fluid_draw_t *d, const fluid_frame_t *s, const fluid_dra
             stepped += done;
             if (l < 2) qold = li->q < qold && !mlist_over(li) ? li->q : qold;
             if (l == 3 && done && !m->dg[FLUID_MD_LIN0]) m->dg[FLUID_MD_LIN0] = m->frames;
-            if (l == 3 && (mm->got & MGOT_LINES) && mlist_over(li) && !m->dg[FLUID_MD_LINF]) m->dg[FLUID_MD_LINF] = m->frames;
+            if (l == 4 && (mm->got & MGOT_LINES) && mlist_over(li) && mlist_over(L[3]) && !m->dg[FLUID_MD_LINF]) m->dg[FLUID_MD_LINF] = m->frames;
             MP_LAP(lap[l]);
         }
     }
@@ -2918,7 +2924,7 @@ static void morph_frame(fluid_draw_t *d, const fluid_frame_t *s, const fluid_dra
     /* the end: the clock at its end, every list through, the dust down; the cells where a mover came to rest over a lit
      * pixel written again (a few: at once, the frame the dust is down) */
     bool caught = m->n >= qend && m->dg[FLUID_MD_SETTLE] && (mm->got & (MGOT_DUST | MGOT_LINES)) == (MGOT_DUST | MGOT_LINES);
-    for (int l = 0; caught && l < 4; l++) caught = mlist_over(L[l]);
+    for (int l = 0; caught && l < 5; l++) caught = mlist_over(L[l]);
     if (caught) {
         float wk = 0.f;
         for (int k = 0; k < N; k++) if (mm->dmg[k]) wk += cell_whole(d, mm, k) ? cell_draw(d, o, k) * MW_SHAPE : cell_again(d, k) * MW_PX;
@@ -2951,6 +2957,7 @@ static void morph_begin(fluid_draw_t *d) {
     const int send = m->sendp > FLUID_MORPH_SEND_US ? m->sendp : FLUID_MORPH_SEND_US;
     const int cells = FLUID_MORPH_FRAME_US - send < FLUID_MORPH_CELLS_US ? FLUID_MORPH_FRAME_US - send : FLUID_MORPH_CELLS_US;
     m->budget = (idle ? FLUID_MORPH_IDLE_US : cells) - (m->spent ? m->spent : FLUID_MORPH_SPENT_US);
+    m->c0 = now_us() - (m->spent ? m->spent : 0);
     m->spent = 0;                                       /* (told again each frame) */
     memset(m->prof, 0, sizeof(m->prof));
     if (!m->on) return;
@@ -3462,9 +3469,18 @@ int fluid_draw_send2(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fl
         const int64_t t0 = now_us();
         const int n = morph_send(d, o, ov, mark, &sd);
         m->px = n; m->wins = s_wins - n0;
-        if (n > 0) {                                    /* (the send this frame took, the next one's guess: its peaks held a while) */
-            const int us = (int)(now_us() - t0), held = m->sendp - m->sendp / 16;
-            m->sendp = us > held ? us : held;
+        const int us = (int)(now_us() - t0);
+        if (n > 0) { const int held = m->sendp - m->sendp / 16; m->sendp = us > held ? us : held; }   /* (the next one's guess: its peaks held) */
+        {   /* (its three slowest frames, for the log) */
+            const int cells = (int)(t0 - m->c0);
+            int big = 0;
+            for (int p = 1; p < FLUID_MP_N; p++) if (m->prof[p] > m->prof[big]) big = p;
+            int q = 3;
+            while (q > 0 && cells + us > m->top[q - 1][1] + m->top[q - 1][2]) q--;
+            if (q < 3) {
+                memmove(m->top[q + 1], m->top[q], sizeof(m->top[0]) * (size_t)(2 - q));
+                m->top[q][0] = m->frames; m->top[q][1] = cells; m->top[q][2] = us; m->top[q][3] = big;
+            }
         }
         if (m->mm && m->mm->last) {                     /* (its last frame: the look whole, its specks as the dust has them) */
             morph_end((fluid_draw_t *)d, false);
