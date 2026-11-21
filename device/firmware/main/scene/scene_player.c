@@ -892,7 +892,8 @@ static void paint_items(const ctx_t *c, const scene_t *sc, float t, float grow, 
 void scene_grow_tick(scene_grow_t *g, bool reading, float dt) {
     if (g->spot < 0) return;
     g->t += dt;
-    if (!reading && g->t >= SCENE_GROW_IN_S && (g->out -= dt / SCENE_GROW_OUT_S) <= 0.f) *g = (scene_grow_t){ -1, 0.f, 0.f };
+    g->rest = reading ? 0.f : g->rest + dt;            /* (a tap with no reading: past the hold from the start) */
+    if (g->rest > SCENE_GROW_HOLD_S && g->t >= SCENE_GROW_IN_S && (g->out -= dt / SCENE_GROW_OUT_S) <= 0.f) *g = (scene_grow_t){ -1, 0.f, 0.f, 0.f };
 }
 
 void scene_grow_apply(const scene_grow_t *g, scene_t *sc) {

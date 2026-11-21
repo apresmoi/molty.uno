@@ -169,18 +169,24 @@ static inline float scene_hd_dust(const scene_hd_t *h) { return h->gen || h->out
 /* A tapped spot's drawing grows with the ripple the tap starts, holds while its reading plays,
  * then eases back to exactly as built. Its drawing: the items in the groups it lights (each
  * about its own centre, and brighter; those `when: "lit"` fade in), else the items inside its
- * disc (about the spot's centre). */
+ * disc (about the spot's centre). Its reading's first word (and with it the caption's backdrop)
+ * comes once the growth is over (scene_grow_settled), and after its reading the drawing stays
+ * grown while the backdrop lifts (SCENE_GROW_HOLD_S): the growth, the backdrop and the tap's
+ * wave never all change the same frames. */
 #define SCENE_GROW      PKG_GROW        /* its scale, grown, unless its spot says (grow)      */
 #define SCENE_GROW_IN_S 0.5f            /* the growth, easing out as the ring spreads       */
-#define SCENE_GROW_OUT_S 0.4f           /* back, once its reading is over                   */
+#define SCENE_GROW_HOLD_S 0.8f          /* held grown so long after its reading (the backdrop's lift, FINE_END_S, and a frame or two) */
+#define SCENE_GROW_OUT_S 0.4f           /* then back                                        */
 #define SCENE_LIT_WHITE 0.5f            /* a lit item's colour this far towards white        */
 typedef struct {
     int spot;                           /* the tapped spot (item), -1 none                  */
-    float t, out;                       /* s since the tap; 1 held .. 0 back                */
+    float t, out, rest;                 /* s since the tap; 1 held .. 0 back; s since its reading ended */
 } scene_grow_t;
-static inline void scene_grow_tap(scene_grow_t *g, int spot) { *g = (scene_grow_t){ spot, 0.f, 1.f }; }
+static inline void scene_grow_tap(scene_grow_t *g, int spot) { *g = (scene_grow_t){ spot, 0.f, 1.f, SCENE_GROW_HOLD_S }; }
 /** Advance by dt: reading, its reading (or a say over the scene) still plays. */
 void scene_grow_tick(scene_grow_t *g, bool reading, float dt);
+/** Its growth is over (or none): a tapped spot's reading shows its first word only then. */
+static inline bool scene_grow_settled(const scene_grow_t *g) { return g->spot < 0 || g->t >= SCENE_GROW_IN_S; }
 /** sc's focus and grow from g (none: as built). */
 void scene_grow_apply(const scene_grow_t *g, scene_t *sc);
 /** The scale a tap on spot item n grows its drawing to (its grow; SCENE_GROW for none). */
