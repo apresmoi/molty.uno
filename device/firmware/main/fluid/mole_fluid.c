@@ -329,6 +329,7 @@ static uint8_t *s_kdots, *s_kdots_d;
 /* its fine dust (fluid_fine.h): built on this task a few ms a frame, drawn by the drawer; the cells a tapped spot's
  * drawing covers (the task's, the drawer's: the water never breaks them); the drawing at full growth it gathers round */
 static fluid_fine_t  *s_fine;
+static bool           s_fine_go;                    /* its next frame is worked out ahead on this task (fluid_fine_frame_ahead) */
 static uint8_t       *s_still, *s_still_d;
 static fluid_shape_t *s_fshp;
 static volatile uint32_t s_sim_fill_us, s_sim_build_us;   /* the sim's last frame: a scene's shapes and rings, the dust's build */
@@ -630,6 +631,7 @@ static esp_err_t build_grid(int W, int H) {
     if (s_draw) s_frame = fluid_frame_create(W, H);
     if (!s_frame) { free_grid(); return ESP_ERR_NO_MEM; }
     s_fine = fluid_fine_create(W, H, s_fb_w, s_fb_h);    /* NULL: scenes keep the braille haze */
+    s_fine_go = false;
     s_noverlay = s_dnletters = 0;
     s_hd = (scene_hd_t){ 0, false, 1.f };             /* nothing held from the old grid */
     s_full_flush = true;
@@ -1275,11 +1277,102 @@ esp_err_t mole_fluid_creature_file_get(uint8_t **out, size_t *len, bool *is_defa
     return *out ? ESP_OK : ESP_ERR_NOT_FOUND;
 }
 
+/* ── Sender (core 1): a scene's windows of its kept glass, while the drawer draws its next band ──────────────
+ * The drawer queues each window (fluid_draw_glass_sender: where it is in the glass, the mark over it) and waits until the
+ * sender has sent them all (tx_drain) before its frame ends and before any window of its own: it gives s_idle, which
+ * every other caller of the panel takes, only after that, so one task at a time talks to the panel. While windows are
+ * queued the sender owns the two window buffers (s_win, s_win2); the glass's rows a window sends are not drawn again in
+ * the frame (glass_send). No sender (no memory for its task, or one window buffer only): the drawer sends in line. */
+typedef struct { const uint16_t *glass; int16_t stride, x, y, w, h; int8_t mark, pal, op; } tx_rec_t;
+enum { TX_COPY, TX_DIRECT, TX_END };                /* op: copied and the mark drawn over; whole rows straight; the frame's end */
+#define TX_DEPTH   32        /* windows queued at most (a frame sends 15 to 40: the drawer waits for room meanwhile) */
+#define TX_STACK   4096      /* internal RAM (a PSRAM stack must not run while the flash is written). Its deepest call is the
+                              * panel driver's (spi_master queueing, and an error's log line: ~2 KB); twice that */
+#define TX_PRIO    3         /* above the sim (2) on its core: a window goes out as soon as it is queued, then it waits on the DMA */
+#define TX_WAIT_MS 300       /* the drawer waits at most this for room in the queue or for the frame's end (a window that fails
+                              * ends the sender's frame at once; the driver's own waits are 100 ms) */
+static QueueHandle_t s_txq;                         /* NULL: no sender */
+static SemaphoreHandle_t s_tx_done;                 /* given by the sender at each TX_END */
+static TaskHandle_t s_txtask;
+static int s_tx_n, s_tx_open;                       /* (the drawer's) windows queued since its last TX_END; TX_ENDs not answered */
+static uint32_t s_tx_qwait_us;                      /* (the drawer's) its waits for room in the queue, this frame */
+static struct { uint32_t busy_us, px, wins; bool fail; } s_tx_last;   /* the sender's last frame (read once its TX_END is answered) */
+static void tx_task(void *arg) {
+    (void)arg;
+    int cur = 0; bool fail = false; uint32_t busy = 0, px = 0, wins = 0;
+    for (;;) {
+        tx_rec_t r;
+        if (xQueueReceive(s_txq, &r, portMAX_DELAY) != pdTRUE) continue;
+        const int64_t t0 = esp_timer_get_time();
+        if (r.op == TX_END) {                       /* the frame's last window out, then the drawer goes on */
+            if (wins && !fail) fail = molty_display_blit_wait() != ESP_OK;
+            s_tx_last.busy_us = busy + (uint32_t)(esp_timer_get_time() - t0); s_tx_last.px = px; s_tx_last.wins = wins; s_tx_last.fail = fail;
+            fail = false; busy = px = wins = 0;
+            xSemaphoreGive(s_tx_done);
+            continue;
+        }
+        if (!fail) {                                /* (once one failed, the rest of the frame is dropped: it repaints whole) */
+            const uint16_t *src = r.glass + (size_t)r.y * r.stride + r.x;
+            if (r.op == TX_COPY) {                  /* into the buffer the panel is not reading (blit_async waits for the other) */
+                uint16_t *buf = cur ? s_win2 : s_win;
+                for (int y = 0; y < r.h; y++) memcpy(buf + (size_t)y * r.w, src + (size_t)y * r.stride, sizeof(uint16_t) * (size_t)r.w);
+                fluid_draw_mark(s_draw, &(fluid_rect_t){ buf, r.w, r.x, r.y, r.x + r.w, r.y + r.h }, r.pal, r.mark);
+                src = buf; cur ^= 1;
+            }
+            fail = molty_display_blit_async(r.x, r.y, r.w, r.h, src) != ESP_OK;
+            px += (uint32_t)(r.w * r.h); wins++;
+        }
+        busy += (uint32_t)(esp_timer_get_time() - t0);
+    }
+}
+static void tx_bound(const char *what) {            /* (a wait's bound hit: logged once a boot) */
+    static bool logged;
+    if (!logged) { logged = true; mole_diag_event(true, "fluid: the sender's %s took over %d ms: the frame repaints", what, TX_WAIT_MS); }
+}
+static int tx_glass(void *ctx, const uint16_t *glass, int stride, int x, int y, int w, int h, bool direct, int mark, int pal) {
+    (void)ctx;
+    const tx_rec_t r = { glass, (int16_t)stride, (int16_t)x, (int16_t)y, (int16_t)w, (int16_t)h, (int8_t)mark, (int8_t)pal, (int8_t)(direct ? TX_DIRECT : TX_COPY) };
+    const int64_t t = esp_timer_get_time();
+    const bool ok = xQueueSend(s_txq, &r, pdMS_TO_TICKS(TX_WAIT_MS)) == pdTRUE;
+    s_tx_qwait_us += (uint32_t)(esp_timer_get_time() - t);
+    if (!ok) { tx_bound("queue"); return 1; }
+    s_tx_n++;
+    return 0;
+}
+static inline bool tx_idle(void) { return !s_tx_n && !s_tx_open; }
+/* every window queued sent and the sender idle (true), or false: one failed, or the sender did not answer in time (then
+ * nothing else may talk to the panel: the drawer sends nothing until it has) */
+static bool tx_drain(void) {
+    if (s_tx_n) {
+        const tx_rec_t end = { .op = TX_END };
+        if (xQueueSend(s_txq, &end, pdMS_TO_TICKS(TX_WAIT_MS)) != pdTRUE) { tx_bound("queue"); return false; }
+        s_tx_n = 0; s_tx_open++;
+    }
+    bool ok = true;
+    for (; s_tx_open; s_tx_open--) {
+        if (xSemaphoreTake(s_tx_done, pdMS_TO_TICKS(TX_WAIT_MS)) != pdTRUE) { tx_bound("frame"); return false; }
+        ok &= !s_tx_last.fail;
+    }
+    return ok;
+}
+/* the sender, once a boot (it lives on, idle on its queue, across the fluid's restarts); none: the drawer sends in line */
+static void tx_start(void) {
+    if (s_txtask || !s_win2) return;
+    s_txq = xQueueCreate(TX_DEPTH, sizeof(tx_rec_t));
+    s_tx_done = s_txq ? xSemaphoreCreateBinary() : NULL;
+    if (s_tx_done && xTaskCreatePinnedToCore(tx_task, "fluid_tx", TX_STACK, NULL, TX_PRIO, &s_txtask, 1) == pdPASS) return;
+    if (s_tx_done) vSemaphoreDelete(s_tx_done);
+    if (s_txq) vQueueDelete(s_txq);
+    s_txq = NULL; s_tx_done = NULL; s_txtask = NULL;
+    mole_diag_event(true, "fluid: no sender task (int free %u): the drawer sends in line", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+}
+
 /* ── Drawer task (core 0): what changed in the latest snapshot, to the panel ──── */
 
 static int s_send_n, s_send_px; static int64_t s_blit_us;   /* this frame's windows to the panel (the drawer) */
 static int send_win(void *ctx, int x, int y, int w, int h, const uint16_t *px) {
     (void)ctx;
+    if (!tx_idle() && !tx_drain()) return 1;       /* (the sender's windows first: one task at a time on the panel) */
     const int64_t t = esp_timer_get_time();
     const int e = (s_win2 ? molty_display_blit_async(x, y, w, h, px) : molty_display_blit(x, y, w, h, px)) == ESP_OK ? 0 : 1;
     s_blit_us += esp_timer_get_time() - t; s_send_n++; s_send_px += w * h;
@@ -1293,7 +1386,9 @@ esp_err_t mole_fluid_framebuffer_sync(void) {
     return xSemaphoreTake(s_fb_done, pdMS_TO_TICKS(500)) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
 }
 
-static uint32_t s_last_wait_us;                     /* the drawer's wait for its last window's transfer, this frame */
+static uint32_t s_last_wait_us;                     /* the drawer's wait for its last window's transfer, this frame (with a
+                                                     * sender: for room in its queue and for the frame's end) */
+static bool s_tx_frame;                             /* this frame's windows went through the sender (push: its time, s_tx_last) */
 /* the bench (mole_fluid_bench_*): records taken, a finger's tap to inject at the next touch poll (1 << 31 | x << 16 | y,
  * panel px), the animations open (bits FLUID_ANIM_*, the wave's while a change runs) */
 static mole_anim_rec_t *volatile s_bench;
@@ -1346,6 +1441,7 @@ static void draw_task(void *arg) {
         const fluid_overlay_t ov = s_dov;
         const unsigned ask_seq = s_dask;
         int64_t t1 = t0;
+        s_tx_frame = false;
         if (fb && s_draw && s_frame) {
             if (full) s_draw->force = true;
             /* overlays blend over the pixel under them: redraw the cells under the last
@@ -1353,11 +1449,24 @@ static void draw_task(void *arg) {
             else { fluid_draw_overlay_dirty(s_draw, &ov_drawn); fluid_draw_overlay_dirty(s_draw, &ov); }
             nc = fluid_draw_cells(s_draw, s_frame, &s_dopts);
             t1 = esp_timer_get_time();
-            bool sent = fluid_draw_send2(s_draw, &s_dopts, &ov, mark, full, s_win, s_win2, s_win_px, send_win, NULL) >= 0;
-            if (s_win2) { const int64_t tw = esp_timer_get_time(); sent &= molty_display_blit_wait() == ESP_OK; s_last_wait_us = (uint32_t)(esp_timer_get_time() - tw); s_blit_us += s_last_wait_us; }
+            /* a scene's windows of its kept glass go to the sender (core 1) while this core draws the next band; a sender
+             * that did not answer last frame: nothing goes to the panel until it has */
+            const bool txok = tx_idle() || tx_drain();
+            fluid_draw_glass_sender(txok && s_txq ? tx_glass : NULL, NULL);
+            s_tx_qwait_us = 0;
+            bool sent = txok && fluid_draw_send2(s_draw, &s_dopts, &ov, mark, full, s_win, s_win2, s_win_px, send_win, NULL) >= 0;
+            const int64_t tw = esp_timer_get_time();
+            s_tx_frame = s_tx_n > 0;
+            if (s_tx_frame) {                           /* (its windows, pixels and time are the frame's) */
+                sent &= tx_drain();
+                if (tx_idle()) { s_send_n += (int)s_tx_last.wins; s_send_px += (int)s_tx_last.px; s_blit_us += s_tx_last.busy_us; }
+            }
+            if (s_win2 && tx_idle()) sent &= molty_display_blit_wait() == ESP_OK;   /* (its own last window) */
+            s_last_wait_us = (uint32_t)(esp_timer_get_time() - tw) + s_tx_qwait_us;
+            if (!s_tx_frame) s_blit_us += s_last_wait_us;
             s_full_flush = !sent;                       /* a window that failed: repaint all */
             mark_drawn = mark; pal_drawn = s_dopts.palette; ov_drawn = ov;
-            if (s_fb_want && !fluid_draw_morphing(s_draw)) {   /* the same frame into the framebuffer (a change of picture keeps the old one there: after it) */
+            if (s_fb_want && !fluid_draw_morphing(s_draw) && tx_idle()) {   /* the same frame into the framebuffer (a change of picture keeps the old one there: after it) */
                 const fluid_rect_t t = { fb, s_fb_w, 0, 0, s_fb_w, s_fb_h };
                 fluid_draw_rect(s_draw, &s_dopts, &t, true);
                 fluid_draw_overlay(s_draw, &t, s_dopts.palette, &ov);
@@ -1404,7 +1513,7 @@ static void draw_task(void *arg) {
                     if ((uint32_t)(t2 - t0) > A->worst) { A->worst = (uint32_t)(t2 - t0); A->worst_c = (uint32_t)(t1 - t0); }
                     uint32_t *v = R->v;
                     const bool w = q == FLUID_ANIM_WAVE;
-                    v[0] = (uint32_t)(t1 - t0); v[1] = (uint32_t)(t2 - t1); v[2] = (uint32_t)m->cmp_us; v[3] = (uint32_t)m->push_us;   /* (every frame's: making its windows, handing them over) */
+                    v[0] = (uint32_t)(t1 - t0); v[1] = (uint32_t)(t2 - t1); v[2] = (uint32_t)m->cmp_us; v[3] = s_tx_frame ? s_tx_last.busy_us : (uint32_t)m->push_us;   /* (every frame's: making its windows, handing them over or the sender's time) */
                     v[4] = s_last_wait_us; v[5] = s_sim_work_us; v[6] = s_sim_fill_us; v[7] = s_sim_build_us; v[8] = fine_f; v[9] = fine_r;
                     for (int p = 0; p < FLUID_MP_N; p++) v[10 + p] = w ? (uint32_t)m->prof[p] : 0;
                     for (int p = 0; p < MOLE_ANIM_PARTS; p++) { A->sum[p] += v[p]; A->max[p] = v[p] > A->max[p] ? v[p] : A->max[p]; }
@@ -1692,6 +1801,18 @@ static void fluid_task(void *arg) {
         sim_frame(rdt, &cfg);
         int64_t t1 = esp_timer_get_time();
         s_sim_work_us = (uint32_t)(t1 - t0);
+        /* the dust's frame, worked out here while the drawer still draws the last one: from this task's own shapes, dots
+         * and water, as the handoff below gives them to the drawer (not when a set swaps in there: it would be the old one's) */
+        if (s_fine_go && s_fine && s_cur == ST_SCENE && !s_hd.out && s_hd.gen && s_nshp >= 0 && !fluid_fine_swap_due(s_fine)) {
+            static fluid_frame_t fv;                    /* (this task's alone: off its stack) */
+            static fluid_draw_opts_t fo;
+            fv.W = s_sim->W; fv.H = s_sim->H; fv.h = s_sim->h;
+            fo.palette = cfg.palette; fo.time = s_tnow; fo.shapes = s_shp; fo.nshapes = s_nshp; fo.kdots = s_kdots; fo.cap_word = s_cap_word;
+            fo.cap_unformed = s_cap_word && FINE_REVEAL_S > 0.f ? fmaxf(0.f, 1.f - (s_tnow - s_cap_t0) / (FINE_REVEAL_S + 1e-6f)) : 0.f;
+            fluid_fine_caption_box(s_fine, s_cap_box_on ? s_cap_box : NULL);
+            s_fine->pause = false;
+            fluid_fine_frame_ahead(s_fine, &fv, &fo);
+        }
         /* hand the frame to the drawer: wait until it finished the previous one */
         xSemaphoreTake(s_idle, portMAX_DELAY);
         if (s_dir.bye) {   /* the goodbye's fade: the panel's level, with the drawer idle */
@@ -1735,7 +1856,16 @@ static void fluid_task(void *arg) {
             if ((look ^ look_was) & ~FLUID_LOOK_DUST)
                 mole_diag_event(false, "look %08x -> %08x %s kept=%d running=%d st=%d", (unsigned)look_was, (unsigned)look,
                                 fluid_draw_morphing(s_draw) ? "change" : "at once", whole, on, s_cur);
-            if (s_draw && s_draw->m.cuts != cuts) { cuts = s_draw->m.cuts; mole_diag_event(false, "change cut at the cloud's limit (%d)", cuts); }
+            if (s_draw && s_draw->m.cuts != cuts) { cuts = s_draw->m.cuts; mole_diag_event(false, "change waited to its limit, the rest made at once (%d)", cuts); }
+            static int ends;
+            if (s_draw && s_draw->m.ends != ends) {     /* (where each change's reading of its new picture got to, by frame) */
+                const int *g = s_draw->m.dg;
+                ends = s_draw->m.ends;
+                mole_diag_event(false, "change stages f=%d old@%d pass@%d ready@%d dust@%d paired@%d lines@%d cells=%d/%d read dust=%dms lines=%dms left=%dms sortf=%d wait=%d+%d",
+                                g[FLUID_MD_FRAMES], g[FLUID_MD_OLD], g[FLUID_MD_PASS], g[FLUID_MD_READY], g[FLUID_MD_DUST], g[FLUID_MD_PAIRED], g[FLUID_MD_LINES],
+                                g[FLUID_MD_LCELLS], s_sim->N, g[FLUID_MD_DUS] / 1000, g[FLUID_MD_LUS] / 1000, g[FLUID_MD_LEFT] / 1000, g[FLUID_MD_SORTF],
+                                g[FLUID_MD_WAITC], g[FLUID_MD_WAITL]);
+            }
             look_was = look;
         }
         atomic_store(&s_dust_in, ready);
@@ -1791,6 +1921,14 @@ static void fluid_task(void *arg) {
         s_dstatus = fd_status(&s_dir);
         ask_compose();
         s_dask = fluid_ask_tappable(&s_ask.scr, cfg.speed);
+        {   /* the dust's frame: worked out ahead (above), else here now; the next one ahead only while the drawer works out
+             * none itself: a scene on the fine specks, no change of picture (a change works its dust out its own way) */
+            const bool go = s_fine && s_dopts.fine == s_fine && s_cur == ST_SCENE && !s_hd.out && s_hd.dust < 1.f &&
+                            !fluid_draw_morphing(s_draw) && fluid_fine_dust_kind_get() == FINE_DUST_SPECKS;
+            if (go && !s_fine->bready) { s_fine->pause = false; fluid_fine_frame_ahead(s_fine, s_frame, &s_dopts); }
+            fluid_fine_publish(s_fine, go);
+            s_fine_go = go;
+        }
         xSemaphoreGive(s_go);
         int64_t t3 = esp_timer_get_time();
 
@@ -1965,6 +2103,7 @@ esp_err_t mole_fluid_creature_init(void) {
         if (!s_win) s_win = heap_caps_malloc((size_t)s_win_px * sizeof(uint16_t), MALLOC_CAP_SPIRAM);   /* bounced, slower */
         if (!s_win) { free_grid(); return ESP_ERR_NO_MEM; }
     }
+    tx_start();                                  /* (the scenes' sender on core 1; none: the drawer sends in line) */
     {   /* the chosen creature (boot_creature), built on the task */
         size_t clen = 0; bool pkg = false; char id[PKG_ID_MAX + 1];
         uint8_t *cb = boot_creature(&clen, &pkg, id);

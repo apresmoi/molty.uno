@@ -1377,13 +1377,14 @@ static esp_err_t http_bench(httpd_req_t *r)
     cJSON_AddNumberToObject(h, "psram_largest", heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
     cJSON *st = cJSON_AddObjectToObject(j, "stack_free");    /* (high-water marks, bytes, as the sampler last saw them) */
     portENTER_CRITICAL(&s_task_mux);
-    int sd = -1, ss = -1;
+    int sd = -1, ss = -1, sx = -1;
     for (int i = 0; i < s_ntasks; i++) {
         if (!strcmp(s_tasks[i].name, "fluid_draw")) sd = (int)s_tasks[i].stack_free;
         if (!strcmp(s_tasks[i].name, "fluid_task")) ss = (int)s_tasks[i].stack_free;
+        if (!strcmp(s_tasks[i].name, "fluid_tx")) sx = (int)s_tasks[i].stack_free;
     }
     portEXIT_CRITICAL(&s_task_mux);
-    cJSON_AddNumberToObject(st, "fluid_draw", sd); cJSON_AddNumberToObject(st, "fluid_task", ss);
+    cJSON_AddNumberToObject(st, "fluid_draw", sd); cJSON_AddNumberToObject(st, "fluid_task", ss); cJSON_AddNumberToObject(st, "fluid_tx", sx);
     char *body = cJSON_PrintUnformatted(j);
     cJSON_Delete(j);
     atomic_store(&busy, false);

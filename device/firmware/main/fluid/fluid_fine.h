@@ -33,7 +33,9 @@
  *            draws its new one (fluid_morph_t: its cloud waits for it): the light holds still meanwhile (pause).
  * The drawer's part (fluid_fine_frame, fluid_fine_rect) is called by fluid_draw_cells / fluid_draw_rect when
  * fluid_draw_opts_t.fine is set; the sim task owns the build (fluid_fine_want, _work) and swaps a finished set in while
- * the drawer is idle (fluid_fine_swap). Plain C: built into the firmware and by the host tests.
+ * the drawer is idle (fluid_fine_swap). On the device the sim task also works each frame out ahead (fluid_fine_frame_ahead,
+ * into f->b while the drawer draws the frame before) and shows it at the handoff (fluid_fine_publish): the drawer then
+ * works out none. Plain C: built into the firmware and by the host tests (which run it in line).
  */
 #pragma once
 
@@ -99,6 +101,12 @@ typedef struct {
     uint16_t *nstat;                    /* N: how many of them (shown whatever the light)        */
     uint32_t *ssig;                     /* N: their signature, calm (no shift, no caption near)  */
 } fine_set_t;
+
+/* the frame worked out ahead (fluid_fine_frame_ahead): what the drawer reads of a frame (fluid_fine_t's sig .. dim), the next */
+typedef struct {
+    uint32_t *sig; uint8_t *why, *vis, *imm, *lv; int8_t *sx, *sy; int16_t *ppx, *ppy; uint16_t *ppc;
+    int lvcap, npd; int16_t pbb[4], pbb0[4]; float dim[7];
+} fine_back_t;
 
 typedef struct fluid_fine {
     int W, H, N, S, S2, ox, oy;         /* the grid, the stage (px; S2: half of it, the build's field) and where it sits in the fb */
@@ -175,6 +183,14 @@ typedef struct fluid_fine {
     uint8_t *lvd; int lvdcap;           /* per speck of the set drawn: its level drawn            */
     int8_t *sxd, *syd;                  /* N: the shift drawn                                     */
     uint8_t *dok;                       /* N: those are known (the set's, the cell drawn whole)   */
+    /* the next frame, worked out on the sim task while the drawer draws this one (it reads only the fields above):
+     * swapped in by fluid_fine_publish with the drawer idle */
+    fine_back_t b;
+    uint8_t *lvchg;                     /* N: 1 the cell's levels changed in b since the last publish, 2 b's are behind lv */
+    bool lvall;                         /* all of b's levels behind lv (a set swapped in)          */
+    bool bready;                        /* b holds a frame not shown yet                         */
+    bool ahead;                         /* the frame shown was worked out ahead: the drawer works out none */
+    int16_t *pmem;                      /* the block of one of the two frames' word specks (ppx, ppy, ppc; the other's are in px0, pc) */
 } fluid_fine_t;
 
 /* EXPERIMENT (scene dust A/B, for Juan to compare in the simulator; delete once he picks). Process-wide, any time:
@@ -238,8 +254,19 @@ static inline int fluid_fine_specks(const fluid_fine_t *f) { return f && f->live
 
 /* ── the drawer (fluid_draw.c) ── */
 /** This frame's dust at o->time: each cell's signature (f->sig: a cell whose signature differs from f->sig0, as drawn,
- *  is drawn again), its specks' levels and its shift, the caption's backdrop and specks, and what moved it (f->why). */
+ *  is drawn again), its specks' levels and its shift, the caption's backdrop and specks, and what moved it (f->why).
+ *  It reads only s->h of the frame and o's time, palette, shapes (the caption's), kdots, cap_word and cap_unformed. */
 void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_opts_t *o);
+/** The same worked out into f->b, not shown: on the sim task while the drawer still draws the frame before (it writes
+ *  nothing the drawer reads); fluid_fine_publish shows it. */
+void fluid_fine_frame_ahead(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_opts_t *o);
+/** With the drawer idle: the frame worked out ahead becomes the one drawn (none waiting: nothing changes). ahead: the
+ *  drawer takes it as its frame's and works out none itself (f->ahead, while one was waiting). */
+void fluid_fine_publish(fluid_fine_t *f, bool ahead);
+/** The set drawn changes at the next fluid_fine_swap (a frame worked out ahead would be the old one's). */
+static inline bool fluid_fine_swap_due(const fluid_fine_t *f) {
+    return (f->drawn && f->drawn->base != f->scene) || (f->ready >= 0 && f->levels_ok);
+}
 /** The light on the water at stage px (x, y), 0..1 (bilinear on its grid; as last worked out by fluid_fine_frame). */
 static inline float fluid_fine_light(const fluid_fine_t *f, float x, float y) {
     const float gx = x * (1.f / FINE_LIGHT_GRID), gy = y * (1.f / FINE_LIGHT_GRID);
@@ -252,10 +279,11 @@ static inline float fluid_fine_light(const fluid_fine_t *f, float x, float y) {
 /** The dust over the window t (fb px), after the shapes and dots: on black (or a dim pixel), never on a lit one;
  *  all: every cell of t (a window), else only the dirty cells (a framebuffer kept). */
 void fluid_fine_rect(const fluid_fine_t *f, const uint8_t *dirty, const fluid_rect_t *t, bool all);
-/** Cell k of a kept framebuffer fb (fb px, stride), black but for its specks (no drawing, dot or letter in it): its specks
- *  as last drawn set to black, then put as they are now (a few pixels, not the cell's). False: not known as drawn (or the
- *  word's breaking specks reach it): draw it whole. */
-bool fluid_fine_move(fluid_fine_t *f, int k, uint16_t *fb, int stride);
+/** Cell k of a kept framebuffer fb (fb px, stride) whose dust alone changed: under its specks black (under NULL) or what
+ *  `under` holds there (its drawing as cached, the same px and stride; no dot or letter in it): its specks as last drawn
+ *  taken off to that, then put as they are now (a few pixels, not the cell's). False: not known as drawn (or the word's
+ *  breaking specks reach it): draw it whole. */
+bool fluid_fine_move(fluid_fine_t *f, int k, uint16_t *fb, const uint16_t *under, int stride);
 /** The glass shows every cell's specks as they are now (a change of picture ended on the look whole). */
 void fluid_fine_drawn(fluid_fine_t *f);
 
