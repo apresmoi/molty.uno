@@ -2252,6 +2252,52 @@ static void test_ride(const char *dir) {
     pkg_unref(p);
 }
 
+/* the reading's word over a scene is kept once folded (scene_fill): every frame it shows after its first comes out exactly
+ * as the first (cells, dots, letters, shapes), and a new word in the same buffer is folded again, never the last one */
+static void test_caption_kept(const char *dir) {
+    char path[512]; size_t len; const char *err;
+    snprintf(path, sizeof(path), "%s/astrology.json", dir);
+    char *buf = read_file(path, &len);
+    pkg_t *p = buf ? pkg_parse(buf, len, &err) : NULL;
+    free(buf);
+    scene_t *sc = p ? sd_scene(p, dir, "chart") : NULL;
+    CHECK(sc != NULL, "caption kept: the chart builds");
+    if (!sc) { pkg_unref(p); return; }
+    int W, H; fluid_grid_for_stage(466, &W, &H);
+    const int N = W * H;
+    fluid_sim_t *s = fluid_sim_create(W, H, 466);
+    static fluid_shape_t sh[2][FLUID_MAX_SHAPES];
+    static fluid_letter_t L[2][FLUID_MAX_LETTERS];
+    uint8_t *dots = calloc(4 * (size_t)N, 1), *keep = dots + 2 * N, *still = calloc((size_t)N, 1);
+    int16_t *T0 = calloc((size_t)N, 2); uint32_t *c0 = calloc((size_t)N, 4);
+    const char *words[] = { "Mars", "opposes", "Saturn.", "Mars" };
+    char word[16];
+    int bad = 0, hits = 0;
+    for (int w = 0; w < 4; w++) {
+        snprintf(word, sizeof(word), "%s", words[w]);          /* (one buffer for every word, as a reading's text) */
+        const scene_caption_t cap = { word, (int)strlen(word), 1 };
+        int nl[2];
+        scene_shapes_t hd[2];
+        for (int r = 0; r < 2; r++) {
+            hd[r] = (scene_shapes_t){ sh[r], 0, keep + r * N, still };
+            scene_fill(s, sc, 1.f, &cap, L[r], &nl[r], dots + r * N, &hd[r]);
+            if (!r) { memcpy(T0, s->T, 2 * (size_t)N); memcpy(c0, s->tcol, 4 * (size_t)N); }
+        }
+        hits++;
+        bad += memcmp(T0, s->T, 2 * (size_t)N) != 0 || memcmp(c0, s->tcol, 4 * (size_t)N) != 0 || memcmp(dots, dots + N, (size_t)N) != 0 ||
+               memcmp(keep, keep + N, (size_t)N) != 0 || nl[0] != nl[1] || memcmp(L[0], L[1], sizeof(fluid_letter_t) * (size_t)nl[0]) != 0 ||
+               hd[0].n != hd[1].n || (hd[0].n > 0 && memcmp(sh[0], sh[1], sizeof(fluid_shape_t) * (size_t)hd[0].n) != 0);
+        int caps = 0;
+        for (int q = 0; q < hd[1].n; q++) caps += sh[1][q].tag == FLUID_TAG_CAPTION;
+        bad += caps == 0;                                       /* (the word's own letters are there) */
+    }
+    CHECK(bad == 0 && hits == 4, "caption kept: a word's frames after its first are exactly its first (%d of %d words differ), a new word in the same buffer folded anew", bad, hits);
+    free(dots); free(still); free(T0); free(c0);
+    fluid_sim_destroy(s);
+    scene_free(sc);
+    pkg_unref(p);
+}
+
 /* ── the two cores (the device's split, mole_fluid.c): the dust's next frame worked out on the sim task while the drawer
  * draws this one (fluid_fine_frame_ahead, shown by fluid_fine_publish at the handoff), and the kept glass's windows sent by
  * another task while the drawer draws the next band (fluid_draw_glass_sender). Here in one thread in the device's order:
@@ -2514,6 +2560,7 @@ typedef struct {
     int frame;
     int job;                           /* the new picture read on the job: its slice a frame, the model's us (0: in line) */
     int full_at;                       /* (morph_run: a full repaint asked at this frame of it, the job reading on after it) */
+    bool tx;                           /* the kept glass's windows queued to a sender, sent at the frame's end (the device's) */
 } morph_rig_t;
 /* what a change did (morph_run): its frames, the panel model's ms a frame (mean, worst, over 33), what it showed */
 typedef struct {
@@ -2524,6 +2571,7 @@ typedef struct {
     int na, nb, fly, spare, born;      /* its grains: old, new; the pairs flying; the old with no pair, the new with none */
     uint32_t read;                     /* the new picture as read (fluid_morph_census_t.read), once whole */
     int still;                         /* frames after a full repaint's that showed anything new (none may: the job may read) */
+    int late, mixed, queued;           /* windows whose rows changed once queued, sent beside the sender's; those queued */
     float extra;
     double mean, worst;
 } morph_res_t;
@@ -2616,7 +2664,16 @@ static void morph_run(morph_rig_t *r, int kind, scene_t *sc, uint32_t look, int 
         r->g.mirror = (look & FLUID_LOOK_GLASS) ? r->snap : NULL;   /* (the panel's mirror keeps such a look's glass) */
         fluid_draw_cells(r->d, r->fr, &r->o);
         const bool full = f == r->full_at && in;
-        fluid_draw_send(r->d, &r->o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, full, r->wbuf, 4096, send_glass, &r->g);
+        static split_q_t q;
+        win_log_t L = { &r->g, 0, 0, { { 0 } }, &q };
+        if (r->tx) fluid_draw_glass_sender(split_take, &q);
+        fluid_draw_send(r->d, &r->o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, full, r->wbuf, 4096, r->tx ? send_log : send_glass, r->tx ? (void *)&L : (void *)&r->g);
+        if (r->tx) {                                    /* (the frame's end: its queued windows sent, each as it was queued) */
+            res->queued += q.taken; q.taken = 0;
+            split_drain(&q, r->d, &L);
+            res->late += q.late + q.over; res->mixed += L.mixed; q.late = q.over = 0;
+            fluid_draw_glass_sender(NULL, NULL);
+        }
         if (full && r->job) {                           /* (the job still at it after the drawer ended the change: as it may be) */
             fluid_draw_morph_work(r->d, r->fr, &r->o, r->job);
             res->still += memcmp(r->prev, r->g.px, (size_t)S * S * 2) != 0;
@@ -2733,7 +2790,7 @@ static morph_rig_t *morph_rig(cpk_t *cat, const morph_rig_t *like, int job) {
     r->dots = calloc((size_t)N, 6); r->keep = r->dots + N; r->still = r->keep + N; r->ddots = r->still + N; r->dkeep = r->ddots + N; r->dstill = r->dkeep + N;
     r->cat = calloc((size_t)N, 3); r->catline = r->cat + N; r->word = r->catline + N;
     r->ccol = calloc((size_t)N, sizeof(fluid_rgba16_t)); r->wcol = calloc((size_t)N, sizeof(fluid_rgba16_t));
-    r->job = job; r->full_at = -1;
+    r->job = job; r->full_at = -1; r->tx = job > 0;
     fluid_draw_morph_job(r->d, job > 0);
     /* the boot word, in the fluid's dots (pale), and the cat (packages/cat: its own sim, a few seconds of life, then its
      * cells as the device shows them: its own cells its lines, the floor and the motes its dust) */
@@ -2803,7 +2860,7 @@ static void test_morph(const char *dir, const char *catp, int job) {
     morph_rig_t *r = morph_rig(cat, NULL, job);
     const int S = r->S, N = r->N;
     morph_res_t res;
-    if (job) printf("  the same, its new picture read on the job (the sim task's share: %.1f ms of the model a frame):\n", job * 1e-3);
+    if (job) printf("  the same, its new picture read on the job (the sim task's share: %.1f ms of the model a frame; switches %u):\n", job * 1e-3, fluid_draw_morph_chg(-1));
     /* the boot word first (nothing to change from: it is there at once, kept by the panel's mirror), then the prototype's
      * five changes, a question over the chart and gone */
     morph_run(r, MK_WORD, NULL, FLUID_LOOK_GLASS, 0, 0, "start", &res);
@@ -2840,6 +2897,9 @@ static void test_morph(const char *dir, const char *catp, int job) {
         CHECK(res.frames >= 36 && res.frames <= 36 + 9 + 2 + 20 && res.over == 0,
               "%s: one change of 1.21 s (+ the extra, + the wait for its dust), every frame inside the panel's (%d frames, worst %.1f ms of %.0f)", RUN[q].name, res.frames, res.worst, MORPH_FIT_MS);
         CHECK(res.unsent == 0, "%s: every frame of it all sent, each grain the frame it moves (%d frames not)", RUN[q].name, res.unsent);
+        if (r->tx && (fluid_draw_morph_chg(-1) & FLUID_CHG_BANDS))   /* (EXPERIMENT chg 1: band by band to the sender, never a band written again once queued) */
+            CHECK(res.queued > res.frames && res.late == 0 && res.mixed == 0, "%s: its frames through the sender, no window's rows changed once queued (%d of %d; %d beside it)",
+                  RUN[q].name, res.late, res.queued, res.mixed);
         CHECK(res.even <= 450, "%s: everywhere at once, never by rows: no band of rows takes over 4.5 times its share of the picture in a frame's changes (most %d %%)",
               RUN[q].name, res.even);
         {   /* (the prototype's own sparse cloud: its emptiest frame, dissolve-proto's render on the same blocks; the device's
@@ -3109,10 +3169,16 @@ int main(int argc, char **argv) {
     test_scene_dust(argv[1]);
     test_ride(argv[1]);
     test_split(argv[1]);
+    test_caption_kept(argv[1]);
     test_fine_hard(argv[1]);
     test_open(argv[1]);
     test_morph(argv[1], argc > 3 ? argv[3] : NULL, 0);
     test_morph(argv[1], argc > 3 ? argv[3] : NULL, 15000);   /* (the device's: its sim task reads, ~15 ms a frame) */
+    {   /* EXPERIMENT: every switch of a change on (FLUID_CHG_*), each path kept checked till the numbers pick */
+        const unsigned was = fluid_draw_morph_chg(FLUID_CHG_BANDS | FLUID_CHG_DUE | FLUID_CHG_LINES10 | FLUID_CHG_GLIDE4);
+        test_morph(argv[1], argc > 3 ? argv[3] : NULL, 15000);
+        fluid_draw_morph_chg((int)was);
+    }
     bench(argc > 2 ? argv[2] : "");
     CHECK(P->refs == 1, "every scene gave its package reference back (%d)", P->refs);
     pkg_unref(P);

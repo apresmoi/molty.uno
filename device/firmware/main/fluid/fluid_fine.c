@@ -86,7 +86,9 @@ static inline int held(int8_t *q, float v) {
 static inline uint8_t backdrop_lv(const float *box, float dlo, float dhi, int x, int y) {
     const float px = x + 0.5f, py = y + 0.5f;
     const float ex = px < box[0] ? box[0] - px : px > box[1] ? px - box[1] : 0.f, ey = py < box[2] ? box[2] - py : py > box[3] ? py - box[3] : 0.f;
-    const float dd = fsqrt(ex * ex + ey * ey);
+    const float d2 = ex * ex + ey * ey;
+    if ((dlo > 0.f && d2 < dlo * dlo) || d2 >= dhi * dhi) return 255;   /* (past the front: no root worked out) */
+    const float dd = fsqrt(d2);
     if (dd < dlo || dd >= dhi) return 255;
     float t = (dd + (hash_u(x, y, 5) - 0.5f) * FINE_PATCH_RAG - FINE_PATCH0) * (1.f / (FINE_PATCH1 - FINE_PATCH0));
     t = t < 0.f ? 0.f : t > 1.f ? 1.f : t;
@@ -710,6 +712,8 @@ void fluid_fine_frame_ahead(fluid_fine_t *f, const fluid_frame_t *s, const fluid
     else if (!f->pause) { const float dt = now - f->last_t; f->light_t += dt < 0.f ? 0.f : dt > 0.1f ? 0.1f : dt; }
     f->last_t = now;
 
+    const int64_t t_cap = now_us();
+    f->prof_prep += (uint32_t)(t_cap - t_in);
     /* the caption: a new word (or none) breaks the one before into specks */
     float b[4];
     const bool has = o->cap_word && caption_box(o->shapes, o->shapes ? o->nshapes : 0, b);
@@ -778,6 +782,7 @@ void fluid_fine_frame_ahead(fluid_fine_t *f, const fluid_frame_t *s, const fluid
         f->step_key = step;
     } else f->step_key = 0;
 
+    f->prof_cap += (uint32_t)(now_us() - t_cap);
     /* each cell's shift, stage px: the water's (its slope as the dots take it, DOT_REFR, times FINE_RIDE) in whole px, at most a sub-dot
      * across and two down, everywhere, plus the calm drift's pixel either way. Its dust rides inside the cell (what leaves
      * one side comes in at the other: fluid_fine_rect), so a shift costs no speck any work and changes only its own cell.
@@ -819,6 +824,7 @@ void fluid_fine_frame_ahead(fluid_fine_t *f, const fluid_frame_t *s, const fluid
      * hides only when the backdrop by them changed, the others against the light. Until then the cell shows what it
      * showed. A cell never worked out for this set (a set just swapped in) is, off its turn too, while FINE_CATCHUP lasts. */
     /* the light: for the specks, or for the creature's kind of dots (the drawer reads it: fluid_fine_light) */
+    const int64_t t_lg = now_us();
     if ((s_dust_kind != FINE_DUST_SPECKS || f->drawn) && (!f->pause || !f->lgrid_ok)) {
         f->lrow = (uint8_t)((f->lrow + 1) % FINE_PHASES);
         light_grid(f, f->lgrid, f->light_t * FINE_LIGHT_SPEED, f->lgrid_ok ? f->lrow : -1);   /* a quarter of its rows a frame, in turn */
@@ -826,11 +832,19 @@ void fluid_fine_frame_ahead(fluid_fine_t *f, const fluid_frame_t *s, const fluid
     }
     const fine_set_t *st = fluid_fine_specks_kind(s_dust_kind) && lv_ok ? f->drawn : NULL;   /* (EXPERIMENT: dots instead, the drawer's) */
     const int64_t t_sk = now_us();
+    f->prof_light += (uint32_t)(t_sk - t_lg);
     if (st) {
         const int LG = f->lg;
         uint8_t *const L = B->lv;
         const float reach = FINE_PATCH1 + FINE_PATCH_RAG * 0.5f;
         int budget = FINE_CATCHUP, worked = 0;
+        /* (the cells the backdrop can reach: those past it never are, so no distance is worked out for them) */
+        int bi0 = W, bi1 = -1, bj0 = H, bj1 = -1;
+        if (box) {
+            const float R = reach + 2.f;
+            bi0 = f->cellx[(int)fmaxf(0.f, fminf(S - 1.f, box[0] - R))]; bi1 = f->cellx[(int)fmaxf(0.f, fminf(S - 1.f, box[1] + R))];
+            bj0 = f->celly[(int)fmaxf(0.f, fminf(S - 1.f, box[2] - R))]; bj1 = f->celly[(int)fmaxf(0.f, fminf(S - 1.f, box[3] + R))];
+        }
         for (int j = 0; j < H; j++) for (int i = 0; i < W; i++) {
             const int k = j * W + i;
             const uint32_t a = st->start[k], e = st->start[k + 1], sm = a + st->nstat[k];
@@ -839,7 +853,7 @@ void fluid_fine_frame_ahead(fluid_fine_t *f, const fluid_frame_t *s, const fluid
             /* by the backdrop: dark, the front crossing it (its specks worked out each frame meanwhile), or none */
             bool near_box = false;
             uint32_t key = 1u;
-            if (box) {
+            if (i >= bi0 && i <= bi1 && j >= bj0 && j <= bj1) {
                 float lo2, hi2;
                 cell_box_dist(f, i, j, box, &lo2, &hi2);
                 near_box = under(lo2, reach + 1.f) && !under(hi2, dlo) && under(lo2, dhi);
@@ -894,6 +908,7 @@ void fluid_fine_frame_ahead(fluid_fine_t *f, const fluid_frame_t *s, const fluid
     }
     f->prof_specks += (uint32_t)(now_us() - t_sk);
 
+    const int64_t t_pt = now_us();
     /* the word before, breaking up: its specks scatter from its centre, ride the water and fade into it */
     int live_p = 0;
     memcpy(B->pbb0, f->pbb, sizeof(f->pbb));              /* (the box drawn last) */
@@ -926,6 +941,7 @@ void fluid_fine_frame_ahead(fluid_fine_t *f, const fluid_frame_t *s, const fluid
         } else if (u >= 1.f) f->np = 0;
     }
     B->npd = live_p;
+    f->prof_parts += (uint32_t)(now_us() - t_pt);
     f->bready = true;
     f->prof_frame += (uint32_t)(now_us() - t_in); f->prof_n++;
 }
