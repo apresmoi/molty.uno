@@ -55,10 +55,11 @@ static void lock(void)
 }
 static void unlock(void) { xSemaphoreGive(atomic_load(&s_lock_h)); }
 
+/* id's (NULL: any): the store changed under it */
 static void drop_cache(const char *id)
 {
     lock();
-    if (s_cache && !strcmp(s_cache->id, id)) { pkg_unref(s_cache); s_cache = NULL; }
+    if (s_cache && (!id || !strcmp(s_cache->id, id))) { pkg_unref(s_cache); s_cache = NULL; }
     unlock();
 }
 
@@ -192,7 +193,9 @@ static const char *room(const pkg_req_t *r)
             return "no_space";
         }
     }
-    return pkg_store_room(PKG_ROOT, r->id, r->size);
+    const char *e = pkg_store_room(PKG_ROOT, r->id, r->size);
+    drop_cache(NULL);                                  /* (the room made may have taken the cached one) */
+    return e;
 }
 
 esp_err_t pkg_cmd_install(const cJSON *args, cJSON **out)
@@ -272,7 +275,9 @@ esp_err_t pkg_cmd_list(const cJSON *args, cJSON **out)
 static const char *load(const char *id, pkg_t **out)
 {
     lock();
-    if (!(s_cache && !strcmp(s_cache->id, id) && pkg_store_find(PKG_ROOT, id, NULL))) {
+    /* (the cache is dropped wherever the store changes: no look at the store here, whose by-name lookup reads every
+     * block's index, ~0.5 MB of flash in ~130 ms of cache-off slivers, a hitch in whatever moves on screen) */
+    if (!(s_cache && !strcmp(s_cache->id, id))) {
         /* reading and parsing a package takes ~0.4 s: under the screen's tasks (priority 2), so it takes their spare
          * time instead of stalling their frames (the caller waits a little longer) */
         const UBaseType_t prio = uxTaskPriorityGet(NULL);
