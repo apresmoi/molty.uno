@@ -2512,6 +2512,8 @@ typedef struct {
     fluid_draw_opts_t o;
     float now;
     int frame;
+    int job;                           /* the new picture read on the job: its slice a frame, the model's us (0: in line) */
+    int full_at;                       /* (morph_run: a full repaint asked at this frame of it, the job reading on after it) */
 } morph_rig_t;
 /* what a change did (morph_run): its frames, the panel model's ms a frame (mean, worst, over 33), what it showed */
 typedef struct {
@@ -2520,6 +2522,8 @@ typedef struct {
                                         * 400 px or more, the most any of 8 bands of rows holds of them against its share of
                                         * the picture's lit px, percent (everywhere at once: 100-390, a creature's lines fading in where it stands; lines shown as read: 540+) */
     int na, nb, fly, spare, born;      /* its grains: old, new; the pairs flying; the old with no pair, the new with none */
+    uint32_t read;                     /* the new picture as read (fluid_morph_census_t.read), once whole */
+    int still;                         /* frames after a full repaint's that showed anything new (none may: the job may read) */
     float extra;
     double mean, worst;
 } morph_res_t;
@@ -2598,16 +2602,25 @@ static void morph_run(morph_rig_t *r, int kind, scene_t *sc, uint32_t look, int 
             if (kind == MK_SCENE && f == 0) { const int n = scene_full_shapes(r->s, sc, 1.f, r->full, &key); fluid_fine_want(r->fine, look, key, true, r->full, n, FLUID_PAL_PASTEL); }
             if (kind == MK_SCENE && f >= late) fluid_fine_work(r->fine, 0);
         }
+        /* (the device's order: the sim task's share of the reading while the drawer draws, with the inputs it last handed
+         * over; then the handoff) */
+        if (r->job) fluid_draw_morph_work(r->d, r->fr, &r->o, r->job);
         if (kind == MK_SCENE && (!fluid_draw_morphing(r->d) || fluid_draw_morph_open(r->d))) fluid_fine_swap(r->fine);
         const bool dust = kind != MK_SCENE || fluid_fine_shown(r->fine, look);
         fluid_draw_morph_look(r->d, kind == MK_SCENE && dust ? look | FLUID_LOOK_DUST : look, r->snap, dust);
         morph_inputs(r, kind, &hd);
+        fluid_draw_morph_handoff(r->d);
         const bool in = fluid_draw_morphing(r->d);    /* (a frame of the change: its last one draws the look whole) */
         memcpy(r->prev, r->g.px, (size_t)S * S * 2);
         r->g.c = (cost_t){ 0, 0, 0, 0 };
         r->g.mirror = (look & FLUID_LOOK_GLASS) ? r->snap : NULL;   /* (the panel's mirror keeps such a look's glass) */
         fluid_draw_cells(r->d, r->fr, &r->o);
-        fluid_draw_send(r->d, &r->o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, r->wbuf, 4096, send_glass, &r->g);
+        const bool full = f == r->full_at && in;
+        fluid_draw_send(r->d, &r->o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, full, r->wbuf, 4096, send_glass, &r->g);
+        if (full && r->job) {                           /* (the job still at it after the drawer ended the change: as it may be) */
+            fluid_draw_morph_work(r->d, r->fr, &r->o, r->job);
+            res->still += memcmp(r->prev, r->g.px, (size_t)S * S * 2) != 0;
+        }
         const fluid_morph_t *m = &r->d->m;
         const bool on = fluid_draw_morphing(r->d);
         long changed = 0, band[8] = { 0 };
@@ -2650,6 +2663,7 @@ static void morph_run(morph_rig_t *r, int kind, scene_t *sc, uint32_t look, int 
                                                      c.wait, c.fly, c.landed, c.born_landed, c.born);
             res->phase += bad;
             res->new_seen += c.new_lines > 0;
+            if (!res->read) res->read = c.read;
         }
         if (sheet && tiles < TILES && (on || f0 < 0) && m->t + 1e-4f >= tiles / (TILES - 1.f) * m->dur) {
             const int x0 = (tiles % COLS) * S, y0 = (tiles / COLS) * S;
@@ -2705,28 +2719,9 @@ static void morph_run(morph_rig_t *r, int kind, scene_t *sc, uint32_t look, int 
     }
 }
 
-static void test_morph(const char *dir, const char *catp) {
-    char path[512]; size_t len; const char *err;
-    snprintf(path, sizeof(path), "%s/astrology.json", dir);
-    char *buf = read_file(path, &len);
-    pkg_t *p = buf ? pkg_parse(buf, len, &err) : NULL;
-    free(buf);
-    snprintf(path, sizeof(path), "%s/astrology-commands.jsonl", dir);
-    char *cmds = p ? read_file(path, &len) : NULL;
-    scene_t *chart = NULL;
-    for (char *line = cmds ? strtok(cmds, "\n") : NULL; line && !chart; line = strtok(NULL, "\n")) {
-        cJSON *c = cJSON_Parse(line), *a = cJSON_GetObjectItem(c, "args");
-        const char *layout = cJSON_GetStringValue(cJSON_GetObjectItem(a, "layout"));
-        if (layout && !strcmp(layout, "chart")) chart = scene_build(p, layout, cJSON_GetObjectItem(a, "params"), 100.f, &err);
-        cJSON_Delete(c);
-    }
-    free(cmds);
-    scene_t *up = chart ? scene_open_build(chart, spot_named(chart, "leo"), &err) : NULL;
-    char *cj = catp ? read_file(catp, &len) : NULL;
-    cpk_t *cat = cj ? cpk_create(cj, len, 3, &err) : NULL;
-    free(cj);
-    CHECK(chart && up && cat, "the chart, Leo up close and the cat (%s) build", catp ? catp : "no cat.json");
-    if (!chart || !up || !cat) { cpk_destroy(cat); scene_free(up); scene_free(chart); pkg_unref(p); return; }
+/* a rig for changes of picture: the boot word, the cat's cells (run from cat, or as `like` has them), a question over the
+ * chart; job: the new picture read on the job, its slice a frame (fluid_draw_morph_work, the model's us), else in line */
+static morph_rig_t *morph_rig(cpk_t *cat, const morph_rig_t *like, int job) {
     morph_rig_t *r = calloc(1, sizeof(*r));
     const int S = r->S = 466;
     fluid_grid_for_stage(S, &r->W, &r->H);
@@ -2738,6 +2733,8 @@ static void test_morph(const char *dir, const char *catp) {
     r->dots = calloc((size_t)N, 6); r->keep = r->dots + N; r->still = r->keep + N; r->ddots = r->still + N; r->dkeep = r->ddots + N; r->dstill = r->dkeep + N;
     r->cat = calloc((size_t)N, 3); r->catline = r->cat + N; r->word = r->catline + N;
     r->ccol = calloc((size_t)N, sizeof(fluid_rgba16_t)); r->wcol = calloc((size_t)N, sizeof(fluid_rgba16_t));
+    r->job = job; r->full_at = -1;
+    fluid_draw_morph_job(r->d, job > 0);
     /* the boot word, in the fluid's dots (pale), and the cat (packages/cat: its own sim, a few seconds of life, then its
      * cells as the device shows them: its own cells its lines, the floor and the motes its dust) */
     fluid_text_t *tx = fluid_text_create(r->s);
@@ -2745,7 +2742,8 @@ static void test_morph(const char *dir, const char *catp) {
     memcpy(r->word, tx->dots, (size_t)N);
     fluid_text_destroy(tx);
     for (int k = 0; k < N; k++) if (r->word[k]) r->wcol[k] = (fluid_rgba16_t){ 52000, 50000, 62000, 0 };
-    {
+    if (like) { memcpy(r->cat, like->cat, (size_t)N * 2); memcpy(r->ccol, like->ccol, sizeof(fluid_rgba16_t) * (size_t)N); }
+    else {
         fluid_sim_t *cs = fluid_sim_create(W, H, S);
         cpk_prepare(cat, cs);
         for (int f = 0; f < 90; f++) { cpk_frame(cat, cs, 1 / 30.f, 1); cs->p.still = true; fluid_sim_step(cs, 1 / 30.f); fluid_sim_color(cs, 1 / 30.f); cpk_paint(cat, cs); }
@@ -2769,7 +2767,43 @@ static void test_morph(const char *dir, const char *catp) {
         fluid_ask_follow(&r->scr, true, 1, -1, q.n);
         fluid_askview_start(r->v, r->s);
     }
+    return r;
+}
+static void morph_rig_free(morph_rig_t *r) {
+    free(r->g.px); free(r->snap); free(r->ref); free(r->prev); free(r->dots); free(r->cat); free(r->ccol); free(r->wcol);
+    fluid_askview_destroy(r->v);
+    fluid_fine_destroy(r->fine); fluid_draw_destroy(r->d); fluid_frame_destroy(r->fr); fluid_sim_destroy(r->s);
+    free(r);
+}
+
+/* every change of picture, its new picture read in line (job 0: the drawer's frames, the web) or on the job (its slice a
+ * frame, us: the device's sim task) */
+static void test_morph(const char *dir, const char *catp, int job) {
+    char path[512]; size_t len; const char *err;
+    snprintf(path, sizeof(path), "%s/astrology.json", dir);
+    char *buf = read_file(path, &len);
+    pkg_t *p = buf ? pkg_parse(buf, len, &err) : NULL;
+    free(buf);
+    snprintf(path, sizeof(path), "%s/astrology-commands.jsonl", dir);
+    char *cmds = p ? read_file(path, &len) : NULL;
+    scene_t *chart = NULL;
+    for (char *line = cmds ? strtok(cmds, "\n") : NULL; line && !chart; line = strtok(NULL, "\n")) {
+        cJSON *c = cJSON_Parse(line), *a = cJSON_GetObjectItem(c, "args");
+        const char *layout = cJSON_GetStringValue(cJSON_GetObjectItem(a, "layout"));
+        if (layout && !strcmp(layout, "chart")) chart = scene_build(p, layout, cJSON_GetObjectItem(a, "params"), 100.f, &err);
+        cJSON_Delete(c);
+    }
+    free(cmds);
+    scene_t *up = chart ? scene_open_build(chart, spot_named(chart, "leo"), &err) : NULL;
+    char *cj = catp ? read_file(catp, &len) : NULL;
+    cpk_t *cat = cj ? cpk_create(cj, len, 3, &err) : NULL;
+    free(cj);
+    CHECK(chart && up && cat, "the chart, Leo up close and the cat (%s) build", catp ? catp : "no cat.json");
+    if (!chart || !up || !cat) { cpk_destroy(cat); scene_free(up); scene_free(chart); pkg_unref(p); return; }
+    morph_rig_t *r = morph_rig(cat, NULL, job);
+    const int S = r->S, N = r->N;
     morph_res_t res;
+    if (job) printf("  the same, its new picture read on the job (the sim task's share: %.1f ms of the model a frame):\n", job * 1e-3);
     /* the boot word first (nothing to change from: it is there at once, kept by the panel's mirror), then the prototype's
      * five changes, a question over the chart and gone */
     morph_run(r, MK_WORD, NULL, FLUID_LOOK_GLASS, 0, 0, "start", &res);
@@ -2871,11 +2905,53 @@ static void test_morph(const char *dir, const char *catp) {
               "its dust never in: the change still ends on time, to the look without it (%d frames of at most %d, %d px differ)", a.frames, most, a.diff);
         morph_run(r, MK_SCENE, up, FLUID_LOOK_KEEP | 400, 0, 0, "dust-after", &b);
         printf("    the dust after it: %.0f ms, worst %.1f ms, %d grains coming\n", b.frames * 1000.0 / 30.0, b.worst, b.born);
-        CHECK(b.frames >= 10 && b.frames <= 36 && b.born > 1000 && b.fly == 0 && b.unsent == 0 && b.diff == 0 && b.over == 0 && s_morph_stale == 0,
-              "... then it comes as a change of its own: its grains come up near their spots, the rest stays (%d frames, %d grains, %d px differ)", b.frames, b.born, b.diff);
+        CHECK(b.frames >= 10 && b.frames <= 36 + (job > 0) && b.born > 1000 && b.fly == 0 && b.unsent == 0 && b.diff == 0 && b.over == 0 && s_morph_stale == 0,
+              "... then it comes as a change of its own: its grains come up near their spots, the rest stays (%d frames, %d grains, %d px differ; read on the job: a frame more,"
+              " the hand-over)", b.frames, b.born, b.diff);
         s_morph_stale = 0;
     }
-    {   /* a reading over a layout a tap just opened (Leo's own, at that layout's subtitle place), driven as the device
+    if (job) {  /* the job slow (still reading when each is cut short): a change replaced while the job reads it (the reading
+                 * goes back to the drawer at the handoff), and one the drawer ends (a full repaint) while the job reads on in
+                 * its slice after: that frame shows nothing new, the look comes whole the next, its memory freed at the
+                 * handoff (an ASan build of this test is the check that nothing reads it after) */
+        morph_res_t a, b, c;
+        r->job = 400;
+        morph_run(r, MK_SCENE, chart, FLUID_LOOK_KEEP | 700, 0, 12, "job-replaced", &a);
+        const bool mid = fluid_draw_morphing(r->d) && r->d->m.jmm;
+        morph_run(r, MK_SCENE, up, FLUID_LOOK_KEEP | 701, 0, 0, "replacing", &b);
+        CHECK(mid && a.unsent + b.unsent == 0 && b.diff == 0 && s_morph_stale == 0 && !r->d->m.jmm && !fluid_draw_morphing(r->d),
+              "a change replaced while the job reads it: the next goes on from the glass as it was, to the look whole (%d px differ)", b.diff);
+        r->full_at = 12;
+        morph_run(r, MK_SCENE, chart, FLUID_LOOK_KEEP | 702, 0, 0, "job-ended", &c);
+        r->full_at = -1;
+        CHECK(c.still == 0 && c.diff == 0 && c.frames >= 12 && c.frames <= 14 && s_morph_stale == 0 && !r->d->m.jmm && !r->d->m.jfree,
+              "a change the drawer ends while the job reads: nothing drawn till the handoff, then the look whole (%d frames, %d px differ)", c.frames, c.diff);
+        r->job = job;
+        s_morph_stale = 0;
+        /* the new picture as the job reads it is the one read in line (all of it read at the first chance either way: the
+         * same frame's dust, the same look), change after change from the same start */
+        morph_rig_t *ra = morph_rig(NULL, r, 0), *rb = morph_rig(NULL, r, job);
+        static const struct { const char *name; int kind, scene; uint32_t look; } SAME[] = {
+            { "boot-cat", MK_CAT, 0, FLUID_LOOK_KEEP | 1 }, { "cat-chart", MK_SCENE, 1, FLUID_LOOK_KEEP | 100 }, { "chart-leo", MK_SCENE, 2, FLUID_LOOK_KEEP | 101 },
+            { "leo-chart", MK_SCENE, 1, FLUID_LOOK_KEEP | 102 }, { "chart-cat", MK_CAT, 0, FLUID_LOOK_KEEP | 1 } };
+        fluid_draw_morph_bounds(0, 0, -1);
+        morph_run(ra, MK_WORD, NULL, FLUID_LOOK_GLASS, 0, 0, "start", &a);
+        morph_run(rb, MK_WORD, NULL, FLUID_LOOK_GLASS, 0, 0, "start", &b);
+        int same = 0, whole = 0;
+        for (int q = 0; q < (int)(sizeof(SAME) / sizeof(SAME[0])); q++) {
+            scene_t *sc = SAME[q].scene == 1 ? chart : SAME[q].scene == 2 ? up : NULL;
+            morph_run(ra, SAME[q].kind, sc, SAME[q].look, 0, 0, SAME[q].name, &a);
+            morph_run(rb, SAME[q].kind, sc, SAME[q].look, 0, 0, SAME[q].name, &b);
+            same += a.read && a.read == b.read && a.nb == b.nb;
+            whole += a.diff == 0 && b.diff == 0 && b.unsent == 0 && b.phase == 0;
+            if (a.read != b.read) printf("    %s: read in line %08x (%d grains), on the job %08x (%d)\n", SAME[q].name, a.read, a.nb, b.read, b.nb);
+        }
+        fluid_draw_morph_bounds(0, 0, 0);
+        CHECK(same == 5 && whole == 5, "the new picture read on the job is the one read in line (%d of 5 the same, %d whole)", same, whole);
+        morph_rig_free(ra); morph_rig_free(rb);
+        s_morph_stale = 0;
+    }
+    if (!job) { /* a reading over a layout a tap just opened (Leo's own, at that layout's subtitle place), driven as the device
          * drives it: after each word no pixel of an earlier word is left on the glass, and what is round the word is
          * the scene, dimmed, and nothing else (EXPERIMENT: on the dust kind it was made and checked on, 8cc8414's) */
         fluid_fine_dust_kind(FINE_DUST_DOTS_ILACE);
@@ -2961,10 +3037,7 @@ static void test_morph(const char *dir, const char *catp) {
         free(plain);
         fluid_fine_dust_kind(FINE_DUST_SPECKS);
     }
-    free(r->g.px); free(r->snap); free(r->ref); free(r->prev); free(r->dots); free(r->cat); free(r->ccol); free(r->wcol);
-    fluid_askview_destroy(r->v);
-    fluid_fine_destroy(r->fine); fluid_draw_destroy(r->d); fluid_frame_destroy(r->fr); fluid_sim_destroy(r->s);
-    free(r);
+    morph_rig_free(r);
     cpk_destroy(cat);
     scene_free(up); scene_free(chart);
     pkg_unref(p);
@@ -3038,7 +3111,8 @@ int main(int argc, char **argv) {
     test_split(argv[1]);
     test_fine_hard(argv[1]);
     test_open(argv[1]);
-    test_morph(argv[1], argc > 3 ? argv[3] : NULL);
+    test_morph(argv[1], argc > 3 ? argv[3] : NULL, 0);
+    test_morph(argv[1], argc > 3 ? argv[3] : NULL, 15000);   /* (the device's: its sim task reads, ~15 ms a frame) */
     bench(argc > 2 ? argv[2] : "");
     CHECK(P->refs == 1, "every scene gave its package reference back (%d)", P->refs);
     pkg_unref(P);
