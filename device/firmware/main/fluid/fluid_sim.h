@@ -435,6 +435,8 @@ static inline uint32_t fluid_look_of(int kind, uint32_t id, bool dust) {
                                         * 33.5 ms, from the pulse, less the handoff: bench 25 lost one at 30.2 of cells +
                                         * send, none at 29.2) ..                                                       */
 #define FLUID_MORPH_SEND_US   12000    /* .. a send guessed this long at least (a whole glass), else as the last ones went */
+#define FLUID_MORPH_GATE_US   1000     /* (a frame sent on a pulse, fluid_draw_morph_room: its cells end this before it, the
+                                        * budget's misses and the compose after it)                                    */
 #define FLUID_MORPH_SPENT_US  1000     /* (the frame's other work before the change's, as the host's model counts it)    */
 #define FLUID_MORPH_PASS_US   12000    /* (the drawer's one pass for the new look, as the panel model counts it)        */
 #define FLUID_MORPH_READ_MIN_US 2000   /* at the cloud, the new picture read a frame at least, whatever the grains took .. */
@@ -493,6 +495,7 @@ typedef struct {
     bool     still;                    /* (at the handoff: the drawer has made its new look, fluid_draw_morph_still)    */
     bool     full;                     /* a change cut: the next send is whole (its glass may hold what was not sent)   */
     int      spent, budget;            /* the drawer's frame before the change's work (us), and so the change's this frame */
+    int      room;                     /* (told each frame) its cells' time till the send's pulse, us; 0: none (FRAME_US) */
     int      sendp;                    /* the send a frame of it is likely to take (us: the last, its peaks held a while) */
     int64_t  c0;                       /* (this frame's cells began, us)                                              */
     int      top[3][4];                /* its three slowest frames (the log): frame, cells us (with the poll), send us, its
@@ -722,6 +725,10 @@ void fluid_draw_morph_handoff(fluid_draw_t *d);
 /** The drawer, each frame before fluid_draw_cells: its frame's time so far (us; the touch poll), the change's budget the rest
  *  of FLUID_MORPH_CELLS_US. Not told: FLUID_MORPH_SPENT_US. */
 void fluid_draw_morph_spent(fluid_draw_t *d, int us);
+/** The drawer, after fluid_draw_morph_spent: a change's frame is sent on the panel's next tearing pulse, in us from now
+ *  (0: no pulse to wait for: its cells and send share FLUID_MORPH_FRAME_US). Its cells then have that, less
+ *  FLUID_MORPH_GATE_US. */
+void fluid_draw_morph_room(fluid_draw_t *d, int us);
 /** The window t as the change shows it this frame, composed whole (the glass holds the same: tests). Returns its pixels. */
 int  fluid_draw_morph_rect(const fluid_draw_t *d, const fluid_rect_t *t);
 void fluid_draw_morph_census(const fluid_draw_t *d, fluid_morph_census_t *c);

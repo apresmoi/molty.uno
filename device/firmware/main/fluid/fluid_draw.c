@@ -2949,6 +2949,7 @@ static void morph_frame(fluid_draw_t *d, const fluid_frame_t *s, const fluid_dra
  * new look's inputs reach the drawer's state (its one pass, after: morph_frame chooses the pairs then). Till the clock
  * runs nothing is sent: those frames have FLUID_MORPH_IDLE_US */
 void fluid_draw_morph_spent(fluid_draw_t *d, int us) { if (d) d->m.spent = us > 0 ? us : 1; }
+void fluid_draw_morph_room(fluid_draw_t *d, int us) { if (d) d->m.room = us > 0 ? us : 0; }
 static void morph_begin(fluid_draw_t *d) {
     fluid_morph_t *m = &d->m;
     m->work = m->comp = 0; m->pass = false;
@@ -2956,7 +2957,12 @@ static void morph_begin(fluid_draw_t *d) {
     /* (a frame that sends: what the send it is likely to take leaves of the frame's FLUID_MORPH_FRAME_US) */
     const int send = m->sendp > FLUID_MORPH_SEND_US ? m->sendp : FLUID_MORPH_SEND_US;
     const int cells = FLUID_MORPH_FRAME_US - send < FLUID_MORPH_CELLS_US ? FLUID_MORPH_FRAME_US - send : FLUID_MORPH_CELLS_US;
-    m->budget = (idle ? FLUID_MORPH_IDLE_US : cells) - (m->spent ? m->spent : FLUID_MORPH_SPENT_US);
+    /* (sent on the next pulse, fluid_draw_morph_room: its cells have till then, counted from here) */
+    const int gate = m->room - FLUID_MORPH_GATE_US > FLUID_MORPH_READ_MIN_US ? m->room - FLUID_MORPH_GATE_US : FLUID_MORPH_READ_MIN_US;
+    m->budget = idle ? FLUID_MORPH_IDLE_US - (m->spent ? m->spent : FLUID_MORPH_SPENT_US)
+              : m->room ? (gate < FLUID_MORPH_CELLS_US ? gate : FLUID_MORPH_CELLS_US)
+              : cells - (m->spent ? m->spent : FLUID_MORPH_SPENT_US);
+    m->room = 0;                                        /* (told again each frame) */
     m->c0 = now_us() - (m->spent ? m->spent : 0);
     m->spent = 0;                                       /* (told again each frame) */
     memset(m->prof, 0, sizeof(m->prof));
