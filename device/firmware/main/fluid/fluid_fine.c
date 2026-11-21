@@ -252,7 +252,7 @@ bool fluid_fine_want(fluid_fine_t *f, uint32_t scene, uint32_t key, bool keep, c
     for (int q = 0; q < FINE_SETS; q++)
         if (q != f->live && f->set[q].key == key && q != f->build) {   /* built before: its levels, then it swaps in */
             if (f->ready != q) {
-                f->ready = q; f->levels_ok = false; f->phase = PH_LEVELS; f->row = 0;
+                f->ready = q; f->levels_ok = false; f->phase = PH_LEVELS; f->row = 0; f->lq = 0;
                 f->build_t0 = now_us(); f->build_us = 0; f->build_calls = 0;
             }
             f->set[q].base = scene; f->set[q].used = f->clock;
@@ -469,20 +469,25 @@ bool fluid_fine_work(fluid_fine_t *f, int budget_us) {
                     if (p || c) st->cap = st->n + 1;
                 }
                 f->ready = f->build; f->build = -1;
-                f->levels_ok = false; f->phase = PH_LEVELS; f->row = 0;
+                f->levels_ok = false; f->phase = PH_LEVELS; f->row = 0; f->lq = 0;
             }
             break;
         case PH_LEVELS: {
             const fine_set_t *nw = &f->set[f->ready];
-            if (!f->row) {                              /* room for its levels; the light as it is now */
-                if (nw->n > f->lv2cap) {
-                    FINE_FREE(f->lv2);
-                    f->lv2 = FINE_CALLOC((size_t)nw->n + 1);
-                    f->lv2cap = f->lv2 ? nw->n : 0;
+            if (!f->row && f->lq < FINE_PHASES) {       /* room for its levels; the light as it is now, a quarter of its
+                                                         * rows a step (whole, one step was ~4 ms past the budget) */
+                if (!f->lq) {
+                    if (nw->n > f->lv2cap) {
+                        FINE_FREE(f->lv2);
+                        f->lv2 = FINE_CALLOC((size_t)nw->n + 1);
+                        f->lv2cap = f->lv2 ? nw->n : 0;
+                    }
+                    if (nw->n > f->lv2cap) { f->ready = -1; f->phase = PH_IDLE; return false; }   /* no memory: no dust */
+                    f->lv_base = f->drawn && f->drawn->base == f->scene ? f->drawn : NULL;   /* (as the swap will find it) */
+                    f->lq_t = f->last_t * FINE_LIGHT_SPEED;
                 }
-                if (nw->n > f->lv2cap) { f->ready = -1; f->phase = PH_IDLE; return false; }   /* no memory: no dust */
-                f->lv_base = f->drawn && f->drawn->base == f->scene ? f->drawn : NULL;   /* (as the swap will find it) */
-                light_grid(f, f->lgrid2, f->last_t * FINE_LIGHT_SPEED, -1);
+                light_grid(f, f->lgrid2, f->lq_t, f->lq++);
+                break;
             }
             for (int q = 0; q < 64 && f->row < f->N; q++, f->row++) levels_cell(f, nw, f->lv_base, f->row);
             if (f->row >= f->N) {
@@ -508,7 +513,7 @@ bool fluid_fine_swap(fluid_fine_t *f) {
     /* the dust on the glass is the scene's own: a set made for another drawing goes at once */
     if (f->drawn && f->drawn->base != f->scene) { f->drawn = NULL; f->live = -1; }
     if (f->ready < 0 || !f->levels_ok) return false;
-    if (f->lv_base != f->drawn) { f->levels_ok = false; f->phase = PH_LEVELS; f->row = 0; return false; }   /* (worked out against another) */
+    if (f->lv_base != f->drawn) { f->levels_ok = false; f->phase = PH_LEVELS; f->row = 0; f->lq = 0; return false; }   /* (worked out against another) */
     const fine_set_t *old = f->drawn, *nw = &f->set[f->ready];
     /* a cell whose specks are the same in both sets keeps its levels and its signature: nothing of it is drawn again;
      * the others take those worked out for them (fluid_fine_work) */

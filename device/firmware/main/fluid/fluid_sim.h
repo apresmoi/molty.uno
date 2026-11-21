@@ -422,10 +422,11 @@ static inline uint32_t fluid_look_of(int kind, uint32_t id, bool dust) {
 #define FLUID_MORPH_LINES_US  2000000  /* the clock stands before the new lines come in till they are read, this long at
                                         * most (nothing moves then: cheap frames), then the rest is read at once      */
 #define FLUID_MORPH_LINES_N   60
-#define FLUID_MORPH_FRAME_US  13500    /* the change's own work a frame on the drawer (us; the frame's budget): the panel's
-                                        * frame is ~31.5 ms, its send ~12. What moves goes first, then the pairing, then
-                                        * the still ones on their own clocks (fluid_morph_t.tau) in what is left           */
-#define FLUID_MORPH_OLD_US    12000    /* the old picture read a frame, while nothing moves and nothing is sent         */
+#define FLUID_MORPH_CELLS_US  16000    /* the drawer's cells a frame in a change (us): the panel's frame is ~31.5 ms, its
+                                        * send ~12. The change's own work (fluid_morph_t.budget) is what the frame's other
+                                        * work before it left of this (fluid_draw_morph_spent): what moves goes first, then
+                                        * the pairing, then the still ones on their own clocks (fluid_morph_t.tau)        */
+#define FLUID_MORPH_SPENT_US  1000     /* (the frame's other work before the change's, as the host's model counts it)    */
 #define FLUID_MORPH_PASS_US   12000    /* (the drawer's one pass for the new look, as the panel model counts it)        */
 #define FLUID_MORPH_READ_MIN_US 2000   /* at the cloud, the new picture read a frame at least, whatever the grains took .. */
 #define FLUID_MORPH_SORT_MIN_US 2500   /* .. and its grains put in order                                               */
@@ -464,7 +465,7 @@ typedef struct {
     int      n, w;                     /* its clock: frames of its schedule, of the cloud's flow                      */
     float    t, dur;                   /* its time and length, s                                                      */
     int      tau[FLUID_MT_N];          /* the still ones' own clocks (FLUID_MT_*), quarter frames of its schedule: each at
-                                        * 4 n, or behind it when the frame's budget left it no room (FLUID_MORPH_FRAME_US) */
+                                        * 4 n, or behind it when the frame's budget left it no room (fluid_morph_t.budget) */
     int      na, nb, nlines, nfly;     /* grains of the old picture, of the new (-1: not read yet), old lines' px, pairs flying */
     int      px, wins, comp;           /* this frame: the pixels and windows sent, the pixels composed                */
     int      work;                     /* .. the change's own work (the panel model's us: reading, pairing, moving grains) */
@@ -487,6 +488,7 @@ typedef struct {
     bool     jhurry;                   /* a wait at its limit: that task reads the rest at once                         */
     bool     still;                    /* (at the handoff: the drawer has made its new look, fluid_draw_morph_still)    */
     bool     full;                     /* a change cut: the next send is whole (its glass may hold what was not sent)   */
+    int      spent, budget;            /* the drawer's frame before the change's work (us), and so the change's this frame */
     fluid_morph_mem_t *jmm;            /* the change that task reads for (set and cleared at the handoff only)          */
     fluid_morph_mem_t *jfree;          /* changes ended in the drawer's frame while that task had them: freed at the handoff */
 } fluid_morph_t;
@@ -706,6 +708,9 @@ void fluid_draw_morph_work(fluid_draw_t *d, const fluid_frame_t *s, const fluid_
 /** At each handoff, with the drawer idle and that task between slices, after fluid_draw_morph_look and _lines: what it
  *  read becomes the drawer's, a change whose new look is made goes to it to read, changes ended meanwhile are freed. */
 void fluid_draw_morph_handoff(fluid_draw_t *d);
+/** The drawer, each frame before fluid_draw_cells: its frame's time so far (us; the touch poll), the change's budget the rest
+ *  of FLUID_MORPH_CELLS_US. Not told: FLUID_MORPH_SPENT_US. */
+void fluid_draw_morph_spent(fluid_draw_t *d, int us);
 /** The window t as the change shows it this frame, composed whole (the glass holds the same: tests). Returns its pixels. */
 int  fluid_draw_morph_rect(const fluid_draw_t *d, const fluid_rect_t *t);
 void fluid_draw_morph_census(const fluid_draw_t *d, fluid_morph_census_t *c);
