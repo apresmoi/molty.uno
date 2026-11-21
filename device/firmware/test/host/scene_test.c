@@ -3167,15 +3167,36 @@ static void test_morph(const char *dir, const char *catp, int job) {
         }
         r->room = 0;
         fluid_draw_morph_costs(0.f);
+        /* bench 33's 8.4 MB: the new grains' list made a few cell rows a call, so a call ends where its first pass does and the
+         * next starts at the second's first cell (it made the list's room again over counts already turned into places,
+         * ~110 x the grains): no list past its picture (bound), no allocation over the drawer's biggest, the change whole */
+        {
+            const int ROWS[] = { r->H, 1, 7, r->H / 2 };
+            int most = 0, bad = 0;
+            for (int q = 0; q < 4; q++) {
+                const uint32_t lk = (uint32_t)(980 + 2 * q);
+                morph_run(r, MK_SCENE, up, FLUID_LOOK_KEEP | lk, 0, 0, "to-leo", &res);
+                fluid_draw_morph_walk_rows(ROWS[q]); s_alloc_most = 0; r->d->m.bound = NULL;
+                morph_run(r, MK_SCENE, chart, FLUID_LOOK_KEEP | (lk + 1), 0, 0, "leo-chart", &res);
+                fluid_draw_morph_walk_rows(0);
+                most = (int)s_alloc_most > most ? (int)s_alloc_most : most;
+                bad += res.diff != 0 || res.phase != 0 || res.frames > 45 || r->d->m.bound != NULL || s_morph_stale != 0;
+                s_morph_stale = 0;
+            }
+            printf("    the new picture's lists a few rows a call (a call ending with a pass): biggest allocation %d B, %d off\n", most, bad);
+            CHECK(most <= DRAW_ALLOC_MAX && bad == 0, "the new picture's lists made a few rows a call, a call ending where a pass does: no allocation over %d B (%d), "
+                  "none past its picture, each change whole (%d off)", DRAW_ALLOC_MAX, most, bad);
+        }
         /* bench 33: a change into the chart while its inputs change under the job (two frames with no shapes, as the
-         * reading over a sign goes), after the drawer's pass, the job resumed in slices of a few sizes: it reads one kind
+         * reading over a sign goes) anywhere, on the drawer's pass too, the job resumed in slices of a few sizes: the pass
+         * waits for a scene's inputs again (bench 34: the glass not the new look at its end otherwise), the job reads one kind
          * of picture (it read a scene's dust as a word's lines, then took the dust as read: counts from cells never read,
          * an 8.4 MB list asked for), no count past the picture's (bound), no allocation over the drawer's biggest block,
          * and the change ends whole */
         {
-            static const int HOLE[] = { 5, 6, 7, 8, 10, 12, 14, 16, 20 }, JOB[] = { 6000, 9000, 15000 };
+            static const int HOLE[] = { 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20 }, JOB[] = { 6000, 9000, 15000 };
             int most = 0, cut = 0, bad = 0, runs = 0;
-            for (int h = 0; h < 9; h++) for (int jb = 0; jb < 3; jb++) {
+            for (int h = 0; h < 13; h++) for (int jb = 0; jb < 3; jb++) {
                 const uint32_t lk = (uint32_t)(940 + 2 * (h * 3 + jb));
                 morph_run(r, MK_SCENE, up, FLUID_LOOK_KEEP | lk, 0, 0, "to-leo", &res);
                 const int job0 = r->job, cuts0 = r->d->m.cuts;
