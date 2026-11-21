@@ -442,6 +442,9 @@ static inline uint32_t fluid_look_of(int kind, uint32_t id, bool dust) {
 #define FLUID_MORPH_READ_MIN_US 2000   /* at the cloud, the new picture read a frame at least, whatever the grains took .. */
 #define FLUID_MORPH_SORT_MIN_US 2500   /* .. and its grains put in order                                               */
 #define FLUID_MORPH_FINE_US   5000     /* (the dust's frame, fluid_fine_frame, as the panel model counts it)            */
+/* the steps of a slice of the change's reading job (fluid_morph_t.jslow): the new grains' list, the new lines', the new
+ * picture read, its grains put in order; of them, allocating */
+enum { FLUID_MJ_GRAINS, FLUID_MJ_LINES, FLUID_MJ_READ, FLUID_MJ_SORT, FLUID_MJ_ALLOC, FLUID_MJ_N };
 /* the parts of a change's own work in a frame (fluid_morph_t.prof, the logs' `anim wave.work`): the look's own changes
  * looked at, the old picture read, the new one read, the pairs planned and matched, the movers taken off the glass, the
  * old picture's lists turned, the gliders drawn, the new picture's lists turned, the pairs drawn (their motion,
@@ -498,6 +501,9 @@ typedef struct {
     int      room;                     /* (told each frame) its cells' time till the send's pulse, us; 0: none (FRAME_US) */
     int      sendp;                    /* the send a frame of it is likely to take (us: the last, its peaks held a while) */
     int      jover;                    /* (tests) the most the job's slices went past their budget, in the model's work  */
+    int      jslow[2 + FLUID_MJ_N];    /* (the job's, for the log "change job") its longest slice this change: us, its budget
+                                        * (-1: none), its us by step MJ_* (grains' list, lines' list, read, sort, of
+                                        * them allocating)                                                            */
     int64_t  c0;                       /* (this frame's cells began, us)                                              */
     int      top[3][4];                /* its three slowest frames (the log): frame, cells us (with the poll), send us, its
                                         * biggest part (FLUID_MP_*)                                                   */

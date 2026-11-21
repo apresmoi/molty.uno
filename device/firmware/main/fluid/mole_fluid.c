@@ -2118,6 +2118,12 @@ static void fluid_task(void *arg) {
                                 lost[0], lost[1] / 1000.f, lost[2] / 1000.f, lost[3] / 1000.f, lost[4] / 1000.f);
                 memset(lost, 0, sizeof(lost));
                 memset(p, 0, sizeof(s_draw->m.pace));
+                /* (its reading job's longest slice, by step: wall ms on this task; alloc is part of the lists') */
+                const int *j = s_draw->m.jslow;
+                mole_diag_event(false, "change job slowest %.1f of %.1f ms: grains %.1f lines %.1f read %.1f sort %.1f (alloc %.1f)",
+                                j[0] / 1000.f, j[1] / 1000.f, j[2 + FLUID_MJ_GRAINS] / 1000.f, j[2 + FLUID_MJ_LINES] / 1000.f,
+                                j[2 + FLUID_MJ_READ] / 1000.f, j[2 + FLUID_MJ_SORT] / 1000.f, j[2 + FLUID_MJ_ALLOC] / 1000.f);
+                memset(s_draw->m.jslow, 0, sizeof(s_draw->m.jslow));
             }
             look_was = look;
         }
