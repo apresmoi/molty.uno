@@ -1304,6 +1304,7 @@ const char *const MOLE_ANIM_PART_NAMES[MOLE_ANIM_PARTS] = {
     "cells", "send", "cmp", "push", "wait", "sim", "fill", "build", "fine", "rect",
     "look", "old", "new", "pair", "fly", "spare", "born", "lines", "compose", "end", "marks" };
 _Static_assert(10 + FLUID_MP_N == MOLE_ANIM_PARTS, "the bench's parts: the frame's ten and the change's own");
+static uint32_t s_touch_us;                         /* the drawer's touch polls since the last fine log line (us) */
 static volatile uint32_t s_sim_work_us;             /* the sim's last frame's own work (sim_frame, the dust's build in it) */
 static void draw_task(void *arg) {
     (void)arg;
@@ -1325,6 +1326,7 @@ static void draw_task(void *arg) {
             uint16_t xs[MOLTY_TOUCH_MAX_POINTS] = { 0 }, ys[MOLTY_TOUCH_MAX_POINTS] = { 0 };
             const uint32_t bt = atomic_exchange(&s_bench_touch, 0);   /* (the bench's finger: down for one poll) */
             const int n = bt ? (xs[0] = (uint16_t)(bt >> 16 & 0x7FFF), ys[0] = (uint16_t)(bt & 0xFFFF), 1) : molty_touch_poll(xs, ys, MOLTY_TOUCH_MAX_POINTS);
+            s_touch_us += (uint32_t)(esp_timer_get_time() - t0);   /* (the poll's share of the cells, for the fine log) */
             xSemaphoreTake(s_mutex, portMAX_DELAY);
             s_tp = (touch_read_t){ n, xs[0], ys[0], t0, s_tp.seq + 1 };
             xSemaphoreGive(s_mutex);
@@ -1469,11 +1471,11 @@ static void draw_task(void *arg) {
                 if (ff->prof_n >= 100) {
                     const float n = (float)ff->prof_n;
                     /* (wf, wkpx: the worst frame's dust part of its cells, ms, and the pixels it sent) */
-                    mole_diag_event(false, "fine f=%.1f r=%.1f c=%.1f s=%.1f worst=%.1f(%.1f+%.1f) wf=%.1f wkpx=%.1f over=%u win=%.0f kpx=%.1f ev=%.0f sp=%d n=%u",
-                                    ff->prof_frame / 1000.f / n, ff->prof_rect / 1000.f / n, cells_us / 1000.f / n, send_us / 1000.f / n,
+                    mole_diag_event(false, "fine f=%.1f(dr=%.1f sk=%.1f) tp=%.1f r=%.1f c=%.1f s=%.1f worst=%.1f(%.1f+%.1f) wf=%.1f wkpx=%.1f over=%u win=%.0f kpx=%.1f ev=%.0f sp=%d n=%u",
+                                    ff->prof_frame / 1000.f / n, ff->prof_drift / 1000.f / n, ff->prof_specks / 1000.f / n, s_touch_us / 1000.f / n, ff->prof_rect / 1000.f / n, cells_us / 1000.f / n, send_us / 1000.f / n,
                                     worst_us / 1000.f, worst_c / 1000.f, worst_s / 1000.f, worst_f / 1000.f, worst_px / 1000.f, (unsigned)slow, wins / n, kpx / 1000.f / n,
                                     ff->prof_eval / n, fluid_fine_specks(ff), (unsigned)ff->prof_n);
-                    ff->prof_frame = ff->prof_rect = ff->prof_n = ff->prof_eval = 0; pf0 = pr0 = 0;
+                    ff->prof_frame = ff->prof_rect = ff->prof_n = ff->prof_eval = ff->prof_drift = ff->prof_specks = 0; pf0 = pr0 = 0; s_touch_us = 0;
                     cells_us = send_us = worst_us = worst_c = worst_s = wins = kpx = slow = 0;
                 }
             }
@@ -1710,6 +1712,12 @@ static void fluid_task(void *arg) {
          * after the change as a change of its own (FLUID_LOOK_DUST). It swaps in before the look is told, so the change
          * reads the glass as it was. */
         const bool fine_look = s_cur == ST_SCENE && s_sp.cur && s_fine && s_nshp >= 0 && s_hd.gen != 0;
+        {   /* (a scene shown not as one (the fine dust, its shapes, its gen): it comes at once, drawn whole; logged once) */
+            static bool was;
+            const bool odd = s_cur == ST_SCENE && s_sp.cur && !fine_look;
+            if (odd && !was) mole_diag_event(false, "scene not a look yet: fine=%d shapes=%d gen=%u", s_fine != NULL, s_nshp, (unsigned)s_hd.gen);
+            was = odd;
+        }
         /* a set built since swaps in: any time but while a change of picture draws its new one (a scene breaking up keeps
          * the dust it showed) */
         if (s_fine && s_hd.gen && s_nshp >= 0 && s_cur == ST_SCENE && !s_hd.out && (!fluid_draw_morphing(s_draw) || fluid_draw_morph_open(s_draw)))

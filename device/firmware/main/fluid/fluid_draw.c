@@ -1036,7 +1036,7 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
         if (sdk != d->sd_kind) { d->sd_kind = (int8_t)sdk; d->force = true; }
         /* (the light holds still while the picture changes, and on the dots while a wave moves more than they send in
          * two frames: the eye is on the wave; it goes on from there after, never all at once) */
-        if (o->fine) o->fine->pause = (d->m.on && !d->m.pass) || (d->sd_kind && d->sd_m > 2);   /* (a change's one pass: as shown after) */
+        if (o->fine) o->fine->pause = d->m.on || (d->sd_kind && d->sd_m > 2);
         if (o->fine) fluid_fine_frame(o->fine, s, o);   /* its fine dust instead of the haze */
         if (d->sd_kind) sd_alive(d, o);
         else caption_box(d, o);
@@ -1146,7 +1146,7 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
                                  : (d->key[k] & 0xFFu) == d->sd_live[k] && d->col[k] == d->sd_lcol[k] && crisp_flat(s, i, j, k)))) { d->dirty[k] = 0; continue; }   /* (EXPERIMENT: its dust on the lattice, the water leaving it there) */
             if (look_same && ff && !d->sd_kind) {           /* only its fine dust changed (the water or the drift moved it, the
                                                              * light, a word's backdrop): its drawing as it was, the cell sent again */
-                d->why[k] |= ff->why[k]; ff->sig0[k] = ff->sig[k]; d->dirty[k] = 1;
+                d->why[k] |= ff->why[k]; ff->sig0[k] = ff->sig[k]; d->dirty[k] = 3;   /* (3: its dust alone: glass_move) */
                 if (i < i0) i0 = i;
                 i1 = i + 1;
                 drawn += d->key[k] != KEY_EMPTY;
@@ -1606,7 +1606,7 @@ static bool hdc_room(fluid_draw_t *d) {
 #define MW_GRAIN      0.3f
 #define MW_LOOK       0.05f
 #define MW_SHAPE      0.5f
-#define MORPH_READ_CELLS 12                      /* (the new picture read a few cells at a time) */
+#define MORPH_READ_CELLS 6                       /* (the new picture read a few cells at a time) */
 
 /* a grain: its place in its cell (dy << 4 | dx) and its size (MG_Z2: 2 x 2 px, else 1); MG_NONE: no pair */
 #define MG_Z2   0x100u
@@ -1862,8 +1862,10 @@ static int morph_read_old(fluid_draw_t *d, int budget) {
     uint16_t *const v = mm->v;
     uint8_t *const dm = mm->dm;
     const int64_t t_in = now_us();
-    for (const int j0 = mm->oj; mm->oj < H && (mm->oj == j0 || (now_us() - t_in < budget && m->work < budget)); mm->oj++) {
+    int64_t row = 0;                                    /* (the last row's time: the next is read only when it fits) */
+    for (const int j0 = mm->oj; mm->oj < H && (mm->oj == j0 || (now_us() - t_in + row < budget && m->work < budget)); mm->oj++) {
         const int j = mm->oj;
+        const int64_t r0 = now_us();
         for (int i = 0; i < W; i++) {
             const int k = j * W + i, x0 = d->cx[i], y0 = d->cy[j], w = d->cx[i + 1] - x0, h = d->cy[j + 1] - y0;
             const uint16_t key = d->key[k];
@@ -1897,6 +1899,7 @@ static int morph_read_old(fluid_draw_t *d, int budget) {
             }
             m->work += (int)(w * h * MW_READ + (mm->A.n - n0) * MW_ITEM);
         }
+        row = now_us() - r0;
     }
     if (mm->oj < H) return 0;
     mm->A.at[W * H] = (uint32_t)mm->A.n; mm->L0.at[W * H] = (uint32_t)mm->L0.n;
@@ -2005,7 +2008,7 @@ static bool morph_read_new(fluid_draw_t *d, const fluid_frame_t *s, const fluid_
         mm->bset = true;
     }
     const fluid_fine_t *f = hd && m->ready && o->fine && o->fine->drawn ? o->fine : NULL;
-    if (mm->bj == 0 && mm->dj == 0) mm->dust = !hd || f || m->ready;   /* (its specks with its lines: they are in, or never) */
+    if (mm->bj == 0 && mm->dj == 0) mm->dust = !hd;     /* (a scene's specks: a pass of their own, after its lines) */
     /* (a cell row at least each frame, so it always ends) */
     const int w0 = m->work;                             /* (the budget as the panel model counts it too: the host's) */
     if (m->keep && !mm->bj) {                           /* (its dust alone: its lines are the glass's, kept) */
@@ -2067,7 +2070,7 @@ static bool morph_read_new(fluid_draw_t *d, const fluid_frame_t *s, const fluid_
     if (!mm->dust) {                                    /* a scene's specks, once in (or the change goes on without them) */
         if (!m->ready) return false;
         if (!mm->fframe && o->fine && o->fine->drawn) { /* (come since the drawer's pass: worked out as the drawer will show them) */
-            if (m->work != w0 || budget < FLUID_MORPH_FINE_US) return false;   /* (a frame of its own) */
+            if (m->work != w0 || (budget < FLUID_MORPH_FINE_US && !m->nheld)) return false;   /* (a frame of its own; at the cloud, the next) */
             o->fine->pause = false;
             fluid_fine_frame(o->fine, s, o);
             memcpy(o->fine->sig0, o->fine->sig, sizeof(uint32_t) * (size_t)N);   /* (the dust as it will be on the glass) */
@@ -2552,9 +2555,10 @@ static void morph_frame(fluid_draw_t *d, const fluid_frame_t *s, const fluid_dra
     MP_LAP(FLUID_MP_END);
     m->work += (int)(work + mm->wpx * MW_PX);
     /* in what the frame has left: the new picture read (its lines at once, a scene's specks when in), put in order, paired */
-    /* (a share at least each frame, even when the grains took the frame's: the cloud never waits long) */
-    const int left = MP_LEFT() > FLUID_MORPH_READ_MIN_US ? MP_LEFT() : FLUID_MORPH_READ_MIN_US;
-    if (m->nb < 0 && !morph_read_new(d, s, o, left) && !mm->bset) { morph_end(d, true); return; }
+    /* (what the grains leave of the frame; at the cloud a share at least, so it never waits long; not in the frame of the
+     * drawer's pass, which has its cells) */
+    const int left = m->nheld && MP_LEFT() < FLUID_MORPH_READ_MIN_US ? FLUID_MORPH_READ_MIN_US : MP_LEFT();
+    if (m->nb < 0 && !m->pass && left > 0 && !morph_read_new(d, s, o, left) && !mm->bset) { morph_end(d, true); return; }
     MP_LAP(FLUID_MP_NEW);
     if (m->nb >= 0 && !mm->ba && (MP_LEFT() > 0 || m->nheld)) {
         if (!sort_step(m, &mm->bkey, mm->B.n, &mm->bpass, mm->f0, FLUID_MORPH_FRAME_US)) { if (!mm->tmp) { morph_end(d, true); return; } }
@@ -2740,7 +2744,7 @@ static void draw_rect_layer(const fluid_draw_t *d, const fluid_draw_opts_t *o, c
  * a full-width pair at each odd edge. */
 #define CRISP_WIN_PX 1500
 #define WAVE_WIN_PX  354                                /* (a scene on fine dust) */
-#define GLASS_WIN_PX 3800                               /* (... over its kept glass: a pixel sent from it, 0.049 us, against 0.19 ms: bench2) */
+#define GLASS_WIN_PX 3300                               /* (... over its kept glass: a pixel sent from it, ~0.058 us, against 0.19 ms: bench3) */
 #define MORPH_WIN_PX 3000                               /* (a change: its pixels mostly copied, 0.05 us against a window's 0.15 ms) */
 /* the windows' buffers: with two, each window is drawn into the one the panel is not reading (the send may return
  * while the panel still reads the other: fluid_draw_send2) */
@@ -2878,6 +2882,18 @@ static void glass_cache(fluid_draw_t *d, const fluid_draw_opts_t *o, int64_t t0)
         d->dirty[k] = 0; d->owe[k] = 1; d->nowed++;
     }
 }
+/* the changed cells whose dust alone moved over black (no drawing, dot or letter in them): only their specks moved
+ * (fluid_fine_move: a few pixels, not the cell's), the cell left out of the drawing pass (on) and back after it (off) */
+static void glass_move(fluid_draw_t *d, const fluid_draw_opts_t *o, bool on) {
+    const int W = d->W, N = W * d->H;
+    for (int k = 0; k < N; k++) {
+        if (!on) { if (d->owe[k] & 2) { d->owe[k] &= ~2; d->dirty[k] = 1; } continue; }
+        const int i = k % W, j = k / W;
+        if (d->dirty[k] != 3 || d->hdcv[k] != 1 || !key_hd(d->key[k]) || (d->key[k] & 0xFFu) ||
+            (i >= d->hold[0] && i <= d->hold[1] && j >= d->hold[2] && j <= d->hold[3]) || !fluid_fine_move(o->fine, k, d->m.snap, d->fb_w)) continue;
+        d->dirty[k] = 0; d->owe[k] |= 2;
+    }
+}
 static void glass_ahead(fluid_draw_t *d, const fluid_draw_opts_t *o) {
     const int N = d->W * d->H, nc = cache_shapes(o);
     const int64_t t0 = now_us();
@@ -2970,6 +2986,7 @@ int fluid_draw_send2(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fl
     const bool runs = o->scene && o->dots && o->shapes;
     fluid_morph_t *m = (fluid_morph_t *)&d->m;
     if (m->on && full) morph_end((fluid_draw_t *)d, false);   /* (all of the look sent at once: the change is over) */
+    if (m->on && o->fine) memset(o->fine->dok, 0, (size_t)d->W * d->H);   /* (the glass is the change's: no speck as last drawn) */
     const int n0 = s_wins;
     m->cmp_us = m->push_us = 0;
     /* crisp dots alone (a rigged creature), and a scene on fine dust: few, larger windows on whole row pairs (crisp_send:
@@ -2977,7 +2994,10 @@ int fluid_draw_send2(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fl
     if (m->on && !full) {
         const int n = morph_send(d, o, ov, mark, &sd);
         m->px = n; m->wins = s_wins - n0;
-        if (m->mm && m->mm->last) morph_end((fluid_draw_t *)d, false);   /* (its last frame: the look whole) */
+        if (m->mm && m->mm->last) {                     /* (its last frame: the look whole, its specks as the dust has them) */
+            morph_end((fluid_draw_t *)d, false);
+            if (o->fine) fluid_fine_drawn(o->fine);
+        }
         return n;
     }
     if (o->scene && o->dots && (!o->shapes || o->fine) && !full) {
@@ -2989,12 +3009,14 @@ int fluid_draw_send2(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fl
         if (sd.glass) {
             const int64_t t0 = now_us();
             glass_cache(dm, o, t0);
+            glass_move(dm, o, true);
             /* a cell row at a time: its specks go into the glass's lines while they are still in the cache (PSRAM) */
             for (int j = 0; j < d->H; j++) {
                 if (d->span[2 * j] >= d->span[2 * j + 1]) continue;
                 const int y0 = d->cy[j], y1 = d->cy[j + 1];
                 fluid_draw_rect(d, o, &(fluid_rect_t){ m->snap + (size_t)y0 * d->fb_w, d->fb_w, 0, y0, d->fb_w, y1 }, false);
             }
+            glass_move(dm, o, false);
             m->cmp_us += (int)(now_us() - t0);
         }
         sd.win_px = sd.glass ? GLASS_WIN_PX : o->shapes ? (d->sd_kind ? SD_WIN_PX : WAVE_WIN_PX) : CRISP_WIN_PX;
