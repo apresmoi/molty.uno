@@ -437,6 +437,8 @@ static inline uint32_t fluid_look_of(int kind, uint32_t id, bool dust) {
 #define FLUID_MORPH_SEND_US   12000    /* .. a send guessed this long at least (a whole glass), else as the last ones went */
 #define FLUID_MORPH_GATE_US   1000     /* (a frame sent on a pulse, fluid_draw_morph_room: its cells end this before it, the
                                         * budget's misses and the compose after it)                                    */
+#define FLUID_MORPH_PASS_WAIT_N 6      /* the drawer's pass for its new look waits this many frames at most for a scene's
+                                        * inputs back (a frame of a scene with no shapes: never its new picture)        */
 #define FLUID_MORPH_SPENT_US  1000     /* (the frame's other work before the change's, as the host's model counts it)    */
 #define FLUID_MORPH_PASS_US   12000    /* (the drawer's one pass for the new look, as the panel model counts it)        */
 #define FLUID_MORPH_READ_MIN_US 2000   /* at the cloud, the new picture read a frame at least, whatever the grains took .. */
@@ -496,6 +498,8 @@ typedef struct {
                                         * of the look is drawn till the handoff                                       */
     bool     jhurry;                   /* a wait at its limit: that task reads the rest at once                         */
     bool     still;                    /* (at the handoff: the drawer has made its new look, fluid_draw_morph_still)    */
+    bool     seen_hd; uint8_t pwait;   /* (its new look's inputs were a scene's in a frame of it; frames its pass waited for
+                                        * such inputs again: FLUID_MORPH_PASS_WAIT_N at most)                         */
     bool     full;                     /* a change cut: the next send is whole (its glass may hold what was not sent)   */
     int      spent, budget;            /* the drawer's frame before the change's work (us), and so the change's this frame */
     int      room;                     /* (told each frame) its cells' time till the send's pulse, us; 0: none (FRAME_US) */
@@ -717,6 +721,8 @@ bool fluid_draw_morph_still(const fluid_draw_t *d);
 /** (tests) The waits' limits in frames: at the cloud, before the new lines; and the new lines' cells read a frame at
  *  most (the device's slow reads; < 0: all of the new picture read at the first chance, by either reader); 0: as built. */
 void fluid_draw_morph_bounds(int cloud_n, int lines_n, int read_cells);
+/** (tests) The new picture's lists made `rows` cell rows a call at most (each pass's end a call's end too); 0: by budget. */
+void fluid_draw_morph_walk_rows(int rows);
 /** (tests) The panel model's costs of a change's own work this many times as built (the device's, ~2: bench10); 0: as built. */
 void fluid_draw_morph_costs(float k);
 /** A change runs and nothing of its new look's dust is read yet: its inputs may still change whole (a scene's dust
