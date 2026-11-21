@@ -1357,6 +1357,7 @@ static cJSON *bench_case(int c, int run)
     default:        bench_calm(1, 1000, 10000); break;
     }
     const int from = bench_n();
+    const uint32_t int0 = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);   /* (what the case keeps of internal RAM) */
     const int64_t t0 = esp_timer_get_time();
     const char *err = NULL;
     float x = 0.f, y = 0.f;
@@ -1382,6 +1383,8 @@ static cJSON *bench_case(int c, int run)
     cJSON *o = cJSON_CreateObject(), *a = cJSON_AddArrayToObject(o, "anims");
     cJSON_AddStringToObject(o, "case", BENCH_CASE[c]); cJSON_AddNumberToObject(o, "run", run);
     cJSON_AddNumberToObject(o, "ms", ms);
+    cJSON_AddNumberToObject(o, "int_before", int0);
+    cJSON_AddNumberToObject(o, "int_after", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     if (err) cJSON_AddStringToObject(o, "error", err);
     const int n = bench_n();
     for (int q = from; q < n; q++) cJSON_AddItemToArray(a, bench_rec_json(&s_brec[q]));
@@ -1393,13 +1396,11 @@ static esp_err_t http_bench(httpd_req_t *r)
     static atomic_bool busy;
     if (atomic_exchange(&busy, true)) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "a bench runs already");
     uint32_t runs = query_u32(r, "runs", 3);
-    const bool te_off = query_u32(r, "te", 1) == 0;      /* EXPERIMENT (bench 12/13's stall): te=0 runs it with the TE interrupt off */
     s_bench_stuck = query_u32(r, "stuck", 0) != 0;
     runs = runs < 1 ? 1 : runs > 5 ? 5 : runs;
     s_brec = heap_caps_calloc(BENCH_RECS, sizeof(mole_anim_rec_t), MALLOC_CAP_SPIRAM);
     cJSON *j = cJSON_CreateObject();
     if (!s_brec || !j) { heap_caps_free(s_brec); s_brec = NULL; cJSON_Delete(j); atomic_store(&busy, false); return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "oom"); }
-    if (te_off) molty_display_te_on(false);
     const bool astro = pkg_store_find(PKG_ROOT, "astrology", NULL);
     cJSON_AddStringToObject(j, "astrology", astro ? "installed" : "not installed: only boot-cat runs");
     mole_fluid_screen(true);
@@ -1409,7 +1410,6 @@ static esp_err_t http_bench(httpd_req_t *r)
         for (int c = 0; c < (astro ? BC_N : 1); c++) cJSON_AddItemToArray(cases, bench_case(c, run));
     mole_fluid_bench_capture(NULL, 0);
     heap_caps_free(s_brec); s_brec = NULL;
-    if (te_off) { molty_display_te_on(true); cJSON_AddBoolToObject(j, "te_off", true); }
     if (s_bench_stuck) { s_bench_stuck = false; cJSON_AddBoolToObject(j, "stuck", true); }
     if (astro) bench_scene(false);
     cJSON *h = cJSON_AddObjectToObject(j, "heap");

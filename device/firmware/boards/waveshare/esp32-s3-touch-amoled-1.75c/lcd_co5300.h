@@ -35,9 +35,7 @@ void lcd_co5300_blit_prof(uint32_t *out);
 void lcd_co5300_mirror(bool on);
 /** The panel's tearing-effect pulses on LCD_TE (molty_display_te). */
 void lcd_co5300_te(molty_te_t *out, bool window);
-/** EXPERIMENT: the TE interrupt off / on again (molty_display_te_on). */
-void lcd_co5300_te_on(bool on);
-/** Where a panel call waits (lcd_q.h LQ_AT_*) and its transfers queued / ended (molty_display_where). */
-void lcd_co5300_where(uint32_t out[3]);
+/** Until the pulses' total passes after (true), timeout_ms at most, or no TE line (false) (molty_display_te_wait). */
+bool lcd_co5300_te_wait(uint32_t after, int timeout_ms);
 /** EXPERIMENT (the bench's stuck=1): the next panel call counts a transfer that never ends (its recovery shown). */
 void lcd_co5300_inject(void);

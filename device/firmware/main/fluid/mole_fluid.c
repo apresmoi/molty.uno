@@ -77,6 +77,7 @@ static const char *TAG = "mole_fluid";
 #define FLUID_STEP         (1.f / 60.f)
 #define FLUID_FRAME_US     30000      /* 33.3 fps cap                            */
 #define FLUID_SLEEP_US     50000      /* asleep (slow breathing): 20 fps, less CPU */
+#define FLUID_TE_GRACE_US  4000       /* a handoff this late after its tearing pulse still goes with it (not twice in a row) */
 #define FLUID_TOUCH_US     16000      /* touch poll ≤ 60 Hz (shared I2C bus)    */
 #define FLUID_TILT_ACCEL   25.f       /* cells/s² of flow bias per g of tilt    */
 #define FLUID_TILT_LEAN    0.12f      /* stage units a target leans per g       */
@@ -1289,10 +1290,9 @@ esp_err_t mole_fluid_creature_file_get(uint8_t **out, size_t *len, bool *is_defa
  * every other caller of the panel takes, only after that, so one task at a time talks to the panel. Should the sender
  * not answer within its bound, it is late (fluid_tx.h): it holds the panel until it has answered, no one waits on it
  * again meanwhile (each frame only takes its answers: the drawer sends nothing and its frames go on at their pace), the
- * other callers (screen_switch, the goodbye's level), holding s_idle, skip their call till then; logged once an episode
- * with where the sender was (s_tx_at), and again when it is back (the drawer then repaints whole). While windows are
- * queued the sender owns the two window buffers (s_win, s_win2); the glass's rows a window sends are not drawn again in
- * the frame (glass_send). No sender (no memory for its task, or one window buffer only): the drawer sends in line. */
+ * other callers (screen_switch, the goodbye's level), holding s_idle, skip their call till then; logged once an episode,
+ * and again when it is back (the drawer then repaints whole). While windows are queued the sender owns the two window
+ * buffers (s_win, s_win2); the glass's rows a window sends are not drawn again in the frame (glass_send). No sender (no memory for its task, or one window buffer only): the drawer sends in line. */
 typedef struct { const uint16_t *glass; int16_t stride, x, y, w, h; int8_t mark, pal, op; } tx_rec_t;
 enum { TX_COPY, TX_DIRECT, TX_END };                /* op: copied and the mark drawn over; whole rows straight; the frame's end */
 #define TX_DEPTH   32        /* windows queued at most (a frame sends 15 to 40: the drawer waits for room meanwhile) */
@@ -1305,8 +1305,6 @@ static QueueHandle_t s_txq;                         /* NULL: no sender */
 static SemaphoreHandle_t s_tx_done;                 /* given by the sender at each TX_END (counting: an answer never lost) */
 static TaskHandle_t s_txtask;
 static fluid_tx_t s_txs;                             /* (the drawer's) windows queued since its last TX_END; TX_ENDs not answered */
-static volatile struct { uint8_t stage; tx_rec_t r; int64_t t; } s_tx_at;   /* the sender: 0 idle, 1 copying, 2 in a blit, 3 the
-                                                     * frame end's wait; the record; since (the log when it is late) */
 static uint32_t s_tx_qwait_us;                      /* (the drawer's) its waits for room in the queue, this frame */
 static struct { uint32_t busy_us, px, wins; bool fail; } s_tx_last;   /* the sender's last frame (read once its TX_END is answered) */
 /* a frame's first window to the panel (the bench's "pres": what the eye gets, frame to frame): its time (us, low 32
@@ -1324,12 +1322,9 @@ static void tx_task(void *arg) {
     int cur = 0; bool fail = false; uint32_t busy = 0, px = 0, wins = 0;
     for (;;) {
         tx_rec_t r;
-        s_tx_at.stage = 0;
         if (xQueueReceive(s_txq, &r, portMAX_DELAY) != pdTRUE) continue;
         const int64_t t0 = esp_timer_get_time();
-        s_tx_at.r = r; s_tx_at.t = t0;
         if (r.op == TX_END) {                       /* the frame's last window out, then the drawer goes on */
-            s_tx_at.stage = 3;
             if (wins && !fail) fail = molty_display_blit_wait() != ESP_OK;
             s_tx_last.busy_us = busy + (uint32_t)(esp_timer_get_time() - t0); s_tx_last.px = px; s_tx_last.wins = wins; s_tx_last.fail = fail;
             fail = false; busy = px = wins = 0;
@@ -1339,13 +1334,11 @@ static void tx_task(void *arg) {
         if (!fail) {                                /* (once one failed, the rest of the frame is dropped: it repaints whole) */
             const uint16_t *src = r.glass + (size_t)r.y * r.stride + r.x;
             if (r.op == TX_COPY) {                  /* into the buffer the panel is not reading (blit_async waits for the other) */
-                s_tx_at.stage = 1;
                 uint16_t *buf = cur ? s_win2 : s_win;
                 for (int y = 0; y < r.h; y++) memcpy(buf + (size_t)y * r.w, src + (size_t)y * r.stride, sizeof(uint16_t) * (size_t)r.w);
                 fluid_draw_mark(s_draw, &(fluid_rect_t){ buf, r.w, r.x, r.y, r.x + r.w, r.y + r.h }, r.pal, r.mark);
                 src = buf; cur ^= 1;
             }
-            s_tx_at.stage = 2;
             pres_mark();
             fail = molty_display_blit_async(r.x, r.y, r.w, r.h, src) != ESP_OK;
             px += (uint32_t)(r.w * r.h); wins++;
@@ -1353,16 +1346,10 @@ static void tx_task(void *arg) {
         busy += (uint32_t)(esp_timer_get_time() - t0);
     }
 }
-/* the sender late (a wait's bound ran out: fluid_tx.h) or back: logged once an episode, with where it was */
+/* the sender late (a wait's bound ran out: fluid_tx.h): logged once an episode (a panel transfer's own failure is the
+ * driver's line) */
 static void tx_late(const char *what) {
-    const tx_rec_t r = s_tx_at.r;
-    uint32_t w[5];                                      /* (the driver: where it waits, transfers queued / ended, async started / collected) */
-    molty_display_where(w);
-    mole_diag_event(true, "fluid: the sender's %s took over %d ms (it was at stage %u, op %d %d,%d %dx%d, for %lld ms; driver at %lu, "
-                    "transfers %lu queued %lu ended, async %lu started %lu collected; dma free %u largest %u): nothing goes to the panel till it answers",
-                    what, TX_WAIT_MS, (unsigned)s_tx_at.stage, r.op, r.x, r.y, r.w, r.h, (long long)((esp_timer_get_time() - s_tx_at.t) / 1000),
-                    (unsigned long)w[0], (unsigned long)w[1], (unsigned long)w[2], (unsigned long)w[3], (unsigned long)w[4],
-                    (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
+    mole_diag_event(true, "fluid: the sender's %s took over %d ms: nothing goes to the panel till it answers", what, TX_WAIT_MS);
 }
 static bool s_inline_out;                           /* (the drawer's) its own last window still going out (send_win) */
 static int tx_glass(void *ctx, const uint16_t *glass, int stride, int x, int y, int w, int h, bool direct, int mark, int pal) {
@@ -1707,11 +1694,11 @@ static bool screen_wanted(void) {
     return w;
 }
 
-/* a change of picture's new picture read on this task (fluid_draw_morph_work) in what its frame leaves of JOB_US, us (the
- * sim's own work included: its frame's handoff and pacing stay inside the panel's ~31.5 ms), JOB_MIN_US at least (one
- * step past it at worst: a cell row, a sort's chunk, the dust's frame ~7-9 ms). Its stack: fluid_task's own. */
-#define JOB_US     25000
-#define JOB_MIN_US 3000
+/* a change of picture's new picture read on this task (fluid_draw_morph_work) in what its frame leaves before the next
+ * wake, less JOB_EDGE_US (one step past its budget at worst: a cell row, a sort's chunk), JOB_MIN_US at least (the
+ * dust's frame ~7-9 ms). Its stack: fluid_task's own. */
+#define JOB_EDGE_US 1500
+#define JOB_MIN_US  3000
 
 static void fluid_task(void *arg) {
     (void)arg;
@@ -1727,8 +1714,10 @@ static void fluid_task(void *arg) {
     esp_timer_handle_t pace = NULL;
     const esp_timer_create_args_t pace_args = { .callback = pace_wake, .arg = xTaskGetCurrentTaskHandle(), .name = "fluid_pace" };
     ESP_ERROR_CHECK(esp_timer_create(&pace_args, &pace));
-    int64_t next = esp_timer_get_time();
+    int64_t next = esp_timer_get_time(), woke = next;   /* the next wake; the last */
     bool overran = false;
+    uint32_t te_n = 0;                                   /* the tearing pulse of the last handoff (molty_display_te) */
+    int te_per = 16770;                                  /* their period, us (the panel's, measured)                 */
 
     while (s_run) {
         esp_task_wdt_reset();
@@ -1739,7 +1728,7 @@ static void fluid_task(void *arg) {
             s_touch_mute = touched;
             atomic_store(&s_screen_want, true);
             if (!screen_switch(true)) { vTaskDelay(pdMS_TO_TICKS(FLUID_OFF_POLL_MS)); continue; }
-            prev = next = esp_timer_get_time();         /* no catching up on the time it was off */
+            prev = next = woke = esp_timer_get_time();  /* no catching up on the time it was off */
         } else if (!atomic_load(&s_screen_want)) { if (!screen_switch(false)) vTaskDelay(pdMS_TO_TICKS(FLUID_OFF_POLL_MS)); continue; }
         int64_t now = esp_timer_get_time();
         float rdt = (float)(now - prev) / 1e6f;
@@ -1890,11 +1879,47 @@ static void fluid_task(void *arg) {
             fluid_fine_frame_ahead(s_fine, &fv, &fo);
         }
         /* a change of picture's new picture read here while the drawer draws (fluid_draw_morph_work: the change given to
-         * this task at a handoff, with that handoff's inputs), in what this task's frame leaves of JOB_US */
+         * this task at a handoff, with that handoff's inputs), in what is left before the next wake (JOB_EDGE_US) */
         if (s_draw && s_frame) {
-            const int left = JOB_US - (int)(esp_timer_get_time() - t0);
+            const int left = (int)(next - esp_timer_get_time()) - JOB_EDGE_US;
             fluid_draw_morph_work(s_draw, s_frame, &s_dopts, left > JOB_MIN_US ? left : JOB_MIN_US);
         }
+        /* pace: the handoff at the same point after each wake: the frame simulated since the last one goes to the drawer
+         * now, then the next is simulated (the sim's work never moves the drawer's start). The wake is every second
+         * tearing pulse of the panel (each frame on the glass for two refreshes); one that comes late hands off at once
+         * within FLUID_TE_GRACE_US of its pulse, else at the next pulse (a refresh lost). No pulses (no TE line, asleep, or
+         * none for 3 periods): the 30 ms timer. Either way an overrun goes at once but never twice in a row: lower-priority
+         * core-1 work still gets some time every other frame. */
+        {
+            molty_te_t te;
+            molty_display_te(&te, false);
+            if (te.mean_us > 10000 && te.mean_us < 25000) te_per = (int)te.mean_us;
+            bool locked = false;
+            if (!fd_asleep(&s_dir) && te.line && te.total && esp_timer_get_time() - te.last_us < 3 * te_per) {
+                uint32_t want = te_n + 2;
+                const bool late = (int32_t)(te.total - want) >= 0;
+                if (late && !overran && esp_timer_get_time() - te.last_us < FLUID_TE_GRACE_US) { locked = overran = true; }
+                else {
+                    overran = false;
+                    if (late) want = te.total + 1;
+                    locked = molty_display_te_wait(want - 1, 3 * te_per / 1000 + 5);
+                    if (locked) molty_display_te(&te, false);
+                }
+                if (locked) next = te.last_us + 2 * te_per;   /* (the next handoff, for the change's job above) */
+            }
+            if (!locked) {
+                int64_t wait = next - esp_timer_get_time();
+                if (wait <= 0) { next = esp_timer_get_time(); wait = overran ? 1000 : 0; overran = !overran; }
+                else overran = false;
+                if (wait > 0 && esp_timer_start_once(pace, (uint64_t)wait) == ESP_OK) ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
+                next += fd_asleep(&s_dir) ? FLUID_SLEEP_US : FLUID_FRAME_US;
+                molty_display_te(&te, false);
+            }
+            te_n = te.total;
+            const int64_t w = esp_timer_get_time();
+            raw_dt_us = (uint32_t)(w - woke); woke = w;     /* (the wakes' interval: the bench's sim) */
+        }
+        const int64_t tw = esp_timer_get_time();
         /* hand the frame to the drawer: wait until it finished the previous one */
         xSemaphoreTake(s_idle, portMAX_DELAY);
         if (s_dir.bye) {   /* the goodbye's fade: the panel's level, with the drawer idle */
@@ -1943,11 +1968,16 @@ static void fluid_task(void *arg) {
             if (s_draw && s_draw->m.ends != ends) {     /* (where each change's reading of its new picture got to, by frame) */
                 const int *g = s_draw->m.dg;
                 ends = s_draw->m.ends;
-                /* (dust@: read and in order; job=: its slices that read, their ms in all, the longest; born, wpx: the most new
-                 * grains moved and pixels written in a frame) */
-                mole_diag_event(false, "change stages f=%d old@%d pass@%d ready@%d dust@%d paired@%d lines@%d cells=%d/%d read dust=%dms lines=%dms left=%dms sortf=%d wait=%d+%d"
-                                " job=%d/%dms max=%.1fms born=%d wpx=%d",
-                                g[FLUID_MD_FRAMES], g[FLUID_MD_OLD], g[FLUID_MD_PASS], g[FLUID_MD_READY], g[FLUID_MD_DUST], g[FLUID_MD_PAIRED], g[FLUID_MD_LINES],
+                /* (first, as the log cuts long lines: move@ the first frame anything moved, down@ the dust all down, hang= the
+                 * frames between them nothing moved or the clock stood, slow= the frames its clock went slower, line0= and
+                 * full= the first new line's frame and the lines' full one against down@ (want <= 0 and <= 4); then dust@:
+                 * read, in order and listed; job=: its slices that read, their ms in all, the longest; born, wpx: the most
+                 * gliders moved and pixels written in a frame) */
+                mole_diag_event(false, "change stages f=%d move@%d down@%d hang=%d slow=%d line0=%+d full=%+d old@%d pass@%d ready@%d dust@%d paired@%d lines@%d"
+                                " cells=%d/%d read dust=%dms lines=%dms left=%dms sortf=%d wait=%d+%d job=%d/%dms max=%.1fms born=%d wpx=%d",
+                                g[FLUID_MD_FRAMES], g[FLUID_MD_MOVE0], g[FLUID_MD_SETTLE], g[FLUID_MD_HANG], g[FLUID_MD_SLOW],
+                                g[FLUID_MD_LIN0] ? g[FLUID_MD_LIN0] - g[FLUID_MD_SETTLE] : -99, g[FLUID_MD_LINF] - g[FLUID_MD_SETTLE],
+                                g[FLUID_MD_OLD], g[FLUID_MD_PASS], g[FLUID_MD_READY], g[FLUID_MD_DUST], g[FLUID_MD_PAIRED], g[FLUID_MD_LINES],
                                 g[FLUID_MD_LCELLS], s_sim->N, g[FLUID_MD_DUS] / 1000, g[FLUID_MD_LUS] / 1000, g[FLUID_MD_LEFT] / 1000, g[FLUID_MD_SORTF],
                                 g[FLUID_MD_WAITC], g[FLUID_MD_WAITL], g[FLUID_MD_JOBN], g[FLUID_MD_JOBUS] / 1000, g[FLUID_MD_JOBMAX] / 1000.f,
                                 g[FLUID_MD_BORN], g[FLUID_MD_WPX]);
@@ -2024,8 +2054,8 @@ static void fluid_task(void *arg) {
         fps = fps > 0.f ? fps * 0.93f + (1.f / fmaxf(rdt, 1e-3f)) * 0.07f : 30.f;
         pms = pms * 0.9f + (t0 - now) / 1000.f * 0.1f;
         sms = sms * 0.9f + (t1 - t0) / 1000.f * 0.1f;
-        wms = wms * 0.9f + (t2 - t1) / 1000.f * 0.1f;
-        fms = fms * 0.9f + (t3 - t0) / 1000.f * 0.1f;
+        wms = wms * 0.9f + (t2 - tw) / 1000.f * 0.1f;
+        fms = fms * 0.9f + ((t1 - t0) + (t3 - tw)) / 1000.f * 0.1f;
         static float prof_ema[FP_N];
         for (int q = 0; q < FP_DSAMPLE; q++) {
             prof_ema[q] = prof_ema[q] * 0.9f + (float)fluid_prof[q] / (float)s_cpu_mhz / 1000.f * 0.1f;
@@ -2057,7 +2087,11 @@ static void fluid_task(void *arg) {
         snprintf(s_stats.scene_layout, sizeof(s_stats.scene_layout), "%s", s_sp.cur ? s_sp.cur->layout : "");
         s_stats.scene_left = s_sp.cur ? scene_end(s_sp.cur) - s_sp.t : 0.f;
         s_stats.crisp_dots = s_crisp ? s_crisp_dots : -1;
-        if (s_crisp && s_cpk) {    /* the creature's rows between the cores: more here while the drawer (core 0) is the slower */
+        if (s_crisp && s_cpk && fluid_draw_morphing(s_draw)) {   /* a change of picture: core 0 is its own (the creature's band
+                                                                 * there runs above the drawer, and with the handoff right
+                                                                 * after the wake it would land on the old picture's read) */
+            cpk_set_share(s_cpk, 90); s_stats.share = 90;
+        } else if (s_crisp && s_cpk) {    /* the creature's rows between the cores: more here while the drawer (core 0) is the slower */
             static float share = 55.f;
             /* the drawer (core 0) slower: more here; this core waiting on the other's band (k_wait): more here too;
              * this core slower and not waiting: less. k_wait has a floor of ~0.5 ms with no real wait (the band's
@@ -2083,14 +2117,6 @@ static void fluid_task(void *arg) {
             memcpy(s_stats.word, s_ttext + s_toks[s_word].off, (size_t)wl); s_stats.word[wl] = '\0';
         }
         xSemaphoreGive(s_mutex);
-
-        /* pace at 33.3 fps. An overrun starts the next frame at once, but never twice in
-         * a row: lower-priority core-1 work still gets 1 ms every other frame. */
-        next += fd_asleep(&s_dir) ? FLUID_SLEEP_US : FLUID_FRAME_US;
-        int64_t wait = next - esp_timer_get_time();
-        if (wait <= 0) { next = esp_timer_get_time(); wait = overran ? 1000 : 0; overran = !overran; }
-        else overran = false;
-        if (wait > 0 && esp_timer_start_once(pace, (uint64_t)wait) == ESP_OK) ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
     }
     esp_timer_stop(pace);
     esp_timer_delete(pace);
