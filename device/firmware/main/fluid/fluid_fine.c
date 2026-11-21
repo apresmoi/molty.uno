@@ -206,7 +206,7 @@ void fluid_fine_destroy(fluid_fine_t *f) {
     FINE_FREE(f->px0); FINE_FREE(f->pc); FINE_FREE(f->pa); FINE_FREE(f->bpos); FINE_FREE(f->bcol); FINE_FREE(f->bcell);
     FINE_FREE(f->dq); FINE_FREE(f->dcol); FINE_FREE(f->vis); FINE_FREE(f->imm); FINE_FREE(f->why); FINE_FREE(f->tot); FINE_FREE(f->stat); FINE_FREE(f->eff);
     FINE_FREE(f->dist); FINE_FREE(f->src); FINE_FREE(f->lit); FINE_FREE(f->lv); FINE_FREE(f->lv2);
-    FINE_FREE(f->tot2); FINE_FREE(f->fresh); FINE_FREE(f->lgrid2); FINE_FREE(f->lvd);
+    FINE_FREE(f->tot2); FINE_FREE(f->fresh); FINE_FREE(f->lgrid2); FINE_FREE(f->lvd); FINE_FREE(f->lvd2);
     FINE_FREE(f->b.sig); FINE_FREE(f->b.why); FINE_FREE(f->b.vis); FINE_FREE(f->b.imm); FINE_FREE(f->b.sx); FINE_FREE(f->b.sy);
     FINE_FREE(f->b.lv); FINE_FREE(f->lvchg); FINE_FREE(f->pmem);
     FINE_FREE(f);
@@ -520,12 +520,19 @@ bool fluid_fine_swap(fluid_fine_t *f) {
     f->drawn = nw;
     f->set[f->live].used = ++f->clock;
     f->lvall = true;                                    /* (the frame ahead's levels: the old set's) */
-    memset(f->dok, 0, (size_t)f->N);                    /* (its specks as drawn: the old set's) */
-    if (nw->n > f->lvdcap) {
-        FINE_FREE(f->lvd);
-        f->lvd = FINE_CALLOC((size_t)nw->n + 1);
-        f->lvdcap = f->lvd ? nw->n : 0;
+    /* the specks as drawn (fluid_fine_move): a kept cell's go on, at the new set's places (a tap's set would otherwise
+     * have its wave redraw every cell it crosses whole once); the others' are not known */
+    if (nw->n > f->lvd2cap) {
+        FINE_FREE(f->lvd2);
+        f->lvd2 = FINE_CALLOC((size_t)nw->n + 1);
+        f->lvd2cap = f->lvd2 ? nw->n : 0;
     }
+    for (int k = 0; k < f->N; k++) {
+        if (!f->lvd2 || !old || !f->lvd || f->fresh[k] || !f->dok[k]) { f->dok[k] = 0; continue; }
+        memcpy(f->lvd2 + nw->start[k], f->lvd + old->start[k], nw->start[k + 1] - nw->start[k]);
+    }
+    uint8_t *ld = f->lvd; f->lvd = f->lvd2; f->lvd2 = ld;
+    const int lc = f->lvdcap; f->lvdcap = f->lvd2cap; f->lvd2cap = lc;
     return kept * 2 < f->N;
 }
 
