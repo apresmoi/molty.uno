@@ -1082,13 +1082,36 @@ void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_
     if (dots) memcpy(dots, s_fc.dots, (size_t)s->N);
     if (hd && hd->keep) memcpy(hd->keep, s_fc.keep, (size_t)s->N);
     if (cap && cap->n > 0) {
-        /* the subtitle, over the drawing: painted on the canvas's band (then put back), its cells
-         * folded again */
+        /* the subtitle, over the drawing: painted on the canvas's band (then put back), its cells folded again; the same
+         * word over the same items comes out the same, so it is kept (s_cc) and only copied while the word shows */
+        static struct { uint32_t key; int n1, nl; int16_t *T; uint32_t *tcol; uint8_t *dots, *keep; fluid_letter_t *L; fluid_shape_t *sh; } s_cc;
+        const int n0 = *nletters, hn0 = hd ? hd->n : 0, bo = bj0 * s->W, bc = (bj1 - bj0 + 1) * s->W;
+        uint32_t ck = (2166136261u ^ s_fc.key) * 16777619u;
+        for (int q = 0; q < cap->n; q++) ck = (ck ^ (uint8_t)cap->str[q]) * 16777619u;
+        { float cy = sc ? sc->caption_y : SCENE_CAPTION_Y; uint32_t v; memcpy(&v, &cy, 4); ck = (ck ^ v) * 16777619u; }
+        ck = (ck ^ (uint32_t)cap->n ^ (uint32_t)cap->orp << 8 ^ (uint32_t)bj0 << 16 ^ (uint32_t)bj1 << 24) * 16777619u;
+        ck = (ck ^ (uint32_t)n0 ^ (uint32_t)(hn0 + 1) << 8 ^ (uint32_t)(dots != NULL) << 30 ^ (uint32_t)(hd && hd->keep) << 31 ^ (uint32_t)(hd != NULL) << 29) * 16777619u;
+        if (!s_fc.key) ck = 0;                                  /* (the items move on their own: never the same) */
+        if (!s_cc.T) {
+            s_cc.T = SCENE_CALLOC((sizeof(int16_t) + sizeof(uint32_t) + 2) * (size_t)FLUID_GRID_MAX_W * 8);
+            s_cc.L = SCENE_CALLOC(sizeof(fluid_letter_t) * FLUID_MAX_LETTERS); s_cc.sh = SCENE_CALLOC(sizeof(fluid_shape_t) * FLUID_MAX_LETTERS);
+            if (s_cc.T) { s_cc.tcol = (uint32_t *)(s_cc.T + FLUID_GRID_MAX_W * 8); s_cc.dots = (uint8_t *)(s_cc.tcol + FLUID_GRID_MAX_W * 8); s_cc.keep = s_cc.dots + FLUID_GRID_MAX_W * 8; }
+        }
+        const bool room = s_cc.T && s_cc.L && s_cc.sh && bc <= FLUID_GRID_MAX_W * 8;
+        if (room && ck && ck == s_cc.key) {
+            memcpy(s->T + bo, s_cc.T, sizeof(int16_t) * (size_t)bc); memcpy(s->tcol + bo, s_cc.tcol, sizeof(uint32_t) * (size_t)bc);
+            if (dots) memcpy(dots + bo, s_cc.dots, (size_t)bc);
+            if (hd && hd->keep) memcpy(hd->keep + bo, s_cc.keep, (size_t)bc);
+            memcpy(letters + n0, s_cc.L, sizeof(fluid_letter_t) * (size_t)s_cc.nl); *nletters = n0 + s_cc.nl;
+            for (int n = n0; dots && n < *nletters; n++) letter_dots(s, &letters[n], dots);   /* (any of a letter's dots past the band) */
+            if (hd && hn0 >= 0) { if (s_cc.n1 > hn0) memcpy(hd->shapes + hn0, s_cc.sh, sizeof(fluid_shape_t) * (size_t)(s_cc.n1 - hn0)); hd->n = s_cc.n1; }
+            FLUID_PROF_END(FP_TARGET, c0);
+            return;
+        }
         const int r0 = 4 * bj0, nb = 4 * (bj1 - bj0 + 1) * cv->W, o = r0 * cv->W;
         memcpy(s_fc.bT, cv->T + o, sizeof(int16_t) * (size_t)nb);
         memcpy(s_fc.btcol, cv->tcol + o, sizeof(uint32_t) * (size_t)nb);
         memcpy(s_fc.bmask, cv->mask + o, (size_t)nb);
-        const int n0 = *nletters;
         const ctx_t cc = { cv, soft, hd, true };
         caption(&cc, cap, sc ? sc->caption_y : SCENE_CAPTION_Y, letters, nletters);
         fold(cv, s->W, bj0, bj1, s->T, s->tcol, dots, hd ? hd->keep : NULL);
@@ -1097,6 +1120,15 @@ void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_
         memcpy(cv->T + o, s_fc.bT, sizeof(int16_t) * (size_t)nb);
         memcpy(cv->tcol + o, s_fc.btcol, sizeof(uint32_t) * (size_t)nb);
         memcpy(cv->mask + o, s_fc.bmask, (size_t)nb);
+        const int n1 = hd ? hd->n : 0, ns = hd && hn0 >= 0 && n1 > hn0 ? n1 - hn0 : 0;
+        s_cc.key = room && ns <= FLUID_MAX_LETTERS && *nletters - n0 <= FLUID_MAX_LETTERS ? ck : 0;
+        if (s_cc.key) {                                         /* (kept: the band's cells, the letters and shapes it added) */
+            memcpy(s_cc.T, s->T + bo, sizeof(int16_t) * (size_t)bc); memcpy(s_cc.tcol, s->tcol + bo, sizeof(uint32_t) * (size_t)bc);
+            if (dots) memcpy(s_cc.dots, dots + bo, (size_t)bc);
+            if (hd && hd->keep) memcpy(s_cc.keep, hd->keep + bo, (size_t)bc);
+            s_cc.nl = *nletters - n0; memcpy(s_cc.L, letters + n0, sizeof(fluid_letter_t) * (size_t)s_cc.nl);
+            s_cc.n1 = n1; if (ns) memcpy(s_cc.sh, hd->shapes + hn0, sizeof(fluid_shape_t) * (size_t)ns);
+        }
     }
     FLUID_PROF_END(FP_TARGET, c0);
 }

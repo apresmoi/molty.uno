@@ -425,6 +425,8 @@ static inline uint32_t fluid_look_of(int kind, uint32_t id, bool dust) {
 #define FLUID_MORPH_PASS_US   12000    /* (the drawer's one pass for the new look, as the panel model counts it)        */
 #define FLUID_MORPH_READ_MIN_US 2000   /* at the cloud, the new picture read a frame at least, whatever the grains took .. */
 #define FLUID_MORPH_SORT_MIN_US 2500   /* .. and its grains put in order                                               */
+#define FLUID_MORPH_JOB_LINES_US 10000 /* the job's slice when only a scene's lines are left to read (they come last): the
+                                        * drawer's peak frames then, which share the PSRAM with it                        */
 #define FLUID_MORPH_FINE_US   5000     /* (the dust's frame, fluid_fine_frame, as the panel model counts it)            */
 #define FLUID_MORPH_BORN_FAST 6000     /* new grains with no pair: more, and they come up over 0.3 s more (the prototype's
                                         * extra, as its fit to the panel chose it: to the chart, not to Leo)            */
@@ -538,7 +540,8 @@ typedef struct {
                                         * (and sent) the next (fluid_draw_send2)                                        */
     int      hdc_next, nbuilt, nowed;   /* the cache made ahead from this cell on; cells made, owed this frame (the log) */
     int      ndrawn;                   /* this frame: px of changed cells drawn into the kept glass (the bench)        */
-    int      move_us, cache_us;        /* this frame: the dust moved alone, the drawing's cache made (of cmp; the bench) */
+    int      move_us, cache_us, draw_us;   /* this frame: the dust moved alone, the drawing's cache made, the changed cells drawn
+                                           * into the glass (the three parts of cmp; the bench) */
     int      nsh0;
     struct {                           /* this frame's condensed letters, ready to draw   */
         const uint8_t *gl, *mask; uint16_t c, mw, mh; int16_t x, y, w, h, cx0, cy0, cx1, cy1;
@@ -682,6 +685,14 @@ void fluid_draw_morph_bounds(int cloud_n, int lines_n, int read_cells);
 /** A change runs and nothing of its new look's dust is read yet: its inputs may still change whole (a scene's dust
  *  swapping in). With the drawer idle. */
 bool fluid_draw_morph_open(const fluid_draw_t *d);
+/** EXPERIMENT (delete once measured): a change's switches, each change keeping those set when it began (the bench's
+ *  &chg=bits): BANDS its frames to the sender band by band from a log of its writes (else written and sent in line), DUE
+ *  the grains with no pair looked at in the order of when each is due (else all, in order), LINES10 the job's slices 10 ms
+ *  once only lines are left (else as the sim task leaves), GLIDE4 one new grain with no pair in 4 glides in (else 1 in 2).
+ *  bits >= 0: set; returns those before. */
+enum { FLUID_CHG_BANDS = 1, FLUID_CHG_DUE = 2, FLUID_CHG_LINES10 = 4, FLUID_CHG_GLIDE4 = 8 };
+#define FLUID_CHG_DEFAULT FLUID_CHG_GLIDE4
+unsigned fluid_draw_morph_chg(int bits);
 /** The new picture of a change read on another task (on: the device's sim task, which then calls fluid_draw_morph_work
  *  between its handoffs and fluid_draw_morph_handoff at each); off (as created): in the drawer's own frames, the same code
  *  (the web, the host tests' in-line runs). */

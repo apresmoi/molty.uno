@@ -165,6 +165,8 @@ typedef struct fluid_fine {
     uint32_t step_key;                  /* the forming word's step, last frame                    */
     uint32_t prof_frame, prof_rect, prof_n, prof_eval;   /* us spent (fluid_fine_frame, fluid_fine_rect) and specks worked out over prof_n frames */
     uint32_t prof_drift, prof_specks;   /* .. of fluid_fine_frame: the shifts' loop, the specks' loop (us) */
+    uint32_t prof_prep, prof_cap, prof_light, prof_parts;   /* .. its levels caught up and arrays cleared, the caption and its
+                                         * backdrop, the light's grid, the word's breaking specks (us) */
     uint32_t *sig, *sig0;               /* N: what each cell's dust is this frame, and as last drawn */
     uint8_t *lgrid;                     /* the light, its grid                                   */
     int lg;

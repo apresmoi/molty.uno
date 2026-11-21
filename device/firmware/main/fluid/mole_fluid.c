@@ -1486,6 +1486,10 @@ static void draw_task(void *arg) {
         static uint32_t pf0, pr0;
         fluid_fine_t *ff = s_dopts.fine;
         const uint32_t fine_f = ff ? ff->prof_frame - pf0 : 0, fine_r = ff ? ff->prof_rect - pr0 : 0;
+        uint32_t fsd[6] = { 0 };                        /* (the dust frame's parts since the last frame: its log resets them) */
+        {   static uint32_t fs0[6];
+            const uint32_t now6[6] = { ff ? ff->prof_drift : 0, ff ? ff->prof_specks : 0, ff ? ff->prof_prep : 0, ff ? ff->prof_cap : 0, ff ? ff->prof_light : 0, ff ? ff->prof_parts : 0 };
+            for (int p = 0; p < 6; p++) { fsd[p] = now6[p] >= fs0[p] ? now6[p] - fs0[p] : now6[p]; fs0[p] = now6[p]; } }
         {   /* each animation's cadence (/api/log, and the bench's table: mole_fluid_bench_capture), once it has rested 10
              * frames: the frames its cells changed (f) and those whose changes were all sent (s: must be f), its pixels a
              * frame (the change's own for the wave), the windows, the frame-to-frame intervals of this core (pan) and of
@@ -1495,7 +1499,7 @@ static void draw_task(void *arg) {
             enum { BINS = 64 };                         /* intervals in 1 ms bins (the last: 63 and more) */
             typedef struct { uint32_t f, s, rest, px, pxmax, win, worst, worst_c, comp; uint16_t pan[BINS], sim[BINS]; int64_t began;
                              uint32_t sum[MOLE_ANIM_PARTS], max[MOLE_ANIM_PARTS]; int forced, keep, ready_at, held, na, nb, pairs;
-                             uint32_t mv, mvx, ca, cax, owed, boot; } anim_t;   /* (cmp's dust moved and cache made, mean/max us; cells owed; dust frames at the handoff) */
+                             uint32_t mv, mvx, ca, cax, dr, drx, owed, boot, fs[6]; } anim_t;   /* (fs: the dust frame's parts, prof_drift .. prof_parts) */   /* (cmp's dust moved and cache made, mean/max us; cells owed; dust frames at the handoff) */
             static struct { anim_t a[FLUID_ANIM_N]; uint32_t v[MOLE_ANIM_PARTS]; } *R;   /* (PSRAM) */
             static int64_t last_t0;
             static float last_sim;
@@ -1525,6 +1529,8 @@ static void draw_task(void *arg) {
                     A->comp += (uint32_t)(w ? m->comp : s_draw->ndrawn);   /* (else: the px of changed cells drawn into the kept glass) */
                     A->mv += (uint32_t)s_draw->move_us; A->mvx = (uint32_t)s_draw->move_us > A->mvx ? (uint32_t)s_draw->move_us : A->mvx;
                     A->ca += (uint32_t)s_draw->cache_us; A->cax = (uint32_t)s_draw->cache_us > A->cax ? (uint32_t)s_draw->cache_us : A->cax;
+                    A->dr += (uint32_t)s_draw->draw_us; A->drx = (uint32_t)s_draw->draw_us > A->drx ? (uint32_t)s_draw->draw_us : A->drx;
+                    for (int p = 0; p < 6; p++) A->fs[p] += fsd[p];
                     A->owed += (uint32_t)s_draw->nowed; A->boot += atomic_exchange(&s_fine_boot_seen, 0) ? 1u : 0u;
                     if (w) {
                         A->forced |= m->forced; A->keep |= m->keep;
@@ -1555,8 +1561,10 @@ static void draw_task(void *arg) {
                     mole_diag_event(false, "anim %s.parts cells=%.1f/%.1f send=%.1f/%.1f cmp=%.1f/%.1f push=%.1f/%.1f wait=%.1f/%.1f sim=%.1f/%.1f fill=%.1f/%.1f build=%.1f/%.1f fine=%.1f/%.1f rect=%.1f/%.1f",
                                     NAME[q], AM(0), AM(1), AM(2), AM(3), AM(4), AM(5), AM(6), AM(7), AM(8), AM(9));
                     if (q != FLUID_ANIM_WAVE)               /* (of cmp: the dust moved alone, the drawing's cache made; cells owed; frames whose dust was worked out at the handoff) */
-                        mole_diag_event(false, "anim %s.cmp move=%.1f/%.1f cache=%.1f/%.1f owed=%u boot=%u",
-                                        NAME[q], A->mv / 1000.f / n, A->mvx / 1000.f, A->ca / 1000.f / n, A->cax / 1000.f, (unsigned)A->owed, (unsigned)A->boot);
+                        mole_diag_event(false, "anim %s.cmp move=%.1f/%.1f cache=%.1f/%.1f draw=%.1f/%.1f drawn=%.1fkpx owed=%u boot=%u fine(dr sk pre cap lg pt)=%.1f %.1f %.1f %.1f %.1f %.1f",
+                                        NAME[q], A->mv / 1000.f / n, A->mvx / 1000.f, A->ca / 1000.f / n, A->cax / 1000.f, A->dr / 1000.f / n, A->drx / 1000.f,
+                                        A->comp / 1000.f / n, (unsigned)A->owed, (unsigned)A->boot, A->fs[0] / 1000.f / n, A->fs[1] / 1000.f / n,
+                                        A->fs[2] / 1000.f / n, A->fs[3] / 1000.f / n, A->fs[4] / 1000.f / n, A->fs[5] / 1000.f / n);
                     if (q == FLUID_ANIM_WAVE)
                         mole_diag_event(false, "anim wave.work look=%.1f/%.1f old=%.1f/%.1f new=%.1f/%.1f pair=%.1f/%.1f fly=%.1f/%.1f spare=%.1f/%.1f born=%.1f/%.1f lines=%.1f/%.1f comp=%.1f/%.1f end=%.1f/%.1f marks=%.1f/%.1f kpx=%.1f forced=%d keep=%d ready@%d held=%d grains=%d/%d pairs=%d",
                                         AM(10), AM(11), AM(12), AM(13), AM(14), AM(15), AM(16), AM(17), AM(18), AM(19), AM(20), A->comp / 1000.f / n,
@@ -1591,11 +1599,11 @@ static void draw_task(void *arg) {
                 if (ff->prof_n >= 100) {
                     const float n = (float)ff->prof_n;
                     /* (wf, wkpx: the worst frame's dust part of its cells, ms, and the pixels it sent) */
-                    mole_diag_event(false, "fine f=%.1f(dr=%.1f sk=%.1f) tp=%.1f r=%.1f c=%.1f s=%.1f worst=%.1f(%.1f+%.1f) wf=%.1f wkpx=%.1f over=%u win=%.0f kpx=%.1f ev=%.0f sp=%d n=%u",
-                                    ff->prof_frame / 1000.f / n, ff->prof_drift / 1000.f / n, ff->prof_specks / 1000.f / n, s_touch_us / 1000.f / n, ff->prof_rect / 1000.f / n, cells_us / 1000.f / n, send_us / 1000.f / n,
+                    mole_diag_event(false, "fine f=%.1f(dr=%.1f sk=%.1f pre=%.1f cap=%.1f lg=%.1f pt=%.1f) tp=%.1f r=%.1f c=%.1f s=%.1f worst=%.1f(%.1f+%.1f) wf=%.1f wkpx=%.1f over=%u win=%.0f kpx=%.1f ev=%.0f sp=%d n=%u",
+                                    ff->prof_frame / 1000.f / n, ff->prof_drift / 1000.f / n, ff->prof_specks / 1000.f / n, ff->prof_prep / 1000.f / n, ff->prof_cap / 1000.f / n, ff->prof_light / 1000.f / n, ff->prof_parts / 1000.f / n, s_touch_us / 1000.f / n, ff->prof_rect / 1000.f / n, cells_us / 1000.f / n, send_us / 1000.f / n,
                                     worst_us / 1000.f, worst_c / 1000.f, worst_s / 1000.f, worst_f / 1000.f, worst_px / 1000.f, (unsigned)slow, wins / n, kpx / 1000.f / n,
                                     ff->prof_eval / n, fluid_fine_specks(ff), (unsigned)ff->prof_n);
-                    ff->prof_frame = ff->prof_rect = ff->prof_n = ff->prof_eval = ff->prof_drift = ff->prof_specks = 0; pf0 = pr0 = 0; s_touch_us = 0;
+                    ff->prof_frame = ff->prof_rect = ff->prof_n = ff->prof_eval = ff->prof_drift = ff->prof_specks = ff->prof_prep = ff->prof_cap = ff->prof_light = ff->prof_parts = 0; pf0 = pr0 = 0; s_touch_us = 0;
                     cells_us = send_us = worst_us = worst_c = worst_s = wins = kpx = slow = 0;
                 }
             }

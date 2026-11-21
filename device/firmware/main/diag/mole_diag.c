@@ -8,6 +8,7 @@
 #include "net/network.h"
 #include "net/console_store.h"
 #include "mole_fluid.h"
+#include "fluid_sim.h"                               /* EXPERIMENT (fluid_draw_morph_chg: the bench's &chg=) */
 #include "pkg/pkg_cmd.h"
 #include "pkg/pkg_store.h"
 #include "bench_chart.h"
@@ -1357,6 +1358,9 @@ static esp_err_t http_bench(httpd_req_t *r)
     if (atomic_exchange(&busy, true)) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "a bench runs already");
     uint32_t runs = query_u32(r, "runs", 3);
     runs = runs < 1 ? 1 : runs > 5 ? 5 : runs;
+    /* EXPERIMENT: &chg=bits, the change of picture's switches for this bench (FLUID_CHG_*; as they were after it) */
+    const unsigned chg0 = fluid_draw_morph_chg(-1), chg = query_u32(r, "chg", chg0) & 15u;
+    fluid_draw_morph_chg((int)chg);
     s_brec = heap_caps_calloc(BENCH_RECS, sizeof(mole_anim_rec_t), MALLOC_CAP_SPIRAM);
     cJSON *j = cJSON_CreateObject();
     if (!s_brec || !j) { heap_caps_free(s_brec); s_brec = NULL; cJSON_Delete(j); atomic_store(&busy, false); return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "oom"); }
@@ -1370,6 +1374,8 @@ static esp_err_t http_bench(httpd_req_t *r)
     mole_fluid_bench_capture(NULL, 0);
     heap_caps_free(s_brec); s_brec = NULL;
     if (astro) bench_scene(false);
+    fluid_draw_morph_chg((int)chg0);                    /* (EXPERIMENT) */
+    cJSON_AddNumberToObject(j, "chg", chg);
     cJSON *h = cJSON_AddObjectToObject(j, "heap");
     cJSON_AddNumberToObject(h, "int_free", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     cJSON_AddNumberToObject(h, "int_largest", heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
