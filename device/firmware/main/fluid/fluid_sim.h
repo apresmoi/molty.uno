@@ -408,8 +408,9 @@ static inline uint32_t fluid_look_of(int kind, uint32_t id, bool dust) {
     const uint32_t tag = kind == FLUID_LOOK_SCENE ? 0x08000000u : kind == FLUID_LOOK_ASK ? 0x20000000u : 0x04000000u;
     return FLUID_LOOK_KEEP | tag | (id & 0x03FFFFFFu) | (dust ? FLUID_LOOK_DUST : 0u);
 }
-#define FLUID_MORPH_FLY       750      /* pairs that fly at most (the rest of each picture fades in place; 800 before the
-                                        * frame's budget: the fewest that keep the cloud full, scene_test) ..           */
+#define FLUID_MORPH_FLY       600      /* pairs that fly at most (the rest of each picture fades in place; 750 till bench 21:
+                                        * the movers never wait, so they are what a slow send leaves; 500 left the cloud
+                                        * too empty, scene_test) ..                                                   */
 #define FLUID_MORPH_FLY_PX    2000     /* .. and px of their grains (a pair of 2 x 2 px grains: 4): both fitted to the panel
                                         * model, every change's worst frame under 33 ms (scene_test.c test_morph)        */
 #define FLUID_MORPH_LAND_PX   1200     /* .. and px of the new picture's grains they land on (pairs past it fade in the cloud:
@@ -430,6 +431,9 @@ static inline uint32_t fluid_look_of(int kind, uint32_t id, bool dust) {
                                         * the still layers' moments, a moment late when the frame has no room            */
 #define FLUID_MORPH_IDLE_US   24000    /* .. and in its first frames, the old picture read, sorted, its pairs chosen: they
                                         * send nothing                                                               */
+#define FLUID_MORPH_FRAME_US  29000    /* .. and its cells with its send at most this (the panel's frame is two refreshes,
+                                        * 33.5 ms, from the pulse: one past it waits for the next) ..                 */
+#define FLUID_MORPH_SEND_US   12000    /* .. a send guessed this long at least (a whole glass), else as the last ones went */
 #define FLUID_MORPH_SPENT_US  1000     /* (the frame's other work before the change's, as the host's model counts it)    */
 #define FLUID_MORPH_PASS_US   12000    /* (the drawer's one pass for the new look, as the panel model counts it)        */
 #define FLUID_MORPH_READ_MIN_US 2000   /* at the cloud, the new picture read a frame at least, whatever the grains took .. */
@@ -488,6 +492,7 @@ typedef struct {
     bool     still;                    /* (at the handoff: the drawer has made its new look, fluid_draw_morph_still)    */
     bool     full;                     /* a change cut: the next send is whole (its glass may hold what was not sent)   */
     int      spent, budget;            /* the drawer's frame before the change's work (us), and so the change's this frame */
+    int      sendp;                    /* the send a frame of it is likely to take (us: the last, its peaks held a while) */
     fluid_morph_mem_t *jmm;            /* the change that task reads for (set and cleared at the handoff only)          */
     fluid_morph_mem_t *jfree;          /* changes ended in the drawer's frame while that task had them: freed at the handoff */
 } fluid_morph_t;

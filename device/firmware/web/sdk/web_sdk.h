@@ -116,6 +116,14 @@ void vTaskDelay(TickType_t t);
 static inline TaskHandle_t xTaskGetCurrentTaskHandle(void) { return NULL; }
 static inline BaseType_t xTaskNotifyGive(TaskHandle_t t) { (void)t; return pdPASS; }
 uint32_t ulTaskNotifyTake(BaseType_t clear, TickType_t wait);
+/* queues (freertos/queue.h): none here. The only user is the scenes' sender task (mole_fluid.c tx_start), which then
+ * does not start: one thread draws and sends in line, the firmware's own path when it has no room for that task */
+typedef struct web_queue *QueueHandle_t;
+static inline QueueHandle_t xQueueCreate(uint32_t n, uint32_t size) { (void)n; (void)size; return NULL; }
+static inline void vQueueDelete(QueueHandle_t q) { (void)q; }
+static inline BaseType_t xQueueSend(QueueHandle_t q, const void *item, TickType_t wait) { (void)q; (void)item; (void)wait; return pdFALSE; }
+static inline BaseType_t xQueueReceive(QueueHandle_t q, void *item, TickType_t wait) { (void)q; (void)item; (void)wait; return pdFALSE; }
+static inline SemaphoreHandle_t xSemaphoreCreateCounting(uint32_t max, uint32_t n) { (void)max; (void)n; return NULL; }
 
 /* ── the caller's side (web_molty.c) ─────────────────────────────────────── */
 void web_sdk_seed(uint32_t seed);                  /* esp_random from here on */
