@@ -2106,11 +2106,11 @@ static void fluid_task(void *arg) {
                                 g[FLUID_MD_LCELLS], s_sim->N, g[FLUID_MD_DUS] / 1000, g[FLUID_MD_LUS] / 1000, g[FLUID_MD_LEFT] / 1000, g[FLUID_MD_SORTF],
                                 g[FLUID_MD_WAITC], g[FLUID_MD_WAITL], g[FLUID_MD_JOBN], g[FLUID_MD_JOBUS] / 1000, g[FLUID_MD_JOBMAX] / 1000.f,
                                 g[FLUID_MD_BORN], g[FLUID_MD_WPX]);
-                const int (*t)[4] = s_draw->m.top;          /* (its three slowest frames: frame index, cells + send ms, biggest part) */
-                mole_diag_event(false, "change slow %d:%.1f+%.1f %s %d:%.1f+%.1f %s %d:%.1f+%.1f %s",
-                                t[0][0], t[0][1] / 1000.f, t[0][2] / 1000.f, MOLE_ANIM_PART_NAMES[10 + t[0][3]],
-                                t[1][0], t[1][1] / 1000.f, t[1][2] / 1000.f, MOLE_ANIM_PART_NAMES[10 + t[1][3]],
-                                t[2][0], t[2][1] / 1000.f, t[2][2] / 1000.f, MOLE_ANIM_PART_NAMES[10 + t[2][3]]);
+                const int (*t)[6] = s_draw->m.top;          /* (its three longest cells of frames that sent: index, cells + send ms, biggest part, movers, lists) */
+                mole_diag_event(false, "change slow %d:%.1f+%.1f %s mv %.1f st %.1f, %d:%.1f+%.1f %s mv %.1f st %.1f, %d:%.1f+%.1f %s mv %.1f st %.1f",
+                                t[0][0], t[0][1] / 1000.f, t[0][2] / 1000.f, MOLE_ANIM_PART_NAMES[10 + t[0][3]], t[0][4] / 1000.f, t[0][5] / 1000.f,
+                                t[1][0], t[1][1] / 1000.f, t[1][2] / 1000.f, MOLE_ANIM_PART_NAMES[10 + t[1][3]], t[1][4] / 1000.f, t[1][5] / 1000.f,
+                                t[2][0], t[2][1] / 1000.f, t[2][2] / 1000.f, MOLE_ANIM_PART_NAMES[10 + t[2][3]], t[2][4] / 1000.f, t[2][5] / 1000.f);
                 /* (refreshes lost at the pace: the sim late there, its job's room, the drawer late before; the drawer's most) */
                 int *p = s_draw->m.pace;
                 mole_diag_event(false, "change pace lost=%d late=%.1f room=%.1f drawer=%.1f most=%.1f ms; last lost f%d: sim %.1f ahead %.1f build %.1f read %.1f",
