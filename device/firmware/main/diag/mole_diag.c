@@ -1357,7 +1357,6 @@ static cJSON *bench_case(int c, int run)
     default:        bench_calm(1, 1000, 10000); break;
     }
     const int from = bench_n();
-    const uint32_t int0 = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);   /* (what the case keeps of internal RAM) */
     const int64_t t0 = esp_timer_get_time();
     const char *err = NULL;
     float x = 0.f, y = 0.f;
@@ -1383,8 +1382,6 @@ static cJSON *bench_case(int c, int run)
     cJSON *o = cJSON_CreateObject(), *a = cJSON_AddArrayToObject(o, "anims");
     cJSON_AddStringToObject(o, "case", BENCH_CASE[c]); cJSON_AddNumberToObject(o, "run", run);
     cJSON_AddNumberToObject(o, "ms", ms);
-    cJSON_AddNumberToObject(o, "int_before", int0);
-    cJSON_AddNumberToObject(o, "int_after", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     if (err) cJSON_AddStringToObject(o, "error", err);
     const int n = bench_n();
     for (int q = from; q < n; q++) cJSON_AddItemToArray(a, bench_rec_json(&s_brec[q]));

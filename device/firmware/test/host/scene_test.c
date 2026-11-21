@@ -2660,6 +2660,7 @@ typedef struct {
     int job;                           /* the new picture read on the job: its slice a frame, the model's us (0: in line) */
     int full_at;                       /* (morph_run: a full repaint asked at this frame of it, the job reading on after it) */
     bool tx;                           /* the kept glass's windows queued to a sender, sent at the frame's end (the device's) */
+    int sendp;                         /* (a send this long guessed each frame, us: the device's slow ones) */
 } morph_rig_t;
 /* what a change did (morph_run): its frames, the panel model's ms a frame (mean, worst, over 33), what it showed */
 typedef struct {
@@ -2766,6 +2767,7 @@ static void morph_run(morph_rig_t *r, int kind, scene_t *sc, uint32_t look, int 
         memcpy(r->prev, r->g.px, (size_t)S * S * 2);
         r->g.c = (cost_t){ 0, 0, 0, 0 };
         r->g.mirror = (look & FLUID_LOOK_GLASS) ? r->snap : NULL;   /* (the panel's mirror keeps such a look's glass) */
+        if (r->sendp) r->d->m.sendp = r->sendp;
         fluid_draw_cells(r->d, r->fr, &r->o);
         const bool full = f == r->full_at && in;
         static split_q_t q;
@@ -3124,6 +3126,22 @@ static void test_morph(const char *dir, const char *catp, int job) {
             s_morph_stale = 0;
         }
         fluid_draw_morph_costs(0.f);
+        /* a slow send (bench 21: a whole glass 17 to 19 ms with core 1 busy): the change's own work shrinks to what the
+         * frame leaves beside it (FLUID_MORPH_FRAME_US: the still layers step aside, the movers never), and the change
+         * still holds its pace */
+        r->sendp = 17500;
+        fluid_draw_morph_costs(1.6f);                  /* (bench 21's movers: ~1.6 x the model's at their peaks) */
+        for (int q = 0; q < 2; q++) {
+            morph_run(r, DEV[q + 1].kind, DEV[q + 1].scene == 1 ? chart : DEV[q + 1].scene == 2 ? up : NULL, DEV[q + 1].look + 10, 0, 0, DEV[q + 1].name, &res);
+            const int most = FLUID_MORPH_FRAME_US - r->sendp - FLUID_MORPH_SPENT_US;
+            printf("    a slow send (%.1f ms): %-9s %4.0f ms, own work at most %.1f ms of %.1f; middle still %d frames\n", r->sendp * 1e-3, DEV[q + 1].name,
+                   res.frames * 1000.0 / 30.0, res.work * 1e-3, most * 1e-3, res.hang);
+            CHECK(res.work <= most + most / 10 && res.frames <= 45 && res.hang <= 3 && res.diff == 0 && res.even <= 450,
+                  "%s with a slow send: its own work inside what the send leaves (%.1f of %.1f ms), %d frames, middle still %d, the look whole (%d px)",
+                  DEV[q + 1].name, res.work * 1e-3, most * 1e-3, res.frames, res.hang, res.diff);
+        }
+        fluid_draw_morph_costs(0.f);
+        r->sendp = 0;
     }
     {   /* a change in the middle of one (Leo opened from the chart, the chart again 12 frames in): from the glass as it is
          * then, no cut, every frame sent, the chart whole at the end */

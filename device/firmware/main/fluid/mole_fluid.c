@@ -77,7 +77,8 @@ static const char *TAG = "mole_fluid";
 #define FLUID_STEP         (1.f / 60.f)
 #define FLUID_FRAME_US     30000      /* 33.3 fps cap                            */
 #define FLUID_SLEEP_US     50000      /* asleep (slow breathing): 20 fps, less CPU */
-#define FLUID_TE_GRACE_US  4000       /* a handoff this late after its tearing pulse still goes with it (not twice in a row) */
+#define FLUID_TE_GRACE_US  4000       /* a handoff this late after its time still goes with its pulse (not twice in a row) */
+#define FLUID_TE_SLACK_US  500        /* (the wake's own lag: not late)                                                   */
 #define FLUID_TOUCH_US     16000      /* touch poll ≤ 60 Hz (shared I2C bus)    */
 #define FLUID_TILT_ACCEL   25.f       /* cells/s² of flow bias per g of tilt    */
 #define FLUID_TILT_LEAN    0.12f      /* stage units a target leans per g       */
@@ -337,6 +338,9 @@ static uint8_t       *s_still, *s_still_d;
 static fluid_shape_t *s_fshp;
 static volatile uint32_t s_sim_fill_us, s_sim_build_us;   /* the sim's last frame: a scene's shapes and rings, the dust's build */
 #define FINE_BUILD_US 6000                          /* the dust's build, at most this a frame (the sim's core) ...  */
+#define FINE_STEP_US  9000                          /* (a step of it runs past its budget by up to this)             */
+static int  s_build_left;                           /* this frame's build budget, as the scene's fill left it (fine_build) */
+static bool s_build_ahead;
 #define FINE_AHEAD_US 20000                         /* ... and while its scene is still coming (a change of picture).
                                                      * (It was 20000: a step of the build runs past its budget by
                                                      * up to ~9 ms, and the sim's frame then ran past 33.) */
@@ -934,17 +938,9 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
             /* ... in what the frame's fill left of its budget (a frame that repainted its items builds nothing) */
             const int mph = fluid_draw_morphing(s_draw);   /* (the scene is not on the glass yet: the drawer has room) */
             const bool ahead = s_hd.out || s_hd.dust >= 1.f || mph;
-            const int left = (ahead ? FINE_AHEAD_US : FINE_BUILD_US) - (int)(esp_timer_get_time() - fill_t0);
-            const bool was = s_fine->levels_ok, built = s_fine->build >= 0;
-            const int64_t bt0 = esp_timer_get_time();
-            s_sim_fill_us = (uint32_t)(bt0 - fill_t0);
-            if (left > 500) fluid_fine_work(s_fine, left);
-            s_sim_build_us = (uint32_t)(esp_timer_get_time() - bt0);
-            if (!was && s_fine->levels_ok) {               /* ready to swap in: how long it took, for the log */
-                int calls;
-                const int us = fluid_fine_built(s_fine, &calls);
-                mole_diag_event(false, "fine.%s %dms in %d frames%s", built ? "build" : "known", us / 1000, calls, ahead ? " (ahead)" : "");
-            }
+            s_build_left = (ahead ? FINE_AHEAD_US : FINE_BUILD_US) - (int)(esp_timer_get_time() - fill_t0);
+            s_build_ahead = ahead;
+            s_sim_fill_us = (uint32_t)(esp_timer_get_time() - fill_t0);
         }
         /* a new word: a gentle wave under its letters; the reading's end: under the last one's, as it breaks up */
         static const char *cap_was;
@@ -1700,6 +1696,42 @@ static bool screen_wanted(void) {
 #define JOB_EDGE_US 1500
 #define JOB_MIN_US  3000
 
+/* The dust's build in what the frame has left (fluid_task, after the dust's frame ahead): the scene's budget for it
+ * (s_build_left), never past the next handoff less a step's overrun. A frame with no room builds nothing: the build goes
+ * on in the lighter ones, and the frame's handoff is not late for it. */
+static void fine_build(int room) {
+    const int left = s_build_left < room - FINE_STEP_US ? s_build_left : room - FINE_STEP_US;
+    s_build_left = 0;
+    if (!s_fine || left <= 500) return;
+    const bool was = s_fine->levels_ok, built = s_fine->build >= 0;
+    const int64_t bt0 = esp_timer_get_time();
+    fluid_fine_work(s_fine, left);
+    s_sim_build_us = (uint32_t)(esp_timer_get_time() - bt0);
+    if (!was && s_fine->levels_ok) {               /* ready to swap in: how long it took, for the log */
+        int calls;
+        const int us = fluid_fine_built(s_fine, &calls);
+        mole_diag_event(false, "fine.%s %dms in %d frames%s", built ? "build" : "known", us / 1000, calls, s_build_ahead ? " (ahead)" : "");
+    }
+}
+
+/* The handoff's place after its tearing pulse (fluid_task's pace): the last frame's first window (s_pres_t) at pulse
+ * time + ph; the handoff moves so ph sits mid-refresh (per / 2), slowly (EMA of its error; a move only past per / 6, so a
+ * frame whose dust took long once moves nothing), wrapping across a pulse with the pulse count it counts from (*n). */
+#define TE_CALM_FRAMES 30   /* steady frames (no change of picture) before the handoff's place follows them */
+static void te_phase(int *off, float *err, uint32_t *n, int per, int64_t pulse) {
+    const uint32_t pt = atomic_load(&s_pres_t);
+    const uint32_t ph = pt - (uint32_t)pulse;
+    if (!pulse || !pt || ph >= (uint32_t)(2 * per)) return;
+    float e = (float)(ph % (uint32_t)per) - per * 0.5f;
+    *err = *err * 0.9f + e * 0.1f;
+    if (fabsf(*err) < per / 6.f) return;
+    int o = *off - (int)*err;
+    *err = 0.f;
+    if (o < 0) { o += per; (*n)--; } else if (o >= per) { o -= per; (*n)++; }
+    *off = o;
+    mole_diag_event(false, "fluid: frames handed off %d us after their pulse (first windows were %u us after it)", o, (unsigned)ph);
+}
+
 static void fluid_task(void *arg) {
     (void)arg;
     /* TWDT: re-created on every select → self-subscribe; delete before exit */
@@ -1714,10 +1746,13 @@ static void fluid_task(void *arg) {
     esp_timer_handle_t pace = NULL;
     const esp_timer_create_args_t pace_args = { .callback = pace_wake, .arg = xTaskGetCurrentTaskHandle(), .name = "fluid_pace" };
     ESP_ERROR_CHECK(esp_timer_create(&pace_args, &pace));
-    int64_t next = esp_timer_get_time(), woke = next;   /* the next wake; the last */
+    int64_t woke = esp_timer_get_time(), next = woke + FLUID_FRAME_US;   /* the last wake; the next (a frame on) */
     bool overran = false;
     uint32_t te_n = 0;                                   /* the tearing pulse of the last handoff (molty_display_te) */
     int te_per = 16770;                                  /* their period, us (the panel's, measured)                 */
+    int64_t te_at = 0, ho_at = 0;                        /* that pulse's time (0: paced by the timer); the last frame's */
+    int te_off = 0;                                      /* the handoff after its pulse, us (te_phase)               */
+    float te_err = 0.f;                                  /* where the first windows land against mid-refresh (EMA)   */
 
     while (s_run) {
         esp_task_wdt_reset();
@@ -1728,7 +1763,8 @@ static void fluid_task(void *arg) {
             s_touch_mute = touched;
             atomic_store(&s_screen_want, true);
             if (!screen_switch(true)) { vTaskDelay(pdMS_TO_TICKS(FLUID_OFF_POLL_MS)); continue; }
-            prev = next = woke = esp_timer_get_time();  /* no catching up on the time it was off */
+            prev = woke = esp_timer_get_time();         /* no catching up on the time it was off */
+            next = woke + FLUID_FRAME_US;
         } else if (!atomic_load(&s_screen_want)) { if (!screen_switch(false)) vTaskDelay(pdMS_TO_TICKS(FLUID_OFF_POLL_MS)); continue; }
         int64_t now = esp_timer_get_time();
         float rdt = (float)(now - prev) / 1e6f;
@@ -1878,6 +1914,7 @@ static void fluid_task(void *arg) {
             s_fine->pause = false;
             fluid_fine_frame_ahead(s_fine, &fv, &fo);
         }
+        fine_build((int)(next - esp_timer_get_time()));   /* (the dust's build in what is left) */
         /* a change of picture's new picture read here while the drawer draws (fluid_draw_morph_work: the change given to
          * this task at a handoff, with that handoff's inputs), in what is left before the next wake (JOB_EDGE_US) */
         if (s_draw && s_frame) {
@@ -1885,11 +1922,13 @@ static void fluid_task(void *arg) {
             fluid_draw_morph_work(s_draw, s_frame, &s_dopts, left > JOB_MIN_US ? left : JOB_MIN_US);
         }
         /* pace: the handoff at the same point after each wake: the frame simulated since the last one goes to the drawer
-         * now, then the next is simulated (the sim's work never moves the drawer's start). The wake is every second
-         * tearing pulse of the panel (each frame on the glass for two refreshes); one that comes late hands off at once
-         * within FLUID_TE_GRACE_US of its pulse, else at the next pulse (a refresh lost). No pulses (no TE line, asleep, or
-         * none for 3 periods): the 30 ms timer. Either way an overrun goes at once but never twice in a row: lower-priority
-         * core-1 work still gets some time every other frame. */
+         * now, then the next is simulated (the sim's work never moves the drawer's start). The wake is te_off after every
+         * second tearing pulse of the panel: each frame on the glass for two refreshes. te_off follows where the frames'
+         * first windows land (pres_mark): it keeps them in the middle of a refresh, so a few ms of jitter in the drawer
+         * never moves one across a pulse (a frame for 3 refreshes, the next for 1). One that comes late hands off at once
+         * within FLUID_TE_GRACE_US of its time, else at the next pulse: the frame before stays a refresh longer, the rest
+         * keep two from there (no short one to catch up). No pulses (no TE line, asleep, or none for 3 periods): the 30 ms
+         * timer. Either way a late one goes at once never twice in a row: lower-priority core-1 work gets its time. */
         {
             molty_te_t te;
             molty_display_te(&te, false);
@@ -1897,15 +1936,23 @@ static void fluid_task(void *arg) {
             bool locked = false;
             if (!fd_asleep(&s_dir) && te.line && te.total && esp_timer_get_time() - te.last_us < 3 * te_per) {
                 uint32_t want = te_n + 2;
-                const bool late = (int32_t)(te.total - want) >= 0;
-                if (late && !overran && esp_timer_get_time() - te.last_us < FLUID_TE_GRACE_US) { locked = overran = true; }
-                else {
-                    overran = false;
-                    if (late) want = te.total + 1;
-                    locked = molty_display_te_wait(want - 1, 3 * te_per / 1000 + 5);
-                    if (locked) molty_display_te(&te, false);
+                if ((int32_t)(te.total - want) > 0) want = te.total;         /* (its pulse long past: the latest) */
+                if (te.total != want) locked = molty_display_te_wait(want - 1, 3 * te_per / 1000 + 5);
+                else locked = true;
+                if (locked) {
+                    molty_display_te(&te, false);
+                    int64_t due = te.last_us + te_off;
+                    const int64_t late = esp_timer_get_time() - due;
+                    if (late > FLUID_TE_SLACK_US && (overran || late >= FLUID_TE_GRACE_US) && molty_display_te_wait(te.total, 3 * te_per / 1000 + 5)) {
+                        molty_display_te(&te, false);                    /* (too late: the next pulse, a refresh lost) */
+                        due = te.last_us + te_off;
+                        overran = false;
+                    } else overran = late > FLUID_TE_SLACK_US;
+                    const int64_t wait = due - esp_timer_get_time();
+                    if (wait > 200 && esp_timer_start_once(pace, (uint64_t)wait) == ESP_OK) ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
+                    te_at = te.last_us;
+                    next = due + 2 * te_per;                     /* (the next handoff, for the change's job above) */
                 }
-                if (locked) next = te.last_us + 2 * te_per;   /* (the next handoff, for the change's job above) */
             }
             if (!locked) {
                 int64_t wait = next - esp_timer_get_time();
@@ -1914,6 +1961,7 @@ static void fluid_task(void *arg) {
                 if (wait > 0 && esp_timer_start_once(pace, (uint64_t)wait) == ESP_OK) ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
                 next += fd_asleep(&s_dir) ? FLUID_SLEEP_US : FLUID_FRAME_US;
                 molty_display_te(&te, false);
+                te_at = 0;
             }
             te_n = te.total;
             const int64_t w = esp_timer_get_time();
@@ -1922,6 +1970,15 @@ static void fluid_task(void *arg) {
         const int64_t tw = esp_timer_get_time();
         /* hand the frame to the drawer: wait until it finished the previous one */
         xSemaphoreTake(s_idle, portMAX_DELAY);
+        {   /* (the last frame's first window, now the drawer is idle) only from steady frames: none in a change of
+             * picture or the second after one (its frames put their first window elsewhere: following them would move
+             * the pace at the very moments the eye watches); a move then holds */
+            static int calm;
+            calm = fluid_draw_morphing(s_draw) ? 0 : calm < TE_CALM_FRAMES ? calm + 1 : calm;
+            if (calm >= TE_CALM_FRAMES) te_phase(&te_off, &te_err, &te_n, te_per, ho_at);
+            else te_err = 0.f;
+        }
+        ho_at = te_at;
         if (s_dir.bye) {   /* the goodbye's fade: the panel's level, with the drawer idle */
             const float l = fd_bye_level(&s_dir);
             if ((s_bye_lvl - l >= 0.02f || (l <= 0.f && s_bye_lvl > 0.f)) && (tx_idle() || tx_drain())) {   /* (not over the sender) */
