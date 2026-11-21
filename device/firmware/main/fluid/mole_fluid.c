@@ -1348,8 +1348,46 @@ static void tx_late(const char *what) {
     mole_diag_event(true, "fluid: the sender's %s took over %d ms: nothing goes to the panel till it answers", what, TX_WAIT_MS);
 }
 static bool s_inline_out;                           /* (the drawer's) its own last window still going out (send_win) */
+/* A change of picture's frame (the whole glass, top to bottom) goes out on the tearing pulse after its handoff's:
+ * drawn in one refresh, sent in the next, its write just ahead of the panel's scan all the way down, so each refresh
+ * shows one whole frame and each frame is on the glass for two (a send started anywhere in the frame crossed the scan
+ * at a different place each frame: a wandering tear). s_gate_at: when its first window may go (fluid_task sets it at
+ * the handoff; 0: at once, as before: no pulses, or not a change). The drawer waits for it before that window
+ * (gate_wait), FLUID_SEND_EARLY_US before the pulse: the whole glass's write (12 to 17.5 ms) is about as fast as the
+ * scan (16.8), so a start a little ahead keeps its last rows ahead of it too, and the top rows it writes first were
+ * scanned a refresh ago. Past that time already (cells over their room): at once, a refresh late. */
+#define FLUID_SEND_EARLY_US 1000
+static volatile int64_t s_gate_at;
+static SemaphoreHandle_t s_gate_sem;
+static esp_timer_handle_t s_gate_tm;
+static inline bool tx_idle(void);
+static bool tx_drain(void);
+static void gate_fire(void *arg) { (void)arg; xSemaphoreGive(s_gate_sem); }
+static void gate_wait(void) {
+    const int64_t at = s_gate_at;
+    s_gate_at = 0;                                  /* (once a frame) */
+    if (!at) return;
+    if (!s_gate_sem) {
+        s_gate_sem = xSemaphoreCreateBinary();
+        const esp_timer_create_args_t a = { .callback = gate_fire, .name = "fluid_gate" };
+        if (s_gate_sem && esp_timer_create(&a, &s_gate_tm) != ESP_OK) s_gate_tm = NULL;
+    }
+    const int64_t wait = at - esp_timer_get_time();
+    if (wait <= 100 || !s_gate_tm) return;
+    xSemaphoreTake(s_gate_sem, 0);
+    if (esp_timer_start_once(s_gate_tm, (uint64_t)wait) == ESP_OK) xSemaphoreTake(s_gate_sem, pdMS_TO_TICKS(wait / 1000 + 20));
+}
 static int tx_glass(void *ctx, const uint16_t *glass, int stride, int x, int y, int w, int h, bool direct, int mark, int pal) {
     (void)ctx;
+    gate_wait();
+    if (direct && stride == w && fluid_draw_morphing(s_draw)) {   /* a change's whole rows: in line, on this core (on the
+                                                                 * sender's, its push ran through the sim's frame) */
+        if (!tx_idle() && !tx_drain()) return 1;
+        pres_mark();
+        const int e = molty_display_blit_async(x, y, w, h, glass + (size_t)y * stride + x) == ESP_OK ? 0 : 1;
+        s_inline_out = !e;
+        return e;
+    }
     /* the panel handed over whole: the drawer's own last window collected before the sender's first (molty_board.c) */
     if (s_inline_out && fluid_tx_idle(&s_txs)) { s_inline_out = false; if (molty_display_blit_wait() != ESP_OK) return 1; }
     const tx_rec_t r = { glass, (int16_t)stride, (int16_t)x, (int16_t)y, (int16_t)w, (int16_t)h, (int8_t)mark, (int8_t)pal, (int8_t)(direct ? TX_DIRECT : TX_COPY) };
@@ -1395,6 +1433,7 @@ static int s_send_n, s_send_px; static int64_t s_blit_us;   /* this frame's wind
 static int send_win(void *ctx, int x, int y, int w, int h, const uint16_t *px) {
     (void)ctx;
     if (!tx_idle() && !tx_drain()) return 1;       /* (the sender's windows first: one task at a time on the panel) */
+    gate_wait();
     pres_mark();
     const int64_t t = esp_timer_get_time();
     const int e = (s_win2 ? molty_display_blit_async(x, y, w, h, px) : molty_display_blit(x, y, w, h, px)) == ESP_OK ? 0 : 1;
@@ -1473,6 +1512,8 @@ static void draw_task(void *arg) {
              * one (restores what it covered) and the next one, then draw it on top */
             else { fluid_draw_overlay_dirty(s_draw, &ov_drawn); fluid_draw_overlay_dirty(s_draw, &ov); }
             fluid_draw_morph_spent(s_draw, (int)(esp_timer_get_time() - t0));   /* (a change's budget: what the frame leaves) */
+            const int64_t gate = s_gate_at;            /* (a change's frame sent on the next pulse: its cells till then) */
+            fluid_draw_morph_room(s_draw, gate ? (int)(gate - esp_timer_get_time()) : 0);
             nc = fluid_draw_cells(s_draw, s_frame, &s_dopts);
             t1 = esp_timer_get_time();
             /* a scene's windows of its kept glass go to the sender (core 1) while this core draws the next band; a sender
@@ -1957,12 +1998,13 @@ static void fluid_task(void *arg) {
                 else locked = true;
                 if (locked) {
                     molty_display_te(&te, false);
-                    int64_t due = te.last_us + te_ph.off;
+                    const int off = fluid_draw_morphing(s_draw) ? 0 : te_ph.off;   /* (a change: on the pulse, gate_wait) */
+                    int64_t due = te.last_us + off;
                     const int64_t late = esp_timer_get_time() - due;
                     if (late > FLUID_TE_SLACK_US && (overran || late >= FLUID_TE_GRACE_US) && molty_display_te_wait(te.total, 3 * te_per / 1000 + 5)) {
                         if (chg) { int *p = s_draw->m.pace; p[0]++; p[1] = (int)late; p[2] = job_room; p[3] = idle_us; }
                         molty_display_te(&te, false);                    /* (too late: the next pulse, a refresh lost) */
-                        due = te.last_us + te_ph.off;
+                        due = te.last_us + off;
                         overran = false;
                     } else overran = late > FLUID_TE_SLACK_US;
                     const int64_t wait = due - esp_timer_get_time();
@@ -1992,7 +2034,9 @@ static void fluid_task(void *arg) {
             idle_us = (int)(esp_timer_get_time() - tw);
             chg = morph;
             if (morph && idle_us > s_draw->m.pace[4]) s_draw->m.pace[4] = idle_us;
-            te_phase(&te_ph, &te_n, te_per, ho_at, !morph, !morph && !atomic_load(&s_anim_busy));
+            static int after;                           /* (frames since a change's: theirs went out on the pulse) */
+            after = morph ? 3 : after ? after - 1 : 0;
+            te_phase(&te_ph, &te_n, te_per, ho_at, !after, !after && !atomic_load(&s_anim_busy));
         }
         ho_at = te_at;
         if (s_dir.bye) {   /* the goodbye's fade: the panel's level, with the drawer idle */
@@ -2129,6 +2173,7 @@ static void fluid_task(void *arg) {
             fluid_fine_publish(s_fine, go);
             s_fine_go = go;
         }
+        s_gate_at = te_at && fluid_draw_morphing(s_draw) ? te_at + te_per - FLUID_SEND_EARLY_US : 0;   /* (gate_wait) */
         xSemaphoreGive(s_go);
         int64_t t3 = esp_timer_get_time();
 
