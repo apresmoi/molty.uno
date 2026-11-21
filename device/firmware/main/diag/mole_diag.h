@@ -8,7 +8,7 @@
  *    per-task CPU % (FreeRTOS run-time stats), heap free + low-water,
  *    alloc-failure hook, per-core starvation probes, gateway ping, and a
  *    1 Hz timeline (last 180 s) to correlate stalls with what ran.
- *  HTTP: GET /api/diag, GET /api/log?since=<seq>[&fmt=json], GET /api/log/prev,
+ *  HTTP: GET /api/diag[?timeline=<s>][&fs=1 (the files by size: reads flash)], GET /api/log?since=<seq>[&fmt=json], GET /api/log/prev,
  *        GET|POST /api/diag/wifi_ps?mode=none|min|max,
  *        POST /api/diag/wifi_drop?hold=<s> (dev: drop the station, no reconnect for <s>, max 600).
  *  Wedge watch: the default event loop or the esp_timer task idle 30 s aborts (loop_watch.h).
@@ -42,6 +42,8 @@ void mole_diag_set_calm(uint32_t (*calm_ms)(void));
 /** A write due: true = it may go now (the screen calm, held FG_HOLD_MAX_US, or a restart / power off next). h: the write's
  *  own hold (zeroed to start). Never blocks. */
 bool mole_flash_may(fg_hold_t *h);
+/** How long the screen has been calm, ms (0: it moves now; UINT32_MAX: no gate, or the screen off). Never blocks. */
+uint32_t mole_flash_calm_ms(void);
 /** Blocks till mole_flash_may says go (100 ms looks). */
 void mole_flash_quiet(void);
 /** path becomes the len bytes at data (written to tmp, then renamed over path), a write that can wait: the erases SPIFFS

@@ -807,7 +807,8 @@ static void flash_tick(void)
     else got = fg_batch_idle(&s_fg_batch, &b, esp_timer_get_time()) && fg_batch_worth(&b);
     portEXIT_CRITICAL(&s_fg_mux);
     if (!got) return;
-    mole_diag_event(false, "flash %s%s w=%lu e=%lu r=%lu ops=%lu %lums (reads %lums) anim=%lu", b.who, b.mixed ? "+" : "",
+    mole_diag_event(false, "flash %s%s%s%s w=%lu e=%lu r=%lu ops=%lu %lums (reads %lums) anim=%lu", b.who, b.mixed ? "+" : "",
+                    b.mixed && b.wwho[0] ? " wrote=" : "", b.mixed ? b.wwho : "",
                     (unsigned long)b.wbytes, (unsigned long)b.ebytes, (unsigned long)b.rbytes, (unsigned long)b.ops,
                     (unsigned long)(b.busy_us / 1000), (unsigned long)(b.read_us / 1000), (unsigned long)b.anim_ops);
 }
@@ -820,6 +821,8 @@ bool mole_flash_may(fg_hold_t *h)
     portEXIT_CRITICAL(&s_fg_mux);
     return go;
 }
+
+uint32_t mole_flash_calm_ms(void) { return s_calm_ms ? s_calm_ms() : UINT32_MAX; }
 
 void mole_flash_quiet(void)
 {
@@ -1292,7 +1295,7 @@ cJSON *mole_diag_json(int timeline_secs)
     cJSON_AddNumberToObject(lg, "persist_last_ms", s_persist_ms);
     flash_json(cJSON_AddObjectToObject(j, "flash"), NULL);
     if (s_core_summary[0]) cJSON_AddStringToObject(j, "coredump", s_core_summary);
-    console_store_fs_json(cJSON_AddObjectToObject(j, "fs"), 12);   /* SPIFFS: what fills it */
+    console_store_fs_json(cJSON_AddObjectToObject(j, "fs"), 0);    /* SPIFFS: how full (?fs=1: what fills it) */
     if (timeline_secs > 0 && s_tl) {
         if (timeline_secs > TL_N) timeline_secs = TL_N;
         uint32_t n_avail = s_tl_n < TL_N ? s_tl_n : TL_N;
@@ -1335,6 +1338,11 @@ static bool query_is(httpd_req_t *r, const char *key, const char *val)
 static esp_err_t http_diag(httpd_req_t *r)
 {
     cJSON *j = mole_diag_json((int)query_u32(r, "timeline", 0));
+    if (j && query_u32(r, "fs", 0)) {   /* (the files by size: each stat is a by-name lookup reading every block's index, ~0.5 MB
+                                         * of flash in ~130 ms of cache-off slivers: only when asked) */
+        cJSON_DeleteItemFromObject(j, "fs");
+        console_store_fs_json(cJSON_AddObjectToObject(j, "fs"), 12);
+    }
     char *body = j ? cJSON_PrintUnformatted(j) : NULL;
     cJSON_Delete(j);
     if (!body) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "oom");

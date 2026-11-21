@@ -111,7 +111,12 @@ static void test_batches(void)
     fg_batch_op(&b, &d, 1 * S + 50 * MS, "httpd", 32, 0, 0, 500, false);
     /* an op past the gap closes it first */
     assert(fg_batch_op(&b, &d, 2 * S, "power", 256, 0, 0, 500, false));
-    assert(d.ops == 2 && d.mixed && !strcmp(d.who, "power") && d.wbytes == 288);
+    assert(d.ops == 2 && d.mixed && !strcmp(d.who, "power") && !strcmp(d.wwho, "power") && d.wbytes == 288);
+    /* a batch led by reads: the writer is named apart */
+    fg_batch_t m = {0};
+    fg_batch_op(&m, &d, 20 * S, "main", 0, 0, 4096, 500, false);
+    fg_batch_op(&m, &d, 20 * S + 10 * MS, "wifi", 40, 0, 0, 300, true);
+    assert(fg_batch_idle(&m, &d, 21 * S) && d.mixed && !strcmp(d.who, "main") && !strcmp(d.wwho, "wifi") && d.anim_ops == 1);
     assert(b.ops == 1 && !b.mixed && b.first_us == 2 * S - 500);
     /* reads alone: logged only when they held the cache off long enough */
     fg_batch_t r = {0};

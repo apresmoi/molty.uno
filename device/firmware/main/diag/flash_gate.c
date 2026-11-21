@@ -33,6 +33,7 @@ bool fg_batch_op(fg_batch_t *b, fg_batch_t *done, int64_t now_us, const char *wh
     if (b->ops && now_us - dur_us - b->last_us > FG_BATCH_GAP_US) { *done = *b; closed = true; b->ops = 0; }
     if (!b->ops) batch_start(b, now_us - dur_us, who);
     else if (strncmp(b->who, who ? who : "?", sizeof(b->who) - 1)) b->mixed = true;
+    if ((w || e) && !b->wwho[0]) strncpy(b->wwho, who ? who : "?", sizeof(b->wwho) - 1);
     b->ops++; b->anim_ops += anim && (w || e);
     b->wbytes += w; b->ebytes += e; b->rbytes += r;
     if (w || e) b->busy_us += dur_us; else b->read_us += dur_us;

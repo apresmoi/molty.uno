@@ -622,6 +622,7 @@ void console_store_fs_json(cJSON *into, int max)
     if (esp_spiffs_info(SPIFFS_PARTITION_LABEL, &total, &used) != ESP_OK) { cJSON_AddStringToObject(into, "state", s_spiffs_state); return; }
     cJSON_AddNumberToObject(into, "total", (double)total);
     cJSON_AddNumberToObject(into, "used", (double)used);
+    if (max <= 0) return;                                /* (the walk below stats every file: flash reads) */
     enum { TOP = 16 };
     struct { char name[48]; long size; } top[TOP];
     int ntop = 0, nfiles = 0;

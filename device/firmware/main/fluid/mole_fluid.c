@@ -524,6 +524,7 @@ static void ripple(float x, float y, float strength, float radius) {
  * rates. Only for transitions the director hands out (fd_take) and a grid rebuild:
  * re-entering the shown state is exactly what melts the creature. */
 static void enter_state(int st, int fx, const fluid_cfg_t *cfg) {
+    motion();                                               /* (a word reading, a scene, the creature: from here) */
     int from = s_cur;
     if (s_cur == ST_FX) fluid_effect_exit(s_sim, s_cur_fx);
     if (st == ST_CREATURE && !cr_loaded()) st = ST_BLOB;   /* no creature loaded */
@@ -776,7 +777,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     if (scene_playing(&s_sp) && !fd_scene_wanted(&s_dir)) scene_clear(&s_sp);   /* another state took the screen */
     {   /* an action to start: an agent's, or idle life's (never a sound) */
         int a = fd_take_act(&s_dir);
-        if (a >= 0) cr_act(a);
+        if (a >= 0) { motion(); cr_act(a); }
     }
 
     const bool asking = s_ask.scr.phase == FLUID_ASK_SHOW;

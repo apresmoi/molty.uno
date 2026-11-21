@@ -34,7 +34,7 @@ typedef struct {
 bool fg_step(fg_hold_t *h, fg_stats_t *st, int64_t now_us, int64_t calm_us, bool force);
 
 typedef struct {
-    char who[16]; bool mixed;          /* the first op's task; others joined                         */
+    char who[16], wwho[16]; bool mixed; /* the first op's task, the first write's or erase's; others joined */
     int64_t first_us, last_us;
     uint32_t ops, anim_ops, wbytes, ebytes, rbytes, busy_us, read_us;   /* (anim_ops, busy_us: the writes + erases) */
 } fg_batch_t;
