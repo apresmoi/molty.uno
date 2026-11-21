@@ -411,7 +411,7 @@ uint8_t fluid_braille_contour(const float *sub);
 #define FLUID_MORPH_HOLD_N    24
 #define FLUID_MORPH_FRAME_US  13500    /* the change's own work a frame (us): the panel's frame is ~31.5 ms, its send ~12;
                                         * reading and sorting take what the grains moving leave of it                 */
-#define FLUID_MORPH_OLD_US    15000    /* the old picture read a frame, while nothing moves and nothing is sent         */
+#define FLUID_MORPH_OLD_US    12000    /* the old picture read a frame, while nothing moves and nothing is sent         */
 #define FLUID_MORPH_PASS_US   12000    /* (the drawer's one pass for the new look, as the panel model counts it)        */
 #define FLUID_MORPH_READ_MIN_US 2000   /* the new picture read a frame at least, whatever the grains took               */
 #define FLUID_MORPH_FINE_US   5000     /* (the dust's frame, fluid_fine_frame, as the panel model counts it)            */

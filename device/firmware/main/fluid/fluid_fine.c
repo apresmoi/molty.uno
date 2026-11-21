@@ -170,7 +170,8 @@ fluid_fine_t *fluid_fine_create(int W, int H, int fb_w, int fb_h) {
     f->bcap = maxh * S;
     f->bpos = FINE_CALLOC(sizeof(uint32_t) * (size_t)f->bcap); f->bcol = FINE_CALLOC(sizeof(uint16_t) * (size_t)f->bcap);
     f->bcell = FINE_CALLOC(sizeof(uint16_t) * (size_t)f->bcap);
-    f->dq = FINE_CALLOC(5 * (size_t)f->N); f->wq = f->dq + 2 * f->N; f->ride = (uint8_t *)(f->wq + 2 * f->N); f->dcol = FINE_CALLOC(sizeof(float) * 4 * (size_t)W); f->vis = FINE_CALLOC((size_t)f->N); f->imm = FINE_CALLOC((size_t)f->N); f->why = FINE_CALLOC((size_t)f->N);
+    f->dq = FINE_CALLOC(8 * (size_t)f->N); f->wq = f->dq + 2 * f->N; f->ride = (uint8_t *)(f->wq + 2 * f->N);
+    f->sxd = (int8_t *)f->ride + f->N; f->syd = f->sxd + f->N; f->dok = (uint8_t *)f->syd + f->N; f->dcol = FINE_CALLOC(sizeof(float) * 4 * (size_t)W); f->vis = FINE_CALLOC((size_t)f->N); f->imm = FINE_CALLOC((size_t)f->N); f->why = FINE_CALLOC((size_t)f->N);
     f->tot = FINE_CALLOC(sizeof(uint32_t) * (size_t)f->N); f->stat = FINE_CALLOC(sizeof(uint32_t) * (size_t)f->N);
     f->eff = FINE_CALLOC(sizeof(uint32_t) * (size_t)f->N); f->tot2 = FINE_CALLOC(sizeof(uint32_t) * (size_t)f->N);
     f->fresh = FINE_CALLOC((size_t)f->N); f->lgrid2 = FINE_CALLOC((size_t)f->lg * (size_t)f->lg);
@@ -185,7 +186,7 @@ fluid_fine_t *fluid_fine_create(int W, int H, int fb_w, int fb_h) {
     }
     f->live = f->ready = f->build = -1;
     f->cbox[1] = f->pbox[1] = f->want_box[1] = f->bbox[1] = -1.f;   /* none */
-    f->pbb[1] = -1;
+    f->pbb[1] = f->pbb0[1] = -1;
     f->dim[5] = -1.f; f->dim[6] = 1e9f;
     return f;
 }
@@ -198,7 +199,7 @@ void fluid_fine_destroy(fluid_fine_t *f) {
     FINE_FREE(f->px0); FINE_FREE(f->pc); FINE_FREE(f->pa); FINE_FREE(f->bpos); FINE_FREE(f->bcol); FINE_FREE(f->bcell);
     FINE_FREE(f->dq); FINE_FREE(f->dcol); FINE_FREE(f->vis); FINE_FREE(f->imm); FINE_FREE(f->why); FINE_FREE(f->tot); FINE_FREE(f->stat); FINE_FREE(f->eff);
     FINE_FREE(f->dist); FINE_FREE(f->src); FINE_FREE(f->lit); FINE_FREE(f->lv); FINE_FREE(f->lv2);
-    FINE_FREE(f->tot2); FINE_FREE(f->fresh); FINE_FREE(f->lgrid2);
+    FINE_FREE(f->tot2); FINE_FREE(f->fresh); FINE_FREE(f->lgrid2); FINE_FREE(f->lvd);
     FINE_FREE(f);
 }
 
@@ -211,10 +212,10 @@ void fluid_fine_clear(fluid_fine_t *f) {
     f->phase = PH_IDLE; f->keep = 0; f->bkey = 0;
     f->drawn = NULL;
     memset(f->eff, 0, sizeof(uint32_t) * (size_t)f->N); memset(f->tot, 0, sizeof(uint32_t) * (size_t)f->N);
-    memset(f->vis, 0, (size_t)f->N);
+    memset(f->vis, 0, (size_t)f->N); memset(f->dok, 0, (size_t)f->N);
     f->word = 0; f->np = f->npd = 0; f->ncap = 0; f->end = false;
     f->cbox[1] = f->pbox[1] = f->want_box[1] = f->bbox[1] = -1.f; f->cbox[0] = f->pbox[0] = f->want_box[0] = f->bbox[0] = 0.f;
-    f->dim[4] = 0.f; f->dim[5] = -1.f; f->dim[6] = 1e9f; f->dark_on = false; f->pbb[1] = -1;
+    f->dim[4] = 0.f; f->dim[5] = -1.f; f->dim[6] = 1e9f; f->dark_on = false; f->pbb[1] = f->pbb0[1] = -1;
 }
 
 /* ── the build (sim task) ──────────────────────────────────────────────────── */
@@ -506,6 +507,12 @@ bool fluid_fine_swap(fluid_fine_t *f) {
     f->live = f->ready; f->ready = -1; f->levels_ok = false;
     f->drawn = nw;
     f->set[f->live].used = ++f->clock;
+    memset(f->dok, 0, (size_t)f->N);                    /* (its specks as drawn: the old set's) */
+    if (nw->n > f->lvdcap) {
+        FINE_FREE(f->lvd);
+        f->lvd = FINE_CALLOC((size_t)nw->n + 1);
+        f->lvdcap = f->lvd ? nw->n : 0;
+    }
     return kept * 2 < f->N;
 }
 
@@ -711,11 +718,14 @@ void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_
     const float subx = (float)S / (2 * W), suby = (float)S / (4 * H);
     const float kx = FINE_RIDE * DOT_REFR / FQ_H * 2.f * subx, ky = FINE_RIDE * DOT_REFR / FQ_H * 4.f * H / W * suby, mx = (int)(subx + 0.5f), my = (int)(2.f * suby + 0.5f);
     const float ph = f->light_t * (1.f / FINE_DRIFT_S), A = FINE_DRIFT_PX * 0.5f;
+    const int64_t t_dr = now_us();
+    const fine_set_t *ds = fluid_fine_specks_kind(s_dust_kind) ? f->drawn : NULL;
     for (int j = 1; !(f->pause && f->drawn) && j < H - 1; j++) {
         const float v = (f->cy[j] + f->cy[j + 1]) * 0.5f / S, ra = DRIFT_AV * v - ph, rb = DRIFT_BV * v + DRIFT_B_T * ph;   /* (turns) */
         const float sa = sin_t(ra), ca = sin_t(ra + 0.25f), sb = sin_t(rb), cb = sin_t(rb + 0.25f);
         for (int i = 1; i < W - 1; i++) {
             const int k = j * W + i;
+            if (ds && ds->start[k] == ds->start[k + 1]) continue;   /* (no speck to move) */
             const float *c = f->dcol + 4 * i;
             const float dx = A * (c[0] * ca + c[1] * sa + c[2] * cb + c[3] * sb), dy = A * (c[1] * ca - c[0] * sa - c[3] * cb + c[2] * sb);
             float wx = (float)(s->h[k - 1] - s->h[k + 1]) * kx, wy = (float)(s->h[k - W] - s->h[k + W]) * ky;
@@ -736,6 +746,7 @@ void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_
         }
     }
 
+    f->prof_drift += (uint32_t)(now_us() - t_dr);
     /* the specks. A cell's own are worked out on its row's turn (a quarter of the rows a frame): those the light never
      * hides only when the backdrop by them changed, the others against the light. Until then the cell shows what it
      * showed. A cell never worked out for this set (a set just swapped in) is, off its turn too, while FINE_CATCHUP lasts. */
@@ -746,6 +757,7 @@ void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_
         f->lgrid_ok = true;
     }
     const fine_set_t *st = fluid_fine_specks_kind(s_dust_kind) ? f->drawn : NULL;   /* (EXPERIMENT: dots instead, the drawer's) */
+    const int64_t t_sk = now_us();
     if (st) {
         const int LG = f->lg;
         const float reach = FINE_PATCH1 + FINE_PATCH_RAG * 0.5f;
@@ -810,9 +822,11 @@ void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_
         }
         f->prof_eval += (uint32_t)worked;
     }
+    f->prof_specks += (uint32_t)(now_us() - t_sk);
 
     /* the word before, breaking up: its specks scatter from its centre, ride the water and fade into it */
     int live_p = 0;
+    memcpy(f->pbb0, f->pbb, sizeof(f->pbb));
     f->pbb[0] = f->pbb[2] = 32767; f->pbb[1] = f->pbb[3] = -1;
     if (f->np) {
         const float D = f->end ? FINE_END_S : FINE_SWAP_S, spread = f->end ? FINE_END_SPREAD : FINE_SWAP_SPREAD, u = (now - f->prev_t) / D;
@@ -870,6 +884,9 @@ void fluid_fine_rect(const fluid_fine_t *f, const uint8_t *dirty, const fluid_re
             if (!f->vis[k] || (!all && !dirty[k])) continue;
             /* its specks, shifted inside the cell: what leaves one side comes in at the other */
             const int dx = f->sx[k], dy = f->sy[k], xa = f->cx[i], xb = f->cx[i + 1], ya = f->cy[j], yb = f->cy[j + 1];
+            fluid_fine_t *fm = (fluid_fine_t *)f;          /* (as drawn, for fluid_fine_move: the cell whole in t) */
+            fm->dok[k] = f->lvd && xa >= X0 && xb <= X1 && ya >= Y0 && yb <= Y1;
+            if (fm->dok[k]) { fm->sxd[k] = (int8_t)dx; fm->syd[k] = (int8_t)dy; memcpy(fm->lvd + st->start[k], f->lv + st->start[k], st->start[k + 1] - st->start[k]); }
             for (uint32_t n = st->start[k]; n < st->start[k + 1]; n++) {
                 const int lv = f->lv[n];
                 if (!lv) continue;
@@ -890,4 +907,39 @@ void fluid_fine_rect(const fluid_fine_t *f, const uint8_t *dirty, const fluid_re
             put(t->px + (size_t)(Y - Y0) * t->stride + (X - X0), f->ppc[q], 255);
         }
     ((fluid_fine_t *)f)->prof_rect += (uint32_t)(now_us() - t_in);   /* the drawer's own profile (fluid_fine_t.prof_*) */
+}
+
+bool fluid_fine_move(fluid_fine_t *f, int k, uint16_t *fb, int stride) {
+    const fine_set_t *st = f->drawn;
+    if (!st || !f->dok[k] || !f->vis[k]) return false;
+    const int i = k % f->W, j = k / f->W, xa = f->cx[i], xb = f->cx[i + 1], ya = f->cy[j], yb = f->cy[j + 1];
+    for (int q = 0; q < 2; q++) {                       /* the word's specks breaking up, now or last frame: not alone */
+        const int16_t *b = q ? f->pbb0 : f->pbb;
+        if (b[1] >= xa && b[0] < xb && b[3] >= ya && b[2] < yb) return false;
+    }
+    uint16_t *o = fb + (size_t)f->oy * stride + f->ox;
+    const uint32_t a = st->start[k], e = st->start[k + 1];
+    for (int pass = 0; pass < 2; pass++) {              /* as drawn taken off (to black), then as now put on */
+        const int dx = pass ? f->sx[k] : f->sxd[k], dy = pass ? f->sy[k] : f->syd[k];
+        const uint8_t *lv = pass ? f->lv : f->lvd;
+        for (uint32_t n = a; n < e; n++) {
+            if (!lv[n]) continue;
+            const uint32_t p = st->pos[n];
+            int X = (int)(p & 511) + dx, Y = (int)(p >> 9 & 511) + dy;
+            if (X < xa) X += xb - xa; else if (X >= xb) X -= xb - xa;
+            if (Y < ya) Y += yb - ya; else if (Y >= yb) Y -= yb - ya;
+            uint16_t *px = o + (size_t)Y * stride + X;
+            if (pass) put(px, st->col[n], lv[n]); else *px = 0;
+        }
+    }
+    memcpy(f->lvd + a, f->lv + a, e - a);
+    f->sxd[k] = f->sx[k]; f->syd[k] = f->sy[k];
+    return true;
+}
+void fluid_fine_drawn(fluid_fine_t *f) {
+    const fine_set_t *st = f->drawn;
+    if (!st || !f->lvd) return;
+    memcpy(f->lvd, f->lv, (size_t)st->n);
+    memcpy(f->sxd, f->sx, (size_t)f->N); memcpy(f->syd, f->sy, (size_t)f->N);
+    memset(f->dok, 1, (size_t)f->N);
 }
