@@ -2661,6 +2661,7 @@ typedef struct {
     int full_at;                       /* (morph_run: a full repaint asked at this frame of it, the job reading on after it) */
     bool tx;                           /* the kept glass's windows queued to a sender, sent at the frame's end (the device's) */
     int sendp;                         /* (a send this long guessed each frame, us: the device's slow ones) */
+    int room;                          /* (the gate's room told each frame, us: the device's frame drawn in one refresh) */
 } morph_rig_t;
 /* what a change did (morph_run): its frames, the panel model's ms a frame (mean, worst, over 33), what it showed */
 typedef struct {
@@ -2768,6 +2769,7 @@ static void morph_run(morph_rig_t *r, int kind, scene_t *sc, uint32_t look, int 
         r->g.c = (cost_t){ 0, 0, 0, 0 };
         r->g.mirror = (look & FLUID_LOOK_GLASS) ? r->snap : NULL;   /* (the panel's mirror keeps such a look's glass) */
         if (r->sendp) r->d->m.sendp = r->sendp;
+        if (r->room) fluid_draw_morph_room(r->d, r->room);
         fluid_draw_cells(r->d, r->fr, &r->o);
         const bool full = f == r->full_at && in;
         static split_q_t q;
@@ -3010,6 +3012,7 @@ static void test_tx(void) {
           "sender stuck a while: one bound waited in all (%d ms), logged once (%d), every frame end answered (%d left), back for the frames after (%d)", k.waited, lates, k.queued, idle);
 }
 
+#define MORPH_GATE_ROOM_US 12500  /* (the device's room till the pulse a change's frame is sent on: bench 31, cells <= 12.5 ms) */
 #define MORPH_JOB_OVER_US 1000   /* (a step past the slice's budget at most: a cell row of a list, a row of specks read) */
 static void test_morph(const char *dir, const char *catp, int job) {
     char path[512]; size_t len; const char *err;
@@ -3131,12 +3134,31 @@ static void test_morph(const char *dir, const char *catp, int job) {
                   " middle still %d, lines %+d / %+d from the dust down", DEV[q].name, res.work * 1e-3, res.diff, res.phase, res.even, res.frames, res.hang, res.gap0, res.gapf);
             s_morph_stale = 0;
         }
-        fluid_draw_morph_costs(0.f);
+        /* the gate (bench 31): a change's frame is drawn in one refresh and sent on the next pulse, so its cells have the
+         * room till that pulse (fluid_draw_morph_room): at the device's costs, the new dust late as the device builds it
+         * (cat-chart paired ~f24, its lines ~f28: what moves, the still layers due and what came in all at once), no
+         * moving frame's own work past that room less FLUID_MORPH_GATE_US; the change as approved */
+        r->room = MORPH_GATE_ROOM_US;
+        fluid_draw_morph_costs(1.6f);                  /* (bench 31's movers and lists: ~1.6 x the model's at their peaks) */
+        static const struct { const char *name; int kind, scene; uint32_t look; int late; } GATE[] = {
+            { "cat-chart", MK_SCENE, 1, FLUID_LOOK_KEEP | 910, 16 }, { "chart-leo", MK_SCENE, 2, FLUID_LOOK_KEEP | 911, 14 },
+            { "leo-chart", MK_SCENE, 1, FLUID_LOOK_KEEP | 912, 12 } };
+        for (int q = 0; q < (int)(sizeof(GATE) / sizeof(GATE[0])); q++) {
+            morph_run(r, GATE[q].kind, GATE[q].scene == 1 ? chart : GATE[q].scene == 2 ? up : NULL, GATE[q].look, GATE[q].late, 0, GATE[q].name, &res);
+            const int most = MORPH_GATE_ROOM_US - FLUID_MORPH_GATE_US;
+            printf("    on the gate (%.1f ms), at the device's costs: %-9s %4.0f ms, own work at most %.1f ms of %.1f; middle still %d, slowed %d; lines %+d / %+d\n",
+                   MORPH_GATE_ROOM_US * 1e-3, GATE[q].name, res.frames * 1000.0 / 30.0, res.work * 1e-3, most * 1e-3, res.hang, res.slow, res.gap0, res.gapf);
+            CHECK(res.work <= most + most / 25 && res.diff == 0 && res.phase == 0 && res.unsent == 0 && res.even <= 450 && res.frames <= 45 && res.hang <= 3 &&
+                  res.gap0 <= -2 && res.gapf <= 4 && s_morph_stale == 0,
+                  "%s on the gate: every moving frame's own work inside its room (%.1f of %.1f ms), the look whole (%d px), in its phases (%d off), %d frames,"
+                  " middle still %d, lines %+d / %+d from the dust down", GATE[q].name, res.work * 1e-3, most * 1e-3, res.diff, res.phase, res.frames, res.hang, res.gap0, res.gapf);
+            s_morph_stale = 0;
+        }
+        r->room = 0;
         /* a slow send (bench 21: a whole glass 17 to 19 ms with core 1 busy): the change's own work shrinks to what the
          * frame leaves beside it (FLUID_MORPH_FRAME_US: the still layers step aside, the movers never), and the change
          * still holds its pace */
-        r->sendp = 17500;
-        fluid_draw_morph_costs(1.6f);                  /* (bench 21's movers: ~1.6 x the model's at their peaks) */
+        r->sendp = 17500;                              /* (at 1.6 x the model's costs: bench 21's movers at their peaks) */
         for (int q = 0; q < 2; q++) {
             morph_run(r, DEV[q + 1].kind, DEV[q + 1].scene == 1 ? chart : DEV[q + 1].scene == 2 ? up : NULL, DEV[q + 1].look + 10, 0, 0, DEV[q + 1].name, &res);
             const int most = FLUID_MORPH_FRAME_US - r->sendp - FLUID_MORPH_SPENT_US;

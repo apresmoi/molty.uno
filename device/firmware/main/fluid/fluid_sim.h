@@ -505,8 +505,9 @@ typedef struct {
                                         * (-1: none), its us by step MJ_* (grains' list, lines' list, read, sort, of
                                         * them allocating)                                                            */
     int64_t  c0;                       /* (this frame's cells began, us)                                              */
-    int      top[3][4];                /* its three slowest frames (the log): frame, cells us (with the poll), send us, its
-                                        * biggest part (FLUID_MP_*)                                                   */
+    int      top[3][6];                /* its three moving frames with the longest cells (the log): frame, cells us (with
+                                        * the poll), send us (with the wait for its pulse), its biggest part (FLUID_MP_*),
+                                        * the movers' us, the still layers' us                                        */
     int      pace[5];                  /* (fluid_task's alone, for the log "change pace": refreshes lost at its pace while
                                         * a change ran; for the latest, how late it was there, its job's room, the drawer's
                                         * lateness at the handoff before; the drawer's most, us)                        */
