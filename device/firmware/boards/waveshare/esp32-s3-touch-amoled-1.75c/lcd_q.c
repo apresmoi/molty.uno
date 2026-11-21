@@ -99,7 +99,47 @@ int lq_reg(lq_t *q, uint8_t cmd, uint32_t addr, const uint8_t *data, uint32_t le
     return take(q, q->head, LQ_AT_DRAIN);
 }
 
-int lq_window(lq_t *q, const lq_tx_t *pre, int npre, uint8_t cmd, uint32_t addr, const uint8_t *px, uint32_t n)
+static uint32_t isqrt(uint32_t v)
+{
+    uint32_t r = 0, b = 1u << 30;
+    while (b > v) b >>= 2;
+    for (; b; b >>= 2) {
+        if (v >= r + b) { v -= r + b; r = (r >> 1) + b; }
+        else r >>= 1;
+    }
+    return r;
+}
+
+/* (in doubled units from the glass's centre: a pixel shows when |2x + 1 - size| <= h, h the rim's half chord at its row) */
+void lq_disc_row(int size, int y, int *a, int *b)
+{
+    const int c = 2 * y + 1 - size, r = size + 2 * LQ_DISC_PAD, v = r * r - c * c;
+    *a = *b = 0;
+    if (v <= 0) return;
+    const int h = (int)isqrt((uint32_t)v), lo = size - 1 - h, hi = (size - 1 + h) / 2 + 1;
+    *a = lo > 0 ? (lo + 1) / 2 : 0;
+    *b = hi < size ? hi : size;
+}
+
+/* k bytes of a window's pixels from byte off into dst: those the round glass shows copied from px, the rest black */
+static void disc_copy(const lq_disc_t *g, uint8_t *dst, const uint8_t *px, uint32_t off, uint32_t k)
+{
+    for (uint32_t p = off / 2, e = (off + k) / 2; p < e;) {
+        const int r = (int)(p / (uint32_t)g->w), i = (int)(p % (uint32_t)g->w);
+        const int n = e - p < (uint32_t)(g->w - i) ? (int)(e - p) : g->w - i;
+        int a, b;
+        lq_disc_row(g->size, g->y + r, &a, &b);
+        a -= g->x; b -= g->x;                           /* (the window's columns) */
+        a = a < i ? i : a > i + n ? i + n : a;
+        b = b > i + n ? i + n : b < a ? a : b;
+        memset(dst, 0, (size_t)(a - i) * 2);
+        memcpy(dst + (size_t)(a - i) * 2, px + (size_t)(p + (uint32_t)(a - i)) * 2, (size_t)(b - a) * 2);
+        memset(dst + (size_t)(b - i) * 2, 0, (size_t)(i + n - b) * 2);
+        dst += (size_t)n * 2; p += (uint32_t)n;
+    }
+}
+
+int lq_window(lq_t *q, const lq_tx_t *pre, int npre, uint8_t cmd, uint32_t addr, const uint8_t *px, uint32_t n, const lq_disc_t *disc)
 {
     const lq_io_t *io = q->io;
     int e = begin(q);
@@ -118,7 +158,8 @@ int lq_window(lq_t *q, const lq_tx_t *pre, int npre, uint8_t cmd, uint32_t addr,
         const int b = q->nb;
         if (bounce) {
             if ((e = take(q, q->use[b], LQ_AT_BUF))) return e;
-            memcpy(q->buf[b], src, k);
+            if (disc) disc_copy(disc, q->buf[b], px, off, k);
+            else memcpy(q->buf[b], src, k);
             src = q->buf[b];
         }
         const lq_tx_t t = { src, k, off ? 0 : addr, off ? 0 : cmd,

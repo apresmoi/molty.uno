@@ -9,7 +9,9 @@
  * select across a window's chunks) only once every earlier transfer has ended, so taking it never waits on one.
  * Pixels from memory the DMA cannot read (PSRAM) go through bounce buffers (lq_bounce: LQ_BUFS of LQ_BUF bytes, given
  * once at init): the SPI master never allocates. A window's source may be reused once the call returns when it was bounced;
- * a DMA-capable one is read until the next call (lq_wait or the next transfer).
+ * a DMA-capable one is read until the next call (lq_wait or the next transfer). A bounced window's pixels off the round
+ * glass (lq_disc_t) go out black and are not read: the copy out of PSRAM is what a whole glass's send waits on while the
+ * other core is busy in PSRAM too (bench 25: 12.5 ms quiet, up to 18), and the corners are a fifth of it.
  *
  * A wait that runs out, a slot back out of order, or a call the IDF refuses: logged by the caller (lq_t.fails), the
  * bus let go, whatever ended taken, and when a transfer is still counted the device is removed and added again (reset):
@@ -54,6 +56,11 @@ typedef struct {
     void *ctx;
 } lq_io_t;
 
+/* a window's place on a round glass of size x size px (lq_window): its pixels past the glass's rim by more than
+ * LQ_DISC_PAD px are sent black */
+typedef struct { int x, y, w, size; } lq_disc_t;
+#define LQ_DISC_PAD 3
+
 typedef struct {
     const lq_io_t *io;
     uint8_t  *buf[LQ_BUFS];      /* nbuf of bsz bytes; none: the IDF bounces each chunk itself (as esp_lcd did)    */
@@ -76,7 +83,10 @@ void lq_bounce(lq_t *q, uint8_t *mem, int n, uint32_t size);
 /** A short command (data <= 4 bytes), out when it returns. */
 int  lq_reg(lq_t *q, uint8_t cmd, uint32_t addr, const uint8_t *data, uint32_t len);
 /** The commands pre (short, in order), then n bytes of px as one chip-select frame (cmd and addr on its first chunk),
- *  queued: it returns while the last chunks still go out. */
-int  lq_window(lq_t *q, const lq_tx_t *pre, int npre, uint8_t cmd, uint32_t addr, const uint8_t *px, uint32_t n);
+ *  queued: it returns while the last chunks still go out. disc (or NULL): px are the window's 2-byte pixels, and those
+ *  off the round glass go out black, unread, when bounced. */
+int  lq_window(lq_t *q, const lq_tx_t *pre, int npre, uint8_t cmd, uint32_t addr, const uint8_t *px, uint32_t n, const lq_disc_t *disc);
+/** Row y of a round glass of size px: the columns it shows, [*a, *b) (LQ_DISC_PAD past its rim; none: *a == *b). */
+void lq_disc_row(int size, int y, int *a, int *b);
 /** Every transfer out (a stuck ring tried again first). */
 int  lq_wait(lq_t *q);
