@@ -1192,7 +1192,9 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
             if (dirty && ff && d->sd_kind && !d->force && !crisp_flat(s, i, j, k)) d->why[k] |= 1u << FLUID_ANIM_WATER;   /* (EXPERIMENT) */
             d->sd_w += dirty && sd_turn; d->sd_o += dirty && !sd_turn && !d->force;
             d->sd_c += sd_turn && (d->sd_ch[k] || !crisp_flat(s, i, j, k) || (key & 0xFFu) != d->sd_live[k] || dirty);
-            d->dirty[k] = (uint8_t)(lt_cell ? 2 : dirty);
+            /* (3: its look as it was, its dust alone changed, where the water moves it too: glass_move) */
+            const bool dust_only = ff && !d->sd_kind && !d->force && key != KEY_SKIP && key == d->key[k] && col == d->col[k] && sig == d->hds[k];
+            d->dirty[k] = (uint8_t)(lt_cell ? 2 : dirty ? (dust_only ? 3 : 1) : 0);
             if (dirty) {
                 if (i < i0) i0 = i;
                 i1 = i + 1;
@@ -2961,10 +2963,13 @@ static int crisp_send(const fluid_draw_t *d, const fluid_draw_opts_t *o, const f
 #undef YB
     return sent;
 }
-/* Over a kept glass the drawing's cache is made where a changed cell needs it within GLASS_CACHE_US a frame (cells in a
- * scattered order); a cell it has no room for is owed (drawn and sent the next frame), so a shape change over most of the
- * glass arrives over a few frames, never as one long one. A light frame makes the cache ahead (GLASS_AHEAD_US). */
+/* Over a kept glass the drawing's cache is made where a changed cell needs it within GLASS_CACHE_US a frame, and cells are
+ * drawn whole up to GLASS_DRAW_PX a frame (cells in a scattered order); a cell with no room is owed (drawn and sent the
+ * next frame, and its animation counted late that frame), so a change over most of the glass (a set of dust coming in, a
+ * shape change) arrives over two or three frames, never as one long one. Every frame of a tap or a reading stays under
+ * the bound (bench6: 15-31 kpx drawn a frame). A light frame makes the cache ahead (GLASS_AHEAD_US). */
 #define GLASS_CACHE_US 8000
+#define GLASS_DRAW_PX  40000                            /* (~19 ms at bench4's 0.47 us a px drawn into the glass) */
 #define GLASS_LIGHT_US 12000
 #define GLASS_AHEAD_US 3000
 static inline int cell_px(const fluid_draw_t *d, int k) { return (d->cx[k % d->W + 1] - d->cx[k % d->W]) * (d->cy[k / d->W + 1] - d->cy[k / d->W]); }
@@ -2974,9 +2979,13 @@ static void glass_cache(fluid_draw_t *d, const fluid_draw_opts_t *o, int64_t t0)
     if (!hdc_room(d)) return;
     for (int q = 0, k = 0; q < N; q++, k = (k + 997) % N) {   /* (997: prime to the grid's cells, a scattered order) */
         if (!d->dirty[k]) continue;
-        if (!cache_wanted(d, k)) { d->ndrawn += cell_px(d, k); continue; }
-        if (now_us() - t0 < GLASS_CACHE_US) { hdc_cell(d, o, k, nc); d->ndrawn += cell_px(d, k); continue; }
-        d->dirty[k] = 0; d->owe[k] = 1; d->nowed++;
+        const int px = cell_px(d, k);
+        if (d->ndrawn + px <= GLASS_DRAW_PX && (!cache_wanted(d, k) || now_us() - t0 < GLASS_CACHE_US)) {
+            if (cache_wanted(d, k)) hdc_cell(d, o, k, nc);
+            d->ndrawn += px;
+            continue;
+        }
+        d->dirty[k] = 0; d->owe[k] = 1; d->nowed++; d->anim_late |= d->why[k];
     }
 }
 /* the changed cells whose dust alone moved, over black or over their drawing as cached (no dot or letter in them, not
@@ -3008,9 +3017,13 @@ static void glass_ahead(fluid_draw_t *d, const fluid_draw_opts_t *o) {
  * cell row at a time: its specks go into the glass's lines while they are still in the cache, PSRAM), then sent as boxes
  * copied from the glass (crisp_send), or as its rows whole straight from the glass when that costs less (one window, no
  * copy: a wave's ring); the mark's rows always through a window (it is drawn over one, never into the glass). With a
- * sender (fluid_draw_glass_sender) a band goes out on the other core while this one draws the next: a band's windows
+ * sender (fluid_draw_glass_sender) a band (or a part of one, GLASS_CHUNK, cut where a cell row starts on an even pixel
+ * row) goes out on the other core while this one draws the next: a band's windows
  * reach a row before the next band's cells (a whole cell row apart) and the glass's rows they send are not drawn again
  * this frame. */
+#define GLASS_CHUNK 6                                   /* a band in parts of about this many cell rows (a wave's ring is one band
+                                                         * of nearly every row: in parts, the sender starts on the first while this
+                                                         * core draws the next; a part costs a window or two more) */
 static int glass_send(fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_overlay_t *ov, int mark, sender_t *sd) {
     const int H = d->H, fw = d->fb_w;
     const int ym = mark > FLUID_MARK_NONE ? (d->oy + d->stage - (int)(16.f * d->stage / (float)FLUID_STAGE_REF)) & ~1 : d->fb_h;
@@ -3019,6 +3032,7 @@ static int glass_send(fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_o
     for (int j = 0, e; j < H; j = e) {
         if (d->span[2 * j] >= d->span[2 * j + 1]) { e = j + 1; continue; }
         for (e = j; e < H && d->span[2 * e] < d->span[2 * e + 1]; e++) {}
+        for (int c = j + GLASS_CHUNK; c < e; c++) if (!(d->cy[c] & 1)) { e = c; break; }   /* (cut on an even row: no pair shared) */
         const int64_t t0 = now_us();
         for (int r = j; r < e; r++)
             fluid_draw_rect(d, o, &(fluid_rect_t){ m->snap + (size_t)d->cy[r] * fw, fw, 0, d->cy[r], fw, d->cy[r + 1] }, false);
@@ -3116,8 +3130,8 @@ int fluid_draw_send2(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fl
         dm->nbuilt = dm->ndrawn = 0;
         if (sd.glass) {
             const int64_t t0 = now_us();
+            glass_move(dm, o);                          /* (first: what moves alone is not drawn whole) */
             glass_cache(dm, o, t0);
-            glass_move(dm, o);
             m->cmp_us += (int)(now_us() - t0);
         }
         sd.win_px = sd.glass ? GLASS_WIN_PX : o->shapes ? (d->sd_kind ? SD_WIN_PX : WAVE_WIN_PX) : CRISP_WIN_PX;

@@ -181,6 +181,7 @@ typedef struct fluid_fine {
     int16_t pbb[4], pbb0[4];            /* ... and their box: x0, x1, y0, y1 (x1 < x0 none); last frame's */
     /* each cell's specks as last drawn (fluid_fine_rect: the cell whole), for fluid_fine_move */
     uint8_t *lvd; int lvdcap;           /* per speck of the set drawn: its level drawn            */
+    uint8_t *lvd2; int lvd2cap;         /* a spare for the next set (fluid_fine_swap)              */
     int8_t *sxd, *syd;                  /* N: the shift drawn                                     */
     uint8_t *dok;                       /* N: those are known (the set's, the cell drawn whole)   */
     /* the next frame, worked out on the sim task while the drawer draws this one (it reads only the fields above):

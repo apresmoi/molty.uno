@@ -1280,7 +1280,9 @@ esp_err_t mole_fluid_creature_file_get(uint8_t **out, size_t *len, bool *is_defa
 /* ── Sender (core 1): a scene's windows of its kept glass, while the drawer draws its next band ──────────────
  * The drawer queues each window (fluid_draw_glass_sender: where it is in the glass, the mark over it) and waits until the
  * sender has sent them all (tx_drain) before its frame ends and before any window of its own: it gives s_idle, which
- * every other caller of the panel takes, only after that, so one task at a time talks to the panel. While windows are
+ * every other caller of the panel takes, only after that, so one task at a time talks to the panel. Should the sender
+ * not answer within its bound (a dead bus), it holds the panel until it does: the drawer sends nothing, and the other
+ * callers (screen_switch, the goodbye's level), holding s_idle, try tx_drain themselves and skip their call till then. While windows are
  * queued the sender owns the two window buffers (s_win, s_win2); the glass's rows a window sends are not drawn again in
  * the frame (glass_send). No sender (no memory for its task, or one window buffer only): the drawer sends in line. */
 typedef struct { const uint16_t *glass; int16_t stride, x, y, w, h; int8_t mark, pal, op; } tx_rec_t;
@@ -1616,8 +1618,9 @@ static void draw_task(void *arg) {
 static void pace_wake(void *task) { xTaskNotifyGive((TaskHandle_t)task); }
 
 /* The panel off / on, with the drawer idle (it never sends a window to a sleeping panel). */
-static void screen_switch(bool on) {
+static bool screen_switch(bool on) {
     xSemaphoreTake(s_idle, portMAX_DELAY);
+    if (!tx_idle() && !tx_drain()) { xSemaphoreGive(s_idle); return false; }   /* (the sender still holds the panel: later) */
     esp_err_t e = molty_display_power(on);
     if (!on && e == ESP_ERR_NOT_SUPPORTED) {            /* no panel switch: a black frame */
         uint16_t *fb = molty_display_framebuffer();
@@ -1627,6 +1630,7 @@ static void screen_switch(bool on) {
     atomic_store(&s_screen, on);
     xSemaphoreGive(s_idle);
     mole_diag_event(false, "fluid.screen %s (%s)", on ? "on" : "off", e == ESP_OK ? "panel" : esp_err_to_name(e));
+    return true;
 }
 
 /* Screen off: something the human must see is waiting (a request the task has not taken yet). */
@@ -1662,9 +1666,9 @@ static void fluid_task(void *arg) {
             if (!touched && !screen_wanted() && !atomic_load(&s_screen_want)) { vTaskDelay(pdMS_TO_TICKS(FLUID_OFF_POLL_MS)); continue; }
             s_touch_mute = touched;
             atomic_store(&s_screen_want, true);
-            screen_switch(true);
+            if (!screen_switch(true)) { vTaskDelay(pdMS_TO_TICKS(FLUID_OFF_POLL_MS)); continue; }
             prev = next = esp_timer_get_time();         /* no catching up on the time it was off */
-        } else if (!atomic_load(&s_screen_want)) { screen_switch(false); continue; }
+        } else if (!atomic_load(&s_screen_want)) { if (!screen_switch(false)) vTaskDelay(pdMS_TO_TICKS(FLUID_OFF_POLL_MS)); continue; }
         int64_t now = esp_timer_get_time();
         float rdt = (float)(now - prev) / 1e6f;
         uint32_t raw_dt_us = (uint32_t)(now - prev);
@@ -1817,7 +1821,7 @@ static void fluid_task(void *arg) {
         xSemaphoreTake(s_idle, portMAX_DELAY);
         if (s_dir.bye) {   /* the goodbye's fade: the panel's level, with the drawer idle */
             const float l = fd_bye_level(&s_dir);
-            if (s_bye_lvl - l >= 0.02f || (l <= 0.f && s_bye_lvl > 0.f)) {
+            if ((s_bye_lvl - l >= 0.02f || (l <= 0.f && s_bye_lvl > 0.f)) && (tx_idle() || tx_drain())) {   /* (not over the sender) */
                 s_bye_lvl = l;
                 molty_display_level((uint8_t)(255.f * l * l + 0.5f));
             }
@@ -2165,6 +2169,10 @@ void mole_fluid_creature_deinit(void) {
             return;
         }
         s_dtask = NULL;
+    }
+    if (!tx_idle() && !tx_drain()) {                 /* (the sender reads the drawer's state while it sends) */
+        ESP_LOGE(TAG, "fluid sender still sending: keeping its buffers");
+        return;
     }
     atomic_store(&s_glass_ask, 0);                   /* nothing of the fluid on the panel now */
     scene_clear(&s_sp);
