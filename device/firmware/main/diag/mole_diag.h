@@ -29,10 +29,33 @@ void mole_diag_early_init(void);
 void mole_diag_start(void);
 
 /* Structured event: one line "EVT <text>". `important` lines (errors) trigger
- * a rate-limited SPIFFS persist. Callable from any task (not ISR). */
+ * a rate-limited SPIFFS persist, once the screen is calm (flash_gate.h); a stall's
+ * record is never important (its write would stall the next frames). Callable from
+ * any task (not ISR). */
 void mole_diag_event(bool important, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
-/** What tells the log's flash writes when the screen is quiet (a write freezes the other core ~110 ms): none set, always. */
-void mole_diag_set_quiet(bool (*quiet)(void));
+/** What tells the flash's writes how long the screen has been calm, ms (0: it animates now; flash_gate.h): none set,
+ *  always calm (every write goes at once, as before the gate). */
+void mole_diag_set_calm(uint32_t (*calm_ms)(void));
+
+/* The flash's quiet window (flash_gate.h), for writes that can wait. Call on a task with an internal stack. */
+#include "flash_gate.h"
+/** A write due: true = it may go now (the screen calm, held FG_HOLD_MAX_US, or a restart / power off next). h: the write's
+ *  own hold (zeroed to start). Never blocks. */
+bool mole_flash_may(fg_hold_t *h);
+/** Blocks till mole_flash_may says go (100 ms looks). */
+void mole_flash_quiet(void);
+/** path becomes the len bytes at data (written to tmp, then renamed over path), a write that can wait: the erases SPIFFS
+ *  needs for it first, then each 2 KB, each step only while the screen is calm. False: it failed, path kept what it had. */
+bool mole_flash_file(const char *path, const char *tmp, const void *data, size_t len);
+/** A restart or power off is next: every hold lets go from now on. */
+void mole_flash_force(void);
+bool mole_flash_forced(void);
+/** t holds writes that a restart would lose (the battery history): esp_restart wakes it, forced, and waits for
+ *  mole_flash_flushed (1.5 s at most) before the restart goes on. */
+void mole_flash_flusher(void *task);
+void mole_flash_flushed(void);
+/** Before a power off: the log ring written now (it does not survive one), wait_ms at most. */
+void mole_diag_flush(uint32_t wait_ms);
 
 /* Frame hooks (fluid creature). */
 void mole_diag_sim_frame(uint32_t interval_us, uint32_t work_us);

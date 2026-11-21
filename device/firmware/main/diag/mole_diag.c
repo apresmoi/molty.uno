@@ -35,6 +35,8 @@
 #include "esp_event.h"
 #include "esp_app_desc.h"
 #include "esp_core_dump.h"
+#include "esp_partition.h"
+#include "esp_spiffs.h"
 #include "ping/ping_sock.h"
 #include "nvs.h"
 #include "sdkconfig.h"
@@ -47,12 +49,10 @@
 #define MAX_TASKS    40
 #define PERSIST_PATH "/spiffs/diag.log"
 #define PERSIST_TMP  "/spiffs/diag.tmp"
-/* SPIFFS writes freeze the other core (ipc) — measured ~150 ms render hitches
- * over a 2 s 24 KB persist. Crashes/WDT/OTA are covered by the no-init RAM ring,
- * so the file only has to survive power loss: small, rare, never at boot. The policy
- * and its numbers live in log_upload.h (LOG_PERSIST_*), host-tested. */
+/* SPIFFS writes freeze both cores (the flash cache off: flash_gate.h). Crashes/WDT/OTA are covered by the no-init RAM
+ * ring, so the file only has to survive power loss: small, rare, never at boot, only while the screen is calm. The
+ * policy and its numbers live in log_upload.h (LOG_PERSIST_*), host-tested. */
 #define PERSIST_BYTES LOG_PERSIST_BYTES
-#define PERSIST_CHUNK 2048
 
 typedef struct { uint32_t seq, ms; char job[LOG_TAG_MAX + 1]; char text[SLOT_TEXT]; } slot_t;
 /* boot: the NVS boot count; sync_up/sync_wall: uptime ms + relay wall ms at this boot's
@@ -255,7 +255,7 @@ static void frame_add(frames_t *f, uint32_t us, const char *what)
         if (now_s != sec) { sec = now_s; in_sec = 0; }
         atomic_fetch_add(&s_gap_events, 1);
         if (++in_sec <= 4)
-            mole_diag_event(us > 1000000, "stall.%s gap=%lums", what, (unsigned long)(us / 1000));
+            mole_diag_event(false, "stall.%s gap=%lums", what, (unsigned long)(us / 1000));   /* (never asks for a write) */
     }
     if (us > f->max_us) { f->max_us = us; f->max_at_s = (uint32_t)(esp_timer_get_time() / 1000000); }
     uint32_t ms = us / 1000; if (ms > 65535) ms = 65535;
@@ -363,7 +363,9 @@ typedef struct {
     uint8_t flags;                   /* bit0 link connected, bit1 audio busy */
     char top[2][12]; uint8_t top_pct[2];
 } tl_t;
-static bool (*s_quiet)(void);       /* the screen quiet (mole_diag_set_quiet): when the costly looks may run */
+static uint32_t (*s_calm_ms)(void);  /* how long the screen has been calm (mole_diag_set_calm): when the costly looks may run */
+static bool screen_calm(void) { return !s_calm_ms || s_calm_ms() > 0; }
+static void flash_tick(void);
 static tl_t *s_tl;                   /* PSRAM [TL_N] */
 static uint32_t s_tl_n;
 
@@ -590,7 +592,8 @@ static void sampler_task(void *arg)
         prev = now;
         if (late > late_max) late_max = late;
         if (late > s_late_max_total) s_late_max_total = late;
-        if (late > 250) mole_diag_event(true, "stall.sampler late=%lums", (unsigned long)late);
+        if (late > 250) mole_diag_event(false, "stall.sampler late=%lums", (unsigned long)late);   /* (a stall's record must not cause the next) */
+        flash_tick();
         uint32_t f = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
         if (f < int_min) int_min = f;
         if (++ticks % 10) continue;
@@ -648,7 +651,7 @@ static void sampler_task(void *arg)
          * on), never each second: the snapshot holds the kernel lock while it measures every task's free stack (~2.6 ms
          * measured, both cores' scheduling held: a frame's hitch each second); the timeline's other seconds carry none */
         static int64_t sampled;
-        if (bad || (ticks % 100 == 0 && (!s_quiet || s_quiet() || now - sampled > 60000000))) {
+        if (bad || (ticks % 100 == 0 && (screen_calm() || now - sampled > 60000000))) {
             sample_tasks(sampled ? now - sampled : elapsed); sampled = now;
             portENTER_CRITICAL(&s_task_mux);
             for (int i = 0, k = 0; i < s_ntasks && k < 2; i++) {
@@ -717,25 +720,129 @@ static char *render_persist(uint32_t *next)
     return out;
 }
 
+/* ── the flash's quiet window (flash_gate.h) ─────────────────────────────────
+ * Every write and erase of a partition (NVS, SPIFFS, OTA, the PHY's and Wi-Fi's NVS: all go through esp_partition_*;
+ * the core dump writes the chip directly and is not seen) passes these wrappers (main/CMakeLists.txt --wrap): counted,
+ * and logged a batch a line from the sampler ("flash <task> w= e= r= ops= <ms>ms anim=<writes while animating>"). */
+static portMUX_TYPE s_fg_mux = portMUX_INITIALIZER_UNLOCKED;
+static fg_stats_t s_fg;                         /* (s_fg_mux) */
+static fg_batch_t s_fg_batch, s_fg_done;        /* (s_fg_mux) the batch open; one closed, for the sampler to log */
+static bool s_fg_done_set;
+static atomic_bool s_fg_force, s_fg_flushed;
+static void *s_fg_flusher;
+
+void mole_diag_set_calm(uint32_t (*calm_ms)(void)) { s_calm_ms = calm_ms; }
+static int64_t calm_us(void)
+{
+    const uint32_t ms = s_calm_ms ? s_calm_ms() : UINT32_MAX;
+    return ms == UINT32_MAX ? INT64_MAX : (int64_t)ms * 1000;
+}
+
+static void flash_note(int64_t t0, bool anim0, uint32_t w, uint32_t e, uint32_t r)
+{
+    const int64_t t1 = esp_timer_get_time();
+    const bool anim = anim0 || calm_us() == 0;
+    const char *who = pcTaskGetName(NULL);
+    portENTER_CRITICAL(&s_fg_mux);
+    if (w || e) { s_fg.ops++; s_fg.anim_ops += anim; }
+    /* (closed straight into the sampler's slot, no copy on this task's stack: it drains it every 100 ms, well inside a gap) */
+    if (fg_batch_op(&s_fg_batch, &s_fg_done, t1, who, w, e, r, (uint32_t)(t1 - t0), anim)) s_fg_done_set = fg_batch_worth(&s_fg_done);
+    portEXIT_CRITICAL(&s_fg_mux);
+}
+
+esp_err_t __real_esp_partition_write(const esp_partition_t *p, size_t off, const void *src, size_t n);
+esp_err_t __real_esp_partition_write_raw(const esp_partition_t *p, size_t off, const void *src, size_t n);
+esp_err_t __real_esp_partition_erase_range(const esp_partition_t *p, size_t off, size_t n);
+esp_err_t __real_esp_partition_read(const esp_partition_t *p, size_t off, void *dst, size_t n);
+#define FLASH_OP(call, w, e, r) do { const int64_t t0 = esp_timer_get_time(); const bool a0 = calm_us() == 0; \
+    const esp_err_t res = call; flash_note(t0, a0, w, e, r); return res; } while (0)
+esp_err_t __wrap_esp_partition_write(const esp_partition_t *p, size_t off, const void *src, size_t n)
+{ FLASH_OP(__real_esp_partition_write(p, off, src, n), n, 0, 0); }
+esp_err_t __wrap_esp_partition_write_raw(const esp_partition_t *p, size_t off, const void *src, size_t n)
+{ FLASH_OP(__real_esp_partition_write_raw(p, off, src, n), n, 0, 0); }
+esp_err_t __wrap_esp_partition_erase_range(const esp_partition_t *p, size_t off, size_t n)
+{ FLASH_OP(__real_esp_partition_erase_range(p, off, n), 0, n, 0); }
+esp_err_t __wrap_esp_partition_read(const esp_partition_t *p, size_t off, void *dst, size_t n)
+{ FLASH_OP(__real_esp_partition_read(p, off, dst, n), 0, 0, n); }
+
+/* the sampler, every 100 ms: a batch over goes into the log */
+static void flash_tick(void)
+{
+    fg_batch_t b;
+    portENTER_CRITICAL(&s_fg_mux);
+    bool got = s_fg_done_set;
+    if (got) { b = s_fg_done; s_fg_done_set = false; }
+    else got = fg_batch_idle(&s_fg_batch, &b, esp_timer_get_time()) && fg_batch_worth(&b);
+    portEXIT_CRITICAL(&s_fg_mux);
+    if (!got) return;
+    mole_diag_event(false, "flash %s%s w=%lu e=%lu r=%lu ops=%lu %lums (reads %lums) anim=%lu", b.who, b.mixed ? "+" : "",
+                    (unsigned long)b.wbytes, (unsigned long)b.ebytes, (unsigned long)b.rbytes, (unsigned long)b.ops,
+                    (unsigned long)(b.busy_us / 1000), (unsigned long)(b.read_us / 1000), (unsigned long)b.anim_ops);
+}
+
+bool mole_flash_may(fg_hold_t *h)
+{
+    const int64_t c = calm_us();
+    portENTER_CRITICAL(&s_fg_mux);
+    const bool go = fg_step(h, &s_fg, esp_timer_get_time(), c, atomic_load(&s_fg_force));
+    portEXIT_CRITICAL(&s_fg_mux);
+    return go;
+}
+
+void mole_flash_quiet(void)
+{
+    fg_hold_t h = {0};
+    while (!mole_flash_may(&h)) vTaskDelay(pdMS_TO_TICKS(100));
+}
+
+bool mole_flash_file(const char *path, const char *tmp, const void *data, size_t len)
+{
+    enum { CHUNK = 2048 };
+    mole_flash_quiet();
+    esp_spiffs_gc("spiffs", len);                      /* the erases it needs, now while calm (none when there is room) */
+    mole_flash_quiet();
+    FILE *f = fopen(tmp, "wb");
+    bool ok = f != NULL;
+    for (size_t o = 0; ok && o < len; o += CHUNK) {
+        const size_t c = len - o < CHUNK ? len - o : CHUNK;
+        if (o) { vTaskDelay(pdMS_TO_TICKS(20)); mole_flash_quiet(); }   /* (frames between the bursts; one may start) */
+        ok = fwrite((const char *)data + o, 1, c, f) == c && fflush(f) == 0;
+    }
+    if (f) ok = fclose(f) == 0 && ok;
+    mole_flash_quiet();
+    if (ok) { remove(path); ok = rename(tmp, path) == 0; }   /* (SPIFFS cannot rename over a file) */
+    if (!ok) remove(tmp);
+    return ok;
+}
+
+void mole_flash_force(void) { atomic_store(&s_fg_force, true); }
+bool mole_flash_forced(void) { return atomic_load(&s_fg_force); }
+void mole_flash_flusher(void *task) { s_fg_flusher = task; }
+void mole_flash_flushed(void) { atomic_store(&s_fg_flushed, true); }
+
+/* esp_restart's shutdown handler: the flusher writes what a restart loses (on its own task: this one's stack may be small
+ * or in PSRAM), 1.5 s at most */
+static void flash_shutdown(void)
+{
+    atomic_store(&s_fg_flushed, false);                /* (first: a flusher that saw the force after it says so after) */
+    mole_flash_force();
+    TaskHandle_t t = s_fg_flusher;
+    if (!t || t == xTaskGetCurrentTaskHandle() || xPortInIsrContext() || xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) return;
+    xTaskNotifyGive(t);
+    for (int i = 0; i < 30 && !atomic_load(&s_fg_flushed); i++) vTaskDelay(pdMS_TO_TICKS(50));
+}
+
+/* ── persistence ── */
+
 static void persist_now(void)
 {
     int64_t t0 = esp_timer_get_time();
     uint32_t next;
     char *text = render_persist(&next);
     if (!text) { s_persist_fail++; return; }
-    size_t len = strlen(text);
-    FILE *f = fopen(PERSIST_TMP, "wb");
-    bool ok = f != NULL;
-    for (size_t o = 0; ok && o < len; o += PERSIST_CHUNK) {
-        size_t c = len - o < PERSIST_CHUNK ? len - o : PERSIST_CHUNK;
-        ok = fwrite(text + o, 1, c, f) == c;
-        if (ok) ok = fflush(f) == 0;                   /* one small flash burst per chunk */
-        vTaskDelay(pdMS_TO_TICKS(50));                 /* flash ops stall caches: let frames through */
-    }
-    if (f) fclose(f);
+    const bool ok = mole_flash_file(PERSIST_PATH, PERSIST_TMP, text, strlen(text));
     heap_caps_free(text);
-    if (ok) { remove(PERSIST_PATH); ok = rename(PERSIST_TMP, PERSIST_PATH) == 0; }
-    if (!ok) { s_persist_fail++; remove(PERSIST_TMP); return; }
+    if (!ok) { s_persist_fail++; return; }
     s_persist_next = next;
     s_persist_n++;
     s_persist_ms = (uint32_t)((esp_timer_get_time() - t0) / 1000);
@@ -757,7 +864,14 @@ static uint32_t wanted_since(uint32_t from)
     return n;
 }
 
-void mole_diag_set_quiet(bool (*quiet)(void)) { s_quiet = quiet; }
+void mole_diag_flush(uint32_t wait_ms)
+{
+    if (!s_persist_task) return;
+    const uint32_t n = s_persist_n + s_persist_fail;
+    mole_flash_force();
+    request_persist();
+    for (uint32_t t = 0; t < wait_ms && s_persist_n + s_persist_fail == n; t += 50) vTaskDelay(pdMS_TO_TICKS(50));
+}
 
 static void persist_task(void *arg)
 {
@@ -765,16 +879,13 @@ static void persist_task(void *arg)
     for (;;) {
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(LOG_PERSIST_PERIOD_MS));
         bool requested = atomic_load(&s_persist_req);
-        if (!log_persist_due(requested, wanted_since(s_persist_next))) continue;
-        /* never in the first 90 s, at least 5 min apart: sleep it out, the request stays pending */
-        int64_t wait = log_persist_delay_us(esp_timer_get_time(), s_last_persist);
-        if (wait > 0) vTaskDelay(pdMS_TO_TICKS(wait / 1000 + 10));
-        /* not mid-animation: until the screen is quiet, bounded (log_persist_go) */
-        for (const int64_t t0 = esp_timer_get_time(); !log_persist_go(!s_quiet || s_quiet(), esp_timer_get_time() - t0);)
-            vTaskDelay(pdMS_TO_TICKS(500));
+        if (!mole_flash_forced() && !log_persist_due(requested, wanted_since(s_persist_next))) continue;
+        /* never in the first 90 s, at least 5 min apart: sleep it out, the request stays pending (a flush wakes it) */
+        for (int64_t wait; !mole_flash_forced() && (wait = log_persist_delay_us(esp_timer_get_time(), s_last_persist)) > 0;)
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wait / 1000 + 10));
         atomic_store(&s_persist_req, false);
         s_last_persist = esp_timer_get_time();
-        persist_now();
+        persist_now();                                 /* (each step only while the screen is calm: mole_flash_file) */
     }
 }
 
@@ -1040,9 +1151,28 @@ void mole_diag_start(void)
     xTaskCreatePinnedToCoreWithCaps(probe_task, "diag_p1", 1536, (void *)1, 1, NULL, 1, MALLOC_CAP_SPIRAM);
     xTaskCreatePinnedToCoreWithCaps(sampler_task, "diag", 4096, NULL, 15, NULL, tskNO_AFFINITY, MALLOC_CAP_SPIRAM);
     xTaskCreate(persist_task, "diag_persist", 3072, NULL, 1, &s_persist_task);
+    if (esp_register_shutdown_handler(flash_shutdown) != ESP_OK) mole_diag_event(false, "flash: no shutdown handler (a restart may lose the battery history's last minutes)");
 }
 
 /* ── JSON / HTTP ──────────────────────────────────────────────────────────── */
+
+/* the flash's writes since boot, or since `from` (a bench: hold_max_ms is then its own, reset at its start) */
+static void flash_json(cJSON *o, const fg_stats_t *from)
+{
+    portENTER_CRITICAL(&s_fg_mux);
+    fg_stats_t d = s_fg;
+    portEXIT_CRITICAL(&s_fg_mux);
+    if (from) { d.ops -= from->ops; d.anim_ops -= from->anim_ops; d.held -= from->held; d.flushed -= from->flushed;
+                d.capped -= from->capped; d.forced -= from->forced; }
+    cJSON_AddNumberToObject(o, "writes", d.ops);                    /* (writes + erases) */
+    cJSON_AddNumberToObject(o, "writes_animating", d.anim_ops);    /* (must be 0) */
+    cJSON_AddNumberToObject(o, "held", d.held);
+    cJSON_AddNumberToObject(o, "flushed", d.flushed);
+    cJSON_AddNumberToObject(o, "capped", d.capped);
+    cJSON_AddNumberToObject(o, "forced", d.forced);
+    cJSON_AddNumberToObject(o, "hold_max_ms", d.hold_max_ms);
+    cJSON_AddBoolToObject(o, "gate", s_calm_ms != NULL);         /* (false: the fluid never said when it is calm) */
+}
 
 static cJSON *heap_json(uint32_t caps)
 {
@@ -1117,6 +1247,7 @@ cJSON *mole_diag_json(int timeline_secs)
     cJSON_AddNumberToObject(lg, "persists", s_persist_n);
     cJSON_AddNumberToObject(lg, "persist_fail", s_persist_fail);
     cJSON_AddNumberToObject(lg, "persist_last_ms", s_persist_ms);
+    flash_json(cJSON_AddObjectToObject(j, "flash"), NULL);
     if (s_core_summary[0]) cJSON_AddStringToObject(j, "coredump", s_core_summary);
     console_store_fs_json(cJSON_AddObjectToObject(j, "fs"), 12);   /* SPIFFS: what fills it */
     if (timeline_secs > 0 && s_tl) {
@@ -1288,6 +1419,17 @@ static bool bench_calm(unsigned mask, uint32_t calm, uint32_t ms)
     }
     return false;
 }
+/* no flash write or erase for 300 ms (3 s at most): a case starts on a flash at rest, its records are its own */
+static void bench_flash_idle(void)
+{
+    for (int q = 0; q < 60; q++) {
+        portENTER_CRITICAL(&s_fg_mux);
+        const bool busy = s_fg_batch.ops && (s_fg_batch.wbytes || s_fg_batch.ebytes) && esp_timer_get_time() - s_fg_batch.last_us < 300000;
+        portEXIT_CRITICAL(&s_fg_mux);
+        if (!busy) return;
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
 /* a record of anim taken since `from`; ms at most */
 static bool bench_rec(int from, int anim, uint32_t ms)
 {
@@ -1347,6 +1489,7 @@ static cJSON *bench_rec_json(const mole_anim_rec_t *b)
 static cJSON *bench_case(int c, int run)
 {
     mole_fluid_screen(true);
+    bench_flash_idle();
     switch (c) {                                       /* (from: the cat; the chart, its dust in; the last change over) */
     case BC_BOOT:   bench_scene(false); bench_calm(1, 1500, 15000); break;
     case BC_MIDDLE: bench_scene(true); bench_calm(1, 1500, 15000);
@@ -1355,6 +1498,7 @@ static cJSON *bench_case(int c, int run)
     case BC_PLANET: bench_calm(0xF, 1000, 8000); break;
     default:        bench_calm(1, 1000, 10000); break;
     }
+    bench_flash_idle();
     const int from = bench_n();
     const int64_t t0 = esp_timer_get_time();
     const char *err = NULL;
@@ -1399,6 +1543,10 @@ static esp_err_t http_bench(httpd_req_t *r)
     cJSON_AddStringToObject(j, "astrology", astro ? "installed" : "not installed: only boot-cat runs");
     mole_fluid_screen(true);
     bench_n();
+    portENTER_CRITICAL(&s_fg_mux);
+    const fg_stats_t fg0 = s_fg;
+    s_fg.hold_max_ms = 0;
+    portEXIT_CRITICAL(&s_fg_mux);
     cJSON *cases = cJSON_AddArrayToObject(j, "cases");
     for (int run = 1; run <= (int)runs; run++)
         for (int c = 0; c < (astro ? BC_N : 1); c++) cJSON_AddItemToArray(cases, bench_case(c, run));
@@ -1411,6 +1559,7 @@ static esp_err_t http_bench(httpd_req_t *r)
     cJSON_AddNumberToObject(h, "psram_free", heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     cJSON_AddNumberToObject(h, "psram_largest", heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
     te_json(cJSON_AddObjectToObject(j, "te"));              /* (the panel's refresh, the last second) */
+    flash_json(cJSON_AddObjectToObject(j, "flash"), &fg0);  /* (the bench's own: writes while animating must be 0) */
     cJSON *st = cJSON_AddObjectToObject(j, "stack_free");    /* (high-water marks, bytes, as the sampler last saw them) */
     portENTER_CRITICAL(&s_task_mux);
     int sd = -1, ss = -1, sx = -1;

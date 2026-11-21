@@ -142,6 +142,7 @@ idf_component_register(
         "diag/heap_guard.c"     # internal-RAM self-protection: warn + shed (host-tested)
         "diag/sta_watch.c"      # the station state the diag samples rssi by (host-tested)
         "diag/loop_watch.c"     # abort on a wedged event loop / esp_timer task (host-tested)
+        "diag/flash_gate.c"     # the flash's quiet window: writes that can wait hold while the screen animates (host-tested)
     INCLUDE_DIRS
         "."
         "net"
@@ -195,6 +196,10 @@ idf_component_register(
 # link/link_connect.c: every esp_transport_connect runs on a task that holds no mutex, so a
 # priority inherited during the TLS handshake cannot freeze the fluid for the whole handshake.
 target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=esp_transport_connect" "-u __wrap_esp_transport_connect")
+# diag/mole_diag.c: every write, erase and read of a flash partition is counted and logged (flash_gate.h), whoever makes it
+# (NVS, SPIFFS, OTA, the IDF's own Wi-Fi and PHY records).
+target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=esp_partition_write" "-Wl,--wrap=esp_partition_write_raw"
+                      "-Wl,--wrap=esp_partition_erase_range" "-Wl,--wrap=esp_partition_read")
 
 # A debug build's ring without a listen (POST /api/diag/ring?ms=): make firmware BOARD=... DIAG_RING=1
 # (tools/scripts/firmware-build.sh passes -DMOLTY_DIAG_RING=ON, or OFF for a plain build)
