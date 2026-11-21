@@ -1036,8 +1036,10 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
         if (sdk != d->sd_kind) { d->sd_kind = (int8_t)sdk; d->force = true; }
         /* (the light holds still while the picture changes, and on the dots while a wave moves more than they send in
          * two frames: the eye is on the wave; it goes on from there after, never all at once) */
-        if (o->fine) o->fine->pause = d->m.on || (d->sd_kind && d->sd_m > 2);
-        if (o->fine) fluid_fine_frame(o->fine, s, o);   /* its fine dust instead of the haze */
+        if (o->fine && !o->fine->ahead) {               /* its fine dust instead of the haze (or worked out ahead on the sim task) */
+            o->fine->pause = d->m.on || (d->sd_kind && d->sd_m > 2);
+            fluid_fine_frame(o->fine, s, o);
+        }
         if (d->sd_kind) sd_alive(d, o);
         else caption_box(d, o);
         hold_box(d, o);
@@ -1780,6 +1782,11 @@ void fluid_draw_morph_lines(fluid_draw_t *d, const uint8_t *cells) {
 
 static void morph_end(fluid_draw_t *d, bool cut) {
     fluid_morph_t *m = &d->m;
+    if (m->on) {                                        /* (its stages for the log: where the new picture's read got to) */
+        if (m->mm) m->dg[FLUID_MD_LCELLS] = m->mm->bj * d->W + m->mm->bi;
+        m->dg[FLUID_MD_FRAMES] = m->frames;
+        m->ends++;
+    }
     m->on = false;
     mm_free(m->mm); m->mm = NULL;
     if (cut) d->force = true;                           /* (the next frame sends every cell: the glass is the look's then) */
@@ -1799,7 +1806,7 @@ void fluid_draw_morph_look(fluid_draw_t *d, uint32_t look, uint16_t *snap, bool 
     if (!((look ^ m->look) & ~FLUID_LOOK_DUST)) {
         const bool gain = (look & FLUID_LOOK_DUST) && !m->on && m->whole && snap && morph_maps(d);
         m->look = look;
-        if (gain) { m->ready = true; m->ready_at = 0; m->frames = 0; m->na = -1; m->mm = NULL; m->on = m->keep = true; m->forced = false; m->held = 0; m->nheld = 0; }
+        if (gain) { m->ready = true; m->ready_at = 0; m->frames = 0; m->na = -1; m->mm = NULL; m->on = m->keep = true; m->forced = false; m->held = 0; m->nheld = 0; memset(m->dg, 0, sizeof(m->dg)); }
         return;
     }
     /* nothing kept to change from, or into a look the panel's mirror keeps (it writes over the kept glass): at once */
@@ -1814,6 +1821,7 @@ void fluid_draw_morph_look(fluid_draw_t *d, uint32_t look, uint16_t *snap, bool 
     m->look = look; m->ready = ready; m->ready_at = ready ? 0 : -1; m->frames = 0; m->na = -1;
     if (!m->on) m->mm = NULL;
     m->on = true; m->keep = m->forced = false; m->held = 0; m->nheld = 0;
+    memset(m->dg, 0, sizeof(m->dg));
 }
 
 /* ── the pictures read ── */
@@ -2002,6 +2010,9 @@ static void lines_on_dust(fluid_draw_t *d) {
             break;
         }
 }
+/* the waits' limits in frames (FLUID_MORPH_HOLD_N, FLUID_MORPH_LINES_N) and the new lines' cells read a frame at most (0:
+ * by the budget alone); tests set them (fluid_draw_morph_bounds) to act out the device's slow reads */
+static int s_hold_n = FLUID_MORPH_HOLD_N, s_lines_n = FLUID_MORPH_LINES_N, s_read_cells;
 /* The new picture, a cell row at a time, as the drawer drew it in the change's one cells pass (it stands after): its
  * lines (drawn without the dust) and its dust (the dots of dust cells; a scene's specks where fluid_fine_rect puts them).
  * A scene's specks come in a second pass once they are in (`ready`), so its lines are read meanwhile. `budget` us a
@@ -2062,7 +2073,8 @@ static bool morph_read_new(fluid_draw_t *d, const fluid_frame_t *s, const fluid_
     if (mm->lines_ok) return false;
     /* its lines (and the dust dots of a creature's or a word's cells): a few cells of a row at a time (MORPH_READ_CELLS),
      * at least once a frame, so it always ends; a scene's lines after its dust, while the change runs (they come last) */
-    for (bool first = true; mm->bj < H && (first || (now_us() - t_in < budget && m->work - w0 < budget)); first = false) {
+    const bool capped = s_read_cells && budget < INT32_MAX / 4;   /* (a test's cap; never on a wait's limit) */
+    for (int read = 0; mm->bj < H && (!read || (now_us() - t_in < budget && m->work - w0 < budget && (!capped || read < s_read_cells))); read += MORPH_READ_CELLS) {
         const int j = mm->bj, y0 = d->cy[j], h = d->cy[j + 1] - y0, i0 = mm->bi, i1 = i0 + MORPH_READ_CELLS < W ? i0 + MORPH_READ_CELLS : W;
         uint16_t *lb = mm->lbuf, *gb = mm->gbuf;
         if (!i0) { memset(lb, 0, sizeof(uint16_t) * (size_t)sw * h); memset(gb, 0, sizeof(uint16_t) * (size_t)sw * h); }
@@ -2134,10 +2146,12 @@ static uint32_t hilbert(int x, int y) {
 /* a grain's key: its place on a Hilbert curve over the glass, then its index (the low 14 bits) */
 static inline uint32_t grain_key(int x, int y, int n) { return hilbert(x < 511 ? x : 511, y < 511 ? y : 511) << 14 | (uint32_t)n; }
 /* A picture's grains put in order along the curve (its keys, a scratch as long): a stable radix sort, 6 bits of the place a
- * pass, three passes, each its digits counted and then its keys moved; as many as the frame's budget leaves (in model us
- * and in time), a few at least. True: in order. */
-static bool sort_step(fluid_morph_t *m, uint32_t **key, int n, int *pass, int64_t t_in, int budget) {
+ * pass, three passes, each its digits counted and then its keys moved; `budget` us of it now (in model us and in time),
+ * a few at least. True: in order. */
+static bool sort_step(fluid_morph_t *m, uint32_t **key, int n, int *pass, int budget) {
     fluid_morph_mem_t *mm = m->mm;
+    const int64_t t_in = now_us();
+    const int w0 = m->work;
     if (*pass >= 3) return true;
     if (!mm->tmp && !(mm->tmp = FLUID_MALLOC(sizeof(uint32_t) * FLUID_MORPH_GRAINS))) return false;
     for (bool first = true; *pass < 3; first = false) {
@@ -2150,7 +2164,7 @@ static bool sort_step(fluid_morph_t *m, uint32_t **key, int n, int *pass, int64_
             mm->counted = true;
             m->work += (int)(n * MW_LOOK);
         }
-        while (mm->spos < n && (first || (now_us() - t_in < budget && m->work + 512 * MW_SORT < budget))) {
+        while (mm->spos < n && (first || (now_us() - t_in < budget && m->work - w0 + 512 * MW_SORT < budget))) {
             const int e = mm->spos + 512 < n ? mm->spos + 512 : n;
             for (int q = mm->spos; q < e; q++) t[cnt[k[q] >> sh & 63]++] = k[q];
             m->work += (int)((e - mm->spos) * MW_SORT);
@@ -2159,7 +2173,7 @@ static bool sort_step(fluid_morph_t *m, uint32_t **key, int n, int *pass, int64_
         }
         if (mm->spos < n) return false;
         *key = t; mm->tmp = k; mm->spos = 0; mm->counted = false; ++*pass;
-        if (now_us() - t_in >= budget || m->work >= budget) break;
+        if (now_us() - t_in >= budget || m->work - w0 >= budget) break;
     }
     return *pass >= 3;
 }
@@ -2428,6 +2442,29 @@ void fluid_draw_morph_census(const fluid_draw_t *d, fluid_morph_census_t *c) {
     }
 }
 
+void fluid_draw_morph_bounds(int cloud_n, int lines_n, int read_cells) {
+    s_hold_n = cloud_n > 0 ? cloud_n : FLUID_MORPH_HOLD_N; s_lines_n = lines_n > 0 ? lines_n : FLUID_MORPH_LINES_N;
+    s_read_cells = read_cells > 0 ? read_cells : 0;
+}
+/* A wait's limit reached: what the change waits for is made now, in this frame, and the change goes on as approved (never
+ * a cut, never a repaint: the new picture still comes everywhere at once). A scene's specks not in by now are given up
+ * (they come after the change, as a change of their own); the rest is read, put in order and paired. False: no room. */
+static bool morph_settle(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_opts_t *o) {
+    fluid_morph_t *m = &d->m;
+    fluid_morph_mem_t *mm = m->mm;
+    if (!m->ready) { m->ready = m->forced = true; m->ready_at = m->frames; }
+    for (int q = 0; q < 8 && (m->nb < 0 || !mm->lines_ok); q++)
+        if (!morph_read_new(d, s, o, INT32_MAX / 2) && !mm->bset) return false;
+    if (m->nb < 0 || !mm->lines_ok) return false;
+    if (!mm->ba) {
+        if (!sort_step(m, &mm->bkey, mm->B.n, &mm->bpass, INT32_MAX / 2) || !morph_pair(d)) return false;
+        mm->tk = m->n && !m->keep ? m->t : -1.f;
+        m->dg[FLUID_MD_PAIRED] = m->frames;
+        FLUID_FREE(mm->bkey); mm->bkey = NULL; FLUID_FREE(mm->tmp); mm->tmp = NULL;
+    }
+    return true;
+}
+
 /* This frame of the change (the drawer stands: fluid_draw_cells runs once, for its new look). Before it moves: the old
  * picture in order. Then: the new picture read and paired (each a share of the frame), the clock, and what changes,
  * straight into the kept glass: each mover that moved (a pair flying, a new grain coming up) cleared where it was, each
@@ -2449,10 +2486,11 @@ static void morph_frame(fluid_draw_t *d, const fluid_frame_t *s, const fluid_dra
     mm->wpx = 0;
     /* the old picture in order, then (the drawer's one pass for its new look made) the pairs chosen */
     if (!mm->planned) {
-        if (!sort_step(m, &mm->akey, mm->A.n, &mm->apass, mm->f0, FLUID_MORPH_FRAME_US)) { if (!mm->tmp) morph_end(d, true); MP_LAP(FLUID_MP_PAIR); return; }
+        if (!sort_step(m, &mm->akey, mm->A.n, &mm->apass, FLUID_MORPH_FRAME_US - m->prof[FLUID_MP_OLD])) { if (!mm->tmp) morph_end(d, true); MP_LAP(FLUID_MP_PAIR); return; }
         MP_LAP(FLUID_MP_PAIR);
         if (!mm->passed) return;                        /* (the next frame: the drawer's pass for the new look) */
         morph_plan(d);
+        m->dg[FLUID_MD_PASS] = m->frames;
         if (m->keep) m->n = (int)(MP_BORN * MP_FPS);    /* (its dust alone: from just before its grains come up) */
         m->t = mtime(m->n);
         MP_LAP(FLUID_MP_PAIR);
@@ -2463,11 +2501,17 @@ static void morph_frame(fluid_draw_t *d, const fluid_frame_t *s, const fluid_dra
     mm->waits = mm->started && ((!mm->ba && mtime(m->n + 1) > MP_HOLD) || (!mm->lines_ok && mtime(m->n + 1) > m->dur - MP_NEW_LINES));
     if (!mm->waits) { m->held = 0; m->nheld = 0; }     /* (each wait its own limit) */
     else {
+        m->dg[mm->ba ? FLUID_MD_WAITL : FLUID_MD_WAITC]++;
         const int64_t w = m->held ? tp - m->held : 0;
         if (!m->held) m->held = tp;
         m->nheld++;
         if (!m->ready && (w >= FLUID_MORPH_DUST_US || m->nheld >= FLUID_MORPH_DUST_N)) { m->ready = m->forced = true; m->ready_at = m->frames; }
-        if (w >= FLUID_MORPH_HOLD_US || m->nheld >= FLUID_MORPH_HOLD_N) { m->cuts++; morph_end(d, true); return; }
+        const bool lines = mm->ba != NULL;               /* (the lines' wait: nothing moves, its frames are cheap) */
+        if (w >= (lines ? FLUID_MORPH_LINES_US : FLUID_MORPH_HOLD_US) || m->nheld >= (lines ? s_lines_n : s_hold_n)) {
+            m->cuts++;
+            if (!morph_settle(d, s, o)) { morph_end(d, true); return; }
+            mm->waits = false;
+        }
     }
     /* the clock: it stands till the pairs are chosen and, at the cloud, till the new picture is paired */
     const float t0 = m->t;
@@ -2583,13 +2627,26 @@ static void morph_frame(fluid_draw_t *d, const fluid_frame_t *s, const fluid_dra
     /* (what the grains leave of the frame; at the cloud a share at least, so it never waits long; not in the frame of the
      * drawer's pass, which has its cells) */
     const int left = mm->waits && MP_LEFT() < FLUID_MORPH_READ_MIN_US ? FLUID_MORPH_READ_MIN_US : MP_LEFT();
-    if ((m->nb < 0 || !mm->lines_ok) && !m->pass && left > 0 && !morph_read_new(d, s, o, left) && !mm->bset) { morph_end(d, true); return; }
+    if (m->ready && !m->dg[FLUID_MD_READY]) m->dg[FLUID_MD_READY] = m->frames;
+    if ((m->nb < 0 || !mm->lines_ok) && !m->pass) {
+        m->dg[FLUID_MD_LEFT] += left > 0 ? left : 0;
+        const bool lines = mm->lines_ok, dust = m->nb >= 0;
+        const int64_t r0 = now_us();
+        if (left > 0 && !morph_read_new(d, s, o, left) && !mm->bset) { morph_end(d, true); return; }
+        m->dg[dust ? FLUID_MD_LUS : FLUID_MD_DUS] += (int)(now_us() - r0);
+        if (!dust && m->nb >= 0) m->dg[FLUID_MD_DUST] = m->frames;
+        if (!lines && mm->lines_ok) m->dg[FLUID_MD_LINES] = m->frames;
+    }
     MP_LAP(FLUID_MP_NEW);
     if (m->nb >= 0 && !mm->ba && (MP_LEFT() > 0 || mm->waits)) {
-        if (!sort_step(m, &mm->bkey, mm->B.n, &mm->bpass, mm->f0, FLUID_MORPH_FRAME_US)) { if (!mm->tmp) { morph_end(d, true); return; } }
+        /* (its own share of the frame: a sort that got only what the grains leave crawled at 512 keys a frame) */
+        const int slice = mm->waits && MP_LEFT() < FLUID_MORPH_SORT_MIN_US ? FLUID_MORPH_SORT_MIN_US : MP_LEFT();
+        m->dg[FLUID_MD_SORTF]++;
+        if (!sort_step(m, &mm->bkey, mm->B.n, &mm->bpass, slice)) { if (!mm->tmp) { morph_end(d, true); return; } }
         else if (MP_LEFT() > (int)(mm->nf * MW_LOOK * 20.f) || mm->waits) {
             if (!morph_pair(d)) { morph_end(d, true); return; }
             mm->tk = m->n && !m->keep ? m->t : -1.f;    /* (paired before the clock moved: its pull from the start) */
+            m->dg[FLUID_MD_PAIRED] = m->frames;
             FLUID_FREE(mm->bkey); mm->bkey = NULL; FLUID_FREE(mm->tmp); mm->tmp = NULL;
         }
     }
@@ -2620,6 +2677,7 @@ static void morph_begin(fluid_draw_t *d) {
     m->mm->f0 = t0;
     if (again) m->mm->again = true;
     if (!r) return;
+    m->dg[FLUID_MD_OLD] = m->frames;
     fluid_morph_mem_t *mm = m->mm;
     mm->E = m->ready ? 0.f : MP_EXTRA;                  /* (and when its grains with no pair are many: morph_pair) */
     m->dur = MP_LEN + mm->E;
@@ -2779,8 +2837,22 @@ typedef struct {
     int win_px; bool dry; long cost;                    /* crisp_send: a window's cost in pixels; dry: its boxes' cost counted, not sent */
 } sender_t;
 static int s_wins;                                      /* windows sent (a change's counted for the log) */
+static fluid_glass_fn s_gq;                             /* the kept glass's windows handed to another task (fluid_draw_glass_sender) */
+static void *s_gq_ctx;
+void fluid_draw_glass_sender(fluid_glass_fn fn, void *ctx) { s_gq = fn; s_gq_ctx = ctx; }
+/* a window of the kept glass to the sender (copied and the mark over it, or direct: whole rows straight from it), or with
+ * no sender whole rows sent here (a copied one goes through window()) */
+static int glass_window(const fluid_draw_t *d, const fluid_draw_opts_t *o, int mark, sender_t *sd, int x0, int y, int w, int h, bool direct) {
+    const int64_t t0 = now_us();
+    const int e = s_gq ? s_gq(s_gq_ctx, d->m.snap, d->fb_w, x0, y, w, h, direct, mark, o->palette)
+                       : sd->send(sd->ctx, 0, y, w, h, d->m.snap + (size_t)y * d->fb_w);
+    ((fluid_morph_t *)&d->m)->push_us += (int)(now_us() - t0);
+    s_wins++;
+    return e != 0 ? -1 : w * h;
+}
 static int window(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_overlay_t *ov, int mark, sender_t *sd,
                   int x0, int y, int x1, int h) {
+    if (sd->glass && s_gq) return glass_window(d, o, mark, sd, x0, y, x1 - x0, h, false);
     uint16_t *buf = sd->buf[sd->cur];
     const int w = x1 - x0;
     const fluid_rect_t t = { buf, w, x0, y, x1, y + h };
@@ -2907,17 +2979,21 @@ static void glass_cache(fluid_draw_t *d, const fluid_draw_opts_t *o, int64_t t0)
         d->dirty[k] = 0; d->owe[k] = 1; d->nowed++;
     }
 }
-/* the changed cells whose dust alone moved over black (no drawing, dot or letter in them): only their specks moved
- * (fluid_fine_move: a few pixels, not the cell's), the cell left out of the drawing pass (on) and back after it (off) */
-static void glass_move(fluid_draw_t *d, const fluid_draw_opts_t *o, bool on) {
+/* the changed cells whose dust alone moved, over black or over their drawing as cached (no dot or letter in them, not
+ * by the caption: nothing dims it): only their specks moved (fluid_fine_move: a few pixels, not the cell's), the cell
+ * left out of the drawing pass (glass_move) and back after it, to be sent (glass_moved, cell rows [ja, jb)) */
+static void glass_move(fluid_draw_t *d, const fluid_draw_opts_t *o) {
     const int W = d->W, N = W * d->H;
     for (int k = 0; k < N; k++) {
-        if (!on) { if (d->owe[k] & 2) { d->owe[k] &= ~2; d->dirty[k] = 1; } continue; }
         const int i = k % W, j = k / W;
-        if (d->dirty[k] != 3 || d->hdcv[k] != 1 || !key_hd(d->key[k]) || (d->key[k] & 0xFFu) ||
-            (i >= d->hold[0] && i <= d->hold[1] && j >= d->hold[2] && j <= d->hold[3]) || !fluid_fine_move(o->fine, k, d->m.snap, d->fb_w)) continue;
+        if (d->dirty[k] != 3 || !d->hdcv[k] || !key_hd(d->key[k]) || (d->key[k] & 0xFFu) ||
+            (i >= d->hold[0] && i <= d->hold[1] && j >= d->hold[2] && j <= d->hold[3]) ||
+            !fluid_fine_move(o->fine, k, d->m.snap, d->hdcv[k] == 2 ? d->hdc : NULL, d->fb_w)) continue;
         d->dirty[k] = 0; d->owe[k] |= 2;
     }
+}
+static void glass_moved(fluid_draw_t *d, int ja, int jb) {
+    for (int k = ja * d->W; k < jb * d->W; k++) if (d->owe[k] & 2) { d->owe[k] &= ~2; d->dirty[k] = 1; }
 }
 static void glass_ahead(fluid_draw_t *d, const fluid_draw_opts_t *o) {
     const int N = d->W * d->H, nc = cache_shapes(o);
@@ -2928,26 +3004,33 @@ static void glass_ahead(fluid_draw_t *d, const fluid_draw_opts_t *o) {
         hdc_cell(d, o, d->hdc_next, nc);
     }
 }
-/* A scene on fine dust over its kept glass (its changed cells drawn into it already): each band of cell rows with changes
- * as boxes copied from the glass (crisp_send), or as its rows whole straight from the glass when that costs less (one
- * window, no copy: a wave's ring); the mark's rows always through a window (it is drawn over one, never into the glass) */
-static int glass_send(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_overlay_t *ov, int mark, sender_t *sd) {
+/* A scene on fine dust over its kept glass: each band of cell rows with changes, its changed cells drawn into the glass (a
+ * cell row at a time: its specks go into the glass's lines while they are still in the cache, PSRAM), then sent as boxes
+ * copied from the glass (crisp_send), or as its rows whole straight from the glass when that costs less (one window, no
+ * copy: a wave's ring); the mark's rows always through a window (it is drawn over one, never into the glass). With a
+ * sender (fluid_draw_glass_sender) a band goes out on the other core while this one draws the next: a band's windows
+ * reach a row before the next band's cells (a whole cell row apart) and the glass's rows they send are not drawn again
+ * this frame. */
+static int glass_send(fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_overlay_t *ov, int mark, sender_t *sd) {
     const int H = d->H, fw = d->fb_w;
     const int ym = mark > FLUID_MARK_NONE ? (d->oy + d->stage - (int)(16.f * d->stage / (float)FLUID_STAGE_REF)) & ~1 : d->fb_h;
+    fluid_morph_t *m = &d->m;
     int sent = 0;
     for (int j = 0, e; j < H; j = e) {
         if (d->span[2 * j] >= d->span[2 * j + 1]) { e = j + 1; continue; }
         for (e = j; e < H && d->span[2 * e] < d->span[2 * e + 1]; e++) {}
+        const int64_t t0 = now_us();
+        for (int r = j; r < e; r++)
+            fluid_draw_rect(d, o, &(fluid_rect_t){ m->snap + (size_t)d->cy[r] * fw, fw, 0, d->cy[r], fw, d->cy[r + 1] }, false);
+        glass_moved(d, j, e);
+        m->cmp_us += (int)(now_us() - t0);
         const int y0 = d->cy[j] & ~1, y1 = ((d->cy[e] + 1) & ~1) < d->fb_h ? (d->cy[e] + 1) & ~1 : d->fb_h, yd = y1 < ym ? y1 : ym;
         sd->dry = true; sd->cost = 0;
         crisp_send(d, o, ov, mark, sd, j, e);
         sd->dry = false;
         int n;
         if (yd > y0 && sd->win_px + (long)fw * (yd - y0) < sd->cost) {
-            const int64_t t0 = now_us();
-            n = sd->send(sd->ctx, 0, y0, fw, yd - y0, d->m.snap + (size_t)y0 * fw) != 0 ? -1 : fw * (yd - y0);
-            ((fluid_morph_t *)&d->m)->push_us += (int)(now_us() - t0);
-            s_wins++;
+            n = glass_window(d, o, mark, sd, 0, y0, fw, yd - y0, true);
             if (n >= 0 && yd < y1) { const int m2 = crisp_box(d, o, ov, mark, 0, fw, yd, y1, sd); n = m2 < 0 ? -1 : n + m2; }
         } else n = crisp_send(d, o, ov, mark, sd, j, e);
         if (n < 0) return -1;
@@ -3034,18 +3117,11 @@ int fluid_draw_send2(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fl
         if (sd.glass) {
             const int64_t t0 = now_us();
             glass_cache(dm, o, t0);
-            glass_move(dm, o, true);
-            /* a cell row at a time: its specks go into the glass's lines while they are still in the cache (PSRAM) */
-            for (int j = 0; j < d->H; j++) {
-                if (d->span[2 * j] >= d->span[2 * j + 1]) continue;
-                const int y0 = d->cy[j], y1 = d->cy[j + 1];
-                fluid_draw_rect(d, o, &(fluid_rect_t){ m->snap + (size_t)y0 * d->fb_w, d->fb_w, 0, y0, d->fb_w, y1 }, false);
-            }
-            glass_move(dm, o, false);
+            glass_move(dm, o);
             m->cmp_us += (int)(now_us() - t0);
         }
         sd.win_px = sd.glass ? GLASS_WIN_PX : o->shapes ? (d->sd_kind ? SD_WIN_PX : WAVE_WIN_PX) : CRISP_WIN_PX;
-        const int n = sd.glass ? glass_send(d, o, ov, mark, &sd) : crisp_send(d, o, ov, mark, &sd, 0, d->H);
+        const int n = sd.glass ? glass_send(dm, o, ov, mark, &sd) : crisp_send(d, o, ov, mark, &sd, 0, d->H);
         if (sd.glass && m->cmp_us + m->push_us < GLASS_LIGHT_US) glass_ahead(dm, o);
         return n;
     }

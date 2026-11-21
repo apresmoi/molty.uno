@@ -1161,7 +1161,7 @@ static void dump_ppm(const char *path, const uint16_t *fb, int S) {
  * drawing cached): a window's commands 0.23 ms, a pixel drawn and sent 0.55 us. The cells pass before it takes ~11 ms. */
 #define CELLS_MS 11.0
 #define MORPH_PASS_MS 12.0   /* the drawer's one cells pass for a change's new look (bench1: ~10 ms outside the change's work) */
-#define MORPH_FIT_MS  28.0   /* a frame's work that keeps the panel's ~31.5 ms step (bench1: past it, the frame takes two) */
+#define MORPH_FIT_MS  30.0   /* a frame's cells + send that keeps 30 fps (benches 2-5: the interval is cells + send + 2 to 3 ms; p95 <= 33) */
 static double panel_ms(const cost_t *c) { return c->wins * 0.23 + c->px * 0.55e-3; }
 /* the panel's glass: the windows land there */
 typedef struct { uint16_t *px; int S; cost_t c; const fluid_draw_t *d; uint16_t *mirror; } glass_t;   /* mirror: kept as the panel's */
@@ -2252,6 +2252,180 @@ static void test_ride(const char *dir) {
     pkg_unref(p);
 }
 
+/* ── the two cores (the device's split, mole_fluid.c): the dust's next frame worked out on the sim task while the drawer
+ * draws this one (fluid_fine_frame_ahead, shown by fluid_fine_publish at the handoff), and the kept glass's windows sent by
+ * another task while the drawer draws the next band (fluid_draw_glass_sender). Here in one thread in the device's order:
+ * each frame's dust is worked out before the frame before is sent (it must change nothing that send reads), its windows
+ * queued and sent only at the frame's end (the rows they send must not change once queued). Beside it a twin drawn in
+ * line as before: the same glass every frame, the same windows in the same order (each once), and the glass the look when
+ * a frame ends; a tap in the open middle, a reading to its end, a tap on the Moon, the mark on and off. ── */
+typedef struct { const uint16_t *glass; int stride, x, y, w, h, mark, pal; bool direct; uint32_t sum; } split_win_t;
+typedef struct { split_win_t q[256]; int n, late, over, taken; } split_q_t;
+typedef struct { glass_t *g; int n, mixed; int16_t v[512][4]; const split_q_t *q; } win_log_t;
+static uint32_t rows_sum(const uint16_t *g, int stride, int x, int y, int w, int h) {
+    uint32_t a = 2166136261u;
+    for (int r = y; r < y + h; r++) for (int c = x; c < x + w; c++) a = (a ^ g[(size_t)r * stride + c]) * 16777619u;
+    return a;
+}
+static int split_take(void *ctx, const uint16_t *glass, int stride, int x, int y, int w, int h, bool direct, int mark, int pal) {
+    split_q_t *q = ctx;
+    if (q->n == 256) { q->over++; return 1; }
+    q->q[q->n++] = (split_win_t){ glass, stride, x, y, w, h, mark, pal, direct, rows_sum(glass, stride, x, y, w, h) };
+    q->taken++;
+    return 0;
+}
+static int send_log(void *ctx, int x, int y, int w, int h, const uint16_t *px) {
+    win_log_t *L = ctx;
+    if (L->q && L->q->n) L->mixed++;                    /* (a window sent here while some wait queued: two senders) */
+    if (L->n < 512) { L->v[L->n][0] = (int16_t)x; L->v[L->n][1] = (int16_t)y; L->v[L->n][2] = (int16_t)w; L->v[L->n][3] = (int16_t)h; }
+    L->n++;
+    return send_glass(L->g, x, y, w, h, px);
+}
+/* the frame's end: each window queued as the device's sender sends it (copied and the mark over it, or straight), in order */
+static void split_drain(split_q_t *q, const fluid_draw_t *d, win_log_t *L) {
+    static uint16_t buf[4096];
+    const int n = q->n;
+    q->n = 0;
+    for (int k = 0; k < n; k++) {
+        const split_win_t *r = &q->q[k];
+        if (rows_sum(r->glass, r->stride, r->x, r->y, r->w, r->h) != r->sum) q->late++;
+        if (r->direct) { send_log(L, r->x, r->y, r->w, r->h, r->glass + (size_t)r->y * r->stride); continue; }
+        for (int y = 0; y < r->h; y++) memcpy(buf + (size_t)y * r->w, r->glass + (size_t)(r->y + y) * r->stride + r->x, sizeof(uint16_t) * (size_t)r->w);
+        fluid_draw_mark(d, &(fluid_rect_t){ buf, r->w, r->x, r->y, r->x + r->w, r->y + r->h }, r->pal, r->mark);
+        send_log(L, r->x, r->y, r->w, r->h, buf);
+    }
+}
+typedef struct { fluid_shape_t shp[FLUID_MAX_SHAPES]; fluid_letter_t L[FLUID_MAX_LETTERS]; uint8_t *dots, *keep, *still; int n, nl; } split_side_t;
+static void test_split(const char *dir) {
+    char path[512]; size_t len; const char *err;
+    snprintf(path, sizeof(path), "%s/astrology.json", dir);
+    char *buf = read_file(path, &len);
+    pkg_t *p = buf ? pkg_parse(buf, len, &err) : NULL;
+    free(buf);
+    scene_t *sc = p ? sd_scene(p, dir, "chart") : NULL;
+    CHECK(sc != NULL, "split: the chart builds");
+    if (!sc) { pkg_unref(p); return; }
+    const int S = 466; int W, H;
+    fluid_grid_for_stage(S, &W, &H);
+    const int N = W * H;
+    fluid_fine_dust_kind(FINE_DUST_SPECKS);
+    ride_rig_t *A = calloc(1, sizeof(*A)), *C = calloc(1, sizeof(*C));
+    split_side_t *sim = calloc(1, sizeof(*sim));
+    split_q_t *q = calloc(1, sizeof(*q));
+    win_log_t *la = calloc(1, sizeof(*la)), *lc = calloc(1, sizeof(*lc));
+    rig_open(A, S); rig_open(C, S);
+    sim->dots = calloc((size_t)N, 1); sim->keep = calloc((size_t)N, 1); sim->still = calloc((size_t)N, 1);
+    la->g = &A->gl; lc->g = &C->gl; lc->q = q;
+    static fluid_shape_t full_sh[FLUID_MAX_SHAPES];
+    static uint16_t wbuf[4096];
+    const char *words[] = { "Mars", "opposes", "Saturn." };
+    float ub[4];
+    for (int w = 0; w < 3; w++) {
+        float b[4];
+        const scene_caption_t c = { words[w], (int)strlen(words[w]), 1 };
+        scene_caption_box(&c, sc->caption_y, S, b);
+        if (!w) memcpy(ub, b, sizeof(b));
+        ub[0] = fminf(ub[0], b[0]); ub[1] = fmaxf(ub[1], b[1]); ub[2] = fminf(ub[2], b[2]); ub[3] = fmaxf(ub[3], b[3]);
+    }
+    fluid_fine_caption_box(A->fine, ub); fluid_fine_caption_box(C->fine, ub);
+    const int moon = spot_named(sc, "moon");
+    scene_grow_t g;
+    int frames = 0, diff = 0, lists = 0, off = 0, ahead = 0, hazard = 0, bands = 0, mark_was = FLUID_MARK_NONE, mark_c = FLUID_MARK_NONE;
+    bool go = false, full_c = true, grow = false;
+    const int F0 = -16, F1 = 150;
+    for (int f = F0; f <= F1; f++) {
+        /* the script: calm, a tap in the middle at 0, a reading from 30 (3 words, 12 frames each, its end), the Moon at 90;
+         * the mark from 60 to 100 */
+        const int rw = f >= 30 && f < 66 ? (f - 30) / 12 : -1;
+        const scene_caption_t cap = rw >= 0 ? (scene_caption_t){ words[rw], (int)strlen(words[rw]), 1 } : (scene_caption_t){ NULL, 0, -1 };
+        const int mark = f >= 60 && f < 100 ? FLUID_MARK_DOT : FLUID_MARK_NONE;
+        const bool full = f == F0 || mark != mark_was;
+        mark_was = mark;
+        const float t = 1.f + (f - F0) / 30.f;
+        if (f == 90 && moon >= 0) { scene_grow_tap(&g, moon); grow = true; }
+        if (grow) { scene_grow_tick(&g, true, DT); scene_grow_apply(&g, sc); }
+        ride_rig_t *R[2] = { A, C };
+        for (int r = 0; r < 2; r++) {
+            if (f == 0) fluid_sim_impulse(R[r]->s, 0.15f, -0.3f, 1.6f, 0.09f);
+            if (f == 90 && moon >= 0) { scene_outline(sc, moon, outline_bump, R[r]->s); fluid_sim_impulse(R[r]->s, sc->items[moon].x, -sc->items[moon].y, 1.6f, 0.09f); }
+        }
+        /* the split: the sim's frame (its own shapes and dots), the dust worked out ahead ... */
+        scene_shapes_t hd = { sim->shp, 0, sim->keep, sim->still };
+        scene_fill(C->s, sc, 1.f, &cap, sim->L, &sim->nl, sim->dots, &hd);
+        sim->n = hd.n;
+        uint32_t key;
+        const int nn = scene_full_shapes(C->s, sc, 1.f, full_sh, &key);
+        fluid_fine_want(C->fine, 1, key, !grow, full_sh, nn, FLUID_PAL_PASTEL);
+        const bool ready = fluid_fine_work(C->fine, 0);
+        if (f > F0) { fluid_sim_step(C->s, DT / 2); fluid_sim_step(C->s, DT / 2); }
+        const unsigned word = cap.n ? (unsigned)(rw + 1) : 0;
+        if (go && !fluid_fine_swap_due(C->fine)) {
+            const fluid_frame_t fv = { .W = W, .H = H, .h = C->s->h };
+            const fluid_draw_opts_t fo = { .palette = FLUID_PAL_PASTEL, .time = t, .shapes = sim->shp, .nshapes = sim->n, .kdots = sim->keep, .cap_word = word };
+            C->fine->pause = false;
+            fluid_fine_frame_ahead(C->fine, &fv, &fo);
+            hazard += f > F0;
+        }
+        /* ... before the drawer's frame before goes out, its windows through the queue */
+        if (f > F0) {
+            fluid_draw_glass_sender(split_take, q);
+            lc->n = 0;
+            fluid_draw_send(C->d, &C->o, &(fluid_overlay_t){ 0 }, mark_c, full_c, wbuf, 4096, send_log, lc);
+            fluid_draw_glass_sender(NULL, NULL);
+            bands += q->n > 0;
+            split_drain(q, C->d, lc);
+            int dif = 0;                                /* (the twin's glass and windows: still the frame before's) */
+            for (int k = 0; k < S * S; k++) dif += C->gl.px[k] != A->gl.px[k];
+            diff += dif != 0;
+            lists += lc->n != la->n || memcmp(lc->v, la->v, sizeof(int16_t) * 4 * (size_t)(lc->n < 512 ? lc->n : 512));
+            if (mark_c == FLUID_MARK_NONE) off += glass_off(C->d, &C->o, C->gl.px, S) != 0;
+            if (dif && getenv("SPLIT_TRACE")) printf("    split f%d: %d px off the twin; windows %d / %d\n", f - 1, dif, lc->n, la->n);
+            frames++;
+        }
+        /* the twin, in line */
+        {
+            scene_shapes_t hd = { A->shp, 0, A->keep, A->still };
+            int nl;
+            scene_fill(A->s, sc, 1.f, &cap, A->L, &nl, A->dots, &hd);
+            A->o.shapes = A->shp; A->o.nshapes = hd.n; A->o.nletters = nl; A->o.cap_word = cap.n ? (unsigned)(rw + 1) : 0;
+            uint32_t key;
+            const int nn = scene_full_shapes(A->s, sc, 1.f, full_sh, &key);
+            fluid_fine_want(A->fine, 1, key, !grow, full_sh, nn, FLUID_PAL_PASTEL);
+            if (fluid_fine_work(A->fine, 0)) fluid_fine_swap(A->fine);
+            if (f > F0) { fluid_sim_step(A->s, DT / 2); fluid_sim_step(A->s, DT / 2); }
+            fluid_sim_snapshot(A->s, A->fr, false);
+            A->o.time = t;
+            fluid_draw_cells(A->d, A->fr, &A->o);
+            la->n = 0;
+            fluid_draw_send(A->d, &A->o, &(fluid_overlay_t){ 0 }, mark, full, wbuf, 4096, send_log, la);
+        }
+        /* the handoff: the set that waits, the drawer's copies, the frame shown, the drawer's next frame */
+        if (ready) fluid_fine_swap(C->fine);
+        memcpy(C->shp, sim->shp, sizeof(fluid_shape_t) * (size_t)(sim->n > 0 ? sim->n : 0)); memcpy(C->L, sim->L, sizeof(sim->L));
+        memcpy(C->dots, sim->dots, (size_t)N); memcpy(C->keep, sim->keep, (size_t)N); memcpy(C->still, sim->still, (size_t)N);
+        C->o.shapes = C->shp; C->o.nshapes = sim->n; C->o.nletters = sim->nl; C->o.cap_word = word; C->o.time = t;
+        fluid_sim_snapshot(C->s, C->fr, false);
+        go = true;
+        if (!C->fine->bready) { C->fine->pause = false; fluid_fine_frame_ahead(C->fine, C->fr, &C->o); }
+        fluid_fine_publish(C->fine, go);
+        ahead += C->fine->ahead;
+        fluid_draw_cells(C->d, C->fr, &C->o);
+        mark_c = mark; full_c = full;
+    }
+    printf("  the two cores (the dust ahead, the glass's windows queued): %d frames, %d with their dust worked out ahead (%d of them before the frame before went out), %d sent through the queue (%d windows)\n",
+           frames, ahead, hazard, bands, q->taken);
+    CHECK(ahead > frames / 2 && hazard > frames / 2 && bands > frames / 2 && q->taken > 4 * frames,
+          "split: the dust worked out ahead and the windows queued on most frames (%d, %d, %d of %d)", ahead, hazard, bands, frames);
+    CHECK(diff == 0 && lists == 0 && lc->mixed == 0 && q->over == 0,
+          "split: the same glass as the drawer in line every frame (%d off), the same windows in the same order, each once (%d frames differ; %d sent while some waited; %d not taken)",
+          diff, lists, lc->mixed, q->over);
+    CHECK(q->late == 0 && off == 0, "split: no queued row drawn again before it went out (%d), the glass the look when each frame ends (%d frames off)", q->late, off);
+    free(sim->dots); free(sim->keep); free(sim->still); free(sim); free(q); free(la); free(lc);
+    rig_close(A); rig_close(C); free(A); free(C);
+    scene_free(sc);
+    pkg_unref(p);
+}
+
 /* EXPERIMENT kind 3 (fluid_fine_dust_kind FINE_DUST_FINE_DOTS; delete with it): the fine specks of kind 0 with a
  * sparse layer of the creature screen's dots on the water. At rest the glass is kind 0's plus hard dots on black pixels
  * only; a tap anywhere sends the creature screen's wave through them over the whole glass, every moved dot sent the
@@ -2342,6 +2516,9 @@ typedef struct {
 /* what a change did (morph_run): its frames, the panel model's ms a frame (mean, worst, over 33), what it showed */
 typedef struct {
     int frames, over, unsent, empty_max, empty0, empty1, diff, hard, phase, new_seen;
+    int even;                          /* its frames' changes over the new picture: of any frame past 0.6 s changing
+                                        * 400 px or more, the most any of 8 bands of rows holds of them against its share of
+                                        * the picture's lit px, percent (everywhere at once: 100-390, a creature's lines fading in where it stands; lines shown as read: 540+) */
     int na, nb, fly, spare, born;      /* its grains: old, new; the pairs flying; the old with no pair, the new with none */
     float extra;
     double mean, worst;
@@ -2406,6 +2583,9 @@ static void morph_run(morph_rig_t *r, int kind, scene_t *sc, uint32_t look, int 
     uint32_t key = 0;
     double sum = 0.;
     *res = (morph_res_t){ 0 };
+    res->even = 0;
+    static long bands[200][9];                         /* (each frame's changes by band of rows; [8]: all) */
+    int nband = 0;
     res->na = res->nb = -1;
     res->empty0 = empty_blocks(r->g.px, S);
     if (!fluid_draw_morphing(r->d) && !r->d->m.whole) for (int k = 0; k < S * S; k++) r->snap[k] = MORPH_STALE;
@@ -2430,8 +2610,10 @@ static void morph_run(morph_rig_t *r, int kind, scene_t *sc, uint32_t look, int 
         fluid_draw_send(r->d, &r->o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, r->wbuf, 4096, send_glass, &r->g);
         const fluid_morph_t *m = &r->d->m;
         const bool on = fluid_draw_morphing(r->d);
-        long changed = 0;
-        for (int k = 0; k < S * S; k++) changed += r->g.px[k] != r->prev[k];
+        long changed = 0, band[8] = { 0 };
+        for (int k = 0; k < S * S; k++) { const bool c = r->g.px[k] != r->prev[k]; changed += c; band[k / S * 8 / S] += c; }
+        /* (once the old picture is gone, 0.6 s: while the new one forms, and the frames after the change) */
+        if (changed >= 400 && nband < 200 && (!fluid_draw_morphing(r->d) || r->d->m.t >= 0.6f)) { memcpy(bands[nband], band, sizeof(band)); bands[nband++][8] = changed; }
         /* the panel model, the device's (bench1): a window 0.15 ms, a pixel sent from the kept glass 0.055 us, the change's
          * own work (fluid_morph_t.work: its per-item costs fitted to the device); the drawer's cells only in the change's one
          * pass for its new look (MORPH_PASS_MS), else ~1 ms (the touch poll). A frame fits the panel's 31.5 ms step with
@@ -2495,6 +2677,20 @@ static void morph_run(morph_rig_t *r, int kind, scene_t *sc, uint32_t look, int 
         res->hard += r->ref[k] != r->g.px[k] && (lum(r->ref[k]) > 700 || lum(r->g.px[k]) > 700);
     }
     res->empty1 = empty_blocks(r->g.px, S);
+    {   /* (the frames' changes against where the new picture is: everywhere at once, never by rows) */
+        long lit[8] = { 0 }, all = 0;
+        for (int k = 0; k < S * S; k++) if (r->ref[k]) { lit[k / S * 8 / S]++; all++; }
+        for (int f = 0; f < nband; f++) {               /* (a band's share of the frame's changes against its share of the picture) */
+            int most = 0;
+            for (int b = 0; b < 8; b++) {
+                if (lit[b] * 50 < all) continue;
+                const int ratio = (int)((double)bands[f][b] / bands[f][8] / ((double)lit[b] / all) * 100.0);
+                most = ratio > most ? ratio : most;
+            }
+            if (most > res->even) res->even = most;
+            if (most > 300 && getenv("MORPH_TRACE")) printf("    %s: frame %d's changes (%ld px) %d %% over one band's share of the picture\n", name, f, bands[f][8], most);
+        }
+    }
     if (sheet) {
         char path[600];
         snprintf(path, sizeof(path), "%s-%s.ppm", getenv("MORPH_DUMP"), name);
@@ -2610,6 +2806,8 @@ static void test_morph(const char *dir, const char *catp) {
         CHECK(res.frames >= 36 && res.frames <= 36 + 9 + 2 + 20 && res.over == 0,
               "%s: one change of 1.21 s (+ the extra, + the wait for its dust), every frame inside the panel's (%d frames, worst %.1f ms of %.0f)", RUN[q].name, res.frames, res.worst, MORPH_FIT_MS);
         CHECK(res.unsent == 0, "%s: every frame of it all sent, each grain the frame it moves (%d frames not)", RUN[q].name, res.unsent);
+        CHECK(res.even <= 450, "%s: everywhere at once, never by rows: no band of rows takes over 4.5 times its share of the picture in a frame's changes (most %d %%)",
+              RUN[q].name, res.even);
         {   /* (the prototype's own sparse cloud: its emptiest frame, dissolve-proto's render on the same blocks; the device's
              * flies fewer pairs, FLUID_MORPH_FLY: a lighter cloud, as Juan allowed, up to 8 % more of it empty) */
             const int calm = res.empty0 > res.empty1 ? res.empty0 : res.empty1, most = (calm > RUN[q].empty ? calm : RUN[q].empty) + 80;
@@ -2641,6 +2839,26 @@ static void test_morph(const char *dir, const char *catp) {
         morph_run(r, MK_CAT, NULL, cat, 0, 0, "first-cat", &b);
         CHECK(((cat ^ first) & ~FLUID_LOOK_DUST) && a.frames >= 36 && b.frames >= 36 && a.diff == 0 && b.diff == 0,
               "the creature, the first scene (numbered 1), the creature again: each a change of picture (%d, %d frames)", a.frames, b.frames);
+    }
+    {   /* every wait at its limit at once (the device's slow reads): what is missing is made in that frame and the change
+         * goes on as approved, everywhere at once, never a cut or a repaint by rows; the same with its dust not in */
+        morph_res_t a, b, c, e;
+        fluid_draw_morph_bounds(1, 1, 0);
+        morph_run(r, MK_SCENE, up, FLUID_LOOK_KEEP | 500, 0, 0, "bound-leo", &a);
+        morph_run(r, MK_SCENE, chart, FLUID_LOOK_KEEP | 501, 0, 0, "bound-chart", &b);
+        morph_run(r, MK_SCENE, up, FLUID_LOOK_KEEP | 502, 1000, 0, "bound-nodust", &c);
+        fluid_draw_morph_bounds(0, 0, 0);
+        /* (the chart's lines read as slowly as the device reads them, a few cells a frame: still never seen as read) */
+        fluid_draw_morph_bounds(0, 0, 24);
+        morph_run(r, MK_SCENE, chart, FLUID_LOOK_KEEP | 503, 0, 0, "slow-chart", &e);
+        fluid_draw_morph_bounds(0, 0, 0);
+        printf("    its lines read slowly: %.0f ms, a band's most of a frame's changes against its share %d %%\n", e.frames * 1000.0 / 30.0, e.even);
+        CHECK(e.even <= 450 && e.diff == 0 && e.frames >= 36 && e.frames <= 36 + 18 + 60 + 9, "its lines read slowly, a few cells a frame: they come in everywhere at once, never as read (%d %%, %d frames)", e.even, e.frames);
+        printf("    every wait at its limit: %.0f, %.0f, %.0f ms; a band's most of a frame's changes against its share: %d, %d, %d %%\n", a.frames * 1000.0 / 30.0,
+               b.frames * 1000.0 / 30.0, c.frames * 1000.0 / 30.0, a.even, b.even, c.even);
+        CHECK(a.even <= 450 && b.even <= 450 && c.even <= 450 && a.diff == 0 && b.diff == 0 && c.diff == 0 && a.frames >= 36 && b.frames >= 36 && c.frames >= 36,
+              "every wait at its limit: the change goes on everywhere at once, to the look whole, never by rows (%d, %d, %d %%)", a.even, b.even, c.even);
+        s_morph_stale = 0;
     }
     {   /* the new picture's dust not in by the cloud (its build starved on the device): the clock waits for it briefly
          * (FLUID_MORPH_DUST_*, FLUID_MORPH_HOLD_*) and the change ends on time without it; the dust comes after it as a
@@ -2817,6 +3035,7 @@ int main(int argc, char **argv) {
     test_fine(argv[1]);
     test_scene_dust(argv[1]);
     test_ride(argv[1]);
+    test_split(argv[1]);
     test_fine_hard(argv[1]);
     test_open(argv[1]);
     test_morph(argv[1], argc > 3 ? argv[3] : NULL);

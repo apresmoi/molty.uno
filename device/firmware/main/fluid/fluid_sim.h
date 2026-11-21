@@ -413,13 +413,18 @@ static inline uint32_t fluid_look_of(int kind, uint32_t id, bool dust) {
 #define FLUID_MORPH_LINES     16384    /* old lines' pixels read at most (beyond: dust)                                 */
 #define FLUID_MORPH_DUST_US   150000   /* at the cloud, the new look's inputs (`ready`) awaited this long at most ..   */
 #define FLUID_MORPH_DUST_N    5        /* .. or this many frames (whichever first) ..                                  */
-#define FLUID_MORPH_HOLD_US   800000   /* .. and the clock stands there this long at most (else the look comes at once) */
+#define FLUID_MORPH_HOLD_US   800000   /* .. and the clock stands there this long at most: then what is missing is made at once
+                                        * (a scene's specks not in come after, as their own change), never a cut   */
 #define FLUID_MORPH_HOLD_N    24
+#define FLUID_MORPH_LINES_US  2000000  /* the clock stands before the new lines come in till they are read, this long at
+                                        * most (nothing moves then: cheap frames), then the rest is read at once      */
+#define FLUID_MORPH_LINES_N   60
 #define FLUID_MORPH_FRAME_US  13500    /* the change's own work a frame (us): the panel's frame is ~31.5 ms, its send ~12;
                                         * reading and sorting take what the grains moving leave of it                 */
 #define FLUID_MORPH_OLD_US    12000    /* the old picture read a frame, while nothing moves and nothing is sent         */
 #define FLUID_MORPH_PASS_US   12000    /* (the drawer's one pass for the new look, as the panel model counts it)        */
-#define FLUID_MORPH_READ_MIN_US 2000   /* the new picture read a frame at least, whatever the grains took               */
+#define FLUID_MORPH_READ_MIN_US 2000   /* at the cloud, the new picture read a frame at least, whatever the grains took .. */
+#define FLUID_MORPH_SORT_MIN_US 2500   /* .. and its grains put in order                                               */
 #define FLUID_MORPH_FINE_US   5000     /* (the dust's frame, fluid_fine_frame, as the panel model counts it)            */
 #define FLUID_MORPH_BORN_FAST 6000     /* new grains with no pair: more, and they come up over 0.3 s more (the prototype's
                                         * extra, as its fit to the panel chose it: to the chart, not to Leo)            */
@@ -429,6 +434,10 @@ static inline uint32_t fluid_look_of(int kind, uint32_t id, bool dust) {
  * marked pixels into the kept glass, the look drawn whole at the end, the marks cleared and the rows to send found */
 enum { FLUID_MP_LOOK, FLUID_MP_OLD, FLUID_MP_NEW, FLUID_MP_PAIR, FLUID_MP_FLY, FLUID_MP_SPARE, FLUID_MP_BORN, FLUID_MP_LINES,
        FLUID_MP_COMPOSE, FLUID_MP_END, FLUID_MP_MARKS, FLUID_MP_N };
+/* a change's stages, for the log (fluid_morph_t.dg; mole_fluid.c "change stages"): the frame (m->frames) each was
+ * reached, and what reading its new picture took */
+enum { FLUID_MD_OLD, FLUID_MD_PASS, FLUID_MD_READY, FLUID_MD_DUST, FLUID_MD_PAIRED, FLUID_MD_LINES, FLUID_MD_LCELLS,
+       FLUID_MD_LUS, FLUID_MD_DUS, FLUID_MD_SORTF, FLUID_MD_WAITC, FLUID_MD_WAITL, FLUID_MD_LEFT, FLUID_MD_FRAMES, FLUID_MD_N };
 typedef struct fluid_morph_mem fluid_morph_mem_t;  /* (fluid_draw.c: the two pictures' grains and lines, the pairs) */
 typedef struct {
     bool     on;
@@ -451,6 +460,8 @@ typedef struct {
     int      nheld;                    /* .. frames since                                                             */
     int      ready_at;                 /* the frame its inputs were whole (-1: not yet)                                 */
     int      cuts;                     /* changes cut at the cloud's limit (FLUID_MORPH_HOLD_*), counted for the log    */
+    int      dg[FLUID_MD_N];           /* its stages (the last change's, kept after it ends; ends counted in `ends`)    */
+    int      ends;
     bool     forced;                   /* the new picture read before its inputs were whole: its dust comes after      */
     bool     keep;                     /* its dust only comes (FLUID_LOOK_DUST): the lines stay as they are             */
     bool     pass;                     /* this frame the drawer made its new look (its one cells pass)                  */
@@ -650,6 +661,9 @@ void fluid_draw_morph_lines(fluid_draw_t *d, const uint8_t *cells);
 static inline int fluid_draw_morphing(const fluid_draw_t *d) { return d && d->m.on; }
 /** A change runs and the drawer has made its new look: it stands (its inputs are not read) till the change ends. */
 bool fluid_draw_morph_still(const fluid_draw_t *d);
+/** (tests) The waits' limits in frames: at the cloud, before the new lines; and the new lines' cells read a frame at
+ *  most (the device's slow reads); 0: as built. */
+void fluid_draw_morph_bounds(int cloud_n, int lines_n, int read_cells);
 /** A change runs and nothing of its new look is read yet: its inputs may still change whole (a scene's dust swapping in). */
 static inline bool fluid_draw_morph_open(const fluid_draw_t *d) { return d && d->m.on && d->m.nb < 0; }
 /** The window t as the change shows it this frame, composed whole (the glass holds the same: tests). Returns its pixels. */
@@ -671,6 +685,13 @@ int  fluid_draw_send(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fl
  *  into the buffer the panel is not reading. The caller waits for the last send after. */
 int  fluid_draw_send2(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fluid_overlay_t *ov, int mark, bool full,
                       uint16_t *buf, uint16_t *buf2, int max_px, fluid_send_fn send, void *ctx);
+/** A scene on fine dust over its kept glass (fluid_draw_send2) hands its windows to fn instead of sending them: rows
+ *  [y, y + h) x [x, x + w) of glass (stride px a row) to copy and draw the mark over (fluid_draw_mark: mark, palette), or
+ *  whole rows straight from it (direct), in this order. The glass's rows handed over are not drawn again in the frame, so
+ *  another task may send them while the drawer draws on; the caller waits for all of them before the drawer's next
+ *  frame and before any other send. Non-zero: not taken (the frame stops). fn NULL: sent here, as before. */
+typedef int (*fluid_glass_fn)(void *ctx, const uint16_t *glass, int stride, int x, int y, int w, int h, bool direct, int mark, int palette);
+void fluid_draw_glass_sender(fluid_glass_fn fn, void *ctx);
 
 #ifdef __cplusplus
 }
