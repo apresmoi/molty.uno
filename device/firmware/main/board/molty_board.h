@@ -132,7 +132,6 @@ typedef struct {
     void      (*blit_mirror)(bool on);            /* optional: see molty_display_blit_mirror                        */
     void      (*display_te)(molty_te_t *out, bool window);   /* optional: see molty_display_te                       */
     bool      (*display_te_wait)(uint32_t after, int timeout_ms);   /* optional: see molty_display_te_wait        */
-    void      (*display_inject)(void);            /* optional, EXPERIMENT: see molty_display_inject                 */
     esp_err_t (*display_power)(bool on);          /* optional: panel off / on (sleep, backlight)  */
     esp_err_t (*display_level)(uint8_t level);    /* optional: brightness 0..255 (255 at power on) */
     esp_err_t (*power_off)(void);                 /* optional: cut the power; returns only on failure */
@@ -222,8 +221,6 @@ void      molty_display_te(molty_te_t *out, bool window);
 /** Blocks until the TE pulses' total (molty_display_te) passes after: true; false after timeout_ms, or at once when the
  *  board reads no TE line. One waiter at a time. */
 bool      molty_display_te_wait(uint32_t after, int timeout_ms);
-/** EXPERIMENT (the bench's stuck=1): the board's next panel call meets a transfer that never ends, so its recovery shows. */
-void      molty_display_inject(void);
 /** The panel off (false) or on. ESP_ERR_NOT_SUPPORTED when the board cannot; the caller
  *  stops drawing either way. */
 esp_err_t molty_display_power(bool on);

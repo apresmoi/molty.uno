@@ -37,5 +37,3 @@ void lcd_co5300_mirror(bool on);
 void lcd_co5300_te(molty_te_t *out, bool window);
 /** Until the pulses' total passes after (true), timeout_ms at most, or no TE line (false) (molty_display_te_wait). */
 bool lcd_co5300_te_wait(uint32_t after, int timeout_ms);
-/** EXPERIMENT (the bench's stuck=1): the next panel call counts a transfer that never ends (its recovery shown). */
-void lcd_co5300_inject(void);

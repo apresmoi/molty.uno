@@ -2662,6 +2662,7 @@ typedef struct {
     bool tx;                           /* the kept glass's windows queued to a sender, sent at the frame's end (the device's) */
     int sendp;                         /* (a send this long guessed each frame, us: the device's slow ones) */
     int room;                          /* (the gate's room told each frame, us: the device's frame drawn in one refresh) */
+    int hole;                          /* (a frame of the change whose inputs have no shapes, as a reading's teardown: -1 none) */
 } morph_rig_t;
 /* what a change did (morph_run): its frames, the panel model's ms a frame (mean, worst, over 33), what it showed */
 typedef struct {
@@ -2763,6 +2764,7 @@ static void morph_run(morph_rig_t *r, int kind, scene_t *sc, uint32_t look, int 
         const bool dust = kind != MK_SCENE || fluid_fine_shown(r->fine, look);
         fluid_draw_morph_look(r->d, kind == MK_SCENE && dust ? look | FLUID_LOOK_DUST : look, r->snap, dust);
         morph_inputs(r, kind, &hd);
+        if (f == r->hole || f == r->hole + 1) { r->o.shapes = NULL; r->o.nshapes = 0; }
         fluid_draw_morph_handoff(r->d);
         const bool in = fluid_draw_morphing(r->d);    /* (a frame of the change: its last one draws the look whole) */
         memcpy(r->prev, r->g.px, (size_t)S * S * 2);
@@ -2907,7 +2909,7 @@ static morph_rig_t *morph_rig(cpk_t *cat, const morph_rig_t *like, int job) {
     r->dots = calloc((size_t)N, 6); r->keep = r->dots + N; r->still = r->keep + N; r->ddots = r->still + N; r->dkeep = r->ddots + N; r->dstill = r->dkeep + N;
     r->cat = calloc((size_t)N, 3); r->catline = r->cat + N; r->word = r->catline + N;
     r->ccol = calloc((size_t)N, sizeof(fluid_rgba16_t)); r->wcol = calloc((size_t)N, sizeof(fluid_rgba16_t));
-    r->job = job; r->full_at = -1; r->tx = job > 0;
+    r->job = job; r->full_at = -1; r->hole = -1; r->tx = job > 0;
     fluid_draw_morph_job(r->d, job > 0);
     /* the boot word, in the fluid's dots (pale), and the cat (packages/cat: its own sim, a few seconds of life, then its
      * cells as the device shows them: its own cells its lines, the floor and the motes its dust) */
@@ -3012,6 +3014,15 @@ static void test_tx(void) {
           "sender stuck a while: one bound waited in all (%d ms), logged once (%d), every frame end answered (%d left), back for the frames after (%d)", k.waited, lates, k.queued, idle);
 }
 
+/* every allocation of the drawer's (fluid_draw.c, FLUID_TEST_ALLOC): none may ask for more than the biggest it has
+ * (the glass's drawing cache, 466 x 466 x 2 B): bench 33's change asked for 8.4 MB, a count gone wrong */
+#define DRAW_ALLOC_MAX (466 * 466 * 2)
+static size_t s_alloc_most;
+void *fluid_test_alloc(void *p, size_t n, bool zero) {
+    if (n > s_alloc_most) s_alloc_most = n;
+    if (n > DRAW_ALLOC_MAX) return NULL;               /* (as the device: it fails, the change is cut) */
+    return p ? realloc(p, n) : zero ? calloc(1, n) : malloc(n);
+}
 #define MORPH_GATE_ROOM_US 12500  /* (the device's room till the pulse a change's frame is sent on: bench 31, cells <= 12.5 ms) */
 #define MORPH_JOB_OVER_US 1000   /* (a step past the slice's budget at most: a cell row of a list, a row of specks read) */
 static void test_morph(const char *dir, const char *catp, int job) {
@@ -3155,10 +3166,36 @@ static void test_morph(const char *dir, const char *catp, int job) {
             s_morph_stale = 0;
         }
         r->room = 0;
+        fluid_draw_morph_costs(0.f);
+        /* bench 33: a change into the chart while its inputs change under the job (two frames with no shapes, as the
+         * reading over a sign goes), after the drawer's pass, the job resumed in slices of a few sizes: it reads one kind
+         * of picture (it read a scene's dust as a word's lines, then took the dust as read: counts from cells never read,
+         * an 8.4 MB list asked for), no count past the picture's (bound), no allocation over the drawer's biggest block,
+         * and the change ends whole */
+        {
+            static const int HOLE[] = { 5, 6, 7, 8, 10, 12, 14, 16, 20 }, JOB[] = { 6000, 9000, 15000 };
+            int most = 0, cut = 0, bad = 0, runs = 0;
+            for (int h = 0; h < 9; h++) for (int jb = 0; jb < 3; jb++) {
+                const uint32_t lk = (uint32_t)(940 + 2 * (h * 3 + jb));
+                morph_run(r, MK_SCENE, up, FLUID_LOOK_KEEP | lk, 0, 0, "to-leo", &res);
+                const int job0 = r->job, cuts0 = r->d->m.cuts;
+                s_alloc_most = 0; r->job = JOB[jb]; r->hole = HOLE[h];
+                morph_run(r, MK_SCENE, chart, FLUID_LOOK_KEEP | (lk + 1), 0, 0, "leo-chart", &res);
+                r->job = job0; r->hole = -1;
+                most = (int)s_alloc_most > most ? (int)s_alloc_most : most;
+                cut += r->d->m.cuts != cuts0 || res.frames > 45;
+                bad += res.diff != 0 || res.phase != 0 || s_morph_stale != 0 || r->d->m.bound != NULL;
+                s_morph_stale = 0; runs++;
+            }
+            printf("    a reading's inputs changing under the job (%d runs: frame of it x slice): biggest allocation %d B, %d cut or long, %d off\n", runs, most, cut, bad);
+            CHECK(most <= DRAW_ALLOC_MAX && cut == 0 && bad == 0, "a change into the chart with its inputs changing under the job: no allocation over %d B (%d), none cut "
+                  "or over 1.5 s (%d), each whole at its end and in its phases (%d off)", DRAW_ALLOC_MAX, most, cut, bad);
+        }
         /* a slow send (bench 21: a whole glass 17 to 19 ms with core 1 busy): the change's own work shrinks to what the
          * frame leaves beside it (FLUID_MORPH_FRAME_US: the still layers step aside, the movers never), and the change
          * still holds its pace */
-        r->sendp = 17500;                              /* (at 1.6 x the model's costs: bench 21's movers at their peaks) */
+        r->sendp = 17500;
+        fluid_draw_morph_costs(1.6f);                  /* (bench 21's movers: ~1.6 x the model's at their peaks) */
         for (int q = 0; q < 2; q++) {
             morph_run(r, DEV[q + 1].kind, DEV[q + 1].scene == 1 ? chart : DEV[q + 1].scene == 2 ? up : NULL, DEV[q + 1].look + 10, 0, 0, DEV[q + 1].name, &res);
             const int most = FLUID_MORPH_FRAME_US - r->sendp - FLUID_MORPH_SPENT_US;

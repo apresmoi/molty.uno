@@ -2,8 +2,8 @@
  * lcd_q_test.c: the CO5300 driver's transfers (boards/waveshare/esp32-s3-touch-amoled-1.75c/lcd_q.c) against a fake
  * SPI device: what reaches the wire (chip-select frames, their cmd/addr and bytes), that a bounce buffer or a DMA source
  * is never changed while a transfer reads it, that the bus is taken only with nothing in flight, that every wait is
- * bounded, and the recoveries: a lost end, a transfer that never ends, a queue call refused, the bench's injection; a
- * window on the round glass: what it shows sent as it is, its corners black.
+ * bounded, and the recoveries: a lost end, a transfer that never ends, a queue call refused; a window on the round
+ * glass: what it shows sent as it is, its corners black.
  */
 #include "lcd_q.h"
 
@@ -214,16 +214,6 @@ static void test_queue_fail(void)
     check_window(want, 20000, "after a refused queue");
 }
 
-static void test_inject(void)
-{
-    fresh();
-    Q.inject = true;
-    CHECK(lq_wait(&Q) == LQ_E_TIMEOUT && Q.resets == 1 && Q.dropped == 1 && !Q.stuck, "injected: timed out, reset");
-    fill(g_ps, 5000, 10);
-    CHECK(window(g_ps, 5000) == 0 && lq_wait(&Q) == 0, "back after it");
-    check_window(g_ps, 5000, "after inject");
-}
-
 static void test_no_bounce(void)
 {
     memset(&F, 0, sizeof F);
@@ -283,7 +273,7 @@ static void test_disc(void)
 int main(void)
 {
     test_bounced(LQ_BUFS, LQ_BUF); test_bounced(2, 2048); test_bounced(1, 8192);
-    test_direct(); test_reg(); test_lost(); test_stall(); test_queue_fail(); test_inject(); test_no_bounce(); test_disc();
+    test_direct(); test_reg(); test_lost(); test_stall(); test_queue_fail(); test_no_bounce(); test_disc();
     if (g_fail) { printf("lcd_q: %d FAILED\n", g_fail); return 1; }
     printf("LCD_Q PASS: frames on the wire, sources untouched in flight, bus taken idle, waits bounded, recoveries clean, the round glass's corners black\n");
     return 0;

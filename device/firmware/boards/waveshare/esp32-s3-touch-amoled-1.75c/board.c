@@ -187,7 +187,6 @@ const molty_board_t molty_board_desc = {
     .blit_mirror = lcd_co5300_mirror,
     .display_te  = lcd_co5300_te,
     .display_te_wait = lcd_co5300_te_wait,
-    .display_inject = lcd_co5300_inject,
     .display_power = lcd_co5300_power,
     .display_level = lcd_co5300_level,
     .power_off     = power_off,

@@ -228,7 +228,6 @@ bool molty_display_te_wait(uint32_t after, int timeout_ms)
 {
     return (s_caps & MOLTY_CAP_DISPLAY) && B.display_te_wait && B.display_te_wait(after, timeout_ms);
 }
-void molty_display_inject(void) { if ((s_caps & MOLTY_CAP_DISPLAY) && B.display_inject) B.display_inject(); }
 
 bool molty_display_blit_can_overlap(void) { return (s_caps & MOLTY_CAP_DISPLAY) && B.blit_async && B.blit_wait; }
 

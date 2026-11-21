@@ -23,7 +23,7 @@ cc -std=c11 -Wall -Wextra -Werror -O2 \
   "$OUT/cJSON.o" -lm -o "$OUT/pkg_test"
 "$OUT/pkg_test" "$HERE/fixtures/shapes.json"
 
-cc -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Werror -O2 \
+cc -std=c11 -D_POSIX_C_SOURCE=200809L -DFLUID_TEST_ALLOC -Wall -Wextra -Werror -O2 \
   -I"$MAIN/pkg" -I"$MAIN/scene" -I"$MAIN/fluid" -I"$MAIN/creature" -I"$IDF_JSON" \
   "$HERE/scene_test.c" "${SCENE_SRC:-$MAIN/scene/scene_player.c}" "$MAIN/pkg/pkg_parse.c" \
   "$MAIN/fluid/fluid_director.c" "$MAIN/fluid/fluid_sim.c" "$MAIN/fluid/fluid_target.c" "$MAIN/fluid/glyph_font.c" "$MAIN/fluid/glyph_rsvp.c" "$MAIN/fluid/fluid_draw.c" "$MAIN/fluid/fluid_fine.c" "$MAIN/fluid/fluid_askview.c" "$MAIN/fluid/fluid_ask.c" \

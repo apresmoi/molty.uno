@@ -508,6 +508,8 @@ typedef struct {
     int      top[3][6];                /* its three moving frames with the longest cells (the log): frame, cells us (with
                                         * the poll), send us (with the wait for its pulse), its biggest part (FLUID_MP_*),
                                         * the movers' us, the still layers' us                                        */
+    const char *bound; int bound_n;    /* (the readers', for the log) a count found past what the glass can hold: which, its
+                                        * value (refused: the change is cut, never an allocation from it)              */
     int      pace[5];                  /* (fluid_task's alone, for the log "change pace": refreshes lost at its pace while
                                         * a change ran; for the latest, how late it was there, its job's room, the drawer's
                                         * lateness at the handoff before; the drawer's most, us)                        */

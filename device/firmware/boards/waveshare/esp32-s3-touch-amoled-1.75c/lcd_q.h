@@ -73,7 +73,6 @@ typedef struct {
     volatile uint8_t at;             /* LQ_AT_*                                                                       */
     uint32_t fails, resets, dropped; /* failures; resets made; transactions counted that never ended                  */
     int      err; uint8_t err_at;    /* the last failure: its error, where                                            */
-    bool     inject;                 /* EXPERIMENT (bench stuck=1): the next call counts one transfer that never ends  */
 } lq_t;
 
 void lq_init(lq_t *q, const lq_io_t *io, const lq_tx_t *close);
