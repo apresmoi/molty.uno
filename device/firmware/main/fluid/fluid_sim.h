@@ -437,7 +437,10 @@ enum { FLUID_MP_LOOK, FLUID_MP_OLD, FLUID_MP_NEW, FLUID_MP_PAIR, FLUID_MP_FLY, F
 /* a change's stages, for the log (fluid_morph_t.dg; mole_fluid.c "change stages"): the frame (m->frames) each was
  * reached, and what reading its new picture took */
 enum { FLUID_MD_OLD, FLUID_MD_PASS, FLUID_MD_READY, FLUID_MD_DUST, FLUID_MD_PAIRED, FLUID_MD_LINES, FLUID_MD_LCELLS,
-       FLUID_MD_LUS, FLUID_MD_DUS, FLUID_MD_SORTF, FLUID_MD_WAITC, FLUID_MD_WAITL, FLUID_MD_LEFT, FLUID_MD_FRAMES, FLUID_MD_N };
+       FLUID_MD_LUS, FLUID_MD_DUS, FLUID_MD_SORTF, FLUID_MD_WAITC, FLUID_MD_WAITL, FLUID_MD_LEFT,
+       FLUID_MD_JOBN, FLUID_MD_JOBUS, FLUID_MD_JOBMAX,  /* (read on the job: its slices that worked, their us in all, the longest) */
+       FLUID_MD_BORN, FLUID_MD_WPX,                     /* (the most new grains with no pair moved, pixels written, in a frame) */
+       FLUID_MD_FRAMES, FLUID_MD_N };
 typedef struct fluid_morph_mem fluid_morph_mem_t;  /* (fluid_draw.c: the two pictures' grains and lines, the pairs) */
 typedef struct {
     bool     on;
@@ -465,10 +468,21 @@ typedef struct {
     bool     forced;                   /* the new picture read before its inputs were whole: its dust comes after      */
     bool     keep;                     /* its dust only comes (FLUID_LOOK_DUST): the lines stay as they are             */
     bool     pass;                     /* this frame the drawer made its new look (its one cells pass)                  */
+    /* its new picture read on another task (fluid_draw_morph_job): the drawer and that task each own their part of it,
+     * handed over only at the drawer's handoff (fluid_draw_morph_handoff) */
+    bool     job;                      /* that task is there                                                           */
+    bool     jhold;                    /* the change ended in the drawer's frame while that task may still read: nothing
+                                        * of the look is drawn till the handoff                                       */
+    bool     jhurry;                   /* a wait at its limit: that task reads the rest at once                         */
+    bool     still;                    /* (at the handoff: the drawer has made its new look, fluid_draw_morph_still)    */
+    bool     full;                     /* a change cut: the next send is whole (its glass may hold what was not sent)   */
+    fluid_morph_mem_t *jmm;            /* the change that task reads for (set and cleared at the handoff only)          */
+    fluid_morph_mem_t *jfree;          /* changes ended in the drawer's frame while that task had them: freed at the handoff */
 } fluid_morph_t;
 /** What a change shows now (tests, logs): the pairs waiting, flying, landed; the grains with no pair shown (old, new);
  *  the old lines' and the new lines' pixels lit. */
-typedef struct { int wait, fly, landed, spare, born, born_landed, old_lines, new_lines; } fluid_morph_census_t;
+typedef struct { int wait, fly, landed, spare, born, born_landed, old_lines, new_lines;
+                 uint32_t read; } fluid_morph_census_t;   /* (read: a hash of the new picture as read, once whole; else 0) */
 
 /* animations the drawer tells apart (fluid_draw_t.anim_*): each frame, which had cells change, and which of those
  * had any change left unsent (none may) */
@@ -524,6 +538,7 @@ typedef struct {
                                         * (and sent) the next (fluid_draw_send2)                                        */
     int      hdc_next, nbuilt, nowed;   /* the cache made ahead from this cell on; cells made, owed this frame (the log) */
     int      ndrawn;                   /* this frame: px of changed cells drawn into the kept glass (the bench)        */
+    int      move_us, cache_us;        /* this frame: the dust moved alone, the drawing's cache made (of cmp; the bench) */
     int      nsh0;
     struct {                           /* this frame's condensed letters, ready to draw   */
         const uint8_t *gl, *mask; uint16_t c, mw, mh; int16_t x, y, w, h, cx0, cy0, cx1, cy1;
@@ -658,14 +673,25 @@ void fluid_draw_morph_look(fluid_draw_t *d, uint32_t look, uint16_t *snap, bool 
 /** With the drawer idle, once a frame with the inputs: the cells (N) whose dots are the look's lines, not its dust (a
  *  creature's own cells; copied), or NULL: none. */
 void fluid_draw_morph_lines(fluid_draw_t *d, const uint8_t *cells);
-static inline int fluid_draw_morphing(const fluid_draw_t *d) { return d && d->m.on; }
+static inline int fluid_draw_morphing(const fluid_draw_t *d) { return d && (d->m.on || d->m.jhold); }
 /** A change runs and the drawer has made its new look: it stands (its inputs are not read) till the change ends. */
 bool fluid_draw_morph_still(const fluid_draw_t *d);
 /** (tests) The waits' limits in frames: at the cloud, before the new lines; and the new lines' cells read a frame at
- *  most (the device's slow reads); 0: as built. */
+ *  most (the device's slow reads; < 0: all of the new picture read at the first chance, by either reader); 0: as built. */
 void fluid_draw_morph_bounds(int cloud_n, int lines_n, int read_cells);
-/** A change runs and nothing of its new look is read yet: its inputs may still change whole (a scene's dust swapping in). */
-static inline bool fluid_draw_morph_open(const fluid_draw_t *d) { return d && d->m.on && d->m.nb < 0; }
+/** A change runs and nothing of its new look's dust is read yet: its inputs may still change whole (a scene's dust
+ *  swapping in). With the drawer idle. */
+bool fluid_draw_morph_open(const fluid_draw_t *d);
+/** The new picture of a change read on another task (on: the device's sim task, which then calls fluid_draw_morph_work
+ *  between its handoffs and fluid_draw_morph_handoff at each); off (as created): in the drawer's own frames, the same code
+ *  (the web, the host tests' in-line runs). */
+void fluid_draw_morph_job(fluid_draw_t *d, bool on);
+/** That task's share, while the drawer draws: the new picture read and put in order, budget_us at most (one cell row, a
+ *  sort's chunk or the dust's frame past it at worst), with the inputs of the last handoff (s, o: the drawer's). */
+void fluid_draw_morph_work(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_opts_t *o, int budget_us);
+/** At each handoff, with the drawer idle and that task between slices, after fluid_draw_morph_look and _lines: what it
+ *  read becomes the drawer's, a change whose new look is made goes to it to read, changes ended meanwhile are freed. */
+void fluid_draw_morph_handoff(fluid_draw_t *d);
 /** The window t as the change shows it this frame, composed whole (the glass holds the same: tests). Returns its pixels. */
 int  fluid_draw_morph_rect(const fluid_draw_t *d, const fluid_rect_t *t);
 void fluid_draw_morph_census(const fluid_draw_t *d, fluid_morph_census_t *c);

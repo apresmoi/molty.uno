@@ -330,6 +330,7 @@ static uint8_t *s_kdots, *s_kdots_d;
  * drawing covers (the task's, the drawer's: the water never breaks them); the drawing at full growth it gathers round */
 static fluid_fine_t  *s_fine;
 static bool           s_fine_go;                    /* its next frame is worked out ahead on this task (fluid_fine_frame_ahead) */
+static atomic_bool    s_fine_boot_seen;             /* ... or was worked out at the handoff, the drawer waiting (the bench's boot=) */
 static uint8_t       *s_still, *s_still_d;
 static fluid_shape_t *s_fshp;
 static volatile uint32_t s_sim_fill_us, s_sim_build_us;   /* the sim's last frame: a scene's shapes and rings, the dust's build */
@@ -628,6 +629,7 @@ static esp_err_t build_grid(int W, int H) {
     s_sim = fluid_sim_create(W, H, s_stage);
     if (s_sim) s_tx = fluid_text_create(s_sim);
     if (s_tx) s_draw = fluid_draw_create(W, H, s_fb_w, s_fb_h);
+    fluid_draw_morph_job(s_draw, true);                 /* (a change's new picture read on this task: fluid_task) */
     if (s_draw) s_frame = fluid_frame_create(W, H);
     if (!s_frame) { free_grid(); return ESP_ERR_NO_MEM; }
     s_fine = fluid_fine_create(W, H, s_fb_w, s_fb_h);    /* NULL: scenes keep the braille haze */
@@ -1492,7 +1494,8 @@ static void draw_task(void *arg) {
             static const char *const NAME[FLUID_ANIM_N] = { "wave", "grow", "word", "water" };
             enum { BINS = 64 };                         /* intervals in 1 ms bins (the last: 63 and more) */
             typedef struct { uint32_t f, s, rest, px, pxmax, win, worst, worst_c, comp; uint16_t pan[BINS], sim[BINS]; int64_t began;
-                             uint32_t sum[MOLE_ANIM_PARTS], max[MOLE_ANIM_PARTS]; int forced, keep, ready_at, held, na, nb, pairs; } anim_t;
+                             uint32_t sum[MOLE_ANIM_PARTS], max[MOLE_ANIM_PARTS]; int forced, keep, ready_at, held, na, nb, pairs;
+                             uint32_t mv, mvx, ca, cax, owed, boot; } anim_t;   /* (cmp's dust moved and cache made, mean/max us; cells owed; dust frames at the handoff) */
             static struct { anim_t a[FLUID_ANIM_N]; uint32_t v[MOLE_ANIM_PARTS]; } *R;   /* (PSRAM) */
             static int64_t last_t0;
             static float last_sim;
@@ -1520,6 +1523,9 @@ static void draw_task(void *arg) {
                     for (int p = 0; p < FLUID_MP_N; p++) v[10 + p] = w ? (uint32_t)m->prof[p] : 0;
                     for (int p = 0; p < MOLE_ANIM_PARTS; p++) { A->sum[p] += v[p]; A->max[p] = v[p] > A->max[p] ? v[p] : A->max[p]; }
                     A->comp += (uint32_t)(w ? m->comp : s_draw->ndrawn);   /* (else: the px of changed cells drawn into the kept glass) */
+                    A->mv += (uint32_t)s_draw->move_us; A->mvx = (uint32_t)s_draw->move_us > A->mvx ? (uint32_t)s_draw->move_us : A->mvx;
+                    A->ca += (uint32_t)s_draw->cache_us; A->cax = (uint32_t)s_draw->cache_us > A->cax ? (uint32_t)s_draw->cache_us : A->cax;
+                    A->owed += (uint32_t)s_draw->nowed; A->boot += atomic_exchange(&s_fine_boot_seen, 0) ? 1u : 0u;
                     if (w) {
                         A->forced |= m->forced; A->keep |= m->keep;
                         if (m->on) { A->ready_at = m->ready_at; A->held = m->nheld > A->held ? m->nheld : A->held; A->na = m->na; A->nb = m->nb; A->pairs = m->nfly; }
@@ -1548,6 +1554,9 @@ static void draw_task(void *arg) {
                     #define AM(p) A->sum[p] / 1000.f / n, A->max[p] / 1000.f
                     mole_diag_event(false, "anim %s.parts cells=%.1f/%.1f send=%.1f/%.1f cmp=%.1f/%.1f push=%.1f/%.1f wait=%.1f/%.1f sim=%.1f/%.1f fill=%.1f/%.1f build=%.1f/%.1f fine=%.1f/%.1f rect=%.1f/%.1f",
                                     NAME[q], AM(0), AM(1), AM(2), AM(3), AM(4), AM(5), AM(6), AM(7), AM(8), AM(9));
+                    if (q != FLUID_ANIM_WAVE)               /* (of cmp: the dust moved alone, the drawing's cache made; cells owed; frames whose dust was worked out at the handoff) */
+                        mole_diag_event(false, "anim %s.cmp move=%.1f/%.1f cache=%.1f/%.1f owed=%u boot=%u",
+                                        NAME[q], A->mv / 1000.f / n, A->mvx / 1000.f, A->ca / 1000.f / n, A->cax / 1000.f, (unsigned)A->owed, (unsigned)A->boot);
                     if (q == FLUID_ANIM_WAVE)
                         mole_diag_event(false, "anim wave.work look=%.1f/%.1f old=%.1f/%.1f new=%.1f/%.1f pair=%.1f/%.1f fly=%.1f/%.1f spare=%.1f/%.1f born=%.1f/%.1f lines=%.1f/%.1f comp=%.1f/%.1f end=%.1f/%.1f marks=%.1f/%.1f kpx=%.1f forced=%d keep=%d ready@%d held=%d grains=%d/%d pairs=%d",
                                         AM(10), AM(11), AM(12), AM(13), AM(14), AM(15), AM(16), AM(17), AM(18), AM(19), AM(20), A->comp / 1000.f / n,
@@ -1640,6 +1649,12 @@ static bool screen_wanted(void) {
     xSemaphoreGive(s_mutex);
     return w;
 }
+
+/* a change of picture's new picture read on this task (fluid_draw_morph_work) in what its frame leaves of JOB_US, us (the
+ * sim's own work included: its frame's handoff and pacing stay inside the panel's ~31.5 ms), JOB_MIN_US at least (one
+ * step past it at worst: a cell row, a sort's chunk, the dust's frame ~7-9 ms). Its stack: fluid_task's own. */
+#define JOB_US     25000
+#define JOB_MIN_US 3000
 
 static void fluid_task(void *arg) {
     (void)arg;
@@ -1817,6 +1832,12 @@ static void fluid_task(void *arg) {
             s_fine->pause = false;
             fluid_fine_frame_ahead(s_fine, &fv, &fo);
         }
+        /* a change of picture's new picture read here while the drawer draws (fluid_draw_morph_work: the change given to
+         * this task at a handoff, with that handoff's inputs), in what this task's frame leaves of JOB_US */
+        if (s_draw && s_frame) {
+            const int left = JOB_US - (int)(esp_timer_get_time() - t0);
+            fluid_draw_morph_work(s_draw, s_frame, &s_dopts, left > JOB_MIN_US ? left : JOB_MIN_US);
+        }
         /* hand the frame to the drawer: wait until it finished the previous one */
         xSemaphoreTake(s_idle, portMAX_DELAY);
         if (s_dir.bye) {   /* the goodbye's fade: the panel's level, with the drawer idle */
@@ -1865,10 +1886,14 @@ static void fluid_task(void *arg) {
             if (s_draw && s_draw->m.ends != ends) {     /* (where each change's reading of its new picture got to, by frame) */
                 const int *g = s_draw->m.dg;
                 ends = s_draw->m.ends;
-                mole_diag_event(false, "change stages f=%d old@%d pass@%d ready@%d dust@%d paired@%d lines@%d cells=%d/%d read dust=%dms lines=%dms left=%dms sortf=%d wait=%d+%d",
+                /* (dust@: read and in order; job=: its slices that read, their ms in all, the longest; born, wpx: the most new
+                 * grains moved and pixels written in a frame) */
+                mole_diag_event(false, "change stages f=%d old@%d pass@%d ready@%d dust@%d paired@%d lines@%d cells=%d/%d read dust=%dms lines=%dms left=%dms sortf=%d wait=%d+%d"
+                                " job=%d/%dms max=%.1fms born=%d wpx=%d",
                                 g[FLUID_MD_FRAMES], g[FLUID_MD_OLD], g[FLUID_MD_PASS], g[FLUID_MD_READY], g[FLUID_MD_DUST], g[FLUID_MD_PAIRED], g[FLUID_MD_LINES],
                                 g[FLUID_MD_LCELLS], s_sim->N, g[FLUID_MD_DUS] / 1000, g[FLUID_MD_LUS] / 1000, g[FLUID_MD_LEFT] / 1000, g[FLUID_MD_SORTF],
-                                g[FLUID_MD_WAITC], g[FLUID_MD_WAITL]);
+                                g[FLUID_MD_WAITC], g[FLUID_MD_WAITL], g[FLUID_MD_JOBN], g[FLUID_MD_JOBUS] / 1000, g[FLUID_MD_JOBMAX] / 1000.f,
+                                g[FLUID_MD_BORN], g[FLUID_MD_WPX]);
             }
             look_was = look;
         }
@@ -1921,6 +1946,7 @@ static void fluid_task(void *arg) {
         }
         /* the creature's own cells are its lines in a change of picture, the rest of its dots its dust */
         fluid_draw_morph_lines(s_draw, s_crisp && s_cpk && !asking ? cpk_cells_creature(s_cpk) : NULL);
+        fluid_draw_morph_handoff(s_draw);                   /* (the change's reading: this task's from here, or back) */
         if (s_touch_t0) { s_dtouch = s_touch_t0; s_touch_t0 = 0; }
         s_dstatus = fd_status(&s_dir);
         ask_compose();
@@ -1929,7 +1955,7 @@ static void fluid_task(void *arg) {
              * none itself: a scene on the fine specks, no change of picture (a change works its dust out its own way) */
             const bool go = s_fine && s_dopts.fine == s_fine && s_cur == ST_SCENE && !s_hd.out && s_hd.dust < 1.f &&
                             !fluid_draw_morphing(s_draw) && fluid_fine_dust_kind_get() == FINE_DUST_SPECKS;
-            if (go && !s_fine->bready) { s_fine->pause = false; fluid_fine_frame_ahead(s_fine, s_frame, &s_dopts); }
+            if (go && !s_fine->bready) { s_fine->pause = false; fluid_fine_frame_ahead(s_fine, s_frame, &s_dopts); atomic_store(&s_fine_boot_seen, true); }
             fluid_fine_publish(s_fine, go);
             s_fine_go = go;
         }
