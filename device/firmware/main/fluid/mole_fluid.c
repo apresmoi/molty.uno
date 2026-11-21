@@ -962,7 +962,8 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     }
     case ST_CREATURE:
         if (cr_loaded()) {
-            if (s_cpk) { cpk_set_work(s_cpk, fd_working(&s_dir)); cpk_frame(s_cpk, s, rdt, swell); }    /* engine + player + body + ambient + fill */
+            /* (while a change of picture shows it, once the drawer made its new look, it stands: the drawer reads none of it) */
+            if (s_cpk && !fluid_draw_morph_still(s_draw)) { cpk_set_work(s_cpk, fd_working(&s_dir)); cpk_frame(s_cpk, s, rdt, swell); }    /* engine + player + body + ambient + fill */
             else cute_rt_update(s_cute, rdt);              /* mood engine + kit + behaviours */
             {   /* paddle's strokes splash the real water, either side of the creature */
                 static float act_t0;
@@ -1405,8 +1406,8 @@ static void draw_task(void *arg) {
                     v[4] = s_last_wait_us; v[5] = s_sim_work_us; v[6] = s_sim_fill_us; v[7] = s_sim_build_us; v[8] = fine_f; v[9] = fine_r;
                     for (int p = 0; p < FLUID_MP_N; p++) v[10 + p] = w ? (uint32_t)m->prof[p] : 0;
                     for (int p = 0; p < MOLE_ANIM_PARTS; p++) { A->sum[p] += v[p]; A->max[p] = v[p] > A->max[p] ? v[p] : A->max[p]; }
+                    A->comp += (uint32_t)(w ? m->comp : s_draw->ndrawn);   /* (else: the px of changed cells drawn into the kept glass) */
                     if (w) {
-                        A->comp += (uint32_t)m->comp;
                         A->forced |= m->forced; A->keep |= m->keep;
                         if (m->on) { A->ready_at = m->ready_at; A->held = m->nheld; A->na = m->na; A->nb = m->nb; A->pairs = m->nfly; }
                     }
@@ -1718,12 +1719,15 @@ static void fluid_task(void *arg) {
         const uint32_t look = asking ? FLUID_LOOK_KEEP | 0x20000000u | (s_ask.scr.seq & 0x0FFFFFFFu)
                             : fine_look ? FLUID_LOOK_KEEP | (s_sp.cur->serial & 0x0FFFFFFFu) | (ready ? FLUID_LOOK_DUST : 0u)
                             : s_crisp ? FLUID_LOOK_KEEP | 1u : FLUID_LOOK_GLASS;
-        {   /* a new look that came at once, not as a change of picture (/api/log: why) */
+        {   /* each new look (/api/log): as a change of picture, or at once (and why); a change cut at the cloud's limit */
             static uint32_t look_was;
+            static int cuts;
             const bool whole = s_draw && s_draw->m.whole, on = fluid_draw_morphing(s_draw);
             fluid_draw_morph_look(s_draw, look, molty_display_framebuffer(), ready);
-            if (((look ^ look_was) & ~FLUID_LOOK_DUST) && !fluid_draw_morphing(s_draw) && (look & FLUID_LOOK_KEEP))
-                mole_diag_event(false, "change at once look=%08x from=%08x kept=%d running=%d", (unsigned)look, (unsigned)look_was, whole, on);
+            if ((look ^ look_was) & ~FLUID_LOOK_DUST)
+                mole_diag_event(false, "look %08x -> %08x %s kept=%d running=%d st=%d", (unsigned)look_was, (unsigned)look,
+                                fluid_draw_morphing(s_draw) ? "change" : "at once", whole, on, s_cur);
+            if (s_draw && s_draw->m.cuts != cuts) { cuts = s_draw->m.cuts; mole_diag_event(false, "change cut at the cloud's limit (%d)", cuts); }
             look_was = look;
         }
         atomic_store(&s_dust_in, ready);

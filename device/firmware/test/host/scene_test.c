@@ -2608,8 +2608,9 @@ static void test_morph(const char *dir, const char *catp) {
         CHECK(res.frames >= 36 && res.frames <= 36 + 9 + 2 + 20 && res.over == 0,
               "%s: one change of 1.21 s (+ the extra, + the wait for its dust), every frame inside the panel's (%d frames, worst %.1f ms of %.0f)", RUN[q].name, res.frames, res.worst, MORPH_FIT_MS);
         CHECK(res.unsent == 0, "%s: every frame of it all sent, each grain the frame it moves (%d frames not)", RUN[q].name, res.unsent);
-        {   /* (the prototype's own sparse cloud: its emptiest frame, dissolve-proto's render on the same blocks) */
-            const int calm = res.empty0 > res.empty1 ? res.empty0 : res.empty1, most = (calm > RUN[q].empty ? calm : RUN[q].empty) + 30;
+        {   /* (the prototype's own sparse cloud: its emptiest frame, dissolve-proto's render on the same blocks; the device's
+             * flies fewer pairs, FLUID_MORPH_FLY: a lighter cloud, as Juan allowed, up to 8 % more of it empty) */
+            const int calm = res.empty0 > res.empty1 ? res.empty0 : res.empty1, most = (calm > RUN[q].empty ? calm : RUN[q].empty) + 80;
             CHECK(res.empty_max <= most, "%s: never a large empty area: at most %.1f %% of the glass's blocks empty (calm %.1f and %.1f, the prototype %.1f)",
                   RUN[q].name, res.empty_max / 10.0, res.empty0 / 10.0, res.empty1 / 10.0, RUN[q].empty / 10.0);
         }

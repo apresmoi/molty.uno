@@ -400,19 +400,20 @@ uint8_t fluid_braille_contour(const float *sub);
 #define FLUID_LOOK_GLASS      0x40000000u  /* ... with this: the panel's mirror keeps it (windows on any rows)          */
 #define FLUID_LOOK_DUST       0x10000000u  /* ... with this: its dust is in. Gained by a look that showed without it: the
                                             * dust comes as a change of its own (the lines stay); lost: nothing      */
-#define FLUID_MORPH_FLY       1500     /* pairs that fly at most (the rest of each picture fades in place) ..          */
-#define FLUID_MORPH_FLY_PX    4800     /* .. and px of their grains (a pair of 2 x 2 px grains: 4): both fitted to the panel
+#define FLUID_MORPH_FLY       800      /* pairs that fly at most (the rest of each picture fades in place) ..          */
+#define FLUID_MORPH_FLY_PX    2000     /* .. and px of their grains (a pair of 2 x 2 px grains: 4): both fitted to the panel
                                         * model, every change's worst frame under 33 ms (scene_test.c test_morph)        */
 #define FLUID_MORPH_GRAINS    16384    /* grains of a picture read at most (beyond: the new look's cells come whole at the end) */
 #define FLUID_MORPH_LINES     16384    /* old lines' pixels read at most (beyond: dust)                                 */
 #define FLUID_MORPH_DUST_US   150000   /* at the cloud, the new look's inputs (`ready`) awaited this long at most ..   */
 #define FLUID_MORPH_DUST_N    5        /* .. or this many frames (whichever first) ..                                  */
-#define FLUID_MORPH_HOLD_US   600000   /* .. and the clock stands there this long at most (else the look comes at once) */
-#define FLUID_MORPH_HOLD_N    18
-#define FLUID_MORPH_FRAME_US  13000    /* the change's own work a frame (us): the panel's frame is ~31.5 ms, its send ~12;
+#define FLUID_MORPH_HOLD_US   800000   /* .. and the clock stands there this long at most (else the look comes at once) */
+#define FLUID_MORPH_HOLD_N    24
+#define FLUID_MORPH_FRAME_US  13500    /* the change's own work a frame (us): the panel's frame is ~31.5 ms, its send ~12;
                                         * reading and sorting take what the grains moving leave of it                 */
-#define FLUID_MORPH_OLD_US    22000    /* the old picture read a frame, while nothing moves and nothing is sent         */
+#define FLUID_MORPH_OLD_US    15000    /* the old picture read a frame, while nothing moves and nothing is sent         */
 #define FLUID_MORPH_PASS_US   12000    /* (the drawer's one pass for the new look, as the panel model counts it)        */
+#define FLUID_MORPH_READ_MIN_US 2000   /* the new picture read a frame at least, whatever the grains took               */
 #define FLUID_MORPH_FINE_US   5000     /* (the dust's frame, fluid_fine_frame, as the panel model counts it)            */
 #define FLUID_MORPH_BORN_FAST 6000     /* new grains with no pair: more, and they come up over 0.3 s more (the prototype's
                                         * extra, as its fit to the panel chose it: to the chart, not to Leo)            */
@@ -443,6 +444,7 @@ typedef struct {
     int64_t  held;                     /* when its clock first stood at the cloud (0: not yet), us                      */
     int      nheld;                    /* .. frames since                                                             */
     int      ready_at;                 /* the frame its inputs were whole (-1: not yet)                                 */
+    int      cuts;                     /* changes cut at the cloud's limit (FLUID_MORPH_HOLD_*), counted for the log    */
     bool     forced;                   /* the new picture read before its inputs were whole: its dust comes after      */
     bool     keep;                     /* its dust only comes (FLUID_LOOK_DUST): the lines stay as they are             */
     bool     pass;                     /* this frame the drawer made its new look (its one cells pass)                  */
@@ -499,7 +501,12 @@ typedef struct {
     uint32_t *sh1;                     /* this frame's hashes (compared with sh0 as lists: some may come or go) */
     fluid_shape_t *near;               /* scratch: the shapes that reach one cell of the drawing's cache      */
     uint16_t *hdc;                     /* a scene on fine dust: its drawing (but the caption) drawn once, fb_w x fb_h (PSRAM) .. */
-    uint8_t  *hdcv;                    /* .. each cell's part of it valid (a changed shape's cells drawn again when shown) */
+    uint8_t  *hdcv;                    /* .. each cell's part of it valid (a changed shape's cells drawn again when shown):
+                                        * 1 black, 2 drawn                                                            */
+    uint8_t  *owe;                     /* N: over a kept glass, a changed cell whose cache had no room in its frame: drawn
+                                        * (and sent) the next (fluid_draw_send2)                                        */
+    int      hdc_next, nbuilt, nowed;   /* the cache made ahead from this cell on; cells made, owed this frame (the log) */
+    int      ndrawn;                   /* this frame: px of changed cells drawn into the kept glass (the bench)        */
     int      nsh0;
     struct {                           /* this frame's condensed letters, ready to draw   */
         const uint8_t *gl, *mask; uint16_t c, mw, mh; int16_t x, y, w, h, cx0, cy0, cx1, cy1;
@@ -635,6 +642,8 @@ void fluid_draw_morph_look(fluid_draw_t *d, uint32_t look, uint16_t *snap, bool 
  *  creature's own cells; copied), or NULL: none. */
 void fluid_draw_morph_lines(fluid_draw_t *d, const uint8_t *cells);
 static inline int fluid_draw_morphing(const fluid_draw_t *d) { return d && d->m.on; }
+/** A change runs and the drawer has made its new look: it stands (its inputs are not read) till the change ends. */
+bool fluid_draw_morph_still(const fluid_draw_t *d);
 /** A change runs and nothing of its new look is read yet: its inputs may still change whole (a scene's dust swapping in). */
 static inline bool fluid_draw_morph_open(const fluid_draw_t *d) { return d && d->m.on && d->m.nb < 0; }
 /** The window t as the change shows it this frame, composed whole (the glass holds the same: tests). Returns its pixels. */
