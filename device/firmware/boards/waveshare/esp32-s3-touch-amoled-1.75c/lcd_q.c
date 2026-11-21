@@ -82,7 +82,6 @@ static int put(lq_t *q, const lq_tx_t *t)
 static int begin(lq_t *q)
 {
     if (q->stuck && !recover(q)) return LQ_E_STATE;
-    if (q->inject && q->head == q->tail) { q->inject = false; q->head++; }   /* EXPERIMENT: a transfer that never ends */
     return take(q, q->head, LQ_AT_DRAIN);
 }
 

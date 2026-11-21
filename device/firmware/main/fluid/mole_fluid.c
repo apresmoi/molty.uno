@@ -2093,36 +2093,46 @@ static void fluid_task(void *arg) {
             if (s_draw && s_draw->m.ends != ends) {     /* (where each change's reading of its new picture got to, by frame) */
                 const int *g = s_draw->m.dg;
                 ends = s_draw->m.ends;
-                /* (first, as the log cuts long lines: move@ the first frame anything moved, down@ the dust all down, hang= the
-                 * frames between them nothing moved or the clock stood, slow= the frames its clock went slower, line0= and
-                 * full= the first new line's frame and the lines' full one against down@ (want <= 0 and <= 4); then dust@:
-                 * read, in order and listed; job=: its slices that read, their ms in all, the longest; born, wpx: the most
-                 * gliders moved and pixels written in a frame) */
-                mole_diag_event(false, "change stages f=%d move@%d down@%d hang=%d slow=%d line0=%+d full=%+d old@%d pass@%d ready@%d dust@%d paired@%d lines@%d"
-                                " cells=%d/%d read dust=%dms lines=%dms left=%dms sortf=%d wait=%d+%d job=%d/%dms max=%.1fms born=%d wpx=%d",
-                                g[FLUID_MD_FRAMES], g[FLUID_MD_MOVE0], g[FLUID_MD_SETTLE], g[FLUID_MD_HANG], g[FLUID_MD_SLOW],
-                                g[FLUID_MD_LIN0] ? g[FLUID_MD_LIN0] - g[FLUID_MD_SETTLE] : -99, g[FLUID_MD_LINF] - g[FLUID_MD_SETTLE],
-                                g[FLUID_MD_OLD], g[FLUID_MD_PASS], g[FLUID_MD_READY], g[FLUID_MD_DUST], g[FLUID_MD_PAIRED], g[FLUID_MD_LINES],
-                                g[FLUID_MD_LCELLS], s_sim->N, g[FLUID_MD_DUS] / 1000, g[FLUID_MD_LUS] / 1000, g[FLUID_MD_LEFT] / 1000, g[FLUID_MD_SORTF],
-                                g[FLUID_MD_WAITC], g[FLUID_MD_WAITL], g[FLUID_MD_JOBN], g[FLUID_MD_JOBUS] / 1000, g[FLUID_MD_JOBMAX] / 1000.f,
-                                g[FLUID_MD_BORN], g[FLUID_MD_WPX]);
-                const int (*t)[6] = s_draw->m.top;          /* (its three longest cells of frames that sent: index, cells + send ms, biggest part, movers, lists) */
-                mole_diag_event(false, "change slow %d:%.1f+%.1f %s mv %.1f st %.1f, %d:%.1f+%.1f %s mv %.1f st %.1f, %d:%.1f+%.1f %s mv %.1f st %.1f",
-                                t[0][0], t[0][1] / 1000.f, t[0][2] / 1000.f, MOLE_ANIM_PART_NAMES[10 + t[0][3]], t[0][4] / 1000.f, t[0][5] / 1000.f,
-                                t[1][0], t[1][1] / 1000.f, t[1][2] / 1000.f, MOLE_ANIM_PART_NAMES[10 + t[1][3]], t[1][4] / 1000.f, t[1][5] / 1000.f,
-                                t[2][0], t[2][1] / 1000.f, t[2][2] / 1000.f, MOLE_ANIM_PART_NAMES[10 + t[2][3]], t[2][4] / 1000.f, t[2][5] / 1000.f);
-                /* (refreshes lost at the pace: the sim late there, its job's room, the drawer late before; the drawer's most) */
+                /* (always one line: its length in frames, the frames nothing moved between the first move and the dust
+                 * down, the first new line's frame and the lines' full one against the dust down (want <= 0 and <= 4), the
+                 * refreshes lost at the pace; while a bench runs its stages, slowest frames, pace and reading job too) */
                 int *p = s_draw->m.pace;
-                mole_diag_event(false, "change pace lost=%d late=%.1f room=%.1f drawer=%.1f most=%.1f ms; last lost f%d: sim %.1f ahead %.1f build %.1f read %.1f",
-                                p[0], p[1] / 1000.f, p[2] / 1000.f, p[3] / 1000.f, p[4] / 1000.f,
-                                lost[0], lost[1] / 1000.f, lost[2] / 1000.f, lost[3] / 1000.f, lost[4] / 1000.f);
+                mole_diag_event(false, "change f=%d hang=%d line0=%+d full=%+d lost=%d", g[FLUID_MD_FRAMES], g[FLUID_MD_HANG],
+                                g[FLUID_MD_LIN0] ? g[FLUID_MD_LIN0] - g[FLUID_MD_SETTLE] : -99, g[FLUID_MD_LINF] - g[FLUID_MD_SETTLE], p[0]);
+                if (s_draw->m.bound) {                  /* (a count past what the glass holds: refused, the change cut; never seen) */
+                    mole_diag_event(false, "change bound %s=%d refused", s_draw->m.bound, s_draw->m.bound_n);
+                    s_draw->m.bound = NULL;
+                }
+                if (s_bench) {
+                    /* (move@ the first frame anything moved, down@ the dust all down, slow= the frames its clock went slower;
+                     * then dust@: read, in order and listed; job=: its slices that read, their ms in all, the longest; born,
+                     * wpx: the most gliders moved and pixels written in a frame) */
+                    mole_diag_event(false, "change stages f=%d move@%d down@%d hang=%d slow=%d line0=%+d full=%+d old@%d pass@%d ready@%d dust@%d paired@%d lines@%d"
+                                    " cells=%d/%d read dust=%dms lines=%dms left=%dms sortf=%d wait=%d+%d job=%d/%dms max=%.1fms born=%d wpx=%d",
+                                    g[FLUID_MD_FRAMES], g[FLUID_MD_MOVE0], g[FLUID_MD_SETTLE], g[FLUID_MD_HANG], g[FLUID_MD_SLOW],
+                                    g[FLUID_MD_LIN0] ? g[FLUID_MD_LIN0] - g[FLUID_MD_SETTLE] : -99, g[FLUID_MD_LINF] - g[FLUID_MD_SETTLE],
+                                    g[FLUID_MD_OLD], g[FLUID_MD_PASS], g[FLUID_MD_READY], g[FLUID_MD_DUST], g[FLUID_MD_PAIRED], g[FLUID_MD_LINES],
+                                    g[FLUID_MD_LCELLS], s_sim->N, g[FLUID_MD_DUS] / 1000, g[FLUID_MD_LUS] / 1000, g[FLUID_MD_LEFT] / 1000, g[FLUID_MD_SORTF],
+                                    g[FLUID_MD_WAITC], g[FLUID_MD_WAITL], g[FLUID_MD_JOBN], g[FLUID_MD_JOBUS] / 1000, g[FLUID_MD_JOBMAX] / 1000.f,
+                                    g[FLUID_MD_BORN], g[FLUID_MD_WPX]);
+                    const int (*t)[6] = s_draw->m.top;      /* (its three longest cells of frames that sent: index, cells + send ms,
+                                                             * biggest part, movers, lists) */
+                    mole_diag_event(false, "change slow %d:%.1f+%.1f %s mv %.1f st %.1f, %d:%.1f+%.1f %s mv %.1f st %.1f, %d:%.1f+%.1f %s mv %.1f st %.1f",
+                                    t[0][0], t[0][1] / 1000.f, t[0][2] / 1000.f, MOLE_ANIM_PART_NAMES[10 + t[0][3]], t[0][4] / 1000.f, t[0][5] / 1000.f,
+                                    t[1][0], t[1][1] / 1000.f, t[1][2] / 1000.f, MOLE_ANIM_PART_NAMES[10 + t[1][3]], t[1][4] / 1000.f, t[1][5] / 1000.f,
+                                    t[2][0], t[2][1] / 1000.f, t[2][2] / 1000.f, MOLE_ANIM_PART_NAMES[10 + t[2][3]], t[2][4] / 1000.f, t[2][5] / 1000.f);
+                    /* (refreshes lost at the pace: the sim late there, its job's room, the drawer late before; the drawer's most) */
+                    mole_diag_event(false, "change pace lost=%d late=%.1f room=%.1f drawer=%.1f most=%.1f ms; last lost f%d: sim %.1f ahead %.1f build %.1f read %.1f",
+                                    p[0], p[1] / 1000.f, p[2] / 1000.f, p[3] / 1000.f, p[4] / 1000.f,
+                                    lost[0], lost[1] / 1000.f, lost[2] / 1000.f, lost[3] / 1000.f, lost[4] / 1000.f);
+                    /* (its reading job's longest slice, by step: wall ms on this task; alloc is part of the lists') */
+                    const int *j = s_draw->m.jslow;
+                    mole_diag_event(false, "change job slowest %.1f of %.1f ms: grains %.1f lines %.1f read %.1f sort %.1f (alloc %.1f)",
+                                    j[0] / 1000.f, j[1] / 1000.f, j[2 + FLUID_MJ_GRAINS] / 1000.f, j[2 + FLUID_MJ_LINES] / 1000.f,
+                                    j[2 + FLUID_MJ_READ] / 1000.f, j[2 + FLUID_MJ_SORT] / 1000.f, j[2 + FLUID_MJ_ALLOC] / 1000.f);
+                }
                 memset(lost, 0, sizeof(lost));
                 memset(p, 0, sizeof(s_draw->m.pace));
-                /* (its reading job's longest slice, by step: wall ms on this task; alloc is part of the lists') */
-                const int *j = s_draw->m.jslow;
-                mole_diag_event(false, "change job slowest %.1f of %.1f ms: grains %.1f lines %.1f read %.1f sort %.1f (alloc %.1f)",
-                                j[0] / 1000.f, j[1] / 1000.f, j[2 + FLUID_MJ_GRAINS] / 1000.f, j[2 + FLUID_MJ_LINES] / 1000.f,
-                                j[2 + FLUID_MJ_READ] / 1000.f, j[2 + FLUID_MJ_SORT] / 1000.f, j[2 + FLUID_MJ_ALLOC] / 1000.f);
                 memset(s_draw->m.jslow, 0, sizeof(s_draw->m.jslow));
             }
             look_was = look;

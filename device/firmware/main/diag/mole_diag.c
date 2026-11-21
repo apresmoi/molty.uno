@@ -1344,7 +1344,6 @@ static cJSON *bench_rec_json(const mole_anim_rec_t *b)
     return o;
 }
 /* one case: what it starts from, then it, till its animations are over */
-static bool s_bench_stuck;   /* EXPERIMENT (stuck=1): each case's panel meets a transfer that never ends 0.6 s in (its recovery) */
 static cJSON *bench_case(int c, int run)
 {
     mole_fluid_screen(true);
@@ -1372,7 +1371,6 @@ static cJSON *bench_case(int c, int run)
     case BC_MIDDLE: mole_fluid_bench_tap(0.15f, 0.3f); break;
     case BC_PLANET: if (!mole_fluid_bench_spot("moon", &x, &y)) err = "no moon"; else mole_fluid_bench_tap(x, y); break;
     }
-    if (s_bench_stuck) { vTaskDelay(pdMS_TO_TICKS(600)); molty_display_inject(); }
     /* its end: a change recorded and none for 1.5 s (a scene's dust may come after as a change of its own); a tap's water
      * (and the Moon's reading) recorded and every tap animation over */
     const int want = c == BC_MIDDLE ? 3 : c == BC_PLANET ? 2 : 0;
@@ -1393,7 +1391,6 @@ static esp_err_t http_bench(httpd_req_t *r)
     static atomic_bool busy;
     if (atomic_exchange(&busy, true)) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "a bench runs already");
     uint32_t runs = query_u32(r, "runs", 3);
-    s_bench_stuck = query_u32(r, "stuck", 0) != 0;
     runs = runs < 1 ? 1 : runs > 5 ? 5 : runs;
     s_brec = heap_caps_calloc(BENCH_RECS, sizeof(mole_anim_rec_t), MALLOC_CAP_SPIRAM);
     cJSON *j = cJSON_CreateObject();
@@ -1407,7 +1404,6 @@ static esp_err_t http_bench(httpd_req_t *r)
         for (int c = 0; c < (astro ? BC_N : 1); c++) cJSON_AddItemToArray(cases, bench_case(c, run));
     mole_fluid_bench_capture(NULL, 0);
     heap_caps_free(s_brec); s_brec = NULL;
-    if (s_bench_stuck) { s_bench_stuck = false; cJSON_AddBoolToObject(j, "stuck", true); }
     if (astro) bench_scene(false);
     cJSON *h = cJSON_AddObjectToObject(j, "heap");
     cJSON_AddNumberToObject(h, "int_free", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));

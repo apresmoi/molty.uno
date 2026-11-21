@@ -254,8 +254,6 @@ esp_err_t lcd_co5300_init(void)
     return ESP_OK;
 }
 
-void lcd_co5300_inject(void) { s_q.inject = true; }
-
 void lcd_co5300_te(molty_te_t *out, bool window)
 {
     portENTER_CRITICAL(&s_te_mux);
