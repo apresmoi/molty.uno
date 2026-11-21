@@ -730,6 +730,13 @@ static fg_batch_t s_fg_batch, s_fg_done;        /* (s_fg_mux) the batch open; on
 static bool s_fg_done_set;
 static atomic_bool s_fg_force, s_fg_flushed;
 static void *s_fg_flusher;
+/* the tasks inside mole_flash_file: each op of theirs waits while the screen moves (gated_op); one in flight (s_fg_op)
+ * is what a motion starting waits for (mole_flash_motion), the motion's own time (s_fg_motion_ms) what they wait on */
+static TaskHandle_t _Atomic s_fg_gated[2];
+static atomic_bool s_fg_op;
+static atomic_uint s_fg_motion_ms;
+#define FG_OP_PAUSE_MAX_MS 5000                 /* an op waits this long in all, a file write's (SPIFFS is locked meanwhile) */
+#define FG_MOTION_WAIT_MS  50                   /* a motion waits this long for an op in flight (a sector erase: ~45 ms) */
 
 void mole_diag_set_calm(uint32_t (*calm_ms)(void)) { s_calm_ms = calm_ms; }
 static int64_t calm_us(void)
@@ -754,8 +761,33 @@ esp_err_t __real_esp_partition_write(const esp_partition_t *p, size_t off, const
 esp_err_t __real_esp_partition_write_raw(const esp_partition_t *p, size_t off, const void *src, size_t n);
 esp_err_t __real_esp_partition_erase_range(const esp_partition_t *p, size_t off, size_t n);
 esp_err_t __real_esp_partition_read(const esp_partition_t *p, size_t off, void *dst, size_t n);
-#define FLASH_OP(call, w, e, r) do { const int64_t t0 = esp_timer_get_time(); const bool a0 = calm_us() == 0; \
-    const esp_err_t res = call; flash_note(t0, a0, w, e, r); return res; } while (0)
+static bool gated_self(void)
+{
+    const TaskHandle_t me = xTaskGetCurrentTaskHandle();
+    return atomic_load(&s_fg_gated[0]) == me || atomic_load(&s_fg_gated[1]) == me;
+}
+static uint32_t s_fg_paused_ms;                 /* (the gated task's, this file write's: they are serial under SPIFFS's lock) */
+/* A gated task's op: not while the screen moves or a motion just began, FG_OP_PAUSE_MAX_MS in all; s_fg_op set first
+ * (a motion sets its time first, then looks at s_fg_op: one of the two sees the other) */
+static void gated_op(void)
+{
+    for (;;) {
+        atomic_store(&s_fg_op, true);
+        const bool moving = calm_us() == 0 || now_ms() - atomic_load(&s_fg_motion_ms) < 100;
+        if (!moving || atomic_load(&s_fg_force) || s_fg_paused_ms >= FG_OP_PAUSE_MAX_MS) return;
+        atomic_store(&s_fg_op, false);
+        vTaskDelay(pdMS_TO_TICKS(10));
+        s_fg_paused_ms += 10;
+    }
+}
+void mole_flash_motion(void)
+{
+    atomic_store(&s_fg_motion_ms, now_ms());
+    for (int i = 0; i < FG_MOTION_WAIT_MS / 10 && atomic_load(&s_fg_op); i++) vTaskDelay(pdMS_TO_TICKS(10));   /* (a tick) */
+}
+#define FLASH_OP(call, w, e, r) do { const bool g = gated_self(); if (g) gated_op(); \
+    const int64_t t0 = esp_timer_get_time(); const bool a0 = calm_us() == 0; \
+    const esp_err_t res = call; if (g) atomic_store(&s_fg_op, false); flash_note(t0, a0, w, e, r); return res; } while (0)
 esp_err_t __wrap_esp_partition_write(const esp_partition_t *p, size_t off, const void *src, size_t n)
 { FLASH_OP(__real_esp_partition_write(p, off, src, n), n, 0, 0); }
 esp_err_t __wrap_esp_partition_write_raw(const esp_partition_t *p, size_t off, const void *src, size_t n)
@@ -795,7 +827,7 @@ void mole_flash_quiet(void)
     while (!mole_flash_may(&h)) vTaskDelay(pdMS_TO_TICKS(100));
 }
 
-bool mole_flash_file(const char *path, const char *tmp, const void *data, size_t len)
+static bool flash_file(const char *path, const char *tmp, const void *data, size_t len)
 {
     enum { CHUNK = 2048 };
     mole_flash_quiet();
@@ -812,6 +844,17 @@ bool mole_flash_file(const char *path, const char *tmp, const void *data, size_t
     mole_flash_quiet();
     if (ok) { remove(path); ok = rename(tmp, path) == 0; }   /* (SPIFFS cannot rename over a file) */
     if (!ok) remove(tmp);
+    return ok;
+}
+
+bool mole_flash_file(const char *path, const char *tmp, const void *data, size_t len)
+{
+    const TaskHandle_t me = xTaskGetCurrentTaskHandle();
+    int slot = -1;
+    for (int q = 0; q < 2 && slot < 0; q++) { TaskHandle_t none = NULL; if (atomic_compare_exchange_strong(&s_fg_gated[q], &none, me)) slot = q; }
+    s_fg_paused_ms = 0;
+    const bool ok = flash_file(path, tmp, data, len);   /* (no slot: its steps are gated, its ops not) */
+    if (slot >= 0) atomic_store(&s_fg_gated[slot], NULL);
     return ok;
 }
 
@@ -1419,12 +1462,14 @@ static bool bench_calm(unsigned mask, uint32_t calm, uint32_t ms)
     }
     return false;
 }
-/* no flash write or erase for 300 ms (3 s at most): a case starts on a flash at rest, its records are its own */
+/* no flash write or erase for 300 ms and no file write open (8 s at most): a case and its set-up start on a flash at
+ * rest (a write held for calm goes in this wait: the screen is calm) */
 static void bench_flash_idle(void)
 {
-    for (int q = 0; q < 60; q++) {
+    for (int q = 0; q < 160; q++) {
         portENTER_CRITICAL(&s_fg_mux);
-        const bool busy = s_fg_batch.ops && (s_fg_batch.wbytes || s_fg_batch.ebytes) && esp_timer_get_time() - s_fg_batch.last_us < 300000;
+        const bool busy = (s_fg_batch.ops && (s_fg_batch.wbytes || s_fg_batch.ebytes) && esp_timer_get_time() - s_fg_batch.last_us < 300000) ||
+                          atomic_load(&s_fg_gated[0]) || atomic_load(&s_fg_gated[1]);
         portEXIT_CRITICAL(&s_fg_mux);
         if (!busy) return;
         vTaskDelay(pdMS_TO_TICKS(50));

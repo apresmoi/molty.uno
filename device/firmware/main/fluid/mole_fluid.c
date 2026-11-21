@@ -508,7 +508,15 @@ static cJSON *gestures_json(uint32_t packed) {
 
 /* ── State machine (task) ───────────────────────────────────────────────────── */
 
+/* the screen starts to move (a ripple, a change of picture): from rest, a flash op in flight ends first, none starts
+ * meanwhile (mole_flash_motion: a few ms, only when one is in flight); then it counts as moving (fluid_calm_ms) */
+static void motion(void) {
+    if ((uint32_t)(esp_timer_get_time() / 1000) - atomic_load(&s_moved_ms) >= 100) mole_flash_motion();
+    atomic_store(&s_moved_ms, (uint32_t)(esp_timer_get_time() / 1000));
+}
+
 static void ripple(float x, float y, float strength, float radius) {
+    motion();
     fluid_sim_impulse(s_sim, x, y, strength, radius);
 }
 
@@ -665,6 +673,7 @@ static void poll_touch(int n, const uint16_t *xs, const uint16_t *ys, int64_t t)
     float x = (float)(xs[0] - s_ox) / (float)s_stage * 2.f - 1.f, y = (float)(ys[0] - s_oy) / (float)s_stage * 2.f - 1.f;
     if (!s_touch_down) {                                    /* tap = ripple */
         s_touch_down = true; s_tpx = x; s_tpy = y; s_last_tx = xs[0]; s_last_ty = ys[0];
+        motion();                                           /* (whatever the tap starts: a wave, a change, a reading) */
         /* on a scene's spot a wave leaves the outline of what it grows (that stays still); the finger's ripple too (on fine
          * dust it carries the dust over the whole glass), unless the spot opens a layout (the picture changes on still water) */
         const int spot = s_cur == ST_SCENE && s_sp.cur ? scene_spot_at(s_sp.cur, s_sp.t, x, -y) : -1;
@@ -2089,6 +2098,7 @@ static void fluid_task(void *arg) {
             static int cuts;
             const bool whole = s_draw && s_draw->m.whole, on = fluid_draw_morphing(s_draw);
             fluid_draw_morph_look(s_draw, look, molty_display_framebuffer(), ready);
+            if (!on && fluid_draw_morphing(s_draw)) motion();   /* (its first frames read and send nothing: they can wait) */
             if ((look ^ look_was) & ~FLUID_LOOK_DUST)
                 mole_diag_event(false, "look %08x -> %08x %s kept=%d running=%d st=%d", (unsigned)look_was, (unsigned)look,
                                 fluid_draw_morphing(s_draw) ? "change" : "at once", whole, on, s_cur);

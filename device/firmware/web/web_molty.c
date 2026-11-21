@@ -139,6 +139,7 @@ char *pkgc_bytes(const char *id, size_t *len) {
 /* the log and the timing histograms go nowhere */
 void mole_diag_event(bool important, const char *fmt, ...) { (void)important; (void)fmt; }
 void mole_diag_set_calm(uint32_t (*calm_ms)(void)) { (void)calm_ms; }   /* (no flash here: nothing to hold) */
+void mole_flash_motion(void) {}
 void mole_diag_sim_frame(uint32_t interval_us, uint32_t work_us) { (void)interval_us; (void)work_us; }
 void mole_diag_panel_frame(uint32_t draw_us, uint32_t flush_us) { (void)draw_us; (void)flush_us; }
 void mole_diag_touch_latency(uint32_t us) { (void)us; }

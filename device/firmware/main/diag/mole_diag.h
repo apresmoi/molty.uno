@@ -47,6 +47,9 @@ void mole_flash_quiet(void);
 /** path becomes the len bytes at data (written to tmp, then renamed over path), a write that can wait: the erases SPIFFS
  *  needs for it first, then each 2 KB, each step only while the screen is calm. False: it failed, path kept what it had. */
 bool mole_flash_file(const char *path, const char *tmp, const void *data, size_t len);
+/** The screen starts to move (a change of picture, a ripple), from rest: a gated op in flight ends first (50 ms at most:
+ *  a sector erase), and none starts for 100 ms (the caller marks its motion meanwhile). Call from the fluid's tasks. */
+void mole_flash_motion(void);
 /** A restart or power off is next: every hold lets go from now on. */
 void mole_flash_force(void);
 bool mole_flash_forced(void);
