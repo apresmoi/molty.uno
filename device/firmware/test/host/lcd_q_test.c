@@ -2,10 +2,12 @@
  * lcd_q_test.c: the CO5300 driver's transfers (boards/waveshare/esp32-s3-touch-amoled-1.75c/lcd_q.c) against a fake
  * SPI device: what reaches the wire (chip-select frames, their cmd/addr and bytes), that a bounce buffer or a DMA source
  * is never changed while a transfer reads it, that the bus is taken only with nothing in flight, that every wait is
- * bounded, and the recoveries: a lost end, a transfer that never ends, a queue call refused, the bench's injection.
+ * bounded, and the recoveries: a lost end, a transfer that never ends, a queue call refused, the bench's injection; a
+ * window on the round glass: what it shows sent as it is, its corners black.
  */
 #include "lcd_q.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -106,7 +108,7 @@ static void fresh_with(int n, uint32_t size)
 static void fresh(void) { fresh_with(LQ_BUFS, LQ_BUF); }
 static void fill(uint8_t *p, int n, int seed) { for (int i = 0; i < n; i++) p[i] = (uint8_t)(i * 7 + seed * 13 + (i >> 8)); }
 static const lq_tx_t PRE[2] = { { NULL, 4, 0x2A00, 0x02, LQ_CMD, { 1, 2, 3, 4 } }, { NULL, 4, 0x2B00, 0x02, LQ_CMD, { 5, 6, 7, 8 } } };
-static int window(const uint8_t *px, uint32_t n) { return lq_window(&Q, PRE, 2, 0x32, 0x2C00, px, n); }
+static int window(const uint8_t *px, uint32_t n) { return lq_window(&Q, PRE, 2, 0x32, 0x2C00, px, n, NULL); }
 /* the last window on the wire: its three frames (CASET, RASET, RAMWR + px) */
 static void check_window(const uint8_t *want, uint32_t n, const char *what)
 {
@@ -232,11 +234,57 @@ static void test_no_bounce(void)
     CHECK(F.bad > 0, "its PSRAM chunks go to the IDF as they are");
 }
 
+/* a window on the round glass (466 px): every pixel it shows on the wire as its source, every one past the rim by more
+ * than LQ_DISC_PAD black; a whole glass and a box off its middle, bounced; a DMA source as it is */
+static void test_disc(void)
+{
+    enum { S = 466 };
+    static uint8_t want[S * S * 2];
+    int rim = 0;
+    for (int y = 0; y < S; y++) {                       /* (the rows' spans against the circle itself) */
+        int a, b;
+        lq_disc_row(S, y, &a, &b);
+        for (int x = 0; x < S; x++) {
+            const float d = hypotf(x + .5f - S / 2.f, y + .5f - S / 2.f);
+            const bool in = x >= a && x < b;
+            rim += (d <= S / 2.f && !in) || (d > S / 2.f + LQ_DISC_PAD + 1.f && in);
+        }
+    }
+    CHECK(rim == 0, "disc: rows' spans hold the glass and end within %d px past its rim (%d px off)", LQ_DISC_PAD + 1, rim);
+    static const struct { int x, y, w, h; } WIN[] = { { 0, 0, S, S }, { 8, 2, 120, 60 }, { 300, 180, 166, 100 }, { 0, 400, S, 66 } };
+    for (int q = 0; q < 4; q++) {
+        const int x0 = WIN[q].x, y0 = WIN[q].y, w = WIN[q].w, h = WIN[q].h;
+        const uint32_t n = (uint32_t)(w * h * 2);
+        fresh();
+        fill(g_ps, (int)n, 20 + q);
+        int black = 0;
+        for (int y = 0; y < h; y++) {
+            int a, b;
+            lq_disc_row(S, y0 + y, &a, &b);
+            for (int x = 0; x < w; x++) {
+                const size_t o = (size_t)(y * w + x) * 2;
+                const bool in = x0 + x >= a && x0 + x < b;
+                want[o] = in ? g_ps[o] : 0; want[o + 1] = in ? g_ps[o + 1] : 0;
+                black += !in;
+            }
+        }
+        const lq_disc_t g = { x0, y0, w, S };
+        CHECK(lq_window(&Q, PRE, 2, 0x32, 0x2C00, g_ps, n, &g) == 0 && lq_wait(&Q) == 0, "disc window %d", q);
+        check_window(want, n, "disc");
+        if (!q) CHECK(black > S * S / 6 && black < S * S / 4, "disc: a whole glass sends its corners black (%d px)", black);
+    }
+    fresh();                                            /* (a DMA source: the IDF reads it, as it is) */
+    fill(g_dma, 9320, 30); memcpy(want, g_dma, 9320);
+    const lq_disc_t g = { 0, 0, S, S };
+    CHECK(lq_window(&Q, PRE, 2, 0x32, 0x2C00, g_dma, 9320, &g) == 0 && lq_wait(&Q) == 0, "disc, a DMA source");
+    check_window(want, 9320, "disc direct");
+}
+
 int main(void)
 {
     test_bounced(LQ_BUFS, LQ_BUF); test_bounced(2, 2048); test_bounced(1, 8192);
-    test_direct(); test_reg(); test_lost(); test_stall(); test_queue_fail(); test_inject(); test_no_bounce();
+    test_direct(); test_reg(); test_lost(); test_stall(); test_queue_fail(); test_inject(); test_no_bounce(); test_disc();
     if (g_fail) { printf("lcd_q: %d FAILED\n", g_fail); return 1; }
-    printf("LCD_Q PASS: frames on the wire, sources untouched in flight, bus taken idle, waits bounded, recoveries clean\n");
+    printf("LCD_Q PASS: frames on the wire, sources untouched in flight, bus taken idle, waits bounded, recoveries clean, the round glass's corners black\n");
     return 0;
 }

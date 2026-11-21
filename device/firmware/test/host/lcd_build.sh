@@ -6,5 +6,5 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BOARD="$(cd "$HERE/../.." && pwd)/boards/waveshare/esp32-s3-touch-amoled-1.75c"
 OUT="$(mktemp -d "${TMPDIR:-/tmp}/molty-lcd.XXXXXX")"
 trap 'rm -rf "$OUT"' EXIT
-cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -I"$BOARD" "$HERE/lcd_q_test.c" "${LCD_Q_SRC:-$BOARD/lcd_q.c}" -o "$OUT/lcd_q_test"
+cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -I"$BOARD" "$HERE/lcd_q_test.c" "${LCD_Q_SRC:-$BOARD/lcd_q.c}" -lm -o "$OUT/lcd_q_test"
 "$OUT/lcd_q_test"

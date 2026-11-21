@@ -1762,6 +1762,8 @@ static void fluid_task(void *arg) {
     ESP_ERROR_CHECK(esp_timer_create(&pace_args, &pace));
     int64_t woke = esp_timer_get_time(), next = woke + FLUID_FRAME_US;   /* the last wake; the next (a frame on) */
     bool overran = false;
+    int job_room = 0, idle_us = 0;                       /* (the change's job's last room; the last handoff's wait, us) */
+    bool chg = false;                                    /* (a change ran at the last handoff) */
     uint32_t te_n = 0;                                   /* the tearing pulse of the last handoff (molty_display_te) */
     int te_per = 16770;                                  /* their period, us (the panel's, measured)                 */
     int64_t te_at = 0, ho_at = 0;                        /* that pulse's time (0: paced by the timer); the last frame's */
@@ -1932,6 +1934,7 @@ static void fluid_task(void *arg) {
          * this task at a handoff, with that handoff's inputs), in what is left before the next wake (JOB_EDGE_US) */
         if (s_draw && s_frame) {
             const int left = (int)(next - esp_timer_get_time()) - JOB_EDGE_US;
+            job_room = left;
             fluid_draw_morph_work(s_draw, s_frame, &s_dopts, left > JOB_MIN_US ? left : JOB_MIN_US);
         }
         /* pace: the handoff at the same point after each wake: the frame simulated since the last one goes to the drawer
@@ -1957,6 +1960,7 @@ static void fluid_task(void *arg) {
                     int64_t due = te.last_us + te_ph.off;
                     const int64_t late = esp_timer_get_time() - due;
                     if (late > FLUID_TE_SLACK_US && (overran || late >= FLUID_TE_GRACE_US) && molty_display_te_wait(te.total, 3 * te_per / 1000 + 5)) {
+                        if (chg) { int *p = s_draw->m.pace; p[0]++; p[1] = (int)late; p[2] = job_room; p[3] = idle_us; }
                         molty_display_te(&te, false);                    /* (too late: the next pulse, a refresh lost) */
                         due = te.last_us + te_ph.off;
                         overran = false;
@@ -1985,6 +1989,9 @@ static void fluid_task(void *arg) {
         xSemaphoreTake(s_idle, portMAX_DELAY);
         {   /* (the last frame's first window, now the drawer is idle) */
             const bool morph = fluid_draw_morphing(s_draw);
+            idle_us = (int)(esp_timer_get_time() - tw);
+            chg = morph;
+            if (morph && idle_us > s_draw->m.pace[4]) s_draw->m.pace[4] = idle_us;
             te_phase(&te_ph, &te_n, te_per, ho_at, !morph, !morph && !atomic_load(&s_anim_busy));
         }
         ho_at = te_at;
@@ -2052,6 +2059,11 @@ static void fluid_task(void *arg) {
                                 t[0][0], t[0][1] / 1000.f, t[0][2] / 1000.f, MOLE_ANIM_PART_NAMES[10 + t[0][3]],
                                 t[1][0], t[1][1] / 1000.f, t[1][2] / 1000.f, MOLE_ANIM_PART_NAMES[10 + t[1][3]],
                                 t[2][0], t[2][1] / 1000.f, t[2][2] / 1000.f, MOLE_ANIM_PART_NAMES[10 + t[2][3]]);
+                /* (refreshes lost at the pace: the sim late there, its job's room, the drawer late before; the drawer's most) */
+                int *p = s_draw->m.pace;
+                mole_diag_event(false, "change pace lost=%d late=%.1f room=%.1f drawer=%.1f most=%.1f ms", p[0], p[1] / 1000.f, p[2] / 1000.f,
+                                p[3] / 1000.f, p[4] / 1000.f);
+                memset(p, 0, sizeof(s_draw->m.pace));
             }
             look_was = look;
         }

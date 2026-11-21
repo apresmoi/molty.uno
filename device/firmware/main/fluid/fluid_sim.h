@@ -431,8 +431,9 @@ static inline uint32_t fluid_look_of(int kind, uint32_t id, bool dust) {
                                         * the still layers' moments, a moment late when the frame has no room            */
 #define FLUID_MORPH_IDLE_US   24000    /* .. and in its first frames, the old picture read, sorted, its pairs chosen: they
                                         * send nothing                                                               */
-#define FLUID_MORPH_FRAME_US  29000    /* .. and its cells with its send at most this (the panel's frame is two refreshes,
-                                        * 33.5 ms, from the pulse: one past it waits for the next) ..                 */
+#define FLUID_MORPH_FRAME_US  28000    /* .. and its cells with its send at most this (the panel's frame is two refreshes,
+                                        * 33.5 ms, from the pulse, less the handoff: bench 25 lost one at 30.2 of cells +
+                                        * send, none at 29.2) ..                                                       */
 #define FLUID_MORPH_SEND_US   12000    /* .. a send guessed this long at least (a whole glass), else as the last ones went */
 #define FLUID_MORPH_SPENT_US  1000     /* (the frame's other work before the change's, as the host's model counts it)    */
 #define FLUID_MORPH_PASS_US   12000    /* (the drawer's one pass for the new look, as the panel model counts it)        */
@@ -496,6 +497,9 @@ typedef struct {
     int64_t  c0;                       /* (this frame's cells began, us)                                              */
     int      top[3][4];                /* its three slowest frames (the log): frame, cells us (with the poll), send us, its
                                         * biggest part (FLUID_MP_*)                                                   */
+    int      pace[5];                  /* (fluid_task's alone, for the log "change pace": refreshes lost at its pace while
+                                        * a change ran; for the latest, how late it was there, its job's room, the drawer's
+                                        * lateness at the handoff before; the drawer's most, us)                        */
     fluid_morph_mem_t *jmm;            /* the change that task reads for (set and cleared at the handoff only)          */
     fluid_morph_mem_t *jfree;          /* changes ended in the drawer's frame while that task had them: freed at the handoff */
 } fluid_morph_t;

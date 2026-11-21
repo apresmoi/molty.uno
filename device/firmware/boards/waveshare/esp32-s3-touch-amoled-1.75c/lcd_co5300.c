@@ -145,7 +145,7 @@ static esp_err_t reg(uint8_t cmd, const uint8_t *data, size_t len)
     return logged(lq_reg(&s_q, OP_REG, ADDR(cmd), data, (uint32_t)len));
 }
 
-/* window (x, y, w, h) + RAMWR of w×h packed px; queued, not awaited */
+/* window (x, y, w, h) + RAMWR of w×h packed px; queued, not awaited (bounced: the round glass's corners go black, unread) */
 static esp_err_t send(int x, int y, int w, int h, const uint16_t *px)
 {
     const int x0 = x + LCD_COL_OFFSET, x1 = x0 + w - 1, y1 = y + h - 1;
@@ -153,7 +153,8 @@ static esp_err_t send(int x, int y, int w, int h, const uint16_t *px)
         { NULL, 4, ADDR(CMD_CASET), OP_REG, LQ_CMD, { (uint8_t)(x0 >> 8), (uint8_t)x0, (uint8_t)(x1 >> 8), (uint8_t)x1 } },
         { NULL, 4, ADDR(CMD_RASET), OP_REG, LQ_CMD, { (uint8_t)(y >> 8), (uint8_t)y, (uint8_t)(y1 >> 8), (uint8_t)y1 } },
     };
-    return logged(lq_window(&s_q, pre, 2, OP_PIXELS, ADDR(CMD_RAMWR), (const uint8_t *)px, (uint32_t)w * h * sizeof(uint16_t)));
+    const lq_disc_t disc = { x, y, w, LCD_WIDTH };
+    return logged(lq_window(&s_q, pre, 2, OP_PIXELS, ADDR(CMD_RAMWR), (const uint8_t *)px, (uint32_t)w * h * sizeof(uint16_t), &disc));
 }
 
 static esp_err_t send_rows(int y0, int y1)
