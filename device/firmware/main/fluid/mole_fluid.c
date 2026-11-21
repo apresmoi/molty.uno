@@ -355,7 +355,7 @@ static float    s_sub_until = 0.f;                  /* the last word stays this 
 typedef struct { char text[PKG_SAY_MAX + 1]; ftok_t toks[PKG_SAY_MAX / 2 + 1]; int n, word; float next; } reading_t;
 static reading_t *s_rd;
 static bool       s_rd_on = false;
-static scene_grow_t s_grow = { -1, 0.f, 0.f };     /* the tapped spot's drawing, grown (scene_grow_t) */
+static scene_grow_t s_grow = { -1, 0.f, 0.f, 0.f };   /* the tapped spot's drawing, grown (scene_grow_t) */
 static unsigned     s_grow_gen;                     /* the scene it was tapped on */
 /* the scene's spots for sense.c's taps (mole_fluid_spot_*): a copy of the scene on screen,
  * made when it starts if it has any, under s_mutex (PSRAM) */
@@ -472,15 +472,16 @@ static void scene_event(const char *why, const char *spot) {
 /* a tap landed on spot item n of sc: its reading, from its first word */
 static void read_text(const char *text, int len);
 static void read_spot(const scene_t *sc, int n) { read_text(sc->say + sc->items[n].str, sc->items[n].nstr); }
-/* a reading (len characters of text, at most PKG_SAY_MAX), from its first word */
+/* a reading (len characters of text, at most PKG_SAY_MAX), from its first word (shown once a tapped spot's drawing has
+ * grown: scene_grow_settled) */
 static void read_text(const char *text, int len) {
     len = len > PKG_SAY_MAX ? PKG_SAY_MAX : len;
     memcpy(s_rd->text, text, (size_t)len);
     s_rd->text[len] = '\0';
     s_rd->n = tokenize_into(s_rd->text, s_rd->toks, PKG_SAY_MAX / 2 + 1);
-    s_rd->word = 0;
+    s_rd->word = -1;
     s_rd_ser++;
-    s_rd->next = s_tnow + word_delay_s(s_rd->text, &s_rd->toks[0], SPOT_READ_WPM);
+    s_rd->next = s_tnow;
     s_rd_on = s_rd->n > 0;
 }
 
@@ -792,12 +793,14 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
             }
         }
         if (s_rd_on && (s_sub || s_cur != ST_SCENE)) s_rd_on = false;
-        else if (s_rd_on && s_tnow >= s_rd->next) {
-            if (s_rd->word + 1 < s_rd->n) s_rd->next = s_tnow + word_delay_s(s_rd->text, &s_rd->toks[++s_rd->word], SPOT_READ_WPM);
-            else if (s_tnow >= s_rd->next + SPOT_READ_HOLD) s_rd_on = false;
+        else if (s_rd_on && s_tnow >= s_rd->next && (s_rd->word >= 0 || scene_grow_settled(&s_grow))) {
+            if (s_rd->word + 1 < s_rd->n) {
+                s_rd->next = s_tnow + word_delay_s(s_rd->text, &s_rd->toks[++s_rd->word], SPOT_READ_WPM);
+                if (!s_rd->word) s_rd->next = fmaxf(s_rd->next, s_tnow + FINE_DARK_IN_S);   /* (the first stays while its backdrop comes) */
+            } else if (s_tnow >= s_rd->next + SPOT_READ_HOLD) s_rd_on = false;
         }
         /* held grown while its reading (or the agent's say over the scene) plays */
-        if (s_grow.spot >= 0 && (s_cur != ST_SCENE || !s_sp.cur || s_sp.gen != s_grow_gen)) s_grow = (scene_grow_t){ -1, 0.f, 0.f };
+        if (s_grow.spot >= 0 && (s_cur != ST_SCENE || !s_sp.cur || s_sp.gen != s_grow_gen)) s_grow = (scene_grow_t){ -1, 0.f, 0.f, 0.f };
         scene_grow_tick(&s_grow, s_rd_on || s_sub, rdt);
         if (s_sp.cur) scene_grow_apply(&s_grow, s_sp.cur);
     }

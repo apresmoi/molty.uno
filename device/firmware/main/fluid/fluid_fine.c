@@ -181,8 +181,9 @@ fluid_fine_t *fluid_fine_create(int W, int H, int fb_w, int fb_h) {
     f->b.sig = FINE_CALLOC(sizeof(uint32_t) * (size_t)f->N); f->b.why = FINE_CALLOC((size_t)f->N); f->b.vis = FINE_CALLOC((size_t)f->N);
     f->b.imm = FINE_CALLOC((size_t)f->N); f->b.sx = FINE_CALLOC((size_t)f->N); f->b.sy = FINE_CALLOC((size_t)f->N);
     f->lvchg = FINE_CALLOC((size_t)f->N); f->pmem = FINE_CALLOC(sizeof(int16_t) * FINE_PARTICLES * 3);
+    f->pdx = FINE_CALLOC(sizeof(int16_t) * FINE_PARTICLES * 2);
     if (!f->bpos || !f->bcol || !f->bcell || !f->dq || !f->dcol || !f->vis || !f->imm || !f->why || !f->tot || !f->stat || !f->eff || !f->tot2 || !f->fresh || !f->lgrid2 ||
-        !f->b.sig || !f->b.why || !f->b.vis || !f->b.imm || !f->b.sx || !f->b.sy || !f->lvchg || !f->pmem) {
+        !f->b.sig || !f->b.why || !f->b.vis || !f->b.imm || !f->b.sx || !f->b.sy || !f->lvchg || !f->pmem || !f->pdx) {
         fluid_fine_destroy(f); return NULL;
     }
     if (!light_tables(f->lg, S)) { fluid_fine_destroy(f); return NULL; }   /* (one stage size a boot) */
@@ -192,10 +193,11 @@ fluid_fine_t *fluid_fine_create(int W, int H, int fb_w, int fb_h) {
         f->dcol[4 * i + 2] = sinf(6.2831853f * DRIFT_BU * u); f->dcol[4 * i + 3] = cosf(6.2831853f * DRIFT_BU * u);
     }
     f->b.ppx = f->pmem; f->b.ppy = f->pmem + FINE_PARTICLES; f->b.ppc = (uint16_t *)f->pmem + 2 * FINE_PARTICLES;
+    f->pdy = f->pdx + FINE_PARTICLES;
     f->lvall = true;
     f->live = f->ready = f->build = -1;
     f->cbox[1] = f->pbox[1] = f->want_box[1] = f->bbox[1] = -1.f;   /* none */
-    f->pbb[1] = f->pbb0[1] = -1;
+    f->pbb[1] = -1;
     f->dim[5] = -1.f; f->dim[6] = 1e9f;
     return f;
 }
@@ -210,7 +212,7 @@ void fluid_fine_destroy(fluid_fine_t *f) {
     FINE_FREE(f->dist); FINE_FREE(f->src); FINE_FREE(f->lit); FINE_FREE(f->lv); FINE_FREE(f->lv2);
     FINE_FREE(f->tot2); FINE_FREE(f->fresh); FINE_FREE(f->lgrid2); FINE_FREE(f->lvd); FINE_FREE(f->lvd2);
     FINE_FREE(f->b.sig); FINE_FREE(f->b.why); FINE_FREE(f->b.vis); FINE_FREE(f->b.imm); FINE_FREE(f->b.sx); FINE_FREE(f->b.sy);
-    FINE_FREE(f->b.lv); FINE_FREE(f->lvchg); FINE_FREE(f->pmem);
+    FINE_FREE(f->b.lv); FINE_FREE(f->lvchg); FINE_FREE(f->pmem); FINE_FREE(f->pdx);
     FINE_FREE(f);
 }
 
@@ -224,9 +226,9 @@ void fluid_fine_clear(fluid_fine_t *f) {
     f->drawn = NULL;
     memset(f->eff, 0, sizeof(uint32_t) * (size_t)f->N); memset(f->tot, 0, sizeof(uint32_t) * (size_t)f->N);
     memset(f->vis, 0, (size_t)f->N); memset(f->dok, 0, (size_t)f->N);
-    f->word = 0; f->np = f->npd = 0; f->ncap = 0; f->end = false;
+    f->word = 0; f->np = f->npd = f->npdd = 0; f->ncap = 0; f->end = false;
     f->cbox[1] = f->pbox[1] = f->want_box[1] = f->bbox[1] = -1.f; f->cbox[0] = f->pbox[0] = f->want_box[0] = f->bbox[0] = 0.f;
-    f->dim[4] = 0.f; f->dim[5] = -1.f; f->dim[6] = 1e9f; f->dark_on = false; f->pbb[1] = f->pbb0[1] = -1;
+    f->dim[4] = 0.f; f->dim[5] = -1.f; f->dim[6] = 1e9f; f->dark_on = false; f->pbb[1] = -1;
     FINE_FREE(f->b.lv); f->b.lv = NULL; f->b.lvcap = 0; f->b.npd = 0; f->lvall = true; f->bready = f->ahead = false;
     memset(f->lvchg, 0, (size_t)f->N);
 }
@@ -691,7 +693,7 @@ void fluid_fine_publish(fluid_fine_t *f, bool ahead) {
     if (B->lv) { FINE_SWAP(f->lv, B->lv); FINE_SWAP(f->lvcap, B->lvcap); }
 #undef FINE_SWAP
     f->npd = B->npd;
-    memcpy(f->pbb, B->pbb, sizeof(f->pbb)); memcpy(f->pbb0, B->pbb0, sizeof(f->pbb0)); memcpy(f->dim, B->dim, sizeof(f->dim));
+    memcpy(f->pbb, B->pbb, sizeof(f->pbb)); memcpy(f->dim, B->dim, sizeof(f->dim));
     for (int k = 0; k < f->N; k++) f->lvchg[k] = f->lvchg[k] & 1 ? 2 : 0;   /* (b is now the frame before: behind where it changed) */
     f->bready = false;
 }
@@ -911,7 +913,6 @@ void fluid_fine_frame_ahead(fluid_fine_t *f, const fluid_frame_t *s, const fluid
     const int64_t t_pt = now_us();
     /* the word before, breaking up: its specks scatter from its centre, ride the water and fade into it */
     int live_p = 0;
-    memcpy(B->pbb0, f->pbb, sizeof(f->pbb));              /* (the box drawn last) */
     B->pbb[0] = B->pbb[2] = 32767; B->pbb[1] = B->pbb[3] = -1;
     if (f->np) {
         const float D = f->end ? FINE_END_S : FINE_SWAP_S, spread = f->end ? FINE_END_SPREAD : FINE_SWAP_SPREAD, u = (now - f->prev_t) / D;
@@ -996,32 +997,49 @@ void fluid_fine_rect(const fluid_fine_t *f, const uint8_t *dirty, const fluid_re
     ((fluid_fine_t *)f)->prof_rect += (uint32_t)(now_us() - t_in);   /* the drawer's own profile (fluid_fine_t.prof_*) */
 }
 
-bool fluid_fine_move(fluid_fine_t *f, int k, uint16_t *fb, const uint16_t *under, int stride) {
+/* cell k's specks: as drawn taken off (to what is under them), or as now put on */
+static void specks_move(fluid_fine_t *f, int k, uint16_t *fb, const uint16_t *under, int stride, bool on) {
     const fine_set_t *st = f->drawn;
-    if (!st || !f->dok[k] || !f->vis[k]) return false;
     const int i = k % f->W, j = k / f->W, xa = f->cx[i], xb = f->cx[i + 1], ya = f->cy[j], yb = f->cy[j + 1];
-    for (int q = 0; q < 2; q++) {                       /* the word's specks breaking up, now or last frame: not alone */
-        const int16_t *b = q ? f->pbb0 : f->pbb;
-        if (b[1] >= xa && b[0] < xb && b[3] >= ya && b[2] < yb) return false;
-    }
+    const int dx = on ? f->sx[k] : f->sxd[k], dy = on ? f->sy[k] : f->syd[k];
+    const uint8_t *lv = on ? f->lv : f->lvd;
     const size_t o = (size_t)f->oy * stride + f->ox;
     const uint32_t a = st->start[k], e = st->start[k + 1];
-    for (int pass = 0; pass < 2; pass++) {              /* as drawn taken off (to what is under them), then as now put on */
-        const int dx = pass ? f->sx[k] : f->sxd[k], dy = pass ? f->sy[k] : f->syd[k];
-        const uint8_t *lv = pass ? f->lv : f->lvd;
-        for (uint32_t n = a; n < e; n++) {
-            if (!lv[n]) continue;
-            const uint32_t p = st->pos[n];
-            int X = (int)(p & 511) + dx, Y = (int)(p >> 9 & 511) + dy;
-            if (X < xa) X += xb - xa; else if (X >= xb) X -= xb - xa;
-            if (Y < ya) Y += yb - ya; else if (Y >= yb) Y -= yb - ya;
-            const size_t q = o + (size_t)Y * stride + X;
-            if (pass) put(fb + q, st->col[n], lv[n]); else fb[q] = under ? under[q] : 0;
-        }
+    for (uint32_t n = a; n < e; n++) {
+        if (!lv[n]) continue;
+        const uint32_t p = st->pos[n];
+        int X = (int)(p & 511) + dx, Y = (int)(p >> 9 & 511) + dy;
+        if (X < xa) X += xb - xa; else if (X >= xb) X -= xb - xa;
+        if (Y < ya) Y += yb - ya; else if (Y >= yb) Y -= yb - ya;
+        const size_t q = o + (size_t)Y * stride + X;
+        if (on) put(fb + q, st->col[n], lv[n]); else fb[q] = under ? under[q] : 0;
     }
+    if (!on) return;
     memcpy(f->lvd + a, f->lv + a, e - a);
     f->sxd[k] = f->sx[k]; f->syd[k] = f->sy[k];
-    return true;
+}
+void fluid_fine_move(fluid_fine_t *f, const uint8_t *mv, uint16_t *fb, const uint16_t *under, const uint8_t *uk, int stride) {
+    const int W = f->W, N = f->N;
+    const size_t o = (size_t)f->oy * stride + f->ox;
+#define MOVING(X, Y) (mv[f->celly[Y] * W + f->cellx[X]] & 2)
+    for (int k = 0; k < N; k++) if (mv[k] & 2) specks_move(f, k, fb, uk[k] == 2 ? under : NULL, stride, false);
+    for (int q = 0; q < f->npdd; q++) {                 /* the word's breaking specks as shown, off too */
+        const int X = f->pdx[q], Y = f->pdy[q];
+        if (X < 0 || !MOVING(X, Y)) continue;
+        const size_t p = o + (size_t)Y * stride + X;
+        fb[p] = uk[f->celly[Y] * W + f->cellx[X]] == 2 ? under[p] : 0;
+    }
+    for (int k = 0; k < N; k++) if (mv[k] & 2) specks_move(f, k, fb, NULL, stride, true);
+    for (int q = 0; q < f->npd; q++) {                  /* .. and as now, over the specks (as fluid_fine_rect draws them) */
+        const int X = f->ppx[q], Y = f->ppy[q];
+        if (X >= 0 && MOVING(X, Y)) put(fb + o + (size_t)Y * stride + X, f->ppc[q], 255);
+    }
+#undef MOVING
+}
+void fluid_fine_sent(fluid_fine_t *f) {
+    if (!f->npd && !f->npdd) return;
+    memcpy(f->pdx, f->ppx, sizeof(int16_t) * (size_t)f->npd); memcpy(f->pdy, f->ppy, sizeof(int16_t) * (size_t)f->npd);
+    f->npdd = f->npd;
 }
 void fluid_fine_drawn(fluid_fine_t *f) {
     const fine_set_t *st = f->drawn;
@@ -1029,4 +1047,5 @@ void fluid_fine_drawn(fluid_fine_t *f) {
     memcpy(f->lvd, f->lv, (size_t)st->n);
     memcpy(f->sxd, f->sx, (size_t)f->N); memcpy(f->syd, f->sy, (size_t)f->N);
     memset(f->dok, 1, (size_t)f->N);
+    fluid_fine_sent(f);
 }

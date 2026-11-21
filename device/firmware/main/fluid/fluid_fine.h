@@ -105,7 +105,7 @@ typedef struct {
 /* the frame worked out ahead (fluid_fine_frame_ahead): what the drawer reads of a frame (fluid_fine_t's sig .. dim), the next */
 typedef struct {
     uint32_t *sig; uint8_t *why, *vis, *imm, *lv; int8_t *sx, *sy; int16_t *ppx, *ppy; uint16_t *ppc;
-    int lvcap, npd; int16_t pbb[4], pbb0[4]; float dim[7];
+    int lvcap, npd; int16_t pbb[4]; float dim[7];
 } fine_back_t;
 
 typedef struct fluid_fine {
@@ -180,12 +180,13 @@ typedef struct fluid_fine {
     int np, npd;                        /* its specks; those drawn this frame (indices below)     */
     int16_t *px0, *py0; uint16_t *pc; uint8_t *pa, *pg, *pang;   /* home px, colour, alpha, hash, angle   */
     int16_t *ppx, *ppy; uint16_t *ppc;  /* this frame's (ppx < 0: none)                          */
-    int16_t pbb[4], pbb0[4];            /* ... and their box: x0, x1, y0, y1 (x1 < x0 none); last frame's */
+    int16_t pbb[4];                     /* ... and their box: x0, x1, y0, y1 (x1 < x0 none)       */
     /* each cell's specks as last drawn (fluid_fine_rect: the cell whole), for fluid_fine_move */
     uint8_t *lvd; int lvdcap;           /* per speck of the set drawn: its level drawn            */
     uint8_t *lvd2; int lvd2cap;         /* a spare for the next set (fluid_fine_swap)              */
     int8_t *sxd, *syd;                  /* N: the shift drawn                                     */
     uint8_t *dok;                       /* N: those are known (the set's, the cell drawn whole)   */
+    int16_t *pdx, *pdy; int npdd;       /* the word's breaking specks as the glass shows them (fluid_fine_sent; pdx < 0 none) */
     /* the next frame, worked out on the sim task while the drawer draws this one (it reads only the fields above):
      * swapped in by fluid_fine_publish with the drawer idle */
     fine_back_t b;
@@ -282,11 +283,16 @@ static inline float fluid_fine_light(const fluid_fine_t *f, float x, float y) {
 /** The dust over the window t (fb px), after the shapes and dots: on black (or a dim pixel), never on a lit one;
  *  all: every cell of t (a window), else only the dirty cells (a framebuffer kept). */
 void fluid_fine_rect(const fluid_fine_t *f, const uint8_t *dirty, const fluid_rect_t *t, bool all);
-/** Cell k of a kept framebuffer fb (fb px, stride) whose dust alone changed: under its specks black (under NULL) or what
- *  `under` holds there (its drawing as cached, the same px and stride; no dot or letter in it): its specks as last drawn
- *  taken off to that, then put as they are now (a few pixels, not the cell's). False: not known as drawn (or the word's
- *  breaking specks reach it): draw it whole. */
-bool fluid_fine_move(fluid_fine_t *f, int k, uint16_t *fb, const uint16_t *under, int stride);
+/** Cell k's specks are known as the glass shows them (fluid_fine_move may move them). */
+static inline bool fluid_fine_known(const fluid_fine_t *f, int k) { return f->drawn && f->dok[k] && f->vis[k]; }
+/** The cells of a kept framebuffer fb (fb px, stride) whose dust alone changed and whose specks are known (mv[k] & 2):
+ *  under their dust black, or what `under` holds there where uk[k] == 2 (its drawing as cached, the same px and stride;
+ *  no dot or letter in it). Their specks and the word's breaking specks as the glass shows them taken off to that, then
+ *  put as they are now, in the order a whole cell draws them (a few pixels, not the cells'). */
+void fluid_fine_move(fluid_fine_t *f, const uint8_t *mv, uint16_t *fb, const uint16_t *under, const uint8_t *uk, int stride);
+/** The drawer's frame went out: the glass shows the word's breaking specks as they are now where it shows dust (every
+ *  cell they changed was drawn, or is owed and drawn whole the next frame). */
+void fluid_fine_sent(fluid_fine_t *f);
 /** The glass shows every cell's specks as they are now (a change of picture ended on the look whole). */
 void fluid_fine_drawn(fluid_fine_t *f);
 
