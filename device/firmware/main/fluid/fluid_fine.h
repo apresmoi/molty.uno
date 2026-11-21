@@ -129,6 +129,7 @@ typedef struct fluid_fine {
     int16_t (*box)[4];
     int64_t build_t0; int build_us, build_calls;   /* the build's time, for the log */
     int nshp, nsym, pal, phase, row;   /* nsym: its symbols, copied after it (a symbol's surround is fainter) */
+    int lq; float lq_t;                 /* the levels' light: quarters of its rows made (FINE_PHASES), at this time */
     uint32_t bkey;                      /* the drawing being built                               */
     uint16_t *dist, *src;               /* S2 x S2 (2 x 2 px blocks): distance to the drawing (1/100 px), the nearest
                                          * drawn block's colour (rgb444) | 0x8000 a symbol's     */

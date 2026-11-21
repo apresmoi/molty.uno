@@ -32,6 +32,7 @@
 #include "fluid_askview.h"
 #include "scene_player.h"
 #include "fluid_fine.h"
+#include "fluid_tx.h"
 #include "cute_rig.h"
 #include "cute_act.h"
 #include "creature_pkg.h"
@@ -1286,8 +1287,10 @@ esp_err_t mole_fluid_creature_file_get(uint8_t **out, size_t *len, bool *is_defa
  * The drawer queues each window (fluid_draw_glass_sender: where it is in the glass, the mark over it) and waits until the
  * sender has sent them all (tx_drain) before its frame ends and before any window of its own: it gives s_idle, which
  * every other caller of the panel takes, only after that, so one task at a time talks to the panel. Should the sender
- * not answer within its bound (a dead bus), it holds the panel until it does: the drawer sends nothing, and the other
- * callers (screen_switch, the goodbye's level), holding s_idle, try tx_drain themselves and skip their call till then. While windows are
+ * not answer within its bound, it is late (fluid_tx.h): it holds the panel until it has answered, no one waits on it
+ * again meanwhile (each frame only takes its answers: the drawer sends nothing and its frames go on at their pace), the
+ * other callers (screen_switch, the goodbye's level), holding s_idle, skip their call till then; logged once an episode
+ * with where the sender was (s_tx_at), and again when it is back (the drawer then repaints whole). While windows are
  * queued the sender owns the two window buffers (s_win, s_win2); the glass's rows a window sends are not drawn again in
  * the frame (glass_send). No sender (no memory for its task, or one window buffer only): the drawer sends in line. */
 typedef struct { const uint16_t *glass; int16_t stride, x, y, w, h; int8_t mark, pal, op; } tx_rec_t;
@@ -1299,19 +1302,34 @@ enum { TX_COPY, TX_DIRECT, TX_END };                /* op: copied and the mark d
 #define TX_WAIT_MS 300       /* the drawer waits at most this for room in the queue or for the frame's end (a window that fails
                               * ends the sender's frame at once; the driver's own waits are 100 ms) */
 static QueueHandle_t s_txq;                         /* NULL: no sender */
-static SemaphoreHandle_t s_tx_done;                 /* given by the sender at each TX_END */
+static SemaphoreHandle_t s_tx_done;                 /* given by the sender at each TX_END (counting: an answer never lost) */
 static TaskHandle_t s_txtask;
-static int s_tx_n, s_tx_open;                       /* (the drawer's) windows queued since its last TX_END; TX_ENDs not answered */
+static fluid_tx_t s_txs;                             /* (the drawer's) windows queued since its last TX_END; TX_ENDs not answered */
+static volatile struct { uint8_t stage; tx_rec_t r; int64_t t; } s_tx_at;   /* the sender: 0 idle, 1 copying, 2 in a blit, 3 the
+                                                     * frame end's wait; the record; since (the log when it is late) */
 static uint32_t s_tx_qwait_us;                      /* (the drawer's) its waits for room in the queue, this frame */
 static struct { uint32_t busy_us, px, wins; bool fail; } s_tx_last;   /* the sender's last frame (read once its TX_END is answered) */
+/* a frame's first window to the panel (the bench's "pres": what the eye gets, frame to frame): its time (us, low 32
+ * bits, never 0) and the panel's refreshes so far (molty_display_te); 0: none yet this frame (the drawer clears it) */
+static _Atomic uint32_t s_pres_t, s_pres_te;
+static inline void pres_mark(void) {
+    if (atomic_load(&s_pres_t)) return;
+    molty_te_t te;
+    molty_display_te(&te, false);
+    uint32_t z = 0;
+    if (atomic_compare_exchange_strong(&s_pres_t, &z, (uint32_t)esp_timer_get_time() | 1u)) atomic_store(&s_pres_te, te.total);
+}
 static void tx_task(void *arg) {
     (void)arg;
     int cur = 0; bool fail = false; uint32_t busy = 0, px = 0, wins = 0;
     for (;;) {
         tx_rec_t r;
+        s_tx_at.stage = 0;
         if (xQueueReceive(s_txq, &r, portMAX_DELAY) != pdTRUE) continue;
         const int64_t t0 = esp_timer_get_time();
+        s_tx_at.r = r; s_tx_at.t = t0;
         if (r.op == TX_END) {                       /* the frame's last window out, then the drawer goes on */
+            s_tx_at.stage = 3;
             if (wins && !fail) fail = molty_display_blit_wait() != ESP_OK;
             s_tx_last.busy_us = busy + (uint32_t)(esp_timer_get_time() - t0); s_tx_last.px = px; s_tx_last.wins = wins; s_tx_last.fail = fail;
             fail = false; busy = px = wins = 0;
@@ -1321,52 +1339,66 @@ static void tx_task(void *arg) {
         if (!fail) {                                /* (once one failed, the rest of the frame is dropped: it repaints whole) */
             const uint16_t *src = r.glass + (size_t)r.y * r.stride + r.x;
             if (r.op == TX_COPY) {                  /* into the buffer the panel is not reading (blit_async waits for the other) */
+                s_tx_at.stage = 1;
                 uint16_t *buf = cur ? s_win2 : s_win;
                 for (int y = 0; y < r.h; y++) memcpy(buf + (size_t)y * r.w, src + (size_t)y * r.stride, sizeof(uint16_t) * (size_t)r.w);
                 fluid_draw_mark(s_draw, &(fluid_rect_t){ buf, r.w, r.x, r.y, r.x + r.w, r.y + r.h }, r.pal, r.mark);
                 src = buf; cur ^= 1;
             }
+            s_tx_at.stage = 2;
+            pres_mark();
             fail = molty_display_blit_async(r.x, r.y, r.w, r.h, src) != ESP_OK;
             px += (uint32_t)(r.w * r.h); wins++;
         }
         busy += (uint32_t)(esp_timer_get_time() - t0);
     }
 }
-static void tx_bound(const char *what) {            /* (a wait's bound hit: logged once a boot) */
-    static bool logged;
-    if (!logged) { logged = true; mole_diag_event(true, "fluid: the sender's %s took over %d ms: the frame repaints", what, TX_WAIT_MS); }
+/* the sender late (a wait's bound ran out: fluid_tx.h) or back: logged once an episode, with where it was */
+static void tx_late(const char *what) {
+    const tx_rec_t r = s_tx_at.r;
+    uint32_t w[5];                                      /* (the driver: where it waits, transfers queued / ended, async started / collected) */
+    molty_display_where(w);
+    mole_diag_event(true, "fluid: the sender's %s took over %d ms (it was at stage %u, op %d %d,%d %dx%d, for %lld ms; driver at %lu, "
+                    "transfers %lu queued %lu ended, async %lu started %lu collected; dma free %u largest %u): nothing goes to the panel till it answers",
+                    what, TX_WAIT_MS, (unsigned)s_tx_at.stage, r.op, r.x, r.y, r.w, r.h, (long long)((esp_timer_get_time() - s_tx_at.t) / 1000),
+                    (unsigned long)w[0], (unsigned long)w[1], (unsigned long)w[2], (unsigned long)w[3], (unsigned long)w[4],
+                    (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
 }
+static bool s_inline_out;                           /* (the drawer's) its own last window still going out (send_win) */
 static int tx_glass(void *ctx, const uint16_t *glass, int stride, int x, int y, int w, int h, bool direct, int mark, int pal) {
     (void)ctx;
+    /* the panel handed over whole: the drawer's own last window collected before the sender's first (molty_board.c) */
+    if (s_inline_out && fluid_tx_idle(&s_txs)) { s_inline_out = false; if (molty_display_blit_wait() != ESP_OK) return 1; }
     const tx_rec_t r = { glass, (int16_t)stride, (int16_t)x, (int16_t)y, (int16_t)w, (int16_t)h, (int8_t)mark, (int8_t)pal, (int8_t)(direct ? TX_DIRECT : TX_COPY) };
     const int64_t t = esp_timer_get_time();
-    const bool ok = xQueueSend(s_txq, &r, pdMS_TO_TICKS(TX_WAIT_MS)) == pdTRUE;
+    const bool ok = xQueueSend(s_txq, &r, pdMS_TO_TICKS(s_txs.late ? 0 : TX_WAIT_MS)) == pdTRUE;
     s_tx_qwait_us += (uint32_t)(esp_timer_get_time() - t);
-    if (!ok) { tx_bound("queue"); return 1; }
-    s_tx_n++;
+    if (!ok) { if (!s_txs.late) { s_txs.late = true; tx_late("queue"); } return 1; }
+    s_txs.n++;
     return 0;
 }
-static inline bool tx_idle(void) { return !s_tx_n && !s_tx_open; }
-/* every window queued sent and the sender idle (true), or false: one failed, or the sender did not answer in time (then
- * nothing else may talk to the panel: the drawer sends nothing until it has) */
+static inline bool tx_idle(void) { return fluid_tx_idle(&s_txs); }
+static bool tx_end(void *ctx, int ms) { (void)ctx; const tx_rec_t e = { .op = TX_END }; return xQueueSend(s_txq, &e, pdMS_TO_TICKS(ms)) == pdTRUE; }
+static bool tx_done(void *ctx, int ms) {
+    if (xSemaphoreTake(s_tx_done, pdMS_TO_TICKS(ms)) != pdTRUE) return false;
+    *(bool *)ctx &= !s_tx_last.fail;
+    return true;
+}
+/* every window queued sent and the sender idle (true), or false: one failed, or the sender has not answered (late: then
+ * nothing else may talk to the panel, and no call waits on it, until it has) */
 static bool tx_drain(void) {
-    if (s_tx_n) {
-        const tx_rec_t end = { .op = TX_END };
-        if (xQueueSend(s_txq, &end, pdMS_TO_TICKS(TX_WAIT_MS)) != pdTRUE) { tx_bound("queue"); return false; }
-        s_tx_n = 0; s_tx_open++;
-    }
-    bool ok = true;
-    for (; s_tx_open; s_tx_open--) {
-        if (xSemaphoreTake(s_tx_done, pdMS_TO_TICKS(TX_WAIT_MS)) != pdTRUE) { tx_bound("frame"); return false; }
-        ok &= !s_tx_last.fail;
-    }
-    return ok;
+    bool ok = true, late = false;
+    const bool was = s_txs.late;
+    const bool idle = fluid_tx_drain(&s_txs, &(fluid_tx_io_t){ tx_end, tx_done, &ok }, TX_WAIT_MS, &late);
+    if (late) tx_late("frame");
+    if (was && idle) mole_diag_event(true, "fluid: the sender answered again: the frame repaints");
+    return idle && ok;
 }
 /* the sender, once a boot (it lives on, idle on its queue, across the fluid's restarts); none: the drawer sends in line */
 static void tx_start(void) {
     if (s_txtask || !s_win2) return;
     s_txq = xQueueCreate(TX_DEPTH, sizeof(tx_rec_t));
-    s_tx_done = s_txq ? xSemaphoreCreateBinary() : NULL;
+    s_tx_done = s_txq ? xSemaphoreCreateCounting(TX_DEPTH + 1, 0) : NULL;
     if (s_tx_done && xTaskCreatePinnedToCore(tx_task, "fluid_tx", TX_STACK, NULL, TX_PRIO, &s_txtask, 1) == pdPASS) return;
     if (s_tx_done) vSemaphoreDelete(s_tx_done);
     if (s_txq) vQueueDelete(s_txq);
@@ -1380,8 +1412,10 @@ static int s_send_n, s_send_px; static int64_t s_blit_us;   /* this frame's wind
 static int send_win(void *ctx, int x, int y, int w, int h, const uint16_t *px) {
     (void)ctx;
     if (!tx_idle() && !tx_drain()) return 1;       /* (the sender's windows first: one task at a time on the panel) */
+    pres_mark();
     const int64_t t = esp_timer_get_time();
     const int e = (s_win2 ? molty_display_blit_async(x, y, w, h, px) : molty_display_blit(x, y, w, h, px)) == ESP_OK ? 0 : 1;
+    s_inline_out = s_win2 && !e;
     s_blit_us += esp_timer_get_time() - t; s_send_n++; s_send_px += w * h;
     return e;
 }
@@ -1423,6 +1457,7 @@ static void draw_task(void *arg) {
         if (xSemaphoreTake(s_go, pdMS_TO_TICKS(200)) != pdTRUE) continue;
         if (!s_run) { xSemaphoreGive(s_idle); break; }
         int64_t t0 = esp_timer_get_time();
+        atomic_store(&s_pres_t, 0);                     /* (the sender is idle: drained at the last frame's end) */
         int64_t touch_t = s_dtouch; s_dtouch = 0;
         if (t0 - last_touch >= FLUID_TOUCH_US) {        /* for the sim's next frame */
             uint16_t xs[MOLTY_TOUCH_MAX_POINTS] = { 0 }, ys[MOLTY_TOUCH_MAX_POINTS] = { 0 };
@@ -1454,6 +1489,7 @@ static void draw_task(void *arg) {
             /* overlays blend over the pixel under them: redraw the cells under the last
              * one (restores what it covered) and the next one, then draw it on top */
             else { fluid_draw_overlay_dirty(s_draw, &ov_drawn); fluid_draw_overlay_dirty(s_draw, &ov); }
+            fluid_draw_morph_spent(s_draw, (int)(esp_timer_get_time() - t0));   /* (a change's budget: what the frame leaves) */
             nc = fluid_draw_cells(s_draw, s_frame, &s_dopts);
             t1 = esp_timer_get_time();
             /* a scene's windows of its kept glass go to the sender (core 1) while this core draws the next band; a sender
@@ -1463,12 +1499,12 @@ static void draw_task(void *arg) {
             s_tx_qwait_us = 0;
             bool sent = txok && fluid_draw_send2(s_draw, &s_dopts, &ov, mark, full, s_win, s_win2, s_win_px, send_win, NULL) >= 0;
             const int64_t tw = esp_timer_get_time();
-            s_tx_frame = s_tx_n > 0;
+            s_tx_frame = s_txs.n > 0;
             if (s_tx_frame) {                           /* (its windows, pixels and time are the frame's) */
                 sent &= tx_drain();
                 if (tx_idle()) { s_send_n += (int)s_tx_last.wins; s_send_px += (int)s_tx_last.px; s_blit_us += s_tx_last.busy_us; }
             }
-            if (s_win2 && tx_idle()) sent &= molty_display_blit_wait() == ESP_OK;   /* (its own last window) */
+            if (s_win2 && tx_idle()) { sent &= molty_display_blit_wait() == ESP_OK; s_inline_out = false; }   /* (its own last window) */
             s_last_wait_us = (uint32_t)(esp_timer_get_time() - tw) + s_tx_qwait_us;
             if (!s_tx_frame) s_blit_us += s_last_wait_us;
             s_full_flush = !sent;                       /* a window that failed: repaint all */
@@ -1500,7 +1536,7 @@ static void draw_task(void *arg) {
              * max ms: MOLE_ANIM_PARTS) */
             static const char *const NAME[FLUID_ANIM_N] = { "wave", "grow", "word", "water" };
             enum { BINS = 64 };                         /* intervals in 1 ms bins (the last: 63 and more) */
-            typedef struct { uint32_t f, s, rest, px, pxmax, win, worst, worst_c, comp; uint16_t pan[BINS], sim[BINS]; int64_t began;
+            typedef struct { uint32_t f, s, rest, px, pxmax, win, worst, worst_c, comp; uint16_t pan[BINS], sim[BINS], pres[BINS], refr[4]; int64_t began;
                              uint32_t sum[MOLE_ANIM_PARTS], max[MOLE_ANIM_PARTS]; int forced, keep, ready_at, held, na, nb, pairs;
                              uint32_t mv, mvx, ca, cax, dr, drx, owed, boot, fs[6]; } anim_t;   /* (fs: the dust frame's parts, prof_drift .. prof_parts) */   /* (cmp's dust moved and cache made, mean/max us; cells owed; dust frames at the handoff) */
             static struct { anim_t a[FLUID_ANIM_N]; uint32_t v[MOLE_ANIM_PARTS]; } *R;   /* (PSRAM) */
@@ -1509,6 +1545,13 @@ static void draw_task(void *arg) {
             if (!R) R = heap_caps_calloc(1, sizeof(*R), MALLOC_CAP_SPIRAM);
             const uint32_t pan_ms = last_t0 ? (uint32_t)((t0 - last_t0 + 500) / 1000) : 0, sim_ms = (uint32_t)((s_dopts.time - last_sim) * 1000.f + 0.5f);
             last_t0 = t0; last_sim = s_dopts.time;
+            /* (this frame's first window against the last frame that sent one: ms, and the panel's refreshes between) */
+            static uint32_t pres_last, te_last;
+            uint32_t pres_ms = 0, refr = 0;
+            const uint32_t pt = atomic_load(&s_pres_t), pte = atomic_load(&s_pres_te);
+            const bool pres_ok = pt && pres_last;
+            if (pres_ok) { pres_ms = (pt - pres_last + 500) / 1000; refr = pte - te_last; }
+            if (pt) { pres_last = pt; te_last = pte; }
             const uint8_t on = s_draw ? s_draw->anim_on : 0, late = s_draw ? s_draw->anim_late : 0;
             uint8_t busy = 0;
             for (int q = 0; R && q < FLUID_ANIM_N; q++) {
@@ -1522,6 +1565,7 @@ static void draw_task(void *arg) {
                     A->px += px; A->pxmax = px > A->pxmax ? px : A->pxmax;
                     A->win += q == FLUID_ANIM_WAVE ? (uint32_t)m->wins : (uint32_t)s_send_n;
                     if (A->f > 1) { A->pan[pan_ms < BINS ? pan_ms : BINS - 1]++; A->sim[sim_ms < BINS ? sim_ms : BINS - 1]++; }
+                    if (A->f > 1 && pres_ok) { A->pres[pres_ms < BINS ? pres_ms : BINS - 1]++; A->refr[refr < 3 ? refr : 3]++; }
                     if ((uint32_t)(t2 - t0) > A->worst) { A->worst = (uint32_t)(t2 - t0); A->worst_c = (uint32_t)(t1 - t0); }
                     uint32_t *v = R->v;
                     const bool w = q == FLUID_ANIM_WAVE;
@@ -1540,9 +1584,9 @@ static void draw_task(void *arg) {
                         if (m->on) { A->ready_at = m->ready_at; A->held = m->nheld > A->held ? m->nheld : A->held; A->na = m->na; A->nb = m->nb; A->pairs = m->nfly; }
                     }
                 } else if (A->f && ++A->rest >= 10) {
-                    uint32_t pc[2][3];                  /* p50, p95, worst of each core */
-                    for (int c = 0; c < 2; c++) {
-                        const uint16_t *h = c ? A->sim : A->pan;
+                    uint32_t pc[3][3];                  /* p50, p95, worst of each core, and of its frames' first windows */
+                    for (int c = 0; c < 3; c++) {
+                        const uint16_t *h = c == 2 ? A->pres : c ? A->sim : A->pan;
                         uint32_t n = 0, acc = 0;
                         for (int b = 0; b < BINS; b++) n += h[b];
                         pc[c][0] = pc[c][1] = pc[c][2] = 0;
@@ -1555,10 +1599,11 @@ static void draw_task(void *arg) {
                         }
                     }
                     const float n = (float)A->f;
-                    mole_diag_event(false, "anim %s %dms f=%u s=%u kpx=%.1f/%.1f win=%.1f pan=%u/%u/%u sim=%u/%u/%u worst=%.1f(%.1f+%.1f)",
+                    mole_diag_event(false, "anim %s %dms f=%u s=%u kpx=%.1f/%.1f win=%.1f pan=%u/%u/%u sim=%u/%u/%u pres=%u/%u/%u ref=%u/%u/%u/%u worst=%.1f(%.1f+%.1f)",
                                     NAME[q], (int)((t0 - A->began) / 1000), (unsigned)A->f, (unsigned)A->s, A->px / 1000.f / n, A->pxmax / 1000.f,
                                     (float)A->win / n, (unsigned)pc[0][0], (unsigned)pc[0][1], (unsigned)pc[0][2], (unsigned)pc[1][0], (unsigned)pc[1][1],
-                                    (unsigned)pc[1][2], A->worst / 1000.f, A->worst_c / 1000.f, (A->worst - A->worst_c) / 1000.f);
+                                    (unsigned)pc[1][2], (unsigned)pc[2][0], (unsigned)pc[2][1], (unsigned)pc[2][2], A->refr[0], A->refr[1], A->refr[2], A->refr[3],
+                                    A->worst / 1000.f, A->worst_c / 1000.f, (A->worst - A->worst_c) / 1000.f);
                     /* (its parts: mean/max ms; a change's own work too, and how its dust came) */
                     #define AM(p) A->sum[p] / 1000.f / n, A->max[p] / 1000.f
                     mole_diag_event(false, "anim %s.parts cells=%.1f/%.1f send=%.1f/%.1f cmp=%.1f/%.1f push=%.1f/%.1f wait=%.1f/%.1f sim=%.1f/%.1f fill=%.1f/%.1f build=%.1f/%.1f fine=%.1f/%.1f rect=%.1f/%.1f",
@@ -1577,7 +1622,8 @@ static void draw_task(void *arg) {
                         mole_anim_rec_t *b = &s_bench[s_bench_n];   /* (field by field: no copy of it on this stack) */
                         b->anim = q; b->ms = (uint32_t)((t0 - A->began) / 1000); b->f = A->f; b->s = A->s;
                         b->kpx = A->px / 1000.f / n; b->kpx_max = A->pxmax / 1000.f; b->win = A->win / n; b->comp = A->comp / 1000.f / n;
-                        for (int c = 0; c < 3; c++) { b->pan[c] = (uint16_t)pc[0][c]; b->sim[c] = (uint16_t)pc[1][c]; }
+                        for (int c = 0; c < 3; c++) { b->pan[c] = (uint16_t)pc[0][c]; b->sim[c] = (uint16_t)pc[1][c]; b->pres[c] = (uint16_t)pc[2][c]; }
+                        memcpy(b->refr, A->refr, sizeof(b->refr));
                         b->worst = A->worst / 1000.f; b->worst_cells = A->worst_c / 1000.f;
                         for (int p = 0; p < MOLE_ANIM_PARTS; p++) { b->mean[p] = A->sum[p] / 1000.f / n; b->max[p] = A->max[p] / 1000.f; }
                         b->forced = A->forced; b->keep = A->keep; b->ready_at = A->ready_at; b->held = A->held; b->na = A->na; b->nb = A->nb; b->pairs = A->pairs;

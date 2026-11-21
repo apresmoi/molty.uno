@@ -223,6 +223,9 @@ typedef struct {
     uint32_t ms, f, s;                 /* its length; frames its cells changed; those whose changes were all sent       */
     float    kpx, kpx_max, win, comp;  /* px sent a frame (k: mean, max), windows a frame, px a change composed (k)   */
     uint16_t pan[3], sim[3];           /* frame-to-frame intervals of the drawer's core and of the sim's clock: p50, p95, worst ms */
+    uint16_t pres[3];                  /* ... and of the frames' first windows to the panel (what the eye gets)          */
+    uint16_t refr[4];                  /* frames by the panel's refreshes since the frame before: 0, 1, 2, 3 or more (all 0
+                                        * refreshes: no TE pulses seen)                                                 */
     float    worst, worst_cells;       /* the worst frame on the drawer, its cells part, ms                             */
     float    mean[MOLE_ANIM_PARTS], max[MOLE_ANIM_PARTS];
     int      forced, keep, ready_at, held, na, nb, pairs;   /* a change: read before its dust was in; its dust alone; the

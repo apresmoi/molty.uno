@@ -32,6 +32,7 @@
 #include "glyph_font.h"
 #include "glyph_rsvp.h"
 #include "fluid_fine.h"
+#include "fluid_tx.h"
 #include "fluid_askview.h"
 #include "creature_pkg.h"
 
@@ -2308,8 +2309,13 @@ static void test_caption_kept(const char *dir) {
  * line as before: the same glass every frame, the same windows in the same order (each once), and the glass the look when
  * a frame ends; a tap in the open middle, a reading to its end, a tap on the Moon, the mark on and off. ── */
 typedef struct { const uint16_t *glass; int stride, x, y, w, h, mark, pal; bool direct; uint32_t sum; } split_win_t;
-typedef struct { split_win_t q[256]; int n, late, over, taken; } split_q_t;
+typedef struct { split_win_t q[256]; int n, late, over, taken, bad; bool draining; } split_q_t;
 typedef struct { glass_t *g; int n, mixed; int16_t v[512][4]; const split_q_t *q; } win_log_t;
+/* the panel's bus as the device's board layer keeps it (molty_board.c): one owner at a time, a task's async transfer its
+ * own till collected. Here: who has one out (0 none, 1 the drawer in line, 2 the sender), and transfers started by the
+ * other meanwhile (breaches: every sender suite fails on one) */
+static struct { int out, breach; } s_bus;
+static void bus_send(int who) { if (s_bus.out && s_bus.out != who) s_bus.breach++; s_bus.out = who; }
 static uint32_t rows_sum(const uint16_t *g, int stride, int x, int y, int w, int h) {
     uint32_t a = 2166136261u;
     for (int r = y; r < y + h; r++) for (int c = x; c < x + w; c++) a = (a ^ g[(size_t)r * stride + c]) * 16777619u;
@@ -2317,7 +2323,12 @@ static uint32_t rows_sum(const uint16_t *g, int stride, int x, int y, int w, int
 }
 static int split_take(void *ctx, const uint16_t *glass, int stride, int x, int y, int w, int h, bool direct, int mark, int pal) {
     split_q_t *q = ctx;
+    if (!q->n && s_bus.out == 1) s_bus.out = 0;          /* (the hand-over: the drawer's own last window collected first, tx_glass) */
     if (q->n == 256) { q->over++; return 1; }
+    /* (what the device's sender takes: whole row pairs, x on 4 px, inside the glass; a copy fits its 4096 px buffer,
+     * a straight send is whole rows) */
+    if (w <= 0 || h <= 0 || x < 0 || y < 0 || x + w > stride || (y & 1) || (h & 1) || (x & 3) ||
+        (direct ? x != 0 || w != stride : w * h > 4096)) { q->bad++; if (getenv("SPLIT_TRACE")) printf("    bad record %d,%d %dx%d direct %d\n", x, y, w, h, direct); }
     q->q[q->n++] = (split_win_t){ glass, stride, x, y, w, h, mark, pal, direct, rows_sum(glass, stride, x, y, w, h) };
     q->taken++;
     return 0;
@@ -2325,6 +2336,7 @@ static int split_take(void *ctx, const uint16_t *glass, int stride, int x, int y
 static int send_log(void *ctx, int x, int y, int w, int h, const uint16_t *px) {
     win_log_t *L = ctx;
     if (L->q && L->q->n) L->mixed++;                    /* (a window sent here while some wait queued: two senders) */
+    bus_send(L->q && !L->q->n && L->q->draining ? 2 : 1);
     if (L->n < 512) { L->v[L->n][0] = (int16_t)x; L->v[L->n][1] = (int16_t)y; L->v[L->n][2] = (int16_t)w; L->v[L->n][3] = (int16_t)h; }
     L->n++;
     return send_glass(L->g, x, y, w, h, px);
@@ -2333,7 +2345,7 @@ static int send_log(void *ctx, int x, int y, int w, int h, const uint16_t *px) {
 static void split_drain(split_q_t *q, const fluid_draw_t *d, win_log_t *L) {
     static uint16_t buf[4096];
     const int n = q->n;
-    q->n = 0;
+    q->n = 0; q->draining = true;
     for (int k = 0; k < n; k++) {
         const split_win_t *r = &q->q[k];
         if (rows_sum(r->glass, r->stride, r->x, r->y, r->w, r->h) != r->sum) q->late++;
@@ -2342,6 +2354,8 @@ static void split_drain(split_q_t *q, const fluid_draw_t *d, win_log_t *L) {
         fluid_draw_mark(d, &(fluid_rect_t){ buf, r->w, r->x, r->y, r->x + r->w, r->y + r->h }, r->pal, r->mark);
         send_log(L, r->x, r->y, r->w, r->h, buf);
     }
+    q->draining = false;
+    if (s_bus.out == 2) s_bus.out = 0;                   /* (the frame end: the sender waits its own last one) */
 }
 typedef struct { fluid_shape_t shp[FLUID_MAX_SHAPES]; fluid_letter_t L[FLUID_MAX_LETTERS]; uint8_t *dots, *keep, *still; int n, nl; } split_side_t;
 static void test_split(const char *dir) {
@@ -2467,7 +2481,9 @@ static void test_split(const char *dir) {
     CHECK(diff == 0 && lists == 0 && lc->mixed == 0 && q->over == 0,
           "split: the same glass as the drawer in line every frame (%d off), the same windows in the same order, each once (%d frames differ; %d sent while some waited; %d not taken)",
           diff, lists, lc->mixed, q->over);
-    CHECK(q->late == 0 && off == 0, "split: no queued row drawn again before it went out (%d), the glass the look when each frame ends (%d frames off)", q->late, off);
+    CHECK(q->late == 0 && off == 0 && q->bad == 0 && s_bus.breach == 0, "split: no queued row drawn again before it went out (%d), every window one the sender takes (%d not), "
+          "one owner of the panel at a time (%d breaches), the glass the look when each frame ends (%d frames off)", q->late, q->bad, s_bus.breach, off);
+    s_bus.breach = 0;
     free(sim->dots); free(sim->keep); free(sim->still); free(sim); free(q); free(la); free(lc);
     rig_close(A); rig_close(C); free(A); free(C);
     scene_free(sc);
@@ -2660,6 +2676,7 @@ typedef struct {
     double mean, worst;
 } morph_res_t;
 enum { MK_CAT, MK_SCENE, MK_WORD, MK_ASK };
+#define MORPH_BUDGET (FLUID_MORPH_CELLS_US - FLUID_MORPH_SPENT_US)   /* (the change's own work a frame, the host's) */
 #define MORPH_STALE 0x1FF8u   /* what the old picture's buffer holds before a change (it is not cleared): never on the glass */
 static int s_morph_stale;
 static int lit_px(const uint16_t *px, int n) { int c = 0; for (int q = 0; q < n; q++) c += px[q] != 0; return c; }
@@ -2755,7 +2772,7 @@ static void morph_run(morph_rig_t *r, int kind, scene_t *sc, uint32_t look, int 
         if (r->tx) {                                    /* (the frame's end: its queued windows sent, each as it was queued) */
             res->queued += q.taken; q.taken = 0;
             split_drain(&q, r->d, &L);
-            res->late += q.late + q.over; res->mixed += L.mixed; q.late = q.over = 0;
+            res->late += q.late + q.over + q.bad + s_bus.breach; res->mixed += L.mixed; q.late = q.over = q.bad = s_bus.breach = 0;
             fluid_draw_glass_sender(NULL, NULL);
         }
         if (full && r->job) {                           /* (the job still at it after the drawer ended the change: as it may be) */
@@ -2923,6 +2940,66 @@ static void morph_rig_free(morph_rig_t *r) {
 
 /* every change of picture, its new picture read in line (job 0: the drawer's frames, the web) or on the job (its slice a
  * frame, us: the device's sim task) */
+/* the scene sc up (look, its change over), a tap's wave on it for 30 frames in the device's order, the kept glass's windows
+ * through the sender (the fake one: split_take / split_drain): windows it could not take, rows changed once queued,
+ * frames whose glass is not the look, windows sent */
+static void morph_tap(morph_rig_t *r, scene_t *sc, uint32_t look, int *bad, int *late, int *off, int *sent) {
+    scene_shapes_t hd = { r->shp, 0, r->keep, r->still };
+    static split_q_t q;
+    int nl;
+    fluid_sim_impulse(r->s, 0.15f, -0.3f, 1.6f, 0.09f);
+    for (int f = 0; f < 30; f++, r->frame++) {
+        r->now += 1.f / 30.f;
+        scene_fill(r->s, sc, 1.f, NULL, r->L, &nl, r->dots, &hd);
+        fluid_sim_step(r->s, 1.f / 60.f); fluid_sim_step(r->s, 1.f / 60.f);
+        if (r->job) fluid_draw_morph_work(r->d, r->fr, &r->o, r->job);
+        fluid_fine_swap(r->fine);
+        fluid_draw_morph_look(r->d, look | FLUID_LOOK_DUST, r->snap, true);
+        morph_inputs(r, MK_SCENE, &hd);
+        fluid_draw_morph_handoff(r->d);
+        fluid_draw_cells(r->d, r->fr, &r->o);
+        win_log_t L = { &r->g, 0, 0, { { 0 } }, &q };
+        fluid_draw_glass_sender(split_take, &q);
+        fluid_draw_send(r->d, &r->o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, false, r->wbuf, 4096, send_log, &L);
+        *sent += q.n;
+        split_drain(&q, r->d, &L);
+        fluid_draw_glass_sender(NULL, NULL);
+        *bad += q.bad; *late += q.late + q.over + L.mixed + s_bus.breach; q.bad = q.late = q.over = s_bus.breach = 0;
+        *off += glass_off(r->d, &r->o, r->g.px, r->S) != 0;
+    }
+}
+
+/* ── the sender's hand-over (fluid_tx.h) with a sender that stops answering for a while, as on bench 12 (every frame then
+ * paid the full bound): only the first wait runs to its bound; every frame after it goes on at once while nothing goes
+ * to the panel; once the sender answers (every frame end, none lost) it is back. ── */
+typedef struct { int queued, answered, stuck_until, now, waited, frame; } tx_fake_t;
+static bool fake_end(void *ctx, int ms) { tx_fake_t *t = ctx; (void)ms; t->queued++; return true; }
+static bool fake_done(void *ctx, int ms) {
+    tx_fake_t *t = ctx;
+    if (t->frame >= t->stuck_until) t->answered = t->queued;   /* (it answers every frame end it has, at once) */
+    if (t->answered > 0) { t->answered--; t->queued--; return true; }
+    t->waited += ms;
+    return false;
+}
+static void test_tx(void) {
+    tx_fake_t k = { 0, 0, 5, 0, 0, 0 };
+    fluid_tx_t t = { 0 };
+    const fluid_tx_io_t io = { fake_end, fake_done, &k };
+    int idle = 0, lates = 0, most = 0;
+    for (k.frame = 0; k.frame < 40; k.frame++) {        /* (frames 0..4 a sender that does not answer; each frame queues windows when it may) */
+        const int w0 = k.waited;
+        bool late = false;
+        const bool ok = fluid_tx_idle(&t) || fluid_tx_drain(&t, &io, 300, &late);
+        if (ok) t.n += 12;                              /* (the frame's windows) */
+        if (t.n) { const bool e = fluid_tx_drain(&t, &io, 300, &late); idle += e && ok; }
+        lates += late;
+        most = k.waited - w0 > most ? k.waited - w0 : most;
+    }
+    printf("  the sender's hand-over, a sender stuck for 5 frames: waited %d ms in all (most %d a frame), late %d time(s), %d frames sent after\n", k.waited, most, lates, idle);
+    CHECK(k.waited == 300 && lates == 1 && !t.late && fluid_tx_idle(&t) && idle >= 34 && k.queued == 0,
+          "sender stuck a while: one bound waited in all (%d ms), logged once (%d), every frame end answered (%d left), back for the frames after (%d)", k.waited, lates, k.queued, idle);
+}
+
 static void test_morph(const char *dir, const char *catp, int job) {
     char path[512]; size_t len; const char *err;
     snprintf(path, sizeof(path), "%s/astrology.json", dir);
@@ -2987,8 +3064,8 @@ static void test_morph(const char *dir, const char *catp, int job) {
               "%s: one change of 1.21 s (+ the extra, + the wait for its dust), every frame inside the panel's (%d frames, worst %.1f ms of %.0f)", RUN[q].name, res.frames, res.worst, MORPH_FIT_MS);
         CHECK(res.unsent == 0, "%s: every frame of it all sent, each grain the frame it moves (%d frames not)", RUN[q].name, res.unsent);
         if (job)                                        /* (the drawer's own: its reading on the job, the device's) */
-            CHECK(res.work <= FLUID_MORPH_FRAME_US + FLUID_MORPH_FRAME_US / 10, "%s: no frame's own work over the change's budget, %.1f ms (most %.1f ms; its still ones %d frames late at most)",
-                  RUN[q].name, FLUID_MORPH_FRAME_US * 1e-3, res.work * 1e-3, res.lag);
+            CHECK(res.work <= MORPH_BUDGET + MORPH_BUDGET / 10, "%s: no frame's own work over the change's budget, %.1f ms (most %.1f ms; its still ones %d frames late at most)",
+                  RUN[q].name, MORPH_BUDGET * 1e-3, res.work * 1e-3, res.lag);
         if (r->tx)                                      /* (the device's sender after it: one sender at a time, no queued row changed before it went) */
             CHECK(res.late == 0 && res.mixed == 0, "%s: with the sender, no window's rows changed once queued, none sent beside it (%d, %d)", RUN[q].name, res.late, res.mixed);
         CHECK(res.even <= 450, "%s: everywhere at once, never by rows: no band of rows takes over 4.5 times its share of the picture in a frame's changes (most %d %%)",
@@ -3003,6 +3080,17 @@ static void test_morph(const char *dir, const char *catp, int job) {
         s_morph_stale = 0;
         CHECK(res.diff == 0, "%s: at its end the glass is the new look to the pixel (%d px differ, %d of them bright)", RUN[q].name, res.diff, res.hard);
     }
+    if (r->tx) {   /* (bench 12's way to a stalled panel, on a rig of its own: the boot word, the cat, the chart, a tap on it) */
+        morph_rig_t *t = morph_rig(cat, r, job);
+        morph_run(t, MK_WORD, NULL, FLUID_LOOK_GLASS, 0, 0, "start", &res);
+        morph_run(t, MK_CAT, NULL, FLUID_LOOK_KEEP | 1, 0, 0, "boot-cat", &res);
+        morph_run(t, MK_SCENE, chart, FLUID_LOOK_KEEP | 100, 16, 0, "cat-chart", &res);
+        int bad = 0, late = 0, off = 0, sent = 0;
+        morph_tap(t, chart, FLUID_LOOK_KEEP | 100, &bad, &late, &off, &sent);
+        CHECK(bad == 0 && late == 0 && off == 0 && sent > 20, "boot word, cat, chart, then a tap's wave on it through the sender: every window one it takes (%d not), "
+              "none changed once queued (%d), the glass the look each frame (%d off; %d windows)", bad, late, off, sent);
+        morph_rig_free(t);
+    }
     if (job) {  /* at the device's costs (about twice the model's at the peaks: bench 10's cells): the frame's budget holds every
                  * frame but the pass (what moves never waits, the still ones step late, everywhere at once), the change
                  * still ends on the look whole, in its phases, never by rows */
@@ -3014,7 +3102,7 @@ static void test_morph(const char *dir, const char *catp, int job) {
             morph_run(r, DEV[q].kind, DEV[q].scene == 1 ? chart : DEV[q].scene == 2 ? up : NULL, DEV[q].look, 0, 0, DEV[q].name, &res);
             printf("    at the device's costs: %-9s %4.0f ms, own work at most %.1f ms, still ones %d frames late at most, %d %% of a band\n", DEV[q].name,
                    res.frames * 1000.0 / 30.0, res.work * 1e-3, res.lag, res.even);
-            CHECK(res.work <= FLUID_MORPH_FRAME_US + FLUID_MORPH_FRAME_US / 10 && res.diff == 0 && res.phase == 0 && res.unsent == 0 && res.even <= 450 &&
+            CHECK(res.work <= MORPH_BUDGET + MORPH_BUDGET / 10 && res.diff == 0 && res.phase == 0 && res.unsent == 0 && res.even <= 450 &&
                   res.frames <= 60 && s_morph_stale == 0,
                   "%s at the device's costs: no frame over the budget (most %.1f ms), the look whole at its end (%d px), in its phases (%d off), never by rows (%d %%), %d frames",
                   DEV[q].name, res.work * 1e-3, res.diff, res.phase, res.even, res.frames);
@@ -3280,6 +3368,7 @@ int main(int argc, char **argv) {
     test_ride(argv[1]);
     test_split(argv[1]);
     test_retime(argv[1]);
+    test_tx();
     test_caption_kept(argv[1]);
     test_fine_hard(argv[1]);
     test_open(argv[1]);

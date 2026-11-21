@@ -1589,7 +1589,7 @@ static bool hdc_room(fluid_draw_t *d) {
 #define MP_BORN_GLIDE 0.2f     /* .. and glides in over this                                                     */
 #define MP_NEAR       10.f
 #define MP_GLIDERS    8        /* one new grain with no pair in this many glides in, the rest come up on their spot (the
-                                * prototype's all; lightened to fit the frame's budget, FLUID_MORPH_FRAME_US)         */
+                                * prototype's all; lightened to fit the frame's budget, fluid_morph_t.budget)         */
 #define MP_OLD_LINES  0.324f   /* the old lines fade out over 0 .. this, in MP_LINE_Q steps                           */
 #define MP_NEW_LINES  0.132f   /* the new lines fade in over the last this, in MP_LINE_Q steps                        */
 #define MP_LEN        1.2132f  /* the change's length ..                                                         */
@@ -1659,10 +1659,11 @@ struct fluid_morph_mem {
                                         * drawn whole again                                                            */
     bool     dust, lines_ok, waits, passed, started, again;   /* the new one read with its dust; the drawer's pass for it made; the clock
                                         * runs; a change in the middle of one                                         */
-    int64_t  f0;                       /* this frame's start (its budget: FLUID_MORPH_FRAME_US)                        */
+    int64_t  f0;                       /* this frame's start (its budget: fluid_morph_t.budget)                        */
     float    shx[256], shy[256];       /* this frame's shimmer by phase                                               */
     uint16_t v[256]; uint8_t dm[256];  /* a cell's pixels while a picture is read: here, not on the draw task's stack    */
-    bool     planned, last;            /* the pairs chosen; this frame ends it                                        */
+    bool     planned, clock, last;     /* the pairs chosen; its clock started (the drawer's pass made); this frame ends it */
+    int      endw;                     /* (frames its end waited for room)                                            */
     uint8_t  *nlc, *stale, *bd;        /* N: (reading) where lines may be; drawn whole at the end; their dust's dots read */
     uint8_t  *rows;                    /* fb_h: the pixel rows written this frame (sent)                               */
     uint16_t *lbuf, *gbuf; int sw;     /* a cell row's lines and dust as read (sw x the tallest cell)                 */
@@ -1683,6 +1684,7 @@ struct fluid_morph_mem {
                                         * the job's copies of fluid_morph_t.ready and .jhurry, taken at the handoff)   */
     uint8_t  got;                      /* what of the read the drawer may use (MGOT_*)                                  */
     int      jn, jus, jmax, jdus, jlus;   /* (the job's slices, their us, the longest; the reader's us on the dust, the lines) */
+    uint8_t  *bst;                     /* (the reader's: the block ba becomes at the pairing, zeroed off the drawer)    */
     uint32_t *bl; int ngl;             /* the new grains (n | k << 14, in order): the ngl that glide in (their own clock: t)
                                         * first, then those that come up on their spot (fluid_morph_t.tau[FLUID_MT_BORN]) */
     float    cost[FLUID_MT_N + 2];     /* the frame's budget plans by these: each still one's measured work against its
@@ -1717,7 +1719,8 @@ static inline uint16_t mmix(uint16_t a, uint16_t b, float m) {
     return (uint16_t)(o >> 8 | o << 8);
 }
 /* a line pixel's own moment in its fade: the fractional part of its pixel index x 0.618 */
-static inline int mline_ph(const fluid_draw_t *d, int x, int y) { return (int)(((uint32_t)(y * d->fb_w + x) * 2654435769u) >> 24); }
+static inline int cell_ph(int k) { return (int)(((uint32_t)k * 2654435769u) >> 24); }   /* (each cell's lines at its own moment) */
+static inline int mline_ph(const fluid_draw_t *d, int x, int y) { return cell_ph(d->m.rowy[y] * d->W + d->m.colx[x]); }
 
 /* ── its memory ── */
 static bool mlayer_new(mlayer_t *L, int cap, int N) {
@@ -1762,7 +1765,7 @@ static void mm_free(fluid_morph_mem_t *mm) {
     FLUID_FREE(mm->A.g); FLUID_FREE(mm->A.at); FLUID_FREE(mm->A.aux); FLUID_FREE(mm->B.g); FLUID_FREE(mm->B.at); FLUID_FREE(mm->B.aux);
     FLUID_FREE(mm->akey); FLUID_FREE(mm->tmp);
     FLUID_FREE(mm->L0.o); FLUID_FREE(mm->L0.at); FLUID_FREE(mm->L1.o); FLUID_FREE(mm->L1.at);
-    FLUID_FREE(mm->fly); FLUID_FREE(mm->ba); FLUID_FREE(mm->bkey); FLUID_FREE(mm->nlc); FLUID_FREE(mm->lbuf); FLUID_FREE(mm->gl); FLUID_FREE(mm->bl);
+    FLUID_FREE(mm->fly); FLUID_FREE(mm->ba); FLUID_FREE(mm->bkey); FLUID_FREE(mm->nlc); FLUID_FREE(mm->lbuf); FLUID_FREE(mm->gl); FLUID_FREE(mm->bl); FLUID_FREE(mm->bst);
     FLUID_FREE(mm);
 }
 static fluid_morph_mem_t *mm_new(const fluid_draw_t *d) {
@@ -1907,10 +1910,12 @@ static int morph_read_old(fluid_draw_t *d, int budget) {
     uint16_t *const v = mm->v;
     uint8_t *const dm = mm->dm;
     const int64_t t_in = now_us();
-    int64_t row = 0;                                    /* (the last row's time: the next is read only when it fits) */
-    for (const int j0 = mm->oj; mm->oj < H && (mm->oj == j0 || (now_us() - t_in + row < budget && m->work < budget)); mm->oj++) {
+    int64_t row = 0;                                    /* (the last row's time and work: the next is read only when it fits) */
+    int wrow = 0;
+    for (const int j0 = mm->oj; mm->oj < H && (mm->oj == j0 || (now_us() - t_in + row < budget && m->work + wrow < budget)); mm->oj++) {
         const int j = mm->oj;
         const int64_t r0 = now_us();
+        const int w0 = m->work;
         for (int i = 0; i < W; i++) {
             const int k = j * W + i, x0 = d->cx[i], y0 = d->cy[j], w = d->cx[i + 1] - x0, h = d->cy[j + 1] - y0;
             const uint16_t key = d->key[k];
@@ -1944,7 +1949,7 @@ static int morph_read_old(fluid_draw_t *d, int budget) {
             }
             m->work += (int)(w * h * MW_READ + (mm->A.n - n0) * MW_ITEM);
         }
-        row = now_us() - r0;
+        row = now_us() - r0; wrow = m->work - w0;
     }
     if (mm->oj < H) return 0;
     mm->A.at[W * H] = (uint32_t)mm->A.n; mm->L0.at[W * H] = (uint32_t)mm->L0.n;
@@ -2057,7 +2062,8 @@ static int s_hold_n = FLUID_MORPH_HOLD_N, s_lines_n = FLUID_MORPH_LINES_N, s_rea
 /* the new grains as the frames go through them: those that glide in, then those that come up on their spot (n | k << 14,
  * each in order: the arrays read in order). False: no room */
 static bool born_lists(const fluid_draw_t *d, fluid_morph_mem_t *mm) {
-    if (!(mm->bl = FLUID_MALLOC(sizeof(uint32_t) * (size_t)(mm->B.n ? mm->B.n : 1)))) return false;
+    if (!(mm->bl = FLUID_MALLOC(sizeof(uint32_t) * (size_t)(mm->B.n ? mm->B.n : 1))) ||
+        !(mm->bst = FLUID_CALLOC(5 * (size_t)(mm->B.n ? mm->B.n : 1)))) return false;
     int g = 0, s = 0;
     for (int n = 0; n < mm->B.n; n++) g += !mm->keep && !(mm->B.aux[2 * n + 1] % MP_GLIDERS);
     mm->ngl = g; s = g; g = 0;
@@ -2309,7 +2315,7 @@ static bool morph_pair(fluid_draw_t *d) {
     if (K > kpx) K = kpx;
     const int nb = B->n ? B->n : 1;
     const uint32_t *ob = mm->bkey;
-    mm->ba = FLUID_CALLOC(5 * (size_t)nb);             /* (its start worked out when first due: blv 0x40) */
+    mm->ba = mm->bst; mm->bst = NULL;                   /* (zeroed by the reader; its start worked out when first due: blv 0x40) */
     if (!mm->ba) return false;
     mm->bo = (int8_t *)mm->ba; mm->bp = mm->bo + 2 * nb; mm->blv = (uint8_t *)(mm->bp + 2 * nb);
     if (B->n - K > FLUID_MORPH_BORN_FAST) { mm->E = MP_EXTRA; m->dur = MP_LEN + mm->E; }   /* (they come up over longer) */
@@ -2456,15 +2462,12 @@ static void gclear(const fluid_draw_t *d, int x, int y, int z) {
 }
 /* lines of cell k at the frame's share v (old fading out, new in) where their level changes from v0 */
 static int lines_step(const fluid_draw_t *d, const mlines_t *L, int k, int vq, int vq0) {
-    const int i = k % d->W, j = k / d->W;
-    int n = 0;
-    for (uint32_t q = L->at[k]; q < L->at[k + 1]; q++) {
-        const int x = d->cx[i] + (L->o[q] & 15), y = d->cy[j] + (L->o[q] >> 4), ph = mline_ph(d, x, y), lv = lv_of(vq, ph, MP_LINE_Q);
-        if (lv == lv_of(vq0, ph, MP_LINE_Q)) continue;
-        gput(d, x, y, 1, lv ? mscale(L->col[q], lv, MP_LINE_Q) : 0);
-        n++;
-    }
-    return n;
+    if (L->at[k] == L->at[k + 1]) return 0;
+    const int i = k % d->W, j = k / d->W, ph = cell_ph(k), lv = lv_of(vq, ph, MP_LINE_Q);
+    if (lv == lv_of(vq0, ph, MP_LINE_Q)) return 0;      /* (a cell's lines step together, the cells each at its own moment) */
+    for (uint32_t q = L->at[k]; q < L->at[k + 1]; q++)
+        gput(d, d->cx[i] + (L->o[q] & 15), d->cy[j] + (L->o[q] >> 4), 1, lv ? mscale(L->col[q], lv, MP_LINE_Q) : 0);
+    return (int)(L->at[k + 1] - L->at[k]);
 }
 
 /* The window t as the change keeps it (tests): a copy of the kept glass. Returns its pixels. */
@@ -2608,7 +2611,7 @@ static float still_cost(const fluid_draw_t *d, int f, int qa, int qb) {
     const mlines_t *L = old ? &mm->L0 : &mm->L1;
     if (!old && !(mm->got & MGOT_LINES)) return 0.f;
     const int v = vq_of(old ? old_v(d, b) : new_v(d, b), MP_LINE_Q), v0 = vq_of(old ? old_v(d, a) : new_v(d, a), MP_LINE_Q);
-    return v == v0 ? 0.f : L->n * MW_LOOK + L->n * (float)(v > v0 ? v - v0 : v0 - v) * (1.f / 256.f) * (MW_GRAIN + MW_PX);
+    return v == v0 ? 0.f : d->W * d->H * MW_LOOK + L->n * (float)(v > v0 ? v - v0 : v0 - v) * (1.f / 256.f) * (MW_GRAIN + MW_PX);
 }
 /* where a still one's clock goes this frame, from quarter frame qa toward the change's q: as far as its work (still_cost x
  * what it measured against that) fits what the frame has left, a quarter at least when it lags MORPH_LAG frames or the
@@ -2642,8 +2645,8 @@ static void morph_frame(fluid_draw_t *d, const fluid_frame_t *s, const fluid_dra
     int *const pf = m->prof;
     int64_t tp = now_us(), tq;
 #define MP_LAP(part) (tq = now_us(), pf[part] += (int)(tq - tp), tp = tq)
-#define MP_LEFT() (FLUID_MORPH_FRAME_US - (int)(now_us() - mm->f0) < FLUID_MORPH_FRAME_US - m->work - (m->pass ? FLUID_MORPH_PASS_US : 0) ? \
-                   FLUID_MORPH_FRAME_US - (int)(now_us() - mm->f0) : FLUID_MORPH_FRAME_US - m->work - (m->pass ? FLUID_MORPH_PASS_US : 0))
+#define MP_LEFT() (m->budget - (int)(now_us() - mm->f0) < m->budget - m->work - (m->pass ? FLUID_MORPH_PASS_US : 0) ? \
+                   m->budget - (int)(now_us() - mm->f0) : m->budget - m->work - (m->pass ? FLUID_MORPH_PASS_US : 0))
     memset(d->span, 0, sizeof(int16_t) * 2 * (size_t)H);
     memset(d->dirty, 0, (size_t)N);
     if (!mm || mm->oj < H) return;                      /* (the old picture being read: nothing moves) */
@@ -2651,19 +2654,24 @@ static void morph_frame(fluid_draw_t *d, const fluid_frame_t *s, const fluid_dra
     mm->wpx = 0;
     /* the old picture in order, then (the drawer's one pass for its new look made) the pairs chosen */
     if (!mm->planned) {
-        const int room = FLUID_MORPH_FRAME_US - (m->prof[FLUID_MP_OLD] > m->work ? m->prof[FLUID_MP_OLD] : m->work);
+        const int room = m->budget - (m->prof[FLUID_MP_OLD] > m->work ? m->prof[FLUID_MP_OLD] : m->work);
         if (room < (int)(mm->A.n * MW_LOOK + 512 * MW_SORT)) { MP_LAP(FLUID_MP_PAIR); return; }   /* (its first step's room: the next frame) */
         const bool sorted = sort_step(mm, &mm->akey, mm->A.n, &mm->apass, room);
         m->work += mm->rw; mm->rw = 0;
         if (!sorted) { if (!mm->tmp) morph_end(d, true); MP_LAP(FLUID_MP_PAIR); return; }
+        /* the pairs chosen in what it leaves (else the next frame), before the drawer's pass: that frame has its cells */
+        const int plan = (int)((mm->A.n < FLUID_MORPH_FLY ? mm->A.n : FLUID_MORPH_FLY) * MW_FLY + mm->A.n * MW_LOOK);
+        if (MP_LEFT() > plan) morph_plan(d);
         MP_LAP(FLUID_MP_PAIR);
-        if (!mm->passed) return;                        /* (the next frame: the drawer's pass for the new look) */
-        morph_plan(d);
+        return;
+    }
+    if (!mm->clock) {                                   /* (its clock from the drawer's pass for the new look) */
+        if (!mm->passed) return;
+        mm->clock = true;
         m->dg[FLUID_MD_PASS] = m->frames;
         if (m->keep) m->n = (int)(MP_BORN * MP_FPS);    /* (its dust alone: from just before its grains come up) */
         m->t = mtime(m->n);
         for (int f = 0; f < FLUID_MT_N; f++) m->tau[f] = 4 * m->n;
-        MP_LAP(FLUID_MP_PAIR);
     }
     /* at the cloud the clock stands for the new picture, never long: its inputs awaited FLUID_MORPH_DUST_* at most (then
      * it is read as it is: its dust comes after the change), FLUID_MORPH_HOLD_* in all (else the look at once) */
@@ -2738,7 +2746,7 @@ static void morph_frame(fluid_draw_t *d, const fluid_frame_t *s, const fluid_dra
         int q = 4 * m->n;                                /* (the new lines last: never ahead of the other still ones) */
         for (int g = 0; f == FLUID_MT_NEW && g < FLUID_MT_NEW; g++) q = m->tau[g] < q ? m->tau[g] : q;
         const float draw = (float)wput * MW_PX + (glide ? mm->ngl : 0) * MW_LOOK, keep = mm->cost[FLUID_MT_N] > draw ? mm->cost[FLUID_MT_N] : draw;
-        const int na = m->tau[f], nb = still_to(d, f, na, q, MP_LEFT() - (int)keep - FLUID_MORPH_FRAME_US / 50, t == t0);   /* (2 % headroom: plans miss) */
+        const int na = m->tau[f], nb = still_to(d, f, na, q, MP_LEFT() - (int)keep - m->budget / 50, t == t0);   /* (2 % headroom: plans miss) */
         if (nb == na) continue;
         const float a = qtime(na), b = qtime(nb);
         const int64_t c0 = now_us();
@@ -2758,7 +2766,7 @@ static void morph_frame(fluid_draw_t *d, const fluid_frame_t *s, const fluid_dra
         } else if (f == FLUID_MT_OLD || (f == FLUID_MT_NEW && (mm->got & MGOT_LINES))) {
             const mlines_t *L = f == FLUID_MT_OLD ? &mm->L0 : &mm->L1;
             const int v = vq_of(f == FLUID_MT_OLD ? old_v(d, b) : new_v(d, b), MP_LINE_Q), v0 = vq_of(f == FLUID_MT_OLD ? old_v(d, a) : new_v(d, a), MP_LINE_Q);
-            if (v != v0) { lk = L->n; for (int k = 0; k < N; k++) st += lines_step(d, L, k, v, v0); }
+            if (v != v0) { lk = N; for (int k = 0; k < N; k++) st += lines_step(d, L, k, v, v0); }
         }                                               /* (the new lines not read yet: nothing of them to step; read before they are due) */
         m->tau[f] = nb;
         m->work += (int)(st * MW_GRAIN + lk * MW_LOOK + (mm->wpx - w0) * MW_PX);
@@ -2816,7 +2824,10 @@ static void morph_frame(fluid_draw_t *d, const fluid_frame_t *s, const fluid_dra
      * (or had no room), drawn whole */
     bool caught = mm->sj >= H || m->nb < 0;
     for (int f = 0; f < FLUID_MT_N; f++) caught &= m->tau[f] >= 4 * m->n;
-    if (t >= m->dur && caught && (mm->got & (MGOT_DUST | MGOT_LINES)) == (MGOT_DUST | MGOT_LINES)) {
+    float wend = 0.f;                                   /* (its cells drawn whole: in the frame's room, else up to 2 frames later) */
+    for (int k = 0; caught && t >= m->dur && k < N; k++)
+        if (mm->stale[k] || (lines_now(d, k) && !mm->nlc[k])) wend += (d->cx[k % W + 1] - d->cx[k % W]) * (d->cy[k / W + 1] - d->cy[k / W]) * MW_SHAPE;
+    if (t >= m->dur && caught && (mm->got & (MGOT_DUST | MGOT_LINES)) == (MGOT_DUST | MGOT_LINES) && (MP_LEFT() > (int)wend || mm->endw++ >= 2)) {
         float wk = 0.f;
         for (int k = 0; k < N; k++) {
             const int x0 = d->cx[k % W], y0 = d->cy[k / W];
@@ -2864,15 +2875,18 @@ static void morph_frame(fluid_draw_t *d, const fluid_frame_t *s, const fluid_dra
 
 /* The top of each cells pass in a change: the old picture read from the glass, a share of a frame at a time, before the
  * new look's inputs reach the drawer's state (its one pass, after: morph_frame chooses the pairs then) */
+void fluid_draw_morph_spent(fluid_draw_t *d, int us) { if (d) d->m.spent = us > 0 ? us : 1; }
 static void morph_begin(fluid_draw_t *d) {
     fluid_morph_t *m = &d->m;
     m->work = m->comp = 0; m->pass = false;
+    m->budget = FLUID_MORPH_CELLS_US - (m->spent ? m->spent : FLUID_MORPH_SPENT_US);
+    m->spent = 0;                                       /* (told again each frame) */
     memset(m->prof, 0, sizeof(m->prof));
     if (!m->on) return;
     const int64_t t0 = now_us();
     if (m->na >= 0) { m->mm->f0 = t0; return; }
     const bool again = m->mm != NULL && m->mm->oj >= d->H;
-    const int r = morph_read_old(d, FLUID_MORPH_OLD_US);
+    const int r = morph_read_old(d, m->budget);
     m->prof[FLUID_MP_OLD] = (int)(now_us() - t0);
     if (r < 0) { morph_end(d, true); return; }
     m->mm->f0 = t0;
@@ -2931,7 +2945,7 @@ static void morph_pass(fluid_draw_t *d) { if (d->m.mm) d->m.mm->passed = d->m.pa
 /* while a change runs the drawer stands (its state as the change read it), but for the one pass that makes its new look */
 static inline bool morph_frozen(const fluid_draw_t *d) {
     const fluid_morph_t *m = &d->m;
-    return m->on && m->mm && (m->na < 0 || m->mm->apass < 3 || m->mm->passed);
+    return m->on && m->mm && (m->na < 0 || !m->mm->planned || m->mm->passed);
 }
 
 /* EXPERIMENT kind 3: the hard dots of window t's cells (all, else the dirty ones), each 2 x 2 px dot on the pixels still

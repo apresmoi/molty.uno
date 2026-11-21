@@ -8,6 +8,7 @@
 #include "net/network.h"
 #include "net/console_store.h"
 #include "mole_fluid.h"
+#include "molty_board.h"
 #include "pkg/pkg_cmd.h"
 #include "pkg/pkg_store.h"
 #include "bench_chart.h"
@@ -562,6 +563,19 @@ static void heap_low_report(uint32_t free_now, const multi_heap_info_t *in)
                     link_audio_busy() ? 1 : 0, top);
 }
 
+/* the panel's tearing-effect pulses (molty_display_te): the last second's, and the 10 s the TE log line covers */
+static molty_te_t s_te_sec;
+static void te_json(cJSON *o)
+{
+    const molty_te_t t = s_te_sec;
+    cJSON_AddBoolToObject(o, "line", t.line);
+    cJSON_AddNumberToObject(o, "total", t.total);
+    cJSON_AddNumberToObject(o, "per_s", t.n);                     /* (periods seen in the last second: its refreshes) */
+    if (!t.n) { cJSON_AddStringToObject(o, "note", t.line ? "no pulses" : "no TE line"); return; }
+    cJSON_AddNumberToObject(o, "hz", t.mean_us ? 1e6 / t.mean_us : 0);
+    cJSON_AddNumberToObject(o, "mean_us", t.mean_us); cJSON_AddNumberToObject(o, "min_us", t.min_us); cJSON_AddNumberToObject(o, "max_us", t.max_us);
+}
+
 static void sampler_task(void *arg)
 {
     (void)arg;
@@ -580,6 +594,14 @@ static void sampler_task(void *arg)
         uint32_t f = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
         if (f < int_min) int_min = f;
         if (++ticks % 10) continue;
+        static molty_te_t te10;                      /* (the TE line's 10 s, for its log line) */
+        molty_display_te(&s_te_sec, true);
+        if (s_te_sec.n) {
+            te10.min_us = !te10.n || s_te_sec.min_us < te10.min_us ? s_te_sec.min_us : te10.min_us;
+            te10.max_us = s_te_sec.max_us > te10.max_us ? s_te_sec.max_us : te10.max_us;
+            te10.mean_us = (uint32_t)(((uint64_t)te10.mean_us * te10.n + (uint64_t)s_te_sec.mean_us * s_te_sec.n) / (te10.n + s_te_sec.n));
+            te10.n += s_te_sec.n;
+        }
 
         int64_t elapsed = now - win_start; win_start = now;
         wedge_check();
@@ -643,6 +665,12 @@ static void sampler_task(void *arg)
                             bad ? "TL!" : "TL", (unsigned long)e.int_min, (unsigned long)e.int_largest, (unsigned long)s_int_blocks,
                             e.sim_n, e.sim_max, e.panel_n, e.panel_max, e.probe0, e.probe1, e.late,
                             e.gw_rtt, (unsigned)lost, (unsigned)sent, e.rssi, e.flags, top);
+        }
+        if (ticks % 100 == 0) {                  /* the panel's refresh, beside the TL line */
+            if (te10.n) mole_diag_event(false, "TE %.2f Hz period=%lu/%lu/%lu us (mean/min/max) n=%lu total=%lu", 1e6 / te10.mean_us,
+                                        (unsigned long)te10.mean_us, (unsigned long)te10.min_us, (unsigned long)te10.max_us, (unsigned long)te10.n, (unsigned long)s_te_sec.total);
+            else mole_diag_event(false, "TE %s (total=%lu)", s_te_sec.line ? "no pulses" : "no line", (unsigned long)s_te_sec.total);
+            te10 = (molty_te_t){ 0 };
         }
     }
 }
@@ -1044,6 +1072,7 @@ cJSON *mole_diag_json(int timeline_secs)
     cJSON_AddNumberToObject(t, "total", s_touch_n);
     cJSON_AddNumberToObject(t, "max_total_ms", s_touch_max / 1000.0);
     cJSON_AddItemToObject(fr, "touch_to_panel", t);
+    te_json(cJSON_AddObjectToObject(fr, "te"));
     cJSON *h = cJSON_AddObjectToObject(j, "heap");
     cJSON_AddItemToObject(h, "internal", heap_json(MALLOC_CAP_INTERNAL));
     cJSON_AddItemToObject(h, "dma", heap_json(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
@@ -1293,6 +1322,12 @@ static cJSON *bench_rec_json(const mole_anim_rec_t *b)
     cJSON_AddNumberToObject(o, "win", r1(b->win));
     a = cJSON_AddArrayToObject(o, "pan"); for (int c = 0; c < 3; c++) cJSON_AddItemToArray(a, cJSON_CreateNumber(b->pan[c]));
     a = cJSON_AddArrayToObject(o, "sim"); for (int c = 0; c < 3; c++) cJSON_AddItemToArray(a, cJSON_CreateNumber(b->sim[c]));
+    a = cJSON_AddArrayToObject(o, "pres"); for (int c = 0; c < 3; c++) cJSON_AddItemToArray(a, cJSON_CreateNumber(b->pres[c]));
+    if (b->refr[1] || b->refr[2] || b->refr[3]) {       /* (the panel's refreshes from a frame's first window to the next's) */
+        cJSON *rf = cJSON_AddObjectToObject(o, "refreshes");
+        static const char *const RN[4] = { "0", "1", "2", "3+" };
+        for (int q = 0; q < 4; q++) cJSON_AddNumberToObject(rf, RN[q], b->refr[q]);
+    } else cJSON_AddStringToObject(o, "refreshes", b->refr[0] ? "no TE pulses" : "no two frames reached the panel");
     a = cJSON_AddArrayToObject(o, "worst"); cJSON_AddItemToArray(a, cJSON_CreateNumber(r1(b->worst))); cJSON_AddItemToArray(a, cJSON_CreateNumber(r1(b->worst_cells)));
     cJSON *p = cJSON_AddObjectToObject(o, "parts");    /* (mean, max ms a frame; the parts it had) */
     for (int q = 0; q < MOLE_ANIM_PARTS; q++) {
@@ -1309,6 +1344,7 @@ static cJSON *bench_rec_json(const mole_anim_rec_t *b)
     return o;
 }
 /* one case: what it starts from, then it, till its animations are over */
+static bool s_bench_stuck;   /* EXPERIMENT (stuck=1): each case's panel meets a transfer that never ends 0.6 s in (its recovery) */
 static cJSON *bench_case(int c, int run)
 {
     mole_fluid_screen(true);
@@ -1336,6 +1372,7 @@ static cJSON *bench_case(int c, int run)
     case BC_MIDDLE: mole_fluid_bench_tap(0.15f, 0.3f); break;
     case BC_PLANET: if (!mole_fluid_bench_spot("moon", &x, &y)) err = "no moon"; else mole_fluid_bench_tap(x, y); break;
     }
+    if (s_bench_stuck) { vTaskDelay(pdMS_TO_TICKS(600)); molty_display_inject(); }
     /* its end: a change recorded and none for 1.5 s (a scene's dust may come after as a change of its own); a tap's water
      * (and the Moon's reading) recorded and every tap animation over */
     const int want = c == BC_MIDDLE ? 3 : c == BC_PLANET ? 2 : 0;
@@ -1356,10 +1393,13 @@ static esp_err_t http_bench(httpd_req_t *r)
     static atomic_bool busy;
     if (atomic_exchange(&busy, true)) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "a bench runs already");
     uint32_t runs = query_u32(r, "runs", 3);
+    const bool te_off = query_u32(r, "te", 1) == 0;      /* EXPERIMENT (bench 12/13's stall): te=0 runs it with the TE interrupt off */
+    s_bench_stuck = query_u32(r, "stuck", 0) != 0;
     runs = runs < 1 ? 1 : runs > 5 ? 5 : runs;
     s_brec = heap_caps_calloc(BENCH_RECS, sizeof(mole_anim_rec_t), MALLOC_CAP_SPIRAM);
     cJSON *j = cJSON_CreateObject();
     if (!s_brec || !j) { heap_caps_free(s_brec); s_brec = NULL; cJSON_Delete(j); atomic_store(&busy, false); return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "oom"); }
+    if (te_off) molty_display_te_on(false);
     const bool astro = pkg_store_find(PKG_ROOT, "astrology", NULL);
     cJSON_AddStringToObject(j, "astrology", astro ? "installed" : "not installed: only boot-cat runs");
     mole_fluid_screen(true);
@@ -1369,12 +1409,15 @@ static esp_err_t http_bench(httpd_req_t *r)
         for (int c = 0; c < (astro ? BC_N : 1); c++) cJSON_AddItemToArray(cases, bench_case(c, run));
     mole_fluid_bench_capture(NULL, 0);
     heap_caps_free(s_brec); s_brec = NULL;
+    if (te_off) { molty_display_te_on(true); cJSON_AddBoolToObject(j, "te_off", true); }
+    if (s_bench_stuck) { s_bench_stuck = false; cJSON_AddBoolToObject(j, "stuck", true); }
     if (astro) bench_scene(false);
     cJSON *h = cJSON_AddObjectToObject(j, "heap");
     cJSON_AddNumberToObject(h, "int_free", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     cJSON_AddNumberToObject(h, "int_largest", heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     cJSON_AddNumberToObject(h, "psram_free", heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     cJSON_AddNumberToObject(h, "psram_largest", heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+    te_json(cJSON_AddObjectToObject(j, "te"));              /* (the panel's refresh, the last second) */
     cJSON *st = cJSON_AddObjectToObject(j, "stack_free");    /* (high-water marks, bytes, as the sampler last saw them) */
     portENTER_CRITICAL(&s_task_mux);
     int sd = -1, ss = -1, sx = -1;
