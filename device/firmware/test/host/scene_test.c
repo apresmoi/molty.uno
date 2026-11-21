@@ -2669,10 +2669,13 @@ typedef struct {
                                         * the picture's lit px, percent (everywhere at once: 100-390, a creature's lines fading in where it stands; lines shown as read: 540+) */
     int na, nb, fly, spare, born;      /* its grains: old, new; the pairs flying; the old with no pair, the new with none */
     uint32_t read;                     /* the new picture as read (fluid_morph_census_t.read), once whole */
-    int work, lag;                     /* the most of the change's own work in a frame but its pass (us), its clocks' most lag */
+    int work, idle;                    /* the most of the change's own work in a frame that sends but its pass (us); in one
+                                        * of its first frames that send nothing (the old picture read, its pairs chosen) */
+    int hang, slow, gap0, gapf;        /* frames nothing moved (or the clock stood) between the first move and the dust
+                                        * down; its clock slowed; the first new line's frame and the lines' full frame
+                                        * against the dust's down (fluid_morph_t.dg) */
     int still;                         /* frames after a full repaint's that showed anything new (none may: the job may read) */
     int late, mixed, queued;           /* windows whose rows changed once queued, sent beside the sender's; those queued */
-    float extra;
     double mean, worst;
 } morph_res_t;
 enum { MK_CAT, MK_SCENE, MK_WORD, MK_ASK };
@@ -2793,7 +2796,8 @@ static void morph_run(morph_rig_t *r, int kind, scene_t *sc, uint32_t look, int 
         for (int k = 0; k < S * S; k++) s_morph_stale += r->g.px[k] == MORPH_STALE;
         if (in) {
             sum += ms; nfr++; res->worst = fmax(res->worst, ms); res->over += ms > MORPH_FIT_MS;
-            if (!m->pass && m->work > res->work) res->work = m->work;   /* (the change's own work on the drawer, the model's us) */
+            if (!m->pass && r->g.c.px && m->work > res->work) res->work = m->work;   /* (the change's own work on the drawer, the model's us) */
+            if (!m->pass && !r->g.c.px && m->work > res->idle) res->idle = m->work;
             if (getenv("MORPH_TRACE")) printf("    %s f%d t %.3f: %.1f ms (%d windows, %ld px, %ld changed, work %.1f), %d/%d grains, %d pairs\n", name, f, m->t,
                                               ms, r->g.c.wins, r->g.c.px, changed, m->work * 1e-3, m->na, m->nb, m->nfly);
         }
@@ -2809,16 +2813,15 @@ static void morph_run(morph_rig_t *r, int kind, scene_t *sc, uint32_t look, int 
             if (un && getenv("MORPH_TRACE")) printf("    %s f%d: %d px not as composed\n", name, f, un);
             const int e = empty_blocks(r->g.px, S);
             res->empty_max = e > res->empty_max ? e : res->empty_max;
-            /* the prototype's phases: old lines gone by 0.324 s, new lines only in the last 0.132 s, every pair down by
-             * 1.081 s and every new grain with no pair by 1.081 s + the extra */
+            /* the phases (fluid_draw.c MP_*): old lines gone by 0.32 s, new lines from 0.85 s only, every pair down by
+             * 1.04 s and every new grain with no pair by 1.06 s (the still layers a moment or two late at most when a
+             * frame has no room, never early) */
             fluid_morph_census_t c;
             fluid_draw_morph_census(r->d, &c);
-            const float t = m->t, eps = 1e-3f, E = m->dur - 1.2132f;
-            if (m->nb >= 0) { res->na = m->na; res->nb = m->nb; res->fly = m->nfly; res->spare = m->na - m->nfly; res->born = m->nb - m->nfly; res->extra = E; }
-            /* (the still ones on their own clocks: a frame or more late when a frame had no room, never early) */
-            const float to = m->tau[FLUID_MT_OLD] / 120.f, tn = m->tau[FLUID_MT_NEW] / 120.f, tb = m->tau[FLUID_MT_BORN] / 120.f;
-            const bool bad = (to >= 0.324f + eps && c.old_lines) || (tn < m->dur - 0.132f - eps && c.new_lines) ||
-                             (t >= 1.0812f + eps && (c.fly || c.wait)) || (m->nb >= 0 && tb >= 1.0812f + E + eps && c.born_landed != c.born) ||
+            const float t = m->t, eps = 1e-3f, late = 0.1f;
+            if (m->nb >= 0) { res->na = m->na; res->nb = m->nb; res->fly = m->nfly; res->spare = m->na - m->nfly; res->born = m->nb - m->nfly; }
+            const bool bad = (t >= 0.32f + late && c.old_lines) || (t < 0.85f - eps && c.new_lines) ||
+                             (t >= 1.04f + eps && (c.fly || c.wait)) || (m->nb >= 0 && t >= 1.06f + late && c.born_landed != c.born) ||
                              (t <= eps && (c.fly || c.landed || c.born));
             if (bad && getenv("MORPH_TRACE")) printf("    %s f%d t %.3f: off the phases (lines %d %d, pairs %d %d %d, born %d/%d)\n", name, f, t, c.old_lines, c.new_lines,
                                                      c.wait, c.fly, c.landed, c.born_landed, c.born);
@@ -2842,7 +2845,12 @@ static void morph_run(morph_rig_t *r, int kind, scene_t *sc, uint32_t look, int 
         if ((f0 >= 0 && f >= f0 + 3) || (stop && f >= stop)) break;
     }
     res->frames = f0;
-    res->lag = r->d->m.dg[FLUID_MD_LAG];
+    {
+        const int *g = r->d->m.dg;
+        res->hang = g[FLUID_MD_HANG]; res->slow = g[FLUID_MD_SLOW];
+        res->gap0 = g[FLUID_MD_LIN0] ? g[FLUID_MD_LIN0] - g[FLUID_MD_SETTLE] : -1;
+        res->gapf = g[FLUID_MD_LINF] - g[FLUID_MD_SETTLE];
+    }
     res->mean = nfr ? sum / nfr : 0.;
     if (stop) { free(sheet); return; }
     /* the end: the look itself, drawn whole */
@@ -3041,10 +3049,11 @@ static void test_morph(const char *dir, const char *catp, int job) {
     printf("  a change of picture, as dust (panel model, cells %.0f ms; ms a frame: mean / worst / over 33):\n", CELLS_MS);
     for (int q = 0; q < (int)(sizeof(RUN) / sizeof(RUN[0])); q++) {
         morph_run(r, RUN[q].kind, RUN[q].scene == 1 ? chart : RUN[q].scene == 2 ? up : NULL, RUN[q].look, RUN[q].late, 0, RUN[q].name, &res);
-        printf("    %-9s %4.0f ms  %5.1f / %5.1f / %d   grains %5d -> %5d (prototype %5d -> %5d), flying %4d (prototype %4d), fading %5d, coming %5d, extra %.1f s;"
-               " empty %4.1f %% (calm %4.1f, %4.1f), phases off %d, not composed %d; own work at most %.1f ms, still ones %d frames late at most\n", RUN[q].name, res.frames * 1000.0 / 30.0, res.mean, res.worst, res.over,
-               res.na, res.nb, RUN[q].na, RUN[q].nb, res.fly, RUN[q].fly, res.spare, res.born, res.extra, res.empty_max / 10.0, res.empty0 / 10.0, res.empty1 / 10.0, res.phase, res.unsent,
-               res.work * 1e-3, res.lag);
+        printf("    %-9s %4.0f ms  %5.1f / %5.1f / %d   grains %5d -> %5d (prototype %5d -> %5d), flying %4d (prototype %4d), fading %5d, coming %5d;"
+               " empty %4.1f %% (calm %4.1f, %4.1f), phases off %d, not composed %d; own work at most %.1f ms (%.1f before it moves); middle still %d frames,"
+               " slowed %d; first new line %+d, lines full %+d frames from the dust down\n", RUN[q].name, res.frames * 1000.0 / 30.0, res.mean, res.worst, res.over,
+               res.na, res.nb, RUN[q].na, RUN[q].nb, res.fly, RUN[q].fly, res.spare, res.born, res.empty_max / 10.0, res.empty0 / 10.0, res.empty1 / 10.0, res.phase, res.unsent,
+               res.work * 1e-3, res.idle * 1e-3, res.hang, res.slow, res.gap0, res.gapf);
         /* (the prototype's rule, its fit to the panel model: as many pairs as the smaller picture has, at most
          * FLUID_MORPH_FLY and FLUID_MORPH_FLY_PX px of grains, 2 x 2 px grains 4 px) */
         const int K = res.na < res.nb ? res.na : res.nb, most = K < FLUID_MORPH_FLY ? K : FLUID_MORPH_FLY, least = most < FLUID_MORPH_LAND_PX / 4 ? most : FLUID_MORPH_LAND_PX / 4;   /* (2 x 2 px grains: 4, landing or leaving) */
@@ -3058,14 +3067,19 @@ static void test_morph(const char *dir, const char *catp, int job) {
                   "%s: the pictures' grains as the prototype's, within 10 and 20 %% (%d, %d against %d, %d)", RUN[q].name, res.na, res.nb, RUN[q].na, RUN[q].nb);
         /* (a question's letters form in the fluid after its first frames: its picture as read has no lines, they come whole at
          * the end) */
-        CHECK(res.phase == 0 && (res.new_seen > 0 || RUN[q].kind == MK_ASK), "%s: the prototype's phases (old lines gone by 0.324 s, the new in the last 0.132 s, every grain down by 1.081 s + the extra; %d frames off)",
+        CHECK(res.phase == 0 && (res.new_seen > 0 || RUN[q].kind == MK_ASK), "%s: its phases (old lines gone by 0.32 s, the new from 0.85 s, every grain down by 1.06 s; %d frames off)",
               RUN[q].name, res.phase);
-        CHECK(res.frames >= 36 && res.frames <= 36 + 9 + 2 + 20 && res.over == 0,
-              "%s: one change of 1.21 s (+ the extra, + the wait for its dust), every frame inside the panel's (%d frames, worst %.1f ms of %.0f)", RUN[q].name, res.frames, res.worst, MORPH_FIT_MS);
+        CHECK(res.frames >= 33 && res.frames <= 45 && res.over == 0,
+              "%s: one change of 1.5 s at most, every frame inside the panel's (%d frames, worst %.1f ms of %.0f)", RUN[q].name, res.frames, res.worst, MORPH_FIT_MS);
+        CHECK(res.hang <= 3, "%s: the dissolve flows into the gathering: at most 3 frames nothing moves between them (%d)", RUN[q].name, res.hang);
+        CHECK((res.gap0 <= -2 || RUN[q].kind == MK_ASK) && res.gapf <= 4,
+              "%s: the dust converges into the lines: the new lines coming in 2 frames or more before the last grain is down (%+d), full 4 frames after at most (%+d)",
+              RUN[q].name, res.gap0, res.gapf);
         CHECK(res.unsent == 0, "%s: every frame of it all sent, each grain the frame it moves (%d frames not)", RUN[q].name, res.unsent);
         if (job)                                        /* (the drawer's own: its reading on the job, the device's) */
-            CHECK(res.work <= MORPH_BUDGET + MORPH_BUDGET / 10, "%s: no frame's own work over the change's budget, %.1f ms (most %.1f ms; its still ones %d frames late at most)",
-                  RUN[q].name, MORPH_BUDGET * 1e-3, res.work * 1e-3, res.lag);
+            CHECK(res.work <= MORPH_BUDGET + MORPH_BUDGET / 10 && res.idle <= FLUID_MORPH_IDLE_US + FLUID_MORPH_IDLE_US / 10,
+                  "%s: no frame's own work over the change's budget, %.1f ms (most %.1f ms; %.1f in its first frames, of %.1f)",
+                  RUN[q].name, MORPH_BUDGET * 1e-3, res.work * 1e-3, res.idle * 1e-3, FLUID_MORPH_IDLE_US * 1e-3);
         if (r->tx)                                      /* (the device's sender after it: one sender at a time, no queued row changed before it went) */
             CHECK(res.late == 0 && res.mixed == 0, "%s: with the sender, no window's rows changed once queued, none sent beside it (%d, %d)", RUN[q].name, res.late, res.mixed);
         CHECK(res.even <= 450, "%s: everywhere at once, never by rows: no band of rows takes over 4.5 times its share of the picture in a frame's changes (most %d %%)",
@@ -3100,12 +3114,13 @@ static void test_morph(const char *dir, const char *catp, int job) {
         fluid_draw_morph_costs(2.2f);
         for (int q = 0; q < (int)(sizeof(DEV) / sizeof(DEV[0])); q++) {
             morph_run(r, DEV[q].kind, DEV[q].scene == 1 ? chart : DEV[q].scene == 2 ? up : NULL, DEV[q].look, 0, 0, DEV[q].name, &res);
-            printf("    at the device's costs: %-9s %4.0f ms, own work at most %.1f ms, still ones %d frames late at most, %d %% of a band\n", DEV[q].name,
-                   res.frames * 1000.0 / 30.0, res.work * 1e-3, res.lag, res.even);
-            CHECK(res.work <= MORPH_BUDGET + MORPH_BUDGET / 10 && res.diff == 0 && res.phase == 0 && res.unsent == 0 && res.even <= 450 &&
-                  res.frames <= 60 && s_morph_stale == 0,
-                  "%s at the device's costs: no frame over the budget (most %.1f ms), the look whole at its end (%d px), in its phases (%d off), never by rows (%d %%), %d frames",
-                  DEV[q].name, res.work * 1e-3, res.diff, res.phase, res.even, res.frames);
+            printf("    at the device's costs: %-9s %4.0f ms, own work at most %.1f ms (%.1f before it moves), %d %% of a band; middle still %d frames, slowed %d;"
+                   " first new line %+d, lines full %+d frames from the dust down\n", DEV[q].name,
+                   res.frames * 1000.0 / 30.0, res.work * 1e-3, res.idle * 1e-3, res.even, res.hang, res.slow, res.gap0, res.gapf);
+            CHECK(res.work <= MORPH_BUDGET + MORPH_BUDGET / 10 && res.idle <= FLUID_MORPH_IDLE_US + FLUID_MORPH_IDLE_US / 10 && res.diff == 0 && res.phase == 0 &&
+                  res.unsent == 0 && res.even <= 450 && res.frames <= 45 && res.hang <= 3 && res.gap0 <= -2 && res.gapf <= 4 && s_morph_stale == 0,
+                  "%s at the device's costs: no frame over the budget (most %.1f ms), the look whole at its end (%d px), in its phases (%d off), never by rows (%d %%), %d frames,"
+                  " middle still %d, lines %+d / %+d from the dust down", DEV[q].name, res.work * 1e-3, res.diff, res.phase, res.even, res.frames, res.hang, res.gap0, res.gapf);
             s_morph_stale = 0;
         }
         fluid_draw_morph_costs(0.f);
@@ -3156,7 +3171,7 @@ static void test_morph(const char *dir, const char *catp, int job) {
          * (FLUID_MORPH_DUST_*, FLUID_MORPH_HOLD_*) and the change ends on time without it; the dust comes after it as a
          * change of its own (FLUID_LOOK_DUST), the lines staying, its grains coming up near their spots */
         morph_res_t a, b;
-        const int most = (int)((1.2132f + 0.3f) * 30.f + 0.5f) + FLUID_MORPH_HOLD_N + 3;
+        const int most = 45 + FLUID_MORPH_HOLD_N + 3;   /* (1.5 s, the slower dissolve of a dust built late, and its stand) */
         morph_run(r, MK_SCENE, up, FLUID_LOOK_KEEP | 400, 1000, 0, "no-dust", &a);
         printf("    its dust late: the change %.0f ms (at most %.0f), worst %.1f ms\n", a.frames * 1000.0 / 30.0, most * 1000.0 / 30.0, a.worst);
         CHECK(a.frames >= 36 && a.frames <= most && a.unsent == 0 && a.diff == 0 && a.over == 0,

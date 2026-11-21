@@ -104,9 +104,8 @@ esp_err_t molty_display_blit_wait(void) { return ESP_OK; }
 bool      molty_display_blit_can_overlap(void) { return true; }
 void      molty_display_blit_prof(uint32_t *out) { out[0] = out[1] = out[2] = 0; }
 void      molty_display_te(molty_te_t *out, bool window) { (void)window; *out = (molty_te_t){ 0 }; }   /* (no panel: no TE line) */
-void      molty_display_te_on(bool on) { (void)on; }
-void      molty_display_where(uint32_t out[5]) { for (int i = 0; i < 5; i++) out[i] = 0; }
 void      molty_display_inject(void) {}
+bool      molty_display_te_wait(uint32_t after, int timeout_ms) { (void)after; (void)timeout_ms; return false; }
 static bool s_mirror_back;             /* the drawer turned the panel's mirror back on: it repaints all (web_device.c) */
 void      molty_display_blit_mirror(bool on) { if (on) s_mirror_back = true; s_mirror = on; }
 esp_err_t molty_display_power(bool on) { (void)on; return ESP_ERR_NOT_SUPPORTED; }

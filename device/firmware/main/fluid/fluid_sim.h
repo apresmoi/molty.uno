@@ -382,15 +382,17 @@ uint8_t fluid_braille_contour(const float *sub);
 /* A change of the whole picture (the boot word to the creature, the creature to a scene and back, a scene to a scene, a
  * question coming and going): everywhere at once, as dust ("A for Molty", Juan's approved prototype). Each picture is
  * read as its dust (grains of 1 or 2 x 2 px: a scene's specks, the creature's and the word's dots) and its lines (the
- * rest: a scene's drawing, the creature's own cells, letters). The old lines fade out (MP_LINE_Q steps); the old dust loses its
- * shape: pairs of old and new grains (each picture's grains along a Hilbert curve, matched rank to rank, at most
- * FLUID_MORPH_FLY of them, spaced evenly) fly into one sparse cloud over the glass with a soft turbulence and on into the
- * new picture's dust; the old grains with no pair fade where they are, the new ones with none come up near their spot
- * and glide in; the new lines fade in last. Times in seconds of the change (fluid_draw.c MP_*); its clock
- * stands while the old picture is read (the first frame) and, at the cloud, till the new picture is read and paired (its
- * dust in: `ready`), the cloud swirling on, but never longer than FLUID_MORPH_HOLD_US (or _N frames): then the new picture
- * is read as it is (its dust, if not in yet, comes after the change as a change of its own: FLUID_LOOK_DUST, its grains
- * coming up near their spots and gliding in, the lines staying). Every grain that moves is drawn and sent the frame
+ * rest: a scene's drawing, the creature's own cells, letters). The old lines go out a cell at a time, scattered; the old
+ * dust loses its shape: pairs of old and new grains (each picture's grains along a Hilbert curve, matched rank to rank, at
+ * most FLUID_MORPH_FLY of them, spaced evenly) fly into one sparse cloud over the glass with a soft turbulence and on into
+ * the new picture's dust, one path each that never stops; the old grains with no pair go out where they are, the new
+ * ones with none come up on their spot (one in 8 near it, gliding in); the new lines come in over the last landings.
+ * Times in seconds of the change (fluid_draw.c MP_*); its clock waits while the old picture is read (its first frames,
+ * nothing sent) and slows (never a jump) before the pairs' cloud points till the new picture is read and paired (its dust
+ * in: `ready`; built late, the dissolve goes a little slower from the start), standing there never longer than
+ * FLUID_MORPH_HOLD_US (or _N frames): then the new picture is read as it is (its dust, if not in yet, comes after the
+ * change as a change of its own: FLUID_LOOK_DUST, its grains coming up on their spots, the lines staying). Every grain
+ * that moves is drawn and sent the frame
  * it moves: the glass is kept (snap), each frame the pixels it changes are composed there, and the cell rows they are
  * in are sent straight from there in windows of whole rows (fluid_draw.c morph_send). Its last frame draws the new look
  * whole where it changed since it was read. A look marked
@@ -416,27 +418,27 @@ static inline uint32_t fluid_look_of(int kind, uint32_t id, bool dust) {
 #define FLUID_MORPH_LINES     16384    /* old lines' pixels read at most (beyond: dust)                                 */
 #define FLUID_MORPH_DUST_US   150000   /* at the cloud, the new look's inputs (`ready`) awaited this long at most ..   */
 #define FLUID_MORPH_DUST_N    5        /* .. or this many frames (whichever first) ..                                  */
-#define FLUID_MORPH_HOLD_US   800000   /* .. and the clock stands there this long at most: then what is missing is made at once
+#define FLUID_MORPH_HOLD_US   400000   /* .. and the clock stands there this long at most: then what is missing is made at once
                                         * (a scene's specks not in come after, as their own change), never a cut   */
-#define FLUID_MORPH_HOLD_N    24
-#define FLUID_MORPH_LINES_US  2000000  /* the clock stands before the new lines come in till they are read, this long at
-                                        * most (nothing moves then: cheap frames), then the rest is read at once      */
-#define FLUID_MORPH_LINES_N   60
+#define FLUID_MORPH_HOLD_N    12
+#define FLUID_MORPH_LINES_US  700000   /* the clock stands before the new lines come in till they are read, this long at
+                                        * most, then the rest is read at once                                         */
+#define FLUID_MORPH_LINES_N   20
 #define FLUID_MORPH_CELLS_US  16000    /* the drawer's cells a frame in a change (us): the panel's frame is ~31.5 ms, its
                                         * send ~12. The change's own work (fluid_morph_t.budget) is what the frame's other
                                         * work before it left of this (fluid_draw_morph_spent): what moves goes first, then
-                                        * the pairing, then the still ones on their own clocks (fluid_morph_t.tau)        */
+                                        * the still layers' moments, a moment late when the frame has no room            */
+#define FLUID_MORPH_IDLE_US   24000    /* .. and in its first frames, the old picture read, sorted, its pairs chosen: they
+                                        * send nothing                                                               */
 #define FLUID_MORPH_SPENT_US  1000     /* (the frame's other work before the change's, as the host's model counts it)    */
 #define FLUID_MORPH_PASS_US   12000    /* (the drawer's one pass for the new look, as the panel model counts it)        */
 #define FLUID_MORPH_READ_MIN_US 2000   /* at the cloud, the new picture read a frame at least, whatever the grains took .. */
 #define FLUID_MORPH_SORT_MIN_US 2500   /* .. and its grains put in order                                               */
 #define FLUID_MORPH_FINE_US   5000     /* (the dust's frame, fluid_fine_frame, as the panel model counts it)            */
-#define FLUID_MORPH_BORN_FAST 6000     /* new grains with no pair: more, and they come up over 0.3 s more (the prototype's
-                                        * extra, as its fit to the panel chose it: to the chart, not to Leo)            */
 /* the parts of a change's own work in a frame (fluid_morph_t.prof, the logs' `anim wave.work`): the look's own changes
- * looked at, the old picture read, the new one read, the pairs planned and matched, the pairs moved (their motion,
- * turbulence, colour), the old grains with no pair, the new ones with none, the line pixels' steps, composing the
- * marked pixels into the kept glass, the look drawn whole at the end, the marks cleared and the rows to send found */
+ * looked at, the old picture read, the new one read, the pairs planned and matched, the movers taken off the glass, the
+ * old picture's lists turned, the gliders drawn, the new picture's lists turned, the pairs drawn (their motion,
+ * turbulence, colour), the look drawn whole at the end, the rows to send found */
 enum { FLUID_MP_LOOK, FLUID_MP_OLD, FLUID_MP_NEW, FLUID_MP_PAIR, FLUID_MP_FLY, FLUID_MP_SPARE, FLUID_MP_BORN, FLUID_MP_LINES,
        FLUID_MP_COMPOSE, FLUID_MP_END, FLUID_MP_MARKS, FLUID_MP_N };
 /* a change's stages, for the log (fluid_morph_t.dg; mole_fluid.c "change stages"): the frame (m->frames) each was
@@ -445,13 +447,12 @@ enum { FLUID_MD_OLD, FLUID_MD_PASS, FLUID_MD_READY, FLUID_MD_DUST, FLUID_MD_PAIR
        FLUID_MD_LUS, FLUID_MD_DUS, FLUID_MD_SORTF, FLUID_MD_WAITC, FLUID_MD_WAITL, FLUID_MD_LEFT,
        FLUID_MD_JOBN, FLUID_MD_JOBUS, FLUID_MD_JOBMAX,  /* (read on the job: its slices that worked, their us in all, the longest) */
        FLUID_MD_BORN, FLUID_MD_WPX,                     /* (the most new grains with no pair moved, pixels written, in a frame) */
-       FLUID_MD_LAG,                                    /* (the most frames a still one's clock lagged) */
+       FLUID_MD_SLOW,                                   /* (frames its clock went slower than a quarter frame a quarter) */
+       FLUID_MD_MOVE0, FLUID_MD_SETTLE, FLUID_MD_HANG,  /* (the first frame anything moved, the dust all down, the frames
+                                                         * between them nothing moved or the clock stood) */
+       FLUID_MD_LIN0, FLUID_MD_LINF,                    /* (the first frame a new line showed, all of them) */
        FLUID_MD_FRAMES, FLUID_MD_N };
 typedef struct fluid_morph_mem fluid_morph_mem_t;  /* (fluid_draw.c: the two pictures' grains and lines, the pairs) */
-/* what of a change may step a frame or more late when its frame has no room (each on a clock of its own: fluid_morph_t.tau,
- * everywhere at once): the old grains with no pair fading, the new ones coming up on their spot, the old lines fading
- * out, the new lines fading in. What moves (the pairs, the gliding new grains) never waits. */
-enum { FLUID_MT_SPARE, FLUID_MT_BORN, FLUID_MT_OLD, FLUID_MT_NEW, FLUID_MT_N };
 typedef struct {
     bool     on;
     bool     whole;                    /* snap holds the glass (kept since the last full send)                        */
@@ -462,10 +463,8 @@ typedef struct {
     uint8_t  *colx, *rowy;             /* fb_w, fb_h: a pixel's cell column, row (255: none)                           */
     fluid_morph_mem_t *mm;             /* the change's pictures and pairs (PSRAM, while it runs)                        */
     int      frames;                   /* frames since it began                                                       */
-    int      n, w;                     /* its clock: frames of its schedule, of the cloud's flow                      */
+    int      n, w;                     /* its clock: quarter frames of its schedule; frames of the cloud's flow       */
     float    t, dur;                   /* its time and length, s                                                      */
-    int      tau[FLUID_MT_N];          /* the still ones' own clocks (FLUID_MT_*), quarter frames of its schedule: each at
-                                        * 4 n, or behind it when the frame's budget left it no room (fluid_morph_t.budget) */
     int      na, nb, nlines, nfly;     /* grains of the old picture, of the new (-1: not read yet), old lines' px, pairs flying */
     int      px, wins, comp;           /* this frame: the pixels and windows sent, the pixels composed                */
     int      work;                     /* .. the change's own work (the panel model's us: reading, pairing, moving grains) */

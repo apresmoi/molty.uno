@@ -107,7 +107,7 @@ typedef struct {
 } molty_mic_ops_t;
 
 /* the panel's tearing-effect pulses (molty_display_te) */
-typedef struct { bool line; uint32_t total, n, mean_us, min_us, max_us; } molty_te_t;
+typedef struct { bool line; uint32_t total, n, mean_us, min_us, max_us; int64_t last_us; } molty_te_t;   /* (last_us: the latest pulse, esp_timer) */
 
 typedef struct {
     const char   *id;          /* board.json "name", e.g. "waveshare-esp32-s3-touch-lcd-1.46" */
@@ -131,8 +131,7 @@ typedef struct {
     void      (*blit_prof)(uint32_t *out);        /* optional: us in the async blits, see molty_display_blit_prof */
     void      (*blit_mirror)(bool on);            /* optional: see molty_display_blit_mirror                        */
     void      (*display_te)(molty_te_t *out, bool window);   /* optional: see molty_display_te                       */
-    void      (*display_te_on)(bool on);          /* optional, EXPERIMENT: see molty_display_te_on                  */
-    void      (*display_where)(uint32_t out[3]);  /* optional: see molty_display_where                              */
+    bool      (*display_te_wait)(uint32_t after, int timeout_ms);   /* optional: see molty_display_te_wait        */
     void      (*display_inject)(void);            /* optional, EXPERIMENT: see molty_display_inject                 */
     esp_err_t (*display_power)(bool on);          /* optional: panel off / on (sleep, backlight)  */
     esp_err_t (*display_level)(uint8_t level);    /* optional: brightness 0..255 (255 at power on) */
@@ -220,11 +219,9 @@ void      molty_display_blit_mirror(bool on);
  *  last windowed call with their period (us; n 0: none came; the window starts again). line false: the board reads no TE
  *  line (none, or its interrupt could not be installed). Any task. */
 void      molty_display_te(molty_te_t *out, bool window);
-/** EXPERIMENT (the bench's te=0): the TE line's interrupt off, or on again. */
-void      molty_display_te_on(bool on);
-/** Where the panel's driver is (the stuck sender's log line): out[0] where the board's driver waits (its own stage, 0
- *  none), out[1] transfers queued, out[2] their ends taken, out[3] async blits started, out[4] collected (zeros without). */
-void      molty_display_where(uint32_t out[5]);
+/** Blocks until the TE pulses' total (molty_display_te) passes after: true; false after timeout_ms, or at once when the
+ *  board reads no TE line. One waiter at a time. */
+bool      molty_display_te_wait(uint32_t after, int timeout_ms);
 /** EXPERIMENT (the bench's stuck=1): the board's next panel call meets a transfer that never ends, so its recovery shows. */
 void      molty_display_inject(void);
 /** The panel off (false) or on. ESP_ERR_NOT_SUPPORTED when the board cannot; the caller

@@ -7,8 +7,8 @@
  * Every transfer is a queued SPI transaction on a ring of LQ_DEPTH slots; their ends are taken back in order, each
  * wait bounded (LQ_WAIT_MS). Nothing here waits for ever: no polling transaction, and the bus is held (for the chip
  * select across a window's chunks) only once every earlier transfer has ended, so taking it never waits on one.
- * Pixels from memory the DMA cannot read (PSRAM) go through LQ_BUFS bounce buffers of LQ_BUF bytes, given once at
- * init: the SPI master never allocates. A window's source may be reused once the call returns when it was bounced;
+ * Pixels from memory the DMA cannot read (PSRAM) go through bounce buffers (lq_bounce: LQ_BUFS of LQ_BUF bytes, given
+ * once at init): the SPI master never allocates. A window's source may be reused once the call returns when it was bounced;
  * a DMA-capable one is read until the next call (lq_wait or the next transfer).
  *
  * A wait that runs out, a slot back out of order, or a call the IDF refuses: logged by the caller (lq_t.fails), the
@@ -22,10 +22,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define LQ_DEPTH   4        /* transactions in flight at most: a window's two commands and two pixel chunks */
-#define LQ_BUFS    2        /* bounce buffers (one filled while the other goes out)                          */
-#define LQ_BUF     2048     /* bytes each: LQ_BUFS x LQ_BUF internal DMA RAM, held from init                 */
-#define LQ_XFER    4096     /* a chunk straight from DMA-capable memory (the bus's max_transfer_sz)          */
+#define LQ_BUFS    2        /* bounce buffers (one filled while the other goes out) ..                      */
+#define LQ_BUF     4096     /* .. of this many bytes: LQ_BUFS x LQ_BUF internal DMA RAM, held from init (bench 17:
+                             * 2 x 2048 sent a change's glass ~25 % slower, 3 x 4096 and 2 x 8192 ~1 ms faster)  */
+#define LQ_DEPTH   (LQ_BUFS + 2)   /* transactions in flight at most: a window's two commands, its chunks       */
+#define LQ_XFER    8192     /* a chunk at most (the bus's max_transfer_sz), straight from DMA-capable memory  */
 #define LQ_WAIT_MS 200      /* a transfer's end, at most (a 4 KB chunk takes 0.1 ms; a flash erase holds the
                              * SPI interrupt off for tens of ms)                                              */
 
@@ -55,8 +56,9 @@ typedef struct {
 
 typedef struct {
     const lq_io_t *io;
-    uint8_t  *buf[LQ_BUFS];          /* NULL: none (the IDF bounces each chunk itself, as before)                     */
-    uint32_t use[LQ_BUFS];           /* the transaction that last read each buffer (+1): free once tail reaches it    */
+    uint8_t  *buf[LQ_BUFS];      /* nbuf of bsz bytes; none: the IDF bounces each chunk itself (as esp_lcd did)    */
+    int      nbuf; uint32_t bsz;
+    uint32_t use[LQ_BUFS];       /* the transaction that last read each buffer (+1): free once tail reaches it    */
     uint32_t head, tail;             /* transactions queued, ends taken (since boot)                                  */
     int      nb;                     /* the next bounce buffer                                                        */
     bool     held, stuck, open;      /* the bus taken; a reset refused; a chunk kept CS low and its frame is not closed  */
@@ -67,7 +69,10 @@ typedef struct {
     bool     inject;                 /* EXPERIMENT (bench stuck=1): the next call counts one transfer that never ends  */
 } lq_t;
 
-void lq_init(lq_t *q, const lq_io_t *io, uint8_t *const bufs[LQ_BUFS], const lq_tx_t *close);
+void lq_init(lq_t *q, const lq_io_t *io, const lq_tx_t *close);
+/** The bounce buffers: n (<= LQ_BUFS) of size (<= LQ_XFER) bytes at mem, DMA-capable; NULL or 0: none. Only with
+ *  every transfer out (lq_wait first); the old ones are free once it returns. */
+void lq_bounce(lq_t *q, uint8_t *mem, int n, uint32_t size);
 /** A short command (data <= 4 bytes), out when it returns. */
 int  lq_reg(lq_t *q, uint8_t cmd, uint32_t addr, const uint8_t *data, uint32_t len);
 /** The commands pre (short, in order), then n bytes of px as one chip-select frame (cmd and addr on its first chunk),

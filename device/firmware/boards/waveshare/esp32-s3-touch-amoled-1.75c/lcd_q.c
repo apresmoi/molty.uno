@@ -7,11 +7,18 @@
 
 #include <string.h>
 
-void lq_init(lq_t *q, const lq_io_t *io, uint8_t *const bufs[LQ_BUFS], const lq_tx_t *close)
+void lq_init(lq_t *q, const lq_io_t *io, const lq_tx_t *close)
 {
     memset(q, 0, sizeof(*q));
     q->io = io; q->close = *close;
-    for (int b = 0; b < LQ_BUFS; b++) q->buf[b] = bufs ? bufs[b] : NULL;
+}
+
+void lq_bounce(lq_t *q, uint8_t *mem, int n, uint32_t size)
+{
+    q->nbuf = mem && n > 0 && size ? (n < LQ_BUFS ? n : LQ_BUFS) : 0;
+    q->bsz = size < LQ_XFER ? size : LQ_XFER;
+    for (int b = 0; b < LQ_BUFS; b++) { q->buf[b] = b < q->nbuf ? mem + (size_t)b * size : NULL; q->use[b] = 0; }
+    q->nb = 0;
 }
 
 static int put(lq_t *q, const lq_tx_t *t);
@@ -97,8 +104,8 @@ int lq_window(lq_t *q, const lq_tx_t *pre, int npre, uint8_t cmd, uint32_t addr,
     const lq_io_t *io = q->io;
     int e = begin(q);
     if (e) return e;
-    const bool bounce = q->buf[0] && !io->dma_ok(io->ctx, px);
-    const uint32_t step = bounce ? LQ_BUF : LQ_XFER;
+    const bool dma = io->dma_ok(io->ctx, px), bounce = !dma && q->nbuf;
+    const uint32_t step = dma ? LQ_XFER : bounce ? q->bsz : 4096;   /* (no buffers: the IDF bounces each, 4 KB as esp_lcd did) */
     if (n > step) {                                     /* (more than one chunk: the chip select held between them) */
         q->at = LQ_AT_HOLD;
         if ((e = io->hold(io->ctx, true))) return fail(q, e);
@@ -117,7 +124,7 @@ int lq_window(lq_t *q, const lq_tx_t *pre, int npre, uint8_t cmd, uint32_t addr,
         const lq_tx_t t = { src, k, off ? 0 : addr, off ? 0 : cmd,
                             (uint8_t)((off ? 0 : LQ_CMD) | LQ_QUAD | (off + k < n ? LQ_KEEP : 0)), { 0 } };
         if ((e = put(q, &t))) return e;
-        if (bounce) { q->use[b] = q->head; q->nb = (b + 1) % LQ_BUFS; }
+        if (bounce) { q->use[b] = q->head; q->nb = (b + 1) % q->nbuf; }
         off += k;
     }
     if (q->held) { io->hold(io->ctx, false); q->held = false; }

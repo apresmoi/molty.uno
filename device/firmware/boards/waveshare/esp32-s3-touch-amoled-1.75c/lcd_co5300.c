@@ -27,6 +27,7 @@
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_heap_caps.h"
@@ -164,16 +165,18 @@ static uint32_t s_prof[3];
 static bool s_mirror = true;               /* async blits keep the framebuffer mirror (lcd_co5300_mirror)          */
 
 /* The tearing effect (TEON: a pulse at each refresh's blanking) on LCD_TE, an input only: counted with its period by a
- * tiny interrupt (no logging, no allocation). Nothing paces by it yet. If it cannot be installed the panel goes on
- * without it (logged once). */
+ * tiny interrupt (no logging, no allocation), which also wakes a task waiting for one (lcd_co5300_te_wait: the fluid
+ * paces its frames by them). If it cannot be installed the panel goes on without it (logged once): the waits say so. */
 static portMUX_TYPE s_te_mux = portMUX_INITIALIZER_UNLOCKED;
-static bool s_te_on, s_te_ok;                   /* (read now; its interrupt installed) */
+static bool s_te_on;                            /* (its interrupt installed) */
 static uint32_t s_te_total, s_te_k, s_te_min = UINT32_MAX, s_te_max;
 static uint64_t s_te_sum;
 static int64_t s_te_last;
+static SemaphoreHandle_t s_te_sem;              /* given at each pulse (lcd_co5300_te_wait) */
 static void te_isr(void *arg)
 {
     (void)arg;
+    BaseType_t woken = pdFALSE;
     const int64_t t = esp_timer_get_time();
     portENTER_CRITICAL_ISR(&s_te_mux);
     if (s_te_last) {
@@ -184,6 +187,8 @@ static void te_isr(void *arg)
     }
     s_te_last = t; s_te_total++;
     portEXIT_CRITICAL_ISR(&s_te_mux);
+    if (s_te_sem) xSemaphoreGiveFromISR(s_te_sem, &woken);
+    portYIELD_FROM_ISR(woken);
 }
 static void te_start(void)
 {
@@ -192,20 +197,12 @@ static void te_start(void)
         .pull_up_en = GPIO_PULLUP_DISABLE, .pull_down_en = GPIO_PULLDOWN_ENABLE,   /* (a quiet low if the panel drives none) */
         .intr_type = GPIO_INTR_POSEDGE,
     };
+    s_te_sem = xSemaphoreCreateBinary();            /* (none: no waits, the fluid paces by its timer) */
     esp_err_t e = gpio_config(&te);
     if (e == ESP_OK) { e = gpio_install_isr_service(0); if (e == ESP_ERR_INVALID_STATE) e = ESP_OK; }   /* (another's already in) */
     if (e == ESP_OK) e = gpio_isr_handler_add(LCD_TE, te_isr, NULL);
     if (e != ESP_OK) { ESP_LOGW(TAG, "TE line on GPIO%d not read (%s)", LCD_TE, esp_err_to_name(e)); gpio_set_intr_type(LCD_TE, GPIO_INTR_DISABLE); return; }
-    s_te_on = s_te_ok = true;
-}
-/* EXPERIMENT (the bench's te=0, to split the suspects of bench 12/13's stalled panel; delete once known): its interrupt off
- * (handler removed, the pin's interrupt disabled) or on again */
-void lcd_co5300_te_on(bool on)
-{
-    if (!s_te_ok || on == s_te_on) return;
-    if (on) { if (gpio_isr_handler_add(LCD_TE, te_isr, NULL) != ESP_OK) return; gpio_intr_enable(LCD_TE); }
-    else { gpio_intr_disable(LCD_TE); gpio_isr_handler_remove(LCD_TE); }
-    s_te_on = on;
+    s_te_on = true;
 }
 
 esp_err_t lcd_co5300_init(void)
@@ -221,16 +218,15 @@ esp_err_t lcd_co5300_init(void)
         .sclk_io_num = LCD_SCLK,
         .data0_io_num = LCD_DATA0, .data1_io_num = LCD_DATA1,
         .data2_io_num = LCD_DATA2, .data3_io_num = LCD_DATA3,
-        .max_transfer_sz = LQ_XFER,
+        .max_transfer_sz = LQ_XFER,          /* (its DMA descriptors: 3 of 12 B) */
     };
     ESP_RETURN_ON_ERROR(spi_bus_initialize(LCD_SPI_HOST, &bus, SPI_DMA_CH_AUTO), TAG, "spi bus");
     ESP_RETURN_ON_ERROR(spi_bus_add_device(LCD_SPI_HOST, &DEV, &s_dev), TAG, "spi device");
-    /* the bounce buffers, once (none: each PSRAM chunk is bounced by the SPI master, as before; logged) */
-    uint8_t *bufs[LQ_BUFS];
-    bufs[0] = heap_caps_malloc(LQ_BUFS * LQ_BUF, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-    for (int b = 1; b < LQ_BUFS; b++) bufs[b] = bufs[0] ? bufs[0] + b * LQ_BUF : NULL;
-    if (!bufs[0]) ESP_LOGW(TAG, "no %d B of DMA RAM for the bounce buffers: the SPI master bounces each chunk", LQ_BUFS * LQ_BUF);
-    lq_init(&s_q, &IO, bufs, &(lq_tx_t){ NULL, 0, ADDR(0x00), OP_REG, LQ_CMD, { 0 } });   /* (NOP: closes a cut frame) */
+    lq_init(&s_q, &IO, &(lq_tx_t){ NULL, 0, ADDR(0x00), OP_REG, LQ_CMD, { 0 } });   /* (NOP: closes a cut frame) */
+    /* the bounce buffers, once (none: each PSRAM chunk is bounced by the SPI master, as esp_lcd did; logged) */
+    uint8_t *bounce = heap_caps_malloc(LQ_BUFS * LQ_BUF, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (!bounce) ESP_LOGW(TAG, "no %d B of DMA RAM for the bounce buffers: the SPI master bounces each chunk", LQ_BUFS * LQ_BUF);
+    lq_bounce(&s_q, bounce, LQ_BUFS, LQ_BUF);
 
     /* hardware reset, as esp_lcd_co5300 (low 10 ms, then 150 ms to boot) */
     gpio_set_level(LCD_RST, 0);
@@ -257,17 +253,31 @@ esp_err_t lcd_co5300_init(void)
     return ESP_OK;
 }
 
-void lcd_co5300_where(uint32_t out[3]) { out[0] = s_q.at; out[1] = s_q.head; out[2] = s_q.tail; }
 void lcd_co5300_inject(void) { s_q.inject = true; }
 
 void lcd_co5300_te(molty_te_t *out, bool window)
 {
     portENTER_CRITICAL(&s_te_mux);
-    *out = (molty_te_t){ s_te_on, s_te_total, s_te_k, s_te_k ? (uint32_t)(s_te_sum / s_te_k) : 0, s_te_k ? s_te_min : 0, s_te_max };
+    *out = (molty_te_t){ s_te_on, s_te_total, s_te_k, s_te_k ? (uint32_t)(s_te_sum / s_te_k) : 0, s_te_k ? s_te_min : 0, s_te_max, s_te_last };
     if (window) { s_te_k = 0; s_te_sum = 0; s_te_min = UINT32_MAX; s_te_max = 0; }
     portEXIT_CRITICAL(&s_te_mux);
 }
 
+bool lcd_co5300_te_wait(uint32_t after, int timeout_ms)
+{
+    if (!s_te_on || !s_te_sem) return false;
+    const int64_t end = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
+    for (;;) {
+        portENTER_CRITICAL(&s_te_mux);
+        const uint32_t n = s_te_total;
+        portEXIT_CRITICAL(&s_te_mux);
+        if ((int32_t)(n - after) > 0) return true;
+        const int64_t left = end - esp_timer_get_time();
+        if (left <= 0) return false;
+        const TickType_t ticks = pdMS_TO_TICKS(left / 1000);
+        xSemaphoreTake(s_te_sem, ticks ? ticks : 1);    /* (a pulse wakes it at once; the ticks only bound it) */
+    }
+}
 
 uint16_t *lcd_co5300_framebuffer(void) { return s_fb; }
 

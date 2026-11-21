@@ -24,7 +24,7 @@ static struct {
     bool in_frame;                                    /* CS low (a frame open: the last chunk kept it) */
     uint8_t wire[WIRE_MAX]; int nwire; int frames; uint8_t frame_cmd[64]; uint32_t frame_addr[64]; int frame_start[64];
 } F;
-static uint8_t g_dma[64 * 1024];                      /* "internal DMA" memory: the DMA reads it as is */
+static uint8_t g_dma[96 * 1024];                      /* "internal DMA" memory: the DMA reads it as is */
 static uint8_t g_ps[440 * 1024];                      /* "PSRAM": bounced */
 
 static uint32_t sum(const lq_tx_t *t)
@@ -97,13 +97,13 @@ static const lq_io_t IO = { f_queue, f_result, f_hold, f_reset, f_dma, NULL };
 static uint8_t *const g_bounce = g_dma + 48 * 1024;   /* (the bounce buffers: internal DMA RAM too) */
 static const lq_tx_t NOP = { NULL, 0, 0, 0x02, LQ_CMD, { 0 } };
 static lq_t Q;
-static void fresh(void)
+static void fresh_with(int n, uint32_t size)
 {
     memset(&F, 0, sizeof F);
-    uint8_t *b[LQ_BUFS];
-    for (int i = 0; i < LQ_BUFS; i++) b[i] = g_bounce + i * LQ_BUF;
-    lq_init(&Q, &IO, b, &NOP);
+    lq_init(&Q, &IO, &NOP);
+    lq_bounce(&Q, g_bounce, n, size);
 }
+static void fresh(void) { fresh_with(LQ_BUFS, LQ_BUF); }
 static void fill(uint8_t *p, int n, int seed) { for (int i = 0; i < n; i++) p[i] = (uint8_t)(i * 7 + seed * 13 + (i >> 8)); }
 static const lq_tx_t PRE[2] = { { NULL, 4, 0x2A00, 0x02, LQ_CMD, { 1, 2, 3, 4 } }, { NULL, 4, 0x2B00, 0x02, LQ_CMD, { 5, 6, 7, 8 } } };
 static int window(const uint8_t *px, uint32_t n) { return lq_window(&Q, PRE, 2, 0x32, 0x2C00, px, n); }
@@ -117,9 +117,9 @@ static void check_window(const uint8_t *want, uint32_t n, const char *what)
     CHECK(!F.in_frame && !F.held && !Q.held, "%s: the frame closed, the bus let go", what);
 }
 
-static void test_bounced(void)
+static void test_bounced(int nb, uint32_t bs)
 {
-    fresh();
+    fresh_with(nb, bs);
     static uint8_t want[10000];
     fill(g_ps, 10000, 1); memcpy(want, g_ps, 10000);
     CHECK(window(g_ps, 10000) == 0, "bounced window");
@@ -127,7 +127,7 @@ static void test_bounced(void)
     CHECK(lq_wait(&Q) == 0, "wait");
     check_window(want, 10000, "bounced");
     CHECK(F.bad == 0, "a PSRAM source reached the IDF");
-    CHECK(Q.head == Q.tail && Q.head == 2 + 5, "2 commands + 5 chunks of %d: %u", LQ_BUF, (unsigned)Q.head);
+    CHECK(Q.head == Q.tail && Q.head == 2 + (10000 + bs - 1) / bs, "2 commands + chunks of %u: %u", (unsigned)bs, (unsigned)Q.head);
     /* a small one: one chunk, the bus never held */
     fill(g_ps, 300, 3); memcpy(want, g_ps, 300);
     CHECK(window(g_ps, 300) == 0 && lq_wait(&Q) == 0, "small window");
@@ -148,7 +148,7 @@ static void test_direct(void)
     CHECK(window(g_dma, 9000) == 0, "direct window");
     CHECK(lq_wait(&Q) == 0, "wait");                    /* (a DMA source is read until the next call) */
     check_window(want, 9000, "direct");
-    CHECK(Q.head == 2 + 3, "2 commands + 3 chunks of %d: %u", LQ_XFER, (unsigned)Q.head);
+    CHECK(Q.head == 2 + (9000 + LQ_XFER - 1) / LQ_XFER, "2 commands + chunks of %d: %u", LQ_XFER, (unsigned)Q.head);
     /* two windows in a row: the second's begin takes the first's ends before its own commands */
     fill(g_dma + 9000, 4000, 6);
     CHECK(window(g_dma, 9000) == 0 && window(g_dma + 9000, 4000) == 0 && lq_wait(&Q) == 0, "back to back");
@@ -225,7 +225,7 @@ static void test_inject(void)
 static void test_no_bounce(void)
 {
     memset(&F, 0, sizeof F);
-    lq_init(&Q, &IO, NULL, &NOP);                             /* (no bounce buffers at init: the IDF bounces, as before) */
+    lq_init(&Q, &IO, &NOP);                             /* (no bounce buffers: the IDF bounces, as before) */
     fill(g_ps, 9000, 11);
     CHECK(window(g_ps, 9000) == 0 && lq_wait(&Q) == 0, "without bounce buffers");
     check_window(g_ps, 9000, "no bounce");
@@ -234,7 +234,8 @@ static void test_no_bounce(void)
 
 int main(void)
 {
-    test_bounced(); test_direct(); test_reg(); test_lost(); test_stall(); test_queue_fail(); test_inject(); test_no_bounce();
+    test_bounced(LQ_BUFS, LQ_BUF); test_bounced(2, 2048); test_bounced(1, 8192);
+    test_direct(); test_reg(); test_lost(); test_stall(); test_queue_fail(); test_inject(); test_no_bounce();
     if (g_fail) { printf("lcd_q: %d FAILED\n", g_fail); return 1; }
     printf("LCD_Q PASS: frames on the wire, sources untouched in flight, bus taken idle, waits bounded, recoveries clean\n");
     return 0;

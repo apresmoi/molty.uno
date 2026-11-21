@@ -153,7 +153,6 @@ molty_shape_t molty_display_shape(void)   { return B.shape; }
  * the others give up after BUS_WAIT_MS with ESP_ERR_TIMEOUT, never wait for ever. */
 #define BUS_WAIT_MS 500
 static TaskHandle_t s_async;                           /* the task whose async transfer is out, not collected */
-static uint32_t s_started, s_collected;                /* async blits started, and collected (the stuck sender's line) */
 static void bus_breach(const char *what, const char *why, TaskHandle_t other)
 {
     static bool logged;
@@ -173,10 +172,6 @@ static bool bus_in(const char *what)
 }
 static esp_err_t bus_out(esp_err_t e, bool out)
 {
-    static bool logged;                                /* (the first failed panel call, once a boot) */
-    if (e != ESP_OK && !logged) { logged = true; ESP_LOGE(TAG, "panel: a call from %s failed: %s", pcTaskGetName(NULL), esp_err_to_name(e)); }
-    if (s_async && !(out && e == ESP_OK && s_async == xTaskGetCurrentTaskHandle())) s_collected++;   /* (any later call collects it) */
-    if (out && e == ESP_OK) s_started++;
     s_async = out && e == ESP_OK ? xTaskGetCurrentTaskHandle() : NULL;
     if (s_bus) xSemaphoreGive(s_bus);
     return e;
@@ -229,14 +224,11 @@ void molty_display_te(molty_te_t *out, bool window)
     if ((s_caps & MOLTY_CAP_DISPLAY) && B.display_te) B.display_te(out, window);
 }
 
-void molty_display_where(uint32_t out[5])
+bool molty_display_te_wait(uint32_t after, int timeout_ms)
 {
-    out[0] = out[1] = out[2] = 0;
-    if ((s_caps & MOLTY_CAP_DISPLAY) && B.display_where) B.display_where(out);
-    out[3] = s_started; out[4] = s_collected;
+    return (s_caps & MOLTY_CAP_DISPLAY) && B.display_te_wait && B.display_te_wait(after, timeout_ms);
 }
 void molty_display_inject(void) { if ((s_caps & MOLTY_CAP_DISPLAY) && B.display_inject) B.display_inject(); }
-void molty_display_te_on(bool on) { if ((s_caps & MOLTY_CAP_DISPLAY) && B.display_te_on) B.display_te_on(on); }
 
 bool molty_display_blit_can_overlap(void) { return (s_caps & MOLTY_CAP_DISPLAY) && B.blit_async && B.blit_wait; }
 
