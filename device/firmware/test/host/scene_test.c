@@ -3010,6 +3010,7 @@ static void test_tx(void) {
           "sender stuck a while: one bound waited in all (%d ms), logged once (%d), every frame end answered (%d left), back for the frames after (%d)", k.waited, lates, k.queued, idle);
 }
 
+#define MORPH_JOB_OVER_US 6500   /* (the job's whole steps left: the new grains' and lines' lists, ~3 ms each) */
 static void test_morph(const char *dir, const char *catp, int job) {
     char path[512]; size_t len; const char *err;
     snprintf(path, sizeof(path), "%s/astrology.json", dir);
@@ -3050,7 +3051,11 @@ static void test_morph(const char *dir, const char *catp, int job) {
         { "chart-cat", MK_CAT, 0, FLUID_LOOK_KEEP | 1, 0, 11843, 1382, 1382, 214 } };
     printf("  a change of picture, as dust (panel model, cells %.0f ms; ms a frame: mean / worst / over 33):\n", CELLS_MS);
     for (int q = 0; q < (int)(sizeof(RUN) / sizeof(RUN[0])); q++) {
+        r->d->m.jover = 0;
         morph_run(r, RUN[q].kind, RUN[q].scene == 1 ? chart : RUN[q].scene == 2 ? up : NULL, RUN[q].look, RUN[q].late, 0, RUN[q].name, &res);
+        /* (on the sim task: no slice of the job past its budget by more than a step's worth in the model's work: one whole
+         * pass over the new lines against the chart's grains was ~30 ms of the device in one go, a frame lost) */
+        if (job > 0) CHECK(r->d->m.jover <= MORPH_JOB_OVER_US, "%s: the job's slices at most %d us past their budget (%d)", RUN[q].name, MORPH_JOB_OVER_US, r->d->m.jover);
         printf("    %-9s %4.0f ms  %5.1f / %5.1f / %d   grains %5d -> %5d (prototype %5d -> %5d), flying %4d (prototype %4d), fading %5d, coming %5d;"
                " empty %4.1f %% (calm %4.1f, %4.1f), phases off %d, not composed %d; own work at most %.1f ms (%.1f before it moves); middle still %d frames,"
                " slowed %d; first new line %+d, lines full %+d frames from the dust down\n", RUN[q].name, res.frames * 1000.0 / 30.0, res.mean, res.worst, res.over,

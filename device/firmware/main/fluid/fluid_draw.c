@@ -1704,6 +1704,8 @@ struct fluid_morph_mem {
     int      bj, bi;                   /* the new picture read to this cell row, and cell in it                        */
     bool     bset;                     /* .. its reading set up (where its lines may be)                               */
     bool     keep;                     /* (fluid_morph_t.keep: its lines stay)                                         */
+    int      lod; bool lfit;           /* (lines_on_dust's next cell; the new lines' arrays fitted)                     */
+    uint32_t *lodt;                    /* (lines_on_dust's table of a cell's places: 512)                               */
     uint8_t  *gl;                      /* (a scene's lines read after its dust) each new grain under a line: in the line's
                                         * pixel                                                                       */
     int      rw;                       /* the reader's work since its caller last took it (the panel model's us)       */
@@ -1797,7 +1799,7 @@ static void mm_free(fluid_morph_mem_t *mm) {
     FLUID_FREE(mm->A.g); FLUID_FREE(mm->A.at); FLUID_FREE(mm->A.aux); FLUID_FREE(mm->B.g); FLUID_FREE(mm->B.at); FLUID_FREE(mm->B.aux);
     FLUID_FREE(mm->akey); FLUID_FREE(mm->sa.tmp); FLUID_FREE(mm->sb.tmp);
     FLUID_FREE(mm->L0.o); FLUID_FREE(mm->L0.at); FLUID_FREE(mm->L1.o); FLUID_FREE(mm->L1.at);
-    FLUID_FREE(mm->fly); FLUID_FREE(mm->bkey); FLUID_FREE(mm->nlc); FLUID_FREE(mm->lbuf); FLUID_FREE(mm->gl); FLUID_FREE(mm->bl); FLUID_FREE(mm->gst);
+    FLUID_FREE(mm->fly); FLUID_FREE(mm->bkey); FLUID_FREE(mm->nlc); FLUID_FREE(mm->lbuf); FLUID_FREE(mm->gl); FLUID_FREE(mm->lodt); FLUID_FREE(mm->bl); FLUID_FREE(mm->gst);
     FLUID_FREE(mm->tg); FLUID_FREE(mm->os.e); FLUID_FREE(mm->ol.e); FLUID_FREE(mm->nb.e); FLUID_FREE(mm->nl.e); FLUID_FREE(mm->nw.e);
     FLUID_FREE(mm);
 }
@@ -2070,17 +2072,38 @@ static inline uint16_t madd(uint16_t a, uint16_t b) {
 }
 /* A scene's lines read after its dust: a speck on a line pixel is in that pixel (added, as fluid_fine_rect adds it to a dim
  * one; a bright one refuses it), its grain only shows till the lines come (gl: never drawn whole again). False: no room */
-static bool lines_on_dust(fluid_draw_t *d, fluid_morph_mem_t *mm) {
-    if (!(mm->gl = FLUID_CALLOC((size_t)(mm->B.n ? mm->B.n : 1)))) return false;
-    for (int k = 0; k < d->W * d->H; k++) for (uint32_t q = mm->L1.at[k]; q < mm->L1.at[k + 1]; q++)
-        for (uint32_t n = mm->B.at[k]; n < mm->B.at[k + 1]; n++) {
-            if ((mm->B.g[n] & (MG_Z2 | 0xFFu)) != mm->L1.o[q]) continue;
-            if (!speck_refused(mm->L1.col[q])) mm->L1.col[q] = madd(mm->L1.col[q], mm->B.col[n]);
-            mm->gl[n] = 1;
-            mm->rw += (int)MW_ITEM;
-            break;
+/* each line pixel onto its cell's grain at the same place (the first, in the cell's order), if any: by a table of the
+ * cell's places (MG_Z2 | dy << 4 | dx: 512) made from its grains and cleared after, so the grains and the line pixels
+ * are each looked at once or twice (it was every pixel against every grain of its cell: ~150,000 looks on the chart,
+ * ~30 ms in one go). A cell row a step, at least one a call, in budget (time and the model's work from w0); it carries
+ * on at the next call (mm->lod). 1: done, 0: more to do, -1: no memory */
+static int lines_on_dust(fluid_draw_t *d, fluid_morph_mem_t *mm, int64_t t_in, int budget, int w0) {
+    if (!mm->gl && !(mm->gl = FLUID_CALLOC((size_t)(mm->B.n ? mm->B.n : 1)))) return -1;
+    if (!mm->lodt && !(mm->lodt = FLUID_CALLOC(sizeof(uint32_t) * 512))) return -1;
+    const int W = d->W, N = W * d->H;
+    uint32_t *const at = mm->lodt;
+    for (bool first = true; mm->lod < N; first = false) {
+        if (!first && (now_us() - t_in >= budget || mm->rw - w0 >= budget)) return 0;
+        int looks = 0;
+        for (const int e = mm->lod + W; mm->lod < e; mm->lod++) {
+            const int k = mm->lod;
+            const uint32_t a = mm->B.at[k], b = mm->B.at[k + 1];
+            if (a == b || mm->L1.at[k] == mm->L1.at[k + 1]) continue;
+            for (uint32_t n = b; n-- > a;) at[mm->B.g[n] & 0x1FFu] = n + 1;   /* (backwards: the first grain at a place stays) */
+            for (uint32_t q = mm->L1.at[k]; q < mm->L1.at[k + 1]; q++) {
+                const uint32_t o = mm->L1.o[q] & 0x1FFu, n1 = at[o];
+                if (!n1) continue;
+                const uint32_t n = n1 - 1;
+                if (!speck_refused(mm->L1.col[q])) mm->L1.col[q] = madd(mm->L1.col[q], mm->B.col[n]);
+                mm->gl[n] = 1;
+                at[o] = 0;                                  /* (a grain under one line pixel only, as before) */
+            }
+            for (uint32_t n = a; n < b; n++) at[mm->B.g[n] & 0x1FFu] = 0;
+            looks += (int)(2 * (b - a) + (mm->L1.at[k + 1] - mm->L1.at[k]));
         }
-    return true;
+        mm->rw += (int)(looks * MW_ITEM);
+    }
+    return 1;
 }
 /* the waits' limits in frames (FLUID_MORPH_HOLD_N, FLUID_MORPH_LINES_N) and the new lines' cells read a frame at most (0:
  * by the budget alone); tests set them (fluid_draw_morph_bounds) to act out the device's slow reads */
@@ -2197,9 +2220,12 @@ static bool morph_read_new(fluid_draw_t *d, fluid_morph_mem_t *mm, const fluid_f
         }
     }
     if (mm->bj < H) return false;
-    mm->L1.at[N] = (uint32_t)mm->L1.n;
-    mlines_fit(&mm->L1);
-    if (hd && mm->dust && !lines_on_dust(d, mm)) { mm->jfail = true; return false; }   /* (a scene's specks read before: those under its lines, in them) */
+    if (!mm->lfit) { mm->L1.at[N] = (uint32_t)mm->L1.n; mlines_fit(&mm->L1); mm->lfit = true; }
+    if (hd && mm->dust) {                               /* (a scene's specks read before: those under its lines, in them) */
+        const int r = lines_on_dust(d, mm, t_in, budget, w0);
+        if (r < 0) { mm->jfail = true; return false; }
+        if (!r) return false;
+    }
     if (!hd) { mm->B.at[N] = (uint32_t)mm->B.n; mlayer_fit(&mm->B); mm->dust = true; }
     mm->lines_ok = true;
     return true;
@@ -3007,6 +3033,7 @@ void fluid_draw_morph_work(fluid_draw_t *d, const fluid_frame_t *s, const fluid_
         if (!morph_read(d, mm, s, o, sort ? 0 : b, sort ? b : 0, mm->jready, !q || mm->jhurry)) { mm->jfail = true; break; }
     }
     mm->jdone = mm->jfail || (mm->bready && mm->lready);
+    if (budget < INT32_MAX / 4 && mm->rw - budget > d->m.jover) d->m.jover = mm->rw - budget;   /* (a step past its budget: tests) */
     const int us = (int)(now_us() - t_in);
     mm->jn++; mm->jus += us; mm->jmax = us > mm->jmax ? us : mm->jmax;
 }
