@@ -170,7 +170,7 @@ fluid_fine_t *fluid_fine_create(int W, int H, int fb_w, int fb_h) {
     f->bcap = maxh * S;
     f->bpos = FINE_CALLOC(sizeof(uint32_t) * (size_t)f->bcap); f->bcol = FINE_CALLOC(sizeof(uint16_t) * (size_t)f->bcap);
     f->bcell = FINE_CALLOC(sizeof(uint16_t) * (size_t)f->bcap);
-    f->dq = FINE_CALLOC(4 * (size_t)f->N); f->wq = f->dq + 2 * f->N; f->dcol = FINE_CALLOC(sizeof(float) * 4 * (size_t)W); f->vis = FINE_CALLOC((size_t)f->N); f->imm = FINE_CALLOC((size_t)f->N); f->why = FINE_CALLOC((size_t)f->N);
+    f->dq = FINE_CALLOC(5 * (size_t)f->N); f->wq = f->dq + 2 * f->N; f->ride = (uint8_t *)(f->wq + 2 * f->N); f->dcol = FINE_CALLOC(sizeof(float) * 4 * (size_t)W); f->vis = FINE_CALLOC((size_t)f->N); f->imm = FINE_CALLOC((size_t)f->N); f->why = FINE_CALLOC((size_t)f->N);
     f->tot = FINE_CALLOC(sizeof(uint32_t) * (size_t)f->N); f->stat = FINE_CALLOC(sizeof(uint32_t) * (size_t)f->N);
     f->eff = FINE_CALLOC(sizeof(uint32_t) * (size_t)f->N); f->tot2 = FINE_CALLOC(sizeof(uint32_t) * (size_t)f->N);
     f->fresh = FINE_CALLOC((size_t)f->N); f->lgrid2 = FINE_CALLOC((size_t)f->lg * (size_t)f->lg);
@@ -720,6 +720,15 @@ void fluid_fine_frame(fluid_fine_t *f, const fluid_frame_t *s, const fluid_draw_
             const float dx = A * (c[0] * ca + c[1] * sa + c[2] * cb + c[3] * sb), dy = A * (c[1] * ca - c[0] * sa - c[3] * cb + c[2] * sb);
             float wx = (float)(s->h[k - 1] - s->h[k + 1]) * kx, wy = (float)(s->h[k - W] - s->h[k + W]) * ky;
             wx = wx < -mx ? -mx : wx > mx ? mx : wx; wy = wy < -my ? -my : wy > my ? my : wy;
+            /* the water's front only: a cell rides from the frame the water would first move its dust, FINE_RIDE_FRAMES,
+             * then rests (back in place, the ripples behind the front leave it) till the water there is calm again */
+            uint8_t *rd = f->ride + k;
+            const bool calm = wx < 0.5f && wx > -0.5f && wy < 0.5f && wy > -0.5f;
+            if (!*rd && (wx > SHIFT_HOLD || wx < -SHIFT_HOLD || wy > SHIFT_HOLD || wy < -SHIFT_HOLD)) *rd = 1;
+            if (*rd > FINE_RIDE_FRAMES) {
+                wx = wy = 0.f;
+                *rd = !calm ? FINE_RIDE_FRAMES + 1 : *rd + 1 >= FINE_RIDE_FRAMES + FINE_RIDE_REST ? 0 : *rd + 1;
+            } else if (*rd) (*rd)++;
             const int8_t qx = f->wq[k], qy = f->wq[N + k];
             const int8_t sx = (int8_t)(held(f->dq + k, dx) + held(f->wq + k, wx)), sy = (int8_t)(held(f->dq + N + k, dy) + held(f->wq + N + k, wy));
             if (qx != f->wq[k] || qy != f->wq[N + k]) f->why[k] |= 1u << FLUID_ANIM_WATER;   /* (the water's: the drift is no animation) */

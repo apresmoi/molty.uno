@@ -81,8 +81,10 @@ extern "C" {
 /* the calm drift: two slow plane waves across the glass sway each cell's dust (fluid_fine_frame) */
 #define FINE_DRIFT_PX    1.4f           /* px at most (rounded: a pixel either way, never more)    */
 #define FINE_DRIFT_S     8.f            /* s a sway: a cell moves a pixel about once a second      */
-#define FINE_RIDE        0.5f           /* the water moves the dust this much of what it moves the dots (a cell steps half as
-                                         * often in a tap's wave: the panel's frame holds it)      */
+#define FINE_RIDE        0.7f           /* the water moves the dust this much of what it moves the dots */
+#define FINE_RIDE_FRAMES 6              /* a cell's dust rides the water's front this many frames (~25 px of it: the
+                                         * band a tap's wave moves stays thin, the panel's frame holds it) .. */
+#define FINE_RIDE_REST   12             /* .. then rests till the water there is calm this many frames */
 #define FINE_CATCHUP     1500           /* specks of cells never worked out, off their row's turn a frame, at most */
 
 typedef struct {
@@ -129,6 +131,8 @@ typedef struct fluid_fine {
     uint8_t *lv, *lv2;                  /* per speck: its level (0 hidden .. 255); a spare for the next set */
     int lvcap, lv2cap;
     int8_t *sx, *sy;                    /* N: each cell's shift, stage px (its dust rides the water and the drift inside the cell) */
+    uint8_t *ride;                      /* N: the water's front at the cell (FINE_RIDE_FRAMES): 0 none, 1.. riding, past it
+                                         * resting till the water is calm (FINE_RIDE_REST frames)  */
     int8_t *dq, *wq;                    /* 2N each: the drift's part of it and the water's (in its steps), x then y, each
                                          * step held until the sway or the slope is well past it (never back and forth) */
     float *dcol;                        /* 4W: sin, cos of each drift wave's column part          */

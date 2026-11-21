@@ -1305,7 +1305,7 @@ static cJSON *bench_rec_json(const mole_anim_rec_t *b)
         cJSON_AddNumberToObject(c, "comp_kpx", r1(b->comp)); cJSON_AddBoolToObject(c, "forced", b->forced); cJSON_AddBoolToObject(c, "dust_after", b->keep);
         cJSON_AddNumberToObject(c, "ready_at", b->ready_at); cJSON_AddNumberToObject(c, "held", b->held);
         cJSON_AddNumberToObject(c, "grains_old", b->na); cJSON_AddNumberToObject(c, "grains_new", b->nb); cJSON_AddNumberToObject(c, "pairs", b->pairs);
-    }
+    } else cJSON_AddNumberToObject(o, "drawn_kpx", r1(b->comp));   /* (changed cells drawn into the kept glass a frame: cmp / this, us a px) */
     return o;
 }
 /* one case: what it starts from, then it, till its animations are over */
