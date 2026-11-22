@@ -25,7 +25,7 @@ What ships, all three built into the firmware:
 |---|---|---|---|---|
 | duck | 1.0.0 | channel layers (sections 1 to 8) | a body the fluid flows toward | none |
 | octopus | 1.0.0 | channel layers | a body the fluid flows toward | none |
-| cat | 2.0.0 | a Blender rig with baked clips (section 12) | crisp dots, straight on the panel's lattice | `eat`, `yarn`, `walk`, `shaken` |
+| cat | 2.1.0 | a Blender rig with baked clips and a life block (section 12) | crisp dots, straight on the panel's lattice | `eat`, `yarn`, `walk`, `shaken` |
 
 The motion model of the channel creatures is the one the creature lab's animals were written in: a shared pose from the
 mood engine and the gestures, then the creature's own layers on top. Every line of that code became a channel; nothing
@@ -269,7 +269,7 @@ Compared over the full reels (every scene, mood and gesture) against the approve
 ## 12. Rigged creatures (clips, routes, dots)
 
 A creature package may carry a **rig** instead of channel layers: a skeleton, its body as rounded primitives per bone, baked
-clips, and the route map between its poses. The cat (2.0.0) is the first: modelled, rigged and animated in Blender, every clip baked, with an authored transition between every pair of resting poses. Its source is the folder `moltys/cat/`, and [The Molty format](CREATURE.md) is how one is made. Its channel layers stay empty; `gestures` and `moods` only declare what it plays (and their
+clips, and the route map between its poses. The cat (2.1.0) is the first: modelled, rigged and animated in Blender, every clip baked, with an authored transition between every pair of resting poses. Its source is the folder `moltys/cat/`, and [The Molty format](CREATURE.md) is how one is made. Its channel layers stay empty; `gestures` and `moods` only declare what it plays (and their
 lengths for the mood engine), so agents and the console see the same names as for any creature. It has its own reference player in JavaScript and a
 C port on the device.
 
@@ -345,6 +345,33 @@ The cat's clips, by what they are for:
 | resting loops | `idle` (sit), `stand_idle`, `loaf_idle`, `crouch_idle`, `walk` |
 | transitions | 16 edges: every ordered pair of sit, stand, loaf and crouch, plus sit and stand into and out of the walk |
 
+### Life
+
+A rigged creature may carry `life` (written as a readable block in its Molty folder, [The Molty format](CREATURE.md),
+"Life"; the Molty tools check it and compile it into this). Without it the creature plays exactly as it did before life
+existed (the creature test pins the duck, the octopus and the cat 2.0.0 frame for frame).
+
+```jsonc
+"life": {
+  "ch": [ Channel, ... ],              // its signals: channels of the engine above (section 2), each after what it reads
+  "events": { "<name>": Event, ... },  // hold and every: events (section 4) that never stop by themselves (gap 0)
+  "layers": [ { "by": "breath", "w": "_lw.gaze", "clip": "breath", "zero": 0.5, "nodes": [9, 10] },   // a pose clip
+              { "by": "breath", "nodes": [1], "rot": [0, 0, 5], "sq": 0.04 } ] }                     // bones turned
+```
+
+- **Each frame** (on the fluid task, before the clips): the device sets `free` (1 while only the mood plays: no gesture,
+  call, way between poses or walk), `idle_time` (seconds since anyone did anything) and `life` (the owner's idle-life
+  setting: 1, 0.5, 0); the player runs its events, then its channels; each layer reads its `by` and `w` (weight, 1 when
+  left out). Old firmware refuses `life` ("creature: unknown key"): a Molty with one needs this firmware.
+- **Randomness**: the life's draws and its events' gaps take the creature's seed (a new one each boot on the device, a
+  fixed one in the tests and the rig), so the same seed plays the same frames and two boots differ.
+- **Layers** are added over the clips' pose, in order, at most 8 a frame (those with a weight over 0.01). A clip layer
+  samples its clip at `u` (by from 0 to 1 maps `zero` to the clip's end, by from -1 to 0 its start to `zero`) and adds the
+  difference from the clip at `zero`: moves added, turns turned on in the bone's own frame (by the weight's share), sizes
+  multiplied; only its `nodes` (all when left out), and only channels that move. A turn layer turns its `nodes` by
+  `rot` degrees a unit of `by` (as a bone's turn) and stretches them by `sq` a unit (up, thinner across). The clips'
+  own pose stays apart, so a crossfade never starts from a layered pose.
+
 ### Drawing (the device's look)
 
 Both players draw straight onto the braille lattice (2W x 4H dots), no meshes: each primitive is
@@ -368,10 +395,11 @@ more and stronger the louder. Letting go, a wave runs in from the rim and fades.
 
 | | limit | the cat |
 |---|---|---|
-| file (rigged) | 256 KB | 242 KB |
-| nodes, shapes, clips | 80, 128, 64 | 43 (2 of them props), 90, 45 |
+| file (rigged) | 256 KB | 241 KB |
+| nodes, shapes, clips | 80, 128, 64 | 43 (2 of them props), 90, 49 (4 of them pose clips for its life) |
 | families, edges, gestures | 8, 64, 32 | 5, 16, 18 |
-| channels (all clips) | | 1827 (1380 LINEAR, 447 STEP, no CUBICSPLINE) |
+| channels (all clips) | | 1846 (1342 LINEAR, 504 STEP, no CUBICSPLINE) |
+| life: channels, events, layers; engine steps a frame | 256, 16, 16 (8 played a frame); 600 | 16, 3, 6; 44 |
 
 Per frame on the device: sampling (a binary search and a Hermite per channel, ~100 channels) and FK of ~50 nodes are a few
 µs; the dots are the cost: the field and parts over the creature's box, then a hash per dot for the world.
@@ -379,7 +407,8 @@ Measured on the host (Apple silicon) and scaled by the creature test's own
 calibration (about 54 µs on the host for 11 ms measured on the 1.46): the cat's play + dots cost about 8 to 10 ms
 sitting or lying, 12 to 13 ms standing, crouched or eating, 17 to 18 ms walking (side on, the widest box), on the 1.46's
 52 x 32 grid. The fluid under it is held still (no background, swirl or view), so a frame is that plus the sim steps, the
-drawer and the flush. To be confirmed on the device (`GET /api/creature/state`, `prof_ms.c_update`).
+drawer and the flush. To be confirmed on the device (`GET /api/creature/state`, `prof_ms.c_update`). Its life (44 engine
+steps, six layers over about 40 channels) adds about 0.15 ms a frame by the same calibration.
 
 ## Where this lives
 
