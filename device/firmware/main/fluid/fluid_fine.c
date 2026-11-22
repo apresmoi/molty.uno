@@ -347,7 +347,7 @@ static void chamfer_row(fluid_fine_t *f, int y, bool fwd) {
             if (x > 0 && D[i + oy - 1] + 283 < d) { d = D[i + oy - 1] + 283; s = C[i + oy - 1]; }
             if (x < S - 1 && D[i + oy + 1] + 283 < d) { d = D[i + oy + 1] + 283; s = C[i + oy + 1]; }
         }
-        D[i] = (uint16_t)(d > (int)FAR ? FAR : d); C[i] = (uint16_t)s;
+        D[i] = (uint16_t)(d > (int)FAR ? (int)FAR : d); C[i] = (uint16_t)s;
     }
 }
 

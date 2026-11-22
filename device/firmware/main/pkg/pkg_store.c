@@ -77,7 +77,8 @@ const char *pkg_req_parse(const cJSON *args, pkg_req_t *r) {
 
 /* ── the index ─────────────────────────────────────────────────────────────── */
 
-static void path(char *out, size_t n, const char *root, const char *name) { snprintf(out, n, "%s/%s", root, name); }
+/* false when root/name does not fit in out: the cut path would name another file */
+static bool path(char *out, size_t n, const char *root, const char *name) { return (size_t)snprintf(out, n, "%s/%s", root, name) < n; }
 
 static bool exists(const char *root, const char *name) {
     char p[96]; struct stat st;
@@ -220,8 +221,7 @@ int pkg_store_sweep(const char *root) {
         for (int i = 0; i < n && !named; i++) named = !strcmp(e[i].file, name);
         if (named) continue;
         char p[96];
-        path(p, sizeof(p), root, name);
-        if (remove(p) == 0) gone++;
+        if (path(p, sizeof(p), root, name) && remove(p) == 0) gone++;
     }
     if (d) closedir(d);
     STORE_FREE(e);
