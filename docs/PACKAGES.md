@@ -15,7 +15,7 @@ of them are about. It has no idea what a planet, a zodiac sign or a cat is.
 | Cat | a creature | 2.0.0 | 242 KB | already there |
 | Duck | a creature | 1.0.0 | 31 KB | already there |
 | Octopus | a creature | 1.0.0 | 33 KB | already there |
-| Astrology | scenes: the moon, the planets, the zodiac chart, eclipses | 1.7.0 | 73 KB | your agent installs it |
+| Astrology | scenes: the moon, the planets, the zodiac chart, eclipses | 1.7.1 | 73 KB | your agent installs it |
 
 ## Installing takes one tap
 
