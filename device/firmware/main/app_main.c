@@ -8,7 +8,8 @@
  *   diag log ring → board early init (power latch) → NVS → Improv serial setup
  *   (boards with a serial console) → SPIFFS + console
  *   (net/console_store) → USB-C NCM (boards with usb_net) + mDNS + Wi-Fi
- *   (net/network) → board init (display, touch, IMU, ...) → "fluid" creature
+ *   (net/network) → board init (display, touch, IMU, ...) → vibration motor
+ *   (haptic/) → "fluid" creature
  *   (fluid/) → agent link (link/) → device events (sense/) → diag tasks → power
  *   (power/: dnd, battery history) → HTTP
  *   server (net/http)
@@ -34,6 +35,7 @@
 #include "link_client.h"
 #include "sense.h"
 #include "power.h"
+#include "haptic.h"
 #include "network.h"
 #include "console_store.h"
 #include "pkg_store.h"
@@ -102,6 +104,7 @@ void app_main(void)
     // Runs ONCE here; creatures must not touch the hardware init. A capability that
     // fails to start is reported absent (molty_board_has) and the core degrades.
     molty_board_init();
+    haptic_init();   // the vibration motor's PWM, off (boards that wire one; haptic.h)
 
     // Creature
     {
