@@ -17,6 +17,7 @@
 #include "http.h"
 #include "network.h"
 #include "console_store.h"
+#include "recv_bound.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -72,11 +73,35 @@ esp_err_t http_send_json(httpd_req_t *r, const char *json)
     return httpd_resp_sendstr(r, json);
 }
 
+_Static_assert(RECV_TIMEOUT == HTTPD_SOCK_ERR_TIMEOUT, "recv_bound.h's timeout is the server's");
+static int recv_once(void *ctx, char *buf, int len)
+{
+    // ⚠ MUST be httpd_req_recv (the IDF API), not recv_full: an earlier
+    // global find-replace of httpd_req_recv → recv_full made this infinitely
+    // recursive, blowing the stack at ~92 chunks deep into a POST.
+    int n = httpd_req_recv(ctx, buf, (size_t)len);
+    if (n == HTTPD_SOCK_ERR_TIMEOUT) vTaskDelay(1);
+    return n;
+}
+
+// One chunk of the body: > 0 bytes, HTTPD_SOCK_ERR_TIMEOUT after RECV_SILENCE_US
+// without data (logged), else the socket's error.
+static int recv_chunk(httpd_req_t *r, char *buf, int len)
+{
+    int n = recv_bound(recv_once, r, buf, len, esp_timer_get_time);
+    if (n == HTTPD_SOCK_ERR_TIMEOUT)
+        mole_diag_event(true, "http.stalled uri=%s len=%d: no data for %d s, given up",
+                        r->uri, r->content_len, (int)(RECV_SILENCE_US / 1000000));
+    return n;
+}
+
 // Read the FULL request body. esp_http_server's httpd_req_recv returns one chunk
 // per call (typically ~MSS-sized). For bodies larger than that — anything over
 // a few hundred bytes — we must loop until we've consumed content_len bytes.
 // Returns the number of bytes read, or <=0 on error (consistent with the
-// underlying API). HTTPD_SOCK_ERR_TIMEOUT is retried transparently.
+// underlying API). HTTPD_SOCK_ERR_TIMEOUT is retried, but only for RECV_SILENCE_US
+// without data (recv_bound.h): a sender that goes silent gets HTTPD_SOCK_ERR_TIMEOUT
+// back, so its handler returns and the server serves again.
 //
 // The `access` attribute tells GCC the function writes `total_len` bytes into
 // `buf`, which lets callers use the buffer after a successful return without
@@ -86,14 +111,7 @@ int http_recv_full(httpd_req_t *r, char *buf, int total_len)
 {
     int total = 0;
     while (total < total_len) {
-        // ⚠ MUST be httpd_req_recv (the IDF API), not recv_full — an earlier
-        // global find-replace of httpd_req_recv → recv_full made this infinitely
-        // recursive, blowing the stack at ~92 chunks deep into a POST.
-        int n = httpd_req_recv(r, buf + total, total_len - total);
-        if (n == HTTPD_SOCK_ERR_TIMEOUT) {
-            vTaskDelay(1);
-            continue;
-        }
+        int n = recv_chunk(r, buf + total, total_len - total);
         if (n <= 0) return n;
         total += n;
         // Yield each chunk so 100 KB+ POSTs don't starve the idle task on core 0.
@@ -1110,9 +1128,12 @@ static esp_err_t ota_receive(httpd_req_t *r, bool *rebooting)
     bool checked = false;
     while (remaining > 0) {
         int want = remaining < 8192 ? remaining : 8192;
-        int rcv = httpd_req_recv(r, buf, want);
-        if (rcv == HTTPD_SOCK_ERR_TIMEOUT) continue;
-        if (rcv <= 0) { heap_caps_free(buf); esp_ota_abort(h); return http_send_json(r, "{\"ok\":false,\"error\":\"recv\"}"); }
+        int rcv = recv_chunk(r, buf, want);
+        if (rcv <= 0) {
+            heap_caps_free(buf); esp_ota_abort(h);
+            return http_send_json(r, rcv == HTTPD_SOCK_ERR_TIMEOUT ? "{\"ok\":false,\"error\":\"stalled\"}"
+                                                                   : "{\"ok\":false,\"error\":\"recv\"}");
+        }
         if (!checked) {
             size_t n = sizeof(head) - have < (size_t)rcv ? sizeof(head) - have : (size_t)rcv;
             memcpy(head + have, buf, n);
