@@ -4,7 +4,8 @@
  * sense.c — device events (sense.h). One small task, 100 Hz on core 0 (PSRAM stack;
  * no flash access here):
  *   imu      the board's cached IMU sample (a new one every 20 ms) → gesture.c's shake
- *            detector, and while the screen is off screen_nap.h's pick-up (it ends a nap);
+ *            detector (deaf while the vibration motor runs and settles: haptic_quiet), and
+ *            while the screen is off screen_nap.h's pick-up (it ends a nap);
  *            boards without "imu" skip it
  *   buttons  press edges of the accept / reject buttons
  *   touch    tap edges handed over by sense_touch (the fluid task polls touch)
@@ -38,6 +39,7 @@
 #include "power.h"
 #include "pkg_parse.h"
 #include "screen_nap.h"
+#include "haptic.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -174,7 +176,7 @@ static void sense_task(void *arg)
                 nap_lift_reset(&lift);
             }
             gesture_shake_t sh;
-            if (pairing) gesture_reset(&g);
+            if (pairing || haptic_quiet()) gesture_reset(&g);   /* Molty's own motor shakes the IMU */
             else if (gesture_feed(&g, s.ax, s.ay, s.az, s.ms, &sh)) {
                 mole_fluid_event(MOLE_FLUID_SHAKE);          /* reacts with or without an agent */
                 mole_diag_event(false, "sense.shake peak=%dmg reversals=%d ms=%u",
