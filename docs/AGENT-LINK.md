@@ -1035,6 +1035,11 @@ hand while the creature sleeps starts the time again. The console's settings: Se
 "screen off on battery" / "on USB" (`POST /api/creature/state {screen_off_battery_s,
 screen_off_usb_s}`, GET and `status` report them, kept in NVS once the screen is calm).
 
+Behind the creature the screen shows today's moon and now and then a falling star ([CREATURES.md](CREATURES.md#the-sky)),
+from the date the device takes by network time on Wi-Fi (`GET /api/diag` reports `time`); none while a question, a
+listen or a say is up. The console's setting: Settings › Molty "sky" (`POST /api/creature/state {sky: false}`, GET
+reports it, kept in NVS once the screen is calm; on out of the box).
+
 The device reacts to a shake by itself (a brief `surprised`), agent or not. A tap or a shake also calls
 the cat to the front of the frame ([CREATURES.md](CREATURES.md#playing)).
 

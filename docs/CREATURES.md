@@ -391,6 +391,40 @@ there as a thin sharp line, in about 1 s. While a listen records, the voice send
 more and stronger the louder. Letting go, a wave runs in from the rim and fades. The recording ring is red
 (`#ff2c3e`) unless the agent (`ring_color`) or the owner's setting gave it a colour.
 
+### The sky
+
+Behind a rigged creature, in its world (`main/creature/sky.c`, merged by `creature_dots.c` `cd_sky`): today's moon,
+small, up and to the right of the creature, and now and then a falling star. Both are braille dots of the world, so the
+creature is always in front (a cell with its dots keeps only them, its halo keeps the sky off it), a touch's wave
+loosens them and they settle back as the world's dust does, and a change of picture takes them with the creature's
+picture.
+
+- **The moon.** Lit to the real phase as seen from the northern hemisphere (waxing: the right side), from the date
+  (Meeus, *Astronomical Algorithms*, ch. 47, the main terms: the moment of a full or new moon within minutes, the
+  distance within a few hundred km). A new moon shows nothing. Its size follows its real distance, exaggerated so the
+  eye sees it: 70 % of the options page's "A sky" at the farthest (406,000 km), 75 % on an average night (384,400 km),
+  100 % at the nearest (357,000 km), in whole dots (7 to 10 dots across its radius on the 466 px panel). A supermoon is
+  the full moon on a big night. Its face is a 32 x 32 grey map of the near side (512 bytes,
+  `sky_moon_map.h`, made by `tools/scripts/sky-moon-map.mjs` from the astrology globe's moon), one colour a cell, at
+  the "quiet" brightness: its brightest dots about luma 100, the cat's eyes about 205. Made once a day (the phase and
+  distance at noon UTC) and kept: a frame only merges its cells.
+- **The falling star.** One every 4 to 15 minutes of the creature on the glass, at random (its own seed, from the
+  director's: repeatable in tests, new each boot); the wait counts only while one may show. A streak of 0.35 to 0.6 s
+  from the upper sky down at a slant, left or right of the cat and clear of the moon, never the last path again; its
+  trail fades behind the head and is gone 0.6 s after it. At most 96 dots; its head at luma about 190, under the eyes.
+  Never while a question, a listen, a say, a speaking mood, the progress ring, a change of picture or the bench is up,
+  nor while the creature sleeps with do not disturb on (the one bright thing moving in a dark room).
+- **The date.** Network time (SNTP, `CONFIG_MOLTY_SNTP_SERVER`, `pool.ntp.org`) once Wi-Fi has an address, again every
+  hour; the chip's clock keeps it through a soft restart, never written to flash. `GET /api/diag` reports it (`time`).
+  Until it is known there is no sky. The web module takes it from the page (`wm_time`); the fidelity script gives
+  none, so its frames have no sky, and `sky.script` plays one with a date.
+- **The setting.** `sky` (`POST /api/creature/state {sky: false}`, on out of the box, kept in NVS once the screen is
+  calm), the console's Settings > Molty "sky". A southern view (the lit side mirrored) would be one more setting and a
+  sign on the light's side; not there yet.
+
+Cost: the moon is made once a day (well under a millisecond); a frame merges at most a few hundred dots on the sim task
+after the creature's cells (host: under a microsecond with a star running).
+
 ### Limits and cost
 
 | | limit | the cat |
