@@ -12,6 +12,7 @@ import { IDLE_CHOICES, idleChoice, idleSupported } from '../idle/idle';
 import { NAP_SETTINGS, NAP_TIMES, napChoice, napLabel, napSupported } from '../nap/nap';
 import { SHAKE_CHOICES, shakeChoice, shakeSupported } from '../shake/shake';
 import { SKY_CHOICES, skyChoice, skySupported } from '../sky/sky';
+import { WEATHER_KINDS, WEATHER_ON_CHOICES, WEATHER_TRY_S, weatherKind, weatherLine, weatherOnChoice, weatherSupported, weatherTry } from '../weather/weather';
 import { GESTURE_ACTIONS, GESTURE_INPUTS, gestureChoice, gesturesSupported } from '../shake/gestures';
 import { creatureMoves, moveLabel } from '../moves/moves';
 
@@ -51,6 +52,12 @@ export function creaturePage(root: HTMLElement, { api }: AppCtx) {
   const skyLabel = h('label', { hidden: true }, 'sky');
   const skyRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'sky', hidden: true });
   const skyHint = h('p', { class: 'dim small', hidden: true }, "today's moon behind Molty, lit as it is tonight, and now and then a falling star; the moon needs the date, which Molty takes from the internet once on Wi-Fi");
+  const wxLabel = h('label', { hidden: true }, 'try the weather');
+  const wxRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'try the weather', hidden: true });
+  const wxNow = h('p', { class: 'dim small', 'aria-live': 'polite', hidden: true });
+  const wxOnLabel = h('label', { hidden: true }, 'weather');
+  const wxOnRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'weather', hidden: true });
+  const wxHint = h('p', { class: 'dim small', hidden: true }, `rain on Molty's glass, told by your agent with how long it holds; a try here lasts ${WEATHER_TRY_S / 60} minutes, then it clears by itself. Off: never any weather`);
   const text = h('textarea', { rows: 3, placeholder: 'words for the speed reader…', 'aria-label': 'reader text' });
   const wpm = h('input', { type: 'range', min: 100, max: 800, step: 25, value: '300', 'aria-label': 'words per minute' });
   const wpmOut = h('output', null, '300 wpm');
@@ -80,6 +87,7 @@ export function creaturePage(root: HTMLElement, { api }: AppCtx) {
         idleLabel, idleRow, idleHint,
         ...napRows.flatMap((n) => [n.label, n.row]), napHint,
         skyLabel, skyRow, skyHint,
+        wxLabel, wxRow, wxNow, wxOnLabel, wxOnRow, wxHint,
         h('label', null, 'speed reader'), text,
         h('div', { class: 'row' }, wpm, wpmOut),
         h('div', { class: 'row' }, word, h('button', { type: 'button', onclick: () => order({ text: text.value, wpm: +wpm.value, state: 'text' }) }, 'read it ⠶')),
@@ -141,6 +149,18 @@ export function creaturePage(root: HTMLElement, { api }: AppCtx) {
     if (skyOn) mount(skyRow, SKY_CHOICES.map((c) =>
       h('button', { type: 'button', class: 'chip' + (sky === c.on ? ' on' : ''), 'aria-pressed': String(sky === c.on),
         onclick: () => order({ sky: c.on }) }, c.label)));
+    const wxOn = weatherSupported(s);   /* older firmware: no weather */
+    wxLabel.hidden = wxRow.hidden = wxNow.hidden = wxOnLabel.hidden = wxOnRow.hidden = wxHint.hidden = !wxOn;
+    if (wxOn) {
+      const kind = weatherKind(s?.weather), on = weatherOnChoice(s?.weather_on);
+      mount(wxRow, WEATHER_KINDS.map((k) =>
+        h('button', { type: 'button', class: 'chip' + (kind === k ? ' on' : ''), 'aria-pressed': String(kind === k), disabled: !on,
+          onclick: () => order(weatherTry(k)) }, k)));
+      wxNow.textContent = on ? `now: ${weatherLine(s?.weather)}` : 'the weather is off';
+      mount(wxOnRow, WEATHER_ON_CHOICES.map((c) =>
+        h('button', { type: 'button', class: 'chip' + (on === c.on ? ' on' : ''), 'aria-pressed': String(on === c.on),
+          onclick: () => order({ weather_on: c.on }) }, c.label)));
+    }
     if (s && document.activeElement !== wpm && s.wpm) { wpm.value = String(s.wpm); wpmOut.textContent = `${s.wpm} wpm`; }
     if (s && !text.value && s.text) text.value = s.text;
     word.textContent = s?.word ? `⠶ ${s.word}` : s?.nwords ? `${s.word_idx ?? 0}/${s.nwords} words` : '';
