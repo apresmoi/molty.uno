@@ -14,6 +14,7 @@
  *   HTTP:  GET /api/status, GET /api/scan, POST /api/set_creds, POST /api/forget.
  */
 #include "network.h"
+#include "net_clock.h"
 #include "http.h"
 #include "wifi_retry.h"
 #include "ap_pick.h"
@@ -621,6 +622,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
         lease_arm(-1);
         wifi_retry_event(&s_retry, WIFI_RETRY_EV_GOT_IP, s_joining);
         ap_mem_good(&s_ap, s_bssid);               /* the AP to prefer next time (ap_pick.h) */
+        net_clock_start();                         /* the date (net_clock.h): once, from the first address */
         if (s_wifi_event_group) {
             xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
         }

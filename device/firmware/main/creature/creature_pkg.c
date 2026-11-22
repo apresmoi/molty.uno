@@ -36,6 +36,7 @@ struct cpk {
     unsigned act_n; uint32_t frame;
     mood_engine_t eng;
     bool work;
+    const struct sky *sky;      /* the sky behind a rigged one (cpk_sky), or NULL                       */
     /* its life: the inputs' slots in the player and what they read, each layer's signals (-1: weight 1) */
     int in_free, in_idle, in_life; float idle_s, life;
     int16_t lay_by[CC_LAYERS_MAX], lay_w[CC_LAYERS_MAX];
@@ -102,6 +103,7 @@ uint32_t cpk_draw_frame(const cpk_t *k) { return k ? FLUID_FRAME(k->frame, cr_il
 void cpk_voice(cpk_t *k, float level) { if (k) cr_voice(k->ring, level); }
 const uint8_t *cpk_cells_creature(const cpk_t *k) { return k && k->dots ? cd_creature(k->dots) : NULL; }
 void cpk_listen(cpk_t *k, int32_t rgb, float ink) { if (k && k->ring) cr_listen(k->ring, rgb, ink); }
+void cpk_sky(cpk_t *k, const struct sky *s) { if (k) k->sky = s; }
 void cpk_set_share(cpk_t *k, int pct) { if (k && k->dots) cd_set_share(k->dots, pct); }
 void cpk_come(cpk_t *k, const char *first) { if (k && k->clip) cc_come(k->clip, first); }
 const cc_t *cpk_clip(const cpk_t *k) { return k ? k->clip : NULL; }
@@ -132,6 +134,8 @@ static void clip_frame(cpk_t *k, fluid_sim_t *s, float dt) {
     if (!k->dots) k->dots = cd_create(k->clip, s->W, s->H);
     if (!k->dots) { FLUID_PROF_END(FP_K_PLAY, c0); return; }
     FLUID_PROF_END(FP_K_PLAY, c0);
+    if (k->sky) cd_sky(k->dots, k->sky->moon_c, k->sky->nmoon_shown, k->sky->star_c, k->sky->nstar);
+    else cd_sky(k->dots, NULL, 0, NULL, 0);
     cd_draw(k->dots, k->clip, k->frame++);
     {   /* the dots' stages into the fluid's profile (GET /api/creature/state prof_ms.k_*) */
         uint32_t st[CD_STAGES] = { 0 };

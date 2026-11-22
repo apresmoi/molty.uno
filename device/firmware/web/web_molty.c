@@ -401,6 +401,12 @@ WM_API char *wm_state_json(void) {
     return s_up && mole_fluid_creature_state_get_json(&out) == ESP_OK ? out : NULL;
 }
 
+/** The time now, unix seconds UTC (the page's clock: Date.now() / 1000), for the sky behind the cat (sky.h: today's
+ *  moon, the falling stars); it runs on with the frames' clock. 0: not known (as out of the box): no sky, the frames
+ *  as ever. wm_time_now: the time as the module has it now (0 not known). */
+WM_API void   wm_time(double unix_s) { if (s_up) mole_fluid_utc(unix_s); }
+WM_API double wm_time_now(void) { return s_up ? mole_fluid_utc_now() : 0.0; }
+
 /** A listen records (the recording ring) or ended; the mic's level while it does, 0..1. */
 WM_API void wm_listen(int on) { if (s_up) mole_fluid_listen(on != 0); }
 WM_API void wm_listen_level(float level) { if (s_up) mole_fluid_listen_level(level); }

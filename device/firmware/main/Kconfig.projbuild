@@ -37,6 +37,14 @@ config MOLTY_DEFAULT_RELAY
         wss://host for a deployed relay, or ws://<LAN-IP>:8787 for `wrangler dev`.
         The device appends /v1/device?id=<device_id>. See docs/AGENT-LINK.md.
 
+config MOLTY_SNTP_SERVER
+    string "Network time server"
+    default "pool.ntp.org"
+    help
+        Where the device asks the date (UTC) once Wi-Fi has an address, and again every
+        CONFIG_LWIP_SNTP_UPDATE_DELAY (an hour). The date lights the moon behind the
+        creature (main/creature/sky.h); without it there is no moon. See main/net/net_clock.h.
+
 config MOLTY_RELEASES_REPO
     string "GitHub repo whose releases the device installs"
     default "apresmoi/molty.uno"

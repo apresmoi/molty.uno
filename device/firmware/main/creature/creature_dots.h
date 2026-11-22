@@ -17,6 +17,7 @@
 
 #include <stdint.h>
 #include "creature_clip.h"
+#include "sky.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,6 +38,10 @@ void  cd_draw(cd_t *d, const cc_t *c, uint32_t frame);
 void  cd_cells(const cd_t *d, const uint8_t **dots, const uint32_t **rgb);
 /** Per cell of the last draw: 1 where the creature's own dots are (not the world's). */
 const uint8_t *cd_creature(const cd_t *d);
+/** The sky behind the creature (sky.h) for the next draws: the moon's cells, then a falling star's (n 0: none). The
+ *  lists stay the caller's and must live until the next call. A cell with the creature's dots keeps only them and the
+ *  halo keeps the sky's dots off it, as the floor's; a moon cell takes the place of the dust's motes there. */
+void  cd_sky(cd_t *d, const sky_cell_t *moon, int nmoon, const sky_cell_t *star, int nstar);
 /** The first band's share of the rows' work, percent (20..90; CD_SHARE at first): the caller balances the two cores. */
 void  cd_set_share(cd_t *d, int pct);
 #define CD_STAGES 8

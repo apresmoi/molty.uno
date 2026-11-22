@@ -89,6 +89,7 @@ struct cd {
     uint8_t *touch, *cat; int8_t *bp; uint16_t *bl;   /* per cell: reached by the creature or its halo; its dots; scratch */
     uint8_t *catm;                          /* per cell: the creature is in it (cd_creature), kept for the frame       */
     const float *world; const cc_shape_t *sh; int ns; uint32_t frame;
+    const sky_cell_t *sky[2]; int nsky[2];  /* the sky behind it (cd_sky): the moon's cells, a falling star's           */
     uint32_t prof[CD_STAGES];
 #ifdef ESP_PLATFORM
     TaskHandle_t task; SemaphoreHandle_t go, done; void (*job)(cd_t *, int); volatile bool quit;
@@ -733,6 +734,32 @@ static void ph_cells(cd_t *d, int part) {
     }
 }
 
+/* ── 8. the sky (sky.h): after the cells, on the calling core (a few hundred dots at most) ───────────────────────── */
+
+static void sky_merge(cd_t *d) {
+    const int W = d->W, DW = d->DW;
+    for (int l = 0; l < 2; l++) for (int q = 0; q < d->nsky[l]; q++) {
+        const sky_cell_t *c = &d->sky[l][q];
+        const int k = c->k;
+        if (k >= d->W * d->H || d->catm[k]) continue;        /* the creature's cell: its dots alone */
+        const int X0 = (k % W) * 2, Y0 = (k / W) * 4;
+        uint8_t bits = 0;
+        for (int b = 0; b < 8; b++) {
+            const int col = b >> 2, row = b & 3, bit = 1 << BIT[b];
+            if (!(c->bits & bit)) continue;
+            const dot_t *p = d->dot + (Y0 + row) * DW + X0 + col;
+            if (!(p->fl & FH) && !p->pri && !(d->frgb[(Y0 + row) * DW + X0 + col] & FON)) bits |= (uint8_t)bit;   /* off the halo, the floor */
+        }
+        if (!bits) continue;
+        if (l == 0 || !d->cdots[k] || lum(c->rgb) > lum(d->ccol[k])) d->ccol[k] = c->rgb;
+        d->cdots[k] = l == 0 ? bits : (uint8_t)(d->cdots[k] | bits);   /* the moon over the motes; a star over all */
+    }
+}
+
+void cd_sky(cd_t *d, const sky_cell_t *moon, int nmoon, const sky_cell_t *star, int nstar) {
+    d->sky[0] = moon; d->nsky[0] = moon ? nmoon : 0; d->sky[1] = star; d->nsky[1] = star ? nstar : 0;
+}
+
 /* ── the frame ─────────────────────────────────────────────────────────── */
 
 void cd_draw(cd_t *d, const cc_t *c, uint32_t frame) {
@@ -836,6 +863,7 @@ void cd_draw(cd_t *d, const cc_t *c, uint32_t frame) {
         d->csplit = balance(d->wrow, 0, DH, d->share) >> 2;
     }
     split_run(d, ph_cells);
+    if (d->nsky[0] || d->nsky[1]) sky_merge(d);
     PROF_STAGE(ST_CELLS);
 }
 
