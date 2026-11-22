@@ -203,8 +203,8 @@ One aspect on the degree grid, its two bodies, the angle between them and the fi
 
 | send | type | about |
 |---|---|---|
-| `a` | angle in degrees | The chart angle of body A. |
-| `b` | angle in degrees | from_angle + d, where d is B's chart angle minus A's, wrapped to -180..180: the arc runs from one to the other. |
+| `a` | angle in degrees | The chart angle of body A, the one the short way round to B starts from, counter-clockwise. |
+| `b` | angle in degrees | from_angle + d, where d is B's chart angle minus A's, wrapped to 0..180 (A and B chosen so it is): the arc runs counter-clockwise from one to the other, the short way. |
 | `c` | color, #rrggbb | The aspect's color: conjunction #ffd678, sextile #6fe0a0, square #ff6a55, trine #7fb0ff, opposition #ff5fa0. |
 | `bodies` | list, up to 2 | The two bodies, A then B. |
 | `lines` | list, up to 7 | The aspect's figure on radius 0.6 from A's angle (sextile 6 sides, square 4, trine 3), then the chord from A to B. None for a conjunction. |
@@ -235,7 +235,7 @@ Each element of `lines`:
 A call that works (lists cut to two elements here):
 
 ```json
-{"name":"scene.play","args":{"pkg":"astrology","layout":"aspect","params":{"a":182.07,"b":123.13,"c":"#6fe0a0","bodies":[{"g":"g-neptune","a":182.07,"r":0.6,"c":"#8fb4ff"},{"g":"g-pluto","a":123.13,"r":0.6,"c":"#c0a0d0"}],"lines":[{"x1":-0.6,"y1":-0.022,"x2":-0.281,"y2":-0.53,"c":"#565b72","on":0},{"x1":-0.281,"y1":-0.53,"x2":0.319,"y2":-0.508,"c":"#565b72","on":0}],"deg":"59","tx":-0.124,"ty":0.064},"ttl_s":10}}
+{"name":"scene.play","args":{"pkg":"astrology","layout":"aspect","params":{"a":123.13,"b":182.07,"c":"#6fe0a0","bodies":[{"g":"g-pluto","a":123.13,"r":0.6,"c":"#c0a0d0"},{"g":"g-neptune","a":182.07,"r":0.6,"c":"#8fb4ff"}],"lines":[{"x1":-0.328,"y1":0.502,"x2":-0.599,"y2":-0.033,"c":"#565b72","on":0},{"x1":-0.599,"y1":-0.033,"x2":-0.271,"y2":-0.535,"c":"#565b72","on":0}],"deg":"59","tx":-0.124,"ty":0.064},"ttl_s":10}}
 ```
 
 ## transit

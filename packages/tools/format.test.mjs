@@ -77,6 +77,21 @@ test('binding rejects missing, unknown and mistyped params, and resolves each, p
   assert.deepEqual([items[0].color, items[0].on, items[0].off], ['#ffffff', 0, 2]);
 });
 
+test('an aspect\'s arc runs the short way, from one body to the other, for every kind, order and wrap', async () => {
+  // the device draws an arc counter-clockwise from a0 to a1 (scene_player.c ring()): its span must be the bodies' separation
+  const { aspect } = await import(`${ROOT}skills/molty-astro/scripts/sky.mjs`), pkg = loadPackage('astrology'), seen = new Set();
+  const same = (x, y) => Math.abs((((x - y) % 360) + 540) % 360 - 180) < 0.02, mod = (v) => ((v % 360) + 360) % 360;
+  for (let i = 0; i < 50; i++) for (const kind of ['conjunction', 'sextile', 'square', 'trine', 'opposition']) {
+    const r = aspect(kind, new Date(Date.UTC(2026, 0, 1) + i * 29 * 864e5)), p = r.scenes[0][1], items = bind(pkg, 'aspect', p);
+    const arc = items.find((it) => it.k === 'arc'), spokes = items.filter((it) => it.k === 'ticks' && it.n === 1), span = mod(arc.a1 - arc.a0), at = `${kind} ${r.facts.a}-${r.facts.b} (${p.a}, ${p.b})`;
+    assert.ok(span <= 180.01 && Math.abs(span - r.facts.sep) < 0.05, `${at}: the arc sweeps ${span.toFixed(2)}, the bodies are ${r.facts.sep} apart`);
+    assert.ok(same(arc.a0, p.bodies[0].a) && same(arc.a1, p.bodies[1].a), `${at}: the arc runs from one body to the other`);
+    assert.deepEqual(spokes.map((s) => mod(s.a0).toFixed(2)), [arc.a0, arc.a1].map((a) => mod(a).toFixed(2)), `${at}: a spoke to each end`);
+    seen.add(p.bodies[0].g === `g-${r.facts.a.toLowerCase()}` ? 'in order' : 'swapped').add(arc.a1 >= 360 ? 'across 0' : 'within');
+  }
+  assert.deepEqual([...seen].sort(), ['across 0', 'in order', 'swapped', 'within'], 'both orders of the bodies and an arc across 0 were tried');
+});
+
 test('every layout plays with the params the molty-astro skill sends, each under 1 KB (with spot readings: 8 KB)', () => {
   const pkg = loadPackage('astrology'), seen = new Set(), READS = ['chart', 'sign-closeup'];
   // a tap on a crowded sign (Leo: Moon, Mars, Jupiter) and on an empty one (Taurus), in the chart's interactive mode
