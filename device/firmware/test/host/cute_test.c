@@ -93,7 +93,7 @@ static void test_file(const char *path, const char *outdir) {
             fluid_sim_color(s, 1.f / 30);
             fluid_sim_view(s);
             fluid_sim_snapshot(s, fr, false);
-            fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, t, 0.f, NULL, 0, " .:-=+*#", font, NULL };
+            fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, t, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL, 0 };
             int y0, y1;
             fluid_draw(d, fr, fbs[m], &o, &y0, &y1);
             if (cute_rt_tris(rt) > worst_tris) worst_tris = cute_rt_tris(rt);
@@ -245,7 +245,7 @@ static void test_act_render(const char *path, const char *outdir) {
                 fluid_sim_background(ps, t, 0.5f, (fno & 1) == 0); fluid_sim_swirl_field(ps);
                 fluid_sim_step(ps, 1.f / 60); fluid_sim_step(ps, 1.f / 60); fluid_sim_color(ps, 1.f / 30); fluid_sim_view(ps);
                 fluid_sim_snapshot(ps, fr, false);
-                fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, t, 0.f, NULL, 0, " .:-=+*#", font, NULL };
+                fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, t, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL, 0 };
                 int y0, y1; fluid_draw(d, fr, fbs[a], &o, &y0, &y1);
             }
             fluid_sim_destroy(ps); cute_rt_destroy(pk);
@@ -301,7 +301,7 @@ static void test_act_render(const char *path, const char *outdir) {
                 if (k % (total / 8) == total / 16 && n_still < (part + 1) * 8) {
                     still[n_still] = calloc(FLUID_STAGE_REF * FLUID_STAGE_REF, 2);
                     fluid_sim_snapshot(ws, fr, false);
-                    fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, clock, 0.f, NULL, 0, " .:-=+*#", font, NULL };
+                    fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, clock, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL, 0 };
                     int y0, y1; fluid_draw(d, fr, still[n_still++], &o, &y0, &y1);
                 }
             }

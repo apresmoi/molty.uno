@@ -1,0 +1,183 @@
+{
+  "title": "astrology sign-closeup: the params of scene.play",
+  "type": "object",
+  "required": [
+    "sign",
+    "c",
+    "name",
+    "nx",
+    "ns",
+    "say",
+    "ruler",
+    "bodies"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "sign": {
+      "enum": [
+        "aries",
+        "taurus",
+        "gemini",
+        "cancer",
+        "leo",
+        "virgo",
+        "libra",
+        "scorpio",
+        "sagittarius",
+        "capricorn",
+        "aquarius",
+        "pisces"
+      ],
+      "description": "The sign, lower case. Also names the centre's tap zone in the tap event."
+    },
+    "c": {
+      "type": "string",
+      "pattern": "^#[0-9a-f]{6}$",
+      "description": "The sign's color: #ff9a7a, #a8d890, #9fc0ff for sign index (Aries 0) mod 3."
+    },
+    "name": {
+      "type": "string",
+      "maxLength": 11,
+      "pattern": "^(?![$@])[\\x20-\\x7e]*$",
+      "description": "The sign's name in capitals."
+    },
+    "nx": {
+      "type": "number",
+      "minimum": -1,
+      "maximum": 1,
+      "description": "The name's centre: the name and the ruler's symbol after it (0.13 wide, 0.06 apart) make one row, centred. A letter is 6/7 of the type size wide, the last 5/7."
+    },
+    "ns": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 2,
+      "description": "The name's type size, 0.13, or 0.11 past 8 letters."
+    },
+    "say": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^(?![$@])[\\x20-\\x7e]*$",
+      "description": "What a tap on the sign shows, the same reading as on the chart."
+    },
+    "ruler": {
+      "type": "array",
+      "maxItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "g",
+          "x",
+          "c"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "g": {
+            "enum": [
+              "g-sun",
+              "g-moon",
+              "g-mercury",
+              "g-venus",
+              "g-mars",
+              "g-jupiter",
+              "g-saturn",
+              "g-uranus",
+              "g-neptune",
+              "g-pluto"
+            ],
+            "description": "The ruler's symbol: g-mars ..."
+          },
+          "x": {
+            "type": "number",
+            "minimum": -1,
+            "maximum": 1,
+            "description": "Its centre: the row's right end less half its width (0.065)."
+          },
+          "c": {
+            "type": "string",
+            "pattern": "^#[0-9a-f]{6}$",
+            "description": "The ruler's color, as on the chart."
+          }
+        }
+      },
+      "description": "The sign's ruler, drawn after its name. Modern rulers from Aries on: Mars, Venus, Mercury, Moon, Sun, Mercury, Venus, Pluto, Jupiter, Saturn, Uranus, Neptune."
+    },
+    "bodies": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "required": [
+          "g",
+          "da",
+          "c",
+          "d",
+          "on",
+          "off",
+          "say",
+          "id"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "g": {
+            "enum": [
+              "g-sun",
+              "g-moon",
+              "g-mercury",
+              "g-venus",
+              "g-mars",
+              "g-jupiter",
+              "g-saturn",
+              "g-uranus",
+              "g-neptune",
+              "g-pluto"
+            ],
+            "description": "The planet's symbol: g-moon ..."
+          },
+          "da": {
+            "type": "number",
+            "minimum": -720,
+            "maximum": 720,
+            "description": "Its place on the dial: 210 - 8 x its degree in the sign (0 lower left, over the top, 30 lower right), kept at least 28 apart and within 210 to -30."
+          },
+          "c": {
+            "type": "string",
+            "pattern": "^#[0-9a-f]{6}$",
+            "description": "Its color, as on the chart."
+          },
+          "d": {
+            "type": "string",
+            "pattern": "^#[0-9a-f]{6}$",
+            "description": "Its color at 60 percent, for when it is not being read."
+          },
+          "on": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 600,
+            "description": "When Molty starts reading it: about 2.6 words a second and 0.3 s a sentence, after 1.2 s and the sign's own line."
+          },
+          "off": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 600,
+            "description": "When Molty has read it."
+          },
+          "say": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^(?![$@])[\\x20-\\x7e]*$",
+            "description": "What a tap on it shows."
+          },
+          "id": {
+            "type": "string",
+            "maxLength": 40,
+            "pattern": "^(?![$@])[\\x20-\\x7e]*$",
+            "description": "Its name, lower case: names it in the tap event."
+          }
+        }
+      },
+      "description": "Each planet in the sign, by degree."
+    }
+  }
+}

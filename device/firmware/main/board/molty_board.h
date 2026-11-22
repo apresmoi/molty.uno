@@ -106,6 +106,9 @@ typedef struct {
     bool      (*stream_active)(void);
 } molty_mic_ops_t;
 
+/* the panel's tearing-effect pulses (molty_display_te) */
+typedef struct { bool line; uint32_t total, n, mean_us, min_us, max_us; int64_t last_us; } molty_te_t;   /* (last_us: the latest pulse, esp_timer) */
+
 typedef struct {
     const char   *id;          /* board.json "name", e.g. "waveshare-esp32-s3-touch-lcd-1.46" */
     const char   *name;        /* human-readable                                         */
@@ -123,6 +126,12 @@ typedef struct {
     esp_err_t (*flush)(void);
     esp_err_t (*flush_rows)(int y0, int y1);      /* full-width rows [y0, y1)                    */
     esp_err_t (*blit)(int x, int y, int w, int h, const uint16_t *px);   /* optional: see molty_display_blit */
+    esp_err_t (*blit_async)(int x, int y, int w, int h, const uint16_t *px);   /* optional: see molty_display_blit_async */
+    esp_err_t (*blit_wait)(void);                 /* optional, with blit_async                                    */
+    void      (*blit_prof)(uint32_t *out);        /* optional: us in the async blits, see molty_display_blit_prof */
+    void      (*blit_mirror)(bool on);            /* optional: see molty_display_blit_mirror                        */
+    void      (*display_te)(molty_te_t *out, bool window);   /* optional: see molty_display_te                       */
+    bool      (*display_te_wait)(uint32_t after, int timeout_ms);   /* optional: see molty_display_te_wait        */
     esp_err_t (*display_power)(bool on);          /* optional: panel off / on (sleep, backlight)  */
     esp_err_t (*display_level)(uint8_t level);    /* optional: brightness 0..255 (255 at power on) */
     esp_err_t (*power_off)(void);                 /* optional: cut the power; returns only on failure */
@@ -194,6 +203,24 @@ esp_err_t molty_display_flush_rows(int y0, int y1);
  *  the framebuffer as it was (whoever draws keeps it for /api/framebuffer); without one,
  *  px is copied into the framebuffer and its rows flushed. */
 esp_err_t molty_display_blit(int x, int y, int w, int h, const uint16_t *px);
+/** As molty_display_blit, but it may return while the panel still reads px: px stays untouched until the next
+ *  molty_display_blit_async or molty_display_blit_wait returns (each waits for the transfer before). Boards without
+ *  one blit synchronously. molty_display_blit_can_overlap: whether it truly returns early. */
+esp_err_t molty_display_blit_async(int x, int y, int w, int h, const uint16_t *px);
+esp_err_t molty_display_blit_wait(void);
+bool      molty_display_blit_can_overlap(void);
+/** us spent in the async blits since the last call, added into out[3] (the mirror copy, waiting, commands); 0s without. */
+void      molty_display_blit_prof(uint32_t *out);
+/** Off: blits on whole row pairs may leave the framebuffer as it was (a board keeping a mirror of the panel for odd
+ *  edges skips copying into it); the caller repaints in full before it sends windows with odd edges again. */
+void      molty_display_blit_mirror(bool on);
+/** The panel's tearing-effect pulses (one a refresh of its glass): total since boot and, with window, those since the
+ *  last windowed call with their period (us; n 0: none came; the window starts again). line false: the board reads no TE
+ *  line (none, or its interrupt could not be installed). Any task. */
+void      molty_display_te(molty_te_t *out, bool window);
+/** Blocks until the TE pulses' total (molty_display_te) passes after: true; false after timeout_ms, or at once when the
+ *  board reads no TE line. One waiter at a time. */
+bool      molty_display_te_wait(uint32_t after, int timeout_ms);
 /** The panel off (false) or on. ESP_ERR_NOT_SUPPORTED when the board cannot; the caller
  *  stops drawing either way. */
 esp_err_t molty_display_power(bool on);

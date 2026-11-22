@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=../../../schema/display-2.json
+molty: display/2
+package:
+  id: dial
+  name: Dial
+  version: 1.0.0
+  about: A gauge with a pointer and a centre you tap to read.
+  fallback: speech
+screens:
+  dial:
+    about: A gauge pointing at one value.
+    duration: hold
+    inputs:
+      value:
+        type: angle
+        about: Where the pointer points.
+        example: 135
+      reading:
+        type: reading
+        about: What a tap on the centre shows.
+        example: Humidity 64 percent, a bit damp.
+    draw:
+      - circle: { radius: 0.9, width: hairline, color: ink }
+      - ticks: { count: 12, radius: 0.82, length: 0.08, width: hairline, color: grid }
+      - spoke: { angle: "{{ value }}", length: 0.8, width: bold }
+      - dot: { radius: 0.05 }
+      - tap_zone: { radius: 0.3, id: centre, reads: "{{ reading }}" }

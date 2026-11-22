@@ -10,12 +10,22 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <dirent.h>
+
+#include <errno.h>
 
 #ifdef ESP_PLATFORM
 #include "esp_heap_caps.h"
+#include "esp_log.h"
+#include "esp_spiffs.h"
+/* SPIFFS reports deleted pages as free but can only write into them after a GC: make room first */
+#define STORE_MAKE_ROOM(n) do { esp_err_t g_ = esp_spiffs_gc("spiffs", (n)); if (g_ != ESP_OK) STORE_WARN("gc for %u bytes: %s", (unsigned)(n), esp_err_to_name(g_)); } while (0)
+#define STORE_WARN(...) ESP_LOGW("pkg_store", __VA_ARGS__)
 #define STORE_MALLOC(n) heap_caps_malloc((n), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
 #define STORE_FREE(p)   heap_caps_free(p)
 #else
+#define STORE_WARN(...) ((void)0)
+#define STORE_MAKE_ROOM(n) ((void)0)
 #define STORE_MALLOC(n) malloc(n)
 #define STORE_FREE(p)   free(p)
 #endif
@@ -67,7 +77,8 @@ const char *pkg_req_parse(const cJSON *args, pkg_req_t *r) {
 
 /* ── the index ─────────────────────────────────────────────────────────────── */
 
-static void path(char *out, size_t n, const char *root, const char *name) { snprintf(out, n, "%s/%s", root, name); }
+/* false when root/name does not fit in out: the cut path would name another file */
+static bool path(char *out, size_t n, const char *root, const char *name) { return (size_t)snprintf(out, n, "%s/%s", root, name) < n; }
 
 static bool exists(const char *root, const char *name) {
     char p[96]; struct stat st;
@@ -152,9 +163,11 @@ static bool save(const char *root, const pkg_entry_t *e, int n) {
     bool ok = f && fwrite(txt, 1, len, f) == len;
     if (f && fclose(f) != 0) ok = false;
     cJSON_free(txt);
-    if (!ok) { remove(tmp); return false; }
+    if (!ok) { STORE_WARN("index write %s failed: errno %d", tmp, errno); remove(tmp); return false; }
     remove(dst);                                   /* SPIFFS cannot rename over a file */
-    return rename(tmp, dst) == 0;
+    if (rename(tmp, dst) == 0) return true;
+    STORE_WARN("index rename failed: errno %d", errno);
+    return false;
 }
 
 static int find(const pkg_entry_t *e, int n, const char *id) {
@@ -184,6 +197,35 @@ const char *pkg_store_room(const char *root, const char *id, uint32_t size) {
     const bool full = find(e, n, id) < 0 && n >= PKG_INSTALLED_MAX;
     STORE_FREE(e);
     return full || used + size > PKG_QUOTA ? "no_space" : NULL;
+}
+
+uint32_t pkg_store_installed_size(const char *root, const char *id) {
+    pkg_entry_t e;
+    char p[96]; struct stat st;
+    if (!pkg_store_find(root, id, &e)) return 0;
+    path(p, sizeof(p), root, e.file);
+    return stat(p, &st) == 0 ? (uint32_t)st.st_size : 0;
+}
+
+int pkg_store_sweep(const char *root) {
+    pkg_entry_t *e = entries();
+    if (!e) return 0;
+    const int n = load(root, e, PKG_INSTALLED_MAX);
+    const bool have_index = exists(root, "index.json");
+    DIR *d = opendir(root);
+    int gone = 0;
+    for (struct dirent *de = d ? readdir(d) : NULL; de; de = readdir(d)) {
+        const char *name = de->d_name;
+        if (name[0] == '.' || !strcmp(name, "index.json") || (!have_index && !strcmp(name, "index.tmp"))) continue;
+        bool named = false;
+        for (int i = 0; i < n && !named; i++) named = !strcmp(e[i].file, name);
+        if (named) continue;
+        char p[96];
+        if (path(p, sizeof(p), root, name) && remove(p) == 0) gone++;
+    }
+    if (d) closedir(d);
+    STORE_FREE(e);
+    return gone;
 }
 
 /* at most r->size bytes into buf, hashed as they come */
@@ -223,9 +265,12 @@ const char *pkg_store_put(const char *root, const pkg_req_t *r, const uint8_t *b
 
     char fp[96];
     path(fp, sizeof(fp), root, ent.file);
+    STORE_MAKE_ROOM(r->size);
     FILE *f = fopen(fp, "wb");
+    if (!f) STORE_WARN("open %s failed: errno %d", fp, errno);
     bool ok = f && fwrite(buf, 1, r->size, f) == r->size;
-    if (f && fclose(f) != 0) ok = false;
+    if (f && !ok) STORE_WARN("write %s failed: errno %d", fp, errno);
+    if (f && fclose(f) != 0) { STORE_WARN("close %s failed: errno %d", fp, errno); ok = false; }
     pkg_entry_t *all = ok ? entries() : NULL;
     int n = all ? load(root, all, PKG_INSTALLED_MAX) : 0, i = all ? find(all, n, r->id) : -1;
     pkg_entry_t old = i >= 0 ? all[i] : (pkg_entry_t){ 0 };

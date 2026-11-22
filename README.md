@@ -28,8 +28,8 @@ add the relay as a remote MCP server (`https://<relay>/mcp`).
 - **Talks and listens.** Your agent speaks through Molty, hears your answer, and asks
   questions you answer with one tap: yes, no or idk.
 - **Shows how it is doing.** Little creatures called Moltys condense out of a fluid of
-  braille, idle, glance around and change mood. 29 ship today, ~1 KB each:
-  [see them all](https://molty.uno/showcase/).
+  braille, idle, glance around and change mood. 29 ship today, ~1 KB each; the newest is a
+  cat with its own gestures: [see what it does](https://molty.uno/showcase/).
 - **Any agent is the brain.** Claude, Codex, Grok, OpenClaw, your own script. The thinking
   happens wherever your agent runs; Molty is the body.
 - **No laptop in the loop.** Molty dials out to a small cloud relay, so your agent reaches
@@ -37,22 +37,19 @@ add the relay as a remote MCP server (`https://<relay>/mcp`).
 
 ## How it works
 
+```mermaid
+flowchart TD
+  accTitle: Molty, the relay and your agent
+  console[Console] ---|USB-C or Wi-Fi| molty[Molty, on your desk]
+  molty -->|audio, events| relay[Relay, in the cloud]
+  relay -->|commands| molty
+  agent[Your agent, anywhere] -->|MCP or REST| relay
+  relay -->|results| agent
 ```
-   your desk                     the cloud                      anywhere
- +----------------+           +-------------------+           +-------------------+
- |     molty      |  outbound |    molty relay    |  MCP or   |    your agent     |
- |                |---------->|                   |<----------|                   |
- | screen   mic   |    WSS    |  one room per     |   REST    |  Claude, Codex,   |
- | speaker  imu   |<----------|  device: pairing, |---------->|  Grok, OpenClaw,  |
- | touch          |  commands |  tokens, speech   |  results  |  ...              |
- |                |  audio,   |  <-> text         |           |                   |
- +-------+--------+  events   +-------------------+           +-------------------+
-         |
-         | USB-C or Wi-Fi
- +-------+--------+
- |  the console   |   setup + settings, served by Molty itself
- +----------------+   http://10.13.37.1 (USB)   or   http://molty.local (Wi-Fi)
-```
+
+Molty has a screen, a mic, a speaker, a motion sensor and touch. It dials out to the relay over WSS. Your agent is
+Claude, Codex, Grok, OpenClaw or any other. The console is setup and settings, served by Molty itself at
+`http://10.13.37.1` (USB) or `http://molty.local` (Wi-Fi).
 
 The relay keeps one room per device: it checks the device key, runs pairing, hands your
 agent a token, forwards commands, and turns speech into text and back. It is a Cloudflare
@@ -77,6 +74,7 @@ There's also a `molty` CLI and a local MCP server: [docs/CLI.md](docs/CLI.md).
 ```
 device/
   firmware/      ESP-IDF firmware: fluid, Moltys, audio, IMU, touch, Wi-Fi, agent link
+                 (web/: its renderer as WebAssembly, what the website's screens run)
   console/       the setup + settings page, built into the firmware image
   creatures/     the Molty kit, the JS fluid engine, viewers, .molty exporter
 services/
@@ -93,7 +91,8 @@ docs/            architecture, agent link, CLI, hardware, releasing
 ```
 
 `make console`, `make firmware`, `make relay`, `make cli`, `make creatures` build each part;
-`make test` runs every suite. Nothing in the Makefile flashes or deploys. Toolchain and
+`make web-molty` rebuilds the website's Molty from the firmware sources; `make test` runs every
+suite. Nothing in the Makefile flashes or deploys. Toolchain and
 first flash from source: [docs/HARDWARE.md](docs/HARDWARE.md).
 
 ## Docs

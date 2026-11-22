@@ -2,11 +2,21 @@
 #include "link_protocol.h"
 #include "../../main/link/link_audio.c"
 #include "cute_act.h"
+int molty_display_width(void);
+int molty_display_height(void);
 #include "../../main/link/link_pair.c"
 #include <assert.h>
 #include <stdio.h>
 #include <math.h>
 
+/* the pairing's question on screen (mole_fluid.c): what was shown, how it left; glass = what a tap may answer */
+static fluid_ask_q_t pair_q; static unsigned pair_seq, pair_glass, pair_ends; static int pair_pick = -9;
+int molty_display_width(void) { return 412; }
+int molty_display_height(void) { return 412; }
+esp_err_t mole_fluid_ask_show(const fluid_ask_q_t *q, unsigned *seq) { pair_q = *q; *seq = ++pair_seq; pair_pick = -9; pair_glass = 0; return ESP_OK; }
+void mole_fluid_ask_pick(int index) { pair_pick = index; }
+void mole_fluid_ask_end(void) { pair_ends++; }
+unsigned mole_fluid_ask_shown(void) { return pair_glass; }
 static unsigned rotations, sent;
 static esp_err_t send_error;
 static const char *field(const char *key) { cJSON *j=cJSON_GetObjectItem(sdk_sent,key); assert(cJSON_IsString(j)); return j->valuestring; }
@@ -87,6 +97,7 @@ void link_identity_rotate(void) { rotations++; }
 /* the screen's listening ring (mole_fluid.c) and the pending question (link_ask.c) */
 static bool ring_on; static unsigned ring_ons;
 void mole_fluid_listen(bool on) { if (on) { assert(!ring_on); ring_ons++; } ring_on=on; }
+void mole_fluid_listen_level(float level) { (void)level; }
 static int32_t ring_color = -9; static unsigned ring_colors;
 void mole_fluid_listen_color(int32_t rgb) { assert(!ring_on); ring_colors++; ring_color=rgb; }
 static uint32_t listen_setting = 30000;   /* the console's setting (mole_fluid.c, NVS) */
@@ -191,12 +202,13 @@ static void test_say(void) {
     complete(record(&job));
     assert(bin_bytes==160000 && bin_ends==1 && bin_frames==17 && sdk_rx_chunks==50);
     assert(!strcmp(bin_reason,"max") && !strcmp(s_end_reason,"max"));
-    /* VAD off measured nothing: no speech_ms (a 0 made the relay skip STT). This exact
-     * header is the fixture in services/relay/test/talk.test.ts ("vad:false end frame"). */
-    assert(bin_speech_ms==-1);
+    /* VAD off still measures (a held press that heard nobody gets no chirp): 0 ms of speech
+     * in digital silence. The relay never skips STT on speech_ms alone (older firmware's
+     * header without it: services/relay/test/talk.test.ts "vad:false end frame"). */
+    assert(bin_speech_ms==0);
     /* ...plus the turn trace (cap "trace", docs/AGENT-LINK.md "Turn trace"): ct, lv (two
      * 100 ms chunks of digital silence), wq, and the end frame's tr */
-    assert(!strcmp(bin_end_header,"{\"s\":\"listen1\",\"seq\":16,\"kind\":\"pcm16\",\"rate\":16000,\"end\":true,\"reason\":\"max\","
+    assert(!strcmp(bin_end_header,"{\"s\":\"listen1\",\"seq\":16,\"kind\":\"pcm16\",\"rate\":16000,\"end\":true,\"reason\":\"max\",\"speech_ms\":0,"
                    "\"ct\":4800,\"lv\":\"0000\",\"wq\":0,\"tr\":{\"wall\":0,\"cap\":5000,\"sent\":17,\"fail\":0,\"drop\":0,\"dropms\":0,"
                    "\"r0\":-40,\"r1\":-40,\"gain\":8,\"pk\":0}}"));
     /* End of speech (default on): nobody speaks → the listen ends at no_speech_ms 4 s
@@ -314,9 +326,10 @@ static void test_ack(void) {
     k=ack_listen("",NULL,stop_no_speech); assert(!strcmp(bin_reason,"no_speech") && NO_ACK());
     /* the window ran out while they were talking (measured speech) */
     k=ack_listen_ms(1500,"",speech_fill,NULL); assert(!strcmp(bin_reason,"max") && bin_speech_ms>=160 && CHIRPED_FULL());
+    k=ack_listen_ms(1500,",\"vad\":false",speech_fill,NULL); assert(!strcmp(bin_reason,"max") && bin_speech_ms>=160 && CHIRPED_FULL());   /* VAD off measures too */
     /* nothing heard / nothing known / failed / cancelled: no acknowledgement, idle as before */
     k=ack_listen("",NULL,NULL); assert(!strcmp(bin_reason,"no_speech") && NO_ACK());
-    k=ack_listen_ms(1500,",\"vad\":false",speech_fill,NULL); assert(!strcmp(bin_reason,"max") && bin_speech_ms==-1 && NO_ACK());
+    k=ack_listen_ms(1500,",\"vad\":false",NULL,NULL); assert(!strcmp(bin_reason,"max") && bin_speech_ms==0 && NO_ACK());
     k=ack_listen("",speech_fill,mic_fails); sdk_rx_error=ESP_OK; assert(!strcmp(bin_reason,"error") && NO_ACK());
     k=ack_listen("",speech_fill,cancel_it); assert(!strcmp(s_end_reason,"error") && NO_ACK());
     /* the agent opts out per listen: false → nothing; "silent" → thinking without the chirp */
@@ -377,9 +390,11 @@ static cJSON *status(void) { cJSON *j=cJSON_CreateObject(); link_pair_status(j);
 static void test_pair(void) {
     cJSON *st=status();   /* boot: nothing pending, no decision yet */
     assert(cJSON_IsNull(cJSON_GetObjectItem(st,"pair")) && cJSON_IsNull(cJSON_GetObjectItem(st,"last_pair"))); cJSON_Delete(st);
+    sdk_state[0]='\0';
     request();
-    /* Static prompt: the code alone, as one held token (no return to the creature). */
-    assert(!strcmp(sdk_state,"{\"state\":\"text\",\"text\":\"1234\",\"hold\":true}"));
+    /* The question over whatever shows: who asks, a reminder, the code, accept / reject (the state is left alone) */
+    assert(!strcmp(pair_q.title,"pair with test agent?") && !strcmp(pair_q.detail,"check the code matches") && !strcmp(pair_q.code,"1234"));
+    assert(pair_q.n==2 && !strcmp(pair_q.label[0],"accept") && !strcmp(pair_q.label[1],"reject") && pair_q.rgb[0]==0x3ccf96 && pair_q.rgb[1]==0xff6b6b && !sdk_state[0]);
     st=status(); cJSON *p=cJSON_GetObjectItem(st,"pair");
     assert(!strcmp(cJSON_GetObjectItem(p,"agent_name")->valuestring,"test agent") && !strcmp(cJSON_GetObjectItem(p,"code")->valuestring,"1234"));
     assert(cJSON_GetObjectItem(p,"expires_in_s")->valueint==110 && cJSON_IsNull(cJSON_GetObjectItem(st,"last_pair"))); cJSON_Delete(st);
@@ -388,33 +403,39 @@ static void test_pair(void) {
     sdk_now+=79999999; link_pair_tick(); assert(link_pair_active());
     sdk_now+=1; link_pair_tick();
     assert(!link_pair_active() && !strcmp(field("reason"),"timeout") && !rotations);
-    assert(!strcmp(sdk_state,"{\"state\":\"blob\"}"));          /* back to what was shown */
+    assert(pair_pick==-9 && pair_ends==1 && !sdk_state[0]);          /* the rim lets go; nothing else changed */
     st=status(); p=cJSON_GetObjectItem(st,"last_pair");
     assert(cJSON_IsNull(cJSON_GetObjectItem(st,"pair")) && cJSON_GetObjectItem(p,"seq")->valueint==1);
     assert(cJSON_IsFalse(cJSON_GetObjectItem(p,"ok")) && !strcmp(cJSON_GetObjectItem(p,"reason")->valuestring,"timeout"));
     assert(!strcmp(cJSON_GetObjectItem(p,"agent_name")->valuestring,"test agent")); cJSON_Delete(st);
-    /* The demo reel was running: the restore lands on the creature, never re-enables it. */
-    sdk_saved_state="{\"state\":\"effect:wave\",\"autoplay\":true,\"reel_step\":11}";
+    /* the reject button: rejected, the rim lets go */
     request(); sdk_gpio[6]=0; link_pair_tick(); sdk_gpio[6]=1;
-    assert(!link_pair_active() && !strcmp(field("reason"),"rejected") && !rotations);
-    assert(!strcmp(sdk_state,"{\"state\":\"creature\"}") && !strstr(sdk_state,"autoplay"));
-    sdk_saved_state="{\"state\":\"blob\"}";
-    request(); link_pair_touch(1); link_pair_tick(); link_pair_touch(0);
-    assert(!link_pair_active() && cJSON_IsTrue(cJSON_GetObjectItem(sdk_sent,"ok")) && rotations==1);
+    assert(!link_pair_active() && !strcmp(field("reason"),"rejected") && !rotations && pair_pick==-9);
+    /* a tap: only on the panel's question, only on an answer. Before it shows, or beside the answers, nothing */
+    request();
+    link_pair_tap(-100.f, 100.f); link_pair_tick(); assert(link_pair_active());          /* not on the panel yet */
+    pair_glass=pair_seq;
+    link_pair_tap(0.f, -150.f); link_pair_tick(); assert(link_pair_active());           /* on the question */
+    link_pair_tap(0.f, 0.f); link_pair_tick(); assert(link_pair_active());              /* the centre */
+    link_pair_tap(-100.f, 100.f); link_pair_tick();                                       /* accept, lower left */
+    assert(!link_pair_active() && cJSON_IsTrue(cJSON_GetObjectItem(sdk_sent,"ok")) && rotations==1 && pair_pick==0);
     assert(!strcmp(field("link_code"),"ABCDEFGH"));
     st=status(); p=cJSON_GetObjectItem(st,"last_pair");
     assert(cJSON_GetObjectItem(p,"seq")->valueint==3 && cJSON_IsTrue(cJSON_GetObjectItem(p,"ok")) && cJSON_IsNull(cJSON_GetObjectItem(p,"reason")));
     cJSON_Delete(st);
     request(); sdk_gpio[0]=0; link_pair_tick(); sdk_gpio[0]=1;
     assert(!link_pair_active() && rotations==2);
-    request(); send_error=ESP_FAIL; link_pair_touch(1); link_pair_tick(); link_pair_touch(0);
+    request(); pair_glass=pair_seq; send_error=ESP_FAIL; link_pair_tap(-100.f, 100.f); link_pair_tick();
     assert(!link_pair_active() && rotations==3); send_error=ESP_OK;
+    /* a tap on reject (lower right): rejected, from that answer */
+    request(); pair_glass=pair_seq; link_pair_tap(100.f, 100.f); link_pair_tick();
+    assert(!link_pair_active() && !strcmp(field("reason"),"rejected") && rotations==3 && pair_pick==1);
     /* A board with no reject button (the 1.28): GPIO 6 means nothing, only the timeout
      * rejects; accept still works on the button with no touch at all. */
     sdk_caps &= ~(MOLTY_CAP_BTN_REJECT | MOLTY_CAP_TOUCH);
     request(); sdk_gpio[6]=0; link_pair_tick(); sdk_gpio[6]=1; assert(link_pair_active());
     sdk_gpio[0]=0; link_pair_tick(); sdk_gpio[0]=1;
-    assert(!link_pair_active() && rotations==4);
+    assert(!link_pair_active() && rotations==4 && pair_pick==0);
     /* Neither touch nor an accept button: refused at once, nothing shown. */
     sdk_caps &= ~MOLTY_CAP_BTN_ACCEPT; sdk_state[0]='\0';
     cJSON *nope=cJSON_Parse("{\"req\":\"noway\",\"agent_name\":\"test\",\"code\":\"1234\"}");
@@ -731,6 +752,7 @@ static void shake_run(audio_job_t *job,int adopt,const char *args) {
 }
 /* a tap: the rec stops with what it has, reason tap, acknowledged; a bound `talk`; a say's first-audio watchdog */
 static void stop_tap_at_chunk_10(int16_t *buf, size_t n, unsigned i) { (void)buf; (void)n; if (i==10) { link_audio_request(link_audio_job_gen(), LINK_AUDIO_REQ_STOP); apply_request(); } }
+static void speech_tap_at_chunk_10(int16_t *buf, size_t n, unsigned i) { speech_fill(buf,n,i); stop_tap_at_chunk_10(buf,n,i); }
 /* a link drop: a held job survives it, the hello names it, the welcome picks it up or drops it */
 static cJSON *welcome_with(const char *job, bool ok, int next) {
     cJSON *w=cJSON_CreateObject(), *f=cJSON_AddArrayToObject(w,"features");
@@ -813,8 +835,12 @@ static void test_tap_and_watchdog(void) {
     listen_job(8000,&job); assert(link_audio_listening(&age)); sdk_rx_chunks=0; sdk_rx_fill=stop_tap_at_chunk_10;
     complete(record(&job)); sdk_rx_fill=NULL;
     assert(bin_ends==1 && !strcmp(bin_reason,"tap") && !strcmp(s_end_reason,"tap") && bin_bytes>0);
-    assert(!link_audio_busy() && !strcmp(sdk_mood,"thinking"));        /* acknowledged: a normal end of turn */
+    assert(!link_audio_busy() && !strcmp(sdk_mood,"idle"));            /* nobody spoke: a press by accident, no acknowledgement */
     assert(!link_audio_listening(NULL));
+    listen_job(8000,&job); sdk_rx_chunks=0; sdk_rx_fill=speech_tap_at_chunk_10;
+    complete(record(&job)); sdk_rx_fill=NULL;
+    assert(!strcmp(bin_reason,"tap") && bin_speech_ms>=160);
+    assert(!link_audio_busy() && !strcmp(sdk_mood,"thinking"));        /* they spoke: acknowledged, a normal end of turn */
     /* no audio yet: waiting, gives up after 8 s; the first frame ends the wait */
     begin_say(); assert(link_audio_say_waiting());
     sdk_now+=7000000; link_audio_tick(); assert(!atomic_load(&s_cancel));

@@ -1,0 +1,74 @@
+/* A Molty device: it fills the square its parent gives it. The canvas is the round screen (the
+   firmware's renderer draws into it, 466 px a side, sized by CSS); the still stands in for it;
+   the Device over them is the bezel and the glass. A screen is a dark panel in both themes.
+   One thing: nothing of the screen shows until the device stands in place (data-screen, set by
+   MoltyScreen: "off" while it is away, then "dark", then "live", or "still"). */
+.root {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+.panel,
+.still,
+.canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+}
+/* the screen's own dark, there from the moment the device stands (the device's cover, on its
+   turning face, was the same dark until then): what comes on fades in over it, never over the page */
+.panel {
+  background: var(--m-device-off);
+  opacity: 0;
+}
+.root[data-screen]:not([data-screen="off"]) .panel {
+  opacity: 1;
+}
+.still {
+  object-fit: cover;
+  transition: opacity 0.35s;
+}
+.canvas {
+  opacity: 0;
+  transition: opacity 0.35s;
+  /* a tap is a tap and a sideways drag stirs the water; an up or down swipe scrolls the page */
+  touch-action: pan-y;
+  cursor: pointer;
+}
+.root[data-screen="live"] .canvas {
+  opacity: 1;
+}
+.root:is([data-screen="off"], [data-screen="dark"], [data-screen="live"]) .still {
+  opacity: 0;
+}
+/* before its script (no data-screen yet): the still is unseen as its device is (every device
+   arrives unseen: Device's data-armed), while the page's intro runs. Not keyed on the device's
+   own element: the parser reaches the still first. No JS, reduced motion or a script that never
+   takes over: both show */
+@media (prefers-reduced-motion: no-preference) {
+  :global(html[data-fluid]:not([data-fluid="static"])) .root:not([data-screen]) .still {
+    opacity: 0;
+  }
+}
+/* the entrance: the cat alone, on a clear canvas the screen's size that the screen service moves
+   to where the cat stands (beyond the window's edge at first: the page clips it, no scrollbar).
+   Under the screen and the bezel, so the cat goes in under the rim; only while the screen is live */
+.outside {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  pointer-events: none;
+}
+.root[data-screen="live"] .outside {
+  opacity: 1;
+}
+.root .outside[data-gone] {
+  opacity: 0;
+}
+:global(:root[data-theme="light"]) .outside {
+  filter: invert(1) hue-rotate(180deg);
+}

@@ -115,9 +115,20 @@ Serial:
 - atob-lite 2.0.0 — MIT. tslib 2.8.1 — © Microsoft, 0BSD.
 Apache-2.0 text: https://www.apache.org/licenses/LICENSE-2.0.txt
 
+## Website Molty (molty.uno, device/firmware/web/built/molty.wasm, built with Emscripten 7.0.0)
+The firmware's own renderer compiled to WebAssembly, statically linked with:
+- cJSON 1.7.18 (from ESP-IDF v5.5): © 2009-2017 Dave Gamble and cJSON contributors, MIT (text above).
+- Emscripten 7.0.0 system libraries: © 2010-2026 the Emscripten authors, MIT OR NCSA. Its libc
+  (musl 1.2.6: © 2005-2020 Rich Felker et al., MIT), emmalloc (MIT) and LLVM compiler-rt builtins
+  (Apache-2.0 WITH LLVM-exception; text: https://llvm.org/LICENSE.txt).
+
 ## molty-astro skill (skills/molty-astro, vendored)
 - astronomy-engine 2.1.19 (scripts/vendor/astronomy.min.js): Copyright (c) 2019-2023 Don Cross, MIT License (its
   full text heads the file).
+
+## Display tools (packages/tools, vendored)
+- js-yaml 4.1.1 (vendor/js-yaml.mjs, its dist/js-yaml.mjs unchanged): Copyright (C) 2011-2015 by Vitaly Puzrin, MIT
+  License (its header names it). Reads display.yaml on the computer that builds a package; not in the firmware.
 
 ## Hosted services (no code licence; terms of use apply)
 The optional cloud relay calls Cloudflare Workers AI models @cf/deepgram/aura-2-en

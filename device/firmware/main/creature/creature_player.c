@@ -131,6 +131,7 @@ typedef struct { float x, y, k; } mote_t;
 #define MOTES_MAX 64
 
 struct cp {
+    bool rigged;                         /* the creature carries a rig (creature_clip.h)                */
     char id[CP_ID_MAX + 1], name[CP_NAME_MAX + 1], version[16];
     char *info;                  /* cp_info: what an agent is told about this creature (JSON)    */
     cp_body_t body;
@@ -1323,7 +1324,8 @@ static char *info_c(const cp_t *c, const cJSON *ab) {
 
 static const char *compile(cp_t *c, const cJSON *cr) {
     cx_t x = { .c = c };
-    static const char *const CK[] = { "about", "body", "walk", "groups", "events", "base", "gestures", "moods", "post", "tints", "ambient", NULL };
+    static const char *const CK[] = { "about", "body", "walk", "groups", "events", "base", "gestures", "moods", "post", "tints", "ambient", "rig", NULL };
+    c->rigged = cJSON_GetObjectItemCaseSensitive(cr, "rig") != NULL;   /* creature_clip.c reads it */
     if (keys_only(&x, cr, CK, "creature: unknown key") < 0) return x.err;
     for (int k = 0; k < 18; k++) slot(&x, POSE[k]);
     slot(&x, "t"); slot(&x, "dt"); slot(&x, "act"); slot(&x, "work");
@@ -1384,9 +1386,16 @@ static const char *compile(cp_t *c, const cJSON *cr) {
     return x.err;
 }
 
+static bool has_rig(const char *j, size_t n) {
+    static const char K[] = "\"rig\":{";
+    for (size_t i = 0; i + sizeof(K) - 1 <= n; i++) if (!memcmp(j + i, K, sizeof(K) - 1)) return true;
+    return false;
+}
+
 cp_t *cp_create(const char *json, size_t len, const char **err) {
     const char *e = NULL;
-    if (!json || len > CP_FILE_MAX) { *err = "too_big"; return NULL; }
+    /* a rigged creature (its baked clips, docs/CREATURES.md section 12) may be larger */
+    if (!json || len > (has_rig(json, len) ? CP_RIG_FILE_MAX : CP_FILE_MAX)) { *err = "too_big"; return NULL; }
     pkg_t *pk = pkg_parse(json, len, &e);   /* the header, as the store checks it */
     if (!pk) { *err = e; return NULL; }
     if (pk->kind != PKG_CREATURE) { pkg_unref(pk); *err = "package: not a creature"; return NULL; }
@@ -1424,6 +1433,7 @@ void cp_destroy(cp_t *c) {
 }
 
 const char *cp_id(const cp_t *c) { return c->id; }
+bool cp_rigged(const cp_t *c) { return c->rigged; }
 const char *cp_name(const cp_t *c) { return c->name; }
 const char *cp_version(const cp_t *c) { return c->version; }
 const char *cp_info(const cp_t *c) { return c->info; }

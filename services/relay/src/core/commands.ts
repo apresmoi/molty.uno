@@ -40,8 +40,8 @@ export const PKG_ID_RE = /^[a-z0-9-]{1,32}$/;
 /** A package file's ceiling; the device downloads it straight from the url: its bytes never pass through the relay. */
 export const MAX_PKG_BYTES = 262144;
 export const MAX_PKG_URL_BYTES = 512;
-/** A scene's params, as JSON: a few hundred bytes in practice (a path of keyframes is the biggest). */
-export const MAX_SCENE_PARAMS_BYTES = 2048;
+/** A scene's params, as JSON: a few hundred bytes for a drawing; a layout with spots carries their readings (the device holds 4096 characters of them). */
+export const MAX_SCENE_PARAMS_BYTES = 8192;
 export const DEFAULT_SCENE_TTL_S = 60;
 export const MAX_SCENE_TTL_S = 600;
 
@@ -477,8 +477,21 @@ export function validateTalk(raw: unknown): TalkArgs {
 
 // ---- ask: a question with tap answers ----
 
-/** Longest answer label (trimmed, printable ASCII). The firmware fits this at 5 sectors; change it here only. */
-export const MAX_ASK_LABEL = 8;
+/**
+ * Longest answer label (trimmed, printable ASCII) by how many answers there are: 14 for 1..2, 10 for 3, 8 for 4..5.
+ * The firmware fits these on its screen (device/firmware/main/fluid/fluid_ask.h fluid_ask_label_max); change them with it.
+ */
+export function askLabelMax(n: number): number {
+  return n <= 2 ? 14 : n === 3 ? 10 : 8;
+}
+/** The longest any label may be (one or two answers). */
+export const MAX_ASK_LABEL = 14;
+/** Firmware without ASK_TITLE_CAP takes at most this many characters a label, and no title. */
+export const LEGACY_ASK_LABEL = 8;
+/** The question shown over the answers (optional): at most this many printable ASCII characters. */
+export const MAX_ASK_TITLE = 40;
+/** The device cap that says its firmware shows a title and labels up to askLabelMax. */
+export const ASK_TITLE_CAP = "ask_title";
 export const MAX_ASK_OPTIONS = 5;
 export const MAX_ASK_TIMEOUT_S = 120;
 export const DEFAULT_ASK_TIMEOUT_S = 30;
@@ -490,6 +503,8 @@ export interface AskArgs {
   voice?: string;
   /** Trimmed labels, in order: index i is options[i]. */
   options: string[];
+  /** The question shown over the answers, trimmed. */
+  title?: string;
   /** options[i]'s colour, resolved "#rrggbb" (given, else DEFAULT_ASK_COLORS[i]). */
   colors: string[];
   timeout_s: number;
@@ -500,20 +515,22 @@ export interface AskArgs {
 }
 
 /**
- * molty_ask / POST /v1/devices/<id>/ask: `{say?, options: 1..5 items, timeout_s? 1..120 (default 30), voice?}`.
- * An item is a label (1..8 printable ASCII chars, unique case-insensitive) or `{label, color?}`
- * (color: a COLORS name or #rrggbb); mixed arrays are fine.
+ * molty_ask / POST /v1/devices/<id>/ask: `{say?, title?, options: 1..5 items, timeout_s? 1..120 (default 30), voice?}`.
+ * An item is a label (1..askLabelMax(n) printable ASCII chars: 14 for 1..2 answers, 10 for 3, 8 for 4..5; unique
+ * case-insensitive) or `{label, color?}` (color: a COLORS name or #rrggbb); mixed arrays are fine. title: the question
+ * shown over the answers, 1..40 printable ASCII chars.
  */
 export function validateAsk(raw: unknown): AskArgs {
   const args = raw === undefined || raw === null ? {} : raw;
   if (!isRecord(args)) throw invalid("args must be an object");
-  only(args, ["say", "options", "timeout_s", "voice", "client_timing", "in_reply_to"]);
+  only(args, ["say", "title", "options", "timeout_s", "voice", "client_timing", "in_reply_to"]);
   const opts = args.options;
   if (!Array.isArray(opts) || opts.length < 1 || opts.length > MAX_ASK_OPTIONS) {
     throw invalid(`options must be a list of 1..${MAX_ASK_OPTIONS} short labels, e.g. ["yes","no"]`);
   }
   const seen = new Set<string>();
   const colors: string[] = [];
+  const max = askLabelMax(opts.length);
   const options = opts.map((item, i) => {
     let o: unknown = item;
     colors[i] = COLORS[DEFAULT_ASK_COLORS[i]];
@@ -524,8 +541,8 @@ export function validateAsk(raw: unknown): AskArgs {
     }
     if (typeof o !== "string") throw invalid(`options[${i}] must be a label string or {"label": "yes", "color": "green"}`);
     const label = o.trim();
-    if (label.length < 1 || label.length > MAX_ASK_LABEL) {
-      throw invalid(`options[${i}] "${o}" must be 1..${MAX_ASK_LABEL} characters after trimming (it is a tap target on a small round screen): shorten it, e.g. "yes", "no", "later"`);
+    if (label.length < 1 || label.length > max) {
+      throw invalid(`options[${i}] "${o}" must be 1..${max} characters after trimming with ${opts.length} answer${opts.length > 1 ? "s" : ""} (14 for 1-2, 10 for 3, 8 for 4-5: it is a tap target on a small round screen): shorten it, e.g. "yes", "no", "later"`);
     }
     if (!/^[\x20-\x7e]+$/.test(label)) throw invalid(`options[${i}] must be printable ASCII (letters, digits, spaces, punctuation; no emoji or accents)`);
     const key = label.toLowerCase();
@@ -534,6 +551,11 @@ export function validateAsk(raw: unknown): AskArgs {
     return label;
   });
   const out: AskArgs = { options, colors, timeout_s: int(args.timeout_s, "timeout_s", 1, MAX_ASK_TIMEOUT_S, DEFAULT_ASK_TIMEOUT_S) };
+  if (args.title !== undefined) {
+    const t = typeof args.title === "string" ? args.title.trim() : "";
+    if (t.length < 1 || t.length > MAX_ASK_TITLE || !/^[\x20-\x7e]+$/.test(t)) throw invalid(`title must be 1..${MAX_ASK_TITLE} printable ASCII characters: the question shown over the answers, e.g. "Send the summary to Ana?"`);
+    out.title = t;
+  }
   if (args.say !== undefined) {
     const said = sayText(args.say, "say");
     out.say = said.text;

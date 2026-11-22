@@ -31,13 +31,16 @@ function checkImport(file, target) {
   if (service && !rel(file).startsWith(`services/${service}/`) && path.basename(target) !== 'index.ts') report(file, `Import services/${service} through its index.ts.`);
 }
 
-/** The creature engine is the repo's (device/creatures/js), imported via @creatures — never forked. */
+/** One owner each: the firmware's renderer (the module and its packages) is
+ *  services/molty-screen's and features/molty's. */
 function checkBareImport(file, spec) {
-  if (spec.startsWith('@creatures/') && !rel(file).startsWith('services/molty-stage/') && !rel(file).endsWith('env.d.ts'))
-    report(file, 'Only services/molty-stage may import the creature engine (@creatures/…).');
-  if ((spec === 'glyphcss' || spec.startsWith('@glyphcss/')) && !rel(file).startsWith('services/molty-stage/'))
-    report(file, 'Only services/molty-stage may import the fluid renderer (glyphcss, @glyphcss/…).');
-  if (spec === 'three' || spec.startsWith('three/')) report(file, 'three.js loads from the CDN inside the engine; do not import it.');
+  if (spec.startsWith('@molty-wasm/') && !rel(file).startsWith('services/molty-screen/'))
+    report(file, "Only services/molty-screen may import the firmware's renderer (@molty-wasm/…).");
+  if (spec.startsWith('@packages/') && !/^(features\/molty|pages)\//.test(rel(file)) && !rel(file).endsWith('env.d.ts'))
+    report(file, 'Packages (@packages/…) are read by features/molty and by a page\'s frontmatter only.');
+  // the docs' diagrams are drawn at build time by one markdown plugin: glyphcss never reaches a client bundle
+  if ((spec === 'glyphcss' || spec.startsWith('@glyphcss/')) && rel(file) !== 'integrations/markdown/glyphDiagrams.ts')
+    report(file, 'glyphcss only draws the docs diagrams at build time (integrations/markdown/glyphDiagrams.ts).');
 }
 
 if (fs.existsSync(path.join(root, 'lib'))) report(root, 'Use hooks, utils, services or a feature owner instead of lib.');
@@ -55,7 +58,6 @@ for (const file of files) {
   const source = fs.readFileSync(file, 'utf8');
 
   if (/\.(js|mjs)$/.test(file) && !relative.startsWith('config/')) report(file, 'Source is TypeScript; plain .mjs is only for config/ shared with Node scripts.');
-  if (/(^|\/)(sim|targets|render|fluid-stage|kit)\.js$/.test(relative)) report(file, 'Looks like a copy of the creature engine; import it via @creatures instead.');
   if (/github\.com\//.test(source) && relative !== 'config/site.mjs') report(file, 'GitHub URLs come from REPO_URL in config/site.mjs.');
 
   if (file.endsWith('.astro')) {

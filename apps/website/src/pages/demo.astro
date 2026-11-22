@@ -1,0 +1,39 @@
+---
+// /demo/: the device simulator, a tool for the owner (not linked, not in the sitemap, noindex).
+import { execSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import SiteLayout from "../layouts/SiteLayout.astro";
+import { SimPage } from "../components/SimPage";
+import cat from "@packages/cat/cat.json";
+
+// the cat's moods and gestures, from its package; the firmware the module was built from
+const creature = (cat as { creature: { moods: Record<string, unknown>; gestures: Record<string, unknown> } }).creature;
+const git = (args: string) => {
+  try {
+    return execSync(`git ${args}`, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return "";
+  }
+};
+const commit = git("rev-parse --short HEAD") || "unknown";
+const local = git("status --porcelain -- ../../device/firmware/main ../../device/firmware/web")
+  ? " + local changes"
+  : "";
+const built = JSON.parse(readFileSync(`${process.cwd()}/../../device/firmware/web/built/molty.json`, "utf8"));
+const module = (built as { wasm: { sha256: string } }).wasm.sha256.slice(0, 12);
+const firmware = `${commit}${local} (module ${module})`;
+---
+
+<SiteLayout
+  title="molty demo"
+  description="The device's own code in the browser, driven as the device is."
+  path="/demo/"
+>
+  <meta slot="head" name="robots" content="noindex, nofollow" />
+  <SimPage
+    client:only="react"
+    moods={Object.keys(creature.moods)}
+    gestures={Object.keys(creature.gestures)}
+    firmware={firmware}
+  />
+</SiteLayout>

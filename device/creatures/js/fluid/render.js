@@ -82,6 +82,9 @@ export class GlyphRenderer {
     const sub = this.sub || (this.sub = new Float32Array(8));
     const dotW = Math.max(1.5, cw * R.DOT_W), dotH = Math.max(1.5, ch * R.DOT_H);
     const shimmer = opt.shimmer || 0, frame = Math.floor((opt.time || 0) * R.SHIMMER_HZ);
+    // opt-in per-cell hook (look experiments): cellHook.cell(k, i, j, sub, dots) returns the cell's
+    // dots; setting cellHook.mean >= 0 makes the cell tonal at that brightness. Absent = today's look.
+    const hook = bmode !== 'off' ? opt.cellHook || null : null;
     for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
       const k = j * W + i;
       if (!mask[k] || skip[k]) continue;
@@ -114,6 +117,7 @@ export class GlyphRenderer {
           }
           cellMean = smean;
         }
+        if (hook) { hook.mean = -1; dots = hook.cell(k, i, j, sub, dots); if (hook.mean >= 0) cellMean = hook.mean; }
         if (dots === 0) continue;
       }
       let ch1 = null;

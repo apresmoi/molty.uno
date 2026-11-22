@@ -41,6 +41,8 @@
 
 #include "esp_err.h"
 #include "cJSON.h"
+#include "fluid_ask.h"
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -54,6 +56,11 @@ esp_err_t mole_fluid_creature_render(void);
  *  windows, from internal RAM): call before reading it. Waits for the next frame, up to
  *  500 ms; ESP_ERR_INVALID_STATE when the fluid is not running. */
 esp_err_t mole_fluid_framebuffer_sync(void);
+#ifdef MOLTY_DIAG_RING
+/** Debug builds only (MOLTY_DIAG_RING=1 at build time): the listening ring as if a listen ran for ms, no audio; voice:
+ *  with a made-up voice on it (cpk_voice). */
+void mole_fluid_diag_ring(uint32_t ms, bool voice);
+#endif
 esp_err_t mole_fluid_creature_state_get_json(char **out);
 esp_err_t mole_fluid_creature_state_set_json(const char *body);
 
@@ -130,12 +137,16 @@ void mole_fluid_set_status(int status);
  *  -1 = the device default, POST /api/creature/state {ring_color: "#rrggbb"|"accent"},
  *  kept in NVS, else the palette's accent; fluid_ring_rgb). Safe from any task; a no-op
  *  before init. */
-/** The agent's progress (link `progress`): a thin line on the listening ring's circle, in mint, filling
- *  clockwise from 12 o'clock to pct (0..100; < 0 = no percent: a comet circles). Each call keeps it up
- *  (it melts after 120 s without one); done fills it, flashes and melts it. Under the listening
- *  ring, never over a question. Safe from any task. */
+/** Progress (the agent's, link `progress`; a package's download, pkg_cmd.c): a thin line on the listening ring's
+ *  circle, filling clockwise from 12 o'clock to pct (0..100; < 0 = no percent: a comet circles). Over a rigged creature
+ *  it is the recording ring itself (creature_ring.h: formed from a wave at the centre, its colour), in mint over the
+ *  fluid. Each call keeps it up (it melts after 120 s without one); done fills it, flashes and lets it go into the
+ *  water; stop lets it go as it is (a failure). Under the listening ring. Safe from any task. */
 void mole_fluid_progress(float pct, bool done);
+void mole_fluid_progress_stop(void);
 void mole_fluid_listen(bool on);
+/** The listen's mic level (0..1, the VAD's, each mic chunk): a rigged creature's listen ring ripples with it. */
+void mole_fluid_listen_level(float level);
 void mole_fluid_listen_color(int32_t rgb);
 /** A say's text follows its voice (link_audio.c, cap say_cues): word < 0 starts following:
  *  the text shows no word until word 0 is reached (its own clock stops); word ≥ 0 shows up to that word (the
@@ -170,8 +181,69 @@ void mole_fluid_shed_internal(void);
  * left above the sim's reserve (rebuilt on the task's next frame). Once a boot, never after
  * a shed. Any task. */
 void mole_fluid_allow_internal(void);
+
+/** A tap at panel pixel (px, py): on a spot of the scene on screen (scene_player.h), Molty
+ *  shows its reading as the subtitle, or opens the layout the spot names (its `open`). Non-zero
+ *  (which spot) if it landed on one; MOLE_SPOT_BACK if it landed beside every spot of a layout
+ *  a tap had opened: Molty goes back to the scene under it. Any task. */
+#define MOLE_SPOT_BACK 0xFFFFFFFFu
+/** EXPERIMENT (delete once Juan picks): the dust of scenes on fine dust. kind 0 (default): single-pixel specks;
+ *  1: the creature screen's braille dots riding the water over the whole glass; 2: the same with the creature
+ *  screen's 2:1 row interlace of the water's changes; 3: the specks of 0 with a sparse layer of 1's dots over them,
+ *  riding the water (fluid_fine_dust_kind). Also the
+ *  state's "scene_dust". Any task, not kept. */
+void mole_fluid_scene_dust(int kind);
+/** EXPERIMENT: kind 3's density, the share (percent, 0..25, FINE_HARD_PCT by default) of the lattice's dots away from
+ *  the drawing that carry a hard dot (fluid_fine_hard_density). Also the state's "scene_hard_pct". Any task. */
+void mole_fluid_scene_hard(int percent);
+unsigned mole_fluid_spot_tap(int px, int py);
+/** That spot's id into id (size bytes; "" if it has none or another spot was tapped since), and the
+ *  layout it opens into open (may be NULL; "" if it opens none). Any task. */
+void mole_fluid_spot_id(unsigned spot, char *id, size_t size, char *open, size_t open_size);
+/** The scene on screen changed on the device itself since the last call (a tap opened a layout, it went back,
+ *  the scenes ended): what is up now, for the relay (link_evt_scene_frame). why: "open" | "back" (a tap beside
+ *  it) | "end" (it ran out); pkg and layout "" when nothing is up; spot: the one that opened it. False: no change.
+ *  Any one task. */
+typedef struct { char pkg[33], layout[25], spot[41], why[6]; } mole_scene_evt_t;
+bool mole_fluid_scene_event(mole_scene_evt_t *out);
 /* how many of the sim's hot fields sit in internal RAM (the last frame's count) */
 int mole_fluid_internal_fields(void);
+
+/* ── the on-device benchmark (POST /api/diag/bench, mole_diag.c) ──
+ * Each animation's record as the `anim` log lines carry it: a change of picture (wave), a drawing growing at a tap
+ * (grow), a reading's words (word), the water's ride (water). Parts are each frame's ms (mean and max over its frames):
+ * on the drawer cells (touch poll + fluid_draw_cells, with the change's own work), send (fluid_draw_send2: its windows
+ * drawn or copied, cmp, and handed to the panel, push), wait (the last transfer); on the sim sim (its whole frame),
+ * fill (a scene's shapes and rings), build (the dust's build); the dust's fine (fluid_fine_frame) and rect
+ * (fluid_fine_rect); then a change's own parts (fluid_sim.h FLUID_MP_*). */
+#define MOLE_ANIM_PARTS 21
+extern const char *const MOLE_ANIM_PART_NAMES[MOLE_ANIM_PARTS];
+typedef struct {
+    int      anim;                     /* 0 wave, 1 grow, 2 word, 3 water                                              */
+    uint32_t ms, f, s;                 /* its length; frames its cells changed; those whose changes were all sent       */
+    float    kpx, kpx_max, win, comp;  /* px sent a frame (k: mean, max), windows a frame, px a change composed (k)   */
+    uint16_t pan[3], sim[3];           /* frame-to-frame intervals of the drawer's core and of the sim's clock: p50, p95, worst ms */
+    uint16_t pres[3];                  /* ... and of the frames' first windows to the panel (what the eye gets)          */
+    uint16_t refr[4];                  /* frames by the panel's refreshes since the frame before: 0, 1, 2, 3 or more (all 0
+                                        * refreshes: no TE pulses seen)                                                 */
+    float    worst, worst_cells;       /* the worst frame on the drawer, its cells part, ms                             */
+    float    mean[MOLE_ANIM_PARTS], max[MOLE_ANIM_PARTS];
+    int      forced, keep, ready_at, held, na, nb, pairs;   /* a change: read before its dust was in; its dust alone; the
+                                        * frame its inputs were whole; frames held at the cloud; grains old, new; pairs */
+} mole_anim_rec_t;
+/** From now on each animation's record also goes into buf (cap of them; NULL: no more). Returns how many it holds. */
+int  mole_fluid_bench_capture(mole_anim_rec_t *buf, int cap);
+/** None of the animations in mask (bits 1 << FLUID_ANIM_*: 1 << 0 the change of picture) runs: none changed a cell for
+ *  10 frames, and no change of picture runs. */
+bool mole_fluid_bench_quiet(unsigned mask);
+/** The boot screen's word again (then it melts into the creature), as at power on. */
+void mole_fluid_bench_boot(void);
+/** A tap at (x, y), glass units (-1..1, y up), as a finger's: its ripple, and the spot it hits. Returns the spot. */
+unsigned mole_fluid_bench_tap(float x, float y);
+/** The spot `id` of the scene shown, its place (glass units, y up). False: none. */
+bool mole_fluid_bench_spot(const char *id, float *x, float *y);
+/** The scene shown has its dust in (or none to wait for). */
+bool mole_fluid_bench_dust(void);
 void mole_fluid_spoke(void);
 /** The listen window an agent gets when it gives none (link_audio.c, cmd listen without ms):
  *  0 = unlimited or 5000..30000 ms (link_protocol.h LINK_LISTEN_*), 30000 out of the box.
@@ -201,20 +273,17 @@ uint32_t mole_fluid_gestures(void);
 cJSON *mole_fluid_gestures_json(void);
 esp_err_t mole_fluid_gestures_apply(const cJSON *bindings);
 
-/** A question (link_ask.c, the link task) — the screen follows what the link wants:
- *  show   n (1..FLUID_ASK_MAX) labels condense out of the fluid in their sectors
- *         (fluid_ask.h), each in its colour (colors[i] 0xRRGGBB, -1 or colors NULL =
- *         FLUID_ASK_COLORS[i]) with a rim arc of the fluid in that colour, and faint
- *         dividers; replaces any question on screen.
- *  pick   the question was answered with option i: the others (labels and arcs) melt,
- *         the chosen one stays ~0.8 s (its arc flares), then the creature comes back.
- *  end    the question ended unanswered (timeout, cancelled): the labels melt and the
- *         fluid returns to the creature — or to the state a command asked for meanwhile.
- *  While a question is up, other state changes wait under it (the director keeps them),
- *  except that an explicit state / mood request ends a pick's hold early.
- *  show sets *seq (≠ 0) to the question's number on screen: what mole_fluid_ask_shown
- *  reports once the panel shows it readable. */
-esp_err_t mole_fluid_ask_show(int n, const char *const *labels, const int32_t *colors, unsigned *seq);
+/** A question (link_ask.c and link_pair.c, the link task) — the screen follows what the link wants (fluid_ask.h,
+ *  fluid_askview.h):
+ *  show   q (title, detail, code, 1..FLUID_ASK_MAX answers in their colours, fluid_ask_color) forms over whatever shows,
+ *         from a touch at the centre of the water; the scene dims under it and keeps moving; replaces any question.
+ *  pick   it was answered with option i: a gentle wave from that answer, everything breaks into dust the water
+ *         carries off (~1 s).
+ *  end    it ended unanswered (timeout, cancelled): the rim lets go, then the same dust.
+ *  While it stands, the director's state changes wait under it; its dust goes over whatever comes next.
+ *  show sets *seq (!= 0) to the question's number on screen: what mole_fluid_ask_shown reports once the panel shows it
+ *  formed enough to answer. */
+esp_err_t mole_fluid_ask_show(const fluid_ask_q_t *q, unsigned *seq);
 void mole_fluid_ask_pick(int index);
 void mole_fluid_ask_end(void);
 /** The question (its show seq) a tap may answer right now: the one on the frame last flushed

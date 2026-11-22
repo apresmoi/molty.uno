@@ -8,6 +8,11 @@
 //   play.mjs --commands <file|-> --stills <dir> [--every 1]
 //     replays the scene.play / scene.queue commands an agent sent (JSON lines, {name, args}),
 //     one still every `--every` seconds of each scene
+//   --hd [--size 466] [--caption word]: the calm view in high definition instead, as the firmware draws
+//     a scene with no touch on it (fluid_draw.c's shapes): anti-aliased at the panel's own pixels, a
+//     ball or an image on the dots, a hairline one fine pixel (not the fluid's faint dust around it, which the
+//     device adds); --caption puts a subtitle word at the bottom
+//   --tap <spot id>: that spot tapped and held: the groups it lights grown and brighter (format.mjs's group / lights / when)
 // <pkg> is a package id (packages/<id>/<id>.json) or a path to its JSON. No dependencies.
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { deflateSync } from 'node:zlib';
@@ -34,19 +39,49 @@ function each([x0, x1, y0, y1], fn) {
   for (let sy = Math.max(0, b - 2); sy <= Math.min(H - 1, d + 2); sy++) for (let sx = Math.max(0, a - 2); sx <= Math.min(W - 1, c + 2); sx++) fn(sx, sy, ...glass(sx, sy));
 }
 
+// a stroke no wider than a dot is a hairline (the firmware's scene_player.c hair_*): a DDA in dot coordinates, one
+// dot a step along its major axis and 8-connected, as drawille; along a path a corner dot (its neighbours touch) drops
+const HAIR = 1 / Math.min(W, H), rnd = (v) => Math.floor(v + 0.5);
+function hair(pts, rgb, put, skip = 0) {
+  let a = null, b = null, pen = null;
+  const commit = () => { if (skip) skip--; else put(b[0], b[1], rgb); };
+  const dot = (x, y) => {
+    if (b && x === b[0] && y === b[1]) return;
+    if (a && Math.abs(x - a[0]) <= 1 && Math.abs(y - a[1]) <= 1) { if (x === a[0] && y === a[1]) a = null; b = [x, y]; return; }
+    if (b) { commit(); a = b; }
+    b = [x, y];
+  };
+  for (const [x, y] of pts) {
+    const X = ((x + 1) / 2) * W - 0.5, Y = ((1 - y) / 2) * H - 0.5;
+    if (pen) {
+      const dx = X - pen[0], dy = Y - pen[1], xm = Math.abs(dx) >= Math.abs(dy), p = xm ? pen[0] : pen[1], q = xm ? pen[1] : pen[0], d = xm ? dx : dy, k = d ? (xm ? dy : dx) / d : 0;
+      const m1 = rnd(p + d), st = m1 >= rnd(p) ? 1 : -1;
+      for (let m = rnd(p); ; m += st) { const o = rnd(q + k * (m - p)); if (xm) dot(m, o); else dot(o, m); if (m === m1) break; }
+    } else dot(rnd(X), rnd(Y));
+    pen = [X, Y];
+  }
+  if (b) commit();
+}
+// a hairline ring or arc as the firmware walks it: a whole ring from one step before its start to one after, its first dot left to the end
+function hairRing(it, whole, rgb, put) {
+  const span = whole ? 360 : (((it.a1 - it.a0) % 360) + 360) % 360, n = 8 + Math.floor(span * DEG * it.r * 0.5 * Math.max(W, H)), pts = [];
+  for (let q = whole ? -1 : 0; q <= (whole ? n + 1 : n); q++) { const a = (it.a0 + (span * q) / n) * DEG; pts.push([it.x + it.r * Math.cos(a), it.y + it.r * Math.sin(a)]); }
+  hair(pts, rgb, put, whole ? 1 : 0);
+}
+
 function stroke(pts, c, put, w = 0) {
   const rgb = hex(c), r = Math.max(0, w / 2);
+  if (r <= HAIR) return hair(pts, rgb, put);
   for (let i = 0; i + 1 < pts.length; i++) {
     const [a, b] = [pts[i], pts[i + 1]], n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 0.006));
     for (let s = 0; s <= n; s++) {
       const x = a[0] + ((b[0] - a[0]) * s) / n, y = a[1] + ((b[1] - a[1]) * s) / n;
-      if (r < PITCH[0] / 2) put(...snap(x, y), rgb);
-      else each([x - r, x + r, y - r, y + r], (sx, sy, gx, gy) => { if (Math.hypot(gx - x, gy - y) <= r) put(sx, sy, rgb); });
+      each([x - r, x + r, y - r, y + r], (sx, sy, gx, gy) => { if (Math.hypot(gx - x, gy - y) <= r) put(sx, sy, rgb); });
     }
   }
 }
-const arcPts = (r, a0, a1) => { const n = Math.max(2, Math.ceil((Math.abs(a1 - a0) * DEG * r) / 0.02)); return Array.from({ length: n + 1 }, (_, i) => { const a = (a0 + ((a1 - a0) * i) / n) * DEG; return [r * Math.cos(a), r * Math.sin(a)]; }); };
-const smooth = (p) => { if (p.length < 3) return p; const out = []; for (let i = 0; i + 1 < p.length; i++) { const a = p[Math.max(0, i - 1)], b = p[i], c = p[i + 1], d = p[Math.min(p.length - 1, i + 2)]; for (let k = 0; k < 8; k++) { const t = k / 8, f = (j) => 0.5 * (2 * b[j] + (c[j] - a[j]) * t + (2 * a[j] - 5 * b[j] + 4 * c[j] - d[j]) * t * t + (3 * b[j] - a[j] - 3 * c[j] + d[j]) * t * t * t); out.push([f(0), f(1)]); } } out.push(p.at(-1)); return out; };
+const arcPts = (r, a0, a1, x = 0, y = 0) => { const n = Math.max(2, Math.ceil((Math.abs(a1 - a0) * DEG * r) / 0.02)); return Array.from({ length: n + 1 }, (_, i) => { const a = (a0 + ((a1 - a0) * i) / n) * DEG; return [x + r * Math.cos(a), y + r * Math.sin(a)]; }); };
+export const smooth = (p) => { if (p.length < 3) return p; const out = []; for (let i = 0; i + 1 < p.length; i++) { const a = p[Math.max(0, i - 1)], b = p[i], c = p[i + 1], d = p[Math.min(p.length - 1, i + 2)]; for (let k = 0; k < 8; k++) { const t = k / 8, f = (j) => 0.5 * (2 * b[j] + (c[j] - a[j]) * t + (2 * a[j] - 5 * b[j] + 4 * c[j] - d[j]) * t * t + (3 * b[j] - a[j] - 3 * c[j] + d[j]) * t * t * t); out.push([f(0), f(1)]); } } out.push(p.at(-1)); return out; };
 
 // assets, decoded once per package
 const decoded = new WeakMap();
@@ -111,14 +146,69 @@ function text(it, put) {
   });
 }
 
-/** The dots of `layout` at `t` seconds: Map(dot index -> rgb). Throws ParamError for bad params. */
-export function frame(pkg, layout, params, t) {
-  const dots = new Map(), put = (sx, sy, c) => { if (sx < 0 || sy < 0 || sx >= W || sy >= H) return; const k = sy * W + sx; if (c === null) dots.delete(k); else dots.set(k, c); };
-  for (const it of bind(pkg, layout, params)) {
+/** The items with spot `tap` (its id) tapped and held, as the firmware's scene_player.c grows it: the items in the groups it
+ *  lights grown by the spot's `grow` (1.25x unless it says) about their own centre and brighter, those `when: "lit"` shown; with no lights, what lies inside its
+ *  disc grown about the spot's centre. No tap: the items as built, none `when: "lit"`. */
+const GROW = 1.25, LIT_WHITE = 0.5;
+export function lit(items, tap) {
+  const s = tap ? items.find((it) => it.k === 'spot' && it.id === tap) : null, on = new Set((s?.lights ?? '').split(' ').filter(Boolean));
+  if (tap && !s) throw new Error(`no spot ${tap}`);
+  const k = s?.grow ?? GROW;
+  const white = (c) => `#${hex(c).map((v) => Math.round(v + (255 - v) * LIT_WHITE).toString(16).padStart(2, '0')).join('')}`;
+  const inside = (it) => {
+    const d = (x, y) => Math.hypot(x - s.x, y - s.y), sr = s.r * 1.001, sd = Math.hypot(s.x, s.y);
+    if (it.k === 'ring' || it.k === 'arc') return d(it.x, it.y) + it.r <= sr;
+    if (it.k === 'ticks') return sd + Math.max(it.r, it.r + it.len) <= sr;
+    if (it.k === 'line' || it.k === 'curve') return it.pts.every(([x, y]) => d(x, y) <= sr);
+    return it.k !== 'spot' && d(it.x, it.y) <= sr;
+  };
+  return items.flatMap((it) => {
+    const isLit = on.has(it.group);
+    if (it.when === 'lit' && !isLit) return [];
+    if (isLit) return [{ ...it, r: it.r * k, size: it.size * k, w: it.w * k, color: it.when === 'lit' ? it.color : white(it.color) }];
+    if (s && !on.size && inside(it)) { const g = (x, y) => [s.x + (x - s.x) * k, s.y + (y - s.y) * k], [x, y] = g(it.x, it.y); return [{ ...it, x, y, r: it.r * k, len: it.len * k, size: it.size * k, pts: it.pts?.map(([px, py]) => g(px, py)) }]; }
+    return [it];
+  });
+}
+
+/** The spot a tap at (x, y) (glass units, y up) lands on at t s, as the firmware's scene_spot_at: of the visible spots that
+ *  hold it (within r of the centre, or of the segment pts), the smallest, then the nearest; if none does, of those whose
+ *  sector holds it (arc degrees round the spot's own direction from the glass centre, radii r0..r1), the same. Or null. */
+export function spotAt(items, x, y, t = 0) {
+  let best = null, bd = 0, direct = false;
+  for (const s of items) {
+    if (s.k !== 'spot' || t < s.on || t >= s.off) continue;
+    let dx = x - s.x, dy = y - s.y;
+    if (s.pts?.length === 2) {
+      const [[ax, ay], [ex, ey]] = s.pts, vx = ex - ax, vy = ey - ay, l2 = vx * vx + vy * vy, u = l2 > 1e-9 ? Math.max(0, Math.min(1, ((x - ax) * vx + (y - ay) * vy) / l2)) : 0;
+      dx = x - ax - u * vx; dy = y - ay - u * vy;
+    }
+    const d = dx * dx + dy * dy, on = d <= s.r * s.r, r = Math.hypot(x, y);
+    const off = ((((Math.atan2(y, x) - Math.atan2(s.y, s.x)) / DEG + 540) % 360) + 360) % 360 - 180;
+    const sector = s.arc > 0 && r >= (s.r0 ?? 0) && r <= s.r1 && (s.arc >= 360 || Math.abs(off) <= s.arc / 2);
+    if (!on && (direct || !sector)) continue;
+    if (!best || (on && !direct) || s.r < best.r || (s.r === best.r && d < bd)) { best = s; bd = d; direct = on; }
+  }
+  return best;
+}
+
+/** The dots of `layout` at `t` seconds: Map(dot index -> rgb). Throws ParamError for bad params.
+ *  kept (a Map): also the dots no high-definition shape draws (a ball's, an image's), as they show. tap: lit(). */
+export function frame(pkg, layout, params, t, kept = null, tap = '') {
+  let keep = false;
+  const dots = new Map(), put = (sx, sy, c) => {
+    if (sx < 0 || sy < 0 || sx >= W || sy >= H) return;
+    const k = sy * W + sx;
+    if (c === null) dots.delete(k); else dots.set(k, c);
+    if (kept && keep && c !== null) kept.set(k, c); else kept?.delete(k);
+  };
+  for (const it of lit(bind(pkg, layout, params), tap)) {
     if (t < it.on || t >= it.off) continue;
+    keep = it.k === 'ball' || (it.k === 'glyph' && pkg.assets[it.asset].kind === 'image');
     const rgb = hex(it.color);
-    if (it.k === 'ring') stroke(arcPts(it.r, 0, 360), it.color, put, it.w);
-    else if (it.k === 'arc') stroke(arcPts(it.r, it.a0, it.a1), it.color, put, it.w);
+    if ((it.k === 'ring' || it.k === 'arc') && it.w / 2 <= HAIR) hairRing(it, it.k === 'ring' || it.a1 - it.a0 >= 360, rgb, put);
+    else if (it.k === 'ring') stroke(arcPts(it.r, 0, 360, it.x, it.y), it.color, put, it.w);
+    else if (it.k === 'arc') stroke(arcPts(it.r, it.a0, it.a1, it.x, it.y), it.color, put, it.w);
     else if (it.k === 'ticks') for (let i = 0; i < it.n; i++) { const a = (it.a0 + (360 * i) / it.n) * DEG, r1 = it.r + it.len; stroke([[it.r * Math.cos(a), it.r * Math.sin(a)], [r1 * Math.cos(a), r1 * Math.sin(a)]], it.color, put); }
     else if (it.k === 'line') stroke(it.pts, it.color, put, it.w);
     else if (it.k === 'curve') stroke(smooth(it.pts), it.color, put, it.w);
@@ -133,15 +223,85 @@ export function frame(pkg, layout, params, t) {
 // ---- PNG
 const CRC = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
 const crc32 = (b) => { let c = 0xffffffff; for (const x of b) c = CRC[(c ^ x) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
-const chunk = (type, data) => { const t = Buffer.from(type), len = Buffer.alloc(4), crc = Buffer.alloc(4); len.writeUInt32BE(data.length); crc.writeUInt32BE(crc32(Buffer.concat([t, data]))); return Buffer.concat([len, t, data, crc]); };
-/** The dots as the panel shows them: round dots on black, inside the round glass. */
-export function png(dots) {
-  const S = PANEL, raw = Buffer.alloc((S * 3 + 1) * S), R = 1.35;
+export const chunk = (type, data) => { const t = Buffer.from(type), len = Buffer.alloc(4), crc = Buffer.alloc(4); len.writeUInt32BE(data.length); crc.writeUInt32BE(crc32(Buffer.concat([t, data]))); return Buffer.concat([len, t, data, crc]); };
+/** The dots as the panel shows them: round dots on black, inside the round glass; over rgb (an S x S
+ *  image of floats, hd's) when given. */
+export function png(dots, rgb = null, S = PANEL) {
+  const raw = Buffer.alloc((S * 3 + 1) * S), R = 1.35 * (S / PANEL);
   const set = (x, y, c) => { if (Math.hypot(x + 0.5 - S / 2, y + 0.5 - S / 2) > S / 2) return; const o = y * (S * 3 + 1) + 1 + x * 3; raw[o] = c[0]; raw[o + 1] = c[1]; raw[o + 2] = c[2]; };
+  if (rgb) for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) set(x, y, [0, 1, 2].map((q) => Math.round(rgb[(y * S + x) * 3 + q])));
   for (let a = 0; a < 720; a++) set(Math.round(S / 2 + (S / 2 - 1) * Math.cos((a * Math.PI) / 360)), Math.round(S / 2 + (S / 2 - 1) * Math.sin((a * Math.PI) / 360)), [40, 40, 40]);
-  for (const [k, c] of dots) { const [px, py] = dotPx(k % W, Math.floor(k / W)); for (let y = Math.floor(py - R); y <= py + R; y++) for (let x = Math.floor(px - R); x <= px + R; x++) if ((x + 0.5 - px) ** 2 + (y + 0.5 - py) ** 2 <= R * R && x >= 0 && y >= 0 && x < S && y < S) set(x, y, c.map(Math.round)); }
+  for (const [k, c] of dots) { const [px, py] = dotPx(k % W, Math.floor(k / W)).map((v) => (v * S) / PANEL); for (let y = Math.floor(py - R); y <= py + R; y++) for (let x = Math.floor(px - R); x <= px + R; x++) if ((x + 0.5 - px) ** 2 + (y + 0.5 - py) ** 2 <= R * R && x >= 0 && y >= 0 && x < S && y < S) set(x, y, c.map(Math.round)); }
   const head = Buffer.alloc(13); head.writeUInt32BE(S, 0); head.writeUInt32BE(S, 4); head[8] = 8; head[9] = 2;
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', head), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}
+
+// ---- high definition: the calm scene as the firmware's shapes draw it (scene_player.c makes them,
+// fluid_draw.c's hd_row draws them): each item over what is under it by its anti-aliased coverage
+const HD_EDGE = 0.42, CAPTION_Y = -0.56, ACCENT = [255, 140, 60], ORP = (n) => (n <= 1 ? 0 : n <= 5 ? 1 : n <= 9 ? 2 : n <= 13 ? 3 : 4);
+const edge = (d) => (d >= 0.5 ? 0 : d <= -0.5 ? 1 : 0.5 - d), sstep = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+/** The calm scene at S x S px (RGB floats) and the dots it keeps (a ball's, an image's): { rgb, kept }. */
+export function hd(pkg, layout, params, t, S = 466, caption = '', tap = '') {
+  const rgb = new Float32Array(S * S * 3), k = S / 2, X = (x) => (x + 1) * k, Y = (y) => (1 - y) * k, hw = (w) => (w / 2 <= HAIR ? 0.5 : Math.max(0.5, (w / 2) * k));   // a hairline: one fine pixel
+  // one shape: its box, and its coverage of the pixel centred at (px, py)
+  const paint = (x0, y0, x1, y1, c, cover) => {
+    for (let y = Math.max(0, Math.floor(y0 - 1)); y < Math.min(S, Math.ceil(y1 + 1)); y++)
+      for (let x = Math.max(0, Math.floor(x0 - 1)); x < Math.min(S, Math.ceil(x1 + 1)); x++) {
+        const a = cover(x + 0.5, y + 0.5);
+        if (a > 0) for (let q = 0; q < 3; q++) rgb[(y * S + x) * 3 + q] += (c[q] - rgb[(y * S + x) * 3 + q]) * a;
+      }
+  };
+  const seg = (a, b, w, c) => {
+    const [ax, ay, bx, by] = [X(a[0]), Y(a[1]), X(b[0]), Y(b[1])], h = hw(w), vx = bx - ax, vy = by - ay, l2 = vx * vx + vy * vy || 1;
+    paint(Math.min(ax, bx) - h, Math.min(ay, by) - h, Math.max(ax, bx) + h, Math.max(ay, by) + h, c, (px, py) => {
+      const u = Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / l2));
+      return edge(Math.hypot(px - ax - u * vx, py - ay - u * vy) - h);
+    });
+  };
+  const disc = (x, y, r, c) => paint(X(x) - r * k, Y(y) - r * k, X(x) + r * k, Y(y) + r * k, c, (px, py) => edge(Math.hypot(px - X(x), py - Y(y)) - r * k));
+  const ring = (it, whole) => {
+    const r = it.r * k, h = hw(it.w), cx = X(it.x), cy = Y(it.y), span = whole ? 360 : (((it.a1 - it.a0) % 360) + 360) % 360, end = (a) => [cx + r * Math.cos(a * DEG), cy - r * Math.sin(a * DEG)];
+    paint(cx - r - h, cy - r - h, cx + r + h, cy + r + h, hex(it.color), (px, py) => {
+      let d = Math.abs(Math.hypot(px - cx, py - cy) - r) - h;
+      if (!whole && d < 0.5 && ((((Math.atan2(cy - py, px - cx) / DEG - it.a0) % 360) + 360) % 360) > span) d = Math.min(...[end(it.a0), end(it.a0 + span)].map(([ex, ey]) => Math.hypot(px - ex, py - ey))) - h;
+      return edge(d);
+    });
+  };
+  // a 1-bit image (bit(i, j)) in a w x h box centred on (cx, cy) px, turned rot degrees: read bilinear, a smooth edge
+  const mask = (bit, mw, mh, cx, cy, w, h, rot, c) => {
+    const co = Math.cos(rot * DEG), si = Math.sin(rot * DEG), e = Math.min(0.45, Math.max(0.02, 0.5 * Math.max(mw / w, mh / h))), ex = 0.5 * (Math.abs(co) * w + Math.abs(si) * h), ey = 0.5 * (Math.abs(si) * w + Math.abs(co) * h);
+    const b = (i, j) => (i < 0 || j < 0 || i >= mw || j >= mh ? 0 : bit(i, j));
+    paint(cx - ex, cy - ey, cx + ex, cy + ey, c, (px, py) => {
+      const dx = px - cx, dy = py - cy, u = ((co * dx - si * dy) / w + 0.5) * mw - 0.5, v = ((si * dx + co * dy) / h + 0.5) * mh - 0.5, i = Math.floor(u), j = Math.floor(v), tu = u - i, tv = v - j;
+      const top = b(i, j) + (b(i + 1, j) - b(i, j)) * tu, bot = b(i, j + 1) + (b(i + 1, j + 1) - b(i, j + 1)) * tu;
+      return sstep(HD_EDGE - e, HD_EDGE + e, top + (bot - top) * tv);
+    });
+  };
+  // the firmware's text runs: letters size * 0.6 apart, each its 5 x 7 glyph in 0.8 x 0.72 of its box
+  const run = (str, x, y, size, c, orp = -1) => {
+    const f = font(), fs = size * k, adv = fs * 0.6, lh = fs * 1.05, x0 = X(x) - (orp < 0 ? str.length / 2 : orp + 0.5) * adv;
+    [...str].forEach((ch, q) => { if (ch !== ' ') mask((i, j) => (f(ch)[j] >> (4 - i)) & 1, 5, 7, x0 + (q + 0.5) * adv, Y(y), adv * 0.8, lh * 0.72, 0, q === orp ? ACCENT : c); });
+  };
+  for (const it of lit(bind(pkg, layout, params), tap)) {
+    if (t < it.on || t >= it.off) continue;
+    const c = hex(it.color);
+    if (it.k === 'ring' || it.k === 'arc') ring(it, it.k === 'ring' || it.a1 - it.a0 >= 360);
+    else if (it.k === 'ticks') for (let i = 0; i < it.n; i++) { const a = (it.a0 + (360 * i) / it.n) * DEG, r1 = it.r + it.len; seg([it.r * Math.cos(a), it.r * Math.sin(a)], [r1 * Math.cos(a), r1 * Math.sin(a)], it.w, c); }
+    else if (it.k === 'line' || it.k === 'curve') { const p = it.k === 'curve' ? smooth(it.pts) : it.pts; for (let i = 0; i + 1 < p.length; i++) seg(p[i], p[i + 1], it.w, c); }
+    else if (it.k === 'disc') disc(it.x, it.y, it.r, c);
+    else if (it.k === 'ball') disc(it.x, it.y, it.r, [0, 0, 0]);                  // its dots go on top (kept)
+    else if (it.k === 'glyph' && pkg.assets[it.asset].kind === 'mask') { const a = asset(pkg, it.asset); mask(a.at, a.w, a.h, X(it.x), Y(it.y), it.size * k, ((it.size * a.h) / a.w) * k, it.rot, c); }
+    else if (it.k === 'text') run(it.str, it.x, it.y, it.size, c);
+  }
+  if (caption) {   // scene_player.c's caption(): shrunk until its farthest corner would be inside the glass at the bottom, at the layout's caption_y
+    const orp = Math.min(ORP(caption.length), caption.length - 1), reach = Math.max(orp + 0.5, caption.length - orp - 0.5);
+    let size = 0.16;
+    while (size >= 0.04 && (reach * 0.6 * size) ** 2 + (CAPTION_Y - 0.525 * size) ** 2 > 0.95 ** 2) size *= 0.92;
+    run(caption, 0, pkg.layouts[layout]?.caption_y ?? CAPTION_Y, size, [255, 255, 255], orp);
+  }
+  const kept = new Map();
+  frame(pkg, layout, params, t, kept, tap);
+  return { rgb, kept };
 }
 
 export const loadPackage = (p) => JSON.parse(readFileSync(existsSync(p) ? p : join(ROOT, 'packages', p, `${p}.json`), 'utf8'));
@@ -161,9 +321,12 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
         console.log(`${c.name} ${layout}: ${JSON.stringify(c.args).length} B`);
       });
     } else {
-      const [id, layout] = argv.filter((a, i) => !a.startsWith('-') && !['--params', '--t', '-o'].includes(argv[i - 1]));
-      if (!id || !layout) throw new Error('usage: play.mjs <pkg> <layout> [--params json|file] [--t s] [-o out.png]');
-      writeFileSync(opt('-o', `${layout}.png`), png(frame(loadPackage(id), layout, json(opt('--params')), +opt('--t', 1))));
+      const [id, layout] = argv.filter((a, i) => !a.startsWith('-') && !['--params', '--t', '-o', '--size', '--caption', '--tap'].includes(argv[i - 1]));
+      if (!id || !layout) throw new Error('usage: play.mjs <pkg> <layout> [--params json|file] [--t s] [-o out.png] [--hd [--size px] [--caption word]]');
+      const pkg = loadPackage(id), params = json(opt('--params')), t = +opt('--t', 1), out = opt('-o', `${layout}.png`);
+      const tap = opt('--tap', '');
+      if (argv.includes('--hd')) { const S = +opt('--size', 466), v = hd(pkg, layout, params, t, S, opt('--caption', ''), tap); writeFileSync(out, png(v.kept, v.rgb, S)); }
+      else writeFileSync(out, png(frame(pkg, layout, params, t, null, tap)));
     }
   } catch (e) {
     console.error(e instanceof ParamError ? `bad_params: ${e.message}` : e.message);

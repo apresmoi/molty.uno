@@ -83,7 +83,7 @@ export class FakeVoice implements VoiceProvider {
 /** The skill's CHANGES.md on GitHub: tests that don't pass `skillChanges` never see the room read it. */
 const CHANGES_RE = /\/skills\/molty\/CHANGES\.md$/;
 
-export function makeRoom(opts: { kv?: MemoryKV; host?: FakeHost; voice?: FakeVoice; timings?: Partial<RoomTimings>; skillChanges?: string } & Partial<Pick<RoomDeps, "clock" | "scheduler" | "fetch" | "resolveHost" | "log" | "releases" | "classifier" | "reflexKeys" | "packagesRef">> = {}) {
+export function makeRoom(opts: { kv?: MemoryKV; host?: FakeHost; voice?: FakeVoice; timings?: Partial<RoomTimings>; skillChanges?: string } & Partial<Pick<RoomDeps, "clock" | "scheduler" | "fetch" | "resolveHost" | "log" | "releases" | "classifier" | "reflexKeys" | "packagesRef" | "voiced">> = {}) {
   const kv = opts.kv ?? new MemoryKV();
   const host = opts.host ?? new FakeHost();
   const voice = opts.voice ?? new FakeVoice();
@@ -105,6 +105,9 @@ export function makeRoom(opts: { kv?: MemoryKV; host?: FakeHost; voice?: FakeVoi
     packagesRef: opts.packagesRef,
     reflexKeys: opts.reflexKeys,
     classifier: opts.classifier,
+    // the fixtures' clips are flat tones, not voices: every listen counts as voiced unless a test
+    // passes its own check (`voiced: undefined` in opts: the real one, core/voiced.ts)
+    voiced: "voiced" in opts ? opts.voiced : () => true,
   });
   host.onClose = (s) => room.socketClose(s, s.closed?.code);
   return { room, kv, host, voice };

@@ -20,8 +20,9 @@ int molty_display_width(void) { return 412; }
 int molty_display_height(void) { return 412; }
 TickType_t xTaskGetTickCount(void) { return 0; }
 int xTaskDelayUntil(TickType_t *wake, TickType_t period) { (void)wake; (void)period; return 1; }
-static bool pairing;
+static bool pairing; static int pair_taps;
 bool link_pair_active(void) { return pairing; }
+void link_pair_tap(float dx, float dy) { (void)dx; (void)dy; pair_taps++; }
 void mole_fluid_event(mole_fluid_event_t ev) { (void)ev; }
 static uint32_t binds; static int talks, stops;
 uint32_t mole_fluid_gestures(void) { return binds; }
@@ -35,7 +36,17 @@ bool link_audio_gesture_talk(const char *input) { (void)input; talks++; return t
 static int holds, releases;
 void link_audio_hold(bool down, const char *input) { (void)input; if (down) holds++; else releases++; }
 void link_audio_stop_any(void) { stops++; }
-bool link_audio_listening(uint32_t *age) { (void)age; return false; }
+static bool listening;
+bool link_audio_listening(uint32_t *age) { (void)age; return listening; }
+static unsigned spot_hit;       /* the spot a tap lands on (mole_fluid.c), 0 none */
+unsigned mole_fluid_spot_tap(int px, int py) { (void)px; (void)py; return spot_hit; }
+static const char *spot_opens = "";   /* the layout that spot opens */
+void mole_fluid_spot_id(unsigned spot, char *id, size_t size, char *open, size_t open_size) {
+    const bool on = spot && spot != MOLE_SPOT_BACK;
+    snprintf(id, size, "%s", on ? "mars" : "");
+    snprintf(open, open_size, "%s", on ? spot_opens : "");
+}
+bool mole_fluid_scene_event(mole_scene_evt_t *out) { (void)out; return false; }
 bool link_audio_say_waiting(void) { return false; }
 uint32_t link_audio_job_gen(void) { return 0; }
 void link_audio_request(uint32_t gen, link_audio_req_t what) { (void)gen; (void)what; }
@@ -55,12 +66,13 @@ esp_err_t link_send_json(const cJSON *j) {
 }
 /* the screen (mole_fluid.c): what the link wants (want_*) reaches the panel only when a
  * frame is drawn — glass = the question a tap on the panel may answer (mole_fluid_ask_shown) */
-static int shown_n = -1, picked = -1; static unsigned shows, ends; static char shown[5][9];
-static int32_t shown_rgb[5];          /* the colours handed to the screen; -2 = none (NULL) */
+static int shown_n = -1, picked = -1; static unsigned shows, ends; static char shown[5][15], shown_title[41], shown_detail[37];
+static int32_t shown_rgb[5];          /* the colours handed to the screen */
 static unsigned want_seq, glass; static bool want_up;
-esp_err_t mole_fluid_ask_show(int n, const char *const *labels, const int32_t *colors, unsigned *seq) {
-    shows++; shown_n = n; picked = -1;
-    for (int i = 0; i < n; i++) { snprintf(shown[i], sizeof(shown[i]), "%s", labels[i]); shown_rgb[i] = colors ? colors[i] : -2; }
+esp_err_t mole_fluid_ask_show(const fluid_ask_q_t *q, unsigned *seq) {
+    shows++; shown_n = q->n; picked = -1;
+    snprintf(shown_title, sizeof(shown_title), "%s", q->title); snprintf(shown_detail, sizeof(shown_detail), "%s", q->detail);
+    for (int i = 0; i < q->n; i++) { snprintf(shown[i], sizeof(shown[i]), "%s", q->label[i]); shown_rgb[i] = (int32_t)q->rgb[i]; }
     *seq = ++want_seq; want_up = true;
     return ESP_OK;
 }
@@ -88,7 +100,7 @@ static esp_err_t ask_cmd(const char *args) {
 /* the command, then the panel shows its question */
 static esp_err_t ask(const char *args) { esp_err_t e = ask_cmd(args); draw(); return e; }
 static const int32_t UC[2] = { 0x3ccf96, 0xf1f3f5 };
-static esp_err_t open_q(const char *job, unsigned timeout_ms) { esp_err_t e = link_ask_open(job, UL, UC, 2, timeout_ms, on_done); draw(); return e; }
+static esp_err_t open_q(const char *job, unsigned timeout_ms) { esp_err_t e = link_ask_open(job, "update molty?", NULL, UL, UC, 2, timeout_ms, on_done); draw(); return e; }
 /* a finger down then up at panel px (x, y) */
 static void touch(int x, int y) {
     uint16_t xs[1] = { (uint16_t)x }, ys[1] = { (uint16_t)y };
@@ -125,7 +137,7 @@ static void test_displayed(void) {
      * from a tap aimed at the old labels */
     assert(ask("{\"job\":\"C\",\"options\":[\"a\",\"b\"],\"timeout_ms\":5000}") == ESP_OK);
     int d0 = dones;
-    assert(link_ask_open("u8", UL, UC, 2, 5000, on_done) == ESP_OK);
+    assert(link_ask_open("u8", NULL, NULL, UL, UC, 2, 5000, on_done) == ESP_OK);
     touch(206 - 100, 206); link_ask_tick();
     assert(dones == d0 && link_ask_pending());
     draw(); touch(206 - 100, 206); link_ask_tick();
@@ -166,6 +178,41 @@ static void test_deadline(void) {
     assert(dones == d0 + 2 && done_index == -1 && !strcmp(done_reason, "timeout"));
 }
 
+/* A tap on a scene's spot is the spot's (its reading shows), not a plain tap; a question's
+ * labels and a recording come first */
+static void test_spot(void) {
+    nframes = 0;
+    atomic_store(&s_tap, false); atomic_store(&s_spot, 0);
+    spot_hit = 0x105;
+    touch(100, 100);
+    assert(atomic_load(&s_spot) == 0x105 && !atomic_load(&s_tap));
+    atomic_store(&s_spot, 0);
+    listening = true;                       /* a tap that stops a recording does that */
+    touch(100, 100);
+    assert(!atomic_load(&s_spot) && atomic_load(&s_tap));
+    listening = false; atomic_store(&s_tap, false);
+    spot_hit = 0;
+    touch(100, 100);
+    assert(!atomic_load(&s_spot) && atomic_load(&s_tap));
+    atomic_store(&s_tap, false);
+    /* the agent hears which spot, whatever tap is bound to */
+    const unsigned n0 = nframes;
+    spot_do(0x105, sdk_now / 1000, &(gesture_limit_t){ .min_ms = 250 });
+    assert(nframes == n0 + 1 && strstr(last(), "\"name\":\"tap\"") && strstr(last(), "\"spot\":\"mars\"") && !strstr(last(), "opened") && !strstr(last(), "closed"));
+    /* a spot that opens a layout on Molty itself: the agent hears that it did */
+    spot_opens = "sign-closeup";
+    spot_do(0x105, sdk_now / 1000, &(gesture_limit_t){ .min_ms = 250 });
+    assert(nframes == n0 + 2 && strstr(last(), "\"spot\":\"mars\"") && strstr(last(), "\"opened\":\"sign-closeup\""));
+    spot_opens = "";
+    /* a tap beside the spots of a layout so opened is Molty's too (it goes back): no plain tap, the agent hears `closed` */
+    spot_hit = MOLE_SPOT_BACK;
+    touch(100, 100);
+    assert(atomic_load(&s_spot) == MOLE_SPOT_BACK && !atomic_load(&s_tap));
+    atomic_store(&s_spot, 0); spot_hit = 0;
+    spot_do(MOLE_SPOT_BACK, sdk_now / 1000, &(gesture_limit_t){ .min_ms = 250 });
+    assert(nframes == n0 + 3 && strstr(last(), "\"name\":\"tap\"") && strstr(last(), "\"closed\":true") && !strstr(last(), "spot"));
+}
+
 int main(void) {
     /* the buttons do what they are bound to; a pending question comes first */
     sdk_now = 90000000;
@@ -201,23 +248,31 @@ int main(void) {
     assert(ask(YNI) == ESP_ERR_NOT_SUPPORTED && !shows && !link_ask_pending());
     sdk_caps = 0xFFFFFFFFu;
     /* bad args: refused, nothing shown */
-    assert(ask("{\"job\":\"j1\",\"options\":[\"123456789\"],\"timeout_ms\":5000}") == ESP_ERR_INVALID_ARG && !shows);
+    assert(ask("{\"job\":\"j1\",\"options\":[\"123456789012345\"],\"timeout_ms\":5000}") == ESP_ERR_INVALID_ARG && !shows);
     /* colours: optional, one "#rrggbb" per option; a bad one refuses the question */
     assert(ask("{\"job\":\"j1\",\"options\":[\"a\",\"b\"],\"colors\":[\"#3ccf96\"],\"timeout_ms\":5000}") == ESP_ERR_INVALID_ARG && !shows);
     assert(ask("{\"job\":\"j1\",\"options\":[\"a\"],\"colors\":[\"green\"],\"timeout_ms\":5000}") == ESP_ERR_INVALID_ARG && !shows);
     assert(ask("{\"job\":\"c1\",\"options\":[\"a\",\"b\"],\"colors\":[\"#3CCF96\",\"#000000\"],\"timeout_ms\":5000}") == ESP_OK);
     assert(shows == 1 && shown_rgb[0] == 0x3ccf96 && shown_rgb[1] == 0);
     assert(ask("{\"job\":\"c2\",\"options\":[\"a\",\"b\"],\"timeout_ms\":5000}") == ESP_OK);   /* older relay: defaults */
-    assert(shows == 2 && shown_rgb[0] == -1 && shown_rgb[1] == -1);
+    assert(shows == 2 && shown_rgb[0] == 0x3ccf96 && shown_rgb[1] == 0xff6b6b);
     assert(open_q("c3", 5000) == ESP_OK && shown_rgb[0] == 0x3ccf96 && shown_rgb[1] == 0xf1f3f5);   /* the firmware's own */
+    assert(!strcmp(shown_title, "update molty?") && !shown_detail[0]);
+    /* the agent's title over the answers; the whole label at its count's limit */
+    assert(ask("{\"job\":\"c4\",\"options\":[\"send it now\",\"keep a draft\"],\"title\":\"Send the summary to Ana?\",\"timeout_ms\":5000}") == ESP_OK);
+    assert(!strcmp(shown_title, "Send the summary to Ana?") && !strcmp(shown[1], "keep a draft"));
     link_ask_cancel(); shows = 0; nframes = 0; dones = 0;
 
-    /* an answer: the tap's sector picks the option (n = 3: upper left, upper right, bottom);
-     * the label goes back exactly as received; no `tap` event for that tap */
+    /* an answer: the tap's rim arc picks the option (n = 3: lower left, bottom, lower right); the label goes back
+     * exactly as received; no `tap` event for that tap */
     sdk_now = 1000000;
     assert(ask(YNI) == ESP_OK && link_ask_pending() && shows == 1 && shown_n == 3 && !strcmp(shown[1], " no "));
     assert(nframes == 0);
-    touch(206 + 90, 206 - 60);
+    touch(206 + 90, 206 - 60);                         /* on the question (the upper half): answers nothing, no tap either */
+    assert(!atomic_load(&s_tap));
+    link_ask_tick(); assert(link_ask_pending() && picked == -1);
+    touch(206, 206); link_ask_tick(); assert(link_ask_pending());   /* the centre: nothing */
+    touch(206, 206 + 150);                             /* the bottom arc */
     assert(!atomic_load(&s_tap));                      /* sense.c: no ordinary tap pending */
     link_ask_tick();
     assert(picked == 1 && !link_ask_pending() && nframes == 1);
@@ -266,13 +321,13 @@ int main(void) {
     /* a tap that raced the old question (its generation) answers nothing */
     atomic_store(&s_mailbox, (uint64_t)(s_ask.gen == 1 ? 255u : s_ask.gen - 1) << 56 | 2048ull << 44 | 2048ull << 32 | (uint32_t)sdk_now);
     link_ask_tick(); assert(link_ask_pending() && nframes == n0 + 1);
-    touch(206, 206 + 150); link_ask_tick();       /* bottom of 3 */
+    touch(206 + 130, 206 + 100); link_ask_tick();       /* lower right of 3 */
     assert(!strcmp(last(), "{\"t\":\"evt\",\"name\":\"answer\",\"data\":{\"job\":\"j8\",\"index\":2,\"label\":\"z\"}}"));
 
     /* pairing owns the touch: no answer from a pairing tap */
     assert(ask("{\"job\":\"j9\",\"options\":[\"a\"],\"timeout_ms\":5000}") == ESP_OK);
-    pairing = true; touch(206, 206); pairing = false;
-    link_ask_tick(); assert(link_ask_pending());
+    pairing = true; touch(206, 206 + 150); pairing = false;
+    link_ask_tick(); assert(link_ask_pending() && pair_taps == 1);   /* the pairing's tap (link_pair_tap) */
     link_ask_cancel();
 
     /* link down: the question still ends on screen, but no event goes out */
@@ -287,7 +342,7 @@ int main(void) {
     /* link_ask_open (self_update's "update" / "later"): same screen + tap, the owner hears
      * the end, no `answer` event ever */
     n0 = nframes;
-    assert(link_ask_open("u1", UL, UC, 2, 5000, NULL) == ESP_ERR_INVALID_ARG);
+    assert(link_ask_open("u1", NULL, NULL, UL, UC, 2, 5000, NULL) == ESP_ERR_INVALID_ARG);
     assert(open_q("u1", 5000) == ESP_OK && link_ask_pending() && shown_n == 2 && !strcmp(shown[0], "update"));
     touch(206 - 100, 206); link_ask_tick();                 /* left half: "update" */
     assert(dones == 1 && done_index == 0 && !done_reason[0] && picked == 0 && nframes == n0 && !link_ask_pending());
@@ -304,7 +359,7 @@ int main(void) {
     assert(open_q("u5", 5000) == ESP_OK);
     assert(ask("{\"job\":\"j12\",\"options\":[\"a\"],\"timeout_ms\":5000}") == ESP_OK);
     assert(dones == 5 && !strcmp(done_reason, "cancelled") && nframes == n0);
-    touch(206, 206); link_ask_tick();
+    touch(206, 206 + 120); link_ask_tick();
     assert(dones == 5 && !strcmp(last(), "{\"t\":\"evt\",\"name\":\"answer\",\"data\":{\"job\":\"j12\",\"index\":0,\"label\":\"a\"}}"));
     /* the update question replaces a pending agent ask: that ask ends cancelled on the wire */
     assert(ask("{\"job\":\"j13\",\"options\":[\"a\"],\"timeout_ms\":5000}") == ESP_OK);
@@ -318,9 +373,10 @@ int main(void) {
     connected = true;
     /* no touch: unsupported */
     sdk_caps &= ~MOLTY_CAP_TOUCH;
-    assert(link_ask_open("u7", UL, UC, 2, 5000, on_done) == ESP_ERR_NOT_SUPPORTED);
+    assert(link_ask_open("u7", NULL, NULL, UL, UC, 2, 5000, on_done) == ESP_ERR_NOT_SUPPORTED);
     sdk_caps = 0xFFFFFFFFu;
     test_displayed();
+    test_spot();
     test_deadline();
     link_ask_cancel();
     /* activity log: every question shown (answered, timed out, cancelled, replaced) ended its tag */

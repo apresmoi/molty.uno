@@ -1,7 +1,8 @@
 // First-load check against a running preview (`pnpm build && pnpm preview`): the landing's hero
-// (the wordmark the fluid draws, the Molty's slot, the device that turns in) must paint its
-// intro's START state from the first frame and only move toward the final one; nothing is shown
-// and then hidden. Samples every frame (requestAnimationFrame, from document start) on a slow
+// (the wordmark the device's renderer draws, the Molty's screen and its still, the device that turns in) must
+// paint its intro's START state from the first frame and only move toward the final one; nothing
+// is shown and then hidden. The Molty's renderer (a WebAssembly module and the cat's package) must
+// load after the page, never with it. Samples every frame (requestAnimationFrame, from document start) on a slow
 // network and CPU, and saves timed screenshots to website/e2e-out/first-load-*.png.
 //   node e2e/first-load.mjs [baseUrl=http://localhost:4330]
 import { chromium } from 'playwright';
@@ -21,8 +22,9 @@ const check = (ok, msg) => {
   }
 };
 
-const TITLE = 'h1[data-fluid-word]';
-const STILL = '[data-fluid-run-in] > img';
+const TITLE = 'section[aria-label="molty.UNO"] h1';
+const STILL = '[data-molty-screen]:has([data-device="arrive"]) > img';
+const SCREEN = '[data-molty-screen]:has([data-device="arrive"]) > canvas:not([data-outside])';
 const DEVICE = '[data-device="arrive"]';
 
 /** Runs in the page from document start: each frame (just before it paints) records how much
@@ -53,6 +55,7 @@ function sampler([TITLE, STILL, DEVICE]) {
     frames.push({
       t: Math.round(performance.now()),
       fluid: root.dataset.fluid ?? null,
+      word: title?.querySelector('[data-molty-word]')?.getAttribute('data-word') ?? null,
       moltys: root.dataset.fluidMoltys ?? null,
       title: title ? opacity(title) * alpha(getComputedStyle(title).color) : null,
       still: still ? opacity(still) : null,
@@ -136,9 +139,9 @@ const firstDrop = (xs) => {
   console.log(`     ${fs.length} frames sampled, ${seen.length} with the hero; intro states: ${[...new Set(fs.map((f) => f.fluid))].join(' → ')}`);
   check(seen.length > 20, `intro: the hero was sampled from early frames (${seen.length})`);
   const title = series(fs, 'title');
-  check(Math.max(...title) <= EPS, `intro: the wordmark's DOM text never shows (the fluid draws it; max alpha ${Math.max(...title).toFixed(2)})`);
+  check(Math.max(...title) <= EPS, `intro: the wordmark's DOM text never shows (the renderer draws it; max alpha ${Math.max(...title).toFixed(2)})`);
   const still = series(fs, 'still');
-  check(Math.max(...still) <= EPS, `intro: the hero's still never shows before its Molty emerges (max opacity ${Math.max(...still).toFixed(2)})`);
+  check(Math.max(...still) <= EPS, `intro: the hero's still never shows before its screen powers on (max opacity ${Math.max(...still).toFixed(2)})`);
   const device = series(fs, 'device');
   const drop = firstDrop(device);
   check(drop < 0, `intro: the device only ever comes in (opacity monotonic${drop < 0 ? '' : `; drops at frame ${drop}: ${device.slice(Math.max(0, drop - 3), drop + 1).map((x) => x.toFixed(2)).join(' ')}`})`);
@@ -147,7 +150,24 @@ const firstDrop = (xs) => {
   check(last.fluid === 'live' && last.moltys === 'live', `intro: ends live (fluid ${last.fluid}, moltys ${last.moltys})`);
   check(last.device === 1 && !last.transform, `intro: the device ends at rest (opacity ${last.device}, transform ${last.transform})`);
   const ink = await inkIn(page, TITLE);
-  check(ink > 2000, `intro: the fluid has drawn the wordmark (${ink} px)`);
+  check(ink > 1200, `intro: the renderer has drawn the wordmark (${ink} px)`);
+  const lit = await page.evaluate((sel) => {
+    const c = document.querySelector(sel);
+    const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 120) n++;
+    return n;
+  }, SCREEN);
+  check(lit > 1500, `intro: the hero's screen is on and drawing (${lit} dots' pixels lit)`);
+  // the renderer and the cat come after the page: neither is in the HTML's own requests
+  const late = await page.evaluate(() =>
+    performance
+      .getEntriesByType('resource')
+      .filter((r) => /\.wasm$|\/cat\.[^/]*\.json$/.test(r.name))
+      .map((r) => ({ name: r.name.split('/').pop(), start: Math.round(r.startTime), initiator: r.initiatorType })),
+  );
+  const fcp = await page.evaluate(() => performance.getEntriesByName('first-contentful-paint')[0]?.startTime ?? 0);
+  check(late.length === 2 && late.every((r) => r.initiator === 'fetch' && r.start > fcp), `intro: the renderer and the cat load after the first paint (${late.map((r) => `${r.name} at ${r.start} ms`).join(', ')}; first paint ${Math.round(fcp)} ms)`);
   check(cls < 0.01, `intro: no layout shift (CLS ${cls.toFixed(4)})`);
   await page.screenshot({ path: `${OUT}first-load-intro-end.png` });
   await ctx.close();
@@ -162,8 +182,8 @@ const firstDrop = (xs) => {
   const fs = (await page.evaluate(() => window.__frames)).filter((f) => f.title !== null);
   check(fs.length > 5, `reduced: sampled (${fs.length} frames)`);
   check(fs.every((f) => f.device === 1 && !f.transform), 'reduced: the device is at rest on every frame');
-  check(fs.every((f) => f.title >= 1 - EPS || f.fluid === 'live'), 'reduced: the wordmark shows until the fluid draws it (never hidden first)');
-  check(fs.every((f) => f.still >= 1 - EPS || f.moltys === 'live'), 'reduced: the still shows until the Molty is drawn (never hidden first)');
+  check(fs.every((f) => f.title >= 1 - EPS || f.word === 'live'), 'reduced: the wordmark shows until the renderer draws it (never hidden first)');
+  check(fs.every((f) => f.still >= 1 - EPS || f.moltys === 'live'), 'reduced: the still shows until the screen draws (never hidden first)');
   await ctx.close();
 }
 

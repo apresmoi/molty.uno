@@ -248,9 +248,9 @@ link_ack_t link_ack_decide(link_ack_t mode, const char *reason, bool speech_know
                            bool screen_taken, bool has_speaker)
 {
     if (mode <= LINK_ACK_OFF || mode > LINK_ACK_CHIRP || screen_taken || !reason) return LINK_ACK_OFF;
-    bool heard = !strcmp(reason, "turn_end") || !strcmp(reason, "tap") ||
+    bool heard = !strcmp(reason, "turn_end") ||
                  (!strcmp(reason, "silence") && (!speech_known || speech_ms > 0)) ||
-                 (!strcmp(reason, "max") && speech_known && speech_ms >= LINK_ACK_MIN_SPEECH_MS);
+                 ((!strcmp(reason, "max") || !strcmp(reason, "tap")) && speech_known && speech_ms >= LINK_ACK_MIN_SPEECH_MS);
     if (!heard) return LINK_ACK_OFF;
     return mode == LINK_ACK_CHIRP && !has_speaker ? LINK_ACK_THINKING : mode;
 }
@@ -295,6 +295,18 @@ bool link_welcome_has(const cJSON *welcome, const char *name)
     if (!name || !cJSON_IsArray(f)) return false;
     cJSON_ArrayForEach(it, f) if (cJSON_IsString(it) && !strcmp(it->valuestring, name)) return true;
     return false;
+}
+
+cJSON *link_evt_scene_frame(const char *pkg, const char *layout, const char *why, const char *spot)
+{
+    cJSON *data, *j = evt("scene", &data);
+    if (j) {
+        cJSON_AddStringToObject(data, "why", why);
+        if (pkg && pkg[0]) cJSON_AddStringToObject(data, "pkg", pkg);
+        if (layout && layout[0]) cJSON_AddStringToObject(data, "layout", layout);
+        if (spot && spot[0]) cJSON_AddStringToObject(data, "spot", spot);
+    }
+    return j;
 }
 
 cJSON *link_evt_tap_frame(double x, double y)
@@ -497,8 +509,24 @@ bool link_color_arg(const cJSON *args, const char *key, int32_t *rgb)
     return true;
 }
 
+int link_ask_label_max(int n) { return n <= 2 ? 14 : n == 3 ? 10 : 8; }
+
+/* 1..max printable ASCII chars, not all spaces */
+static bool printable(const char *v, size_t max)
+{
+    size_t len = strlen(v);
+    if (len < 1 || len > max) return false;
+    bool ink = false;
+    for (size_t k = 0; k < len; k++) {
+        unsigned char c = (unsigned char)v[k];
+        if (c < 0x20 || c > 0x7E) return false;
+        if (c != ' ') ink = true;
+    }
+    return ink;
+}
+
 bool link_ask_args(const cJSON *args, char job[LINK_STREAM_MAX], char labels[LINK_ASK_MAX][LINK_ASK_LABEL_MAX + 1],
-                   int32_t colors[LINK_ASK_MAX], int *n, unsigned *timeout_ms)
+                   int32_t colors[LINK_ASK_MAX], int *n, unsigned *timeout_ms, char title[LINK_ASK_TITLE_MAX + 1])
 {
     const cJSON *j = cJSON_GetObjectItemCaseSensitive(args, "job");
     const cJSON *opts = cJSON_GetObjectItemCaseSensitive(args, "options");
@@ -513,14 +541,7 @@ bool link_ask_args(const cJSON *args, char job[LINK_STREAM_MAX], char labels[LIN
         if (!cJSON_IsString(o)) return false;
         const char *v = o->valuestring;
         size_t len = strlen(v);
-        if (len < 1 || len > LINK_ASK_LABEL_MAX) return false;
-        bool ink = false;
-        for (size_t k = 0; k < len; k++) {
-            unsigned char c = (unsigned char)v[k];
-            if (c < 0x20 || c > 0x7E) return false;
-            if (c != ' ') ink = true;
-        }
-        if (!ink) return false;
+        if (!printable(v, (size_t)link_ask_label_max(count))) return false;
         for (int p = 0; p < i; p++) {                 /* unique, ignoring case */
             const char *a = labels[p];
             size_t q = 0;
@@ -540,6 +561,9 @@ bool link_ask_args(const cJSON *args, char job[LINK_STREAM_MAX], char labels[LIN
             colors[i] = (int32_t)v;
         }
     }
+    const cJSON *t = cJSON_GetObjectItemCaseSensitive(args, "title");
+    if (t && (!cJSON_IsString(t) || !printable(t->valuestring, LINK_ASK_TITLE_MAX))) return false;
+    strcpy(title, t ? t->valuestring : "");
     strcpy(job, j->valuestring);
     *n = count; *timeout_ms = (unsigned)to->valuedouble;
     return true;

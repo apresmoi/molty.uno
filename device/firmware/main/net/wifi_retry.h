@@ -12,7 +12,11 @@
  *     WIFI_RETRY_MAX_MS, for as long as it takes (an AP that comes back is found again);
  *   - a got-IP resets the back-off;
  *   - no retry while a join (set_creds / Improv) owns the radio — it reports its own result —
- *     nor after a forget (no credentials), nor before the first connect was ever asked for. */
+ *     nor after a forget (no credentials), nor before the first connect was ever asked for;
+ *   - a join that fails falls back to the saved network, on the back-off. Its own disconnects
+ *     were not retried, so before this a failed set_creds (a wrong password, an extender that
+ *     refuses) left the station idle for good, aimed at the network it could not join
+ *     (2026-11-16: four failed joins to an extender, offline 6+ minutes until a reboot). */
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
@@ -30,6 +34,7 @@ typedef enum {
     WIFI_RETRY_EV_GOT_IP,        /* connected: the back-off starts over */
     WIFI_RETRY_EV_DISCONNECTED,  /* the station lost (or never got) its AP */
     WIFI_RETRY_EV_FORGET,        /* credentials erased: never retry */
+    WIFI_RETRY_EV_JOIN_FAILED,   /* a join gave up: the saved network (if any) is restored, retry it */
 } wifi_retry_ev_t;
 
 void wifi_retry_init(wifi_retry_t *r);

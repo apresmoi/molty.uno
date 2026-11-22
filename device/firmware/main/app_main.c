@@ -36,6 +36,7 @@
 #include "power.h"
 #include "network.h"
 #include "console_store.h"
+#include "pkg_store.h"
 #include "http.h"
 #include "improv_serial.h"
 #include "self_update.h"
@@ -85,6 +86,7 @@ void app_main(void)
 
     // SPIFFS + console page. Must run before USB/Wi-Fi/httpd (see console_store.c).
     console_store_init();
+    pkg_store_sweep(PKG_ROOT);      /* the package store holds only what it lists (a download cut short leaves nothing) */
 
     // Networking: USB-C NCM (10.13.37.1, DHCP server), mDNS, Wi-Fi STA. NCM needs the
     // chip's native USB on the USB-C port; boards with a USB-UART bridge there skip it.
@@ -131,8 +133,8 @@ void app_main(void)
     // OTA rollback validation (update/update_core.h "the mark-valid rule"): a fresh
     // image (PENDING_VERIFY) installed by a self-update while the link was up is kept
     // once the relay welcomes it, and rolled back if that does not happen within 3 min;
-    // any other fresh image (POST /api/ota, no relay link at install time) is kept now
-    // that the HTTP server is up. A crash before either rolls back on reset.
+    // any other fresh image (POST /api/ota, no relay link at install time) is kept once
+    // it has run 30 s. A crash before either rolls back on reset.
     self_update_boot();
 
     http_imu_ws_start();

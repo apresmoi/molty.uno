@@ -1,0 +1,846 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Molty Display v2</title>
+<style>
+:root {
+  --bg: #fbfbfd; --panel: #f2f3f7; --text: #1d2030; --muted: #5c6178; --line: #dcdfe8;
+  --accent: #3b6fd8; --code-bg: #eef0f6; --v1: #a0682a; --v2: #2f8f5b; --warn: #b5781f; --warn-bg: #fff6e4;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1117; --panel: #161925; --text: #e2e5f0; --muted: #9399b2; --line: #2a2f42;
+    --accent: #8fb4ff; --code-bg: #141824; --v1: #e3a86a; --v2: #6fd39a; --warn: #e3b04b; --warn-bg: #2a2416;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1117; --panel: #161925; --text: #e2e5f0; --muted: #9399b2; --line: #2a2f42;
+  --accent: #8fb4ff; --code-bg: #141824; --v1: #e3a86a; --v2: #6fd39a; --warn: #e3b04b; --warn-bg: #2a2416;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 17px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+.wrap { display: grid; grid-template-columns: 230px minmax(0, 1fr); max-width: 1280px; margin: 0 auto; }
+nav { position: sticky; top: 0; height: 100vh; overflow-y: auto; padding: 26px 16px; border-right: 1px solid var(--line); background: var(--panel); }
+nav .brand { font-weight: 700; font-size: 17px; }
+nav .sub { color: var(--muted); font-size: 13px; margin: 2px 0 16px; }
+nav ol { list-style: none; padding: 0; margin: 0; }
+nav a { display: block; padding: 4px 8px; border-radius: 6px; color: var(--text); text-decoration: none; font-size: 14px; }
+nav a:hover { background: var(--line); }
+main { padding: 32px 40px 90px; min-width: 0; }
+h1 { font-size: 32px; margin: 0 0 6px; }
+h2 { font-size: 24px; margin: 60px 0 10px; padding-top: 14px; border-top: 1px solid var(--line); }
+h3 { font-size: 18px; margin: 30px 0 8px; }
+p, li { max-width: 74ch; }
+.lead { color: var(--muted); font-size: 18px; margin-top: 0; }
+a { color: var(--accent); }
+code { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; overflow-x: auto; margin: 8px 0 16px; }
+pre code { background: none; padding: 0; font-size: 13px; line-height: 1.55; }
+pre .c { color: var(--muted); }
+table { border-collapse: collapse; width: 100%; margin: 10px 0 20px; font-size: 15px; display: block; overflow-x: auto; }
+th, td { text-align: left; vertical-align: top; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+th { background: var(--panel); font-weight: 600; white-space: nowrap; }
+td code { white-space: nowrap; }
+.note { border-left: 4px solid var(--accent); background: var(--panel); padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 14px 0; max-width: 84ch; }
+.note.warn { border-color: var(--warn); background: var(--warn-bg); }
+.decisions { counter-reset: d; list-style: none; padding: 0; }
+.decisions li { counter-increment: d; position: relative; padding: 10px 14px 10px 52px; margin: 10px 0; background: var(--panel); border-radius: 10px; max-width: 90ch; }
+.decisions li::before { content: counter(d); position: absolute; left: 14px; top: 10px; width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: var(--bg); font-weight: 700; text-align: center; line-height: 26px; font-size: 14px; }
+.vs { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin: 10px 0 20px; }
+.vs > div { min-width: 0; }
+.label { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 2px 8px; border-radius: 4px; color: var(--bg); }
+.label.v1 { background: var(--v1); }
+.label.v2 { background: var(--v2); }
+.label.fw { background: var(--warn); }
+.file { font: 13px ui-monospace, Menlo, monospace; color: var(--muted); margin: 10px 0 0; }
+.flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; margin: 14px 0 20px; }
+.flow .step { flex: 1 1 150px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-size: 14.5px; }
+.flow .step b { display: block; font-size: 15px; margin-bottom: 2px; }
+.flow .arrow { align-self: center; color: var(--muted); font-size: 20px; }
+.tree { font: 13.5px/1.6 ui-monospace, Menlo, monospace; }
+@media (max-width: 900px) {
+  .wrap { display: block; }
+  nav { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 16px; }
+  main { padding: 22px 16px 60px; }
+  .vs { grid-template-columns: 1fr; }
+  .flow .arrow { transform: rotate(90deg); flex-basis: 100%; text-align: center; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav>
+  <div class="brand">Molty Display v2</div>
+  <div class="sub">Proposal, nothing built. 2026-11-17.</div>
+  <ol>
+    <li><a href="#minute">The short version</a></li>
+    <li><a href="#principles">Design principles</a></li>
+    <li><a href="#folder">The skill folder</a></li>
+    <li><a href="#file">display.yaml at a glance</a></li>
+    <li><a href="#units">Places, units, colors</a></li>
+    <li><a href="#shapes">Shapes</a></li>
+    <li><a href="#common">Timing, groups, motion</a></li>
+    <li><a href="#inputs">Inputs and binding</a></li>
+    <li><a href="#taps">Taps and highlights</a></li>
+    <li><a href="#assets">Assets</a></li>
+    <li><a href="#skillmd">SKILL.md and display.yaml</a></li>
+    <li><a href="#ex1">Example 1: a tappable dial</a></li>
+    <li><a href="#ex2">Example 2: the astrology chart</a></li>
+    <li><a href="#ex3">Example 3: an eclipse in motion</a></li>
+    <li><a href="#schema">JSON Schema outline</a></li>
+    <li><a href="#pipeline">Check, build, preview, publish</a></li>
+    <li><a href="#device">What the device keeps</a></li>
+    <li><a href="#migration">Moving from v1</a></li>
+    <li><a href="#questions">Open questions</a></li>
+  </ol>
+</nav>
+
+<main>
+<h1>Molty Display v2</h1>
+<p class="lead">A proposal for how skills describe what Molty draws: a readable <code>display.yaml</code> next to the skill's <code>SKILL.md</code>, plain image files in <code>assets/</code>, and a compiler that turns them into the small package the device already plays.</p>
+<p class="note">Status: proposal only. No code, schema or firmware has changed. Today's format (<code>molty-pkg/1</code>) is in <code>docs/PACKAGES.md</code>; nothing here replaces it on the device.</p>
+
+<!-- ───────────────────────── -->
+<h2 id="minute">The short version</h2>
+<p>A skill that draws on Molty is three things side by side:</p>
+<ul>
+  <li><strong><code>SKILL.md</code></strong>: words for the agent. What the skill does, which screens exist, when to show which.</li>
+  <li><strong><code>display.yaml</code></strong>: the drawing. Screens made of named shapes, with typed inputs.</li>
+  <li><strong><code>assets/</code></strong>: plain files (SVG, PNG). The compiler turns them into the device's masks and images.</li>
+</ul>
+<p>The five decisions that shape everything else:</p>
+<ol class="decisions">
+  <li><strong>The skill folder is the source; the package is a build output.</strong> <code>SKILL.md</code> links to screens in <code>display.yaml</code>; the compiler writes the installable package and a generated <code>display.md</code> (every screen's inputs and a ready <code>scene.play</code> call), so the agent docs never drift from the drawing.</li>
+  <li><strong>One key names the shape, and units never change.</strong> <code>- circle: { radius: 0.9 }</code>. Distances are fractions of the screen's radius, angles are degrees counter-clockwise from 3 o'clock, times are seconds. A place is <code>center</code>, <code>{x, y}</code> or <code>{angle, distance}</code>.</li>
+  <li><strong>Inputs are declared with a type and a sentence; binding is one form only.</strong> <code>"{{ value }}"</code> and, inside a <code>for</code>, <code>"{{ body.angle }}"</code>. A whole value, never a formula. Any maths stays in the skill.</li>
+  <li><strong>The device does not change to ship v2.</strong> The compiler emits today's <code>molty-pkg/1</code> exactly. Layouts are only 11 KB of the astrology package's 74 KB (assets are the rest), so a new wire format would buy little. A few small firmware additions (defaults, motion) come later, one at a time.</li>
+  <li><strong>Two checks before anything ships.</strong> A published JSON Schema (editors and agents autocomplete it) and a device check in the compiler (limits after repetition, asset cost against 256 KB, every name resolves). The compiler also writes an input schema per screen, so an agent can check its params before sending.</li>
+</ol>
+
+<!-- ───────────────────────── -->
+<h2 id="principles">Design principles</h2>
+<ul>
+  <li><strong>Say what it is.</strong> <code>circle</code>, <code>arc</code>, <code>tap_zone</code>, <code>radius</code>, <code>reads</code>. No one-letter keys, no <code>k</code>, no <code>a0</code>.</li>
+  <li><strong>Units are part of the language, not of each field.</strong> Learn them once (<a href="#units">places, units, colors</a>), then every number reads the same.</li>
+  <li><strong>Readable by people and agents alike.</strong> YAML to write, JSON accepted, same schema. Every input carries an <code>about</code> sentence.</li>
+  <li><strong>No code.</strong> No expressions, no conditions, no filters. Repetition and binding only. Same promise as today.</li>
+  <li><strong>Molty's look by default.</strong> Named colors and line weights (<code>ink</code>, <code>grid</code>, <code>hairline</code>) so a new skill looks like Molty without picking hex codes.</li>
+  <li><strong>Small device, smart compiler.</strong> Names, units, files and reuse are resolved on the computer; the device gets the same compact JSON as today.</li>
+  <li><strong>v1 keeps working.</strong> Every v1 package converts to v2 and back, item for item.</li>
+  <li><strong>snake_case everywhere.</strong> One naming style, valid inside <code>{{ }}</code> and in agent JSON.</li>
+</ul>
+
+<!-- ───────────────────────── -->
+<h2 id="folder">The skill folder</h2>
+<p>A small skill keeps every screen in <code>display.yaml</code>. A big one moves each screen into <code>screens/&lt;name&gt;.yaml</code> and lists them by name; shared tokens, assets, data and parts stay in <code>display.yaml</code>.</p>
+<div class="vs">
+<div>
+<span class="label v2">small: one file</span>
+<pre class="tree"><code>skills/molty-dial/
+  SKILL.md          <span class="c"># for the agent</span>
+  display.yaml      <span class="c"># package + every screen</span>
+  assets/
+    needle.svg
+  build/            <span class="c"># generated, not edited</span>
+    display.md      <span class="c"># screens, inputs, sample calls</span>
+    inputs/dial.schema.json</code></pre>
+</div>
+<div>
+<span class="label v2">big: split screens</span>
+<pre class="tree"><code>skills/molty-astro/
+  SKILL.md
+  display.yaml      <span class="c"># package, tokens, assets, data,</span>
+                    <span class="c"># parts, and the list of screens</span>
+  screens/
+    chart.yaml      <span class="c"># one screen per file</span>
+    sign-closeup.yaml
+    aspect.yaml
+    solar-eclipse.yaml  ...
+  assets/
+    signs/aries.svg ... pisces.svg
+    planets/sun.svg ... pluto.svg
+    maps/sun-map.png moon-map.png ...
+    rings/saturn-rings-p3.png ...
+  scripts/astro.mjs  sky.mjs
+  build/display.md   build/inputs/*.json</code></pre>
+</div>
+</div>
+<p>The compiled package still lands where the device fetches it today: <code>packages/&lt;id&gt;/&lt;id&gt;.json</code> plus its <code>packages/index.json</code> entry. The download allowlist and install flow do not change.</p>
+<p>The split form in <code>display.yaml</code>:</p>
+<pre><code>screens:
+  chart: screens/chart.yaml          <span class="c"># a path: the file holds one screen (about, duration, inputs, draw)</span>
+  sign_closeup: screens/sign-closeup.yaml
+  dial:                              <span class="c"># or the screen itself, inline. Both can mix.</span>
+    about: ...
+    draw: [...]</code></pre>
+<p class="note"><strong>Recommendation: one <code>display.yaml</code> by default; split at about 5 screens or 200 lines.</strong> One file is one thing for an agent to read and one place to look. Past that size a file gets hard to scan and two people editing two screens collide. The compiler output is identical either way, so splitting later is a pure move.</p>
+<p><code>molty.json</code> (today: <code>requires</code>, <code>packages</code>, <code>fallback</code>) folds into <code>display.yaml</code>'s <code>package</code> block, so the pair stays a pair.</p>
+
+<!-- ───────────────────────── -->
+<h2 id="file">display.yaml at a glance</h2>
+<table>
+<tr><th>key</th><th>what it holds</th><th>needed</th></tr>
+<tr><td><code>molty</code></td><td>Always <code>display/2</code>. Tells tools which schema applies.</td><td>yes</td></tr>
+<tr><td><code>package</code></td><td><code>id</code>, <code>name</code>, <code>version</code>, <code>about</code> (one line for the catalog), <code>fallback</code> (<code>speech</code>: what the agent does on a Molty without screens).</td><td>yes</td></tr>
+<tr><td><code>tokens</code></td><td>The skill's own named <code>colors</code>, <code>lines</code> (widths) and <code>sizes</code>, added to Molty's built-in ones.</td><td>no</td></tr>
+<tr><td><code>assets</code></td><td>Which files in <code>assets/</code> become symbols, pictures or globe maps, and at what pixel size.</td><td>no</td></tr>
+<tr><td><code>data</code></td><td>Fixed tables the compiler repeats over (the twelve signs and their angles). Never sent by the agent.</td><td>no</td></tr>
+<tr><td><code>parts</code></td><td>Reusable groups of shapes (the zodiac wheel), placed with <code>use</code>.</td><td>no</td></tr>
+<tr><td><code>screens</code></td><td>Name to screen, inline or a path to <code>screens/&lt;name&gt;.yaml</code>.</td><td>yes</td></tr>
+</table>
+<p>A screen:</p>
+<table>
+<tr><th>key</th><th>meaning</th><th>v1 today</th></tr>
+<tr><td><code>about</code></td><td>One sentence: what it shows. Goes into <code>display.md</code>.</td><td>none</td></tr>
+<tr><td><code>duration</code></td><td>Seconds, or <code>hold</code> (until replaced or its <code>ttl_s</code> runs out).</td><td><code>dur</code> (0 = hold)</td></tr>
+<tr><td><code>subtitles</code></td><td>Where readings and says show: <code>bottom</code> (default), <code>middle</code>, or a <code>y</code> number.</td><td><code>caption_y</code></td></tr>
+<tr><td><code>inputs</code></td><td>What the agent sends, typed and described (<a href="#inputs">inputs</a>).</td><td><code>params</code></td></tr>
+<tr><td><code>draw</code></td><td>Shapes, painted in order, later ones on top.</td><td><code>items</code></td></tr>
+</table>
+
+<!-- ───────────────────────── -->
+<h2 id="units">Places, units, colors</h2>
+<table>
+<tr><th>quantity</th><th>unit</th><th>notes</th></tr>
+<tr><td>distance, radius, size, width</td><td>fraction of the screen's radius</td><td><code>1</code> reaches the rim; <code>2</code> is the full width.</td></tr>
+<tr><td>angle</td><td>degrees</td><td><code>0</code> is 3 o'clock, <code>90</code> is 12 o'clock (counter-clockwise, like maths).</td></tr>
+<tr><td>time</td><td>seconds from the screen's start</td><td><code>show: { from: 0.4, until: 2 }</code></td></tr>
+<tr><td>speed</td><td>degrees per second</td><td>a globe's <code>spin</code></td></tr>
+<tr><td>amount</td><td>0 to 1</td><td>a globe's <code>lit</code></td></tr>
+</table>
+<p>A <strong>place</strong> (<code>at</code>, <code>from</code>, <code>to</code>, a point in <code>points</code>) is one of:</p>
+<pre><code>at: center                          <span class="c"># the middle of the glass (the default)</span>
+at: { x: 0.2, y: -0.4 }             <span class="c"># right and up are positive</span>
+at: { angle: 195, distance: 0.825 } <span class="c"># around the centre</span></code></pre>
+<h3>Built-in tokens (Molty's look)</h3>
+<table>
+<tr><th>token</th><th>value</th><th>use</th></tr>
+<tr><td><code>ink</code></td><td><code>#c8cce0</code></td><td>main strokes and words</td></tr>
+<tr><td><code>grid</code></td><td><code>#565b72</code></td><td>scales, secondary rings</td></tr>
+<tr><td><code>dim</code></td><td><code>#3a3e4e</code></td><td>background structure</td></tr>
+<tr><td><code>white</code></td><td><code>#ffffff</code></td><td>emphasis (v1's default color)</td></tr>
+<tr><td><code>erase</code></td><td><code>#000000</code></td><td>clears what is under it (a body passing in front of the Sun)</td></tr>
+<tr><td><code>hairline</code> (line)</td><td><code>0.012</code></td><td>one braille dot wide: crisp, never doubled</td></tr>
+<tr><td><code>thin</code> (line)</td><td><code>0.03</code></td><td>the default width</td></tr>
+<tr><td><code>bold</code> (line)</td><td><code>0.06</code></td><td>a pointer, a needle</td></tr>
+</table>
+<p>A color is a token or <code>#rrggbb</code>. A skill adds its own under <code>tokens</code>; a skill token may not reuse a built-in name.</p>
+
+<!-- ───────────────────────── -->
+<h2 id="shapes">Shapes</h2>
+<p>Each entry in <code>draw</code> is one key, the shape's name, holding its properties. Every shape also takes the <a href="#common">common properties</a>.</p>
+<table>
+<tr><th>shape</th><th>properties (defaults)</th><th>draws</th><th>v1</th></tr>
+<tr><td><code>circle</code></td><td><code>radius</code>, <code>at</code> (center), <code>width</code> (thin)</td><td>a circle outline</td><td><code>ring</code></td></tr>
+<tr><td><code>arc</code></td><td><code>radius</code>, <code>start</code>, <code>end</code> (angles), <code>at</code>, <code>width</code></td><td>part of a circle, from <code>start</code> to <code>end</code></td><td><code>arc</code></td></tr>
+<tr><td><code>ticks</code></td><td><code>count</code> (12), <code>radius</code>, <code>length</code> (0.1, negative inward), <code>first_angle</code> (0), <code>width</code></td><td>evenly spaced marks round the centre</td><td><code>ticks</code></td></tr>
+<tr><td><code>spoke</code></td><td><code>angle</code>, <code>radius</code> (0, where it starts), <code>length</code>, <code>width</code></td><td>one mark at an angle: a pointer, a planet's tick</td><td><code>ticks</code> with <code>n: 1</code></td></tr>
+<tr><td><code>line</code></td><td><code>from</code> + <code>to</code>, or <code>points</code> (2 to 16); <code>smooth</code> (false); <code>width</code></td><td>straight segments, or a smooth curve through them</td><td><code>line</code> / <code>curve</code></td></tr>
+<tr><td><code>dot</code></td><td><code>radius</code>, <code>at</code></td><td>a filled circle (<code>color: erase</code> cuts a hole)</td><td><code>disc</code></td></tr>
+<tr><td><code>globe</code></td><td><code>radius</code>, <code>at</code>, <code>map</code> (a map asset), <code>lit</code> (1), <code>lit_side</code> (<code>right</code>), <code>spin</code> (0)</td><td>a shaded sphere wearing a map: Moon phases, planets</td><td><code>ball</code></td></tr>
+<tr><td><code>symbol</code></td><td><code>asset</code>, <code>size</code> (0.12, its width), <code>at</code>, <code>rotate</code> (0)</td><td>a symbol (takes <code>color</code>) or a picture (keeps its own colors)</td><td><code>glyph</code></td></tr>
+<tr><td><code>label</code></td><td><code>text</code> (up to 40 letters), <code>size</code> (letter height), <code>at</code></td><td>words in the device font</td><td><code>text</code></td></tr>
+<tr><td><code>tap_zone</code></td><td><code>at</code> + <code>radius</code>, or <code>along: { from, to }</code> + <code>radius</code>; <code>reads</code>, <code>id</code>, <code>highlights</code>, <code>grow</code> (1.25)</td><td>nothing visible: a place to tap (<a href="#taps">taps</a>)</td><td><code>spot</code></td></tr>
+</table>
+<p>And two structural entries, which are not shapes:</p>
+<table>
+<tr><th>entry</th><th>meaning</th></tr>
+<tr><td><code>for: body in bodies</code> + <code>draw: [...]</code></td><td>Repeat the inner shapes for each element. <code>bodies</code> is a list input (repeated on the device) or a <code>data</code> table (repeated by the compiler).</td></tr>
+<tr><td><code>use: wheel</code> + <code>with: { sign_size: 0.106 }</code></td><td>Place a part. Expanded by the compiler; costs the same items as writing it out.</td></tr>
+</table>
+
+<!-- ───────────────────────── -->
+<h2 id="common">Timing, groups, motion</h2>
+<table>
+<tr><th>property</th><th>meaning</th><th>v1</th></tr>
+<tr><td><code>color</code></td><td>A token or <code>#rrggbb</code>. Default <code>white</code>.</td><td><code>color</code></td></tr>
+<tr><td><code>show: { from, until }</code></td><td>Seconds into the screen. Either may be left out: shown from the start, or until the end.</td><td><code>on</code>, <code>off</code></td></tr>
+<tr><td><code>group</code></td><td>A name a tap zone can light (<code>"{{ aspect.id }}"</code> works).</td><td><code>group</code></td></tr>
+<tr><td><code>only_when: highlighted</code></td><td>Hidden until its group is lit, then fades in.</td><td><code>when: "lit"</code></td></tr>
+<tr><td><code>move</code> <span class="label fw">firmware</span></td><td>Slide along keyframes over time (<a href="#ex3">example 3</a>).</td><td>none (today: one copy per keyframe with on/off)</td></tr>
+</table>
+<h3>Motion, proposed</h3>
+<pre><code>move:
+  along: "{{ path }}"     <span class="c"># an input of type path: [{ time, x, y }, ...], up to 32</span>
+  ease: linear            <span class="c"># linear | smooth</span></code></pre>
+<p>Between two keyframes the shape slides; before the first and after the last it waits there. One <code>dot</code> instead of 14 copies, smooth instead of stepped, and the agent sends 3 to 6 keyframes instead of 14. This one needs the firmware to interpolate (about 40 lines in <code>scene_player.c</code>); until then the compiler refuses <code>move</code> and authors use the stepped v1 form.</p>
+
+<!-- ───────────────────────── -->
+<h2 id="inputs">Inputs and binding</h2>
+<p>Every input has a <code>type</code> and an <code>about</code>. Optional: <code>default</code>, <code>min</code>, <code>max</code>, <code>example</code>.</p>
+<table>
+<tr><th>type</th><th>the agent sends</th><th>checked</th><th>v1 param</th></tr>
+<tr><td><code>number</code></td><td>a number</td><td><code>min</code>/<code>max</code></td><td><code>number</code></td></tr>
+<tr><td><code>angle</code></td><td>degrees</td><td>-720..720</td><td><code>number</code></td></tr>
+<tr><td><code>distance</code></td><td>fraction of the radius</td><td>0..2</td><td><code>number</code></td></tr>
+<tr><td><code>amount</code></td><td>0..1</td><td>0..1</td><td><code>number</code></td></tr>
+<tr><td><code>seconds</code></td><td>seconds</td><td>0..600</td><td><code>number</code></td></tr>
+<tr><td><code>text</code></td><td>short words for a <code>label</code></td><td>printable, up to 40</td><td><code>text</code></td></tr>
+<tr><td><code>reading</code></td><td>what a tap shows</td><td>printable, up to 160</td><td><code>text</code></td></tr>
+<tr><td><code>color</code></td><td><code>#rrggbb</code></td><td>format</td><td><code>text</code></td></tr>
+<tr><td><code>asset</code></td><td>an asset name; <code>of: assets/signs</code> limits it to one folder</td><td>name exists (listed in the schema)</td><td><code>text</code></td></tr>
+<tr><td><code>groups</code></td><td>group names, spaces between, up to 4</td><td>format</td><td><code>text</code></td></tr>
+<tr><td><code>list</code></td><td>up to 32 flat objects; <code>of: { field: type, ... }</code>, up to 12 fields</td><td>each field by its type</td><td><code>list</code></td></tr>
+<tr><td><code>path</code></td><td>keyframes <code>[{ time, x, y }, ...]</code>, up to 32</td><td>times rise</td><td><code>list</code></td></tr>
+</table>
+<h3>Binding: one form</h3>
+<ul>
+  <li><code>"{{ value }}"</code> reads an input. Inside <code>for: body in bodies</code>, <code>"{{ body.angle }}"</code> reads a field of the element.</li>
+  <li>The braces fill <strong>a whole value</strong>, never part of a string. <code>"Sun in {{ sign }}"</code> is refused: the skill sends the finished sentence.</li>
+  <li>No maths, no filters, no conditions. If it needs a formula, the skill computes it and sends the result.</li>
+  <li>Inside a part, <code>{{ }}</code> reads the part's <code>with</code> values, which may themselves pass an input through.</li>
+  <li>Why <code>{{ }}</code>: agents and editors already know it from every template language; it never collides with a literal; and it reads the same in YAML and JSON. In YAML, quote it (<code>"{{ x }}"</code>), which the schema's error message says.</li>
+</ul>
+<p class="note">Paint order inside a <code>for</code>: the compiler draws layer by layer (the first inner shape for every element, then the second for every element). That is what v1's <code>each</code> does, and what a chart wants (all lines under all symbols).</p>
+
+<!-- ───────────────────────── -->
+<h2 id="taps">Taps and highlights</h2>
+<pre><code>- tap_zone:
+    at: { angle: "{{ body.angle }}", distance: "{{ body.distance }}" }
+    radius: 0.08
+    reads: "{{ body.reading }}"   <span class="c"># shown at once, word by word, no round trip</span>
+    id: "{{ body.id }}"           <span class="c"># the agent's tap event names it</span>
+    highlights: "{{ body.id }}"   <span class="c"># groups to light; left out: whatever is drawn inside the zone</span>
+    grow: 1.25                    <span class="c"># how much what it lights grows, 1 to 3</span></code></pre>
+<ul>
+  <li><strong><code>along: { from, to }</code></strong> makes the zone a band of <code>radius</code> around a segment: a line you tap along (an aspect).</li>
+  <li><strong>Highlighted</strong> shapes grow about their own centre and brighten while the reading plays, then ease back. Shapes with <code>only_when: highlighted</code> appear only then.</li>
+  <li>Overlapping zones: the smallest wins, then the nearest. Same as today.</li>
+</ul>
+
+<!-- ───────────────────────── -->
+<h2 id="assets">Assets</h2>
+<p>Assets are ordinary files in <code>assets/</code>. An asset's name is its file name without the extension (<code>assets/signs/aries.svg</code> is <code>aries</code>); folders are for tidiness, and two files with the same name are an error.</p>
+<pre><code>assets:
+  - files: assets/signs/*.svg     <span class="c"># aries ... pisces</span>
+    as: symbol                    <span class="c"># one color, takes the shape's color</span>
+    pixels: 64                    <span class="c"># width on the device; height keeps the aspect</span>
+    stroke: 0.085                 <span class="c"># SVG lines drawn this thick (fraction of the drawing)</span>
+  - files: assets/planets/*.svg
+    as: symbol
+    pixels: 32
+  - files: assets/maps/*-map.png  <span class="c"># sun-map, moon-map ...: wrapped round globes</span>
+    as: map
+    pixels: [128, 64]             <span class="c"># equirectangular, 2:1</span>
+  - file: assets/logo.png
+    as: picture                   <span class="c"># keeps its colors: up to 15 + transparent</span>
+    pixels: 48</code></pre>
+<table>
+<tr><th><code>as</code></th><th>from</th><th>becomes (v1)</th><th>cost on the device</th></tr>
+<tr><td><code>symbol</code></td><td>SVG (strokes and fills) or PNG (alpha)</td><td><code>mask</code>, 1 bit a pixel</td><td>64 x 64: about 0.7 KB</td></tr>
+<tr><td><code>picture</code></td><td>PNG, SVG</td><td><code>image</code>, 4 bits a pixel, 15 colors chosen by the compiler</td><td>48 x 48: about 1.6 KB</td></tr>
+<tr><td><code>map</code></td><td>PNG, 2:1</td><td><code>image</code> (a globe's <code>map</code>)</td><td>128 x 64: about 5.5 KB</td></tr>
+</table>
+<p>Every build prints what each asset costs and how much of the 256 KB is left. Sizes below are from today's astrology package:</p>
+<pre><code>$ molty-display build skills/molty-astro
+assets     symbols  32   17.6 KB   (12 signs 64 px, 10 planets 32 px, 10 ring tilts 112 px)
+           maps      8   45.4 KB   (128 x 64, 15 colors each)
+screens   12   10.8 KB   largest: chart, 26 items, 76 of 128 with 10 bodies, 12 signs, 3 aspects
+package   packages/astrology/astrology.json   74.3 KB of 256 KB   ok
+docs      skills/molty-astro/build/display.md, build/inputs/*.schema.json</code></pre>
+<p class="note">Generated art (the noise-made planet maps, the ring masks at five tilts) becomes a small script that writes PNGs into <code>assets/</code> once; the PNGs are what is checked in and reviewed. The compiler only reads files.</p>
+
+<!-- ───────────────────────── -->
+<h2 id="skillmd">SKILL.md and display.yaml together</h2>
+<ul>
+  <li><strong>SKILL.md says when and why; display.yaml says how it looks.</strong> Neither repeats the other.</li>
+  <li>SKILL.md names a screen with a plain markdown link: <code>[chart](display.yaml#chart)</code>. Any markdown viewer follows it; the checker makes sure every such link names a real screen, and warns about screens SKILL.md never mentions.</li>
+  <li>For the exact inputs, SKILL.md links the generated <code>build/display.md</code>: per screen, its <code>about</code>, duration, an input table built from each <code>about</code>, and a ready <code>scene.play</code> call filled with the <code>example</code> values. Today's hand-written <code>references/layouts.md</code> goes away.</li>
+  <li>SKILL.md's frontmatter stays the standard <code>name</code> + <code>description</code>, so every agent harness still loads it.</li>
+  <li>The commands are unchanged: <code>scene.play { pkg, layout, params, ttl_s }</code>, where <code>layout</code> is the screen's name.</li>
+</ul>
+
+<!-- ───────────────────────── -->
+<h2 id="ex1">Example 1: a tappable dial</h2>
+<p>A gauge with twelve marks, a pointer at an angle the agent sends, and a centre you tap to read a sentence.</p>
+<div class="vs">
+<div>
+<span class="label v1">v1 today</span>
+<pre><code>"dial": {
+  "dur": 0,
+  "params": { "value": "number",
+              "reading": "text" },
+  "items": [
+    { "k": "ring", "r": 0.9, "w": 0.012,
+      "color": "#c8cce0" },
+    { "k": "ticks", "r": 0.82, "len": 0.08,
+      "n": 12, "a0": 0, "w": 0.012,
+      "color": "#565b72" },
+    { "k": "ticks", "r": 0, "len": 0.8,
+      "n": 1, "a0": "$value", "w": 0.06,
+      "color": "#ffffff" },
+    { "k": "disc", "r": 0.05,
+      "color": "#ffffff" },
+    { "k": "spot", "r": 0.3,
+      "say": "$reading", "id": "centre" }
+  ]
+}</code></pre>
+</div>
+<div>
+<span class="label v2">v2 display.yaml</span>
+<pre><code><span class="c"># yaml-language-server:
+#   $schema=../../schema/display-2.json</span>
+molty: display/2
+package:
+  id: dial
+  name: Dial
+  version: 1.0.0
+  about: A gauge with a pointer and a tap-to-read centre.
+
+screens:
+  dial:
+    about: A gauge pointing at one value.
+    duration: hold
+    inputs:
+      value:
+        type: angle
+        about: Where the pointer points.
+        example: 135
+      reading:
+        type: reading
+        about: What a tap on the centre shows.
+        example: Humidity 64 percent, a bit damp.
+    draw:
+      - circle: { radius: 0.9, width: hairline,
+                  color: ink }
+      - ticks: { count: 12, radius: 0.82, length: 0.08,
+                 width: hairline, color: grid }
+      - spoke: { angle: "{{ value }}", length: 0.8,
+                 width: bold }
+      - dot: { radius: 0.05 }
+      - tap_zone: { radius: 0.3, id: centre,
+                    reads: "{{ reading }}" }</code></pre>
+</div>
+</div>
+<p class="file">skills/molty-dial/SKILL.md</p>
+<pre><code>---
+name: molty-dial
+description: >-
+  Show one value as a gauge on your human's Molty, with a sentence they can
+  tap to read. Use when a single number has a natural range (humidity,
+  battery, progress) and the molty skill is paired.
+---
+
+# Molty dial
+
+Molty draws a [dial](display.yaml#dial): a ring of twelve marks and a pointer.
+The skill turns the value into an angle and writes one sentence about it.
+
+## Show it
+
+1. Map the value onto 0..300 degrees: `angle = 240 - 300 * (value - min) / (max - min)`.
+2. Send `scene.play` with `layout: "dial"` and `{ value: angle, reading }`.
+   Inputs and a sample call: [build/display.md](build/display.md#dial).
+3. Speak one short line; the reading is on the screen for a tap.
+
+The package installs on first use (Molty asks your human with one tap).</code></pre>
+
+<!-- ───────────────────────── -->
+<h2 id="ex2">Example 2: the astrology chart</h2>
+<p>The zodiac wheel with ten bodies placed by the skill, the tightest aspects as lines, and a reading on every planet, sign and line. Compared item for item with today's <code>chart</code> layout.</p>
+<div class="vs">
+<div>
+<span class="label v1">v1 today (built by build.mjs)</span>
+<pre><code>"chart": {
+  "dur": 0, "caption_y": 0,
+  "params": { "bodies": "list", "signs": "list",
+              "aspects": "list" },
+  "items": [
+    { "k": "ring", "r": 0.9, "w": 0.012,
+      "color": "#c8cce0" },
+    { "k": "ring", "r": 0.75, "w": 0.012,
+      "color": "#565b72" },
+    { "k": "ticks", "r": 0.75, "len": 0.15,
+      "n": 12, "a0": 0, "w": 0.012,
+      "color": "#c8cce0" },
+    { "k": "ticks", "r": 0.73, "len": 0.02,
+      "n": 36, "a0": 0, "w": 0.012,
+      "color": "#565b72" },
+    { "k": "glyph", "asset": "aries",
+      "size": 0.106, "polar": [195, 0.825],
+      "color": "#ff9a7a" },
+    <span class="c">... 11 more signs ...</span>
+    { "k": "disc", "x": "@px1", "y": "@py1",
+      "r": 0.075, "color": "#000000",
+      "group": "@id", "when": "lit",
+      "each": "$aspects" },
+    { "k": "ring", "x": "@px1", "y": "@py1",
+      "r": 0.075, "w": 0.012, "color": "@c",
+      "group": "@id", "when": "lit",
+      "each": "$aspects" },
+    <span class="c">... the same two for px2, py2 ...</span>
+    { "k": "line",
+      "pts": [["@x1","@y1"],["@x2","@y2"]],
+      "w": 0.012, "color": "@c",
+      "group": "@id", "each": "$aspects" },
+    { "k": "ticks", "r": 0.66, "len": 0.07,
+      "n": 1, "a0": "@a", "w": 0.012,
+      "color": "#565b72", "each": "$bodies" },
+    { "k": "glyph", "asset": "@g",
+      "size": 0.12, "polar": ["@a","@r"],
+      "color": "@c", "group": "@id",
+      "each": "$bodies" },
+    { "k": "spot", "polar": ["@a","@r"],
+      "r": 0.08, "say": "@say", "id": "@id",
+      "each": "$bodies" },
+    { "k": "spot", "polar": ["@a",0.825],
+      "r": 0.07, "say": "@say", "id": "@id",
+      "grow": 1.5, "each": "$signs" },
+    { "k": "spot",
+      "pts": [["@x1","@y1"],["@x2","@y2"]],
+      "r": 0.05, "say": "@say", "id": "@id",
+      "lights": "@lights",
+      "each": "$aspects" }
+  ]
+}</code></pre>
+<p>What is <code>@a</code>, <code>@r</code>, <code>@c</code>, <code>@px1</code>? Only <code>references/layouts.md</code> says.</p>
+</div>
+<div>
+<span class="label v2">v2 display.yaml (shared)</span>
+<pre><code>molty: display/2
+package:
+  id: astrology
+  name: Astrology
+  version: 2.0.0
+  about: The zodiac, planets, Moon and eclipses.
+  fallback: speech
+
+tokens:
+  colors: { coral: "#ff9a7a", sage: "#a8d890",
+            sky: "#9fc0ff" }
+
+assets:
+  - { files: assets/signs/*.svg, as: symbol, pixels: 64 }
+  - { files: assets/planets/*.svg, as: symbol, pixels: 32 }
+  - { files: assets/maps/*-map.png, as: map,
+      pixels: [128, 64] }
+
+data:
+  signs:            <span class="c"># 0 Aries at 9 o'clock</span>
+    - { name: aries,  angle: 195, color: coral }
+    - { name: taurus, angle: 225, color: sage }
+    - { name: gemini, angle: 255, color: sky }
+    <span class="c"># ... to pisces at 165</span>
+
+parts:
+  wheel:
+    with: { sign_size: 0.09 }
+    draw:
+      - circle: { radius: 0.9,  width: hairline, color: ink }
+      - circle: { radius: 0.75, width: hairline, color: grid }
+      - ticks: { count: 12, radius: 0.75, length: 0.15,
+                 width: hairline, color: ink }
+      - ticks: { count: 36, radius: 0.73, length: 0.02,
+                 width: hairline, color: grid }
+      - for: sign in signs
+        draw:
+          - symbol:
+              asset: "{{ sign.name }}"
+              size: "{{ sign_size }}"
+              at: { angle: "{{ sign.angle }}", distance: 0.825 }
+              color: "{{ sign.color }}"
+
+screens:
+  chart: screens/chart.yaml
+  sign_closeup: screens/sign-closeup.yaml
+  aspect: screens/aspect.yaml
+  solar_eclipse: screens/solar-eclipse.yaml
+  <span class="c"># ...</span></code></pre>
+</div>
+</div>
+<p class="file">skills/molty-astro/screens/chart.yaml</p>
+<pre><code>about: All ten bodies on the zodiac wheel, joined by the tightest aspects. Tap anything to read it.
+duration: hold
+subtitles: middle
+inputs:
+  bodies:
+    type: list
+    about: The Sun, Moon and planets, in order of longitude.
+    of:
+      symbol:   { type: asset, of: assets/planets, about: "Which planet: sun, moon, mercury ..." }
+      angle:    { type: angle, about: "Chart angle: (180 + longitude) mod 360." }
+      distance: { type: distance, about: "0.64, pulled in by 0.1 when crowding a neighbour." }
+      color:    { type: color }
+      reading:  { type: reading, about: "Sun in Gemini: you shine by talking and learning." }
+      id:       { type: text, about: The body's name, lower case. }
+  signs:
+    type: list
+    about: A reading for each sign (where the tap zones go).
+    of:
+      angle:   { type: angle }
+      reading: { type: reading }
+      id:      { type: text }
+  aspects:
+    type: list
+    about: The tightest aspects, each a hairline between two bodies.
+    of:
+      from_x: { type: distance }   <span class="c"># line ends, just outside each symbol</span>
+      from_y: { type: distance }
+      to_x:   { type: distance }
+      to_y:   { type: distance }
+      ring1_x: { type: distance }  <span class="c"># the two bodies' centres, for the lit rings</span>
+      ring1_y: { type: distance }
+      ring2_x: { type: distance }
+      ring2_y: { type: distance }
+      color:   { type: color, about: "Tense #ff5a4a, easy #6fa8ff, conjunction #c8cce0." }
+      reading: { type: reading }
+      id:      { type: text, about: "sun-moon" }
+      lights:  { type: groups, about: "The aspect and its two bodies: sun-moon sun moon" }
+draw:
+  - use: wheel
+    with: { sign_size: 0.106 }
+
+  - for: aspect in aspects
+    draw:
+      - dot:    { at: { x: "{{ aspect.ring1_x }}", y: "{{ aspect.ring1_y }}" }, radius: 0.075,
+                  color: erase, group: "{{ aspect.id }}", only_when: highlighted }
+      - circle: { at: { x: "{{ aspect.ring1_x }}", y: "{{ aspect.ring1_y }}" }, radius: 0.075,
+                  width: hairline, color: "{{ aspect.color }}", group: "{{ aspect.id }}", only_when: highlighted }
+      <span class="c"># ... the same two at ring2 ...</span>
+      - line:
+          from: { x: "{{ aspect.from_x }}", y: "{{ aspect.from_y }}" }
+          to:   { x: "{{ aspect.to_x }}",   y: "{{ aspect.to_y }}" }
+          width: hairline
+          color: "{{ aspect.color }}"
+          group: "{{ aspect.id }}"
+
+  - for: body in bodies
+    draw:
+      - spoke:  { angle: "{{ body.angle }}", radius: 0.66, length: 0.07, width: hairline, color: grid }
+      - symbol: { asset: "{{ body.symbol }}", size: 0.12, color: "{{ body.color }}", group: "{{ body.id }}",
+                  at: { angle: "{{ body.angle }}", distance: "{{ body.distance }}" } }
+      - tap_zone: { at: { angle: "{{ body.angle }}", distance: "{{ body.distance }}" }, radius: 0.08,
+                    reads: "{{ body.reading }}", id: "{{ body.id }}" }
+
+  - for: sign in signs
+    draw:
+      - tap_zone: { at: { angle: "{{ sign.angle }}", distance: 0.825 }, radius: 0.07,
+                    reads: "{{ sign.reading }}", id: "{{ sign.id }}", grow: 1.5 }
+
+  - for: aspect in aspects
+    draw:
+      - tap_zone:
+          along: { from: { x: "{{ aspect.from_x }}", y: "{{ aspect.from_y }}" },
+                   to:   { x: "{{ aspect.to_x }}",   y: "{{ aspect.to_y }}" } }
+          radius: 0.05
+          reads: "{{ aspect.reading }}"
+          id: "{{ aspect.id }}"
+          highlights: "{{ aspect.lights }}"</code></pre>
+<p>This compiles to the same 26 v1 items, in the same order. The wheel's twelve signs come from the <code>data</code> table at build time, so they cost nothing to send.</p>
+<p class="file">skills/molty-astro/SKILL.md (the part about screens)</p>
+<pre><code>---
+name: molty-astro
+description: >-
+  Show the real sky on your human's Molty: tonight's moon and planets, the
+  zodiac chart, the twelve signs, aspects and the next eclipses. Use when the
+  human asks about the moon, planets, their sign, aspects or eclipses, and
+  Molty is paired through the molty skill.
+---
+
+# Molty astro
+
+This skill computes the sky (scripts/sky.mjs); Molty only draws it.
+Every screen, its inputs and a sample call: [build/display.md](build/display.md).
+
+## Which screen when
+
+- "What's in the sky tonight?": [globe](display.yaml#globe) for the Moon, then each
+  planet, [saturn](display.yaml#saturn), then [sign](display.yaml#sign) for the Moon's sign.
+- "Show me my chart" or a horoscope question: [chart](display.yaml#chart), held.
+  A tap on a sign: play [sign_closeup](display.yaml#sign_closeup) and queue the chart behind it.
+- "What does trine mean?": [aspect](display.yaml#aspect), five seconds each.
+- "When is the next eclipse?": [solar_eclipse](display.yaml#solar_eclipse) or
+  [lunar_eclipse](display.yaml#lunar_eclipse).
+
+## Run it
+
+node "&lt;skill-dir&gt;/scripts/astro.mjs" chart --interactive
+<span class="c">...the rest as today: install once, speak first, short lines...</span></code></pre>
+
+<!-- ───────────────────────── -->
+<h2 id="ex3">Example 3: an eclipse in motion</h2>
+<p>The Moon crossing the Sun over six seconds. Today the skill sends 14 keyframes, each with its own on/off window, and the device shows 14 separate black discs one after another. v2 says what is meant: one dot that moves.</p>
+<div class="vs">
+<div>
+<span class="label v1">v1 today</span>
+<pre><code>"solar-eclipse": {
+  "dur": 6,
+  "params": { "path": "list",
+              "moon_r": "number" },
+  "items": [
+    { "k": "ball", "r": 0.5, "img": "sun",
+      "spin": 6 },
+    { "k": "disc", "each": "$path",
+      "x": "@x", "y": "@y",
+      "on": "@on", "off": "@off",
+      "r": "$moon_r", "color": "#000000" }
+  ]
+}</code></pre>
+<p>The agent sends:</p>
+<pre><code>"path": [
+  { "x": -0.9, "y": 0.31, "on": 0.3,  "off": 0.69 },
+  { "x": -0.76,"y": 0.26, "on": 0.69, "off": 1.07 },
+  <span class="c">... 14 in all ...</span>
+], "moon_r": 0.51</code></pre>
+</div>
+<div>
+<span class="label v2">v2 screens/solar-eclipse.yaml</span>
+<pre><code>about: The Moon passing in front of the Sun.
+duration: 6
+inputs:
+  path:
+    type: path
+    about: >-
+      The Moon's track against the Sun, offsets on the
+      sky (north up, east left), the Sun's radius 0.5.
+  moon_size:
+    type: distance
+    about: The Moon's radius, the Sun's being 0.5.
+    default: 0.5
+draw:
+  - globe: { radius: 0.5, map: sun-map, spin: 6 }
+  - dot:
+      radius: "{{ moon_size }}"
+      color: erase
+      move: { along: "{{ path }}", ease: smooth }</code></pre>
+<p>The agent sends:</p>
+<pre><code>"path": [
+  { "time": 0.3, "x": -0.9, "y": 0.31 },
+  { "time": 3.0, "x": 0.02, "y": 0.0 },
+  { "time": 5.7, "x": 0.9,  "y": -0.3 }
+]</code></pre>
+</div>
+</div>
+<p class="note warn"><code>move</code> and <code>default</code> both need small firmware additions (<a href="#device">next section</a>). Until they land, this screen is written in the stepped form: <code>for: key in path</code> with a <code>dot</code> that has <code>show: { from: "{{ key.from }}", until: "{{ key.until }}" }</code>, which compiles to exactly today's item.</p>
+
+<!-- ───────────────────────── -->
+<h2 id="schema">JSON Schema outline</h2>
+<p>Published at <code>schema/display-2.json</code> (and its raw GitHub URL). YAML files point at it with the <code>yaml-language-server</code> comment; JSON files with <code>"$schema"</code>. VS Code, Zed and agents all autocomplete and explain from it: every property carries a <code>description</code> and, where it helps, <code>examples</code>.</p>
+<pre><code>{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/apresmoi/molty.uno/main/schema/display-2.json",
+  "title": "Molty display v2",
+  "type": "object",
+  "required": ["molty", "package", "screens"],
+  "additionalProperties": false,
+  "properties": {
+    "molty":   { "const": "display/2" },
+    "package": { "$ref": "#/$defs/package" },
+    "tokens":  { "$ref": "#/$defs/tokens" },
+    "assets":  { "type": "array", "items": { "$ref": "#/$defs/assetGroup" } },
+    "data":    { "type": "object", "additionalProperties": { "type": "array" } },
+    "parts":   { "type": "object", "additionalProperties": { "$ref": "#/$defs/part" } },
+    "screens": { "type": "object", "propertyNames": { "$ref": "#/$defs/name" },
+                 "additionalProperties": { "oneOf": [ { "$ref": "#/$defs/screen" },
+                                                      { "type": "string", "pattern": "^screens/.+\\.ya?ml$" } ] } }
+  },
+  "$defs": {
+    "name":    { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,23}$" },
+    "binding": { "type": "string", "pattern": "^\\{\\{ ?[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)? ?\\}\\}$",
+                 "description": "A whole value read from an input, or from a for element: \"{{ body.angle }}\"" },
+    "num":     { "oneOf": [ { "type": "number" }, { "$ref": "#/$defs/binding" } ] },
+    "color":   { "oneOf": [ { "pattern": "^#[0-9a-f]{6}$" }, { "enum": ["ink", "grid", "dim", "white", "erase"] },
+                            { "$ref": "#/$defs/name" }, { "$ref": "#/$defs/binding" } ] },
+    "place":   { "oneOf": [ { "const": "center" },
+                            { "type": "object", "required": ["x", "y"], "properties": { "x": { "$ref": "#/$defs/num" }, "y": { "$ref": "#/$defs/num" } }, "additionalProperties": false },
+                            { "type": "object", "required": ["angle", "distance"], "properties": { "angle": { "$ref": "#/$defs/num" }, "distance": { "$ref": "#/$defs/num" } }, "additionalProperties": false } ] },
+    "common":  { "properties": { "color": { "$ref": "#/$defs/color" },
+                                 "show": { "properties": { "from": { "$ref": "#/$defs/num" }, "until": { "$ref": "#/$defs/num" } } },
+                                 "group": { "type": "string" }, "only_when": { "const": "highlighted" },
+                                 "move": { "required": ["along"], "properties": { "along": { "$ref": "#/$defs/binding" }, "ease": { "enum": ["linear", "smooth"] } } } } },
+    "screen":  { "type": "object", "required": ["about", "draw"], "additionalProperties": false,
+                 "properties": { "about": { "type": "string" },
+                                 "duration": { "oneOf": [ { "type": "number", "minimum": 0, "maximum": 600 }, { "const": "hold" } ] },
+                                 "subtitles": { "oneOf": [ { "enum": ["bottom", "middle"] }, { "type": "number", "minimum": -1, "maximum": 1 } ] },
+                                 "inputs": { "type": "object", "maxProperties": 8, "additionalProperties": { "$ref": "#/$defs/input" } },
+                                 "draw": { "$ref": "#/$defs/draw" } } },
+    "input":   { "type": "object", "required": ["type", "about"],
+                 "properties": { "type": { "enum": ["number", "angle", "distance", "amount", "seconds", "text", "reading",
+                                                    "color", "asset", "groups", "list", "path"] },
+                                 "about": { "type": "string" }, "default": {}, "example": {}, "min": { "type": "number" },
+                                 "max": { "type": "number" }, "of": {} } },
+    "draw":    { "type": "array", "minItems": 1, "items": { "oneOf": [
+                   { "$ref": "#/$defs/shape/circle" }, { "$ref": "#/$defs/shape/arc" }, { "$ref": "#/$defs/shape/ticks" },
+                   { "$ref": "#/$defs/shape/spoke" }, { "$ref": "#/$defs/shape/line" }, { "$ref": "#/$defs/shape/dot" },
+                   { "$ref": "#/$defs/shape/globe" }, { "$ref": "#/$defs/shape/symbol" }, { "$ref": "#/$defs/shape/label" },
+                   { "$ref": "#/$defs/shape/tap_zone" }, { "$ref": "#/$defs/for" }, { "$ref": "#/$defs/use" } ] } },
+    "shape": {
+      "circle": { "type": "object", "required": ["circle"], "additionalProperties": false,
+                  "properties": { "circle": { "allOf": [ { "$ref": "#/$defs/common" } ], "required": ["radius"],
+                    "properties": { "radius": { "$ref": "#/$defs/num", "description": "Fraction of the screen radius." },
+                                    "at": { "$ref": "#/$defs/place" }, "width": { "$ref": "#/$defs/width" } } } } }
+      <span class="c">// ... one entry per shape, the same way ...</span>
+    },
+    "for": { "required": ["for", "draw"], "properties": { "for": { "pattern": "^[a-z_]+ in [a-z_]+$" }, "draw": { "$ref": "#/$defs/draw" } } },
+    "use": { "required": ["use"], "properties": { "use": { "$ref": "#/$defs/name" }, "with": { "type": "object" } } }
+  }
+}</code></pre>
+<p>The schema checks shape and spelling. What it cannot know (does this binding name a declared input, does the screen fit in 128 items with 32 bodies, does the asset exist) the compiler checks next.</p>
+
+<!-- ───────────────────────── -->
+<h2 id="pipeline">Check, build, preview, publish</h2>
+<div class="flow">
+  <div class="step"><b>1. Write</b>SKILL.md, display.yaml (or JSON), files in assets/. The editor autocompletes from the schema.</div>
+  <div class="arrow">&rarr;</div>
+  <div class="step"><b>2. Check</b><code>molty-display check</code>: schema, then device rules, then SKILL.md links.</div>
+  <div class="arrow">&rarr;</div>
+  <div class="step"><b>3. Build</b><code>molty-display build</code>: assets to masks and images, screens to v1 layouts, cost report, display.md, input schemas.</div>
+  <div class="arrow">&rarr;</div>
+  <div class="step"><b>4. Preview</b><code>molty-display preview</code>: a local browser page. Pick a screen, edit inputs, scrub time, tap zones.</div>
+  <div class="arrow">&rarr;</div>
+  <div class="step"><b>5. Publish</b>Commit the skill and the built package. <code>check-packages</code> proves the build reproduces; Molty installs it as today.</div>
+</div>
+<h3>What each check catches</h3>
+<table>
+<tr><th>layer</th><th>catches</th></tr>
+<tr><td>JSON Schema</td><td>Unknown keys, misspelt shapes, wrong types, a <code>color</code> that is neither a token nor <code>#rrggbb</code>, a missing <code>about</code>.</td></tr>
+<tr><td>Device rules (compiler)</td><td>Bindings name declared inputs of a matching type; <code>{{ body.x }}</code> only inside <code>for: body in ...</code>; assets and tokens exist; at most 64 items a screen, 8 inputs, 32 screens, 64 assets of 128 px; the worst case (every list at its <code>max</code>) stays within 128 items, 40 letters and 32 groups; literal text never starts with <code>$</code> or <code>@</code> (v1 reserves them); the package fits 256 KB.</td></tr>
+<tr><td>Skill links</td><td>Every <code>display.yaml#name</code> in SKILL.md is a real screen; screens SKILL.md never mentions are listed.</td></tr>
+<tr><td>Agent side, at run time</td><td><code>build/inputs/&lt;screen&gt;.schema.json</code> lets the skill (or the relay, later) check params before <code>scene.play</code>, instead of the device answering <code>bad_params</code>.</td></tr>
+</table>
+<p>Errors name the file, the line and the fix: <code>screens/chart.yaml:41  symbol.asset "{{ body.glyph }}": bodies has no field glyph (fields: symbol, angle, distance, color, reading, id)</code>.</p>
+<p>The preview reuses <code>packages/tools/play.mjs</code> (the braille lattice and <code>--hd</code> views) on the compiled layout, so what you see is what the device would draw.</p>
+
+<!-- ───────────────────────── -->
+<h2 id="device">What the device keeps</h2>
+<p>Phase 1 ships with <strong>no firmware change</strong>: the compiler's output is a <code>molty-pkg/1</code> file that <code>pkg_parse.c</code> already accepts. Each feature below that needs the device is optional and small; the compiler refuses it until the firmware advertises it.</p>
+<table>
+<tr><th>feature</th><th>phase 1 (no firmware change)</th><th>firmware addition</th></tr>
+<tr><td>Input <code>default</code></td><td>Documented in display.md; the agent must still send every input.</td><td>Optional params with a default in the layout; a few lines in the param check.</td></tr>
+<tr><td><code>move</code> along a path</td><td>Refused; use the stepped <code>show</code> form.</td><td>Interpolate x, y between keyframes in <code>scene_player.c</code>.</td></tr>
+<tr><td><code>lit_side: right | left</code> from an input</td><td>A literal word is fine; an input sends <code>1</code> or <code>-1</code>.</td><td>Accept the words at run time.</td></tr>
+<tr><td>Polar <code>from</code>/<code>to</code> on a <code>line</code> from inputs</td><td>Literal polar is converted at build time; bound points must be <code>{x, y}</code>.</td><td>A polar flag per point.</td></tr>
+<tr><td>Text with a slot (<code>"Sun in {{ sign }}"</code>)</td><td>Refused; send the finished text.</td><td>Not planned: keeps the device free of string building.</td></tr>
+</table>
+<p class="note">Why not a new compact wire format? The astrology package is 74 KB: 63 KB of assets (base64 masks and images) and 11 KB of layouts. Shrinking layouts would save little; a binary asset encoding would save the base64 third, but is a separate decision (open question 4).</p>
+
+<!-- ───────────────────────── -->
+<h2 id="migration">Moving from v1</h2>
+<ul>
+  <li><strong><code>molty-display convert packages/astrology/astrology.json --to skills/molty-astro</code></strong> writes a display.yaml and turns every asset back into a PNG in <code>assets/</code>.</li>
+  <li>The conversion is mechanical: <code>k</code> to the shape name, <code>$x</code> to <code>{{ x }}</code>, each run of <code>"each": "$bodies"</code> to a <code>for</code> block, <code>polar</code> to <code>{angle, distance}</code>, hex colors that match a token to the token.</li>
+  <li>It cannot guess what <code>@a</code> means, so list fields keep their v1 names and every input gets <code>about: TODO</code>, which the checker reports until a person or agent fills it in. Renaming <code>a</code> to <code>angle</code> is then a find-and-replace the checker verifies.</li>
+  <li><strong>The guarantee:</strong> for every package in the repo, <code>build(convert(v1))</code> produces the same layouts and assets as the v1 file. A test runs it on all of them and fails on any difference.</li>
+  <li>The device keeps reading v1 files forever; nothing installed today needs reinstalling.</li>
+  <li>Creature packages (duck, cat, octopus) stay as they are: their rig and clips come from Blender and <code>tools/creatures/kit.mjs</code>. See open question 5.</li>
+</ul>
+
+<!-- ───────────────────────── -->
+<h2 id="questions">Open questions for Juan</h2>
+<ol>
+  <li><strong>Angles: maths or clock?</strong> This proposal keeps today's maths convention (0 at 3 o'clock, counter-clockwise). A clock convention (0 at 12, clockwise) reads more naturally to people but breaks every v1 number and the astrology formulas. Keep maths?</li>
+  <li><strong>Asset names: file name or path?</strong> Bare file names (<code>aries</code>) need no firmware change but force unique names (<code>sun</code> vs <code>sun-map</code>). Paths (<code>signs/aries</code>) read better and need the firmware to allow <code>/</code> in names, one character in <code>key_ok</code>.</li>
+  <li><strong>Rename <code>layout</code> to <code>screen</code> in the command?</strong> The docs would say screen everywhere; the wire can keep <code>layout</code> with the relay accepting both.</li>
+  <li><strong>Binary assets?</strong> Shipping masks and images as raw bytes instead of base64 cuts about a third of a package. Worth a format change now, or later when a package nears 256 KB?</li>
+  <li><strong>Creatures in the same pair?</strong> Should a creature also be a skill folder with a <code>creature.yaml</code>, or stay a Blender-built package outside this format?</li>
+  <li><strong>Where does the schema live?</strong> <code>schema/display-2.json</code> in this repo (raw GitHub URL), or a stable <code>molty.uno/schema/...</code> address that survives a repo move?</li>
+  <li><strong>One file or split by default?</strong> The recommendation is one file until about 5 screens. Would you rather every skill start split, so they all look alike?</li>
+</ol>
+
+</main>
+</div>
+</body>
+</html>

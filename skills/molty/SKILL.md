@@ -18,9 +18,9 @@ Resolve `<skill-dir>` to this file's directory.
 ## Connect
 
 The human's setup message gives you a **Device** id (`molty-xxxxxxxxxx`) and an
-8-character **Code** (`[A-Z2-9]`, the link code; it rotates every 15 min and after each
-pairing). Molty uses the official relay unless the message also names a **Relay** (a
-private one, see [self-hosting](references/self-hosting.md)).
+8-character **Code** (`[A-Z2-9]`, the link code, which rotates). Molty uses the official
+relay unless the message also names a **Relay** (a private one, see
+[self-hosting](references/self-hosting.md)).
 
 1. **Pair once.** With a shell (macOS/Linux, `zsh` or `bash`, `curl`, `python3`):
 
@@ -50,7 +50,7 @@ private one, see [self-hosting](references/self-hosting.md)).
 | `talk.sh "text" --no-listen` | speak only | — |
 | `talk.sh "text" --reply <turn_id>` | answer an `utterance` (claims the turn) | `HEARD: …` |
 | `quick.sh <id> [--reply <turn_id>]` | play a cached quick phrase now | the job |
-| `ask.sh "question" yes no later` | speak + 1–5 tap buttons (labels ≤ 8 chars) | `ANSWER: yes \| index 0` |
+| `ask.sh "question" yes no later` | speak + show it, 1–5 tap answers (labels ≤ 14 chars, 10 for 3, 8 for 4–5) | `ANSWER: yes \| index 0` |
 | `mood.sh happy [hold_s]` | set a mood | the result |
 | `act.sh eat` | a gesture from `device.creature.gestures` (the cat has `eat`) | the result |
 | `progress.sh 40 "step"` / `progress.sh done` | ring fills to 40% / finishes | the result |
@@ -58,13 +58,13 @@ private one, see [self-hosting](references/self-hosting.md)).
 
 ## Key rules
 
-- **Speak first, always.** Your first call on every wake comes before any reasoning or other
-  tool. No planning, lookups or status checks.
+- **Speak first, always**: your first call on every wake, before any reasoning, planning,
+  lookup, status check or other tool.
   - Can answer from what you know → one `talk`, the answer. Nothing else in the turn.
   - Needs any work (search, tools, a long think) → say what you'll do and start working:
     `talk {"say":"Searching for that. [working]"}`. Molty animates itself until you
-    speak again; no gestures to fill the wait. Over ~20 s: `progress` at each step (a ring
-    fills), `progress done` at the end. Then answer.
+    speak again; no gestures to fill the wait. Over ~20 s: `progress` at each step,
+    `progress done` at the end. Then answer.
 - **Fastest model for that first line**, always; a slower one only for the work behind it.
 - **Follow a `202 pending` talk to its end**: their words are in it.
 - **Wake only on `utterance`** unless your human gave an input a job: other runs collide.

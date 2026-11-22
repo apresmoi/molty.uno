@@ -18,7 +18,8 @@ pairing stores the device and token this skill reads), and Molty firmware with `
 
 ```sh
 node "<skill-dir>/scripts/astro.mjs" tonight          # moon, then Mercury..Saturn, then the moon's sign (7 scenes, 19 s)
-node "<skill-dir>/scripts/astro.mjs" chart            # all ten bodies on the zodiac wheel with their aspects (held 60 s)
+node "<skill-dir>/scripts/astro.mjs" chart            # all ten bodies on the zodiac wheel joined by the three tightest aspects (held 60 s; --all: every one that fits)
+node "<skill-dir>/scripts/astro.mjs" chart --interactive  # the chart, and a tapped sign opens up close (5 min, see below)
 node "<skill-dir>/scripts/astro.mjs" signs            # the twelve signs (36 s)
 node "<skill-dir>/scripts/astro.mjs" aspects [trine]  # each aspect on the degree grid, or one (5 s each)
 node "<skill-dir>/scripts/astro.mjs" events [lunar-eclipse]  # next transit, occultation, close pass, solar and lunar eclipse (6 s each)
@@ -31,17 +32,29 @@ nothing). Event kinds: `transit`, `occultation`, `appulse`, `solar-eclipse`, `lu
 Each run prints `SAY: <one line>` and `FACTS: <json>`. The first scene replaces the screen,
 the rest queue behind it; Molty melts back to its creature when they end.
 
+## Screens
+
+Inputs and a call for each: [build/display.md](build/display.md).
+[globe](display.yaml#globe), [saturn](display.yaml#saturn), [sign](display.yaml#sign), [chart](display.yaml#chart), [sign-closeup](display.yaml#sign-closeup), [signs](display.yaml#signs), [aspect](display.yaml#aspect), [transit](display.yaml#transit), [occultation](display.yaml#occultation), [appulse](display.yaml#appulse), [solar-eclipse](display.yaml#solar-eclipse), [lunar-eclipse](display.yaml#lunar-eclipse).
+
+## Tap to read (chart)
+
+On the chart a tap on a planet or an aspect line shows its
+reading on Molty at once ("Sun in Gemini: you shine by talking and learning."), with no help from you. A tap on a
+sign (anywhere in its block of the zodiac ring) opens the **sign close-up** on Molty itself: that sign big with its
+planets on its degree dial, each lit in turn, and the sign's own reading as the subtitle (Molty's, no voice); the
+chart comes back when its time is up, or at once on a tap beside it. The tap event you get names the sign (`spot`) and says Molty opened it (`opened: "sign-closeup"`).
+`chart --interactive` adds the voice: it reads the tapped sign aloud while its close-up shows. Start it in the
+background, speak its `SAY` line, and don't talk over a close-up ([interactive.md](references/interactive.md)).
+
 ## Install, once
 
 The first scene installs the package if Molty lacks it (or has an older one): **Molty asks your
-human on its screen** (two buttons: "Astrolog" and "no") and waits up to a minute for one tap; the
+human on its screen** ("INSTALL ASTROLOGY?": `install` or `not now`) and waits up to a minute for one tap; the
 script waits for the outcome (about 2 min at most). So the first time, say
-so before you run it: `talk {"say":"Molty will ask to install the astrology pack: tap yes.","listen":false}`.
+so before you run it: `talk {"say":"Molty will ask to install the astrology pack: tap install.","listen":false}`.
 Or install up front: `astro.mjs install`. `astro.mjs status` lists what Molty has;
 `astro.mjs uninstall` removes it (Molty frees the space; ask your human first).
-
-Molty downloads the file itself, from this repo (`packages/index.json` names it, with its size
-and sha256): the relay never carries it, and Molty refuses a file whose hash differs.
 
 ## Speak with it (the molty skill's voice rules hold)
 
@@ -84,11 +97,5 @@ A wiped store (a factory flash) is handled: the script reinstalls once and plays
 - **Claude Code, Codex**: the molty plugin ships this skill next to `molty`; needs `node` 18+.
 - **OpenClaw and other long-lived agents**: install `skills/molty-astro` beside `skills/molty`
   from `https://github.com/apresmoi/molty.uno/tree/main/skills`; same scripts.
-- **Grok and other hosted bots without a shell**: send the commands over REST yourself
-  ([layouts.md](references/layouts.md)): `pkg.install` from `packages/index.json`, then
-  `scene.play` with params you compute with your own code tool (any ephemeris, e.g.
-  astronomy-engine for Python or JS). [layouts.md](references/layouts.md) defines every param.
-
-## References
-
-- [layouts.md](references/layouts.md): every layout and its params, the commands in full, for agents without a shell.
+- **Grok and other hosted bots without a shell**: send the commands yourself
+  ([commands.md](references/commands.md)), computing the inputs with your own code tool.

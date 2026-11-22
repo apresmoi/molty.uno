@@ -58,7 +58,8 @@ void fluid_sim_allow_internal(bool on) { s_internal_ok = on; }
 uint32_t fluid_prof[FP_N];
 const char *const FLUID_PROF_NAMES[FP_N] = {
     "target", "bg", "swirl", "wave", "demand", "flow", "advect", "relax", "color", "view",
-    "c_update", "c_raster", "c_clear", "c_vert", "c_samples", "c_agg", "c_fill", "d_sample", "d_raster",
+    "c_update", "c_raster", "c_clear", "c_vert", "c_samples", "c_agg", "c_fill",
+    "k_play", "k_proj", "k_solid", "k_lines", "k_feat", "k_halo", "k_cells", "k_wait", "k_band", "d_sample", "d_raster",
 };
 
 static inline int ffloor(float x) { int i = (int)x; return i - (x < (float)i); }
@@ -575,6 +576,7 @@ void fluid_sim_step(fluid_sim_t *s, float dt) {
         s->hp = h; s->h = hp;
     }
     FLUID_PROF_END(FP_WAVE, c0); c0 = fluid_cycles();
+    if (p->still) return;
 
     /* ---- 2. demand potential φ = blur(T − ink) at two scales (Q13) ---- */
     int16_t *D = s->D, *phi = s->phi, *ink = s->ink, *T = s->T, *big = s->ink2;
@@ -666,6 +668,13 @@ void fluid_sim_step(fluid_sim_t *s, float dt) {
 /* Colour + accent ride the same flow; once per frame (dt = the frame's stepped time). */
 void fluid_sim_color(fluid_sim_t *s, float dt) {
     if (dt <= 0.f) return;
+    if (s->p.still) {                                    /* no flow: each cell its target's colour */
+        for (int k = 0; k < s->N; k++) {
+            const uint32_t tc = s->tcol[k];
+            s->col[k] = (fluid_rgba16_t){ (uint16_t)((tc & 255) * 257u), (uint16_t)((tc >> 8 & 255) * 257u), (uint16_t)((tc >> 16 & 255) * 257u), (uint16_t)((tc >> 24) * 257u) };
+        }
+        return;
+    }
     FLUID_PROF_BEGIN(c0);
     const int W = s->W, H = s->H;
     const flow_k_t fc = flow_consts(s);

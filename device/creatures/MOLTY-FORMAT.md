@@ -1,15 +1,27 @@
 # .molty — swappable creatures for the device
 
+> Creature **packages** (`packages/<id>/<id>.json`, docs/PACKAGES.md section 5) are the other way to ship a creature; a
+> rigged one (the cat: baked Blender clips, drawn straight on the braille dots) is described in docs/CREATURES.md section 12.
+> This file is the older binary `.molty` form of the cute-kit creatures.
+
 A `.molty` file is one cute-kit creature (`js/cute/kit.js` `defineCreature` spec) in a
 compact binary form. The firmware holds the generic kit **runtime**; it does not hold any
 creature. A creature is data, uploaded at runtime, so creatures can be swapped without a
 reflash.
 
+```mermaid
+flowchart LR
+  accTitle: From a creature spec to the fluid on the device
+  spec[Creature<br>spec] -->|export| file[.molty file,<br>about 1 KB]
+  file -->|upload| stored[Stored<br>on Molty]
+  stored -->|hot reload| parse[Parse,<br>validate]
+  parse --> rig[Meshes, rig,<br>moods, raster]
+  rig --> target[Fluid<br>target]
 ```
-js/cute/*.js spec ──molty-export.mjs──▶ name.molty (≈0.4–1.3 KB) ──POST /api/creature/file──▶ /spiffs/creature.molty
-                                                                                          │ hot reload
-            firmware: cute_spec.c (parse+validate) → cute_rig.c (meshes, rig, moods, raster) → fluid target
-```
+
+The spec is a `js/cute/*.js` file. `molty-export.mjs` writes `name.molty` (about 0.4 to 1.3 KB), `POST /api/creature/file`
+uploads it, and the device keeps it as `/spiffs/creature.molty`. In the firmware `cute_spec.c` parses and validates it
+and `cute_rig.c` builds the meshes, rig, moods and raster that fill the fluid target.
 
 - Writer: `device/creatures/tools/molty-export.mjs` (`node … molty-export.mjs <id|all> [outdir] [--json]`).
   Hook stand-ins live in `tools/molty-behaviours.mjs`.

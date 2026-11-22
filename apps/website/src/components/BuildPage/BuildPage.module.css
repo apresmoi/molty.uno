@@ -1,8 +1,9 @@
-/* /build/: a heading drawn by the page fluid (FluidField, fixed behind), then plain
-   monospace sections over quiet zones of the fluid. Same grammar as the landing: bracket
-   links, dotted rules, ink and dim. */
+/* /build/: a heading drawn by the device's renderer (WordHeading) over the page's water (its
+   dust a background tile, a tap's wave on PageWater, fixed behind), then plain monospace
+   sections. Same grammar as the landing: bracket links, dotted rules, ink and dim. */
 .root {
   position: relative;
+  background: var(--m-bg) var(--m-dust) repeat 0 0 / var(--m-dust-size);
   font: var(--m-text-md) / 1.6 var(--m-font-mono);
   overflow-x: clip;
 }
@@ -24,22 +25,8 @@
   padding-block: calc(var(--m-header-height) + var(--m-space-6)) var(--m-space-8);
 }
 .word {
-  width: fit-content;
-  max-width: 100%;
-  margin: var(--m-space-4) 0 var(--m-space-4);
-  color: var(--m-ink);
-  font-family: var(--m-font-mono);
-  font-size: var(--m-text-page);
-  font-weight: 700;
-  line-height: 1;
-  letter-spacing: -0.03em;
-  white-space: nowrap;
-}
-:global(html[data-fluid="live"]) .word {
-  color: transparent;
-}
-.word::selection {
-  color: var(--m-ink);
+  --word-canvas: min(460px, 100vw - 2 * var(--m-gutter));
+  margin: var(--m-space-4) 0;
 }
 .lede {
   width: fit-content;

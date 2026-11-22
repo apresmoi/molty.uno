@@ -5,12 +5,14 @@
  * bookkeeping and the guarded wrappers the core calls. Nothing here knows a pin.
  */
 #include "molty_board.h"
-#include "link_pair.h"
 #include "sense.h"
 
 #include <stdio.h>
 #include <string.h>
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
 #include "esp_flash.h"
 #include "esp_psram.h"
 #include "sdkconfig.h"
@@ -20,6 +22,7 @@ static const char *TAG = "board";
 #define B molty_board_desc
 
 static uint32_t s_caps;   /* what came up; written once by molty_board_init() before any task */
+static SemaphoreHandle_t s_bus;   /* the panel's bus, one owner at a time (display, below) */
 
 static const char *const CAP_NAMES[MOLTY_CAP_COUNT] = {
     "display", "touch", "imu", "mic", "speaker", "btn_accept", "btn_reject", "battery", "usb_net", "serial",
@@ -117,6 +120,7 @@ uint32_t molty_board_init(void)
         return 0;
     }
     uint32_t want = caps_with_ops();
+    s_bus = xSemaphoreCreateMutex();                   /* (none: the calls go unguarded, as before) */
     uint32_t up = B.init ? B.init() : 0;
     s_caps = up & want;
     char list[96] = "";
@@ -142,6 +146,38 @@ molty_shape_t molty_display_shape(void)   { return B.shape; }
 
 /* ── display ──────────────────────────────────────────────────────────────── */
 
+/* The panel's bus has one owner at a time, here for every caller: each call that talks to the panel holds s_bus (its
+ * driver's transfers are not safe from two tasks at once), and a task's async transfer counts as its own until it is
+ * collected (molty_display_blit_wait, or any later call of that task). Another task coming meanwhile is a breach of the
+ * hand-over: logged once a boot (both tasks named), then served in turn. A holder that never lets go (a dead bus) makes
+ * the others give up after BUS_WAIT_MS with ESP_ERR_TIMEOUT, never wait for ever. */
+#define BUS_WAIT_MS 500
+static TaskHandle_t s_async;                           /* the task whose async transfer is out, not collected */
+static void bus_breach(const char *what, const char *why, TaskHandle_t other)
+{
+    static bool logged;
+    if (logged) return;
+    logged = true;
+    ESP_LOGE(TAG, "panel: %s from %s while %s %s", what, pcTaskGetName(NULL), other ? pcTaskGetName(other) : "?", why);
+}
+static bool bus_in(const char *what)
+{
+    if (!s_bus) return true;
+    if (xSemaphoreTake(s_bus, 0) != pdTRUE) {
+        bus_breach(what, "is in the driver", xSemaphoreGetMutexHolder(s_bus));
+        if (xSemaphoreTake(s_bus, pdMS_TO_TICKS(BUS_WAIT_MS)) != pdTRUE) return false;
+    }
+    if (s_async && s_async != xTaskGetCurrentTaskHandle()) bus_breach(what, "has a transfer out", s_async);
+    return true;
+}
+static esp_err_t bus_out(esp_err_t e, bool out)
+{
+    s_async = out && e == ESP_OK ? xTaskGetCurrentTaskHandle() : NULL;
+    if (s_bus) xSemaphoreGive(s_bus);
+    return e;
+}
+#define ON_BUS(what, call, out) (bus_in(what) ? bus_out((call), (out)) : ESP_ERR_TIMEOUT)
+
 uint16_t *molty_display_framebuffer(void)
 {
     return (s_caps & MOLTY_CAP_DISPLAY) ? B.framebuffer() : NULL;
@@ -149,34 +185,62 @@ uint16_t *molty_display_framebuffer(void)
 
 esp_err_t molty_display_flush(void)
 {
-    return (s_caps & MOLTY_CAP_DISPLAY) ? B.flush() : ESP_ERR_INVALID_STATE;
+    return (s_caps & MOLTY_CAP_DISPLAY) ? ON_BUS("flush", B.flush(), false) : ESP_ERR_INVALID_STATE;
 }
 
 esp_err_t molty_display_flush_rows(int y0, int y1)
 {
-    return (s_caps & MOLTY_CAP_DISPLAY) ? B.flush_rows(y0, y1) : ESP_ERR_INVALID_STATE;
+    return (s_caps & MOLTY_CAP_DISPLAY) ? ON_BUS("flush", B.flush_rows(y0, y1), false) : ESP_ERR_INVALID_STATE;
 }
 
 esp_err_t molty_display_blit(int x, int y, int w, int h, const uint16_t *px)
 {
     if (!(s_caps & MOLTY_CAP_DISPLAY)) return ESP_ERR_INVALID_STATE;
     if (x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > B.width || y + h > B.height) return ESP_ERR_INVALID_ARG;
-    if (B.blit) return B.blit(x, y, w, h, px);
+    if (B.blit) return ON_BUS("blit", B.blit(x, y, w, h, px), false);
     uint16_t *fb = B.framebuffer();
     for (int r = 0; r < h; r++) memcpy(fb + (size_t)(y + r) * B.width + x, px + (size_t)r * w, (size_t)w * sizeof(uint16_t));
-    return B.flush_rows(y, y + h);
+    return molty_display_flush_rows(y, y + h);
 }
+
+esp_err_t molty_display_blit_async(int x, int y, int w, int h, const uint16_t *px)
+{
+    if (!(s_caps & MOLTY_CAP_DISPLAY)) return ESP_ERR_INVALID_STATE;
+    if (!B.blit_async) return molty_display_blit(x, y, w, h, px);
+    if (x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > B.width || y + h > B.height) return ESP_ERR_INVALID_ARG;
+    return ON_BUS("blit", B.blit_async(x, y, w, h, px), true);
+}
+
+esp_err_t molty_display_blit_wait(void)
+{
+    return (s_caps & MOLTY_CAP_DISPLAY) && B.blit_wait ? ON_BUS("wait", B.blit_wait(), false) : ESP_OK;
+}
+
+void molty_display_blit_mirror(bool on) { if ((s_caps & MOLTY_CAP_DISPLAY) && B.blit_mirror) B.blit_mirror(on); }
+void molty_display_blit_prof(uint32_t *out) { if ((s_caps & MOLTY_CAP_DISPLAY) && B.blit_prof) B.blit_prof(out); }
+void molty_display_te(molty_te_t *out, bool window)
+{
+    *out = (molty_te_t){ 0 };
+    if ((s_caps & MOLTY_CAP_DISPLAY) && B.display_te) B.display_te(out, window);
+}
+
+bool molty_display_te_wait(uint32_t after, int timeout_ms)
+{
+    return (s_caps & MOLTY_CAP_DISPLAY) && B.display_te_wait && B.display_te_wait(after, timeout_ms);
+}
+
+bool molty_display_blit_can_overlap(void) { return (s_caps & MOLTY_CAP_DISPLAY) && B.blit_async && B.blit_wait; }
 
 esp_err_t molty_display_power(bool on)
 {
     if (!(s_caps & MOLTY_CAP_DISPLAY)) return ESP_ERR_INVALID_STATE;
-    return B.display_power ? B.display_power(on) : ESP_ERR_NOT_SUPPORTED;
+    return B.display_power ? ON_BUS("power", B.display_power(on), false) : ESP_ERR_NOT_SUPPORTED;
 }
 
 esp_err_t molty_display_level(uint8_t level)
 {
     if (!(s_caps & MOLTY_CAP_DISPLAY)) return ESP_ERR_INVALID_STATE;
-    return B.display_level ? B.display_level(level) : ESP_ERR_NOT_SUPPORTED;
+    return B.display_level ? ON_BUS("level", B.display_level(level), false) : ESP_ERR_NOT_SUPPORTED;
 }
 
 esp_err_t molty_power_off(void) { return B.power_off ? B.power_off() : ESP_ERR_NOT_SUPPORTED; }
@@ -188,8 +252,7 @@ int molty_touch_poll(uint16_t *xs, uint16_t *ys, int max)
     if (!(s_caps & MOLTY_CAP_TOUCH)) return 0;
     if (max > MOLTY_TOUCH_MAX_POINTS) max = MOLTY_TOUCH_MAX_POINTS;
     int n = B.touch_poll(xs, ys, max);
-    link_pair_touch(n);   /* the one touch poller also drives the pairing tap */
-    sense_touch(n, xs, ys);   /* ...and the agent's tap events */
+    sense_touch(n, xs, ys);   /* the one touch poller drives the agent's tap events, a question's and a pairing's answers */
     return n;
 }
 

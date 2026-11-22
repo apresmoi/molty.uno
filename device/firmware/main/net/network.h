@@ -32,6 +32,9 @@ esp_err_t net_wifi_join(const char *ssid, const char *pass, uint32_t timeout_ms)
 int       net_wifi_scan(net_ap_t *out, int max);
 /** True when connected; the station's IPv4 address into ip. */
 bool      net_wifi_ip(char *ip, size_t len);
+/** Dev: drop the station now (a real STA_DISCONNECTED, the drop path) and hold reconnects off
+ *  for hold_s (max 600), then the usual back-off. POST /api/diag/wifi_drop?hold=<s>. */
+esp_err_t net_wifi_drop(uint32_t hold_s);
 
 /* GET /api/status, GET /api/scan, POST /api/set_creds, POST /api/forget. */
 esp_err_t net_http_register(httpd_handle_t server);

@@ -106,3 +106,46 @@
   --sl-text-h3: 18px;
   --sl-text-h4: 16px;
 }
+
+/* Diagrams: a ```mermaid block, drawn at build time by @glyphcss/diagrams as plain text
+   (integrations/markdown/glyphDiagrams.ts). The figure is the container: the wide drawing shows
+   when its box has room, else the narrow one; each scales its type to the box (--cols is its
+   width in characters) and scrolls inside the box rather than shrink below 9.5px. */
+.glyph-diagram {
+  container-type: inline-size;
+  margin: 1.5rem 0;
+}
+.glyph-diagram > div {
+  overflow-x: auto;
+}
+.glyph-diagram pre {
+  width: max-content;
+  margin: 0 auto; /* centred while it fits; flush left once it has to scroll */
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--m-ink);
+  font-family: var(--m-font-mono);
+  font-size: clamp(9.5px, calc(100cqw / (var(--cols) * 0.61)), 13px);
+  line-height: 1.2;
+  white-space: pre;
+}
+.glyph-diagram i {
+  color: var(--m-dim);
+  font-style: normal;
+}
+.glyph-diagram b {
+  color: var(--m-accent);
+  font-weight: inherit;
+}
+.glyph-diagram-wide {
+  display: none;
+}
+@container (min-width: 36rem) {
+  .glyph-diagram-wide {
+    display: block;
+  }
+  .glyph-diagram-narrow {
+    display: none;
+  }
+}
