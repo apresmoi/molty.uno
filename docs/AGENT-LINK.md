@@ -1135,6 +1135,7 @@ device dials; agents/CLI use its http(s) twin (`ws://h` → `http://h`, `wss://h
 | `POST /api/creature/state {ring_color}` (with the other fluid fields) | the state JSON; saved to NVS; `GET` reports `ring_color` as `"#rrggbb"` or `"accent"` (older firmware: absent — the console hides the setting) | `{ok:false, error}` when not `"#rrggbb"` / `"accent"` |
 | `POST /api/creature/state {listen_ms}` (with the other fluid fields) | the state JSON; saved to NVS: the listen window an agent gets when it gives none, `5000..30000` or `0` = unlimited (300 s safety ceiling); `GET` reports `listen_ms` (older firmware: absent — the console hides the setting) | `{ok:false, error}` when not an integer 5000..30000 or 0 |
 | `POST /api/creature/state {filler_ms}` (with the other fluid fields) | the state JSON; saved to NVS: the [auto filler](#quick-phrases-and-the-auto-filler)'s delay, `0` = off or `400..5000` (2500 out of the box); `GET` reports `filler_ms` and every listen answer carries it (older firmware: absent — the console hides the setting, the relay uses 2500) | `{ok:false, error}` when not an integer 400..5000 or 0 |
+| `POST /api/haptic {ms, strength?}` or `{pattern: [on, off, on, ...], strength?}` | `{ok:true, ms, strength[, pattern]}`: the buzz that started, after the cap (see below) | `{ok:false, error:"no_motor"}` on a board without one; `{ok:false, error:"invalid_args"}` |
 | `GET /api/update` (firmware with the `update` cap; older firmware: not found) | `200 {ok:true, state:"idle"\|"downloading"\|"flashing"\|"rebooting"\|"failed", version?, progress?: 0..1, error?}` | — |
 | `POST /api/update {version, url, sha256, size}` (any Content-Type) | `202 {ok:true, state:"downloading"}`; then as `cmd update` after an accept (no on-screen question: the click in the console is the consent, the same trust as `POST /api/ota`) | `400 bad_url` (not an official release URL), `409 busy` |
 
@@ -1147,6 +1148,19 @@ a relay disconnect clears `pair` without a decision. Example while pending, then
 ```
 {"device_id":"molty-k7m2w9c4ya","link_code":"K7M2W9C4","relay_url":"wss://relay.example","pair":{"agent_name":"Claude Code","code":"4821","expires_in_s":97},"last_pair":null,"connected":true,"auth_failed":false,"close_code":0}
 {"device_id":"molty-k7m2w9c4ya","link_code":"Q3XH8ND2","relay_url":"wss://relay.example","pair":null,"last_pair":{"seq":1,"agent_name":"Claude Code","ok":true,"reason":null},"connected":true,"auth_failed":false,"close_code":0}
+```
+
+Vibration motor (`POST /api/haptic`, device/firmware/main/haptic/haptic.h): on boards that wire one, today only
+the 1.75C with a hand-soldered coin motor on GPIO17 (`GET /api/diag` reports `haptic: true`). `ms` buzzes once;
+`pattern` is up to 8 segments in ms, on, off, on, ... (`[80,60,80]` is a double tap). `strength` 0..100 is the PWM
+duty (100 when absent). One buzz lasts at most 2000 ms (a longer one is cut there); a new buzz replaces the running
+one; the call returns at once. While the motor runs and 250 ms after, a shake is not felt (the motor shakes the
+IMU). Local only: no link command drives it yet.
+```
+curl -s -X POST http://molty.local/api/haptic -d '{"ms":300,"strength":100}'
+{"ok":true,"ms":300,"strength":100}
+curl -s -X POST http://molty.local/api/haptic -d '{"pattern":[80,60,80],"strength":100}'
+{"ok":true,"ms":220,"strength":100,"pattern":[80,60,80]}
 ```
 
 `state` cmd: empty args = read; `{state:{...}}` or flat fields = patch (sent to the
