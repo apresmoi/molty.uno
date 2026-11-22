@@ -79,6 +79,7 @@ Success: `200 {"ok":true,"result":{…}}`. Unknown argument keys are rejected.
 | `status` | — | fw, uptime, creature, state, mood, fps, rssi + `relay` {api_version, online, connected_since, board, caps, voice, events, webhook, firmware, creature} | cheap; use it to check Molty is online; `relay.creature`: who you are on screen |
 | `mood` | `{"mood": m, "hold_s"?: s}` | — | m ∈ idle, listening, thinking, speaking, happy, sleepy, surprised; happy/surprised revert by themselves, `hold_s` (0 < s ≤ 3600) sets how long any mood stays |
 | `act` | `{"action": a}` | `{action}` | a one-shot gesture over the current mood (see [Gestures](#gestures-act-and-inline-cues)); needs `act` in `relay.caps` (`409 unsupported` / `firmware_too_old` otherwise) |
+| `buzz` | `{"pattern": name \| [on, off, …] ms}` or `{"ms": 1..2000}`, `"strength"?: 0..100`, `"in_reply_to"?: turn_id` | `{ms, strength, pattern?}` | the vibration motor, once: `tick` (30 ms), `tap` (60), `double` (60, 90, 60), `nudge` (350); needs `haptic` in `relay.caps` (`409 no_motor`); `listening` while Molty listens (dropped); `unknown_pattern` |
 | `show` | `{"text": s, "wpm"?: 100..800}` | — | speed-reader text in the fluid, ≤ 16384 bytes, default 300 wpm; returns when it starts |
 | `progress` | `{"pct"?: 0..100, "step"?: s, "done"?: true}` | — | a thin ring fills on the rim to `pct` while the creature works (no `pct`: a short line circles); `step` (≤ 80 bytes) goes to the activity log; `done` flashes and clears it; send it at each step of a job over ~20 s; needs `progress` in `relay.caps` |
 | `say` | `{"text": s, "voice"?: id, "in_reply_to"?: turn_id}` | `{job}` immediately | relay TTS → speaker (streamed sentence by sentence), text shown in sync; ≤ 4096 bytes; job done → `{ms, text, timings}` (`text` without its [inline cues](#gestures-act-and-inline-cues) like `[happy]`); `in_reply_to`: see [events.md](events.md#shake-to-talk) |
@@ -456,7 +457,7 @@ what it can draw. The format: `https://github.com/apresmoi/molty.uno/blob/main/d
 ## MCP (optional)
 
 The same features are a remote MCP server at `$MOLTY_RELAY/mcp` (streamable HTTP, bearer
-auth). Tools: `molty_pair` (no token needed), `molty_talk`, `molty_keep`, `molty_quick`, `molty_phrases`, `molty_ask`, `molty_status`, `molty_mood`, `molty_act`, `molty_progress`, `molty_gestures`,
+auth). Tools: `molty_pair` (no token needed), `molty_talk`, `molty_keep`, `molty_quick`, `molty_phrases`, `molty_ask`, `molty_status`, `molty_mood`, `molty_act`, `molty_buzz`, `molty_progress`, `molty_gestures`,
 `molty_package`, `molty_scene`, `molty_show`, `molty_say`, `molty_listen`, `molty_wait`, `molty_state`,
 `molty_volume`, `molty_imu`, `molty_diag`, `molty_log`, `molty_events`,
 `molty_webhook`, `molty_updates`, `molty_update`, `molty_activity`, `molty_draft`, `molty_react`,

@@ -883,6 +883,7 @@ What the screen does between commands (`device/firmware/main/fluid/fluid_directo
 | `state` | `{state, ...}` | creature state JSON | passthrough to `/api/creature/state` semantics |
 | `mood` | `{mood, hold_s?}` (device also `react?`) | — | idle listening thinking speaking happy sleepy surprised; `hold_s` 0..3600 (0 = until the next mood; default: happy/surprised revert, the rest persist). `react:true` (relay-sent, cap `react`): shown but not an explicit mood ([While the human speaks](#while-the-human-speaks)) |
 | `act` | `{action}` | `{action}` | a one-shot gesture over the current mood: inspect paddle (cap `working`) wiggle nod shake_head bounce peek glance_left glance_right blink wobble stretch look_up yawn, or one of the creature's own (`unknown_gesture` for a name it lacks; [Inline cues and actions](#inline-cues-and-actions)); `unsupported` / `firmware_too_old` without the `act` cap |
+| `buzz` | `{pattern?, ms?, strength?, in_reply_to?}` | `{ms, strength, pattern?}` | cap `haptic`: the vibration motor, once. `pattern` a name (`tick`, `tap`, `double`, `nudge`; `unknown_pattern` otherwise) or `[on, off, on, ...]` ms, or `ms` for one buzz; `strength` 0..100 (100). `no_motor` without the cap; `listening` while Molty listens (dropped, not queued); `do_not_disturb` without `in_reply_to` while it is on (the names: Vibration motor, under [REST envelopes](#rest-envelopes)) |
 | `draft` (relay) | `{turn_id, based_on, opener, max_new_words?, voice?}` | `{turn_id, based_on, status:"held", max_new_words, threshold}` | only during an open turn ([While the human speaks](#while-the-human-speaks)) |
 | `react` (relay) | `{turn_id, mood}` or `{turn_id, action}` | `{turn_id, shown, for_ms, next_after_ms}` | only during an open turn; ≤ 1 per 3 s |
 | `show` | `{text, wpm?}` | — | speed reader in the fluid; back to the creature 1.5 s after the last word |
@@ -1019,7 +1020,7 @@ pairing). Rate-limited on the device. `shake`, `tap` and `button` reach agents t
 | `double_tap` | `{x, y}` | two taps within 350 ms, when bound to `event` (out of the box a double tap talks) |
 | `button` | `{id: "accept"\|"reject"}` | a button was pressed (the board's accept / reject buttons); ≤ 4/s. For agents it means acknowledge / dismiss, never an answer (answers come only from `ask`) |
 | `answer` | `{job, index, label}` · `{job, index: null, reason: "timeout"\|"cancelled"}` | an `ask` ended: tapped (0-based `index`, `label` verbatim), timed out, or cancelled; one per job, never rate-limited |
-| `dnd` | `{on}` | after each welcome and each change (cap `dnd`): the human's do not disturb (the PWR button's double click, `POST /api/power`). Relay-internal: kept per device; while on, `say` / `quick` / `listen` / `talk` / `ask` without `in_reply_to` fail `do_not_disturb`, and agents get a `dnd` event on each change |
+| `dnd` | `{on}` | after each welcome and each change (cap `dnd`): the human's do not disturb (the PWR button's double click, `POST /api/power`). Relay-internal: kept per device; while on, `say` / `quick` / `listen` / `talk` / `ask` / `buzz` without `in_reply_to` fail `do_not_disturb`, and agents get a `dnd` event on each change |
 | `creature` | `{id, name, about?, gestures?, moods?}` | after each welcome and whenever the creature on screen changes: a package's `cp_info` (`about` {look, gestures, moods}: its own words, [CREATURES.md](CREATURES.md) section 1; `gestures` it plays that the firmware knows; `moods` idle and its own), `{id: "", name}` for a creature that is not a package. Relay-internal: kept per device (below) |
 
 Screen off (the PWR button's `screen` binding, `POST /api/power {screen}`): the fluid stops
@@ -1135,7 +1136,7 @@ device dials; agents/CLI use its http(s) twin (`ws://h` → `http://h`, `wss://h
 | `POST /api/creature/state {ring_color}` (with the other fluid fields) | the state JSON; saved to NVS; `GET` reports `ring_color` as `"#rrggbb"` or `"accent"` (older firmware: absent — the console hides the setting) | `{ok:false, error}` when not `"#rrggbb"` / `"accent"` |
 | `POST /api/creature/state {listen_ms}` (with the other fluid fields) | the state JSON; saved to NVS: the listen window an agent gets when it gives none, `5000..30000` or `0` = unlimited (300 s safety ceiling); `GET` reports `listen_ms` (older firmware: absent — the console hides the setting) | `{ok:false, error}` when not an integer 5000..30000 or 0 |
 | `POST /api/creature/state {filler_ms}` (with the other fluid fields) | the state JSON; saved to NVS: the [auto filler](#quick-phrases-and-the-auto-filler)'s delay, `0` = off or `400..5000` (2500 out of the box); `GET` reports `filler_ms` and every listen answer carries it (older firmware: absent — the console hides the setting, the relay uses 2500) | `{ok:false, error}` when not an integer 400..5000 or 0 |
-| `POST /api/haptic {ms, strength?}` or `{pattern: [on, off, on, ...], strength?}` | `{ok:true, ms, strength[, pattern]}`: the buzz that started, after the cap (see below) | `{ok:false, error:"no_motor"}` on a board without one; `{ok:false, error:"invalid_args"}` |
+| `POST /api/haptic {ms, strength?}` or `{pattern: "<name>" \| [on, off, on, ...], strength?}` | `{ok:true, ms, strength[, pattern]}`: the buzz that started, after the cap (see below) | `{ok:false, error:"no_motor"}` on a board without one; `"listening"` while the mic is open; `"unknown_pattern"`; `"invalid_args"` |
 | `GET /api/update` (firmware with the `update` cap; older firmware: not found) | `200 {ok:true, state:"idle"\|"downloading"\|"flashing"\|"rebooting"\|"failed", version?, progress?: 0..1, error?}` | — |
 | `POST /api/update {version, url, sha256, size}` (any Content-Type) | `202 {ok:true, state:"downloading"}`; then as `cmd update` after an accept (no on-screen question: the click in the console is the consent, the same trust as `POST /api/ota`) | `400 bad_url` (not an official release URL), `409 busy` |
 
@@ -1150,12 +1151,23 @@ a relay disconnect clears `pair` without a decision. Example while pending, then
 {"device_id":"molty-k7m2w9c4ya","link_code":"Q3XH8ND2","relay_url":"wss://relay.example","pair":null,"last_pair":{"seq":1,"agent_name":"Claude Code","ok":true,"reason":null},"connected":true,"auth_failed":false,"close_code":0}
 ```
 
-Vibration motor (`POST /api/haptic`, device/firmware/main/haptic/haptic.h): on boards that wire one, today only
-the 1.75C with a hand-soldered coin motor on GPIO17 (`GET /api/diag` reports `haptic: true`). `ms` buzzes once;
-`pattern` is up to 8 segments in ms, on, off, on, ... (`[80,60,80]` is a double tap). `strength` 0..100 is the PWM
-duty (100 when absent). One buzz lasts at most 2000 ms (a longer one is cut there); a new buzz replaces the running
-one; the call returns at once. While the motor runs and 250 ms after, a shake is not felt (the motor shakes the
-IMU). Local only: no link command drives it yet.
+Vibration motor (`POST /api/haptic` and the link's `buzz`, device/firmware/main/haptic/haptic.h): on boards that wire one, today only
+the 1.75C with a hand-soldered coin motor on GPIO17 (`GET /api/diag` reports `haptic: true`, the hello lists cap
+`haptic`). `ms` buzzes once; `pattern` is up to 8 segments in ms, on, off, on, ... (`[80,60,80]` is a double tap),
+or one of these names:
+
+| name | ms | for |
+|---|---|---|
+| `tick` | 30 | touch feedback, barely there |
+| `tap` | 60 | a light touch |
+| `double` | 60, 90, 60 | look at me |
+| `nudge` | 350 | a longer push, when a tap would be missed |
+
+`strength` 0..100 is the PWM duty (100 when absent). One buzz lasts at most 2000 ms (a longer one is cut there); a
+new buzz replaces the running one; the call returns at once. The motor sits next to the microphones: a buzz that
+arrives while the mic is open is dropped, not queued (`listening`). While the motor runs and 250 ms after, a shake
+is not felt (the motor shakes the IMU). Molty buzzes by itself only when a question with buttons or a pairing code
+appears (`double`) and when it takes a tap on an answer (`tick`).
 ```
 curl -s -X POST http://molty.local/api/haptic -d '{"ms":300,"strength":100}'
 {"ok":true,"ms":300,"strength":100}
