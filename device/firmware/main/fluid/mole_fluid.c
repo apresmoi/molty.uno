@@ -68,6 +68,7 @@
 #include "glyph_font.h"   /* gc_font5x7, GC_RAMP_ASCII */
 #include "fluid_ring.h"   /* the listening ring's knobs */
 #include "screen_nap.h"   /* the screen off a while after the creature fell asleep */
+#include "sky.h"          /* the moon and the falling stars behind the creature */
 
 static const char *TAG = "mole_fluid";
 
@@ -203,6 +204,19 @@ static uint32_t s_nap_s[2] = { NAP_BATTERY_S_DEFAULT, NAP_USB_S_DEFAULT };
 static bool     s_nap_loaded = false;
 static unsigned s_nap_gen;
 static void     nap_setting_load(void);
+/* the sky behind the creature (sky.h): the setting (NVS "fluid"/"sky", on out of the box, written by power.c in the
+ * flash's quiet window: mole_fluid_sky_setting; s_sky_gen moves with each change), the time (mole_fluid_utc: unix s at
+ * esp_timer us; 0 not known) and do not disturb (mole_fluid_dnd), under s_mutex; the sky itself is the task's (PSRAM) */
+static bool     s_sky_on = true;
+static bool     s_sky_loaded = false;
+static unsigned s_sky_gen;
+static double   s_utc0;
+static int64_t  s_utc_us0;
+static bool     s_dnd;
+static sky_t   *s_sky;
+static double   s_tutc;                         /* (the task's) the time now, unix s, 0 not known */
+static bool     s_tsky_on = true, s_tdnd;       /* (the task's) copies of the setting and do not disturb */
+static void     sky_setting_load(void);
 static int      s_req_act = -1;                 /* an agent's action (act / a say's mark)  */
 static bool     s_req_spoke = false;            /* a say played to its end                 */
 /* scenes (mole_fluid_scene): ops wait here for the task, which owns the player */
@@ -751,6 +765,21 @@ static inline float frand(void) { return (esp_random() & 0xFFFFFF) / 16777216.f;
  * overwritten) / s_go (snapshot ready). Measured before the split: sim 34 ms, draw
  * 17 ms, flush 9 ms per frame at 52×32. */
 
+/* The sky behind the creature (sky.h), each frame before its own: the moon whenever the creature is on the glass with
+ * nothing over it; a falling star only when nothing else is going on (no question, listen, say, reading, progress,
+ * change of picture or bench), and not while it sleeps with do not disturb on (a dark, quiet room: the one bright
+ * thing moving). No time known: nothing. A few hundred bytes of the task's stack. */
+static bool sky_bench(void);
+static void sky_tick(float rdt) {
+    if (!s_sky || !s_cpk) return;
+    const bool moon = s_cur == ST_CREATURE && cpk_crisp(s_cpk) && s_ask.scr.phase == FLUID_ASK_NONE;
+    const bool star = moon && !s_listen && s_rg.on <= 0.f && s_pg.on <= 0.f && cr_mood() != CM_SPEAKING && !s_sub && !s_rd_on &&
+                      !fluid_draw_morphing(s_draw) && !sky_bench() && !(fd_asleep(&s_dir) && s_tdnd);
+    sky_set(s_sky, s_tsky_on);
+    sky_frame(s_sky, s_tutc, s_sim->W, s_sim->H, rdt, moon, star);
+    cpk_sky(s_cpk, s_sky);
+}
+
 static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     fluid_sim_t *s = s_sim;
     s->p.speed_mul = cfg->speed;
@@ -807,6 +836,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     }
 
     const bool asking = s_ask.scr.phase == FLUID_ASK_SHOW;
+    sky_tick(rdt);                                         /* (every frame: a star out at once when the creature goes) */
     if (s_ask.scr.phase != FLUID_ASK_NONE) {               /* the question's clocks */
         s_ask.scr.t += rdt;
         if (s_ask.scr.phase != FLUID_ASK_SHOW) s_ask.scr.out_t += rdt;
@@ -1497,6 +1527,7 @@ static bool s_tx_frame;                             /* this frame's windows went
 /* the bench (mole_fluid_bench_*): records taken, a finger's tap to inject at the next touch poll (1 << 31 | x << 16 | y,
  * panel px), the animations open (bits FLUID_ANIM_*, the wave's while a change runs) */
 static mole_anim_rec_t *volatile s_bench;
+static bool sky_bench(void) { return s_bench != NULL; }   /* (a bench runs: no falling star in its frames) */
 static volatile int s_bench_n, s_bench_cap;
 static atomic_uint s_bench_touch, s_anim_busy;
 static atomic_bool s_bench_boot, s_dust_in;
@@ -1933,6 +1964,9 @@ static void fluid_task(void *arg) {
         if (!s_idle_life_loaded) { s_idle_life = idle_life_load(); s_idle_life_loaded = true; }
         int idle_life = s_idle_life;
         if (!s_nap_loaded) nap_setting_load();
+        if (!s_sky_loaded) sky_setting_load();
+        s_tsky_on = s_sky_on; s_tdnd = s_dnd;
+        s_tutc = s_utc0 > 0.0 ? s_utc0 + (double)(now - s_utc_us0) * 1e-6 : 0.0;
         uint32_t tint = s_tint_in;
         bool activity = s_req_activity, shake = s_req_shake, user = s_req_user;
         s_req_activity = s_req_shake = s_req_user = false;
@@ -2423,8 +2457,9 @@ esp_err_t mole_fluid_creature_init(void) {
     if (!s_shp)     s_shp     = heap_caps_calloc(2 * FLUID_MAX_SHAPES, sizeof(fluid_shape_t), MALLOC_CAP_SPIRAM);
     s_dshp = s_shp ? s_shp + FLUID_MAX_SHAPES : NULL;
     if (!s_rd)      s_rd      = heap_caps_calloc(1, sizeof(reading_t), MALLOC_CAP_SPIRAM);
+    if (!s_sky)     s_sky     = heap_caps_calloc(1, sizeof(sky_t), MALLOC_CAP_SPIRAM);
     if (!s_spot_sc) s_spot_sc = heap_caps_calloc(1, sizeof(scene_t), MALLOC_CAP_SPIRAM);
-    if (!s_ttext || !s_toks || !s_sdots || !s_sdots_d || !s_kdots || !s_shp || !s_rd || !s_spot_sc || !s_still || !s_fshp) return ESP_ERR_NO_MEM;
+    if (!s_ttext || !s_toks || !s_sdots || !s_sdots_d || !s_kdots || !s_shp || !s_rd || !s_spot_sc || !s_still || !s_fshp || !s_sky) return ESP_ERR_NO_MEM;
     s_ttext[0] = '\0';
     s_seen_ver = -1;
 
@@ -2457,6 +2492,7 @@ esp_err_t mole_fluid_creature_init(void) {
     /* boot: the director wants the creature (the one queued above loads on the task's first
      * frame; the blob stands in only if none loads); at power on, the boot screen's word first */
     fd_init(&s_dir, NULL, esp_random());
+    sky_init(s_sky, s_dir.rng);                  /* (seeded from the director's, none of its numbers drawn) */
     if (!s_booted) fd_boot(&s_dir);
     s_booted = true;
     s_cur = ST_BLOB; s_cur_fx = 0; s_word = 0; s_ntok = 0;
@@ -2565,6 +2601,8 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     const int idle_life = s_idle_life;
     if (!s_nap_loaded) nap_setting_load();
     const uint32_t nap_bat = s_nap_s[0], nap_usb = s_nap_s[1];
+    if (!s_sky_loaded) sky_setting_load();
+    const bool sky = s_sky_on;
     char cname[40], cerr[40], cid[PKG_ID_MAX + 1];
     memcpy(cname, s_cute_name, sizeof(cname)); memcpy(cerr, s_cute_err, sizeof(cerr)); memcpy(cid, s_cr_id, sizeof(cid));
     cJSON *info = s_cr_info ? cJSON_Parse(s_cr_info) : NULL;   /* its gestures and moods (a package's) */
@@ -2623,6 +2661,7 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     cJSON_AddStringToObject(root, "idle_life", FD_IDLE_NAMES[idle_life]);
     cJSON_AddNumberToObject(root, "screen_off_battery_s", nap_bat);   /* 0 = never */
     cJSON_AddNumberToObject(root, "screen_off_usb_s", nap_usb);
+    cJSON_AddBoolToObject(root, "sky", sky);
     cJSON_AddNumberToObject(root, "scene_dust", fluid_fine_dust_kind_get());       /* EXPERIMENT (mole_fluid_scene_dust) */
     cJSON_AddNumberToObject(root, "scene_hard_pct", fluid_fine_hard_density_get()); /* EXPERIMENT (mole_fluid_scene_hard) */
     cJSON_AddStringToObject(root, "edge_mode",   FLUID_EDGE_NAMES[c.edge_mode]);
@@ -2764,6 +2803,13 @@ esp_err_t mole_fluid_creature_state_set_json(const char *body) {
                 nap_valid_s((long)j->valuedouble)) nap[k] = (long)j->valuedouble;
             else ret = ESP_ERR_INVALID_ARG;
         }
+    /* sky: true | false, the moon and the falling stars behind the creature (sky.h); kept in NVS by power.c once the
+     * screen is calm (mole_fluid_sky_setting) */
+    int sky = -1;                                      /* -1: not given */
+    if ((j = cJSON_GetObjectItem(root, "sky"))) {
+        if (cJSON_IsBool(j)) sky = cJSON_IsTrue(j);
+        else ret = ESP_ERR_INVALID_ARG;
+    }
     /* EXPERIMENT scene_dust: 0 | 1 | 2 | 3, scene_hard_pct: 0..25 (mole_fluid_scene_dust, _scene_hard; not kept) */
     if ((j = cJSON_GetObjectItem(root, "scene_dust"))) {
         if (cJSON_IsNumber(j) && j->valueint >= 0 && j->valueint <= 3) mole_fluid_scene_dust(j->valueint);
@@ -2900,6 +2946,10 @@ esp_err_t mole_fluid_creature_state_set_json(const char *body) {
         if (!s_nap_loaded) nap_setting_load();
         for (int k = 0; k < 2; k++) if (nap[k] >= 0) s_nap_s[k] = (uint32_t)nap[k];
         if (++s_nap_gen == 0) s_nap_gen = 1;
+    }
+    if (sky >= 0) {
+        if (!s_sky_loaded) sky_setting_load();
+        if (s_sky_on != (sky == 1)) { s_sky_on = sky == 1; if (++s_sky_gen == 0) s_sky_gen = 1; }
     }
     if (act >= 0) s_req_act = act;
     s_req_activity = true;                             /* someone is driving: no dozing off */
@@ -3161,6 +3211,53 @@ static void nap_setting_load(void) {
     }
     for (int k = 0; k < 2; k++) if (v[k] >= 0 && nap_valid_s(v[k])) s_nap_s[k] = (uint32_t)v[k];
     s_nap_loaded = true;
+}
+
+/* (under s_mutex) */
+static void sky_setting_load(void) {
+    nvs_handle_t h;
+    int32_t v = 1;
+    if (nvs_open("fluid", NVS_READONLY, &h) == ESP_OK) {
+        if (nvs_get_i32(h, "sky", &v) != ESP_OK) v = 1;
+        nvs_close(h);
+    }
+    s_sky_on = v != 0;
+    s_sky_loaded = true;
+}
+
+unsigned mole_fluid_sky_setting(bool *on) {
+    if (!s_mutex) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (!s_sky_loaded) sky_setting_load();
+    if (on) *on = s_sky_on;
+    const unsigned gen = s_sky_gen;
+    xSemaphoreGive(s_mutex);
+    return gen;
+}
+
+void mole_fluid_utc(double unix_s) {
+    if (!s_mutex) return;
+    const int64_t now = esp_timer_get_time();
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_utc0 = unix_s > 0.0 ? unix_s : 0.0;
+    s_utc_us0 = now;
+    xSemaphoreGive(s_mutex);
+}
+
+double mole_fluid_utc_now(void) {
+    if (!s_mutex) return 0.0;
+    const int64_t now = esp_timer_get_time();
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    const double t = s_utc0 > 0.0 ? s_utc0 + (double)(now - s_utc_us0) * 1e-6 : 0.0;
+    xSemaphoreGive(s_mutex);
+    return t;
+}
+
+void mole_fluid_dnd(bool on) {
+    if (!s_mutex) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_dnd = on;
+    xSemaphoreGive(s_mutex);
 }
 
 unsigned mole_fluid_nap_setting(uint32_t *battery_s, uint32_t *usb_s) {

@@ -83,6 +83,7 @@ idf_component_register(
         "net/console_store.c"
         "net/improv_proto.c"     # Wi-Fi setup over a serial console (boards with MOLTY_CAP_SERIAL)
         "net/improv_serial.c"
+        "net/net_clock.c"        # the date from network time (SNTP), for the sky
         # fluid: the fluid-of-characters creature (+ speed reader, 5x7 font)
         "fluid/mole_fluid.c"
         "fluid/fluid_director.c"  # what is shown when: states, moods, idle life, status
@@ -107,6 +108,7 @@ idf_component_register(
         "creature/creature_clip.c"     # a rigged creature's baked clips and routes (clip-player.js)
         "creature/creature_dots.c"     # ... drawn straight on the braille dots (clip-dots.js)
         "creature/creature_ring.c"     # ... the listen / question / progress rings over them, as dust
+        "creature/sky.c"               # ... the moon and the falling stars behind them (host-tested)
         # link: agent link to the relay (WSS, pairing, audio)
         "link/link_protocol.c"
         "link/link_identity.c"

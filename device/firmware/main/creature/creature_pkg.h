@@ -45,6 +45,10 @@ bool   cpk_crisp(const cpk_t *k);
 /** A tap or a shake: a rigged creature plays first (a shake: "shaken"), then comes to the front of the frame facing the
  *  viewer, attending (cc_come). */
 void   cpk_come(cpk_t *k, const char *first);
+/** The sky behind a rigged creature (sky.h: s->moon_c, s->star_c as its last sky_frame made them), drawn into its world
+ *  from its next frame; NULL: none. s must live as long as k uses it. */
+struct sky;
+void   cpk_sky(cpk_t *k, const struct sky *s);
 /** A rigged creature's dots: the share of their rows' work on the calling core (cd_set_share), the rest on the other. */
 void   cpk_set_share(cpk_t *k, int pct);
 /** The listen ring over a rigged creature, given directly (creature_ring.h cr_listen): its colour (0xRRGGBB, -1: the

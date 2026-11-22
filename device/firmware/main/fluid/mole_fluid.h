@@ -27,6 +27,8 @@
  *         screen_off_battery_s, screen_off_usb_s: 0 (never) | 10..3600 (the screen goes off
  *               this long after the creature fell asleep, on battery / on USB: screen_nap.h;
  *               60 and 600 out of the box; kept in NVS; GET reports them),
+ *         sky: true|false (the moon and the falling stars behind the creature: sky.h; on out
+ *               of the box; kept in NVS; GET reports it),
  *         act: "nod"|... (a one-shot action, cute_act.h; GET reports the one playing),
  *         hold: true (with "text": hold the last word instead of returning to the
  *               creature 1.5 s after it; the pairing code, the Improv "hi"),
@@ -134,6 +136,16 @@ void mole_fluid_power(int power);
 /** The nap settings (s; 0 = never) and their generation: 0 while they are as NVS has them, else
  *  it moves with each change (power.c keeps them once the screen is calm). Any task. */
 unsigned mole_fluid_nap_setting(uint32_t *battery_s, uint32_t *usb_s);
+/** The sky's setting (on: the moon and the falling stars behind the creature, sky.h) and its generation, as
+ *  mole_fluid_nap_setting (power.c keeps it once the screen is calm). Any task. */
+unsigned mole_fluid_sky_setting(bool *on);
+/** The time now, unix s UTC (the network's: net_clock.c; the web page's: wm_time); <= 0: not known (no sky). It runs on
+ *  from here by the uptime clock. Any task. */
+void mole_fluid_utc(double unix_s);
+/** The time now as the fluid has it (mole_fluid_utc run on), 0 not known. Any task. */
+double mole_fluid_utc_now(void);
+/** Do not disturb is on (power.c): no falling star while the creature sleeps then. Any task. */
+void mole_fluid_dnd(bool on);
 /** Power off's goodbye (fluid_director.h "fd_bye"): the screen on, "bye!" condenses, melts
  *  into a pond and the panel fades to black; then mole_fluid_goodbye_done. From here the
  *  screen stays on and every request is ignored. Safe from any task. */
