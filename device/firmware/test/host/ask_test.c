@@ -147,6 +147,20 @@ static void test_follow(void) {
     fluid_ask_follow(&q, true, 4, -1, 2); fluid_ask_follow(&q, false, 4, -1, 2);
     did = fluid_ask_follow(&q, true, 5, -1, 2);
     CHECK(did == FLUID_ASK_DID_SHOW && q.phase == FLUID_ASK_SHOW && q.seq == 5, "a new one over the dust");
+    /* whole (a change of picture brings it and takes it away): tappable at once, gone the frame after it is answered or
+     * ended; a new question is not whole till its caller says */
+    fluid_ask_follow(&q, true, 6, -1, 2);
+    CHECK(!q.whole, "a new question: not whole");
+    q.whole = true;
+    CHECK(fluid_ask_tappable(&q, 1.f) == 6, "whole: tappable at t = 0 (the caller holds it while the change brings it)");
+    did = fluid_ask_follow(&q, true, 6, 0, 2);
+    CHECK(did == FLUID_ASK_DID_PICK && fluid_ask_follow(&q, true, 6, 0, 2) == 0, "whole, answered: drawn once as answered");
+    q.out_t = 0.03f;
+    CHECK(fluid_ask_follow(&q, true, 6, 0, 2) == FLUID_ASK_DID_GONE && q.phase == FLUID_ASK_NONE, "whole: gone the frame after");
+    fluid_ask_follow(&q, true, 7, -1, 2); q.whole = true;
+    CHECK(fluid_ask_follow(&q, false, 7, -1, 2) == FLUID_ASK_DID_LEAVE, "whole, ended");
+    q.out_t = 0.03f;
+    CHECK(fluid_ask_follow(&q, false, 7, -1, 2) == FLUID_ASK_DID_GONE, "whole, ended: gone the frame after");
     /* answered before it was ever drawn: show + pick in one frame; out-of-range pick → 0 */
     did = fluid_ask_follow(&q, true, 9, 7, 2);
     CHECK(did == (FLUID_ASK_DID_SHOW | FLUID_ASK_DID_PICK) && q.pick == 0, "show + pick");

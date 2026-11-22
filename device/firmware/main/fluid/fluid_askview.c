@@ -33,6 +33,8 @@
 #define LET_S     0.3f
 #define LET_W     0.05f
 #define TWINKLE_HZ 5.f       /* a cell row's twinkle moves this often                              */
+#define GROW0     0.35f      /* coming by a change of picture, an answer's line grows over the last 0.65 of its grains'
+                              * window (fluid_draw_morph_order: ~8 frames)                             */
 #define MASK_BYTES ((FLUID_ASK_STR * 6 * 7 + 7) / 8)
 /* the scene dims under the question (to DIM of its brightness, its world's dust thinned to KEEP) where the crest has
  * passed, and comes back a cell row at a time as the question leaves, in DIM_STEPS steps: a cell's colour changes a
@@ -56,9 +58,12 @@ struct fluid_askview {
     uint8_t *hb;                                    /* per dot: its fixed chance of staying in the dimmed scene */
     uint8_t *qd, *ql;                               /* per cell: the question's dots, their level (eighths)   */
     uint8_t *cp;                                    /* per cell: how far the scene has dimmed under it, 0..DIM_STEPS */
+    uint8_t *ord;                                   /* per cell: its answers' line grows in here (fluid_askview_order) */
     uint32_t *qc;                                   /* ... and colour                                         */
     int mode, pick; float T;
     bool settled;                                   /* every letter formed: the masks are whole              */
+    bool whole;                                     /* it comes and goes by a change of picture: formed from its first
+                                                     * frame, no wave of its own                              */
     uint32_t fno; int im;                           /* frames drawn; how many the cell rows take turns over  */
     uint8_t rowon[64];                              /* this frame's turn: the rows its dots are made again in */
     struct { float x, y, w, h; int mw; bool on; } box[FLUID_ASK_ITEMS];
@@ -99,6 +104,27 @@ static inline bool in_band(const fluid_ask_target_t *t, float r2) {
     return r2 <= hi * hi && (lo <= 0.f || r2 >= lo * lo);
 }
 
+/* the answers' lines grow in a change of picture: per cell of their dots, how far along the growth (0 where it starts ..
+ * 254 at its ends): the rim's arcs (and the rows' faint ring) from 6 o'clock, where the answers meet, up both sides as one
+ * opening sweep; a row's underline from its middle out; 255 elsewhere */
+static void order(fluid_askview_t *v) {
+    const float half = v->stage * 0.5f, PI = 3.14159265f;
+    memset(v->ord, 255, (size_t)v->N);
+    for (int n = 0; n < v->nd; n++) {
+        const av_dot_t *D = &v->dot[n];
+        if (v->ord[D->k] != 255) continue;
+        const fluid_ask_target_t *t = &v->L.tg[D->tg];
+        const float X = ((float)(D->k % v->W) + 0.5f) * v->cw / half - 1.f, Y = ((float)(D->k / v->W) + 0.5f) * v->ch / half - 1.f;
+        float u;
+        if (t->kind == FLUID_ASK_HLINE) u = fabsf(X - 0.5f * (t->b + t->c)) / (0.5f * (t->c - t->b));
+        else {
+            float a = atan2f(X, -Y); if (a < 0.f) a += 2.f * PI;
+            u = fabsf(a - PI) / (t->kind == FLUID_ASK_RING ? PI : 0.5f * PI);
+        }
+        v->ord[D->k] = (uint8_t)((GROW0 + (1.f - GROW0) * clampf(u, 0.f, 1.f)) * 254.f + 0.5f);
+    }
+}
+
 bool fluid_askview_build(fluid_askview_t *v, const fluid_sim_t *s, int rows) {
     const int W = v->W, DW = 2 * W, DH = 4 * v->H;
     const fluid_ask_layout_t *L = &v->L;
@@ -127,7 +153,9 @@ bool fluid_askview_build(fluid_askview_t *v, const fluid_sim_t *s, int rows) {
             }
         }
     }
-    return v->by >= DH;
+    if (v->by < DH) return false;
+    order(v);
+    return true;
 }
 
 fluid_askview_t *fluid_askview_create(const fluid_sim_t *s, const fluid_ask_q_t *q) {
@@ -146,7 +174,8 @@ fluid_askview_t *fluid_askview_begin(const fluid_sim_t *s, const fluid_ask_q_t *
     v->cw = (float)s->stage / W; v->ch = (float)s->stage / H; v->sc = (float)s->stage / (float)FLUID_STAGE_REF;
     v->reach = AV_CALLOC(sizeof(float) * (size_t)N); v->hb = AV_CALLOC((size_t)N * 8);
     v->qd = AV_CALLOC((size_t)N); v->ql = AV_CALLOC((size_t)N); v->qc = AV_CALLOC(sizeof(uint32_t) * (size_t)N); v->cp = AV_CALLOC((size_t)N);
-    if (!v->reach || !v->hb || !v->qd || !v->ql || !v->qc || !v->cp) { fluid_askview_destroy(v); return NULL; }
+    v->ord = AV_CALLOC((size_t)N);
+    if (!v->reach || !v->hb || !v->qd || !v->ql || !v->qc || !v->cp || !v->ord) { fluid_askview_destroy(v); return NULL; }
     for (int k = 0; k < N * 8; k++) v->hb[k] = hb8((uint32_t)k, 77u);
     const float half = s->stage * 0.5f;
     /* a row's underline in the cell row under its label's: the drawer clears the cells a word covers, the page only its
@@ -208,18 +237,21 @@ fluid_askview_t *fluid_askview_begin(const fluid_sim_t *s, const fluid_ask_q_t *
 
 void fluid_askview_destroy(fluid_askview_t *v) {
     if (!v) return;
-    AV_FREE(v->dot); AV_FREE(v->px); AV_FREE(v->reach); AV_FREE(v->hb); AV_FREE(v->qd); AV_FREE(v->ql); AV_FREE(v->qc); AV_FREE(v->cp);
+    AV_FREE(v->dot); AV_FREE(v->px); AV_FREE(v->reach); AV_FREE(v->hb); AV_FREE(v->qd); AV_FREE(v->ql); AV_FREE(v->qc); AV_FREE(v->cp); AV_FREE(v->ord);
     AV_FREE(v);
 }
 
 void fluid_askview_start(fluid_askview_t *v, fluid_sim_t *s) {
     for (int k = 0; k < v->N; k++) v->reach[k] = -1.f;
-    v->settled = false;
+    v->settled = v->whole = false;
     fluid_sim_impulse(s, 0.f, 0.f, TOUCH_S, TOUCH_R);
 }
+void fluid_askview_start_whole(fluid_askview_t *v) { v->settled = false; v->whole = true; }
+const uint8_t *fluid_askview_order(const fluid_askview_t *v) { return v->ord; }
 
 void fluid_askview_answer(fluid_askview_t *v, fluid_sim_t *s, int pick) {
     v->pick = pick;
+    if (v->whole) return;
     for (int t = 0; pick >= 0 && t < v->L.ntargets; t++)
         if (v->L.tg[t].opt == pick) { fluid_sim_impulse(s, v->L.tg[t].cx, v->L.tg[t].cy, TOUCH_S * 1.2f, TOUCH_R); return; }
     for (int j = 0; j < s->H; j++) for (int i = 0; i < s->W; i++) {   /* the rim lets go: a ring-shaped wave */
@@ -256,6 +288,7 @@ static inline void put_px(fluid_askview_t *v, const fluid_sim_t *s, float x, flo
 }
 /* how formed a thing at cell k is at T: from when the real crest first lifted it (a slow fallback never leaves a gap) */
 static inline float formed(const fluid_askview_t *v, int k, float T, float delay, float span) {
+    if (v->whole) return 1.f;
     const float r = v->reach[k], a = r < 0.f ? 0.f : smooth(delay, delay + span, T - r);
     return fmaxf(a, smooth(2.6f + delay, 3.f + delay, T));
 }
@@ -271,8 +304,8 @@ static inline uint32_t toward_white(uint32_t c, float hot) {
 
 void fluid_askview_frame(fluid_askview_t *v, const fluid_sim_t *s, const fluid_ask_screen_t *scr, float t) {
     const int N = v->N, DW = 2 * v->W;
-    v->mode = scr->phase == FLUID_ASK_SHOW ? (scr->t < FLUID_ASK_FORM_S ? M_IN : M_ON) : scr->phase == FLUID_ASK_PICK ? M_PICK : scr->phase == FLUID_ASK_OUT ? M_OUT : M_OFF;
-    v->T = v->mode == M_IN || v->mode == M_ON ? scr->t : scr->out_t;
+    v->mode = scr->phase == FLUID_ASK_SHOW ? (scr->t < FLUID_ASK_FORM_S && !v->whole ? M_IN : M_ON) : scr->phase == FLUID_ASK_PICK ? M_PICK : scr->phase == FLUID_ASK_OUT ? M_OUT : M_OFF;
+    v->T = v->mode == M_IN || v->mode == M_ON ? scr->t : v->whole ? 0.f : scr->out_t;   /* (whole: its last frame, answered) */
     if (v->mode == M_OUT) v->pick = -1;
     const bool forming = v->mode == M_IN || v->mode == M_ON, leaving = v->mode == M_PICK || v->mode == M_OUT;
     const float T = v->T;

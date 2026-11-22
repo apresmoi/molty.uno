@@ -306,6 +306,9 @@ static struct {
     fluid_askview_t *v;                         /* how it looks (PSRAM, made for it)                                    */
     fluid_askview_t *making;                    /* ... while its dots are worked out, a few rows a frame (ASK_BUILD_ROWS) */
     fluid_askview_t *old;                       /* one the drawer may still read: freed with the drawer idle            */
+    unsigned vseq;                              /* the question `v` shows (the one before stands while the next is made) */
+    float gone;                                 /* (s_tnow) a whole one went, answered: the press that answered it may
+                                                 * reach poll_touch a frame or two later (ASK_PRESS_S)                  */
 } s_ask;
 /* the listening ring (fluid_target_arc) */
 static bool  s_listen = false;                  /* task copy of s_listen_in */
@@ -627,26 +630,34 @@ static void direct(const fluid_cfg_t *cfg) {
 /* ── A question (the link's ask): drawn over the screen (fluid_askview.h) ─────── */
 
 #define ASK_BUILD_ROWS 24                       /* a question's dots: this many of their 4 x H rows a frame (~5 ms) */
+#define ASK_PRESS_S    0.25f                    /* a whole question answered: its press still its own this long after   */
 /* follow what the link wants (once per frame, before the director's transitions) */
 static void ask_follow(const ask_want_t *w) {
     const int did = fluid_ask_follow(&s_ask.scr, w->active, w->seq, w->pick, w->q.n);
     if (did & FLUID_ASK_DID_SHOW) {                        /* a new one: its look is made over the next frames (a frame
-                                                            * cannot take it whole: ~0.3 s of roots and angles) */
-        if (s_ask.v) { fluid_askview_destroy(s_ask.old); s_ask.old = s_ask.v; s_ask.v = NULL; }
+                                                            * cannot take it whole: ~0.3 s of roots and angles); the one
+                                                            * before stands as it was till then */
         fluid_askview_destroy(s_ask.making);
         s_ask.making = fluid_askview_begin(s_sim, &w->q);
         if (!s_ask.making) mole_diag_event(true, "fluid.ask no memory for the question's look");
     }
     if (did & FLUID_ASK_DID_GONE) { fluid_askview_destroy(s_ask.making); s_ask.making = NULL; }
-    if (s_ask.making) {                                    /* ... its clock waits; made, the touch at the centre */
+    if (s_ask.making) {                                    /* ... its clock waits; made, it comes: as the new picture of a
+                                                            * change of picture, whole, where the drawer changes its
+                                                            * pictures so (the device); else by a touch at the centre */
         s_ask.scr.t = 0.f;
         if (fluid_askview_build(s_ask.making, s_sim, ASK_BUILD_ROWS)) {
-            s_ask.v = s_ask.making; s_ask.making = NULL;
-            s_ask.hit = fluid_askview_layout(s_ask.v)->hit; fluid_askview_start(s_ask.v, s_sim);
+            fluid_askview_destroy(s_ask.old); s_ask.old = s_ask.v;
+            s_ask.v = s_ask.making; s_ask.making = NULL; s_ask.vseq = s_ask.scr.seq;
+            s_ask.hit = fluid_askview_layout(s_ask.v)->hit;
+            s_ask.scr.whole = fluid_draw_morph_carries(s_draw);
+            if (s_ask.scr.whole) fluid_askview_start_whole(s_ask.v); else fluid_askview_start(s_ask.v, s_sim);
         }
     }
-    if (s_ask.v && (did & (FLUID_ASK_DID_PICK | FLUID_ASK_DID_LEAVE))) fluid_askview_answer(s_ask.v, s_sim, did & FLUID_ASK_DID_PICK ? s_ask.scr.pick : -1);
+    if (s_ask.v && s_ask.vseq == s_ask.scr.seq && (did & (FLUID_ASK_DID_PICK | FLUID_ASK_DID_LEAVE)))
+        fluid_askview_answer(s_ask.v, s_sim, did & FLUID_ASK_DID_PICK ? s_ask.scr.pick : -1);
     if ((did & FLUID_ASK_DID_GONE) && s_ask.v) { fluid_askview_destroy(s_ask.old); s_ask.old = s_ask.v; s_ask.v = NULL; }
+    if (did & FLUID_ASK_DID_GONE) s_ask.gone = s_tnow;
 }
 
 /* with the drawer idle: the question over this frame's scene (its dots as crisp dots, dimmed under it), its letters */
@@ -728,11 +739,13 @@ static void poll_touch(int n, const uint16_t *xs, const uint16_t *ys, int64_t t)
         /* (a spot found on the press itself (mole_fluid_spot_tap, before this poll) counts too: its layout may be up already) */
         const unsigned press = atomic_exchange(&s_spot_press, 0);
         const bool on_spot = spot >= 0 || press == (1u << 31 | (unsigned)xs[0] << 16 | ys[0]);
-        /* a tap on a question's answer: its own wave goes from there (fluid_askview_answer), not a finger's (and the answer
-         * may be taken already: the press went to the question first, as a spot's) */
-        const int pick = s_ask.v ? fluid_ask_pick(&s_ask.hit, x, y) : -1;
-        const bool answer = pick >= 0 && ((s_ask.scr.phase == FLUID_ASK_SHOW && s_ask.scr.t >= FLUID_ASK_READY) ||
-                                          (s_ask.scr.phase == FLUID_ASK_PICK && pick == s_ask.scr.pick));
+        /* a tap on a question's answer: its own wave goes from there (fluid_askview_answer; a whole one's none), not a
+         * finger's (and the answer may be taken already: the press went to the question first, as a spot's; a whole one
+         * gone with it) */
+        const bool went = s_ask.scr.whole && s_ask.scr.phase == FLUID_ASK_NONE && s_ask.scr.pick >= 0 && s_tnow - s_ask.gone < ASK_PRESS_S;
+        const int pick = s_ask.v || went ? fluid_ask_pick(&s_ask.hit, x, y) : -1;
+        const bool answer = pick >= 0 && ((s_ask.scr.phase == FLUID_ASK_SHOW && (s_ask.scr.whole ? s_dask == s_ask.scr.seq : s_ask.scr.t >= FLUID_ASK_READY)) ||
+                                          ((s_ask.scr.phase == FLUID_ASK_PICK || went) && pick == s_ask.scr.pick));
         if (spot >= 0 && fluid_fine_dust_kind_get() == FINE_DUST_SPECKS) scene_outline(s_sp.cur, spot, outline_bump, NULL);
         if (!answer && (spot < 0 || !s_sp.cur->items[spot].nopen)) ripple(x, y, on_spot ? TAP_WAVE * TAP_SPOT : TAP_WAVE, TAP_R);
         fd_user(&s_dir);                                    /* wakes a sleepy creature */
@@ -963,10 +976,13 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     /* a listen on the water, never over a question: a fixed circle at the rim, and each rise of
      * the voice sends a round wave from it across the screen (fluid_ring.h). The circle is a
      * target of the fluid, around whatever the state shows. */
+    /* (the rings form on the glass, not unseen under a change of picture that would show them whole at its end: a listen,
+     * an install's progress starting as a question goes) */
+    const float rdt_ring = fluid_draw_morphing(s_draw) && fluid_draw_morph_carries(s_draw) ? 0.f : rdt;
 #ifdef MOLTY_DIAG_RING
-    fluid_ring_tick(&s_rg, rdt, (s_listen || esp_timer_get_time() < s_diag_ring_until) && !asking);
+    fluid_ring_tick(&s_rg, rdt_ring, (s_listen || esp_timer_get_time() < s_diag_ring_until) && !asking);
 #else
-    fluid_ring_tick(&s_rg, rdt, s_listen && !asking);
+    fluid_ring_tick(&s_rg, rdt_ring, s_listen && !asking);
 #endif
     {   /* the agent's progress: on from its first word until done, or PROG_TTL_S without news */
         static unsigned seen; static float at = -1.f;
@@ -975,7 +991,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         const bool done = atomic_exchange(&s_prog_end, false);
         if (done || atomic_exchange(&s_prog_stop, false)) at = -1.f;   /* done flashes first; a stop just lets go */
         const int32_t pv = atomic_load(&s_prog_in);
-        fluid_progress_tick(&s_pg, rdt, at >= 0.f && s_tnow - at < PROG_TTL_S, pv < 0 ? -1.f : pv * 0.001f, done);
+        fluid_progress_tick(&s_pg, rdt_ring, at >= 0.f && s_tnow - at < PROG_TTL_S, pv < 0 ? -1.f : pv * 0.001f, done);
     }
     /* the floor: the dim fluid on a ground plane under a creature, flat behind anything else */
     s_floor_w += ((s_cur == ST_CREATURE ? 1.f : 0.f) - s_floor_w) * fminf(1.f, 2.f * rdt);
@@ -1158,7 +1174,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     s_shimmer = 0.12f + (thinking ? 0.35f : 0.f) + cfg->mic * 0.4f;
 
     /* the question over it all, from the water as it is now */
-    if (s_ask.v) fluid_askview_frame(s_ask.v, s, &s_ask.scr, s_tnow);
+    if (s_ask.v && s_ask.vseq == s_ask.scr.seq) fluid_askview_frame(s_ask.v, s, &s_ask.scr, s_tnow);   /* (the one before: as it stood) */
     s_frame_no++;
 }
 
@@ -2045,6 +2061,8 @@ static void fluid_task(void *arg) {
                 fluid_askview_destroy(s_ask.v); fluid_askview_destroy(s_ask.old); fluid_askview_destroy(s_ask.making); s_ask.v = s_ask.old = s_ask.making = NULL;
                 if (s_ask.scr.phase == FLUID_ASK_SHOW && want.seq == s_ask.scr.seq) s_ask.v = fluid_askview_create(s_sim, &want.q);
                 if (!s_ask.v) s_ask.scr.phase = FLUID_ASK_NONE;   /* one leaving goes at once */
+                else if (s_ask.scr.whole) fluid_askview_start_whole(s_ask.v);
+                s_ask.vseq = s_ask.scr.seq;
             }
         }
         if (text_changed) {
@@ -2232,7 +2250,7 @@ static void fluid_task(void *arg) {
             fluid_fine_swap(s_fine);
         const bool asking = s_ask.v && s_ask.scr.phase != FLUID_ASK_NONE;   /* (ask_compose draws it over the frame) */
         const bool ready = !fine_look || asking || !fluid_fine_specks_kind(fluid_fine_dust_kind_get()) || fluid_fine_shown(s_fine, s_sp.cur->serial);
-        const uint32_t look = asking ? fluid_look_of(FLUID_LOOK_ASK, s_ask.scr.seq, true)
+        const uint32_t look = asking ? fluid_look_of(FLUID_LOOK_ASK, s_ask.vseq, true)
                             : fine_look ? fluid_look_of(FLUID_LOOK_SCENE, s_sp.cur->serial, ready)
                             : s_crisp ? fluid_look_of(FLUID_LOOK_CREATURE, 1u, true) : FLUID_LOOK_GLASS;
         {   /* each new look (/api/log): as a change of picture, or at once (and why); a change cut at the cloud's limit */
@@ -2342,11 +2360,12 @@ static void fluid_task(void *arg) {
         }
         /* the creature's own cells are its lines in a change of picture, the rest of its dots its dust */
         fluid_draw_morph_lines(s_draw, s_crisp && s_cpk && !asking ? cpk_cells_creature(s_cpk) : NULL);
+        fluid_draw_morph_order(s_draw, asking && s_ask.scr.whole ? fluid_askview_order(s_ask.v) : NULL);   /* (its answers grow) */
         fluid_draw_morph_handoff(s_draw);                   /* (the change's reading: this task's from here, or back) */
         if (s_touch_t0) { s_dtouch = s_touch_t0; s_touch_t0 = 0; }
         s_dstatus = fd_status(&s_dir);
         ask_compose();
-        s_dask = fluid_ask_tappable(&s_ask.scr, cfg.speed);
+        s_dask = s_ask.scr.whole && fluid_draw_morphing(s_draw) ? 0u : fluid_ask_tappable(&s_ask.scr, cfg.speed);   /* (whole: once on the glass) */
         {   /* the dust's frame: worked out ahead (above), else here now; the next one ahead only while the drawer works out
              * none itself: a scene on the fine specks, no change of picture (a change works its dust out its own way) */
             const bool go = s_fine && s_dopts.fine == s_fine && s_cur == ST_SCENE && !s_hd.out && s_hd.dust < 1.f &&
