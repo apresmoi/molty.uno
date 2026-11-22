@@ -950,6 +950,53 @@ static void test_life(const char *pkgdir) {
     fluid_sim_destroy(s); cpk_destroy(k); cpk_destroy(same); cpk_destroy(other); free(json);
 }
 
+/* the shipped cat's life: what a frame of it costs. Its signals (the player) and its layers over the clips, timed on the
+ * host against the clips alone (the same cat with the life block taken out), scaled as the bench below scales (the
+ * .molty duck is ~11 ms on the device); and the engine's steps a frame, against the build's count (44) */
+static void test_cat_life(const char *pkgdir, double v1) {
+    char path[512]; size_t len;
+    snprintf(path, sizeof(path), "%s/cat/cat.json", pkgdir);
+    char *json = slurp(path, &len);
+    cJSON *j = json ? cJSON_Parse(json) : NULL, *cr = cJSON_GetObjectItem(j, "creature");
+    const char *err = NULL;
+    cp_t *cp = json ? cp_create(json, len, &err) : NULL;
+    cc_t *with = cr ? cc_create(cr, &err) : NULL;
+    cJSON_DeleteItemFromObject(cr, "life");
+    cc_t *bare = cr ? cc_create(cr, &err) : NULL;
+    CHECK(cp && with && bare && cp_life(cp) && cc_layers(with) == 6, "cat life: loads (%s)", err ? err : "");
+    if (!cp || !with || !bare) { cp_destroy(cp); cc_destroy(with); cc_destroy(bare); cJSON_Delete(j); free(json); return; }
+    int by[CC_LAYERS_MAX], w[CC_LAYERS_MAX], steps = 0;   /* the layers' signals, as creature_pkg.c binds them */
+    cJSON *jl = cJSON_Parse(json);
+    const cJSON *L = cJSON_GetObjectItem(cJSON_GetObjectItem(cJSON_GetObjectItem(jl, "creature"), "life"), "layers");
+    for (int i = 0; i < cc_layers(with); i++) {
+        const cJSON *l = cJSON_GetArrayItem(L, i), *wj = cJSON_GetObjectItem(l, "w");
+        by[i] = cp_slot(cp, cJSON_GetObjectItem(l, "by")->valuestring); w[i] = wj ? cp_slot(cp, wj->valuestring) : -1;
+    }
+    const int in_free = cp_slot(cp, "free");
+    static const cp_walk_t still;
+    double t_life = 0, t_bare = 0;
+    for (int f = 0; f < 1800; f++) {
+        const int mood = (int[]){ CM_IDLE, CM_THINKING, CM_LISTENING, CM_SLEEPY }[f / 450];
+        if (f % 450 == 0) { cc_mood(with, MOOD_NAMES[mood]); cc_mood(bare, MOOD_NAMES[mood]); }
+        double t0 = now_us();
+        cp_set(cp, in_free, cc_free(with) ? 1.f : 0.f);
+        cp_pose_t p = { .mood = mood };
+        cp_pose(cp, &p, 1.0 / 30, NULL, NULL, 0.f, &still);
+        for (int i = 0; i < cc_layers(with); i++) cc_layer(with, i, cp_get(cp, by[i]), w[i] < 0 ? 1.f : cp_get(cp, w[i]));
+        cc_update(with, 1.f / 30.f);
+        double t1 = now_us();
+        cc_update(bare, 1.f / 30.f);
+        double t2 = now_us();
+        t_life += t1 - t0; t_bare += t2 - t1;
+        if (cp_factors(cp) > steps) steps = cp_factors(cp);
+    }
+    const double us = (t_life - t_bare) / 1800, ms = 11.0 * us / (v1 > 0 ? v1 : 1);
+    printf("  cat life: %d steps a frame at most; host %.1f us a frame (clips alone %.1f): device estimate %.2f ms for its life\n", steps, t_life / 1800, t_bare / 1800, ms);
+    CHECK(steps > 0 && steps <= 44, "cat life: %d steps a frame", steps);
+    CHECK(ms < 1.0, "cat life: about %.2f ms a frame on the device, over its 1 ms", ms);
+    cJSON_Delete(jl); cJSON_Delete(j); cp_destroy(cp); cc_destroy(with); cc_destroy(bare); free(json);
+}
+
 int main(int argc, char **argv) {
     if (argc < 4) { printf("usage: creature_test <packages dir> <golden dir> <duck.molty> [out dir]\n"); return 2; }
     printf("creature player host test\n");
@@ -967,6 +1014,7 @@ int main(int argc, char **argv) {
     for (const char *const *id = (const char *const[]){ "duck", NULL }; *id; id++) test_planted(argv[1], *id);   /* the cat: clip_test.c */
     const double v1 = bench_v1(argv[3]);
     CHECK(v1 > 0, "the .molty duck to compare with (%s)", argv[3]);
+    test_cat_life(argv[1], v1);
     for (const char *const *id = (const char *const[]){ "duck", "cat", "octopus", NULL }; *id; id++) {
         const double us = test_render(argv[1], *id, argc > 4 ? argv[4] : NULL), ms = 11.0 * us / (v1 > 0 ? v1 : 1), frame = 30.0 - 11.0 + ms;
         printf("  bench %-8s host %.1f us a frame (the .molty duck %.1f us): device estimate %.1f ms, frame %.1f ms = %.0f fps\n",
