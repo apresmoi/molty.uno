@@ -104,8 +104,10 @@ runtime from the board's display (412×412 on the 1.46: 52×32 cells; 466×466 o
   params the agent sends ([PACKAGES.md](PACKAGES.md)). Left alone, a scene stands in high definition:
   its lines at the panel's own pixels on fine dust that gathers round every stroke. A touch sends a
   real wave through it, and what a tapped spot highlights grows and stays sharp.
-- **Questions and the ring form from the water.** A question's arcs or rows condense where a wave's
-  crest passes and break into dust when answered ([AGENT-LINK.md](AGENT-LINK.md#device--relay-wire-wswss-v1deviceiddevice_id), `ask`).
+- **Questions come as dust; the ring forms from the water.** A question is a change of picture: the
+  screen dissolves and its dust gathers into the question, the answers' arcs growing out from the
+  bottom of the rim, and dissolves back when answered
+  ([AGENT-LINK.md](AGENT-LINK.md#device--relay-wire-wswss-v1deviceiddevice_id), `ask`).
 - **Frame rate.** The fluid task draws at most 33 frames a second (`FLUID_FRAME_US`, 30 ms a frame)
   and 20 while the creature sleeps. The floor we hold every effect to is 30 fps: an effect that
   misses it gets lighter, not shipped slower. `GET /api/creature/state` reports `fps` and the
