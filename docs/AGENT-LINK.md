@@ -862,7 +862,9 @@ What the screen does between commands (`device/firmware/main/fluid/fluid_directo
 - **Idle life.** While idle, the creature blinks, glances and breathes, and every
   20–60 s flashes a short `happy` or `surprised`. After 5 minutes without a touch or a
   command it dozes off (`sleepy`, 20 fps); a touch, a button, a shake or any command
-  wakes it. `status` reports the mood on screen.
+  wakes it. `status` reports the mood on screen. A while after it dozes off the screen
+  goes dark by itself ([Screen off](#device-events), below the events table): any
+  command that shows something lights it again, the creature awake.
 - **Status mark.** No Wi-Fi (a short arc), relay offline (a dim dot) or a refused device
   key (an accent dot) shows as a small mark at the bottom edge after 10 s; it never
   changes the state. Only the pairing code takes over the screen.
@@ -990,6 +992,7 @@ it **yawns**, then dozes off (`sleepy`; off: no yawn). A say that played to its 
 creature back and idle within 8 s: one `happy` flash (at most one a minute). The console's
 setting: Settings › Molty "idle life" (`POST /api/creature/state {idle_life:
 "lively"|"calm"|"off"}`, GET reports it, kept in NVS like `ring_color`; lively out of the box).
+A while after it dozes off the screen goes dark: [Screen off](#device-events).
 **Frame cost:** the action layer is a handful of `sinf` per frame on the creature's pose
 (host: within ±0.03 µs, i.e. noise, of a ~54 µs creature update + raster + fill — scaled to
 the device's ~11 ms creature work, a few µs of a 33 ms frame), the scheduler a few
@@ -1017,6 +1020,20 @@ Screen off (the PWR button's `screen` binding, `POST /api/power {screen}`): the 
 simulating and drawing and the panel sleeps; a touch (not a tap), a shake, a button, new
 words, a question or a listen turns it back on. `GET /api/power` has the battery and the last
 12 h of per-minute samples (device/firmware/main/power/power.h).
+
+The screen also goes off by itself (`screen_nap.h`) once the creature has slept for the human's
+time: `screen_off_battery_s` on battery (60 out of the box), `screen_off_usb_s` on USB power
+(600), each `0` (never) or 10..3600 s. A board that cannot tell battery from USB counts as USB.
+It never goes off while something is up: a scene, a question, a listen, a say, the progress
+ring, an update's or the pairing's words, the boot word, the bench. Besides what wakes it
+above, such a nap ends when Molty is picked up (turned past 30° from how it lay, for 0.4 s: a
+knock or a truck going by does not) and for any command that shows something (`mood`, `act`,
+`state`, `show`, `progress`, a scene, a creature), the creature awake; do not disturb changes
+nothing here, the relay already holds back what it does not allow. An off by hand stays off
+for those: only the human's touch, button, shake, or something they must see ends it. An on by
+hand while the creature sleeps starts the time again. The console's settings: Settings › Molty
+"screen off on battery" / "on USB" (`POST /api/creature/state {screen_off_battery_s,
+screen_off_usb_s}`, GET and `status` report them, kept in NVS once the screen is calm).
 
 The device reacts to a shake by itself (a brief `surprised`), agent or not. A tap or a shake also calls
 the cat to the front of the frame ([CREATURES.md](CREATURES.md#playing)).

@@ -26,7 +26,7 @@ SRCS=(
   "$HERE/web_molty.c" "$HERE/web_sdk.c" "$HERE/web_field.c"   # web_cat.c below is main/creature/creature_clip.c,
   "$MAIN/fluid/fluid_director.c" "$MAIN/fluid/fluid_ask.c" "$MAIN/fluid/fluid_askview.c" "$HERE/web_sim.c"   # web_sim.c main/fluid/fluid_sim.c
   "$MAIN/fluid/fluid_target.c" "$MAIN/fluid/fluid_draw.c" "$MAIN/fluid/fluid_fine.c" "$MAIN/fluid/glyph_rsvp.c"
-  "$MAIN/fluid/glyph_font.c"
+  "$MAIN/fluid/glyph_font.c" "$MAIN/fluid/screen_nap.c"
   "$MAIN/creature/cute_spec.c" "$MAIN/creature/cute_rig.c" "$MAIN/creature/mood_engine.c" "$MAIN/creature/rig_geo.c"
   "$MAIN/creature/creature_player.c" "$MAIN/creature/creature_body.c" "$MAIN/creature/creature_pkg.c"
   "$HERE/web_cat.c" "$MAIN/creature/creature_dots.c" "$MAIN/creature/creature_ring.c"

@@ -93,6 +93,7 @@ idf_component_register(
         "fluid/fluid_fine.c"      # a scene's fine dust in high definition
         "fluid/glyph_rsvp.c"
         "fluid/glyph_font.c"
+        "fluid/screen_nap.c"      # the screen off a while after the creature fell asleep (host-tested)
         # creature: registry + the .molty cute-kit runtime
         "creature/mole_creature.c"
         "creature/cute_spec.c"
