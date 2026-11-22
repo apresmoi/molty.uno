@@ -42,6 +42,8 @@ void link_audio_external_react(uint32_t hold_ms) { s_ext_hold_ms = hold_ms; s_ex
 static unsigned ask_cancels, ask_cmds;
 void link_ask_cancel(void) { ask_cancels++; }
 esp_err_t link_ask_cmd(const cJSON *a, cJSON **o) { (void)a;(void)o; ask_cmds++; return ESP_OK; }
+static unsigned buzz_cmds;   /* haptic.c's buzz (link_haptic_test.c tests it) */
+esp_err_t haptic_cmd(const cJSON *a, cJSON **o) { (void)a;(void)o; buzz_cmds++; return ESP_OK; }
 static unsigned update_cmds;
 esp_err_t self_update_cmd(const cJSON *a, cJSON **o) { (void)a;(void)o; update_cmds++; return link_cmd_refuse("wrong_board"); }
 /* packages and scenes (pkg_cmd.c): which one ran */
@@ -65,6 +67,8 @@ static esp_err_t run(const char *name, const char *args) {
 }
 int main(void) {
     link_cmd_init();
+    /* buzz goes to the motor's own handler */
+    assert(run("buzz","{\"pattern\":\"tap\"}")==ESP_OK && buzz_cmds==1);
     /* gestures: read, set; a refusal changes and answers nothing */
     { cJSON *r=NULL, *a=cJSON_Parse("{}");
       assert(link_cmd_run("gestures",a,&r)==ESP_OK && !gestures_given && cJSON_GetObjectItem(r,"bindings")); cJSON_Delete(r); cJSON_Delete(a);

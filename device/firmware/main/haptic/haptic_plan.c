@@ -26,6 +26,23 @@ bool haptic_plan_one(haptic_plan_t *p, int ms, int strength)
     return haptic_plan_pattern(p, &ms, 1, strength);
 }
 
+static const struct { const char *name; int n; int seg[3]; } NAMED[] = {
+    { "tick",   1, { 30 } },
+    { "tap",    1, { 60 } },
+    { "double", 3, { 60, 90, 60 } },
+    { "nudge",  1, { 350 } },
+};
+#define N_NAMED ((int)(sizeof(NAMED) / sizeof(NAMED[0])))
+
+bool haptic_plan_named(haptic_plan_t *p, const char *name, int strength)
+{
+    for (int i = 0; name && i < N_NAMED; i++)
+        if (!strcmp(name, NAMED[i].name)) return haptic_plan_pattern(p, NAMED[i].seg, NAMED[i].n, strength);
+    return false;
+}
+
+const char *haptic_plan_name(int i) { return i >= 0 && i < N_NAMED ? NAMED[i].name : NULL; }
+
 uint32_t haptic_plan_ms(const haptic_plan_t *p)
 {
     uint32_t ms = 0;

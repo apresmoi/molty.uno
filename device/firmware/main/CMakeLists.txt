@@ -140,7 +140,7 @@ idf_component_register(
         "sense/sense.c"
         "power/power.c"          # screen off, do not disturb, the battery history (/api/power)
         "haptic/haptic_plan.c"   # the vibration motor: a buzz's segments, cap, quiet window (plain C, host-tested)
-        "haptic/haptic.c"        # ... its PWM and timer, /api/haptic
+        "haptic/haptic.c"        # ... its PWM and timer, /api/haptic, the link's buzz
         # board: the seam to the hardware (molty_board.h) + the selected board's drivers
         "board/molty_board.c"
         ${MOLTY_BOARD_SRCS}

@@ -1,7 +1,8 @@
-/* haptic_plan.c on the host: a buzz's segments, its cap, its duty and the shake gate's quiet window. */
+/* haptic_plan.c on the host: a buzz's segments, its cap, its duty, the named patterns and the shake gate's quiet window. */
 #include "haptic_plan.h"
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
 
 int main(void) {
     haptic_plan_t p;
@@ -35,6 +36,20 @@ int main(void) {
     assert(end + 249 * 1000 < until && !(end + 250 * 1000 < until));
     /* a capped buzz is quiet for the cap plus the settle, never for what was asked */
     assert(haptic_plan_one(&p, 60000, 100) && haptic_plan_quiet_until(&p, 0) == (HAPTIC_MAX_MS + 250) * 1000);
+    /* the named patterns: these four, each resolves, something on, under HAPTIC_NAMED_MAX_MS; strength passes through */
+    const char *const names[] = { "tick", "tap", "double", "nudge" };
+    int named = 0;
+    for (const char *n; (n = haptic_plan_name(named)); named++) {
+        assert(named < 4 && !strcmp(n, names[named]));
+        assert(haptic_plan_named(&p, n, 40) && p.strength == 40);
+        assert(haptic_plan_ms(&p) > 0 && haptic_plan_ms(&p) < HAPTIC_NAMED_MAX_MS);
+    }
+    assert(named == 4 && !haptic_plan_name(-1));
+    assert(haptic_plan_named(&p, "double", 100) && p.n == 3 && p.seg[0] == 60 && p.seg[1] == 90 && p.seg[2] == 60);
+    assert(haptic_plan_named(&p, "tick", 100) && haptic_plan_ms(&p) <= 40);   /* a tick, not a buzz */
+    /* unknown: refused, whatever its case */
+    assert(!haptic_plan_named(&p, "bogus", 100) && !haptic_plan_named(&p, "Double", 100) && !haptic_plan_named(&p, "", 100));
+    assert(!haptic_plan_named(&p, NULL, 100));
     printf("haptic_test: ok\n");
     return 0;
 }

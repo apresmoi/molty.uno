@@ -6,6 +6,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+static bool motor;   /* haptic.h: a vibration motor wired and up (the stub board has none) */
+bool haptic_available(void) { return motor; }
+
 int main(void)
 {
     assert(link_identity_init() == ESP_OK);
@@ -31,6 +34,11 @@ int main(void)
     sdk_caps &= ~MOLTY_CAP_TOUCH;
     hello=link_identity_hello(); caps=cJSON_PrintUnformatted(cJSON_GetObjectItem(hello,"caps"));
     assert(!strcmp(caps,"[\"fluid\",\"gestures\",\"dnd\",\"show\",\"mood\",\"act\",\"creature\",\"working\",\"progress\",\"react\",\"scene\",\"creatures\",\"log_upload\"]")); free(caps); cJSON_Delete(hello);
+    /* a board with a motor says so (cap haptic: the link's buzz) */
+    motor = true;
+    hello=link_identity_hello(); caps=cJSON_PrintUnformatted(cJSON_GetObjectItem(hello,"caps"));
+    assert(strstr(caps,"\"haptic\",\"gestures\"")); free(caps); cJSON_Delete(hello);
+    motor = false;
     sdk_caps = 0xFFFFFFFFu;
     char code[9]; strcpy(code,link_identity_code());
     sdk_now=899999999; assert(!link_identity_tick());
