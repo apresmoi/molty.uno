@@ -1,0 +1,37 @@
+{
+  "molty": "molty/2",
+  "id": "tiny",
+  "name": "Tiny",
+  "version": "1.0.0",
+  "about": "A test Molty: a ball that breathes, blinks and leans now and then (creature_test.c test_life).",
+  "look": "A green ball with two pale eyes.",
+  "colors": { "body": "#8fd4a0", "iris": "#f4f0d0", "shine": "#ffffff" },
+  "moods": { "idle": "breathes slowly", "sleepy": "breathes slower" },
+  "body": {
+    "bones": [{ "name": "root" }, { "name": "body", "parent": "root", "at": [0, 0.25, 0] }, { "name": "eyes", "parent": "body" }],
+    "shapes": [
+      { "shape": "blob", "on": "body", "radii": [0.25, 0.25, 0.25], "color": "body", "outline": "torso" },
+      { "shape": "ellipsoid", "on": "eyes", "at": [0.08, 0.08, 0.22], "radii": [0.04, 0.04, 0.006], "color": "iris", "outline": "eye" },
+      { "shape": "ellipsoid", "on": "eyes", "at": [-0.08, 0.08, 0.22], "radii": [0.04, 0.04, 0.006], "color": "iris", "outline": "eye" }
+    ],
+    "actions": {
+      "idle": { "keys": [{ "time": 0, "body": { "at": [0, 0.25, 0] } }, { "time": 3, "body": { "at": [0, 0.25, 0] } }] },
+      "sleepy": { "keys": [{ "time": 0, "body": { "at": [0, 0.22, 0] } }, { "time": 3, "body": { "at": [0, 0.22, 0] } }] },
+      "shut": { "keys": [{ "time": 0, "eyes": { "scale": [1, 1, 1] } }, { "time": 1, "eyes": { "scale": [1, 0.1, 1] } }] },
+      "lean": { "keys": [{ "time": 0, "body": { "turn": [0, 0, -20] } }, { "time": 1, "body": { "turn": [0, 0, 0] } }, { "time": 2, "body": { "turn": [0, 0, 20] } }] }
+    }
+  },
+  "life": {
+    "signals": {
+      "breath": { "wave": { "_": 0.3, "sleepy": 0.15 }, "vary": 0.2, "rise": 0.4 },
+      "blink": { "every": { "_": [1, 2], "sleepy": [4, 6] }, "lasts": 0.25, "double": 0.5 },
+      "lean_to": { "hold": [0.5, 1.5], "range": [-1, 1], "move": 0.2, "home": 0.3, "waits": "blink" },
+      "lean_head": { "follow": "lean_to", "lag": 0.25, "bounce": 0.2 }
+    },
+    "layers": [
+      { "layer": "breathing", "turn": { "bones": "body", "squash": ["breath", 0.04] } },
+      { "layer": "blink", "clip": "shut", "by": "blink" },
+      { "layer": "lean", "clip": "lean", "by": "lean_head", "zero": 0.5, "weight": "free" }
+    ]
+  }
+}

@@ -12,6 +12,9 @@
  *             what each mood and gesture plays, the startle's own way in, the walk's stride for leaving it
  *   play      cc_mood / cc_act, then cc_update once a frame: routing, sampling, crossfades (with a light paw
  *             lock), root motion, the camera
+ *   layers    its life's layers (creature.life.layers, docs/CREATURES.md section 12) over that: a pose clip at the
+ *             place a signal sets, or bones turned by it, added to the pose by a weight; the signals are the
+ *             creature player's (cp_life), handed in each frame (cc_layer)
  *
  * Plain C, no ESP-IDF (host-testable).
  */
@@ -33,6 +36,8 @@ extern "C" {
 #define CC_GEST_MAX   32
 #define CC_NAME_MAX   24
 #define CC_POSE       10          /* per node: t (3), r (4, x y z w), s (3)                          */
+#define CC_LAYERS_MAX 16          /* life layers declared                                             */
+#define CC_LAYERS_ON  8           /* ...and played in a frame (weight over 0.01), the first ones        */
 
 enum { CC_BLOB, CC_ELL, CC_CAP, CC_CONE, CC_CYL, CC_PATCH };
 /* outline groups (in the depth buffer), then features */
@@ -74,6 +79,12 @@ bool cc_come(cc_t *c, const char *first);
 bool cc_coming(const cc_t *c);
 /** Play a clip at once (no route; the preview's player and the tests). */
 void cc_play(cc_t *c, const char *clip);
+
+/** Its life layers: how many; layer i's place (the signal it is moved by) and weight this frame, set before cc_update. */
+int  cc_layers(const cc_t *c);
+void cc_layer(cc_t *c, int i, float by, float w);
+/** Nothing but its mood plays: no gesture, call or way between poses, and it is not walking (the life input `free`). */
+bool cc_free(const cc_t *c);
 
 /** One frame: dt seconds. */
 void cc_update(cc_t *c, float dt);

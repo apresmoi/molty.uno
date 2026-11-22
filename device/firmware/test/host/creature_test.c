@@ -8,6 +8,8 @@
  *             the limits) are refused with a reason.
  *   info      cp_info, what the device tells the relay: the package's about, its gestures,
  *             idle and its moods.
+ *   pinned    a Molty without a life plays as before the firmware learnt life, frame for frame.
+ *   life      a tiny Molty with one (fixtures/life-tiny, built by the Molty tools): breath, blinks, a lean.
  *
  *   render    each creature through the device's whole frame (mood engine, player, body,
  *             ambient, fill, fluid, glyphs): every mood fills the target, the eyes are holes,
@@ -803,12 +805,159 @@ static void test_own_rigged(const char *pkgdir) {
     fluid_sim_destroy(s); cpk_destroy(k); free(json);
 }
 
+/* a Molty with no life block plays as it did before the firmware learnt life (docs/alive-proposal.html section 8):
+ * the duck, the octopus and the cat as it shipped (2.0.0, kept in fixtures/) through the device's whole creature frame
+ * (engine, player, clips or body, dots or target) over moods, a gesture, work and a tap, every frame hashed. The hashes
+ * were taken on the firmware before life; a change to them is a change to how today's Moltys look. */
+static uint64_t fnv(uint64_t h, const void *p, size_t n) {
+    for (size_t i = 0; i < n; i++) h = (h ^ ((const uint8_t *)p)[i]) * 0x100000001b3ull;
+    return h;
+}
+static uint64_t pinned_frames(const char *path) {
+    size_t len;
+    char *json = slurp(path, &len);
+    const char *err = NULL;
+    cpk_t *k = json ? cpk_create(json, len, 11, &err) : NULL;
+    CHECK(k != NULL, "pinned: %s (%s)", path, err ? err : "no file");
+    if (!k) { free(json); return 0; }
+    fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
+    mood_engine_t *e = cpk_engine(k);
+    uint64_t h = 0xcbf29ce484222325ull;
+    for (int f = 0; f < 900; f++) {
+        if (f % 150 == 0) me_set_mood(e, (f / 150) % CP_N_MOODS);
+        if (f == 200) me_act(e, CA_NOD);
+        if (f == 700) cpk_come(k, NULL);
+        cpk_set_work(k, f >= 450 && f < 600);
+        cpk_frame(k, s, f % 3 ? 1.f / 30.f : 1.f / 25.f, 1.f);
+        const uint8_t *dots; const uint32_t *rgb;
+        cpk_cells(k, &dots, &rgb);
+        if (dots) { h = fnv(h, dots, (size_t)s->N); h = fnv(h, rgb, sizeof(uint32_t) * (size_t)s->N); }
+        else { h = fnv(h, s->T, sizeof(int16_t) * (size_t)s->N); h = fnv(h, s->tcol, sizeof(uint32_t) * (size_t)s->N); }
+    }
+    fluid_sim_destroy(s); cpk_destroy(k); free(json);
+    return h;
+}
+static void test_pinned(const char *pkgdir) {
+    static const struct { const char *file; uint64_t hash; } P[] = {
+        { "duck/duck.json", 0x95e7b9e4152cf148ull }, { "octopus/octopus.json", 0xb170585018046edfull },
+        { FIXTURES "/cat-2.0.0.json", 0xd682819335841d53ull },
+    };
+    for (size_t i = 0; i < sizeof(P) / sizeof(P[0]); i++) {
+        char path[512];
+        if (P[i].file[0] == '/') snprintf(path, sizeof(path), "%s", P[i].file);
+        else snprintf(path, sizeof(path), "%s/%s", pkgdir, P[i].file);
+        const uint64_t h = pinned_frames(path);
+        printf("  pinned %-22s %016llx\n", strrchr(P[i].file, '/') + 1, (unsigned long long)h);
+        CHECK(h == P[i].hash, "pinned: %s plays differently (%016llx)", P[i].file, (unsigned long long)h);
+    }
+}
+
+/* life (docs/CREATURES.md section 12) on a tiny Molty the Molty tools built (fixtures/life-tiny): a breath that squashes
+ * its body at a rate the mood sets, never the same length twice; blinks (a pose clip) at uneven gaps, sometimes two,
+ * rarer when sleepy; a lean that holds a random while, never starting mid-blink, its weight fading out under a gesture.
+ * The same seed plays the same frames, another seed others; its layers at weight 0 leave the mood loop exactly as it
+ * is; and a broken life is refused when it loads. */
+static const float *node_world(const cpk_t *k, int n) { return cc_world(cpk_clip(k)) + 12 * n; }
+static float col_len(const float *W, int c) { return sqrtf(W[c] * W[c] + W[4 + c] * W[4 + c] + W[8 + c] * W[8 + c]); }
+static void refused_life(const char *json, const char *from, const char *to, const char *want) {
+    const char *at = strstr(json, from);
+    CHECK(at != NULL, "life: mutation '%s' not found", from);
+    if (!at) return;
+    const size_t a = (size_t)(at - json), fl = strlen(from), tl = strlen(to), n = strlen(json);
+    char *m = malloc(n - fl + tl + 1);
+    memcpy(m, json, a); memcpy(m + a, to, tl); memcpy(m + a + tl, at + fl, n - a - fl + 1);
+    const char *err = NULL;
+    cpk_t *k = cpk_create(m, strlen(m), 1, &err);
+    CHECK(k == NULL && err && !strcmp(err, want), "life: %s accepted (%s)", want, err ? err : "no error");
+    cpk_destroy(k); free(m);
+}
+static void test_life(const char *pkgdir) {
+    size_t len;
+    char *json = slurp(LIFE_TINY, &len);
+    const char *err = NULL;
+    cpk_t *k = json ? cpk_create(json, len, 5, &err) : NULL, *same = json ? cpk_create(json, len, 5, &err) : NULL, *other = json ? cpk_create(json, len, 6, &err) : NULL;
+    CHECK(k && same && other, "life: the tiny Molty (%s)", err ? err : "no file");
+    if (!k || !same || !other) { cpk_destroy(k); cpk_destroy(same); cpk_destroy(other); free(json); return; }
+    const cp_t *cp = cpk_player(k);
+    CHECK(cp_life(cp) && cc_layers(cpk_clip(k)) == 3, "life: %d layers", cc_layers(cpk_clip(k)));
+    fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
+    const int to = cp_slot(cp, "_lean_to.to"), bx = cp_slot(cp, "_blink.x"), body = 1, eyes = 2;
+    float lo = 9, hi = 0, prev_y = 1, prev_to = 0, lean_lo = 9, lean_hi = -9, steps = 0;
+    int rise[64], nrise = 0, shut[128], nshut = 0, mid = 0, moves = 0, differ = 0, apart = 0;
+    bool closed = false;
+    for (int f = 0; f < 1200; f++) {               /* 40 s: idle, then sleepy */
+        if (f == 600) me_set_mood(cpk_engine(k), CM_SLEEPY);
+        cpk_frame(k, s, 1.f / 30.f, 1.f);
+        if (f < 600) { me_set_mood(cpk_engine(same), CM_IDLE); cpk_frame(same, s, 1.f / 30.f, 1.f); cpk_frame(other, s, 1.f / 30.f, 1.f);
+                       differ += memcmp(cc_world(cpk_clip(k)), cc_world(cpk_clip(same)), sizeof(float) * 12 * 3) != 0;
+                       apart += memcmp(cc_world(cpk_clip(k)), cc_world(cpk_clip(other)), sizeof(float) * 12 * 3) != 0; }
+        const float y = col_len(node_world(k, body), 1), e = col_len(node_world(k, eyes), 1) / y, ang = atan2f(node_world(k, body)[4], node_world(k, body)[0]);
+        if (f > 30 && f < 600) { lo = fminf(lo, y); hi = fmaxf(hi, y); lean_lo = fminf(lean_lo, ang); lean_hi = fmaxf(lean_hi, ang); }
+        if (f > 30 && y >= 1.f && prev_y < 1.f && nrise < 64) rise[nrise++] = f;
+        if (!closed && e < 0.5f && nshut < 128) shut[nshut++] = f;
+        closed = e < 0.5f;
+        const float t = cp_get(cp, to);
+        if (f > 0 && t != prev_to) { moves++; const float x = cp_get(cp, bx); mid += x > -0.25f && x < 0.575f; }
+        prev_y = y; prev_to = t;
+        steps = fmaxf(steps, (float)cp_factors(cp));
+    }
+    /* the breath: 4 % either way, about 0.3 a second while idle, no two the same length */
+    double gap = 0, gap2 = 0;
+    for (int i = 1; i < nrise; i++) { const double g = (rise[i] - rise[i - 1]) / 30.0; gap += g; gap2 += g * g; }
+    const int ng = nrise - 1;
+    const double mean = ng > 0 ? gap / ng : 0, sd = ng > 1 ? sqrt(fmax(0.0, gap2 / ng - mean * mean)) : 0;
+    int idle_shut = 0;
+    for (int i = 0; i < nshut; i++) idle_shut += shut[i] < 600;
+    printf("  life: breath %.3f..%.3f, %d breaths, %.2f s apart (sd %.2f); %d blinks idle, %d sleepy; lean %.1f..%.1f deg, %d moves, %d mid-blink; %.0f steps\n",
+           lo, hi, nrise, mean, sd, idle_shut, nshut - idle_shut, lean_lo * 57.3f, lean_hi * 57.3f, moves, mid, steps);
+    CHECK(lo > 0.955f && lo < 0.97f && hi > 1.03f && hi < 1.045f, "life: the breath squashes %.3f..%.3f, not 0.96..1.04", lo, hi);
+    CHECK(nrise >= 8 && mean > 2.6 && sd > 0.05, "life: %d breaths %.2f s apart (sd %.2f): not about 3.3 s, or like a clock", nrise, mean, sd);
+    CHECK(idle_shut >= 10 && nshut - idle_shut <= idle_shut / 2, "life: %d blinks idle, %d sleepy", idle_shut, nshut - idle_shut);
+    CHECK(lean_hi - lean_lo > 0.4f && moves >= 8 && mid == 0, "life: the lean %.2f rad wide, %d moves, %d of them mid-blink", lean_hi - lean_lo, moves, mid);
+    CHECK(differ == 0 && apart > 300, "life: the same seed differs in %d frames, another seed in only %d of 600", differ, apart);
+    CHECK(steps > 0 && steps <= 24, "life: %.0f steps a frame (the build counted 24 at most)", steps);
+    /* a gesture plays: the lean's weight (free) fades out, so the body is the gesture's alone */
+    {
+        cJSON *j = cJSON_Parse(json);
+        cJSON *cr = cJSON_GetObjectItem(j, "creature");
+        cc_t *with = cc_create(cr, &err);
+        cJSON_DeleteItemFromObject(cr, "life");
+        cc_t *without = cc_create(cr, &err);
+        int same_pose = 0;
+        for (int f = 0; f < 120; f++) {            /* its layers never set: weight 0, the loop exactly as it is */
+            cc_update(with, 1.f / 30.f); cc_update(without, 1.f / 30.f);
+            same_pose += !memcmp(cc_world(with), cc_world(without), sizeof(float) * 12 * (size_t)cc_nodes(with));
+        }
+        CHECK(same_pose == 120, "life: its layers at weight 0 change the loop in %d of 120 frames", 120 - same_pose);
+        cc_destroy(with); cc_destroy(without); cJSON_Delete(j);
+    }
+    /* refused when it loads, with the reason */
+    refused_life(json, "\"by\":\"blink\"", "\"by\":\"blinq\"", "life: a layer's signal");
+    refused_life(json, "\"clip\":\"shut\"", "\"clip\":\"shot\"", "life: a layer's clip");
+    refused_life(json, "\"sq\":0.04", "\"sq\":0.04,\"ripple\":1", "life: a layer");
+    refused_life(json, "\"life\":{", "\"life\":{\"moments\":[],", "creature: life");
+    {   /* more work than a frame gives it */
+        char heavy[8192] = "\"life\":{\"ch\":[[\"_heavy\",[";
+        for (int i = 0; i < 76; i++) strcat(heavy, i ? ",[1,\"@t\",\"@t\",\"@t\",\"@t\",\"@t\",\"@t\",\"@t\",\"@t\"]" : "[1,\"@t\",\"@t\",\"@t\",\"@t\",\"@t\",\"@t\",\"@t\",\"@t\"]");
+        strcat(heavy, "]],");
+        refused_life(json, "\"life\":{\"ch\":[", heavy, "creature: life is too much work");
+    }
+    char path[512];
+    snprintf(path, sizeof(path), "%s/duck/duck.json", pkgdir);
+    char *duck = slurp(path, &len);
+    if (duck) refused_life(duck, "\"creature\":{", "\"creature\":{\"life\":{\"ch\":[]},", "creature: life needs a rig");
+    free(duck);
+    fluid_sim_destroy(s); cpk_destroy(k); cpk_destroy(same); cpk_destroy(other); free(json);
+}
+
 int main(int argc, char **argv) {
     if (argc < 4) { printf("usage: creature_test <packages dir> <golden dir> <duck.molty> [out dir]\n"); return 2; }
     printf("creature player host test\n");
     test_hash();
     for (const char *const *id = (const char *const[]){ "duck", "cat", "octopus", NULL }; *id; id++) test_golden(argv[1], argv[2], *id);
     test_strict(argv[1]);
+    test_pinned(argv[1]);
+    test_life(argv[1]);
     test_own_rigged(argv[1]);
     test_crisp_panel(argv[1]);
     test_crisp_ring(argv[1]);

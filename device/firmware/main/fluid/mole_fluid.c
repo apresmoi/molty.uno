@@ -980,7 +980,11 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     case ST_CREATURE:
         if (cr_loaded()) {
             /* (while a change of picture shows it, once the drawer made its new look, it stands: the drawer reads none of it) */
-            if (s_cpk && !fluid_draw_morph_still(s_draw)) { cpk_set_work(s_cpk, fd_working(&s_dir)); cpk_frame(s_cpk, s, rdt, swell); }    /* engine + player + body + ambient + fill */
+            if (s_cpk && !fluid_draw_morph_still(s_draw)) {    /* engine + player + body + ambient + fill */
+                cpk_set_work(s_cpk, fd_working(&s_dir));
+                cpk_set_idle(s_cpk, s_dir.quiet, s_dir.idle_life == FD_IDLE_LIVELY ? 1.f : s_dir.idle_life == FD_IDLE_CALM ? 0.5f : 0.f);
+                cpk_frame(s_cpk, s, rdt, swell);
+            }
             else cute_rt_update(s_cute, rdt);              /* mood engine + kit + behaviours */
             {   /* paddle's strokes splash the real water, either side of the creature */
                 static float act_t0;

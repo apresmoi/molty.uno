@@ -18,6 +18,9 @@
  *   numbers   channel values are float; the clocks (time, mood clocks, block clocks, integrated
  *             phases) are double, and the periodic ops form their argument in double, so a
  *             creature moves the same after a day as after a minute.
+ *   life      a rigged creature's `life` (docs/CREATURES.md section 12): its signals, compiled by the build
+ *             tool into channels and events of this same engine, run last in cp_pose, after the device has
+ *             set its inputs (cp_set: free, idle_time, life). Its layers are the clip player's (creature_clip.h).
  */
 #pragma once
 
@@ -46,6 +49,8 @@ extern "C" {
 #define CP_LIVE_MAX     64       /* live particles                                             */
 #define CP_ID_MAX       32
 #define CP_NAME_MAX     32
+#define CP_LIFE_CH      256      /* a life's channels                                          */
+#define CP_LIFE_STEPS   600      /* ...and the factors it may evaluate in a frame, at most      */
 
 enum { CPS_ELLIPSOID, CPS_BOX, CPS_CONE, CPS_CYLINDER, CPS_TUBE };
 enum { CP_EYE_NORMAL, CP_EYE_WIDE, CP_EYE_HAPPY, CP_EYE_SLEEPY, CP_EYE_SQUINT };
@@ -147,6 +152,14 @@ bool  cp_tinted(const cp_t *c);
 int   cp_ambient(cp_t *c, const cp_env_t *env, cp_mark_t *out, int max);
 /** Factor evaluations in the last frame (the cost meter of docs/CREATURES.md section 8). */
 int   cp_factors(const cp_t *c);
+/** It has a life block. Its randomness (each draw and each gap) follows seed, so two boots differ and a test repeats. */
+bool  cp_life(const cp_t *c);
+void  cp_seed(cp_t *c, uint32_t seed);
+/** A named value of the store (a signal, a device input): its slot, -1 for none. cp_set writes an input before
+ *  cp_pose (one the life reads keeps it); cp_get reads any after. */
+int   cp_slot(const cp_t *c, const char *name);
+void  cp_set(cp_t *c, int slot, float v);
+float cp_get(const cp_t *c, int slot);
 /** The reference player's integer hash (murmur3 fmix32 of floor(16 n)), in 0..1. */
 double cp_hash(double n);
 
