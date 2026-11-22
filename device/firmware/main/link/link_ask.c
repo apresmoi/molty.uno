@@ -23,6 +23,7 @@
 #include "fluid_ask.h"
 #include "esp_timer.h"
 #include "mole_diag.h"
+#include "haptic.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -111,6 +112,7 @@ static esp_err_t open_question(const char *job, const fluid_ask_q_t *q, unsigned
     atomic_store(&s_mailbox, 0);
     atomic_store(&s_open_seq, seq);
     atomic_store(&s_open_gen, s_ask.gen);
+    haptic_cue("double");   /* the human must look (dropped while the mic is open) */
     mole_diag_job_begin(job);   /* ended with the question (finish / an answer in link_ask_tick) */
     return ESP_OK;
 }
@@ -176,6 +178,7 @@ void link_ask_tick(void)
                     ? link_ask_pick(&s_ask.hit, (float)(t >> 44 & 4095u) - 2048.f, (float)(t >> 32 & 4095u) - 2048.f) : -1;
     if (index >= 0) {
         mole_fluid_ask_pick(index);   /* the screen first: the send may block on a slow socket */
+        haptic_cue("tick");           /* the tap was taken */
         close_ask();
         mole_diag_event(false, "ask.answer job=%s index=%d", s_ask.job, index);
         emit_answer(index, NULL);
