@@ -90,6 +90,9 @@ export interface FluidState {
   gestures?: Partial<Record<string, string>>;
   /** How much Molty moves by itself when nobody drives it: "lively" | "calm" | "off" (newer firmware). */
   idle_life?: string;
+  /** How long after Molty falls asleep its screen goes off, on battery / on USB: 0 = never or 10..3600 s (newer firmware). */
+  screen_off_battery_s?: number;
+  screen_off_usb_s?: number;
   word?: string;
   word_idx?: number;
   nwords?: number;
@@ -112,6 +115,8 @@ export interface FluidOrder {
   shake_talk?: boolean; // a shake starts a listen by itself (shake to talk), kept on the device
   gestures?: Partial<Record<string, string>>; // what tap, double tap and the buttons do, kept on the device
   idle_life?: string; // "lively" | "calm" | "off" — small idle actions when nobody drives it, kept on the device
+  screen_off_battery_s?: number; // 0 (never) | 10..3600: the screen off this long after Molty fell asleep, on battery, kept on the device
+  screen_off_usb_s?: number; // ... on USB power
   ripple?: { x: number; y: number; strength?: number }; // x,y in -1..1, y down
 }
 

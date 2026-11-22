@@ -556,6 +556,14 @@ const canvasStats = (page) => page.evaluate(() => {
   await idleRow.getByRole('button', { name: 'lively (default)' }).click();
   await idleRow.locator('button[aria-pressed="true"]', { hasText: 'lively' }).waitFor();
   ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).idle_life === 'lively'), 'settings molty: idle life back to lively (idle_life lively)');
+  const napBat = page.getByRole('group', { name: 'screen off on battery' }), napUsb = page.getByRole('group', { name: 'screen off on USB' });
+  ok(await napBat.getByRole('button', { name: '1 min (default)' }).getAttribute('aria-pressed') === 'true', 'settings molty: screen off on battery defaults to 1 min');
+  ok(await napUsb.getByRole('button', { name: '10 min (default)' }).getAttribute('aria-pressed') === 'true', 'settings molty: screen off on USB defaults to 10 min');
+  await napUsb.getByRole('button', { name: 'never' }).click();
+  await napUsb.locator('button[aria-pressed="true"]', { hasText: 'never' }).waitFor();
+  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).screen_off_usb_s === 0), 'settings molty: screen off on USB never sent to the device (screen_off_usb_s 0)');
+  await napUsb.getByRole('button', { name: '10 min (default)' }).click();
+  await napUsb.locator('button[aria-pressed="true"]', { hasText: '10 min' }).waitFor();
   ok((await page.getByRole('group', { name: 'state' }).getByRole('button').allInnerTexts()).join() === 'creature,text', 'settings molty: the state is creature or text only');
   const actRow = page.getByRole('group', { name: 'gestures' }), moodRow = page.getByRole('group', { name: 'moods' });
   await actRow.getByRole('button', { name: 'shake head' }).click();
