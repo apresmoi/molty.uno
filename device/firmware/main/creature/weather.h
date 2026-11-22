@@ -127,7 +127,7 @@ static inline bool weather_drawn(const weather_t *w) { return w && w->show; }
  *  once the floor's wetness passes its own mark (the low places first), a quarter step at a time: the floor changes a
  *  few cells a frame, never all of it at once. (Inline: creature_dots.c builds without weather.c in some host tests.) */
 static inline int weather_wet_at(const weather_t *w, int k) {
-    if (!w || w->wet <= 0.f || k < 0 || k >= WX_GRID_MAX || !w->puddle[k]) return 0;
+    if (!w || w->wet <= 0.f || k < 0 || k >= WX_GRID_MAX) return 0;   /* (wet through, every cell is: a puddle's high places dry first) */
     const float p = (float)w->puddle[k] * (1.f / 255.f), v = (w->wet - (1.f - p) * 0.85f) / 0.15f;
     return v <= 0.f ? 0 : v >= 1.f ? 4 : (int)(v * 4.f + 0.5f);
 }

@@ -838,7 +838,9 @@ static void wx_merge(cd_t *d) {
                 for (int b = 0; b < 8; b++) {
                     if (!(c->bits & (1 << BIT[b]))) continue;
                     const int X = (c->k % W) * 2 + (b >> 2), Y = (c->k / W) * 4 + (b & 3);
-                    wx_put(d, X, (int)(yr - ((float)Y - yc) * 0.62f), c->rgb, WX_REFL * 1.1f, rough);
+                    const int ry = (int)(yr - ((float)Y - yc) * 0.62f);
+                    if (ry & 1) continue;                   /* (every other row: a wet street's moon, in lines) */
+                    wx_put(d, X, ry, c->rgb, WX_REFL * 0.9f, rough);
                 }
             }
         }
@@ -873,15 +875,16 @@ static void wx_merge(cd_t *d) {
             const int at = (Y0 + row) * DW + X0 + col;
             const dot_t *p = d->dot + at;
             if (d->vig[at] <= 0.f || p->pri) continue;
-            if (p->fl & FH) {                               /* behind: the cat hides it; in front: across its body, half */
-                if (!l || (l == 1 && ((Y0 + row) & 1))) continue;
+            if (p->fl & FH) {                               /* behind: the cat hides it; in front: across its body, a dot in four
+                                                             * left out and dimmer (a line, not a scratch) */
+                if (!l || (l == 1 && (Y0 + row) % 4 == 3)) continue;
                 body = true;
             }
             bits |= (uint8_t)bit;
         }
         if (!bits) continue;
         d->wx_dots[1 + l] += __builtin_popcount(bits);
-        const uint32_t v = body && l == 1 ? rgb_k(c->rgb, 0.6f) : c->rgb;
+        const uint32_t v = body && l == 1 ? rgb_k(c->rgb, 0.55f) : c->rgb;
         if (!d->cdots[k] || lum(v) > lum(d->ccol[k])) d->ccol[k] = v;
         d->cdots[k] |= bits;
     }

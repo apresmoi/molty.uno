@@ -20,13 +20,13 @@ static const wx_look_t LOOK[WX_KINDS] = {
     /*            land  far  front slant  len     bri    bumpk beads runner/s */
     [WX_CLEAR]    = { 0.f,  0.f,  0.f, 0.05f, 0.036f, 0.75f, 1.f,  0.f,  0.f },
     [WX_DRIZZLE]  = { 5.f,  10.f, 0.f, 0.05f, 0.036f, 0.75f, 1.f,  5.f,  1.f / 40.f },
-    [WX_RAIN]     = { 12.f, 30.f, 0.f, 0.14f, 0.08f,  0.80f, 1.f,  10.f,  1.f / 14.f },
-    [WX_DOWNPOUR] = { 12.f, 20.f, 8.f,  0.36f, 0.11f,  0.80f, 0.6f, 13.f, 1.f / 9.f },
+    [WX_RAIN]     = { 10.f, 26.f, 0.f, 0.14f, 0.08f,  0.80f, 1.f,  10.f,  1.f / 14.f },
+    [WX_DOWNPOUR] = { 8.f,  8.f,  10.f, 0.36f, 0.11f,  0.80f, 0.6f, 12.f, 1.f / 9.f },
 };
 #define WX_MOON_FAR     60.f                /* moonlit: this many more far streaks a second, all in the moon's light     */
 #define WX_DROP_S       0.12f               /* a drop's bump: fluid_sim_impulse's strength (a light tap's 0.15 x 0.8)     */
 #define WX_DROP_R       0.045f              /* ... and radius                                                             */
-#define WX_RING_LIFE    0.53f               /* s a ring spreads and fades                                                 */
+#define WX_RING_LIFE    0.4f                /* s a ring spreads and fades                                                 */
 #define WX_SPLASH       (2.f / 30.f)        /* s a splash shows                                                           */
 #define WX_STAGE_PX     466.f               /* the page's px (the looks were tuned on the 466 px glass)                    */
 #define WX_BRI_MAX      0.8f                /* a streak's dot at most this of RAIN: luma ~150, the cat's eyes ~205        */
@@ -161,7 +161,7 @@ static void spawn(weather_t *w, const wx_look_t *k, int what, bool in_beam) {
             x = in_beam ? SKY_MOON_X - 0.107f * (y - SKY_MOON_Y) / (1.f - SKY_MOON_Y) + frnd(w, -0.5f, 0.5f) * (0.097f + 0.236f * (y - SKY_MOON_Y) / (1.f - SKY_MOON_Y))
                         : frnd(w, 0.03f, 0.97f);
         } else if (what == SP_FRONT) {
-            y = frnd(w, 0.86f, 0.95f); z = 1.f; x = frnd(w, 0.1f, 0.9f);
+            y = frnd(w, 0.86f, 0.95f); z = 1.f; x = frnd(w, 0.45f, 0.85f);   /* (most cross the cat at its slant) */
         } else {
             y = WX_HORIZON + 0.017f + (0.975f - WX_HORIZON - 0.017f) * r * (0.6f + 0.4f * r);   /* (more near the horizon, as seen) */
             z = clampf((y - WX_HORIZON) / (1.f - WX_HORIZON), 0.f, 1.f); x = frnd(w, 0.03f, 0.97f);
@@ -170,13 +170,15 @@ static void spawn(weather_t *w, const wx_look_t *k, int what, bool in_beam) {
     }
     if (!in_glass(x, y, WX_GLASS_R - 0.02f)) return;
     const float sl = k->slant, ux = wsin(sl), uy = wcos(sl);
-    s->v = 0.9f + 1.6f * z;
-    s->len = k->len * (what == SP_FRONT ? 1.5f : 0.45f + 0.75f * z) * frnd(w, 0.8f, 1.2f);   /* (in front: the nearest, longest) */
+    s->v = what == SP_FRONT ? 1.6f : 0.9f + 1.6f * z;   /* (in front: slower, it stays across the cat a while) */
+    s->len = k->len * (what == SP_FRONT ? 1.2f : 0.45f + 0.75f * z) * frnd(w, 0.8f, 1.2f);   /* (in front: the nearest, longest) */
     s->b = 0.65f + 0.35f * z;
     s->z = z;
     s->lands = what != SP_FAR; s->front = what == SP_FRONT;
     s->bump = what == SP_LAND && frnd(w, 0.f, 1.f) < k->bumpk;   /* (in front: a ring, no bump: the water's budget) */
-    const float y0 = -frnd(w, 0.f, 0.2f), L = (y - y0) / uy;   /* from above the glass, through the sky, to its end */
+    /* from above the glass, through the sky, to its end; in front from over the cat's head (nearer, it comes in from
+     * above the view) */
+    const float y0 = what == SP_FRONT ? frnd(w, 0.18f, 0.3f) : -frnd(w, 0.f, 0.2f), L = (y - y0) / uy;
     s->x0 = x - ux * L; s->y0 = y0; s->ux = ux; s->uy = uy;
     s->t = s->td = 0.f; s->T = L / s->v;
     s->ph = (uint8_t)(w->nstreak % WX_STREAK_EVERY);
@@ -300,15 +302,13 @@ static void draw_bead(weather_t *w, layer_t *L, const wx_bead_t *b) {
     const int X = (int)(b->x * (float)DW), Y = (int)(b->y * (float)DH);
     /* a lens, not a bubble: a bright point up and to the left, the rim's light gathered low, nothing at the top */
     if (b->size == 0) { put(w, L, X, Y, 0.55f * fade, GLASS); }
-    else if (b->size == 1) {
+    else if (b->size == 1) {                                  /* a lens: a point of light high, its rim lit low */
         put(w, L, X - 1, Y - 1, 0.7f * fade, SHINE);
-        put(w, L, X - 2, Y + 1, 0.45f * fade, GLASS); put(w, L, X - 1, Y + 2, 0.7f * fade, GLASS); put(w, L, X, Y + 2, 0.7f * fade, GLASS); put(w, L, X + 1, Y + 1, 0.45f * fade, GLASS);
-    } else {                                                  /* (a big one: its sides too, low, open at the top) */
-        put(w, L, X - 1, Y - 2, 0.75f * fade, SHINE);
-        put(w, L, X - 3, Y, 0.35f * fade, GLASS); put(w, L, X + 2, Y, 0.35f * fade, GLASS);
-        put(w, L, X - 3, Y + 1, 0.5f * fade, GLASS); put(w, L, X + 2, Y + 1, 0.5f * fade, GLASS);
-        put(w, L, X - 2, Y + 2, 0.7f * fade, GLASS); put(w, L, X + 1, Y + 2, 0.7f * fade, GLASS);
-        put(w, L, X - 1, Y + 3, 0.8f * fade, GLASS); put(w, L, X, Y + 3, 0.8f * fade, GLASS);
+        put(w, L, X - 1, Y + 1, 0.55f * fade, GLASS); put(w, L, X, Y + 1, 0.55f * fade, GLASS);
+    } else {                                                  /* (a big one: wider low, heavier at the bottom) */
+        put(w, L, X - 1, Y - 1, 0.75f * fade, SHINE);
+        put(w, L, X - 2, Y + 1, 0.4f * fade, GLASS); put(w, L, X - 1, Y + 2, 0.65f * fade, GLASS);
+        put(w, L, X, Y + 2, 0.65f * fade, GLASS); put(w, L, X + 1, Y + 1, 0.4f * fade, GLASS);
     }
     if (b->vy > 0.f)                                          /* a runner's trail: specks back up its way, fading */
         for (int ty = Y - 4; (float)ty > b->y0 * (float)DH; ty -= 3) {
