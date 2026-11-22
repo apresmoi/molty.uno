@@ -67,6 +67,7 @@
 
 #include "glyph_font.h"   /* gc_font5x7, GC_RAMP_ASCII */
 #include "fluid_ring.h"   /* the listening ring's knobs */
+#include "screen_nap.h"   /* the screen off a while after the creature fell asleep */
 
 static const char *TAG = "mole_fluid";
 
@@ -195,6 +196,13 @@ static uint32_t gestures_load(void);
 static int      s_idle_life = FD_IDLE_DEFAULT;
 static bool     s_idle_life_loaded = false;
 static int      idle_life_load(void);
+/* the screen's nap after the creature fell asleep, on battery and on USB, s (0 never; NVS "fluid"/"nap_bat", "nap_usb",
+ * the console's settings, written by power.c in the flash's quiet window: mole_fluid_nap_setting); s_nap_gen moves
+ * with each change */
+static uint32_t s_nap_s[2] = { NAP_BATTERY_S_DEFAULT, NAP_USB_S_DEFAULT };
+static bool     s_nap_loaded = false;
+static unsigned s_nap_gen;
+static void     nap_setting_load(void);
 static int      s_req_act = -1;                 /* an agent's action (act / a say's mark)  */
 static bool     s_req_spoke = false;            /* a say played to its end                 */
 /* scenes (mole_fluid_scene): ops wait here for the task, which owns the player */
@@ -320,6 +328,12 @@ static int   s_last_tx = 0, s_last_ty = 0;
 static volatile bool s_full_flush = true;
 static atomic_bool s_screen_want = true;        /* mole_fluid_screen                    */
 static atomic_bool s_screen = true;             /* on the glass now (the task switches it) */
+/* the screen's nap (screen_nap.h): the task's timer; an off by hand (mole_fluid_screen), a pick-up (mole_fluid_lifted)
+ * and the power Molty is on (mole_fluid_power) from other tasks; the progress count when the nap began */
+static nap_t       s_nap;
+static atomic_bool s_hand_off, s_lifted;
+static atomic_int  s_nap_power = NAP_POWER_UNKNOWN;
+static unsigned    s_nap_prog;
 static atomic_uint s_moved_ms;                  /* the last frame something moved on the glass (uptime ms): fluid_calm_ms */
 #define FLUID_QUIET_PX 20000                    /* ... or sent this many px to the panel (a creature at rest: ~10 k) */
 static uint32_t fluid_calm_ms(void);
@@ -1753,12 +1767,32 @@ static bool screen_switch(bool on) {
     return true;
 }
 
-/* Screen off: something the human must see is waiting (a request the task has not taken yet). */
-static bool screen_wanted(void) {
+/* Screen off: a request the task has not taken yet. NAP_WAKE_SHOW: one the human must see (words, a question, a
+ * listen), which wakes any off; NAP_WAKE_AGENT: anything else the agent shows (a state, a mood, a gesture, a scene,
+ * progress, a creature), which ends a nap only (nap_wakes); -1 none. */
+static int screen_wanted(void) {
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    bool w = s_text_ver != s_seen_ver || (s_ask_want.active && s_ask_want.seq != s_ask.scr.seq) || (s_listen_in && !s_listen);
+    const bool show = s_text_ver != s_seen_ver || (s_ask_want.active && s_ask_want.seq != s_ask.scr.seq) || (s_listen_in && !s_listen);
+    const bool agent = s_req_activity || s_req_state >= 0 || s_req_mood >= 0 || s_req_work || s_req_act >= 0 || s_req_reel ||
+                       s_scene_nops || s_follow_in || s_cute_blob;
     xSemaphoreGive(s_mutex);
-    return w;
+    return show ? NAP_WAKE_SHOW : agent || atomic_load(&s_prog_seq) != s_nap_prog ? NAP_WAKE_AGENT : -1;
+}
+
+/* Once a frame, after the sim's (fluid_task, its stack: a few words): the creature asleep on screen with nothing else
+ * up for the human's time (screen_nap.h), the screen naps. "Up": a state but the creature's, a change on its way, a
+ * question, a listen, a say, a reading, a scene, the progress ring, the boot word, the goodbye, the bench. */
+static void nap_check(void) {
+    const bool busy = (s_cur != ST_CREATURE && s_cur != ST_BLOB) || s_dir.pending || s_dir.busy || s_ask.scr.phase != FLUID_ASK_NONE ||
+                      scene_playing(&s_sp) || s_pg.on > 0.f || s_sub || s_rd_on || fd_boot_word(&s_dir) || s_dir.bye || s_bench;
+    if (!nap_tick(&s_nap, (uint32_t)(esp_timer_get_time() / 1000), fd_asleep(&s_dir), busy, atomic_load(&s_nap_power), s_nap_s[0], s_nap_s[1]))
+        return;
+    bool on = true;
+    if (!atomic_compare_exchange_strong(&s_screen_want, &on, false)) { nap_on(&s_nap); return; }   /* (the human's switch came first) */
+    atomic_store(&s_hand_off, false);
+    atomic_store(&s_lifted, false);
+    s_nap_prog = atomic_load(&s_prog_seq);
+    mole_diag_event(false, "fluid.nap (%s)", atomic_load(&s_nap_power) == NAP_POWER_BATTERY ? "battery" : "usb");
 }
 
 /* a change of picture's new picture read on this task (fluid_draw_morph_work) in what its frame leaves before the next
@@ -1846,14 +1880,25 @@ static void fluid_task(void *arg) {
         esp_task_wdt_reset();
         if (!atomic_load(&s_screen)) {                  /* off: no sim, no drawing */
             uint16_t xs[MOLTY_TOUCH_MAX_POINTS], ys[MOLTY_TOUCH_MAX_POINTS];
-            const bool touched = molty_touch_poll(xs, ys, MOLTY_TOUCH_MAX_POINTS) > 0;
-            if (!touched && !screen_wanted() && !atomic_load(&s_screen_want)) { vTaskDelay(pdMS_TO_TICKS(FLUID_OFF_POLL_MS)); continue; }
+            const bool touched = molty_touch_poll(xs, ys, MOLTY_TOUCH_MAX_POINTS) > 0, lifted = atomic_exchange(&s_lifted, false);
+            if (atomic_exchange(&s_hand_off, false)) nap_hand_off(&s_nap);
+            const int wanted = screen_wanted();
+            const int why = touched ? NAP_WAKE_TOUCH : wanted == NAP_WAKE_SHOW ? NAP_WAKE_SHOW : atomic_load(&s_screen_want) ? NAP_WAKE_BUTTON
+                          : lifted ? NAP_WAKE_LIFT : wanted;
+            if (why < 0 || !nap_wakes(&s_nap, (nap_wake_t)why)) { vTaskDelay(pdMS_TO_TICKS(FLUID_OFF_POLL_MS)); continue; }
+            if (why == NAP_WAKE_LIFT || why == NAP_WAKE_AGENT) {   /* a nap's end for a pick-up or the agent: the creature wakes too */
+                xSemaphoreTake(s_mutex, portMAX_DELAY);
+                if (why == NAP_WAKE_LIFT) s_req_user = true; else s_req_activity = true;
+                xSemaphoreGive(s_mutex);
+            }
             s_touch_mute = touched;
             atomic_store(&s_screen_want, true);
             if (!screen_switch(true)) { vTaskDelay(pdMS_TO_TICKS(FLUID_OFF_POLL_MS)); continue; }
+            nap_on(&s_nap);
             prev = woke = esp_timer_get_time();         /* no catching up on the time it was off */
             next = woke + FLUID_FRAME_US;
         } else if (!atomic_load(&s_screen_want)) { if (!screen_switch(false)) vTaskDelay(pdMS_TO_TICKS(FLUID_OFF_POLL_MS)); continue; }
+        else if (atomic_exchange(&s_hand_off, false)) nap_on(&s_nap);   /* (off and on again by hand: the timer starts again) */
         int64_t now = esp_timer_get_time();
         float rdt = (float)(now - prev) / 1e6f;
         uint32_t raw_dt_us = (uint32_t)(now - prev);
@@ -1887,6 +1932,7 @@ static void fluid_task(void *arg) {
         const touch_read_t tp = s_tp;
         if (!s_idle_life_loaded) { s_idle_life = idle_life_load(); s_idle_life_loaded = true; }
         int idle_life = s_idle_life;
+        if (!s_nap_loaded) nap_setting_load();
         uint32_t tint = s_tint_in;
         bool activity = s_req_activity, shake = s_req_shake, user = s_req_user;
         s_req_activity = s_req_shake = s_req_user = false;
@@ -1988,6 +2034,7 @@ static void fluid_task(void *arg) {
         int64_t t0 = esp_timer_get_time();
         s_sim_fill_us = s_sim_build_us = 0;
         sim_frame(rdt, &cfg);
+        nap_check();
         int64_t t1 = esp_timer_get_time();
         s_sim_work_us = (uint32_t)(t1 - t0);
         /* the dust's frame, worked out here while the drawer still draws the last one: from this task's own shapes, dots
@@ -2516,6 +2563,8 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     const uint32_t gestures = s_gestures;
     if (!s_idle_life_loaded) { s_idle_life = idle_life_load(); s_idle_life_loaded = true; }
     const int idle_life = s_idle_life;
+    if (!s_nap_loaded) nap_setting_load();
+    const uint32_t nap_bat = s_nap_s[0], nap_usb = s_nap_s[1];
     char cname[40], cerr[40], cid[PKG_ID_MAX + 1];
     memcpy(cname, s_cute_name, sizeof(cname)); memcpy(cerr, s_cute_err, sizeof(cerr)); memcpy(cid, s_cr_id, sizeof(cid));
     cJSON *info = s_cr_info ? cJSON_Parse(s_cr_info) : NULL;   /* its gestures and moods (a package's) */
@@ -2572,6 +2621,8 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     cJSON_AddBoolToObject(root, "shake_talk", shake_talk);
     cJSON_AddItemToObject(root, "gestures", gestures_json(gestures));
     cJSON_AddStringToObject(root, "idle_life", FD_IDLE_NAMES[idle_life]);
+    cJSON_AddNumberToObject(root, "screen_off_battery_s", nap_bat);   /* 0 = never */
+    cJSON_AddNumberToObject(root, "screen_off_usb_s", nap_usb);
     cJSON_AddNumberToObject(root, "scene_dust", fluid_fine_dust_kind_get());       /* EXPERIMENT (mole_fluid_scene_dust) */
     cJSON_AddNumberToObject(root, "scene_hard_pct", fluid_fine_hard_density_get()); /* EXPERIMENT (mole_fluid_scene_hard) */
     cJSON_AddStringToObject(root, "edge_mode",   FLUID_EDGE_NAMES[c.edge_mode]);
@@ -2704,6 +2755,15 @@ esp_err_t mole_fluid_creature_state_set_json(const char *body) {
         }
         if (ne != ESP_OK) { ESP_LOGW(TAG, "idle_life not saved (%s)", esp_err_to_name(ne)); ret = ne; }
     }
+    /* screen_off_battery_s, screen_off_usb_s: 0 (never) or NAP_MIN_S..NAP_MAX_S, the screen's nap after the creature
+     * fell asleep (screen_nap.h); kept in NVS by power.c once the screen is calm (mole_fluid_nap_setting) */
+    long nap[2] = { -1, -1 };                          /* -1: not given */
+    for (int k = 0; k < 2; k++)
+        if ((j = cJSON_GetObjectItem(root, k ? "screen_off_usb_s" : "screen_off_battery_s"))) {
+            if (cJSON_IsNumber(j) && j->valuedouble >= 0 && j->valuedouble <= NAP_MAX_S && j->valuedouble == (long)j->valuedouble &&
+                nap_valid_s((long)j->valuedouble)) nap[k] = (long)j->valuedouble;
+            else ret = ESP_ERR_INVALID_ARG;
+        }
     /* EXPERIMENT scene_dust: 0 | 1 | 2 | 3, scene_hard_pct: 0..25 (mole_fluid_scene_dust, _scene_hard; not kept) */
     if ((j = cJSON_GetObjectItem(root, "scene_dust"))) {
         if (cJSON_IsNumber(j) && j->valueint >= 0 && j->valueint <= 3) mole_fluid_scene_dust(j->valueint);
@@ -2836,6 +2896,11 @@ esp_err_t mole_fluid_creature_state_set_json(const char *body) {
     if (filler >= 0) { s_filler_ms = (uint32_t)filler; s_filler_loaded = true; }
     if (shake >= 0) { s_shake_talk = shake == 1; s_shake_talk_loaded = true; }
     if (idle >= 0) { s_idle_life = idle; s_idle_life_loaded = true; }
+    if (nap[0] >= 0 || nap[1] >= 0) {
+        if (!s_nap_loaded) nap_setting_load();
+        for (int k = 0; k < 2; k++) if (nap[k] >= 0) s_nap_s[k] = (uint32_t)nap[k];
+        if (++s_nap_gen == 0) s_nap_gen = 1;
+    }
     if (act >= 0) s_req_act = act;
     s_req_activity = true;                             /* someone is driving: no dozing off */
     xSemaphoreGive(s_mutex);
@@ -2893,7 +2958,14 @@ void mole_fluid_event(mole_fluid_event_t ev) {
     atomic_store(&s_screen_want, true);
 }
 
-void mole_fluid_screen(bool on) { if (!atomic_load(&s_bye)) atomic_store(&s_screen_want, on); }
+void mole_fluid_screen(bool on) {
+    if (atomic_load(&s_bye)) return;
+    atomic_store(&s_hand_off, true);                   /* (by hand: off is no nap, on starts the timer again) */
+    atomic_store(&s_screen_want, on);
+}
+
+void mole_fluid_lifted(void) { atomic_store(&s_lifted, true); }
+void mole_fluid_power(int power) { atomic_store(&s_nap_power, power); }
 
 void mole_fluid_goodbye(void) {
     atomic_store(&s_bye, true);
@@ -3076,6 +3148,30 @@ void mole_fluid_spoke(void) {
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     s_req_spoke = true;
     xSemaphoreGive(s_mutex);
+}
+
+/* (under s_mutex) */
+static void nap_setting_load(void) {
+    nvs_handle_t h;
+    int32_t v[2] = { -1, -1 };
+    if (nvs_open("fluid", NVS_READONLY, &h) == ESP_OK) {
+        if (nvs_get_i32(h, "nap_bat", &v[0]) != ESP_OK) v[0] = -1;
+        if (nvs_get_i32(h, "nap_usb", &v[1]) != ESP_OK) v[1] = -1;
+        nvs_close(h);
+    }
+    for (int k = 0; k < 2; k++) if (v[k] >= 0 && nap_valid_s(v[k])) s_nap_s[k] = (uint32_t)v[k];
+    s_nap_loaded = true;
+}
+
+unsigned mole_fluid_nap_setting(uint32_t *battery_s, uint32_t *usb_s) {
+    if (!s_mutex) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (!s_nap_loaded) nap_setting_load();
+    if (battery_s) *battery_s = s_nap_s[0];
+    if (usb_s) *usb_s = s_nap_s[1];
+    const unsigned gen = s_nap_gen;
+    xSemaphoreGive(s_mutex);
+    return gen;
 }
 
 static int idle_life_load(void) {
