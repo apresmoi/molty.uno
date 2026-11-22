@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # askview_build.sh — host build + run of the question's look over a moving scene (askview_test.c: main/fluid/
 # fluid_askview.c with the sim, the drawer and a panel cost model). ASKVIEW_SRC overrides the source (mutation checks);
-# ASKVIEW_DUMP=<dir> writes frames as PPM to compare against device/creatures/ask-options.html.
+# ASKVIEW_DUMP=<dir> writes frames as PPM to look at by eye.
 # Usage: test/host/askview_build.sh   (run from anywhere)
 set -euo pipefail
 

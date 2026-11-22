@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * fluid_askview.h — a question drawn over whatever the screen shows, as device/creatures/ask-options.html: the
+ * fluid_askview.h: a question drawn over whatever the screen shows, as the approved design: the
  * recording ring's language (creature_ring.h) on the braille dots, its words in the device's font at the panel's pixels.
  *
  *   form      a touch at the centre of the real water; where its crest first lifts a cell, the question's lines and

@@ -58,7 +58,7 @@ Branch `trial/hd-dust`, checked against commit `1e913af`. Nothing committed, pus
 | 13 | Website: 1.28 "supported"; setup has 3 steps and 29 Moltys | `board.json` says experimental; 4 steps, creature packages |
 | 14 | NOT FIXED (not my path): `pkg_cmd.h` and `mole_fluid.h` comments | still describe the old install buttons and the old ring |
 | 15 | NOT FIXED: relay takes a 512 byte package URL | firmware refuses over 384 |
-| 16 | NOT FIXED: docs name `ask-options.html`, `ring-options.html`, `chart-options.html`, `PORT-SPEC.md` | those files are untracked, not committed |
+| 16 | FIXED: docs and comments no longer name `ask-options.html`, `ring-options.html`, `chart-options.html`, `PORT-SPEC.md` | those files stay out of the repo; the mentions were reworded |
 | 17 | NOT FIXED: `CHANGELOG.md` Unreleased | has none of this work |
 
 **Relay not deployed (documented from source, not live)**

@@ -386,7 +386,7 @@ drawer and the flush. To be confirmed on the device (`GET /api/creature/state`, 
 | What | Where in the repository |
 |---|---|
 | The creature packages and their build scripts | `packages/duck/`, `packages/cat/`, `packages/octopus/` |
-| The cat's Blender sources | `packages/cat/blender/` |
+| The cat's Blender sources | `moltys/cat/` (`cat.blend`, exported by `tools/blender/molty_export.py`) |
 | The shared kit and the player tests | `tools/creatures/` |
 | Reference players (JavaScript) | `device/creatures/js/creature-player.js`, `clip-player.js`, `clip-dots.js` |
 | Players on the device (C) | `device/firmware/main/creature/` |

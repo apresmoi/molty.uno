@@ -209,7 +209,7 @@ int scene_outline(const scene_t *sc, int n, void (*fn)(void *ctx, float x, float
 #define SCENE_CAPTION_RGB   0x9aa0b8u   /* the ink under it                                */
 /* each new word starts a tiny ripple under each of its letters: it reaches a dot or so past the
  * word and fades fast, a wobble that never breaks the drawing into dust (fluid_sim_impulse) */
-#define SCENE_CAPTION_RIPPLE   0.12f    /* its strength (PORT-SPEC 0.16, gentler for the panel's time) */
+#define SCENE_CAPTION_RIPPLE   0.12f    /* its strength (the design's 0.16, gentler for the panel's time) */
 #define SCENE_CAPTION_RIPPLE_R 0.06f    /* its radius, glass units                         */
 typedef struct { const char *str; int n, orp; } scene_caption_t;
 /** The box a caption word's letters take at glass height y on a stage px wide: [x0, x1, y0, y1], stage px (y down). */

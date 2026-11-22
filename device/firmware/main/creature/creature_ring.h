@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: MIT
  *
  * creature_ring.h: the rings (a listen's, a question's arcs, the agent's progress) over a rigged creature's crisp cells,
- * as ring-options.html's disc 1: a wave runs out from the centre through the real water (the creature wobbles as it
+ * as the chosen design: a wave runs out from the centre through the real water (the creature wobbles as it
  * passes), its crest turns the ring's colour near the rim and lands there as a thin sharp line; a listen's voice sends
  * small ripples from the rim inward (cr_voice); letting go, a wave runs in from the rim carrying the colour inward,
  * fading. About 1 s

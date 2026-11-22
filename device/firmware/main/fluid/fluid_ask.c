@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: MIT
  *
  * fluid_ask.c — a question on the round screen: its layout, which answer a tap picks, its screen's phases
- * (fluid_ask.h). The layout is ask-options.js's header() and its "Rim arcs" / "Underlined rows" variants.
+ * (fluid_ask.h). The layout is a header, then "Rim arcs" (1..3 answers) or "Underlined rows" (4..5).
  * Plain C: built into the firmware and by test/host/ask_test.c and the link tests.
  */
 #include "fluid_ask.h"

@@ -1,5 +1,5 @@
 /*
- * askview_test.c — a question over a moving scene, as device/creatures/ask-options.html shows it (main/fluid/
+ * askview_test.c: a question over a moving scene, as the approved design shows it (main/fluid/
  * fluid_askview.c with the real sim and drawer): it forms where the centre tap's crest passes; standing, it overlays
  * everything (its words on cleared cells, its lines over the scene) while the scene behind, dimmed and thinned, keeps
  * moving; the whole name shows; answered, a wave leaves the chosen line and everything breaks into dust where it
