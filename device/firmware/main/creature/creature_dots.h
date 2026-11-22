@@ -18,6 +18,7 @@
 #include <stdint.h>
 #include "creature_clip.h"
 #include "sky.h"
+#include "weather.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -42,6 +43,12 @@ const uint8_t *cd_creature(const cd_t *d);
  *  lists stay the caller's and must live until the next call. A cell with the creature's dots keeps only them and the
  *  halo keeps the sky's dots off it, as the floor's; a moon cell takes the place of the dust's motes there. */
 void  cd_sky(cd_t *d, const sky_cell_t *moon, int nmoon, const sky_cell_t *star, int nstar);
+/** The weather (weather.h, as its last weather_frame made it) for the next draws, and the water's height on the same
+ *  grid (fluid_sim_t.h: it pushes and breaks the wet floor's mirror); w NULL or with nothing drawn: none. Both stay the
+ *  caller's. Behind: as the sky. In front and on the glass: never on the creature's own cells nor near its eyes. */
+void  cd_weather(cd_t *d, const weather_t *w, const int16_t *h);
+/** The weather's dots merged in the last draw: mirrored in the wet floor, behind, in front, on the glass. */
+void  cd_weather_dots(const cd_t *d, int out[4]);
 /** The first band's share of the rows' work, percent (20..90; CD_SHARE at first): the caller balances the two cores. */
 void  cd_set_share(cd_t *d, int pct);
 #define CD_STAGES 8

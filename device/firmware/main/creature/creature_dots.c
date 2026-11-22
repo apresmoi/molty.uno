@@ -90,6 +90,8 @@ struct cd {
     uint8_t *catm;                          /* per cell: the creature is in it (cd_creature), kept for the frame       */
     const float *world; const cc_shape_t *sh; int ns; uint32_t frame;
     const sky_cell_t *sky[2]; int nsky[2];  /* the sky behind it (cd_sky): the moon's cells, a falling star's           */
+    const weather_t *wx; const int16_t *wh;  /* the weather (cd_weather) and the water's height under it                  */
+    int wx_dots[4];                         /* ... its dots merged last frame: mirrored, behind, in front, on the glass       */
     uint32_t prof[CD_STAGES];
 #ifdef ESP_PLATFORM
     TaskHandle_t task; SemaphoreHandle_t go, done; void (*job)(cd_t *, int); volatile bool quit;
@@ -760,6 +762,134 @@ void cd_sky(cd_t *d, const sky_cell_t *moon, int nmoon, const sky_cell_t *star, 
     d->sky[0] = moon; d->nsky[0] = moon ? nmoon : 0; d->sky[1] = star; d->nsky[1] = star ? nstar : 0;
 }
 
+/* ── 9. the weather (weather.h): after the sky, on the calling core. The wet floor darker where it is wet and the cat
+ *    and the moon mirrored in it (the cat's own dots of this frame, flipped under its feet, squashed, pushed by the
+ *    water's slope and broken where it is steep); then the rain behind (off the cat and its halo, as the sky), in front
+ *    and on the glass (off the cat's lines and its face; across its body thinner and dimmer) ────────────────────── */
+
+#define WX_SQUASH     0.55f                 /* the mirror's height of the thing mirrored                               */
+#define WX_REACH      0.26f                 /* the cat's mirror fades out this far under its feet (of the dots' height) */
+#define WX_REFL       0.6f                  /* the mirror's brightness of the thing at its best                         */
+#define WX_DARK       0.13f                 /* the floor darker by this a wet step (4: 0.48 of it)                     */
+#define WX_SHIFT      0.0118f               /* the mirror's shift, dots per unit of the height's slope (h, 2 cells)      */
+#define WX_BREAK      1080.f                /* ... broken where the slope passes this (less while it rains)               */
+
+static inline uint32_t rgb_k(uint32_t v, float k) {
+    const uint32_t r = (uint32_t)((float)(v >> 16 & 255) * k + 0.5f), g = (uint32_t)((float)(v >> 8 & 255) * k + 0.5f), b = (uint32_t)((float)(v & 255) * k + 0.5f);
+    return r << 16 | g << 8 | b;
+}
+
+/* dot (X, Y) on the floor as the mirror shows it, pushed by the water's slope there: false where it breaks */
+static bool wx_mirror_at(const cd_t *d, int *X, int *Y, float rough) {
+    const int W = d->W, H = d->H, i = *X >> 1, j = *Y >> 2;
+    if (!d->wh || i < 1 || j < 1 || i >= W - 1 || j >= H - 1) return true;
+    const int k = j * W + i;
+    const float gx = (float)(d->wh[k + 1] - d->wh[k - 1]), gy = (float)(d->wh[k + W] - d->wh[k - W]);
+    if (3.33f * fabsf(gx) + 3.1f * fabsf(gy) > WX_BREAK * (1.f - 0.4f * rough)) return false;
+    *X += (int)lrintf(gx * WX_SHIFT); *Y += (int)lrintf(gy * WX_SHIFT * 0.6f);
+    return true;
+}
+/* one mirrored dot onto the floor, colour v at strength k by its cell's wetness */
+static void wx_put(cd_t *d, int X, int Y, uint32_t v, float k, float rough) {
+    if (!wx_mirror_at(d, &X, &Y, rough)) return;
+    if (X < 0 || Y <= (int)d->horizon || X >= d->DW || Y >= d->DH) return;
+    const int i = Y * d->DW + X, kc = (Y >> 2) * d->W + (X >> 1);
+    const dot_t *p = d->dot + i;
+    if (d->vig[i] <= 0.f || (p->fl & FH) || p->pri || d->catm[kc]) return;
+    const int q = weather_wet_at(d->wx, kc);
+    if (!q) return;
+    const uint32_t c = rgb_k(v, k * (float)q * 0.25f * d->vig[i]);
+    if (lum(c) < 24) return;
+    d->wx_dots[0]++;
+    d->cdots[kc] |= (uint8_t)(1 << BIT[(X & 1) << 2 | (Y & 3)]);
+    if (lum(c) > lum(d->ccol[kc])) d->ccol[kc] = c;
+}
+
+static void wx_merge(cd_t *d) {
+    const weather_t *w = d->wx;
+    const int W = d->W, H = d->H, DW = d->DW, DH = d->DH;
+    const int cx0 = d->bx0 >> 1, cx1 = (d->bx1 + 1) >> 1 < W ? (d->bx1 + 1) >> 1 : W, cy0 = d->by0 >> 2, cy1 = (d->by1 + 3) >> 2 < H ? (d->by1 + 3) >> 2 : H;
+    const float rough = clampf(w->level * 0.5f, 0.f, 1.f);
+    memset(d->wx_dots, 0, sizeof(d->wx_dots));
+    if (w->wet > 0.f) {
+        for (int j = ((int)d->horizon + 1) >> 2; j < H; j++) for (int i = 0; i < W; i++) {   /* the floor darker where wet */
+            const int k = j * W + i, q = d->cdots[k] && !d->catm[k] ? weather_wet_at(w, k) : 0;
+            if (q) d->ccol[k] = rgb_k(d->ccol[k], 1.f - WX_DARK * (float)q);
+        }
+        const float m = d->floor_row + 1.f, reach = WX_REACH * DH;
+        for (int j = cy0; j < cy1; j++) for (int i = cx0; i < cx1; i++) {   /* the cat, mirrored under its feet */
+            const int k = j * W + i;
+            if (!d->catm[k]) continue;
+            const uint8_t bits = d->cdots[k];
+            const uint32_t v = d->ccol[k];
+            for (int b = 0; b < 8; b++) {
+                if (!(bits & (1 << BIT[b]))) continue;
+                const int X = 2 * i + (b >> 2), Y = 4 * j + (b & 3);
+                if ((float)Y >= m) continue;
+                const float ry = m + (m - (float)Y) * WX_SQUASH, far = (ry - m) / reach;
+                if (far >= 1.f) continue;
+                wx_put(d, X, (int)ry, v, WX_REFL * (1.f - 0.85f * far), rough);
+            }
+        }
+        if (d->nsky[0]) {                                   /* the moon, mirrored about the horizon, squashed */
+            const float yc = SKY_MOON_Y * DH, yr = 2.f * d->horizon - yc;
+            for (int q = 0; q < d->nsky[0]; q++) {
+                const sky_cell_t *c = &d->sky[0][q];
+                for (int b = 0; b < 8; b++) {
+                    if (!(c->bits & (1 << BIT[b]))) continue;
+                    const int X = (c->k % W) * 2 + (b >> 2), Y = (c->k / W) * 4 + (b & 3);
+                    wx_put(d, X, (int)(yr - ((float)Y - yc) * 0.62f), c->rgb, WX_REFL * 1.1f, rough);
+                }
+            }
+        }
+    }
+    /* the face: the cells around the eyes (no rain in front there) */
+    int fx0 = W, fx1 = -1, fy0 = H, fy1 = -1;
+    if (w->nfront || w->nglass)
+        for (int j = cy0; j < cy1; j++) for (int i = cx0; i < cx1; i++) {
+            if (!d->catm[j * W + i]) continue;
+            for (int b = 0; b < 8; b++) {
+                const dot_t *p = d->dot + (4 * j + (b & 3)) * DW + 2 * i + (b >> 2);
+                if (!p->pri || (p->col != C_IRIS && p->col != C_PUPIL && p->col != C_SHINE)) continue;
+                if (i < fx0) fx0 = i;
+                if (i > fx1) fx1 = i;
+                if (j < fy0) fy0 = j;
+                if (j > fy1) fy1 = j;
+            }
+        }
+    fx0 -= 3; fx1 += 3; fy0 -= 2; fy1 += 3;
+    const sky_cell_t *Ls[3] = { w->back_c, w->front_c, w->glass_c };
+    const int Ns[3] = { w->nback, w->nfront, w->nglass };
+    for (int l = 0; l < 3; l++) for (int q = 0; q < Ns[l]; q++) {
+        const sky_cell_t *c = &Ls[l][q];
+        const int k = c->k, i = k % W, j = k / W;
+        if (k >= W * H || d->catm[k]) continue;             /* the creature's cell: its dots alone */
+        if (l && i >= fx0 && i <= fx1 && j >= fy0 && j <= fy1) continue;   /* never in front of its face */
+        const int X0 = i * 2, Y0 = j * 4;
+        uint8_t bits = 0; bool body = false;
+        for (int b = 0; b < 8; b++) {
+            const int col = b >> 2, row = b & 3, bit = 1 << BIT[b];
+            if (!(c->bits & bit)) continue;
+            const int at = (Y0 + row) * DW + X0 + col;
+            const dot_t *p = d->dot + at;
+            if (d->vig[at] <= 0.f || p->pri) continue;
+            if (p->fl & FH) {                               /* behind: the cat hides it; in front: across its body, half */
+                if (!l || (l == 1 && ((Y0 + row) & 1))) continue;
+                body = true;
+            }
+            bits |= (uint8_t)bit;
+        }
+        if (!bits) continue;
+        d->wx_dots[1 + l] += __builtin_popcount(bits);
+        const uint32_t v = body && l == 1 ? rgb_k(c->rgb, 0.6f) : c->rgb;
+        if (!d->cdots[k] || lum(v) > lum(d->ccol[k])) d->ccol[k] = v;
+        d->cdots[k] |= bits;
+    }
+}
+
+void cd_weather(cd_t *d, const weather_t *w, const int16_t *h) { d->wx = w; d->wh = h; }
+void cd_weather_dots(const cd_t *d, int out[4]) { for (int q = 0; q < 4; q++) out[q] = weather_drawn(d->wx) ? d->wx_dots[q] : 0; }
+
 /* ── the frame ─────────────────────────────────────────────────────────── */
 
 void cd_draw(cd_t *d, const cc_t *c, uint32_t frame) {
@@ -864,6 +994,7 @@ void cd_draw(cd_t *d, const cc_t *c, uint32_t frame) {
     }
     split_run(d, ph_cells);
     if (d->nsky[0] || d->nsky[1]) sky_merge(d);
+    if (weather_drawn(d->wx)) wx_merge(d);
     PROF_STAGE(ST_CELLS);
 }
 

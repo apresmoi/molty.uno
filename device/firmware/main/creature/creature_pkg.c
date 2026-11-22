@@ -37,6 +37,7 @@ struct cpk {
     mood_engine_t eng;
     bool work;
     const struct sky *sky;      /* the sky behind a rigged one (cpk_sky), or NULL                       */
+    const struct weather *wx;   /* the weather on its glass (cpk_weather), or NULL                       */
     /* its life: the inputs' slots in the player and what they read, each layer's signals (-1: weight 1) */
     int in_free, in_idle, in_life; float idle_s, life;
     int16_t lay_by[CC_LAYERS_MAX], lay_w[CC_LAYERS_MAX];
@@ -104,6 +105,9 @@ void cpk_voice(cpk_t *k, float level) { if (k) cr_voice(k->ring, level); }
 const uint8_t *cpk_cells_creature(const cpk_t *k) { return k && k->dots ? cd_creature(k->dots) : NULL; }
 void cpk_listen(cpk_t *k, int32_t rgb, float ink) { if (k && k->ring) cr_listen(k->ring, rgb, ink); }
 void cpk_sky(cpk_t *k, const struct sky *s) { if (k) k->sky = s; }
+void cpk_weather(cpk_t *k, const struct weather *w) { if (k) k->wx = w; }
+void cpk_weather_dots(const cpk_t *k, int out[4]) { if (k && k->dots) cd_weather_dots(k->dots, out); else for (int q = 0; q < 4; q++) out[q] = 0; }
+bool cpk_gesture(cpk_t *k, const char *name) { return k && k->clip && cc_free(k->clip) && cc_act(k->clip, name); }
 void cpk_set_share(cpk_t *k, int pct) { if (k && k->dots) cd_set_share(k->dots, pct); }
 void cpk_come(cpk_t *k, const char *first) { if (k && k->clip) cc_come(k->clip, first); }
 const cc_t *cpk_clip(const cpk_t *k) { return k ? k->clip : NULL; }
@@ -136,6 +140,7 @@ static void clip_frame(cpk_t *k, fluid_sim_t *s, float dt) {
     FLUID_PROF_END(FP_K_PLAY, c0);
     if (k->sky) cd_sky(k->dots, k->sky->moon_c, k->sky->nmoon_shown, k->sky->star_c, k->sky->nstar);
     else cd_sky(k->dots, NULL, 0, NULL, 0);
+    cd_weather(k->dots, k->wx, s->h);
     cd_draw(k->dots, k->clip, k->frame++);
     {   /* the dots' stages into the fluid's profile (GET /api/creature/state prof_ms.k_*) */
         uint32_t st[CD_STAGES] = { 0 };
