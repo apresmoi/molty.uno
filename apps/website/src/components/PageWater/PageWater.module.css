@@ -26,16 +26,24 @@
   top: 0;
   left: 0;
 }
-/* loose dust that drifts: the page's own loose dust once more, a tile bigger than the viewport
-   all round, carried one tile across and down every few minutes (a transform: no repaint) */
+/* loose dust that drifts: the page's own loose dust once more, on the page (it scrolls with it).
+   Its tile is a tile bigger than the page all round, clipped to the page, carried one tile across
+   and down every few minutes (a transform: no repaint, and only what is near the viewport is
+   drawn) */
 .drift {
-  position: fixed;
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+}
+.drift::before {
+  content: "";
+  position: absolute;
   inset: calc(-1 * var(--m-dust-size));
   background: var(--m-dust) repeat calc(var(--m-dust-size) / 2) calc(var(--m-dust-size) / 4) / var(--m-dust-size);
   opacity: 0.8;
 }
 @media (prefers-reduced-motion: no-preference) {
-  .drift {
+  .drift::before {
     animation: drift 300s linear infinite;
     will-change: transform;
   }

@@ -6,7 +6,7 @@ import styles from "./PageWater.module.css";
  *  script); here are the layers over it, under the page's text: the denser dust in focus round
  *  each device and heading (a second tile, laid by the service once it knows where they stand),
  *  the canvas a tap's wave moves the dust on (fixed to the viewport, drawn only while the water
- *  moves), and a little loose dust that drifts (by CSS alone). It finds the page (the element
+ *  moves), and loose dust drifting on the page (by CSS alone). It finds the page (the element
  *  the dust is the background of) by `data-water`. On mount it also ends the intro's wait
  *  (<html data-fluid>: Head's "pending" becomes "live"), so Head's watchdog knows a script took
  *  over. Reduced motion: the dust is laid, no waves. The dust's colours follow the theme, so a
