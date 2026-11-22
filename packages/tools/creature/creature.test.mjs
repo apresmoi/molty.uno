@@ -148,6 +148,21 @@ test('docs/CREATURE.md: its first Molty builds as written', () => {
   assert.ok(drawn(r.pkg.creature.rig, 20).dots > 100);
 });
 
+test('docs/CREATURE.md: its life examples build, Blip\'s breath and the cat\'s', () => {
+  const doc = readFileSync(join(ROOT, 'docs/CREATURE.md'), 'utf8'), [blip, cat] = [...doc.slice(doc.indexOf('## Life')).matchAll(/```json\n([\s\S]*?)```/g)].map((m) => m[1]);
+  const first = JSON.parse(/```json\n([\s\S]*?)```/.exec(doc)[1]), dir = fresh();
+  mkdirSync(dir);
+  writeFileSync(join(dir, 'molty.json'), JSON.stringify({ ...first, ...JSON.parse(`{${blip}}`) }));
+  const r = build(dir);
+  assert.deepEqual(r.errors, []);
+  assert.deepEqual(r.pkg.creature.life.layers, [{ by: 'breath', nodes: [1], sq: 0.04 }]);
+  const cdir = fresh();
+  mkdirSync(cdir);
+  cpSync(join(CAT, 'cat.glb'), join(cdir, 'cat.glb'));
+  writeFileSync(join(cdir, 'molty.json'), JSON.stringify({ ...JSON.parse(readFileSync(join(CAT, 'molty.json'), 'utf8')), life: JSON.parse(`{${cat}}`) }));
+  assert.deepEqual(check(cdir).errors, []);
+});
+
 test('the schema: what the checker enforces is what editors read', () => {
   const walk = (s, at) => {
     if (!s || typeof s !== 'object' || Array.isArray(s)) return;
