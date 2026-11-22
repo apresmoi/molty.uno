@@ -19,8 +19,8 @@ export interface SceneCommand {
 }
 
 export type MoltyAction =
-  /** POST /api/creature/state { mood }, held a few seconds, then idle again. */
-  | { kind: "mood"; name: string; about: string }
+  /** POST /api/creature/state { mood }, held a few seconds (`hold`, else MOOD_HOLD), then idle again. */
+  | { kind: "mood"; name: string; about: string; hold?: number }
   /** ... { act }: one gesture, once. */
   | { kind: "act"; name: string; about: string }
   /** The device was shaken. */
@@ -53,11 +53,24 @@ export function madeUpVoice(seconds: number): number {
   return phrase > 0 ? Math.min(1, (0.35 + 0.65 * syllable) * (0.6 + 0.4 * phrase)) : 0;
 }
 
-/** The question the stage asks, and what the cat does for each answer. */
+/** The question the stage asks, and what the cat does for each answer: yes, it laps its milk;
+ *  no, it startles (a short surprise, fur up). Any other answer, or none: nothing more. */
 export const STAGE_QUESTION = {
   question: { title: "feed the cat?", options: ["yes", "no"] },
-  then: [{ act: "eat" }, { act: "shake_head" }] as Array<Record<string, unknown>>,
+  then: [
+    { kind: "act", name: "eat" },
+    { kind: "mood", name: "surprised", hold: 2 },
+  ] as Array<{ kind: MoltyAction["kind"]; name: string; hold?: number }>,
 };
+
+/** What plays after answer `index` to the stage's question: the action from the page's own
+ *  lists (so the package's words come with it), or null. */
+export function answered(groups: ActionGroup[], index: number): MoltyAction | null {
+  const then = STAGE_QUESTION.then[index];
+  const a = then && groups.flatMap((g) => g.actions).find((x) => x.kind === then.kind && x.name === then.name);
+  if (!a) return null;
+  return a.kind === "mood" && then.hold ? { ...a, hold: then.hold } : a;
+}
 
 const GLASS: MoltyAction[] = [
   { kind: "listen", name: "listen", about: "a thin red ring while Molty records; it moves with your voice" },

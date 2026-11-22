@@ -8,7 +8,7 @@ import styles from "./MoltyActs.module.css";
  *  The line under them is the package's own words for what is playing. Without the renderer
  *  the buttons do nothing and the still stands. */
 export function MoltyActs({ groups, rest }: { groups: ActionGroup[]; rest: string }) {
-  const stage = useMoltyStage();
+  const stage = useMoltyStage(groups);
   const playing = stage.playing;
   return (
     <div className={styles.root}>

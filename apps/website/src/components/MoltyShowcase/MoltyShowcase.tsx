@@ -11,7 +11,7 @@ const label = (a: MoltyAction) => a.name.replace(/_/g, " ");
  *  come from its package and the scenes package, features/molty/actions). The line under its
  *  name is the package's own words for what is playing. URL: ?a=<action>. */
 export function MoltyShowcase({ groups, rest }: { groups: ActionGroup[]; rest: string }) {
-  const stage = useMoltyStage();
+  const stage = useMoltyStage(groups);
   const [auto, setAuto] = useState(false);
   const slot = useRef<HTMLDivElement>(null);
   const last = useRef<MoltyAction | null>(null);

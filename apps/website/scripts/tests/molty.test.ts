@@ -14,7 +14,7 @@ import sharp from "sharp";
 import { listing } from "../../../../tools/web-molty/fidelity.mjs";
 import { STILL, renderStill } from "../molty-still.mjs";
 import { WORDS } from "../../src/config/words.mjs";
-import { landingActions, sampleScene, showcaseActions, showcaseScenes, type CreaturePackage } from "../../src/features/molty/actions.ts";
+import { STAGE_QUESTION, answered, landingActions, sampleScene, showcaseActions, showcaseScenes, type CreaturePackage } from "../../src/features/molty/actions.ts";
 
 const ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
 const read = (path: string) => readFileSync(join(ROOT, path));
@@ -66,4 +66,22 @@ test("the stage's lists are the package's own: every mood, every gesture, its wo
   const own = landingActions(cat).find((g) => g.label === "its own")!.actions.map((a) => a.name);
   assert.deepEqual(own, ["eat", "yarn", "walk", "shake"]);
   assert.equal(sampleScene(commands, "chart").layout, "chart");
+});
+
+test("feed the cat? yes: it eats; no: it startles a moment; anything else: nothing more", () => {
+  const commands = read("device/firmware/test/host/fixtures/astrology-commands.jsonl").toString();
+  assert.deepEqual(STAGE_QUESTION.question.options, ["yes", "no"]);
+  for (const groups of [landingActions(cat), showcaseActions(cat, showcaseScenes(commands))]) {
+    const yes = answered(groups, 0)!;
+    assert.equal(yes.kind, "act");
+    assert.equal(yes.name, "eat");
+    assert.equal(yes.about, cat.creature.about.gestures.eat);
+    const no = answered(groups, 1)!;
+    assert.equal(no.kind, "mood");
+    assert.equal(no.name, "surprised");
+    assert.equal(no.kind === "mood" && no.hold, 2);
+    assert.equal(no.about, cat.creature.about.moods.surprised);
+    assert.equal(answered(groups, 2), null);
+    assert.equal(answered(groups, -1), null);
+  }
 });

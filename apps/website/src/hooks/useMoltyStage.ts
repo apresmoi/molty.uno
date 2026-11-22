@@ -5,7 +5,9 @@ import {
   LISTEN_SECONDS,
   MOOD_HOLD,
   STAGE_QUESTION,
+  answered,
   madeUpVoice,
+  type ActionGroup,
   type MoltyAction,
 } from "../features/molty/actions";
 
@@ -16,8 +18,9 @@ const ACT_START = 3.5;
 /** A stage: one MoltyScreen asked to do things (features/molty/actions), one at a time.
  *  `bind` goes on the MoltyScreen; `play` asks for an action (it replaces the one playing);
  *  `playing` is the one on screen now, read back from the device's own state where it has one
- *  (the gesture playing), else by its length on the screen's clock. */
-export function useMoltyStage() {
+ *  (the gesture playing), else by its length on the screen's clock. An answer to the question
+ *  plays what it asks for from `groups` (features/molty/actions answered). */
+export function useMoltyStage(groups: ActionGroup[]) {
   const screen = useRef<MoltyScreenHandle | null>(null);
   const run = useRef<{ action: MoltyAction; from: number; until: number; seen: boolean; poll: number } | null>(null);
   const clock = useRef(0);
@@ -39,8 +42,8 @@ export function useMoltyStage() {
     clear();
     let seconds = ACT_START;
     if (a.kind === "mood") {
-      s.state({ mood: a.name, hold_s: MOOD_HOLD });
-      seconds = MOOD_HOLD;
+      seconds = a.hold ?? MOOD_HOLD;
+      s.state({ mood: a.name, hold_s: seconds });
     } else if (a.kind === "act") s.state({ act: a.name });
     else if (a.kind === "shake") s.shake();
     else if (a.kind === "listen") {
@@ -78,10 +81,10 @@ export function useMoltyStage() {
 
   const onAnswer = (index: number) => {
     if (run.current?.action.kind !== "ask") return;
-    run.current = null;
+    run.current = null; // the question dissolves by itself
     setPlaying(null);
-    const then = STAGE_QUESTION.then[index];
-    if (then) screen.current?.state(then);
+    const then = answered(groups, index);
+    if (then) play(then);
   };
 
   const onReady = (s: MoltyScreenHandle | null) => {
