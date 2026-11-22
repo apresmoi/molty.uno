@@ -118,6 +118,7 @@ export async function mountMoltyScreen(
       if (scenes && !core.pack(scenes)) throw new Error("not a scenes package");
       if (!core.start(seed, options.boot && !options.reducedMotion, options.px ?? PANEL)) throw new Error("no memory");
       if (options.heading) core.haze();
+      core.time(Date.now() / 1000); // the browser's date: today's moon behind the cat
       return core;
     };
     const core = await make();
@@ -137,6 +138,8 @@ export async function mountMoltyScreen(
 /** A scene held up is asked for again this long before the device would let it go (its ttl). */
 const SCENE_TTL = 600;
 const SCENE_AGAIN = 540;
+/** The browser's date given to the module again after this long (its clock runs with the frames). */
+const TIME_AGAIN_MS = 60_000;
 
 const FINGER = ["pointerdown", "pointermove", "pointerup", "pointercancel", "pointerleave"] as const;
 
@@ -155,6 +158,7 @@ class Screen implements MoltyScreenHandle {
   private walk: Entrance | null = null;
   private outside: CanvasRenderingContext2D | null = null;
   private sceneAt = 0;
+  private timeAt = Date.now();
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -257,6 +261,11 @@ class Screen implements MoltyScreenHandle {
 
   private step(ms: number) {
     this.seconds += ms / 1000;
+    // the module's clock runs with its frames, which stop while the screen is unseen: the date again now and then
+    if (Date.now() - this.timeAt > TIME_AGAIN_MS) {
+      this.timeAt = Date.now();
+      this.core.time(this.timeAt / 1000);
+    }
     if (!this.walk) play(Math.round(ms * 1000), (us) => this.core.frame(us));
     else if (!this.walk.step(ms)) {
       // it sits: the window beside the screen is done with, the screen's own cat takes over

@@ -12,6 +12,15 @@ and looks around by itself.
 
 The cat walks. Tap the screen and it comes to the front and sits up, looking at you.
 
+## The sky
+
+Behind the creature sits today's moon, small, up to the right, lit the way it is tonight. It
+grows a little on the nights the moon is near the Earth, and at new moon it is not there. Now
+and then a falling star crosses the sky and leaves a trail that fades.
+
+The moon needs the date, which Molty takes from the internet once it is on Wi-Fi. You can turn
+the sky off on the console's **molty** page.
+
 ## The recording ring
 
 When Molty listens, a ring appears at the rim and stays until you stop talking.
