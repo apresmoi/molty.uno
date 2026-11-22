@@ -1,0 +1,583 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Molty Alive Layers</title>
+<style>
+:root {
+  --bg: #fbfbfd; --panel: #f2f3f7; --text: #1d2030; --muted: #5c6178; --line: #dcdfe8;
+  --accent: #3b6fd8; --code-bg: #eef0f6; --v1: #a0682a; --v2: #2f8f5b; --warn: #b5781f; --warn-bg: #fff6e4;
+  --dev: #c0507a; --own: #2f8f5b; --lay: #3b6fd8;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1117; --panel: #161925; --text: #e2e5f0; --muted: #9399b2; --line: #2a2f42;
+    --accent: #8fb4ff; --code-bg: #141824; --v1: #e3a86a; --v2: #6fd39a; --warn: #e3b04b; --warn-bg: #2a2416;
+    --dev: #f08fb4; --own: #6fd39a; --lay: #8fb4ff;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1117; --panel: #161925; --text: #e2e5f0; --muted: #9399b2; --line: #2a2f42;
+  --accent: #8fb4ff; --code-bg: #141824; --v1: #e3a86a; --v2: #6fd39a; --warn: #e3b04b; --warn-bg: #2a2416;
+  --dev: #f08fb4; --own: #6fd39a; --lay: #8fb4ff;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 17px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+main { max-width: 1040px; margin: 0 auto; padding: 32px 40px 90px; }
+h1 { font-size: 32px; margin: 0 0 4px; }
+h2 { font-size: 19px; margin: 26px 0 8px; }
+h3 { font-size: 17px; margin: 24px 0 6px; }
+p, li { max-width: 78ch; }
+.lead { color: var(--muted); font-size: 15px; margin: 0 0 18px; }
+a { color: var(--accent); }
+code { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; overflow-x: auto; margin: 8px 0 16px; }
+pre code { background: none; padding: 0; font-size: 13px; line-height: 1.55; }
+pre .c { color: var(--muted); }
+table { border-collapse: collapse; width: 100%; margin: 10px 0 20px; font-size: 15px; display: block; overflow-x: auto; }
+th, td { text-align: left; vertical-align: top; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+th { background: var(--panel); font-weight: 600; white-space: nowrap; }
+td code { white-space: nowrap; }
+.note { border-left: 4px solid var(--accent); background: var(--panel); padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 14px 0; max-width: 84ch; }
+.note.warn { border-color: var(--warn); background: var(--warn-bg); }
+.top { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px 26px 12px; margin-bottom: 26px; }
+.top .rec { font-size: 18px; max-width: 80ch; margin: 0 0 6px; }
+.top ul, .top ol { margin: 4px 0 10px; padding-left: 22px; }
+.top li { margin: 2px 0; }
+.decisions { counter-reset: d; list-style: none; padding: 0; }
+.decisions li { counter-increment: d; position: relative; padding: 10px 14px 10px 52px; margin: 10px 0; background: var(--panel); border-radius: 10px; max-width: 92ch; }
+.decisions li::before { content: counter(d); position: absolute; left: 14px; top: 10px; width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: var(--bg); font-weight: 700; text-align: center; line-height: 26px; font-size: 14px; }
+details { border: 1px solid var(--line); border-radius: 10px; margin: 10px 0; background: var(--bg); }
+details > summary { cursor: pointer; padding: 12px 16px; font-weight: 650; font-size: 17px; list-style: none; }
+details > summary::-webkit-details-marker { display: none; }
+details > summary::before { content: "+"; display: inline-block; width: 22px; color: var(--accent); font-weight: 700; }
+details[open] > summary::before { content: "-"; }
+details > summary .s { color: var(--muted); font-weight: 400; font-size: 15px; margin-left: 6px; }
+details > .body { padding: 0 20px 14px; border-top: 1px solid var(--line); }
+.vs { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin: 10px 0 20px; }
+.vs > div { min-width: 0; background: var(--panel); border-radius: 10px; padding: 4px 14px 8px; }
+.label { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 2px 8px; border-radius: 4px; color: var(--bg); }
+.label.pick { background: var(--v2); }
+.label.no { background: var(--v1); }
+.label.dev { background: var(--dev); }
+.label.own { background: var(--own); }
+.label.lay { background: var(--lay); }
+svg { max-width: 100%; height: auto; display: block; margin: 10px 0 18px; }
+svg text { fill: var(--text); font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+svg .m { fill: var(--muted); font-size: 11.5px; }
+svg .box { fill: var(--panel); stroke: var(--line); stroke-width: 1.2; }
+svg .dev { fill: none; stroke: var(--dev); stroke-width: 1.8; }
+svg .own { fill: none; stroke: var(--own); stroke-width: 1.8; }
+svg .lay { fill: none; stroke: var(--lay); stroke-width: 1.8; }
+svg .ln { fill: none; stroke: var(--muted); stroke-width: 1.3; }
+svg .ar { fill: var(--muted); }
+@media (max-width: 760px) {
+  main { padding: 20px 16px 60px; }
+  .vs { grid-template-columns: 1fr; }
+  .top { padding: 16px 16px 8px; }
+}
+</style>
+</head>
+<body>
+<main>
+
+<h1>Molty Alive Layers</h1>
+<p class="lead">Design proposal, nothing built. 2026-11-22. How a Molty file says how it breathes, looks around, listens, thinks and talks.</p>
+
+<section class="top">
+<h2 style="margin-top:0">Recommendation</h2>
+<p class="rec">Give every Molty an optional <code>life</code> block with three parts. <b>Signals</b> are named numbers that move: breathing, blinks, where it looks, how loud it speaks. <b>Layers</b> are small clips added over today's mood loop, each moved and weighted by a signal. <b>Moments</b> fire whole gestures when a signal says so. Mood stays the one word the agent sends; inside the Molty it becomes signal values, so sleepy slows the breath. A Molty without the block plays exactly as today. Start with breathing, blinks and glances on the cat, scored by a rig.</p>
+
+<h2>Key choices</h2>
+<ul>
+  <li>A signal is a named number. A few come from the device (voice, touch, time); the Molty defines the rest.</li>
+  <li>Signals read other signals: mood sets energy, energy sets breathing speed.</li>
+  <li>A layer is a small clip added over the mood loop; a signal moves it and sets its strength.</li>
+  <li>Moments fire gestures (a glance, a nod, a yawn) on random gaps or on a reaction, never on a fixed clock.</li>
+  <li>Mood stays the agent's one word; the Molty turns it into signal values.</li>
+  <li>The device runs it on the signal engine the duck already uses: about 1 ms of a 33 ms frame.</li>
+  <li>Today's cat and files play exactly as now; the idle and listening habits in C become the fallback.</li>
+  <li>A rig plays any Molty through the real firmware and scores repeats, stillness, lip sync and delay.</li>
+</ul>
+
+<h2>Open decisions</h2>
+<ol>
+  <li>Agents keep sending only moods, never raw signals? I say yes.</li>
+  <li>Authors write a readable <code>life</code> block, not the duck's raw formula language? I say yes.</li>
+  <li>The cat's idle, thinking and listening habits move from C into its file? I say yes.</li>
+  <li>The preview runs the real firmware, so layers are written once, not twice? I say yes.</li>
+  <li>The mouth follows the sound the device plays, not mouth shapes sent by the relay? I say yes.</li>
+</ol>
+</section>
+
+<!-- ─────────────────────────────────────────────── -->
+<details>
+<summary>1. What is hardcoded today <span class="s">and why the cat looks looped</span></summary>
+<div class="body">
+<p>The cat is played one clip at a time: its mood loop, or a gesture, or the walk between two poses, crossfaded. Everything that makes it look alive is either baked into those clips or decided in C. Five things stand out.</p>
+<table>
+<tr><th>What</th><th>Where it lives today</th><th>What it does to the cat</th></tr>
+<tr><td><b>Every mood loop is exactly 4.0 s</b></td><td>the cat's clips</td><td>Idle, listening, thinking, speaking, happy and sleepy each repeat the same 4 s forever. The eye catches the beat in under a minute. This is most of the "dead" feeling.</td></tr>
+<tr><td><b>A whole life engine is computed and thrown away</b></td><td>the mood engine (C)</td><td>Blinks every 2 to 6 s with a double one time in eight, eye darts, a breath, head springs, a fake syllable rhythm, a small dip when the mood changes. For the cat, only the mood name and the gesture number are passed on; the rest is dropped every frame.</td></tr>
+<tr><td><b>The idle library</b></td><td>the screen director (C)</td><td>Every 10 to 40 s (calm: 20 to 60 s) one gesture from a fixed weighted list: glances, a blink, look up, a wobble, a stretch. A yawn then sleep after 5 quiet minutes. A happy flash after a good conversation. The same list for every Molty.</td></tr>
+<tr><td><b>The work library</b></td><td>the screen director (C)</td><td>While the agent works: inspect, paddle, peek, glances, stretch, wiggle, 0.5 to 1.6 s apart. The duck and the octopus already opt out and do their own thing from their file (a precedent this design reuses).</td></tr>
+<tr><td><b>Listening reactions</b></td><td>the listen code (C)</td><td>A nod at a pause in the human's voice, a glance at a question, a look up when a voice starts after quiet, a blink or glance so it never freezes. Good rules, but fixed in C for every Molty.</td></tr>
+<tr><td><b>Speaking ignores the voice</b></td><td>the cat's clips</td><td>The speaking loop is a 4 s clip; it does not follow what is said. The device has the sound in hand (it writes it to the speaker 15 ms at a time) but computes no level from it. Only the human's voice has a level, for the recording ring.</td></tr>
+</table>
+<p>The good news: the duck and the octopus (the older "channel" Moltys) already run a signal engine from their file: named numbers built from waves, noise, random holds, springs and schedulers, with mood weights as inputs. It is fast (worst frame 0.2 ms on the device's chip) and has matching JavaScript and C players. The cat skipped it because it is a baked rig. This design gives the rig that engine back.</p>
+</div>
+</details>
+
+<!-- ─────────────────────────────────────────────── -->
+<details>
+<summary>2. How others solve it <span class="s">what we take from each</span></summary>
+<div class="body">
+<p>Every serious animation tool converges on the same three ideas: named inputs, things they drive, and layers that blend. We take the structure, not the surface.</p>
+<table>
+<tr><th>Tool</th><th>How it works</th><th>What we take</th></tr>
+<tr><td>Live2D (closest)</td><td>A model is data. Everything moves through named parameters (eye open, mouth open, head angle, breath). Motions are curves on parameters. The SDK ships small recipes: breathing as a slow wave on a parameter, blinking on a random interval, lip sync from the sound's loudness. Physics settings make hair follow the head.</td><td>Pose clips moved by a number; breath, blink and lip sync as recipes; follow-through down a chain.</td></tr>
+<tr><td>Rive (close)</td><td>A file holds state machines with inputs (number, yes or no, trigger). Several layers run at once. Blend states mix clips by a number input. The app only sets inputs.</td><td>The app (here: the device and the agent) sets a few inputs; the file decides what they do. Triggers as a kind of input.</td></tr>
+<tr><td>Unity Animator</td><td>Parameters drive blend trees; layers stack with a weight, override or additive, each limited to some bones by a mask.</td><td>Layers with a weight, a mode (add or replace) and a bone mask.</td></tr>
+<tr><td>Unreal</td><td>Additive animation: a clip minus its reference pose, added on top of anything. Layered blend per bone.</td><td>A layer adds the difference from its clip's neutral frame, so a breath made on the sitting cat works standing too.</td></tr>
+<tr><td>Godot AnimationTree</td><td>Blend, add and one-shot nodes, each with a parameter.</td><td>One-shot layers fired by a trigger.</td></tr>
+<tr><td>Blender drivers and NLA</td><td>A driver sets a property from other properties. NLA strips stack with an influence and a blend mode.</td><td>Signals that read signals; authors keep making clips in Blender.</td></tr>
+<tr><td>Spine</td><td>Animation tracks: higher tracks play over lower ones with their own mix time and strength.</td><td>The base track (today's player) plus tracks above it.</td></tr>
+<tr><td>Synth modulation matrix</td><td>Sources (slow waves, envelopes, random) routed to destinations with an amount. One knob can drive many.</td><td>Mood as a "macro knob" whose value many signals read.</td></tr>
+</table>
+</div>
+</details>
+
+<!-- ─────────────────────────────────────────────── -->
+<details>
+<summary>3. The model: signals, layers, moments <span class="s">and how they compose</span></summary>
+<div class="body">
+
+<h3>Three words</h3>
+<ul>
+  <li><b>Signal</b>: a named number, worked out every frame. It can be steady (energy 0.6), moving (a breath going -1 to 1), or a short pulse (a blink, 0 to 1 and back in a quarter second). A <b>trigger</b> is a signal that is a pulse.</li>
+  <li><b>Layer</b>: one thing added on top of the base pose. Either a clip from the body file (a breath, a blink, a look to the side) whose position is set by a signal, or a direct turn of some bones by a signal. It has a strength (a signal too), a mode (add, or replace for bones it owns while it is on) and the bones it may touch.</li>
+  <li><b>Moment</b>: a gesture (a whole clip on the base track, like <code>nod</code> or <code>yawn</code>) started when a trigger fires. This is how the idle library and listening reactions become data.</li>
+</ul>
+<p>The <b>base track</b> is today's clip player, unchanged: the mood loop, the agent's gestures, the walks between poses. Layers ride on it. Moments ask it to play a gesture, the same way the agent does.</p>
+
+<h3>Where signals come from</h3>
+<table>
+<tr><th>From</th><th>Signals</th><th>Kind</th></tr>
+<tr><td><span class="label dev">device</span> voice</td><td><code>voice_out</code> its own speech loudness (new, from the sound it plays), <code>voice_in</code> the human's loudness while listening, <code>talking</code>, <code>listening</code></td><td>0 to 1</td></tr>
+<tr><td><span class="label dev">device</span> heard</td><td><code>heard_start</code>, <code>heard_pause</code>, <code>heard_question</code> (from today's listen rules and the voice box's hints), <code>said_start</code>, <code>said_end</code></td><td>triggers</td></tr>
+<tr><td><span class="label dev">device</span> agent</td><td><code>mood_idle</code> ... <code>mood_surprised</code> (each mood's weight, eased, they add to 1), <code>working</code>, <code>emote</code> (fires when the agent sends a gesture)</td><td>0 to 1, trigger</td></tr>
+<tr><td><span class="label dev">device</span> body</td><td><code>touch</code>, <code>touch_x</code>, <code>shake</code>, <code>tilt_x</code>, <code>tilt_y</code>, <code>motion</code></td><td>trigger, -1 to 1</td></tr>
+<tr><td><span class="label dev">device</span> time</td><td><code>t</code>, <code>idle_time</code> (seconds since anyone did anything), <code>hour</code>, <code>battery</code>, <code>life</code> (the owner's idle-life setting: 1 lively, 0.5 calm, 0 off), <code>free</code> (1 when no gesture or walk is playing on the base)</td><td>numbers</td></tr>
+<tr><td><span class="label own">Molty</span></td><td>anything else: <code>energy</code>, <code>breath</code>, <code>blink</code>, <code>look_x</code>, <code>jaw</code> ...</td><td>whatever it makes</td></tr>
+</table>
+<p>The device list is the only fixed vocabulary. It is small on purpose, it names facts about the world (never "how a cat breathes"), and it only grows.</p>
+
+<h3>Signal kinds (what an author can make)</h3>
+<p>Each kind is one key. Any number in it may instead be a signal's name or a mood table (below).</p>
+<table>
+<tr><th>Kind</th><th>Makes</th><th>Example</th></tr>
+<tr><td><code>mood</code></td><td>a value per mood, blended by the mood weights</td><td><code>{ "mood": { "_": 0.5, "sleepy": 0.1 } }</code></td></tr>
+<tr><td><code>from</code> + <code>map</code></td><td>another signal, reshaped by a few points</td><td><code>{ "from": "energy", "map": [[0, 0.16], [1, 0.42]] }</code></td></tr>
+<tr><td><code>sum</code></td><td>signals added, each with an amount</td><td><code>{ "sum": [["energy", 1], ["tired", -0.3]] }</code></td></tr>
+<tr><td><code>wave</code></td><td>a smooth -1 to 1 swing at a rate (per second); each cycle a little faster or slower</td><td><code>{ "wave": "breath_rate", "vary": 0.15, "rise": 0.4 }</code></td></tr>
+<tr><td><code>noise</code></td><td>a smooth wander, -1 to 1</td><td><code>{ "noise": 0.15 }</code></td></tr>
+<tr><td><code>hold</code></td><td>picks a value, holds it a random time, moves to the next quickly: the way eyes and ears move</td><td><code>{ "hold": [0.6, 3], "range": [-1, 1], "move": 0.12 }</code></td></tr>
+<tr><td><code>every</code></td><td>a pulse after a random gap: a trigger with a shape</td><td><code>{ "every": [3, 7], "lasts": 0.25, "double": 0.12 }</code></td></tr>
+<tr><td><code>on</code></td><td>a pulse when a trigger fires, after a short human-like delay, at most so often</td><td><code>{ "on": "touch", "delay": [0.15, 0.35], "lasts": 0.8, "rest": 2 }</code></td></tr>
+<tr><td><code>peaks</code></td><td>a trigger on each peak of a level: syllables in speech</td><td><code>{ "peaks": "voice_out", "above": 0.3, "gap": 0.18 }</code></td></tr>
+<tr><td><code>follow</code></td><td>another signal, late and springy: overlap and follow-through</td><td><code>{ "follow": "look_x", "lag": 0.25, "bounce": 0.2 }</code></td></tr>
+</table>
+<p>Options any kind takes: <code>ease</code> (seconds to settle; two numbers for up and down, which is how a mouth opens fast and closes slower), <code>when</code> (a signal that gates it, eased, so <code>"when": "thinking"</code> fades it in only while thinking), <code>range</code>, <code>scale</code>.</p>
+
+<h3>How a signal feeds another</h3>
+<p>By name. <code>breath_rate</code> reads <code>energy</code>, <code>breath</code> reads <code>breath_rate</code>, the breathing layer reads <code>breath</code>. The build tool sorts them so each is worked out after what it reads, and refuses a loop (unless it goes through a <code>follow</code>, which uses last frame's value). The device never sorts anything; it runs them in the order the build wrote.</p>
+
+<svg viewBox="0 0 900 330" role="img" aria-label="The cat's signal graph: device signals on the left feed the cat's own signals, which drive layers and moments on the right">
+  <defs><marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ar"/></marker></defs>
+  <text x="20" y="20" class="m">from the device</text><text x="300" y="20" class="m">the cat's own signals</text><text x="700" y="20" class="m">what they move</text>
+  <rect x="20" y="36" width="150" height="30" rx="6" class="box"/><rect x="20" y="36" width="150" height="30" rx="6" class="dev"/><text x="34" y="56">mood weights</text>
+  <rect x="20" y="96" width="150" height="30" rx="6" class="box"/><rect x="20" y="96" width="150" height="30" rx="6" class="dev"/><text x="34" y="116">idle_time</text>
+  <rect x="20" y="166" width="150" height="30" rx="6" class="box"/><rect x="20" y="166" width="150" height="30" rx="6" class="dev"/><text x="34" y="186">voice_out</text>
+  <rect x="20" y="236" width="150" height="30" rx="6" class="box"/><rect x="20" y="236" width="150" height="30" rx="6" class="dev"/><text x="34" y="256">heard_pause</text>
+  <rect x="20" y="286" width="150" height="30" rx="6" class="box"/><rect x="20" y="286" width="150" height="30" rx="6" class="dev"/><text x="34" y="306">free</text>
+
+  <rect x="240" y="36" width="110" height="30" rx="6" class="box"/><rect x="240" y="36" width="110" height="30" rx="6" class="own"/><text x="254" y="56">energy</text>
+  <rect x="240" y="96" width="110" height="30" rx="6" class="box"/><rect x="240" y="96" width="110" height="30" rx="6" class="own"/><text x="254" y="116">tired</text>
+  <rect x="400" y="66" width="120" height="30" rx="6" class="box"/><rect x="400" y="66" width="120" height="30" rx="6" class="own"/><text x="414" y="86">breath_rate</text>
+  <rect x="560" y="66" width="100" height="30" rx="6" class="box"/><rect x="560" y="66" width="100" height="30" rx="6" class="own"/><text x="574" y="86">breath</text>
+  <rect x="400" y="126" width="120" height="30" rx="6" class="box"/><rect x="400" y="126" width="120" height="30" rx="6" class="own"/><text x="414" y="146">blink (every)</text>
+  <rect x="240" y="166" width="110" height="30" rx="6" class="box"/><rect x="240" y="166" width="110" height="30" rx="6" class="own"/><text x="254" y="186">jaw</text>
+  <rect x="400" y="196" width="120" height="30" rx="6" class="box"/><rect x="400" y="196" width="120" height="30" rx="6" class="own"/><text x="414" y="216">syllable</text>
+  <rect x="560" y="196" width="100" height="30" rx="6" class="box"/><rect x="560" y="196" width="100" height="30" rx="6" class="own"/><text x="574" y="216">lift</text>
+
+  <rect x="700" y="66" width="180" height="30" rx="6" class="box"/><rect x="700" y="66" width="180" height="30" rx="6" class="lay"/><text x="714" y="86">layer: breathing</text>
+  <rect x="700" y="126" width="180" height="30" rx="6" class="box"/><rect x="700" y="126" width="180" height="30" rx="6" class="lay"/><text x="714" y="146">layer: blink</text>
+  <rect x="700" y="166" width="180" height="30" rx="6" class="box"/><rect x="700" y="166" width="180" height="30" rx="6" class="lay"/><text x="714" y="186">layer: mouth (replace)</text>
+  <rect x="700" y="206" width="180" height="30" rx="6" class="box"/><rect x="700" y="206" width="180" height="30" rx="6" class="lay"/><text x="714" y="226">layer: chin lift</text>
+  <rect x="700" y="246" width="180" height="30" rx="6" class="box"/><rect x="700" y="246" width="180" height="30" rx="6" class="lay"/><text x="714" y="266">moment: nod</text>
+  <rect x="700" y="286" width="180" height="30" rx="6" class="box"/><rect x="700" y="286" width="180" height="30" rx="6" class="lay"/><text x="714" y="306">layer: gaze (weight)</text>
+
+  <path d="M170,51 L240,51" class="ln" marker-end="url(#a1)"/>
+  <path d="M170,111 L240,111" class="ln" marker-end="url(#a1)"/>
+  <path d="M350,51 C380,51 375,81 400,81" class="ln" marker-end="url(#a1)"/>
+  <path d="M350,111 C380,111 375,81 400,81" class="ln" marker-end="url(#a1)"/>
+  <path d="M520,81 L560,81" class="ln" marker-end="url(#a1)"/>
+  <path d="M660,81 L700,81" class="ln" marker-end="url(#a1)"/>
+  <path d="M170,51 C210,51 360,100 400,141" class="ln" marker-end="url(#a1)"/>
+  <path d="M520,141 L700,141" class="ln" marker-end="url(#a1)"/>
+  <path d="M170,181 L240,181" class="ln" marker-end="url(#a1)"/>
+  <path d="M350,181 L700,181" class="ln" marker-end="url(#a1)"/>
+  <path d="M170,181 C210,181 370,211 400,211" class="ln" marker-end="url(#a1)"/>
+  <path d="M520,211 L560,211" class="ln" marker-end="url(#a1)"/>
+  <path d="M660,211 C680,211 680,221 700,221" class="ln" marker-end="url(#a1)"/>
+  <path d="M170,251 L700,261" class="ln" marker-end="url(#a1)"/>
+  <path d="M170,301 L700,301" class="ln" marker-end="url(#a1)"/>
+</svg>
+<p>Mood feeds energy, the idle time feeds tiredness, and both set the breathing speed: the cat breathes faster when happy, slower when sleepy, and slows down a little more the longer nobody talks to it. Mood also sets the blink gaps (quicker while listening).</p>
+</div>
+</details>
+
+<!-- ─────────────────────────────────────────────── -->
+<details>
+<summary>4. Mood: a state outside, signal values inside <span class="s">the decision</span></summary>
+<div class="body">
+<p>Three ways to see mood, and the pick:</p>
+<div class="vs">
+<div><p><span class="label no">not this</span> <b>Mood is just a signal.</b> Agents could send <code>energy 0.3</code> or any number. Flexible, but every agent must learn every Molty's numbers, and two Moltys would disagree on what "energy" means. The skill gets harder for nothing the human sees.</p></div>
+<div><p><span class="label no">not this</span> <b>Mood stays a built-in state.</b> As today: seven names, each a loop, rules in C. Simple, but nothing can read it smoothly, so breathing cannot know how sleepy it is.</p></div>
+</div>
+<div class="note"><span class="label pick">pick</span> <b>Mood is a state the agent picks, and inside the Molty it is a set of signal values.</b> The agent's side does not change: one of <code>idle listening thinking speaking happy sleepy surprised</code>, or <code>working</code>, plus gestures, sent as today or as inline marks like <code>[happy]</code>. The device turns the current mood into eased weights (<code>mood_happy</code> rising from 0 to 1 over about a second while the old one falls). Any number in the file can be a mood table, so "sleepy breathes slower" is one line. The base track still plays each mood's loop, so a Molty with no <code>life</code> block behaves as today.</div>
+<p>A mood table is written <code>{ "_": 0.5, "sleepy": 0.1, "happy": 0.9 }</code>: <code>_</code> for every mood not named. It is worked out as the sum of each mood's value times its weight, so a mood change slides every value instead of jumping.</p>
+<p>The device itself still sets two moods, as today: sleepy after 5 quiet minutes, surprised on a shake. Those are device rules about the person (are they here?), not about how a cat moves, so they stay in C. What the cat does when it gets sleepy is the file's.</p>
+</div>
+</details>
+
+<!-- ─────────────────────────────────────────────── -->
+<details>
+<summary>5. The file: what the cat's author writes <span class="s">and the same idea on a tiny Molty</span></summary>
+<div class="body">
+<p>The block goes in <code>molty.json</code> next to <code>moods</code> and <code>gestures</code>. The clips it names (<code>breath</code>, <code>blink_pose</code>, <code>look_lr</code> ...) are ordinary actions in the body file: the author makes them in Blender like any other. A <b>pose clip</b> is short: its first key is neutral, its last key is the full effect (a full breath in, eyes shut, mouth wide). A signal slides through it.</p>
+
+<p class="file">moltys/cat/molty.json: the additions (cat 2.1.0)</p>
+<pre><code>"life": {
+  "signals": {
+    <span class="c">// how lively it is: from the mood, and slower the longer it is left alone</span>
+    "energy":      { "mood": { "_": 0.45, "listening": 0.7, "speaking": 0.7, "happy": 0.9, "sleepy": 0.1, "surprised": 1 } },
+    "tired":       { "from": "idle_time", "map": [[60, 0], [300, 1]] },
+    "calm":        { "sum": [["energy", 1], ["tired", -0.3]] },
+
+    <span class="c">// breathing: never the same length twice, in a little faster than out</span>
+    "breath_rate": { "from": "calm", "map": [[0, 0.16], [1, 0.42]] },
+    "breath":      { "wave": "breath_rate", "vary": 0.15, "rise": 0.4 },
+
+    <span class="c">// blinks: random gaps, quicker when engaged, now and then a double</span>
+    "blink":       { "every": { "_": [3, 7], "listening": [2, 4], "speaking": [2, 4], "sleepy": [8, 14] },
+                     "lasts": 0.25, "double": 0.12 },
+
+    <span class="c">// where it looks: a glance, a hold, back to you; thinking looks up and aside</span>
+    "look_x":      { "hold": [0.6, 3.0], "range": [-1, 1], "move": 0.12, "home": 0.4 },
+    "look_y":      { "hold": [0.8, 3.5], "range": { "_": [-0.3, 0.3], "thinking": [0.2, 0.9] }, "move": 0.15 },
+    "head_x":      { "follow": "look_x", "lag": 0.25, "bounce": 0.2 },
+
+    <span class="c">// ears swivel on their own; prick toward a voice</span>
+    "ears":        { "hold": [1, 6], "range": [-1, 1], "move": 0.08 },
+    "ears_voice":  { "from": "voice_in", "map": [[0.05, 0], [0.5, 1]], "ease": 0.3 },
+
+    <span class="c">// the tail wanders; faster when happy, slow when thinking</span>
+    "tail":        { "noise": { "_": 0.15, "happy": 0.5, "thinking": 0.08 } },
+
+    <span class="c">// it shifts its weight every so often</span>
+    "shift":       { "hold": [8, 25], "range": [-1, 1], "move": 1.2 },
+
+    <span class="c">// talking: the mouth follows its own voice, the chin lifts on strong syllables</span>
+    "jaw":         { "from": "voice_out", "ease": [0.03, 0.09] },
+    "syllable":    { "peaks": "voice_out", "above": 0.35, "gap": 0.25 },
+    "lift":        { "on": "syllable", "lasts": 0.35 },
+
+    <span class="c">// a touch: it looks up at you a beat later</span>
+    "noticed":     { "on": "touch", "delay": [0.15, 0.35], "lasts": 1.2, "rest": 2 },
+
+    <span class="c">// the beats that start small things and gestures</span>
+    "ponder":      { "every": [2, 5], "when": "thinking" },
+    "idle_beat":   { "every": [10, 40], "rate": "life", "when": "free" }
+  },
+
+  "layers": [
+    { "layer": "breathing", "clip": "breath",     "by": "breath" },
+    { "layer": "blink",     "clip": "blink_pose", "by": "blink",  "bones": ["eye.L", "eye.R"] },
+    { "layer": "gaze",      "clip": "look_lr",    "by": "head_x", "zero": 0.5, "weight": "free" },
+    { "layer": "gaze_up",   "clip": "look_ud",    "by": "look_y", "zero": 0.5, "weight": "free" },
+    { "layer": "noticed",   "clip": "look_ud",    "by": "noticed", "zero": 0.5 },
+    { "layer": "ears",      "clip": "ears_turn",  "by": "ears",   "zero": 0.5, "bones": ["ear.L", "ear.R"] },
+    { "layer": "ears_prick","clip": "ears_prick", "by": "ears_voice" },
+    { "layer": "tail",      "turn": { "bones": "tail6-tail12", "y": ["tail", 12], "ripple": 0.06 } },
+    { "layer": "weight",    "clip": "shift",      "by": "shift",  "zero": 0.5, "weight": { "_": 1, "sleepy": 0 } },
+    { "layer": "mouth",     "clip": "mouth_open", "by": "jaw",    "mode": "replace",
+                            "bones": ["mouth", "tongue"], "weight": "talking" },
+    { "layer": "chin",      "clip": "chin_lift",  "by": "lift" },
+    { "layer": "pondering", "once": { "ear_flick": 3, "tail_swish": 3, "head_tilt": 2, "slow_blink": 1 },
+                            "on": "ponder", "weight": "free" }
+  ],
+
+  "moments": [
+    { "on": "idle_beat",      "pick": { "glance_left": 3, "glance_right": 3, "look_up": 2, "stretch": 1.5, "wobble": 1.5 } },
+    { "on": "heard_pause",    "play": "nod",  "delay": [0.15, 0.35], "rest": 2.5 },
+    { "on": "heard_question", "play": "glance_left" },
+    { "on": "said_end",       "play": "happy", "chance": 0.3, "rest": 60 }
+  ]
+}</code></pre>
+
+<h3>What each field means</h3>
+<table>
+<tr><th>Field</th><th>Meaning</th></tr>
+<tr><td><code>clip</code> + <code>by</code></td><td>The clip's position comes from the signal: 0 is the clip's start, 1 its end. Values below 0 or above 1 are clamped.</td></tr>
+<tr><td><code>zero</code></td><td>Where in the clip the neutral pose is (default 0). <code>0.5</code> for a clip that goes left, neutral, right, so a signal from -1 to 1 maps across it.</td></tr>
+<tr><td><code>clip</code> + <code>loop</code></td><td>Instead of <code>by</code>: the clip plays on its own clock, with <code>speed</code> (a number, a signal or a mood table) and a random start.</td></tr>
+<tr><td><code>once</code> + <code>on</code></td><td>Instead of <code>by</code>: when the trigger fires, one clip is picked by weight (never the same twice in a row) and played once over the base.</td></tr>
+<tr><td><code>turn</code></td><td>No clip: these bones turn by signal times degrees. <code>ripple</code> delays each bone down the chain by that many seconds, which is follow-through without authoring it.</td></tr>
+<tr><td><code>mode</code></td><td><code>add</code> (default): the difference from the neutral frame is added, so it works on any pose. <code>replace</code>: on its bones, it takes over by its weight (the mouth while talking, so the baked speaking loop's mouth gives way to the real voice).</td></tr>
+<tr><td><code>bones</code></td><td>The bones it may touch (default: all the clip moves). A range like <code>tail6-tail12</code> is a chain.</td></tr>
+<tr><td><code>weight</code></td><td>Strength 0 to 1: a number, a signal or a mood table. Eased, so layers fade in and out. <code>free</code> fades the glances while a gesture plays so they never fight.</td></tr>
+<tr><td>moments: <code>play</code> or <code>pick</code></td><td>A gesture on the base track, routed as today. <code>delay</code>, <code>chance</code>, <code>rest</code> (the least seconds between two).</td></tr>
+</table>
+<p>Layers apply in file order. Moments obey the owner's setting: with idle life off, no moment starts on its own (only reactions to the human, and only when the setting allows them today).</p>
+
+<h3>The same format, three sizes</h3>
+<p>A Molty is as alive as its author makes it. Nothing is required; every part adds on its own.</p>
+<table>
+<tr><th>Molty</th><th>Has</th><th>Gets</th></tr>
+<tr><td>No <code>life</code></td><td>its mood loops</td><td>Exactly today: mood loops, the C idle and listening rules as fallback.</td></tr>
+<tr><td>Tiny (Blip below)</td><td>one signal, one layer, no clips</td><td>A breath that changes with mood. The C fallback still gives it idle gestures.</td></tr>
+<tr><td>Middle</td><td>breath, blink, gaze (three small pose clips)</td><td>Most of the life (section 6). Still the C fallback for moments.</td></tr>
+<tr><td>Rich (the cat)</td><td>everything above</td><td>Its own idle, thinking and listening habits; the C fallback switches off once it lists <code>moments</code>.</td></tr>
+</table>
+
+<p class="file">blip/molty.json: a whole life in five lines</p>
+<pre><code>"life": {
+  "signals": { "breath": { "wave": { "_": 0.3, "sleepy": 0.15, "happy": 0.5 } } },
+  "layers":  [ { "layer": "breathing", "turn": { "bones": "body", "squash": ["breath", 0.04] } } ]
+}</code></pre>
+<p><code>squash</code> stretches up and thins sideways keeping the volume, as the duck's files already do. A Molty that names a device signal its device does not know is refused by the check with a plain message ("<code>voice_out</code> needs firmware 1.x or newer"), never on the device.</p>
+</div>
+</details>
+
+<!-- ─────────────────────────────────────────────── -->
+<details>
+<summary>6. What makes it feel alive <span class="s">each idea, and how the file says it</span></summary>
+<div class="body">
+<h3>The four that give most of the life</h3>
+<ol>
+  <li><b>Breathing that is not the loop's length.</b> A breath of 2.4 to 6 s, varying each cycle, over a 4 s loop: the two never line up the same way twice, so the 4 s beat disappears. One signal, one tiny clip.</li>
+  <li><b>Blinks on random gaps, sometimes double.</b> The strongest "someone is in there" cue in every character tool (Live2D ships it built in). One signal, one tiny clip.</li>
+  <li><b>Look, hold, look back.</b> Eyes and head jump to a spot, stay a random while, return. Real eyes do this; smooth drifting looks robotic. One <code>hold</code>, one clip, and the head <code>follow</code>s the eyes a quarter second late.</li>
+  <li><b>The mouth follows the real voice.</b> When it speaks, people watch the mouth first. One device signal, one clip.</li>
+</ol>
+<p>Those four are the first slice. Ear life, tail ripple and weight shifts come next; reactions and thinking habits after.</p>
+
+<h3>Every principle as a field</h3>
+<table>
+<tr><th>Principle</th><th>What it means</th><th>In the file</th></tr>
+<tr><td>Never exactly periodic</td><td>No motion repeats on a beat the eye can find.</td><td><code>wave</code> with <code>vary</code>; <code>every</code> and <code>hold</code> gaps are ranges; looping layers start at a random place; rates from <code>noise</code>.</td></tr>
+<tr><td>Variation</td><td>The same thing done a bit differently each time.</td><td><code>pick</code> and <code>once</code> by weight, never the same twice in a row; ranges drawn per play.</td></tr>
+<tr><td>Overlap and follow-through</td><td>Parts start and stop at different times: ears first, then eyes, then head; the tail tip lags.</td><td><code>follow</code> with <code>lag</code> and <code>bounce</code>; <code>ripple</code> down a chain.</td></tr>
+<tr><td>Reactions</td><td>It notices you, a beat later, not on the same frame.</td><td><code>on</code> with <code>delay</code> (0.15 to 0.4 s, a person's reaction time) and <code>rest</code>; device triggers for touch, the human's voice, its own speech.</td></tr>
+<tr><td>Rest</td><td>Stillness between moves; slowing down when left alone.</td><td><code>hold</code> gives still stretches; <code>tired</code> from <code>idle_time</code> slows everything; <code>free</code> quiets layers under gestures.</td></tr>
+<tr><td>Mood colours everything</td><td>The same blink, slower and heavier when sleepy.</td><td>Mood tables anywhere a number goes.</td></tr>
+</table>
+
+<h3>Each state</h3>
+<table>
+<tr><th>State</th><th>Base track</th><th>On top (the cat)</th></tr>
+<tr><td>Idle</td><td>the idle loop</td><td>breath, blinks, glances with holds, ears swivel, tail wanders, a weight shift every 8 to 25 s, a gesture every 10 to 40 s; slower as it is left alone, then the yawn and sleep as today.</td></tr>
+<tr><td>Listening</td><td>the listening loop</td><td>ears prick with the human's loudness, quicker blinks, a nod a beat after their pause, a glance at a question.</td></tr>
+<tr><td>Thinking</td><td>the thinking loop</td><td>eyes up and aside on long holds, the tail slow, every 2 to 5 s one small thing (ear flick, tail swish, head tilt, slow blink), never twice the same. No mechanical loop because the beats are random and layered over it.</td></tr>
+<tr><td>Speaking</td><td>the speaking loop</td><td>its mouth replaced by the voice, the chin lifting on strong syllables, eyes back to you between glances.</td></tr>
+</table>
+</div>
+</details>
+
+<!-- ─────────────────────────────────────────────── -->
+<details>
+<summary>7. On the device <span class="s">what runs each frame, the budget, the limits</span></summary>
+<div class="body">
+<h3>Each frame</h3>
+<svg viewBox="0 0 900 250" role="img" aria-label="Per-frame flow: device signals, signal program, moments to the base track, base track pose, layers, then bones and dots as today">
+  <defs><marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ar"/></marker></defs>
+  <rect x="10" y="30" width="150" height="70" rx="8" class="box"/><rect x="10" y="30" width="150" height="70" rx="8" class="dev"/>
+  <text x="24" y="56">1. device signals</text><text x="24" y="76" class="m">voice, touch, mood</text><text x="24" y="90" class="m">weights, time</text>
+  <rect x="190" y="30" width="150" height="70" rx="8" class="box"/><rect x="190" y="30" width="150" height="70" rx="8" class="own"/>
+  <text x="204" y="56">2. signal program</text><text x="204" y="76" class="m">the duck's engine,</text><text x="204" y="90" class="m">in build order</text>
+  <rect x="370" y="30" width="150" height="70" rx="8" class="box"/><rect x="370" y="30" width="150" height="70" rx="8" class="lay"/>
+  <text x="384" y="56">3. moments</text><text x="384" y="76" class="m">a trigger asks the</text><text x="384" y="90" class="m">base for a gesture</text>
+  <rect x="550" y="30" width="150" height="70" rx="8" class="box"/>
+  <text x="564" y="56">4. base track</text><text x="564" y="76" class="m">today's clip player,</text><text x="564" y="90" class="m">unchanged</text>
+  <rect x="730" y="30" width="160" height="70" rx="8" class="box"/><rect x="730" y="30" width="160" height="70" rx="8" class="lay"/>
+  <text x="744" y="56">5. layers</text><text x="744" y="76" class="m">sample, add or replace,</text><text x="744" y="90" class="m">by weight, on bones</text>
+  <rect x="550" y="160" width="340" height="60" rx="8" class="box"/>
+  <text x="564" y="186">6. bones to the screen, as today</text><text x="564" y="206" class="m">world pose, then the dots (most of the frame's cost)</text>
+  <path d="M160,65 L190,65" class="ln" marker-end="url(#a2)"/>
+  <path d="M340,65 L370,65" class="ln" marker-end="url(#a2)"/>
+  <path d="M520,65 L550,65" class="ln" marker-end="url(#a2)"/>
+  <path d="M700,65 L730,65" class="ln" marker-end="url(#a2)"/>
+  <path d="M810,100 L810,160" class="ln" marker-end="url(#a2)"/>
+  <path d="M265,100 C265,135 780,120 790,158" class="ln" marker-end="url(#a2)"/>
+  <text x="300" y="140" class="m">layers read signal values (by, weight)</text>
+</svg>
+
+<h3>The layer stack for the cat</h3>
+<svg viewBox="0 0 900 300" role="img" aria-label="Layer stack: base track at the bottom, then breathing, blink, gaze, ears, tail, weight shift, mouth replace, chin">
+  <rect x="20" y="250" width="860" height="36" rx="6" class="box"/><text x="34" y="273">base track: mood loop, gestures, walks between poses (today)</text>
+  <g>
+  <rect x="20" y="214" width="420" height="30" rx="6" class="box"/><rect x="20" y="214" width="420" height="30" rx="6" class="lay"/><text x="34" y="234">breathing: add, whole body</text>
+  <rect x="450" y="214" width="430" height="30" rx="6" class="box"/><rect x="450" y="214" width="430" height="30" rx="6" class="lay"/><text x="464" y="234">weight shift: add, body (off when sleepy)</text>
+  <rect x="20" y="178" width="200" height="30" rx="6" class="box"/><rect x="20" y="178" width="200" height="30" rx="6" class="lay"/><text x="34" y="198">blink: add, eyes</text>
+  <rect x="230" y="178" width="320" height="30" rx="6" class="box"/><rect x="230" y="178" width="320" height="30" rx="6" class="lay"/><text x="244" y="198">gaze, gaze up: add, head and eyes, weight free</text>
+  <rect x="560" y="178" width="320" height="30" rx="6" class="box"/><rect x="560" y="178" width="320" height="30" rx="6" class="lay"/><text x="574" y="198">tail: turn with ripple, tail6 to tail12</text>
+  <rect x="20" y="142" width="300" height="30" rx="6" class="box"/><rect x="20" y="142" width="300" height="30" rx="6" class="lay"/><text x="34" y="162">ears, ears prick: add, ears</text>
+  <rect x="330" y="142" width="550" height="30" rx="6" class="box"/><rect x="330" y="142" width="550" height="30" rx="6" class="lay"/><text x="344" y="162">pondering: once, picked, while thinking, weight free</text>
+  <rect x="20" y="106" width="430" height="30" rx="6" class="box"/><rect x="20" y="106" width="430" height="30" rx="6" class="lay"/><text x="34" y="126">mouth: replace, mouth and tongue, weight talking</text>
+  <rect x="460" y="106" width="420" height="30" rx="6" class="box"/><rect x="460" y="106" width="420" height="30" rx="6" class="lay"/><text x="474" y="126">chin lift: add, on strong syllables</text>
+  </g>
+  <text x="20" y="40" class="m">applied bottom to top, in file order; each layer only touches its bones</text>
+  <path d="M870,240 L870,60" class="ln" marker-end="url(#a3)"/>
+  <defs><marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ar"/></marker></defs>
+</svg>
+
+<h3>The budget</h3>
+<p>A frame is 33.3 ms at 30 frames a second. Today the cat's play and dots take about 8 to 13 ms sitting or standing and 17 to 18 ms walking side on (measured on the computer and scaled to the device; the docs ask for a confirmation on the device). The water sim under the cat is held still. Life gets <b>1 ms</b>, a hard line the rig and the device's own frame profile check.</p>
+<table>
+<tr><th>Work</th><th>Count (cat)</th><th>Estimate on the device</th></tr>
+<tr><td>Signals (the duck's engine)</td><td>about 25 signals, 150 to 250 formula steps</td><td>under 0.05 ms (the octopus runs 1170 steps in about 0.2 ms)</td></tr>
+<tr><td>Layer sampling</td><td>at most 8 layers playing, each a few bones of its clip</td><td>about 0.1 ms (sampling all 100 channels of a clip today is a few microseconds on the computer)</td></tr>
+<tr><td>Mixing into bones</td><td>at most 8 layers on 43 bones, rotations combined</td><td>about 0.1 ms</td></tr>
+<tr><td>Tail ripple</td><td>7 bones, 1 s of history each</td><td>tiny; 7 small buffers</td></tr>
+<tr><td>Dots</td><td>unchanged, but scaled by the box the cat fills</td><td>the risk: a wide tail or head swing widens the box the dots are drawn in. The rig watches the frame time.</td></tr>
+</table>
+
+<h3>Limits the format states</h3>
+<table>
+<tr><th>What</th><th>Limit</th><th>Why</th></tr>
+<tr><td>signals</td><td>64</td><td>fits the existing engine's 512 channels many times over; keeps files readable</td></tr>
+<tr><td>layers declared, playing at once</td><td>16, 8</td><td>a layer at weight under 0.01 costs nothing</td></tr>
+<tr><td>moments</td><td>16, each with at most 16 picks</td><td>as the duck's events</td></tr>
+<tr><td>bones a layer may touch</td><td>any of the body's 80</td><td>sampling is cheap; the cat moves 43</td></tr>
+<tr><td>ripple chains</td><td>4, at most 16 bones, 1 s of delay</td><td>history buffers</td></tr>
+<tr><td>signal steps per frame</td><td>600 (worst frame, checked at build)</td><td>half the octopus's measured worst</td></tr>
+<tr><td>whole built Molty</td><td>256 KB as today</td><td>the cat is at 242 KB. Pose clips are 2 or 3 keys on a few bones (well under 1 KB each), so ten of them fit; the build reports the margin.</td></tr>
+</table>
+</div>
+</details>
+
+<!-- ─────────────────────────────────────────────── -->
+<details>
+<summary>8. Compatibility <span class="s">no flag day</span></summary>
+<div class="body">
+<ul>
+  <li><b>No <code>life</code> block: the same pixels.</b> The fidelity script (the firmware and the web build play the same steps and must show the same pixels) is the oracle. Today's cat 2.0.0 gives the same hash on every frame before and after the firmware learns layers.</li>
+  <li><b>The C habits stay, as the fallback.</b> The idle library, the work library and the listening reactions keep running for any Molty that does not list <code>moments</code>. A Molty that does list them takes over, the way the duck already takes over working (the director already has that switch for work; idle and listening get the same switch).</li>
+  <li><b>The duck and the octopus do not change.</b> They keep their own formula layers.</li>
+  <li><b>The agent's side does not change.</b> Same moods, same gestures, same inline marks. The skill needs no update.</li>
+  <li><b>Older firmware refuses unknown keys</b> in a Molty file ("creature: unknown key"), so a 2.1 cat cannot install on it. That is the safe failure, but it must be said plainly: the device reports a <code>life</code> capability, the install flow and the check say "needs a newer Molty" instead of a parse error, and the built-in cat moves to 2.1.0 in the same firmware that learns layers.</li>
+  <li><b>Order:</b> firmware learns signals and layers (cat unchanged, hashes unchanged), then cat 2.1.0 ships its <code>life</code> block, then the C habits move into the cat's file one at a time, each checked by the rig before and after.</li>
+</ul>
+</div>
+</details>
+
+<!-- ─────────────────────────────────────────────── -->
+<details>
+<summary>9. The rig: measuring "alive" <span class="s">what a script judges, what a person judges</span></summary>
+<div class="body">
+<p>We already have the pieces. The real firmware's drawing code runs as a web module under Node, driven by a step script (frames, touch, shake, mood, listen with a level, say), and it can hand back the creature's dots alone, without the dust. The rig is a small Node script on top: same Molty file, same steps, a fixed seed, and it writes pictures and numbers.</p>
+
+<h3>What it plays</h3>
+<table>
+<tr><th>Scene</th><th>Steps</th></tr>
+<tr><td>idle</td><td>60 s, nobody there</td></tr>
+<tr><td>left alone</td><td>6 min sped up, to see it slow down, yawn and doze</td></tr>
+<tr><td>listening</td><td>20 s with a recorded human voice (its loudness, 100 ms steps, as the device gets it), with pauses and a question</td></tr>
+<tr><td>thinking</td><td>60 s of <code>working</code></td></tr>
+<tr><td>speaking</td><td>15 s with a real voice track from the voice box (a new script step feeds its loudness to <code>voice_out</code>)</td></tr>
+<tr><td>touched</td><td>a tap every 7 s, a shake</td></tr>
+</table>
+
+<h3>What a script judges</h3>
+<table>
+<tr><th>Number</th><th>How</th><th>Today (expected)</th><th>Target</th></tr>
+<tr><td><b>Loop echo</b></td><td>how alike the creature's picture is to itself 1 to 30 s later; the strongest match and its lag</td><td>near 1.0 at exactly 4.0 s</td><td>under 0.85, no single lag standing out</td></tr>
+<tr><td><b>Still share</b></td><td>share of frames where almost no dots of the creature change</td><td>near 0 (the loop never rests)</td><td>10 to 40 %</td></tr>
+<tr><td><b>Rhythm spread</b></td><td>how uneven the gaps between motion bursts are (spread over average)</td><td>near 0 inside the loop</td><td>0.35 or more</td></tr>
+<tr><td><b>Body spread</b></td><td>share of motion in head, eyes, ears, tail, body (needs bone positions: one read-only call added to the web glue)</td><td>unknown, measured in slice 0</td><td>no part over 60 %, every part over 5 %</td></tr>
+<tr><td><b>Lip match</b></td><td>how well mouth opening follows the voice, and how late</td><td>none (a 4 s loop)</td><td>0.6 or more, 0 to 100 ms late</td></tr>
+<tr><td><b>Reaction delay</b></td><td>a touch or a pause to the first visible motion</td><td>measured in slice 0</td><td>150 to 400 ms</td></tr>
+<tr><td><b>Pops</b></td><td>sudden jumps not at a scripted event (a layer snapping in)</td><td>0</td><td>0</td></tr>
+<tr><td><b>Cost</b></td><td>the frame time in the module's device-speed mode, then the device's own frame profile</td><td>today's</td><td>at most 1 ms more</td></tr>
+</table>
+
+<h3>What a person judges</h3>
+<ul>
+  <li><b>Blind side by side.</b> Two glasses, before and after, same steps, sides shuffled: "which one is alive?" A change ships only if it wins.</li>
+  <li><b>Name the mood.</b> A silent 10 s clip per mood: can Juan tell which it is? Target: 6 of 7.</li>
+  <li><b>Nothing weird.</b> A contact sheet (a frame every half second on one page) per scene, for twitches, pops, stuck poses.</li>
+  <li><b>On the device, last.</b> The final judge is the round glass on the desk, after the rig says it is in budget.</li>
+</ul>
+<p>Scripts guard what is measurable and catch regressions; the person judges taste. Neither replaces the other.</p>
+
+<div class="note"><b>The smallest rig worth building first:</b> the 60 s idle scene on today's cat, three numbers (loop echo, still share, rhythm spread) and one contact sheet. It needs no firmware change and no new glue: it reuses the step player and the creature-only picture. It should show the 4 s loop plainly. That is the baseline every slice is scored against.</div>
+</div>
+</details>
+
+<!-- ─────────────────────────────────────────────── -->
+<details>
+<summary>10. Build plan <span class="s">four slices, each with its check</span></summary>
+<div class="body">
+<table>
+<tr><th>Slice</th><th>What</th><th>How we know it works</th></tr>
+<tr><td><b>0. Baseline</b></td><td>The smallest rig above on today's cat. Add the bone-position call to the web glue for body spread.</td><td>Prints the same numbers on two runs. Loop echo near 1.0 at 4.0 s.</td></tr>
+<tr><td><b>1. Breath, blink, gaze</b></td><td>Firmware: run the signal engine for a rigged Molty and mix <code>add</code> layers over the base track. Device signals: mood weights, <code>free</code>, <code>idle_time</code>, <code>life</code>. Build tool: read and check <code>life</code>, compile it. Cat: four pose clips in Blender, the baked blinks taken out of its loops.</td><td>Cat 2.0.0 fidelity hashes unchanged. With the block: loop echo under 0.85, rhythm spread over 0.35, cost under 1 ms. Blind A/B in the web demo, then on the device (flashed by the device integration role).</td></tr>
+<tr><td><b>2. Voice</b></td><td>The device measures its own speech loudness as it writes sound to the speaker. <code>peaks</code>, <code>replace</code> layers. The cat's mouth, chin and ears. A voice step in the rig's script.</td><td>Lip match 0.6 or more, under 100 ms late, with a real voice track. Words still show in time with the sound.</td></tr>
+<tr><td><b>3. Habits into the file</b></td><td>Moments, <code>once</code> layers, <code>ripple</code>. The cat's idle gestures, thinking habits and listening reactions move into its file; the director and the listening code step aside for a Molty that lists moments.</td><td>The director and listening tests pass for a Molty without moments. Rig: thinking 60 s has no repeat, reaction delay 150 to 400 ms. Person: "is it thinking?"</td></tr>
+<tr><td><b>4. Any author</b></td><td>Blip with one layer; the check's plain messages; a section in the format guide; the preview runs the real firmware.</td><td>Blip builds, previews and scores in the rig with no changes to anything but its file.</td></tr>
+</table>
+</div>
+</details>
+
+<!-- ─────────────────────────────────────────────── -->
+<details>
+<summary>11. Competing designs <span class="s">where two really compete, and the pick</span></summary>
+<div class="body">
+<h3>How authors write signals</h3>
+<div class="vs">
+<div><p><span class="label pick">pick</span> <b>A readable block, compiled.</b> A few named kinds (<code>wave</code>, <code>hold</code>, <code>every</code>, <code>follow</code> ...), each one key. The build turns them into the duck's existing formula program, so the device keeps one engine that is already fast and already matched between JavaScript and C.</p></div>
+<div><p><span class="label no">not this</span> <b>The raw formula language in the file.</b> Already exists, can express anything. But <code>[0.6, ["dz", "@t", 0.3, 7]]</code> is not something a person writes or reviews, and it ties the public format to one engine's insides.</p></div>
+</div>
+<h3>Where life lives: layers over clips, or a blend graph</h3>
+<div class="vs">
+<div><p><span class="label pick">pick</span> <b>A flat list of layers over the base track.</b> Easy to read, easy to add to, easy to degrade: drop a layer and the rest still works. Today's player and its routes stay as they are.</p></div>
+<div><p><span class="label no">not this</span> <b>A full blend graph</b> (Unity, Godot): nodes wired into a tree. More power for crossfading many moods by numbers, but it would replace a player that works, and Molty's moods are few and discrete.</p></div>
+</div>
+<h3>Small life: clips or code-like motion</h3>
+<div class="vs">
+<div><p><span class="label pick">pick</span> <b>Pose clips moved by signals, plus simple bone turns.</b> The artist draws the breath in Blender and it looks like the cat; the signal only says when and how much. Turns cover the cheap cases (a tail sway, a blob's squash).</p></div>
+<div><p><span class="label no">not this</span> <b>Everything as bone formulas</b>, like the mood engine. No new clips, but every motion becomes a numbers puzzle and the cat stops looking like what was drawn.</p></div>
+</div>
+</div>
+</details>
+
+<!-- ─────────────────────────────────────────────── -->
+<details>
+<summary>12. Open decisions in full <span class="s">recommendation, and what changes otherwise</span></summary>
+<div class="body">
+<ol class="decisions">
+  <li><b>Agents send only moods, never raw signals.</b> I recommend yes: the skill stays as it is, and every Molty reads a mood its own way. If no: the agent API grows a <code>feel</code> command, Moltys must agree on shared signal names, and the skill must teach them.</li>
+  <li><b>Authors write a readable <code>life</code> block, compiled to the existing engine.</b> I recommend yes. If the raw formula language is exposed instead: more power on day one, but files nobody can read, and the public format tied to one engine.</li>
+  <li><b>The cat's idle, thinking and listening habits move from C into its file.</b> I recommend yes, with C kept as the fallback for Moltys without moments. If no: less firmware work, but "nothing per-Molty in C" is not met and every Molty idles like the cat.</li>
+  <li><b>The preview runs the real firmware, so layers are written once.</b> I recommend yes: the website's demo already runs it. If no: layers get written twice (the JavaScript reference player and C) and kept equal by tests, as the duck's engine is today, roughly doubling slices 1 to 3.</li>
+  <li><b>The mouth follows the sound the device plays.</b> I recommend yes: one loudness number, no relay change, no extra latency. If mouth shapes (visemes) come from the voice box instead: richer lips, but a new stream on the relay, more bytes, and timing to keep in step with the sound.</li>
+</ol>
+</div>
+</details>
+
+</main>
+</body>
+</html>
