@@ -84,7 +84,10 @@ fluid_ask_hit_t fluid_ask_hit(const fluid_ask_q_t *q);
  * question a tap on the frame it drew may answer. SHOW: forming where the centre tap's crest passes (FLUID_ASK_FORM_S),
  * then standing; PICK: answered, its lines and letters breaking into dust the water carries off; OUT: it ended
  * unanswered (declined, timed out, replaced), the rim letting go as the recording ring's stop, then the same dust.
- * Only SHOW owns the screen (the director's transitions wait under it); the dust goes over whatever comes next. */
+ * Only SHOW owns the screen (the director's transitions wait under it); the dust goes over whatever comes next.
+ * Where the drawer changes its picture as dust (mole_fluid.c: whole), a question is that change's new picture instead:
+ * formed from the start and tappable once the change has brought it, and answered or ended it goes the frame after (the
+ * next change of picture takes it away). */
 enum { FLUID_ASK_NONE, FLUID_ASK_SHOW, FLUID_ASK_PICK, FLUID_ASK_OUT };
 #define FLUID_ASK_FORM_S  1.6f   /* s from the tap to standing                                  */
 #define FLUID_ASK_GONE_S  1.3f   /* s an answered or ended question takes to blow away         */
@@ -92,6 +95,7 @@ enum { FLUID_ASK_NONE, FLUID_ASK_SHOW, FLUID_ASK_PICK, FLUID_ASK_OUT };
 typedef struct {
     int phase, pick;             /* FLUID_ASK_*; the option picked (PICK)                       */
     unsigned seq;                /* the question it follows (mole_fluid_ask_show's seq)         */
+    bool whole;                  /* it comes and goes by a change of picture (the caller's; a new question: false) */
     float t, out_t;              /* s shown, s since it was answered or ended (the caller advances both) */
 } fluid_ask_screen_t;
 enum { FLUID_ASK_DID_SHOW = 1, FLUID_ASK_DID_PICK = 2, FLUID_ASK_DID_LEAVE = 4, FLUID_ASK_DID_GONE = 8 };
@@ -100,7 +104,7 @@ enum { FLUID_ASK_DID_SHOW = 1, FLUID_ASK_DID_PICK = 2, FLUID_ASK_DID_LEAVE = 4, 
  *  has blown away: NONE). */
 int fluid_ask_follow(fluid_ask_screen_t *s, bool active, unsigned seq, int pick, int n);
 /** The question a tap on a frame of this screen may answer: shown, not yet answered, formed enough at this speed
- *  (cfg speed), else 0. */
+ *  (cfg speed; whole: at once, the caller holding it while the change brings it), else 0. */
 unsigned fluid_ask_tappable(const fluid_ask_screen_t *s, float speed);
 
 #ifdef __cplusplus

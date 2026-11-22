@@ -129,7 +129,7 @@ int fluid_ask_pick(const fluid_ask_hit_t *L, float X, float Y) {
 int fluid_ask_follow(fluid_ask_screen_t *s, bool active, unsigned seq, int pick, int n) {
     int did = 0;
     if (active && seq != s->seq) {                        /* a new question replaces any */
-        s->phase = FLUID_ASK_SHOW; s->seq = seq; s->pick = -1; s->t = s->out_t = 0.f;
+        s->phase = FLUID_ASK_SHOW; s->seq = seq; s->pick = -1; s->t = s->out_t = 0.f; s->whole = false;
         did |= FLUID_ASK_DID_SHOW;
     }
     if (s->phase == FLUID_ASK_SHOW && pick >= 0 && seq == s->seq) {   /* answered (maybe before it was drawn) */
@@ -139,7 +139,7 @@ int fluid_ask_follow(fluid_ask_screen_t *s, bool active, unsigned seq, int pick,
         s->phase = FLUID_ASK_OUT; s->out_t = 0.f;
         did |= FLUID_ASK_DID_LEAVE;
     }
-    if ((s->phase == FLUID_ASK_PICK || s->phase == FLUID_ASK_OUT) && s->out_t >= FLUID_ASK_GONE_S) {
+    if ((s->phase == FLUID_ASK_PICK || s->phase == FLUID_ASK_OUT) && (s->whole ? s->out_t > 0.f : s->out_t >= FLUID_ASK_GONE_S)) {
         s->phase = FLUID_ASK_NONE;
         did |= FLUID_ASK_DID_GONE;
     }
@@ -147,5 +147,5 @@ int fluid_ask_follow(fluid_ask_screen_t *s, bool active, unsigned seq, int pick,
 }
 
 unsigned fluid_ask_tappable(const fluid_ask_screen_t *s, float speed) {
-    return s->phase == FLUID_ASK_SHOW && s->t * speed >= FLUID_ASK_READY ? s->seq : 0u;
+    return s->phase == FLUID_ASK_SHOW && (s->whole || s->t * speed >= FLUID_ASK_READY) ? s->seq : 0u;
 }

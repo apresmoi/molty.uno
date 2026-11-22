@@ -2731,6 +2731,7 @@ static void morph_inputs(morph_rig_t *r, int kind, scene_shapes_t *hd) {
         r->o = (fluid_draw_opts_t){ .palette = FLUID_PAL_PASTEL, .edge_mode = FLUID_EDGE_CONTOURS, .font = gc_font5x7, .dots = r->ddots, .scene = true };
     }
     fluid_draw_morph_lines(r->d, kind == MK_CAT ? r->catline : NULL);   /* (the creature's own cells are its lines) */
+    fluid_draw_morph_order(r->d, kind == MK_ASK ? fluid_askview_order(r->v) : NULL);   /* (a question's answers grow) */
     r->o.time = r->now;
 }
 /* The look changes to kind's (the scene's dust asked for at once and built `late` frames after, as the device builds it;
@@ -2950,7 +2951,9 @@ static morph_rig_t *morph_rig(cpk_t *cat, const morph_rig_t *like, int job) {
         q.rgb[0] = 0x3ccf96; q.rgb[1] = 0xff6b6b;
         r->v = fluid_askview_create(r->s, &q);
         fluid_ask_follow(&r->scr, true, 1, -1, q.n);
-        fluid_askview_start(r->v, r->s);
+        fluid_askview_start(r->v, r->s);                /* (its touch on the water: the chart's dust rides it in every case) */
+        r->scr.whole = true;                            /* (as mole_fluid.c on the device: the change's new picture, whole) */
+        fluid_askview_start_whole(r->v);
     }
     return r;
 }
@@ -3096,14 +3099,12 @@ static void test_morph(const char *dir, const char *catp, int job) {
         if (RUN[q].na)
             CHECK(abs(res.na - RUN[q].na) * 100 <= RUN[q].na * 10 && abs(res.nb - RUN[q].nb) * 100 <= RUN[q].nb * 20,
                   "%s: the pictures' grains as the prototype's, within 10 and 20 %% (%d, %d against %d, %d)", RUN[q].name, res.na, res.nb, RUN[q].na, RUN[q].nb);
-        /* (a question's letters form in the fluid after its first frames: its picture as read has no lines, they come whole at
-         * the end) */
-        CHECK(res.phase == 0 && (res.new_seen > 0 || RUN[q].kind == MK_ASK), "%s: its phases (old lines gone by 0.32 s, the new from 0.85 s, every grain down by 1.06 s; %d frames off)",
+        CHECK(res.phase == 0 && res.new_seen > 0, "%s: its phases (old lines gone by 0.32 s, the new from 0.85 s, every grain down by 1.06 s; %d frames off)",
               RUN[q].name, res.phase);
         CHECK(res.frames >= 33 && res.frames <= 45 && res.over == 0,
               "%s: one change of 1.5 s at most, every frame inside the panel's (%d frames, worst %.1f ms of %.0f)", RUN[q].name, res.frames, res.worst, MORPH_FIT_MS);
         CHECK(res.hang <= 3, "%s: the dissolve flows into the gathering: at most 3 frames nothing moves between them (%d)", RUN[q].name, res.hang);
-        CHECK((res.gap0 <= -2 || RUN[q].kind == MK_ASK) && res.gapf <= 4,
+        CHECK(res.gap0 <= -2 && res.gapf <= 4,
               "%s: the dust converges into the lines: the new lines coming in 2 frames or more before the last grain is down (%+d), full 4 frames after at most (%+d)",
               RUN[q].name, res.gap0, res.gapf);
         CHECK(res.unsent == 0, "%s: every frame of it all sent, each grain the frame it moves (%d frames not)", RUN[q].name, res.unsent);
@@ -3113,7 +3114,8 @@ static void test_morph(const char *dir, const char *catp, int job) {
                   RUN[q].name, MORPH_BUDGET * 1e-3, res.work * 1e-3, res.idle * 1e-3, FLUID_MORPH_IDLE_US * 1e-3);
         if (r->tx)                                      /* (the device's sender after it: one sender at a time, no queued row changed before it went) */
             CHECK(res.late == 0 && res.mixed == 0, "%s: with the sender, no window's rows changed once queued, none sent beside it (%d, %d)", RUN[q].name, res.late, res.mixed);
-        CHECK(res.even <= 450, "%s: everywhere at once, never by rows: no band of rows takes over 4.5 times its share of the picture in a frame's changes (most %d %%)",
+        /* (a question's answers grow from 6 o'clock up the rim, fluid_askview_order: its lowest bands first, by design) */
+        CHECK(res.even <= 450 || RUN[q].kind == MK_ASK, "%s: everywhere at once, never by rows: no band of rows takes over 4.5 times its share of the picture in a frame's changes (most %d %%)",
               RUN[q].name, res.even);
         {   /* (the prototype's own sparse cloud: its emptiest frame, dissolve-proto's render on the same blocks; the device's
              * flies fewer pairs, FLUID_MORPH_FLY: a lighter cloud, as Juan allowed, up to 8 % more of it empty) */

@@ -472,6 +472,8 @@ typedef struct {
     uint32_t look;                     /* the picture the drawer's inputs show                                         */
     uint16_t *snap;                    /* fb_w x fb_h: the glass kept; in a change, the change as shown                */
     uint8_t  *lc, *lcn;                /* N: the cells whose dots are lines (a creature's own), this frame's and the next's */
+    uint8_t  *ord;                     /* N: when each cell's new grains with no pair come up, as a share of their window
+                                        * (0..254, outward from where the look grows); 255: each at its own moment     */
     uint8_t  *colx, *rowy;             /* fb_w, fb_h: a pixel's cell column, row (255: none)                           */
     fluid_morph_mem_t *mm;             /* the change's pictures and pairs (PSRAM, while it runs)                        */
     int      frames;                   /* frames since it began                                                       */
@@ -501,6 +503,7 @@ typedef struct {
     bool     seen_hd; uint8_t pwait;   /* (its new look's inputs were a scene's in a frame of it; frames its pass waited for
                                         * such inputs again: FLUID_MORPH_PASS_WAIT_N at most)                         */
     bool     full;                     /* a change cut: the next send is whole (its glass may hold what was not sent)   */
+    uint8_t  fulls;                    /* sends in a row that were whole (a drawer that repaints all every frame: many)  */
     int      spent, budget;            /* the drawer's frame before the change's work (us), and so the change's this frame */
     int      room;                     /* (told each frame) its cells' time till the send's pulse, us; 0: none (FRAME_US) */
     int      sendp;                    /* the send a frame of it is likely to take (us: the last, its peaks held a while) */
@@ -715,6 +718,13 @@ void fluid_draw_morph_look(fluid_draw_t *d, uint32_t look, uint16_t *snap, bool 
 /** With the drawer idle, once a frame with the inputs: the cells (N) whose dots are the look's lines, not its dust (a
  *  creature's own cells; copied), or NULL: none. */
 void fluid_draw_morph_lines(fluid_draw_t *d, const uint8_t *cells);
+/** With the drawer idle, once a frame with the inputs: per cell (N) when its new grains with no pair come up in a change
+ *  into this look, as a share of their window, 0..254 (a look that grows outward from somewhere: a question's answers),
+ *  255 each at its own moment; copied. NULL: all at their own moments. */
+void fluid_draw_morph_order(fluid_draw_t *d, const uint8_t *order);
+/** A new look given now would come as a change of picture that runs to its end: a glass kept to change from, and the
+ *  drawer sending what changes (not repainting all of it every frame, which ends a change at its first send). */
+bool fluid_draw_morph_carries(const fluid_draw_t *d);
 static inline int fluid_draw_morphing(const fluid_draw_t *d) { return d && (d->m.on || d->m.jhold); }
 /** A change runs and the drawer has made its new look: it stands (its inputs are not read) till the change ends. */
 bool fluid_draw_morph_still(const fluid_draw_t *d);
