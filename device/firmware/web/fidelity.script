@@ -1,6 +1,6 @@
 # The fidelity script: the native build (web_main.c) and the WebAssembly build (tools/web-molty) both play it and
 # must show the same pixels on every frame. Fixed seed, fixed inputs, fixed frame times. Paths: from the repo root.
-# Power on with the boot screen, the cat 2.0.0; idle; a tap; moods; its own gestures; a shake; a listen with a voice;
+# Power on with the boot screen, the cat (its life on: breath, blinks, glances); idle; a tap; moods; its own gestures; a shake; a listen with a voice;
 # a question answered by a tap; a say; the astrology chart with a tapped sign; back to the cat. Then the changes of
 # picture one after another, the dust reshaping (fluid_draw.c: one round wave): the cat to the chart (from the glass's
 # middle), a tapped sign's close-up (from the finger), a tap beside it back to the chart, another scene over the

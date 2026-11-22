@@ -165,13 +165,17 @@ export function compileLife(doc, nodes, actions, bad) {
       }
     }
     // the options any kind takes: scale, range (clamped to), when (only while that signal is on, eased in and out), ease
-    const scale = num(n, def.scale, 'scale', -1000, 1000, 1), state = Object.keys(opts).length > 0;
+    // (a scale that is a signal or a mood table is worked out beside it, then multiplied in)
+    const scale = typeof def.scale === 'number' || def.scale === undefined ? num(n, def.scale, 'scale', -1000, 1000, 1) : `@${slot}.scale`;
+    if (typeof scale === 'string') extra.push({ who: n, ch: [`${slot}.scale`, val(n, def.scale, 'scale'), { op: '=', keep: 1 }] });
+    const state = Object.keys(opts).length > 0;
     const clamp = kind !== 'hold' && def.range !== undefined;
     if (clamp && !(Array.isArray(def.range) && def.range.length === 2 && def.range[0] < def.range[1])) bad(at(n), `signal ${n}: range must be [least, most]`);
     const when = def.when !== undefined && kind !== 'hold' && kind !== 'every' ? ref(n, def.when) : null;
     if (when) extra.push({ who: n, ch: [`${slot}.when`, [[1, when]], { ...spring(8), keep: 1 }] });
     const ease = typeof def.ease === 'number' ? num(n, def.ease, 'ease', 0.01, 10, 0) : 0;
-    const post = (ts) => (when ? ts.map((t) => [...t, `@${slot}.when`]) : ts).map(([g, ...f]) => [scaleG(g, scale), ...f]);
+    const post = (ts) => [when && `@${slot}.when`, typeof scale === 'string' && scale].filter(Boolean)
+      .reduce((q, f) => q.map((t) => [...t, f]), ts).map(([g, ...f]) => [typeof scale === 'number' ? scaleG(g, scale) : g, ...f]);
     const fin = { op: '=', keep: 1, ...(clamp ? { cl: def.range } : {}) };
     if (ease || (state && (scale !== 1 || when))) {
       extra.push({ who: n, ch: [`${slot}.raw`, terms, { ...opts, op: '=', keep: 1 }] });
