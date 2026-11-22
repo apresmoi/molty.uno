@@ -19,6 +19,15 @@ CONFIG_LWIP_TCP_SND_BUF_DEFAULT=32768
 CONFIG_LWIP_TCP_RECVMBOX_SIZE=32
 CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64
 
+# DHCP: bind the offered address without the ARP check (IDF's default checks it). In IDF v5.5.0
+# a reply to that check from any other MAC declines the address and parks the DHCP client for
+# good (no restart timer; fixed upstream in esp-idf c2d87d9), and a mesh repeater that answers
+# ARP for its clients (seen 2026-11-22: Molty's address behind a repeater's MAC) trips it. What is
+# lost: noticing an address the router hands out twice, which on a home network with one DHCP
+# server is the router's job (most probe before they offer). lwIP still announces the address it
+# binds (gratuitous ARP). Also about 1 s off every join. network.c refuses a stale sdkconfig.
+CONFIG_LWIP_DHCP_DOES_NOT_CHECK_OFFERED_IP=y
+
 # Extend httpd recv timeout — large PSRAM calloc + slow PDM mic init can stall
 # request handling longer than the 5-second default.
 CONFIG_HTTPD_RECV_WAIT_TIMEOUT=20

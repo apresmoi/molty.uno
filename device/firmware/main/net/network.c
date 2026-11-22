@@ -41,6 +41,12 @@
 #include "sdkconfig.h"
 #include "mole_diag.h"
 
+/* A build dir's sdkconfig keeps the choice it was made with over sdkconfig.defaults: one from
+ * before the ARP-check change would quietly keep the check that can park the DHCP client. */
+#if !CONFIG_LWIP_DHCP_DOES_NOT_CHECK_OFFERED_IP
+#error "sdkconfig predates CONFIG_LWIP_DHCP_DOES_NOT_CHECK_OFFERED_IP (sdkconfig.defaults): delete the build dir's sdkconfig and build again"
+#endif
+
 static const char *TAG = "net";
 
 // ── Static IP config for the USB NCM side ─────────────────────────────────────
