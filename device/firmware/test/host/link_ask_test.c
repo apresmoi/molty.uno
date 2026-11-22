@@ -32,6 +32,7 @@ bool mole_fluid_screen_on(void) { return screen_on; }
 bool power_dnd(void) { return dnd; }
 void power_dnd_set(bool on) { dnd = on; }
 void power_off(void) {}
+bool haptic_quiet(void) { return false; }      /* (no motor: the shake detector as ever) */
 bool link_audio_gesture_talk(const char *input) { (void)input; talks++; return true; }
 static int holds, releases;
 void link_audio_hold(bool down, const char *input) { (void)input; if (down) holds++; else releases++; }
