@@ -5,6 +5,7 @@
 #include "link_ask.h"
 #include "self_update.h"
 #include "pkg_cmd.h"
+#include "haptic.h"
 #include "mole_creature.h"
 #include "molty_board.h"
 #include "sdkconfig.h"
@@ -344,6 +345,7 @@ void link_cmd_init(void)
     link_cmd_register("say_cancel", link_audio_say_cancel);
     link_cmd_register("gestures", cmd_gestures);
     link_cmd_register("volume", cmd_volume); link_cmd_register("imu", cmd_imu);
+    link_cmd_register("buzz", haptic_cmd);
     link_cmd_register("ask", link_ask_cmd);
     link_cmd_register("update", self_update_cmd);
     link_cmd_register("pkg.install", pkg_cmd_install); link_cmd_register("pkg.remove", pkg_cmd_remove);
