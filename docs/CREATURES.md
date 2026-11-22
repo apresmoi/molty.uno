@@ -331,9 +331,9 @@ hold: { gesture: seconds }, enter: { clip: { family: clip } }, sync: { loop: str
 - A loop in `sync` (the walk) is joined at the phase that best matches the pose on screen and left only on a stride
   boundary, so a stepping paw is never cut.
 - A gesture or mood name the package lacks is refused (`unknown_gesture`), as for channel creatures.
-- **Called to the front.** A tap on the screen or a shake calls a rigged creature (`cc_come`): it walks to the front
-  of the frame facing the viewer and sits up attending (its `listening` clip, 3 s), then goes back to its mood. Already
-  facing front near the middle, it only perks up. A shake plays its `shaken` clip first. A gesture ends the call.
+- **Called to the front.** A tap on the screen (not on a control: a question's answer) or a shake calls a rigged
+  creature (`cc_come`): it walks to the front of the frame facing the viewer and sits up attending (its `listening`
+  clip, 3 s), then goes back to its mood. Already facing front near the middle, it only perks up. A shake plays its `shaken` clip first. A gesture ends the call.
 
 The cat's clips, by what they are for:
 

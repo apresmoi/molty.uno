@@ -685,12 +685,17 @@ static void poll_touch(int n, const uint16_t *xs, const uint16_t *ys, int64_t t)
         /* (a spot found on the press itself (mole_fluid_spot_tap, before this poll) counts too: its layout may be up already) */
         const unsigned press = atomic_exchange(&s_spot_press, 0);
         const bool on_spot = spot >= 0 || press == (1u << 31 | (unsigned)xs[0] << 16 | ys[0]);
-        /* a tap on a question's answer: its own wave goes from there (fluid_askview_answer), not a finger's */
-        const bool answer = s_ask.scr.phase == FLUID_ASK_SHOW && s_ask.scr.t >= FLUID_ASK_READY && s_ask.v && fluid_ask_pick(&s_ask.hit, x, y) >= 0;
+        /* a tap on a question's answer: its own wave goes from there (fluid_askview_answer), not a finger's (and the answer
+         * may be taken already: the press went to the question first, as a spot's) */
+        const int pick = s_ask.v ? fluid_ask_pick(&s_ask.hit, x, y) : -1;
+        const bool answer = pick >= 0 && ((s_ask.scr.phase == FLUID_ASK_SHOW && s_ask.scr.t >= FLUID_ASK_READY) ||
+                                          (s_ask.scr.phase == FLUID_ASK_PICK && pick == s_ask.scr.pick));
         if (spot >= 0 && fluid_fine_dust_kind_get() == FINE_DUST_SPECKS) scene_outline(s_sp.cur, spot, outline_bump, NULL);
         if (!answer && (spot < 0 || !s_sp.cur->items[spot].nopen)) ripple(x, y, on_spot ? TAP_WAVE * TAP_SPOT : TAP_WAVE, TAP_R);
         fd_user(&s_dir);                                    /* wakes a sleepy creature */
-        if (s_cur == ST_CREATURE && s_cpk) cpk_come(s_cpk, NULL);   /* a rigged one comes to the front, attending */
+        /* a rigged one comes to the front, attending: not for a touch on a control (an answer, a spot), so what the agent
+         * asks right after (a gesture, a mood) shows */
+        if (s_cur == ST_CREATURE && s_cpk && !answer && !on_spot) cpk_come(s_cpk, NULL);
         if (!s_touch_t0) s_touch_t0 = t;
         return;
     }
