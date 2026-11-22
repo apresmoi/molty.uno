@@ -1,7 +1,7 @@
 // The demo (/demo/) driven as Juan drives the device, in both speeds, a picture of the glass
 // after each step (e2e-out/sim/<speed>-NN-<step>.png). Fails on page errors, a step whose event
 // the device would send does not come (a tap, an answer, the install's, a spot's reading, a sign
-// opened and closed, a scene), a glass that does not change, a state that is not reached, or (device
+// opened and closed, a scene, the weather told), a glass that does not change, a state that is not reached, or (device
 // speed) a panel that is not what the firmware would show after the windows it sent.
 //   node e2e/sim.mjs [baseUrl=http://localhost:4330]      (pnpm sim; the preview running)
 import { chromium } from 'playwright';
@@ -218,6 +218,29 @@ async function run(speed) {
   await expectState('cleared to the cat', /no scene/, 6);
   await wait(3);
   await shot('cat-again');
+
+  // the sky and the weather as an agent tells them: the supermoon's night, rain for 10 minutes, a falling star now
+  const group = (t) => page.locator('fieldset', { has: page.locator('legend', { hasText: new RegExp(`^${t}$`) }) });
+  await group('sky').getByRole('button', { name: 'supermoon 2016' }).click();
+  const moon = await page.locator('[data-sim-moon]').innerText();
+  if (/2016-11-14 · moon lit 100%/.test(moon)) ok(`${speed} the supermoon's night: ${moon}`);
+  else fail(`${speed} the supermoon's night: ${moon}`);
+  await group('weather').getByRole('button', { name: '10 min' }).click();
+  await group('weather').getByRole('button', { name: 'rain', exact: true }).click();
+  let wx = '';
+  for (let t = 0; t < 200 && !/^rain · 10 min left · floor wet/.test(wx); t++) {
+    await wait(0.1);
+    wx = await page.locator('[data-sim-weather]').innerText();
+  }
+  if (/^rain · 10 min left · floor wet/.test(wx)) ok(`${speed} rain told: ${wx}`);
+  else fail(`${speed} rain told: "${wx}"`);
+  await wait(3);
+  await shot('rain-supermoon');
+  await group('sky').getByRole('button', { name: 'falling star now' }).click();
+  await wait(0.25);
+  await shot('falling-star');
+  await group('weather').getByRole('button', { name: 'clear', exact: true }).click();
+  await wait(1);
 
   const readout = await page.locator('[data-sim-readout]').innerText();
   ok(`${speed} readout: ${readout}`);
