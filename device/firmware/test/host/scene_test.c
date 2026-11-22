@@ -2663,6 +2663,9 @@ typedef struct {
     int sendp;                         /* (a send this long guessed each frame, us: the device's slow ones) */
     int room;                          /* (the gate's room told each frame, us: the device's frame drawn in one refresh) */
     int hole;                          /* (a frame of the change whose inputs have no shapes, as a reading's teardown: -1 none) */
+    float wave, wx, wy;                /* a tap's ripple at (wx, wy) as the change starts, the water then stepped as the
+                                        * device's (0: still water) */
+    uint16_t *tape;                    /* (each of the change's first MORPH_TAPE frames' glass, if set) */
 } morph_rig_t;
 /* what a change did (morph_run): its frames, the panel model's ms a frame (mean, worst, over 33), what it showed */
 typedef struct {
@@ -2682,6 +2685,7 @@ typedef struct {
     double mean, worst;
 } morph_res_t;
 enum { MK_CAT, MK_SCENE, MK_WORD, MK_ASK };
+#define MORPH_TAPE 64
 #define MORPH_BUDGET (FLUID_MORPH_CELLS_US - FLUID_MORPH_SPENT_US)   /* (the change's own work a frame, the host's) */
 #define MORPH_STALE 0x1FF8u   /* what the old picture's buffer holds before a change (it is not cleared): never on the glass */
 static int s_morph_stale;
@@ -2752,6 +2756,10 @@ static void morph_run(morph_rig_t *r, int kind, scene_t *sc, uint32_t look, int 
     uint16_t *sheet = getenv("MORPH_DUMP") ? calloc((size_t)COLS * S * (TILES / COLS) * S, 2) : NULL;
     for (int f = 0; f < 200; f++, r->frame++) {
         r->now += 1.f / 30.f;
+        if (r->wave > 0.f) {
+            if (f == 0) fluid_sim_impulse(r->s, r->wx, r->wy, r->wave, 0.09f);
+            fluid_sim_step(r->s, 1.f / 60.f); fluid_sim_step(r->s, 1.f / 60.f);
+        }
         if (sc) {
             scene_fill(r->s, sc, 1.f, NULL, r->L, &nl, r->dots, &hd);
             if (kind == MK_SCENE && f == 0) { const int n = scene_full_shapes(r->s, sc, 1.f, r->full, &key); fluid_fine_want(r->fine, look, key, true, r->full, n, FLUID_PAL_PASTEL); }
@@ -2778,6 +2786,7 @@ static void morph_run(morph_rig_t *r, int kind, scene_t *sc, uint32_t look, int 
         win_log_t L = { &r->g, 0, 0, { { 0 } }, &q };
         if (r->tx) fluid_draw_glass_sender(split_take, &q);
         fluid_draw_send(r->d, &r->o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, full, r->wbuf, 4096, r->tx ? send_log : send_glass, r->tx ? (void *)&L : (void *)&r->g);
+        if (r->tape && f < MORPH_TAPE) memcpy(r->tape + (size_t)f * S * S, r->g.px, (size_t)S * S * 2);
         if (r->tx) {                                    /* (the frame's end: its queued windows sent, each as it was queued) */
             res->queued += q.taken; q.taken = 0;
             split_drain(&q, r->d, &L);
@@ -3325,6 +3334,44 @@ static void test_morph(const char *dir, const char *catp, int job) {
         }
         fluid_draw_morph_bounds(0, 0, 0);
         CHECK(same == 5 && whole == 5, "the new picture read on the job is the one read in line (%d of 5 the same, %d whole)", same, whole);
+        morph_rig_free(ra); morph_rig_free(rb);
+        s_morph_stale = 0;
+    }
+    if (!job) { /* a sign's change of picture with its tap's ripple on the water (the device's: the finger's, mole_fluid.c),
+                 * at full strength and at a control's 0.3 (TAP_SPOT): the same change in its timing and its every stage;
+                 * the fainter ring only moves the dust it crosses, as the water always does (fluid_fine.h: its read takes
+                 * the water's shifts) */
+        morph_rig_t *ra = morph_rig(NULL, r, 0), *rb = morph_rig(NULL, r, 0);
+        morph_res_t a, b;
+        morph_run(ra, MK_WORD, NULL, FLUID_LOOK_GLASS, 0, 0, "start", &a); morph_run(rb, MK_WORD, NULL, FLUID_LOOK_GLASS, 0, 0, "start", &b);
+        morph_run(ra, MK_CAT, NULL, FLUID_LOOK_KEEP | 1, 0, 0, "boot-cat", &a); morph_run(rb, MK_CAT, NULL, FLUID_LOOK_KEEP | 1, 0, 0, "boot-cat", &b);
+        morph_run(ra, MK_SCENE, chart, FLUID_LOOK_KEEP | 100, 16, 0, "cat-chart", &a); morph_run(rb, MK_SCENE, chart, FLUID_LOOK_KEEP | 100, 16, 0, "cat-chart", &b);
+        const int leo = spot_named(chart, "leo");
+        ra->wx = rb->wx = chart->items[leo].x; ra->wy = rb->wy = -chart->items[leo].y;
+        ra->wave = 1.6f; rb->wave = 1.6f * 0.3f;
+        ra->tape = malloc((size_t)MORPH_TAPE * S * S * 2); rb->tape = malloc((size_t)MORPH_TAPE * S * S * 2);
+        morph_run(ra, MK_SCENE, up, FLUID_LOOK_KEEP | 101, 14, 0, "leo-full", &a);
+        morph_run(rb, MK_SCENE, up, FLUID_LOOK_KEEP | 101, 14, 0, "leo-faint", &b);
+        const int *ga = ra->d->m.dg, *gb = rb->d->m.dg;
+        /* (every stage's frame and count, but its us and the most grains or pixels a frame moved: the ring moves a few) */
+        int stages = 0, differ = 0, most = 0;
+        for (int q = 0; q < FLUID_MD_N; q++)
+            stages += ga[q] == gb[q] || q == FLUID_MD_LUS || q == FLUID_MD_DUS || q == FLUID_MD_JOBUS || q == FLUID_MD_JOBMAX ||
+                      ((q == FLUID_MD_BORN || q == FLUID_MD_WPX) && abs(ga[q] - gb[q]) * 10 <= ga[q]);
+        for (int f = 0; f < MORPH_TAPE && f < a.frames; f++) {
+            int c = 0;
+            for (int k = 0; k < S * S; k++) c += ra->tape[(size_t)f * S * S + k] != rb->tape[(size_t)f * S * S + k];
+            differ += c > 0; most = c > most ? c : most;
+        }
+        printf("  a sign's change, its tap's ripple full and at 0.3: %d and %d frames, stages %d of %d the same, %d frames differ"
+               " (at most %d px, %.2f %% of the glass: the dust the ring moves), %d and %d px off the look at the end; most grains"
+               " coming in a frame %d and %d, of %d and %d new grains; worst %.1f and %.1f ms\n", a.frames, b.frames, stages, FLUID_MD_N,
+               differ, most, 100. * most / (S * S), a.diff, b.diff, ga[FLUID_MD_BORN], gb[FLUID_MD_BORN], a.nb, b.nb, a.worst, b.worst);
+        CHECK(a.frames == b.frames && stages == FLUID_MD_N && a.hang == b.hang && a.slow == b.slow && a.over == b.over && a.unsent == b.unsent &&
+              a.phase == b.phase && a.diff == 0 && b.diff == 0 && a.na == b.na && abs(a.nb - b.nb) * 200 <= a.nb && a.fly == b.fly && a.worst == b.worst &&
+              most * 50 < S * S,
+              "a sign's change with its tap's ripple at 0.3: the same change as at full strength (%d / %d frames, stages %d of %d)", a.frames, b.frames, stages, FLUID_MD_N);
+        free(ra->tape); free(rb->tape); ra->tape = rb->tape = NULL;
         morph_rig_free(ra); morph_rig_free(rb);
         s_morph_stale = 0;
     }

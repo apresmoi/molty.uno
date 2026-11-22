@@ -179,8 +179,8 @@ static void answered(int i, const char *reason) {
 static bool pairing(void) { return s_q.open && s_qa.kind == Q_PAIR; }
 
 /* sense_touch: a pairing or a question takes the press, else a scene's spot (unless it stops a recording), else it is a
- * tap for the task. True: handled (the senses are on). */
-static bool web_sense_touch(int x, int y) {
+ * tap for the task. True: handled (the senses are on); *spot_out: the spot it took (mole_fluid_spot_tap), 0 none. */
+static bool web_sense_touch(int x, int y, unsigned *spot_out) {
     if (!s_sense) return false;
     if (s_q.open) {                    /* link_pair_tap / link_ask_tap: never a `tap` event, whatever it lands on */
         const float r = s_px * 0.5f;
@@ -192,6 +192,7 @@ static bool web_sense_touch(int x, int y) {
     s_tap_xy = (X > 65535u ? 65535u : X) << 16 | (Y > 65535u ? 65535u : Y);
     const unsigned spot = s_lis.on ? 0 : mole_fluid_spot_tap(x, y);
     if (spot) s_spot = spot; else s_tap_flag = true;
+    *spot_out = spot;
     return true;
 }
 

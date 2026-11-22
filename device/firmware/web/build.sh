@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # build.sh: Molty's screen for a computer and for the web, from the firmware's own sources (web_molty.c).
 #   build.sh host <out dir>   the native player (web_main.c): <out dir>/web_molty
+#   build.sh test <out dir> <file.c>   a host test that includes web_molty.c whole: <out dir>/<file>
 #   build.sh wasm <out dir>   the WebAssembly module: <out dir>/molty.wasm   (needs emcc, see EMSCRIPTEN below)
 #   build.sh deps <out dir>   every file the module is made of, a path a line
 #   build.sh emscripten       the pinned toolchain's version
@@ -48,6 +49,10 @@ CFLAGS=(-std=c11 -D_POSIX_C_SOURCE=200809L -D_DARWIN_C_SOURCE -D_DEFAULT_SOURCE 
 case "$MODE" in
 host)
   cc -O2 "${CFLAGS[@]}" "${INCS[@]}" "$HERE/web_main.c" "${SRCS[@]}" -lm -o "$OUT/web_molty"
+  ;;
+test)
+  T="${3:?test file}"
+  cc -O2 "${CFLAGS[@]}" "${INCS[@]}" "$T" "${SRCS[@]:1}" -lm -o "$OUT/$(basename "$T" .c)"
   ;;
 wasm)
   have="$(emcc --version 2>/dev/null | sed -n '1s/.* \([0-9][0-9.]*\)\(-git\)\{0,1\}$/\1/p')"

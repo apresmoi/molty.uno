@@ -372,6 +372,7 @@ static bool       s_spot_on = false;
 static unsigned   s_spot_gen = 0;                   /* the player's gen it was copied at (0: none) */
 static float      s_spot_t = 0.f;                   /* the scene's clock, for spots' on / off */
 static atomic_uint s_spot_req;                      /* a tap on a spot: gen << 8 | item + 1, 0 none; MOLE_SPOT_BACK */
+static atomic_uint s_spot_press;                    /* the last press mole_fluid_spot_tap saw on a spot: 1 << 31 | x << 16 | y */
 static bool       s_spot_back;                      /* the scene on screen was opened by a tap: a tap beside its spots goes back */
 static unsigned   s_tapped;                         /* the last spot tapped, its id and the layout it opens: kept apart from */
 static char       s_tapped_id[PKG_STR_MAX + 1], s_tapped_open[PKG_KEY_MAX + 1];   /* its scene, which the tap may replace */
@@ -662,8 +663,11 @@ static esp_err_t build_grid(int W, int H) {
 /* ── Input ──────────────────────────────────────────────────────────────────── */
 
 static int64_t s_touch_t0;            /* sim: tap seen, not yet handed to the drawer */
+#define TAP_WAVE   1.6f               /* a tap on open water: its ripple's strength ..                       */
+#define TAP_R      0.09f              /* .. and radius                                                       */
+#define TAP_SPOT   0.3f               /* a tap on a scene's spot (a button): every bump it makes, this much of it */
 /* one bump of a tapped spot's wave, at (x, y) glass units, y up (scene_outline) */
-static void outline_bump(void *ctx, float x, float y) { (void)ctx; ripple(x, -y, SCENE_OUTLINE_WAVE, SCENE_OUTLINE_R); }
+static void outline_bump(void *ctx, float x, float y) { (void)ctx; ripple(x, -y, SCENE_OUTLINE_WAVE * TAP_SPOT, SCENE_OUTLINE_R); }
 static volatile int64_t s_dtouch;     /* drawer: tap time riding with the current frame */
 /* the touch panel's last read (the drawer polls it, off the sim's core: ~1 ms of I2C and
  * waits a poll); s_mutex */
@@ -678,10 +682,13 @@ static void poll_touch(int n, const uint16_t *xs, const uint16_t *ys, int64_t t)
         /* on a scene's spot a wave leaves the outline of what it grows (that stays still); the finger's ripple too (on fine
          * dust it carries the dust over the whole glass), unless the spot opens a layout (the picture changes on still water) */
         const int spot = s_cur == ST_SCENE && s_sp.cur ? scene_spot_at(s_sp.cur, s_sp.t, x, -y) : -1;
+        /* (a spot found on the press itself (mole_fluid_spot_tap, before this poll) counts too: its layout may be up already) */
+        const unsigned press = atomic_exchange(&s_spot_press, 0);
+        const bool on_spot = spot >= 0 || press == (1u << 31 | (unsigned)xs[0] << 16 | ys[0]);
         /* a tap on a question's answer: its own wave goes from there (fluid_askview_answer), not a finger's */
         const bool answer = s_ask.scr.phase == FLUID_ASK_SHOW && s_ask.scr.t >= FLUID_ASK_READY && s_ask.v && fluid_ask_pick(&s_ask.hit, x, y) >= 0;
         if (spot >= 0 && fluid_fine_dust_kind_get() == FINE_DUST_SPECKS) scene_outline(s_sp.cur, spot, outline_bump, NULL);
-        if (!answer && (spot < 0 || !s_sp.cur->items[spot].nopen)) ripple(x, y, 1.6f, 0.09f);
+        if (!answer && (spot < 0 || !s_sp.cur->items[spot].nopen)) ripple(x, y, on_spot ? TAP_WAVE * TAP_SPOT : TAP_WAVE, TAP_R);
         fd_user(&s_dir);                                    /* wakes a sleepy creature */
         if (s_cur == ST_CREATURE && s_cpk) cpk_come(s_cpk, NULL);   /* a rigged one comes to the front, attending */
         if (!s_touch_t0) s_touch_t0 = t;
@@ -3016,6 +3023,7 @@ unsigned mole_fluid_spot_tap(int px, int py) {
         snprintf(s_tapped_open, sizeof(s_tapped_open), "%.*s", (int)it->nopen, s_spot_sc->say + it->open);
     }
     xSemaphoreGive(s_mutex);
+    atomic_store(&s_spot_press, spot && spot != MOLE_SPOT_BACK ? 1u << 31 | (uint32_t)px << 16 | (uint32_t)py : 0u);
     if (spot) atomic_store(&s_spot_req, spot);
     return spot;
 }

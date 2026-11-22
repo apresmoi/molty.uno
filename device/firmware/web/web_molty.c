@@ -156,7 +156,7 @@ static void run_task(const char *name) { s_run = true; web_sdk_task(name); s_run
 /* web_device.c: the simulator's device mode and the device's own input handling (at the end: it reads the fluid's state) */
 static void web_drawer_before(void);
 static void web_frame_after(void);
-static bool web_sense_touch(int x, int y);
+static bool web_sense_touch(int x, int y, unsigned *spot);
 
 /* ── the calls ────────────────────────────────────────────────────────────── */
 
@@ -226,21 +226,27 @@ static struct { bool open; unsigned seq; fluid_ask_hit_t hit; int answer; } s_q 
 /** The finger: down at panel pixel (x, y), moved, or lifted. As sense.c does on the press: a question on screen takes
  *  the tap as its answer (link_ask.c: only the question the panel shows, only on an answer), else a scene's spot
  *  takes it (its reading shows). The fluid's own share (the ripple, the creature coming to the front, a drag stirring
- *  the water) is mole_fluid.c's poll of the same finger. */
-WM_API void wm_touch(int down, int x, int y) {
-    if (!s_up) return;
+ *  the water) is mole_fluid.c's poll of the same finger. 1: the press landed on a control (an answer, a spot), its
+ *  wave faint (mole_fluid.c TAP_SPOT) and the creature not called over; else 0. */
+WM_API int wm_touch(int down, int x, int y) {
+    if (!s_up) return 0;
     x = x < 0 ? 0 : x >= s_px ? s_px - 1 : x; y = y < 0 ? 0 : y >= s_px ? s_px - 1 : y;
+    int control = 0;
     if (down && !s_finger.down) {
         s_finger.tapped = true;
-        if (web_sense_touch(x, y)) {}  /* the simulator: sense.c's own routing (web_device.c) */
+        const bool asked = s_q.open;
+        unsigned spot = 0;
+        if (web_sense_touch(x, y, &spot)) {}  /* the simulator: sense.c's own routing (web_device.c) */
         else if (s_q.open) {
             const float r = s_px * 0.5f;
             const int i = mole_fluid_ask_shown() == s_q.seq ? fluid_ask_pick(&s_q.hit, ((float)x + 0.5f - r) / r, ((float)y + 0.5f - r) / r) : -1;
             if (i >= 0) { mole_fluid_ask_pick(i); s_q.open = false; s_q.answer = i; }
-        } else mole_fluid_spot_tap(x, y);
+        } else spot = mole_fluid_spot_tap(x, y);
+        control = (asked && !s_q.open) || (spot && spot != MOLE_SPOT_BACK);
     }
     s_finger.down = down != 0;
     if (down) { s_finger.x = x; s_finger.y = y; }
+    return control;
 }
 
 /* web_cat.c: the creature's place and the picture's camera */
