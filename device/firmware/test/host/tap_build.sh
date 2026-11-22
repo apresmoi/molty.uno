@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tap_build.sh — host build + run of what a touch does to the water and the creature (tap_test.c: mole_fluid.c itself,
+# tap_build.sh: host build + run of what a touch does to the water and the creature (tap_test.c: mole_fluid.c itself,
 # as the web module's native build). Needs cJSON from ESP-IDF, as web/build.sh: set IDF_PATH (default ~/esp/esp-idf).
 # Usage: test/host/tap_build.sh   (run from anywhere)
 set -euo pipefail
