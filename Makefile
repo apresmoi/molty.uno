@@ -6,7 +6,7 @@ export IDF_PATH
 
 .PHONY: help all test console console-test console-e2e firmware firmware-all firmware-test \
         firmware-size relay relay-test cli cli-test creatures creatures-test packages display-test molty-test hygiene version \
-        waitlist-export waitlist-delete sim sim-test sim-env voice-test web-molty web-molty-test
+        waitlist-export waitlist-delete sim sim-test sim-env voice-test web-molty web-molty-test alive-rig alive-rig-test
 
 help:
 	@echo "build:"
@@ -30,6 +30,8 @@ help:
 	@echo "  make creatures-test creature package player rules + every creature package plays within its limits"
 	@echo "  make web-molty-test the website's Molty draws the same pixels as a native build of the firmware sources,"
 	@echo "                      and is built from the sources as they are now (no emscripten needed)"
+	@echo "  make alive-rig-test the alive rig's numbers on made-up input (tools/alive-rig)"
+	@echo "  make alive-rig      how alive a Molty looks: contact sheets and numbers in tools/alive-rig/out/ (MOLTY=<file>)"
 	@echo "  make sim-test       simulated-Molty harness unit tests (tools/sim)"
 	@echo "  make voice-test     voice-box bridge unit tests (services/molty-voice; no GPU, no network)"
 	@echo "sim (tools/sim/README.md; needs ssh to the voice box, never touches a real device):"
@@ -48,7 +50,7 @@ help:
 
 all: console firmware cli
 
-test: firmware-test relay-test cli-test console-test creatures-test display-test molty-test web-molty-test
+test: firmware-test relay-test cli-test console-test creatures-test display-test molty-test web-molty-test alive-rig-test
 
 console:
 	cd device/console && pnpm install --frozen-lockfile && pnpm run build
@@ -128,6 +130,14 @@ web-molty:
 
 web-molty-test:
 	node tools/web-molty/web-molty.mjs test
+
+# How alive a Molty looks (docs/alive-proposal.html section 9): it plays through the module above in fixed scenes and
+# writes contact sheets and numbers to tools/alive-rig/out/ (not committed). MOLTY=<its file> for another Molty.
+alive-rig:
+	node tools/alive-rig/alive-rig.mjs $(if $(MOLTY),--molty $(MOLTY))
+
+alive-rig-test:
+	node --test tools/alive-rig/*.test.mjs
 
 hygiene:
 	tools/scripts/hygiene.sh

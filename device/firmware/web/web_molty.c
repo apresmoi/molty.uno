@@ -283,6 +283,9 @@ WM_API int wm_pan(float across) {
 /** Where the creature stands: across the frame from its middle, and back from the viewer (world units; 0 with none). */
 WM_API float wm_across(void) { return s_up && s_cpk && cpk_crisp(s_cpk) ? web_cat_across(cpk_clip(s_cpk)) : 0.f; }
 WM_API float wm_back(void) { return s_up && s_cpk && cpk_crisp(s_cpk) ? web_cat_back(cpk_clip(s_cpk)) : 0.f; }
+/** The rigged creature's bones this frame, read only: each node's world matrix (creature_clip.h cc_world: 12 floats a
+ *  node, 3 rows of 4), in its rig's node order; NULL while none shows. For tools/alive-rig (where its motion is). */
+WM_API const float *wm_bones(void) { return s_up && s_cpk && cpk_crisp(s_cpk) ? cc_world(cpk_clip(s_cpk)) : NULL; }
 
 /** The creature alone, as the panel shows it: the panel's pixels in the cells its own dots are in (creature_dots.h
  *  cd_creature), everything else clear, and clear between its dots. Nothing is drawn here: it is the firmware's picture
