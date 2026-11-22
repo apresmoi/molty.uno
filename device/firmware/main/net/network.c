@@ -6,7 +6,9 @@
  *
  *   USB-C: TinyUSB NCM (Ethernet over USB). The device is 10.13.37.1/24 and runs
  *          a DHCP server, so a laptop gets an address with no driver install.
- *   Wi-Fi: STA only, credentials in NVS (namespace "wifi", keys "ssid"/"pass").
+ *   Wi-Fi: STA only, credentials in NVS (namespace "wifi", keys "ssid"/"pass"). Back on the
+ *          network by itself (wifi_retry.h): a drop is reconnected, a join that gets no
+ *          address restarts DHCP, rejoins, then tries another AP.
  *   mDNS:  "molty.local" on every registered interface (each answers with its
  *          own address) + "molty-<6 hex>.local" on Wi-Fi only.
  *   HTTP:  GET /api/status, GET /api/scan, POST /api/set_creds, POST /api/forget.
@@ -38,6 +40,7 @@
 #include "tinyusb.h"
 #include "tinyusb_net.h"
 #include "apps/dhcpserver/dhcpserver_options.h"
+#include "lwip/dhcp.h"
 #include "sdkconfig.h"
 #include "mole_diag.h"
 
@@ -118,6 +121,73 @@ static void retry_after(int32_t ms)
     esp_timer_stop(s_retry_timer);                 /* one pending retry at most */
     ESP_LOGI(TAG, "Wi-Fi dropped: reconnecting in %ld ms", (long)ms);
     esp_timer_start_once(s_retry_timer, (uint64_t)ms * 1000);
+}
+
+// ── Joined, no address: the lease ladder (wifi_retry.h). All of it runs on the default event
+// loop, with the other station events; the timer only hands it over. ──
+ESP_EVENT_DEFINE_BASE(NET_LEASE_EVENT);
+static esp_timer_handle_t s_lease_timer = NULL;
+static uint32_t           s_assoc_id;             /* each STA_CONNECTED */
+static volatile uint32_t  s_lease_id;             /* the association the lease timer runs for */
+static int64_t            s_assoc_us;             /* when it began */
+static uint8_t            s_bssid[6];             /* its AP */
+
+static void lease_timer_cb(void *arg)
+{
+    (void)arg;
+    const uint32_t id = s_lease_id;
+    if (esp_event_post(NET_LEASE_EVENT, 0, &id, sizeof(id), 0) != ESP_OK)
+        esp_timer_start_once(s_lease_timer, 1000 * 1000);   /* the loop's queue is full: shortly */
+}
+
+static void lease_arm(int32_t ms)                 /* -1: stop */
+{
+    if (!s_lease_timer) return;
+    esp_timer_stop(s_lease_timer);
+    if (ms < 0) return;
+    s_lease_id = s_assoc_id;
+    esp_timer_start_once(s_lease_timer, (uint64_t)ms * 1000);
+}
+
+/* lwIP's own link-up path (tcpip thread): from any state short of bound, a fresh DISCOVER with
+ * short timeouts again, and a client parked after a decline asks again. Not a dhcpc stop + start:
+ * a start that failed would leave esp_netif's DHCP "stopped", and the next join would take that
+ * for a static address and never ask. */
+static esp_err_t dhcp_kick(void *netif)
+{
+    dhcp_network_changed_link_up(netif);
+    return ESP_OK;
+}
+
+static const char *dhcp_state_name(const struct dhcp *d)
+{
+    static const char *const n[] = { "off", "requesting", "init", "rebooting", "rebinding", "renewing",
+                                     "selecting", "informing", "checking", "permanent", "bound",
+                                     "releasing", "backing_off" };
+    return !d ? "none" : d->state < sizeof(n) / sizeof(n[0]) ? n[d->state] : "?";
+}
+
+/* The wait ran out (ip_lost false) or IDF posted IP_EVENT_STA_LOST_IP: one line, one step. */
+static void lease_step(bool ip_lost)
+{
+    uint32_t wait = 0;
+    const wifi_lease_t a = wifi_retry_lease_due(&s_retry, s_joining, ip_lost, &wait);
+    if (a == WIFI_LEASE_NONE) return;
+    struct netif *nif = s_sta_netif ? esp_netif_get_netif_impl(s_sta_netif) : NULL;
+    const struct dhcp *d = nif ? netif_dhcp_data(nif) : NULL;   /* a racy read of two bytes: a log line */
+    int rssi = 0;
+    esp_wifi_sta_get_rssi(&rssi);
+    static const char *const step[] = { "none", "dhcp", "rejoin", "avoid" };
+    mole_diag_event(false, "wifi.no_lease step=%s why=%s after=%lums dhcp=%s/%u bssid=..:%02x:%02x rssi=%d",
+                    step[a], ip_lost ? "ip_lost" : "wait", (unsigned long)((esp_timer_get_time() - s_assoc_us) / 1000),
+                    dhcp_state_name(d), d ? d->tries : 0, s_bssid[4], s_bssid[5], rssi);
+    if (a == WIFI_LEASE_DHCP) {
+        if (nif) esp_netif_tcpip_exec(dhcp_kick, nif);
+        lease_arm((int32_t)wait);
+        return;
+    }
+    lease_arm(-1);
+    esp_wifi_disconnect();                         /* a real STA_DISCONNECTED: the reconnect joins again */
 }
 
 esp_err_t net_wifi_drop(uint32_t hold_s)
@@ -376,6 +446,10 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
         const wifi_event_sta_connected_t *c = data;
         mole_diag_event(false, "wifi.join bssid=%02x:%02x:%02x:%02x:%02x:%02x ch=%u", c->bssid[0], c->bssid[1],
                         c->bssid[2], c->bssid[3], c->bssid[4], c->bssid[5], c->channel);
+        memcpy(s_bssid, c->bssid, sizeof(s_bssid));
+        s_assoc_us = esp_timer_get_time();
+        s_assoc_id++;
+        lease_arm(wifi_retry_event(&s_retry, WIFI_RETRY_EV_ASSOCIATED, s_joining));   /* the lease wait */
     } else if (base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED && data) {
         const wifi_event_sta_disconnected_t *c = data;
         mole_diag_event(true, "wifi.drop reason=%u rssi=%d bssid=..:%02x:%02x", c->reason, c->rssi, c->bssid[4], c->bssid[5]);
@@ -396,7 +470,16 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
                 (mdns_event_actions_t)(MDNS_EVENT_ENABLE_IP6 | MDNS_EVENT_ANNOUNCE_IP6));
         }
 #endif
+    } else if (base == NET_LEASE_EVENT) {
+        if (data && *(const uint32_t *)data == s_assoc_id && s_sta_associated) lease_step(false);
+    } else if (base == IP_EVENT && event_id == IP_EVENT_STA_LOST_IP) {
+        /* IDF's 120 s notice: no address since the DHCP client started (at a join, or when a lease
+         * ran out). It changes nothing by itself, so a lost lease kept saying "connected". */
+        s_ip_buf[0] = '\0';
+        if (s_wifi_state == WIFI_PORTAL_STATE_CONNECTED) s_wifi_state = WIFI_PORTAL_STATE_CONNECTING;
+        if (s_sta_associated) lease_step(true);
     } else if (base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        lease_arm(-1);
         /* a forget already said "setup needed": that one is never retried */
         retry_after(wifi_retry_event(&s_retry, s_wifi_state == WIFI_PORTAL_STATE_SETUP_NEEDED
                                      ? WIFI_RETRY_EV_FORGET : WIFI_RETRY_EV_DISCONNECTED, s_joining));
@@ -431,6 +514,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
         ip_event_got_ip_t *ev = (ip_event_got_ip_t *)data;
         snprintf(s_ip_buf, sizeof(s_ip_buf), IPSTR, IP2STR(&ev->ip_info.ip));
         s_wifi_state = WIFI_PORTAL_STATE_CONNECTED;
+        lease_arm(-1);
         wifi_retry_event(&s_retry, WIFI_RETRY_EV_GOT_IP, s_joining);
         if (s_wifi_event_group) {
             xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
@@ -499,6 +583,8 @@ esp_err_t net_wifi_init(void)
     wifi_retry_init(&s_retry);
     const esp_timer_create_args_t retry_args = { .callback = retry_timer_cb, .name = "wifi_retry" };
     ESP_RETURN_ON_ERROR(esp_timer_create(&retry_args, &s_retry_timer), TAG, "retry timer");
+    const esp_timer_create_args_t lease_args = { .callback = lease_timer_cb, .name = "wifi_lease" };
+    ESP_RETURN_ON_ERROR(esp_timer_create(&lease_args, &s_lease_timer), TAG, "lease timer");
 
     s_sta_netif = esp_netif_create_default_wifi_sta();
 
@@ -511,6 +597,12 @@ esp_err_t net_wifi_init(void)
     ESP_RETURN_ON_ERROR(
         esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL),
         TAG, "register ip handler");
+    ESP_RETURN_ON_ERROR(
+        esp_event_handler_register(IP_EVENT, IP_EVENT_STA_LOST_IP, wifi_event_handler, NULL),
+        TAG, "register ip lost handler");
+    ESP_RETURN_ON_ERROR(
+        esp_event_handler_register(NET_LEASE_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL),
+        TAG, "register lease handler");
     ESP_RETURN_ON_ERROR(
         esp_event_handler_register(IP_EVENT, IP_EVENT_GOT_IP6, wifi_event_handler, NULL),
         TAG, "register ip6 handler");
