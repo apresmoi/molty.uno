@@ -34,6 +34,13 @@ typedef struct {
 } clip_t;
 typedef struct { char name[CC_NAME_MAX + 1]; int16_t clip; float hold; } gest_t;
 typedef struct { int16_t target, fam, clip; } enter_t;
+typedef struct {
+    int16_t clip;                       /* a pose clip, or -1: a turn of its nodes                           */
+    float zero, rot[3], sq;             /* the clip's neutral place (0..1); a turn's degrees and squash a unit */
+    int n; uint16_t *at;                /* the clip's channels it plays (those that move, on its nodes); a turn's nodes */
+    float *ref;                         /* each channel at zero, 4 floats                                    */
+    float by, w;                        /* this frame's place and weight                                     */
+} layer_t;
 
 struct cc {
     int nn; struct { int16_t parent; char id[CC_NAME_MAX + 1]; } node[CC_NODES_MAX];
@@ -49,6 +56,7 @@ struct cc {
     int ngest; gest_t gest[CC_GEST_MAX];
     int nenter; enter_t enter[8];
     int16_t center[2];
+    int nlay; layer_t lay[CC_LAYERS_MAX];
     /* play state (the JS player's s) */
     int cur_clip; double t; float blendT, blendD; float ox, oz, lockX, lockZ;
     int queue[16], nq;
@@ -59,7 +67,7 @@ struct cc {
                                          * the frame's edges, sense: which way round) */
     int come; float comeT;              /* called (cc_come): 1 walking to the front, 2 attending, 3 facing the viewer,
                                          * 4 its first reaction playing                                               */
-    float *cur, *from, *tmp, *pose, *world, *fromWorld, *out;
+    float *cur, *from, *tmp, *pose, *laid, *world, *fromWorld, *out;   /* laid: the pose with the layers on */
 };
 
 /* ── parse ──────────────────────────────────────────────────────────────── */
@@ -178,8 +186,8 @@ static const char *parse(cc_t *c, const cJSON *rig) {
     c->rest = CC_MALLOC(sizeof(float) * CC_POSE * (size_t)c->nn * 6 + sizeof(float) * 12 * (size_t)c->nn * 3);
     if (!c->rest) return "oom";
     c->cur = c->rest + CC_POSE * c->nn; c->from = c->cur + CC_POSE * c->nn; c->tmp = c->from + CC_POSE * c->nn;
-    c->pose = c->tmp + CC_POSE * c->nn;
-    c->world = c->pose + CC_POSE * c->nn + CC_POSE * c->nn; c->fromWorld = c->world + 12 * c->nn; c->out = c->fromWorld + 12 * c->nn;
+    c->pose = c->tmp + CC_POSE * c->nn; c->laid = c->pose + CC_POSE * c->nn;
+    c->world = c->laid + CC_POSE * c->nn; c->fromWorld = c->world + 12 * c->nn; c->out = c->fromWorld + 12 * c->nn;
     int i = 0;
     for (const cJSON *n = nodes->child; n; n = n->next, i++) {
         const cJSON *id = cJSON_GetObjectItemCaseSensitive(n, "id"), *pa = cJSON_GetObjectItemCaseSensitive(n, "parent");
@@ -384,6 +392,108 @@ static void point_on(const float *w, int n, const float *p, float *o) {
     o[2] = m[8] * p[0] + m[9] * p[1] + m[10] * p[2] + m[11];
 }
 
+/* ── life layers ───────────────────────────────────────────────────────── */
+
+/* creature.life.layers: [{ by, w?, clip, zero?, nodes? } or { by, w?, nodes, rot?, sq? }]; by and w name the creature
+ * player's signals (creature_pkg.c binds them) */
+static const char *parse_layers(cc_t *c, const cJSON *a) {
+    if (!a) return NULL;
+    if (!cJSON_IsArray(a) || cJSON_GetArraySize(a) > CC_LAYERS_MAX) return "life: layers";
+    static const char *const K[] = { "by", "w", "clip", "zero", "nodes", "rot", "sq", NULL };
+    for (const cJSON *j = a->child; j; j = j->next) {
+        layer_t *L = &c->lay[c->nlay++];
+        memset(L, 0, sizeof(*L)); L->clip = -1;
+        if (!cJSON_IsObject(j) || !cJSON_IsString(cJSON_GetObjectItemCaseSensitive(j, "by"))) return "life: a layer";
+        for (const cJSON *k = j->child; k; k = k->next) {
+            bool ok = false;
+            for (int i = 0; K[i]; i++) ok |= !strcmp(k->string, K[i]);
+            if (!ok) return "life: a layer";
+        }
+        const cJSON *cl = cJSON_GetObjectItemCaseSensitive(j, "clip"), *z = cJSON_GetObjectItemCaseSensitive(j, "zero"),
+                    *nodes = cJSON_GetObjectItemCaseSensitive(j, "nodes"), *rot = cJSON_GetObjectItemCaseSensitive(j, "rot"),
+                    *sq = cJSON_GetObjectItemCaseSensitive(j, "sq");
+        bool on[CC_NODES_MAX];
+        for (int i = 0; i < c->nn; i++) on[i] = !nodes;
+        if (nodes && (!cJSON_IsArray(nodes) || !cJSON_GetArraySize(nodes))) return "life: a layer's nodes";
+        if (nodes) for (const cJSON *n = nodes->child; n; n = n->next) {
+            if (!cJSON_IsNumber(n) || n->valueint < 0 || n->valueint >= c->nn) return "life: a layer's nodes";
+            on[n->valueint] = true;
+        }
+        if (cl) {
+            if (!cJSON_IsString(cl) || (L->clip = (int16_t)cc_clip_find(c, cl->valuestring)) < 0 || rot || sq) return "life: a layer's clip";
+            if (z && (!cJSON_IsNumber(z) || z->valuedouble < 0 || z->valuedouble > 1)) return "life: a layer's zero";
+            L->zero = z ? (float)z->valuedouble : 0.f;
+            const clip_t *k = &c->clip[L->clip];
+            L->at = CC_MALLOC(sizeof(uint16_t) * (size_t)(k->nch ? k->nch : 1));
+            L->ref = CC_MALLOC(sizeof(float) * 4 * (size_t)(k->nch ? k->nch : 1));
+            if (!L->at || !L->ref) return "oom";
+            for (int i = 0; i < k->nch; i++) {          /* a held channel adds nothing */
+                if (!on[k->ch[i].node] || k->ch[i].nk < 2) continue;
+                sample_channel(&k->ch[i], L->zero * (float)(k->frames - 1), (float)k->frames, false, L->ref + 4 * L->n);
+                L->at[L->n++] = (uint16_t)i;
+            }
+        } else {
+            if (!nodes || z || (!rot && !sq) || (rot && !num3(rot, L->rot, 3)) || (sq && !cJSON_IsNumber(sq))) return "life: a layer's turn";
+            L->sq = sq ? (float)sq->valuedouble : 0.f;
+            if (!(L->at = CC_MALLOC(sizeof(uint16_t) * (size_t)c->nn))) return "oom";
+            for (int i = 0; i < c->nn; i++) if (on[i]) L->at[L->n++] = (uint16_t)i;
+        }
+    }
+    return NULL;
+}
+
+static void qmul(const float *a, const float *b, float *o) {   /* x y z w */
+    const float x = a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1], y = a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+                z = a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3], w = a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2];
+    o[0] = x; o[1] = y; o[2] = z; o[3] = w;
+}
+/* q turned on by d in its own frame, d's share w of the way from no turn (nlerp) */
+static void turn_by(float *q, const float *d, float w) {
+    const float sg = d[3] < 0 ? -1.f : 1.f, e[4] = { sg * w * d[0], sg * w * d[1], sg * w * d[2], 1.f - w + sg * w * d[3] };
+    float r[4]; qmul(q, e, r);
+    const float l = sqrtf(r[0] * r[0] + r[1] * r[1] + r[2] * r[2] + r[3] * r[3]);
+    for (int k = 0; k < 4; k++) q[k] = r[k] / (l > 0.f ? l : 1.f);
+}
+
+/* the layers over c->cur into c->laid; false (laid untouched) when none plays */
+static bool layers(cc_t *c) {
+    int on = 0;
+    for (int i = 0; i < c->nlay && on < CC_LAYERS_ON; i++) {
+        const layer_t *L = &c->lay[i];
+        const float w = L->w > 1.f ? 1.f : L->w;
+        if (!(w > 0.01f)) continue;
+        if (!on++) memcpy(c->laid, c->cur, sizeof(float) * CC_POSE * (size_t)c->nn);
+        if (L->clip < 0) {                                /* a turn: degrees and a squash a unit of its signal */
+            const float D2R = 3.14159265358979f / 180.f, a[3] = { L->by * w * L->rot[0] * D2R, L->by * w * L->rot[1] * D2R, L->by * w * L->rot[2] * D2R };
+            const float cx = cosf(a[0] / 2), sx = sinf(a[0] / 2), cy = cosf(a[1] / 2), sy = sinf(a[1] / 2), cz = cosf(a[2] / 2), sz = sinf(a[2] / 2);
+            const float d[4] = { sx * cy * cz - cx * sy * sz, cx * sy * cz + sx * cy * sz, cx * cy * sz - sx * sy * cz, cx * cy * cz + sx * sy * sz };   /* as a bone's turn (body.mjs) */
+            const float y = fmaxf(0.3f, 1.f + L->by * w * L->sq), xz = 1.f / sqrtf(y);
+            for (int j = 0; j < L->n; j++) {
+                float *o = c->laid + L->at[j] * CC_POSE;
+                turn_by(o + 3, d, 1.f);
+                o[7] *= xz; o[8] *= y; o[9] *= xz;
+            }
+            continue;
+        }
+        const clip_t *k = &c->clip[L->clip];
+        const float u = fminf(1.f, fmaxf(0.f, L->by >= 0.f ? L->zero + L->by * (1.f - L->zero) : L->zero + L->by * L->zero));
+        for (int j = 0; j < L->n; j++) {                  /* its difference from the neutral place, added */
+            const chan_t *h = &k->ch[L->at[j]];
+            const float *r = L->ref + 4 * j;
+            float v[4];
+            sample_channel(h, u * (float)(k->frames - 1), (float)k->frames, false, v);
+            float *o = c->laid + h->node * CC_POSE;
+            if (h->path == 0) for (int q = 0; q < 3; q++) o[q] += w * (v[q] - r[q]);
+            else if (h->path == 2) for (int q = 0; q < 3; q++) o[7 + q] *= 1.f + w * (r[q] != 0.f ? v[q] / r[q] - 1.f : 0.f);
+            else { const float ri[4] = { -r[0], -r[1], -r[2], r[3] }; float d[4]; qmul(ri, v, d); turn_by(o + 3, d, w); }
+        }
+    }
+    return on > 0;
+}
+
+int  cc_layers(const cc_t *c) { return c->nlay; }
+void cc_layer(cc_t *c, int i, float by, float w) { if (i >= 0 && i < c->nlay) { c->lay[i].by = by; c->lay[i].w = w; } }
+
 /* ── routing (route, bestPhase, start, plan, advance) ─────────────────── */
 
 int cc_route(const cc_t *c, int a, int b, int *out, int max) {
@@ -554,6 +664,7 @@ cc_t *cc_create(const void *crv, const char **err) {
     if (!c) { *err = "oom"; return NULL; }
     memset(c, 0, sizeof(*c));
     const char *e = parse(c, rig);
+    if (!e) e = parse_layers(c, cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(cr, "life"), "layers"));
     if (e) { cc_destroy(c); *err = e; return NULL; }
     const int sit = fam_of(c, "sit");
     c->cur_clip = c->rest_clip[sit >= 0 ? sit : 0];
@@ -573,6 +684,7 @@ void cc_destroy(cc_t *c) {
         for (int k = 0; k < c->clip[i].nch; k++) { CC_FREE(c->clip[i].ch[k].keys); CC_FREE(c->clip[i].ch[k].out); }
         CC_FREE(c->clip[i].ch);
     }
+    for (int i = 0; i < c->nlay; i++) { CC_FREE(c->lay[i].at); CC_FREE(c->lay[i].ref); }
     CC_FREE(c->rest);
     CC_FREE(c);
 }
@@ -629,6 +741,10 @@ bool cc_come(cc_t *c, const char *first) {
     return true;
 }
 bool cc_coming(const cc_t *c) { return c->come != 0; }
+bool cc_free(const cc_t *c) {
+    const clip_t *k = &c->clip[c->cur_clip];
+    return c->gesture < 0 && !c->come && !c->nq && k->loop && k->to != fam_of(c, "walk");
+}
 
 static bool act(cc_t *c, const char *name) {
     int g = -1;
@@ -681,7 +797,8 @@ void cc_update(cc_t *c, float dt) {
     const float w = ease(c->blendD > 0.f ? c->blendT / c->blendD : 1.f);
     if (w < 1.f) blend_pose(c->from, c->pose, w, c->cur, c->nn);
     else memcpy(c->cur, c->pose, sizeof(float) * CC_POSE * (size_t)c->nn);
-    forward(c, c->cur, c->ox, c->oz, c->world);
+    const float *P = layers(c) ? c->laid : c->cur;   /* cur stays the base: the next crossfade starts from it */
+    forward(c, P, c->ox, c->oz, c->world);
     if (w < 1.f && c->ncon) {                                            /* the light paw lock */
         float dx = 0, dz = 0; int n = 0;
         for (int i = 0; i < c->ncon; i++) {
@@ -689,7 +806,7 @@ void cc_update(cc_t *c, float dt) {
             point_on(c->fromWorld, c->con[i].node, c->con[i].p, a); point_on(c->world, c->con[i].node, c->con[i].p, b);
             if (a[1] < 0.03f && b[1] < 0.03f) { dx += a[0] - b[0]; dz += a[2] - b[2]; n++; }
         }
-        if (n) { const float q = (1.f - w) / n; c->lockX = dx * q; c->lockZ = dz * q; forward(c, c->cur, c->ox + c->lockX, c->oz + c->lockZ, c->world); }
+        if (n) { const float q = (1.f - w) / n; c->lockX = dx * q; c->lockZ = dz * q; forward(c, P, c->ox + c->lockX, c->oz + c->lockZ, c->world); }
     } else { c->lockX = c->lockZ = 0.f; }
     turn(c, dt);
 }

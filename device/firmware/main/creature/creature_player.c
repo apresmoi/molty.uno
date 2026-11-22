@@ -155,6 +155,8 @@ struct cp {
     int gest_of[32];             /* cute_act index -> gesture block, -1 none                     */
     int own[32], nown;           /* its own gestures (no shared one): play id CUTE_N_ACTS + i      */
     event_t ev[CP_EVENTS_MAX]; int nev;
+    /* life: its channels, and its events (ev[ev_life] on); lseed salts its draws */
+    bool has_life; list_t life; int ev_life; double lseed;
     tint_t *tint; int ntint;
     /* ambient */
     bool amb;
@@ -392,6 +394,30 @@ static void at(cp_t *c, list_t l, double a, double dur, double seed, double w) {
     c->B.w = 1; c->B.seed = 0; c->B.a = c->time;
 }
 
+/* events e0..e1, each a scheduler: first, then gap (or rate), gated, cut short by stop; salt moves their draws */
+static void events(cp_t *c, int e0, int e1, double salt) {
+    const double dt = c->dt;
+    for (int e = e0; e < e1; e++) {
+        event_t *E = &c->ev[e];
+        if (E->run) {
+            E->ra += dt;
+            if (E->ra > E->rlen || (E->has_stop && terms(c, E->stop) > 0.5f)) { E->run = false; c->B.seed = c->time * 3.7 + E->n + salt; E->next = c->time + prm(c, &E->gap); }
+        }
+        if (!E->run) {
+            const float g = E->has_gate ? terms(c, E->gate) : 1.f;
+            const bool ok = E->has_rate ? cp_hash(c->time * 61.7 + E->n * 3.1) < E->rate * g * c->dt : c->time >= E->next && g > 0.5f;
+            if (ok) {
+                const double s = ++E->n * 17.3 + E->namelen + salt;
+                c->B.seed = s;
+                E->ri = (int)floor(cp_hash(s * 0.71) * E->npick);
+                E->run = true; E->ra = 0; E->rseed = s;
+                E->rlen = prm(c, &E->pick[E->ri].len);
+            }
+        }
+        if (E->run) at(c, E->pick[E->ri].l, E->ra, E->rlen, E->rseed, E->has_w ? terms(c, E->w) : 1.f);
+    }
+}
+
 void cp_pose(cp_t *c, cp_pose_t *p, double dt, const cp_action_t *act, const cp_action_t *prev, float prev_w, const cp_walk_t *wk) {
     c->dt = dt; c->time += dt; c->frame_factors = 0;
     for (int b = 0; b <= c->body.nbones; b++) { float *a = c->out[b]; a[0] = a[1] = a[2] = a[3] = a[4] = a[5] = 0; a[6] = a[7] = a[8] = 1; }
@@ -421,25 +447,7 @@ void cp_pose(cp_t *c, cp_pose_t *p, double dt, const cp_action_t *act, const cp_
 
     at(c, c->walk.l, c->C[S_WALK], 1, 0, 1);
 
-    for (int e = 0; e < c->nev; e++) {   /* each a scheduler: first, then gap (or rate), gated, cut short by stop */
-        event_t *E = &c->ev[e];
-        if (E->run) {
-            E->ra += dt;
-            if (E->ra > E->rlen || (E->has_stop && terms(c, E->stop) > 0.5f)) { E->run = false; c->B.seed = c->time * 3.7 + E->n; E->next = c->time + prm(c, &E->gap); }
-        }
-        if (!E->run) {
-            const float g = E->has_gate ? terms(c, E->gate) : 1.f;
-            const bool ok = E->has_rate ? cp_hash(c->time * 61.7 + E->n * 3.1) < E->rate * g * c->dt : c->time >= E->next && g > 0.5f;
-            if (ok) {
-                const double s = ++E->n * 17.3 + E->namelen;
-                c->B.seed = s;
-                E->ri = (int)floor(cp_hash(s * 0.71) * E->npick);
-                E->run = true; E->ra = 0; E->rseed = s;
-                E->rlen = prm(c, &E->pick[E->ri].len);
-            }
-        }
-        if (E->run) at(c, E->pick[E->ri].l, E->ra, E->rlen, E->rseed, E->has_w ? terms(c, E->w) : 1.f);
-    }
+    events(c, 0, c->ev_life, 0);
 
     at(c, c->base.l, c->time, 0, 0, 1);
 
@@ -470,11 +478,21 @@ void cp_pose(cp_t *c, cp_pose_t *p, double dt, const cp_action_t *act, const cp_
         if (w > 0.01f) at(c, b->l, c->mclock[b->mood], 0, c->wm[b->mood] * 13.7 + b->mood, w);
     }
     at(c, c->post.l, c->time, 0, 0, 1);
+    if (c->has_life) { events(c, c->ev_life, c->nev, c->lseed); at(c, c->life, c->time, 0, c->lseed, 1); }
 
     float *o[18] = { &p->pos[0], &p->pos[1], &p->pos[2], &p->rot[0], &p->rot[1], &p->rot[2], &p->head[0], &p->head[1], &p->head[2],
                      &p->spine[0], &p->spine[1], &p->spine[2], &p->squash, &p->lid, &p->mouth, &p->look[0], &p->look[1], &p->prowl };
     for (int k = 0; k < 18; k++) *o[k] = c->C[S_POSE + k];
 }
+
+bool cp_life(const cp_t *c) { return c->has_life; }
+void cp_seed(cp_t *c, uint32_t seed) { c->lseed = (double)(seed % 9973u) + 1; }
+int cp_slot(const cp_t *c, const char *name) {
+    for (int s = 0; s < c->nslot; s++) if (!strcmp(c->slot[s].name, name)) return s;
+    return -1;
+}
+void cp_set(cp_t *c, int slot, float v) { if (slot >= 0 && slot < c->nslot) { c->C[slot] = v; c->Cd[slot] = v; } }
+float cp_get(const cp_t *c, int slot) { return slot >= 0 && slot < c->nslot ? c->C[slot] : 0.f; }
 
 const float *cp_bone_out(const cp_t *c, int b) { return c->out[b < 0 || b > c->body.nbones ? c->body.nbones : b]; }
 int cp_factors(const cp_t *c) { return c->frame_factors; }
@@ -1322,9 +1340,46 @@ static char *info_c(const cp_t *c, const cJSON *ab) {
     return out;
 }
 
+/* the factors a list evaluates at most (a fan's once per bone): what a frame of it can cost */
+static int list_cost(const cp_t *c, list_t l) {
+    int n = 0;
+    for (int k = 0; k < l.n; k++) {
+        const int it = c->item[l.i0 + k];
+        const fan_t *f = it < 0 ? &c->fan[-it - 1] : NULL;
+        const int i0 = f ? f->l.i0 : it, i1 = f ? f->l.i0 + f->l.n : it + 1, times = f ? c->group[f->group].nb : 1;
+        for (int i = i0; i < i1; i++) for (int t = 0; t < c->ch[i].t.nt; t++) n += times * c->term[c->ch[i].t.t0 + t].nf;
+    }
+    return n;
+}
+static int terms_cost(const cp_t *c, terms_t t) { int n = 0; for (int k = 0; k < t.nt; k++) n += c->term[t.t0 + k].nf; return n; }
+
+/* life: { ch, events, layers } (the build tool's compiled signals; the layers are the clip player's). The device's
+ * inputs are kept values, set before each frame (cp_set). */
+static int life_c(cx_t *x, const cJSON *lj) {
+    cp_t *c = x->c;
+    if (!lj) return 0;
+    static const char *const LK[] = { "ch", "events", "layers", NULL };
+    TRY(keys_only(x, lj, LK, "creature: life"));
+    if (!c->rigged) FAIL(x, "creature: life needs a rig");
+    static const char *const IN[] = { "free", "idle_time", "life" };
+    for (int i = 0; i < 3; i++) { const int s = slot(x, IN[i]); TRY(s); c->slot[s].keep = 1; }
+    TRY(events_c(x, cJSON_GetObjectItemCaseSensitive(lj, "events")));
+    const int ch0 = c->nch;
+    TRY(list_c(x, cJSON_GetObjectItemCaseSensitive(lj, "ch"), &c->life));
+    int cost = list_cost(c, c->life);
+    for (int e = c->ev_life; e < c->nev; e++) {
+        const event_t *E = &c->ev[e];
+        for (int k = 0; k < E->npick; k++) cost += list_cost(c, E->pick[k].l);
+        cost += (E->has_gate ? terms_cost(c, E->gate) : 0) + (E->has_w ? terms_cost(c, E->w) : 0) + (E->has_stop ? terms_cost(c, E->stop) : 0);
+    }
+    if (c->nch - ch0 > CP_LIFE_CH || cost > CP_LIFE_STEPS) FAIL(x, "creature: life is too much work");
+    c->has_life = true;
+    return 0;
+}
+
 static const char *compile(cp_t *c, const cJSON *cr) {
     cx_t x = { .c = c };
-    static const char *const CK[] = { "about", "body", "walk", "groups", "events", "base", "gestures", "moods", "post", "tints", "ambient", "rig", NULL };
+    static const char *const CK[] = { "about", "body", "walk", "groups", "events", "base", "gestures", "moods", "post", "tints", "ambient", "rig", "life", NULL };
     c->rigged = cJSON_GetObjectItemCaseSensitive(cr, "rig") != NULL;   /* creature_clip.c reads it */
     if (keys_only(&x, cr, CK, "creature: unknown key") < 0) return x.err;
     for (int k = 0; k < 18; k++) slot(&x, POSE[k]);
@@ -1368,6 +1423,8 @@ static const char *compile(cp_t *c, const cJSON *cr) {
         }
     }
     if (events_c(&x, cJSON_GetObjectItemCaseSensitive(cr, "events")) < 0) return x.err;
+    c->ev_life = c->nev;
+    if (life_c(&x, cJSON_GetObjectItemCaseSensitive(cr, "life")) < 0) return x.err;
     const cJSON *walk = cJSON_GetObjectItemCaseSensitive(cr, "walk"), *surge = cJSON_GetObjectItemCaseSensitive(walk, "surge");
     terms_t st;   /* the walk engine's (the device stands still): checked, not played */
     if (surge && terms_c(&x, surge, &st) < 0) return x.err;

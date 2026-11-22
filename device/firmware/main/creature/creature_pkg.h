@@ -32,6 +32,9 @@ mood_engine_t *cpk_engine(cpk_t *k);
 const cp_t    *cpk_player(const cpk_t *k);
 /** The agent is working (mood `working`): the package's `work` input, for its own life while it waits. */
 void   cpk_set_work(cpk_t *k, bool on);
+/** What its life (cp_life) reads of the world: seconds since anyone did anything, and the owner's idle-life setting
+ *  (1 lively, 0.5 calm, 0 off). */
+void   cpk_set_idle(cpk_t *k, float idle_s, float life);
 const cb_t    *cpk_body(const cpk_t *k);
 /** One frame: the engine, the player, the body into the cells, the ambient over them (its
  *  splashes and currents into s), then s's target. */

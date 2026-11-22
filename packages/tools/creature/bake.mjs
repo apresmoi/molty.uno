@@ -97,9 +97,10 @@ function channel(node, name, path, v, n, loop) {
 
 /**
  * One action as a clip. nodes: the body's (rest t, r, s). loop: whether it repeats (then its last key, the first pose
- * again, is left off). Returns { dur, frames, ch, first, last }: first and last are the poses it starts and ends in.
+ * again, is left off). moving: keep only what moves in it (a clip a life layer adds: a held bone adds nothing).
+ * Returns { dur, frames, ch, first, last }: first and last are the poses it starts and ends in.
  */
-export function bakeAction(nodes, action, fps, loop) {
+export function bakeAction(nodes, action, fps, loop, moving = false) {
   const end = Math.max(0, ...action.tracks.map((t) => t.times[t.times.length - 1])), dur = r6(end);
   const n = round(dur * fps) + (loop ? 0 : 1), ch = [], first = [], last = [];
   const tracks = new Map(action.tracks.map((t) => [`${t.node} ${t.path}`, t]));
@@ -121,10 +122,14 @@ export function bakeAction(nodes, action, fps, loop) {
         }
       }
       first.push(...row(v, 0, w)); last.push(...row(v, n - 1, w));
-      let dot = 0, away = 0;
+      let dot = 0, away = 0, moves = 0;
       if (path === 'r') for (let c = 0; c < 4; c++) dot += v[c] * rest[c];
-      for (let i = 0; i < n; i++) for (let c = 0; c < w; c++) away = Math.max(away, Math.abs(v[i * w + c] - (dot < 0 ? -rest[c] : rest[c])));
-      if (away > TOL[path] * 0.25) ch.push(channel(ni, node.name, path, v, n, loop));   // the rest pose all through: left out
+      for (let i = 0; i < n; i++) for (let c = 0; c < w; c++) {
+        away = Math.max(away, Math.abs(v[i * w + c] - (dot < 0 ? -rest[c] : rest[c])));
+        moves = Math.max(moves, Math.abs(v[i * w + c] - v[c]));
+      }
+      // the rest pose all through: left out; so is a held bone, in a clip that only moves
+      if (away > TOL[path] * 0.25 && (!moving || moves > TOL[path] * 0.25)) ch.push(channel(ni, node.name, path, v, n, loop));
     }
   });
   return { dur, frames: n, ch, first, last };
