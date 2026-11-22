@@ -52,6 +52,7 @@ export interface Exports {
   wm_entering(): number;
   wm_pan(across: number): number;
   wm_across(): number;
+  wm_back(): number;
   wm_cat_pixels(): number;
   wm_world_pixels(): number;
   wm_haze(): void;
@@ -219,6 +220,10 @@ export class MoltyCore {
   /** Where the creature stands, across the frame from its middle (world units). */
   across(): number {
     return this.x.wm_across();
+  }
+  /** And how far back from the viewer (world units). */
+  back(): number {
+    return this.x.wm_back();
   }
   /** The creature alone, as the panel shows it (everything else clear): px * px RGBA, a view of
    *  the module's memory, or null without one. */
