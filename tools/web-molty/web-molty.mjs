@@ -6,8 +6,8 @@
 //   node tools/web-molty/web-molty.mjs test    check the installed one (a C compiler and Node; no emscripten)
 //
 // The check, either way: the module and a native build of the same sources play
-// device/firmware/web/fidelity.script (no date: no sky) and sky.script (a date: the moon behind the cat) and must
-// show identical pixels on every frame. `test`
+// device/firmware/web/fidelity.script (no date: no sky), sky.script (a date: the moon behind the cat) and the
+// weather's scripts (weather-drizzle, -rain, -downpour) and must show identical pixels on every frame. `test`
 // also wants the installed module to be the one its manifest describes and its sources
 // unchanged since it was built; with the pinned emscripten on the PATH it builds the module
 // again and wants the same bytes. Run from anywhere; make web-molty / make web-molty-test.
@@ -24,6 +24,7 @@ const WEB = path.join(ROOT, 'device/firmware/web');
 const BUILT = path.join(WEB, 'built');
 const SCRIPT = 'device/firmware/web/fidelity.script';
 const SKY_SCRIPT = 'device/firmware/web/sky.script';
+const WEATHER_SCRIPTS = ['drizzle', 'rain', 'downpour'].map((k) => [k, `device/firmware/web/weather-${k}.script`]);
 const sha = (data) => crypto.createHash('sha256').update(data).digest('hex');
 const sh = (args, opts = {}) => execFileSync(path.join(WEB, 'build.sh'), args, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], ...opts });
 
@@ -64,6 +65,8 @@ try {
     const wasm = fs.readFileSync(path.join(tmp, 'molty.wasm'));
     const fid = await fidelity(tmp, wasm);
     const sky = await fidelity(tmp, wasm, SKY_SCRIPT);
+    const weather = {};
+    for (const [k, script] of WEATHER_SCRIPTS) weather[k] = { script, ...(await fidelity(tmp, wasm, script)) };
     const { files, outside } = inputs(tmp);
     fs.mkdirSync(BUILT, { recursive: true });
     fs.writeFileSync(path.join(BUILT, 'molty.wasm'), wasm);
@@ -74,9 +77,11 @@ try {
       sources: { sha256: sources(files), outside, files },
       fidelity: { script: SCRIPT, ...fid },
       sky: { script: SKY_SCRIPT, ...sky },
+      weather,
     };
     fs.writeFileSync(path.join(BUILT, 'molty.json'), JSON.stringify(manifest, null, 2) + '\n');
-    console.log(`web-molty: built/molty.wasm ${wasm.length} bytes (${manifest.wasm.gzip} gzip), ${fid.frames} + ${sky.frames} (sky) frames identical to the native build`);
+    const wn = Object.values(weather).reduce((n, w) => n + w.frames, 0);
+    console.log(`web-molty: built/molty.wasm ${wasm.length} bytes (${manifest.wasm.gzip} gzip), ${fid.frames} + ${sky.frames} (sky) + ${wn} (weather) frames identical to the native build`);
   } else if (mode === 'test') {
     const manifest = JSON.parse(fs.readFileSync(path.join(BUILT, 'molty.json'), 'utf8'));
     const wasm = fs.readFileSync(path.join(BUILT, 'molty.wasm'));
@@ -89,6 +94,12 @@ try {
     if (fid.sha256 !== manifest.fidelity.sha256) fail('the fidelity script (or a package it plays) changed since built/molty.wasm was checked');
     const sky = await fidelity(tmp, wasm, SKY_SCRIPT);
     if (sky.sha256 !== manifest.sky?.sha256) fail('the sky script (or a package it plays) changed since built/molty.wasm was checked');
+    let wn = 0;
+    for (const [k, script] of WEATHER_SCRIPTS) {
+      const w = await fidelity(tmp, wasm, script);
+      if (w.sha256 !== manifest.weather?.[k]?.sha256) fail(`the weather's ${k} script (or a package it plays) changed since built/molty.wasm was checked`);
+      wn += w.frames;
+    }
     let again = 'emscripten not on the PATH: the rebuild check was skipped';
     let have = '';
     try { have = execFileSync('emcc', ['--version'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch {}
@@ -97,7 +108,7 @@ try {
       if (sha(fs.readFileSync(path.join(tmp, 'molty.wasm'))) !== manifest.wasm.sha256) fail(`emscripten ${emscripten} builds a different module from these sources`);
       again = `a rebuild with emscripten ${emscripten} gives the same bytes`;
     }
-    console.log(`web-molty: ${fid.frames} + ${sky.frames} (sky) frames identical to the native build; sources unchanged; ${again}`);
+    console.log(`web-molty: ${fid.frames} + ${sky.frames} (sky) + ${wn} (weather) frames identical to the native build; sources unchanged; ${again}`);
   } else {
     console.error('usage: node tools/web-molty/web-molty.mjs build | test');
     process.exitCode = 2;

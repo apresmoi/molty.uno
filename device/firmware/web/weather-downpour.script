@@ -1,0 +1,9 @@
+# A downpour a day after the new moon (no moonlight), told for an hour: rain in front of the cat as well, the drops on
+# the glass running, and within its first minutes the cat shakes itself off (its own "shaken"). See
+# weather-drizzle.script.
+creature cat packages/cat/cat.json
+package packages/astrology/astrology.json
+start 466 20261122 0
+time 1712690000
+weather 3 3600
+frames 2700 33333
