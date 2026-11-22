@@ -294,6 +294,10 @@ static void test_store(void) {
         for (int q = 0; q < 3; q++) { snprintf(sp, sizeof(sp), "%s/%s", ROOT, strays[q]); left += access(sp, F_OK) == 0; }
         CHECK(gone == 3 && left == 0 && access(p, F_OK) == 0 && pkg_store_find(ROOT, "shapes", NULL), "swept %d strays (%d left), the package kept", gone, left);
         CHECK(pkg_store_sweep(ROOT) == 0, "nothing more to sweep");
+        char lp[256], ln[121]; memset(ln, 'a', 120); ln[120] = 0;
+        snprintf(lp, sizeof(lp), "%s/%s", ROOT, ln); FILE *fl = fopen(lp, "wb"); if (fl) fclose(fl);
+        CHECK(pkg_store_sweep(ROOT) == 0 && access(lp, F_OK) == 0, "a name too long for the path is left alone, not cut to another");
+        remove(lp);
     }
 
     /* a new version replaces the old one and its file */

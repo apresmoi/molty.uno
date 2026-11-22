@@ -7,7 +7,7 @@
     "sha256": "cb96a616574fd282ef50b50da5c31d24e7380e977b24b22c1fdfaf39a131dc31"
   },
   "sources": {
-    "sha256": "34d1e56e980a89d0bff19b5d1de5a38716b6a838c655385ef416138f905a2994",
+    "sha256": "fa7e3744052df821a0625b488089152b7352415eb786d1d6fd6d2625ed9be9a1",
     "outside": "1a96ea17622a98ddaa7e9c53030c8fd80920565bc4782ac179cf2001735b9d53",
     "files": [
       "device/firmware/main/board/molty_board.h",
