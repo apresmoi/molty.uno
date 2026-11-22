@@ -17,7 +17,7 @@
  * Then a frame-cost estimate: a busy layout (1 ring, 12 glyphs, 10 balls, 40 letters)
  * against the creature's own update + raster + fill on the same host.
  *
- * Fine dust (test_fine, packages/astrology/PORT-SPEC.md): the chart's specks gather toward its lines, never on them,
+ * Fine dust (test_fine, the chart design): the chart's specks gather toward its lines, never on them,
  * fainter round its symbols; the light flows through them; a tapped spot's drawing stays still and crisp while the wave
  * leaves its outline; the reading's word sits in the middle on a dark backdrop, forms from the dust and breaks into it;
  * and each state's panel time by the device's model (0.25 ms a window, 0.25 us a pixel).
@@ -1138,7 +1138,7 @@ static void test_open(const char *dir) {
     pkg_unref(p);
 }
 
-/* ── fine dust: the chart as the page draws it (packages/astrology/PORT-SPEC.md) ── */
+/* ── fine dust: the chart as the design draws it ── */
 typedef struct { int wins; long px; int odd; long comp; } cost_t;
 static long composed(const fluid_draw_t *d, int S, int x, int y, int w, int h, const uint16_t *px);
 static const fluid_draw_t *s_cost_d;                    /* (set: send_cost counts the composed pixels against its cache) */
@@ -1343,7 +1343,7 @@ static void test_fine(const char *dir) {
         calm_px += c.px; calm_w += c.wins;
         sum += ms; worst = ms > worst ? ms : worst; changed += c.px > 0;
     }
-    {   /* the light, as the page's (chart-engine.js light()) */
+    {   /* the light, as the design's */
         float err_l = 0.f;
         for (int gy = 0; gy < fine->lg; gy += 3) for (int gx = 0; gx < fine->lg; gx += 5) {
             const double u = gx * (double)FINE_LIGHT_GRID / S, v = gy * (double)FINE_LIGHT_GRID / S;

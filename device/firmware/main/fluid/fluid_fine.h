@@ -1,8 +1,8 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * fluid_fine.h: a scene's fine dust in high definition (packages/astrology/PORT-SPEC.md sections 3, 4, 7 and 8; the
- * reference is device/creatures/js/chart-engine.js). It replaces the braille haze of fluid_draw.c for such a scene.
+ * fluid_fine.h: a scene's fine dust in high definition, as the chart design draws it. It replaces the braille haze of
+ * fluid_draw.c for such a scene.
  *
  *   specks   fixed single pixels. A pixel holds one when its density beats its ordered threshold (interleaved gradient
  *            noise: even, not clumpy). Density at d px from the drawing: 0.03 + 0.40 e^(-d/5), only 0.22 of the near term
@@ -50,7 +50,7 @@ extern "C" {
 #define FINE_SETS        4              /* the calm drawing's, a tapped spot's, one building, and one kept from before
                                          * (a set is found again by its drawing: back at a chart, its dust is there) */
 #define FINE_PARTICLES   6000           /* a word breaking up: its pixels, at most              */
-/* the dust (chart-engine.js AMBIENT .. DRAWN) */
+/* the dust (the design's AMBIENT .. DRAWN) */
 #define FINE_AMBIENT     0.03f
 #define FINE_PEAK        0.40f          /* (the page: 0.85; Juan: half the dust along the lines)  */
 #define FINE_FALL        5.f            /* px                                                   */
@@ -61,13 +61,13 @@ extern "C" {
 #define FINE_WATER_R     107
 #define FINE_WATER_G     120
 #define FINE_WATER_B     160
-/* the light on the water (chart-engine.js light()) */
+/* the light on the water (the design's light) */
 #define FINE_LIGHT_FLOOR 0.5f
 #define FINE_LIGHT_GRID  8              /* px: sampled on this grid, bilinear (the page: 4; its ridges are ~20 px wide) */
 #define FINE_LIGHT_SPEED 0.55f
 #define FINE_PHASES      4              /* the light's changes go in every 4th cell row a frame (the panel's time; the
                                          * light moves ~0.5 px a frame, so a row a cell high changes about as often) */
-/* the caption (chart-engine.js PATCH .. GRAIN) */
+/* the caption (the design's PATCH .. GRAIN) */
 #define FINE_PATCH0      10.f           /* px from the word's box: dark .. (the page: 4; Juan: darker, wider) */
 #define FINE_PATCH1      48.f           /* .. to all the dust (the page: 40; wider, its front crossing it fits a frame) */
 #define FINE_PATCH_RAG   30.f           /* px: the edge as ragged as the grains (the page: 26)   */

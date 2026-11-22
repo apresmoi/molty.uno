@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * fluid_askview.c — a question drawn over the screen (fluid_askview.h), as device/creatures/js/ask-options.js draw():
+ * fluid_askview.c: a question drawn over the screen (fluid_askview.h), as the approved design draws it:
  * the same lattice of dots (2 x 4 a cell), the same forming from the real crest, the same dust carried by the water.
  * What the page does per dot each frame this does over precomputed lists: each line's dots (only those that can ever
  * show), each letter's pixels. The twinkles move a cell row at a time, a few times a second (the panel's cost is by
@@ -23,7 +23,7 @@
 #define AV_FREE(p)   free(p)
 #endif
 
-/* ask-options.js */
+/* the design's timings and sizes */
 #define TOUCH_S   1.6f       /* the start: a finger's touch at the centre                        */
 #define TOUCH_R   0.09f
 #define REACH     0.012f     /* the crest has reached a cell where the water is up this much (h)   */
@@ -243,7 +243,7 @@ static inline void put(fluid_askview_t *v, const fluid_sim_t *s, int sx, int sy,
 }
 
 /* where the water has carried a grain that broke loose `age` s ago, stage px: its eddies, its slope's push, the grain's
- * own spread, a slight rise (ask-options.js carry) */
+ * own spread, a slight rise (the design's carry) */
 static void carry(const fluid_askview_t *v, const fluid_sim_t *s, int k, float age, uint8_t h1, uint8_t h2, float *ox, float *oy) {
     const int W = s->W, i = k % W, j = k / W;
     const float gx = i > 0 && i < W - 1 ? (s->h[k + 1] - s->h[k - 1]) / FQ_H : 0.f, gy = j > 0 && j < s->H - 1 ? (s->h[k + W] - s->h[k - W]) / FQ_H : 0.f;

@@ -273,7 +273,7 @@ static struct {
 /* the listening ring (fluid_target_arc) */
 static bool  s_listen = false;                  /* task copy of s_listen_in */
 static float s_voice = 0.f;                     /* task copy of s_voice_in */
-#define FLUID_CRISP_LISTEN_RGB 0xFF2C3E           /* a rigged creature's listen ring (ring-options.html)       */
+#define FLUID_CRISP_LISTEN_RGB 0xFF2C3E           /* a rigged creature's listen ring                           */
 #define FLUID_CRISP_PROG_RGB   0x35E07C           /* ... and its progress line: green, apart from the listen  */
 static int32_t s_ring_rgb = -1, s_ring_def = -1;   /* task copies of s_ring_in / s_ring_dflt */
 static fluid_ring_t s_rg;                       /* the listening ring (fluid_ring.h)     */
@@ -1046,7 +1046,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     if (n == 4) s_acc = 0.f;
     fluid_sim_color(s, n * FLUID_STEP);                    /* colour rides the same flow, once per frame */
     if (s_crisp) {                                         /* a rigged creature: each cell its dots' colour, and the rings */
-        /* the listen ring red (ring-options.html), unless the agent or the settings gave it one */
+        /* the listen ring red, unless the agent or the settings gave it one */
         cpk_listen(s_cpk, s_ring_rgb >= 0 ? s_ring_rgb : s_ring_def >= 0 ? s_ring_def : FLUID_CRISP_LISTEN_RGB, s_rg.ink);
 #ifdef MOLTY_DIAG_RING
         cpk_voice(s_cpk, s_diag_voice && esp_timer_get_time() < s_diag_ring_until ? diag_voice(s_tnow) : s_voice);

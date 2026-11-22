@@ -3,7 +3,7 @@
  *
  * fluid_ask.h — a question on the round screen (a package install, an agent's ask, a firmware update, a pairing code):
  * what it says, where its answers sit, which one a tap picks, and its screen's phases. The approved design is
- * device/creatures/ask-options.html ("Rim arcs" for 1..3 answers, "Underlined rows" for 4..5); fluid_askview.h draws it.
+ * "Rim arcs" for 1..3 answers, "Underlined rows" for 4..5; fluid_askview.h draws it.
  *
  * Plain C, no FreeRTOS / ESP-IDF, no fluid: link/link_ask.c and link/link_pair.c pick the answer for a tap,
  * mole_fluid.c follows the phases; test/host/ask_test.c checks all of it.

@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * creature_ring.c: the rings over a rigged creature's crisp cells (creature_ring.h), as ring-options.html's disc 1 (one
+ * creature_ring.c: the rings over a rigged creature's crisp cells (creature_ring.h), as the chosen design (one
  * touch; a sharp line). Start: a touch at the centre of the real water (a finger's), the water quickened while the ring
  * forms so its crest reaches the rim in ~0.6 s, not a touch's ~1.5 s; it wobbles the creature as it passes, near the rim
  * its crest carries the ring's colour, and where it arrives the ring lands row by row: a thin bright line at the edge.
@@ -40,8 +40,8 @@
 #define CR_C2       0.28f    /* ... its water quicker while the ring forms or lets go (fluid_params_t c2: 0.11; a
                               * touch's ripple reaches the rim in ~1.5 s, this one in ~0.8 s; stable below ~0.4)  */
 #define CR_FORM_S   0.9f     /* ... and lands there by now, the water's crest or not                           */
-#define CR_LET_S    0.04f    /* the release: a ring-shaped wave let go at the line (as ring-options.html), a third
-                              * as high as the page's 0.12: the water under it (and the creature) moves a third as
+#define CR_LET_S    0.04f    /* the release: a ring-shaped wave let go at the line (as the design), a third
+                              * as high as the design's 0.12: the water under it (and the creature) moves a third as
                               * far, so far fewer cells change in its heaviest frames (the panel's cost) ...      */
 #define CR_LET_W    0.05f
 #define CR_LET_H0   0.007f   /* ... its crest wears the line's colour from this height of the water up, full at   */

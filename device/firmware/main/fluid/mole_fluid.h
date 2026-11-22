@@ -274,7 +274,7 @@ cJSON *mole_fluid_gestures_json(void);
 esp_err_t mole_fluid_gestures_apply(const cJSON *bindings);
 
 /** A question (link_ask.c and link_pair.c, the link task) — the screen follows what the link wants (fluid_ask.h,
- *  fluid_askview.h; device/creatures/ask-options.html):
+ *  fluid_askview.h):
  *  show   q (title, detail, code, 1..FLUID_ASK_MAX answers in their colours, fluid_ask_color) forms over whatever shows,
  *         from a touch at the centre of the water; the scene dims under it and keeps moving; replaces any question.
  *  pick   it was answered with option i: a gentle wave from that answer, everything breaks into dust the water

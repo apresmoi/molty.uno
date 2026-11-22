@@ -85,7 +85,7 @@ idf_component_register(
         "fluid/mole_fluid.c"
         "fluid/fluid_director.c"  # what is shown when: states, moods, idle life, status
         "fluid/fluid_ask.c"       # a question: its layout, its answer for a tap, its phases (link ask)
-        "fluid/fluid_askview.c"   # ... drawn over the screen (ask-options.html)
+        "fluid/fluid_askview.c"   # ... drawn over the screen
         "fluid/fluid_sim.c"
         "fluid/fluid_target.c"
         "fluid/fluid_draw.c"

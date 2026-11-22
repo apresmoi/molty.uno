@@ -51,7 +51,7 @@ void  fluid_fine_hard_density(int percent) { s_hard_pct = percent < 0 ? 0 : perc
 int   fluid_fine_hard_density_get(void) { return s_hard_pct; }
 static bool s_lut;
 
-static inline float hash_u(int a, int b, uint32_t c) {     /* fluid_draw.c's, chart-engine.js hashU */
+static inline float hash_u(int a, int b, uint32_t c) {     /* fluid_draw.c's, the design's hashU */
     uint32_t h = (uint32_t)a * 0x27d4eb2du ^ (uint32_t)b * 0x165667b1u ^ c * 0x9e3779b1u;
     h ^= h >> 15; h *= 0x85ebca6bu; h ^= h >> 13;
     return (float)(h & 0xFFFFu) * (1.f / 65536.f);
@@ -555,7 +555,7 @@ void fluid_fine_caption_box(fluid_fine_t *f, const float box[4]) {
 
 /* ── the drawer's frame ────────────────────────────────────────────────────── */
 
-/* Light on moving water over the grid at T = t x speed (chart-engine.js light()): 0..1, bright in thin ridges where two
+/* Light on moving water over the grid at T = t x speed (as the design's light): 0..1, bright in thin ridges where two
  * slowly warping wave fronts cross zero:
  *   a = sin(2 pi (1.4u + 0.5v) + 0.31T + 1.6 sin(2 pi (0.8v - 0.55u) + 0.21T)),
  *   b = sin(2 pi (-0.7u + 1.25v) - 0.27T + 1.6 sin(2 pi (0.95u + 0.35v) - 0.17T)), light = min(1, (1-|a|)^3 + (1-|b|)^3).

@@ -1,6 +1,6 @@
 /*
  * ask_test.c — host test for a question's layout, answers and phases (main/fluid/fluid_ask.c), against
- * device/creatures/js/ask-options.js ("Rim arcs" for 1..3 answers, "Underlined rows" for 4..5): the whole title
+ * the approved design ("Rim arcs" for 1..3 answers, "Underlined rows" for 4..5): the whole title
  * and every label at its limit (14 / 10 / 8 letters) shown in full, readable, inside the glass and apart; a tap on
  * a label picks it, one on the question picks nothing; the screen's phases.
  *

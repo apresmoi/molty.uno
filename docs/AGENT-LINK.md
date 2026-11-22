@@ -233,8 +233,7 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   defaults by index, present → exactly one valid hex per option), answers `unsupported`
   without touch, and acknowledges `{job}` at once. Firmware from before colours ignores the
   extra field (unknown args are not checked), so the relay needs no cap for it. The question
-  (`device/firmware/main/fluid/fluid_ask.h`, `fluid_askview.h`; the design is
-  `device/creatures/ask-options.html`) forms over whatever shows where a touch's crest passes from the
+  (`device/firmware/main/fluid/fluid_ask.h`, `fluid_askview.h`) forms over whatever shows where a touch's crest passes from the
   centre, the scene behind dimming but moving on: the title (two lines when long) near the top, then for
   1–3 options arcs of the rim splitting its lower half (option 0 lower left), each label inside its arc
   in its colour, for 4–5 rows each underlined in its colour under a faint ring. A tap on an answer: a
@@ -1031,7 +1030,7 @@ pending `ask`. How it looks depends on the creature on screen:
 | voice | small ripples run inward from the rim, more and stronger the louder (the mic level) | none: the circle stays as it is |
 | ends | a wave runs in from the rim and fades | the line melts back |
 | colour | the listen's `ring_color`, else the owner's setting, else red `#ff2c3e` | the listen's `ring_color`, else the owner's setting, else the palette's accent |
-| code | `creature/creature_ring.c` (design: `device/creatures/ring-options.html`) | `fluid_target_ring`, knobs in `fluid/fluid_ring.h` |
+| code | `creature/creature_ring.c` | `fluid_target_ring`, knobs in `fluid/fluid_ring.h` |
 
 The owner's setting is the console's `ring_color` (NVS). Shake detector constants: `device/firmware/main/sense/gesture.h`.
 
