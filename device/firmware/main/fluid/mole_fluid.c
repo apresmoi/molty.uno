@@ -69,6 +69,7 @@
 #include "fluid_ring.h"   /* the listening ring's knobs */
 #include "screen_nap.h"   /* the screen off a while after the creature fell asleep */
 #include "sky.h"          /* the moon and the falling stars behind the creature */
+#include "weather.h"      /* the weather on the glass behind the creature */
 
 static const char *TAG = "mole_fluid";
 
@@ -217,6 +218,20 @@ static sky_t   *s_sky;
 static double   s_tutc;                         /* (the task's) the time now, unix s, 0 not known */
 static bool     s_tsky_on = true, s_tdnd;       /* (the task's) copies of the setting and do not disturb */
 static void     sky_setting_load(void);
+/* the weather on the glass (weather.h): the setting (NVS "fluid"/"wx", on out of the box, written by power.c in the
+ * flash's quiet window: mole_fluid_weather_setting; s_wx_gen moves with each change), what was last told (its kind and
+ * lifetime; s_wx_told moves with each telling) and what the task last had (s_wx_rep, for GET), under s_mutex; the
+ * weather itself is the task's (PSRAM) */
+static bool     s_wx_on = true;
+static bool     s_wx_loaded = false;
+static unsigned s_wx_gen, s_wx_told, s_wx_seen;
+static int      s_wx_kind_in = WX_CLEAR;
+static float    s_wx_life_in;
+static struct { int kind; float left, level, wet; } s_wx_rep;
+static weather_t *s_wx;
+static bool     s_twx_on = true;                /* (the task's) copy of the setting */
+static int64_t  s_wx_t;                         /* (the task's) its last frame, uptime us (0: none yet) */
+static void     wx_setting_load(void);
 static int      s_req_act = -1;                 /* an agent's action (act / a say's mark)  */
 static bool     s_req_spoke = false;            /* a say played to its end                 */
 /* scenes (mole_fluid_scene): ops wait here for the task, which owns the player */
@@ -780,6 +795,27 @@ static void sky_tick(float rdt) {
     cpk_sky(s_cpk, s_sky);
 }
 
+/* The weather on the glass (weather.h), each frame after the sky: shown whenever the moon may show (the creature on the
+ * glass with nothing over it); its clocks (the lifetime, the easing, the drying) run by the uptime clock, so the time the
+ * screen was off counts. Each landed drop is a soft bump in the water (fluid_sim_impulse, never motion(): it does not
+ * hold the flash's quiet window off). In a full downpour the cat shakes itself off, only when nothing else plays: no
+ * gesture, mood, listen, say, question, reading, ring, change of picture or sleep. A few dozen bytes of the task's
+ * stack. */
+static void wx_tick(void) {
+    if (!s_wx || !s_cpk) return;
+    const int64_t now = esp_timer_get_time();
+    const float dt = s_wx_t ? (float)(now - s_wx_t) * 1e-6f : 0.f;
+    s_wx_t = now;
+    const bool show = s_cur == ST_CREATURE && cpk_crisp(s_cpk) && s_ask.scr.phase == FLUID_ASK_NONE;
+    weather_set(s_wx, s_twx_on);
+    weather_frame(s_wx, s_sim->W, s_sim->H, dt, show, s_sky && s_sky->nmoon_shown ? s_sky->moon.lit : 0.f);
+    for (int q = 0; q < s_wx->nbump; q++) fluid_sim_impulse(s_sim, s_wx->bump[q].x, s_wx->bump[q].y, s_wx->bump[q].strength, s_wx->bump[q].radius);
+    cpk_weather(s_cpk, s_wx);
+    if (s_wx->shake && show && !s_listen && s_rg.on <= 0.f && s_pg.on <= 0.f && !s_sub && !s_rd_on && fd_mood(&s_dir) == CM_IDLE &&
+        cr_mood() == CM_IDLE && cr_acting() < 0 && !fd_asleep(&s_dir) && !fluid_draw_morphing(s_draw) && cpk_gesture(s_cpk, "shaken"))
+        weather_shook(s_wx);
+}
+
 static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     fluid_sim_t *s = s_sim;
     s->p.speed_mul = cfg->speed;
@@ -837,6 +873,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
 
     const bool asking = s_ask.scr.phase == FLUID_ASK_SHOW;
     sky_tick(rdt);                                         /* (every frame: a star out at once when the creature goes) */
+    wx_tick();                                             /* (after the sky: the moon's light on the rain) */
     if (s_ask.scr.phase != FLUID_ASK_NONE) {               /* the question's clocks */
         s_ask.scr.t += rdt;
         if (s_ask.scr.phase != FLUID_ASK_SHOW) s_ask.scr.out_t += rdt;
@@ -1966,6 +2003,12 @@ static void fluid_task(void *arg) {
         if (!s_nap_loaded) nap_setting_load();
         if (!s_sky_loaded) sky_setting_load();
         s_tsky_on = s_sky_on; s_tdnd = s_dnd;
+        if (!s_wx_loaded) wx_setting_load();
+        s_twx_on = s_wx_on;
+        const bool wx_told = s_wx_told != s_wx_seen;
+        const int wx_kind = s_wx_kind_in; const float wx_life = s_wx_life_in;
+        s_wx_seen = s_wx_told;
+        if (s_wx) { s_wx_rep.kind = s_wx->kind; s_wx_rep.left = s_wx->left; s_wx_rep.level = s_wx->level; s_wx_rep.wet = s_wx->wet; }
         s_tutc = s_utc0 > 0.0 ? s_utc0 + (double)(now - s_utc_us0) * 1e-6 : 0.0;
         uint32_t tint = s_tint_in;
         bool activity = s_req_activity, shake = s_req_shake, user = s_req_user;
@@ -2050,6 +2093,7 @@ static void fluid_task(void *arg) {
         fd_set_idle_life(&s_dir, idle_life);
         if (req_act >= 0) fd_agent_act(&s_dir, req_act, cr_act_dur(req_act));
         if (spoke) fd_turn_spoken(&s_dir);
+        if (wx_told && s_wx && s_twx_on) weather_tell(s_wx, wx_kind, wx_life);
         if (tint != s_tint) {                      /* a say's mood mark: its words from now on */
             s_tint = tint;
             if (s_cur == ST_TEXT && s_ask.scr.phase == FLUID_ASK_NONE) tint_letters();
@@ -2458,8 +2502,9 @@ esp_err_t mole_fluid_creature_init(void) {
     s_dshp = s_shp ? s_shp + FLUID_MAX_SHAPES : NULL;
     if (!s_rd)      s_rd      = heap_caps_calloc(1, sizeof(reading_t), MALLOC_CAP_SPIRAM);
     if (!s_sky)     s_sky     = heap_caps_calloc(1, sizeof(sky_t), MALLOC_CAP_SPIRAM);
+    if (!s_wx)      s_wx      = heap_caps_calloc(1, sizeof(weather_t), MALLOC_CAP_SPIRAM);
     if (!s_spot_sc) s_spot_sc = heap_caps_calloc(1, sizeof(scene_t), MALLOC_CAP_SPIRAM);
-    if (!s_ttext || !s_toks || !s_sdots || !s_sdots_d || !s_kdots || !s_shp || !s_rd || !s_spot_sc || !s_still || !s_fshp || !s_sky) return ESP_ERR_NO_MEM;
+    if (!s_ttext || !s_toks || !s_sdots || !s_sdots_d || !s_kdots || !s_shp || !s_rd || !s_spot_sc || !s_still || !s_fshp || !s_sky || !s_wx) return ESP_ERR_NO_MEM;
     s_ttext[0] = '\0';
     s_seen_ver = -1;
 
@@ -2493,6 +2538,8 @@ esp_err_t mole_fluid_creature_init(void) {
      * frame; the blob stands in only if none loads); at power on, the boot screen's word first */
     fd_init(&s_dir, NULL, esp_random());
     sky_init(s_sky, s_dir.rng);                  /* (seeded from the director's, none of its numbers drawn) */
+    weather_init(s_wx, s_dir.rng);               /* (the same seed, its own stream: weather.c) */
+    s_wx_t = 0;
     if (!s_booted) fd_boot(&s_dir);
     s_booted = true;
     s_cur = ST_BLOB; s_cur_fx = 0; s_word = 0; s_ntok = 0;
@@ -2603,6 +2650,10 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     const uint32_t nap_bat = s_nap_s[0], nap_usb = s_nap_s[1];
     if (!s_sky_loaded) sky_setting_load();
     const bool sky = s_sky_on;
+    if (!s_wx_loaded) wx_setting_load();
+    const bool wx_on = s_wx_on;
+    const int wx_kind = s_wx_rep.kind;
+    const float wx_left = s_wx_rep.left, wx_level = s_wx_rep.level, wx_wet = s_wx_rep.wet;
     char cname[40], cerr[40], cid[PKG_ID_MAX + 1];
     memcpy(cname, s_cute_name, sizeof(cname)); memcpy(cerr, s_cute_err, sizeof(cerr)); memcpy(cid, s_cr_id, sizeof(cid));
     cJSON *info = s_cr_info ? cJSON_Parse(s_cr_info) : NULL;   /* its gestures and moods (a package's) */
@@ -2662,6 +2713,17 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     cJSON_AddNumberToObject(root, "screen_off_battery_s", nap_bat);   /* 0 = never */
     cJSON_AddNumberToObject(root, "screen_off_usb_s", nap_usb);
     cJSON_AddBoolToObject(root, "sky", sky);
+    cJSON_AddBoolToObject(root, "weather_on", wx_on);
+    {   /* the weather as the task had it: what was told and how long it still holds, where it is on the way there (level:
+         * 0 clear .. 3 downpour) and how wet the floor is */
+        cJSON *wj = cJSON_AddObjectToObject(root, "weather");
+        if (wj) {
+            cJSON_AddStringToObject(wj, "kind", WX_NAMES[wx_kind >= 0 && wx_kind < WX_KINDS ? wx_kind : 0]);
+            cJSON_AddNumberToObject(wj, "s_left", (int)(wx_left + 0.5f));
+            cJSON_AddNumberToObject(wj, "level", (int)(wx_level * 100.f + 0.5f) / 100.0);
+            cJSON_AddNumberToObject(wj, "wet", (int)(wx_wet * 100.f + 0.5f) / 100.0);
+        }
+    }
     cJSON_AddNumberToObject(root, "scene_dust", fluid_fine_dust_kind_get());       /* EXPERIMENT (mole_fluid_scene_dust) */
     cJSON_AddNumberToObject(root, "scene_hard_pct", fluid_fine_hard_density_get()); /* EXPERIMENT (mole_fluid_scene_hard) */
     cJSON_AddStringToObject(root, "edge_mode",   FLUID_EDGE_NAMES[c.edge_mode]);
@@ -2810,6 +2872,22 @@ esp_err_t mole_fluid_creature_state_set_json(const char *body) {
         if (cJSON_IsBool(j)) sky = cJSON_IsTrue(j);
         else ret = ESP_ERR_INVALID_ARG;
     }
+    /* weather_on: true | false, the weather on the glass at all (weather.h; kept in NVS by power.c, as the sky);
+     * weather: "clear" | "drizzle" | "rain" | "downpour", or {"kind": that, "s": its lifetime 10..21600, 3600 when not
+     * given}: told, it eases there and back to clear when its time is up (kept in RAM only) */
+    int wx_on = -1, wx_kind = -1;
+    float wx_life = 0.f;
+    if ((j = cJSON_GetObjectItem(root, "weather_on"))) {
+        if (cJSON_IsBool(j)) wx_on = cJSON_IsTrue(j);
+        else ret = ESP_ERR_INVALID_ARG;
+    }
+    if ((j = cJSON_GetObjectItem(root, "weather"))) {
+        const cJSON *jk = cJSON_IsObject(j) ? cJSON_GetObjectItem(j, "kind") : j, *js = cJSON_IsObject(j) ? cJSON_GetObjectItem(j, "s") : NULL;
+        wx_kind = cJSON_IsString(jk) ? weather_kind(jk->valuestring) : -1;
+        if (js && !(cJSON_IsNumber(js) && js->valuedouble >= WX_LIFE_MIN_S && js->valuedouble <= WX_LIFE_MAX_S)) wx_kind = -1;
+        else if (js) wx_life = (float)js->valuedouble;
+        if (wx_kind < 0) ret = ESP_ERR_INVALID_ARG;
+    }
     /* EXPERIMENT scene_dust: 0 | 1 | 2 | 3, scene_hard_pct: 0..25 (mole_fluid_scene_dust, _scene_hard; not kept) */
     if ((j = cJSON_GetObjectItem(root, "scene_dust"))) {
         if (cJSON_IsNumber(j) && j->valueint >= 0 && j->valueint <= 3) mole_fluid_scene_dust(j->valueint);
@@ -2951,8 +3029,15 @@ esp_err_t mole_fluid_creature_state_set_json(const char *body) {
         if (!s_sky_loaded) sky_setting_load();
         if (s_sky_on != (sky == 1)) { s_sky_on = sky == 1; if (++s_sky_gen == 0) s_sky_gen = 1; }
     }
+    if (wx_on >= 0) {
+        if (!s_wx_loaded) wx_setting_load();
+        if (s_wx_on != (wx_on == 1)) { s_wx_on = wx_on == 1; if (++s_wx_gen == 0) s_wx_gen = 1; }
+    }
+    if (wx_kind >= 0) { s_wx_kind_in = wx_kind; s_wx_life_in = wx_life; s_wx_told++; }
     if (act >= 0) s_req_act = act;
-    s_req_activity = true;                             /* someone is driving: no dozing off */
+    bool told_only = true;                             /* the weather alone (an agent keeping it): not someone driving */
+    for (const cJSON *it = root->child; it && told_only; it = it->next) told_only = it->string && (!strcmp(it->string, "weather") || !strcmp(it->string, "weather_on"));
+    if (!told_only || !root->child) s_req_activity = true;   /* someone is driving: no dozing off */
     xSemaphoreGive(s_mutex);
     cJSON_Delete(root);
     return ret;
@@ -3223,6 +3308,28 @@ static void sky_setting_load(void) {
     }
     s_sky_on = v != 0;
     s_sky_loaded = true;
+}
+
+/* (under s_mutex) */
+static void wx_setting_load(void) {
+    nvs_handle_t h;
+    int32_t v = 1;
+    if (nvs_open("fluid", NVS_READONLY, &h) == ESP_OK) {
+        if (nvs_get_i32(h, "wx", &v) != ESP_OK) v = 1;
+        nvs_close(h);
+    }
+    s_wx_on = v != 0;
+    s_wx_loaded = true;
+}
+
+unsigned mole_fluid_weather_setting(bool *on) {
+    if (!s_mutex) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (!s_wx_loaded) wx_setting_load();
+    if (on) *on = s_wx_on;
+    const unsigned gen = s_wx_gen;
+    xSemaphoreGive(s_mutex);
+    return gen;
 }
 
 unsigned mole_fluid_sky_setting(bool *on) {

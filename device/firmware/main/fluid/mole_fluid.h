@@ -29,6 +29,11 @@
  *               60 and 600 out of the box; kept in NVS; GET reports them),
  *         sky: true|false (the moon and the falling stars behind the creature: sky.h; on out
  *               of the box; kept in NVS; GET reports it),
+ *         weather_on: true|false (the weather on the glass at all: weather.h; on out of the box;
+ *               kept in NVS; GET reports it),
+ *         weather: "clear"|"drizzle"|"rain"|"downpour" or {"kind": that, "s": 10..21600} (told: it
+ *               eases there, holds s seconds, 3600 when not given, then eases back to clear; RAM
+ *               only; GET reports {kind, s_left, level 0..3, wet 0..1}),
  *         act: "nod"|... (a one-shot action, cute_act.h; GET reports the one playing),
  *         hold: true (with "text": hold the last word instead of returning to the
  *               creature 1.5 s after it; the pairing code, the Improv "hi"),
@@ -139,6 +144,9 @@ unsigned mole_fluid_nap_setting(uint32_t *battery_s, uint32_t *usb_s);
 /** The sky's setting (on: the moon and the falling stars behind the creature, sky.h) and its generation, as
  *  mole_fluid_nap_setting (power.c keeps it once the screen is calm). Any task. */
 unsigned mole_fluid_sky_setting(bool *on);
+/** The weather's setting (on: the weather on the glass, weather.h) and its generation, as mole_fluid_sky_setting. Any
+ *  task. */
+unsigned mole_fluid_weather_setting(bool *on);
 /** The time now, unix s UTC (the network's: net_clock.c; the web page's: wm_time); <= 0: not known (no sky). It runs on
  *  from here by the uptime clock. Any task. */
 void mole_fluid_utc(double unix_s);

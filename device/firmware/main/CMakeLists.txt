@@ -109,6 +109,7 @@ idf_component_register(
         "creature/creature_dots.c"     # ... drawn straight on the braille dots (clip-dots.js)
         "creature/creature_ring.c"     # ... the listen / question / progress rings over them, as dust
         "creature/sky.c"               # ... the moon and the falling stars behind them (host-tested)
+        "creature/weather.c"           # ... the weather on the glass: rain, its rings, a wet floor (host-tested)
         # link: agent link to the relay (WSS, pairing, audio)
         "link/link_protocol.c"
         "link/link_identity.c"

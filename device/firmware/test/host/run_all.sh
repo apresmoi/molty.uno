@@ -3,7 +3,7 @@
 # link_build.sh compiles cJSON from ESP-IDF: set IDF_PATH (default ~/esp/esp-idf).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for t in fluid_build.sh fluid_golden_build.sh director_build.sh ask_build.sh askview_build.sh gesture_build.sh vad_build.sh cute_build.sh creature_build.sh clip_build.sh improv_build.sh link_build.sh trace_build.sh update_build.sh log_upload_build.sh guard_build.sh pkg_build.sh lcd_build.sh tap_build.sh nap_build.sh nap_flow_build.sh sky_build.sh sky_flow_build.sh; do
+for t in fluid_build.sh fluid_golden_build.sh director_build.sh ask_build.sh askview_build.sh gesture_build.sh vad_build.sh cute_build.sh creature_build.sh clip_build.sh improv_build.sh link_build.sh trace_build.sh update_build.sh log_upload_build.sh guard_build.sh pkg_build.sh lcd_build.sh tap_build.sh nap_build.sh nap_flow_build.sh sky_build.sh sky_flow_build.sh weather_build.sh weather_flow_build.sh; do
   echo "== $t"
   "$HERE/$t"
 done

@@ -49,6 +49,15 @@ void   cpk_come(cpk_t *k, const char *first);
  *  from its next frame; NULL: none. s must live as long as k uses it. */
 struct sky;
 void   cpk_sky(cpk_t *k, const struct sky *s);
+/** The weather on a rigged creature's glass (weather.h, as its last weather_frame made it), drawn into its world from
+ *  its next frame with the water's height pushing the wet floor's mirror; NULL: none. w must live as long as k uses it. */
+struct weather;
+void   cpk_weather(cpk_t *k, const struct weather *w);
+/** Its dots of the weather in the last frame (cd_weather_dots: mirrored, behind, in front, on the glass). */
+void   cpk_weather_dots(const cpk_t *k, int out[4]);
+/** A rigged creature plays a gesture of its own by name now, only if nothing but its mood plays (cc_free): true if it
+ *  started. */
+bool   cpk_gesture(cpk_t *k, const char *name);
 /** A rigged creature's dots: the share of their rows' work on the calling core (cd_set_share), the rest on the other. */
 void   cpk_set_share(cpk_t *k, int pct);
 /** The listen ring over a rigged creature, given directly (creature_ring.h cr_listen): its colour (0xRRGGBB, -1: the

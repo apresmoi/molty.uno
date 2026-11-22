@@ -407,6 +407,20 @@ WM_API char *wm_state_json(void) {
 WM_API void   wm_time(double unix_s) { if (s_up) mole_fluid_utc(unix_s); }
 WM_API double wm_time_now(void) { return s_up ? mole_fluid_utc_now() : 0.0; }
 
+/** The weather on the glass behind the cat (weather.h), as POST /api/creature/state {weather: {kind, s}} tells it:
+ *  kind 0 clear, 1 drizzle, 2 rain, 3 downpour, held s seconds (<= 0: an hour), then easing back to clear. Never told
+ *  (as out of the box): clear, the frames as ever. */
+WM_API int wm_weather(int kind, float s) {
+    if (!s_up || kind < 0 || kind >= WX_KINDS) return -1;
+    char b[96];
+    if (s > 0.f) snprintf(b, sizeof(b), "{\"weather\":{\"kind\":\"%s\",\"s\":%.0f}}", WX_NAMES[kind], s);
+    else snprintf(b, sizeof(b), "{\"weather\":\"%s\"}", WX_NAMES[kind]);
+    return mole_fluid_creature_state_set_json(b) == ESP_OK ? 0 : -1;
+}
+/** (A demo hook for the website's /demo/ page, never the device's nor an agent's: the next falling star now, as soon
+ *  as one may show.) */
+WM_API void wm_demo_star(void) { if (s_up && s_sky && s_sky->star.t < 0.f) s_sky->star.wait = 0.f; }
+
 /** A listen records (the recording ring) or ended; the mic's level while it does, 0..1. */
 WM_API void wm_listen(int on) { if (s_up) mole_fluid_listen(on != 0); }
 WM_API void wm_listen_level(float level) { if (s_up) mole_fluid_listen_level(level); }
