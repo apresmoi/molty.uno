@@ -35,14 +35,22 @@ test("the firmware sources have not moved on without the module", () => {
   assert.equal(h.digest("hex"), manifest.sources.sha256, `a source of the web Molty changed since it was built: ${stale}`);
 });
 
-test("the module still draws the frames it was checked on against the native build", async () => {
-  const cwd = process.cwd();
+// The listing's frames are the same on every machine, however slow: the module never reads the computer's clock while
+// it plays the script (web/build.sh WEB_SDK_CLOCK: the drawer's budgets run on web_sdk.c's clock, which stands still in a
+// task). Played here under a clock that leaps a second on every read (a machine slower than any), so a budget timed
+// by the real clock would end early and change the frames; none read means a clock that stands still gives them too.
+test("the module still draws the frames it was checked on against the native build, on a machine of any speed", async () => {
+  const cwd = process.cwd(), now = performance.now;
+  let reads = 0;
   process.chdir(ROOT); // the script's paths
+  performance.now = () => now.call(performance) + 1000 * ++reads;
   try {
     const frames = await listing(wasm, read(manifest.fidelity.script).toString());
     assert.equal(frames.trimEnd().split("\n").length, manifest.fidelity.frames);
     assert.equal(sha(frames), manifest.fidelity.sha256, `the fidelity script, or a package it plays, changed: ${stale}`);
+    assert.equal(reads, 0, "the module read the computer's clock while it played the script: its frames depend on the machine's speed");
   } finally {
+    performance.now = now;
     process.chdir(cwd);
   }
 });
