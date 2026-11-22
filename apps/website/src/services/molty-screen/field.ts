@@ -57,19 +57,33 @@ export interface FieldOptions {
   c2: number;
   leak: number;
   damp: number;
+  /** Seconds of water after the last tap it is laid flat, whatever is left of it (none: when it
+   *  settles by itself). */
+  life?: number;
 }
+
+/** The module's field opened for `o`: flat water. */
+const wake = (x: FieldExports, o: FieldOptions) =>
+  x.wf_open(o.cols, o.rows, o.background, o.paper ? 1 : 0, o.c2, o.leak, o.damp);
 
 /** One field (one instance of the module). All places are the field's pixels on the page. */
 export class MoltyField {
   private x: FieldExports;
+  private o: FieldOptions;
   readonly width: number;
   readonly height: number;
   /** Scratch in the module's memory for `sample`. */
   private lent = 0;
   private lentSize = 0;
+  /** Seconds since the last tap while the water moves (-1: flat), and where it stands and
+   *  what focuses it, to stand it again when it is laid flat. */
+  private age = -1;
+  private at: [number, number] = [0, 0];
+  private foci: Focus[] = [];
 
   private constructor(x: FieldExports, o: FieldOptions) {
     this.x = x;
+    this.o = o;
     this.width = o.cols * CELL.w;
     this.height = o.rows * CELL.h;
   }
@@ -77,9 +91,7 @@ export class MoltyField {
   /** On a fresh instance of the module (core.ts `instantiate`). Null when the window is wider
    *  than the largest field. */
   static open(x: FieldExports, o: FieldOptions): MoltyField | null {
-    return x.wf_open(o.cols, o.rows, o.background, o.paper ? 1 : 0, o.c2, o.leak, o.damp) === 0
-      ? new MoltyField(x, o)
-      : null;
+    return wake(x, o) === 0 ? new MoltyField(x, o) : null;
   }
 
   private floats(n: number): number {
@@ -93,9 +105,11 @@ export class MoltyField {
 
   /** The page's cell (column, row) under the canvas's first one. */
   place(col: number, row: number) {
+    this.at = [col, row];
     this.x.wf_place(col, row);
   }
   focus(foci: Focus[]) {
+    this.foci = foci;
     const p = this.floats(foci.length * 12);
     const f = new Float32Array(this.x.memory.buffer, p, foci.length * 12);
     foci.forEach((c, i) => {
@@ -107,12 +121,20 @@ export class MoltyField {
   /** A tap: a bump `strength` high, `radius` px wide. */
   tap(x: number, y: number, strength: number, radius: number) {
     this.x.wf_tap(x, y, strength, radius);
+    this.age = 0;
   }
-  /** `dt` seconds of the water: "front" while a front is out (the water keeps its waves: the
-   *  field's own leak and damp), "settling" while what is left settles (the water is the
-   *  device's), "flat" once it is flat again. */
+  /** `dt` seconds of the water: "front" while a front is out (the field's own leak and damp),
+   *  "settling" while what is left settles (the water is the device's), "flat" once it is flat
+   *  again: by itself, or `life` seconds after the last tap (the field opened afresh). */
   step(dt: number): "front" | "settling" | "flat" {
-    return (["flat", "settling", "front"] as const)[this.x.wf_step(dt)]!;
+    if (this.age >= 0 && (this.age += dt) > (this.o.life ?? Infinity)) {
+      wake(this.x, this.o);
+      this.x.wf_place(...this.at);
+      this.focus(this.foci);
+    }
+    const state = (["flat", "settling", "front"] as const)[this.x.wf_step(dt)]!;
+    if (state === "flat") this.age = -1;
+    return state;
   }
   /** Draw what changed: the boxes (x, y, w, h each) of `pixels` that did. */
   draw(): Int16Array {

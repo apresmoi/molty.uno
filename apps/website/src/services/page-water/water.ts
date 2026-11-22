@@ -21,7 +21,7 @@ import {
   type FieldExports,
   type Focus,
 } from "../molty-screen";
-import { CARRY, FOCUS } from "../../config/water.mjs";
+import { CARRY, FOCUS, LIFE, SPEED } from "../../config/water.mjs";
 
 /** The canvas reaches this many cells beyond the viewport: the page scrolls that far before the
  *  field has to be stood again (every cell drawn afresh). */
@@ -55,7 +55,7 @@ export function mountPageWater(
   let making: Promise<void> | null = null;
   let alive = true;
   let stop: (() => void) | null = null;
-  /** A front is out: the water keeps its waves (CARRY); else it is the device's own. */
+  /** A front is out: the water is the page's (CARRY); else it is the device's own. */
   let front = false;
   /** The page's cell under the canvas's first one. */
   let col = 0,
@@ -125,6 +125,7 @@ export function mountPageWater(
           // the page's speed in the field's own cells
           c2: (speed() / (CELL.w / k)) ** 2,
           ...CARRY,
+          life: LIFE,
         });
         if (!field) return;
         canvas.width = field.width;
@@ -146,8 +147,8 @@ export function mountPageWater(
     if (stale()) drop();
     lay();
   };
-  /** A wave's speed: the device's own on the page's reference screen, CSS px a step. */
-  const speed = () => (Math.sqrt(WATER.c2) * (WATER.panel / k)) / WATER.cells;
+  /** A wave's speed: the device's own on the page's reference screen, SPEED times, CSS px a step. */
+  const speed = () => (SPEED * Math.sqrt(WATER.c2) * (WATER.panel / k)) / WATER.cells;
 
   /** The canvas stands over the viewport, on the page's own lattice: stood again (the water
    *  carried along) when the page has scrolled past its margin. */
