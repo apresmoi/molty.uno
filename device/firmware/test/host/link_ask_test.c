@@ -33,6 +33,11 @@ bool power_dnd(void) { return dnd; }
 void power_dnd_set(bool on) { dnd = on; }
 void power_off(void) {}
 bool haptic_quiet(void) { return false; }      /* (no motor: the shake detector as ever) */
+static char cues[64];                            /* the device's own buzzes (haptic_cue), in order */
+esp_err_t haptic_cue(const char *name) {
+    if (strlen(cues) + strlen(name) + 2 > sizeof cues) cues[0] = 0;   /* (only the recent ones are looked at) */
+    strcat(strcat(cues, cues[0] ? " " : ""), name); return ESP_OK;
+}
 bool link_audio_gesture_talk(const char *input) { (void)input; talks++; return true; }
 static int holds, releases;
 void link_audio_hold(bool down, const char *input) { (void)input; if (down) holds++; else releases++; }
@@ -177,6 +182,25 @@ static void test_deadline(void) {
     assert(open_q("u11", 1000) == ESP_OK);
     sdk_now += 1000001; touch(206 - 100, 206); link_ask_tick();
     assert(dones == d0 + 2 && done_index == -1 && !strcmp(done_reason, "timeout"));
+}
+
+/* The device's own buzzes: a question appears (double), an answer is taken (tick); nothing for a tap
+ * beside the answers, a timeout, a cancel. */
+static void test_cues(void) {
+    sdk_now = 70000000; cues[0] = 0;
+    assert(ask("{\"job\":\"G\",\"options\":[\"a\",\"b\"],\"timeout_ms\":1000}") == ESP_OK);
+    assert(!strcmp(cues, "double"));
+    touch(206, 206); link_ask_tick();                  /* the centre: not an answer */
+    assert(link_ask_pending() && !strcmp(cues, "double"));
+    touch(206 + 100, 206); link_ask_tick();
+    assert(!link_ask_pending() && !strcmp(cues, "double tick"));
+    cues[0] = 0;
+    assert(ask("{\"job\":\"H\",\"options\":[\"a\",\"b\"],\"timeout_ms\":1000}") == ESP_OK);
+    sdk_now += 1000001; link_ask_tick();               /* timed out: no tick */
+    assert(!link_ask_pending() && !strcmp(cues, "double"));
+    assert(open_q("u12", 1000) == ESP_OK && !strcmp(cues, "double double"));   /* the firmware's own question too */
+    link_ask_cancel();
+    assert(!strcmp(cues, "double double"));
 }
 
 /* A tap on a scene's spot is the spot's (its reading shows), not a plain tap; a question's
@@ -379,6 +403,7 @@ int main(void) {
     test_displayed();
     test_spot();
     test_deadline();
+    test_cues();
     link_ask_cancel();
     /* activity log: every question shown (answered, timed out, cancelled, replaced) ended its tag */
     assert(sdk_job_begins>0 && sdk_job_begins==sdk_job_ends);
