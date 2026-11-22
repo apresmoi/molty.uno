@@ -95,6 +95,9 @@ export interface FluidState {
   screen_off_usb_s?: number;
   /** Today's moon and the falling stars behind Molty (newer firmware). */
   sky?: boolean;
+  /** The weather on the glass (newer firmware): its setting, and what is told now (kind, s left, 0..3 level, 0..1 wet). */
+  weather_on?: boolean;
+  weather?: { kind: string; s_left: number; level: number; wet: number };
   word?: string;
   word_idx?: number;
   nwords?: number;
@@ -120,6 +123,8 @@ export interface FluidOrder {
   screen_off_battery_s?: number; // 0 (never) | 10..3600: the screen off this long after Molty fell asleep, on battery, kept on the device
   screen_off_usb_s?: number; // ... on USB power
   sky?: boolean; // today's moon and the falling stars behind the creature, kept on the device
+  weather_on?: boolean; // the weather on the glass at all, kept on the device
+  weather?: string | { kind: string; s?: number }; // told: 'clear' | 'drizzle' | 'rain' | 'downpour', for s seconds (an hour)
   ripple?: { x: number; y: number; strength?: number }; // x,y in -1..1, y down
 }
 
