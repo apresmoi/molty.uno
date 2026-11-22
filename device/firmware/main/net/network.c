@@ -16,6 +16,7 @@
 #include "network.h"
 #include "http.h"
 #include "wifi_retry.h"
+#include "ap_pick.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -25,6 +26,7 @@
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
 #include "freertos/semphr.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_check.h"
 #include "esp_event.h"
@@ -95,6 +97,87 @@ static esp_timer_handle_t s_retry_timer = NULL;
 static volatile bool      s_joining = false;      /* a join owns the radio: it reports its own result */
 static volatile int64_t   s_hold_until_us;        /* net_wifi_drop: no reconnect before this */
 
+// ── Which AP of the network to join (ap_pick.h) ──
+#define PICK_TIMEOUT_MS 5000u                     /* an all-channel scan takes about 2 s */
+static EXT_RAM_NOINIT_ATTR ap_mem_t s_ap;         /* last good / last failed AP: kept across a soft restart */
+static volatile bool s_pick;                      /* a scan to choose the AP runs: its SCAN_DONE joins */
+static volatile bool s_retry_is_pick;             /* the retry timer is that scan's timeout */
+static bool          s_pinned;                    /* the station config aims at s_pinned_bssid */
+static uint8_t       s_pinned_bssid[6];
+static EXT_RAM_BSS_ATTR wifi_config_t s_aim_cfg;  /* under s_wifi_op */
+
+static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
+static void retry_after(int32_t ms);
+
+/* A join or a scan waits for a pick's scan to end (about 2 s) before it takes the radio. */
+static void pick_wait(void)
+{
+    for (int i = 0; s_pick && i < (int)(PICK_TIMEOUT_MS / 100); i++) vTaskDelay(pdMS_TO_TICKS(100));
+}
+
+/* Aim the station config at one AP (its BSSID on its channel: a one-channel scan, then the join), or
+ * at none (all channels, the strongest: the driver's own pick). Caller holds s_wifi_op. */
+static void sta_aim(const ap_seen_t *ap)
+{
+    if (!ap && !s_pinned) return;
+    if (esp_wifi_get_config(WIFI_IF_STA, &s_aim_cfg) != ESP_OK) return;
+    s_aim_cfg.sta.bssid_set = ap != NULL;
+    if (ap) memcpy(s_aim_cfg.sta.bssid, ap->bssid, sizeof(s_aim_cfg.sta.bssid));
+    s_aim_cfg.sta.channel = ap ? ap->channel : 0;
+    s_aim_cfg.sta.scan_method = ap ? WIFI_FAST_SCAN : WIFI_ALL_CHANNEL_SCAN;
+    esp_wifi_set_config(WIFI_IF_STA, &s_aim_cfg);
+    memset(&s_aim_cfg, 0, sizeof(s_aim_cfg));      /* it held the password */
+    s_pinned = ap != NULL;
+    if (ap) memcpy(s_pinned_bssid, ap->bssid, sizeof(s_pinned_bssid));
+}
+
+/* Join the saved network. An AP remembered or avoided: scan the network first, and its SCAN_DONE
+ * (pick_done) joins the chosen one. Nothing remembered: as before, the driver joins the strongest.
+ * Caller holds s_wifi_op. */
+static esp_err_t sta_connect(void)
+{
+    if (s_ssid_buf[0] && ap_mem_active(&s_ap, now_ms())) {
+        const wifi_scan_config_t sc = { .ssid = (uint8_t *)s_ssid_buf, .scan_type = WIFI_SCAN_TYPE_ACTIVE };
+        s_pick = true;
+        if (esp_wifi_scan_start(&sc, false) == ESP_OK) {
+            esp_timer_stop(s_retry_timer);
+            s_retry_is_pick = true;
+            esp_timer_start_once(s_retry_timer, (uint64_t)PICK_TIMEOUT_MS * 1000);
+            return ESP_OK;
+        }
+        s_pick = false;
+    }
+    sta_aim(NULL);
+    return esp_wifi_connect();
+}
+
+/* WIFI_EVENT_SCAN_DONE of the pick (default event loop). The radio busy (a join took it): the
+ * pick's timeout joins instead. */
+static void pick_done(void)
+{
+    static EXT_RAM_BSS_ATTR wifi_ap_record_t rec;
+    static EXT_RAM_BSS_ATTR ap_seen_t seen[AP_PICK_MAX];
+    if (!s_pick || xSemaphoreTake(s_wifi_op, pdMS_TO_TICKS(50)) != pdTRUE) return;
+    s_pick = false;
+    int n = 0;
+    while (esp_wifi_scan_get_ap_record(&rec) == ESP_OK)
+        if (!strncmp((const char *)rec.ssid, s_ssid_buf, sizeof(rec.ssid)))
+            ap_seen_add(seen, &n, rec.bssid, rec.rssi, rec.primary);
+    esp_wifi_clear_ap_list();
+    ap_why_t why;
+    const int i = ap_pick(&s_ap, seen, n, now_ms(), &why);
+    sta_aim(i >= 0 ? &seen[i] : NULL);
+    if (i >= 0) mole_diag_event(false, "wifi.pick bssid=..:%02x:%02x ch=%u rssi=%d why=%s aps=%d", seen[i].bssid[4],
+                                seen[i].bssid[5], seen[i].channel, seen[i].rssi, why == AP_PICK_LAST ? "last" : "best", n);
+    else mole_diag_event(false, "wifi.pick none: the driver scans");
+    const esp_err_t e = esp_wifi_connect();
+    xSemaphoreGive(s_wifi_op);
+    if (e != ESP_OK) {                             /* no attempt, so no disconnect event: retry from here */
+        ESP_LOGW(TAG, "reconnect: esp_wifi_connect %s", esp_err_to_name(e));
+        retry_after(wifi_retry_event(&s_retry, WIFI_RETRY_EV_DISCONNECTED, false));
+    }
+}
+
 static void retry_timer_cb(void *arg)
 {
     (void)arg;
@@ -106,7 +189,18 @@ static void retry_timer_cb(void *arg)
         return;
     }
     s_wifi_state = WIFI_PORTAL_STATE_CONNECTING;
-    esp_err_t e = esp_wifi_connect();
+    esp_err_t e;
+    if (!s_retry_is_pick) e = sta_connect();
+    else if (!s_pick) e = ESP_OK;                  /* the pick reported meanwhile and joined */
+    else {                                         /* its scan never reported: join without it */
+        ESP_LOGW(TAG, "reconnect: the AP pick's scan timed out");
+        s_pick = false;
+        esp_wifi_scan_stop();
+        sta_aim(NULL);
+        e = esp_wifi_connect();
+    }
+    if (e == ESP_OK && s_pick) { xSemaphoreGive(s_wifi_op); return; }   /* sta_connect armed the timeout */
+    s_retry_is_pick = false;
     xSemaphoreGive(s_wifi_op);
     if (e != ESP_OK) {                             /* no attempt, so no disconnect event: retry from here */
         ESP_LOGW(TAG, "reconnect: esp_wifi_connect %s", esp_err_to_name(e));
@@ -119,6 +213,7 @@ static void retry_after(int32_t ms)
 {
     if (ms < 0 || !s_retry_timer) return;
     esp_timer_stop(s_retry_timer);                 /* one pending retry at most */
+    s_retry_is_pick = false;
     ESP_LOGI(TAG, "Wi-Fi dropped: reconnecting in %ld ms", (long)ms);
     esp_timer_start_once(s_retry_timer, (uint64_t)ms * 1000);
 }
@@ -187,6 +282,7 @@ static void lease_step(bool ip_lost)
         return;
     }
     lease_arm(-1);
+    if (a == WIFI_LEASE_AVOID) ap_mem_bad(&s_ap, s_bssid, now_ms());
     esp_wifi_disconnect();                         /* a real STA_DISCONNECTED: the reconnect joins again */
 }
 
@@ -431,7 +527,8 @@ void net_mdns_start(void)
 // WiFi event handler — used only for the blocking connect attempt in set_creds
 // ─────────────────────────────────────────────────────────────────────────────
 /* Join the strongest AP of the SSID, not the first one a fast scan finds. Costs a full-channel
- * scan on each join (about 2 s more). No RSSI floor: a weak link beats none. */
+ * scan on each join (about 2 s more). No RSSI floor: a weak link beats none. A reconnect of the
+ * saved network may aim at one AP instead (sta_connect, ap_pick.h): the last good one. */
 static void sta_config_range(wifi_config_t *c)
 {
     c->sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
@@ -454,6 +551,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
         const wifi_event_sta_disconnected_t *c = data;
         mole_diag_event(true, "wifi.drop reason=%u rssi=%d bssid=..:%02x:%02x", c->reason, c->rssi, c->bssid[4], c->bssid[5]);
     }
+    const bool was_associated = s_sta_associated;
     if (base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) s_sta_associated = true;
     else if (base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) s_sta_associated = false;
 
@@ -470,6 +568,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
                 (mdns_event_actions_t)(MDNS_EVENT_ENABLE_IP6 | MDNS_EVENT_ANNOUNCE_IP6));
         }
 #endif
+    } else if (base == WIFI_EVENT && event_id == WIFI_EVENT_SCAN_DONE) {
+        pick_done();                               /* only a pick's scan: anyone else's is ignored there */
     } else if (base == NET_LEASE_EVENT) {
         if (data && *(const uint32_t *)data == s_assoc_id && s_sta_associated) lease_step(false);
     } else if (base == IP_EVENT && event_id == IP_EVENT_STA_LOST_IP) {
@@ -480,6 +580,10 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
         if (s_sta_associated) lease_step(true);
     } else if (base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         lease_arm(-1);
+        if (s_pinned && !was_associated && !s_joining) {   /* aimed at one AP and could not join it */
+            ap_mem_bad(&s_ap, s_pinned_bssid, now_ms());
+            mole_diag_event(false, "wifi.avoid bssid=..:%02x:%02x (no join)", s_pinned_bssid[4], s_pinned_bssid[5]);
+        }
         /* a forget already said "setup needed": that one is never retried */
         retry_after(wifi_retry_event(&s_retry, s_wifi_state == WIFI_PORTAL_STATE_SETUP_NEEDED
                                      ? WIFI_RETRY_EV_FORGET : WIFI_RETRY_EV_DISCONNECTED, s_joining));
@@ -516,6 +620,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
         s_wifi_state = WIFI_PORTAL_STATE_CONNECTED;
         lease_arm(-1);
         wifi_retry_event(&s_retry, WIFI_RETRY_EV_GOT_IP, s_joining);
+        ap_mem_good(&s_ap, s_bssid);               /* the AP to prefer next time (ap_pick.h) */
         if (s_wifi_event_group) {
             xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
         }
@@ -581,6 +686,7 @@ esp_err_t net_wifi_init(void)
     s_wifi_op = xSemaphoreCreateMutex();
     if (!s_wifi_event_group || !s_wifi_op) return ESP_ERR_NO_MEM;
     wifi_retry_init(&s_retry);
+    ap_mem_boot(&s_ap);
     const esp_timer_create_args_t retry_args = { .callback = retry_timer_cb, .name = "wifi_retry" };
     ESP_RETURN_ON_ERROR(esp_timer_create(&retry_args, &s_retry_timer), TAG, "retry timer");
     const esp_timer_create_args_t lease_args = { .callback = lease_timer_cb, .name = "wifi_lease" };
@@ -634,8 +740,12 @@ esp_err_t net_wifi_init(void)
         strncpy(s_ssid_buf, saved_ssid, sizeof(s_ssid_buf) - 1);
         s_wifi_state = WIFI_PORTAL_STATE_CONNECTING;
         wifi_retry_event(&s_retry, WIFI_RETRY_EV_CONNECT, false);   /* a drop from here is retried */
-        esp_wifi_connect();
-        // Don't block here — let it connect in background while HTTP server comes up
+        // In the background while the HTTP server comes up. After a soft restart, on the AP that
+        // gave the last address if it is still about as strong (ap_pick.h): not the strongest node
+        // of the moment, which may be another one than the restart left.
+        xSemaphoreTake(s_wifi_op, portMAX_DELAY);
+        sta_connect();
+        xSemaphoreGive(s_wifi_op);
     }
 
     return ESP_OK;
@@ -694,6 +804,7 @@ bool net_wifi_ip(char *ip, size_t len)
 int net_wifi_scan(net_ap_t *out, int max)
 {
     if (!s_wifi_op || max <= 0) return -1;
+    pick_wait();
     xSemaphoreTake(s_wifi_op, portMAX_DELAY);
     // Reconnect afterwards if we were connected (the scan may drop the association).
     bool was_connected = (s_wifi_state == WIFI_PORTAL_STATE_CONNECTED);
@@ -836,8 +947,10 @@ static esp_err_t handler_set_creds(httpd_req_t *r)
 esp_err_t net_wifi_join(const char *ssid, const char *pass, uint32_t timeout_ms)
 {
     if (!s_wifi_op) return ESP_ERR_INVALID_STATE;
+    pick_wait();
     xSemaphoreTake(s_wifi_op, portMAX_DELAY);
     s_joining = true;                              /* its own disconnects are not drops to retry */
+    s_pick = false;                                /* a pick that never reported joins nothing now */
     s_hold_until_us = 0;                           /* a join ends a dev hold (net_wifi_drop) */
     if (s_retry_timer) esp_timer_stop(s_retry_timer);
 
@@ -853,7 +966,8 @@ esp_err_t net_wifi_join(const char *ssid, const char *pass, uint32_t timeout_ms)
     strncpy((char *)wcfg.sta.ssid,     ssid, sizeof(wcfg.sta.ssid)     - 1);
     strncpy((char *)wcfg.sta.password, pass, sizeof(wcfg.sta.password) - 1);
     sta_config_range(&wcfg);
-        esp_wifi_set_config(WIFI_IF_STA, &wcfg);
+    esp_wifi_set_config(WIFI_IF_STA, &wcfg);
+    s_pinned = false;                              /* a fresh config: no AP aimed at */
 
     strncpy(s_ssid_buf, ssid, sizeof(s_ssid_buf) - 1);
     s_ssid_buf[sizeof(s_ssid_buf) - 1] = '\0';
@@ -890,6 +1004,7 @@ esp_err_t net_wifi_join(const char *ssid, const char *pass, uint32_t timeout_ms)
             strncpy((char *)wcfg.sta.password, saved_pass, sizeof(wcfg.sta.password) - 1);
             sta_config_range(&wcfg);
             esp_wifi_set_config(WIFI_IF_STA, &wcfg);
+            s_pinned = false;
             snprintf(s_ssid_buf, sizeof(s_ssid_buf), "%s", saved_ssid);
             memset(saved_pass, 0, sizeof(saved_pass));
             memset(&wcfg, 0, sizeof(wcfg));
@@ -913,6 +1028,7 @@ static esp_err_t handler_forget(httpd_req_t *r)
     s_ssid_buf[0] = '\0';
     s_ip_buf[0]   = '\0';
     s_wifi_state  = WIFI_PORTAL_STATE_SETUP_NEEDED;
+    ap_mem_forget(&s_ap);                          /* no-init RAM: it would outlive the reboot */
     esp_wifi_disconnect();
 
     http_send_json(r, "{\"ok\":true}");

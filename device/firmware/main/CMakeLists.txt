@@ -76,7 +76,8 @@ idf_component_register(
         "app_main.c"
         # net: USB-C NCM + Wi-Fi + mDNS, the HTTP API, console page + SPIFFS
         "net/network.c"
-        "net/wifi_retry.c"       # reconnect after a Wi-Fi drop (host-tested)
+        "net/wifi_retry.c"       # reconnect after a Wi-Fi drop, the lease ladder (host-tested)
+        "net/ap_pick.c"          # which AP of the saved network to join (host-tested)
         "net/http.c"
         "net/recv_bound.c"       # a request body read that gives up on a silent sender (host-tested)
         "net/console_store.c"
