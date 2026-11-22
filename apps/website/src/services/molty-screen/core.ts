@@ -75,6 +75,8 @@ export interface Exports {
   wm_package(json: number, len: number): number;
   wm_scene(layout: number, params: number, ttl: number): number;
   wm_scene_clear(): void;
+  wm_time(unixS: number): void;
+  wm_time_now(): number;
 }
 
 /** The last frame (web_device.c wm_frame_info): what went to the panel and what the device would
@@ -187,6 +189,16 @@ export class MoltyCore {
   start(seed: number, boot: boolean, px = PANEL): boolean {
     this.px = px;
     return this.x.wm_start(px, seed >>> 0, boot ? 1 : 0) === 0;
+  }
+
+  /** The time now (unix seconds, UTC: Date.now() / 1000), for the sky behind the cat (today's moon, the falling
+   *  stars); the module runs it on with its frames. Never given: no sky (the frames as ever). */
+  time(unixS: number) {
+    this.x.wm_time(unixS);
+  }
+  /** The time as the module has it now (0: not known). */
+  timeNow(): number {
+    return this.x.wm_time_now();
   }
 
   /** One frame, `dtUs` microseconds after the last. */

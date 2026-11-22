@@ -19,6 +19,7 @@
  *   ask <json>        ask_end
  *   scene <layout> <ttl s> [params json]      scene_clear
  *   device <0|1>                    the simulator's device mode (wm_device; its clock runs with the computer's)
+ *   time <unix s>                   the date (wm_time: the sky behind the cat); never given, no sky
  * With a dump dir every frame is also written there as <number>.ppm.
  */
 #include <stdint.h>
@@ -47,6 +48,7 @@ void  wm_ask_end(void);
 int   wm_scene(const char *layout, const char *params, float ttl_s);
 void  wm_scene_clear(void);
 void  wm_device(int on);
+void  wm_time(double unix_s);
 
 static char *slurp(const char *path, size_t *len) {
     FILE *f = fopen(path, "rb");
@@ -109,6 +111,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(op, "scene")) { float ttl; int m = 0; if (sscanf(rest, "%63s %f %n", a, &ttl, &m) < 2) rc = -1; else rc = wm_scene(a, rest[m] ? rest + m : NULL, ttl); }
         else if (!strcmp(op, "scene_clear")) wm_scene_clear();
         else if (!strcmp(op, "device")) wm_device(atoi(rest));
+        else if (!strcmp(op, "time")) wm_time(atof(rest));
         else rc = -1;
         if (rc) { fprintf(stderr, "web_molty: step failed: %s\n", line); return 1; }
     }
