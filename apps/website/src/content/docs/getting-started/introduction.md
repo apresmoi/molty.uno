@@ -1,38 +1,44 @@
 ---
 title: Introduction
-description: What molty.UNO is — the fluid, the Moltys, the bridge — and which screens it runs on.
+description: A small creature on a round screen that any AI agent can speak, listen and ask through.
 ---
 
-molty.UNO is not one device. It is three portable things you bake onto a screen:
+Molty is a small creature that lives on a round screen on your desk. It has no brain of its
+own. You connect an agent you already use, and the agent speaks, listens and asks through it.
 
-1. **The fluid.** One liquid of braille characters fills the screen. Everything it shows —
-   words, creatures, ripples — is a shape the fluid flows toward.
-2. **The Moltys.** Small creatures that emerge from the fluid, dance and melt back. Each is a
-   ~1 KB `.molty` file: the same file brings the same creature to any screen, no reflash.
-3. **The bridge.** Moltys have no brain of their own. Any agent — Claude, Grok, OpenClaw, or
-   anything that speaks MCP or HTTP — becomes one, paired with one message and a tap on the
-   screen. It can then set moods, show text in the fluid, speak and listen.
+## Three parts
 
-```
-agent ──MCP / REST──▶ relay ◀──outbound WSS── your screen
-```
+- **The water.** The screen is a liquid made of tiny dots. Words, creatures and questions come
+  out of it and melt back in.
+- **The creature.** A duck, a cat or an octopus. You pick one, and you can change it any time.
+- **The agent.** Claude, Grok, OpenClaw, or anything that can make web requests. You pair it
+  with one message and one tap on the screen.
 
-## Boards
+## What you do with it
 
-| Board | Screen | Status |
+- Shake Molty and talk. Your agent hears you and answers out loud.
+- Answer your agent's questions with one tap.
+- Watch a ring fill while your agent works on something long.
+- Ask for the sky. Your agent draws tonight's moon, the planets and the zodiac.
+
+## What you need
+
+A board, a USB-C data cable, 2.4 GHz Wi-Fi and an agent.
+
+| Board | Screen | Sound |
 |---|---|---|
-| Waveshare ESP32-S3-Touch-LCD-1.46 | 412×412 round, touch, mic, speaker | reference |
-| Waveshare ESP32-S3-Touch-LCD-1.28 | 240×240 round, touch, no audio | supported |
-| Your screen | anything with an ESP32-S3 | port it |
+| Waveshare ESP32-S3-Touch-LCD-1.46 | 412×412, round | mic and speaker |
+| Waveshare ESP32-S3-Touch-AMOLED-1.75C | 466×466, round, the largest | mic and speaker |
+| Waveshare ESP32-S3-Touch-LCD-1.28 | 240×240, round | none: it shows, it does not talk |
 
-You also need a USB-C cable and an agent you already use.
+The 1.46 is the board we build on. The other two run, but are less tested. Have another
+screen with an ESP32-S3 chip? You can [port Molty to it](/getting-started/porting/).
 
-## Where to go next
+## Next
 
-1. [Flash a release](/getting-started/flash-a-release/) — the short path.
-2. [Build and flash](/getting-started/hardware/) — from source, with the toolchain.
-3. [Set up your Molty](/getting-started/setup/) — Wi-Fi, pick a Molty, connect an agent.
-4. [Connect an agent](/agents/connect/) — what the one message does.
+1. [Set up your Molty](/getting-started/setup/)
+2. [Connect an agent](/agents/connect/)
+3. [What Molty shows](/getting-started/on-screen/)
+4. [Packages and scenes](/moltys/packages/)
 
-Everything — firmware, console, relay, CLI and the creature engine — is MIT-licensed and
-lives in one repository.
+Everything is open source under the MIT licence.

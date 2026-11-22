@@ -1,4 +1,4 @@
-// Landing copy and data. Few words: the fluid does the talking.
+// Landing copy and data. Few words: the screens do the talking.
 import { SITE_URL, SITE_DESCRIPTION, REPO_URL, REPO_BRANCH } from "../../config/site.mjs";
 
 export const title = "molty.UNO — liquid ASCII creatures for any screen";
@@ -15,17 +15,7 @@ export const ldJson = {
   programmingLanguage: ["C", "TypeScript", "JavaScript", "Go"],
 };
 
-/** Colours the fluid gives each heading: the wordmark's own green, then the Molty beside it. */
-export const WORDMARK = "#3ccf96";
-export const FLUID_INK = "#9cb8ac";
-
-/** The hero's Moltys take turns emerging: the duck first, then the octopus, then the bunny. */
-export const HERO_MOLTYS = ["cute-duck", "cute-octopus", "cute-bunny"];
-export const GALLERY_FIRST = "cute-axolotl";
-export const BRIDGE_MOLTY = { id: "cute-octopus", color: "#c6a8f2" };
-export const BAKE_MOLTY = { id: "cute-duck", color: "#ffdf5a" };
-
-/** What an agent might say through Molty, read one word at a time out of the fluid; its
+/** What an agent might say through Molty, read one word at a time on its screen; its
  *  question is answered by a tap on the screen (yes / no / idk), and the agent says one of these back. */
 export const readerText = "Build passed. Three tests were flaky, so I reran them. Want me to open the pull request?";
 export const readerAnswers = {
@@ -52,10 +42,16 @@ export const boards = [
     status: "reference",
   },
   {
+    tag: "1.75C",
+    board: "Waveshare ESP32-S3-Touch-AMOLED-1.75C",
+    screen: "466×466 AMOLED · mic · speaker",
+    status: "experimental",
+  },
+  {
     tag: "1.28",
     board: "Waveshare ESP32-S3-Touch-LCD-1.28",
     screen: "240×240 round · no audio",
-    status: "supported",
+    status: "experimental",
   },
 ] as const;
 

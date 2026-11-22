@@ -17,6 +17,7 @@
 #include "molty_board.h"
 #include "http.h"
 
+#include <math.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
@@ -54,10 +55,11 @@ static void lock(void)
 }
 static void unlock(void) { xSemaphoreGive(atomic_load(&s_lock_h)); }
 
+/* id's (NULL: any): the store changed under it */
 static void drop_cache(const char *id)
 {
     lock();
-    if (s_cache && !strcmp(s_cache->id, id)) { pkg_unref(s_cache); s_cache = NULL; }
+    if (s_cache && (!id || !strcmp(s_cache->id, id))) { pkg_unref(s_cache); s_cache = NULL; }
     unlock();
 }
 
@@ -80,7 +82,9 @@ static void send_evt(const char *state, const char *key, const char *val)
 
 /* ── the download: esp_http_client over verified TLS, mbedtls SHA-256 ──────── */
 
-typedef struct { esp_http_client_handle_t http; mbedtls_sha256_context sha; char err[16]; } dl_t;
+typedef struct { esp_http_client_handle_t http; mbedtls_sha256_context sha; char err[16]; uint32_t got; } dl_t;
+/* the download fills the ring to this much; saving it, the rest (pkg_store_put) */
+#define DL_RING_PCT 90.f
 
 static const char *io_open(void *ctx, const char *url, int64_t *len)
 {
@@ -107,7 +111,20 @@ static const char *io_open(void *ctx, const char *url, int64_t *len)
     *len = cl > 0 ? cl : -1;
     return NULL;
 }
-static int io_read(void *ctx, uint8_t *buf, int cap) { return esp_http_client_read(((dl_t *)ctx)->http, (char *)buf, cap); }
+/* 0 before the body is complete is a stall (a read that timed out on a weak signal, errno
+ * EAGAIN), not the end: wait and read on, a few times, then call it a failed download */
+static int io_read(void *ctx, uint8_t *buf, int cap)
+{
+    dl_t *d = ctx;
+    for (int tries = 0;; tries++) {
+        const int n = esp_http_client_read(d->http, (char *)buf, cap);
+        if (n > 0 && s_req.size) { d->got += (uint32_t)n; mole_fluid_progress(DL_RING_PCT * fminf(1.f, (float)d->got / (float)s_req.size), false); }
+        if (n != 0 || esp_http_client_is_complete_data_received(d->http)) return n;
+        if (tries >= 4) return -1;
+        mole_diag_event(false, "pkg.stall retry %d", tries + 1);
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+}
 static void io_close(void *ctx)
 {
     dl_t *d = ctx;
@@ -127,14 +144,23 @@ static void download_task(void *arg)
     const pkg_io_t io = { &d, io_open, io_read, io_close, io_sha_start, io_sha_update, io_sha_finish };
     uint8_t *buf = heap_caps_malloc(s_req.size + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     pkg_entry_t ent;
+    d.got = 0;
+    mole_fluid_progress(0.f, false);                   /* the ring forms as the question blows away */
     const char *e = buf ? pkg_fetch(&s_req, &io, buf) : "oom";
     if (!e) {
         lock();
         e = pkg_store_put(PKG_ROOT, &s_req, buf, &ent);
         unlock();
     }
-    heap_caps_free(buf);
     drop_cache(s_req.id);
+    if (!e) {   /* parsed here (this task runs under the screen's), so the first scene of it starts at once */
+        const char *pe;
+        pkg_t *p = pkg_parse((const char *)buf, s_req.size, &pe);
+        if (p) { lock(); pkg_unref(s_cache); s_cache = p; unlock(); }
+    }
+    heap_caps_free(buf);
+    if (e) mole_fluid_progress_stop();                 /* it lets go where it got to */
+    else mole_fluid_progress(100.f, true);             /* full, then into the water */
     if (e) send_evt("failed", "error", e);
     else send_evt("installed", "version", ent.version);
     atomic_store(&s_installing, false);
@@ -150,12 +176,26 @@ static void on_answer(int index, const char *reason)
     atomic_store(&s_installing, false);
 }
 
-/* SPIFFS itself must hold it too (the console page, the creature and the log share it) */
+/* SPIFFS itself must hold it too (the console page, the creature and the log share it). An update replaces the
+ * installed file, so its bytes count as free; when the bytes are there but only as deleted pages, SPIFFS collects
+ * them first. */
 static const char *room(const pkg_req_t *r)
 {
     size_t total = 0, used = 0;
-    if (esp_spiffs_info("spiffs", &total, &used) != ESP_OK || used + r->size + SPARE > total) return "no_space";
-    return pkg_store_room(PKG_ROOT, r->id, r->size);
+    pkg_store_sweep(PKG_ROOT);                         /* nothing the store does not list */
+    const size_t freed = pkg_store_installed_size(PKG_ROOT, r->id);
+    if (esp_spiffs_info("spiffs", &total, &used) != ESP_OK) return "no_space";
+    if (used + r->size + SPARE > total + freed) {
+        esp_spiffs_gc("spiffs", r->size + SPARE);
+        if (esp_spiffs_info("spiffs", &total, &used) != ESP_OK || used + r->size + SPARE > total + freed) {
+            mole_diag_event(true, "pkg.no_space spiffs %u of %u used, need %u (frees %u)", (unsigned)used, (unsigned)total,
+                            (unsigned)(r->size + SPARE), (unsigned)freed);
+            return "no_space";
+        }
+    }
+    const char *e = pkg_store_room(PKG_ROOT, r->id, r->size);
+    drop_cache(NULL);                                  /* (the room made may have taken the cached one) */
+    return e;
 }
 
 esp_err_t pkg_cmd_install(const cJSON *args, cJSON **out)
@@ -168,15 +208,18 @@ esp_err_t pkg_cmd_install(const cJSON *args, cJSON **out)
     if (!e && !atomic_compare_exchange_strong(&s_installing, &idle, true)) e = "busy";
     if (e) { mole_diag_event(true, "pkg.refused %s", e); return refuse(e); }
     s_req = r;
-    /* the question names what is installed, in the ask's 8 letters */
-    char label[9];
-    snprintf(label, sizeof(label), "%.8s", r.name);
-    for (int n = (int)strlen(label); n > 0 && label[n - 1] == ' '; n--) label[n - 1] = 0;
-    if (!label[0]) snprintf(label, sizeof(label), "%.8s", r.id);
-    const char *labels[2] = { label, "no" };
+    /* the question names what is installed, in full: "INSTALL ASTROLOGY?" */
+    const char *name = r.name;
+    int len = (int)strlen(name);
+    while (len > 0 && name[len - 1] == ' ') len--;
+    if (!len) { name = r.id; len = (int)strlen(name); }
+    if (len > FLUID_ASK_TITLE_MAX - 9) len = FLUID_ASK_TITLE_MAX - 9;   /* "install " + it + "?" */
+    char title[64];
+    snprintf(title, sizeof(title), "install %.*s?", len, name);
+    const char *labels[2] = { "install", "not now" };
     const int32_t colors[2] = { COLOR_YES, COLOR_NO };
     cJSON *j = cJSON_CreateObject();
-    esp_err_t err = j ? link_ask_open(r.job[0] ? r.job : r.id, labels, colors, 2, r.timeout_ms, on_answer) : ESP_ERR_NO_MEM;
+    esp_err_t err = j ? link_ask_open(r.job[0] ? r.job : r.id, title, "a new package for molty", labels, colors, 2, r.timeout_ms, on_answer) : ESP_ERR_NO_MEM;
     if (err != ESP_OK) { atomic_store(&s_installing, false); cJSON_Delete(j); return err; }
     if (r.job[0]) cJSON_AddStringToObject(j, "job", r.job);
     cJSON_AddStringToObject(j, "id", r.id);
@@ -232,13 +275,20 @@ esp_err_t pkg_cmd_list(const cJSON *args, cJSON **out)
 static const char *load(const char *id, pkg_t **out)
 {
     lock();
-    if (!(s_cache && !strcmp(s_cache->id, id) && pkg_store_find(PKG_ROOT, id, NULL))) {
+    /* (the cache is dropped wherever the store changes: no look at the store here, whose by-name lookup reads every
+     * block's index, ~0.5 MB of flash in ~130 ms of cache-off slivers, a hitch in whatever moves on screen) */
+    if (!(s_cache && !strcmp(s_cache->id, id))) {
+        /* reading and parsing a package takes ~0.4 s: under the screen's tasks (priority 2), so it takes their spare
+         * time instead of stalling their frames (the caller waits a little longer) */
+        const UBaseType_t prio = uxTaskPriorityGet(NULL);
+        if (prio > 1) vTaskPrioritySet(NULL, 1);
         size_t len = 0;
         char *buf = pkg_store_read(PKG_ROOT, id, &len);
         const bool stored = buf != NULL;
         const char *err;
         pkg_t *p = stored ? pkg_parse(buf, len, &err) : NULL;
         pkg_store_free(buf);
+        if (prio > 1) vTaskPrioritySet(NULL, prio);
         if (!p) { unlock(); return stored ? "bad_package" : "not_installed"; }
         pkg_unref(s_cache);
         s_cache = p;

@@ -26,10 +26,12 @@
  *             VAD_END_NO_SPEECH no_speech_ms elapsed with < min_speech_ms voiced and
  *                               nothing voiced right now;
  *             VAD_END_MAX       max_ms of audio fed (the `listen` window).
- *             With enabled = false only VAD_END_MAX fires (the old full-window record).
+ *             With enabled = false only VAD_END_MAX fires (the old full-window record), but
+ *             the frames are still classified: a button held to talk ends on its release,
+ *             and speech_ms says whether anyone spoke (no chirp for a silent press).
  *             A verdict is sticky: once ended, vad_feed keeps returning it.
- *   speech_ms only meaningful when vad_speech_known(): VAD on and calibration done.
- *             Otherwise nothing was classified and the voiced total is unknown (not 0).
+ *   speech_ms only meaningful when vad_speech_known(): calibration done. Before that
+ *             nothing was classified and the voiced total is unknown (not 0).
  *
  * Every constant is in vad_cfg_t; VAD_CFG_DEFAULT holds the shipped values.
  */
@@ -96,8 +98,8 @@ typedef struct {
 void vad_init(vad_t *v, const vad_cfg_t *cfg);
 /* Feed n samples (any length; partial frames carry over). Returns the verdict. */
 vad_verdict_t vad_feed(vad_t *v, const int16_t *pcm, size_t n);
-/* true when speech_ms is a measurement: VAD enabled and calibration over. A listen
- * that ends earlier (or runs with VAD off) has an unknown voiced total. */
+/* true when speech_ms is a measurement: calibration over (VAD on or off). A listen
+ * that ends earlier has an unknown voiced total. */
 bool vad_speech_known(const vad_t *v);
 /* The mic level for the screen's listening ring: the loudest frame since the previous
  * call, VAD_LEVEL_FLOOR_DB above the noise floor = 0 ... + VAD_LEVEL_SPAN_DB = 1 (close

@@ -1,0 +1,27 @@
+{
+  "title": "astrology sign: the params of scene.play",
+  "type": "object",
+  "required": [
+    "sign"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "sign": {
+      "enum": [
+        "aries",
+        "taurus",
+        "gemini",
+        "cancer",
+        "leo",
+        "virgo",
+        "libra",
+        "scorpio",
+        "sagittarius",
+        "capricorn",
+        "aquarius",
+        "pisces"
+      ],
+      "description": "The sign, lower case: for tonight, the one the Moon is in."
+    }
+  }
+}

@@ -4,8 +4,14 @@
 #include "log_upload.h"
 #include "heap_guard.h"
 #include "sta_watch.h"
+#include "loop_watch.h"
 #include "net/network.h"
+#include "net/console_store.h"
 #include "mole_fluid.h"
+#include "molty_board.h"
+#include "pkg/pkg_cmd.h"
+#include "pkg/pkg_store.h"
+#include "bench_chart.h"
 #include "link/link_client.h"
 #include "link/link_audio.h"
 
@@ -14,6 +20,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <stdatomic.h>
+#include <math.h>
 #include <sys/stat.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -28,6 +35,8 @@
 #include "esp_event.h"
 #include "esp_app_desc.h"
 #include "esp_core_dump.h"
+#include "esp_partition.h"
+#include "esp_spiffs.h"
 #include "ping/ping_sock.h"
 #include "nvs.h"
 #include "sdkconfig.h"
@@ -40,12 +49,10 @@
 #define MAX_TASKS    40
 #define PERSIST_PATH "/spiffs/diag.log"
 #define PERSIST_TMP  "/spiffs/diag.tmp"
-/* SPIFFS writes freeze the other core (ipc) — measured ~150 ms render hitches
- * over a 2 s 24 KB persist. Crashes/WDT/OTA are covered by the no-init RAM ring,
- * so the file only has to survive power loss: small, rare, never at boot. The policy
- * and its numbers live in log_upload.h (LOG_PERSIST_*), host-tested. */
+/* SPIFFS writes freeze both cores (the flash cache off: flash_gate.h). Crashes/WDT/OTA are covered by the no-init RAM
+ * ring, so the file only has to survive power loss: small, rare, never at boot, only while the screen is calm. The
+ * policy and its numbers live in log_upload.h (LOG_PERSIST_*), host-tested. */
 #define PERSIST_BYTES LOG_PERSIST_BYTES
-#define PERSIST_CHUNK 2048
 
 typedef struct { uint32_t seq, ms; char job[LOG_TAG_MAX + 1]; char text[SLOT_TEXT]; } slot_t;
 /* boot: the NVS boot count; sync_up/sync_wall: uptime ms + relay wall ms at this boot's
@@ -248,7 +255,7 @@ static void frame_add(frames_t *f, uint32_t us, const char *what)
         if (now_s != sec) { sec = now_s; in_sec = 0; }
         atomic_fetch_add(&s_gap_events, 1);
         if (++in_sec <= 4)
-            mole_diag_event(us > 1000000, "stall.%s gap=%lums", what, (unsigned long)(us / 1000));
+            mole_diag_event(false, "stall.%s gap=%lums", what, (unsigned long)(us / 1000));   /* (never asks for a write) */
     }
     if (us > f->max_us) { f->max_us = us; f->max_at_s = (uint32_t)(esp_timer_get_time() / 1000000); }
     uint32_t ms = us / 1000; if (ms > 65535) ms = 65535;
@@ -356,6 +363,9 @@ typedef struct {
     uint8_t flags;                   /* bit0 link connected, bit1 audio busy */
     char top[2][12]; uint8_t top_pct[2];
 } tl_t;
+static uint32_t (*s_calm_ms)(void);  /* how long the screen has been calm (mole_diag_set_calm): when the costly looks may run */
+static bool screen_calm(void) { return !s_calm_ms || s_calm_ms() > 0; }
+static void flash_tick(void);
 static tl_t *s_tl;                   /* PSRAM [TL_N] */
 static uint32_t s_tl_n;
 
@@ -376,6 +386,32 @@ static sta_watch_t s_sta;              /* associated: only then is there an AP t
 static portMUX_TYPE s_sta_mux = portMUX_INITIALIZER_UNLOCKED;
 static heap_guard_t s_hg;              /* the sampler's */
 static uint32_t s_int_blocks;          /* internal heap: allocated blocks (last sample) */
+/* wedge watch (loop_watch.h): the sampler sends a no-op to each shared dispatcher every second */
+ESP_EVENT_DEFINE_BASE(MOLE_DIAG_EVENT);
+static loop_watch_t s_evt_watch, s_tmr_watch;
+static esp_timer_handle_t s_beat_timer;
+
+static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
+static void evt_beat(void *a, esp_event_base_t b, int32_t id, void *d)
+{
+    (void)a; (void)b; (void)id; (void)d;
+    loop_watch_beat(&s_evt_watch, now_ms());
+}
+static void tmr_beat(void *a) { (void)a; loop_watch_beat(&s_tmr_watch, now_ms()); }
+
+/* a dispatcher stuck 30 s: abort, so the coredump shows who blocks it and on what */
+static void wedge_check(void)
+{
+    const uint32_t t = now_ms();
+    const uint32_t evt = loop_watch_stuck(&s_evt_watch, t), tmr = s_beat_timer ? loop_watch_stuck(&s_tmr_watch, t) : 0;
+    if (evt || tmr) {
+        mole_diag_event(true, "wedge %s stuck=%lums int=%lu", evt ? "sys_evt" : "esp_timer", (unsigned long)(evt ? evt : tmr),
+                        (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+        esp_system_abort(evt ? "default event loop wedged 30 s" : "esp_timer task wedged 30 s");
+    }
+    /* no data, no wait: a full queue is a missed beat, not a blocked sampler */
+    esp_event_post(MOLE_DIAG_EVENT, 0, NULL, 0, 0);
+}
 
 static void alloc_failed(size_t size, uint32_t caps, const char *fn)
 {
@@ -529,6 +565,19 @@ static void heap_low_report(uint32_t free_now, const multi_heap_info_t *in)
                     link_audio_busy() ? 1 : 0, top);
 }
 
+/* the panel's tearing-effect pulses (molty_display_te): the last second's, and the 10 s the TE log line covers */
+static molty_te_t s_te_sec;
+static void te_json(cJSON *o)
+{
+    const molty_te_t t = s_te_sec;
+    cJSON_AddBoolToObject(o, "line", t.line);
+    cJSON_AddNumberToObject(o, "total", t.total);
+    cJSON_AddNumberToObject(o, "per_s", t.n);                     /* (periods seen in the last second: its refreshes) */
+    if (!t.n) { cJSON_AddStringToObject(o, "note", t.line ? "no pulses" : "no TE line"); return; }
+    cJSON_AddNumberToObject(o, "hz", t.mean_us ? 1e6 / t.mean_us : 0);
+    cJSON_AddNumberToObject(o, "mean_us", t.mean_us); cJSON_AddNumberToObject(o, "min_us", t.min_us); cJSON_AddNumberToObject(o, "max_us", t.max_us);
+}
+
 static void sampler_task(void *arg)
 {
     (void)arg;
@@ -543,13 +592,22 @@ static void sampler_task(void *arg)
         prev = now;
         if (late > late_max) late_max = late;
         if (late > s_late_max_total) s_late_max_total = late;
-        if (late > 250) mole_diag_event(true, "stall.sampler late=%lums", (unsigned long)late);
+        if (late > 250) mole_diag_event(false, "stall.sampler late=%lums", (unsigned long)late);   /* (a stall's record must not cause the next) */
+        flash_tick();
         uint32_t f = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
         if (f < int_min) int_min = f;
         if (++ticks % 10) continue;
+        static molty_te_t te10;                      /* (the TE line's 10 s, for its log line) */
+        molty_display_te(&s_te_sec, true);
+        if (s_te_sec.n) {
+            te10.min_us = !te10.n || s_te_sec.min_us < te10.min_us ? s_te_sec.min_us : te10.min_us;
+            te10.max_us = s_te_sec.max_us > te10.max_us ? s_te_sec.max_us : te10.max_us;
+            te10.mean_us = (uint32_t)(((uint64_t)te10.mean_us * te10.n + (uint64_t)s_te_sec.mean_us * s_te_sec.n) / (te10.n + s_te_sec.n));
+            te10.n += s_te_sec.n;
+        }
 
         int64_t elapsed = now - win_start; win_start = now;
-        sample_tasks(elapsed);
+        wedge_check();
         tl_t e = {0};
         e.t_s = (uint32_t)(now / 1000000);
         e.int_min = int_min; int_min = UINT32_MAX;
@@ -572,14 +630,6 @@ static void sampler_task(void *arg)
         e.gw_rtt = sent > lost ? (int16_t)(rtt > 32767 ? 32767 : rtt) : -1;
         e.rssi = rssi_now();
         e.flags = (link_client_connected() ? 1 : 0) | (link_audio_busy() ? 2 : 0);
-        portENTER_CRITICAL(&s_task_mux);
-        for (int i = 0, k = 0; i < s_ntasks && k < 2; i++) {
-            if (!strncmp(s_tasks[i].name, "IDLE", 4)) continue;
-            strlcpy(e.top[k], s_tasks[i].name, sizeof(e.top[k])); e.top_pct[k] = s_tasks[i].pct; k++;
-        }
-        portEXIT_CRITICAL(&s_task_mux);
-        if (s_tl) s_tl[s_tl_n % TL_N] = e;
-        s_tl_n++;
 
         /* internal RAM self-protection: warn once per episode, give the fluid's share back */
         const int hg = heap_guard_step(&s_hg, f);
@@ -597,12 +647,33 @@ static void sampler_task(void *arg)
         }
         bool bad = e.sim_max > 250 || e.panel_max > 250 || e.probe0 > 250 || e.probe1 > 250 || e.late > 250 ||
                    (sent && lost == sent);
+        /* the tasks' shares (since the last look): on trouble, else with a TL line while the screen is quiet (or a minute
+         * on), never each second: the snapshot holds the kernel lock while it measures every task's free stack (~2.6 ms
+         * measured, both cores' scheduling held: a frame's hitch each second); the timeline's other seconds carry none */
+        static int64_t sampled;
+        if (bad || (ticks % 100 == 0 && (screen_calm() || now - sampled > 60000000))) {
+            sample_tasks(sampled ? now - sampled : elapsed); sampled = now;
+            portENTER_CRITICAL(&s_task_mux);
+            for (int i = 0, k = 0; i < s_ntasks && k < 2; i++) {
+                if (!strncmp(s_tasks[i].name, "IDLE", 4)) continue;
+                strlcpy(e.top[k], s_tasks[i].name, sizeof(e.top[k])); e.top_pct[k] = s_tasks[i].pct; k++;
+            }
+            portEXIT_CRITICAL(&s_task_mux);
+        }
+        if (s_tl) s_tl[s_tl_n % TL_N] = e;
+        s_tl_n++;
         if (bad || ticks % 100 == 0) {           /* every 10 s, or immediately on trouble */
             char top[96]; top_tasks_str(top, sizeof(top), 3);
             mole_diag_event(false, "%s int=%lu/%lu blk=%lu sim=%u/%ums pan=%u/%ums pr=%u/%ums late=%u gw=%d(%u/%u) rssi=%d l=%u %s",
                             bad ? "TL!" : "TL", (unsigned long)e.int_min, (unsigned long)e.int_largest, (unsigned long)s_int_blocks,
                             e.sim_n, e.sim_max, e.panel_n, e.panel_max, e.probe0, e.probe1, e.late,
                             e.gw_rtt, (unsigned)lost, (unsigned)sent, e.rssi, e.flags, top);
+        }
+        if (ticks % 100 == 0) {                  /* the panel's refresh, beside the TL line */
+            if (te10.n) mole_diag_event(false, "TE %.2f Hz period=%lu/%lu/%lu us (mean/min/max) n=%lu total=%lu", 1e6 / te10.mean_us,
+                                        (unsigned long)te10.mean_us, (unsigned long)te10.min_us, (unsigned long)te10.max_us, (unsigned long)te10.n, (unsigned long)s_te_sec.total);
+            else mole_diag_event(false, "TE %s (total=%lu)", s_te_sec.line ? "no pulses" : "no line", (unsigned long)s_te_sec.total);
+            te10 = (molty_te_t){ 0 };
         }
     }
 }
@@ -649,25 +720,175 @@ static char *render_persist(uint32_t *next)
     return out;
 }
 
+/* ── the flash's quiet window (flash_gate.h) ─────────────────────────────────
+ * Every write and erase of a partition (NVS, SPIFFS, OTA, the PHY's and Wi-Fi's NVS: all go through esp_partition_*;
+ * the core dump writes the chip directly and is not seen) passes these wrappers (main/CMakeLists.txt --wrap): counted,
+ * and logged a batch a line from the sampler ("flash <task> w= e= r= ops= <ms>ms anim=<writes while animating>"). */
+static portMUX_TYPE s_fg_mux = portMUX_INITIALIZER_UNLOCKED;
+static fg_stats_t s_fg;                         /* (s_fg_mux) */
+static fg_batch_t s_fg_batch, s_fg_done;        /* (s_fg_mux) the batch open; one closed, for the sampler to log */
+static bool s_fg_done_set;
+static atomic_bool s_fg_force, s_fg_flushed;
+static void *s_fg_flusher;
+/* the tasks inside mole_flash_file: each op of theirs waits while the screen moves (gated_op); one in flight (s_fg_op)
+ * is what a motion starting waits for (mole_flash_motion), the motion's own time (s_fg_motion_ms) what they wait on */
+static TaskHandle_t _Atomic s_fg_gated[2];
+static atomic_bool s_fg_op;
+static atomic_uint s_fg_motion_ms;
+#define FG_OP_PAUSE_MAX_MS 5000                 /* an op waits this long in all, a file write's (SPIFFS is locked meanwhile) */
+#define FG_MOTION_WAIT_MS  50                   /* a motion waits this long for an op in flight (a sector erase: ~45 ms) */
+
+void mole_diag_set_calm(uint32_t (*calm_ms)(void)) { s_calm_ms = calm_ms; }
+static int64_t calm_us(void)
+{
+    const uint32_t ms = s_calm_ms ? s_calm_ms() : UINT32_MAX;
+    return ms == UINT32_MAX ? INT64_MAX : (int64_t)ms * 1000;
+}
+
+static void flash_note(int64_t t0, bool anim0, uint32_t w, uint32_t e, uint32_t r)
+{
+    const int64_t t1 = esp_timer_get_time();
+    const bool anim = anim0 || calm_us() == 0;
+    const char *who = pcTaskGetName(NULL);
+    portENTER_CRITICAL(&s_fg_mux);
+    if (w || e) { s_fg.ops++; s_fg.anim_ops += anim; }
+    /* (closed straight into the sampler's slot, no copy on this task's stack: it drains it every 100 ms, well inside a gap) */
+    if (fg_batch_op(&s_fg_batch, &s_fg_done, t1, who, w, e, r, (uint32_t)(t1 - t0), anim)) s_fg_done_set = fg_batch_worth(&s_fg_done);
+    portEXIT_CRITICAL(&s_fg_mux);
+}
+
+esp_err_t __real_esp_partition_write(const esp_partition_t *p, size_t off, const void *src, size_t n);
+esp_err_t __real_esp_partition_write_raw(const esp_partition_t *p, size_t off, const void *src, size_t n);
+esp_err_t __real_esp_partition_erase_range(const esp_partition_t *p, size_t off, size_t n);
+esp_err_t __real_esp_partition_read(const esp_partition_t *p, size_t off, void *dst, size_t n);
+static bool gated_self(void)
+{
+    const TaskHandle_t me = xTaskGetCurrentTaskHandle();
+    return atomic_load(&s_fg_gated[0]) == me || atomic_load(&s_fg_gated[1]) == me;
+}
+static uint32_t s_fg_paused_ms;                 /* (the gated task's, this file write's: they are serial under SPIFFS's lock) */
+/* A gated task's op: not while the screen moves or a motion just began, FG_OP_PAUSE_MAX_MS in all; s_fg_op set first
+ * (a motion sets its time first, then looks at s_fg_op: one of the two sees the other) */
+static void gated_op(void)
+{
+    for (;;) {
+        atomic_store(&s_fg_op, true);
+        const bool moving = calm_us() == 0 || now_ms() - atomic_load(&s_fg_motion_ms) < 100;
+        if (!moving || atomic_load(&s_fg_force) || s_fg_paused_ms >= FG_OP_PAUSE_MAX_MS) return;
+        atomic_store(&s_fg_op, false);
+        vTaskDelay(pdMS_TO_TICKS(10));
+        s_fg_paused_ms += 10;
+    }
+}
+void mole_flash_motion(void)
+{
+    atomic_store(&s_fg_motion_ms, now_ms());
+    for (int i = 0; i < FG_MOTION_WAIT_MS / 10 && atomic_load(&s_fg_op); i++) vTaskDelay(pdMS_TO_TICKS(10));   /* (a tick) */
+}
+#define FLASH_OP(call, w, e, r) do { const bool g = gated_self(); if (g) gated_op(); \
+    const int64_t t0 = esp_timer_get_time(); const bool a0 = calm_us() == 0; \
+    const esp_err_t res = call; if (g) atomic_store(&s_fg_op, false); flash_note(t0, a0, w, e, r); return res; } while (0)
+esp_err_t __wrap_esp_partition_write(const esp_partition_t *p, size_t off, const void *src, size_t n)
+{ FLASH_OP(__real_esp_partition_write(p, off, src, n), n, 0, 0); }
+esp_err_t __wrap_esp_partition_write_raw(const esp_partition_t *p, size_t off, const void *src, size_t n)
+{ FLASH_OP(__real_esp_partition_write_raw(p, off, src, n), n, 0, 0); }
+esp_err_t __wrap_esp_partition_erase_range(const esp_partition_t *p, size_t off, size_t n)
+{ FLASH_OP(__real_esp_partition_erase_range(p, off, n), 0, n, 0); }
+esp_err_t __wrap_esp_partition_read(const esp_partition_t *p, size_t off, void *dst, size_t n)
+{ FLASH_OP(__real_esp_partition_read(p, off, dst, n), 0, 0, n); }
+
+/* the sampler, every 100 ms: a batch over goes into the log */
+static void flash_tick(void)
+{
+    fg_batch_t b;
+    portENTER_CRITICAL(&s_fg_mux);
+    bool got = s_fg_done_set;
+    if (got) { b = s_fg_done; s_fg_done_set = false; }
+    else got = fg_batch_idle(&s_fg_batch, &b, esp_timer_get_time()) && fg_batch_worth(&b);
+    portEXIT_CRITICAL(&s_fg_mux);
+    if (!got) return;
+    mole_diag_event(false, "flash %s%s%s%s w=%lu e=%lu r=%lu ops=%lu %lums (reads %lums) anim=%lu", b.who, b.mixed ? "+" : "",
+                    b.mixed && b.wwho[0] ? " wrote=" : "", b.mixed ? b.wwho : "",
+                    (unsigned long)b.wbytes, (unsigned long)b.ebytes, (unsigned long)b.rbytes, (unsigned long)b.ops,
+                    (unsigned long)(b.busy_us / 1000), (unsigned long)(b.read_us / 1000), (unsigned long)b.anim_ops);
+}
+
+bool mole_flash_may(fg_hold_t *h)
+{
+    const int64_t c = calm_us();
+    portENTER_CRITICAL(&s_fg_mux);
+    const bool go = fg_step(h, &s_fg, esp_timer_get_time(), c, atomic_load(&s_fg_force));
+    portEXIT_CRITICAL(&s_fg_mux);
+    return go;
+}
+
+uint32_t mole_flash_calm_ms(void) { return s_calm_ms ? s_calm_ms() : UINT32_MAX; }
+
+void mole_flash_quiet(void)
+{
+    fg_hold_t h = {0};
+    while (!mole_flash_may(&h)) vTaskDelay(pdMS_TO_TICKS(100));
+}
+
+static bool flash_file(const char *path, const char *tmp, const void *data, size_t len)
+{
+    enum { CHUNK = 2048 };
+    mole_flash_quiet();
+    esp_spiffs_gc("spiffs", len);                      /* the erases it needs, now while calm (none when there is room) */
+    mole_flash_quiet();
+    FILE *f = fopen(tmp, "wb");
+    bool ok = f != NULL;
+    for (size_t o = 0; ok && o < len; o += CHUNK) {
+        const size_t c = len - o < CHUNK ? len - o : CHUNK;
+        if (o) { vTaskDelay(pdMS_TO_TICKS(20)); mole_flash_quiet(); }   /* (frames between the bursts; one may start) */
+        ok = fwrite((const char *)data + o, 1, c, f) == c && fflush(f) == 0;
+    }
+    if (f) ok = fclose(f) == 0 && ok;
+    mole_flash_quiet();
+    if (ok) { remove(path); ok = rename(tmp, path) == 0; }   /* (SPIFFS cannot rename over a file) */
+    if (!ok) remove(tmp);
+    return ok;
+}
+
+bool mole_flash_file(const char *path, const char *tmp, const void *data, size_t len)
+{
+    const TaskHandle_t me = xTaskGetCurrentTaskHandle();
+    int slot = -1;
+    for (int q = 0; q < 2 && slot < 0; q++) { TaskHandle_t none = NULL; if (atomic_compare_exchange_strong(&s_fg_gated[q], &none, me)) slot = q; }
+    s_fg_paused_ms = 0;
+    const bool ok = flash_file(path, tmp, data, len);   /* (no slot: its steps are gated, its ops not) */
+    if (slot >= 0) atomic_store(&s_fg_gated[slot], NULL);
+    return ok;
+}
+
+void mole_flash_force(void) { atomic_store(&s_fg_force, true); }
+bool mole_flash_forced(void) { return atomic_load(&s_fg_force); }
+void mole_flash_flusher(void *task) { s_fg_flusher = task; }
+void mole_flash_flushed(void) { atomic_store(&s_fg_flushed, true); }
+
+/* esp_restart's shutdown handler: the flusher writes what a restart loses (on its own task: this one's stack may be small
+ * or in PSRAM), 1.5 s at most */
+static void flash_shutdown(void)
+{
+    atomic_store(&s_fg_flushed, false);                /* (first: a flusher that saw the force after it says so after) */
+    mole_flash_force();
+    TaskHandle_t t = s_fg_flusher;
+    if (!t || t == xTaskGetCurrentTaskHandle() || xPortInIsrContext() || xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) return;
+    xTaskNotifyGive(t);
+    for (int i = 0; i < 30 && !atomic_load(&s_fg_flushed); i++) vTaskDelay(pdMS_TO_TICKS(50));
+}
+
+/* ── persistence ── */
+
 static void persist_now(void)
 {
     int64_t t0 = esp_timer_get_time();
     uint32_t next;
     char *text = render_persist(&next);
     if (!text) { s_persist_fail++; return; }
-    size_t len = strlen(text);
-    FILE *f = fopen(PERSIST_TMP, "wb");
-    bool ok = f != NULL;
-    for (size_t o = 0; ok && o < len; o += PERSIST_CHUNK) {
-        size_t c = len - o < PERSIST_CHUNK ? len - o : PERSIST_CHUNK;
-        ok = fwrite(text + o, 1, c, f) == c;
-        if (ok) ok = fflush(f) == 0;                   /* one small flash burst per chunk */
-        vTaskDelay(pdMS_TO_TICKS(50));                 /* flash ops stall caches: let frames through */
-    }
-    if (f) fclose(f);
+    const bool ok = mole_flash_file(PERSIST_PATH, PERSIST_TMP, text, strlen(text));
     heap_caps_free(text);
-    if (ok) { remove(PERSIST_PATH); ok = rename(PERSIST_TMP, PERSIST_PATH) == 0; }
-    if (!ok) { s_persist_fail++; remove(PERSIST_TMP); return; }
+    if (!ok) { s_persist_fail++; return; }
     s_persist_next = next;
     s_persist_n++;
     s_persist_ms = (uint32_t)((esp_timer_get_time() - t0) / 1000);
@@ -689,19 +910,28 @@ static uint32_t wanted_since(uint32_t from)
     return n;
 }
 
+void mole_diag_flush(uint32_t wait_ms)
+{
+    if (!s_persist_task) return;
+    const uint32_t n = s_persist_n + s_persist_fail;
+    mole_flash_force();
+    request_persist();
+    for (uint32_t t = 0; t < wait_ms && s_persist_n + s_persist_fail == n; t += 50) vTaskDelay(pdMS_TO_TICKS(50));
+}
+
 static void persist_task(void *arg)
 {
     (void)arg;
     for (;;) {
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(LOG_PERSIST_PERIOD_MS));
         bool requested = atomic_load(&s_persist_req);
-        if (!log_persist_due(requested, wanted_since(s_persist_next))) continue;
-        /* never in the first 90 s, at least 5 min apart: sleep it out, the request stays pending */
-        int64_t wait = log_persist_delay_us(esp_timer_get_time(), s_last_persist);
-        if (wait > 0) vTaskDelay(pdMS_TO_TICKS(wait / 1000 + 10));
+        if (!mole_flash_forced() && !log_persist_due(requested, wanted_since(s_persist_next))) continue;
+        /* never in the first 90 s, at least 5 min apart: sleep it out, the request stays pending (a flush wakes it) */
+        for (int64_t wait; !mole_flash_forced() && (wait = log_persist_delay_us(esp_timer_get_time(), s_last_persist)) > 0;)
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wait / 1000 + 10));
         atomic_store(&s_persist_req, false);
         s_last_persist = esp_timer_get_time();
-        persist_now();
+        persist_now();                                 /* (each step only while the screen is calm: mole_flash_file) */
     }
 }
 
@@ -948,6 +1178,12 @@ void mole_diag_start(void)
     esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_evt, NULL);
     esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_evt, NULL);
     esp_event_handler_register(IP_EVENT, IP_EVENT_STA_LOST_IP, wifi_evt, NULL);
+    loop_watch_init(&s_evt_watch, now_ms());
+    loop_watch_init(&s_tmr_watch, now_ms());
+    esp_event_handler_register(MOLE_DIAG_EVENT, 0, evt_beat, NULL);
+    const esp_timer_create_args_t beat = {.callback = tmr_beat, .name = "diag_beat"};
+    if (esp_timer_create(&beat, &s_beat_timer) == ESP_OK) esp_timer_start_periodic(s_beat_timer, 1000000);
+    else s_beat_timer = NULL;
     /* the boot connect usually associated before these handlers existed: start from network.c's
      * state (it listens from before esp_wifi_start), or rssi reads 0 until the first reconnect */
     bool assoc = net_wifi_associated();
@@ -961,9 +1197,28 @@ void mole_diag_start(void)
     xTaskCreatePinnedToCoreWithCaps(probe_task, "diag_p1", 1536, (void *)1, 1, NULL, 1, MALLOC_CAP_SPIRAM);
     xTaskCreatePinnedToCoreWithCaps(sampler_task, "diag", 4096, NULL, 15, NULL, tskNO_AFFINITY, MALLOC_CAP_SPIRAM);
     xTaskCreate(persist_task, "diag_persist", 3072, NULL, 1, &s_persist_task);
+    if (esp_register_shutdown_handler(flash_shutdown) != ESP_OK) mole_diag_event(false, "flash: no shutdown handler (a restart may lose the battery history's last minutes)");
 }
 
 /* ── JSON / HTTP ──────────────────────────────────────────────────────────── */
+
+/* the flash's writes since boot, or since `from` (a bench: hold_max_ms is then its own, reset at its start) */
+static void flash_json(cJSON *o, const fg_stats_t *from)
+{
+    portENTER_CRITICAL(&s_fg_mux);
+    fg_stats_t d = s_fg;
+    portEXIT_CRITICAL(&s_fg_mux);
+    if (from) { d.ops -= from->ops; d.anim_ops -= from->anim_ops; d.held -= from->held; d.flushed -= from->flushed;
+                d.capped -= from->capped; d.forced -= from->forced; }
+    cJSON_AddNumberToObject(o, "writes", d.ops);                    /* (writes + erases) */
+    cJSON_AddNumberToObject(o, "writes_animating", d.anim_ops);    /* (must be 0) */
+    cJSON_AddNumberToObject(o, "held", d.held);
+    cJSON_AddNumberToObject(o, "flushed", d.flushed);
+    cJSON_AddNumberToObject(o, "capped", d.capped);
+    cJSON_AddNumberToObject(o, "forced", d.forced);
+    cJSON_AddNumberToObject(o, "hold_max_ms", d.hold_max_ms);
+    cJSON_AddBoolToObject(o, "gate", s_calm_ms != NULL);         /* (false: the fluid never said when it is calm) */
+}
 
 static cJSON *heap_json(uint32_t caps)
 {
@@ -993,6 +1248,7 @@ cJSON *mole_diag_json(int timeline_secs)
     cJSON_AddNumberToObject(t, "total", s_touch_n);
     cJSON_AddNumberToObject(t, "max_total_ms", s_touch_max / 1000.0);
     cJSON_AddItemToObject(fr, "touch_to_panel", t);
+    te_json(cJSON_AddObjectToObject(fr, "te"));
     cJSON *h = cJSON_AddObjectToObject(j, "heap");
     cJSON_AddItemToObject(h, "internal", heap_json(MALLOC_CAP_INTERNAL));
     cJSON_AddItemToObject(h, "dma", heap_json(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
@@ -1037,7 +1293,9 @@ cJSON *mole_diag_json(int timeline_secs)
     cJSON_AddNumberToObject(lg, "persists", s_persist_n);
     cJSON_AddNumberToObject(lg, "persist_fail", s_persist_fail);
     cJSON_AddNumberToObject(lg, "persist_last_ms", s_persist_ms);
+    flash_json(cJSON_AddObjectToObject(j, "flash"), NULL);
     if (s_core_summary[0]) cJSON_AddStringToObject(j, "coredump", s_core_summary);
+    console_store_fs_json(cJSON_AddObjectToObject(j, "fs"), 0);    /* SPIFFS: how full (?fs=1: what fills it) */
     if (timeline_secs > 0 && s_tl) {
         if (timeline_secs > TL_N) timeline_secs = TL_N;
         uint32_t n_avail = s_tl_n < TL_N ? s_tl_n : TL_N;
@@ -1080,6 +1338,11 @@ static bool query_is(httpd_req_t *r, const char *key, const char *val)
 static esp_err_t http_diag(httpd_req_t *r)
 {
     cJSON *j = mole_diag_json((int)query_u32(r, "timeline", 0));
+    if (j && query_u32(r, "fs", 0)) {   /* (the files by size: each stat is a by-name lookup reading every block's index, ~0.5 MB
+                                         * of flash in ~130 ms of cache-off slivers: only when asked) */
+        cJSON_DeleteItemFromObject(j, "fs");
+        console_store_fs_json(cJSON_AddObjectToObject(j, "fs"), 12);
+    }
     char *body = j ? cJSON_PrintUnformatted(j) : NULL;
     cJSON_Delete(j);
     if (!body) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "oom");
@@ -1153,6 +1416,227 @@ static esp_err_t http_wifi_ps(httpd_req_t *r)
     return httpd_resp_sendstr(r, body);
 }
 
+/* dev: force a Wi-Fi drop (the disconnect handlers, the back-off, RAM while down). POST only. */
+static esp_err_t http_wifi_drop(httpd_req_t *r)
+{
+    const uint32_t hold = query_u32(r, "hold", 0);
+    esp_err_t e = net_wifi_drop(hold);
+    mole_diag_event(false, "wifi.drop_forced hold=%lus -> %s", (unsigned long)hold, esp_err_to_name(e));
+    char body[64];
+    snprintf(body, sizeof(body), "{\"ok\":%s,\"hold_s\":%lu}", e == ESP_OK ? "true" : "false", (unsigned long)hold);
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, body);
+}
+
+#ifdef MOLTY_DIAG_RING
+/* debug builds only: POST /api/diag/ring?ms=<ms> shows the listening ring for ms (default 3000) without a listen */
+static esp_err_t http_ring(httpd_req_t *r)
+{
+    const uint32_t ms = query_u32(r, "ms", 3000);
+    char q[64] = "", lv[16] = "";
+    const bool voice = httpd_req_get_url_query_str(r, q, sizeof(q)) == ESP_OK &&
+                       httpd_query_key_value(q, "level", lv, sizeof(lv)) == ESP_OK && !strcmp(lv, "sine");
+    mole_fluid_diag_ring(ms, voice);
+    char body[48];
+    snprintf(body, sizeof(body), "{\"ok\":true,\"ms\":%lu}", (unsigned long)ms);
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, body);
+}
+#endif
+
+/* ── the on-device benchmark: POST /api/diag/bench?runs=3 ──────────────────────
+ * Untouched, `runs` times (1..5): the boot word to the cat, the cat to the astrology chart (a fixed sky: bench_chart.h),
+ * a tap on Leo (the chart to its close-up), a tap beside it (back), the chart to the cat; then on the chart again a tap
+ * in its open middle and a tap on the Moon (its reading). Each case's animations as the drawer records them
+ * (mole_anim_rec_t, the `anim` log lines) and one `bench` log line a case; the answer is the whole table. It holds this
+ * server meanwhile (about 50 s a run). */
+#define BENCH_RECS 160
+enum { BC_BOOT, BC_CHART, BC_SIGN, BC_BACK, BC_CAT, BC_MIDDLE, BC_PLANET, BC_N };
+static const char *const BENCH_CASE[BC_N] = { "boot-cat", "cat-chart", "chart-sign", "sign-chart", "chart-cat", "tap-middle", "tap-planet" };
+static const char *const BENCH_ANIM[4] = { "wave", "grow", "word", "water" };
+static mole_anim_rec_t *s_brec;                       /* [BENCH_RECS] (PSRAM, while it runs) */
+
+static int bench_n(void) { return mole_fluid_bench_capture(s_brec, BENCH_RECS); }
+/* nothing in mask (bits of the animations, 1: a change) for calm ms; ms at most. True: it was */
+static bool bench_calm(unsigned mask, uint32_t calm, uint32_t ms)
+{
+    const int64_t t0 = esp_timer_get_time();
+    int64_t since = 0;
+    for (int64_t now = t0; now - t0 < (int64_t)ms * 1000; now = esp_timer_get_time()) {
+        if (!mole_fluid_bench_quiet(mask)) since = 0;
+        else if (!since) since = now;
+        else if (now - since >= (int64_t)calm * 1000) return true;
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    return false;
+}
+/* no flash write or erase for 300 ms and no file write open (8 s at most): a case and its set-up start on a flash at
+ * rest (a write held for calm goes in this wait: the screen is calm) */
+static void bench_flash_idle(void)
+{
+    for (int q = 0; q < 160; q++) {
+        portENTER_CRITICAL(&s_fg_mux);
+        const bool busy = (s_fg_batch.ops && (s_fg_batch.wbytes || s_fg_batch.ebytes) && esp_timer_get_time() - s_fg_batch.last_us < 300000) ||
+                          atomic_load(&s_fg_gated[0]) || atomic_load(&s_fg_gated[1]);
+        portEXIT_CRITICAL(&s_fg_mux);
+        if (!busy) return;
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
+/* a record of anim taken since `from`; ms at most */
+static bool bench_rec(int from, int anim, uint32_t ms)
+{
+    const int64_t t0 = esp_timer_get_time();
+    for (;;) {
+        for (int q = from, n = bench_n(); q < n; q++) if (s_brec[q].anim == anim) return true;
+        if (esp_timer_get_time() - t0 >= (int64_t)ms * 1000) return false;
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
+/* the chart (its fixed sky), or none: the cat */
+static const char *bench_scene(bool chart)
+{
+    cJSON *args = cJSON_CreateObject(), *out = NULL;
+    if (!args) return "oom";
+    esp_err_t e;
+    if (chart) {
+        cJSON_AddStringToObject(args, "pkg", "astrology"); cJSON_AddStringToObject(args, "layout", "chart");
+        cJSON_AddItemToObject(args, "params", cJSON_Parse(BENCH_CHART)); cJSON_AddNumberToObject(args, "ttl_s", 120);
+        e = pkg_cmd_scene_play(args, &out);
+    } else e = pkg_cmd_scene_clear(args, &out);
+    cJSON_Delete(args); cJSON_Delete(out);
+    return e == ESP_OK ? NULL : esp_err_to_name(e);
+}
+static double r1(float v) { return (double)lroundf(v * 10.f) / 10.0; }
+static cJSON *bench_rec_json(const mole_anim_rec_t *b)
+{
+    cJSON *o = cJSON_CreateObject(), *a;
+    cJSON_AddStringToObject(o, "anim", BENCH_ANIM[b->anim & 3]);
+    cJSON_AddNumberToObject(o, "ms", b->ms); cJSON_AddNumberToObject(o, "frames", b->f); cJSON_AddNumberToObject(o, "sent", b->s);
+    a = cJSON_AddArrayToObject(o, "kpx"); cJSON_AddItemToArray(a, cJSON_CreateNumber(r1(b->kpx))); cJSON_AddItemToArray(a, cJSON_CreateNumber(r1(b->kpx_max)));
+    cJSON_AddNumberToObject(o, "win", r1(b->win));
+    a = cJSON_AddArrayToObject(o, "pan"); for (int c = 0; c < 3; c++) cJSON_AddItemToArray(a, cJSON_CreateNumber(b->pan[c]));
+    a = cJSON_AddArrayToObject(o, "sim"); for (int c = 0; c < 3; c++) cJSON_AddItemToArray(a, cJSON_CreateNumber(b->sim[c]));
+    a = cJSON_AddArrayToObject(o, "pres"); for (int c = 0; c < 3; c++) cJSON_AddItemToArray(a, cJSON_CreateNumber(b->pres[c]));
+    if (b->refr[1] || b->refr[2] || b->refr[3]) {       /* (the panel's refreshes from a frame's first window to the next's) */
+        cJSON *rf = cJSON_AddObjectToObject(o, "refreshes");
+        static const char *const RN[4] = { "0", "1", "2", "3+" };
+        for (int q = 0; q < 4; q++) cJSON_AddNumberToObject(rf, RN[q], b->refr[q]);
+    } else cJSON_AddStringToObject(o, "refreshes", b->refr[0] ? "no TE pulses" : "no two frames reached the panel");
+    a = cJSON_AddArrayToObject(o, "worst"); cJSON_AddItemToArray(a, cJSON_CreateNumber(r1(b->worst))); cJSON_AddItemToArray(a, cJSON_CreateNumber(r1(b->worst_cells)));
+    cJSON *p = cJSON_AddObjectToObject(o, "parts");    /* (mean, max ms a frame; the parts it had) */
+    for (int q = 0; q < MOLE_ANIM_PARTS; q++) {
+        if (b->max[q] < 0.05f) continue;
+        a = cJSON_AddArrayToObject(p, MOLE_ANIM_PART_NAMES[q]);
+        cJSON_AddItemToArray(a, cJSON_CreateNumber(r1(b->mean[q]))); cJSON_AddItemToArray(a, cJSON_CreateNumber(r1(b->max[q])));
+    }
+    if (b->anim == 0) {
+        cJSON *c = cJSON_AddObjectToObject(o, "change");
+        cJSON_AddNumberToObject(c, "comp_kpx", r1(b->comp)); cJSON_AddBoolToObject(c, "forced", b->forced); cJSON_AddBoolToObject(c, "dust_after", b->keep);
+        cJSON_AddNumberToObject(c, "ready_at", b->ready_at); cJSON_AddNumberToObject(c, "held", b->held);
+        cJSON_AddNumberToObject(c, "grains_old", b->na); cJSON_AddNumberToObject(c, "grains_new", b->nb); cJSON_AddNumberToObject(c, "pairs", b->pairs);
+    } else cJSON_AddNumberToObject(o, "drawn_kpx", r1(b->comp));   /* (changed cells drawn into the kept glass a frame: cmp / this, us a px) */
+    return o;
+}
+/* one case: what it starts from, then it, till its animations are over */
+static cJSON *bench_case(int c, int run)
+{
+    mole_fluid_screen(true);
+    bench_flash_idle();
+    switch (c) {                                       /* (from: the cat; the chart, its dust in; the last change over) */
+    case BC_BOOT:   bench_scene(false); bench_calm(1, 1500, 15000); break;
+    case BC_MIDDLE: bench_scene(true); bench_calm(1, 1500, 15000);
+                    for (int q = 0; q < 200 && !mole_fluid_bench_dust(); q++) vTaskDelay(pdMS_TO_TICKS(50));
+                    bench_calm(0xF, 1000, 8000); break;
+    case BC_PLANET: bench_calm(0xF, 1000, 8000); break;
+    default:        bench_calm(1, 1000, 10000); break;
+    }
+    bench_flash_idle();
+    const int from = bench_n();
+    const int64_t t0 = esp_timer_get_time();
+    const char *err = NULL;
+    float x = 0.f, y = 0.f;
+    switch (c) {
+    case BC_BOOT:   mole_fluid_bench_boot(); break;
+    case BC_CHART:  err = bench_scene(true); break;
+    case BC_SIGN:
+        if (!mole_fluid_bench_spot("leo", &x, &y)) { x = 0.76f * cosf(302.f * 0.017453293f); y = 0.76f * sinf(302.f * 0.017453293f); }
+        if (!mole_fluid_bench_tap(x, y)) err = "no spot at leo";
+        break;
+    case BC_BACK:   if (mole_fluid_bench_tap(0.f, -0.8f) != MOLE_SPOT_BACK) err = "not a way back"; break;
+    case BC_CAT:    err = bench_scene(false); break;
+    case BC_MIDDLE: mole_fluid_bench_tap(0.15f, 0.3f); break;
+    case BC_PLANET: if (!mole_fluid_bench_spot("moon", &x, &y)) err = "no moon"; else mole_fluid_bench_tap(x, y); break;
+    }
+    /* its end: a change recorded and none for 1.5 s (a scene's dust may come after as a change of its own); a tap's water
+     * (and the Moon's reading) recorded and every tap animation over */
+    const int want = c == BC_MIDDLE ? 3 : c == BC_PLANET ? 2 : 0;
+    if (!err && !bench_rec(from, want, c == BC_PLANET ? 40000 : 25000)) err = "timeout";
+    const uint32_t ms = (uint32_t)((esp_timer_get_time() - t0) / 1000);
+    if (!err) bench_calm(want ? 0xE : 1, want ? 500 : 1500, 10000);
+    cJSON *o = cJSON_CreateObject(), *a = cJSON_AddArrayToObject(o, "anims");
+    cJSON_AddStringToObject(o, "case", BENCH_CASE[c]); cJSON_AddNumberToObject(o, "run", run);
+    cJSON_AddNumberToObject(o, "ms", ms);
+    if (err) cJSON_AddStringToObject(o, "error", err);
+    const int n = bench_n();
+    for (int q = from; q < n; q++) cJSON_AddItemToArray(a, bench_rec_json(&s_brec[q]));
+    mole_diag_event(false, "bench %s run=%d ms=%u anims=%d%s%s", BENCH_CASE[c], run, (unsigned)ms, n - from, err ? " error=" : "", err ? err : "");
+    return o;
+}
+static esp_err_t http_bench(httpd_req_t *r)
+{
+    static atomic_bool busy;
+    if (atomic_exchange(&busy, true)) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "a bench runs already");
+    uint32_t runs = query_u32(r, "runs", 3);
+    runs = runs < 1 ? 1 : runs > 5 ? 5 : runs;
+    s_brec = heap_caps_calloc(BENCH_RECS, sizeof(mole_anim_rec_t), MALLOC_CAP_SPIRAM);
+    cJSON *j = cJSON_CreateObject();
+    if (!s_brec || !j) { heap_caps_free(s_brec); s_brec = NULL; cJSON_Delete(j); atomic_store(&busy, false); return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "oom"); }
+    const bool astro = pkg_store_find(PKG_ROOT, "astrology", NULL);
+    cJSON_AddStringToObject(j, "astrology", astro ? "installed" : "not installed: only boot-cat runs");
+    mole_fluid_screen(true);
+    bench_n();
+    portENTER_CRITICAL(&s_fg_mux);
+    const fg_stats_t fg0 = s_fg;
+    s_fg.hold_max_ms = 0;
+    portEXIT_CRITICAL(&s_fg_mux);
+    cJSON *cases = cJSON_AddArrayToObject(j, "cases");
+    for (int run = 1; run <= (int)runs; run++)
+        for (int c = 0; c < (astro ? BC_N : 1); c++) cJSON_AddItemToArray(cases, bench_case(c, run));
+    mole_fluid_bench_capture(NULL, 0);
+    heap_caps_free(s_brec); s_brec = NULL;
+    if (astro) bench_scene(false);
+    cJSON *h = cJSON_AddObjectToObject(j, "heap");
+    cJSON_AddNumberToObject(h, "int_free", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    cJSON_AddNumberToObject(h, "int_largest", heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    cJSON_AddNumberToObject(h, "psram_free", heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    cJSON_AddNumberToObject(h, "psram_largest", heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+    te_json(cJSON_AddObjectToObject(j, "te"));              /* (the panel's refresh, the last second) */
+    flash_json(cJSON_AddObjectToObject(j, "flash"), &fg0);  /* (the bench's own: writes while animating must be 0) */
+    cJSON *st = cJSON_AddObjectToObject(j, "stack_free");    /* (high-water marks, bytes, as the sampler last saw them) */
+    portENTER_CRITICAL(&s_task_mux);
+    int sd = -1, ss = -1, sx = -1;
+    for (int i = 0; i < s_ntasks; i++) {
+        if (!strcmp(s_tasks[i].name, "fluid_draw")) sd = (int)s_tasks[i].stack_free;
+        if (!strcmp(s_tasks[i].name, "fluid_task")) ss = (int)s_tasks[i].stack_free;
+        if (!strcmp(s_tasks[i].name, "fluid_tx")) sx = (int)s_tasks[i].stack_free;
+    }
+    portEXIT_CRITICAL(&s_task_mux);
+    cJSON_AddNumberToObject(st, "fluid_draw", sd); cJSON_AddNumberToObject(st, "fluid_task", ss); cJSON_AddNumberToObject(st, "fluid_tx", sx);
+    char *body = cJSON_PrintUnformatted(j);
+    cJSON_Delete(j);
+    atomic_store(&busy, false);
+    if (!body) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "oom");
+    httpd_resp_set_type(r, "application/json");
+    httpd_resp_set_hdr(r, "Cache-Control", "no-store");
+    esp_err_t e = ESP_OK;
+    const size_t len = strlen(body);
+    for (size_t o = 0; o < len && e == ESP_OK; o += 4096) e = httpd_resp_send_chunk(r, body + o, (ssize_t)(len - o < 4096 ? len - o : 4096));
+    if (e == ESP_OK) e = httpd_resp_send_chunk(r, NULL, 0);
+    free(body);
+    return e;
+}
+
 esp_err_t mole_diag_http_register(httpd_handle_t server)
 {
     const httpd_uri_t routes[] = {
@@ -1161,6 +1645,11 @@ esp_err_t mole_diag_http_register(httpd_handle_t server)
         {.uri = "/api/log/prev", .method = HTTP_GET, .handler = http_log_prev},
         {.uri = "/api/diag/wifi_ps", .method = HTTP_GET, .handler = http_wifi_ps},
         {.uri = "/api/diag/wifi_ps", .method = HTTP_POST, .handler = http_wifi_ps},
+        {.uri = "/api/diag/wifi_drop", .method = HTTP_POST, .handler = http_wifi_drop},
+        {.uri = "/api/diag/bench", .method = HTTP_POST, .handler = http_bench},
+#ifdef MOLTY_DIAG_RING
+        {.uri = "/api/diag/ring", .method = HTTP_POST, .handler = http_ring},
+#endif
     };
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
         esp_err_t e = httpd_register_uri_handler(server, &routes[i]);

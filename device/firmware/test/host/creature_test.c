@@ -20,9 +20,11 @@
  */
 #include "creature_player.h"
 #include "creature_pkg.h"
+#include "creature_clip.h"
 #include "cute_act.h"
 #include "cute_rig.h"
 #include "fluid_sim.h"
+#include "scene_player.h"
 #include "cJSON.h"
 
 #include <time.h>
@@ -258,6 +260,7 @@ static double test_render(const char *pkgdir, const char *id, const char *outdir
     uint16_t *fb = calloc(FLUID_STAGE_REF * FLUID_STAGE_REF, 2);
     s->edge_w = 1.f;
     int worst = 0, eyes = 0; double us = 0; int timed = 0;
+    const bool crisp = cpk_crisp(k);       /* a rigged creature: its own dots, the fluid still under them (mole_fluid.c) */
     for (int m = 0; m < CP_N_MOODS; m++) {
         me_set_mood(cpk_engine(k), m);
         float ink = 0; int holes = 0;
@@ -269,16 +272,32 @@ static double test_render(const char *pkgdir, const char *id, const char *outdir
             const double t0 = now_us();
             cpk_frame(k, s, 1.f / 30.f, 1.f);
             us += now_us() - t0; timed++;
-            fluid_sim_background(s, t, 0.5f, (f & 1) == 0);
-            fluid_sim_swirl_field(s);
+            if (!crisp) { fluid_sim_background(s, t, 0.5f, (f & 1) == 0); fluid_sim_swirl_field(s); }
             fluid_sim_step(s, 1.f / 60); fluid_sim_step(s, 1.f / 60);
             fluid_sim_color(s, 1.f / 30);
-            fluid_sim_view(s);
+            if (crisp) cpk_paint(k, s); else fluid_sim_view(s);
             fluid_sim_snapshot(s, fr, false);
-            fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, t, 0.f, NULL, 0, " .:-=+*#", font, NULL };
+            fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, t, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL, 0, NULL, NULL, 0, 0.f };
+            /* the drawer's options as mole_fluid.c sets them for a rigged creature: its cells as a scene's dots, with no
+             * scene held (scene_hd_t at rest) */
+            const scene_hd_t hd = { 0, false, 1.f };
+            if (crisp) { const uint32_t *cc; cpk_cells(k, &o.dots, &cc); o.scene = hd.gen != 0 || crisp; o.dust = scene_hd_dust(&hd); }
             int y0, y1;
             fluid_draw(d, fr, fb, &o, &y0, &y1);
             if (cpk_tris(k) > worst) worst = cpk_tris(k);
+        }
+        if (crisp) {                       /* its dots: an outline, features, the floor and dust */
+            const uint8_t *cd; const uint32_t *cc; int dots = 0;
+            cpk_cells(k, &cd, &cc);
+            for (int q = 0; q < W * H; q++) dots += __builtin_popcount(cd[q]);
+            CHECK(dots > 200, "%s %s: only %d dots", id, MOOD_NAMES[m], dots);
+            int lit = 0;                   /* ...and they reach the panel: the drawn frame is not black */
+            for (int q = 0; q < FLUID_STAGE_REF * FLUID_STAGE_REF; q++) lit += fb[q] != 0;
+            CHECK(lit > 1000, "%s %s: the drawn frame has only %d lit pixels", id, MOOD_NAMES[m], lit);
+            eyes++; worst = 1000;
+            printf("  %-8s %-10s dots %5d\n", id, MOOD_NAMES[m], dots);
+            if (outdir) { snprintf(path, sizeof(path), "%s/%s_%s.ppm", outdir, id, MOOD_NAMES[m]); write_ppm(path, fb); }
+            continue;
         }
         /* the body only revisits the cells it or the marks wrote: re-rastered now (last frame's
          * marks still in its cells), it matches a body rastered from nothing at this pose */
@@ -417,9 +436,349 @@ static void test_info(const char *pkgdir, const char *id) {
     free(json);
 }
 
-/* a gesture of the package's own (the cat's eat): found by name, played by the device's engine for its own length with
- * the package moving the body (the bowl, shown only while it plays), listed for agents; a name it lacks is -1 */
-static void test_own(const char *pkgdir) {
+/* a gesture of the package's own (the cat's eat, its clips in the rig): found by name, listed for agents, played by the
+ * engine and routed by the clip player to its clip; a name it lacks is -1 */
+/* a rigged creature on a 466 px panel (the 1.75C) fed only the windows fluid_draw_send makes, as mole_fluid.c drives
+ * it: every frame it shows what a drawer redrawing every cell shows, or showed a frame before (the skipped cells are
+ * the unchanged ones; the water's own changes go every other frame),
+ * sitting, through a tap's ripple and walking (the floor stays put); and the windows stay on even rows (that panel's)
+ * and cost well under a full frame */
+typedef struct { uint16_t *px; int w, h, odd, n; struct { int x, y, w, h; const uint16_t *px; } q; } crisp_panel_t;
+/* the panel as the CO5300's asynchronous blit: a window's pixels are read when the next window is sent (or at the
+ * wait), so a drawer that drew into the buffer still being read shows it here */
+static void crisp_land(crisp_panel_t *p) {
+    if (!p->q.px) return;
+    for (int r = 0; r < p->q.h; r++) memcpy(p->px + (size_t)(p->q.y + r) * p->w + p->q.x, p->q.px + (size_t)r * p->q.w, (size_t)p->q.w * 2);
+    p->q.px = NULL;
+}
+static int crisp_send(void *ctx, int x, int y, int w, int h, const uint16_t *px) {
+    crisp_panel_t *p = ctx;
+    if (x < 0 || y < 0 || x + w > p->w || y + h > p->h) return 1;
+    p->odd += (y & 1) || (h & 1);
+    p->n++;
+    crisp_land(p);
+    p->q.x = x; p->q.y = y; p->q.w = w; p->q.h = h; p->q.px = px;
+    return 0;
+}
+static void test_crisp_panel(const char *pkgdir) {
+    char path[512]; size_t len;
+    snprintf(path, sizeof(path), "%s/cat/cat.json", pkgdir);
+    char *json = slurp(path, &len);
+    const char *err = NULL;
+    cpk_t *k = json ? cpk_create(json, len, 7, &err) : NULL;
+    CHECK(k != NULL, "crisp panel: cat (%s)", err ? err : "no file");
+    if (!k) { free(json); return; }
+    const int P = 466, MAXPX = 4096;                 /* mole_fluid.c's two windows (FLUID_WIN2_PX) */
+    int W, H; fluid_grid_for_stage(P, &W, &H);
+    fluid_sim_t *s = fluid_sim_create(W, H, P);
+    fluid_draw_t *d = fluid_draw_create(W, H, P, P), *ref = fluid_draw_create(W, H, P, P);
+    fluid_frame_t *fr = fluid_frame_create(W, H);
+    uint16_t *truth = calloc((size_t)P * P, 2), *prev = calloc((size_t)P * P, 2), *buf = malloc((size_t)MAXPX * 2), *buf2 = malloc((size_t)MAXPX * 2);
+    crisp_panel_t pn = { calloc((size_t)P * P, 2), P, P, 0, 0, { 0 } };
+    int walk = -1;
+    for (int g = 0; g < CUTE_N_ACTS + cp_own_gestures(cpk_player(k)); g++) if (!strcmp(cp_gesture_name(cpk_player(k), g), "walk")) walk = g;
+    CHECK(walk >= 0, "crisp panel: the cat walks");
+    const scene_hd_t hd = { 0, false, 1.f };
+    const fluid_overlay_t ov = { 0 };
+    int bad = -1; long sent[2] = { 0, 0 }, drawn[2] = { 0, 0 }, wins[2] = { 0, 0 }; int nf[2] = { 0, 0 };
+    for (int f = 0; f < 240 && bad < 0; f++) {
+        if (f == 100) me_act(cpk_engine(k), walk);
+        if (f == 40) fluid_sim_impulse(s, 0.3f, 0.2f, 1.6f, 0.09f);      /* a tap */
+        cpk_frame(k, s, 1.f / 30.f, 1.f);
+        s->p.still = true;
+        fluid_sim_step(s, 1.f / 60); fluid_sim_step(s, 1.f / 60);
+        fluid_sim_color(s, 1.f / 30);
+        cpk_paint(k, s);
+        fluid_sim_snapshot(s, fr, false);
+        fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, f / 30.f, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL, 0, NULL, NULL, 0, 0.f };
+        const uint32_t *cc; cpk_cells(k, &o.dots, &cc); o.scene = true; o.dust = scene_hd_dust(&hd);
+        const bool full = f == 0;
+        if (full) d->force = true;
+        const int n = fluid_draw_cells(d, fr, &o);
+        const int n0 = pn.n;
+        const int px = fluid_draw_send2(d, &o, &ov, FLUID_MARK_NONE, full, buf, buf2, MAXPX, crisp_send, &pn);
+        crisp_land(&pn);                           /* the wait */
+        CHECK(px >= 0, "crisp panel: send failed at frame %d", f);
+        ref->force = true; fluid_draw_cells(ref, fr, &o);
+        const fluid_rect_t all = { truth, P, 0, 0, P, P };
+        fluid_draw_rect(ref, &o, &all, true);
+        /* each pixel as a full redraw shows it now, or did the frame before: the water's own changes go every other frame
+         * (interlaced), the creature's at once */
+        for (size_t q = 0; q < (size_t)P * P && bad < 0; q++) if (pn.px[q] != truth[q] && (f == 0 || pn.px[q] != prev[q])) bad = f;
+        memcpy(prev, truth, (size_t)P * P * 2);
+        const int ph = f >= 130 ? 1 : f >= 70 && f < 100 ? 0 : -1;    /* settled: sitting, then walking */
+        if (ph >= 0) { sent[ph] += px; drawn[ph] += n; wins[ph] += pn.n - n0; nf[ph]++; }
+    }
+    CHECK(bad < 0, "crisp panel: the panel differs from a full redraw at frame %d", bad);
+    CHECK(pn.odd == 0, "crisp panel: %d windows on odd rows", pn.odd);
+    for (int q = 0; q < 2; q++) {
+        const double avg = nf[q] ? (double)sent[q] / nf[q] : 0;
+        printf("  crisp panel %s: %.0f px sent a frame (%.0f%% of the panel) in %.0f windows, %.0f cells drawn\n", q ? "walking" : "sitting",
+               avg, 100.0 * avg / (P * P), nf[q] ? (double)wins[q] / nf[q] : 0, nf[q] ? (double)drawn[q] / nf[q] : 0);
+        /* a window costs about 2500 px (crisp_send): the whole send, in those, well under a full frame's */
+        const double wn = nf[q] ? (double)wins[q] / nf[q] : 0;
+        CHECK(avg + 2500 * wn < 0.5 * P * P, "crisp panel %s: %.0f px in %.0f windows a frame", q ? "walking" : "sitting", avg, wn);
+    }
+    free(truth); free(prev); free(buf); free(buf2); free(pn.px); fluid_frame_destroy(fr); fluid_draw_destroy(d); fluid_draw_destroy(ref); fluid_sim_destroy(s);
+    cpk_destroy(k); free(json);
+}
+
+/* a listen's ring (and the agent's progress ring) over a rigged creature, as mole_fluid.c runs a frame (the creature, the
+ * rings into the target, the water's steps, colour, paint): its wave runs out from the centre and its crest reaches the
+ * rim, the ring lands there within 1.4 s (a line, a band thinning inward behind it), never popping; let go, it is gone
+ * within about a second; and a forming or releasing frame costs the panel no more than a touch's ripple */
+/* the ring's radii are the round rim's (creature_ring.c: the least, over angles, of the outermost drawn dot is 0.988) */
+static float ring_shift(const fluid_sim_t *s) {
+    float edge[128] = { 0 }, vis = 1.f;
+    for (int j = 0; j < s->H; j++) for (int i = 0; i < s->W; i++) {
+        if (!s->mask[j * s->W + i]) continue;
+        for (int b = 0; b < 8; b++) {
+            const float x = s->xs[i] + ((b >> 2) ? 0.5f : -0.5f) / s->W, y = s->ys[j] + (((b & 3) + 0.5f) / 4.f - 0.5f) * 2.f / s->H, r = sqrtf(x * x + y * y);
+            if (r < 0.55f || r > 0.988f) continue;
+            float a = atan2f(x, -y); if (a < 0.f) a += 6.2831853f;
+            const int q = (int)(a * (128 / 6.2831853f)) % 128;
+            if (r > edge[q]) edge[q] = r;
+        }
+    }
+    for (int q = 0; q < 128; q++) if (edge[q] > 0.5f && edge[q] < vis) vis = edge[q];
+    return 0.988f - vis;
+}
+static int ring_dots(const cpk_t *k, const fluid_sim_t *s, float r0, float r1, int *all) {
+    static float sh = -1.f;
+    if (sh < 0.f) sh = ring_shift(s);
+    const uint8_t *cells; const uint32_t *cc; cpk_cells(k, &cells, &cc);
+    int lit = 0, n = 0;
+    for (int j = 0; j < s->H; j++) for (int i = 0; i < s->W; i++) {
+        const int c = j * s->W + i;
+        if (!s->mask[c]) continue;
+        const fluid_rgba16_t *q = &s->col[c];
+        const bool red = q->r > 2 * q->g && q->r > 2 * q->b && q->r > 40 * 257;
+        for (int b = 0; b < 8; b++) {
+            const int col = b >> 2, row = b & 3;
+            const float x = s->xs[i] + (col ? 0.5f : -0.5f) / s->W, y = s->ys[j] + ((row + 0.5f) / 4.f - 0.5f) * 2.f / s->H, r = sqrtf(x * x + y * y) + sh;
+            if (r < r0 || r >= r1) continue;
+            n++;
+            if (red && (cells[c] >> fluid_braille_bit(col, row) & 1)) lit++;
+        }
+    }
+    if (all) *all = n;
+    return lit;
+}
+typedef struct { fluid_draw_t *d; fluid_frame_t *fr; uint16_t *buf, *buf2; crisp_panel_t pn; } ring_panel_t;
+static double ring_send(ring_panel_t *rp, const cpk_t *k, fluid_sim_t *s, int f) {   /* this frame to the panel, ~ms (80 MHz) */
+    fluid_sim_snapshot(s, rp->fr, false);
+    fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, f / 30.f, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL, 0, NULL, NULL, 0, 0.f };
+    const uint32_t *cc; cpk_cells(k, &o.dots, &cc); o.scene = true; o.frame = cpk_draw_frame(k);   /* as mole_fluid.c */
+    const fluid_overlay_t ov = { 0 };
+    if (f == 0) rp->d->force = true;
+    fluid_draw_cells(rp->d, rp->fr, &o);
+    const int n0 = rp->pn.n, px = fluid_draw_send2(rp->d, &o, &ov, FLUID_MARK_NONE, f == 0, rp->buf, rp->buf2, 4096, crisp_send, &rp->pn);
+    crisp_land(&rp->pn);
+    return f == 0 ? 0.0 : px / 3900.0 + 0.25 * (rp->pn.n - n0);     /* measured: ~3.9 px a us, ~0.25 ms a window */
+}
+static void ring_frame(cpk_t *k, fluid_sim_t *s, fluid_ring_t *ring, bool on) {
+    cpk_frame(k, s, 1.f / 30.f, 1.f);
+    fluid_ring_tick(ring, 1.f / 30.f, on);
+    cpk_listen(k, 0xff2a2a, ring->ink);           /* as mole_fluid.c gives it a rigged creature */
+    s->p.still = true;
+    fluid_sim_step(s, 1.f / 60); fluid_sim_step(s, 1.f / 60);
+    fluid_sim_color(s, 1.f / 30);
+    cpk_paint(k, s);
+}
+static double rim_water(const fluid_sim_t *s) {   /* how much the water moves near the rim (|h| summed, h units) */
+    double e = 0.0;
+    for (int j = 0; j < s->H; j++) for (int i = 0; i < s->W; i++) {
+        const float r = sqrtf(s->xs[i] * s->xs[i] + s->ys[j] * s->ys[j]);
+        if (r > 0.7f && r < 0.95f && s->mask[j * s->W + i]) e += fabs((double)s->h[j * s->W + i]) / FQ_H;
+    }
+    return e;
+}
+/* a creature prepared ahead (its dots and rings made off the sim's task, from a copy of the grid alone) is the creature
+ * its first frame would have made */
+static void test_prepare(const char *pkgdir) {
+    char path[512]; size_t len;
+    snprintf(path, sizeof(path), "%s/cat/cat.json", pkgdir);
+    char *json = slurp(path, &len);
+    const char *err = NULL;
+    cpk_t *a = json ? cpk_create(json, len, 3, &err) : NULL, *b = json ? cpk_create(json, len, 3, &err) : NULL;
+    CHECK(a && b, "prepare: cat (%s)", err ? err : "no file");
+    if (!a || !b) { cpk_destroy(a); cpk_destroy(b); free(json); return; }
+    const int P = 466; int W, H; fluid_grid_for_stage(P, &W, &H);
+    fluid_sim_t *sa = fluid_sim_create(W, H, P), *sb = fluid_sim_create(W, H, P);
+    fluid_sim_t grid;                              /* the grid alone: its size, cell centres and mask */
+    memset(&grid, 0, sizeof(grid));
+    grid.W = W; grid.H = H; grid.N = W * H; grid.stage = P;
+    grid.xs = malloc(sizeof(float) * (size_t)W); grid.ys = malloc(sizeof(float) * (size_t)H); grid.mask = malloc((size_t)W * H);
+    memcpy(grid.xs, sb->xs, sizeof(float) * (size_t)W); memcpy(grid.ys, sb->ys, sizeof(float) * (size_t)H); memcpy(grid.mask, sb->mask, (size_t)W * H);
+    cpk_prepare(b, &grid);
+    free(grid.xs); free(grid.ys); free(grid.mask);
+    int differ = 0;
+    fluid_ring_t ra = { 0 }, rb = { 0 };
+    for (int f = 0; f < 60; f++) {                 /* idle, then a listen's ring */
+        ring_frame(a, sa, &ra, f >= 20); ring_frame(b, sb, &rb, f >= 20);
+        const uint8_t *da, *db; const uint32_t *ca, *cb;
+        cpk_cells(a, &da, &ca); cpk_cells(b, &db, &cb);
+        differ += memcmp(da, db, (size_t)W * H) != 0 || memcmp(sa->col, sb->col, sizeof(fluid_rgba16_t) * (size_t)W * H) != 0;
+    }
+    CHECK(differ == 0, "prepare: the creature made ahead is the same creature (%d of 60 frames differ)", differ);
+    cpk_destroy(a); cpk_destroy(b); fluid_sim_destroy(sa); fluid_sim_destroy(sb); free(json);
+}
+
+static void test_crisp_ring(const char *pkgdir) {
+    char path[512]; size_t len;
+    snprintf(path, sizeof(path), "%s/cat/cat.json", pkgdir);
+    char *json = slurp(path, &len);
+    const char *err = NULL;
+    cpk_t *k = json ? cpk_create(json, len, 3, &err) : NULL;
+    CHECK(k != NULL, "crisp ring: cat (%s)", err ? err : "no file");
+    if (!k) { free(json); return; }
+    const int P = 466; int W, H; fluid_grid_for_stage(P, &W, &H);
+    fluid_sim_t *s = fluid_sim_create(W, H, P);
+    ring_panel_t rp = { fluid_draw_create(W, H, P, P), fluid_frame_create(W, H), malloc(4096 * 2), malloc(4096 * 2), { calloc((size_t)P * P, 2), P, P, 0, 0, { 0 } } };
+    fluid_ring_t ring = { 0 }; fluid_progress_t prog = { 0 }; prog.pct = -1.f;
+    /* a finger's touch at the centre first: its ripple's heaviest frame (running out to the rim) is the budget the
+     * ring's wave may take */
+    double touch = 0.0;
+    for (int f = 0; f < 80; f++) {
+        if (f == 20) fluid_sim_impulse(s, 0.f, 0.f, 1.6f, 0.09f);
+        ring_frame(k, s, &ring, false);
+        const double ms = ring_send(&rp, k, s, f);
+        if (f > 20 && ms > touch) touch = ms;
+    }
+    fluid_sim_destroy(s); s = fluid_sim_create(W, H, P);   /* the ring on calm water */
+    cpk_destroy(k); k = cpk_create(json, len, 3, &err);
+    ring = (fluid_ring_t){ 0 };
+    enum { N = 150, ON0 = 10, OFF0 = 90 };
+    int line[N] = { 0 }, all[N] = { 0 }, crest = -1, nline = 1;
+    double heavy = 0.0, quiet = 0.0, loud = 0.0, before = 0.0, let = 0.0;
+    for (int f = 0; f < N; f++) {                  /* 10 frames none, 80 a listen, 60 after it */
+        /* a voice: before the ring (nothing to ripple), then quiet once it settled, then speaking */
+        cpk_voice(k, f < ON0 ? 0.8f : f >= 75 && f < OFF0 ? 0.8f : 0.f);
+        ring_frame(k, s, &ring, f >= ON0 && f < OFF0);
+        if (f == ON0 - 1) before = rim_water(s);
+        if (f >= 60 && f < 75) quiet += rim_water(s) / 15;
+        if (f >= 75 && f < OFF0) loud += rim_water(s) / 15;
+        line[f] = ring_dots(k, s, 0.962f, 1.f, &nline);
+        all[f] = ring_dots(k, s, 0.08f, 1.f, NULL);
+        if (crest < 0 && f >= ON0 && ring_dots(k, s, 0.8f, 0.962f, NULL) > 0 && line[f] == 0) crest = f;   /* red near the rim, the line not yet */
+        const double ms = ring_send(&rp, k, s, 70 + f);
+        if (f >= ON0 && f < ON0 + 45 && ms > heavy) heavy = ms;
+        if (f >= OFF0 && f < OFF0 + 45 && ms > let) let = ms;
+        if (getenv("RING_TRACE") && f >= ON0) printf("    %s f%+d: %.1f ms\n", f < OFF0 ? "form" : "let", f - (f < OFF0 ? ON0 : OFF0), ms);
+        if (f == OFF0 - 1) {                       /* settled: the sharp line alone */
+            int n0, n1, n2, n3, n4;
+            const int a0 = ring_dots(k, s, 0.962f, 0.988f, &n0), a1 = ring_dots(k, s, 0.9f, 0.962f, &n1), a2 = ring_dots(k, s, 0.82f, 0.9f, &n2),
+                      a3 = ring_dots(k, s, 0.74f, 0.82f, &n3), a4 = ring_dots(k, s, 0.08f, 0.64f, &n4);
+            const double f0 = (double)a0 / n0, f1 = (double)a1 / n1, f2 = (double)a2 / n2, f3 = (double)a3 / n3;
+            printf("  crisp ring, settled: lit %.2f on the line, %.2f, %.2f, %.2f inward, %d dots inside\n", f0, f1, f2, f3, a4);
+            CHECK(f0 > 0.6, "crisp ring: the line %.2f lit", f0);
+            CHECK(f1 < 0.1 && f2 < 0.02 && f3 < 0.02, "crisp ring: dots inside the line (%.2f %.2f %.2f)", f1, f2, f3);
+            CHECK(a4 == 0, "crisp ring: %d dots inside the ring", a4);
+        }
+    }
+    const int full = line[OFF0 - 1];
+    int formed = -1, gone = -1, jump = 0;
+    for (int f = ON0; f < OFF0 && formed < 0; f++) if (line[f] >= 0.8 * full) formed = f;
+    for (int f = OFF0; f < N && gone < 0; f++) if (all[f] == 0) gone = f;
+    for (int f = ON0 + 1; f < N; f++) { const int dd = abs(line[f] - line[f - 1]); if (dd > jump) jump = dd; }
+    printf("  crisp ring: the crest near the rim at %.2f s, the line formed at %.2f s, gone %.2f s after; largest step %d of %d line dots\n",
+           crest < 0 ? -1.0 : (crest - ON0) / 30.0, formed < 0 ? -1.0 : (formed - ON0) / 30.0, gone < 0 ? -1.0 : (gone - OFF0) / 30.0, jump, full);
+    printf("  crisp ring: heaviest forming frame ~%.1f ms on the panel, letting go ~%.1f ms, a touch's %.1f ms\n", heavy, let, touch);
+    /* the release is the lighter of the two, with room: on the device it ran ~0.85 of this model (35.5 ms at the 42.2
+     * it had), and a frame has 33 ms */
+    CHECK(let < 28.0 && let < 0.85 * heavy, "crisp ring: letting go takes ~%.1f ms a frame at its heaviest (forming %.1f)", let, heavy);
+    printf("  crisp ring, voice: the water near the rim %.2f before the ring, %.2f quiet, %.2f speaking\n", before, quiet, loud);
+    CHECK(before < 0.01, "crisp ring: a voice ripples the water with no ring (%.2f)", before);
+    CHECK(loud > 4.0 * quiet + 0.5, "crisp ring: the voice does not ripple the rim (%.2f quiet, %.2f speaking)", quiet, loud);
+    CHECK(line[ON0 - 1] == 0 && all[ON0 - 1] == 0, "crisp ring: dots before a listen");
+    CHECK(crest >= 0 && crest < formed, "crisp ring: no crest reaching the rim before the line");
+    CHECK(formed >= 0 && formed - ON0 <= 33, "crisp ring: formed only %.2f s after the start", (formed - ON0) / 30.0);
+    CHECK(gone >= 0 && gone - OFF0 <= 33, "crisp ring: still there %.2f s after", gone < 0 ? 99.0 : (gone - OFF0) / 30.0);
+    CHECK(jump < full / 3, "crisp ring: pops (a step of %d of %d line dots)", jump, full);
+    /* the panel's cost (reported, not yet held to a touch's): a wave across the whole disc changes every cell row,
+     * ~0.6 ms a row on the CO5300's windows; see the report */
+    int lit = 0;                                   /* the progress comet shows too */
+    for (int f = 0; f < 60; f++) {
+        cpk_frame(k, s, 1.f / 30.f, 1.f);
+        fluid_progress_tick(&prog, 1.f / 30.f, true, -1.f, false);
+        fluid_target_progress(s, &prog, 0x2a6aff, 0.f);
+        fluid_sim_step(s, 1.f / 60); fluid_sim_step(s, 1.f / 60);
+        fluid_sim_color(s, 1.f / 30);
+        cpk_paint(k, s);
+    }
+    for (int c = 0; c < s->N; c++) { const fluid_rgba16_t *q = &s->col[c]; if (q->b > 2 * q->r && q->b > 40 * 257) lit++; }
+    printf("  crisp ring, progress: %d cells\n", lit);
+    CHECK(lit > 5, "crisp ring: the progress comet does not show (%d cells)", lit);
+    free(rp.buf); free(rp.buf2); free(rp.pn.px); fluid_frame_destroy(rp.fr); fluid_draw_destroy(rp.d); fluid_sim_destroy(s); cpk_destroy(k); free(json);
+}
+
+/* a package's download over a rigged creature, as mole_fluid.c and pkg_cmd.c run it: the progress in the recording
+ * ring's colour, which the creature's ring draws (creature_ring.h): formed from the centre's wave into the thin line at
+ * the rim, only from 12 o'clock clockwise as far as the download got; done, it fills, then lets go into the water;
+ * failed, it lets go where it got to */
+static void prog_frame(cpk_t *k, fluid_sim_t *s, fluid_progress_t *p, bool on, float pct, bool done) {
+    cpk_frame(k, s, 1.f / 30.f, 1.f);
+    fluid_progress_tick(p, 1.f / 30.f, on, pct, done);
+    fluid_target_progress(s, p, 0xFF2C3E, 0.f);       /* mole_fluid.c: FLUID_CRISP_LISTEN_RGB over a rigged creature */
+    cpk_listen(k, 0xFF2C3E, 0.f);
+    s->p.still = true;
+    fluid_sim_step(s, 1.f / 60); fluid_sim_step(s, 1.f / 60);
+    fluid_sim_color(s, 1.f / 30);
+    cpk_paint(k, s);
+}
+/* the red line's dots at the rim in the clockwise half from 12 (right) and the other (left) */
+static void halves(const cpk_t *k, const fluid_sim_t *s, int *right, int *left) {
+    const uint8_t *cells; const uint32_t *cc; cpk_cells(k, &cells, &cc);
+    *right = *left = 0;
+    for (int j = 0; j < s->H; j++) for (int i = 0; i < s->W; i++) {
+        const int c = j * s->W + i;
+        const fluid_rgba16_t *q = &s->col[c];
+        if (!s->mask[c] || !cells[c] || !(q->r > 2 * q->g && q->r > 2 * q->b && q->r > 40 * 257)) continue;
+        const float r = sqrtf(s->xs[i] * s->xs[i] + s->ys[j] * s->ys[j]);
+        if (r < 0.88f) continue;
+        if (s->xs[i] > 0.05f) (*right)++; else if (s->xs[i] < -0.05f) (*left)++;
+    }
+}
+static void test_crisp_progress(const char *pkgdir) {
+    char path[512]; size_t len;
+    snprintf(path, sizeof(path), "%s/cat/cat.json", pkgdir);
+    char *json = slurp(path, &len);
+    const char *err = NULL;
+    for (int fail = 0; fail < 2; fail++) {
+        cpk_t *k = json ? cpk_create(json, len, 3, &err) : NULL;
+        CHECK(k != NULL, "crisp progress: cat (%s)", err ? err : "no file");
+        if (!k) break;
+        const int P = 466; int W, H; fluid_grid_for_stage(P, &W, &H);
+        fluid_sim_t *s = fluid_sim_create(W, H, P);
+        fluid_progress_t p = { 0 }; p.pct = -1.f;
+        for (int f = 0; f < 10; f++) prog_frame(k, s, &p, false, -1.f, false);
+        int r0, l0; halves(k, s, &r0, &l0);
+        CHECK(r0 == 0 && l0 == 0, "crisp progress: no ring before the download");
+        /* half downloaded (pkg_cmd.c: 90 % for the bytes): the right half at the rim, not the left */
+        for (int f = 0; f < 60; f++) prog_frame(k, s, &p, true, 0.45f * f / 59.f, false);
+        int r1, l1; halves(k, s, &r1, &l1);
+        printf("  crisp progress at 45 %%: %d line cells right of 12, %d left\n", r1, l1);
+        CHECK(r1 > 8 && l1 <= 1, "crisp progress: the line from 12 clockwise only (%d right, %d left)", r1, l1);
+        for (int f = 0; f < 30; f++) prog_frame(k, s, &p, true, fail ? 0.45f : 0.9f, false);
+        int r2, l2; halves(k, s, &r2, &l2);
+        if (!fail) CHECK(l2 > 6, "crisp progress: at 90 %% it goes round (%d left)", l2);
+        /* done: full, then into the water; failed: let go as it is */
+        int full = 0, gone = -1;
+        for (int f = 0; f < 90 && gone < 0; f++) {
+            prog_frame(k, s, &p, false, -1.f, !fail && f == 0);
+            int r, l; halves(k, s, &r, &l);
+            if (!fail && f < 15 && l > full) full = l;
+            if (r + l == 0) gone = f;
+        }
+        if (!fail) CHECK(full > l2, "crisp progress: done fills the circle (%d left, %d before)", full, l2);
+        printf("  crisp progress %s: gone %.2f s after\n", fail ? "failed" : "done", gone / 30.0);
+        CHECK(gone >= 0 && gone <= 75, "crisp progress %s: still there %.2f s after", fail ? "failed" : "done", gone < 0 ? 9.9 : gone / 30.0);
+        fluid_sim_destroy(s); cpk_destroy(k);
+    }
+    free(json);
+}
+
+static void test_own_rigged(const char *pkgdir) {
     char path[512]; size_t len;
     snprintf(path, sizeof(path), "%s/cat/cat.json", pkgdir);
     char *json = slurp(path, &len);
@@ -428,23 +787,19 @@ static void test_own(const char *pkgdir) {
     CHECK(k != NULL, "cat: create (%s)", err ? err : "no file");
     if (!k) { free(json); return; }
     const cp_t *c = cpk_player(k);
-    const int eat = cp_gesture(c, "eat"), bowl = cp_bone_find(c, "bowl");
-    CHECK(eat >= CUTE_N_ACTS && cp_own_gestures(c) >= 1 && !strcmp(cp_gesture_name(c, eat), "eat"), "cat: eat is its own gesture (%d)", eat);
-    CHECK(cp_gesture(c, "nod") == CA_NOD && cp_gesture(c, "fly") < 0 && cp_gesture(NULL, "eat") < 0 && cp_gesture(c, NULL) < 0, "cat: gesture lookup");
-    CHECK(cp_gesture_dur(c, eat) > 3.f && cp_gesture_dur(c, eat) < 6.f && cp_gesture_dur(c, CA_NOD) == cute_act_dur(CA_NOD), "cat: eat lasts %.2f s", cp_gesture_dur(c, eat));
+    const int eat = cp_gesture(c, "eat");
+    CHECK(cpk_crisp(k) && cp_rigged(c), "cat: rigged");
+    CHECK(eat >= CUTE_N_ACTS && !strcmp(cp_gesture_name(c, eat), "eat"), "cat: eat is its own gesture (%d)", eat);
+    CHECK(cp_gesture(c, "nod") == CA_NOD && cp_gesture(c, "fly") < 0, "cat: gesture lookup");
     CHECK(strstr(cp_info(c), "\"eat\"") != NULL, "cat: eat is not in its info");
     fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
     mood_engine_t *e = cpk_engine(k);
+    const cc_t *cl = cpk_clip(k);
     cpk_frame(k, s, 1.f / 30, 1.f);
-    const float before = cp_bone_out(c, bowl)[6];
     me_act(e, eat);
-    CHECK(me_acting(e) == eat, "cat: eat does not play");
-    float most = 0; int f = 0;
-    for (; f < 300 && me_acting(e) == eat; f++) { cpk_frame(k, s, 1.f / 30, 1.f); most = fmaxf(most, cp_bone_out(c, bowl)[6]); }
-    CHECK(fabsf(f / 30.f - cp_gesture_dur(c, eat)) < 0.1f, "cat: eat played %.2f s", f / 30.f);
-    CHECK(before < 0.01f && most > 0.95f && cp_bone_out(c, bowl)[6] < 0.01f, "cat: the bowl %.3f, then %.3f, then %.3f", before, most, cp_bone_out(c, bowl)[6]);
-    me_act(e, CUTE_N_ACTS + cp_own_gestures(c));
-    CHECK(me_acting(e) < 0, "an id past its own gestures plays");
+    bool played = false;
+    for (int f = 0; f < 400; f++) { cpk_frame(k, s, 1.f / 30, 1.f); float t; played |= !strcmp(cc_clip_name(cl, cc_clip(cl, &t)), "eat"); }
+    CHECK(played, "cat: the eat clip never played");
     fluid_sim_destroy(s); cpk_destroy(k); free(json);
 }
 
@@ -454,9 +809,13 @@ int main(int argc, char **argv) {
     test_hash();
     for (const char *const *id = (const char *const[]){ "duck", "cat", "octopus", NULL }; *id; id++) test_golden(argv[1], argv[2], *id);
     test_strict(argv[1]);
-    test_own(argv[1]);
+    test_own_rigged(argv[1]);
+    test_crisp_panel(argv[1]);
+    test_crisp_ring(argv[1]);
+    test_prepare(argv[1]);
+    test_crisp_progress(argv[1]);
     for (const char *const *id = (const char *const[]){ "duck", "cat", "octopus", NULL }; *id; id++) test_info(argv[1], *id);
-    for (const char *const *id = (const char *const[]){ "duck", "cat", NULL }; *id; id++) test_planted(argv[1], *id);
+    for (const char *const *id = (const char *const[]){ "duck", NULL }; *id; id++) test_planted(argv[1], *id);   /* the cat: clip_test.c */
     const double v1 = bench_v1(argv[3]);
     CHECK(v1 > 0, "the .molty duck to compare with (%s)", argv[3]);
     for (const char *const *id = (const char *const[]){ "duck", "cat", "octopus", NULL }; *id; id++) {

@@ -33,7 +33,8 @@
 #define LCD_DATA3           7
 #define LCD_CS              12
 #define LCD_RST             1       /* active low                                    */
-/* LCD_TE on GPIO13 [S]: unused. No backlight pin: brightness is panel command 0x51. */
+#define LCD_TE              13      /* the panel's tearing effect [S]: an input, counted (lcd_co5300_te); no backlight
+                                     * pin: brightness is panel command 0x51 */
 
 /* ── Touch: CST9217, polled (touch_cst9217.c) [S][B][A] ─────────────────────── */
 #define TOUCH_ADDR          0x5A

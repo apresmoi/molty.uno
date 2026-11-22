@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 // One packages/index.json entry (docs/PACKAGES.md section 1), shared by every writer and checker:
 // the file's facts, its one-line pitch (packages/<id>/description.txt), and for a scenes package
-// its layouts and the skills that play it (skills/*/molty.json "packages").
+// its layouts and the skills that play it (the skill folder whose display.yaml builds it, docs/DISPLAY.md;
+// or one whose molty.json names it under "packages").
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { parse } from './display/load.mjs';
 
 const ROOT = new URL('../../', import.meta.url);
 /** What an agent reads to pitch a package to its human: one line of printable ASCII. */
@@ -14,10 +16,14 @@ export const description = (id) => {
   return existsSync(f) ? readFileSync(f, 'utf8').trim() : '';
 };
 
-/** Skills whose molty.json sidecar installs this package, by directory name. */
+/** The packages a skill folder installs: the one its display.yaml builds, and those its molty.json sidecar names. */
+function packagesOf(skill) {
+  const file = (f) => new URL(`skills/${skill}/${f}`, ROOT), text = (f) => readFileSync(file(f), 'utf8');
+  return [...(existsSync(file('display.yaml')) ? [parse(text('display.yaml'), 'display.yaml')?.package?.id] : []), ...(existsSync(file('molty.json')) ? JSON.parse(text('molty.json')).packages ?? [] : [])];
+}
+/** Skills that install this package, by directory name. */
 export const skillsFor = (id) => readdirSync(new URL('skills/', ROOT), { withFileTypes: true })
-  .filter((e) => e.isDirectory() && existsSync(new URL(`skills/${e.name}/molty.json`, ROOT)))
-  .filter((e) => (JSON.parse(readFileSync(new URL(`skills/${e.name}/molty.json`, ROOT), 'utf8')).packages ?? []).includes(id))
+  .filter((e) => e.isDirectory() && packagesOf(e.name).includes(id))
   .map((e) => e.name).sort();
 
 export function indexEntry(pkg, bytes) {

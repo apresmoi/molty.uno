@@ -19,7 +19,7 @@
 #define PKG_FREE(p)   free(p)
 #endif
 
-const char *const PKG_KIND_NAMES[PK_KINDS] = { "ring", "arc", "ticks", "line", "curve", "disc", "ball", "glyph", "text" };
+const char *const PKG_KIND_NAMES[PK_KINDS] = { "ring", "arc", "ticks", "line", "curve", "disc", "ball", "glyph", "text", "spot" };
 
 /* ── arena: 16 KB blocks, linked; the package struct sits at the head of the first ── */
 
@@ -117,6 +117,10 @@ bool pkg_num_ok(int pf, float v) {
     case PF_SIDE:             return v == -1.f || v == 1.f;
     case PF_SPIN:             return v >= -720.f && v <= 720.f;
     case PF_ON: case PF_OFF:  return v >= 0.f && v <= PKG_DUR_MAX;
+    case PF_GROW:             return v >= 1.f && v <= 3.f;
+    case PF_ARC:              return v > 0.f && v <= 360.f;
+    case PF_R0: case PF_R1:   return v >= 0.f && v <= 2.f;
+    case PF_TTL:              return v >= 1.f && v <= PKG_DUR_MAX;
     default:                  return v >= -720.f && v <= 720.f;   /* angles: a0 a1 rot polar */
     }
 }
@@ -188,13 +192,13 @@ static const char *parse_asset(arena_t *a, const cJSON *j, pkg_asset_t *as) {
 
 /* ── items ─────────────────────────────────────────────────────────────────── */
 
-enum { T_NUM, T_COLOR, T_ASSET, T_IMAGE, T_STR };
+enum { T_NUM, T_COLOR, T_ASSET, T_IMAGE, T_STR, T_SAY };
 #define KB(k) (1u << (k))
-#define XY (KB(PK_DISC) | KB(PK_BALL) | KB(PK_GLYPH) | KB(PK_TEXT))
-#define ALL 0x1FFu
+#define XY (KB(PK_RING) | KB(PK_ARC) | KB(PK_DISC) | KB(PK_BALL) | KB(PK_GLYPH) | KB(PK_TEXT) | KB(PK_SPOT))
+#define ALL 0x3FFu
 static const struct { const char *key; uint8_t pf, type; uint16_t kinds; } FIELDS[] = {
     { "x", PF_X, T_NUM, XY }, { "y", PF_Y, T_NUM, XY },
-    { "r", PF_R, T_NUM, KB(PK_RING) | KB(PK_ARC) | KB(PK_TICKS) | KB(PK_DISC) | KB(PK_BALL) },
+    { "r", PF_R, T_NUM, KB(PK_RING) | KB(PK_ARC) | KB(PK_TICKS) | KB(PK_DISC) | KB(PK_BALL) | KB(PK_SPOT) },
     { "w", PF_W, T_NUM, KB(PK_RING) | KB(PK_ARC) | KB(PK_TICKS) | KB(PK_LINE) | KB(PK_CURVE) },
     { "a0", PF_A0, T_NUM, KB(PK_ARC) | KB(PK_TICKS) }, { "a1", PF_A1, T_NUM, KB(PK_ARC) },
     { "len", PF_LEN, T_NUM, KB(PK_TICKS) }, { "n", PF_N, T_NUM, KB(PK_TICKS) },
@@ -205,12 +209,25 @@ static const struct { const char *key; uint8_t pf, type; uint16_t kinds; } FIELD
     { "color", PF_COLOR, T_COLOR, ALL },
     { "img", PF_ASSET, T_IMAGE, KB(PK_BALL) }, { "asset", PF_ASSET, T_ASSET, KB(PK_GLYPH) },
     { "str", PF_STR, T_STR, KB(PK_TEXT) },
+    { "say", PF_SAY, T_SAY, KB(PK_SPOT) }, { "id", PF_ID, T_STR, KB(PK_SPOT) },
+    /* a highlight: a spot lights groups (names, spaces between), their items grow and brighten,
+     * an item `when: "lit"` shows only then */
+    { "group", PF_GROUP, T_STR, ALL & ~KB(PK_SPOT) }, { "when", PF_WHEN, T_STR, ALL & ~KB(PK_SPOT) },
+    { "lights", PF_LIGHTS, T_STR, KB(PK_SPOT) },
+    { "grow", PF_GROW, T_NUM, KB(PK_SPOT) },          /* what a tap on it lights grows this much */
+    /* a spot is also tappable in a ring sector about the glass centre: arc degrees wide, centred on the spot's own
+     * direction, from radius r0 (0 unless given) to r1 */
+    { "arc", PF_ARC, T_NUM, KB(PK_SPOT) }, { "r0", PF_R0, T_NUM, KB(PK_SPOT) }, { "r1", PF_R1, T_NUM, KB(PK_SPOT) },
+    /* a tap on it opens another layout of the package over this one (scene_player.h scene_open_build), for ttl
+     * seconds when that layout is a held one (dur 0) */
+    { "open", PF_OPEN, T_STR, KB(PK_SPOT) }, { "ttl", PF_TTL, T_NUM, KB(PK_SPOT) },
 };
 #define NFIELDS ((int)(sizeof(FIELDS) / sizeof(FIELDS[0])))
 /* what each kind cannot do without */
 static const uint32_t REQUIRED[PK_KINDS] = {
     [PK_RING] = KB(PF_R), [PK_ARC] = KB(PF_R) | KB(PF_A0) | KB(PF_A1), [PK_TICKS] = KB(PF_R) | KB(PF_N),
     [PK_DISC] = KB(PF_R), [PK_BALL] = KB(PF_R), [PK_GLYPH] = KB(PF_ASSET) | KB(PF_SIZE), [PK_TEXT] = KB(PF_STR),
+    [PK_SPOT] = KB(PF_R) | KB(PF_SAY),
 };
 
 typedef struct { const pkg_t *p; const pkg_layout_t *l; bool in_each; arena_t *a; } ictx_t;
@@ -258,7 +275,7 @@ static const char *parse_val(const ictx_t *c, const cJSON *j, int pf, int type, 
         return NULL;
     }
     default:
-        if (!cJSON_IsString(j) || !pkg_text_ok(j->valuestring, PKG_STR_MAX)) return "item: str";
+        if (!cJSON_IsString(j) || !pkg_text_ok(j->valuestring, type == T_SAY ? PKG_SAY_MAX : PKG_STR_MAX)) return "item: str";
         v->src = PV_STR; v->s = astr(c->a, j->valuestring);
         return v->s ? NULL : "oom";
     }
@@ -293,9 +310,9 @@ static const char *parse_item(ictx_t *c, const cJSON *j, pkg_item_t *it) {
             continue;
         }
         if (!strcmp(f->string, "pts")) {
-            if (kind != PK_LINE && kind != PK_CURVE) return "item: unknown key";
+            if (kind != PK_LINE && kind != PK_CURVE && kind != PK_SPOT) return "item: unknown key";
             int n = cJSON_IsArray(f) ? cJSON_GetArraySize(f) : 0;
-            if (n < 2 || n > PKG_PTS_MAX) return "item: pts";
+            if (n < 2 || n > (kind == PK_SPOT ? 2 : PKG_PTS_MAX)) return "item: pts";
             it->pts = aalloc(c->a, sizeof(pkg_val_t[2]) * (size_t)n);
             if (!it->pts) return "oom";
             int i = 0;
@@ -318,17 +335,22 @@ static const char *parse_item(ictx_t *c, const cJSON *j, pkg_item_t *it) {
     if ((have & REQUIRED[kind]) != REQUIRED[kind]) return "item: a required field is missing";
     if ((kind == PK_LINE || kind == PK_CURVE) && !it->pts) return "item: pts";
     if (it->polar && (have & (KB(PF_X) | KB(PF_Y)))) return "item: polar or x / y, not both";
+    if (!(have & KB(PF_ARC)) != !(have & KB(PF_R1)) || ((have & KB(PF_R0)) && !(have & KB(PF_ARC)))) return "item: a sector is arc and r1 (and r0)";
+    if ((have & KB(PF_TTL)) && !(have & KB(PF_OPEN))) return "item: ttl is for open";
+    if (it->f[PF_WHEN].src != PV_NONE && (it->f[PF_WHEN].src != PV_STR || strcmp(it->f[PF_WHEN].s, "lit"))) return "item: when is \"lit\"";
     return NULL;
 }
 
 /* ── layouts ───────────────────────────────────────────────────────────────── */
 
 static const char *parse_layout(arena_t *a, const pkg_t *p, const cJSON *j, pkg_layout_t *l) {
-    static const char *const KEYS[] = { "dur", "params", "items", NULL };
+    static const char *const KEYS[] = { "dur", "params", "items", "caption_y", NULL };
     if (!cJSON_IsObject(j) || !only(j, KEYS)) return "layout: unknown key";
-    const cJSON *dur = cJSON_GetObjectItemCaseSensitive(j, "dur");
+    const cJSON *dur = cJSON_GetObjectItemCaseSensitive(j, "dur"), *cy = cJSON_GetObjectItemCaseSensitive(j, "caption_y");
     if (dur && (!cJSON_IsNumber(dur) || !(dur->valuedouble >= 0 && dur->valuedouble <= PKG_DUR_MAX))) return "layout: dur";
+    if (cy && (!cJSON_IsNumber(cy) || !(cy->valuedouble >= -1 && cy->valuedouble <= 1))) return "layout: caption_y";
     l->dur = dur ? (float)dur->valuedouble : 0.f;
+    l->caption_y = cy ? (float)cy->valuedouble : PKG_CAPTION_Y;
     const cJSON *params = cJSON_GetObjectItemCaseSensitive(j, "params");
     if (params) {
         if (!cJSON_IsObject(params) || count(params) > PKG_PARAMS_MAX) return "layout: params";
@@ -404,6 +426,11 @@ static const char *parse_root(arena_t *a, pkg_t *p, const cJSON *j) {
         if (e) return e;
         if (!(l->name = astr(a, c->string))) return "oom";
         p->nlayouts++;
+    }
+    /* a spot opens a layout of this package (a bound name is checked when it is tapped) */
+    for (int i = 0; i < p->nlayouts; i++) for (int q = 0; q < p->layouts[i].nitems; q++) {
+        const pkg_val_t *v = &p->layouts[i].items[q].f[PF_OPEN];
+        if (v->src == PV_STR && !pkg_layout(p, v->s)) return "item: open names no layout";
     }
     return NULL;
 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The sky for a date, as the params of the astrology package's layouts (packages/astrology).
+// The sky for a date, as the inputs of this skill's screens (../display.yaml, ../screens/).
 // All astronomy comes from astronomy-engine (MIT, vendored); nothing here draws. Ported from the
 // lab prototype (molty-creature-lab/astronomy/sky.mjs): same instants, aspects, orbs and events.
 import { createRequire } from 'node:module';
@@ -8,8 +8,10 @@ const A = createRequire(import.meta.url)('./vendor/astronomy.min.js');
 const TAU = Math.PI * 2, DAY = 86400000, RAD = Math.PI / 180, mod360 = (d) => ((d % 360) + 360) % 360;
 const r2 = (v) => +v.toFixed(2) + 0, r3 = (v) => +v.toFixed(3) + 0;
 export const BODIES = ['Sun', 'Moon', 'Mercury', 'Venus', 'Mars', 'Jupiter', 'Saturn', 'Uranus', 'Neptune', 'Pluto'];
-// the package's glyph colours (packages/astrology/build.mjs BODIES)
+// the bodies' colours (a body's color input, ../screens/chart.yaml)
 const INK = { Sun: '#ffd678', Moon: '#e6e6e0', Mercury: '#c8bcb0', Venus: '#fff0c4', Mars: '#ff7a55', Jupiter: '#ffc266', Saturn: '#e8d890', Uranus: '#9fe3e0', Neptune: '#8fb4ff', Pluto: '#c0a0d0' };
+// the sign glyphs' colours (../display.yaml coral, sage, sky) and the close-up's ruler glyph size (../screens/sign-closeup.yaml)
+const SIGN_INK = ['#ff9a7a', '#a8d890', '#9fc0ff'], RULER = 0.13, RULER_GAP = 0.06;
 export const ASPECTS = [{ angle: 0, name: 'conjunction', c: '#ffd678' }, { angle: 60, name: 'sextile', c: '#6fe0a0' }, { angle: 90, name: 'square', c: '#ff6a55' }, { angle: 120, name: 'trine', c: '#7fb0ff' }, { angle: 180, name: 'opposition', c: '#ff5fa0' }];
 export const MAX_ORB = 6;
 export const SIGNS = ['Aries', 'Taurus', 'Gemini', 'Cancer', 'Leo', 'Virgo', 'Libra', 'Scorpio', 'Sagittarius', 'Capricorn', 'Aquarius', 'Pisces'];
@@ -41,7 +43,7 @@ export function aspectOf(kind, date) {
   throw new Error(`no ${kind} in 800 days`);
 }
 /** Bodies on the chart: true longitude, pushed inward in steps when crowded. */
-export function placeBodies(bodies, rBase = 0.64) { const placed = []; return [...bodies].sort((a, b) => a.lon - b.lon).map((b) => { let level = 0; while (placed.some((p) => p.level === level && sep(p.lon, b.lon) < 13)) level++; const it = { ...b, level, r: rBase - level * 0.11 }; placed.push(it); return it; }); }
+export function placeBodies(bodies, rBase = 0.64) { const placed = []; return [...bodies].sort((a, b) => a.lon - b.lon).map((b) => { let level = 0; while (placed.some((p) => p.level === level && sep(p.lon, b.lon) < 13)) level++; const it = { ...b, level, r: rBase - level * 0.1 }; placed.push(it); return it; }); }
 
 // ---- scenes: each builder returns [[layout, params], ...] (the first plays, the rest queue), a short line to say and the facts.
 const litSide = (lon, sunLon) => (mod360(lon - sunLon) < 180 ? 1 : -1); // east of the Sun: lit on its west, the right, north up
@@ -61,16 +63,117 @@ export function tonight(date) {
   const pct = Math.round(s.moon.fraction * 100);
   return { scenes, say: `Tonight's moon is ${pct} percent lit, ${s.moon.waxing ? 'waxing' : 'waning'}, in ${s.moon.sign}. Then Mercury, Venus, Mars, Jupiter and Saturn.`, facts: { moon: { lit: pct, waxing: s.moon.waxing, sign: s.moon.sign }, planets: Object.fromEntries(PLANETS.map((p) => { const lon = eclipticLon(p, date); return [p, `${Math.floor(mod360(lon) % 30)} ${signOf(lon)}`]; })) } };
 }
-const KIND_LIST = { sextile: 'sextiles', square: 'squares', trine: 'trines', opposition: 'oppositions' };
-/** A command's params stay small: the loosest aspects are left off the wheel until it fits. */
-export const MAX_PARAMS_BYTES = 900;
-export function chart(date) {
-  const s = sky(date), placed = placeBodies(s.bodies), inner = Math.min(...placed.map((b) => b.r)) - 0.07, aspects = findAspects(s.bodies);
-  const line = (a) => { const [x1, y1] = polar(chartAngle(a.lonA), inner), [x2, y2] = polar(chartAngle(a.lonB), inner); return { x1: r2(x1), y1: r2(y1), x2: r2(x2), y2: r2(y2) }; };
-  const build = (n) => { const params = { inner: r3(inner), bodies: placed.map((b) => ({ g: `g-${b.name.toLowerCase()}`, a: chartAngle(b.lon), r: r3(b.r), c: INK[b.name] })), ...Object.fromEntries(Object.values(KIND_LIST).map((k) => [k, []])) }; for (const a of aspects.filter((a) => a.angle > 0).slice(0, n)) params[KIND_LIST[a.name]].push(line(a)); return params; };
-  let n = 32, params = build(n);
-  while (n > 0 && JSON.stringify(params).length > MAX_PARAMS_BYTES) params = build(--n);
-  return { scenes: [['chart', params]], say: `The whole sky: ten bodies on the zodiac, ${aspects.length} aspects between them.`, facts: { bodies: Object.fromEntries(s.bodies.map((b) => [b.name, `${Math.floor(mod360(b.lon) % 30)} ${signOf(b.lon)}`])), aspects: aspects.map((a) => `${a.a} ${a.name} ${a.b} (orb ${a.orb.toFixed(1)})`), drawn: n } };
+// The chart's aspects: the tightest few, each a hairline between its two bodies' symbols (../screens/chart.yaml):
+// tense red, easy blue, a conjunction white; LINE_GAP outside each symbol's centre, none for a pair too close for a line
+const DRAWN = 3, TONE = { square: 'tense', opposition: 'tense', trine: 'easy', sextile: 'easy', conjunction: 'joined' };
+const TONE_INK = { tense: '#ff5a4a', easy: '#6fa8ff', joined: '#c8cce0' }, LINE_GAP = 0.085;
+// every aspect instead (chart(date, { all: true })): the tightest brightest (ORB_FADE of the colour lost by MAX_ORB), as many as
+// the device's 128 items hold (the chart's other items are 58, an aspect's 6)
+const ORB_FADE = 0.7, MOST = Math.floor((128 - 58) / 6);
+// What a tap reads (a spot) and what the close-up says: a planet's part of you, played out in its sign's way.
+const DOES = { Sun: 'you shine', Moon: 'you feel at home', Mercury: 'your mind works best', Venus: 'you love', Mars: 'you go after things', Jupiter: 'luck finds you', Saturn: 'you learn hard lessons', Uranus: 'you break old rules', Neptune: 'you dream', Pluto: 'you change deep down' };
+const PART = { Sun: 'your core self', Moon: 'your feelings', Mercury: 'your mind', Venus: 'your loves', Mars: 'your drive', Jupiter: 'your luck', Saturn: 'your discipline', Uranus: 'your rebel side', Neptune: 'your dreams', Pluto: 'your power' };
+// each sign: its nature, its ruler (modern), and two ways it plays out (alternating, so a crowded sign does not repeat itself)
+const NATURE = [
+  ['bold, quick', 'Mars', 'by being bold and going first', 'with courage and a fast start'],
+  ['steady, sensual', 'Venus', 'through comfort and patience', 'by building things that last'],
+  ['curious, chatty', 'Mercury', 'by talking and learning', 'through ideas and quick wits'],
+  ['caring, tender', 'Moon', 'by caring for your people', 'through home and feeling safe'],
+  ['warm, proud', 'Sun', 'with warmth and a big heart', 'by being seen and playing'],
+  ['careful, helpful', 'Mercury', 'by getting the details right', 'through being useful'],
+  ['fair, graceful', 'Venus', 'through fairness and beauty', 'by sharing and making peace'],
+  ['deep, intense', 'Pluto', 'with deep, all or nothing focus', 'through trust and hidden things'],
+  ['free, far-roaming', 'Jupiter', 'through adventure and big ideas', 'by searching for meaning'],
+  ['patient, ambitious', 'Saturn', 'with patience and quiet ambition', 'by climbing step by step'],
+  ['original, free-thinking', 'Uranus', 'by doing it your own way', 'through friends and new ideas'],
+  ['dreamy, gentle', 'Neptune', 'through dreams and kindness', 'by feeling what others feel'],
+];
+const ELEMENTS = ['fire', 'earth', 'air', 'water'];
+const TOUCH = { conjunction: 'sits right beside it, so the two blend', sextile: 'lends a hand', trine: 'makes it flow easily', square: 'adds friction that pushes you', opposition: 'pulls the other way, so look for balance' };
+const MAX_SAY = 160; // a spot's reading (docs/PACKAGES.md)
+const signIndex = (lon) => Math.floor(mod360(lon) / 30), deg = (lon) => mod360(lon) % 30;
+/** The bodies in sign i, by degree. */
+const inSign = (bodies, i) => bodies.filter((b) => signIndex(b.lon) === i).sort((a, b) => deg(a.lon) - deg(b.lon));
+const and = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}` : xs[0]);
+/** The first of these lines that fits a spot. */
+const fit = (...lines) => lines.find((l) => l.length <= MAX_SAY) ?? lines.at(-1).slice(0, MAX_SAY);
+function bodyReading(b, bodies, aspects) {
+  const i = signIndex(b.lon), rank = inSign(bodies, i).findIndex((x) => x.name === b.name), main = `${b.name} in ${SIGNS[i]}: ${DOES[b.name]} ${NATURE[i][2 + (rank % 2)]}.`;
+  const x = aspects.find((a) => a.a === b.name || a.b === b.name);
+  return x ? fit(`${main} ${x.a === b.name ? x.b : x.a} ${TOUCH[x.name]}.`, main) : main;
+}
+const lord = (i) => `${['Sun', 'Moon'].includes(NATURE[i][1]) ? 'the ' : ''}${NATURE[i][1]}`, signHead = (i) => `${SIGNS[i]}: ${NATURE[i][0]} ${ELEMENTS[i % 4]}, ruled by ${lord(i)}.`;
+function signReading(i, bodies) {
+  const here = inSign(bodies, i), head = signHead(i);
+  if (!here.length) return fit(`${head} Empty now, so its ruler, ${lord(i)} in ${signOf(bodies.find((b) => b.name === NATURE[i][1]).lon)}, shows how it plays out for you.`, `${head} Empty now; ${lord(i)} speaks for it.`);
+  const names = and(here.map((b) => b.name)), parts = and(here.map((b) => PART[b.name]));
+  return fit(`${head} ${names} here: ${NATURE[i][2]}, you live out ${parts}.`, `${head} ${names} here, all ${NATURE[i][2]}.`, `${head} ${here.length} planets here.`);
+}
+const aspectReading = (a) => `${a.a} ${PAIR[a.name][0]} ${a.b}: ${PAIR[a.name][1](WORD[a.a], WORD[a.b])}.`;
+const WORD = { Sun: 'self', Moon: 'mood', Mercury: 'mind', Venus: 'love', Mars: 'drive', Jupiter: 'luck', Saturn: 'limits', Uranus: 'change', Neptune: 'dreams', Pluto: 'power' };
+const PAIR = { conjunction: ['sits with', (a, b) => `${a} and ${b} as one`], sextile: ['helps', (a, b) => `${a} helping ${b}`], square: ['squares', (a, b) => `friction between ${a} and ${b}`], trine: ['flows with', (a, b) => `${a} and ${b} in step`], opposition: ['opposes', (a, b) => `${a} meets ${b}`] };
+const scaleInk = (c, f) => '#' + [1, 3, 5].map((k) => Math.round(parseInt(c.slice(k, k + 2), 16) * f).toString(16).padStart(2, '0')).join('');
+/** The chart: every body on the zodiac, and between them the tightest aspects as lines (all: every one that fits). */
+export function chart(date, { all = false } = {}) {
+  const s = sky(date), placed = placeBodies(s.bodies), aspects = findAspects(s.bodies), DEG = Math.PI / 180;
+  const at = (name) => { const b = placed.find((p) => p.name === name), a = chartAngle(b.lon) * DEG; return [b.r * Math.cos(a), b.r * Math.sin(a)]; };
+  // a line from LINE_GAP outside one symbol's centre to LINE_GAP outside the other's, or null for a pair too close for one
+  const line = (a) => {
+    const P = at(a.a), Q = at(a.b), dx = Q[0] - P[0], dy = Q[1] - P[1], l = Math.hypot(dx, dy), ux = dx / l, uy = dy / l, id = `${a.a}-${a.b}`.toLowerCase();
+    if (l < 2 * LINE_GAP + 0.03) return null;
+    const c0 = TONE_INK[TONE[a.name]], c = all ? scaleInk(c0, 1 - ORB_FADE * Math.min(1, a.orb / MAX_ORB)) : c0;
+    return { x1: r3(P[0] + ux * LINE_GAP), y1: r3(P[1] + uy * LINE_GAP), x2: r3(Q[0] - ux * LINE_GAP), y2: r3(Q[1] - uy * LINE_GAP), px1: r3(P[0]), py1: r3(P[1]), px2: r3(Q[0]), py2: r3(Q[1]), c, say: aspectReading(a), id, lights: `${id} ${a.a.toLowerCase()} ${a.b.toLowerCase()}` };
+  };
+  const lines = [], drawn = [];
+  for (const a of aspects) {
+    if (lines.length >= (all ? MOST : DRAWN)) break;
+    const l = line(a);
+    if (l) { lines.push(l); drawn.push(a); }
+  }
+  // a tap on a sign opens it up close on Molty itself (the layout's spots: open): the chart carries what that needs. Each
+  // sign: its close-up's own fields and how long it plays; `ruler`: each sign's ruler glyph (of: the sign); each body: the
+  // sign it is in (of) and its place and moment on that sign's dial (da, d, on, off)
+  const ups = SIGNS.map((_, i) => closeupOf(s, aspects, i)), dial = Object.fromEntries(ups.flatMap((c) => c.params.bodies.map((b) => [b.id, { of: c.params.sign, da: b.da, d: b.d, on: b.on, off: b.off }])));
+  const params = { bodies: placed.map((b) => ({ g: `g-${b.name.toLowerCase()}`, a: chartAngle(b.lon), r: r3(b.r), c: INK[b.name], say: bodyReading(b, s.bodies, aspects), id: b.name.toLowerCase(), ...dial[b.name.toLowerCase()] })), aspects: lines };
+  params.signs = SIGNS.map((name, i) => { const { sign, c, name: label, nx, ns, say } = ups[i].params; return { a: (195 + 30 * i) % 360, say, id: sign, sign, c, name: label, nx, ns, ttl: ups[i].ttl }; });
+  params.ruler = ups.map((c) => ({ of: c.params.sign, ...c.params.ruler[0] }));
+  return { scenes: [['chart', params]], say: `The whole sky: ten bodies on the zodiac, joined by the ${drawn.length} tightest of their ${aspects.length} aspects. Tap a planet, a sign or a line to read it.`, facts: { bodies: Object.fromEntries(s.bodies.map((b) => [b.name, `${Math.floor(mod360(b.lon) % 30)} ${signOf(b.lon)}`])), aspects: aspects.map((a) => `${a.a} ${a.name} ${a.b} (orb ${a.orb.toFixed(1)})`), drawn: drawn.map((a) => `${a.a} ${a.name} ${a.b}`), tap: 'a tap on a body or an aspect line shows its reading; a tap on a sign opens it up close on Molty itself (the tap event says so: opened), and a tap beside it there comes back; the tap event names the spot; chart --interactive reads the sign aloud' } };
+}
+// The close-up reads aloud (a say over the scene) while each planet lights in turn. Molty's voice cues are not
+// visible to a layout, so the lighting follows an estimate of the voice: about 2.6 words a second, a beat at each
+// sentence end, after a lead-in while the first words are synthesised.
+const SPEECH = { lead: 1.2, wps: 2.6, stop: 0.3, hold: 3 };
+const speak = (line) => line.split(/\s+/).length / SPEECH.wps + (line.match(/[.!?](\s|$)/g)?.length ?? 0) * SPEECH.stop;
+/** The sign's degree dial: 0 at the lower left, over the top, 30 at the lower right (the subtitle keeps the bottom). */
+const DIAL = { a0: 210, span: 240, gap: 28 };
+const dim = (c) => '#' + [1, 3, 5].map((k) => Math.round(parseInt(c.slice(k, k + 2), 16) * 0.6).toString(16).padStart(2, '0')).join('');
+/** Dial angles for these degrees (ascending), at least `gap` apart and on the dial. */
+function spread(degs) {
+  const gap = Math.min(DIAL.gap, DIAL.span / Math.max(1, degs.length - 1)), a = degs.map((d) => DIAL.a0 - (d * DIAL.span) / 30), end = DIAL.a0 - DIAL.span;
+  for (let k = 1; k < a.length; k++) a[k] = Math.min(a[k], a[k - 1] - gap);
+  for (let k = a.length - 1; k >= 0 && a[k] < end + (a.length - 1 - k) * gap; k--) a[k] = end + (a.length - 1 - k) * gap;
+  return a.map(r2);
+}
+/** The device font's width of a text item (5 x 7 letters, 1 apart), in glass units at `size`. */
+const textWidth = (str, size) => ((str.length * 6 - 1) * size) / 7;
+/** Sign i up close for this sky: the close-up's params (its planets on its degree dial, `da`, lit one by one as Molty reads
+ *  them), how long it plays and what is read aloud. */
+function closeupOf(s, aspects, i) {
+  const id = SIGNS[i].toLowerCase(), here = inSign(s.bodies, i), angles = spread(here.map((b) => deg(b.lon)));
+  const intro = here.length ? signHead(i) : signReading(i, s.bodies), reads = here.map((b) => bodyReading(b, s.bodies, aspects));
+  let t = SPEECH.lead + speak(intro);
+  const bodies = here.map((b, k) => { const on = r2(t); t += speak(reads[k]); return { g: `g-${b.name.toLowerCase()}`, da: angles[k], c: INK[b.name], d: dim(INK[b.name]), on, off: r2(t), say: reads[k], id: b.name.toLowerCase() }; });
+  // the name and the ruler's glyph after it, centred as one row (a long name in smaller type)
+  const name = SIGNS[i].toUpperCase(), ruler = NATURE[i][1], ns = name.length > 8 ? 0.11 : 0.13, w = textWidth(name, ns), half = (w + RULER_GAP + RULER) / 2;
+  const params = { sign: id, c: SIGN_INK[i % 3], name, nx: r3(w / 2 - half), ns, say: signReading(i, s.bodies), ruler: [{ g: `g-${ruler.toLowerCase()}`, x: r3(half - RULER / 2), c: INK[ruler] }], bodies };
+  return { params, ttl: Math.ceil(t + SPEECH.hold), read: [intro, ...reads.map((r) => r.replace(` in ${SIGNS[i]}:`, ':'))].join(' ') };
+}
+/** A sign up close: its glyph, its planets on its degree dial lit one by one as Molty reads them, its ruler. */
+export function closeup(date, id) {
+  const i = SIGNS.findIndex((n) => n.toLowerCase() === id);
+  if (i < 0) throw new Error(`sign must be one of ${SIGNS.join(', ').toLowerCase()}`);
+  const s = sky(date), c = closeupOf(s, findAspects(s.bodies), i);
+  return { scenes: [['sign-closeup', c.params, c.ttl]], read: c.read };
 }
 const FIG = { sextile: 6, square: 4, trine: 3, opposition: 2, conjunction: 1 };
 const GRID = '#565b72';

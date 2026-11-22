@@ -17,6 +17,7 @@
 #include "http.h"
 #include "network.h"
 #include "console_store.h"
+#include "recv_bound.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -72,11 +73,35 @@ esp_err_t http_send_json(httpd_req_t *r, const char *json)
     return httpd_resp_sendstr(r, json);
 }
 
+_Static_assert(RECV_TIMEOUT == HTTPD_SOCK_ERR_TIMEOUT, "recv_bound.h's timeout is the server's");
+static int recv_once(void *ctx, char *buf, int len)
+{
+    // ⚠ MUST be httpd_req_recv (the IDF API), not recv_full: an earlier
+    // global find-replace of httpd_req_recv → recv_full made this infinitely
+    // recursive, blowing the stack at ~92 chunks deep into a POST.
+    int n = httpd_req_recv(ctx, buf, (size_t)len);
+    if (n == HTTPD_SOCK_ERR_TIMEOUT) vTaskDelay(1);
+    return n;
+}
+
+// One chunk of the body: > 0 bytes, HTTPD_SOCK_ERR_TIMEOUT after RECV_SILENCE_US
+// without data (logged), else the socket's error.
+static int recv_chunk(httpd_req_t *r, char *buf, int len)
+{
+    int n = recv_bound(recv_once, r, buf, len, esp_timer_get_time);
+    if (n == HTTPD_SOCK_ERR_TIMEOUT)
+        mole_diag_event(true, "http.stalled uri=%s len=%d: no data for %d s, given up",
+                        r->uri, r->content_len, (int)(RECV_SILENCE_US / 1000000));
+    return n;
+}
+
 // Read the FULL request body. esp_http_server's httpd_req_recv returns one chunk
 // per call (typically ~MSS-sized). For bodies larger than that — anything over
 // a few hundred bytes — we must loop until we've consumed content_len bytes.
 // Returns the number of bytes read, or <=0 on error (consistent with the
-// underlying API). HTTPD_SOCK_ERR_TIMEOUT is retried transparently.
+// underlying API). HTTPD_SOCK_ERR_TIMEOUT is retried, but only for RECV_SILENCE_US
+// without data (recv_bound.h): a sender that goes silent gets HTTPD_SOCK_ERR_TIMEOUT
+// back, so its handler returns and the server serves again.
 //
 // The `access` attribute tells GCC the function writes `total_len` bytes into
 // `buf`, which lets callers use the buffer after a successful return without
@@ -86,14 +111,7 @@ int http_recv_full(httpd_req_t *r, char *buf, int total_len)
 {
     int total = 0;
     while (total < total_len) {
-        // ⚠ MUST be httpd_req_recv (the IDF API), not recv_full — an earlier
-        // global find-replace of httpd_req_recv → recv_full made this infinitely
-        // recursive, blowing the stack at ~92 chunks deep into a POST.
-        int n = httpd_req_recv(r, buf + total, total_len - total);
-        if (n == HTTPD_SOCK_ERR_TIMEOUT) {
-            vTaskDelay(1);
-            continue;
-        }
+        int n = recv_chunk(r, buf + total, total_len - total);
         if (n <= 0) return n;
         total += n;
         // Yield each chunk so 100 KB+ POSTs don't starve the idle task on core 0.
@@ -1110,9 +1128,12 @@ static esp_err_t ota_receive(httpd_req_t *r, bool *rebooting)
     bool checked = false;
     while (remaining > 0) {
         int want = remaining < 8192 ? remaining : 8192;
-        int rcv = httpd_req_recv(r, buf, want);
-        if (rcv == HTTPD_SOCK_ERR_TIMEOUT) continue;
-        if (rcv <= 0) { heap_caps_free(buf); esp_ota_abort(h); return http_send_json(r, "{\"ok\":false,\"error\":\"recv\"}"); }
+        int rcv = recv_chunk(r, buf, want);
+        if (rcv <= 0) {
+            heap_caps_free(buf); esp_ota_abort(h);
+            return http_send_json(r, rcv == HTTPD_SOCK_ERR_TIMEOUT ? "{\"ok\":false,\"error\":\"stalled\"}"
+                                                                   : "{\"ok\":false,\"error\":\"recv\"}");
+        }
         if (!checked) {
             size_t n = sizeof(head) - have < (size_t)rcv ? sizeof(head) - have : (size_t)rcv;
             memcpy(head + have, buf, n);
@@ -1259,8 +1280,9 @@ static esp_err_t handler_info(httpd_req_t *r)
 // byte-swapped for the SPI panel's wire
 // order; we swap back and expand 5/6/5 bits to 8 bits per channel. The fluid
 // keeps no framebuffer (it sends the panel only what changed): it draws the frame
-// on the panel into it on request first. We memcpy the whole 339 KB buffer
-// (sub-millisecond) and convert from the copy.
+// on the panel into it on request first, and nothing else writes it until the next
+// request, so the rows are converted straight from it (no copy of the whole buffer:
+// with a scene up the PSRAM had no room for one, and the request answered "oom").
 // ═════════════════════════════════════════════════════════════════════════════
 static inline void rgb565_be_to_rgb888(uint16_t stored, uint8_t *out /* r,g,b */)
 {
@@ -1273,7 +1295,7 @@ static inline void rgb565_be_to_rgb888(uint16_t stored, uint8_t *out /* r,g,b */
     out[2] = (uint8_t)((b5 << 3) | (b5 >> 2));   // 5→8 bits
 }
 
-#define FB_PARITY_ROWS_PER_CHUNK 32   // 32*412*3 = 39,552 B/chunk on the 1.46 — modest scratch, ~13 chunks/frame
+#define FB_PARITY_ROWS_PER_CHUNK 8    // 8*466*3 = 11,184 B/chunk on the 1.75C: a small scratch
 
 static esp_err_t handler_framebuffer(httpd_req_t *r)
 {
@@ -1281,18 +1303,11 @@ static esp_err_t handler_framebuffer(httpd_req_t *r)
     uint16_t *live_fb = molty_display_framebuffer();
     if (!live_fb) return http_send_json(r, "{\"ok\":false,\"error\":\"no_framebuffer\"}");
 
-    size_t fb_bytes = (size_t)W * H * sizeof(uint16_t);
-    uint16_t *snap = (uint16_t *)heap_caps_malloc(fb_bytes, MALLOC_CAP_SPIRAM);
-    if (!snap) return http_send_json(r, "{\"ok\":false,\"error\":\"oom\"}");
-    mole_fluid_framebuffer_sync();     // the fluid sends the panel windows, not this buffer
-    memcpy(snap, live_fb, fb_bytes);   // the "snapshot" — see consistency note above
-
     size_t rgb_chunk_bytes = (size_t)FB_PARITY_ROWS_PER_CHUNK * W * 3;
     uint8_t *rgb_scratch = (uint8_t *)heap_caps_malloc(rgb_chunk_bytes, MALLOC_CAP_SPIRAM);
-    if (!rgb_scratch) {
-        heap_caps_free(snap);
-        return http_send_json(r, "{\"ok\":false,\"error\":\"oom\"}");
-    }
+    if (!rgb_scratch) return http_send_json(r, "{\"ok\":false,\"error\":\"oom\"}");
+    mole_fluid_framebuffer_sync();     // the fluid sends the panel windows, not this buffer
+    const uint16_t *snap = live_fb;
 
     httpd_resp_set_type(r, "image/x-portable-pixmap");
     httpd_resp_set_hdr(r, "Access-Control-Allow-Origin", "*");
@@ -1318,7 +1333,6 @@ static esp_err_t handler_framebuffer(httpd_req_t *r)
     httpd_resp_send_chunk(r, NULL, 0);   // EOF
 
     heap_caps_free(rgb_scratch);
-    heap_caps_free(snap);
     return ESP_OK;
 }
 
@@ -1419,7 +1433,7 @@ esp_err_t http_server_start(void)
     cfg.max_open_sockets = 7;      // headroom for WS + concurrent tabs
     cfg.lru_purge_enable = true;
     cfg.server_port      = 80;
-    cfg.max_uri_handlers = 48;     // ~36 routes today; headroom so new routes always fit
+    cfg.max_uri_handlers = 56;     // 48 routes today (49 with DIAG_RING); headroom so new routes always fit
 
     httpd_handle_t server = NULL;
     ESP_RETURN_ON_ERROR(httpd_start(&server, &cfg), TAG, "httpd_start failed");

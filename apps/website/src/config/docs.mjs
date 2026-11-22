@@ -31,22 +31,28 @@ export const SYNCED_DOCS = [
     description: 'The molty CLI and stdio MCP server, direct over USB/Wi-Fi or through the relay.',
   },
   {
-    source: 'device/creatures/README.md',
-    slug: 'moltys/overview',
-    title: 'Moltys and the viewers',
-    description: 'Where the creatures live, the browser viewers and the .molty exporter.',
+    source: 'docs/CREATURE.md',
+    slug: 'moltys/molty-format',
+    title: 'The Molty format',
+    description: 'A Molty is one folder: a small molty.json and a body file. How to make one, and how we make the cat.',
   },
   {
-    source: 'device/creatures/js/cute/README.md',
-    slug: 'moltys/making-your-own',
-    title: 'Make your own Molty',
-    description: 'The cute kit: a creature is a small data spec plus optional hooks.',
+    source: 'docs/DISPLAY.md',
+    slug: 'moltys/draw',
+    title: 'Draw on Molty',
+    description: 'A skill that draws: SKILL.md, a display.yaml of screens made of shapes, and plain image assets.',
   },
   {
-    source: 'device/creatures/MOLTY-FORMAT.md',
-    slug: 'moltys/format',
-    title: 'The .molty format',
-    description: 'The ~1 KB binary file that carries one creature to the device.',
+    source: 'docs/PACKAGES.md',
+    slug: 'moltys/packages',
+    title: 'Packages and scenes',
+    description: 'Data-only packages that teach a Molty new scenes and creatures: the format, the commands, the limits.',
+  },
+  {
+    source: 'docs/CREATURES.md',
+    slug: 'moltys/creature-packages',
+    title: 'Creature packages',
+    description: 'The duck, the cat and the octopus as data: channel creatures, the rigged cat with baked clips, limits.',
   },
   {
     source: 'docs/ARCHITECTURE.md',
@@ -61,3 +67,10 @@ export const SYNCED_DOCS = [
     description: 'Tests to run, conventions, and how to send a pull request.',
   },
 ];
+
+/** Addresses that used to serve other pages: they land on the Moltys group's first page. */
+export const DOC_REDIRECTS = {
+  '/moltys/overview/': '/moltys/packages/',
+  '/moltys/making-your-own/': '/moltys/packages/',
+  '/moltys/format/': '/moltys/packages/',
+};

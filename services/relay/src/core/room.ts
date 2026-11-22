@@ -54,7 +54,8 @@ import {
   type ActivityOwnerRequest,
 } from "./api.js";
 import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
-import { CREATURES_CAP, DND_CAP, PROGRESS_CAP, DEFAULT_WPM, PKG_CAP, SCENE_CAP, WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, GESTURES_CAP, RESUME_CAP, RESUME_FEATURE, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, MAX_KEEP_WORDS, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
+import { hasVoice, junkTranscript } from "./voiced.js";
+import { ASK_TITLE_CAP, LEGACY_ASK_LABEL, CREATURES_CAP, DND_CAP, PROGRESS_CAP, DEFAULT_WPM, PKG_CAP, SCENE_CAP, MAX_SCENE_TTL_S, WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, GESTURES_CAP, RESUME_CAP, RESUME_FEATURE, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, MAX_KEEP_WORDS, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
 import { FIRST_WORDS_MODES, type FirstWordsMode, type LinePlay, OPENER, type OpenerMessage, clauseEnd, guardOpener, hangs, planReply, pushHistory } from "./opener.js";
 import { PcmFeed, estimateSpeechMs, speechWords, splitSpeech, synthesize } from "./speech.js";
 import { DEFAULT_PARTIAL_POLICY, DRAFT_DROPPED_EVENT, DRAFT_USED_EVENT, type DropReason, PARTIAL_EVENT, PartialChunker, PauseTracker, judgeDraft, words } from "./partials.js";
@@ -79,7 +80,8 @@ import {
   type JsonObject,
 } from "./protocol.js";
 import { type Clock, type KV, sleep } from "./store.js";
-import { type AgentEvent, CREATURE_EVENT, DND_EVENT, DEFAULT_WEBHOOK_EVENTS, type DeviceCreature, INBOX_LIMITS, SAMPLE_EVENTS, UTTERANCE_EVENT, agentEventData, creatureData, eventId, webhookWants } from "./events.js";
+import { type AgentEvent, CREATURE_EVENT, DND_EVENT, DEFAULT_WEBHOOK_EVENTS, type DeviceCreature, INBOX_LIMITS, SAMPLE_EVENTS, SCENE_EVENT, UTTERANCE_EVENT, agentEventData, creatureData, eventId, webhookWants } from "./events.js";
+import { type Play, SCREEN, type Screen, deviceSaid, held, played, queued, reconnected, sceneChanged, sceneContext, tapped } from "./screen.js";
 import { LISTEN_ADOPT_FEATURE, LOCAL_LISTEN_RE, type TurnClaim, type TurnRecord, claimTurn, turnTimings, utteranceData } from "./turns.js";
 import { API_VERSION, FEATURES, compareVersions } from "./version.js";
 import type { ReleaseLookup, ReleaseSource } from "./releases.js";
@@ -282,6 +284,8 @@ export interface RoomDeps {
    * UtteranceClassifier). Default: Molty's reflex (fillerCategory: the owner's engine, keywords when off). Tests override it.
    */
   classifier?: UtteranceClassifier;
+  /** Is there a voice in this listen's audio (core/voiced.ts hasVoice)? Tests whose clips are not voices override it. */
+  voiced?: (pcm: Int16Array) => boolean;
 }
 
 interface DeviceRecord {
@@ -399,6 +403,8 @@ interface ListenBuffer {
   extend?: () => void;
   /** The device ended the listen with reason "error": its capture failed. */
   captureFailed?: boolean;
+  /** The relay's voice check on the audio, once the listen is over (heardVoice). */
+  voiced?: boolean;
   /** The auto filler delay for this turn (core/phrases.ts fillerMs of the listen's ack). */
   fillerMs?: number;
   /** The turn trace being gathered (core/trace.ts). */
@@ -617,6 +623,17 @@ function fadeOut(pcm: Int16Array): Int16Array {
   return out;
 }
 
+/** Everything a listen recorded, as one PCM16 clip. */
+function listenPcm(buf: ListenBuffer): Int16Array {
+  const all = new Uint8Array(buf.bytes);
+  let o = 0;
+  for (const c of buf.chunks) {
+    all.set(c, o);
+    o += c.byteLength;
+  }
+  return bytesToPcm16(all);
+}
+
 function concat(a: Int16Array, b: Int16Array): Int16Array {
   if (a.length === 0) return b;
   const out = new Int16Array(a.length + b.length);
@@ -657,6 +674,8 @@ const K = {
   creature: "creature",
   /** Do not disturb, as the device last reported it (its `dnd` event). */
   dnd: "dnd",
+  /** The scene on its screen, as the relay follows it (core/screen.ts). */
+  screen: "screen",
 };
 
 /** Device-facing name of a voice box pairing (the console shows it next to the code). */
@@ -702,6 +721,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private readonly skillVersion: SkillVersion;
   /** An override of the filler's classifier (RoomDeps.classifier); absent = Molty's reflex (fillerCategory). */
   private readonly classifier: UtteranceClassifier | undefined;
+  private readonly voiced: (pcm: Int16Array) => boolean;
   /** The voice box, spoken to over whichever voice socket is live (in-flight requests only). */
   private readonly box: RemoteVoiceProvider;
   /** The activity log (core/activity.ts): every hook below is one `this.activity.*` call. */
@@ -778,6 +798,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private lead: LeadPlay | undefined;
   /** Bumped by everything an agent starts or shows (jobs incl. a draft's opener, mood / show / act / state): the auto filler stands down. */
   private agentSeq = 0;
+  /** When the human's last words were heard, until Molty answers: a scene's clock waits for that answer (core/screen.ts held). */
+  private heardAt: number | undefined;
   private fillWatch: FillWatch | undefined;
   /** The last auto filler: an agent's quick right after it (same turn, nothing else since) is skipped ("filled"). */
   private lastFill: { turn: string; job: string; phrase: string; text: string; at: number; seq: number } | undefined;
@@ -810,6 +832,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     this.skillVersion = new SkillVersion(this.fetcher, this.clock, this.catalog.ref);
     this.reflexKeys = { ...(deps.reflexKeys?.jev ? { jev: deps.reflexKeys.jev } : {}), ...(deps.reflexKeys?.openai ? { openai: deps.reflexKeys.openai } : {}) };
     this.classifier = deps.classifier;
+    this.voiced = deps.voiced ?? ((pcm) => hasVoice(pcm));
     this.box = new RemoteVoiceProvider(() => this.boxSocket(), this.clock);
     this.activity = new ActivityLog({ deviceId: this.deviceId, kv: this.kv, clock: this.clock, log: this.log });
     this.audioKeep = new AudioKeep(this.kv, this.clock);
@@ -988,6 +1011,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     }
     const resume = this.settleResume(frame.resume);
     if (hello.link_code) await this.kv.put(K.link, { code: hello.link_code, at: this.clock.now() });
+    await this.screenTo(reconnected); // what the device said while away is lost
     await this.kv.put<DevInfo>(K.devinfo, { fw: hello.fw ?? null, board: hello.board ?? null, caps: hello.caps ?? null, at: this.clock.now() });
     // features: what this relay does for the device (listen_adopt: shake to talk, core/turns.ts);
     // now: the relay's clock (the device's time sync for log uploads); log: uploads welcome (core/activity.ts)
@@ -1027,6 +1051,9 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (frame.name === CREATURE_EVENT) return this.onCreature(data); // kept; agents hear of a change
     if (frame.name === DND_EVENT) return this.onDnd(data); // kept; gates unprompted speech
     const clean = agentEventData(frame.name, data);
+    // the screen follows the device before the event is counted: the inbox's rate cap never costs it a change
+    if (clean && frame.name === SCENE_EVENT) await this.screenTo((s) => sceneChanged(s, clean, this.clock.now()));
+    if (clean && frame.name === "tap" && typeof clean.spot === "string") await this.screenTo((s) => tapped(s, clean.spot as string, this.clock.now()));
     if (clean) await this.appendEvent(frame.name, clean);
     if (clean) await this.activity.device(frame.name, clean);
   }
@@ -1079,12 +1106,45 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     await this.appendEvent(CREATURE_EVENT, c as JsonObject, true);
   }
 
-  /** The utterance's `device` learns who Molty is now (its creature, when the device said) and the skill's newest version. */
-  private async withDevice(data: JsonObject): Promise<JsonObject> {
+  /**
+   * The utterance's `device` learns who Molty is now (its creature, when the device said), the skill's newest
+   * version, and the scene the human was looking at when they began to speak (`since`), with the spot they last touched.
+   */
+  private async withDevice(data: JsonObject, since: number): Promise<JsonObject> {
     const c = await this.kv.get<DeviceCreature>(K.creature), skill = this.skillVersion.peek();
     if (c) (data.device as JsonObject).creature = c as JsonObject;
     if (skill) (data.device as JsonObject).skill = skill;
+    const scene = sceneContext(await this.kv.get<Screen>(K.screen), since);
+    if (scene) (data.device as JsonObject).scene = scene;
     return data;
+  }
+
+  /** The screen's record through one of core/screen.ts's steps; written only when the step changed it. */
+  private screenTo(step: (s: Screen | undefined) => Screen | undefined): Promise<void> {
+    return this.kv.update<Screen, void>(K.screen, (s) => {
+      const next = step(s);
+      return { next: next === s ? undefined : (next ?? null), result: undefined };
+    });
+  }
+
+  /** What a command the device took did to its screen: a scene went up, was queued or cleared; text or another state took the screen. */
+  private async screenAfter(name: string, args: JsonObject, result: JsonObject) {
+    const now = this.clock.now();
+    if (name === "scene.play" || name === "scene.queue") {
+      // the ttl the device gave it, when it says
+      const ttl = typeof result.ttl_s === "number" && result.ttl_s >= 1 && result.ttl_s <= MAX_SCENE_TTL_S ? result.ttl_s : (args.ttl_s as number);
+      const play: Play = { pkg: args.pkg as string, layout: args.layout as string, params: args.params as JsonObject, ttl_s: ttl };
+      await this.screenTo((s) => (name === "scene.play" ? played(play, now) : queued(s, play, now)));
+    } else if (name === "scene.clear" || name === "show" || (name === "state" && typeof args.state === "string")) {
+      await this.screenTo(() => undefined); // the firmware drops a scene when another state takes the screen, without a word
+    } else if (name === "status" && this.liveSocket()?.getMeta()?.caps?.includes(SCENE_CAP)) {
+      await this.screenTo((s) => deviceSaid(s, result.scene, now));
+    }
+  }
+
+  /** The device's scene clock waits while Molty listens or speaks: the relay's waits with it. */
+  private holdScreen(from: number, to: number) {
+    return this.screenTo((s) => held(s, from, to));
   }
 
   private async onLinkCode(code: unknown) {
@@ -1100,7 +1160,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     for (const prefix of ["tok:", "pair:", "job:", "ev:", "cur:", "whq:", NOTES_PREFIX, ACTIVITY_PREFIX, AUDIO_PREFIX, ...PHRASE_PREFIXES]) {
       for (const key of (await this.kv.list(prefix)).keys()) await this.kv.delete(key);
     }
-    for (const key of [K.device, K.link, K.pairCurrent, K.evSeq, K.evRate, K.skillEv, K.origin, K.devinfo, K.upd, K.voiceCfg, K.vbox, K.vstat, K.turn, K.speech, K.lastAnswerer, K.creature]) await this.kv.delete(key);
+    for (const key of [K.device, K.link, K.pairCurrent, K.evSeq, K.evRate, K.skillEv, K.origin, K.devinfo, K.upd, K.voiceCfg, K.vbox, K.vstat, K.turn, K.speech, K.lastAnswerer, K.creature, K.screen]) await this.kv.delete(key);
     // Its token is gone with the rest: so is the voice box.
     this.closeBoxes(() => true, CLOSE_UNAUTHORIZED, "device forgotten");
     this.log("device forgotten", { device: this.deviceId });
@@ -1301,6 +1361,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       }
       if (res.ok) this.screenRev++;
     } else res = await this.sendCmd(cmd.name, cmd.args);
+    if (res.ok) await this.screenAfter(cmd.name, cmd.args, res.result);
     // the agent is on it (a feeling, text, a gesture): Molty's own filler stands down
     if (res.ok && (cmd.name === "mood" || cmd.name === "progress" || cmd.name === "show" || cmd.name === "act" || cmd.name === "scene.play" || (cmd.name === "state" && Object.keys(cmd.args).length > 0))) this.agentSeq++;
     if (!res.ok || cmd.name !== "status") return res;
@@ -1326,6 +1387,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
           setup: await this.setupChoices(),
           // who Molty is now: the creature on screen, its look and moves (null: the firmware does not say)
           creature: ((await this.kv.get<DeviceCreature>(K.creature)) ?? null) as JsonObject | null,
+          // the scene on screen, as on an utterance's device.scene (null: none is up, as far as the relay can tell)
+          scene: sceneContext(await this.kv.get<Screen>(K.screen), this.clock.now()) ?? null,
           // the skill's newest version (skills/molty/CHANGES.md); null until GitHub has answered once
           skill: this.skillVersion.peek() ?? null,
           // do not disturb: speak, listen or ask only in reply to an utterance (null: the firmware does not say)
@@ -1555,6 +1618,13 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       if (caps) return fail("unsupported", "this device has no touch screen for answers: use molty_talk instead");
     }
     if (caps && args.say !== undefined && !caps.includes("say")) return fail("unsupported", "this device has no speaker: ask without say, or show the question first");
+    // Firmware before the question screen with a title (no ASK_TITLE_CAP) shows 8 characters a label and no title: a
+    // longer label would be refused there, so say so here; a title is left out (the spoken question carries it).
+    if (!caps?.includes(ASK_TITLE_CAP)) {
+      const long = args.options.find((o) => o.length > LEGACY_ASK_LABEL);
+      if (long !== undefined) return fail("firmware_too_old", `"${long}" is longer than this Molty's firmware shows (${LEGACY_ASK_LABEL} characters a label): shorten it, or ask your human to update Molty`);
+      delete args.title;
+    }
     // in_reply_to naming the open turn: traced (a `reply` entry), never claimed — an ask never takes the floor
     const turn = args.in_reply_to !== undefined ? await this.kv.get<TurnRecord>(K.turn) : undefined;
     const answers: JsonObject = turn && turn.id === args.in_reply_to ? { turn: { id: turn.id, at: turn.at }, called: t0 } : {};
@@ -2107,7 +2177,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       voice: await this.voiceName(),
     });
     if (r.opener) Object.assign(data, { opener: r.opener, opener_wpm: this.lineWpm });
-    await this.appendEvent(UTTERANCE_EVENT, await this.withDevice(data), true);
+    await this.appendEvent(UTTERANCE_EVENT, await this.withDevice(data, r.start), true);
     await this.activity.record({ ts: this.clock.now(), kind: "device", ev: "utterance", job: id, data: { text: text.slice(0, 500), reason: r.reason, trigger: "talk", words: words(text).length } });
   }
 
@@ -2224,7 +2294,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       let res: Outcome<JsonObject>;
       try {
         // colors rides along always: firmware without button colours ignores the field.
-        res = await this.sendCmd("ask", { job: id, options: args.options, colors: args.colors, timeout_ms: args.timeout_s * 1000 });
+        res = await this.sendCmd("ask", { job: id, options: args.options, colors: args.colors, ...(args.title !== undefined ? { title: args.title } : {}), timeout_ms: args.timeout_s * 1000 });
       } finally {
         this.screenInFlight--;
       }
@@ -2286,6 +2356,12 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const kept = marks?.filter((m) => m[1] !== WORKING_MOOD && (working || !WORKING_ACTIONS.includes(m[1])));
     const rev = this.screenRev;
     const r = (await this.voiceIsOff()) ? await this.showInstead(text) : await this.speakNow(id, text, voice, untilDone || wantsWork, kept, prepared);
+    if (r.ok && r.ms > 0) {
+      // a scene's clock waited for this answer since the human's words (heardAt), and waits while it plays
+      const from = this.heardAt === undefined ? r.start : Math.min(r.start, Math.max(this.heardAt, r.start - SCREEN.maxWaitMs));
+      this.heardAt = undefined;
+      await this.holdScreen(from, r.start + r.ms);
+    }
     // an explicit mood during the say (the work was called off) has the last word
     if (r.ok && wantsWork && working && rev === this.screenRev && this.screenInFlight === 0) {
       const m = await this.sendCmd("mood", { mood: WORKING_MOOD });
@@ -2298,6 +2374,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private async showInstead(text: string): Promise<SpeakResult> {
     const start = this.clock.now();
     const res = await this.sendCmd("show", { text, wpm: DEFAULT_WPM });
+    if (res.ok) await this.screenAfter("show", {}, {});
     return res.ok ? { ok: true, start, ms: 0, timings: { voice: "off" } } : { ok: false, error: res.error };
   }
 
@@ -2723,6 +2800,12 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       buf.reflex?.close();
       this.clock.clearTimeout(buf.gapTimer);
     }
+    if (r.ok) {
+      // a scene's clock waited while Molty listened
+      const now = this.clock.now();
+      await this.holdScreen(r.start, now);
+      this.heardAt = r.text ? now : undefined;
+    }
     return this.traced(buf, r);
   }
 
@@ -2846,16 +2929,15 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     // Device VAD heard nothing: no STT call at all. Only the explicit verdict counts:
     // speech_ms is absent when VAD was off, and older firmware sent speech_ms:0 with
     // vad:false -- neither means silence (older firmware without reason: STT as before).
-    const noSpeech = buf.reason === "no_speech";
+    let noSpeech = buf.reason === "no_speech";
     if (!this.liveSocket() && buf.bytes === 0) return { ok: false, error: "device_offline" };
     if (buf.bytes === 0 && !noSpeech) return { ok: false, error: "no_audio" };
-    const all = new Uint8Array(buf.bytes);
-    let o = 0;
-    for (const c of buf.chunks) {
-      all.set(c, o);
-      o += c.byteLength;
-    }
-    const pcm = bytesToPcm16(all);
+    // No voice in what was recorded (a press by accident: the room, a bump, a breath): nothing was
+    // said, however the listen ended — no STT, no turn, no opener or filler, no thinking.
+    // `dropped`: the relay's verdict, not the device's (the device may have acknowledged it).
+    let dropped: "no_voice" | "no_words" | undefined = !noSpeech && !this.heardVoice(buf) ? "no_voice" : undefined;
+    if (dropped) noSpeech = true;
+    const pcm = listenPcm(buf);
     const tStt = this.clock.now();
     let served = pick.name;
     let text = "";
@@ -2879,11 +2961,17 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       text = await withTimeout(this.clock, pick.provider.stt(pcm), this.t.sttTimeoutMs, "stt_timeout");
     }
     const sttMs = noSpeech ? 0 : this.clock.now() - tStt;
+    // the second gate: a transcript without a single word ("", ".", "[BLANK_AUDIO]") is nothing said
+    if (!noSpeech && junkTranscript(text)) {
+      text = "";
+      dropped = "no_words";
+    }
+    if (dropped) buf.reason = "no_speech";
     // Re-assert thinking after STT (covers the device's own idle racing the first one); nothing heard -> idle.
-    if (buf.thinking) this.autoMood(buf, text ? "thinking" : "idle");
+    if (buf.thinking || dropped) this.autoMood(buf, text ? "thinking" : "idle");
     const duration = durationMs(pcm.length);
     const reason = buf.reason ?? (!text ? "no_speech" : duration >= ms - 100 ? "max" : "ended");
-    Object.assign(rt, { voice: served, stt: sttMs }, fallback ? { fallback } : {});
+    Object.assign(rt, { voice: served, stt: sttMs }, fallback ? { fallback } : {}, dropped ? { dropped } : {});
     return {
       ok: true,
       start: t0,
@@ -2925,6 +3013,13 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     });
   }
 
+  /** The relay's voice check (core/voiced.ts) on this listen's audio, once it is over: memoized. */
+  private heardVoice(buf: ListenBuffer): boolean {
+    const v = buf.voiced ?? (buf.bytes > 0 && this.voiced(listenPcm(buf)));
+    if (buf.ended) buf.voiced = v;
+    return v;
+  }
+
   /**
    * The STT backend's semantic end of turn (voice box `stt.turn_end`): the listen ends HERE,
    * as if the device's end frame had arrived (reason `turn_end`; record() then finalizes the
@@ -2940,8 +3035,9 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     buf.endAt = now;
     buf.turnEndAt = now;
     buf.turnEnd = turnEndTiming(buf.stream?.trace?.() as JsonObject | undefined, buf.bytes / 32); // 16 kHz, 16 bit
-    // no_speech (the box heard nobody, device VAD off): as the device's own no_speech — no STT, transcript ""
-    buf.reason = why === "no_speech" ? "no_speech" : "turn_end";
+    // no_speech (the box heard nobody, device VAD off; or no voice in the audio, whatever the box
+    // made of it): as the device's own no_speech — no STT, transcript "", no chirp
+    buf.reason = why === "no_speech" || !this.heardVoice(buf) ? "no_speech" : "turn_end";
     if (this.liveSocket()?.getMeta()?.caps?.includes("listen_stop")) {
       // the reason rides along so the device ends with it and applies its acknowledgement
       // rules to it: no_speech → no chirp, no thinking (older firmware ignores it: turn_end)
@@ -3030,8 +3126,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       if (frame.header.reason) buf.reason = frame.header.reason;
       if (frame.header.reason === "error") buf.captureFailed = true;
       if (frame.header.speech_ms !== undefined) buf.speech_ms = frame.header.speech_ms;
-      // End of speech: show thinking right away, while STT runs.
-      if (buf.bytes > 0 && buf.reason !== "no_speech" && buf.reason !== "error") {
+      // End of speech: show thinking right away, while STT runs (only when there was a voice).
+      if (buf.bytes > 0 && buf.reason !== "no_speech" && buf.reason !== "error" && this.heardVoice(buf)) {
         buf.thinking = true;
         this.autoMood(buf, "thinking");
       }
@@ -3240,7 +3336,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         if (fill !== undefined) data.filler_in_ms = fill;
       }
       // agent-facing, one per turn: not subject to the device event rate cap
-      await this.appendEvent(UTTERANCE_EVENT, await this.withDevice(data), true);
+      await this.appendEvent(UTTERANCE_EVENT, await this.withDevice(data, r.start), true);
       if (r.trace) r.trace.relay.utterance = this.clock.now() - r.trace.t0;
       await this.activity.record({
         ts: this.clock.now(),

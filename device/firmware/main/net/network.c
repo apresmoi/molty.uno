@@ -62,7 +62,7 @@ static char s_ip_buf[20]    = {};
 // ── netif handle (USB side) ────────────────────────────────────────────────────
 static esp_netif_t *s_usb_netif = NULL;
 static esp_netif_t *s_sta_netif = NULL;
-static bool         s_sta_in_mdns = false;
+static bool         s_sta_in_mdns = false;   /* registered once, for good: a drop only disables it */
 
 // ── Per-interface delegated mDNS hostnames ─────────────────────────────────────
 // s_unique_hostname  = "molty-<6hex>"  e.g. "molty-a1b2c3" — Wi-Fi-only delegate
@@ -84,11 +84,14 @@ static SemaphoreHandle_t  s_wifi_op = NULL;       /* one join or scan at a time 
 static wifi_retry_t       s_retry;                /* the event handler's (the default event loop) */
 static esp_timer_handle_t s_retry_timer = NULL;
 static volatile bool      s_joining = false;      /* a join owns the radio: it reports its own result */
+static volatile int64_t   s_hold_until_us;        /* net_wifi_drop: no reconnect before this */
 
 static void retry_timer_cb(void *arg)
 {
     (void)arg;
     if (s_joining || !s_wifi_op) return;          /* a join reports its own result */
+    const int64_t hold = s_hold_until_us - esp_timer_get_time();
+    if (hold > 0) { esp_timer_start_once(s_retry_timer, (uint64_t)hold); return; }
     if (xSemaphoreTake(s_wifi_op, 0) != pdTRUE) { /* a scan has the radio: try again after it */
         esp_timer_start_once(s_retry_timer, (uint64_t)WIFI_RETRY_MIN_MS * 1000);
         return;
@@ -96,7 +99,11 @@ static void retry_timer_cb(void *arg)
     s_wifi_state = WIFI_PORTAL_STATE_CONNECTING;
     esp_err_t e = esp_wifi_connect();
     xSemaphoreGive(s_wifi_op);
-    if (e != ESP_OK) ESP_LOGW(TAG, "reconnect: esp_wifi_connect %s", esp_err_to_name(e));
+    if (e != ESP_OK) {                             /* no attempt, so no disconnect event: retry from here */
+        ESP_LOGW(TAG, "reconnect: esp_wifi_connect %s", esp_err_to_name(e));
+        int32_t ms = wifi_retry_event(&s_retry, WIFI_RETRY_EV_DISCONNECTED, false);
+        if (ms >= 0) esp_timer_start_once(s_retry_timer, (uint64_t)ms * 1000);
+    }
 }
 
 static void retry_after(int32_t ms)
@@ -105,6 +112,15 @@ static void retry_after(int32_t ms)
     esp_timer_stop(s_retry_timer);                 /* one pending retry at most */
     ESP_LOGI(TAG, "Wi-Fi dropped: reconnecting in %ld ms", (long)ms);
     esp_timer_start_once(s_retry_timer, (uint64_t)ms * 1000);
+}
+
+esp_err_t net_wifi_drop(uint32_t hold_s)
+{
+    if (!s_retry_timer) return ESP_ERR_INVALID_STATE;
+    if (hold_s > 600) hold_s = 600;
+    s_hold_until_us = esp_timer_get_time() + (int64_t)hold_s * 1000000;
+    ESP_LOGW(TAG, "Wi-Fi drop forced (dev), no reconnect for %lu s", (unsigned long)hold_s);
+    return esp_wifi_disconnect();                  /* a real STA_DISCONNECTED: the drop path, retried */
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -383,12 +399,13 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
         }
 #if defined(CONFIG_MDNS_MAX_SERVICES)
-        // Unregister the STA netif from mDNS (the main-hostname A-record on Wi-Fi).
+        // Stop answering on Wi-Fi (the main-hostname A-record). Never mdns_unregister_netif here:
+        // mdns 1.11.1 takes its lock twice in it, so this handler never returned and the default
+        // event loop + esp_timer task wedged for good (no reconnect, RAM drain, panic; 2026-11-16,
+        // diag/loop_watch.h). Disabling only queues an action: nothing here blocks.
         if (s_sta_in_mdns && s_sta_netif) {
-            mdns_netif_action(s_sta_netif, MDNS_EVENT_DISABLE_IP4);
-            mdns_unregister_netif(s_sta_netif);
-            s_sta_in_mdns = false;
-            ESP_LOGI(TAG, "mDNS: STA interface removed (Wi-Fi disconnected)");
+            mdns_netif_action(s_sta_netif, (mdns_event_actions_t)(MDNS_EVENT_DISABLE_IP4 | MDNS_EVENT_DISABLE_IP6));
+            ESP_LOGI(TAG, "mDNS: STA interface disabled (Wi-Fi disconnected)");
         }
         // Remove the Wi-Fi-only delegated hostname (molty-<id>.local).
         // This ensures there is no stale A-record pointing at a now-unreachable IP.
@@ -419,15 +436,14 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
         // (one per interface) — that is acceptable since users never type it.
         if (!s_sta_in_mdns && s_sta_netif) {
             esp_err_t mr = mdns_register_netif(s_sta_netif);
-            if (mr == ESP_OK) {
-                mdns_netif_action(s_sta_netif,
-                    (mdns_event_actions_t)(MDNS_EVENT_ENABLE_IP4 | MDNS_EVENT_ANNOUNCE_IP4 |
-                                   MDNS_EVENT_ENABLE_IP6 | MDNS_EVENT_ANNOUNCE_IP6));
-                s_sta_in_mdns = true;
-                ESP_LOGI(TAG, "mDNS: STA interface registered for main hostname");
-            } else {
-                ESP_LOGW(TAG, "mDNS: STA register failed: %s", esp_err_to_name(mr));
-            }
+            if (mr == ESP_OK) s_sta_in_mdns = true;
+            else ESP_LOGW(TAG, "mDNS: STA register failed: %s", esp_err_to_name(mr));
+        }
+        if (s_sta_in_mdns) {                       /* first join, or back after a drop */
+            mdns_netif_action(s_sta_netif,
+                (mdns_event_actions_t)(MDNS_EVENT_ENABLE_IP4 | MDNS_EVENT_ANNOUNCE_IP4 |
+                               MDNS_EVENT_ENABLE_IP6 | MDNS_EVENT_ANNOUNCE_IP6));
+            ESP_LOGI(TAG, "mDNS: STA interface enabled for main hostname");
         }
         // Add the Wi-Fi-only delegated hostname: molty-<id>.local → <wifi-ip>.
         // Guard against double-add on reconnect without an intervening disconnect.
@@ -724,6 +740,7 @@ esp_err_t net_wifi_join(const char *ssid, const char *pass, uint32_t timeout_ms)
     if (!s_wifi_op) return ESP_ERR_INVALID_STATE;
     xSemaphoreTake(s_wifi_op, portMAX_DELAY);
     s_joining = true;                              /* its own disconnects are not drops to retry */
+    s_hold_until_us = 0;                           /* a join ends a dev hold (net_wifi_drop) */
     if (s_retry_timer) esp_timer_stop(s_retry_timer);
 
     // Disconnect if currently connected
@@ -765,8 +782,24 @@ esp_err_t net_wifi_join(const char *ssid, const char *pass, uint32_t timeout_ms)
     } else {
         s_wifi_state = WIFI_PORTAL_STATE_DISCONNECTED;
         e = (bits & WIFI_FAIL_BIT) ? ESP_FAIL : ESP_ERR_TIMEOUT;
+        /* back to the saved network (wifi_retry.h): the radio is still aimed at the one that failed,
+         * and nothing else would ever reconnect it */
+        esp_wifi_disconnect();                     /* a timed-out join may still be trying */
+        char saved_ssid[64] = {}, saved_pass[128] = {};
+        if (nvs_read_creds(saved_ssid, sizeof(saved_ssid), saved_pass, sizeof(saved_pass)) == ESP_OK && saved_ssid[0]) {
+            wifi_config_t wcfg = {};
+            strncpy((char *)wcfg.sta.ssid,     saved_ssid, sizeof(wcfg.sta.ssid)     - 1);
+            strncpy((char *)wcfg.sta.password, saved_pass, sizeof(wcfg.sta.password) - 1);
+            sta_config_range(&wcfg);
+            esp_wifi_set_config(WIFI_IF_STA, &wcfg);
+            snprintf(s_ssid_buf, sizeof(s_ssid_buf), "%s", saved_ssid);
+            memset(saved_pass, 0, sizeof(saved_pass));
+            memset(&wcfg, 0, sizeof(wcfg));
+            ESP_LOGW(TAG, "join %s: back to the saved network", esp_err_to_name(e));
+        }
     }
     s_joining = false;
+    if (e != ESP_OK) retry_after(wifi_retry_event(&s_retry, WIFI_RETRY_EV_JOIN_FAILED, false));
     xSemaphoreGive(s_wifi_op);
     return e;
 }

@@ -1,0 +1,47 @@
+/* the layers of the page's water: over the page's loose dust (its background), under its text,
+   never in the way */
+.near,
+.water,
+.drift {
+  z-index: 0;
+  pointer-events: none;
+}
+/* the denser dust, in focus round each device and heading: the second tile on the page's own
+   lattice, shown by a mask the service lays once it knows where they stand */
+.near {
+  position: absolute;
+  inset: 0;
+  background: var(--m-dust-near) repeat 0 0 / var(--m-dust-size);
+  mask-repeat: no-repeat;
+  opacity: 0;
+  transition: opacity 0.8s;
+}
+.near[data-laid] {
+  opacity: 1;
+}
+/* the canvas the water moves the dust on: fixed at the viewport's corner, sized and moved by the
+   service (a pixel of it is a pixel of the tiles) */
+.water {
+  position: fixed;
+  top: 0;
+  left: 0;
+}
+/* loose dust that drifts: the page's own loose dust once more, a tile bigger than the viewport
+   all round, carried one tile across and down every few minutes (a transform: no repaint) */
+.drift {
+  position: fixed;
+  inset: calc(-1 * var(--m-dust-size));
+  background: var(--m-dust) repeat calc(var(--m-dust-size) / 2) calc(var(--m-dust-size) / 4) / var(--m-dust-size);
+  opacity: 0.8;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .drift {
+    animation: drift 300s linear infinite;
+    will-change: transform;
+  }
+}
+@keyframes drift {
+  to {
+    transform: translate3d(calc(-1 * var(--m-dust-size)), var(--m-dust-size), 0);
+  }
+}

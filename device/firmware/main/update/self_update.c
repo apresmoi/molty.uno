@@ -380,7 +380,7 @@ esp_err_t self_update_cmd(const cJSON *args, cJSON **out)
     upd_confirm_label(t.version, version);   /* fits: upd_request refused it otherwise */
     const char *labels[2] = { version, UPD_LABEL_LATER };
     const int32_t colors[2] = { UPD_COLOR_UPDATE, UPD_COLOR_LATER };
-    esp_err_t r = result ? link_ask_open(t.job, labels, colors, 2, t.timeout_ms, on_answer) : ESP_ERR_NO_MEM;
+    esp_err_t r = result ? link_ask_open(t.job, "update molty?", NULL, labels, colors, 2, t.timeout_ms, on_answer) : ESP_ERR_NO_MEM;
     if (r != ESP_OK) {
         lock();
         if (s_s.state == UPD_CONFIRM) s_s.state = UPD_IDLE;
@@ -473,10 +473,18 @@ static void guard_eval(void)
         esp_ota_mark_app_valid_cancel_rollback();
     }
     unlock();
-    if (g == UPD_GUARD_MARK_VALID) mole_diag_event(false, "update.valid (%s)", welcomed ? "relay welcome" : "http up");
+    if (g == UPD_GUARD_MARK_VALID) mole_diag_event(false, "update.valid (%s)", welcomed ? "relay welcome" : "ran its settle time");
 }
 
-static void guard_timer(void *arg) { (void)arg; guard_eval(); }
+/* The window's end: its mark (an otadata sector erase, ~33 ms of both cores frozen) waits for the screen to be still
+ * 500 ms, 5 s at most. Harmless a little late: a reset meanwhile rolls back, as one before the window's end does. */
+static void guard_timer(void *arg)
+{
+    (void)arg;
+    static int waits;
+    if (mole_flash_calm_ms() < 500 && waits++ < 25 && esp_timer_start_once(s_guard_timer, 200000) == ESP_OK) return;
+    guard_eval();
+}
 
 void self_update_welcomed(void)
 {
@@ -492,12 +500,14 @@ void self_update_boot(void)
     bool armed = arm_take(running);
     upd_boot_t rule = upd_boot_rule(pending, armed);
     lock(); s_rule = rule; unlock();
-    if (rule == UPD_BOOT_AWAIT_WELCOME) {
-        ESP_LOGI(TAG, "new image: kept once the relay welcomes it (else rolled back in %us)", (unsigned)(UPD_WELCOME_WINDOW_US / 1000000));
+    if (rule != UPD_BOOT_NOTHING) {
+        const int64_t window = rule == UPD_BOOT_AWAIT_WELCOME ? UPD_WELCOME_WINDOW_US : UPD_SETTLE_US;
+        if (rule == UPD_BOOT_AWAIT_WELCOME) ESP_LOGI(TAG, "new image: kept once the relay welcomes it (else rolled back in %us)", (unsigned)(window / 1000000));
+        else ESP_LOGI(TAG, "new image: kept once it has run %us (a reset before that rolls it back)", (unsigned)(window / 1000000));
         const esp_timer_create_args_t a = { .callback = guard_timer, .name = "upd_guard" };
-        int64_t left = UPD_WELCOME_WINDOW_US - esp_timer_get_time();
+        int64_t left = window - esp_timer_get_time();
         if (esp_timer_create(&a, &s_guard_timer) == ESP_OK)
             esp_timer_start_once(s_guard_timer, left > 0 ? (uint64_t)left : 1);
     }
-    guard_eval();   /* not armed: valid now (HTTP is up); armed + already welcomed: valid now */
+    guard_eval();   /* armed + already welcomed: valid now; else the timer (or the welcome) decides */
 }

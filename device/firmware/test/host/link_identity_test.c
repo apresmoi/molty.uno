@@ -20,12 +20,12 @@ int main(void)
     assert(cJSON_GetObjectItem(hello,"key") && cJSON_GetObjectItem(hello,"link_code"));
     assert(!strcmp(cJSON_GetObjectItem(hello,"board")->valuestring,"test-board"));
     char *caps=cJSON_PrintUnformatted(cJSON_GetObjectItem(hello,"caps"));
-    assert(!strcmp(caps,"[\"fluid\",\"say\",\"say_cues\",\"say_marks\",\"listen\",\"listen_stop\",\"listen_window\",\"ack\",\"shake_talk\",\"trace\",\"hints\",\"resume\",\"say_cancel\",\"gestures\",\"dnd\",\"show\",\"mood\",\"act\",\"creature\",\"working\",\"progress\",\"react\",\"ask\",\"update\",\"pkg\",\"scene\",\"creatures\",\"log_upload\"]")); free(caps);
+    assert(!strcmp(caps,"[\"fluid\",\"say\",\"say_cues\",\"say_marks\",\"listen\",\"listen_stop\",\"listen_window\",\"ack\",\"shake_talk\",\"trace\",\"hints\",\"resume\",\"say_cancel\",\"gestures\",\"dnd\",\"show\",\"mood\",\"act\",\"creature\",\"working\",\"progress\",\"react\",\"ask\",\"ask_title\",\"update\",\"pkg\",\"scene\",\"creatures\",\"log_upload\"]")); free(caps);
     cJSON_Delete(hello);
     /* no speaker / mic (the 1.28): no say / listen, so the relay refuses those jobs */
     sdk_caps &= ~(MOLTY_CAP_SPEAKER | MOLTY_CAP_MIC);
     hello=link_identity_hello(); caps=cJSON_PrintUnformatted(cJSON_GetObjectItem(hello,"caps"));
-    assert(!strcmp(caps,"[\"fluid\",\"gestures\",\"dnd\",\"show\",\"mood\",\"act\",\"creature\",\"working\",\"progress\",\"react\",\"ask\",\"update\",\"pkg\",\"scene\",\"creatures\",\"log_upload\"]")); free(caps); cJSON_Delete(hello);
+    assert(!strcmp(caps,"[\"fluid\",\"gestures\",\"dnd\",\"show\",\"mood\",\"act\",\"creature\",\"working\",\"progress\",\"react\",\"ask\",\"ask_title\",\"update\",\"pkg\",\"scene\",\"creatures\",\"log_upload\"]")); free(caps); cJSON_Delete(hello);
     /* no touch: nothing could answer a question, so no ask, no update and no pkg (nobody could
      * confirm it on screen; the relay gates on these caps) */
     sdk_caps &= ~MOLTY_CAP_TOUCH;

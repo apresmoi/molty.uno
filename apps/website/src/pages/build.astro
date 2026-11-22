@@ -1,7 +1,8 @@
 ---
 import ContentLayout from "../layouts/ContentLayout.astro";
 import { BuildPage } from "../components/BuildPage";
-import { FluidField } from "../components/FluidField";
+import { PageWater } from "../components/PageWater";
+import { MoltyWord } from "../components/MoltyWord";
 import { WaitlistForm } from "../components/WaitlistForm";
 import { title, description } from "../features/build/content";
 import { COMMUNITY_BOARDS } from "../features/build/repoBoards";
@@ -9,7 +10,8 @@ import { COMMUNITY_BOARDS } from "../features/build/repoBoards";
 
 <ContentLayout title={title} description={description} path="/build/" fluid>
   <BuildPage boards={COMMUNITY_BOARDS}>
-    <FluidField slot="fluid" client:load />
+    <PageWater slot="fluid" client:load />
+    <MoltyWord slot="word" client:load word="build" />
     <WaitlistForm slot="waitlist" client:load source="build" returnPath="/build/" />
   </BuildPage>
 </ContentLayout>

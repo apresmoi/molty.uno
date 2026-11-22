@@ -13,6 +13,10 @@ void console_store_init(void);
 /* GET /, POST /dev/html, POST /dev/reset_html. */
 esp_err_t console_http_register(httpd_handle_t server);
 
+/* SPIFFS for /api/diag ("fs"): total, used and the largest files (name, bytes), at most max of them. */
+#include "cJSON.h"
+void console_store_fs_json(cJSON *into, int max);   /* max <= 0: total + used only (no flash access) */
+
 /* For /api/info. */
 const char *console_spiffs_state(void);
 bool console_html_recovered(void);

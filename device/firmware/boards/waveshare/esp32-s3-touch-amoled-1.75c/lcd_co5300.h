@@ -13,6 +13,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
+#include "molty_board.h"
 
 esp_err_t lcd_co5300_init(void);
 uint16_t *lcd_co5300_framebuffer(void);
@@ -23,3 +24,16 @@ esp_err_t lcd_co5300_flush(void);
 esp_err_t lcd_co5300_flush_rows(int y0, int y1);
 /** w×h packed px (wire order) at (x, y), x and w even; returns once px may be reused. */
 esp_err_t lcd_co5300_blit(int x, int y, int w, int h, const uint16_t *px);
+/** As lcd_co5300_blit, but it returns once the pixels are queued (px, when the DMA reads it as is, read until the next
+ *  blit or lcd_co5300_blit_wait, which wait for it): the caller draws the next window meanwhile. */
+esp_err_t lcd_co5300_blit_async(int x, int y, int w, int h, const uint16_t *px);
+esp_err_t lcd_co5300_blit_wait(void);
+/** us in the async blits since the last call, added into out[3]: the mirror's copy, waiting for the panel, the commands and queueing. */
+void lcd_co5300_blit_prof(uint32_t *out);
+/** Off: an async blit on whole row pairs skips the framebuffer mirror (only an odd edge row's pair is sent from it, and
+ *  /api/framebuffer draws the frame afresh): the caller repaints in full before it sends odd edges again. */
+void lcd_co5300_mirror(bool on);
+/** The panel's tearing-effect pulses on LCD_TE (molty_display_te). */
+void lcd_co5300_te(molty_te_t *out, bool window);
+/** Until the pulses' total passes after (true), timeout_ms at most, or no TE line (false) (molty_display_te_wait). */
+bool lcd_co5300_te_wait(uint32_t after, int timeout_ms);

@@ -1,0 +1,1 @@
+export { MoltyWord } from "./MoltyWord";

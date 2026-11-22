@@ -144,6 +144,10 @@ static void test_parse(void) {
     CHECK(IS(parse_with("{\"k\": \"ring\"", "{\"k\": \"ring\", \"eval\": 1"), "item: unknown key"), "an unknown item key");
     CHECK(IS(parse_with("{\"k\": \"ring\"", "{\"k\": \"ring\", \"rot\": 1"), "item: unknown key"), "a key of another kind");
     CHECK(IS(parse_with("\"kind\": \"mask\"", "\"kind\": \"svg\""), "asset: unknown kind"), "an unknown asset kind");
+    /* a highlight: group / when on a drawing, lights and a segment on a spot */
+    CHECK(!parse_with("{\"k\": \"ring\"", "{\"k\": \"ring\", \"group\": \"a\", \"when\": \"lit\", \"x\": 0.1"), "a ring in a group, shown when lit, off the centre");
+    CHECK(IS(parse_with("{\"k\": \"ring\"", "{\"k\": \"ring\", \"when\": \"later\""), "item: when is \"lit\""), "when is lit or nothing");
+    CHECK(IS(parse_with("{\"k\": \"line\"", "{\"k\": \"line\", \"lights\": \"a\""), "item: unknown key"), "only a spot lights");
     CHECK(parse_with("\"dur\": 6", "\"dur\": 6, \"script\": \"x\""), "an unknown layout key");
     /* assets */
     CHECK(IS(parse_with("\"img\": \"halves\"", "\"img\": \"nothing\""), "item: unresolved asset"), "an unresolved asset");
@@ -277,6 +281,24 @@ static void test_store(void) {
     CHECK(IS(pkg_store_room(ROOT, "big", PKG_QUOTA - (uint32_t)s_fix_len + 1), "no_space"), "over the quota");
     CHECK(!pkg_store_room(ROOT, "big", PKG_QUOTA - (uint32_t)s_fix_len), "up to the quota");
     CHECK(!pkg_store_room(ROOT, "shapes", PKG_QUOTA), "a reinstall replaces its own bytes");
+
+    /* an update's room counts its own file as free; stray files (a download or an index write cut short, a package
+     * whose entry went) are swept, what the index lists stays */
+    CHECK(pkg_store_installed_size(ROOT, "shapes") == s_fix_len && pkg_store_installed_size(ROOT, "nope") == 0, "the installed size an update frees");
+    {
+        char sp[256];
+        const char *const strays[] = { "deadbeef.json", "download.part", "index.tmp" };
+        for (int q = 0; q < 3; q++) { snprintf(sp, sizeof(sp), "%s/%s", ROOT, strays[q]); FILE *fs = fopen(sp, "wb"); if (fs) { fputs("x", fs); fclose(fs); } }
+        const int gone = pkg_store_sweep(ROOT);
+        int left = 0;
+        for (int q = 0; q < 3; q++) { snprintf(sp, sizeof(sp), "%s/%s", ROOT, strays[q]); left += access(sp, F_OK) == 0; }
+        CHECK(gone == 3 && left == 0 && access(p, F_OK) == 0 && pkg_store_find(ROOT, "shapes", NULL), "swept %d strays (%d left), the package kept", gone, left);
+        CHECK(pkg_store_sweep(ROOT) == 0, "nothing more to sweep");
+        char lp[256], ln[121]; memset(ln, 'a', 120); ln[120] = 0;
+        snprintf(lp, sizeof(lp), "%s/%s", ROOT, ln); FILE *fl = fopen(lp, "wb"); if (fl) fclose(fl);
+        CHECK(pkg_store_sweep(ROOT) == 0 && access(lp, F_OK) == 0, "a name too long for the path is left alone, not cut to another");
+        remove(lp);
+    }
 
     /* a new version replaces the old one and its file */
     char *v2 = strdup(s_fix); char *at = strstr(v2, "\"1.0.0\""); memcpy(at, "\"1.0.1\"", 7);

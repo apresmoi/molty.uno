@@ -10,7 +10,8 @@ interface Props {
   description: string;
   path: string;
   image?: string;
-  /** The page runs the live fluid (a FluidField): its intro starts hidden before paint. */
+  /** The page has the water and its screens (PageWater, MoltyWord, MoltyScreen): its intro starts
+   *  hidden before paint. */
   fluid?: boolean;
 }
 
@@ -32,11 +33,11 @@ const ogImage = `${SITE_URL}${image}`;
   })();
 </script>
 <script is:inline define:vars={{ fluid }}>
-  // The intro's start state, before the first paint (a page with the live fluid): the fluid
-  // will draw the headings, the Moltys will emerge in their slots and the devices turn in, so
-  // none of them shows settled first (the CSS keys on these; FluidField moves them on). Without
-  // JS they are never set and the page shows at rest; if no script takes over (a bundle that
-  // never loads), it shows at rest after 8 s ("static").
+  // The intro's start state, before the first paint (a page with the water and its screens): the
+  // headings' words will be drawn, the devices turn in and their screens come on, so none of
+  // them shows settled first (the CSS keys on these; PageWater and the first screen move them
+  // on). Without JS they are never set and the page shows at rest; if no script takes over (a
+  // bundle that never loads), it shows at rest after 8 s ("static").
   if (fluid) {
     const root = document.documentElement;
     root.dataset.fluid = "pending";

@@ -16,8 +16,8 @@ device/creatures/
 │   ├── stage.js      3D viewport + 412×412 device preview
 │   ├── catalog.js    viewer roster
 │   └── main.js       viewer UI
-├── molty/            the 29 exported .molty files (the website offers them for download)
-├── catalog/          their names + fluid thumbnails for the website (apps/website/scripts/thumbs.mjs)
+├── molty/            the 29 exported .molty files
+├── catalog/          their names + fluid thumbnails (made for the website's old gallery; nothing reads them now)
 ├── tools/            molty-export.mjs (spec → .molty), molty-behaviours.mjs (hook stand-ins),
 │                     act-golden.mjs (actions.js → the firmware's act_golden.txt)
 ├── index.html        creature viewer: moods, pokes, autopilot, device preview, compare A|B

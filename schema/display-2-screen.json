@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/apresmoi/molty.uno/main/schema/display-2-screen.json",
+  "title": "Molty display v2: one screen",
+  "description": "A screen kept in its own file, screens/<name>.yaml, and listed by path in display.yaml. Guide: docs/DISPLAY.md.",
+  "$ref": "display-2.json#/$defs/screen"
+}

@@ -30,6 +30,7 @@ extern "C" {
 #endif
 
 #define CP_FILE_MAX     (40 * 1024)
+#define CP_RIG_FILE_MAX (256 * 1024)   /* a creature with a rig: its clips (docs/CREATURES.md section 12)   */
 #define CP_BONES_MAX    96
 #define CP_PARTS_MAX    96
 #define CP_PALETTE_MAX  32
@@ -112,6 +113,8 @@ typedef struct cp cp_t;
 cp_t *cp_create(const char *json, size_t len, const char **err);
 void  cp_destroy(cp_t *c);
 const char *cp_id(const cp_t *c);
+/** The package carries a rig: creature_clip.c plays it, these layers are only its declarations. */
+bool  cp_rigged(const cp_t *c);
 const char *cp_name(const cp_t *c);
 const char *cp_version(const cp_t *c);
 /** What an agent is told about this creature, as JSON: {id, name, about?, gestures, moods}. about is the

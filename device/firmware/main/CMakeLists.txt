@@ -78,16 +78,19 @@ idf_component_register(
         "net/network.c"
         "net/wifi_retry.c"       # reconnect after a Wi-Fi drop (host-tested)
         "net/http.c"
+        "net/recv_bound.c"       # a request body read that gives up on a silent sender (host-tested)
         "net/console_store.c"
         "net/improv_proto.c"     # Wi-Fi setup over a serial console (boards with MOLTY_CAP_SERIAL)
         "net/improv_serial.c"
         # fluid: the fluid-of-characters creature (+ speed reader, 5x7 font)
         "fluid/mole_fluid.c"
         "fluid/fluid_director.c"  # what is shown when: states, moods, idle life, status
-        "fluid/fluid_ask.c"       # a question's sectors + label layout (link ask)
+        "fluid/fluid_ask.c"       # a question: its layout, its answer for a tap, its phases (link ask)
+        "fluid/fluid_askview.c"   # ... drawn over the screen
         "fluid/fluid_sim.c"
         "fluid/fluid_target.c"
         "fluid/fluid_draw.c"
+        "fluid/fluid_fine.c"      # a scene's fine dust in high definition
         "fluid/glyph_rsvp.c"
         "fluid/glyph_font.c"
         # creature: registry + the .molty cute-kit runtime
@@ -99,10 +102,14 @@ idf_component_register(
         "creature/creature_player.c"   # a creature package's channels, layers, tints, ambient (creature-player.js)
         "creature/creature_body.c"     # its bones + v2 parts, rasterised the lab's way into the fluid
         "creature/creature_pkg.c"      # engine + player + body: one frame
+        "creature/creature_clip.c"     # a rigged creature's baked clips and routes (clip-player.js)
+        "creature/creature_dots.c"     # ... drawn straight on the braille dots (clip-dots.js)
+        "creature/creature_ring.c"     # ... the listen / question / progress rings over them, as dust
         # link: agent link to the relay (WSS, pairing, audio)
         "link/link_protocol.c"
         "link/link_identity.c"
         "link/link_client.c"
+        "link/link_connect.c"    # TLS handshakes on a task that holds no mutex (wraps esp_transport_connect)
         "link/link_cmd.c"
         "link/link_audio.c"
         "link/link_uplink.c"     # the listen's uplink ring: resend in order (plain C, host-tested)
@@ -135,6 +142,8 @@ idf_component_register(
         "diag/log_upload.c"     # activity log: job tags, upload filter + frames, persist policy (host-tested)
         "diag/heap_guard.c"     # internal-RAM self-protection: warn + shed (host-tested)
         "diag/sta_watch.c"      # the station state the diag samples rssi by (host-tested)
+        "diag/loop_watch.c"     # abort on a wedged event loop / esp_timer task (host-tested)
+        "diag/flash_gate.c"     # the flash's quiet window: writes that can wait hold while the screen animates (host-tested)
     INCLUDE_DIRS
         "."
         "net"
@@ -185,6 +194,20 @@ idf_component_register(
         ${CREATURE_FILES}       # the built-in creature packages (packages/<id>/<id>.json)
 )
 
+# link/link_connect.c: every esp_transport_connect runs on a task that holds no mutex, so a
+# priority inherited during the TLS handshake cannot freeze the fluid for the whole handshake.
+target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=esp_transport_connect" "-u __wrap_esp_transport_connect")
+# diag/mole_diag.c: every write, erase and read of a flash partition is counted and logged (flash_gate.h), whoever makes it
+# (NVS, SPIFFS, OTA, the IDF's own Wi-Fi and PHY records).
+target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=esp_partition_write" "-Wl,--wrap=esp_partition_write_raw"
+                      "-Wl,--wrap=esp_partition_erase_range" "-Wl,--wrap=esp_partition_read")
+
+# A debug build's ring without a listen (POST /api/diag/ring?ms=): make firmware BOARD=... DIAG_RING=1
+# (tools/scripts/firmware-build.sh passes -DMOLTY_DIAG_RING=ON, or OFF for a plain build)
+if(MOLTY_DIAG_RING)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE MOLTY_DIAG_RING=1)
+endif()
+
 # ── Console SPIFFS image ─────────────────────────────────────────────────────
 # Ships device/console/dist/index.html in the "spiffs" partition (partitions.csv), so a
 # cable flash always lands the current console. net/console_store.c loads
@@ -225,9 +248,14 @@ set_source_files_properties(
     "fluid/fluid_sim.c"
     "fluid/fluid_target.c"
     "fluid/fluid_draw.c"
+    "fluid/fluid_fine.c"
+    "fluid/fluid_askview.c"
     "fluid/mole_fluid.c"
     "creature/cute_rig.c"
     "creature/creature_body.c"
+    "creature/creature_clip.c"
+    "creature/creature_dots.c"
+    "creature/creature_ring.c"
     "scene/scene_player.c"
     ${MOLTY_BOARD_FAST_SRCS}
     PROPERTIES COMPILE_OPTIONS "-O2;-fno-math-errno"

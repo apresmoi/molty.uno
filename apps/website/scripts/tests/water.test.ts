@@ -1,0 +1,278 @@
+// The page's water and words against the firmware they follow. The water is the firmware's own
+// (the module: device/firmware/web/web_field.c runs fluid_sim.c and fluid_draw.c on a wide
+// grid); what is the website's is where the page's dust is, and its numbers are the firmware's,
+// pinned here: a change there fails this until the page follows. One water: a wave crosses a
+// screen's rim as one front, and a heading rides it. The words are a scenes package the
+// firmware's renderer must take, each within what it draws in high definition.
+// Run: pnpm test (node --test; Node 22 strips the types).
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { CARRY, HEADING_GAIN } from "../../src/config/water.mjs";
+import { WORDS, wordsPackage } from "../../src/config/words.mjs";
+import { TILES, readTile, renderTile } from "../dust-tile.mjs";
+import { MoltyCore, instantiate } from "../../src/services/molty-screen/core.ts";
+import { CELL, MoltyField, TILE, WATER, type FieldExports } from "../../src/services/molty-screen/field.ts";
+
+const repo = (path: string) => readFileSync(fileURLToPath(new URL(`../../../../${path}`, import.meta.url)));
+const define = (source: string, name: string) => {
+  const m = new RegExp(`#define\\s+${name}\\s+\\(?([-0-9.]+)f?\\b`).exec(source);
+  assert.ok(m, `${name} is defined`);
+  return Number(m[1]);
+};
+const module = await WebAssembly.compile(repo("device/firmware/web/built/molty.wasm"));
+const field_c = repo("device/firmware/web/web_field.c").toString();
+
+test("the page's dust is the motes of a creature's world (creature_dots.c)", () => {
+  const c = repo("device/firmware/main/creature/creature_dots.c").toString();
+  // where a mote is, how bright, which of its two colours
+  assert.ok(c.includes(`seed >= ${define(field_c, "WF_MOTE_FAR")} + ${define(field_c, "WF_MOTE_NEAR")} * band`), "a dot in fifty, more toward the horizon");
+  assert.ok(c.includes("(0.3f + 0.55f * tw) * (0.55f + 0.45f * d->mote_band[m])") && field_c.includes("al = 0.3f + 0.55f * tw") && field_c.includes("al * 0.55f"));
+  assert.ok(c.includes(`kv > ${define(field_c, "WF_MOTE_CUT")}f ? pack(cc3) : 0`), "a mote this faint does not show");
+  assert.ok(c.includes("tw > 0.8f ? MOTE : DIM") && field_c.includes("tw > 0.8f ? WF_BRIGHT : WF_DIM"));
+  assert.ok(c.includes("DIM[3] = { 0x5c / 255.f, 0x56 / 255.f, 0x88 / 255.f }, MOTE[3] = { 0xb4 / 255.f, 0xac / 255.f, 0xec / 255.f }"));
+  assert.ok(field_c.includes("WF_DIM[3] = { 0x5c, 0x56, 0x88 }, WF_BRIGHT[3] = { 0xb4, 0xac, 0xec }"));
+  // its hash
+  const hash = "uint32_t h = (uint32_t)i * 374761393u + (uint32_t)j * 668265263u + (uint32_t)k * 2147483647u;\n    h = (h ^ (h >> 13)) * 1274126177u;\n    return h ^ (h >> 16);";
+  assert.ok(c.includes(hash) && field_c.includes(hash), "hash3u");
+});
+
+test("... its water and its drawer take the firmware's numbers", () => {
+  const sim = repo("device/firmware/main/fluid/fluid_sim.c").toString();
+  const mole = repo("device/firmware/main/fluid/mole_fluid.c").toString();
+  const draw = repo("device/firmware/main/fluid/fluid_draw.c").toString();
+  assert.match(sim, new RegExp(`p->c2 = ${WATER.c2}f;\\s+p->damp = ${WATER.damp}f; p->leak = ${WATER.leak}f;`));
+  // a 466 px panel's grid (fluid_grid_for_stage)
+  assert.match(sim, /lrintf\(52\.f \* \(float\)stage \/ FLUID_STAGE_REF\)/);
+  assert.equal(WATER.cells, Math.round((52 * WATER.panel) / define(repo("device/firmware/main/fluid/fluid_sim.h").toString(), "FLUID_STAGE_REF")));
+  assert.ok(mole.includes(`ripple(x, y, ${WATER.tap}f, ${WATER.tapRadius}f);`), "a finger's tap");
+  assert.equal(define(field_c, "WF_REFR"), define(draw, "DOT_REFR"));
+  assert.ok(mole.includes("#define FLUID_STEP         (1.f / 60.f)") && field_c.includes("#define WF_STEP    (1.f / 60.f)"));
+  assert.deepEqual([CELL.w, CELL.h], [define(field_c, "WF_CW"), define(field_c, "WF_CH")]);
+  assert.equal(TILE, 104 * define(field_c, "WF_TILE_M"));
+});
+
+test("the dust tiles are pictures of the field at rest (node scripts/dust-tile.mjs)", async () => {
+  for (const tile of TILES)
+    assert.ok((await readTile(tile)).equals(await renderTile(tile)), `src/assets/dust/${tile.kind}-${tile.theme}.png is stale`);
+});
+
+// ---------------------------------------------------------------- one water
+
+/** The landing at 1280 x 800: its reference screen shows 352 px, a tile 784. Places in CSS px. */
+const HERO = 352;
+const K = TILE / (Math.round((HERO * TILE) / WATER.panel / 4) * 4);
+/** A wave's speed there, CSS px a step (services/page-water does the same sum). */
+const SPEED = (Math.sqrt(WATER.c2) * (WATER.panel / K)) / WATER.cells;
+const openField = async (cols: number, rows: number) =>
+  MoltyField.open(await instantiate<FieldExports>(module), {
+    cols,
+    rows,
+    background: 0,
+    paper: false,
+    c2: (SPEED / (CELL.w / K)) ** 2,
+    ...CARRY,
+  })!;
+/** One frame of both, on one clock: the screen meets the page's water as it is (a heading's window `gain` times
+ *  over), then each takes the frame. */
+function frame(field: MoltyField, core: MoltyCore, box: { left: number; top: number; size: number; px: number }, gain = 1) {
+  core.coupled(field.sample(core.cells().slice(), box.left * K, box.top * K, (box.size / box.px) * K), gain);
+  core.frame(16667);
+  field.step(1 / 60);
+}
+/** The crests along a line of heights (a step apart): where, and how high, the outermost first. */
+function crests(line: Array<number | null>, step: number): Array<[number, number]> {
+  const found: Array<[number, number]> = [];
+  for (let q = line.length - 2; q > 0; q--) {
+    const [a, b, c] = [line[q - 1], line[q], line[q + 1]];
+    if (a != null && b != null && c != null && b > 0 && b >= a && b > c) found.push([q * step, b]);
+  }
+  return found;
+}
+
+for (const size of [HERO, 540])
+  test(`a wave crosses the rim of a ${size} px screen as one front`, async () => {
+    const field = await openField(212, 94);
+    // a screen whose own water is still but for what comes in (a scene up: no creature stirs it)
+    const core = await MoltyCore.create(module);
+    assert.ok(core.pack(Buffer.from(JSON.stringify(wordsPackage()))) && core.start(5, false, WATER.panel) && core.scene("talk", undefined, 600));
+    for (let i = 0; i < 240; i++) core.frame(16667);
+    const box = { left: 700, top: 240, size, px: WATER.panel };
+    const [cx, cy] = [box.left + size / 2, box.top + size / 2];
+    const W = core.gridW;
+    core.water((SPEED / (size / W)) ** 2, CARRY.leak, CARRY.damp);
+    core.couple(0.74, 0.86);
+    // a tap on the page, left of the screen: its ray through the screen's middle, every 2 px
+    const tap = [box.left - 110, cy] as const;
+    const ray = new Float32Array(2 * 420);
+    for (let q = 0; q < 420; q++) ray.set([tap[0] + q * 2, cy], q * 2);
+    const inGlass = (x: number) => Math.abs(x - cx) < 0.7 * (size / 2);
+    /** The screen's own water along the ray (its middle row: between two rows of cells). */
+    const inScreen = () => {
+      const h = core.height();
+      return Array.from({ length: 420 }, (_, q) => {
+        const x = ray[2 * q]!;
+        if (!inGlass(x)) return null;
+        const gx = ((x - box.left) / size) * W - 0.5,
+          i = Math.floor(gx),
+          row = (core.gridH / 2 - 1) * W;
+        return (((h[row + i]! + h[row + W + i]!) / 2) * (1 - (gx - i)) + ((h[row + i + 1]! + h[row + W + i + 1]!) / 2) * (gx - i)) / 1024;
+      });
+    };
+    // (what the scene's coming left in its water: the wave is what comes over that)
+    for (let f = 0; f < 90; f++) frame(field, core, box);
+    const calm = inScreen();
+    field.tap(tap[0] * K, tap[1] * K, WATER.tap, WATER.tapRadius * (WATER.panel / 2));
+    let seen = 0,
+      worst = 0,
+      sum = 0;
+    for (let f = 1; f <= 400; f++) {
+      frame(field, core, box);
+      const page = field.sample(ray, 0, 0, K);
+      const out = Array.from({ length: 420 }, (_, q) => (inGlass(ray[2 * q]!) ? page[2 * q]! : null));
+      const glass = inScreen().map((v, q) => (v == null ? null : v - calm[q]!));
+      // the page's front (its outermost crest a dot would move by), while it is well inside the glass
+      const [rp, ap] = crests(out, 2).find(([, a]) => a >= 0.06) ?? [0, 0];
+      if (!ap || !inGlass(tap[0] + rp + 12) || !inGlass(tap[0] + rp - 12)) continue;
+      // its height, from the trough behind it
+      const rise = (line: Array<number | null>, r: number, top: number) => top - Math.min(...line.slice(Math.max(0, r / 2 - 20), r / 2).map((v) => v ?? top));
+      const hp = rise(out, rp, ap);
+      if (hp < 0.15) continue; // (while it is a wave a dot moves by)
+      // ... and the screen's own water: its crest there (a screen shown larger than the page's reference has
+      // coarser cells: its crest is a little lower, wider and later)
+      const near = size === HERO ? 8 : 16;
+      const [rs, as] = crests(glass, 2)
+        .filter(([r]) => Math.abs(r - rp) <= near)
+        .reduce((best, c) => (c[1] > best[1] ? c : best), [1e9, 0] as [number, number]);
+      seen++;
+      assert.ok(Math.abs(rp - rs) <= near, `frame ${f}: the front is ${rp} px from the tap on the page, and the screen has no crest within ${near} px of there`);
+      worst = Math.max(worst, Math.abs(rp - rs));
+      sum += Math.abs(rp - rs);
+      const hs = rise(glass, rs, as);
+      // (the page's reference screen: the same height; one shown larger has coarser cells for the same wave, and
+      // its crest is lower and wider the farther it has come: half the page's at the far rim)
+      assert.ok(size === HERO ? Math.abs(hs - hp) < 0.2 * hp : hs > 0.4 * hp && hs < 1.2 * hp, `frame ${f}: the crest stands ${hp.toFixed(3)} over its trough on the page and ${hs.toFixed(3)} in the screen`);
+    }
+    assert.ok(seen > 60, `the front was followed through the glass for ${seen} frames`);
+    console.log(`      ${size} px: the front in the screen is ${(sum / seen).toFixed(1)} px from the page's on average over ${seen} frames, ${worst} px at most`);
+    field.destroy();
+  });
+
+test("a tap on the glass leaves through the rim and does not come back", async () => {
+  const field = await openField(212, 94);
+  const core = await MoltyCore.create(module);
+  assert.ok(core.creature("cat", repo("packages/cat/cat.json")) && core.start(5, false, WATER.panel));
+  for (let i = 0; i < 120; i++) core.frame(16667);
+  const box = { left: 700, top: 240, size: HERO, px: WATER.panel };
+  core.water(WATER.c2, CARRY.leak, CARRY.damp);
+  core.couple(0.74, 0.86);
+  // the finger at the glass's middle, and the same bump on the page
+  core.touch(true, WATER.panel / 2, WATER.panel / 2);
+  field.tap((box.left + HERO / 2) * K, (box.top + HERO / 2) * K, WATER.tap, WATER.tapRadius * (HERO / 2) * K);
+  const energy = () => core.height().reduce((s, v) => s + (v / 1024) ** 2, 0);
+  let peak = 0;
+  for (let f = 1; f <= 300; f++) {
+    frame(field, core, box);
+    if (f === 2) core.touch(false);
+    if (f < 60) peak = Math.max(peak, energy());
+  }
+  // 5 s on, the ring is long past the rim (1.5 s away): what is left in the glass is a few percent
+  assert.ok(energy() < 0.05 * peak, `the glass keeps ${((energy() / peak) * 100).toFixed(1)}% of the tap's water`);
+  field.destroy();
+});
+
+// ---------------------------------------------------------------- the headings ride it
+
+/** A heading's window as the page mounts it (MoltyWord): on the haze, all its water the page's. */
+async function heading(layout: string, px: number) {
+  const core = await MoltyCore.create(module);
+  assert.ok(core.pack(Buffer.from(JSON.stringify(wordsPackage()))) && core.start(3, false, px));
+  core.haze();
+  assert.ok(core.scene(layout, undefined, 600));
+  core.water((SPEED / (px / K / core.gridW)) ** 2, CARRY.leak, CARRY.damp);
+  core.couple(0, 0);
+  return core;
+}
+/** The word's own lines: the pixels its colour is strongest in, while the water is flat; and
+ *  how many of them still are its lines' (not the dimmer dots a loosened line breaks into). */
+const light = (px: Uint8ClampedArray, i: number) => Math.max(px[i]!, px[i + 1]!, px[i + 2]!);
+function lines(core: MoltyCore): { at: number[]; full: number } {
+  const px = core.pixels();
+  let full = 0;
+  for (let i = 0; i < px.length; i += 4) full = Math.max(full, light(px, i));
+  const at: number[] = [];
+  for (let i = 0; i < px.length; i += 4) if (light(px, i) >= 0.7 * full) at.push(i);
+  return { at, full };
+}
+const kept = (core: MoltyCore, { at, full }: { at: number[]; full: number }) => {
+  const px = core.pixels();
+  return at.filter((i) => light(px, i) >= 0.5 * full).length / at.length;
+};
+
+test("every heading rides the page's water: a wave loosens its lines as the front arrives, and they sharpen back", async () => {
+  const PX = 512; // the window's side here (the page gives it as many as its dust has across it)
+  const size = PX / K;
+  for (const [layout] of WORDS) {
+    const field = await openField(212, 94);
+    const core = await heading(layout, PX);
+    const box = { left: 500, top: 200, size, px: PX };
+    for (let f = 0; f < 240; f++) frame(field, core, box, HEADING_GAIN);
+    const at = lines(core);
+    assert.ok(at.at.length > 200 && kept(core, at) === 1, `${layout}: its lines stand on flat water (${at.at.length} px)`);
+    // a tap beside it, left of its window: the front reaches its first line after their distance / the speed
+    const tap = [box.left - 0.3 * size, box.top + size / 2] as const;
+    field.tap(tap[0] * K, tap[1] * K, WATER.tap, WATER.tapRadius * (WATER.panel / 2));
+    const nearest = Math.min(...at.at.map((i) => Math.hypot(box.left + (((i / 4) % PX) / PX) * size - tap[0], box.top + (Math.floor(i / 4 / PX) / PX) * size - tap[1])));
+    const arrive = nearest / SPEED;
+    let before = 1,
+      loosest = 1;
+    for (let f = 1; f <= arrive + 240; f++) {
+      frame(field, core, box, HEADING_GAIN);
+      const k = kept(core, at);
+      if (f < arrive - 30) before = Math.min(before, k);
+      else loosest = Math.min(loosest, k);
+    }
+    assert.ok(before > 0.99, `${layout}: nothing moves before the front arrives (${(before * 100).toFixed(0)}% of its lines stand)`);
+    assert.ok(loosest < 0.97, `${layout}: the front loosens its lines (${(loosest * 100).toFixed(1)}% stand at the least)`);
+    assert.ok(loosest > 0.3, `${layout}: it stays a word (${(loosest * 100).toFixed(0)}% of its lines stand at the least)`);
+    for (let f = 0; f < 900; f++) frame(field, core, box, HEADING_GAIN);
+    assert.ok(kept(core, at) > 0.99, `${layout}: its lines are back (${(kept(core, at) * 100).toFixed(1)}%)`);
+    field.destroy();
+  }
+});
+
+test("a tap on a heading loosens it most", async () => {
+  const PX = 512,
+    size = PX / K;
+  const loosest = async (dx: number) => {
+    const field = await openField(212, 94);
+    const core = await heading("molty-uno", PX);
+    const box = { left: 500, top: 200, size, px: PX };
+    for (let f = 0; f < 240; f++) frame(field, core, box, HEADING_GAIN);
+    const at = lines(core);
+    field.tap((box.left + size / 2 + dx) * K, (box.top + size / 2) * K, WATER.tap, WATER.tapRadius * (WATER.panel / 2));
+    let least = 1;
+    for (let f = 0; f < 400; f++) {
+      frame(field, core, box, HEADING_GAIN);
+      least = Math.min(least, kept(core, at));
+    }
+    field.destroy();
+    return least;
+  };
+  const [on, beside, far] = [await loosest(0), await loosest(-0.6 * size), await loosest(-1.5 * size)];
+  assert.ok(on < beside && beside <= far, `on it ${(on * 100).toFixed(0)}% of its lines stand, beside it ${(beside * 100).toFixed(0)}%, far from it ${(far * 100).toFixed(0)}%`);
+});
+
+test("the words are a package the renderer takes, each drawn in high definition", async () => {
+  const json = JSON.stringify(wordsPackage());
+  assert.equal(repo("apps/website/src/assets/molty/words.json").toString().trim(), json, "words.json is stale: node scripts/words-package.mjs");
+  const core = await MoltyCore.create(module);
+  assert.ok(core.pack(Buffer.from(json)));
+  for (const [name] of WORDS) {
+    const layout = wordsPackage().layouts[name]!;
+    // a line is a shape a segment; the renderer draws at most 256 in high definition
+    const shapes = layout.items.reduce((n: number, it: { pts?: unknown[] }) => n + (it.pts ? it.pts.length - 1 : 1), 0);
+    assert.ok(shapes <= 256, `${name}: ${shapes} shapes`);
+  }
+});

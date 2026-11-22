@@ -141,9 +141,10 @@ bool link_ack_parse(const char *name, link_ack_t *mode);
 bool link_ack_arg(const cJSON *args, link_ack_t setting, link_ack_t *mode);
 /* What a listen that ended acknowledges: the listen's mode when it heard speech — reason
  * "turn_end" (the relay's end of turn), "silence" (the device VAD's end of speech, with
- * speech measured > 0 if measured), or "max" (window full) with ≥ LINK_ACK_MIN_SPEECH_MS of
- * measured speech — and nothing else owns the screen (an explicit mood, an ask, an update
- * screen or a pairing arrived during the listen: screen_taken). no_speech / error / a
+ * speech measured > 0 if measured), or "max" (window full) / "tap" (a tap, a held button's
+ * release) with ≥ LINK_ACK_MIN_SPEECH_MS of measured speech (a press that heard nobody gets
+ * no chirp) — and nothing else owns the screen (an explicit mood, an ask, an update screen or
+ * a pairing arrived during the listen: screen_taken). no_speech / error / a
  * cancelled listen ("error" too) never ack. A chirp without a speaker is thinking only. */
 #define LINK_ACK_MIN_SPEECH_MS 160u
 link_ack_t link_ack_decide(link_ack_t mode, const char *reason, bool speech_known, uint32_t speech_ms,
@@ -173,6 +174,9 @@ cJSON *link_evt_tap_frame(double x, double y);
 /* {"t":"evt","name":"creature","data":<info>}: the creature on screen as the agent is told
  * (mole_fluid_creature_info's JSON object), on each welcome and each change. NULL: not an object. */
 cJSON *link_evt_creature_frame(const char *info);
+/* evt `scene`: the scene on screen changed on the device itself. data {why: "open" | "back" | "end", pkg?, layout?
+ * (what is up now; neither: nothing), spot? (the tapped spot that opened it)} */
+cJSON *link_evt_scene_frame(const char *pkg, const char *layout, const char *why, const char *spot);
 cJSON *link_evt_button_frame(bool accept);
 /* {"t":"evt","name":"dnd","data":{"on":bool}}: do not disturb (power.h), after each welcome and each change. */
 cJSON *link_evt_dnd_frame(bool on);
@@ -187,19 +191,23 @@ bool link_color_parse(const char *s, uint32_t *rgb);
 /* An optional colour field (listen's "ring_color"): absent → *rgb = -1 and true; a
  * "#rrggbb" string → its value; any other value (wrong type, bad hex, null) → false. */
 bool link_color_arg(const cJSON *args, const char *key, int32_t *rgb);
-/* ask cmd args {job, options, colors?, timeout_ms}: job a stream-sized id (1..128 chars);
- * options 1..LINK_ASK_MAX strings, each 1..LINK_ASK_LABEL_MAX chars of printable ASCII
+/* ask cmd args {job, options, colors?, title?, timeout_ms}: job a stream-sized id (1..128 chars);
+ * options 1..LINK_ASK_MAX strings, each 1..link_ask_label_max(n) chars of printable ASCII
  * (0x20..0x7E), not all spaces, no two equal ignoring case; timeout_ms an integer
  * 1000..120000. All required. Labels are copied verbatim (the answer echoes them).
  * colors (optional; the relay resolves names): one "#rrggbb" per option, in order →
  * colors[i] = 0xRRGGBB; absent → every colors[i] = -1 (the screen's default by index);
- * present but not an array of exactly n valid hex strings → false. */
+ * present but not an array of exactly n valid hex strings → false. title (optional): the
+ * question shown over the answers, 1..LINK_ASK_TITLE_MAX printable ASCII chars; absent → "". */
 #define LINK_ASK_MAX        5
-#define LINK_ASK_LABEL_MAX  8
+#define LINK_ASK_LABEL_MAX  14           /* 1..2 answers; 10 for 3, 8 for 4..5 (link_ask_label_max) */
+#define LINK_ASK_TITLE_MAX  40
 #define LINK_ASK_TIMEOUT_MIN 1000
 #define LINK_ASK_TIMEOUT_MAX 120000
+/* The longest label n answers may have (the screen fits them: fluid_ask_label_max agrees; the relay checks the same). */
+int  link_ask_label_max(int n);
 bool link_ask_args(const cJSON *args, char job[LINK_STREAM_MAX], char labels[LINK_ASK_MAX][LINK_ASK_LABEL_MAX + 1],
-                   int32_t colors[LINK_ASK_MAX], int *n, unsigned *timeout_ms);
+                   int32_t colors[LINK_ASK_MAX], int *n, unsigned *timeout_ms, char title[LINK_ASK_TITLE_MAX + 1]);
 /* {"t":"evt","name":"answer","data":{...}}: index ≥ 0 → {job, index, label} (a tap);
  * index < 0 → {job, index:null, reason} ("timeout" | "cancelled"). */
 cJSON *link_evt_answer_frame(const char *job, int index, const char *label, const char *reason);

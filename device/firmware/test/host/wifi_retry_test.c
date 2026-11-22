@@ -27,10 +27,25 @@ int main(void)
     assert(wifi_retry_event(&r, WIFI_RETRY_EV_DISCONNECTED, false) == -1);
     assert(wifi_retry_event(&r, WIFI_RETRY_EV_GOT_IP, false) == -1);
     assert(wifi_retry_event(&r, WIFI_RETRY_EV_DISCONNECTED, false) == 1000);
+    /* a failed join (wrong password, an AP that refuses): its own drops are not retried, but the
+     * join's end is: back to the saved network on the back-off, which keeps growing */
+    wifi_retry_init(&r);
+    assert(wifi_retry_event(&r, WIFI_RETRY_EV_CONNECT, false) == -1);
+    assert(wifi_retry_event(&r, WIFI_RETRY_EV_DISCONNECTED, true) == -1);
+    assert(wifi_retry_event(&r, WIFI_RETRY_EV_JOIN_FAILED, true) == 1000);
+    assert(wifi_retry_event(&r, WIFI_RETRY_EV_DISCONNECTED, false) == 2000);
+    assert(wifi_retry_event(&r, WIFI_RETRY_EV_JOIN_FAILED, false) == 4000);
+    assert(wifi_retry_event(&r, WIFI_RETRY_EV_GOT_IP, false) == -1);
+    /* nothing saved (a fresh device, or after a forget): a failed join leaves it in setup */
+    wifi_retry_init(&r);
+    assert(wifi_retry_event(&r, WIFI_RETRY_EV_JOIN_FAILED, true) == -1);
+    assert(wifi_retry_event(&r, WIFI_RETRY_EV_GOT_IP, false) == -1);
+    assert(wifi_retry_event(&r, WIFI_RETRY_EV_FORGET, false) == -1);
+    assert(wifi_retry_event(&r, WIFI_RETRY_EV_JOIN_FAILED, false) == -1);
     /* first set_creds on a fresh device: the join's success (got IP) arms it */
     wifi_retry_init(&r);
     assert(wifi_retry_event(&r, WIFI_RETRY_EV_GOT_IP, true) == -1);
     assert(wifi_retry_event(&r, WIFI_RETRY_EV_DISCONNECTED, false) == 1000);
-    puts("WIFI RETRY PASS: a dropped station reconnects (1 s doubling to 30 s, forever), got-IP resets, never during a join, never after a forget");
+    puts("WIFI RETRY PASS: a dropped station reconnects (1 s doubling to 30 s, forever), got-IP resets, never during a join, never after a forget, a failed join falls back to the saved network");
     return 0;
 }

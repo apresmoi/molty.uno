@@ -1,0 +1,39 @@
+# yaml-language-server: $schema=../../../schema/display-2-screen.json
+about: The Moon passing in front of the Sun.
+duration: 6
+inputs:
+  path:
+    type: list
+    max: 14
+    about: "The Moon against the Sun in 14 steps, 2.6 hours either side of the peak, seen from the point of greatest eclipse when it has one. Scale: 0.5 over the Sun's angular radius."
+    of:
+      x: { type: number, min: -2, max: 2, about: "Offset on the sky from the still body, east to the left." }
+      y: { type: number, min: -2, max: 2, about: "Offset on the sky from the still body, north up." }
+      from: { type: seconds, sent_as: "on", about: "When this step shows: 0.3 + 5.4 i / 14 for step i." }
+      until: { type: seconds, sent_as: "off", about: "When the next step takes over (the last one: 6)." }
+    example:
+      - { x: 1.11, y: -0.84, from: 0.3, until: 0.69 }
+      - { x: 0.93, y: -0.72, from: 0.69, until: 1.07 }
+      - { x: 0.75, y: -0.6, from: 1.07, until: 1.46 }
+      - { x: 0.58, y: -0.48, from: 1.46, until: 1.84 }
+      - { x: 0.41, y: -0.35, from: 1.84, until: 2.23 }
+      - { x: 0.25, y: -0.21, from: 2.23, until: 2.61 }
+      - { x: 0.08, y: -0.07, from: 2.61, until: 3 }
+      - { x: -0.08, y: 0.07, from: 3, until: 3.39 }
+      - { x: -0.25, y: 0.22, from: 3.39, until: 3.77 }
+      - { x: -0.43, y: 0.37, from: 3.77, until: 4.16 }
+      - { x: -0.61, y: 0.53, from: 4.16, until: 4.54 }
+      - { x: -0.79, y: 0.69, from: 4.54, until: 4.93 }
+      - { x: -0.99, y: 0.85, from: 4.93, until: 5.31 }
+      - { x: -1.19, y: 1.02, from: 5.31, until: 6 }
+  moon_size:
+    type: distance
+    sent_as: moon_r
+    about: The Moon's radius, the Sun's being 0.5.
+    example: 0.457
+draw:
+  - globe: { radius: 0.5, map: sun, spin: 6 }
+  # draw before for: the built package keeps the order written here, and this is the order it has always had
+  - draw:
+      - dot: { at: { x: "{{ step.x }}", y: "{{ step.y }}" }, show: { from: "{{ step.from }}", until: "{{ step.until }}" }, radius: "{{ moon_size }}", color: erase }
+    for: step in path

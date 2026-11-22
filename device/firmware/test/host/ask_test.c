@@ -1,8 +1,8 @@
 /*
- * ask_test.c — host test for the question screen's geometry (main/fluid/fluid_ask.c):
- * the sector a tap lands in for n = 1..5 (dividers included), the reading order of the
- * options, and the label layout (every 8-letter label fits its sector at a readable size,
- * and a tap on a label picks that label).
+ * ask_test.c — host test for a question's layout, answers and phases (main/fluid/fluid_ask.c), against
+ * the approved design ("Rim arcs" for 1..3 answers, "Underlined rows" for 4..5): the whole title
+ * and every label at its limit (14 / 10 / 8 letters) shown in full, readable, inside the glass and apart; a tap on
+ * a label picks it, one on the question picks nothing; the screen's phases.
  *
  * Build + run: test/host/ask_build.sh
  */
@@ -10,155 +10,145 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 
 static int s_fail = 0, s_pass = 0;
 #define CHECK(cond, ...) do { if (cond) s_pass++; else { s_fail++; printf("FAIL %s:%d: ", __FILE__, __LINE__); printf(__VA_ARGS__); printf("\n"); } } while (0)
 
-#define DEG (3.14159265f / 180.f)
+static fluid_ask_q_t question(const char *title, const char *detail, const char *code, int n, const char *const *labels) {
+    fluid_ask_q_t q;
+    memset(&q, 0, sizeof(q));
+    snprintf(q.title, sizeof(q.title), "%s", title);
+    snprintf(q.detail, sizeof(q.detail), "%s", detail);
+    snprintf(q.code, sizeof(q.code), "%s", code);
+    q.n = n;
+    for (int i = 0; i < n; i++) { snprintf(q.label[i], sizeof(q.label[i]), "%s", labels[i]); q.rgb[i] = fluid_ask_color(-1, i); }
+    return q;
+}
+/* an item's box in glass units */
+static void box(const fluid_ask_item_t *it, float b[4]) {
+    const float hw = (it->len * 6 - 1) * it->px / 206.f / 2.f, hh = 3.5f * it->px / 206.f;
+    b[0] = it->x - hw; b[1] = it->x + hw; b[2] = it->y - hh; b[3] = it->y + hh;
+}
+static bool inside(const float b[4], float r) {
+    for (int c = 0; c < 4; c++) { const float x = b[c & 1], y = b[2 + (c >> 1)]; if (x * x + y * y > r * r) return false; }
+    return true;
+}
+static bool apart(const float a[4], const float b[4]) { return a[1] <= b[0] || b[1] <= a[0] || a[3] <= b[2] || b[3] <= a[2]; }
 
-/* a point at `deg` clockwise from 12 o'clock, r px from the centre (y down) */
-static float px(float deg, float r) { return sinf(deg * DEG) * r; }
-static float py(float deg, float r) { return -cosf(deg * DEG) * r; }
-
-static void test_order(void) {
-    /* option i → sector (clockwise from 12): the reading order of the sector centres */
-    static const int want[6][FLUID_ASK_MAX] = {
-        { 0 }, { 0 },
-        { 1, 0 },                 /* left, right                                       */
-        { 2, 0, 1 },              /* upper left, upper right, bottom (the website's)   */
-        { 3, 0, 2, 1 },           /* TL TR BL BR                                       */
-        { 4, 0, 3, 1, 2 },        /* top left, top right, lower left, lower right, bottom */
-    };
-    for (int n = 1; n <= FLUID_ASK_MAX; n++) {
-        int got[FLUID_ASK_MAX];
-        fluid_ask_order(n, got);
-        for (int i = 0; i < n; i++) CHECK(got[i] == want[n][i], "n=%d option %d in sector %d, want %d", n, i, got[i], want[n][i]);
-    }
+static void test_limits(void) {
+    CHECK(fluid_ask_label_max(1) == 14 && fluid_ask_label_max(2) == 14 && fluid_ask_label_max(3) == 10 &&
+          fluid_ask_label_max(4) == 8 && fluid_ask_label_max(5) == 8, "14 for 1..2 answers, 10 for 3, 8 for 4..5");
 }
 
-static void test_pick(void) {
-    /* n = 1: anywhere, even the panel's corners */
-    CHECK(fluid_ask_pick(1, 0.f, 0.f) == 0 && fluid_ask_pick(1, -205.f, -205.f) == 0 && fluid_ask_pick(1, 150.f, 90.f) == 0, "n=1");
-    /* n = 2: left / right halves */
-    CHECK(fluid_ask_pick(2, -60.f, 10.f) == 0 && fluid_ask_pick(2, -1.f, -150.f) == 0 && fluid_ask_pick(2, -1.f, 150.f) == 0, "n=2 left");
-    CHECK(fluid_ask_pick(2, 60.f, -10.f) == 1 && fluid_ask_pick(2, 1.f, -150.f) == 1 && fluid_ask_pick(2, 1.f, 150.f) == 1, "n=2 right");
-    /* on the divider: the sector clockwise of it (straight up → right half, straight
-     * down → left half); the centre is sector 0 (the one clockwise of 12 o'clock) */
-    CHECK(fluid_ask_pick(2, 0.f, -100.f) == 1 && fluid_ask_pick(2, 0.f, 100.f) == 0 && fluid_ask_pick(2, 0.f, 0.f) == 1, "n=2 divider");
-    CHECK(fluid_ask_pick(2, -0.f, -100.f) == 1, "n=2: −0 is straight up");
-    /* n = 4: the quadrants, and the axis-aligned dividers exactly */
-    CHECK(fluid_ask_pick(4, -80.f, -80.f) == 0 && fluid_ask_pick(4, 80.f, -80.f) == 1 &&
-          fluid_ask_pick(4, -80.f, 80.f) == 2 && fluid_ask_pick(4, 80.f, 80.f) == 3, "n=4 quadrants");
-    CHECK(fluid_ask_pick(4, 0.f, -50.f) == 1 && fluid_ask_pick(4, 50.f, 0.f) == 3 &&
-          fluid_ask_pick(4, 0.f, 50.f) == 2 && fluid_ask_pick(4, -50.f, 0.f) == 0, "n=4 dividers");
-    /* n = 3: the website's yes (upper left) / no (upper right) / idk (bottom) */
-    CHECK(fluid_ask_pick(3, -90.f, -60.f) == 0 && fluid_ask_pick(3, 90.f, -60.f) == 1 && fluid_ask_pick(3, 0.f, 120.f) == 2, "n=3");
-    /* n = 5 */
-    CHECK(fluid_ask_pick(5, -60.f, -120.f) == 0 && fluid_ask_pick(5, 60.f, -120.f) == 1 && fluid_ask_pick(5, -150.f, 40.f) == 2 &&
-          fluid_ask_pick(5, 150.f, 40.f) == 3 && fluid_ask_pick(5, 0.f, 150.f) == 4, "n=5");
-    /* every divider, from every n: half a degree either side lands in the two sectors it
-     * separates, near the centre and out at the rim */
-    for (int n = 2; n <= FLUID_ASK_MAX; n++) for (int k = 0; k < n; k++) for (int ri = 0; ri < 2; ri++) {
-        float a = 360.f * k / n, r = ri ? 200.f : 12.f;
-        int cw = fluid_ask_sector(n, px(a + 0.5f, r), py(a + 0.5f, r));
-        int ccw = fluid_ask_sector(n, px(a - 0.5f, r), py(a - 0.5f, r));
-        CHECK(cw == k && ccw == (k + n - 1) % n, "n=%d divider %d r=%.0f: sectors %d|%d", n, k, r, ccw, cw);
-    }
+/* the install question: its name in full ("ASTROLOG" was the old 8-letter cut), a detail line, two arcs */
+static void test_install(void) {
+    static const char *const L[2] = { "install", "not now" };
+    const fluid_ask_q_t q = question("install astrology?", "a new package for molty", "", 2, L);
+    fluid_ask_layout_t lay;
+    fluid_ask_lay(&q, &lay);
+    CHECK(!lay.hit.rows && lay.ntargets == 2 && lay.tg[0].kind == FLUID_ASK_ARC, "1..3 answers: rim arcs");
+    CHECK(lay.nitems == 4 && !strcmp(lay.item[0].str, "INSTALL ASTROLOGY?") && lay.item[0].role == FLUID_ASK_TITLE,
+          "the whole name, one line, capitals (%s)", lay.item[0].str);
+    CHECK(lay.item[0].px > 2.4f && lay.item[1].role == FLUID_ASK_DETAIL && lay.item[1].px < lay.item[0].px, "title big, the detail smaller (%.2f, %.2f)", lay.item[0].px, lay.item[1].px);
+    CHECK(!strcmp(lay.item[2].str, "INSTALL") && lay.item[2].opt == 0 && !strcmp(lay.item[3].str, "NOT NOW") && lay.item[3].opt == 1, "the answers");
+    CHECK(lay.item[2].x < 0.f && lay.item[3].x > 0.f && lay.item[2].y > lay.item[1].y, "install on the left, not now on the right, under the question");
 }
 
-static void test_layout(int stage) {
-    const float r = stage * 0.5f, sc = stage / 412.f;
+/* every count at its longest labels and a 40-letter title: all inside the glass, nothing on top of anything */
+static void test_fit(void) {
+    static const char *const LONG[5] = { "ABCDEFGHIJKLMN", "NOPQRSTUVWXYZA", "ABCDEFGHIJ", "ABCDEFGH", "ABCDEFGH" };
     for (int n = 1; n <= FLUID_ASK_MAX; n++) {
-        int lens[FLUID_ASK_MAX], sector[FLUID_ASK_MAX];
-        for (int i = 0; i < n; i++) lens[i] = FLUID_ASK_LABEL_MAX;
-        float cx[FLUID_ASK_MAX], cy[FLUID_ASK_MAX];
-        float fs = fluid_ask_layout(n, lens, stage, cx, cy);
-        fluid_ask_order(n, sector);
-        printf("  stage %d n=%d: 8 letters at %.1f px (%.1f px wide)\n", stage, n, fs, 8 * 0.6f * fs);
-        if (stage == 412) CHECK(fs >= FLUID_ASK_FS_MIN, "n=%d: 8 letters only fit at %.1f px", n, fs);
-        CHECK(fs <= FLUID_ASK_FS_MAX * sc + 1e-3f, "n=%d: %.1f px above the cap", n, fs);
-        for (int i = 0; i < n; i++) {
-            float x = cx[i] - r, y = cy[i] - r;
-            CHECK(fluid_ask_fits(n, sector[i], lens[i], fs, x, y, r, sc), "n=%d option %d does not fit its sector", n, i);
-            CHECK(fluid_ask_pick(n, x, y) == i, "n=%d: a tap on label %d picks %d", n, i, fluid_ask_pick(n, x, y));
-            /* every corner of the label's box picks it too */
-            float hw = lens[i] * 0.6f * fs * 0.5f, hh = 1.05f * fs * 0.5f;
-            for (int c = 0; c < 4; c++)
-                CHECK(fluid_ask_pick(n, x + (c & 1 ? hw : -hw), y + (c & 2 ? hh : -hh)) == i, "n=%d label %d corner %d", n, i, c);
+        const char *labels[5];
+        char buf[5][16];
+        for (int i = 0; i < n; i++) { snprintf(buf[i], sizeof(buf[i]), "%.*s", fluid_ask_label_max(n), LONG[i] ); buf[i][0] = (char)('A' + i); labels[i] = buf[i]; }
+        for (int hdr = 0; hdr < 3; hdr++) {
+            const fluid_ask_q_t q = question(hdr ? "send the whole summary to ana tomorrow?" : "", hdr ? "your agent asks" : "", hdr == 2 ? "4719" : "", n, labels);
+            fluid_ask_layout_t lay;
+            fluid_ask_lay(&q, &lay);
+            CHECK(lay.hit.rows == (n >= 4), "n=%d: %s", n, n >= 4 ? "rows" : "arcs");
+            float b[FLUID_ASK_ITEMS][4];
+            int titles = 0;
+            for (int i = 0; i < lay.nitems; i++) {
+                const fluid_ask_item_t *it = &lay.item[i];
+                box(it, b[i]);
+                CHECK(inside(b[i], 0.95f), "n=%d hdr %d: \"%s\" inside the glass", n, hdr, it->str);
+                if (it->role == FLUID_ASK_LABEL) {
+                    CHECK(it->len == fluid_ask_label_max(n) && it->px >= FLUID_ASK_PX_MIN - 1e-4f, "n=%d: label %s whole (%d letters) at %.2f px", n, it->str, it->len, it->px);
+                }
+                if (it->role == FLUID_ASK_TITLE) { titles++; CHECK(it->px >= 2.f, "the title readable (%.2f px)", it->px); }
+                for (int j = 0; j < i; j++) CHECK(apart(b[i], b[j]), "n=%d hdr %d: \"%s\" and \"%s\" apart", n, hdr, it->str, lay.item[j].str);
+            }
+            if (hdr) CHECK(titles == 2, "a 40-letter title on two lines (%d)", titles);
+            /* a tap on each label picks it; on the title, nothing */
+            for (int i = 0; i < lay.nitems; i++) {
+                const fluid_ask_item_t *it = &lay.item[i];
+                const int p = fluid_ask_pick(&lay.hit, it->x, it->y);
+                if (it->role == FLUID_ASK_LABEL) CHECK(p == it->opt, "n=%d hdr %d: a tap on %s picks %d (got %d)", n, hdr, it->str, it->opt, p);
+                else CHECK(p == -1, "n=%d hdr %d: a tap on the question (%s) picks nothing (%d)", n, hdr, it->str, p);
+            }
+            /* the arcs: each one's middle picks its own option */
+            for (int t = 0; !lay.hit.rows && t < lay.ntargets; t++) {
+                const float m = 0.5f * (lay.tg[t].b + lay.tg[t].c);
+                CHECK(fluid_ask_pick(&lay.hit, 0.95f * sinf(m), -0.95f * cosf(m)) == lay.tg[t].opt, "n=%d: arc %d picks its option", n, t);
+            }
         }
-        /* shorter labels never get a smaller size */
-        for (int i = 0; i < n; i++) lens[i] = 3;
-        float fs3 = fluid_ask_layout(n, lens, stage, cx, cy);
-        CHECK(fs3 >= fs, "n=%d: 3 letters %.1f px < 8 letters %.1f px", n, fs3, fs);
     }
-    /* one long label sets the size for all (one type size per question) */
-    int mixed[3] = { 2, 8, 3 };
-    float cx[3], cy[3], fs = fluid_ask_layout(3, mixed, stage, cx, cy);
-    int eight[3] = { 8, 8, 8 };
-    float fs8 = fluid_ask_layout(3, eight, stage, cx, cy);
-    CHECK(fabsf(fs - fs8) < 0.6f * sc + 0.5f, "stage %d: mixed lengths %.1f px vs all-8 %.1f px", stage, fs, fs8);
+    /* the centre and the upper half answer nothing (rim arcs) */
+    static const char *const YN[2] = { "yes", "no" };
+    const fluid_ask_q_t q = question("ok?", "", "", 2, YN);
+    fluid_ask_layout_t lay; fluid_ask_lay(&q, &lay);
+    CHECK(fluid_ask_pick(&lay.hit, 0.f, 0.f) == -1 && fluid_ask_pick(&lay.hit, 0.5f, -0.5f) == -1 && fluid_ask_pick(&lay.hit, -0.5f, 0.5f) == 0 && fluid_ask_pick(&lay.hit, 0.5f, 0.5f) == 1,
+          "centre and top: none; lower left: 0; lower right: 1");
+    /* a label over its limit is cut to it */
+    static const char *const OVER[3] = { "ABCDEFGHIJKLMN", "B", "C" };
+    const fluid_ask_q_t q3 = question("", "", "", 3, OVER);
+    fluid_ask_lay(&q3, &lay);
+    CHECK(lay.item[0].len == 10, "3 answers: 10 letters at most (%d)", lay.item[0].len);
 }
 
-/* the fit test itself: a box over a divider or past the rim does not fit */
-static void test_fits(void) {
-    CHECK(fluid_ask_fits(1, 0, 8, 30.f, 0.f, 0.f, 206.f, 1.f), "n=1 centred");
-    CHECK(!fluid_ask_fits(1, 0, 8, 30.f, 0.f, 190.f, 206.f, 1.f), "n=1 past the rim");
-    CHECK(!fluid_ask_fits(2, 0, 4, 30.f, 0.f, 0.f, 206.f, 1.f), "n=2 straddling the divider");
-    CHECK(fluid_ask_fits(2, 0, 4, 30.f, 60.f, 0.f, 206.f, 1.f) && !fluid_ask_fits(2, 1, 4, 30.f, 60.f, 0.f, 206.f, 1.f), "n=2 right half");
-    CHECK(!fluid_ask_fits(4, 0, 2, 20.f, 3.f, -100.f, 206.f, 1.f), "n=4 within the gap of 12 o'clock");
+/* the pairing code: the digits spaced, big, between the detail and the answers */
+static void test_code(void) {
+    static const char *const AR[2] = { "accept", "reject" };
+    const fluid_ask_q_t q = question("pair with claude?", "check the code matches", "4719", 2, AR);
+    fluid_ask_layout_t lay; fluid_ask_lay(&q, &lay);
+    CHECK(lay.nitems == 5 && lay.item[2].role == FLUID_ASK_CODE && !strcmp(lay.item[2].str, "4 7 1 9") && lay.item[2].px > 5.f, "the code (%s)", lay.item[2].str);
+    CHECK(lay.item[2].y < lay.item[3].y && lay.item[2].y > lay.item[1].y, "under the detail, over the answers");
 }
 
-/* the question on screen, frame by frame (fluid_ask_follow / fluid_ask_tappable) */
 static void test_follow(void) {
     fluid_ask_screen_t q = { 0 };
-    bool keep = true;
-    int did = fluid_ask_follow(&q, true, 1, -1, 2, false, &keep);
-    CHECK(did == FLUID_ASK_DID_SHOW && q.phase == FLUID_ASK_SHOW && q.seq == 1 && !keep, "show");
-    /* tappable only once condensed (t·speed ≥ FLUID_ASK_READY), at any speed */
-    CHECK(fluid_ask_tappable(&q, 1.f) == 0, "not condensed at t = 0");
+    int did = fluid_ask_follow(&q, true, 1, -1, 2);
+    CHECK(did == FLUID_ASK_DID_SHOW && q.phase == FLUID_ASK_SHOW && q.seq == 1, "show");
+    /* tappable only once formed enough (t·speed ≥ FLUID_ASK_READY), at any speed */
+    CHECK(fluid_ask_tappable(&q, 1.f) == 0, "not formed at t = 0");
     q.t = 0.59f; CHECK(fluid_ask_tappable(&q, 1.f) == 0, "t 0.59 at speed 1");
     q.t = 0.6f;  CHECK(fluid_ask_tappable(&q, 1.f) == 1, "t 0.6 at speed 1");
-    CHECK(fluid_ask_tappable(&q, 0.4f) == 0, "slow speed: still morphing");
-    q.t = 1.5f;  CHECK(fluid_ask_tappable(&q, 0.4f) == 1, "slow speed, later");
-    /* a new question replaces it: back to not tappable until its labels condense */
-    did = fluid_ask_follow(&q, true, 2, -1, 3, false, &keep);
-    CHECK(did == FLUID_ASK_DID_SHOW && q.seq == 2 && fluid_ask_tappable(&q, 2.5f) == 0, "replace");
-    /* answered: the pick holds FLUID_ASK_HOLD_S, never tappable, then leaves for the creature */
+    CHECK(fluid_ask_tappable(&q, 0.4f) == 0, "slow speed: still forming");
+    /* a new question replaces it */
+    did = fluid_ask_follow(&q, true, 2, -1, 3);
+    CHECK(did == FLUID_ASK_DID_SHOW && q.seq == 2 && q.t == 0.f && fluid_ask_tappable(&q, 2.5f) == 0, "replace");
+    /* answered: blows away over FLUID_ASK_GONE_S, never tappable meanwhile */
     q.t = 1.f;
-    did = fluid_ask_follow(&q, true, 2, 1, 3, false, &keep);
-    CHECK(did == FLUID_ASK_DID_PICK && q.phase == FLUID_ASK_PICK && q.pick == 1 && fluid_ask_tappable(&q, 1.f) == 0, "pick");
-    q.pick_t = FLUID_ASK_HOLD_S - 0.01f;
-    CHECK(fluid_ask_follow(&q, true, 2, 1, 3, false, &keep) == 0, "pick holds");
-    q.pick_t = FLUID_ASK_HOLD_S;
-    did = fluid_ask_follow(&q, true, 2, 1, 3, false, &keep);
-    CHECK(did == FLUID_ASK_DID_LEAVE && q.phase == FLUID_ASK_NONE && !keep && fluid_ask_tappable(&q, 1.f) == 0, "pick leaves");
-    /* ended unanswered, nothing requested meanwhile: to the creature */
-    fluid_ask_follow(&q, true, 3, -1, 2, false, &keep);
-    did = fluid_ask_follow(&q, false, 3, -1, 2, false, &keep);
-    CHECK(did == FLUID_ASK_DID_LEAVE && !keep, "end, no request");
-    /* a request that arrived while it was up (the command that then cancelled it: the link
-     * applies first and cancels after, so they may land in different frames) is kept */
-    fluid_ask_follow(&q, true, 4, -1, 2, false, &keep);
-    CHECK(fluid_ask_follow(&q, true, 4, -1, 2, true, &keep) == 0 && q.phase == FLUID_ASK_SHOW, "request waits under it");
-    did = fluid_ask_follow(&q, false, 4, -1, 2, false, &keep);
-    CHECK(did == FLUID_ASK_DID_LEAVE && keep, "end after a request: keep it");
-    /* ...and one in the very frame it ends */
-    fluid_ask_follow(&q, true, 5, -1, 2, false, &keep);
-    did = fluid_ask_follow(&q, false, 5, -1, 2, true, &keep);
-    CHECK(did == FLUID_ASK_DID_LEAVE && keep, "end with a request");
-    /* a request during the previous question does not carry into the next one */
-    fluid_ask_follow(&q, true, 6, -1, 2, false, &keep);
-    fluid_ask_follow(&q, true, 6, -1, 2, true, &keep);
-    fluid_ask_follow(&q, true, 7, -1, 2, false, &keep);
-    did = fluid_ask_follow(&q, false, 7, -1, 2, false, &keep);
-    CHECK(did == FLUID_ASK_DID_LEAVE && !keep, "request does not carry over");
-    /* a request cuts a pick's hold short and is kept */
-    fluid_ask_follow(&q, true, 8, -1, 2, false, &keep);
-    fluid_ask_follow(&q, true, 8, 0, 2, false, &keep);
-    did = fluid_ask_follow(&q, true, 8, 0, 2, true, &keep);
-    CHECK(did == FLUID_ASK_DID_LEAVE && keep, "request ends the pick");
+    did = fluid_ask_follow(&q, true, 2, 1, 3);
+    CHECK(did == FLUID_ASK_DID_PICK && q.phase == FLUID_ASK_PICK && q.pick == 1 && q.out_t == 0.f && fluid_ask_tappable(&q, 1.f) == 0, "pick");
+    CHECK(fluid_ask_follow(&q, false, 2, 1, 3) == 0 && q.phase == FLUID_ASK_PICK, "the link ending it changes nothing: its dust goes on");
+    q.out_t = FLUID_ASK_GONE_S - 0.01f; CHECK(fluid_ask_follow(&q, true, 2, 1, 3) == 0, "still blowing away");
+    q.out_t = FLUID_ASK_GONE_S;
+    did = fluid_ask_follow(&q, true, 2, 1, 3);
+    CHECK(did == FLUID_ASK_DID_GONE && q.phase == FLUID_ASK_NONE, "gone");
+    /* ended unanswered: OUT, then gone */
+    fluid_ask_follow(&q, true, 3, -1, 2);
+    did = fluid_ask_follow(&q, false, 3, -1, 2);
+    CHECK(did == FLUID_ASK_DID_LEAVE && q.phase == FLUID_ASK_OUT && q.out_t == 0.f, "end: the rim lets go");
+    q.out_t = FLUID_ASK_GONE_S;
+    CHECK(fluid_ask_follow(&q, false, 3, -1, 2) == FLUID_ASK_DID_GONE && q.phase == FLUID_ASK_NONE, "then gone");
+    /* a new question over one blowing away replaces it at once */
+    fluid_ask_follow(&q, true, 4, -1, 2); fluid_ask_follow(&q, false, 4, -1, 2);
+    did = fluid_ask_follow(&q, true, 5, -1, 2);
+    CHECK(did == FLUID_ASK_DID_SHOW && q.phase == FLUID_ASK_SHOW && q.seq == 5, "a new one over the dust");
     /* answered before it was ever drawn: show + pick in one frame; out-of-range pick → 0 */
-    did = fluid_ask_follow(&q, true, 9, 7, 2, false, &keep);
+    did = fluid_ask_follow(&q, true, 9, 7, 2);
     CHECK(did == (FLUID_ASK_DID_SHOW | FLUID_ASK_DID_PICK) && q.pick == 0, "show + pick");
 }
 
@@ -171,70 +161,14 @@ static void test_colors(void) {
     }
 }
 
-/* each option's arc: inside its own sector (the one its label sits in), the gap off
- * both dividers, n = 1 the whole ring; arcs never overlap */
-static void test_arcs(int stage) {
-    const float TWO_PI = 6.2831853f, R = FLUID_ASK_ARC_R * stage * 0.5f, gap = FLUID_ASK_ARC_GAP * stage / 412.f;
-    float a0, a1;
-    fluid_ask_arc(1, 0, stage, &a0, &a1);
-    CHECK(a0 == 0.f && a1 >= TWO_PI, "n=1: a full ring (%.3f..%.3f)", a0, a1);
-    for (int n = 2; n <= FLUID_ASK_MAX; n++) {
-        int sector[FLUID_ASK_MAX]; fluid_ask_order(n, sector);
-        float lo[FLUID_ASK_MAX], hi[FLUID_ASK_MAX];
-        for (int i = 0; i < n; i++) {
-            fluid_ask_arc(n, i, stage, &lo[i], &hi[i]);
-            float s0 = sector[i] * TWO_PI / n, s1 = (sector[i] + 1) * TWO_PI / n;
-            CHECK(lo[i] < hi[i] && fabsf((lo[i] - s0) * R - gap) < 0.01f && fabsf((s1 - hi[i]) * R - gap) < 0.01f,
-                  "stage %d n=%d arc %d: %.3f..%.3f in sector %.3f..%.3f", stage, n, i, lo[i], hi[i], s0, s1);
-            /* its middle on the rim picks its own option (the colour belongs to the button) */
-            float m = 0.5f * (lo[i] + hi[i]);
-            CHECK(fluid_ask_pick(n, sinf(m) * R, -cosf(m) * R) == i, "n=%d arc %d sits in option %d's sector", n, i, fluid_ask_pick(n, sinf(m) * R, -cosf(m) * R));
-            /* both ends too, just inside */
-            CHECK(fluid_ask_pick(n, sinf(lo[i] + 1e-3f) * R, -cosf(lo[i] + 1e-3f) * R) == i && fluid_ask_pick(n, sinf(hi[i] - 1e-3f) * R, -cosf(hi[i] - 1e-3f) * R) == i,
-                  "n=%d arc %d ends", n, i);
-        }
-        for (int i = 0; i < n; i++) for (int j = 0; j < n; j++)
-            if (i != j) CHECK(hi[i] <= lo[j] || hi[j] <= lo[i], "n=%d arcs %d and %d overlap", n, i, j);
-    }
-}
-
-/* the arcs follow the question: condense with the labels, the pick flares, the others fade */
-static void test_arc_look(void) {
-    fluid_ask_screen_t s = { 0 };
-    float amt, hw;
-    s.phase = FLUID_ASK_NONE; fluid_ask_arc_look(&s, 0, 1.f, &amt, &hw);
-    CHECK(amt == 0.f, "no question: no arc");
-    s.phase = FLUID_ASK_SHOW; s.t = 0.f; fluid_ask_arc_look(&s, 0, 1.f, &amt, &hw);
-    CHECK(amt == 0.f && hw == FLUID_ASK_ARC_HW, "just shown: none yet (%.2f)", amt);
-    s.t = FLUID_ASK_READY; fluid_ask_arc_look(&s, 2, 1.f, &amt, &hw);
-    CHECK(amt == 1.f, "condensed with the labels at READY (%.2f)", amt);
-    s.t = FLUID_ASK_READY / 2.f; fluid_ask_arc_look(&s, 2, 2.f, &amt, &hw);
-    CHECK(amt == 1.f, "speed scales the ramp");
-    s.phase = FLUID_ASK_PICK; s.pick = 1; s.pick_t = 0.f;
-    float a1, h1, a0, h0;
-    fluid_ask_arc_look(&s, 1, 1.f, &a1, &h1); fluid_ask_arc_look(&s, 0, 1.f, &a0, &h0);
-    CHECK(a1 > 1.2f && h1 > 1.5f * FLUID_ASK_ARC_HW && a0 == 1.f, "pick: the chosen flares (%.2f, %.3f), the other still there (%.2f)", a1, h1, a0);
-    s.pick_t = 0.25f;
-    fluid_ask_arc_look(&s, 0, 1.f, &a0, &h0); fluid_ask_arc_look(&s, 1, 1.f, &amt, &hw);
-    CHECK(a0 > 0.f && a0 < 1.f && amt < a1 && amt > 1.f && hw < h1, "fading / settling (%.2f, %.2f)", a0, amt);
-    s.pick_t = 0.5f; fluid_ask_arc_look(&s, 0, 1.f, &a0, &h0);
-    CHECK(a0 == 0.f, "the others gone by 0.5 s");
-    s.pick_t = FLUID_ASK_HOLD_S; fluid_ask_arc_look(&s, 1, 1.f, &amt, &hw);
-    CHECK(amt == 1.f && hw == FLUID_ASK_ARC_HW, "the chosen one settled at the hold's end");
-}
-
 int main(void) {
     printf("ask host test\n");
+    test_limits();
     test_colors();
-    test_arcs(412);
-    test_arcs(240);
-    test_arc_look();
-    test_order();
-    test_pick();
-    test_fits();
+    test_install();
+    test_fit();
+    test_code();
     test_follow();
-    test_layout(412);
-    test_layout(240);
     printf("%d passed, %d failed\n", s_pass, s_fail);
     return s_fail ? 1 : 0;
 }

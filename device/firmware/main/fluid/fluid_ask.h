@@ -1,29 +1,20 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * fluid_ask.h — the screen of a question (the link's `ask`): where its 1–5 answers sit
- * on the round screen, and which one a tap picks.
+ * fluid_ask.h — a question on the round screen (a package install, an agent's ask, a firmware update, a pairing code):
+ * what it says, where its answers sit, which one a tap picks, and its screen's phases. The approved design is
+ * "Rim arcs" for 1..3 answers, "Underlined rows" for 4..5; fluid_askview.h draws it.
  *
- * Plain C, no FreeRTOS / ESP-IDF: link/link_ask.c picks the answer for a tap,
- * mole_fluid.c lays the labels out; test/host/ask_test.c checks both.
+ * Plain C, no FreeRTOS / ESP-IDF, no fluid: link/link_ask.c and link/link_pair.c pick the answer for a tap,
+ * mole_fluid.c follows the phases; test/host/ask_test.c checks all of it.
  *
- *   sectors   n = 1: the whole screen. n ≥ 2: n equal pie sectors, dividers at 12 o'clock
- *             and every 360/n degrees clockwise (n = 2: the left / right halves). Sector k
- *             spans [k, k+1)·360/n clockwise from 12 o'clock: a point exactly on a divider
- *             belongs to the sector clockwise of it; the centre belongs to sector 0.
- *   order     option i sits in the i-th sector in reading order of the sector centres:
- *             top to bottom by row, left to right within a row. n = 3: upper left, upper
- *             right, bottom; 4: TL TR BL BR; 5: top left, top right, lower left, lower
- *             right, bottom; 2: left, right.
- *   layout    each label on its sector's bisector at a fixed fraction of the radius, one
- *             type size for all: the largest at which every label's letter box stays in
- *             its sector (FLUID_ASK_GAP px off both dividers) and inside the disc
- *             (FLUID_ASK_RIM px off the rim), capped at FLUID_ASK_FS_MAX. Letter boxes are
- *             the reader's: 0.6 em wide, 1.05 em tall (fluid_text_set_word). 8 letters fit
- *             at 26.0 px at n = 5 on the 412 px stage, above FLUID_ASK_FS_MIN (18 px, the
- *             reader's legibility floor; ask_test.c pins it). A 240 px stage gets 15 px.
- * Coordinates: px relative to the screen's centre, y down; pixel sizes scale with the
- * stage (tuned at FLUID_STAGE_REF = 412).
+ *   header    the title (up to 40 letters, wrapped to two lines when one would be too small), a smaller detail line
+ *             and a code (a pairing's digits), centred, from near the top down; the device's 5x7 font, capitals
+ *   arcs      1..3 answers: arcs of the rim splitting its lower half, option 0 on the left (clockwise from 6 o'clock
+ *             going right to left: the page's reading order), each label inside its arc
+ *   rows      4..5 answers: rows under the header, each label underlined; a faint ring round the rim
+ *   labels    up to fluid_ask_label_max(n) letters: 14 for 1..2 answers, 10 for 3, 8 for 4..5 (the relay checks the same)
+ * Coordinates: glass units, -1..1 across the stage, y down; font pixel sizes in stage px at FLUID_STAGE_REF (412).
  */
 #pragma once
 
@@ -34,72 +25,82 @@
 extern "C" {
 #endif
 
-#define FLUID_ASK_MAX        5       /* options                                       */
-#define FLUID_ASK_LABEL_MAX  8       /* characters per option (the relay checks it too) */
-#define FLUID_ASK_FS_MIN     18.f    /* type size floor, stage px at 412              */
-#define FLUID_ASK_FS_MAX     44.f    /* type size cap                                 */
-#define FLUID_ASK_RIM        27.f    /* letter boxes stay this far inside the rim (the arcs' band) */
-#define FLUID_ASK_GAP        4.f     /* ...and this far off a divider                 */
+#define FLUID_ASK_MAX        5       /* options                                             */
+#define FLUID_ASK_LABEL_MAX  14      /* letters a label may have at most (1..2 answers)     */
+#define FLUID_ASK_TITLE_MAX  40
+#define FLUID_ASK_DETAIL_MAX 36
+#define FLUID_ASK_CODE_MAX   6       /* digits                                              */
+#define FLUID_ASK_ARCS_MAX   3       /* up to this many answers on rim arcs; more on rows   */
+#define FLUID_ASK_PX_MIN     1.6f    /* a label's font pixel floor, stage px at 412 (11 px tall letters) */
 
-/* ── Colours and rim arcs (the buttons' borders) ─────────────────────────────────
- *   colour    each option has one (0xRRGGBB): the agent's (the relay resolves names),
- *             else FLUID_ASK_COLORS[i] by index. Its label's letters and its arc take it.
- *   arc       option i's border: an arc of the fluid itself (fluid_target_arc) centred
- *             FLUID_ASK_ARC_R of the radius out, spanning its sector minus
- *             FLUID_ASK_ARC_GAP px (at 412) at each divider; n = 1: the whole ring.
- *             Labels stay FLUID_ASK_RIM px inside the rim, clear of the arcs' band. */
-#define FLUID_ASK_ARC_R      0.92f   /* arc centre line, of the radius                 */
-#define FLUID_ASK_ARC_HW     0.022f  /* arc half width, of the radius                   */
-#define FLUID_ASK_ARC_GAP    9.f     /* px (at 412) each arc stops short of a divider   */
+/** The longest label n answers may have: 14 (1..2), 10 (3), 8 (4..5). */
+int fluid_ask_label_max(int n);
+
 /** Default colours by option index: green, red, amber, blue, violet (relay COLORS). */
 extern const uint32_t FLUID_ASK_COLORS[FLUID_ASK_MAX];
-/** Option i's colour: `given` (0xRRGGBB) when ≥ 0, else FLUID_ASK_COLORS[i]. */
+/** Option i's colour: `given` (0xRRGGBB) when >= 0, else FLUID_ASK_COLORS[i]. */
 uint32_t fluid_ask_color(int32_t given, int i);
-/** Option i's arc (of n) on a stage of `stage` px: *a0..*a1 radians clockwise from 12
- *  o'clock, a0 < a1; n = 1: 0..2π. */
-void  fluid_ask_arc(int n, int i, int stage, float *a0, float *a1);
 
-/** The clockwise sector 0..n-1 of a point (dx, dy) from the centre; 0 for n ≤ 1. */
-int   fluid_ask_sector(int n, float dx, float dy);
-/** sector[i] = the sector option i sits in (reading order); n clamped to 1..FLUID_ASK_MAX. */
-void  fluid_ask_order(int n, int sector[FLUID_ASK_MAX]);
-/** The option (0..n-1) a tap at (dx, dy) from the centre picks. */
-int   fluid_ask_pick(int n, float dx, float dy);
-/** Lay out n labels of lens[i] characters on a stage of `stage` px: cx/cy = the centre of
- *  option i's label (stage px from the top left), returns the type size (stage px). */
-float fluid_ask_layout(int n, const int *lens, int stage, float *cx, float *cy);
-/** Whether a len-letter label of type size fs centred at (x, y) (px from the centre) fits
- *  sector k of n on a disc of radius r px (rim and gap scaled by sc = stage / 412). */
-bool  fluid_ask_fits(int n, int k, int len, float fs, float x, float y, float r, float sc);
+/** What is asked. Strings may be empty (no title, detail or code); labels 1..fluid_ask_label_max(n) letters. */
+typedef struct {
+    char title[FLUID_ASK_TITLE_MAX + 1], detail[FLUID_ASK_DETAIL_MAX + 1], code[FLUID_ASK_CODE_MAX + 1];
+    int n;
+    char label[FLUID_ASK_MAX][FLUID_ASK_LABEL_MAX + 1];
+    uint32_t rgb[FLUID_ASK_MAX];                /* each option's colour, 0xRRGGBB */
+} fluid_ask_q_t;
+
+/* ── The layout ───────────────────────────────────────────────────────────────── */
+enum { FLUID_ASK_TITLE, FLUID_ASK_DETAIL, FLUID_ASK_CODE, FLUID_ASK_LABEL };
+#define FLUID_ASK_ITEMS   (2 + 1 + 1 + FLUID_ASK_MAX)
+#define FLUID_ASK_STR     (FLUID_ASK_TITLE_MAX + 1)
+/** A line of text: its letters (capitals), centre (x, y), font pixel px (412 stage px), colour, role, option (-1). */
+typedef struct { char str[FLUID_ASK_STR]; int len; float x, y, px; uint32_t rgb; uint8_t role; int8_t opt; } fluid_ask_item_t;
+enum { FLUID_ASK_ARC, FLUID_ASK_RING, FLUID_ASK_HLINE };
+/** A crisp line with dust thinning off one side: an arc of radius a from b to c (radians clockwise from 12), a ring
+ *  of radius a, or a line at y = a from x = b to c. (cx, cy): where an accept's wave starts. opt -1: no option's. */
+typedef struct { uint8_t kind; int8_t opt; float a, b, c, cx, cy; uint32_t rgb; } fluid_ask_target_t;
+/** Where the answers are, for a tap (small: kept by the link for the question it waits on). */
+typedef struct {
+    int n;
+    bool rows;                                  /* underlined rows (else rim arcs)                 */
+    float top, rowh;                            /* rows: where the first starts, each one's height  */
+} fluid_ask_hit_t;
+typedef struct {
+    fluid_ask_hit_t hit;
+    int nitems, ntargets;
+    fluid_ask_item_t item[FLUID_ASK_ITEMS];
+    fluid_ask_target_t tg[FLUID_ASK_MAX + 1];
+} fluid_ask_layout_t;
+
+/** Lay the question out (n clamped to 1..FLUID_ASK_MAX; a label longer than its limit is cut to it). */
+void fluid_ask_lay(const fluid_ask_q_t *q, fluid_ask_layout_t *L);
+/** The option (0..n-1) a tap at (X, Y) glass units picks, -1 for none (the centre, the upper half, between rows). */
+int  fluid_ask_pick(const fluid_ask_hit_t *h, float X, float Y);
+/** q's answers for a tap (fluid_ask_lay's hit; the layout itself is on the stack for the call). */
+fluid_ask_hit_t fluid_ask_hit(const fluid_ask_q_t *q);
 
 /* ── The question on screen, frame by frame ─────────────────────────────────────
- * mole_fluid.c follows what the link wants (mole_fluid_ask_*) with this once per frame,
- * and tells the touch path which question a tap on the frame it drew may answer. */
-enum { FLUID_ASK_NONE, FLUID_ASK_SHOW, FLUID_ASK_PICK };
-#define FLUID_ASK_HOLD_S  0.8f   /* a picked answer stays this long                          */
-#define FLUID_ASK_READY   0.6f   /* t·speed at which the labels are condensed (the hold ramp,
-                                  * (t·speed − 0.2) / 0.4, reaches 1): readable, tappable     */
+ * mole_fluid.c follows what the link wants (mole_fluid_ask_*) with this once per frame and tells the touch path which
+ * question a tap on the frame it drew may answer. SHOW: forming where the centre tap's crest passes (FLUID_ASK_FORM_S),
+ * then standing; PICK: answered, its lines and letters breaking into dust the water carries off; OUT: it ended
+ * unanswered (declined, timed out, replaced), the rim letting go as the recording ring's stop, then the same dust.
+ * Only SHOW owns the screen (the director's transitions wait under it); the dust goes over whatever comes next. */
+enum { FLUID_ASK_NONE, FLUID_ASK_SHOW, FLUID_ASK_PICK, FLUID_ASK_OUT };
+#define FLUID_ASK_FORM_S  1.6f   /* s from the tap to standing                                  */
+#define FLUID_ASK_GONE_S  1.3f   /* s an answered or ended question takes to blow away         */
+#define FLUID_ASK_READY   0.6f   /* t·speed from which a tap answers                            */
 typedef struct {
-    int phase, pick;             /* FLUID_ASK_*; the option picked (PICK)                     */
-    unsigned seq;                /* the question it follows (mole_fluid_ask_show's seq)       */
-    float t, pick_t;             /* s shown, s since the pick (the caller advances both)      */
-    bool requested;              /* a state / mood request came while it was up               */
+    int phase, pick;             /* FLUID_ASK_*; the option picked (PICK)                       */
+    unsigned seq;                /* the question it follows (mole_fluid_ask_show's seq)         */
+    float t, out_t;              /* s shown, s since it was answered or ended (the caller advances both) */
 } fluid_ask_screen_t;
-enum { FLUID_ASK_DID_SHOW = 1, FLUID_ASK_DID_PICK = 2, FLUID_ASK_DID_LEAVE = 4 };
-/** One frame: the link wants question `seq` (`active`), answered with option `pick` (≥ 0,
- *  of n) or not yet; `requested` = an explicit state / mood request arrived this frame.
- *  Returns what changed, in this order: SHOW (a new question replaces any), PICK, LEAVE
- *  (ended unanswered, or the pick's hold is over / cut short by a request). On LEAVE, *keep
- *  = a request came while the question was up: the screen goes to it, not to the creature. */
-int fluid_ask_follow(fluid_ask_screen_t *s, bool active, unsigned seq, int pick, int n, bool requested, bool *keep);
-/** Option i's arc this frame: *amt its ink (0 = gone, 1 = full) and *hw its half width
- *  (of the radius). SHOW: every arc condenses with the labels (the hold ramp at this
- *  speed). PICK: the chosen arc flares (brighter, up to 1.7× as wide) and settles over the
- *  hold; the others fade as fast as their labels melt (gone at 0.5 s). */
-void  fluid_ask_arc_look(const fluid_ask_screen_t *s, int i, float speed, float *amt, float *hw);
-/** The question a tap on a frame of this screen may answer: shown, not yet answered, its
- *  labels condensed at this speed (cfg speed) — else 0 (nothing, another question's
- *  letters still morphing, or a pick on its way out). */
+enum { FLUID_ASK_DID_SHOW = 1, FLUID_ASK_DID_PICK = 2, FLUID_ASK_DID_LEAVE = 4, FLUID_ASK_DID_GONE = 8 };
+/** One frame: the link wants question `seq` (`active`), answered with option `pick` (>= 0, of n) or not yet.
+ *  Returns what changed: SHOW (a new question replaces any), PICK (answered), LEAVE (ended unanswered), GONE (its dust
+ *  has blown away: NONE). */
+int fluid_ask_follow(fluid_ask_screen_t *s, bool active, unsigned seq, int pick, int n);
+/** The question a tap on a frame of this screen may answer: shown, not yet answered, formed enough at this speed
+ *  (cfg speed), else 0. */
 unsigned fluid_ask_tappable(const fluid_ask_screen_t *s, float speed);
 
 #ifdef __cplusplus

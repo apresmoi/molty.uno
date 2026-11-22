@@ -97,6 +97,7 @@ uint32_t log_upload_backlog(const uint32_t *wanted_seqs, size_t n, uint32_t curs
 #define LOG_PERSIST_MIN_GAP_US    (300LL * 1000000)
 #define LOG_PERSIST_PERIOD_MS     (30 * 60 * 1000)
 #define LOG_PERSIST_NOT_BEFORE_US (90LL * 1000000)
+/* ... and each of its steps only while the screen is calm (flash_gate.h: a write freezes both cores) */
 
 /* How long to wait before a write may happen (0 = now): never before NOT_BEFORE after
  * boot, never within MIN_GAP of the last write (last_us 0 = none yet). */

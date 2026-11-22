@@ -8,8 +8,10 @@
  *    per-task CPU % (FreeRTOS run-time stats), heap free + low-water,
  *    alloc-failure hook, per-core starvation probes, gateway ping, and a
  *    1 Hz timeline (last 180 s) to correlate stalls with what ran.
- *  HTTP: GET /api/diag, GET /api/log?since=<seq>[&fmt=json], GET /api/log/prev,
- *        GET|POST /api/diag/wifi_ps?mode=none|min|max.
+ *  HTTP: GET /api/diag[?timeline=<s>][&fs=1 (the files by size: reads flash)], GET /api/log?since=<seq>[&fmt=json], GET /api/log/prev,
+ *        GET|POST /api/diag/wifi_ps?mode=none|min|max,
+ *        POST /api/diag/wifi_drop?hold=<s> (dev: drop the station, no reconnect for <s>, max 600).
+ *  Wedge watch: the default event loop or the esp_timer task idle 30 s aborts (loop_watch.h).
  */
 #pragma once
 #include <stdint.h>
@@ -27,8 +29,38 @@ void mole_diag_early_init(void);
 void mole_diag_start(void);
 
 /* Structured event: one line "EVT <text>". `important` lines (errors) trigger
- * a rate-limited SPIFFS persist. Callable from any task (not ISR). */
+ * a rate-limited SPIFFS persist, once the screen is calm (flash_gate.h); a stall's
+ * record is never important (its write would stall the next frames). Callable from
+ * any task (not ISR). */
 void mole_diag_event(bool important, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+/** What tells the flash's writes how long the screen has been calm, ms (0: it animates now; flash_gate.h): none set,
+ *  always calm (every write goes at once, as before the gate). */
+void mole_diag_set_calm(uint32_t (*calm_ms)(void));
+
+/* The flash's quiet window (flash_gate.h), for writes that can wait. Call on a task with an internal stack. */
+#include "flash_gate.h"
+/** A write due: true = it may go now (the screen calm, held FG_HOLD_MAX_US, or a restart / power off next). h: the write's
+ *  own hold (zeroed to start). Never blocks. */
+bool mole_flash_may(fg_hold_t *h);
+/** How long the screen has been calm, ms (0: it moves now; UINT32_MAX: no gate, or the screen off). Never blocks. */
+uint32_t mole_flash_calm_ms(void);
+/** Blocks till mole_flash_may says go (100 ms looks). */
+void mole_flash_quiet(void);
+/** path becomes the len bytes at data (written to tmp, then renamed over path), a write that can wait: the erases SPIFFS
+ *  needs for it first, then each 2 KB, each step only while the screen is calm. False: it failed, path kept what it had. */
+bool mole_flash_file(const char *path, const char *tmp, const void *data, size_t len);
+/** The screen starts to move (a change of picture, a ripple), from rest: a gated op in flight ends first (50 ms at most:
+ *  a sector erase), and none starts for 100 ms (the caller marks its motion meanwhile). Call from the fluid's tasks. */
+void mole_flash_motion(void);
+/** A restart or power off is next: every hold lets go from now on. */
+void mole_flash_force(void);
+bool mole_flash_forced(void);
+/** t holds writes that a restart would lose (the battery history): esp_restart wakes it, forced, and waits for
+ *  mole_flash_flushed (1.5 s at most) before the restart goes on. */
+void mole_flash_flusher(void *task);
+void mole_flash_flushed(void);
+/** Before a power off: the log ring written now (it does not survive one), wait_ms at most. */
+void mole_diag_flush(uint32_t wait_ms);
 
 /* Frame hooks (fluid creature). */
 void mole_diag_sim_frame(uint32_t interval_us, uint32_t work_us);
