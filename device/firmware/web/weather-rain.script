@@ -1,0 +1,19 @@
+# Rain under the 2016 supermoon (full: the moonlit look whole), told for an hour; a touch in it; the picture changing
+# to a scene and back (the weather goes and comes with the cat's picture); then a waxing quarter (lit ~0.5: half
+# moonlit). See weather-drizzle.script.
+creature cat packages/cat/cat.json
+package packages/astrology/astrology.json
+start 466 20261122 0
+time 1479131520
+weather 2 3600
+frames 900 33333
+touch 1 300 400
+frames 2 33333
+touch 0 0 0
+frames 60 33333
+scene globe 20 {"img":"moon","lit":0.82,"side":1,"r":0.6,"spin":0}
+frames 90 33333
+scene_clear
+frames 120 33333
+time 1713208380
+frames 90 33333

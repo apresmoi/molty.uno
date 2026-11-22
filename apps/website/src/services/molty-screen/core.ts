@@ -77,6 +77,8 @@ export interface Exports {
   wm_scene_clear(): void;
   wm_time(unixS: number): void;
   wm_time_now(): number;
+  wm_weather(kind: number, s: number): number;
+  wm_demo_star(): void;
 }
 
 /** The last frame (web_device.c wm_frame_info): what went to the panel and what the device would
@@ -146,6 +148,12 @@ export interface MoltyState {
   crisp_dots: number;
   scene?: { pkg: string; layout: string };
   creature_info: { name: string; package: string; gestures?: Array<{ name: string }>; moods?: string[] };
+  /** Idle life ("lively" | "calm" | "off"), the sky on, the weather on (the device's settings). */
+  idle_life?: string;
+  sky?: boolean;
+  weather_on?: boolean;
+  /** The weather told: its kind, s it still holds, where it is on the way (0 clear .. 3 downpour), the floor 0..1 wet. */
+  weather?: { kind: string; s_left: number; level: number; wet: number };
 }
 
 const utf8 = new TextEncoder();
@@ -199,6 +207,16 @@ export class MoltyCore {
   /** The time as the module has it now (0: not known). */
   timeNow(): number {
     return this.x.wm_time_now();
+  }
+
+  /** The weather on the glass behind the cat, as an agent tells a Molty (POST /api/creature/state {weather}): 0 clear,
+   *  1 drizzle, 2 rain, 3 downpour, held `s` seconds (0: an hour), then easing back to clear. Never told: clear. */
+  weather(kind: number, s = 0): boolean {
+    return this.x.wm_weather(kind, s) === 0;
+  }
+  /** (The /demo/ page's hook: the next falling star now, as soon as one may show. Never a device's nor an agent's.) */
+  demoStar() {
+    this.x.wm_demo_star();
   }
 
   /** One frame, `dtUs` microseconds after the last. */

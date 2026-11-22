@@ -48,6 +48,7 @@ export function play(core, script, onFrame) {
     else if (op === 'scene') ok = core.scene(args[0], args[2] ? JSON.parse(rest.split(/\s+/).slice(2).join(' ')) : undefined, Number(args[1]));
     else if (op === 'scene_clear') core.sceneClear();
     else if (op === 'time') core.time(Number(args[0]));
+    else if (op === 'weather') ok = core.weather(Number(args[0]), Number(args[1]));
     else ok = false;
     if (!ok) throw new Error(`step failed: ${line}`);
   }

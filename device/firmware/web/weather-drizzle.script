@@ -1,0 +1,18 @@
+# The weather's scripts (weather-drizzle, -rain, -downpour): as fidelity.script (the native build and the WebAssembly
+# build both play them and must show the same pixels), each with a weather told (weather <kind 0..3> <s>: wm_weather).
+# A drizzle told for 40 s with no date (no sky): it eases in, a touch in the rain, it runs out and eases back to clear,
+# the floor wet; then a quarter of an hour in one step (the clock counts the time the screen was off) and it is dry:
+# once the last drops' water settles (half a second) the frames are those with no weather told, pixel for pixel
+# (weather_flow_test.c). fidelity.script tells none: its frames have no weather.
+creature cat packages/cat/cat.json
+package packages/astrology/astrology.json
+start 466 20261122 0
+frames 60 33333
+weather 1 40
+frames 900 33333
+touch 1 233 415
+frames 2 33333
+touch 0 0 0
+frames 360 33333
+frames 1 900000000
+frames 120 33333
