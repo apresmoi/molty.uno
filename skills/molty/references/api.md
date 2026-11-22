@@ -327,7 +327,7 @@ firmware leaves it out) over the options on the round screen and returns
 the one the human tapped: `answer` (its label) and `index`. Blocks and finishes like talk
 (24 s, then `202` pending — a long `timeout_s` is fine, finish it with the jobs URL).
 
-- **Labels are tap targets on a small round screen**: up to 14 characters each for 1–2 options, 10 for 3,
+- **Labels are tap targets on a small round screen**: 1–14 characters each for 1–2 options, 10 for 3,
   8 for 4–5; printable ASCII, unique ignoring case. Good: `"yes"`, `"no"`, `"later"`, `"send it now"`.
   Bad: `"Yes, please do it now"` (too long), `"👍"` (not ASCII), `["no","No"]` (duplicates). Too long is
   `400 invalid_args` with the reason; a label over 8 characters to firmware older than the title screen is

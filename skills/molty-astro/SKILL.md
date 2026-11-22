@@ -44,10 +44,8 @@ reading on Molty at once ("Sun in Gemini: you shine by talking and learning."), 
 sign (anywhere in its block of the zodiac ring) opens the **sign close-up** on Molty itself: that sign big with its
 planets on its degree dial, each lit in turn, and the sign's own reading as the subtitle (Molty's, no voice); the
 chart comes back when its time is up, or at once on a tap beside it. The tap event you get names the sign (`spot`) and says Molty opened it (`opened: "sign-closeup"`).
-`chart --interactive` adds the voice: it keeps listening to Molty's events (the molty skill's long-poll) and reads
-the tapped sign aloud while its close-up shows. An empty sign reads its nature and where its ruler is. It runs until `--ttl` (default 300 s, max 600) or Ctrl-C (which clears the
-screen): start it in the background, speak its `SAY` line, and don't talk over a close-up.
-`--dry-run --tap gemini` prints what one tap would send.
+`chart --interactive` adds the voice: it reads the tapped sign aloud while its close-up shows. Start it in the
+background, speak its `SAY` line, and don't talk over a close-up ([interactive.md](references/interactive.md)).
 
 ## Install, once
 
