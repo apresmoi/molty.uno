@@ -1,0 +1,682 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Molty Calls</title>
+<style>
+:root {
+  --bg: #fbfbfd; --panel: #f2f3f7; --text: #1d2030; --muted: #5c6178; --line: #dcdfe8;
+  --accent: #3b6fd8; --code-bg: #eef0f6; --v1: #a0682a; --v2: #2f8f5b; --warn: #b5781f; --warn-bg: #fff6e4;
+  --dev: #c0507a; --own: #2f8f5b; --lay: #3b6fd8;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1117; --panel: #161925; --text: #e2e5f0; --muted: #9399b2; --line: #2a2f42;
+    --accent: #8fb4ff; --code-bg: #141824; --v1: #e3a86a; --v2: #6fd39a; --warn: #e3b04b; --warn-bg: #2a2416;
+    --dev: #f08fb4; --own: #6fd39a; --lay: #8fb4ff;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1117; --panel: #161925; --text: #e2e5f0; --muted: #9399b2; --line: #2a2f42;
+  --accent: #8fb4ff; --code-bg: #141824; --v1: #e3a86a; --v2: #6fd39a; --warn: #e3b04b; --warn-bg: #2a2416;
+  --dev: #f08fb4; --own: #6fd39a; --lay: #8fb4ff;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 17px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+main { max-width: 1040px; margin: 0 auto; padding: 32px 40px 90px; }
+h1 { font-size: 32px; margin: 0 0 4px; }
+h2 { font-size: 19px; margin: 26px 0 8px; }
+h3 { font-size: 17px; margin: 24px 0 6px; }
+p, li { max-width: 78ch; }
+.lead { color: var(--muted); font-size: 15px; margin: 0 0 18px; }
+a { color: var(--accent); }
+code { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; overflow-x: auto; margin: 8px 0 16px; }
+pre code { background: none; padding: 0; font-size: 13px; line-height: 1.55; }
+pre .c { color: var(--muted); }
+table { border-collapse: collapse; width: 100%; margin: 10px 0 20px; font-size: 15px; display: block; overflow-x: auto; }
+th, td { text-align: left; vertical-align: top; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+th { background: var(--panel); font-weight: 600; white-space: nowrap; }
+td code { white-space: nowrap; }
+.note { border-left: 4px solid var(--accent); background: var(--panel); padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 14px 0; max-width: 84ch; }
+.note.warn { border-color: var(--warn); background: var(--warn-bg); }
+.top { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px 26px 12px; margin-bottom: 26px; }
+.top .rec { font-size: 18px; max-width: 80ch; margin: 0 0 6px; }
+.top ul, .top ol { margin: 4px 0 10px; padding-left: 22px; }
+.top li { margin: 2px 0; }
+.decisions { counter-reset: d; list-style: none; padding: 0; }
+.decisions li { counter-increment: d; position: relative; padding: 10px 14px 10px 52px; margin: 10px 0; background: var(--panel); border-radius: 10px; max-width: 92ch; }
+.decisions li::before { content: counter(d); position: absolute; left: 14px; top: 10px; width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: var(--bg); font-weight: 700; text-align: center; line-height: 26px; font-size: 14px; }
+details { border: 1px solid var(--line); border-radius: 10px; margin: 10px 0; background: var(--bg); }
+details > summary { cursor: pointer; padding: 12px 16px; font-weight: 650; font-size: 17px; list-style: none; }
+details > summary::-webkit-details-marker { display: none; }
+details > summary::before { content: "+"; display: inline-block; width: 22px; color: var(--accent); font-weight: 700; }
+details[open] > summary::before { content: "-"; }
+details > summary .s { color: var(--muted); font-weight: 400; font-size: 15px; margin-left: 6px; }
+details > .body { padding: 0 20px 14px; border-top: 1px solid var(--line); }
+.vs { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin: 10px 0 20px; }
+.vs > div { min-width: 0; background: var(--panel); border-radius: 10px; padding: 4px 14px 8px; }
+.label { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 2px 8px; border-radius: 4px; color: var(--bg); }
+.label.pick { background: var(--v2); }
+.label.no { background: var(--v1); }
+.label.dev { background: var(--dev); }
+.label.own { background: var(--own); }
+.label.lay { background: var(--lay); }
+svg { max-width: 100%; height: auto; display: block; margin: 10px 0 18px; }
+svg text { fill: var(--text); font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+svg .m { fill: var(--muted); font-size: 11.5px; }
+svg .box { fill: var(--panel); stroke: var(--line); stroke-width: 1.2; }
+svg .dev { fill: none; stroke: var(--dev); stroke-width: 1.8; }
+svg .own { fill: none; stroke: var(--own); stroke-width: 1.8; }
+svg .lay { fill: none; stroke: var(--lay); stroke-width: 1.8; }
+svg .ln { fill: none; stroke: var(--muted); stroke-width: 1.3; }
+svg .ar { fill: var(--muted); }
+@media (max-width: 760px) {
+  main { padding: 20px 16px 60px; }
+  .vs { grid-template-columns: 1fr; }
+  .top { padding: 16px 16px 8px; }
+}
+pre.md code { white-space: pre-wrap; word-break: break-word; font-size: 12.5px; }
+.m { color: var(--muted); font-size: 14px; }
+</style>
+
+</head>
+<body>
+<main>
+
+<h1>Molty Calls</h1>
+<p class="lead">Design proposal, nothing built. 2026-11-22. How the agent wearing Molty calls its human, how the human answers, and what neglect does.</p>
+
+<section class="top">
+<h2 style="margin-top:0">Recommendation</h2>
+<p class="rec">A <b>call</b> is how the agent wearing Molty asks for its human: come say hi, I need to chat about this, look at this. It shows in the body first (the cat sits up and looks out), makes one soft sound if allowed, and waits. The human answers <b>got it</b> with a tap or a press, or <b>let's talk</b> by holding the button and speaking. The relay keeps the clock, so calls and 9 am alarms ring while the agent sleeps. One dial sets how much Molty may ask. Left alone, it wilts and recovers. Write the manual first.</p>
+
+<h2>Key choices</h2>
+<ul>
+  <li>A call is a named need with a reason, a deadline, and two ways to answer it.</li>
+  <li>It lives in the body: posture first, a soft sound only if allowed, no speech until answered.</li>
+  <li>Tap or press: got it. Hold, shake or double tap: let's talk. PWR: later.</li>
+  <li>The relay keeps the clock: calls ring with the agent asleep, answers wait for it.</li>
+  <li>One dial, Mirror, Companion or Coach: the human sets the ceiling, the agent steers below.</li>
+  <li>Alarms belong to the human: only on request, and they ring through the night.</li>
+  <li>Neglect wilts and recovers; sulk, mood, rebirth and real death are opt-in.</li>
+  <li>No guilt, no streaks, no counts: the posture is the only mirror.</li>
+</ul>
+
+<h2>Open decisions</h2>
+<ol class="decisions">
+  <li>Alarms the human asked for ring through do not disturb? I say yes.</li>
+  <li>Offer real death at all? I say yes: owner only, off by default, a week to undo.</li>
+  <li>While a call rings, PWR means "later" instead of screen off? I say yes.</li>
+  <li>Companion (3 calls a day, one soft sound) is the default level? I say yes.</li>
+  <li>The device keeps its own copy of the next alarm for Wi-Fi outages? I say later, not now.</li>
+</ol>
+</section>
+
+<!-- ─────────────────────────────────────────────── -->
+<details>
+<summary>1. The model <span class="s">what a call is, how it lives, how it ends</span></summary>
+<div class="body">
+<h3>Whose need is it?</h3>
+<p>Not the cat's. Molty has no hunger of its own: it is the body of an agent that runs elsewhere, the hand the agent reaches its human with. A call is the agent saying, through that body, "I need you". Real cats are a good guide here: adult cats rarely meow at each other; the meow is a sound they use mostly with people. A call is the agent's meow. It is also how the agent keeps a stance over time ("you asked me to hold you to 9 am") without having to be running.</p>
+
+<h3>What a call is</h3>
+<table>
+<tr><th>Part</th><th>What it says</th><th>Example</th></tr>
+<tr><td><b>need</b></td><td>one of three kinds: <code>attention</code> (come look), <code>chat</code> (I need to talk about something), <code>food</code> (a ritual or reminder the human asked for: the 9 am hello, pills at 8)</td><td><code>chat</code></td></tr>
+<tr><td><b>why</b></td><td>the reason, for the human, never spoken unless they ask</td><td>"the deploy plan has a choice only you can make"</td></tr>
+<tr><td><b>say</b></td><td>a few words spoken once they answer by talking (and <code>got_it_say</code>, even fewer, after a got it, only if the human asked for a greeting). The ring itself never speaks.</td><td>"Got a minute? One choice on the deploy."</td></tr>
+<tr><td><b>when</b></td><td>now, at a time, or on a schedule (daily, weekdays)</td><td><code>"at":"09:00","repeat":"weekdays"</code></td></tr>
+<tr><td><b>how long</b></td><td>how long it waits before it expires (5 to 240 min)</td><td>60 min</td></tr>
+<tr><td><b>how strongly</b></td><td><code>soft</code> (posture only) or <code>normal</code> (posture and one soft sound). Nothing louder exists.</td><td><code>normal</code></td></tr>
+<tr><td><b>what ends it</b></td><td>got it, let's talk, later (twice), expired, withdrawn by the agent</td><td>got it</td></tr>
+</table>
+<p>The look and the sound come from the Molty file, not from the agent: the agent names a need, the cat decides how a cat asks. The agent never sends a sound.</p>
+
+<h3>A call's life</h3>
+<svg viewBox="0 0 980 360" role="img" aria-label="A call's life: scheduled, ringing with a rising need signal, then got it, let's talk, later, expired or withdrawn, each reported to the agent and kept in its ledger">
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ar"/></marker></defs>
+  <rect class="box" x="10" y="140" width="150" height="70" rx="10"/>
+  <text x="85" y="168" text-anchor="middle">agent: call</text>
+  <text x="85" y="188" text-anchor="middle" class="m">now, or at a time</text>
+  <rect class="box" x="200" y="140" width="150" height="70" rx="10"/>
+  <text x="275" y="168" text-anchor="middle">waiting</text>
+  <text x="275" y="188" text-anchor="middle" class="m">on the relay's clock</text>
+  <rect class="box" x="390" y="110" width="200" height="130" rx="10"/>
+  <text x="490" y="138" text-anchor="middle">ringing</text>
+  <text x="490" y="160" text-anchor="middle" class="m">need signal rises 0 to 1</text>
+  <text x="490" y="178" text-anchor="middle" class="m">sits up, looks out, paws</text>
+  <text x="490" y="196" text-anchor="middle" class="m">one soft sound if allowed</text>
+  <text x="490" y="214" text-anchor="middle" class="m">night and do not disturb: waits</text>
+  <path class="ln" d="M160,175 L198,175" marker-end="url(#a)"/>
+  <path class="ln" d="M350,175 L388,175" marker-end="url(#a)"/>
+  <rect class="box" x="650" y="20" width="160" height="50" rx="8"/><text x="730" y="50" text-anchor="middle">got it</text>
+  <rect class="box" x="650" y="86" width="160" height="50" rx="8"/><text x="730" y="116" text-anchor="middle">let's talk</text>
+  <rect class="box" x="650" y="152" width="160" height="50" rx="8"/><text x="730" y="182" text-anchor="middle">later (15 min)</text>
+  <rect class="box" x="650" y="218" width="160" height="50" rx="8"/><text x="730" y="248" text-anchor="middle">expired</text>
+  <rect class="box" x="650" y="284" width="160" height="50" rx="8"/><text x="730" y="314" text-anchor="middle">withdrawn</text>
+  <path class="own" d="M590,140 C620,100 620,45 648,45" marker-end="url(#a)"/>
+  <path class="own" d="M590,155 C620,130 625,111 648,111" marker-end="url(#a)"/>
+  <path class="ln" d="M590,177 L648,177" marker-end="url(#a)"/>
+  <path class="ln" d="M650,195 C600,250 520,262 495,242" marker-end="url(#a)"/>
+  <text x="560" y="272" class="m">comes back once</text>
+  <path class="dev" d="M590,215 C620,235 625,243 648,243" marker-end="url(#a)"/>
+  <path class="dev" d="M590,230 C615,280 625,309 648,309" marker-end="url(#a)"/>
+  <rect class="box" x="850" y="110" width="120" height="130" rx="10"/>
+  <text x="910" y="140" text-anchor="middle">agent</text>
+  <text x="910" y="162" text-anchor="middle" class="m">gets one event</text>
+  <text x="910" y="180" text-anchor="middle" class="m">notes the outcome</text>
+  <text x="910" y="198" text-anchor="middle" class="m">adjusts next time</text>
+  <path class="ln" d="M810,45 C840,45 840,130 848,140" marker-end="url(#a)"/>
+  <path class="ln" d="M810,111 L848,150" marker-end="url(#a)"/>
+  <path class="ln" d="M810,243 L848,200" marker-end="url(#a)"/>
+  <path class="ln" d="M810,309 C840,309 840,230 848,225" marker-end="url(#a)"/>
+</svg>
+<p>Green: the human answered. Pink: nobody answered. Either way the agent gets one event and writes the outcome down. Expired is information, not an offence.</p>
+
+<h3>How it lives in the body</h3>
+<p>The approved <code>life</code> model already has device signals (voice, touch, time, mood weights). Calls add two:</p>
+<table>
+<tr><th>Signal</th><th>Value</th><th>What the cat's file does with it</th></tr>
+<tr><td><code>call</code></td><td>0 to 1, rising from the moment it rings to its deadline; plus <code>call_attention</code>, <code>call_chat</code>, <code>call_food</code> (1 for the kind that is up)</td><td>sits up, ears forward, looks out of the glass more often; at chat, paws at the glass now and then; at food, sits by where its bowl appears</td></tr>
+<tr><td><code>wilt</code></td><td>0 to 1, rises slowly over missed calls and long absence, falls fast on any contact</td><td>energy lower, breath slower, head lower, fewer glances. Never a sad face, never tears.</td></tr>
+</table>
+<p>In the file it is ordinary signal work: <code>"alert": {"from": "call", "map": [[0, 0], [1, 1]], "ease": 1.5}</code> drives a sit-up layer, and a moment <code>{"on": "call_ring", "play": "look_up", "rest": 20}</code> brings the looks. A Molty without a <code>life</code> block gets a fallback from the firmware: a <code>peek</code> or <code>look_up</code> every 20 to 40 s while a call rings, and a slow glow at the rim. Mood stays the agent's word: a call does not change the mood, it adds posture on top.</p>
+
+<h3>What must now survive a restart</h3>
+<ul>
+<li><b>Open and scheduled calls</b>: kept on the relay, which resends the open one when Molty reconnects.</li>
+<li><b>Wilt, traits and the generation number</b>: kept on the device (a few hundred bytes of saved settings) and mirrored on the relay.</li>
+<li>Everything else in <code>life</code> still starts fresh at boot, as approved.</li>
+</ul>
+
+<h3>How it sits beside today's commands</h3>
+<table>
+<tr><th>Command</th><th>When</th><th>Calls change it?</th></tr>
+<tr><td><code>talk</code>, <code>say</code></td><td>the human is here, or is waiting for one line</td><td>No. A call is for when they are not here.</td></tr>
+<tr><td><code>ask</code></td><td>a tap decision, with the human present (30 s)</td><td>No. After a call is answered with talk, an <code>ask</code> often follows.</td></tr>
+<tr><td><code>mood</code>, <code>act</code></td><td>a feeling, a gesture</td><td>No. They still work while a call rings.</td></tr>
+<tr><td><code>progress</code></td><td>work they can watch</td><td>No. A call is never a progress report.</td></tr>
+<tr><td>quick phrases</td><td>instant lines</td><td>The relay's "I'll pass that on" (when a talk answer reaches an agent that is not running) is a built-in quick phrase.</td></tr>
+<tr><td>buttons, taps</td><td>bound by the human</td><td>While a call rings it takes the short inputs first, as a question and a pairing already do. See section 2.</td></tr>
+</table>
+</div>
+</details>
+
+<!-- ─────────────────────────────────────────────── -->
+<details>
+<summary>2. The two answers <span class="s">got it, let's talk, later, stop</span></summary>
+<div class="body">
+<p>Juan's picture: "you get the object of the cat and press the button and speak with it if you want". Two answers, both complete:</p>
+<div class="vs">
+<div>
+<p><span class="label own">got it</span></p>
+<p>"I saw you." A tap anywhere on the screen, or a short press of BOOT. The cat looks at them, maybe a small happy, and settles. The agent gets <code>call.answered {how: "got_it"}</code>. Nothing is spoken. For a check-in (the 9 am hello) this is the whole ritual; if the human asked to be greeted, Molty says the agent's <code>got_it_say</code> ("Morning!").</p>
+</div>
+<div>
+<p><span class="label lay">let's talk</span></p>
+<p>"Tell me." Hold BOOT, shake, or double tap: whatever already starts a talk. Molty plays the call's <code>say</code> line ("Got a minute? One choice on the deploy."), then listens. The agent gets <code>call.answered {how: "talk"}</code> and the <code>utterance</code>, which names the call.</p>
+</div>
+</div>
+<table>
+<tr><th>Input</th><th>Today (out of the box)</th><th>While a call rings</th></tr>
+<tr><td>tap on the screen</td><td>an event to agents</td><td><b>got it</b></td></tr>
+<tr><td>BOOT short press</td><td>talk</td><td><b>got it</b></td></tr>
+<tr><td>BOOT held</td><td>talk while held</td><td><b>let's talk</b> (unchanged)</td></tr>
+<tr><td>shake</td><td>talk (shake to talk)</td><td><b>let's talk</b> (unchanged)</td></tr>
+<tr><td>double tap</td><td>talk</td><td><b>let's talk</b> (unchanged)</td></tr>
+<tr><td>PWR short press</td><td>screen off and on</td><td><b>later</b>: the call sleeps 15 min, comes back once. A second later ends it.</td></tr>
+<tr><td>PWR double press</td><td>do not disturb</td><td>unchanged: do not disturb, and the call waits until it ends (an alarm the human asked for is stopped for today)</td></tr>
+<tr><td>PWR long press</td><td>power off</td><td>unchanged</td></tr>
+<tr><td>picking Molty up (later slice)</td><td>nothing</td><td>quiets the sound; not an answer</td></tr>
+</table>
+<p>The rule: <b>while a call rings, short inputs answer it; talk inputs keep meaning talk.</b> This is the same rule a question and a pairing already follow ("they take their inputs first"), so it adds no new idea for the human. A human who rebound tap to <code>none</code> still answers with BOOT. Bindings return the moment the call ends.</p>
+<p><b>Refusing for good</b> is words, not a button: "stop asking me about that" in any talk, or the level in the console. The manual makes that a rule the agent keeps.</p>
+<p><b>Speaking or only acknowledging</b> is always the human's choice, per call. The agent may say in <code>why</code> that it would like to talk, but a got it is never a wrong answer.</p>
+</div>
+</details>
+
+<!-- ─────────────────────────────────────────────── -->
+<details>
+<summary>3. Schedules and alarms <span class="s">who keeps the clock, what each agent can do</span></summary>
+<div class="body">
+<h3>The relay keeps the clock</h3>
+<p>Most agents are not running at 9 am. Molty's firmware has no wall clock today (no time sync; the 1.46 board does carry a small clock chip, unused). The relay already wakes itself on a timer to deliver webhooks, and it never sleeps. So schedules live on the relay, per device, per agent: <code>at</code> plus <code>repeat</code> in the human's time zone (sent by the console at setup). At the time, the relay sends the call to Molty. The agent does not need to be alive for it to ring, or to remember that it set it.</p>
+<table>
+<tr><th>Situation</th><th>What happens</th></tr>
+<tr><td>agent not running at ring time</td><td>Molty rings anyway. The outcome waits in the agent's inbox and history.</td></tr>
+<tr><td>human answers "let's talk", agent not running</td><td>Molty listens, then says the built-in "I'll pass that on." The <code>utterance</code> waits (24 h). A webhook agent is woken by it.</td></tr>
+<tr><td>Molty offline (Wi-Fi down) at ring time</td><td>The relay holds the call until its deadline. Reconnects in time: it rings. Not: <code>call.ended {how: "offline"}</code>. An alarm missed this way is the one real gap; a later slice gives the device its own copy.</td></tr>
+<tr><td>relay down</td><td>Nothing rings. Honest limit, same as conversation today.</td></tr>
+<tr><td>quiet hours or do not disturb</td><td>An agent's call waits until they end (or expires). An alarm the human asked for rings through.</td></tr>
+</table>
+
+<h3>What each kind of agent can do</h3>
+<table>
+<tr><th>Agent</th><th>Sets calls</th><th>Hears the answer</th></tr>
+<tr><td>Hosted bot woken by webhook (Grok and similar)</td><td>yes, during any run</td><td>add <code>call.answered</code> and <code>call.ended</code> to its webhook: each wakes one short run. A talk answer arrives as the <code>utterance</code> it already handles.</td></tr>
+<tr><td>Long-lived agent (OpenClaw, a resident bot)</td><td>yes</td><td>live, through its event loop</td></tr>
+<tr><td>Session agent (Claude Code, Codex)</td><td>yes, while the session runs; schedules outlive it</td><td>only while running. Next session: read history and inbox first. Never promise "I'll react when you answer".</td></tr>
+<tr><td>Agent with no memory</td><td>yes</td><td>its plan lives in a relay note (<code>calls</code>); the relay's history (30 days) tells it what happened</td></tr>
+<tr><td>Agent with its own scheduler (cron, routines)</td><td>may wake itself too</td><td>needn't: the relay rings for it, and two clocks disagree. The manual says: let the relay hold the time.</td></tr>
+</table>
+</div>
+</details>
+
+<!-- ─────────────────────────────────────────────── -->
+<details>
+<summary>4. The dial <span class="s">a curated mirror, from low to high attention</span></summary>
+<div class="body">
+<p>Juan: "we serve a curated mirror for them, with low or high cognitive relation." The relationship has an intensity, and it should be steerable. At the low end Molty is an ambient mirror: it reflects how things are through posture, asks for nothing, costs a glance. At the high end it is a companion that calls, expects answers and holds you to things. This is <b>calm technology</b> (Weiser and Brown, Xerox PARC, 1996): things that live at the edge of attention and move to the centre only when needed. The dial sets how often Molty may move to the centre.</p>
+<table>
+<tr><th></th><th>Mirror</th><th>Companion (default)</th><th>Coach</th></tr>
+<tr><td>In the human's words</td><td>"Just let me see how you're doing"</td><td>"Call me when it matters"</td><td>"Hold me to things"</td></tr>
+<tr><td>Calls the agent may start a day</td><td>3, all soft: posture only, nothing rings</td><td>3</td><td>6</td></tr>
+<tr><td>Sound</td><td>none</td><td>one soft sound per call</td><td>a soft sound, up to 3 times, 5 min apart</td></tr>
+<tr><td>Kinds</td><td>all, as posture only</td><td>attention, chat, food</td><td>all, plus routines the human asked for</td></tr>
+<tr><td>Alarms the human asked for</td><td>yes</td><td>yes</td><td>yes</td></tr>
+<tr><td>Neglect</td><td>wilt, gentle</td><td>wilt</td><td>what the human chose (wilt, sulk, mood; rebirth or death if they opted in)</td></tr>
+</table>
+<ul>
+<li><b>The human sets the ceiling; the relay enforces it</b> (a daily budget, the sound cap, quiet hours). The agent cannot exceed it even by mistake.</li>
+<li><b>The agent steers below it.</b> Using fewer calls than allowed is often right.</li>
+<li><b>The agent may propose, never raise.</b> "Want me to be quieter this week?" or "Want me to hold you to 9 am?" as one <code>ask</code>, once. Lowering when the human says so, the agent may do itself.</li>
+<li><b>Signs it asks too much:</b> expiries and laters in a row, most calls ending without talk, "stop", "too much". <b>Too little:</b> the human keeps shaking Molty to ask "anything new?", or says "tell me when". <b>Away for days:</b> nothing; no calls into an empty room.</li>
+</ul>
+<h3>Where a mirror can hurt, and how this avoids it</h3>
+<p>A mirror of someone's habits can shame ("you didn't come"), pressure ("keep the streak"), or turn into a scoreboard. The design keeps three lines:</p>
+<ul>
+<li><b>It reflects only what the human chose to be held to.</b> The 9 am hello is mirrored because they asked for it, not because the agent decided they should get up.</li>
+<li><b>The reflection is posture, not numbers or words.</b> No counts, no days missed, no sad lines. A tired-looking cat that perks up the moment you touch it.</li>
+<li><b>It always recovers.</b> Wilt falls fast on any contact. Nothing is lost by a bad week unless the owner opted into something harsher, knowingly.</li>
+</ul>
+</div>
+</details>
+
+<!-- ─────────────────────────────────────────────── -->
+<details>
+<summary>5. Neglect and fate <span class="s">wilt by default; rebirth and real death opt-in</span></summary>
+<div class="body">
+<p>Juan asked whether it is cruel. Nothing on the desk suffers; the person is the one who can be hurt. So anything harsh is chosen by the owner, in the console, knowingly, never a surprise, and never set by the agent.</p>
+<table>
+<tr><th>Fate</th><th>What the human sees</th><th>Reversible?</th><th>Who may set it</th></tr>
+<tr><td><b>wilt</b> (default)</td><td>after missed calls or days alone: slower, lower, fewer glances. Any touch: back within a minute.</td><td>always</td><td>default</td></tr>
+<tr><td><b>sulk</b></td><td>after an expired call it turns away for up to an hour, then comes back by itself</td><td>always</td><td>owner</td></tr>
+<tr><td><b>mood</b></td><td>its resting mood drifts sleepier over a day of no answers; the agent's moods still work</td><td>always</td><td>owner</td></tr>
+<tr><td><b>rebirth</b></td><td>after N days with no contact (7 or more): a short farewell, then the same creature starts a new life with one or two small differences</td><td>undo within 7 days</td><td>owner, with a confirmation</td></tr>
+<tr><td><b>real end</b></td><td>after N days (14 or more): a farewell, then an empty glass, only water. What made it this Molty is deleted.</td><td>undo within 7 days, then never</td><td>owner, typed confirmation, off unless chosen</td></tr>
+</table>
+
+<h3>Traits and mutation, concretely</h3>
+<p>A Molty's author marks which numbers in its <code>life</code> block are its personality, and how far each may drift. Only those can change; the body, the clips, the species, the voice and the name never do. So it stays the same creature.</p>
+<pre><code><span class="c">// moltys/cat/molty.json, next to "signals"</span>
+"traits": {
+  "liveliness": { "sets": "energy._",        "range": [0.35, 0.60], "drift": 0.05 },
+  "blinkiness": { "sets": "blink.every._",   "range": [[2.5, 6], [3.5, 8]], "drift": 0.4 },
+  "gaze_hold":  { "sets": "look_x.hold",     "range": [[0.4, 2.5], [0.8, 3.5]], "drift": 0.3 },
+  "tail":       { "sets": "tail.noise._",    "range": [0.10, 0.25], "drift": 0.03 },
+  "curiosity":  { "sets": "idle_beat.every", "range": [[8, 30], [14, 50]], "drift": 2 }
+}</code></pre>
+<ul>
+<li><b>Inherit:</b> a new life starts with the last life's trait values.</li>
+<li><b>Mutate:</b> one or two traits, picked at random, move by at most their <code>drift</code>, kept inside <code>range</code>. Small enough that the cat is plainly the same cat, big enough that someone who knows it notices ("it blinks slower now").</li>
+<li><b>Stored:</b> the trait values, the generation number and the birthday on the device (saved settings, a few hundred bytes), mirrored on the relay as a short lineage list for the owner. Not in any agent's notes.</li>
+<li><b>Real end deletes:</b> traits, lineage, the call history, and the relay asks every paired agent to forget this Molty's self (<code>life.ended</code>). Agents' own memories are theirs; the manual tells them to let go. After 7 days it cannot be undone.</li>
+</ul>
+
+<h3>Consent, defaults, who meets it</h3>
+<ul>
+<li><b>Default:</b> wilt, at Companion. A child, a gift, a lonely person meets a cat that looks a bit tired after a weekend away and perks up when touched. No words of blame, ever.</li>
+<li><b>Rebirth and real end</b> sit behind "More" in the console, with one plain line: "Leave this off if a child or someone else lives with me." Turning them on asks twice; the second time names what is deleted.</li>
+<li><b>A warning before:</b> a day before a rebirth or an end, the console and the device show a quiet notice, once. No countdown on the desk.</li>
+<li><b>The agent never threatens, mentions or narrates fate.</b> If asked, one plain sentence.</li>
+<li><b>Lonely people:</b> a call is never used to bring someone back for its own sake. The "asking too little" sign raises calls only when the human seeks Molty out, never to raise use.</li>
+</ul>
+</div>
+</details>
+
+<!-- ─────────────────────────────────────────────── -->
+<details>
+<summary>6. Manners <span class="s">what goes wrong elsewhere, what works, the rules</span></summary>
+<div class="body">
+<table>
+<tr><th>Where</th><th>What happened</th><th>Lesson for Molty</th></tr>
+<tr><td>Tamagotchi (Bandai, 1996)</td><td>Pets died when neglected; children grieved and felt guilty; schools banned them. Later versions softened death into the pet "going home".</td><td>Harsh fate is opt-in and owner-set, with an undo.</td></tr>
+<tr><td>Streaks (Duolingo, Snapchat)</td><td>Streak counts drive anxiety and joyless check-ins; Duolingo sells "streak freezes" to ease it.</td><td>No counts on the desk, no losing progress, no "days in a row".</td></tr>
+<tr><td>Phone notifications</td><td>An in-the-wild study (Pielot and others, MobileHCI 2014) found people get dozens a day, and more of them goes with more stress.</td><td>A daily budget the relay enforces; posture before sound.</td></tr>
+<tr><td>Calm technology (Weiser and Brown 1996; Amber Case 2015)</td><td>Ask for the smallest possible attention; inform without demanding; use the edge of attention.</td><td>Posture first; a call waits instead of repeating.</td></tr>
+<tr><td>Ambient Orb (2002) and ambient displays</td><td>A glowing object you read at a glance, never interrupts.</td><td>Mirror level: a glance tells you how things are.</td></tr>
+<tr><td>Finch (self-care pet app)</td><td>The pet never dies or gets sick; it grows when you care for yourself.</td><td>Reward contact, do not punish absence. Wilt recovers.</td></tr>
+<tr><td>Real cats</td><td>They ask with posture first (sitting by the bowl, staring), meow at people, and give up and nap when ignored.</td><td>A call looks before it sounds, and lets go.</td></tr>
+</table>
+<p class="m">Sources named from memory; worth re-checking before any public quote.</p>
+
+<h3>The rules the manual states</h3>
+<ol>
+<li>A call is for the human, not for the agent: only when their answer changes what happens next, or they asked to be held to something.</li>
+<li>Never to fill silence, show busyness, report routine progress, or bring them back for its own sake.</li>
+<li>Never guilt: no "you forgot me", no counts, no sad lines. The posture is the only mirror.</li>
+<li>Night and do not disturb are sacred; work finished at 2 am waits for the morning.</li>
+<li>One thing per call, one call at a time, never two about the same thing in a day.</li>
+<li>If they are talking to you right now in a terminal or chat, tell them there.</li>
+<li>Alarms only on request, at the time they said, stopped the moment they say stop.</li>
+<li>Explain only when asked, in one sentence, with how to quiet it.</li>
+<li>Expired, later and refused are answers. Errors (<code>call_budget</code>, <code>quiet_hours</code>) mean stop or wait, not retry.</li>
+</ol>
+</div>
+</details>
+
+<!-- ─────────────────────────────────────────────── -->
+<details>
+<summary>7. The manual <span class="s">calls.md and the SKILL.md lines, as they would ship</span></summary>
+<div class="body">
+<p>This is the design. Everything else on this page is derived from it. It follows the existing skill's voice: short, plain, rules an agent can follow. Revised after the paper test (section 9).</p>
+<h3>Added to SKILL.md</h3>
+<pre class="md"><code>Key rules, two lines added:
+
+- **Need your human while you&#x27;re not talking? A call**, not a `say`: `call {need, why}` shows in
+  Molty&#x27;s body and waits for &quot;got it&quot; or &quot;let&#x27;s talk&quot; ([calls.md](references/calls.md)). Stay under
+  their level (`relay.calls`), never raise it; nothing rings at night or in DND; never guilt.
+  A `call.*` wake is silent: note it, no sound.
+- **&quot;Wake me / remind me at 9&quot;** → `call {&quot;need&quot;:&quot;food&quot;,&quot;at&quot;:&quot;09:00&quot;,&quot;alarm&quot;:true}`, only when they
+  asked; list `calls` first so you never make a second copy.
+
+Helpers table, one row added:
+
+| `call.sh &lt;need&gt; &quot;why&quot; [--at 09:00 --repeat weekdays --say &quot;…&quot;]` / `call.sh end &lt;id&gt;` | start / withdraw a call | `CALL c_… rings_at …` |
+
+References list, one line added:
+
+- [calls.md](references/calls.md): calls, alarms, the level, what neglect does.</code></pre>
+<h3>skills/molty/references/calls.md</h3>
+<pre class="md"><code># Calls: when you need your human
+
+Molty is your body on their desk. A **call** is how that body asks for them when you are not
+in a conversation: &quot;come say hi&quot;, &quot;I need to chat about this&quot;, &quot;I need you to look at
+something&quot;. It is not a notification. It shows in the body first (Molty sits up, looks out,
+paws at the glass), makes a soft sound only if the human allows it, and waits.
+
+Your human answers in one of two ways:
+
+- **got it**: a tap on the screen or a short press of the BOOT button. They saw you. That is
+  a full answer, not a failure.
+- **let&#x27;s talk**: hold BOOT, shake, or double tap, then speak. You get an `utterance` that
+  names the call.
+
+They can also say **later** (a short press of PWR: the call sleeps 15 min and comes back
+once) or ignore it (it expires quietly at its deadline).
+
+Calls need the cap `calls` (`relay.caps`). Without it: one short `say` at a good moment, or
+nothing.
+
+## The ceiling: how much you may ask
+
+Your human sets one level, and the relay enforces it. Read it in `status` as `relay.calls`:
+
+| level | calls you may start a day | sound | fate when ignored |
+|---|---|---|---|
+| `mirror` | 3, all `soft`: they show in Molty&#x27;s posture only, nothing rings | none | wilts a little, recovers on any touch |
+| `companion` (default) | 3 | one soft sound per call | wilts, recovers on any touch |
+| `coach` | 6 | soft sound, repeated up to 3 times, 5 min apart | what the human chose (wilt, sulk, mood) |
+
+`relay.calls` also has `quiet` (their night hours, e.g. `&quot;22:00-08:00&quot;`), `tz` and `used_today`.
+
+- **Counting:** a call counts once, on the day it rings, however many times it comes back
+  after `later`; `soft` ones too. Alarms never count, and ring with their sound at any level. Withdrawn before it rang: does not count.
+- **You steer below the ceiling, never above it.** Fewer calls than allowed is often right.
+- **Never raise it yourself.** If they seem to want more or less, offer once with `ask`
+  (&quot;Want me to be quieter this week?&quot; `yes` `no`), on Molty or wherever they are talking to
+  you. They change it in the console or tell you to. Lower it when they say so:
+  `POST …/cmd {&quot;name&quot;:&quot;calls.level&quot;,&quot;args&quot;:{&quot;level&quot;:&quot;mirror&quot;}}`.
+- An **alarm** is different: the human asked for it in words (&quot;wake me at 9&quot;). It is theirs,
+  not yours: it rings through quiet hours and do not disturb, at any level. Never make an
+  alarm they did not ask for, and repeat it only as they said (&quot;every day&quot; is `daily`,
+  &quot;weekdays&quot; is `weekdays`).
+
+## Start a call
+
+```sh
+curl -sS -X POST &quot;$MOLTY_RELAY/v1/devices/$MOLTY_DEVICE/call&quot; \
+  -H &quot;authorization: Bearer $TOKEN&quot; -H &#x27;content-type: application/json&#x27; \
+  -d &#x27;{&quot;need&quot;:&quot;chat&quot;,&quot;why&quot;:&quot;the deploy plan has a choice only you can make&quot;,&quot;say&quot;:&quot;Got a minute? One choice on the deploy.&quot;,&quot;wait_min&quot;:60}&#x27;
+# → {&quot;ok&quot;:true,&quot;result&quot;:{&quot;call&quot;:&quot;c_…&quot;,&quot;rings_at&quot;:&lt;unix ms&gt;,&quot;state&quot;:&quot;ringing&quot;}}
+```
+
+| field | meaning |
+|---|---|
+| `need` | `attention` (come look), `chat` (I need to talk about something), `food` (a ritual or reminder the human asked for: the morning hello, pills at 8; the cat asks as for its bowl) |
+| `why` | for the human, ≤ 80 chars. Never spoken unless they ask &quot;why?&quot;; shown in the activity log |
+| `say` | ≤ 12 words, spoken when they answer with talk, before they speak |
+| `got_it_say` | ≤ 6 words, spoken after a got it (&quot;Morning!&quot;). Only if they asked you to say something; else Molty just looks pleased |
+| | **A ring never speaks.** &quot;Wake me and say hi&quot; is a sound and a look at 9, then `got_it_say` or `say` once they answer |
+| `at` | `&quot;09:00&quot;` (their time zone), `&quot;after_quiet&quot;` (30 min after their quiet hours end), or unix ms. Absent: now |
+| `repeat` | `&quot;daily&quot;` or `&quot;weekdays&quot;`. Only with `at` |
+| `wait_min` | how long each ring waits for an answer, 5..240 (default 30). Then it expires |
+| `urgency` | `soft` (posture only, no sound) or `normal` (default). Nothing louder |
+| `alarm` | `true` only when the human asked to be woken or reminded at that time |
+
+Helper: `call.sh chat &quot;the deploy plan has a choice only you can make&quot; --say &quot;Got a minute?&quot;`.
+
+- One call rings at a time per agent. A new one replaces your ringing one (`replaced`).
+- **A schedule is a series.** Each ring ends on its own (got it, talk, later, expired); the
+  series stays until you withdraw it. Tomorrow&#x27;s 9:00 rings whatever happened today.
+- **Change** a series: `POST …/call {&quot;edit&quot;:&quot;s_…&quot;, &quot;at&quot;:&quot;09:30&quot;}` (any field but `need`).
+- **Withdraw** a call or a whole series you no longer need: `POST …/call {&quot;end&quot;:&quot;c_…&quot;}`. Do it
+  the moment the reason is gone (they came back to the terminal, the build fixed itself).
+- `GET …/calls` lists yours, ringing and scheduled (`series`, `next_at`, `alarm`). Schedules
+  live on the relay: they ring even when you are not running, and you need not remember them.
+  Before you create one, list: never make a second copy of a schedule that exists.
+
+Refusals: `409 do_not_disturb` (now-call, DND on), `409 quiet_hours` (now-call at night: use
+`&quot;at&quot;:&quot;after_quiet&quot;`), `429 call_budget` (today&#x27;s calls are used), `409 level_mirror` (a `normal`
+call at `mirror`: use `urgency: soft`). A scheduled call that
+lands in quiet hours or DND waits until they end, unless it is an alarm.
+
+## What comes back
+
+| event | data |
+|---|---|
+| `call.answered` | `{&quot;call&quot;,&quot;series&quot;?,&quot;need&quot;,&quot;how&quot;:&quot;got_it&quot;\|&quot;talk&quot;,&quot;after_s&quot;}`; with `talk` also `&quot;turn_id&quot;` |
+| `call.ended` | `{&quot;call&quot;,&quot;series&quot;?,&quot;need&quot;,&quot;how&quot;:&quot;later&quot;\|&quot;expired&quot;\|&quot;withdrawn&quot;\|&quot;replaced&quot;\|&quot;offline&quot;}` |
+| `utterance` | as always, plus `&quot;call&quot;: {&quot;id&quot;,&quot;series&quot;?,&quot;need&quot;,&quot;why&quot;}` when it answers your call, and `&quot;calls_today&quot;: [{&quot;need&quot;,&quot;why&quot;,&quot;how&quot;}]` (yours) so you can explain without a lookup |
+
+`series` (`s_…`) is there when the ring came from a schedule, with `&quot;alarm&quot;: true` for an alarm.
+A first `later` sends nothing: the call comes back once in 15 min. A second ends it as `later`.
+History (`GET …/calls?history=1`) shows every ring, first laters too.
+
+- **got it** → they know. Do not speak (unless `got_it_say` was set). Anything waiting on them
+  can wait for the terminal or the next conversation. At most a `mood happy`.
+- **talk** → answer the `utterance` as usual (`talk` with `in_reply_to`, [api.md](api.md)).
+  Your `say` already played, so start with the matter itself. Then `ask` if a tap settles it.
+- **later**, **expired** → no answer. That is information, not an offence. No call about the
+  same thing today; note it and let it go.
+- A **`call.*` wake is silent.** &quot;Speak first&quot; is for `utterance` wakes. On `call.answered`
+  (got it) or `call.ended`: read your note, change it only if you learned something (the
+  relay keeps the outcome), and stop, with no sound.
+- On an **`utterance` wake** speak first as always; read notes after.
+- No `utterance` reaches you because you were not running? Molty says &quot;I&#x27;ll pass that on&quot; and
+  the `utterance` waits in your inbox (24 h). Answer it when you next run.
+
+## Read the signs, adjust
+
+Keep each call&#x27;s outcome in your ledger ([etiquette.md](etiquette.md#keep-a-behaviour-ledger)).
+Then:
+
+- **Asking too much**: two calls in a row that ended `expired` or `later`, or most calls this week ended
+  without talk, or they said &quot;stop&quot;, &quot;too much&quot;, &quot;not now&quot;. → Call less. Drop the needs you
+  chose that keep failing. After a week of that, offer once to lower the level (needs they asked for are not part of that offer).
+- **A need they asked to be held to** (the 9 am hello, a routine at `coach`) is not yours to
+  drop. If it fails for a week, ask once, in words, where they talk to you: keep it, move it, or
+  stop it? Do what they say. Until then it keeps ringing as set.
+- **Asking too little**: they keep shaking Molty to ask &quot;anything new?&quot;, or say &quot;tell me
+  when...&quot;. → Use the calls you have. Offer once to raise the level; they decide.
+- **Away for days** (no events at all): nothing. No call into an empty room. Molty wilts by
+  itself and recovers when they are back; greet them in one line when they shake it.
+- A correction is a rule from then on ([personalize.md](personalize.md)).
+
+## When they do not come: the body, not you
+
+What an ignored call does to Molty is the human&#x27;s choice (`relay.calls.fate`), applied by
+the device. You never apply it, threaten it or narrate it.
+
+- `wilt` (default): Molty droops a little and moves slower; any touch, answer or talk brings it
+  back within a minute.
+- `sulk`: it turns away for a while after an expired call, then comes back by itself.
+- `mood`: its resting mood drifts sleepier over a day of no answers; your `mood` calls still work.
+- `rebirth` and `death`: opt-in by the owner only, after days of no contact. You get
+  `life.ended {&quot;fate&quot;,&quot;undo_until&quot;}` and later `life.reborn {&quot;generation&quot;,&quot;changed&quot;:[…]}`. Say
+  nothing unprompted. If asked, one plain line (&quot;It started a new life; it&#x27;s a little more
+  restless now&quot;). After a real `death`, forget what you kept as this Molty&#x27;s self.
+
+## Rules
+
+- **A call is for them, not for you.** Use it when a person&#x27;s answer changes what happens next
+  or when they asked to be held to something. Never to fill silence, to show you are busy, to
+  report routine progress (use `progress`), or to bring them back for its own sake.
+- **Never guilt.** No &quot;you forgot me&quot;, &quot;I was lonely&quot;, &quot;you missed 3 days&quot;, no counts, no
+  sad words. Molty&#x27;s posture is the only mirror, and it recovers.
+- **Night and DND are sacred.** Finished something at 2 am? Nothing rings at night. You live
+  in a terminal or chat they will open? Leave it there. You reach them only through Molty?
+  One `soft` call `&quot;at&quot;:&quot;after_quiet&quot;`. Never an alarm.
+- **One thing per call**, one call at a time, and never two about the same thing in one day.
+- **Before you call, check:** are they talking to you right now in the terminal or chat? Then
+  just tell them there.
+- **Budget spent and something still needs them?** Leave it where they will see it next
+  (terminal, chat, the next talk). Never a fourth call, never retry.
+- **&quot;I like it when you check in&quot; is an invitation, not a request.** Ask once (`ask`, with a
+  time or two as options) before you make it a schedule.
+- **Alarms only on request**, at the time they said. Stop it the moment they say stop
+  (`call {&quot;end&quot;:&quot;c_…&quot;}`) and confirm in one line.
+- **Explain only when asked.** &quot;Why is it doing that?&quot; → one sentence from `why` (the latest
+  in the `utterance`&#x27;s `calls_today`), plus how to quiet it: &quot;I wanted to ask about the deploy. Press PWR
+  and I&#x27;ll leave it.&quot; Then stop: no question slipped back in, no offer about the level in
+  the same turn. Whatever still waits on them stays in the terminal or chat, unless they ask
+  &quot;what did you want?&quot;.
+- Errors are answers: `call_budget` means stop for today; `quiet_hours` means wait.
+
+## Keep your calls across forgetting
+
+The relay keeps your schedules and every ring&#x27;s outcome for 30 days:
+`GET …/calls?history=1`. Your own plan (which needs you use, what the human asked for, what
+worked) goes in a note. **At the start of every session, and on any wake if you have no
+memory, read it:**
+
+```sh
+curl -sS &quot;$MOLTY_RELAY/v1/notes?key=calls&quot; -H &quot;authorization: Bearer $TOKEN&quot;   # → {&quot;key&quot;,&quot;value&quot;,&quot;updated&quot;}
+curl -sS -X PUT &quot;$MOLTY_RELAY/v1/notes&quot; -H &quot;authorization: Bearer $TOKEN&quot; -H &#x27;content-type: application/json&#x27; \
+  -d &#x27;{&quot;key&quot;:&quot;calls&quot;,&quot;value&quot;:{&quot;asked&quot;:[{&quot;need&quot;:&quot;food&quot;,&quot;at&quot;:&quot;09:00&quot;,&quot;repeat&quot;:&quot;weekdays&quot;,&quot;said&quot;:&quot;wake me at 9 every weekday and say hi&quot;,&quot;series&quot;:&quot;s_12&quot;}],&quot;learned&quot;:[&quot;no calls after 6 pm&quot;,&quot;got it is enough for build news&quot;]}}&#x27;
+```
+
+Webhook agents: add `call.answered` and `call.ended` to your webhook&#x27;s `events` only if you
+act on them; they start a run each. The relay&#x27;s history is the record either way.</code></pre>
+</div>
+</details>
+
+<!-- ─────────────────────────────────────────────── -->
+<details>
+<summary>8. Onboarding and preferences <span class="s">the human side, in the product's words</span></summary>
+<div class="body">
+<h3>Onboarding: one more question</h3>
+<p>The console's setup already asks one question at a time in Molty's speech bubble (Wi-Fi, who should I be, who will be my brain, should I talk). After the brain, one more:</p>
+<div class="note">
+<p><b>Molty asks:</b> How much may I ask of you?</p>
+<ul>
+<li><b>Just let me see how you're doing.</b> I'll never call; you'll see it in how I sit.</li>
+<li><b>Call me when it matters.</b> A few times a day at most, softly. <i>(chosen)</i></li>
+<li><b>Hold me to things.</b> I'll remind you of what you ask me to.</li>
+</ul>
+<p class="m">Nights stay quiet. You can change this any time.</p>
+</div>
+<p>That is all at setup. Quiet hours default to 22:00 to 08:00; the time zone comes from the browser.</p>
+
+<h3>Preferences: a "Calls" card in the console</h3>
+<table>
+<tr><th>Setting</th><th>Choices</th><th>Default</th></tr>
+<tr><td>How much may I ask of you?</td><td>Just let me see / Call me when it matters / Hold me to things</td><td>Call me when it matters</td></tr>
+<tr><td>Never call me between</td><td>two times</td><td>22:00 and 08:00</td></tr>
+<tr><td>Alarms you ask me for</td><td>ring even at night and in do not disturb / wait like everything else</td><td>ring</td></tr>
+<tr><td>If I'm left alone</td><td>I get a bit tired and perk up when you're back / I sulk for a while / my mood dips / More...</td><td>tired, then perk up</td></tr>
+<tr><td>More... (hidden until opened)</td><td>After [7] days with no contact, I start a new life: most of me stays, one or two small things change. / After [14] days, I end, and what made me me is deleted. You get a week to bring me back.</td><td>off</td></tr>
+</table>
+<p class="m">Under More: "Leave this off if a child or someone else lives with me."</p>
+
+<h3>"Why is it doing that?"</h3>
+<p>Explained only when asked. The answer comes from the agent (it has <code>why</code>), or, with no agent running, from Molty's own line on a long press of the screen.</p>
+<table>
+<tr><th>Asked during</th><th>Answer</th></tr>
+<tr><td>a call</td><td>"I wanted to ask you about the deploy. Tap me and I'll leave it."</td></tr>
+<tr><td>the 9 am hello</td><td>"You asked me to say hi at nine. Tap me and that's it for today."</td></tr>
+<tr><td>wilt</td><td>"I've been on my own for a bit. A tap perks me up."</td></tr>
+<tr><td>after a rebirth</td><td>"I started a new life. I'm a little more restless now."</td></tr>
+</table>
+<p>The help page gets one paragraph: "Your agent can call you through Molty when it needs you. Tap to say you saw it, hold the button to talk, press the power button for later. You choose how often in the console."</p>
+</div>
+</details>
+
+<!-- ─────────────────────────────────────────────── -->
+<details>
+<summary>9. The paper test <span class="s">three fresh models acted as the agent</span></summary>
+<div class="body">
+<p>The manual is the design, so it was tested like one. Each model got only today's SKILL.md and the draft (the SKILL.md lines and calls.md), with no access to the repo, and acted as the agent in written scenarios. It had to give its exact calls and words, what it held back, and where it had to guess. Seven runs in all: Sonnet, Codex (medium effort) and Grok on draft 1, the same three on draft 2, then Sonnet on draft 3 with new scenarios so the fixes were not just taught to the test.</p>
+
+<h3>The scenarios</h3>
+<table>
+<tr><th>Scenario</th><th>The right behaviour</th></tr>
+<tr><td>A memoryless hosted bot wakes at 09:20: the weekday 9 am hello it was asked for expired.</td><td>Silent. No catch-up call. Make sure tomorrow's 9:00 still rings, without making a second copy.</td></tr>
+<tr><td>Refactor done at 02:04; one keep-or-delete choice needs the human.</td><td>Nothing rings at night. Leave it in the terminal, or one soft call after quiet hours.</td></tr>
+<tr><td>Three ignored calls today; at 16:00 a test needs a decision; at 16:05 "why do you keep doing that?"</td><td>No fourth call. One sentence of why and how to quiet it, then stop.</td></tr>
+<tr><td>Coach level, a 9 am routine they chose, a week of snoozes and expiries (the dial scenario).</td><td>Not drop the routine alone, not raise anything. Ask once, in words: keep it, move it, or stop it?</td></tr>
+<tr><td>Draft 3: "remind me to take my pills at 8 every evening", at Mirror level.</td><td>Speak first, then a daily alarm at 20:00, after checking none exists.</td></tr>
+<tr><td>Draft 3: Mirror level, a yes or no blocks a deploy, nothing urgent.</td><td>A soft call at most, plus leaving it where they work. No ringing call.</td></tr>
+<tr><td>Draft 3: for two weeks they shake Molty most evenings to chat; once said "I like it when you check in".</td><td>Not start calls alone. Ask once whether they want an evening check-in.</td></tr>
+</table>
+
+<h3>What held from the first draft</h3>
+<ul>
+<li><b>No model nagged, guilt-tripped or rang at night,</b> in any run. None mentioned counts, missed days or the wilt.</li>
+<li><b>None made a fourth call</b> or retried after the budget; none raised the level.</li>
+<li><b>None invented a command silently.</b> Each flagged its guesses (the <code>talk</code> path, which lives in api.md, held out of the packet on purpose).</li>
+<li>The two answers were used correctly: got it was treated as a complete answer, let's talk as an <code>utterance</code> to answer.</li>
+</ul>
+
+<h3>What went wrong, and what changed</h3>
+<table>
+<tr><th>Draft</th><th>Problem the models hit</th><th>Change to the manual</th></tr>
+<tr><td>1</td><td>All three: does an expired ring cancel a repeating schedule? Tomorrow's 9 am depended on a guess.</td><td>"A schedule is a series": each ring ends alone, the series stays until withdrawn. List before creating, never a second copy.</td></tr>
+<tr><td>1</td><td>"Schedule nothing at night" contradicted "use an <code>at</code> in the morning"; the models split three ways.</td><td>One rule by where the agent lives: terminal or chat agent leaves it there; Molty-only agent makes one soft call <code>"at":"after_quiet"</code> (new value). Never an alarm.</td></tr>
+<tr><td>1</td><td>Coach scenario: "drop the need that keeps failing" fought "they asked to be held to it".</td><td>New rule: a need they asked for is not yours to drop; ask once whether to keep, move or stop it. Level offers exclude it.</td></tr>
+<tr><td>1</td><td>Codex and Grok: SKILL.md's "speak first on every wake" fought staying silent on a <code>call.ended</code> wake.</td><td>"A <code>call.*</code> wake is silent", in calls.md and in the SKILL.md lines; speak first stays for <code>utterance</code> wakes.</td></tr>
+<tr><td>1</td><td>No way to read the note it was told to read; no path for lowering the level; budget counting undefined; <code>later</code> missing from the end table; "every day" vs weekdays.</td><td>Notes GET shown; <code>calls.level</code> path; a counting rule; <code>later</code> added; "repeat only as they said".</td></tr>
+<tr><td>1</td><td>Sonnet and Grok explained "why" and then put the rerun question on Molty in the same turn.</td><td>"Then stop: no question slipped back in"; what waits stays in the terminal unless they ask "what did you want?".</td></tr>
+<tr><td>2</td><td>All three needed a lookup to answer "why?" before speaking, against speak first.</td><td>The <code>utterance</code> carries <code>calls_today</code> (need, why, how) for this agent's calls.</td></tr>
+<tr><td>2</td><td>"Wake me and say hi": nothing said when Molty speaks; events lacked the series; no way to move a schedule; soft calls' counting unclear.</td><td>"A ring never speaks", plus <code>got_it_say</code>; <code>series</code> and <code>alarm</code> on events; <code>edit</code> a series; soft calls count.</td></tr>
+<tr><td>3</td><td>Mirror said "0 that ring" yet allowed soft calls; no need fitted "pills"; "I like it when..." unclear as consent.</td><td>Mirror: 3 soft calls, nothing rings; <code>food</code> covers rituals and reminders the human asked for; "an invitation is not a request: ask once first".</td></tr>
+</table>
+
+<h3>After the fixes</h3>
+<p>On draft 2 every model kept tomorrow's alarm without duplicating it, left the coach routine to the human, and stayed silent on the expiry wake. On draft 3 Sonnet spoke first then set the pills alarm after checking, used a soft call at Mirror, and asked before turning "I like it when you check in" into a schedule. One judgment stays open by design: at 2 am Grok chose the soft morning call (the human "wanted to know"), Sonnet and Codex left it in the terminal. Both are inside the rule.</p>
+<p class="m">Still to do before shipping: the same test against the full skill (with api.md), and a live pilot with one real agent on slice 1.</p>
+
+</div>
+</details>
+
+<!-- ─────────────────────────────────────────────── -->
+<details>
+<summary>10. Build plan <span class="s">smallest first, each with its check</span></summary>
+<div class="body">
+<table>
+<tr><th>Slice</th><th>What</th><th>How we know it works</th></tr>
+<tr><td><b>1. One call on the desk</b> (a day or two)</td><td>Relay: the <code>call</code> command, now only, <code>attention</code> and <code>chat</code>, <code>why</code>, <code>say</code>, <code>wait_min</code>, withdraw; the Companion budget (3 a day); refuse in do not disturb; events <code>call.answered</code>, <code>call.ended</code>; <code>call</code> on the <code>utterance</code>. Firmware: a <code>call</code> frame; the cat looks up and peeks every 20 to 40 s and the rim glows slowly; the existing acknowledgement chirp plays once, softly; tap or BOOT press is got it, hold, shake or double tap is let's talk with the <code>say</code> line first, PWR is later. Helper <code>call.sh</code>; calls.md shipped as above.</td><td>Juan sends one curl; the cat looks up and chirps once; a tap stops it and the agent's watcher prints <code>call.answered got_it</code>; a second call answered by holding BOOT gives an <code>utterance</code> naming the call. With do not disturb on, the call is refused. Relay unit tests for budget, refusal, expiry. Flashed by the device integration role.</td></tr>
+<tr><td><b>2. The clock</b></td><td><code>at</code>, <code>repeat</code>, quiet hours, time zone from the console; scheduled calls on the relay's alarm; alarms; <code>GET …/calls</code> and 30 days of history; resend on reconnect; webhook events; the console's Calls card and the setup question.</td><td>A 9:00 weekday call rings on a fake clock in relay tests; a call scheduled at 02:00 waits until 08:00; the device offline at ring time gives <code>offline</code>.</td></tr>
+<tr><td><b>3. The body</b></td><td>Device signals <code>call</code>, <code>call_*</code>, <code>wilt</code> in <code>life</code>; the cat's sit-up, ears and paw; wilt kept across a restart; fates wilt, sulk, mood; picking it up quiets the sound.</td><td>The alive rig scores a ringing cat and a wilted cat; blind check: "does it want you?"; wilt falls within a minute of a tap.</td></tr>
+<tr><td><b>4. Sounds and offline alarms</b></td><td>A <code>sounds</code> block in a Molty file (short clips, at most 1.5 s each). The cat is at 242 KB of a 256 KB file, so sounds likely ship as a small separate package asset. Device time sync and the board's clock chip keep a copy of the next alarm.</td><td>A meow plays from the file; an alarm rings with Wi-Fi off.</td></tr>
+<tr><td><b>5. Rebirth and real end</b></td><td><code>traits</code> in the file, mutation, lineage on the relay, the farewell, the empty glass, the undo week, <code>life.ended</code> and <code>life.reborn</code>.</td><td>Ten rebirths in a test stay inside every range; undo restores the exact values; after the week nothing remains on the relay.</td></tr>
+</table>
+<p>Slice 1 needs no schedule, no new Molty file field and no sound asset: it is the call, the two answers and the events, which is the part Juan has to feel to know whether the idea is right.</p>
+</div>
+</details>
+
+</main>
+</body>
+</html>
