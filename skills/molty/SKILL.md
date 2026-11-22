@@ -52,7 +52,8 @@ relay unless the message also names a **Relay** (a private one, see
 | `quick.sh <id> [--reply <turn_id>]` | play a cached quick phrase now | the job |
 | `ask.sh "question" yes no later` | speak + show it, 1–5 tap answers (labels ≤ 14 chars, 10 for 3, 8 for 4–5) | `ANSWER: yes \| index 0` |
 | `mood.sh happy [hold_s]` | set a mood | the result |
-| `act.sh eat` | a gesture from `device.creature.gestures` (the cat has `eat`) | the result |
+| `act.sh eat` | a gesture from `device.creature.gestures` (cat: `eat`) | the result |
+| `buzz.sh double` | buzz once | the result |
 | `progress.sh 40 "step"` / `progress.sh done` | ring fills to 40% / finishes | the result |
 | `watch.py` / `watch.py --once [wait_s]` | events, forever / unread ones, then exit | `MOLTY utterance: '…'` |
 
