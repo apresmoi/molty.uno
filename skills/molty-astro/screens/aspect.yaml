@@ -70,16 +70,17 @@ inputs:
     example: 0.064
 draw:
   - use: wheel
-  - ticks: { radius: 0.1, length: 0.62, count: 12, first_angle: 0, color: dim }
-  - circle: { radius: 0.2, color: dim }
-  - circle: { radius: 0.4, color: dim }
-  - circle: { radius: 0.6, color: grid }
+  # every inner line a hairline; the degree grid halfway between dim and grid, so it holds over the dust at 1 px
+  - ticks: { radius: 0.1, length: 0.62, count: 12, first_angle: 0, width: hairline, color: "#484c60" }
+  - circle: { radius: 0.2, width: hairline, color: "#484c60" }
+  - circle: { radius: 0.4, width: hairline, color: "#484c60" }
+  - circle: { radius: 0.6, width: hairline, color: grid }
   - for: side in lines
     draw:
-      - line: { show: { from: "{{ side.appears }}" }, from: { x: "{{ side.from_x }}", y: "{{ side.from_y }}" }, to: { x: "{{ side.to_x }}", y: "{{ side.to_y }}" }, color: "{{ side.color }}" }
-  - arc: { show: { from: 0.4 }, radius: 0.28, start: "{{ from_angle }}", end: "{{ to_angle }}", color: "{{ color }}" }
-  - spoke: { radius: 0, length: 0.6, angle: "{{ from_angle }}", color: "{{ color }}" }
-  - spoke: { show: { from: 0.4 }, radius: 0, length: 0.6, angle: "{{ to_angle }}", color: "{{ color }}" }
+      - line: { show: { from: "{{ side.appears }}" }, from: { x: "{{ side.from_x }}", y: "{{ side.from_y }}" }, to: { x: "{{ side.to_x }}", y: "{{ side.to_y }}" }, width: hairline, color: "{{ side.color }}" }
+  - arc: { show: { from: 0.4 }, radius: 0.28, start: "{{ from_angle }}", end: "{{ to_angle }}", width: hairline, color: "{{ color }}" }
+  - spoke: { radius: 0, length: 0.6, angle: "{{ from_angle }}", width: hairline, color: "{{ color }}" }
+  - spoke: { show: { from: 0.4 }, radius: 0, length: 0.6, angle: "{{ to_angle }}", width: hairline, color: "{{ color }}" }
   - label: { show: { from: 0.4 }, at: { x: "{{ label_x }}", y: "{{ label_y }}" }, size: 0.2, text: "{{ degrees }}", color: white }
   - for: body in bodies
     draw:

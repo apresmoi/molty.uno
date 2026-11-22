@@ -2,7 +2,7 @@
 
 Generated from display.yaml by `molty-display build`. Do not edit: change display.yaml and build again.
 
-Draws the sky on Molty, the zodiac wheel with aspects, planet globes, the signs, eclipses and transits. Play it with the molty-astro skill. Package `astrology`, version 1.7.0. On a Molty without screens: say it in words instead.
+Draws the sky on Molty, the zodiac wheel with aspects, planet globes, the signs, eclipses and transits. Play it with the molty-astro skill. Package `astrology`, version 1.7.1. On a Molty without screens: say it in words instead.
 
 Show a screen with `scene.play { pkg, layout, params, ttl_s }` (`scene.queue` plays it after the one showing). `layout` is the screen's name.
 Send every input and nothing else. `inputs/<screen>.schema.json` (next to this file) checks params before you send them.
