@@ -68,3 +68,7 @@
 #define BOARD_BTN_PWR       GPIO_NUM_3  /* pairing: reject; SYS_OUT, the PWR key through a
                                          * BSS138 inverter: HIGH = pressed. The key is also the
                                          * AXP2101 PWRON: a long press powers the board off. */
+
+/* ── Vibration motor (haptic.h): not on the board. A 3 V coin motor (80 mA) behind a 2N2222
+ *    low-side switch, soldered to the bare GPIO17 pad: GPIO17 → 470 Ω → base, HIGH = on ── */
+#define BOARD_HAPTIC_GPIO   17
