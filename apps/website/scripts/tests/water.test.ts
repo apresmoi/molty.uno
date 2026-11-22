@@ -47,7 +47,7 @@ test("... its water and its drawer take the firmware's numbers", () => {
   // a 466 px panel's grid (fluid_grid_for_stage)
   assert.match(sim, /lrintf\(52\.f \* \(float\)stage \/ FLUID_STAGE_REF\)/);
   assert.equal(WATER.cells, Math.round((52 * WATER.panel) / define(repo("device/firmware/main/fluid/fluid_sim.h").toString(), "FLUID_STAGE_REF")));
-  assert.ok(mole.includes(`ripple(x, y, ${WATER.tap}f, ${WATER.tapRadius}f);`), "a finger's tap");
+  assert.deepEqual([define(mole, "TAP_WAVE"), define(mole, "TAP_R")], [WATER.tap, WATER.tapRadius], "a finger's tap on open water");
   assert.equal(define(field_c, "WF_REFR"), define(draw, "DOT_REFR"));
   assert.ok(mole.includes("#define FLUID_STEP         (1.f / 60.f)") && field_c.includes("#define WF_STEP    (1.f / 60.f)"));
   assert.deepEqual([CELL.w, CELL.h], [define(field_c, "WF_CW"), define(field_c, "WF_CH")]);

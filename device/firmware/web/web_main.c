@@ -31,7 +31,7 @@ int   wm_package(const char *json, size_t len);
 int   wm_start(int px, uint32_t seed, int boot);
 void  wm_frame(uint32_t dt_us);
 const uint8_t *wm_pixels(void);
-void  wm_touch(int down, int x, int y);
+int   wm_touch(int down, int x, int y);
 void  wm_shake(void);
 int   wm_enter(float across, float back);
 int   wm_entering(void);

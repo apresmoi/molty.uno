@@ -141,7 +141,8 @@ direction (the angle of `x`, `y`), from radius `r0` (0 unless given) to `r1`: a 
 `"arc": 30, "r0": 0.75, "r1": 0.9`). The sector only widens where a tap lands; what the tap highlights is still the disc's.
 What a tap highlights grows with the tap's wave (the spot's `grow`, 1..3, default 1.25: the chart's signs 1.5), stays so
 while the reading (or the agent's say over the scene) plays, then eases back. On the device it stays perfectly still and
-crisp meanwhile (the water breaks nothing it covers), and the wave leaves its outline rather than the finger:
+crisp meanwhile (the water breaks nothing it covers), and the wave leaves its outline rather than the finger. A spot is
+a button: every bump its tap makes is 0.3 of a touch on open water. What it highlights:
 - with `lights` (group names, spaces between, at most 4): every item whose `group` is one of them, each about its own
   centre and brighter; an item with `"when": "lit"` shows only then, fading in and out with it. Any drawn item may take
   `group` (a name, bindable: `"group": "@id"`) and `when`. The chart's aspects: a spot along each line lights the
