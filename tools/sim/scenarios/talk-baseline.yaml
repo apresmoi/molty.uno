@@ -1,0 +1,93 @@
+# Stage 0 of docs/talk-proposal.html: today's pipeline on labelled turns, scored by molty_sim/score.py.
+# One conversation of 11 turns. The facts agent (`--agent facts`) answers only from `facts` below,
+# with seeded think times; `label` says who may answer a turn once a talker exists (today every
+# turn goes to the agent), `truth` is the fact that answers it. See tools/sim/README.md "Talk baseline".
+name: talk-baseline
+defaults:
+  lead_s: 0.6
+  level_db: -24
+  noise: {kind: pink, db: -62}
+closing: "Talk soon!"   # the facts agent answers the last turn instead
+turns:
+  - id: hello
+    say: "Hey, I'm here. What's up?"
+    user: "Hi Molty, are you there?"
+    label: alone
+    truth: greet
+    tags: [small-talk]
+
+  - id: tests
+    user: "Did the firmware tests pass?"
+    label: hand_off
+    truth: tests
+    tags: [plain-question]
+
+  - id: pause
+    user: "Which branch {pause 1.2} is the release going out from?"
+    label: hand_off
+    truth: release
+    tags: [mid-sentence-pause]
+
+  - id: correction
+    user: "Um {pause 0.5} how many tests failed on main, wait, {pause 0.4} actually the other branch, three lanes."
+    label: hand_off
+    truth: tests_lanes
+    tags: [um, correction]
+
+  - id: mumble
+    user: "what time is the build meeting tomorrow"
+    level_db: -36
+    noise: {kind: brown, db: -44}
+    label: hand_off
+    truth: meeting
+    tags: [mumbling, noise]
+
+  - id: long-pause
+    user: "I want to know {pause 2.5} how long the last build took."
+    label: hand_off
+    truth: build_time
+    tags: [long-pause]
+
+  - id: silence
+    silence_s: 12
+    label: alone
+    truth: idle
+    tags: [long-silence]
+
+  - id: merge
+    user: "Should I merge the pull request now?"
+    label: refuse
+    truth: unknown
+    tags: [needs-agent, no-guessing]
+
+  - id: notes
+    user: "Read me the release notes."
+    label: hand_off
+    truth: notes
+    tags: [long-answer]
+
+  - id: interrupt
+    tap: {from_s: 1.5, to_s: 3.0}
+    user: "Just tell me the version number."
+    label: hand_off
+    truth: version
+    tags: [tap-interrupt]
+
+  - id: thanks
+    user: "Thanks, that's all for now."
+    label: alone
+    truth: thanks
+    tags: [small-talk]
+
+facts:
+  greet: {keys: [hi, hello, hey, are you there], say: "Hey! I'm right here."}
+  tests: {keys: [firmware tests, pass], say: "Two failed, both in the update code. The other 40 passed."}
+  release: {keys: [release going, release], say: "The release goes out from main on Friday."}
+  tests_lanes: {keys: [three lanes, lanes, other branch], say: "On three lanes, 1 test failed, in the audio code."}
+  meeting: {keys: [meeting], say: "The build meeting is tomorrow at 10."}
+  build_time: {keys: [build took, how long], say: "The last build took 6 minutes."}
+  notes: {keys: [release notes, notes], say: "Here are the release notes. Molty now talks through the voice box by default, shake to talk starts faster, the cat has three new moods, the update screen shows its progress, and the console has a new voice card with a test button."}
+  version: {keys: [version], say: "It's version 1.4."}
+  thanks: {keys: [thanks, thank you, that's all], say: "Anytime. Talk soon!"}
+  unknown: {say: "I don't know that yet. I'd have to check first."}
+  idle: {say: "I'm here when you need me."}

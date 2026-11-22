@@ -117,6 +117,10 @@ class Rest:
             r = {"job": r["job"], "status": j.get("status")}
         return r
 
+    async def voice_set(self, link_code: str, **fields) -> dict:
+        _, out = await http("POST", f"{self.base}/v1/devices/{self.device}/voice", fields, headers={"X-Molty-Link-Code": link_code})
+        return out.get("result") or out
+
     async def voice_status(self, link_code: str) -> dict:
         _, out = await http("GET", f"{self.base}/v1/devices/{self.device}/voice", headers={"X-Molty-Link-Code": link_code})
         return out.get("result") or out

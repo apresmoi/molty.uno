@@ -26,7 +26,16 @@
         user: "..."                                #   (a list of such windows works too)
       - id: persona                                # reserved: an LLM writes the line (not implemented yet)
         user: {llm: {persona: "...", prompt: "..."}}
+      - id: tests                                  # labelled (with `facts`): who may answer this turn
+        user: "Did the tests pass?"
+        label: hand_off                            #   alone (a talker may answer) | hand_off (needs the agent) | refuse (nobody guesses)
+        truth: tests                               #   the fact id that answers it (`unknown`: the right answer is "I don't know")
+        tap: {from_s: 0.8, to_s: 2.0}              #   the human taps Molty during the say before this listen, at a seeded moment
     closing: "Okay, talk soon."                    # Molty's last line after the last turn (optional)
+    facts:                                         # the scripted agent's fact sheet (`--agent facts`, molty_sim/facts.py)
+      tests: {keys: [tests, pass], say: "Two failed, both in the update code."}
+      unknown: {say: "I don't know that yet."}    #   required: no fact matches what was heard
+      idle: {say: "I'm here when you need me."}  #   required: nothing was heard
 
 User text markup: `{pause S}` inserts S seconds of silence at that point (between words, or
 before the first word = a later start). Fillers are plain words ("um", "uh").
@@ -61,6 +70,8 @@ import yaml
 PAUSE_RE = re.compile(r"\{\s*pause\s+([0-9]*\.?[0-9]+)\s*\}")
 TOKEN_RE = re.compile(r"\{[^}]*\}|[^\s{}]+")
 EXPECTS = ("turn_end", "no_speech")
+LABELS = ("alone", "hand_off", "refuse")
+SHEET_REQUIRED = ("unknown", "idle")
 DEFAULT_VOICES = [
     "vctk/p225_023.wav",
     "expresso/ex01-ex02_default_001_channel1_168s.wav",
@@ -135,6 +146,10 @@ class Turn:
     answer: str | None = None  # the opener family that fits the full utterance
     reply: str | None = None
     follow: str | None = None
+    # labelled turns (a scenario with `facts`)
+    label: str | None = None
+    truth: str | None = None
+    tap: tuple[float, float] | None = None  # (from_s, to_s) after the say's first sample
 
 
 @dataclass
@@ -145,10 +160,11 @@ class Scenario:
     source: Path | None = None
     shake: bool = False
     arms: list[str] = field(default_factory=lambda: ["baseline", "drafts"])
+    facts: dict[str, dict] | None = None  # id -> {keys: [...], say}
 
 
 TURN_KEYS = {"id", "say", "user", "wav", "text", "silence_s", "voice", "lead_s", "level_db", "noise", "listen_ms", "expect", "tags",
-             "shake", "stall", "draft", "react", "answer", "reply", "follow"}
+             "shake", "stall", "draft", "react", "answer", "reply", "follow", "label", "truth", "tap"}
 ARMS = ("baseline", "drafts")
 REACT_MOODS = ("happy", "surprised", "thinking")
 # react actions: the device's gestures (services/relay/src/core/commands.ts ACTIONS)
@@ -241,12 +257,56 @@ def parse(data: dict, source: Path | None = None) -> Scenario:
         if t.expect not in EXPECTS:
             raise ScenarioError(f"turn {tid}: expect must be one of {EXPECTS}")
         _shake_keys(t, raw, bool(data.get("shake")))
+        _label_keys(t, raw)
         turns.append(t)
     arms = data.get("arms") or list(ARMS)
     if not isinstance(arms, list) or not arms or any(a not in ARMS for a in arms):
         raise ScenarioError(f"arms must be a non-empty list of {ARMS}")
+    facts = _facts(data.get("facts"))
+    for t in turns:
+        if (t.label or t.truth) and facts is None:
+            raise ScenarioError(f"turn {t.id}: label / truth need a `facts` sheet")
+        if t.truth is not None and t.truth not in facts:
+            raise ScenarioError(f"turn {t.id}: truth {t.truth!r} is not in the fact sheet")
     return Scenario(name=str(data.get("name") or (source.stem if source else "scenario")), turns=turns,
-                    closing=data.get("closing"), source=source, shake=bool(data.get("shake")), arms=list(arms))
+                    closing=data.get("closing"), source=source, shake=bool(data.get("shake")), arms=list(arms), facts=facts)
+
+
+def _label_keys(t: Turn, raw: dict) -> None:
+    if raw.get("label") is not None:
+        if raw["label"] not in LABELS:
+            raise ScenarioError(f"turn {t.id}: label must be one of {LABELS}")
+        t.label = raw["label"]
+    if raw.get("truth") is not None:
+        if not isinstance(raw["truth"], str):
+            raise ScenarioError(f"turn {t.id}: truth is a fact id")
+        t.truth = raw["truth"]
+    if t.label and not t.truth:
+        raise ScenarioError(f"turn {t.id}: a labelled turn needs `truth` (a fact id)")
+    tap = raw.get("tap")
+    if tap is not None:
+        if not isinstance(tap, dict) or set(tap) != {"from_s", "to_s"}:
+            raise ScenarioError(f"turn {t.id}: tap is {{from_s, to_s}}")
+        a, b = _num(tap["from_s"], f"{t.id}.tap.from_s", 0, 30), _num(tap["to_s"], f"{t.id}.tap.to_s", 0, 30)
+        if b < a or t.index == 0:
+            raise ScenarioError(f"turn {t.id}: tap needs from_s <= to_s and a say before it (not the first turn)")
+        t.tap = (a, b)
+
+
+def _facts(raw) -> dict[str, dict] | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or any(k not in raw for k in SHEET_REQUIRED):
+        raise ScenarioError(f"facts is a mapping of id -> {{keys, say}} with {SHEET_REQUIRED}")
+    out = {}
+    for k, v in raw.items():
+        if not isinstance(v, dict) or set(v) - {"keys", "say"} or not isinstance(v.get("say"), str) or not v["say"].strip():
+            raise ScenarioError(f"fact {k!r}: {{keys: [words], say: text}}")
+        keys = v.get("keys") or []
+        if not isinstance(keys, list) or not all(isinstance(w, str) and w.strip() for w in keys):
+            raise ScenarioError(f"fact {k!r}: keys is a list of words")
+        out[str(k)] = {"keys": [w.lower() for w in keys], "say": v["say"]}
+    return out
 
 
 def _shake_keys(t: Turn, raw: dict, shake: bool) -> None:

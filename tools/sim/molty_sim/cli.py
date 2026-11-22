@@ -33,7 +33,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--turn-end", type=float, help="bridge: end-of-turn threshold (molty-voice --turn-end)")
     r.add_argument("--turn-end-hold", type=float, help="bridge: mid-sentence hold seconds (molty-voice --turn-end-hold)")
     r.add_argument("--turn-end-skip", type=int, help="bridge: steps ignored at a listen's start (molty-voice --turn-end-skip)")
-    r.add_argument("--agent", choices=["scripted", "llm"], default="scripted")
+    r.add_argument("--agent", choices=["scripted", "llm", "facts"], default="scripted",
+                   help="facts: the scripted agent with the scenario's fact sheet and seeded think times (molty_sim/facts.py)")
     r.add_argument("--agent-gap-ms", type=int, default=0, help="fixed agent think time added before each reply (default 0)")
     r.add_argument("--filler-ms", type=int, default=2500, help="the sim device's auto filler setting: 0 = off, 400..5000 (default 2500); -1 = not reported (older firmware)")
     r.add_argument("--llm-url", default=os.environ.get("MOLTY_SIM_LLM_URL", "http://127.0.0.1:11434"), help="OpenAI-compatible base URL for --agent llm (env MOLTY_SIM_LLM_URL)")
@@ -42,6 +43,16 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--align-python", default=os.environ.get("MOLTY_SIM_ALIGN_PYTHON", "python3"), help="python with torchaudio on the box (env MOLTY_SIM_ALIGN_PYTHON)")
     r.add_argument("--no-audio", action="store_true", help="don't keep WAVs in the run directory")
     r.add_argument("--drafter", choices=["careful", "naive"], default="careful", help="shake scenarios: careful = no (re)draft once a turn-around word (but, not, actually, …) was heard; naive = always re-base on the latest partial")
+    r.add_argument("--seed", type=int, default=1, help="think times and tap moments; repeat r uses seed + r")
+    r.add_argument("--reps", type=int, default=1, help="play the conversation this many times on one stack")
+    r.add_argument("--quick", action="store_true", help="facts agent: a quick phrase before it thinks (the skill's advice)")
+    r.add_argument("--first-words", action="store_true", help="the owner's first words on (the sim bridge's --opener); the facts agent keeps them")
+    r.add_argument("--opener-url", default=os.environ.get("MOLTY_SIM_OPENER_URL", "http://127.0.0.1:11434"), help="Ollama for first words, from this machine (env MOLTY_SIM_OPENER_URL)")
+    r.add_argument("--judge", default=os.environ.get("MOLTY_SIM_JUDGE"), help="judge command: reads the prompt on stdin, prints JSON (env MOLTY_SIM_JUDGE)")
+    r.add_argument("--judge-votes", type=int, default=3)
+    r.add_argument("--arm", default="", help="a name for this arm in the report")
+    r.add_argument("--cloud", action="store_true", help="Workers AI speaks instead of the box: the local relay gets a remote AI binding on the owner's Cloudflare account (no bridge, nothing deployed)")
+    r.add_argument("--runs-dir", help="where the run directory goes (default tools/sim/runs)")
     r.add_argument("-v", "--verbose", action="store_true")
 
     s = sub.add_parser("check", help="parse a scenario and print its turns (no network)")
@@ -73,7 +84,8 @@ def main(argv: list[str] | None = None) -> int:
         sc = scenario.load(a.scenario)
         for t in sc.turns:
             src = t.markup and t.markup.pauses or t.wav or (f"silence {t.silence_s}s" if t.kind == "silence" else "")
-            print(f"{t.index + 1:2d}. {t.id:22s} {t.kind:7s} expect {t.expect:9s} listen_ms {t.listen_ms!s:5s} {t.text[:50]!r} {src}")
+            print(f"{t.index + 1:2d}. {t.id:22s} {t.kind:7s} expect {t.expect:9s} listen_ms {t.listen_ms!s:5s} {t.text[:50]!r} {src}"
+                  + (f" [{t.label} -> {t.truth}]" if t.label else "") + (f" tap {t.tap}" if t.tap else ""))
             if sc.shake and (t.draft or t.react):
                 print(f"    draft {t.draft} react {t.react} fits {t.answer}")
         if sc.shake:
@@ -102,9 +114,11 @@ def main(argv: list[str] | None = None) -> int:
         if v is not None:
             tuning += [flag, str(v)]
     o = Options(scenario=scenario.load(a.scenario), box=a.box, tunnel=not a.no_tunnel, tts_port=a.tts_port, stt_port=a.stt_port,
-                relay=a.relay, allow_remote=a.allow_remote, bridge=not a.no_bridge, tuning=tuning, agent=a.agent,
+                relay=a.relay, allow_remote=a.allow_remote, bridge=not a.no_bridge and not a.cloud, tuning=tuning, agent=a.agent,
                 agent_gap_ms=a.agent_gap_ms, filler_ms=None if a.filler_ms < 0 else a.filler_ms, llm_url=a.llm_url, llm_model=a.llm_model, align=a.align, align_python=a.align_python,
-                keep_audio=not a.no_audio, only=a.only.split(",") if a.only else None, drafter=a.drafter)
+                keep_audio=not a.no_audio, only=a.only.split(",") if a.only else None, drafter=a.drafter,
+                seed=a.seed, reps=a.reps, quick=a.quick, first_words=a.first_words, opener_url=a.opener_url, judge=a.judge,
+                judge_votes=a.judge_votes, arm=a.arm, cloud=a.cloud, **({"runs_dir": Path(a.runs_dir)} if a.runs_dir else {}))
     try:
         asyncio.run(run(o))
     except KeyboardInterrupt:
