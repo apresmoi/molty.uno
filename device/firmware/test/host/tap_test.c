@@ -4,7 +4,8 @@
  * tap_test.c: what a touch does to the water and to the creature, through mole_fluid.c itself (the web module's
  * native build, web_molty.c, included whole: its statics are this file's). A touch on a control (a scene's spot, a
  * question's answer) is not a touch on the water: its ring is TAP_SPOT of an open-water touch's at the same place and
- * moment. Each case runs in a child process forked from the same moment, so the runs it compares start alike.
+ * moment, and it does not call the creature over, so a gesture or a mood asked right after an answer shows. Each case
+ * runs in a child process forked from the same moment, so the runs it compares start alike.
  *
  *   tap_test <repo root>
  */
@@ -109,6 +110,37 @@ static void ring_case(const char *what, bool open, int kind) {
     else CHECK(a.grow == s_item, "%s: the tap still grows its drawing (spot %d, want %d)", what, a.grow, s_item);
 }
 
+/* ── the creature: a touch on a question's answer does not call it over ── */
+
+typedef struct { int control, coming, eat, surprised, came; } cat_t;
+static int s_ans_x, s_ans_y;
+static bool clip_is(const char *name) {   /* the creature plays it now or next */
+    const cc_t *c = cpk_clip(s_cpk);
+    int q[8];
+    const int n = cc_queue(c, q, 8), cur = cc_clip(c, NULL);
+    if (cur >= 0 && strstr(cc_clip_name(c, cur), name)) return true;
+    for (int i = 0; i < n; i++) if (q[i] >= 0 && strstr(cc_clip_name(c, q[i]), name)) return true;
+    return false;
+}
+static void answer_then(void *out, const char *state, const char *clip) {
+    cat_t *r = out;
+    r->control = wm_touch(1, s_ans_x, s_ans_y); frames(2); wm_touch(0, 0, 0);
+    frames(28);                                        /* 0.5 s after the touch */
+    r->coming = cc_coming(cpk_clip(s_cpk));
+    wm_state(state);
+    int seen = 0;
+    for (int f = 0; f < 12 && !seen; f++) { frames(1); seen = clip_is(clip); }
+    *(clip[0] == 'e' ? &r->eat : &r->surprised) = seen;
+}
+static void answer_eat(void *out) { answer_then(out, "{\"act\":\"eat\"}", "eat"); }
+static void answer_surprised(void *out) { answer_then(out, "{\"mood\":\"surprised\"}", "surprised"); }
+static void open_glass(void *out) {
+    cat_t *r = out;
+    wm_ask_end(); frames(90);                          /* (the question gone: the glass is open water) */
+    r->control = wm_touch(1, s_ans_x, s_ans_y); frames(2); wm_touch(0, 0, 0); frames(10);
+    r->came = cc_coming(cpk_clip(s_cpk));
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) { fprintf(stderr, "usage: tap_test <repo root>\n"); return 2; }
     char path[1024]; size_t len;
@@ -121,6 +153,26 @@ int main(int argc, char **argv) {
     CHECK(wm_start(466, 20260516, 0) == 0, "the module starts");
     frames(120);
     s_h0 = malloc(sizeof(int16_t) * (size_t)s_sim->N);
+
+    /* the creature: a question, its first answer touched */
+    CHECK(wm_ask("{\"title\":\"feed the cat?\",\"options\":[\"yes\",\"no\"]}") == 0, "a question is asked");
+    frames(150);
+    bool found = false;
+    for (int y = 0; y < s_px && !found; y += 4) for (int x = 0; x < s_px && !found; x += 4) {
+        const float r = s_px * 0.5f;
+        if (fluid_ask_pick(&s_q.hit, ((float)x + 0.5f - r) / r, ((float)y + 0.5f - r) / r) == 0) { s_ans_x = x; s_ans_y = y; found = true; }
+    }
+    CHECK(found && s_cpk && cpk_crisp(s_cpk), "the question's first answer is on the glass, over the cat");
+    cat_t e = { 0 }, m = { 0 }, o = { 0 };
+    forked(answer_eat, &e, sizeof(e));
+    forked(answer_surprised, &m, sizeof(m));
+    forked(open_glass, &o, sizeof(o));
+    CHECK(e.control == 1, "a touch on an answer tells its caller it hit a control");
+    CHECK(!e.coming && e.eat, "eat asked 0.5 s after an answer plays (the cat %s, eat %s)", e.coming ? "coming" : "not called", e.eat ? "plays" : "does not play");
+    CHECK(!m.coming && m.surprised, "surprised set 0.5 s after an answer shows (%s)", m.surprised ? "it does" : "it does not");
+    CHECK(o.control == 0 && o.came, "a touch on open glass still calls the cat over");
+    wm_ask_end();
+    frames(90);
 
     /* the water: a star chart's spots against open water */
     snprintf(path, sizeof(path), "%s/device/firmware/web/fidelity.script", argv[1]);
