@@ -42,7 +42,7 @@ const WIFI0 = { state: 'connected', ssid: 'home-wifi', ip: '192.168.1.32', rssi:
 const wifi = { ...WIFI0 };
 const fluid = {
   ok: true, creature: 'fluid', state: 'creature', autoplay: false, mood: 'idle', act: '', creature_info: { name: 'Duck', package: 'duck', tris: 620 }, text: 'hello, i am molty. i breathe in ascii.', wpm: 300,
-  palette: 'pastel', ring_color: 'accent', listen_ms: 30000, ack: 'chirp', filler_ms: 2500, shake_talk: true, idle_life: 'lively', screen_off_battery_s: 60, screen_off_usb_s: 600, word: '', word_idx: 0, nwords: 7, fps: 33.1,
+  palette: 'pastel', ring_color: 'accent', listen_ms: 30000, ack: 'chirp', filler_ms: 2500, shake_talk: true, idle_life: 'lively', screen_off_battery_s: 60, screen_off_usb_s: 600, sky: true, word: '', word_idx: 0, nwords: 7, fps: 33.1,
 };
 let current = 'fluid';
 let pkg = 'duck';   // the selected creature package: a device that never chose plays the first built-in
@@ -148,10 +148,11 @@ createServer(async (req, res) => {
       if (o.ack !== undefined && !['chirp', 'thinking', 'off'].includes(o.ack)) return json(res, { ok: false, error: 'invalid_args' }, 400);
       if (o.filler_ms !== undefined && !(Number.isInteger(o.filler_ms) && (o.filler_ms === 0 || (o.filler_ms >= 400 && o.filler_ms <= 5000)))) return json(res, { ok: false, error: 'invalid_args' }, 400);
       if (o.shake_talk !== undefined && typeof o.shake_talk !== 'boolean') return json(res, { ok: false, error: 'invalid_args' }, 400);
+      if (o.sky !== undefined && typeof o.sky !== 'boolean') return json(res, { ok: false, error: 'invalid_args' }, 400);
       if (o.idle_life !== undefined && !['lively', 'calm', 'off'].includes(o.idle_life)) return json(res, { ok: false, error: 'invalid_args' }, 400);
       for (const k of ['screen_off_battery_s', 'screen_off_usb_s'])
         if (o[k] !== undefined && !(Number.isInteger(o[k]) && (o[k] === 0 || (o[k] >= 10 && o[k] <= 3600)))) return json(res, { ok: false, error: 'invalid_args' }, 400);
-      for (const k of ['act', 'mood', 'text', 'wpm', 'palette', 'ring_color', 'listen_ms', 'ack', 'filler_ms', 'shake_talk', 'idle_life', 'screen_off_battery_s', 'screen_off_usb_s']) if (o[k] !== undefined) fluid[k] = o[k];
+      for (const k of ['act', 'mood', 'text', 'wpm', 'palette', 'ring_color', 'listen_ms', 'ack', 'filler_ms', 'shake_talk', 'idle_life', 'screen_off_battery_s', 'screen_off_usb_s', 'sky']) if (o[k] !== undefined) fluid[k] = o[k];
       if (o.text) fluid.nwords = o.text.split(/\s+/).filter(Boolean).length;
       return json(res, fluid);
     }

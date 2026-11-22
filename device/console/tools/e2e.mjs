@@ -564,6 +564,13 @@ const canvasStats = (page) => page.evaluate(() => {
   ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).screen_off_usb_s === 0), 'settings molty: screen off on USB never sent to the device (screen_off_usb_s 0)');
   await napUsb.getByRole('button', { name: '10 min (default)' }).click();
   await napUsb.locator('button[aria-pressed="true"]', { hasText: '10 min' }).waitFor();
+  const skyRow = page.getByRole('group', { name: 'sky' });
+  ok(await skyRow.getByRole('button', { name: 'on (default)' }).getAttribute('aria-pressed') === 'true', 'settings molty: the sky defaults to on');
+  await skyRow.getByRole('button', { name: 'off' }).click();
+  await skyRow.locator('button[aria-pressed="true"]', { hasText: 'off' }).waitFor();
+  ok((await mockLog()).some((l) => l.path === '/api/creature/state' && JSON.parse(l.body).sky === false), 'settings molty: the sky off sent to the device (sky false)');
+  await skyRow.getByRole('button', { name: 'on (default)' }).click();
+  await skyRow.locator('button[aria-pressed="true"]', { hasText: 'on' }).waitFor();
   ok((await page.getByRole('group', { name: 'state' }).getByRole('button').allInnerTexts()).join() === 'creature,text', 'settings molty: the state is creature or text only');
   const actRow = page.getByRole('group', { name: 'gestures' }), moodRow = page.getByRole('group', { name: 'moods' });
   await actRow.getByRole('button', { name: 'shake head' }).click();

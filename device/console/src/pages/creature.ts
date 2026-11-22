@@ -11,6 +11,7 @@ import { RING_CHOICES, ringChoice, ringSupported } from '../ring/ring';
 import { IDLE_CHOICES, idleChoice, idleSupported } from '../idle/idle';
 import { NAP_SETTINGS, NAP_TIMES, napChoice, napLabel, napSupported } from '../nap/nap';
 import { SHAKE_CHOICES, shakeChoice, shakeSupported } from '../shake/shake';
+import { SKY_CHOICES, skyChoice, skySupported } from '../sky/sky';
 import { GESTURE_ACTIONS, GESTURE_INPUTS, gestureChoice, gesturesSupported } from '../shake/gestures';
 import { creatureMoves, moveLabel } from '../moves/moves';
 
@@ -47,6 +48,9 @@ export function creaturePage(root: HTMLElement, { api }: AppCtx) {
     row: h('div', { class: 'chips', role: 'group', 'aria-label': n.label, hidden: true }),
   }));
   const napHint = h('p', { class: 'dim small', hidden: true }, 'the screen goes dark this long after Molty falls asleep, to save the battery; a touch, a button, a shake, picking Molty up or your agent lights it again');
+  const skyLabel = h('label', { hidden: true }, 'sky');
+  const skyRow = h('div', { class: 'chips', role: 'group', 'aria-label': 'sky', hidden: true });
+  const skyHint = h('p', { class: 'dim small', hidden: true }, "today's moon behind Molty, lit as it is tonight, and now and then a falling star; the moon needs the date, which Molty takes from the internet once on Wi-Fi");
   const text = h('textarea', { rows: 3, placeholder: 'words for the speed reader…', 'aria-label': 'reader text' });
   const wpm = h('input', { type: 'range', min: 100, max: 800, step: 25, value: '300', 'aria-label': 'words per minute' });
   const wpmOut = h('output', null, '300 wpm');
@@ -75,6 +79,7 @@ export function creaturePage(root: HTMLElement, { api }: AppCtx) {
         ...gestureRows.flatMap((g) => [g.label, g.row]), gestureHint,
         idleLabel, idleRow, idleHint,
         ...napRows.flatMap((n) => [n.label, n.row]), napHint,
+        skyLabel, skyRow, skyHint,
         h('label', null, 'speed reader'), text,
         h('div', { class: 'row' }, wpm, wpmOut),
         h('div', { class: 'row' }, word, h('button', { type: 'button', onclick: () => order({ text: text.value, wpm: +wpm.value, state: 'text' }) }, 'read it ⠶')),
@@ -130,6 +135,12 @@ export function creaturePage(root: HTMLElement, { api }: AppCtx) {
         h('button', { type: 'button', class: 'chip' + (on === t ? ' on' : ''), 'aria-pressed': String(on === t),
           onclick: () => order({ [n.key]: t }) }, napLabel(t, n.def))));
     }
+    const skyOn = skySupported(s);   /* older firmware: no sky */
+    skyLabel.hidden = skyRow.hidden = skyHint.hidden = !skyOn;
+    const sky = skyChoice(s?.sky);
+    if (skyOn) mount(skyRow, SKY_CHOICES.map((c) =>
+      h('button', { type: 'button', class: 'chip' + (sky === c.on ? ' on' : ''), 'aria-pressed': String(sky === c.on),
+        onclick: () => order({ sky: c.on }) }, c.label)));
     if (s && document.activeElement !== wpm && s.wpm) { wpm.value = String(s.wpm); wpmOut.textContent = `${s.wpm} wpm`; }
     if (s && !text.value && s.text) text.value = s.text;
     word.textContent = s?.word ? `⠶ ${s.word}` : s?.nwords ? `${s.word_idx ?? 0}/${s.nwords} words` : '';
