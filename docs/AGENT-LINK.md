@@ -233,12 +233,18 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   defaults by index, present → exactly one valid hex per option), answers `unsupported`
   without touch, and acknowledges `{job}` at once. Firmware from before colours ignores the
   extra field (unknown args are not checked), so the relay needs no cap for it. The question
-  (`device/firmware/main/fluid/fluid_ask.h`, `fluid_askview.h`) forms over whatever shows where a touch's crest passes from the
-  centre, the scene behind dimming but moving on: the title (two lines when long) near the top, then for
-  1–3 options arcs of the rim splitting its lower half (option 0 lower left), each label inside its arc
-  in its colour, for 4–5 rows each underlined in its colour under a faint ring. A tap on an answer: a
-  gentle wave from it, everything breaks into dust the water carries off; a tap on the question or the
-  centre answers nothing. The device then sends exactly one `answer` event for the job:
+  (`device/firmware/main/fluid/fluid_ask.h`, `fluid_askview.h`) comes as one change of picture: what
+  shows dissolves into dust over the whole glass, the dust gathers straight into the question (the
+  scene behind dimmed but moving on), its answers' lines growing out from the bottom of the rim up both
+  sides, and its words fading in as the last grains land, at rest in about 1.3 s. The title (two lines
+  when long) sits near the top, then for 1–3 options arcs of the rim splitting its lower half (option 0
+  lower left), each label inside its arc in its colour, for 4–5 rows each underlined in its colour under
+  a faint ring. A new question replaces one on screen the same way, never through the bare creature. A
+  tap on an answer: it brightens for a moment and the question dissolves straight back into what was
+  under it, in one change (an unanswered one the same, without the brightening); a tap on the question
+  or the centre answers nothing. (Where the screen is redrawn whole every frame, as on the website
+  outside its device speed, the question forms where a touch's crest passes from the centre and breaks
+  into dust the water carries off.) The device then sends exactly one `answer` event for the job:
   `{"t":"evt","name":"answer","data":{"job":"…","index":1,"label":"no"}}` (a tap: the answer
   it landed on; `label` = `options[index]` verbatim, no `reason`),
   `{"t":"evt","name":"answer","data":{"job":"…","index":null,"reason":"timeout"}}` (no tap

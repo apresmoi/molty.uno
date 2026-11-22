@@ -212,7 +212,7 @@ Over the existing command path (`link_cmd_register`), gated by device caps `pkg`
   `install` (green) and `not now` (white). It waits 60 s for a tap (the relay's `timeout_ms`). The size is not shown;
   it is checked against 256 KB and the quota instead.
   The name shown is the one the agent sent; the stored name and version are the file's own.
-- **Progress on screen:** after the tap the question blows away and a ring forms on the rim. It grows clockwise from
+- **Progress on screen:** after the tap the question dissolves back into the cat and a ring forms on the rim. It grows clockwise from
   12 o'clock as the bytes arrive (to 90 % when the download is complete), then fills, flashes and melts when the package
   is stored. On a failure it lets go where it got to. It is the same ring as an agent's `progress`
   ([AGENT-LINK.md](AGENT-LINK.md#inline-cues-and-actions)): over the cat it forms from a wave at the centre as a thin green line, over the duck or the octopus it is a mint line.

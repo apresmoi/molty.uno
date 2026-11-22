@@ -30,10 +30,11 @@ While you speak, small ripples run in from the rim.
 
 ## Questions
 
-When your agent asks you something, the answers appear for you to tap. Up to three answers
-sit on the rim. Four or five become rows.
+When your agent asks you something, the screen dissolves into dust and the dust gathers into
+the question, its answers growing out along the rim for you to tap. Up to three answers sit on
+the rim. Four or five become rows.
 
-Tap an answer and the question breaks into dust that the water carries off.
+Tap an answer and it brightens, then the question dissolves back into what was there before.
 
 ## Scenes
 
