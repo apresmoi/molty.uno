@@ -9,6 +9,8 @@
 # Both builds: no fused multiply-adds, no errno from the maths (as main/CMakeLists.txt builds the fluid), so the
 # floats round the same way in both. Both are -O2, as the device (the module was -Os: a sixth smaller, and a sixth
 # slower where it counts: a slow phone with a wave out on the page, a heading's wide window and the page's field drawing).
+# Both time the drawer's budgets (fluid_draw.c, fluid_fine.c) by web_sdk.c's clock (WEB_SDK_CLOCK), never the
+# computer's: with web_sdk_cpu 0 it stands still in a task, so a slow machine draws the same pixels as a fast one.
 # Do not run this by hand for the website: `make web-molty` builds, checks the two against each other and installs.
 set -euo pipefail
 
@@ -35,7 +37,7 @@ SRCS=(
 )
 INCS=(-I"$OUT" -I"$HERE/sdk" -I"$MAIN/fluid" -I"$MAIN/creature" -I"$MAIN/scene" -I"$MAIN/pkg" -I"$MAIN/link"
       -I"$MAIN/sense" -I"$MAIN/board" -I"$MAIN/diag" -I"$IDF_JSON")
-CFLAGS=(-std=c11 -D_POSIX_C_SOURCE=200809L -D_DARWIN_C_SOURCE -D_DEFAULT_SOURCE -ffp-contract=off -fno-math-errno
+CFLAGS=(-std=c11 -DWEB_SDK_CLOCK -D_POSIX_C_SOURCE=200809L -D_DARWIN_C_SOURCE -D_DEFAULT_SOURCE -ffp-contract=off -fno-math-errno
         -Wall -Wextra -Werror -Wno-deprecated-declarations)
 
 # the default .molty as the image carries it (main/CMakeLists.txt EMBED_FILES)

@@ -44,7 +44,12 @@ void *fluid_test_alloc(void *p, size_t n, bool zero);
 #define FLUID_REALLOC(p, n) realloc((p), (n))
 #endif
 #define FLUID_FREE(p)   free(p)
+#ifdef WEB_SDK_CLOCK                             /* (web/build.sh: the clock its caller sets, web_sdk.c, never the computer's) */
+#include "esp_timer.h"
+static inline int64_t now_us(void) { return esp_timer_get_time(); }
+#else
 static inline int64_t now_us(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000; }
+#endif
 #endif
 
 /* ---- tunables (render.js R) ---- */
