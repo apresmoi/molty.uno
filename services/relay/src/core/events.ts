@@ -293,7 +293,7 @@ export function eventSentence(ev: AgentEvent): string {
       return `Molty is now ${d.name}: speak as this creature (its look and moves are in the event)`;
     case DND_EVENT:
       return d.on === true
-        ? "The human turned on do not disturb: speak, listen or ask only in reply to an utterance"
+        ? "The human turned on do not disturb: speak, listen, ask or buzz only in reply to an utterance"
         : "The human turned off do not disturb";
     case DRAFT_USED_EVENT:
       return `Molty is speaking your opener "${String(d.opener ?? "")}": you have the turn, continue with in_reply_to`;

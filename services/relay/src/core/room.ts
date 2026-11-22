@@ -55,7 +55,7 @@ import {
 } from "./api.js";
 import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
 import { hasVoice, junkTranscript } from "./voiced.js";
-import { ASK_TITLE_CAP, LEGACY_ASK_LABEL, CREATURES_CAP, DND_CAP, PROGRESS_CAP, DEFAULT_WPM, PKG_CAP, SCENE_CAP, MAX_SCENE_TTL_S, WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, GESTURES_CAP, RESUME_CAP, RESUME_FEATURE, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, MAX_KEEP_WORDS, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
+import { ASK_TITLE_CAP, HAPTIC_CAP, LEGACY_ASK_LABEL, CREATURES_CAP, DND_CAP, PROGRESS_CAP, DEFAULT_WPM, PKG_CAP, SCENE_CAP, MAX_SCENE_TTL_S, WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, GESTURES_CAP, RESUME_CAP, RESUME_FEATURE, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, MAX_KEEP_WORDS, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
 import { FIRST_WORDS_MODES, type FirstWordsMode, type LinePlay, OPENER, type OpenerMessage, clauseEnd, guardOpener, hangs, planReply, pushHistory } from "./opener.js";
 import { PcmFeed, estimateSpeechMs, speechWords, splitSpeech, synthesize } from "./speech.js";
 import { DEFAULT_PARTIAL_POLICY, DRAFT_DROPPED_EVENT, DRAFT_USED_EVENT, type DropReason, PARTIAL_EVENT, PartialChunker, PauseTracker, judgeDraft, words } from "./partials.js";
@@ -1093,7 +1093,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   /** Do not disturb is on (a device that reports it, `dnd` in caps): unprompted speech, listens and questions are refused. */
   private async disturbs(inReplyTo: string | undefined): Promise<ReturnType<typeof fail> | undefined> {
     if (inReplyTo !== undefined || !this.liveSocket()?.getMeta()?.caps?.includes(DND_CAP) || !(await this.kv.get<boolean>(K.dnd))) return undefined;
-    return fail("do_not_disturb", "the human turned on do not disturb: speak, listen or ask only in reply to an utterance (in_reply_to)");
+    return fail("do_not_disturb", "the human turned on do not disturb: speak, listen, ask or buzz only in reply to an utterance (in_reply_to)");
   }
 
   /** Device `creature` (on each welcome and each change): kept for utterances and status; a new one is an event. */
@@ -1270,7 +1270,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       const hush = this.humanSpeaking();
       if (hush) return hush;
     }
-    if (cmd.name === "say" || cmd.name === "quick" || cmd.name === "listen") {
+    if (cmd.name === "say" || cmd.name === "quick" || cmd.name === "listen" || cmd.name === "buzz") {
       const dnd = await this.disturbs(cmd.in_reply_to);
       if (dnd) return dnd;
     }
@@ -1311,6 +1311,9 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     }
     if (cmd.name.startsWith("creature.") && !live.getMeta()?.caps?.includes(CREATURES_CAP)) {
       return fail("unsupported", `this Molty's firmware has no creature packages (no \`${CREATURES_CAP}\` in its caps): update it`);
+    }
+    if (cmd.name === "buzz" && live.getMeta()?.caps && !live.getMeta()!.caps!.includes(HAPTIC_CAP)) {
+      return fail("no_motor", "this Molty has no vibration motor, or its firmware is too old to use it (no `haptic` in its caps)");
     }
     if (cmd.name === "gestures") {
       const caps = live.getMeta()?.caps;
@@ -1391,7 +1394,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
           scene: sceneContext(await this.kv.get<Screen>(K.screen), this.clock.now()) ?? null,
           // the skill's newest version (skills/molty/CHANGES.md); null until GitHub has answered once
           skill: this.skillVersion.peek() ?? null,
-          // do not disturb: speak, listen or ask only in reply to an utterance (null: the firmware does not say)
+          // do not disturb: speak, listen, ask or buzz only in reply to an utterance (null: the firmware does not say)
           dnd: meta?.caps?.includes(DND_CAP) ? ((await this.kv.get<boolean>(K.dnd)) ?? false) : null,
           events,
           webhook: agent.webhook ? (redactWebhook(agent.webhook) as JsonObject) : null,

@@ -68,6 +68,8 @@ const STATUS: Record<string, number> = {
   rate_limited: 429,
   too_large: 413,
   unsupported: 409,
+  no_motor: 409,
+  listening: 409,
   firmware_too_old: 409,
   no_build: 409,
   no_checksum: 409,

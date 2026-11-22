@@ -11,7 +11,7 @@
 
 import { type AgentApi, type FirmwareNotice, type Inbox, type JobView, type Outcome, type RelayBackend, bearer, tokenDevice } from "../core/api.js";
 import { BUILTIN_PHRASES, FILLER_DEFAULT_MS, PHRASE_LIMITS } from "../core/phrases.js";
-import { ACK_THINK_S, ACTIONS, GESTURE_INPUTS, COLORS, MAX_PROGRESS_STEP, DEFAULT_ASK_COLORS, DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, LISTEN_CEILING_MS, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, MAX_ASK_TITLE, MAX_DRAFTS_PER_TURN, MAX_DRAFT_NEW_WORDS, MAX_LISTEN_MS, MAX_MOOD_HOLD_S, MAX_OPENER_WORDS, MAX_SCENE_PARAMS_BYTES, MAX_SCENE_TTL_S, MOODS, REACT_ACTIONS, REACT_MIN_GAP_MS, REACT_MOODS, TALK_BUDGET_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
+import { ACK_THINK_S, ACTIONS, GESTURE_INPUTS, COLORS, MAX_BUZZ_MS, MAX_BUZZ_SEGS, MAX_PROGRESS_STEP, DEFAULT_ASK_COLORS, DEFAULT_ASK_TIMEOUT_S, DEFAULT_LISTEN_MS, LISTEN_CEILING_MS, MAX_ASK_OPTIONS, MAX_ASK_TIMEOUT_S, MAX_ASK_TITLE, MAX_DRAFTS_PER_TURN, MAX_DRAFT_NEW_WORDS, MAX_LISTEN_MS, MAX_MOOD_HOLD_S, MAX_OPENER_WORDS, MAX_SCENE_PARAMS_BYTES, MAX_SCENE_TTL_S, MOODS, REACT_ACTIONS, REACT_MIN_GAP_MS, REACT_MOODS, TALK_BUDGET_MS, THINK_HOLD_S, VAD_LIMITS } from "../core/commands.js";
 import { NOTES_LIMITS } from "../core/notes.js";
 
 /** say / talk / ask: inline [mood] / [action] cues in the spoken text. */
@@ -143,6 +143,18 @@ export const TOOLS: ToolDef[] = [
     inputSchema: obj({ action: { type: "string", description: `A gesture of the creature (device.creature.gestures), e.g. ${ACTIONS.join(", ")}.` } }, ["action"]),
     auth: true,
     run: (api, t, a) => api.command(t, "act", a),
+  },
+  {
+    name: "molty_buzz",
+    description: `Buzz Molty's vibration motor (cap haptic; boards without one: no_motor): a glance without a sound, or a silent yes. pattern: tick, tap, double or nudge (unknown_pattern otherwise), or [on, off, on, ...] ms (up to ${MAX_BUZZ_SEGS}, ${MAX_BUZZ_MS} ms in all); or ms for one buzz. strength 0..100 (100). Sparingly. Never while the human talks: a buzz while Molty listens is dropped (listening). Do not disturb: only with in_reply_to.`,
+    inputSchema: obj({
+      pattern: { type: ["string", "array"], description: "A name (tick, tap, double, nudge) or an array of ms: on, off, on, ...", items: { anyOf: [{ type: "integer" }] } },
+      ms: { type: "integer", description: `One buzz this long, 1..${MAX_BUZZ_MS}. Instead of pattern.` },
+      strength: { type: "integer", description: "0..100; default 100." },
+      in_reply_to: { type: "string", description: "The utterance's turn_id this answers (lets it through do not disturb)." },
+    }),
+    auth: true,
+    run: (api, t, a) => api.command(t, "buzz", a),
   },
   {
     name: "molty_progress",
