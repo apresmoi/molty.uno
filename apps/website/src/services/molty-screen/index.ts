@@ -1,4 +1,5 @@
-export { ENTER_STARTS, mountMoltyScreen, warmMoltyScreen } from "./screen";
+export { mountMoltyScreen, warmMoltyScreen } from "./screen";
+export { ENTER_STARTS } from "./entrance";
 export { runProgram } from "./program";
 export { PANEL, instantiate } from "./core";
 export { CELL, MoltyField, TILE, WATER } from "./field";
