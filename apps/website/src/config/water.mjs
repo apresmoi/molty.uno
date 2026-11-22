@@ -50,3 +50,7 @@ export const LIFE = 6;
  *  about 400. Taken this much steeper, a heading's lines loosen as a front from a tap within about
  *  450 px passes, most under the finger, and the calm water behind the front leaves them sharp. */
 export const HEADING_GAIN = 2.5;
+
+/** A tap on a control (a button, a link, a field: services/page-water `control`) raises a wave
+ *  this much of a tap on bare page, on text or on a screen's glass. */
+export const BUTTON = 0.3;

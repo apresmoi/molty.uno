@@ -10,7 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { CARRY, HEADING_GAIN, LIFE, SPEED } from "../../src/config/water.mjs";
+import { BUTTON, CARRY, HEADING_GAIN, LIFE, SPEED } from "../../src/config/water.mjs";
 import { WORDS, wordsPackage } from "../../src/config/words.mjs";
 import { TILES, readTile, renderTile } from "../dust-tile.mjs";
 import { MoltyCore, instantiate } from "../../src/services/molty-screen/core.ts";
@@ -222,7 +222,7 @@ async function pageField(vw: number, vh: number, screen: number, o: { carry?: ty
       for (let i = cell(x0); i < Math.ceil((x1 * k) / CELL.w); i++) top = Math.max(top, Math.hypot(...shift(i, j)));
     return top;
   };
-  const tap = (px: number, py: number) => field.tap(px * k, py * k, WATER.tap, (WATER.tapRadius * (WATER.panel / k)) / 2 * k);
+  const tap = (px: number, py: number, strength = WATER.tap) => field.tap(px * k, py * k, strength, (WATER.tapRadius * (WATER.panel / k)) / 2 * k);
   return { field, tap, moves, shift, cols: cols - 4 - (o.more ?? 0), rows: rows - 16 };
 }
 /** Taps (s, CSS px) and the water run on until flat (or `most` s): when the last dot of the viewport moved and when
@@ -300,6 +300,37 @@ test("... it loses its height as it spreads, does not come back off the rim, and
   assert.ok(echo < 0.5, `the rim's echo shifts a dot ${echo.toFixed(2)} sub-dots (a dot moves from 0.5)`);
   far.field.destroy();
   p.field.destroy();
+});
+
+test(`a tap on a control raises a ring ${BUTTON} as high as a tap on bare page, as wide and as fast`, async () => {
+  // 1440 x 900, a tap in the middle: the water's steepest slope along its row, every few frames for 2 s
+  const ring = async (strength: number) => {
+    const p = await pageField(1440, 900, 396);
+    p.tap(720, 450, strength);
+    const seen: Array<[number, number]> = [];
+    for (let f = 1; f <= 120; f++) {
+      p.field.step(1 / 60);
+      if (f % 10) continue;
+      let top = 0,
+        at = 0;
+      for (let x = 720; x < 1400; x += 4) {
+        const m = p.moves(x, 440, x + 4, 460);
+        if (m > top) [top, at] = [m, x];
+      }
+      seen.push([top, at]);
+    }
+    p.field.destroy();
+    return seen;
+  };
+  const [full, faint] = [await ring(WATER.tap), await ring(WATER.tap * BUTTON)];
+  const seen = full.filter(([h]) => h >= 1).length;
+  assert.ok(seen >= 6, `a full tap's crest moves dots for ${seen} of the samples`);
+  full.forEach(([h, x], n) => {
+    const [fh, fx] = faint[n]!;
+    if (h < 1) return;
+    assert.ok(Math.abs(fh / h - BUTTON) < 0.04, `${(n + 1) / 6} s after the tap: its crest is ${((100 * fh) / h).toFixed(0)}% as high (${fh.toFixed(2)} sub-dots against ${h.toFixed(2)})`);
+    assert.ok(Math.abs(fx - x) <= 8, `${(n + 1) / 6} s after the tap: its crest is where a full one's is (${fx} px against ${x})`);
+  });
 });
 
 test(`water that keeps its waves is still laid flat ${LIFE} s after the last tap`, async () => {
