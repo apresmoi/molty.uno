@@ -85,15 +85,39 @@ async def tunnel(host: str, tts_port: int, stt_port: int, log: Path) -> Proc | N
     return p
 
 
-async def relay(state: Path, log: Path, port: int | None = None) -> tuple[Proc, str]:
-    """`wrangler dev --local` (workerd + local DO storage), VOICE_PROVIDER=none: only the box speaks."""
+# The owner's Cloudflare account, the only one the cloud arm may use (`wrangler whoami` with it first).
+CF_ACCOUNT_ENV = {"CLOUDFLARE_ACCOUNT_ID": "38a0038e733cdaa9970665670c22e842",
+                  "XDG_CONFIG_HOME": str(Path.home() / ".config" / "wrangler-apresmoi")}
+
+
+def cloud_config(dst: Path) -> Path:
+    """A copy of the relay's wrangler.jsonc whose AI binding is remote in local dev (Workers AI runs
+    only on Cloudflare): the relay itself still runs here, nothing is deployed."""
+    import json
+
+    src = (RELAY_DIR / "wrangler.jsonc").read_text()
+    cfg = json.loads("\n".join(x for x in src.splitlines() if not x.strip().startswith("//")))
+    cfg.pop("$schema", None)
+    cfg["name"] = "molty-sim-relay"  # never the deployed worker's name: the remote AI session is its own preview
+    cfg["main"] = str(RELAY_DIR / cfg["main"])
+    cfg["ai"]["remote"] = True
+    for d in cfg.get("d1_databases", []):
+        d["migrations_dir"] = str(RELAY_DIR / d["migrations_dir"])
+    dst.write_text(json.dumps(cfg, indent=2))
+    return dst
+
+
+async def relay(state: Path, log: Path, port: int | None = None, cloud: Path | None = None) -> tuple[Proc, str]:
+    """`wrangler dev --local` (workerd + local DO storage), VOICE_PROVIDER=none: only the box speaks.
+    `cloud`: a run dir to put cloud_config() in; Workers AI speaks (remote binding, the owner's account)."""
     wr = RELAY_DIR / "node_modules" / ".bin" / "wrangler"
     if not wr.exists():
         raise RuntimeError("relay deps missing: run `cd services/relay && pnpm install --frozen-lockfile` first")
     port = port or free_port()
+    voice = ["--var", "VOICE_PROVIDER:none"] if cloud is None else ["-c", str(cloud_config(cloud / "wrangler.cloud.json"))]
     p = Proc("wrangler dev", [str(wr), "dev", "--local", "--ip", "127.0.0.1", "--port", str(port), "--persist-to", str(state),
-                              "--var", "VOICE_PROVIDER:none", "--log-level", "info"], log, cwd=RELAY_DIR,
-             env={"CI": "1", "WRANGLER_SEND_METRICS": "false"})
+                              *voice, "--log-level", "info"], log, cwd=RELAY_DIR,
+             env={"CI": "1", "WRANGLER_SEND_METRICS": "false", **(CF_ACCOUNT_ENV if cloud is not None else {})})
 
     def healthy():
         try:
@@ -117,6 +141,17 @@ def pair_bridge(config: Path, relay_http: str, device: str, link_code: str, log:
         f.write(r.stdout + r.stderr)
     if r.returncode != 0:
         raise RuntimeError(f"molty-voice pair failed (exit {r.returncode}); see {log}")
+
+
+def set_config(config: Path, **keys) -> None:
+    """Add keys to the sim bridge's own config (0600, in the run dir); the token in it is never read out."""
+    import json
+
+    d = json.loads(config.read_text())
+    d.update(keys)
+    fd = os.open(config, os.O_WRONLY | os.O_TRUNC)
+    with os.fdopen(fd, "w") as f:
+        json.dump(d, f)
 
 
 async def bridge(config: Path, log: Path, stt_url: str, tts_url: str, tuning: list[str]) -> Proc:

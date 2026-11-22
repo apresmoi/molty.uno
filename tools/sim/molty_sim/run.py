@@ -14,8 +14,10 @@ from pathlib import Path
 
 import numpy as np
 
-from . import align, report, stack
+from . import align, report, score, stack
+from . import judge as judgem
 from .agent import EventPump, LlmAgent, RelayError, Rest, ScriptedAgent
+from .facts import FactAgent, tap_s
 from .device import CUE_LEAD_S, SimDevice, new_device_id
 from .metrics import ShakeFacts, TurnFacts, drafts_summary, foreign_script, shake_metrics, summarize, turn_metrics, wer
 from .scenario import Scenario
@@ -49,6 +51,17 @@ class Options:
     keep_audio: bool = True
     only: list[str] | None = None  # turn ids
     drafter: str = "careful"  # shake turns: careful (no draft once a turn-around word was heard) | naive
+    # labelled scenarios (`facts`): the scoreboard
+    seed: int = 1  # think times and tap moments (repeat r uses seed + r)
+    reps: int = 1
+    quick: bool = False  # the facts agent plays a quick phrase before it thinks
+    first_words: bool = False  # the owner's first words on (the bridge's --opener); the facts agent keeps them
+    opener_url: str = "http://127.0.0.1:11434"  # Ollama for first words, as the bridge sees it
+    opener_model: str = "gemma3:4b"
+    judge: str | None = None  # a command: prompt on stdin, JSON out (molty_sim/judge.py)
+    judge_votes: int = 3
+    arm: str = ""  # a name for this arm in the report
+    cloud: bool = False  # Workers AI speaks (a remote AI binding under the owner's account); no bridge
 
     @property
     def tts_url(self) -> str:
@@ -105,7 +118,7 @@ async def run(o: Options) -> Path:
             relay_http = o.relay.rstrip("/")
             device_id, key = _remote_identity(o.state_dir, relay_http)
         else:
-            p, relay_http = await stack.relay(out / "wrangler", out / "relay.log")
+            p, relay_http = await stack.relay(out / "wrangler", out / "relay.log", cloud=out if o.cloud else None)
             procs.append(p)
             device_id, key = new_device_id(), None
         fw = (stack.ROOT / "VERSION").read_text().strip()
@@ -118,21 +131,53 @@ async def run(o: Options) -> Path:
         rest.token = await rest.pair(dev.link_code, "molty-sim agent")
         if o.bridge:
             await asyncio.to_thread(stack.pair_bridge, voice_cfg, relay_http, device_id, dev.link_code, out / "bridge.log")
-            procs.append(await stack.bridge(voice_cfg, out / "bridge.log", o.stt_url, o.tts_url, o.tuning))
+            extra = []
+            if o.first_words:  # the sim's own bridge config (run dir, deleted at the end): first words from Ollama
+                stack.set_config(voice_cfg, opener=True, opener_url=o.opener_url, opener_model=o.opener_model)
+                extra = ["--opener"]
+            procs.append(await stack.bridge(voice_cfg, out / "bridge.log", o.stt_url, o.tts_url, o.tuning + extra))
         for _ in range(50):
             vs = await rest.voice_status(dev.link_code)
-            if (vs.get("box") or {}).get("connected"):
+            if (vs.get("box") or {}).get("connected") or o.cloud:
                 break
             await asyncio.sleep(0.2)
         else:
             raise RuntimeError(f"the voice box never showed as connected: {vs}")
+        if o.cloud:
+            vs = await rest.voice_set(dev.link_code, mode="cloud")
         print(f"voice box connected (mode {vs.get('mode')}); bridge tuning: {' '.join(o.tuning) or 'defaults'}", flush=True)
+        if o.first_words:
+            for _ in range(50):  # the box offers first words once its model answered
+                if ((await rest.voice_status(dev.link_code)).get("first_words") or {}).get("available"):
+                    break
+                await asyncio.sleep(0.3)
+            fw_set = await rest.voice_set(dev.link_code, first_words="opener")
+            print(f"first words: {fw_set.get('first_words')}", flush=True)
 
         if sc.shake:
             return await shake_run(o, out, ts, dev, rest, turns, clips, fw, device_id, relay_http)
-        agent = (LlmAgent(o.llm_url, o.llm_model, o.agent_gap_ms) if o.agent == "llm" else ScriptedAgent(o.agent_gap_ms))
-        rows = await conversation(dev, rest, agent, turns, clips, sc.closing)
-        await asyncio.sleep(0.5)
+        if o.agent == "facts" and not sc.facts:
+            raise SystemExit("--agent facts needs a scenario with a `facts` sheet")
+        rows, verdicts = [], []
+        for r in range(o.reps):
+            seed = o.seed + r
+            agent = (LlmAgent(o.llm_url, o.llm_model, o.agent_gap_ms) if o.agent == "llm"
+                     else FactAgent(sc.facts, rest, seed, quick=o.quick, keep=o.first_words) if o.agent == "facts"
+                     else ScriptedAgent(o.agent_gap_ms))
+            if o.reps > 1:
+                print(f"--- repeat {r + 1}/{o.reps} (seed {seed})", flush=True)
+            rr = await conversation(dev, rest, agent, turns, clips, sc.closing, seed)
+            await asyncio.sleep(0.5)
+            if sc.facts:
+                score_rows(rr, turns, clips, dev)
+                if o.judge:
+                    print(f"judging repeat {r + 1} ({o.judge_votes} votes)…", flush=True)
+                    verdicts.append(await asyncio.to_thread(judgem.judge, o.judge, rr, sc.facts, o.judge_votes, out))
+                    verdicts[-1]["rep"] = r
+            for x in rr:
+                x["rep"], x["seed"] = r, seed
+            rows += rr
+            await asyncio.sleep(2.0)
 
         # ---- offline: alignment, metrics ----
         cue_errs, selfcheck = await alignment(o, dev, rows, turns, clips)
@@ -144,7 +189,8 @@ async def run(o: Options) -> Path:
         summary["alignment_selfcheck_ms"] = selfcheck
         meta = {"run": ts, "scenario": sc.name, "relay": "local wrangler dev" if not o.relay else relay_http, "device": device_id,
                 "fw": fw, "caps": dev.caps, "bridge_tuning": o.tuning, "agent": agent.name, "agent_gap_ms": o.agent_gap_ms, "filler_ms": o.filler_ms,
-                "align": o.align, "box": o.box}
+                "align": o.align, "box": o.box, "arm": o.arm, "seed": o.seed, "reps": o.reps, "quick": o.quick, "first_words": o.first_words,
+                "judge": o.judge, "voice": "cloud (Workers AI)" if o.cloud else "box"}
         if o.keep_audio:
             for t in turns:
                 c = clips[t.id]
@@ -154,6 +200,13 @@ async def run(o: Options) -> Path:
                 write_wav(out / "audio" / f"{n:02d}-say.wav", s.audio())
         report.write(out, meta, rows, summary)
         print(report.table(rows, summary), flush=True)
+        if sc.facts:
+            b = score.board(rows)
+            j = judgem.merge(verdicts) if verdicts else None
+            (out / "board.json").write_text(json.dumps({"meta": meta, "board": b, "judge": j, "verdicts": verdicts}, indent=2, default=str))
+            txt = score.board_text(b, f"scoreboard: {o.arm or sc.name}, {o.reps} x {len(turns)} turns, seed {o.seed}", j)
+            (out / "board.txt").write_text(txt + "\n")
+            print("\n" + txt, flush=True)
         print(f"\nreport: {out / 'report.md'}", flush=True)
         return out
     finally:
@@ -321,7 +374,7 @@ async def shake_turn(dev: SimDevice, rest: Rest, pump: EventPump, t, clip: Clip,
     return row
 
 
-async def conversation(dev: SimDevice, rest: Rest, agent, turns, clips, closing) -> list[dict]:
+async def conversation(dev: SimDevice, rest: Rest, agent, turns, clips, closing, seed: int = 0) -> list[dict]:
     rows: list[dict] = []
     history: list[dict] = []
     t_ret_prev = None
@@ -333,6 +386,9 @@ async def conversation(dev: SimDevice, rest: Rest, agent, turns, clips, closing)
         dev.stall_for = lambda job, w=list(t.stalls): w
         t_think = time.monotonic()
         say_text = t.say if i == 0 else await agent.reply(t.say, prev_heard, history)
+        if i and getattr(agent, "last", None) is not None:
+            rows[-1]["agent"] = agent.last
+        dev.tap_after_s = tap_s(seed, t.id, *t.tap) if t.tap and say_text else None
         before_s, before_l = set(dev.says), set(dev.listens)
         t_req = time.monotonic()
         row: dict = {"i": i, "id": t.id, "kind": t.kind, "tags": t.tags, "voice": t.voice if t.kind == "tts" else None,
@@ -361,11 +417,13 @@ async def conversation(dev: SimDevice, rest: Rest, agent, turns, clips, closing)
         row.update(listen_row(t, clip, lis, res, t_ret))
         row["_say"], row["_listen"] = say, lis
         rows.append(row)
-        history.append({"said": say_text, "heard": res.get("heard", "")})
+        history.append({"said": say_text, "heard": res.get("heard", ""), "turn": t, "res": res})
         prev_heard = res.get("heard", "")
         t_ret_prev = t_ret
     if closing is not None or isinstance(agent, LlmAgent):
         text = await agent.reply(closing, prev_heard, history)
+        if rows and getattr(agent, "last", None) is not None:
+            rows[-1]["agent"] = agent.last
         if text:
             before_s = set(dev.says)
             t_req = time.monotonic()
@@ -405,6 +463,8 @@ def _facts(row: dict, next_play_at: float | None, first_voice_at: float | None =
 
 def agent_say(dev, before: set, text: str | None):
     """The agent's own say among the new ones (a relay filler may have started meanwhile)."""
+    if text is None:
+        return None
     new = [dev.says[k] for k in dev.says if k not in before]
     return next((s for s in new if s.text == text), new[-1] if new else None)
 
@@ -466,6 +526,7 @@ def listen_row(t, clip: Clip, lis, res: dict, t_ret: float) -> dict:
     r: dict = {
         "reason": res.get("reason"),
         "heard": res.get("heard"),
+        "opener": res.get("opener"),
         "error": res.get("error"),
         "wer": round(wer(t.text, res.get("heard") or ""), 3) if t.text and not res.get("error") else None,
         "foreign_script": foreign_script(res.get("heard") or ""),
@@ -526,3 +587,51 @@ async def alignment(o: Options, dev: SimDevice, rows: list[dict], turns, clips) 
         diffs += [(onset - a[0]) * 1000 for (_, onset), a in zip(clips[t.id].words, al) if a]
     selfcheck = {"n": len(diffs), "median_tts_minus_mms_ms": round(float(np.median(diffs)))} if diffs else None
     return errs, selfcheck
+
+
+def _tail(text: str, n: int = 3) -> list[str]:
+    return [w for w in (align.norm(x) for x in text.split()) if w][-n:]
+
+
+def score_rows(rows: list[dict], turns, clips, dev: SimDevice) -> None:
+    """The scoreboard's numbers per labelled turn (molty_sim/score.py), from the wall clock of the
+    sim device: what Molty said between each listen's end and the next listen."""
+    by_id = {t.id: t for t in turns}
+    spans: dict[str, list] = {}
+
+    def voiced(sy) -> list:
+        if sy.job not in spans:
+            spans[sy.job] = score.voiced_spans(sy.audio(), sy.play_start or 0.0, sy.play_time) if sy.samples else []
+        return spans[sy.job]
+
+    says = sorted(dev.says.values(), key=lambda sy: sy.cmd_at)
+    for k, r in enumerate(rows):
+        t, lis = by_id[r["id"]], r.get("_listen")
+        if lis is None or lis.end_at is None:
+            continue
+        nxt = rows[k + 1].get("_listen") if k + 1 < len(rows) else None
+        until = nxt.mic_open_at if nxt is not None and nxt.mic_open_at else float("inf")
+        a = r.get("agent") or {}
+        voices = []
+        for sy in says:
+            if not (lis.end_at - 0.05 <= sy.cmd_at < until):
+                continue
+            tail = _tail(a.get("answer") or "")
+            kind = ("answer" if tail and _tail(sy.text, len(tail)) == tail else "quick" if a.get("quick") and sy.text == a["quick"]
+                    else "opener" if r.get("opener") and sy.text == r["opener"] else "filler")
+            voices.append(score.Voice(kind, sy.text, voiced(sy)))
+        clip = clips[t.id]
+        eos = lis.mic_open_at + clip.speech_end_s if clip.speech_end_s is not None else None
+        prev = rows[k - 1].get("_listen") if k else None
+        since = prev.end_at if prev is not None and prev.end_at else 0.0
+        tapped = next((sy for sy in says if sy.tap_at is not None and since <= sy.cmd_at < lis.mic_open_at), None) if t.tap else None
+        mk = t.markup
+        f = score.ScoreFacts(
+            label=t.label, truth=t.truth, pick=a.get("pick"), think_s=a.get("think_s"), eos_at=eos,
+            human=[(lis.mic_open_at + x, lis.mic_open_at + y) for x, y in clip.speech], voices=voices,
+            ack_at=lis.end_at if lis.ack != "off" else None, cut=bool(r.get("false_cutoff")),
+            pauses=bool(mk and any(0 < i < len(mk.words) for i, _ in mk.pauses)), reason_ok=r.get("reason") == t.expect,
+            answer=a.get("answer"), tap_at=tapped.tap_at if tapped else None, tapped=voiced(tapped) if tapped else [])
+        r.update(score.score_turn(f))
+        ref = eos if eos is not None else lis.end_at
+        r["voices"] = [{"kind": v.kind, "text": v.text, "at_s": round(v.spans[0][0] - ref, 2)} for v in voices if v.spans]
