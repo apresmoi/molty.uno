@@ -1,0 +1,103 @@
+/* a row a group: its label in a narrow column (a long one takes two lines), the buttons in its
+   lines, dotted rules between (the rules of the landing's boards list) */
+.group {
+  display: grid;
+  grid-template-columns: 9ch minmax(0, 1fr);
+  column-gap: var(--m-space-6);
+  align-items: baseline;
+  padding: var(--m-space-2) 0;
+  border-bottom: 1px dotted var(--m-faint);
+}
+.group:first-child {
+  border-top: 1px dotted var(--m-faint);
+}
+.group,
+.group h3 {
+  font: 400 var(--m-text-sm) / 1.4 var(--m-font-mono);
+}
+.group h3 {
+  margin: 0;
+  color: var(--m-ink);
+}
+.lines {
+  min-width: 0;
+}
+/* the bracket a pressed one wears is always there, unseen until pressed, so nothing shifts; the
+   line starts its width early (into the gap), so the words line up under each other */
+.lines ul {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 0 0 0 -2ch;
+  padding: 0;
+  font: var(--m-text-base) / 1.4 var(--m-font-mono);
+  list-style: none;
+}
+.lines button {
+  padding: var(--m-space-1) 0;
+  border: 0;
+  background: transparent;
+  color: var(--m-dim);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.lines button::before {
+  content: "[ " / "";
+  color: transparent;
+}
+.lines button::after {
+  content: " ]" / "";
+  color: transparent;
+}
+.lines button:hover {
+  color: var(--m-ink);
+}
+.lines button[aria-pressed="true"],
+.lines button[aria-pressed="true"]::before,
+.lines button[aria-pressed="true"]::after {
+  color: var(--m-accent);
+}
+
+/* what is playing, under the screen (clear of its bezel): room for its name and three lines, so
+   the page holds still */
+.playing {
+  box-sizing: border-box;
+  max-width: 30em;
+  min-height: 6.4em;
+  margin: var(--m-space-8) auto 0;
+  font-size: var(--m-text-base);
+  line-height: 1.6;
+  text-align: center;
+}
+.playing b {
+  display: block;
+  color: var(--m-accent);
+  font-weight: 400;
+}
+.playing span {
+  color: var(--m-dim);
+}
+
+/* stacked (phones, portrait tablets): the label over its lines, finger-sized buttons, and the
+   pressed one filled instead of bracketed (no bracket hangs past the gutter) */
+@media (max-width: 46rem), (max-width: 68rem) and (orientation: portrait) {
+  .group {
+    grid-template-columns: minmax(0, 1fr);
+    padding: var(--m-space-3) 0 var(--m-space-1);
+  }
+  .lines ul {
+    gap: 0 var(--m-space-1);
+    margin-left: calc(-1 * var(--m-space-2));
+  }
+  .lines button {
+    padding: var(--m-space-3) var(--m-space-2);
+  }
+  .lines button::before,
+  .lines button::after {
+    content: none;
+  }
+  .lines button[aria-pressed="true"] {
+    background: var(--m-accent-soft);
+    color: var(--m-ink);
+  }
+}
