@@ -131,7 +131,8 @@
   grid-column: 1;
   grid-row: 1 / span 4;
 }
-/* 02: the picker's slot stands beside the heading, the text and the names, like 04 */
+/* 02: the picker's stage (its screen, what is playing under it) stands beside the heading, the
+   text and the rows, like 04 */
 .gallery {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
@@ -366,8 +367,7 @@
   /* the device takes what the copy leaves, square and centred; its bezel reaches 1.1× past the
      screen, so it stops short of the gutters */
   .section .slot,
-  .reading [data-reader-glass],
-  .gallery [data-stage="gallery"] {
+  .reading [data-reader-glass] {
     flex: 1 1 0;
     align-self: center;
     width: auto;
@@ -375,6 +375,10 @@
     max-width: none;
     max-height: calc(0.86 * (100vw - 2 * var(--m-gutter)));
     margin-block: var(--m-space-4);
+  }
+  /* moltys: the stage keeps its size (--m-stack-slot), the rows make it more than a screen */
+  .gallery [data-stage="gallery"] {
+    margin-block: var(--m-space-4) var(--m-space-2);
   }
   /* bake: a board is two lines (its screen and status, then its name) */
   .boards li {

@@ -14,7 +14,7 @@ import sharp from "sharp";
 import { listing } from "../../../../tools/web-molty/fidelity.mjs";
 import { STILL, renderStill } from "../molty-still.mjs";
 import { WORDS } from "../../src/config/words.mjs";
-import { STAGE_QUESTION, answered, landingActions, sampleScene, showcaseActions, showcaseScenes, type CreaturePackage } from "../../src/features/molty/actions.ts";
+import { STAGE_QUESTION, answered, everyAction, landingActions, sampleScene, showcaseActions, showcaseScenes, type CreaturePackage } from "../../src/features/molty/actions.ts";
 
 const ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
 const read = (path: string) => readFileSync(join(ROOT, path));
@@ -58,12 +58,12 @@ test("the cat's headings take its own body colour", () => {
 
 test("the stage's lists are the package's own: every mood, every gesture, its words for each", () => {
   const commands = read("device/firmware/test/host/fixtures/astrology-commands.jsonl").toString();
-  const all = showcaseActions(cat, showcaseScenes(commands)).flatMap((g) => g.actions);
+  const all = everyAction(showcaseActions(cat, showcaseScenes(commands)));
   for (const mood of Object.keys(cat.creature.moods)) assert.ok(all.some((a) => a.kind === "mood" && a.name === mood), mood);
   for (const g of Object.keys(cat.creature.gestures))
     assert.ok(all.some((a) => (g === "shaken" ? a.kind === "shake" : a.kind === "act" && a.name === g)), g);
   for (const a of all) assert.ok(a.about.length > 10, `${a.name} is described`);
-  const own = landingActions(cat).find((g) => g.label === "its own")!.actions.map((a) => a.name);
+  const own = landingActions(cat).find((g) => g.label === "its own")!.rows.flat().map((a) => a.name);
   assert.deepEqual(own, ["eat", "yarn", "walk", "shake"]);
   assert.equal(sampleScene(commands, "chart").layout, "chart");
 });

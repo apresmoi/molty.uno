@@ -1,42 +1,24 @@
-/* the page (ShowcasePage) lays the stage and the panel out: the root is transparent to its
-   grid */
+/* the page (ShowcasePage) lays the stage (the screen and what is playing under it) and the panel
+   out: the root is transparent to its grid */
 .root {
   display: contents;
 }
 .stage {
   grid-area: stage;
+  display: grid;
+  justify-items: center;
+  min-width: 0;
+  margin-top: var(--m-space-4);
+}
+.screen {
   position: relative;
   aspect-ratio: 1;
   width: 100%;
   max-width: 520px;
-  justify-self: center;
 }
 .panel {
   grid-area: panel;
   min-width: 0;
-}
-.now {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0 var(--m-space-2);
-  margin: 0 0 var(--m-space-2);
-  font-size: var(--m-text-md);
-}
-.now b {
-  color: var(--m-ink);
-}
-.now span {
-  color: var(--m-dim);
-}
-
-/* the package's own words for what is playing: room for three lines, so the lists hold still */
-.about {
-  min-height: 4.8em;
-  max-width: 34em;
-  margin: 0 0 var(--m-space-3);
-  color: var(--m-dim);
-  font-size: var(--m-text-base);
-  line-height: 1.6;
 }
 .more {
   margin: var(--m-space-6) 0 0;
@@ -44,24 +26,14 @@
   font-size: var(--m-text-base);
 }
 
-.group h3 {
-  margin: var(--m-space-3) 0 var(--m-space-1);
-  color: var(--m-dim);
-  font: 400 var(--m-text-sm) / 1.4 var(--m-font-mono);
-}
-
-/* actions: always bracketed, like the page's links; the one playing lights up */
-.play,
-.acts {
+/* random and autoplay: bracketed, like the page's links */
+.play {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--m-space-1) var(--m-space-3);
-  margin: 0;
-  padding: 0;
-  list-style: none;
+  gap: var(--m-space-1) var(--m-space-6);
+  margin: 0 0 var(--m-space-3);
 }
-.play button,
-.acts button {
+.play button {
   padding: var(--m-space-1) 0;
   border: 0;
   background: transparent;
@@ -70,19 +42,15 @@
   white-space: nowrap;
   cursor: pointer;
 }
-.play button::before,
-.acts button::before {
+.play button::before {
   content: "[ " / "";
 }
-.play button::after,
-.acts button::after {
+.play button::after {
   content: " ]" / "";
 }
-.play button:hover,
-.acts button:hover {
+.play button:hover {
   color: var(--m-ink);
 }
-.acts button[aria-pressed="true"],
 .play button[aria-pressed="true"] {
   background: var(--m-accent-soft);
   color: var(--m-ink);
@@ -91,7 +59,15 @@
 @media (min-width: 60rem) {
   .stage {
     align-self: start;
-    max-width: min(640px, 100svh - var(--m-header-height) - var(--m-space-12));
-    margin-top: var(--m-space-4);
+  }
+  /* the screen and what is playing under it fit the window's height */
+  .screen {
+    max-width: min(640px, 100svh - var(--m-header-height) - var(--m-space-12) - 8em);
+  }
+}
+/* stacked: finger-sized */
+@media (max-width: 46rem), (max-width: 68rem) and (orientation: portrait) {
+  .play button {
+    padding-block: var(--m-space-3);
   }
 }
