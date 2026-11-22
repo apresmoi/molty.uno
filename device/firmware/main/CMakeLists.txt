@@ -78,6 +78,7 @@ idf_component_register(
         "net/network.c"
         "net/wifi_retry.c"       # reconnect after a Wi-Fi drop (host-tested)
         "net/http.c"
+        "net/recv_bound.c"       # a request body read that gives up on a silent sender (host-tested)
         "net/console_store.c"
         "net/improv_proto.c"     # Wi-Fi setup over a serial console (boards with MOLTY_CAP_SERIAL)
         "net/improv_serial.c"
