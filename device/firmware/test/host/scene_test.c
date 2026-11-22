@@ -3480,31 +3480,42 @@ static void bench(const char *molty) {
     CHECK(sc && sc->nitems == 1 + 12 + 10 + 1 && sc->nchars == 40, "the busy layout: 1 ring, 12 glyphs, 10 balls, 40 letters (%s)", err ? err : "");
     if (!sc) return;
     fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
-    fluid_letter_t L[FLUID_MAX_LETTERS]; int nl;
-    const int N = 2000;
-    double t0 = now_us();
-    for (int k = 0; k < N; k++) scene_fill(s, sc, k * DT, NULL, L, &nl, NULL, NULL);
-    const double scene_us = (now_us() - t0) / N;
-    CHECK(nl == 12 + 40, "12 crisp symbols and 40 letters on the overlay (%d)", nl);
-
-    double creature_us = 0.;
+    fluid_letter_t L[FLUID_MAX_LETTERS]; int nl = 0;
+    /* The same 2000 frames of each, BENCH_REPEATS times over, timed in blocks of BENCH_N frames taken in turns (a block
+     * of the scene's, then the same stretch of the creature's), and each block's fastest repeat kept: every repeat does
+     * the same work, and a busy machine only ever slows a block, so a slow spell on either side no longer decides the
+     * ratio. */
+    enum { BENCH_REPEATS = 5, BENCH_BLOCKS = 20, BENCH_N = 100 };
+    double sbest[BENCH_BLOCKS], cbest[BENCH_BLOCKS], scene_us = 0., creature_us = 0.;
+    for (int b = 0; b < BENCH_BLOCKS; b++) sbest[b] = cbest[b] = 1e30;
     static uint8_t buf[CUTE_MAX_FILE + 16];
     FILE *f = fopen(molty, "rb");
     size_t n = f ? fread(buf, 1, sizeof(buf), f) : 0;
     if (f) fclose(f);
     static cute_spec_t spec;
-    if (n && cute_spec_parse(buf, n, &spec, &err) == 0) {
-        cute_rt_t *rt = cute_rt_create(&spec, 99);
-        for (int k = 0; k < 30; k++) cute_rt_update(rt, DT);
-        t0 = now_us();
-        for (int k = 0; k < N; k++) { cute_rt_update(rt, DT); cute_rt_raster(rt, s->W, s->H); cute_rt_fill(rt, s, 1.f); }
-        creature_us = (now_us() - t0) / N;
+    const bool creature = n && cute_spec_parse(buf, n, &spec, &err) == 0;
+    for (int rep = 0; rep < BENCH_REPEATS; rep++) {
+        cute_rt_t *rt = creature ? cute_rt_create(&spec, 99) : NULL;
+        for (int k = 0; rt && k < 30; k++) cute_rt_update(rt, DT);
+        for (int b = 0; b < BENCH_BLOCKS; b++) {
+            double t0 = now_us();
+            for (int i = 0, k = b * BENCH_N; i < BENCH_N; i++, k++) scene_fill(s, sc, k * DT, NULL, L, &nl, NULL, NULL);
+            sbest[b] = fmin(sbest[b], now_us() - t0);
+            if (!rt) continue;
+            t0 = now_us();
+            for (int i = 0; i < BENCH_N; i++) { cute_rt_update(rt, DT); cute_rt_raster(rt, s->W, s->H); cute_rt_fill(rt, s, 1.f); }
+            cbest[b] = fmin(cbest[b], now_us() - t0);
+        }
+        if (rt) cute_rt_destroy(rt);
     }
+    for (int b = 0; b < BENCH_BLOCKS; b++) { scene_us += sbest[b] / (BENCH_BLOCKS * BENCH_N); creature_us += creature ? cbest[b] / (BENCH_BLOCKS * BENCH_N) : 0.; }
+    CHECK(nl == 12 + 40, "12 crisp symbols and 40 letters on the overlay (%d)", nl);
     CHECK(creature_us > 0., "the creature to compare with (%s)", molty);
     /* docs/AGENT-LINK.md: the creature's update + raster + fill is ~11 ms of the device's
      * ~30 ms frame (33 fps). The scene replaces that work, so it scales the same way. */
     const double ratio = scene_us / (creature_us > 0. ? creature_us : 1.), dev_ms = 11.0 * ratio, frame_ms = 30.0 - 11.0 + dev_ms;
-    printf("  bench (host): busy scene fill %.1f us, creature update+raster+fill %.1f us, ratio %.2f\n", scene_us, creature_us, ratio);
+    printf("  bench (host, each block the fastest of %d): busy scene fill %.1f us, creature update+raster+fill %.1f us, ratio %.2f\n",
+           BENCH_REPEATS, scene_us, creature_us, ratio);
     printf("  estimate (device, scaled from the creature's ~11 ms at 33 fps): scene fill %.1f ms, frame %.1f ms = %.0f fps\n",
            dev_ms, frame_ms, 1000.0 / (frame_ms > 30.0 ? frame_ms : 30.0));
     CHECK(ratio < 1.0, "the busy scene costs less than the creature it replaces (ratio %.2f)", ratio);
