@@ -425,6 +425,62 @@ picture.
 Cost: the moon is made once a day (well under a millisecond); a frame merges at most a few hundred dots on the sim task
 after the creature's cells (host: under a microsecond with a star running).
 
+### The weather
+
+Rain on the glass behind a rigged creature, in its world as the sky is (`main/creature/weather.c`, merged by
+`creature_dots.c` after the sky): it goes with the creature's picture, never over a scene, a question, words or the
+screen off. It is told, never guessed: a kind and how long it holds (`POST /api/creature/state {"weather": {"kind":
+"rain", "s": 3600}}`, or a kind's name alone for an hour; 10 s to 6 h), kept in RAM only. When the time is up it eases
+back to clear by itself, so a Molty whose agent went away does not rain for ever. GET reports `weather {kind, s_left,
+level, wet}`. Nothing told: clear, nothing made or drawn, no random number drawn (the frames are those of a Molty
+without weather).
+
+- **The kinds.** Drizzle, rain, downpour, from the rain options page (A, B, C), thinned to fit the frame: a drop that
+  lands is one soft bump in the real water (strength 0.12, a light tap's 0.15 x 0.8), so its rings are the water's own
+  and a touch's wave and the drops live in the same water; a thin ring oval and a two-dot splash are drawn where it
+  lands. Streaks are dotted lines on the dot lattice, near ones long, fast and bright, far ones short and dim, at 3
+  (drizzle), 8 (rain) and 21 (downpour) degrees; they fall behind the cat (its halo keeps them off it). A streak moves
+  every third frame and a ring grows every other, in turns: what costs is the panel's cells that change.
+
+  | | lands / s | far streaks / s | in front / s | bumps / s | drops on the glass |
+  |---|---|---|---|---|---|
+  | drizzle | 5 | 10 | 0 | 5 | 5 |
+  | rain | 10 | 26 | 0 | 10 | 10 |
+  | downpour | 8 | 8 | 10 | 4.8 (60 %) | 12 |
+
+  At most 3 bumps a frame, 144 streaks, 48 rings, 16 drops on the glass; the rain's brightest dot about luma 150
+  against the eyes' 205.
+- **The downpour** is slanted and long, and also falls in front of the cat (from over its head, slower, most of it
+  across the cat): across its body a dot in four left out and at 0.55 of the brightness, never on its own lines nor
+  near its eyes. Now and then the cat shakes itself off with its own
+  `shaken`: 25 to 60 s into a full downpour, then every 3 to 7 minutes, only when nothing else plays (no gesture, mood,
+  listen, say, question, ring, change of picture, and awake).
+- **Drops on the glass.** A few sit on the glass and fade after 25 to 70 s; now and then a big one away from the cat's
+  column runs down with a trail of specks. A drop is a lens, not a bubble: a point of light up and to the left, the rim
+  lit low, nothing at its top. Never over the face.
+- **Moonlit.** Drizzle and rain under a bright moon show only in the moon's light (a soft beam from the moon down to
+  the floor, with more far streaks in it): the look blends in with the moon's lit fraction from 0.35 to 0.85, so a thin
+  or new moon gives plain rain; so do the sky off, no date, and a downpour.
+- **Starts and ends.** The level moves a kind every 6 s: rain starts and ends through drizzle, nothing pops.
+- **The wet floor.** It wets over 90 s of rain and dries over 15 minutes after it, in patches: a fixed puddle map in
+  perspective (the low places wet first and dry last), a cell a quarter step at a time, so a few cells change a frame.
+  Where it is wet the floor is darker and mirrors the cat (its own dots of the frame, flipped under its feet, squashed to
+  0.55, fading out a quarter of the glass below) and the moon (flipped about the horizon), both pushed by the water's
+  slope and broken where it is steep (a drop's ring, a touch). Dry: today's floor exactly. The lifetime and the drying go
+  by the clock, the screen's time off included.
+- **The setting.** `weather_on` (`POST /api/creature/state {weather_on: false}`, on out of the box, kept in NVS once
+  the screen is calm), the console's Settings > Molty "weather", next to a "try the weather" row (a kind for 5 minutes).
+  Telling the weather alone is not someone driving: it neither wakes the creature nor changes its life.
+- **The web module.** `wm_weather(kind, s)`; `weather-drizzle`, `-rain` and `-downpour.script` pin the looks (checked
+  native against WebAssembly). The site's /demo/ page has the controls; the home page's cat stays clear.
+
+Cost, modelled in the web module's device mode (the panel's measured costs, a mean over 100 s with the cat's own life):
+the drawer's work a frame from 18.8 ms with no weather to 23.1 (drizzle), 27.4 (rain, 24.9 moonlit) and 29.5 ms
+(downpour), a frame 30.3, 30.9, 31.7 and 32.5 ms (the 30 ms floor; about 31 fps at the worst); the cat's own gestures
+still make the longest frames. On the sim task the weather itself
+is about 2 us a frame on a computer (about 0.2 ms on the device) plus its merge, a few hundred dots. Its memory: one
+25 KB block in PSRAM, made at start.
+
 ### Limits and cost
 
 | | limit | the cat |

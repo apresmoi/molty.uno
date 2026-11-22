@@ -1040,6 +1040,12 @@ from the date the device takes by network time on Wi-Fi (`GET /api/diag` reports
 listen or a say is up. The console's setting: Settings › Molty "sky" (`POST /api/creature/state {sky: false}`, GET
 reports it, kept in NVS once the screen is calm; on out of the box).
 
+The weather on the glass is told the same way, with how long it holds: `POST /api/creature/state {"weather": {"kind":
+"drizzle" | "rain" | "downpour" | "clear", "s": 10..21600}}` (an hour when `s` is not given); it eases there and back to
+clear when the time is up, and the floor stays wet some minutes after ([CREATURES.md](CREATURES.md#the-weather)). GET
+reports `weather {kind, s_left, level, wet}` and the setting `weather_on` (Settings › Molty "weather", kept in NVS; on
+out of the box). Kept in RAM: a restart is clear. A relay command for agents is to come; it maps onto this body.
+
 The device reacts to a shake by itself (a brief `surprised`), agent or not. A tap or a shake also calls
 the cat to the front of the frame ([CREATURES.md](CREATURES.md#playing)).
 
