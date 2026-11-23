@@ -120,6 +120,13 @@ esp_err_t haptic_cue(const char *name)
     return haptic_plan_named(&p, name, 100) ? haptic_buzz(&p) : ESP_ERR_INVALID_ARG;
 }
 
+esp_err_t haptic_touch(void)
+{
+    haptic_plan_t p;
+    haptic_plan_one(&p, HAPTIC_TOUCH_MS, HAPTIC_TOUCH_STRENGTH);
+    return haptic_buzz(&p);
+}
+
 bool haptic_quiet(void) { return s_mux && esp_timer_get_time() < atomic_load(&s_quiet_until); }
 
 /* ── POST /api/haptic, the link's buzz ────────────────────────────────────── */
