@@ -20,6 +20,9 @@
   --m-device-contact: rgba(0, 0, 0, 0.75);
   --m-device-off: #030504;
   --m-glass-hairline: rgba(255, 255, 255, 0.07);
+  /* the ink screen (a concept): e-paper, the same paper in both themes, and its edge */
+  --m-paper: #e4e2da;
+  --m-paper-edge: #c9c6bc;
 }
 :root,
 :root[data-theme="dark"] {

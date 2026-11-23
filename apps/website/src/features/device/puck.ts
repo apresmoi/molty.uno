@@ -5,8 +5,9 @@
 // looks down +X), so a camera at rotX 90 / rotY 0 sees it face on and rotY / rotX turn it about
 // the screen's vertical / horizontal. Units: the screen's radius is 1 (the slot's half-width).
 //
-//   wall   the board's thickness: `segments` rectangles (polycss's cheapest exact leaf), with a
-//          radius a little inside the bezel's, so face on it never peeks out from behind it
+//   wall   the board's thickness: a rectangle (polycss's cheapest exact leaf) per side of its
+//          outline (`segments` round it, or the ink's rounded square), a little inside the
+//          bezel's (or the ink's frame), so face on it never peeks out from behind it
 //   back   a flat disc (only for a board that spins past edge-on), a fan of triangles (one
 //          48-gon is a clipped leaf that renders unreliably edge-on)
 //
@@ -30,27 +31,54 @@ export interface PuckColors {
   back: string;
 }
 
-/** A point at plane x, distance d out along the segment's centre direction a, s across it. */
-const at = (x: number, d: number, s: number, a: number): Vec3 => [
-  x,
-  d * Math.cos(a) - s * Math.sin(a),
-  d * Math.sin(a) + s * Math.cos(a),
-];
+/** The ink screen's board (a concept): a rounded square round a square screen (half-side 1),
+ *  its frame (CSS, on the face) reaching `frame` from the centre, its corners rounded by
+ *  `corner`; the wall a little inside that, like the round one's. */
+export const INK_BOARD = {
+  frame: 1.44,
+  wall: 1.42,
+  corner: 0.46,
+  /** Points a corner. */
+  per: 8,
+} as const;
+
+export type Shape = "round" | "ink";
+
+/** The wall's outline, counter-clockwise (y, z): the round one's polygon, or the ink's rounded
+ *  square. */
+export function outline(shape: Shape): Array<[number, number]> {
+  if (shape === "round") {
+    const { segments: n, wall: r } = PUCK;
+    return Array.from({ length: n }, (_, i) => [
+      r * Math.cos((i / n) * Math.PI * 2),
+      r * Math.sin((i / n) * Math.PI * 2),
+    ]);
+  }
+  const { wall: h, corner: c, per } = INK_BOARD;
+  const out: Array<[number, number]> = [];
+  for (let k = 0; k < 4; k++) {
+    const cy = (k === 0 || k === 3 ? 1 : -1) * (h - c);
+    const cz = (k < 2 ? 1 : -1) * (h - c);
+    for (let j = 0; j <= per; j++) {
+      const a = ((k + j / per) * Math.PI) / 2;
+      out.push([cy + c * Math.cos(a), cz + c * Math.sin(a)]);
+    }
+  }
+  return out;
+}
 
 /** `back`: add the back plate (only a board that spins past edge-on ever shows it). */
-export function puckPolygons(c: PuckColors, { back: withBack = true } = {}): Polygon[] {
-  const { segments: n, wall: r, wallFront: f, back } = PUCK;
-  // half a segment's chord: the wall's rectangles meet edge to edge on the polygon
-  const w = r * Math.sin(Math.PI / n);
-  const d = r * Math.cos(Math.PI / n);
+export function puckPolygons(c: PuckColors, { back: withBack = true, shape = "round" as Shape } = {}): Polygon[] {
+  const { wallFront: f, back } = PUCK;
+  const ring = outline(shape);
+  const at = (x: number, i: number): Vec3 => [x, ...ring[i % ring.length]!];
   const out: Polygon[] = [];
-  for (let i = 0; i < n; i++) {
-    const a = ((i + 0.5) / n) * Math.PI * 2;
-    out.push({ vertices: [at(f, d, -w, a), at(back, d, -w, a), at(back, d, w, a), at(f, d, w, a)], color: c.wall });
-  }
+  // the wall's rectangles meet edge to edge on the outline
+  for (let i = 0; i < ring.length; i++)
+    out.push({ vertices: [at(f, i), at(back, i), at(back, i + 1), at(f, i + 1)], color: c.wall });
   const centre: Vec3 = [back, 0, 0];
-  const corner = (k: number) => at(back, d, -w, ((k + 0.5) / n) * Math.PI * 2);
-  for (let i = 0; withBack && i < n; i++) out.push({ vertices: [centre, corner(i + 1), corner(i)], color: c.back });
+  for (let i = 0; withBack && i < ring.length; i++)
+    out.push({ vertices: [centre, at(back, i + 1), at(back, i)], color: c.back });
   return out;
 }
 

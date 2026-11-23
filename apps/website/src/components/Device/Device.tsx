@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { PolyCamera, PolyMesh, PolyScene, useCameraContext, type CameraHandle } from "@layoutit/polycss-react";
-import { PUCK, puckPolygons, type PuckColors } from "../../features/device/puck";
+import { PUCK, puckPolygons, type PuckColors, type Shape } from "../../features/device/puck";
 import {
   REST,
   REVEAL_SECONDS,
@@ -59,7 +59,9 @@ const GLARE_VARS = ["--glare-x", "--glare-y", "--glare-squeeze", "--glare-angle"
  *  its picture is ready by then and its cat walks in over it). Any other brings its picture with
  *  it (features/device/hold.ts): well in view, it waits unseen until `picture` is "lit" (or the
  *  hold's cap). `onWant` says when it is well in view and would turn in; `onStandsIn` how long
- *  from now it stands, once its turn's clock starts. */
+ *  from now it stands, once its turn's clock starts. `shape` "ink": the ink screen's board (a
+ *  concept) instead, a rounded square frame round a square of paper with no glass over it;
+ *  `children` is then its screen, carried on the face (paper when off, not a dark disc). */
 export function Device({
   reveal,
   onScreen,
@@ -68,6 +70,8 @@ export function Device({
   onFace,
   onStandsIn,
   picture,
+  shape = "round",
+  children,
 }: {
   reveal: RevealKind;
   onScreen?: (on: boolean) => void;
@@ -76,6 +80,8 @@ export function Device({
   onFace?: (transform: string, opacity: string) => void;
   onStandsIn?: (ms: number) => void;
   picture?: "wait" | "lit" | "dark";
+  shape?: Shape;
+  children?: ReactNode;
 }) {
   const root = useRef<HTMLSpanElement>(null);
   const face = useRef<HTMLSpanElement>(null);
@@ -232,10 +238,20 @@ export function Device({
 
   // the wall's polygons, in the theme's colours of the moment it turns (the back plate only
   // for a board that spins past edge-on: a coin)
-  const polygons = useMemo(() => (turning ? puckPolygons(readColors(), { back: reveal === "coin" }) : null), [turning]);
+  const polygons = useMemo(
+    () => (turning ? puckPolygons(readColors(), { back: reveal === "coin", shape }) : null),
+    [turning],
+  );
 
   return (
-    <span ref={root} className={styles.device} data-device={reveal} data-armed={armed || undefined} aria-hidden="true">
+    <span
+      ref={root}
+      className={styles.device}
+      data-device={reveal}
+      data-shape={shape}
+      data-armed={armed || undefined}
+      aria-hidden="true"
+    >
       <span className={styles.shadow} />
       {polygons && (
         <span className={styles.body}>
@@ -259,9 +275,10 @@ export function Device({
         <span className={styles.bezel}>
           <span className={styles.lip} />
         </span>
+        {children}
         <span ref={cover} className={styles.cover} />
         <span ref={lid} className={styles.lid}>
-          <GlassDome />
+          {shape === "round" && <GlassDome />}
         </span>
       </span>
     </span>
