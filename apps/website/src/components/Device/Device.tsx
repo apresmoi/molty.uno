@@ -9,7 +9,7 @@ import {
   type RevealFrame,
   type RevealKind,
 } from "../../features/device/reveal";
-import { PACES, afterTitle, introPreview } from "../../features/home/intro";
+import { PACES, afterTitle, introPreview, together } from "../../features/home/intro";
 import { GlassDome } from "../GlassDome";
 import styles from "./Device.module.css";
 
@@ -52,7 +52,8 @@ const GLARE_VARS = ["--glare-x", "--glare-y", "--glare-squeeze", "--glare-angle"
  *  until the device stands at rest its screen is off (a dark disc on the face): `onScreen(true)`
  *  says when it stands (at once with reduced motion), `onScreen(false)` when it is away;
  *  `onTurn` when it starts to turn in. An intro preview's pace (`?pace=`, features/home/intro.ts)
- *  times the hero's ("arrive") after the title and slows it. */
+ *  times the hero's ("arrive") after the title and slows it; take b's turns it at its own pace just
+ *  after the title starts (its cat walks in meanwhile and must find the screen on). */
 export function Device({
   reveal,
   onScreen,
@@ -77,7 +78,8 @@ export function Device({
   // so nothing settled flashes before it turns in: CSS hides it (motion allowed, the page's
   // intro started by Head) and shows it at rest without JS or if no script takes over
   const [armed, setArmed] = useState(() => revealFrame(reveal, 0).opacity < 1);
-  const pace = useRef({ after: -1, stretch: 1 }); // an intro preview's, for the hero (after -1: none)
+  // an intro preview's, for the hero (after: seconds after the title starts forming; null: at once)
+  const pace = useRef<{ after: number | null; stretch: number }>({ after: null, stretch: 1 });
 
   /** Put the whole device in pose `f`: a few style writes, one of them the polycss scene root. */
   const apply = (f: RevealFrame) => {
@@ -179,13 +181,15 @@ export function Device({
     }
     apply(revealFrame(reveal, 0));
     const preview = reveal === "arrive" ? introPreview()?.pace : undefined;
-    if (preview) pace.current = PACES[preview];
+    if (preview) pace.current = { after: PACES[preview].after || null, stretch: PACES[preview].stretch };
+    const one = reveal === "arrive" ? together() : undefined;
+    if (one) pace.current = { after: one.after, stretch: 1 };
     const io = new IntersectionObserver(
       (entries) => {
         const e = entries[entries.length - 1]!;
         if (!seen.current && e.intersectionRatio >= 0.45) {
           seen.current = true;
-          if (pace.current.after > 0) void afterTitle(pace.current.after).then(() => root.current && play(reveal));
+          if (pace.current.after !== null) void afterTitle(pace.current.after).then(() => root.current && play(reveal));
           else play(reveal);
         } else if (seen.current && !e.isIntersecting && el.hasAttribute("data-turning")) finish();
       },

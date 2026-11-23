@@ -9,7 +9,7 @@ import {
 } from "../../services/molty-screen";
 import { CAT, CAT_STILL, PROGRAMS, SCENES_URL, type ProgramName } from "../../features/molty/content";
 import type { RevealKind } from "../../features/device/reveal";
-import { heroCue } from "../../features/home/intro";
+import { afterTitle, heroCue, together } from "../../features/home/intro";
 import { Device } from "../Device";
 import styles from "./MoltyScreen.module.css";
 
@@ -30,7 +30,10 @@ import styles from "./MoltyScreen.module.css";
  *  the same renderer's picture of the cat alone).
  *  `boot`: the device's boot screen first. `play`: what it does by itself (features/molty).
  *  `scenes`: it may be asked for scenes. `onReady` hands the running screen over (null when it
- *  goes); `onAnswer` and `onFrame` are the screen's own. */
+ *  goes); `onAnswer` and `onFrame` are the screen's own. Take b of an intro preview (`?intro=b`,
+ *  features/home/intro.ts TOGETHER): the hero's renderer mounts as soon as it is near, and its
+ *  clock starts as the title starts forming, so the cat walks in (outside the glass) while the
+ *  device turns; the screen still comes on once it stands. */
 export function MoltyScreen({
   reveal,
   boot = false,
@@ -58,6 +61,7 @@ export function MoltyScreen({
   callbacks.current = { onReady, onAnswer, onFrame };
   const state = useRef({ turning: false, stands: false, live: false, failed: false });
   const [screen, setScreen] = useState<"off" | "dark" | "live" | "still">();
+  const [one, setOne] = useState(false); // take b's: the hero and the title as one
   const show = () => {
     const s = state.current;
     // waiting for the renderer the screen is dark (the still would be shown, then hidden by the
@@ -71,22 +75,24 @@ export function MoltyScreen({
   useEffect(() => {
     const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
     const needs = { creature: CAT, scenes: scenes || play === "chart" ? SCENES_URL : undefined };
+    const early = reveal === "arrive" ? together() : undefined;
+    setOne(!!early);
     let handle: MoltyScreenHandle | null = null;
     let program: ProgramRun | null = null;
     let alive = true;
     let near = false;
     let started = false;
     let stood = () => {};
-    const shown = new Promise<void>((done) => (stood = done));
+    const shown = early ? afterTitle(0) : new Promise<void>((done) => (stood = done));
     power.current = () => {
       if (state.current.stands) stood();
-      if (started || !near || !(state.current.turning || state.current.stands)) return;
+      if (started || !near || !(early || state.current.turning || state.current.stands)) return;
       started = true;
       const mount = mountMoltyScreen(canvas.current!, {
         ...needs,
         boot,
         shown,
-        entrance: enter ? { outside: outside.current } : undefined,
+        entrance: enter ? { outside: outside.current, pace: early?.walk } : undefined,
         reducedMotion,
         onEntered: () => alive && setEntered(true),
         onAnswer: (i) => {
@@ -135,7 +141,13 @@ export function MoltyScreen({
   }, []);
 
   return (
-    <span className={styles.root} data-molty-screen="" data-dust-focus="device" data-screen={screen}>
+    <span
+      className={styles.root}
+      data-molty-screen=""
+      data-dust-focus="device"
+      data-screen={screen}
+      data-together={one || undefined}
+    >
       {enter && (
         <canvas
           ref={outside}

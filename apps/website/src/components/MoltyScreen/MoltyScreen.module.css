@@ -80,3 +80,12 @@
 :global(html[data-intro-pace="quick"]) .root:has([data-device="arrive"]) .canvas {
   transition-duration: 0.45s;
 }
+/* take b (features/home/intro.ts TOGETHER): the cat walks in while the device turns, so its
+   window beside the screen shows before the screen comes on (it is clear but for the cat), and
+   the screen comes on quickly whatever the pace: it is on before the cat reaches the glass */
+.root[data-together] .outside:not([data-gone]) {
+  opacity: 1;
+}
+:global(html[data-intro-pace]) .root[data-together] .canvas {
+  transition-duration: 0.45s;
+}

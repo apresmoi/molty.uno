@@ -23,6 +23,9 @@ import { HEADING_GAIN } from "../../config/water.mjs";
 
 /** Reduced motion and a screen that starts on its creature: this much is played unseen first. */
 const SETTLE_S = 1.6;
+/** A scene's formation, dust to the scene (scene_player.h SCENE_DUST_S, 0.6 s), and a few frames
+ *  more: a word intro's `formed`. */
+const FORM_S = 0.7;
 const SETTLE_STEP_MS = 1000 / 30;
 /** One water with the page: a screen's water goes to the page's own from this far out of the
  *  glass's radius, wholly from that far (its outer band, where the device's water has its
@@ -67,8 +70,9 @@ export interface MoltyScreenOptions {
   heading?: boolean;
   /** The creature walks in from beyond the window's right edge. `outside`: a canvas the size and
    *  place of the screen's own, clear but for the cat: this moves it along with the cat while
-   *  the cat is outside the glass (the same renderer's picture of the cat alone). */
-  entrance?: { outside: HTMLCanvasElement | null };
+   *  the cat is outside the glass (the same renderer's picture of the cat alone). `pace`: its
+   *  walk this many times its own (default 1). */
+  entrance?: { outside: HTMLCanvasElement | null; pace?: number };
   reducedMotion: boolean;
   /** A tap (or `pick`) answered the question on screen with this option. */
   onAnswer?: (index: number) => void;
@@ -198,6 +202,11 @@ class Screen implements MoltyScreenHandle {
     else if (options.intro && !options.reducedMotion) {
       this.intro = options.intro;
       if (options.intro.water) this.core.couple(0, 0);
+      if (options.intro.formed)
+        for (let t = 0; t < FORM_S * 1000; t += SETTLE_STEP_MS) {
+          this.meetPage(options.intro);
+          yield this.step(SETTLE_STEP_MS);
+        }
     }
     // straight to the creature (or the scene): it has formed by the first frame shown
     else if (!options.boot || options.reducedMotion) {
@@ -229,7 +238,7 @@ class Screen implements MoltyScreenHandle {
     this.outside = this.options.entrance!.outside?.getContext("2d") ?? null;
     const box = this.canvas.getBoundingClientRect();
     const aside = ((innerWidth - (box.left + box.width / 2)) / box.width) * ENTER.view;
-    const walk = new Entrance(this.core, twin, aside);
+    const walk = new Entrance(this.core, twin, aside, this.options.entrance!.pace);
     yield* walk.lead();
     if (walk.walking) this.walk = walk;
   }

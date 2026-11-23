@@ -23,6 +23,18 @@ export const PACES: Record<IntroPace, { after: number; stretch: number }> = {
   quick: { after: 0, stretch: 1 },
 };
 
+/** Take b plays the title, the hero's device and its cat as one: whatever the pace, the device
+ *  turns in at its own pace `after` s once the title starts forming (its dust is coming up), and
+ *  its screen's clock starts with the title (not once the device stands), so the cat is already
+ *  walking in from the window's edge while the title forms, at `walk` times its own pace (the
+ *  page is wide: its walk is long). */
+export const TOGETHER: Partial<Record<TitleIntro, { after: number; walk: number }>> = { b: { after: 0.3, walk: 2 } };
+/** This page's take that plays as one (TOGETHER), or undefined. */
+export const together = () => {
+  const title = introPreview()?.title;
+  return title && TOGETHER[title];
+};
+
 /** The preview this page was opened with, or null (no parameter, reduced motion, the server). */
 export function introPreview(): IntroPreview | null {
   if (typeof location === "undefined" || matchMedia("(prefers-reduced-motion: reduce)").matches) return null;

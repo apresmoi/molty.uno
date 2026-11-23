@@ -12,6 +12,10 @@ export interface WordIntro {
   clock?: (t: number) => number;
   /** The water's height at (x, y) of the window (-1 .. 1, glass units) at `t`: 0 by `seconds`. */
   water?: (x: number, y: number, t: number) => number;
+  /** The firmware's formation (dust to the scene, SCENE_DUST_S) is played unseen first, under
+   *  the water at its `t` 0: its haze, which it lays only once formed (fluid_draw.c), is then
+   *  there from the first frame shown and comes up with the window instead of on one frame. */
+  formed?: boolean;
 }
 
 const clamp01 = (x: number) => (x <= 0 ? 0 : x >= 1 ? 1 : x);
@@ -43,9 +47,10 @@ const noise = (x: number, y: number, n: number) => {
 export const WORD_INTROS: Record<"a" | "b" | "c", WordIntro> = {
   // still water; the device's own formation, dust to lines, played a third as fast
   a: { seconds: 2.1, clock: (t) => (t < 1.9 ? 0.32 : 1) },
-  // the word forms under rough water; calm spreads from its middle out to its ends
+  // the dust comes up, rough; the word forms under it as calm spreads from its middle to its ends
   b: {
     seconds: 2.4,
+    formed: true,
     water: (x, y, t) => {
       const edge = 1.15 * smooth((t - 0.25) / 1.95);
       return rough(x, y, t) * smooth((Math.hypot(x, 2.5 * y) - edge) / 0.18 + 0.5);

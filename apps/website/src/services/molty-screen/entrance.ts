@@ -56,14 +56,16 @@ export class Entrance {
   readonly twin: MoltyCore | null;
   /** False when there was no creature to call. */
   readonly walking: boolean;
+  private readonly pace: number;
   /** How far the window beside the screen looks to the side (panel px). */
   aside = 0;
 
   /** `aside`: world units from the screen's middle to the window's right edge. The creature is
    *  on screen after a few frames; then it is put beyond that edge and called. Its getting up is
-   *  played unseen (`lead`) before the first step. */
-  constructor(core: MoltyCore, twin: MoltyCore | null, aside: number) {
+   *  played unseen (`lead`) before the first step. `pace`: its walk this many times `rate`. */
+  constructor(core: MoltyCore, twin: MoltyCore | null, aside: number, pace = 1) {
     this.core = core;
+    this.pace = pace;
     this.twin = twin;
     const [across, back] = enterFrom(aside);
     let ok = true;
@@ -96,7 +98,7 @@ export class Entrance {
   /** `ms` of the page's time, the clock sped up. False once it sits: the screen's own cat takes
    *  over. `entering` is asked of both: the call moves the cat (web_molty.c wm_entering). */
   step(ms: number): boolean {
-    const rate = Math.abs(this.core.across()) < ENTER.near ? ENTER.settle : ENTER.rate;
+    const rate = Math.abs(this.core.across()) < ENTER.near ? ENTER.settle : ENTER.rate * this.pace;
     this.advance(Math.round(ms * 1000 * rate));
     this.twin?.entering();
     return this.core.entering();
