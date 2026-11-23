@@ -74,6 +74,7 @@ for (const [name, aside] of WINDOWS) {
   test(`the cat walks into place as one cat: a ${name} window`, async () => {
     const seed = 20260516;
     const walk = new Entrance(await molty(seed), await molty(seed), aside);
+    for (const _ of walk.lead());
     const { core, twin } = walk;
     assert.ok(walk.walking && twin);
     // it starts wholly beyond the window's right edge (panel px from the screen's left)

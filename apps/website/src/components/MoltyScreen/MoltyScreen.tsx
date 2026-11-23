@@ -21,6 +21,8 @@ import styles from "./MoltyScreen.module.css";
  *  The device is one thing: nothing of its screen shows until its frame stands in place. Then
  *  the screen comes on inside it: dark first, the renderer's picture as soon as it draws (it
  *  mounts when the device nears the viewport, and its clock starts when the device stands).
+ *  What it plays unseen first (the cat getting up) it plays while the device turns in, so the
+ *  picture is ready when the device stands.
  *  Without JavaScript, with reduced motion, or if the renderer cannot load, a still of the cat
  *  stands in. `data-screen` says which: "off" (the device is away), "dark", "live", "still".
  *  `enter`: the cat is not there at first: it walks in from beyond the window's right edge,
@@ -54,7 +56,7 @@ export function MoltyScreen({
   const power = useRef<() => void>(() => {});
   const callbacks = useRef({ onReady, onAnswer, onFrame });
   callbacks.current = { onReady, onAnswer, onFrame };
-  const state = useRef({ stands: false, live: false, failed: false });
+  const state = useRef({ turning: false, stands: false, live: false, failed: false });
   const [screen, setScreen] = useState<"off" | "dark" | "live" | "still">();
   const show = () => {
     const s = state.current;
@@ -74,12 +76,16 @@ export function MoltyScreen({
     let alive = true;
     let near = false;
     let started = false;
+    let stood = () => {};
+    const shown = new Promise<void>((done) => (stood = done));
     power.current = () => {
-      if (started || !near || !state.current.stands) return;
+      if (state.current.stands) stood();
+      if (started || !near || !(state.current.turning || state.current.stands)) return;
       started = true;
       const mount = mountMoltyScreen(canvas.current!, {
         ...needs,
         boot,
+        shown,
         entrance: enter ? { outside: outside.current } : undefined,
         reducedMotion,
         onEntered: () => alive && setEntered(true),
@@ -145,7 +151,11 @@ export function MoltyScreen({
       <canvas ref={canvas} className={styles.canvas} width={PANEL} height={PANEL} />
       <Device
         reveal={reveal}
-        onTurn={() => reveal === "arrive" && heroCue("turning")}
+        onTurn={() => {
+          if (reveal === "arrive") heroCue("turning");
+          state.current.turning = true;
+          power.current();
+        }}
         onScreen={(on) => {
           state.current.stands = on;
           show();

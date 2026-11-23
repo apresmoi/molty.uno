@@ -39,8 +39,13 @@ const SETTLE_STEP_MS = 1000 / 30;
 /** `us` of the firmware's clock: a sped-up clock goes in steps no longer than a device frame (the
  *  creature's player takes no more than that of one frame's time). */
 export function play(us: number, frame: (us: number) => void) {
-  const steps = Math.ceil(us / 30000);
-  for (let i = 0; i < steps; i++) frame(us / steps);
+  const [n, dt] = steps(us);
+  for (let i = 0; i < n; i++) frame(dt);
+}
+/** `play`'s steps for `us`: how many, and the firmware's clock in each. */
+export function steps(us: number): [number, number] {
+  const n = Math.ceil(us / 30000);
+  return [n, us / n];
 }
 
 /** The cat walking in on the screen's Molty and, when there is one, on the window beside it: the
@@ -55,8 +60,8 @@ export class Entrance {
   aside = 0;
 
   /** `aside`: world units from the screen's middle to the window's right edge. The creature is
-   *  on screen after a few frames; then it is put beyond that edge and called, its getting up
-   *  played unseen. */
+   *  on screen after a few frames; then it is put beyond that edge and called. Its getting up is
+   *  played unseen (`lead`) before the first step. */
   constructor(core: MoltyCore, twin: MoltyCore | null, aside: number) {
     this.core = core;
     this.twin = twin;
@@ -67,7 +72,12 @@ export class Entrance {
       ok = c.enter(across, back) && ok;
     }
     this.walking = ok;
-    if (ok) for (let t = 0; t < ENTER.lead * 1000; t += SETTLE_STEP_MS) this.advance(SETTLE_STEP_MS * 1000);
+  }
+
+  /** Its getting up, played unseen: a yield a step (the screen spreads them over the page's frames). */
+  *lead() {
+    if (!this.walking) return;
+    for (let t = 0; t < ENTER.lead * 1000; t += SETTLE_STEP_MS) yield this.advance(SETTLE_STEP_MS * 1000);
   }
 
   private cores() {

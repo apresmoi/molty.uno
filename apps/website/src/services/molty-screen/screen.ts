@@ -7,13 +7,16 @@
 //   water      one with the page's (water.ts): before each frame the screen takes the page's
 //              water at its rim, so a wave from outside comes in and its own goes out
 //   reduced    prefers-reduced-motion: no frames; one settled still per change
+//   unseen     what a screen plays before it is first shown (a word settling, the cat getting up)
+//              is spread over the page's frames (slices.ts): the mount settles once it is done
 //   <html data-fluid-moltys>   "live" once a screen draws, "off" when the module cannot load
 //              (the page then keeps its still images)
 import { onFrame } from "./clock";
 import { MoltyCore, PANEL, type MoltyQuestion, type MoltyState } from "./core";
-import { ENTER, Entrance, play } from "./entrance";
+import { ENTER, Entrance, play, steps } from "./entrance";
 import { WATER } from "./field";
 import { loadModule } from "./module";
+import { sliced } from "./slices";
 import type { WordIntro } from "./intro";
 import { pageWater, type PageWater } from "./water";
 import { HEADING_GAIN } from "../../config/water.mjs";
@@ -69,6 +72,9 @@ export interface MoltyScreenOptions {
   reducedMotion: boolean;
   /** A tap (or `pick`) answered the question on screen with this option. */
   onAnswer?: (index: number) => void;
+  /** The screen is shown (drawn, its clock running) once this settles, and what it plays unseen
+   *  is played before (a device that turns in: it settles when the device stands). */
+  shown?: Promise<unknown>;
   /** Every frame drawn, with the seconds this screen has run (they stop while it is unseen). */
   onFrame?: (seconds: number) => void;
   /** The entrance is over: the creature sits. */
@@ -129,7 +135,10 @@ export async function mountMoltyScreen(
     // camera looking to the side
     const entering = options.entrance && !options.reducedMotion;
     const twin = entering && options.entrance!.outside ? await make() : null;
-    const screen = new Screen(canvas, core, twin, options);
+    const screen = new Screen(canvas, core, options);
+    await sliced(screen.unseen(twin));
+    await options.shown;
+    screen.show();
     pageState("live");
     return screen;
   } catch (e) {
@@ -156,7 +165,12 @@ class Screen implements MoltyScreenHandle {
   private waterAs = "";
   private inView = false;
   private alive = true;
-  private watch: IntersectionObserver;
+  private watch = new IntersectionObserver((entries) => {
+    this.inView = entries[entries.length - 1]!.isIntersecting;
+    this.sync();
+  });
+  /** It was played unseen to where it is first shown (`settle`). */
+  private settled = false;
   /** The cat walking in, until it sits. */
   private walk: Entrance | null = null;
   private outside: CanvasRenderingContext2D | null = null;
@@ -170,28 +184,35 @@ class Screen implements MoltyScreenHandle {
   constructor(
     private canvas: HTMLCanvasElement,
     private core: MoltyCore,
-    twin: MoltyCore | null,
     private options: MoltyScreenOptions,
   ) {
     this.ctx = canvas.getContext("2d", { alpha: false })!;
     this.px = options.px ?? PANEL;
     if (options.scene) this.hold();
-    if (options.entrance && !options.reducedMotion) this.enter(twin);
+  }
+
+  /** What it plays before it is first shown, a yield a step (spread over the page's frames). */
+  *unseen(twin: MoltyCore | null) {
+    const options = this.options;
+    if (options.entrance && !options.reducedMotion) yield* this.enter(twin);
     else if (options.intro && !options.reducedMotion) {
       this.intro = options.intro;
-      if (options.intro.water) core.couple(0, 0);
-      this.draw();
+      if (options.intro.water) this.core.couple(0, 0);
     }
     // straight to the creature (or the scene): it has formed by the first frame shown
-    else if (!options.boot || options.reducedMotion) this.settle(options.scene ? 3.2 : SETTLE_S);
-    else this.draw();
-    this.watch = new IntersectionObserver((entries) => {
-      this.inView = entries[entries.length - 1]!.isIntersecting;
-      this.sync();
-    });
-    this.watch.observe(canvas);
+    else if (!options.boot || options.reducedMotion) {
+      yield* this.settling(options.scene ? 3.2 : SETTLE_S);
+      this.settled = true;
+    }
+  }
+
+  /** Its first picture, and from now on its frames and the finger. */
+  show() {
+    this.draw();
+    if (this.settled) this.options.onFrame?.(this.seconds);
+    this.watch.observe(this.canvas);
     document.addEventListener("visibilitychange", this.sync);
-    if (!options.heading) for (const type of FINGER) canvas.addEventListener(type, this.finger);
+    if (!this.options.heading) for (const type of FINGER) this.canvas.addEventListener(type, this.finger);
   }
 
   /** The scene it holds up, (again) from now. */
@@ -204,13 +225,13 @@ class Screen implements MoltyScreenHandle {
   /** The entrance (entrance.ts), from beyond the window's right edge. While the cat walks in,
    *  the window beside the screen looks where the cat is: its picture of the cat alone is the one
    *  cat the page shows, outside the glass and inside it. */
-  private enter(twin: MoltyCore | null) {
+  private *enter(twin: MoltyCore | null) {
     this.outside = this.options.entrance!.outside?.getContext("2d") ?? null;
     const box = this.canvas.getBoundingClientRect();
     const aside = ((innerWidth - (box.left + box.width / 2)) / box.width) * ENTER.view;
     const walk = new Entrance(this.core, twin, aside);
+    yield* walk.lead();
     if (walk.walking) this.walk = walk;
-    this.draw();
   }
 
   destroy() {
@@ -234,10 +255,17 @@ class Screen implements MoltyScreenHandle {
 
   /** A heading takes every other of the page's frames while the page's water moves (about the
    *  device's own pace: its window is four panels' worth of pixels), and one in six while it is
-   *  flat (nothing of it moves then but its dust's slow shimmer). Headings take turns. */
+   *  flat (nothing of it moves then but its dust's slow shimmer). Headings take turns. A turn's
+   *  firmware frames are spread over the page's frames to the next turn, and its picture is
+   *  drawn after the last: the same pictures, a few frames later. */
   private static headings = 0;
   private turn = Screen.headings++;
   private owed = 0;
+  private spreading = false;
+  /** The turn's firmware frames still to play, the clock in each, and how many a page frame. */
+  private left = 0;
+  private dt = 0;
+  private per = 0;
 
   private tick = (ms: number) => {
     const intro = this.intro;
@@ -246,9 +274,16 @@ class Screen implements MoltyScreenHandle {
       if (this.introT >= intro.seconds) this.intro = this.introH = null;
     } else if (this.options.heading) {
       this.owed += ms;
-      if (++this.turn % (pageWater()?.moving ? 2 : 6)) return;
-      ms = this.owed;
+      const every = pageWater()?.moving ? 2 : 6;
+      if (++this.turn % every) return this.spread(this.per);
+      this.spread(Infinity); // the last turn's, when the page's water changed pace mid-turn
+      this.meetPage(null);
+      this.begin(this.owed);
+      [this.left, this.dt] = steps(Math.round(this.owed * 1000));
+      this.per = Math.ceil(this.left / every);
       this.owed = 0;
+      this.spreading = true;
+      return this.spread(this.per);
     }
     this.meetPage(intro);
     this.step(intro?.clock ? ms * intro.clock(this.introT) : ms);
@@ -299,13 +334,19 @@ class Screen implements MoltyScreenHandle {
     return out;
   }
 
+  /** `n` of a heading's turn's firmware frames; after its last, the turn's picture. */
+  private spread(n: number) {
+    if (!this.spreading) return;
+    for (; this.left > 0 && n > 0; this.left--, n--) this.core.frame(this.dt);
+    if (this.left) return;
+    this.spreading = false;
+    this.end();
+    this.draw();
+    this.options.onFrame?.(this.seconds);
+  }
+
   private step(ms: number) {
-    this.seconds += ms / 1000;
-    // the module's clock runs with its frames, which stop while the screen is unseen: the date again now and then
-    if (Date.now() - this.timeAt > TIME_AGAIN_MS) {
-      this.timeAt = Date.now();
-      this.core.time(this.timeAt / 1000);
-    }
+    this.begin(ms);
     if (!this.walk) play(Math.round(ms * 1000), (us) => this.core.frame(us));
     else if (!this.walk.step(ms)) {
       // it sits: the window beside the screen is done with, the screen's own cat takes over
@@ -314,6 +355,17 @@ class Screen implements MoltyScreenHandle {
       this.outside = null;
       this.options.onEntered?.();
     }
+    this.end();
+  }
+  private begin(ms: number) {
+    this.seconds += ms / 1000;
+    // the module's clock runs with its frames, which stop while the screen is unseen: the date again now and then
+    if (Date.now() - this.timeAt > TIME_AGAIN_MS) {
+      this.timeAt = Date.now();
+      this.core.time(this.timeAt / 1000);
+    }
+  }
+  private end() {
     if (this.options.scene && this.seconds - this.sceneAt > SCENE_AGAIN) this.hold();
     const answer = this.core.answer();
     if (answer >= 0) this.options.onAnswer?.(answer);
@@ -335,9 +387,13 @@ class Screen implements MoltyScreenHandle {
     this.ctx.drawImage(outside.canvas, aside, 0);
   }
 
+  /** Play `seconds` unseen, a yield a step. */
+  private *settling(seconds: number) {
+    for (let t = 0; t < seconds * 1000; t += SETTLE_STEP_MS) yield this.step(SETTLE_STEP_MS);
+  }
   /** Play `seconds` unseen, then show where it got to (reduced motion: one still per change). */
   private settle(seconds = SETTLE_S) {
-    for (let t = 0; t < seconds * 1000; t += SETTLE_STEP_MS) this.step(SETTLE_STEP_MS);
+    for (const _ of this.settling(seconds));
     this.draw();
     this.options.onFrame?.(this.seconds);
   }
