@@ -1,0 +1,74 @@
+/* bake's three screens in a row like cards in a hand. Sizes are the screens' true ones: the
+   1.75's screen is --d of the row's width, the 1.28's 1.28 / 1.75 of it, the ink's paper a
+   1.54 inch e-paper square's (27.6 mm to the 1.75's 44.5: 0.62). The 1.75 lies on the others. */
+.fan {
+  --d: 0.46;
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 0.7;
+}
+.place {
+  position: absolute;
+  left: calc(var(--x) * 100%);
+  top: calc(var(--y) * 100%);
+  width: calc(var(--s) * 100%);
+  aspect-ratio: 1;
+  translate: -50% -50%;
+  rotate: var(--r);
+}
+.small {
+  --s: calc(var(--d) * 0.731);
+  --x: 0.23;
+  --y: 0.56;
+  --r: -14deg;
+}
+.ink {
+  --s: calc(var(--d) * 0.62);
+  --x: 0.75;
+  --y: 0.54;
+  --r: 12deg;
+}
+.big {
+  --s: var(--d);
+  --x: 0.5;
+  --y: 0.48;
+  --r: 0deg;
+  z-index: 1;
+}
+/* each one's name, on one line along the row's foot */
+.label {
+  position: absolute;
+  left: calc(var(--lx, var(--x)) * 100%);
+  top: 92%;
+  translate: -50% 0;
+  color: var(--m-dim);
+  font-size: var(--m-text-sm);
+  white-space: nowrap;
+  rotate: none;
+}
+.label.big {
+  z-index: 2;
+}
+/* phones: the row is the column's width, so the screens are drawn larger and lie less on each
+   other: the 1.75 a little higher, the 1.28 lower left with its lower half clear (its screen
+   about 130 px across on a 390 px phone), the ink lower right. Their names spread across */
+@media (max-width: 46rem) {
+  .fan {
+    --d: 0.5;
+    aspect-ratio: 1 / 0.86;
+  }
+  .small {
+    --x: 0.2;
+    --y: 0.6;
+    --lx: 0.15;
+  }
+  .ink {
+    --x: 0.77;
+    --y: 0.6;
+    --lx: 0.85;
+  }
+  .big {
+    --x: 0.5;
+    --y: 0.4;
+  }
+}

@@ -7,6 +7,7 @@ import { MoltyActs } from "../components/MoltyActs";
 import { CopyMessage } from "../components/CopyMessage";
 import { SpeedReader } from "../components/SpeedReader";
 import { MoltyScreen } from "../components/MoltyScreen";
+import { BakeFan } from "../components/BakeFan";
 import { title, description, ldJson, pairingMessage, readerText, readerAnswers } from "../features/home/content";
 import { PAIR } from "../features/molty/content";
 import { landingActions, type CreaturePackage } from "../features/molty/actions";
@@ -31,6 +32,6 @@ const rest = (cat as unknown as CreaturePackage).creature.about.moods.idle ?? ""
     <CopyMessage slot="message" client:visible text={pairingMessage} />
     <MoltyScreen slot="heroDevice" client:load reveal="arrive" enter />
     <MoltyScreen slot="bridgeDevice" client:idle reveal="rise" play={PAIR} />
-    <MoltyScreen slot="bakeDevice" client:idle reveal="coin" />
+    <BakeFan slot="bakeDevice" client:idle />
   </HomePage>
 </ContentLayout>

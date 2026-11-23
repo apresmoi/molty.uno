@@ -1,14 +1,15 @@
 import type { ReactNode } from "react";
-import { bridgeFlow, boards, PORTING_HREF } from "../../features/home/content";
+import { bridgeFlow, boards, inkConcept, PORTING_HREF } from "../../features/home/content";
 import { REPO_URL } from "../../config/site.mjs";
 import { MoltyMark } from "../MoltyMark";
 import { WordHeading } from "../WordHeading";
 import styles from "./HomePage.module.css";
 
-/** A square for a Molty device (the island the page passes in): decoration, to tap. */
-function Slot({ device }: { device: ReactNode }) {
+/** A square for a Molty device (the island the page passes in): decoration, to tap. `fan`: bake's
+ *  row of three instead (wider than tall). */
+function Slot({ device, fan = false }: { device: ReactNode; fan?: boolean }) {
   return (
-    <div className={styles.slot} aria-hidden="true">
+    <div className={`${styles.slot} ${fan ? styles.fan : ""}`} aria-hidden="true">
       {device}
     </div>
   );
@@ -42,7 +43,8 @@ export function HomePage({
   reader: ReactNode;
   picker: ReactNode;
   message: ReactNode;
-  /** The three Molty devices (MoltyScreen islands: they turn in on first sight, then power on). */
+  /** The Molty devices (MoltyScreen islands: they turn in on first sight, then power on): the
+   *  hero's, bridge's and bake's three (BakeFan). */
   heroDevice: ReactNode;
   bridgeDevice: ReactNode;
   bakeDevice: ReactNode;
@@ -146,7 +148,14 @@ export function HomePage({
       <section className={`${styles.section} ${styles.split}`} aria-labelledby="boards">
         <div className={styles.copy}>
           <WordHeading id="boards" text="bake" word={wordBoards} className={styles.word} />
-          <p className={styles.text}>Flash it onto a round screen. Or port it to yours.</p>
+          <p className={styles.text}>
+            <span className={styles.wide}>
+              One creature, any screen. Flash it onto a round screen, or port it to yours: the same cat, drawn for each.
+            </span>
+            <span className={styles.phone}>
+              One creature, any screen. Flash it onto a round one, or port it to yours.
+            </span>
+          </p>
           <ul className={styles.boards}>
             {boards.map((b) => (
               <li key={b.tag}>
@@ -158,6 +167,14 @@ export function HomePage({
                 <i>{b.status}</i>
               </li>
             ))}
+            <li>
+              <b>{inkConcept.tag}</b>
+              <span>
+                {inkConcept.screen}
+                <small>{inkConcept.board}</small>
+              </span>
+              <i className={styles.concept}>{inkConcept.status}</i>
+            </li>
             <li>
               <b>yours</b>
               <span>
@@ -176,7 +193,7 @@ export function HomePage({
             </a>
           </Links>
         </div>
-        <Slot device={bakeDevice} />
+        <Slot device={bakeDevice} fan />
       </section>
 
       <footer className={styles.footer}>

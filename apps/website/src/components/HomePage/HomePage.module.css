@@ -161,6 +161,12 @@
   justify-self: center;
 }
 
+/* bake's row of three screens: wider than tall (BakeFan sets its own height) */
+.slot.fan {
+  aspect-ratio: auto;
+  max-width: none;
+}
+
 /* 03 */
 .flow {
   max-width: 100%;
@@ -200,6 +206,9 @@
   color: var(--m-dim);
   font-size: var(--m-text-sm);
   font-style: normal;
+}
+.boards i.concept {
+  color: var(--m-warn);
 }
 .boards a {
   color: var(--m-accent);
@@ -288,6 +297,9 @@
     width: var(--m-stack-slot);
     max-width: none;
   }
+  .split > .slot.fan {
+    width: 100%;
+  }
   .section {
     padding-block: calc(var(--m-header-height) + 6svh) 4svh;
   }
@@ -375,6 +387,12 @@
     max-width: none;
     max-height: calc(0.86 * (100vw - 2 * var(--m-gutter)));
     margin-block: var(--m-space-4);
+  }
+  /* bake's row keeps its own height: the column's width, wider than tall */
+  .section .slot.fan {
+    flex: none;
+    width: 100%;
+    max-height: none;
   }
   /* moltys: the stage keeps its size (--m-stack-slot), the rows make it more than a screen */
   .gallery [data-stage="gallery"] {
