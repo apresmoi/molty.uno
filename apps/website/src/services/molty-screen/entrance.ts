@@ -19,6 +19,10 @@ export const ENTER = {
   settle: 4.5,
   /** At its place: this near the frame's middle. */
   near: 0.12,
+  /** The most it moves a firmware second (creature_clip.c CC_PACE). */
+  pace: 0.6,
+  /** Its picture touches the glass from no farther across than this (measured: 1.52 to 1.56). */
+  glass: 1.5,
 };
 /** Walking in, the cat also drifts toward the viewer: starting [across, back] it ends at its own
  *  place. Measured for each start; a start in between takes the next one further out. */
@@ -78,6 +82,11 @@ export class Entrance {
   *lead() {
     if (!this.walking) return;
     for (let t = 0; t < ENTER.lead * 1000; t += SETTLE_STEP_MS) yield this.advance(SETTLE_STEP_MS * 1000);
+  }
+
+  /** Page seconds it takes at the least to touch the glass from where it is. */
+  glassS(): number {
+    return Math.max(0, (this.core.across() - ENTER.glass) / (ENTER.pace * ENTER.rate));
   }
 
   private cores() {

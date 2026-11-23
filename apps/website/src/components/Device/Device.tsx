@@ -58,13 +58,15 @@ const GLARE_VARS = ["--glare-x", "--glare-y", "--glare-squeeze", "--glare-angle"
  *  hero's ("arrive") turns in just after the page's title starts forming (features/home/opening.ts:
  *  its picture is ready by then and its cat walks in over it). Any other brings its picture with
  *  it (features/device/hold.ts): well in view, it waits unseen until `picture` is "lit" (or the
- *  hold's cap). `onWant` says when it is well in view and would turn in. */
+ *  hold's cap). `onWant` says when it is well in view and would turn in; `onStandsIn` how long
+ *  from now it stands, once its turn's clock starts. */
 export function Device({
   reveal,
   onScreen,
   onTurn,
   onWant,
   onFace,
+  onStandsIn,
   picture,
 }: {
   reveal: RevealKind;
@@ -72,6 +74,7 @@ export function Device({
   onTurn?: () => void;
   onWant?: () => void;
   onFace?: (transform: string, opacity: string) => void;
+  onStandsIn?: (ms: number) => void;
   picture?: "wait" | "lit" | "dark";
 }) {
   const root = useRef<HTMLSpanElement>(null);
@@ -149,7 +152,10 @@ export function Device({
     const ms = REVEAL_SECONDS[kind] * 1000;
     let t0 = -1;
     const step = (now: number) => {
-      if (t0 < 0) t0 = now;
+      if (t0 < 0) {
+        t0 = now;
+        onStandsIn?.(ms);
+      }
       const u = (now - t0) / ms;
       if (u >= 1) return finish();
       apply(revealFrame(kind, u));

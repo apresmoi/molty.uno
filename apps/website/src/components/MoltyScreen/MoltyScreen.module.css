@@ -54,8 +54,8 @@
 }
 /* the entrance: the cat alone, on a clear canvas the screen's size that the screen service moves
    to where the cat stands (beyond the window's edge at first: the page clips it, no scrollbar).
-   Under the screen and the bezel, so the cat goes in under the rim. It walks in while the device
-   turns, so this shows before the screen comes on (it is clear but for the cat), until it sits */
+   Under the screen and the bezel, so the cat goes in under the rim. It shows the cat outside the
+   glass (it is clear but for the cat) until it sits */
 .outside {
   position: absolute;
   inset: 0;

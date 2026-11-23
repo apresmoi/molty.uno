@@ -73,8 +73,10 @@ export interface MoltyScreenOptions {
   heading?: boolean;
   /** The creature walks in from beyond the window's right edge. `outside`: a canvas the size and
    *  place of the screen's own, clear but for the cat: this moves it along with the cat while
-   *  the cat is outside the glass (the same renderer's picture of the cat alone). */
-  entrance?: { outside: HTMLCanvasElement | null };
+   *  the cat is outside the glass (the same renderer's picture of the cat alone). `go`: it sets
+   *  off once this settles, given the page seconds it takes at the least to touch the glass (the
+   *  screen shows its first picture meanwhile and runs no frames). */
+  entrance?: { outside: HTMLCanvasElement | null; go?: (glassS: number) => Promise<unknown> };
   reducedMotion: boolean;
   /** A tap (or `pick`) answered the question on screen with this option. */
   onAnswer?: (index: number) => void;
@@ -171,6 +173,8 @@ class Screen implements MoltyScreenHandle {
   private waterAs = "";
   private inView = false;
   private alive = true;
+  /** The cat waits to set off (`entrance.go`). */
+  private held = false;
   private watch = new IntersectionObserver((entries) => {
     this.inView = entries[entries.length - 1]!.isIntersecting;
     this.sync();
@@ -219,6 +223,14 @@ class Screen implements MoltyScreenHandle {
   /** Its first picture, and from now on its frames and the finger. */
   show() {
     this.draw();
+    const go = this.walk && this.options.entrance?.go;
+    if (go) {
+      this.held = true;
+      void go(this.walk!.glassS()).then(() => {
+        this.held = false;
+        this.sync();
+      });
+    }
     if (this.settled) this.options.onFrame?.(this.seconds);
     this.watch.observe(this.canvas);
     document.addEventListener("visibilitychange", this.sync);
@@ -255,7 +267,7 @@ class Screen implements MoltyScreenHandle {
   // ---------------------------------------------------------------- frames
 
   private sync = () => {
-    const run = this.alive && this.inView && !document.hidden && !this.options.reducedMotion;
+    const run = this.alive && !this.held && this.inView && !document.hidden && !this.options.reducedMotion;
     if (run && !this.stop) this.stop = onFrame(this.tick);
     else if (!run && this.stop) {
       this.stop();
@@ -394,7 +406,8 @@ class Screen implements MoltyScreenHandle {
     // the world without its cat (what of it is inside the glass).
     const outside = this.outside!;
     const aside = this.walk!.aside;
-    outside.canvas.style.translate = `${(aside / this.px) * this.canvas.getBoundingClientRect().width}px 0`;
+    // its width at rest (the canvas may ride a turning face; the window beside it does not)
+    outside.canvas.style.translate = `${(aside / this.px) * this.canvas.offsetWidth}px 0`;
     outside.putImageData(picture(cat), 0, 0);
     this.ctx.putImageData(picture(this.core.worldPixels()), 0, 0);
     this.ctx.drawImage(outside.canvas, aside, 0);

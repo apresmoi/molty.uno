@@ -76,6 +76,7 @@ for (const [name, aside] of WINDOWS) {
     const walk = new Entrance(await molty(seed), await molty(seed), aside);
     for (const _ of walk.lead());
     const { core, twin } = walk;
+    const glassS = walk.glassS(); // the least it takes to the glass (the opening times its start on it)
     assert.ok(walk.walking && twin);
     // it starts wholly beyond the window's right edge (panel px from the screen's left)
     const edge = PANEL / 2 + (aside / ENTER.view) * PANEL;
@@ -93,6 +94,7 @@ for (const [name, aside] of WINDOWS) {
       assert.ok(Math.abs(twin.back() - core.back()) < 1e-3, `${at}: the two cats part, back`);
       const shown: Uint8ClampedArray = twin.catPixels()!;
       dots = litInGlass(shown, walk.aside);
+      if (dots && !entered) assert.ok((frame + 1) * PAGE_MS >= glassS * 1000, `${at}: at the glass sooner than ${glassS.toFixed(2)} s`);
       if (dots) entered = true;
       else assert.ok(!entered, `${at}: the cat in the glass is gone`);
       assert.equal(blankCells(core, shown, walk.aside), 0, `${at}: cells blanked with no cat drawn`);

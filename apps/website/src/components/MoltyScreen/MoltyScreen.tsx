@@ -9,7 +9,7 @@ import {
 } from "../../services/molty-screen";
 import { CAT, CAT_STILL, PROGRAMS, SCENES_URL, type ProgramName } from "../../features/molty/content";
 import type { RevealKind } from "../../features/device/reveal";
-import { afterOpening, afterTitle, heroCue, heroSits } from "../../features/home/opening";
+import { afterOpening, afterTitle, catSetsOff, heroCue, heroSits, heroStandsIn } from "../../features/home/opening";
 import { Device } from "../Device";
 import styles from "./MoltyScreen.module.css";
 
@@ -29,13 +29,15 @@ import styles from "./MoltyScreen.module.css";
  *  `boot`: the device's boot screen first. `play`: what it does by itself (features/molty).
  *  `scenes`: it may be asked for scenes. `onReady` hands the running screen over (null when it
  *  goes); `onAnswer` and `onFrame` are the screen's own. The hero ("arrive", the page's opening:
- *  features/home/opening.ts): its renderer mounts as soon as it is near, and its clock starts as
+ *  features/home/opening.ts): its renderer mounts as soon as it is near and draws its picture as
  *  the title starts forming, before the device turns in (just after), so its scene rides the
- *  turning face and the cat walks in over it. Any other is prepared before it is seen: once the
- *  opening is over (or as soon as it is wanted) its renderer settles while the device is within
- *  a viewport of the view, through the in-view-first queue, and draws its picture; the device
- *  then turns in with that picture on its turning face (Device, features/device/hold.ts). Out of
- *  view the screen keeps its picture and runs no frames. */
+ *  turning face. Its clock starts as its cat sets off, a second after the title starts and
+ *  late enough that it touches the glass only once the device stands (catSetsOff): the turning
+ *  face never carries it. Any other is prepared before it is seen: once the opening is over (or
+ *  as soon as it is wanted) its renderer settles while the device is within a viewport of the
+ *  view, through the in-view-first queue, and draws its picture; the device then turns in with
+ *  that picture on its turning face (Device, features/device/hold.ts). Out of view the screen
+ *  keeps its picture and runs no frames. */
 export function MoltyScreen({
   reveal,
   boot = false,
@@ -97,7 +99,7 @@ export function MoltyScreen({
         ...needs,
         boot,
         shown,
-        entrance: enter ? { outside: outside.current } : undefined,
+        entrance: enter ? { outside: outside.current, go: early ? catSetsOff : undefined } : undefined,
         reducedMotion,
         onEntered: () => {
           if (reveal === "arrive") heroSits();
@@ -178,6 +180,7 @@ export function MoltyScreen({
           power.current();
         }}
         picture={picture}
+        onStandsIn={reveal === "arrive" ? heroStandsIn : undefined}
         onWant={() => {
           state.current.wanted = true;
           power.current();

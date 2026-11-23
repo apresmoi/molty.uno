@@ -1,6 +1,7 @@
 // The landing's opening, as one: the title's word forms out of the dust (MoltyWord), and as it
-// starts the hero's device turns in (Device), its cat already walking in from the window's edge
-// (MoltyScreen), and the dust round it comes up in step (PageWater, keyed on <html data-hero>).
+// starts the hero's device turns in (Device) with its screen on its face, and the dust round it
+// comes up in step (PageWater, keyed on <html data-hero>). Then its cat walks in from the
+// window's edge (MoltyScreen), and touches the glass only once the device stands.
 // Reduced motion: all of it shows at once.
 
 let formed: () => void = () => {};
@@ -13,6 +14,22 @@ export const afterTitle = (after: number) =>
     started.then(() => new Promise((r) => setTimeout(r, after * 1000))),
     new Promise((r) => setTimeout(r, 2500)),
   ]);
+
+/** The hero's cat sets off this long after the title starts forming, at the soonest. */
+export const CAT_AFTER_S = 1;
+let standsAt: (at: number) => void = () => {};
+const stood = new Promise<number>((done) => (standsAt = done));
+/** The hero's device turns in: it stands `ms` from now. */
+export const heroStandsIn = (ms: number) => standsAt(performance.now() + ms);
+/** Resolves when the hero's cat sets off, `glassS` page seconds at the least from touching the
+ *  glass: CAT_AFTER_S after the title starts forming, and late enough that it touches the glass
+ *  no sooner than its device stands (a device that never turns in: not waited for). */
+export function catSetsOff(glassS: number): Promise<unknown> {
+  const stands = Promise.race([stood, afterTitle(CAT_AFTER_S + 2).then(() => 0)]);
+  return Promise.all([afterTitle(CAT_AFTER_S), stands]).then(
+    ([, at]) => new Promise((r) => setTimeout(r, at - glassS * 1000 - performance.now())),
+  );
+}
 
 let sat = false;
 let onSat: () => void = () => {};
