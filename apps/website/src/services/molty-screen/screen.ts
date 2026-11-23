@@ -8,7 +8,8 @@
 //              water at its rim, so a wave from outside comes in and its own goes out
 //   reduced    prefers-reduced-motion: no frames; one settled still per change
 //   unseen     what a screen plays before it is first shown (a word settling, the cat getting up)
-//              is spread over the page's frames (slices.ts): the mount settles once it is done
+//              is spread over the page's frames, what is in view first (slices.ts): the mount
+//              settles once it is done
 //   <html data-fluid-moltys>   "live" once a screen draws, "off" when the module cannot load
 //              (the page then keeps its still images)
 import { onFrame } from "./clock";
@@ -141,7 +142,7 @@ export async function mountMoltyScreen(
     const entering = options.entrance && !options.reducedMotion;
     const twin = entering && options.entrance!.outside ? await make() : null;
     const screen = new Screen(canvas, core, options);
-    await sliced(screen.unseen(twin));
+    await sliced(screen.unseen(twin), canvas);
     await options.shown;
     screen.show();
     pageState("live");
