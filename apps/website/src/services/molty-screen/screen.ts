@@ -24,6 +24,8 @@ import { HEADING_GAIN } from "../../config/water.mjs";
 
 /** Reduced motion and a screen that starts on its creature: this much is played unseen first. */
 const SETTLE_S = 1.6;
+/** A paced screen's: the cat and a scene have both formed by then (one of many: less to prepare). */
+const PACED_SETTLE_S = 0.8;
 /** A scene's formation, dust to the scene (scene_player.h SCENE_DUST_S, 0.6 s), and a few frames
  *  more: a word that forms in view plays it unseen first, under its rough water, so its haze
  *  (laid only once formed: fluid_draw.c) is there from the first frame shown and comes up with
@@ -77,6 +79,8 @@ export interface MoltyScreenOptions {
    *  (its clock then runs a little slower, and never catches up on a slow page): a small screen
    *  among many. */
   pace?: number;
+  /** Its device waits for its first picture (it would turn in now): its preparing goes first. */
+  waited?: () => boolean;
   /** The creature walks in from beyond the window's right edge. `outside`: a canvas the size and
    *  place of the screen's own, clear but for the cat: this moves it along with the cat while
    *  the cat is outside the glass (the same renderer's picture of the cat alone). `go`: it sets
@@ -153,7 +157,7 @@ export async function mountMoltyScreen(
     const entering = options.entrance && !options.reducedMotion;
     const twin = entering && options.entrance!.outside ? await make() : null;
     const screen = new Screen(canvas, core, options);
-    await sliced(screen.unseen(twin), canvas);
+    await sliced(screen.unseen(twin), canvas, options.waited);
     await options.shown;
     screen.show();
     pageState("live");
@@ -224,7 +228,8 @@ class Screen implements MoltyScreenHandle {
     }
     // straight to the creature (or the scene): it has formed by the first frame shown
     else if (!options.boot || options.reducedMotion) {
-      yield* this.settling(options.scene ? 3.2 : SETTLE_S);
+      // a heading's word takes longer to gather; a scene on a screen has formed within a second
+      yield* this.settling(options.heading ? 3.2 : options.pace ? PACED_SETTLE_S : SETTLE_S);
       this.settled = true;
     }
   }
@@ -428,9 +433,10 @@ class Screen implements MoltyScreenHandle {
     this.ctx.drawImage(outside.canvas, aside, 0);
   }
 
-  /** Play `seconds` unseen, a yield a step. */
+  /** Play `seconds` unseen, a yield a step (a paced screen's: one firmware frame, as it plays). */
   private *settling(seconds: number) {
-    for (let t = 0; t < seconds * 1000; t += SETTLE_STEP_MS) yield this.step(SETTLE_STEP_MS);
+    const ms = this.options.pace ? DEVICE_FRAME_MS : SETTLE_STEP_MS;
+    for (let t = 0; t < seconds * 1000; t += ms) yield this.step(ms);
   }
   /** Play `seconds` unseen, then show where it got to (reduced motion: one still per change). */
   private settle(seconds = SETTLE_S) {

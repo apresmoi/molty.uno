@@ -109,6 +109,7 @@ export function MoltyScreen({
         boot,
         px,
         pace,
+        waited: () => state.current.wanted,
         scene,
         shown,
         entrance: enter ? { outside: outside.current, go: early ? catSetsOff : undefined } : undefined,

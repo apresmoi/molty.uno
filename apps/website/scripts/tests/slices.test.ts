@@ -54,6 +54,20 @@ test("rank: in view first (nearest the middle first), then out of view by distan
   assert.equal(rank({ top: -1500, bottom: -1100 }, VIEW), Infinity);
 });
 
+test("work a device waits for goes before other work in view", async () => {
+  const log: string[] = [];
+  const middle = canvas(300);
+  const edge = canvas(700);
+  let wants = false;
+  const jobs = [sliced(work("middle", 2, log), middle), sliced(work("edge", 2, log), edge, () => wants)];
+  frame();
+  wants = true;
+  frame();
+  assert.deepEqual(log.slice(0, 2), ["middle", "edge"], "the device at the edge now waits: its work goes first");
+  while (frames.length) frame();
+  await Promise.all(jobs);
+});
+
 test("the queue serves the canvas in view before one out of view, and follows the view", async () => {
   const log: string[] = [];
   const out = canvas(1300);
