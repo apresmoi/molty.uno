@@ -53,12 +53,13 @@ export interface PageWaterHandle {
 /** Mount the page's water. `page` is the element the dust is the background of; `near` covers
  *  it and holds the denser dust (this lays it round what focuses it: `[data-dust-focus]`);
  *  `canvas` is fixed to the viewport's corner (this sizes and moves it). `still`: the dust is
- *  laid and that is all (reduced motion). */
+ *  laid and that is all (reduced motion). `hero`: the dust round the hero's device (the one that
+ *  arrives) is laid on this layer instead, apart (an intro preview fades it in step with it). */
 export function mountPageWater(
   canvas: HTMLCanvasElement,
   near: HTMLElement,
   page: HTMLElement,
-  options: { paper: boolean; still: boolean },
+  options: { paper: boolean; still: boolean; hero?: HTMLElement },
 ): PageWaterHandle {
   const ctx = canvas.getContext("2d")!;
   let k = grain(page);
@@ -75,7 +76,7 @@ export function mountPageWater(
   const taps: Array<{ x: number; y: number; radius: number; strength: number }> = [];
 
   /** What focuses the dust, in CSS px from the page's corner. */
-  const foci = (): Focus[] => {
+  const foci = (): Array<Focus & { hero: boolean }> => {
     const o = page.getBoundingClientRect();
     return [...page.querySelectorAll<HTMLElement>("[data-dust-focus]")].map((el) => {
       const r = el.getBoundingClientRect();
@@ -86,6 +87,7 @@ export function mountPageWater(
         rx: f.rx * r.width,
         ry: f.ry * r.height,
         stops: f.stops,
+        hero: !!options.hero && !!el.querySelector('[data-device="arrive"]'),
       };
     });
   };
@@ -95,16 +97,27 @@ export function mountPageWater(
     const key = JSON.stringify(all);
     if (key === laid) return;
     laid = key;
-    const mask = all
-      .map(
-        (f) =>
-          `radial-gradient(ellipse ${f.rx}px ${f.ry}px at ${f.x}px ${f.y}px, ${f.stops.map(([t, a]) => `rgb(0 0 0 / ${a}) ${t * 100}%`).join(", ")}, transparent 100%)`,
-      )
-      .join(", ");
-    near.style.setProperty("-webkit-mask-image", mask || "none");
-    near.style.maskImage = mask || "none";
-    near.dataset.laid = "";
-    field?.focus(all.map((f) => ({ ...f, x: f.x * k, y: f.y * k, rx: f.rx * k, ry: f.ry * k })));
+    const mask = (on: HTMLElement, foci: typeof all) => {
+      const image = foci
+        .map(
+          (f) =>
+            `radial-gradient(ellipse ${f.rx}px ${f.ry}px at ${f.x}px ${f.y}px, ${f.stops.map(([t, a]) => `rgb(0 0 0 / ${a}) ${t * 100}%`).join(", ")}, transparent 100%)`,
+        )
+        .join(", ");
+      on.style.setProperty("-webkit-mask-image", image || "none");
+      on.style.maskImage = image || "none";
+      on.dataset.laid = "";
+    };
+    mask(
+      near,
+      all.filter((f) => !f.hero),
+    );
+    if (options.hero)
+      mask(
+        options.hero,
+        all.filter((f) => f.hero),
+      );
+    field?.focus(all.map(({ hero: _, ...f }) => ({ ...f, x: f.x * k, y: f.y * k, rx: f.rx * k, ry: f.ry * k })));
   };
   lay();
   /** The page changed size: the dust is laid again (and, with water, a field that no longer

@@ -14,6 +14,7 @@ import { MoltyCore, PANEL, type MoltyQuestion, type MoltyState } from "./core";
 import { ENTER, Entrance, play } from "./entrance";
 import { WATER } from "./field";
 import { loadModule } from "./module";
+import type { WordIntro } from "./intro";
 import { pageWater, type PageWater } from "./water";
 import { HEADING_GAIN } from "../../config/water.mjs";
 
@@ -56,6 +57,8 @@ export interface MoltyScreenOptions {
   boot: boolean;
   /** A scene it plays from the start and keeps up (a word). */
   scene?: { layout: string; params?: Record<string, unknown> };
+  /** The scene forms in view instead of unseen (intro.ts; not with reduced motion). */
+  intro?: WordIntro;
   /** A heading's window: its scene is on the braille haze (the page's own grain), all of its
    *  water is the page's, and it takes no finger (a tap there is the page's). */
   heading?: boolean;
@@ -159,6 +162,10 @@ class Screen implements MoltyScreenHandle {
   private outside: CanvasRenderingContext2D | null = null;
   private sceneAt = 0;
   private timeAt = Date.now();
+  /** The word forming in view, its seconds so far, and its water a frame ago (cells' h). */
+  private intro: WordIntro | null = null;
+  private introT = 0;
+  private introH: Float32Array | null = null;
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -170,6 +177,11 @@ class Screen implements MoltyScreenHandle {
     this.px = options.px ?? PANEL;
     if (options.scene) this.hold();
     if (options.entrance && !options.reducedMotion) this.enter(twin);
+    else if (options.intro && !options.reducedMotion) {
+      this.intro = options.intro;
+      if (options.intro.water) core.couple(0, 0);
+      this.draw();
+    }
     // straight to the creature (or the scene): it has formed by the first frame shown
     else if (!options.boot || options.reducedMotion) this.settle(options.scene ? 3.2 : SETTLE_S);
     else this.draw();
@@ -228,14 +240,18 @@ class Screen implements MoltyScreenHandle {
   private owed = 0;
 
   private tick = (ms: number) => {
-    if (this.options.heading) {
+    const intro = this.intro;
+    if (intro) {
+      this.introT += ms / 1000;
+      if (this.introT >= intro.seconds) this.intro = this.introH = null;
+    } else if (this.options.heading) {
       this.owed += ms;
       if (++this.turn % (pageWater()?.moving ? 2 : 6)) return;
       ms = this.owed;
       this.owed = 0;
     }
-    this.meetPage();
-    this.step(ms);
+    this.meetPage(intro);
+    this.step(intro?.clock ? ms * intro.clock(this.introT) : ms);
     this.draw();
     this.options.onFrame?.(this.seconds);
   };
@@ -243,9 +259,10 @@ class Screen implements MoltyScreenHandle {
   /** One water: the screen's water has the page's numbers (its waves the page's speed on screen,
    *  whatever size the screen is shown at), and takes the page's water where the two meet: at
    *  its rim, or all over (a heading's window). */
-  private meetPage() {
+  private meetPage(intro: WordIntro | null) {
     const water = pageWater();
-    if (!water && !this.water) return;
+    const own = intro?.water ? this.introWater(intro) : null;
+    if (!water && !this.water && !own) return;
     const box = this.canvas.getBoundingClientRect();
     const as = water ? `${box.width} ${water.leak} ${water.damp}` : "";
     if (water !== this.water || as !== this.waterAs) {
@@ -256,7 +273,30 @@ class Screen implements MoltyScreenHandle {
       if (water) this.core.water(Math.min(C2_MAX, cells * cells), water.leak, water.damp);
       else this.core.water(WATER.c2, WATER.leak, WATER.damp);
     }
-    if (water) this.core.coupled(water.under(this.core.cells(), box, this.px), this.options.heading ? HEADING_GAIN : 1);
+    const gain = this.options.heading ? HEADING_GAIN : 1;
+    const under = water?.under(this.core.cells(), box, this.px) ?? null;
+    if (own) {
+      if (under) for (let i = 0; i < own.length; i++) own[i]! += under[i]! * gain;
+      this.core.coupled(own, 1);
+    } else if (water) this.core.coupled(under, gain);
+  }
+
+  /** The intro's water under the screen's cells (its height now and a frame ago each), easing to
+   *  flat over its last 0.3 s so the word ends on calm water. */
+  private introWater({ water: height, seconds }: WordIntro): Float32Array {
+    const xy = this.core.cells();
+    const n = xy.length / 2;
+    const t = this.introT;
+    const fade = 1 - Math.min(1, Math.max(0, (t - seconds + 0.3) / 0.3));
+    const out = new Float32Array(xy.length);
+    const was = this.introH;
+    const h = (this.introH = new Float32Array(n));
+    for (let i = 0; i < n; i++) {
+      h[i] = fade * height!((xy[2 * i]! / this.px) * 2 - 1, (xy[2 * i + 1]! / this.px) * 2 - 1, t);
+      out[2 * i] = h[i]!;
+      out[2 * i + 1] = was ? was[i]! : h[i]!;
+    }
+    return out;
   }
 
   private step(ms: number) {

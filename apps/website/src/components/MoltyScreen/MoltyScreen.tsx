@@ -9,6 +9,7 @@ import {
 } from "../../services/molty-screen";
 import { CAT, CAT_STILL, PROGRAMS, SCENES_URL, type ProgramName } from "../../features/molty/content";
 import type { RevealKind } from "../../features/device/reveal";
+import { heroCue } from "../../features/home/intro";
 import { Device } from "../Device";
 import styles from "./MoltyScreen.module.css";
 
@@ -60,7 +61,9 @@ export function MoltyScreen({
     // waiting for the renderer the screen is dark (the still would be shown, then hidden by the
     // boot); with reduced motion nothing boots, so the still holds until the picture replaces it
     const waiting = matchMedia("(prefers-reduced-motion: reduce)").matches ? "still" : "dark";
-    setScreen(!s.stands ? "off" : s.live ? "live" : s.failed ? "still" : waiting);
+    const now = !s.stands ? "off" : s.live ? "live" : s.failed ? "still" : waiting;
+    setScreen(now);
+    if (reveal === "arrive" && s.stands) heroCue(now);
   };
 
   useEffect(() => {
@@ -142,6 +145,7 @@ export function MoltyScreen({
       <canvas ref={canvas} className={styles.canvas} width={PANEL} height={PANEL} />
       <Device
         reveal={reveal}
+        onTurn={() => reveal === "arrive" && heroCue("turning")}
         onScreen={(on) => {
           state.current.stands = on;
           show();

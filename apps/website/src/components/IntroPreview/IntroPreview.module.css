@@ -1,0 +1,38 @@
+/* the intro preview's switches: a small bar at the window's foot, out of the hero's way */
+.bar {
+  position: fixed;
+  z-index: 10;
+  bottom: var(--m-space-3);
+  left: var(--m-space-3);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--m-space-2) var(--m-space-4);
+  padding: var(--m-space-2) var(--m-space-3);
+  background: var(--m-overlay);
+  color: var(--m-dim);
+  font: var(--m-text-sm) / 1.4 var(--m-font-mono);
+  user-select: none;
+}
+.bar span {
+  display: flex;
+  gap: var(--m-space-2);
+}
+.bar a {
+  color: var(--m-dim);
+  text-decoration: none;
+}
+.bar a[aria-current] {
+  color: var(--m-accent);
+}
+.bar a:hover,
+.bar button:hover {
+  color: var(--m-ink);
+}
+.bar button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--m-accent);
+  font: inherit;
+  cursor: pointer;
+}

@@ -72,3 +72,11 @@
 :global(:root[data-theme="light"]) .outside {
   filter: invert(1) hue-rotate(180deg);
 }
+/* an intro preview's pace (features/home/intro.ts): the hero's picture comes on as the dust round
+   it gathers (PageWater), slower when calm */
+:global(html[data-intro-pace="calm"]) .root:has([data-device="arrive"]) .canvas {
+  transition-duration: 1s;
+}
+:global(html[data-intro-pace="quick"]) .root:has([data-device="arrive"]) .canvas {
+  transition-duration: 0.45s;
+}

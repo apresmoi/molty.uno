@@ -9,6 +9,7 @@ import {
   type RevealFrame,
   type RevealKind,
 } from "../../features/device/reveal";
+import { PACES, afterTitle, introPreview } from "../../features/home/intro";
 import { GlassDome } from "../GlassDome";
 import styles from "./Device.module.css";
 
@@ -49,8 +50,18 @@ const GLARE_VARS = ["--glare-x", "--glare-y", "--glare-squeeze", "--glare-angle"
  *  glass's reflections slide against the turn), then the scene is unmounted and the device is
  *  flat again. It never takes the pointer. The screen under it cannot turn with the board, so
  *  until the device stands at rest its screen is off (a dark disc on the face): `onScreen(true)`
- *  says when it stands (at once with reduced motion), `onScreen(false)` when it is away. */
-export function Device({ reveal, onScreen }: { reveal: RevealKind; onScreen?: (on: boolean) => void }) {
+ *  says when it stands (at once with reduced motion), `onScreen(false)` when it is away;
+ *  `onTurn` when it starts to turn in. An intro preview's pace (`?pace=`, features/home/intro.ts)
+ *  times the hero's ("arrive") after the title and slows it. */
+export function Device({
+  reveal,
+  onScreen,
+  onTurn,
+}: {
+  reveal: RevealKind;
+  onScreen?: (on: boolean) => void;
+  onTurn?: () => void;
+}) {
   const root = useRef<HTMLSpanElement>(null);
   const face = useRef<HTMLSpanElement>(null);
   const lid = useRef<HTMLSpanElement>(null);
@@ -66,6 +77,7 @@ export function Device({ reveal, onScreen }: { reveal: RevealKind; onScreen?: (o
   // so nothing settled flashes before it turns in: CSS hides it (motion allowed, the page's
   // intro started by Head) and shows it at rest without JS or if no script takes over
   const [armed, setArmed] = useState(() => revealFrame(reveal, 0).opacity < 1);
+  const pace = useRef({ after: -1, stretch: 1 }); // an intro preview's, for the hero (after -1: none)
 
   /** Put the whole device in pose `f`: a few style writes, one of them the polycss scene root. */
   const apply = (f: RevealFrame) => {
@@ -118,7 +130,7 @@ export function Device({ reveal, onScreen }: { reveal: RevealKind; onScreen?: (o
   const run = (kind: RevealKind) => {
     const frozen = frozenAt();
     if (frozen !== null) return apply(revealFrame(kind, frozen));
-    const ms = REVEAL_SECONDS[kind] * 1000;
+    const ms = REVEAL_SECONDS[kind] * 1000 * pace.current.stretch;
     let t0 = -1;
     const step = (now: number) => {
       if (t0 < 0) t0 = now;
@@ -133,6 +145,7 @@ export function Device({ reveal, onScreen }: { reveal: RevealKind; onScreen?: (o
   /** Turn in: mount the wall's scene (the clock starts once it is there), start pose now. */
   const play = (kind: RevealKind) => {
     cancelAnimationFrame(raf.current);
+    onTurn?.();
     unit.current = root.current!.clientWidth / 2;
     apply(revealFrame(kind, frozenAt() ?? 0));
     if (frozenAt() === 1) return finish();
@@ -165,12 +178,15 @@ export function Device({ reveal, onScreen }: { reveal: RevealKind; onScreen?: (o
       return;
     }
     apply(revealFrame(reveal, 0));
+    const preview = reveal === "arrive" ? introPreview()?.pace : undefined;
+    if (preview) pace.current = PACES[preview];
     const io = new IntersectionObserver(
       (entries) => {
         const e = entries[entries.length - 1]!;
         if (!seen.current && e.intersectionRatio >= 0.45) {
           seen.current = true;
-          play(reveal);
+          if (pace.current.after > 0) void afterTitle(pace.current.after).then(() => root.current && play(reveal));
+          else play(reveal);
         } else if (seen.current && !e.isIntersecting && el.hasAttribute("data-turning")) finish();
       },
       { threshold: [0, 0.45] },

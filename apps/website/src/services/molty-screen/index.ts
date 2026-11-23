@@ -13,3 +13,5 @@ export type { DeviceEvent, DeviceQuestion, FrameInfo, LabSwitch, MoltyQuestion, 
 export type { DeviceCalls, MoltySim, SimEvent, SimSpeed, SimStats } from "./sim";
 export type { FieldExports, Focus } from "./field";
 export type { PageWater } from "./water";
+export { WORD_INTROS } from "./intro";
+export type { WordIntro } from "./intro";

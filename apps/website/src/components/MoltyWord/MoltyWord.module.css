@@ -26,3 +26,7 @@
 :global(:root[data-theme="light"]) .canvas {
   filter: invert(1) hue-rotate(180deg);
 }
+/* an intro preview forms the word in view: its window comes up with it, not before it */
+.root[data-forming] .canvas {
+  transition-duration: 0.9s;
+}

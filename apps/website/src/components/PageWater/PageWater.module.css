@@ -53,3 +53,27 @@
     transform: translate3d(calc(-1 * var(--m-dust-size)), var(--m-dust-size), 0);
   }
 }
+/* an intro preview's pace (features/home/intro.ts): the dust round the hero's device, apart. It
+   gathers as the device turns in, holds while its screen waits for the renderer, and is whole
+   when the picture comes on */
+.near.hero {
+  opacity: 0;
+  transition: opacity 0.8s ease-in-out;
+}
+:global(html[data-intro-device="turning"]) .near.hero,
+:global(html[data-intro-device="dark"]) .near.hero {
+  opacity: 0.55;
+}
+:global(html[data-intro-device="live"]) .near.hero,
+:global(html[data-intro-device="still"]) .near.hero {
+  opacity: 1;
+}
+:global(html[data-intro-pace="calm"]) .near.hero {
+  transition-duration: 1.5s;
+}
+:global(html[data-intro-pace="calm"][data-intro-device="live"]) .near.hero {
+  transition-duration: 1s;
+}
+:global(html[data-intro-pace="quick"][data-intro-device="live"]) .near.hero {
+  transition-duration: 0.45s;
+}
