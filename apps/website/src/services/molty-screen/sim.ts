@@ -59,7 +59,6 @@ interface SimExports extends Exports {
   wm_progress_stop(): void;
   wm_question(json: number): number;
   wm_question_end(reason: number): void;
-  wm_scene_op(layout: number, params: number, ttl: number, queue: number): number;
   wm_lab_n(): number;
   wm_lab_name(i: number): number;
   wm_lab_range(i: number): number;

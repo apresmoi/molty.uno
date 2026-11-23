@@ -30,6 +30,8 @@ const SETTLE_S = 1.6;
  *  the window instead of on one frame. */
 const FORM_S = 0.7;
 const SETTLE_STEP_MS = 1000 / 30;
+/** A device frame (mole_fluid.c paces its own at 33 a second): one firmware step. */
+const DEVICE_FRAME_MS = 30;
 /** One water with the page: a screen's water goes to the page's own from this far out of the
  *  glass's radius, wholly from that far (its outer band, where the device's water has its
  *  sponge: fluid_sim.c). */
@@ -71,6 +73,10 @@ export interface MoltyScreenOptions {
   /** A heading's window: its scene is on the braille haze (the page's own grain), all of its
    *  water is the page's, and it takes no finger (a tap there is the page's). */
   heading?: boolean;
+  /** One of every `pace` of the page's frames, as one firmware step of at most a device frame
+   *  (its clock then runs a little slower, and never catches up on a slow page): a small screen
+   *  among many. */
+  pace?: number;
   /** The creature walks in from beyond the window's right edge. `outside`: a canvas the size and
    *  place of the screen's own, clear but for the cat: this moves it along with the cat while
    *  the cat is outside the glass (the same renderer's picture of the cat alone). `go`: it sets
@@ -90,6 +96,8 @@ export interface MoltyScreenOptions {
 }
 
 export interface MoltyScreenHandle {
+  /** The canvas it draws on: its last picture, to copy from (the ink screen's). */
+  readonly canvas: HTMLCanvasElement;
   /** POST /api/creature/state's body, as on the device: { mood }, { act }, { state, text, wpm }. */
   state(body: Record<string, unknown>): boolean;
   /** GET /api/creature/state. */
@@ -101,7 +109,8 @@ export interface MoltyScreenHandle {
   listen(on: boolean): void;
   level(v: number): void;
   shake(): void;
-  scene(layout: string, params?: Record<string, unknown>, ttlS?: number): boolean;
+  /** scene.play, or scene.queue (`queue`). */
+  scene(layout: string, params?: Record<string, unknown>, ttlS?: number, queue?: boolean): boolean;
   sceneClear(): void;
   destroy(): void;
 }
@@ -192,7 +201,7 @@ class Screen implements MoltyScreenHandle {
   private formingH: Float32Array | null = null;
 
   constructor(
-    private canvas: HTMLCanvasElement,
+    readonly canvas: HTMLCanvasElement,
     private core: MoltyCore,
     private options: MoltyScreenOptions,
   ) {
@@ -291,6 +300,7 @@ class Screen implements MoltyScreenHandle {
 
   private tick = (ms: number) => {
     const forming = this.forming;
+    const pace = this.options.pace;
     if (forming) {
       this.formingT += ms / 1000;
       if (this.formingT >= FORMING_S) {
@@ -309,6 +319,11 @@ class Screen implements MoltyScreenHandle {
       this.owed = 0;
       this.spreading = true;
       return this.spread(this.per);
+    } else if (pace) {
+      this.owed += ms;
+      if (++this.turn % pace) return;
+      ms = Math.min(this.owed, DEVICE_FRAME_MS);
+      this.owed = 0;
     }
     this.meetPage(forming);
     this.step(ms);
@@ -471,9 +486,9 @@ class Screen implements MoltyScreenHandle {
   shake() {
     this.changed(this.core.shake());
   }
-  scene(layout: string, params?: Record<string, unknown>, ttlS = 0) {
-    const ok = this.core.scene(layout, params, ttlS);
-    if (this.options.reducedMotion) this.settle(3.2);
+  scene(layout: string, params?: Record<string, unknown>, ttlS = 0, queue = false) {
+    const ok = this.core.scene(layout, params, ttlS, queue);
+    if (this.options.reducedMotion && !queue) this.settle(3.2); // one still: the first scene
     return ok;
   }
   sceneClear() {

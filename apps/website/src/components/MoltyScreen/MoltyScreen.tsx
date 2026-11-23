@@ -5,9 +5,10 @@ import {
   runProgram,
   warmMoltyScreen,
   type MoltyScreenHandle,
+  type Program,
   type ProgramRun,
 } from "../../services/molty-screen";
-import { CAT, CAT_STILL, PROGRAMS, SCENES_URL, type ProgramName } from "../../features/molty/content";
+import { CAT, CAT_STILL, SCENES_URL } from "../../features/molty/content";
 import type { RevealKind } from "../../features/device/reveal";
 import { afterHeroUp, afterTitle, catSetsOff, heroCue, heroStandsIn } from "../../features/home/opening";
 import { Device } from "../Device";
@@ -26,9 +27,11 @@ import styles from "./MoltyScreen.module.css";
  *  `enter`: the cat is not there at first: it walks in from beyond the window's right edge,
  *  across the page, through the rim, and sits (once; outside the glass a clear canvas carries
  *  the same renderer's picture of the cat alone).
- *  `boot`: the device's boot screen first. `play`: what it does by itself (features/molty).
- *  `scenes`: it may be asked for scenes. `onReady` hands the running screen over (null when it
- *  goes); `onAnswer` and `onFrame` are the screen's own. The hero ("arrive", the page's opening:
+ *  `boot`: the device's boot screen first. `play`: what it does by itself (features/molty), or
+ *  `scene`: a scene it holds up from its first picture. `scenes`: it may be asked for scenes.
+ *  `px`: the panel's pixels a side (a smaller board's: its picture as coarse as that board's).
+ *  `pace`: it takes one of every `pace` of the page's frames (a small screen among many).
+ *  `onReady` hands the running screen over (null when it goes); `onAnswer` and `onFrame` are the screen's own. The hero ("arrive", the page's opening:
  *  features/home/opening.ts): its renderer mounts as soon as it is near and draws its picture as
  *  the title starts forming, before the device turns in (just after), so its scene rides the
  *  turning face. Its clock starts as its cat sets off, a second after the title starts and
@@ -44,6 +47,9 @@ export function MoltyScreen({
   enter = false,
   scenes = false,
   play,
+  scene,
+  px = PANEL,
+  pace,
   onReady,
   onAnswer,
   onFrame,
@@ -52,7 +58,10 @@ export function MoltyScreen({
   boot?: boolean;
   enter?: boolean;
   scenes?: boolean;
-  play?: ProgramName;
+  play?: Program;
+  scene?: { layout: string; params?: Record<string, unknown> };
+  px?: number;
+  pace?: number;
   onReady?: (screen: MoltyScreenHandle | null) => void;
   onAnswer?: (index: number) => void;
   onFrame?: (seconds: number) => void;
@@ -79,11 +88,11 @@ export function MoltyScreen({
 
   useEffect(() => {
     const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const needs = { creature: CAT, scenes: scenes || play === "chart" ? SCENES_URL : undefined };
+    const needs = { creature: CAT, scenes: scenes || scene || play?.kind === "scenes" ? SCENES_URL : undefined };
     const early = reveal === "arrive" && !reducedMotion;
     const ahead = reveal !== "arrive" && !reducedMotion; // prepared before it is seen
     let handle: MoltyScreenHandle | null = null;
-    let program: ProgramRun | null = null;
+    let run: ProgramRun | null = null;
     let alive = true;
     let near = false;
     let started = false;
@@ -98,29 +107,32 @@ export function MoltyScreen({
       const mount = mountMoltyScreen(canvas.current!, {
         ...needs,
         boot,
+        px,
+        pace,
+        scene,
         shown,
         entrance: enter ? { outside: outside.current, go: early ? catSetsOff : undefined } : undefined,
         reducedMotion,
         onEntered: () => alive && setEntered(true),
         onAnswer: (i) => {
-          program?.answer(i);
+          run?.answer(i);
           callbacks.current.onAnswer?.(i);
         },
         onFrame: (t) => {
-          program?.frame(t);
+          run?.frame(t);
           callbacks.current.onFrame?.(t);
         },
       });
-      Promise.all([mount, play ? PROGRAMS[play]() : null]).then(
-        ([s, p]) => {
+      mount.then(
+        (s) => {
           if (!alive) return s.destroy();
           handle = s;
           state.current.live = true;
           show();
           setPicture("lit");
           callbacks.current.onReady?.(s);
-          if (p) program = runProgram(p, s);
-          if (reducedMotion) program?.frame(Infinity); // no clock: its one thing, as a still
+          if (play) run = runProgram(play, s);
+          if (reducedMotion) run?.frame(Infinity); // no clock: its one thing, as a still
         },
         () => {
           // the still stands in (the service marked the page)
@@ -168,7 +180,7 @@ export function MoltyScreen({
       )}
       <span className={styles.panel} />
       <img className={styles.still} src={CAT_STILL} alt="" width={PANEL} height={PANEL} />
-      <canvas ref={canvas} className={styles.canvas} width={PANEL} height={PANEL} />
+      <canvas ref={canvas} className={styles.canvas} width={px} height={px} />
       <Device
         reveal={reveal}
         onTurn={() => {

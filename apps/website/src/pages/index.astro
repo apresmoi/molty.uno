@@ -8,6 +8,7 @@ import { CopyMessage } from "../components/CopyMessage";
 import { SpeedReader } from "../components/SpeedReader";
 import { MoltyScreen } from "../components/MoltyScreen";
 import { title, description, ldJson, pairingMessage, readerText, readerAnswers } from "../features/home/content";
+import { PAIR } from "../features/molty/content";
 import { landingActions, type CreaturePackage } from "../features/molty/actions";
 import cat from "@packages/cat/cat.json";
 
@@ -29,7 +30,7 @@ const rest = (cat as unknown as CreaturePackage).creature.about.moods.idle ?? ""
     <MoltyActs slot="picker" client:idle groups={groups} rest={rest} />
     <CopyMessage slot="message" client:visible text={pairingMessage} />
     <MoltyScreen slot="heroDevice" client:load reveal="arrive" enter />
-    <MoltyScreen slot="bridgeDevice" client:idle reveal="rise" play="pair" />
-    <MoltyScreen slot="bakeDevice" client:idle reveal="coin" play="chart" />
+    <MoltyScreen slot="bridgeDevice" client:idle reveal="rise" play={PAIR} />
+    <MoltyScreen slot="bakeDevice" client:idle reveal="coin" />
   </HomePage>
 </ContentLayout>

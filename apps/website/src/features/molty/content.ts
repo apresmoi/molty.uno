@@ -1,5 +1,5 @@
 // The Molty on the site's screens: the cat (packages/cat, the first creature), the still that
-// stands in for it, and what the landing's two side screens play by themselves. The packages
+// stands in for it, and what bridge's screen plays by itself. The packages
 // are the repo's own files, fetched by the screen when it mounts (never bundled, never copied).
 import catUrl from "@packages/cat/cat.json?url";
 import scenesUrl from "@packages/astrology/astrology.json?url";
@@ -22,7 +22,7 @@ export const WORD_PX_MAX = 1024;
 export const CAT_STILL = catStill;
 
 /** bridge: the pairing question exactly as the device asks it (link_pair.c); a tap accepts. */
-const PAIR: Program = {
+export const PAIR: Program = {
   kind: "ask",
   question: {
     title: "pair with claude?",
@@ -35,12 +35,3 @@ const PAIR: Program = {
   wait: 30,
   rest: 9,
 };
-
-/** What the landing's side screens play by themselves, by name; loaded when a screen asks for
- *  one (the chart's sample is its own small file). */
-export const PROGRAMS = {
-  pair: async () => PAIR,
-  chart: async () => (await import("./chart")).CHART,
-} satisfies Record<string, () => Promise<Program>>;
-
-export type ProgramName = keyof typeof PROGRAMS;
