@@ -1166,8 +1166,16 @@ or one of these names:
 `strength` 0..100 is the PWM duty (100 when absent). One buzz lasts at most 2000 ms (a longer one is cut there); a
 new buzz replaces the running one; the call returns at once. The motor sits next to the microphones: a buzz that
 arrives while the mic is open is dropped, not queued (`listening`). While the motor runs and 250 ms after, a shake
-is not felt (the motor shakes the IMU). Molty buzzes by itself only when a question with buttons or a pairing code
-appears (`double`) and when it takes a tap on an answer (`tick`).
+is not felt (the motor shakes the IMU; a tick is too short to read as a pick-up). Molty buzzes by itself only when a
+question with buttons or a pairing code appears (`double`), and with one `tick` when the human's own press does something:
+
+- a tap on a scene's spot (a planet, a sign), or beside an opened close-up's spots (back), at once
+- a tap or a button on a question's or a pairing's answer, once it is taken
+- each click of the screen switch button, and its hold (power off)
+- a button bound to `event` or `stop`, or any button while a question waits
+
+Never for the water (a plain tap, a drag, a tap on nothing) nor a press that opens the mic (`talk`, `hold`). One press is
+one tick however long it is held or dragged; do not disturb does not silence it.
 ```
 curl -s -X POST http://molty.local/api/haptic -d '{"ms":300,"strength":100}'
 {"ok":true,"ms":300,"strength":100}

@@ -16,7 +16,8 @@
  *   quiet    the motor shakes the IMU: sense.c resets the shake detector while
  *            haptic_quiet() (the buzz, then HAPTIC_SETTLE_MS).
  *   cues     the device's own buzzes (haptic_cue): a question with buttons or a pairing code
- *            appears (double), an answer tapped (tick). Nothing else buzzes by itself.
+ *            appears (double), an answer taken (tick), and the human's own press that does something
+ *            (tick: sense.c's acted). Nothing else buzzes by itself.
  *
  * Boards without a motor: haptic_buzz answers ESP_ERR_NOT_SUPPORTED, haptic_quiet is false.
  *

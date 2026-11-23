@@ -12,7 +12,7 @@
  *             those after it dropped.
  *   named     a few patterns by name (the link's buzz {pattern:"double"}, the device's own moments), each
  *             at most HAPTIC_NAMED_MAX_MS:
- *               tick    30            touch feedback, barely there (an answer tapped)
+ *               tick    30            touch feedback, barely there (a press that acts)
  *               tap     60            a light touch
  *               double  60, 90, 60    look at me (a question with buttons, a pairing code)
  *               nudge   350           a longer push, for when a tap would be missed
