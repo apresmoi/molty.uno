@@ -36,7 +36,8 @@ extern "C" {
 /* The device's touch feedback (haptic_touch): a tap on the screen that does something. Gentler than the named
  * tick an agent asks for; tuned by feel, here only. */
 #define HAPTIC_TOUCH_MS       15
-#define HAPTIC_TOUCH_STRENGTH 50   /* percent */
+#define HAPTIC_TOUCH_STRENGTH 35   /* percent. Measured on the 1.75C: the motor does not turn at 20 or below and starts
+                                    * at 25 held; 15 ms at 35 is the weakest pulse the IMU saw reliably. Not lower. */
 
 typedef struct {
     uint16_t seg[HAPTIC_SEGS];   /* ms: even index on, odd off */

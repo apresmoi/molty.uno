@@ -1167,7 +1167,7 @@ or one of these names:
 new buzz replaces the running one; the call returns at once. The motor sits next to the microphones: a buzz that
 arrives while the mic is open is dropped, not queued (`listening`). While the motor runs and 250 ms after, a shake
 is not felt (the motor shakes the IMU; a touch buzz is too short to read as a pick-up). Molty buzzes by itself only
-when a question with buttons or a pairing code appears (`double`), and with one gentle touch buzz (15 ms at 50%,
+when a question with buttons or a pairing code appears (`double`), and with one gentle touch buzz (15 ms at 35%,
 softer than the `tick` above) when a tap on the screen does something:
 
 - a tap on a scene's spot (a planet, a sign), or beside an opened close-up's spots (back), at once
