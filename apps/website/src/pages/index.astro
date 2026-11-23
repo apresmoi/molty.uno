@@ -20,7 +20,7 @@ const rest = (cat as unknown as CreaturePackage).creature.about.moods.idle ?? ""
   <script slot="head" type="application/ld+json" set:html={JSON.stringify(ldJson)} />
   <HomePage>
     <PageWater slot="fluid" client:load />
-    <MoltyWord slot="title" client:load word="molty-uno" />
+    <MoltyWord slot="title" client:load word="molty-uno" forms />
     <MoltyWord slot="wordTalk" client:idle word="talk" />
     <MoltyWord slot="wordMoltys" client:idle word="moltys" />
     <MoltyWord slot="wordBridge" client:idle word="bridge" />

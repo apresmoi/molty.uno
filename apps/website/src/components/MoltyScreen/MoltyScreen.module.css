@@ -54,38 +54,22 @@
 }
 /* the entrance: the cat alone, on a clear canvas the screen's size that the screen service moves
    to where the cat stands (beyond the window's edge at first: the page clips it, no scrollbar).
-   Under the screen and the bezel, so the cat goes in under the rim; only while the screen is live */
+   Under the screen and the bezel, so the cat goes in under the rim. It walks in while the device
+   turns, so this shows before the screen comes on (it is clear but for the cat), until it sits */
 .outside {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  opacity: 0;
   pointer-events: none;
 }
-.root[data-screen="live"] .outside {
-  opacity: 1;
-}
-.root .outside[data-gone] {
+.outside[data-gone] {
   opacity: 0;
 }
 :global(:root[data-theme="light"]) .outside {
   filter: invert(1) hue-rotate(180deg);
 }
-/* an intro preview's pace (features/home/intro.ts): the hero's picture comes on as the dust round
-   it gathers (PageWater), slower when calm */
-:global(html[data-intro-pace="calm"]) .root:has([data-device="arrive"]) .canvas {
-  transition-duration: 1s;
-}
-:global(html[data-intro-pace="quick"]) .root:has([data-device="arrive"]) .canvas {
-  transition-duration: 0.45s;
-}
-/* take b (features/home/intro.ts TOGETHER): the cat walks in while the device turns, so its
-   window beside the screen shows before the screen comes on (it is clear but for the cat), and
-   the screen comes on quickly whatever the pace: it is on before the cat reaches the glass */
-.root[data-together] .outside:not([data-gone]) {
-  opacity: 1;
-}
-:global(html[data-intro-pace]) .root[data-together] .canvas {
+/* the hero's screen comes on quickly: it is on before its cat reaches the glass */
+.root:has([data-device="arrive"]) .canvas {
   transition-duration: 0.45s;
 }

@@ -1,7 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { mountPageWater } from "../../services/page-water";
-import { introPreview, type IntroPreview as Preview } from "../../features/home/intro";
-import { IntroPreview } from "../IntroPreview";
 import styles from "./PageWater.module.css";
 
 /** The page's water. The loose dust is the page's own background (a tile, there without any
@@ -12,20 +10,13 @@ import styles from "./PageWater.module.css";
  *  the dust is the background of) by `data-water`. On mount it also ends the intro's wait
  *  (<html data-fluid>: Head's "pending" becomes "live"), so Head's watchdog knows a script took
  *  over. Reduced motion: the dust is laid, no waves. The dust's colours follow the theme, so a
- *  theme switch mounts it afresh. An intro preview (`?intro=`, `pace=`: features/home/intro.ts)
- *  shows its switches, and with a pace lays the dust round the hero's device apart, to come in
- *  step with it (<html data-intro-pace>, <html data-intro-device>). */
+ *  theme switch mounts it afresh. The dust round the hero's device is laid apart, to come in
+ *  step with it (<html data-hero>: features/home/opening.ts). */
 export function PageWater() {
   const canvas = useRef<HTMLCanvasElement>(null);
   const near = useRef<HTMLSpanElement>(null);
   const hero = useRef<HTMLSpanElement>(null);
   const theme = useTheme();
-  const [preview, setPreview] = useState<Preview | null>(null);
-  useEffect(() => {
-    const p = introPreview();
-    if (p?.pace) document.documentElement.dataset.introPace = p.pace;
-    setPreview(p);
-  }, []);
   useEffect(() => {
     if (!theme) return;
     const root = document.documentElement;
@@ -35,17 +26,16 @@ export function PageWater() {
     const water = mountPageWater(canvas.current!, near.current!, page, {
       paper: theme === "light",
       still: matchMedia("(prefers-reduced-motion: reduce)").matches,
-      hero: hero.current ?? undefined,
+      hero: hero.current!,
     });
     return () => water.destroy();
-  }, [theme, preview]);
+  }, [theme]);
   return (
     <>
       <span ref={near} className={styles.near} aria-hidden="true" />
-      {preview?.pace && <span ref={hero} className={`${styles.near} ${styles.hero}`} aria-hidden="true" />}
+      <span ref={hero} className={`${styles.near} ${styles.hero}`} aria-hidden="true" />
       <canvas ref={canvas} className={styles.water} data-page-water="" aria-hidden="true" />
       <span className={styles.drift} aria-hidden="true" />
-      {preview && <IntroPreview preview={preview} />}
     </>
   );
 }

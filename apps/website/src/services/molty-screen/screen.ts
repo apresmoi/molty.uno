@@ -17,14 +17,16 @@ import { ENTER, Entrance, play, steps } from "./entrance";
 import { WATER } from "./field";
 import { loadModule } from "./module";
 import { sliced } from "./slices";
-import type { WordIntro } from "./intro";
+import { FORMING_S, formingWater } from "./forming";
 import { pageWater, type PageWater } from "./water";
 import { HEADING_GAIN } from "../../config/water.mjs";
 
 /** Reduced motion and a screen that starts on its creature: this much is played unseen first. */
 const SETTLE_S = 1.6;
 /** A scene's formation, dust to the scene (scene_player.h SCENE_DUST_S, 0.6 s), and a few frames
- *  more: a word intro's `formed`. */
+ *  more: a word that forms in view plays it unseen first, under its rough water, so its haze
+ *  (laid only once formed: fluid_draw.c) is there from the first frame shown and comes up with
+ *  the window instead of on one frame. */
 const FORM_S = 0.7;
 const SETTLE_STEP_MS = 1000 / 30;
 /** One water with the page: a screen's water goes to the page's own from this far out of the
@@ -63,16 +65,15 @@ export interface MoltyScreenOptions {
   boot: boolean;
   /** A scene it plays from the start and keeps up (a word). */
   scene?: { layout: string; params?: Record<string, unknown> };
-  /** The scene forms in view instead of unseen (intro.ts; not with reduced motion). */
-  intro?: WordIntro;
+  /** The scene forms in view instead of unseen (forming.ts; not with reduced motion). */
+  forming?: boolean;
   /** A heading's window: its scene is on the braille haze (the page's own grain), all of its
    *  water is the page's, and it takes no finger (a tap there is the page's). */
   heading?: boolean;
   /** The creature walks in from beyond the window's right edge. `outside`: a canvas the size and
    *  place of the screen's own, clear but for the cat: this moves it along with the cat while
-   *  the cat is outside the glass (the same renderer's picture of the cat alone). `pace`: its
-   *  walk this many times its own (default 1). */
-  entrance?: { outside: HTMLCanvasElement | null; pace?: number };
+   *  the cat is outside the glass (the same renderer's picture of the cat alone). */
+  entrance?: { outside: HTMLCanvasElement | null };
   reducedMotion: boolean;
   /** A tap (or `pick`) answered the question on screen with this option. */
   onAnswer?: (index: number) => void;
@@ -181,9 +182,9 @@ class Screen implements MoltyScreenHandle {
   private sceneAt = 0;
   private timeAt = Date.now();
   /** The word forming in view, its seconds so far, and its water a frame ago (cells' h). */
-  private intro: WordIntro | null = null;
-  private introT = 0;
-  private introH: Float32Array | null = null;
+  private forming = false;
+  private formingT = 0;
+  private formingH: Float32Array | null = null;
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -199,14 +200,13 @@ class Screen implements MoltyScreenHandle {
   *unseen(twin: MoltyCore | null) {
     const options = this.options;
     if (options.entrance && !options.reducedMotion) yield* this.enter(twin);
-    else if (options.intro && !options.reducedMotion) {
-      this.intro = options.intro;
-      if (options.intro.water) this.core.couple(0, 0);
-      if (options.intro.formed)
-        for (let t = 0; t < FORM_S * 1000; t += SETTLE_STEP_MS) {
-          this.meetPage(options.intro);
-          yield this.step(SETTLE_STEP_MS);
-        }
+    else if (options.forming && !options.reducedMotion) {
+      this.forming = true;
+      this.core.couple(0, 0);
+      for (let t = 0; t < FORM_S * 1000; t += SETTLE_STEP_MS) {
+        this.meetPage(true);
+        yield this.step(SETTLE_STEP_MS);
+      }
     }
     // straight to the creature (or the scene): it has formed by the first frame shown
     else if (!options.boot || options.reducedMotion) {
@@ -238,7 +238,7 @@ class Screen implements MoltyScreenHandle {
     this.outside = this.options.entrance!.outside?.getContext("2d") ?? null;
     const box = this.canvas.getBoundingClientRect();
     const aside = ((innerWidth - (box.left + box.width / 2)) / box.width) * ENTER.view;
-    const walk = new Entrance(this.core, twin, aside, this.options.entrance!.pace);
+    const walk = new Entrance(this.core, twin, aside);
     yield* walk.lead();
     if (walk.walking) this.walk = walk;
   }
@@ -277,16 +277,19 @@ class Screen implements MoltyScreenHandle {
   private per = 0;
 
   private tick = (ms: number) => {
-    const intro = this.intro;
-    if (intro) {
-      this.introT += ms / 1000;
-      if (this.introT >= intro.seconds) this.intro = this.introH = null;
+    const forming = this.forming;
+    if (forming) {
+      this.formingT += ms / 1000;
+      if (this.formingT >= FORMING_S) {
+        this.forming = false;
+        this.formingH = null;
+      }
     } else if (this.options.heading) {
       this.owed += ms;
       const every = pageWater()?.moving ? 2 : 6;
       if (++this.turn % every) return this.spread(this.per);
       this.spread(Infinity); // the last turn's, when the page's water changed pace mid-turn
-      this.meetPage(null);
+      this.meetPage(false);
       this.begin(this.owed);
       [this.left, this.dt] = steps(Math.round(this.owed * 1000));
       this.per = Math.ceil(this.left / every);
@@ -294,8 +297,8 @@ class Screen implements MoltyScreenHandle {
       this.spreading = true;
       return this.spread(this.per);
     }
-    this.meetPage(intro);
-    this.step(intro?.clock ? ms * intro.clock(this.introT) : ms);
+    this.meetPage(forming);
+    this.step(ms);
     this.draw();
     this.options.onFrame?.(this.seconds);
   };
@@ -303,9 +306,9 @@ class Screen implements MoltyScreenHandle {
   /** One water: the screen's water has the page's numbers (its waves the page's speed on screen,
    *  whatever size the screen is shown at), and takes the page's water where the two meet: at
    *  its rim, or all over (a heading's window). */
-  private meetPage(intro: WordIntro | null) {
+  private meetPage(forming: boolean) {
     const water = pageWater();
-    const own = intro?.water ? this.introWater(intro) : null;
+    const own = forming ? this.formingWater() : null;
     if (!water && !this.water && !own) return;
     const box = this.canvas.getBoundingClientRect();
     const as = water ? `${box.width} ${water.leak} ${water.damp}` : "";
@@ -325,18 +328,18 @@ class Screen implements MoltyScreenHandle {
     } else if (water) this.core.coupled(under, gain);
   }
 
-  /** The intro's water under the screen's cells (its height now and a frame ago each), easing to
-   *  flat over its last 0.3 s so the word ends on calm water. */
-  private introWater({ water: height, seconds }: WordIntro): Float32Array {
+  /** The forming word's water under the screen's cells (its height now and a frame ago each),
+   *  easing to flat over its last 0.3 s so the word ends on calm water. */
+  private formingWater(): Float32Array {
     const xy = this.core.cells();
     const n = xy.length / 2;
-    const t = this.introT;
-    const fade = 1 - Math.min(1, Math.max(0, (t - seconds + 0.3) / 0.3));
+    const t = this.formingT;
+    const fade = 1 - Math.min(1, Math.max(0, (t - FORMING_S + 0.3) / 0.3));
     const out = new Float32Array(xy.length);
-    const was = this.introH;
-    const h = (this.introH = new Float32Array(n));
+    const was = this.formingH;
+    const h = (this.formingH = new Float32Array(n));
     for (let i = 0; i < n; i++) {
-      h[i] = fade * height!((xy[2 * i]! / this.px) * 2 - 1, (xy[2 * i + 1]! / this.px) * 2 - 1, t);
+      h[i] = fade * formingWater((xy[2 * i]! / this.px) * 2 - 1, (xy[2 * i + 1]! / this.px) * 2 - 1, t);
       out[2 * i] = h[i]!;
       out[2 * i + 1] = was ? was[i]! : h[i]!;
     }

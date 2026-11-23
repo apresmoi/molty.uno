@@ -54,12 +54,12 @@ export interface PageWaterHandle {
  *  it and holds the denser dust (this lays it round what focuses it: `[data-dust-focus]`);
  *  `canvas` is fixed to the viewport's corner (this sizes and moves it). `still`: the dust is
  *  laid and that is all (reduced motion). `hero`: the dust round the hero's device (the one that
- *  arrives) is laid on this layer instead, apart (an intro preview fades it in step with it). */
+ *  arrives) is laid on this layer instead, apart (it fades in step with the device). */
 export function mountPageWater(
   canvas: HTMLCanvasElement,
   near: HTMLElement,
   page: HTMLElement,
-  options: { paper: boolean; still: boolean; hero?: HTMLElement },
+  options: { paper: boolean; still: boolean; hero: HTMLElement },
 ): PageWaterHandle {
   const ctx = canvas.getContext("2d")!;
   let k = grain(page);
@@ -87,7 +87,7 @@ export function mountPageWater(
         rx: f.rx * r.width,
         ry: f.ry * r.height,
         stops: f.stops,
-        hero: !!options.hero && !!el.querySelector('[data-device="arrive"]'),
+        hero: !!el.querySelector('[data-device="arrive"]'),
       };
     });
   };
@@ -112,11 +112,10 @@ export function mountPageWater(
       near,
       all.filter((f) => !f.hero),
     );
-    if (options.hero)
-      mask(
-        options.hero,
-        all.filter((f) => f.hero),
-      );
+    mask(
+      options.hero,
+      all.filter((f) => f.hero),
+    );
     field?.focus(all.map(({ hero: _, ...f }) => ({ ...f, x: f.x * k, y: f.y * k, rx: f.rx * k, ry: f.ry * k })));
   };
   lay();
