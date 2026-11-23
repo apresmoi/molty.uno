@@ -434,7 +434,7 @@ static void test_pair(void) {
     cJSON_Delete(st);
     cues[0]=0;
     request(); sdk_gpio[0]=0; link_pair_tick(); sdk_gpio[0]=1;
-    assert(!link_pair_active() && rotations==2 && !strcmp(cues,"double"));   /* the button: no touch, no tick */
+    assert(!link_pair_active() && rotations==2 && !strcmp(cues,"double tick"));   /* the button was taken: a tick */
     request(); pair_glass=pair_seq; send_error=ESP_FAIL; link_pair_tap(-100.f, 100.f); link_pair_tick();
     assert(!link_pair_active() && rotations==3); send_error=ESP_OK;
     /* a tap on reject (lower right): rejected, from that answer */
