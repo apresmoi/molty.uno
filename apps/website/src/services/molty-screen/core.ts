@@ -52,6 +52,7 @@ export interface Exports {
   wm_entering(): number;
   wm_pan(across: number): number;
   wm_across(): number;
+  wm_back(): number;
   wm_cat_pixels(): number;
   wm_world_pixels(): number;
   wm_haze(): void;
@@ -74,6 +75,10 @@ export interface Exports {
   wm_package(json: number, len: number): number;
   wm_scene(layout: number, params: number, ttl: number): number;
   wm_scene_clear(): void;
+  wm_time(unixS: number): void;
+  wm_time_now(): number;
+  wm_weather(kind: number, s: number): number;
+  wm_demo_star(): void;
 }
 
 /** The last frame (web_device.c wm_frame_info): what went to the panel and what the device would
@@ -143,6 +148,12 @@ export interface MoltyState {
   crisp_dots: number;
   scene?: { pkg: string; layout: string };
   creature_info: { name: string; package: string; gestures?: Array<{ name: string }>; moods?: string[] };
+  /** Idle life ("lively" | "calm" | "off"), the sky on, the weather on (the device's settings). */
+  idle_life?: string;
+  sky?: boolean;
+  weather_on?: boolean;
+  /** The weather told: its kind, s it still holds, where it is on the way (0 clear .. 3 downpour), the floor 0..1 wet. */
+  weather?: { kind: string; s_left: number; level: number; wet: number };
 }
 
 const utf8 = new TextEncoder();
@@ -188,6 +199,26 @@ export class MoltyCore {
     return this.x.wm_start(px, seed >>> 0, boot ? 1 : 0) === 0;
   }
 
+  /** The time now (unix seconds, UTC: Date.now() / 1000), for the sky behind the cat (today's moon, the falling
+   *  stars); the module runs it on with its frames. Never given: no sky (the frames as ever). */
+  time(unixS: number) {
+    this.x.wm_time(unixS);
+  }
+  /** The time as the module has it now (0: not known). */
+  timeNow(): number {
+    return this.x.wm_time_now();
+  }
+
+  /** The weather on the glass behind the cat, as an agent tells a Molty (POST /api/creature/state {weather}): 0 clear,
+   *  1 drizzle, 2 rain, 3 downpour, held `s` seconds (0: an hour), then easing back to clear. Never told: clear. */
+  weather(kind: number, s = 0): boolean {
+    return this.x.wm_weather(kind, s) === 0;
+  }
+  /** (The /demo/ page's hook: the next falling star now, as soon as one may show. Never a device's nor an agent's.) */
+  demoStar() {
+    this.x.wm_demo_star();
+  }
+
   /** One frame, `dtUs` microseconds after the last. */
   frame(dtUs: number) {
     this.x.wm_frame(dtUs);
@@ -219,6 +250,10 @@ export class MoltyCore {
   /** Where the creature stands, across the frame from its middle (world units). */
   across(): number {
     return this.x.wm_across();
+  }
+  /** And how far back from the viewer (world units). */
+  back(): number {
+    return this.x.wm_back();
   }
   /** The creature alone, as the panel shows it (everything else clear): px * px RGBA, a view of
    *  the module's memory, or null without one. */

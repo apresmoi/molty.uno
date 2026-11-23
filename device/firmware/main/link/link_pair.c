@@ -9,6 +9,7 @@
 #include "fluid_ask.h"
 #include "molty_board.h"
 #include "esp_timer.h"
+#include "haptic.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -153,6 +154,7 @@ void link_pair_request(const cJSON *args)
         result(s_req, false, "rejected", s_name); link_pair_cancel(); return;
     }
     atomic_store(&s_tap, -1);
+    haptic_cue("double");   /* the human must look and accept */
     s_boot_released = !molty_button_pressed(MOLTY_BTN_ACCEPT);
     s_power_released = !molty_button_pressed(MOLTY_BTN_REJECT);
 }
@@ -169,6 +171,7 @@ void link_pair_tick(void)
     bool reject = (power && s_power_released) || tap == 1;
     bool expired = esp_timer_get_time() >= s_deadline;
     if (accept || expired || reject) {
+        if (tap >= 0) haptic_cue("tick");   /* the tap on accept / reject was taken */
         result(s_req, accept && !expired && !reject, expired ? "timeout" : "rejected", s_name);
         end_pair(tap >= 0 ? tap : accept && !expired && !reject ? 0 : -1);   /* a tap or the button: from that answer */
     }

@@ -179,13 +179,16 @@ const FIG = { sextile: 6, square: 4, trine: 3, opposition: 2, conjunction: 1 };
 const GRID = '#565b72';
 export function aspect(kind, date) {
   if (!FIG[kind]) throw new Error(`aspect must be one of ${Object.keys(FIG).join(', ')}`);
-  const x = aspectOf(kind, date), R = 0.6, sA = chartAngle(x.lonA), sB = chartAngle(x.lonB);
-  let d = sB - sA; while (d > 180) d -= 360; while (d < -180) d += 360;
+  const x = aspectOf(kind, date), R = 0.6;
+  let sA = chartAngle(x.lonA), sB = chartAngle(x.lonB), [nA, nB] = [x.a, x.b], d = sB - sA;
+  while (d > 180) d -= 360; while (d < -180) d += 360;
+  // a screen's arc runs counter-clockwise from its start to its end: A is the body the short way round starts from
+  if (d < 0) { [sA, sB, nA, nB] = [sB, sA, nB, nA]; d = -d; }
   const n = FIG[kind], seg = (p, q, c, on) => ({ x1: p[0], y1: p[1], x2: q[0], y2: q[1], c, on });
   const corner = (i) => polar(sA + (i * 360) / n, R), lines = n >= 3 ? Array.from({ length: n }, (_, i) => seg(corner(i), corner(i + 1), GRID, 0)) : [];
   if (x.angle > 0) lines.push(seg(polar(sA, R), polar(sB, R), x.c, 1.2));
   const [tx, ty] = x.angle > 0 ? polar(sA + d / 2, 0.14) : [0, 0];
-  const bodies = [{ g: `g-${x.a.toLowerCase()}`, a: sA, r: R, c: INK[x.a] }, { g: `g-${x.b.toLowerCase()}`, a: sB, r: Math.abs(d) < 14 ? 0.47 : R, c: INK[x.b] }];
+  const bodies = [{ g: `g-${nA.toLowerCase()}`, a: sA, r: R, c: INK[nA] }, { g: `g-${nB.toLowerCase()}`, a: sB, r: d < 14 ? 0.47 : R, c: INK[nB] }];
   const params = { a: sA, b: r2(sA + d), c: x.c, bodies, lines, deg: String(Math.max(1, Math.round(x.sep))), tx, ty };
   const name = kind[0].toUpperCase() + kind.slice(1);
   return { scenes: [['aspect', params]], say: `${name}: ${x.a} and ${x.b}, ${Math.round(x.sep)} degrees apart.${x.tonight ? '' : ` Next on ${fmt(x.when)}.`}`, facts: { kind, a: x.a, b: x.b, sep: r2(x.sep), orb: r2(x.orb), when: x.when.toISOString(), tonight: x.tonight } };

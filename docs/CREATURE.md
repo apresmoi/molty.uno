@@ -122,6 +122,81 @@ A bigger Molty keeps its body in a file: `"body": "cat.glb"`. Any tool that save
 
 Then list in `molty.json` the bones that stand on the floor (`"feet"`) and two bones the view stays between (`"center"`).
 
+## Life
+
+A mood's action loops, and a loop the eye can count looks wound up. `life` makes a Molty move on its own over its loops:
+it breathes, blinks, looks around, never the same way twice. Nothing in it is required, and each part adds on its own.
+
+Blip's whole life is a breath. Add this to `blip/molty.json`:
+
+```json
+"life": {
+  "signals": { "breath": { "wave": { "_": 0.3, "sleepy": 0.15, "happy": 0.5 } } },
+  "layers": [{ "layer": "breathing", "turn": { "bones": "body", "squash": ["breath", 0.04] } }]
+}
+```
+
+A **signal** is a named number that moves; `breath` swings from -1 to 1, 0.3 times a second, slower when sleepy. A
+**layer** is what a signal moves, added over the loop: here Blip's body stretches up 4 % and back as `breath` swings.
+
+Any number in a signal may be a mood table, `{ "_": 0.3, "sleepy": 0.15 }` (`_` for the moods it does not name; it slides
+from one mood's value to the next as the mood changes), or another signal's name.
+
+| a signal that | write | is |
+|---|---|---|
+| a value per mood | `{ "mood": { "_": 0.5, "sleepy": 0.1 } }` | |
+| reads another | `{ "from": "idle_time", "map": [[60, 0], [300, 1]] }` | straight lines between the points |
+| adds some up | `{ "sum": [["energy", 1], ["tired", -0.3]] }` | |
+| swings | `{ "wave": 0.3, "vary": 0.15, "rise": 0.4 }` | -1 to 1, that many times a second, each swing a little different; `rise`: the share going up |
+| wanders | `{ "noise": 0.2 }` | -1 to 1, smoothly |
+| holds a place | `{ "hold": [0.6, 3], "range": [-1, 1], "move": 0.12, "home": 0.4, "waits": "blink" }` | a new place in `range` after a random 0.6 to 3 s, there in `move` s; `home`: the chance it goes back to 0; `waits`: it never moves while that one is on (or about to start) |
+| pulses now and then | `{ "every": [3, 7], "lasts": 0.25, "double": 0.15 }` | 0 to 1 and back, after a random 3 to 7 s; `double`: the chance of a second one right after |
+| follows another | `{ "follow": "look_x", "lag": 0.25, "bounce": 0.2 }` | a beat behind it, swinging past by `bounce` |
+
+Any signal also takes `scale` (times this), `range` (kept inside it), `when` (only while that signal is on) and
+`ease` (seconds to settle). Signals may read the device's: `t` (seconds), a mood's name or `mood_<mood>` (how much it is
+in that mood, 0 to 1), `working`, `free` (1 while no gesture plays), `idle_time` (seconds since anyone did anything) and
+`life` (the owner's setting: 1 lively, 0.5 calm, 0 off).
+
+A layer either plays an action at the place a signal sets, or turns bones:
+
+| layer | does |
+|---|---|
+| `{ "layer": "blink", "clip": "blink_pose", "by": "blink" }` | `blink` 0 shows the action's start, 1 its end. Make such an action short: its first key how the Molty is, its last the full effect (eyes shut) |
+| `"zero": 0.5` | the place that adds nothing: an action that goes left, neutral, right, moved by a signal from -1 to 1 |
+| `"bones": ["eye.L", "eye.R"]` | only these bones of the action (`"tail6-tail12"`: a chain) |
+| `"weight": "free"` | how much of it shows, 0 to 1 (a number, a signal or a mood table), eased: `free` fades it out while a gesture plays |
+| `{ "layer": "lean", "turn": { "bones": "head", "z": ["look_x", 8], "squash": ["breath", 0.04] } }` | bones turned by a signal times degrees (`x`, `y`, `z`), or stretched up by it |
+
+A layer adds the difference from its action's neutral place, so a breath made on the sitting cat works standing too.
+The cat's life, in `moltys/cat/molty.json`: a breath whose speed and depth follow its mood and slow down as it is left
+alone, blinks at uneven gaps (quicker while listening, now and then two), eyes that look somewhere, hold, and come back,
+never mid-blink, and the head following them a quarter second late, all faded out while a gesture plays (here the
+looks to the side; `look_y` and `head_y` do the same up and down):
+
+```json
+"signals": {
+  "energy": { "mood": { "_": 0.45, "listening": 0.7, "speaking": 0.7, "happy": 0.9, "sleepy": 0.1, "surprised": 1 } },
+  "tired": { "from": "idle_time", "map": [[60, 0], [300, 1]] },
+  "calm": { "sum": [["energy", 1], ["tired", -0.3]] },
+  "breath_rate": { "from": "calm", "map": [[0, 0.16], [1, 0.42]] },
+  "breath": { "wave": "breath_rate", "vary": 0.15, "rise": 0.4, "scale": { "_": 0.6, "sleepy": 0.9, "happy": 0.5 } },
+  "blink": { "every": { "_": [2.5, 6.5], "listening": [2, 4], "sleepy": [8, 14] }, "lasts": 0.25, "double": 0.15 },
+  "look_x": { "hold": [0.6, 3], "range": [-1, 1], "move": 0.12, "home": 0.4, "waits": "blink" },
+  "head_x": { "follow": "look_x", "lag": 0.25, "bounce": 0.2 }
+},
+"layers": [
+  { "layer": "breathing", "clip": "breath", "by": "breath", "zero": 0.5 },
+  { "layer": "blink", "clip": "blink_pose", "by": "blink" },
+  { "layer": "eyes", "clip": "look_lr", "by": "look_x", "zero": 0.5, "bones": ["eye.L", "eye.R"], "weight": "free" },
+  { "layer": "gaze", "clip": "look_lr", "by": "head_x", "zero": 0.5, "bones": ["neck", "head", "ear.L", "ear.R"], "weight": "free" }
+]
+```
+
+`check` names any signal it cannot find, a loop between signals, an action or a bone a layer names that is not there,
+and a life that is more than the device gives it. Gestures started by a signal (`moments`), a pulse on a touch (`on`) and
+the mouth following the voice (`peaks`) come in a later firmware.
+
 ## Commands and limits
 
 `molty-creature check <folder>` finds what is wrong and says how to fix it; `build` checks, then writes the file a
@@ -130,7 +205,8 @@ device installs; `preview` shows every mood, gesture and action moving, on your 
 | what | limit |
 |---|---|
 | bones, shapes, actions, poses, gestures; letters in a name | 80, 128, 64, 8, 32; 24 |
-| the built Molty | 256 KB (the cat, with 45 actions, is 242 KB) |
+| the built Molty | 256 KB (the cat, with 49 actions, is 241 KB) |
+| life: signals, layers; its work a frame | 64, 16; 600 steps (`build` says how many; the cat's are 44) |
 | words in `about`, `look`, a mood's or a gesture's line | plain ASCII; 160, 240, 100 letters |
 | action keys in a body file | straight-line or held keys; curve keys are refused: save one key a frame |
 

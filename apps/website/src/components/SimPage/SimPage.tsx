@@ -23,6 +23,17 @@ import {
   sceneTtl,
 } from "../../features/sim/controls";
 import { loadSky, utc, type Show } from "../../features/sim/astro";
+import {
+  DAY_SPAN,
+  MOON_NIGHTS,
+  WEATHER_KINDS,
+  WEATHER_LIFETIMES,
+  fromField,
+  moonLit,
+  nextPhase,
+  toField,
+  weatherLine,
+} from "../../features/sim/sky";
 import styles from "./SimPage.module.css";
 
 export interface SimPageProps {
@@ -48,6 +59,8 @@ const SIGNS = [
   "pisces",
 ];
 const EVENT_KINDS = ["transit", "occultation", "appulse", "solar-eclipse", "lunar-eclipse"];
+const IDLE_LIFE = ["lively", "calm", "off"];
+const DAY_MS = 86_400_000;
 const LOG_MAX = 200;
 
 function Group({ title, children }: { title: string; children: ReactNode }) {
@@ -113,6 +126,9 @@ export function SimPage({ moods, gestures, firmware }: SimPageProps) {
   const [sign, setSign] = useState("leo");
   const [dnd, setDnd] = useState(false);
   const [note, setNote] = useState("");
+  const [skyDate, setSkyDate] = useState(() => Date.now());
+  const [dayOff, setDayOff] = useState(0);
+  const [wxLife, setWxLife] = useState(3600);
   const statsAt = useRef(0);
 
   useEffect(() => {
@@ -133,6 +149,7 @@ export function SimPage({ moods, gestures, firmware }: SimPageProps) {
         if (gone) return s.destroy();
         sim.current = s;
         s.setSpeed("device"); // as on Molty by default
+        s.core.time(Date.now() / 1000); // today's moon, as a Molty on Wi-Fi has it
         setLab(s.dev.lab());
         (window as unknown as { __sim: MoltySim }).__sim = s;
       })
@@ -175,6 +192,13 @@ export function SimPage({ moods, gestures, firmware }: SimPageProps) {
     }
   };
   const when = () => utc(date);
+  /** the module's date: the day picked, moved by the slider (the moon is made for each day's noon) */
+  const skyAt = (t: number, off: number) => {
+    setSkyDate(t);
+    setDayOff(off);
+    sim.current?.core.time((t + off * DAY_MS) / 1000);
+  };
+  const shownAt = skyDate + dayOff * DAY_MS;
   const tonightDate = () => new Date();
 
   const copy = async () => {
@@ -255,6 +279,13 @@ export function SimPage({ moods, gestures, firmware }: SimPageProps) {
               {[...moods, ...AGENT_MOODS].map((m) => (
                 <Btn key={m} on={state?.mood === m} onClick={go((s) => s.core.state({ mood: m }))}>
                   {m}
+                </Btn>
+              ))}
+            </Row>
+            <Row label="idle life">
+              {IDLE_LIFE.map((l) => (
+                <Btn key={l} on={state?.idle_life === l} onClick={go((s) => s.core.state({ idle_life: l }))}>
+                  {l}
                 </Btn>
               ))}
             </Row>
@@ -387,6 +418,102 @@ export function SimPage({ moods, gestures, firmware }: SimPageProps) {
             </Row>
           </Group>
 
+          <Group title="sky">
+            <Row label="sky">
+              <Btn on={state?.sky !== false} onClick={go((s) => s.core.state({ sky: true }))}>
+                on
+              </Btn>
+              <Btn on={state?.sky === false} onClick={go((s) => s.core.state({ sky: false }))}>
+                off
+              </Btn>
+              <Btn onClick={go((s) => s.core.demoStar())}>falling star now</Btn>
+            </Row>
+            <Row label="date (UTC)">
+              <input
+                type="datetime-local"
+                value={toField(skyDate)}
+                onChange={(e) => Number.isFinite(fromField(e.target.value)) && skyAt(fromField(e.target.value), 0)}
+              />
+              <Btn onClick={() => skyAt(Date.now(), 0)}>today</Btn>
+            </Row>
+            <Row label="day">
+              <input
+                type="range"
+                min={-DAY_SPAN}
+                max={DAY_SPAN}
+                step={1}
+                value={dayOff}
+                onChange={(e) => skyAt(skyDate, Number(e.target.value))}
+              />
+              <span className={styles.label} data-sim-moon="">
+                {dayOff >= 0 ? "+" : ""}
+                {dayOff} d · {toField(shownAt).slice(0, 10)} · moon lit {Math.round(moonLit(shownAt) * 100)}%
+              </span>
+            </Row>
+            <Row label="jump">
+              <Btn onClick={() => skyAt(nextPhase(shownAt, 0), 0)}>next new moon</Btn>
+              <Btn onClick={() => skyAt(nextPhase(shownAt, 0.5), 0)}>next full moon</Btn>
+              {MOON_NIGHTS.map(([name, t]) => (
+                <Btn key={name} onClick={() => skyAt(t, 0)}>
+                  {name}
+                </Btn>
+              ))}
+            </Row>
+            <p className={styles.small}>
+              The moon of the date's day, lit and sized as that night. A falling star also comes by itself every 4 to 15
+              minutes; the button is a demo hook, no device or agent has it.
+            </p>
+          </Group>
+
+          <Group title="weather">
+            <Row label="kind">
+              {WEATHER_KINDS.map((k, i) => (
+                <Btn
+                  key={k}
+                  on={(state?.weather?.kind ?? "clear") === k}
+                  onClick={go((s) => s.core.weather(i, wxLife))}
+                >
+                  {k}
+                </Btn>
+              ))}
+            </Row>
+            <Row label="holds">
+              {WEATHER_LIFETIMES.map(([v, name]) => (
+                <Btn key={v} on={wxLife === v} onClick={() => setWxLife(v)}>
+                  {name}
+                </Btn>
+              ))}
+            </Row>
+            <Row label="now">
+              <span className={styles.label} data-sim-weather="">
+                {state?.weather_on === false ? "off" : weatherLine(state?.weather)}
+              </span>
+            </Row>
+            <Row label="weather">
+              <Btn on={state?.weather_on !== false} onClick={go((s) => s.core.state({ weather_on: true }))}>
+                on
+              </Btn>
+              <Btn on={state?.weather_on === false} onClick={go((s) => s.core.state({ weather_on: false }))}>
+                off
+              </Btn>
+            </Row>
+            <p className={styles.small}>
+              As an agent tells it: a kind and how long it holds, then it eases back to clear by itself. Rain starts and
+              ends through drizzle; under a bright moon it shows in the moon's light.
+            </p>
+          </Group>
+
+          <Group title="floor">
+            <Row label="floor">
+              <span className={styles.label}>
+                {(state?.weather?.wet ?? 0) > 0
+                  ? `wet ${Math.round((state?.weather?.wet ?? 0) * 100)}%: the cat and the moon mirrored in it`
+                  : "dry"}
+              </span>
+            </Row>
+            <p className={styles.small}>Wet while it rains and some minutes after; it dries in patches.</p>
+          </Group>
+
           <Group title="device">
             <Row label="screen">
               <Btn onClick={go((s) => s.dev.screen(false))}>sleep</Btn>
@@ -420,7 +547,8 @@ export function SimPage({ moods, gestures, firmware }: SimPageProps) {
             </Row>
             <p className={styles.small}>
               Hold accept to talk. Reject: a press turns the screen off or on, two do not disturb, a long hold says
-              goodbye. As the device's buttons out of the box.
+              goodbye. As the device's buttons out of the box. The screen's own nap (off a while after Molty falls
+              asleep) is the device's power behaviour, not here.
             </p>
           </Group>
 

@@ -44,7 +44,12 @@ void *fluid_test_alloc(void *p, size_t n, bool zero);
 #define FLUID_REALLOC(p, n) realloc((p), (n))
 #endif
 #define FLUID_FREE(p)   free(p)
+#ifdef WEB_SDK_CLOCK                             /* (web/build.sh: the clock its caller sets, web_sdk.c, never the computer's) */
+#include "esp_timer.h"
+static inline int64_t now_us(void) { return esp_timer_get_time(); }
+#else
 static inline int64_t now_us(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000; }
+#endif
 #endif
 
 /* ---- tunables (render.js R) ---- */
@@ -1847,10 +1852,10 @@ static bool morph_maps(fluid_draw_t *d) {
     fluid_morph_t *m = &d->m;
     if (m->colx) return true;
     const int N = d->W * d->H;
-    uint8_t *p = FLUID_CALLOC((size_t)d->fb_w + d->fb_h + 2 * (size_t)N);
+    uint8_t *p = FLUID_CALLOC((size_t)d->fb_w + d->fb_h + 3 * (size_t)N);
     if (!p) return false;
-    m->colx = p; m->rowy = p + d->fb_w; m->lc = m->rowy + d->fb_h; m->lcn = m->lc + N;
-    memset(m->colx, 255, (size_t)d->fb_w); memset(m->rowy, 255, (size_t)d->fb_h);
+    m->colx = p; m->rowy = p + d->fb_w; m->lc = m->rowy + d->fb_h; m->lcn = m->lc + N; m->ord = m->lcn + N;
+    memset(m->colx, 255, (size_t)d->fb_w); memset(m->rowy, 255, (size_t)d->fb_h); memset(m->ord, 255, (size_t)N);
     for (int i = 0; i < d->W; i++) for (int x = d->cx[i]; x < d->cx[i + 1]; x++) m->colx[x] = (uint8_t)i;
     for (int j = 0; j < d->H; j++) for (int y = d->cy[j]; y < d->cy[j + 1]; y++) m->rowy[y] = (uint8_t)j;
     return true;
@@ -1860,6 +1865,11 @@ void fluid_draw_morph_lines(fluid_draw_t *d, const uint8_t *cells) {
     if (!d || !morph_maps(d)) return;
     if (cells) memcpy(d->m.lcn, cells, (size_t)d->W * d->H); else memset(d->m.lcn, 0, (size_t)d->W * d->H);
 }
+void fluid_draw_morph_order(fluid_draw_t *d, const uint8_t *order) {
+    if (!d || !morph_maps(d)) return;
+    if (order) memcpy(d->m.ord, order, (size_t)d->W * d->H); else memset(d->m.ord, 255, (size_t)d->W * d->H);
+}
+bool fluid_draw_morph_carries(const fluid_draw_t *d) { return d && d->m.snap && (d->m.on || d->m.whole) && d->m.colx && d->m.fulls < 2; }
 
 /* the job no longer reads for the change (at the handoff, or in line: that task is between slices); it is the drawer's */
 static void job_release(fluid_draw_t *d) {
@@ -2453,15 +2463,17 @@ static int lists_walk(const fluid_draw_t *d, fluid_morph_mem_t *mm, mwalk_t *w, 
     if (b) mlist_done(b);
     return 1;
 }
-/* (a cell's new grains with no pair: one in MP_GLIDERS glides in, the others come up on their spot, each at its own moment) */
+/* (a cell's new grains with no pair: one in MP_GLIDERS glides in, the others come up on their spot, each at its own moment,
+ * or all at the cell's in a look that grows outward: fluid_draw_morph_order) */
 static int grains_cell(const fluid_draw_t *d, fluid_morph_mem_t *mm, int pass, int k) {
     const mlayer_t *B = &mm->B;
-    const int x0 = d->cx[k % d->W], y0 = d->cy[k / d->W];
+    const int x0 = d->cx[k % d->W], y0 = d->cy[k / d->W], o = d->m.ord[k];   /* (its order: none glides, they come in turn) */
     if (!bound(d, "B.at", B->at[k + 1], (uint64_t)B->n) || !bound(d, "B.at", B->at[k], B->at[k + 1])) return -1;
     for (uint32_t n = B->at[k]; n < B->at[k + 1]; n++) {
         if (B->ref[n] != MG_NONE) continue;
-        if (!mm->keep && !(B->aux[2 * n + 1] % MP_GLIDERS)) { if (pass) mm->bl[mm->wg.g] = n | (uint32_t)k << 14; mm->wg.g++; continue; }
-        mlist_put(&mm->nb, pass, mq(MP_BORN0 + (MP_BORN1 - MP_BORN0) * (1.f - fsqrt(1.f - mrand(n, 36)))), mpix(x0 + (B->g[n] & 15), y0 + (B->g[n] >> 4 & 15), B->g[n] & MG_Z2), B->col[n]);
+        if (!mm->keep && o == 255 && !(B->aux[2 * n + 1] % MP_GLIDERS)) { if (pass) mm->bl[mm->wg.g] = n | (uint32_t)k << 14; mm->wg.g++; continue; }
+        mlist_put(&mm->nb, pass, mq(MP_BORN0 + (MP_BORN1 - MP_BORN0) * (o < 255 ? o * (1.f / 254.f) : 1.f - fsqrt(1.f - mrand(n, 36)))),
+                  mpix(x0 + (B->g[n] & 15), y0 + (B->g[n] >> 4 & 15), B->g[n] & MG_Z2), B->col[n]);
     }
     return (int)(B->at[k + 1] - B->at[k]);
 }
@@ -3607,6 +3619,7 @@ int fluid_draw_send2(const fluid_draw_t *d, const fluid_draw_opts_t *o, const fl
     if (m->on && full) morph_end((fluid_draw_t *)d, false);   /* (all of the look sent at once: the change is over) */
     if (m->jhold) return 0;                             /* (its reader may still be in the drawing's state: from the next frame) */
     if (m->full) { full = true; m->full = false; }
+    m->fulls = full ? (uint8_t)(m->fulls < 255 ? m->fulls + 1 : 255) : 0;
     if (m->on && o->fine) memset(o->fine->dok, 0, (size_t)d->W * d->H);   /* (the glass is the change's: no speck as last drawn) */
     const int n0 = s_wins;
     m->cmp_us = m->push_us = 0;

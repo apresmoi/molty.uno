@@ -17,6 +17,11 @@ esp_err_t mole_fluid_ask_show(const fluid_ask_q_t *q, unsigned *seq) { pair_q = 
 void mole_fluid_ask_pick(int index) { pair_pick = index; }
 void mole_fluid_ask_end(void) { pair_ends++; }
 unsigned mole_fluid_ask_shown(void) { return pair_glass; }
+static char cues[64];   /* the device's own buzzes (haptic_cue), in order */
+esp_err_t haptic_cue(const char *name) {
+    if (strlen(cues) + strlen(name) + 2 > sizeof cues) cues[0] = 0;   /* (only the recent ones are looked at) */
+    strcat(strcat(cues, cues[0] ? " " : ""), name); return ESP_OK;
+}
 static unsigned rotations, sent;
 static esp_err_t send_error;
 static const char *field(const char *key) { cJSON *j=cJSON_GetObjectItem(sdk_sent,key); assert(cJSON_IsString(j)); return j->valuestring; }
@@ -390,8 +395,9 @@ static cJSON *status(void) { cJSON *j=cJSON_CreateObject(); link_pair_status(j);
 static void test_pair(void) {
     cJSON *st=status();   /* boot: nothing pending, no decision yet */
     assert(cJSON_IsNull(cJSON_GetObjectItem(st,"pair")) && cJSON_IsNull(cJSON_GetObjectItem(st,"last_pair"))); cJSON_Delete(st);
-    sdk_state[0]='\0';
+    sdk_state[0]='\0'; cues[0]=0;
     request();
+    assert(!strcmp(cues,"double"));   /* the code appears: the human must look */
     /* The question over whatever shows: who asks, a reminder, the code, accept / reject (the state is left alone) */
     assert(!strcmp(pair_q.title,"pair with test agent?") && !strcmp(pair_q.detail,"check the code matches") && !strcmp(pair_q.code,"1234"));
     assert(pair_q.n==2 && !strcmp(pair_q.label[0],"accept") && !strcmp(pair_q.label[1],"reject") && pair_q.rgb[0]==0x3ccf96 && pair_q.rgb[1]==0xff6b6b && !sdk_state[0]);
@@ -403,6 +409,7 @@ static void test_pair(void) {
     sdk_now+=79999999; link_pair_tick(); assert(link_pair_active());
     sdk_now+=1; link_pair_tick();
     assert(!link_pair_active() && !strcmp(field("reason"),"timeout") && !rotations);
+    assert(!strcmp(cues,"double"));   /* a timeout: no tick */
     assert(pair_pick==-9 && pair_ends==1 && !sdk_state[0]);          /* the rim lets go; nothing else changed */
     st=status(); p=cJSON_GetObjectItem(st,"last_pair");
     assert(cJSON_IsNull(cJSON_GetObjectItem(st,"pair")) && cJSON_GetObjectItem(p,"seq")->valueint==1);
@@ -417,14 +424,17 @@ static void test_pair(void) {
     pair_glass=pair_seq;
     link_pair_tap(0.f, -150.f); link_pair_tick(); assert(link_pair_active());           /* on the question */
     link_pair_tap(0.f, 0.f); link_pair_tick(); assert(link_pair_active());              /* the centre */
+    cues[0]=0;
     link_pair_tap(-100.f, 100.f); link_pair_tick();                                       /* accept, lower left */
+    assert(!strcmp(cues,"tick"));   /* the tap was taken */
     assert(!link_pair_active() && cJSON_IsTrue(cJSON_GetObjectItem(sdk_sent,"ok")) && rotations==1 && pair_pick==0);
     assert(!strcmp(field("link_code"),"ABCDEFGH"));
     st=status(); p=cJSON_GetObjectItem(st,"last_pair");
     assert(cJSON_GetObjectItem(p,"seq")->valueint==3 && cJSON_IsTrue(cJSON_GetObjectItem(p,"ok")) && cJSON_IsNull(cJSON_GetObjectItem(p,"reason")));
     cJSON_Delete(st);
+    cues[0]=0;
     request(); sdk_gpio[0]=0; link_pair_tick(); sdk_gpio[0]=1;
-    assert(!link_pair_active() && rotations==2);
+    assert(!link_pair_active() && rotations==2 && !strcmp(cues,"double"));   /* the button: no touch, no tick */
     request(); pair_glass=pair_seq; send_error=ESP_FAIL; link_pair_tap(-100.f, 100.f); link_pair_tick();
     assert(!link_pair_active() && rotations==3); send_error=ESP_OK;
     /* a tap on reject (lower right): rejected, from that answer */

@@ -90,6 +90,14 @@ export interface FluidState {
   gestures?: Partial<Record<string, string>>;
   /** How much Molty moves by itself when nobody drives it: "lively" | "calm" | "off" (newer firmware). */
   idle_life?: string;
+  /** How long after Molty falls asleep its screen goes off, on battery / on USB: 0 = never or 10..3600 s (newer firmware). */
+  screen_off_battery_s?: number;
+  screen_off_usb_s?: number;
+  /** Today's moon and the falling stars behind Molty (newer firmware). */
+  sky?: boolean;
+  /** The weather on the glass (newer firmware): its setting, and what is told now (kind, s left, 0..3 level, 0..1 wet). */
+  weather_on?: boolean;
+  weather?: { kind: string; s_left: number; level: number; wet: number };
   word?: string;
   word_idx?: number;
   nwords?: number;
@@ -112,6 +120,11 @@ export interface FluidOrder {
   shake_talk?: boolean; // a shake starts a listen by itself (shake to talk), kept on the device
   gestures?: Partial<Record<string, string>>; // what tap, double tap and the buttons do, kept on the device
   idle_life?: string; // "lively" | "calm" | "off" — small idle actions when nobody drives it, kept on the device
+  screen_off_battery_s?: number; // 0 (never) | 10..3600: the screen off this long after Molty fell asleep, on battery, kept on the device
+  screen_off_usb_s?: number; // ... on USB power
+  sky?: boolean; // today's moon and the falling stars behind the creature, kept on the device
+  weather_on?: boolean; // the weather on the glass at all, kept on the device
+  weather?: string | { kind: string; s?: number }; // told: 'clear' | 'drizzle' | 'rain' | 'downpour', for s seconds (an hour)
   ripple?: { x: number; y: number; strength?: number }; // x,y in -1..1, y down
 }
 

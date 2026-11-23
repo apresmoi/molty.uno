@@ -15,6 +15,7 @@ import { validate } from '../display/schema.mjs';
 import { MAX_PKG_BYTES, checkPackage } from '../format.mjs';
 import { SCALE, bakeAction, r6 } from './bake.mjs';
 import { SHAPES, readGltf, readInline } from './body.mjs';
+import { LIFE_LIMITS, compileLife } from './life.mjs';
 
 export const SCHEMA = JSON.parse(readFileSync(new URL('../../../schema/molty-2.json', import.meta.url), 'utf8'));
 /** What the device holds (main/creature/creature_clip.h). */
@@ -82,10 +83,12 @@ export function check(dir) {
   };
   plays('moods', moods); plays('gestures', gestures);
   for (const key of ['feet', 'center']) (doc[key] ?? []).forEach((n, i) => { if (node(n) < 0) bad(where(doc[key], i), `${key}: there is no bone named ${n} (bones: ${list(nodes.map((x) => x.name))})`); });
+  const life = compileLife(doc, nodes, names, bad);
   if (errors.length) return { errors, warnings, doc, body };
 
-  const loops = new Set([...Object.values(rest), ...Object.values(moods)]), baked = new Map();
-  for (const a of body.actions) baked.set(a.name, bakeAction(nodes, a, fps, loops.has(a.name)));
+  // a clip only a life layer plays keeps only what moves in it
+  const loops = new Set([...Object.values(rest), ...Object.values(moods)]), baked = new Map(), played = new Set([...loops, ...Object.values(gestures)]);
+  for (const a of body.actions) baked.set(a.name, bakeAction(nodes, a, fps, loops.has(a.name), !!life?.clips.has(a.name) && !played.has(a.name)));
   // which pose an action starts and ends in: what it says, what its name says (<a>_to_<b>), else the pose whose resting
   // action starts nearest to how it looks (the root's place left out)
   const far = (p, q) => { let d = 0; for (let n = 0; n < nodes.length; n++) { const o = n * 10; if (n) for (let c = 0; c < 3; c++) d += (p[o + c] - q[o + c]) ** 2; let dot = 0; for (let c = 3; c < 7; c++) dot += p[o + c] * q[o + c]; d += 1 - dot * dot; } return d; };
@@ -100,7 +103,7 @@ export function check(dir) {
   const enter = {};
   for (const [m, a] of Object.entries(moods)) for (const p of poses) if (actions.has(`${p}_${m}`) && rest[p] !== `${p}_${m}`) (enter[a] ??= {})[p] = `${p}_${m}`;
   // the way from one pose to another: <a>_to_<b>, or the one action that goes that way and that nothing else plays
-  const taken = new Set([...Object.values(rest), ...Object.values(moods), ...Object.values(gestures), ...Object.values(enter).flatMap((e) => Object.values(e))]), edges = {};
+  const taken = new Set([...Object.values(rest), ...Object.values(moods), ...Object.values(gestures), ...Object.values(enter).flatMap((e) => Object.values(e)), ...(life?.clips ?? [])]), edges = {};
   for (const a of poses) for (const b of poses) {
     if (a === b) continue;
     const named = `${a}_to_${b}`, free = names.filter((n) => !taken.has(n) && ends.get(n)[0] === a && ends.get(n)[1] === b);
@@ -140,6 +143,7 @@ export function check(dir) {
       gestures: Object.fromEntries(Object.keys(gestures).map((g) => [g, g in ACTIONS ? { ch: [] } : { dur: lasts(g), ch: [] }])),
       moods: Object.fromEntries(Object.keys(moods).map((m) => [m, { ch: [] }])),
       rig,
+      ...(life ? { life: life.life } : {}),
     } };
   const bytes = Buffer.from(packageText(pkg));
   if (!errors.length) for (const p of checkPackage(JSON.parse(bytes), doc.id)) bad('molty.json:1', `${p} (the device's own check of the built Molty)`);
@@ -148,7 +152,7 @@ export function check(dir) {
     bad(here, `the built Molty is ${kb(bytes.length)}: the device takes ${kb(MAX_PKG_BYTES)}. Its largest actions: ${size.map(([n, s]) => `${n} ${kb(s)}`).join(', ')}. Shorten or drop some`);
   }
   for (const n of names) if (!taken.has(n) && !Object.values(edges).includes(n)) warn(here, `${file}: nothing plays the action ${n}: name a gesture or a mood after it, or leave it out (it costs ${kb(JSON.stringify(clips[n]).length)})`);
-  return { errors, warnings, doc, body, pkg, bytes, clips };
+  return { errors, warnings, doc, body, pkg, bytes, clips, life };
 }
 
 /**
@@ -168,6 +172,7 @@ export function build(dir, out) {
   const report = [
     `body      ${rig.nodes.length} bones, ${rig.shapes.length} shapes, ${Object.keys(doc.colors).length} colors`,
     `actions   ${body.actions.length}, ${frames} frames, ${kb(JSON.stringify(rig.clips).length)}; ${Object.keys(rig.graph.moods).length} moods, ${Object.keys(rig.graph.gestures).length} gestures, ${rig.graph.families.length} poses, ${Object.keys(rig.graph.edges).length} ways between them`,
+    ...(r.life ? [`life      ${r.life.life.ch.length} channels, ${Object.keys(r.life.life.events ?? {}).length} events, ${r.life.life.layers?.length ?? 0} layers; ${r.life.steps} of ${LIFE_LIMITS.steps} steps a frame`] : []),
     `package   ${rel(out)}  ${kb(bytes.length)} of ${kb(MAX_PKG_BYTES)}  ok`,
   ];
   return { ...r, out, report };

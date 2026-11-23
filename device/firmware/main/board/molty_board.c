@@ -336,6 +336,11 @@ uint8_t molty_mic_gain(void)
     return B.mic_gain ? B.mic_gain : 8;
 }
 
+int molty_haptic_gpio(void)
+{
+    return B.haptic_gpio && !s_mismatch[0] ? B.haptic_gpio : -1;
+}
+
 esp_err_t molty_mic_stream_read(int16_t *buf, size_t chunk_samples, size_t *got)
 {
     return MIC ? B.mic->stream_read(buf, chunk_samples, got) : ESP_ERR_NOT_SUPPORTED;

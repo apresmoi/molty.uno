@@ -23,7 +23,7 @@ import { preview } from './preview.mjs';
 import { ANNOTATIONS, KEYWORDS, validate } from './schema.mjs';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url)), ASTRO = join(ROOT, 'skills/molty-astro'), DIAL = join(ROOT, 'docs/examples/molty-dial');
-const GOLDEN = join(ROOT, 'packages/astrology/astrology.json'), GOLDEN_SHA = '66e94aed50a4a3d9684f947c09b33a01d860390e42a311bda93eecdc89d49a66';
+const GOLDEN = join(ROOT, 'packages/astrology/astrology.json'), GOLDEN_SHA = 'cb320aaee9e993ccb861eb8ec8abcedebd112832028abdaf227508b9d5f36dd7';
 const TMP = mkdtempSync(join(tmpdir(), 'molty-display-'));
 after(() => rmSync(TMP, { recursive: true, force: true }));
 let made = 0;
@@ -82,7 +82,7 @@ test('golden: the astrology skill folder builds today\'s package, byte for byte,
   const bytes = readFileSync(out);
   assert.equal(createHash('sha256').update(bytes).digest('hex'), GOLDEN_SHA);
   assert.ok(bytes.equals(readFileSync(GOLDEN)), 'the built package is packages/astrology/astrology.json');
-  assert.equal(bytes.length, 74427);
+  assert.equal(bytes.length, 74507);
   assert.deepEqual(tree(join(dir, 'build')), tree(join(ASTRO, 'build')));
   for (const f of tree(join(dir, 'build'))) assert.equal(readFileSync(join(dir, 'build', f), 'utf8'), readFileSync(join(ASTRO, 'build', f), 'utf8'), `skills/molty-astro/build/${f} is stale: run molty-display build`);
   assert.equal(r.skill.doc.package.about, readFileSync(join(ROOT, 'packages/astrology/description.txt'), 'utf8').trim(), 'the catalog line is package.about');

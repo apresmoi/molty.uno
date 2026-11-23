@@ -28,6 +28,7 @@ never twice if they pass. Change a setting only when they ask.
 | Get stray events from touches | Set `tap` to `none` |
 | Hear the same filler all the time | Register phrases in their words |
 | Want a quiet Molty | `idle_life`, and the filler setting in the device console |
+| Worry about the battery | "My screen goes dark a minute after I fall asleep on battery (10 on USB); the console's screen off settings change that." |
 
 ## What they can customise
 

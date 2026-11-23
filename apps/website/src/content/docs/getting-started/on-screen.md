@@ -12,6 +12,15 @@ and looks around by itself.
 
 The cat walks. Tap the screen and it comes to the front and sits up, looking at you.
 
+## The sky
+
+Behind the creature sits today's moon, small, up to the right, lit the way it is tonight. It
+grows a little on the nights the moon is near the Earth, and at new moon it is not there. Now
+and then a falling star crosses the sky and leaves a trail that fades.
+
+The moon needs the date, which Molty takes from the internet once it is on Wi-Fi. You can turn
+the sky off on the console's **molty** page.
+
 ## The recording ring
 
 When Molty listens, a ring appears at the rim and stays until you stop talking.
@@ -21,10 +30,11 @@ While you speak, small ripples run in from the rim.
 
 ## Questions
 
-When your agent asks you something, the answers appear for you to tap. Up to three answers
-sit on the rim. Four or five become rows.
+When your agent asks you something, the screen dissolves into dust and the dust gathers into
+the question, its answers growing out along the rim for you to tap. Up to three answers sit on
+the rim. Four or five become rows.
 
-Tap an answer and the question breaks into dust that the water carries off.
+Tap an answer and it brightens, then the question dissolves back into what was there before.
 
 ## Scenes
 

@@ -15,7 +15,7 @@ of them are about. It has no idea what a planet, a zodiac sign or a cat is.
 | Cat | a creature | 2.0.0 | 242 KB | already there |
 | Duck | a creature | 1.0.0 | 31 KB | already there |
 | Octopus | a creature | 1.0.0 | 33 KB | already there |
-| Astrology | scenes: the moon, the planets, the zodiac chart, eclipses | 1.7.0 | 73 KB | your agent installs it |
+| Astrology | scenes: the moon, the planets, the zodiac chart, eclipses | 1.7.1 | 73 KB | your agent installs it |
 
 ## Installing takes one tap
 
@@ -141,7 +141,8 @@ direction (the angle of `x`, `y`), from radius `r0` (0 unless given) to `r1`: a 
 `"arc": 30, "r0": 0.75, "r1": 0.9`). The sector only widens where a tap lands; what the tap highlights is still the disc's.
 What a tap highlights grows with the tap's wave (the spot's `grow`, 1..3, default 1.25: the chart's signs 1.5), stays so
 while the reading (or the agent's say over the scene) plays, then eases back. On the device it stays perfectly still and
-crisp meanwhile (the water breaks nothing it covers), and the wave leaves its outline rather than the finger:
+crisp meanwhile (the water breaks nothing it covers), and the wave leaves its outline rather than the finger. A spot is
+a button: every bump its tap makes is 0.3 of a touch on open water. What it highlights:
 - with `lights` (group names, spaces between, at most 4): every item whose `group` is one of them, each about its own
   centre and brighter; an item with `"when": "lit"` shows only then, fading in and out with it. Any drawn item may take
   `group` (a name, bindable: `"group": "@id"`) and `when`. The chart's aspects: a spot along each line lights the
@@ -211,7 +212,7 @@ Over the existing command path (`link_cmd_register`), gated by device caps `pkg`
   `install` (green) and `not now` (white). It waits 60 s for a tap (the relay's `timeout_ms`). The size is not shown;
   it is checked against 256 KB and the quota instead.
   The name shown is the one the agent sent; the stored name and version are the file's own.
-- **Progress on screen:** after the tap the question blows away and a ring forms on the rim. It grows clockwise from
+- **Progress on screen:** after the tap the question dissolves back into the cat and a ring forms on the rim. It grows clockwise from
   12 o'clock as the bytes arrive (to 90 % when the download is complete), then fills, flashes and melts when the package
   is stored. On a failure it lets go where it got to. It is the same ring as an agent's `progress`
   ([AGENT-LINK.md](AGENT-LINK.md#inline-cues-and-actions)): over the cat it forms from a wave at the centre as a thin green line, over the duck or the octopus it is a mint line.

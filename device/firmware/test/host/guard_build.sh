@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # guard_build.sh — host build + run of the internal-RAM / Wi-Fi recovery policies:
-# main/diag/heap_guard.c (warn + shed), main/net/wifi_retry.c (reconnect after a drop) and
+# main/diag/heap_guard.c (warn + shed), main/net/wifi_retry.c (reconnect after a drop, the lease
+# ladder when joined with no address), main/net/ap_pick.c (which AP of the network to join) and
 # main/diag/sta_watch.c (rssi only while associated), main/net/recv_bound.c (a silent upload is
 # given up), main/diag/loop_watch.c (abort on a wedged event loop / esp_timer task),
 # main/diag/flash_gate.c (flash writes that can wait hold while the screen animates).
 # Plain C, no ESP-IDF.
-# HEAP_GUARD_SRC / WIFI_RETRY_SRC / RECV_BOUND_SRC / STA_WATCH_SRC / LOOP_WATCH_SRC / FLASH_GATE_SRC override a source (mutation checks).
+# HEAP_GUARD_SRC / WIFI_RETRY_SRC / AP_PICK_SRC / RECV_BOUND_SRC / STA_WATCH_SRC / LOOP_WATCH_SRC / FLASH_GATE_SRC override a source (mutation checks).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MAIN="$(cd "$HERE/../.." && pwd)/main"
@@ -16,6 +17,8 @@ $CC -I"$MAIN/diag" "$HERE/heap_guard_test.c" "${HEAP_GUARD_SRC:-$MAIN/diag/heap_
 "$OUT/heap_guard_test"
 $CC -I"$MAIN/net" "$HERE/wifi_retry_test.c" "${WIFI_RETRY_SRC:-$MAIN/net/wifi_retry.c}" -o "$OUT/wifi_retry_test"
 "$OUT/wifi_retry_test"
+$CC -I"$MAIN/net" "$HERE/ap_pick_test.c" "${AP_PICK_SRC:-$MAIN/net/ap_pick.c}" -o "$OUT/ap_pick_test"
+"$OUT/ap_pick_test"
 $CC -I"$MAIN/net" "$HERE/recv_bound_test.c" "${RECV_BOUND_SRC:-$MAIN/net/recv_bound.c}" -o "$OUT/recv_bound_test"
 "$OUT/recv_bound_test"
 $CC -I"$MAIN/diag" "$HERE/sta_watch_test.c" "${STA_WATCH_SRC:-$MAIN/diag/sta_watch.c}" -o "$OUT/sta_watch_test"

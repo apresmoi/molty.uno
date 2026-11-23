@@ -12,6 +12,7 @@
  *   battery  AXP2101 PMU, I2C 0x34: VBAT ADC, fuel gauge %, charger and VBUS status
  *   power    the PMU's shutdown bit (power_off: the PWR long press's goodbye, power.c)
  *   usb_net  native USB on the USB-C port (TinyUSB NCM)
+ *   haptic   a coin motor on GPIO17 (added by hand, board.h): held LOW in early_init
  *
  * No power latch: the AXP2101 keeps the board on until a long PWR press. The
  * firmware turns it off first (its goodbye after 1.5 s held); the PMU's own cutoff is
@@ -99,6 +100,14 @@ static esp_err_t power_off(void)
     return e == ESP_OK ? ESP_ERR_INVALID_STATE : e;
 }
 
+/* The motor's switch LOW from the first milliseconds: a floating base could half-open the
+ * transistor. haptic.c takes the pin over as PWM after the hardware check. */
+static void early_init(void)
+{
+    gpio_set_level(BOARD_HAPTIC_GPIO, 0);
+    gpio_set_direction(BOARD_HAPTIC_GPIO, GPIO_MODE_OUTPUT);
+}
+
 static uint32_t init(void)
 {
     uint32_t up = MOLTY_CAP_USB_NET;
@@ -176,6 +185,7 @@ const molty_board_t molty_board_desc = {
     .caps   = MOLTY_CAP_DISPLAY | MOLTY_CAP_TOUCH | MOLTY_CAP_IMU | MOLTY_CAP_MIC | MOLTY_CAP_SPEAKER |
               MOLTY_CAP_BTN_ACCEPT | MOLTY_CAP_BTN_REJECT | MOLTY_CAP_BATTERY | MOLTY_CAP_USB_NET,
 
+    .early_init  = early_init,
     .init        = init,
     .framebuffer = lcd_co5300_framebuffer,
     .flush       = lcd_co5300_flush,
@@ -200,4 +210,5 @@ const molty_board_t molty_board_desc = {
     .mic_gain       = 4,
     .button_pressed = button_pressed,
     .battery        = battery,
+    .haptic_gpio    = BOARD_HAPTIC_GPIO,
 };

@@ -32,6 +32,9 @@ mood_engine_t *cpk_engine(cpk_t *k);
 const cp_t    *cpk_player(const cpk_t *k);
 /** The agent is working (mood `working`): the package's `work` input, for its own life while it waits. */
 void   cpk_set_work(cpk_t *k, bool on);
+/** What its life (cp_life) reads of the world: seconds since anyone did anything, and the owner's idle-life setting
+ *  (1 lively, 0.5 calm, 0 off). */
+void   cpk_set_idle(cpk_t *k, float idle_s, float life);
 const cb_t    *cpk_body(const cpk_t *k);
 /** One frame: the engine, the player, the body into the cells, the ambient over them (its
  *  splashes and currents into s), then s's target. */
@@ -42,6 +45,19 @@ bool   cpk_crisp(const cpk_t *k);
 /** A tap or a shake: a rigged creature plays first (a shake: "shaken"), then comes to the front of the frame facing the
  *  viewer, attending (cc_come). */
 void   cpk_come(cpk_t *k, const char *first);
+/** The sky behind a rigged creature (sky.h: s->moon_c, s->star_c as its last sky_frame made them), drawn into its world
+ *  from its next frame; NULL: none. s must live as long as k uses it. */
+struct sky;
+void   cpk_sky(cpk_t *k, const struct sky *s);
+/** The weather on a rigged creature's glass (weather.h, as its last weather_frame made it), drawn into its world from
+ *  its next frame with the water's height pushing the wet floor's mirror; NULL: none. w must live as long as k uses it. */
+struct weather;
+void   cpk_weather(cpk_t *k, const struct weather *w);
+/** Its dots of the weather in the last frame (cd_weather_dots: mirrored, behind, in front, on the glass). */
+void   cpk_weather_dots(const cpk_t *k, int out[4]);
+/** A rigged creature plays a gesture of its own by name now, only if nothing but its mood plays (cc_free): true if it
+ *  started. */
+bool   cpk_gesture(cpk_t *k, const char *name);
 /** A rigged creature's dots: the share of their rows' work on the calling core (cd_set_share), the rest on the other. */
 void   cpk_set_share(cpk_t *k, int pct);
 /** The listen ring over a rigged creature, given directly (creature_ring.h cr_listen): its colour (0xRRGGBB, -1: the

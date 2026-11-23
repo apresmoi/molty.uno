@@ -7,6 +7,7 @@
 #include "loop_watch.h"
 #include "net/network.h"
 #include "net/console_store.h"
+#include "net/net_clock.h"
 #include "mole_fluid.h"
 #include "molty_board.h"
 #include "pkg/pkg_cmd.h"
@@ -14,6 +15,7 @@
 #include "bench_chart.h"
 #include "link/link_client.h"
 #include "link/link_audio.h"
+#include "haptic/haptic.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1236,6 +1238,8 @@ cJSON *mole_diag_json(int timeline_secs)
     cJSON_AddNumberToObject(j, "uptime_ms", esp_timer_get_time() / 1000);
     cJSON_AddStringToObject(j, "reset_reason", reset_str(esp_reset_reason()));
     cJSON_AddStringToObject(j, "fw", esp_app_get_description()->version);
+    cJSON_AddItemToObject(j, "time", net_clock_json());   /* the date (net_clock.h): the sky's */
+    cJSON_AddBoolToObject(j, "haptic", haptic_available());  /* a vibration motor wired and its PWM up (haptic.h) */
     cJSON *fr = cJSON_AddObjectToObject(j, "frames");
     cJSON *sim = frames_json(&s_sim);
     cJSON_AddNumberToObject(sim, "work_ms", s_sim_work_us / 1000.0);

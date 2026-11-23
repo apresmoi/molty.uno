@@ -22,7 +22,7 @@ import { LIMITS, SCHEMA, build, check } from './build.mjs';
 import { preview } from './preview.mjs';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url)), CAT = join(ROOT, 'moltys/cat'), PIP = join(ROOT, 'docs/examples/molty-pip');
-const GOLDEN = join(ROOT, 'packages/cat/cat.json'), GOLDEN_SHA = '96189940b42cc4fb53297b2205f8a924f97796823f6c8235eb88d0227473170e';
+const GOLDEN = join(ROOT, 'packages/cat/cat.json'), GOLDEN_SHA = '212b067e92d2f7acb4067e0821dbfc681b3f391191a348b7642014dee55c949b';
 const CLI = join(ROOT, 'packages/tools/molty-creature.mjs'), EXPORTER = join(ROOT, 'tools/blender/molty_export.py');
 const TMP = mkdtempSync(join(tmpdir(), 'molty-creature-'));
 after(() => rmSync(TMP, { recursive: true, force: true }));
@@ -62,7 +62,7 @@ test('golden: the cat\'s folder builds today\'s cat.json byte for byte, with no 
   const bytes = readFileSync(out);
   assert.equal(sha(bytes), GOLDEN_SHA);
   assert.ok(bytes.equals(readFileSync(GOLDEN)), 'the built Molty is packages/cat/cat.json');
-  assert.equal(bytes.length, 247792);
+  assert.equal(bytes.length, 246775);
   const r = check(CAT);
   assert.deepEqual([r.errors, r.warnings], [[], []]);
   assert.equal(r.doc.about, readFileSync(join(ROOT, 'packages/cat/description.txt'), 'utf8').trim(), 'the catalog line is molty.json\'s about');
@@ -146,6 +146,21 @@ test('docs/CREATURE.md: its first Molty builds as written', () => {
   const r = build(dir);
   assert.deepEqual(r.errors, []);
   assert.ok(drawn(r.pkg.creature.rig, 20).dots > 100);
+});
+
+test('docs/CREATURE.md: its life examples build, Blip\'s breath and the cat\'s', () => {
+  const doc = readFileSync(join(ROOT, 'docs/CREATURE.md'), 'utf8'), [blip, cat] = [...doc.slice(doc.indexOf('## Life')).matchAll(/```json\n([\s\S]*?)```/g)].map((m) => m[1]);
+  const first = JSON.parse(/```json\n([\s\S]*?)```/.exec(doc)[1]), dir = fresh();
+  mkdirSync(dir);
+  writeFileSync(join(dir, 'molty.json'), JSON.stringify({ ...first, ...JSON.parse(`{${blip}}`) }));
+  const r = build(dir);
+  assert.deepEqual(r.errors, []);
+  assert.deepEqual(r.pkg.creature.life.layers, [{ by: 'breath', nodes: [1], sq: 0.04 }]);
+  const cdir = fresh();
+  mkdirSync(cdir);
+  cpSync(join(CAT, 'cat.glb'), join(cdir, 'cat.glb'));
+  writeFileSync(join(cdir, 'molty.json'), JSON.stringify({ ...JSON.parse(readFileSync(join(CAT, 'molty.json'), 'utf8')), life: JSON.parse(`{${cat}}`) }));
+  assert.deepEqual(check(cdir).errors, []);
 });
 
 test('the schema: what the checker enforces is what editors read', () => {
@@ -233,6 +248,87 @@ test('limits: 80 bones, 128 shapes, 64 actions, 8 poses, 32 gestures, names of 2
   const heavy = (n) => (d) => { bones(60)(d); for (let i = 0; i < n; i++) { d.body.actions[`a${i}`] = { keys: Array.from({ length: 240 }, (_, k) => ({ time: k / 24, ...Object.fromEntries(d.body.bones.slice(4).map((b, j) => [b.name, { turn: [Math.sin(k * 0.7 + j + i) * 40, Math.cos(k * 1.3 + j) * 40, 0] }])) })) }; d.gestures[`a${i}`] = 'wriggles'; } };
   assert.deepEqual(checked(heavy(1)).errors, []);
   lacks(checked(heavy(6)), 'KB: the device takes 256.0 KB. Its largest actions: a');
+});
+
+// ---- life (docs/CREATURE.md, "Life")
+const breathing = (d) => { d.life = { signals: { breath: { wave: { _: 0.3, sleepy: 0.15 } } }, layers: [{ layer: 'breathing', turn: { bones: 'body', squash: ['breath', 0.04] } }] }; };
+
+test('life: one breathing layer compiles to a signal the device runs and a turn of the body', () => {
+  const r = checked(breathing);
+  assert.deepEqual([r.errors, r.warnings], [[], []]);
+  const life = r.pkg.creature.life;
+  assert.deepEqual(life.layers, [{ by: 'breath', nodes: [1], sq: 0.04 }]);
+  assert.deepEqual(life.ch.map((c) => c[0]), ['_breath.ph', 'breath'], 'its phase, then the wave');
+  assert.deepEqual(life.ch[0][1], [[{ _: 0.3, sleepy: -0.15 }]], 'the rate a mood table: 0.3, less 0.15 as sleepy weighs in');
+  assert.equal(r.life.steps, 1);
+  assert.deepEqual(checkPackage(r.pkg, 'pip'), []);
+  assert.equal(checked().pkg.creature.life, undefined, 'no life block, no life');
+});
+
+test('life: a layer\'s clip keeps only what moves, and counts as played', () => {
+  const r = checked((d) => {
+    breathing(d);
+    d.body.actions.nod_pose = { keys: [{ time: 0, head: { turn: [0, 0, 0] }, tail: { turn: [0, 0, 0] } }, { time: 1, head: { turn: [20, 0, 0] }, tail: { turn: [0, 0, 0] } }] };
+    d.life.layers.push({ layer: 'nodding', clip: 'nod_pose', by: 'breath', zero: 0.5, weight: 'free' });
+  });
+  assert.deepEqual([r.errors, r.warnings], [[], []], 'no "nothing plays the action nod_pose"');
+  assert.deepEqual(r.pkg.creature.rig.clips.nod_pose.ch.map((c) => c[0]), [2], 'the head only: the held tail is left out');
+  assert.deepEqual(r.pkg.creature.life.layers[1], { by: 'breath', w: '_lw.nodding', clip: 'nod_pose', zero: 0.5 });
+  assert.deepEqual(r.pkg.creature.life.ch.at(-1), ['_lw.nodding', [[1, '@free']], { sp: [36, 12], keep: 1 }], 'its weight eased');
+});
+
+test('life: signals come after what they read; hold and every are events', () => {
+  const r = checked((d) => {
+    d.life = { signals: {
+      rate: { from: 'calm', map: [[0, 0.2], [1, 0.4]] },
+      calm: { sum: [['energy', 1], ['tired', -0.3]] },
+      energy: { mood: { _: 0.5, sleepy: 0.1, working: 0.8 } },
+      tired: { from: 'idle_time', map: [[60, 0], [300, 1]] },
+      blink: { every: { _: [3, 7], sleepy: [8, 14] }, double: 0.1 },
+      look: { hold: [0.5, 3], range: [-1, 1], move: 0.12, waits: 'blink' },
+      head: { follow: 'look', lag: 0.25, bounce: 0.2 },
+    }, layers: [{ layer: 'lean', turn: { bones: 'head', y: ['head', 15], z: ['look', 5] } }] };
+  });
+  assert.deepEqual(r.errors, []);
+  const life = r.pkg.creature.life, order = life.ch.map((c) => c[0]);
+  assert.ok(order.indexOf('energy') < order.indexOf('calm') && order.indexOf('tired') < order.indexOf('calm') && order.indexOf('calm') < order.indexOf('rate'), order.join(' '));
+  assert.equal(order[0], '_working', 'working eased, first');
+  assert.deepEqual(Object.keys(life.events), ['blink', 'look']);
+  assert.deepEqual(life.events.look.stop.length, 2, 'look waits: never as a blink is about to start or under way');
+  assert.deepEqual(life.layers.map((l) => [l.by, l.rot]), [['head', [0, 15, 0]], ['look', [0, 0, 5]]], 'one layer for each signal a turn reads');
+  assert.deepEqual(life.ch.find((c) => c[0] === 'rate')[1], [[0.2], [0.2, ['clamp', '@calm', 0, 1]]], 'a map, as straight lines');
+  assert.deepEqual(life.ch.find((c) => c[0] === 'tired')[1], [[-0.25], [1 / 240, ['clamp', '@idle_time', 60, 300]]], 'nothing before 60 s, all of it from 300 s');
+});
+
+test('life: check says what is wrong in plain words', () => {
+  const sig = (s, more = {}) => (d) => { breathing(d); Object.assign(d.life.signals, s); Object.assign(d.life, more); };
+  catches({
+    'signal breath reads "enrgy", which is not a signal': (d) => { breathing(d); d.life.signals.breath = { wave: 'enrgy' }; },
+    'signal breath reads "voice_out", which Molty\'s firmware does not give yet': (d) => { breathing(d); d.life.signals.breath = { wave: 'voice_out' }; },
+    'signals read each other in a loop: a -> b -> a': sig({ a: { from: 'b' }, b: { sum: [['a', 1]] } }),
+    'signal spin: say what kind it is, one of mood, from, sum, wave, noise, hold, every, follow': sig({ spin: { twirl: 1 } }),
+    'signal jaw: a pulse on a trigger (on) is not in Molty\'s firmware yet': sig({ jaw: { on: 'touch' } }),
+    'signal free: free is a name the device uses': sig({ free: { mood: { _: 1 } } }),
+    'signal e: mood names grumpy, which is not a mood': sig({ e: { mood: { _: 1, grumpy: 0 } } }),
+    'signal b: every must be [least, most], or a mood table of them': sig({ b: { every: 3 } }),
+    'signal w: a wave signal does not take lag': sig({ w: { wave: 0.3, lag: 1 } }),
+    'layer blink: there is no action named blink_pose (actions: idle, hop)': (d) => { breathing(d); d.life.layers.push({ layer: 'blink', clip: 'blink_pose', by: 'breath' }); },
+    'layer breathing: there is no bone named belly (bones: root, body, head, tail)': (d) => { breathing(d); d.life.layers[0].turn.bones = 'belly'; },
+    'layer breathing: by "breth" is not a signal': (d) => { breathing(d); d.life.layers[0] = { layer: 'breathing', clip: 'hop', by: 'breth' }; },
+    'layer breathing: ripple is not in Molty\'s firmware yet': (d) => { breathing(d); d.life.layers[0].turn.ripple = 0.06; },
+    'layer mouth: mode replace is not in Molty\'s firmware yet': (d) => { breathing(d); d.life.layers.push({ layer: 'mouth', clip: 'hop', by: 'breath', mode: 'replace' }); },
+    'life.moments: moments (gestures started by a signal) are not in Molty\'s firmware yet': (d) => { breathing(d); d.life.moments = [{ on: 'breath', play: 'hop' }]; },
+  });
+});
+
+test('life: the device\'s limits: 64 signals, 16 layers, 600 steps a frame', () => {
+  const many = (n) => (d) => { breathing(d); for (let i = 0; i < n; i++) d.life.signals[`s${i}`] = { sum: [['breath', 1], ['breath', 1], ['breath', 1], ['breath', 1], ['breath', 1], ['breath', 1], ['breath', 1], ['breath', 1], ['breath', 1], ['breath', 1]] }; };
+  assert.deepEqual(checked(many(59)).errors, [], '60 signals, 591 steps');
+  assert.ok(checked(many(60)).errors.some((e) => e.message.includes('life takes 601 steps a frame: the device gives it 600')));
+  assert.ok(checked(many(64)).errors.some((e) => e.message.includes('life.signals holds at most 64 (it has 65)') || e.message.includes('a Molty holds 64')));
+  const layers = (n) => (d) => { breathing(d); for (let i = 1; i < n; i++) d.life.layers.push({ layer: `l${i}`, turn: { bones: 'head', x: ['breath', 1] } }); };
+  assert.deepEqual(checked(layers(16)).errors, []);
+  assert.ok(checked(layers(17)).errors.some((e) => e.message.includes('17')), 'a 17th layer');
 });
 
 test('the rounding is the first exporter\'s: six digits and halves to even, as Python does them', () => {

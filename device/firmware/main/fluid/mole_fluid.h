@@ -24,6 +24,16 @@
  *               on out of the box; kept in NVS; GET reports it),
  *         idle_life: "lively"|"calm"|"off" (how much the creature moves by itself:
  *               fluid_director.h; lively out of the box; kept in NVS; GET reports it),
+ *         screen_off_battery_s, screen_off_usb_s: 0 (never) | 10..3600 (the screen goes off
+ *               this long after the creature fell asleep, on battery / on USB: screen_nap.h;
+ *               60 and 600 out of the box; kept in NVS; GET reports them),
+ *         sky: true|false (the moon and the falling stars behind the creature: sky.h; on out
+ *               of the box; kept in NVS; GET reports it),
+ *         weather_on: true|false (the weather on the glass at all: weather.h; on out of the box;
+ *               kept in NVS; GET reports it),
+ *         weather: "clear"|"drizzle"|"rain"|"downpour" or {"kind": that, "s": 10..21600} (told: it
+ *               eases there, holds s seconds, 3600 when not given, then eases back to clear; RAM
+ *               only; GET reports {kind, s_left, level 0..3, wet 0..1}),
  *         act: "nod"|... (a one-shot action, cute_act.h; GET reports the one playing),
  *         hold: true (with "text": hold the last word instead of returning to the
  *               creature 1.5 s after it; the pairing code, the Improv "hi"),
@@ -111,15 +121,39 @@ esp_err_t mole_fluid_scene(mole_scene_op_t op, struct scene *sc);
  *  task; a no-op before init. */
 typedef enum { MOLE_FLUID_SHAKE, MOLE_FLUID_BUTTON } mole_fluid_event_t;
 void mole_fluid_event(mole_fluid_event_t ev);
-/** The screen off (false) or on (power.h's switch, sense.c's button). Off, the fluid stops
+/** The screen off (false) or on (power.h's switch, sense.c's button), by hand. Off, the fluid stops
  *  simulating and drawing (the CPU's share of the battery) and the panel goes to sleep
  *  (molty_display_power; a board without it gets one black frame). Requests keep queueing
  *  while it is off. It comes back on by itself for something the human must see: a touch
- *  (that touch is not a tap), new words (a say, the pairing code), a question or a listen.
- *  Safe from any task; a no-op before init. */
+ *  (that touch is not a tap), a button, a shake, new words (a say, the pairing code), a question
+ *  or a listen. It also goes off by itself a while after the creature fell asleep (screen_nap.h:
+ *  the settings screen_off_battery_s / screen_off_usb_s); such a nap ends for those, for a
+ *  pick-up and for anything the agent shows, the creature awake. An on by hand starts that
+ *  timer again. Safe from any task; a no-op before init. */
 void mole_fluid_screen(bool on);
 /** The screen is on (true before init). */
 bool mole_fluid_screen_on(void);
+/** Molty was picked up (sense.c, nap_lift_feed): ends a nap. Any task. */
+void mole_fluid_lifted(void);
+/** The power Molty is on (power.c, screen_nap.h NAP_POWER_*): which nap time counts. Unknown (the
+ *  default) never naps. Any task. */
+void mole_fluid_power(int power);
+/** The nap settings (s; 0 = never) and their generation: 0 while they are as NVS has them, else
+ *  it moves with each change (power.c keeps them once the screen is calm). Any task. */
+unsigned mole_fluid_nap_setting(uint32_t *battery_s, uint32_t *usb_s);
+/** The sky's setting (on: the moon and the falling stars behind the creature, sky.h) and its generation, as
+ *  mole_fluid_nap_setting (power.c keeps it once the screen is calm). Any task. */
+unsigned mole_fluid_sky_setting(bool *on);
+/** The weather's setting (on: the weather on the glass, weather.h) and its generation, as mole_fluid_sky_setting. Any
+ *  task. */
+unsigned mole_fluid_weather_setting(bool *on);
+/** The time now, unix s UTC (the network's: net_clock.c; the web page's: wm_time); <= 0: not known (no sky). It runs on
+ *  from here by the uptime clock. Any task. */
+void mole_fluid_utc(double unix_s);
+/** The time now as the fluid has it (mole_fluid_utc run on), 0 not known. Any task. */
+double mole_fluid_utc_now(void);
+/** Do not disturb is on (power.c): no falling star while the creature sleeps then. Any task. */
+void mole_fluid_dnd(bool on);
 /** Power off's goodbye (fluid_director.h "fd_bye"): the screen on, "bye!" condenses, melts
  *  into a pond and the panel fades to black; then mole_fluid_goodbye_done. From here the
  *  screen stays on and every request is ignored. Safe from any task. */

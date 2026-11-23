@@ -14,7 +14,7 @@ import sharp from "sharp";
 import { listing } from "../../../../tools/web-molty/fidelity.mjs";
 import { STILL, renderStill } from "../molty-still.mjs";
 import { WORDS } from "../../src/config/words.mjs";
-import { landingActions, sampleScene, showcaseActions, showcaseScenes, type CreaturePackage } from "../../src/features/molty/actions.ts";
+import { STAGE_QUESTION, answered, everyAction, landingActions, sampleScene, showcaseActions, showcaseScenes, type CreaturePackage } from "../../src/features/molty/actions.ts";
 
 const ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
 const read = (path: string) => readFileSync(join(ROOT, path));
@@ -35,14 +35,22 @@ test("the firmware sources have not moved on without the module", () => {
   assert.equal(h.digest("hex"), manifest.sources.sha256, `a source of the web Molty changed since it was built: ${stale}`);
 });
 
-test("the module still draws the frames it was checked on against the native build", async () => {
-  const cwd = process.cwd();
+// The listing's frames are the same on every machine, however slow: the module never reads the computer's clock while
+// it plays the script (web/build.sh WEB_SDK_CLOCK: the drawer's budgets run on web_sdk.c's clock, which stands still in a
+// task). Played here under a clock that leaps a second on every read (a machine slower than any), so a budget timed
+// by the real clock would end early and change the frames; none read means a clock that stands still gives them too.
+test("the module still draws the frames it was checked on against the native build, on a machine of any speed", async () => {
+  const cwd = process.cwd(), now = performance.now;
+  let reads = 0;
   process.chdir(ROOT); // the script's paths
+  performance.now = () => now.call(performance) + 1000 * ++reads;
   try {
     const frames = await listing(wasm, read(manifest.fidelity.script).toString());
     assert.equal(frames.trimEnd().split("\n").length, manifest.fidelity.frames);
     assert.equal(sha(frames), manifest.fidelity.sha256, `the fidelity script, or a package it plays, changed: ${stale}`);
+    assert.equal(reads, 0, "the module read the computer's clock while it played the script: its frames depend on the machine's speed");
   } finally {
+    performance.now = now;
     process.chdir(cwd);
   }
 });
@@ -58,12 +66,30 @@ test("the cat's headings take its own body colour", () => {
 
 test("the stage's lists are the package's own: every mood, every gesture, its words for each", () => {
   const commands = read("device/firmware/test/host/fixtures/astrology-commands.jsonl").toString();
-  const all = showcaseActions(cat, showcaseScenes(commands)).flatMap((g) => g.actions);
+  const all = everyAction(showcaseActions(cat, showcaseScenes(commands)));
   for (const mood of Object.keys(cat.creature.moods)) assert.ok(all.some((a) => a.kind === "mood" && a.name === mood), mood);
   for (const g of Object.keys(cat.creature.gestures))
     assert.ok(all.some((a) => (g === "shaken" ? a.kind === "shake" : a.kind === "act" && a.name === g)), g);
   for (const a of all) assert.ok(a.about.length > 10, `${a.name} is described`);
-  const own = landingActions(cat).find((g) => g.label === "its own")!.actions.map((a) => a.name);
+  const own = landingActions(cat).find((g) => g.label === "its own")!.rows.flat().map((a) => a.name);
   assert.deepEqual(own, ["eat", "yarn", "walk", "shake"]);
   assert.equal(sampleScene(commands, "chart").layout, "chart");
+});
+
+test("feed the cat? yes: it eats; no: it startles a moment; anything else: nothing more", () => {
+  const commands = read("device/firmware/test/host/fixtures/astrology-commands.jsonl").toString();
+  assert.deepEqual(STAGE_QUESTION.question.options, ["yes", "no"]);
+  for (const groups of [landingActions(cat), showcaseActions(cat, showcaseScenes(commands))]) {
+    const yes = answered(groups, 0)!;
+    assert.equal(yes.kind, "act");
+    assert.equal(yes.name, "eat");
+    assert.equal(yes.about, cat.creature.about.gestures.eat);
+    const no = answered(groups, 1)!;
+    assert.equal(no.kind, "mood");
+    assert.equal(no.name, "surprised");
+    assert.equal(no.kind === "mood" && no.hold, 2);
+    assert.equal(no.about, cat.creature.about.moods.surprised);
+    assert.equal(answered(groups, 2), null);
+    assert.equal(answered(groups, -1), null);
+  }
 });

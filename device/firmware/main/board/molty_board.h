@@ -146,6 +146,8 @@ typedef struct {
                             * audio; the VAD follows its noise floor, so it needs no retune) */
     bool      (*button_pressed)(molty_button_t b);
     esp_err_t (*battery)(molty_battery_t *out);                     /* fails on a failed read   */
+    uint8_t   haptic_gpio; /* a vibration motor's switch, HIGH = on (haptic.h); 0 = none (GPIO0 is a
+                            * strapping pin, never a motor's). The board holds it LOW in early_init */
 } molty_board_t;
 
 /** Defined by the selected board's board.c. */
@@ -250,6 +252,9 @@ esp_err_t molty_mic_record(uint32_t rate_hz, uint32_t ms, int16_t **out, size_t 
 esp_err_t molty_mic_stream_start(uint32_t rate_hz, uint32_t chunk_ms, uint8_t gain);
 /** The board's listen gain (molty_board_t.mic_gain; 8 when it sets none). */
 uint8_t   molty_mic_gain(void);
+/** The vibration motor's pin (molty_board_t.haptic_gpio); -1 without one, or on hardware this image
+ *  is not for (molty_board_mismatch, so only after molty_board_init). */
+int       molty_haptic_gpio(void);
 esp_err_t molty_mic_stream_read(int16_t *buf, size_t chunk_samples, size_t *got);
 void      molty_mic_stream_stop(void);
 bool      molty_mic_stream_active(void);

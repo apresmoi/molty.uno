@@ -165,6 +165,7 @@ class SayRec:
     chirp_delay_s: float = 0.0
     bad: list[str] = field(default_factory=list)
     done: asyncio.Event = field(default_factory=asyncio.Event)
+    tap_at: float | None = None  # the human tapped the screen while this say played (wall)
 
     def play_time(self, sample: int) -> float | None:
         """Wall time the speaker plays `sample` (None before that audio arrived)."""
@@ -234,6 +235,9 @@ class SimDevice:
         self._send_lock = asyncio.Lock()
         self._tasks: set[asyncio.Task] = set()
         self.moods: list[tuple[float, str, bool]] = []  # (wall, mood, react); acts as (wall, "act:<name>", True)
+        # the next say is tapped this many seconds after its first sample. Tap is bound to `event`
+        # out of the box (sense/gesture.c gesture_binds_default): a `tap` event, the say plays on.
+        self.tap_after_s: float | None = None
         self._mood_gen = 0
 
     # ---------------- link ----------------
@@ -649,6 +653,9 @@ class SimDevice:
                 delay = min(max(0.0, self._chirp_until - now), CHIRP_CUT_S)  # the chirp is cut first
                 rec.chirp_delay_s = delay
                 rec.play_start = rec.cursor = now + delay
+                if self.tap_after_s is not None:
+                    self._spawn(self._tap(rec, rec.play_start + self.tap_after_s))
+                    self.tap_after_s = None
             if now > rec.cursor:  # the speaker ran dry before this frame came
                 rec.underrun_s += now - rec.cursor
                 rec.underruns += 1
@@ -661,6 +668,11 @@ class SimDevice:
         if h.get("end"):
             rec.end_at = now
             self._spawn(self._say_done(rec))
+
+    async def _tap(self, rec: SayRec, at: float) -> None:
+        await asyncio.sleep(max(0.0, at - time.monotonic()))
+        rec.tap_at = time.monotonic()
+        await self._send_json({"t": "evt", "name": "tap", "data": {"x": 0.5, "y": 0.5}})
 
     async def _say_done(self, rec: SayRec) -> None:
         left = (rec.cursor or time.monotonic()) + DMA_TAIL_S - time.monotonic()

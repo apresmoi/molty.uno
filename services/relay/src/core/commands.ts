@@ -18,7 +18,13 @@ export const PROGRESS_CAP = "progress";
 export const MAX_PROGRESS_STEP = 80;
 /** A say's `[working]` cue: never a device mark. The relay plays the say to its end, then sets the mood. */
 export const WORKING_MOOD = "working";
-export const COMMANDS = ["status", "state", "mood", "show", "say", "quick", "keep", "listen", "volume", "imu", "diag", "log", "act", "progress", "gestures", "pkg.install", "pkg.remove", "pkg.list", "pkg.available", "scene.play", "scene.queue", "scene.clear", "creature.select", "creature.list"] as const;
+export const COMMANDS = ["status", "state", "mood", "show", "say", "quick", "keep", "listen", "volume", "imu", "diag", "log", "act", "buzz", "progress", "gestures", "pkg.install", "pkg.remove", "pkg.list", "pkg.available", "scene.play", "scene.queue", "scene.clear", "creature.select", "creature.list"] as const;
+/** `buzz {pattern | ms, strength?}`: the vibration motor (firmware cap `haptic`, only on boards that have one). A pattern is
+ *  a name the device knows (tick, tap, double, nudge: unknown_pattern otherwise) or [on, off, on, ...] ms. */
+export const HAPTIC_CAP = "haptic";
+export const BUZZ_NAME_RE = /^[a-z][a-z0-9_]{0,15}$/;
+export const MAX_BUZZ_SEGS = 8;
+export const MAX_BUZZ_MS = 2000;
 /** What the human's inputs can do (`gestures`; firmware: sense/gesture.h). */
 export const GESTURE_INPUTS = ["tap", "double_tap", "button_accept", "button_reject"] as const;
 export const GESTURE_ACTIONS = ["none", "talk", "event", "stop", "screen", "hold"] as const;
@@ -416,6 +422,24 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
         out.done = args.done;
       }
       return { name: n, args: out, job: false };
+    }
+    case "buzz": {
+      // relay-checked shape; the device knows the names. in_reply_to: relay-only (do not disturb lets a reply through)
+      only(args, ["pattern", "ms", "strength", "in_reply_to"]);
+      if ((args.pattern === undefined) === (args.ms === undefined)) throw invalid('give pattern (a name, e.g. "double", or [on, off, on, ...] ms) or ms, not both');
+      const out: JsonObject = {};
+      if (args.ms !== undefined) out.ms = int(args.ms, "ms", 1, MAX_BUZZ_MS);
+      else if (typeof args.pattern === "string") {
+        if (!BUZZ_NAME_RE.test(args.pattern)) throw invalid("pattern must be a name (tick, tap, double, nudge) or an array of ms");
+        out.pattern = args.pattern;
+      } else {
+        const p = args.pattern;
+        if (!Array.isArray(p) || p.length < 1 || p.length > MAX_BUZZ_SEGS) throw invalid(`pattern must be a name or 1..${MAX_BUZZ_SEGS} ms: on, off, on, ...`);
+        out.pattern = p.map((v, i) => int(v, `pattern[${i}]`, 0, MAX_BUZZ_MS));
+      }
+      if (args.strength !== undefined) out.strength = int(args.strength, "strength", 0, 100);
+      const reply = turnId(args.in_reply_to);
+      return { name: n, args: out, job: false, ...(reply !== undefined ? { in_reply_to: reply } : {}) };
     }
     case "act":
       only(args, ["action"]);

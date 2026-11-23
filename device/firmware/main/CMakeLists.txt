@@ -76,12 +76,14 @@ idf_component_register(
         "app_main.c"
         # net: USB-C NCM + Wi-Fi + mDNS, the HTTP API, console page + SPIFFS
         "net/network.c"
-        "net/wifi_retry.c"       # reconnect after a Wi-Fi drop (host-tested)
+        "net/wifi_retry.c"       # reconnect after a Wi-Fi drop, the lease ladder (host-tested)
+        "net/ap_pick.c"          # which AP of the saved network to join (host-tested)
         "net/http.c"
         "net/recv_bound.c"       # a request body read that gives up on a silent sender (host-tested)
         "net/console_store.c"
         "net/improv_proto.c"     # Wi-Fi setup over a serial console (boards with MOLTY_CAP_SERIAL)
         "net/improv_serial.c"
+        "net/net_clock.c"        # the date from network time (SNTP), for the sky
         # fluid: the fluid-of-characters creature (+ speed reader, 5x7 font)
         "fluid/mole_fluid.c"
         "fluid/fluid_director.c"  # what is shown when: states, moods, idle life, status
@@ -93,6 +95,7 @@ idf_component_register(
         "fluid/fluid_fine.c"      # a scene's fine dust in high definition
         "fluid/glyph_rsvp.c"
         "fluid/glyph_font.c"
+        "fluid/screen_nap.c"      # the screen off a while after the creature fell asleep (host-tested)
         # creature: registry + the .molty cute-kit runtime
         "creature/mole_creature.c"
         "creature/cute_spec.c"
@@ -105,6 +108,8 @@ idf_component_register(
         "creature/creature_clip.c"     # a rigged creature's baked clips and routes (clip-player.js)
         "creature/creature_dots.c"     # ... drawn straight on the braille dots (clip-dots.js)
         "creature/creature_ring.c"     # ... the listen / question / progress rings over them, as dust
+        "creature/sky.c"               # ... the moon and the falling stars behind them (host-tested)
+        "creature/weather.c"           # ... the weather on the glass: rain, its rings, a wet floor (host-tested)
         # link: agent link to the relay (WSS, pairing, audio)
         "link/link_protocol.c"
         "link/link_identity.c"
@@ -134,6 +139,8 @@ idf_component_register(
         "sense/shake_settle.c"   # shake to talk: when the handling noise is over (host-tested)
         "sense/sense.c"
         "power/power.c"          # screen off, do not disturb, the battery history (/api/power)
+        "haptic/haptic_plan.c"   # the vibration motor: a buzz's segments, cap, quiet window (plain C, host-tested)
+        "haptic/haptic.c"        # ... its PWM and timer, /api/haptic, the link's buzz
         # board: the seam to the hardware (molty_board.h) + the selected board's drivers
         "board/molty_board.c"
         ${MOLTY_BOARD_SRCS}
@@ -156,6 +163,7 @@ idf_component_register(
         "audio"
         "sense"
         "power"
+        "haptic"
         "board"
         "diag"
         ${MOLTY_BOARD_INCLUDE_DIRS}
@@ -183,6 +191,8 @@ idf_component_register(
         espcoredump    # GET /api/coredump
         esp_partition  # coredump partition reads
         esp_driver_uart  # Improv Wi-Fi setup on the console UART (net/improv_serial.c)
+        esp_driver_ledc  # the vibration motor's PWM (haptic/haptic.c)
+        esp_driver_gpio
         ${MOLTY_BOARD_REQUIRES}   # the board's drivers (its board.cmake)
     # Fallback page for "/" when no console is stored in SPIFFS.
     EMBED_TXTFILES

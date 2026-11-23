@@ -36,8 +36,25 @@ struct cpk {
     unsigned act_n; uint32_t frame;
     mood_engine_t eng;
     bool work;
+    const struct sky *sky;      /* the sky behind a rigged one (cpk_sky), or NULL                       */
+    const struct weather *wx;   /* the weather on its glass (cpk_weather), or NULL                       */
+    /* its life: the inputs' slots in the player and what they read, each layer's signals (-1: weight 1) */
+    int in_free, in_idle, in_life; float idle_s, life;
+    int16_t lay_by[CC_LAYERS_MAX], lay_w[CC_LAYERS_MAX];
     cp_mark_t marks[MARKS_MAX];
 };
+
+/* the life layers' signals by name (creature.life.layers[i].by and .w), as the player's slots */
+static bool bind_layers(cpk_t *k, const cJSON *cr) {
+    const cJSON *L = cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(cr, "life"), "layers");
+    for (int i = 0; i < cc_layers(k->clip); i++) {
+        const cJSON *l = cJSON_GetArrayItem(L, i), *by = cJSON_GetObjectItemCaseSensitive(l, "by"), *w = cJSON_GetObjectItemCaseSensitive(l, "w");
+        k->lay_by[i] = (int16_t)cp_slot(k->cp, by->valuestring);
+        k->lay_w[i] = (int16_t)(cJSON_IsString(w) ? cp_slot(k->cp, w->valuestring) : -1);
+        if (k->lay_by[i] < 0 || (w && k->lay_w[i] < 0)) return false;
+    }
+    return true;
+}
 
 cpk_t *cpk_create(const char *json, size_t len, uint32_t seed, const char **err) {
     cpk_t *k = K_CALLOC(sizeof(cpk_t));
@@ -47,8 +64,12 @@ cpk_t *cpk_create(const char *json, size_t len, uint32_t seed, const char **err)
         cJSON *j = cJSON_ParseWithLength(json, len);
         k->clip = j ? cc_create(cJSON_GetObjectItemCaseSensitive(j, "creature"), err) : NULL;
         if (!j) *err = "package: json";
+        if (k->clip && !bind_layers(k, cJSON_GetObjectItemCaseSensitive(j, "creature"))) { cc_destroy(k->clip); k->clip = NULL; *err = "life: a layer's signal"; }
         cJSON_Delete(j);
         if (!k->clip) { cpk_destroy(k); return NULL; }
+        cp_seed(k->cp, seed);
+        k->in_free = cp_slot(k->cp, "free"); k->in_idle = cp_slot(k->cp, "idle_time"); k->in_life = cp_slot(k->cp, "life");
+        k->life = 1.f;
     } else if (k->cp && !(k->body = cb_create(k->cp))) *err = "oom";
     if (!k->body && !k->clip) { cpk_destroy(k); return NULL; }
     me_init(&k->eng, seed);
@@ -69,6 +90,7 @@ void cpk_destroy(cpk_t *k) {
 
 mood_engine_t *cpk_engine(cpk_t *k) { return &k->eng; }
 void cpk_set_work(cpk_t *k, bool on) { if (k) k->work = on; }
+void cpk_set_idle(cpk_t *k, float idle_s, float life) { if (k) { k->idle_s = idle_s; k->life = life; } }
 const cp_t *cpk_player(const cpk_t *k) { return k->cp; }
 const cb_t *cpk_body(const cpk_t *k) { return k->body; }
 int cpk_tris(const cpk_t *k) { return k && k->body ? cb_tris(k->body) : 0; }
@@ -82,6 +104,10 @@ uint32_t cpk_draw_frame(const cpk_t *k) { return k ? FLUID_FRAME(k->frame, cr_il
 void cpk_voice(cpk_t *k, float level) { if (k) cr_voice(k->ring, level); }
 const uint8_t *cpk_cells_creature(const cpk_t *k) { return k && k->dots ? cd_creature(k->dots) : NULL; }
 void cpk_listen(cpk_t *k, int32_t rgb, float ink) { if (k && k->ring) cr_listen(k->ring, rgb, ink); }
+void cpk_sky(cpk_t *k, const struct sky *s) { if (k) k->sky = s; }
+void cpk_weather(cpk_t *k, const struct weather *w) { if (k) k->wx = w; }
+void cpk_weather_dots(const cpk_t *k, int out[4]) { if (k && k->dots) cd_weather_dots(k->dots, out); else for (int q = 0; q < 4; q++) out[q] = 0; }
+bool cpk_gesture(cpk_t *k, const char *name) { return k && k->clip && cc_free(k->clip) && cc_act(k->clip, name); }
 void cpk_set_share(cpk_t *k, int pct) { if (k && k->dots) cd_set_share(k->dots, pct); }
 void cpk_come(cpk_t *k, const char *first) { if (k && k->clip) cc_come(k->clip, first); }
 const cc_t *cpk_clip(const cpk_t *k) { return k ? k->clip : NULL; }
@@ -99,10 +125,22 @@ static void clip_frame(cpk_t *k, fluid_sim_t *s, float dt) {
     if (g->mood >= 0 && g->mood < 7) cc_mood(k->clip, MOOD_NAMES[g->mood]);
     if (g->act >= 0 && g->act_n != k->act_n && !cc_coming(k->clip)) { cc_act(k->clip, cp_gesture_name(k->cp, g->act)); }   /* a call first */
     k->act_n = g->act_n;
+    if (cp_life(k->cp)) {                          /* its life: the device's inputs, its signals, its layers' places */
+        cp_set(k->cp, k->in_free, cc_free(k->clip) ? 1.f : 0.f);
+        cp_set(k->cp, k->in_idle, k->idle_s);
+        cp_set(k->cp, k->in_life, k->life);
+        cp_pose_t p = { .mood = g->mood, .work = k->work };
+        static const cp_walk_t still;
+        cp_pose(k->cp, &p, dt, NULL, NULL, 0.f, &still);
+        for (int i = 0; i < cc_layers(k->clip); i++) cc_layer(k->clip, i, cp_get(k->cp, k->lay_by[i]), k->lay_w[i] < 0 ? 1.f : cp_get(k->cp, k->lay_w[i]));
+    }
     cc_update(k->clip, dt);
     if (!k->dots) k->dots = cd_create(k->clip, s->W, s->H);
     if (!k->dots) { FLUID_PROF_END(FP_K_PLAY, c0); return; }
     FLUID_PROF_END(FP_K_PLAY, c0);
+    if (k->sky) cd_sky(k->dots, k->sky->moon_c, k->sky->nmoon_shown, k->sky->star_c, k->sky->nstar);
+    else cd_sky(k->dots, NULL, 0, NULL, 0);
+    cd_weather(k->dots, k->wx, s->h);
     cd_draw(k->dots, k->clip, k->frame++);
     {   /* the dots' stages into the fluid's profile (GET /api/creature/state prof_ms.k_*) */
         uint32_t st[CD_STAGES] = { 0 };

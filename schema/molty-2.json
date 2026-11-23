@@ -26,7 +26,17 @@
     "feet": { "type": "array", "items": { "type": "string" }, "description": "The bones that touch the floor, so a planted foot stays put between two actions. The point is the bone's start, or the one the body gives it (foot)." },
     "center": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "string" }, "description": "Two bones the view stays between. Left out: the whole body's first bone." },
     "blend": { "type": "number", "minimum": 0, "maximum": 2, "description": "Seconds one action melts into the next. Default 0.3." },
-    "fps": { "type": "integer", "minimum": 1, "maximum": 60, "description": "Frames a second the actions are read at. Default 24." }
+    "fps": { "type": "integer", "minimum": 1, "maximum": 60, "description": "Frames a second the actions are read at. Default 24." },
+    "life": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "signals": { "type": "object", "maxProperties": 64, "propertyNames": { "$ref": "#/$defs/name" }, "additionalProperties": { "type": "object" }, "description": "Named numbers that move, each one kind: mood, from, sum, wave, noise, hold, every or follow. A number in one may be another signal's name or a mood table." },
+        "layers": { "type": "array", "maxItems": 16, "items": { "type": "object" }, "description": "What the signals move, over the mood loops: { layer, clip, by, zero, weight, bones } plays an action at the place a signal sets; { layer, turn: { bones, x, y, z, squash } } turns bones by one." },
+        "moments": { "type": "array", "description": "Gestures started by a signal: not in Molty's firmware yet." }
+      },
+      "description": "How it moves on its own over its mood loops: breathing, blinks, where it looks. Guide: docs/CREATURE.md, Life."
+    }
   },
   "$defs": {
     "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,23}$", "errorMessage": "must be a snake_case name: a lower-case letter, then up to 23 of a-z, 0-9 and _" },

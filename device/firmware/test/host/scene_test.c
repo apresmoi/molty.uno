@@ -2663,6 +2663,9 @@ typedef struct {
     int sendp;                         /* (a send this long guessed each frame, us: the device's slow ones) */
     int room;                          /* (the gate's room told each frame, us: the device's frame drawn in one refresh) */
     int hole;                          /* (a frame of the change whose inputs have no shapes, as a reading's teardown: -1 none) */
+    float wave, wx, wy;                /* a tap's ripple at (wx, wy) as the change starts, the water then stepped as the
+                                        * device's (0: still water) */
+    uint16_t *tape;                    /* (each of the change's first MORPH_TAPE frames' glass, if set) */
 } morph_rig_t;
 /* what a change did (morph_run): its frames, the panel model's ms a frame (mean, worst, over 33), what it showed */
 typedef struct {
@@ -2682,6 +2685,7 @@ typedef struct {
     double mean, worst;
 } morph_res_t;
 enum { MK_CAT, MK_SCENE, MK_WORD, MK_ASK };
+#define MORPH_TAPE 64
 #define MORPH_BUDGET (FLUID_MORPH_CELLS_US - FLUID_MORPH_SPENT_US)   /* (the change's own work a frame, the host's) */
 #define MORPH_STALE 0x1FF8u   /* what the old picture's buffer holds before a change (it is not cleared): never on the glass */
 static int s_morph_stale;
@@ -2727,6 +2731,7 @@ static void morph_inputs(morph_rig_t *r, int kind, scene_shapes_t *hd) {
         r->o = (fluid_draw_opts_t){ .palette = FLUID_PAL_PASTEL, .edge_mode = FLUID_EDGE_CONTOURS, .font = gc_font5x7, .dots = r->ddots, .scene = true };
     }
     fluid_draw_morph_lines(r->d, kind == MK_CAT ? r->catline : NULL);   /* (the creature's own cells are its lines) */
+    fluid_draw_morph_order(r->d, kind == MK_ASK ? fluid_askview_order(r->v) : NULL);   /* (a question's answers grow) */
     r->o.time = r->now;
 }
 /* The look changes to kind's (the scene's dust asked for at once and built `late` frames after, as the device builds it;
@@ -2752,6 +2757,10 @@ static void morph_run(morph_rig_t *r, int kind, scene_t *sc, uint32_t look, int 
     uint16_t *sheet = getenv("MORPH_DUMP") ? calloc((size_t)COLS * S * (TILES / COLS) * S, 2) : NULL;
     for (int f = 0; f < 200; f++, r->frame++) {
         r->now += 1.f / 30.f;
+        if (r->wave > 0.f) {
+            if (f == 0) fluid_sim_impulse(r->s, r->wx, r->wy, r->wave, 0.09f);
+            fluid_sim_step(r->s, 1.f / 60.f); fluid_sim_step(r->s, 1.f / 60.f);
+        }
         if (sc) {
             scene_fill(r->s, sc, 1.f, NULL, r->L, &nl, r->dots, &hd);
             if (kind == MK_SCENE && f == 0) { const int n = scene_full_shapes(r->s, sc, 1.f, r->full, &key); fluid_fine_want(r->fine, look, key, true, r->full, n, FLUID_PAL_PASTEL); }
@@ -2778,6 +2787,7 @@ static void morph_run(morph_rig_t *r, int kind, scene_t *sc, uint32_t look, int 
         win_log_t L = { &r->g, 0, 0, { { 0 } }, &q };
         if (r->tx) fluid_draw_glass_sender(split_take, &q);
         fluid_draw_send(r->d, &r->o, &(fluid_overlay_t){ 0 }, FLUID_MARK_NONE, full, r->wbuf, 4096, r->tx ? send_log : send_glass, r->tx ? (void *)&L : (void *)&r->g);
+        if (r->tape && f < MORPH_TAPE) memcpy(r->tape + (size_t)f * S * S, r->g.px, (size_t)S * S * 2);
         if (r->tx) {                                    /* (the frame's end: its queued windows sent, each as it was queued) */
             res->queued += q.taken; q.taken = 0;
             split_drain(&q, r->d, &L);
@@ -2941,7 +2951,9 @@ static morph_rig_t *morph_rig(cpk_t *cat, const morph_rig_t *like, int job) {
         q.rgb[0] = 0x3ccf96; q.rgb[1] = 0xff6b6b;
         r->v = fluid_askview_create(r->s, &q);
         fluid_ask_follow(&r->scr, true, 1, -1, q.n);
-        fluid_askview_start(r->v, r->s);
+        fluid_askview_start(r->v, r->s);                /* (its touch on the water: the chart's dust rides it in every case) */
+        r->scr.whole = true;                            /* (as mole_fluid.c on the device: the change's new picture, whole) */
+        fluid_askview_start_whole(r->v);
     }
     return r;
 }
@@ -3087,14 +3099,12 @@ static void test_morph(const char *dir, const char *catp, int job) {
         if (RUN[q].na)
             CHECK(abs(res.na - RUN[q].na) * 100 <= RUN[q].na * 10 && abs(res.nb - RUN[q].nb) * 100 <= RUN[q].nb * 20,
                   "%s: the pictures' grains as the prototype's, within 10 and 20 %% (%d, %d against %d, %d)", RUN[q].name, res.na, res.nb, RUN[q].na, RUN[q].nb);
-        /* (a question's letters form in the fluid after its first frames: its picture as read has no lines, they come whole at
-         * the end) */
-        CHECK(res.phase == 0 && (res.new_seen > 0 || RUN[q].kind == MK_ASK), "%s: its phases (old lines gone by 0.32 s, the new from 0.85 s, every grain down by 1.06 s; %d frames off)",
+        CHECK(res.phase == 0 && res.new_seen > 0, "%s: its phases (old lines gone by 0.32 s, the new from 0.85 s, every grain down by 1.06 s; %d frames off)",
               RUN[q].name, res.phase);
         CHECK(res.frames >= 33 && res.frames <= 45 && res.over == 0,
               "%s: one change of 1.5 s at most, every frame inside the panel's (%d frames, worst %.1f ms of %.0f)", RUN[q].name, res.frames, res.worst, MORPH_FIT_MS);
         CHECK(res.hang <= 3, "%s: the dissolve flows into the gathering: at most 3 frames nothing moves between them (%d)", RUN[q].name, res.hang);
-        CHECK((res.gap0 <= -2 || RUN[q].kind == MK_ASK) && res.gapf <= 4,
+        CHECK(res.gap0 <= -2 && res.gapf <= 4,
               "%s: the dust converges into the lines: the new lines coming in 2 frames or more before the last grain is down (%+d), full 4 frames after at most (%+d)",
               RUN[q].name, res.gap0, res.gapf);
         CHECK(res.unsent == 0, "%s: every frame of it all sent, each grain the frame it moves (%d frames not)", RUN[q].name, res.unsent);
@@ -3104,7 +3114,8 @@ static void test_morph(const char *dir, const char *catp, int job) {
                   RUN[q].name, MORPH_BUDGET * 1e-3, res.work * 1e-3, res.idle * 1e-3, FLUID_MORPH_IDLE_US * 1e-3);
         if (r->tx)                                      /* (the device's sender after it: one sender at a time, no queued row changed before it went) */
             CHECK(res.late == 0 && res.mixed == 0, "%s: with the sender, no window's rows changed once queued, none sent beside it (%d, %d)", RUN[q].name, res.late, res.mixed);
-        CHECK(res.even <= 450, "%s: everywhere at once, never by rows: no band of rows takes over 4.5 times its share of the picture in a frame's changes (most %d %%)",
+        /* (a question's answers grow from 6 o'clock up the rim, fluid_askview_order: its lowest bands first, by design) */
+        CHECK(res.even <= 450 || RUN[q].kind == MK_ASK, "%s: everywhere at once, never by rows: no band of rows takes over 4.5 times its share of the picture in a frame's changes (most %d %%)",
               RUN[q].name, res.even);
         {   /* (the prototype's own sparse cloud: its emptiest frame, dissolve-proto's render on the same blocks; the device's
              * flies fewer pairs, FLUID_MORPH_FLY: a lighter cloud, as Juan allowed, up to 8 % more of it empty) */
@@ -3328,6 +3339,44 @@ static void test_morph(const char *dir, const char *catp, int job) {
         morph_rig_free(ra); morph_rig_free(rb);
         s_morph_stale = 0;
     }
+    if (!job) { /* a sign's change of picture with its tap's ripple on the water (the device's: the finger's, mole_fluid.c),
+                 * at full strength and at a control's 0.3 (TAP_SPOT): the same change in its timing and its every stage;
+                 * the fainter ring only moves the dust it crosses, as the water always does (fluid_fine.h: its read takes
+                 * the water's shifts) */
+        morph_rig_t *ra = morph_rig(NULL, r, 0), *rb = morph_rig(NULL, r, 0);
+        morph_res_t a, b;
+        morph_run(ra, MK_WORD, NULL, FLUID_LOOK_GLASS, 0, 0, "start", &a); morph_run(rb, MK_WORD, NULL, FLUID_LOOK_GLASS, 0, 0, "start", &b);
+        morph_run(ra, MK_CAT, NULL, FLUID_LOOK_KEEP | 1, 0, 0, "boot-cat", &a); morph_run(rb, MK_CAT, NULL, FLUID_LOOK_KEEP | 1, 0, 0, "boot-cat", &b);
+        morph_run(ra, MK_SCENE, chart, FLUID_LOOK_KEEP | 100, 16, 0, "cat-chart", &a); morph_run(rb, MK_SCENE, chart, FLUID_LOOK_KEEP | 100, 16, 0, "cat-chart", &b);
+        const int leo = spot_named(chart, "leo");
+        ra->wx = rb->wx = chart->items[leo].x; ra->wy = rb->wy = -chart->items[leo].y;
+        ra->wave = 1.6f; rb->wave = 1.6f * 0.3f;
+        ra->tape = malloc((size_t)MORPH_TAPE * S * S * 2); rb->tape = malloc((size_t)MORPH_TAPE * S * S * 2);
+        morph_run(ra, MK_SCENE, up, FLUID_LOOK_KEEP | 101, 14, 0, "leo-full", &a);
+        morph_run(rb, MK_SCENE, up, FLUID_LOOK_KEEP | 101, 14, 0, "leo-faint", &b);
+        const int *ga = ra->d->m.dg, *gb = rb->d->m.dg;
+        /* (every stage's frame and count, but its us and the most grains or pixels a frame moved: the ring moves a few) */
+        int stages = 0, differ = 0, most = 0;
+        for (int q = 0; q < FLUID_MD_N; q++)
+            stages += ga[q] == gb[q] || q == FLUID_MD_LUS || q == FLUID_MD_DUS || q == FLUID_MD_JOBUS || q == FLUID_MD_JOBMAX ||
+                      ((q == FLUID_MD_BORN || q == FLUID_MD_WPX) && abs(ga[q] - gb[q]) * 10 <= ga[q]);
+        for (int f = 0; f < MORPH_TAPE && f < a.frames; f++) {
+            int c = 0;
+            for (int k = 0; k < S * S; k++) c += ra->tape[(size_t)f * S * S + k] != rb->tape[(size_t)f * S * S + k];
+            differ += c > 0; most = c > most ? c : most;
+        }
+        printf("  a sign's change, its tap's ripple full and at 0.3: %d and %d frames, stages %d of %d the same, %d frames differ"
+               " (at most %d px, %.2f %% of the glass: the dust the ring moves), %d and %d px off the look at the end; most grains"
+               " coming in a frame %d and %d, of %d and %d new grains; worst %.1f and %.1f ms\n", a.frames, b.frames, stages, FLUID_MD_N,
+               differ, most, 100. * most / (S * S), a.diff, b.diff, ga[FLUID_MD_BORN], gb[FLUID_MD_BORN], a.nb, b.nb, a.worst, b.worst);
+        CHECK(a.frames == b.frames && stages == FLUID_MD_N && a.hang == b.hang && a.slow == b.slow && a.over == b.over && a.unsent == b.unsent &&
+              a.phase == b.phase && a.diff == 0 && b.diff == 0 && a.na == b.na && abs(a.nb - b.nb) * 200 <= a.nb && a.fly == b.fly && a.worst == b.worst &&
+              most * 50 < S * S,
+              "a sign's change with its tap's ripple at 0.3: the same change as at full strength (%d / %d frames, stages %d of %d)", a.frames, b.frames, stages, FLUID_MD_N);
+        free(ra->tape); free(rb->tape); ra->tape = rb->tape = NULL;
+        morph_rig_free(ra); morph_rig_free(rb);
+        s_morph_stale = 0;
+    }
     if (!job) { /* a reading over a layout a tap just opened (Leo's own, at that layout's subtitle place), driven as the device
          * drives it: after each word no pixel of an earlier word is left on the glass, and what is round the word is
          * the scene, dimmed, and nothing else (EXPERIMENT: on the dust kind it was made and checked on, 8cc8414's) */
@@ -3431,31 +3480,42 @@ static void bench(const char *molty) {
     CHECK(sc && sc->nitems == 1 + 12 + 10 + 1 && sc->nchars == 40, "the busy layout: 1 ring, 12 glyphs, 10 balls, 40 letters (%s)", err ? err : "");
     if (!sc) return;
     fluid_sim_t *s = fluid_sim_create(52, 32, FLUID_STAGE_REF);
-    fluid_letter_t L[FLUID_MAX_LETTERS]; int nl;
-    const int N = 2000;
-    double t0 = now_us();
-    for (int k = 0; k < N; k++) scene_fill(s, sc, k * DT, NULL, L, &nl, NULL, NULL);
-    const double scene_us = (now_us() - t0) / N;
-    CHECK(nl == 12 + 40, "12 crisp symbols and 40 letters on the overlay (%d)", nl);
-
-    double creature_us = 0.;
+    fluid_letter_t L[FLUID_MAX_LETTERS]; int nl = 0;
+    /* The same 2000 frames of each, BENCH_REPEATS times over, timed in blocks of BENCH_N frames taken in turns (a block
+     * of the scene's, then the same stretch of the creature's), and each block's fastest repeat kept: every repeat does
+     * the same work, and a busy machine only ever slows a block, so a slow spell on either side no longer decides the
+     * ratio. */
+    enum { BENCH_REPEATS = 5, BENCH_BLOCKS = 20, BENCH_N = 100 };
+    double sbest[BENCH_BLOCKS], cbest[BENCH_BLOCKS], scene_us = 0., creature_us = 0.;
+    for (int b = 0; b < BENCH_BLOCKS; b++) sbest[b] = cbest[b] = 1e30;
     static uint8_t buf[CUTE_MAX_FILE + 16];
     FILE *f = fopen(molty, "rb");
     size_t n = f ? fread(buf, 1, sizeof(buf), f) : 0;
     if (f) fclose(f);
     static cute_spec_t spec;
-    if (n && cute_spec_parse(buf, n, &spec, &err) == 0) {
-        cute_rt_t *rt = cute_rt_create(&spec, 99);
-        for (int k = 0; k < 30; k++) cute_rt_update(rt, DT);
-        t0 = now_us();
-        for (int k = 0; k < N; k++) { cute_rt_update(rt, DT); cute_rt_raster(rt, s->W, s->H); cute_rt_fill(rt, s, 1.f); }
-        creature_us = (now_us() - t0) / N;
+    const bool creature = n && cute_spec_parse(buf, n, &spec, &err) == 0;
+    for (int rep = 0; rep < BENCH_REPEATS; rep++) {
+        cute_rt_t *rt = creature ? cute_rt_create(&spec, 99) : NULL;
+        for (int k = 0; rt && k < 30; k++) cute_rt_update(rt, DT);
+        for (int b = 0; b < BENCH_BLOCKS; b++) {
+            double t0 = now_us();
+            for (int i = 0, k = b * BENCH_N; i < BENCH_N; i++, k++) scene_fill(s, sc, k * DT, NULL, L, &nl, NULL, NULL);
+            sbest[b] = fmin(sbest[b], now_us() - t0);
+            if (!rt) continue;
+            t0 = now_us();
+            for (int i = 0; i < BENCH_N; i++) { cute_rt_update(rt, DT); cute_rt_raster(rt, s->W, s->H); cute_rt_fill(rt, s, 1.f); }
+            cbest[b] = fmin(cbest[b], now_us() - t0);
+        }
+        if (rt) cute_rt_destroy(rt);
     }
+    for (int b = 0; b < BENCH_BLOCKS; b++) { scene_us += sbest[b] / (BENCH_BLOCKS * BENCH_N); creature_us += creature ? cbest[b] / (BENCH_BLOCKS * BENCH_N) : 0.; }
+    CHECK(nl == 12 + 40, "12 crisp symbols and 40 letters on the overlay (%d)", nl);
     CHECK(creature_us > 0., "the creature to compare with (%s)", molty);
     /* docs/AGENT-LINK.md: the creature's update + raster + fill is ~11 ms of the device's
      * ~30 ms frame (33 fps). The scene replaces that work, so it scales the same way. */
     const double ratio = scene_us / (creature_us > 0. ? creature_us : 1.), dev_ms = 11.0 * ratio, frame_ms = 30.0 - 11.0 + dev_ms;
-    printf("  bench (host): busy scene fill %.1f us, creature update+raster+fill %.1f us, ratio %.2f\n", scene_us, creature_us, ratio);
+    printf("  bench (host, each block the fastest of %d): busy scene fill %.1f us, creature update+raster+fill %.1f us, ratio %.2f\n",
+           BENCH_REPEATS, scene_us, creature_us, ratio);
     printf("  estimate (device, scaled from the creature's ~11 ms at 33 fps): scene fill %.1f ms, frame %.1f ms = %.0f fps\n",
            dev_ms, frame_ms, 1000.0 / (frame_ms > 30.0 ? frame_ms : 30.0));
     CHECK(ratio < 1.0, "the busy scene costs less than the creature it replaces (ratio %.2f)", ratio);

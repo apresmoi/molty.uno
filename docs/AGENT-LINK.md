@@ -233,12 +233,18 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   defaults by index, present → exactly one valid hex per option), answers `unsupported`
   without touch, and acknowledges `{job}` at once. Firmware from before colours ignores the
   extra field (unknown args are not checked), so the relay needs no cap for it. The question
-  (`device/firmware/main/fluid/fluid_ask.h`, `fluid_askview.h`) forms over whatever shows where a touch's crest passes from the
-  centre, the scene behind dimming but moving on: the title (two lines when long) near the top, then for
-  1–3 options arcs of the rim splitting its lower half (option 0 lower left), each label inside its arc
-  in its colour, for 4–5 rows each underlined in its colour under a faint ring. A tap on an answer: a
-  gentle wave from it, everything breaks into dust the water carries off; a tap on the question or the
-  centre answers nothing. The device then sends exactly one `answer` event for the job:
+  (`device/firmware/main/fluid/fluid_ask.h`, `fluid_askview.h`) comes as one change of picture: what
+  shows dissolves into dust over the whole glass, the dust gathers straight into the question (the
+  scene behind dimmed but moving on), its answers' lines growing out from the bottom of the rim up both
+  sides, and its words fading in as the last grains land, at rest in about 1.3 s. The title (two lines
+  when long) sits near the top, then for 1–3 options arcs of the rim splitting its lower half (option 0
+  lower left), each label inside its arc in its colour, for 4–5 rows each underlined in its colour under
+  a faint ring. A new question replaces one on screen the same way, never through the bare creature. A
+  tap on an answer: it brightens for a moment and the question dissolves straight back into what was
+  under it, in one change (an unanswered one the same, without the brightening); a tap on the question
+  or the centre answers nothing. (Where the screen is redrawn whole every frame, as on the website
+  outside its device speed, the question forms where a touch's crest passes from the centre and breaks
+  into dust the water carries off.) The device then sends exactly one `answer` event for the job:
   `{"t":"evt","name":"answer","data":{"job":"…","index":1,"label":"no"}}` (a tap: the answer
   it landed on; `label` = `options[index]` verbatim, no `reason`),
   `{"t":"evt","name":"answer","data":{"job":"…","index":null,"reason":"timeout"}}` (no tap
@@ -862,7 +868,9 @@ What the screen does between commands (`device/firmware/main/fluid/fluid_directo
 - **Idle life.** While idle, the creature blinks, glances and breathes, and every
   20–60 s flashes a short `happy` or `surprised`. After 5 minutes without a touch or a
   command it dozes off (`sleepy`, 20 fps); a touch, a button, a shake or any command
-  wakes it. `status` reports the mood on screen.
+  wakes it. `status` reports the mood on screen. A while after it dozes off the screen
+  goes dark by itself ([Screen off](#device-events), below the events table): any
+  command that shows something lights it again, the creature awake.
 - **Status mark.** No Wi-Fi (a short arc), relay offline (a dim dot) or a refused device
   key (an accent dot) shows as a small mark at the bottom edge after 10 s; it never
   changes the state. Only the pairing code takes over the screen.
@@ -875,6 +883,7 @@ What the screen does between commands (`device/firmware/main/fluid/fluid_directo
 | `state` | `{state, ...}` | creature state JSON | passthrough to `/api/creature/state` semantics |
 | `mood` | `{mood, hold_s?}` (device also `react?`) | — | idle listening thinking speaking happy sleepy surprised; `hold_s` 0..3600 (0 = until the next mood; default: happy/surprised revert, the rest persist). `react:true` (relay-sent, cap `react`): shown but not an explicit mood ([While the human speaks](#while-the-human-speaks)) |
 | `act` | `{action}` | `{action}` | a one-shot gesture over the current mood: inspect paddle (cap `working`) wiggle nod shake_head bounce peek glance_left glance_right blink wobble stretch look_up yawn, or one of the creature's own (`unknown_gesture` for a name it lacks; [Inline cues and actions](#inline-cues-and-actions)); `unsupported` / `firmware_too_old` without the `act` cap |
+| `buzz` | `{pattern?, ms?, strength?, in_reply_to?}` | `{ms, strength, pattern?}` | cap `haptic`: the vibration motor, once. `pattern` a name (`tick`, `tap`, `double`, `nudge`; `unknown_pattern` otherwise) or `[on, off, on, ...]` ms, or `ms` for one buzz; `strength` 0..100 (100). `no_motor` without the cap; `listening` while Molty listens (dropped, not queued); `do_not_disturb` without `in_reply_to` while it is on (the names: Vibration motor, under [REST envelopes](#rest-envelopes)) |
 | `draft` (relay) | `{turn_id, based_on, opener, max_new_words?, voice?}` | `{turn_id, based_on, status:"held", max_new_words, threshold}` | only during an open turn ([While the human speaks](#while-the-human-speaks)) |
 | `react` (relay) | `{turn_id, mood}` or `{turn_id, action}` | `{turn_id, shown, for_ms, next_after_ms}` | only during an open turn; ≤ 1 per 3 s |
 | `show` | `{text, wpm?}` | — | speed reader in the fluid; back to the creature 1.5 s after the last word |
@@ -990,6 +999,7 @@ it **yawns**, then dozes off (`sleepy`; off: no yawn). A say that played to its 
 creature back and idle within 8 s: one `happy` flash (at most one a minute). The console's
 setting: Settings › Molty "idle life" (`POST /api/creature/state {idle_life:
 "lively"|"calm"|"off"}`, GET reports it, kept in NVS like `ring_color`; lively out of the box).
+A while after it dozes off the screen goes dark: [Screen off](#device-events).
 **Frame cost:** the action layer is a handful of `sinf` per frame on the creature's pose
 (host: within ±0.03 µs, i.e. noise, of a ~54 µs creature update + raster + fill — scaled to
 the device's ~11 ms creature work, a few µs of a 33 ms frame), the scheduler a few
@@ -1010,13 +1020,38 @@ pairing). Rate-limited on the device. `shake`, `tap` and `button` reach agents t
 | `double_tap` | `{x, y}` | two taps within 350 ms, when bound to `event` (out of the box a double tap talks) |
 | `button` | `{id: "accept"\|"reject"}` | a button was pressed (the board's accept / reject buttons); ≤ 4/s. For agents it means acknowledge / dismiss, never an answer (answers come only from `ask`) |
 | `answer` | `{job, index, label}` · `{job, index: null, reason: "timeout"\|"cancelled"}` | an `ask` ended: tapped (0-based `index`, `label` verbatim), timed out, or cancelled; one per job, never rate-limited |
-| `dnd` | `{on}` | after each welcome and each change (cap `dnd`): the human's do not disturb (the PWR button's double click, `POST /api/power`). Relay-internal: kept per device; while on, `say` / `quick` / `listen` / `talk` / `ask` without `in_reply_to` fail `do_not_disturb`, and agents get a `dnd` event on each change |
+| `dnd` | `{on}` | after each welcome and each change (cap `dnd`): the human's do not disturb (the PWR button's double click, `POST /api/power`). Relay-internal: kept per device; while on, `say` / `quick` / `listen` / `talk` / `ask` / `buzz` without `in_reply_to` fail `do_not_disturb`, and agents get a `dnd` event on each change |
 | `creature` | `{id, name, about?, gestures?, moods?}` | after each welcome and whenever the creature on screen changes: a package's `cp_info` (`about` {look, gestures, moods}: its own words, [CREATURES.md](CREATURES.md) section 1; `gestures` it plays that the firmware knows; `moods` idle and its own), `{id: "", name}` for a creature that is not a package. Relay-internal: kept per device (below) |
 
 Screen off (the PWR button's `screen` binding, `POST /api/power {screen}`): the fluid stops
 simulating and drawing and the panel sleeps; a touch (not a tap), a shake, a button, new
 words, a question or a listen turns it back on. `GET /api/power` has the battery and the last
 12 h of per-minute samples (device/firmware/main/power/power.h).
+
+The screen also goes off by itself (`screen_nap.h`) once the creature has slept for the human's
+time: `screen_off_battery_s` on battery (60 out of the box), `screen_off_usb_s` on USB power
+(600), each `0` (never) or 10..3600 s. A board that cannot tell battery from USB counts as USB.
+It never goes off while something is up: a scene, a question, a listen, a say, the progress
+ring, an update's or the pairing's words, the boot word, the bench. Besides what wakes it
+above, such a nap ends when Molty is picked up (turned past 30° from how it lay, for 0.4 s: a
+knock or a truck going by does not) and for any command that shows something (`mood`, `act`,
+`state`, `show`, `progress`, a scene, a creature), the creature awake; do not disturb changes
+nothing here, the relay already holds back what it does not allow. An off by hand stays off
+for those: only the human's touch, button, shake, or something they must see ends it. An on by
+hand while the creature sleeps starts the time again. The console's settings: Settings › Molty
+"screen off on battery" / "on USB" (`POST /api/creature/state {screen_off_battery_s,
+screen_off_usb_s}`, GET and `status` report them, kept in NVS once the screen is calm).
+
+Behind the creature the screen shows today's moon and now and then a falling star ([CREATURES.md](CREATURES.md#the-sky)),
+from the date the device takes by network time on Wi-Fi (`GET /api/diag` reports `time`); none while a question, a
+listen or a say is up. The console's setting: Settings › Molty "sky" (`POST /api/creature/state {sky: false}`, GET
+reports it, kept in NVS once the screen is calm; on out of the box).
+
+The weather on the glass is told the same way, with how long it holds: `POST /api/creature/state {"weather": {"kind":
+"drizzle" | "rain" | "downpour" | "clear", "s": 10..21600}}` (an hour when `s` is not given); it eases there and back to
+clear when the time is up, and the floor stays wet some minutes after ([CREATURES.md](CREATURES.md#the-weather)). GET
+reports `weather {kind, s_left, level, wet}` and the setting `weather_on` (Settings › Molty "weather", kept in NVS; on
+out of the box). Kept in RAM: a restart is clear. A relay command for agents is to come; it maps onto this body.
 
 The device reacts to a shake by itself (a brief `surprised`), agent or not. A tap or a shake also calls
 the cat to the front of the frame ([CREATURES.md](CREATURES.md#playing)).
@@ -1101,6 +1136,7 @@ device dials; agents/CLI use its http(s) twin (`ws://h` → `http://h`, `wss://h
 | `POST /api/creature/state {ring_color}` (with the other fluid fields) | the state JSON; saved to NVS; `GET` reports `ring_color` as `"#rrggbb"` or `"accent"` (older firmware: absent — the console hides the setting) | `{ok:false, error}` when not `"#rrggbb"` / `"accent"` |
 | `POST /api/creature/state {listen_ms}` (with the other fluid fields) | the state JSON; saved to NVS: the listen window an agent gets when it gives none, `5000..30000` or `0` = unlimited (300 s safety ceiling); `GET` reports `listen_ms` (older firmware: absent — the console hides the setting) | `{ok:false, error}` when not an integer 5000..30000 or 0 |
 | `POST /api/creature/state {filler_ms}` (with the other fluid fields) | the state JSON; saved to NVS: the [auto filler](#quick-phrases-and-the-auto-filler)'s delay, `0` = off or `400..5000` (2500 out of the box); `GET` reports `filler_ms` and every listen answer carries it (older firmware: absent — the console hides the setting, the relay uses 2500) | `{ok:false, error}` when not an integer 400..5000 or 0 |
+| `POST /api/haptic {ms, strength?}` or `{pattern: "<name>" \| [on, off, on, ...], strength?}` | `{ok:true, ms, strength[, pattern]}`: the buzz that started, after the cap (see below) | `{ok:false, error:"no_motor"}` on a board without one; `"listening"` while the mic is open; `"unknown_pattern"`; `"invalid_args"` |
 | `GET /api/update` (firmware with the `update` cap; older firmware: not found) | `200 {ok:true, state:"idle"\|"downloading"\|"flashing"\|"rebooting"\|"failed", version?, progress?: 0..1, error?}` | — |
 | `POST /api/update {version, url, sha256, size}` (any Content-Type) | `202 {ok:true, state:"downloading"}`; then as `cmd update` after an accept (no on-screen question: the click in the console is the consent, the same trust as `POST /api/ota`) | `400 bad_url` (not an official release URL), `409 busy` |
 
@@ -1113,6 +1149,30 @@ a relay disconnect clears `pair` without a decision. Example while pending, then
 ```
 {"device_id":"molty-k7m2w9c4ya","link_code":"K7M2W9C4","relay_url":"wss://relay.example","pair":{"agent_name":"Claude Code","code":"4821","expires_in_s":97},"last_pair":null,"connected":true,"auth_failed":false,"close_code":0}
 {"device_id":"molty-k7m2w9c4ya","link_code":"Q3XH8ND2","relay_url":"wss://relay.example","pair":null,"last_pair":{"seq":1,"agent_name":"Claude Code","ok":true,"reason":null},"connected":true,"auth_failed":false,"close_code":0}
+```
+
+Vibration motor (`POST /api/haptic` and the link's `buzz`, device/firmware/main/haptic/haptic.h): on boards that wire one, today only
+the 1.75C with a hand-soldered coin motor on GPIO17 (`GET /api/diag` reports `haptic: true`, the hello lists cap
+`haptic`). `ms` buzzes once; `pattern` is up to 8 segments in ms, on, off, on, ... (`[80,60,80]` is a double tap),
+or one of these names:
+
+| name | ms | for |
+|---|---|---|
+| `tick` | 30 | touch feedback, barely there |
+| `tap` | 60 | a light touch |
+| `double` | 60, 90, 60 | look at me |
+| `nudge` | 350 | a longer push, when a tap would be missed |
+
+`strength` 0..100 is the PWM duty (100 when absent). One buzz lasts at most 2000 ms (a longer one is cut there); a
+new buzz replaces the running one; the call returns at once. The motor sits next to the microphones: a buzz that
+arrives while the mic is open is dropped, not queued (`listening`). While the motor runs and 250 ms after, a shake
+is not felt (the motor shakes the IMU). Molty buzzes by itself only when a question with buttons or a pairing code
+appears (`double`) and when it takes a tap on an answer (`tick`).
+```
+curl -s -X POST http://molty.local/api/haptic -d '{"ms":300,"strength":100}'
+{"ok":true,"ms":300,"strength":100}
+curl -s -X POST http://molty.local/api/haptic -d '{"pattern":[80,60,80],"strength":100}'
+{"ok":true,"ms":220,"strength":100,"pattern":[80,60,80]}
 ```
 
 `state` cmd: empty args = read; `{state:{...}}` or flat fields = patch (sent to the

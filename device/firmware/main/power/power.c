@@ -9,6 +9,9 @@
  * in the fluid) and to store the switch. Its flash writes (the switch, the history every
  * 10 min) wait for a calm screen (mole_flash_may, flash_gate.h); a restart or power off
  * writes them at once. The ring and dnd are shared with httpd under s_mux.
+ * Every POWER_EVERY s it tells the fluid what Molty runs on, for the screen's nap (screen_nap.h), do not disturb and
+ * the date (net_clock.h), for the sky (sky.h), and keeps the nap's and the sky's settings the human changed
+ * (mole_fluid_nap_setting, _sky_setting, _weather_setting) in the same quiet window.
  */
 #include "power.h"
 #include "molty_board.h"
@@ -18,6 +21,8 @@
 #include "link_client.h"
 #include "link_audio.h"
 #include "http.h"
+#include "screen_nap.h"
+#include "net_clock.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -37,6 +42,7 @@
 #define HIST_PATH     "/spiffs/power.bin"
 #define HIST_TMP      "/spiffs/power.tmp"
 #define HIST_MAGIC    0x31525750u           /* "PWR1"                                  */
+#define POWER_EVERY   5                     /* s between two looks at USB for the nap  */
 
 enum { F_CHARGING = 1, F_USB = 2, F_DND = 4, F_LINK = 8, F_BATTERY = 16 };
 
@@ -59,7 +65,10 @@ static TaskHandle_t s_task;
 static volatile bool s_dnd_dirty;           /* a change the task has not shown yet   */
 static bool      s_dnd_unsaved;             /* (the task's) the switch not on the flash yet           */
 static bool      s_hist_due, s_hist_new;    /* ... the history's write due; samples since the last */
-static fg_hold_t s_dnd_hold, s_hist_hold;
+static fg_hold_t s_dnd_hold, s_hist_hold, s_nap_hold, s_sky_hold, s_wx_hold;
+static unsigned  s_nap_saved;               /* (the task's) the nap settings' generation on the flash */
+static unsigned  s_sky_saved;               /* (the task's) the sky setting's generation on the flash  */
+static unsigned  s_wx_saved;                /* (the task's) the weather setting's generation on the flash */
 static volatile bool s_off;                 /* power_off: the goodbye, then off      */
 
 /* ── do not disturb ───────────────────────────────────────────────────────── */
@@ -103,6 +112,46 @@ static void dnd_store(void)
     if (nvs_open("power", NVS_READWRITE, &h) == ESP_OK) { nvs_set_u8(h, "dnd", s_dnd); nvs_commit(h); nvs_close(h); }
 }
 
+/* The nap settings as the fluid has them now (NVS "fluid", where it loads them from). */
+static void nap_store(void)
+{
+    uint32_t bat, usb;
+    s_nap_saved = mole_fluid_nap_setting(&bat, &usb);
+    nvs_handle_t h;
+    if (nvs_open("fluid", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_i32(h, "nap_bat", (int32_t)bat); nvs_set_i32(h, "nap_usb", (int32_t)usb); nvs_commit(h); nvs_close(h);
+    }
+}
+
+/* The sky setting as the fluid has it now (NVS "fluid"/"sky", where it loads it from). */
+static void sky_store(void)
+{
+    bool on = true;
+    s_sky_saved = mole_fluid_sky_setting(&on);
+    nvs_handle_t h;
+    if (nvs_open("fluid", NVS_READWRITE, &h) == ESP_OK) { nvs_set_i32(h, "sky", on ? 1 : 0); nvs_commit(h); nvs_close(h); }
+}
+
+/* The weather setting as the fluid has it now (NVS "fluid"/"wx", where it loads it from). */
+static void wx_store(void)
+{
+    bool on = true;
+    s_wx_saved = mole_fluid_weather_setting(&on);
+    nvs_handle_t h;
+    if (nvs_open("fluid", NVS_READWRITE, &h) == ESP_OK) { nvs_set_i32(h, "wx", on ? 1 : 0); nvs_commit(h); nvs_close(h); }
+}
+
+/* What the nap's timer goes by: on battery only when the board says so (a reading without USB and with a gauge or the
+ * charger's state); no battery, or a board that cannot tell (the 1.28's voltage alone), counts as USB. */
+static int power_source(void)
+{
+    molty_battery_t b;
+    const esp_err_t e = molty_battery_read(&b);
+    if (e == ESP_ERR_NOT_SUPPORTED || e == ESP_ERR_NOT_FOUND) return NAP_POWER_USB;
+    if (e != ESP_OK) return -1;                        /* (a failed read: as it was) */
+    return b.usb || (b.pct < 0 && !b.charging) ? NAP_POWER_USB : NAP_POWER_BATTERY;
+}
+
 /* ── history ──────────────────────────────────────────────────────────────── */
 
 static const sample_t *at(int i) { return &s_hist[(s_head - s_n + i + HIST_N) % HIST_N]; }   /* 0 = oldest */
@@ -139,6 +188,9 @@ static void save(void)
 static void flush_due(void)
 {
     if (s_dnd_unsaved && mole_flash_may(&s_dnd_hold)) dnd_store();
+    if (mole_fluid_nap_setting(NULL, NULL) != s_nap_saved && mole_flash_may(&s_nap_hold)) nap_store();
+    if (mole_fluid_sky_setting(NULL) != s_sky_saved && mole_flash_may(&s_sky_hold)) sky_store();
+    if (mole_fluid_weather_setting(NULL) != s_wx_saved && mole_flash_may(&s_wx_hold)) wx_store();
     if ((s_hist_due || (s_hist_new && mole_flash_forced())) && mole_flash_may(&s_hist_hold)) save();
 }
 
@@ -157,6 +209,9 @@ static void off_now(void)
     for (int i = 0; i < 80 && !mole_fluid_goodbye_done(); i++) vTaskDelay(pdMS_TO_TICKS(100));
     mole_flash_force();
     if (s_dnd_unsaved) dnd_store();
+    if (mole_fluid_nap_setting(NULL, NULL) != s_nap_saved) nap_store();
+    if (mole_fluid_sky_setting(NULL) != s_sky_saved) sky_store();
+    if (mole_fluid_weather_setting(NULL) != s_wx_saved) wx_store();
     save();
     mole_diag_event(false, "power.off now");
     mole_diag_flush(3000);                             /* the log ring does not survive a power off */
@@ -183,6 +238,11 @@ static void power_task(void *arg)
         next += pdMS_TO_TICKS(1000);
         screen_s += mole_fluid_screen_on();
         audio_s += link_audio_busy();
+        if (ticks % POWER_EVERY == 0) {        /* what the fluid goes by: the power (the nap), do not disturb and the date (the sky) */
+            const int p = power_source(); if (p >= 0) mole_fluid_power(p);
+            mole_fluid_dnd(power_dnd());
+            mole_fluid_utc(net_clock_utc());
+        }
         if (++ticks < 60) continue;
 
         molty_battery_t b;

@@ -4,7 +4,9 @@
  * sense.c — device events (sense.h). One small task, 100 Hz on core 0 (PSRAM stack;
  * no flash access here):
  *   imu      the board's cached IMU sample (a new one every 20 ms) → gesture.c's shake
- *            detector; boards without "imu" skip it
+ *            detector (deaf while the vibration motor runs and settles: haptic_quiet), and
+ *            while the screen is off screen_nap.h's pick-up (it ends a nap);
+ *            boards without "imu" skip it
  *   buttons  press edges of the accept / reject buttons
  *   touch    tap edges handed over by sense_touch (the fluid task polls touch)
  *   status   every 0.5 s: Wi-Fi / relay / auth → mole_fluid_set_status (the edge mark)
@@ -36,6 +38,8 @@
 #include "mole_diag.h"
 #include "power.h"
 #include "pkg_parse.h"
+#include "screen_nap.h"
+#include "haptic.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -141,6 +145,7 @@ static void sense_task(void *arg)
     (void)arg;
     gesture_t g;
     gesture_init(&g, NULL);
+    nap_lift_t lift = { 0 };
     gesture_tapper_t tapper = { 0 }, presser[2] = { 0 };
     gesture_limit_t tap_l = { .min_ms = TAP_MIN_MS }, btn_l = { .min_ms = BUTTON_MIN_MS },
                     shake_l = { .min_ms = SHAKE_MIN_MS };
@@ -164,8 +169,14 @@ static void sense_task(void *arg)
         if (imu && molty_imu_get(&s) && s.ms != last_imu) {
             last_imu = s.ms;
             link_audio_imu(s.ax, s.ay, s.az, s.ms);       /* a shake's listen: has the handling stopped? */
+            if (mole_fluid_screen_on()) { if (lift.primed) nap_lift_reset(&lift); }
+            else if (nap_lift_feed(&lift, s.ax, s.ay, s.az, s.ms)) {
+                mole_fluid_lifted();                          /* (the fluid wakes only from a nap) */
+                mole_diag_event(false, "sense.lift");
+                nap_lift_reset(&lift);
+            }
             gesture_shake_t sh;
-            if (pairing) gesture_reset(&g);
+            if (pairing || haptic_quiet()) gesture_reset(&g);   /* Molty's own motor shakes the IMU */
             else if (gesture_feed(&g, s.ax, s.ay, s.az, s.ms, &sh)) {
                 mole_fluid_event(MOLE_FLUID_SHAKE);          /* reacts with or without an agent */
                 mole_diag_event(false, "sense.shake peak=%dmg reversals=%d ms=%u",

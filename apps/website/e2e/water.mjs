@@ -7,9 +7,10 @@
 //   headings     every big dust text of the site (the landing's title and section headings, the
 //                showcase's, the build page's): a tap beside it loosens its lines as the front
 //                arrives, and they sharpen back
-//   the title    taps from six places (on it, beside it, far left, far right, inside the hero's
-//                screen, inside another section's screen): it answers each as the front arrives;
-//                the strip is the far right one: e2e-out/water-title-sheet.png
+//   the title    taps from six places: on it and beside it, it answers as the front arrives (the
+//                strip is the one beside it: e2e-out/water-title-sheet.png); far left, far right,
+//                inside the hero's screen and inside another section's screen are beyond a ring's
+//                reach (it fades out about a reference screen from the finger): its lines stand
 //   a change     on the showcase, the cat to the chart and a tapped sign's close-up: the picture
 //                changes as a wave through its dust, from the middle and from the finger, never
 //                as a cut: e2e-out/water-change-sheet.png
@@ -18,6 +19,7 @@ import { chromium } from 'playwright';
 import sharp from 'sharp';
 import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { SPEED } from '../src/config/water.mjs';
 
 const BASE = process.argv[2] ?? 'http://localhost:4330';
 const OUT = fileURLToPath(new URL('../e2e-out/', import.meta.url));
@@ -118,8 +120,8 @@ async function open(path, width, height, wait = 9000) {
   return { ctx, page };
 }
 const pump = (page, n = 1) => page.evaluate((n) => window.__pump(n), n);
-/** A wave's speed on this page, CSS px a frame (services/page-water: the device's own on the page's reference screen). */
-const speed = (page) => page.evaluate(() => (Math.sqrt(0.11) * ((466 * parseFloat(getComputedStyle(document.querySelector('[data-water]')).backgroundSize)) / 1040)) / 59);
+/** A wave's speed on this page, CSS px a frame (services/page-water: SPEED times the device's own on the page's reference screen). */
+const speed = (page) => page.evaluate((times) => (times * Math.sqrt(0.11) * ((466 * parseFloat(getComputedStyle(document.querySelector('[data-water]')).backgroundSize)) / 1040)) / 59, SPEED);
 /** Frames until the water is flat again (the page's canvas clear), at most `most`. */
 async function calm(page, most = 1500) {
   for (let f = 0; f < most; f += 30) {
@@ -139,9 +141,10 @@ async function sheet(shots, cols, tile, path) {
 }
 
 /** A tap at (x, y), then the heading `n` watched: its lines stand until the front is due at the
- *  nearest of them, loosen as it passes, and are back once the water is flat. `shots`: a picture
- *  of `clip` every this many frames from a little before the front is due. */
-async function rides(page, n, x, y, what, shots) {
+ *  nearest of them, loosen as it passes, and are back once the water is flat (`far`: the ring
+ *  dies before it gets there, and they stand all along). `shots`: a picture of `clip` every this
+ *  many frames from a little before the front is due. */
+async function rides(page, n, x, y, what, shots, far = false) {
   const px = await speed(page);
   await page.evaluate((n) => window.__word(n), n);
   const due = (await page.evaluate(([n, x, y]) => window.__nearest(n, x, y), [n, x, y])) / px;
@@ -161,11 +164,13 @@ async function rides(page, n, x, y, what, shots) {
   await pump(page, 60);
   const after = await page.evaluate((n) => window.__kept(n), n);
   if (shots) await sheet(pictures, shots.cols, shots.tile, shots.path);
-  const ok = before > 0.99 && least < 0.985 && least > 0.3 && after > 0.99;
+  const ok = far ? before > 0.99 && least > 0.99 : before > 0.99 && least < 0.985 && least > 0.3 && after > 0.99;
   pass(
     ok,
-    `${what}: its lines stand until the front is due (${(due / 60).toFixed(1)} s; ${(before * 100).toFixed(1)}% before), ` +
-      `loosen as it passes (${(least * 100).toFixed(1)}% stand at the least, ${(when / 60).toFixed(1)} s after the tap), and are back (${(after * 100).toFixed(1)}%)`,
+    far
+      ? `${what}: the ring dies before it gets there (${(due / 60).toFixed(1)} s away): its lines stand (${(Math.min(before, least) * 100).toFixed(1)}% at the least)`
+      : `${what}: its lines stand until the front is due (${(due / 60).toFixed(1)} s; ${(before * 100).toFixed(1)}% before), ` +
+          `loosen as it passes (${(least * 100).toFixed(1)}% stand at the least, ${(when / 60).toFixed(1)} s after the tap), and are back (${(after * 100).toFixed(1)}%)`,
   );
   return ok;
 }
@@ -254,14 +259,14 @@ const where = (page) =>
   await page.evaluate(() => (window.__manual = true));
   await pump(page, 60);
   const { title, screens } = await where(page);
-  for (const [what, x, y, shots] of [
+  for (const [what, x, y, shots, far] of [
     ['on it', (title.left + title.right) / 2, title.mid],
-    ['beside it', title.right + 120, title.mid],
-    ['far left', 8, 760],
-    ['far right', 1270, title.mid + 60, { n: 12, every: 30, cols: 3, tile: 840, path: 'water-title-sheet.png', clip: { x: 0, y: 60, width: 1280, height: 420 } }],
-    ["inside the hero's screen", screens[0].x, screens[0].y - 40],
+    ['beside it', title.right + 120, title.mid, { n: 12, every: 15, cols: 3, tile: 840, path: 'water-title-sheet.png', clip: { x: 0, y: 60, width: 1280, height: 420 } }],
+    ['far left', 8, 760, null, true],
+    ['far right', 1270, title.mid + 60, null, true],
+    ["inside the hero's screen", screens[0].x, screens[0].y - 40, null, true],
   ])
-    places.push([what, await rides(page, 0, x, y, `the title, a tap ${what} (${Math.round(x)}, ${Math.round(y)})`, shots)]);
+    places.push([what, await rides(page, 0, x, y, `the title, a tap ${what} (${Math.round(x)}, ${Math.round(y)})`, shots, far)]);
   await ctx.close();
 }
 {
@@ -276,7 +281,7 @@ const where = (page) =>
   await pump(page, 60);
   const { screens } = await where(page);
   const [x, y] = [screens[1].x, screens[1].top + 50];
-  places.push(["inside the talk section's screen", await rides(page, 0, x, y, `the title, a tap inside the talk section's screen (${Math.round(x)}, ${Math.round(y)})`)]);
+  places.push(["inside the talk section's screen", await rides(page, 0, x, y, `the title, a tap inside the talk section's screen (${Math.round(x)}, ${Math.round(y)})`, null, true)]);
   await ctx.close();
 }
 

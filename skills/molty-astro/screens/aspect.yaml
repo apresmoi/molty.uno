@@ -5,13 +5,13 @@ inputs:
   from_angle:
     type: angle
     sent_as: a
-    about: The chart angle of body A.
-    example: 182.07
+    about: "The chart angle of body A, the one the short way round to B starts from, counter-clockwise."
+    example: 123.13
   to_angle:
     type: angle
     sent_as: b
-    about: "from_angle + d, where d is B's chart angle minus A's, wrapped to -180..180: the arc runs from one to the other."
-    example: 123.13
+    about: "from_angle + d, where d is B's chart angle minus A's, wrapped to 0..180 (A and B chosen so it is): the arc runs counter-clockwise from one to the other, the short way."
+    example: 182.07
   color:
     type: color
     sent_as: c
@@ -27,8 +27,8 @@ inputs:
       distance: { type: distance, sent_as: r, about: "0.6; B at 0.47 when the two are under 14 degrees apart." }
       color: { type: color, sent_as: c, about: "Its color, as on the chart." }
     example:
-      - { symbol: g-neptune, angle: 182.07, distance: 0.6, color: "#8fb4ff" }
       - { symbol: g-pluto, angle: 123.13, distance: 0.6, color: "#c0a0d0" }
+      - { symbol: g-neptune, angle: 182.07, distance: 0.6, color: "#8fb4ff" }
   lines:
     type: list
     max: 7
@@ -41,13 +41,13 @@ inputs:
       color: { type: color, sent_as: c, about: "A side of the figure #565b72; the chord in the aspect's color." }
       appears: { type: seconds, sent_as: "on", about: "When it appears: 0 for the figure, 1.2 for the chord." }
     example:
-      - { from_x: -0.6, from_y: -0.022, to_x: -0.281, to_y: -0.53, color: "#565b72", appears: 0 }
-      - { from_x: -0.281, from_y: -0.53, to_x: 0.319, to_y: -0.508, color: "#565b72", appears: 0 }
-      - { from_x: 0.319, from_y: -0.508, to_x: 0.6, to_y: 0.022, color: "#565b72", appears: 0 }
-      - { from_x: 0.6, from_y: 0.022, to_x: 0.281, to_y: 0.53, color: "#565b72", appears: 0 }
-      - { from_x: 0.281, from_y: 0.53, to_x: -0.319, to_y: 0.508, color: "#565b72", appears: 0 }
-      - { from_x: -0.319, from_y: 0.508, to_x: -0.6, to_y: -0.022, color: "#565b72", appears: 0 }
-      - { from_x: -0.6, from_y: -0.022, to_x: -0.328, to_y: 0.502, color: "#6fe0a0", appears: 1.2 }
+      - { from_x: -0.328, from_y: 0.502, to_x: -0.599, to_y: -0.033, color: "#565b72", appears: 0 }
+      - { from_x: -0.599, from_y: -0.033, to_x: -0.271, to_y: -0.535, color: "#565b72", appears: 0 }
+      - { from_x: -0.271, from_y: -0.535, to_x: 0.328, to_y: -0.502, color: "#565b72", appears: 0 }
+      - { from_x: 0.328, from_y: -0.502, to_x: 0.599, to_y: 0.033, color: "#565b72", appears: 0 }
+      - { from_x: 0.599, from_y: 0.033, to_x: 0.271, to_y: 0.535, color: "#565b72", appears: 0 }
+      - { from_x: 0.271, from_y: 0.535, to_x: -0.328, to_y: 0.502, color: "#565b72", appears: 0 }
+      - { from_x: -0.328, from_y: 0.502, to_x: -0.6, to_y: -0.022, color: "#6fe0a0", appears: 1.2 }
   degrees:
     type: text
     max: 3
@@ -70,16 +70,17 @@ inputs:
     example: 0.064
 draw:
   - use: wheel
-  - ticks: { radius: 0.1, length: 0.62, count: 12, first_angle: 0, color: dim }
-  - circle: { radius: 0.2, color: dim }
-  - circle: { radius: 0.4, color: dim }
-  - circle: { radius: 0.6, color: grid }
+  # every inner line a hairline; the degree grid halfway between dim and grid, so it holds over the dust at 1 px
+  - ticks: { radius: 0.1, length: 0.62, count: 12, first_angle: 0, width: hairline, color: "#484c60" }
+  - circle: { radius: 0.2, width: hairline, color: "#484c60" }
+  - circle: { radius: 0.4, width: hairline, color: "#484c60" }
+  - circle: { radius: 0.6, width: hairline, color: grid }
   - for: side in lines
     draw:
-      - line: { show: { from: "{{ side.appears }}" }, from: { x: "{{ side.from_x }}", y: "{{ side.from_y }}" }, to: { x: "{{ side.to_x }}", y: "{{ side.to_y }}" }, color: "{{ side.color }}" }
-  - arc: { show: { from: 0.4 }, radius: 0.28, start: "{{ from_angle }}", end: "{{ to_angle }}", color: "{{ color }}" }
-  - spoke: { radius: 0, length: 0.6, angle: "{{ from_angle }}", color: "{{ color }}" }
-  - spoke: { show: { from: 0.4 }, radius: 0, length: 0.6, angle: "{{ to_angle }}", color: "{{ color }}" }
+      - line: { show: { from: "{{ side.appears }}" }, from: { x: "{{ side.from_x }}", y: "{{ side.from_y }}" }, to: { x: "{{ side.to_x }}", y: "{{ side.to_y }}" }, width: hairline, color: "{{ side.color }}" }
+  - arc: { show: { from: 0.4 }, radius: 0.28, start: "{{ from_angle }}", end: "{{ to_angle }}", width: hairline, color: "{{ color }}" }
+  - spoke: { radius: 0, length: 0.6, angle: "{{ from_angle }}", width: hairline, color: "{{ color }}" }
+  - spoke: { show: { from: 0.4 }, radius: 0, length: 0.6, angle: "{{ to_angle }}", width: hairline, color: "{{ color }}" }
   - label: { show: { from: 0.4 }, at: { x: "{{ label_x }}", y: "{{ label_y }}" }, size: 0.2, text: "{{ degrees }}", color: white }
   - for: body in bodies
     draw:

@@ -2,7 +2,7 @@
   "molty": "molty/2",
   "id": "cat",
   "name": "Cat",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "about": "A small cat that lives on the screen, with its own moods and gestures. Built into every Molty; install only for a newer version.",
   "look": "A slim lavender cat drawn as a fine outline: pointy ears pink inside, round green eyes, a pink nose, whiskers, a white chest. A long darker tail. It sits, stands, lies in a loaf and walks.",
   "body": "cat.glb",
@@ -51,5 +51,27 @@
     "walk": { "about": "gets up and walks a few steps across the floor, then settles again", "hold": 6, "lasts": 8 }
   },
   "feet": ["hand.L", "toe.L", "hand.R", "toe.R"],
-  "center": ["pelvis", "head"]
+  "center": ["pelvis", "head"],
+  "life": {
+    "signals": {
+      "energy": { "mood": { "_": 0.45, "listening": 0.7, "speaking": 0.7, "happy": 0.9, "sleepy": 0.1, "surprised": 1 } },
+      "tired": { "from": "idle_time", "map": [[60, 0], [300, 1]] },
+      "calm": { "sum": [["energy", 1], ["tired", -0.3]] },
+      "breath_rate": { "from": "calm", "map": [[0, 0.16], [1, 0.42]] },
+      "breath": { "wave": "breath_rate", "vary": 0.15, "rise": 0.4, "scale": { "_": 0.6, "sleepy": 0.9, "happy": 0.5, "surprised": 0.8 } },
+      "blink": { "every": { "_": [2.5, 6.5], "listening": [2, 4], "speaking": [2, 4], "sleepy": [8, 14] }, "lasts": 0.25, "double": 0.15 },
+      "look_x": { "hold": { "_": [0.6, 3], "thinking": [1.5, 4.5] }, "range": { "_": [-1, 1], "listening": [-0.4, 0.4] }, "move": 0.12, "home": 0.4, "waits": "blink" },
+      "look_y": { "hold": [0.8, 3.5], "range": { "_": [-0.3, 0.3], "thinking": [0.2, 0.9] }, "move": 0.15, "waits": "blink" },
+      "head_x": { "follow": "look_x", "lag": 0.25, "bounce": 0.2 },
+      "head_y": { "follow": "look_y", "lag": 0.3 }
+    },
+    "layers": [
+      { "layer": "breathing", "clip": "breath", "by": "breath", "zero": 0.5 },
+      { "layer": "blink", "clip": "blink_pose", "by": "blink" },
+      { "layer": "eyes", "clip": "look_lr", "by": "look_x", "zero": 0.5, "bones": ["eye.L", "eye.R"], "weight": "free" },
+      { "layer": "eyes_up", "clip": "look_ud", "by": "look_y", "zero": 0.5, "bones": ["eye.L", "eye.R"], "weight": "free" },
+      { "layer": "gaze", "clip": "look_lr", "by": "head_x", "zero": 0.5, "bones": ["neck", "head", "ear.L", "ear.R"], "weight": "free" },
+      { "layer": "gaze_up", "clip": "look_ud", "by": "head_y", "zero": 0.5, "bones": ["neck", "head"], "weight": "free" }
+    ]
+  }
 }

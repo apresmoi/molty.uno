@@ -22,7 +22,8 @@ agent (scripted | local LLM) ──REST talk/say──▶ relay ◀────�
   `.cache/` so every run replays identical audio), a WAV, or silence; room noise (pink/white/brown),
   level, start delay, listen window. An `{llm: …}` user line is reserved in the format (not implemented).
 - **Agent**: scripted lines with a fixed think time (`--agent-gap-ms`, default 0, so the gap is the
-  pipeline's own), or `--agent llm` (any OpenAI-compatible endpoint, default Ollama on the box).
+  pipeline's own), `--agent llm` (any OpenAI-compatible endpoint, default Ollama on the box), or
+  `--agent facts` (a fact sheet and seeded think times, see "Talk baseline" below).
 - **Metrics** per turn and summarised (`runs/<ts>/report.{md,json}`, plus every WAV).
 
 Why Python: it reuses `services/molty-voice/` directly (Kyutai TTS/STT clients, resampler, framing) and runs the
@@ -97,6 +98,49 @@ arrival lateness, relay timings. Cue ground truth is MMS forced alignment (torch
 box's CPU over ssh (`molty_sim/mms_remote.py`, `MOLTY_SIM_ALIGN_PYTHON`); the STT's word
 `start_time` is not used for it — it lands ~0.25 s late with a word-length-dependent spread. The
 alignment self-check aligns the human's clips too (their onsets are known from the TTS).
+
+## Talk baseline: labelled turns, the facts agent, the scoreboard
+
+Stage 0 of `docs/talk-proposal.html` (section 9): today's pipeline on `scenarios/talk-baseline.yaml`,
+11 labelled turns in one conversation (small talk, a plain question, a mid-sentence pause, "um"
+and "wait, actually the other branch", mumbling in noise, a 2.5 s pause, 12 s of silence, a
+question nobody should guess, a long answer, a tap while Molty reads it, thanks).
+
+- **Labels** (scenario keys): `label` `alone` (a talker may answer) | `hand_off` (needs the agent) |
+  `refuse` (nobody guesses), `truth` (the fact id that answers it; `unknown` = the right answer is
+  "I don't know"), `tap: {from_s, to_s}` (the human taps Molty during the say before this listen,
+  at a seeded moment; tap is bound to `event` out of the box, so the say plays on). A top-level
+  `facts` sheet (`id: {keys, say}`, with `unknown` and `idle`).
+- **The facts agent** (`molty_sim/facts.py`): says only lines of the sheet (the fact whose keys
+  match what Molty heard, the words after "wait / actually" first), thinks for a seeded time per
+  turn (median about 4 s, 12 % about 12 s, 6 % never: it then stays quiet for 20 s and the human
+  speaks again). It uses the skill's calls: one `talk` per turn; `--quick` plays `quick one_sec`
+  before thinking; with `--first-words` it `keep`s the line up to its first clause end.
+- **Scoreboard** (`molty_sim/score.py`, `board.txt` / `board.json` in the run dir): first sound
+  p50 / p90 (the human's last voiced sample to Molty's first voiced sample of words, the chirp
+  apart), the filler / quick / first-words time, grounded answer p50 / p90 (to the first voiced
+  sample of the right fact; minus the agent's think time too), false cut-offs, talk-over ms, pause
+  takeover rate, interruption recovery (quiet within 300 ms of the tap and the new question
+  answered), answer fidelity (numbers and names of the fact in what Molty was sent), and per turn
+  how many repeats passed. Agent-free turns, hand-off precision / recall and one voice need a
+  talker: reported as not applicable today.
+- **Judge** (`molty_sim/judge.py`, `--judge CMD`): any command that reads the prompt on stdin and
+  prints JSON; the timed transcript, labels and sheet; a fixed rubric (invented facts, right
+  answers, smooth 1-5, one voice 1-5); `--judge-votes` (3), the median. No key: a subscription
+  CLI in print mode, e.g. `claude -p --model opus --no-session-persistence --tools '' --strict-mcp-config`
+  (no temperature setting there), or a local model's CLI.
+- **Repeatable**: the human's audio is cached as above; `--seed S --reps N` replays the
+  conversation N times on one stack with seeds S..S+N-1 (think times, tap moments).
+- **Arms**: box (default), `--first-words` (the sim bridge's `--opener`, Ollama at
+  `MOLTY_SIM_OPENER_URL`, the owner's `first_words: opener`), `--quick`, and `--cloud` (Workers AI:
+  the local relay gets a remote AI binding on the owner's Cloudflare account, `stack.CF_ACCOUNT_ENV`;
+  nothing is deployed, no bridge). A model-played human (`{llm: ...}`) is still reserved, not built.
+
+```sh
+make sim SIM_ARGS="scenarios/talk-baseline.yaml --agent facts --reps 5 --seed 1 --align none --arm box \
+  --judge \"claude -p --model opus --no-session-persistence --tools '' --strict-mcp-config\""
+make sim SIM_ARGS="scenarios/talk-baseline.yaml --agent facts --reps 5 --seed 1 --align none --arm first-words --first-words"
+```
 
 ## Shake turns: partials, drafts, reacts
 

@@ -179,8 +179,8 @@ static void answered(int i, const char *reason) {
 static bool pairing(void) { return s_q.open && s_qa.kind == Q_PAIR; }
 
 /* sense_touch: a pairing or a question takes the press, else a scene's spot (unless it stops a recording), else it is a
- * tap for the task. True: handled (the senses are on). */
-static bool web_sense_touch(int x, int y) {
+ * tap for the task. True: handled (the senses are on); *spot_out: the spot it took (mole_fluid_spot_tap), 0 none. */
+static bool web_sense_touch(int x, int y, unsigned *spot_out) {
     if (!s_sense) return false;
     if (s_q.open) {                    /* link_pair_tap / link_ask_tap: never a `tap` event, whatever it lands on */
         const float r = s_px * 0.5f;
@@ -192,6 +192,7 @@ static bool web_sense_touch(int x, int y) {
     s_tap_xy = (X > 65535u ? 65535u : X) << 16 | (Y > 65535u ? 65535u : Y);
     const unsigned spot = s_lis.on ? 0 : mole_fluid_spot_tap(x, y);
     if (spot) s_spot = spot; else s_tap_flag = true;
+    *spot_out = spot;
     return true;
 }
 
@@ -319,7 +320,7 @@ WM_API void wm_shake_imu(void) { s_shake_at = (uint32_t)(s_clock / 1000); }
 /** The agent's listen (link `listen`): on, and off as its turn ends (the device's end of turn: `turn_end`). */
 WM_API void wm_talk(int on) { if (on) lis_start(NULL, false, false, NULL); else lis_stop("turn_end"); }
 /** Do not disturb (POST /api/power {dnd}). */
-WM_API void wm_dnd(int on) { if (s_dnd != (on != 0)) { s_dnd = on != 0; ws_emit(link_evt_dnd_frame(s_dnd)); } }
+WM_API void wm_dnd(int on) { if (s_dnd != (on != 0)) { s_dnd = on != 0; ws_emit(link_evt_dnd_frame(s_dnd)); } if (s_up) mole_fluid_dnd(s_dnd); }
 /** The screen off or on (POST /api/power {screen}). Power off: the goodbye. */
 WM_API void wm_screen(int on) { if (s_up) mole_fluid_screen(on != 0); }
 WM_API void wm_goodbye(void) { if (s_up) mole_fluid_goodbye(); }

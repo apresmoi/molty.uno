@@ -39,7 +39,7 @@ export const QUESTIONS: Record<string, () => DeviceQuestion> = {
     kind: "install",
     job: job(),
     id: "astrology",
-    version: "1.7.0",
+    version: "1.7.1",
     ms: 3000,
     title: "install astrology?",
     detail: "a new package for molty",

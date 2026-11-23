@@ -1,0 +1,22 @@
+# The sky's script: as fidelity.script (the native build and the WebAssembly build both play it and must show the same
+# pixels), with a date given: the cat under today's moon. The night of the 2016 supermoon (2016-11-14 13:52 UTC: full,
+# the largest moon); a touch on the water (the moon's dust moves with it and settles); a gesture that looks up toward it;
+# the picture changing to a scene and back (the moon goes and comes with the cat's picture); then a waxing quarter
+# (2024-04-15 19:13 UTC), the moon made again for its day. fidelity.script gives no date: its frames have no sky.
+creature cat packages/cat/cat.json
+package packages/astrology/astrology.json
+start 466 20261122 0
+time 1479131520
+frames 90 33333
+touch 1 340 120
+frames 2 33333
+touch 0 0 0
+frames 60 33333
+state {"act":"look_up"}
+frames 90 33333
+scene globe 20 {"img":"moon","lit":0.82,"side":1,"r":0.6,"spin":0}
+frames 90 33333
+scene_clear
+frames 90 33333
+time 1713208380
+frames 30 33333

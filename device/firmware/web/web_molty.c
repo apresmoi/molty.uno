@@ -156,7 +156,7 @@ static void run_task(const char *name) { s_run = true; web_sdk_task(name); s_run
 /* web_device.c: the simulator's device mode and the device's own input handling (at the end: it reads the fluid's state) */
 static void web_drawer_before(void);
 static void web_frame_after(void);
-static bool web_sense_touch(int x, int y);
+static bool web_sense_touch(int x, int y, unsigned *spot);
 
 /* ── the calls ────────────────────────────────────────────────────────────── */
 
@@ -226,21 +226,27 @@ static struct { bool open; unsigned seq; fluid_ask_hit_t hit; int answer; } s_q 
 /** The finger: down at panel pixel (x, y), moved, or lifted. As sense.c does on the press: a question on screen takes
  *  the tap as its answer (link_ask.c: only the question the panel shows, only on an answer), else a scene's spot
  *  takes it (its reading shows). The fluid's own share (the ripple, the creature coming to the front, a drag stirring
- *  the water) is mole_fluid.c's poll of the same finger. */
-WM_API void wm_touch(int down, int x, int y) {
-    if (!s_up) return;
+ *  the water) is mole_fluid.c's poll of the same finger. 1: the press landed on a control (an answer, a spot), its
+ *  wave faint (mole_fluid.c TAP_SPOT) and the creature not called over; else 0. */
+WM_API int wm_touch(int down, int x, int y) {
+    if (!s_up) return 0;
     x = x < 0 ? 0 : x >= s_px ? s_px - 1 : x; y = y < 0 ? 0 : y >= s_px ? s_px - 1 : y;
+    int control = 0;
     if (down && !s_finger.down) {
         s_finger.tapped = true;
-        if (web_sense_touch(x, y)) {}  /* the simulator: sense.c's own routing (web_device.c) */
+        const bool asked = s_q.open;
+        unsigned spot = 0;
+        if (web_sense_touch(x, y, &spot)) {}  /* the simulator: sense.c's own routing (web_device.c) */
         else if (s_q.open) {
             const float r = s_px * 0.5f;
             const int i = mole_fluid_ask_shown() == s_q.seq ? fluid_ask_pick(&s_q.hit, ((float)x + 0.5f - r) / r, ((float)y + 0.5f - r) / r) : -1;
             if (i >= 0) { mole_fluid_ask_pick(i); s_q.open = false; s_q.answer = i; }
-        } else mole_fluid_spot_tap(x, y);
+        } else spot = mole_fluid_spot_tap(x, y);
+        control = (asked && !s_q.open) || (spot && spot != MOLE_SPOT_BACK);
     }
     s_finger.down = down != 0;
     if (down) { s_finger.x = x; s_finger.y = y; }
+    return control;
 }
 
 /* web_cat.c: the creature's place and the picture's camera */
@@ -283,6 +289,9 @@ WM_API int wm_pan(float across) {
 /** Where the creature stands: across the frame from its middle, and back from the viewer (world units; 0 with none). */
 WM_API float wm_across(void) { return s_up && s_cpk && cpk_crisp(s_cpk) ? web_cat_across(cpk_clip(s_cpk)) : 0.f; }
 WM_API float wm_back(void) { return s_up && s_cpk && cpk_crisp(s_cpk) ? web_cat_back(cpk_clip(s_cpk)) : 0.f; }
+/** The rigged creature's bones this frame, read only: each node's world matrix (creature_clip.h cc_world: 12 floats a
+ *  node, 3 rows of 4), in its rig's node order; NULL while none shows. For tools/alive-rig (where its motion is). */
+WM_API const float *wm_bones(void) { return s_up && s_cpk && cpk_crisp(s_cpk) ? cc_world(cpk_clip(s_cpk)) : NULL; }
 
 /** The creature alone, as the panel shows it: the panel's pixels in the cells its own dots are in (creature_dots.h
  *  cd_creature), everything else clear, and clear between its dots. Nothing is drawn here: it is the firmware's picture
@@ -391,6 +400,26 @@ WM_API char *wm_state_json(void) {
     char *out = NULL;
     return s_up && mole_fluid_creature_state_get_json(&out) == ESP_OK ? out : NULL;
 }
+
+/** The time now, unix seconds UTC (the page's clock: Date.now() / 1000), for the sky behind the cat (sky.h: today's
+ *  moon, the falling stars); it runs on with the frames' clock. 0: not known (as out of the box): no sky, the frames
+ *  as ever. wm_time_now: the time as the module has it now (0 not known). */
+WM_API void   wm_time(double unix_s) { if (s_up) mole_fluid_utc(unix_s); }
+WM_API double wm_time_now(void) { return s_up ? mole_fluid_utc_now() : 0.0; }
+
+/** The weather on the glass behind the cat (weather.h), as POST /api/creature/state {weather: {kind, s}} tells it:
+ *  kind 0 clear, 1 drizzle, 2 rain, 3 downpour, held s seconds (<= 0: an hour), then easing back to clear. Never told
+ *  (as out of the box): clear, the frames as ever. */
+WM_API int wm_weather(int kind, float s) {
+    if (!s_up || kind < 0 || kind >= WX_KINDS) return -1;
+    char b[96];
+    if (s > 0.f) snprintf(b, sizeof(b), "{\"weather\":{\"kind\":\"%s\",\"s\":%.0f}}", WX_NAMES[kind], s);
+    else snprintf(b, sizeof(b), "{\"weather\":\"%s\"}", WX_NAMES[kind]);
+    return mole_fluid_creature_state_set_json(b) == ESP_OK ? 0 : -1;
+}
+/** (A demo hook for the website's /demo/ page, never the device's nor an agent's: the next falling star now, as soon
+ *  as one may show.) */
+WM_API void wm_demo_star(void) { if (s_up && s_sky && s_sky->star.t < 0.f) s_sky->star.wait = 0.f; }
 
 /** A listen records (the recording ring) or ended; the mic's level while it does, 0..1. */
 WM_API void wm_listen(int on) { if (s_up) mole_fluid_listen(on != 0); }

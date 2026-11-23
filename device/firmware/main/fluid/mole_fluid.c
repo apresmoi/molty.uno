@@ -67,6 +67,9 @@
 
 #include "glyph_font.h"   /* gc_font5x7, GC_RAMP_ASCII */
 #include "fluid_ring.h"   /* the listening ring's knobs */
+#include "screen_nap.h"   /* the screen off a while after the creature fell asleep */
+#include "sky.h"          /* the moon and the falling stars behind the creature */
+#include "weather.h"      /* the weather on the glass behind the creature */
 
 static const char *TAG = "mole_fluid";
 
@@ -195,6 +198,40 @@ static uint32_t gestures_load(void);
 static int      s_idle_life = FD_IDLE_DEFAULT;
 static bool     s_idle_life_loaded = false;
 static int      idle_life_load(void);
+/* the screen's nap after the creature fell asleep, on battery and on USB, s (0 never; NVS "fluid"/"nap_bat", "nap_usb",
+ * the console's settings, written by power.c in the flash's quiet window: mole_fluid_nap_setting); s_nap_gen moves
+ * with each change */
+static uint32_t s_nap_s[2] = { NAP_BATTERY_S_DEFAULT, NAP_USB_S_DEFAULT };
+static bool     s_nap_loaded = false;
+static unsigned s_nap_gen;
+static void     nap_setting_load(void);
+/* the sky behind the creature (sky.h): the setting (NVS "fluid"/"sky", on out of the box, written by power.c in the
+ * flash's quiet window: mole_fluid_sky_setting; s_sky_gen moves with each change), the time (mole_fluid_utc: unix s at
+ * esp_timer us; 0 not known) and do not disturb (mole_fluid_dnd), under s_mutex; the sky itself is the task's (PSRAM) */
+static bool     s_sky_on = true;
+static bool     s_sky_loaded = false;
+static unsigned s_sky_gen;
+static double   s_utc0;
+static int64_t  s_utc_us0;
+static bool     s_dnd;
+static sky_t   *s_sky;
+static double   s_tutc;                         /* (the task's) the time now, unix s, 0 not known */
+static bool     s_tsky_on = true, s_tdnd;       /* (the task's) copies of the setting and do not disturb */
+static void     sky_setting_load(void);
+/* the weather on the glass (weather.h): the setting (NVS "fluid"/"wx", on out of the box, written by power.c in the
+ * flash's quiet window: mole_fluid_weather_setting; s_wx_gen moves with each change), what was last told (its kind and
+ * lifetime; s_wx_told moves with each telling) and what the task last had (s_wx_rep, for GET), under s_mutex; the
+ * weather itself is the task's (PSRAM) */
+static bool     s_wx_on = true;
+static bool     s_wx_loaded = false;
+static unsigned s_wx_gen, s_wx_told, s_wx_seen;
+static int      s_wx_kind_in = WX_CLEAR;
+static float    s_wx_life_in;
+static struct { int kind; float left, level, wet; } s_wx_rep;
+static weather_t *s_wx;
+static bool     s_twx_on = true;                /* (the task's) copy of the setting */
+static int64_t  s_wx_t;                         /* (the task's) its last frame, uptime us (0: none yet) */
+static void     wx_setting_load(void);
 static int      s_req_act = -1;                 /* an agent's action (act / a say's mark)  */
 static bool     s_req_spoke = false;            /* a say played to its end                 */
 /* scenes (mole_fluid_scene): ops wait here for the task, which owns the player */
@@ -269,6 +306,9 @@ static struct {
     fluid_askview_t *v;                         /* how it looks (PSRAM, made for it)                                    */
     fluid_askview_t *making;                    /* ... while its dots are worked out, a few rows a frame (ASK_BUILD_ROWS) */
     fluid_askview_t *old;                       /* one the drawer may still read: freed with the drawer idle            */
+    unsigned vseq;                              /* the question `v` shows (the one before stands while the next is made) */
+    float gone;                                 /* (s_tnow) a whole one went, answered: the press that answered it may
+                                                 * reach poll_touch a frame or two later (ASK_PRESS_S)                  */
 } s_ask;
 /* the listening ring (fluid_target_arc) */
 static bool  s_listen = false;                  /* task copy of s_listen_in */
@@ -320,6 +360,12 @@ static int   s_last_tx = 0, s_last_ty = 0;
 static volatile bool s_full_flush = true;
 static atomic_bool s_screen_want = true;        /* mole_fluid_screen                    */
 static atomic_bool s_screen = true;             /* on the glass now (the task switches it) */
+/* the screen's nap (screen_nap.h): the task's timer; an off by hand (mole_fluid_screen), a pick-up (mole_fluid_lifted)
+ * and the power Molty is on (mole_fluid_power) from other tasks; the progress count when the nap began */
+static nap_t       s_nap;
+static atomic_bool s_hand_off, s_lifted;
+static atomic_int  s_nap_power = NAP_POWER_UNKNOWN;
+static unsigned    s_nap_prog;
 static atomic_uint s_moved_ms;                  /* the last frame something moved on the glass (uptime ms): fluid_calm_ms */
 #define FLUID_QUIET_PX 20000                    /* ... or sent this many px to the panel (a creature at rest: ~10 k) */
 static uint32_t fluid_calm_ms(void);
@@ -372,6 +418,7 @@ static bool       s_spot_on = false;
 static unsigned   s_spot_gen = 0;                   /* the player's gen it was copied at (0: none) */
 static float      s_spot_t = 0.f;                   /* the scene's clock, for spots' on / off */
 static atomic_uint s_spot_req;                      /* a tap on a spot: gen << 8 | item + 1, 0 none; MOLE_SPOT_BACK */
+static atomic_uint s_spot_press;                    /* the last press mole_fluid_spot_tap saw on a spot: 1 << 31 | x << 16 | y */
 static bool       s_spot_back;                      /* the scene on screen was opened by a tap: a tap beside its spots goes back */
 static unsigned   s_tapped;                         /* the last spot tapped, its id and the layout it opens: kept apart from */
 static char       s_tapped_id[PKG_STR_MAX + 1], s_tapped_open[PKG_KEY_MAX + 1];   /* its scene, which the tap may replace */
@@ -583,26 +630,34 @@ static void direct(const fluid_cfg_t *cfg) {
 /* ── A question (the link's ask): drawn over the screen (fluid_askview.h) ─────── */
 
 #define ASK_BUILD_ROWS 24                       /* a question's dots: this many of their 4 x H rows a frame (~5 ms) */
+#define ASK_PRESS_S    0.25f                    /* a whole question answered: its press still its own this long after   */
 /* follow what the link wants (once per frame, before the director's transitions) */
 static void ask_follow(const ask_want_t *w) {
     const int did = fluid_ask_follow(&s_ask.scr, w->active, w->seq, w->pick, w->q.n);
     if (did & FLUID_ASK_DID_SHOW) {                        /* a new one: its look is made over the next frames (a frame
-                                                            * cannot take it whole: ~0.3 s of roots and angles) */
-        if (s_ask.v) { fluid_askview_destroy(s_ask.old); s_ask.old = s_ask.v; s_ask.v = NULL; }
+                                                            * cannot take it whole: ~0.3 s of roots and angles); the one
+                                                            * before stands as it was till then */
         fluid_askview_destroy(s_ask.making);
         s_ask.making = fluid_askview_begin(s_sim, &w->q);
         if (!s_ask.making) mole_diag_event(true, "fluid.ask no memory for the question's look");
     }
     if (did & FLUID_ASK_DID_GONE) { fluid_askview_destroy(s_ask.making); s_ask.making = NULL; }
-    if (s_ask.making) {                                    /* ... its clock waits; made, the touch at the centre */
+    if (s_ask.making) {                                    /* ... its clock waits; made, it comes: as the new picture of a
+                                                            * change of picture, whole, where the drawer changes its
+                                                            * pictures so (the device); else by a touch at the centre */
         s_ask.scr.t = 0.f;
         if (fluid_askview_build(s_ask.making, s_sim, ASK_BUILD_ROWS)) {
-            s_ask.v = s_ask.making; s_ask.making = NULL;
-            s_ask.hit = fluid_askview_layout(s_ask.v)->hit; fluid_askview_start(s_ask.v, s_sim);
+            fluid_askview_destroy(s_ask.old); s_ask.old = s_ask.v;
+            s_ask.v = s_ask.making; s_ask.making = NULL; s_ask.vseq = s_ask.scr.seq;
+            s_ask.hit = fluid_askview_layout(s_ask.v)->hit;
+            s_ask.scr.whole = fluid_draw_morph_carries(s_draw);
+            if (s_ask.scr.whole) fluid_askview_start_whole(s_ask.v); else fluid_askview_start(s_ask.v, s_sim);
         }
     }
-    if (s_ask.v && (did & (FLUID_ASK_DID_PICK | FLUID_ASK_DID_LEAVE))) fluid_askview_answer(s_ask.v, s_sim, did & FLUID_ASK_DID_PICK ? s_ask.scr.pick : -1);
+    if (s_ask.v && s_ask.vseq == s_ask.scr.seq && (did & (FLUID_ASK_DID_PICK | FLUID_ASK_DID_LEAVE)))
+        fluid_askview_answer(s_ask.v, s_sim, did & FLUID_ASK_DID_PICK ? s_ask.scr.pick : -1);
     if ((did & FLUID_ASK_DID_GONE) && s_ask.v) { fluid_askview_destroy(s_ask.old); s_ask.old = s_ask.v; s_ask.v = NULL; }
+    if (did & FLUID_ASK_DID_GONE) s_ask.gone = s_tnow;
 }
 
 /* with the drawer idle: the question over this frame's scene (its dots as crisp dots, dimmed under it), its letters */
@@ -662,8 +717,11 @@ static esp_err_t build_grid(int W, int H) {
 /* ── Input ──────────────────────────────────────────────────────────────────── */
 
 static int64_t s_touch_t0;            /* sim: tap seen, not yet handed to the drawer */
+#define TAP_WAVE   1.6f               /* a tap on open water: its ripple's strength ..                       */
+#define TAP_R      0.09f              /* .. and radius                                                       */
+#define TAP_SPOT   0.3f               /* a tap on a scene's spot (a button): every bump it makes, this much of it */
 /* one bump of a tapped spot's wave, at (x, y) glass units, y up (scene_outline) */
-static void outline_bump(void *ctx, float x, float y) { (void)ctx; ripple(x, -y, SCENE_OUTLINE_WAVE, SCENE_OUTLINE_R); }
+static void outline_bump(void *ctx, float x, float y) { (void)ctx; ripple(x, -y, SCENE_OUTLINE_WAVE * TAP_SPOT, SCENE_OUTLINE_R); }
 static volatile int64_t s_dtouch;     /* drawer: tap time riding with the current frame */
 /* the touch panel's last read (the drawer polls it, off the sim's core: ~1 ms of I2C and
  * waits a poll); s_mutex */
@@ -678,12 +736,22 @@ static void poll_touch(int n, const uint16_t *xs, const uint16_t *ys, int64_t t)
         /* on a scene's spot a wave leaves the outline of what it grows (that stays still); the finger's ripple too (on fine
          * dust it carries the dust over the whole glass), unless the spot opens a layout (the picture changes on still water) */
         const int spot = s_cur == ST_SCENE && s_sp.cur ? scene_spot_at(s_sp.cur, s_sp.t, x, -y) : -1;
-        /* a tap on a question's answer: its own wave goes from there (fluid_askview_answer), not a finger's */
-        const bool answer = s_ask.scr.phase == FLUID_ASK_SHOW && s_ask.scr.t >= FLUID_ASK_READY && s_ask.v && fluid_ask_pick(&s_ask.hit, x, y) >= 0;
+        /* (a spot found on the press itself (mole_fluid_spot_tap, before this poll) counts too: its layout may be up already) */
+        const unsigned press = atomic_exchange(&s_spot_press, 0);
+        const bool on_spot = spot >= 0 || press == (1u << 31 | (unsigned)xs[0] << 16 | ys[0]);
+        /* a tap on a question's answer: its own wave goes from there (fluid_askview_answer; a whole one's none), not a
+         * finger's (and the answer may be taken already: the press went to the question first, as a spot's; a whole one
+         * gone with it) */
+        const bool went = s_ask.scr.whole && s_ask.scr.phase == FLUID_ASK_NONE && s_ask.scr.pick >= 0 && s_tnow - s_ask.gone < ASK_PRESS_S;
+        const int pick = s_ask.v || went ? fluid_ask_pick(&s_ask.hit, x, y) : -1;
+        const bool answer = pick >= 0 && ((s_ask.scr.phase == FLUID_ASK_SHOW && (s_ask.scr.whole ? s_dask == s_ask.scr.seq : s_ask.scr.t >= FLUID_ASK_READY)) ||
+                                          ((s_ask.scr.phase == FLUID_ASK_PICK || went) && pick == s_ask.scr.pick));
         if (spot >= 0 && fluid_fine_dust_kind_get() == FINE_DUST_SPECKS) scene_outline(s_sp.cur, spot, outline_bump, NULL);
-        if (!answer && (spot < 0 || !s_sp.cur->items[spot].nopen)) ripple(x, y, 1.6f, 0.09f);
+        if (!answer && (spot < 0 || !s_sp.cur->items[spot].nopen)) ripple(x, y, on_spot ? TAP_WAVE * TAP_SPOT : TAP_WAVE, TAP_R);
         fd_user(&s_dir);                                    /* wakes a sleepy creature */
-        if (s_cur == ST_CREATURE && s_cpk) cpk_come(s_cpk, NULL);   /* a rigged one comes to the front, attending */
+        /* a rigged one comes to the front, attending: not for a touch on a control (an answer, a spot), so what the agent
+         * asks right after (a gesture, a mood) shows */
+        if (s_cur == ST_CREATURE && s_cpk && !answer && !on_spot) cpk_come(s_cpk, NULL);
         if (!s_touch_t0) s_touch_t0 = t;
         return;
     }
@@ -724,6 +792,42 @@ static inline float frand(void) { return (esp_random() & 0xFFFFFF) / 16777216.f;
  * flush) instead of their sum. Handshake: s_idle (drawer free → snapshot may be
  * overwritten) / s_go (snapshot ready). Measured before the split: sim 34 ms, draw
  * 17 ms, flush 9 ms per frame at 52×32. */
+
+/* The sky behind the creature (sky.h), each frame before its own: the moon whenever the creature is on the glass with
+ * nothing over it; a falling star only when nothing else is going on (no question, listen, say, reading, progress,
+ * change of picture or bench), and not while it sleeps with do not disturb on (a dark, quiet room: the one bright
+ * thing moving). No time known: nothing. A few hundred bytes of the task's stack. */
+static bool sky_bench(void);
+static void sky_tick(float rdt) {
+    if (!s_sky || !s_cpk) return;
+    const bool moon = s_cur == ST_CREATURE && cpk_crisp(s_cpk) && s_ask.scr.phase == FLUID_ASK_NONE;
+    const bool star = moon && !s_listen && s_rg.on <= 0.f && s_pg.on <= 0.f && cr_mood() != CM_SPEAKING && !s_sub && !s_rd_on &&
+                      !fluid_draw_morphing(s_draw) && !sky_bench() && !(fd_asleep(&s_dir) && s_tdnd);
+    sky_set(s_sky, s_tsky_on);
+    sky_frame(s_sky, s_tutc, s_sim->W, s_sim->H, rdt, moon, star);
+    cpk_sky(s_cpk, s_sky);
+}
+
+/* The weather on the glass (weather.h), each frame after the sky: shown whenever the moon may show (the creature on the
+ * glass with nothing over it); its clocks (the lifetime, the easing, the drying) run by the uptime clock, so the time the
+ * screen was off counts. Each landed drop is a soft bump in the water (fluid_sim_impulse, never motion(): it does not
+ * hold the flash's quiet window off). In a full downpour the cat shakes itself off, only when nothing else plays: no
+ * gesture, mood, listen, say, question, reading, ring, change of picture or sleep. A few dozen bytes of the task's
+ * stack. */
+static void wx_tick(void) {
+    if (!s_wx || !s_cpk) return;
+    const int64_t now = esp_timer_get_time();
+    const float dt = s_wx_t ? (float)(now - s_wx_t) * 1e-6f : 0.f;
+    s_wx_t = now;
+    const bool show = s_cur == ST_CREATURE && cpk_crisp(s_cpk) && s_ask.scr.phase == FLUID_ASK_NONE;
+    weather_set(s_wx, s_twx_on);
+    weather_frame(s_wx, s_sim->W, s_sim->H, dt, show, s_sky && s_sky->nmoon_shown ? s_sky->moon.lit : 0.f);
+    for (int q = 0; q < s_wx->nbump; q++) fluid_sim_impulse(s_sim, s_wx->bump[q].x, s_wx->bump[q].y, s_wx->bump[q].strength, s_wx->bump[q].radius);
+    cpk_weather(s_cpk, s_wx);
+    if (s_wx->shake && show && !s_listen && s_rg.on <= 0.f && s_pg.on <= 0.f && !s_sub && !s_rd_on && fd_mood(&s_dir) == CM_IDLE &&
+        cr_mood() == CM_IDLE && cr_acting() < 0 && !fd_asleep(&s_dir) && !fluid_draw_morphing(s_draw) && cpk_gesture(s_cpk, "shaken"))
+        weather_shook(s_wx);
+}
 
 static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     fluid_sim_t *s = s_sim;
@@ -781,6 +885,8 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     }
 
     const bool asking = s_ask.scr.phase == FLUID_ASK_SHOW;
+    sky_tick(rdt);                                         /* (every frame: a star out at once when the creature goes) */
+    wx_tick();                                             /* (after the sky: the moon's light on the rain) */
     if (s_ask.scr.phase != FLUID_ASK_NONE) {               /* the question's clocks */
         s_ask.scr.t += rdt;
         if (s_ask.scr.phase != FLUID_ASK_SHOW) s_ask.scr.out_t += rdt;
@@ -870,10 +976,13 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     /* a listen on the water, never over a question: a fixed circle at the rim, and each rise of
      * the voice sends a round wave from it across the screen (fluid_ring.h). The circle is a
      * target of the fluid, around whatever the state shows. */
+    /* (the rings form on the glass, not unseen under a change of picture that would show them whole at its end: a listen,
+     * an install's progress starting as a question goes) */
+    const float rdt_ring = fluid_draw_morphing(s_draw) && fluid_draw_morph_carries(s_draw) ? 0.f : rdt;
 #ifdef MOLTY_DIAG_RING
-    fluid_ring_tick(&s_rg, rdt, (s_listen || esp_timer_get_time() < s_diag_ring_until) && !asking);
+    fluid_ring_tick(&s_rg, rdt_ring, (s_listen || esp_timer_get_time() < s_diag_ring_until) && !asking);
 #else
-    fluid_ring_tick(&s_rg, rdt, s_listen && !asking);
+    fluid_ring_tick(&s_rg, rdt_ring, s_listen && !asking);
 #endif
     {   /* the agent's progress: on from its first word until done, or PROG_TTL_S without news */
         static unsigned seen; static float at = -1.f;
@@ -882,7 +991,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         const bool done = atomic_exchange(&s_prog_end, false);
         if (done || atomic_exchange(&s_prog_stop, false)) at = -1.f;   /* done flashes first; a stop just lets go */
         const int32_t pv = atomic_load(&s_prog_in);
-        fluid_progress_tick(&s_pg, rdt, at >= 0.f && s_tnow - at < PROG_TTL_S, pv < 0 ? -1.f : pv * 0.001f, done);
+        fluid_progress_tick(&s_pg, rdt_ring, at >= 0.f && s_tnow - at < PROG_TTL_S, pv < 0 ? -1.f : pv * 0.001f, done);
     }
     /* the floor: the dim fluid on a ground plane under a creature, flat behind anything else */
     s_floor_w += ((s_cur == ST_CREATURE ? 1.f : 0.f) - s_floor_w) * fminf(1.f, 2.f * rdt);
@@ -980,7 +1089,11 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     case ST_CREATURE:
         if (cr_loaded()) {
             /* (while a change of picture shows it, once the drawer made its new look, it stands: the drawer reads none of it) */
-            if (s_cpk && !fluid_draw_morph_still(s_draw)) { cpk_set_work(s_cpk, fd_working(&s_dir)); cpk_frame(s_cpk, s, rdt, swell); }    /* engine + player + body + ambient + fill */
+            if (s_cpk && !fluid_draw_morph_still(s_draw)) {    /* engine + player + body + ambient + fill */
+                cpk_set_work(s_cpk, fd_working(&s_dir));
+                cpk_set_idle(s_cpk, s_dir.quiet, s_dir.idle_life == FD_IDLE_LIVELY ? 1.f : s_dir.idle_life == FD_IDLE_CALM ? 0.5f : 0.f);
+                cpk_frame(s_cpk, s, rdt, swell);
+            }
             else cute_rt_update(s_cute, rdt);              /* mood engine + kit + behaviours */
             {   /* paddle's strokes splash the real water, either side of the creature */
                 static float act_t0;
@@ -1061,7 +1174,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     s_shimmer = 0.12f + (thinking ? 0.35f : 0.f) + cfg->mic * 0.4f;
 
     /* the question over it all, from the water as it is now */
-    if (s_ask.v) fluid_askview_frame(s_ask.v, s, &s_ask.scr, s_tnow);
+    if (s_ask.v && s_ask.vseq == s_ask.scr.seq) fluid_askview_frame(s_ask.v, s, &s_ask.scr, s_tnow);   /* (the one before: as it stood) */
     s_frame_no++;
 }
 
@@ -1467,6 +1580,7 @@ static bool s_tx_frame;                             /* this frame's windows went
 /* the bench (mole_fluid_bench_*): records taken, a finger's tap to inject at the next touch poll (1 << 31 | x << 16 | y,
  * panel px), the animations open (bits FLUID_ANIM_*, the wave's while a change runs) */
 static mole_anim_rec_t *volatile s_bench;
+static bool sky_bench(void) { return s_bench != NULL; }   /* (a bench runs: no falling star in its frames) */
 static volatile int s_bench_n, s_bench_cap;
 static atomic_uint s_bench_touch, s_anim_busy;
 static atomic_bool s_bench_boot, s_dust_in;
@@ -1737,12 +1851,32 @@ static bool screen_switch(bool on) {
     return true;
 }
 
-/* Screen off: something the human must see is waiting (a request the task has not taken yet). */
-static bool screen_wanted(void) {
+/* Screen off: a request the task has not taken yet. NAP_WAKE_SHOW: one the human must see (words, a question, a
+ * listen), which wakes any off; NAP_WAKE_AGENT: anything else the agent shows (a state, a mood, a gesture, a scene,
+ * progress, a creature), which ends a nap only (nap_wakes); -1 none. */
+static int screen_wanted(void) {
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    bool w = s_text_ver != s_seen_ver || (s_ask_want.active && s_ask_want.seq != s_ask.scr.seq) || (s_listen_in && !s_listen);
+    const bool show = s_text_ver != s_seen_ver || (s_ask_want.active && s_ask_want.seq != s_ask.scr.seq) || (s_listen_in && !s_listen);
+    const bool agent = s_req_activity || s_req_state >= 0 || s_req_mood >= 0 || s_req_work || s_req_act >= 0 || s_req_reel ||
+                       s_scene_nops || s_follow_in || s_cute_blob;
     xSemaphoreGive(s_mutex);
-    return w;
+    return show ? NAP_WAKE_SHOW : agent || atomic_load(&s_prog_seq) != s_nap_prog ? NAP_WAKE_AGENT : -1;
+}
+
+/* Once a frame, after the sim's (fluid_task, its stack: a few words): the creature asleep on screen with nothing else
+ * up for the human's time (screen_nap.h), the screen naps. "Up": a state but the creature's, a change on its way, a
+ * question, a listen, a say, a reading, a scene, the progress ring, the boot word, the goodbye, the bench. */
+static void nap_check(void) {
+    const bool busy = (s_cur != ST_CREATURE && s_cur != ST_BLOB) || s_dir.pending || s_dir.busy || s_ask.scr.phase != FLUID_ASK_NONE ||
+                      scene_playing(&s_sp) || s_pg.on > 0.f || s_sub || s_rd_on || fd_boot_word(&s_dir) || s_dir.bye || s_bench;
+    if (!nap_tick(&s_nap, (uint32_t)(esp_timer_get_time() / 1000), fd_asleep(&s_dir), busy, atomic_load(&s_nap_power), s_nap_s[0], s_nap_s[1]))
+        return;
+    bool on = true;
+    if (!atomic_compare_exchange_strong(&s_screen_want, &on, false)) { nap_on(&s_nap); return; }   /* (the human's switch came first) */
+    atomic_store(&s_hand_off, false);
+    atomic_store(&s_lifted, false);
+    s_nap_prog = atomic_load(&s_prog_seq);
+    mole_diag_event(false, "fluid.nap (%s)", atomic_load(&s_nap_power) == NAP_POWER_BATTERY ? "battery" : "usb");
 }
 
 /* a change of picture's new picture read on this task (fluid_draw_morph_work) in what its frame leaves before the next
@@ -1830,14 +1964,25 @@ static void fluid_task(void *arg) {
         esp_task_wdt_reset();
         if (!atomic_load(&s_screen)) {                  /* off: no sim, no drawing */
             uint16_t xs[MOLTY_TOUCH_MAX_POINTS], ys[MOLTY_TOUCH_MAX_POINTS];
-            const bool touched = molty_touch_poll(xs, ys, MOLTY_TOUCH_MAX_POINTS) > 0;
-            if (!touched && !screen_wanted() && !atomic_load(&s_screen_want)) { vTaskDelay(pdMS_TO_TICKS(FLUID_OFF_POLL_MS)); continue; }
+            const bool touched = molty_touch_poll(xs, ys, MOLTY_TOUCH_MAX_POINTS) > 0, lifted = atomic_exchange(&s_lifted, false);
+            if (atomic_exchange(&s_hand_off, false)) nap_hand_off(&s_nap);
+            const int wanted = screen_wanted();
+            const int why = touched ? NAP_WAKE_TOUCH : wanted == NAP_WAKE_SHOW ? NAP_WAKE_SHOW : atomic_load(&s_screen_want) ? NAP_WAKE_BUTTON
+                          : lifted ? NAP_WAKE_LIFT : wanted;
+            if (why < 0 || !nap_wakes(&s_nap, (nap_wake_t)why)) { vTaskDelay(pdMS_TO_TICKS(FLUID_OFF_POLL_MS)); continue; }
+            if (why == NAP_WAKE_LIFT || why == NAP_WAKE_AGENT) {   /* a nap's end for a pick-up or the agent: the creature wakes too */
+                xSemaphoreTake(s_mutex, portMAX_DELAY);
+                if (why == NAP_WAKE_LIFT) s_req_user = true; else s_req_activity = true;
+                xSemaphoreGive(s_mutex);
+            }
             s_touch_mute = touched;
             atomic_store(&s_screen_want, true);
             if (!screen_switch(true)) { vTaskDelay(pdMS_TO_TICKS(FLUID_OFF_POLL_MS)); continue; }
+            nap_on(&s_nap);
             prev = woke = esp_timer_get_time();         /* no catching up on the time it was off */
             next = woke + FLUID_FRAME_US;
         } else if (!atomic_load(&s_screen_want)) { if (!screen_switch(false)) vTaskDelay(pdMS_TO_TICKS(FLUID_OFF_POLL_MS)); continue; }
+        else if (atomic_exchange(&s_hand_off, false)) nap_on(&s_nap);   /* (off and on again by hand: the timer starts again) */
         int64_t now = esp_timer_get_time();
         float rdt = (float)(now - prev) / 1e6f;
         uint32_t raw_dt_us = (uint32_t)(now - prev);
@@ -1871,6 +2016,16 @@ static void fluid_task(void *arg) {
         const touch_read_t tp = s_tp;
         if (!s_idle_life_loaded) { s_idle_life = idle_life_load(); s_idle_life_loaded = true; }
         int idle_life = s_idle_life;
+        if (!s_nap_loaded) nap_setting_load();
+        if (!s_sky_loaded) sky_setting_load();
+        s_tsky_on = s_sky_on; s_tdnd = s_dnd;
+        if (!s_wx_loaded) wx_setting_load();
+        s_twx_on = s_wx_on;
+        const bool wx_told = s_wx_told != s_wx_seen;
+        const int wx_kind = s_wx_kind_in; const float wx_life = s_wx_life_in;
+        s_wx_seen = s_wx_told;
+        if (s_wx) { s_wx_rep.kind = s_wx->kind; s_wx_rep.left = s_wx->left; s_wx_rep.level = s_wx->level; s_wx_rep.wet = s_wx->wet; }
+        s_tutc = s_utc0 > 0.0 ? s_utc0 + (double)(now - s_utc_us0) * 1e-6 : 0.0;
         uint32_t tint = s_tint_in;
         bool activity = s_req_activity, shake = s_req_shake, user = s_req_user;
         s_req_activity = s_req_shake = s_req_user = false;
@@ -1906,6 +2061,8 @@ static void fluid_task(void *arg) {
                 fluid_askview_destroy(s_ask.v); fluid_askview_destroy(s_ask.old); fluid_askview_destroy(s_ask.making); s_ask.v = s_ask.old = s_ask.making = NULL;
                 if (s_ask.scr.phase == FLUID_ASK_SHOW && want.seq == s_ask.scr.seq) s_ask.v = fluid_askview_create(s_sim, &want.q);
                 if (!s_ask.v) s_ask.scr.phase = FLUID_ASK_NONE;   /* one leaving goes at once */
+                else if (s_ask.scr.whole) fluid_askview_start_whole(s_ask.v);
+                s_ask.vseq = s_ask.scr.seq;
             }
         }
         if (text_changed) {
@@ -1954,6 +2111,7 @@ static void fluid_task(void *arg) {
         fd_set_idle_life(&s_dir, idle_life);
         if (req_act >= 0) fd_agent_act(&s_dir, req_act, cr_act_dur(req_act));
         if (spoke) fd_turn_spoken(&s_dir);
+        if (wx_told && s_wx && s_twx_on) weather_tell(s_wx, wx_kind, wx_life);
         if (tint != s_tint) {                      /* a say's mood mark: its words from now on */
             s_tint = tint;
             if (s_cur == ST_TEXT && s_ask.scr.phase == FLUID_ASK_NONE) tint_letters();
@@ -1972,6 +2130,7 @@ static void fluid_task(void *arg) {
         int64_t t0 = esp_timer_get_time();
         s_sim_fill_us = s_sim_build_us = 0;
         sim_frame(rdt, &cfg);
+        nap_check();
         int64_t t1 = esp_timer_get_time();
         s_sim_work_us = (uint32_t)(t1 - t0);
         /* the dust's frame, worked out here while the drawer still draws the last one: from this task's own shapes, dots
@@ -2091,7 +2250,7 @@ static void fluid_task(void *arg) {
             fluid_fine_swap(s_fine);
         const bool asking = s_ask.v && s_ask.scr.phase != FLUID_ASK_NONE;   /* (ask_compose draws it over the frame) */
         const bool ready = !fine_look || asking || !fluid_fine_specks_kind(fluid_fine_dust_kind_get()) || fluid_fine_shown(s_fine, s_sp.cur->serial);
-        const uint32_t look = asking ? fluid_look_of(FLUID_LOOK_ASK, s_ask.scr.seq, true)
+        const uint32_t look = asking ? fluid_look_of(FLUID_LOOK_ASK, s_ask.vseq, true)
                             : fine_look ? fluid_look_of(FLUID_LOOK_SCENE, s_sp.cur->serial, ready)
                             : s_crisp ? fluid_look_of(FLUID_LOOK_CREATURE, 1u, true) : FLUID_LOOK_GLASS;
         {   /* each new look (/api/log): as a change of picture, or at once (and why); a change cut at the cloud's limit */
@@ -2201,11 +2360,12 @@ static void fluid_task(void *arg) {
         }
         /* the creature's own cells are its lines in a change of picture, the rest of its dots its dust */
         fluid_draw_morph_lines(s_draw, s_crisp && s_cpk && !asking ? cpk_cells_creature(s_cpk) : NULL);
+        fluid_draw_morph_order(s_draw, asking && s_ask.scr.whole ? fluid_askview_order(s_ask.v) : NULL);   /* (its answers grow) */
         fluid_draw_morph_handoff(s_draw);                   /* (the change's reading: this task's from here, or back) */
         if (s_touch_t0) { s_dtouch = s_touch_t0; s_touch_t0 = 0; }
         s_dstatus = fd_status(&s_dir);
         ask_compose();
-        s_dask = fluid_ask_tappable(&s_ask.scr, cfg.speed);
+        s_dask = s_ask.scr.whole && fluid_draw_morphing(s_draw) ? 0u : fluid_ask_tappable(&s_ask.scr, cfg.speed);   /* (whole: once on the glass) */
         {   /* the dust's frame: worked out ahead (above), else here now; the next one ahead only while the drawer works out
              * none itself: a scene on the fine specks, no change of picture (a change works its dust out its own way) */
             const bool go = s_fine && s_dopts.fine == s_fine && s_cur == ST_SCENE && !s_hd.out && s_hd.dust < 1.f &&
@@ -2360,8 +2520,10 @@ esp_err_t mole_fluid_creature_init(void) {
     if (!s_shp)     s_shp     = heap_caps_calloc(2 * FLUID_MAX_SHAPES, sizeof(fluid_shape_t), MALLOC_CAP_SPIRAM);
     s_dshp = s_shp ? s_shp + FLUID_MAX_SHAPES : NULL;
     if (!s_rd)      s_rd      = heap_caps_calloc(1, sizeof(reading_t), MALLOC_CAP_SPIRAM);
+    if (!s_sky)     s_sky     = heap_caps_calloc(1, sizeof(sky_t), MALLOC_CAP_SPIRAM);
+    if (!s_wx)      s_wx      = heap_caps_calloc(1, sizeof(weather_t), MALLOC_CAP_SPIRAM);
     if (!s_spot_sc) s_spot_sc = heap_caps_calloc(1, sizeof(scene_t), MALLOC_CAP_SPIRAM);
-    if (!s_ttext || !s_toks || !s_sdots || !s_sdots_d || !s_kdots || !s_shp || !s_rd || !s_spot_sc || !s_still || !s_fshp) return ESP_ERR_NO_MEM;
+    if (!s_ttext || !s_toks || !s_sdots || !s_sdots_d || !s_kdots || !s_shp || !s_rd || !s_spot_sc || !s_still || !s_fshp || !s_sky || !s_wx) return ESP_ERR_NO_MEM;
     s_ttext[0] = '\0';
     s_seen_ver = -1;
 
@@ -2394,6 +2556,9 @@ esp_err_t mole_fluid_creature_init(void) {
     /* boot: the director wants the creature (the one queued above loads on the task's first
      * frame; the blob stands in only if none loads); at power on, the boot screen's word first */
     fd_init(&s_dir, NULL, esp_random());
+    sky_init(s_sky, s_dir.rng);                  /* (seeded from the director's, none of its numbers drawn) */
+    weather_init(s_wx, s_dir.rng);               /* (the same seed, its own stream: weather.c) */
+    s_wx_t = 0;
     if (!s_booted) fd_boot(&s_dir);
     s_booted = true;
     s_cur = ST_BLOB; s_cur_fx = 0; s_word = 0; s_ntok = 0;
@@ -2500,6 +2665,14 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     const uint32_t gestures = s_gestures;
     if (!s_idle_life_loaded) { s_idle_life = idle_life_load(); s_idle_life_loaded = true; }
     const int idle_life = s_idle_life;
+    if (!s_nap_loaded) nap_setting_load();
+    const uint32_t nap_bat = s_nap_s[0], nap_usb = s_nap_s[1];
+    if (!s_sky_loaded) sky_setting_load();
+    const bool sky = s_sky_on;
+    if (!s_wx_loaded) wx_setting_load();
+    const bool wx_on = s_wx_on;
+    const int wx_kind = s_wx_rep.kind;
+    const float wx_left = s_wx_rep.left, wx_level = s_wx_rep.level, wx_wet = s_wx_rep.wet;
     char cname[40], cerr[40], cid[PKG_ID_MAX + 1];
     memcpy(cname, s_cute_name, sizeof(cname)); memcpy(cerr, s_cute_err, sizeof(cerr)); memcpy(cid, s_cr_id, sizeof(cid));
     cJSON *info = s_cr_info ? cJSON_Parse(s_cr_info) : NULL;   /* its gestures and moods (a package's) */
@@ -2556,6 +2729,20 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     cJSON_AddBoolToObject(root, "shake_talk", shake_talk);
     cJSON_AddItemToObject(root, "gestures", gestures_json(gestures));
     cJSON_AddStringToObject(root, "idle_life", FD_IDLE_NAMES[idle_life]);
+    cJSON_AddNumberToObject(root, "screen_off_battery_s", nap_bat);   /* 0 = never */
+    cJSON_AddNumberToObject(root, "screen_off_usb_s", nap_usb);
+    cJSON_AddBoolToObject(root, "sky", sky);
+    cJSON_AddBoolToObject(root, "weather_on", wx_on);
+    {   /* the weather as the task had it: what was told and how long it still holds, where it is on the way there (level:
+         * 0 clear .. 3 downpour) and how wet the floor is */
+        cJSON *wj = cJSON_AddObjectToObject(root, "weather");
+        if (wj) {
+            cJSON_AddStringToObject(wj, "kind", WX_NAMES[wx_kind >= 0 && wx_kind < WX_KINDS ? wx_kind : 0]);
+            cJSON_AddNumberToObject(wj, "s_left", (int)(wx_left + 0.5f));
+            cJSON_AddNumberToObject(wj, "level", (int)(wx_level * 100.f + 0.5f) / 100.0);
+            cJSON_AddNumberToObject(wj, "wet", (int)(wx_wet * 100.f + 0.5f) / 100.0);
+        }
+    }
     cJSON_AddNumberToObject(root, "scene_dust", fluid_fine_dust_kind_get());       /* EXPERIMENT (mole_fluid_scene_dust) */
     cJSON_AddNumberToObject(root, "scene_hard_pct", fluid_fine_hard_density_get()); /* EXPERIMENT (mole_fluid_scene_hard) */
     cJSON_AddStringToObject(root, "edge_mode",   FLUID_EDGE_NAMES[c.edge_mode]);
@@ -2687,6 +2874,38 @@ esp_err_t mole_fluid_creature_state_set_json(const char *body) {
             nvs_close(h);
         }
         if (ne != ESP_OK) { ESP_LOGW(TAG, "idle_life not saved (%s)", esp_err_to_name(ne)); ret = ne; }
+    }
+    /* screen_off_battery_s, screen_off_usb_s: 0 (never) or NAP_MIN_S..NAP_MAX_S, the screen's nap after the creature
+     * fell asleep (screen_nap.h); kept in NVS by power.c once the screen is calm (mole_fluid_nap_setting) */
+    long nap[2] = { -1, -1 };                          /* -1: not given */
+    for (int k = 0; k < 2; k++)
+        if ((j = cJSON_GetObjectItem(root, k ? "screen_off_usb_s" : "screen_off_battery_s"))) {
+            if (cJSON_IsNumber(j) && j->valuedouble >= 0 && j->valuedouble <= NAP_MAX_S && j->valuedouble == (long)j->valuedouble &&
+                nap_valid_s((long)j->valuedouble)) nap[k] = (long)j->valuedouble;
+            else ret = ESP_ERR_INVALID_ARG;
+        }
+    /* sky: true | false, the moon and the falling stars behind the creature (sky.h); kept in NVS by power.c once the
+     * screen is calm (mole_fluid_sky_setting) */
+    int sky = -1;                                      /* -1: not given */
+    if ((j = cJSON_GetObjectItem(root, "sky"))) {
+        if (cJSON_IsBool(j)) sky = cJSON_IsTrue(j);
+        else ret = ESP_ERR_INVALID_ARG;
+    }
+    /* weather_on: true | false, the weather on the glass at all (weather.h; kept in NVS by power.c, as the sky);
+     * weather: "clear" | "drizzle" | "rain" | "downpour", or {"kind": that, "s": its lifetime 10..21600, 3600 when not
+     * given}: told, it eases there and back to clear when its time is up (kept in RAM only) */
+    int wx_on = -1, wx_kind = -1;
+    float wx_life = 0.f;
+    if ((j = cJSON_GetObjectItem(root, "weather_on"))) {
+        if (cJSON_IsBool(j)) wx_on = cJSON_IsTrue(j);
+        else ret = ESP_ERR_INVALID_ARG;
+    }
+    if ((j = cJSON_GetObjectItem(root, "weather"))) {
+        const cJSON *jk = cJSON_IsObject(j) ? cJSON_GetObjectItem(j, "kind") : j, *js = cJSON_IsObject(j) ? cJSON_GetObjectItem(j, "s") : NULL;
+        wx_kind = cJSON_IsString(jk) ? weather_kind(jk->valuestring) : -1;
+        if (js && !(cJSON_IsNumber(js) && js->valuedouble >= WX_LIFE_MIN_S && js->valuedouble <= WX_LIFE_MAX_S)) wx_kind = -1;
+        else if (js) wx_life = (float)js->valuedouble;
+        if (wx_kind < 0) ret = ESP_ERR_INVALID_ARG;
     }
     /* EXPERIMENT scene_dust: 0 | 1 | 2 | 3, scene_hard_pct: 0..25 (mole_fluid_scene_dust, _scene_hard; not kept) */
     if ((j = cJSON_GetObjectItem(root, "scene_dust"))) {
@@ -2820,8 +3039,24 @@ esp_err_t mole_fluid_creature_state_set_json(const char *body) {
     if (filler >= 0) { s_filler_ms = (uint32_t)filler; s_filler_loaded = true; }
     if (shake >= 0) { s_shake_talk = shake == 1; s_shake_talk_loaded = true; }
     if (idle >= 0) { s_idle_life = idle; s_idle_life_loaded = true; }
+    if (nap[0] >= 0 || nap[1] >= 0) {
+        if (!s_nap_loaded) nap_setting_load();
+        for (int k = 0; k < 2; k++) if (nap[k] >= 0) s_nap_s[k] = (uint32_t)nap[k];
+        if (++s_nap_gen == 0) s_nap_gen = 1;
+    }
+    if (sky >= 0) {
+        if (!s_sky_loaded) sky_setting_load();
+        if (s_sky_on != (sky == 1)) { s_sky_on = sky == 1; if (++s_sky_gen == 0) s_sky_gen = 1; }
+    }
+    if (wx_on >= 0) {
+        if (!s_wx_loaded) wx_setting_load();
+        if (s_wx_on != (wx_on == 1)) { s_wx_on = wx_on == 1; if (++s_wx_gen == 0) s_wx_gen = 1; }
+    }
+    if (wx_kind >= 0) { s_wx_kind_in = wx_kind; s_wx_life_in = wx_life; s_wx_told++; }
     if (act >= 0) s_req_act = act;
-    s_req_activity = true;                             /* someone is driving: no dozing off */
+    bool told_only = true;                             /* the weather alone (an agent keeping it): not someone driving */
+    for (const cJSON *it = root->child; it && told_only; it = it->next) told_only = it->string && (!strcmp(it->string, "weather") || !strcmp(it->string, "weather_on"));
+    if (!told_only || !root->child) s_req_activity = true;   /* someone is driving: no dozing off */
     xSemaphoreGive(s_mutex);
     cJSON_Delete(root);
     return ret;
@@ -2877,7 +3112,14 @@ void mole_fluid_event(mole_fluid_event_t ev) {
     atomic_store(&s_screen_want, true);
 }
 
-void mole_fluid_screen(bool on) { if (!atomic_load(&s_bye)) atomic_store(&s_screen_want, on); }
+void mole_fluid_screen(bool on) {
+    if (atomic_load(&s_bye)) return;
+    atomic_store(&s_hand_off, true);                   /* (by hand: off is no nap, on starts the timer again) */
+    atomic_store(&s_screen_want, on);
+}
+
+void mole_fluid_lifted(void) { atomic_store(&s_lifted, true); }
+void mole_fluid_power(int power) { atomic_store(&s_nap_power, power); }
 
 void mole_fluid_goodbye(void) {
     atomic_store(&s_bye, true);
@@ -3012,6 +3254,7 @@ unsigned mole_fluid_spot_tap(int px, int py) {
         snprintf(s_tapped_open, sizeof(s_tapped_open), "%.*s", (int)it->nopen, s_spot_sc->say + it->open);
     }
     xSemaphoreGive(s_mutex);
+    atomic_store(&s_spot_press, spot && spot != MOLE_SPOT_BACK ? 1u << 31 | (uint32_t)px << 16 | (uint32_t)py : 0u);
     if (spot) atomic_store(&s_spot_req, spot);
     return spot;
 }
@@ -3059,6 +3302,99 @@ void mole_fluid_spoke(void) {
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     s_req_spoke = true;
     xSemaphoreGive(s_mutex);
+}
+
+/* (under s_mutex) */
+static void nap_setting_load(void) {
+    nvs_handle_t h;
+    int32_t v[2] = { -1, -1 };
+    if (nvs_open("fluid", NVS_READONLY, &h) == ESP_OK) {
+        if (nvs_get_i32(h, "nap_bat", &v[0]) != ESP_OK) v[0] = -1;
+        if (nvs_get_i32(h, "nap_usb", &v[1]) != ESP_OK) v[1] = -1;
+        nvs_close(h);
+    }
+    for (int k = 0; k < 2; k++) if (v[k] >= 0 && nap_valid_s(v[k])) s_nap_s[k] = (uint32_t)v[k];
+    s_nap_loaded = true;
+}
+
+/* (under s_mutex) */
+static void sky_setting_load(void) {
+    nvs_handle_t h;
+    int32_t v = 1;
+    if (nvs_open("fluid", NVS_READONLY, &h) == ESP_OK) {
+        if (nvs_get_i32(h, "sky", &v) != ESP_OK) v = 1;
+        nvs_close(h);
+    }
+    s_sky_on = v != 0;
+    s_sky_loaded = true;
+}
+
+/* (under s_mutex) */
+static void wx_setting_load(void) {
+    nvs_handle_t h;
+    int32_t v = 1;
+    if (nvs_open("fluid", NVS_READONLY, &h) == ESP_OK) {
+        if (nvs_get_i32(h, "wx", &v) != ESP_OK) v = 1;
+        nvs_close(h);
+    }
+    s_wx_on = v != 0;
+    s_wx_loaded = true;
+}
+
+unsigned mole_fluid_weather_setting(bool *on) {
+    if (!s_mutex) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (!s_wx_loaded) wx_setting_load();
+    if (on) *on = s_wx_on;
+    const unsigned gen = s_wx_gen;
+    xSemaphoreGive(s_mutex);
+    return gen;
+}
+
+unsigned mole_fluid_sky_setting(bool *on) {
+    if (!s_mutex) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (!s_sky_loaded) sky_setting_load();
+    if (on) *on = s_sky_on;
+    const unsigned gen = s_sky_gen;
+    xSemaphoreGive(s_mutex);
+    return gen;
+}
+
+void mole_fluid_utc(double unix_s) {
+    if (!s_mutex) return;
+    const int64_t now = esp_timer_get_time();
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_utc0 = unix_s > 0.0 ? unix_s : 0.0;
+    s_utc_us0 = now;
+    xSemaphoreGive(s_mutex);
+}
+
+double mole_fluid_utc_now(void) {
+    if (!s_mutex) return 0.0;
+    const int64_t now = esp_timer_get_time();
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    const double t = s_utc0 > 0.0 ? s_utc0 + (double)(now - s_utc_us0) * 1e-6 : 0.0;
+    xSemaphoreGive(s_mutex);
+    return t;
+}
+
+void mole_fluid_dnd(bool on) {
+    if (!s_mutex) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_dnd = on;
+    xSemaphoreGive(s_mutex);
+}
+
+unsigned mole_fluid_nap_setting(uint32_t *battery_s, uint32_t *usb_s) {
+    if (!s_mutex) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (!s_nap_loaded) nap_setting_load();
+    if (battery_s) *battery_s = s_nap_s[0];
+    if (usb_s) *usb_s = s_nap_s[1];
+    const unsigned gen = s_nap_gen;
+    xSemaphoreGive(s_mutex);
+    return gen;
 }
 
 static int idle_life_load(void) {

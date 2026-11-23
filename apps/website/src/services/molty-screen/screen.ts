@@ -11,6 +11,7 @@
 //              (the page then keeps its still images)
 import { onFrame } from "./clock";
 import { MoltyCore, PANEL, type MoltyQuestion, type MoltyState } from "./core";
+import { ENTER, Entrance, play } from "./entrance";
 import { WATER } from "./field";
 import { loadModule } from "./module";
 import { pageWater, type PageWater } from "./water";
@@ -42,35 +43,6 @@ function pageState(state: "live" | "off") {
   const root = document.documentElement;
   if (state === "live" || root.dataset.fluidMoltys !== "live") root.dataset.fluidMoltys = state;
 }
-
-/** The entrance (the hero): the cat starts beyond the right edge of the window, walks across the
- *  page and into its screen, and sits where it always sits. All in the firmware's world units,
- *  measured on its own frames (device/firmware/web/web_main.c, WM_TRACE). */
-const ENTER = {
-  /** World units a panel is wide (creature_dots.h CD_VIEW_SIZE; the picture has no perspective
-   *  across): how far beyond the window's edge the cat starts. */
-  view: 1.75,
-  /** The cat's nose is this far ahead of where it stands: it starts that much beyond the edge. */
-  nose: 0.85,
-  /** Played unseen first: it gets up. */
-  lead: 1.0,
-  /** Its clock runs this much faster while it walks in ... */
-  rate: 2.2,
-  /** ... and this much once it is at its place (it stops, turns to you and sits). */
-  settle: 4.5,
-  /** At its place: this near the frame's middle. */
-  near: 0.12,
-};
-/** Walking in, the cat also drifts toward the viewer: starting [across, back] it ends at its own
- *  place. Measured for each start; a start in between takes the next one further out. */
-// prettier-ignore
-export const ENTER_STARTS: Array<[number, number]> = [
-  [1.0, 0.885], [1.25, 1.044], [1.5, 0.853], [1.75, 1.006], [2.0, 1.144], [2.25, 0.937], [2.5, 1.066], [2.75, 1.205], [3.0, 0.99],
-  [3.25, 1.111], [3.5, 1.233], [3.75, 1.364], [4.0, 1.141], [4.5, 1.375], [5.0, 1.275], [5.5, 1.502], [6.0, 1.395],
-];
-/** The start that puts the cat wholly beyond a point `aside` world units to the right. */
-const enterFrom = (aside: number) =>
-  ENTER_STARTS.find(([across]) => across >= aside + ENTER.nose) ?? ENTER_STARTS.at(-1)!;
 
 export interface MoltyScreenOptions {
   /** The creature package: its id and its file's URL (packages/<id>/<id>.json). None: a
@@ -146,6 +118,7 @@ export async function mountMoltyScreen(
       if (scenes && !core.pack(scenes)) throw new Error("not a scenes package");
       if (!core.start(seed, options.boot && !options.reducedMotion, options.px ?? PANEL)) throw new Error("no memory");
       if (options.heading) core.haze();
+      core.time(Date.now() / 1000); // the browser's date: today's moon behind the cat
       return core;
     };
     const core = await make();
@@ -165,6 +138,8 @@ export async function mountMoltyScreen(
 /** A scene held up is asked for again this long before the device would let it go (its ttl). */
 const SCENE_TTL = 600;
 const SCENE_AGAIN = 540;
+/** The browser's date given to the module again after this long (its clock runs with the frames). */
+const TIME_AGAIN_MS = 60_000;
 
 const FINGER = ["pointerdown", "pointermove", "pointerup", "pointercancel", "pointerleave"] as const;
 
@@ -179,20 +154,22 @@ class Screen implements MoltyScreenHandle {
   private inView = false;
   private alive = true;
   private watch: IntersectionObserver;
-  private entering = false;
+  /** The cat walking in, until it sits. */
+  private walk: Entrance | null = null;
   private outside: CanvasRenderingContext2D | null = null;
   private sceneAt = 0;
+  private timeAt = Date.now();
 
   constructor(
     private canvas: HTMLCanvasElement,
     private core: MoltyCore,
-    private twin: MoltyCore | null,
+    twin: MoltyCore | null,
     private options: MoltyScreenOptions,
   ) {
     this.ctx = canvas.getContext("2d", { alpha: false })!;
     this.px = options.px ?? PANEL;
     if (options.scene) this.hold();
-    if (options.entrance && !options.reducedMotion) this.enter();
+    if (options.entrance && !options.reducedMotion) this.enter(twin);
     // straight to the creature (or the scene): it has formed by the first frame shown
     else if (!options.boot || options.reducedMotion) this.settle(options.scene ? 3.2 : SETTLE_S);
     else this.draw();
@@ -212,37 +189,16 @@ class Screen implements MoltyScreenHandle {
     this.sceneAt = this.seconds;
   }
 
-  /** The entrance: the creature is on screen after a few frames; then it is put beyond the
-   *  window's right edge and called, its getting up played unseen. */
-  private enter() {
-    const cores = this.twin ? [this.core, this.twin] : [this.core];
+  /** The entrance (entrance.ts), from beyond the window's right edge. While the cat walks in,
+   *  the window beside the screen looks where the cat is: its picture of the cat alone is the one
+   *  cat the page shows, outside the glass and inside it. */
+  private enter(twin: MoltyCore | null) {
     this.outside = this.options.entrance!.outside?.getContext("2d") ?? null;
     const box = this.canvas.getBoundingClientRect();
     const aside = ((innerWidth - (box.left + box.width / 2)) / box.width) * ENTER.view;
-    const [across, back] = enterFrom(aside);
-    for (const c of cores) {
-      for (let i = 0; i < 3; i++) c.frame(SETTLE_STEP_MS * 1000);
-      this.entering = c.enter(across, back);
-    }
-    for (let t = 0; t < ENTER.lead * 1000; t += SETTLE_STEP_MS) this.advance(SETTLE_STEP_MS * 1000);
+    const walk = new Entrance(this.core, twin, aside);
+    if (walk.walking) this.walk = walk;
     this.draw();
-  }
-
-  /** One frame of the firmware's clock. While the cat walks in, a second window looks where the
-   *  cat is (whole cells to the side, `aside` panel pixels): its picture of the cat alone is the
-   *  one cat the page shows, outside the glass and inside it. */
-  private aside = 0;
-  private advance(us: number) {
-    // a sped-up clock goes in steps no longer than a device frame: the creature's player takes
-    // no more than that of one frame's time
-    const steps = Math.ceil(us / 30000);
-    for (let i = 0; i < steps; i++) {
-      if (this.twin) {
-        this.aside = this.twin.pan(this.core.across());
-        this.twin.frame(us / steps);
-      }
-      this.core.frame(us / steps);
-    }
   }
 
   destroy() {
@@ -304,13 +260,16 @@ class Screen implements MoltyScreenHandle {
   }
 
   private step(ms: number) {
-    const rate = !this.entering ? 1 : Math.abs(this.core.across()) < ENTER.near ? ENTER.settle : ENTER.rate;
-    this.advance(Math.round(ms * 1000 * rate));
     this.seconds += ms / 1000;
-    if (this.entering && !this.core.entering()) {
+    // the module's clock runs with its frames, which stop while the screen is unseen: the date again now and then
+    if (Date.now() - this.timeAt > TIME_AGAIN_MS) {
+      this.timeAt = Date.now();
+      this.core.time(this.timeAt / 1000);
+    }
+    if (!this.walk) play(Math.round(ms * 1000), (us) => this.core.frame(us));
+    else if (!this.walk.step(ms)) {
       // it sits: the window beside the screen is done with, the screen's own cat takes over
-      this.entering = false;
-      this.twin = null;
+      this.walk = null;
       this.outside?.clearRect(0, 0, this.px, this.px);
       this.outside = null;
       this.options.onEntered?.();
@@ -322,17 +281,18 @@ class Screen implements MoltyScreenHandle {
 
   private draw() {
     const picture = (px: Uint8ClampedArray) => new ImageData(px as Uint8ClampedArray<ArrayBuffer>, this.px, this.px);
-    const cat = this.outside && this.twin?.catPixels();
+    const cat = this.outside && this.walk?.twin?.catPixels();
     if (!cat) return this.ctx.putImageData(picture(this.core.pixels()), 0, 0);
     // The cat walking in is one picture, the second window's, from one frame and with one shift:
     // on the clear canvas carried to where the cat stands (what of it is outside the glass shows
     // there, under the bezel), and drawn from that same canvas onto the screen's own picture of
     // the world without its cat (what of it is inside the glass).
     const outside = this.outside!;
-    outside.canvas.style.translate = `${(this.aside / this.px) * this.canvas.getBoundingClientRect().width}px 0`;
+    const aside = this.walk!.aside;
+    outside.canvas.style.translate = `${(aside / this.px) * this.canvas.getBoundingClientRect().width}px 0`;
     outside.putImageData(picture(cat), 0, 0);
     this.ctx.putImageData(picture(this.core.worldPixels()), 0, 0);
-    this.ctx.drawImage(outside.canvas, this.aside, 0);
+    this.ctx.drawImage(outside.canvas, aside, 0);
   }
 
   /** Play `seconds` unseen, then show where it got to (reduced motion: one still per change). */
@@ -356,7 +316,7 @@ class Screen implements MoltyScreenHandle {
     const x = ((e.clientX - r.left) / r.width) * this.px;
     const y = ((e.clientY - r.top) / r.height) * this.px;
     this.core.touch(down, x, y);
-    this.twin?.touch(down, x, y); // the same Molty: the same finger
+    this.walk?.twin?.touch(down, x, y); // the same Molty: the same finger
     if (down && e.type === "pointerdown") this.changed(null);
   };
 

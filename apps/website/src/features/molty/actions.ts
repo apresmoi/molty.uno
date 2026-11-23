@@ -19,8 +19,8 @@ export interface SceneCommand {
 }
 
 export type MoltyAction =
-  /** POST /api/creature/state { mood }, held a few seconds, then idle again. */
-  | { kind: "mood"; name: string; about: string }
+  /** POST /api/creature/state { mood }, held a few seconds (`hold`, else MOOD_HOLD), then idle again. */
+  | { kind: "mood"; name: string; about: string; hold?: number }
   /** ... { act }: one gesture, once. */
   | { kind: "act"; name: string; about: string }
   /** The device was shaken. */
@@ -32,10 +32,14 @@ export type MoltyAction =
   /** A package's scene. */
   | { kind: "scene"; name: string; about: string; layout: string; params: Record<string, unknown>; ttl: number };
 
+/** A labelled group, in the lines a stage shows it in (each line wraps only when it must). */
 export interface ActionGroup {
   label: string;
-  actions: MoltyAction[];
+  rows: MoltyAction[][];
 }
+
+/** Every action of the groups, in order. */
+export const everyAction = (groups: ActionGroup[]): MoltyAction[] => groups.flatMap((g) => g.rows.flat());
 
 /** Seconds a mood asked for is held before the cat is idle again (hold_s). */
 export const MOOD_HOLD = 6;
@@ -53,19 +57,39 @@ export function madeUpVoice(seconds: number): number {
   return phrase > 0 ? Math.min(1, (0.35 + 0.65 * syllable) * (0.6 + 0.4 * phrase)) : 0;
 }
 
-/** The question the stage asks, and what the cat does for each answer. */
+/** The question the stage asks, and what the cat does for each answer: yes, it laps its milk;
+ *  no, it startles (a short surprise, fur up). Any other answer, or none: nothing more. */
 export const STAGE_QUESTION = {
   question: { title: "feed the cat?", options: ["yes", "no"] },
-  then: [{ act: "eat" }, { act: "shake_head" }] as Array<Record<string, unknown>>,
+  then: [
+    { kind: "act", name: "eat" },
+    { kind: "mood", name: "surprised", hold: 2 },
+  ] as Array<{ kind: MoltyAction["kind"]; name: string; hold?: number }>,
 };
+
+/** What plays after answer `index` to the stage's question: the action from the page's own
+ *  lists (so the package's words come with it), or null. */
+export function answered(groups: ActionGroup[], index: number): MoltyAction | null {
+  const then = STAGE_QUESTION.then[index];
+  const a = then && everyAction(groups).find((x) => x.kind === then.kind && x.name === then.name);
+  if (!a) return null;
+  return a.kind === "mood" && then.hold ? { ...a, hold: then.hold } : a;
+}
 
 const GLASS: MoltyAction[] = [
   { kind: "listen", name: "listen", about: "a thin red ring while Molty records; it moves with your voice" },
   { kind: "ask", name: "ask", about: "a question on the rim; tap an answer on the glass" },
 ];
 
-const moods = (pkg: CreaturePackage): MoltyAction[] =>
-  Object.keys(pkg.creature.moods).map((name) => ({ kind: "mood", name, about: pkg.creature.about.moods[name] ?? "" }));
+/** The moods a conversation sets (Molty listens, the agent thinks, it speaks): a line of their
+ *  own after the creature's others. */
+const TURN = ["listening", "thinking", "speaking"];
+const moods = (pkg: CreaturePackage): MoltyAction[][] => {
+  const all = Object.keys(pkg.creature.moods).map(
+    (name): MoltyAction => ({ kind: "mood", name, about: pkg.creature.about.moods[name] ?? "" }),
+  );
+  return [all.filter((a) => !TURN.includes(a.name)), all.filter((a) => TURN.includes(a.name))];
+};
 /** A gesture the package gives a length is its own; the rest every creature plays its own way. */
 const gestures = (pkg: CreaturePackage, own: boolean): MoltyAction[] =>
   Object.entries(pkg.creature.gestures)
@@ -80,20 +104,20 @@ const shake = (pkg: CreaturePackage): MoltyAction => ({
 /** The landing's few: its moods, its own gestures, the ring and a question. */
 export function landingActions(pkg: CreaturePackage): ActionGroup[] {
   return [
-    { label: "moods", actions: moods(pkg) },
-    { label: "its own", actions: [...gestures(pkg, true), shake(pkg)] },
-    { label: "on the glass", actions: GLASS },
+    { label: "moods", rows: moods(pkg) },
+    { label: "its own", rows: [[...gestures(pkg, true), shake(pkg)]] },
+    { label: "on the glass", rows: [GLASS] },
   ];
 }
 
 /** Everything: also the gestures every creature shares, and scenes from a package. */
 export function showcaseActions(pkg: CreaturePackage, scenes: MoltyAction[]): ActionGroup[] {
   return [
-    { label: "moods", actions: moods(pkg) },
-    { label: "its own", actions: [...gestures(pkg, true), shake(pkg)] },
-    { label: "gestures", actions: gestures(pkg, false) },
-    { label: "on the glass", actions: GLASS },
-    { label: "scenes", actions: scenes },
+    { label: "moods", rows: moods(pkg) },
+    { label: "its own", rows: [[...gestures(pkg, true), shake(pkg)]] },
+    { label: "gestures", rows: [gestures(pkg, false)] },
+    { label: "on the glass", rows: [GLASS] },
+    { label: "scenes", rows: [scenes] },
   ];
 }
 

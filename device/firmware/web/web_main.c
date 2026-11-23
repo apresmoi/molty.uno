@@ -19,6 +19,8 @@
  *   ask <json>        ask_end
  *   scene <layout> <ttl s> [params json]      scene_clear
  *   device <0|1>                    the simulator's device mode (wm_device; its clock runs with the computer's)
+ *   time <unix s>                   the date (wm_time: the sky behind the cat); never given, no sky
+ *   weather <kind 0..3> <s>          the weather on the glass (wm_weather); never told, clear
  * With a dump dir every frame is also written there as <number>.ppm.
  */
 #include <stdint.h>
@@ -31,7 +33,7 @@ int   wm_package(const char *json, size_t len);
 int   wm_start(int px, uint32_t seed, int boot);
 void  wm_frame(uint32_t dt_us);
 const uint8_t *wm_pixels(void);
-void  wm_touch(int down, int x, int y);
+int   wm_touch(int down, int x, int y);
 void  wm_shake(void);
 int   wm_enter(float across, float back);
 int   wm_entering(void);
@@ -47,6 +49,8 @@ void  wm_ask_end(void);
 int   wm_scene(const char *layout, const char *params, float ttl_s);
 void  wm_scene_clear(void);
 void  wm_device(int on);
+void  wm_time(double unix_s);
+int   wm_weather(int kind, float s);
 
 static char *slurp(const char *path, size_t *len) {
     FILE *f = fopen(path, "rb");
@@ -109,6 +113,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(op, "scene")) { float ttl; int m = 0; if (sscanf(rest, "%63s %f %n", a, &ttl, &m) < 2) rc = -1; else rc = wm_scene(a, rest[m] ? rest + m : NULL, ttl); }
         else if (!strcmp(op, "scene_clear")) wm_scene_clear();
         else if (!strcmp(op, "device")) wm_device(atoi(rest));
+        else if (!strcmp(op, "time")) wm_time(atof(rest));
+        else if (!strcmp(op, "weather")) { int k; float t; if (sscanf(rest, "%d %f", &k, &t) != 2) rc = -1; else rc = wm_weather(k, t); }
         else rc = -1;
         if (rc) { fprintf(stderr, "web_molty: step failed: %s\n", line); return 1; }
     }

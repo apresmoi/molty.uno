@@ -21,7 +21,7 @@ import {
   type FieldExports,
   type Focus,
 } from "../molty-screen";
-import { CARRY, FOCUS } from "../../config/water.mjs";
+import { BUTTON, CARRY, FOCUS, LIFE, SPEED } from "../../config/water.mjs";
 
 /** The canvas reaches this many cells beyond the viewport: the page scrolls that far before the
  *  field has to be stood again (every cell drawn afresh). */
@@ -33,6 +33,17 @@ const MARGIN = { cols: 2, rows: 8 };
 export function grain(page: Element | null): number {
   const size = page ? parseFloat(getComputedStyle(page).backgroundSize) : NaN;
   return size > 0 ? TILE / size : WATER.panel / 420;
+}
+
+/** What a tap on a control lands on: a button, a link, a field, a disclosure, anything with a
+ *  control's role or that takes the keyboard's focus (a tap on its text or its icon too). */
+const CONTROLS =
+  'a[href], button, input, select, textarea, label, summary, [role="button"], [role="link"], [role="tab"], [role="switch"], [role="checkbox"], [role="radio"], [role="option"], [role="menuitem"], [contenteditable]:not([contenteditable="false"]), [tabindex]:not([tabindex="-1"])';
+
+/** Whether a tap on `target` is a tap on a control (its wave BUTTON of a full one). A screen's
+ *  glass is its water, not a control. */
+function control(target: Element | null): boolean {
+  return !!target?.closest?.(CONTROLS) && !target.closest("[data-molty-screen]");
 }
 
 export interface PageWaterHandle {
@@ -55,13 +66,13 @@ export function mountPageWater(
   let making: Promise<void> | null = null;
   let alive = true;
   let stop: (() => void) | null = null;
-  /** A front is out: the water keeps its waves (CARRY); else it is the device's own. */
+  /** A front is out: the water is the page's (CARRY); else it is the device's own. */
   let front = false;
   /** The page's cell under the canvas's first one. */
   let col = 0,
     row = 0;
   let laid = "";
-  const taps: Array<{ x: number; y: number; radius: number }> = [];
+  const taps: Array<{ x: number; y: number; radius: number; strength: number }> = [];
 
   /** What focuses the dust, in CSS px from the page's corner. */
   const foci = (): Focus[] => {
@@ -125,6 +136,7 @@ export function mountPageWater(
           // the page's speed in the field's own cells
           c2: (speed() / (CELL.w / k)) ** 2,
           ...CARRY,
+          life: LIFE,
         });
         if (!field) return;
         canvas.width = field.width;
@@ -146,8 +158,8 @@ export function mountPageWater(
     if (stale()) drop();
     lay();
   };
-  /** A wave's speed: the device's own on the page's reference screen, CSS px a step. */
-  const speed = () => (Math.sqrt(WATER.c2) * (WATER.panel / k)) / WATER.cells;
+  /** A wave's speed: the device's own on the page's reference screen, SPEED times, CSS px a step. */
+  const speed = () => (SPEED * Math.sqrt(WATER.c2) * (WATER.panel / k)) / WATER.cells;
 
   /** The canvas stands over the viewport, on the page's own lattice: stood again (the water
    *  carried along) when the page has scrolled past its margin. */
@@ -189,20 +201,22 @@ export function mountPageWater(
   const tap = (e: PointerEvent) => {
     if (e.button !== 0 && e.pointerType === "mouse") return;
     // on a screen: the bump its own finger makes there (mole_fluid.c: by the glass's radius);
-    // on the page: the same, of the page's reference screen
-    const screen = (e.target as Element | null)?.closest?.("[data-molty-screen]");
+    // on the page: the same, of the page's reference screen; on a control: as wide, fainter
+    const target = e.target as Element | null;
+    const screen = target?.closest?.("[data-molty-screen]");
     const o = page.getBoundingClientRect();
     taps.push({
       x: e.clientX - o.left,
       y: e.clientY - o.top,
       radius: (WATER.tapRadius * (screen ? screen.getBoundingClientRect().width : WATER.panel / k)) / 2,
+      strength: WATER.tap * (control(target) ? BUTTON : 1),
     });
     if (stale()) drop();
     void make().then(() => {
       if (!field || !alive) return;
       lay();
       stand();
-      for (const t of taps.splice(0)) field.tap(t.x * k, t.y * k, WATER.tap, t.radius * k);
+      for (const t of taps.splice(0)) field.tap(t.x * k, t.y * k, t.strength, t.radius * k);
       front = true;
       stop ??= onFrame(frame, true);
     });
