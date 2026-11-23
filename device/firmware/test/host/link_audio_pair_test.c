@@ -22,6 +22,7 @@ esp_err_t haptic_cue(const char *name) {
     if (strlen(cues) + strlen(name) + 2 > sizeof cues) cues[0] = 0;   /* (only the recent ones are looked at) */
     strcat(strcat(cues, cues[0] ? " " : ""), name); return ESP_OK;
 }
+esp_err_t haptic_touch(void) { return haptic_cue("touch"); }   /* the touch feedback, among them */
 static unsigned rotations, sent;
 static esp_err_t send_error;
 static const char *field(const char *key) { cJSON *j=cJSON_GetObjectItem(sdk_sent,key); assert(cJSON_IsString(j)); return j->valuestring; }
@@ -409,7 +410,7 @@ static void test_pair(void) {
     sdk_now+=79999999; link_pair_tick(); assert(link_pair_active());
     sdk_now+=1; link_pair_tick();
     assert(!link_pair_active() && !strcmp(field("reason"),"timeout") && !rotations);
-    assert(!strcmp(cues,"double"));   /* a timeout: no tick */
+    assert(!strcmp(cues,"double"));   /* a timeout: no buzz */
     assert(pair_pick==-9 && pair_ends==1 && !sdk_state[0]);          /* the rim lets go; nothing else changed */
     st=status(); p=cJSON_GetObjectItem(st,"last_pair");
     assert(cJSON_IsNull(cJSON_GetObjectItem(st,"pair")) && cJSON_GetObjectItem(p,"seq")->valueint==1);
@@ -426,7 +427,7 @@ static void test_pair(void) {
     link_pair_tap(0.f, 0.f); link_pair_tick(); assert(link_pair_active());              /* the centre */
     cues[0]=0;
     link_pair_tap(-100.f, 100.f); link_pair_tick();                                       /* accept, lower left */
-    assert(!strcmp(cues,"tick"));   /* the tap was taken */
+    assert(!strcmp(cues,"touch"));   /* the tap was taken */
     assert(!link_pair_active() && cJSON_IsTrue(cJSON_GetObjectItem(sdk_sent,"ok")) && rotations==1 && pair_pick==0);
     assert(!strcmp(field("link_code"),"ABCDEFGH"));
     st=status(); p=cJSON_GetObjectItem(st,"last_pair");
@@ -434,7 +435,7 @@ static void test_pair(void) {
     cJSON_Delete(st);
     cues[0]=0;
     request(); sdk_gpio[0]=0; link_pair_tick(); sdk_gpio[0]=1;
-    assert(!link_pair_active() && rotations==2 && !strcmp(cues,"double tick"));   /* the button was taken: a tick */
+    assert(!link_pair_active() && rotations==2 && !strcmp(cues,"double"));   /* the button: no touch, no tick */
     request(); pair_glass=pair_seq; send_error=ESP_FAIL; link_pair_tap(-100.f, 100.f); link_pair_tick();
     assert(!link_pair_active() && rotations==3); send_error=ESP_OK;
     /* a tap on reject (lower right): rejected, from that answer */

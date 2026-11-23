@@ -38,6 +38,7 @@ esp_err_t haptic_cue(const char *name) {
     if (strlen(cues) + strlen(name) + 2 > sizeof cues) cues[0] = 0;   /* (only the recent ones are looked at) */
     strcat(strcat(cues, cues[0] ? " " : ""), name); return ESP_OK;
 }
+esp_err_t haptic_touch(void) { return haptic_cue("touch"); }   /* the touch feedback, among them */
 bool link_audio_gesture_talk(const char *input) { (void)input; talks++; return true; }
 static int holds, releases;
 void link_audio_hold(bool down, const char *input) { (void)input; if (down) holds++; else releases++; }
@@ -184,7 +185,7 @@ static void test_deadline(void) {
     assert(dones == d0 + 2 && done_index == -1 && !strcmp(done_reason, "timeout"));
 }
 
-/* The device's own buzzes: a question appears (double), an answer is taken (tick); nothing for a tap
+/* The device's own buzzes: a question appears (double), an answer is taken (touch); nothing for a tap
  * beside the answers, a timeout, a cancel. */
 static void test_cues(void) {
     sdk_now = 70000000; cues[0] = 0;
@@ -193,7 +194,7 @@ static void test_cues(void) {
     touch(206, 206); link_ask_tick();                  /* the centre: not an answer */
     assert(link_ask_pending() && !strcmp(cues, "double"));
     touch(206 + 100, 206); link_ask_tick();
-    assert(!link_ask_pending() && !strcmp(cues, "double tick"));
+    assert(!link_ask_pending() && !strcmp(cues, "double touch"));
     cues[0] = 0;
     assert(ask("{\"job\":\"H\",\"options\":[\"a\",\"b\"],\"timeout_ms\":1000}") == ESP_OK);
     sdk_now += 1000001; link_ask_tick();               /* timed out: no tick */
@@ -238,55 +239,52 @@ static void test_spot(void) {
     assert(nframes == n0 + 3 && strstr(last(), "\"name\":\"tap\"") && strstr(last(), "\"closed\":true") && !strstr(last(), "spot"));
 }
 
-/* Touch feedback (sense.c's acted): a press that does something ticks once, at once; the water never does. */
+/* Touch feedback (sense.c's acted): a tap that does something buzzes once, at once; the water and the buttons never. */
 static void test_haptics(void) {
     uint16_t xs[1] = { 100 }, ys[1] = { 100 };
     sdk_now = 200000000; cues[0] = 0; spot_hit = 0; listening = false;
     touch(100, 100); assert(!cues[0]);                                     /* the water (a ripple, a miss): none */
     atomic_store(&s_tap, false);
     sdk_now += 1000000; spot_hit = 0x105;
-    touch(100, 100); assert(!strcmp(cues, "tick"));                        /* a planet, a sign: one */
+    touch(100, 100); assert(!strcmp(cues, "touch"));                        /* a planet, a sign: one */
     sdk_now += 1000000; spot_hit = MOLE_SPOT_BACK;
-    touch(100, 100); assert(!strcmp(cues, "tick tick"));                   /* out of a close-up: one */
+    touch(100, 100); assert(!strcmp(cues, "touch touch"));                   /* out of a close-up: one */
     sdk_now += 1000000; spot_hit = 0x105; cues[0] = 0;                     /* one press held and dragged, the panel repeating it: one */
     for (int i = 0; i < 20; i++) { xs[0] = (uint16_t)(100 + i * 5); sense_touch(1, xs, ys); sdk_now += 16000; }
-    sense_touch(0, xs, ys); assert(!strcmp(cues, "tick"));
+    sense_touch(0, xs, ys); assert(!strcmp(cues, "touch"));
     sdk_now += 1000000; cues[0] = 0;                                       /* the panel's bounce (up and down in 30 ms): one */
     sense_touch(1, xs, ys); sense_touch(0, xs, ys); sdk_now += 30000; sense_touch(1, xs, ys); sense_touch(0, xs, ys);
-    assert(!strcmp(cues, "tick"));
-    sdk_now += 120000; touch(100, 100); assert(!strcmp(cues, "tick tick"));   /* two quick separate taps: two */
+    assert(!strcmp(cues, "touch"));
+    sdk_now += 120000; touch(100, 100); assert(!strcmp(cues, "touch touch"));   /* two quick separate taps: two */
     sdk_now += 1000000; cues[0] = 0; listening = true;
     touch(100, 100); assert(!cues[0]);                                     /* a tap that stops a recording: the mic's */
     listening = false; atomic_store(&s_tap, false); atomic_store(&s_spot, 0);
-    /* a question's answer: one tick (link_ask), even over a spot */
+    /* a question's answer: one (link_ask), even over a spot */
     sdk_now += 1000000;
     assert(ask("{\"job\":\"T\",\"options\":[\"a\",\"b\"],\"timeout_ms\":5000}") == ESP_OK);
     cues[0] = 0; touch(206 + 100, 206); link_ask_tick();
-    assert(!link_ask_pending() && !strcmp(cues, "tick"));
+    assert(!link_ask_pending() && !strcmp(cues, "touch"));
     spot_hit = 0;
-    /* the buttons: an event, a stop, a pending question tick; none, talk, hold (the mic) do not */
+    /* the buttons click by themselves: never a buzz, whatever they are bound to or do */
     binds = gesture_binds_default();
-    const gesture_action_t acts[] = { GESTURE_DO_EVENT, GESTURE_DO_STOP, GESTURE_DO_NONE, GESTURE_DO_TALK, GESTURE_DO_HOLD };
-    const char *const felt[] = { "tick", "tick", "", "", "" };
-    for (int i = 0; i < 5; i++) {
+    const gesture_action_t acts[] = { GESTURE_DO_EVENT, GESTURE_DO_STOP, GESTURE_DO_NONE, GESTURE_DO_TALK, GESTURE_DO_HOLD, GESTURE_DO_SCREEN };
+    for (int i = 0; i < 6; i++) {
         sdk_now += 1000000; cues[0] = 0;
         binds = gesture_binds_set(binds, GESTURE_IN_BUTTON_ACCEPT, acts[i]);
-        button_do(true); assert(!strcmp(cues, felt[i]));
+        button_do(true); assert(!cues[0]);
     }
     link_audio_hold(false, NULL);
-    sdk_now += 1000000; cues[0] = 0;
+    sdk_now += 1000000;
     assert(ask("{\"job\":\"U\",\"options\":[\"a\"],\"timeout_ms\":5000}") == ESP_OK);
-    cues[0] = 0; button_do(true); assert(!strcmp(cues, "tick"));            /* a question's acknowledge */
+    cues[0] = 0; button_do(true); assert(!cues[0]);                         /* a question's acknowledge */
     link_ask_cancel(); binds = gesture_binds_default();
-    /* the screen switch: each click ticks at once (the screen waits out the double window), the hold too */
+    /* the screen switch: its clicks and its hold act, without a buzz */
     gesture_tapper_t pr = { 0 };
     screen_on = true; dnd = false;
     sdk_now += 1000000; cues[0] = 0;
-    switch_do(GESTURE_SW_NONE, &pr, 5000); assert(!cues[0]);
-    switch_do(GESTURE_SW_CLICK, &pr, 5000); assert(!strcmp(cues, "tick") && screen_on);
-    screen_do(gesture_tapper_poll(&pr, 5400)); assert(!screen_on);
-    sdk_now += 1000000; cues[0] = 0;
-    switch_do(GESTURE_SW_HOLD, &pr, 6000); assert(!strcmp(cues, "tick"));
+    switch_do(GESTURE_SW_CLICK, &pr, 5000); assert(!cues[0] && screen_on);
+    screen_do(gesture_tapper_poll(&pr, 5400)); assert(!screen_on && !cues[0]);
+    switch_do(GESTURE_SW_HOLD, &pr, 6000); assert(!cues[0]);
     screen_on = true;
 }
 
@@ -460,5 +458,5 @@ int main(void) {
     link_ask_cancel();
     /* activity log: every question shown (answered, timed out, cancelled, replaced) ended its tag */
     assert(sdk_job_begins>0 && sdk_job_begins==sdk_job_ends);
-    puts("LINK ASK PASS: job tags begin/end on every path, unsupported without touch, args, answer by sector (label verbatim), first tap wins, no tap event while pending, not rate-limited, timeout, cancel, replace, stale tap, pairing, link down, firmware-owned question (tap/timeout/cancel/replace → owner, never an answer event), a tap answers only the question on the panel, a tap at or before the deadline beats the timeout and one after it loses, a press that acts ticks once (a spot, back, a button, the screen switch), the water and the mic never");
+    puts("LINK ASK PASS: job tags begin/end on every path, unsupported without touch, args, answer by sector (label verbatim), first tap wins, no tap event while pending, not rate-limited, timeout, cancel, replace, stale tap, pairing, link down, firmware-owned question (tap/timeout/cancel/replace → owner, never an answer event), a tap answers only the question on the panel, a tap at or before the deadline beats the timeout and one after it loses, a tap that acts buzzes once (a spot, back, an answer), the water, the mic and the buttons never");
 }
