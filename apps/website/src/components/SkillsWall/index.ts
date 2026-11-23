@@ -1,0 +1,1 @@
+export { SkillsWall } from "./SkillsWall";

@@ -167,6 +167,30 @@
   max-width: none;
 }
 
+/* skills: the heading and its line, the links beside them, the wall of screens across under both */
+.skills {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  column-gap: var(--m-space-12);
+  align-items: end;
+}
+.skills :global(astro-island) {
+  display: contents;
+}
+.skills > *,
+.skills > :global(astro-island) > * {
+  grid-column: 1 / -1;
+}
+.skills > .copy {
+  grid-column: 1;
+  grid-row: 1;
+}
+.skills > .links {
+  grid-column: 2;
+  grid-row: 1;
+  margin: 0 0 var(--m-space-6);
+}
+
 /* 03 */
 .flow {
   max-width: 100%;
@@ -299,6 +323,17 @@
   }
   .split > .slot.fan {
     width: 100%;
+  }
+  .skills {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .skills > .copy,
+  .skills > .links {
+    grid-column: 1;
+    grid-row: auto;
+  }
+  .skills > .links {
+    margin-top: var(--m-space-6);
   }
   .section {
     padding-block: calc(var(--m-header-height) + 6svh) 4svh;

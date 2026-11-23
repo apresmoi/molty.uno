@@ -66,5 +66,8 @@ export const inkConcept = {
   status: "concept",
 };
 
+/** How a skill that draws is made (docs/DISPLAY.md, synced to this slug). */
+export const SKILLS_HREF = "/moltys/draw/";
+
 /** Porting guide (docs/PORTING.md, synced to this slug). */
 export const PORTING_HREF = "/getting-started/porting/";

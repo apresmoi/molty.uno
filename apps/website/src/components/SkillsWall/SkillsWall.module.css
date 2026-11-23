@@ -1,0 +1,84 @@
+/* The wall: the chart big in the first column over two rows, the rest three a row beside it, the
+   place for the next skill last. A phone: the chart across, then two a row (signs left off). */
+.wall {
+  display: grid;
+  grid-template-columns: 1.7fr repeat(3, minmax(0, 1fr));
+  gap: var(--m-space-6) var(--m-space-6);
+  align-items: start;
+  margin: var(--m-space-8) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.wall > li:first-child {
+  grid-row: span 2;
+}
+.tile {
+  display: grid;
+  justify-items: center;
+  gap: var(--m-space-2);
+  margin: 0;
+  text-align: center;
+}
+/* a screen and its bezel: the bezel reaches 1.1 × past the screen, so the screen is 90 % */
+.screen {
+  position: relative;
+  display: block;
+  width: 90%;
+  margin: 5%;
+  aspect-ratio: 1;
+}
+.tile figcaption {
+  display: grid;
+  gap: 2px;
+  font-size: var(--m-text-sm);
+  line-height: 1.45;
+}
+.tile b {
+  color: var(--m-ink);
+  font-weight: 400;
+}
+.tile figcaption > span {
+  color: var(--m-dim);
+}
+.tile [data-skill] {
+  color: var(--m-dim);
+}
+.tile [data-skill="molty-astro"] {
+  color: var(--m-sky);
+}
+/* the next skill's place: a dashed ring the size of a screen, a link to how one is made */
+.next {
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  width: 90%;
+  margin: 5%;
+  aspect-ratio: 1;
+  padding: 18%;
+  border: 1px dashed var(--m-faint);
+  border-radius: 50%;
+  color: var(--m-dim);
+  font-size: var(--m-text-sm);
+  text-decoration: none;
+}
+.next:hover,
+.next:focus-visible {
+  border-color: var(--m-accent);
+  color: var(--m-accent);
+}
+@media (max-width: 46rem), (max-width: 68rem) and (orientation: portrait) {
+  .wall {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--m-space-4);
+    margin-top: var(--m-space-4);
+  }
+  .wall > li:first-child {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    justify-self: center;
+    width: var(--m-stack-slot);
+  }
+  .wide {
+    display: none;
+  }
+}

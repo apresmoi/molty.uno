@@ -38,6 +38,8 @@
   --m-accent-dim: #2f9a72;
   --m-accent-ink: #001a0e;
   --m-warn: #ffcf7a;
+  /* the astrology skill's own sky blue (skills/molty-astro/display.yaml), for its name */
+  --m-sky: #9fc0ff;
   --m-accent-glow: rgba(60, 207, 150, 0.07);
   --m-accent-soft: rgba(60, 207, 150, 0.16);
   --m-overlay: rgba(0, 0, 0, 0.82);
@@ -132,6 +134,7 @@
   --m-accent-dim: #2f9a72;
   --m-accent-ink: #fff;
   --m-warn: #8a5a00;
+  --m-sky: #2b5c9e;
   --m-accent-glow: rgba(16, 127, 87, 0.06);
   --m-accent-soft: rgba(16, 127, 87, 0.14);
   --m-overlay: rgba(255, 255, 255, 0.86);

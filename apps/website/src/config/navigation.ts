@@ -1,4 +1,4 @@
-// Header links follow the landing's order (talk · moltys · bridge · bake), with /showcase/
+// Header links follow the landing's order (talk · moltys · bridge · skills · bake), with /showcase/
 // (every Molty and its actions) after moltys, then the two places people go next. /setup/ is
 // the browser flasher (owned by the setup page's branch); /build/ is the parts list,
 // community boards and the waitlist (desktop only: the phone header keeps setup and docs).
@@ -7,6 +7,7 @@ export const SITE_LINKS = [
   { href: "/#moltys", label: "moltys", mobileHidden: true },
   { href: "/showcase/", label: "showcase", mobileHidden: true },
   { href: "/#bridge", label: "bridge", mobileHidden: true },
+  { href: "/#skills", label: "skills", mobileHidden: true },
   { href: "/#boards", label: "bake", mobileHidden: true },
   { href: "/build/", label: "build", mobileHidden: true },
   { href: "/setup/", label: "setup" },
