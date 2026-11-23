@@ -18,11 +18,9 @@ import styles from "./MoltyScreen.module.css";
  *  it. The pointer is the finger on the glass: a tap ripples the water and the cat comes to the
  *  front, a tap on a question's answer or a scene's spot does what it does on the device.
  *
- *  The device is one thing: nothing of its screen shows until its frame stands in place. Then
- *  the screen comes on inside it: dark first, the renderer's picture as soon as it draws (it
- *  mounts when the device nears the viewport, and its clock starts when the device stands).
- *  What it plays unseen first (the cat getting up) it plays while the device turns in, so the
- *  picture is ready when the device stands.
+ *  The device is one thing: its screen comes with it. A picture that is ready when the device
+ *  starts to turn in rides the turning face from the first frame; one that is not shows once
+ *  the device stands (dark first, the renderer's picture as soon as it draws).
  *  Without JavaScript, with reduced motion, or if the renderer cannot load, a still of the cat
  *  stands in. `data-screen` says which: "off" (the device is away), "dark", "live", "still".
  *  `enter`: the cat is not there at first: it walks in from beyond the window's right edge,
@@ -32,8 +30,8 @@ import styles from "./MoltyScreen.module.css";
  *  `scenes`: it may be asked for scenes. `onReady` hands the running screen over (null when it
  *  goes); `onAnswer` and `onFrame` are the screen's own. The hero ("arrive", the page's opening:
  *  features/home/opening.ts): its renderer mounts as soon as it is near, and its clock starts as
- *  the title starts forming, so the cat walks in (outside the glass) while the device turns; the
- *  screen still comes on once it stands. Any other is prepared before it is seen: once the
+ *  the title starts forming, before the device turns in (just after), so its scene rides the
+ *  turning face and the cat walks in over it. Any other is prepared before it is seen: once the
  *  opening is over (or as soon as it is wanted) its renderer settles while the device is within
  *  a viewport of the view, through the in-view-first queue, and draws its picture; the device
  *  then turns in with that picture on its turning face (Device, features/device/hold.ts). Out of
@@ -179,7 +177,7 @@ export function MoltyScreen({
           state.current.turning = true;
           power.current();
         }}
-        picture={reveal === "arrive" ? undefined : picture}
+        picture={picture}
         onWant={() => {
           state.current.wanted = true;
           power.current();

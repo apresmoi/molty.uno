@@ -52,13 +52,13 @@ const GLARE_VARS = ["--glare-x", "--glare-y", "--glare-squeeze", "--glare-angle"
  *  flat again. It never takes the pointer. The screen under it cannot turn with the board, so
  *  until the device stands at rest its screen is off (a dark disc on the face): `onScreen(true)`
  *  says when it stands (at once with reduced motion), `onScreen(false)` when it is away;
- *  `onTurn` when it starts to turn in. The hero's ("arrive") turns in just after the page's title
- *  starts forming (features/home/opening.ts: its cat walks in meanwhile and must find the screen on).
- *  Any other brings its picture with it (features/device/hold.ts): well in view, it waits unseen
- *  until `picture` is "lit" (or the hold's cap), and a lit picture rides the turning face from
- *  the first frame: `onFace` hands the face's transform and opacity over each frame of the turn
- *  ("" at rest) to the screen under it, and the screen counts as on throughout. `onWant` says
- *  when it is well in view and would turn in. */
+ *  `onTurn` when it starts to turn in. A `picture` that is "lit" as it starts rides the turning
+ *  face from the first frame: `onFace` hands the face's transform and opacity over each frame of
+ *  the turn ("" at rest) to the screen under it, and the screen counts as on throughout. The
+ *  hero's ("arrive") turns in just after the page's title starts forming (features/home/opening.ts:
+ *  its picture is ready by then and its cat walks in over it). Any other brings its picture with
+ *  it (features/device/hold.ts): well in view, it waits unseen until `picture` is "lit" (or the
+ *  hold's cap). `onWant` says when it is well in view and would turn in. */
 export function Device({
   reveal,
   onScreen,

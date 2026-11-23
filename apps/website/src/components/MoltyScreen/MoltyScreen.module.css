@@ -69,11 +69,11 @@
 :global(:root[data-theme="light"]) .outside {
   filter: invert(1) hue-rotate(180deg);
 }
-/* the hero's screen comes on quickly: it is on before its cat reaches the glass */
+/* the hero's screen, when its picture was not ready as it turned in: it comes on quickly */
 .root:has([data-device="arrive"]) .canvas {
   transition-duration: 0.45s;
 }
-/* a device below the fold whose picture was ready: its screen rides the turning face from the
+/* a device whose picture was ready as it turned in: its screen rides the turning face from the
    first frame, one thing arriving (Device hands over the face's transform and opacity; both
    unset at rest). The panel too, once on: it is flat under the canvas otherwise */
 .root[data-lit] .canvas,
