@@ -8,8 +8,8 @@ import {
   type ProgramRun,
 } from "../../services/molty-screen";
 import { CAT, CAT_STILL, PROGRAMS, SCENES_URL, type ProgramName } from "../../features/molty/content";
-import { SCREENS_EARLY, type RevealKind } from "../../features/device/reveal";
-import { afterTitle, heroCue } from "../../features/home/opening";
+import type { RevealKind } from "../../features/device/reveal";
+import { afterOpening, afterTitle, heroCue, heroSits } from "../../features/home/opening";
 import { Device } from "../Device";
 import styles from "./MoltyScreen.module.css";
 
@@ -33,7 +33,11 @@ import styles from "./MoltyScreen.module.css";
  *  goes); `onAnswer` and `onFrame` are the screen's own. The hero ("arrive", the page's opening:
  *  features/home/opening.ts): its renderer mounts as soon as it is near, and its clock starts as
  *  the title starts forming, so the cat walks in (outside the glass) while the device turns; the
- *  screen still comes on once it stands. */
+ *  screen still comes on once it stands. Any other is prepared before it is seen: once the
+ *  opening is over (or as soon as it is wanted) its renderer settles while the device is within
+ *  a viewport of the view, through the in-view-first queue, and draws its picture; the device
+ *  then turns in with that picture on its turning face (Device, features/device/hold.ts). Out of
+ *  view the screen keeps its picture and runs no frames. */
 export function MoltyScreen({
   reveal,
   boot = false,
@@ -60,8 +64,9 @@ export function MoltyScreen({
   const power = useRef<() => void>(() => {});
   const callbacks = useRef({ onReady, onAnswer, onFrame });
   callbacks.current = { onReady, onAnswer, onFrame };
-  const state = useRef({ turning: false, stands: false, live: false, failed: false });
+  const state = useRef({ turning: false, stands: false, live: false, failed: false, wanted: false });
   const [screen, setScreen] = useState<"off" | "dark" | "live" | "still">();
+  const [picture, setPicture] = useState<"wait" | "lit" | "dark">("wait");
   const show = () => {
     const s = state.current;
     // waiting for the renderer the screen is dark (the still would be shown, then hidden by the
@@ -76,18 +81,19 @@ export function MoltyScreen({
     const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
     const needs = { creature: CAT, scenes: scenes || play === "chart" ? SCENES_URL : undefined };
     const early = reveal === "arrive" && !reducedMotion;
-    const carried = SCREENS_EARLY && !early; // its renderer starts as it nears (features/device/reveal.ts)
-    if (carried) root.current!.dataset.early = ""; // the page's address, so not in the server's HTML
+    const ahead = reveal !== "arrive" && !reducedMotion; // prepared before it is seen
     let handle: MoltyScreenHandle | null = null;
     let program: ProgramRun | null = null;
     let alive = true;
     let near = false;
     let started = false;
+    let over = false; // the opening (prepared ahead only after it)
     let stood = () => {};
-    const shown = early ? afterTitle(0) : new Promise<void>((done) => (stood = done));
+    const shown = early ? afterTitle(0) : ahead ? undefined : new Promise<void>((done) => (stood = done));
     power.current = () => {
       if (state.current.stands) stood();
-      if (started || !near || !(early || carried || state.current.turning || state.current.stands)) return;
+      if (started || !near) return;
+      if (!(ahead ? over || state.current.wanted : early || state.current.turning || state.current.stands)) return;
       started = true;
       const mount = mountMoltyScreen(canvas.current!, {
         ...needs,
@@ -95,7 +101,10 @@ export function MoltyScreen({
         shown,
         entrance: enter ? { outside: outside.current } : undefined,
         reducedMotion,
-        onEntered: () => alive && setEntered(true),
+        onEntered: () => {
+          if (reveal === "arrive") heroSits();
+          if (alive) setEntered(true);
+        },
         onAnswer: (i) => {
           program?.answer(i);
           callbacks.current.onAnswer?.(i);
@@ -111,6 +120,7 @@ export function MoltyScreen({
           handle = s;
           state.current.live = true;
           show();
+          setPicture("lit");
           callbacks.current.onReady?.(s);
           if (p) program = runProgram(p, s);
           if (reducedMotion) program?.frame(Infinity); // no clock: its one thing, as a still
@@ -119,6 +129,7 @@ export function MoltyScreen({
           // the still stands in (the service marked the page)
           state.current.failed = true;
           show();
+          if (alive) setPicture("dark");
         },
       );
     };
@@ -129,9 +140,14 @@ export function MoltyScreen({
         warmMoltyScreen(needs);
         power.current();
       },
-      { rootMargin: carried ? "25% 0px" : "60% 0px" },
+      { rootMargin: ahead ? "100% 0px" : "60% 0px" },
     );
     watch.observe(canvas.current!);
+    if (ahead)
+      void afterOpening().then(() => {
+        over = true;
+        power.current();
+      });
     return () => {
       alive = false;
       watch.disconnect();
@@ -163,7 +179,17 @@ export function MoltyScreen({
           state.current.turning = true;
           power.current();
         }}
-        onFace={SCREENS_EARLY ? (t) => root.current?.style.setProperty("--face", t) : undefined}
+        picture={reveal === "arrive" ? undefined : picture}
+        onWant={() => {
+          state.current.wanted = true;
+          power.current();
+        }}
+        onFace={(transform, opacity) => {
+          const el = root.current!;
+          el.dataset.lit = "";
+          el.style.setProperty("--face", transform);
+          el.style.setProperty("--face-opacity", opacity);
+        }}
         onScreen={(on) => {
           state.current.stands = on;
           show();

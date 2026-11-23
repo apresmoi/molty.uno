@@ -73,12 +73,13 @@
 .root:has([data-device="arrive"]) .canvas {
   transition-duration: 0.45s;
 }
-/* ?screens=early (a preview: features/device/reveal.ts): the screen comes on for the last 0.45 s
-   of the turn, carried on the turning face (Device hands its transform over as --face), and its
-   picture fades in over those 0.45 s, whole as the device stands */
-.root[data-early] :is(.panel, .canvas) {
+/* a device below the fold whose picture was ready: its screen rides the turning face from the
+   first frame, one thing arriving (Device hands over the face's transform and opacity; both
+   unset at rest). The panel too, once on: it is flat under the canvas otherwise */
+.root[data-lit] .canvas,
+.root[data-lit]:not([data-screen="off"]) .panel {
   transform: var(--face);
-}
-.root[data-early] .canvas {
-  transition-duration: 0.45s;
+  opacity: var(--face-opacity);
+  transition: none;
+  backface-visibility: hidden;
 }

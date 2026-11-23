@@ -4,13 +4,12 @@ import { PUCK, puckPolygons, type PuckColors } from "../../features/device/puck"
 import {
   REST,
   REVEAL_SECONDS,
-  SCREENS_EARLY,
-  SCREEN_EARLY_S,
   glareOf,
   revealFrame,
   type RevealFrame,
   type RevealKind,
 } from "../../features/device/reveal";
+import { holdTurn } from "../../features/device/hold";
 import { afterTitle } from "../../features/home/opening";
 import { GlassDome } from "../GlassDome";
 import styles from "./Device.module.css";
@@ -54,18 +53,26 @@ const GLARE_VARS = ["--glare-x", "--glare-y", "--glare-squeeze", "--glare-angle"
  *  until the device stands at rest its screen is off (a dark disc on the face): `onScreen(true)`
  *  says when it stands (at once with reduced motion), `onScreen(false)` when it is away;
  *  `onTurn` when it starts to turn in. The hero's ("arrive") turns in just after the page's title
- *  starts forming (features/home/opening.ts: its cat walks in meanwhile and must find the screen on). */
+ *  starts forming (features/home/opening.ts: its cat walks in meanwhile and must find the screen on).
+ *  Any other brings its picture with it (features/device/hold.ts): well in view, it waits unseen
+ *  until `picture` is "lit" (or the hold's cap), and a lit picture rides the turning face from
+ *  the first frame: `onFace` hands the face's transform and opacity over each frame of the turn
+ *  ("" at rest) to the screen under it, and the screen counts as on throughout. `onWant` says
+ *  when it is well in view and would turn in. */
 export function Device({
   reveal,
   onScreen,
   onTurn,
+  onWant,
   onFace,
+  picture,
 }: {
   reveal: RevealKind;
   onScreen?: (on: boolean) => void;
   onTurn?: () => void;
-  /** The turning face's CSS transform each frame ("" at rest), for a screen carried on it. */
-  onFace?: (transform: string) => void;
+  onWant?: () => void;
+  onFace?: (transform: string, opacity: string) => void;
+  picture?: "wait" | "lit" | "dark";
 }) {
   const root = useRef<HTMLSpanElement>(null);
   const face = useRef<HTMLSpanElement>(null);
@@ -77,8 +84,10 @@ export function Device({
   const raf = useRef(0);
   const seen = useRef(false);
   const queued = useRef<RevealKind | null>(null); // waits for the polycss scene to mount
-  const lit = useRef(false); // its screen is on before it stands (SCREENS_EARLY)
   const [turning, setTurning] = useState(false);
+  const lit = useRef(false); // its picture rides the turning face
+  const sight = useRef({ picture, inView: false });
+  sight.current.picture = picture;
   // a device that arrives (starts unseen) is rendered unseen already (the HTML, before any JS),
   // so nothing settled flashes before it turns in: CSS hides it (motion allowed, the page's
   // intro started by Head) and shows it at rest without JS or if no script takes over
@@ -112,8 +121,9 @@ export function Device({
       fc.style.setProperty("--glare-fade", g.fade.toFixed(3));
     }
     lid.current!.style.transform = f.lid ? `perspective(${(unit.current * 8).toFixed(0)}px) rotateX(${f.lid}deg)` : "";
-    onFace?.(rest ? "" : `${el.style.transform} ${fc.style.transform}`);
-    // it stands: the screen may show. Away or turning: the face carries a dark disc instead
+    if (lit.current) onFace?.(rest ? "" : `${el.style.transform} ${fc.style.transform}`, rest ? "" : String(f.opacity));
+    // it stands (or its picture rides the face): the screen may show. Away or turning: the face
+    // carries a dark disc instead
     const stands = lit.current || (rest && f.lift === 0 && f.opacity === 1);
     cover.current!.style.opacity = stands ? "" : "1";
     if (el.hasAttribute("data-screen-off") === stands) {
@@ -142,7 +152,6 @@ export function Device({
       if (t0 < 0) t0 = now;
       const u = (now - t0) / ms;
       if (u >= 1) return finish();
-      lit.current = SCREENS_EARLY && kind !== "arrive" && (1 - u) * ms <= SCREEN_EARLY_S * 1000;
       apply(revealFrame(kind, u));
       raf.current = requestAnimationFrame(step);
     };
@@ -152,6 +161,7 @@ export function Device({
   /** Turn in: mount the wall's scene (the clock starts once it is there), start pose now. */
   const play = (kind: RevealKind) => {
     cancelAnimationFrame(raf.current);
+    lit.current = sight.current.picture === "lit";
     onTurn?.();
     unit.current = root.current!.clientWidth / 2;
     apply(revealFrame(kind, frozenAt() ?? 0));
@@ -174,6 +184,12 @@ export function Device({
     return () => ro.disconnect();
   }, []);
 
+  // a device below the fold: in once its picture is ready (gone from view by then: at rest)
+  const hold = useMemo(() => holdTurn(() => (sight.current.inView ? play(reveal) : finish())), []);
+  useEffect(() => {
+    if (picture !== "wait") hold.ready();
+  }, [picture]);
+
   // the first sight: armed in the start pose (no scene yet), it turns in when it is well in
   // view; one that leaves the view mid-turn is put to rest at once (no reveal runs unseen)
   useEffect(() => {
@@ -188,10 +204,14 @@ export function Device({
     const io = new IntersectionObserver(
       (entries) => {
         const e = entries[entries.length - 1]!;
+        sight.current.inView = e.isIntersecting;
         if (!seen.current && e.intersectionRatio >= 0.45) {
           seen.current = true;
           if (reveal === "arrive") void afterTitle(0.3).then(() => root.current && play(reveal));
-          else play(reveal);
+          else {
+            onWant?.();
+            hold.want();
+          }
         } else if (seen.current && !e.isIntersecting && el.hasAttribute("data-turning")) finish();
       },
       { threshold: [0, 0.45] },
@@ -199,6 +219,7 @@ export function Device({
     io.observe(el);
     return () => {
       io.disconnect();
+      hold.cancel();
       cancelAnimationFrame(raf.current);
     };
   }, []);
