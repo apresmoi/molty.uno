@@ -849,6 +849,7 @@ void cute_rt_raster(cute_rt_t *rt, int W, int H) {
             if (shade > 1.f) shade = 1.f;
             uint32_t col = (uint32_t)(rgb[0] * shade) | (uint32_t)(rgb[1] * shade) << 8 | (uint32_t)(rgb[2] * shade) << 16 | tagbits;
             tris++;
+            FLUID_DOTS(FLUID_DOTS_DRAW, (y1 - y0) * (x1 - x0));
             if (x0 < bx0) bx0 = x0;
             if (x1 > bx1) bx1 = x1;
             if (y0 < by0) by0 = y0;
@@ -889,6 +890,7 @@ void cute_rt_raster(cute_rt_t *rt, int W, int H) {
     for (int j = 0; j < H; j++) {
         uint32_t acc[FLUID_GRID_MAX_W][4];
         memset(acc, 0, sizeof(uint32_t) * 4 * (size_t)W);
+        FLUID_DOTS(FLUID_DOTS_PASS, j >= cj0 && j < cj1 && sx1 > sx0 ? 4 * (sx1 - sx0) : 0);
         for (int r = 0; r < 4 && j >= cj0 && j < cj1; r++) {
             const uint32_t *row = rt->cbuf + (j * 4 + r) * SW;
             for (int x = sx0; x < sx1; x++) {

@@ -60,6 +60,16 @@ static inline uint32_t fluid_cycles(void) { return 0; }
 #endif
 #define FLUID_PROF_BEGIN(v) uint32_t v = fluid_cycles()
 #define FLUID_PROF_END(ph, v) (fluid_prof[ph] += fluid_cycles() - (v))
+/* host tests only (-DFLUID_WORK_COUNT): the dots of the 2 x 4 braille lattice a frame's per-dot loops visit, a
+ * count no machine's speed changes (scene_test's frame-cost budget); nothing at all on the device. DRAW: a dot tried
+ * against the drawing (an item's, a triangle's); PASS: a dot a whole-lattice pass reads or writes (clear, fold). */
+enum { FLUID_DOTS_DRAW, FLUID_DOTS_PASS };
+#ifdef FLUID_WORK_COUNT
+extern unsigned long fluid_dot_visits[2];
+#define FLUID_DOTS(k, n) (fluid_dot_visits[k] += (unsigned long)(n))
+#else
+#define FLUID_DOTS(k, n) ((void)0)
+#endif
 
 /* ── sim ──────────────────────────────────────────────────────────────────── */
 

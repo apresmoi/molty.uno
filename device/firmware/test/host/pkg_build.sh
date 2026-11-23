@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # pkg_build.sh: host build + run of the package tests: the strict parser and the store
 # (pkg_test.c: main/pkg) and the scene player with the director (scene_test.c: main/scene,
-# main/fluid), on fixtures/shapes.json; scene_test also estimates a busy scene's frame cost
-# against the creature (duck.molty) and changes the picture to and from the cat (packages/cat).
+# main/fluid), on fixtures/shapes.json; scene_test also holds a busy scene's frame cost (the dots its loops
+# visit, counted under -DFLUID_WORK_COUNT) to a budget, beside the creature's (duck.molty), and changes the
+# picture to and from the cat (packages/cat).
 # cJSON from ESP-IDF: set IDF_PATH (default ~/esp/esp-idf).
 # PKG_SRC / SCENE_SRC override a source (mutation checks).
 # Usage: test/host/pkg_build.sh   (run from anywhere)
@@ -23,7 +24,7 @@ cc -std=c11 -Wall -Wextra -Werror -O2 \
   "$OUT/cJSON.o" -lm -o "$OUT/pkg_test"
 "$OUT/pkg_test" "$HERE/fixtures/shapes.json"
 
-cc -std=c11 -D_POSIX_C_SOURCE=200809L -DFLUID_TEST_ALLOC -Wall -Wextra -Werror -O2 \
+cc -std=c11 -D_POSIX_C_SOURCE=200809L -DFLUID_TEST_ALLOC -DFLUID_WORK_COUNT -Wall -Wextra -Werror -O2 \
   -I"$MAIN/pkg" -I"$MAIN/scene" -I"$MAIN/fluid" -I"$MAIN/creature" -I"$IDF_JSON" \
   "$HERE/scene_test.c" "${SCENE_SRC:-$MAIN/scene/scene_player.c}" "$MAIN/pkg/pkg_parse.c" \
   "$MAIN/fluid/fluid_director.c" "$MAIN/fluid/fluid_sim.c" "$MAIN/fluid/fluid_target.c" "$MAIN/fluid/glyph_font.c" "$MAIN/fluid/glyph_rsvp.c" "$MAIN/fluid/fluid_draw.c" "$MAIN/fluid/fluid_fine.c" "$MAIN/fluid/fluid_askview.c" "$MAIN/fluid/fluid_ask.c" \
