@@ -4,6 +4,8 @@ import { PUCK, puckPolygons, type PuckColors } from "../../features/device/puck"
 import {
   REST,
   REVEAL_SECONDS,
+  SCREENS_EARLY,
+  SCREEN_EARLY_S,
   glareOf,
   revealFrame,
   type RevealFrame,
@@ -57,10 +59,13 @@ export function Device({
   reveal,
   onScreen,
   onTurn,
+  onFace,
 }: {
   reveal: RevealKind;
   onScreen?: (on: boolean) => void;
   onTurn?: () => void;
+  /** The turning face's CSS transform each frame ("" at rest), for a screen carried on it. */
+  onFace?: (transform: string) => void;
 }) {
   const root = useRef<HTMLSpanElement>(null);
   const face = useRef<HTMLSpanElement>(null);
@@ -72,6 +77,7 @@ export function Device({
   const raf = useRef(0);
   const seen = useRef(false);
   const queued = useRef<RevealKind | null>(null); // waits for the polycss scene to mount
+  const lit = useRef(false); // its screen is on before it stands (SCREENS_EARLY)
   const [turning, setTurning] = useState(false);
   // a device that arrives (starts unseen) is rendered unseen already (the HTML, before any JS),
   // so nothing settled flashes before it turns in: CSS hides it (motion allowed, the page's
@@ -106,8 +112,9 @@ export function Device({
       fc.style.setProperty("--glare-fade", g.fade.toFixed(3));
     }
     lid.current!.style.transform = f.lid ? `perspective(${(unit.current * 8).toFixed(0)}px) rotateX(${f.lid}deg)` : "";
+    onFace?.(rest ? "" : `${el.style.transform} ${fc.style.transform}`);
     // it stands: the screen may show. Away or turning: the face carries a dark disc instead
-    const stands = rest && f.lift === 0 && f.opacity === 1;
+    const stands = lit.current || (rest && f.lift === 0 && f.opacity === 1);
     cover.current!.style.opacity = stands ? "" : "1";
     if (el.hasAttribute("data-screen-off") === stands) {
       el.toggleAttribute("data-screen-off", !stands);
@@ -135,6 +142,7 @@ export function Device({
       if (t0 < 0) t0 = now;
       const u = (now - t0) / ms;
       if (u >= 1) return finish();
+      lit.current = SCREENS_EARLY && kind !== "arrive" && (1 - u) * ms <= SCREEN_EARLY_S * 1000;
       apply(revealFrame(kind, u));
       raf.current = requestAnimationFrame(step);
     };

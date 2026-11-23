@@ -73,3 +73,12 @@
 .root:has([data-device="arrive"]) .canvas {
   transition-duration: 0.45s;
 }
+/* ?screens=early (a preview: features/device/reveal.ts): the screen comes on for the last 0.45 s
+   of the turn, carried on the turning face (Device hands its transform over as --face), and its
+   picture fades in over those 0.45 s, whole as the device stands */
+.root[data-early] :is(.panel, .canvas) {
+  transform: var(--face);
+}
+.root[data-early] .canvas {
+  transition-duration: 0.45s;
+}

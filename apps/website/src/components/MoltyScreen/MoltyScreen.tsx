@@ -8,7 +8,7 @@ import {
   type ProgramRun,
 } from "../../services/molty-screen";
 import { CAT, CAT_STILL, PROGRAMS, SCENES_URL, type ProgramName } from "../../features/molty/content";
-import type { RevealKind } from "../../features/device/reveal";
+import { SCREENS_EARLY, type RevealKind } from "../../features/device/reveal";
 import { afterTitle, heroCue } from "../../features/home/opening";
 import { Device } from "../Device";
 import styles from "./MoltyScreen.module.css";
@@ -53,6 +53,7 @@ export function MoltyScreen({
   onAnswer?: (index: number) => void;
   onFrame?: (seconds: number) => void;
 }) {
+  const root = useRef<HTMLSpanElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const outside = useRef<HTMLCanvasElement>(null);
   const [entered, setEntered] = useState(false);
@@ -75,6 +76,8 @@ export function MoltyScreen({
     const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
     const needs = { creature: CAT, scenes: scenes || play === "chart" ? SCENES_URL : undefined };
     const early = reveal === "arrive" && !reducedMotion;
+    const carried = SCREENS_EARLY && !early; // its renderer starts as it nears (features/device/reveal.ts)
+    if (carried) root.current!.dataset.early = ""; // the page's address, so not in the server's HTML
     let handle: MoltyScreenHandle | null = null;
     let program: ProgramRun | null = null;
     let alive = true;
@@ -84,7 +87,7 @@ export function MoltyScreen({
     const shown = early ? afterTitle(0) : new Promise<void>((done) => (stood = done));
     power.current = () => {
       if (state.current.stands) stood();
-      if (started || !near || !(early || state.current.turning || state.current.stands)) return;
+      if (started || !near || !(early || carried || state.current.turning || state.current.stands)) return;
       started = true;
       const mount = mountMoltyScreen(canvas.current!, {
         ...needs,
@@ -126,7 +129,7 @@ export function MoltyScreen({
         warmMoltyScreen(needs);
         power.current();
       },
-      { rootMargin: "60% 0px" },
+      { rootMargin: carried ? "25% 0px" : "60% 0px" },
     );
     watch.observe(canvas.current!);
     return () => {
@@ -139,7 +142,7 @@ export function MoltyScreen({
   }, []);
 
   return (
-    <span className={styles.root} data-molty-screen="" data-dust-focus="device" data-screen={screen}>
+    <span ref={root} className={styles.root} data-molty-screen="" data-dust-focus="device" data-screen={screen}>
       {enter && (
         <canvas
           ref={outside}
@@ -160,6 +163,7 @@ export function MoltyScreen({
           state.current.turning = true;
           power.current();
         }}
+        onFace={SCREENS_EARLY ? (t) => root.current?.style.setProperty("--face", t) : undefined}
         onScreen={(on) => {
           state.current.stands = on;
           show();

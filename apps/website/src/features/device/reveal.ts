@@ -42,6 +42,15 @@ export const REVEAL_SECONDS: Record<RevealKind, number> = {
   coin: 1.2,
 };
 
+/** `?screens=early`, a preview for the owner's eye, not the default (make it the default or
+ *  delete it once he decides): a device below the hero turns its screen on for the last
+ *  SCREEN_EARLY_S of its turn, on its turning face, its picture fading in to be whole as the
+ *  device stands; and its renderer starts as it nears the view, not once it turns
+ *  (Device, MoltyScreen and its CSS, which says the same 0.45 s). */
+export const SCREENS_EARLY =
+  typeof location === "object" && new URLSearchParams(location.search).get("screens") === "early";
+export const SCREEN_EARLY_S = 0.45;
+
 const clamp01 = (x: number) => (x <= 0 ? 0 : x >= 1 ? 1 : x);
 const smooth = (x: number) => {
   const t = clamp01(x);
