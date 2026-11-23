@@ -31,21 +31,17 @@ export function catSetsOff(glassS: number): Promise<unknown> {
   );
 }
 
-let sat = false;
-let onSat: () => void = () => {};
+let up: () => void = () => {};
+const sceneUp = new Promise<void>((done) => (up = done));
 let over: Promise<unknown> | null = null;
-/** The hero's cat sits: the opening is over. */
-export const heroSits = () => {
-  sat = true;
-  onSat();
-};
-/** Resolves once the opening is over (the hero's cat sits, or 8 s from the first call if it never
- *  does; at once on a page without the hero): the devices below the fold prepare only then. */
-export function afterOpening(): Promise<unknown> {
-  over ??=
-    sat || !document.querySelector('[data-device="arrive"]')
-      ? Promise.resolve()
-      : Promise.race([new Promise<void>((done) => (onSat = done)), new Promise((r) => setTimeout(r, 8000))]);
+/** Resolves once the hero stands with its scene up (or 8 s from the first call if it never does;
+ *  at once on a page without the hero): the devices below the fold prepare only then, while its
+ *  cat still walks in. */
+export function afterHeroUp(): Promise<unknown> {
+  const stands = () => stood.then((at) => new Promise((r) => setTimeout(r, at - performance.now())));
+  over ??= !document.querySelector('[data-device="arrive"]')
+    ? Promise.resolve()
+    : Promise.race([Promise.all([stands(), sceneUp]), new Promise((r) => setTimeout(r, 8000))]);
   return over;
 }
 
@@ -53,4 +49,5 @@ export function afterOpening(): Promise<unknown> {
  *  "still"), which the CSS of the dust round it keys on. */
 export function heroCue(state: string) {
   document.documentElement.dataset.hero = state;
+  if (state === "live" || state === "still") up();
 }

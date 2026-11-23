@@ -43,10 +43,11 @@ test("the hero's cat sets off a second after the title, and touches the glass no
   // its device's turn: it stands this long from now
   heroStandsIn(1150);
   const stands = performance.now() + 1150;
-  // the least page seconds from setting off to the glass, a phone's window to a very wide one
-  // (scripts/tests/entrance.test.ts: the cat takes at least that long on every width)
+  // the least page seconds from setting off to the glass at the cat's own pace (Entrance.glassS):
+  // none, a phone's window, 1440, 1920, 2560 and a very wide, short one (scripts/tests/
+  // entrance.test.ts: the cat takes at least that long on every width)
   const offs = await Promise.all(
-    [0, 0.27, 0.6, 1.2, 3, 8].map((glassS) => catSetsOff(glassS).then(() => [glassS, performance.now()] as const)),
+    [0, 0.24, 0.61, 1.37, 2.5, 5.96].map((glassS) => catSetsOff(glassS).then(() => [glassS, performance.now()] as const)),
   );
   for (const [glassS, at] of offs) {
     assert.ok(at >= formedAt + CAT_AFTER_S * 1000 - 2, `${glassS} s out: it sets off a second after the title`);

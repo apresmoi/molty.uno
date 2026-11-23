@@ -13,8 +13,9 @@ export const ENTER = {
   nose: 0.85,
   /** Played unseen first: it gets up. */
   lead: 1.0,
-  /** Its clock runs this much faster while it walks in (the page is wide: its walk is long) ... */
-  rate: 4.4,
+  /** Its clock runs this much faster while it walks in (its own walk's cadence and ground speed
+   *  together: its feet stay planted) ... */
+  rate: 2.2,
   /** ... and this much once it is at its place (it stops, turns to you and sits). */
   settle: 4.5,
   /** At its place: this near the frame's middle. */

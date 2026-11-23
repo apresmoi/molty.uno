@@ -9,7 +9,7 @@ import {
 } from "../../services/molty-screen";
 import { CAT, CAT_STILL, PROGRAMS, SCENES_URL, type ProgramName } from "../../features/molty/content";
 import type { RevealKind } from "../../features/device/reveal";
-import { afterOpening, afterTitle, catSetsOff, heroCue, heroSits, heroStandsIn } from "../../features/home/opening";
+import { afterHeroUp, afterTitle, catSetsOff, heroCue, heroStandsIn } from "../../features/home/opening";
 import { Device } from "../Device";
 import styles from "./MoltyScreen.module.css";
 
@@ -33,11 +33,11 @@ import styles from "./MoltyScreen.module.css";
  *  the title starts forming, before the device turns in (just after), so its scene rides the
  *  turning face. Its clock starts as its cat sets off, a second after the title starts and
  *  late enough that it touches the glass only once the device stands (catSetsOff): the turning
- *  face never carries it. Any other is prepared before it is seen: once the opening is over (or
- *  as soon as it is wanted) its renderer settles while the device is within a viewport of the
- *  view, through the in-view-first queue, and draws its picture; the device then turns in with
- *  that picture on its turning face (Device, features/device/hold.ts). Out of view the screen
- *  keeps its picture and runs no frames. */
+ *  face never carries it. Any other is prepared before it is seen: once the hero stands with its
+ *  scene up (or as soon as it is wanted) its renderer settles while the device is within a
+ *  viewport of the view, through the in-view-first queue, and draws its picture; the device then
+ *  turns in with that picture on its turning face (Device, features/device/hold.ts). Out of view
+ *  the screen keeps its picture and runs no frames. */
 export function MoltyScreen({
   reveal,
   boot = false,
@@ -87,7 +87,7 @@ export function MoltyScreen({
     let alive = true;
     let near = false;
     let started = false;
-    let over = false; // the opening (prepared ahead only after it)
+    let over = false; // the hero stands with its scene up (prepared ahead only after it)
     let stood = () => {};
     const shown = early ? afterTitle(0) : ahead ? undefined : new Promise<void>((done) => (stood = done));
     power.current = () => {
@@ -101,10 +101,7 @@ export function MoltyScreen({
         shown,
         entrance: enter ? { outside: outside.current, go: early ? catSetsOff : undefined } : undefined,
         reducedMotion,
-        onEntered: () => {
-          if (reveal === "arrive") heroSits();
-          if (alive) setEntered(true);
-        },
+        onEntered: () => alive && setEntered(true),
         onAnswer: (i) => {
           program?.answer(i);
           callbacks.current.onAnswer?.(i);
@@ -144,7 +141,7 @@ export function MoltyScreen({
     );
     watch.observe(canvas.current!);
     if (ahead)
-      void afterOpening().then(() => {
+      void afterHeroUp().then(() => {
         over = true;
         power.current();
       });
