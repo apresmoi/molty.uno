@@ -325,7 +325,9 @@ chains: { gesture: { first: [clip], then: [clip], rounds: [min, max], last: [cli
 - The player keeps a **target**: the mood's loop, or a gesture's clip once (a `hold` gesture, the walk, stays in its loop
   that long). To reach it from the family the current clip ends in, it plays the **route**: the authored edge clips, found
   breadth first (`edges` in file order), then the target. `enter` gives a target its own way in from a family (the cat's
-  startle from sitting or standing). Between two clips it crossfades for `blend` seconds (eased; quaternions nlerp), and a
+  startle from sitting or standing). Between two clips it crossfades for `blend` seconds (eased; quaternions nlerp; a prop,
+  a root-level node after the first, is never crossfaded: it is where the new clip puts it, so it never sweeps across the
+  picture from where it showed to where it rests hidden), and a
   **light paw lock** holds the paws that were on the floor where they were, fading out with the blend.
 - Every ordered pair of resting families has its own authored clip, and so do sitting and standing into and out of the walk
   (the cat: sit, stand, loaf, crouch, walk; 16 clips); from the loaf or the crouch the walk is two authored hops (it stands up

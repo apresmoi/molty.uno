@@ -398,7 +398,11 @@ export function clipPlayer(rig, { seed = 1 } = {}) {
       }
       samplePose(rig, rest, clips[s.clip], s.t, pose);
       const w = ease(s.blendD > 0 ? s.blendT / s.blendD : 1);
-      if (w < 1) blendPose(from, pose, w, cur); else cur.set(pose);
+      if (w < 1) {
+        blendPose(from, pose, w, cur);
+        // a prop (a root-level node but the first) is never cross-faded: it is where the clip puts it (creature_clip.c)
+        rig.nodes.forEach((n, i) => { if (i > 0 && n.parent < 0) cur.set(pose.subarray(i * POSE, (i + 1) * POSE), i * POSE); });
+      } else cur.set(pose);
       forward(rig, cur, s.ox, s.oz, world, s.oyaw);
       // a light paw lock while blending: the paws that were on the floor are held where they were, fading out with the blend
       if (w < 1 && contacts.length) {
