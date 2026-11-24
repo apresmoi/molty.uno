@@ -48,10 +48,18 @@
           "about": { "$ref": "#/$defs/line" },
           "plays": { "$ref": "#/$defs/name", "description": "The action it plays, when it is not the one with its own name." },
           "hold": { "type": "number", "minimum": 0, "maximum": 60, "description": "For a gesture that plays a resting action (a walk): seconds it keeps it up before settling." },
-          "lasts": { "type": "number", "minimum": 0.2, "maximum": 10, "description": "Seconds the whole gesture takes, when it is not its action's own length." }
+          "lasts": { "type": "number", "minimum": 0.2, "maximum": 10, "description": "Seconds the whole gesture takes, when it is not its action's own length." },
+          "chain": { "type": "object", "required": ["then", "rounds"], "additionalProperties": false,
+            "description": "Played as a chain of actions, a different one each time: one of first, then rounds (a random count from the first number to the second) of then, never the same one twice running, then one of last. Each starts where the one before ended.",
+            "properties": {
+              "first": { "anyOf": [{ "$ref": "#/$defs/name" }, { "type": "array", "minItems": 1, "maxItems": 8, "items": { "$ref": "#/$defs/name" } }] },
+              "then": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "$ref": "#/$defs/name" } },
+              "rounds": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "integer", "minimum": 0, "maximum": 16 } },
+              "last": { "anyOf": [{ "$ref": "#/$defs/name" }, { "type": "array", "minItems": 1, "maxItems": 8, "items": { "$ref": "#/$defs/name" } }] }
+            } }
         } }
       ],
-      "errorMessage": "is one line about what it does, or { about, plays, hold, lasts }"
+      "errorMessage": "is one line about what it does, or { about, plays, chain, hold, lasts }"
     },
     "vec3": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number" }, "errorMessage": "must be three numbers: [x, y, z]" },
     "body": {

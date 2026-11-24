@@ -25,7 +25,7 @@ What ships, all three built into the firmware:
 |---|---|---|---|---|
 | duck | 1.0.0 | channel layers (sections 1 to 8) | a body the fluid flows toward | none |
 | octopus | 1.0.0 | channel layers | a body the fluid flows toward | none |
-| cat | 2.1.0 | a Blender rig with baked clips and a life block (section 12) | crisp dots, straight on the panel's lattice | `eat`, `yarn`, `walk`, `shaken` |
+| cat | 2.2.0 | a Blender rig with baked clips and a life block (section 12) | crisp dots, straight on the panel's lattice | `eat`, `yarn`, `walk`, `shaken` |
 
 The motion model of the channel creatures is the one the creature lab's animals were written in: a shared pose from the
 mood engine and the gestures, then the creature's own layers on top. Every line of that code became a channel; nothing
@@ -269,7 +269,7 @@ Compared over the full reels (every scene, mood and gesture) against the approve
 ## 12. Rigged creatures (clips, routes, dots)
 
 A creature package may carry a **rig** instead of channel layers: a skeleton, its body as rounded primitives per bone, baked
-clips, and the route map between its poses. The cat (2.1.0) is the first: modelled, rigged and animated in Blender, every clip baked, with an authored transition between every pair of resting poses. Its source is the folder `moltys/cat/`, and [The Molty format](CREATURE.md) is how one is made. Its channel layers stay empty; `gestures` and `moods` only declare what it plays (and their
+clips, and the route map between its poses. The cat (2.2.0) is the first: modelled, rigged and animated in Blender, every clip baked, with an authored transition between every pair of resting poses. Its source is the folder `moltys/cat/`, and [The Molty format](CREATURE.md) is how one is made. Its channel layers stay empty; `gestures` and `moods` only declare what it plays (and their
 lengths for the mood engine), so agents and the console see the same names as for any creature. It has its own reference player in JavaScript and a
 C port on the device.
 
@@ -316,7 +316,9 @@ are features.
 
 **Graph**:
 `{ families: [...], rest: { family: loop }, edges: { "a>b": clip }, moods: { mood: clip }, gestures: { name: clip },
-hold: { gesture: seconds }, enter: { clip: { family: clip } }, sync: { loop: stride seconds }, blend, center: [node, node] }`.
+hold: { gesture: seconds }, enter: { clip: { family: clip } }, sync: { loop: stride seconds },
+chains: { gesture: { first: [clip], then: [clip], rounds: [min, max], last: [clip] } }, blend, center: [node, node] }`
+(`first` and `last` may be left out; a chained gesture's own entry in `gestures` names its first clip).
 
 ### Playing
 
@@ -331,6 +333,15 @@ hold: { gesture: seconds }, enter: { clip: { family: clip } }, sync: { loop: str
 - A loop in `sync` (the walk) is joined at the phase that best matches the pose on screen and left only on a stride
   boundary, so a stepping paw is never cut.
 - A gesture or mood name the package lacks is refused (`unknown_gesture`), as for channel creatures.
+- **Chains.** A gesture in `chains` plays one clip of `first`, then `rounds` (a count drawn between min and max) clips of
+  `then`, never the same one twice running, then one of `last`; then it routes back to its mood as any gesture does. Each
+  pick is a draw from the creature's seed (`cc_seed`: the same seed as the life's), so the same seed plays the same game
+  and two boots differ. A chain's clips join without a crossfade: the tools check that each starts in the pose the one
+  before ends in (the body, and each prop where it was from the root).
+- **The heading carries** between clips as the place does: a clip that turns its root about up (a turn on its feet)
+  leaves the creature facing that way, and the next clip, whatever it is, starts from there (`oyaw`, turning the root and
+  the props about up through the origin before `ox, oz`). No clip before the cat 2.2.0 turns its root, so they play as
+  they did.
 - **Called to the front.** A tap on the screen (not on a control: a question's answer) or a shake calls a rigged
   creature (`cc_come`): it walks to the front of the frame facing the viewer and sits up attending (its `listening`
   clip, 3 s), then goes back to its mood. Already facing front near the middle, it only perks up. A shake plays its `shaken` clip first. A gesture ends the call.
@@ -341,7 +352,7 @@ The cat's clips, by what they are for:
 |---|---|
 | moods | `idle`, `listening`, `thinking`, `speaking`, `happy` (sitting), `sleepy` (the loaf), `surprised` (standing, arched) |
 | shared gestures | `wiggle`, `nod`, `shake_head`, `bounce`, `peek` (also `inspect`), `glance_left`, `glance_right`, `blink`, `wobble`, `stretch`, `look_up`, `yawn`, `paddle` |
-| its own gestures | `eat` (a bowl of milk, 6 s), `yarn` (a ball of yarn, 5.2 s), `walk` (held 6 s), `shaken` (3.4 s) |
+| its own gestures | `eat` (a chain: the bowl comes in `eat_left` or `eat_right`, then `eat_dish`), `yarn` (a chain: `yarn_in`, 1 to 4 of `yarn_bat_l` and `yarn_bat_r`, then `yarn_away`), `walk` (held 6 s), `shaken` (3.4 s) |
 | resting loops | `idle` (sit), `stand_idle`, `loaf_idle`, `crouch_idle`, `walk` |
 | transitions | 16 edges: every ordered pair of sit, stand, loaf and crouch, plus sit and stand into and out of the walk |
 
@@ -485,10 +496,10 @@ is about 2 us a frame on a computer (about 0.2 ms on the device) plus its merge,
 
 | | limit | the cat |
 |---|---|---|
-| file (rigged) | 256 KB | 241 KB |
-| nodes, shapes, clips | 80, 128, 64 | 43 (2 of them props), 90, 49 (4 of them pose clips for its life) |
-| families, edges, gestures | 8, 64, 32 | 5, 16, 18 |
-| channels (all clips) | | 1846 (1342 LINEAR, 504 STEP, no CUBICSPLINE) |
+| file (rigged) | 256 KB | 255 KB |
+| nodes, shapes, clips | 80, 128, 64 | 43 (2 of them props), 109, 54 (4 of them pose clips for its life, 7 links of its eat and yarn chains) |
+| families, edges, gestures, chains | 8, 64, 32, 4 (8 clips a step) | 5, 16, 18, 2 |
+| channels (all clips) | | 2046 (1368 LINEAR, 678 STEP, no CUBICSPLINE) |
 | life: channels, events, layers; engine steps a frame | 256, 16, 16 (8 played a frame); 600 | 16, 3, 6; 44 |
 
 Per frame on the device: sampling (a binary search and a Hermite per channel, ~100 channels) and FK of ~50 nodes are a few

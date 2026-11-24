@@ -109,6 +109,27 @@ through the Molty. To play an action under another name: `"inspect": { "about": 
 A looping action ends on the pose it starts with. Which pose an action starts and ends in is worked out from how
 it looks, so the way between two poses is found even without the `_to_` name.
 
+### A gesture that is different every time
+
+A gesture can be a chain of short actions that the Molty strings together itself, picking at random, so two plays are
+never the same. The cat's yarn:
+
+```json
+"yarn": { "about": "a ball of yarn bounces in; it swats it about and turns after it ...",
+  "chain": { "first": "yarn_in", "then": ["yarn_bat_l", "yarn_bat_r"], "rounds": [1, 4], "last": "yarn_away" } }
+```
+
+It plays `first` (the ball bounces in from out of the picture), then from 1 to 4 of `then` (a swat to the left or to the
+right), never the same one twice running, then `last` (a swat that knocks it out of sight). `first` and `last` are optional, and each may be one name or a list. The picks come from
+the Molty's seed: a new one each time the device starts, a fixed one in tests, so a test plays the same game every time.
+Agents ask for it by its name, as for any gesture.
+
+Each action in a chain starts in the pose the one before it ends in, and a prop is where it was (`check` names any two that
+do not join). Where the Molty stands and the way it faces carry on: an action that walks or turns it on its feet leaves it
+there, facing the new way, and the next one starts from there. That is how a Molty turns without turning as a block. The
+cat's eat is a chain too: the bowl comes in to its left or to its right (`first`), it turns to it, and `eat_dish` eats
+from it.
+
 ## A body from a 3D tool
 
 A bigger Molty keeps its body in a file: `"body": "cat.glb"`. Any tool that saves glTF works. The file needs:
@@ -205,7 +226,7 @@ device installs; `preview` shows every mood, gesture and action moving, on your 
 | what | limit |
 |---|---|
 | bones, shapes, actions, poses, gestures; letters in a name | 80, 128, 64, 8, 32; 24 |
-| the built Molty | 256 KB (the cat, with 49 actions, is 241 KB) |
+| the built Molty | 256 KB, as every file in this repo, which is also the agents' plugin (its loaders refuse a file of 256 KB or more); the cat, with 54 actions, is 255 KB |
 | life: signals, layers; its work a frame | 64, 16; 600 steps (`build` says how many; the cat's are 44) |
 | words in `about`, `look`, a mood's or a gesture's line | plain ASCII; 160, 240, 100 letters |
 | action keys in a body file | straight-line or held keys; curve keys are refused: save one key a frame |
