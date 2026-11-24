@@ -48,7 +48,7 @@ flowchart TD
 | `apps/cli/` | `molty` CLI + stdio MCP server, direct HTTP or via the relay | device or relay |
 | `device/creatures/` | The JS fluid engine and the JS reference players | console (imported at build time) |
 | `packages/` | Data-only packages the device plays: the duck, cat and octopus creatures (built in) and the astrology scenes ([PACKAGES.md](PACKAGES.md)) | firmware (embedded at build time, or downloaded by the device) |
-| `skills/` | What agents read: `molty` (pairing, talking, asking) and `molty-astro` (the sky, on the astrology package) | agents (they call the relay) |
+| `skills/` | What agents read: `molty` (pairing, talking, asking), `molty-astro` (the sky, on the astrology package) and `molty-rhythm` (a rhythm as a clock, on the rhythm package and the beat player) | agents (they call the relay) |
 | `services/molty-voice/` | The owner's optional voice box: Kyutai STT / TTS behind the relay | relay |
 
 ## Firmware layout

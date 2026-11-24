@@ -1,0 +1,4 @@
+{ "id": "son-clave", "name": "Son clave", "label": "SON CLAVE", "status": "verified",
+  "steps": 16, "tempo": { "bpm": 100, "per": 4 }, "beats": [1, 5, 9, 13],
+  "layers": { "clave": { "name": "The clave", "sound": "rim", "hits": [1, 4, 7, 11, 13] } },
+  "source": "Wikipedia Clave (rhythm); Absil 2004 table 1; 3-2; tempo a practice default" }

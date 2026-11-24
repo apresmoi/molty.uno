@@ -1,0 +1,8 @@
+{ "id": "chacarera", "name": "Chacarera", "label": "CHACARERA", "status": "verified",
+  "steps": 6, "tempo": { "bpm": 104, "per": 3, "range": [100, 112] }, "beats": [1, 4],
+  "layers": {
+    "aro": { "name": "Aro, the rim", "sound": "rim", "hits": [1, 4] },
+    "parche": { "name": "Parche, the head", "sound": "head", "hits": [3, 5], "accent": [5] } },
+  "bars": { "A": {}, "B": { "only": ["parche"] } },
+  "phrase": { "count_in": 1, "order": ["A", "A", "B", "A"], "note": "a practice order, not a traditional form" },
+  "source": "Marti 2018 via Paredes 2025 fig. 5; Tajan (FBA-UNLP) points 2 to 4; tempo Mola (FBA-UNLP) corpus" }

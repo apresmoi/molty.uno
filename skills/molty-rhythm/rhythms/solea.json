@@ -1,0 +1,4 @@
+{ "id": "solea", "name": "Solea", "label": "SOLEA", "status": "verified",
+  "steps": 12, "tempo": { "bpm": 120, "per": 1, "range": [100, 180] }, "beats": [3, 6, 8, 10, 12],
+  "layers": { "palmas": { "name": "The palmas", "sound": "clap", "hits": [3, 6, 8, 10, 12] } },
+  "source": "Chromatone citing Juan Martin; Gongora 2024 (UPM) alegrias 3-6-8-10-12; tempo range a single source (alegrias)" }

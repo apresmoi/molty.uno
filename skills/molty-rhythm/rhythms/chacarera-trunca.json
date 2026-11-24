@@ -1,0 +1,6 @@
+{ "id": "chacarera-trunca", "name": "Chacarera trunca", "label": "TRUNCA", "status": "verified",
+  "steps": 12, "tempo": { "bpm": 104, "per": 3 }, "beats": [1, 4, 7, 10],
+  "layers": {
+    "aro": { "name": "Aro, the rim", "sound": "rim", "hits": [1, 4, 8] },
+    "parche": { "name": "Parche, the head", "sound": "head", "hits": [3, 5, 9, 11], "accent": [9, 11] } },
+  "source": "Diaz Capello 2024 p. 35 ex. 1; form in Mola (FBA-UNLP) and Paredes 2025 p. 29; tempo a practice default" }

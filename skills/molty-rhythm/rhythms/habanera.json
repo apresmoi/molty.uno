@@ -1,0 +1,4 @@
+{ "id": "habanera", "name": "Habanera", "label": "HABANERA", "status": "verified",
+  "steps": 8, "tempo": { "bpm": 100, "per": 4 }, "beats": [1, 5],
+  "layers": { "bass": { "name": "The bass", "sound": "low", "hits": [1, 4, 5, 7] } },
+  "source": "Toussaint 2005 fig. 1a (tresillo); tangoindepth 2021 (habanera 3+1+2+2); tempo a practice default" }
