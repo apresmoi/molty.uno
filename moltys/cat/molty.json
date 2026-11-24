@@ -2,7 +2,7 @@
   "molty": "molty/2",
   "id": "cat",
   "name": "Cat",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "about": "A small cat that lives on the screen, with its own moods and gestures. Built into every Molty; install only for a newer version.",
   "look": "A slim lavender cat drawn as a fine outline: pointy ears pink inside, round green eyes, a pink nose, whiskers, a white chest. A long darker tail. It sits, stands, lies in a loaf and walks.",
   "body": "cat.glb",

@@ -25,7 +25,7 @@ What ships, all three built into the firmware:
 |---|---|---|---|---|
 | duck | 1.0.0 | channel layers (sections 1 to 8) | a body the fluid flows toward | none |
 | octopus | 1.0.0 | channel layers | a body the fluid flows toward | none |
-| cat | 2.2.0 | a Blender rig with baked clips and a life block (section 12) | crisp dots, straight on the panel's lattice | `eat`, `yarn`, `walk`, `shaken` |
+| cat | 2.2.1 | a Blender rig with baked clips and a life block (section 12) | crisp dots, straight on the panel's lattice | `eat`, `yarn`, `walk`, `shaken` |
 
 The motion model of the channel creatures is the one the creature lab's animals were written in: a shared pose from the
 mood engine and the gestures, then the creature's own layers on top. Every line of that code became a channel; nothing
@@ -269,7 +269,7 @@ Compared over the full reels (every scene, mood and gesture) against the approve
 ## 12. Rigged creatures (clips, routes, dots)
 
 A creature package may carry a **rig** instead of channel layers: a skeleton, its body as rounded primitives per bone, baked
-clips, and the route map between its poses. The cat (2.2.0) is the first: modelled, rigged and animated in Blender, every clip baked, with an authored transition between every pair of resting poses. Its source is the folder `moltys/cat/`, and [The Molty format](CREATURE.md) is how one is made. Its channel layers stay empty; `gestures` and `moods` only declare what it plays (and their
+clips, and the route map between its poses. The cat (2.2.1) is the first: modelled, rigged and animated in Blender, every clip baked, with an authored transition between every pair of resting poses. Its source is the folder `moltys/cat/`, and [The Molty format](CREATURE.md) is how one is made. Its channel layers stay empty; `gestures` and `moods` only declare what it plays (and their
 lengths for the mood engine), so agents and the console see the same names as for any creature. It has its own reference player in JavaScript and a
 C port on the device.
 
