@@ -67,7 +67,7 @@ cpk_t *cpk_create(const char *json, size_t len, uint32_t seed, const char **err)
         if (k->clip && !bind_layers(k, cJSON_GetObjectItemCaseSensitive(j, "creature"))) { cc_destroy(k->clip); k->clip = NULL; *err = "life: a layer's signal"; }
         cJSON_Delete(j);
         if (!k->clip) { cpk_destroy(k); return NULL; }
-        cp_seed(k->cp, seed);
+        cp_seed(k->cp, seed); cc_seed(k->clip, seed);
         k->in_free = cp_slot(k->cp, "free"); k->in_idle = cp_slot(k->cp, "idle_time"); k->in_life = cp_slot(k->cp, "life");
         k->life = 1.f;
     } else if (k->cp && !(k->body = cb_create(k->cp))) *err = "oom";

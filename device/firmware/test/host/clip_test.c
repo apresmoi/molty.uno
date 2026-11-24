@@ -148,11 +148,95 @@ static void test_strict(const char *pkgdir) {
     cJSON_Delete(j);
 }
 
+/* a gesture played as a chain (graph.chains): plays it under a seed until the creature is back in its mood, writing the
+ * clips it went through; the largest jump of any node but the root from one frame to the next where one link hands over
+ * to the next; the root's heading (rad, about up) at the end of the chain and a second later in its mood */
+static int play_chain(cc_t *c, uint32_t seed, const char *g, int *seq, int max, float *jump, float *yaw_end, float *yaw_after) {
+    cc_seed(c, seed);
+    CHECK(cc_act(c, g), "chain: cc_act %s", g);
+    const int N = cc_nodes(c);
+    float *prev = malloc(sizeof(float) * 12 * (size_t)N);
+    int n = 0, last = -1, chain_from = -1; *jump = 0.f; *yaw_end = *yaw_after = 0.f;
+    bool in_chain = false, done = false;
+    for (int f = 0; f < 30 * 60 && !done; f++) {
+        memcpy(prev, cc_world(c), sizeof(float) * 12 * (size_t)N);
+        cc_update(c, 1.f / 30.f);
+        const int k = cc_clip(c, NULL);
+        const char *name = cc_clip_name(c, k);
+        const bool link = !strncmp(name, g, strlen(g)) && name[strlen(g)] == '_';
+        if (k != last) {
+            if (link && in_chain && last >= 0) {      /* a link handing over: nothing but the place may jump */
+                const float *w = cc_world(c);
+                for (int i = 1; i < N; i++) {
+                    if (i == cc_node_find(c, "root") || fabsf(w[i * 12]) + fabsf(w[i * 12 + 4]) + fabsf(w[i * 12 + 8]) < 1e-3f) continue;   /* a hidden prop is nowhere */
+                    const float d = fabsf(w[i * 12 + 3] - prev[i * 12 + 3]) + fabsf(w[i * 12 + 7] - prev[i * 12 + 7]) + fabsf(w[i * 12 + 11] - prev[i * 12 + 11]);
+                    if (d > *jump) *jump = d;
+                }
+            }
+            if (link) { in_chain = true; if (n < max) seq[n++] = k; }
+            else if (in_chain) { *yaw_end = atan2f(-cc_world(c)[8], cc_world(c)[0]); chain_from = f; }
+            last = k;
+        }
+        if (chain_from >= 0 && f == chain_from + 30) { *yaw_after = atan2f(-cc_world(c)[8], cc_world(c)[0]); done = true; }
+    }
+    free(prev);
+    return n;
+}
+
+static void test_chains(const char *pkgdir) {
+    cJSON *j = NULL;
+    cc_t *probe = load(pkgdir, "cat", &j);
+    if (!probe) { cJSON_Delete(j); return; }
+    const cJSON *chains = cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(j, "creature"), "rig"), "graph"), "chains");
+    CHECK(chains && cJSON_GetObjectItemCaseSensitive(chains, "yarn"), "chains: the cat's yarn is a chain");
+    cc_destroy(probe);
+    const char *const G[] = { "yarn", "eat" };
+    for (int gi = 0; gi < 2; gi++) {
+        const cJSON *h = cJSON_GetObjectItemCaseSensitive(chains, G[gi]);
+        if (!h) continue;
+        int seqs[8][24], ns[8], distinct = 0, repeats = 0, bad_end = 0;
+        float worst = 0.f;
+        for (int s = 0; s < 8; s++) {
+            cc_t *c = load(pkgdir, "cat", NULL);
+            float jump, ye, ya;
+            ns[s] = play_chain(c, 1000u + 77u * (uint32_t)s, G[gi], seqs[s], 24, &jump, &ye, &ya);
+            if (jump > worst) worst = jump;
+            if (fabsf(remainderf(ye - ya, 6.28318530718f)) > 0.05f) bad_end++;       /* it keeps facing the way it ended */
+            for (int i = 1; i < ns[s]; i++) if (seqs[s][i] == seqs[s][i - 1]) repeats++;
+            bool fresh = true;
+            for (int q = 0; q < s; q++) if (ns[q] == ns[s] && !memcmp(seqs[q], seqs[s], sizeof(int) * (size_t)ns[s])) fresh = false;
+            distinct += fresh;
+            cc_t *again = load(pkgdir, "cat", NULL);       /* the same seed: the same game */
+            int seq2[24]; float j2, y2, a2;
+            const int n2 = play_chain(again, 1000u + 77u * (uint32_t)s, G[gi], seq2, 24, &j2, &y2, &a2);
+            CHECK(n2 == ns[s] && !memcmp(seq2, seqs[s], sizeof(int) * (size_t)n2) && y2 == ye, "chain %s: seed %d plays another game the second time", G[gi], s);
+            cc_destroy(c); cc_destroy(again);
+        }
+        const cJSON *r = cJSON_GetObjectItemCaseSensitive(h, "rounds");
+        const int rmax = cJSON_GetArrayItem(r, 1)->valueint;
+        printf("  chain %s: 8 seeds, %d different games, links %d..%d, worst jump where links join %.3f\n", G[gi], distinct, ns[0], ns[7], worst);
+        for (int s = 0; s < 8; s++) CHECK(ns[s] >= 1 && ns[s] <= rmax + 2, "chain %s: seed %d played %d links", G[gi], s, ns[s]);
+        CHECK(!repeats, "chain %s: the same link twice running (%d times)", G[gi], repeats);
+        CHECK(worst < 0.03f, "chain %s: links do not join (a node jumps %.3f)", G[gi], worst);
+        CHECK(!bad_end, "chain %s: the heading does not carry into its mood (%d of 8)", G[gi], bad_end);
+        if (rmax > 1) CHECK(distinct >= 3, "chain %s: only %d different games in 8 seeds", G[gi], distinct);
+    }
+    /* a chain naming an action the rig lacks is refused */
+    cJSON *y = cJSON_GetObjectItemCaseSensitive((cJSON *)chains, "yarn");
+    cJSON_AddItemToArray(cJSON_GetObjectItemCaseSensitive(y, "then"), cJSON_CreateString("no_such_clip"));
+    const char *err = NULL;
+    cc_t *c = cc_create(cJSON_GetObjectItemCaseSensitive(j, "creature"), &err);
+    CHECK(!c && err && strstr(err, "chain"), "a chain with a missing clip: %s", err ? err : "accepted");
+    cc_destroy(c);
+    cJSON_Delete(j);
+}
+
 int main(int argc, char **argv) {
     if (argc < 3) { printf("usage: clip_test <packages dir> <golden dir>\n"); return 2; }
     printf("rigged creature host test\n");
     test_golden(argv[1], argv[2], "cat");
     test_strict(argv[1]);
+    test_chains(argv[1]);
     printf("%d passed, %d failed\n", s_pass, s_fail);
     return s_fail ? 1 : 0;
 }
