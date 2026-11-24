@@ -56,6 +56,7 @@ export interface Exports {
   wm_cat_pixels(): number;
   wm_world_pixels(): number;
   wm_haze(): void;
+  wm_haze_water(kx: number, ky: number): void;
   wm_couple(r0: number, r1: number): number;
   wm_couple_xy(): number;
   wm_couple_in(): number;
@@ -267,6 +268,11 @@ export class MoltyCore {
    *  water sharpens them back. A heading on the page is one. Before the first frame. */
   haze() {
     this.x.wm_haze();
+  }
+  /** The haze's dots ride the water as the page's dust does: the water's slope under them taken
+   *  `kx` times across and `ky` times down (so they move as far as the page's dust). After haze(). */
+  hazeWater(kx: number, ky: number) {
+    this.x.wm_haze_water(kx, ky);
   }
   /** The grid's width in cells (a 466 px panel: 59). */
   get gridW(): number {

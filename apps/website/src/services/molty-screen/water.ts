@@ -10,6 +10,9 @@ export interface PageWater {
    *  while a front is out the page's water keeps its waves, else it is the device's own. */
   leak: number;
   damp: number;
+  /** A cell of its dust, CSS px: how far a wave moves a dot goes with it (the screen's own dots
+   *  move as far by its cells: fluid_draw.c wave_shift). */
+  cell: { w: number; h: number };
   /** The water under a screen's cells (`xy`: x, y each, in the screen's own pixels; `box`: where
    *  the screen's canvas is in the viewport; `px`: its pixels a side): its height now and a step
    *  ago for each, or null while the page's water is flat. */
@@ -22,4 +25,16 @@ export const pageWater = () => water;
 /** The page's water is this from now on (null: gone). */
 export function setPageWater(w: PageWater | null) {
   water = w;
+}
+
+/** How much a heading's haze takes of the water under it (core.hazeWater), across and down, so its
+ *  dots move as far as the page's dust: a dot moves by the slope a cell times its cell (across:
+ *  w * w, down: w * h), `cell` a cell of the heading's grid and `page` one of the page's dust, CSS
+ *  px, and the heading takes the water `gain` times over. */
+export function hazeWater(
+  cell: { w: number; h: number },
+  page: { w: number; h: number },
+  gain: number,
+): [number, number] {
+  return [(page.w * page.w) / (gain * cell.w * cell.w), (page.w * page.h) / (gain * cell.w * cell.h)];
 }

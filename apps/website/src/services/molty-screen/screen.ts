@@ -19,7 +19,7 @@ import { WATER } from "./field";
 import { loadModule } from "./module";
 import { sliced } from "./slices";
 import { FORMING_S, formingWater } from "./forming";
-import { pageWater, type PageWater } from "./water";
+import { hazeWater, pageWater, type PageWater } from "./water";
 import { HEADING_GAIN } from "../../config/water.mjs";
 
 /** Reduced motion and a screen that starts on its creature: this much is played unseen first. */
@@ -184,6 +184,8 @@ class Screen implements MoltyScreenHandle {
   /** The page's water this screen's water was last given the numbers of, and those. */
   private water: PageWater | null = null;
   private waterAs = "";
+  /** A heading's haze: how much the water moves its dots (core.hazeWater), across and down. */
+  private hazeK = [0, 0];
   private inView = false;
   private alive = true;
   /** The cat waits to set off (`entrance.go`). */
@@ -332,6 +334,18 @@ class Screen implements MoltyScreenHandle {
       const cells = (water?.speed ?? 0) / (box.width / this.core.gridW);
       if (water) this.core.water(Math.min(C2_MAX, cells * cells), water.leak, water.damp);
       else this.core.water(WATER.c2, WATER.leak, WATER.damp);
+    }
+    if (this.options.heading) {
+      // its haze moves as far as the page's dust; while the word forms it holds still on the
+      // word's own water, as it always has
+      const [kx, ky] =
+        forming || !water
+          ? [0, 0]
+          : hazeWater({ w: box.width / this.core.gridW, h: box.height / this.core.gridH }, water.cell, HEADING_GAIN);
+      if (kx !== this.hazeK[0] || ky !== this.hazeK[1]) {
+        this.core.hazeWater(kx, ky);
+        this.hazeK = [kx, ky];
+      }
     }
     const gain = this.options.heading ? HEADING_GAIN : 1;
     const under = water?.under(this.core.cells(), box, this.px) ?? null;
